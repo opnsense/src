@@ -847,7 +847,6 @@ struct ifaddr {
 	int	ifa_metric;		/* cost of going out this interface */
 	int (*ifa_claim_addr)		/* check if an addr goes to this if */
 		(struct ifaddr *, struct sockaddr *);
-	struct mtx ifa_mtx;
 };
 #define	IFA_ROUTE	RTF_UP		/* route installed */
 #define IFA_RTSELF	RTF_HOST	/* loopback route to self installed */
@@ -856,8 +855,6 @@ struct ifaddr {
 #define	ifa_list	ifa_link
 
 #ifdef _KERNEL
-#define	IFA_LOCK(ifa)		mtx_lock(&(ifa)->ifa_mtx)
-#define	IFA_UNLOCK(ifa)		mtx_unlock(&(ifa)->ifa_mtx)
 
 void	ifa_free(struct ifaddr *ifa);
 void	ifa_init(struct ifaddr *ifa);
