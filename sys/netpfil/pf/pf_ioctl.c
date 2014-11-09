@@ -1713,6 +1713,30 @@ relock_DIOCKILLSTATES:
 		break;
 	}
 
+	case DIOCKILLSCHEDULE: {
+		struct pf_state         *state;
+		struct pfioc_schedule_kill *psk = (struct pfioc_schedule_kill *)addr;
+		int                      killed = 0;
+		u_int			 i;
+                    
+		for (i = 0; i <= V_pf_hashmask; i++) {
+			struct pf_idhash *ih = &V_pf_idhash[i];
+
+relock_DIOCKILLSCHEDULE:
+			PF_HASHROW_LOCK(ih);
+			LIST_FOREACH(state, &ih->states, entry) {
+			       if (!strcmp(psk->schedule, state->rule.ptr->schedule)) {
+					pf_unlink_state(state, PF_ENTER_LOCKED);
+					killed++;
+					goto relock_DIOCKILLSCHEDULE;
+				}
+			}
+			PF_HASHROW_UNLOCK(ih);
+               }
+               psk->numberkilled = killed;
+               break;
+       }
+
 	case DIOCADDSTATE: {
 		struct pfioc_state	*ps = (struct pfioc_state *)addr;
 		struct pfsync_state	*sp = &ps->state;
