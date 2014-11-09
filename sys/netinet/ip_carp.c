@@ -115,7 +115,6 @@ struct carp_softc {
 	int			sc_sendad_success;
 #define	CARP_SENDAD_MIN_SUCCESS 3
 
-	int			sc_init_counter;
 	uint64_t		sc_counter;
 
 	/* authentication */
@@ -579,7 +578,6 @@ carp_input_c(struct mbuf *m, struct carp_header *ch, sa_family_t af)
 	struct ifnet *ifp = m->m_pkthdr.rcvif;
 	struct ifaddr *ifa;
 	struct carp_softc *sc;
-	uint64_t tmp_counter;
 	struct timeval sc_tv, ch_tv;
 
 	/* verify that the VHID is valid on the receiving interface */
@@ -619,14 +617,20 @@ carp_input_c(struct mbuf *m, struct carp_header *ch, sa_family_t af)
 		goto out;
 	}
 
-	tmp_counter = ntohl(ch->carp_counter[0]);
-	tmp_counter = tmp_counter<<32;
-	tmp_counter += ntohl(ch->carp_counter[1]);
-
-	/* XXX Replay protection goes here */
-
-	sc->sc_init_counter = 0;
-	sc->sc_counter = tmp_counter;
+	if (!bcmp(&sc->sc_counter, ch->carp_counter,
+            sizeof(ch->carp_counter))) {
+                /* Do not log duplicates from non simplex interfaces */
+                if (sc->sc_carpdev->if_flags & IFF_SIMPLEX) {
+                        CARPSTATS_INC(carps_badauth);
+                        ifp->if_ierrors++;
+                        CARP_UNLOCK(sc);
+                        CARP_LOG("%s, replay or network loop detected.\n",
+				ifp->if_xname);
+                } else
+                        CARP_UNLOCK(sc);
+                m_freem(m);
+                return;
+        }
 
 	sc_tv.tv_sec = sc->sc_advbase;
 	sc_tv.tv_usec = DEMOTE_ADVSKEW(sc) * 1000000 / 256;
@@ -700,13 +704,12 @@ carp_prepare_ad(struct mbuf *m, struct carp_softc *sc, struct carp_header *ch)
 {
 	struct m_tag *mtag;
 
-	if (sc->sc_init_counter) {
+	if (!sc->sc_counter) {
 		/* this could also be seconds since unix epoch */
 		sc->sc_counter = arc4random();
 		sc->sc_counter = sc->sc_counter << 32;
 		sc->sc_counter += arc4random();
-	} else
-		sc->sc_counter++;
+	}
 
 	ch->carp_counter[0] = htonl((sc->sc_counter>>32)&0xffffffff);
 	ch->carp_counter[1] = htonl(sc->sc_counter&0xffffffff);
@@ -1485,9 +1488,9 @@ carp_alloc(struct ifnet *ifp)
 
 	sc = malloc(sizeof(*sc), M_CARP, M_WAITOK|M_ZERO);
 
+	sc->sc_counter = 0;
 	sc->sc_advbase = CARP_DFLTINTV;
 	sc->sc_vhid = -1;	/* required setting */
-	sc->sc_init_counter = 1;
 	sc->sc_state = INIT;
 
 	sc->sc_ifasiz = sizeof(struct ifaddr *);
