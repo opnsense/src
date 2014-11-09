@@ -296,6 +296,8 @@ distribution:
 	cd ${.CURDIR}/root; \
 	    ${INSTALL} -o ${BINOWN} -g ${BINGRP} -m 644 \
 		dot.profile ${DESTDIR}/root/.profile; \
+	    ${INSTALL} -o ${BINOWN} -g ${BINGRP} -m 644 \
+		dot.vimrc ${DESTDIR}/root/.vimrc; \
 	    rm -f ${DESTDIR}/.profile; \
 	    ln ${DESTDIR}/root/.profile ${DESTDIR}/.profile
 .if ${MK_TCSH} != "no"
