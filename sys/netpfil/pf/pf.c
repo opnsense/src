@@ -3106,16 +3106,18 @@ pf_set_rt_ifp(struct pf_state *s, struct pf_addr *saddr)
 #ifdef INET
 	case AF_INET:
 		pf_map_addr(AF_INET, r, saddr, &s->rt_addr, NULL, &sn);
-		s->rt_kif = r->rpool.cur->kif;
 		break;
 #endif /* INET */
 #ifdef INET6
 	case AF_INET6:
 		pf_map_addr(AF_INET6, r, saddr, &s->rt_addr, NULL, &sn);
-		s->rt_kif = r->rpool.cur->kif;
 		break;
 #endif /* INET6 */
 	}
+	if (sn != NULL && sn->kif != NULL)
+		s->rt_kif = sn->kif;
+	else
+		s->rt_kif = r->rpool.cur->kif;
 }
 
 static u_int32_t
