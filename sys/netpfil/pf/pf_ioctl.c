@@ -66,6 +66,8 @@ __FBSDID("$FreeBSD$");
 #include <net/route.h>
 #include <net/pfil.h>
 #include <net/pfvar.h>
+#define TCPSTATES
+#include <netinet/tcp_fsm.h>
 #include <net/if_pfsync.h>
 #include <net/if_pflog.h>
 
@@ -1609,6 +1611,7 @@ DIOCCHANGERULE_error:
 
 	case DIOCCLRSTATES: {
 		struct pf_state		*s;
+		struct pf_state_key	*sk;
 		struct pfioc_state_kill *psk = (struct pfioc_state_kill *)addr;
 		u_int			 i, killed = 0;
 
@@ -1617,7 +1620,8 @@ DIOCCHANGERULE_error:
 
 relock_DIOCCLRSTATES:
 			PF_HASHROW_LOCK(ih);
-			LIST_FOREACH(s, &ih->states, entry)
+			LIST_FOREACH(s, &ih->states, entry) {
+				sk = s->key[PF_SK_WIRE];
 				if (!psk->psk_ifname[0] ||
 				    !strcmp(psk->psk_ifname,
 				    s->kif->pfik_name)) {
@@ -1629,7 +1633,22 @@ relock_DIOCCLRSTATES:
 					pf_unlink_state(s, PF_ENTER_LOCKED);
 					killed++;
 					goto relock_DIOCCLRSTATES;
+				} else if (sk->af == psk->psk_af &&
+				    !PF_AZERO(&psk->psk_src.addr.v.a.addr, psk->psk_af) &&
+			    	    !PF_AZERO(&s->rt_addr, sk->af) &&
+				    PF_AEQ(&psk->psk_src.addr.v.a.addr, &s->rt_addr, sk->af)) {
+					if (sk->proto == IPPROTO_TCP)
+						s->src.state = PF_TCPS_PROXY_DST; /* XXX: Hack to send a RST back to the host */
+					/*
+					 * Don't send out individual
+					 * delete messages.
+					 */
+					s->state_flags |= PFSTATE_NOSYNC;
+					pf_unlink_state(s, PF_ENTER_LOCKED);
+					killed++;
+					goto relock_DIOCCLRSTATES;
 				}
+			}
 			PF_HASHROW_UNLOCK(ih);
 		}
 		psk->psk_killed = killed;

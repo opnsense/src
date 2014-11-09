@@ -124,6 +124,8 @@ int		 src_node_killers;
 char		*src_node_kill[2];
 int		 state_killers;
 char		*state_kill[2];
+int		 if_kill;
+char		*if_gw_kill;
 int		 loadopt;
 int		 altqsupport;
 
@@ -389,10 +391,46 @@ pfctl_clear_states(int dev, const char *iface, int opts)
 	    sizeof(psk.psk_ifname)) >= sizeof(psk.psk_ifname))
 		errx(1, "invalid interface: %s", iface);
 
-	if (ioctl(dev, DIOCCLRSTATES, &psk))
-		err(1, "DIOCCLRSTATES");
-	if ((opts & PF_OPT_QUIET) == 0)
-		fprintf(stderr, "%d states cleared\n", psk.psk_killed);
+	if (if_kill) {
+		struct addrinfo *res, *resp;
+		u_int killed;
+		int ret_ga;
+
+		if ((ret_ga = getaddrinfo(if_gw_kill, NULL, NULL, &res))) {
+			errx(1, "getaddrinfo: %s", gai_strerror(ret_ga));
+			/* NOTREACHED */
+		}
+		killed = 0;
+		for (resp = res; resp; resp = resp->ai_next) {
+			if (resp->ai_addr == NULL)
+				continue;
+
+			psk.psk_af = resp->ai_family;
+
+			if (psk.psk_af == AF_INET)
+				psk.psk_src.addr.v.a.addr.v4 =
+					((struct sockaddr_in *)resp->ai_addr)->sin_addr;
+			else if (psk.psk_af == AF_INET6)
+				psk.psk_src.addr.v.a.addr.v6 =
+					((struct sockaddr_in6 *)resp->ai_addr)->
+					sin6_addr;
+			else
+				errx(1, "Unknown address family %d", psk.psk_af);
+
+			if (ioctl(dev, DIOCCLRSTATES, &psk))
+				err(1, "DIOCCLRSTATES");
+			if ((opts & PF_OPT_QUIET) == 0)
+				killed += psk.psk_af;
+		}
+		if ((opts & PF_OPT_QUIET) == 0)
+			fprintf(stderr, "%d states cleared\n", killed);
+	} else {
+		if (ioctl(dev, DIOCCLRSTATES, &psk))
+			err(1, "DIOCCLRSTATES");
+		if ((opts & PF_OPT_QUIET) == 0)
+			fprintf(stderr, "%d states cleared\n", psk.psk_af);
+	}
+
 	return (0);
 }
 
@@ -2024,7 +2062,7 @@ main(int argc, char *argv[])
 		usage();
 
 	while ((ch = getopt(argc, argv,
-	    "a:AdD:eqf:F:ghi:k:K:mnNOo:Pp:rRs:t:T:vx:y:z")) != -1) {
+	    "a:AdD:eqf:F:gG:hi:k:K:mnNOo:Pp:rRs:t:T:vx:y:z")) != -1) {
 		switch (ch) {
 		case 'a':
 			anchoropt = optarg;
@@ -2092,6 +2130,16 @@ main(int argc, char *argv[])
 			break;
 		case 'g':
 			opts |= PF_OPT_DEBUG;
+			break;
+		case 'G':
+			if (if_kill) {
+				warnx("can only specify -b twice");
+				usage();
+				/* NOTREACHED */
+			}
+			if_gw_kill = optarg;
+			if_kill++;
+			mode = O_RDWR;
 			break;
 		case 'A':
 			loadopt |= PFCTL_FLAG_ALTQ;
