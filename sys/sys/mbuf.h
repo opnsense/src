@@ -128,6 +128,7 @@ struct pkthdr {
 	uint32_t	 flowid;	/* packet's 4-tuple system */
 	uint64_t	 csum_flags;	/* checksum and offload features */
 	uint16_t	 fibnum;	/* this packet should use this fib */
+	uint64_t	 enqueue_time;
 	uint8_t		 cosqos;	/* class/quality of service */
 	uint8_t		 rsstype;	/* hash type */
 	uint8_t		 l2hlen;	/* layer 2 header length */

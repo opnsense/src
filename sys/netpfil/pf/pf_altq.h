@@ -79,6 +79,12 @@ struct fairq_opts {
 	u_int		lssc_m2;
 };
 
+struct codel_opts {
+	u_int		target;
+	u_int		interval;
+	int		ecn;
+};
+
 struct pf_altq {
 	char			 ifname[IFNAMSIZ];
 
@@ -106,6 +112,7 @@ struct pf_altq {
 		struct priq_opts	 priq_opts;
 		struct hfsc_opts	 hfsc_opts;
 		struct fairq_opts	 fairq_opts;
+		struct codel_opts	 codel_opts;
 	} pq_u;
 
 	uint32_t		 qid;		/* return value */

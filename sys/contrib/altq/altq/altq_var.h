@@ -250,6 +250,11 @@ int	priq_add_queue(struct pf_altq *);
 int	priq_remove_queue(struct pf_altq *);
 int	priq_getqstats(struct pf_altq *, void *, int *);
 
+int     codel_pfattach(struct pf_altq *);
+int     codel_add_altq(struct pf_altq *);
+int     codel_remove_altq(struct pf_altq *);
+int     codel_getqstats(struct pf_altq *, void *, int *);
+
 int	hfsc_pfattach(struct pf_altq *);
 int	hfsc_add_altq(struct pf_altq *);
 int	hfsc_remove_altq(struct pf_altq *);
