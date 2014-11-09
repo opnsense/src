@@ -523,6 +523,11 @@ struct pf_rule {
 	}			 max_src_conn_rate;
 	u_int32_t		 qid;
 	u_int32_t		 pqid;
+	u_int32_t                dnpipe;
+        u_int32_t                pdnpipe;
+#define	PFRULE_DN_IS_PIPE	0x00000010
+#define	PFRULE_DN_IS_QUEUE	0x00000020	
+	u_int32_t                free_flags;
 	u_int32_t		 rt_listid;
 	u_int32_t		 nr;
 	u_int32_t		 prob;
