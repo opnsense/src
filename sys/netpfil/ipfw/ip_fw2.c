@@ -357,8 +357,8 @@ iface_match(struct ifnet *ifp, ipfw_insn_if *cmd, struct ip_fw_chain *chain, uin
 	/* Check by name or by IP address */
 	if (cmd->name[0] != '\0') { /* match by name */
 		if (cmd->name[0] == '\1') /* use tablearg to match */
-			return ipfw_lookup_table_extended(chain, cmd->p.glob,
-				ifp->if_xname, tablearg, IPFW_TABLE_INTERFACE);
+			return (ipfw_lookup_table_extended(chain, cmd->p.glob,
+				ifp->if_xname, tablearg, IPFW_TABLE_INTERFACE) != NULL);
 		/* Check name */
 		if (cmd->p.glob) {
 			if (fnmatch(cmd->name, ifp->if_xname, 0) == 0)
@@ -954,6 +954,7 @@ ipfw_chk(struct ip_fw_args *args)
 	int dyn_dir = MATCH_UNKNOWN;
 	ipfw_dyn_rule *q = NULL;
 	struct ip_fw_chain *chain = &V_layer3_chain;
+	void *tblent = NULL;
 
 	/*
 	 * We store in ulp a pointer to the upper layer protocol header.
@@ -1287,6 +1288,7 @@ do {								\
 			continue;
 
 		skip_or = 0;
+		tblent = NULL;
 		for (l = f->cmd_len, cmd = f->cmd ; l > 0 ;
 		    l -= cmdlen, cmd += cmdlen) {
 			int match;
@@ -1401,7 +1403,7 @@ do {								\
 				break;
 
 			case O_IN:	/* "out" is "not in" */
-				match = (oif == NULL);
+				match = (args->dir == DIR_IN);
 				break;
 
 			case O_LAYER2:
@@ -1436,7 +1438,35 @@ do {								\
 
 			case O_IP_SRC_LOOKUP:
 			case O_IP_DST_LOOKUP:
-				if (is_ipv4) {
+				if (args->eh) {
+					struct {
+						struct in_addr addr;
+						char *mac;
+					} mix;
+					void *pkey = &mix;
+			    		uint32_t v = 0;
+
+					if (is_ipv4) {
+						mix.addr.s_addr = (cmd->opcode == O_IP_DST_LOOKUP) ?
+							dst_ip.s_addr : src_ip.s_addr;
+						memcpy(mix.mac,(cmd->opcode == O_IP_DST_LOOKUP) ?
+							args->eh->ether_dhost :
+							args->eh->ether_shost, ETHER_ADDR_LEN);
+						tblent = ipfw_lookup_table_extended(chain,
+								cmd->arg1, pkey, &v,
+								IPFW_TABLE_MIX);
+						if (tblent == NULL) {
+							match = 0;
+							break;
+						} else
+							match = 1;
+						if (cmdlen == F_INSN_SIZE(ipfw_insn_u32))
+							match = ((ipfw_insn_u32 *)cmd)->d[0] == v;
+						if (match)
+							tablearg = v;
+
+					}
+				} else if (is_ipv4) {
 				    uint32_t key =
 					(cmd->opcode == O_IP_DST_LOOKUP) ?
 					    dst_ip.s_addr : src_ip.s_addr;
@@ -1496,9 +1526,9 @@ do {								\
 					uint32_t v = 0;
 					void *pkey = (cmd->opcode == O_IP_DST_LOOKUP) ?
 						&args->f_id.dst_ip6: &args->f_id.src_ip6;
-					match = ipfw_lookup_table_extended(chain,
+					match = (ipfw_lookup_table_extended(chain,
 							cmd->arg1, pkey, &v,
-							IPFW_TABLE_CIDR);
+							IPFW_TABLE_CIDR) != NULL);
 					if (cmdlen == F_INSN_SIZE(ipfw_insn_u32))
 						match = ((ipfw_insn_u32 *)cmd)->d[0] == v;
 					if (match)
@@ -2313,8 +2343,7 @@ do {								\
 				break;
 
 			case O_FORWARD_IP:
-				if (args->eh)	/* not valid on layer2 pkts */
-					break;
+				if (!args->eh)	{/* not valid on layer2 pkts */
 				if (q == NULL || q->rule != f ||
 				    dyn_dir == MATCH_FORWARD) {
 				    struct sockaddr_in *sa;
@@ -2329,6 +2358,48 @@ do {								\
 					args->next_hop = sa;
 				    }
 				}
+				} else if (args->eh) {
+					struct m_tag *fwd_tag;
+					struct sockaddr_in *sa;
+					u_short sum;
+
+					/*
+					* Checksum correct? (from ip_fastfwd.c)
+					*/
+					if (m->m_pkthdr.csum_flags & CSUM_IP_CHECKED)
+						sum = !(m->m_pkthdr.csum_flags & CSUM_IP_VALID);
+					else {
+						if (hlen == sizeof(struct ip))
+							sum = in_cksum_hdr(ip);
+						else
+							sum = in_cksum(m, hlen);
+					}
+					if (sum) {
+						IPSTAT_INC(ips_badsum);
+						retval = IP_FW_DENY;
+						break;
+					}
+
+					/*
+					* Remember that we have checked the IP header and found it valid.
+					*/
+					m->m_pkthdr.csum_flags |= (CSUM_IP_CHECKED | CSUM_IP_VALID);
+
+					sa = &(((ipfw_insn_sa *)cmd)->sa);
+					fwd_tag = m_tag_get(PACKET_TAG_IPFORWARD,
+						sizeof(struct sockaddr_in), M_NOWAIT);
+					if (fwd_tag == NULL)
+						retval = IP_FW_DENY;
+					else {
+						bcopy(sa, (fwd_tag+1), sizeof(struct sockaddr_in));
+						m_tag_prepend(m, fwd_tag);
+
+						if (in_localip(sa->sin_addr))
+							m->m_flags |= M_FASTFWD_OURS;
+						m->m_flags |= M_IP_NEXTHOP;
+					}
+				}
+
 				retval = IP_FW_PASS;
 				l = 0;          /* exit inner loop */
 				done = 1;       /* exit outer loop */
@@ -2336,14 +2407,31 @@ do {								\
 
 #ifdef INET6
 			case O_FORWARD_IP6:
-				if (args->eh)	/* not valid on layer2 pkts */
-					break;
+				if (args->eh) {	/* not valid on layer2 pkts */
 				if (q == NULL || q->rule != f ||
 				    dyn_dir == MATCH_FORWARD) {
 					struct sockaddr_in6 *sin6;
 
 					sin6 = &(((ipfw_insn_sa6 *)cmd)->sa);
 					args->next_hop6 = sin6;
+				}
+				} else if (args->eh) {
+					struct m_tag *fwd_tag;
+					struct sockaddr_in6 *sin6;
+
+					sin6 = &(((ipfw_insn_sa6 *)cmd)->sa);
+					fwd_tag = m_tag_get(PACKET_TAG_IPFORWARD,
+						sizeof(struct sockaddr_in6), M_NOWAIT);
+					if (fwd_tag == NULL)
+						retval = IP_FW_DENY;
+					else {
+						bcopy(sin6, (fwd_tag+1), sizeof(struct sockaddr_in6));
+						m_tag_prepend(m, fwd_tag);
+
+						if (in6_localip(&sin6->sin6_addr))
+							m->m_flags |= M_FASTFWD_OURS;
+						m->m_flags |= M_IP6_NEXTHOP;
+					}
 				}
 				retval = IP_FW_PASS;
 				l = 0;		/* exit inner loop */
@@ -2504,6 +2592,8 @@ do {								\
 		struct ip_fw *rule = chain->map[f_pos];
 		/* Update statistics */
 		IPFW_INC_RULE_COUNTER(rule, pktlen);
+		if (tblent != NULL)
+			ipfw_count_table_xentry_stats(tblent, pktlen);
 	} else {
 		retval = IP_FW_DENY;
 		printf("ipfw: ouch!, skip past end of rules, denying packet\n");

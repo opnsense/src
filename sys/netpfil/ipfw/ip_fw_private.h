@@ -101,6 +101,7 @@ struct ip_fw_args {
 
 	struct ipfw_flow_id f_id;	/* grabbed from IP header	*/
 	//uint32_t	cookie;		/* a cookie depending on rule action */
+	uint32_t        dir;            /* direction */
 	struct inpcb	*inp;
 
 	struct _ip6dn_args	dummypar; /* dummynet->ip6_output */
@@ -304,8 +305,11 @@ void ipfw_reap_rules(struct ip_fw *head);
 struct radix_node;
 int ipfw_lookup_table(struct ip_fw_chain *ch, uint16_t tbl, in_addr_t addr,
     uint32_t *val);
-int ipfw_lookup_table_extended(struct ip_fw_chain *ch, uint16_t tbl, void *paddr,
+void *ipfw_lookup_table_extended(struct ip_fw_chain *ch, uint16_t tbl, void *paddr,
     uint32_t *val, int type);
+void ipfw_count_table_xentry_stats(void *, int);
+int ipfw_zero_table_xentry_stats(struct ip_fw_chain *, ipfw_table_xentry *);
+int ipfw_lookup_table_xentry(struct ip_fw_chain *, ipfw_table_xentry *);
 int ipfw_init_tables(struct ip_fw_chain *ch);
 void ipfw_destroy_tables(struct ip_fw_chain *ch);
 int ipfw_flush_table(struct ip_fw_chain *ch, uint16_t tbl);

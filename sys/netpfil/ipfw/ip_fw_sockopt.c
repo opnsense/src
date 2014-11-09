@@ -1241,6 +1241,47 @@ ipfw_ctl(struct sockopt *sopt)
 		}
 		break;
 
+	case IP_FW_TABLE_XZEROENTRY: /* IP_FW3 */
+		{
+			ipfw_table_xentry *xent = (ipfw_table_xentry *)(op3 + 1);
+
+			/* Check minimum header size */
+			if (IP_FW3_OPLENGTH(sopt) < offsetof(ipfw_table_xentry, k)) {
+				error = EINVAL;
+				break;
+			}
+
+			/* Check if len field is valid */
+			if (xent->len > sizeof(ipfw_table_xentry)) {
+				error = EINVAL;
+				break;
+			}
+			
+			error = ipfw_zero_table_xentry_stats(chain, xent);
+		}
+		break;
+
+	case IP_FW_TABLE_XLISTENTRY: /* IP_FW3 */
+		{
+			ipfw_table_xentry *xent = (ipfw_table_xentry *)(op3 + 1);
+
+			/* Check minimum header size */
+			if (IP_FW3_OPLENGTH(sopt) < offsetof(ipfw_table_xentry, k)) {
+				error = EINVAL;
+				break;
+			}
+
+			/* Check if len field is valid */
+			if (xent->len > sizeof(ipfw_table_xentry)) {
+				error = EINVAL;
+				break;
+			}
+			
+			error = ipfw_lookup_table_xentry(chain, xent);
+			xent->timestamp += boottime.tv_sec;
+		}
+		break;
+
 	case IP_FW_TABLE_XLIST: /* IP_FW3 */
 		{
 			ipfw_xtable *tbl;

@@ -75,12 +75,31 @@ struct table_entry {
 	struct radix_node	rn[2];
 	struct sockaddr_in	addr, mask;
 	u_int32_t		value;
+	u_int32_t               timestamp;
+	u_int64_t               bytes;
+	u_int64_t               packets;
 };
 
 struct xaddr_iface {
 	uint8_t		if_len;		/* length of this struct */
 	uint8_t		pad[7];		/* Align name */
 	char 		ifname[IF_NAMESIZE];	/* Interface name */
+};
+
+#if 0
+struct xaddr_mac {
+	uint8_t		mac_len;		/* length of this struct */
+	uint8_t		pad[7];		/* Align name */
+	struct ether_addr mac;
+};
+#endif
+
+struct xaddr_mix {
+	uint8_t		mix_len;		/* length of this struct */
+	sa_family_t     sin_family;
+        uint8_t		pad[6];
+        struct  in_addr sin_addr;
+	u_char	mac[ETHER_ADDR_LEN];
 };
 
 struct table_xentry {
@@ -90,14 +109,25 @@ struct table_xentry {
 		struct sockaddr_in6	addr6;
 #endif
 		struct xaddr_iface	iface;
+#if 0
+		struct xaddr_mac	mac;
+#endif
+		struct xaddr_mix	mix;
 	} a;
 	union {
 #ifdef INET6
 		struct sockaddr_in6	mask6;
 #endif
 		struct xaddr_iface	ifmask;
+#if 0
+		struct xaddr_mac	macmask;
+#endif
+		struct xaddr_mix	mixmask;
 	} m;
 	u_int32_t		value;
+	u_int32_t               timestamp;
+	u_int64_t               bytes;
+	u_int64_t               packets;
 };
 
 /*
@@ -117,10 +147,17 @@ struct table_xentry {
 #define KEY_LEN_INET	(offsetof(struct sockaddr_in, sin_addr) + sizeof(in_addr_t))
 #define KEY_LEN_INET6	(offsetof(struct sockaddr_in6, sin6_addr) + sizeof(struct in6_addr))
 #define KEY_LEN_IFACE	(offsetof(struct xaddr_iface, ifname))
+#define KEY_LEN_MIX	(offsetof(struct xaddr_mix, sin_addr) + sizeof(in_addr_t) + ETHER_ADDR_LEN)
+#if 0
+#define KEY_LEN_MAC	(offsetof(struct xaddr_mac, mac) + ETHER_ADDR_LEN)
+#endif
 
 #define OFF_LEN_INET	(8 * offsetof(struct sockaddr_in, sin_addr))
 #define OFF_LEN_INET6	(8 * offsetof(struct sockaddr_in6, sin6_addr))
 #define OFF_LEN_IFACE	(8 * offsetof(struct xaddr_iface, ifname))
+#if 0
+#define OFF_LEN_MAC	(8 * offsetof(struct xaddr_mac, mac))
+#endif
 
 
 static inline void
@@ -228,6 +265,52 @@ ipfw_add_table_entry(struct ip_fw_chain *ch, uint16_t tbl, void *paddr,
 		rnh_ptr = &ch->xtables[tbl];
 		ent_ptr = xent;
 		addr_ptr = (struct sockaddr *)&xent->a.iface;
+		mask_ptr = NULL;
+		break;
+
+#if 0
+	case IPFW_TABLE_MAC:
+		int i;
+
+		xent = malloc(sizeof(*xent), M_IPFW_TBL, M_WAITOK | M_ZERO);
+		xent->value = value;
+		/* Set 'total' structure length */
+		KEY_LEN(xent->a.mac) = KEY_LEN_MAC;
+		KEY_LEN(xent->m.macmask) = KEY_LEN_MAC;
+		/* Set offset of address in bits */
+		offset = OFF_LEN_MAC;
+		xent->a.mac = (struct ether_addr)(*paddr);
+		xent->m.mac = (struct ether_addr)(*(((struct ether_addr *)paddr) + 1));
+		for (i = 0; i < ETHER_ADDR_LEN; i++)
+			xent->a.mac.octet[i] &= xent->m.mac.octet[i];
+		/* Set pointers */
+		rnh_ptr = &ch->xtables[tbl];
+		ent_ptr = xent;
+		addr_ptr = (struct sockaddr *)&xent->a.mac;
+		mask_ptr = (struct sockaddr *)&xent->m.macmask;
+		break;
+#endif
+
+	case IPFW_TABLE_MIX:
+		if ((plen - ETHER_ADDR_LEN) != sizeof(in_addr_t))
+			return (EINVAL);
+
+		xent = malloc(sizeof(*xent), M_IPFW_TBL, M_WAITOK | M_ZERO);
+		xent->value = value;
+		/* Set 'total' structure length */
+		KEY_LEN(xent->a.mix) = KEY_LEN_MIX;
+		KEY_LEN(xent->m.mixmask) = KEY_LEN_MIX;
+		/* Set offset of IPv4 address in bits */
+		offset = OFF_LEN_INET;
+		/* XXX: Needs to be fixed */
+		memcpy(&xent->a.mix.sin_addr, paddr, ETHER_ADDR_LEN + sizeof(struct in_addr));
+		/* Only full ips /32 and full masks supported for mac */
+		memset(&xent->m.mixmask.sin_addr, 0xFF, sizeof(struct in_addr));
+		memset(xent->m.mixmask.mac, 0xFF, ETHER_ADDR_LEN);
+		/* Set pointers */
+		rnh_ptr = &ch->xtables[tbl];
+		ent_ptr = xent;
+		addr_ptr = (struct sockaddr *)&xent->a.mix;
 		mask_ptr = NULL;
 		break;
 
@@ -362,6 +445,41 @@ ipfw_del_table_entry(struct ip_fw_chain *ch, uint16_t tbl, void *paddr,
 		/* Set pointers */
 		rnh_ptr = &ch->xtables[tbl];
 		sa_ptr = (struct sockaddr *)&ifname;
+
+		break;
+
+#if 0
+	case IPFW_TABLE_MAC:
+		struct xaddr_mac mac, macmask;
+		memset(&mac, 0, sizeof(mac));
+		memset(&macmask, 0, sizeof(macmask));
+
+		/* Set 'total' structure length */
+                KEY_LEN(mac) = KEY_LEN_MAC;
+		mac.mac.mac = (struct ether_addr)(*paddr);
+                KEY_LEN(macmask) = KEY_LEN_MAC;
+		macmask.mac.macmask = (struct ether_addr)(*(((struct ether_addr *)paddr) + 1));
+		for (i = 0; i < ETHER_ADDR_LEN; i++)
+			mac.mac.octet[i] &= macmask.mac.octet[i];
+		rnh_ptr = &ch->xtables[tbl];
+		sa_ptr = (struct sockaddr *)&mac;
+		mask_ptr = (struct sockaddr *)&macmask;
+
+		break;
+#endif
+
+	case IPFW_TABLE_MIX:
+		if (mlen > (32 + ETHER_ADDR_LEN))
+			return (EINVAL);
+		struct xaddr_mix mix;
+		memset(&mix, 0, sizeof(mix));
+
+		/* Set 'total' structure length */
+		KEY_LEN(mix) = KEY_LEN_MIX;
+		memcpy(&mix.sin_addr, paddr, sizeof(struct in_addr) + ETHER_ADDR_LEN);
+		rnh_ptr = &ch->xtables[tbl];
+		sa_ptr = (struct sockaddr *)&mix;
+		mask_ptr = NULL;
 
 		break;
 
@@ -550,7 +668,150 @@ ipfw_lookup_table(struct ip_fw_chain *ch, uint16_t tbl, in_addr_t addr,
 	return (0);
 }
 
+void
+ipfw_count_table_xentry_stats(void *arg, int pktlen)
+{
+	ipfw_table_xentry *xent= arg;
+
+	xent->packets++;
+	xent->bytes += pktlen;
+	xent->timestamp = time_uptime;
+}
+
 int
+ipfw_zero_table_xentry_stats(struct ip_fw_chain *ch, ipfw_table_xentry *arg)
+{
+	struct radix_node_head *rnh;
+	struct table_xentry *xent;
+	struct sockaddr_in6 sa6;
+	struct xaddr_iface iface;
+	struct xaddr_mix xm;
+
+	if (arg->tbl >= V_fw_tables_max)
+		return (0);
+	if ((rnh = ch->xtables[arg->tbl]) == NULL)
+		return (0);
+
+	switch (arg->type) {
+	case IPFW_TABLE_CIDR:
+		KEY_LEN(sa6) = KEY_LEN_INET6;
+		memcpy(&sa6.sin6_addr, &arg->k.addr6, sizeof(struct in6_addr));
+		xent = (struct table_xentry *)(rnh->rnh_lookup(&sa6, NULL, rnh));
+		break;
+
+	case IPFW_TABLE_INTERFACE:
+		KEY_LEN(iface) = KEY_LEN_IFACE +
+		    strlcpy(iface.ifname, arg->k.iface, IF_NAMESIZE) + 1;
+		/* Assume direct match */
+		/* FIXME: Add interface pattern matching */
+		xent = (struct table_xentry *)(rnh->rnh_lookup(&iface, NULL, rnh));
+		break;
+
+#if 0
+	case IPFW_TABLE_MAC:
+	{
+		struct xaddr_mac mac;
+
+		KEY_LEN(mac) = KEY_LEN_MAC;
+		&mac.mac = arg->k.mac;
+		xent = (struct table_xentry *)(rnh->rnh_lookup(&mac, NULL, rnh));
+	}
+		break;
+#endif
+
+	case IPFW_TABLE_MIX:
+		KEY_LEN(xm) = KEY_LEN_MIX;
+		memcpy(&xm.sin_addr, &arg->k.mix.addr, sizeof(struct in_addr));
+		memcpy(&xm.mac, arg->k.mix.mac, ETHER_ADDR_LEN);
+		xent = (struct table_xentry *)(rnh->rnh_lookup(&xm, NULL, rnh));
+		break;
+
+	default:
+		return (0);
+	}
+
+	if (xent != NULL) {
+		xent->bytes = 0;
+		xent->packets = 0;
+		xent->timestamp = time_uptime;
+		
+		return (1);
+	}
+	return (0);
+}
+
+int
+ipfw_lookup_table_xentry(struct ip_fw_chain *ch, ipfw_table_xentry *arg)
+{
+	struct radix_node_head *rnh;
+	struct table_xentry *xent;
+
+	if (arg->tbl >= V_fw_tables_max)
+		return (0);
+	if ((rnh = ch->xtables[arg->tbl]) == NULL)
+		return (0);
+
+	switch (arg->type) {
+	case IPFW_TABLE_CIDR:
+	{
+		struct sockaddr_in6 sa6;
+		KEY_LEN(sa6) = KEY_LEN_INET6;
+		memcpy(&sa6.sin6_addr, &arg->k.addr6, sizeof(struct in6_addr));
+		xent = (struct table_xentry *)(rnh->rnh_lookup(&sa6, NULL, rnh));
+	}
+		break;
+
+	case IPFW_TABLE_INTERFACE:
+	{
+		struct xaddr_iface iface;
+
+		KEY_LEN(iface) = KEY_LEN_IFACE +
+		    strlcpy(iface.ifname, arg->k.iface, IF_NAMESIZE) + 1;
+		/* Assume direct match */
+		/* FIXME: Add interface pattern matching */
+		xent = (struct table_xentry *)(rnh->rnh_lookup(&iface, NULL, rnh));
+	}
+		break;
+
+#if 0
+	case IPFW_TABLE_MAC:
+	{
+		struct xaddr_mac mac;
+
+		KEY_LEN(mac) = KEY_LEN_MAC;
+		mac.mac = arg->k.mac.addr;
+		xent = (struct table_xentry *)(rnh->rnh_lookup(&mac, NULL, rnh));
+	}
+		break;
+#endif
+
+	case IPFW_TABLE_MIX:
+	{
+		struct xaddr_mix xm;
+
+		KEY_LEN(xm) = KEY_LEN_MIX;
+		memcpy(&xm.sin_addr, &arg->k.mix.addr, sizeof(struct in_addr));
+		memcpy(&xm.mac, arg->k.mix.mac, ETHER_ADDR_LEN);
+		xent = (struct table_xentry *)(rnh->rnh_lookup(&xm, NULL, rnh));
+	}
+		break;
+
+	default:
+		return (0);
+	}
+
+	if (xent != NULL) {
+		arg->bytes = xent->bytes;
+		arg->packets = xent->packets;
+		arg->value = xent->value;
+		arg->timestamp = xent->timestamp;
+		
+		return (1);
+	}
+	return (0);
+}
+
+void *
 ipfw_lookup_table_extended(struct ip_fw_chain *ch, uint16_t tbl, void *paddr,
     uint32_t *val, int type)
 {
@@ -560,9 +821,9 @@ ipfw_lookup_table_extended(struct ip_fw_chain *ch, uint16_t tbl, void *paddr,
 	struct xaddr_iface iface;
 
 	if (tbl >= V_fw_tables_max)
-		return (0);
+		return (NULL);
 	if ((rnh = ch->xtables[tbl]) == NULL)
-		return (0);
+		return (NULL);
 
 	switch (type) {
 	case IPFW_TABLE_CIDR:
@@ -579,15 +840,37 @@ ipfw_lookup_table_extended(struct ip_fw_chain *ch, uint16_t tbl, void *paddr,
 		xent = (struct table_xentry *)(rnh->rnh_lookup(&iface, NULL, rnh));
 		break;
 
+#if 0
+	case IPFW_TABLE_MAC:
+	{
+		struct xaddr_mac mac;
+
+		KEY_LEN(mac) = KEY_LEN_MAC;
+		mac.mac = (struct ether_addr)(*paddr);
+		xent = (struct table_xentry *)(rnh->rnh_lookup(&mac, NULL, rnh));
+	}
+		break;
+#endif
+
+	case IPFW_TABLE_MIX:
+	{
+		struct xaddr_mix xm;
+
+		KEY_LEN(xm) = KEY_LEN_MIX;
+		memcpy(((char *)&xm.sin_addr), paddr, sizeof(struct in_addr) + ETHER_ADDR_LEN);
+		xent = (struct table_xentry *)(rnh->rnh_lookup(&xm, NULL, rnh));
+	}
+		break;
+
 	default:
-		return (0);
+		return (NULL);
 	}
 
 	if (xent != NULL) {
 		*val = xent->value;
-		return (1);
+		return (xent);
 	}
-	return (0);
+	return (NULL);
 }
 
 static int
@@ -696,6 +979,9 @@ dump_table_xentry_base(struct radix_node *rn, void *arg)
 	/* Save IPv4 address as deprecated IPv6 compatible */
 	xent->k.addr6.s6_addr32[3] = n->addr.sin_addr.s_addr;
 	xent->value = n->value;
+	xent->bytes = n->bytes;
+	xent->packets = n->packets;
+	xent->timestamp = n->timestamp;
 	tbl->cnt++;
 	return (0);
 }
@@ -733,12 +1019,31 @@ dump_table_xentry_extended(struct radix_node *rn, void *arg)
 		memcpy(&xent->k, &n->a.iface.ifname, IF_NAMESIZE);
 		break;
 	
+#if 0
+	case IPFW_TABLE_MAC:
+		/* Assume exact mask */
+		xent->masklen = 8 * ETHER_ADDR_LEN;
+		xent->k.mac.addr = n->a.mac.mac;
+		xent->k.mac.mask = n->m.mac.mac;
+		break;
+#endif
+	
+	case IPFW_TABLE_MIX:
+		/* Assume exact mask */
+		xent->masklen = 8 * (ETHER_ADDR_LEN + sizeof(struct in_addr));
+		memcpy(&xent->k.mix.addr, &n->a.mix.sin_addr, sizeof(struct in_addr));
+		memcpy(xent->k.mix.mac, &n->a.mix.mac, ETHER_ADDR_LEN);
+		break;
+
 	default:
 		/* unknown, skip entry */
 		return (0);
 	}
 
 	xent->value = n->value;
+	xent->bytes = n->bytes;
+	xent->packets = n->packets;
+	xent->timestamp = n->timestamp;
 	tbl->cnt++;
 	return (0);
 }

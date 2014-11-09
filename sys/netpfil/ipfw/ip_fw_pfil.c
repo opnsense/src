@@ -143,8 +143,9 @@ again:
 	}
 
 	args.m = *m0;
-	args.oif = dir == DIR_OUT ? ifp : NULL;
+	args.oif = ifp;
 	args.inp = inp;
+	args.dir = dir;
 
 	ipfw = ipfw_chk(&args);
 	*m0 = args.m;
@@ -314,9 +315,8 @@ ipfw_check_frame(void *arg, struct mbuf **m0, struct ifnet *dst, int dir,
 		/* XXX can we free it after use ? */
 		mtag->m_tag_id = PACKET_TAG_NONE;
 		r = (struct ipfw_rule_ref *)(mtag + 1);
-		if (r->info & IPFW_ONEPASS)
-			return (0);
-		args.rule = *r;
+		m_tag_delete(*m0, mtag);
+		return (0);
 	}
 
 	/* I need some amt of data to be contiguous */
@@ -333,12 +333,15 @@ ipfw_check_frame(void *arg, struct mbuf **m0, struct ifnet *dst, int dir,
 	save_eh = *eh;			/* save copy for restore below */
 	m_adj(m, ETHER_HDR_LEN);	/* strip ethernet header */
 
+	dir = dir == PFIL_IN ? DIR_IN : DIR_OUT;
+
 	args.m = m;		/* the packet we are looking at		*/
 	args.oif = dst;		/* destination, if any			*/
 	args.next_hop = NULL;	/* we do not support forward yet	*/
 	args.next_hop6 = NULL;	/* we do not support forward yet	*/
 	args.eh = &save_eh;	/* MAC header for bridged/MAC packets	*/
 	args.inp = NULL;	/* used by ipfw uid/gid/jail rules	*/
+	args.dir = dir;		/* pfSense addition			*/
 	i = ipfw_chk(&args);
 	m = args.m;
 	if (m != NULL) {
@@ -369,13 +372,12 @@ ipfw_check_frame(void *arg, struct mbuf **m0, struct ifnet *dst, int dir,
 
 	case IP_FW_DUMMYNET:
 		ret = EACCES;
-		int dir;
 
 		if (ip_dn_io_ptr == NULL)
 			break; /* i.e. drop */
 
 		*m0 = NULL;
-		dir = PROTO_LAYER2 | (dst ? DIR_OUT : DIR_IN);
+		dir = PROTO_LAYER2 | dir;
 		ip_dn_io_ptr(&m, dir, &args);
 		return 0;
 
