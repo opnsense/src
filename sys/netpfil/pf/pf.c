@@ -6102,7 +6102,14 @@ pf_test(int dir, struct ifnet *ifp, struct mbuf **m0, struct inpcb *inp)
 	if (m->m_flags & M_SKIP_FIREWALL)
 		return (PF_PASS);
 
-	pd.pf_mtag = pf_find_mtag(m);
+	pd.pf_mtag = pf_get_mtag(m);
+	if (pd.pf_mtag == NULL) {
+		REASON_SET(&reason, PFRES_MEMORY);
+		log = 1;
+		DPFPRINTF(PF_DEBUG_MISC,
+		    ("pf: dropping packet due to failed memory allocation for tags\n"));
+		return PF_DROP;
+	}
 
 	PF_RULES_RLOCK();
 
@@ -6572,7 +6579,14 @@ pf_test6(int dir, struct ifnet *ifp, struct mbuf **m0, struct inpcb *inp)
 		return (PF_PASS);
 
 	memset(&pd, 0, sizeof(pd));
-	pd.pf_mtag = pf_find_mtag(m);
+        pd.pf_mtag = pf_get_mtag(m);
+        if (pd.pf_mtag == NULL) {
+                REASON_SET(&reason, PFRES_MEMORY);
+                log = 1;
+                DPFPRINTF(PF_DEBUG_MISC,
+                    ("pf: dropping packet due to failed memory allocation for tags\n"));
+                return PF_DROP;
+        }
 
 	if (pd.pf_mtag && pd.pf_mtag->flags & PF_TAG_GENERATED)
 		return (PF_PASS);
