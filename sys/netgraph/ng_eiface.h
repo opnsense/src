@@ -54,6 +54,7 @@ enum {
 	NGM_EIFACE_GET_IFNAME = 1,	/* get the interface name */
 	NGM_EIFACE_GET_IFADDRS,		/* returns list of addresses */
 	NGM_EIFACE_SET,			/* set ethernet address */
+	NGM_EIFACE_SET_IFNAME,
 };
 
 #endif /* _NETGRAPH_NG_EIFACE_H_ */
