@@ -262,7 +262,7 @@ ipfw_main(int oldac, char **oldav)
 	save_av = av;
 
 	optind = optreset = 1;	/* restart getopt() */
-	while ((ch = getopt(ac, av, "abcdefhinNp:qs:STtv")) != -1)
+	while ((ch = getopt(ac, av, "abcdefhinNp:qs:STtvx:")) != -1)
 		switch (ch) {
 		case 'a':
 			do_acct = 1;
@@ -335,6 +335,12 @@ ipfw_main(int oldac, char **oldav)
 			co.verbose = 1;
 			break;
 
+		case 'x':
+			co.ctx = atoi(optarg);
+			if (co.ctx == 0)
+				errx(EX_USAGE, "Context 0 is invalid");
+			break;
+
 		default:
 			free(save_av);
 			return 1;
@@ -362,7 +368,9 @@ ipfw_main(int oldac, char **oldav)
 	co.do_nat = 0;
 	co.do_pipe = 0;
 	co.use_set = 0;
-	if (!strncmp(*av, "nat", strlen(*av)))
+	if (!strncmp(*av, "zone", strlen(*av)))
+		return (ipfw_context_handler(ac, av));
+	else if (!strncmp(*av, "nat", strlen(*av)))
  		co.do_nat = 1;
  	else if (!strncmp(*av, "pipe", strlen(*av)))
 		co.do_pipe = 1;
@@ -388,6 +396,9 @@ ipfw_main(int oldac, char **oldav)
 		av++;
 	}
 	NEED1("missing command");
+
+	if (!co.ctx && !co.do_pipe)
+		err(11, "Context is mandatory");
 
 	/*
 	 * For pipes, queues and nats we normally say 'nat|pipe NN config'
@@ -458,7 +469,7 @@ ipfw_readfile(int ac, char *av[])
 	FILE	*f = NULL;
 	pid_t	preproc = 0;
 
-	while ((c = getopt(ac, av, "cfNnp:qS")) != -1) {
+	while ((c = getopt(ac, av, "cfNnp:qSx:")) != -1) {
 		switch(c) {
 		case 'c':
 			co.do_compact = 1;
@@ -507,6 +518,12 @@ ipfw_readfile(int ac, char *av[])
 
 		case 'S':
 			co.show_sets = 1;
+			break;
+
+		case 'x':
+			co.ctx = atoi(optarg);
+			if (co.ctx == 0)
+				errx(EX_USAGE, "Context 0 is invalid");
 			break;
 
 		default:

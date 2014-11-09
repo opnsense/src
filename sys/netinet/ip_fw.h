@@ -65,7 +65,8 @@
 /* IP_FW3 header/opcodes */
 typedef struct _ip_fw3_opheader {
 	uint16_t opcode;	/* Operation opcode */
-	uint16_t reserved[3];	/* Align to 64-bit boundary */
+	uint16_t ctxid;
+	uint16_t reserved[2];	/* Align to 64-bit boundary */
 } ip_fw3_opheader;
 
 
@@ -76,6 +77,12 @@ typedef struct _ip_fw3_opheader {
 #define	IP_FW_TABLE_XLIST	89	/* list table contents */
 #define	IP_FW_TABLE_XLISTENTRY	90	/* list one table entry contents */
 #define	IP_FW_TABLE_XZEROENTRY	91	/* zero one table entry stats */
+#define	IP_FW_CTX_GET		92	
+#define	IP_FW_CTX_ADD		93	
+#define	IP_FW_CTX_DEL		94	
+#define	IP_FW_CTX_SET		95	
+#define	IP_FW_CTX_ADDMEMBER	96	
+#define	IP_FW_CTX_DELMEMBER	97	
 
 /*
  * The kernel representation of ipfw rules is made of a list of

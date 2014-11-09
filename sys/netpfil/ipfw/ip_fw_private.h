@@ -171,6 +171,9 @@ enum { /* result for matching dynamic rules */
 	MATCH_UNKNOWN,
 };
 
+VNET_DECLARE(u_int32_t, curr_dyn_buckets);
+#define V_curr_dyn_buckets              VNET(curr_dyn_buckets)
+
 /*
  * The lock for dynamic rules is only used once outside the file,
  * and only to release the result of lookup_dyn_rule().
@@ -179,6 +182,7 @@ enum { /* result for matching dynamic rules */
 struct ip_fw_chain;
 void ipfw_expire_dyn_rules(struct ip_fw_chain *, struct ip_fw *, int);
 void ipfw_dyn_unlock(ipfw_dyn_rule *q);
+int resize_dynamic_table(struct ip_fw_chain *, int);
 
 struct tcphdr;
 struct mbuf *ipfw_send_pkt(struct mbuf *, struct ipfw_flow_id *,
@@ -190,7 +194,7 @@ ipfw_dyn_rule *ipfw_lookup_dyn_rule(struct ipfw_flow_id *pkt,
 void ipfw_remove_dyn_children(struct ip_fw *rule);
 void ipfw_get_dynamic(struct ip_fw_chain *chain, char **bp, const char *ep);
 
-void ipfw_dyn_init(struct ip_fw_chain *);	/* per-vnet initialization */
+void ipfw_dyn_init(void);	/* per-vnet initialization */
 void ipfw_dyn_uninit(int);	/* per-vnet deinitialization */
 int ipfw_dyn_len(void);
 
@@ -200,9 +204,6 @@ VNET_DECLARE(int, fw_one_pass);
 
 VNET_DECLARE(int, fw_verbose);
 #define	V_fw_verbose		VNET(fw_verbose)
-
-VNET_DECLARE(struct ip_fw_chain, layer3_chain);
-#define	V_layer3_chain		VNET(layer3_chain)
 
 VNET_DECLARE(u_int32_t, set_disable);
 #define	V_set_disable		VNET(set_disable)
@@ -234,6 +235,33 @@ struct ip_fw_chain {
 	uint32_t	id;		/* ruleset id */
 	uint32_t	gencnt;		/* generation count */
 };
+
+struct ip_fw_ctx_iflist {
+	TAILQ_ENTRY(ip_fw_ctx_iflist) entry;
+	char ifname[IFNAMSIZ];
+};
+
+#define	IP_FW_MAXCTX		4096
+struct ip_fw_contextes {
+	struct ip_fw_chain	*chain[IP_FW_MAXCTX]; /* Arrays of contextes */
+	TAILQ_HEAD(, ip_fw_ctx_iflist) iflist[IP_FW_MAXCTX];
+	struct rwlock rwctx;
+	eventhandler_tag        ifnet_arrival;
+};
+
+VNET_DECLARE(struct ip_fw_contextes,	ip_fw_contexts);
+#define	V_ip_fw_contexts	VNET(ip_fw_contexts)
+
+#define	IPFW_CTX_LOCK_INIT()	rw_init(&V_ip_fw_contexts.rwctx, "IPFW context")
+#define	IPFW_CTX_LOCK_DESTROY()	rw_destroy(&V_ip_fw_contexts.rwctx)
+#define	IPFW_CTX_WLOCK()	rw_wlock(&V_ip_fw_contexts.rwctx)
+#define	IPFW_CTX_WUNLOCK()	rw_wunlock(&V_ip_fw_contexts.rwctx)
+#define	IPFW_CTX_RLOCK()	rw_rlock(&V_ip_fw_contexts.rwctx)
+#define	IPFW_CTX_RUNLOCK()	rw_runlock(&V_ip_fw_contexts.rwctx)
+
+void	ipfw_attach_ifnet_event(void *, struct ifnet *);
+int	ipfw_context_init(int);
+int	ipfw_context_uninit(int);
 
 struct sockopt;	/* used by tcp_var.h */
 
@@ -328,8 +356,9 @@ int ipfw_resize_tables(struct ip_fw_chain *ch, unsigned int ntables);
 
 extern struct cfg_nat *(*lookup_nat_ptr)(struct nat_list *, int);
 
-typedef int ipfw_nat_t(struct ip_fw_args *, struct cfg_nat *, struct mbuf *);
-typedef int ipfw_nat_cfg_t(struct sockopt *);
+typedef int ipfw_nat_t(struct ip_fw_args *, struct cfg_nat *, struct mbuf *,
+			struct ip_fw_chain *);
+typedef int ipfw_nat_cfg_t(struct sockopt *, struct ip_fw_chain *);
 
 VNET_DECLARE(int, ipfw_nat_ready);
 #define	V_ipfw_nat_ready	VNET(ipfw_nat_ready)

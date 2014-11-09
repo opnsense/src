@@ -54,7 +54,7 @@
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 
-struct cmdline_opts co;	/* global options */
+struct cmdline_opts co = { 0 };	/* global options */
 
 int resvd_set_number = RESVD_SET;
 
@@ -420,6 +420,7 @@ safe_realloc(void *ptr, size_t size)
 int
 do_cmd(int optname, void *optval, uintptr_t optlen)
 {
+	ip_fw3_opheader op3;
 	int i;
 
 	if (co.test_only)
@@ -429,6 +430,15 @@ do_cmd(int optname, void *optval, uintptr_t optlen)
 		ipfw_socket = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
 	if (ipfw_socket < 0)
 		err(EX_UNAVAILABLE, "socket");
+
+	if (optname != IP_FW3 && optname != IP_DUMMYNET3 && optname != -IP_DUMMYNET3) {
+		memset(&op3, 0, sizeof op3);
+		op3.ctxid = co.ctx;
+		op3.opcode = IP_FW_CTX_SET;
+		i = setsockopt(ipfw_socket, IPPROTO_IP, IP_FW3, &op3, sizeof(op3));
+		if (i)
+			errx(EX_OSERR, "setsockopt: choosing context");
+	}
 
 	if (optname == IP_FW_GET || optname == IP_DUMMYNET_GET ||
 	    optname == IP_FW_ADD || optname == IP_FW3 ||
@@ -475,6 +485,7 @@ do_setcmd3(int optname, void *optval, socklen_t optlen)
 	memset(op3, 0, sizeof(ip_fw3_opheader));
 	memcpy(op3 + 1, optval, optlen);
 	op3->opcode = optname;
+	op3->ctxid = co.ctx;
 
 	return setsockopt(ipfw_socket, IPPROTO_IP, IP_FW3, op3, len);
 }
@@ -4435,6 +4446,7 @@ table_list(uint16_t num, int need_header)
 	a = (uint32_t *)(op3 + 1);
 	*a = num;
 	op3->opcode = IP_FW_TABLE_XGETSIZE;
+	op3->ctxid = co.ctx;
 	if (do_cmd(IP_FW3, op3, (uintptr_t)&l) < 0)
 		err(EX_OSERR, "getsockopt(IP_FW_TABLE_XGETSIZE)");
 

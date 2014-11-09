@@ -54,6 +54,7 @@ struct cmdline_opts {
 	int	use_set;	/* work with specified set number */
 		/* 0 means all sets, otherwise apply to set use_set - 1 */
 
+	u_int	ctx;
 };
 
 extern struct cmdline_opts co;
@@ -276,6 +277,9 @@ void print_altq_cmd(struct _ipfw_insn_altq *altqptr);
 void dummynet_list(int ac, char *av[], int show_counters);
 void dummynet_flush(void);
 int ipfw_delete_pipe(int pipe_or_queue, int n);
+
+/* Contextes */
+int ipfw_context_handler(int, char **);
 
 /* ipv6.c */
 void print_unreach6_code(uint16_t code);
