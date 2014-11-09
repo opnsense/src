@@ -48,6 +48,11 @@
 #include <net/route.h>
 #include <net/vnet.h>
 
+#ifdef DEV_ENC
+#include <altq/if_altq.h>
+#include <netpfil/pf/pf_mtag.h>
+#endif
+
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
@@ -99,6 +104,7 @@ ipsec_process_done(struct mbuf *m, struct ipsecrequest *isr)
 	struct m_tag *mtag;
 	struct secasvar *sav;
 	struct secasindex *saidx;
+	struct pf_mtag *atag = NULL;
 	int error;
 
 	IPSEC_ASSERT(m != NULL, ("null mbuf"));
@@ -190,6 +196,14 @@ ipsec_process_done(struct mbuf *m, struct ipsecrequest *isr)
 	}
 	key_sa_recordxfer(sav, m);		/* record data transfer */
 
+#ifdef DEV_ENC
+	if (saidx->qid && (atag = pf_find_mtag(m)) != NULL) {
+        	atag->qid = saidx->qid;
+                /* add hints for ecn */
+                atag->af = saidx->dst.sa.sa_family;
+                atag->hdr = NULL; /* This should be safe! */
+	}
+#endif
 	/*
 	 * We're done with IPsec processing, transmit the packet using the
 	 * appropriate network protocol (IP or IPv6). SPD lookup will be
@@ -447,7 +461,8 @@ ipsec4_process_packet(
 	/* pass the mbuf to enc0 for bpf processing */
 	ipsec_bpf(m, sav, AF_INET, ENC_OUT|ENC_BEFORE);
 	/* pass the mbuf to enc0 for packet filtering */
-	if ((error = ipsec_filter(&m, PFIL_OUT, ENC_OUT|ENC_BEFORE)) != 0)
+	if ((error = ipsec_filter(&m, &sav->sah->saidx, PFIL_OUT, 
+		ENC_OUT|ENC_BEFORE)) != 0)
 		goto bad;
 #endif
 
@@ -544,7 +559,8 @@ ipsec4_process_packet(
 	/* pass the mbuf to enc0 for bpf processing */
 	ipsec_bpf(m, sav, AF_INET, ENC_OUT|ENC_AFTER);
 	/* pass the mbuf to enc0 for packet filtering */
-	if ((error = ipsec_filter(&m, PFIL_OUT, ENC_OUT|ENC_AFTER)) != 0)
+	if ((error = ipsec_filter(&m, &sav->sah->saidx, PFIL_OUT, 
+		ENC_OUT|ENC_AFTER)) != 0)
 		goto bad;
 #endif
 
@@ -802,7 +818,8 @@ ipsec6_output_tunnel(struct ipsec_output_state *state, struct secpolicy *sp, int
 	/* pass the mbuf to enc0 for bpf processing */
 	ipsec_bpf(m, isr->sav, AF_INET6, ENC_OUT|ENC_BEFORE);
 	/* pass the mbuf to enc0 for packet filtering */
-	if ((error = ipsec_filter(&m, PFIL_OUT, ENC_OUT|ENC_BEFORE)) != 0)
+	if ((error = ipsec_filter(&m, &isr->sav->sah->saidx, PFIL_OUT, 
+		ENC_OUT|ENC_BEFORE)) != 0)
 		goto bad;
 #endif
 
@@ -878,7 +895,8 @@ ipsec6_output_tunnel(struct ipsec_output_state *state, struct secpolicy *sp, int
 	/* pass the mbuf to enc0 for bpf processing */
 	ipsec_bpf(m, isr->sav, AF_INET6, ENC_OUT|ENC_AFTER);
 	/* pass the mbuf to enc0 for packet filtering */
-	if ((error = ipsec_filter(&m, PFIL_OUT, ENC_OUT|ENC_AFTER)) != 0)
+	if ((error = ipsec_filter(&m, &isr->sav->sah->saidx, PFIL_OUT, 
+		ENC_OUT|ENC_AFTER)) != 0)
 		goto bad;
 #endif
 
