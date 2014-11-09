@@ -1,0 +1,4 @@
+# $FreeBSD$
+
+SUBDIR+=	ofwdump
+SUBDIR+=	kgmon
