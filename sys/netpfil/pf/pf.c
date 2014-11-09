@@ -228,6 +228,8 @@ static int		 pf_state_key_attach(struct pf_state_key *,
 static void		 pf_state_key_detach(struct pf_state *, int);
 static int		 pf_state_key_ctor(void *, int, void *, int);
 static u_int32_t	 pf_tcp_iss(struct pf_pdesc *);
+void			 pf_rule_to_actions(struct pf_rule *,
+			    struct pf_rule_actions *);
 static int		 pf_test_rule(struct pf_rule **, struct pf_state **,
 			    int, struct pfi_kif *, struct mbuf *, int,
 			    struct pf_pdesc *, struct pf_rule **,
@@ -2909,6 +2911,21 @@ pf_addr_inc(struct pf_addr *addr, sa_family_t af)
 }
 #endif /* INET6 */
 
+void
+pf_rule_to_actions(struct pf_rule *r, struct pf_rule_actions *a)
+{
+	if (r->qid)
+		a->qid = r->qid;
+	if (r->pqid)
+		a->pqid = r->pqid;
+	if (r->pdnpipe)
+		a->pdnpipe = r->pdnpipe;
+	if (r->dnpipe)
+		a->dnpipe = r->dnpipe;
+	if (r->free_flags & PFRULE_DN_IS_PIPE)
+		a->flags |= PFRULE_DN_IS_PIPE;
+}
+
 int
 pf_socket_lookup(int direction, struct pf_pdesc *pd, struct mbuf *m)
 {
@@ -3434,10 +3451,20 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 			if (r->rtableid >= 0)
 				rtableid = r->rtableid;
 			if (r->anchor == NULL) {
-				match = 1;
-				*rm = r;
-				*am = a;
-				*rsm = ruleset;
+				if (r->action == PF_MATCH) {
+					r->packets[direction == PF_OUT]++;
+					r->bytes[direction == PF_OUT] += pd->tot_len;
+					pf_rule_to_actions(r, &pd->act);
+					if (r->log)
+						PFLOG_PACKET(kif, m, af,
+						    direction, PFRES_MATCH, r,
+						    a, ruleset, pd, 1);
+				} else {
+					match = 1;
+					*rm = r;
+					*am = a;
+					*rsm = ruleset;
+				}
 				if ((*rm)->quick)
 					break;
 				r = TAILQ_NEXT(r, entries);
@@ -3455,6 +3482,9 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 	ruleset = *rsm;
 
 	REASON_SET(&reason, PFRES_MATCH);
+
+	/* apply actions for last matching pass/block rule */
+	pf_rule_to_actions(r, &pd->act);
 
 	if (r->log || (nr != NULL && nr->log)) {
 		if (rewrite)
@@ -3629,6 +3659,11 @@ pf_create_state(struct pf_rule *r, struct pf_rule *nr, struct pf_rule *a,
 		s->state_flags |= PFSTATE_SLOPPY;
 	s->log = r->log & PF_LOG_ALL;
 	s->sync_state = PFSYNC_S_NONE;
+	s->qid = pd->act.qid;
+	s->pqid = pd->act.pqid;
+	s->pdnpipe = pd->act.pdnpipe;
+	s->dnpipe = pd->act.dnpipe;
+	s->state_flags |= pd->act.flags;
 	if (nr != NULL)
 		s->log |= nr->log & PF_LOG_ALL;
 	switch (pd->proto) {
@@ -3875,10 +3910,20 @@ pf_test_fragment(struct pf_rule **rm, int direction, struct pfi_kif *kif,
 			r = TAILQ_NEXT(r, entries);
 		else {
 			if (r->anchor == NULL) {
-				match = 1;
-				*rm = r;
-				*am = a;
-				*rsm = ruleset;
+				if (r->action == PF_MATCH) {
+                                        r->packets[direction == PF_OUT]++;
+                                        r->bytes[direction == PF_OUT] += pd->tot_len;
+                                        pf_rule_to_actions(r, &pd->act);
+                                        if (r->log)
+                                                PFLOG_PACKET(kif, m, af,
+                                                    direction, PFRES_MATCH, r,
+                                                    a, ruleset, pd, 1);
+                                } else {
+					match = 1;
+					*rm = r;
+					*am = a;
+					*rsm = ruleset;
+				}
 				if ((*rm)->quick)
 					break;
 				r = TAILQ_NEXT(r, entries);
@@ -3896,6 +3941,9 @@ pf_test_fragment(struct pf_rule **rm, int direction, struct pfi_kif *kif,
 	ruleset = *rsm;
 
 	REASON_SET(&reason, PFRES_MATCH);
+
+	/* apply actions for last matching pass/block rule */
+        pf_rule_to_actions(r, &pd->act);
 
 	if (r->log)
 		PFLOG_PACKET(kif, m, af, direction, reason, r, a, ruleset, pd,
@@ -6160,34 +6208,46 @@ done:
 		M_SETFIB(m, r->rtableid);
 
 #ifdef ALTQ
-	if (action == PF_PASS && r->qid) {
-		if (pd.pf_mtag == NULL &&
-		    ((pd.pf_mtag = pf_get_mtag(m)) == NULL)) {
-			action = PF_DROP;
-			REASON_SET(&reason, PFRES_MEMORY);
-		}
+	if (s && s->qid) {
+		pd.act.pqid = s->pqid;
+		pd.act.qid = s->qid;
+	} else if (r->qid) {
+		pd.act.pqid = r->pqid;
+		pd.act.qid = r->qid;
+	}
+	if (action == PF_PASS && pd.act.qid) {
 		if (s)
 			pd.pf_mtag->qid_hash = pf_state_hash(s);
 		if (pqid || (pd.tos & IPTOS_LOWDELAY))
-			pd.pf_mtag->qid = r->pqid;
+			pd.pf_mtag->qid = pd.act.pqid;
 		else
-			pd.pf_mtag->qid = r->qid;
+			pd.pf_mtag->qid = pd.act.qid;
 		/* add hints for ecn */
 		pd.pf_mtag->hdr = h;
-
 	}
 #endif /* ALTQ */
 
-	if (r->dnpipe && ip_dn_io_ptr != NULL && loopedfrom != 1) {
-		if (dir != r->direction && r->pdnpipe) {
-			dnflow.rule.info = r->pdnpipe;
+	if (s && (s->dnpipe || s->pdnpipe)) {
+		pd.act.dnpipe = s->dnpipe;
+		pd.act.pdnpipe = s->pdnpipe;
+		pd.act.flags = s->state_flags;
+	} else if (r->dnpipe || r->pdnpipe) {
+		pd.act.dnpipe = r->dnpipe;
+		pd.act.dnpipe = r->pdnpipe;
+		pd.act.flags = r->free_flags;
+	}
+
+	if (pd.act.dnpipe && ip_dn_io_ptr != NULL && loopedfrom != 1) {
+		if (dir != r->direction && pd.act.pdnpipe) {
+			dnflow.rule.info = pd.act.pdnpipe;
 		} else if (dir == r->direction) {
-			dnflow.rule.info = r->dnpipe;
+			dnflow.rule.info = pd.act.dnpipe;
 		} else
 			goto continueprocessing;
 
-		if (r->free_flags & PFRULE_DN_IS_PIPE)
+		if (pd.act.flags & PFRULE_DN_IS_PIPE)
 			dnflow.rule.info |= IPFW_IS_PIPE;
+
 		dnflow.f_id.addr_type = 4; /* IPv4 type */
 		dnflow.f_id.proto = pd.proto;
 		if (dir == PF_OUT && s != NULL && s->nat_rule.ptr != NULL &&
@@ -6656,33 +6716,45 @@ done:
 		M_SETFIB(m, r->rtableid);
 
 #ifdef ALTQ
-	if (action == PF_PASS && r->qid) {
-		if (pd.pf_mtag == NULL &&
-		    ((pd.pf_mtag = pf_get_mtag(m)) == NULL)) {
-			action = PF_DROP;
-			REASON_SET(&reason, PFRES_MEMORY);
-		}
+	if (s && s->qid) {
+                pd.act.pqid = s->pqid;
+                pd.act.qid = s->qid;
+        } else if (r->qid) {
+                pd.act.pqid = r->pqid;
+                pd.act.qid = r->qid;
+        }
+	if (action == PF_PASS && pd.act.qid) {
 		if (s)
 			pd.pf_mtag->qid_hash = pf_state_hash(s);
 		if (pd.tos & IPTOS_LOWDELAY)
-			pd.pf_mtag->qid = r->pqid;
+			pd.pf_mtag->qid = pd.act.pqid;
 		else
-			pd.pf_mtag->qid = r->qid;
+			pd.pf_mtag->qid = pd.act.qid;
 		/* add hints for ecn */
 		pd.pf_mtag->hdr = h;
 	}
 #endif /* ALTQ */
 
-	if (r->dnpipe && ip_dn_io_ptr != NULL && loopedfrom != 1) {
-		if (dir != r->direction && r->pdnpipe) {
-			dnflow.rule.info = r->pdnpipe;
-		} else if (dir == r->direction) {
-			dnflow.rule.info = r->dnpipe;
+	if (s && (s->dnpipe || s->pdnpipe)) {
+                pd.act.dnpipe = s->dnpipe;
+                pd.act.pdnpipe = s->pdnpipe;
+                pd.act.flags = s->state_flags;
+        } else if (r->dnpipe || r->pdnpipe) {
+                pd.act.dnpipe = r->dnpipe;
+                pd.act.dnpipe = r->pdnpipe;
+                pd.act.flags = r->free_flags;
+        }
+	if ((pd.act.dnpipe || pd.act.pdnpipe) && ip_dn_io_ptr != NULL && loopedfrom != 1) {
+		if (dir != r->direction && pd.act.pdnpipe) {
+			dnflow.rule.info = pd.act.pdnpipe;
+		} else if (dir == r->direction && pd.act.dnpipe) {
+			dnflow.rule.info = pd.act.dnpipe;
 		} else
 			goto continueprocessing6;
 
-		if (r->free_flags & PFRULE_DN_IS_PIPE)
+		if (pd.act.flags & PFRULE_DN_IS_PIPE)
 			dnflow.rule.info |= IPFW_IS_PIPE;
+
 		dnflow.f_id.addr_type = 6; /* IPv4 type */
 		dnflow.f_id.proto = pd.proto;
 		dnflow.f_id.src_ip = 0;
