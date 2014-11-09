@@ -138,6 +138,7 @@ enum {
 	NGM_ASCII2BINARY= (13|NGM_READONLY|NGM_HASREPLY),
 	/* (optional) Get/set text config. */
 	NGM_TEXT_CONFIG	= 14,
+	NGM_ETHER_ATTACH = 15,
 };
 
 /*
