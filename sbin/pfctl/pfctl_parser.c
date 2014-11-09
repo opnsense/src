@@ -969,6 +969,12 @@ print_rule(struct pf_rule *r, const char *anchor_call, int verbose, int numeric)
 			printf("max-src-conn %u", r->max_src_conn);
 			opts = 0;
 		}
+		if (r->spare1) {
+                        if (!opts)
+                                printf(", ");
+                        printf("max-packets %u", r->spare1);
+                        opts = 0;
+		}
 		if (r->max_src_conn_rate.limit) {
 			if (!opts)
 				printf(", ");

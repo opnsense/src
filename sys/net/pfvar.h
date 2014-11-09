@@ -833,7 +833,13 @@ struct pf_state {
 	u_int64_t		 id;
 	u_int32_t		 creatorid;
 	u_int8_t		 direction;
-	u_int8_t		 pad[3];
+	u_int8_t		 pad[2];
+	u_int8_t		 local_flags;
+#define PFSTATE_DIVERT_ALTQ	0x10
+#define PFSTATE_DIVERT_DNCOOKIE 0x20
+#define PFSTATE_DIVERT_ACTION   0x40
+#define PFSTATE_DIVERT_TAG      0x80
+#define PFSTATE_DIVERT_MASK	0xFF00
 
 	u_int			 refs;
 	TAILQ_ENTRY(pf_state)	 sync_list;
@@ -860,6 +866,7 @@ struct pf_state {
 	u_int32_t		 pdnpipe;
 	u_int32_t		 dnpipe;
 	u_int16_t		 tag;
+	u_int16_t		 divert_cookie;
 	u_int8_t		 log;
 	u_int8_t		 state_flags;
 #define	PFSTATE_ALLOWOPTS	0x01
@@ -872,7 +879,7 @@ struct pf_state {
 
 	/* XXX */
 	u_int8_t		 sync_updates;
-	u_int8_t		_tail[3];
+	u_int8_t		_tail;
 };
 
 /*
@@ -1268,7 +1275,8 @@ struct pf_pdesc {
 #define PFRES_MAXSTATES	12		/* State limit */
 #define PFRES_SRCLIMIT	13		/* Source node/conn limit */
 #define PFRES_SYNPROXY	14		/* SYN proxy */
-#define PFRES_MAX	15		/* total+1 */
+#define	PFRES_DIVERT	15		/* Divert override */
+#define PFRES_MAX	16		/* total+1 */
 
 #define PFRES_NAMES { \
 	"match", \
@@ -1286,6 +1294,7 @@ struct pf_pdesc {
 	"state-limit", \
 	"src-limit", \
 	"synproxy", \
+	"divert", \
 	NULL \
 }
 
