@@ -25,4 +25,4 @@ ENV=$HOME/.shrc; export ENV
 if [ -x /usr/bin/resizewin ] ; then /usr/bin/resizewin -z ; fi
 
 # Display a random cookie on each login.
-if [ -x /usr/bin/fortune ] ; then /usr/bin/fortune freebsd-tips ; fi
+#if [ -x /usr/bin/fortune ] ; then /usr/bin/fortune freebsd-tips ; fi
