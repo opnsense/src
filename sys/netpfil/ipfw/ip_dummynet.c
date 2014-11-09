@@ -2290,7 +2290,6 @@ static moduledata_t dummynet_mod = {
 #define	DN_SI_SUB	SI_SUB_PROTO_IFATTACHDOMAIN
 #define	DN_MODEV_ORD	(SI_ORDER_ANY - 128) /* after ipfw */
 DECLARE_MODULE(dummynet, dummynet_mod, DN_SI_SUB, DN_MODEV_ORD);
-MODULE_DEPEND(dummynet, ipfw, 2, 2, 2);
 MODULE_VERSION(dummynet, 3);
 
 /*
