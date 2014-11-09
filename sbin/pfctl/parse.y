@@ -215,6 +215,7 @@ struct filter_opts {
 #define FOM_TOS		0x04
 #define FOM_KEEP	0x08
 #define FOM_SRCTRACK	0x10
+#define FOM_DSCP	0x20
 	struct node_uid		*uid;
 	struct node_gid		*gid;
 	struct {
@@ -225,6 +226,7 @@ struct filter_opts {
 	} flags;
 	struct node_icmp	*icmpspec;
 	u_int32_t		 tos;
+	u_int32_t		 dscp;
 	u_int32_t		 prob;
 	struct {
 		int			 action;
@@ -440,7 +442,7 @@ int	parseport(char *, struct range *r, int);
 %token	RETURNRST RETURNICMP RETURNICMP6 PROTO INET INET6 ALL ANY ICMPTYPE
 %token	ICMP6TYPE CODE KEEP MODULATE STATE PORT RDR NAT BINAT ARROW NODF
 %token	MINTTL ERROR ALLOWOPTS FASTROUTE FILENAME ROUTETO DUPTO REPLYTO NO LABEL
-%token	NOROUTE URPFFAILED FRAGMENT USER GROUP MAXMSS MAXIMUM TTL TOS DROP TABLE
+%token	NOROUTE URPFFAILED FRAGMENT USER GROUP MAXMSS MAXIMUM TTL TOS DSCP DROP TABLE
 %token	REASSEMBLE FRAGDROP FRAGCROP ANCHOR NATANCHOR RDRANCHOR BINATANCHOR
 %token	SET OPTIMIZATION TIMEOUT LIMIT LOGINTERFACE BLOCKPOLICY RANDOMID
 %token	REQUIREORDER SYNPROXY FINGERPRINTS NOSYNC DEBUG SKIP HOSTID
@@ -458,7 +460,7 @@ int	parseport(char *, struct range *r, int);
 %token	<v.i>			PORTBINARY
 %type	<v.interface>		interface if_list if_item_not if_item
 %type	<v.number>		number icmptype icmp6type uid gid
-%type	<v.number>		tos not yesno
+%type	<v.number>		tos dscp not yesno
 %type	<v.probability>		probability
 %type	<v.i>			no dir af fragcache optimizer
 %type	<v.i>			sourcetrack flush unaryop statelock
@@ -1928,7 +1930,14 @@ pfrule		: action dir logquick interface route af proto fromto
 #endif
 			}
 
-			r.tos = $9.tos;
+			if ($9.tos) {
+				r.tos = $9.tos;
+				r.rule_flag |= PFRULE_TOS;
+			}
+			if ($9.dscp) {
+				r.tos = $9.dscp;
+				r.rule_flag |= PFRULE_DSCP;
+			}
 			r.keep_state = $9.keep.action;
 			o = $9.keep.options;
 
@@ -2305,6 +2314,14 @@ filter_opt	: USER uids {
 			}
 			filter_opts.marker |= FOM_TOS;
 			filter_opts.tos = $2;
+		}
+		| dscp {
+			if (filter_opts.marker & FOM_DSCP) {
+				yyerror("dscp cannot be redefined");
+				YYERROR;
+			}
+			filter_opts.marker |= FOM_DSCP;
+			filter_opts.dscp = $1;
 		}
 		| keep {
 			if (filter_opts.marker & FOM_KEEP) {
@@ -3398,6 +3415,48 @@ tos	: STRING			{
 		}
 		;
 
+dscp		: DSCP STRING			{
+                        if (!strcmp($2, "EF"))
+                                $$ = DSCP_EF;
+                        else if (!strcmp($2, "VA"))
+                                $$ = DSCP_VA;
+                        else if (!strcmp($2, "af11"))
+                                $$ = DSCP_AF11;
+                        else if (!strcmp($2, "af12"))
+                                $$ = DSCP_AF12;
+                        else if (!strcmp($2, "af13"))
+                                $$ = DSCP_AF13;
+                        else if (!strcmp($2, "af21"))
+                                $$ = DSCP_AF21;
+                        else if (!strcmp($2, "af22"))
+                                $$ = DSCP_AF22;
+                        else if (!strcmp($2, "af23"))
+                                $$ = DSCP_AF23;
+                        else if (!strcmp($2, "af31"))
+                                $$ = DSCP_AF31;
+                        else if (!strcmp($2, "af32"))
+                                $$ = DSCP_AF32;
+                        else if (!strcmp($2, "af33"))
+                                $$ = DSCP_AF33;
+                        else if (!strcmp($2, "af41"))
+                                $$ = DSCP_AF41;
+                        else if (!strcmp($2, "af42"))
+                                $$ = DSCP_AF42;
+                        else if (!strcmp($2, "af43"))
+                                $$ = DSCP_AF43;
+                        else if ($2[0] == '0' && $2[1] == 'x')
+                                $$ = strtoul($2, NULL, 16) * 4;
+                        else
+                                $$ = strtoul($2, NULL, 10) * 4;
+                        if (!$$ || $$ > 255) {
+                                yyerror("illegal dscp value %s", $2);
+                                free($2);
+                                YYERROR;
+                        }
+                        free($2);
+               }
+		;
+
 sourcetrack	: SOURCETRACK		{ $$ = PF_SRCTRACK; }
 		| SOURCETRACK GLOBAL	{ $$ = PF_SRCTRACK_GLOBAL; }
 		| SOURCETRACK RULE	{ $$ = PF_SRCTRACK_RULE; }
@@ -4440,6 +4499,10 @@ filter_consistent(struct pf_rule *r, int anchor_call)
 		    "synproxy state or modulate state");
 		problems++;
 	}
+	if ((r->rule_flag & PFRULE_TOS) && (r->rule_flag & PFRULE_DSCP)) {
+		yyerror("tos and dscp cannot be used together");
+		problems++;
+	}
 	return (-problems);
 }
 
@@ -5234,6 +5297,7 @@ lookup(char *s)
 		{ "divert-to",		DIVERTTO},
 		{ "drop",		DROP},
 		{ "drop-ovl",		FRAGDROP},
+		{ "dscp",		DSCP},
 		{ "dup-to",		DUPTO},
 		{ "fastroute",		FASTROUTE},
 		{ "file",		FILENAME},
