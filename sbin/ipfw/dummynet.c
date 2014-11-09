@@ -538,10 +538,10 @@ read_bandwidth(char *arg, int *bandwidth, char *if_name, int namelen)
 		if_name[namelen] = '\0';
 		*bandwidth = 0;
 	} else {	/* read bandwidth value */
-		int bw;
+		double bw;
 		char *end = NULL;
 
-		bw = strtoul(arg, &end, 0);
+		bw = strtod(arg, &end);
 		if (*end == 'K' || *end == 'k') {
 			end++;
 			bw *= 1000;
@@ -557,7 +557,7 @@ read_bandwidth(char *arg, int *bandwidth, char *if_name, int namelen)
 		if (bw < 0)
 			errx(EX_DATAERR, "bandwidth too large");
 
-		*bandwidth = bw;
+		*bandwidth = (int)bw;
 		if (if_name)
 			if_name[0] = '\0';
 	}
