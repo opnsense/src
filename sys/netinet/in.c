@@ -315,6 +315,7 @@ in_control(struct socket *so, u_long cmd, caddr_t data, struct ifnet *ifp,
 	 * Security checks before we get involved in any work.
 	 */
 	switch (cmd) {
+	case SIOCORDERIFADDR:
 	case SIOCAIFADDR:
 		if (td != NULL) {
 			error = priv_check(td, PRIV_NET_ADDIFADDR);
@@ -374,6 +375,7 @@ in_control(struct socket *so, u_long cmd, caddr_t data, struct ifnet *ifp,
 
 	error = 0;
 	switch (cmd) {
+	case SIOCORDERIFADDR:
 	case SIOCAIFADDR:
 	case SIOCDIFADDR:
 		if (ifra->ifra_addr.sin_family == AF_INET) {
@@ -399,8 +401,15 @@ in_control(struct socket *so, u_long cmd, caddr_t data, struct ifnet *ifp,
 				goto out;
 			}
 		}
-		if (cmd == SIOCDIFADDR && ia == NULL) {
+		if ((cmd == SIOCDIFADDR || cmd == SIOCORDERIFADDR) && ia == NULL) {
 			error = EADDRNOTAVAIL;
+			goto out;
+		}
+		if (cmd == SIOCORDERIFADDR && ia != NULL) {
+			IF_ADDR_WLOCK(ifp);
+			TAILQ_REMOVE(&ifp->if_addrhead, &ia->ia_ifa, ifa_link);
+			TAILQ_INSERT_AFTER(&ifp->if_addrhead, TAILQ_FIRST(&ifp->if_addrhead), &ia->ia_ifa, ifa_link);
+			IF_ADDR_WUNLOCK(ifp);
 			goto out;
 		}
 		if (ia == NULL) {
