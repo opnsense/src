@@ -499,7 +499,11 @@ ipfw_hook(int onoff, int pf)
 
 	hook_func = (pf == AF_LINK) ? ipfw_check_frame : ipfw_check_packet;
 
-	(void) (onoff ? pfil_add_hook : pfil_remove_hook)
+	if (onoff)
+	(void) pfil_add_named_hook
+		(hook_func, NULL, "ipfw", PFIL_IN | PFIL_OUT | PFIL_WAITOK, pfh);
+	else
+	(void) pfil_remove_hook
 	    (hook_func, NULL, PFIL_IN | PFIL_OUT | PFIL_WAITOK, pfh);
 
 	return 0;

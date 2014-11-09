@@ -3618,8 +3618,8 @@ hook_pf(void)
 	pfh_inet = pfil_head_get(PFIL_TYPE_AF, AF_INET);
 	if (pfh_inet == NULL)
 		return (ESRCH); /* XXX */
-	pfil_add_hook(pf_check_in, NULL, PFIL_IN | PFIL_WAITOK, pfh_inet);
-	pfil_add_hook(pf_check_out, NULL, PFIL_OUT | PFIL_WAITOK, pfh_inet);
+	pfil_add_named_hook(pf_check_in, NULL, "pf", PFIL_IN | PFIL_WAITOK, pfh_inet);
+	pfil_add_named_hook(pf_check_out, NULL, "pf", PFIL_OUT | PFIL_WAITOK, pfh_inet);
 #endif
 #ifdef INET6
 	pfh_inet6 = pfil_head_get(PFIL_TYPE_AF, AF_INET6);
@@ -3632,8 +3632,10 @@ hook_pf(void)
 #endif
 		return (ESRCH); /* XXX */
 	}
-	pfil_add_hook(pf_check6_in, NULL, PFIL_IN | PFIL_WAITOK, pfh_inet6);
-	pfil_add_hook(pf_check6_out, NULL, PFIL_OUT | PFIL_WAITOK, pfh_inet6);
+	pfil_add_named_hook(pf_check6_in, NULL, "pf", PFIL_IN | PFIL_WAITOK,
+		pfh_inet6);
+	pfil_add_named_hook(pf_check6_out, NULL, "pf", PFIL_OUT | PFIL_WAITOK,
+		pfh_inet6);
 #endif
 
 	V_pf_pfil_hooked = 1;

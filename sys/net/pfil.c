@@ -34,6 +34,7 @@
 #include <sys/errno.h>
 #include <sys/lock.h>
 #include <sys/malloc.h>
+#include <sys/sbuf.h>
 #include <sys/rmlock.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
@@ -78,7 +79,7 @@ pfil_run_hooks(struct pfil_head *ph, struct mbuf **mp, struct ifnet *ifp,
 	KASSERT(ph->ph_nhooks >= 0, ("Pfil hook count dropped < 0"));
 	for (pfh = pfil_chain_get(dir, ph); pfh != NULL;
 	     pfh = TAILQ_NEXT(pfh, pfil_chain)) {
-		if (pfh->pfil_func != NULL) {
+		if (!(pfh->pfil_flags & PFIL_DISABLED) && pfh->pfil_func != NULL) {
 			rv = (*pfh->pfil_func)(pfh->pfil_arg, &m, ifp, dir,
 			    inp);
 			if (rv != 0 || m == NULL)
@@ -211,6 +212,140 @@ pfil_head_unregister(struct pfil_head *ph)
 	return (0);
 }
 
+static int
+pfil_sysctl_handler(SYSCTL_HANDLER_ARGS)
+{
+	struct rm_priotracker rmpt;
+	struct pfil_head *ph;
+	struct packet_filter_hook *pfh, *pfhtmp;
+	struct sbuf *sb;
+	pfil_chain_t npfl, *pfl;
+	char *new_order, *elm, *parse;
+	int i = 0, err = 0, hintlen, reqlen;
+
+	hintlen = 0;
+
+	ph = (struct pfil_head *)arg1;
+	if (ph == NULL || !PFIL_HOOKED(ph)) {
+		err = SYSCTL_OUT(req, "", 2);
+		return (err);
+	}
+
+	if (arg2 == PFIL_IN)
+		pfl = &ph->ph_in;
+	else
+		pfl = &ph->ph_out;
+
+	if (TAILQ_EMPTY(pfl)) {
+		err = SYSCTL_OUT(req, "", 2);
+		return (err);
+	}
+
+	/*
+	 * NOTE: This is needed to avoid witness(4) warnings.
+	 */
+	PFIL_RLOCK(ph, &rmpt);
+	TAILQ_FOREACH(pfh, pfl, pfil_chain) {
+		if (pfh->pfil_name != NULL)
+			hintlen = strlen(pfh->pfil_name);
+		else
+			hintlen += 2;
+	}
+	PFIL_RUNLOCK(ph, &rmpt);
+
+	sb = sbuf_new(NULL, NULL, hintlen + 1, SBUF_AUTOEXTEND);
+	if (sb == NULL)
+		return (EINVAL);
+
+	PFIL_RLOCK(ph, &rmpt);
+	TAILQ_FOREACH(pfh, pfl, pfil_chain) {
+		if (i > 0)
+			sbuf_printf(sb, ", ");
+		if (pfh->pfil_name != NULL)
+			sbuf_printf(sb, "%s%s", pfh->pfil_name,
+					pfh->pfil_flags & PFIL_DISABLED ? "*" : "");
+		else
+			sbuf_printf(sb, "%s%s", "NA",
+					pfh->pfil_flags & PFIL_DISABLED ? "*" : "");
+		i++;
+	}
+	PFIL_RUNLOCK(ph, &rmpt);
+
+	sbuf_finish(sb);
+
+	/* hint for sensible write buffer sizes */
+	hintlen = sbuf_len(sb) + i * 2;
+	err = SYSCTL_OUT(req, sbuf_data(sb), sbuf_len(sb) + 1);
+	sbuf_delete(sb);
+
+	if (err || !req->newptr)
+		return (err);
+
+	if ((reqlen = req->newlen - req->newidx) > hintlen)
+		return (E2BIG);
+	new_order = malloc(reqlen + 1, M_TEMP, M_WAITOK|M_ZERO);
+
+	err = SYSCTL_IN(req, new_order, reqlen);
+	if (err)
+		goto error;
+	new_order[reqlen] = '\0'; /* Just in case */
+	parse = new_order;
+
+	TAILQ_INIT(&npfl);
+	PFIL_WLOCK(ph);
+	while ((elm = strsep(&parse, " \t,")) != NULL) {
+		if (*elm == '\0')
+			continue;
+		TAILQ_FOREACH_SAFE(pfh, pfl, pfil_chain, pfhtmp) {
+			if (pfh->pfil_name != NULL) {
+				if (!strcmp(pfh->pfil_name, elm)) {
+					TAILQ_REMOVE(pfl, pfh, pfil_chain);
+					TAILQ_INSERT_TAIL(&npfl, pfh, pfil_chain);
+					pfh->pfil_flags &= ~PFIL_DISABLED;
+					break;
+				}
+			} else {
+				if (!strcmp(elm, "NA")) {
+					TAILQ_REMOVE(pfl, pfh, pfil_chain);
+					TAILQ_INSERT_TAIL(&npfl, pfh, pfil_chain);
+					pfh->pfil_flags &= ~PFIL_DISABLED;
+					break;
+				}
+			}
+		}
+	}
+
+	TAILQ_FOREACH_SAFE(pfh, pfl, pfil_chain, pfhtmp) {
+		pfh->pfil_flags |= PFIL_DISABLED;
+		TAILQ_REMOVE(pfl, pfh, pfil_chain);
+		TAILQ_INSERT_TAIL(&npfl, pfh, pfil_chain);
+	}
+
+	TAILQ_CONCAT(pfl, &npfl, pfil_chain);
+
+error:
+	PFIL_WUNLOCK(ph);
+	free(new_order, M_TEMP);
+	return (err);
+}
+
+void
+pfil_head_export_sysctl(struct pfil_head *ph, struct sysctl_oid_list *parent)
+{
+	struct sysctl_oid *root;
+
+	root = SYSCTL_ADD_NODE(&ph->ph_clist, parent, OID_AUTO, "pfil",
+	    CTLFLAG_RW, 0, "pfil(9) management");
+	SYSCTL_ADD_PROC((void *)&ph->ph_clist, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "inbound", CTLTYPE_STRING|CTLFLAG_RW|CTLFLAG_SECURE3,
+	    (void *)ph, PFIL_IN, pfil_sysctl_handler, "A",
+	    "Inbound filter hooks");
+	SYSCTL_ADD_PROC((void *)&ph->ph_clist, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "outbound", CTLTYPE_STRING|CTLFLAG_RW|CTLFLAG_SECURE3,
+	    (void *)ph, PFIL_OUT, pfil_sysctl_handler, "A",
+	    "Outbound filter hooks");
+}
+
 /*
  * pfil_head_get() returns the pfil_head for a given key/dlt.
  */
@@ -238,6 +373,12 @@ pfil_head_get(int type, u_long val)
 int
 pfil_add_hook(pfil_func_t func, void *arg, int flags, struct pfil_head *ph)
 {
+	return (pfil_add_named_hook(func, arg, NULL, flags, ph));
+}
+
+int
+pfil_add_named_hook(pfil_func_t func, void *arg, char *name, int flags, struct pfil_head *ph)
+{
 	struct packet_filter_hook *pfh1 = NULL;
 	struct packet_filter_hook *pfh2 = NULL;
 	int err;
@@ -262,6 +403,8 @@ pfil_add_hook(pfil_func_t func, void *arg, int flags, struct pfil_head *ph)
 	if (flags & PFIL_IN) {
 		pfh1->pfil_func = func;
 		pfh1->pfil_arg = arg;
+		pfh1->pfil_name = name;
+		pfh1->pfil_flags &= ~PFIL_DISABLED;
 		err = pfil_chain_add(&ph->ph_in, pfh1, flags & ~PFIL_OUT);
 		if (err)
 			goto locked_error;
@@ -270,6 +413,8 @@ pfil_add_hook(pfil_func_t func, void *arg, int flags, struct pfil_head *ph)
 	if (flags & PFIL_OUT) {
 		pfh2->pfil_func = func;
 		pfh2->pfil_arg = arg;
+		pfh2->pfil_name = name;
+		pfh2->pfil_flags &= ~PFIL_DISABLED;
 		err = pfil_chain_add(&ph->ph_out, pfh2, flags & ~PFIL_IN);
 		if (err) {
 			if (flags & PFIL_IN)

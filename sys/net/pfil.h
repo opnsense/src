@@ -38,6 +38,7 @@
 #include <sys/_mutex.h>
 #include <sys/lock.h>
 #include <sys/rmlock.h>
+#include <sys/sysctl.h>
 
 struct mbuf;
 struct ifnet;
@@ -55,11 +56,14 @@ struct packet_filter_hook {
 	TAILQ_ENTRY(packet_filter_hook) pfil_chain;
 	pfil_func_t	 pfil_func;
 	void		*pfil_arg;
+	int		 pfil_flags;
+	char		*pfil_name;
 };
 
 #define PFIL_IN		0x00000001
 #define PFIL_OUT	0x00000002
 #define PFIL_WAITOK	0x00000004
+#define PFIL_DISABLED	0x00000008
 #define PFIL_ALL	(PFIL_IN|PFIL_OUT)
 
 typedef	TAILQ_HEAD(pfil_chain, packet_filter_hook) pfil_chain_t;
@@ -85,6 +89,7 @@ struct pfil_head {
 	struct rmlock	 ph_lock;	/* Private lock storage */
 	int		 flags;
 #endif
+	struct sysctl_ctx_list ph_clist;
 	union {
 		u_long	 phu_val;
 		void	*phu_ptr;
@@ -96,7 +101,9 @@ struct pfil_head {
 
 /* Public functions for pfil hook management by packet filters. */
 struct pfil_head *pfil_head_get(int, u_long);
+void	pfil_head_export_sysctl(struct pfil_head *, struct sysctl_oid_list *);
 int	pfil_add_hook(pfil_func_t, void *, int, struct pfil_head *);
+int	pfil_add_named_hook(pfil_func_t, void *, char *, int, struct pfil_head *);
 int	pfil_remove_hook(pfil_func_t, void *, int, struct pfil_head *);
 #define	PFIL_HOOKED(p) ((p)->ph_nhooks > 0)
 

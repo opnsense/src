@@ -142,6 +142,7 @@ static struct netisr_handler ip6_nh = {
 VNET_DECLARE(struct callout, in6_tmpaddrtimer_ch);
 #define	V_in6_tmpaddrtimer_ch		VNET(in6_tmpaddrtimer_ch)
 
+SYSCTL_DECL(_net_inet6_ip6);
 VNET_DEFINE(struct pfil_head, inet6_pfil_hook);
 
 VNET_PCPUSTAT_DEFINE(struct ip6stat, ip6stat);
@@ -188,6 +189,9 @@ ip6_init(void)
 	if ((i = pfil_head_register(&V_inet6_pfil_hook)) != 0)
 		printf("%s: WARNING: unable to register pfil hook, "
 			"error %d\n", __func__, i);
+	else
+		pfil_head_export_sysctl(&V_inet6_pfil_hook,
+			SYSCTL_STATIC_CHILDREN(_net_inet6_ip6));
 
 	scope6_init();
 	addrsel_policy_init();
