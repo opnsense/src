@@ -234,6 +234,7 @@ struct filter_opts {
 	u_int32_t		 tos;
 	u_int32_t		 dscp;
 	u_int32_t		 prob;
+	u_int32_t		 tracker;
 	struct {
 		int			 action;
 		struct node_state_opt	*options;
@@ -462,7 +463,7 @@ int	parseport(char *, struct range *r, int);
 %token	RETURNRST RETURNICMP RETURNICMP6 PROTO INET INET6 ALL ANY ICMPTYPE
 %token	ICMP6TYPE CODE KEEP MODULATE STATE PORT RDR NAT BINAT ARROW NODF
 %token	MINTTL ERROR ALLOWOPTS FASTROUTE FILENAME ROUTETO DUPTO REPLYTO NO LABEL SCHEDULE
-%token	NOROUTE URPFFAILED FRAGMENT USER GROUP MAXMSS MAXIMUM TTL TOS DSCP DROP TABLE
+%token	NOROUTE URPFFAILED FRAGMENT USER GROUP MAXMSS MAXIMUM TTL TOS DSCP DROP TABLE TRACKER
 %token	REASSEMBLE FRAGDROP FRAGCROP ANCHOR NATANCHOR RDRANCHOR BINATANCHOR
 %token	SET OPTIMIZATION TIMEOUT LIMIT LOGINTERFACE BLOCKPOLICY RANDOMID
 %token	REQUIREORDER SYNPROXY FINGERPRINTS NOSYNC DEBUG SKIP HOSTID
@@ -2064,6 +2065,8 @@ pfrule		: action dir logquick interface route af proto fromto
 			if  (rule_schedule(&r, $9.schedule))
 				YYERROR;
 			free($9.schedule);
+			if ($9.tracker)
+				r.cuid = $9.tracker;
 			r.flags = $9.flags.b1;
 			r.flagset = $9.flags.b2;
 			if (($9.flags.b1 & $9.flags.b2) != $9.flags.b1) {
@@ -2513,6 +2516,9 @@ filter_opt	: USER uids {
 			filter_opts.marker |= FOM_KEEP;
 			filter_opts.keep.action = $1.action;
 			filter_opts.keep.options = $1.options;
+		}
+		| TRACKER number {
+			filter_opts.tracker = $2;
 		}
 		| FRAGMENT {
 			filter_opts.fragment = 1;
@@ -5743,6 +5749,7 @@ lookup(char *s)
 		{ "timeout",		TIMEOUT},
 		{ "to",			TO},
 		{ "tos",		TOS},
+		{ "tracker",		TRACKER},
 		{ "ttl",		TTL},
 		{ "upperlimit",		UPPERLIMIT},
 		{ "urpf-failed",	URPFFAILED},

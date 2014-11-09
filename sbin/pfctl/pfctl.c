@@ -862,10 +862,17 @@ pfctl_print_rule_counters(struct pf_rule *rule, int opts)
 			    (unsigned long long)(rule->bytes[0] +
 			    rule->bytes[1]), rule->states_cur);
 		if (!(opts & PF_OPT_DEBUG))
+#ifdef PF_USER_INFO
 			printf("  [ Inserted: uid %u pid %u "
 			    "State Creations: %-6u]\n",
 			    (unsigned)rule->cuid, (unsigned)rule->cpid,
 			    rule->states_tot);
+#else
+			printf("  [ Inserted: pid %u "
+			    "State Creations: %-6u]\n",
+			    (unsigned)rule->cpid,
+			    rule->states_tot);
+#endif
 	}
 }
 

@@ -1150,7 +1150,9 @@ pfioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flags, struct thread *td
 		bcopy(&pr->rule, rule, sizeof(struct pf_rule));
 		if (rule->ifname[0])
 			kif = malloc(sizeof(*kif), PFI_MTYPE, M_WAITOK);
+#ifdef PF_USER_INFO
 		rule->cuid = td->td_ucred->cr_ruid;
+#endif
 		rule->cpid = td->td_proc ? td->td_proc->p_pid : 0;
 		TAILQ_INIT(&rule->rpool.list);
 
@@ -1176,7 +1178,6 @@ pfioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flags, struct thread *td
 			    V_ticket_pabuf));
 			ERROUT(EBUSY);
 		}
-
 		tail = TAILQ_LAST(ruleset->rules[rs_num].inactive.ptr,
 		    pf_rulequeue);
 		if (tail)
@@ -1255,8 +1256,29 @@ pfioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flags, struct thread *td
 		}
 
 		rule->rpool.cur = TAILQ_FIRST(&rule->rpool.list);
+#ifndef PF_USER_INFO
+		if (rule->cuid) {
+			tail = TAILQ_FIRST(ruleset->rules[rs_num].active.ptr);
+			while ((tail != NULL) && (tail->cuid != rule->cuid))
+				tail = TAILQ_NEXT(tail, entries);
+			if (tail != NULL) {
+				tail->evaluations = rule->evaluations;
+				tail->packets[0] = rule->packets[0];
+				tail->packets[1] = rule->packets[1];
+				tail->bytes[0] = rule->bytes[0];
+				tail->bytes[1] = rule->bytes[1];
+			} else {
+				rule->evaluations = rule->packets[0] = rule->packets[1] =
+				    rule->bytes[0] = rule->bytes[1] = 0;
+			}
+		} else {
+			rule->evaluations = rule->packets[0] = rule->packets[1] =
+			    rule->bytes[0] = rule->bytes[1] = 0;
+		}
+#else
 		rule->evaluations = rule->packets[0] = rule->packets[1] =
 		    rule->bytes[0] = rule->bytes[1] = 0;
+#endif
 		TAILQ_INSERT_TAIL(ruleset->rules[rs_num].inactive.ptr,
 		    rule, entries);
 		ruleset->rules[rs_num].inactive.rcount++;
@@ -1395,7 +1417,9 @@ DIOCADDRULE_error:
 #endif /* INET6 */
 			newrule = malloc(sizeof(*newrule), M_PFRULE, M_WAITOK);
 			bcopy(&pcr->rule, newrule, sizeof(struct pf_rule));
+#ifdef PF_USER_INFO
 			newrule->cuid = td->td_ucred->cr_ruid;
+#endif
 			newrule->cpid = td->td_proc ? td->td_proc->p_pid : 0;
 			TAILQ_INIT(&newrule->rpool.list);
 			/* Initialize refcounting. */
