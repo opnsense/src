@@ -147,6 +147,7 @@ static int ip6_getpmtu(struct route_in6 *, struct route_in6 *,
 	struct ifnet *, struct in6_addr *, u_long *, int *, u_int);
 static int copypktopts(struct ip6_pktopts *, struct ip6_pktopts *, int);
 
+VNET_DECLARE(int, ipipsec_in_use);
 
 /*
  * Make an extension header from option data.  hp is the source, and
@@ -294,33 +295,35 @@ ip6_output(struct mbuf *m0, struct ip6_pktopts *opt,
 	}
 
 #ifdef IPSEC
-	/*
-	 * IPSec checking which handles several cases.
-	 * FAST IPSEC: We re-injected the packet.
-	 */
-	switch(ip6_ipsec_output(&m, inp, &flags, &error, &ifp, &sp))
-	{
-	case 1:                 /* Bad packet */
-		goto freehdrs;
-	case -1:                /* Do IPSec */
-		needipsec = 1;
+	if (V_ipipsec_in_use) {
 		/*
-		 * Do delayed checksums now, as we may send before returning.
+		 * IPSec checking which handles several cases.
+		 * FAST IPSEC: We re-injected the packet.
 		 */
-		if (m->m_pkthdr.csum_flags & CSUM_DELAY_DATA_IPV6) {
-			plen = m->m_pkthdr.len - sizeof(*ip6);
-			in6_delayed_cksum(m, plen, sizeof(struct ip6_hdr));
-			m->m_pkthdr.csum_flags &= ~CSUM_DELAY_DATA_IPV6;
-		}
+		switch(ip6_ipsec_output(&m, inp, &flags, &error, &ifp, &sp))
+		{
+		case 1:                 /* Bad packet */
+			goto freehdrs;
+		case -1:                /* Do IPSec */
+			needipsec = 1;
+			/*
+			 * Do delayed checksums now, as we may send before returning.
+			 */
+			if (m->m_pkthdr.csum_flags & CSUM_DELAY_DATA_IPV6) {
+				plen = m->m_pkthdr.len - sizeof(*ip6);
+				in6_delayed_cksum(m, plen, sizeof(struct ip6_hdr));
+				m->m_pkthdr.csum_flags &= ~CSUM_DELAY_DATA_IPV6;
+			}
 #ifdef SCTP
-		if (m->m_pkthdr.csum_flags & CSUM_SCTP_IPV6) {
-			sctp_delayed_cksum(m, sizeof(struct ip6_hdr));
-			m->m_pkthdr.csum_flags &= ~CSUM_SCTP_IPV6;
-		}
+			if (m->m_pkthdr.csum_flags & CSUM_SCTP_IPV6) {
+				sctp_delayed_cksum(m, sizeof(struct ip6_hdr));
+				m->m_pkthdr.csum_flags &= ~CSUM_SCTP_IPV6;
+			}
 #endif
-	case 0:                 /* No IPSec */
-	default:
-		break;
+		case 0:                 /* No IPSec */
+		default:
+			break;
+		}
 	}
 #endif /* IPSEC */
 
@@ -421,67 +424,69 @@ ip6_output(struct mbuf *m0, struct ip6_pktopts *opt,
 		   IPPROTO_ROUTING);
 
 #ifdef IPSEC
-	if (!needipsec)
-		goto skip_ipsec2;
+	if (V_ipipsec_in_use) {
+		if (!needipsec)
+			goto skip_ipsec2;
 
-	/*
-	 * pointers after IPsec headers are not valid any more.
-	 * other pointers need a great care too.
-	 * (IPsec routines should not mangle mbufs prior to AH/ESP)
-	 */
-	exthdrs.ip6e_dest2 = NULL;
-
-	if (exthdrs.ip6e_rthdr) {
-		rh = mtod(exthdrs.ip6e_rthdr, struct ip6_rthdr *);
-		segleft_org = rh->ip6r_segleft;
-		rh->ip6r_segleft = 0;
-	}
-
-	bzero(&state, sizeof(state));
-	state.m = m;
-	error = ipsec6_output_trans(&state, nexthdrp, mprev, sp, flags,
-				    &needipsectun);
-	m = state.m;
-	if (error == EJUSTRETURN) {
 		/*
-		 * We had a SP with a level of 'use' and no SA. We
-		 * will just continue to process the packet without
-		 * IPsec processing.
+		 * pointers after IPsec headers are not valid any more.
+		 * other pointers need a great care too.
+		 * (IPsec routines should not mangle mbufs prior to AH/ESP)
 		 */
-		;
-	} else if (error) {
-		/* mbuf is already reclaimed in ipsec6_output_trans. */
-		m = NULL;
-		switch (error) {
-		case EHOSTUNREACH:
-		case ENETUNREACH:
-		case EMSGSIZE:
-		case ENOBUFS:
-		case ENOMEM:
-			break;
-		default:
-			printf("[%s:%d] (ipsec): error code %d\n",
-			    __func__, __LINE__, error);
-			/* FALLTHROUGH */
-		case ENOENT:
-			/* don't show these error codes to the user */
-			error = 0;
-			break;
+		exthdrs.ip6e_dest2 = NULL;
+
+		if (exthdrs.ip6e_rthdr) {
+			rh = mtod(exthdrs.ip6e_rthdr, struct ip6_rthdr *);
+			segleft_org = rh->ip6r_segleft;
+			rh->ip6r_segleft = 0;
 		}
-		goto bad;
-	} else if (!needipsectun) {
-		/*
-		 * In the FAST IPSec case we have already
-		 * re-injected the packet and it has been freed
-		 * by the ipsec_done() function.  So, just clean
-		 * up after ourselves.
-		 */
-		m = NULL;
-		goto done;
-	}
-	if (exthdrs.ip6e_rthdr) {
-		/* ah6_output doesn't modify mbuf chain */
-		rh->ip6r_segleft = segleft_org;
+
+		bzero(&state, sizeof(state));
+		state.m = m;
+		error = ipsec6_output_trans(&state, nexthdrp, mprev, sp, flags,
+					    &needipsectun);
+		m = state.m;
+		if (error == EJUSTRETURN) {
+			/*
+			 * We had a SP with a level of 'use' and no SA. We
+			 * will just continue to process the packet without
+			 * IPsec processing.
+			 */
+			;
+		} else if (error) {
+			/* mbuf is already reclaimed in ipsec6_output_trans. */
+			m = NULL;
+			switch (error) {
+			case EHOSTUNREACH:
+			case ENETUNREACH:
+			case EMSGSIZE:
+			case ENOBUFS:
+			case ENOMEM:
+				break;
+			default:
+				printf("[%s:%d] (ipsec): error code %d\n",
+				    __func__, __LINE__, error);
+				/* FALLTHROUGH */
+			case ENOENT:
+				/* don't show these error codes to the user */
+				error = 0;
+				break;
+			}
+			goto bad;
+		} else if (!needipsectun) {
+			/*
+			 * In the FAST IPSec case we have already
+			 * re-injected the packet and it has been freed
+			 * by the ipsec_done() function.  So, just clean
+			 * up after ourselves.
+			 */
+			m = NULL;
+			goto done;
+		}
+		if (exthdrs.ip6e_rthdr) {
+			/* ah6_output doesn't modify mbuf chain */
+			rh->ip6r_segleft = segleft_org;
+		}
 	}
 skip_ipsec2:;
 #endif /* IPSEC */
@@ -552,73 +557,75 @@ again:
 	}
 
 #ifdef IPSEC
-	/*
-	 * We may re-inject packets into the stack here.
-	 */
-	if (needipsec && needipsectun) {
-		struct ipsec_output_state state;
-
+	if (V_ipipsec_in_use) {
 		/*
-		 * All the extension headers will become inaccessible
-		 * (since they can be encrypted).
-		 * Don't panic, we need no more updates to extension headers
-		 * on inner IPv6 packet (since they are now encapsulated).
-		 *
-		 * IPv6 [ESP|AH] IPv6 [extension headers] payload
+		 * We may re-inject packets into the stack here.
 		 */
-		bzero(&exthdrs, sizeof(exthdrs));
-		exthdrs.ip6e_ip6 = m;
+		if (needipsec && needipsectun) {
+			struct ipsec_output_state state;
 
-		bzero(&state, sizeof(state));
-		state.m = m;
-		state.ro = (struct route *)ro;
-		state.dst = (struct sockaddr *)dst;
-
-		error = ipsec6_output_tunnel(&state, sp, flags);
-
-		m = state.m;
-		ro = (struct route_in6 *)state.ro;
-		dst = (struct sockaddr_in6 *)state.dst;
-		if (error == EJUSTRETURN) {
 			/*
-			 * We had a SP with a level of 'use' and no SA. We
-			 * will just continue to process the packet without
-			 * IPsec processing.
+			 * All the extension headers will become inaccessible
+			 * (since they can be encrypted).
+			 * Don't panic, we need no more updates to extension headers
+			 * on inner IPv6 packet (since they are now encapsulated).
+			 *
+			 * IPv6 [ESP|AH] IPv6 [extension headers] payload
 			 */
-			;
-		} else if (error) {
-			/* mbuf is already reclaimed in ipsec6_output_tunnel. */
-			m0 = m = NULL;
-			m = NULL;
-			switch (error) {
-			case EHOSTUNREACH:
-			case ENETUNREACH:
-			case EMSGSIZE:
-			case ENOBUFS:
-			case ENOMEM:
-				break;
-			default:
-				printf("[%s:%d] (ipsec): error code %d\n",
-				    __func__, __LINE__, error);
-				/* FALLTHROUGH */
-			case ENOENT:
-				/* don't show these error codes to the user */
-				error = 0;
-				break;
+			bzero(&exthdrs, sizeof(exthdrs));
+			exthdrs.ip6e_ip6 = m;
+
+			bzero(&state, sizeof(state));
+			state.m = m;
+			state.ro = (struct route *)ro;
+			state.dst = (struct sockaddr *)dst;
+
+			error = ipsec6_output_tunnel(&state, sp, flags);
+
+			m = state.m;
+			ro = (struct route_in6 *)state.ro;
+			dst = (struct sockaddr_in6 *)state.dst;
+			if (error == EJUSTRETURN) {
+				/*
+				 * We had a SP with a level of 'use' and no SA. We
+				 * will just continue to process the packet without
+				 * IPsec processing.
+				 */
+				;
+			} else if (error) {
+				/* mbuf is already reclaimed in ipsec6_output_tunnel. */
+				m0 = m = NULL;
+				m = NULL;
+				switch (error) {
+				case EHOSTUNREACH:
+				case ENETUNREACH:
+				case EMSGSIZE:
+				case ENOBUFS:
+				case ENOMEM:
+					break;
+				default:
+					printf("[%s:%d] (ipsec): error code %d\n",
+					    __func__, __LINE__, error);
+					/* FALLTHROUGH */
+				case ENOENT:
+					/* don't show these error codes to the user */
+					error = 0;
+					break;
+				}
+				goto bad;
+			} else {
+				/*
+				 * In the FAST IPSec case we have already
+				 * re-injected the packet and it has been freed
+				 * by the ipsec_done() function.  So, just clean
+				 * up after ourselves.
+				 */
+				m = NULL;
+				goto done;
 			}
-			goto bad;
-		} else {
-			/*
-			 * In the FAST IPSec case we have already
-			 * re-injected the packet and it has been freed
-			 * by the ipsec_done() function.  So, just clean
-			 * up after ourselves.
-			 */
-			m = NULL;
-			goto done;
-		}
 
-		exthdrs.ip6e_ip6 = m;
+			exthdrs.ip6e_ip6 = m;
+		}
 	}
 #endif /* IPSEC */
 

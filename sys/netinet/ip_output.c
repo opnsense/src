@@ -481,18 +481,20 @@ again:
 
 sendit:
 #ifdef IPSEC
-	switch(ip_ipsec_output(&m, inp, &flags, &error)) {
-	case 1:
-		goto bad;
-	case -1:
-		goto done;
-	case 0:
-	default:
-		break;	/* Continue with packet processing. */
+	if (V_ipipsec_in_use) {
+		switch(ip_ipsec_output(&m, inp, &flags, &error)) {
+		case 1:
+			goto bad;
+		case -1:
+			goto done;
+		case 0:
+		default:
+			break;	/* Continue with packet processing. */
+		}
+		/* Update variables that are affected by ipsec4_output(). */
+		ip = mtod(m, struct ip *);
+		hlen = ip->ip_hl << 2;
 	}
-	/* Update variables that are affected by ipsec4_output(). */
-	ip = mtod(m, struct ip *);
-	hlen = ip->ip_hl << 2;
 #endif /* IPSEC */
 
 	/* Jump over all PFIL processing if hooks are not active. */
