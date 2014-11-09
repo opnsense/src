@@ -37,6 +37,7 @@
 #include <altq/altq_rmclass.h>
 #include <altq/altq_red.h>
 #include <altq/altq_rio.h>
+#include <altq/altq_codel.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -51,6 +52,7 @@ extern "C" {
 #define	CBQCLF_FLOWVALVE	0x0008	/* use flowvalve (aka penalty-box) */
 #define	CBQCLF_CLEARDSCP	0x0010  /* clear diffserv codepoint */
 #define	CBQCLF_BORROW		0x0020  /* borrow from parent */
+#define	CBQCLF_CODEL		0x0040  /* use CODEL */
 
 /* class flags only for root class */
 #define	CBQCLF_WRR		0x0100	/* weighted-round robin */
@@ -93,6 +95,7 @@ typedef struct _cbq_class_stats_ {
 	/* red and rio related info */
 	int		qtype;
 	struct redstats	red[3];
+	struct codel_stats codel;
 } class_stats_t;
 
 #ifdef ALTQ3_COMPAT

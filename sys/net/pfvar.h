@@ -1391,6 +1391,12 @@ struct cbq_opts {
 	int		flags;
 };
 
+struct codel_opts {
+	u_int		target;
+        u_int		interval;
+        int		ecn;
+};
+
 struct priq_opts {
 	int		flags;
 };
@@ -1452,6 +1458,7 @@ struct pf_altq {
 		struct priq_opts	 priq_opts;
 		struct hfsc_opts	 hfsc_opts;
 		struct fairq_opts	 fairq_opts;
+		struct codel_opts	 codel_opts;
 	} pq_u;
 
 	u_int32_t		 qid;		/* return value */

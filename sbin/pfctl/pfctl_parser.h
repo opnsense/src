@@ -169,6 +169,7 @@ struct node_queue_opt {
 	union {
 		struct cbq_opts		cbq_opts;
 		struct priq_opts	priq_opts;
+		struct codel_opts	codel_opts;
 		struct node_hfsc_opts	hfsc_opts;
 		struct node_fairq_opts	fairq_opts;
 	}			 data;
