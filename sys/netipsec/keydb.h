@@ -119,6 +119,7 @@ struct comp_algo;
 /* Security Association */
 struct secasvar {
 	LIST_ENTRY(secasvar) chain;
+	LIST_ENTRY(secasvar) spihash;
 	struct mtx lock;		/* update/access lock */
 
 	u_int refcnt;			/* reference count */
