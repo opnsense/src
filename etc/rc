@@ -33,6 +33,17 @@
 # Output and error are redirected to console by init,
 # and the console is the controlling terminal.
 
+if [ -f /usr/local/etc/rc ]; then
+	# Basically, we yield the system to our evil twin
+	# when installed via a package.  Not the most modern
+	# way in any sense, but it keeps our evil twin from
+	# meddling with the original system files so that we
+	# can purge that son-of-a-gun back into the dephts
+	# of hell if need be.  Awwww, yes, yielding...
+	/usr/local/etc/rc
+	exit 0;
+fi
+
 # Note that almost all of the user-configurable behavior is no longer in
 # this file, but rather in /etc/defaults/rc.conf.  Please check that file
 # first before contemplating any changes here.  If you do need to change
