@@ -98,6 +98,11 @@ SYSCTL_VNET_INT(_net_inet_ip, IPCTL_FORWARDING, forwarding, CTLFLAG_RW,
     &VNET_NAME(ipforwarding), 0,
     "Enable IP forwarding between interfaces");
 
+VNET_DEFINE(int, ipipsec_in_use);
+SYSCTL_VNET_INT(_net_inet_ip, IPCTL_IPSEC_INUSE, ipsec_in_use, CTLFLAG_RW,
+    &VNET_NAME(ipipsec_in_use), 0,
+    "Enable IPSec processing of packets");
+
 static VNET_DEFINE(int, ipsendredirects) = 1;	/* XXX */
 #define	V_ipsendredirects	VNET(ipsendredirects)
 SYSCTL_VNET_INT(_net_inet_ip, IPCTL_SENDREDIRECTS, redirect, CTLFLAG_RW,
@@ -500,7 +505,7 @@ tooshort:
 	/*
 	 * Bypass packet filtering for packets previously handled by IPsec.
 	 */
-	if (ip_ipsec_filtertunnel(m))
+	if (V_ipipsec_in_use && ip_ipsec_filtertunnel(m))
 		goto passin;
 #endif /* IPSEC */
 
@@ -707,7 +712,7 @@ passin:
 		m_freem(m);
 	} else {
 #ifdef IPSEC
-		if (ip_ipsec_fwd(m))
+		if (V_ipipsec_in_use && ip_ipsec_fwd(m))
 			goto bad;
 #endif /* IPSEC */
 		ip_forward(m, dchg);
@@ -753,7 +758,7 @@ ours:
 	 * note that we do not visit this with protocols with pcb layer
 	 * code - like udp/tcp/raw ip.
 	 */
-	if (ip_ipsec_input(m))
+	if (V_ipipsec_in_use && ip_ipsec_input(m))
 		goto bad;
 #endif /* IPSEC */
 
@@ -1547,7 +1552,8 @@ ip_forward(struct mbuf *m, int srcrt)
 		 * If IPsec is configured for this path,
 		 * override any possibly mtu value set by ip_output.
 		 */ 
-		mtu = ip_ipsec_mtu(mcopy, mtu);
+		if (V_ipipsec_in_use)
+			mtu = ip_ipsec_mtu(mcopy, mtu);
 #endif /* IPSEC */
 		/*
 		 * If the MTU was set before make sure we are below the
