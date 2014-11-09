@@ -242,7 +242,7 @@ struct if_data {
 
 #define	IFCAP_CANTCHANGE	(IFCAP_NETMAP)
 
-#define	IFQ_MAXLEN	50
+#define	IFQ_MAXLEN	128
 #define	IFNET_SLOWHZ	1		/* granularity is 1 second */
 
 /*
