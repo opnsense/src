@@ -8,6 +8,10 @@ PACKAGE=	vi
 SRCDIR=		${SRCTOP}/contrib/nvi
 SUBDIR+=	catalog
 
+CONFS=			dot.vimrc
+CONFSDIR_dot.vimrc=	/root
+CONFSNAME_dot.vimrc=	.vimrc
+
 WARNS?=	0	# some warn issues on 32 bit machines
 
 VI=	nvi
