@@ -609,9 +609,7 @@ struct _ipfw_dyn_rule {
 
 #define	IPFW_TABLE_CIDR		1	/* Table for holding IPv4/IPv6 prefixes */
 #define	IPFW_TABLE_INTERFACE	2	/* Table for holding interface names */
-#define	IPFW_TABLE_MIX		3	/* Table for holding IPv4/mac entries */
-#define	IPFW_TABLE_MAC		4	/* Table for holding mac entries */
-#define	IPFW_TABLE_MAXTYPE	5	/* Maximum valid number */
+#define	IPFW_TABLE_MAXTYPE	2	/* Maximum valid number */
 
 typedef struct	_ipfw_table_entry {
 	in_addr_t	addr;		/* network address		*/
@@ -628,25 +626,9 @@ typedef struct	_ipfw_table_xentry {
 	uint32_t	value;		/* value			*/
 	union {
 		/* Longest field needs to be aligned by 4-byte boundary	*/
-#ifndef ETHER_ADDR_LEN
-#define ETHER_ADDR_LEN 6
-#endif
-#if 0
-		struct {
-			struct ether_addr addr;
-			struct ether_addr mask;
-		} mac;
-#endif
-		struct {
-			struct in_addr addr;
-			u_char mac[ETHER_ADDR_LEN];
-		} mix;
 		struct in6_addr	addr6;	/* IPv6 address 		*/
 		char	iface[IF_NAMESIZE];	/* interface name	*/
 	} k;
-	uint64_t               bytes;
-	uint64_t               packets;
-	uint32_t               timestamp;
 } ipfw_table_xentry;
 
 typedef struct	_ipfw_table {
