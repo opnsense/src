@@ -952,7 +952,6 @@ ipfw_chk(struct ip_fw_args *args)
 	 */
 	int dyn_dir = MATCH_UNKNOWN;
 	ipfw_dyn_rule *q = NULL;
-	struct ip_fw_chain *chain = &V_layer3_chain;
 
 	/* XXX: WARNING - The chain is accessed unlocked here.
 	 * There is a potential race here with context handling.
