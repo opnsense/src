@@ -139,7 +139,8 @@ VNET_DEFINE(int, fw_verbose);
 VNET_DEFINE(u_int64_t, norule_counter);
 VNET_DEFINE(int, verbose_limit);
 
-VNET_DEFINE(struct ip_fw_contextes, ip_fw_contexts);
+/* layer3_chain contains the list of rules for layer 3 */
+VNET_DEFINE(struct ip_fw_chain, layer3_chain);
 
 VNET_DEFINE(int, ipfw_nat_ready) = 0;
 
@@ -180,6 +181,9 @@ SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, default_to_accept, CTLFLAG_RDTUN,
     "Make the default rule accept all packets.");
 TUNABLE_INT("net.inet.ip.fw.default_to_accept", &default_to_accept);
 TUNABLE_INT("net.inet.ip.fw.tables_max", (int *)&default_fw_tables);
+SYSCTL_VNET_INT(_net_inet_ip_fw, OID_AUTO, static_count,
+    CTLFLAG_RD, &VNET_NAME(layer3_chain.n_rules), 0,
+    "Number of static rules");
 
 #ifdef INET6
 SYSCTL_DECL(_net_inet6_ip6);
@@ -899,9 +903,6 @@ ipfw_chk(struct ip_fw_args *args)
 	 */
 	struct ifnet *oif = args->oif;
 
-	if (V_ip_fw_contexts.chain[oif->if_ispare[0]] == NULL)
-		return (IP_FW_PASS);
-
 	int f_pos = 0;		/* index of current rule in the array */
 	int retval = 0;
 
@@ -952,13 +953,7 @@ ipfw_chk(struct ip_fw_args *args)
 	 */
 	int dyn_dir = MATCH_UNKNOWN;
 	ipfw_dyn_rule *q = NULL;
-
-	/* XXX: WARNING - The chain is accessed unlocked here.
-	 * There is a potential race here with context handling.
-	 * The chain pointer will get destroyed and a NULL 
-	 * pointer dereference can happen!
-	 */
-	struct ip_fw_chain *chain = V_ip_fw_contexts.chain[oif->if_ispare[0]];
+	struct ip_fw_chain *chain = &V_layer3_chain;
 
 	/*
 	 * We store in ulp a pointer to the upper layer protocol header.
@@ -2417,7 +2412,7 @@ do {								\
 				    set_match(args, f_pos, chain);
 				    /* Check if this is 'global' nat rule */
 				    if (cmd->arg1 == 0) {
-					    retval = ipfw_nat_ptr(args, NULL, m, chain);
+					    retval = ipfw_nat_ptr(args, NULL, m);
 					    l = 0;
 					    done = 1;
 					    break;
@@ -2436,7 +2431,7 @@ do {								\
 					if (cmd->arg1 != IP_FW_TABLEARG)
 					    ((ipfw_insn_nat *)cmd)->nat = t;
 				    }
-				    retval = ipfw_nat_ptr(args, t, m, chain);
+				    retval = ipfw_nat_ptr(args, t, m);
 				}
 				l = 0;          /* exit inner loop */
 				done = 1;       /* exit outer loop */
@@ -2543,9 +2538,7 @@ sysctl_ipfw_table_num(SYSCTL_HANDLER_ARGS)
 	if ((error != 0) || (req->newptr == NULL))
 		return (error);
 
-	for (int i = 1; i < IP_FW_MAXCTX; i++)
-		error += ipfw_resize_tables(V_ip_fw_contexts.chain[i], ntables);
-	return (error);
+	return (ipfw_resize_tables(&V_layer3_chain, ntables));
 }
 #endif
 /*
@@ -2623,6 +2616,11 @@ ipfw_destroy(void)
 static int
 vnet_ipfw_init(const void *unused)
 {
+	int error;
+	struct ip_fw *rule = NULL;
+	struct ip_fw_chain *chain;
+
+	chain = &V_layer3_chain;
 
 	/* First set up some values that are compile time options */
 	V_autoinc_step = 100;	/* bounded to 1..1000 in add_rule() */
@@ -2633,16 +2631,39 @@ vnet_ipfw_init(const void *unused)
 #ifdef IPFIREWALL_VERBOSE_LIMIT
 	V_verbose_limit = IPFIREWALL_VERBOSE_LIMIT;
 #endif
+#ifdef IPFIREWALL_NAT
+	LIST_INIT(&chain->nat);
+#endif
 
-	for (int i = 0; i < IP_FW_MAXCTX; i++)
-		V_ip_fw_contexts.chain[i] = NULL;
+	/* insert the default rule and create the initial map */
+	chain->n_rules = 1;
+	chain->static_len = sizeof(struct ip_fw);
+	chain->map = malloc(sizeof(struct ip_fw *), M_IPFW, M_WAITOK | M_ZERO);
+	if (chain->map)
+		rule = malloc(chain->static_len, M_IPFW, M_WAITOK | M_ZERO);
 
-	IPFW_CTX_LOCK_INIT();
+	/* Set initial number of tables */
+	V_fw_tables_max = default_fw_tables;
+	error = ipfw_init_tables(chain);
+	if (error) {
+		printf("ipfw2: setting up tables failed\n");
+		free(chain->map, M_IPFW);
+		free(rule, M_IPFW);
+		return (ENOSPC);
+	}
 
-	V_ip_fw_contexts.ifnet_arrival = EVENTHANDLER_REGISTER(ifnet_arrival_event,
-		ipfw_attach_ifnet_event, NULL, EVENTHANDLER_PRI_ANY);
+	/* fill and insert the default rule */
+	rule->act_ofs = 0;
+	rule->rulenum = IPFW_DEFAULT_RULE;
+	rule->cmd_len = 1;
+	rule->set = RESVD_SET;
+	rule->cmd[0].len = 1;
+	rule->cmd[0].opcode = default_to_accept ? O_ACCEPT : O_DENY;
+	chain->rules = chain->default_rule = chain->map[0] = rule;
+	chain->id = rule->id = 1;
 
-	ipfw_dyn_init();
+	IPFW_LOCK_INIT(chain);
+	ipfw_dyn_init(chain);
 
 	/* First set up some values that are compile time options */
 	V_ipfw_vnet_ready = 1;		/* Open for business */
@@ -2661,55 +2682,8 @@ vnet_ipfw_init(const void *unused)
 	 * is checked on each packet because there are no pfil hooks.
 	 */
 	V_ip_fw_ctl_ptr = ipfw_ctl;
-	return ipfw_attach_hooks(1);
-}
-
-int
-ipfw_context_init(int index)
-{
-	struct ip_fw_chain *chain;
-	struct ip_fw *rule = NULL;
-
-	if (index > IP_FW_MAXCTX)
-		return (-1);
-
-	TAILQ_INIT(&V_ip_fw_contexts.iflist[index]);
-
-	chain = V_ip_fw_contexts.chain[index];
-
-	IPFW_LOCK_INIT(chain);
-
-#ifdef IPFIREWALL_NAT
-	LIST_INIT(&chain->nat);
-#endif
-	/* insert the default rule and create the initial map */
-	chain->n_rules = 1;
-	chain->static_len = sizeof(struct ip_fw);
-	chain->map = malloc(sizeof(struct ip_fw *), M_IPFW, M_WAITOK | M_ZERO);
-	if (chain->map)
-		rule = malloc(chain->static_len, M_IPFW, M_WAITOK | M_ZERO);
-
-	/* Set initial number of tables */
-	V_fw_tables_max = default_fw_tables;
-	ipfw_init_tables(chain);
-
-	/* fill and insert the default rule */
-	rule->act_ofs = 0;
-	rule->rulenum = IPFW_DEFAULT_RULE;
-	rule->cmd_len = 1;
-	rule->set = RESVD_SET;
-	rule->cmd[0].len = 1;
-	rule->cmd[0].opcode = default_to_accept ? O_ACCEPT : O_DENY;
-	chain->rules = chain->default_rule = chain->map[0] = rule;
-	chain->id = rule->id = 1;
-
-        /*
-         * This can potentially be done on first dynamic rule
-         * being added to chain.
-         */
-        resize_dynamic_table(chain, V_curr_dyn_buckets);
-
-	return (0);
+	error = ipfw_attach_hooks(1);
+	return (error);
 }
 
 /*
@@ -2718,9 +2692,11 @@ ipfw_context_init(int index)
 static int
 vnet_ipfw_uninit(const void *unused)
 {
+	struct ip_fw *reap, *rule;
+	struct ip_fw_chain *chain = &V_layer3_chain;
+	int i;
 
 	V_ipfw_vnet_ready = 0; /* tell new callers to go away */
-
 	/*
 	 * disconnect from ipv4, ipv6, layer2 and sockopt.
 	 * Then grab, release and grab again the WLOCK so we make
@@ -2728,50 +2704,13 @@ vnet_ipfw_uninit(const void *unused)
 	 */
 	(void)ipfw_attach_hooks(0 /* detach */);
 	V_ip_fw_ctl_ptr = NULL;
-
-	ipfw_dyn_uninit(0);	/* run the callout_drain */
-
-	IPFW_CTX_WLOCK();
-	EVENTHANDLER_DEREGISTER(ifnet_arrival_event, V_ip_fw_contexts.ifnet_arrival);
-	for (int i = 0; i < IP_FW_MAXCTX; i++) {
-		ipfw_context_uninit(i);
-	}
-	IPFW_CTX_WUNLOCK();
-	IPFW_CTX_LOCK_DESTROY();
-
-	ipfw_dyn_uninit(1);	/* free the remaining parts */
-
-	return (0);
-}
-
-int
-ipfw_context_uninit(int index)
-{
-	struct ip_fw_chain *chain;
-	struct ip_fw_ctx_iflist *ifl;
-	struct ip_fw *reap, *rule;
-	struct ifnet *ifp;
-	int i;
-
-	if (index > IP_FW_MAXCTX)
-		return (-1);
-
-	chain = V_ip_fw_contexts.chain[index];
-	if (chain == NULL)
-		return (0);
-
-	while (!TAILQ_EMPTY(&V_ip_fw_contexts.iflist[index])) {
-		ifl = TAILQ_FIRST(&V_ip_fw_contexts.iflist[index]);
-		TAILQ_REMOVE(&V_ip_fw_contexts.iflist[index], ifl, entry);
-		ifp = ifunit(ifl->ifname);
-		if (ifp != NULL)
-			ifp->if_ispare[0] = 0;
-		free(ifl, M_IPFW);
-	}
-
 	IPFW_UH_WLOCK(chain);
 	IPFW_UH_WUNLOCK(chain);
 	IPFW_UH_WLOCK(chain);
+
+	IPFW_WLOCK(chain);
+	ipfw_dyn_uninit(0);	/* run the callout_drain */
+	IPFW_WUNLOCK(chain);
 
 	ipfw_destroy_tables(chain);
 	reap = NULL;
@@ -2788,10 +2727,8 @@ ipfw_context_uninit(int index)
 	if (reap != NULL)
 		ipfw_reap_rules(reap);
 	IPFW_LOCK_DESTROY(chain);
-
-	free(chain, M_IPFW);
-
-	return (0);
+	ipfw_dyn_uninit(1);	/* free the remaining parts */
+	return 0;
 }
 
 /*

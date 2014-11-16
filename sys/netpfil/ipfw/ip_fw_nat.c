@@ -64,33 +64,26 @@ ifaddr_change(void *arg __unused, struct ifnet *ifp)
 
 	KASSERT(curvnet == ifp->if_vnet,
 	    ("curvnet(%p) differs from iface vnet(%p)", curvnet, ifp->if_vnet));
-
-	IPFW_CTX_RLOCK();
-	for (int i = 1; i < IP_FW_MAXCTX; i++) {
-		chain = V_ip_fw_contexts.chain[i];
-		if (chain == NULL)
+	chain = &V_layer3_chain;
+	IPFW_WLOCK(chain);
+	/* Check every nat entry... */
+	LIST_FOREACH(ptr, &chain->nat, _next) {
+		/* ...using nic 'ifp->if_xname' as dynamic alias address. */
+		if (strncmp(ptr->if_name, ifp->if_xname, IF_NAMESIZE) != 0)
 			continue;
-		IPFW_WLOCK(chain);
-		/* Check every nat entry... */
-		LIST_FOREACH(ptr, &chain->nat, _next) {
-			/* ...using nic 'ifp->if_xname' as dynamic alias address. */
-			if (strncmp(ptr->if_name, ifp->if_xname, IF_NAMESIZE) != 0)
+		if_addr_rlock(ifp);
+		TAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) {
+			if (ifa->ifa_addr == NULL)
 				continue;
-			if_addr_rlock(ifp);
-			TAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) {
-				if (ifa->ifa_addr == NULL)
-					continue;
-				if (ifa->ifa_addr->sa_family != AF_INET)
-					continue;
-				ptr->ip = ((struct sockaddr_in *)
-				    (ifa->ifa_addr))->sin_addr;
-				LibAliasSetAddress(ptr->lib, ptr->ip);
-			}
-			if_addr_runlock(ifp);
+			if (ifa->ifa_addr->sa_family != AF_INET)
+				continue;
+			ptr->ip = ((struct sockaddr_in *)
+			    (ifa->ifa_addr))->sin_addr;
+			LibAliasSetAddress(ptr->lib, ptr->ip);
 		}
-		IPFW_WUNLOCK(chain);
+		if_addr_runlock(ifp);
 	}
-	IPFW_CTX_RUNLOCK();
+	IPFW_WUNLOCK(chain);
 }
 
 /*
@@ -213,18 +206,18 @@ add_redir_spool_cfg(char *buf, struct cfg_nat *ptr)
 /*
  * ipfw_nat - perform mbuf header translation.
  *
- * Note *chain has to be locked while calling ipfw_nat() in
+ * Note V_layer3_chain has to be locked while calling ipfw_nat() in
  * 'global' operation mode (t == NULL).
  *
  */
 static int
-ipfw_nat(struct ip_fw_args *args, struct cfg_nat *t, struct mbuf *m,
-    struct ip_fw_chain *chain)
+ipfw_nat(struct ip_fw_args *args, struct cfg_nat *t, struct mbuf *m)
 {
 	struct mbuf *mcl;
 	struct ip *ip;
 	/* XXX - libalias duct tape */
 	int ldt, retval, found;
+	struct ip_fw_chain *chain;
 	char *c;
 
 	ldt = 0;
@@ -283,6 +276,7 @@ ipfw_nat(struct ip_fw_args *args, struct cfg_nat *t, struct mbuf *m,
 		}
 
 		found = 0;
+		chain = &V_layer3_chain;
 		IPFW_RLOCK_ASSERT(chain);
 		/* Check every nat entry... */
 		LIST_FOREACH(t, &chain->nat, _next) {
@@ -397,10 +391,11 @@ lookup_nat(struct nat_list *l, int nat_id)
 }
 
 static int
-ipfw_nat_cfg(struct sockopt *sopt, struct ip_fw_chain *chain)
+ipfw_nat_cfg(struct sockopt *sopt)
 {
 	struct cfg_nat *cfg, *ptr;
 	char *buf;
+	struct ip_fw_chain *chain = &V_layer3_chain;
 	size_t len;
 	int gencnt, error = 0;
 
@@ -473,9 +468,10 @@ out:
 }
 
 static int
-ipfw_nat_del(struct sockopt *sopt, struct ip_fw_chain *chain)
+ipfw_nat_del(struct sockopt *sopt)
 {
 	struct cfg_nat *ptr;
+	struct ip_fw_chain *chain = &V_layer3_chain;
 	int i;
 
 	sooptcopyin(sopt, &i, sizeof i, sizeof i);
@@ -496,8 +492,9 @@ ipfw_nat_del(struct sockopt *sopt, struct ip_fw_chain *chain)
 }
 
 static int
-ipfw_nat_get_cfg(struct sockopt *sopt, struct ip_fw_chain *chain)
+ipfw_nat_get_cfg(struct sockopt *sopt)
 {
+	struct ip_fw_chain *chain = &V_layer3_chain;
 	struct cfg_nat *n;
 	struct cfg_redir *r;
 	struct cfg_spool *s;
@@ -555,11 +552,14 @@ retry:
 }
 
 static int
-ipfw_nat_get_log(struct sockopt *sopt, struct ip_fw_chain *chain)
+ipfw_nat_get_log(struct sockopt *sopt)
 {
 	uint8_t *data;
 	struct cfg_nat *ptr;
 	int i, size;
+	struct ip_fw_chain *chain;
+
+	chain = &V_layer3_chain;
 
 	IPFW_RLOCK(chain);
 	/* one pass to count, one to copy the data */
@@ -604,22 +604,17 @@ vnet_ipfw_nat_uninit(const void *arg __unused)
 	struct cfg_nat *ptr, *ptr_temp;
 	struct ip_fw_chain *chain;
 
-	IPFW_CTX_RLOCK();
-	for (int i = 1; i < IP_FW_MAXCTX; i++) {
-		chain = V_ip_fw_contexts.chain[i];
-		IPFW_WLOCK(chain);
-		LIST_FOREACH_SAFE(ptr, &chain->nat, _next, ptr_temp) {
-			LIST_REMOVE(ptr, _next);
-			del_redir_spool_cfg(ptr, &ptr->redir_chain);
-			LibAliasUninit(ptr->lib);
-			free(ptr, M_IPFW);
-		}
-		flush_nat_ptrs(chain, -1 /* flush all */);
-		V_ipfw_nat_ready = 0;
-		IPFW_WUNLOCK(chain);
+	chain = &V_layer3_chain;
+	IPFW_WLOCK(chain);
+	LIST_FOREACH_SAFE(ptr, &chain->nat, _next, ptr_temp) {
+		LIST_REMOVE(ptr, _next);
+		del_redir_spool_cfg(ptr, &ptr->redir_chain);
+		LibAliasUninit(ptr->lib);
+		free(ptr, M_IPFW);
 	}
-	IPFW_CTX_RUNLOCK();
-
+	flush_nat_ptrs(chain, -1 /* flush all */);
+	V_ipfw_nat_ready = 0;
+	IPFW_WUNLOCK(chain);
 	return (0);
 }
 

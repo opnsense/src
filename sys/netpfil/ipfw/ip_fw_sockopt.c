@@ -943,15 +943,12 @@ ipfw_ctl(struct sockopt *sopt)
 #define	RULE_MAXSIZE	(256*sizeof(u_int32_t))
 	int error;
 	size_t size, len, valsize;
-	struct ifnet *ifp;
 	struct ip_fw *buf, *rule;
-	static struct ip_fw_chain *chain;
-	struct ip_fw_ctx_iflist *tmpifl, *tmpifl2;
-	ip_fw3_opheader *op3 = NULL;
+	struct ip_fw_chain *chain;
 	u_int32_t rulenum[2];
 	uint32_t opt;
 	char xbuf[128];
-	char *ifname;
+	ip_fw3_opheader *op3 = NULL;
 
 	error = priv_check(sopt->sopt_td, PRIV_NETINET_IPFW);
 	if (error)
@@ -968,6 +965,7 @@ ipfw_ctl(struct sockopt *sopt)
 			return (error);
 	}
 
+	chain = &V_layer3_chain;
 	error = 0;
 
 	/* Save original valsize before it is altered via sooptcopyin() */
@@ -982,236 +980,9 @@ ipfw_ctl(struct sockopt *sopt)
 			return (error);
 		op3 = (ip_fw3_opheader *)xbuf;
 		opt = op3->opcode;
-
-		if (op3->ctxid > IP_FW_MAXCTX)
-			return (EINVAL);
-
-		if (opt != IP_FW_CTX_GET) {
-			if (opt != IP_FW_CTX_ADD) {
-				if (op3->ctxid == 0)
-					return (ENOENT);
-			} 
-
-			chain = V_ip_fw_contexts.chain[op3->ctxid];
-		}
-	}
-
-	/* Verification needed to avoid problems */
-	switch (opt) {
-	case IP_FW_CTX_GET:
-	case IP_FW_CTX_ADD:
-	case IP_FW_CTX_DEL:
-		break;
-	default:
-		if (chain == NULL)
-			return (EINVAL);
-		/* NOTREACHED */
 	}
 
 	switch (opt) {
-	case IP_FW_CTX_ADD:
-		IPFW_CTX_WLOCK();
-		if (V_ip_fw_contexts.chain[op3->ctxid] != NULL) {
-			IPFW_CTX_WUNLOCK();
-			return (EEXIST);
-		}
-
-		chain = malloc(sizeof(struct ip_fw_chain), M_IPFW, M_WAITOK | M_ZERO);
-		TAILQ_INIT(&V_ip_fw_contexts.iflist[op3->ctxid]);
-		V_ip_fw_contexts.chain[op3->ctxid] = chain;
-		ipfw_context_init(op3->ctxid); /* XXX: error checking */
-		IPFW_CTX_WUNLOCK();
-		break;
-
-	case IP_FW_CTX_DEL:
-		IPFW_CTX_WLOCK();
-		if (V_ip_fw_contexts.chain[op3->ctxid] == NULL) {
-			IPFW_CTX_WUNLOCK();
-			return (ENOENT);
-		}
-
-		ipfw_context_uninit(op3->ctxid);
-		V_ip_fw_contexts.chain[op3->ctxid] = NULL;
-		IPFW_CTX_WUNLOCK();
-		break;
-
-	case IP_FW_CTX_GET:
-		{
-			int i, n, len = 0, want;
-			char *bufout, *tmpbuf;
-
-			sopt->sopt_valsize = valsize;
-
-			IPFW_CTX_RLOCK();
-			for (i = 1; i < IP_FW_MAXCTX; i++) {
-				if (op3->ctxid > 0 && op3->ctxid != i)
-					continue;
-				if (op3->ctxid > 0 && op3->ctxid < i)
-					break;
-
-				if (V_ip_fw_contexts.chain[i] == NULL)
-					continue;
-
-				/* Calculate number of bytes for the integer */
-				n = i;
-				while (n > 0) {
-					n /= 10;
-					len++;
-				}
-				TAILQ_FOREACH(tmpifl, &V_ip_fw_contexts.iflist[i], entry) {
-					len += strlen(tmpifl->ifname) + 1;
-				}
-				len += 3; // newline, :, space
-			}
-			IPFW_CTX_RUNLOCK();
-
-			if (len > sopt->sopt_valsize) {
-				sopt->sopt_valsize = len;
-				break;
-			}
-
-			bufout = malloc(len, M_TEMP, M_WAITOK | M_ZERO);
-			if (bufout == NULL)
-				break;
-			
-			/* Record our size for later checks */
-			want = len;
-			len = 0;
-			IPFW_CTX_RLOCK();
-			/* Recalculate length to detect if smth changed */
-			for (i = 1; i < IP_FW_MAXCTX; i++) {
-				if (op3->ctxid > 0 && op3->ctxid != i)
-					continue;
-				if (op3->ctxid > 0 && op3->ctxid < i)
-					break;
-
-				if (V_ip_fw_contexts.chain[i] == NULL)
-					continue;
-
-				/* Calculate number of bytes for the integer */
-				n = i;
-				while (n > 0) {
-					n /= 10;
-					len++;
-				}
-				TAILQ_FOREACH(tmpifl, &V_ip_fw_contexts.iflist[i], entry) {
-					len += strlen(tmpifl->ifname) + 1;
-				}
-				len += 3; // newline, :, space
-			}
-
-			if (want >= len) {
-				tmpbuf = bufout;
-				for (i = 1; i < IP_FW_MAXCTX; i++) {
-					if (op3->ctxid > 0 && op3->ctxid != i)
-						continue;
-					if (op3->ctxid > 0 && op3->ctxid < i)
-						break;
-
-					if (V_ip_fw_contexts.chain[i] == NULL)
-						continue;
-
-					sprintf(tmpbuf, "%d: ", i);
-					tmpbuf += strlen(tmpbuf);
-					TAILQ_FOREACH(tmpifl, &V_ip_fw_contexts.iflist[i], entry) {
-						sprintf(tmpbuf, "%s,", tmpifl->ifname);
-						tmpbuf += strlen(tmpifl->ifname) + 1;
-					}
-					sprintf(tmpbuf, "\n");
-					tmpbuf++;
-				}
-			}
-			IPFW_CTX_RUNLOCK();
-
-			if (want >= len)
-				error = sooptcopyout(sopt, bufout, len);
-			else
-				len = 0;
-			free(bufout, M_TEMP);
-		}
-		break;
-
-	case IP_FW_CTX_SET:
-		/* XXX: Maybe not use this option at all? */
-		IPFW_CTX_RLOCK();
-		if (V_ip_fw_contexts.chain[op3->ctxid] == NULL)
-			error = ENOENT;
-		else
-			chain = V_ip_fw_contexts.chain[op3->ctxid];
-		IPFW_CTX_RUNLOCK();
-		break;
-
-	case IP_FW_CTX_ADDMEMBER:
-		{
-			int i;
-
-			ifname = (char *)(op3 + 1);
-			ifp = ifunit(ifname);
-			if (ifp == NULL)
-				return (ENOENT);
-
-			tmpifl = malloc(sizeof(*tmpifl), M_IPFW, M_WAITOK | M_ZERO);
-
-			IPFW_CTX_WLOCK();
-			if (V_ip_fw_contexts.chain[op3->ctxid] == NULL) {
-				IPFW_CTX_WUNLOCK();
-				free(tmpifl, M_IPFW);
-				return (ENOENT);
-			}
-
-			for (i = 1; i < IP_FW_MAXCTX; i++) {
-				if (V_ip_fw_contexts.chain[i] == NULL)
-					continue;
-
-				TAILQ_FOREACH(tmpifl2, &V_ip_fw_contexts.iflist[i], entry) {
-					if (strlen(tmpifl2->ifname) != strlen(ifname))
-						continue;
-					if (!strcmp(tmpifl2->ifname, ifname))
-						goto ctxifacefound;
-				}
-			}
-ctxifacefound:
-			if (tmpifl2 != NULL) {
-				IPFW_CTX_WUNLOCK();
-				free(tmpifl, M_IPFW);
-				return (EEXIST);
-			}
-
-			strlcpy(tmpifl->ifname, ifname, IFNAMSIZ);
-			TAILQ_INSERT_HEAD(&V_ip_fw_contexts.iflist[op3->ctxid], tmpifl, entry);
-			ifp->if_ispare[0] = op3->ctxid;
-			IPFW_CTX_WUNLOCK();
-		}
-		break;
-
-	case IP_FW_CTX_DELMEMBER:
-		IPFW_CTX_WLOCK();
-		if (V_ip_fw_contexts.chain[op3->ctxid] == NULL) {
-			IPFW_CTX_WUNLOCK();
-			return (ENOENT);
-		}
-
-		ifname = (char *)(op3 + 1);
-		TAILQ_FOREACH(tmpifl2, &V_ip_fw_contexts.iflist[op3->ctxid], entry) {
-			if (strlen(tmpifl2->ifname) != strlen(ifname))
-				continue;
-			if (!strcmp(tmpifl2->ifname, ifname)) 
-				break;
-		}
-		if (tmpifl2 == NULL) {
-			IPFW_CTX_WUNLOCK();
-			return (ENOENT);
-		}
-
-		TAILQ_REMOVE(&V_ip_fw_contexts.iflist[op3->ctxid], tmpifl2, entry);
-		IPFW_CTX_WUNLOCK();
-		free(tmpifl2, M_IPFW);
-
-		ifp = ifunit(ifname);
-		if (ifp != NULL)
-			ifp->if_ispare[0] = 0;
-		break;
-
 	case IP_FW_GET:
 		/*
 		 * pass up a copy of the current rules. Static rules
@@ -1509,7 +1280,7 @@ ctxifacefound:
 	/*--- NAT operations are protected by the IPFW_LOCK ---*/
 	case IP_FW_NAT_CFG:
 		if (IPFW_NAT_LOADED)
-			error = ipfw_nat_cfg_ptr(sopt, chain);
+			error = ipfw_nat_cfg_ptr(sopt);
 		else {
 			printf("IP_FW_NAT_CFG: %s\n",
 			    "ipfw_nat not present, please load it");
@@ -1519,7 +1290,7 @@ ctxifacefound:
 
 	case IP_FW_NAT_DEL:
 		if (IPFW_NAT_LOADED)
-			error = ipfw_nat_del_ptr(sopt, chain);
+			error = ipfw_nat_del_ptr(sopt);
 		else {
 			printf("IP_FW_NAT_DEL: %s\n",
 			    "ipfw_nat not present, please load it");
@@ -1529,7 +1300,7 @@ ctxifacefound:
 
 	case IP_FW_NAT_GET_CONFIG:
 		if (IPFW_NAT_LOADED)
-			error = ipfw_nat_get_cfg_ptr(sopt, chain);
+			error = ipfw_nat_get_cfg_ptr(sopt);
 		else {
 			printf("IP_FW_NAT_GET_CFG: %s\n",
 			    "ipfw_nat not present, please load it");
@@ -1539,7 +1310,7 @@ ctxifacefound:
 
 	case IP_FW_NAT_GET_LOG:
 		if (IPFW_NAT_LOADED)
-			error = ipfw_nat_get_log_ptr(sopt, chain);
+			error = ipfw_nat_get_log_ptr(sopt);
 		else {
 			printf("IP_FW_NAT_GET_LOG: %s\n",
 			    "ipfw_nat not present, please load it");
@@ -1556,33 +1327,6 @@ ctxifacefound:
 #undef RULE_MAXSIZE
 }
 
-void
-ipfw_attach_ifnet_event(void *arg __unused, struct ifnet *ifp)
-{
-	struct ip_fw_ctx_iflist *tmpifl;
-
-	CURVNET_SET(ifp->if_vnet);
-
-	IPFW_CTX_RLOCK();
-	for (int i = 1; i < IP_FW_MAXCTX; i++) {
-		if (V_ip_fw_contexts.chain[i] == NULL)
-			continue;
-		TAILQ_FOREACH(tmpifl, &V_ip_fw_contexts.iflist[i], entry) {
-			if (strlen(tmpifl->ifname) != strlen(ifp->if_xname))
-				continue;
-			if (!strcmp(tmpifl->ifname, ifp->if_xname)) {
-				printf("Restoring context for interface %s to %d\n", ifp->if_xname, i);
-				ifp->if_ispare[0] = i;
-				goto ifctxdone;
-				break;
-			}
-		}
-	}
-ifctxdone:
-	IPFW_CTX_RUNLOCK();
-
-	CURVNET_RESTORE();
-}
 
 #define	RULE_MAXSIZE	(256*sizeof(u_int32_t))
 

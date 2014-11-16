@@ -121,9 +121,11 @@ struct ipfw_dyn_bucket {
  */
 static VNET_DEFINE(struct ipfw_dyn_bucket *, ipfw_dyn_v);
 static VNET_DEFINE(u_int32_t, dyn_buckets_max);
+static VNET_DEFINE(u_int32_t, curr_dyn_buckets);
 static VNET_DEFINE(struct callout, ipfw_timeout);
 #define	V_ipfw_dyn_v			VNET(ipfw_dyn_v)
 #define	V_dyn_buckets_max		VNET(dyn_buckets_max)
+#define	V_curr_dyn_buckets		VNET(curr_dyn_buckets)
 #define V_ipfw_timeout                  VNET(ipfw_timeout)
 
 static VNET_DEFINE(uma_zone_t, ipfw_dyn_rule_zone);
@@ -178,8 +180,6 @@ static VNET_DEFINE(u_int32_t, dyn_max);		/* max # of dynamic rules */
 #define	V_dyn_max			VNET(dyn_max)
 
 static int last_log;	/* Log ratelimiting */
-
-VNET_DEFINE(u_int32_t, curr_dyn_buckets);
 
 static void ipfw_dyn_tick(void *vnetx);
 static void check_dyn_rules(struct ip_fw_chain *, struct ip_fw *,
@@ -470,7 +470,7 @@ ipfw_dyn_unlock(ipfw_dyn_rule *q)
 	IPFW_BUCK_UNLOCK(q->bucket);
 }
 
-int
+static int
 resize_dynamic_table(struct ip_fw_chain *chain, int nbuckets)
 {
 	int i, k, nbuckets_old;
@@ -970,6 +970,7 @@ ipfw_dyn_send_ka(struct mbuf **mtailp, ipfw_dyn_rule *q)
 static void
 ipfw_dyn_tick(void * vnetx) 
 {
+	struct ip_fw_chain *chain;
 	int check_ka = 0;
 #ifdef VIMAGE
 	struct vnet *vp = vnetx;
@@ -977,6 +978,7 @@ ipfw_dyn_tick(void * vnetx)
 
 	CURVNET_SET(vp);
 
+	chain = &V_layer3_chain;
 
 	/* Run keepalive checks every keepalive_period iff ka is enabled */
 	if ((V_dyn_keepalive_last + V_dyn_keepalive_period <= time_uptime) &&
@@ -985,12 +987,7 @@ ipfw_dyn_tick(void * vnetx)
 		check_ka = 1;
 	}
 
-	IPFW_CTX_RLOCK();
-	for (int i = 1; i < IP_FW_MAXCTX; i++) {
-		if (V_ip_fw_contexts.chain[i] != NULL)
-			check_dyn_rules(V_ip_fw_contexts.chain[i], NULL, RESVD_SET, check_ka, 1);
-	}
-	IPFW_CTX_RUNLOCK();
+	check_dyn_rules(chain, NULL, RESVD_SET, check_ka, 1);
 
 	callout_reset_on(&V_ipfw_timeout, hz, ipfw_dyn_tick, vnetx, 0);
 
@@ -1306,7 +1303,7 @@ ipfw_expire_dyn_rules(struct ip_fw_chain *chain, struct ip_fw *rule, int set)
 }
 
 void
-ipfw_dyn_init()
+ipfw_dyn_init(struct ip_fw_chain *chain)
 {
 
         V_ipfw_dyn_v = NULL;
@@ -1335,6 +1332,12 @@ ipfw_dyn_init()
 	uma_zone_set_max(V_ipfw_dyn_rule_zone, V_dyn_max);
 
         callout_init(&V_ipfw_timeout, CALLOUT_MPSAFE);
+
+	/*
+	 * This can potentially be done on first dynamic rule
+	 * being added to chain.
+	 */
+	resize_dynamic_table(chain, V_curr_dyn_buckets);
 }
 
 void
