@@ -79,7 +79,7 @@ pfil_run_hooks(struct pfil_head *ph, struct mbuf **mp, struct ifnet *ifp,
 	KASSERT(ph->ph_nhooks >= 0, ("Pfil hook count dropped < 0"));
 	for (pfh = pfil_chain_get(dir, ph); pfh != NULL;
 	     pfh = TAILQ_NEXT(pfh, pfil_chain)) {
-		if (!(pfh->pfil_flags & PFIL_DISABLED) && pfh->pfil_func != NULL) {
+		if ( pfh->pfil_func != NULL) {
 			rv = (*pfh->pfil_func)(pfh->pfil_arg, &m, ifp, dir,
 			    inp);
 			if (rv != 0 || m == NULL)
@@ -262,11 +262,9 @@ pfil_sysctl_handler(SYSCTL_HANDLER_ARGS)
 		if (i > 0)
 			sbuf_printf(sb, ", ");
 		if (pfh->pfil_name != NULL)
-			sbuf_printf(sb, "%s%s", pfh->pfil_name,
-					pfh->pfil_flags & PFIL_DISABLED ? "*" : "");
+			sbuf_printf(sb, "%s%s", pfh->pfil_name, "" );
 		else
-			sbuf_printf(sb, "%s%s", "NA",
-					pfh->pfil_flags & PFIL_DISABLED ? "*" : "");
+			sbuf_printf(sb, "%s%s", "NA","");
 		i++;
 	}
 	PFIL_RUNLOCK(ph, &rmpt);
@@ -301,14 +299,12 @@ pfil_sysctl_handler(SYSCTL_HANDLER_ARGS)
 				if (!strcmp(pfh->pfil_name, elm)) {
 					TAILQ_REMOVE(pfl, pfh, pfil_chain);
 					TAILQ_INSERT_TAIL(&npfl, pfh, pfil_chain);
-					pfh->pfil_flags &= ~PFIL_DISABLED;
 					break;
 				}
 			} else {
 				if (!strcmp(elm, "NA")) {
 					TAILQ_REMOVE(pfl, pfh, pfil_chain);
 					TAILQ_INSERT_TAIL(&npfl, pfh, pfil_chain);
-					pfh->pfil_flags &= ~PFIL_DISABLED;
 					break;
 				}
 			}
@@ -316,7 +312,6 @@ pfil_sysctl_handler(SYSCTL_HANDLER_ARGS)
 	}
 
 	TAILQ_FOREACH_SAFE(pfh, pfl, pfil_chain, pfhtmp) {
-		pfh->pfil_flags |= PFIL_DISABLED;
 		TAILQ_REMOVE(pfl, pfh, pfil_chain);
 		TAILQ_INSERT_TAIL(&npfl, pfh, pfil_chain);
 	}
@@ -404,7 +399,6 @@ pfil_add_named_hook(pfil_func_t func, void *arg, char *name, int flags, struct p
 		pfh1->pfil_func = func;
 		pfh1->pfil_arg = arg;
 		pfh1->pfil_name = name;
-		pfh1->pfil_flags &= ~PFIL_DISABLED;
 		err = pfil_chain_add(&ph->ph_in, pfh1, flags & ~PFIL_OUT);
 		if (err)
 			goto locked_error;
@@ -414,7 +408,6 @@ pfil_add_named_hook(pfil_func_t func, void *arg, char *name, int flags, struct p
 		pfh2->pfil_func = func;
 		pfh2->pfil_arg = arg;
 		pfh2->pfil_name = name;
-		pfh2->pfil_flags &= ~PFIL_DISABLED;
 		err = pfil_chain_add(&ph->ph_out, pfh2, flags & ~PFIL_IN);
 		if (err) {
 			if (flags & PFIL_IN)
