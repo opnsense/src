@@ -40,14 +40,10 @@ struct pfloghdr {
 	char		ruleset[PFLOG_RULESET_NAME_SIZE];
 	u_int32_t	rulenr;
 	u_int32_t	subrulenr;
-#ifdef PF_USER_INFO
 	uid_t		uid;
 	pid_t		pid;
 	uid_t		rule_uid;
 	pid_t		rule_pid;
-#else
-	u_int32_t	ridentifier;
-#endif
 	u_int8_t	dir;
 	u_int8_t	pad[3];
 };

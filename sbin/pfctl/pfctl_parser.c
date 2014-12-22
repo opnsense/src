@@ -736,11 +736,7 @@ print_rule(struct pf_rule *r, const char *anchor_call, int verbose, int numeric)
 	int	i, opts;
 
 	if (verbose)
-#ifdef PF_USER_INFO
 		printf("@%d ", r->nr);
-#else
-		printf("@%d(%u) ", r->nr, r->cuid);
-#endif
 	if (r->action == PF_MATCH)
 		printf("match");
 	else if (r->action > PF_NORDR)
