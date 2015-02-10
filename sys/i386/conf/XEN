@@ -7,11 +7,12 @@ cpu		I686_CPU
 ident		XEN
 
 makeoptions	DEBUG=-g		# Build kernel with gdb(1) debug symbols
-makeoptions	WITHOUT_MODULES="aha ahb amd ctl cxgb dpt drm drm2 hptnr hptmv ida malo mps mwl nve rdma sound sym trm xfs"
+
+# The following modules don't build with PAE and XEN enabled.
+makeoptions	WITHOUT_MODULES="ctl cxgb dpt drm drm2 hptmv ida malo mwl rdma"
 
 options 	SCHED_ULE		# ULE scheduler
 options 	PREEMPTION		# Enable kernel thread preemption
-#options 	SCHED_4BSD		 
 
 options 	INET			# InterNETworking
 options 	INET6			# IPv6 communications protocols
@@ -65,7 +66,6 @@ options 	MCLSHIFT=12
 options 	SMP			# Symmetric MultiProcessor Kernel
 device		apic			# I/O APIC
 
-
 #device		atkbdc		# AT keyboard controller
 #device		atkbd		# AT keyboard
 device		psm		# PS/2 mouse
@@ -83,11 +83,10 @@ device		gif		# IPv6 and IPv4 tunneling
 device		faith		# IPv6-to-IPv4 relaying (translation)
 
 # Wireless cards
-options		IEEE80211_SUPPORT_MESH
-options		AH_SUPPORT_AR5416
+options 	IEEE80211_SUPPORT_MESH
+options 	AH_SUPPORT_AR5416
 
 # The `bpf' device enables the Berkeley Packet Filter.
 # Be aware of the administrative consequences of enabling this!
 # Note that 'bpf' is required for DHCP.
 device		bpf		# Berkeley packet filter
-

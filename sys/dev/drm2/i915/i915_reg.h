@@ -80,6 +80,7 @@ __FBSDID("$FreeBSD$");
 #define  GRDOM_FULL	(0<<2)
 #define  GRDOM_RENDER	(1<<2)
 #define  GRDOM_MEDIA	(3<<2)
+#define  GRDOM_RESET_ENABLE (1<<0)
 
 #define GEN6_MBCUNIT_SNPCR	0x900c /* for LLC config */
 #define   GEN6_MBC_SNPCR_SHIFT	21
@@ -200,6 +201,10 @@ __FBSDID("$FreeBSD$");
 #define MI_DISPLAY_FLIP		MI_INSTR(0x14, 2)
 #define MI_DISPLAY_FLIP_I915	MI_INSTR(0x14, 1)
 #define   MI_DISPLAY_FLIP_PLANE(n) ((n) << 20)
+#define MI_ARB_ON_OFF		MI_INSTR(0x08, 0)
+#define   MI_ARB_ENABLE			(1<<0)
+#define   MI_ARB_DISABLE		(0<<0)
+
 #define MI_SET_CONTEXT		MI_INSTR(0x18, 0)
 #define   MI_MM_SPACE_GTT		(1<<8)
 #define   MI_MM_SPACE_PHYSICAL		(0<<8)
@@ -798,7 +803,7 @@ __FBSDID("$FreeBSD$");
 #define _DPLL_A	0x06014
 #define _DPLL_B	0x06018
 #define DPLL(pipe) _PIPE(pipe, _DPLL_A, _DPLL_B)
-#define   DPLL_VCO_ENABLE		(1 << 31)
+#define   DPLL_VCO_ENABLE		(1U << 31)
 #define   DPLL_DVO_HIGH_SPEED		(1 << 30)
 #define   DPLL_SYNCLOCK_ENABLE		(1 << 29)
 #define   DPLL_VGA_MODE_DIS		(1 << 28)
@@ -1361,6 +1366,31 @@ __FBSDID("$FreeBSD$");
  */
 #define CCID			0x2180
 #define   CCID_EN		(1<<0)
+#define CXT_SIZE		0x21a0
+#define GEN6_CXT_POWER_SIZE(cxt_reg)	((cxt_reg >> 24) & 0x3f)
+#define GEN6_CXT_RING_SIZE(cxt_reg)	((cxt_reg >> 18) & 0x3f)
+#define GEN6_CXT_RENDER_SIZE(cxt_reg)	((cxt_reg >> 12) & 0x3f)
+#define GEN6_CXT_EXTENDED_SIZE(cxt_reg)	((cxt_reg >> 6) & 0x3f)
+#define GEN6_CXT_PIPELINE_SIZE(cxt_reg)	((cxt_reg >> 0) & 0x3f)
+#define GEN6_CXT_TOTAL_SIZE(cxt_reg)	(GEN6_CXT_POWER_SIZE(cxt_reg) + \
+					GEN6_CXT_RING_SIZE(cxt_reg) + \
+					GEN6_CXT_RENDER_SIZE(cxt_reg) + \
+					GEN6_CXT_EXTENDED_SIZE(cxt_reg) + \
+					GEN6_CXT_PIPELINE_SIZE(cxt_reg))
+#define GEN7_CXT_SIZE		0x21a8
+#define GEN7_CXT_POWER_SIZE(ctx_reg)	((ctx_reg >> 25) & 0x7f)
+#define GEN7_CXT_RING_SIZE(ctx_reg)	((ctx_reg >> 22) & 0x7)
+#define GEN7_CXT_RENDER_SIZE(ctx_reg)	((ctx_reg >> 16) & 0x3f)
+#define GEN7_CXT_EXTENDED_SIZE(ctx_reg)	((ctx_reg >> 9) & 0x7f)
+#define GEN7_CXT_GT1_SIZE(ctx_reg)	((ctx_reg >> 6) & 0x7)
+#define GEN7_CXT_VFSTATE_SIZE(ctx_reg)	((ctx_reg >> 0) & 0x3f)
+#define GEN7_CXT_TOTAL_SIZE(ctx_reg)	(GEN7_CXT_POWER_SIZE(ctx_reg) + \
+					 GEN7_CXT_RING_SIZE(ctx_reg) + \
+					 GEN7_CXT_RENDER_SIZE(ctx_reg) + \
+					 GEN7_CXT_EXTENDED_SIZE(ctx_reg) + \
+					 GEN7_CXT_GT1_SIZE(ctx_reg) + \
+					 GEN7_CXT_VFSTATE_SIZE(ctx_reg))
+
 /*
  * Overlay regs
  */
@@ -1483,7 +1513,7 @@ __FBSDID("$FreeBSD$");
 /* SDVO port control */
 #define SDVOB			0x61140
 #define SDVOC			0x61160
-#define   SDVO_ENABLE		(1 << 31)
+#define   SDVO_ENABLE		(1U << 31)
 #define   SDVO_PIPE_B_SELECT	(1 << 30)
 #define   SDVO_STALL_SELECT	(1 << 29)
 #define   SDVO_INTERRUPT_ENABLE	(1 << 26)
@@ -1521,7 +1551,7 @@ __FBSDID("$FreeBSD$");
 #define DVOA			0x61120
 #define DVOB			0x61140
 #define DVOC			0x61160
-#define   DVO_ENABLE			(1 << 31)
+#define   DVO_ENABLE			(1U << 31)
 #define   DVO_PIPE_B_SELECT		(1 << 30)
 #define   DVO_PIPE_STALL_UNUSED		(0 << 28)
 #define   DVO_PIPE_STALL		(1 << 28)
@@ -1557,7 +1587,7 @@ __FBSDID("$FreeBSD$");
  * Enables the LVDS port.  This bit must be set before DPLLs are enabled, as
  * the DPLL semantics change when the LVDS is assigned to that pipe.
  */
-#define   LVDS_PORT_EN			(1 << 31)
+#define   LVDS_PORT_EN			(1U << 31)
 /* Selects pipe B for LVDS data.  Must be set on pre-965. */
 #define   LVDS_PIPEB_SELECT		(1 << 30)
 #define   LVDS_PIPE_MASK		(1 << 30)
@@ -1604,7 +1634,7 @@ __FBSDID("$FreeBSD$");
 /* Video Data Island Packet control */
 #define VIDEO_DIP_DATA		0x61178
 #define VIDEO_DIP_CTL		0x61170
-#define   VIDEO_DIP_ENABLE		(1 << 31)
+#define   VIDEO_DIP_ENABLE		(1U << 31)
 #define   VIDEO_DIP_PORT_B		(1 << 29)
 #define   VIDEO_DIP_PORT_C		(2 << 29)
 #define   VIDEO_DIP_ENABLE_AVI		(1 << 21)
@@ -1620,7 +1650,7 @@ __FBSDID("$FreeBSD$");
 
 /* Panel power sequencing */
 #define PP_STATUS	0x61200
-#define   PP_ON		(1 << 31)
+#define   PP_ON		(1U << 31)
 /*
  * Indicates that all dependencies of the panel are on:
  *
@@ -1653,7 +1683,7 @@ __FBSDID("$FreeBSD$");
 
 /* Panel fitting */
 #define PFIT_CONTROL	0x61230
-#define   PFIT_ENABLE		(1 << 31)
+#define   PFIT_ENABLE		(1U << 31)
 #define   PFIT_PIPE_MASK	(3 << 29)
 #define   PFIT_PIPE_SHIFT	29
 #define   VERT_INTERP_DISABLE	(0 << 10)
@@ -1714,7 +1744,7 @@ __FBSDID("$FreeBSD$");
 /* TV port control */
 #define TV_CTL			0x68000
 /** Enables the TV encoder */
-# define TV_ENC_ENABLE			(1 << 31)
+# define TV_ENC_ENABLE			(1U << 31)
 /** Sources the TV encoder input from pipe B instead of A. */
 # define TV_ENC_PIPEB_SELECT		(1 << 30)
 /** Outputs composite video (DAC A only) */
@@ -1786,7 +1816,7 @@ __FBSDID("$FreeBSD$");
  *
  * This gets cleared when TV_DAC_STATE_EN is cleared
 */
-# define TVDAC_STATE_CHG		(1 << 31)
+# define TVDAC_STATE_CHG		(1U << 31)
 # define TVDAC_SENSE_MASK		(7 << 28)
 /** Reports that DAC A voltage is above the detect threshold */
 # define TVDAC_A_SENSE			(1 << 30)
@@ -1913,7 +1943,7 @@ __FBSDID("$FreeBSD$");
 
 #define TV_H_CTL_2		0x68034
 /** Enables the colorburst (needed for non-component color) */
-# define TV_BURST_ENA			(1 << 31)
+# define TV_BURST_ENA			(1U << 31)
 /** Offset of the colorburst from the start of hsync, in pixels minus one. */
 # define TV_HBURST_START_SHIFT		16
 # define TV_HBURST_START_MASK		0x1fff0000
@@ -1958,7 +1988,7 @@ __FBSDID("$FreeBSD$");
 
 #define TV_V_CTL_3		0x68044
 /** Enables generation of the equalization signal */
-# define TV_EQUAL_ENA			(1 << 31)
+# define TV_EQUAL_ENA			(1U << 31)
 /** Length of vsync, in half lines */
 # define TV_VEQ_LEN_MASK		0x007f0000
 # define TV_VEQ_LEN_SHIFT		16
@@ -2032,7 +2062,7 @@ __FBSDID("$FreeBSD$");
 
 #define TV_SC_CTL_1		0x68060
 /** Turns on the first subcarrier phase generation DDA */
-# define TV_SC_DDA1_EN			(1 << 31)
+# define TV_SC_DDA1_EN			(1U << 31)
 /** Turns on the first subcarrier phase generation DDA */
 # define TV_SC_DDA2_EN			(1 << 30)
 /** Turns on the first subcarrier phase generation DDA */
@@ -2095,7 +2125,7 @@ __FBSDID("$FreeBSD$");
  * If set, the rest of the registers are ignored, and the calculated values can
  * be read back from the register.
  */
-# define TV_AUTO_SCALE			(1 << 31)
+# define TV_AUTO_SCALE			(1U << 31)
 /**
  * Disables the vertical filter.
  *
@@ -2158,7 +2188,7 @@ __FBSDID("$FreeBSD$");
 # define TV_VSCALE_IP_FRAC_SHIFT		0
 
 #define TV_CC_CONTROL		0x68090
-# define TV_CC_ENABLE			(1 << 31)
+# define TV_CC_ENABLE			(1U << 31)
 /**
  * Specifies which field to send the CC data in.
  *
@@ -2174,7 +2204,7 @@ __FBSDID("$FreeBSD$");
 # define TV_CC_LINE_SHIFT		0
 
 #define TV_CC_DATA		0x68094
-# define TV_CC_RDY			(1 << 31)
+# define TV_CC_RDY			(1U << 31)
 /** Second word of CC data to be transmitted. */
 # define TV_CC_DATA_2_MASK		0x007f0000
 # define TV_CC_DATA_2_SHIFT		16
@@ -2197,7 +2227,7 @@ __FBSDID("$FreeBSD$");
 #define DP_C				0x64200
 #define DP_D				0x64300
 
-#define   DP_PORT_EN			(1 << 31)
+#define   DP_PORT_EN			(1U << 31)
 #define   DP_PIPEB_SELECT		(1 << 30)
 #define   DP_PIPE_MASK			(1 << 30)
 
@@ -2307,7 +2337,7 @@ __FBSDID("$FreeBSD$");
 #define DPD_AUX_CH_DATA4		0x64320
 #define DPD_AUX_CH_DATA5		0x64324
 
-#define   DP_AUX_CH_CTL_SEND_BUSY	    (1 << 31)
+#define   DP_AUX_CH_CTL_SEND_BUSY	    (1U << 31)
 #define   DP_AUX_CH_CTL_DONE		    (1 << 30)
 #define   DP_AUX_CH_CTL_INTERRUPT	    (1 << 29)
 #define   DP_AUX_CH_CTL_TIME_OUT_ERROR	    (1 << 28)
@@ -2903,7 +2933,7 @@ __FBSDID("$FreeBSD$");
 
 /* VBIOS regs */
 #define VGACNTRL		0x71400
-# define VGA_DISP_DISABLE			(1 << 31)
+# define VGA_DISP_DISABLE			(1U << 31)
 # define VGA_2X_MODE				(1 << 30)
 # define VGA_PIPE_B_SELECT			(1 << 29)
 
@@ -3029,7 +3059,7 @@ __FBSDID("$FreeBSD$");
 #define LGC_PALETTE(pipe) _PIPE(pipe, _LGC_PALETTE_A, _LGC_PALETTE_B)
 
 /* interrupts */
-#define DE_MASTER_IRQ_CONTROL   (1 << 31)
+#define DE_MASTER_IRQ_CONTROL   (1U << 31)
 #define DE_SPRITEB_FLIP_DONE    (1 << 29)
 #define DE_SPRITEA_FLIP_DONE    (1 << 28)
 #define DE_PLANEB_FLIP_DONE     (1 << 27)
@@ -3553,7 +3583,7 @@ __FBSDID("$FreeBSD$");
 
 /* or SDVOB */
 #define HDMIB   0xe1140
-#define  PORT_ENABLE    (1 << 31)
+#define  PORT_ENABLE    (1U << 31)
 #define  TRANSCODER(pipe)       ((pipe) << 30)
 #define  TRANSCODER_CPT(pipe)   ((pipe) << 29)
 #define  TRANSCODER_MASK        (1 << 30)
@@ -3583,13 +3613,13 @@ __FBSDID("$FreeBSD$");
 #define  LVDS_DETECTED	(1 << 1)
 
 #define BLC_PWM_CPU_CTL2	0x48250
-#define  PWM_ENABLE		(1 << 31)
+#define  PWM_ENABLE		(1U << 31)
 #define  PWM_PIPE_A		(0 << 29)
 #define  PWM_PIPE_B		(1 << 29)
 #define BLC_PWM_CPU_CTL		0x48254
 
 #define BLC_PWM_PCH_CTL1	0xc8250
-#define  PWM_PCH_ENABLE		(1 << 31)
+#define  PWM_PCH_ENABLE		(1U << 31)
 #define  PWM_POLARITY_ACTIVE_LOW	(1 << 29)
 #define  PWM_POLARITY_ACTIVE_HIGH	(0 << 29)
 #define  PWM_POLARITY_ACTIVE_LOW2	(1 << 28)
@@ -3611,8 +3641,8 @@ __FBSDID("$FreeBSD$");
 #define  PANEL_PORT_SELECT_LVDS	(0 << 30)
 #define  PANEL_PORT_SELECT_DPA	(1 << 30)
 #define  EDP_PANEL		(1 << 30)
-#define  PANEL_PORT_SELECT_DPC	(2 << 30)
-#define  PANEL_PORT_SELECT_DPD	(3 << 30)
+#define  PANEL_PORT_SELECT_DPC	(2U << 30)
+#define  PANEL_PORT_SELECT_DPD	(3U << 30)
 #define  PANEL_POWER_UP_DELAY_MASK	(0x1fff0000)
 #define  PANEL_POWER_UP_DELAY_SHIFT	16
 #define  PANEL_LIGHT_ON_DELAY_MASK	(0x1fff)

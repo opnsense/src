@@ -94,29 +94,6 @@ __FBSDID("$FreeBSD$");
 
 #ifdef KDTRACE_HOOKS
 #include <sys/dtrace_bsd.h>
-
-/*
- * This is a hook which is initialised by the dtrace module
- * to handle traps which might occur during DTrace probe
- * execution.
- */
-dtrace_trap_func_t	dtrace_trap_func;
-
-dtrace_doubletrap_func_t	dtrace_doubletrap_func;
-
-/*
- * This is a hook which is initialised by the systrace module
- * when it is loaded. This keeps the DTrace syscall provider
- * implementation opaque. 
- */
-systrace_probe_func_t	systrace_probe_func;
-
-/*
- * These hooks are necessary for the pid, usdt and fasttrap providers.
- */
-dtrace_fasttrap_probe_ptr_t	dtrace_fasttrap_probe_ptr;
-dtrace_pid_probe_ptr_t		dtrace_pid_probe_ptr;
-dtrace_return_probe_ptr_t	dtrace_return_probe_ptr;
 #endif
 
 #ifdef TRAP_DEBUG
@@ -639,7 +616,7 @@ trap(struct trapframe *trapframe)
 	 * function can return normally.
 	 */
 	/*
-	 * XXXDTRACE: add fasttrap and pid  probes handlers here (if ever)
+	 * XXXDTRACE: add pid probe handler here (if ever)
 	 */
 	if (!usermode) {
 		if (dtrace_trap_func != NULL && (*dtrace_trap_func)(trapframe, type))
@@ -1520,6 +1497,7 @@ log_bad_page_fault(char *msg, struct trapframe *frame, int trap_type)
 	printf("cpuid = %d\n", PCPU_GET(cpuid));
 #endif
 	switch (trap_type) {
+	case T_TLB_MOD:
 	case T_TLB_ST_MISS:
 	case T_ADDR_ERR_ST:
 		read_or_write = "write";

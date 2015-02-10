@@ -36,6 +36,7 @@ f_include $BSDCFG_SHARE/device.subr
 f_include $BSDCFG_SHARE/media/common.subr
 f_include $BSDCFG_SHARE/packages/categories.subr
 f_include $BSDCFG_SHARE/packages/index.subr
+f_include $BSDCFG_SHARE/packages/musthavepkg.subr
 f_include $BSDCFG_SHARE/strings.subr
 
 BSDCFG_LIBE="/usr/libexec/bsdconfig"
@@ -472,8 +473,7 @@ f_package_menu_select()
 	"$msg_all"|"") f_category_desc_get "All" prompt ;;
 	            *) f_category_desc_get "$category" prompt ;;
 	esac
-	prompt="$prompt $( printf "$msg_page_of_npages" \
-	                          "$page" "$npages" )"
+	f_sprintf prompt "%s $msg_page_of_npages" "$prompt" "$page" "$npages"
 
 	local mheight mwidth mrows
 	eval f_dialog_menu${SHOW_DESC:+_with_help}_size mheight mwidth mrows \
@@ -536,7 +536,7 @@ f_package_menu_deselect()
 	" # End-Quote
 	local hline="$hline_alnum_arrows_punc_tab_enter"
 
-	prompt=$( printf "$msg_what_would_you_like_to_do_with" "$package" )
+	f_sprintf prompt "$msg_what_would_you_like_to_do_with" "$package"
 
 	local height width rows
 	eval f_dialog_menu_size height width rows \
@@ -578,7 +578,7 @@ f_package_review()
 
 	f_dprintf "$funcname: SELECTED_PACKAGES=[%s]" "$SELECTED_PACKAGES"
 
-	prompt=$( printf "$msg_reviewing_selected_packages" "$_All_nselected" )
+	f_sprintf prompt "$msg_reviewing_selected_packages" "$_All_nselected"
 
 	local package varpkg mark
 	for package in $SELECTED_PACKAGES; do
@@ -663,7 +663,7 @@ f_package_review()
 f_package_config()
 {
 	# Did we get an INDEX?
-	f_index_initialize packages/INDEX || return $FAILURE
+	f_index_initialize || return $FAILURE
 		# Creates following variables (indirectly via f_index_read())
 		#   CATEGORY_MENU_LIST _categories_{varpkg} _rundeps_{varpkg}
 		#   PACKAGE_CATEGORIES _npkgs
@@ -839,8 +839,8 @@ f_package_add()
 
 	{ # Verify and initialize device media if-defined
 		f_media_verify &&
-		f_device_init media &&
-		f_index_initialize packages/INDEX
+		f_device_init device_media &&
+		f_index_initialize
 	} || return $FAILURE
 
 	# Now we have (indirectly via f_index_read()):
@@ -924,7 +924,7 @@ f_package_add()
 	# Done with the deps? Try to load the real m'coy.
 	#
 
-	f_package_extract media "$name" "$depended"
+	f_package_extract device_media "$name" "$depended"
 	retval=$?
 	if [ $retval -ne $SUCCESS ]; then
 		status=$(( $status | $retval ))
@@ -945,9 +945,13 @@ f_package_extract()
 {
 	local funcname=f_package_extract
 	local device="$1" name="$2" depended="$3"
+	local devname=
 
+	f_musthavepkg_init # Make sure we have a usable pkg(8) with $PKG_ABI
+
+	$device get name devname
 	f_dprintf "$funcname: device=[%s] name=[%s] depended=[%s]" \
-	          "$device" "$name" "$depended"
+	          "$devname" "$name" "$depended"
 
 	# Check to make sure it's not already there
 	local varpkg mark=
@@ -972,7 +976,7 @@ f_package_extract()
 	f_quietly mkdir -p -m 1777 "$tmpdir"
 
 	local path device_type
-	device_$device get type device_type
+	$device get type device_type
 	case "$name" in
 	*/*) path="$name" ;;
 	*)
@@ -1001,7 +1005,7 @@ f_package_extract()
 		fi
 	done
 	[ "$found" ] && f_dprintf "$funcname: found path=[%s] dev=[%s]" \
-	                          "$path" "$device"
+	                          "$path" "$devname"
 
 	local alert=f_show_msg no_confirm=
 	f_getvar $VAR_NO_CONFIRM no_confirm
@@ -1009,15 +1013,13 @@ f_package_extract()
 
 	if [ ! "$found" ]; then
 		f_dprintf "$funcname: No such %s file on %s device" \
-	                  "$path" "$device"
+	                  "$path" "$devname"
 		$alert "$msg_unable_to_fetch_package_from_selected_media" \
 		       "$name"
 		[ "$no_confirm" ] && sleep 2
 		return $FAILURE
 	fi
 
-	local devname=
-	f_struct device_$device get name devname
 	if [ "$depended" ]; then
 		f_show_info "$msg_adding_package_as_a_dependency_from_media" \
 		            "$name" "$devname"
@@ -1027,9 +1029,11 @@ f_package_extract()
 
 	# Request the package be added via pkg-install(8)
 	if f_debugging; then
-		f_eval_catch $funcname pkg 'pkg -d install -y "%s"' "$name"
+		f_eval_catch $funcname pkg \
+			'pkg -d install -${depended:+A}y "%s"' "$name"
 	else
-		f_eval_catch $funcname pkg 'pkg install -y "%s"' "$name"
+		f_eval_catch $funcname pkg \
+			'pkg install -${depended:+A}y "%s"' "$name"
 	fi
 	if [ $? -ne $SUCCESS ]; then
 		$alert "$msg_pkg_install_apparently_did_not_like_the_package" \
@@ -1065,8 +1069,8 @@ f_package_delete()
 
 	{ # Verify and initialize device media if-defined
 		f_media_verify &&
-		f_device_init media &&
-		f_index_initialize packages/INDEX
+		f_device_init device_media &&
+		f_index_initialize
 	} || return $FAILURE
 
 	# Now we have (indirectly via f_index_read()):

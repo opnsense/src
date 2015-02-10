@@ -6,11 +6,11 @@
 .include <bsd.own.mk>
 
 CLEANFILES= osreldate.h version vers.c
-SUBDIR= arpa gssapi protocols rpcsvc rpc xlocale
+SUBDIR= arpa protocols rpcsvc rpc xlocale
 INCS=	a.out.h ar.h assert.h bitstring.h complex.h cpio.h _ctype.h ctype.h \
 	db.h \
 	dirent.h dlfcn.h elf.h elf-hints.h err.h fmtmsg.h fnmatch.h fstab.h \
-	fts.h ftw.h getopt.h glob.h grp.h gssapi.h \
+	fts.h ftw.h getopt.h glob.h grp.h \
 	ieeefp.h ifaddrs.h \
 	inttypes.h iso646.h kenv.h langinfo.h libgen.h limits.h link.h \
 	locale.h malloc.h malloc_np.h memory.h monetary.h mpool.h mqueue.h \
@@ -66,6 +66,11 @@ _dev_powermac_nvram=	dev/powermac_nvram
 
 .if ${MK_GPIB} != "no"
 _dev_ieee488=	dev/ieee488
+.endif
+
+.if ${MK_GSSAPI} != "no"
+SUBDIR+=	gssapi
+INCS+=		gssapi.h
 .endif
 
 .if ${MK_HESIOD} != "no"
@@ -187,6 +192,11 @@ copies:
 	${INSTALL} -C -o ${BINOWN} -g ${BINGRP} -m 444 *.h \
 	    ${DESTDIR}${INCLUDEDIR}/netinet
 .endif
+.if ${MK_PF} != "no"
+	cd ${.CURDIR}/../sys/netpfil/pf; \
+	${INSTALL} -C -o ${BINOWN} -g ${BINGRP} -m 444 *.h \
+	    ${DESTDIR}${INCLUDEDIR}/netpfil/pf
+.endif
 	cd ${.CURDIR}/../sys/crypto; \
 	${INSTALL} -C -o ${BINOWN} -g ${BINGRP} -m 444 rijndael/rijndael.h \
 	    ${DESTDIR}${INCLUDEDIR}/crypto
@@ -278,6 +288,13 @@ symlinks:
 	for h in *.h; do \
 		ln -fs ../../../sys/contrib/ipfilter/netinet/$$h \
 		    ${DESTDIR}${INCLUDEDIR}/netinet; \
+	done
+.endif
+.if ${MK_PF} != "no"
+	cd ${.CURDIR}/../sys/netpfil/pf; \
+	for h in *.h; do \
+		ln -fs ../../../../sys/netpfil/pf/$$h \
+		    ${DESTDIR}${INCLUDEDIR}/netpfil/pf; \
 	done
 .endif
 	cd ${.CURDIR}/../sys/crypto; \

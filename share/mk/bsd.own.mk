@@ -251,7 +251,6 @@ __DEFAULT_YES_OPTIONS = \
     ARM_EABI \
     ASSERT_DEBUG \
     AT \
-    ATF \
     ATM \
     AUDIT \
     AUTHPF \
@@ -275,6 +274,7 @@ __DEFAULT_YES_OPTIONS = \
     ED_CRYPTO \
     EXAMPLES \
     FLOPPY \
+    FMTREE \
     FORMAT_EXTENSIONS \
     FORTH \
     FP_LIBC \
@@ -285,6 +285,7 @@ __DEFAULT_YES_OPTIONS = \
     GNU \
     GPIB \
     GPIO \
+    GPL_DTC \
     GROFF \
     HTML \
     ICONV \
@@ -314,6 +315,7 @@ __DEFAULT_YES_OPTIONS = \
     MAILWRAPPER \
     MAKE \
     MAN \
+    NCURSESW \
     NDIS \
     NETCAT \
     NETGRAPH \
@@ -356,6 +358,7 @@ __DEFAULT_YES_OPTIONS = \
     UNBOUND \
     USB \
     UTMPX \
+    VT \
     WIRELESS \
     WPA_SUPPLICANT_EAPOL \
     ZFS \
@@ -366,7 +369,6 @@ __DEFAULT_NO_OPTIONS = \
     CLANG_EXTRAS \
     CTF \
     DEBUG_FILES \
-    GPL_DTC \
     HESIOD \
     INSTALL_AS_USER \
     LLDB \
@@ -376,6 +378,7 @@ __DEFAULT_NO_OPTIONS = \
     PKGTOOLS \
     SHARED_TOOLCHAIN \
     SVN \
+    TESTS \
     USB_GADGET_EXAMPLES
 
 #
@@ -418,15 +421,6 @@ __DEFAULT_YES_OPTIONS+=GCC
 .else
 __DEFAULT_NO_OPTIONS+=GCC GNUCXX
 .endif
-# The libc++ headers use c++11 extensions.  These are normally silenced because
-# they are treated as system headers, but we explicitly disable that warning
-# suppression when building the base system to catch bugs in our headers.
-# Eventually we'll want to start building the base system C++ code as C++11,
-# but not yet.
-_COMPVERSION!= ${CC} --version
-.if ${_COMPVERSION:Mclang}
-CXXFLAGS+=	-Wno-c++11-extensions
-.endif
 .else
 # If clang is not cc, then build gcc by default
 __DEFAULT_NO_OPTIONS+=CLANG_IS_CC
@@ -443,6 +437,12 @@ __DEFAULT_YES_OPTIONS+=GNUCXX
 __DEFAULT_YES_OPTIONS+=FDT
 .else
 __DEFAULT_NO_OPTIONS+=FDT
+.endif
+# HyperV is only available for x86 and amd64.
+.if ${__T} == "amd64" || ${__T} == "i386"
+__DEFAULT_YES_OPTIONS+=HYPERV
+.else
+__DEFAULT_NO_OPTIONS+=HYPERV
 .endif
 .undef __T
 
@@ -555,6 +555,20 @@ MK_CLANG_FULL:= no
 MK_LLDB:= no
 .endif
 
+.if defined(NO_TESTS)
+# This should be handled above along the handling of all other NO_*  options.
+# However, the above is broken when WITH_*=yes are passed to make(1) as
+# command line arguments.  See PR bin/183762.
+#
+# Because the TESTS option is new and it will default to yes, it's likely
+# that people will pass WITHOUT_TESTS=yes to make(1) directly and get a broken
+# build.  So, just in case, it's better to explicitly handle this case here.
+#
+# TODO(jmmv): Either fix make to allow us putting this override where it
+# belongs above or fix this file to cope with the make bug.
+MK_TESTS:= no
+.endif
+
 #
 # Set defaults for the MK_*_SUPPORT variables.
 #
@@ -658,5 +672,9 @@ $xGRP=	${_gid}
 .endif
 
 .endif # !_WITHOUT_SRCCONF
+
+# Pointer to the top directory into which tests are installed.  Should not be
+# overriden by Makefiles, but the user may choose to set this in src.conf(5).
+TESTSBASE?= /usr/tests
 
 .endif	# !target(__<bsd.own.mk>__)

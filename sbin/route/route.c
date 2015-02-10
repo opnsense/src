@@ -67,6 +67,7 @@ __FBSDID("$FreeBSD$");
 #include <stdlib.h>
 #include <string.h>
 #include <sysexits.h>
+#include <time.h>
 #include <unistd.h>
 #include <ifaddrs.h>
 
@@ -81,7 +82,7 @@ static struct keytab {
 static struct sockaddr_storage so[RTAX_MAX];
 static int	pid, rtm_addrs;
 static int	s;
-static int	forcehost, forcenet, nflag, af, qflag, tflag;
+static int	nflag, af, qflag, tflag;
 static int	verbose, aflen;
 static int	locking, lockrest, debugonly;
 static struct rt_metrics rt_metrics;
@@ -140,7 +141,7 @@ usage(const char *cp)
 {
 	if (cp != NULL)
 		warnx("bad keyword: %s", cp);
-	errx(EX_USAGE, "usage: route [-dnqtv] command [[modifiers] args]");
+	errx(EX_USAGE, "usage: route [-46dnqtv] command [[modifiers] args]");
 	/* NOTREACHED */
 }
 
@@ -153,8 +154,24 @@ main(int argc, char **argv)
 	if (argc < 2)
 		usage(NULL);
 
-	while ((ch = getopt(argc, argv, "nqdtv")) != -1)
+	while ((ch = getopt(argc, argv, "46nqdtv")) != -1)
 		switch(ch) {
+		case '4':
+#ifdef INET
+			af = AF_INET;
+			aflen = sizeof(struct sockaddr_in);
+#else
+			errx(1, "IPv4 support is not compiled in");
+#endif
+			break;
+		case '6':
+#ifdef INET6
+			af = AF_INET6;
+			aflen = sizeof(struct sockaddr_in6);
+#else
+			errx(1, "IPv6 support is not compiled in");
+#endif
+			break;
 		case 'n':
 			nflag = 1;
 			break;
@@ -368,11 +385,13 @@ flushroutes(int argc, char *argv[])
 			usage(*argv);
 		switch (keyword(*argv + 1)) {
 #ifdef INET
+		case K_4:
 		case K_INET:
 			af = AF_INET;
 			break;
 #endif
 #ifdef INET6
+		case K_6:
 		case K_INET6:
 			af = AF_INET6;
 			break;
@@ -723,6 +742,7 @@ static void
 set_metric(char *value, int key)
 {
 	int flag = 0;
+	char *endptr;
 	u_long noval, *valp = &noval;
 
 	switch (key) {
@@ -742,7 +762,18 @@ set_metric(char *value, int key)
 		rt_metrics.rmx_locks |= flag;
 	if (locking)
 		locking = 0;
-	*valp = atoi(value);
+	errno = 0;
+	*valp = strtol(value, &endptr, 0);
+	if (errno == 0 && *endptr != '\0')
+		errno = EINVAL;
+	if (errno)
+		err(EX_USAGE, "%s", value);
+	if (flag & RTV_EXPIRE && (value[0] == '+' || value[0] == '-')) {
+		struct timespec ts;
+
+		clock_gettime(CLOCK_REALTIME_FAST, &ts);
+		*valp += ts.tv_sec;
+	}
 }
 
 #define	F_ISHOST	0x01
@@ -780,12 +811,14 @@ newroute(int argc, char **argv)
 				aflen = sizeof(struct sockaddr_dl);
 				break;
 #ifdef INET
+			case K_4:
 			case K_INET:
 				af = AF_INET;
 				aflen = sizeof(struct sockaddr_in);
 				break;
 #endif
 #ifdef INET6
+			case K_6:
 			case K_INET6:
 				af = AF_INET6;
 				aflen = sizeof(struct sockaddr_in6);
@@ -826,6 +859,9 @@ newroute(int argc, char **argv)
 				break;
 			case K_PROTO2:
 				flags |= RTF_PROTO2;
+				break;
+			case K_PROTO3:
+				flags |= RTF_PROTO3;
 				break;
 			case K_PROXY:
 				nrflags |= F_PROXY;
@@ -1215,7 +1251,7 @@ getaddr(int idx, char *str, struct hostent **hpp, int nrflags)
 		 */
 		switch (idx) {
 		case RTAX_DST:
-			forcenet++;
+			nrflags |= F_FORCENET;
 			getaddr(RTAX_NETMASK, str, 0, nrflags);
 			break;
 		}
@@ -1255,7 +1291,7 @@ getaddr(int idx, char *str, struct hostent **hpp, int nrflags)
 		if (!atalk_aton(str, &sat->sat_addr))
 			errx(EX_NOHOST, "bad address: %s", str);
 		rtm_addrs |= RTA_NETMASK;
-		return(forcehost || sat->sat_addr.s_node != 0);
+		return(nrflags & F_FORCEHOST || sat->sat_addr.s_node != 0);
 	}
 	case AF_LINK:
 		link_addr(str, (struct sockaddr_dl *)(void *)sa);
@@ -1288,10 +1324,10 @@ getaddr(int idx, char *str, struct hostent **hpp, int nrflags)
 		}
 		*q = '/';
 	}
-	if ((idx != RTAX_DST || forcenet == 0) &&
+	if ((idx != RTAX_DST || (nrflags & F_FORCENET) == 0) &&
 	    inet_aton(str, &sin->sin_addr)) {
 		val = sin->sin_addr.s_addr;
-		if (idx != RTAX_DST || forcehost ||
+		if (idx != RTAX_DST || nrflags & F_FORCEHOST ||
 		    inet_lnaof(sin->sin_addr) != INADDR_ANY)
 			return (1);
 		else {
@@ -1299,7 +1335,7 @@ getaddr(int idx, char *str, struct hostent **hpp, int nrflags)
 			goto netdone;
 		}
 	}
-	if (idx == RTAX_DST && forcehost == 0 &&
+	if (idx == RTAX_DST && (nrflags & F_FORCEHOST) == 0 &&
 	    ((val = inet_network(str)) != INADDR_NONE ||
 	    ((np = getnetbyname(str)) != NULL && (val = np->n_net) != 0))) {
 netdone:
@@ -1681,6 +1717,7 @@ static void
 print_getmsg(struct rt_msghdr *rtm, int msglen, int fib)
 {
 	struct sockaddr *sp[RTAX_MAX];
+	struct timespec ts;
 	char *cp;
 	int i;
 
@@ -1733,15 +1770,18 @@ print_getmsg(struct rt_msghdr *rtm, int msglen, int fib)
 #define msec(u)	(((u) + 500) / 1000)		/* usec to msec */
 	printf("\n%9s %9s %9s %9s %9s %10s %9s\n", "recvpipe",
 	    "sendpipe", "ssthresh", "rtt,msec", "mtu   ", "weight", "expire");
-	printf("%8ld%c ", rtm->rtm_rmx.rmx_recvpipe, lock(RPIPE));
-	printf("%8ld%c ", rtm->rtm_rmx.rmx_sendpipe, lock(SPIPE));
-	printf("%8ld%c ", rtm->rtm_rmx.rmx_ssthresh, lock(SSTHRESH));
-	printf("%8ld%c ", msec(rtm->rtm_rmx.rmx_rtt), lock(RTT));
-	printf("%8ld%c ", rtm->rtm_rmx.rmx_mtu, lock(MTU));
-	printf("%8ld%c ", rtm->rtm_rmx.rmx_weight, lock(WEIGHT));
-	if (rtm->rtm_rmx.rmx_expire)
-		rtm->rtm_rmx.rmx_expire -= time(0);
-	printf("%8ld%c\n", rtm->rtm_rmx.rmx_expire, lock(EXPIRE));
+	printf("%8lu%c ", rtm->rtm_rmx.rmx_recvpipe, lock(RPIPE));
+	printf("%8lu%c ", rtm->rtm_rmx.rmx_sendpipe, lock(SPIPE));
+	printf("%8lu%c ", rtm->rtm_rmx.rmx_ssthresh, lock(SSTHRESH));
+	printf("%8lu%c ", msec(rtm->rtm_rmx.rmx_rtt), lock(RTT));
+	printf("%8lu%c ", rtm->rtm_rmx.rmx_mtu, lock(MTU));
+	printf("%8lu%c ", rtm->rtm_rmx.rmx_weight, lock(WEIGHT));
+	if (rtm->rtm_rmx.rmx_expire > 0)
+		clock_gettime(CLOCK_REALTIME_FAST, &ts);
+	else
+		ts.tv_sec = 0;
+	printf("%8ld%c\n", (long)(rtm->rtm_rmx.rmx_expire - ts.tv_sec),
+	    lock(EXPIRE));
 #undef lock
 #undef msec
 #define	RTA_IGN	(RTA_DST|RTA_GATEWAY|RTA_NETMASK|RTA_IFP|RTA_IFA|RTA_BRD)

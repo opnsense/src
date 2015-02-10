@@ -475,8 +475,7 @@ ipsec4_common_input_cb(struct mbuf *m, struct secasvar *sav,
 	ipsec_bpf(m, sav, AF_INET, ENC_IN|ENC_BEFORE);
 
 	if (prot != IPPROTO_IPIP)
-		if ((error = ipsec_filter(&m, &sav->sah->saidx, PFIL_IN, 
-			ENC_IN|ENC_BEFORE)) != 0)
+		if ((error = ipsec_filter(&m, PFIL_IN, ENC_IN|ENC_BEFORE)) != 0)
 			return (error);
 #endif
 
@@ -603,6 +602,7 @@ ipsec6_common_input_cb(struct mbuf *m, struct secasvar *sav, int skip, int proto
 	ip6->ip6_plen = htons(m->m_pkthdr.len - sizeof(struct ip6_hdr));
 
 	/* Save protocol */
+	prot = 0;
 	m_copydata(m, protoff, 1, (unsigned char *) &prot);
 
 #ifdef notyet
@@ -730,8 +730,7 @@ ipsec6_common_input_cb(struct mbuf *m, struct secasvar *sav, int skip, int proto
 
 	/* XXX-BZ does not make sense. */
 	if (prot != IPPROTO_IPIP)
-		if ((error = ipsec_filter(&m, &sav->sah->saidx, PFIL_IN, 
-			ENC_IN|ENC_BEFORE)) != 0)
+		if ((error = ipsec_filter(&m, PFIL_IN, ENC_IN|ENC_BEFORE)) != 0)
 			return (error);
 #endif
 

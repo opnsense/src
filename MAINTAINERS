@@ -82,7 +82,6 @@ binutils	obrien	Insists on BU blocked from unapproved commits
 file		obrien	Insists to keep file blocked from other's unapproved
 			commits
 contrib/bzip2	obrien	Pre-commit review required.
-lukemftpd	obrien	Pre-commit review required.
 geom_concat	pjd	Pre-commit review preferred.
 geom_eli	pjd	Pre-commit review preferred.
 geom_gate	pjd	Pre-commit review preferred.
@@ -110,7 +109,6 @@ lib/libbluetooth	emax	Pre-commit review preferred.
 lib/libsdp		emax	Pre-commit review preferred.
 usr.bin/bluetooth	emax	Pre-commit review preferred.
 usr.sbin/bluetooth	emax	Pre-commit review preferred.
-gnu/usr.bin/send-pr	bugmaster	Pre-commit review requested.
 *env(3)		secteam	Due to the problematic security history of this
 			code, please have patches reviewed by secteam.
 share/zoneinfo		edwin	Heads-up appreciated, since our data is coming

@@ -203,8 +203,7 @@ pfsync_status(int s)
 	if (preq.pfsyncr_syncdev[0] != '\0' ||
 	    preq.pfsyncr_syncpeer.s_addr != INADDR_PFSYNC_GROUP) {
 		printf("maxupd: %d ", preq.pfsyncr_maxupdates);
-		printf("defer: %s\n", (preq.pfsyncr_defer & PFSYNCF_DEFER) ? "on" : "off");
-		printf("syncok: %d\n", (preq.pfsyncr_defer & PFSYNCF_OK) ? 1 : 0);
+		printf("defer: %s\n", preq.pfsyncr_defer ? "on" : "off");
 	}
 }
 

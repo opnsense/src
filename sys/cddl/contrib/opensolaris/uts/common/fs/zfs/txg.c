@@ -21,7 +21,7 @@
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Portions Copyright 2011 Martin Matuska <mm@FreeBSD.org>
- * Copyright (c) 2013 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2014 by Delphix. All rights reserved.
  */
 
 #include <sys/zfs_context.h>
@@ -45,7 +45,7 @@
  * either be processing, or blocked waiting to enter the next state. There may
  * be up to three active txgs, and there is always a txg in the open state
  * (though it may be blocked waiting to enter the quiescing state). In broad
- * strokes, transactions — operations that change in-memory structures — are
+ * strokes, transactions -- operations that change in-memory structures -- are
  * accepted into the txg in the open state, and are completed while the txg is
  * in the open or quiescing states. The accumulated changes are written to
  * disk in the syncing state.
@@ -53,7 +53,7 @@
  * Open
  *
  * When a new txg becomes active, it first enters the open state. New
- * transactions — updates to in-memory structures — are assigned to the
+ * transactions -- updates to in-memory structures -- are assigned to the
  * currently open txg. There is always a txg in the open state so that ZFS can
  * accept new changes (though the txg may refuse new changes if it has hit
  * some limit). ZFS advances the open txg to the next state for a variety of
@@ -369,6 +369,7 @@ txg_quiesce(dsl_pool_t *dp, uint64_t txg)
 
 	ASSERT(txg == tx->tx_open_txg);
 	tx->tx_open_txg++;
+	tx->tx_open_time = gethrtime();
 
 	DTRACE_PROBE2(txg__quiescing, dsl_pool_t *, dp, uint64_t, txg);
 	DTRACE_PROBE2(txg__opened, dsl_pool_t *, dp, uint64_t, tx->tx_open_txg);
@@ -462,7 +463,8 @@ txg_sync_thread(void *arg)
 
 	start = delta = 0;
 	for (;;) {
-		uint64_t timer, timeout = zfs_txg_timeout * hz;
+		uint64_t timeout = zfs_txg_timeout * hz;
+		uint64_t timer;
 		uint64_t txg;
 
 		/*
@@ -474,7 +476,8 @@ txg_sync_thread(void *arg)
 		while (!dsl_scan_active(dp->dp_scan) &&
 		    !tx->tx_exiting && timer > 0 &&
 		    tx->tx_synced_txg >= tx->tx_sync_txg_waiting &&
-		    tx->tx_quiesced_txg == 0) {
+		    tx->tx_quiesced_txg == 0 &&
+		    dp->dp_dirty_total < zfs_dirty_data_sync) {
 			dprintf("waiting; tx_synced=%llu waiting=%llu dp=%p\n",
 			    tx->tx_synced_txg, tx->tx_sync_txg_waiting, dp);
 			txg_thread_wait(tx, &cpr, &tx->tx_sync_more_cv, timer);
@@ -652,6 +655,28 @@ txg_wait_open(dsl_pool_t *dp, uint64_t txg)
 	mutex_exit(&tx->tx_sync_lock);
 }
 
+/*
+ * If there isn't a txg syncing or in the pipeline, push another txg through
+ * the pipeline by queiscing the open txg.
+ */
+void
+txg_kick(dsl_pool_t *dp)
+{
+	tx_state_t *tx = &dp->dp_tx;
+
+	ASSERT(!dsl_pool_config_held(dp));
+
+	mutex_enter(&tx->tx_sync_lock);
+	if (tx->tx_syncing_txg == 0 &&
+	    tx->tx_quiesce_txg_waiting <= tx->tx_open_txg &&
+	    tx->tx_sync_txg_waiting <= tx->tx_synced_txg &&
+	    tx->tx_quiesced_txg <= tx->tx_synced_txg) {
+		tx->tx_quiesce_txg_waiting = tx->tx_open_txg + 1;
+		cv_broadcast(&tx->tx_quiesce_more_cv);
+	}
+	mutex_exit(&tx->tx_sync_lock);
+}
+
 boolean_t
 txg_stalled(dsl_pool_t *dp)
 {
@@ -699,6 +724,24 @@ boolean_t
 txg_list_empty(txg_list_t *tl, uint64_t txg)
 {
 	return (tl->tl_head[txg & TXG_MASK] == NULL);
+}
+
+/*
+ * Returns true if all txg lists are empty.
+ *
+ * Warning: this is inherently racy (an item could be added immediately after this
+ * function returns). We don't bother with the lock because it wouldn't change the
+ * semantics.
+ */
+boolean_t
+txg_all_lists_empty(txg_list_t *tl)
+{
+	for (int i = 0; i < TXG_SIZE; i++) {
+		if (!txg_list_empty(tl, i)) {
+			return (B_FALSE);
+		}
+	}
+	return (B_TRUE);
 }
 
 /*

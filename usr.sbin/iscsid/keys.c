@@ -26,8 +26,10 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * $FreeBSD$
  */
+
+#include <sys/cdefs.h>
+__FBSDID("$FreeBSD$");
 
 #include <assert.h>
 #include <stdint.h>
@@ -65,7 +67,7 @@ keys_load(struct keys *keys, const struct pdu *pdu)
 	size_t pair_len;
 
 	if (pdu->pdu_data_len == 0)
-		log_errx(1, "protocol error: empty data segment");
+		return;
 
 	if (pdu->pdu_data[pdu->pdu_data_len - 1] != '\0')
 		log_errx(1, "protocol error: key not NULL-terminated\n");

@@ -56,6 +56,8 @@ struct pcpu_md {
 	uint32_t	clock_mode;		/* Clock ET mode */
 	uint32_t	awake:1;		/* CPU is awake? */
 	struct pcpu_stats stats;		/* Interrupt stats. */
+	void		*xtrace_buffer;
+	uint64_t	xtrace_tail;
 #ifdef _KERNEL
 	struct sysctl_ctx_list sysctl_ctx;
 	struct sysctl_oid *sysctl_tree;
@@ -65,9 +67,11 @@ struct pcpu_md {
 #define	PCPU_MD_FIELDS							\
 	uint32_t	pc_acpi_id;		/* ACPI CPU id. */	\
 	struct pcpu_md	pc_md;			/* MD fields. */	\
-	char		__pad[1265]
+	char		__pad[10*128]
 
 #ifdef _KERNEL
+
+#include <sys/systm.h>
 
 struct pcpu;
 
@@ -83,16 +87,48 @@ __curthread(void)
 }
 #define	curthread	(__curthread())
 
-#define	PCPU_GET(member)	(pcpup->pc_ ## member)
+#define	__pcpu_offset(name)	__offsetof(struct pcpu, name)
+#define	__pcpu_type(name)	__typeof(((struct pcpu *)0)->name)
 
-/*
- * XXX The implementation of this operation should be made atomic
- * with respect to preemption.
- */
-#define	PCPU_ADD(member, value)	(pcpup->pc_ ## member += (value))
+#define	PCPU_ADD(name, val)					\
+    do {							\
+	__pcpu_type(pc_ ## name) *nmp;				\
+	critical_enter();					\
+	__asm __volatile("add %0=%1,r13;;" :			\
+	    "=r"(nmp) : "i"(__pcpu_offset(pc_ ## name)));	\
+	*nmp += val;						\
+	critical_exit();					\
+    } while (0)
+
+#define	PCPU_GET(name)						\
+    ({	__pcpu_type(pc_ ## name) *nmp;				\
+	__pcpu_type(pc_ ## name) res;				\
+	critical_enter();					\
+	__asm __volatile("add %0=%1,r13;;" :			\
+	    "=r"(nmp) : "i"(__pcpu_offset(pc_ ## name)));	\
+	res = *nmp;						\
+	critical_exit();					\
+	res;							\
+    })
+
 #define	PCPU_INC(member)	PCPU_ADD(member, 1)
-#define	PCPU_PTR(member)	(&pcpup->pc_ ## member)
-#define	PCPU_SET(member,value)	(pcpup->pc_ ## member = (value))
+
+#define	PCPU_PTR(name)						\
+    ({	__pcpu_type(pc_ ## name) *nmp;				\
+	__asm __volatile("add %0=%1,r13;;" :			\
+	    "=r"(nmp) : "i"(__pcpu_offset(pc_ ## name)));	\
+	nmp;							\
+    })
+
+#define	PCPU_SET(name, val)					\
+    do {							\
+	__pcpu_type(pc_ ## name) *nmp;				\
+	critical_enter();					\
+	__asm __volatile("add %0=%1,r13;;" :			\
+	    "=r"(nmp) : "i"(__pcpu_offset(pc_ ## name)));	\
+	*nmp = val;						\
+	critical_exit();					\
+    } while (0)
 
 #endif	/* _KERNEL */
 

@@ -815,8 +815,6 @@ bridge_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		}
 		BRIDGE_LOCK(sc);
 		LIST_FOREACH(bif, &sc->sc_iflist, bif_next) {
-			if (bif->bif_ifp->if_type == IFT_GIF)
-				continue;
 			if (bif->bif_ifp->if_mtu != ifr->ifr_mtu) {
 				log(LOG_NOTICE, "%s: invalid MTU: %lu(%s)"
 				    " != %d\n", sc->sc_ifp->if_xname,
@@ -1105,14 +1103,12 @@ bridge_ioctl_add(struct bridge_softc *sc, void *arg)
 	}
 #endif
 	/* Allow the first Ethernet member to define the MTU */
-	if (ifs->if_type != IFT_GIF) {
 	if (LIST_EMPTY(&sc->sc_iflist))
 		sc->sc_ifp->if_mtu = ifs->if_mtu;
 	else if (sc->sc_ifp->if_mtu != ifs->if_mtu) {
 		if_printf(sc->sc_ifp, "invalid MTU: %lu(%s) != %lu\n",
 		    ifs->if_mtu, ifs->if_xname, sc->sc_ifp->if_mtu);
 		return (EINVAL);
-	}
 	}
 
 	bif = malloc(sizeof(*bif), M_DEVBUF, M_NOWAIT|M_ZERO);

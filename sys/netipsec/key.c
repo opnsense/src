@@ -140,18 +140,6 @@ static VNET_DEFINE(int, key_preferred_oldsa) = 1;
 static VNET_DEFINE(u_int32_t, acq_seq) = 0;
 #define	V_acq_seq		VNET(acq_seq)
 
-								/* SPD cache */
-struct secpolicycache {
-	struct secpolicy *policy;
-	struct secpolicyindex spidx;
-	u_int32_t genid;
-};
-#define SPCACHESIZE	8192
-static VNET_DEFINE(struct secpolicycache, spcache[2][SPCACHESIZE]);
-#define	V_spcache		VNET(spcache)
-static VNET_DEFINE(u_int32_t, spcache_genid) = 0;
-#define	V_spcache_genid		VNET(spcache_genid)
-
 								/* SPD */
 static VNET_DEFINE(LIST_HEAD(_sptree, secpolicy), sptree[IPSEC_DIR_MAX]);
 #define	V_sptree		VNET(sptree)
@@ -164,13 +152,8 @@ static struct mtx sptree_lock;
 #define	SPTREE_UNLOCK()	mtx_unlock(&sptree_lock)
 #define	SPTREE_LOCK_ASSERT()	mtx_assert(&sptree_lock, MA_OWNED)
 
-#define SPIHASHSIZE	1024
-#define	SPIHASH(x)	(((x) + ((x) >> 16)) % SPIHASHSIZE)
-
 static VNET_DEFINE(LIST_HEAD(_sahtree, secashead), sahtree);	/* SAD */
 #define	V_sahtree		VNET(sahtree)
-static VNET_DEFINE(LIST_HEAD(_spihash, secasvar), spihash[SPIHASHSIZE]);
-#define	V_spihash		VNET(spihash)
 static struct mtx sahtree_lock;
 #define	SAHTREE_LOCK_INIT() \
 	mtx_init(&sahtree_lock, "sahtree", \
@@ -347,8 +330,6 @@ SYSCTL_VNET_INT(_net_key, KEYCTL_PREFERED_OLDSA,
 
 #define __LIST_CHAINED(elm) \
 	(!((elm)->chain.le_next == NULL && (elm)->chain.le_prev == NULL))
-#define __LIST_SPIHASHED(elm) \
-	(!((elm)->spihash.le_next == NULL && (elm)->spihash.le_prev == NULL))
 #define LIST_INSERT_TAIL(head, elm, type, field) \
 do {\
 	struct type *curelm = LIST_FIRST(head); \
@@ -457,11 +438,11 @@ static u_int key_getspreqmsglen __P((struct secpolicy *));
 static int key_spdexpire __P((struct secpolicy *));
 static struct secashead *key_newsah __P((struct secasindex *));
 static void key_delsah __P((struct secashead *));
-static struct secasvar *key_newsav __P((u_int32_t, struct mbuf *,
+static struct secasvar *key_newsav __P((struct mbuf *,
 	const struct sadb_msghdr *, struct secashead *, int *,
 	const char*, int));
-#define	KEY_NEWSAV(spi, m, sadb, sah, e)			\
-	key_newsav(spi, m, sadb, sah, e, __FILE__, __LINE__)
+#define	KEY_NEWSAV(m, sadb, sah, e)				\
+	key_newsav(m, sadb, sah, e, __FILE__, __LINE__)
 static void key_delsav __P((struct secasvar *));
 static struct secashead *key_getsah __P((struct secasindex *));
 static struct secasvar *key_checkspidup __P((struct secasindex *, u_int32_t));
@@ -629,10 +610,14 @@ key_havesp(u_int dir)
  * OUT:	NULL:	not found
  *	others:	found and return the pointer.
  */
-static struct secpolicy *
-key_allocsp_slow(struct secpolicyindex *spidx, u_int dir, const char* where, int tag)
+struct secpolicy *
+key_allocsp(struct secpolicyindex *spidx, u_int dir, const char* where, int tag)
 {
 	struct secpolicy *sp;
+
+	IPSEC_ASSERT(spidx != NULL, ("null spidx"));
+	IPSEC_ASSERT(dir == IPSEC_DIR_INBOUND || dir == IPSEC_DIR_OUTBOUND,
+		("invalid direction %u", dir));
 
 	KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
 		printf("DP %s from %s:%u\n", __func__, where, tag));
@@ -642,7 +627,7 @@ key_allocsp_slow(struct secpolicyindex *spidx, u_int dir, const char* where, int
 		printf("*** objects\n");
 		kdebug_secpolicyindex(spidx));
 
-	SPTREE_LOCK_ASSERT();
+	SPTREE_LOCK();
 	LIST_FOREACH(sp, &V_sptree[dir], chain) {
 		KEYDEBUG(KEYDEBUG_IPSEC_DATA,
 			printf("*** in SPD\n");
@@ -655,45 +640,6 @@ key_allocsp_slow(struct secpolicyindex *spidx, u_int dir, const char* where, int
 	}
 	sp = NULL;
 found:
-
-	KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
-		printf("DP %s return SP:%p (ID=%u) refcnt %u\n", __func__,
-			sp, sp ? sp->id : 0, sp ? sp->refcnt : 0));
-	return sp;
-}
-
-static Fnv32_t key_hash_spidx(struct secpolicyindex *spidx)
-{
-	Fnv32_t hash = FNV1_32_INIT;
-	hash = fnv_32_buf(&spidx->src.sa, spidx->src.sa.sa_len, hash);
-	hash = fnv_32_buf(&spidx->dst.sa, spidx->dst.sa.sa_len, hash);
-	hash = fnv_32_buf(&spidx->ul_proto, sizeof(spidx->ul_proto), hash);
-	return hash;
-}
-
-struct secpolicy *
-key_allocsp(struct secpolicyindex *spidx, u_int dir, const char* where, int tag)
-{
-	struct secpolicy *sp;
-	Fnv32_t hash;
-	int hdir;
-
-	IPSEC_ASSERT(spidx != NULL, ("null spidx"));
-	IPSEC_ASSERT(dir == IPSEC_DIR_INBOUND || dir == IPSEC_DIR_OUTBOUND,
-		("invalid direction %u", dir));
-
-	SPTREE_LOCK();
-	hdir = (dir == IPSEC_DIR_INBOUND);
-	hash = key_hash_spidx(spidx) % SPCACHESIZE;
-	if (V_spcache[hdir][hash].genid == V_spcache_genid &&
-	    key_cmpspidx_exactly(&V_spcache[hdir][hash].spidx, spidx)) {
-		sp = V_spcache[hdir][hash].policy;
-	} else {
-		sp = key_allocsp_slow(spidx, dir, where, tag);
-		V_spcache[hdir][hash].policy = sp;
-		V_spcache[hdir][hash].spidx = *spidx;
-		V_spcache[hdir][hash].genid = V_spcache_genid;
-	}
 	if (sp) {
 		/* sanity check */
 		KEY_CHKSPDIR(sp->spidx.dir, dir, __func__);
@@ -704,6 +650,9 @@ key_allocsp(struct secpolicyindex *spidx, u_int dir, const char* where, int tag)
 	}
 	SPTREE_UNLOCK();
 
+	KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
+		printf("DP %s return SP:%p (ID=%u) refcnt %u\n", __func__,
+			sp, sp ? sp->id : 0, sp ? sp->refcnt : 0));
 	return sp;
 }
 
@@ -1132,8 +1081,13 @@ key_allocsa(
 	u_int32_t spi,
 	const char* where, int tag)
 {
+	struct secashead *sah;
 	struct secasvar *sav;
-	int chkport;
+	u_int stateidx, arraysize, state;
+	const u_int *saorder_state_valid;
+#ifdef IPSEC_NAT_T
+	int natt_chkport;
+#endif
 
 	IPSEC_ASSERT(dst != NULL, ("null dst address"));
 
@@ -1141,11 +1095,9 @@ key_allocsa(
 		printf("DP %s from %s:%u\n", __func__, where, tag));
 
 #ifdef IPSEC_NAT_T
-        chkport = (dst->sa.sa_family == AF_INET &&
+        natt_chkport = (dst->sa.sa_family == AF_INET &&
 	    dst->sa.sa_len == sizeof(struct sockaddr_in) &&
 	    dst->sin.sin_port != 0);
-#else
-	chkport = 0;
 #endif
 
 	/*
@@ -1155,19 +1107,54 @@ key_allocsa(
 	 * encrypted so we can't check internal IP header.
 	 */
 	SAHTREE_LOCK();
-	LIST_FOREACH(sav, &spihash[SPIHASH(spi)], spihash) {
-		if (sav->state != SADB_SASTATE_MATURE &&
-			sav->state != SADB_SASTATE_DYING)
-			continue;
-		if (proto != sav->sah->saidx.proto)
-			continue;
-		if (spi != sav->spi)
-			continue;
-		/* check dst address */
-		if (key_sockaddrcmp(&dst->sa, &sav->sah->saidx.dst.sa, chkport) != 0)
-			continue;
-		sa_addref(sav);
-		goto done;
+	if (V_key_preferred_oldsa) {
+		saorder_state_valid = saorder_state_valid_prefer_old;
+		arraysize = _ARRAYLEN(saorder_state_valid_prefer_old);
+	} else {
+		saorder_state_valid = saorder_state_valid_prefer_new;
+		arraysize = _ARRAYLEN(saorder_state_valid_prefer_new);
+	}
+	LIST_FOREACH(sah, &V_sahtree, chain) {
+		int checkport;
+
+		/* search valid state */
+		for (stateidx = 0; stateidx < arraysize; stateidx++) {
+			state = saorder_state_valid[stateidx];
+			LIST_FOREACH(sav, &sah->savtree[state], chain) {
+				/* sanity check */
+				KEY_CHKSASTATE(sav->state, state, __func__);
+				/* do not return entries w/ unusable state */
+				if (sav->state != SADB_SASTATE_MATURE &&
+				    sav->state != SADB_SASTATE_DYING)
+					continue;
+				if (proto != sav->sah->saidx.proto)
+					continue;
+				if (spi != sav->spi)
+					continue;
+				checkport = 0;
+#ifdef IPSEC_NAT_T
+				/*
+				 * Really only check ports when this is a NAT-T
+				 * SA.  Otherwise other lookups providing ports
+				 * might suffer.
+				 */
+				if (sav->natt_type && natt_chkport)
+					checkport = 1;
+#endif
+#if 0	/* don't check src */
+				/* check src address */
+				if (key_sockaddrcmp(&src->sa,	
+				    &sav->sah->saidx.src.sa, checkport) != 0)
+					continue;
+#endif
+				/* check dst address */
+				if (key_sockaddrcmp(&dst->sa,
+				    &sav->sah->saidx.dst.sa, checkport) != 0)
+					continue;
+				sa_addref(sav);
+				goto done;
+			}
+		}
 	}
 	sav = NULL;
 done:
@@ -1300,8 +1287,6 @@ key_delsp(struct secpolicy *sp)
 	IPSEC_ASSERT(sp != NULL, ("null sp"));
 	SPTREE_LOCK_ASSERT();
 
-	if (sp->state != IPSEC_SPSTATE_DEAD)
-		V_spcache_genid++;
 	sp->state = IPSEC_SPSTATE_DEAD;
 
 	IPSEC_ASSERT(sp->refcnt == 0,
@@ -1965,7 +1950,6 @@ key_spdadd(so, m, mhp)
 	newsp->refcnt = 1;	/* do not reclaim until I say I do */
 	newsp->state = IPSEC_SPSTATE_ALIVE;
 	LIST_INSERT_TAIL(&V_sptree[newsp->spidx.dir], newsp, secpolicy, chain);
-	V_spcache_genid++;
 
 	/* delete the entry in spacqtree */
 	if (mhp->msg->sadb_msg_type == SADB_X_SPDUPDATE) {
@@ -2413,7 +2397,6 @@ key_spdflush(so, m, mhp)
 		SPTREE_LOCK();
 		LIST_FOREACH(sp, &V_sptree[dir], chain)
 			sp->state = IPSEC_SPSTATE_DEAD;
-		V_spcache_genid++;
 		SPTREE_UNLOCK();
 	}
 
@@ -2803,8 +2786,7 @@ key_delsah(sah)
  * does not modify mbuf.  does not free mbuf on error.
  */
 static struct secasvar *
-key_newsav(spi, m, mhp, sah, errp, where, tag)
-	u_int32_t spi;
+key_newsav(m, mhp, sah, errp, where, tag)
 	struct mbuf *m;
 	const struct sadb_msghdr *mhp;
 	struct secashead *sah;
@@ -2813,12 +2795,12 @@ key_newsav(spi, m, mhp, sah, errp, where, tag)
 	int tag;
 {
 	struct secasvar *newsav;
+	const struct sadb_sa *xsa;
 
 	IPSEC_ASSERT(m != NULL, ("null mbuf"));
 	IPSEC_ASSERT(mhp != NULL, ("null msghdr"));
 	IPSEC_ASSERT(mhp->msg != NULL, ("null msg"));
 	IPSEC_ASSERT(sah != NULL, ("null secashead"));
-	SAHTREE_LOCK_ASSERT();
 
 	newsav = malloc(sizeof(struct secasvar), M_IPSEC_SA, M_NOWAIT|M_ZERO);
 	if (newsav == NULL) {
@@ -2827,16 +2809,41 @@ key_newsav(spi, m, mhp, sah, errp, where, tag)
 		goto done;
 	}
 
+	switch (mhp->msg->sadb_msg_type) {
+	case SADB_GETSPI:
+		newsav->spi = 0;
 
 #ifdef IPSEC_DOSEQCHECK
-	/* sync sequence number */
-	if (mhp->msg->sadb_msg_type == SADB_GETSPI &&
-	    mhp->msg->sadb_msg_seq == 0)
-		newsav->seq =
-			(V_acq_seq = (V_acq_seq == ~0 ? 1 : ++V_acq_seq));
-	else
+		/* sync sequence number */
+		if (mhp->msg->sadb_msg_seq == 0)
+			newsav->seq =
+				(V_acq_seq = (V_acq_seq == ~0 ? 1 : ++V_acq_seq));
+		else
 #endif
+			newsav->seq = mhp->msg->sadb_msg_seq;
+		break;
+
+	case SADB_ADD:
+		/* sanity check */
+		if (mhp->ext[SADB_EXT_SA] == NULL) {
+			free(newsav, M_IPSEC_SA);
+			newsav = NULL;
+			ipseclog((LOG_DEBUG, "%s: invalid message is passed.\n",
+				__func__));
+			*errp = EINVAL;
+			goto done;
+		}
+		xsa = (const struct sadb_sa *)mhp->ext[SADB_EXT_SA];
+		newsav->spi = xsa->sadb_sa_spi;
 		newsav->seq = mhp->msg->sadb_msg_seq;
+		break;
+	default:
+		free(newsav, M_IPSEC_SA);
+		newsav = NULL;
+		*errp = EINVAL;
+		goto done;
+	}
+
 
 	/* copy sav values */
 	if (mhp->msg->sadb_msg_type != SADB_GETSPI) {
@@ -2848,21 +2855,21 @@ key_newsav(spi, m, mhp, sah, errp, where, tag)
 		}
 	}
 
+	SECASVAR_LOCK_INIT(newsav);
+
 	/* reset created */
 	newsav->created = time_second;
 	newsav->pid = mhp->msg->sadb_msg_pid;
-	newsav->spi = spi;
 
 	/* add to satree */
 	newsav->sah = sah;
 	sa_initref(newsav);
 	newsav->state = SADB_SASTATE_LARVAL;
 
+	SAHTREE_LOCK();
 	LIST_INSERT_TAIL(&sah->savtree[SADB_SASTATE_LARVAL], newsav,
 			secasvar, chain);
-	if (spi)
-		LIST_INSERT_HEAD(&spihash[SPIHASH(spi)], newsav, spihash);
-
+	SAHTREE_UNLOCK();
 done:
 	KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
 		printf("DP %s from %s:%u return SP:%p\n", __func__,
@@ -2939,9 +2946,8 @@ key_delsav(sav)
 	/* remove from SA header */
 	if (__LIST_CHAINED(sav))
 		LIST_REMOVE(sav, chain);
-	if (__LIST_SPIHASHED(sav))
-		LIST_REMOVE(sav, spihash);
 	key_cleansav(sav);
+	SECASVAR_LOCK_DESTROY(sav);
 	free(sav, M_IPSEC_SA);
 }
 
@@ -2971,6 +2977,7 @@ key_getsah(saidx)
 
 /*
  * check not to be duplicated SPI.
+ * NOTE: this function is too slow due to searching all SAD.
  * OUT:
  *	NULL	: not found
  *	others	: found, pointer to a SA.
@@ -2980,9 +2987,8 @@ key_checkspidup(saidx, spi)
 	struct secasindex *saidx;
 	u_int32_t spi;
 {
+	struct secashead *sah;
 	struct secasvar *sav;
-
-	SAHTREE_LOCK_ASSERT();
 
 	/* check address family */
 	if (saidx->src.sa.sa_family != saidx->dst.sa.sa_family) {
@@ -2992,11 +2998,16 @@ key_checkspidup(saidx, spi)
 	}
 
 	sav = NULL;
-	LIST_FOREACH(sav, &spihash[SPIHASH(spi)], spihash) {
-		if (sav->spi == spi &&
-		    key_ismyaddr((struct sockaddr *)&sav->sah->saidx.dst))
+	/* check all SAD */
+	SAHTREE_LOCK();
+	LIST_FOREACH(sah, &V_sahtree, chain) {
+		if (!key_ismyaddr((struct sockaddr *)&sah->saidx.dst))
+			continue;
+		sav = key_getsavbyspi(sah, spi);
+		if (sav != NULL)
 			break;
 	}
+	SAHTREE_UNLOCK();
 
 	return sav;
 }
@@ -3013,21 +3024,27 @@ key_getsavbyspi(sah, spi)
 	u_int32_t spi;
 {
 	struct secasvar *sav;
-	u_int stateidx;
+	u_int stateidx, state;
 
 	sav = NULL;
 	SAHTREE_LOCK_ASSERT();
+	/* search all status */
+	for (stateidx = 0;
+	     stateidx < _ARRAYLEN(saorder_state_alive);
+	     stateidx++) {
 
-	LIST_FOREACH(sav, &spihash[SPIHASH(spi)], spihash) {
-		if (sav->sah != sah)
-			continue;
-		if (sav->spi != spi)
-			continue;
+		state = saorder_state_alive[stateidx];
+		LIST_FOREACH(sav, &sah->savtree[state], chain) {
 
-		for (stateidx = 0; 
-		     stateidx < _ARRAYLEN(saorder_state_alive);
-		     stateidx++) {
-			if (sav->state == saorder_state_alive[stateidx])
+			/* sanity check */
+			if (sav->state != state) {
+				ipseclog((LOG_DEBUG, "%s: "
+				    "invalid sav->state (queue: %d SA: %d)\n",
+				    __func__, state, sav->state));
+				continue;
+			}
+
+			if (sav->spi == spi)
 				return sav;
 		}
 	}
@@ -4319,7 +4336,6 @@ restart:
 			if ((sp->lifetime && now - sp->created > sp->lifetime)
 			 || (sp->validtime && now - sp->lastused > sp->validtime)) {
 				sp->state = IPSEC_SPSTATE_DEAD;
-				V_spcache_genid++;
 				SPTREE_UNLOCK();
 				key_spdexpire(sp);
 				goto restart;
@@ -4756,6 +4772,12 @@ key_getspi(so, m, mhp)
 	}
 #endif
 
+	/* SPI allocation */
+	spi = key_do_getnewspi((struct sadb_spirange *)mhp->ext[SADB_EXT_SPIRANGE],
+	                       &saidx);
+	if (spi == 0)
+		return key_senderror(so, m, EINVAL);
+
 	/* get a SA index */
 	if ((newsah = key_getsah(&saidx)) == NULL) {
 		/* create a new SA index */
@@ -4765,24 +4787,16 @@ key_getspi(so, m, mhp)
 		}
 	}
 
-	/* SPI allocation */
-	SAHTREE_LOCK();
-	spi = key_do_getnewspi((struct sadb_spirange *)mhp->ext[SADB_EXT_SPIRANGE],
-	                       &saidx);
-	if (spi == 0) {
-		SAHTREE_UNLOCK();
-		return key_senderror(so, m, EINVAL);
-	}
-
 	/* get a new SA */
 	/* XXX rewrite */
-	newsav = KEY_NEWSAV(spi, m, mhp, newsah, &error);
+	newsav = KEY_NEWSAV(m, mhp, newsah, &error);
 	if (newsav == NULL) {
 		/* XXX don't free new SA index allocated in above. */
-		SAHTREE_UNLOCK();
 		return key_senderror(so, m, error);
 	}
-	SAHTREE_UNLOCK();
+
+	/* set spi */
+	newsav->spi = htonl(spi);
 
 	/* delete the entry in acqtree */
 	if (mhp->msg->sadb_msg_seq != 0) {
@@ -4825,7 +4839,7 @@ key_getspi(so, m, mhp)
 	m_sa = (struct sadb_sa *)(mtod(n, caddr_t) + off);
 	m_sa->sadb_sa_len = PFKEY_UNIT64(sizeof(struct sadb_sa));
 	m_sa->sadb_sa_exttype = SADB_EXT_SA;
-	m_sa->sadb_sa_spi = spi;
+	m_sa->sadb_sa_spi = htonl(spi);
 	off += PFKEY_ALIGN8(sizeof(struct sadb_sa));
 
 	IPSEC_ASSERT(off == len,
@@ -4874,8 +4888,6 @@ key_do_getnewspi(spirange, saidx)
 	u_int32_t min, max;
 	int count = V_key_spi_trycnt;
 
-	SAHTREE_LOCK_ASSERT();
-
 	/* set spi range to allocate */
 	if (spirange != NULL) {
 		min = spirange->sadb_spirange_min;
@@ -4897,15 +4909,15 @@ key_do_getnewspi(spirange, saidx)
 	}
 
 	if (min == max) {
-		newspi = htonl(min);
-
-		if (key_checkspidup(saidx, newspi) != NULL) {
+		if (key_checkspidup(saidx, min) != NULL) {
 			ipseclog((LOG_DEBUG, "%s: SPI %u exists already.\n",
 				__func__, min));
 			return 0;
 		}
 
 		count--; /* taking one cost. */
+		newspi = min;
+
 	} else {
 
 		/* init SPI */
@@ -4914,7 +4926,7 @@ key_do_getnewspi(spirange, saidx)
 		/* when requesting to allocate spi ranged */
 		while (count--) {
 			/* generate pseudo-random SPI value ranged. */
-			newspi = htonl(min + (key_random() % (max - min + 1)));
+			newspi = min + (key_random() % (max - min + 1));
 
 			if (key_checkspidup(saidx, newspi) == NULL)
 				break;
@@ -5395,14 +5407,12 @@ key_add(so, m, mhp)
 	/* We can create new SA only if SPI is differenct. */
 	SAHTREE_LOCK();
 	newsav = key_getsavbyspi(newsah, sa0->sadb_sa_spi);
+	SAHTREE_UNLOCK();
 	if (newsav != NULL) {
-		SAHTREE_UNLOCK();
 		ipseclog((LOG_DEBUG, "%s: SA already exists.\n", __func__));
 		return key_senderror(so, m, EEXIST);
 	}
-	newsav = KEY_NEWSAV(sa0->sadb_sa_spi, m, mhp, newsah, &error);
-	SAHTREE_UNLOCK();
-
+	newsav = KEY_NEWSAV(m, mhp, newsah, &error);
 	if (newsav == NULL) {
 		return key_senderror(so, m, error);
 	}
@@ -7737,8 +7747,6 @@ key_init(void)
 		LIST_INIT(&V_sptree[i]);
 
 	LIST_INIT(&V_sahtree);
-	for (i = 0; i < SPIHASHSIZE; i++)
-		LIST_INIT(&V_spihash[i]);
 
 	for (i = 0; i <= SADB_SATYPE_MAX; i++)
 		LIST_INIT(&V_regtree[i]);

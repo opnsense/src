@@ -36,6 +36,46 @@ __FBSDID("$FreeBSD$");
 #include <dev/drm2/drm_fb_helper.h>
 #include <dev/drm2/drm_crtc_helper.h>
 
+
+#include <sys/kdb.h>
+
+struct vt_kms_softc {
+	struct drm_fb_helper *fb_helper;
+	struct task	fb_mode_task;
+};
+
+static fb_enter_t	vt_kms_postswitch;
+static void vt_restore_fbdev_mode(void *, int);
+
+/* Call restore out of vt(9) locks. */
+static void
+vt_restore_fbdev_mode(void *arg, int pending)
+{
+	struct drm_fb_helper *fb_helper;
+	struct vt_kms_softc *sc;
+
+	sc = (struct vt_kms_softc *)arg;
+	fb_helper = sc->fb_helper;
+	sx_xlock(&fb_helper->dev->mode_config.mutex);
+	drm_fb_helper_restore_fbdev_mode(fb_helper);
+	sx_xunlock(&fb_helper->dev->mode_config.mutex);
+}
+
+static int
+vt_kms_postswitch(void *arg)
+{
+	struct vt_kms_softc *sc;
+
+	sc = (struct vt_kms_softc *)arg;
+
+	if (!kdb_active && panicstr == NULL)
+		taskqueue_enqueue_fast(taskqueue_thread, &sc->fb_mode_task);
+	else
+		drm_fb_helper_restore_fbdev_mode(sc->fb_helper);
+
+	return (0);
+}
+
 static DRM_LIST_HEAD(kernel_fb_helper_list);
 
 /* simple single crtc case helper function */
@@ -216,6 +256,10 @@ static int
 fb_get_options(const char *connector_name, char **option)
 {
 
+	/*
+	 * TODO: store mode options pointer in ${option} for connector with
+	 * name ${connector_name}
+	 */
 	return (1);
 }
 
@@ -892,11 +936,11 @@ int drm_fb_helper_single_fb_probe(struct drm_fb_helper *fb_helper,
 	int new_fb = 0;
 	int crtc_count = 0;
 	int i;
-#if 0
 	struct fb_info *info;
-#endif
 	struct drm_fb_helper_surface_size sizes;
 	int gamma_size = 0;
+	struct vt_kms_softc *sc;
+	device_t kdev;
 
 	memset(&sizes, 0, sizeof(struct drm_fb_helper_surface_size));
 	sizes.surface_depth = 24;
@@ -973,40 +1017,41 @@ int drm_fb_helper_single_fb_probe(struct drm_fb_helper *fb_helper,
 	if (new_fb < 0)
 		return new_fb;
 
-#if 0
+	sc = malloc(sizeof(struct vt_kms_softc), DRM_MEM_KMS,
+	    M_WAITOK | M_ZERO);
+	sc->fb_helper = fb_helper;
+	TASK_INIT(&sc->fb_mode_task, 0, vt_restore_fbdev_mode, sc);
+
 	info = fb_helper->fbdev;
-#endif
+
+	info->fb_name = device_get_nameunit(fb_helper->dev->device);
+	info->fb_depth = fb_helper->fb->bits_per_pixel;
+	info->fb_height = fb_helper->fb->height;
+	info->fb_width = fb_helper->fb->width;
+	info->fb_stride = fb_helper->fb->pitches[0];
+	info->fb_priv = sc;
+	info->enter = &vt_kms_postswitch;
 
 	/* set the fb pointer */
 	for (i = 0; i < fb_helper->crtc_count; i++) {
 		fb_helper->crtc_info[i].mode_set.fb = fb_helper->fb;
 	}
 
-#if 0
 	if (new_fb) {
-		info->var.pixclock = 0;
-		if (register_framebuffer(info) < 0) {
-			return -EINVAL;
-		}
+		device_t fbd;
+		int ret;
 
-		printf("fb%d: %s frame buffer device\n", info->node,
-		       info->fix.id);
-
-	} else {
-		drm_fb_helper_set_par(info);
-	}
-
-	/* Switch back to kernel console on panic */
-	/* multi card linked list maybe */
-	if (list_empty(&kernel_fb_helper_list)) {
-		printf("drm: registered panic notifier\n");
-		atomic_notifier_chain_register(&panic_notifier_list,
-					       &paniced);
-	}
-	if (new_fb)
-		list_add(&fb_helper->kernel_fb_list, &kernel_fb_helper_list);
+		kdev = fb_helper->dev->device;
+		fbd = device_add_child(kdev, "fbd", device_get_unit(kdev));
+		if (fbd != NULL) 
+			ret = device_probe_and_attach(fbd);
+		else
+			ret = ENODEV;
+#ifdef DEV_VT
+		if (ret != 0)
+			DRM_ERROR("Failed to attach fbd device: %d\n", ret);
 #endif
-
+	}
 	return 0;
 }
 

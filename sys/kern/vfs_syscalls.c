@@ -92,8 +92,8 @@ __FBSDID("$FreeBSD$");
 MALLOC_DEFINE(M_FADVISE, "fadvise", "posix_fadvise(2) information");
 
 SDT_PROVIDER_DEFINE(vfs);
-SDT_PROBE_DEFINE2(vfs, , stat, mode, mode, "char *", "int");
-SDT_PROBE_DEFINE2(vfs, , stat, reg, reg, "char *", "int");
+SDT_PROBE_DEFINE2(vfs, , stat, mode, "char *", "int");
+SDT_PROBE_DEFINE2(vfs, , stat, reg, "char *", "int");
 
 static int chroot_refuse_vdir_fds(struct filedesc *fdp);
 static int getutimes(const struct timeval *, enum uio_seg, struct timespec *);
@@ -829,7 +829,7 @@ chroot_refuse_vdir_fds(fdp)
 
 	FILEDESC_LOCK_ASSERT(fdp);
 
-	for (fd = 0; fd < fdp->fd_nfiles ; fd++) {
+	for (fd = 0; fd <= fdp->fd_lastfile; fd++) {
 		fp = fget_locked(fdp, fd);
 		if (fp == NULL)
 			continue;
@@ -1555,6 +1555,7 @@ kern_linkat(struct thread *td, int fd1, int fd2, char *path1, char *path2,
 	bwillwrite();
 	NDINIT_AT(&nd, LOOKUP, follow | AUDITVNODE1, segflg, path1, fd1, td);
 
+again:
 	if ((error = namei(&nd)) != 0)
 		return (error);
 	NDFREE(&nd, NDF_ONLY_PNBUF);
@@ -1577,9 +1578,16 @@ kern_linkat(struct thread *td, int fd1, int fd2, char *path1, char *path2,
 				vput(nd.ni_dvp);
 			vrele(nd.ni_vp);
 			error = EEXIST;
-		} else if ((error = vn_lock(vp, LK_EXCLUSIVE | LK_RETRY))
-		    == 0) {
-			error = can_hardlink(vp, td->td_ucred);
+		} else if ((error = vn_lock(vp, LK_EXCLUSIVE)) == 0) {
+			/*
+			 * Check for cross-device links.  No need to
+			 * recheck vp->v_type, since it cannot change
+			 * for non-doomed vnode.
+			 */
+			if (nd.ni_dvp->v_mount != vp->v_mount)
+				error = EXDEV;
+			else
+				error = can_hardlink(vp, td->td_ucred);
 			if (error == 0)
 #ifdef MAC
 				error = mac_vnode_check_link(td->td_ucred,
@@ -1589,6 +1597,12 @@ kern_linkat(struct thread *td, int fd1, int fd2, char *path1, char *path2,
 				error = VOP_LINK(nd.ni_dvp, vp, &nd.ni_cnd);
 			VOP_UNLOCK(vp, 0);
 			vput(nd.ni_dvp);
+		} else {
+			vput(nd.ni_dvp);
+			NDFREE(&nd, NDF_ONLY_PNBUF);
+			vrele(vp);
+			vn_finished_write(mp);
+			goto again;
 		}
 		NDFREE(&nd, NDF_ONLY_PNBUF);
 	}
@@ -2554,9 +2568,9 @@ kern_readlinkat(struct thread *td, int fd, char *path, enum uio_seg pathseg,
 		auio.uio_td = td;
 		auio.uio_resid = count;
 		error = VOP_READLINK(vp, &auio, td->td_ucred);
+		td->td_retval[0] = count - auio.uio_resid;
 	}
 	vput(vp);
-	td->td_retval[0] = count - auio.uio_resid;
 	return (error);
 }
 
@@ -4585,7 +4599,9 @@ int
 sys_posix_fallocate(struct thread *td, struct posix_fallocate_args *uap)
 {
 
-	return (kern_posix_fallocate(td, uap->fd, uap->offset, uap->len));
+	td->td_retval[0] = kern_posix_fallocate(td, uap->fd, uap->offset,
+	    uap->len);
+	return (0);
 }
 
 /*
@@ -4724,6 +4740,7 @@ int
 sys_posix_fadvise(struct thread *td, struct posix_fadvise_args *uap)
 {
 
-	return (kern_posix_fadvise(td, uap->fd, uap->offset, uap->len,
-	    uap->advice));
+	td->td_retval[0] = kern_posix_fadvise(td, uap->fd, uap->offset,
+	    uap->len, uap->advice);
+	return (0);
 }

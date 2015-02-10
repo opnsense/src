@@ -62,7 +62,6 @@ __FBSDID("$FreeBSD$");
 #include <net/route.h>
 #include <net/netisr.h>
 #include <net/vnet.h>
-#include <net/flowtable.h>
 
 #include <netinet/in.h>
 #include <netinet/in_kdtrace.h>
@@ -97,11 +96,6 @@ VNET_DEFINE(int, ipforwarding);
 SYSCTL_VNET_INT(_net_inet_ip, IPCTL_FORWARDING, forwarding, CTLFLAG_RW,
     &VNET_NAME(ipforwarding), 0,
     "Enable IP forwarding between interfaces");
-
-VNET_DEFINE(int, ipipsec_in_use);
-SYSCTL_VNET_INT(_net_inet_ip, IPCTL_IPSEC_INUSE, ipsec_in_use, CTLFLAG_RW,
-    &VNET_NAME(ipipsec_in_use), 0,
-    "Enable IPSec processing of packets");
 
 static VNET_DEFINE(int, ipsendredirects) = 1;	/* XXX */
 #define	V_ipsendredirects	VNET(ipsendredirects)
@@ -201,16 +195,6 @@ VNET_DEFINE(int, ipstealth);
 SYSCTL_VNET_INT(_net_inet_ip, OID_AUTO, stealth, CTLFLAG_RW,
     &VNET_NAME(ipstealth), 0,
     "IP stealth mode, no TTL decrementation on forwarding");
-#endif
-
-#ifdef FLOWTABLE
-static VNET_DEFINE(int, ip_output_flowtable_size) = 2048;
-VNET_DEFINE(struct flowtable *, ip_ft);
-#define	V_ip_output_flowtable_size	VNET(ip_output_flowtable_size)
-
-SYSCTL_VNET_INT(_net_inet_ip, OID_AUTO, output_flowtable_size, CTLFLAG_RDTUN,
-    &VNET_NAME(ip_output_flowtable_size), 2048,
-    "number of entries in the per-cpu output flow caches");
 #endif
 
 static void	ip_freef(struct ipqhead *, struct ipq *);
@@ -313,27 +297,6 @@ ip_init(void)
 	if ((i = pfil_head_register(&V_inet_pfil_hook)) != 0)
 		printf("%s: WARNING: unable to register pfil hook, "
 			"error %d\n", __func__, i);
-	else
-		pfil_head_export_sysctl(&V_inet_pfil_hook,
-			SYSCTL_STATIC_CHILDREN(_net_inet_ip));
-
-#ifdef FLOWTABLE
-	if (TUNABLE_INT_FETCH("net.inet.ip.output_flowtable_size",
-		&V_ip_output_flowtable_size)) {
-		if (V_ip_output_flowtable_size < 256)
-			V_ip_output_flowtable_size = 256;
-		if (!powerof2(V_ip_output_flowtable_size)) {
-			printf("flowtable must be power of 2 size\n");
-			V_ip_output_flowtable_size = 2048;
-		}
-	} else {
-		/*
-		 * round up to the next power of 2
-		 */
-		V_ip_output_flowtable_size = 1 << fls((1024 + maxusers * 64)-1);
-	}
-	V_ip_ft = flowtable_alloc("ipv4", V_ip_output_flowtable_size, FL_PCPU);
-#endif
 
 	/* Skip initialization of globals for non-default instances. */
 	if (!IS_DEFAULT_VNET(curvnet))
@@ -505,7 +468,7 @@ tooshort:
 	/*
 	 * Bypass packet filtering for packets previously handled by IPsec.
 	 */
-	if (V_ipipsec_in_use && ip_ipsec_filtertunnel(m))
+	if (ip_ipsec_filtertunnel(m))
 		goto passin;
 #endif /* IPSEC */
 
@@ -536,7 +499,8 @@ tooshort:
 		goto ours;
 	}
 	if (m->m_flags & M_IP_NEXTHOP) {
-		if (m_tag_find(m, PACKET_TAG_IPFORWARD, NULL) != NULL) {
+		dchg = (m_tag_find(m, PACKET_TAG_IPFORWARD, NULL) != NULL);
+		if (dchg != 0) {
 			/*
 			 * Directly ship the packet on.  This allows
 			 * forwarding packets originally destined to us
@@ -711,7 +675,7 @@ passin:
 		m_freem(m);
 	} else {
 #ifdef IPSEC
-		if (V_ipipsec_in_use && ip_ipsec_fwd(m))
+		if (ip_ipsec_fwd(m))
 			goto bad;
 #endif /* IPSEC */
 		ip_forward(m, dchg);
@@ -743,6 +707,7 @@ ours:
 	 * ip_reass() will return a different mbuf.
 	 */
 	if (ip->ip_off & htons(IP_MF | IP_OFFMASK)) {
+		/* XXXGL: shouldn't we save & set m_flags? */
 		m = ip_reass(m);
 		if (m == NULL)
 			return;
@@ -757,7 +722,7 @@ ours:
 	 * note that we do not visit this with protocols with pcb layer
 	 * code - like udp/tcp/raw ip.
 	 */
-	if (V_ipipsec_in_use && ip_ipsec_input(m))
+	if (ip_ipsec_input(m))
 		goto bad;
 #endif /* IPSEC */
 
@@ -834,6 +799,8 @@ sysctl_maxnipq(SYSCTL_HANDLER_ARGS)
 SYSCTL_PROC(_net_inet_ip, OID_AUTO, maxfragpackets, CTLTYPE_INT|CTLFLAG_RW,
     NULL, 0, sysctl_maxnipq, "I",
     "Maximum number of IPv4 fragment reassembly queue entries");
+
+#define	M_IP_FRAG	M_PROTO9
 
 /*
  * Take incoming datagram fragment and try to reassemble it into
@@ -1118,8 +1085,9 @@ found:
 	 * (and not in for{} loop), though it implies we are not going to
 	 * reassemble more than 64k fragments.
 	 */
-	m->m_pkthdr.csum_data =
-	    (m->m_pkthdr.csum_data & 0xffff) + (m->m_pkthdr.csum_data >> 16);
+	while (m->m_pkthdr.csum_data & 0xffff0000)
+		m->m_pkthdr.csum_data = (m->m_pkthdr.csum_data & 0xffff) +
+		    (m->m_pkthdr.csum_data >> 16);
 #ifdef MAC
 	mac_ipq_reassemble(fp, m);
 	mac_ipq_destroy(fp);
@@ -1504,7 +1472,7 @@ ip_forward(struct mbuf *m, int srcrt)
 	error = ip_output(m, NULL, &ro, IP_FORWARDING, NULL, NULL);
 
 	if (error == EMSGSIZE && ro.ro_rt)
-		mtu = ro.ro_rt->rt_rmx.rmx_mtu;
+		mtu = ro.ro_rt->rt_mtu;
 	RO_RTFREE(&ro);
 
 	if (error)
@@ -1551,8 +1519,7 @@ ip_forward(struct mbuf *m, int srcrt)
 		 * If IPsec is configured for this path,
 		 * override any possibly mtu value set by ip_output.
 		 */ 
-		if (V_ipipsec_in_use)
-			mtu = ip_ipsec_mtu(mcopy, mtu);
+		mtu = ip_ipsec_mtu(mcopy, mtu);
 #endif /* IPSEC */
 		/*
 		 * If the MTU was set before make sure we are below the

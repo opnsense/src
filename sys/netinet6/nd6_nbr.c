@@ -88,8 +88,10 @@ static void nd6_dad_na_input(struct ifaddr *);
 static void nd6_na_output_fib(struct ifnet *, const struct in6_addr *,
     const struct in6_addr *, u_long, int, struct sockaddr *, u_int);
 
-VNET_DEFINE(int, dad_ignore_ns) = 0;	/* ignore NS in DAD - specwise incorrect*/
-VNET_DEFINE(int, dad_maxtry) = 15;	/* max # of *tries* to transmit DAD packet */
+static VNET_DEFINE(int, dad_ignore_ns) = 0;	/* ignore NS in DAD
+						   - specwise incorrect */
+static VNET_DEFINE(int, dad_maxtry) = 15;	/* max # of *tries* to
+						   transmit DAD packet */
 #define	V_dad_ignore_ns			VNET(dad_ignore_ns)
 #define	V_dad_maxtry			VNET(dad_maxtry)
 
@@ -232,41 +234,28 @@ nd6_ns_input(struct mbuf *m, int off, int icmp6len)
 
 	/* (2) check. */
 	if (ifa == NULL) {
-		struct rtentry *rt;
-		struct sockaddr_in6 tsin6;
-		int need_proxy;
-#ifdef RADIX_MPATH
 		struct route_in6 ro;
-#endif
+		int need_proxy;
 
-		bzero(&tsin6, sizeof tsin6);
-		tsin6.sin6_len = sizeof(struct sockaddr_in6);
-		tsin6.sin6_family = AF_INET6;
-		tsin6.sin6_addr = taddr6;
+		bzero(&ro, sizeof(ro));
+		ro.ro_dst.sin6_len = sizeof(struct sockaddr_in6);
+		ro.ro_dst.sin6_family = AF_INET6;
+		ro.ro_dst.sin6_addr = taddr6;
 
 		/* Always use the default FIB. */
 #ifdef RADIX_MPATH
-		bzero(&ro, sizeof(ro));
-		ro.ro_dst = tsin6;
 		rtalloc_mpath_fib((struct route *)&ro, RTF_ANNOUNCE,
 		    RT_DEFAULT_FIB);
-		rt = ro.ro_rt;
 #else
-		rt = in6_rtalloc1((struct sockaddr *)&tsin6, 0, 0,
-		    RT_DEFAULT_FIB);
+		in6_rtalloc(&ro, RT_DEFAULT_FIB);
 #endif
-		need_proxy = (rt && (rt->rt_flags & RTF_ANNOUNCE) != 0 &&
-		    rt->rt_gateway->sa_family == AF_LINK);
-		if (rt != NULL) {
-			/*
-			 * Make a copy while we can be sure that rt_gateway
-			 * is still stable before unlocking to avoid lock
-			 * order problems.  proxydl will only be used if
-			 * proxy will be set in the next block.
-			 */
+		need_proxy = (ro.ro_rt &&
+		    (ro.ro_rt->rt_flags & RTF_ANNOUNCE) != 0 &&
+		    ro.ro_rt->rt_gateway->sa_family == AF_LINK);
+		if (ro.ro_rt != NULL) {
 			if (need_proxy)
-				proxydl = *SDL(rt->rt_gateway);
-			RTFREE_LOCKED(rt);
+				proxydl = *SDL(ro.ro_rt->rt_gateway);
+			RTFREE(ro.ro_rt);
 		}
 		if (need_proxy) {
 			/*
@@ -736,9 +725,9 @@ nd6_na_input(struct mbuf *m, int off, int icmp6len)
 	 * If no neighbor cache entry is found, NA SHOULD silently be
 	 * discarded.
 	 */
-	IF_AFDATA_LOCK(ifp);
+	IF_AFDATA_RLOCK(ifp);
 	ln = nd6_lookup(&taddr6, LLE_EXCLUSIVE, ifp);
-	IF_AFDATA_UNLOCK(ifp);
+	IF_AFDATA_RUNLOCK(ifp);
 	if (ln == NULL) {
 		goto freeit;
 	}
@@ -1178,20 +1167,30 @@ struct dadq {
 };
 
 static VNET_DEFINE(TAILQ_HEAD(, dadq), dadq);
-VNET_DEFINE(int, dad_init) = 0;
-#define	V_dadq				VNET(dadq)
-#define	V_dad_init			VNET(dad_init)
+static VNET_DEFINE(struct rwlock, dad_rwlock);
+#define	V_dadq			VNET(dadq)
+#define	V_dad_rwlock		VNET(dad_rwlock)
+
+#define	DADQ_LOCK_INIT()	rw_init(&V_dad_rwlock, "nd6 DAD queue")	
+#define	DADQ_LOCK_DESTROY()	rw_destroy(&V_dad_rwlock)	
+#define	DADQ_LOCK_INITIALIZED()	rw_initialized(&V_dad_rwlock)	
+#define	DADQ_RLOCK()		rw_rlock(&V_dad_rwlock)	
+#define	DADQ_RUNLOCK()		rw_runlock(&V_dad_rwlock)	
+#define	DADQ_WLOCK()		rw_wlock(&V_dad_rwlock)	
+#define	DADQ_WUNLOCK()		rw_wunlock(&V_dad_rwlock)	
 
 static struct dadq *
 nd6_dad_find(struct ifaddr *ifa)
 {
 	struct dadq *dp;
 
+	DADQ_RLOCK();
 	TAILQ_FOREACH(dp, &V_dadq, dad_list)
 		if (dp->dad_ifa == ifa)
-			return (dp);
+			break;
+	DADQ_RUNLOCK();
 
-	return (NULL);
+	return (dp);
 }
 
 static void
@@ -1219,9 +1218,9 @@ nd6_dad_start(struct ifaddr *ifa, int delay)
 	struct dadq *dp;
 	char ip6buf[INET6_ADDRSTRLEN];
 
-	if (!V_dad_init) {
+	if (DADQ_LOCK_INITIALIZED() == 0) {
+		DADQ_LOCK_INIT();
 		TAILQ_INIT(&V_dadq);
-		V_dad_init++;
 	}
 
 	/*
@@ -1271,7 +1270,9 @@ nd6_dad_start(struct ifaddr *ifa, int delay)
 #ifdef VIMAGE
 	dp->dad_vnet = curvnet;
 #endif
+	DADQ_WLOCK();
 	TAILQ_INSERT_TAIL(&V_dadq, (struct dadq *)dp, dad_list);
+	DADQ_WUNLOCK();
 
 	nd6log((LOG_DEBUG, "%s: starting DAD for %s\n", if_name(ifa->ifa_ifp),
 	    ip6_sprintf(ip6buf, &ia->ia_addr.sin6_addr)));
@@ -1304,7 +1305,7 @@ nd6_dad_stop(struct ifaddr *ifa)
 {
 	struct dadq *dp;
 
-	if (!V_dad_init)
+	if (DADQ_LOCK_INITIALIZED() == 0)
 		return;
 	dp = nd6_dad_find(ifa);
 	if (!dp) {
@@ -1314,7 +1315,9 @@ nd6_dad_stop(struct ifaddr *ifa)
 
 	nd6_dad_stoptimer(dp);
 
+	DADQ_WLOCK();
 	TAILQ_REMOVE(&V_dadq, (struct dadq *)dp, dad_list);
+	DADQ_WUNLOCK();
 	free(dp, M_IP6NDP);
 	dp = NULL;
 	ifa_free(ifa);
@@ -1325,12 +1328,23 @@ nd6_dad_timer(struct dadq *dp)
 {
 	CURVNET_SET(dp->dad_vnet);
 	struct ifaddr *ifa = dp->dad_ifa;
+	struct ifnet *ifp = dp->dad_ifa->ifa_ifp;
 	struct in6_ifaddr *ia = (struct in6_ifaddr *)ifa;
 	char ip6buf[INET6_ADDRSTRLEN];
 
 	/* Sanity check */
 	if (ia == NULL) {
 		log(LOG_ERR, "nd6_dad_timer: called with null parameter\n");
+		goto done;
+	}
+	if (ND_IFINFO(ifp)->flags & ND6_IFF_IFDISABLED) {
+		/* Do not need DAD for ifdisabled interface. */
+		TAILQ_REMOVE(&V_dadq, (struct dadq *)dp, dad_list);
+		log(LOG_ERR, "nd6_dad_timer: cancel DAD on %s because of "
+		    "ND6_IFF_IFDISABLED.\n", ifp->if_xname);
+		free(dp, M_IP6NDP);
+		dp = NULL;
+		ifa_free(ifa);
 		goto done;
 	}
 	if (ia->ia6_flags & IN6_IFF_DUPLICATED) {
@@ -1353,7 +1367,9 @@ nd6_dad_timer(struct dadq *dp)
 		nd6log((LOG_INFO, "%s: could not run DAD, driver problem?\n",
 		    if_name(ifa->ifa_ifp)));
 
+		DADQ_WLOCK();
 		TAILQ_REMOVE(&V_dadq, (struct dadq *)dp, dad_list);
+		DADQ_WUNLOCK();
 		free(dp, M_IP6NDP);
 		dp = NULL;
 		ifa_free(ifa);
@@ -1397,16 +1413,21 @@ nd6_dad_timer(struct dadq *dp)
 		} else {
 			/*
 			 * We are done with DAD.  No NA came, no NS came.
-			 * No duplicate address found.
+			 * No duplicate address found.  Check IFDISABLED flag
+			 * again in case that it is changed between the
+			 * beginning of this function and here.
 			 */
-			ia->ia6_flags &= ~IN6_IFF_TENTATIVE;
+			if ((ND_IFINFO(ifp)->flags & ND6_IFF_IFDISABLED) == 0)
+				ia->ia6_flags &= ~IN6_IFF_TENTATIVE;
 
 			nd6log((LOG_DEBUG,
 			    "%s: DAD complete for %s - no duplicates found\n",
 			    if_name(ifa->ifa_ifp),
 			    ip6_sprintf(ip6buf, &ia->ia_addr.sin6_addr)));
 
+			DADQ_WLOCK();
 			TAILQ_REMOVE(&V_dadq, (struct dadq *)dp, dad_list);
+			DADQ_WUNLOCK();
 			free(dp, M_IP6NDP);
 			dp = NULL;
 			ifa_free(ifa);
@@ -1483,7 +1504,9 @@ nd6_dad_duplicated(struct ifaddr *ifa)
 		}
 	}
 
+	DADQ_WLOCK();
 	TAILQ_REMOVE(&V_dadq, (struct dadq *)dp, dad_list);
+	DADQ_WUNLOCK();
 	free(dp, M_IP6NDP);
 	dp = NULL;
 	ifa_free(ifa);

@@ -1,5 +1,5 @@
 /* $FreeBSD$ */
-/*	$NetBSD: citrus_big5.c,v 1.12 2008/06/14 16:01:07 tnozaki Exp $	*/
+/*	$NetBSD: citrus_big5.c,v 1.13 2011/05/23 14:53:46 joerg Exp $	*/
 
 /*-
  * Copyright (c)2002, 2006 Citrus Project,
@@ -92,8 +92,8 @@ typedef struct {
 
 typedef struct _BIG5Exclude {
 	TAILQ_ENTRY(_BIG5Exclude)	 entry;
-	wint_t				 end;
 	wint_t				 start;
+	wint_t				 end;
 } _BIG5Exclude;
 
 typedef TAILQ_HEAD(_BIG5ExcludeList, _BIG5Exclude) _BIG5ExcludeList;
@@ -123,6 +123,7 @@ _citrus_BIG5_init_state(_BIG5EncodingInfo * __restrict ei __unused,
 	memset(s, 0, sizeof(*s));
 }
 
+#if 0
 static __inline void
 /*ARGSUSED*/
 _citrus_BIG5_pack_state(_BIG5EncodingInfo * __restrict ei __unused,
@@ -142,6 +143,7 @@ _citrus_BIG5_unpack_state(_BIG5EncodingInfo * __restrict ei __unused,
 
 	memcpy((void *)s, pspriv, sizeof(*s));
 }
+#endif
 
 static __inline int
 _citrus_BIG5_check(_BIG5EncodingInfo *ei, unsigned int c)
@@ -356,7 +358,7 @@ _citrus_BIG5_wcrtomb_priv(_BIG5EncodingInfo * __restrict ei,
     size_t n, wchar_t wc, _BIG5State * __restrict psenc __unused,
     size_t * __restrict nresult)
 {
-	unsigned char l;
+	size_t l;
 	int ret;
 
 	/* check invalid sequence */

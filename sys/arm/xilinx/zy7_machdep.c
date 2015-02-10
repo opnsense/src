@@ -49,8 +49,7 @@ __FBSDID("$FreeBSD$");
 #include <dev/fdt/fdt_common.h>
 
 #include <machine/bus.h>
-#include <machine/pmap.h>
-#include <machine/frame.h>
+#include <machine/devmap.h>
 #include <machine/machdep.h>
 
 #include <arm/xilinx/zy7_reg.h>
@@ -61,7 +60,13 @@ vm_offset_t
 initarm_lastaddr(void)
 {
 
-	return (ZYNQ7_PSIO_VBASE - ARM_NOCACHE_KVA_SIZE);
+	return (arm_devmap_lastaddr());
+}
+
+void
+initarm_early_init(void)
+{
+
 }
 
 void
@@ -74,39 +79,18 @@ initarm_late_init(void)
 {
 }
 
-#define FDT_DEVMAP_SIZE 3
-static struct pmap_devmap fdt_devmap[FDT_DEVMAP_SIZE];
-
 /*
- * Construct pmap_devmap[] with DT-derived config data.
+ * Set up static device mappings.  Not strictly necessary -- simplebus will
+ * dynamically establish mappings as needed -- but doing it this way gets us
+ * nice efficient 1MB section mappings.
  */
 int
-platform_devmap_init(void)
+initarm_devmap_init(void)
 {
-	int i = 0;
 
-	fdt_devmap[i].pd_va =	ZYNQ7_PSIO_VBASE;
-	fdt_devmap[i].pd_pa =	ZYNQ7_PSIO_HWBASE;
-	fdt_devmap[i].pd_size = ZYNQ7_PSIO_SIZE;
-	fdt_devmap[i].pd_prot = VM_PROT_READ | VM_PROT_WRITE;
-	fdt_devmap[i].pd_cache = PTE_DEVICE;
-	i++;
+	arm_devmap_add_entry(ZYNQ7_PSIO_HWBASE, ZYNQ7_PSIO_SIZE);
+	arm_devmap_add_entry(ZYNQ7_PSCTL_HWBASE, ZYNQ7_PSCTL_SIZE);
 
-	fdt_devmap[i].pd_va =	ZYNQ7_PSCTL_VBASE;
-	fdt_devmap[i].pd_pa = 	ZYNQ7_PSCTL_HWBASE;
-	fdt_devmap[i].pd_size = ZYNQ7_PSCTL_SIZE;
-	fdt_devmap[i].pd_prot = VM_PROT_READ | VM_PROT_WRITE;
-	fdt_devmap[i].pd_cache = PTE_DEVICE;
-	i++;
-
-	/* end of table */
-	fdt_devmap[i].pd_va = 0;
-	fdt_devmap[i].pd_pa = 0;
-	fdt_devmap[i].pd_size = 0;
-	fdt_devmap[i].pd_prot = 0;
-	fdt_devmap[i].pd_cache = 0;
-
-	pmap_devmap_bootstrap_table = &fdt_devmap[0];
 	return (0);
 }
 

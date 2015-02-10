@@ -162,15 +162,6 @@ void	kmod_ipstat_dec(int statnum);
 #define IP_ROUTETOIF		SO_DONTROUTE	/* 0x10 bypass routing tables */
 #define IP_ALLOWBROADCAST	SO_BROADCAST	/* 0x20 can send broadcast packets */
 
-/*
- * IPv4 protocol layer specific mbuf flags.
- */
-#define	M_FASTFWD_OURS		M_PROTO1	/* changed dst to local */
-#define	M_IP_NEXTHOP		M_PROTO2	/* explicit ip nexthop */
-#define	M_SKIP_FIREWALL		M_PROTO3	/* skip firewall processing,
-						   keep in sync with IP6 */
-#define	M_IP_FRAG		M_PROTO4	/* fragment reassembly */
-
 #ifdef __NO_STRICT_ALIGNMENT
 #define IP_HDR_ALIGNED_P(ip)	1
 #else
@@ -185,7 +176,6 @@ struct sockopt;
 VNET_DECLARE(u_short, ip_id);			/* ip packet ctr, for ids */
 VNET_DECLARE(int, ip_defttl);			/* default IP ttl */
 VNET_DECLARE(int, ipforwarding);		/* ip forwarding */
-VNET_DECLARE(int, ipipsec_in_use);
 #ifdef IPSTEALTH
 VNET_DECLARE(int, ipstealth);			/* stealth forwarding */
 #endif
@@ -201,7 +191,6 @@ extern struct	pr_usrreqs rip_usrreqs;
 #define	V_ip_id			VNET(ip_id)
 #define	V_ip_defttl		VNET(ip_defttl)
 #define	V_ipforwarding		VNET(ipforwarding)
-#define	V_ipipsec_in_use	VNET(ipipsec_in_use)
 #ifdef IPSTEALTH
 #define	V_ipstealth		VNET(ipstealth)
 #endif

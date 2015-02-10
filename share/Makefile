@@ -26,7 +26,9 @@ SUBDIR=	${_colldef} \
 	${_syscons} \
 	tabset \
 	termcap \
+	${_tests} \
 	${_timedef} \
+	${_vt} \
 	${_zoneinfo}
 
 # NB: keep these sorted by MK_* knobs
@@ -78,6 +80,14 @@ _doc=		doc
 
 .if ${MK_SYSCONS} != "no"
 _syscons=	syscons
+.endif
+
+.if ${MK_TESTS} != "no"
+_tests=		tests
+.endif
+
+.if ${MK_VT} != "no"
+_vt=		vt
 .endif
 
 .if ${MK_ZONEINFO} != "no"

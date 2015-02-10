@@ -94,6 +94,7 @@ compat/linux/linux_socket.c	optional compat_linux
 compat/linux/linux_stats.c	optional compat_linux
 compat/linux/linux_sysctl.c	optional compat_linux
 compat/linux/linux_time.c	optional compat_linux
+compat/linux/linux_timer.c	optional compat_linux
 compat/linux/linux_uid16.c	optional compat_linux
 compat/linux/linux_util.c	optional compat_linux
 compat/ndis/kern_ndis.c		optional ndisapi pci
@@ -226,6 +227,7 @@ dev/hyperv/netvsc/hv_netvsc_drv_freebsd.c		optional	hyperv
 dev/hyperv/netvsc/hv_rndis_filter.c			optional	hyperv
 dev/hyperv/stordisengage/hv_ata_pci_disengage.c		optional	hyperv
 dev/hyperv/storvsc/hv_storvsc_drv_freebsd.c		optional	hyperv
+dev/hyperv/utilities/hv_kvp.c				optional	hyperv
 dev/hyperv/utilities/hv_util.c				optional	hyperv
 dev/hyperv/vmbus/hv_channel.c				optional	hyperv
 dev/hyperv/vmbus/hv_channel_mgmt.c			optional	hyperv
@@ -249,7 +251,7 @@ dev/ipmi/ipmi_smbios.c		optional ipmi
 dev/ipmi/ipmi_ssif.c		optional ipmi smbus
 dev/ipmi/ipmi_pci.c		optional ipmi pci
 dev/ipmi/ipmi_linux.c		optional ipmi compat_linux
-dev/kbd/kbd.c			optional atkbd | sc | ukbd
+dev/kbd/kbd.c			optional atkbd | sc | ukbd | vt
 dev/le/if_le_isa.c		optional le isa
 dev/lindev/full.c		optional lindev
 dev/lindev/lindev.c		optional lindev
@@ -413,6 +415,7 @@ dev/virtio/network/if_vtnet.c		optional	vtnet
 dev/virtio/block/virtio_blk.c		optional	virtio_blk
 dev/virtio/balloon/virtio_balloon.c	optional	virtio_balloon
 dev/virtio/scsi/virtio_scsi.c		optional	virtio_scsi
+dev/virtio/random/virtio_random.c	optional	virtio_random
 i386/acpica/acpi_machdep.c	optional acpi
 acpi_wakecode.o			optional acpi				\
 	dependency	"$S/i386/acpica/acpi_wakecode.S assym.s"	\
@@ -532,6 +535,7 @@ isa/syscons_isa.c		optional sc
 isa/vga_isa.c			optional vga
 kern/kern_clocksource.c		standard
 kern/imgact_aout.c		optional compat_aout
+kern/imgact_binmisc.c		optional imagact_binmisc
 kern/imgact_gzip.c		optional gzip
 libkern/divdi3.c		standard
 libkern/ffsl.c			standard
@@ -566,6 +570,15 @@ x86/cpufreq/hwpstate.c		optional cpufreq
 x86/cpufreq/p4tcc.c		optional cpufreq
 x86/cpufreq/powernow.c		optional cpufreq
 x86/cpufreq/smist.c		optional cpufreq
+x86/iommu/busdma_dmar.c		optional acpi acpi_dmar pci
+x86/iommu/intel_ctx.c		optional acpi acpi_dmar pci
+x86/iommu/intel_drv.c		optional acpi acpi_dmar pci
+x86/iommu/intel_fault.c		optional acpi acpi_dmar pci
+x86/iommu/intel_gas.c		optional acpi acpi_dmar pci
+x86/iommu/intel_idpgtbl.c	optional acpi acpi_dmar pci
+x86/iommu/intel_qi.c		optional acpi acpi_dmar pci
+x86/iommu/intel_quirks.c	optional acpi acpi_dmar pci
+x86/iommu/intel_utils.c		optional acpi acpi_dmar pci
 x86/isa/atpic.c			optional atpic
 x86/isa/atrtc.c			optional native
 x86/isa/clock.c			optional native
@@ -576,6 +589,7 @@ x86/isa/nmi.c			standard
 x86/isa/orm.c			optional isa
 x86/pci/pci_bus.c		optional pci
 x86/pci/qpi.c			optional pci
+x86/x86/busdma_bounce.c		standard
 x86/x86/busdma_machdep.c	standard
 x86/x86/dump_machdep.c		standard
 x86/x86/fdt_machdep.c		optional fdt

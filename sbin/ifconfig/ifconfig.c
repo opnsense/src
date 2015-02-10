@@ -78,7 +78,7 @@ static const char rcsid[] =
 
 /*
  * Since "struct ifreq" is composed of various union members, callers
- * should pay special attention to interprete the value.
+ * should pay special attention to interpret the value.
  * (.e.g. little/big endian difference in the structure.)
  */
 struct	ifreq ifr;
@@ -634,23 +634,6 @@ top:
 
 	close(s);
 	return(0);
-}
-
-static void
-setaddrfirst(const char *addr, int dummy __unused, int s,
-    const struct afswtch *afp)
-{
-
-	if (afp == NULL)
-		err(2, "No address family");
-	if (afp->af_getaddr == NULL)
-		err(2, "No appropriate functions from address family");
-	afp->af_getaddr(addr, ADDR);
-
-	strncpy(afp->af_addreq, name, sizeof ifr.ifr_name);
-	printf("Interface name: %s, socket %d, addr %s\n", name, s, addr);
-	if (ioctl(s, SIOCORDERIFADDR, afp->af_addreq) < 0)
-                err(1, "SIOCORDERIFADDR");
 }
 
 /*ARGSUSED*/
@@ -1246,7 +1229,6 @@ static struct cmd basic_cmds[] = {
 	DEF_CMD("noicmp",	IFF_LINK1,	setifflags),
 	DEF_CMD_ARG("mtu",			setifmtu),
 	DEF_CMD_ARG("name",			setifname),
-	DEF_CMD_ARG("setfirst",			setaddrfirst),
 };
 
 static __constructor void

@@ -74,6 +74,7 @@
 #include <net/vnet.h>
 
 #if defined(INET) || defined(INET6)
+#include <net/ethernet.h>
 #include <netinet/in.h>
 #include <netinet/in_var.h>
 #include <netinet/ip.h>
@@ -658,7 +659,8 @@ if_attach_internal(struct ifnet *ifp, int vmove)
 #if defined(INET) || defined(INET6)
 		/* Initialize to max value. */
 		if (ifp->if_hw_tsomax == 0)
-			ifp->if_hw_tsomax = IP_MAXPACKET;
+			ifp->if_hw_tsomax = min(IP_MAXPACKET, 32 * MCLBYTES -
+			    (ETHER_HDR_LEN + ETHER_VLAN_ENCAP_LEN));
 		KASSERT(ifp->if_hw_tsomax <= IP_MAXPACKET &&
 		    ifp->if_hw_tsomax >= IP_MAXPACKET / 8,
 		    ("%s: tsomax outside of range", __func__));
@@ -1456,7 +1458,7 @@ ifa_add_loopback_route(struct ifaddr *ifa, struct sockaddr *ia)
 	info.rti_flags = ifa->ifa_flags | RTF_HOST | RTF_STATIC;
 	info.rti_info[RTAX_DST] = ia;
 	info.rti_info[RTAX_GATEWAY] = (struct sockaddr *)&null_sdl;
-	error = rtrequest1_fib(RTM_ADD, &info, &rt, 0);
+	error = rtrequest1_fib(RTM_ADD, &info, &rt, ifa->ifa_ifp->if_fib);
 
 	if (error == 0 && rt != NULL) {
 		RT_LOCK(rt);
@@ -1488,7 +1490,7 @@ ifa_del_loopback_route(struct ifaddr *ifa, struct sockaddr *ia)
 	info.rti_flags = ifa->ifa_flags | RTF_HOST | RTF_STATIC;
 	info.rti_info[RTAX_DST] = ia;
 	info.rti_info[RTAX_GATEWAY] = (struct sockaddr *)&null_sdl;
-	error = rtrequest1_fib(RTM_DELETE, &info, NULL, 0);
+	error = rtrequest1_fib(RTM_DELETE, &info, NULL, ifa->ifa_ifp->if_fib);
 
 	if (error != 0)
 		log(LOG_DEBUG, "%s: deletion failed: %u\n", __func__, error);
@@ -1605,7 +1607,7 @@ done:
  */
 /*ARGSUSED*/
 struct ifaddr *
-ifa_ifwithdstaddr(struct sockaddr *addr)
+ifa_ifwithdstaddr_fib(struct sockaddr *addr, int fibnum)
 {
 	struct ifnet *ifp;
 	struct ifaddr *ifa;
@@ -1613,6 +1615,8 @@ ifa_ifwithdstaddr(struct sockaddr *addr)
 	IFNET_RLOCK_NOSLEEP();
 	TAILQ_FOREACH(ifp, &V_ifnet, if_link) {
 		if ((ifp->if_flags & IFF_POINTOPOINT) == 0)
+			continue;
+		if ((fibnum != RT_ALL_FIBS) && (ifp->if_fib != fibnum))
 			continue;
 		IF_ADDR_RLOCK(ifp);
 		TAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) {
@@ -1633,12 +1637,19 @@ done:
 	return (ifa);
 }
 
+struct ifaddr *
+ifa_ifwithdstaddr(struct sockaddr *addr)
+{
+
+	return (ifa_ifwithdstaddr_fib(addr, RT_ALL_FIBS));
+}
+
 /*
  * Find an interface on a specific network.  If many, choice
  * is most specific found.
  */
 struct ifaddr *
-ifa_ifwithnet(struct sockaddr *addr, int ignore_ptp)
+ifa_ifwithnet_fib(struct sockaddr *addr, int ignore_ptp, int fibnum)
 {
 	struct ifnet *ifp;
 	struct ifaddr *ifa;
@@ -1658,12 +1669,14 @@ ifa_ifwithnet(struct sockaddr *addr, int ignore_ptp)
 
 	/*
 	 * Scan though each interface, looking for ones that have addresses
-	 * in this address family.  Maintain a reference on ifa_maybe once
-	 * we find one, as we release the IF_ADDR_RLOCK() that kept it stable
-	 * when we move onto the next interface.
+	 * in this address family and the requested fib.  Maintain a reference
+	 * on ifa_maybe once we find one, as we release the IF_ADDR_RLOCK() that
+	 * kept it stable when we move onto the next interface.
 	 */
 	IFNET_RLOCK_NOSLEEP();
 	TAILQ_FOREACH(ifp, &V_ifnet, if_link) {
+		if ((fibnum != RT_ALL_FIBS) && (ifp->if_fib != fibnum))
+			continue;
 		IF_ADDR_RLOCK(ifp);
 		TAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) {
 			char *cp, *cp2, *cp3;
@@ -1745,6 +1758,13 @@ done:
 	if (ifa_maybe != NULL)
 		ifa_free(ifa_maybe);
 	return (ifa);
+}
+
+struct ifaddr *
+ifa_ifwithnet(struct sockaddr *addr, int ignore_ptp)
+{
+
+	return (ifa_ifwithnet_fib(addr, ignore_ptp, RT_ALL_FIBS));
 }
 
 /*
@@ -1989,7 +2009,7 @@ if_qflush(struct ifnet *ifp)
 #endif
 	n = ifq->ifq_head;
 	while ((m = n) != 0) {
-		n = m->m_act;
+		n = m->m_nextpkt;
 		m_freem(m);
 	}
 	ifq->ifq_head = 0;

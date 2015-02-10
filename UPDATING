@@ -16,120 +16,110 @@ from older versions of FreeBSD, try WITHOUT_CLANG to bootstrap to the tip of
 stable/10, and then rebuild without this option. The bootstrap process from
 older version of current is a bit fragile.
 
-20150127:	p17	FreeBSD-SA-15:02.kmem
-			FreeBSD-SA-15:03.sctp
+20140904:
+	The ofwfb driver, used to provide a graphics console on PowerPC when
+	using vt(4), no longer allows mmap() of all of physical memory. This
+	will prevent Xorg on PowerPC with some ATI graphics cards from
+	initializing properly unless x11-servers/xorg-server is updated to
+	1.12.4_8 or newer.
 
-	Fix SCTP SCTP_SS_VALUE kernel memory corruption and disclosure
-	vulnerability.  [SA-15:02]
+20140831:
+	The libatf-c and libatf-c++ major versions were downgraded to 0 and
+	1 respectively to match the upstream numbers.  They were out of
+	sync because, when they were originally added to FreeBSD, the
+	upstream versions were not respected.  These libraries are private
+	and not yet built by default, so renumbering them should be a
+	non-issue.  However, unclean source trees will yield broken test
+	programs once the operator executes "make delete-old-libs" after a
+	"make installworld".
 
-	Fix SCTP stream reset vulnerability.  [SA-15:03]
+	Additionally, the atf-sh binary was made private by moving it into
+	/usr/libexec/.  Already-built shell test programs will keep the
+	path to the old binary so they will break after "make delete-old"
+	is run.
 
-20150114:	p16	FreeBSD-SA-15:01.openssl
-	Fix multiple vulnerabilities in OpenSSL.  [SA-15:01]
+	If you are using WITH_TESTS=yes (not the default), wipe the object
+	tree and rebuild from scratch to prevent spurious test failures.
+	This is only needed once: the misnumbered libraries and misplaced
+	binaries have been added to OptionalObsoleteFiles.inc so they will
+	be removed during a clean upgrade.
 
-20141223:	p15	FreeBSD-SA-14:31.ntp
-			FreeBSD-EN-14:13.freebsd-update
+20140814:
+	The ixgbe tunables now match their sysctl counterparts, for example:
+	hw.ixgbe.enable_aim => hw.ix.enable_aim
+	Anyone using ixgbe tunables should ensure they update /boot/loader.conf.
 
-	Fix multiple vulnerabilities in NTP suite.  [SA-14:31]
-	Fix directory deletion issue in freebsd-update.  [EN-14:13]
+20140801:
+	The NFSv4.1 server committed by r269398 changes the internal
+	function call interfaces used between the NFS and krpc modules.
+	As such, __FreeBSD_version was bumped.
 
-20141217:	p14	FreeBSD-SA-14:30.unbound
-	Fix unbound remote denial of service vulnerability.
+20140729:
+	The default unbound configuration has been modified to address
+	issues with reverse lookups on networks that use private
+	address ranges.  If you use the local_unbound service, run
+	"service local_unbound setup" as root to regenerate your
+	configuration, then "service local_unbound reload" to load the
+	new configuration.
 
-20141210:	p13	FreeBSD-SA-14:28.file
-	Fix multiple vulnerabilities in file(1) and libmagic(3).
+20140717:
+	It is no longer necessary to include the dwarf version in your DEBUG
+	options in your kernel config file. The bug that required it to be
+	placed in the config file has bene fixed. DEBUG should now just
+	contain -g. The build system will automatically update things
+	to do the right thing.
 
-20141104:	p12	FreeBSD-SA-14:24.sshd
-			FreeBSD-SA-14:25.setlogin
-			FreeBSD-SA-14:26.ftp
-			FreeBSD-EN-14:12.zfs
+20140715:
+	Several ABI breaking changes were merged to CTL and new iSCSI code.
+	All CTL and iSCSI-related tools, such as ctladm, ctld, iscsid and
+	iscsictl need to be rebuilt to work with a new kernel.
 
-	Fix denial of service attack against sshd(8). [SA-14:24]
+20140708:
+	The WITHOUT_VT_SUPPORT kernel config knob has been renamed
+	WITHOUT_VT.  (The other _SUPPORT knobs have a consistent meaning
+	which differs from the behaviour controlled by this knob.)
 
-	Fix kernel stack disclosure in setlogin(2) / getlogin(2).
-	[SA-14:25]
+20140608:
+	On i386 and amd64 systems, the onifconsole flag is now set by default
+	in /etc/ttys for ttyu0. This causes ttyu0 to be automatically enabled
+	as a login TTY if it is set in the bootloader as an active kernel
+	console. No changes in behavior should result otherwise. To revert to
+	the previous behavior, set ttyu0 to "off" in /etc/ttys.
 
-	Fix remote command execution in ftp(1). [SA-14:26]
+20140512:
+	Clang and llvm have been upgraded to 3.4.1 release.
 
-	Fix NFSv4 and ZFS cache consistency issue. [EN-14:12]
+20140321:
+	Clang and llvm have been upgraded to 3.4 release.
 
-20141022:	p11	FreeBSD-EN-14:10.tzdata
+20140306:
+	If a Makefile in a tests/ directory was auto-generating a Kyuafile
+	instead of providing an explicit one, this would prevent such
+	Makefile from providing its own Kyuafile in the future during
+	NO_CLEAN builds.  This has been fixed in the Makefiles but manual
+	intervention is needed to clean an objdir if you use NO_CLEAN:
+	  # find /usr/obj -name Kyuafile | xargs rm -f
 
-	Time zone data file update. [EN-14:10]
+20140303:
+	OpenSSH will now ignore errors caused by kernel lacking of Capsicum
+	capability mode support.  Please note that enabling the feature in
+	kernel is still highly recommended.
 
-20141021:	p10	FreeBSD-SA-14:20.rtsold
-			FreeBSD-SA-14:21.routed
-			FreeBSD-SA-14:22.namei
-			FreeBSD-SA-14:23.openssl
+20140227:
+	OpenSSH is now built with sandbox support, and will use sandbox as
+	the default privilege separation method.  This requires Capsicum
+	capability mode support in kernel.
 
-	Fix rtsold(8) remote buffer overflow vulnerability. [SA-14:20]
+20140216:
+	The nve(4) driver for NVIDIA nForce MCP Ethernet adapters has
+	been deprecated and will not be part of FreeBSD 11.0 and later
+	releases.  If you use this driver, please consider switching to
+	the nfe(4) driver instead.
 
-	Fix routed(8) remote denial of service vulnerability. [SA-14:21]
+20140120:
+	10.0-RELEASE.
 
-	Fix memory leak in sandboxed namei lookup. [SA-14:22]
-
-	Fix OpenSSL multiple vulnerabilities. [SA-14:23]
-
-20140916:	p9	FreeBSD-SA-14:19.tcp
-	Fix Denial of Service in TCP packet processing. [SA-14:19]
-
-20140909:	p8	FreeBSD-SA-14:18.openssl
-	Fix OpenSSL multiple vulnerabilities. [SA-14:18]
-
-20140708:	p7	FreeBSD-SA-14:17.kmem
-	Fix kernel memory disclosure in control messages and SCTP
-	notifications. [SA-14:17]
-
-20140624:	p6	FreeBSD-SA-14:15.iconv
-			FreeBSD-SA-14:16.file
-			FreeBSD-EN-14:07.pmap
-
-	Fix iconv(3) NULL pointer dereference and out-of-bounds array
-	access. [SA-14:15]
-
-	Fix multiple vulnerabilities in file(1) and libmagic(3).
-	[SA-14:16]
-
-	Worked around bug with PCID implementation. [EN-14:07]
-
-20140605:	p5	FreeBSD-SA-14:14.openssl
-	Fix OpenSSL multiple vulnerabilities. [SA-14:14]
-
-20140603:	p4	FreeBSD-SA-14:11.sendmail
-			FreeBSD-SA-14:13.pam
-			FreeBSD-EN-14:06.exec
-
-	Fix sendmail improper close-on-exec flag handling. [SA-14:11]
-
-	Fix incorrect error handling in PAM policy parser. [SA-14:13]
-
-	Fix triple-fault when executing from a threaded process.
-	[EN-14:06]
-
-20140513:	p3	FreeBSD-SA-14:10.openssl
-			FreeBSD-EN-14:05.ciss
-
-	Fix OpenSSL NULL pointer deference vulnerability. [SA-14:10]
-
-	Fix data corruption with ciss(4). [EN-14:05]
-
-20140430:	p2	FreeBSD-SA-14:07.devfs
-			FreeBSD-SA-14:08.tcp
-			FreeBSD-SA-14:09.openssl
-
-	Fix devfs rules not applied by default for jails. [SA-14:07]
-
-	Fix TCP reassembly vulnerability. [SA-14:08]
-
-	Fix OpenSSL use-after-free vulnerability. [SA-14:09]
-
-20140408:	p1	FreeBSD-SA-14:05.nfsserver
-			FreeBSD-SA-14:06.openssl
-	Fix deadlock in the NFS server. [SA-14:05]
-
-	Fix multiple vulnerabilities in OpenSSL. [SA-14:06]
-
-20131223:
+20131216:
 	The behavior of gss_pseudo_random() for the krb5 mechanism
 	has changed, for applications requesting a longer random string
 	than produced by the underlying enctype's pseudo-random() function.
@@ -138,6 +128,13 @@ older version of current is a bit fragile.
 	be different at the 17th octet and later, after this change.
 	The counter used in the PRF+ construction is now encoded as a
 	big-endian integer in accordance with RFC 4402.
+	__FreeBSD_version is bumped to 1000701.
+
+20131108:
+	The WITHOUT_ATF build knob has been removed and its functionality
+	has been subsumed into the more generic WITHOUT_TESTS.  If you were
+	using the former to disable the build of the ATF libraries, you
+	should change your settings to use the latter.
 
 20131031:
 	The default version of mtree is nmtree which is obtained from

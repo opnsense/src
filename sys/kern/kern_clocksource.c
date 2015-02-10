@@ -234,7 +234,8 @@ handleevents(sbintime_t now, int fake)
 	if (!busy) {
 		state->idle = 0;
 		state->nextevent = t;
-		loadtimer(now, 0);
+		loadtimer(now, (fake == 2) &&
+		    (timer->et_flags & ET_FLAGS_PERCPU));
 	}
 	ET_HW_UNLOCK(state);
 	return (done);
@@ -797,6 +798,25 @@ cpu_activeclock(void)
 	handleevents(now, 1);
 	td->td_intr_nesting_level--;
 	spinlock_exit();
+}
+
+/*
+ * Change the frequency of the given timer.  This changes et->et_frequency and
+ * if et is the active timer it reconfigures the timer on all CPUs.  This is
+ * intended to be a private interface for the use of et_change_frequency() only.
+ */
+void
+cpu_et_frequency(struct eventtimer *et, uint64_t newfreq)
+{
+
+	ET_LOCK();
+	if (et == timer) {
+		configtimer(0);
+		et->et_frequency = newfreq;
+		configtimer(1);
+	} else
+		et->et_frequency = newfreq;
+	ET_UNLOCK();
 }
 
 #ifdef KDTRACE_HOOKS

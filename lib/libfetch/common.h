@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 1998-2011 Dag-Erling Smørgrav
+ * Copyright (c) 1998-2014 Dag-Erling Smørgrav
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -52,13 +52,6 @@ struct fetchconn {
 	size_t		 bufsize;	/* buffer size */
 	size_t		 buflen;	/* length of buffer contents */
 	int		 err;		/* last protocol reply code */
-	struct {			/* data cached after an interrupted
-					   read */
-		char	*buf;
-		size_t	 size;
-		size_t	 pos;
-		size_t	 len;
-	} cache;
 #ifdef WITH_SSL
 	SSL		*ssl;		/* SSL handle */
 	SSL_CTX		*ssl_ctx;	/* SSL context */
@@ -124,6 +117,9 @@ int		 fetch_no_proxy_match(const char *);
  */
 FILE		*http_request(struct url *, const char *,
 		     struct url_stat *, struct url *, const char *);
+FILE		*http_request_body(struct url *, const char *,
+		     struct url_stat *, struct url *, const char *,
+		     const char *, const char *);
 FILE		*ftp_request(struct url *, const char *,
 		     struct url_stat *, struct url *, const char *);
 

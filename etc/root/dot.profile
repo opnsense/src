@@ -6,5 +6,5 @@ HOME=/root
 export HOME
 TERM=${TERM:-xterm}
 export TERM
-PAGER=less
+PAGER=more
 export PAGER

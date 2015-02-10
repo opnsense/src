@@ -864,24 +864,12 @@ crypto_recv(
 			 * errors.
 			 */
 			if (vallen == (u_int) EVP_PKEY_size(host_pkey)) {
-				u_int32 *cookiebuf = malloc(
-					RSA_size(host_pkey->pkey.rsa));
-				if (cookiebuf == NULL) {
-					rval = XEVNT_CKY;
-					break;
-				}
-				if (RSA_private_decrypt(vallen,
+				RSA_private_decrypt(vallen,
 				    (u_char *)ep->pkt,
-				    (u_char *)cookiebuf,
+				    (u_char *)&temp32,
 				    host_pkey->pkey.rsa,
-				    RSA_PKCS1_OAEP_PADDING) != 4) {
-					rval = XEVNT_CKY;
-					free(cookiebuf);
-					break;
-				} else {
-					cookie = ntohl(*cookiebuf);
-					free(cookiebuf);
-				}
+				    RSA_PKCS1_OAEP_PADDING);
+				cookie = ntohl(temp32);
 			} else {
 				rval = XEVNT_CKY;
 				break;
@@ -3926,7 +3914,7 @@ crypto_setup(void)
 		    rand_file);
 		exit (-1);
 	}
-	arc4random_buf(&seed, sizeof(l_fp));
+	get_systime(&seed);
 	RAND_seed(&seed, sizeof(l_fp));
 	RAND_write_file(rand_file);
 	OpenSSL_add_all_algorithms();

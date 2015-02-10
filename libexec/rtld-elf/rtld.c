@@ -161,6 +161,7 @@ static bool matched_symbol(SymLook *, const Obj_Entry *, Sym_Match_Result *,
     const unsigned long);
 
 void r_debug_state(struct r_debug *, struct link_map *) __noinline;
+void _r_debug_postinit(struct link_map *) __noinline;
 
 /*
  * Data declarations.
@@ -231,6 +232,7 @@ char **main_argv;
 size_t tls_last_offset;		/* Static TLS offset of last module */
 size_t tls_last_size;		/* Static TLS size of last module */
 size_t tls_static_space;	/* Static TLS space allocated */
+size_t tls_static_max_align;
 int tls_dtv_generation = 1;	/* Used to detect when dtv size changes  */
 int tls_max_index = 1;		/* Largest module index allocated */
 
@@ -634,6 +636,7 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
     if (obj_main->crt_no_init)
 	preinit_main();
     objlist_call_init(&initlist, &lockstate);
+    _r_debug_postinit(&obj_main->linkmap);
     objlist_clear(&initlist);
     dbg("loading filtees");
     for (obj = obj_list->next; obj != NULL; obj = obj->next) {
@@ -2472,7 +2475,7 @@ relocate_object(Obj_Entry *obj, bool bind_now, Obj_Entry *rtldobj,
 		}
 	}
 
-	/* Process the non-PLT relocations. */
+	/* Process the non-PLT non-IFUNC relocations. */
 	if (reloc_non_plt(obj, rtldobj, flags, lockstate))
 		return (-1);
 
@@ -2485,7 +2488,6 @@ relocate_object(Obj_Entry *obj, bool bind_now, Obj_Entry *rtldobj,
 		}
 	}
 
-
 	/* Set the special PLT or GOT entries. */
 	init_pltgot(obj);
 
@@ -2496,6 +2498,16 @@ relocate_object(Obj_Entry *obj, bool bind_now, Obj_Entry *rtldobj,
 	if (obj->bind_now || bind_now)
 		if (reloc_jmpslots(obj, flags, lockstate) == -1)
 			return (-1);
+
+	/*
+	 * Process the non-PLT IFUNC relocations.  The relocations are
+	 * processed in two phases, because IFUNC resolvers may
+	 * reference other symbols, which must be readily processed
+	 * before resolvers are called.
+	 */
+	if (obj->non_plt_gnu_ifunc &&
+	    reloc_non_plt(obj, rtldobj, flags | SYMLOOK_IFUNC, lockstate))
+		return (-1);
 
 	if (obj->relro_size > 0) {
 		if (mprotect(obj->relro_page, obj->relro_size,
@@ -3496,7 +3508,20 @@ r_debug_state(struct r_debug* rd, struct link_map *m)
      * even when marked __noinline.  However, gdb depends on those
      * calls being made.
      */
-    __asm __volatile("" : : : "memory");
+    __compiler_membar();
+}
+
+/*
+ * A function called after init routines have completed. This can be used to
+ * break before a program's entry routine is called, and can be used when
+ * main is not available in the symbol table.
+ */
+void
+_r_debug_postinit(struct link_map *m)
+{
+
+	/* See r_debug_state(). */
+	__compiler_membar();
 }
 
 /*
@@ -4276,19 +4301,22 @@ void *
 allocate_tls(Obj_Entry *objs, void *oldtls, size_t tcbsize, size_t tcbalign)
 {
     Obj_Entry *obj;
-    size_t size;
+    size_t size, ralign;
     char *tls;
     Elf_Addr *dtv, *olddtv;
     Elf_Addr segbase, oldsegbase, addr;
     int i;
 
-    size = round(tls_static_space, tcbalign);
+    ralign = tcbalign;
+    if (tls_static_max_align > ralign)
+	    ralign = tls_static_max_align;
+    size = round(tls_static_space, ralign) + round(tcbsize, ralign);
 
     assert(tcbsize >= 2*sizeof(Elf_Addr));
-    tls = xcalloc(1, size + tcbsize);
+    tls = malloc_aligned(size, ralign);
     dtv = xcalloc(tls_max_index + 2, sizeof(Elf_Addr));
 
-    segbase = (Elf_Addr)(tls + size);
+    segbase = (Elf_Addr)(tls + round(tls_static_space, ralign));
     ((Elf_Addr*)segbase)[0] = segbase;
     ((Elf_Addr*)segbase)[1] = (Elf_Addr) dtv;
 
@@ -4340,8 +4368,8 @@ allocate_tls(Obj_Entry *objs, void *oldtls, size_t tcbsize, size_t tcbalign)
 void
 free_tls(void *tls, size_t tcbsize, size_t tcbalign)
 {
-    size_t size;
     Elf_Addr* dtv;
+    size_t size, ralign;
     int dtvsize, i;
     Elf_Addr tlsstart, tlsend;
 
@@ -4349,19 +4377,22 @@ free_tls(void *tls, size_t tcbsize, size_t tcbalign)
      * Figure out the size of the initial TLS block so that we can
      * find stuff which ___tls_get_addr() allocated dynamically.
      */
-    size = round(tls_static_space, tcbalign);
+    ralign = tcbalign;
+    if (tls_static_max_align > ralign)
+	    ralign = tls_static_max_align;
+    size = round(tls_static_space, ralign);
 
     dtv = ((Elf_Addr**)tls)[1];
     dtvsize = dtv[1];
     tlsend = (Elf_Addr) tls;
     tlsstart = tlsend - size;
     for (i = 0; i < dtvsize; i++) {
-	if (dtv[i+2] && (dtv[i+2] < tlsstart || dtv[i+2] > tlsend)) {
-	    free((void*) dtv[i+2]);
+	if (dtv[i + 2] != 0 && (dtv[i + 2] < tlsstart || dtv[i + 2] > tlsend)) {
+		free_aligned((void *)dtv[i + 2]);
 	}
     }
 
-    free((void*) tlsstart);
+    free_aligned((void *)tlsstart);
     free((void*) dtv);
 }
 
@@ -4385,11 +4416,7 @@ allocate_module_tls(int index)
 	die();
     }
 
-    p = malloc(obj->tlssize);
-    if (p == NULL) {
-	_rtld_error("Cannot allocate TLS block for index %d", index);
-	die();
-    }
+    p = malloc_aligned(obj->tlssize, obj->tlsalign);
     memcpy(p, obj->tlsinit, obj->tlsinitsize);
     memset(p + obj->tlsinitsize, 0, obj->tlssize - obj->tlsinitsize);
 
@@ -4421,9 +4448,11 @@ allocate_tls_offset(Obj_Entry *obj)
      * leave a small amount of space spare to be used for dynamically
      * loading modules which use static TLS.
      */
-    if (tls_static_space) {
+    if (tls_static_space != 0) {
 	if (calculate_tls_end(off, obj->tlssize) > tls_static_space)
 	    return false;
+    } else if (obj->tlsalign > tls_static_max_align) {
+	    tls_static_max_align = obj->tlsalign;
     }
 
     tls_last_offset = obj->tlsoffset = off;

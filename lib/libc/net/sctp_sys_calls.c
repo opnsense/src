@@ -233,18 +233,10 @@ sctp_bindx(int sd, struct sockaddr *addrs, int addrcnt, int flags)
 			break;
 		default:
 			/* Invalid address family specified. */
-			errno = EINVAL;
+			errno = EAFNOSUPPORT;
 			return (-1);
 		}
 		sa = (struct sockaddr *)((caddr_t)sa + sa->sa_len);
-	}
-	/*
-	 * Now if there was a port mentioned, assure that the first address
-	 * has that port to make sure it fails or succeeds correctly.
-	 */
-	if (sport) {
-		sin = (struct sockaddr_in *)sa;
-		sin->sin_port = sport;
 	}
 	argsz = sizeof(struct sctp_getaddresses) +
 	    sizeof(struct sockaddr_storage);
@@ -257,6 +249,23 @@ sctp_bindx(int sd, struct sockaddr *addrs, int addrcnt, int flags)
 		memset(gaddrs, 0, argsz);
 		gaddrs->sget_assoc_id = 0;
 		memcpy(gaddrs->addr, sa, sa->sa_len);
+		/*
+		 * Now, if there was a port mentioned, assure that the first
+		 * address has that port to make sure it fails or succeeds
+		 * correctly.
+		 */
+		if ((i == 0) && (sport != 0)) {
+			switch (gaddrs->addr->sa_family) {
+			case AF_INET:
+				sin = (struct sockaddr_in *)gaddrs->addr;
+				sin->sin_port = sport;
+				break;
+			case AF_INET6:
+				sin6 = (struct sockaddr_in6 *)gaddrs->addr;
+				sin6->sin6_port = sport;
+				break;
+			}
+		}
 		if (setsockopt(sd, IPPROTO_SCTP, flags, gaddrs,
 		    (socklen_t) argsz) != 0) {
 			free(gaddrs);
@@ -341,11 +350,38 @@ sctp_opt_info(int sd, sctp_assoc_t id, int opt, void *arg, socklen_t * size)
 	case SCTP_REMOTE_UDP_ENCAPS_PORT:
 		((struct sctp_udpencaps *)arg)->sue_assoc_id = id;
 		break;
+	case SCTP_ECN_SUPPORTED:
+		((struct sctp_assoc_value *)arg)->assoc_id = id;
+		break;
+	case SCTP_PR_SUPPORTED:
+		((struct sctp_assoc_value *)arg)->assoc_id = id;
+		break;
+	case SCTP_AUTH_SUPPORTED:
+		((struct sctp_assoc_value *)arg)->assoc_id = id;
+		break;
+	case SCTP_ASCONF_SUPPORTED:
+		((struct sctp_assoc_value *)arg)->assoc_id = id;
+		break;
+	case SCTP_RECONFIG_SUPPORTED:
+		((struct sctp_assoc_value *)arg)->assoc_id = id;
+		break;
+	case SCTP_NRSACK_SUPPORTED:
+		((struct sctp_assoc_value *)arg)->assoc_id = id;
+		break;
+	case SCTP_PKTDROP_SUPPORTED:
+		((struct sctp_assoc_value *)arg)->assoc_id = id;
+		break;
 	case SCTP_MAX_BURST:
 		((struct sctp_assoc_value *)arg)->assoc_id = id;
 		break;
 	case SCTP_ENABLE_STREAM_RESET:
 		((struct sctp_assoc_value *)arg)->assoc_id = id;
+		break;
+	case SCTP_PR_STREAM_STATUS:
+		((struct sctp_prstatus *)arg)->sprstat_assoc_id = id;
+		break;
+	case SCTP_PR_ASSOC_STATUS:
+		((struct sctp_prstatus *)arg)->sprstat_assoc_id = id;
 		break;
 	default:
 		break;
@@ -566,6 +602,7 @@ sctp_sendmsg(int s,
 	cmsg->cmsg_type = SCTP_SNDRCV;
 	cmsg->cmsg_len = CMSG_LEN(sizeof(struct sctp_sndrcvinfo));
 	sinfo = (struct sctp_sndrcvinfo *)CMSG_DATA(cmsg);
+	memset(sinfo, 0, sizeof(struct sctp_sndrcvinfo));
 	sinfo->sinfo_stream = stream_no;
 	sinfo->sinfo_ssn = 0;
 	sinfo->sinfo_flags = flags;

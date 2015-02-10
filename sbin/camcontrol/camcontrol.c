@@ -96,6 +96,7 @@ typedef enum {
 	CAM_CMD_SECURITY	= 0x0000001d,
 	CAM_CMD_HPA		= 0x0000001e,
 	CAM_CMD_SANITIZE	= 0x0000001f,
+	CAM_CMD_PERSIST		= 0x00000020
 } cam_cmdmask;
 
 typedef enum {
@@ -202,7 +203,7 @@ static struct camcontrol_opts option_table[] = {
 	{"defects", CAM_CMD_READ_DEFECTS, CAM_ARG_NONE, readdefect_opts},
 	{"defectlist", CAM_CMD_READ_DEFECTS, CAM_ARG_NONE, readdefect_opts},
 #endif /* MINIMALISTIC */
-	{"devlist", CAM_CMD_DEVTREE, CAM_ARG_NONE, NULL},
+	{"devlist", CAM_CMD_DEVTREE, CAM_ARG_NONE, "-b"},
 #ifndef MINIMALISTIC
 	{"periphlist", CAM_CMD_DEVLIST, CAM_ARG_NONE, NULL},
 	{"modepage", CAM_CMD_MODE_PAGE, CAM_ARG_NONE, "bdelm:P:"},
@@ -218,18 +219,13 @@ static struct camcontrol_opts option_table[] = {
 	{"fwdownload", CAM_CMD_DOWNLOAD_FW, CAM_ARG_NONE, "f:ys"},
 	{"security", CAM_CMD_SECURITY, CAM_ARG_NONE, "d:e:fh:k:l:qs:T:U:y"},
 	{"hpa", CAM_CMD_HPA, CAM_ARG_NONE, "Pflp:qs:U:y"},
+	{"persist", CAM_CMD_PERSIST, CAM_ARG_NONE, "ai:I:k:K:o:ps:ST:U"},
 #endif /* MINIMALISTIC */
 	{"help", CAM_CMD_USAGE, CAM_ARG_NONE, NULL},
 	{"-?", CAM_CMD_USAGE, CAM_ARG_NONE, NULL},
 	{"-h", CAM_CMD_USAGE, CAM_ARG_NONE, NULL},
 	{NULL, 0, 0, NULL}
 };
-
-typedef enum {
-	CC_OR_NOT_FOUND,
-	CC_OR_AMBIGUOUS,
-	CC_OR_FOUND
-} camcontrol_optret;
 
 struct cam_devitem {
 	struct device_match_result dev_match;
@@ -254,7 +250,7 @@ camcontrol_optret getoption(struct camcontrol_opts *table, char *arg,
 #ifndef MINIMALISTIC
 static int getdevlist(struct cam_device *device);
 #endif /* MINIMALISTIC */
-static int getdevtree(void);
+static int getdevtree(int argc, char **argv, char *combinedopt);
 #ifndef MINIMALISTIC
 static int testunitready(struct cam_device *device, int retry_count,
 			 int timeout, int quiet);
@@ -264,11 +260,12 @@ static int scsiinquiry(struct cam_device *device, int retry_count, int timeout);
 static int scsiserial(struct cam_device *device, int retry_count, int timeout);
 static int camxferrate(struct cam_device *device);
 #endif /* MINIMALISTIC */
-static int parse_btl(char *tstr, int *bus, int *target, int *lun,
-		     cam_argmask *arglst);
+static int parse_btl(char *tstr, path_id_t *bus, target_id_t *target,
+		     lun_id_t *lun, cam_argmask *arglst);
 static int dorescan_or_reset(int argc, char **argv, int rescan);
-static int rescan_or_reset_bus(int bus, int rescan);
-static int scanlun_or_reset_dev(int bus, int target, int lun, int scan);
+static int rescan_or_reset_bus(path_id_t bus, int rescan);
+static int scanlun_or_reset_dev(path_id_t bus, target_id_t target,
+    lun_id_t lun, int scan);
 #ifndef MINIMALISTIC
 static int readdefects(struct cam_device *device, int argc, char **argv,
 		       char *combinedopt, int retry_count, int timeout);
@@ -411,7 +408,7 @@ getdevlist(struct cam_device *device)
 #endif /* MINIMALISTIC */
 
 static int
-getdevtree(void)
+getdevtree(int argc, char **argv, char *combinedopt)
 {
 	union ccb ccb;
 	int bufsize, fd;
@@ -419,6 +416,19 @@ getdevtree(void)
 	int need_close = 0;
 	int error = 0;
 	int skip_device = 0;
+	int busonly = 0;
+	int c;
+
+	while ((c = getopt(argc, argv, combinedopt)) != -1) {
+		switch(c) {
+		case 'b':
+			if ((arglist & CAM_ARG_VERBOSE) == 0)
+				busonly = 1;
+			break;
+		default:
+			break;
+		}
+	}
 
 	if ((fd = open(XPT_DEVICE, O_RDWR)) == -1) {
 		warn("couldn't open %s", XPT_DEVICE);
@@ -478,7 +488,8 @@ getdevtree(void)
 				 * Only print the bus information if the
 				 * user turns on the verbose flag.
 				 */
-				if ((arglist & CAM_ARG_VERBOSE) == 0)
+				if ((busonly == 0) &&
+				    (arglist & CAM_ARG_VERBOSE) == 0)
 					break;
 
 				bus_result =
@@ -489,17 +500,21 @@ getdevtree(void)
 					need_close = 0;
 				}
 
-				fprintf(stdout, "scbus%d on %s%d bus %d:\n",
+				fprintf(stdout, "scbus%d on %s%d bus %d%s\n",
 					bus_result->path_id,
 					bus_result->dev_name,
 					bus_result->unit_number,
-					bus_result->bus_id);
+					bus_result->bus_id,
+					(busonly ? "" : ":"));
 				break;
 			}
 			case DEV_MATCH_DEVICE: {
 				struct device_match_result *dev_result;
 				char vendor[16], product[48], revision[16];
 				char fw[5], tmpstr[256];
+
+				if (busonly == 1)
+					break;
 
 				dev_result =
 				     &ccb.cdm.matches[i].result.device_result;
@@ -566,11 +581,11 @@ getdevtree(void)
 				}
 
 				fprintf(stdout, "%-33s  at scbus%d "
-					"target %d lun %d (",
+					"target %d lun %jx (",
 					tmpstr,
 					dev_result->path_id,
 					dev_result->target_id,
-					dev_result->target_lun);
+					(uintmax_t)dev_result->target_lun);
 
 				need_close = 1;
 
@@ -582,7 +597,7 @@ getdevtree(void)
 				periph_result =
 				      &ccb.cdm.matches[i].result.periph_result;
 
-				if (skip_device != 0)
+				if (busonly || skip_device != 0)
 					break;
 
 				if (need_close > 1)
@@ -1195,6 +1210,18 @@ atahpa_print(struct ata_params *parm, u_int64_t hpasize, int header)
 	}
 }
 
+static int
+atasata(struct ata_params *parm)
+{
+
+
+	if (parm->satacapabilities != 0xffff &&
+	    parm->satacapabilities != 0x0000)
+		return 1;
+
+	return 0;
+}
+
 static void
 atacapprint(struct ata_params *parm)
 {
@@ -1351,6 +1378,17 @@ atacapprint(struct ata_params *parm)
 		    ATA_QUEUE_LEN(parm->queue) + 1);
 	} else
 		printf("no\n");
+
+	printf("NCQ Queue Management           %s\n", atasata(parm) &&
+		parm->satacapabilities2 & ATA_SUPPORT_NCQ_QMANAGEMENT ?
+		"yes" : "no");
+	printf("NCQ Streaming                  %s\n", atasata(parm) &&
+		parm->satacapabilities2 & ATA_SUPPORT_NCQ_STREAM ?
+		"yes" : "no");
+	printf("Receive & Send FPDMA Queued    %s\n", atasata(parm) &&
+		parm->satacapabilities2 & ATA_SUPPORT_RCVSND_FPDMA_QUEUED ?
+		"yes" : "no");
+
 	printf("SMART                          %s	%s\n",
 		parm->support.command1 & ATA_SUPPORT_SMART ? "yes" : "no",
 		parm->enabled.command1 & ATA_SUPPORT_SMART ? "yes" : "no");
@@ -1399,6 +1437,9 @@ atacapprint(struct ata_params *parm)
 	printf("unload                         %s	%s\n",
 		parm->support.extension & ATA_SUPPORT_UNLOAD ? "yes" : "no",
 		parm->enabled.extension & ATA_SUPPORT_UNLOAD ? "yes" : "no");
+	printf("general purpose logging        %s	%s\n",
+		parm->support.extension & ATA_SUPPORT_GENLOG ? "yes" : "no",
+		parm->enabled.extension & ATA_SUPPORT_GENLOG ? "yes" : "no");
 	printf("free-fall                      %s	%s\n",
 		parm->support2 & ATA_SUPPORT_FREEFALL ? "yes" : "no",
 		parm->enabled2 & ATA_SUPPORT_FREEFALL ? "yes" : "no");
@@ -3001,7 +3042,8 @@ atasecurity(struct cam_device *device, int retry_count, int timeout,
  * Returns the number of parsed components, or 0.
  */
 static int
-parse_btl(char *tstr, int *bus, int *target, int *lun, cam_argmask *arglst)
+parse_btl(char *tstr, path_id_t *bus, target_id_t *target, lun_id_t *lun,
+    cam_argmask *arglst)
 {
 	char *tmpstr;
 	int convs = 0;
@@ -3037,7 +3079,9 @@ dorescan_or_reset(int argc, char **argv, int rescan)
 	static const char must[] =
 		"you must specify \"all\", a bus, or a bus:target:lun to %s";
 	int rv, error = 0;
-	int bus = -1, target = -1, lun = -1;
+	path_id_t bus = CAM_BUS_WILDCARD;
+	target_id_t target = CAM_TARGET_WILDCARD;
+	lun_id_t lun = CAM_LUN_WILDCARD;
 	char *tstr;
 
 	if (argc < 3) {
@@ -3069,7 +3113,7 @@ dorescan_or_reset(int argc, char **argv, int rescan)
 }
 
 static int
-rescan_or_reset_bus(int bus, int rescan)
+rescan_or_reset_bus(path_id_t bus, int rescan)
 {
 	union ccb ccb, matchccb;
 	int fd, retval;
@@ -3083,7 +3127,7 @@ rescan_or_reset_bus(int bus, int rescan)
 		return(1);
 	}
 
-	if (bus != -1) {
+	if (bus != CAM_BUS_WILDCARD) {
 		ccb.ccb_h.func_code = rescan ? XPT_SCAN_BUS : XPT_RESET_BUS;
 		ccb.ccb_h.path_id = bus;
 		ccb.ccb_h.target_id = CAM_TARGET_WILDCARD;
@@ -3183,7 +3227,7 @@ rescan_or_reset_bus(int bus, int rescan)
 			 * We don't want to rescan or reset the xpt bus.
 			 * See above.
 			 */
-			if ((int)bus_result->path_id == -1)
+			if (bus_result->path_id == CAM_XPT_PATH_ID)
 				continue;
 
 			ccb.ccb_h.func_code = rescan ? XPT_SCAN_BUS :
@@ -3236,7 +3280,7 @@ bailout:
 }
 
 static int
-scanlun_or_reset_dev(int bus, int target, int lun, int scan)
+scanlun_or_reset_dev(path_id_t bus, target_id_t target, lun_id_t lun, int scan)
 {
 	union ccb ccb;
 	struct cam_device *device;
@@ -3244,18 +3288,18 @@ scanlun_or_reset_dev(int bus, int target, int lun, int scan)
 
 	device = NULL;
 
-	if (bus < 0) {
+	if (bus == CAM_BUS_WILDCARD) {
 		warnx("invalid bus number %d", bus);
 		return(1);
 	}
 
-	if (target < 0) {
+	if (target == CAM_TARGET_WILDCARD) {
 		warnx("invalid target number %d", target);
 		return(1);
 	}
 
-	if (lun < 0) {
-		warnx("invalid lun number %d", lun);
+	if (lun == CAM_LUN_WILDCARD) {
+		warnx("invalid lun number %jx", (uintmax_t)lun);
 		return(1);
 	}
 
@@ -3313,12 +3357,12 @@ scanlun_or_reset_dev(int bus, int target, int lun, int scan)
 	if (((ccb.ccb_h.status & CAM_STATUS_MASK) == CAM_REQ_CMP)
 	 || ((!scan)
 	  && ((ccb.ccb_h.status & CAM_STATUS_MASK) == CAM_BDR_SENT))) {
-		fprintf(stdout, "%s of %d:%d:%d was successful\n",
-		    scan? "Re-scan" : "Reset", bus, target, lun);
+		fprintf(stdout, "%s of %d:%d:%jx was successful\n",
+		    scan? "Re-scan" : "Reset", bus, target, (uintmax_t)lun);
 		return(0);
 	} else {
-		fprintf(stdout, "%s of %d:%d:%d returned error %#x\n",
-		    scan? "Re-scan" : "Reset", bus, target, lun,
+		fprintf(stdout, "%s of %d:%d:%jx returned error %#x\n",
+		    scan? "Re-scan" : "Reset", bus, target, (uintmax_t)lun,
 		    ccb.ccb_h.status & CAM_STATUS_MASK);
 		return(1);
 	}
@@ -4200,7 +4244,9 @@ static int
 camdebug(int argc, char **argv, char *combinedopt)
 {
 	int c, fd;
-	int bus = -1, target = -1, lun = -1;
+	path_id_t bus = CAM_BUS_WILDCARD;
+	target_id_t target = CAM_TARGET_WILDCARD;
+	lun_id_t lun = CAM_LUN_WILDCARD;
 	char *tstr, *tmpstr = NULL;
 	union ccb ccb;
 	int error = 0;
@@ -4320,8 +4366,8 @@ camdebug(int argc, char **argv, char *combinedopt)
 				} else {
 					fprintf(stderr,
 						"Debugging enabled for "
-						"%d:%d:%d\n",
-						bus, target, lun);
+						"%d:%d:%jx\n",
+						bus, target, (uintmax_t)lun);
 				}
 			}
 		}
@@ -7776,6 +7822,9 @@ usage(int printlong)
 "                              [-U <user|master>] [-y]\n"
 "        camcontrol hpa        [dev_id][generic args] [-f] [-l] [-P] [-p pwd]\n"
 "                              [-q] [-s max_sectors] [-U pwd] [-y]\n"
+"        camcontrol persist    [dev_id][generic args] <-i action|-o action>\n"
+"                              [-a][-I tid][-k key][-K sa_key][-p][-R rtp]\n"
+"                              [-s scope][-S][-T type][-U]\n"
 #endif /* MINIMALISTIC */
 "        camcontrol help\n");
 	if (!printlong)
@@ -7812,8 +7861,9 @@ usage(int printlong)
 "idle        send the ATA IDLE command to the named device\n"
 "standby     send the ATA STANDBY command to the named device\n"
 "sleep       send the ATA SLEEP command to the named device\n"
-"fwdownload  program firmware of the named device with the given image"
+"fwdownload  program firmware of the named device with the given image\n"
 "security    report or send ATA security commands to the named device\n"
+"persist     send the SCSI PERSISTENT RESERVE IN or OUT commands\n"
 "help        this message\n"
 "Device Identifiers:\n"
 "bus:target        specify the bus and target, lun defaults to 0\n"
@@ -7948,6 +7998,22 @@ usage(int printlong)
 "                  device\n"
 "-U pwd            unlock the HPA configuration of the device\n"
 "-y                don't ask any questions\n"
+"persist arguments:\n"
+"-i action         specify read_keys, read_reservation, report_cap, or\n"
+"                  read_full_status\n"
+"-o action         specify register, register_ignore, reserve, release,\n"
+"                  clear, preempt, preempt_abort, register_move, replace_lost\n"
+"-a                set the All Target Ports (ALL_TG_PT) bit\n"
+"-I tid            specify a Transport ID, e.g.: sas,0x1234567812345678\n"
+"-k key            specify the Reservation Key\n"
+"-K sa_key         specify the Service Action Reservation Key\n"
+"-p                set the Activate Persist Through Power Loss bit\n"
+"-R rtp            specify the Relative Target Port\n"
+"-s scope          specify the scope: lun, extent, element or a number\n"
+"-S                specify Transport ID for register, requires -I\n"
+"-T res_type       specify the reservation type: read_shared, wr_ex, rd_ex,\n"
+"                  ex_ac, wr_ex_ro, ex_ac_ro, wr_ex_ar, ex_ac_ar\n"
+"-U                unregister the current initiator for register_move\n"
 );
 #endif /* MINIMALISTIC */
 }
@@ -7968,7 +8034,9 @@ main(int argc, char **argv)
 	int error = 0, optstart = 2;
 	int devopen = 1;
 #ifndef MINIMALISTIC
-	int bus, target, lun;
+	path_id_t bus;
+	target_id_t target;
+	lun_id_t lun;
 #endif /* MINIMALISTIC */
 
 	cmdlist = CAM_CMD_NONE;
@@ -8178,7 +8246,7 @@ main(int argc, char **argv)
 			break;
 #endif /* MINIMALISTIC */
 		case CAM_CMD_DEVTREE:
-			error = getdevtree();
+			error = getdevtree(argc, argv, combinedopt);
 			break;
 #ifndef MINIMALISTIC
 		case CAM_CMD_TUR:
@@ -8279,6 +8347,11 @@ main(int argc, char **argv)
 		case CAM_CMD_SANITIZE:
 			error = scsisanitize(cam_dev, argc, argv,
 					     combinedopt, retry_count, timeout);
+			break;
+		case CAM_CMD_PERSIST:
+			error = scsipersist(cam_dev, argc, argv, combinedopt,
+			    retry_count, timeout, arglist & CAM_ARG_VERBOSE,
+			    arglist & CAM_ARG_ERR_RECOVER);
 			break;
 #endif /* MINIMALISTIC */
 		case CAM_CMD_USAGE:

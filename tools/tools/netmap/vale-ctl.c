@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013 Michio Honda. All rights reserved.
+ * Copyright (C) 2013-2014 Michio Honda. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -33,10 +33,12 @@
 #include <unistd.h>	/* close */
 #include <sys/ioctl.h>	/* ioctl */
 #include <sys/param.h>
+#include <sys/socket.h>	/* apple needs sockaddr */
 #include <net/if.h>	/* ifreq */
 #include <net/netmap.h>
 #include <net/netmap_user.h>
 #include <libgen.h>	/* basename */
+#include <stdlib.h>	/* atoi, free */
 
 /* debug support */
 #define ND(format, ...)	do {} while(0)
@@ -44,8 +46,47 @@
 	fprintf(stderr, "%s [%d] " format "\n",		\
 	__FUNCTION__, __LINE__, ##__VA_ARGS__)
 
+/* XXX cut and paste from pkt-gen.c because I'm not sure whether this
+ * program may include nm_util.h
+ */
+void parse_nmr_config(const char* conf, struct nmreq *nmr)
+{
+	char *w, *tok;
+	int i, v;
+
+	nmr->nr_tx_rings = nmr->nr_rx_rings = 0;
+	nmr->nr_tx_slots = nmr->nr_rx_slots = 0;
+	if (conf == NULL || ! *conf)
+		return;
+	w = strdup(conf);
+	for (i = 0, tok = strtok(w, ","); tok; i++, tok = strtok(NULL, ",")) {
+		v = atoi(tok);
+		switch (i) {
+		case 0:
+			nmr->nr_tx_slots = nmr->nr_rx_slots = v;
+			break;
+		case 1:
+			nmr->nr_rx_slots = v;
+			break;
+		case 2:
+			nmr->nr_tx_rings = nmr->nr_rx_rings = v;
+			break;
+		case 3:
+			nmr->nr_rx_rings = v;
+			break;
+		default:
+			D("ignored config: %s", tok);
+			break;
+		}
+	}
+	D("txr %d txd %d rxr %d rxd %d",
+			nmr->nr_tx_rings, nmr->nr_tx_slots,
+			nmr->nr_rx_rings, nmr->nr_rx_slots);
+	free(w);
+}
+
 static int
-bdg_ctl(const char *name, int nr_cmd, int nr_arg)
+bdg_ctl(const char *name, int nr_cmd, int nr_arg, char *nmr_config)
 {
 	struct nmreq nmr;
 	int error = 0;
@@ -61,28 +102,41 @@ bdg_ctl(const char *name, int nr_cmd, int nr_arg)
 	if (name != NULL) /* might be NULL */
 		strncpy(nmr.nr_name, name, sizeof(nmr.nr_name));
 	nmr.nr_cmd = nr_cmd;
+	parse_nmr_config(nmr_config, &nmr);
 
 	switch (nr_cmd) {
+	case NETMAP_BDG_DELIF:
+	case NETMAP_BDG_NEWIF:
+		error = ioctl(fd, NIOCREGIF, &nmr);
+		if (error == -1) {
+			ND("Unable to %s %s", nr_cmd == NETMAP_BDG_DELIF ? "delete":"create", name);
+			perror(name);
+		} else {
+			ND("Success to %s %s", nr_cmd == NETMAP_BDG_DELIF ? "delete":"create", name);
+		}
+		break;
 	case NETMAP_BDG_ATTACH:
 	case NETMAP_BDG_DETACH:
 		if (nr_arg && nr_arg != NETMAP_BDG_HOST)
 			nr_arg = 0;
 		nmr.nr_arg1 = nr_arg;
 		error = ioctl(fd, NIOCREGIF, &nmr);
-		if (error == -1)
-			D("Unable to %s %s to the bridge", nr_cmd ==
+		if (error == -1) {
+			ND("Unable to %s %s to the bridge", nr_cmd ==
 			    NETMAP_BDG_DETACH?"detach":"attach", name);
-		else
-			D("Success to %s %s to the bridge\n", nr_cmd ==
+			perror(name);
+		} else
+			ND("Success to %s %s to the bridge", nr_cmd ==
 			    NETMAP_BDG_DETACH?"detach":"attach", name);
 		break;
 
 	case NETMAP_BDG_LIST:
 		if (strlen(nmr.nr_name)) { /* name to bridge/port info */
 			error = ioctl(fd, NIOCGINFO, &nmr);
-			if (error)
-				D("Unable to obtain info for %s", name);
-			else
+			if (error) {
+				ND("Unable to obtain info for %s", name);
+				perror(name);
+			} else
 				D("%s at bridge:%d port:%d", name, nmr.nr_arg1,
 				    nmr.nr_arg2);
 			break;
@@ -101,9 +155,10 @@ bdg_ctl(const char *name, int nr_cmd, int nr_arg)
 	default: /* GINFO */
 		nmr.nr_cmd = nmr.nr_arg1 = nmr.nr_arg2 = 0;
 		error = ioctl(fd, NIOCGINFO, &nmr);
-		if (error)
-			D("Unable to get if info for %s", name);
-		else
+		if (error) {
+			ND("Unable to get if info for %s", name);
+			perror(name);
+		} else
 			D("%s: %d queues.", name, nmr.nr_rx_rings);
 		break;
 	}
@@ -116,9 +171,9 @@ main(int argc, char *argv[])
 {
 	int ch, nr_cmd = 0, nr_arg = 0;
 	const char *command = basename(argv[0]);
-	char *name = NULL;
+	char *name = NULL, *nmr_config = NULL;
 
-	if (argc != 3 && argc != 1 /* list all */ ) {
+	if (argc > 3) {
 usage:
 		fprintf(stderr,
 			"Usage:\n"
@@ -127,12 +182,16 @@ usage:
 			"\t-d interface	interface name to be detached\n"
 			"\t-a interface	interface name to be attached\n"
 			"\t-h interface	interface name to be attached with the host stack\n"
-			"\t-l list all or specified bridge's interfaces\n"
+			"\t-n interface	interface name to be created\n"
+			"\t-r interface	interface name to be deleted\n"
+			"\t-l list all or specified bridge's interfaces (default)\n"
+			"\t-C string ring/slot setting of an interface creating by -n\n"
 			"", command);
 		return 0;
 	}
 
-	while ((ch = getopt(argc, argv, "d:a:h:g:l:")) != -1) {
+	while ((ch = getopt(argc, argv, "d:a:h:g:l:n:r:C:")) != -1) {
+		name = optarg; /* default */
 		switch (ch) {
 		default:
 			fprintf(stderr, "bad option %c %s", ch, optarg);
@@ -147,17 +206,30 @@ usage:
 			nr_cmd = NETMAP_BDG_ATTACH;
 			nr_arg = NETMAP_BDG_HOST;
 			break;
+		case 'n':
+			nr_cmd = NETMAP_BDG_NEWIF;
+			break;
+		case 'r':
+			nr_cmd = NETMAP_BDG_DELIF;
+			break;
 		case 'g':
 			nr_cmd = 0;
 			break;
 		case 'l':
 			nr_cmd = NETMAP_BDG_LIST;
+			if (optind < argc && argv[optind][0] == '-')
+				name = NULL;
+			break;
+		case 'C':
+			nmr_config = strdup(optarg);
 			break;
 		}
-		name = optarg;
+		if (optind != argc) {
+			// fprintf(stderr, "optind %d argc %d\n", optind, argc);
+			goto usage;
+		}
 	}
 	if (argc == 1)
 		nr_cmd = NETMAP_BDG_LIST;
-	bdg_ctl(name, nr_cmd, nr_arg);
-	return 0;
+	return bdg_ctl(name, nr_cmd, nr_arg, nmr_config) ? 1 : 0;
 }

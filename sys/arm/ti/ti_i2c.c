@@ -91,7 +91,6 @@ struct ti_i2c_softc
 
 	volatile uint16_t	sc_stat_flags;	/* contains the status flags last IRQ */
 
-	uint16_t		sc_i2c_addr;
 	uint16_t		sc_rev;
 };
 
@@ -294,10 +293,6 @@ ti_i2c_reset(device_t dev, u_char speed, u_char addr, u_char *oldaddr)
 
 	TI_I2C_LOCK(sc);
 
-	if (oldaddr)
-		*oldaddr = sc->sc_i2c_addr;
-	sc->sc_i2c_addr = addr;
-
 	/* First disable the controller while changing the clocks */
 	con_reg = ti_i2c_read_reg(sc, I2C_REG_CON);
 	ti_i2c_write_reg(sc, I2C_REG_CON, 0x0000);
@@ -308,9 +303,6 @@ ti_i2c_reset(device_t dev, u_char speed, u_char addr, u_char *oldaddr)
 	/* Set the bitrate */
 	ti_i2c_write_reg(sc, I2C_REG_SCLL, clkcfg->scll | (clkcfg->hsscll<<8));
 	ti_i2c_write_reg(sc, I2C_REG_SCLH, clkcfg->sclh | (clkcfg->hssclh<<8));
-
-	/* Set the remote slave address */
-	ti_i2c_write_reg(sc, I2C_REG_SA, addr);
 
 	/* Check if we are dealing with high speed mode */
 	if ((clkcfg->hsscll + clkcfg->hssclh) > 0)
@@ -323,7 +315,7 @@ ti_i2c_reset(device_t dev, u_char speed, u_char addr, u_char *oldaddr)
 
 	TI_I2C_UNLOCK(sc);
 
-	return 0;
+	return (IIC_ENOADDR);
 }
 
 /**
@@ -755,7 +747,7 @@ ti_i2c_transfer(device_t dev, struct iic_msg *msgs, uint32_t nmsgs)
 		}
 
 		/* set the slave address */
-		ti_i2c_write_reg(sc, I2C_REG_SA, msgs[i].slave);
+		ti_i2c_write_reg(sc, I2C_REG_SA, msgs[i].slave >> 1);
 
 		/* perform the read or write */
 		if (msgs[i].flags & IIC_M_RD) {
@@ -1020,6 +1012,10 @@ ti_i2c_deactivate(device_t dev)
 static int
 ti_i2c_probe(device_t dev)
 {
+
+	if (!ofw_bus_status_okay(dev))
+		return (ENXIO);
+
 	if (!ofw_bus_is_compatible(dev, "ti,i2c"))
 		return (ENXIO);
 
@@ -1076,19 +1072,19 @@ ti_i2c_attach(device_t dev)
 		goto out;
 	}
 
-	/* XXXOMAP3: FIXME get proper revision here */
-	/* First read the version number of the I2C module */
-	sc->sc_rev = ti_i2c_read_2(sc, I2C_REG_REVNB_HI) & 0xff;
-
-	device_printf(dev, "I2C revision %d.%d\n", sc->sc_rev >> 4,
-	    sc->sc_rev & 0xf);
-
-	/* Activate the H/W */
+	/* First we _must_ activate the H/W */
 	err = ti_i2c_activate(dev);
 	if (err) {
 		device_printf(dev, "ti_i2c_activate failed\n");
 		goto out;
 	}
+
+	/* XXXOMAP3: FIXME get proper revision here */
+	/* Read the version number of the I2C module */
+	sc->sc_rev = ti_i2c_read_2(sc, I2C_REG_REVNB_HI) & 0xff;
+
+	device_printf(dev, "I2C revision %d.%d\n", sc->sc_rev >> 4,
+	    sc->sc_rev & 0xf);
 
 	/* activate the interrupt */
 	err = bus_setup_intr(dev, sc->sc_irq_res, INTR_TYPE_MISC | INTR_MPSAFE,

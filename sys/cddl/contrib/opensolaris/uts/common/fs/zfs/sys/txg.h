@@ -23,7 +23,7 @@
  * Use is subject to license terms.
  */
 /*
- * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2014 by Delphix. All rights reserved.
  */
 
 #ifndef _SYS_TXG_H
@@ -76,6 +76,7 @@ extern void txg_register_callbacks(txg_handle_t *txghp, list_t *tx_callbacks);
 
 extern void txg_delay(struct dsl_pool *dp, uint64_t txg, hrtime_t delta,
     hrtime_t resolution);
+extern void txg_kick(struct dsl_pool *dp);
 
 /*
  * Wait until the given transaction group has finished syncing.
@@ -111,6 +112,7 @@ extern boolean_t txg_sync_waiting(struct dsl_pool *dp);
 extern void txg_list_create(txg_list_t *tl, size_t offset);
 extern void txg_list_destroy(txg_list_t *tl);
 extern boolean_t txg_list_empty(txg_list_t *tl, uint64_t txg);
+extern boolean_t txg_all_lists_empty(txg_list_t *tl);
 extern boolean_t txg_list_add(txg_list_t *tl, void *p, uint64_t txg);
 extern boolean_t txg_list_add_tail(txg_list_t *tl, void *p, uint64_t txg);
 extern void *txg_list_remove(txg_list_t *tl, uint64_t txg);

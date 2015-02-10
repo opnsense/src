@@ -355,7 +355,7 @@ imx51_gpio_intr(void *arg)
 	sc = arg;
 	input = READ4(sc, IMX_GPIO_ISR_REG);
 	value = input & READ4(sc, IMX_GPIO_IMR_REG);
-	WRITE4(sc, IMX_GPIO_DR_REG, input);
+	WRITE4(sc, IMX_GPIO_ISR_REG, input);
 
 	if (!value)
 		goto intr_done;
@@ -369,6 +369,9 @@ intr_done:
 static int
 imx51_gpio_probe(device_t dev)
 {
+
+	if (!ofw_bus_status_okay(dev))
+		return (ENXIO);
 
 	if (ofw_bus_is_compatible(dev, "fsl,imx51-gpio") ||
 	    ofw_bus_is_compatible(dev, "fsl,imx53-gpio")) {

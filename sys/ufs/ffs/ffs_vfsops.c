@@ -255,31 +255,9 @@ ffs_mount(struct mount *mp)
 			 */
 			if ((error = vn_start_write(NULL, &mp, V_WAIT)) != 0)
 				return (error);
-			for (;;) {
-				vn_finished_write(mp);
-				if ((error = vfs_write_suspend(mp, 0)) != 0)
-					return (error);
-				MNT_ILOCK(mp);
-				if (mp->mnt_kern_flag & MNTK_SUSPENDED) {
-					/*
-					 * Allow the secondary writes
-					 * to proceed.
-					 */
-					mp->mnt_kern_flag &= ~(MNTK_SUSPENDED |
-					    MNTK_SUSPEND2);
-					wakeup(&mp->mnt_flag);
-					MNT_IUNLOCK(mp);
-					/*
-					 * Allow the curthread to
-					 * ignore the suspension to
-					 * synchronize on-disk state.
-					 */
-					td->td_pflags |= TDP_IGNSUSP;
-					break;
-				}
-				MNT_IUNLOCK(mp);
-				vn_start_write(NULL, &mp, V_WAIT);
-			}
+			error = vfs_write_suspend_umnt(mp);
+			if (error != 0)
+				return (error);
 			/*
 			 * Check for and optionally get rid of files open
 			 * for writing.
@@ -1235,7 +1213,7 @@ ffs_unmount(mp, mntflags)
 	susp = 0;
 	if (mntflags & MNT_FORCE) {
 		flags |= FORCECLOSE;
-		susp = fs->fs_ronly != 0;
+		susp = fs->fs_ronly == 0;
 	}
 #ifdef UFS_EXTATTR
 	if ((error = ufs_extattr_stop(mp, td))) {
@@ -1250,25 +1228,9 @@ ffs_unmount(mp, mntflags)
 	}
 #endif
 	if (susp) {
-		/*
-		 * dounmount already called vn_start_write().
-		 */
-		for (;;) {
-			vn_finished_write(mp);
-			if ((error = vfs_write_suspend(mp, 0)) != 0)
-				return (error);
-			MNT_ILOCK(mp);
-			if (mp->mnt_kern_flag & MNTK_SUSPENDED) {
-				mp->mnt_kern_flag &= ~(MNTK_SUSPENDED |
-				    MNTK_SUSPEND2);
-				wakeup(&mp->mnt_flag);
-				MNT_IUNLOCK(mp);
-				td->td_pflags |= TDP_IGNSUSP;
-				break;
-			}
-			MNT_IUNLOCK(mp);
-			vn_start_write(NULL, &mp, V_WAIT);
-		}
+		error = vfs_write_suspend_umnt(mp);
+		if (error != 0)
+			goto fail1;
 	}
 	if (MOUNTEDSOFTDEP(mp))
 		error = softdep_flushfiles(mp, flags, td);
@@ -1286,7 +1248,8 @@ ffs_unmount(mp, mntflags)
 		fs->fs_pendinginodes = 0;
 	}
 	UFS_UNLOCK(ump);
-	softdep_unmount(mp);
+	if (MOUNTEDSOFTDEP(mp))
+		softdep_unmount(mp);
 	if (fs->fs_ronly == 0 || ump->um_fsckpid > 0) {
 		fs->fs_clean = fs->fs_flags & (FS_UNCLEAN|FS_NEEDSFSCK) ? 0 : 1;
 		error = ffs_sbupdate(ump, MNT_WAIT, 0);
@@ -1330,6 +1293,7 @@ ffs_unmount(mp, mntflags)
 fail:
 	if (susp)
 		vfs_write_resume(mp, VR_START_WRITE);
+fail1:
 #ifdef UFS_EXTATTR
 	if (e_restart) {
 		ufs_extattr_uepm_init(&ump->um_extattr);
@@ -1676,7 +1640,7 @@ ffs_vgetf(mp, ino, flags, vpp, ffs_flags)
 	/*
 	 * We must promote to an exclusive lock for vnode creation.  This
 	 * can happen if lookup is passed LOCKSHARED.
- 	 */
+	 */
 	if ((flags & LK_TYPE_MASK) == LK_SHARED) {
 		flags &= ~LK_TYPE_MASK;
 		flags |= LK_EXCLUSIVE;
@@ -1943,7 +1907,7 @@ ffs_sbupdate(ump, waitfor, suspended)
 	}
 	fs->fs_fmod = 0;
 	fs->fs_time = time_second;
-	if (fs->fs_flags & FS_DOSOFTDEP)
+	if (MOUNTEDSOFTDEP(ump->um_mountp))
 		softdep_setup_sbupdate(ump, (struct fs *)bp->b_data, bp);
 	bcopy((caddr_t)fs, bp->b_data, (u_int)fs->fs_sbsize);
 	ffs_oldfscompat_write((struct fs *)bp->b_data, ump);
@@ -2220,15 +2184,10 @@ ffs_own_mount(const struct mount *mp)
 }
 
 #ifdef	DDB
+#ifdef SOFTUPDATES
 
-static void
-db_print_ffs(struct ufsmount *ump)
-{
-	db_printf("mp %p %s devvp %p fs %p su_wl %d su_deps %d su_req %d\n",
-	    ump->um_mountp, ump->um_mountp->mnt_stat.f_mntonname,
-	    ump->um_devvp, ump->um_fs, ump->softdep_on_worklist,
-	    ump->softdep_deps, ump->softdep_req);
-}
+/* defined in ffs_softdep.c */
+extern void db_print_ffs(struct ufsmount *ump);
 
 DB_SHOW_COMMAND(ffs, db_show_ffs)
 {
@@ -2247,4 +2206,5 @@ DB_SHOW_COMMAND(ffs, db_show_ffs)
 	}
 }
 
+#endif	/* SOFTUPDATES */
 #endif	/* DDB */

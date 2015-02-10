@@ -95,11 +95,13 @@ void		isp_put_ecmd(struct ispsoftc *, isp_ecmd_t *);
 
 #define	ISP_TARGET_FUNCTIONS	1
 #define	ATPDPSIZE	4096
+#define	ATPDPHASHSIZE	16
+#define	ATPDPHASH(x)	((((x) >> 24) ^ ((x) >> 16) ^ ((x) >> 8) ^ (x)) &  \
+			    ((ATPDPHASHSIZE) - 1))
 
 #include <dev/isp/isp_target.h>
-
-typedef struct {
-	void *		next;
+typedef struct atio_private_data {
+	LIST_ENTRY(atio_private_data)	next;
 	uint32_t	orig_datalen;
 	uint32_t	bytes_xfered;
 	uint32_t	bytes_in_transit;
@@ -173,7 +175,8 @@ typedef struct tstate {
 	inot_private_data_t *	restart_queue;
 	inot_private_data_t *	ntfree;
 	inot_private_data_t	ntpool[ATPDPSIZE];
-	atio_private_data_t *	atfree;
+	LIST_HEAD(, atio_private_data)	atfree;
+	LIST_HEAD(, atio_private_data)	atused[ATPDPHASHSIZE];
 	atio_private_data_t	atpool[ATPDPSIZE];
 } tstate_t;
 
@@ -451,6 +454,39 @@ case SYNC_REG:							\
 	bus_space_barrier(isp->isp_osinfo.bus_tag,		\
 	    isp->isp_osinfo.bus_handle, offset, size,		\
 	    BUS_SPACE_BARRIER_READ | BUS_SPACE_BARRIER_WRITE);	\
+	break;							\
+default:							\
+	break;							\
+}
+
+#define	MEMORYBARRIERW(isp, type, offset, size, chan)		\
+switch (type) {							\
+case SYNC_SFORDEV:						\
+{								\
+	struct isp_fc *fc = ISP_FC_PC(isp, chan);		\
+	bus_dmamap_sync(fc->tdmat, fc->tdmap,			\
+	   BUS_DMASYNC_PREWRITE);				\
+	break;							\
+}								\
+case SYNC_REQUEST:						\
+	bus_dmamap_sync(isp->isp_osinfo.cdmat,			\
+	   isp->isp_osinfo.cdmap, BUS_DMASYNC_PREWRITE);	\
+	break;							\
+case SYNC_SFORCPU:						\
+{								\
+	struct isp_fc *fc = ISP_FC_PC(isp, chan);		\
+	bus_dmamap_sync(fc->tdmat, fc->tdmap,			\
+	   BUS_DMASYNC_POSTWRITE);				\
+	break;							\
+}								\
+case SYNC_RESULT:						\
+	bus_dmamap_sync(isp->isp_osinfo.cdmat, 			\
+	   isp->isp_osinfo.cdmap, BUS_DMASYNC_POSTWRITE);	\
+	break;							\
+case SYNC_REG:							\
+	bus_space_barrier(isp->isp_osinfo.bus_tag,		\
+	    isp->isp_osinfo.bus_handle, offset, size,		\
+	    BUS_SPACE_BARRIER_WRITE);				\
 	break;							\
 default:							\
 	break;							\

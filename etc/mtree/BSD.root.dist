@@ -24,19 +24,21 @@
     etc
         X11
         ..
+        autofs
+        ..
         bluetooth
         ..
         defaults
         ..
         devd
         ..
-        gnats
-        ..
         gss
         ..
         mail
         ..
         mtree
+        ..
+        newsyslog.conf.d
         ..
         ntp             mode=0700
         ..
@@ -55,6 +57,8 @@
         pkg
         ..
         ppp
+        ..
+        rc.conf.d
         ..
         rc.d
         ..

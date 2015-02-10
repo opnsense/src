@@ -768,7 +768,9 @@ nfs_close(struct vop_close_args *ap)
 		/*
 		 * Get attributes so "change" is up to date.
 		 */
-		if (error == 0 && nfscl_mustflush(vp) != 0) {
+		if (error == 0 && nfscl_mustflush(vp) != 0 &&
+		    vp->v_type == VREG &&
+		    (VFSTONFS(vp->v_mount)->nm_flag & NFSMNT_NOCTO) == 0) {
 			ret = nfsrpc_getattr(vp, cred, ap->a_td, &nfsva,
 			    NULL);
 			if (!ret) {
@@ -1975,10 +1977,6 @@ nfs_link(struct vop_link_args *ap)
 	struct nfsvattr nfsva, dnfsva;
 	int error = 0, attrflag, dattrflag;
 
-	if (vp->v_mount != tdvp->v_mount) {
-		return (EXDEV);
-	}
-
 	/*
 	 * Push all writes to the server, so that the attribute cache
 	 * doesn't get "out of sync" with the server.
@@ -3079,6 +3077,10 @@ nfs_advlock(struct vop_advlock_args *ap)
 					np->n_change = va.va_filerev;
 				}
 			}
+			/* Mark that a file lock has been acquired. */
+			mtx_lock(&np->n_mtx);
+			np->n_flag |= NHASBEENLOCKED;
+			mtx_unlock(&np->n_mtx);
 		}
 		NFSVOPUNLOCK(vp, 0);
 		return (0);
@@ -3097,6 +3099,12 @@ nfs_advlock(struct vop_advlock_args *ap)
 				NFSVOPUNLOCK(vp, 0);
 				error = ENOLCK;
 			}
+		}
+		if (error == 0 && ap->a_op == F_SETLK) {
+			/* Mark that a file lock has been acquired. */
+			mtx_lock(&np->n_mtx);
+			np->n_flag |= NHASBEENLOCKED;
+			mtx_unlock(&np->n_mtx);
 		}
 	}
 	return (error);
@@ -3418,12 +3426,15 @@ nfs_pathconf(struct vop_pathconf_args *ap)
 	struct thread *td = curthread;
 	int attrflag, error;
 
-	if (NFS_ISV4(vp) || (NFS_ISV3(vp) && (ap->a_name == _PC_LINK_MAX ||
+	if ((NFS_ISV34(vp) && (ap->a_name == _PC_LINK_MAX ||
 	    ap->a_name == _PC_NAME_MAX || ap->a_name == _PC_CHOWN_RESTRICTED ||
-	    ap->a_name == _PC_NO_TRUNC))) {
+	    ap->a_name == _PC_NO_TRUNC)) ||
+	    (NFS_ISV4(vp) && ap->a_name == _PC_ACL_NFS4)) {
 		/*
 		 * Since only the above 4 a_names are returned by the NFSv3
 		 * Pathconf RPC, there is no point in doing it for others.
+		 * For NFSv4, the Pathconf RPC (actually a Getattr Op.) can
+		 * be used for _PC_NFS4_ACL as well.
 		 */
 		error = nfsrpc_pathconf(vp, &pc, td->td_ucred, td, &nfsva,
 		    &attrflag, NULL);

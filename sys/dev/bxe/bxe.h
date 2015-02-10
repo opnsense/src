@@ -1,9 +1,5 @@
 /*-
- * Copyright (c) 2007-2013 Broadcom Corporation. All rights reserved.
- *
- * Eric Davis        <edavis@broadcom.com>
- * David Christensen <davidch@broadcom.com>
- * Gary Zambrano     <zambrano@broadcom.com>
+ * Copyright (c) 2007-2014 QLogic Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -14,9 +10,6 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. Neither the name of Broadcom Corporation nor the name of its contributors
- *    may be used to endorse or promote products derived from this software
- *    without specific prior written consent.
  *
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS'
  * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
@@ -2308,10 +2301,19 @@ void ecore_storm_memset_struct(struct bxe_softc *sc, uint32_t addr,
         }                                             \
     } while(0)
 
+#ifdef ECORE_STOP_ON_ERROR
+
 #define bxe_panic(sc, msg) \
     do {                   \
         panic msg;         \
     } while (0)
+
+#else
+
+#define bxe_panic(sc, msg) \
+    device_printf((sc)->dev, "%s (%s,%d)\n", __FUNCTION__, __FILE__, __LINE__);
+
+#endif
 
 #define CATC_TRIGGER(sc, data) REG_WR((sc), 0x2000, (data));
 #define CATC_TRIGGER_START(sc) CATC_TRIGGER((sc), 0xcafecafe)

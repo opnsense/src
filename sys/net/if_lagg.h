@@ -174,6 +174,7 @@ struct lagg_lb {
 };
 
 struct lagg_mc {
+	struct sockaddr_dl	mc_addr;
 	struct ifmultiaddr      *mc_ifma;
 	SLIST_ENTRY(lagg_mc)	mc_entries;
 };
@@ -231,6 +232,7 @@ struct lagg_softc {
 	struct sysctl_ctx_list		ctx;		/* sysctl variables */
 	struct sysctl_oid		*sc_oid;	/* sysctl tree oid */
 	int				use_flowid;	/* use M_FLOWID */
+	int				flowid_shift;	/* shift the flowid */
 };
 
 struct lagg_port {

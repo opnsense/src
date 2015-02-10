@@ -95,9 +95,9 @@ static void restartjob(struct job *);
 #endif
 static void freejob(struct job *);
 static int waitcmdloop(struct job *);
-static struct job *getjob_nonotfound(char *);
-static struct job *getjob(char *);
 pid_t getjobpgrp(char *);
+static struct job *getjob_nonotfound(const char *);
+static struct job *getjob(const char *);
 static pid_t dowait(int, struct job *);
 static void checkzombies(void);
 static void cmdtxt(union node *);
@@ -558,7 +558,7 @@ jobidcmd(int argc __unused, char **argv __unused)
  */
 
 static struct job *
-getjob_nonotfound(char *name)
+getjob_nonotfound(const char *name)
 {
 	int jobno;
 	struct job *found, *jp;
@@ -628,7 +628,7 @@ currentjob:	if ((jp = getcurjob(NULL)) == NULL)
 
 
 static struct job *
-getjob(char *name)
+getjob(const char *name)
 {
 	struct job *jp;
 
@@ -978,7 +978,6 @@ int
 waitforjob(struct job *jp, int *origstatus)
 {
 #if JOBS
-	pid_t mypgrp = getpgrp();
 	int propagate_int = jp->jobctl && jp->foreground;
 #endif
 	int status;
@@ -992,7 +991,7 @@ waitforjob(struct job *jp, int *origstatus)
 			dotrap();
 #if JOBS
 	if (jp->jobctl) {
-		if (tcsetpgrp(ttyfd, mypgrp) < 0)
+		if (tcsetpgrp(ttyfd, rootpid) < 0)
 			error("tcsetpgrp failed, errno=%d\n", errno);
 	}
 	if (jp->state == JOBSTOPPED)

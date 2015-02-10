@@ -2074,15 +2074,18 @@ static void pcie_intr_handler(struct adapter *adapter)
 
 	int fat;
 
-	fat = t4_handle_intr_status(adapter,
-				    A_PCIE_CORE_UTL_SYSTEM_BUS_AGENT_STATUS,
-				    sysbus_intr_info) +
-	      t4_handle_intr_status(adapter,
-				    A_PCIE_CORE_UTL_PCI_EXPRESS_PORT_STATUS,
-				    pcie_port_intr_info) +
-	      t4_handle_intr_status(adapter, A_PCIE_INT_CAUSE,
-				    is_t4(adapter) ?
-				    pcie_intr_info : t5_pcie_intr_info);
+	if (is_t4(adapter))
+		fat = t4_handle_intr_status(adapter,
+					    A_PCIE_CORE_UTL_SYSTEM_BUS_AGENT_STATUS,
+					    sysbus_intr_info) +
+		      t4_handle_intr_status(adapter,
+					    A_PCIE_CORE_UTL_PCI_EXPRESS_PORT_STATUS,
+					    pcie_port_intr_info) +
+		      t4_handle_intr_status(adapter, A_PCIE_INT_CAUSE,
+					    pcie_intr_info);
+	else
+		fat = t4_handle_intr_status(adapter, A_PCIE_INT_CAUSE,
+					    t5_pcie_intr_info);
 	if (fat)
 		t4_fatal_err(adapter);
 }
@@ -2463,9 +2466,15 @@ static void ma_intr_handler(struct adapter *adapter)
 {
 	u32 v, status = t4_read_reg(adapter, A_MA_INT_CAUSE);
 
-	if (status & F_MEM_PERR_INT_CAUSE)
+	if (status & F_MEM_PERR_INT_CAUSE) {
 		CH_ALERT(adapter, "MA parity error, parity status %#x\n",
-			 t4_read_reg(adapter, A_MA_PARITY_ERROR_STATUS));
+			 t4_read_reg(adapter, A_MA_PARITY_ERROR_STATUS1));
+		if (is_t5(adapter))
+			CH_ALERT(adapter,
+				 "MA parity error, parity status %#x\n",
+				 t4_read_reg(adapter,
+				 	     A_MA_PARITY_ERROR_STATUS2));
+	}
 	if (status & F_MEM_WRAP_INT_CAUSE) {
 		v = t4_read_reg(adapter, A_MA_INT_WRAP_STATUS);
 		CH_ALERT(adapter, "MA address wrap-around error by client %u to"
@@ -2682,10 +2691,8 @@ void t4_intr_clear(struct adapter *adapter)
 {
 	static const unsigned int cause_reg[] = {
 		A_SGE_INT_CAUSE1, A_SGE_INT_CAUSE2, A_SGE_INT_CAUSE3,
-		A_PCIE_CORE_UTL_SYSTEM_BUS_AGENT_STATUS,
-		A_PCIE_CORE_UTL_PCI_EXPRESS_PORT_STATUS,
 		A_PCIE_NONFAT_ERR, A_PCIE_INT_CAUSE,
-		A_MA_INT_WRAP_STATUS, A_MA_PARITY_ERROR_STATUS, A_MA_INT_CAUSE,
+		A_MA_INT_WRAP_STATUS, A_MA_PARITY_ERROR_STATUS1, A_MA_INT_CAUSE,
 		A_EDC_INT_CAUSE, EDC_REG(A_EDC_INT_CAUSE, 1),
 		A_CIM_HOST_INT_CAUSE, A_CIM_HOST_UPACC_INT_CAUSE,
 		MYPF_REG(A_CIM_PF_HOST_INT_CAUSE),
@@ -2706,6 +2713,14 @@ void t4_intr_clear(struct adapter *adapter)
 
 	t4_write_reg(adapter, is_t4(adapter) ? A_MC_INT_CAUSE :
 				A_MC_P_INT_CAUSE, 0xffffffff);
+
+	if (is_t4(adapter)) {
+		t4_write_reg(adapter, A_PCIE_CORE_UTL_SYSTEM_BUS_AGENT_STATUS,
+				0xffffffff);
+		t4_write_reg(adapter, A_PCIE_CORE_UTL_PCI_EXPRESS_PORT_STATUS,
+				0xffffffff);
+	} else
+		t4_write_reg(adapter, A_MA_PARITY_ERROR_STATUS2, 0xffffffff);
 
 	t4_write_reg(adapter, A_PL_INT_CAUSE, GLBL_INTR_MASK);
 	(void) t4_read_reg(adapter, A_PL_INT_CAUSE);          /* flush */
@@ -4145,36 +4160,6 @@ int t4_fwaddrspace_write(struct adapter *adap, unsigned int mbox, u32 addr, u32 
 }
 
 /**
- *	t4_i2c_rd - read a byte from an i2c addressable device
- *	@adap: the adapter
- *	@mbox: mailbox to use for the FW command
- *	@port_id: the port id
- *	@dev_addr: the i2c device address
- *	@offset: the byte offset to read from
- *	@valp: where to store the value
- */
-int t4_i2c_rd(struct adapter *adap, unsigned int mbox, unsigned int port_id,
-	       u8 dev_addr, u8 offset, u8 *valp)
-{
-	int ret;
-	struct fw_ldst_cmd c;
-
-	memset(&c, 0, sizeof(c));
-	c.op_to_addrspace = htonl(V_FW_CMD_OP(FW_LDST_CMD) | F_FW_CMD_REQUEST |
-		F_FW_CMD_READ |
-		V_FW_LDST_CMD_ADDRSPACE(FW_LDST_ADDRSPC_FUNC_I2C));
-	c.cycles_to_len16 = htonl(FW_LEN16(c));
-	c.u.i2c_deprecated.pid_pkd = V_FW_LDST_CMD_PID(port_id);
-	c.u.i2c_deprecated.base = dev_addr;
-	c.u.i2c_deprecated.boffset = offset;
-
-	ret = t4_wr_mbox(adap, mbox, &c, sizeof(c), &c);
-	if (ret == 0)
-		*valp = c.u.i2c_deprecated.data;
-	return ret;
-}
-
-/**
  *	t4_mdio_rd - read a PHY register through MDIO
  *	@adap: the adapter
  *	@mbox: mailbox to use for the FW command
@@ -4231,6 +4216,87 @@ int t4_mdio_wr(struct adapter *adap, unsigned int mbox, unsigned int phy_addr,
 	c.u.mdio.rval = htons(val);
 
 	return t4_wr_mbox(adap, mbox, &c, sizeof(c), NULL);
+}
+
+/**
+ *	t4_i2c_rd - read I2C data from adapter
+ *	@adap: the adapter
+ *	@port: Port number if per-port device; <0 if not
+ *	@devid: per-port device ID or absolute device ID
+ *	@offset: byte offset into device I2C space
+ *	@len: byte length of I2C space data
+ *	@buf: buffer in which to return I2C data
+ *
+ *	Reads the I2C data from the indicated device and location.
+ */
+int t4_i2c_rd(struct adapter *adap, unsigned int mbox,
+	      int port, unsigned int devid,
+	      unsigned int offset, unsigned int len,
+	      u8 *buf)
+{
+	struct fw_ldst_cmd ldst;
+	int ret;
+
+	if (port >= 4 ||
+	    devid >= 256 ||
+	    offset >= 256 ||
+	    len > sizeof ldst.u.i2c.data)
+		return -EINVAL;
+
+	memset(&ldst, 0, sizeof ldst);
+	ldst.op_to_addrspace =
+		cpu_to_be32(V_FW_CMD_OP(FW_LDST_CMD) |
+			    F_FW_CMD_REQUEST |
+			    F_FW_CMD_READ |
+			    V_FW_LDST_CMD_ADDRSPACE(FW_LDST_ADDRSPC_I2C));
+	ldst.cycles_to_len16 = cpu_to_be32(FW_LEN16(ldst));
+	ldst.u.i2c.pid = (port < 0 ? 0xff : port);
+	ldst.u.i2c.did = devid;
+	ldst.u.i2c.boffset = offset;
+	ldst.u.i2c.blen = len;
+	ret = t4_wr_mbox(adap, mbox, &ldst, sizeof ldst, &ldst);
+	if (!ret)
+		memcpy(buf, ldst.u.i2c.data, len);
+	return ret;
+}
+
+/**
+ *	t4_i2c_wr - write I2C data to adapter
+ *	@adap: the adapter
+ *	@port: Port number if per-port device; <0 if not
+ *	@devid: per-port device ID or absolute device ID
+ *	@offset: byte offset into device I2C space
+ *	@len: byte length of I2C space data
+ *	@buf: buffer containing new I2C data
+ *
+ *	Write the I2C data to the indicated device and location.
+ */
+int t4_i2c_wr(struct adapter *adap, unsigned int mbox,
+	      int port, unsigned int devid,
+	      unsigned int offset, unsigned int len,
+	      u8 *buf)
+{
+	struct fw_ldst_cmd ldst;
+
+	if (port >= 4 ||
+	    devid >= 256 ||
+	    offset >= 256 ||
+	    len > sizeof ldst.u.i2c.data)
+		return -EINVAL;
+
+	memset(&ldst, 0, sizeof ldst);
+	ldst.op_to_addrspace =
+		cpu_to_be32(V_FW_CMD_OP(FW_LDST_CMD) |
+			    F_FW_CMD_REQUEST |
+			    F_FW_CMD_WRITE |
+			    V_FW_LDST_CMD_ADDRSPACE(FW_LDST_ADDRSPC_I2C));
+	ldst.cycles_to_len16 = cpu_to_be32(FW_LEN16(ldst));
+	ldst.u.i2c.pid = (port < 0 ? 0xff : port);
+	ldst.u.i2c.did = devid;
+	ldst.u.i2c.boffset = offset;
+	ldst.u.i2c.blen = len;
+	memcpy(ldst.u.i2c.data, buf, len);
+	return t4_wr_mbox(adap, mbox, &ldst, sizeof ldst, &ldst);
 }
 
 /**
@@ -4823,7 +4889,7 @@ int t4_cfg_pfvf(struct adapter *adap, unsigned int mbox, unsigned int pf,
  */
 int t4_alloc_vi_func(struct adapter *adap, unsigned int mbox,
 		     unsigned int port, unsigned int pf, unsigned int vf,
-		     unsigned int nmac, u8 *mac, unsigned int *rss_size,
+		     unsigned int nmac, u8 *mac, u16 *rss_size,
 		     unsigned int portfunc, unsigned int idstype)
 {
 	int ret;
@@ -4878,7 +4944,7 @@ int t4_alloc_vi_func(struct adapter *adap, unsigned int mbox,
  */
 int t4_alloc_vi(struct adapter *adap, unsigned int mbox, unsigned int port,
 		unsigned int pf, unsigned int vf, unsigned int nmac, u8 *mac,
-		unsigned int *rss_size)
+		u16 *rss_size)
 {
 	return t4_alloc_vi_func(adap, mbox, port, pf, vf, nmac, mac, rss_size,
 				FW_VI_FUNC_ETH, 0);
@@ -5620,7 +5686,7 @@ int __devinit t4_port_init(struct port_info *p, int mbox, int pf, int vf)
 	u8 addr[6];
 	int ret, i, j;
 	struct fw_port_cmd c;
-	unsigned int rss_size;
+	u16 rss_size;
 	adapter_t *adap = p->adapter;
 
 	memset(&c, 0, sizeof(c));
@@ -5647,6 +5713,7 @@ int __devinit t4_port_init(struct port_info *p, int mbox, int pf, int vf)
 
 	p->viid = ret;
 	p->tx_chan = j;
+	p->rx_chan_map = get_mps_bg_map(adap, j);
 	p->lport = j;
 	p->rss_size = rss_size;
 	t4_os_set_hw_addr(adap, p->port_id, addr);
@@ -5660,4 +5727,53 @@ int __devinit t4_port_init(struct port_info *p, int mbox, int pf, int vf)
 	init_link_config(&p->link_cfg, ntohs(c.u.info.pcap));
 
 	return 0;
+}
+
+int t4_sched_config(struct adapter *adapter, int type, int minmaxen,
+    		    int sleep_ok)
+{
+	struct fw_sched_cmd cmd;
+
+	memset(&cmd, 0, sizeof(cmd));
+	cmd.op_to_write = cpu_to_be32(V_FW_CMD_OP(FW_SCHED_CMD) |
+				      F_FW_CMD_REQUEST |
+				      F_FW_CMD_WRITE);
+	cmd.retval_len16 = cpu_to_be32(FW_LEN16(cmd));
+
+	cmd.u.config.sc = FW_SCHED_SC_CONFIG;
+	cmd.u.config.type = type;
+	cmd.u.config.minmaxen = minmaxen;
+
+	return t4_wr_mbox_meat(adapter,adapter->mbox, &cmd, sizeof(cmd),
+			       NULL, sleep_ok);
+}
+
+int t4_sched_params(struct adapter *adapter, int type, int level, int mode,
+		    int rateunit, int ratemode, int channel, int cl,
+		    int minrate, int maxrate, int weight, int pktsize,
+		    int sleep_ok)
+{
+	struct fw_sched_cmd cmd;
+
+	memset(&cmd, 0, sizeof(cmd));
+	cmd.op_to_write = cpu_to_be32(V_FW_CMD_OP(FW_SCHED_CMD) |
+				      F_FW_CMD_REQUEST |
+				      F_FW_CMD_WRITE);
+	cmd.retval_len16 = cpu_to_be32(FW_LEN16(cmd));
+
+	cmd.u.params.sc = FW_SCHED_SC_PARAMS;
+	cmd.u.params.type = type;
+	cmd.u.params.level = level;
+	cmd.u.params.mode = mode;
+	cmd.u.params.ch = channel;
+	cmd.u.params.cl = cl;
+	cmd.u.params.unit = rateunit;
+	cmd.u.params.rate = ratemode;
+	cmd.u.params.min = cpu_to_be32(minrate);
+	cmd.u.params.max = cpu_to_be32(maxrate);
+	cmd.u.params.weight = cpu_to_be16(weight);
+	cmd.u.params.pktsize = cpu_to_be16(pktsize);
+
+	return t4_wr_mbox_meat(adapter,adapter->mbox, &cmd, sizeof(cmd),
+			       NULL, sleep_ok);
 }

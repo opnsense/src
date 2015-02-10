@@ -345,8 +345,8 @@ ENTRY(savectx)
 	movq	%r14,PCB_R14(%rdi)
 	movq	%r15,PCB_R15(%rdi)
 
-	movq	%cr0,%rsi
-	movq	%rsi,PCB_CR0(%rdi)
+	movq	%cr0,%rax
+	movq	%rax,PCB_CR0(%rdi)
 	movq	%cr2,%rax
 	movq	%rax,PCB_CR2(%rdi)
 	movq	%cr3,%rax
@@ -399,17 +399,11 @@ ENTRY(savectx)
 	rdmsr
 	movl	%eax,PCB_SFMASK(%rdi)
 	movl	%edx,PCB_SFMASK+4(%rdi)
-	movl	xsave_mask,%eax
-	movl	%eax,PCB_XSMASK(%rdi)
-	movl	xsave_mask+4,%eax
-	movl	%eax,PCB_XSMASK+4(%rdi)
 
 	sgdt	PCB_GDT(%rdi)
 	sidt	PCB_IDT(%rdi)
 	sldt	PCB_LDT(%rdi)
 	str	PCB_TR(%rdi)
-
-2:	movq	%rsi,%cr0	/* The previous %cr0 is saved in %rsi. */
 
 	movl	$1,%eax
 	ret
@@ -469,12 +463,9 @@ ENTRY(resumectx)
 	movl	PCB_SFMASK(%rdi),%eax
 	wrmsr
 
-	/* Restore CR0 except for FPU mode. */
+	/* Restore CR0, CR2, CR4 and CR3. */
 	movq	PCB_CR0(%rdi),%rax
-	andq	$~(CR0_EM | CR0_TS),%rax
 	movq	%rax,%cr0
-
-	/* Restore CR2, CR4 and CR3. */
 	movq	PCB_CR2(%rdi),%rax
 	movq	%rax,%cr2
 	movq	PCB_CR4(%rdi),%rax
@@ -512,26 +503,6 @@ ENTRY(resumectx)
 	movq	PCB_DR7(%rdi),%rax
 	movq	%rax,%dr7
 
-	/* Restore FPU state. */
-	fninit
-	movq	PCB_FPUSUSPEND(%rdi),%rbx
-	movq	PCB_XSMASK(%rdi),%rax
-	testq	%rax,%rax
-	jz	1f
-	movq	%rax,%rdx
-	shrq	$32,%rdx
-	movl	$XCR0,%ecx
-	xsetbv
-	xrstor	(%rbx)
-	jmp	2f
-1:
-	fxrstor	(%rbx)
-2:
-
-	/* Reload CR0. */
-	movq	PCB_CR0(%rdi),%rax
-	movq	%rax,%cr0
-
 	/* Restore other callee saved registers. */
 	movq	PCB_R15(%rdi),%r15
 	movq	PCB_R14(%rdi),%r14
@@ -548,14 +519,3 @@ ENTRY(resumectx)
 	xorl	%eax,%eax
 	ret
 END(resumectx)
-
-/*
- * Wrapper around fpusave to care about TS0_CR.
- */
-ENTRY(ctx_fpusave)
-	movq	%cr0,%rsi
-	clts
-	call	fpusave
-	movq	%rsi,%cr0
-	ret
-END(ctx_fpusave)

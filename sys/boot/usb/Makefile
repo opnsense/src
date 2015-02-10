@@ -53,7 +53,7 @@ CFLAGS+=	-g
 
 .if ${MACHINE_CPUARCH} == "i386" || ${MACHINE_CPUARCH} == "amd64"
 CFLAGS+=	-march=i386
-CFLAGS+=	-mpreferred-stack-boundary=2
+CFLAGS.gcc+=	-mpreferred-stack-boundary=2
 .endif
 .if ${MACHINE_CPUARCH} == "amd64"
 CFLAGS+=	-m32
@@ -116,6 +116,7 @@ SRCS+=	usb_template_modem.c
 SRCS+=	usb_template_mouse.c
 SRCS+=	usb_template_kbd.c
 SRCS+=	usb_template_audio.c
+SRCS+=	usb_template_phone.c
 SRCS+=	sysinit_data.c
 SRCS+=	sysuninit_data.c
 

@@ -40,8 +40,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/param.h>
 #include <sys/proc.h>
 #include <net/if.h>
-#include <net/ethernet.h>
-#include <net/if_vlan_var.h>
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
@@ -67,8 +65,6 @@ __FBSDID("$FreeBSD$");
 void		 print_op (u_int8_t, const char *, const char *);
 void		 print_port (u_int8_t, u_int16_t, u_int16_t, const char *, int);
 void		 print_ugid (u_int8_t, unsigned, unsigned, const char *, unsigned);
-void		 print_ieee8021q_pcp (u_int8_t, uint8_t, uint8_t);
-void		 print_ieee8021q_setpcp (u_int8_t);
 void		 print_flags (u_int8_t);
 void		 print_fromto(struct pf_rule_addr *, pf_osfp_t,
 		    struct pf_rule_addr *, u_int8_t, u_int8_t, int, int);
@@ -355,47 +351,6 @@ print_ugid(u_int8_t op, unsigned u1, unsigned u2, const char *t, unsigned umax)
 		print_op(op, "unknown", a2);
 	else
 		print_op(op, a1, a2);
-}
-
-static const char *
-ieee8021q_pcp_name(u_int8_t pcp)
-{
-	const char *s;
-
-	if (pcp == IEEE8021Q_PCP_BE)
-		s = "be";
-	else if (pcp == IEEE8021Q_PCP_BK)
-		s = "bk";
-	else if (pcp == IEEE8021Q_PCP_EE)
-		s = "ee";
-	else if (pcp == IEEE8021Q_PCP_CA)
-		s = "ca";
-	else if (pcp == IEEE8021Q_PCP_VI)
-		s = "vi";
-	else if (pcp == IEEE8021Q_PCP_VO)
-		s = "vo";
-	else if (pcp == IEEE8021Q_PCP_IC)
-		s = "ic";
-	else if (pcp == IEEE8021Q_PCP_NC)
-		s = "nc";
-	else
-		s = "??";
-	return (s);
-}
-
- void
-print_ieee8021q_pcp(u_int8_t op, u_int8_t pcp0, u_int8_t pcp1)
-{
-
-	printf(" ieee8021q-pcp");
-	print_op(op, ieee8021q_pcp_name(pcp0), ieee8021q_pcp_name(pcp1));
-}
-
-void
-print_ieee8021q_setpcp(u_int8_t pcp)
-{
-
-	printf(" ieee8021q-setpcp %s", ieee8021q_pcp_name(pcp));
 }
 
 void
@@ -737,9 +692,7 @@ print_rule(struct pf_rule *r, const char *anchor_call, int verbose, int numeric)
 
 	if (verbose)
 		printf("@%d ", r->nr);
-	if (r->action == PF_MATCH)
-		printf("match");
-	else if (r->action > PF_NORDR)
+	if (r->action > PF_NORDR)
 		printf("action(%d)", r->action);
 	else if (anchor_call[0]) {
 		if (anchor_call[0] == '_') {
@@ -894,10 +847,8 @@ print_rule(struct pf_rule *r, const char *anchor_call, int verbose, int numeric)
 				printf(" code %u", r->code-1);
 		}
 	}
-	if (r->tos && (r->rule_flag & PFRULE_TOS))
-                printf(" tos 0x%2.2x", r->tos);
-        if (r->tos && (r->rule_flag & PFRULE_DSCP))
-                printf(" dscp 0x%2.2x", r->tos & DSCP_MASK);
+	if (r->tos)
+		printf(" tos 0x%2.2x", r->tos);
 	if (!r->keep_state && r->action == PF_PASS && !anchor_call[0])
 		printf(" no state");
 	else if (r->keep_state == PF_STATE_NORMAL)
@@ -968,12 +919,6 @@ print_rule(struct pf_rule *r, const char *anchor_call, int verbose, int numeric)
 				printf(", ");
 			printf("max-src-conn %u", r->max_src_conn);
 			opts = 0;
-		}
-		if (r->spare1) {
-                        if (!opts)
-                                printf(", ");
-                        printf("max-packets %u", r->spare1);
-                        opts = 0;
 		}
 		if (r->max_src_conn_rate.limit) {
 			if (!opts)
@@ -1054,14 +999,6 @@ print_rule(struct pf_rule *r, const char *anchor_call, int verbose, int numeric)
 	}
 	if (r->label[0])
 		printf(" label \"%s\"", r->label);
-	if (r->dnpipe && r->pdnpipe)
-	       printf(" %s(%d, %d)", 
-			r->free_flags & PFRULE_DN_IS_PIPE ? "dnpipe" : "dnqueue",
-			r->dnpipe, r->pdnpipe);
-	else if (r->dnpipe)	
-		printf(" %s %d", 
-			r->free_flags & PFRULE_DN_IS_PIPE ? "dnpipe" : "dnqueue",
-			r->dnpipe);
 	if (r->qname[0] && r->pqname[0])
 		printf(" queue(%s, %s)", r->qname, r->pqname);
 	else if (r->qname[0])
@@ -1075,13 +1012,6 @@ print_rule(struct pf_rule *r, const char *anchor_call, int verbose, int numeric)
 	}
 	if (r->rtableid != -1)
 		printf(" rtable %u", r->rtableid);
-	if (r->ieee8021q_pcp.op != 0)
-		print_ieee8021q_pcp(r->ieee8021q_pcp.op,
-			r->ieee8021q_pcp.pcp[0], r->ieee8021q_pcp.pcp[1]);
-	if (r->ieee8021q_pcp.setpcp & SETPCP_VALID)
-		print_ieee8021q_setpcp(r->ieee8021q_pcp.setpcp &
-			SETPCP_PCP_MASK);
-
 	if (r->divert.port) {
 #ifdef __FreeBSD__
 		printf(" divert-to %u", ntohs(r->divert.port));
@@ -1301,6 +1231,26 @@ ifa_load(void)
 	freeifaddrs(ifap);
 }
 
+int
+get_socket_domain(void)
+{
+	int sdom;
+
+	sdom = AF_UNSPEC;
+#ifdef WITH_INET6
+	if (sdom == AF_UNSPEC && feature_present("inet6"))
+		sdom = AF_INET6;
+#endif
+#ifdef WITH_INET
+	if (sdom == AF_UNSPEC && feature_present("inet"))
+		sdom = AF_INET;
+#endif
+	if (sdom == AF_UNSPEC)
+		sdom = AF_LINK;
+
+	return (sdom);
+}
+
 struct node_host *
 ifa_exists(const char *ifa_name)
 {
@@ -1312,7 +1262,7 @@ ifa_exists(const char *ifa_name)
 		ifa_load();
 
 	/* check wether this is a group */
-	if ((s = socket(AF_INET, SOCK_DGRAM, 0)) == -1)
+	if ((s = socket(get_socket_domain(), SOCK_DGRAM, 0)) == -1)
 		err(1, "socket");
 	bzero(&ifgr, sizeof(ifgr));
 	strlcpy(ifgr.ifgr_name, ifa_name, sizeof(ifgr.ifgr_name));
@@ -1343,7 +1293,7 @@ ifa_grouplookup(const char *ifa_name, int flags)
 	int			 s, len;
 	struct node_host	*n, *h = NULL;
 
-	if ((s = socket(AF_INET, SOCK_DGRAM, 0)) == -1)
+	if ((s = socket(get_socket_domain(), SOCK_DGRAM, 0)) == -1)
 		err(1, "socket");
 	bzero(&ifgr, sizeof(ifgr));
 	strlcpy(ifgr.ifgr_name, ifa_name, sizeof(ifgr.ifgr_name));

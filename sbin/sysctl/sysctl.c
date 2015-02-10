@@ -201,7 +201,7 @@ parse(const char *string, int lineno)
 
 	cp = buf;
 	if (snprintf(buf, BUFSIZ, "%s", string) >= BUFSIZ) {
-		warn("oid too long: '%s'%s", string, line);
+		warnx("oid too long: '%s'%s", string, line);
 		return (1);
 	}
 	bufp = strsep(&cp, "=:");
@@ -260,7 +260,7 @@ parse(const char *string, int lineno)
 		}
 	} else {
 		if ((kind & CTLTYPE) == CTLTYPE_NODE) {
-			warn("oid '%s' isn't a leaf node%s", bufp, line);
+			warnx("oid '%s' isn't a leaf node%s", bufp, line);
 			return (1);
 		}
 
@@ -710,9 +710,10 @@ show_var(int *oid, int nlen)
 		warnx("malloc failed");
 		return (1);
 	}
+	ctltype = (kind & CTLTYPE);
 	len = j;
 	i = sysctl(oid, nlen, val, &len, 0, 0);
-	if (i || !len) {
+	if (i != 0 || (len == 0 && ctltype != CTLTYPE_STRING)) {
 		free(oval);
 		return (1);
 	}
@@ -724,7 +725,6 @@ show_var(int *oid, int nlen)
 	}
 	val[len] = '\0';
 	p = val;
-	ctltype = (kind & CTLTYPE);
 	sign = ctl_sign[ctltype];
 	intlen = ctl_size[ctltype];
 

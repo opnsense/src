@@ -94,21 +94,53 @@ dtrace_execexit_func_t	dtrace_fasttrap_exit;
 #endif
 
 SDT_PROVIDER_DECLARE(proc);
-SDT_PROBE_DEFINE1(proc, kernel, , exit, exit, "int");
+SDT_PROBE_DEFINE1(proc, kernel, , exit, "int");
 
 /* Hook for NFS teardown procedure. */
 void (*nlminfo_release_p)(struct proc *p);
 
+struct proc *
+proc_realparent(struct proc *child)
+{
+	struct proc *p, *parent;
+
+	sx_assert(&proctree_lock, SX_LOCKED);
+	if ((child->p_treeflag & P_TREE_ORPHANED) == 0) {
+		if (child->p_oppid == 0 ||
+		    child->p_pptr->p_pid == child->p_oppid)
+			parent = child->p_pptr;
+		else
+			parent = initproc;
+		return (parent);
+	}
+	for (p = child; (p->p_treeflag & P_TREE_FIRST_ORPHAN) == 0;) {
+		/* Cannot use LIST_PREV(), since the list head is not known. */
+		p = __containerof(p->p_orphan.le_prev, struct proc,
+		    p_orphan.le_next);
+		KASSERT((p->p_treeflag & P_TREE_ORPHANED) != 0,
+		    ("missing P_ORPHAN %p", p));
+	}
+	parent = __containerof(p->p_orphan.le_prev, struct proc,
+	    p_orphans.lh_first);
+	return (parent);
+}
+
 static void
 clear_orphan(struct proc *p)
 {
+	struct proc *p1;
 
-	PROC_LOCK_ASSERT(p, MA_OWNED);
-
-	if (p->p_flag & P_ORPHAN) {
-		LIST_REMOVE(p, p_orphan);
-		p->p_flag &= ~P_ORPHAN;
+	sx_assert(&proctree_lock, SA_XLOCKED);
+	if ((p->p_treeflag & P_TREE_ORPHANED) == 0)
+		return;
+	if ((p->p_treeflag & P_TREE_FIRST_ORPHAN) != 0) {
+		p1 = LIST_NEXT(p, p_orphan);
+		if (p1 != NULL)
+			p1->p_treeflag |= P_TREE_FIRST_ORPHAN;
+		p->p_treeflag &= ~P_TREE_FIRST_ORPHAN;
 	}
+	LIST_REMOVE(p, p_orphan);
+	p->p_treeflag &= ~P_TREE_ORPHANED;
 }
 
 /*
@@ -131,9 +163,7 @@ void
 exit1(struct thread *td, int rv)
 {
 	struct proc *p, *nq, *q;
-	struct vnode *vtmp;
 	struct vnode *ttyvp = NULL;
-	struct plimit *plim;
 
 	mtx_assert(&Giant, MA_NOTOWNED);
 
@@ -379,19 +409,16 @@ exit1(struct thread *td, int rv)
 	/*
 	 * Release reference to text vnode
 	 */
-	if ((vtmp = p->p_textvp) != NULL) {
+	if (p->p_textvp != NULL) {
+		vrele(p->p_textvp);
 		p->p_textvp = NULL;
-		vrele(vtmp);
 	}
 
 	/*
 	 * Release our limits structure.
 	 */
-	PROC_LOCK(p);
-	plim = p->p_limit;
+	lim_free(p->p_limit);
 	p->p_limit = NULL;
-	PROC_UNLOCK(p);
-	lim_free(plim);
 
 	tidhash_remove(td);
 
@@ -783,7 +810,9 @@ proc_reap(struct thread *td, struct proc *p, int *status, int options)
 	 * If we got the child via a ptrace 'attach', we need to give it back
 	 * to the old parent.
 	 */
-	if (p->p_oppid && (t = pfind(p->p_oppid)) != NULL) {
+	if (p->p_oppid != 0) {
+		t = proc_realparent(p);
+		PROC_LOCK(t);
 		PROC_LOCK(p);
 		proc_reparent(p, t);
 		p->p_oppid = 0;
@@ -974,16 +1003,19 @@ proc_to_reap(struct thread *td, struct proc *p, idtype_t idtype, id_t id,
 		 *  This is still a rough estimate.  We will fix the
 		 *  cases TRAPPED, STOPPED, and CONTINUED later.
 		 */
-		if (WCOREDUMP(p->p_xstat))
+		if (WCOREDUMP(p->p_xstat)) {
 			siginfo->si_code = CLD_DUMPED;
-		else if (WIFSIGNALED(p->p_xstat))
+			siginfo->si_status = WTERMSIG(p->p_xstat);
+		} else if (WIFSIGNALED(p->p_xstat)) {
 			siginfo->si_code = CLD_KILLED;
-		else
+			siginfo->si_status = WTERMSIG(p->p_xstat);
+		} else {
 			siginfo->si_code = CLD_EXITED;
+			siginfo->si_status = WEXITSTATUS(p->p_xstat);
+		}
 
 		siginfo->si_pid = p->p_pid;
 		siginfo->si_uid = p->p_ucred->cr_uid;
-		siginfo->si_status = p->p_xstat;
 
 		/*
 		 * The si_addr field would be useful additional
@@ -1253,8 +1285,15 @@ proc_reparent(struct proc *child, struct proc *parent)
 
 	clear_orphan(child);
 	if (child->p_flag & P_TRACED) {
-		LIST_INSERT_HEAD(&child->p_pptr->p_orphans, child, p_orphan);
-		child->p_flag |= P_ORPHAN;
+		if (LIST_EMPTY(&child->p_pptr->p_orphans)) {
+			child->p_treeflag |= P_TREE_FIRST_ORPHAN;
+			LIST_INSERT_HEAD(&child->p_pptr->p_orphans, child,
+			    p_orphan);
+		} else {
+			LIST_INSERT_AFTER(LIST_FIRST(&child->p_pptr->p_orphans),
+			    child, p_orphan);
+		}
+		child->p_treeflag |= P_TREE_ORPHANED;
 	}
 
 	child->p_pptr = parent;

@@ -114,11 +114,19 @@ int
 ip_ipsec_fwd(struct mbuf *m)
 {
 #ifdef IPSEC
+	struct m_tag *mtag;
+	struct tdb_ident *tdbi;
 	struct secpolicy *sp;
 	int error;
 
-	sp = ipsec_getpolicybyaddr(m, IPSEC_DIR_INBOUND,
-				   IP_FORWARDING, &error);   
+	mtag = m_tag_find(m, PACKET_TAG_IPSEC_IN_DONE, NULL);
+	if (mtag != NULL) {
+		tdbi = (struct tdb_ident *)(mtag + 1);
+		sp = ipsec_getpolicy(tdbi, IPSEC_DIR_INBOUND);
+	} else {
+		sp = ipsec_getpolicybyaddr(m, IPSEC_DIR_INBOUND,
+					   IP_FORWARDING, &error);   
+	}
 	if (sp == NULL) {	/* NB: can happen if error */
 		/*XXX error stat???*/
 		DPRINTF(("ip_input: no SP for forwarding\n"));	/*XXX*/
@@ -150,6 +158,8 @@ ip_ipsec_input(struct mbuf *m)
 {
 #ifdef IPSEC
 	struct ip *ip = mtod(m, struct ip *);
+	struct m_tag *mtag;
+	struct tdb_ident *tdbi;
 	struct secpolicy *sp;
 	int error;
 	/*
@@ -164,8 +174,14 @@ ip_ipsec_input(struct mbuf *m)
 		 * set during AH, ESP, etc. input handling, before the
 		 * packet is returned to the ip input queue for delivery.
 		 */ 
-		sp = ipsec_getpolicybyaddr(m, IPSEC_DIR_INBOUND,
-					   IP_FORWARDING, &error);   
+		mtag = m_tag_find(m, PACKET_TAG_IPSEC_IN_DONE, NULL);
+		if (mtag != NULL) {
+			tdbi = (struct tdb_ident *)(mtag + 1);
+			sp = ipsec_getpolicy(tdbi, IPSEC_DIR_INBOUND);
+		} else {
+			sp = ipsec_getpolicybyaddr(m, IPSEC_DIR_INBOUND,
+						   IP_FORWARDING, &error);   
+		}
 		if (sp != NULL) {
 			/*
 			 * Check security policy against packet attributes.
@@ -220,9 +236,7 @@ ip_ipsec_mtu(struct mbuf *m, int mtu)
 		    sp->req->sav->sah != NULL) {
 			ro = &sp->req->sav->sah->route_cache.sa_route;
 			if (ro->ro_rt && ro->ro_rt->rt_ifp) {
-				mtu =
-				    ro->ro_rt->rt_rmx.rmx_mtu ?
-				    ro->ro_rt->rt_rmx.rmx_mtu :
+				mtu = ro->ro_rt->rt_mtu ? ro->ro_rt->rt_mtu :
 				    ro->ro_rt->rt_ifp->if_mtu;
 				mtu -= ipsechdr;
 			}

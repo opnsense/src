@@ -319,9 +319,10 @@ int dtls1_do_write(SSL *s, int type)
 				s->init_off -= DTLS1_HM_HEADER_LENGTH;
 				s->init_num += DTLS1_HM_HEADER_LENGTH;
 
-				/* write atleast DTLS1_HM_HEADER_LENGTH bytes */
-				if ( len <= DTLS1_HM_HEADER_LENGTH)  
-					len += DTLS1_HM_HEADER_LENGTH;
+				if ( s->init_num > curr_mtu)
+					len = curr_mtu;
+				else
+					len = s->init_num;
 				}
 
 			dtls1_fix_message_header(s, frag_off, 
@@ -684,8 +685,8 @@ dtls1_reassemble_fragment(SSL *s, const struct hm_header_st* msg_hdr, int *ok)
 		item = pitem_new(seq64be, frag);
 		if (item == NULL)
 			{
-			goto err;
 			i = -1;
+			goto err;
 			}
 
 		item = pqueue_insert(s->d1->buffered_messages, item);
@@ -1193,6 +1194,8 @@ dtls1_buffer_message(SSL *s, int is_ccs)
 	OPENSSL_assert(s->init_off == 0);
 
 	frag = dtls1_hm_fragment_new(s->init_num, 0);
+	if (!frag)
+		return 0;
 
 	memcpy(frag->fragment, s->init_buf->data, s->init_num);
 
@@ -1489,6 +1492,9 @@ dtls1_process_heartbeat(SSL *s)
 	/* Read type and payload length first */
 	if (1 + 2 + 16 > s->s3->rrec.length)
 		return 0; /* silently discard */
+	if (s->s3->rrec.length > SSL3_RT_MAX_PLAIN_LENGTH)
+		return 0; /* silently discard per RFC 6520 sec. 4 */
+
 	hbtype = *p++;
 	n2s(p, payload);
 	if (1 + 2 + payload + 16 > s->s3->rrec.length)

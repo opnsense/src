@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2013 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
  */
 
 #include <sys/dsl_scan.h>
@@ -50,11 +50,10 @@
 #include <sys/zfs_vfsops.h>
 #endif
 
-typedef int (scan_cb_t)(dsl_pool_t *, const blkptr_t *, const zbookmark_t *);
+typedef int (scan_cb_t)(dsl_pool_t *, const blkptr_t *,
+    const zbookmark_phys_t *);
 
-static scan_cb_t dsl_scan_defrag_cb;
 static scan_cb_t dsl_scan_scrub_cb;
-static scan_cb_t dsl_scan_remove_cb;
 static void dsl_scan_cancel_sync(void *, dmu_tx_t *);
 static void dsl_scan_sync_state(dsl_scan_t *, dmu_tx_t *tx);
 
@@ -68,7 +67,7 @@ unsigned int zfs_free_min_time_ms = 1000; /* min millisecs to free per txg */
 unsigned int zfs_resilver_min_time_ms = 3000; /* min millisecs to resilver
 						 per txg */
 boolean_t zfs_no_scrub_io = B_FALSE; /* set to disable scrub i/o */
-boolean_t zfs_no_scrub_prefetch = B_FALSE; /* set to disable srub prefetching */
+boolean_t zfs_no_scrub_prefetch = B_FALSE; /* set to disable scrub prefetch */
 
 SYSCTL_DECL(_vfs_zfs);
 TUNABLE_INT("vfs.zfs.top_maxinflight", &zfs_top_maxinflight);
@@ -132,7 +131,7 @@ dsl_scan_init(dsl_pool_t *dp, uint64_t txg)
 	 */
 	ASSERT(!scn->scn_async_destroying);
 	scn->scn_async_destroying = spa_feature_is_active(dp->dp_spa,
-	    &spa_feature_table[SPA_FEATURE_ASYNC_DESTROY]);
+	    SPA_FEATURE_ASYNC_DESTROY);
 
 	err = zap_lookup(dp->dp_meta_objset, DMU_POOL_DIRECTORY_OBJECT,
 	    "scrub_func", sizeof (uint64_t), 1, &f);
@@ -377,11 +376,11 @@ int
 dsl_scan_cancel(dsl_pool_t *dp)
 {
 	return (dsl_sync_task(spa_name(dp->dp_spa), dsl_scan_cancel_check,
-	    dsl_scan_cancel_sync, NULL, 3));
+	    dsl_scan_cancel_sync, NULL, 3, ZFS_SPACE_CHECK_RESERVED));
 }
 
 static void dsl_scan_visitbp(blkptr_t *bp,
-    const zbookmark_t *zb, dnode_phys_t *dnp, arc_buf_t *pbuf,
+    const zbookmark_phys_t *zb, dnode_phys_t *dnp, arc_buf_t *pbuf,
     dsl_dataset_t *ds, dsl_scan_t *scn, dmu_objset_type_t ostype,
     dmu_tx_t *tx);
 static void dsl_scan_visitdnode(dsl_scan_t *, dsl_dataset_t *ds,
@@ -421,7 +420,7 @@ dsl_scan_sync_state(dsl_scan_t *scn, dmu_tx_t *tx)
 }
 
 static boolean_t
-dsl_scan_check_pause(dsl_scan_t *scn, const zbookmark_t *zb)
+dsl_scan_check_pause(dsl_scan_t *scn, const zbookmark_phys_t *zb)
 {
 	uint64_t elapsed_nanosecs;
 	unsigned int mintime;
@@ -479,9 +478,9 @@ dsl_scan_zil_block(zilog_t *zilog, blkptr_t *bp, void *arg, uint64_t claim_txg)
 	dsl_pool_t *dp = zsa->zsa_dp;
 	dsl_scan_t *scn = dp->dp_scan;
 	zil_header_t *zh = zsa->zsa_zh;
-	zbookmark_t zb;
+	zbookmark_phys_t zb;
 
-	if (bp->blk_birth <= scn->scn_phys.scn_cur_min_txg)
+	if (BP_IS_HOLE(bp) || bp->blk_birth <= scn->scn_phys.scn_cur_min_txg)
 		return (0);
 
 	/*
@@ -511,9 +510,10 @@ dsl_scan_zil_record(zilog_t *zilog, lr_t *lrc, void *arg, uint64_t claim_txg)
 		zil_header_t *zh = zsa->zsa_zh;
 		lr_write_t *lr = (lr_write_t *)lrc;
 		blkptr_t *bp = &lr->lr_blkptr;
-		zbookmark_t zb;
+		zbookmark_phys_t zb;
 
-		if (bp->blk_birth <= scn->scn_phys.scn_cur_min_txg)
+		if (BP_IS_HOLE(bp) ||
+		    bp->blk_birth <= scn->scn_phys.scn_cur_min_txg)
 			return (0);
 
 		/*
@@ -560,7 +560,7 @@ static void
 dsl_scan_prefetch(dsl_scan_t *scn, arc_buf_t *buf, blkptr_t *bp,
     uint64_t objset, uint64_t object, uint64_t blkid)
 {
-	zbookmark_t czb;
+	zbookmark_phys_t czb;
 	uint32_t flags = ARC_NOWAIT | ARC_PREFETCH;
 
 	if (zfs_no_scrub_prefetch)
@@ -579,7 +579,7 @@ dsl_scan_prefetch(dsl_scan_t *scn, arc_buf_t *buf, blkptr_t *bp,
 
 static boolean_t
 dsl_scan_check_resume(dsl_scan_t *scn, const dnode_phys_t *dnp,
-    const zbookmark_t *zb)
+    const zbookmark_phys_t *zb)
 {
 	/*
 	 * We never skip over user/group accounting objects (obj<0)
@@ -619,7 +619,7 @@ dsl_scan_check_resume(dsl_scan_t *scn, const dnode_phys_t *dnp,
 static int
 dsl_scan_recurse(dsl_scan_t *scn, dsl_dataset_t *ds, dmu_objset_type_t ostype,
     dnode_phys_t *dnp, const blkptr_t *bp,
-    const zbookmark_t *zb, dmu_tx_t *tx, arc_buf_t **bufp)
+    const zbookmark_phys_t *zb, dmu_tx_t *tx, arc_buf_t **bufp)
 {
 	dsl_pool_t *dp = scn->scn_dp;
 	int zio_flags = ZIO_FLAG_CANFAIL | ZIO_FLAG_SCAN_THREAD;
@@ -642,7 +642,7 @@ dsl_scan_recurse(dsl_scan_t *scn, dsl_dataset_t *ds, dmu_objset_type_t ostype,
 			    zb->zb_object, zb->zb_blkid * epb + i);
 		}
 		for (i = 0, cbp = (*bufp)->b_data; i < epb; i++, cbp++) {
-			zbookmark_t czb;
+			zbookmark_phys_t czb;
 
 			SET_BOOKMARK(&czb, zb->zb_objset, zb->zb_object,
 			    zb->zb_level - 1,
@@ -726,7 +726,7 @@ dsl_scan_visitdnode(dsl_scan_t *scn, dsl_dataset_t *ds,
 	int j;
 
 	for (j = 0; j < dnp->dn_nblkptr; j++) {
-		zbookmark_t czb;
+		zbookmark_phys_t czb;
 
 		SET_BOOKMARK(&czb, ds ? ds->ds_object : 0, object,
 		    dnp->dn_nlevels - 1, j);
@@ -735,7 +735,7 @@ dsl_scan_visitdnode(dsl_scan_t *scn, dsl_dataset_t *ds,
 	}
 
 	if (dnp->dn_flags & DNODE_FLAG_SPILL_BLKPTR) {
-		zbookmark_t czb;
+		zbookmark_phys_t czb;
 		SET_BOOKMARK(&czb, ds ? ds->ds_object : 0, object,
 		    0, DMU_SPILL_BLKID);
 		dsl_scan_visitbp(&dnp->dn_spill,
@@ -748,7 +748,7 @@ dsl_scan_visitdnode(dsl_scan_t *scn, dsl_dataset_t *ds,
  * first 5; we want them to be useful.
  */
 static void
-dsl_scan_visitbp(blkptr_t *bp, const zbookmark_t *zb,
+dsl_scan_visitbp(blkptr_t *bp, const zbookmark_phys_t *zb,
     dnode_phys_t *dnp, arc_buf_t *pbuf,
     dsl_dataset_t *ds, dsl_scan_t *scn, dmu_objset_type_t ostype,
     dmu_tx_t *tx)
@@ -765,7 +765,7 @@ dsl_scan_visitbp(blkptr_t *bp, const zbookmark_t *zb,
 	if (dsl_scan_check_resume(scn, dnp, zb))
 		return;
 
-	if (bp->blk_birth == 0)
+	if (BP_IS_HOLE(bp))
 		return;
 
 	scn->scn_visited_this_txg++;
@@ -812,7 +812,7 @@ static void
 dsl_scan_visit_rootbp(dsl_scan_t *scn, dsl_dataset_t *ds, blkptr_t *bp,
     dmu_tx_t *tx)
 {
-	zbookmark_t zb;
+	zbookmark_phys_t zb;
 
 	SET_BOOKMARK(&zb, ds ? ds->ds_object : DMU_META_OBJSET,
 	    ZB_ROOT_OBJECT, ZB_ROOT_LEVEL, ZB_ROOT_BLKID);
@@ -1239,7 +1239,7 @@ dsl_scan_ddt_entry(dsl_scan_t *scn, enum zio_checksum checksum,
 	const ddt_key_t *ddk = &dde->dde_key;
 	ddt_phys_t *ddp = dde->dde_phys;
 	blkptr_t bp;
-	zbookmark_t zb = { 0 };
+	zbookmark_phys_t zb = { 0 };
 
 	if (scn->scn_phys.scn_state != DSS_SCANNING)
 		return;
@@ -1307,7 +1307,7 @@ dsl_scan_visit(dsl_scan_t *scn, dmu_tx_t *tx)
 	 * In case we were paused right at the end of the ds, zero the
 	 * bookmark so we don't think that we're still trying to resume.
 	 */
-	bzero(&scn->scn_phys.scn_bookmark, sizeof (zbookmark_t));
+	bzero(&scn->scn_phys.scn_bookmark, sizeof (zbookmark_phys_t));
 
 	/* keep pulling things out of the zap-object-as-queue */
 	while (zap_cursor_init(&zc, dp->dp_meta_objset,
@@ -1347,6 +1347,9 @@ dsl_scan_free_should_pause(dsl_scan_t *scn)
 {
 	uint64_t elapsed_nanosecs;
 
+	if (zfs_recover)
+		return (B_FALSE);
+
 	elapsed_nanosecs = gethrtime() - scn->scn_sync_start_time;
 	return (elapsed_nanosecs / NANOSEC > zfs_txg_timeout ||
 	    (NSEC2MSEC(elapsed_nanosecs) > zfs_free_min_time_ms &&
@@ -1384,9 +1387,8 @@ dsl_scan_active(dsl_scan_t *scn)
 		return (B_FALSE);
 	if (spa_shutting_down(spa))
 		return (B_FALSE);
-
 	if (scn->scn_phys.scn_state == DSS_SCANNING ||
-	    scn->scn_async_destroying)
+	    (scn->scn_async_destroying && !scn->scn_async_stalled))
 		return (B_TRUE);
 
 	if (spa_version(scn->scn_dp->dp_spa) >= SPA_VERSION_DEADLISTS) {
@@ -1401,7 +1403,7 @@ dsl_scan_sync(dsl_pool_t *dp, dmu_tx_t *tx)
 {
 	dsl_scan_t *scn = dp->dp_scan;
 	spa_t *spa = dp->dp_spa;
-	int err;
+	int err = 0;
 
 	/*
 	 * Check for scn_restart_txg before checking spa_load_state, so
@@ -1419,7 +1421,10 @@ dsl_scan_sync(dsl_pool_t *dp, dmu_tx_t *tx)
 		dsl_scan_setup_sync(&func, tx);
 	}
 
-	if (!dsl_scan_active(scn) ||
+	/*
+	 * If the scan is inactive due to a stalled async destroy, try again.
+	 */
+	if ((!scn->scn_async_stalled && !dsl_scan_active(scn)) ||
 	    spa_sync_pass(dp->dp_spa) > 1)
 		return;
 
@@ -1429,10 +1434,11 @@ dsl_scan_sync(dsl_pool_t *dp, dmu_tx_t *tx)
 	spa->spa_scrub_active = B_TRUE;
 
 	/*
-	 * First process the free list.  If we pause the free, don't do
-	 * any scanning.  This ensures that there is no free list when
-	 * we are scanning, so the scan code doesn't have to worry about
-	 * traversing it.
+	 * First process the async destroys.  If we pause, don't do
+	 * any scrubbing or resilvering.  This ensures that there are no
+	 * async destroys while we are scanning, so the scan code doesn't
+	 * have to worry about traversing it.  It is also faster to free the
+	 * blocks than to scrub them.
 	 */
 	if (spa_version(dp->dp_spa) >= SPA_VERSION_DEADLISTS) {
 		scn->scn_is_bptree = B_FALSE;
@@ -1442,48 +1448,97 @@ dsl_scan_sync(dsl_pool_t *dp, dmu_tx_t *tx)
 		    dsl_scan_free_block_cb, scn, tx);
 		VERIFY3U(0, ==, zio_wait(scn->scn_zio_root));
 
-		if (err == 0 && spa_feature_is_active(spa,
-		    &spa_feature_table[SPA_FEATURE_ASYNC_DESTROY])) {
-			ASSERT(scn->scn_async_destroying);
-			scn->scn_is_bptree = B_TRUE;
-			scn->scn_zio_root = zio_root(dp->dp_spa, NULL,
-			    NULL, ZIO_FLAG_MUSTSUCCEED);
-			err = bptree_iterate(dp->dp_meta_objset,
-			    dp->dp_bptree_obj, B_TRUE, dsl_scan_free_block_cb,
-			    scn, tx);
-			VERIFY0(zio_wait(scn->scn_zio_root));
+		if (err != 0 && err != ERESTART)
+			zfs_panic_recover("error %u from bpobj_iterate()", err);
+	}
 
-			if (err == 0) {
-				zfeature_info_t *feat = &spa_feature_table
-				    [SPA_FEATURE_ASYNC_DESTROY];
-				/* finished; deactivate async destroy feature */
-				spa_feature_decr(spa, feat, tx);
-				ASSERT(!spa_feature_is_active(spa, feat));
-				VERIFY0(zap_remove(dp->dp_meta_objset,
-				    DMU_POOL_DIRECTORY_OBJECT,
-				    DMU_POOL_BPTREE_OBJ, tx));
-				VERIFY0(bptree_free(dp->dp_meta_objset,
-				    dp->dp_bptree_obj, tx));
-				dp->dp_bptree_obj = 0;
-				scn->scn_async_destroying = B_FALSE;
-			}
+	if (err == 0 && spa_feature_is_active(spa, SPA_FEATURE_ASYNC_DESTROY)) {
+		ASSERT(scn->scn_async_destroying);
+		scn->scn_is_bptree = B_TRUE;
+		scn->scn_zio_root = zio_root(dp->dp_spa, NULL,
+		    NULL, ZIO_FLAG_MUSTSUCCEED);
+		err = bptree_iterate(dp->dp_meta_objset,
+		    dp->dp_bptree_obj, B_TRUE, dsl_scan_free_block_cb, scn, tx);
+		VERIFY0(zio_wait(scn->scn_zio_root));
+
+		if (err == EIO || err == ECKSUM) {
+			err = 0;
+		} else if (err != 0 && err != ERESTART) {
+			zfs_panic_recover("error %u from "
+			    "traverse_dataset_destroyed()", err);
 		}
-		if (scn->scn_visited_this_txg) {
-			zfs_dbgmsg("freed %llu blocks in %llums from "
-			    "free_bpobj/bptree txg %llu",
-			    (longlong_t)scn->scn_visited_this_txg,
-			    (longlong_t)
-			    NSEC2MSEC(gethrtime() - scn->scn_sync_start_time),
-			    (longlong_t)tx->tx_txg);
-			scn->scn_visited_this_txg = 0;
+
+		if (bptree_is_empty(dp->dp_meta_objset, dp->dp_bptree_obj)) {
+			/* finished; deactivate async destroy feature */
+			spa_feature_decr(spa, SPA_FEATURE_ASYNC_DESTROY, tx);
+			ASSERT(!spa_feature_is_active(spa,
+			    SPA_FEATURE_ASYNC_DESTROY));
+			VERIFY0(zap_remove(dp->dp_meta_objset,
+			    DMU_POOL_DIRECTORY_OBJECT,
+			    DMU_POOL_BPTREE_OBJ, tx));
+			VERIFY0(bptree_free(dp->dp_meta_objset,
+			    dp->dp_bptree_obj, tx));
+			dp->dp_bptree_obj = 0;
+			scn->scn_async_destroying = B_FALSE;
+		} else {
 			/*
-			 * Re-sync the ddt so that we can further modify
-			 * it when doing bprewrite.
+			 * If we didn't make progress, mark the async destroy as
+			 * stalled, so that we will not initiate a spa_sync() on
+			 * its behalf.
 			 */
-			ddt_sync(spa, tx->tx_txg);
+			scn->scn_async_stalled =
+			    (scn->scn_visited_this_txg == 0);
 		}
-		if (err == ERESTART)
-			return;
+	}
+	if (scn->scn_visited_this_txg) {
+		zfs_dbgmsg("freed %llu blocks in %llums from "
+		    "free_bpobj/bptree txg %llu; err=%u",
+		    (longlong_t)scn->scn_visited_this_txg,
+		    (longlong_t)
+		    NSEC2MSEC(gethrtime() - scn->scn_sync_start_time),
+		    (longlong_t)tx->tx_txg, err);
+		scn->scn_visited_this_txg = 0;
+
+		/*
+		 * Write out changes to the DDT that may be required as a
+		 * result of the blocks freed.  This ensures that the DDT
+		 * is clean when a scrub/resilver runs.
+		 */
+		ddt_sync(spa, tx->tx_txg);
+	}
+	if (err != 0)
+		return;
+	if (!scn->scn_async_destroying && zfs_free_leak_on_eio &&
+	    (dp->dp_free_dir->dd_phys->dd_used_bytes != 0 ||
+	    dp->dp_free_dir->dd_phys->dd_compressed_bytes != 0 ||
+	    dp->dp_free_dir->dd_phys->dd_uncompressed_bytes != 0)) {
+		/*
+		 * We have finished background destroying, but there is still
+		 * some space left in the dp_free_dir. Transfer this leaked
+		 * space to the dp_leak_dir.
+		 */
+		if (dp->dp_leak_dir == NULL) {
+			rrw_enter(&dp->dp_config_rwlock, RW_WRITER, FTAG);
+			(void) dsl_dir_create_sync(dp, dp->dp_root_dir,
+			    LEAK_DIR_NAME, tx);
+			VERIFY0(dsl_pool_open_special_dir(dp,
+			    LEAK_DIR_NAME, &dp->dp_leak_dir));
+			rrw_exit(&dp->dp_config_rwlock, FTAG);
+		}
+		dsl_dir_diduse_space(dp->dp_leak_dir, DD_USED_HEAD,
+		    dp->dp_free_dir->dd_phys->dd_used_bytes,
+		    dp->dp_free_dir->dd_phys->dd_compressed_bytes,
+		    dp->dp_free_dir->dd_phys->dd_uncompressed_bytes, tx);
+		dsl_dir_diduse_space(dp->dp_free_dir, DD_USED_HEAD,
+		    -dp->dp_free_dir->dd_phys->dd_used_bytes,
+		    -dp->dp_free_dir->dd_phys->dd_compressed_bytes,
+		    -dp->dp_free_dir->dd_phys->dd_uncompressed_bytes, tx);
+	}
+	if (!scn->scn_async_destroying) {
+		/* finished; verify that space accounting went to zero */
+		ASSERT0(dp->dp_free_dir->dd_phys->dd_used_bytes);
+		ASSERT0(dp->dp_free_dir->dd_phys->dd_compressed_bytes);
+		ASSERT0(dp->dp_free_dir->dd_phys->dd_uncompressed_bytes);
 	}
 
 	if (scn->scn_phys.scn_state != DSS_SCANNING)
@@ -1650,7 +1705,7 @@ dsl_scan_scrub_done(zio_t *zio)
 
 static int
 dsl_scan_scrub_cb(dsl_pool_t *dp,
-    const blkptr_t *bp, const zbookmark_t *zb)
+    const blkptr_t *bp, const zbookmark_phys_t *zb)
 {
 	dsl_scan_t *scn = dp->dp_scan;
 	size_t size = BP_GET_PSIZE(bp);
@@ -1658,7 +1713,6 @@ dsl_scan_scrub_cb(dsl_pool_t *dp,
 	uint64_t phys_birth = BP_PHYSICAL_BIRTH(bp);
 	boolean_t needs_io;
 	int zio_flags = ZIO_FLAG_SCAN_THREAD | ZIO_FLAG_RAW | ZIO_FLAG_CANFAIL;
-	int zio_priority;
 	unsigned int scan_delay = 0;
 
 	if (phys_birth <= scn->scn_phys.scn_min_txg ||
@@ -1667,16 +1721,17 @@ dsl_scan_scrub_cb(dsl_pool_t *dp,
 
 	count_block(dp->dp_blkstats, bp);
 
+	if (BP_IS_EMBEDDED(bp))
+		return (0);
+
 	ASSERT(DSL_SCAN_IS_SCRUB_RESILVER(scn));
 	if (scn->scn_phys.scn_func == POOL_SCAN_SCRUB) {
 		zio_flags |= ZIO_FLAG_SCRUB;
-		zio_priority = ZIO_PRIORITY_SCRUB;
 		needs_io = B_TRUE;
 		scan_delay = zfs_scrub_delay;
 	} else {
 		ASSERT3U(scn->scn_phys.scn_func, ==, POOL_SCAN_RESILVER);
 		zio_flags |= ZIO_FLAG_RESILVER;
-		zio_priority = ZIO_PRIORITY_RESILVER;
 		needs_io = B_FALSE;
 		scan_delay = zfs_resilver_delay;
 	}
@@ -1735,7 +1790,7 @@ dsl_scan_scrub_cb(dsl_pool_t *dp,
 			delay(MAX((int)scan_delay, 0));
 
 		zio_nowait(zio_read(NULL, spa, bp, data, size,
-		    dsl_scan_scrub_done, NULL, zio_priority,
+		    dsl_scan_scrub_done, NULL, ZIO_PRIORITY_SCRUB,
 		    zio_flags, zb));
 	}
 
@@ -1762,5 +1817,5 @@ dsl_scan(dsl_pool_t *dp, pool_scan_func_t func)
 	(void) spa_vdev_state_exit(spa, NULL, 0);
 
 	return (dsl_sync_task(spa_name(spa), dsl_scan_setup_check,
-	    dsl_scan_setup_sync, &func, 0));
+	    dsl_scan_setup_sync, &func, 0, ZFS_SPACE_CHECK_NONE));
 }

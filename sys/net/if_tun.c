@@ -52,7 +52,6 @@
 #include <net/vnet.h>
 #ifdef INET
 #include <netinet/in.h>
-#include <netinet/ip.h>
 #endif
 #include <net/bpf.h>
 #include <net/if_tun.h>
@@ -111,7 +110,6 @@ static const char tunname[] = "tun";
 static MALLOC_DEFINE(M_TUN, tunname, "Tunnel Interface");
 static int tundebug = 0;
 static int tundclone = 1;
-static int tundispatch = 1;
 static struct clonedevs *tunclones;
 static TAILQ_HEAD(,tun_softc)	tunhead = TAILQ_HEAD_INITIALIZER(tunhead);
 SYSCTL_INT(_debug, OID_AUTO, if_tun_debug, CTLFLAG_RW, &tundebug, 0, "");
@@ -121,8 +119,6 @@ static SYSCTL_NODE(_net_link, OID_AUTO, tun, CTLFLAG_RW, 0,
     "IP tunnel software network interface.");
 SYSCTL_INT(_net_link_tun, OID_AUTO, devfs_cloning, CTLFLAG_RW, &tundclone, 0,
     "Enable legacy devfs interface creation.");
-SYSCTL_INT(_net_link_tun, OID_AUTO, tun_dispatching, CTLFLAG_RW, &tundispatch, 0,
-    "Queue rather than direct dispatch on write.");
 
 TUNABLE_INT("net.link.tun.devfs_cloning", &tundclone);
 
@@ -332,28 +328,31 @@ static void
 tunstart(struct ifnet *ifp)
 {
 	struct tun_softc *tp = ifp->if_softc;
+	struct mbuf *m;
 
 	TUNDEBUG(ifp,"%s starting\n", ifp->if_xname);
-	if (IFQ_IS_EMPTY(&ifp->if_snd))
-		return;
+	if (ALTQ_IS_ENABLED(&ifp->if_snd)) {
+		IFQ_LOCK(&ifp->if_snd);
+		IFQ_POLL_NOLOCK(&ifp->if_snd, m);
+		if (m == NULL) {
+			IFQ_UNLOCK(&ifp->if_snd);
+			return;
+		}
+		IFQ_UNLOCK(&ifp->if_snd);
+	}
 
-	ifp->if_drv_flags |= IFF_DRV_OACTIVE;
-
+	mtx_lock(&tp->tun_mtx);
 	if (tp->tun_flags & TUN_RWAIT) {
 		tp->tun_flags &= ~TUN_RWAIT;
 		wakeup(tp);
 	}
-	if (!TAILQ_EMPTY(&tp->tun_rsel.si_tdlist))
-		selwakeuppri(&tp->tun_rsel, PZERO + 1);
-	if (!KNLIST_EMPTY(&tp->tun_rsel.si_note)) {
-		mtx_lock(&tp->tun_mtx);
-		KNOTE_LOCKED(&tp->tun_rsel.si_note, 0);
+	selwakeuppri(&tp->tun_rsel, PZERO + 1);
+	KNOTE_LOCKED(&tp->tun_rsel.si_note, 0);
+	if (tp->tun_flags & TUN_ASYNC && tp->tun_sigio) {
 		mtx_unlock(&tp->tun_mtx);
-	}
-	if (tp->tun_flags & TUN_ASYNC && tp->tun_sigio)
 		pgsigio(&tp->tun_sigio, SIGIO, 0);
-
-	ifp->if_drv_flags &= ~IFF_DRV_OACTIVE;
+	} else
+		mtx_unlock(&tp->tun_mtx);
 }
 
 /* XXX: should return an error code so it can fail. */
@@ -591,7 +590,9 @@ tunoutput(struct ifnet *ifp, struct mbuf *m0, const struct sockaddr *dst,
 #endif
 
 	/* Could be unlocked read? */
+	mtx_lock(&tp->tun_mtx);
 	cached_tun_flags = tp->tun_flags;
+	mtx_unlock(&tp->tun_mtx);
 	if ((cached_tun_flags & TUN_READY) != TUN_READY) {
 		TUNDEBUG (ifp, "not ready 0%o\n", tp->tun_flags);
 		m_freem (m0);
@@ -798,7 +799,9 @@ tunread(struct cdev *dev, struct uio *uio, int flag)
 	int		error=0, len;
 
 	TUNDEBUG (ifp, "read\n");
+	mtx_lock(&tp->tun_mtx);
 	if ((tp->tun_flags & TUN_READY) != TUN_READY) {
+		mtx_unlock(&tp->tun_mtx);
 		TUNDEBUG (ifp, "not ready 0%o\n", tp->tun_flags);
 		return (EHOSTDOWN);
 	}
@@ -809,19 +812,19 @@ tunread(struct cdev *dev, struct uio *uio, int flag)
 		IFQ_DEQUEUE(&ifp->if_snd, m);
 		if (m == NULL) {
 			if (flag & O_NONBLOCK) {
+				mtx_unlock(&tp->tun_mtx);
 				return (EWOULDBLOCK);
 			}
-			mtx_lock(&tp->tun_mtx);
 			tp->tun_flags |= TUN_RWAIT;
 			error = mtx_sleep(tp, &tp->tun_mtx, PCATCH | (PZERO + 1),
 			    "tunread", 0);
-			tp->tun_flags &= ~TUN_RWAIT;
-			mtx_unlock(&tp->tun_mtx);
 			if (error != 0) {
+				mtx_unlock(&tp->tun_mtx);
 				return (error);
 			}
 		}
 	} while (m == NULL);
+	mtx_unlock(&tp->tun_mtx);
 
 	while (m && uio->uio_resid > 0 && error == 0) {
 		len = min(uio->uio_resid, m->m_len);
@@ -846,7 +849,6 @@ tunwrite(struct cdev *dev, struct uio *uio, int flag)
 	struct tun_softc *tp = dev->si_drv1;
 	struct ifnet	*ifp = TUN2IFP(tp);
 	struct mbuf	*m;
-	struct ip	*ip;
 	uint32_t	family;
 	int 		isr;
 
@@ -874,26 +876,18 @@ tunwrite(struct cdev *dev, struct uio *uio, int flag)
 	mac_ifnet_create_mbuf(ifp, m);
 #endif
 
-	/* XXX: unlocked read? */
+	/* Could be unlocked read? */
+	mtx_lock(&tp->tun_mtx);
 	if (tp->tun_flags & TUN_IFHEAD) {
+		mtx_unlock(&tp->tun_mtx);
 		if (m->m_len < sizeof(family) &&
 		    (m = m_pullup(m, sizeof(family))) == NULL)
 			return (ENOBUFS);
 		family = ntohl(*mtod(m, u_int32_t *));
 		m_adj(m, sizeof(family));
 	} else {
-		if (m->m_len < sizeof(struct ip) &&
-		    (m = m_pullup(m, sizeof(struct ip))) == NULL)
-			return (ENOBUFS);
-		ip = mtod(m, struct ip *);
-		if (ip->ip_v == IPVERSION)
-			family = AF_INET;
-		else if (ip->ip_v == AF_INET6)
-			family = AF_INET6;
-		else {
-			m_freem(m);
-			return (EINVAL);
-		}
+		mtx_unlock(&tp->tun_mtx);
+		family = AF_INET;
 	}
 
 	BPF_MTAP2(ifp, &family, sizeof(family), m);
@@ -929,10 +923,7 @@ tunwrite(struct cdev *dev, struct uio *uio, int flag)
 	ifp->if_ipackets++;
 	CURVNET_SET(ifp->if_vnet);
 	M_SETFIB(m, ifp->if_fib);
-	if (tundispatch)
-		netisr_queue(isr, m);
-	else
-		netisr_dispatch(isr, m);
+	netisr_dispatch(isr, m);
 	CURVNET_RESTORE();
 	return (0);
 }
@@ -948,17 +939,21 @@ tunpoll(struct cdev *dev, int events, struct thread *td)
 	struct tun_softc *tp = dev->si_drv1;
 	struct ifnet	*ifp = TUN2IFP(tp);
 	int		revents = 0;
+	struct mbuf	*m;
 
 	TUNDEBUG(ifp, "tunpoll\n");
 
 	if (events & (POLLIN | POLLRDNORM)) {
-		if (IFQ_IS_EMPTY(&ifp->if_snd)) {
-			TUNDEBUG(ifp, "tunpoll waiting\n");
-			selrecord(td, &tp->tun_rsel);
-		} else {
+		IFQ_LOCK(&ifp->if_snd);
+		IFQ_POLL_NOLOCK(&ifp->if_snd, m);
+		if (m != NULL) {
 			TUNDEBUG(ifp, "tunpoll q=%d\n", ifp->if_snd.ifq_len);
 			revents |= events & (POLLIN | POLLRDNORM);
+		} else {
+			TUNDEBUG(ifp, "tunpoll waiting\n");
+			selrecord(td, &tp->tun_rsel);
 		}
+		IFQ_UNLOCK(&ifp->if_snd);
 	}
 	if (events & (POLLOUT | POLLWRNORM))
 		revents |= events & (POLLOUT | POLLWRNORM);

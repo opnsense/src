@@ -101,6 +101,11 @@ struct tid_info {
 	u_int nftids;
 	u_int ftid_base;
 	u_int ftids_in_use;
+
+	struct mtx etid_lock __aligned(CACHE_LINE_SIZE);
+	struct etid_entry *etid_tab;
+	u_int netids;
+	u_int etid_base;
 };
 
 struct t4_range {
@@ -148,6 +153,6 @@ int t4_register_uld(struct uld_info *);
 int t4_unregister_uld(struct uld_info *);
 int t4_activate_uld(struct adapter *, int);
 int t4_deactivate_uld(struct adapter *, int);
+void t4_iscsi_init(struct ifnet *, unsigned int, const unsigned int *);
 #endif
-
 #endif

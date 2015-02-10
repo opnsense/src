@@ -62,6 +62,7 @@ KDB_TRACE	opt_kdb.h
 KDB_UNATTENDED	opt_kdb.h
 KLD_DEBUG	opt_kld.h
 SYSCTL_DEBUG	opt_sysctl.h
+EARLY_PRINTF	opt_global.h
 TEXTDUMP_PREFERRED	opt_ddb.h
 TEXTDUMP_VERBOSE	opt_ddb.h
 
@@ -108,6 +109,7 @@ GEOM_MULTIPATH	opt_geom.h
 GEOM_NOP	opt_geom.h
 GEOM_PART_APM	opt_geom.h
 GEOM_PART_BSD	opt_geom.h
+GEOM_PART_BSD64	opt_geom.h
 GEOM_PART_EBR	opt_geom.h
 GEOM_PART_EBR_COMPAT	opt_geom.h
 GEOM_PART_GPT	opt_geom.h
@@ -123,6 +125,7 @@ GEOM_STRIPE	opt_geom.h
 GEOM_SUNLABEL	opt_geom.h
 GEOM_UNCOMPRESS	opt_geom.h
 GEOM_UZIP	opt_geom.h
+GEOM_VINUM	opt_geom.h
 GEOM_VIRSTOR	opt_geom.h
 GEOM_VOL	opt_geom.h
 GEOM_ZERO	opt_geom.h
@@ -156,6 +159,7 @@ NEW_PCIB	opt_global.h
 NO_ADAPTIVE_MUTEXES	opt_adaptive_mutexes.h
 NO_ADAPTIVE_RWLOCKS
 NO_ADAPTIVE_SX
+NO_EVENTTIMERS		opt_timer.h
 NO_SYSCTL_DESCR	opt_global.h
 NSWBUF_MIN	opt_swap.h
 MBUF_PACKET_ZONE_DISABLE	opt_global.h
@@ -214,6 +218,7 @@ INCLUDE_CONFIG_FILE	opt_config.h
 # time, since the corresponding lkms cannot work if there are any static
 # dependencies.  Unusability is enforced by hiding the defines for the
 # options in a never-included header.
+AUTOFS		opt_dontuse.h
 CD9660		opt_dontuse.h
 EXT2FS		opt_dontuse.h
 FDESCFS		opt_dontuse.h
@@ -379,12 +384,10 @@ ALTQ_CBQ		opt_altq.h
 ALTQ_CDNR		opt_altq.h
 ALTQ_DEBUG		opt_altq.h
 ALTQ_HFSC		opt_altq.h
-ALTQ_FAIRQ		opt_altq.h
 ALTQ_NOPCC		opt_altq.h
 ALTQ_PRIQ		opt_altq.h
 ALTQ_RED		opt_altq.h
 ALTQ_RIO		opt_altq.h
-ALTQ_CODEL		opt_altq.h
 BOOTP			opt_bootp.h
 BOOTP_BLOCKSIZE		opt_bootp.h
 BOOTP_COMPAT		opt_bootp.h
@@ -440,6 +443,7 @@ TCP_SIGNATURE		opt_inet.h
 VLAN_ARRAY		opt_vlan.h
 XBONEHACK
 FLOWTABLE		opt_route.h
+FLOWTABLE_HASH_ALL	opt_route.h
 
 #
 # SCTP
@@ -453,8 +457,10 @@ SCTP_MBCNT_LOGGING	opt_sctp.h # Log to KTR mbcnt activity
 SCTP_PACKET_LOGGING	opt_sctp.h # Log to a packet buffer last N packets
 SCTP_LTRACE_CHUNKS	opt_sctp.h # Log to KTR chunks processed
 SCTP_LTRACE_ERRORS	opt_sctp.h # Log to KTR error returns.
-SCTP_USE_PERCPU_STAT    opt_sctp.h # Use per cpu stats.
-SCTP_MCORE_INPUT        opt_sctp.h # Have multiple input threads for input mbufs
+SCTP_USE_PERCPU_STAT	opt_sctp.h # Use per cpu stats.
+SCTP_MCORE_INPUT	opt_sctp.h # Have multiple input threads for input mbufs
+SCTP_LOCAL_TRACE_BUF	opt_sctp.h # Use tracebuffer exported via sysctl
+SCTP_DETAILED_STR_STATS	opt_sctp.h # Use per PR-SCTP policy stream stats
 #
 #
 #
@@ -690,6 +696,7 @@ OPENSOLARIS_WITNESS	opt_global.h
 ACPI_DEBUG		opt_acpi.h
 ACPI_MAX_TASKS		opt_acpi.h
 ACPI_MAX_THREADS	opt_acpi.h
+ACPI_DMAR		opt_acpi.h
 
 # ISA support
 DEV_ISA			opt_isa.h
@@ -732,7 +739,7 @@ SAFE_DEBUG		opt_safe.h
 SAFE_NO_RNG		opt_safe.h
 SAFE_RNDTEST		opt_safe.h
 
-# syscons options
+# syscons/vt options
 MAXCONS			opt_syscons.h
 SC_ALT_MOUSE_IMAGE	opt_syscons.h
 SC_CUT_SPACES2TABS	opt_syscons.h
@@ -756,10 +763,19 @@ SC_NORM_REV_ATTR	opt_syscons.h
 SC_PIXEL_MODE		opt_syscons.h
 SC_RENDER_DEBUG		opt_syscons.h
 SC_TWOBUTTON_MOUSE	opt_syscons.h
+VT_ALT_TO_ESC_HACK	opt_syscons.h
+VT_FB_DEFAULT_WIDTH	opt_syscons.h
+VT_FB_DEFAULT_HEIGHT	opt_syscons.h
+VT_MAXWINDOWS		opt_syscons.h
+VT_TWOBUTTON_MOUSE	opt_syscons.h
+DEV_SC			opt_syscons.h
+DEV_VT			opt_syscons.h
 
 # teken terminal emulator options
 TEKEN_CONS25		opt_teken.h
 TEKEN_UTF8		opt_teken.h
+TERMINAL_KERN_ATTR	opt_teken.h
+TERMINAL_NORM_ATTR	opt_teken.h
 
 # options for printf
 PRINTF_BUFR_SIZE	opt_printf.h

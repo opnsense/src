@@ -14,9 +14,11 @@ SRCS=		dtrace.c \
 		dtrace_subr.c
 
 .if ${MACHINE_CPUARCH} == "amd64" || ${MACHINE_CPUARCH} == "i386"
+.PATH: ${.CURDIR}/../../../cddl/dev/dtrace/x86
 SRCS+=		dis_tables.c \
 		instr_size.c
-CFLAGS+=	-I${.CURDIR}/../../../cddl/contrib/opensolaris/uts/intel
+CFLAGS+=	-I${.CURDIR}/../../../cddl/contrib/opensolaris/uts/intel \
+		-I${.CURDIR}/../../../cddl/dev/dtrace/x86
 .endif
 
 SRCS+=		bus_if.h device_if.h vnode_if.h
@@ -38,6 +40,7 @@ CFLAGS+=	-I${.CURDIR}/../../../cddl/compat/opensolaris \
 		-I${.CURDIR}/../../../cddl/dev/dtrace \
 		-I${.CURDIR}/../../../cddl/dev/dtrace/${ARCHDIR} \
 		-I${.CURDIR}/../../../cddl/contrib/opensolaris/uts/common \
+		-I${.CURDIR}/../../../../cddl/contrib/opensolaris/common/util \
 		-I${.CURDIR}/../../.. -DDIS_MEM
 
 CFLAGS+=	-DSMP

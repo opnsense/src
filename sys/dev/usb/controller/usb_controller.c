@@ -133,7 +133,7 @@ DRIVER_MODULE(usbus, xhci, usb_driver, usb_devclass, 0, 0);
 /* Device Only Drivers */
 DRIVER_MODULE(usbus, at91_udp, usb_driver, usb_devclass, 0, 0);
 DRIVER_MODULE(usbus, musbotg, usb_driver, usb_devclass, 0, 0);
-DRIVER_MODULE(usbus, uss820, usb_driver, usb_devclass, 0, 0);
+DRIVER_MODULE(usbus, uss820dci, usb_driver, usb_devclass, 0, 0);
 DRIVER_MODULE(usbus, octusb, usb_driver, usb_devclass, 0, 0);
 
 /* Dual Mode Drivers */
@@ -296,6 +296,28 @@ usb_resume(device_t dev)
 }
 
 /*------------------------------------------------------------------------*
+ *	usb_bus_reset_async_locked
+ *------------------------------------------------------------------------*/
+void
+usb_bus_reset_async_locked(struct usb_bus *bus)
+{
+	USB_BUS_LOCK_ASSERT(bus, MA_OWNED);
+
+	DPRINTF("\n");
+
+	if (bus->reset_msg[0].hdr.pm_qentry.tqe_prev != NULL ||
+	    bus->reset_msg[1].hdr.pm_qentry.tqe_prev != NULL) {
+		DPRINTF("Reset already pending\n");
+		return;
+	}
+
+	device_printf(bus->parent, "Resetting controller\n");
+
+	usb_proc_msignal(USB_BUS_EXPLORE_PROC(bus),
+	    &bus->reset_msg[0], &bus->reset_msg[1]);
+}
+
+/*------------------------------------------------------------------------*
  *	usb_shutdown
  *------------------------------------------------------------------------*/
 static int
@@ -310,7 +332,7 @@ usb_shutdown(device_t dev)
 		return (0);
 	}
 
-	device_printf(bus->bdev, "Controller shutdown\n");
+	DPRINTF("%s: Controller shutdown\n", device_get_nameunit(bus->bdev));
 
 	USB_BUS_LOCK(bus);
 	usb_proc_msignal(USB_BUS_EXPLORE_PROC(bus),
@@ -322,7 +344,8 @@ usb_shutdown(device_t dev)
 	}
 	USB_BUS_UNLOCK(bus);
 
-	device_printf(bus->bdev, "Controller shutdown complete\n");
+	DPRINTF("%s: Controller shutdown complete\n",
+	    device_get_nameunit(bus->bdev));
 
 	return (0);
 }
@@ -344,7 +367,13 @@ usb_bus_explore(struct usb_proc_msg *pm)
 	if (bus->no_explore != 0)
 		return;
 
-	if (udev && udev->hub) {
+	if (udev != NULL) {
+		USB_BUS_UNLOCK(bus);
+		uhub_explore_handle_re_enumerate(udev);
+		USB_BUS_LOCK(bus);
+	}
+
+	if (udev != NULL && udev->hub != NULL) {
 
 		if (bus->do_probe) {
 			bus->do_probe = 0;
@@ -419,7 +448,7 @@ usb_bus_detach(struct usb_proc_msg *pm)
 /*------------------------------------------------------------------------*
  *	usb_bus_suspend
  *
- * This function is used to suspend the USB contoller.
+ * This function is used to suspend the USB controller.
  *------------------------------------------------------------------------*/
 static void
 usb_bus_suspend(struct usb_proc_msg *pm)
@@ -428,6 +457,8 @@ usb_bus_suspend(struct usb_proc_msg *pm)
 	struct usb_device *udev;
 	usb_error_t err;
 	uint8_t do_unlock;
+
+	DPRINTF("\n");
 
 	bus = ((struct usb_bus_msg *)pm)->bus;
 	udev = bus->devices[USB_ROOT_HUB_ADDR];
@@ -474,7 +505,7 @@ usb_bus_suspend(struct usb_proc_msg *pm)
 /*------------------------------------------------------------------------*
  *	usb_bus_resume
  *
- * This function is used to resume the USB contoller.
+ * This function is used to resume the USB controller.
  *------------------------------------------------------------------------*/
 static void
 usb_bus_resume(struct usb_proc_msg *pm)
@@ -483,6 +514,8 @@ usb_bus_resume(struct usb_proc_msg *pm)
 	struct usb_device *udev;
 	usb_error_t err;
 	uint8_t do_unlock;
+
+	DPRINTF("\n");
 
 	bus = ((struct usb_bus_msg *)pm)->bus;
 	udev = bus->devices[USB_ROOT_HUB_ADDR];
@@ -533,9 +566,31 @@ usb_bus_resume(struct usb_proc_msg *pm)
 }
 
 /*------------------------------------------------------------------------*
+ *	usb_bus_reset
+ *
+ * This function is used to reset the USB controller.
+ *------------------------------------------------------------------------*/
+static void
+usb_bus_reset(struct usb_proc_msg *pm)
+{
+	struct usb_bus *bus;
+
+	DPRINTF("\n");
+
+	bus = ((struct usb_bus_msg *)pm)->bus;
+
+	if (bus->bdev == NULL || bus->no_explore != 0)
+		return;
+
+	/* a suspend and resume will reset the USB controller */
+	usb_bus_suspend(pm);
+	usb_bus_resume(pm);
+}
+
+/*------------------------------------------------------------------------*
  *	usb_bus_shutdown
  *
- * This function is used to shutdown the USB contoller.
+ * This function is used to shutdown the USB controller.
  *------------------------------------------------------------------------*/
 static void
 usb_bus_shutdown(struct usb_proc_msg *pm)
@@ -750,6 +805,11 @@ usb_attach_sub(device_t dev, struct usb_bus *bus)
 	bus->resume_msg[1].hdr.pm_callback = &usb_bus_resume;
 	bus->resume_msg[1].bus = bus;
 
+	bus->reset_msg[0].hdr.pm_callback = &usb_bus_reset;
+	bus->reset_msg[0].bus = bus;
+	bus->reset_msg[1].hdr.pm_callback = &usb_bus_reset;
+	bus->reset_msg[1].bus = bus;
+
 	bus->shutdown_msg[0].hdr.pm_callback = &usb_bus_shutdown;
 	bus->shutdown_msg[0].bus = bus;
 	bus->shutdown_msg[1].hdr.pm_callback = &usb_bus_shutdown;
@@ -845,7 +905,10 @@ usb_bus_mem_alloc_all(struct usb_bus *bus, bus_dma_tag_t dmat,
 	bus->alloc_failed = 0;
 
 	mtx_init(&bus->bus_mtx, device_get_nameunit(bus->parent),
-	    NULL, MTX_DEF | MTX_RECURSE);
+	    "usb_def_mtx", MTX_DEF | MTX_RECURSE);
+
+	mtx_init(&bus->bus_spin_lock, device_get_nameunit(bus->parent),
+	    "usb_spin_mtx", MTX_SPIN | MTX_RECURSE);
 
 	usb_callout_init_mtx(&bus->power_wdog,
 	    &bus->bus_mtx, 0);
@@ -900,6 +963,7 @@ usb_bus_mem_free_all(struct usb_bus *bus, usb_bus_mem_cb_t *cb)
 #endif
 
 	mtx_destroy(&bus->bus_mtx);
+	mtx_destroy(&bus->bus_spin_lock);
 }
 
 /* convenience wrappers */

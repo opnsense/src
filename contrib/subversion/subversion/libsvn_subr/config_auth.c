@@ -94,6 +94,7 @@ svn_config_read_auth_data(apr_hash_t **hash,
   if (kind == svn_node_file)
     {
       svn_stream_t *stream;
+      svn_string_t *stored_realm;
 
       SVN_ERR_W(svn_stream_open_readonly(&stream, auth_path, pool, pool),
                 _("Unable to open auth file for reading"));
@@ -103,6 +104,11 @@ svn_config_read_auth_data(apr_hash_t **hash,
       SVN_ERR_W(svn_hash_read2(*hash, stream, SVN_HASH_TERMINATOR, pool),
                 apr_psprintf(pool, _("Error parsing '%s'"),
                              svn_dirent_local_style(auth_path, pool)));
+
+      stored_realm = svn_hash_gets(*hash, SVN_CONFIG_REALMSTRING_KEY);
+
+      if (!stored_realm || strcmp(stored_realm->data, realmstring) != 0)
+        *hash = NULL; /* Hash collision, or somebody tampering with storage */
 
       SVN_ERR(svn_stream_close(stream));
     }
@@ -172,12 +178,6 @@ svn_config_walk_auth_data(const char *config_dir,
       SVN_AUTH_CRED_SSL_SERVER_TRUST,
       NULL
     };
-
-  if (! config_dir)
-    {
-      /* Can't locate the cache to clear */
-      return SVN_NO_ERROR;
-    }
 
   iterpool = svn_pool_create(scratch_pool);
   for (i = 0; cred_kinds[i]; i++)

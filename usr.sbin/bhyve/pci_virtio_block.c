@@ -52,10 +52,6 @@ __FBSDID("$FreeBSD$");
 #include "pci_emul.h"
 #include "virtio.h"
 
-#ifndef min
-#define	min(a, b)	((a) < (b) ? (a) : (b))
-#endif
-
 #define VTBLK_RINGSZ	64
 
 #define VTBLK_MAXSEGS	32
@@ -117,6 +113,7 @@ static int pci_vtblk_debug;
  */
 struct pci_vtblk_softc {
 	struct virtio_softc vbsc_vs;
+	pthread_mutex_t vsc_mtx;
 	struct vqueue_info vbsc_vq;
 	int		vbsc_fd;
 	struct vtblk_config vbsc_cfg;	
@@ -136,6 +133,7 @@ static struct virtio_consts vtblk_vi_consts = {
 	pci_vtblk_notify,	/* device-wide qnotify */
 	pci_vtblk_cfgread,	/* read PCI config */
 	pci_vtblk_cfgwrite,	/* write PCI config */
+	NULL,			/* apply negotiated features */
 	VTBLK_S_HOSTCAPS,	/* our capabilities */
 };
 
@@ -216,7 +214,7 @@ pci_vtblk_proc(struct pci_vtblk_softc *sc, struct vqueue_info *vq)
 	case VBH_OP_IDENT:
 		/* Assume a single buffer */
 		strlcpy(iov[1].iov_base, sc->vbsc_ident,
-		    min(iov[1].iov_len, sizeof(sc->vbsc_ident)));
+		    MIN(iov[1].iov_len, sizeof(sc->vbsc_ident)));
 		err = 0;
 		break;
 	default:
@@ -298,14 +296,17 @@ pci_vtblk_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 		assert(sectsz != 0);
 	}
 
-	sc = malloc(sizeof(struct pci_vtblk_softc));
-	memset(sc, 0, sizeof(struct pci_vtblk_softc));
+	sc = calloc(1, sizeof(struct pci_vtblk_softc));
 
 	/* record fd of storage device/file */
 	sc->vbsc_fd = fd;
 
+	pthread_mutex_init(&sc->vsc_mtx, NULL);
+
 	/* init virtio softc and virtqueues */
 	vi_softc_linkup(&sc->vbsc_vs, &vtblk_vi_consts, sc, pi, &sc->vbsc_vq);
+	sc->vbsc_vs.vs_mtx = &sc->vsc_mtx;
+
 	sc->vbsc_vq.vq_qsize = VTBLK_RINGSZ;
 	/* sc->vbsc_vq.vq_notify = we have no per-queue notify */
 
@@ -338,6 +339,8 @@ pci_vtblk_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 	pci_set_cfgdata16(pi, PCIR_VENDOR, VIRTIO_VENDOR);
 	pci_set_cfgdata8(pi, PCIR_CLASS, PCIC_STORAGE);
 	pci_set_cfgdata16(pi, PCIR_SUBDEV_0, VIRTIO_TYPE_BLOCK);
+
+	pci_lintr_request(pi);
 
 	if (vi_intr_init(&sc->vbsc_vs, 1, fbsdrun_virtio_msix()))
 		return (1);

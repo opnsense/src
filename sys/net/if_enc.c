@@ -52,9 +52,6 @@
 #include <net/bpf.h>
 #include <net/vnet.h>
 
-#include <altq/if_altq.h>
-#include <net/pf_mtag.h>
-
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
@@ -228,11 +225,10 @@ enc_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 }
 
 int
-ipsec_filter(struct mbuf **mp, struct secasindex *saidx, int dir, int flags)
+ipsec_filter(struct mbuf **mp, int dir, int flags)
 {
 	int error, i;
 	struct ip *ip;
-	struct pf_mtag *atag;
 
 	KASSERT(encif != NULL, ("%s: encif is null", __func__));
 	KASSERT(flags & (ENC_IN|ENC_OUT),
@@ -300,9 +296,6 @@ ipsec_filter(struct mbuf **mp, struct secasindex *saidx, int dir, int flags)
 		return (error);
 	if (error != 0)
 		goto bad;
-
-	if (saidx && (atag = pf_find_mtag(*mp)) != NULL) 
-		saidx->qid = atag->qid; 
 
 	return (error);
 

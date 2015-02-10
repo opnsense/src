@@ -404,7 +404,6 @@ f_acl(PLAN *plan __unused, FTSENT *entry)
 	acl_free(facl);
 	if (ret) {
 		warn("%s", entry->fts_accpath);
-		acl_free(facl);
 		return (0);
 	}
 	if (trivial)
@@ -1122,11 +1121,24 @@ f_name(PLAN *plan, FTSENT *entry)
 {
 	char fn[PATH_MAX];
 	const char *name;
+	ssize_t len;
 
 	if (plan->flags & F_LINK) {
-		name = fn;
-		if (readlink(entry->fts_path, fn, sizeof(fn)) == -1)
+		/*
+		 * The below test both avoids obviously useless readlink()
+		 * calls and ensures that symlinks with existent target do
+		 * not match if symlinks are being followed.
+		 * Assumption: fts will stat all symlinks that are to be
+		 * followed and will return the stat information.
+		 */
+		if (entry->fts_info != FTS_NSOK && entry->fts_info != FTS_SL &&
+		    entry->fts_info != FTS_SLNONE)
 			return 0;
+		len = readlink(entry->fts_accpath, fn, sizeof(fn) - 1);
+		if (len == -1)
+			return 0;
+		fn[len] = '\0';
+		name = fn;
 	} else
 		name = entry->fts_name;
 	return !fnmatch(plan->c_data, name,
@@ -1488,7 +1500,7 @@ c_size(OPTION *option, char ***argvp)
 			scale = 0x40000000LL;
 			break;
 		case 'T':                       /* terabytes 1<<40 */
-			scale = 0x1000000000LL;
+			scale = 0x10000000000LL;
 			break;
 		case 'P':                       /* petabytes 1<<50 */
 			scale = 0x4000000000000LL;
@@ -1755,6 +1767,7 @@ f_false(PLAN *plan __unused, FTSENT *entry __unused)
 int
 f_quit(PLAN *plan __unused, FTSENT *entry __unused)
 {
+	finish_execplus();
 	exit(0);
 }
 

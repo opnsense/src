@@ -326,9 +326,9 @@ int ssl3_connect(SSL *s)
 				break;
 				}
 #endif
-			/* Check if it is anon DH/ECDH */
+			/* Check if it is anon DH/ECDH, SRP auth */
 			/* or PSK */
-			if (!(s->s3->tmp.new_cipher->algorithm_auth & SSL_aNULL) &&
+			if (!(s->s3->tmp.new_cipher->algorithm_auth & (SSL_aNULL|SSL_aSRP)) &&
 			    !(s->s3->tmp.new_cipher->algorithm_mkey & SSL_kPSK))
 				{
 				ret=ssl3_get_server_certificate(s);
@@ -510,6 +510,7 @@ int ssl3_connect(SSL *s)
 				s->method->ssl3_enc->client_finished_label,
 				s->method->ssl3_enc->client_finished_label_len);
 			if (ret <= 0) goto end;
+			s->s3->flags |= SSL3_FLAGS_CCS_OK;
 			s->state=SSL3_ST_CW_FLUSH;
 
 			/* clear flags */
@@ -656,7 +657,7 @@ int ssl3_client_hello(SSL *s)
 	unsigned char *buf;
 	unsigned char *p,*d;
 	int i;
-	unsigned long Time,l;
+	unsigned long l;
 #ifndef OPENSSL_NO_COMP
 	int j;
 	SSL_COMP *comp;
@@ -681,9 +682,8 @@ int ssl3_client_hello(SSL *s)
 		/* else use the pre-loaded session */
 
 		p=s->s3->client_random;
-		Time=(unsigned long)time(NULL);			/* Time */
-		l2n(Time,p);
-		if (RAND_pseudo_bytes(p,SSL3_RANDOM_SIZE-4) <= 0)
+
+		if (ssl_fill_hello_random(s, 0, p, SSL3_RANDOM_SIZE) <= 0)
 			goto err;
 
 		/* Do the message type and length last */
@@ -902,6 +902,7 @@ int ssl3_get_server_hello(SSL *s)
 			{
 			s->session->cipher = pref_cipher ?
 				pref_cipher : ssl_get_cipher_by_char(s, p+j);
+	    		s->s3->flags |= SSL3_FLAGS_CCS_OK;
 			}
 		}
 #endif /* OPENSSL_NO_TLSEXT */
@@ -1294,8 +1295,6 @@ int ssl3_get_key_exchange(SSL *s)
 	int encoded_pt_len = 0;
 #endif
 
-	EVP_MD_CTX_init(&md_ctx);
-
 	/* use same message size as in ssl3_get_certificate_request()
 	 * as ServerKeyExchange message may be skipped */
 	n=s->method->ssl_get_message(s,
@@ -1306,26 +1305,14 @@ int ssl3_get_key_exchange(SSL *s)
 		&ok);
 	if (!ok) return((int)n);
 
-	alg_k=s->s3->tmp.new_cipher->algorithm_mkey;
-
 	if (s->s3->tmp.message_type != SSL3_MT_SERVER_KEY_EXCHANGE)
 		{
-		/*
-		 * Can't skip server key exchange if this is an ephemeral
-		 * ciphersuite.
-		 */
-		if (alg_k & (SSL_kEDH|SSL_kEECDH))
-			{
-			SSLerr(SSL_F_SSL3_GET_KEY_EXCHANGE, SSL_R_UNEXPECTED_MESSAGE);
-			al = SSL_AD_UNEXPECTED_MESSAGE;
-			goto f_err;
-			}
 #ifndef OPENSSL_NO_PSK
 		/* In plain PSK ciphersuite, ServerKeyExchange can be
 		   omitted if no identity hint is sent. Set
 		   session->sess_cert anyway to avoid problems
 		   later.*/
-		if (alg_k & SSL_kPSK)
+		if (s->s3->tmp.new_cipher->algorithm_mkey & SSL_kPSK)
 			{
 			s->session->sess_cert=ssl_sess_cert_new();
 			if (s->ctx->psk_identity_hint)
@@ -1370,7 +1357,9 @@ int ssl3_get_key_exchange(SSL *s)
 	/* Total length of the parameters including the length prefix */
 	param_len=0;
 
+	alg_k=s->s3->tmp.new_cipher->algorithm_mkey;
 	alg_a=s->s3->tmp.new_cipher->algorithm_auth;
+	EVP_MD_CTX_init(&md_ctx);
 
 	al=SSL_AD_DECODE_ERROR;
 
@@ -1554,13 +1543,6 @@ int ssl3_get_key_exchange(SSL *s)
 #ifndef OPENSSL_NO_RSA
 	if (alg_k & SSL_kRSA)
 		{
-		/* Temporary RSA keys only allowed in export ciphersuites */
-		if (!SSL_C_IS_EXPORT(s->s3->tmp.new_cipher))
-			{
-			al=SSL_AD_UNEXPECTED_MESSAGE;
-			SSLerr(SSL_F_SSL3_GET_KEY_EXCHANGE,SSL_R_UNEXPECTED_MESSAGE);
-			goto f_err;
-			}
 		if ((rsa=RSA_new()) == NULL)
 			{
 			SSLerr(SSL_F_SSL3_GET_KEY_EXCHANGE,ERR_R_MALLOC_FAILURE);
@@ -1918,6 +1900,7 @@ fprintf(stderr, "USING TLSv1.2 HASH %s\n", EVP_MD_name(md));
 		if (pkey->type == EVP_PKEY_RSA && TLS1_get_version(s) < TLS1_2_VERSION)
 			{
 			int num;
+			unsigned int size;
 
 			j=0;
 			q=md_buf;
@@ -1930,9 +1913,9 @@ fprintf(stderr, "USING TLSv1.2 HASH %s\n", EVP_MD_name(md));
 				EVP_DigestUpdate(&md_ctx,&(s->s3->client_random[0]),SSL3_RANDOM_SIZE);
 				EVP_DigestUpdate(&md_ctx,&(s->s3->server_random[0]),SSL3_RANDOM_SIZE);
 				EVP_DigestUpdate(&md_ctx,param,param_len);
-				EVP_DigestFinal_ex(&md_ctx,q,(unsigned int *)&i);
-				q+=i;
-				j+=i;
+				EVP_DigestFinal_ex(&md_ctx,q,&size);
+				q+=size;
+				j+=size;
 				}
 			i=RSA_verify(NID_md5_sha1, md_buf, j, p, n,
 								pkey->pkey.rsa);
@@ -1968,8 +1951,8 @@ fprintf(stderr, "USING TLSv1.2 HASH %s\n", EVP_MD_name(md));
 		}
 	else
 		{
-		if (!(alg_a & SSL_aNULL) && !(alg_k & SSL_kPSK))
-			/* aNULL or kPSK do not need public keys */
+		/* aNULL, aSRP or kPSK do not need public keys */
+		if (!(alg_a & (SSL_aNULL|SSL_aSRP)) && !(alg_k & SSL_kPSK))
 			{
 			SSLerr(SSL_F_SSL3_GET_KEY_EXCHANGE,ERR_R_INTERNAL_ERROR);
 			goto err;
@@ -2978,7 +2961,11 @@ int ssl3_send_client_key_exchange(SSL *s)
 #ifndef OPENSSL_NO_PSK
 		else if (alg_k & SSL_kPSK)
 			{
-			char identity[PSK_MAX_IDENTITY_LEN];
+			/* The callback needs PSK_MAX_IDENTITY_LEN + 1 bytes
+			 * to return a \0-terminated identity. The last byte
+			 * is for us for simulating strnlen. */
+			char identity[PSK_MAX_IDENTITY_LEN + 2];
+			size_t identity_len;
 			unsigned char *t = NULL;
 			unsigned char psk_or_pre_ms[PSK_MAX_PSK_LEN*2+4];
 			unsigned int pre_ms_len = 0, psk_len = 0;
@@ -2992,8 +2979,9 @@ int ssl3_send_client_key_exchange(SSL *s)
 				goto err;
 				}
 
+			memset(identity, 0, sizeof(identity));
 			psk_len = s->psk_client_callback(s, s->ctx->psk_identity_hint,
-				identity, PSK_MAX_IDENTITY_LEN,
+				identity, sizeof(identity) - 1,
 				psk_or_pre_ms, sizeof(psk_or_pre_ms));
 			if (psk_len > PSK_MAX_PSK_LEN)
 				{
@@ -3007,7 +2995,14 @@ int ssl3_send_client_key_exchange(SSL *s)
 					SSL_R_PSK_IDENTITY_NOT_FOUND);
 				goto psk_err;
 				}
-
+			identity[PSK_MAX_IDENTITY_LEN + 1] = '\0';
+			identity_len = strlen(identity);
+			if (identity_len > PSK_MAX_IDENTITY_LEN)
+				{
+				SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,
+					ERR_R_INTERNAL_ERROR);
+				goto psk_err;
+				}
 			/* create PSK pre_master_secret */
 			pre_ms_len = 2+psk_len+2+psk_len;
 			t = psk_or_pre_ms;
@@ -3041,14 +3036,13 @@ int ssl3_send_client_key_exchange(SSL *s)
 			s->session->master_key_length =
 				s->method->ssl3_enc->generate_master_secret(s,
 					s->session->master_key,
-					psk_or_pre_ms, pre_ms_len); 
-			n = strlen(identity);
-			s2n(n, p);
-			memcpy(p, identity, n);
-			n+=2;
+					psk_or_pre_ms, pre_ms_len);
+			s2n(identity_len, p);
+			memcpy(p, identity, identity_len);
+			n = 2 + identity_len;
 			psk_err = 0;
 		psk_err:
-			OPENSSL_cleanse(identity, PSK_MAX_IDENTITY_LEN);
+			OPENSSL_cleanse(identity, sizeof(identity));
 			OPENSSL_cleanse(psk_or_pre_ms, sizeof(psk_or_pre_ms));
 			if (psk_err != 0)
 				{

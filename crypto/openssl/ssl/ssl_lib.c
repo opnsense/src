@@ -1349,6 +1349,10 @@ char *SSL_get_shared_ciphers(const SSL *s,char *buf,int len)
 
 	p=buf;
 	sk=s->session->ciphers;
+
+	if (sk_SSL_CIPHER_num(sk) == 0)
+		return NULL;
+
 	for (i=0; i<sk_SSL_CIPHER_num(sk); i++)
 		{
 		int n;
@@ -1834,7 +1838,9 @@ SSL_CTX *SSL_CTX_new(const SSL_METHOD *meth)
 	CRYPTO_new_ex_data(CRYPTO_EX_INDEX_SSL_CTX, ret, &ret->ex_data);
 
 	ret->extra_certs=NULL;
-	ret->comp_methods=SSL_COMP_get_compression_methods();
+	/* No compression for DTLS */
+	if (meth->version != DTLS1_VERSION)
+		ret->comp_methods=SSL_COMP_get_compression_methods();
 
 	ret->max_send_fragment = SSL3_RT_MAX_PLAIN_LENGTH;
 
@@ -2829,9 +2835,7 @@ void ssl_clear_cipher_ctx(SSL *s)
 /* Fix this function so that it takes an optional type parameter */
 X509 *SSL_get_certificate(const SSL *s)
 	{
-	if (s->server)
-		return(ssl_get_server_send_cert(s));
-	else if (s->cert != NULL)
+	if (s->cert != NULL)
 		return(s->cert->key->x509);
 	else
 		return(NULL);
@@ -2992,32 +2996,10 @@ SSL_CTX *SSL_set_SSL_CTX(SSL *ssl, SSL_CTX* ctx)
 			}
 		ssl_cert_free(ocert);
 		}
-
-	/*
-	 * Program invariant: |sid_ctx| has fixed size (SSL_MAX_SID_CTX_LENGTH),
-	 * so setter APIs must prevent invalid lengths from entering the system.
-	 */
-	OPENSSL_assert(ssl->sid_ctx_length <= sizeof(ssl->sid_ctx));
-
-	/*
-	 * If the session ID context matches that of the parent SSL_CTX,
-	 * inherit it from the new SSL_CTX as well. If however the context does
-	 * not match (i.e., it was set per-ssl with SSL_set_session_id_context),
-	 * leave it unchanged.
-	 */
-	if ((ssl->ctx != NULL) &&
-		(ssl->sid_ctx_length == ssl->ctx->sid_ctx_length) &&
-		(memcmp(ssl->sid_ctx, ssl->ctx->sid_ctx, ssl->sid_ctx_length) == 0))
-		{
-		ssl->sid_ctx_length = ctx->sid_ctx_length;
-		memcpy(&ssl->sid_ctx, &ctx->sid_ctx, sizeof(ssl->sid_ctx));
-		}
-
 	CRYPTO_add(&ctx->references,1,CRYPTO_LOCK_SSL_CTX);
 	if (ssl->ctx != NULL)
 		SSL_CTX_free(ssl->ctx); /* decrement reference count */
 	ssl->ctx = ctx;
-
 	return(ssl->ctx);
 	}
 

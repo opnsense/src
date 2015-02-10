@@ -24,7 +24,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd October 19, 2013
+.Dd September 11, 2014
 .Dt RC.CONF 5
 .Os
 .Sh NAME
@@ -63,18 +63,37 @@ The file
 is used to override settings in
 .Pa /etc/rc.conf
 for historical reasons.
+.Pp
 In addition to
 .Pa /etc/rc.conf.local
 you can also place smaller configuration files for each
 .Xr rc 8
 script in the
 .Pa /etc/rc.conf.d
-directory, which will be included by the
+directory or
+.Ao Ar dir Ac Ns Pa /rc.conf.d
+directories specified in
+.Va local_startup ,
+which will be included by the
 .Va load_rc_config
 function.
 For jail configurations you could use the file
 .Pa /etc/rc.conf.d/jail
 to store jail specific configuration options.
+If
+.Va local_startup
+contains
+.Pa /usr/local/etc/rc.d
+and
+.Pa /opt/conf ,
+.Pa /usr/local/rc.conf.d/jail
+and
+.Pa /opt/conf/rc.conf.d/jail
+will be loaded.
+If
+.Ao Ar dir Ac Ns Pa /rc.conf.d/ Ns Ao Ar name Ac
+is a directory,
+all of files in the directory will be loaded.
 Also see the
 .Va rc_conf_files
 variable below.
@@ -1140,6 +1159,19 @@ or
 .Li inet6 2001:db8:1-f::1/64 .
 This notation allows address and prefix length part only,
 not the other address modifiers.
+Note that the maximum number of the generated addresses from a range
+specification is limited to an integer value specified in
+.Va netif_ipexpand_max
+in
+.Xr rc.conf 5
+because a small typo can unexpectedly generate a large number of addresses.
+The default value is
+.Li 2048 .
+It can be increased by adding the following line into
+.Xr rc.conf 5 :
+.Bd -literal
+netif_ipexpand_max="4096"
+.Ed
 .Pp
 In the case of
 .Li 192.0.2.5-23/24 ,
@@ -2048,85 +2080,6 @@ If set to
 run the
 .Xr unbound 8
 daemon as a local caching resolver.
-.It Va named_enable
-.Pq Vt bool
-If set to
-.Dq Li YES ,
-run the
-.Xr named 8
-daemon.
-.It Va named_program
-.Pq Vt str
-Path to
-.Xr named 8
-(default
-.Pa /usr/sbin/named ) .
-.It Va named_conf
-.Pq Vt str
-Path to
-.Xr named 8
-configuration file, (default
-.Pa /etc/namedb/named.conf ) .
-.It Va named_flags
-.Pq Vt str
-If
-.Va named_enable
-is set to
-.Dq Li YES ,
-these are the flags to pass to
-.Xr named 8 .
-.It Va named_uid
-.Pq Vt str
-The user that the
-.Xr named 8
-process should be run as.
-.It Va named_chrootdir
-.Pq Vt str
-The root directory for a name server run in a
-.Xr chroot 8
-environment (default
-.Pa /var/named ) .
-If left empty
-.Xr named 8
-will not be run in a
-.Xr chroot 8
-environment.
-.It Va named_chroot_autoupdate
-.Pq Vt bool
-Set to
-.Dq Li NO
-to disable automatic update of the
-.Xr chroot 8
-environment.
-.It Va named_symlink_enable
-.Pq Vt bool
-Set to
-.Dq Li NO
-to disable symlinking of
-daemon's PID file
-into the
-.Xr chroot 8
-environment.
-.It Va named_wait
-.Pq Vt bool
-Set to have
-.Pa /etc/rc.d/named
-loop until working name service is established.
-.It Va named_wait_host
-.Pq Vt str
-Name of host to lookup for the named_wait option.
-(Default localhost)
-.It Va named_auto_forward
-.Pq Vt bool
-Set to enable automatic creation of a forwarder
-configuration file derived from
-.Pa /etc/resolv.conf .
-.It Va named_auto_forward_only
-.Pq Vt bool
-Set to change the default forwarder configuration from
-.Dq forward first
-to
-.Dq forward only .
 .It Va kerberos5_server_enable
 .Pq Vt bool
 Set to
@@ -3199,8 +3152,13 @@ set to this device.
 If set to
 .Dq Li NO ,
 no keymap is installed, otherwise the value is used to install
-the keymap file in
-.Pa /usr/share/syscons/keymaps/ Ns Ao Ar value Ac Ns Pa .kbd .
+the keymap file found in
+.Pa /usr/share/syscons/keymaps/ Ns Ao Ar value Ac Ns Pa .kbd
+(if using
+.Xr syscons 4 ) or
+.Pa /usr/share/vt/keymaps/ Ns Ao Ar value Ac Ns Pa .kbd
+(if using
+.Xr vt 4 ) .
 .It Va keyrate
 .Pq Vt str
 The keyboard repeat speed.
@@ -3235,6 +3193,9 @@ If set to
 no screen map is installed, otherwise the value is used to install
 the screen map file in
 .Pa /usr/share/syscons/scrnmaps/ Ns Aq Ar value .
+This parameter is ignored when using
+.Xr vt 4
+as the console driver.
 .It Va font8x16
 .Pq Vt str
 If set to
@@ -3242,7 +3203,9 @@ If set to
 the default 8x16 font value is used for screen size requests, otherwise
 the value in
 .Pa /usr/share/syscons/fonts/ Ns Aq Ar value
-is used.
+or
+.Pa /usr/share/vt/fonts/ Ns Aq Ar value
+is used (depending on the console driver being used).
 .It Va font8x14
 .Pq Vt str
 If set to
@@ -3250,7 +3213,9 @@ If set to
 the default 8x14 font value is used for screen size requests, otherwise
 the value in
 .Pa /usr/share/syscons/fonts/ Ns Aq Ar value
-is used.
+or
+.Pa /usr/share/vt/fonts/ Ns Aq Ar value
+is used (depending on the console driver being used).
 .It Va font8x8
 .Pq Vt str
 If set to
@@ -3258,7 +3223,9 @@ If set to
 the default 8x8 font value is used for screen size requests, otherwise
 the value in
 .Pa /usr/share/syscons/fonts/ Ns Aq Ar value
-is used.
+or
+.Pa /usr/share/vt/fonts/ Ns Aq Ar value
+is used (depending on the console driver being used).
 .It Va blanktime
 .Pq Vt int
 If set to
@@ -3465,6 +3432,8 @@ For example,
 .Dq Fl h Li 200
 will set the
 .Xr syscons 4
+or
+.Xr vt 4
 scrollback (history) buffer to 200 lines.
 .It Va cron_enable
 .Pq Vt bool
@@ -4495,6 +4464,26 @@ interface if desired.
 Defines the total number of seconds to wait for link to become usable,
 polled at a 1-second interval.
 The default is 30.
+.It Va rctl_enable
+.Pq Vt bool
+Set to
+.Dq Li YES
+to load
+.Xr rctl 8
+rules from the defined ruleset.
+The kernel must be built with
+.Cd "options RACCT"
+and
+.Cd "options RCTL" .
+.It Va rctl_rules
+.Pq Vt str
+Set to
+.Pa /etc/rctl.conf
+by default.
+This variables contains the
+.Xr rctl.conf 5
+ruleset to load for
+.Xr rctl 8 .
 .El
 .Sh FILES
 .Bl -tag -width ".Pa /etc/defaults/rc.conf" -compact
@@ -4528,6 +4517,7 @@ The default is 30.
 .Xr fstab 5 ,
 .Xr ipf 5 ,
 .Xr ipnat 5 ,
+.Xr jail.conf 5 ,
 .Xr motd 5 ,
 .Xr newsyslog.conf 5 ,
 .Xr pf.conf 5 ,
@@ -4559,7 +4549,6 @@ The default is 30.
 .Xr mountd 8 ,
 .Xr moused 8 ,
 .Xr mrouted 8 ,
-.Xr named 8 ,
 .Xr newfs 8 ,
 .Xr newsyslog 8 ,
 .Xr nfsd 8 ,

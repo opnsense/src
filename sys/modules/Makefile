@@ -2,6 +2,8 @@
 
 .include <bsd.own.mk>
 
+SUBDIR_PARALLEL=
+
 # Modules that include binary-only blobs of microcode should be selectable by
 # MK_SOURCELESS_UCODE option (see below).
 
@@ -42,6 +44,7 @@ SUBDIR=	\
 	ata \
 	ath \
 	ath_pci \
+	autofs \
 	${_auxio} \
 	${_bce} \
 	bfe \
@@ -149,6 +152,7 @@ SUBDIR=	\
 	if_vlan \
 	${_igb} \
 	${_iir} \
+	${_imgact_binmisc} \
 	${_io} \
         ${_ipoib} \
 	${_ipdivert} \
@@ -172,6 +176,8 @@ SUBDIR=	\
 	${_iwnfw} \
 	${_ixgb} \
 	${_ixgbe} \
+	${_ixl} \
+	${_ixlv} \
 	jme \
 	joy \
 	kbdmux \
@@ -216,9 +222,11 @@ SUBDIR=	\
 	${_mly} \
 	mmc \
 	mmcsd \
+	mpr \
 	mps \
 	mpt \
 	mqueue \
+	mrsas \
 	msdosfs \
 	msdosfs_iconv \
 	${_mse} \
@@ -234,6 +242,7 @@ SUBDIR=	\
 	${_ncp} \
 	${_ncv} \
 	${_ndis} \
+	netfpga10g \
 	${_netgraph} \
 	${_nfe} \
 	nfs_common \
@@ -373,6 +382,7 @@ SUBDIR=	\
 
 .if ${MACHINE_CPUARCH} == "i386" || ${MACHINE_CPUARCH} == "amd64"
 _filemon=	filemon
+_imgact_binmisc=	imgact_binmisc
 _vmware=	vmware
 .endif
 
@@ -713,6 +723,8 @@ _iwnfw=		iwnfw
 .endif
 _ixgb=		ixgb
 _ixgbe=		ixgbe
+_ixl=		ixl
+_ixlv=		ixlv
 _lindev=	lindev
 _linprocfs=	linprocfs
 _linsysfs=	linsysfs

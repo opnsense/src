@@ -7,7 +7,12 @@
 SUBDIR=	sendmail
 .endif
 
-BIN1=	crontab \
+.if ${MK_TESTS} != "no"
+SUBDIR+=tests
+.endif
+
+BIN1=	auto_master \
+	crontab \
 	devd.conf \
 	devfs.conf \
 	ddb.conf \
@@ -139,6 +144,9 @@ BIN1+= regdomain.xml
 BIN2=	netstart pccard_ether rc.suspend rc.resume
 
 MTREE=	BSD.include.dist BSD.root.dist BSD.usr.dist BSD.var.dist
+.if ${MK_TESTS} != "no"
+MTREE+=	BSD.tests.dist
+.endif
 .if ${MK_SENDMAIL} != "no"
 MTREE+=	BSD.sendmail.dist
 .endif
@@ -167,7 +175,10 @@ afterinstall:
 .endif
 
 distribute:
-	${_+_}cd ${.CURDIR} ; ${MAKE} install DESTDIR=${DISTDIR}/${DISTRIBUTION}
+	# Avoid installing tests here; "make distribution" will do this and
+	# correctly place them in the right location.
+	${_+_}cd ${.CURDIR} ; ${MAKE} -DNO_TESTS install \
+	    DESTDIR=${DISTDIR}/${DISTRIBUTION}
 	${_+_}cd ${.CURDIR} ; ${MAKE} distribution DESTDIR=${DISTDIR}/${DISTRIBUTION}
 
 .include <bsd.endian.mk>
@@ -215,6 +226,7 @@ distribution:
 		echo "./etc/spwd.db type=file mode=0600 uname=root gname=wheel"; \
 	) | ${METALOG.add}
 .endif
+	${_+_}cd ${.CURDIR}/autofs; ${MAKE} install
 .if ${MK_BLUETOOTH} != "no"
 	${_+_}cd ${.CURDIR}/bluetooth; ${MAKE} install
 .endif
@@ -222,11 +234,8 @@ distribution:
 	${_+_}cd ${.CURDIR}/devd; ${MAKE} install
 	${_+_}cd ${.CURDIR}/gss; ${MAKE} install
 	${_+_}cd ${.CURDIR}/periodic; ${MAKE} install
-.if ${MK_PKGBOOTSTRAP} != "no"
 	${_+_}cd ${.CURDIR}/pkg; ${MAKE} install
-.endif
 	${_+_}cd ${.CURDIR}/rc.d; ${MAKE} install
-	${_+_}cd ${.CURDIR}/../gnu/usr.bin/send-pr; ${MAKE} etc-gnats-freefall
 	${_+_}cd ${.CURDIR}/../share/termcap; ${MAKE} etc-termcap
 	${_+_}cd ${.CURDIR}/../usr.sbin/rmt; ${MAKE} etc-rmt
 	${_+_}cd ${.CURDIR}/pam.d; ${MAKE} install
@@ -260,8 +269,6 @@ distribution:
 	cd ${.CURDIR}/root; \
 	    ${INSTALL} -o ${BINOWN} -g ${BINGRP} -m 644 \
 		dot.profile ${DESTDIR}/root/.profile; \
-	    ${INSTALL} -o ${BINOWN} -g ${BINGRP} -m 644 \
-		dot.vimrc ${DESTDIR}/root/.vimrc; \
 	    rm -f ${DESTDIR}/.profile; \
 	    ln ${DESTDIR}/root/.profile ${DESTDIR}/.profile
 .if ${MK_TCSH} != "no"
@@ -318,6 +325,9 @@ MTREES+=	mtree/BSD.debug.dist		/usr/lib
 .endif
 .if ${MK_GROFF} != "no"
 MTREES+=	mtree/BSD.groff.dist		/usr
+.endif
+.if ${MK_TESTS} != "no"
+MTREES+=	mtree/BSD.tests.dist		/usr
 .endif
 .if ${MK_SENDMAIL} != "no"
 MTREES+=	mtree/BSD.sendmail.dist		/

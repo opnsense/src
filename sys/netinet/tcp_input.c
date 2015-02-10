@@ -162,7 +162,7 @@ SYSCTL_NODE(_net_inet_tcp, OID_AUTO, experimental, CTLFLAG_RW, 0,
 VNET_DEFINE(int, tcp_do_initcwnd10) = 1;
 SYSCTL_VNET_INT(_net_inet_tcp_experimental, OID_AUTO, initcwnd10, CTLFLAG_RW,
     &VNET_NAME(tcp_do_initcwnd10), 0,
-    "Enable draft-ietf-tcpm-initcwnd-05 (Increasing initial CWND to 10)");
+    "Enable RFC 6928 (Increasing initial CWND to 10)");
 
 VNET_DEFINE(int, tcp_do_rfc3465) = 1;
 SYSCTL_VNET_INT(_net_inet_tcp, OID_AUTO, rfc3465, CTLFLAG_RW,
@@ -229,12 +229,6 @@ static void	 tcp_pulloutofband(struct socket *,
 		     struct tcphdr *, struct mbuf *, int);
 static void	 tcp_xmit_timer(struct tcpcb *, int);
 static void	 tcp_newreno_partial_ack(struct tcpcb *, struct tcphdr *);
-static void inline 	tcp_fields_to_host(struct tcphdr *);
-#ifdef TCP_SIGNATURE
-static void inline 	tcp_fields_to_net(struct tcphdr *);
-static int inline	tcp_signature_verify_input(struct mbuf *, int, int,
-			    int, struct tcpopt *, struct tcphdr *, u_int);
-#endif
 static void inline	cc_ack_received(struct tcpcb *tp, struct tcphdr *th,
 			    uint16_t type);
 static void inline	cc_conn_init(struct tcpcb *tp);
@@ -360,7 +354,7 @@ cc_conn_init(struct tcpcb *tp)
 	 *
 	 * RFC5681 Section 3.1 specifies the default conservative values.
 	 * RFC3390 specifies slightly more aggressive values.
-	 * Draft-ietf-tcpm-initcwnd-05 increases it to ten segments.
+	 * RFC6928 increases it to ten segments.
 	 *
 	 * If a SYN or SYN/ACK was lost and retransmitted, we have to
 	 * reduce the initial CWND to one segment as congestion is likely
@@ -455,27 +449,7 @@ cc_post_recovery(struct tcpcb *tp, struct tcphdr *th)
 	tp->t_bytes_acked = 0;
 }
 
-static inline void
-tcp_fields_to_host(struct tcphdr *th)
-{
-
-	th->th_seq = ntohl(th->th_seq);
-	th->th_ack = ntohl(th->th_ack);
-	th->th_win = ntohs(th->th_win);
-	th->th_urp = ntohs(th->th_urp);
-}
-
 #ifdef TCP_SIGNATURE
-static inline void
-tcp_fields_to_net(struct tcphdr *th)
-{
-
-	th->th_seq = htonl(th->th_seq);
-	th->th_ack = htonl(th->th_ack);
-	th->th_win = htons(th->th_win);
-	th->th_urp = htons(th->th_urp);
-}
-
 static inline int
 tcp_signature_verify_input(struct mbuf *m, int off0, int tlen, int optlen,
     struct tcpopt *to, struct tcphdr *th, u_int tcpbflag)
@@ -1393,7 +1367,7 @@ relocked:
 	}
 #endif
 
-	TCP_PROBE5(receive, NULL, tp, m->m_data, tp, th);
+	TCP_PROBE5(receive, NULL, tp, mtod(m, const char *), tp, th);
 
 	/*
 	 * Segment belongs to a connection in SYN_SENT, ESTABLISHED or later
@@ -1405,7 +1379,7 @@ relocked:
 	return;
 
 dropwithreset:
-	TCP_PROBE5(receive, NULL, tp, m->m_data, tp, th);
+	TCP_PROBE5(receive, NULL, tp, mtod(m, const char *), tp, th);
 
 	if (ti_locked == TI_WLOCKED) {
 		INP_INFO_WUNLOCK(&V_tcbinfo);
@@ -1429,7 +1403,7 @@ dropwithreset:
 
 dropunlock:
 	if (m != NULL)
-		TCP_PROBE5(receive, NULL, tp, m->m_data, tp, th);
+		TCP_PROBE5(receive, NULL, tp, mtod(m, const char *), tp, th);
 
 	if (ti_locked == TI_WLOCKED) {
 		INP_INFO_WUNLOCK(&V_tcbinfo);
@@ -1928,8 +1902,8 @@ tcp_do_segment(struct mbuf *m, struct tcphdr *th, struct socket *so,
 			goto dropwithreset;
 		}
 		if ((thflags & (TH_ACK|TH_RST)) == (TH_ACK|TH_RST)) {
-			TCP_PROBE5(connect_refused, NULL, tp, m->m_data, tp,
-			    th);
+			TCP_PROBE5(connect__refused, NULL, tp,
+			    mtod(m, const char *), tp, th);
 			tp = tcp_drop(tp, ECONNREFUSED);
 		}
 		if (thflags & TH_RST)
@@ -1981,8 +1955,8 @@ tcp_do_segment(struct mbuf *m, struct tcphdr *th, struct socket *so,
 				thflags &= ~TH_SYN;
 			} else {
 				tcp_state_change(tp, TCPS_ESTABLISHED);
-				TCP_PROBE5(connect_established, NULL, tp,
-				    m->m_data, tp, th);
+				TCP_PROBE5(connect__established, NULL, tp,
+				    mtod(m, const char *), tp, th);
 				cc_conn_init(tp);
 				tcp_timer_activate(tp, TT_KEEP,
 				    TP_KEEPIDLE(tp));
@@ -2383,8 +2357,8 @@ tcp_do_segment(struct mbuf *m, struct tcphdr *th, struct socket *so,
 			tp->t_flags &= ~TF_NEEDFIN;
 		} else {
 			tcp_state_change(tp, TCPS_ESTABLISHED);
-			TCP_PROBE5(accept_established, NULL, tp, m->m_data, tp,
-			    th);
+			TCP_PROBE5(accept__established, NULL, tp,
+			    mtod(m, const char *), tp, th);
 			cc_conn_init(tp);
 			tcp_timer_activate(tp, TT_KEEP, TP_KEEPIDLE(tp));
 		}

@@ -9,10 +9,6 @@
     ..
     arpa
     ..
-    atf-c
-    ..
-    atf-c++
-    ..
     bsm
     ..
     bsnmp
@@ -81,6 +77,8 @@
             ..
         ..
         v1
+            experimental
+            ..
             ext
             ..
             tr1
@@ -94,7 +92,7 @@
         ..
     ..
     clang
-        3.3
+        3.4.1
         ..
     ..
     crypto
@@ -287,6 +285,10 @@
         saal
         ..
         sig
+        ..
+    ..
+    netpfil
+        pf
         ..
     ..
     netsmb

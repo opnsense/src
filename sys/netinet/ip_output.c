@@ -32,6 +32,7 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#include "opt_inet.h"
 #include "opt_ipfw.h"
 #include "opt_ipsec.h"
 #include "opt_kdtrace.h"
@@ -133,9 +134,11 @@ ip_output(struct mbuf *m, struct mbuf *opt, struct route *ro, int flags,
 	struct route iproute;
 	struct rtentry *rte;	/* cache for ro->ro_rt */
 	struct in_addr odst;
-	int no_route_but_check = 0;
 	struct m_tag *fwd_tag = NULL;
-
+	int have_ia_ref;
+#ifdef IPSEC
+	int no_route_but_check_spd = 0;
+#endif
 	M_ASSERTPKTHDR(m);
 
 	if (inp != NULL) {
@@ -153,19 +156,8 @@ ip_output(struct mbuf *m, struct mbuf *opt, struct route *ro, int flags,
 	}
 
 #ifdef FLOWTABLE
-	if (ro->ro_rt == NULL) {
-		struct flentry *fle;
-			
-		/*
-		 * The flow table returns route entries valid for up to 30
-		 * seconds; we rely on the remainder of ip_output() taking no
-		 * longer than that long for the stability of ro_rt. The
-		 * flow ID assignment must have happened before this point.
-		 */
-		fle = flowtable_lookup_mbuf(V_ip_ft, m, AF_INET);
-		if (fle != NULL)
-			flow_to_route(fle, ro);
-	}
+	if (ro->ro_rt == NULL)
+		(void )flowtable_lookup(AF_INET, m, ro);
 #endif
 
 	if (opt) {
@@ -199,9 +191,17 @@ ip_output(struct mbuf *m, struct mbuf *opt, struct route *ro, int flags,
 		hlen = ip->ip_hl << 2;
 	}
 
+	/*
+	 * dst/gw handling:
+	 *
+	 * dst can be rewritten but always point to &ro->ro_dst
+	 * gw is readonly but can be pointed either to dst OR rt_gatewy
+	 * therefore we need restore GW if we're re-doing lookup
+	 */
 	gw = dst = (struct sockaddr_in *)&ro->ro_dst;
 again:
 	ia = NULL;
+	have_ia_ref = 0;
 	/*
 	 * If there is a cached route,
 	 * check that it is to the same destination
@@ -218,6 +218,7 @@ again:
 		RO_RTFREE(ro);
 		ro->ro_lle = NULL;
 		rte = NULL;
+		gw = dst;
 	}
 	if (rte == NULL && fwd_tag == NULL) {
 		bzero(dst, sizeof(*dst));
@@ -238,6 +239,7 @@ again:
 			error = ENETUNREACH;
 			goto bad;
 		}
+		have_ia_ref = 1;
 		ip->ip_dst.s_addr = INADDR_BROADCAST;
 		dst->sin_addr = ip->ip_dst;
 		ifp = ia->ia_ifp;
@@ -250,6 +252,7 @@ again:
 			error = ENETUNREACH;
 			goto bad;
 		}
+		have_ia_ref = 1;
 		ifp = ia->ia_ifp;
 		ip->ip_ttl = 1;
 		isbroadcast = in_broadcast(dst->sin_addr, ifp);
@@ -261,6 +264,8 @@ again:
 		 */
 		ifp = imo->imo_multicast_ifp;
 		IFP_TO_IA(ifp, ia);
+		if (ia)
+			have_ia_ref = 1;
 		isbroadcast = 0;	/* fool gcc */
 	} else {
 		/*
@@ -287,19 +292,17 @@ again:
 			 * There is no route for this packet, but it is
 			 * possible that a matching SPD entry exists.
 			 */
+			no_route_but_check_spd = 1;
 			mtu = 0; /* Silence GCC warning. */
-#endif
-			no_route_but_check = 1;
 			goto sendit;
-
+#endif
 			IPSTAT_INC(ips_noroute);
 			error = EHOSTUNREACH;
 			goto bad;
 		}
 		ia = ifatoia(rte->rt_ifa);
-		ifa_ref(&ia->ia_ifa);
 		ifp = rte->rt_ifp;
-		rte->rt_rmx.rmx_pksent++;
+		counter_u64_add(rte->rt_pksent, 1);
 		if (rte->rt_flags & RTF_GATEWAY)
 			gw = (struct sockaddr_in *)rte->rt_gateway;
 		if (rte->rt_flags & RTF_HOST)
@@ -319,9 +322,9 @@ again:
 		 * them, there is no way for one to update all its
 		 * routes when the MTU is changed.
 		 */
-		if (rte->rt_rmx.rmx_mtu > ifp->if_mtu)
-			rte->rt_rmx.rmx_mtu = ifp->if_mtu;
-		mtu = rte->rt_rmx.rmx_mtu;
+		if (rte->rt_mtu > ifp->if_mtu)
+			rte->rt_mtu = ifp->if_mtu;
+		mtu = rte->rt_mtu;
 	} else {
 		mtu = ifp->if_mtu;
 	}
@@ -479,45 +482,37 @@ again:
 
 sendit:
 #ifdef IPSEC
-	if (V_ipipsec_in_use) {
-		switch(ip_ipsec_output(&m, inp, &flags, &error)) {
-		case 1:
-			goto bad;
-		case -1:
-			goto done;
-		case 0:
-		default:
-			break;	/* Continue with packet processing. */
-		}
-		/* Update variables that are affected by ipsec4_output(). */
-		ip = mtod(m, struct ip *);
-		hlen = ip->ip_hl << 2;
+	switch(ip_ipsec_output(&m, inp, &flags, &error)) {
+	case 1:
+		goto bad;
+	case -1:
+		goto done;
+	case 0:
+	default:
+		break;	/* Continue with packet processing. */
 	}
+	/*
+	 * Check if there was a route for this packet; return error if not.
+	 */
+	if (no_route_but_check_spd) {
+		IPSTAT_INC(ips_noroute);
+		error = EHOSTUNREACH;
+		goto bad;
+	}
+	/* Update variables that are affected by ipsec4_output(). */
+	ip = mtod(m, struct ip *);
+	hlen = ip->ip_hl << 2;
 #endif /* IPSEC */
 
 	/* Jump over all PFIL processing if hooks are not active. */
-	if (!PFIL_HOOKED(&V_inet_pfil_hook)) {
-		if (no_route_but_check) {
-			IPSTAT_INC(ips_noroute);
-			error = EHOSTUNREACH;
-			goto bad;
-		}
+	if (!PFIL_HOOKED(&V_inet_pfil_hook))
 		goto passout;
-	}
-
-	if (ifp == NULL)
-		ifp = V_loif;
 
 	/* Run through list of hooks for output packets. */
 	odst.s_addr = ip->ip_dst.s_addr;
 	error = pfil_run_hooks(&V_inet_pfil_hook, &m, ifp, PFIL_OUT, inp);
 	if (error != 0 || m == NULL)
 		goto done;
-	if (no_route_but_check) {
-		IPSTAT_INC(ips_noroute);
-                error = EHOSTUNREACH;
-                goto bad;
-	}
 
 	ip = mtod(m, struct ip *);
 
@@ -543,7 +538,7 @@ sendit:
 			error = netisr_queue(NETISR_IP, m);
 			goto done;
 		} else {
-			if (ia != NULL)
+			if (have_ia_ref)
 				ifa_free(&ia->ia_ifa);
 			goto again;	/* Redo the routing table lookup. */
 		}
@@ -575,7 +570,7 @@ sendit:
 		m->m_flags |= M_SKIP_FIREWALL;
 		m->m_flags &= ~M_IP_NEXTHOP;
 		m_tag_delete(m, fwd_tag);
-		if (ia != NULL)
+		if (have_ia_ref)
 			ifa_free(&ia->ia_ifa);
 		goto again;
 	}
@@ -687,7 +682,7 @@ passout:
 done:
 	if (ro == &iproute)
 		RO_RTFREE(ro);
-	if (ia != NULL)
+	if (have_ia_ref)
 		ifa_free(&ia->ia_ifa);
 	return (error);
 bad:
@@ -882,17 +877,13 @@ in_delayed_cksum(struct mbuf *m)
 		csum = 0xffff;
 	offset += m->m_pkthdr.csum_data;	/* checksum offset */
 
-	if (offset + sizeof(u_short) > m->m_len) {
-		printf("delayed m_pullup, m->len: %d  off: %d  p: %d\n",
-		    m->m_len, offset, ip->ip_p);
-		/*
-		 * XXX
-		 * this shouldn't happen, but if it does, the
-		 * correct behavior may be to insert the checksum
-		 * in the appropriate next mbuf in the chain.
-		 */
-		return;
+	/* find the mbuf in the chain where the checksum starts*/
+	while ((m != NULL) && (offset >= m->m_len)) {
+		offset -= m->m_len;
+		m = m->m_next;
 	}
+	KASSERT(m != NULL, ("in_delayed_cksum: checksum outside mbuf chain."));
+	KASSERT(offset + sizeof(u_short) <= m->m_len, ("in_delayed_cksum: checksum split between mbufs."));
 	*(u_short *)(m->m_data + offset) = csum;
 }
 

@@ -267,7 +267,8 @@ divert_packet(struct mbuf *m, int incoming)
 		 * this iface name will come along for the ride.
 		 * (see div_output for the other half of this.)
 		 */ 
-		*((u_short *)divsrc.sin_zero) = m->m_pkthdr.rcvif->if_index;
+		strlcpy(divsrc.sin_zero, m->m_pkthdr.rcvif->if_xname,
+		    sizeof(divsrc.sin_zero));
 	}
 
 	/* Put packet on socket queue, if any */
@@ -341,7 +342,7 @@ div_output(struct socket *so, struct mbuf *m, struct sockaddr_in *sin,
 
 	/* Loopback avoidance and state recovery */
 	if (sin) {
-		u_short idx;
+		int i;
 
 		/* set the starting point. We provide a non-zero slot,
 		 * but a non_matching chain_id to skip that info and use
@@ -349,7 +350,7 @@ div_output(struct socket *so, struct mbuf *m, struct sockaddr_in *sin,
 		 */
 		dt->slot = 1; /* dummy, chain_id is invalid */
 		dt->chain_id = 0;
-		dt->rulenum = sin->sin_port; /* host format ? */
+		dt->rulenum = sin->sin_port+1; /* host format ? */
 		dt->rule_id = 0;
 		/*
 		 * Find receive interface with the given name, stuffed
@@ -357,9 +358,10 @@ div_output(struct socket *so, struct mbuf *m, struct sockaddr_in *sin,
 		 * The name is user supplied data so don't trust its size
 		 * or that it is zero terminated.
 		 */
-		idx = *((u_short *)sin->sin_zero);
-		if ( idx > 0 )
-			m->m_pkthdr.rcvif = ifnet_byindex(idx);
+		for (i = 0; i < sizeof(sin->sin_zero) && sin->sin_zero[i]; i++)
+			;
+		if ( i > 0 && i < sizeof(sin->sin_zero))
+			m->m_pkthdr.rcvif = ifunit(sin->sin_zero);
 	}
 
 	/* Reinject packet into the system as incoming or outgoing */
@@ -830,4 +832,5 @@ static moduledata_t ipdivertmod = {
 };
 
 DECLARE_MODULE(ipdivert, ipdivertmod, SI_SUB_PROTO_IFATTACHDOMAIN, SI_ORDER_ANY);
+MODULE_DEPEND(ipdivert, ipfw, 2, 2, 2);
 MODULE_VERSION(ipdivert, 1);

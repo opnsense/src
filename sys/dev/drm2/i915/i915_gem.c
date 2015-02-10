@@ -477,6 +477,7 @@ i915_gem_init_hw(struct drm_device *dev)
 	}
 
 	dev_priv->next_seqno = 1;
+	i915_gem_context_init(dev);
 	i915_gem_init_ppgtt(dev);
 	return (0);
 
@@ -1431,6 +1432,7 @@ retry:
 	m = vm_phys_fictitious_to_vm_page(dev->agp->base + obj->gtt_offset +
 	    offset);
 	if (m == NULL) {
+		VM_OBJECT_WUNLOCK(vm_obj);
 		cause = 60;
 		ret = -EFAULT;
 		goto unlock;
@@ -1450,7 +1452,6 @@ retry:
 		DRM_UNLOCK(dev);
 		VM_OBJECT_WUNLOCK(vm_obj);
 		VM_WAIT;
-		VM_OBJECT_WLOCK(vm_obj);
 		goto retry;
 	}
 	m->valid = VM_PAGE_BITS_ALL;
@@ -2584,11 +2585,16 @@ int
 i915_gpu_idle(struct drm_device *dev, bool do_retire)
 {
 	drm_i915_private_t *dev_priv = dev->dev_private;
+	struct intel_ring_buffer *ring;
 	int ret, i;
 
 	/* Flush everything onto the inactive list. */
-	for (i = 0; i < I915_NUM_RINGS; i++) {
-		ret = i915_ring_idle(&dev_priv->rings[i], do_retire);
+	for_each_ring(ring, dev_priv, i) {
+		ret = i915_switch_context(ring, NULL, DEFAULT_CONTEXT_ID);
+		if (ret)
+			return ret;
+
+		ret = i915_ring_idle(ring, do_retire);
 		if (ret)
 			return ret;
 	}

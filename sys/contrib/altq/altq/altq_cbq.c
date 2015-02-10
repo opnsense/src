@@ -54,9 +54,12 @@
 #endif
 
 #include <net/if.h>
+#include <net/if_var.h>
 #include <netinet/in.h>
 
-#include <net/pfvar.h>
+#include <netpfil/pf/pf.h>
+#include <netpfil/pf/pf_altq.h>
+#include <netpfil/pf/pf_mtag.h>
 #include <altq/altq.h>
 #include <altq/altq_cbq.h>
 #ifdef ALTQ3_COMPAT
@@ -237,10 +240,6 @@ get_class_stats(class_stats_t *statsp, struct rm_class *cl)
 #ifdef ALTQ_RIO
 	if (q_is_rio(cl->q_))
 		rio_getstats((rio_t *)cl->red_, &statsp->red[0]);
-#endif
-#ifdef ALTQ_CODEL
-	if (q_is_codel(cl->q_))
-		codel_getstats(cl->codel_, &statsp->codel);
 #endif
 }
 

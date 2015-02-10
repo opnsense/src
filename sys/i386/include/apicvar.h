@@ -10,9 +10,6 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. Neither the name of the author nor the names of any co-contributors
- *    may be used to endorse or promote products derived from this software
- *    without specific prior written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
@@ -134,15 +131,6 @@
  * it is not a normal interrupt. (Does not use the APIC's interrupt fifo)
  */
 #define	APIC_SPURIOUS_INT 255
-
-#define	LVT_LINT0	0
-#define	LVT_LINT1	1
-#define	LVT_TIMER	2
-#define	LVT_ERROR	3
-#define	LVT_PMC		4
-#define	LVT_THERMAL	5
-#define	LVT_CMCI	6
-#define	LVT_MAX		LVT_CMCI
 
 #ifndef LOCORE
 

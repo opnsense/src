@@ -80,11 +80,6 @@ static int      MY_USEIOSPACE = 1;
 
 #include <dev/my/if_myreg.h>
 
-#ifndef lint
-static          const char rcsid[] =
-"$Id: if_my.c,v 1.16 2003/04/15 06:37:25 mdodd Exp $";
-#endif
-
 /*
  * Various supported device vendors/types and their names.
  */
@@ -662,10 +657,8 @@ static void
 my_setmode_mii(struct my_softc * sc, int media)
 {
 	u_int16_t       bmcr;
-	struct ifnet   *ifp;
 
 	MY_LOCK_ASSERT(sc);
-	ifp = sc->my_ifp;
 	/*
 	 * If an autoneg session is in progress, stop it.
 	 */

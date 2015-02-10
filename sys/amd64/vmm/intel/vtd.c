@@ -39,7 +39,6 @@ __FBSDID("$FreeBSD$");
 
 #include <dev/pci/pcireg.h>
 
-#include <machine/pmap.h>
 #include <machine/vmparam.h>
 #include <contrib/dev/acpica/include/acpi.h>
 
@@ -74,11 +73,11 @@ struct vtdmap {
 
 #define	VTD_GCR_WBF		(1 << 27)
 #define	VTD_GCR_SRTP		(1 << 30)
-#define	VTD_GCR_TE		(1 << 31)
+#define	VTD_GCR_TE		(1U << 31)
 
 #define	VTD_GSR_WBFS		(1 << 27)
 #define	VTD_GSR_RTPS		(1 << 30)
-#define	VTD_GSR_TES		(1 << 31)
+#define	VTD_GSR_TES		(1U << 31)
 
 #define	VTD_CCR_ICC		(1UL << 63)	/* invalidate context cache */
 #define	VTD_CCR_CIRG_GLOBAL	(1UL << 61)	/* global invalidation */
@@ -452,6 +451,11 @@ vtd_update_mapping(void *arg, vm_paddr_t gpa, vm_paddr_t hpa, uint64_t len,
 	dom = arg;
 	ptpindex = 0;
 	ptpshift = 0;
+
+	KASSERT(gpa + len > gpa, ("%s: invalid gpa range %#lx/%#lx", __func__,
+	    gpa, len));
+	KASSERT(gpa + len <= dom->maxaddr, ("%s: gpa range %#lx/%#lx beyond "
+	    "domain maxaddr %#lx", __func__, gpa, len, dom->maxaddr));
 
 	if (gpa & PAGE_MASK)
 		panic("vtd_create_mapping: unaligned gpa 0x%0lx", gpa);

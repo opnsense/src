@@ -16,6 +16,7 @@ CFLAGS+= -I${.CURDIR}/../../ofed/drivers/infiniband/hw/mlx4
 CFLAGS+= -I${.CURDIR}/../../ofed/include/
 CFLAGS+= -DCONFIG_INFINIBAND_USER_MEM
 CFLAGS+= -DINET6 -DINET -DOFED
+CFLAGS+= -fms-extensions
 
 .if !defined(KERNBUILDDIR)
 .if ${MK_INET_SUPPORT} != "no"
@@ -31,4 +32,4 @@ opt_inet6.h:
 
 .include <bsd.kmod.mk>
 
-CFLAGS+= -Wno-cast-qual -Wno-pointer-arith -fms-extensions
+CFLAGS+= -Wno-cast-qual -Wno-pointer-arith ${GCC_MS_EXTENSIONS}

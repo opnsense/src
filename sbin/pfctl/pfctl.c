@@ -55,6 +55,7 @@ __FBSDID("$FreeBSD$");
 #include <fcntl.h>
 #include <limits.h>
 #include <netdb.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -77,7 +78,6 @@ void	 pfctl_addrprefix(char *, struct pf_addr *);
 int	 pfctl_kill_src_nodes(int, const char *, int);
 int	 pfctl_net_kill_states(int, const char *, int);
 int	 pfctl_label_kill_states(int, const char *, int);
-int	 pfctl_kill_schedule(int, const char *, int);
 int	 pfctl_id_kill_states(int, const char *, int);
 void	 pfctl_init_options(struct pfctl *);
 int	 pfctl_load_options(struct pfctl *);
@@ -117,14 +117,11 @@ const char	*optiopt = NULL;
 char		*pf_device = "/dev/pf";
 char		*ifaceopt;
 char		*tableopt;
-char		*schedule = NULL;
 const char	*tblcmdopt;
 int		 src_node_killers;
 char		*src_node_kill[2];
 int		 state_killers;
 char		*state_kill[2];
-int		 if_kill;
-char		*if_gw_kill;
 int		 loadopt;
 int		 altqsupport;
 
@@ -390,46 +387,10 @@ pfctl_clear_states(int dev, const char *iface, int opts)
 	    sizeof(psk.psk_ifname)) >= sizeof(psk.psk_ifname))
 		errx(1, "invalid interface: %s", iface);
 
-	if (if_kill) {
-		struct addrinfo *res, *resp;
-		u_int killed;
-		int ret_ga;
-
-		if ((ret_ga = getaddrinfo(if_gw_kill, NULL, NULL, &res))) {
-			errx(1, "getaddrinfo: %s", gai_strerror(ret_ga));
-			/* NOTREACHED */
-		}
-		killed = 0;
-		for (resp = res; resp; resp = resp->ai_next) {
-			if (resp->ai_addr == NULL)
-				continue;
-
-			psk.psk_af = resp->ai_family;
-
-			if (psk.psk_af == AF_INET)
-				psk.psk_src.addr.v.a.addr.v4 =
-					((struct sockaddr_in *)resp->ai_addr)->sin_addr;
-			else if (psk.psk_af == AF_INET6)
-				psk.psk_src.addr.v.a.addr.v6 =
-					((struct sockaddr_in6 *)resp->ai_addr)->
-					sin6_addr;
-			else
-				errx(1, "Unknown address family %d", psk.psk_af);
-
-			if (ioctl(dev, DIOCCLRSTATES, &psk))
-				err(1, "DIOCCLRSTATES");
-			if ((opts & PF_OPT_QUIET) == 0)
-				killed += psk.psk_af;
-		}
-		if ((opts & PF_OPT_QUIET) == 0)
-			fprintf(stderr, "%d states cleared\n", killed);
-	} else {
-		if (ioctl(dev, DIOCCLRSTATES, &psk))
-			err(1, "DIOCCLRSTATES");
-		if ((opts & PF_OPT_QUIET) == 0)
-			fprintf(stderr, "%d states cleared\n", psk.psk_af);
-	}
-
+	if (ioctl(dev, DIOCCLRSTATES, &psk))
+		err(1, "DIOCCLRSTATES");
+	if ((opts & PF_OPT_QUIET) == 0)
+		fprintf(stderr, "%d states cleared\n", psk.psk_killed);
 	return (0);
 }
 
@@ -693,25 +654,6 @@ pfctl_net_kill_states(int dev, const char *iface, int opts)
 }
 
 int
-pfctl_kill_schedule(int dev, const char *sched, int opts)
-{
-	struct pfioc_schedule_kill psk;
-
-	memset(&psk, 0, sizeof(psk));
-	if (sched != NULL && strlcpy(psk.schedule, sched,
-	    sizeof(psk.schedule)) >= sizeof(psk.schedule))
-		errx(1, "invalid schedule label: %s", sched);
-
-	if (ioctl(dev, DIOCKILLSCHEDULE, &psk))
-		err(1, "DIOCKILLSCHEDULE");
-
-	if ((opts & PF_OPT_QUIET) == 0)
-		fprintf(stderr, "killed %d states from %s schedule label\n",
-			psk.numberkilled, sched);
-	return (0);
-}
-
-int
 pfctl_label_kill_states(int dev, const char *iface, int opts)
 {
 	struct pfioc_state_kill psk;
@@ -855,17 +797,17 @@ pfctl_print_rule_counters(struct pf_rule *rule, int opts)
 	}
 	if (opts & PF_OPT_VERBOSE) {
 		printf("  [ Evaluations: %-8llu  Packets: %-8llu  "
-			    "Bytes: %-10llu  States: %-6u]\n",
+			    "Bytes: %-10llu  States: %-6ju]\n",
 			    (unsigned long long)rule->evaluations,
 			    (unsigned long long)(rule->packets[0] +
 			    rule->packets[1]),
 			    (unsigned long long)(rule->bytes[0] +
-			    rule->bytes[1]), rule->states_cur);
+			    rule->bytes[1]), (uintmax_t)rule->u_states_cur);
 		if (!(opts & PF_OPT_DEBUG))
 			printf("  [ Inserted: uid %u pid %u "
-			    "State Creations: %-6u]\n",
+			    "State Creations: %-6ju]\n",
 			    (unsigned)rule->cuid, (unsigned)rule->cpid,
-			    rule->states_tot);
+			    (uintmax_t)rule->u_states_tot);
 	}
 }
 
@@ -967,7 +909,7 @@ pfctl_show_rules(int dev, char *path, int opts, enum pfctl_show format,
 		case PFCTL_SHOW_LABELS:
 			if (pr.rule.label[0]) {
 				printf("%s %llu %llu %llu %llu"
-				    " %llu %llu %llu %llu\n",
+				    " %llu %llu %llu %ju\n",
 				    pr.rule.label,
 				    (unsigned long long)pr.rule.evaluations,
 				    (unsigned long long)(pr.rule.packets[0] +
@@ -978,7 +920,7 @@ pfctl_show_rules(int dev, char *path, int opts, enum pfctl_show format,
 				    (unsigned long long)pr.rule.bytes[0],
 				    (unsigned long long)pr.rule.packets[1],
 				    (unsigned long long)pr.rule.bytes[1],
-				    (unsigned long long)pr.rule.states_tot);
+				    (uintmax_t)pr.rule.u_states_tot);
 			}
 			break;
 		case PFCTL_SHOW_RULES:
@@ -2061,7 +2003,7 @@ main(int argc, char *argv[])
 		usage();
 
 	while ((ch = getopt(argc, argv,
-	    "a:AdD:eqf:F:gG:hi:k:K:mnNOo:Pp:rRs:t:T:vx:y:z")) != -1) {
+	    "a:AdD:eqf:F:ghi:k:K:mnNOo:Pp:rRs:t:T:vx:z")) != -1) {
 		switch (ch) {
 		case 'a':
 			anchoropt = optarg;
@@ -2130,16 +2072,6 @@ main(int argc, char *argv[])
 		case 'g':
 			opts |= PF_OPT_DEBUG;
 			break;
-		case 'G':
-			if (if_kill) {
-				warnx("can only specify -b twice");
-				usage();
-				/* NOTREACHED */
-			}
-			if_gw_kill = optarg;
-			if_kill++;
-			mode = O_RDWR;
-			break;
 		case 'A':
 			loadopt |= PFCTL_FLAG_ALTQ;
 			break;
@@ -2184,12 +2116,6 @@ main(int argc, char *argv[])
 			if (opts & PF_OPT_VERBOSE)
 				opts |= PF_OPT_VERBOSE2;
 			opts |= PF_OPT_VERBOSE;
-			break;
-		case 'y':
-			if (schedule != NULL && strlen(schedule) > 64)
-				errx(1, "Schedule label cannot be more than 64 characters\n");
-			schedule = optarg;
-			mode = O_RDWR;
 			break;
 		case 'x':
 			debugopt = pfctl_lookup_option(optarg, debugopt_list);
@@ -2398,9 +2324,6 @@ main(int argc, char *argv[])
 
 	if (src_node_killers)
 		pfctl_kill_src_nodes(dev, ifaceopt, opts);
-
-	if (schedule)
-		pfctl_kill_schedule(dev, schedule, opts);
 
 	if (tblcmdopt != NULL) {
 		error = pfctl_command_tables(argc, argv, tableopt,

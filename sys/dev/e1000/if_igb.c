@@ -988,12 +988,12 @@ igb_mq_start(struct ifnet *ifp, struct mbuf *m)
 	if (err)
 		return (err);
 	if (IGB_TX_TRYLOCK(txr)) {
-		err = igb_mq_start_locked(ifp, txr);
+		igb_mq_start_locked(ifp, txr);
 		IGB_TX_UNLOCK(txr);
 	} else
 		taskqueue_enqueue(que->tq, &txr->txq_task);
 
-	return (err);
+	return (0);
 }
 
 static int
@@ -2380,7 +2380,9 @@ igb_allocate_legacy(struct adapter *adapter)
 {
 	device_t		dev = adapter->dev;
 	struct igb_queue	*que = adapter->queues;
+#ifndef IGB_LEGACY_TX
 	struct tx_ring		*txr = adapter->tx_rings;
+#endif
 	int			error, rid = 0;
 
 	/* Turn off all interrupts */
@@ -3529,7 +3531,7 @@ igb_setup_transmit_ring(struct tx_ring *txr)
 		if (slot) {
 			int si = netmap_idx_n2k(&na->tx_rings[txr->me], i);
 			/* no need to set the address */
-			netmap_load_map(txr->txtag, txbuf->map, NMB(slot + si));
+			netmap_load_map(na, txr->txtag, txbuf->map, NMB(na, slot + si));
 		}
 #endif /* DEV_NETMAP */
 		/* clear the watch index */
@@ -3961,8 +3963,7 @@ igb_txeof(struct tx_ring *txr)
 	mtx_assert(&txr->tx_mtx, MA_OWNED);
 
 #ifdef DEV_NETMAP
-	if (netmap_tx_irq(ifp, txr->me |
-	    (NETMAP_LOCKED_ENTER|NETMAP_LOCKED_EXIT)))
+	if (netmap_tx_irq(ifp, txr->me))
 		return (FALSE);
 #endif /* DEV_NETMAP */
 
@@ -3996,7 +3997,6 @@ igb_txeof(struct tx_ring *txr)
 			    buf->map);
 			m_freem(buf->m_head);
 			buf->m_head = NULL;
-			buf->map = NULL;
 		}
 		buf->eop = NULL;
 		++txr->tx_avail;
@@ -4022,7 +4022,6 @@ igb_txeof(struct tx_ring *txr)
 				    buf->map);
 				m_freem(buf->m_head);
 				buf->m_head = NULL;
-				buf->map = NULL;
 			}
 			++txr->tx_avail;
 			buf->eop = NULL;
@@ -4230,15 +4229,13 @@ igb_allocate_receive_buffers(struct rx_ring *rxr)
 
 	for (i = 0; i < adapter->num_rx_desc; i++) {
 		rxbuf = &rxr->rx_buffers[i];
-		error = bus_dmamap_create(rxr->htag,
-		    BUS_DMA_NOWAIT, &rxbuf->hmap);
+		error = bus_dmamap_create(rxr->htag, 0, &rxbuf->hmap);
 		if (error) {
 			device_printf(dev,
 			    "Unable to create RX head DMA maps\n");
 			goto fail;
 		}
-		error = bus_dmamap_create(rxr->ptag,
-		    BUS_DMA_NOWAIT, &rxbuf->pmap);
+		error = bus_dmamap_create(rxr->ptag, 0, &rxbuf->pmap);
 		if (error) {
 			device_printf(dev,
 			    "Unable to create RX packet DMA maps\n");
@@ -4338,8 +4335,8 @@ igb_setup_receive_ring(struct rx_ring *rxr)
 			uint64_t paddr;
 			void *addr;
 
-			addr = PNMB(slot + sj, &paddr);
-			netmap_load_map(rxr->ptag, rxbuf->pmap, addr);
+			addr = PNMB(na, slot + sj, &paddr);
+			netmap_load_map(na, rxr->ptag, rxbuf->pmap, addr);
 			/* Update descriptor */
 			rxr->rx_base[j].read.pkt_addr = htole64(paddr);
 			continue;
@@ -4634,13 +4631,13 @@ igb_initialize_receive_units(struct adapter *adapter)
 		 * an init() while a netmap client is active must
 		 * preserve the rx buffers passed to userspace.
 		 * In this driver it means we adjust RDT to
-		 * somthing different from next_to_refresh
+		 * something different from next_to_refresh
 		 * (which is not used in netmap mode).
 		 */
 		if (ifp->if_capenable & IFCAP_NETMAP) {
 			struct netmap_adapter *na = NA(adapter->ifp);
 			struct netmap_kring *kring = &na->rx_rings[i];
-			int t = rxr->next_to_refresh - kring->nr_hwavail;
+			int t = rxr->next_to_refresh - nm_kr_rxspace(kring);
 
 			if (t >= adapter->num_rx_desc)
 				t -= adapter->num_rx_desc;
@@ -4758,11 +4755,13 @@ igb_rx_discard(struct rx_ring *rxr, int i)
 	if (rbuf->m_head) {
 		m_free(rbuf->m_head);
 		rbuf->m_head = NULL;
+		bus_dmamap_unload(rxr->htag, rbuf->hmap);
 	}
 
 	if (rbuf->m_pack) {
 		m_free(rbuf->m_pack);
 		rbuf->m_pack = NULL;
+		bus_dmamap_unload(rxr->ptag, rbuf->pmap);
 	}
 
 	return;
@@ -4828,8 +4827,10 @@ igb_rxeof(struct igb_queue *que, int count, int *done)
 	    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 
 #ifdef DEV_NETMAP
-	if (netmap_rx_irq(ifp, rxr->me | NETMAP_LOCKED_ENTER, &processed))
+	if (netmap_rx_irq(ifp, rxr->me, &processed)) {
+		IGB_RX_UNLOCK(rxr);
 		return (FALSE);
+	}
 #endif /* DEV_NETMAP */
 
 	/* Main clean loop */
@@ -4885,6 +4886,7 @@ igb_rxeof(struct igb_queue *que, int count, int *done)
 		** case only the first header is valid.
 		*/
 		if (rxr->hdr_split && rxr->fmp == NULL) {
+			bus_dmamap_unload(rxr->htag, rxbuf->hmap);
 			hlen = (hdr & E1000_RXDADV_HDRBUFLEN_MASK) >>
 			    E1000_RXDADV_HDRBUFLEN_SHIFT;
 			if (hlen > IGB_HDR_BUF)
@@ -4917,6 +4919,7 @@ igb_rxeof(struct igb_queue *que, int count, int *done)
 			/* clear buf info for refresh */
 			rxbuf->m_pack = NULL;
 		}
+		bus_dmamap_unload(rxr->ptag, rxbuf->pmap);
 
 		++processed; /* So we know when to refresh */
 

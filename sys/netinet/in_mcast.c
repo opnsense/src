@@ -139,7 +139,9 @@ static int	in_getmulti(struct ifnet *, const struct in_addr *,
 		    struct in_multi **);
 static int	inm_get_source(struct in_multi *inm, const in_addr_t haddr,
 		    const int noalloc, struct ip_msource **pims);
+#ifdef KTR
 static int	inm_is_ifp_detached(const struct in_multi *);
+#endif
 static int	inm_merge(struct in_multi *, /*const*/ struct in_mfilter *);
 static void	inm_purge(struct in_multi *);
 static void	inm_reap(struct in_multi *);
@@ -186,6 +188,7 @@ static STAILQ_HEAD(, ip_moptions) imo_gc_list =
     STAILQ_HEAD_INITIALIZER(imo_gc_list);
 static struct task imo_gc_task = TASK_INITIALIZER(0, inp_gcmoptions, NULL);
 
+#ifdef KTR
 /*
  * Inline function which wraps assertions for a valid ifp.
  * The ifnet layer will set the ifma's ifp pointer to NULL if the ifp
@@ -208,6 +211,7 @@ inm_is_ifp_detached(const struct in_multi *inm)
 
 	return (ifp == NULL);
 }
+#endif
 
 /*
  * Initialize an in_mfilter structure to a known state at t0, t1
@@ -1448,13 +1452,15 @@ inp_block_unblock_source(struct inpcb *inp, struct sockopt *sopt)
 	error = inm_merge(inm, imf);
 	if (error) {
 		CTR1(KTR_IGMPV3, "%s: failed to merge inm state", __func__);
-		goto out_imf_rollback;
+		goto out_in_multi_locked;
 	}
 
 	CTR1(KTR_IGMPV3, "%s: doing igmp downcall", __func__);
 	error = igmp_change_state(inm);
 	if (error)
 		CTR1(KTR_IGMPV3, "%s: failed igmp downcall", __func__);
+
+out_in_multi_locked:
 
 	IN_MULTI_UNLOCK();
 
@@ -2124,8 +2130,12 @@ inp_join_group(struct inpcb *inp, struct sockopt *sopt)
 	if (is_new) {
 		error = in_joingroup_locked(ifp, &gsa->sin.sin_addr, imf,
 		    &inm);
-		if (error)
+		if (error) {
+                        CTR1(KTR_IGMPV3, "%s: in_joingroup_locked failed", 
+                            __func__);
+                        IN_MULTI_UNLOCK();
 			goto out_imo_free;
+                }
 		imo->imo_membership[idx] = inm;
 	} else {
 		CTR1(KTR_IGMPV3, "%s: merge inm state", __func__);
@@ -2133,20 +2143,21 @@ inp_join_group(struct inpcb *inp, struct sockopt *sopt)
 		if (error) {
 			CTR1(KTR_IGMPV3, "%s: failed to merge inm state",
 			    __func__);
-			goto out_imf_rollback;
+			goto out_in_multi_locked;
 		}
 		CTR1(KTR_IGMPV3, "%s: doing igmp downcall", __func__);
 		error = igmp_change_state(inm);
 		if (error) {
 			CTR1(KTR_IGMPV3, "%s: failed igmp downcall",
 			    __func__);
-			goto out_imf_rollback;
+			goto out_in_multi_locked;
 		}
 	}
 
+out_in_multi_locked:
+
 	IN_MULTI_UNLOCK();
 
-out_imf_rollback:
 	INP_WLOCK_ASSERT(inp);
 	if (error) {
 		imf_rollback(imf);
@@ -2350,7 +2361,7 @@ inp_leave_group(struct inpcb *inp, struct sockopt *sopt)
 		if (error) {
 			CTR1(KTR_IGMPV3, "%s: failed to merge inm state",
 			    __func__);
-			goto out_imf_rollback;
+			goto out_in_multi_locked;
 		}
 
 		CTR1(KTR_IGMPV3, "%s: doing igmp downcall", __func__);
@@ -2361,9 +2372,10 @@ inp_leave_group(struct inpcb *inp, struct sockopt *sopt)
 		}
 	}
 
+out_in_multi_locked:
+
 	IN_MULTI_UNLOCK();
 
-out_imf_rollback:
 	if (error)
 		imf_rollback(imf);
 	else
@@ -2597,13 +2609,15 @@ inp_set_source_filters(struct inpcb *inp, struct sockopt *sopt)
 	error = inm_merge(inm, imf);
 	if (error) {
 		CTR1(KTR_IGMPV3, "%s: failed to merge inm state", __func__);
-		goto out_imf_rollback;
+		goto out_in_multi_locked;
 	}
 
 	CTR1(KTR_IGMPV3, "%s: doing igmp downcall", __func__);
 	error = igmp_change_state(inm);
 	if (error)
 		CTR1(KTR_IGMPV3, "%s: failed igmp downcall", __func__);
+
+out_in_multi_locked:
 
 	IN_MULTI_UNLOCK();
 

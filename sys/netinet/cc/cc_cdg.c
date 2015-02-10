@@ -81,11 +81,6 @@ __FBSDID("$FreeBSD$");
 
 #define	CAST_PTR_INT(X) (*((int*)(X)))
 
-#ifndef	VIMAGE
-#define	vnet_sysctl_handle_uint(oidp, arg1, arg2, req) \
-    sysctl_handle_int(oidp, arg1, arg2, req)
-#endif
-
 /* Private delay-gradient induced congestion control signal. */
 #define	CC_CDG_DELAY 0x01000000
 
@@ -226,6 +221,7 @@ static VNET_DEFINE(uint32_t, cdg_hold_backoff);
 
 /* Function prototypes. */
 static int cdg_mod_init(void);
+static int cdg_mod_destroy(void);
 static void cdg_conn_init(struct cc_var *ccv);
 static int cdg_cb_init(struct cc_var *ccv);
 static void cdg_cb_destroy(struct cc_var *ccv);
@@ -239,7 +235,8 @@ struct cc_algo cdg_cc_algo = {
 	.cb_destroy = cdg_cb_destroy,
 	.cb_init = cdg_cb_init,
 	.conn_init = cdg_conn_init,
-	.cong_signal = cdg_cong_signal
+	.cong_signal = cdg_cong_signal,
+	.mod_destroy = cdg_mod_destroy
 };
 
 /* Vnet created and being initialised. */
@@ -279,6 +276,14 @@ cdg_mod_init(void)
 	cdg_cc_algo.post_recovery = newreno_cc_algo.post_recovery;
 	cdg_cc_algo.after_idle = newreno_cc_algo.after_idle;
 
+	return (0);
+}
+
+static int
+cdg_mod_destroy(void)
+{
+
+	uma_zdestroy(qdiffsample_zone);
 	return (0);
 }
 
@@ -357,7 +362,7 @@ cdg_beta_handler(SYSCTL_HANDLER_ARGS)
 	    (CAST_PTR_INT(req->newptr) == 0 || CAST_PTR_INT(req->newptr) > 100))
 		return (EINVAL);
 
-	return (vnet_sysctl_handle_uint(oidp, arg1, arg2, req));
+	return (sysctl_handle_int(oidp, arg1, arg2, req));
 }
 
 static int
@@ -367,7 +372,7 @@ cdg_exp_backoff_scale_handler(SYSCTL_HANDLER_ARGS)
 	if (req->newptr != NULL && CAST_PTR_INT(req->newptr) < 1)
 		return (EINVAL);
 
-	return (vnet_sysctl_handle_uint(oidp, arg1, arg2, req));
+	return (sysctl_handle_int(oidp, arg1, arg2, req));
 }
 
 static inline unsigned long

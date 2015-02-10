@@ -58,8 +58,6 @@ struct secasindex {
 	u_int8_t mode;			/* mode of protocol, see ipsec.h */
 	u_int32_t reqid;		/* reqid id who owned this SA */
 					/* see IPSEC_MANUAL_REQID_MAX. */
-	u_int32_t qid;			/* used for ALTQ shaping inside */
-					/* tunnel */
 };
 
 /* 
@@ -119,7 +117,6 @@ struct comp_algo;
 /* Security Association */
 struct secasvar {
 	LIST_ENTRY(secasvar) chain;
-	LIST_ENTRY(secasvar) spihash;
 	struct mtx lock;		/* update/access lock */
 
 	u_int refcnt;			/* reference count */

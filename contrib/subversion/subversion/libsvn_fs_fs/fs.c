@@ -41,6 +41,7 @@
 #include "rep-cache.h"
 #include "svn_private_config.h"
 #include "private/svn_fs_util.h"
+#include "private/svn_subr_private.h"
 
 #include "../libsvn_fs/fs-loader.h"
 
@@ -97,8 +98,11 @@ fs_serialized_init(svn_fs_t *fs, apr_pool_t *common_pool, apr_pool_t *pool)
       SVN_ERR(svn_mutex__init(&ffsd->txn_current_lock,
                               SVN_FS_FS__USE_LOCK_MUTEX, common_pool));
 
+      /* We also need a mutex for synchronizing access to the active
+         transaction list and free transaction pointer.  This one is
+         enabled unconditionally. */
       SVN_ERR(svn_mutex__init(&ffsd->txn_list_lock,
-                              SVN_FS_FS__USE_LOCK_MUTEX, common_pool));
+                              TRUE, common_pool));
 
       key = apr_pstrdup(common_pool, key);
       status = apr_pool_userdata_set(ffsd, key, NULL, common_pool);
@@ -449,7 +453,7 @@ svn_fs_fs__init(const svn_version_t *loader_version,
     return svn_error_createf(SVN_ERR_VERSION_MISMATCH, NULL,
                              _("Unsupported FS loader version (%d) for fsfs"),
                              loader_version->major);
-  SVN_ERR(svn_ver_check_list(fs_version(), checklist));
+  SVN_ERR(svn_ver_check_list2(fs_version(), checklist, svn_ver_equal));
 
   *vtable = &library_vtable;
   return SVN_NO_ERROR;

@@ -32,7 +32,7 @@
 .\"	@(#)hier.7	8.1 (Berkeley) 6/5/93
 .\" $FreeBSD$
 .\"
-.Dd October 29, 2013
+.Dd December 25, 2013
 .Dt HIER 7
 .Os
 .Sh NAME
@@ -90,10 +90,6 @@ see
 .Xr rc 8
 .It Pa bluetooth/
 bluetooth configuration files
-.It Pa gnats/
-gnats configuration files;
-see
-.Xr send-pr 1
 .It Pa localtime
 local timezone information;
 see
@@ -104,10 +100,6 @@ Sendmail control files
 mtree configuration files;
 see
 .Xr mtree 8
-.It Pa namedb/
-named configuration files;
-see
-.Xr named 8
 .It Pa pam.d/
 configuration files for the Pluggable Authentication Modules (PAM)
 library
@@ -387,6 +379,9 @@ a.out backward compatibility libraries
 DTrace library scripts
 .It Pa engines/
 OpenSSL (Cryptography/SSL toolkit) dynamically loadable engines
+.It Pa private/
+Private system libraries not for use by third-party programs.
+ABI and API stability are not guaranteed.
 .El
 .Pp
 .It Pa libdata/
@@ -645,6 +640,26 @@ timezone configuration information;
 see
 .Xr tzfile 5
 .El
+.It Pa vt/
+files used by vt;
+see
+.Xr vt 4
+.Bl -tag -width ".Pa scrnmaps/" -compact
+.It Pa fonts/
+console fonts;
+see
+.Xr vidcontrol 1
+and
+.Xr vidfont 1
+.It Pa keymaps/
+console keyboard maps;
+see
+.Xr kbdcontrol 1
+and
+.Xr kbdmap 1
+.\" .It Pa scrnmaps/
+.\" console screen maps
+.El
 .It Pa src/
 .Bx ,
 third-party, and/or local source files
@@ -702,6 +717,14 @@ source code for files in
 source code for files in
 .Pa /usr/sbin
 .El
+.Pp
+.It Pa tests/
+The
+.Fx
+test suite.
+See
+.Xr tests 7
+for more details.
 .El
 .It Pa /var/
 multi-purpose log, temporary, transient, and spool files
@@ -798,11 +821,6 @@ system information files describing various info about
 system since it was booted
 .Pp
 .Bl -tag -width Fl -compact
-.It Pa named/
-writable by the
-.Dq bind
-user; see
-.Xr named 8
 .It Pa ppp/
 writable by the
 .Dq network

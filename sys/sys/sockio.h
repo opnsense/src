@@ -44,8 +44,8 @@
 #define	SIOCSPGRP	 _IOW('s',  8, int)		/* set process group */
 #define	SIOCGPGRP	 _IOR('s',  9, int)		/* get process group */
 
-#define	SIOCADDRT	 _IOW('r', 10, struct ortentry)	/* add route */
-#define	SIOCDELRT	 _IOW('r', 11, struct ortentry)	/* delete route */
+/*	SIOCADDRT	 _IOW('r', 10, struct ortentry)	4.3BSD */
+/*	SIOCDELRT	 _IOW('r', 11, struct ortentry)	4.3BSD */
 #define	SIOCGETVIFCNT	_IOWR('r', 15, struct sioc_vif_req)/* get vif pkt cnt */
 #define	SIOCGETSGCNT	_IOWR('r', 16, struct sioc_sg_req) /* get s,g pkt cnt */
 
@@ -127,6 +127,5 @@
 #define	SIOCGIFGROUP	_IOWR('i', 136, struct ifgroupreq) /* get ifgroups */
 #define	SIOCDIFGROUP	 _IOW('i', 137, struct ifgroupreq) /* delete ifgroup */
 #define	SIOCGIFGMEMB	_IOWR('i', 138, struct ifgroupreq) /* get members */
-#define	SIOCORDERIFADDR	_IOWR('i', 139, struct ifaliasreq) /* reorder interface */
 
 #endif /* !_SYS_SOCKIO_H_ */

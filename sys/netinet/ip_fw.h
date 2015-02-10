@@ -74,8 +74,6 @@ typedef struct _ip_fw3_opheader {
 #define	IP_FW_TABLE_XDEL	87	/* delete entry */
 #define	IP_FW_TABLE_XGETSIZE	88	/* get table size */
 #define	IP_FW_TABLE_XLIST	89	/* list table contents */
-#define	IP_FW_TABLE_XLISTENTRY	90	/* list one table entry contents */
-#define	IP_FW_TABLE_XZEROENTRY	91	/* zero one table entry stats */
 
 /*
  * The kernel representation of ipfw rules is made of a list of

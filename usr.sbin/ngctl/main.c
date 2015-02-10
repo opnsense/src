@@ -218,6 +218,7 @@ ReadFile(FILE *fp)
 			continue;
 		if ((rtn = DoParseCommand(line)) != 0) {
 			warnx("line %d: error in file", num);
+			return (rtn);
 		}
 	}
 	return (CMDRTN_OK);

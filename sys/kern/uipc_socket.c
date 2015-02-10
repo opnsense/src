@@ -486,6 +486,10 @@ SYSCTL_INT(_regression, OID_AUTO, sonewconn_earlytest, CTLFLAG_RW,
 struct socket *
 sonewconn(struct socket *head, int connstatus)
 {
+	static struct timeval lastover;
+	static struct timeval overinterval = { 60, 0 };
+	static int overcount;
+
 	struct socket *so;
 	int over;
 
@@ -497,9 +501,17 @@ sonewconn(struct socket *head, int connstatus)
 #else
 	if (over) {
 #endif
-		log(LOG_DEBUG, "%s: pcb %p: Listen queue overflow: "
-		    "%i already in queue awaiting acceptance\n",
-		    __func__, head->so_pcb, head->so_qlen);
+		overcount++;
+
+		if (ratecheck(&lastover, &overinterval)) {
+			log(LOG_DEBUG, "%s: pcb %p: Listen queue overflow: "
+			    "%i already in queue awaiting acceptance "
+			    "(%d occurrences)\n",
+			    __func__, head->so_pcb, head->so_qlen, overcount);
+
+			overcount = 0;
+		}
+
 		return (NULL);
 	}
 	VNET_ASSERT(head->so_vnet != NULL, ("%s:%d so_vnet is NULL, head=%p",
@@ -2536,8 +2548,10 @@ sosetopt(struct socket *so, struct sockopt *sopt)
 				error = EDOM;
 				goto bad;
 			}
-			val = tvtosbt(tv);
-
+			if (tv.tv_sec > INT32_MAX)
+				val = SBT_MAX;
+			else
+				val = tvtosbt(tv);
 			switch (sopt->sopt_name) {
 			case SO_SNDTIMEO:
 				so->so_snd.sb_timeo = val;
@@ -2687,10 +2701,8 @@ integer:
 
 		case SO_SNDTIMEO:
 		case SO_RCVTIMEO:
-			optval = (sopt->sopt_name == SO_SNDTIMEO ?
-				  so->so_snd.sb_timeo : so->so_rcv.sb_timeo);
-
-			tv = sbttotv(optval);
+			tv = sbttotv(sopt->sopt_name == SO_SNDTIMEO ?
+			    so->so_snd.sb_timeo : so->so_rcv.sb_timeo);
 #ifdef COMPAT_FREEBSD32
 			if (SV_CURPROC_FLAG(SV_ILP32)) {
 				struct timeval32 tv32;

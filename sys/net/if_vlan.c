@@ -1,9 +1,5 @@
 /*-
  * Copyright 1998 Massachusetts Institute of Technology
- * Copyright 2012 ADARA Networks, Inc.
- *
- * Portions of this software were developed by Robert N. M. Watson under
- * contract to ADARA Networks, Inc.
  *
  * Permission to use, copy, modify, and distribute this software and
  * its documentation for any purpose and without fee is hereby
@@ -55,7 +51,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/mbuf.h>
 #include <sys/module.h>
 #include <sys/rwlock.h>
-#include <sys/priv.h>
 #include <sys/queue.h>
 #include <sys/socket.h>
 #include <sys/sockio.h>
@@ -117,7 +112,6 @@ struct	ifvlan {
 		int	ifvm_mintu;	/* min transmission unit */
 		uint16_t ifvm_proto;	/* encapsulation ethertype */
 		uint16_t ifvm_tag;	/* tag to apply on packets leaving if */
-		uint8_t	ifvm_pcp;	/* Priority Code Point (PCP). */
 	}	ifv_mib;
 	SLIST_HEAD(, vlan_mc_entry) vlan_mc_listhead;
 #ifndef VLAN_ARRAY
@@ -126,7 +120,6 @@ struct	ifvlan {
 };
 #define	ifv_proto	ifv_mib.ifvm_proto
 #define	ifv_vid		ifv_mib.ifvm_tag
-#define	ifv_pcp		ifv_mib.ifvm_pcp
 #define	ifv_encaplen	ifv_mib.ifvm_encaplen
 #define	ifv_mtufudge	ifv_mib.ifvm_mtufudge
 #define	ifv_mintu	ifv_mib.ifvm_mintu
@@ -150,15 +143,6 @@ static SYSCTL_NODE(_net_link_vlan, PF_LINK, link, CTLFLAG_RW, 0,
 static int soft_pad = 0;
 SYSCTL_INT(_net_link_vlan, OID_AUTO, soft_pad, CTLFLAG_RW, &soft_pad, 0,
 	   "pad short frames before tagging");
-
-/*
- * For now, make preserving PCP via an mbuf tag optional, as it increases
- * per-packet memory allocations and frees.  In the future, it would be
- * preferable to reuse ether_vtag for this, or similar.
- */
-static int vlan_mtag_pcp = 0;
-SYSCTL_INT(_net_link_vlan, OID_AUTO, mtag_pcp, CTLFLAG_RW, &vlan_mtag_pcp, 0,
-	"Retain VLAN PCP information as packets are passed up the stack");
 
 static const char vlanname[] = "vlan";
 static MALLOC_DEFINE(M_VLAN, vlanname, "802.1Q Virtual LAN Interface");
@@ -474,48 +458,48 @@ trunk_destroy(struct ifvlantrunk *trunk)
  * traffic that it doesn't really want, which ends up being discarded
  * later by the upper protocol layers. Unfortunately, there's no way
  * to avoid this: there really is only one physical interface.
- *
- * XXX: There is a possible race here if more than one thread is
- *      modifying the multicast state of the vlan interface at the same time.
  */
 static int
 vlan_setmulti(struct ifnet *ifp)
 {
 	struct ifnet		*ifp_p;
-	struct ifmultiaddr	*ifma, *rifma = NULL;
+	struct ifmultiaddr	*ifma;
 	struct ifvlan		*sc;
 	struct vlan_mc_entry	*mc;
 	int			error;
 
-	/*VLAN_LOCK_ASSERT();*/
-
 	/* Find the parent. */
 	sc = ifp->if_softc;
+	TRUNK_LOCK_ASSERT(TRUNK(sc));
 	ifp_p = PARENT(sc);
 
 	CURVNET_SET_QUIET(ifp_p->if_vnet);
 
 	/* First, remove any existing filter entries. */
 	while ((mc = SLIST_FIRST(&sc->vlan_mc_listhead)) != NULL) {
-		error = if_delmulti(ifp_p, (struct sockaddr *)&mc->mc_addr);
-		if (error)
-			return (error);
 		SLIST_REMOVE_HEAD(&sc->vlan_mc_listhead, mc_entries);
+		(void)if_delmulti(ifp_p, (struct sockaddr *)&mc->mc_addr);
 		free(mc, M_VLAN);
 	}
 
 	/* Now program new ones. */
+	IF_ADDR_WLOCK(ifp);
 	TAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
 		if (ifma->ifma_addr->sa_family != AF_LINK)
 			continue;
 		mc = malloc(sizeof(struct vlan_mc_entry), M_VLAN, M_NOWAIT);
-		if (mc == NULL)
+		if (mc == NULL) {
+			IF_ADDR_WUNLOCK(ifp);
 			return (ENOMEM);
+		}
 		bcopy(ifma->ifma_addr, &mc->mc_addr, ifma->ifma_addr->sa_len);
 		mc->mc_addr.sdl_index = ifp_p->if_index;
 		SLIST_INSERT_HEAD(&sc->vlan_mc_listhead, mc, mc_entries);
+	}
+	IF_ADDR_WUNLOCK(ifp);
+	SLIST_FOREACH (mc, &sc->vlan_mc_listhead, mc_entries) {
 		error = if_addmulti(ifp_p, (struct sockaddr *)&mc->mc_addr,
-		    &rifma);
+		    NULL);
 		if (error)
 			return (error);
 	}
@@ -706,16 +690,6 @@ vlan_devat(struct ifnet *ifp, uint16_t vid)
 		ifp = ifv->ifv_ifp;
 	TRUNK_RUNLOCK(trunk);
 	return (ifp);
-}
-
-/*
- * Recalculate the cached VLAN tag exposed via the MIB.
- */
-static void
-vlan_tag_recalculate(struct ifvlan *ifv)
-{
-
-	ifv->ifv_mib.ifvm_tag = EVL_MAKETAG(ifv->ifv_vid, ifv->ifv_pcp, 0);
 }
 
 /*
@@ -1052,8 +1026,6 @@ vlan_transmit(struct ifnet *ifp, struct mbuf *m)
 {
 	struct ifvlan *ifv;
 	struct ifnet *p;
-	struct m_tag *mtag;
-	uint16_t tag;
 	int error, len, mcast;
 
 	ifv = ifp->if_softc;
@@ -1109,16 +1081,11 @@ vlan_transmit(struct ifnet *ifp, struct mbuf *m)
 	 * knows how to find the VLAN tag to use, so we attach a
 	 * packet tag that holds it.
 	 */
-	if (vlan_mtag_pcp && (mtag = m_tag_locate(m, MTAG_8021Q,
-	    MTAG_8021Q_PCP_OUT, NULL)) != NULL)
-		tag = EVL_MAKETAG(ifv->ifv_vid, *(uint8_t *)(mtag + 1), 0);
-	else
-		tag = EVL_MAKETAG(ifv->ifv_vid, ifv->ifv_pcp, 0);
 	if (p->if_capenable & IFCAP_VLAN_HWTAGGING) {
-		m->m_pkthdr.ether_vtag = tag;
+		m->m_pkthdr.ether_vtag = ifv->ifv_vid;
 		m->m_flags |= M_VLANTAG;
 	} else {
-		m = ether_vlanencap(m, tag);
+		m = ether_vlanencap(m, ifv->ifv_vid);
 		if (m == NULL) {
 			if_printf(ifp, "unable to prepend VLAN header\n");
 			ifp->if_oerrors++;
@@ -1152,8 +1119,7 @@ vlan_input(struct ifnet *ifp, struct mbuf *m)
 {
 	struct ifvlantrunk *trunk = ifp->if_vlantrunk;
 	struct ifvlan *ifv;
-	struct m_tag *mtag;
-	uint16_t vid, tag;
+	uint16_t vid;
 
 	KASSERT(trunk != NULL, ("%s: no trunk", __func__));
 
@@ -1162,7 +1128,7 @@ vlan_input(struct ifnet *ifp, struct mbuf *m)
 		 * Packet is tagged, but m contains a normal
 		 * Ethernet frame; the tag is stored out-of-band.
 		 */
-		tag = m->m_pkthdr.ether_vtag;
+		vid = EVL_VLANOFTAG(m->m_pkthdr.ether_vtag);
 		m->m_flags &= ~M_VLANTAG;
 	} else {
 		struct ether_vlan_header *evl;
@@ -1178,7 +1144,7 @@ vlan_input(struct ifnet *ifp, struct mbuf *m)
 				return;
 			}
 			evl = mtod(m, struct ether_vlan_header *);
-			tag = ntohs(evl->evl_tag);
+			vid = EVL_VLANOFTAG(ntohs(evl->evl_tag));
 
 			/*
 			 * Remove the 802.1q header by copying the Ethernet
@@ -1202,8 +1168,6 @@ vlan_input(struct ifnet *ifp, struct mbuf *m)
 		}
 	}
 
-	vid = EVL_VLANOFTAG(tag);
-
 	TRUNK_RLOCK(trunk);
 	ifv = vlan_gethash(trunk, vid);
 	if (ifv == NULL || !UP_AND_RUNNING(ifv->ifv_ifp)) {
@@ -1213,28 +1177,6 @@ vlan_input(struct ifnet *ifp, struct mbuf *m)
 		return;
 	}
 	TRUNK_RUNLOCK(trunk);
-
-	if (vlan_mtag_pcp) {
-		/*
-		 * While uncommon, it is possible that we will find a 802.1q
-		 * packet encapsulated inside another packet that also had an
-		 * 802.1q header.  For example, ethernet tunneled over IPSEC
-		 * arriving over ethernet.  In that case, we replace the
-		 * existing 802.1q PCP m_tag value.
-		 */
-		mtag = m_tag_locate(m, MTAG_8021Q, MTAG_8021Q_PCP_IN, NULL);
-		if (mtag == NULL) {
-			mtag = m_tag_alloc(MTAG_8021Q, MTAG_8021Q_PCP_IN,
-			    sizeof(uint8_t), M_NOWAIT);
-			if (mtag == NULL) {
-				m_freem(m);
-				ifp->if_ierrors++;
-				return;
-			}
-			m_tag_prepend(m, mtag);
-		}
-		*(uint8_t *)(mtag + 1) = EVL_PRIOFTAG(tag);
-	}
 
 	m->m_pkthdr.rcvif = ifv->ifv_ifp;
 	ifv->ifv_ifp->if_ipackets++;
@@ -1284,8 +1226,6 @@ exists:
 	}
 
 	ifv->ifv_vid = vid;	/* must set this before vlan_inshash() */
-	ifv->ifv_pcp = 0;       /* Default: best effort delivery. */
-	vlan_tag_recalculate(ifv);
 	error = vlan_inshash(trunk, ifv);
 	if (error)
 		goto done;
@@ -1432,7 +1372,7 @@ vlan_unconfig_locked(struct ifnet *ifp, int departing)
 		 * Check if we were the last.
 		 */
 		if (trunk->refcnt == 0) {
-			trunk->parent->if_vlantrunk = NULL;
+			parent->if_vlantrunk = NULL;
 			/*
 			 * XXXGL: If some ithread has already entered
 			 * vlan_input() and is now blocked on the trunk
@@ -1569,6 +1509,8 @@ vlan_capabilities(struct ifvlan *ifv)
 	 * propagate the hardware-assisted flag. TSO on VLANs
 	 * does not necessarily require hardware VLAN tagging.
 	 */
+	if (p->if_hw_tsomax > 0)
+		ifp->if_hw_tsomax = p->if_hw_tsomax;
 	if (p->if_capabilities & IFCAP_VLAN_HWTSO)
 		ifp->if_capabilities |= p->if_capabilities & IFCAP_TSO;
 	if (p->if_capenable & IFCAP_VLAN_HWTSO) {
@@ -1624,6 +1566,7 @@ vlan_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 	struct ifreq *ifr;
 	struct ifaddr *ifa;
 	struct ifvlan *ifv;
+	struct ifvlantrunk *trunk;
 	struct vlanreq vlr;
 	int error = 0;
 
@@ -1768,36 +1711,12 @@ vlan_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		 * If we don't have a parent, just remember the membership for
 		 * when we do.
 		 */
-		if (TRUNK(ifv) != NULL)
+		trunk = TRUNK(ifv);
+		if (trunk != NULL) {
+			TRUNK_LOCK(trunk);
 			error = vlan_setmulti(ifp);
-		break;
-
-	case SIOCGVLANPCP:
-#ifdef VIMAGE
-		if (ifp->if_vnet != ifp->if_home_vnet) {
-			error = EPERM;
-			break;
+			TRUNK_UNLOCK(trunk);
 		}
-#endif
-		ifr->ifr_vlan_pcp = ifv->ifv_pcp;
-		break;
-
-	case SIOCSVLANPCP:
-#ifdef VIMAGE
-		if (ifp->if_vnet != ifp->if_home_vnet) {
-			error = EPERM;
-			break;
-		}
-#endif
-		error = priv_check(curthread, PRIV_NET_SETVLANPCP);
-		if (error)
-			break;
-		if (ifr->ifr_vlan_pcp > 7) {
-			error = EINVAL;
-			break;
-		}
-		ifv->ifv_pcp = ifr->ifr_vlan_pcp;
-		vlan_tag_recalculate(ifv);
 		break;
 
 	default:

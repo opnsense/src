@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2013 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
  */
 
 /* Portions Copyright 2010 Robert Milkowski */
@@ -149,9 +149,14 @@ int
 zil_bp_tree_add(zilog_t *zilog, const blkptr_t *bp)
 {
 	avl_tree_t *t = &zilog->zl_bp_tree;
-	const dva_t *dva = BP_IDENTITY(bp);
+	const dva_t *dva;
 	zil_bp_node_t *zn;
 	avl_index_t where;
+
+	if (BP_IS_EMBEDDED(bp))
+		return (0);
+
+	dva = BP_IDENTITY(bp);
 
 	if (avl_find(t, dva, &where) != NULL)
 		return (SET_ERROR(EEXIST));
@@ -190,7 +195,7 @@ zil_read_log_block(zilog_t *zilog, const blkptr_t *bp, blkptr_t *nbp, void *dst,
 	enum zio_flag zio_flags = ZIO_FLAG_CANFAIL;
 	uint32_t aflags = ARC_WAIT;
 	arc_buf_t *abuf = NULL;
-	zbookmark_t zb;
+	zbookmark_phys_t zb;
 	int error;
 
 	if (zilog->zl_header->zh_claim_txg == 0)
@@ -263,7 +268,7 @@ zil_read_log_data(zilog_t *zilog, const lr_write_t *lr, void *wbuf)
 	const blkptr_t *bp = &lr->lr_blkptr;
 	uint32_t aflags = ARC_WAIT;
 	arc_buf_t *abuf = NULL;
-	zbookmark_t zb;
+	zbookmark_phys_t zb;
 	int error;
 
 	if (BP_IS_HOLE(bp)) {
@@ -383,7 +388,8 @@ zil_claim_log_block(zilog_t *zilog, blkptr_t *bp, void *tx, uint64_t first_txg)
 	 * Claim log block if not already committed and not already claimed.
 	 * If tx == NULL, just verify that the block is claimable.
 	 */
-	if (bp->blk_birth < first_txg || zil_bp_tree_add(zilog, bp) != 0)
+	if (BP_IS_HOLE(bp) || bp->blk_birth < first_txg ||
+	    zil_bp_tree_add(zilog, bp) != 0)
 		return (0);
 
 	return (zio_wait(zio_claim(NULL, zilog->zl_spa,
@@ -433,7 +439,8 @@ zil_free_log_record(zilog_t *zilog, lr_t *lrc, void *tx, uint64_t claim_txg)
 	 * If we previously claimed it, we need to free it.
 	 */
 	if (claim_txg != 0 && lrc->lrc_txtype == TX_WRITE &&
-	    bp->blk_birth >= claim_txg && zil_bp_tree_add(zilog, bp) == 0)
+	    bp->blk_birth >= claim_txg && zil_bp_tree_add(zilog, bp) == 0 &&
+	    !BP_IS_HOLE(bp))
 		zio_free(zilog->zl_spa, dmu_tx_get_txg(tx), bp);
 
 	return (0);
@@ -640,7 +647,14 @@ zil_claim(const char *osname, void *txarg)
 
 	error = dmu_objset_own(osname, DMU_OST_ANY, B_FALSE, FTAG, &os);
 	if (error != 0) {
-		cmn_err(CE_WARN, "can't open objset for %s", osname);
+		/*
+		 * EBUSY indicates that the objset is inconsistent, in which
+		 * case it can not have a ZIL.
+		 */
+		if (error != EBUSY) {
+			cmn_err(CE_WARN, "can't open objset for %s, error %u",
+			    osname, error);
+		}
 		return (0);
 	}
 
@@ -841,7 +855,7 @@ zil_lwb_write_done(zio_t *zio)
 	ASSERT(BP_GET_BYTEORDER(zio->io_bp) == ZFS_HOST_BYTEORDER);
 	ASSERT(!BP_IS_GANG(zio->io_bp));
 	ASSERT(!BP_IS_HOLE(zio->io_bp));
-	ASSERT(zio->io_bp->blk_fill == 0);
+	ASSERT(BP_GET_FILL(zio->io_bp) == 0);
 
 	/*
 	 * Ensure the lwb buffer pointer is cleared before releasing
@@ -871,7 +885,7 @@ zil_lwb_write_done(zio_t *zio)
 static void
 zil_lwb_write_init(zilog_t *zilog, lwb_t *lwb)
 {
-	zbookmark_t zb;
+	zbookmark_phys_t zb;
 
 	SET_BOOKMARK(&zb, lwb->lwb_blk.blk_cksum.zc_word[ZIL_ZC_OBJSET],
 	    ZB_ZIL_OBJECT, ZB_ZIL_LEVEL,
@@ -884,7 +898,7 @@ zil_lwb_write_init(zilog_t *zilog, lwb_t *lwb)
 	if (lwb->lwb_zio == NULL) {
 		lwb->lwb_zio = zio_rewrite(zilog->zl_root_zio, zilog->zl_spa,
 		    0, &lwb->lwb_blk, lwb->lwb_buf, BP_GET_LSIZE(&lwb->lwb_blk),
-		    zil_lwb_write_done, lwb, ZIO_PRIORITY_LOG_WRITE,
+		    zil_lwb_write_done, lwb, ZIO_PRIORITY_SYNC_WRITE,
 		    ZIO_FLAG_CANFAIL | ZIO_FLAG_DONT_PROPAGATE, &zb);
 	}
 }

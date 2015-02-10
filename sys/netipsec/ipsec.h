@@ -383,7 +383,7 @@ extern	int m_striphdr(struct mbuf *m, int skip, int hlen);
 #define	ENC_AFTER	0x0002
 #define	ENC_IN		0x0100
 #define	ENC_OUT		0x0200
-extern	int ipsec_filter(struct mbuf **, struct secasindex *, int, int);
+extern	int ipsec_filter(struct mbuf **, int, int);
 extern	void ipsec_bpf(struct mbuf *, struct secasvar *, int, int);
 #endif
 #endif /* _KERNEL */

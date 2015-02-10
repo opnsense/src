@@ -244,18 +244,18 @@ static SYSCTL_NODE(_hw, OID_AUTO, ix, CTLFLAG_RD, 0,
 ** traffic for that interrupt vector
 */
 static int ixgbe_enable_aim = TRUE;
-TUNABLE_INT("hw.ixgbe.enable_aim", &ixgbe_enable_aim);
+TUNABLE_INT("hw.ix.enable_aim", &ixgbe_enable_aim);
 SYSCTL_INT(_hw_ix, OID_AUTO, enable_aim, CTLFLAG_RW, &ixgbe_enable_aim, 0,
     "Enable adaptive interrupt moderation");
 
 static int ixgbe_max_interrupt_rate = (4000000 / IXGBE_LOW_LATENCY);
-TUNABLE_INT("hw.ixgbe.max_interrupt_rate", &ixgbe_max_interrupt_rate);
+TUNABLE_INT("hw.ix.max_interrupt_rate", &ixgbe_max_interrupt_rate);
 SYSCTL_INT(_hw_ix, OID_AUTO, max_interrupt_rate, CTLFLAG_RDTUN,
     &ixgbe_max_interrupt_rate, 0, "Maximum interrupts per second");
 
 /* How many packets rxeof tries to clean at a time */
 static int ixgbe_rx_process_limit = 256;
-TUNABLE_INT("hw.ixgbe.rx_process_limit", &ixgbe_rx_process_limit);
+TUNABLE_INT("hw.ix.rx_process_limit", &ixgbe_rx_process_limit);
 SYSCTL_INT(_hw_ix, OID_AUTO, rx_process_limit, CTLFLAG_RDTUN,
     &ixgbe_rx_process_limit, 0,
     "Maximum number of received packets to process at a time,"
@@ -263,7 +263,7 @@ SYSCTL_INT(_hw_ix, OID_AUTO, rx_process_limit, CTLFLAG_RDTUN,
 
 /* How many packets txeof tries to clean at a time */
 static int ixgbe_tx_process_limit = 256;
-TUNABLE_INT("hw.ixgbe.tx_process_limit", &ixgbe_tx_process_limit);
+TUNABLE_INT("hw.ix.tx_process_limit", &ixgbe_tx_process_limit);
 SYSCTL_INT(_hw_ix, OID_AUTO, tx_process_limit, CTLFLAG_RDTUN,
     &ixgbe_tx_process_limit, 0,
     "Maximum number of sent packets to process at a time,"
@@ -283,7 +283,7 @@ static int ixgbe_smart_speed = ixgbe_smart_speed_on;
  * but this allows it to be forced off for testing.
  */
 static int ixgbe_enable_msix = 1;
-TUNABLE_INT("hw.ixgbe.enable_msix", &ixgbe_enable_msix);
+TUNABLE_INT("hw.ix.enable_msix", &ixgbe_enable_msix);
 SYSCTL_INT(_hw_ix, OID_AUTO, enable_msix, CTLFLAG_RDTUN, &ixgbe_enable_msix, 0,
     "Enable MSI-X interrupts");
 
@@ -294,7 +294,7 @@ SYSCTL_INT(_hw_ix, OID_AUTO, enable_msix, CTLFLAG_RDTUN, &ixgbe_enable_msix, 0,
  * can be overriden manually here.
  */
 static int ixgbe_num_queues = 0;
-TUNABLE_INT("hw.ixgbe.num_queues", &ixgbe_num_queues);
+TUNABLE_INT("hw.ix.num_queues", &ixgbe_num_queues);
 SYSCTL_INT(_hw_ix, OID_AUTO, num_queues, CTLFLAG_RDTUN, &ixgbe_num_queues, 0,
     "Number of queues to configure, 0 indicates autoconfigure");
 
@@ -304,13 +304,13 @@ SYSCTL_INT(_hw_ix, OID_AUTO, num_queues, CTLFLAG_RDTUN, &ixgbe_num_queues, 0,
 ** the better performing choice.
 */
 static int ixgbe_txd = PERFORM_TXD;
-TUNABLE_INT("hw.ixgbe.txd", &ixgbe_txd);
+TUNABLE_INT("hw.ix.txd", &ixgbe_txd);
 SYSCTL_INT(_hw_ix, OID_AUTO, txd, CTLFLAG_RDTUN, &ixgbe_txd, 0,
-    "Number of receive descriptors per queue");
+    "Number of transmit descriptors per queue");
 
 /* Number of RX descriptors per ring */
 static int ixgbe_rxd = PERFORM_RXD;
-TUNABLE_INT("hw.ixgbe.rxd", &ixgbe_rxd);
+TUNABLE_INT("hw.ix.rxd", &ixgbe_rxd);
 SYSCTL_INT(_hw_ix, OID_AUTO, rxd, CTLFLAG_RDTUN, &ixgbe_rxd, 0,
     "Number of receive descriptors per queue");
 
@@ -320,7 +320,7 @@ SYSCTL_INT(_hw_ix, OID_AUTO, rxd, CTLFLAG_RDTUN, &ixgbe_rxd, 0,
 ** doing so you are on your own :)
 */
 static int allow_unsupported_sfp = FALSE;
-TUNABLE_INT("hw.ixgbe.unsupported_sfp", &allow_unsupported_sfp);
+TUNABLE_INT("hw.ix.unsupported_sfp", &allow_unsupported_sfp);
 
 /*
 ** HW RSC control: 
@@ -517,7 +517,7 @@ ixgbe_attach(device_t dev)
 	}
 
 	if (((ixgbe_rxd * sizeof(union ixgbe_adv_rx_desc)) % DBA_ALIGN) != 0 ||
-	    ixgbe_rxd < MIN_TXD || ixgbe_rxd > MAX_TXD) {
+	    ixgbe_rxd < MIN_RXD || ixgbe_rxd > MAX_RXD) {
 		device_printf(dev, "RXD config issue, using default!\n");
 		adapter->num_rx_desc = DEFAULT_RXD;
 	} else
@@ -831,12 +831,12 @@ ixgbe_mq_start(struct ifnet *ifp, struct mbuf *m)
 	if (err)
 		return (err);
 	if (IXGBE_TX_TRYLOCK(txr)) {
-		err = ixgbe_mq_start_locked(ifp, txr);
+		ixgbe_mq_start_locked(ifp, txr);
 		IXGBE_TX_UNLOCK(txr);
 	} else
 		taskqueue_enqueue(que->tq, &txr->txq_task);
 
-	return (err);
+	return (0);
 }
 
 static int
@@ -1245,7 +1245,7 @@ ixgbe_init_locked(struct adapter *adapter)
 		if (ifp->if_capenable & IFCAP_NETMAP) {
 			struct netmap_adapter *na = NA(adapter->ifp);
 			struct netmap_kring *kring = &na->rx_rings[i];
-			int t = na->num_rx_desc - 1 - kring->nr_hwavail;
+			int t = na->num_rx_desc - 1 - nm_kr_rxspace(kring);
 
 			IXGBE_WRITE_REG(hw, IXGBE_RDT(i), t);
 		} else
@@ -3079,7 +3079,7 @@ ixgbe_setup_transmit_ring(struct tx_ring *txr)
 		 */
 		if (slot) {
 			int si = netmap_idx_n2k(&na->tx_rings[txr->me], i);
-			netmap_load_map(txr->txtag, txbuf->map, NMB(slot + si));
+			netmap_load_map(na, txr->txtag, txbuf->map, NMB(na, slot + si));
 		}
 #endif /* DEV_NETMAP */
 		/* Clear the EOP descriptor pointer */
@@ -3629,8 +3629,7 @@ ixgbe_txeof(struct tx_ring *txr)
 		if (!netmap_mitigate ||
 		    (kring->nr_kflags < kring->nkr_num_slots &&
 		    txd[kring->nr_kflags].wb.status & IXGBE_TXD_STAT_DD)) {
-			netmap_tx_irq(ifp, txr->me |
-			    (NETMAP_LOCKED_ENTER|NETMAP_LOCKED_EXIT));
+			netmap_tx_irq(ifp, txr->me);
 		}
 		return;
 	}
@@ -4026,8 +4025,8 @@ ixgbe_setup_receive_ring(struct rx_ring *rxr)
 			uint64_t paddr;
 			void *addr;
 
-			addr = PNMB(slot + sj, &paddr);
-			netmap_load_map(rxr->ptag, rxbuf->pmap, addr);
+			addr = PNMB(na, slot + sj, &paddr);
+			netmap_load_map(na, rxr->ptag, rxbuf->pmap, addr);
 			/* Update descriptor and the cached value */
 			rxr->rx_base[j].read.pkt_addr = htole64(paddr);
 			rxbuf->addr = htole64(paddr);
@@ -4422,8 +4421,10 @@ ixgbe_rxeof(struct ix_queue *que)
 
 #ifdef DEV_NETMAP
 	/* Same as the txeof routine: wakeup clients on intr. */
-	if (netmap_rx_irq(ifp, rxr->me | NETMAP_LOCKED_ENTER, &processed))
+	if (netmap_rx_irq(ifp, rxr->me, &processed)) {
+		IXGBE_RX_UNLOCK(rxr);
 		return (FALSE);
+	}
 #endif /* DEV_NETMAP */
 
 	for (i = rxr->next_to_check; count != 0;) {

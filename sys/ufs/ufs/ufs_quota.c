@@ -307,7 +307,6 @@ int
 chkiq(struct inode *ip, int change, struct ucred *cred, int flags)
 {
 	struct dquot *dq;
-	ino_t ncurinodes;
 	int i, error, warn, do_check;
 
 #ifdef DIAGNOSTIC
@@ -322,10 +321,8 @@ chkiq(struct inode *ip, int change, struct ucred *cred, int flags)
 				continue;
 			DQI_LOCK(dq);
 			DQI_WAIT(dq, PINOD+1, "chkiq1");
-			ncurinodes = dq->dq_curinodes + change;
-			/* XXX: ncurinodes is unsigned */
-			if (dq->dq_curinodes != 0 && ncurinodes >= 0)
-				dq->dq_curinodes = ncurinodes;
+			if (dq->dq_curinodes >= -change)
+				dq->dq_curinodes += change;
 			else
 				dq->dq_curinodes = 0;
 			dq->dq_flags &= ~DQ_INODS;
@@ -359,11 +356,8 @@ chkiq(struct inode *ip, int change, struct ucred *cred, int flags)
 						continue;
 					DQI_LOCK(dq);
 					DQI_WAIT(dq, PINOD+1, "chkiq3");
-					ncurinodes = dq->dq_curinodes - change;
-					/* XXX: ncurinodes is unsigned */
-					if (dq->dq_curinodes != 0 &&
-					    ncurinodes >= 0)
-						dq->dq_curinodes = ncurinodes;
+					if (dq->dq_curinodes >= change)
+						dq->dq_curinodes -= change;
 					else
 						dq->dq_curinodes = 0;
 					dq->dq_flags &= ~DQ_INODS;
@@ -563,8 +557,21 @@ quotaon(struct thread *td, struct mount *mp, int type, void *fname)
 	if (*vpp != vp)
 		quotaoff1(td, mp, type);
 
+	/*
+	 * When the directory vnode containing the quota file is
+	 * inactivated, due to the shared lookup of the quota file
+	 * vput()ing the dvp, the qsyncvp() call for the containing
+	 * directory would try to acquire the quota lock exclusive.
+	 * At the same time, lookup already locked the quota vnode
+	 * shared.  Mark the quota vnode lock as allowing recursion
+	 * and automatically converting shared locks to exclusive.
+	 *
+	 * Also mark quota vnode as system.
+	 */
 	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
 	vp->v_vflag |= VV_SYSTEM;
+	VN_LOCK_AREC(vp);
+	VN_LOCK_DSHARE(vp);
 	VOP_UNLOCK(vp, 0);
 	*vpp = vp;
 	/*

@@ -47,6 +47,7 @@ LDFLAGS+= -nodefaultlibs
 LDADD+= -lgcc
 
 .if ${MK_SSP} != "no"
+DPADD+= ${LIBSSP_NONSHARED}
 LDADD+= -lssp_nonshared
 .endif
 
@@ -73,6 +74,7 @@ NOASM=
 .include "${.CURDIR}/inet/Makefile.inc"
 .include "${.CURDIR}/isc/Makefile.inc"
 .include "${.CURDIR}/locale/Makefile.inc"
+.include "${.CURDIR}/md/Makefile.inc"
 .include "${.CURDIR}/nameser/Makefile.inc"
 .include "${.CURDIR}/net/Makefile.inc"
 .include "${.CURDIR}/nls/Makefile.inc"

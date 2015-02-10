@@ -431,7 +431,7 @@ acpi_probe(device_t dev)
 
     device_set_desc(dev, acpi_desc);
 
-    return_VALUE (0);
+    return_VALUE (BUS_PROBE_NOWILDCARD);
 }
 
 static int
@@ -1190,11 +1190,36 @@ acpi_set_resource(device_t dev, device_t child, int type, int rid,
     struct acpi_softc *sc = device_get_softc(dev);
     struct acpi_device *ad = device_get_ivars(child);
     struct resource_list *rl = &ad->ad_rl;
+    ACPI_DEVICE_INFO *devinfo;
     u_long end;
     
     /* Ignore IRQ resources for PCI link devices. */
     if (type == SYS_RES_IRQ && ACPI_ID_PROBE(dev, child, pcilink_ids) != NULL)
 	return (0);
+
+    /*
+     * Ignore most resources for PCI root bridges.  Some BIOSes
+     * incorrectly enumerate the memory ranges they decode as plain
+     * memory resources instead of as ResourceProducer ranges.  Other
+     * BIOSes incorrectly list system resource entries for I/O ranges
+     * under the PCI bridge.  Do allow the one known-correct case on
+     * x86 of a PCI bridge claiming the I/O ports used for PCI config
+     * access.
+     */
+    if (type == SYS_RES_MEMORY || type == SYS_RES_IOPORT) {
+	if (ACPI_SUCCESS(AcpiGetObjectInfo(ad->ad_handle, &devinfo))) {
+	    if ((devinfo->Flags & ACPI_PCI_ROOT_BRIDGE) != 0) {
+#if defined(__i386__) || defined(__amd64__)
+		if (!(type == SYS_RES_IOPORT && start == CONF1_ADDR_PORT))
+#endif
+		{
+		    AcpiOsFree(devinfo);
+		    return (0);
+		}
+	    }
+	    AcpiOsFree(devinfo);
+	}
+    }
 
     /* If the resource is already allocated, fail. */
     if (resource_list_busy(rl, type, rid))

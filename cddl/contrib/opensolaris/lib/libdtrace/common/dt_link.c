@@ -242,8 +242,14 @@ printf("%s:%s(%d): DOODAD\n",__FUNCTION__,__FILE__,__LINE__);
 /* XXX */
 printf("%s:%s(%d): DOODAD\n",__FUNCTION__,__FILE__,__LINE__);
 #elif defined(__powerpc__)
-/* XXX */
-printf("%s:%s(%d): DOODAD\n",__FUNCTION__,__FILE__,__LINE__);
+			/*
+			 * Add 4 bytes to hit the low half of this 64-bit
+			 * big-endian address.
+			 */
+			rel->r_offset = s->dofs_offset +
+			    dofr[j].dofr_offset + 4;
+			rel->r_info = ELF32_R_INFO(count + dep->de_global,
+			    R_PPC_REL32);
 #elif defined(__sparc)
 			/*
 			 * Add 4 bytes to hit the low half of this 64-bit
@@ -423,7 +429,10 @@ prepare_elf64(dtrace_hdl_t *dtp, const dof_hdr_t *dof, dof_elf64_t *dep)
 #elif defined(__mips__)
 /* XXX */
 #elif defined(__powerpc__)
-/* XXX */
+			rel->r_offset = s->dofs_offset +
+			    dofr[j].dofr_offset;
+			rel->r_info = ELF64_R_INFO(count + dep->de_global,
+			    R_PPC64_REL64);
 #elif defined(__i386) || defined(__amd64)
 			rel->r_offset = s->dofs_offset +
 			    dofr[j].dofr_offset;
@@ -824,12 +833,84 @@ printf("%s:%s(%d): DOODAD\n",__FUNCTION__,__FILE__,__LINE__);
 	return (0);
 }
 #elif defined(__powerpc__)
+/* The sentinel is 'xor r3,r3,r3'. */
+#define DT_OP_XOR_R3	0x7c631a78
+
+#define DT_OP_NOP		0x60000000
+#define DT_OP_BLR		0x4e800020
+
+/* This captures all forms of branching to address. */
+#define DT_IS_BRANCH(inst)	((inst & 0xfc000000) == 0x48000000)
+#define DT_IS_BL(inst)	(DT_IS_BRANCH(inst) && (inst & 0x01))
+
 /* XXX */
 static int
 dt_modtext(dtrace_hdl_t *dtp, char *p, int isenabled, GElf_Rela *rela,
     uint32_t *off)
 {
-printf("%s:%s(%d): DOODAD\n",__FUNCTION__,__FILE__,__LINE__);
+	uint32_t *ip;
+
+	if ((rela->r_offset & (sizeof (uint32_t) - 1)) != 0)
+		return (-1);
+
+	/*LINTED*/
+	ip = (uint32_t *)(p + rela->r_offset);
+
+	/*
+	 * We only know about some specific relocation types.
+	 */
+	if (GELF_R_TYPE(rela->r_info) != R_PPC_REL24 &&
+	    GELF_R_TYPE(rela->r_info) != R_PPC_PLTREL24)
+		return (-1);
+
+	/*
+	 * We may have already processed this object file in an earlier linker
+	 * invocation. Check to see if the present instruction sequence matches
+	 * the one we would install below.
+	 */
+	if (isenabled) {
+		if (ip[0] == DT_OP_XOR_R3) {
+			(*off) += sizeof (ip[0]);
+			return (0);
+		}
+	} else {
+		if (ip[0] == DT_OP_NOP) {
+			(*off) += sizeof (ip[0]);
+			return (0);
+		}
+	}
+
+	/*
+	 * We only expect branch to address instructions.
+	 */
+	if (!DT_IS_BRANCH(ip[0])) {
+		dt_dprintf("found %x instead of a branch instruction at %llx\n",
+		    ip[0], (u_longlong_t)rela->r_offset);
+		return (-1);
+	}
+
+	if (isenabled) {
+		/*
+		 * It would necessarily indicate incorrect usage if an is-
+		 * enabled probe were tail-called so flag that as an error.
+		 * It's also potentially (very) tricky to handle gracefully,
+		 * but could be done if this were a desired use scenario.
+		 */
+		if (!DT_IS_BL(ip[0])) {
+			dt_dprintf("tail call to is-enabled probe at %llx\n",
+			    (u_longlong_t)rela->r_offset);
+			return (-1);
+		}
+
+		ip[0] = DT_OP_XOR_R3;
+		(*off) += sizeof (ip[0]);
+	} else {
+		if (DT_IS_BL(ip[0]))
+			ip[0] = DT_OP_NOP;
+		else
+			ip[0] = DT_OP_BLR;
+	}
+
 	return (0);
 }
 
@@ -1539,10 +1620,17 @@ process_obj(dtrace_hdl_t *dtp, const char *obj, int *eprobesp)
 			 * the executable file as the symbol is going to be
 			 * change from UND to ABS.
 			 */
-			rela.r_offset = 0;
-			rela.r_info  = 0;
-			rela.r_addend = 0;
-			(void) gelf_update_rela(data_rel, i, &rela);
+			if (shdr_rel.sh_type == SHT_RELA) {
+				rela.r_offset = 0;
+				rela.r_info  = 0;
+				rela.r_addend = 0;
+				(void) gelf_update_rela(data_rel, i, &rela);
+			} else {
+				GElf_Rel rel;
+				rel.r_offset = 0;
+				rel.r_info = 0;
+				(void) gelf_update_rel(data_rel, i, &rel);
+			}
 #endif
 
 			mod = 1;
@@ -1783,7 +1871,7 @@ dtrace_program_link(dtrace_hdl_t *dtp, dtrace_prog_t *pgp, uint_t dflags,
 		 * Arches which default to 64-bit need to explicitly use
 		 * the 32-bit library path.
 		 */
-		int use_32 = !(dtp->dt_oflags & DTRACE_O_LP64);
+		int use_32 = (dtp->dt_oflags & DTRACE_O_ILP32);
 #else
 		/*
 		 * Arches which are 32-bit only just use the normal
@@ -1798,9 +1886,7 @@ dtrace_program_link(dtrace_hdl_t *dtp, dtrace_prog_t *pgp, uint_t dflags,
 		len = snprintf(&tmp, 1, fmt, dtp->dt_ld_path, file, tfile,
 		    drti) + 1;
 
-#if !defined(sun)
 		len *= 2;
-#endif
 		cmd = alloca(len);
 
 		(void) snprintf(cmd, len, fmt, dtp->dt_ld_path, file,
@@ -1827,7 +1913,6 @@ dtrace_program_link(dtrace_hdl_t *dtp, dtrace_prog_t *pgp, uint_t dflags,
 			goto done;
 		}
 #if !defined(sun)
-#define BROKEN_LIBELF
 		/*
 		 * FreeBSD's ld(1) is not instructed to interpret and add
 		 * correctly the SUNW_dof section present in tfile.
@@ -1851,9 +1936,6 @@ dtrace_program_link(dtrace_hdl_t *dtp, dtrace_prog_t *pgp, uint_t dflags,
 		/*
 		 * Add the string '.SUWN_dof' to the shstrtab section.
 		 */
-#ifdef BROKEN_LIBELF
-		elf_flagelf(e, ELF_C_SET, ELF_F_LAYOUT);
-#endif
 		elf_getshdrstrndx(e, &stridx);
 		scn = elf_getscn(e, stridx);
 		gelf_getshdr(scn, &shdr);
@@ -1865,54 +1947,6 @@ dtrace_program_link(dtrace_hdl_t *dtp, dtrace_prog_t *pgp, uint_t dflags,
 		loc = shdr.sh_size;
 		shdr.sh_size += data->d_size;
 		gelf_update_shdr(scn, &shdr);
-#ifdef BROKEN_LIBELF
-		off = shdr.sh_offset;
-		rc = shdr.sh_offset + shdr.sh_size;
-		gelf_getehdr(e, &ehdr);
-		if (ehdr.e_shoff > off) {
-			off = ehdr.e_shoff + ehdr.e_shnum * ehdr.e_shentsize;
-			rc = roundup(rc, 8);
-			ehdr.e_shoff = rc;
-			gelf_update_ehdr(e, &ehdr);
-			rc += ehdr.e_shnum * ehdr.e_shentsize;
-		}
-		for (;;) {
-			scn0 = NULL;
-			scn = NULL;
-			while ((scn = elf_nextscn(e, scn)) != NULL) {
-				gelf_getshdr(scn, &shdr);
-				if (shdr.sh_type == SHT_NOBITS ||
-				    shdr.sh_offset < off)
-					continue;
-				/* Find the immediately adjcent section. */
-				if (scn0 == NULL ||
-				    shdr.sh_offset < shdr0.sh_offset) {
-					scn0 = scn;
-					gelf_getshdr(scn0, &shdr0);
-				}
-			}
-			if (scn0 == NULL)
-				break;
-			/* Load section data to work around another bug */
-			elf_getdata(scn0, NULL);
-			/* Update section header, assure section alignment */
-			off = shdr0.sh_offset + shdr0.sh_size;
-			rc = roundup(rc, shdr0.sh_addralign);
-			shdr0.sh_offset = rc;
-			gelf_update_shdr(scn0, &shdr0);
-			rc += shdr0.sh_size;
-		}
-		if (elf_update(e, ELF_C_WRITE) < 0) {
-			ret = dt_link_error(dtp, NULL, -1, NULL,
-			    "failed to add append the shstrtab section: %s",
-			    elf_errmsg(elf_errno()));
-			elf_end(e);
-			close(efd);
-			goto done;
-		}
-		elf_end(e);
-		e = elf_begin(efd, ELF_C_RDWR, NULL);
-#endif
 		/*
 		 * Construct the .SUNW_dof section.
 		 */

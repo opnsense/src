@@ -268,6 +268,8 @@ static const STRUCT_USB_HOST_ID uhso_devs[] = {
 	UHSO_DEV(OPTION, ICON401, UHSO_AUTO_IFACE),
 	/* Option GlobeTrotter Module 382 */
 	UHSO_DEV(OPTION, GMT382, UHSO_AUTO_IFACE),
+	/* Option GTM661W */
+	UHSO_DEV(OPTION, GTM661W, UHSO_AUTO_IFACE),
 	/* Option iCON EDGE */
 	UHSO_DEV(OPTION, ICONEDGE, UHSO_STATIC_IFACE),
 	/* Option Module HSxPA */
@@ -556,8 +558,6 @@ uhso_attach(device_t self)
 	mtx_init(&sc->sc_mtx, "uhso", NULL, MTX_DEF);
 	ucom_ref(&sc->sc_super_ucom);
 
-	sc->sc_ucom = NULL;
-	sc->sc_ttys = 0;
 	sc->sc_radio = 1;
 
 	id = usbd_get_interface_descriptor(uaa->iface);
@@ -677,9 +677,6 @@ uhso_detach(device_t self)
 				    UHSO_CTRL_MAX);
 			}
 		}
-
-		free(sc->sc_tty, M_USBDEV);
-		free(sc->sc_ucom, M_USBDEV);
 	}
 
 	if (sc->sc_ifp != NULL) {
@@ -707,6 +704,8 @@ static void
 uhso_free_softc(struct uhso_softc *sc)
 {
 	if (ucom_unref(&sc->sc_super_ucom)) {
+		free(sc->sc_tty, M_USBDEV);
+		free(sc->sc_ucom, M_USBDEV);
 		mtx_destroy(&sc->sc_mtx);
 		device_free_softc(sc);
 	}
@@ -814,6 +813,8 @@ uhso_probe_iface_auto(struct usb_device *udev, int index)
 		    UHSO_PORT_SERIAL | UHSO_PORT_NETWORK, port));
 	case UHSO_PORT_TYPE_DIAG:
 	case UHSO_PORT_TYPE_DIAG2:
+	case UHSO_PORT_TYPE_GPS:
+	case UHSO_PORT_TYPE_GPSCTL:
 	case UHSO_PORT_TYPE_CTL:
 	case UHSO_PORT_TYPE_APP:
 	case UHSO_PORT_TYPE_APP2:

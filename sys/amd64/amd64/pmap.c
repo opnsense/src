@@ -321,7 +321,7 @@ SYSCTL_INT(_machdep, OID_AUTO, nkpt, CTLFLAG_RD, &nkpt, 0,
     "Number of kernel page table pages allocated on bootup");
 
 static int ndmpdp;
-static vm_paddr_t dmaplimit;
+vm_paddr_t dmaplimit;
 vm_offset_t kernel_vm_end = VM_MIN_KERNEL_ADDRESS;
 pt_entry_t pg_nx;
 
@@ -389,6 +389,11 @@ pmap_pcid_save_cnt_proc(SYSCTL_HANDLER_ARGS)
 SYSCTL_PROC(_vm_pmap, OID_AUTO, pcid_save_cnt, CTLTYPE_U64 | CTLFLAG_RW |
     CTLFLAG_MPSAFE, NULL, 0, pmap_pcid_save_cnt_proc, "QU",
     "Count of saved TLB context on switch");
+
+/* pmap_copy_pages() over non-DMAP */
+static struct mtx cpage_lock;
+static vm_offset_t cpage_a;
+static vm_offset_t cpage_b;
 
 /*
  * Crashdump maps.
@@ -608,6 +613,9 @@ pmap_resident_count_dec(pmap_t pmap, int count)
 {
 
 	PMAP_LOCK_ASSERT(pmap, MA_OWNED);
+	KASSERT(pmap->pm_stats.resident_count >= count,
+	    ("pmap %p resident count underflow %ld %d", pmap,
+	    pmap->pm_stats.resident_count, count));
 	pmap->pm_stats.resident_count -= count;
 }
 
@@ -809,7 +817,7 @@ void
 pmap_bootstrap(vm_paddr_t *firstaddr)
 {
 	vm_offset_t va;
-	pt_entry_t *pte, *unused;
+	pt_entry_t *pte;
 
 	/*
 	 * Create an initial set of page tables to run the kernel in.
@@ -835,7 +843,7 @@ pmap_bootstrap(vm_paddr_t *firstaddr)
 	kernel_pmap->pm_pml4 = (pdp_entry_t *)PHYS_TO_DMAP(KPML4phys);
 	kernel_pmap->pm_cr3 = KPML4phys;
 	CPU_FILL(&kernel_pmap->pm_active);	/* don't allow deactivation */
-	CPU_ZERO(&kernel_pmap->pm_save);
+	CPU_FILL(&kernel_pmap->pm_save);	/* always superset of pm_active */
 	TAILQ_INIT(&kernel_pmap->pm_pvchunk);
 	kernel_pmap->pm_flags = pmap_flags;
 
@@ -855,14 +863,11 @@ pmap_bootstrap(vm_paddr_t *firstaddr)
 	pte = vtopte(va);
 
 	/*
-	 * CMAP1 is only used for the memory test.
+	 * Crashdump maps.  The first page is reused as CMAP1 for the
+	 * memory test.
 	 */
-	SYSMAP(caddr_t, CMAP1, CADDR1, 1)
-
-	/*
-	 * Crashdump maps.
-	 */
-	SYSMAP(caddr_t, unused, crashdumpmap, MAXDUMPPGS)
+	SYSMAP(caddr_t, CMAP1, crashdumpmap, MAXDUMPPGS)
+	CADDR1 = crashdumpmap;
 
 	virtual_avail = va;
 
@@ -1005,12 +1010,18 @@ pmap_init(void)
 	}
 
 	/*
-	 * If the kernel is running in a virtual machine on an AMD Family 10h
-	 * processor, then it must assume that MCA is enabled by the virtual
-	 * machine monitor.
+	 * If the kernel is running on a virtual machine, then it must assume
+	 * that MCA is enabled by the hypervisor.  Moreover, the kernel must
+	 * be prepared for the hypervisor changing the vendor and family that
+	 * are reported by CPUID.  Consequently, the workaround for AMD Family
+	 * 10h Erratum 383 is enabled if the processor's feature set does not
+	 * include at least one feature that is only supported by older Intel
+	 * or newer AMD processors.
 	 */
-	if (vm_guest == VM_GUEST_VM && cpu_vendor_id == CPU_VENDOR_AMD &&
-	    CPUID_TO_FAMILY(cpu_id) == 0x10)
+	if (vm_guest == VM_GUEST_VM && (cpu_feature & CPUID_SS) == 0 &&
+	    (cpu_feature2 & (CPUID2_SSSE3 | CPUID2_SSE41 | CPUID2_AESNI |
+	    CPUID2_AVX | CPUID2_XSAVE)) == 0 && (amd_feature2 & (AMDID2_XOP |
+	    AMDID2_FMA4)) == 0)
 		workaround_erratum383 = 1;
 
 	/*
@@ -1049,6 +1060,10 @@ pmap_init(void)
 	    M_WAITOK | M_ZERO);
 	for (i = 0; i < pv_npg; i++)
 		TAILQ_INIT(&pv_table[i].pv_list);
+
+	mtx_init(&cpage_lock, "cpage", NULL, MTX_DEF);
+	cpage_a = kva_alloc(PAGE_SIZE);
+	cpage_b = kva_alloc(PAGE_SIZE);
 }
 
 static SYSCTL_NODE(_vm_pmap, OID_AUTO, pde, CTLFLAG_RD, 0,
@@ -1295,6 +1310,7 @@ pmap_invalidate_page_pcid(pmap_t pmap, vm_offset_t va)
 static __inline void
 pmap_invalidate_ept(pmap_t pmap)
 {
+	int ipinum;
 
 	sched_pin();
 	KASSERT(!CPU_ISSET(curcpu, &pmap->pm_active),
@@ -1319,11 +1335,9 @@ pmap_invalidate_ept(pmap_t pmap)
 
 	/*
 	 * Force the vcpu to exit and trap back into the hypervisor.
-	 *
-	 * XXX this is not optimal because IPI_AST builds a trapframe
-	 * whereas all we need is an 'eoi' followed by 'iret'.
 	 */
-	ipi_selected(pmap->pm_active, IPI_AST);
+	ipinum = pmap->pm_flags & PMAP_NESTED_IPIMASK;
+	ipi_selected(pmap->pm_active, ipinum);
 	sched_unpin();
 }
 
@@ -1489,7 +1503,8 @@ pmap_invalidate_all(pmap_t pmap)
 		} else {
 			invltlb_globpcid();
 		}
-		CPU_CLR_ATOMIC(cpuid, &pmap->pm_save);
+		if (!CPU_ISSET(cpuid, &pmap->pm_active))
+			CPU_CLR_ATOMIC(cpuid, &pmap->pm_save);
 		smp_invltlb(pmap);
 	} else {
 		other_cpus = all_cpus;
@@ -1523,7 +1538,8 @@ pmap_invalidate_all(pmap_t pmap)
 			}
 		} else if (CPU_ISSET(cpuid, &pmap->pm_active))
 			invltlb();
-		CPU_CLR_ATOMIC(cpuid, &pmap->pm_save);
+		if (!CPU_ISSET(cpuid, &pmap->pm_active))
+			CPU_CLR_ATOMIC(cpuid, &pmap->pm_save);
 		if (pmap_pcid_enabled)
 			CPU_AND(&other_cpus, &pmap->pm_save);
 		else
@@ -1764,16 +1780,6 @@ pmap_invalidate_cache_pages(vm_page_t *pages, int count)
 		}
 		mfence();
 	}
-}
-
-/*
- * Are we current address space or kernel?
- */
-static __inline int
-pmap_is_current(pmap_t pmap)
-{
-	return (pmap == kernel_pmap ||
-	    (pmap->pm_pml4[PML4PML4I] & PG_FRAME) == (PML4pml4e[0] & PG_FRAME));
 }
 
 /*
@@ -3839,7 +3845,8 @@ pmap_protect(pmap_t pmap, vm_offset_t sva, vm_offset_t eva, vm_prot_t prot)
 	pt_entry_t *pte, PG_G, PG_M, PG_RW, PG_V;
 	boolean_t anychanged, pv_lists_locked;
 
-	if ((prot & VM_PROT_READ) == VM_PROT_NONE) {
+	KASSERT((prot & ~VM_PROT_ALL) == 0, ("invalid prot %x", prot));
+	if (prot == VM_PROT_NONE) {
 		pmap_remove(pmap, sva, eva);
 		return;
 	}
@@ -4110,9 +4117,9 @@ setpte:
  *	or lose information.  That is, this routine must actually
  *	insert this page into the given map NOW.
  */
-void
-pmap_enter(pmap_t pmap, vm_offset_t va, vm_prot_t access, vm_page_t m,
-    vm_prot_t prot, boolean_t wired)
+int
+pmap_enter(pmap_t pmap, vm_offset_t va, vm_page_t m, vm_prot_t prot,
+    u_int flags, int8_t psind __unused)
 {
 	struct rwlock *lock;
 	pd_entry_t *pde;
@@ -4121,6 +4128,7 @@ pmap_enter(pmap_t pmap, vm_offset_t va, vm_prot_t access, vm_page_t m,
 	pv_entry_t pv;
 	vm_paddr_t opa, pa;
 	vm_page_t mpte, om;
+	boolean_t nosleep;
 
 	PG_A = pmap_accessed_bit(pmap);
 	PG_G = pmap_global_bit(pmap);
@@ -4137,18 +4145,18 @@ pmap_enter(pmap_t pmap, vm_offset_t va, vm_prot_t access, vm_page_t m,
 	    va >= kmi.clean_eva,
 	    ("pmap_enter: managed mapping within the clean submap"));
 	if ((m->oflags & VPO_UNMANAGED) == 0 && !vm_page_xbusied(m))
-		VM_OBJECT_ASSERT_WLOCKED(m->object);
+		VM_OBJECT_ASSERT_LOCKED(m->object);
 	pa = VM_PAGE_TO_PHYS(m);
 	newpte = (pt_entry_t)(pa | PG_A | PG_V);
-	if ((access & VM_PROT_WRITE) != 0)
+	if ((flags & VM_PROT_WRITE) != 0)
 		newpte |= PG_M;
 	if ((prot & VM_PROT_WRITE) != 0)
 		newpte |= PG_RW;
 	KASSERT((newpte & (PG_M | PG_RW)) != PG_M,
-	    ("pmap_enter: access includes VM_PROT_WRITE but prot doesn't"));
+	    ("pmap_enter: flags includes VM_PROT_WRITE but prot doesn't"));
 	if ((prot & VM_PROT_EXECUTE) == 0)
 		newpte |= pg_nx;
-	if (wired)
+	if ((flags & PMAP_ENTER_WIRED) != 0)
 		newpte |= PG_W;
 	if (va < VM_MAXUSER_ADDRESS)
 		newpte |= PG_U;
@@ -4190,7 +4198,16 @@ retry:
 		 * Here if the pte page isn't mapped, or if it has been
 		 * deallocated.
 		 */
-		mpte = _pmap_allocpte(pmap, pmap_pde_pindex(va), &lock);
+		nosleep = (flags & PMAP_ENTER_NOSLEEP) != 0;
+		mpte = _pmap_allocpte(pmap, pmap_pde_pindex(va),
+		    nosleep ? NULL : &lock);
+		if (mpte == NULL && nosleep) {
+			if (lock != NULL)
+				rw_wunlock(lock);
+			rw_runlock(&pvh_global_lock);
+			PMAP_UNLOCK(pmap);
+			return (KERN_RESOURCE_SHORTAGE);
+		}
 		goto retry;
 	} else
 		panic("pmap_enter: invalid page directory va=%#lx", va);
@@ -4322,6 +4339,7 @@ unchanged:
 		rw_wunlock(lock);
 	rw_runlock(&pvh_global_lock);
 	PMAP_UNLOCK(pmap);
+	return (KERN_SUCCESS);
 }
 
 /*
@@ -4431,9 +4449,7 @@ pmap_enter_object(pmap_t pmap, vm_offset_t start, vm_offset_t end,
 	while (m != NULL && (diff = m->pindex - m_start->pindex) < psize) {
 		va = start + ptoa(diff);
 		if ((va & PDRMASK) == 0 && va + NBPDR <= end &&
-		    (VM_PAGE_TO_PHYS(m) & PDRMASK) == 0 &&
-		    pmap_ps_enabled(pmap) &&
-		    vm_reserv_level_iffullpop(m) == 0 &&
+		    m->psind == 1 && pmap_ps_enabled(pmap) &&
 		    pmap_enter_pde(pmap, va, m, prot, &lock))
 			m = &m[NBPDR / PAGE_SIZE - 1];
 		else
@@ -4689,52 +4705,96 @@ pmap_object_init_pt(pmap_t pmap, vm_offset_t addr, vm_object_t object,
 }
 
 /*
- *	Routine:	pmap_change_wiring
- *	Function:	Change the wiring attribute for a map/virtual-address
- *			pair.
- *	In/out conditions:
- *			The mapping must already exist in the pmap.
+ *	Clear the wired attribute from the mappings for the specified range of
+ *	addresses in the given pmap.  Every valid mapping within that range
+ *	must have the wired attribute set.  In contrast, invalid mappings
+ *	cannot have the wired attribute set, so they are ignored.
+ *
+ *	The wired attribute of the page table entry is not a hardware feature,
+ *	so there is no need to invalidate any TLB entries.
  */
 void
-pmap_change_wiring(pmap_t pmap, vm_offset_t va, boolean_t wired)
+pmap_unwire(pmap_t pmap, vm_offset_t sva, vm_offset_t eva)
 {
+	vm_offset_t va_next;
+	pml4_entry_t *pml4e;
+	pdp_entry_t *pdpe;
 	pd_entry_t *pde;
-	pt_entry_t *pte;
+	pt_entry_t *pte, PG_V;
 	boolean_t pv_lists_locked;
 
+	PG_V = pmap_valid_bit(pmap);
 	pv_lists_locked = FALSE;
-
-	/*
-	 * Wiring is not a hardware characteristic so there is no need to
-	 * invalidate TLB.
-	 */
-retry:
+resume:
 	PMAP_LOCK(pmap);
-	pde = pmap_pde(pmap, va);
-	if ((*pde & PG_PS) != 0) {
-		if (!wired != ((*pde & PG_W) == 0)) {
-			if (!pv_lists_locked) {
-				pv_lists_locked = TRUE;
-				if (!rw_try_rlock(&pvh_global_lock)) {
-					PMAP_UNLOCK(pmap);
-					rw_rlock(&pvh_global_lock);
-					goto retry;
+	for (; sva < eva; sva = va_next) {
+		pml4e = pmap_pml4e(pmap, sva);
+		if ((*pml4e & PG_V) == 0) {
+			va_next = (sva + NBPML4) & ~PML4MASK;
+			if (va_next < sva)
+				va_next = eva;
+			continue;
+		}
+		pdpe = pmap_pml4e_to_pdpe(pml4e, sva);
+		if ((*pdpe & PG_V) == 0) {
+			va_next = (sva + NBPDP) & ~PDPMASK;
+			if (va_next < sva)
+				va_next = eva;
+			continue;
+		}
+		va_next = (sva + NBPDR) & ~PDRMASK;
+		if (va_next < sva)
+			va_next = eva;
+		pde = pmap_pdpe_to_pde(pdpe, sva);
+		if ((*pde & PG_V) == 0)
+			continue;
+		if ((*pde & PG_PS) != 0) {
+			if ((*pde & PG_W) == 0)
+				panic("pmap_unwire: pde %#jx is missing PG_W",
+				    (uintmax_t)*pde);
+
+			/*
+			 * Are we unwiring the entire large page?  If not,
+			 * demote the mapping and fall through.
+			 */
+			if (sva + NBPDR == va_next && eva >= va_next) {
+				atomic_clear_long(pde, PG_W);
+				pmap->pm_stats.wired_count -= NBPDR /
+				    PAGE_SIZE;
+				continue;
+			} else {
+				if (!pv_lists_locked) {
+					pv_lists_locked = TRUE;
+					if (!rw_try_rlock(&pvh_global_lock)) {
+						PMAP_UNLOCK(pmap);
+						rw_rlock(&pvh_global_lock);
+						/* Repeat sva. */
+						goto resume;
+					}
 				}
+				if (!pmap_demote_pde(pmap, pde, sva))
+					panic("pmap_unwire: demotion failed");
 			}
-			if (!pmap_demote_pde(pmap, pde, va))
-				panic("pmap_change_wiring: demotion failed");
-		} else
-			goto out;
+		}
+		if (va_next > eva)
+			va_next = eva;
+		for (pte = pmap_pde_to_pte(pde, sva); sva != va_next; pte++,
+		    sva += PAGE_SIZE) {
+			if ((*pte & PG_V) == 0)
+				continue;
+			if ((*pte & PG_W) == 0)
+				panic("pmap_unwire: pte %#jx is missing PG_W",
+				    (uintmax_t)*pte);
+
+			/*
+			 * PG_W must be cleared atomically.  Although the pmap
+			 * lock synchronizes access to PG_W, another processor
+			 * could be setting PG_M and/or PG_A concurrently.
+			 */
+			atomic_clear_long(pte, PG_W);
+			pmap->pm_stats.wired_count--;
+		}
 	}
-	pte = pmap_pde_to_pte(pde, va);
-	if (wired && (*pte & PG_W) == 0) {
-		pmap->pm_stats.wired_count++;
-		atomic_set_long(pte, PG_W);
-	} else if (!wired && (*pte & PG_W) != 0) {
-		pmap->pm_stats.wired_count--;
-		atomic_clear_long(pte, PG_W);
-	}
-out:
 	if (pv_lists_locked)
 		rw_runlock(&pvh_global_lock);
 	PMAP_UNLOCK(pmap);
@@ -4973,19 +5033,66 @@ pmap_copy_pages(vm_page_t ma[], vm_offset_t a_offset, vm_page_t mb[],
     vm_offset_t b_offset, int xfersize)
 {
 	void *a_cp, *b_cp;
+	vm_page_t m_a, m_b;
+	vm_paddr_t p_a, p_b;
+	pt_entry_t *pte;
 	vm_offset_t a_pg_offset, b_pg_offset;
 	int cnt;
+	boolean_t pinned;
 
+	/*
+	 * NB:  The sequence of updating a page table followed by accesses
+	 * to the corresponding pages used in the !DMAP case is subject to
+	 * the situation described in the "AMD64 Architecture Programmer's
+	 * Manual Volume 2: System Programming" rev. 3.23, "7.3.1 Special
+	 * Coherency Considerations".  Therefore, issuing the INVLPG right
+	 * after modifying the PTE bits is crucial.
+	 */
+	pinned = FALSE;
 	while (xfersize > 0) {
 		a_pg_offset = a_offset & PAGE_MASK;
-		cnt = min(xfersize, PAGE_SIZE - a_pg_offset);
-		a_cp = (char *)PHYS_TO_DMAP(ma[a_offset >> PAGE_SHIFT]->
-		    phys_addr) + a_pg_offset;
+		m_a = ma[a_offset >> PAGE_SHIFT];
+		p_a = m_a->phys_addr;
 		b_pg_offset = b_offset & PAGE_MASK;
+		m_b = mb[b_offset >> PAGE_SHIFT];
+		p_b = m_b->phys_addr;
+		cnt = min(xfersize, PAGE_SIZE - a_pg_offset);
 		cnt = min(cnt, PAGE_SIZE - b_pg_offset);
-		b_cp = (char *)PHYS_TO_DMAP(mb[b_offset >> PAGE_SHIFT]->
-		    phys_addr) + b_pg_offset;
+		if (__predict_false(p_a < DMAP_MIN_ADDRESS ||
+		    p_a > DMAP_MIN_ADDRESS + dmaplimit)) {
+			mtx_lock(&cpage_lock);
+			sched_pin();
+			pinned = TRUE;
+			pte = vtopte(cpage_a);
+			*pte = p_a | X86_PG_A | X86_PG_V |
+			    pmap_cache_bits(kernel_pmap, m_a->md.pat_mode, 0);
+			invlpg(cpage_a);
+			a_cp = (char *)cpage_a + a_pg_offset;
+		} else {
+			a_cp = (char *)PHYS_TO_DMAP(p_a) + a_pg_offset;
+		}
+		if (__predict_false(p_b < DMAP_MIN_ADDRESS ||
+		    p_b > DMAP_MIN_ADDRESS + dmaplimit)) {
+			if (!pinned) {
+				mtx_lock(&cpage_lock);
+				sched_pin();
+				pinned = TRUE;
+			}
+			pte = vtopte(cpage_b);
+			*pte = p_b | X86_PG_A | X86_PG_M | X86_PG_RW |
+			    X86_PG_V | pmap_cache_bits(kernel_pmap,
+			    m_b->md.pat_mode, 0);
+			invlpg(cpage_b);
+			b_cp = (char *)cpage_b + b_pg_offset;
+		} else {
+			b_cp = (char *)PHYS_TO_DMAP(p_b) + b_pg_offset;
+		}
 		bcopy(a_cp, b_cp, cnt);
+		if (__predict_false(pinned)) {
+			sched_unpin();
+			mtx_unlock(&cpage_lock);
+			pinned = FALSE;
+		}
 		a_offset += cnt;
 		b_offset += cnt;
 		xfersize -= cnt;
@@ -5131,12 +5238,20 @@ pmap_page_is_mapped(vm_page_t m)
 }
 
 /*
- * Remove all pages from specified address space
- * this aids process exit speeds.  Also, this code
- * is special cased for current process only, but
- * can have the more generic (and slightly slower)
- * mode enabled.  This is much faster than pmap_remove
- * in the case of running down an entire address space.
+ * Destroy all managed, non-wired mappings in the given user-space
+ * pmap.  This pmap cannot be active on any processor besides the
+ * caller.
+ *                                                                                
+ * This function cannot be applied to the kernel pmap.  Moreover, it
+ * is not intended for general use.  It is only to be used during
+ * process termination.  Consequently, it can be implemented in ways
+ * that make it faster than pmap_remove().  First, it can more quickly
+ * destroy mappings by iterating over the pmap's collection of PV
+ * entries, rather than searching the page table.  Second, it doesn't
+ * have to test and clear the page table entries atomically, because
+ * no processor is currently accessing the user address space.  In
+ * particular, a page table entry's dirty bit won't change state once
+ * this function starts.
  */
 void
 pmap_remove_pages(pmap_t pmap)
@@ -5156,10 +5271,24 @@ pmap_remove_pages(pmap_t pmap)
 	boolean_t superpage;
 	vm_paddr_t pa;
 
-	if (pmap != PCPU_GET(curpmap)) {
-		printf("warning: pmap_remove_pages called with non-current pmap\n");
-		return;
+	/*
+	 * Assert that the given pmap is only active on the current
+	 * CPU.  Unfortunately, we cannot block another CPU from
+	 * activating the pmap while this function is executing.
+	 */
+	KASSERT(pmap == PCPU_GET(curpmap), ("non-current pmap %p", pmap));
+#ifdef INVARIANTS
+	{
+		cpuset_t other_cpus;
+
+		other_cpus = all_cpus;
+		critical_enter();
+		CPU_CLR(PCPU_GET(cpuid), &other_cpus);
+		CPU_AND(&other_cpus, &pmap->pm_active);
+		critical_exit();
+		KASSERT(CPU_EMPTY(&other_cpus), ("pmap active %p", pmap));
 	}
+#endif
 
 	lock = NULL;
 	PG_M = pmap_modified_bit(pmap);
@@ -6658,9 +6787,19 @@ retry:
 	if (ftype == VM_PROT_WRITE) {
 		if ((*pte & PG_RW) == 0)
 			goto done;
-		*pte |= PG_M;
+		/*
+		 * Set the modified and accessed bits simultaneously.
+		 *
+		 * Intel EPT PTEs that do software emulation of A/D bits map
+		 * PG_A and PG_M to EPT_PG_READ and EPT_PG_WRITE respectively.
+		 * An EPT misconfiguration is triggered if the PTE is writable
+		 * but not readable (WR=10). This is avoided by setting PG_A
+		 * and PG_M simultaneously.
+		 */
+		*pte |= PG_M | PG_A;
+	} else {
+		*pte |= PG_A;
 	}
-	*pte |= PG_A;
 
 	/* try to promote the mapping */
 	if (va < VM_MAXUSER_ADDRESS)

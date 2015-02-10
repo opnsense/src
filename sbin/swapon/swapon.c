@@ -172,15 +172,8 @@ main(int argc, char **argv)
 					continue;
 				if (strstr(fsp->fs_mntops, "noauto") != NULL)
 					continue;
-				/*
-				 * Forcibly enable "late" option when file= is
-				 * specified.  This is because mounting file
-				 * systems with rw option is typically
-				 * required to make the backing store ready.
-				 */
 				if (which_prog != SWAPOFF &&
-				    (strstr(fsp->fs_mntops, "late") != NULL ||
-				     strstr(fsp->fs_mntops, "file=") != NULL) &&
+				    strstr(fsp->fs_mntops, "late") &&
 				    late == 0)
 					continue;
 				swfile = swap_on_off(fsp->fs_spec, 1,
@@ -266,7 +259,8 @@ static const char *
 swap_on_off_gbde(const char *name, int doingall)
 {
 	const char *ret;
-	char pass[64 * 2 + 1], bpass[64];
+	char pass[64 * 2 + 1];
+	unsigned char bpass[64];
 	char *dname;
 	int i, error;
 

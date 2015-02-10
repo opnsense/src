@@ -32,6 +32,10 @@
 # targets             - Print a list of supported TARGET/TARGET_ARCH pairs
 #                       for world and kernel targets.
 # toolchains          - Build a toolchain for all world and kernel targets.
+# xdev                - xdev-build + xdev-install for the architecture
+#                       specified with XDEV and XDEV_ARCH.
+# xdev-build          - Build cross-development tools.
+# xdev-install        - Install cross-development tools.
 # 
 # "quick" way to test all kernel builds:
 # 	_jflag=`sysctl -n hw.ncpu`
@@ -248,8 +252,17 @@ tinderbox toolchains kernel-toolchains: .MAKE
 ${TGTS}:
 	${_+_}@cd ${.CURDIR}; ${_MAKE} ${.TARGET}
 
-# Set a reasonable default
-.MAIN:	all
+# The historic default "all" target creates files which may cause stale
+# or (in the cross build case) unlinkable results. Fail with an error
+# when no target is given. The users can explicitly specify "all"
+# if they want the historic behavior.
+.MAIN:	_guard
+
+_guard:
+	@echo
+	@echo "Explicit target required (use \"all\" for historic behavior)"
+	@echo
+	@false
 
 STARTTIME!= LC_ALL=C date
 CHECK_TIME!= find ${.CURDIR}/sys/sys/param.h -mtime -0s ; echo
@@ -341,7 +354,8 @@ MMAKEENV=	MAKEOBJDIRPREFIX=${MYMAKE:H} \
 MMAKE=		${MMAKEENV} ${MAKE} \
 		-D_UPGRADING \
 		-DNOMAN -DNO_MAN -DNOSHARED -DNO_SHARED \
-		-DNO_CPU_CFLAGS -DNO_WERROR DESTDIR= PROGNAME=${MYMAKE:T}
+		-DNO_CPU_CFLAGS -DNO_WERROR \
+		DESTDIR= MK_TESTS=no PROGNAME=${MYMAKE:T}
 
 make bmake: .PHONY
 	@echo
@@ -459,9 +473,15 @@ universe_kernels: universe_kernconfs
 .if !defined(TARGET)
 TARGET!=	uname -m
 .endif
+.if defined(MAKE_ALL_KERNELS)
+_THINNER=cat
+.else
+_THINNER=xargs grep -L "^.NO_UNIVERSE"
+.endif
 KERNCONFS!=	cd ${KERNSRCDIR}/${TARGET}/conf && \
 		find [A-Z0-9]*[A-Z0-9] -type f -maxdepth 0 \
-		! -name DEFAULTS ! -name NOTES
+		! -name DEFAULTS ! -name NOTES | \
+		${_THINNER}
 universe_kernconfs:
 .for kernel in ${KERNCONFS}
 TARGET_ARCH_${kernel}!=	cd ${KERNSRCDIR}/${TARGET}/conf && \

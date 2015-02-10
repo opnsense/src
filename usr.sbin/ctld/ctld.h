@@ -33,6 +33,10 @@
 #define	CTLD_H
 
 #include <sys/queue.h>
+#ifdef ICL_KERNEL_PROXY
+#include <sys/types.h>
+#endif
+#include <sys/socket.h>
 #include <stdbool.h>
 #include <libutil.h>
 
@@ -53,10 +57,25 @@ struct auth {
 	char				*a_mutual_secret;
 };
 
+struct auth_name {
+	TAILQ_ENTRY(auth_name)		an_next;
+	struct auth_group		*an_auth_group;
+	char				*an_initator_name;
+};
+
+struct auth_portal {
+	TAILQ_ENTRY(auth_portal)	ap_next;
+	struct auth_group		*ap_auth_group;
+	char				*ap_initator_portal;
+	struct sockaddr_storage		ap_sa;
+	int				ap_mask;
+};
+
 #define	AG_TYPE_UNKNOWN			0
-#define	AG_TYPE_NO_AUTHENTICATION	1
-#define	AG_TYPE_CHAP			2
-#define	AG_TYPE_CHAP_MUTUAL		3
+#define	AG_TYPE_DENY			1
+#define	AG_TYPE_NO_AUTHENTICATION	2
+#define	AG_TYPE_CHAP			3
+#define	AG_TYPE_CHAP_MUTUAL		4
 
 struct auth_group {
 	TAILQ_ENTRY(auth_group)		ag_next;
@@ -65,6 +84,8 @@ struct auth_group {
 	struct target			*ag_target;
 	int				ag_type;
 	TAILQ_HEAD(, auth)		ag_auths;
+	TAILQ_HEAD(, auth_name)		ag_names;
+	TAILQ_HEAD(, auth_portal)	ag_portals;
 };
 
 struct portal {
@@ -73,6 +94,9 @@ struct portal {
 	bool				p_iser;
 	char				*p_listen;
 	struct addrinfo			*p_ai;
+#ifdef ICL_KERNEL_PROXY
+	int				p_id;
+#endif
 
 	TAILQ_HEAD(, target)		p_targets;
 	int				p_socket;
@@ -117,7 +141,7 @@ struct target {
 	struct conf			*t_conf;
 	struct auth_group		*t_auth_group;
 	struct portal_group		*t_portal_group;
-	char				*t_iqn;
+	char				*t_name;
 	char				*t_alias;
 };
 
@@ -131,7 +155,14 @@ struct conf {
 	int				conf_maxproc;
 
 	uint16_t			conf_last_portal_group_tag;
+#ifdef ICL_KERNEL_PROXY
+	int				conf_portal_id;
+#endif
 	struct pidfh			*conf_pidfh;
+
+	bool				conf_default_pg_defined;
+	bool				conf_default_ag_defined;
+	bool				conf_kernel_port_on;
 };
 
 #define	CONN_SESSION_TYPE_NONE		0
@@ -149,6 +180,8 @@ struct connection {
 	char			*conn_initiator_name;
 	char			*conn_initiator_addr;
 	char			*conn_initiator_alias;
+	uint8_t			conn_initiator_isid[6];
+	struct sockaddr_storage	conn_initiator_sa;
 	uint32_t		conn_cmdsn;
 	uint32_t		conn_statsn;
 	size_t			conn_max_data_segment_length;
@@ -182,30 +215,46 @@ int			conf_verify(struct conf *conf);
 
 struct auth_group	*auth_group_new(struct conf *conf, const char *name);
 void			auth_group_delete(struct auth_group *ag);
-struct auth_group	*auth_group_find(struct conf *conf, const char *name);
+struct auth_group	*auth_group_find(const struct conf *conf,
+			    const char *name);
+int			auth_group_set_type_str(struct auth_group *ag,
+			    const char *type);
 
 const struct auth	*auth_new_chap(struct auth_group *ag,
 			    const char *user, const char *secret);
 const struct auth	*auth_new_chap_mutual(struct auth_group *ag,
 			    const char *user, const char *secret,
 			    const char *user2, const char *secret2);
-const struct auth	*auth_find(struct auth_group *ag,
+const struct auth	*auth_find(const struct auth_group *ag,
 			    const char *user);
+
+const struct auth_name	*auth_name_new(struct auth_group *ag,
+			    const char *initiator_name);
+bool			auth_name_defined(const struct auth_group *ag);
+const struct auth_name	*auth_name_find(const struct auth_group *ag,
+			    const char *initiator_name);
+
+const struct auth_portal	*auth_portal_new(struct auth_group *ag,
+				    const char *initiator_portal);
+bool			auth_portal_defined(const struct auth_group *ag);
+const struct auth_portal	*auth_portal_find(const struct auth_group *ag,
+				    const struct sockaddr_storage *sa);
 
 struct portal_group	*portal_group_new(struct conf *conf, const char *name);
 void			portal_group_delete(struct portal_group *pg);
-struct portal_group	*portal_group_find(struct conf *conf, const char *name);
+struct portal_group	*portal_group_find(const struct conf *conf,
+			    const char *name);
 int			portal_group_add_listen(struct portal_group *pg,
 			    const char *listen, bool iser);
 
-struct target		*target_new(struct conf *conf, const char *iqn);
+struct target		*target_new(struct conf *conf, const char *name);
 void			target_delete(struct target *target);
 struct target		*target_find(struct conf *conf,
-			    const char *iqn);
+			    const char *name);
 
 struct lun		*lun_new(struct target *target, int lun_id);
 void			lun_delete(struct lun *lun);
-struct lun		*lun_find(struct target *target, int lun_id);
+struct lun		*lun_find(const struct target *target, int lun_id);
 void			lun_set_backend(struct lun *lun, const char *value);
 void			lun_set_blocksize(struct lun *lun, size_t value);
 void			lun_set_device_id(struct lun *lun, const char *value);
@@ -217,7 +266,8 @@ void			lun_set_ctl_lun(struct lun *lun, uint32_t value);
 struct lun_option	*lun_option_new(struct lun *lun,
 			    const char *name, const char *value);
 void			lun_option_delete(struct lun_option *clo);
-struct lun_option	*lun_option_find(struct lun *lun, const char *name);
+struct lun_option	*lun_option_find(const struct lun *lun,
+			    const char *name);
 void			lun_option_set(struct lun_option *clo,
 			    const char *value);
 
@@ -226,17 +276,19 @@ int			kernel_lun_add(struct lun *lun);
 int			kernel_lun_resize(struct lun *lun);
 int			kernel_lun_remove(struct lun *lun);
 void			kernel_handoff(struct connection *conn);
-int			kernel_port_on(void);
-int			kernel_port_off(void);
+int			kernel_port_add(struct target *targ);
+int			kernel_port_remove(struct target *targ);
 void			kernel_capsicate(void);
 
-/*
- * ICL_KERNEL_PROXY
- */
-void			kernel_listen(struct addrinfo *ai, bool iser);
-int			kernel_accept(void);
+#ifdef ICL_KERNEL_PROXY
+void			kernel_listen(struct addrinfo *ai, bool iser,
+			    int portal_id);
+void			kernel_accept(int *connection_id, int *portal_id,
+			    struct sockaddr *client_sa,
+			    socklen_t *client_salen);
 void			kernel_send(struct pdu *pdu);
 void			kernel_receive(struct pdu *pdu);
+#endif
 
 struct keys		*keys_new(void);
 void			keys_delete(struct keys *keys);
@@ -263,12 +315,12 @@ void			log_init(int level);
 void			log_set_peer_name(const char *name);
 void			log_set_peer_addr(const char *addr);
 void			log_err(int, const char *, ...)
-			    __dead2 __printf0like(2, 3);
+			    __dead2 __printflike(2, 3);
 void			log_errx(int, const char *, ...)
-			    __dead2 __printf0like(2, 3);
-void			log_warn(const char *, ...) __printf0like(1, 2);
+			    __dead2 __printflike(2, 3);
+void			log_warn(const char *, ...) __printflike(1, 2);
 void			log_warnx(const char *, ...) __printflike(1, 2);
-void			log_debugx(const char *, ...) __printf0like(1, 2);
+void			log_debugx(const char *, ...) __printflike(1, 2);
 
 char			*checked_strdup(const char *);
 bool			valid_iscsi_name(const char *name);

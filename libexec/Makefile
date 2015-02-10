@@ -10,6 +10,7 @@ SUBDIR=	${_atf} \
 	fingerd \
 	ftpd \
 	getty \
+	${_hyperv} \
 	${_mail.local} \
 	${_mknetid} \
 	${_pppoed} \
@@ -28,14 +29,11 @@ SUBDIR=	${_atf} \
 	talkd \
 	tcpd \
 	${_telnetd} \
+	${_tests} \
 	tftpd \
 	${_tftp-proxy} \
 	ulog-helper \
 	${_ypxfr}
-
-.if ${MK_ATF} != "no"
-_atf=		atf
-.endif
 
 .if ${MK_AT} != "no"
 _atrun=		atrun
@@ -43,6 +41,10 @@ _atrun=		atrun
 
 .if ${MK_MAIL} != "no"
 _comsat=	comsat
+.endif
+
+.if ${MK_HYPERV} != "no"
+_hyperv=	hyperv
 .endif
 
 .if ${MK_NIS} != "no"
@@ -74,6 +76,11 @@ _smrsh=		smrsh
 
 .if ${MK_TELNET} != "no"
 _telnetd=	telnetd
+.endif
+
+.if ${MK_TESTS} != "no"
+_atf=		atf
+_tests=		tests
 .endif
 
 .include <bsd.subdir.mk>

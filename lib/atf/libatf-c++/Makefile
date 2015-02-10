@@ -28,14 +28,16 @@
 .include <bsd.init.mk>
 
 LIB=		atf-c++
+PRIVATELIB=	true
 SHLIB_MAJOR=	1
 
 # libatf-c++ depends on the C version of the ATF library to build.
-DPADD=		${LIBATFC}
+DPADD=		${LIBATF_C}
 LDADD=		-latf-c
 
 LDFLAGS+=	-L${.OBJDIR}/../libatf-c
 
+ATF=		${.CURDIR:H:H:H}/contrib/atf
 .PATH:		${ATF}
 .PATH:		${ATF}/atf-c++
 .PATH:		${ATF}/atf-c++/detail
@@ -52,13 +54,11 @@ SRCS=		application.cpp \
 		config.cpp \
 		env.cpp \
 		exceptions.cpp \
-		expand.cpp \
 		fs.cpp \
-		parser.cpp \
 		process.cpp \
 		tests.cpp \
 		text.cpp \
-		ui.cpp
+		utils.cpp
 
 INCS=		build.hpp \
 		check.hpp \
@@ -73,4 +73,9 @@ INCSDIR_atf-c++.hpp= ${INCLUDEDIR}
 
 MAN=		atf-c++-api.3
 
+.if ${MK_TESTS} != "no"
+SUBDIR=		tests
+.endif
+
+.include "../common.mk"
 .include <bsd.lib.mk>

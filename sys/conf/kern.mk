@@ -29,7 +29,8 @@ NO_WSOMETIMES_UNINITIALIZED=	-Wno-error-sometimes-uninitialized
 # enough to error out the whole kernel build.  Display them anyway, so there is
 # some incentive to fix them eventually.
 CWARNEXTRA?=	-Wno-error-tautological-compare -Wno-error-empty-body \
-		-Wno-error-parentheses-equality ${NO_WFORMAT}
+		-Wno-error-parentheses-equality -Wno-error-unused-function \
+		${NO_WFORMAT}
 .endif
 
 # External compilers may not support our format extensions.  Allow them
@@ -89,7 +90,11 @@ INLINE_LIMIT?=	15000
 # operations which it has a tendency to do.
 #
 .if ${MACHINE_CPUARCH} == "sparc64"
+.if ${COMPILER_TYPE} == "clang"
+CFLAGS+=	-mcmodel=large -fno-dwarf2-cfi-asm
+.else
 CFLAGS+=	-mcmodel=medany -msoft-float
+.endif
 INLINE_LIMIT?=	15000
 .endif
 
@@ -153,4 +158,11 @@ CFLAGS+=	-ffreestanding
 .if ${MK_SSP} != "no" && ${MACHINE_CPUARCH} != "ia64" && \
     ${MACHINE_CPUARCH} != "arm" && ${MACHINE_CPUARCH} != "mips"
 CFLAGS+=	-fstack-protector
+.endif
+
+#
+# Add -gdwarf-2 when compiling -g
+#
+.if ${COMPILER_TYPE} == "clang" && ${CFLAGS:M-g} != "" && ${CFLAGS:M-gdwarf} == ""
+CFLAGS+=	-gdwarf-2
 .endif

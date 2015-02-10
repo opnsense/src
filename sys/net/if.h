@@ -106,6 +106,9 @@ struct if_data {
 	uint64_t ifi_hwassist;		/* HW offload capabilities, see IFCAP */
 	time_t	ifi_epoch;		/* uptime at attach or stat reset */
 	struct	timeval ifi_lastchange;	/* time of last administrative change */
+#ifdef _IFI_OQDROPS
+	u_long	ifi_oqdrops;		/* dropped on output */
+#endif
 };
 
 /*-
@@ -242,7 +245,7 @@ struct if_data {
 
 #define	IFCAP_CANTCHANGE	(IFCAP_NETMAP)
 
-#define	IFQ_MAXLEN	128
+#define	IFQ_MAXLEN	50
 #define	IFNET_SLOWHZ	1		/* granularity is 1 second */
 
 /*
@@ -283,6 +286,9 @@ struct if_msghdrl {
 	u_short	ifm_len;	/* length of if_msghdrl incl. if_data */
 	u_short	ifm_data_off;	/* offset of if_data from beginning */
 	struct	if_data ifm_data;/* statistics and other data about if */
+#ifdef _IN_NET_RTSOCK_C
+	u_long	ifi_oqdrops;
+#endif
 };
 
 /*
@@ -386,7 +392,6 @@ struct	ifreq {
 		caddr_t	ifru_data;
 		int	ifru_cap[2];
 		u_int	ifru_fib;
-		u_char	ifru_vlan_pcp;
 	} ifr_ifru;
 #define	ifr_addr	ifr_ifru.ifru_addr	/* address */
 #define	ifr_dstaddr	ifr_ifru.ifru_dstaddr	/* other end of p-to-p link */
@@ -404,7 +409,6 @@ struct	ifreq {
 #define	ifr_curcap	ifr_ifru.ifru_cap[1]	/* current capabilities */
 #define	ifr_index	ifr_ifru.ifru_index	/* interface index */
 #define	ifr_fib		ifr_ifru.ifru_fib	/* interface fib */
-#define	ifr_vlan_pcp	ifr_ifru.ifru_vlan_pcp	/* VLAN priority */
 };
 
 #define	_SIZEOF_ADDR_IFREQ(ifr) \

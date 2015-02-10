@@ -1146,9 +1146,9 @@ nd6_nud_hint(struct rtentry *rt, struct in6_addr *dst6, int force)
 		return;
 
 	ifp = rt->rt_ifp;
-	IF_AFDATA_LOCK(ifp);
+	IF_AFDATA_RLOCK(ifp);
 	ln = nd6_lookup(dst6, ND6_EXCLUSIVE, NULL);
-	IF_AFDATA_UNLOCK(ifp);
+	IF_AFDATA_RUNLOCK(ifp);
 	if (ln == NULL)
 		return;
 
@@ -1574,16 +1574,16 @@ nd6_cache_lladdr(struct ifnet *ifp, struct in6_addr *from, char *lladdr,
 	 * description on it in NS section (RFC 2461 7.2.3).
 	 */
 	flags = lladdr ? ND6_EXCLUSIVE : 0;
-	IF_AFDATA_LOCK(ifp);
+	IF_AFDATA_RLOCK(ifp);
 	ln = nd6_lookup(from, flags, ifp);
-
+	IF_AFDATA_RUNLOCK(ifp);
 	if (ln == NULL) {
 		flags |= ND6_EXCLUSIVE;
+		IF_AFDATA_LOCK(ifp);
 		ln = nd6_lookup(from, flags | ND6_CREATE, ifp);
 		IF_AFDATA_UNLOCK(ifp);
 		is_newentry = 1;
 	} else {
-		IF_AFDATA_UNLOCK(ifp);		
 		/* do nothing if static ndp is set */
 		if (ln->la_flags & LLE_STATIC) {
 			static_route = 1;
@@ -1888,12 +1888,12 @@ nd6_output_lle(struct ifnet *ifp, struct ifnet *origifp, struct mbuf *m0,
 	 * or an anycast address(i.e. not a multicast).
 	 */
 
-	flags = ((m != NULL) || (lle != NULL)) ? LLE_EXCLUSIVE : 0;
+	flags = (lle != NULL) ? LLE_EXCLUSIVE : 0;
 	if (ln == NULL) {
 	retry:
-		IF_AFDATA_LOCK(ifp);
+		IF_AFDATA_RLOCK(ifp);
 		ln = lla_lookup(LLTABLE6(ifp), flags, (struct sockaddr *)dst);
-		IF_AFDATA_UNLOCK(ifp);
+		IF_AFDATA_RUNLOCK(ifp);
 		if ((ln == NULL) && nd6_is_addr_neighbor(dst, ifp))  {
 			/*
 			 * Since nd6_is_addr_neighbor() internally calls nd6_lookup(),
@@ -1924,6 +1924,7 @@ nd6_output_lle(struct ifnet *ifp, struct ifnet *origifp, struct mbuf *m0,
 	    ln->ln_state < ND6_LLINFO_REACHABLE) {
 		if ((flags & LLE_EXCLUSIVE) == 0) {
 			flags |= LLE_EXCLUSIVE;
+			LLE_RUNLOCK(ln);
 			goto retry;
 		}
 		ln->ln_state = ND6_LLINFO_STALE;
@@ -2271,6 +2272,8 @@ SYSCTL_NODE(_net_inet6_icmp6, ICMPV6CTL_ND6_PRLIST, nd6_prlist,
 	CTLFLAG_RD, nd6_sysctl_prlist, "");
 SYSCTL_VNET_INT(_net_inet6_icmp6, ICMPV6CTL_ND6_MAXQLEN, nd6_maxqueuelen,
 	CTLFLAG_RW, &VNET_NAME(nd6_maxqueuelen), 1, "");
+SYSCTL_VNET_INT(_net_inet6_icmp6, OID_AUTO, nd6_gctimer,
+	CTLFLAG_RW, &VNET_NAME(nd6_gctimer), (60 * 60 * 24), "");
 
 static int
 nd6_sysctl_drlist(SYSCTL_HANDLER_ARGS)

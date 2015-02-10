@@ -32,6 +32,7 @@ __FBSDID("$FreeBSD$");
 #include "opt_ddb.h"
 #include "opt_kstack_pages.h"
 #include "opt_sched.h"
+#include "opt_xtrace.h"
 
 #include <sys/param.h>
 #include <sys/proc.h>
@@ -41,6 +42,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/bus.h>
 #include <sys/cons.h>
 #include <sys/cpu.h>
+#include <sys/efi.h>
 #include <sys/eventhandler.h>
 #include <sys/exec.h>
 #include <sys/imgact.h>
@@ -82,10 +84,10 @@ __FBSDID("$FreeBSD$");
 
 #include <machine/bootinfo.h>
 #include <machine/cpu.h>
-#include <machine/efi.h>
 #include <machine/elf.h>
 #include <machine/fpu.h>
 #include <machine/intr.h>
+#include <machine/kdb.h>
 #include <machine/mca.h>
 #include <machine/md_var.h>
 #include <machine/pal.h>
@@ -131,6 +133,7 @@ SYSCTL_UINT(_hw_freq, OID_AUTO, itc, CTLFLAG_RD, &itc_freq, 0,
     "ITC frequency");
 
 int cold = 1;
+int unmapped_buf_allowed = 0;
 
 struct bootinfo *bootinfo;
 
@@ -175,9 +178,6 @@ struct msgbuf *msgbufp = NULL;
 void (*cpu_idle_hook)(sbintime_t) = NULL;
 
 struct kva_md_info kmi;
-
-#define	Mhz	1000000L
-#define	Ghz	(1000L*Mhz)
 
 static void
 identifycpu(void)
@@ -458,12 +458,14 @@ cpu_switch(struct thread *old, struct thread *new, struct mtx *mtx)
 #ifdef COMPAT_FREEBSD32
 	ia32_savectx(oldpcb);
 #endif
-	if (PCPU_GET(fpcurthread) == old)
+	if (pcpup->pc_fpcurthread == old)
 		old->td_frame->tf_special.psr |= IA64_PSR_DFH;
 	if (!savectx(oldpcb)) {
 		newpcb = new->td_pcb;
 		oldpcb->pcb_current_pmap =
 		    pmap_switch(newpcb->pcb_current_pmap);
+
+		ia64_mf();
 
 		atomic_store_rel_ptr(&old->td_lock, mtx);
 
@@ -472,13 +474,13 @@ cpu_switch(struct thread *old, struct thread *new, struct mtx *mtx)
 			cpu_spinwait();
 #endif
 
-		PCPU_SET(curthread, new);
+		pcpup->pc_curthread = new;
 
 #ifdef COMPAT_FREEBSD32
 		ia32_restorectx(newpcb);
 #endif
 
-		if (PCPU_GET(fpcurthread) == new)
+		if (pcpup->pc_fpcurthread == new)
 			new->td_frame->tf_special.psr &= ~IA64_PSR_DFH;
 		restorectx(newpcb);
 		/* We should not get here. */
@@ -500,7 +502,7 @@ cpu_throw(struct thread *old __unused, struct thread *new)
 		cpu_spinwait();
 #endif
 
-	PCPU_SET(curthread, new);
+	pcpup->pc_curthread = new;
 
 #ifdef COMPAT_FREEBSD32
 	ia32_restorectx(newpcb);
@@ -559,6 +561,21 @@ spinlock_exit(void)
 	td->td_md.md_spinlock_count--;
 	if (td->td_md.md_spinlock_count == 0)
 		intr_restore(intr);
+}
+
+void
+kdb_cpu_trap(int vector, int code __unused)
+{
+
+#ifdef XTRACE
+	ia64_xtrace_stop();
+#endif
+	__asm __volatile("flushrs;;");
+
+	/* Restart after the break instruction. */
+	if (vector == IA64_VEC_BREAK &&
+	    kdb_frame->tf_special.ifa == IA64_FIXED_BREAK)
+		kdb_frame->tf_special.psr += IA64_PSR_RI_1;
 }
 
 void
@@ -716,8 +733,8 @@ ia64_init(void)
 	 * handlers. Here we just make sure that they have the largest
 	 * possible page size to minimise TLB usage.
 	 */
-	ia64_set_rr(IA64_RR_BASE(6), (6 << 8) | (PAGE_SHIFT << 2));
-	ia64_set_rr(IA64_RR_BASE(7), (7 << 8) | (PAGE_SHIFT << 2));
+	ia64_set_rr(IA64_RR_BASE(6), (6 << 8) | (LOG2_ID_PAGE_SIZE << 2));
+	ia64_set_rr(IA64_RR_BASE(7), (7 << 8) | (LOG2_ID_PAGE_SIZE << 2));
 	ia64_srlz_d();
 
 	/* Initialize/setup physical memory datastructures */
@@ -732,8 +749,8 @@ ia64_init(void)
 		mdlen = md->md_pages * EFI_PAGE_SIZE;
 		switch (md->md_type) {
 		case EFI_MD_TYPE_IOPORT:
-			ia64_port_base = (uintptr_t)pmap_mapdev(md->md_phys,
-			    mdlen);
+			ia64_port_base = pmap_mapdev_priv(md->md_phys,
+			    mdlen, VM_MEMATTR_UNCACHEABLE);
 			break;
 		case EFI_MD_TYPE_PALCODE:
 			ia64_pal_base = md->md_phys;
@@ -818,7 +835,7 @@ ia64_init(void)
 	pcpu_init(pcpup, 0, sizeof(pcpu0));
 	dpcpu_init(ia64_physmem_alloc(DPCPU_SIZE, PAGE_SIZE), 0);
 	cpu_pcpu_setup(pcpup, ~0U, ia64_get_lid());
-	PCPU_SET(curthread, &thread0);
+	pcpup->pc_curthread = &thread0;
 
 	/*
 	 * Initialize the console before we print anything out.
@@ -878,6 +895,10 @@ ia64_init(void)
 	 * Initialize the virtual memory system.
 	 */
 	pmap_bootstrap();
+
+#ifdef XTRACE
+	ia64_xtrace_init_bsp();
+#endif
 
 	/*
 	 * Initialize debuggers, and break into them if appropriate.
