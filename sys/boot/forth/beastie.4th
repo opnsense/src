@@ -34,7 +34,7 @@ variable logoX
 variable logoY
 
 \ Initialize logo placement to defaults
-46 logoX !
+48 logoX !
 4  logoY !
 
 : beastie-logo ( x y -- ) \ color BSD mascot (19 rows x 34 columns)
@@ -125,20 +125,20 @@ variable logoY
 
 : orb-logo ( x y -- ) \ color Orb mascot (15 rows x 30 columns)
 
-	3 + \ beastie adjustment (see `fbsdbw-logo' comments above)
+	4 + \ beastie adjustment (see `fbsdbw-logo' comments above)
 
-	2dup at-xy ."  [31m```                        [31;1m`[31m" 1+
-	2dup at-xy ." s` `.....---...[31;1m....--.```   -/[31m" 1+
-	2dup at-xy ." +o   .--`         [31;1m/y:`      +.[31m" 1+
-	2dup at-xy ."  yo`:.            [31;1m:o      `+-[31m" 1+
-	2dup at-xy ."   y/               [31;1m-/`   -o/[31m" 1+
-	2dup at-xy ."  .-                  [31;1m::/sy+:.[31m" 1+
-	2dup at-xy ."  /                     [31;1m`--  /[31m" 1+
-	2dup at-xy ." `:                          [31;1m:`[31m" 1+
-	2dup at-xy ." `:                          [31;1m:`[31m" 1+
-	2dup at-xy ."  /                          [31;1m/[31m" 1+
-	2dup at-xy ."  .-                        [31;1m-.[31m" 1+
-	2dup at-xy ."   --                      [31;1m-.[31m" 1+
+	2dup at-xy ."  [30;1m```                        [31;1m`[30;1m" 1+
+	2dup at-xy ." s` `.....---...[31;1m....--.```   -/[30;1m" 1+
+	2dup at-xy ." +o   .--`         [31;1m/y:`      +.[30;1m" 1+
+	2dup at-xy ."  yo`:.            [31;1m:o      `+-[30;1m" 1+
+	2dup at-xy ."   y/               [31;1m-/`   -o/[30;1m" 1+
+	2dup at-xy ."  .-                  [31;1m::/sy+:.[30;1m" 1+
+	2dup at-xy ."  /                     [31;1m`--  /[30;1m" 1+
+	2dup at-xy ." `:                          [31;1m:`[30;1m" 1+
+	2dup at-xy ." `:                          [31;1m:`[30;1m" 1+
+	2dup at-xy ."  /                          [31;1m/[30;1m" 1+
+	2dup at-xy ."  .-                        [31;1m-.[30;1m" 1+
+	2dup at-xy ."   --                      [31;1m-.[30;1m" 1+
 	2dup at-xy ."    `:`                  [31;1m`:`" 1+
 	2dup at-xy ."      [31;1m.--             `--." 1+
 	     at-xy ."         .---.....----.[37m"
@@ -149,7 +149,7 @@ variable logoY
 
 : orbbw-logo ( x y -- ) \ B/W Orb mascot (15 rows x 32 columns)
 
-	3 + \ beastie adjustment (see `fbsdbw-logo' comments above)
+	4 + \ beastie adjustment (see `fbsdbw-logo' comments above)
 
 	2dup at-xy ."  ```                        `" 1+
 	2dup at-xy ." s` `.....---.......--.```   -/" 1+
