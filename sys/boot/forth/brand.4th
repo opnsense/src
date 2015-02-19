@@ -30,7 +30,7 @@ variable brandX
 variable brandY
 
 \ Initialize logo placement
-2 brandX !
+17 brandX !
 1 brandY !
 
 : fbsd-logo ( x y -- ) \ "FreeBSD" [wide] logo in B/W (7 rows x 42 columns)
@@ -42,6 +42,16 @@ variable brandY
 	2dup at-xy ." | |   | | |  __/  __/| |_) |____) | |__| |" 1+
 	2dup at-xy ." | |   | | |    |    ||     |      |      |" 1+
 	     at-xy ." |_|   |_|  \___|\___||____/|_____/|_____/ "
+;
+
+: opnsns-logo ( x y -- ) \ "OPNsense" [wide] logo in B/W (6 rows x 47 columns)
+
+	2dup at-xy ."  ______  _____  _____                         " 1+
+	2dup at-xy ." /  __  |/ ___ |/ __  |                        " 1+
+	2dup at-xy ." | |  | | |__/ | |  | |___  ___ _ __  ___  ___ " 1+
+	2dup at-xy ." | |  | |  ___/| |  | / __|/ _ \ '_ \/ __|/ _ \" 1+
+	2dup at-xy ." | |__| | |    | |  | \__ \  __/ | | \__ \  __/" 1+
+	     at-xy ." |_____/|_|    |_| /__|___/\___|_| |_|___/\___|"
 
 	\ Put the cursor back at the bottom
 	0 25 at-xy
@@ -55,6 +65,7 @@ variable brandY
 \
 \ 	NAME        DESCRIPTION
 \ 	fbsd        FreeBSD logo
+\ 	opnsns      OPNsense logo
 \ 
 \ NOTE: Setting `loader_brand' to the value of an existing function
 \       (such as "mycustom-brand") will cause that symbol to be executed.
@@ -80,12 +91,12 @@ variable brandY
 	then
 
 	s" loader_brand" getenv dup -1 = if
-		brandX @ brandY @ fbsd-logo
+		brandX @ brandY @ opnsns-logo
 		drop exit
 	then
 
-	2dup s" fbsd" compare-insensitive 0= if
-		brandX @ brandY @ fbsd-logo
+	2dup s" opnsns" compare-insensitive 0= if
+		brandX @ brandY @ opnsns-logo
 		2drop exit
 	then
 
