@@ -979,7 +979,7 @@ loop:
 		}
 		vs = vget_prep(vp);
 		TMPFS_NODE_UNLOCK(node);
-		error = vget_finish(vp, lkflag, vs);
+		error = vget_finish(vp, lkflag | LK_CANRECURSE, vs);
 		if (error == ENOENT) {
 			TMPFS_NODE_LOCK(node);
 			goto loop;
