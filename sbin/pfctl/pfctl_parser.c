@@ -922,7 +922,7 @@ print_rule(struct pf_rule *r, const char *anchor_call, int verbose, int numeric)
 		printf(" probability %s%%", buf);
 	}
 	opts = 0;
-	if (r->max_states || r->max_src_nodes || r->max_src_states)
+	if (r->max_states || r->max_src_nodes || r->max_src_states  || r->spare2)
 		opts = 1;
 	if (r->rule_flag & PFRULE_NOSYNC)
 		opts = 1;
