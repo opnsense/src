@@ -80,8 +80,6 @@ SYSCTL_DECL(_net_link_ether);
 static SYSCTL_NODE(_net_link_ether, PF_INET, inet, CTLFLAG_RW, 0, "");
 static SYSCTL_NODE(_net_link_ether, PF_ARP, arp, CTLFLAG_RW, 0, "");
 
-static VNET_DEFINE(int, arp_carp_mac) = 0;	/* default to disabled */
-
 /* timer values */
 static VNET_DEFINE(int, arpt_keep) = (20*60);	/* once resolved, good for 20
 						 * minutes */
@@ -100,16 +98,12 @@ VNET_PCPUSTAT_SYSUNINIT(arpstat);
 
 static VNET_DEFINE(int, arp_maxhold) = 1;
 
-#define	V_arp_carp_mac		VNET(arp_carp_mac)
 #define	V_arpt_keep		VNET(arpt_keep)
 #define	V_arpt_down		VNET(arpt_down)
 #define	V_arp_maxtries		VNET(arp_maxtries)
 #define	V_arp_proxyall		VNET(arp_proxyall)
 #define	V_arp_maxhold		VNET(arp_maxhold)
 
-SYSCTL_VNET_INT(_net_link_ether_inet, OID_AUTO, carp_mac, CTLFLAG_RW,
-	&VNET_NAME(arp_carp_mac), 0,
-	"Send CARP mac with replies to CARP ips");
 SYSCTL_VNET_INT(_net_link_ether_inet, OID_AUTO, max_age, CTLFLAG_RW,
 	&VNET_NAME(arpt_keep), 0,
 	"ARP entry lifetime in seconds");
@@ -888,29 +882,6 @@ reply:
 		/* default behaviour; never reply by broadcast. */
 		m->m_flags &= ~(M_BCAST|M_MCAST);
 	}
-#ifdef DEV_CARP
-	if (V_arp_carp_mac && carp_match) {
-		struct ether_header *eh = (struct ether_header *) sa.sa_data;
-		short type = htons(ETHERTYPE_ARP);
-
-		ah->ar_hrd = htons(ARPHRD_ETHER);
-
-		(void)memcpy(&eh->ether_type, &type,
-			sizeof(eh->ether_type));
-		(void)memcpy(eh->ether_dhost, ar_tha(ah),
-			sizeof (eh->ether_dhost));
-		(void)memcpy(eh->ether_shost, enaddr,
-			sizeof(eh->ether_shost));
-
-		sa.sa_family = pseudo_AF_HDRCMPLT;
-		sa.sa_len = sizeof(sa);
-	} else {
-#endif
-		sa.sa_family = AF_ARP;
-		sa.sa_len = 2;
-#ifdef DEV_CARP
-	}
-#endif
 	(void)memcpy(ar_tpa(ah), ar_spa(ah), ah->ar_pln);
 	(void)memcpy(ar_spa(ah), &itaddr, ah->ar_pln);
 	ah->ar_op = htons(ARPOP_REPLY);
@@ -918,6 +889,8 @@ reply:
 	m->m_len = sizeof(*ah) + (2 * ah->ar_pln) + (2 * ah->ar_hln);
 	m->m_pkthdr.len = m->m_len;
 	m->m_pkthdr.rcvif = NULL;
+	sa.sa_family = AF_ARP;
+	sa.sa_len = 2;
 	m_clrprotoflags(m);	/* Avoid confusing lower layers. */
 	(*ifp->if_output)(ifp, m, &sa, NULL);
 	ARPSTAT_INC(txreplies);
