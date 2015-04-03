@@ -185,6 +185,9 @@ struct pfsync_softc {
 	struct ip_moptions	sc_imo;
 	struct in_addr		sc_sync_peer;
 	uint32_t		sc_flags;
+#define	PFSYNCF_OK		0x00000001
+#define	PFSYNCF_DEFER		0x00000002
+#define	PFSYNCF_PUSH		0x00000004
 	uint8_t			sc_maxupdates;
 	struct ip		sc_template;
 	struct callout		sc_tmo;
@@ -1305,7 +1308,8 @@ pfsyncioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		}
 		pfsyncr.pfsyncr_syncpeer = sc->sc_sync_peer;
 		pfsyncr.pfsyncr_maxupdates = sc->sc_maxupdates;
-		pfsyncr.pfsyncr_defer = sc->sc_flags;
+		pfsyncr.pfsyncr_defer = (PFSYNCF_DEFER ==
+		    (sc->sc_flags & PFSYNCF_DEFER));
 		PFSYNC_UNLOCK(sc);
 		return (copyout(&pfsyncr, ifr->ifr_data, sizeof(pfsyncr)));
 
@@ -1627,7 +1631,6 @@ pfsync_sendout(int schedswi)
 	sc->sc_ifp->if_obytes += m->m_pkthdr.len;
 	sc->sc_len = PFSYNC_MINPKT;
 
-	/* XXX: SHould not drop voluntarily update packets! */
 	if (!_IF_QFULL(&sc->sc_ifp->if_snd))
 		_IF_ENQUEUE(&sc->sc_ifp->if_snd, m);
 	else {
@@ -1656,10 +1659,6 @@ pfsync_insert_state(struct pf_state *st)
 		("%s: st->sync_state %u", __func__, st->sync_state));
 
 	PFSYNC_LOCK(sc);
-	if (sc == NULL || !(sc->sc_ifp->if_flags & IFF_DRV_RUNNING)) {
-		PFSYNC_UNLOCK(sc);
-		return;
-	}
 	if (sc->sc_len == PFSYNC_MINPKT)
 		callout_reset(&sc->sc_tmo, 1 * hz, pfsync_timeout, V_pfsyncif);
 
@@ -1754,7 +1753,6 @@ pfsync_defer_tmo(void *arg)
 		free(pd, M_PFSYNC);
 	PFSYNC_UNLOCK(sc);
 
-	m->m_flags |= M_SKIP_FIREWALL;
 	ip_output(m, NULL, NULL, 0, NULL, NULL);
 
 	pf_release_state(st);
@@ -1790,10 +1788,6 @@ pfsync_update_state(struct pf_state *st)
 	PF_STATE_LOCK_ASSERT(st);
 	PFSYNC_LOCK(sc);
 
-	if (sc == NULL || !(sc->sc_ifp->if_flags & IFF_DRV_RUNNING)) {
-		PFSYNC_UNLOCK(sc);
-		return;
-	}
 	if (st->state_flags & PFSTATE_ACK)
 		pfsync_undefer_state(st, 0);
 	if (st->state_flags & PFSTATE_NOSYNC) {
@@ -1919,10 +1913,6 @@ pfsync_delete_state(struct pf_state *st)
 	struct pfsync_softc *sc = V_pfsyncif;
 
 	PFSYNC_LOCK(sc);
-	if (sc == NULL || !(sc->sc_ifp->if_flags & IFF_DRV_RUNNING)) {
-		PFSYNC_UNLOCK(sc);
-		return;
-	}
 	if (st->state_flags & PFSTATE_ACK)
 		pfsync_undefer_state(st, 1);
 	if (st->state_flags & PFSTATE_NOSYNC) {
@@ -1976,10 +1966,6 @@ pfsync_clear_states(u_int32_t creatorid, const char *ifname)
 	r.clr.creatorid = creatorid;
 
 	PFSYNC_LOCK(sc);
-	if (sc == NULL || !(sc->sc_ifp->if_flags & IFF_DRV_RUNNING)) {
-		PFSYNC_UNLOCK(sc);
-		return;
-	}
 	pfsync_send_plus(&r, sizeof(r));
 	PFSYNC_UNLOCK(sc);
 }
