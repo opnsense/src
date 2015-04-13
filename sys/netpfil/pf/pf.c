@@ -316,8 +316,8 @@ VNET_DEFINE(struct pf_limit, pf_limits[PF_LIMIT_MAX]);
 
 #define	PF_DIVERT_MAXPACKETS_REACHED()			\
 do {							\
-	if (r->spare1 &&				\
-		s->packets[dir == PF_OUT] > r->spare1)	\
+	if (r->spare2 &&				\
+		s->packets[dir == PF_OUT] > r->spare2)	\
 		/* fake that divert already happened */	\
 		pd.pf_mtag->flags |= PF_PACKET_LOOPED;	\
 } while(0)
@@ -6413,8 +6413,8 @@ continueprocessing:
 
 	if (action == PF_PASS && r->divert.port && ip_divert_ptr != NULL &&
 	    !PACKET_LOOPED(&pd)) {
-		if (!r->spare1 ||
-		    (s && s->packets[dir == PF_OUT] <= r->spare1)) {
+		if (!r->spare2 ||
+		    (s && s->packets[dir == PF_OUT] <= r->spare2)) {
 			ipfwtag = m_tag_alloc(MTAG_IPFW_RULE, 0,
 				sizeof(struct ipfw_rule_ref), M_NOWAIT | M_ZERO);
 			if (ipfwtag != NULL) {
