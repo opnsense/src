@@ -33,7 +33,6 @@ __FBSDID("$FreeBSD$");
 #include <errno.h>
 #include <limits.h>
 #include <math.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -265,11 +264,15 @@ eval_pfaltq(struct pfctl *pf, struct pf_altq *pa, struct node_queue_bw *bw,
 		pa->ifbandwidth = bw->bw_absolute;
 	else
 #ifdef __FreeBSD__
-		rate = getifspeed(pf->dev, pa->ifname); 
-		if (rate == 0)
-			rate = IF_Mbps(100);
+		if ((rate = getifspeed(pf->dev, pa->ifname)) == 0) {
+#else
+		if ((rate = getifspeed(pa->ifname)) == 0) {
 #endif
-		if ((pa->ifbandwidth = eval_bwspec(bw, rate)) == 0)
+			fprintf(stderr, "interface %s does not know its bandwidth, "
+			    "please specify an absolute bandwidth\n",
+			    pa->ifname);
+			errors++;
+		} else if ((pa->ifbandwidth = eval_bwspec(bw, rate)) == 0)
 			pa->ifbandwidth = rate;
 
 	errors += eval_queue_opts(pa, opts, pa->ifbandwidth);
