@@ -33,7 +33,6 @@ SRCS+=	iffib.c			# non-default FIB support
 SRCS+=	ifvlan.c		# SIOC[GS]ETVLAN support
 SRCS+=	ifgre.c			# GRE keys etc
 SRCS+=	ifgif.c			# GIF reversed header workaround
-SRCS+=	ifstf.c			# STF configuration options
 
 SRCS+=	ifieee80211.c regdomain.c # SIOC[GS]IEEE80211 support
 DPADD+=	${LIBBSDXML} ${LIBSBUF}
