@@ -314,7 +314,6 @@ VNET_DECLARE(int, ip6_v6only);
 #define	V_ip6_rr_prune			VNET(ip6_rr_prune)
 #define	V_ip6_mcast_pmtu		VNET(ip6_mcast_pmtu)
 #define	V_ip6_v6only			VNET(ip6_v6only)
-#define	V_ipipsec_in_use		VNET(ipipsec_in_use)
 
 VNET_DECLARE(struct socket *, ip6_mrouter);	/* multicast routing daemon */
 VNET_DECLARE(int, ip6_sendredirects);	/* send IP redirects when forwarding? */

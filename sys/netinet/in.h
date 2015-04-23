@@ -702,8 +702,7 @@ int	getsourcefilter(int, uint32_t, struct sockaddr *, socklen_t,
 #define	IPCTL_FASTFORWARDING	14	/* use fast IP forwarding code */
 #define	IPCTL_KEEPFAITH		15	/* FAITH IPv4->IPv6 translater ctl */
 #define	IPCTL_GIF_TTL		16	/* default TTL for gif encap packet */
-#define	IPCTL_IPSEC_INUSE	17
-#define	IPCTL_MAXID		18
+#define	IPCTL_MAXID		17
 
 #endif /* __BSD_VISIBLE */
 

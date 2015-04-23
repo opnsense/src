@@ -176,7 +176,6 @@ struct sockopt;
 VNET_DECLARE(u_short, ip_id);			/* ip packet ctr, for ids */
 VNET_DECLARE(int, ip_defttl);			/* default IP ttl */
 VNET_DECLARE(int, ipforwarding);		/* ip forwarding */
-VNET_DECLARE(int, ipipsec_in_use);
 #ifdef IPSTEALTH
 VNET_DECLARE(int, ipstealth);			/* stealth forwarding */
 #endif
@@ -192,7 +191,6 @@ extern struct	pr_usrreqs rip_usrreqs;
 #define	V_ip_id			VNET(ip_id)
 #define	V_ip_defttl		VNET(ip_defttl)
 #define	V_ipforwarding		VNET(ipforwarding)
-#define	V_ipipsec_in_use	VNET(ipipsec_in_use)
 #ifdef IPSTEALTH
 #define	V_ipstealth		VNET(ipstealth)
 #endif

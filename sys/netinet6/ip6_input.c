@@ -133,7 +133,6 @@ static struct netisr_handler ip6_nh = {
 	.nh_policy = NETISR_POLICY_FLOW,
 };
 
-VNET_DECLARE(int, ipipsec_in_use);
 VNET_DECLARE(struct callout, in6_tmpaddrtimer_ch);
 #define	V_in6_tmpaddrtimer_ch		VNET(in6_tmpaddrtimer_ch)
 
@@ -1001,7 +1000,6 @@ passin:
 		}
 
 #ifdef IPSEC
-	if (V_ipipsec_in_use) {
 		/*
 		 * enforce IPsec policy checking if we are seeing last header.
 		 * note that we do not visit this with protocols with pcb layer
@@ -1009,7 +1007,6 @@ passin:
 		 */
 		if (ip6_ipsec_input(m, nxt))
 			goto bad;
-	}
 #endif /* IPSEC */
 
 		/*
