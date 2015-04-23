@@ -2609,14 +2609,26 @@ filter_opt	: USER uids {
 				pcp = IEEE8021Q_PCP_IC;
 			else if (!strcmp($2, "nc"))
 				pcp = IEEE8021Q_PCP_NC;
-			else if (atoul($2, &pcp) == -1) /* int argument  */
-				pcp = 8 ; /* flag bad argument  */
+			else
+				pcp = 8;               /* flag bad argument */
 			if (pcp > 7) {
 				yyerror("invalid ieee8021q_pcp value %s", $2);
 				free($2);
 				YYERROR;
 			}
 			free($2);
+			filter_opts.ieee8021q_pcp.pcp[0] = pcp;
+			filter_opts.ieee8021q_pcp.pcp[1] = 0;
+			filter_opts.ieee8021q_pcp.op = PF_OP_EQ;
+		}
+		| IEEE8021QPCP number {
+			u_int pcp;
+
+			pcp = $2;
+			if (pcp > 7) {
+				yyerror("invalid ieee8021q_pcp value %u", pcp);
+				YYERROR;
+			}
 			filter_opts.ieee8021q_pcp.pcp[0] = pcp;
 			filter_opts.ieee8021q_pcp.pcp[1] = 0;
 			filter_opts.ieee8021q_pcp.op = PF_OP_EQ;
@@ -2644,8 +2656,8 @@ filter_opt	: USER uids {
 				pcp = IEEE8021Q_PCP_IC;
 			else if (!strcmp($2, "nc"))
 				pcp = IEEE8021Q_PCP_NC;
-			else if (atoul($2, &pcp) == -1) /* int argument  */
-				pcp = 8;                /* flag bad argument */
+			else
+				pcp = 8;               /* flag bad argument */
 			if (pcp > 7) {
 				yyerror("invalid ieee8021q_setpcp value %s",
 					$2);
@@ -2653,6 +2665,17 @@ filter_opt	: USER uids {
 				YYERROR;
 			}
 			free($2);
+			filter_opts.ieee8021q_pcp.setpcp = pcp | SETPCP_VALID;
+		}
+		| IEEE8021QSETPCP number {
+			u_int pcp;
+
+			pcp = $2;
+			if (pcp > 7) {
+				yyerror("invalid ieee8021q_setpcp value %u",
+					pcp);
+				YYERROR;
+			}
 			filter_opts.ieee8021q_pcp.setpcp = pcp | SETPCP_VALID;
 		}
 		| RTABLE NUMBER				{
