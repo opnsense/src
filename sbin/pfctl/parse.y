@@ -2140,7 +2140,7 @@ pfrule		: action dir logquick interface route af proto fromto
 							"greater than 0");
 						YYERROR;
 					}
-					r.spare2 = o->data.max_packets;
+					r.spare1 = o->data.max_packets;
 					break;
 				case PF_STATE_OPT_SRCTRACK:
 					if (srctrack) {
