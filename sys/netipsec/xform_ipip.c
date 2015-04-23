@@ -324,7 +324,7 @@ _ipip_input(struct mbuf *m, int iphlen, struct ifnet *gifp)
 		panic("%s: bogus ip version %u", __func__, v>>4);
 	}
 	/* pass the mbuf to enc0 for packet filtering */
-	if (ipsec_filter(&m, NULL, PFIL_IN, ENC_IN|ENC_AFTER) != 0)
+	if (ipsec_filter(&m, PFIL_IN, ENC_IN|ENC_AFTER) != 0)
 		return;
 #endif
 
