@@ -499,7 +499,8 @@ tooshort:
 		goto ours;
 	}
 	if (m->m_flags & M_IP_NEXTHOP) {
-		if (m_tag_find(m, PACKET_TAG_IPFORWARD, NULL) != NULL) {
+		dchg = (m_tag_find(m, PACKET_TAG_IPFORWARD, NULL) != NULL);
+		if (dchg != 0) {
 			/*
 			 * Directly ship the packet on.  This allows
 			 * forwarding packets originally destined to us
