@@ -162,7 +162,6 @@ struct node_icmp {
 enum	{ PF_STATE_OPT_MAX, PF_STATE_OPT_NOSYNC, PF_STATE_OPT_SRCTRACK,
 	    PF_STATE_OPT_MAX_SRC_STATES, PF_STATE_OPT_MAX_SRC_CONN,
 	    PF_STATE_OPT_MAX_SRC_CONN_RATE, PF_STATE_OPT_MAX_SRC_NODES,
-	    PF_STATE_OPT_MAX_PACKETS, 
 	    PF_STATE_OPT_OVERLOAD, PF_STATE_OPT_STATELOCK,
 	    PF_STATE_OPT_TIMEOUT, PF_STATE_OPT_SLOPPY, };
 
@@ -174,7 +173,6 @@ struct node_state_opt {
 		u_int32_t	 max_states;
 		u_int32_t	 max_src_states;
 		u_int32_t	 max_src_conn;
-		u_int32_t	 max_packets;
 		struct {
 			u_int32_t	limit;
 			u_int32_t	seconds;
@@ -474,7 +472,7 @@ int	parseport(char *, struct range *r, int);
 %token	LOAD RULESET_OPTIMIZATION
 %token	STICKYADDRESS MAXSRCSTATES MAXSRCNODES SOURCETRACK GLOBAL RULE
 %token	MAXSRCCONN MAXSRCCONNRATE OVERLOAD FLUSH SLOPPY
-%token	TAGGED TAG IFBOUND FLOATING STATEPOLICY STATEDEFAULTS ROUTE SETTOS MAXPCKT
+%token	TAGGED TAG IFBOUND FLOATING STATEPOLICY STATEDEFAULTS ROUTE SETTOS
 %token	IEEE8021QPCP IEEE8021QSETPCP
 %token	DIVERTTO DIVERTREPLY
 %token	<v.string>		STRING
@@ -2133,14 +2131,6 @@ pfrule		: action dir logquick interface route af proto fromto
 						YYERROR;
 					}
 					r.rule_flag |= PFRULE_NOSYNC;
-					break;
-				case PF_STATE_OPT_MAX_PACKETS:
-					if (o->data.max_packets == 0) {
-						yyerror("max_packets must be"
-							"greater than 0");
-						YYERROR;
-					}
-					r.spare1 = o->data.max_packets;
 					break;
 				case PF_STATE_OPT_SRCTRACK:
 					if (srctrack) {
@@ -5677,7 +5667,6 @@ lookup(char *s)
 		{ "match",		MATCH},
 		{ "max",		MAXIMUM},
 		{ "max-mss",		MAXMSS},
-		{ "max-packets",	MAXPCKT},
 		{ "max-src-conn",	MAXSRCCONN},
 		{ "max-src-conn-rate",	MAXSRCCONNRATE},
 		{ "max-src-nodes",	MAXSRCNODES},
