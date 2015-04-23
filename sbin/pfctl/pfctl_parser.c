@@ -847,10 +847,8 @@ print_rule(struct pf_rule *r, const char *anchor_call, int verbose, int numeric)
 				printf(" code %u", r->code-1);
 		}
 	}
-	if (r->tos && (r->rule_flag & PFRULE_TOS))
-                printf(" tos 0x%2.2x", r->tos);
-        if (r->tos && (r->rule_flag & PFRULE_DSCP))
-                printf(" dscp 0x%2.2x", r->tos & DSCP_MASK);
+	if (r->tos)
+		printf(" tos 0x%2.2x", r->tos);
 	if (!r->keep_state && r->action == PF_PASS && !anchor_call[0])
 		printf(" no state");
 	else if (r->keep_state == PF_STATE_NORMAL)
