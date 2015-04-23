@@ -489,7 +489,6 @@ struct pf_rule {
 	union pf_rule_ptr	 skip[PF_SKIP_COUNT];
 #define PF_RULE_LABEL_SIZE	 64
 	char			 label[PF_RULE_LABEL_SIZE];
-	char                     schedule[PF_RULE_LABEL_SIZE];
 	char			 ifname[IFNAMSIZ];
 	char			 qname[PF_QNAME_SIZE];
 	char			 pqname[PF_QNAME_SIZE];
@@ -1289,11 +1288,6 @@ struct pfioc_state_kill {
 	u_int			psk_killed;
 };
 
-struct pfioc_schedule_kill {
-	int		numberkilled;
-	char		schedule[PF_RULE_LABEL_SIZE];
-};
-
 struct pfioc_states {
 	int	ps_len;
 	union {
@@ -1374,7 +1368,6 @@ struct pfioc_trans {
 #endif
 #define DIOCGETNAMEDALTQ	_IOWR('D', 94, struct pfioc_ruleset)
 #define DIOCGETNAMEDTAG		_IOR('D', 95, u_int32_t)
-#define DIOCKILLSCHEDULE	_IOWR('D', 96, struct pfioc_schedule_kill)
 
 struct pfioc_table {
 	struct pfr_table	 pfrio_table;
