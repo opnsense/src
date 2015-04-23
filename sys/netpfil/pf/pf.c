@@ -62,8 +62,6 @@ __FBSDID("$FreeBSD$");
 
 #include <net/if.h>
 #include <net/if_types.h>
-#include <net/ethernet.h>
-#include <net/if_vlan_var.h>
 #include <net/route.h>
 #include <net/radix_mpath.h>
 #include <net/vnet.h>
@@ -2532,26 +2530,6 @@ pf_send_tcp(struct mbuf *replyto, const struct pf_rule *r, sa_family_t af,
 	pf_send(pfse);
 }
 
-int
-pf_ieee8021q_setpcp(struct mbuf *m, struct pf_rule *r)
-{
-	struct m_tag *mtag;
-
-	KASSERT(r->ieee8021q_pcp.setpcp & SETPCP_VALID,
-	    ("%s with invalid setpcp", __func__));
-
-	mtag = m_tag_locate(m, MTAG_8021Q, MTAG_8021Q_PCP_OUT, NULL);
-	if (mtag == NULL) {
-		mtag = m_tag_alloc(MTAG_8021Q, MTAG_8021Q_PCP_OUT,
-		    sizeof(uint8_t), M_NOWAIT);
-		if (mtag == NULL)
-			return (ENOMEM);
-		m_tag_prepend(m, mtag);
-	}
-	*(uint8_t *)(mtag + 1) = (r->ieee8021q_pcp.setpcp & SETPCP_PCP_MASK);
-	return (0);
-}
-
 static void
 pf_send_icmp(struct mbuf *m, u_int8_t type, u_int8_t code, sa_family_t af,
     struct pf_rule *r)
@@ -2723,36 +2701,6 @@ pf_match_port(u_int8_t op, u_int16_t a1, u_int16_t a2, u_int16_t p)
 	NTOHS(a2);
 	NTOHS(p);
 	return (pf_match(op, a1, a2, p));
-}
-
-int
-pf_match_ieee8021q_pcp(u_int8_t op, u_int8_t pcp1, u_int8_t pcp2,
-    struct mbuf *m)
-{
-	struct m_tag *mtag;
-	uint8_t mpcp;
-
-	/*
-	* Packets without 802.1q headers are treated as having a PCP of 0
-	* (best effort).
-	*/
-	mtag = m_tag_locate(m, MTAG_8021Q, MTAG_8021Q_PCP_IN, NULL);
-	if (mtag != NULL)
-		mpcp = *(uint8_t *)(mtag + 1);
-	else
-		mpcp = IEEE8021Q_PCP_BE;
-
-	/*
-	* 802.1q uses a non-traditional ordering, in which 1 < 0, allowing
-	* default 0-tagged ("best effort") traffic to take precedence over
-	* 1-tagged ("background") traffic.  Renumber both PCP arguments
-	* before making a comparison so that we can use boring arithmetic
-	* operators.
-	*/
-	pcp1 = ((pcp1 == 0) ? 1 : ((pcp1 == 1) ? 0 : pcp1));
-	pcp2 = ((pcp2 == 0) ? 1 : ((pcp2 == 1) ? 0 : pcp2));
-	mpcp = ((mpcp == 0) ? 1 : ((mpcp == 1) ? 0 : mpcp));
-	return (pf_match(op, pcp1, pcp2, mpcp));
 }
 
 static int
@@ -3486,10 +3434,6 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 		    !pf_match_gid(r->gid.op, r->gid.gid[0], r->gid.gid[1],
 		    pd->lookup.gid))
 			r = TAILQ_NEXT(r, entries);
-		else if (r->ieee8021q_pcp.op &&
-		    !pf_match_ieee8021q_pcp(r->ieee8021q_pcp.op,
-		    r->ieee8021q_pcp.pcp[0], r->ieee8021q_pcp.pcp[1], m))
-			r = TAILQ_NEXT(r, entries);
 		else if (r->prob &&
 		    r->prob <= arc4random())
 			r = TAILQ_NEXT(r, entries);
@@ -3958,10 +3902,6 @@ pf_test_fragment(struct pf_rule **rm, int direction, struct pfi_kif *kif,
 		    pd->proto == IPPROTO_ICMPV6) &&
 		    (r->type || r->code))
 			r = TAILQ_NEXT(r, entries);
-                else if (r->ieee8021q_pcp.op &&
-                    !pf_match_ieee8021q_pcp(r->ieee8021q_pcp.op,
-                    r->ieee8021q_pcp.pcp[0], r->ieee8021q_pcp.pcp[1], m))
-                        r = TAILQ_NEXT(r, entries);
 		else if (r->prob && r->prob <=
 		    (arc4random() % (UINT_MAX - 1) + 1))
 			r = TAILQ_NEXT(r, entries);
@@ -6774,24 +6714,6 @@ done:
 	}
 	if (r->rtableid >= 0)
 		M_SETFIB(m, r->rtableid);
-
-	if ((r->ieee8021q_pcp.setpcp & SETPCP_VALID) &&
-	    pf_ieee8021q_setpcp(m, r)) {
-		action = PF_DROP;
-		REASON_SET(&reason, PFRES_MEMORY);
-		log = 1;
-		DPFPRINTF(PF_DEBUG_MISC,
-		    ("pf: failed to allocate 802.1q mtag\n"));
-	}
-
-	if ((r->ieee8021q_pcp.setpcp & SETPCP_VALID) &&
-	    pf_ieee8021q_setpcp(m, r)) {
-		action = PF_DROP;
-		REASON_SET(&reason, PFRES_MEMORY);
-		log = 1;
-		DPFPRINTF(PF_DEBUG_MISC,
-		    ("pf: failed to allocate 802.1q mtag\n"));
-	}
 
 #ifdef ALTQ
 	if (s && s->qid) {
