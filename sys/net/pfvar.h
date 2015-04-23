@@ -1366,8 +1366,6 @@ struct pfioc_trans {
 #ifdef _KERNEL
 #define PFR_FLAG_USERIOCTL	0x10000000
 #endif
-#define DIOCGETNAMEDALTQ	_IOWR('D', 94, struct pfioc_ruleset)
-#define DIOCGETNAMEDTAG		_IOR('D', 95, u_int32_t)
 
 struct pfioc_table {
 	struct pfr_table	 pfrio_table;

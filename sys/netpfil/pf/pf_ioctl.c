@@ -1000,8 +1000,6 @@ pfioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flags, struct thread *td
 		case DIOCCLRRULECTRS:
 		case DIOCGETLIMIT:
 		case DIOCGETALTQS:
-		case DIOCGETNAMEDALTQ:
-		case DIOCGETNAMEDTAG:
 		case DIOCGETALTQ:
 		case DIOCGETQSTATS:
 		case DIOCGETRULESETS:
@@ -1048,8 +1046,6 @@ pfioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flags, struct thread *td
 		case DIOCGETTIMEOUT:
 		case DIOCGETLIMIT:
 		case DIOCGETALTQS:
-		case DIOCGETNAMEDALTQ:
-		case DIOCGETNAMEDTAG:
 		case DIOCGETALTQ:
 		case DIOCGETQSTATS:
 		case DIOCGETRULESETS:
@@ -2103,16 +2099,6 @@ DIOCGETSTATES_full:
 		break;
 	}
 
-	case DIOCGETNAMEDALTQ: {
-		struct pfioc_ruleset	*pa = (struct pfioc_ruleset *)addr;
-
-		if (pa->name[0]) {
-                        pa->nr = pf_qname2qid(pa->name);
-                        pf_qid_unref(pa->nr);
-                }
-		break;
-	}
-	
 	case DIOCGETALTQS: {
 		struct pfioc_altq	*pa = (struct pfioc_altq *)addr;
 		struct pf_altq		*altq;
@@ -2197,16 +2183,6 @@ DIOCGETSTATES_full:
 		break;
 	}
 #endif /* ALTQ */
-
-	case DIOCGETNAMEDTAG: {
-                /* Little abuse. */
-                struct pfioc_ruleset    *pa = (struct pfioc_ruleset *)addr;
-
-                if (pa->name[0])
-                        pa->nr = pf_tagname2tag(pa->name);
-
-                break;
-        }
 
 	case DIOCBEGINADDRS: {
 		struct pfioc_pooladdr	*pp = (struct pfioc_pooladdr *)addr;
