@@ -334,8 +334,8 @@ VNET_DEFINE(struct pf_limit, pf_limits[PF_LIMIT_MAX]);
 			return (PF_PASS);				\
 	} while (0)
 
-#define	BOUND_IFACE(r, k) 	k
-	/* ((r)->rule_flag & PFRULE_IFBOUND) ? (k) : V_pfi_all */
+#define	BOUND_IFACE(r, k) \
+	((r)->rule_flag & PFRULE_IFBOUND) ? (k) : V_pfi_all
 
 #define	STATE_INC_COUNTERS(s)						\
 	do {								\
