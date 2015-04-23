@@ -3964,17 +3964,6 @@ state_opt_item	: MAXIMUM NUMBER		{
 			$$->next = NULL;
 			$$->tail = $$;
 		}
-		| MAXPCKT NUMBER                        {
-		        $$ = calloc(1, sizeof(struct node_state_opt));
-		        if ($$ == NULL) {
-		                err(1, "state_opt_item: calloc");
-		        }
-		        $$->type = PF_STATE_OPT_MAX_PACKETS;
-		        $$->data.max_packets = $2;
-		        $$->next = NULL;
-		        $$->tail = $$;
-                }
-		        
 		;
 
 label		: LABEL STRING			{
