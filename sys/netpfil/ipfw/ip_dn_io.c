@@ -651,7 +651,6 @@ dummynet_send(struct mbuf *m)
 			 * to carry reinject info.
 			 */
 			dst = pkt->dn_dir;
-			pkt->rule.info |= IPFW_IS_DUMMYNET;
 			ifp = pkt->ifp;
 			tag->m_tag_cookie = MTAG_IPFW_RULE;
 			tag->m_tag_id = 0;

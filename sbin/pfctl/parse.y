@@ -239,9 +239,6 @@ struct filter_opts {
 	char			*tag;
 	char			*match_tag;
 	u_int8_t		 match_tag_not;
-	u_int32_t                dnpipe;
-	u_int32_t                pdnpipe;
-	u_int32_t                free_flags;
 	u_int			 rtableid;
 	struct {
 		struct node_host	*addr;
@@ -453,7 +450,6 @@ int	parseport(char *, struct range *r, int);
 %token	BITMASK RANDOM SOURCEHASH ROUNDROBIN STATICPORT PROBABILITY
 %token	ALTQ CBQ PRIQ HFSC BANDWIDTH TBRSIZE LINKSHARE REALTIME UPPERLIMIT
 %token	QUEUE PRIORITY QLIMIT RTABLE
-%token  DNPIPE DNQUEUE 
 %token	LOAD RULESET_OPTIMIZATION
 %token	STICKYADDRESS MAXSRCSTATES MAXSRCNODES SOURCETRACK GLOBAL RULE
 %token	MAXSRCCONN MAXSRCCONNRATE OVERLOAD FLUSH SLOPPY
@@ -1604,22 +1600,14 @@ bandwidth	: STRING {
 
 			bps = strtod($1, &cp);
 			if (cp != NULL) {
-				if (!strcmp(cp, "b") || !strcmp(cp, "bit"))
+				if (!strcmp(cp, "b"))
 					; /* nothing */
-				else if (!strcmp(cp, "Kb") || !strcmp(cp, "Kbit"))
+				else if (!strcmp(cp, "Kb"))
 					bps *= 1000;
-				else if (!strcmp(cp, "Mb") || !strcmp(cp, "Mbit"))
+				else if (!strcmp(cp, "Mb"))
 					bps *= 1000 * 1000;
-				else if (!strcmp(cp, "Gb") || !strcmp(cp, "Gbit"))
+				else if (!strcmp(cp, "Gb"))
 					bps *= 1000 * 1000 * 1000;
-				else if (!strcmp(cp, "B") || !strcmp(cp, "Byte"))
-					; /* nothing */
-				else if (!strcmp(cp, "KB") || !strcmp(cp, "Kbyte"))
-					bps *= 1024;
-				else if (!strcmp(cp, "MB") || !strcmp(cp, "Mbyte"))
-					bps *= 1024 * 1024;
-				else if (!strcmp(cp, "GB") || !strcmp(cp, "Gbyte"))
-					bps *= 1024 * 1024 * 1024;
 				else if (!strcmp(cp, "%")) {
 					if (bps < 0 || bps > 100) {
 						yyerror("bandwidth spec "
@@ -2267,15 +2255,6 @@ pfrule		: action dir logquick interface route af proto fromto
 			}
 #endif
 
-			if ($9.dnpipe) {
-                                r.dnpipe = $9.dnpipe;
-				if ($9.free_flags & PFRULE_DN_IS_PIPE)
-					r.free_flags |= PFRULE_DN_IS_PIPE;
-				else
-					r.free_flags |= PFRULE_DN_IS_QUEUE;
-				r.pdnpipe = $9.pdnpipe;
-			}
-
 			expand_rule(&r, $4, $5.host, $7, $8.src_os,
 			    $8.src.host, $8.src.port, $8.dst.host, $8.dst.port,
 			    $9.uid, $9.gid, $9.icmpspec, "");
@@ -2372,32 +2351,6 @@ filter_opt	: USER uids {
 				YYERROR;
 			}
 			filter_opts.queues = $1;
-		}
-		| DNPIPE number			        {
-			filter_opts.dnpipe = $2;
-			filter_opts.free_flags |= PFRULE_DN_IS_PIPE;
-		}
-		| DNPIPE '(' number ')'			{
-			filter_opts.dnpipe = $3;
-			filter_opts.free_flags |= PFRULE_DN_IS_PIPE;
-		}
-		| DNPIPE '(' number comma number ')' {
-			filter_opts.pdnpipe = $5;
-			filter_opts.dnpipe = $3;
-			filter_opts.free_flags |= PFRULE_DN_IS_PIPE;
-		}
-		| DNQUEUE number			{
-			filter_opts.dnpipe = $2;
-			filter_opts.free_flags |= PFRULE_DN_IS_QUEUE;
-		}
-		| DNQUEUE '(' number comma number ')'	{
-			filter_opts.pdnpipe = $5;
-			filter_opts.dnpipe = $3;
-			filter_opts.free_flags |= PFRULE_DN_IS_QUEUE;
-		}
-		| DNQUEUE '(' number ')'		{
-			filter_opts.dnpipe = $3;
-			filter_opts.free_flags |= PFRULE_DN_IS_QUEUE;
 		}
 		| TAG string				{
 			filter_opts.tag = $2;
@@ -4550,11 +4503,6 @@ filter_consistent(struct pf_rule *r, int anchor_call)
 		yyerror("tos and dscp cannot be used together");
 		problems++;
 	}
-	if (r->dnpipe && r->pdnpipe && !r->direction) {
-		yyerror("dummynet cannot be specified without direction");
-		problems++;
-	}
-
 	return (-problems);
 }
 
@@ -5345,8 +5293,6 @@ lookup(char *s)
 		{ "code",		CODE},
 		{ "crop",		FRAGCROP},
 		{ "debug",		DEBUG},
-		{ "dnpipe",             DNPIPE},
-		{ "dnqueue",            DNQUEUE},
 		{ "divert-reply",	DIVERTREPLY},
 		{ "divert-to",		DIVERTTO},
 		{ "drop",		DROP},
