@@ -549,21 +549,6 @@ pf_hashsrc(struct pf_addr *addr, sa_family_t af)
 	return (h & V_pf_srchashmask);
 }
 
-#ifdef ALTQ
-/* XXX: revisit this with ALTQ_WFQ/dummynet */
-static int
-pf_state_hash(struct pf_state *s)
-{
-	u_int32_t hv = (intptr_t)s / sizeof(*s);
-
-	hv ^= crc32(&s->src, sizeof(s->src));
-	hv ^= crc32(&s->dst, sizeof(s->dst));
-	if (hv == 0)
-		hv = 1;
-	return (hv);
-}
-#endif
-
 #ifdef INET6
 void
 pf_addrcpy(struct pf_addr *dst, struct pf_addr *src, sa_family_t af)
@@ -6166,8 +6151,6 @@ done:
 			action = PF_DROP;
 			REASON_SET(&reason, PFRES_MEMORY);
 		}
-		if (s)
-			pd.pf_mtag->qid_hash = pf_state_hash(s);
 		if (pqid || (pd.tos & IPTOS_LOWDELAY))
 			pd.pf_mtag->qid = r->pqid;
 		else
@@ -6662,8 +6645,6 @@ done:
 			action = PF_DROP;
 			REASON_SET(&reason, PFRES_MEMORY);
 		}
-		if (s)
-			pd.pf_mtag->qid_hash = pf_state_hash(s);
 		if (pd.tos & IPTOS_LOWDELAY)
 			pd.pf_mtag->qid = r->pqid;
 		else
