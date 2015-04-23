@@ -42,7 +42,6 @@
 #include <altq/altq_red.h>
 #include <altq/altq_rio.h>
 #include <altq/altq_rmclass.h>
-#include <altq/altq_codel.h>
 
 #define	FAIRQ_MAX_BUCKETS	2048	/* maximum number of sorting buckets */
 #define	FAIRQ_MAXPRI		RM_MAXPRIO
@@ -53,7 +52,6 @@
 #define	FARF_RED		0x0001	/* use RED */
 #define	FARF_ECN		0x0002  /* use RED/ECN */
 #define	FARF_RIO		0x0004  /* use RIO */
-#define	FARF_CODEL		0x0008  /* use CODEL */
 #define	FARF_CLEARDSCP		0x0010  /* clear diffserv codepoint */
 #define	FARF_DEFAULTCLASS	0x1000	/* default class */
 
@@ -78,7 +76,6 @@ struct fairq_classstats {
 	/* red and rio related info */
 	int			qtype;
 	struct redstats		red[3];	/* rio has 3 red stats */
-	struct codel_stats	codel;
 };
 
 #ifdef _KERNEL
@@ -100,10 +97,7 @@ struct fairq_class {
 	fairq_bucket_t	*cl_buckets;
 	fairq_bucket_t	*cl_head;	/* head of circular bucket list */
 	fairq_bucket_t	*cl_polled;
-	union {
-		struct red	*cl_red;	/* RED state */
-		struct codel	*cl_codel;
-	} cl_aqm;
+	struct red	*cl_red;	/* RED state */
 	u_int		cl_hogs_m1;
 	u_int		cl_lssc_m1;
 	u_int		cl_bandwidth;
@@ -123,8 +117,6 @@ struct fairq_class {
 	struct pktcntr  cl_xmitcnt;	/* transmitted packet counter */
 	struct pktcntr  cl_dropcnt;	/* dropped packet counter */
 };
-#define	cl_red	cl_aqm.cl_red
-#define	cl_codel	cl_aqm.cl_codel
 
 /*
  * fairq interface state

@@ -53,7 +53,6 @@ typedef struct rm_ifdat		rm_ifdat_t;
 typedef struct rm_class		rm_class_t;
 
 struct red;
-struct codel;
 
 /*
  * Macros for dealing with time values.  We assume all times are
@@ -165,10 +164,7 @@ struct rm_class {
 	void	(*overlimit)(struct rm_class *, struct rm_class *);
 	void	(*drop)(struct rm_class *);       /* Class drop action. */
 
-	union {
-		struct red	*red_;		/* RED state pointer */
-		struct codel	*codel;
-	} cl_aqm;
+	struct red	*red_;		/* RED state pointer */
 	struct altq_pktattr *pktattr_;	/* saved hdr used by RED/ECN */
 	int		flags_;
 
@@ -180,8 +176,6 @@ struct rm_class {
 
 	rm_class_stats_t stats_;	/* Class Statistics */
 };
-#define	red_	cl_aqm.red_
-#define	codel_	cl_aqm.codel
 
 /*
  * CBQ Interface state
@@ -239,7 +233,6 @@ struct rm_ifdat {
 #define	RMCF_RIO		0x0004
 #define	RMCF_FLOWVALVE		0x0008	/* use flowvalve (aka penalty-box) */
 #define	RMCF_CLEARDSCP		0x0010  /* clear diffserv codepoint */
-#define	RMCF_CODEL		0x0040
 
 /* flags for rmc_init */
 #define	RMCF_WRR		0x0100
