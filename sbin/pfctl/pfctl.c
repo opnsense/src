@@ -78,6 +78,7 @@ void	 pfctl_addrprefix(char *, struct pf_addr *);
 int	 pfctl_kill_src_nodes(int, const char *, int);
 int	 pfctl_net_kill_states(int, const char *, int);
 int	 pfctl_label_kill_states(int, const char *, int);
+int	 pfctl_kill_schedule(int, const char *, int);
 int	 pfctl_id_kill_states(int, const char *, int);
 void	 pfctl_init_options(struct pfctl *);
 int	 pfctl_load_options(struct pfctl *);
@@ -117,6 +118,7 @@ const char	*optiopt = NULL;
 char		*pf_device = "/dev/pf";
 char		*ifaceopt;
 char		*tableopt;
+char		*schedule = NULL;
 const char	*tblcmdopt;
 int		 src_node_killers;
 char		*src_node_kill[2];
@@ -650,6 +652,25 @@ pfctl_net_kill_states(int dev, const char *iface, int opts)
 	if ((opts & PF_OPT_QUIET) == 0)
 		fprintf(stderr, "killed %d states from %d sources and %d "
 		    "destinations\n", killed, sources, dests);
+	return (0);
+}
+
+int
+pfctl_kill_schedule(int dev, const char *sched, int opts)
+{
+	struct pfioc_schedule_kill psk;
+
+	memset(&psk, 0, sizeof(psk));
+	if (sched != NULL && strlcpy(psk.schedule, sched,
+	    sizeof(psk.schedule)) >= sizeof(psk.schedule))
+		errx(1, "invalid schedule label: %s", sched);
+
+	if (ioctl(dev, DIOCKILLSCHEDULE, &psk))
+		err(1, "DIOCKILLSCHEDULE");
+
+	if ((opts & PF_OPT_QUIET) == 0)
+		fprintf(stderr, "killed %d states from %s schedule label\n",
+			psk.numberkilled, sched);
 	return (0);
 }
 
@@ -2003,7 +2024,7 @@ main(int argc, char *argv[])
 		usage();
 
 	while ((ch = getopt(argc, argv,
-	    "a:AdD:eqf:F:ghi:k:K:mnNOo:Pp:rRs:t:T:vx:z")) != -1) {
+	    "a:AdD:eqf:F:ghi:k:K:mnNOo:Pp:rRs:t:T:vx:y:z")) != -1) {
 		switch (ch) {
 		case 'a':
 			anchoropt = optarg;
@@ -2116,6 +2137,12 @@ main(int argc, char *argv[])
 			if (opts & PF_OPT_VERBOSE)
 				opts |= PF_OPT_VERBOSE2;
 			opts |= PF_OPT_VERBOSE;
+			break;
+		case 'y':
+			if (schedule != NULL && strlen(schedule) > 64)
+				errx(1, "Schedule label cannot be more than 64 characters\n");
+			schedule = optarg;
+			mode = O_RDWR;
 			break;
 		case 'x':
 			debugopt = pfctl_lookup_option(optarg, debugopt_list);
@@ -2324,6 +2351,9 @@ main(int argc, char *argv[])
 
 	if (src_node_killers)
 		pfctl_kill_src_nodes(dev, ifaceopt, opts);
+
+	if (schedule)
+		pfctl_kill_schedule(dev, schedule, opts);
 
 	if (tblcmdopt != NULL) {
 		error = pfctl_command_tables(argc, argv, tableopt,
