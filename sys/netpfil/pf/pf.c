@@ -226,6 +226,8 @@ static int		 pf_state_key_attach(struct pf_state_key *,
 static void		 pf_state_key_detach(struct pf_state *, int);
 static int		 pf_state_key_ctor(void *, int, void *, int);
 static u_int32_t	 pf_tcp_iss(struct pf_pdesc *);
+void                     pf_rule_to_actions(struct pf_rule *,
+                            struct pf_rule_actions *);
 static int		 pf_test_rule(struct pf_rule **, struct pf_state **,
 			    int, struct pfi_kif *, struct mbuf *, int,
 			    struct pf_pdesc *, struct pf_rule **,
@@ -2821,6 +2823,15 @@ pf_addr_inc(struct pf_addr *addr, sa_family_t af)
 }
 #endif /* INET6 */
 
+void
+pf_rule_to_actions(struct pf_rule *r, struct pf_rule_actions *a)
+{
+        if (r->qid)
+                a->qid = r->qid;
+        if (r->pqid)
+                a->pqid = r->pqid;
+}
+
 int
 pf_socket_lookup(int direction, struct pf_pdesc *pd, struct mbuf *m)
 {
@@ -3343,10 +3354,20 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 			if (r->rtableid >= 0)
 				rtableid = r->rtableid;
 			if (r->anchor == NULL) {
-				match = 1;
-				*rm = r;
-				*am = a;
-				*rsm = ruleset;
+                                if (r->action == PF_MATCH) {
+                                        r->packets[direction == PF_OUT]++;
+                                        r->bytes[direction == PF_OUT] += pd->tot_len;
+                                        pf_rule_to_actions(r, &pd->act);
+                                        if (r->log)
+                                                PFLOG_PACKET(kif, m, af,
+                                                    direction, PFRES_MATCH, r,
+                                                    a, ruleset, pd, 1);
+                                } else {
+                                        match = 1;
+                                        *rm = r;
+                                        *am = a;
+                                        *rsm = ruleset;
+                                }
 				if ((*rm)->quick)
 					break;
 				r = TAILQ_NEXT(r, entries);
@@ -3364,6 +3385,9 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 	ruleset = *rsm;
 
 	REASON_SET(&reason, PFRES_MATCH);
+
+        /* apply actions for last matching pass/block rule */
+        pf_rule_to_actions(r, &pd->act);
 
 	if (r->log || (nr != NULL && nr->log)) {
 		if (rewrite)
@@ -3538,6 +3562,9 @@ pf_create_state(struct pf_rule *r, struct pf_rule *nr, struct pf_rule *a,
 		s->state_flags |= PFSTATE_SLOPPY;
 	s->log = r->log & PF_LOG_ALL;
 	s->sync_state = PFSYNC_S_NONE;
+        s->qid = pd->act.qid;
+        s->pqid = pd->act.pqid;
+        s->state_flags |= pd->act.flags;	
 	if (nr != NULL)
 		s->log |= nr->log & PF_LOG_ALL;
 	switch (pd->proto) {
@@ -3796,10 +3823,20 @@ pf_test_fragment(struct pf_rule **rm, int direction, struct pfi_kif *kif,
 			r = TAILQ_NEXT(r, entries);
 		else {
 			if (r->anchor == NULL) {
-				match = 1;
-				*rm = r;
-				*am = a;
-				*rsm = ruleset;
+                                if (r->action == PF_MATCH) {
+                                         r->packets[direction == PF_OUT]++;
+                                         r->bytes[direction == PF_OUT] += pd->tot_len;
+                                         pf_rule_to_actions(r, &pd->act);
+                                         if (r->log)
+                                                 PFLOG_PACKET(kif, m, af,
+                                                     direction, PFRES_MATCH, r,
+                                                     a, ruleset, pd, 1);
+                                 } else {
+                                        match = 1;
+                                        *rm = r;
+                                        *am = a;
+                                        *rsm = ruleset;
+                                }
 				if ((*rm)->quick)
 					break;
 				r = TAILQ_NEXT(r, entries);
@@ -3817,6 +3854,9 @@ pf_test_fragment(struct pf_rule **rm, int direction, struct pfi_kif *kif,
 	ruleset = *rsm;
 
 	REASON_SET(&reason, PFRES_MATCH);
+
+        /* apply actions for last matching pass/block rule */
+        pf_rule_to_actions(r, &pd->act);
 
 	if (r->log)
 		PFLOG_PACKET(kif, m, af, direction, reason, r, a, ruleset, pd,

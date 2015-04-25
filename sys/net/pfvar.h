@@ -465,6 +465,12 @@ struct pf_osfp_ioctl {
 	int			fp_getnum;	/* DIOCOSFPGET number */
 };
 
+struct pf_rule_actions {
+        u_int16_t       qid;
+        u_int16_t       pqid;
+        u_int8_t        flags;
+};
+
 
 union pf_rule_ptr {
 	struct pf_rule		*ptr;
@@ -730,6 +736,8 @@ struct pf_state {
 	u_int32_t		 creation;
 	u_int32_t	 	 expire;
 	u_int32_t		 pfsync_time;
+        u_int16_t                qid;
+        u_int16_t                pqid;
 	u_int16_t		 tag;
 	u_int8_t		 log;
 	u_int8_t		 state_flags;
@@ -1101,6 +1109,7 @@ struct pf_pdesc {
 	u_int16_t *sport;
 	u_int16_t *dport;
 	struct pf_mtag	*pf_mtag;
+        struct pf_rule_actions   act;
 
 	u_int32_t	 p_len;		/* total length of payload */
 
