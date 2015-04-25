@@ -483,8 +483,8 @@ int	parseport(char *, struct range *r, int);
 %type	<v.icmp>		icmp6_list icmp6_item
 %type	<v.number>		reticmpspec reticmp6spec
 %type	<v.fromto>		fromto
-%type	<v.peer>		ipportspec from to
-%type	<v.host>		ipspec toipspec xhost host dynaddr host_list
+%type	<v.peer>		ipportspec from to toipportspec
+%type	<v.host>		ipspec xhost host dynaddr host_list
 %type	<v.host>		redir_host_list redirspec
 %type	<v.host>		route_host route_host_list routespec
 %type	<v.os>			os xos os_list
@@ -2848,8 +2848,8 @@ ipspec		: ANY				{ $$ = NULL; }
 		| '{' optnl host_list '}'	{ $$ = $3; }
 		;
 
-toipspec	: TO ipspec			{ $$ = $2; }
-		| /* empty */			{ $$ = NULL; }
+toipportspec	: TO ipportspec			{ $$ = $2; }
+		| /* empty */			{ $$.host = NULL; $$.port = NULL; }
 		;
 
 host_list	: ipspec optnl			{ $$ = $1; }
@@ -4083,7 +4083,7 @@ natrule		: nataction interface af proto fromto tag tagged rtable
 		}
 		;
 
-binatrule	: no BINAT natpasslog interface af proto FROM host toipspec tag
+binatrule	: no BINAT natpasslog interface af proto FROM ipportspec toipportspec tag
 		    tagged rtable redirection
 		{
 			struct pf_rule		binat;
@@ -4091,7 +4091,7 @@ binatrule	: no BINAT natpasslog interface af proto FROM host toipspec tag
 
 			if (check_rulestate(PFCTL_STATE_NAT))
 				YYERROR;
-			if (disallow_urpf_failed($9, "\"urpf-failed\" is not "
+			if (disallow_urpf_failed($9.host, "\"urpf-failed\" is not "
 			    "permitted as a binat destination"))
 				YYERROR;
 
@@ -4109,10 +4109,10 @@ binatrule	: no BINAT natpasslog interface af proto FROM host toipspec tag
 			binat.log = $3.b2;
 			binat.logif = $3.w2;
 			binat.af = $5;
-			if (!binat.af && $8 != NULL && $8->af)
-				binat.af = $8->af;
-			if (!binat.af && $9 != NULL && $9->af)
-				binat.af = $9->af;
+			if (!binat.af && $8.host != NULL && $8.host->af)
+				binat.af = $8.host->af;
+			if (!binat.af && $9.host != NULL && $9.host->af)
+				binat.af = $9.host->af;
 
 			if (!binat.af && $13 != NULL && $13->host)
 				binat.af = $13->host->af;
@@ -4151,10 +4151,10 @@ binatrule	: no BINAT natpasslog interface af proto FROM host toipspec tag
 				free($6);
 			}
 
-			if ($8 != NULL && disallow_table($8, "invalid use of "
+			if ($8.host != NULL && disallow_table($8.host, "invalid use of "
 			    "table <%s> as the source address of a binat rule"))
 				YYERROR;
-			if ($8 != NULL && disallow_alias($8, "invalid use of "
+			if ($8.host != NULL && disallow_alias($8.host, "invalid use of "
 			    "interface (%s) as the source address of a binat "
 			    "rule"))
 				YYERROR;
@@ -4167,38 +4167,46 @@ binatrule	: no BINAT natpasslog interface af proto FROM host toipspec tag
 			    "redirect address of a binat rule"))
 				YYERROR;
 
-			if ($8 != NULL) {
-				if ($8->next) {
+			if ($8.host != NULL) {
+				if ($8.host->next) {
 					yyerror("multiple binat ip addresses");
 					YYERROR;
 				}
-				if ($8->addr.type == PF_ADDR_DYNIFTL)
-					$8->af = binat.af;
-				if ($8->af != binat.af) {
+				if ($8.host->addr.type == PF_ADDR_DYNIFTL)
+					$8.host->af = binat.af;
+				if ($8.host->af != binat.af) {
 					yyerror("binat ip versions must match");
 					YYERROR;
 				}
-				if (check_netmask($8, binat.af))
+				if (check_netmask($8.host, binat.af))
 					YYERROR;
-				memcpy(&binat.src.addr, &$8->addr,
+				memcpy(&binat.src.addr, &$8.host->addr,
 				    sizeof(binat.src.addr));
-				free($8);
+				binat.src.neg = $8.host->not;
+				free($8.host);
 			}
-			if ($9 != NULL) {
-				if ($9->next) {
+			if ($9.host != NULL) {
+				if ($9.host->next) {
 					yyerror("multiple binat ip addresses");
 					YYERROR;
 				}
-				if ($9->af != binat.af && $9->af) {
+				if ($9.host->af != binat.af && $9.host->af) {
 					yyerror("binat ip versions must match");
 					YYERROR;
 				}
-				if (check_netmask($9, binat.af))
+				if (check_netmask($9.host, binat.af))
 					YYERROR;
-				memcpy(&binat.dst.addr, &$9->addr,
+				memcpy(&binat.dst.addr, &$9.host->addr,
 				    sizeof(binat.dst.addr));
-				binat.dst.neg = $9->not;
-				free($9);
+				binat.dst.neg = $9.host->not;
+				free($9.host);
+			}
+
+			if ($9.port != NULL) {
+				binat.dst.port[0] = $9.port->port[0];
+				binat.dst.port[1] = $9.port->port[1];
+				binat.dst.port_op = $9.port->op;
+				free($9.port);
 			}
 
 			if (binat.action == PF_NOBINAT) {
