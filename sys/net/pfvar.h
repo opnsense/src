@@ -327,6 +327,14 @@ struct pf_rule_gid {
 	u_int8_t	 op;
 };
 
+struct pf_rule_ieee8021q_pcp {
+	u_int8_t	 pcp[2];
+	u_int8_t	 op;
+#define	SETPCP_VALID	0x80	/* Set if PCP value in field is valid. */
+#define	SETPCP_PCP_MASK	0x07	/* Mask to retrieve pcp if SETPCP_VALID. */
+	u_int8_t	 setpcp;
+};
+
 struct pf_rule_addr {
 	struct pf_addr_wrap	 addr;
 	u_int16_t		 port[2];
@@ -539,6 +547,7 @@ struct pf_rule {
 	u_int16_t		 tag;
 	u_int16_t		 match_tag;
 	u_int16_t		 spare2;			/* netgraph */
+	struct pf_rule_ieee8021q_pcp    ieee8021q_pcp;
 
 	struct pf_rule_uid	 uid;
 	struct pf_rule_gid	 gid;
@@ -1588,6 +1597,8 @@ int	pf_match_addr(u_int8_t, struct pf_addr *, struct pf_addr *,
 int	pf_match_addr_range(struct pf_addr *, struct pf_addr *,
 	    struct pf_addr *, sa_family_t);
 int	pf_match_port(u_int8_t, u_int16_t, u_int16_t, u_int16_t);
+int	pf_match_ieee8021q_pcp(u_int8_t, u_int8_t, u_int8_t, struct mbuf *);
+int	pf_ieee8021q_setpcp(struct mbuf *m, struct pf_rule *r);
 
 void	pf_normalize_init(void);
 void	pf_normalize_cleanup(void);

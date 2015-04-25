@@ -37,6 +37,8 @@ __FBSDID("$FreeBSD$");
 #include <sys/sysctl.h>
 #endif
 #include <net/if.h>
+#include <net/ethernet.h>
+#include <net/if_vlan_var.h>
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
@@ -237,6 +239,11 @@ struct filter_opts {
 	char			*tag;
 	char			*match_tag;
 	u_int8_t		 match_tag_not;
+        struct {
+               uint8_t          pcp[2];
+               uint8_t          op;
+               uint8_t          setpcp;
+        } ieee8021q_pcp;	
 	u_int			 rtableid;
 	struct {
 		struct node_host	*addr;
@@ -452,6 +459,7 @@ int	parseport(char *, struct range *r, int);
 %token	STICKYADDRESS MAXSRCSTATES MAXSRCNODES SOURCETRACK GLOBAL RULE
 %token	MAXSRCCONN MAXSRCCONNRATE OVERLOAD FLUSH SLOPPY
 %token	TAGGED TAG IFBOUND FLOATING STATEPOLICY STATEDEFAULTS ROUTE SETTOS
+%token	IEEE8021QPCP IEEE8021QSETPCP
 %token	DIVERTTO DIVERTREPLY
 %token	<v.string>		STRING
 %token	<v.number>		NUMBER
@@ -873,6 +881,11 @@ anchorrule	: ANCHOR anchorname dir quick interface af proto fromto
 				    "on anchors");
 				YYERROR;
 			}
+
+			r.ieee8021q_pcp.pcp[0] = $9.ieee8021q_pcp.pcp[0];
+			r.ieee8021q_pcp.pcp[1] = $9.ieee8021q_pcp.pcp[1];
+			r.ieee8021q_pcp.op = $9.ieee8021q_pcp.op;
+			r.ieee8021q_pcp.setpcp = $9.ieee8021q_pcp.setpcp;
 
 			if ($9.match_tag)
 				if (strlcpy(r.match_tagname, $9.match_tag,
@@ -1878,6 +1891,11 @@ pfrule		: action dir logquick interface route af proto fromto
 			r.prob = $9.prob;
 			r.rtableid = $9.rtableid;
 
+			r.ieee8021q_pcp.pcp[0] = $9.ieee8021q_pcp.pcp[0];
+			r.ieee8021q_pcp.pcp[1] = $9.ieee8021q_pcp.pcp[1];
+			r.ieee8021q_pcp.op = $9.ieee8021q_pcp.op;
+			r.ieee8021q_pcp.setpcp = $9.ieee8021q_pcp.setpcp;
+
 			r.af = $6;
 			if ($9.tag)
 				if (strlcpy(r.tagname, $9.tag,
@@ -2353,6 +2371,75 @@ filter_opt	: USER uids {
 			filter_opts.prob = (u_int32_t)p;
 			if (filter_opts.prob == 0)
 				filter_opts.prob = 1;
+		}
+		| IEEE8021QPCP STRING {
+			u_int pcp;
+
+			/*
+			* XXXRW: More complete set of operations, similar to
+			* ports.
+			*/
+			if (!strcmp($2, "be"))
+				pcp = IEEE8021Q_PCP_BE;
+			else if (!strcmp($2, "bk"))
+				pcp = IEEE8021Q_PCP_BK;
+			else if (!strcmp($2, "ee"))
+				pcp = IEEE8021Q_PCP_EE;
+			else if (!strcmp($2, "ca"))
+				pcp = IEEE8021Q_PCP_CA;
+			else if (!strcmp($2, "vi"))
+				pcp = IEEE8021Q_PCP_VI;
+			else if (!strcmp($2, "vo"))
+				pcp = IEEE8021Q_PCP_VO;
+			else if (!strcmp($2, "ic"))
+				pcp = IEEE8021Q_PCP_IC;
+			else if (!strcmp($2, "nc"))
+				pcp = IEEE8021Q_PCP_NC;
+			else if (atoul($2, &pcp) == -1) /* int argument  */
+				pcp = 8 ; /* flag bad argument  */
+			if (pcp > 7) {
+				yyerror("invalid ieee8021q_pcp value %s", $2);
+				free($2);
+				YYERROR;
+			}
+			free($2);
+			filter_opts.ieee8021q_pcp.pcp[0] = pcp;
+			filter_opts.ieee8021q_pcp.pcp[1] = 0;
+			filter_opts.ieee8021q_pcp.op = PF_OP_EQ;
+		}
+		| IEEE8021QSETPCP STRING {
+			u_int pcp;
+
+			/*
+			* XXXRW: More complete set of operations, similar to
+			* ports.
+			*/
+			if (!strcmp($2, "be"))
+				pcp = IEEE8021Q_PCP_BE;
+			else if (!strcmp($2, "bk"))
+				pcp = IEEE8021Q_PCP_BK;
+			else if (!strcmp($2, "ee"))
+				pcp = IEEE8021Q_PCP_EE;
+			else if (!strcmp($2, "ca"))
+				pcp = IEEE8021Q_PCP_CA;
+			else if (!strcmp($2, "vi"))
+				pcp = IEEE8021Q_PCP_VI;
+			else if (!strcmp($2, "vo"))
+				pcp = IEEE8021Q_PCP_VO;
+			else if (!strcmp($2, "ic"))
+				pcp = IEEE8021Q_PCP_IC;
+			else if (!strcmp($2, "nc"))
+				pcp = IEEE8021Q_PCP_NC;
+			else if (atoul($2, &pcp) == -1) /* int argument  */
+				pcp = 8;                /* flag bad argument */
+			if (pcp > 7) {
+				yyerror("invalid ieee8021q_setpcp value %s",
+					$2);
+				free($2);
+				YYERROR;
+			}
+			free($2);
+			filter_opts.ieee8021q_pcp.setpcp = pcp | SETPCP_VALID;
 		}
 		| RTABLE NUMBER				{
 			if ($2 < 0 || $2 > rt_tableid_max()) {
@@ -5250,6 +5337,8 @@ lookup(char *s)
 		{ "hostid",		HOSTID},
 		{ "icmp-type",		ICMPTYPE},
 		{ "icmp6-type",		ICMP6TYPE},
+		{ "ieee8021q-pcp",	IEEE8021QPCP},
+		{ "ieee8021q-setpcp",	IEEE8021QSETPCP},
 		{ "if-bound",		IFBOUND},
 		{ "in",			IN},
 		{ "include",		INCLUDE},

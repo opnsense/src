@@ -40,6 +40,8 @@ __FBSDID("$FreeBSD$");
 #include <sys/param.h>
 #include <sys/proc.h>
 #include <net/if.h>
+#include <net/ethernet.h>
+#include <net/if_vlan_var.h>
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
@@ -65,6 +67,8 @@ __FBSDID("$FreeBSD$");
 void		 print_op (u_int8_t, const char *, const char *);
 void		 print_port (u_int8_t, u_int16_t, u_int16_t, const char *, int);
 void		 print_ugid (u_int8_t, unsigned, unsigned, const char *, unsigned);
+void		 print_ieee8021q_pcp (u_int8_t, uint8_t, uint8_t);
+void		 print_ieee8021q_setpcp (u_int8_t);
 void		 print_flags (u_int8_t);
 void		 print_fromto(struct pf_rule_addr *, pf_osfp_t,
 		    struct pf_rule_addr *, u_int8_t, u_int8_t, int, int);
@@ -351,6 +355,47 @@ print_ugid(u_int8_t op, unsigned u1, unsigned u2, const char *t, unsigned umax)
 		print_op(op, "unknown", a2);
 	else
 		print_op(op, a1, a2);
+}
+
+static const char *
+ieee8021q_pcp_name(u_int8_t pcp)
+{
+	const char *s;
+
+	if (pcp == IEEE8021Q_PCP_BE)
+		s = "be";
+	else if (pcp == IEEE8021Q_PCP_BK)
+		s = "bk";
+	else if (pcp == IEEE8021Q_PCP_EE)
+		s = "ee";
+	else if (pcp == IEEE8021Q_PCP_CA)
+		s = "ca";
+	else if (pcp == IEEE8021Q_PCP_VI)
+		s = "vi";
+	else if (pcp == IEEE8021Q_PCP_VO)
+		s = "vo";
+	else if (pcp == IEEE8021Q_PCP_IC)
+		s = "ic";
+	else if (pcp == IEEE8021Q_PCP_NC)
+		s = "nc";
+	else
+		s = "??";
+	return (s);
+}
+
+ void
+print_ieee8021q_pcp(u_int8_t op, u_int8_t pcp0, u_int8_t pcp1)
+{
+
+	printf(" ieee8021q-pcp");
+	print_op(op, ieee8021q_pcp_name(pcp0), ieee8021q_pcp_name(pcp1));
+}
+
+void
+print_ieee8021q_setpcp(u_int8_t pcp)
+{
+
+	printf(" ieee8021q-setpcp %s", ieee8021q_pcp_name(pcp));
 }
 
 void
@@ -1012,6 +1057,13 @@ print_rule(struct pf_rule *r, const char *anchor_call, int verbose, int numeric)
 	}
 	if (r->rtableid != -1)
 		printf(" rtable %u", r->rtableid);
+	if (r->ieee8021q_pcp.op != 0)
+		print_ieee8021q_pcp(r->ieee8021q_pcp.op,
+			r->ieee8021q_pcp.pcp[0], r->ieee8021q_pcp.pcp[1]);
+	if (r->ieee8021q_pcp.setpcp & SETPCP_VALID)
+		print_ieee8021q_setpcp(r->ieee8021q_pcp.setpcp &
+			SETPCP_PCP_MASK);
+
 	if (r->divert.port) {
 #ifdef __FreeBSD__
 		printf(" divert-to %u", ntohs(r->divert.port));
