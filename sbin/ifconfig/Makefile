@@ -34,6 +34,7 @@ SRCS+=	ifvlan.c		# SIOC[GS]ETVLAN support
 SRCS+=	ifvxlan.c		# VXLAN support
 SRCS+=	ifgre.c			# GRE keys etc
 SRCS+=	ifgif.c			# GIF reversed header workaround
+SRCS+=	ifstf.c			# STF configuration options
 
 SRCS+=	sfp.c			# SFP/SFP+ information
 DPADD+=	${LIBM}
