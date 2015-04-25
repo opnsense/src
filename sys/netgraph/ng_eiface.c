@@ -43,6 +43,7 @@
 #include <net/if.h>
 #include <net/if_media.h>
 #include <net/if_types.h>
+#include <net/if_dl.h>
 #include <net/netisr.h>
 #include <net/route.h>
 #include <net/vnet.h>
@@ -63,6 +64,13 @@ static const struct ng_cmdlist ng_eiface_cmdlist[] = {
 	  "getifname",
 	  NULL,
 	  &ng_parse_string_type
+	},
+	{
+	  NGM_EIFACE_COOKIE,
+	  NGM_EIFACE_SET_IFNAME,
+	  "setifname",
+	  &ng_parse_string_type,
+	  NULL
 	},
 	{
 	  NGM_EIFACE_COOKIE,
@@ -470,6 +478,11 @@ ng_eiface_rcvmsg(node_p node, item_p item, hook_p lasthook)
 	struct ng_mesg *resp = NULL;
 	int error = 0;
 	struct ng_mesg *msg;
+	char *new_name;
+        size_t namelen, onamelen;
+        struct sockaddr_dl *sdl = NULL;
+        struct ifaddr *ifa = NULL;
+	node_p ethernode;
 
 	NGI_GET_MSG(item, msg);
 	switch (msg->header.typecookie) {
@@ -495,6 +508,46 @@ ng_eiface_rcvmsg(node_p node, item_p item, hook_p lasthook)
 				break;
 			}
 			strlcpy(resp->data, ifp->if_xname, IFNAMSIZ);
+			break;
+		case NGM_EIFACE_SET_IFNAME:
+			new_name = (char *)msg->data;
+                        
+                	/* Deny request if interface is UP */
+                	if ((ifp->if_flags & IFF_UP) != 0) {
+                  		error = EBUSY;
+                  		break;
+                        }
+                        
+                	EVENTHANDLER_INVOKE(ifnet_departure_event, ifp);
+
+			ethernode = ng_name2noderef(node, ifp->if_xname);
+                        if (ethernode != NULL)
+                                ng_name_node(ethernode, new_name);
+
+                	strlcpy(ifp->if_xname, new_name, sizeof(ifp->if_xname));
+                	ifa = ifp->if_addr;
+                	IFA_LOCK(ifa);
+                	sdl = (struct sockaddr_dl *)ifa->ifa_addr;
+                	namelen = strlen(new_name) + 1;
+                	onamelen = sdl->sdl_nlen;
+                	/*
+                 	* Move the address if needed.  This is safe because we
+                 	* allocate space for a name of length IFNAMSIZ when we
+                 	* create this in if_attach().
+                	 */
+        	        if (namelen != onamelen) {
+	                        bcopy(sdl->sdl_data + onamelen,
+                        	    sdl->sdl_data + namelen, sdl->sdl_alen);
+                	}
+        	        bcopy(new_name, sdl->sdl_data, namelen);
+	                sdl->sdl_nlen = namelen;
+                	sdl = (struct sockaddr_dl *)ifa->ifa_netmask;
+        	        bzero(sdl->sdl_data, onamelen);
+	                while (namelen != 0)
+                        	sdl->sdl_data[--namelen] = 0xff;
+                	IFA_UNLOCK(ifa);
+
+                	EVENTHANDLER_INVOKE(ifnet_arrival_event, ifp);
 			break;
 
 		case NGM_EIFACE_GET_IFADDRS:
