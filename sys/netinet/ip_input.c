@@ -495,10 +495,11 @@ tooshort:
 		   packet will be treated improperly in ip_output. */
 		struct m_tag *ipfw_tag;
 		ipfw_tag = m_tag_locate(m, MTAG_IPFW_RULE, 0, NULL);
-		if (ipfw_tag != NULL)
+		if (ipfw_tag != NULL) {
 			m_tag_delete(m, ipfw_tag);
-			m->m_flags &= ~M_IPIN_SKIPPFIL;
-			goto passin;
+		}
+		m->m_flags &= ~M_IPIN_SKIPPFIL;
+		goto passin;
 	}
 
 	odst = ip->ip_dst;
