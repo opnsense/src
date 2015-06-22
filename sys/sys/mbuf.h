@@ -222,6 +222,7 @@ struct mbuf {
 #define	M_VLANTAG	0x00000080 /* ether_vtag is valid */
 #define	M_FLOWID	0x00000100 /* deprecated: flowid is valid */
 #define	M_NOFREE	0x00000200 /* do not free mbuf, embedded in cluster */
+#define M_IPIN_SKIPPFIL 0x00800000 /* OPNsense (original from m0n0wall): skip pfil processing in ip_input */
 
 #define	M_PROTO1	0x00001000 /* protocol-specific */
 #define	M_PROTO2	0x00002000 /* protocol-specific */

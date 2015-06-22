@@ -662,6 +662,7 @@ dummynet_send(struct mbuf *m)
 			break ;
 
 		case DIR_IN :
+		        m->m_flags |= M_IPIN_SKIPPFIL;
 			netisr_dispatch(NETISR_IP, m);
 			break;
 
