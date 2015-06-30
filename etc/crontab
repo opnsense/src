@@ -13,7 +13,7 @@ PATH=/etc:/bin:/sbin:/usr/bin:/usr/sbin
 */11	*	*	*	*	operator /usr/libexec/save-entropy
 #
 # Rotate log files every hour, if necessary.
-#0	*	*	*	*	root	newsyslog
+0	*	*	*	*	root	newsyslog
 #
 # Perform daily/weekly/monthly maintenance.
 1	3	*	*	*	root	periodic daily
