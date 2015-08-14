@@ -149,11 +149,13 @@
  * The following must match the type definition of dtrace_probe.  It is
  * defined this way to avoid having to rely on CDDL code.
  */
+struct lock_object;
 extern uint32_t lockstat_probemap[LS_NPROBES];
 typedef void (*lockstat_probe_func_t)(uint32_t, uintptr_t arg0, uintptr_t arg1,
     uintptr_t arg2, uintptr_t arg3, uintptr_t arg4);
 extern lockstat_probe_func_t lockstat_probe_func;
-extern uint64_t lockstat_nsecs(void);
+extern uint64_t lockstat_nsecs(struct lock_object *);
+extern int lockstat_enabled;
 
 #ifdef	KDTRACE_HOOKS
 /*
@@ -197,6 +199,9 @@ extern uint64_t lockstat_nsecs(void);
 	if ((id = lockstat_probemap[(probe)])) 			     	     \
 		(*lockstat_probe_func)(id, (uintptr_t)(lp), 0, 0, 0, 0);     \
 } while (0)
+
+#define	LOCKSTAT_WRITER		0
+#define	LOCKSTAT_READER		1
 
 #else	/* !KDTRACE_HOOKS */
 

@@ -2666,7 +2666,7 @@ pmap_kenter_section(vm_offset_t va, vm_offset_t pa, int flags)
  * to be used for panic dumps.
  */
 void *
-pmap_kenter_temp(vm_paddr_t pa, int i)
+pmap_kenter_temporary(vm_paddr_t pa, int i)
 {
 	vm_offset_t va;
 
@@ -4324,7 +4324,13 @@ pmap_copy_page(vm_page_t src, vm_page_t dst)
 	pmap_copy_page_func(VM_PAGE_TO_PHYS(src), VM_PAGE_TO_PHYS(dst));
 }
 
-int unmapped_buf_allowed = 1;
+/*
+ * We have code to do unmapped I/O. However, it isn't quite right and
+ * causes un-page-aligned I/O to devices to fail (most notably newfs
+ * or fsck). We give up a little performance to not allow unmapped I/O
+ * to gain stability.
+ */
+int unmapped_buf_allowed = 0;
 
 void
 pmap_copy_pages(vm_page_t ma[], vm_offset_t a_offset, vm_page_t mb[],

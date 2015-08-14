@@ -33,7 +33,7 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/capability.h>
+#include <sys/capsicum.h>
 #include <sys/kernel.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
@@ -522,11 +522,38 @@ knote_fork(struct knlist *list, int pid)
  * XXX: EVFILT_TIMER should perhaps live in kern_time.c beside the
  * interval timer support code.
  */
-static __inline sbintime_t 
-timer2sbintime(intptr_t data)
-{
 
-	return (SBT_1MS * data);
+#define NOTE_TIMER_PRECMASK	(NOTE_SECONDS|NOTE_MSECONDS|NOTE_USECONDS| \
+				NOTE_NSECONDS)
+
+static __inline sbintime_t
+timer2sbintime(intptr_t data, int flags)
+{
+	sbintime_t modifier;
+
+	switch (flags & NOTE_TIMER_PRECMASK) {
+	case NOTE_SECONDS:
+		modifier = SBT_1S;
+		break;
+	case NOTE_MSECONDS: /* FALLTHROUGH */
+	case 0:
+		modifier = SBT_1MS;
+		break;
+	case NOTE_USECONDS:
+		modifier = SBT_1US;
+		break;
+	case NOTE_NSECONDS:
+		modifier = SBT_1NS;
+		break;
+	default:
+		return (-1);
+	}
+
+#ifdef __LP64__
+	if (data > SBT_MAX / modifier)
+		return (SBT_MAX);
+#endif
+	return (modifier * data);
 }
 
 static void
@@ -541,14 +568,15 @@ filt_timerexpire(void *knx)
 
 	if ((kn->kn_flags & EV_ONESHOT) != EV_ONESHOT) {
 		calloutp = (struct callout *)kn->kn_hook;
-		callout_reset_sbt_on(calloutp,
-		    timer2sbintime(kn->kn_sdata), 0 /* 1ms? */,
-		    filt_timerexpire, kn, PCPU_GET(cpuid), 0);
+		*kn->kn_ptr.p_nexttime += timer2sbintime(kn->kn_sdata,
+		    kn->kn_sfflags);
+		callout_reset_sbt_on(calloutp, *kn->kn_ptr.p_nexttime, 0,
+		    filt_timerexpire, kn, PCPU_GET(cpuid), C_ABSOLUTE);
 	}
 }
 
 /*
- * data contains amount of time to sleep, in milliseconds
+ * data contains amount of time to sleep
  */
 static int
 filt_timerattach(struct knote *kn)
@@ -561,7 +589,11 @@ filt_timerattach(struct knote *kn)
 		return (EINVAL);
 	if ((intptr_t)kn->kn_sdata == 0 && (kn->kn_flags & EV_ONESHOT) == 0)
 		kn->kn_sdata = 1;
-	to = timer2sbintime(kn->kn_sdata);
+	/* Only precision unit are supported in flags so far */
+	if (kn->kn_sfflags & ~NOTE_TIMER_PRECMASK)
+		return (EINVAL);
+
+	to = timer2sbintime(kn->kn_sdata, kn->kn_sfflags);
 	if (to < 0)
 		return (EINVAL);
 
@@ -575,11 +607,13 @@ filt_timerattach(struct knote *kn)
 
 	kn->kn_flags |= EV_CLEAR;		/* automatically set */
 	kn->kn_status &= ~KN_DETACHED;		/* knlist_add clears it */
+	kn->kn_ptr.p_nexttime = malloc(sizeof(sbintime_t), M_KQUEUE, M_WAITOK);
 	calloutp = malloc(sizeof(*calloutp), M_KQUEUE, M_WAITOK);
 	callout_init(calloutp, CALLOUT_MPSAFE);
 	kn->kn_hook = calloutp;
-	callout_reset_sbt_on(calloutp, to, 0 /* 1ms? */,
-	    filt_timerexpire, kn, PCPU_GET(cpuid), 0);
+	*kn->kn_ptr.p_nexttime = to + sbinuptime();
+	callout_reset_sbt_on(calloutp, *kn->kn_ptr.p_nexttime, 0,
+	    filt_timerexpire, kn, PCPU_GET(cpuid), C_ABSOLUTE);
 
 	return (0);
 }
@@ -593,6 +627,7 @@ filt_timerdetach(struct knote *kn)
 	calloutp = (struct callout *)kn->kn_hook;
 	callout_drain(calloutp);
 	free(calloutp, M_KQUEUE);
+	free(kn->kn_ptr.p_nexttime, M_KQUEUE);
 	old = atomic_fetch_sub_explicit(&kq_ncallouts, 1, memory_order_relaxed);
 	KASSERT(old > 0, ("Number of callouts cannot become negative"));
 	kn->kn_status |= KN_DETACHED;	/* knlist_remove sets it */

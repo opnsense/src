@@ -2,11 +2,11 @@
 
 BINDIR= /usr/libexec/bsdinstall
 PROG=	distextract
-DPADD=	${LIBARCHIVE} ${LIBDIALOG} ${LIBM}
-LDADD=	-larchive -ldialog -lm
+DPADD=	${LIBARCHIVE} ${LIBDPV} ${LIBFIGPAR} ${LIBDIALOG} ${LIBM}
+LDADD=	-larchive -ldpv -lfigpar -ldialog -lm
 
 WARNS?=	6
-NO_MAN=	true
+MAN=
 
 .include <bsd.own.mk>
 

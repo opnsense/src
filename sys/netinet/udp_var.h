@@ -55,7 +55,8 @@ struct udpiphdr {
 struct inpcb;
 struct mbuf;
 
-typedef void(*udp_tun_func_t)(struct mbuf *, int off, struct inpcb *);
+typedef void(*udp_tun_func_t)(struct mbuf *, int off, struct inpcb *,
+			      const struct sockaddr *, void *);
 
 /*
  * UDP control block; one per udp.
@@ -65,6 +66,7 @@ struct udpcb {
 	u_int		u_flags;	/* Generic UDP flags. */
 	uint16_t	u_rxcslen;	/* Coverage for incoming datagrams. */
 	uint16_t	u_txcslen;	/* Coverage for outgoing datagrams. */
+	void 		*u_tun_ctx;	/* Tunneling callback context. */
 };
 
 #define	intoudpcb(ip)	((struct udpcb *)(ip)->inp_ppcb)
@@ -127,6 +129,7 @@ void	kmod_udpstat_inc(int statnum);
 #define	UDPCTL_MAXID		6
 
 #ifdef _KERNEL
+#include <netinet/in_pcb.h>
 SYSCTL_DECL(_net_inet_udp);
 
 extern struct pr_usrreqs	udp_usrreqs;
@@ -176,7 +179,8 @@ void		udplite_input(struct mbuf *, int);
 struct inpcb	*udp_notify(struct inpcb *inp, int errno);
 int		udp_shutdown(struct socket *so);
 
-int		udp_set_kernel_tunneling(struct socket *so, udp_tun_func_t f);
+int		udp_set_kernel_tunneling(struct socket *so, udp_tun_func_t f,
+					 void *ctx);
 
 #endif /* _KERNEL */
 

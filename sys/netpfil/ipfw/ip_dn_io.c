@@ -662,7 +662,6 @@ dummynet_send(struct mbuf *m)
 			break ;
 
 		case DIR_IN :
-		        m->m_flags |= M_IPIN_SKIPPFIL;
 			netisr_dispatch(NETISR_IP, m);
 			break;
 
@@ -700,11 +699,7 @@ dummynet_send(struct mbuf *m)
 			break;
 
 		case DIR_OUT | PROTO_LAYER2: /* N_TO_ETH_OUT: */
-			if (ifp) {
-				ether_output_frame(ifp, m);
-			} else {
-				FREE_PKT(m);
-			}
+			ether_output_frame(ifp, m);
 			break;
 
 		case DIR_DROP:

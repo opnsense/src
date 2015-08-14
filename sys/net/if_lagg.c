@@ -179,12 +179,12 @@ static int lagg_failover_rx_all = 0; /* Allow input on any failover links */
 SYSCTL_INT(_net_link_lagg, OID_AUTO, failover_rx_all, CTLFLAG_RW,
     &lagg_failover_rx_all, 0,
     "Accept input from any interface in a failover lagg");
-static int def_use_flowid = 1; /* Default value for using M_FLOWID */
+static int def_use_flowid = 1; /* Default value for using flowid */
 TUNABLE_INT("net.link.lagg.default_use_flowid", &def_use_flowid);
 SYSCTL_INT(_net_link_lagg, OID_AUTO, default_use_flowid, CTLFLAG_RW,
     &def_use_flowid, 0,
     "Default setting for using flow id for load sharing");
-static int def_flowid_shift = 16; /* Default value for using M_FLOWID */
+static int def_flowid_shift = 16; /* Default value for using flow shift */
 TUNABLE_INT("net.link.lagg.default_flowid_shift", &def_flowid_shift);
 SYSCTL_INT(_net_link_lagg, OID_AUTO, default_flowid_shift, CTLFLAG_RW,
     &def_flowid_shift, 0,
@@ -303,20 +303,20 @@ lagg_clone_create(struct if_clone *ifc, int unit, caddr_t params)
 		&SYSCTL_NODE_CHILDREN(_net_link, lagg),
 		OID_AUTO, num, CTLFLAG_RD, NULL, "");
 	SYSCTL_ADD_INT(&sc->ctx, SYSCTL_CHILDREN(oid), OID_AUTO,
-		"use_flowid", CTLTYPE_INT|CTLFLAG_RW, &sc->use_flowid,
+		"use_flowid", CTLFLAG_RW, &sc->use_flowid,
 		sc->use_flowid, "Use flow id for load sharing");
 	SYSCTL_ADD_INT(&sc->ctx, SYSCTL_CHILDREN(oid), OID_AUTO,
-		"flowid_shift", CTLTYPE_INT|CTLFLAG_RW, &sc->flowid_shift,
+		"flowid_shift", CTLFLAG_RW, &sc->flowid_shift,
 		sc->flowid_shift,
 		"Shift flowid bits to prevent multiqueue collisions");
 	SYSCTL_ADD_INT(&sc->ctx, SYSCTL_CHILDREN(oid), OID_AUTO,
-		"count", CTLTYPE_INT|CTLFLAG_RD, &sc->sc_count, sc->sc_count,
+		"count", CTLFLAG_RD, &sc->sc_count, sc->sc_count,
 		"Total number of ports");
 	SYSCTL_ADD_PROC(&sc->ctx, SYSCTL_CHILDREN(oid), OID_AUTO,
 		"active", CTLTYPE_INT|CTLFLAG_RD, sc, 0, lagg_sysctl_active,
 		"I", "Total number of active ports");
 	SYSCTL_ADD_INT(&sc->ctx, SYSCTL_CHILDREN(oid), OID_AUTO,
-		"flapping", CTLTYPE_INT|CTLFLAG_RD, &sc->sc_flapping,
+		"flapping", CTLFLAG_RD, &sc->sc_flapping,
 		sc->sc_flapping, "Total number of port change events");
 	/* Hash all layers by default */
 	sc->sc_flags = LAGG_F_HASHL2|LAGG_F_HASHL3|LAGG_F_HASHL4;
@@ -448,23 +448,18 @@ lagg_capabilities(struct lagg_softc *sc)
 	struct lagg_port *lp;
 	int cap = ~0, ena = ~0;
 	u_long hwa = ~0UL;
-#if defined(INET) || defined(INET6)
-	u_int hw_tsomax = IP_MAXPACKET;	/* Initialize to the maximum value. */
-#else
-	u_int hw_tsomax = ~0;	/* if_hw_tsomax is only for INET/INET6, but.. */
-#endif
+	struct ifnet_hw_tsomax hw_tsomax;
 
 	LAGG_WLOCK_ASSERT(sc);
+
+	memset(&hw_tsomax, 0, sizeof(hw_tsomax));
 
 	/* Get capabilities from the lagg ports */
 	SLIST_FOREACH(lp, &sc->sc_ports, lp_entries) {
 		cap &= lp->lp_ifp->if_capabilities;
 		ena &= lp->lp_ifp->if_capenable;
 		hwa &= lp->lp_ifp->if_hwassist;
-		/* Set to the minimum value of the lagg ports. */
-		if (lp->lp_ifp->if_hw_tsomax < hw_tsomax &&
-		    lp->lp_ifp->if_hw_tsomax > 0)
-			hw_tsomax = lp->lp_ifp->if_hw_tsomax;
+		if_hw_tsomax_common(lp->lp_ifp, &hw_tsomax);
 	}
 	cap = (cap == ~0 ? 0 : cap);
 	ena = (ena == ~0 ? 0 : ena);
@@ -473,11 +468,10 @@ lagg_capabilities(struct lagg_softc *sc)
 	if (sc->sc_ifp->if_capabilities != cap ||
 	    sc->sc_ifp->if_capenable != ena ||
 	    sc->sc_ifp->if_hwassist != hwa ||
-	    sc->sc_ifp->if_hw_tsomax != hw_tsomax) {
+	    if_hw_tsomax_update(sc->sc_ifp, &hw_tsomax) != 0) {
 		sc->sc_ifp->if_capabilities = cap;
 		sc->sc_ifp->if_capenable = ena;
 		sc->sc_ifp->if_hwassist = hwa;
-		sc->sc_ifp->if_hw_tsomax = hw_tsomax;
 		getmicrotime(&sc->sc_ifp->if_lastchange);
 
 		if (sc->sc_ifflags & IFF_DEBUG)
@@ -565,7 +559,7 @@ static int
 lagg_port_create(struct lagg_softc *sc, struct ifnet *ifp)
 {
 	struct lagg_softc *sc_ptr;
-	struct lagg_port *lp;
+	struct lagg_port *lp, *tlp;
 	int error = 0;
 
 	LAGG_WLOCK_ASSERT(sc);
@@ -672,8 +666,23 @@ lagg_port_create(struct lagg_softc *sc, struct ifnet *ifp)
 		lagg_port_lladdr(lp, IF_LLADDR(sc->sc_ifp));
 	}
 
-	/* Insert into the list of ports */
-	SLIST_INSERT_HEAD(&sc->sc_ports, lp, lp_entries);
+	/*
+	 * Insert into the list of ports.
+	 * Keep ports sorted by if_index. It is handy, when configuration
+	 * is predictable and `ifconfig laggN create ...` command
+	 * will lead to the same result each time.
+	 */
+	SLIST_FOREACH(tlp, &sc->sc_ports, lp_entries) {
+		if (tlp->lp_ifp->if_index < ifp->if_index && (
+		    SLIST_NEXT(tlp, lp_entries) == NULL ||
+		    SLIST_NEXT(tlp, lp_entries)->lp_ifp->if_index >
+		    ifp->if_index))
+			break;
+	}
+	if (tlp != NULL)
+		SLIST_INSERT_AFTER(tlp, lp, lp_entries);
+	else
+		SLIST_INSERT_HEAD(&sc->sc_ports, lp, lp_entries);
 	sc->sc_count++;
 
 	/* Update lagg capabilities */
@@ -1870,7 +1879,8 @@ lagg_lb_start(struct lagg_softc *sc, struct mbuf *m)
 	struct lagg_port *lp = NULL;
 	uint32_t p = 0;
 
-	if (sc->use_flowid && (m->m_flags & M_FLOWID))
+	if (sc->use_flowid &&
+	    M_HASHTYPE_GET(m) != M_HASHTYPE_NONE)
 		p = m->m_pkthdr.flowid >> sc->flowid_shift;
 	else
 		p = lagg_hashmbuf(sc, m, lb->lb_key);

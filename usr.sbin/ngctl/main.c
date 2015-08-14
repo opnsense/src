@@ -218,6 +218,7 @@ ReadFile(FILE *fp)
 			continue;
 		if ((rtn = DoParseCommand(line)) != 0) {
 			warnx("line %d: error in file", num);
+			return (rtn);
 		}
 	}
 	return (CMDRTN_OK);
@@ -323,8 +324,10 @@ DoInteractive(void)
 		history(hist, &hev, H_ENTER, buf);
 		pthread_kill(monitor, SIGUSR1);
 		pthread_mutex_lock(&mutex);
-		if (DoParseCommand(buf) == CMDRTN_QUIT)
+		if (DoParseCommand(buf) == CMDRTN_QUIT) {
+			pthread_mutex_unlock(&mutex);
 			break;
+		}
 		pthread_cond_signal(&cond);
 		pthread_mutex_unlock(&mutex);
 	}

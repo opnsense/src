@@ -36,8 +36,8 @@ SUBDIR=	alias \
 	ctlstat \
 	cut \
 	dirname \
+	dpv \
 	du \
-	ee \
 	elf2aout \
 	elfdump \
 	enigma \
@@ -45,14 +45,11 @@ SUBDIR=	alias \
 	expand \
 	false \
 	fetch \
-	file \
 	find \
-	finger \
 	fmt \
 	fold \
 	fstat \
 	fsync \
-	ftp \
 	gcore \
 	gencat \
 	getconf \
@@ -66,7 +63,6 @@ SUBDIR=	alias \
 	id \
 	ipcrm \
 	ipcs \
-	iscsictl \
 	join \
 	jot \
 	${_kdump} \
@@ -156,12 +152,10 @@ SUBDIR=	alias \
 	systat \
 	tabs \
 	tail \
-	talk \
 	tar \
 	tcopy \
 	tee \
 	${_tests} \
-	tftp \
 	time \
 	tip \
 	top \
@@ -231,6 +225,22 @@ SUBDIR+=	calendar
 _clang=		clang
 .endif
 
+.if ${MK_EE} != "no"
+SUBDIR+=	ee
+.endif
+
+.if ${MK_FILE} != "no"
+SUBDIR+=	file
+.endif
+
+.if ${MK_FINGER} != "no"
+SUBDIR+=	finger
+.endif
+
+.if ${MK_FTP} != "no"
+SUBDIR+=	ftp
+.endif
+
 .if ${MK_GPL_DTC} != "yes"
 SUBDIR+=	dtc
 .endif
@@ -247,6 +257,10 @@ SUBDIR+=	hesinfo
 _iconv=		iconv
 _mkcsmapper=	mkcsmapper
 _mkesdb=	mkesdb
+.endif
+
+.if ${MK_ISCSI} != "no"
+SUBDIR+=	iscsictl
 .endif
 
 .if ${MK_KDUMP} != "no"
@@ -329,6 +343,10 @@ SUBDIR+=	rwho
 SUBDIR+=	vacation
 .endif
 
+.if ${MK_TALK} != "no"
+SUBDIR+=	talk
+.endif
+
 .if ${MK_TELNET} != "no"
 SUBDIR+=	telnet
 .endif
@@ -341,6 +359,10 @@ _tests=		tests
 SUBDIR+=	checknr
 SUBDIR+=	colcrt
 SUBDIR+=	ul
+.endif
+
+.if ${MK_TFTP} != "no"
+SUBDIR+=	tftp
 .endif
 
 .if ${MK_TOOLCHAIN} != "no"

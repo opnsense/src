@@ -200,8 +200,8 @@ retry:
 		 * bo_dirty list. Recheck and resync as needed.
 		 */
 		BO_LOCK(bo);
-		if (vp->v_type == VREG && (bo->bo_numoutput > 0 ||
-		    bo->bo_dirty.bv_cnt > 0)) {
+		if ((vp->v_type == VREG || vp->v_type == VDIR) &&
+		    (bo->bo_numoutput > 0 || bo->bo_dirty.bv_cnt > 0)) {
 			BO_UNLOCK(bo);
 			goto retry;
 		}
@@ -628,7 +628,7 @@ ffs_read(ap)
 	}
 
 	if ((error == 0 || uio->uio_resid != orig_resid) &&
-	    (vp->v_mount->mnt_flag & MNT_NOATIME) == 0 &&
+	    (vp->v_mount->mnt_flag & (MNT_NOATIME | MNT_RDONLY)) == 0 &&
 	    (ip->i_flag & IN_ACCESS) == 0) {
 		VI_LOCK(vp);
 		ip->i_flag |= IN_ACCESS;
@@ -1407,11 +1407,6 @@ struct vop_openextattr_args {
 };
 */
 {
-	struct inode *ip;
-	struct fs *fs;
-
-	ip = VTOI(ap->a_vp);
-	fs = ip->i_fs;
 
 	if (ap->a_vp->v_type == VCHR || ap->a_vp->v_type == VBLK)
 		return (EOPNOTSUPP);
@@ -1435,11 +1430,6 @@ struct vop_closeextattr_args {
 };
 */
 {
-	struct inode *ip;
-	struct fs *fs;
-
-	ip = VTOI(ap->a_vp);
-	fs = ip->i_fs;
 
 	if (ap->a_vp->v_type == VCHR || ap->a_vp->v_type == VBLK)
 		return (EOPNOTSUPP);
@@ -1553,13 +1543,11 @@ vop_getextattr {
 */
 {
 	struct inode *ip;
-	struct fs *fs;
 	u_char *eae, *p;
 	unsigned easize;
 	int error, ealen;
 
 	ip = VTOI(ap->a_vp);
-	fs = ip->i_fs;
 
 	if (ap->a_vp->v_type == VCHR || ap->a_vp->v_type == VBLK)
 		return (EOPNOTSUPP);
@@ -1608,14 +1596,12 @@ vop_listextattr {
 */
 {
 	struct inode *ip;
-	struct fs *fs;
 	u_char *eae, *p, *pe, *pn;
 	unsigned easize;
 	uint32_t ul;
 	int error, ealen;
 
 	ip = VTOI(ap->a_vp);
-	fs = ip->i_fs;
 
 	if (ap->a_vp->v_type == VCHR || ap->a_vp->v_type == VBLK)
 		return (EOPNOTSUPP);

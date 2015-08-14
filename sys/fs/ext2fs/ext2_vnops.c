@@ -54,6 +54,7 @@
 #include <sys/buf.h>
 #include <sys/endian.h>
 #include <sys/priv.h>
+#include <sys/rwlock.h>
 #include <sys/mount.h>
 #include <sys/unistd.h>
 #include <sys/time.h>
@@ -65,9 +66,11 @@
 #include <sys/file.h>
 
 #include <vm/vm.h>
-#include <vm/vm_page.h>
-#include <vm/vm_object.h>
+#include <vm/vm_param.h>
 #include <vm/vm_extern.h>
+#include <vm/vm_object.h>
+#include <vm/vm_page.h>
+#include <vm/vm_pager.h>
 #include <vm/vnode_pager.h>
 
 #include "opt_directio.h"
@@ -94,6 +97,7 @@ static int ext2_chown(struct vnode *, uid_t, gid_t, struct ucred *,
 static vop_close_t	ext2_close;
 static vop_create_t	ext2_create;
 static vop_fsync_t	ext2_fsync;
+static vop_getpages_t	ext2_getpages;
 static vop_getattr_t	ext2_getattr;
 static vop_ioctl_t	ext2_ioctl;
 static vop_link_t	ext2_link;
@@ -124,6 +128,7 @@ struct vop_vector ext2_vnodeops = {
 	.vop_close =		ext2_close,
 	.vop_create =		ext2_create,
 	.vop_fsync =		ext2_fsync,
+	.vop_getpages =		ext2_getpages,
 	.vop_getattr =		ext2_getattr,
 	.vop_inactive =		ext2_inactive,
 	.vop_ioctl =		ext2_ioctl,
@@ -235,8 +240,10 @@ ext2_create(struct vop_create_args *ap)
 	error =
 	    ext2_makeinode(MAKEIMODE(ap->a_vap->va_type, ap->a_vap->va_mode),
 	    ap->a_dvp, ap->a_vpp, ap->a_cnp);
-	if (error)
+	if (error != 0)
 		return (error);
+	if ((ap->a_cnp->cn_flags & MAKEENTRY) != 0)
+		cache_enter(ap->a_dvp, *ap->a_vpp, ap->a_cnp);
 	return (0);
 }
 
@@ -1217,7 +1224,6 @@ ext2_rmdir(struct vop_rmdir_args *ap)
 	 *  the current directory and thus be
 	 *  non-empty.)
 	 */
-	error = 0;
 	if (ip->i_nlink != 2 || !ext2_dirempty(ip, dp->i_number, cnp->cn_cred)) {
 		error = ENOTEMPTY;
 		goto out;
@@ -1323,12 +1329,10 @@ ext2_strategy(struct vop_strategy_args *ap)
 {
 	struct buf *bp = ap->a_bp;
 	struct vnode *vp = ap->a_vp;
-	struct inode *ip;
 	struct bufobj *bo;
 	daddr_t blkno;
 	int error;
 
-	ip = VTOI(vp);
 	if (vp->v_type == VBLK || vp->v_type == VCHR)
 		panic("ext2_strategy: spec");
 	if (bp->b_blkno == bp->b_lblkno) {
@@ -1758,7 +1762,7 @@ ext2_ind_read(struct vop_read_args *ap)
 	}
 
 	if ((error == 0 || uio->uio_resid != orig_resid) &&
-	    (vp->v_mount->mnt_flag & MNT_NOATIME) == 0)
+	    (vp->v_mount->mnt_flag & (MNT_NOATIME | MNT_RDONLY)) == 0)
 		ip->i_flag |= IN_ACCESS;
 	return (error);
 }
@@ -2057,4 +2061,44 @@ ext2_write(struct vop_write_args *ap)
 			error = ext2_update(vp, 1);
 	}
 	return (error);
+}
+
+/*
+ * get page routine
+ */
+static int
+ext2_getpages(struct vop_getpages_args *ap)
+{
+	int i;
+	vm_page_t mreq;
+	int pcount;
+
+	pcount = round_page(ap->a_count) / PAGE_SIZE;
+	mreq = ap->a_m[ap->a_reqpage];
+
+	/*
+	 * if ANY DEV_BSIZE blocks are valid on a large filesystem block,
+	 * then the entire page is valid.  Since the page may be mapped,
+	 * user programs might reference data beyond the actual end of file
+	 * occuring within the page.  We have to zero that data.
+	 */
+	VM_OBJECT_WLOCK(mreq->object);
+	if (mreq->valid) {
+		if (mreq->valid != VM_PAGE_BITS_ALL)
+			vm_page_zero_invalid(mreq, TRUE);
+		for (i = 0; i < pcount; i++) {
+			if (i != ap->a_reqpage) {
+				vm_page_lock(ap->a_m[i]);
+				vm_page_free(ap->a_m[i]);
+				vm_page_unlock(ap->a_m[i]);
+			}
+		}
+		VM_OBJECT_WUNLOCK(mreq->object);
+		return VM_PAGER_OK;
+	}
+	VM_OBJECT_WUNLOCK(mreq->object);
+
+	return vnode_pager_generic_getpages(ap->a_vp, ap->a_m,
+					    ap->a_count,
+					    ap->a_reqpage);
 }

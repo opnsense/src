@@ -78,7 +78,6 @@ typedef void * (*path_enum_proc) (const char *path, size_t len, void *arg);
  * Function declarations.
  */
 static const char *basename(const char *);
-static void die(void) __dead2;
 static void digest_dynamic1(Obj_Entry *, int, const Elf_Dyn **,
     const Elf_Dyn **, const Elf_Dyn **);
 static void digest_dynamic2(Obj_Entry *, const Elf_Dyn *, const Elf_Dyn *,
@@ -97,6 +96,7 @@ static void *fill_search_info(const char *, size_t, void *);
 static char *find_library(const char *, const Obj_Entry *);
 static const char *gethints(bool);
 static void init_dag(Obj_Entry *);
+static void init_pagesizes(Elf_Auxinfo **aux_info);
 static void init_rtld(caddr_t, Elf_Auxinfo **);
 static void initlist_add_neededs(Needed_Entry *, Objlist *);
 static void initlist_add_objects(Obj_Entry *, Obj_Entry **, Objlist *);
@@ -146,8 +146,10 @@ static void unlink_object(Obj_Entry *);
 static void unload_object(Obj_Entry *);
 static void unref_dag(Obj_Entry *);
 static void ref_dag(Obj_Entry *);
-static char *origin_subst_one(char *, const char *, const char *, bool);
-static char *origin_subst(char *, const char *);
+static char *origin_subst_one(Obj_Entry *, char *, const char *,
+    const char *, bool);
+static char *origin_subst(Obj_Entry *, char *);
+static bool obj_resolve_origin(Obj_Entry *obj);
 static void preinit_main(void);
 static int  rtld_verify_versions(const Objlist *);
 static int  rtld_verify_object_versions(Obj_Entry *);
@@ -160,14 +162,14 @@ static uint32_t gnu_hash(const char *);
 static bool matched_symbol(SymLook *, const Obj_Entry *, Sym_Match_Result *,
     const unsigned long);
 
-void r_debug_state(struct r_debug *, struct link_map *) __noinline;
-void _r_debug_postinit(struct link_map *) __noinline;
+void r_debug_state(struct r_debug *, struct link_map *) __noinline __exported;
+void _r_debug_postinit(struct link_map *) __noinline __exported;
 
 /*
  * Data declarations.
  */
 static char *error_message;	/* Message for dlerror(), or NULL */
-struct r_debug r_debug;		/* for GDB; */
+struct r_debug r_debug __exported;	/* for GDB; */
 static bool libmap_disable;	/* Disable libmap */
 static bool ld_loadfltr;	/* Immediate filters processing */
 static char *libmap_override;	/* Maps to use in addition to libmap.conf */
@@ -206,7 +208,25 @@ extern Elf_Dyn _DYNAMIC;
 #define	RTLD_IS_DYNAMIC()	(&_DYNAMIC != NULL)
 #endif
 
-int osreldate, pagesize;
+int dlclose(void *) __exported;
+char *dlerror(void) __exported;
+void *dlopen(const char *, int) __exported;
+void *fdlopen(int, int) __exported;
+void *dlsym(void *, const char *) __exported;
+dlfunc_t dlfunc(void *, const char *) __exported;
+void *dlvsym(void *, const char *, const char *) __exported;
+int dladdr(const void *, Dl_info *) __exported;
+void dllockinit(void *, void *(*)(void *), void (*)(void *), void (*)(void *),
+    void (*)(void *), void (*)(void *), void (*)(void *)) __exported;
+int dlinfo(void *, int , void *) __exported;
+int dl_iterate_phdr(__dl_iterate_hdr_callback, void *) __exported;
+int _rtld_addr_phdr(const void *, struct dl_phdr_info *) __exported;
+int _rtld_get_stack_prot(void) __exported;
+int _rtld_is_dlopened(void *) __exported;
+void _rtld_error(const char *, ...) __exported;
+
+int npagesizes, osreldate;
+size_t *pagesizes;
 
 long __stack_chk_guard[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 
@@ -259,6 +279,8 @@ bool ld_library_path_rpath = false;
 #define	UTRACE_PRELOAD_FINISHED		8
 #define	UTRACE_INIT_CALL		9
 #define	UTRACE_FINI_CALL		10
+#define	UTRACE_DLSYM_START		11
+#define	UTRACE_DLSYM_STOP		12
 
 struct utrace_rtld {
 	char sig[4];			/* 'RTLD' */
@@ -403,7 +425,7 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
 	    unsetenv(LD_ "DEBUG") || unsetenv(LD_ "ELF_HINTS_PATH") ||
 	    unsetenv(LD_ "LOADFLTR") || unsetenv(LD_ "LIBRARY_PATH_RPATH")) {
 		_rtld_error("environment corrupt; aborting");
-		die();
+		rtld_die();
 	}
     }
     ld_debug = getenv(LD_ "DEBUG");
@@ -451,7 +473,7 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
 	obj_main = map_object(fd, argv0, NULL);
 	close(fd);
 	if (obj_main == NULL)
-	    die();
+	    rtld_die();
 	max_stack_flags = obj->stack_flags;
     } else {				/* Main program already loaded. */
 	const Elf_Phdr *phdr;
@@ -468,7 +490,7 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
 	assert(aux_info[AT_ENTRY] != NULL);
 	entry = (caddr_t) aux_info[AT_ENTRY]->a_un.a_ptr;
 	if ((obj_main = digest_phdr(phdr, phnum, entry, argv0)) == NULL)
-	    die();
+	    rtld_die();
     }
 
     if (aux_info[AT_EXECPATH] != 0) {
@@ -496,6 +518,7 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
       aux_info[AT_STACKPROT]->a_un.a_val != 0)
 	    stack_prot = aux_info[AT_STACKPROT]->a_un.a_val;
 
+#ifndef COMPAT_32BIT
     /*
      * Get the actual dynamic linker pathname from the executable if
      * possible.  (It should always be possible.)  That ensures that
@@ -508,6 +531,7 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
 	obj_rtld.path = xstrdup(obj_main->interp);
         __progname = obj_rtld.path;
     }
+#endif
 
     digest_dynamic(obj_main, 0);
     dbg("%s valid_hash_sysv %d valid_hash_gnu %d dynsymcount %d",
@@ -533,12 +557,12 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
 
     dbg("loading LD_PRELOAD libraries");
     if (load_preload_objects() == -1)
-	die();
+	rtld_die();
     preload_tail = obj_tail;
 
     dbg("loading needed objects");
     if (load_needed_objects(obj_main, 0) == -1)
-	die();
+	rtld_die();
 
     /* Make a list of all objects loaded at startup. */
     last_interposer = obj_main;
@@ -554,7 +578,7 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
 
     dbg("checking for required versions");
     if (rtld_verify_versions(&list_main) == -1 && !ld_tracing)
-	die();
+	rtld_die();
 
     if (ld_tracing) {		/* We're done */
 	trace_loaded_objects(obj_main);
@@ -583,11 +607,11 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
     if (relocate_objects(obj_main,
       ld_bind_now != NULL && *ld_bind_now != '\0',
       &obj_rtld, SYMLOOK_EARLY, NULL) == -1)
-	die();
+	rtld_die();
 
     dbg("doing copy relocations");
     if (do_copy_relocations(obj_main) == -1)
-	die();
+	rtld_die();
 
     if (getenv(LD_ "DUMP_REL_POST") != NULL) {
        dump_relocations(obj_main);
@@ -619,7 +643,7 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
     if (resolve_objects_ifunc(obj_main,
       ld_bind_now != NULL && *ld_bind_now != '\0', SYMLOOK_EARLY,
       NULL) == -1)
-	die();
+	rtld_die();
 
     if (!obj_main->crt_no_init) {
 	/*
@@ -686,7 +710,7 @@ _rtld_bind(Obj_Entry *obj, Elf_Size reloff)
     def = find_symdef(ELF_R_SYM(rel->r_info), obj, &defobj, true, NULL,
 	&lockstate);
     if (def == NULL)
-	die();
+	rtld_die();
     if (ELF_ST_TYPE(def->st_info) == STT_GNU_IFUNC)
 	target = (Elf_Addr)rtld_resolve_ifunc(defobj, def);
     else
@@ -759,8 +783,8 @@ basename(const char *name)
 static struct utsname uts;
 
 static char *
-origin_subst_one(char *real, const char *kw, const char *subst,
-    bool may_free)
+origin_subst_one(Obj_Entry *obj, char *real, const char *kw,
+    const char *subst, bool may_free)
 {
 	char *p, *p1, *res, *resp;
 	int subst_len, kw_len, subst_count, old_len, new_len;
@@ -779,9 +803,15 @@ origin_subst_one(char *real, const char *kw, const char *subst,
 
 	/*
 	 * If the keyword is not found, just return.
+	 *
+	 * Return non-substituted string if resolution failed.  We
+	 * cannot do anything more reasonable, the failure mode of the
+	 * caller is unresolved library anyway.
 	 */
-	if (subst_count == 0)
+	if (subst_count == 0 || (obj != NULL && !obj_resolve_origin(obj)))
 		return (may_free ? real : xstrdup(real));
+	if (obj != NULL)
+		subst = obj->origin_path;
 
 	/*
 	 * There is indeed something to substitute.  Calculate the
@@ -818,25 +848,27 @@ origin_subst_one(char *real, const char *kw, const char *subst,
 }
 
 static char *
-origin_subst(char *real, const char *origin_path)
+origin_subst(Obj_Entry *obj, char *real)
 {
 	char *res1, *res2, *res3, *res4;
 
+	if (obj == NULL || !trust)
+		return (xstrdup(real));
 	if (uts.sysname[0] == '\0') {
 		if (uname(&uts) != 0) {
 			_rtld_error("utsname failed: %d", errno);
 			return (NULL);
 		}
 	}
-	res1 = origin_subst_one(real, "$ORIGIN", origin_path, false);
-	res2 = origin_subst_one(res1, "$OSNAME", uts.sysname, true);
-	res3 = origin_subst_one(res2, "$OSREL", uts.release, true);
-	res4 = origin_subst_one(res3, "$PLATFORM", uts.machine, true);
+	res1 = origin_subst_one(obj, real, "$ORIGIN", NULL, false);
+	res2 = origin_subst_one(NULL, res1, "$OSNAME", uts.sysname, true);
+	res3 = origin_subst_one(NULL, res2, "$OSREL", uts.release, true);
+	res4 = origin_subst_one(NULL, res3, "$PLATFORM", uts.machine, true);
 	return (res4);
 }
 
-static void
-die(void)
+void
+rtld_die(void)
 {
     const char *msg = dlerror();
 
@@ -863,7 +895,6 @@ digest_dynamic1(Obj_Entry *obj, int early, const Elf_Dyn **dyn_rpath,
     const Elf32_Word *hashval;
     Elf32_Word bkt, nmaskwords;
     int bloom_size32;
-    bool nmw_power2;
     int plttype = DT_REL;
 
     *dyn_rpath = NULL;
@@ -973,16 +1004,15 @@ digest_dynamic1(Obj_Entry *obj, int early, const Elf_Dyn **dyn_rpath,
 		obj->symndx_gnu = hashtab[1];
 		nmaskwords = hashtab[2];
 		bloom_size32 = (__ELF_WORD_SIZE / 32) * nmaskwords;
-		/* Number of bitmask words is required to be power of 2 */
-		nmw_power2 = ((nmaskwords & (nmaskwords - 1)) == 0);
 		obj->maskwords_bm_gnu = nmaskwords - 1;
 		obj->shift2_gnu = hashtab[3];
 		obj->bloom_gnu = (Elf_Addr *) (hashtab + 4);
 		obj->buckets_gnu = hashtab + 4 + bloom_size32;
 		obj->chain_zero_gnu = obj->buckets_gnu + obj->nbuckets_gnu -
 		  obj->symndx_gnu;
-		obj->valid_hash_gnu = nmw_power2 && obj->nbuckets_gnu > 0 &&
-		  obj->buckets_gnu != NULL;
+		/* Number of bitmask words is required to be power of 2 */
+		obj->valid_hash_gnu = powerof2(nmaskwords) &&
+		    obj->nbuckets_gnu > 0 && obj->buckets_gnu != NULL;
 	    }
 	    break;
 
@@ -1097,7 +1127,7 @@ digest_dynamic1(Obj_Entry *obj, int early, const Elf_Dyn **dyn_rpath,
 #endif
 
 	case DT_FLAGS:
-		if ((dynp->d_un.d_val & DF_ORIGIN) && trust)
+		if (dynp->d_un.d_val & DF_ORIGIN)
 		    obj->z_origin = true;
 		if (dynp->d_un.d_val & DF_SYMBOLIC)
 		    obj->symbolic = true;
@@ -1129,10 +1159,10 @@ digest_dynamic1(Obj_Entry *obj, int early, const Elf_Dyn **dyn_rpath,
 	case DT_FLAGS_1:
 		if (dynp->d_un.d_val & DF_1_NOOPEN)
 		    obj->z_noopen = true;
-		if ((dynp->d_un.d_val & DF_1_ORIGIN) && trust)
+		if (dynp->d_un.d_val & DF_1_ORIGIN)
 		    obj->z_origin = true;
-		/*if (dynp->d_un.d_val & DF_1_GLOBAL)
-		    XXX ;*/
+		if (dynp->d_un.d_val & DF_1_GLOBAL)
+		    obj->z_global = true;
 		if (dynp->d_un.d_val & DF_1_BIND_NOW)
 		    obj->bind_now = true;
 		if (dynp->d_un.d_val & DF_1_NODELETE)
@@ -1180,30 +1210,33 @@ digest_dynamic1(Obj_Entry *obj, int early, const Elf_Dyn **dyn_rpath,
     }
 }
 
+static bool
+obj_resolve_origin(Obj_Entry *obj)
+{
+
+	if (obj->origin_path != NULL)
+		return (true);
+	obj->origin_path = xmalloc(PATH_MAX);
+	return (rtld_dirname_abs(obj->path, obj->origin_path) != -1);
+}
+
 static void
 digest_dynamic2(Obj_Entry *obj, const Elf_Dyn *dyn_rpath,
     const Elf_Dyn *dyn_soname, const Elf_Dyn *dyn_runpath)
 {
 
-    if (obj->z_origin && obj->origin_path == NULL) {
-	obj->origin_path = xmalloc(PATH_MAX);
-	if (rtld_dirname_abs(obj->path, obj->origin_path) == -1)
-	    die();
-    }
+	if (obj->z_origin && !obj_resolve_origin(obj))
+		rtld_die();
 
-    if (dyn_runpath != NULL) {
-	obj->runpath = (char *)obj->strtab + dyn_runpath->d_un.d_val;
-	if (obj->z_origin)
-	    obj->runpath = origin_subst(obj->runpath, obj->origin_path);
-    }
-    else if (dyn_rpath != NULL) {
-	obj->rpath = (char *)obj->strtab + dyn_rpath->d_un.d_val;
-	if (obj->z_origin)
-	    obj->rpath = origin_subst(obj->rpath, obj->origin_path);
-    }
-
-    if (dyn_soname != NULL)
-	object_add_name(obj, obj->strtab + dyn_soname->d_un.d_val);
+	if (dyn_runpath != NULL) {
+		obj->runpath = (char *)obj->strtab + dyn_runpath->d_un.d_val;
+		obj->runpath = origin_subst(obj, obj->runpath);
+	} else if (dyn_rpath != NULL) {
+		obj->rpath = (char *)obj->strtab + dyn_rpath->d_un.d_val;
+		obj->rpath = origin_subst(obj, obj->rpath);
+	}
+	if (dyn_soname != NULL)
+		object_add_name(obj, obj->strtab + dyn_soname->d_un.d_val);
 }
 
 static void
@@ -1448,12 +1481,8 @@ find_library(const char *xname, const Obj_Entry *refobj)
 	      xname);
 	    return NULL;
 	}
-	if (objgiven && refobj->z_origin) {
-		return (origin_subst(__DECONST(char *, xname),
-		    refobj->origin_path));
-	} else {
-		return (xstrdup(xname));
-	}
+	return (origin_subst(__DECONST(Obj_Entry *, refobj),
+	  __DECONST(char *, xname)));
     }
 
     if (libmap_disable || !objgiven ||
@@ -1756,22 +1785,35 @@ init_dag(Obj_Entry *root)
 }
 
 static void
-process_nodelete(Obj_Entry *root)
+process_z(Obj_Entry *root)
 {
 	const Objlist_Entry *elm;
+	Obj_Entry *obj;
 
 	/*
-	 * Walk over object DAG and process every dependent object that
-	 * is marked as DF_1_NODELETE. They need to grow their own DAG,
-	 * which then should have its reference upped separately.
+	 * Walk over object DAG and process every dependent object
+	 * that is marked as DF_1_NODELETE or DF_1_GLOBAL. They need
+	 * to grow their own DAG.
+	 *
+	 * For DF_1_GLOBAL, DAG is required for symbol lookups in
+	 * symlook_global() to work.
+	 *
+	 * For DF_1_NODELETE, the DAG should have its reference upped.
 	 */
 	STAILQ_FOREACH(elm, &root->dagmembers, link) {
-		if (elm->obj != NULL && elm->obj->z_nodelete &&
-		    !elm->obj->ref_nodel) {
-			dbg("obj %s nodelete", elm->obj->path);
-			init_dag(elm->obj);
-			ref_dag(elm->obj);
-			elm->obj->ref_nodel = true;
+		obj = elm->obj;
+		if (obj == NULL)
+			continue;
+		if (obj->z_nodelete && !obj->ref_nodel) {
+			dbg("obj %s -z nodelete", obj->path);
+			init_dag(obj);
+			ref_dag(obj);
+			obj->ref_nodel = true;
+		}
+		if (obj->z_global && objlist_find(&list_global, obj) == NULL) {
+			dbg("obj %s -z global", obj->path);
+			objlist_push_tail(&list_global, obj);
+			init_dag(obj);
 		}
 	}
 }
@@ -1787,6 +1829,11 @@ init_rtld(caddr_t mapbase, Elf_Auxinfo **aux_info)
     const Elf_Dyn *dyn_rpath;
     const Elf_Dyn *dyn_soname;
     const Elf_Dyn *dyn_runpath;
+
+#ifdef RTLD_INIT_PAGESIZES_EARLY
+    /* The page size is required by the dynamic memory allocator. */
+    init_pagesizes(aux_info);
+#endif
 
     /*
      * Conjure up an Obj_Entry structure for the dynamic linker.
@@ -1824,8 +1871,11 @@ init_rtld(caddr_t mapbase, Elf_Auxinfo **aux_info)
     /* Now that non-local variables can be accesses, copy out obj_rtld. */
     memcpy(&obj_rtld, &objtmp, sizeof(obj_rtld));
 
-    if (aux_info[AT_PAGESZ] != NULL)
-	    pagesize = aux_info[AT_PAGESZ]->a_un.a_val;
+#ifndef RTLD_INIT_PAGESIZES_EARLY
+    /* The page size is required by the dynamic memory allocator. */
+    init_pagesizes(aux_info);
+#endif
+
     if (aux_info[AT_OSRELDATE] != NULL)
 	    osreldate = aux_info[AT_OSRELDATE]->a_un.a_val;
 
@@ -1836,6 +1886,50 @@ init_rtld(caddr_t mapbase, Elf_Auxinfo **aux_info)
 
     r_debug.r_brk = r_debug_state;
     r_debug.r_state = RT_CONSISTENT;
+}
+
+/*
+ * Retrieve the array of supported page sizes.  The kernel provides the page
+ * sizes in increasing order.
+ */
+static void
+init_pagesizes(Elf_Auxinfo **aux_info)
+{
+	static size_t psa[MAXPAGESIZES];
+	int mib[2];
+	size_t len, size;
+
+	if (aux_info[AT_PAGESIZES] != NULL && aux_info[AT_PAGESIZESLEN] !=
+	    NULL) {
+		size = aux_info[AT_PAGESIZESLEN]->a_un.a_val;
+		pagesizes = aux_info[AT_PAGESIZES]->a_un.a_ptr;
+	} else {
+		len = 2;
+		if (sysctlnametomib("hw.pagesizes", mib, &len) == 0)
+			size = sizeof(psa);
+		else {
+			/* As a fallback, retrieve the base page size. */
+			size = sizeof(psa[0]);
+			if (aux_info[AT_PAGESZ] != NULL) {
+				psa[0] = aux_info[AT_PAGESZ]->a_un.a_val;
+				goto psa_filled;
+			} else {
+				mib[0] = CTL_HW;
+				mib[1] = HW_PAGESIZE;
+				len = 2;
+			}
+		}
+		if (sysctl(mib, len, psa, &size, NULL, 0) == -1) {
+			_rtld_error("sysctl for hw.pagesize(s) failed");
+			rtld_die();
+		}
+psa_filled:
+		pagesizes = psa;
+	}
+	npagesizes = size / sizeof(pagesizes[0]);
+	/* Discard any invalid entries at the end of the array. */
+	while (npagesizes > 0 && pagesizes[npagesizes - 1] == 0)
+		npagesizes--;
 }
 
 /*
@@ -2149,6 +2243,7 @@ do_load_object(int fd, const char *name, char *path, struct stat *sbp,
 	return (NULL);
     }
 
+    obj->dlopened = (flags & RTLD_LO_DLOPEN) != 0;
     *obj_tail = obj;
     obj_tail = &obj->next;
     obj_count++;
@@ -2889,13 +2984,13 @@ dlopen_object(const char *name, int fd, Obj_Entry *refobj, int lo_flags,
 		initlist_add_objects(obj, &obj->next, &initlist);
 	    }
 	    /*
-	     * Process all no_delete objects here, given them own
-	     * DAGs to prevent their dependencies from being unloaded.
-	     * This has to be done after we have loaded all of the
-	     * dependencies, so that we do not miss any.
+	     * Process all no_delete or global objects here, given
+	     * them own DAGs to prevent their dependencies from being
+	     * unloaded.  This has to be done after we have loaded all
+	     * of the dependencies, so that we do not miss any.
 	     */
 	    if (obj != NULL)
-		process_nodelete(obj);
+		process_z(obj);
 	} else {
 	    /*
 	     * Bump the reference counts for objects on this DAG.  If
@@ -2962,6 +3057,7 @@ do_dlsym(void *handle, const char *name, void *retaddr, const Ver_Entry *ve,
 #ifndef __ia64__
     tls_index ti;
 #endif
+    void *sym;
     int res;
 
     def = NULL;
@@ -2971,6 +3067,7 @@ do_dlsym(void *handle, const char *name, void *retaddr, const Ver_Entry *ve,
     req.flags = flags | SYMLOOK_IN_PLT;
     req.lockstate = &lockstate;
 
+    LD_UTRACE(UTRACE_DLSYM_START, handle, NULL, 0, 0, name);
     rlock_acquire(rtld_bind_lock, &lockstate);
     if (sigsetjmp(lockstate.env, 0) != 0)
 	    lock_upgrade(rtld_bind_lock, &lockstate);
@@ -2980,6 +3077,7 @@ do_dlsym(void *handle, const char *name, void *retaddr, const Ver_Entry *ve,
 	if ((obj = obj_from_addr(retaddr)) == NULL) {
 	    _rtld_error("Cannot determine caller's shared object");
 	    lock_release(rtld_bind_lock, &lockstate);
+	    LD_UTRACE(UTRACE_DLSYM_STOP, handle, NULL, 0, 0, name);
 	    return NULL;
 	}
 	if (handle == NULL) {	/* Just the caller's shared object. */
@@ -3027,6 +3125,7 @@ do_dlsym(void *handle, const char *name, void *retaddr, const Ver_Entry *ve,
     } else {
 	if ((obj = dlcheck(handle)) == NULL) {
 	    lock_release(rtld_bind_lock, &lockstate);
+	    LD_UTRACE(UTRACE_DLSYM_STOP, handle, NULL, 0, 0, name);
 	    return NULL;
 	}
 
@@ -3073,23 +3172,26 @@ do_dlsym(void *handle, const char *name, void *retaddr, const Ver_Entry *ve,
 	 * the relocated value of the symbol.
 	 */
 	if (ELF_ST_TYPE(def->st_info) == STT_FUNC)
-	    return (make_function_pointer(def, defobj));
+	    sym = make_function_pointer(def, defobj);
 	else if (ELF_ST_TYPE(def->st_info) == STT_GNU_IFUNC)
-	    return (rtld_resolve_ifunc(defobj, def));
+	    sym = rtld_resolve_ifunc(defobj, def);
 	else if (ELF_ST_TYPE(def->st_info) == STT_TLS) {
 #ifdef __ia64__
 	    return (__tls_get_addr(defobj->tlsindex, def->st_value));
 #else
 	    ti.ti_module = defobj->tlsindex;
 	    ti.ti_offset = def->st_value;
-	    return (__tls_get_addr(&ti));
+	    sym = __tls_get_addr(&ti);
 #endif
 	} else
-	    return (defobj->relocbase + def->st_value);
+	    sym = defobj->relocbase + def->st_value;
+	LD_UTRACE(UTRACE_DLSYM_STOP, handle, sym, 0, 0, name);
+	return (sym);
     }
 
     _rtld_error("Undefined symbol \"%s\"", name);
     lock_release(rtld_bind_lock, &lockstate);
+    LD_UTRACE(UTRACE_DLSYM_STOP, handle, NULL, 0, 0, name);
     return NULL;
 }
 
@@ -3252,8 +3354,7 @@ rtld_fill_dl_phdr_info(const Obj_Entry *obj, struct dl_phdr_info *phdr_info)
 {
 
 	phdr_info->dlpi_addr = (Elf_Addr)obj->relocbase;
-	phdr_info->dlpi_name = STAILQ_FIRST(&obj->names) ?
-	    STAILQ_FIRST(&obj->names)->name : obj->path;
+	phdr_info->dlpi_name = obj->path;
 	phdr_info->dlpi_phdr = obj->phdr;
 	phdr_info->dlpi_phnum = obj->phsize / sizeof(obj->phdr[0]);
 	phdr_info->dlpi_tls_modid = obj->tlsindex;
@@ -3420,17 +3521,16 @@ rtld_dirname(const char *path, char *bname)
 static int
 rtld_dirname_abs(const char *path, char *base)
 {
-	char base_rel[PATH_MAX];
+	char *last;
 
-	if (rtld_dirname(path, base) == -1)
+	if (realpath(path, base) == NULL)
 		return (-1);
-	if (base[0] == '/')
-		return (0);
-	if (getcwd(base_rel, sizeof(base_rel)) == NULL ||
-	    strlcat(base_rel, "/", sizeof(base_rel)) >= sizeof(base_rel) ||
-	    strlcat(base_rel, base, sizeof(base_rel)) >= sizeof(base_rel))
+	dbg("%s -> %s", path, base);
+	last = strrchr(base, '/');
+	if (last == NULL)
 		return (-1);
-	strcpy(base, base_rel);
+	if (last != base)
+		*last = '\0';
 	return (0);
 }
 
@@ -4413,7 +4513,7 @@ allocate_module_tls(int index)
     }
     if (!obj) {
 	_rtld_error("Can't find module with TLS index %d", index);
-	die();
+	rtld_die();
     }
 
     p = malloc_aligned(obj->tlssize, obj->tlsalign);
@@ -4554,7 +4654,7 @@ locate_dependency(const Obj_Entry *obj, const char *name)
     }
     _rtld_error("%s: Unexpected inconsistency: dependency %s not found",
 	obj->path, name);
-    die();
+    rtld_die();
 }
 
 static int
@@ -4753,6 +4853,27 @@ _rtld_get_stack_prot(void)
 	return (stack_prot);
 }
 
+int
+_rtld_is_dlopened(void *arg)
+{
+	Obj_Entry *obj;
+	RtldLockState lockstate;
+	int res;
+
+	rlock_acquire(rtld_bind_lock, &lockstate);
+	obj = dlcheck(arg);
+	if (obj == NULL)
+		obj = obj_from_addr(arg);
+	if (obj == NULL) {
+		_rtld_error("No shared object contains address");
+		lock_release(rtld_bind_lock, &lockstate);
+		return (-1);
+	}
+	res = obj->dlopened ? 1 : 0;
+	lock_release(rtld_bind_lock, &lockstate);
+	return (res);
+}
+
 static void
 map_stacks_exec(RtldLockState *lockstate)
 {
@@ -4840,7 +4961,7 @@ __stack_chk_fail(void)
 {
 
 	_rtld_error("stack overflow detected; terminated");
-	die();
+	rtld_die();
 }
 __weak_reference(__stack_chk_fail, __stack_chk_fail_local);
 
@@ -4849,7 +4970,7 @@ __chk_fail(void)
 {
 
 	_rtld_error("buffer overflow detected; terminated");
-	die();
+	rtld_die();
 }
 
 const char *

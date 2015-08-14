@@ -597,6 +597,8 @@ vtnet_setup_features(struct vtnet_softc *sc)
 
 	vtnet_negotiate_features(sc);
 
+	if (virtio_with_feature(dev, VIRTIO_RING_F_INDIRECT_DESC))
+		sc->vtnet_flags |= VTNET_FLAG_INDIRECT;
 	if (virtio_with_feature(dev, VIRTIO_RING_F_EVENT_IDX))
 		sc->vtnet_flags |= VTNET_FLAG_EVENT_IDX;
 
@@ -967,8 +969,13 @@ vtnet_setup_interface(struct vtnet_softc *sc)
 			ifp->if_capabilities |= IFCAP_VLAN_HWTSO;
 	}
 
-	if (virtio_with_feature(dev, VIRTIO_NET_F_GUEST_CSUM))
+	if (virtio_with_feature(dev, VIRTIO_NET_F_GUEST_CSUM)) {
 		ifp->if_capabilities |= IFCAP_RXCSUM | IFCAP_RXCSUM_IPV6;
+
+		if (virtio_with_feature(dev, VIRTIO_NET_F_GUEST_TSO4) ||
+		    virtio_with_feature(dev, VIRTIO_NET_F_GUEST_TSO6))
+			ifp->if_capabilities |= IFCAP_LRO;
+	}
 
 	if (ifp->if_capabilities & IFCAP_HWCSUM) {
 		/*
@@ -986,12 +993,6 @@ vtnet_setup_interface(struct vtnet_softc *sc)
 	/*
 	 * Capabilities after here are not enabled by default.
 	 */
-
-	if (ifp->if_capabilities & IFCAP_RXCSUM) {
-		if (virtio_with_feature(dev, VIRTIO_NET_F_GUEST_TSO4) ||
-		    virtio_with_feature(dev, VIRTIO_NET_F_GUEST_TSO6))
-			ifp->if_capabilities |= IFCAP_LRO;
-	}
 
 	if (sc->vtnet_flags & VTNET_FLAG_VLAN_FILTER) {
 		ifp->if_capabilities |= IFCAP_VLAN_HWFILTER;
@@ -1077,8 +1078,12 @@ vtnet_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			    (IFF_PROMISC | IFF_ALLMULTI)) {
 				if (sc->vtnet_flags & VTNET_FLAG_CTRL_RX)
 					vtnet_rx_filter(sc);
-				else
-					error = ENOTSUP;
+				else {
+					ifp->if_flags |= IFF_PROMISC;
+					if ((ifp->if_flags ^ sc->vtnet_if_flags)
+					    & IFF_ALLMULTI)
+						error = ENOTSUP;
+				}
 			}
 		} else
 			vtnet_init_locked(sc);
@@ -1702,7 +1707,7 @@ vtnet_rxq_input(struct vtnet_rxq *rxq, struct mbuf *m,
 	}
 
 	m->m_pkthdr.flowid = rxq->vtnrx_id;
-	m->m_flags |= M_FLOWID;
+	M_HASHTYPE_SET(m, M_HASHTYPE_OPAQUE);
 
 	/*
 	 * BMV: FreeBSD does not have the UNNECESSARY and PARTIAL checksum
@@ -2348,7 +2353,8 @@ vtnet_txq_mq_start(struct ifnet *ifp, struct mbuf *m)
 	sc = ifp->if_softc;
 	npairs = sc->vtnet_act_vq_pairs;
 
-	if (m->m_flags & M_FLOWID)
+	/* check if flowid is set */
+	if (M_HASHTYPE_GET(m) != M_HASHTYPE_NONE)
 		i = m->m_pkthdr.flowid % npairs;
 	else
 		i = curcpu % npairs;
@@ -2754,6 +2760,11 @@ vtnet_drain_rxtx_queues(struct vtnet_softc *sc)
 	struct vtnet_txq *txq;
 	int i;
 
+#ifdef DEV_NETMAP
+	if (nm_native_on(NA(sc->vtnet_ifp)))
+		return;
+#endif /* DEV_NETMAP */
+
 	for (i = 0; i < sc->vtnet_act_vq_pairs; i++) {
 		rxq = &sc->vtnet_rxqs[i];
 		vtnet_rxq_free_mbufs(rxq);
@@ -3017,9 +3028,9 @@ vtnet_reinit(struct vtnet_softc *sc)
 	if (ifp->if_capenable & IFCAP_TXCSUM_IPV6)
 		ifp->if_hwassist |= VTNET_CSUM_OFFLOAD_IPV6;
 	if (ifp->if_capenable & IFCAP_TSO4)
-		ifp->if_hwassist |= CSUM_TSO;
+		ifp->if_hwassist |= CSUM_IP_TSO;
 	if (ifp->if_capenable & IFCAP_TSO6)
-		ifp->if_hwassist |= CSUM_TSO; /* No CSUM_TSO_IPV6. */
+		ifp->if_hwassist |= CSUM_IP6_TSO;
 
 	if (sc->vtnet_flags & VTNET_FLAG_CTRL_VQ)
 		vtnet_init_rx_filters(sc);
@@ -3664,7 +3675,7 @@ vtnet_set_tx_intr_threshold(struct vtnet_softc *sc)
 	 * Without indirect descriptors, leave enough room for the most
 	 * segments we handle.
 	 */
-	if (virtio_with_feature(dev, VIRTIO_RING_F_INDIRECT_DESC) == 0 &&
+	if ((sc->vtnet_flags & VTNET_FLAG_INDIRECT) == 0 &&
 	    thresh < sc->vtnet_tx_nsegs)
 		thresh = sc->vtnet_tx_nsegs;
 

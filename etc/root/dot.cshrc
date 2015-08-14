@@ -18,7 +18,7 @@ umask 22
 set path = (/sbin /bin /usr/sbin /usr/bin /usr/games /usr/local/sbin /usr/local/bin $HOME/bin)
 
 setenv	EDITOR	vi
-setenv	PAGER	less
+setenv	PAGER	more
 setenv	BLOCKSIZE	K
 
 if ($?prompt) then
@@ -38,10 +38,6 @@ if ($?prompt) then
 		bindkey "^W" backward-delete-word
 		bindkey -k up history-search-backward
 		bindkey -k down history-search-forward
-		bindkey "\e[1~" beginning-of-line
-		bindkey "\e[2~" overwrite-mode
-		bindkey "\e[3~" delete-char
-		bindkey "\e[4~" end-of-line
 	endif
 
 endif

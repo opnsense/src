@@ -132,6 +132,7 @@ GEOM_ZERO	opt_geom.h
 KDTRACE_HOOKS	opt_kdtrace.h
 KSTACK_MAX_PAGES
 KSTACK_PAGES
+KSTACK_USAGE_PROF
 KTRACE
 KTRACE_REQUEST_POOL	opt_ktrace.h
 LIBICONV
@@ -438,6 +439,7 @@ RADIX_MPATH		opt_mpath.h
 ROUTETABLES		opt_route.h
 SLIP_IFF_OPTS		opt_slip.h
 TCPDEBUG
+SIFTR
 TCP_OFFLOAD		opt_inet.h # Enable code to dispatch TCP offloading
 TCP_SIGNATURE		opt_inet.h
 VLAN_ARRAY		opt_vlan.h
@@ -662,6 +664,7 @@ USB_HOST_ALIGN		opt_usb.h
 USB_REQ_DEBUG		opt_usb.h
 USB_TEMPLATE		opt_usb.h
 USB_VERBOSE		opt_usb.h
+USB_DMA_SINGLE_ALLOC	opt_usb.h
 USB_EHCI_BIG_ENDIAN_DESC	opt_usb.h
 U3G_DEBUG		opt_u3g.h
 UKBD_DFLT_KEYMAP	opt_ukbd.h
@@ -855,6 +858,7 @@ DCONS_FORCE_CONSOLE	opt_dcons.h
 DCONS_FORCE_GDB		opt_dcons.h
 
 # HWPMC options
+HWPMC_DEBUG		opt_global.h
 HWPMC_HOOKS
 HWPMC_MIPS_BACKTRACE 	opt_hwpmc_hooks.h
 
@@ -921,6 +925,7 @@ IPOIB_CM	opt_ofed.h
 
 # Resource Accounting
 RACCT		opt_global.h
+RACCT_DEFAULT_TO_DISABLED	opt_global.h
 
 # Resource Limits
 RCTL		opt_global.h
@@ -930,3 +935,6 @@ RANDOM_YARROW	opt_random.h
 RANDOM_FORTUNA	opt_random.h
 RANDOM_DEBUG	opt_random.h
 RANDOM_RWFILE	opt_random.h
+
+# Intel em(4) driver
+EM_MULTIQUEUE	opt_em.h

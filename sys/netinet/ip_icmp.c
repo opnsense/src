@@ -33,7 +33,6 @@
 __FBSDID("$FreeBSD$");
 
 #include "opt_inet.h"
-#include "opt_ipsec.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -64,10 +63,6 @@ __FBSDID("$FreeBSD$");
 #include <netinet/icmp_var.h>
 
 #ifdef INET
-#ifdef IPSEC
-#include <netipsec/ipsec.h>
-#include <netipsec/key.h>
-#endif
 
 #include <machine/in_cksum.h>
 
@@ -148,6 +143,10 @@ SYSCTL_VNET_INT(_net_inet_icmp, OID_AUTO, bmcastecho, CTLFLAG_RW,
 	&VNET_NAME(icmpbmcastecho), 0,
 	"");
 
+static VNET_DEFINE(int, icmptstamprepl) = 1;
+#define	V_icmptstamprepl		VNET(icmptstamprepl)
+SYSCTL_INT(_net_inet_icmp, OID_AUTO, tstamprepl, CTLFLAG_RW,
+	&VNET_NAME(icmptstamprepl), 0, "Respond to ICMP Timestamp packets");
 
 #ifdef ICMPPRINTFS
 int	icmpprintfs = 0;
@@ -541,6 +540,8 @@ icmp_input(struct mbuf *m, int off)
 			goto reflect;
 
 	case ICMP_TSTAMP:
+		if (V_icmptstamprepl == 0)
+			break;
 		if (!V_icmpbmcastecho
 		    && (m->m_flags & (M_MCAST | M_BCAST)) != 0) {
 			ICMPSTAT_INC(icps_bmcasttstamp);
@@ -658,9 +659,6 @@ reflect:
 			  (struct sockaddr *)&icmpgw, fibnum);
 		}
 		pfctlinput(PRC_REDIRECT_HOST, (struct sockaddr *)&icmpsrc);
-#ifdef IPSEC
-		key_sa_routechange((struct sockaddr *)&icmpsrc);
-#endif
 		break;
 
 	/*

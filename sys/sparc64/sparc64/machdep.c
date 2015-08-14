@@ -503,7 +503,7 @@ sparc64_init(caddr_t mdp, u_long o1, u_long o2, u_long o3, ofw_vec_t *vec)
 	}
 
 #ifdef SMP
-	mp_init(cpu_impl);
+	mp_init();
 #endif
 
 	/*
@@ -815,7 +815,7 @@ get_mcontext(struct thread *td, mcontext_t *mc, int flags)
 }
 
 int
-set_mcontext(struct thread *td, const mcontext_t *mc)
+set_mcontext(struct thread *td, mcontext_t *mc)
 {
 	struct trapframe *tf;
 	struct pcb *pcb;

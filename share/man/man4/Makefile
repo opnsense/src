@@ -91,7 +91,7 @@ MAN=	aac.4 \
 	cc_htcp.4 \
 	cc_newreno.4 \
 	cc_vegas.4 \
-	ccd.4 \
+	${_ccd.4} \
 	cd.4 \
 	cdce.4 \
 	ch.4 \
@@ -131,6 +131,7 @@ MAN=	aac.4 \
 	esp.4 \
 	est.4 \
 	et.4 \
+	etherswitch.4 \
 	eventtimers.4 \
 	exca.4 \
 	faith.4 \
@@ -200,14 +201,13 @@ MAN=	aac.4 \
 	ip.4 \
 	ip6.4 \
 	ipfirewall.4 \
+	ipheth.4 \
 	${_ipmi.4} \
 	ips.4 \
 	ipsec.4 \
 	ipw.4 \
 	ipwfw.4 \
 	isci.4 \
-	iscsi.4 \
-	iscsi_initiator.4 \
 	isp.4 \
 	ispfw.4 \
 	iwi.4 \
@@ -216,6 +216,8 @@ MAN=	aac.4 \
 	iwnfw.4 \
 	ixgb.4 \
 	ixgbe.4 \
+	ixl.4 \
+	ixlv.4 \
 	jme.4 \
 	joy.4 \
 	kbdmux.4 \
@@ -250,6 +252,7 @@ MAN=	aac.4 \
 	malo.4 \
 	mcd.4 \
 	md.4 \
+	me.4 \
 	mem.4 \
 	meteor.4 \
 	mfi.4 \
@@ -379,6 +382,7 @@ MAN=	aac.4 \
 	${_pflog.4} \
 	${_pfsync.4} \
 	pim.4 \
+	pms.4 \
 	polling.4 \
 	ppbus.4 \
 	ppc.4 \
@@ -438,6 +442,7 @@ MAN=	aac.4 \
 	smb.4 \
 	smbus.4 \
 	smp.4 \
+	smsc.4 \
 	sn.4 \
 	snd_ad1816.4 \
 	snd_als4000.4 \
@@ -503,53 +508,6 @@ MAN=	aac.4 \
 	tws.4 \
 	tx.4 \
 	txp.4 \
-	u3g.4 \
-	uark.4 \
-	uart.4 \
-	uath.4 \
-	ubsa.4 \
-	ubsec.4 \
-	ubser.4 \
-	ubtbcmfw.4 \
-	uchcom.4 \
-	ucom.4 \
-	ucycom.4 \
-	udav.4 \
-	udbp.4 \
-	udp.4 \
-	udplite.4 \
-	uep.4 \
-	ufm.4 \
-	ufoma.4 \
-	uftdi.4 \
-	ugen.4 \
-	uhci.4 \
-	uhid.4 \
-	uhso.4 \
-	uipaq.4 \
-	ukbd.4 \
-	ulpt.4 \
-	umass.4 \
-	umcs.4 \
-	umct.4 \
-	umodem.4 \
-	ums.4 \
-	unix.4 \
-	upgt.4 \
-	uplcom.4 \
-	ural.4 \
-	urio.4 \
-	urndis.4 \
-	${_urtw.4} \
-	urtwn.4 \
-	urtwnfw.4 \
-	usb.4 \
-	usb_template.4 \
-	usb_quirk.4 \
-	uslcom.4 \
-	utopia.4 \
-	uvisor.4 \
-	uvscom.4 \
 	vale.4 \
 	vga.4 \
 	vge.4 \
@@ -558,10 +516,12 @@ MAN=	aac.4 \
 	${_virtio.4} \
 	${_virtio_balloon.4} \
 	${_virtio_blk.4} \
+	${_virtio_console.4} \
 	${_virtio_random.4} \
 	${_virtio_scsi.4} \
 	vkbd.4 \
 	vlan.4 \
+	vxlan.4 \
 	${_vmx.4} \
 	vpo.4 \
 	vr.4 \
@@ -655,6 +615,7 @@ MLINKS+=ip.4 rawip.4
 MLINKS+=ipfirewall.4 ipaccounting.4 \
 	ipfirewall.4 ipacct.4 \
 	ipfirewall.4 ipfw.4
+MLINKS+=ipheth.4 if_ipheth.4
 MLINKS+=ipw.4 if_ipw.4
 MLINKS+=iwi.4 if_iwi.4
 MLINKS+=iwn.4 if_iwn.4
@@ -662,6 +623,8 @@ MLINKS+=ixgb.4 if_ixgb.4
 MLINKS+=ixgbe.4 ix.4
 MLINKS+=ixgbe.4 if_ix.4
 MLINKS+=ixgbe.4 if_ixgbe.4
+MLINKS+=ixl.4 if_ixl.4
+MLINKS+=ixlv.4 if_ixlv.4
 MLINKS+=jme.4 if_jme.4
 MLINKS+=kue.4 if_kue.4
 MLINKS+=lagg.4 trunk.4
@@ -710,6 +673,7 @@ MLINKS+=sge.4 if_sge.4
 MLINKS+=sis.4 if_sis.4
 MLINKS+=sk.4 if_sk.4
 MLINKS+=smp.4 SMP.4
+MLINKS+=smsc.4 if_smsc.4
 MLINKS+=sn.4 if_sn.4
 MLINKS+=snd_envy24.4 snd_ak452x.4
 MLINKS+=snd_sbc.4 snd_sb16.4 \
@@ -728,15 +692,9 @@ MLINKS+=tl.4 if_tl.4
 MLINKS+=tun.4 if_tun.4
 MLINKS+=tx.4 if_tx.4
 MLINKS+=txp.4 if_txp.4
-MLINKS+=u3g.4 u3gstub.4
-MLINKS+=uath.4 if_uath.4
-MLINKS+=udav.4 if_udav.4
-MLINKS+=upgt.4 if_upgt.4
-MLINKS+=ural.4 if_ural.4
-MLINKS+=urndis.4 if_urndis.4
-MLINKS+=${_urtw.4} ${_if_urtw.4}
 MLINKS+=vge.4 if_vge.4
 MLINKS+=vlan.4 if_vlan.4
+MLINKS+=vxlan.4 if_vxlan.4
 MLINKS+=${_vmx.4} ${_if_vmx.4}
 MLINKS+=vpo.4 imm.4
 MLINKS+=vr.4 if_vr.4
@@ -809,6 +767,7 @@ _nxge.4=	nxge.4
 _virtio.4=	virtio.4
 _virtio_balloon.4=virtio_balloon.4
 _virtio_blk.4=	virtio_blk.4
+_virtio_console.4=virtio_console.4
 _virtio_random.4= virtio_random.4
 _virtio_scsi.4= virtio_scsi.4
 _vmx.4=		vmx.4
@@ -830,7 +789,6 @@ MLINKS+=lindev.4 full.4
 .endif
 
 .if ${MACHINE_CPUARCH} == "amd64"
-_bhyve.4=	bhyve.4
 _if_ntb.4=	if_ntb.4
 _ntb.4=		ntb.4
 _ntb_hw.4=	ntb_hw.4
@@ -843,6 +801,10 @@ MLINKS+=qlxge.4 if_qlxge.4
 MLINKS+=qlxgb.4 if_qlxgb.4
 MLINKS+=qlxgbe.4 if_qlxgbe.4
 MLINKS+=sfxge.4 if_sfxge.4
+
+.if ${MK_BHYVE} != "no"
+_bhyve.4=	bhyve.4
+.endif
 .endif
 
 .if ${MACHINE_CPUARCH} == "mips"
@@ -851,6 +813,16 @@ _nvram2env.4=	nvram2env.4
 
 .if exists(${.CURDIR}/man4.${MACHINE_CPUARCH})
 SUBDIR=	man4.${MACHINE_CPUARCH}
+.endif
+
+.if ${MK_CCD} != "no"
+_ccd.4=		ccd.4
+.endif
+
+.if ${MK_ISCSI} != "no"
+MAN+=		iscsi.4
+MAN+=		iscsi_initiator.4
+
 .endif
 
 .if ${MK_TESTS} != "no"
@@ -863,6 +835,65 @@ _atf_test_case.4=	atf-test-case.4
 _pf.4=		pf.4
 _pflog.4=	pflog.4
 _pfsync.4=	pfsync.4
+.endif
+
+.if ${MK_USB} != "no"
+MAN+=	u3g.4 \
+	uark.4 \
+	uart.4 \
+	uath.4 \
+	ubsa.4 \
+	ubsec.4 \
+	ubser.4 \
+	ubtbcmfw.4 \
+	uchcom.4 \
+	ucom.4 \
+	ucycom.4 \
+	udav.4 \
+	udbp.4 \
+	udp.4 \
+	udplite.4 \
+	uep.4 \
+	ufm.4 \
+	ufoma.4 \
+	uftdi.4 \
+	ugen.4 \
+	uhci.4 \
+	uhid.4 \
+	uhso.4 \
+	uipaq.4 \
+	ukbd.4 \
+	uled.4 \
+	ulpt.4 \
+	umass.4 \
+	umcs.4 \
+	umct.4 \
+	umodem.4 \
+	ums.4 \
+	unix.4 \
+	upgt.4 \
+	uplcom.4 \
+	ural.4 \
+	urio.4 \
+	urndis.4 \
+	${_urtw.4} \
+	urtwn.4 \
+	urtwnfw.4 \
+	usb.4 \
+	usb_template.4 \
+	usb_quirk.4 \
+	uslcom.4 \
+	utopia.4 \
+	uvisor.4 \
+	uvscom.4 \
+
+MLINKS+=u3g.4 u3gstub.4
+MLINKS+=uath.4 if_uath.4
+MLINKS+=udav.4 if_udav.4
+MLINKS+=upgt.4 if_upgt.4
+MLINKS+=ural.4 if_ural.4
+MLINKS+=urndis.4 if_urndis.4
+MLINKS+=${_urtw.4} ${_if_urtw.4}
 .endif
 
 .include <bsd.prog.mk>

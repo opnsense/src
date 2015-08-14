@@ -60,17 +60,17 @@
 /*
  * Maximum number of LUNs we support at the moment.  MUST be a power of 2.
  */
-#define	CTL_MAX_LUNS		256
+#define	CTL_MAX_LUNS		1024
 
 /*
  * Maximum number of initiators per port.
  */
-#define	CTL_MAX_INIT_PER_PORT	2048 // Was 16
+#define	CTL_MAX_INIT_PER_PORT	2048
 
 /*
  * Maximum number of ports registered at one time.
  */
-#define	CTL_MAX_PORTS		128
+#define	CTL_MAX_PORTS		256
 
 /*
  * Maximum number of initiators we support.
@@ -363,7 +363,8 @@ struct ctl_port_list {
 typedef enum {
 	CTL_LUN_NOSTATUS,
 	CTL_LUN_OK,
-	CTL_LUN_ERROR
+	CTL_LUN_ERROR,
+	CTL_LUN_WARNING
 } ctl_lun_status;
 
 #define	CTL_ERROR_STR_LEN	160
@@ -804,6 +805,12 @@ struct ctl_iscsi {
 						/* passed to userland */
 };
 
+struct ctl_lun_map {
+	uint32_t		port;
+	uint32_t		plun;
+	uint32_t		lun;
+};
+
 #define	CTL_IO			_IOWR(CTL_MINOR, 0x00, union ctl_io)
 #define	CTL_ENABLE_PORT		_IOW(CTL_MINOR, 0x04, struct ctl_port_entry)
 #define	CTL_DISABLE_PORT	_IOW(CTL_MINOR, 0x05, struct ctl_port_entry)
@@ -831,6 +838,7 @@ struct ctl_iscsi {
 #define	CTL_ISCSI		_IOWR(CTL_MINOR, 0x25, struct ctl_iscsi)
 #define	CTL_PORT_REQ		_IOWR(CTL_MINOR, 0x26, struct ctl_req)
 #define	CTL_PORT_LIST		_IOWR(CTL_MINOR, 0x27, struct ctl_lun_list)
+#define	CTL_LUN_MAP		_IOW(CTL_MINOR, 0x28, struct ctl_lun_map)
 
 #endif /* _CTL_IOCTL_H_ */
 

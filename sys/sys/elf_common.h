@@ -251,6 +251,9 @@ typedef struct {
 #define	SHN_LOPROC	0xff00		/* First processor-specific. */
 #define	SHN_HIPROC	0xff1f		/* Last processor-specific. */
 #define	SHN_LOOS	0xff20		/* First operating system-specific. */
+#define	SHN_FBSD_CACHED	SHN_LOOS	/* Transient, for sys/kern/link_elf_obj
+					   linker only: Cached global in local
+					   symtab. */
 #define	SHN_HIOS	0xff3f		/* Last operating system-specific. */
 #define	SHN_ABS		0xfff1		/* Absolute values. */
 #define	SHN_COMMON	0xfff2		/* Common data. */
@@ -281,6 +284,7 @@ typedef struct {
 #define	SHT_SUNW_cap		0x6ffffff5
 #define	SHT_SUNW_SIGNATURE	0x6ffffff6
 #define	SHT_GNU_HASH		0x6ffffff6
+#define	SHT_GNU_LIBLIST		0x6ffffff7
 #define	SHT_SUNW_ANNOTATE	0x6ffffff7
 #define	SHT_SUNW_DEBUGSTR	0x6ffffff8
 #define	SHT_SUNW_DEBUG		0x6ffffff9
@@ -325,6 +329,9 @@ typedef struct {
 #define	SHF_MASKOS	0x0ff00000	/* OS-specific semantics. */
 #define	SHF_MASKPROC	0xf0000000	/* Processor-specific semantics. */
 
+/* Flags for section groups. */
+#define	GRP_COMDAT	0x1	/* COMDAT semantics. */
+
 /* Values for p_type. */
 #define	PT_NULL		0	/* Unused entry. */
 #define	PT_LOAD		1	/* Loadable segment. */
@@ -339,6 +346,8 @@ typedef struct {
 #define	PT_GNU_EH_FRAME	0x6474e550
 #define	PT_GNU_STACK	0x6474e551
 #define	PT_GNU_RELRO	0x6474e552
+#define	PT_DUMP_DELTA	0x6fb5d000	/* va->pa map for kernel dumps
+					   (currently arm). */
 #define	PT_LOSUNW	0x6ffffffa
 #define	PT_SUNWBSS	0x6ffffffa	/* Sun Specific segment */
 #define	PT_SUNWSTACK	0x6ffffffb	/* describes the stack segment */
@@ -505,6 +514,7 @@ typedef struct {
 #define	NT_PROCSTAT_OSREL	14	/* Procstat osreldate data. */
 #define	NT_PROCSTAT_PSSTRINGS	15	/* Procstat ps_strings data. */
 #define	NT_PROCSTAT_AUXV	16	/* Procstat auxv data. */
+#define	NT_X86_XSTATE	0x202	/* x86 XSAVE extended state. */
 
 /* Symbol Binding - ELFNN_ST_BIND - st_info */
 #define	STB_LOCAL	0	/* Local symbol */
@@ -770,6 +780,7 @@ typedef struct {
 #define	R_MIPS_PC16	10	/* PC relative 16 bit */
 #define	R_MIPS_CALL16	11	/* 16 bit GOT entry for function */
 #define	R_MIPS_GPREL32	12	/* GP relative 32 bit */
+#define	R_MIPS_64	18	/* Direct 64 bit */
 #define	R_MIPS_GOTHI16	21	/* GOT HI 16 bit */
 #define	R_MIPS_GOTLO16	22	/* GOT LO 16 bit */
 #define	R_MIPS_CALLHI16 30	/* upper 16 bit GOT entry for function */
@@ -989,6 +1000,19 @@ typedef struct {
 #define	R_X86_64_DTPOFF32	21	/* Offset in TLS block */
 #define	R_X86_64_GOTTPOFF	22	/* PC relative offset to IE GOT entry */
 #define	R_X86_64_TPOFF32	23	/* Offset in static TLS block */
+#define	R_X86_64_PC64		24	/* PC-relative 64 bit signed sym value. */
+#define	R_X86_64_GOTOFF64	25
+#define	R_X86_64_GOTPC32	26
+#define	R_X86_64_GOT64		27
+#define	R_X86_64_GOTPCREL64	28
+#define	R_X86_64_GOTPC64	29
+#define	R_X86_64_GOTPLT64	30
+#define	R_X86_64_PLTOFF64	31
+#define	R_X86_64_SIZE32		32
+#define	R_X86_64_SIZE64		33
+#define	R_X86_64_GOTPC32_TLSDESC 34
+#define	R_X86_64_TLSDESC_CALL	35
+#define	R_X86_64_TLSDESC	36
 #define	R_X86_64_IRELATIVE	37
 
 

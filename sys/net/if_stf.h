@@ -33,20 +33,6 @@
 #ifndef _NET_IF_STF_H_
 #define _NET_IF_STF_H_
 
-struct stfv4args {
-	struct in_addr inaddr;
-	struct in_addr dstv4_addr;
-	int prefix;
-};
-
-#define	STF_SV4NET	1
-#define	STF_GV4NET	2
-#define	STF_SDSTV4	3
-
-#ifdef _KERNEL
-
 void in_stf_input(struct mbuf *, int);
-
-#endif /* _KERNEL */
 
 #endif /* _NET_IF_STF_H_ */

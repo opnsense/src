@@ -1,4 +1,4 @@
-/*
+/*-
  * Copyright (c) 2007 Cisco Systems, Inc.  All rights reserved.
  * Copyright (c) 2014 Mellanox Technologies, Ltd. All rights reserved.
  *
@@ -89,6 +89,9 @@ static inline bool is_valid_ether_addr(const u8 *addr)
         return !is_multicast_ether_addr(addr) && !is_zero_ether_addr(addr);
 }
 
-
+static inline void ether_addr_copy(u8 *dst, const u8 *src)
+{
+	memcpy(dst, src, 6);
+}
 
 #endif /* _LINUX_ETHERDEVICE */

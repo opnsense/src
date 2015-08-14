@@ -46,6 +46,7 @@ __FBSDID("$FreeBSD$");
 
 #include <errno.h>
 #include <limits.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -341,11 +342,14 @@ ELFNAMEEND(hide)(int fd, const char *fn)
 	 */
 
 	/* load section string table for debug use */
-	if ((shstrtabp = xmalloc(xewtoh(shstrtabshdr->sh_size), fn,
-	    "section string table")) == NULL)
+	if ((size = xewtoh(shstrtabshdr->sh_size)) == 0)
+		goto bad;
+	if ((shstrtabp = xmalloc(size, fn, "section string table")) == NULL)
 		goto bad;
 	if ((size_t)xreadatoff(fd, shstrtabp, xewtoh(shstrtabshdr->sh_offset),
-	    xewtoh(shstrtabshdr->sh_size), fn) != xewtoh(shstrtabshdr->sh_size))
+	    size, fn) != size)
+		goto bad;
+	if (shstrtabp[size - 1] != '\0')
 		goto bad;
 
 	/* we need symtab, strtab, and everything behind strtab */
@@ -366,7 +370,8 @@ ELFNAMEEND(hide)(int fd, const char *fn)
 			strtabidx = i;
 		if (layoutp[i].shdr == symtabshdr || i >= strtabidx) {
 			off = xewtoh(layoutp[i].shdr->sh_offset);
-			size = xewtoh(layoutp[i].shdr->sh_size);
+			if ((size = xewtoh(layoutp[i].shdr->sh_size)) == 0)
+				goto bad;
 			layoutp[i].bufp = xmalloc(size, fn,
 			    shstrtabp + xewtoh(layoutp[i].shdr->sh_name));
 			if (layoutp[i].bufp == NULL)
@@ -376,10 +381,13 @@ ELFNAMEEND(hide)(int fd, const char *fn)
 				goto bad;
 
 			/* set symbol table and string table */
-			if (layoutp[i].shdr == symtabshdr)
+			if (layoutp[i].shdr == symtabshdr) {
 				symtabp = layoutp[i].bufp;
-			else if (layoutp[i].shdr == strtabshdr)
+			} else if (layoutp[i].shdr == strtabshdr) {
 				strtabp = layoutp[i].bufp;
+				if (strtabp[size - 1] != '\0')
+					goto bad;
+			}
 		}
 	}
 
@@ -464,7 +472,7 @@ ELFNAMEEND(hide)(int fd, const char *fn)
 			if (layoutp[i].shdr == &shdrshdr &&
 			    ehdr.e_shoff != shdrshdr.sh_offset) {
 				ehdr.e_shoff = shdrshdr.sh_offset;
-				off = (ELFSIZE == 32) ? 32 : 44;
+				off = offsetof(Elf_Ehdr, e_shoff);
 				size = sizeof(Elf_Off);
 				if ((size_t)xwriteatoff(fd, &ehdr.e_shoff, off, size,
 				    fn) != size)

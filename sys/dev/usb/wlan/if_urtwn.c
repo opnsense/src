@@ -136,14 +136,15 @@ static const STRUCT_USB_HOST_ID urtwn_devs[] = {
 	URTWN_DEV(REALTEK,	RTL8188CU_0),
 	URTWN_DEV(REALTEK,	RTL8188CU_1),
 	URTWN_DEV(REALTEK,	RTL8188CU_2),
+	URTWN_DEV(REALTEK,	RTL8188CU_3),
 	URTWN_DEV(REALTEK,	RTL8188CU_COMBO),
 	URTWN_DEV(REALTEK,	RTL8188CUS),
 	URTWN_DEV(REALTEK,	RTL8188RU_1),
 	URTWN_DEV(REALTEK,	RTL8188RU_2),
+	URTWN_DEV(REALTEK,	RTL8188RU_3),
 	URTWN_DEV(REALTEK,	RTL8191CU),
 	URTWN_DEV(REALTEK,	RTL8192CE),
 	URTWN_DEV(REALTEK,	RTL8192CU),
-	URTWN_DEV(REALTEK, 	RTL8188CU_0),
 	URTWN_DEV(SITECOMEU,	RTL8188CU_1),
 	URTWN_DEV(SITECOMEU,	RTL8188CU_2),
 	URTWN_DEV(SITECOMEU,	RTL8192CU),
@@ -1187,7 +1188,7 @@ urtwn_efuse_read(struct urtwn_softc *sc)
 	uint8_t *rom = (uint8_t *)&sc->rom;
 	uint16_t addr = 0;
 	uint32_t reg;
-	uint8_t off, msk;
+	uint8_t off, msk, vol;
 	int i;
 
 	urtwn_efuse_switch_power(sc);
@@ -1220,11 +1221,18 @@ urtwn_efuse_read(struct urtwn_softc *sc)
 		printf("\n");
 	}
 #endif
+	/* Disable LDO 2.5V. */
+	vol = urtwn_read_1(sc, R92C_EFUSE_TEST + 3);
+	urtwn_write_1(sc, R92C_EFUSE_TEST + 3, vol & ~(0x80));
+
 }
 static void
 urtwn_efuse_switch_power(struct urtwn_softc *sc)
 {
 	uint32_t reg;
+
+	if (sc->chip & URTWN_CHIP_88E)
+		urtwn_write_1(sc, R92C_EFUSE_ACCESS, R92C_EFUSE_ACCESS_ON);
 
 	reg = urtwn_read_2(sc, R92C_SYS_ISO_CTRL);
 	if (!(reg & R92C_SYS_ISO_CTRL_PWC_EV12V)) {
@@ -1241,6 +1249,16 @@ urtwn_efuse_switch_power(struct urtwn_softc *sc)
 	    (R92C_SYS_CLKR_LOADER_EN | R92C_SYS_CLKR_ANA8M)) {
 		urtwn_write_2(sc, R92C_SYS_CLKR,
 		    reg | R92C_SYS_CLKR_LOADER_EN | R92C_SYS_CLKR_ANA8M);
+	}
+
+	if (!(sc->chip & URTWN_CHIP_88E)) {
+		uint8_t vol;
+
+		/* Enable LDO 2.5V. */
+		vol = urtwn_read_1(sc, R92C_EFUSE_TEST + 3);
+		vol &= 0x0f;
+		vol |= 0x30;
+		urtwn_write_1(sc, R92C_EFUSE_TEST + 3, (vol | 0x80));
 	}
 }
 
@@ -1309,7 +1327,7 @@ urtwn_r88e_read_rom(struct urtwn_softc *sc)
 
 	/* Read full ROM image. */
 	memset(&sc->r88e_rom, 0xff, sizeof(sc->r88e_rom));
-	while (addr < 1024) {
+	while (addr < 512) {
 		reg = urtwn_efuse_read_1(sc, addr);
 		if (reg == 0xff)
 			break;
@@ -1334,6 +1352,8 @@ urtwn_r88e_read_rom(struct urtwn_softc *sc)
 			addr++;
 		}
 	}
+
+	urtwn_write_1(sc, R92C_EFUSE_ACCESS, R92C_EFUSE_ACCESS_OFF);
 
 	addr = 0x10;
 	for (i = 0; i < 6; i++)
@@ -1560,14 +1580,9 @@ urtwn_newstate(struct ieee80211vap *vap, enum ieee80211_state nstate, int arg)
 				urtwn_bb_write(sc, R92C_OFDM0_AGCCORE1(1), reg);
 			}
 		}
-		/* Make link LED blink during scan. */
-		urtwn_set_led(sc, URTWN_LED_LINK, !sc->ledlink);
-
 		/* Pause AC Tx queues. */
 		urtwn_write_1(sc, R92C_TXPAUSE,
 		    urtwn_read_1(sc, R92C_TXPAUSE) | 0x0f);
-
-		urtwn_set_chan(sc, ic->ic_curchan, NULL);
 		break;
 	case IEEE80211_S_AUTH:
 		/* Set initial gain under link. */
@@ -2179,14 +2194,12 @@ urtwn_r92c_power_on(struct urtwn_softc *sc)
 static int
 urtwn_r88e_power_on(struct urtwn_softc *sc)
 {
-	uint8_t val;
 	uint32_t reg;
 	int ntries;
 
 	/* Wait for power ready bit. */
 	for (ntries = 0; ntries < 5000; ntries++) {
-		val = urtwn_read_1(sc, 0x6) & 0x2;
-		if (val == 0x2)
+		if (urtwn_read_4(sc, R92C_APS_FSMCO) & R92C_APS_FSMCO_SUS_HOST)
 			break;
 		urtwn_ms_delay(sc);
 	}
@@ -2201,17 +2214,23 @@ urtwn_r88e_power_on(struct urtwn_softc *sc)
 	    urtwn_read_1(sc, R92C_SYS_FUNC_EN) & ~(R92C_SYS_FUNC_EN_BBRSTB |
 	    R92C_SYS_FUNC_EN_BB_GLB_RST));
 
-	urtwn_write_1(sc, 0x26, urtwn_read_1(sc, 0x26) | 0x80);
+	urtwn_write_1(sc, R92C_AFE_XTAL_CTRL + 2,
+	    urtwn_read_1(sc, R92C_AFE_XTAL_CTRL + 2) | 0x80);
 
 	/* Disable HWPDN. */
-	urtwn_write_1(sc, 0x5, urtwn_read_1(sc, 0x5) & ~0x80);
+	urtwn_write_2(sc, R92C_APS_FSMCO,
+	    urtwn_read_2(sc, R92C_APS_FSMCO) & ~R92C_APS_FSMCO_APDM_HPDN);
 
 	/* Disable WL suspend. */
-	urtwn_write_1(sc, 0x5, urtwn_read_1(sc, 0x5) & ~0x18);
+	urtwn_write_2(sc, R92C_APS_FSMCO,
+	    urtwn_read_2(sc, R92C_APS_FSMCO) &
+	    ~(R92C_APS_FSMCO_AFSM_HSUS | R92C_APS_FSMCO_AFSM_PCIE));
 
-	urtwn_write_1(sc, 0x5, urtwn_read_1(sc, 0x5) | 0x1);
+	urtwn_write_2(sc, R92C_APS_FSMCO,
+	    urtwn_read_2(sc, R92C_APS_FSMCO) | R92C_APS_FSMCO_APFM_ONMAC);
 	for (ntries = 0; ntries < 5000; ntries++) {
-		if (!(urtwn_read_1(sc, 0x5) & 0x1))
+		if (!(urtwn_read_2(sc, R92C_APS_FSMCO) &
+		    R92C_APS_FSMCO_APFM_ONMAC))
 			break;
 		urtwn_ms_delay(sc);
 	}
@@ -2219,7 +2238,8 @@ urtwn_r88e_power_on(struct urtwn_softc *sc)
 		return (ETIMEDOUT);
 
 	/* Enable LDO normal mode. */
-	urtwn_write_1(sc, 0x23, urtwn_read_1(sc, 0x23) & ~0x10);
+	urtwn_write_1(sc, R92C_LPLDO_CTRL,
+	    urtwn_read_1(sc, R92C_LPLDO_CTRL) & ~0x10);
 
 	/* Enable MAC DMA/WMAC/SCHEDULE/SEC blocks. */
 	urtwn_write_2(sc, R92C_CR, 0);
@@ -2551,7 +2571,6 @@ urtwn_r88e_dma_init(struct urtwn_softc *sc)
 		return (EIO);
 
 	/* Set number of pages for normal priority queue. */
-	urtwn_write_2(sc, R92C_RQPN_NPQ, 0);
 	urtwn_write_2(sc, R92C_RQPN_NPQ, 0x000d);
 	urtwn_write_4(sc, R92C_RQPN, 0x808e000d);
 
@@ -3123,8 +3142,13 @@ static void
 urtwn_set_channel(struct ieee80211com *ic)
 {
 	struct urtwn_softc *sc = ic->ic_ifp->if_softc;
+	struct ieee80211vap *vap = TAILQ_FIRST(&ic->ic_vaps);
 
 	URTWN_LOCK(sc);
+	if (vap->iv_state == IEEE80211_S_SCAN) {
+		/* Make link LED blink during scan. */
+		urtwn_set_led(sc, URTWN_LED_LINK, !sc->ledlink);
+	}
 	urtwn_set_chan(sc, ic->ic_curchan, NULL);
 	URTWN_UNLOCK(sc);
 }
@@ -3365,16 +3389,17 @@ urtwn_init_locked(void *arg)
 	urtwn_write_1(sc, R92C_TRXDMA_CTRL,
 	    urtwn_read_1(sc, R92C_TRXDMA_CTRL) |
 	    R92C_TRXDMA_CTRL_RXDMA_AGG_EN);
-	urtwn_write_1(sc, R92C_USB_SPECIAL_OPTION,
-	    urtwn_read_1(sc, R92C_USB_SPECIAL_OPTION) |
-	    R92C_USB_SPECIAL_OPTION_AGG_EN);
 	urtwn_write_1(sc, R92C_RXDMA_AGG_PG_TH, 48);
 	if (sc->chip & URTWN_CHIP_88E)
 		urtwn_write_1(sc, R92C_RXDMA_AGG_PG_TH + 1, 4);
-	else
+	else {
 		urtwn_write_1(sc, R92C_USB_DMA_AGG_TO, 4);
-	urtwn_write_1(sc, R92C_USB_AGG_TH, 8);
-	urtwn_write_1(sc, R92C_USB_AGG_TO, 6);
+		urtwn_write_1(sc, R92C_USB_SPECIAL_OPTION,
+		    urtwn_read_1(sc, R92C_USB_SPECIAL_OPTION) |
+		    R92C_USB_SPECIAL_OPTION_AGG_EN);
+		urtwn_write_1(sc, R92C_USB_AGG_TH, 8);
+		urtwn_write_1(sc, R92C_USB_AGG_TO, 6);
+	}
 
 	/* Initialize beacon parameters. */
 	urtwn_write_2(sc, R92C_BCN_CTRL, 0x1010);

@@ -20,7 +20,7 @@ alias ll	ls -lAF
 # umask 22
 
 setenv	EDITOR	vi
-setenv	PAGER	less
+setenv	PAGER	more
 
 if ($?prompt) then
 	# An interactive shell -- set some stuff up
@@ -39,10 +39,6 @@ if ($?prompt) then
 		bindkey "^W" backward-delete-word
 		bindkey -k up history-search-backward
 		bindkey -k down history-search-forward
-		bindkey "\e[1~" beginning-of-line
-		bindkey "\e[2~" overwrite-mode
-		bindkey "\e[3~" delete-char
-		bindkey "\e[4~" end-of-line
 	endif
 
 endif

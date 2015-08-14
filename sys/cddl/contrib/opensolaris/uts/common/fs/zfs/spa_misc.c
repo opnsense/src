@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2015 by Delphix. All rights reserved.
  * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
  * Copyright 2013 Martin Matuska <mm@FreeBSD.org>. All rights reserved.
  */
@@ -384,6 +384,9 @@ zfs_deadman_init()
  * See also the comments in zfs_space_check_t.
  */
 int spa_slop_shift = 5;
+SYSCTL_INT(_vfs_zfs, OID_AUTO, spa_slop_shift, CTLFLAG_RWTUN,
+    &spa_slop_shift, 0,
+    "Shift value of reserved space (1/(2^spa_slop_shift)).");
 
 /*
  * ==========================================================================
@@ -692,6 +695,9 @@ spa_add(const char *name, nvlist_t *config, const char *altroot)
 	}
 
 	spa->spa_debug = ((zfs_flags & ZFS_DEBUG_SPA) != 0);
+
+	spa->spa_min_ashift = INT_MAX;
+	spa->spa_max_ashift = 0;
 
 	/*
 	 * As a pool is being created, treat all features as disabled by
@@ -2024,4 +2030,13 @@ boolean_t
 spa_debug_enabled(spa_t *spa)
 {
 	return (spa->spa_debug);
+}
+
+int
+spa_maxblocksize(spa_t *spa)
+{
+	if (spa_feature_is_enabled(spa, SPA_FEATURE_LARGE_BLOCKS))
+		return (SPA_MAXBLOCKSIZE);
+	else
+		return (SPA_OLD_MAXBLOCKSIZE);
 }

@@ -72,6 +72,7 @@ __FBSDID("$FreeBSD$");
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <netinet/ip_var.h>
+#include <netinet6/ip6_var.h>
 #include <netinet/ip_icmp.h>
 
 #ifdef INET6
@@ -187,6 +188,7 @@ static volatile VNET_DEFINE(int, pf_pfil_hooked);
 VNET_DEFINE(int,		pf_end_threads);
 
 struct rwlock			pf_rules_lock;
+struct sx			pf_ioctl_lock;
 
 /* pfsync */
 pfsync_state_import_t 		*pfsync_state_import_ptr = NULL;
@@ -1089,20 +1091,18 @@ pfioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flags, struct thread *td
 
 	switch (cmd) {
 	case DIOCSTART:
-		PF_RULES_WLOCK();
+		sx_xlock(&pf_ioctl_lock);
 		if (V_pf_status.running)
 			error = EEXIST;
 		else {
 			int cpu;
 
-			PF_RULES_WUNLOCK();
 			error = hook_pf();
 			if (error) {
 				DPFPRINTF(PF_DEBUG_MISC,
 				    ("pf: pfil registration failed\n"));
 				break;
 			}
-			PF_RULES_WLOCK();
 			V_pf_status.running = 1;
 			V_pf_status.since = time_second;
 
@@ -1111,27 +1111,23 @@ pfioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flags, struct thread *td
 
 			DPFPRINTF(PF_DEBUG_MISC, ("pf: started\n"));
 		}
-		PF_RULES_WUNLOCK();
 		break;
 
 	case DIOCSTOP:
-		PF_RULES_WLOCK();
+		sx_xlock(&pf_ioctl_lock);
 		if (!V_pf_status.running)
 			error = ENOENT;
 		else {
 			V_pf_status.running = 0;
-			PF_RULES_WUNLOCK();
 			error = dehook_pf();
 			if (error) {
 				V_pf_status.running = 1;
 				DPFPRINTF(PF_DEBUG_MISC,
 				    ("pf: pfil unregistration failed\n"));
 			}
-			PF_RULES_WLOCK();
 			V_pf_status.since = time_second;
 			DPFPRINTF(PF_DEBUG_MISC, ("pf: stopped\n"));
 		}
-		PF_RULES_WUNLOCK();
 		break;
 
 	case DIOCADDRULE: {
@@ -1608,7 +1604,7 @@ DIOCCHANGERULE_error:
 		struct pfioc_state_kill *psk = (struct pfioc_state_kill *)addr;
 		u_int			 i, killed = 0;
 
-		for (i = 0; i <= V_pf_hashmask; i++) {
+		for (i = 0; i <= pf_hashmask; i++) {
 			struct pf_idhash *ih = &V_pf_idhash[i];
 
 relock_DIOCCLRSTATES:
@@ -1653,7 +1649,7 @@ relock_DIOCCLRSTATES:
 			break;
 		}
 
-		for (i = 0; i <= V_pf_hashmask; i++) {
+		for (i = 0; i <= pf_hashmask; i++) {
 			struct pf_idhash *ih = &V_pf_idhash[i];
 
 relock_DIOCKILLSTATES:
@@ -1709,30 +1705,6 @@ relock_DIOCKILLSTATES:
 		break;
 	}
 
-	case DIOCKILLSCHEDULE: {
-		struct pf_state         *state;
-		struct pfioc_schedule_kill *psk = (struct pfioc_schedule_kill *)addr;
-		int                      killed = 0;
-		u_int			 i;
-                    
-		for (i = 0; i <= V_pf_hashmask; i++) {
-			struct pf_idhash *ih = &V_pf_idhash[i];
-
-relock_DIOCKILLSCHEDULE:
-			PF_HASHROW_LOCK(ih);
-			LIST_FOREACH(state, &ih->states, entry) {
-			       if (!strcmp(psk->schedule, state->rule.ptr->schedule)) {
-					pf_unlink_state(state, PF_ENTER_LOCKED);
-					killed++;
-					goto relock_DIOCKILLSCHEDULE;
-				}
-			}
-			PF_HASHROW_UNLOCK(ih);
-               }
-               psk->numberkilled = killed;
-               break;
-       }
-
 	case DIOCADDSTATE: {
 		struct pfioc_state	*ps = (struct pfioc_state *)addr;
 		struct pfsync_state	*sp = &ps->state;
@@ -1780,7 +1752,7 @@ relock_DIOCKILLSCHEDULE:
 		p = pstore = malloc(ps->ps_len, M_TEMP, M_WAITOK);
 		nr = 0;
 
-		for (i = 0; i <= V_pf_hashmask; i++) {
+		for (i = 0; i <= pf_hashmask; i++) {
 			struct pf_idhash *ih = &V_pf_idhash[i];
 
 			PF_HASHROW_LOCK(ih);
@@ -3153,7 +3125,7 @@ DIOCCHANGEADDR_error:
 		uint32_t		 i, nr = 0;
 
 		if (psn->psn_len == 0) {
-			for (i = 0, sh = V_pf_srchash; i <= V_pf_srchashmask;
+			for (i = 0, sh = V_pf_srchash; i <= pf_srchashmask;
 			    i++, sh++) {
 				PF_HASHROW_LOCK(sh);
 				LIST_FOREACH(n, &sh->nodes, entry)
@@ -3165,7 +3137,7 @@ DIOCCHANGEADDR_error:
 		}
 
 		p = pstore = malloc(psn->psn_len, M_TEMP, M_WAITOK);
-		for (i = 0, sh = V_pf_srchash; i <= V_pf_srchashmask;
+		for (i = 0, sh = V_pf_srchash; i <= pf_srchashmask;
 		    i++, sh++) {
 		    PF_HASHROW_LOCK(sh);
 		    LIST_FOREACH(n, &sh->nodes, entry) {
@@ -3279,6 +3251,8 @@ DIOCCHANGEADDR_error:
 		break;
 	}
 fail:
+	if (sx_xlocked(&pf_ioctl_lock))
+		sx_xunlock(&pf_ioctl_lock);
 	CURVNET_RESTORE();
 
 	return (error);
@@ -3369,7 +3343,7 @@ pf_clear_states(void)
 	struct pf_state	*s;
 	u_int i;
 
-	for (i = 0; i <= V_pf_hashmask; i++) {
+	for (i = 0; i <= pf_hashmask; i++) {
 		struct pf_idhash *ih = &V_pf_idhash[i];
 relock:
 		PF_HASHROW_LOCK(ih);
@@ -3404,7 +3378,7 @@ pf_clear_srcnodes(struct pf_src_node *n)
 	struct pf_state *s;
 	int i;
 
-	for (i = 0; i <= V_pf_hashmask; i++) {
+	for (i = 0; i <= pf_hashmask; i++) {
 		struct pf_idhash *ih = &V_pf_idhash[i];
 
 		PF_HASHROW_LOCK(ih);
@@ -3420,7 +3394,7 @@ pf_clear_srcnodes(struct pf_src_node *n)
 	if (n == NULL) {
 		struct pf_srchash *sh;
 
-		for (i = 0, sh = V_pf_srchash; i <= V_pf_srchashmask;
+		for (i = 0, sh = V_pf_srchash; i <= pf_srchashmask;
 		    i++, sh++) {
 			PF_HASHROW_LOCK(sh);
 			LIST_FOREACH(n, &sh->nodes, entry) {
@@ -3442,7 +3416,7 @@ pf_kill_srcnodes(struct pfioc_src_node_kill *psnk)
 	struct pf_src_node_list	 kill;
 
 	LIST_INIT(&kill);
-	for (int i = 0; i <= V_pf_srchashmask; i++) {
+	for (int i = 0; i <= pf_srchashmask; i++) {
 		struct pf_srchash *sh = &V_pf_srchash[i];
 		struct pf_src_node *sn, *tmp;
 
@@ -3456,31 +3430,23 @@ pf_kill_srcnodes(struct pfioc_src_node_kill *psnk)
 			      &psnk->psnk_dst.addr.v.a.addr,
 			      &psnk->psnk_dst.addr.v.a.mask,
 			      &sn->raddr, sn->af)) {
-				pf_unlink_src_node_locked(sn);
+				pf_unlink_src_node(sn);
 				LIST_INSERT_HEAD(&kill, sn, entry);
 				sn->expire = 1;
 			}
 		PF_HASHROW_UNLOCK(sh);
 	}
 
-	for (int i = 0; i <= V_pf_hashmask; i++) {
+	for (int i = 0; i <= pf_hashmask; i++) {
 		struct pf_idhash *ih = &V_pf_idhash[i];
 		struct pf_state *s;
 
 		PF_HASHROW_LOCK(ih);
 		LIST_FOREACH(s, &ih->states, entry) {
-			if (s->src_node && s->src_node->expire == 1) {
-#ifdef INVARIANTS
-				s->src_node->states--;
-#endif
+			if (s->src_node && s->src_node->expire == 1)
 				s->src_node = NULL;
-			}
-			if (s->nat_src_node && s->nat_src_node->expire == 1) {
-#ifdef INVARIANTS
-				s->nat_src_node->states--;
-#endif
+			if (s->nat_src_node && s->nat_src_node->expire == 1)
 				s->nat_src_node = NULL;
-			}
 		}
 		PF_HASHROW_UNLOCK(ih);
 	}
@@ -3640,12 +3606,11 @@ pf_check6_out(void *arg, struct mbuf **m, struct ifnet *ifp, int dir,
 	int chk;
 
 	/* We need a proper CSUM before we start (s. OpenBSD ip_output) */
-	if ((*m)->m_pkthdr.csum_flags & CSUM_DELAY_DATA) {
-#ifdef INET
-		/* XXX-BZ copy&paste error from r126261? */
-		in_delayed_cksum(*m);
-#endif
-		(*m)->m_pkthdr.csum_flags &= ~CSUM_DELAY_DATA;
+	if ((*m)->m_pkthdr.csum_flags & CSUM_DELAY_DATA_IPV6) {
+		in6_delayed_cksum(*m,
+		    (*m)->m_pkthdr.len - sizeof(struct ip6_hdr),
+		    sizeof(struct ip6_hdr));
+		(*m)->m_pkthdr.csum_flags &= ~CSUM_DELAY_DATA_IPV6;
 	}
 	CURVNET_SET(ifp->if_vnet);
 	chk = pf_test6(PF_OUT, ifp, m, inp);
@@ -3752,6 +3717,7 @@ pf_load(void)
 	VNET_LIST_RUNLOCK();
 
 	rw_init(&pf_rules_lock, "pf rulesets");
+	sx_init(&pf_ioctl_lock, "pf ioctl");
 
 	pf_dev = make_dev(&pf_cdevsw, 0, 0, 0, 0600, PF_NAME);
 	if ((error = pfattach()) != 0)
@@ -3765,9 +3731,7 @@ pf_unload(void)
 {
 	int error = 0;
 
-	PF_RULES_WLOCK();
 	V_pf_status.running = 0;
-	PF_RULES_WUNLOCK();
 	swi_remove(V_pf_swi_cookie);
 	error = dehook_pf();
 	if (error) {
@@ -3786,6 +3750,7 @@ pf_unload(void)
 		wakeup_one(pf_purge_thread);
 		rw_sleep(pf_purge_thread, &pf_rules_lock, 0, "pftmo", 0);
 	}
+	PF_RULES_WUNLOCK();
 	pf_normalize_cleanup();
 	pfi_cleanup();
 	pfr_cleanup();
@@ -3793,9 +3758,9 @@ pf_unload(void)
 	pf_cleanup();
 	if (IS_DEFAULT_VNET(curvnet))
 		pf_mtag_cleanup();
-	PF_RULES_WUNLOCK();
 	destroy_dev(pf_dev);
 	rw_destroy(&pf_rules_lock);
+	sx_destroy(&pf_ioctl_lock);
 
 	return (error);
 }

@@ -74,9 +74,7 @@ RB_PROTOTYPE(dmar_gas_entries_tree, dmar_map_entry, rb_entry,
 #define	DMAR_MAP_ENTRY_TM	0x8000	/* Transient */
 
 struct dmar_ctx {
-	int bus;	/* pci bus/slot/func */
-	int slot;
-	int func;
+	uint16_t rid;	/* pci RID */
 	int domain;	/* DID */
 	int mgaw;	/* Real max address width */
 	int agaw;	/* Adjusted guest address width */
@@ -230,11 +228,14 @@ struct vm_page *dmar_pgalloc(vm_object_t obj, vm_pindex_t idx, int flags);
 void dmar_pgfree(vm_object_t obj, vm_pindex_t idx, int flags);
 void *dmar_map_pgtbl(vm_object_t obj, vm_pindex_t idx, int flags,
     struct sf_buf **sf);
-void dmar_unmap_pgtbl(struct sf_buf *sf, bool coherent);
+void dmar_unmap_pgtbl(struct sf_buf *sf);
 int dmar_load_root_entry_ptr(struct dmar_unit *unit);
 int dmar_inv_ctx_glob(struct dmar_unit *unit);
 int dmar_inv_iotlb_glob(struct dmar_unit *unit);
 int dmar_flush_write_bufs(struct dmar_unit *unit);
+void dmar_flush_pte_to_ram(struct dmar_unit *unit, dmar_pte_t *dst);
+void dmar_flush_ctx_to_ram(struct dmar_unit *unit, dmar_ctx_entry_t *dst);
+void dmar_flush_root_to_ram(struct dmar_unit *unit, dmar_root_entry_t *dst);
 int dmar_enable_translation(struct dmar_unit *unit);
 int dmar_disable_translation(struct dmar_unit *unit);
 bool dmar_barrier_enter(struct dmar_unit *dmar, u_int barrier_id);
@@ -269,12 +270,11 @@ void ctx_free_pgtbl(struct dmar_ctx *ctx);
 
 struct dmar_ctx *dmar_instantiate_ctx(struct dmar_unit *dmar, device_t dev,
     bool rmrr);
-struct dmar_ctx *dmar_get_ctx(struct dmar_unit *dmar, device_t dev,
-    int bus, int slot, int func, bool id_mapped, bool rmrr_init);
+struct dmar_ctx *dmar_get_ctx(struct dmar_unit *dmar, device_t dev, 
+    uint16_t rid, bool id_mapped, bool rmrr_init);
 void dmar_free_ctx_locked(struct dmar_unit *dmar, struct dmar_ctx *ctx);
 void dmar_free_ctx(struct dmar_ctx *ctx);
-struct dmar_ctx *dmar_find_ctx_locked(struct dmar_unit *dmar, int bus,
-    int slot, int func);
+struct dmar_ctx *dmar_find_ctx_locked(struct dmar_unit *dmar, uint16_t rid);
 void dmar_ctx_unload_entry(struct dmar_map_entry *entry, bool free);
 void dmar_ctx_unload(struct dmar_ctx *ctx,
     struct dmar_map_entries_tailq *entries, bool cansleep);
@@ -289,7 +289,7 @@ struct dmar_map_entry *dmar_gas_alloc_entry(struct dmar_ctx *ctx, u_int flags);
 void dmar_gas_free_entry(struct dmar_ctx *ctx, struct dmar_map_entry *entry);
 void dmar_gas_free_space(struct dmar_ctx *ctx, struct dmar_map_entry *entry);
 int dmar_gas_map(struct dmar_ctx *ctx, const struct bus_dma_tag_common *common,
-    dmar_gaddr_t size, u_int eflags, u_int flags, vm_page_t *ma,
+    dmar_gaddr_t size, int offset, u_int eflags, u_int flags, vm_page_t *ma,
     struct dmar_map_entry **res);
 void dmar_gas_free_region(struct dmar_ctx *ctx, struct dmar_map_entry *entry);
 int dmar_gas_map_region(struct dmar_ctx *ctx, struct dmar_map_entry *entry,

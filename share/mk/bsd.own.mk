@@ -143,6 +143,10 @@ KMODDIR?=	/boot/kernel
 KMODOWN?=	${BINOWN}
 KMODGRP?=	${BINGRP}
 KMODMODE?=	${BINMODE}
+DTBDIR?=	/boot/dtb
+DTBOWN?=	root
+DTBGRP?=	wheel
+DTBMODE?=	444
 
 LIBDIR?=	/usr/lib
 LIBCOMPATDIR?=	/usr/lib/compat
@@ -254,15 +258,21 @@ __DEFAULT_YES_OPTIONS = \
     ATM \
     AUDIT \
     AUTHPF \
+    AUTOFS \
+    BHYVE \
     BINUTILS \
     BLUETOOTH \
     BMAKE \
     BOOT \
+    BOOTPARAMD \
+    BOOTPD \
     BSD_CPIO \
+    BSDINSTALL \
     BSNMP \
     BZIP2 \
     CALENDAR \
     CAPSICUM \
+    CCD \
     CDDL \
     CPP \
     CROSS_COMPILER \
@@ -272,13 +282,17 @@ __DEFAULT_YES_OPTIONS = \
     DICT \
     DYNAMICROOT \
     ED_CRYPTO \
+    EE \
     EXAMPLES \
+    FILE \
+    FINGER \
     FLOPPY \
     FMTREE \
     FORMAT_EXTENSIONS \
     FORTH \
     FP_LIBC \
     FREEBSD_UPDATE \
+    FTP \
     GAMES \
     GCOV \
     GDB \
@@ -287,15 +301,18 @@ __DEFAULT_YES_OPTIONS = \
     GPIO \
     GPL_DTC \
     GROFF \
+    HAST \
     HTML \
     ICONV \
     INET \
     INET6 \
+    INETD \
     INFO \
     INSTALLLIB \
     IPFILTER \
     IPFW \
     IPX \
+    ISCSI \
     JAIL \
     KDUMP \
     KERBEROS \
@@ -336,6 +353,8 @@ __DEFAULT_YES_OPTIONS = \
     PPP \
     PROFILE \
     QUOTAS \
+    RADIUS_SUPPORT \
+    RBOOTD \
     RCMDS \
     RCS \
     RESCUE \
@@ -351,9 +370,13 @@ __DEFAULT_YES_OPTIONS = \
     SYMVER \
     SYSCONS \
     SYSINSTALL \
+    TALK \
     TCSH \
+    TCP_WRAPPERS \
     TELNET \
     TEXTPROC \
+    TFTP \
+    TIMED \
     TOOLCHAIN \
     UNBOUND \
     USB \
@@ -664,7 +687,7 @@ _uid!=	id -u
 USER!=	id -un
 .endif
 _gid!=	id -gn
-.for x in BIN CONF DOC INFO KMOD LIB MAN NLS SHARE
+.for x in BIN CONF DOC DTB INFO KMOD LIB MAN NLS SHARE
 $xOWN=	${USER}
 $xGRP=	${_gid}
 .endfor

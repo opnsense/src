@@ -24,7 +24,7 @@
 /*
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2013, Joyent, Inc. All rights reserved.
- * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2014 by Delphix. All rights reserved.
  */
 
 /*
@@ -176,7 +176,7 @@ dtrace_optval_t dtrace_ustackframes_default = 20;
 dtrace_optval_t dtrace_jstackframes_default = 50;
 dtrace_optval_t dtrace_jstackstrsize_default = 512;
 int		dtrace_msgdsize_max = 128;
-hrtime_t	dtrace_chill_max = 500 * (NANOSEC / MILLISEC);	/* 500 ms */
+hrtime_t	dtrace_chill_max = MSEC2NSEC(500);		/* 500 ms */
 hrtime_t	dtrace_chill_interval = NANOSEC;		/* 1000 ms */
 int		dtrace_devdepth_max = 32;
 int		dtrace_err_verbose;
@@ -351,17 +351,22 @@ dtrace_id_t		dtrace_probeid_error;	/* special ERROR probe */
 
 /*
  * DTrace Helper Tracing Variables
+ *
+ * These variables should be set dynamically to enable helper tracing.  The
+ * only variables that should be set are dtrace_helptrace_enable (which should
+ * be set to a non-zero value to allocate helper tracing buffers on the next
+ * open of /dev/dtrace) and dtrace_helptrace_disable (which should be set to a
+ * non-zero value to deallocate helper tracing buffers on the next close of
+ * /dev/dtrace).  When (and only when) helper tracing is disabled, the
+ * buffer size may also be set via dtrace_helptrace_bufsize.
  */
-uint32_t dtrace_helptrace_next = 0;
-uint32_t dtrace_helptrace_nlocals;
-char	*dtrace_helptrace_buffer;
-int	dtrace_helptrace_bufsize = 512 * 1024;
-
-#ifdef DEBUG
-int	dtrace_helptrace_enabled = 1;
-#else
-int	dtrace_helptrace_enabled = 0;
-#endif
+int			dtrace_helptrace_enable = 0;
+int			dtrace_helptrace_disable = 0;
+int			dtrace_helptrace_bufsize = 16 * 1024 * 1024;
+uint32_t		dtrace_helptrace_nlocals;
+static dtrace_helptrace_t *dtrace_helptrace_buffer;
+static uint32_t		dtrace_helptrace_next = 0;
+static int		dtrace_helptrace_wrapped = 0;
 
 /*
  * DTrace Error Hashing
@@ -606,7 +611,11 @@ dtrace_panic(const char *format, ...)
 	va_list alist;
 
 	va_start(alist, format);
+#ifdef __FreeBSD__
+	vpanic(format, alist);
+#else
 	dtrace_vpanic(format, alist);
+#endif
 	va_end(alist);
 }
 
@@ -7078,7 +7087,8 @@ dtrace_probe(dtrace_id_t id, uintptr_t arg0, uintptr_t arg1,
 		return;
 	}
 
-	now = dtrace_gethrtime();
+	now = mstate.dtms_timestamp = dtrace_gethrtime();
+	mstate.dtms_present |= DTRACE_MSTATE_TIMESTAMP;
 	vtime = dtrace_vtime_references != 0;
 
 	if (vtime && curthread->t_dtrace_start)
@@ -13782,7 +13792,7 @@ dtrace_dof_slurp(dof_hdr_t *dof, dtrace_vstate_t *vstate, cred_t *cr,
 		if (!(sec->dofs_flags & DOF_SECF_LOAD))
 			continue; /* just ignore non-loadable sections */
 
-		if (sec->dofs_align & (sec->dofs_align - 1)) {
+		if (!ISP2(sec->dofs_align)) {
 			dtrace_dof_error(dof, "bad section alignment");
 			return (-1);
 		}
@@ -14174,7 +14184,7 @@ dtrace_state_create(struct cdev *dev)
 	if (dev != NULL) {
 		cr = dev->si_cred;
 		m = dev2unit(dev);
-		}
+	}
 
 	/* Allocate memory for the state. */
 	state = kmem_zalloc(sizeof(dtrace_state_t), KM_SLEEP);
@@ -15199,10 +15209,10 @@ dtrace_helper_trace(dtrace_helper_action_t *helper,
     dtrace_mstate_t *mstate, dtrace_vstate_t *vstate, int where)
 {
 	uint32_t size, next, nnext, i;
-	dtrace_helptrace_t *ent;
+	dtrace_helptrace_t *ent, *buffer;
 	uint16_t flags = cpu_core[curcpu].cpuc_dtrace_flags;
 
-	if (!dtrace_helptrace_enabled)
+	if ((buffer = dtrace_helptrace_buffer) == NULL)
 		return;
 
 	ASSERT(vstate->dtvs_nlocals <= dtrace_helptrace_nlocals);
@@ -15230,10 +15240,12 @@ dtrace_helper_trace(dtrace_helper_action_t *helper,
 	/*
 	 * We have our slot; fill it in.
 	 */
-	if (nnext == size)
+	if (nnext == size) {
+		dtrace_helptrace_wrapped++;
 		next = 0;
+	}
 
-	ent = (dtrace_helptrace_t *)&dtrace_helptrace_buffer[next];
+	ent = (dtrace_helptrace_t *)((uintptr_t)buffer + next);
 	ent->dtht_helper = helper;
 	ent->dtht_where = where;
 	ent->dtht_nlocals = vstate->dtvs_nlocals;
@@ -15267,7 +15279,7 @@ dtrace_helper(int which, dtrace_mstate_t *mstate,
 	dtrace_helper_action_t *helper;
 	dtrace_vstate_t *vstate;
 	dtrace_difo_t *pred;
-	int i, trace = dtrace_helptrace_enabled;
+	int i, trace = dtrace_helptrace_buffer != NULL;
 
 	ASSERT(which >= 0 && which < DTRACE_NHELPER_ACTIONS);
 
@@ -16670,17 +16682,6 @@ dtrace_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	mutex_exit(&cpu_lock);
 
 	/*
-	 * If DTrace helper tracing is enabled, we need to allocate the
-	 * trace buffer and initialize the values.
-	 */
-	if (dtrace_helptrace_enabled) {
-		ASSERT(dtrace_helptrace_buffer == NULL);
-		dtrace_helptrace_buffer =
-		    kmem_zalloc(dtrace_helptrace_bufsize, KM_SLEEP);
-		dtrace_helptrace_next = 0;
-	}
-
-	/*
 	 * If there are already providers, we must ask them to provide their
 	 * probes, and then match any anonymous enabling against them.  Note
 	 * that there should be no other retained enablings at this time:
@@ -16728,9 +16729,7 @@ dtrace_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 #endif
 
 #if !defined(sun)
-#if __FreeBSD_version >= 800039
 static void dtrace_dtr(void *);
-#endif
 #endif
 
 /*ARGSUSED*/
@@ -16758,27 +16757,7 @@ dtrace_open(struct cdev *dev, int oflags, int devtype, struct thread *td)
 		return (ENXIO);
 #else
 	cred_t *cred_p = NULL;
-
-#if __FreeBSD_version < 800039
-	/*
-	 * The first minor device is the one that is cloned so there is
-	 * nothing more to do here.
-	 */
-	if (dev2unit(dev) == 0)
-		return 0;
-
-	/*
-	 * Devices are cloned, so if the DTrace state has already
-	 * been allocated, that means this device belongs to a
-	 * different client. Each client should open '/dev/dtrace'
-	 * to get a cloned device.
-	 */
-	if (dev->si_drv1 != NULL)
-		return (EBUSY);
-#endif
-
 	cred_p = dev->si_cred;
-#endif
 
 	/*
 	 * If no DTRACE_PRIV_* bits are set in the credential, then the
@@ -16786,11 +16765,6 @@ dtrace_open(struct cdev *dev, int oflags, int devtype, struct thread *td)
 	 */
 	dtrace_cred2priv(cred_p, &priv, &uid, &zoneid);
 	if (priv == DTRACE_PRIV_NONE) {
-#if !defined(sun)
-#if __FreeBSD_version < 800039
-		/* Destroy the cloned device. */
-                destroy_dev(dev);
-#endif
 #endif
 
 		return (EACCES);
@@ -16820,14 +16794,22 @@ dtrace_open(struct cdev *dev, int oflags, int devtype, struct thread *td)
 		return (EBUSY);
 	}
 
+	if (dtrace_helptrace_enable && dtrace_helptrace_buffer == NULL) {
+		/*
+		 * If DTrace helper tracing is enabled, we need to allocate the
+		 * trace buffer and initialize the values.
+		 */
+		dtrace_helptrace_buffer =
+		    kmem_zalloc(dtrace_helptrace_bufsize, KM_SLEEP);
+		dtrace_helptrace_next = 0;
+		dtrace_helptrace_wrapped = 0;
+		dtrace_helptrace_enable = 0;
+	}
+
 	state = dtrace_state_create(devp, cred_p);
 #else
 	state = dtrace_state_create(dev);
-#if __FreeBSD_version < 800039
-	dev->si_drv1 = state;
-#else
 	devfs_set_cdevpriv(state, dtrace_dtr);
-#endif
 #endif
 
 	mutex_exit(&cpu_lock);
@@ -16840,12 +16822,6 @@ dtrace_open(struct cdev *dev, int oflags, int devtype, struct thread *td)
 		--dtrace_opens;
 #endif
 		mutex_exit(&dtrace_lock);
-#if !defined(sun)
-#if __FreeBSD_version < 800039
-		/* Destroy the cloned device. */
-                destroy_dev(dev);
-#endif
-#endif
 		return (EAGAIN);
 	}
 
@@ -16858,9 +16834,6 @@ dtrace_open(struct cdev *dev, int oflags, int devtype, struct thread *td)
 #if defined(sun)
 static int
 dtrace_close(dev_t dev, int flag, int otyp, cred_t *cred_p)
-#elif __FreeBSD_version < 800039
-static int
-dtrace_close(struct cdev *dev, int flags, int fmt __unused, struct thread *td)
 #else
 static void
 dtrace_dtr(void *data)
@@ -16869,47 +16842,56 @@ dtrace_dtr(void *data)
 #if defined(sun)
 	minor_t minor = getminor(dev);
 	dtrace_state_t *state;
+#endif
+	dtrace_helptrace_t *buf = NULL;
 
+#ifdef illumos
 	if (minor == DTRACEMNRN_HELPER)
 		return (0);
 
 	state = ddi_get_soft_state(dtrace_softstate, minor);
 #else
-#if __FreeBSD_version < 800039
-	dtrace_state_t *state = dev->si_drv1;
-
-	/* Check if this is not a cloned device. */
-	if (dev2unit(dev) == 0)
-		return (0);
-#else
 	dtrace_state_t *state = data;
-#endif
-
 #endif
 
 	mutex_enter(&cpu_lock);
 	mutex_enter(&dtrace_lock);
 
-	if (state != NULL) {
-		if (state->dts_anon) {
-			/*
-			 * There is anonymous state. Destroy that first.
-			 */
-			ASSERT(dtrace_anon.dta_state == NULL);
-			dtrace_state_destroy(state->dts_anon);
-		}
-
-		dtrace_state_destroy(state);
-
-#if !defined(sun)
-		kmem_free(state, 0);
-#if __FreeBSD_version < 800039
-		dev->si_drv1 = NULL;
+#ifdef illumos
+	if (state->dts_anon)
+#else
+	if (state != NULL && state->dts_anon)
 #endif
-#endif
+	{
+		/*
+		 * There is anonymous state. Destroy that first.
+		 */
+		ASSERT(dtrace_anon.dta_state == NULL);
+		dtrace_state_destroy(state->dts_anon);
 	}
 
+	if (dtrace_helptrace_disable) {
+		/*
+		 * If we have been told to disable helper tracing, set the
+		 * buffer to NULL before calling into dtrace_state_destroy();
+		 * we take advantage of its dtrace_sync() to know that no
+		 * CPU is in probe context with enabled helper tracing
+		 * after it returns.
+		 */
+		buf = dtrace_helptrace_buffer;
+		dtrace_helptrace_buffer = NULL;
+	}
+
+#ifdef illumos
+	dtrace_state_destroy(state);
+#else
+	if (state != NULL) {
+		dtrace_state_destroy(state);
+		kmem_free(state, 0);
+	}
+#endif
 	ASSERT(dtrace_opens > 0);
+
 #if defined(sun)
 	/*
 	 * Only relinquish control of the kernel debugger interface when there
@@ -16921,15 +16903,15 @@ dtrace_dtr(void *data)
 	--dtrace_opens;
 #endif
 
+	if (buf != NULL) {
+		kmem_free(buf, dtrace_helptrace_bufsize);
+		dtrace_helptrace_disable = 0;
+	}
+
 	mutex_exit(&dtrace_lock);
 	mutex_exit(&cpu_lock);
 
-#if __FreeBSD_version < 800039
-	/* Schedule this cloned device to be destroyed. */
-	destroy_dev_sched(dev);
-#endif
-
-#if defined(sun) || __FreeBSD_version < 800039
+#if defined(sun)
 	return (0);
 #endif
 }
@@ -17823,11 +17805,6 @@ dtrace_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 
 	mutex_exit(&cpu_lock);
 
-	if (dtrace_helptrace_enabled) {
-		kmem_free(dtrace_helptrace_buffer, dtrace_helptrace_bufsize);
-		dtrace_helptrace_buffer = NULL;
-	}
-
 	kmem_free(dtrace_probes, dtrace_nprobes * sizeof (dtrace_probe_t *));
 	dtrace_probes = NULL;
 	dtrace_nprobes = 0;
@@ -17969,24 +17946,14 @@ static d_ioctl_t	dtrace_ioctl;
 static d_ioctl_t	dtrace_ioctl_helper;
 static void		dtrace_load(void *);
 static int		dtrace_unload(void);
-#if __FreeBSD_version < 800039
-static void		dtrace_clone(void *, struct ucred *, char *, int , struct cdev **);
-static struct clonedevs	*dtrace_clones;		/* Ptr to the array of cloned devices. */
-static eventhandler_tag	eh_tag;			/* Event handler tag. */
-#else
 static struct cdev	*dtrace_dev;
 static struct cdev	*helper_dev;
-#endif
 
 void dtrace_invop_init(void);
 void dtrace_invop_uninit(void);
 
 static struct cdevsw dtrace_cdevsw = {
 	.d_version	= D_VERSION,
-#if __FreeBSD_version < 800039
-	.d_flags	= D_TRACKCLOSE | D_NEEDMINOR,
-	.d_close	= dtrace_close,
-#endif
 	.d_ioctl	= dtrace_ioctl,
 	.d_open		= dtrace_open,
 	.d_name		= "dtrace",
@@ -17999,9 +17966,6 @@ static struct cdevsw helper_cdevsw = {
 };
 
 #include <dtrace_anon.c>
-#if __FreeBSD_version < 800039
-#include <dtrace_clone.c>
-#endif
 #include <dtrace_ioctl.c>
 #include <dtrace_load.c>
 #include <dtrace_modevent.c>
@@ -18017,6 +17981,5 @@ SYSINIT(dtrace_anon_init, SI_SUB_DTRACE_ANON, SI_ORDER_FIRST, dtrace_anon_init, 
 
 DEV_MODULE(dtrace, dtrace_modevent, NULL);
 MODULE_VERSION(dtrace, 1);
-MODULE_DEPEND(dtrace, cyclic, 1, 1, 1);
 MODULE_DEPEND(dtrace, opensolaris, 1, 1, 1);
 #endif

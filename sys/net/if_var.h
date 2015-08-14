@@ -104,6 +104,22 @@ VNET_DECLARE(struct pfil_head, link_pfil_hook);	/* packet filter hooks */
 #define	V_link_pfil_hook	VNET(link_pfil_hook)
 #endif /* _KERNEL */
 
+typedef enum {
+	IFCOUNTER_IPACKETS = 0,
+	IFCOUNTER_IERRORS,
+	IFCOUNTER_OPACKETS,
+	IFCOUNTER_OERRORS,
+	IFCOUNTER_COLLISIONS,
+	IFCOUNTER_IBYTES,
+	IFCOUNTER_OBYTES,
+	IFCOUNTER_IMCASTS,
+	IFCOUNTER_OMCASTS,
+	IFCOUNTER_IQDROPS,
+	IFCOUNTER_OQDROPS,
+	IFCOUNTER_NOPROTO,
+	IFCOUNTERS /* Array size. */
+} ift_counter;
+
 /*
  * Structure defining a queue for a network interface.
  */
@@ -114,6 +130,12 @@ struct	ifqueue {
 	int	ifq_maxlen;
 	int	ifq_drops;
 	struct	mtx ifq_mtx;
+};
+
+struct ifnet_hw_tsomax {
+	u_int	tsomaxbytes;	/* TSO total burst length limit in bytes */
+	u_int	tsomaxsegcount;	/* TSO maximum segment count */
+	u_int	tsomaxsegsize;	/* TSO maximum segment size in bytes */
 };
 
 /*
@@ -204,10 +226,23 @@ struct ifnet {
 	u_int	if_fib;			/* interface FIB */
 	u_char	if_alloctype;		/* if_type at time of allocation */
 
-	u_int	if_hw_tsomax;		/* tso burst length limit, the minimum
-					 * is (IP_MAXPACKET / 8).
-					 * XXXAO: Have to find a better place
-					 * for it eventually. */
+	/*
+	 * Network adapter TSO limits:
+	 * ===========================
+	 *
+	 * If the "if_hw_tsomax" field is zero the maximum segment
+	 * length limit does not apply. If the "if_hw_tsomaxsegcount"
+	 * or the "if_hw_tsomaxsegsize" field is zero the TSO segment
+	 * count limit does not apply. If all three fields are zero,
+	 * there is no TSO limit.
+	 *
+	 * NOTE: The TSO limits only apply to the data payload part of
+	 * a TCP/IP packet. That means there is no need to subtract
+	 * space for ethernet-, vlan-, IP- or TCP- headers from the
+	 * TSO limits unless the hardware driver in question requires
+	 * so.
+	 */
+	u_int	if_hw_tsomax;
 
 	/*
 	 * Spare fields are added so that we can modify sensitive data
@@ -215,7 +250,14 @@ struct ifnet {
 	 * be used with care where binary compatibility is required.
 	 */
 	char	if_cspare[3];
-	int	if_ispare[4];
+	int	if_ispare[2];
+
+	/*
+	 * TSO fields for segment limits. If a field is zero below,
+	 * there is no limit:
+	 */
+	u_int	if_hw_tsomaxsegcount;	/* TSO maximum segment count */
+	u_int	if_hw_tsomaxsegsize;	/* TSO maximum segment size in bytes */
 	void	*if_pspare[8];		/* 1 netmap, 7 TDB */
 };
 
@@ -955,6 +997,8 @@ typedef	void *if_com_alloc_t(u_char type, struct ifnet *ifp);
 typedef	void if_com_free_t(void *com, u_char type);
 void	if_register_com_alloc(u_char type, if_com_alloc_t *a, if_com_free_t *f);
 void	if_deregister_com_alloc(u_char type);
+uint64_t if_get_counter_default(struct ifnet *, ift_counter);
+void	if_inc_counter(struct ifnet *, ift_counter, int64_t);
 
 #define IF_LLADDR(ifp)							\
     LLADDR((struct sockaddr_dl *)((ifp)->if_addr->ifa_addr))
@@ -966,6 +1010,10 @@ typedef	int poll_handler_t(struct ifnet *ifp, enum poll_cmd cmd, int count);
 int    ether_poll_register(poll_handler_t *h, struct ifnet *ifp);
 int    ether_poll_deregister(struct ifnet *ifp);
 #endif /* DEVICE_POLLING */
+
+/* TSO */
+void if_hw_tsomax_common(struct ifnet *, struct ifnet_hw_tsomax *);
+int if_hw_tsomax_update(struct ifnet *, struct ifnet_hw_tsomax *);
 
 #endif /* _KERNEL */
 

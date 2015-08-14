@@ -39,12 +39,14 @@ SUBDIR=	${SUBDIR_ORDERED} \
 	libcrypt \
 	libdevinfo \
 	libdevstat \
+	libdpv \
 	libdwarf \
 	libedit \
 	${_libefi} \
 	libexecinfo \
 	libexpat \
 	libfetch \
+	libfigpar \
 	libgeom \
 	${_libgpib} \
 	${_libgssapi} \
@@ -57,12 +59,13 @@ SUBDIR=	${SUBDIR_ORDERED} \
 	libkvm \
 	${_libldns} \
 	liblzma \
-	libmagic \
+	${_libmagic} \
 	libmandoc \
 	libmemstat \
 	libmd \
 	${_libmilter} \
 	${_libmp} \
+	libmt \
 	${_libnandfs} \
 	libnetbsd \
 	${_libnetgraph} \
@@ -73,7 +76,7 @@ SUBDIR=	${SUBDIR_ORDERED} \
 	${_libpmc} \
 	${_libproc} \
 	libprocstat \
-	libradius \
+	${_libradius} \
 	librpcsvc \
 	librt \
 	${_librtld_db} \
@@ -121,7 +124,7 @@ SUBDIR_DEPEND_libc++= libcxxrt
 SUBDIR_DEPEND_libc= libcompiler_rt
 SUBDIR_DEPEND_libcam= libsbuf
 SUBDIR_DEPEND_libdevstat= libkvm
-SUBDIR_DEPEND_libdiaglog= ncurses
+SUBDIR_DEPEND_libdpv= libfigpar ncurses libutil
 SUBDIR_DEPEND_libedit= ncurses
 SUBDIR_DEPEND_libg++= msun
 SUBDIR_DEPEND_libgeom= libexpat libsbuf
@@ -129,11 +132,10 @@ SUBDIR_DEPEND_liblibrpcsec_gss= libgssapi
 SUBDIR_DEPEND_libmagic= libz
 SUBDIR_DEPEND_libmemstat= libkvm
 SUBDIR_DEPEND_libopie= libmd
-SUBDIR_DEPEND_libpam= libcrypt libopie libradius librpcsvc libtacplus libutil ${_libypclnt} ${_libcom_err} 
+SUBDIR_DEPEND_libpam= libcrypt libopie ${_libradius} librpcsvc libtacplus libutil ${_libypclnt} ${_libcom_err} 
 SUBDIR_DEPEND_libpjdlog= libutil
 SUBDIR_DEPEND_libprocstat= libkvm libutil
 SUBDIR_DEPEND_libradius= libmd
-SUBDIR_DEPEND_libreadline= ncurses
 SUBDIR_DEPEND_libsmb= libkiconv
 SUBDIR_DEPEND_libstdc++= msun
 SUBDIR_DEPEND_libtacplus= libmd
@@ -167,6 +169,10 @@ _libbsnmp=	libbsnmp
 
 .if ${MK_CLANG} != "no" && !defined(COMPAT_32BIT)
 _clang=		clang
+.endif
+
+.if ${MK_FILE} != "no"
+_libmagic=	libmagic
 .endif
 
 .if ${MK_GPIB} != "no"
@@ -223,7 +229,9 @@ _librtld_db=	librtld_db
 .endif
 
 .if ${MACHINE_CPUARCH} == "amd64"
+.if ${MK_BHYVE} != "no"
 _libvmmapi=	libvmmapi
+.endif
 .endif
 
 .if ${MACHINE_CPUARCH} == "ia64"
@@ -252,6 +260,10 @@ _libmp=		libmp
 
 .if ${MK_PMC} != "no"
 _libpmc=	libpmc
+.endif
+
+.if ${MK_RADIUS_SUPPORT} != "no"
+_libradius=	libradius
 .endif
 
 .if ${MK_SENDMAIL} != "no"

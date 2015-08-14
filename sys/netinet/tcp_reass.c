@@ -90,7 +90,7 @@ SYSCTL_PROC(_net_inet_tcp_reass, OID_AUTO, cursegments,
 
 static int tcp_reass_overflows = 0;
 SYSCTL_INT(_net_inet_tcp_reass, OID_AUTO, overflows,
-    CTLTYPE_INT | CTLFLAG_RD,
+    CTLFLAG_RD,
     &tcp_reass_overflows, 0,
     "Global number of TCP Segment Reassembly Queue Overflows");
 

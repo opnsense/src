@@ -16,122 +16,75 @@ from older versions of FreeBSD, try WITHOUT_CLANG to bootstrap to the tip of
 stable/10, and then rebuild without this option. The bootstrap process from
 older version of current is a bit fragile.
 
-20150805:	p17	FreeBSD-SA-15:18.bsdpatch
-			FreeBSD-SA-15:19.routed
+20150817:
+	10.2-RELEASE.
 
-	Fix patch(1) shell injection vulnerability via ed(1).
-	[SA-15:18]
+20150703:
+	The default Unbound configuration now enables remote control
+	using a local socket.  Users who have already enabled the
+	local_unbound service should regenerate their configuration
+	by running "service local_unbound setup" as root.
 
-	Fix routed remote denial of service vulnerability. [SA-15:19]
+20150624:
+	An additional fix for the issue described in the 20150614 sendmail
+	entry below has been been committed in revision 284786.
 
-20150728:	p16	FreeBSD-SA-15:14.bsdpatch
-			FreeBSD-SA-15:15.tcp
-			FreeBSD-SA-15:16.openssh
+20150615:
+	The fix for the issue described in the 20150614 sendmail entry
+	below has been been committed in revision 284485.  The work
+	around described in that entry is no longer needed unless the
+	default setting is overridden by a confDH_PARAMETERS configuration
+	setting of '5' or pointing to a 512 bit DH parameter file.
 
-	Fix patch(1) shell injection vulnerability. [SA-15:14]
+20150614:
+	The import of openssl to address the FreeBSD-SA-15:10.openssl
+	security advisory includes a change which rejects handshakes
+	with DH parameters below 768 bits.  sendmail releases prior
+	to 8.15.2 (not yet released), defaulted to a 512 bit
+	DH parameter setting for client connections.  To work around
+	this interoperability, sendmail can be configured to use a
+	2048 bit DH parameter by:
 
-	Fix resource exhaustion in TCP reassembly. [SA-15:15]
+	1. Edit /etc/mail/`hostname`.mc 
+	2. If a setting for confDH_PARAMETERS does not exist or
+	   exists and is set to a string beginning with '5',
+	   replace it with '2'.
+	3. If a setting for confDH_PARAMETERS exists and is set to
+	   a file path, create a new file with:
+		openssl dhparam -out /path/to/file 2048
+	4. Rebuild the .cf file:
+		cd /etc/mail/; make; make install
+	5. Restart sendmail:
+		cd /etc/mail/; make restart
 
-	Fix OpenSSH multiple vulnerabilities. [SA-15:16]
+	A sendmail patch is coming, at which time this file will be
+	updated.
 
-20150721:	p15	FreeBSD-SA-15:13.tcp
+20150601:
+	chmod, chflags, chown and chgrp now affect symlinks in -R mode as
+	defined in symlink(7); previously symlinks were silently ignored.
 
-	Fix resource exhaustion due to sessions stuck in LAST_ACK state.
-	[SA-15:13]
+20150430:
+	The const qualifier has been removed from iconv(3) to comply with
+	POSIX.  The ports tree is aware of this from r384038 onwards.
 
-20150630:	p14	FreeBSD-EN-15:08.sendmail [revised]
-			FreeBSD-EN-15:09.xlocale
-			FreeBSD-EN-15:10.iconv
+20141215:
+	At svn r275807, The default linux compat kernel ABI has been adjusted
+	to 2.6.18 in support of the linux-c6 compat ports infrastructure
+	update.  If you wish to continue using the linux-f10 compat ports,
+	add compat.linux.osrelease=2.6.16 to your local sysctl.conf.  Users are
+	encouraged to update their linux-compat packages to linux-c6 during
+	their next update cycle.
+	
+	See ports/UPDATING 20141209 and 20141215 on migration to CentOS 6 ports.
 
-	Improvements to sendmail TLS/DH interoperability. [EN-15:08]
+20141205:
+	pjdfstest has been integrated into kyua as an opt-in test suite.
+	Please see share/doc/pjdfstest/README for a more details on how to
+	execute it.
 
-	Fix inconsistency between locale and rune locale states.
-	[EN-15:09]
-
-	Improved iconv(3) UTF-7 support. [EN-15:10]
-
-20150618:	p13	FreeBSD-EN-15:08.sendmail
-	Improvements to sendmail TLS/DH interoperability. [EN-15:08]
-
-20150612:	p12	FreeBSD-SA-15:10.openssl
-	Fix multiple vulnerabilities in OpenSSL.  [SA-15:10]
-
-20150609:	p11	FreeBSD-EN-15:06.file
-			FreeBSD-EN-15:07.zfs
-
-	Updated base system file(1) to 5.22 to address multiple denial
-	of service issues. [EN-15:06]
-
-	Improved reliability of ZFS when TRIM/UNMAP and/or L2ARC is used.
-	[EN-15:07]
-
-20150513:	p10	FreeBSD-EN-15:04.freebsd-update
-			FreeBSD-EN-15:05.ufs
-
-	Fix bug with freebsd-update(8) that does not ensure the previous
-	upgrade was completed. [EN-15:04]
-
-	Fix deadlock on reboot with UFS tuned with SU+J. [EN-15:05]
-
-20150407:	p9	FreeBSD-SA-15:04.igmp [revised]
-			FreeBSD-SA-15:07.ntp
-			FreeBSD-SA-15:08.bsdinstall
-			FreeBSD-SA-15:09.ipv6
-
-	Improved patch for SA-15:04.igmp.
-
-	Fix multiple vulnerabilities of ntp. [SA-15:07]
-
-	Fix bsdinstall(8) insecure default GELI keyfile permissions. [SA-15:08]
-
-	Fix Denial of Service with IPv6 Router Advertisements. [SA-15:09]
-
-20150320:	p8
-	Fix patch for SA-15:06.openssl.
-
-20150319:	p7	FreeBSD-SA-15:06.openssl
-	Fix multiple vulnerabilities in OpenSSL.  [SA-15:06]
-
-20150225:	p6	FreeBSD-SA-15:04.igmp
-			FreeBSD-EN-15:01.vt
-			FreeBSD-EN-15:02.openssl
-			FreeBSD-EN-15:03.freebsd-update
-
-	Fix integer overflow in IGMP protocol. [SA-15:04]
-
-	Fix vt(4) crash with improper ioctl parameters. [EN-15:01]
-
-	Updated base system OpenSSL to 1.0.1l. [EN-15:02]
-
-	Fix freebsd-update libraries update ordering issue. [EN-15:03]
-
-20150127:	p5	FreeBSD-SA-15:02.kmem
-			FreeBSD-SA-15:03.sctp
-
-	Fix SCTP SCTP_SS_VALUE kernel memory corruption and disclosure
-	vulnerability.  [SA-15:02]
-
-	Fix SCTP stream reset vulnerability.  [SA-15:03]
-
-20150114:	p4	FreeBSD-SA-15:01.openssl
-	Fix multiple vulnerabilities in OpenSSL.  [SA-15:01]
-
-20141223:	p3	FreeBSD-SA-14:31.ntp
-			FreeBSD-EN-14:13.freebsd-update
-
-	Fix multiple vulnerabilities in NTP suite.  [SA-14:31]
-	Fix directory deletion issue in freebsd-update.	 [EN-14:13]
-
-20141217:	p2	FreeBSD-SA-14:30.unbound
-	Fix unbound remote denial of service vulnerability.
-
-20141210:	p1	FreeBSD-SA-14:27.stdio
-			FreeBSD-SA-14:28.file
-
-	Fix buffer overflow in stdio. [SA-14:27]
-
-	Fix multiple vulnerabilities in file(1) and libmagic(3).
-	[SA-14:28]
+20141118:
+	10.1-RELEASE.
 
 20140904:
 	The ofwfb driver, used to provide a graphics console on PowerPC when

@@ -1,7 +1,7 @@
 #$FreeBSD$
 #	@(#)Makefile	8.1 (Berkeley) 6/2/93
 
-NO_MAN=
+MAN=
 
 .include <bsd.own.mk>
 MK_SSP=	no
@@ -51,7 +51,8 @@ CRUNCH_LIBS+= ${.OBJDIR}/../librescue/*.o
 CRUNCH_SRCDIRS+= bin
 CRUNCH_PROGS_bin= cat chflags chio chmod cp date dd df echo 	\
 	 ed expr getfacl hostname kenv kill ln ls mkdir mv	\
-	 pkill ps pwd realpath rm rmdir setfacl sh stty sync test
+	 pkill ps pwd realpath rm rmdir setfacl sh sleep stty	\
+	 sync test
 CRUNCH_LIBS+= -lcrypt -ledit -ljail -lkvm -ll -ltermcap -lutil
 CRUNCH_BUILDTOOLS+= bin/sh
 
@@ -130,7 +131,7 @@ CRUNCH_LIBS+= -lgeom -lbsdxml -lkiconv
 .if ${MK_OPENSSL} == "no"
 CRUNCH_LIBS+= -lmd
 .endif
-CRUNCH_LIBS+= -lsbuf -lufs -lz
+CRUNCH_LIBS+= -lmt -lsbuf -lufs -lz
 
 .if ${MACHINE_CPUARCH} == "i386"
 CRUNCH_PROGS_sbin+= bsdlabel sconfig fdisk
@@ -140,7 +141,6 @@ CRUNCH_ALIAS_bsdlabel= disklabel
 .endif
 
 .if ${MACHINE} == "pc98"
-CRUNCH_PROGS_sbin+= bsdlabel
 CRUNCH_SRCDIR_fdisk= $(.CURDIR)/../../sbin/fdisk_pc98
 .endif
 

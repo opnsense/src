@@ -406,8 +406,7 @@ int	ip6_process_hopopts(struct mbuf *, u_int8_t *, int, u_int32_t *,
 struct mbuf	**ip6_savecontrol_v4(struct inpcb *, struct mbuf *,
 	    struct mbuf **, int *);
 void	ip6_savecontrol(struct inpcb *, struct mbuf *, struct mbuf **);
-void	ip6_notify_pmtu(struct inpcb *, struct sockaddr_in6 *,
-			     u_int32_t *);
+void	ip6_notify_pmtu(struct inpcb *, struct sockaddr_in6 *, u_int32_t);
 int	ip6_sysctl(int *, u_int, void *, size_t *, void *, size_t);
 
 void	ip6_forward(struct mbuf *, int);
@@ -426,6 +425,9 @@ int	ip6_setpktopts(struct mbuf *, struct ip6_pktopts *,
 void	ip6_clearpktopts(struct ip6_pktopts *, int);
 struct ip6_pktopts *ip6_copypktopts(struct ip6_pktopts *, int);
 int	ip6_optlen(struct inpcb *);
+int	ip6_deletefraghdr(struct mbuf *, int, int);
+int	ip6_fragment(struct ifnet *, struct mbuf *, int, u_char, int,
+			uint32_t);
 
 int	route6_input(struct mbuf **, int *, int);
 
@@ -456,6 +458,7 @@ int	in6_selectroute_fib(struct sockaddr_in6 *, struct ip6_pktopts *,
 	    struct rtentry **, u_int);
 u_int32_t ip6_randomid(void);
 u_int32_t ip6_randomflowlabel(void);
+void in6_delayed_cksum(struct mbuf *m, uint32_t plen, u_short offset);
 #endif /* _KERNEL */
 
 #endif /* !_NETINET6_IP6_VAR_H_ */

@@ -44,7 +44,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
-#include <sys/capability.h>
+#include <sys/capsicum.h>
 #include <sys/fcntl.h>
 #include <sys/jail.h>
 #include <sys/lock.h>
@@ -392,6 +392,7 @@ compute_cn_lkflags(struct mount *mp, int lkflags, int cnflags)
 		lkflags &= ~LK_SHARED;
 		lkflags |= LK_EXCLUSIVE;
 	}
+	lkflags |= LK_NODDLKTREAT;
 	return (lkflags);
 }
 

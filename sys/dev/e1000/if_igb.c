@@ -977,7 +977,7 @@ igb_mq_start(struct ifnet *ifp, struct mbuf *m)
 	int 			i, err = 0;
 
 	/* Which queue to use */
-	if ((m->m_flags & M_FLOWID) != 0)
+	if (M_HASHTYPE_GET(m) != M_HASHTYPE_NONE)
 		i = m->m_pkthdr.flowid % adapter->num_queues;
 	else
 		i = curcpu % adapter->num_queues;
@@ -4397,7 +4397,6 @@ skip_head:
 
 	rxr->fmp = NULL;
 	rxr->lmp = NULL;
-	rxr->discard = FALSE;
 
 	bus_dmamap_sync(rxr->rxdma.dma_tag, rxr->rxdma.dma_map,
 	    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
@@ -4515,6 +4514,18 @@ igb_initialize_receive_units(struct adapter *adapter)
 		rctl &= ~E1000_RCTL_LPE;
 		srrctl |= 2048 >> E1000_SRRCTL_BSIZEPKT_SHIFT;
 		rctl |= E1000_RCTL_SZ_2048;
+	}
+
+	/*
+	 * If TX flow control is disabled and there's >1 queue defined,
+	 * enable DROP.
+	 *
+	 * This drops frames rather than hanging the RX MAC for all queues.
+	 */
+	if ((adapter->num_queues > 1) &&
+	    (adapter->fc == e1000_fc_none ||
+	     adapter->fc == e1000_fc_rx_pause)) {
+		srrctl |= E1000_SRRCTL_DROP_EN;
 	}
 
 	/* Setup the Base and Length of the Rx Descriptor Rings */
@@ -4861,15 +4872,16 @@ igb_rxeof(struct igb_queue *que, int count, int *done)
 		hdr = le16toh(cur->wb.lower.lo_dword.hs_rss.hdr_info);
 		eop = ((staterr & E1000_RXD_STAT_EOP) == E1000_RXD_STAT_EOP);
 
-		/* Make sure all segments of a bad packet are discarded */
-		if (((staterr & E1000_RXDEXT_ERR_FRAME_ERR_MASK) != 0) ||
-		    (rxr->discard)) {
+		/*
+		 * Free the frame (all segments) if we're at EOP and
+		 * it's an error.
+		 *
+		 * The datasheet states that EOP + status is only valid for
+		 * the final segment in a multi-segment frame.
+		 */
+		if (eop && ((staterr & E1000_RXDEXT_ERR_FRAME_ERR_MASK) != 0)) {
 			adapter->dropped_pkts++;
 			++rxr->rx_discarded;
-			if (!eop) /* Catch subsequent segs */
-				rxr->discard = TRUE;
-			else
-				rxr->discard = FALSE;
 			igb_rx_discard(rxr, i);
 			goto next_desc;
 		}
@@ -4958,10 +4970,27 @@ igb_rxeof(struct igb_queue *que, int count, int *done)
 				rxr->fmp->m_pkthdr.ether_vtag = vtag;
 				rxr->fmp->m_flags |= M_VLANTAG;
 			}
+
+			/*
+			 * In case of multiqueue, we have RXCSUM.PCSD bit set
+			 * and never cleared. This means we have RSS hash
+			 * available to be used.
+			 */
+			if (adapter->num_queues > 1) {
+				rxr->fmp->m_pkthdr.flowid = 
+				    le32toh(cur->wb.lower.hi_dword.rss);
+				/*
+				 * Full RSS support is not avilable in
+				 * FreeBSD 10 so setting the hash type to
+				 * OPAQUE.
+				 */
+				M_HASHTYPE_SET(rxr->fmp, M_HASHTYPE_OPAQUE);
+			} else {
 #ifndef IGB_LEGACY_TX
-			rxr->fmp->m_pkthdr.flowid = que->msix;
-			rxr->fmp->m_flags |= M_FLOWID;
+				rxr->fmp->m_pkthdr.flowid = que->msix;
+				M_HASHTYPE_SET(rxr->fmp, M_HASHTYPE_OPAQUE);
 #endif
+			}
 			sendmp = rxr->fmp;
 			/* Make sure to set M_PKTHDR. */
 			sendmp->m_flags |= M_PKTHDR;
@@ -5410,8 +5439,14 @@ igb_update_stats_counters(struct adapter *adapter)
 	stats->roc += E1000_READ_REG(hw, E1000_ROC);
 	stats->rjc += E1000_READ_REG(hw, E1000_RJC);
 
-	stats->tor += E1000_READ_REG(hw, E1000_TORH);
-	stats->tot += E1000_READ_REG(hw, E1000_TOTH);
+	stats->mgprc += E1000_READ_REG(hw, E1000_MGTPRC);
+	stats->mgpdc += E1000_READ_REG(hw, E1000_MGTPDC);
+	stats->mgptc += E1000_READ_REG(hw, E1000_MGTPTC);
+
+	stats->tor += E1000_READ_REG(hw, E1000_TORL) +
+	    ((u64)E1000_READ_REG(hw, E1000_TORH) << 32);
+	stats->tot += E1000_READ_REG(hw, E1000_TOTL) +
+	    ((u64)E1000_READ_REG(hw, E1000_TOTH) << 32);
 
 	stats->tpr += E1000_READ_REG(hw, E1000_TPR);
 	stats->tpt += E1000_READ_REG(hw, E1000_TPT);
@@ -5590,8 +5625,8 @@ igb_add_hw_stats(struct adapter *adapter)
 	char namebuf[QUEUE_NAME_LEN];
 
 	/* Driver Statistics */
-	SYSCTL_ADD_UINT(ctx, child, OID_AUTO, "link_irq", 
-			CTLFLAG_RD, &adapter->link_irq, 0,
+	SYSCTL_ADD_ULONG(ctx, child, OID_AUTO, "link_irq", 
+			CTLFLAG_RD, &adapter->link_irq,
 			"Link MSIX IRQ Handled");
 	SYSCTL_ADD_ULONG(ctx, child, OID_AUTO, "dropped", 
 			CTLFLAG_RD, &adapter->dropped_pkts,
@@ -5640,17 +5675,17 @@ igb_add_hw_stats(struct adapter *adapter)
 		queue_list = SYSCTL_CHILDREN(queue_node);
 
 		SYSCTL_ADD_PROC(ctx, queue_list, OID_AUTO, "interrupt_rate", 
-				CTLFLAG_RD, &adapter->queues[i],
+				CTLTYPE_UINT | CTLFLAG_RD, &adapter->queues[i],
 				sizeof(&adapter->queues[i]),
 				igb_sysctl_interrupt_rate_handler,
 				"IU", "Interrupt Rate");
 
 		SYSCTL_ADD_PROC(ctx, queue_list, OID_AUTO, "txd_head", 
-				CTLFLAG_RD, adapter, E1000_TDH(txr->me),
+				CTLTYPE_UINT | CTLFLAG_RD, adapter, E1000_TDH(txr->me),
 				igb_sysctl_reg_handler, "IU",
  				"Transmit Descriptor Head");
 		SYSCTL_ADD_PROC(ctx, queue_list, OID_AUTO, "txd_tail", 
-				CTLFLAG_RD, adapter, E1000_TDT(txr->me),
+				CTLTYPE_UINT | CTLFLAG_RD, adapter, E1000_TDT(txr->me),
 				igb_sysctl_reg_handler, "IU",
  				"Transmit Descriptor Tail");
 		SYSCTL_ADD_QUAD(ctx, queue_list, OID_AUTO, "no_desc_avail", 
@@ -5661,11 +5696,11 @@ igb_add_hw_stats(struct adapter *adapter)
 				"Queue Packets Transmitted");
 
 		SYSCTL_ADD_PROC(ctx, queue_list, OID_AUTO, "rxd_head", 
-				CTLFLAG_RD, adapter, E1000_RDH(rxr->me),
+				CTLTYPE_UINT | CTLFLAG_RD, adapter, E1000_RDH(rxr->me),
 				igb_sysctl_reg_handler, "IU",
 				"Receive Descriptor Head");
 		SYSCTL_ADD_PROC(ctx, queue_list, OID_AUTO, "rxd_tail", 
-				CTLFLAG_RD, adapter, E1000_RDT(rxr->me),
+				CTLTYPE_UINT | CTLFLAG_RD, adapter, E1000_RDT(rxr->me),
 				igb_sysctl_reg_handler, "IU",
 				"Receive Descriptor Tail");
 		SYSCTL_ADD_QUAD(ctx, queue_list, OID_AUTO, "rx_packets",
@@ -5738,6 +5773,9 @@ igb_add_hw_stats(struct adapter *adapter)
 	SYSCTL_ADD_QUAD(ctx, stat_list, OID_AUTO, "missed_packets",
 			CTLFLAG_RD, &stats->mpc,
 			"Missed Packets");
+	SYSCTL_ADD_QUAD(ctx, stat_list, OID_AUTO, "recv_length_errors",
+			CTLFLAG_RD, &stats->rlec,
+			"Receive Length Errors");
 	SYSCTL_ADD_QUAD(ctx, stat_list, OID_AUTO, "recv_no_buff",
 			CTLFLAG_RD, &stats->rnbc,
 			"Receive No Buffers");
@@ -5746,7 +5784,7 @@ igb_add_hw_stats(struct adapter *adapter)
 			"Receive Undersize");
 	SYSCTL_ADD_QUAD(ctx, stat_list, OID_AUTO, "recv_fragmented",
 			CTLFLAG_RD, &stats->rfc,
-			"Fragmented Packets Received ");
+			"Fragmented Packets Received");
 	SYSCTL_ADD_QUAD(ctx, stat_list, OID_AUTO, "recv_oversize",
 			CTLFLAG_RD, &stats->roc,
 			"Oversized Packets Received");
@@ -5762,6 +5800,9 @@ igb_add_hw_stats(struct adapter *adapter)
 	SYSCTL_ADD_QUAD(ctx, stat_list, OID_AUTO, "alignment_errs",
 			CTLFLAG_RD, &stats->algnerrc,
 			"Alignment Errors");
+	SYSCTL_ADD_QUAD(ctx, stat_list, OID_AUTO, "tx_no_crs",
+			CTLFLAG_RD, &stats->tncrs,
+			"Transmit with No CRS");
 	/* On 82575 these are collision counts */
 	SYSCTL_ADD_QUAD(ctx, stat_list, OID_AUTO, "coll_ext_errs",
 			CTLFLAG_RD, &stats->cexterr,
@@ -5778,10 +5819,22 @@ igb_add_hw_stats(struct adapter *adapter)
 	SYSCTL_ADD_QUAD(ctx, stat_list, OID_AUTO, "xoff_txd",
 			CTLFLAG_RD, &stats->xofftxc,
 			"XOFF Transmitted");
+	SYSCTL_ADD_QUAD(ctx, stat_list, OID_AUTO, "unsupported_fc_recvd",
+			CTLFLAG_RD, &stats->fcruc,
+			"Unsupported Flow Control Received");
+	SYSCTL_ADD_QUAD(ctx, stat_list, OID_AUTO, "mgmt_pkts_recvd",
+			CTLFLAG_RD, &stats->mgprc,
+			"Management Packets Received");
+	SYSCTL_ADD_QUAD(ctx, stat_list, OID_AUTO, "mgmt_pkts_drop",
+			CTLFLAG_RD, &stats->mgpdc,
+			"Management Packets Dropped");
+	SYSCTL_ADD_QUAD(ctx, stat_list, OID_AUTO, "mgmt_pkts_txd",
+			CTLFLAG_RD, &stats->mgptc,
+			"Management Packets Transmitted");
 	/* Packet Reception Stats */
 	SYSCTL_ADD_QUAD(ctx, stat_list, OID_AUTO, "total_pkts_recvd",
 			CTLFLAG_RD, &stats->tpr,
-			"Total Packets Received ");
+			"Total Packets Received");
 	SYSCTL_ADD_QUAD(ctx, stat_list, OID_AUTO, "good_pkts_recvd",
 			CTLFLAG_RD, &stats->gprc,
 			"Good Packets Received");
@@ -5793,7 +5846,7 @@ igb_add_hw_stats(struct adapter *adapter)
 			"Multicast Packets Received");
 	SYSCTL_ADD_QUAD(ctx, stat_list, OID_AUTO, "rx_frames_64",
 			CTLFLAG_RD, &stats->prc64,
-			"64 byte frames received ");
+			"64 byte frames received");
 	SYSCTL_ADD_QUAD(ctx, stat_list, OID_AUTO, "rx_frames_65_127",
 			CTLFLAG_RD, &stats->prc127,
 			"65-127 byte frames received");
@@ -5811,12 +5864,18 @@ igb_add_hw_stats(struct adapter *adapter)
 			"1023-1522 byte frames received");
  	SYSCTL_ADD_QUAD(ctx, stat_list, OID_AUTO, "good_octets_recvd", 
  			CTLFLAG_RD, &stats->gorc, 
- 			"Good Octets Received"); 
+ 			"Good Octets Received");
+ 	SYSCTL_ADD_QUAD(ctx, stat_list, OID_AUTO, "total_octets_recvd", 
+ 			CTLFLAG_RD, &stats->tor, 
+ 			"Total Octets Received");
 
 	/* Packet Transmission Stats */
  	SYSCTL_ADD_QUAD(ctx, stat_list, OID_AUTO, "good_octets_txd", 
  			CTLFLAG_RD, &stats->gotc, 
  			"Good Octets Transmitted"); 
+ 	SYSCTL_ADD_QUAD(ctx, stat_list, OID_AUTO, "total_octets_txd", 
+ 			CTLFLAG_RD, &stats->tot, 
+ 			"Total Octets Transmitted");
 	SYSCTL_ADD_QUAD(ctx, stat_list, OID_AUTO, "total_pkts_txd",
 			CTLFLAG_RD, &stats->tpt,
 			"Total Packets Transmitted");
@@ -5831,7 +5890,7 @@ igb_add_hw_stats(struct adapter *adapter)
 			"Multicast Packets Transmitted");
 	SYSCTL_ADD_QUAD(ctx, stat_list, OID_AUTO, "tx_frames_64",
 			CTLFLAG_RD, &stats->ptc64,
-			"64 byte frames transmitted ");
+			"64 byte frames transmitted");
 	SYSCTL_ADD_QUAD(ctx, stat_list, OID_AUTO, "tx_frames_65_127",
 			CTLFLAG_RD, &stats->ptc127,
 			"65-127 byte frames transmitted");
@@ -6015,7 +6074,7 @@ igb_set_sysctl_value(struct adapter *adapter, const char *name,
 	*limit = value;
 	SYSCTL_ADD_INT(device_get_sysctl_ctx(adapter->dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(adapter->dev)),
-	    OID_AUTO, name, CTLTYPE_INT|CTLFLAG_RW, limit, value, description);
+	    OID_AUTO, name, CTLFLAG_RW, limit, value, description);
 }
 
 /*
@@ -6053,6 +6112,7 @@ igb_set_flowcntl(SYSCTL_HANDLER_ARGS)
 
 	adapter->hw.fc.current_mode = adapter->hw.fc.requested_mode;
 	e1000_force_mac_fc(&adapter->hw);
+	/* XXX TODO: update DROP_EN on each RX queue if appropriate */
 	return (error);
 }
 

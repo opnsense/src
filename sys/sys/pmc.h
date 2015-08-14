@@ -94,6 +94,7 @@
 	__PMC_CPU(INTEL_ATOM_SILVERMONT, 0x92,	"Intel Atom Silvermont")    \
 	__PMC_CPU(INTEL_NEHALEM_EX, 0x93,   "Intel Nehalem Xeon 7500")	\
 	__PMC_CPU(INTEL_WESTMERE_EX, 0x94,   "Intel Westmere Xeon E7")	\
+        __PMC_CPU(INTEL_HASWELL_XEON, 0x95,   "Intel Haswell Xeon E5 v3") \
 	__PMC_CPU(INTEL_XSCALE,	0x100,	"Intel XScale")		\
 	__PMC_CPU(MIPS_24K,     0x200,  "MIPS 24K")		\
 	__PMC_CPU(MIPS_OCTEON,  0x201,  "Cavium Octeon")	\
@@ -349,7 +350,7 @@ enum pmc_ops {
 #define	PMC_F_NEEDS_LOGFILE	0x00020000 /*needs log file */
 #define	PMC_F_ATTACH_DONE	0x00040000 /*attached at least once */
 
-#define	PMC_CALLCHAIN_DEPTH_MAX	32
+#define	PMC_CALLCHAIN_DEPTH_MAX	128
 
 #define	PMC_CC_F_USERSPACE	0x01	   /*userspace callchain*/
 
@@ -605,7 +606,7 @@ struct pmc_op_getdyneventinfo {
 #define	PMC_LOG_BUFFER_SIZE			4
 #define	PMC_NLOGBUFFERS				1024
 #define	PMC_NSAMPLES				1024
-#define	PMC_CALLCHAIN_DEPTH			16
+#define	PMC_CALLCHAIN_DEPTH			32
 
 #define PMC_SYSCTL_NAME_PREFIX "kern." PMC_MODULE_NAME "."
 
@@ -989,7 +990,8 @@ extern struct pmc_cpu **pmc_pcpu;
 /* driver statistics */
 extern struct pmc_op_getdriverstats pmc_stats;
 
-#if	defined(DEBUG)
+#if	defined(HWPMC_DEBUG)
+#include <sys/ktr.h>
 
 /* debug flags, major flag groups */
 struct pmc_debugflags {
@@ -1006,14 +1008,42 @@ struct pmc_debugflags {
 
 extern struct pmc_debugflags pmc_debugflags;
 
+#define	KTR_PMC			KTR_SUBSYS
+
 #define	PMC_DEBUG_STRSIZE		128
 #define	PMC_DEBUG_DEFAULT_FLAGS		{ 0, 0, 0, 0, 0, 0, 0, 0 }
 
-#define	PMCDBG(M,N,L,F,...) do {					\
+#define	PMCDBG0(M, N, L, F) do {					\
 	if (pmc_debugflags.pdb_ ## M & (1 << PMC_DEBUG_MIN_ ## N))	\
-		printf(#M ":" #N ":" #L  ": " F "\n", __VA_ARGS__);	\
+		CTR0(KTR_PMC, #M ":" #N ":" #L  ": " F);		\
 } while (0)
-
+#define	PMCDBG1(M, N, L, F, p1) do {					\
+	if (pmc_debugflags.pdb_ ## M & (1 << PMC_DEBUG_MIN_ ## N))	\
+		CTR1(KTR_PMC, #M ":" #N ":" #L  ": " F, p1);		\
+} while (0)
+#define	PMCDBG2(M, N, L, F, p1, p2) do {				\
+	if (pmc_debugflags.pdb_ ## M & (1 << PMC_DEBUG_MIN_ ## N))	\
+		CTR2(KTR_PMC, #M ":" #N ":" #L  ": " F, p1, p2);	\
+} while (0)
+#define	PMCDBG3(M, N, L, F, p1, p2, p3) do {				\
+	if (pmc_debugflags.pdb_ ## M & (1 << PMC_DEBUG_MIN_ ## N))	\
+		CTR3(KTR_PMC, #M ":" #N ":" #L  ": " F, p1, p2, p3);	\
+} while (0)
+#define	PMCDBG4(M, N, L, F, p1, p2, p3, p4) do {			\
+	if (pmc_debugflags.pdb_ ## M & (1 << PMC_DEBUG_MIN_ ## N))	\
+		CTR4(KTR_PMC, #M ":" #N ":" #L  ": " F, p1, p2, p3, p4);\
+} while (0)
+#define	PMCDBG5(M, N, L, F, p1, p2, p3, p4, p5) do {			\
+	if (pmc_debugflags.pdb_ ## M & (1 << PMC_DEBUG_MIN_ ## N))	\
+		CTR5(KTR_PMC, #M ":" #N ":" #L  ": " F, p1, p2, p3, p4,	\
+		    p5);						\
+} while (0)
+#define	PMCDBG6(M, N, L, F, p1, p2, p3, p4, p5, p6) do {		\
+	if (pmc_debugflags.pdb_ ## M & (1 << PMC_DEBUG_MIN_ ## N))	\
+		CTR6(KTR_PMC, #M ":" #N ":" #L  ": " F, p1, p2, p3, p4,	\
+		    p5, p6);						\
+} while (0)
+	
 /* Major numbers */
 #define	PMC_DEBUG_MAJ_CPU		0 /* cpu switches */
 #define	PMC_DEBUG_MAJ_CSW		1 /* context switches */
@@ -1079,7 +1109,13 @@ extern struct pmc_debugflags pmc_debugflags;
 #define	PMC_DEBUG_MIN_CLO	       12 /* close */
 
 #else
-#define	PMCDBG(M,N,L,F,...)		/* nothing */
+#define	PMCDBG0(M, N, L, F)		/* nothing */
+#define	PMCDBG1(M, N, L, F, p1)
+#define	PMCDBG2(M, N, L, F, p1, p2)
+#define	PMCDBG3(M, N, L, F, p1, p2, p3)
+#define	PMCDBG4(M, N, L, F, p1, p2, p3, p4)
+#define	PMCDBG5(M, N, L, F, p1, p2, p3, p4, p5)
+#define	PMCDBG6(M, N, L, F, p1, p2, p3, p4, p5, p6)
 #endif
 
 /* declare a dedicated memory pool */

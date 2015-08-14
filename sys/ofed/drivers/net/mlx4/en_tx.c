@@ -31,7 +31,7 @@
  *
  */
 
-#include <asm/page.h>
+#include <linux/page.h>
 #include <linux/mlx4/cq.h>
 #include <linux/slab.h>
 #include <linux/mlx4/qp.h>
@@ -710,18 +710,21 @@ u16 mlx4_en_select_queue(struct net_device *dev, struct mbuf *mb)
 {
 	struct mlx4_en_priv *priv = netdev_priv(dev);
 	u32 rings_p_up = priv->num_tx_rings_p_up;
-	u32 vlan_tag = 0;
 	u32 up = 0;
 	u32 queue_index;
 
+#if (MLX4_EN_NUM_UP > 1)
 	/* Obtain VLAN information if present */
 	if (mb->m_flags & M_VLANTAG) {
-		vlan_tag = mb->m_pkthdr.ether_vtag;
-	        up = (vlan_tag >> 13);
+		u32 vlan_tag = mb->m_pkthdr.ether_vtag;
+	        up = (vlan_tag >> 13) % MLX4_EN_NUM_UP;
 	}
-
-	/* hash mbuf */
-	queue_index = mlx4_en_hashmbuf(MLX4_F_HASHL3 | MLX4_F_HASHL4, mb, hashrandom);
+#endif
+	/* check if flowid is set */
+	if (M_HASHTYPE_GET(mb) != M_HASHTYPE_NONE)
+		queue_index = mb->m_pkthdr.flowid;
+	else
+		queue_index = mlx4_en_hashmbuf(MLX4_F_HASHL3 | MLX4_F_HASHL4, mb, hashrandom);
 
 	return ((queue_index % rings_p_up) + (up * rings_p_up));
 }
@@ -1028,9 +1031,6 @@ mlx4_en_transmit_locked(struct ifnet *dev, int tx_ind, struct mbuf *m)
 		}
 		drbr_advance(dev, ring->br);
 		enqueued++;
-		dev->if_obytes += next->m_pkthdr.len;
-		if (next->m_flags & M_MCAST)
-			dev->if_omcasts++;
 		if ((dev->if_drv_flags & IFF_DRV_RUNNING) == 0)
 			break;
 	}
@@ -1069,15 +1069,11 @@ mlx4_en_transmit(struct ifnet *dev, struct mbuf *m)
 	struct mlx4_en_priv *priv = netdev_priv(dev);
 	struct mlx4_en_tx_ring *ring;
 	struct mlx4_en_cq *cq;
-	int i = 0, err = 0;
+	int i, err = 0;
 
-	/* Which queue to use */
-	if ((m->m_flags & (M_FLOWID | M_VLANTAG)) == M_FLOWID) {
-		i = m->m_pkthdr.flowid % (priv->tx_ring_num - 1);
-	}
-	else {
-		i = mlx4_en_select_queue(dev, m);
-	}
+	/* Compute which queue to use */
+	i = mlx4_en_select_queue(dev, m);
+
 	ring = priv->tx_ring[i];
 
 	if (spin_trylock(&ring->tx_lock)) {

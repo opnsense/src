@@ -702,6 +702,12 @@ re_set_rxmode(struct rl_softc *sc)
 		rxfilt |= RL_RXCFG_RX_MULTI;
 	}
 
+	if  (sc->rl_hwrev->rl_rev == RL_HWREV_8168F) {
+		/* Disable multicast filtering due to silicon bug. */
+		hashes[0] = 0xffffffff;
+		hashes[1] = 0xffffffff;
+	}
+
 done:
 	CSR_WRITE_4(sc, RL_MAR0, hashes[0]);
 	CSR_WRITE_4(sc, RL_MAR4, hashes[1]);
@@ -3189,11 +3195,6 @@ re_init_locked(struct rl_softc *sc)
 		    ~0x00080000);
 
 	/*
-	 * Enable transmit and receive.
-	 */
-	CSR_WRITE_1(sc, RL_COMMAND, RL_CMD_TX_ENB|RL_CMD_RX_ENB);
-
-	/*
 	 * Set the initial TX configuration.
 	 */
 	if (sc->rl_testmode) {
@@ -3219,6 +3220,11 @@ re_init_locked(struct rl_softc *sc)
 		CSR_WRITE_2(sc, RL_INTRMOD, 0x5100);
 	}
 
+	/*
+	 * Enable transmit and receive.
+	 */
+	CSR_WRITE_1(sc, RL_COMMAND, RL_CMD_TX_ENB | RL_CMD_RX_ENB);
+
 #ifdef DEVICE_POLLING
 	/*
 	 * Disable interrupts if we are polling.
@@ -3242,10 +3248,6 @@ re_init_locked(struct rl_softc *sc)
 
 	/* Start RX/TX process. */
 	CSR_WRITE_4(sc, RL_MISSEDPKT, 0);
-#ifdef notdef
-	/* Enable receiver and transmitter. */
-	CSR_WRITE_1(sc, RL_COMMAND, RL_CMD_TX_ENB|RL_CMD_RX_ENB);
-#endif
 
 	/*
 	 * Initialize the timer interrupt register so that

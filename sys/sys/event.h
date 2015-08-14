@@ -132,6 +132,12 @@ struct kevent {
 #define	NOTE_TRACKERR	0x00000002		/* could not track child */
 #define	NOTE_CHILD	0x00000004		/* am a child process */
 
+/* additional flags for EVFILE_TIMER */
+#define NOTE_SECONDS		0x00000001	/* data is seconds */
+#define NOTE_MSECONDS		0x00000002	/* data is milliseconds */
+#define NOTE_USECONDS		0x00000004	/* data is microseconds */
+#define NOTE_NSECONDS		0x00000008	/* data is nanoseconds */
+
 struct knote;
 SLIST_HEAD(klist, knote);
 struct kqueue;
@@ -214,6 +220,7 @@ struct knote {
 		struct		proc *p_proc;	/* proc pointer */
 		struct		aiocblist *p_aio;	/* AIO job pointer */
 		struct		aioliojob *p_lio;	/* LIO job pointer */ 
+		sbintime_t	*p_nexttime;	/* next timer event fires at */
 	} kn_ptr;
 	struct			filterops *kn_fop;
 	void			*kn_hook;

@@ -48,7 +48,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/signalvar.h>
 #include <sys/vnode.h>
 #include <sys/acct.h>
-#include <sys/capability.h>
+#include <sys/capsicum.h>
 #include <sys/condvar.h>
 #include <sys/event.h>
 #include <sys/fcntl.h>
@@ -658,9 +658,10 @@ kern_sigaction(td, sig, act, oact, flags)
 
 	if (!_SIG_VALID(sig))
 		return (EINVAL);
-	if (act != NULL && (act->sa_flags & ~(SA_ONSTACK | SA_RESTART |
-	    SA_RESETHAND | SA_NOCLDSTOP | SA_NODEFER | SA_NOCLDWAIT |
-	    SA_SIGINFO)) != 0)
+	if (act != NULL && act->sa_handler != SIG_DFL &&
+	    act->sa_handler != SIG_IGN && (act->sa_flags & ~(SA_ONSTACK |
+	    SA_RESTART | SA_RESETHAND | SA_NOCLDSTOP | SA_NODEFER |
+	    SA_NOCLDWAIT | SA_SIGINFO)) != 0)
 		return (EINVAL);
 
 	PROC_LOCK(p);
@@ -2370,9 +2371,12 @@ tdsigwakeup(struct thread *td, int sig, sig_t action, int intrval)
 	thread_lock(td);
 	/*
 	 * Bring the priority of a thread up if we want it to get
-	 * killed in this lifetime.
+	 * killed in this lifetime.  Be careful to avoid bumping the
+	 * priority of the idle thread, since we still allow to signal
+	 * kernel processes.
 	 */
-	if (action == SIG_DFL && (prop & SA_KILL) && td->td_priority > PUSER)
+	if (action == SIG_DFL && (prop & SA_KILL) != 0 &&
+	    td->td_priority > PUSER && !TD_IS_IDLETHREAD(td))
 		sched_prio(td, PUSER);
 	if (TD_ON_SLEEPQ(td)) {
 		/*
@@ -2410,7 +2414,7 @@ tdsigwakeup(struct thread *td, int sig, sig_t action, int intrval)
 		/*
 		 * Give low priority threads a better chance to run.
 		 */
-		if (td->td_priority > PUSER)
+		if (td->td_priority > PUSER && !TD_IS_IDLETHREAD(td))
 			sched_prio(td, PUSER);
 
 		wakeup_swapper = sleepq_abort(td, intrval);
@@ -2480,6 +2484,8 @@ ptracestop(struct thread *td, int sig)
 
 	td->td_dbgflags |= TDB_XSIG;
 	td->td_xsig = sig;
+	CTR4(KTR_PTRACE, "ptracestop: tid %d (pid %d) flags %#x sig %d",
+	    td->td_tid, p->p_pid, td->td_dbgflags, sig);
 	PROC_SLOCK(p);
 	while ((p->p_flag & P_TRACED) && (td->td_dbgflags & TDB_XSIG)) {
 		if (p->p_flag & P_SINGLE_EXIT) {
@@ -2500,7 +2506,7 @@ ptracestop(struct thread *td, int sig)
 			cv_broadcast(&p->p_dbgwait);
 		}
 stopme:
-		thread_suspend_switch(td);
+		thread_suspend_switch(td, p);
 		if (p->p_xthread == td)
 			p->p_xthread = NULL;
 		if (!(p->p_flag & P_TRACED))
@@ -2595,15 +2601,18 @@ sigdeferstop(void)
  * not immediately suspend if a stop was posted.  Instead, the thread
  * will suspend either via ast() or a subsequent interruptible sleep.
  */
-void
-sigallowstop()
+int
+sigallowstop(void)
 {
 	struct thread *td;
+	int prev;
 
 	td = curthread;
 	thread_lock(td);
+	prev = (td->td_flags & TDF_SBDRY) != 0;
 	td->td_flags &= ~TDF_SBDRY;
 	thread_unlock(td);
+	return (prev);
 }
 
 /*
@@ -2761,7 +2770,7 @@ issignal(struct thread *td)
 				p->p_xstat = sig;
 				PROC_SLOCK(p);
 				sig_suspend_threads(td, p, 0);
-				thread_suspend_switch(td);
+				thread_suspend_switch(td, p);
 				PROC_SUNLOCK(p);
 				mtx_lock(&ps->ps_mtx);
 				break;
@@ -2942,7 +2951,7 @@ sigexit(td, sig)
 	 * XXX If another thread attempts to single-thread before us
 	 *     (e.g. via fork()), we won't get a dump at all.
 	 */
-	if ((sigprop(sig) & SA_CORE) && (thread_single(SINGLE_NO_EXIT) == 0)) {
+	if ((sigprop(sig) & SA_CORE) && thread_single(p, SINGLE_NO_EXIT) == 0) {
 		p->p_sig = sig;
 		/*
 		 * Log signals which would cause core dumps
@@ -3177,7 +3186,8 @@ corefile_open(const char *comm, uid_t uid, pid_t pid, struct thread *td,
 	sbuf_delete(&sb);
 
 	cmode = S_IRUSR | S_IWUSR;
-	oflags = VN_OPEN_NOAUDIT | (capmode_coredump ? VN_OPEN_NOCAPCHECK : 0);
+	oflags = VN_OPEN_NOAUDIT | VN_OPEN_NAMECACHE |
+	    (capmode_coredump ? VN_OPEN_NOCAPCHECK : 0);
 
 	/*
 	 * If the core format has a %I in it, then we need to check
@@ -3252,7 +3262,8 @@ coredump(struct thread *td)
 	MPASS((p->p_flag & P_HADTHREADS) == 0 || p->p_singlethread == td);
 	_STOPEVENT(p, S_CORE, 0);
 
-	if (!do_coredump || (!sugid_coredump && (p->p_flag & P_SUGID) != 0)) {
+	if (!do_coredump || (!sugid_coredump && (p->p_flag & P_SUGID) != 0) ||
+	    (p->p_flag2 & P2_NOTRACE) != 0) {
 		PROC_UNLOCK(p);
 		return (EFAULT);
 	}

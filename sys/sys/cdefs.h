@@ -40,6 +40,9 @@
  * Testing against Clang-specific extensions.
  */
 
+#ifndef	__has_attribute
+#define	__has_attribute(x)	0
+#endif
 #ifndef	__has_extension
 #define	__has_extension		__has_feature
 #endif
@@ -89,7 +92,7 @@
 #  undef __GNUCLIKE_BUILTIN_CONSTANT_P
 # endif
 
-#if (__GNUC_MINOR__ > 95 || __GNUC__ >= 3) && !defined(__INTEL_COMPILER)
+#if (__GNUC_MINOR__ > 95 || __GNUC__ >= 3)
 # define __GNUCLIKE_BUILTIN_VARARGS 1
 # define __GNUCLIKE_BUILTIN_STDARG 1
 # define __GNUCLIKE_BUILTIN_VAALIST 1
@@ -210,7 +213,9 @@
 #define	__packed
 #define	__aligned(x)
 #define	__section(x)
+#define	__weak_symbol
 #else
+#define	__weak_symbol	__attribute__((__weak__))
 #if !__GNUC_PREREQ__(2, 5) && !defined(__INTEL_COMPILER)
 #define	__dead2
 #define	__pure2
@@ -240,7 +245,7 @@
 #define __aligned(x)	__attribute__((__aligned__(x)))
 #define __section(x)	__attribute__((__section__(x)))
 #endif
-#endif
+#endif /* lint */
 
 #if !__GNUC_PREREQ__(2, 95)
 #define	__alignof(x)	__offsetof(struct { char __a; x __b; }, __b)
@@ -250,7 +255,7 @@
  * Keywords added in C11.
  */
 
-#if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 201112L
+#if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 201112L || defined(lint)
 
 #if !__has_extension(c_alignas)
 #if (defined(__cplusplus) && __cplusplus >= 201103L) || \
@@ -289,7 +294,8 @@
 #elif defined(__COUNTER__)
 #define	_Static_assert(x, y)	__Static_assert(x, __COUNTER__)
 #define	__Static_assert(x, y)	___Static_assert(x, y)
-#define	___Static_assert(x, y)	typedef char __assert_ ## y[(x) ? 1 : -1]
+#define	___Static_assert(x, y)	typedef char __assert_ ## y[(x) ? 1 : -1] \
+				__unused
 #else
 #define	_Static_assert(x, y)	struct __hack
 #endif
@@ -353,8 +359,10 @@
 
 #if __GNUC_PREREQ__(3, 4)
 #define	__fastcall	__attribute__((__fastcall__))
+#define	__result_use_check	__attribute__((__warn_unused_result__))
 #else
 #define	__fastcall
+#define	__result_use_check
 #endif
 
 #if __GNUC_PREREQ__(4, 1)
@@ -433,7 +441,7 @@
 #define __predict_false(exp)    (exp)
 #endif
 
-#if __GNUC_PREREQ__(4, 2)
+#if __GNUC_PREREQ__(4, 0)
 #define	__hidden	__attribute__((__visibility__("hidden")))
 #define	__exported	__attribute__((__visibility__("default")))
 #else

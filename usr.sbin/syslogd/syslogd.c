@@ -557,7 +557,8 @@ main(int argc, char *argv[])
 	if (finet) {
 		if (SecureMode) {
 			for (i = 0; i < *finet; i++) {
-				if (shutdown(finet[i+1], SHUT_RD) < 0) {
+				if (shutdown(finet[i+1], SHUT_RD) < 0 &&
+				    errno != ENOTCONN) {
 					logerror("shutdown");
 					if (!Debug)
 						die(0);
@@ -1020,7 +1021,7 @@ logmsg(int pri, const char *msg, const char *from, int flags)
 		 */
 		if (no_compress - (f->f_type != F_PIPE) < 1 &&
 		    (flags & MARK) == 0 && msglen == f->f_prevlen &&
-		    f->f_prevline && !strcmp(msg, f->f_prevline) &&
+		    !strcmp(msg, f->f_prevline) &&
 		    !strcasecmp(from, f->f_prevhost)) {
 			(void)strlcpy(f->f_lasttime, timestamp,
 				sizeof(f->f_lasttime));
@@ -1175,11 +1176,9 @@ fprintlog(struct filed *f, int flags, const char *msg)
 		v->iov_base = repbuf;
 		v->iov_len = snprintf(repbuf, sizeof repbuf,
 		    "last message repeated %d times", f->f_prevcount);
-	} else if (f->f_prevline) {
+	} else {
 		v->iov_base = f->f_prevline;
 		v->iov_len = f->f_prevlen;
-	} else {
-		return;
 	}
 	v++;
 
@@ -1542,7 +1541,7 @@ init(int signo)
 	struct filed *f, *next, **nextp;
 	char *p;
 	char cline[LINE_MAX];
- 	char prog[NAME_MAX+1];
+ 	char prog[LINE_MAX];
 	char host[MAXHOSTNAMELEN];
 	char oldLocalHostName[MAXHOSTNAMELEN];
 	char hostMsg[2*MAXHOSTNAMELEN+40];
@@ -1664,7 +1663,7 @@ init(int signo)
 				(void)strlcpy(prog, "*", sizeof(prog));
 				continue;
 			}
-			for (i = 0; i < NAME_MAX; i++) {
+			for (i = 0; i < LINE_MAX - 1; i++) {
 				if (!isprint(p[i]) || isspace(p[i]))
 					break;
 				prog[i] = p[i];

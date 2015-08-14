@@ -1203,21 +1203,25 @@ kern_proc_out(struct proc *p, struct sbuf *sb, int flags)
 #ifdef COMPAT_FREEBSD32
 		if ((flags & KERN_PROC_MASK32) != 0) {
 			freebsd32_kinfo_proc_out(&ki, &ki32);
-			error = sbuf_bcat(sb, &ki32, sizeof(ki32));
+			if (sbuf_bcat(sb, &ki32, sizeof(ki32)) != 0)
+				error = ENOMEM;
 		} else
 #endif
-			error = sbuf_bcat(sb, &ki, sizeof(ki));
+			if (sbuf_bcat(sb, &ki, sizeof(ki)) != 0)
+				error = ENOMEM;
 	} else {
 		FOREACH_THREAD_IN_PROC(p, td) {
 			fill_kinfo_thread(td, &ki, 1);
 #ifdef COMPAT_FREEBSD32
 			if ((flags & KERN_PROC_MASK32) != 0) {
 				freebsd32_kinfo_proc_out(&ki, &ki32);
-				error = sbuf_bcat(sb, &ki32, sizeof(ki32));
+				if (sbuf_bcat(sb, &ki32, sizeof(ki32)) != 0)
+					error = ENOMEM;
 			} else
 #endif
-				error = sbuf_bcat(sb, &ki, sizeof(ki));
-			if (error)
+				if (sbuf_bcat(sb, &ki, sizeof(ki)) != 0)
+					error = ENOMEM;
+			if (error != 0)
 				break;
 		}
 	}
@@ -1768,7 +1772,8 @@ proc_getauxv(struct thread *td, struct proc *p, struct sbuf *sb)
 		else
 #endif
 			size = vsize * sizeof(Elf_Auxinfo);
-		error = sbuf_bcat(sb, auxv, size);
+		if (sbuf_bcat(sb, auxv, size) != 0)
+			error = ENOMEM;
 		free(auxv, M_TEMP);
 	}
 	return (error);
@@ -2354,9 +2359,10 @@ kern_proc_vmmap_out(struct proc *p, struct sbuf *sb)
 		    strlen(kve->kve_path) + 1;
 		kve->kve_structsize = roundup(kve->kve_structsize,
 		    sizeof(uint64_t));
-		error = sbuf_bcat(sb, kve, kve->kve_structsize);
+		if (sbuf_bcat(sb, kve, kve->kve_structsize) != 0)
+			error = ENOMEM;
 		vm_map_lock_read(map);
-		if (error)
+		if (error != 0)
 			break;
 		if (last_timestamp != map->timestamp) {
 			vm_map_lookup_entry(map, addr - 1, &tmp_entry);
@@ -2854,3 +2860,142 @@ static SYSCTL_NODE(_kern_proc, KERN_PROC_OSREL, osrel, CTLFLAG_RW |
 static SYSCTL_NODE(_kern_proc, KERN_PROC_SIGTRAMP, sigtramp, CTLFLAG_RD |
 	CTLFLAG_MPSAFE, sysctl_kern_proc_sigtramp,
 	"Process signal trampoline location");
+
+int allproc_gen;
+
+void
+stop_all_proc(void)
+{
+	struct proc *cp, *p;
+	int r, gen;
+	bool restart, seen_stopped, seen_exiting, stopped_some;
+
+	cp = curproc;
+	/*
+	 * stop_all_proc() assumes that all process which have
+	 * usermode must be stopped, except current process, for
+	 * obvious reasons.  Since other threads in the process
+	 * establishing global stop could unstop something, disable
+	 * calls from multithreaded processes as precaution.  The
+	 * service must not be user-callable anyway.
+	 */
+	KASSERT((cp->p_flag & P_HADTHREADS) == 0 ||
+	    (cp->p_flag & P_KTHREAD) != 0, ("mt stop_all_proc"));
+
+allproc_loop:
+	sx_xlock(&allproc_lock);
+	gen = allproc_gen;
+	seen_exiting = seen_stopped = stopped_some = restart = false;
+	LIST_REMOVE(cp, p_list);
+	LIST_INSERT_HEAD(&allproc, cp, p_list);
+	for (;;) {
+		p = LIST_NEXT(cp, p_list);
+		if (p == NULL)
+			break;
+		LIST_REMOVE(cp, p_list);
+		LIST_INSERT_AFTER(p, cp, p_list);
+		PROC_LOCK(p);
+		if ((p->p_flag & (P_KTHREAD | P_SYSTEM |
+		    P_TOTAL_STOP)) != 0) {
+			PROC_UNLOCK(p);
+			continue;
+		}
+		if ((p->p_flag & P_WEXIT) != 0) {
+			seen_exiting = true;
+			PROC_UNLOCK(p);
+			continue;
+		}
+		if (P_SHOULDSTOP(p) == P_STOPPED_SINGLE) {
+			/*
+			 * Stopped processes are tolerated when there
+			 * are no other processes which might continue
+			 * them.  P_STOPPED_SINGLE but not
+			 * P_TOTAL_STOP process still has at least one
+			 * thread running.
+			 */
+			seen_stopped = true;
+			PROC_UNLOCK(p);
+			continue;
+		}
+		_PHOLD(p);
+		sx_xunlock(&allproc_lock);
+		r = thread_single(p, SINGLE_ALLPROC);
+		if (r != 0)
+			restart = true;
+		else
+			stopped_some = true;
+		_PRELE(p);
+		PROC_UNLOCK(p);
+		sx_xlock(&allproc_lock);
+	}
+	/* Catch forked children we did not see in iteration. */
+	if (gen != allproc_gen)
+		restart = true;
+	sx_xunlock(&allproc_lock);
+	if (restart || stopped_some || seen_exiting || seen_stopped) {
+		kern_yield(PRI_USER);
+		goto allproc_loop;
+	}
+}
+
+void
+resume_all_proc(void)
+{
+	struct proc *cp, *p;
+
+	cp = curproc;
+	sx_xlock(&allproc_lock);
+	LIST_REMOVE(cp, p_list);
+	LIST_INSERT_HEAD(&allproc, cp, p_list);
+	for (;;) {
+		p = LIST_NEXT(cp, p_list);
+		if (p == NULL)
+			break;
+		LIST_REMOVE(cp, p_list);
+		LIST_INSERT_AFTER(p, cp, p_list);
+		PROC_LOCK(p);
+		if ((p->p_flag & P_TOTAL_STOP) != 0) {
+			sx_xunlock(&allproc_lock);
+			_PHOLD(p);
+			thread_single_end(p, SINGLE_ALLPROC);
+			_PRELE(p);
+			PROC_UNLOCK(p);
+			sx_xlock(&allproc_lock);
+		} else {
+			PROC_UNLOCK(p);
+		}
+	}
+	sx_xunlock(&allproc_lock);
+}
+
+#define	TOTAL_STOP_DEBUG	1
+#ifdef TOTAL_STOP_DEBUG
+volatile static int ap_resume;
+#include <sys/mount.h>
+
+static int
+sysctl_debug_stop_all_proc(SYSCTL_HANDLER_ARGS)
+{
+	int error, val;
+
+	val = 0;
+	ap_resume = 0;
+	error = sysctl_handle_int(oidp, &val, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	if (val != 0) {
+		stop_all_proc();
+		syncer_suspend();
+		while (ap_resume == 0)
+			;
+		syncer_resume();
+		resume_all_proc();
+	}
+	return (0);
+}
+
+SYSCTL_PROC(_debug, OID_AUTO, stop_all_proc, CTLTYPE_INT | CTLFLAG_RW |
+    CTLFLAG_MPSAFE, __DEVOLATILE(int *, &ap_resume), 0,
+    sysctl_debug_stop_all_proc, "I",
+    "");
+#endif

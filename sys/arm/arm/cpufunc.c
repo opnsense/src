@@ -837,6 +837,11 @@ u_int cpu_reset_needs_v4_MMU_disable;	/* flag used in locore.s */
   defined(CPU_XSCALE_80219) || defined(CPU_XSCALE_81342) || \
   defined(CPU_CORTEXA) || defined(CPU_KRAIT)
 
+/* Global cache line sizes, use 32 as default */
+int	arm_dcache_min_line_size = 32;
+int	arm_icache_min_line_size = 32;
+int	arm_idcache_min_line_size = 32;
+
 static void get_cachetype_cp15(void);
 
 /* Additional cache information local to this file.  Log2 of some of the
@@ -868,6 +873,12 @@ get_cachetype_cp15()
 		goto out;
 
 	if (CPU_CT_FORMAT(ctype) == CPU_CT_ARMV7) {
+		/* Resolve minimal cache line sizes */
+		arm_dcache_min_line_size = 1 << (CPU_CT_DMINLINE(ctype) + 2);
+		arm_icache_min_line_size = 1 << (CPU_CT_IMINLINE(ctype) + 2);
+		arm_idcache_min_line_size =
+		    min(arm_icache_min_line_size, arm_dcache_min_line_size);
+
 		__asm __volatile("mrc p15, 1, %0, c0, c0, 1"
 		    : "=r" (clevel));
 		arm_cache_level = clevel;
@@ -1397,6 +1408,53 @@ arm10_setup(args)
 }
 #endif	/* CPU_ARM9E || CPU_ARM10 */
 
+#if defined(CPU_ARM1136) || defined(CPU_ARM1176) \
+ || defined(CPU_MV_PJ4B) \
+ || defined(CPU_CORTEXA) || defined(CPU_KRAIT)
+static __inline void
+cpu_scc_setup_ccnt(void)
+{
+/* This is how you give userland access to the CCNT and PMCn
+ * registers.
+ * BEWARE! This gives write access also, which may not be what
+ * you want!
+ */
+#ifdef _PMC_USER_READ_WRITE_
+#if defined(CPU_ARM1136) || defined(CPU_ARM1176)
+	/* Use the Secure User and Non-secure Access Validation Control Register
+	 * to allow userland access
+	 */
+	__asm volatile ("mcr	p15, 0, %0, c15, c9, 0\n\t"
+			:
+			: "r"(0x00000001));
+#else
+	/* Set PMUSERENR[0] to allow userland access */
+	__asm volatile ("mcr	p15, 0, %0, c9, c14, 0\n\t"
+			:
+			: "r"(0x00000001));
+#endif
+#endif
+#if defined(CPU_ARM1136) || defined(CPU_ARM1176)
+	/* Set PMCR[2,0] to enable counters and reset CCNT */
+	__asm volatile ("mcr	p15, 0, %0, c15, c12, 0\n\t"
+			:
+			: "r"(0x00000005));
+#else
+	/* Set up the PMCCNTR register as a cyclecounter:
+	 * Set PMINTENCLR to 0xFFFFFFFF to block interrupts
+	 * Set PMCR[2,0] to enable counters and reset CCNT
+	 * Set PMCNTENSET to 0x80000000 to enable CCNT */
+	__asm volatile ("mcr	p15, 0, %0, c9, c14, 2\n\t"
+			"mcr	p15, 0, %1, c9, c12, 0\n\t"
+			"mcr	p15, 0, %2, c9, c12, 1\n\t"
+			:
+			: "r"(0xFFFFFFFF),
+			  "r"(0x00000005),
+			  "r"(0x80000000));
+#endif
+}
+#endif
+
 #if defined(CPU_ARM1136) || defined(CPU_ARM1176)
 struct cpu_option arm11_options[] = {
 	{ "cpu.cache",		BIC, OR,  (CPU_CONTROL_IC_ENABLE | CPU_CONTROL_DC_ENABLE) },
@@ -1500,6 +1558,8 @@ arm11x6_setup(char *args)
 
 	/* And again. */
 	cpu_idcache_wbinv_all();
+
+	cpu_scc_setup_ccnt();
 }
 #endif  /* CPU_ARM1136 || CPU_ARM1176 */
 
@@ -1534,6 +1594,8 @@ pj4bv7_setup(args)
 
 	/* And again. */
 	cpu_idcache_wbinv_all();
+
+	cpu_scc_setup_ccnt();
 }
 #endif /* CPU_MV_PJ4B */
 
@@ -1581,6 +1643,8 @@ cortexa_setup(char *args)
 #ifdef SMP
 	armv7_auxctrl((1 << 6) | (1 << 0), (1 << 6) | (1 << 0)); /* Enable SMP + TLB broadcasting  */
 #endif
+
+	cpu_scc_setup_ccnt();
 }
 #endif  /* CPU_CORTEXA */
 

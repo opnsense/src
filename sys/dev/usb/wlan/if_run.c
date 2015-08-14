@@ -224,13 +224,14 @@ static const STRUCT_USB_HOST_ID run_devs[] = {
     RUN_DEV(LOGITEC,		LANW300NU2),
     RUN_DEV(LOGITEC,		LANW150NU2),
     RUN_DEV(LOGITEC,		LANW300NU2S),
-    RUN_DEV(MELCO,		RT2870_1),
+    RUN_DEV(MELCO,		WLIUCG300HP),
     RUN_DEV(MELCO,		RT2870_2),
     RUN_DEV(MELCO,		WLIUCAG300N),
     RUN_DEV(MELCO,		WLIUCG300N),
     RUN_DEV(MELCO,		WLIUCG301N),
     RUN_DEV(MELCO,		WLIUCGN),
     RUN_DEV(MELCO,		WLIUCGNM),
+    RUN_DEV(MELCO,		WLIUCG300HPV1),
     RUN_DEV(MELCO,		WLIUCGNM2),
     RUN_DEV(MOTOROLA4,		RT2770),
     RUN_DEV(MOTOROLA4,		RT3070),
@@ -4911,6 +4912,12 @@ run_update_beacon(struct ieee80211vap *vap, int item)
 	}
 
 	setbit(rvp->bo.bo_flags, item);
+	if (rvp->beacon_mbuf == NULL) {
+		rvp->beacon_mbuf = ieee80211_beacon_alloc(vap->iv_bss,
+		    &rvp->bo);
+		if (rvp->beacon_mbuf == NULL)
+			return;
+	}
 	ieee80211_beacon_update(vap->iv_bss, &rvp->bo, rvp->beacon_mbuf, mcast);
 
 	i = RUN_CMDQ_GET(&sc->cmdq_store);

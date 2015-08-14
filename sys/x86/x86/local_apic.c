@@ -56,7 +56,6 @@ __FBSDID("$FreeBSD$");
 #include <vm/pmap.h>
 
 #include <x86/apicreg.h>
-#include <machine/cpu.h>
 #include <machine/cputypes.h>
 #include <machine/frame.h>
 #include <machine/intr_machdep.h>
@@ -1264,9 +1263,6 @@ static void
 apic_init(void *dummy __unused)
 {
 	struct apic_enumerator *enumerator;
-#ifndef __amd64__
-	uint64_t apic_base;
-#endif
 	int retval, best;
 
 	/* We only support built in local APICs. */
@@ -1302,18 +1298,13 @@ apic_init(void *dummy __unused)
 		printf("APIC: Using the %s enumerator.\n",
 		    best_enum->apic_name);
 
-#ifndef __amd64__
+#ifdef I686_CPU
 	/*
 	 * To work around an errata, we disable the local APIC on some
 	 * CPUs during early startup.  We need to turn the local APIC back
 	 * on on such CPUs now.
 	 */
-	if (cpu == CPU_686 && cpu_vendor_id == CPU_VENDOR_INTEL &&
-	    (cpu_id & 0xff0) == 0x610) {
-		apic_base = rdmsr(MSR_APICBASE);
-		apic_base |= APICBASE_ENABLED;
-		wrmsr(MSR_APICBASE, apic_base);
-	}
+	ppro_reenable_apic();
 #endif
 
 	/* Probe the CPU's in the system. */
@@ -1393,22 +1384,22 @@ SYSINIT(apic_setup_io, SI_SUB_INTR, SI_ORDER_SECOND, apic_setup_io, NULL);
 int
 lapic_ipi_wait(int delay)
 {
-	int x, incr;
+	int x;
 
 	/*
-	 * Wait delay loops for IPI to be sent.  This is highly bogus
-	 * since this is sensitive to CPU clock speed.  If delay is
+	 * Wait delay microseconds for IPI to be sent.  If delay is
 	 * -1, we wait forever.
 	 */
 	if (delay == -1) {
-		incr = 0;
-		delay = 1;
-	} else
-		incr = 1;
-	for (x = 0; x < delay; x += incr) {
+		while ((lapic->icr_lo & APIC_DELSTAT_MASK) != APIC_DELSTAT_IDLE)
+			ia32_pause();
+		return (1);
+	}
+
+	for (x = 0; x < delay; x += 5) {
 		if ((lapic->icr_lo & APIC_DELSTAT_MASK) == APIC_DELSTAT_IDLE)
 			return (1);
-		ia32_pause();
+		DELAY(5);
 	}
 	return (0);
 }
@@ -1442,9 +1433,9 @@ lapic_ipi_raw(register_t icrlo, u_int dest)
 	intr_restore(saveintr);
 }
 
-#define	BEFORE_SPIN	1000000
+#define	BEFORE_SPIN	50000
 #ifdef DETECT_DEADLOCK
-#define	AFTER_SPIN	1000
+#define	AFTER_SPIN	50
 #endif
 
 void
@@ -1455,7 +1446,7 @@ lapic_ipi_vectored(u_int vector, int dest)
 	KASSERT((vector & ~APIC_VECTOR_MASK) == 0,
 	    ("%s: invalid vector %d", __func__, vector));
 
-	icrlo = APIC_DESTMODE_PHY | APIC_TRIGMOD_EDGE;
+	icrlo = APIC_DESTMODE_PHY | APIC_TRIGMOD_EDGE | APIC_LEVEL_ASSERT;
 
 	/*
 	 * IPI_STOP_HARD is just a "fake" vector used to send a NMI.
@@ -1463,9 +1454,9 @@ lapic_ipi_vectored(u_int vector, int dest)
 	 * the vector.
 	 */
 	if (vector == IPI_STOP_HARD)
-		icrlo |= APIC_DELMODE_NMI | APIC_LEVEL_ASSERT;
+		icrlo |= APIC_DELMODE_NMI;
 	else
-		icrlo |= vector | APIC_DELMODE_FIXED | APIC_LEVEL_DEASSERT;
+		icrlo |= vector | APIC_DELMODE_FIXED;
 	destfield = 0;
 	switch (dest) {
 	case APIC_IPI_DEST_SELF:

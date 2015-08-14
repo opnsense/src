@@ -36,11 +36,12 @@ __FBSDID("$FreeBSD$");
 #include "opt_core.h"
 
 #include <sys/param.h>
-#include <sys/capability.h>
+#include <sys/capsicum.h>
 #include <sys/exec.h>
 #include <sys/fcntl.h>
 #include <sys/imgact.h>
 #include <sys/imgact_elf.h>
+#include <sys/jail.h>
 #include <sys/kernel.h>
 #include <sys/lock.h>
 #include <sys/malloc.h>
@@ -775,6 +776,7 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 			if (__elfN(nxstack))
 				imgp->stack_prot =
 				    __elfN(trans_prot)(phdr[i].p_flags);
+			imgp->stack_sz = phdr[i].p_memsz;
 			break;
 		}
 	}
@@ -996,7 +998,8 @@ __elfN(freebsd_fixup)(register_t **stack_base, struct image_params *imgp)
 	AUXARGS_ENTRY(pos, AT_BASE, args->base);
 	if (imgp->execpathp != 0)
 		AUXARGS_ENTRY(pos, AT_EXECPATH, imgp->execpathp);
-	AUXARGS_ENTRY(pos, AT_OSRELDATE, osreldate);
+	AUXARGS_ENTRY(pos, AT_OSRELDATE,
+	    imgp->proc->p_ucred->cr_prison->pr_osreldate);
 	if (imgp->canary != 0) {
 		AUXARGS_ENTRY(pos, AT_CANARY, imgp->canary);
 		AUXARGS_ENTRY(pos, AT_CANARYLEN, imgp->canarylen);
@@ -1228,12 +1231,14 @@ __elfN(coredump)(struct thread *td, struct vnode *vp, off_t limit, int flags)
 	coresize = round_page(hdrsize + notesz) + seginfo.size;
 
 #ifdef RACCT
-	PROC_LOCK(td->td_proc);
-	error = racct_add(td->td_proc, RACCT_CORE, coresize);
-	PROC_UNLOCK(td->td_proc);
-	if (error != 0) {
-		error = EFAULT;
-		goto done;
+	if (racct_enable) {
+		PROC_LOCK(td->td_proc);
+		error = racct_add(td->td_proc, RACCT_CORE, coresize);
+		PROC_UNLOCK(td->td_proc);
+		if (error != 0) {
+			error = EFAULT;
+			goto done;
+		}
 	}
 #endif
 	if (coresize >= limit) {
@@ -1390,7 +1395,8 @@ each_writable_segment(td, func, closure)
 			object = backing_object;
 		}
 		ignore_entry = object->type != OBJT_DEFAULT &&
-		    object->type != OBJT_SWAP && object->type != OBJT_VNODE;
+		    object->type != OBJT_SWAP && object->type != OBJT_VNODE &&
+		    object->type != OBJT_PHYS;
 		VM_OBJECT_RUNLOCK(object);
 		if (ignore_entry)
 			continue;
@@ -1576,7 +1582,50 @@ register_note(struct note_info_list *list, int type, outfunc_t out, void *arg)
 		return (size);
 
 	notesize = sizeof(Elf_Note) +		/* note header */
-	    roundup2(8, ELF_NOTE_ROUNDSIZE) +	/* note name ("FreeBSD") */
+	    roundup2(sizeof(FREEBSD_ABI_VENDOR), ELF_NOTE_ROUNDSIZE) +
+						/* note name */
+	    roundup2(size, ELF_NOTE_ROUNDSIZE);	/* note description */
+
+	return (notesize);
+}
+
+static size_t
+append_note_data(const void *src, void *dst, size_t len)
+{
+	size_t padded_len;
+
+	padded_len = roundup2(len, ELF_NOTE_ROUNDSIZE);
+	if (dst != NULL) {
+		bcopy(src, dst, len);
+		bzero((char *)dst + len, padded_len - len);
+	}
+	return (padded_len);
+}
+
+size_t
+__elfN(populate_note)(int type, void *src, void *dst, size_t size, void **descp)
+{
+	Elf_Note *note;
+	char *buf;
+	size_t notesize;
+
+	buf = dst;
+	if (buf != NULL) {
+		note = (Elf_Note *)buf;
+		note->n_namesz = sizeof(FREEBSD_ABI_VENDOR);
+		note->n_descsz = size;
+		note->n_type = type;
+		buf += sizeof(*note);
+		buf += append_note_data(FREEBSD_ABI_VENDOR, buf,
+		    sizeof(FREEBSD_ABI_VENDOR));
+		append_note_data(src, buf, size);
+		if (descp != NULL)
+			*descp = buf;
+	}
+
+	notesize = sizeof(Elf_Note) +		/* note header */
+	    roundup2(sizeof(FREEBSD_ABI_VENDOR), ELF_NOTE_ROUNDSIZE) +
+						/* note name */
 	    roundup2(size, ELF_NOTE_ROUNDSIZE);	/* note description */
 
 	return (notesize);
@@ -1593,13 +1642,13 @@ __elfN(putnote)(struct note_info *ninfo, struct sbuf *sb)
 		return;
 	}
 
-	note.n_namesz = 8; /* strlen("FreeBSD") + 1 */
+	note.n_namesz = sizeof(FREEBSD_ABI_VENDOR);
 	note.n_descsz = ninfo->outsize;
 	note.n_type = ninfo->type;
 
 	sbuf_bcat(sb, &note, sizeof(note));
 	sbuf_start_section(sb, &old_len);
-	sbuf_bcat(sb, "FreeBSD", note.n_namesz);
+	sbuf_bcat(sb, FREEBSD_ABI_VENDOR, sizeof(FREEBSD_ABI_VENDOR));
 	sbuf_end_section(sb, old_len, ELF_NOTE_ROUNDSIZE, 0);
 	if (note.n_descsz == 0)
 		return;
@@ -1746,7 +1795,7 @@ __elfN(note_threadmd)(void *arg, struct sbuf *sb, size_t *sizep)
 		buf = NULL;
 	size = 0;
 	__elfN(dump_thread)(td, buf, &size);
-	KASSERT(*sizep == size, ("invalid size"));
+	KASSERT(sb == NULL || *sizep == size, ("invalid size"));
 	if (size != 0 && sb != NULL)
 		sbuf_bcat(sb, buf, size);
 	free(buf, M_TEMP);

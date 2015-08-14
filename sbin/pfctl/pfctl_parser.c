@@ -692,9 +692,7 @@ print_rule(struct pf_rule *r, const char *anchor_call, int verbose, int numeric)
 
 	if (verbose)
 		printf("@%d ", r->nr);
-        if (r->action == PF_MATCH)
-                printf("match");
-        else if (r->action > PF_NORDR)
+	if (r->action > PF_NORDR)
 		printf("action(%d)", r->action);
 	else if (anchor_call[0]) {
 		if (anchor_call[0] == '_') {
@@ -849,10 +847,8 @@ print_rule(struct pf_rule *r, const char *anchor_call, int verbose, int numeric)
 				printf(" code %u", r->code-1);
 		}
 	}
-	if (r->tos && (r->rule_flag & PFRULE_TOS))
-                printf(" tos 0x%2.2x", r->tos);
-        if (r->tos && (r->rule_flag & PFRULE_DSCP))
-                printf(" dscp 0x%2.2x", r->tos & DSCP_MASK);
+	if (r->tos)
+		printf(" tos 0x%2.2x", r->tos);
 	if (!r->keep_state && r->action == PF_PASS && !anchor_call[0])
 		printf(" no state");
 	else if (r->keep_state == PF_STATE_NORMAL)

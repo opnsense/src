@@ -21,8 +21,8 @@
 
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
- * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2015 by Delphix. All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
  * Copyright 2013 Martin Matuska <mm@FreeBSD.org>. All rights reserved.
  */
 
@@ -156,6 +156,15 @@ static vdev_ops_t *vdev_ops_table[] = {
 
 
 /*
+ * When a vdev is added, it will be divided into approximately (but no
+ * more than) this number of metaslabs.
+ */
+int metaslabs_per_vdev = 200;
+SYSCTL_INT(_vfs_zfs_vdev, OID_AUTO, metaslabs_per_vdev, CTLFLAG_RDTUN,
+    &metaslabs_per_vdev, 0,
+    "When a vdev is added, how many metaslabs the vdev should be divided into");
+
+/*
  * Given a vdev type, return the appropriate ops vector.
  */
 static vdev_ops_t *
@@ -269,8 +278,9 @@ vdev_add_child(vdev_t *pvd, vdev_t *cvd)
 	size_t oldsize, newsize;
 	uint64_t id = cvd->vdev_id;
 	vdev_t **newchild;
+	spa_t *spa = cvd->vdev_spa;
 
-	ASSERT(spa_config_held(cvd->vdev_spa, SCL_ALL, RW_WRITER) == SCL_ALL);
+	ASSERT(spa_config_held(spa, SCL_ALL, RW_WRITER) == SCL_ALL);
 	ASSERT(cvd->vdev_parent == NULL);
 
 	cvd->vdev_parent = pvd;
@@ -917,9 +927,9 @@ vdev_metaslab_init(vdev_t *vd, uint64_t txg)
 
 	/*
 	 * Compute the raidz-deflation ratio.  Note, we hard-code
-	 * in 128k (1 << 17) because it is the current "typical" blocksize.
-	 * Even if SPA_MAXBLOCKSIZE changes, this algorithm must never change,
-	 * or we will inconsistently account for existing bp's.
+	 * in 128k (1 << 17) because it is the "typical" blocksize.
+	 * Even though SPA_MAXBLOCKSIZE changed, this algorithm can not change,
+	 * otherwise it would inconsistently account for existing bp's.
 	 */
 	vd->vdev_deflate_ratio = (1 << 17) /
 	    (vdev_psize_to_asize(vd, 1 << 17) >> SPA_MINBLOCKSHIFT);
@@ -946,7 +956,11 @@ vdev_metaslab_init(vdev_t *vd, uint64_t txg)
 			if (error)
 				return (error);
 		}
-		vd->vdev_ms[m] = metaslab_init(vd->vdev_mg, m, object, txg);
+
+		error = metaslab_init(vd->vdev_mg, m, object, txg,
+		    &(vd->vdev_ms[m]));
+		if (error)
+			return (error);
 	}
 
 	if (txg == 0)
@@ -1385,6 +1399,17 @@ vdev_open(vdev_t *vd)
 	}
 
 	/*
+	 * Track the min and max ashift values for normal data devices.
+	 */
+	if (vd->vdev_top == vd && vd->vdev_ashift != 0 &&
+	    !vd->vdev_islog && vd->vdev_aux == NULL) {
+		if (vd->vdev_ashift > spa->spa_max_ashift)
+			spa->spa_max_ashift = vd->vdev_ashift;
+		if (vd->vdev_ashift < spa->spa_min_ashift)
+			spa->spa_min_ashift = vd->vdev_ashift;
+	}
+
+	/*
 	 * If a leaf vdev has a DTL, and seems healthy, then kick off a
 	 * resilver.  But don't do this if we are doing a reopen for a scrub,
 	 * since this would just restart the scrub we are already doing.
@@ -1662,9 +1687,9 @@ void
 vdev_metaslab_set_size(vdev_t *vd)
 {
 	/*
-	 * Aim for roughly 200 metaslabs per vdev.
+	 * Aim for roughly metaslabs_per_vdev (default 200) metaslabs per vdev.
 	 */
-	vd->vdev_ms_shift = highbit64(vd->vdev_asize / 200);
+	vd->vdev_ms_shift = highbit64(vd->vdev_asize / metaslabs_per_vdev);
 	vd->vdev_ms_shift = MAX(vd->vdev_ms_shift, SPA_MAXBLOCKSHIFT);
 }
 

@@ -155,27 +155,28 @@ in6_ifaddloop(struct ifaddr *ifa)
 
 	ia = ifa2ia6(ifa);
 	ifp = ifa->ifa_ifp;
-	IF_AFDATA_LOCK(ifp);
-	ifa->ifa_rtrequest = nd6_rtrequest;
-	ln = lla_lookup(LLTABLE6(ifp), (LLE_CREATE | LLE_IFADDR |
-	    LLE_EXCLUSIVE), (struct sockaddr *)&ia->ia_addr);
-	IF_AFDATA_UNLOCK(ifp);
-	if (ln != NULL) {
-		ln->la_expire = 0;  /* for IPv6 this means permanent */
-		ln->ln_state = ND6_LLINFO_REACHABLE;
-		/*
-		 * initialize for rtmsg generation
-		 */
-		bzero(&gateway, sizeof(gateway));
-		gateway.sdl_len = sizeof(gateway);
-		gateway.sdl_family = AF_LINK;
-		gateway.sdl_nlen = 0;
-		gateway.sdl_alen = 6;
-		memcpy(gateway.sdl_data, &ln->ll_addr.mac_aligned,
-		    sizeof(ln->ll_addr));
-		LLE_WUNLOCK(ln);
-	}
+	/*
+	 * initialize for rtmsg generation
+	 */
+	bzero(&gateway, sizeof(gateway));
+	gateway.sdl_len = sizeof(gateway);
+	gateway.sdl_family = AF_LINK;
+	if (nd6_need_cache(ifp) != 0) {
+		IF_AFDATA_LOCK(ifp);
+		ifa->ifa_rtrequest = nd6_rtrequest;
+		ln = lla_lookup(LLTABLE6(ifp), (LLE_CREATE | LLE_IFADDR |
+		    LLE_EXCLUSIVE), (struct sockaddr *)&ia->ia_addr);
+		IF_AFDATA_UNLOCK(ifp);
+		if (ln != NULL) {
+			ln->la_expire = 0;  /* for IPv6 this means permanent */
+			ln->ln_state = ND6_LLINFO_REACHABLE;
 
+			gateway.sdl_alen = 6;
+			memcpy(gateway.sdl_data, &ln->ll_addr.mac_aligned,
+			    sizeof(ln->ll_addr));
+			LLE_WUNLOCK(ln);
+		}
+	}
 	bzero(&rt, sizeof(rt));
 	rt.rt_gateway = (struct sockaddr *)&gateway;
 	memcpy(&mask, &ia->ia_prefixmask, sizeof(ia->ia_prefixmask));
@@ -700,7 +701,8 @@ in6_control(struct socket *so, u_long cmd, caddr_t data,
 		pr0.ndpr_plen = in6_mask2len(&ifra->ifra_prefixmask.sin6_addr,
 		    NULL);
 		if (pr0.ndpr_plen == 128) {
-			break;	/* we don't need to install a host route. */
+			/* we don't need to install a host route. */
+			goto aifaddr_out;
 		}
 		pr0.ndpr_prefix = ifra->ifra_addr;
 		/* apply the mask for safety. */
@@ -768,32 +770,29 @@ in6_control(struct socket *so, u_long cmd, caddr_t data,
 		 * that is, this address might make other addresses detached.
 		 */
 		pfxlist_onlink_check();
-		if (error == 0 && ia) {
-			if (ND_IFINFO(ifp)->flags & ND6_IFF_IFDISABLED) {
-				/*
-				 * Try to clear the flag when a new
-				 * IPv6 address is added onto an
-				 * IFDISABLED interface and it
-				 * succeeds.
-				 */
-				struct in6_ndireq nd;
+aifaddr_out:
+		if (error != 0 || ia == NULL)
+			break;
+		/*
+		 * Try to clear the flag when a new IPv6 address is added
+		 * onto an IFDISABLED interface and it succeeds.
+		 */
+		if (ND_IFINFO(ifp)->flags & ND6_IFF_IFDISABLED) {
+			struct in6_ndireq nd;
 
-				memset(&nd, 0, sizeof(nd));
-				nd.ndi.flags = ND_IFINFO(ifp)->flags;
-				nd.ndi.flags &= ~ND6_IFF_IFDISABLED;
-				if (nd6_ioctl(SIOCSIFINFO_FLAGS,
-				    (caddr_t)&nd, ifp) < 0)
-					log(LOG_NOTICE, "SIOCAIFADDR_IN6: "
-					    "SIOCSIFINFO_FLAGS for -ifdisabled "
-					    "failed.");
-				/*
-				 * Ignore failure of clearing the flag
-				 * intentionally.  The failure means
-				 * address duplication was detected.
-				 */
-			}
-			EVENTHANDLER_INVOKE(ifaddr_event, ifp);
+			memset(&nd, 0, sizeof(nd));
+			nd.ndi.flags = ND_IFINFO(ifp)->flags;
+			nd.ndi.flags &= ~ND6_IFF_IFDISABLED;
+			if (nd6_ioctl(SIOCSIFINFO_FLAGS, (caddr_t)&nd, ifp) < 0)
+				log(LOG_NOTICE, "SIOCAIFADDR_IN6: "
+				    "SIOCSIFINFO_FLAGS for -ifdisabled "
+				    "failed.");
+			/*
+			 * Ignore failure of clearing the flag intentionally.
+			 * The failure means address duplication was detected.
+			 */
 		}
+		EVENTHANDLER_INVOKE(ifaddr_event, ifp);
 		break;
 	}
 
@@ -1543,6 +1542,7 @@ in6_purgeaddr(struct ifaddr *ifa)
 static void
 in6_unlink_ifa(struct in6_ifaddr *ia, struct ifnet *ifp)
 {
+	char ip6buf[INET6_ADDRSTRLEN];
 
 	IF_ADDR_WLOCK(ifp);
 	TAILQ_REMOVE(&ifp->if_addrhead, &ia->ia_ifa, ifa_link);
@@ -1566,7 +1566,7 @@ in6_unlink_ifa(struct in6_ifaddr *ia, struct ifnet *ifp)
 	if (ia->ia6_ndpr == NULL) {
 		nd6log((LOG_NOTICE,
 		    "in6_unlink_ifa: autoconf'ed address "
-		    "%p has no prefix\n", ia));
+		    "%s has no prefix\n", ip6_sprintf(ip6buf, IA6_IN6(ia))));
 	} else {
 		ia->ia6_ndpr->ndpr_refcnt--;
 		ia->ia6_ndpr = NULL;
@@ -2367,7 +2367,8 @@ in6if_do_dad(struct ifnet *ifp)
 	if ((ifp->if_flags & IFF_LOOPBACK) != 0)
 		return (0);
 
-	if (ND_IFINFO(ifp)->flags & ND6_IFF_IFDISABLED)
+	if ((ND_IFINFO(ifp)->flags & ND6_IFF_IFDISABLED) ||
+	    (ND_IFINFO(ifp)->flags & ND6_IFF_NO_DAD))
 		return (0);
 
 	switch (ifp->if_type) {
@@ -2518,8 +2519,7 @@ in6_lltable_new(const struct sockaddr *l3addr, u_int flags)
 	lle->base.lle_refcnt = 1;
 	lle->base.lle_free = in6_lltable_free;
 	LLE_LOCK_INIT(&lle->base);
-	callout_init_rw(&lle->base.ln_timer_ch, &lle->base.lle_lock,
-	    CALLOUT_RETURNUNLOCKED);
+	callout_init(&lle->base.ln_timer_ch, 1);
 
 	return (&lle->base);
 }

@@ -504,10 +504,6 @@ int mlx4_get_val(struct mlx4_dbdf2val *tbl, struct pci_dev *pdev, int idx,
 	if (!pdev)
 		return -EINVAL;
 
-	if (!pdev->bus) {
-		return -EINVAL;
-	}
-
         dbdf = dbdf_to_u64(pci_get_domain(pdev->dev.bsddev), pci_get_bus(pdev->dev.bsddev),
 			   PCI_SLOT(pdev->devfn), PCI_FUNC(pdev->devfn));
 
@@ -1311,8 +1307,9 @@ static ssize_t show_port_ib_mtu(struct device *dev,
 						   port_mtu_attr);
 	struct mlx4_dev *mdev = info->dev;
 
+	/* When port type is eth, port mtu value isn't used. */
 	if (mdev->caps.port_type[info->port] == MLX4_PORT_TYPE_ETH)
-		mlx4_warn(mdev, "port level mtu is only used for IB ports\n");
+		return -EINVAL;
 
 	sprintf(buf, "%d\n",
 			ibta_mtu_to_int(mdev->caps.port_ib_mtu[info->port]));
@@ -2907,6 +2904,12 @@ static void mlx4_enable_msi_x(struct mlx4_dev *dev)
 				goto retry;
 			}
 			kfree(entries);
+			/* if error, or can't alloc even 1 IRQ */
+			if (err < 0) {
+				mlx4_err(dev, "No IRQs left, device can't "
+				    "be started.\n");
+				goto no_irq;
+			}
 			goto no_msi;
 		}
 
@@ -2934,6 +2937,10 @@ no_msi:
 
 	for (i = 0; i < 2; ++i)
 		priv->eq_table.eq[i].irq = dev->pdev->irq;
+	return;
+no_irq:
+	dev->caps.num_comp_vectors = 0;
+	dev->caps.comp_pool        = 0;
 }
 
 static int mlx4_init_port_info(struct mlx4_dev *dev, int port)
@@ -3309,6 +3316,13 @@ slave_start:
 	mutex_init(&priv->msix_ctl.pool_lock);
 
 	mlx4_enable_msi_x(dev);
+
+	/* no MSIX and no shared IRQ */
+	if (!dev->caps.num_comp_vectors && !dev->caps.comp_pool) {
+		err = -ENOSPC;
+		goto err_free_eq;
+	}
+
 	if ((mlx4_is_mfunc(dev)) &&
 	    !(dev->flags & MLX4_FLAG_MSI_X)) {
 		err = -ENOSYS;

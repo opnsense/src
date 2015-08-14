@@ -192,21 +192,20 @@ extern struct rwlock pf_rules_lock;
 
 #define PF_AEQ(a, b, c) \
 	((c == AF_INET && (a)->addr32[0] == (b)->addr32[0]) || \
-	((a)->addr32[3] == (b)->addr32[3] && \
+	(c == AF_INET6 && (a)->addr32[3] == (b)->addr32[3] && \
 	(a)->addr32[2] == (b)->addr32[2] && \
 	(a)->addr32[1] == (b)->addr32[1] && \
 	(a)->addr32[0] == (b)->addr32[0])) \
 
 #define PF_ANEQ(a, b, c) \
-	((c == AF_INET && (a)->addr32[0] != (b)->addr32[0]) || \
-	((a)->addr32[3] != (b)->addr32[3] || \
-	(a)->addr32[2] != (b)->addr32[2] || \
+	((a)->addr32[0] != (b)->addr32[0] || \
 	(a)->addr32[1] != (b)->addr32[1] || \
-	(a)->addr32[0] != (b)->addr32[0])) \
+	(a)->addr32[2] != (b)->addr32[2] || \
+	(a)->addr32[3] != (b)->addr32[3]) \
 
 #define PF_AZERO(a, c) \
 	((c == AF_INET && !(a)->addr32[0]) || \
-	(!(a)->addr32[0] && !(a)->addr32[1] && \
+	(c == AF_INET6 && !(a)->addr32[0] && !(a)->addr32[1] && \
 	!(a)->addr32[2] && !(a)->addr32[3] )) \
 
 #define PF_MATCHA(n, a, m, b, f) \
@@ -466,12 +465,6 @@ struct pf_osfp_ioctl {
 	int			fp_getnum;	/* DIOCOSFPGET number */
 };
 
-struct pf_rule_actions {
-        u_int16_t       qid;
-        u_int16_t       pqid;
-        u_int8_t        flags;
-};
-
 
 union pf_rule_ptr {
 	struct pf_rule		*ptr;
@@ -495,7 +488,6 @@ struct pf_rule {
 	union pf_rule_ptr	 skip[PF_SKIP_COUNT];
 #define PF_RULE_LABEL_SIZE	 64
 	char			 label[PF_RULE_LABEL_SIZE];
-	char                     schedule[PF_RULE_LABEL_SIZE];
 	char			 ifname[IFNAMSIZ];
 	char			 qname[PF_QNAME_SIZE];
 	char			 pqname[PF_QNAME_SIZE];
@@ -574,29 +566,6 @@ struct pf_rule {
 	u_int8_t		 allow_opts;
 	u_int8_t		 rt;
 	u_int8_t		 return_ttl;
-
-#ifndef DSCP_EF
-/* Copied from altq_cdnr.h */
-/* diffserve code points */
-#define DSCP_MASK       0xfc
-#define DSCP_CUMASK     0x03
-#define DSCP_VA         0xb0
-#define DSCP_EF         0xb8
-#define DSCP_AF11       0x28
-#define DSCP_AF12       0x30
-#define DSCP_AF13       0x38
-#define DSCP_AF21       0x48
-#define DSCP_AF22       0x50
-#define DSCP_AF23       0x58
-#define DSCP_AF31       0x68
-#define DSCP_AF32       0x70
-#define DSCP_AF33       0x78
-#define DSCP_AF41       0x88
-#define DSCP_AF42       0x90
-#define DSCP_AF43       0x98
-#define AF_CLASSMASK            0xe0
-#define AF_DROPPRECMASK         0x18
-#endif
 	u_int8_t		 tos;
 	u_int8_t		 set_tos;
 	u_int8_t		 anchor_relative;
@@ -634,13 +603,6 @@ struct pf_rule {
 #define PFRULE_RANDOMID		0x0800
 #define PFRULE_REASSEMBLE_TCP	0x1000
 #define PFRULE_SET_TOS		0x2000
-
-/* rule flags for TOS or DSCP differentiation */
-#define PFRULE_TOS		0x2000
-#define PFRULE_DSCP		0x4000
-
-/* rule flags for handling ALTQ hashing required by certain disciplines */
-#define PFRULE_ALTQ_HASH	0x8000
 
 /* rule flags again */
 #define PFRULE_IFBOUND		0x00010000	/* if-bound */
@@ -768,8 +730,6 @@ struct pf_state {
 	u_int32_t		 creation;
 	u_int32_t	 	 expire;
 	u_int32_t		 pfsync_time;
-        u_int16_t                qid;
-        u_int16_t                pqid;
 	u_int16_t		 tag;
 	u_int8_t		 log;
 	u_int8_t		 state_flags;
@@ -1141,7 +1101,6 @@ struct pf_pdesc {
 	u_int16_t *sport;
 	u_int16_t *dport;
 	struct pf_mtag	*pf_mtag;
-        struct pf_rule_actions   act;
 
 	u_int32_t	 p_len;		/* total length of payload */
 
@@ -1293,11 +1252,6 @@ struct pfioc_state_kill {
 	u_int			psk_killed;
 };
 
-struct pfioc_schedule_kill {
-	int		numberkilled;
-	char		schedule[PF_RULE_LABEL_SIZE];
-};
-
 struct pfioc_states {
 	int	ps_len;
 	union {
@@ -1376,7 +1330,6 @@ struct pfioc_trans {
 #ifdef _KERNEL
 #define PFR_FLAG_USERIOCTL	0x10000000
 #endif
-#define DIOCKILLSCHEDULE       _IOWR('D', 96, struct pfioc_schedule_kill)
 
 struct pfioc_table {
 	struct pfr_table	 pfrio_table;
@@ -1501,19 +1454,17 @@ struct pf_idhash {
 	struct mtx			lock;
 };
 
+extern u_long		pf_hashmask;
+extern u_long		pf_srchashmask;
 #define	PF_HASHSIZ	(32768)
 VNET_DECLARE(struct pf_keyhash *, pf_keyhash);
 VNET_DECLARE(struct pf_idhash *, pf_idhash);
-VNET_DECLARE(u_long, pf_hashmask);
 #define V_pf_keyhash	VNET(pf_keyhash)
 #define	V_pf_idhash	VNET(pf_idhash)
-#define	V_pf_hashmask	VNET(pf_hashmask)
 VNET_DECLARE(struct pf_srchash *, pf_srchash);
-VNET_DECLARE(u_long, pf_srchashmask);
 #define	V_pf_srchash	VNET(pf_srchash)
-#define V_pf_srchashmask VNET(pf_srchashmask)
 
-#define PF_IDHASH(s)	(be64toh((s)->id) % (V_pf_hashmask + 1))
+#define PF_IDHASH(s)	(be64toh((s)->id) % (pf_hashmask + 1))
 
 VNET_DECLARE(void *, pf_swi_cookie);
 #define V_pf_swi_cookie	VNET(pf_swi_cookie)
@@ -1598,7 +1549,6 @@ extern struct pf_state		*pf_find_state_all(struct pf_state_key_cmp *,
 extern struct pf_src_node	*pf_find_src_node(struct pf_addr *,
 				    struct pf_rule *, sa_family_t, int);
 extern void			 pf_unlink_src_node(struct pf_src_node *);
-extern void			 pf_unlink_src_node_locked(struct pf_src_node *);
 extern u_int			 pf_free_src_nodes(struct pf_src_node_list *);
 extern void			 pf_print_state(struct pf_state *);
 extern void			 pf_print_flags(u_int8_t);
@@ -1615,13 +1565,18 @@ void				pf_free_rule(struct pf_rule *);
 
 #ifdef INET
 int	pf_test(int, struct ifnet *, struct mbuf **, struct inpcb *);
+int	pf_normalize_ip(struct mbuf **, int, struct pfi_kif *, u_short *,
+	    struct pf_pdesc *);
 #endif /* INET */
 
 #ifdef INET6
 int	pf_test6(int, struct ifnet *, struct mbuf **, struct inpcb *);
+int	pf_normalize_ip6(struct mbuf **, int, struct pfi_kif *, u_short *,
+	    struct pf_pdesc *);
 void	pf_poolmask(struct pf_addr *, struct pf_addr*,
 	    struct pf_addr *, struct pf_addr *, u_int8_t);
 void	pf_addr_inc(struct pf_addr *, sa_family_t);
+int	pf_refragment6(struct ifnet *, struct mbuf **, struct m_tag *);
 #endif /* INET6 */
 
 u_int32_t	pf_new_isn(struct pf_state *);
@@ -1637,10 +1592,6 @@ int	pf_match_port(u_int8_t, u_int16_t, u_int16_t, u_int16_t);
 
 void	pf_normalize_init(void);
 void	pf_normalize_cleanup(void);
-int	pf_normalize_ip(struct mbuf **, int, struct pfi_kif *, u_short *,
-	    struct pf_pdesc *);
-int	pf_normalize_ip6(struct mbuf **, int, struct pfi_kif *, u_short *,
-	    struct pf_pdesc *);
 int	pf_normalize_tcp(int, struct pfi_kif *, struct mbuf *, int, int, void *,
 	    struct pf_pdesc *);
 void	pf_normalize_tcp_cleanup(struct pf_state *);
@@ -1717,6 +1668,8 @@ int		 pfi_clear_flags(const char *, int);
 
 int		 pf_match_tag(struct mbuf *, struct pf_rule *, int *, int);
 int		 pf_tag_packet(struct mbuf *, struct pf_pdesc *, int);
+int		 pf_addr_cmp(struct pf_addr *, struct pf_addr *,
+		    sa_family_t);
 void		 pf_qid2qname(u_int32_t, char *);
 
 VNET_DECLARE(struct pf_kstatus, pf_status);

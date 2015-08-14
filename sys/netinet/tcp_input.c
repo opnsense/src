@@ -871,13 +871,12 @@ findpcb:
 		goto dropwithreset;
 	}
 	INP_WLOCK_ASSERT(inp);
-	if (!(inp->inp_flags & INP_HW_FLOWID)
-	    && (m->m_flags & M_FLOWID)
-	    && ((inp->inp_socket == NULL)
-		|| !(inp->inp_socket->so_options & SO_ACCEPTCONN))) {
-		inp->inp_flags |= INP_HW_FLOWID;
-		inp->inp_flags &= ~INP_SW_FLOWID;
+	if ((inp->inp_flowtype == M_HASHTYPE_NONE) &&
+	    (M_HASHTYPE_GET(m) != M_HASHTYPE_NONE) &&
+	    ((inp->inp_socket == NULL) ||
+	    (inp->inp_socket->so_options & SO_ACCEPTCONN) == 0)) {
 		inp->inp_flowid = m->m_pkthdr.flowid;
+		inp->inp_flowtype = M_HASHTYPE_GET(m);
 	}
 #ifdef IPSEC
 #ifdef INET6
@@ -1802,6 +1801,7 @@ tcp_do_segment(struct mbuf *m, struct tcphdr *th, struct socket *so,
 		 * the buffer to better manage the socket buffer resources.
 		 */
 			if (V_tcp_do_autorcvbuf &&
+			    (to.to_flags & TOF_TS) &&
 			    to.to_tsecr &&
 			    (so->so_rcv.sb_flags & SB_AUTOSIZE)) {
 				if (TSTMP_GT(to.to_tsecr, tp->rfbuf_ts) &&
@@ -3623,6 +3623,8 @@ tcp_mss(struct tcpcb *tp, int offer)
 	if (cap.ifcap & CSUM_TSO) {
 		tp->t_flags |= TF_TSO;
 		tp->t_tsomax = cap.tsomax;
+		tp->t_tsomaxsegcount = cap.tsomaxsegcount;
+		tp->t_tsomaxsegsize = cap.tsomaxsegsize;
 	}
 }
 

@@ -44,6 +44,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/mutex.h>
 #include <sys/proc.h>
 #include <sys/rwlock.h>
+#include <sys/sched.h>
 #include <sys/sysctl.h>
 #include <sys/systm.h>
 #include <sys/turnstile.h>
@@ -298,6 +299,9 @@ __rw_try_wlock(volatile uintptr_t *c, const char *file, int line)
 	if (rval) {
 		WITNESS_LOCK(&rw->lock_object, LOP_EXCLUSIVE | LOP_TRYLOCK,
 		    file, line);
+		if (!rw_recursed(rw))
+			LOCKSTAT_PROFILE_OBTAIN_LOCK_SUCCESS(LS_RW_WLOCK_ACQUIRE,
+			    rw, 0, 0, file, line);
 		curthread->td_locks++;
 	}
 	return (rval);
@@ -352,9 +356,11 @@ __rw_rlock(volatile uintptr_t *c, const char *file, int line)
 #endif
 	uintptr_t v;
 #ifdef KDTRACE_HOOKS
+	uintptr_t state;
 	uint64_t spin_cnt = 0;
 	uint64_t sleep_cnt = 0;
 	int64_t sleep_time = 0;
+	int64_t all_time = 0;
 #endif
 
 	if (SCHEDULER_STOPPED())
@@ -372,6 +378,10 @@ __rw_rlock(volatile uintptr_t *c, const char *file, int line)
 	    rw->lock_object.lo_name, file, line));
 	WITNESS_CHECKORDER(&rw->lock_object, LOP_NEWORDER, file, line, NULL);
 
+#ifdef KDTRACE_HOOKS
+	all_time -= lockstat_nsecs(&rw->lock_object);
+	state = rw->rw_lock;
+#endif
 	for (;;) {
 #ifdef KDTRACE_HOOKS
 		spin_cnt++;
@@ -423,6 +433,9 @@ __rw_rlock(volatile uintptr_t *c, const char *file, int line)
 					CTR3(KTR_LOCK,
 					    "%s: spinning on %p held by %p",
 					    __func__, rw, owner);
+				KTR_STATE1(KTR_SCHED, "thread",
+				    sched_tdname(curthread), "spinning",
+				    "lockname:\"%s\"", rw->lock_object.lo_name);
 				while ((struct thread*)RW_OWNER(rw->rw_lock) ==
 				    owner && TD_IS_RUNNING(owner)) {
 					cpu_spinwait();
@@ -430,16 +443,23 @@ __rw_rlock(volatile uintptr_t *c, const char *file, int line)
 					spin_cnt++;
 #endif
 				}
+				KTR_STATE0(KTR_SCHED, "thread",
+				    sched_tdname(curthread), "running");
 				continue;
 			}
 		} else if (spintries < rowner_retries) {
 			spintries++;
+			KTR_STATE1(KTR_SCHED, "thread", sched_tdname(curthread),
+			    "spinning", "lockname:\"%s\"",
+			    rw->lock_object.lo_name);
 			for (i = 0; i < rowner_loops; i++) {
 				v = rw->rw_lock;
 				if ((v & RW_LOCK_READ) == 0 || RW_CAN_READ(v))
 					break;
 				cpu_spinwait();
 			}
+			KTR_STATE0(KTR_SCHED, "thread", sched_tdname(curthread),
+			    "running");
 			if (i != rowner_loops)
 				continue;
 		}
@@ -510,18 +530,30 @@ __rw_rlock(volatile uintptr_t *c, const char *file, int line)
 			CTR2(KTR_LOCK, "%s: %p blocking on turnstile", __func__,
 			    rw);
 #ifdef KDTRACE_HOOKS
-		sleep_time -= lockstat_nsecs();
+		sleep_time -= lockstat_nsecs(&rw->lock_object);
 #endif
 		turnstile_wait(ts, rw_owner(rw), TS_SHARED_QUEUE);
 #ifdef KDTRACE_HOOKS
-		sleep_time += lockstat_nsecs();
+		sleep_time += lockstat_nsecs(&rw->lock_object);
 		sleep_cnt++;
 #endif
 		if (LOCK_LOG_TEST(&rw->lock_object, 0))
 			CTR2(KTR_LOCK, "%s: %p resuming from turnstile",
 			    __func__, rw);
 	}
+#ifdef KDTRACE_HOOKS
+	all_time += lockstat_nsecs(&rw->lock_object);
+	if (sleep_time)
+		LOCKSTAT_RECORD4(LS_RW_RLOCK_BLOCK, rw, sleep_time,
+		    LOCKSTAT_READER, (state & RW_LOCK_READ) == 0,
+		    (state & RW_LOCK_READ) == 0 ? 0 : RW_READERS(state));
 
+	/* Record only the loops spinning and not sleeping. */
+	if (spin_cnt > sleep_cnt)
+		LOCKSTAT_RECORD4(LS_RW_RLOCK_SPIN, rw, all_time - sleep_time,
+		    LOCKSTAT_READER, (state & RW_LOCK_READ) == 0,
+		    (state & RW_LOCK_READ) == 0 ? 0 : RW_READERS(state));
+#endif
 	/*
 	 * TODO: acquire "owner of record" here.  Here be turnstile dragons
 	 * however.  turnstiles don't like owners changing between calls to
@@ -533,16 +565,6 @@ __rw_rlock(volatile uintptr_t *c, const char *file, int line)
 	WITNESS_LOCK(&rw->lock_object, 0, file, line);
 	curthread->td_locks++;
 	curthread->td_rw_rlocks++;
-#ifdef KDTRACE_HOOKS
-	if (sleep_time)
-		LOCKSTAT_RECORD1(LS_RW_RLOCK_BLOCK, rw, sleep_time);
-
-	/*
-	 * Record only the loops spinning and not sleeping. 
-	 */
-	if (spin_cnt > sleep_cnt)
-		LOCKSTAT_RECORD1(LS_RW_RLOCK_SPIN, rw, (spin_cnt - sleep_cnt));
-#endif
 }
 
 int
@@ -570,6 +592,8 @@ __rw_try_rlock(volatile uintptr_t *c, const char *file, int line)
 			LOCK_LOG_TRY("RLOCK", &rw->lock_object, 0, 1, file,
 			    line);
 			WITNESS_LOCK(&rw->lock_object, LOP_TRYLOCK, file, line);
+			LOCKSTAT_PROFILE_OBTAIN_LOCK_SUCCESS(LS_RW_RLOCK_ACQUIRE,
+			    rw, 0, 0, file, line);
 			curthread->td_locks++;
 			curthread->td_rw_rlocks++;
 			return (1);
@@ -714,9 +738,11 @@ __rw_wlock_hard(volatile uintptr_t *c, uintptr_t tid, const char *file,
 	int contested = 0;
 #endif
 #ifdef KDTRACE_HOOKS
+	uintptr_t state;
 	uint64_t spin_cnt = 0;
 	uint64_t sleep_cnt = 0;
 	int64_t sleep_time = 0;
+	int64_t all_time = 0;
 #endif
 
 	if (SCHEDULER_STOPPED())
@@ -738,6 +764,10 @@ __rw_wlock_hard(volatile uintptr_t *c, uintptr_t tid, const char *file,
 		CTR5(KTR_LOCK, "%s: %s contested (lock=%p) at %s:%d", __func__,
 		    rw->lock_object.lo_name, (void *)rw->rw_lock, file, line);
 
+#ifdef KDTRACE_HOOKS
+	all_time -= lockstat_nsecs(&rw->lock_object);
+	state = rw->rw_lock;
+#endif
 	while (!_rw_write_lock(rw, tid)) {
 #ifdef KDTRACE_HOOKS
 		spin_cnt++;
@@ -759,6 +789,9 @@ __rw_wlock_hard(volatile uintptr_t *c, uintptr_t tid, const char *file,
 			if (LOCK_LOG_TEST(&rw->lock_object, 0))
 				CTR3(KTR_LOCK, "%s: spinning on %p held by %p",
 				    __func__, rw, owner);
+			KTR_STATE1(KTR_SCHED, "thread", sched_tdname(curthread),
+			    "spinning", "lockname:\"%s\"",
+			    rw->lock_object.lo_name);
 			while ((struct thread*)RW_OWNER(rw->rw_lock) == owner &&
 			    TD_IS_RUNNING(owner)) {
 				cpu_spinwait();
@@ -766,6 +799,8 @@ __rw_wlock_hard(volatile uintptr_t *c, uintptr_t tid, const char *file,
 				spin_cnt++;
 #endif
 			}
+			KTR_STATE0(KTR_SCHED, "thread", sched_tdname(curthread),
+			    "running");
 			continue;
 		}
 		if ((v & RW_LOCK_READ) && RW_READERS(v) &&
@@ -777,11 +812,16 @@ __rw_wlock_hard(volatile uintptr_t *c, uintptr_t tid, const char *file,
 				}
 			}
 			spintries++;
+			KTR_STATE1(KTR_SCHED, "thread", sched_tdname(curthread),
+			    "spinning", "lockname:\"%s\"",
+			    rw->lock_object.lo_name);
 			for (i = 0; i < rowner_loops; i++) {
 				if ((rw->rw_lock & RW_LOCK_WRITE_SPINNER) == 0)
 					break;
 				cpu_spinwait();
 			}
+			KTR_STATE0(KTR_SCHED, "thread", sched_tdname(curthread),
+			    "running");
 #ifdef KDTRACE_HOOKS
 			spin_cnt += rowner_loops - i;
 #endif
@@ -851,11 +891,11 @@ __rw_wlock_hard(volatile uintptr_t *c, uintptr_t tid, const char *file,
 			CTR2(KTR_LOCK, "%s: %p blocking on turnstile", __func__,
 			    rw);
 #ifdef KDTRACE_HOOKS
-		sleep_time -= lockstat_nsecs();
+		sleep_time -= lockstat_nsecs(&rw->lock_object);
 #endif
 		turnstile_wait(ts, rw_owner(rw), TS_EXCLUSIVE_QUEUE);
 #ifdef KDTRACE_HOOKS
-		sleep_time += lockstat_nsecs();
+		sleep_time += lockstat_nsecs(&rw->lock_object);
 		sleep_cnt++;
 #endif
 		if (LOCK_LOG_TEST(&rw->lock_object, 0))
@@ -865,18 +905,21 @@ __rw_wlock_hard(volatile uintptr_t *c, uintptr_t tid, const char *file,
 		spintries = 0;
 #endif
 	}
+#ifdef KDTRACE_HOOKS
+	all_time += lockstat_nsecs(&rw->lock_object);
+	if (sleep_time)
+		LOCKSTAT_RECORD4(LS_RW_WLOCK_BLOCK, rw, sleep_time,
+		    LOCKSTAT_WRITER, (state & RW_LOCK_READ) == 0,
+		    (state & RW_LOCK_READ) == 0 ? 0 : RW_READERS(state));
+
+	/* Record only the loops spinning and not sleeping. */
+	if (spin_cnt > sleep_cnt)
+		LOCKSTAT_RECORD4(LS_RW_WLOCK_SPIN, rw, all_time - sleep_time,
+		    LOCKSTAT_READER, (state & RW_LOCK_READ) == 0,
+		    (state & RW_LOCK_READ) == 0 ? 0 : RW_READERS(state));
+#endif
 	LOCKSTAT_PROFILE_OBTAIN_LOCK_SUCCESS(LS_RW_WLOCK_ACQUIRE, rw, contested,
 	    waittime, file, line);
-#ifdef KDTRACE_HOOKS
-	if (sleep_time)
-		LOCKSTAT_RECORD1(LS_RW_WLOCK_BLOCK, rw, sleep_time);
-
-	/*
-	 * Record only the loops spinning and not sleeping.
-	 */ 
-	if (spin_cnt > sleep_cnt)
-		LOCKSTAT_RECORD1(LS_RW_WLOCK_SPIN, rw, (spin_cnt - sleep_cnt));
-#endif
 }
 
 /*

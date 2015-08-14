@@ -46,7 +46,7 @@ extern int errno;
 #include <sys/errno.h>
 #undef _KERNEL
 #include <sys/param.h>
-#include <sys/capability.h>
+#include <sys/capsicum.h>
 #include <sys/errno.h>
 #define _KERNEL
 #include <sys/time.h>
@@ -57,6 +57,7 @@ extern int errno;
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/sysent.h>
+#include <sys/umtx.h>
 #include <sys/un.h>
 #include <sys/queue.h>
 #include <sys/wait.h>
@@ -101,9 +102,9 @@ void ktrgenio(struct ktr_genio *, int);
 void ktrpsig(struct ktr_psig *);
 void ktrcsw(struct ktr_csw *);
 void ktrcsw_old(struct ktr_csw_old *);
-void ktruser_malloc(unsigned char *);
-void ktruser_rtld(int, unsigned char *);
-void ktruser(int, unsigned char *);
+void ktruser_malloc(void *);
+void ktruser_rtld(int, void *);
+void ktruser(int, void *);
 void ktrcaprights(cap_rights_t *);
 void ktrsockaddr(struct sockaddr *);
 void ktrstat(struct stat *);
@@ -115,10 +116,13 @@ void limitfd(int fd);
 void usage(void);
 void ioctlname(unsigned long, int);
 
-int timestamp, decimal, fancy = 1, suppressdata, tail, threads, maxdata,
+extern const char *signames[], *syscallnames[];
+extern int nsyscalls;
+
+static int timestamp, decimal, fancy = 1, suppressdata, tail, threads, maxdata,
     resolv = 0, abiflag = 0, syscallno = 0;
-const char *tracefile = DEF_TRACEFILE;
-struct ktr_header ktr_header;
+static const char *tracefile = DEF_TRACEFILE;
+static struct ktr_header ktr_header;
 
 #define TIME_FORMAT	"%b %e %T %Y"
 #define eqs(s1, s2)	(strcmp((s1), (s2)) == 0)
@@ -137,8 +141,11 @@ struct ktr_header ktr_header;
 
 void linux_ktrsyscall(struct ktr_syscall *);
 void linux_ktrsysret(struct ktr_sysret *);
-extern char *linux_syscallnames[];
-extern int nlinux_syscalls;
+extern const char *linux_syscallnames[];
+
+#include <linux_syscalls.c>
+static int nlinux_syscalls = sizeof(linux_syscallnames) / \
+				sizeof(linux_syscallnames[0]);
 
 /*
  * from linux.h
@@ -165,7 +172,7 @@ struct proc_info
 	pid_t			pid;
 };
 
-TAILQ_HEAD(trace_procs, proc_info) trace_procs;
+static TAILQ_HEAD(trace_procs, proc_info) trace_procs;
 
 static void
 strerror_init(void)
@@ -385,7 +392,7 @@ limitfd(int fd)
 	unsigned long cmd;
 
 	cap_rights_init(&rights, CAP_FSTAT);
-	cmd = -1;
+	cmd = 0;
 
 	switch (fd) {
 	case STDIN_FILENO:
@@ -408,7 +415,7 @@ limitfd(int fd)
 
 	if (cap_rights_limit(fd, &rights) < 0 && errno != ENOSYS)
 		err(1, "unable to limit rights for descriptor %d", fd);
-	if (cmd != -1 && cap_ioctls_limit(fd, &cmd, 1) < 0 && errno != ENOSYS)
+	if (cmd != 0 && cap_ioctls_limit(fd, &cmd, 1) < 0 && errno != ENOSYS)
 		err(1, "unable to limit ioctls for descriptor %d", fd);
 }
 
@@ -1015,7 +1022,7 @@ ktrsyscall(struct ktr_syscall *ktr, u_int flags)
 				print_number(ip, narg, c);
 				putchar(',');
 				flagsname(ip[0]);
-				printf(",0%o", ip[1]);
+				printf(",0%o", (unsigned int)ip[1]);
 				ip += 3;
 				narg -= 3;
 				break;
@@ -1069,7 +1076,7 @@ ktrsyscall(struct ktr_syscall *ktr, u_int flags)
 				print_number(ip, narg, c);
 				print_number(ip, narg, c);
 				putchar(',');
-				sendfileflagsname(*ip);
+				sendfileflagsname(*(int *)ip);
 				ip++;
 				narg--;
 				break;
@@ -1187,6 +1194,26 @@ ktrsyscall(struct ktr_syscall *ktr, u_int flags)
 				ip++;
 				narg--;
 				break;
+			case SYS__umtx_op:
+				print_number(ip, narg, c);
+				putchar(',');
+				umtxopname(*ip);
+				switch (*ip) {
+				case UMTX_OP_CV_WAIT:
+					ip++;
+					narg--;
+					putchar(',');
+					umtxcvwaitflags(*ip);
+					break;
+				case UMTX_OP_RW_RDLOCK:
+					ip++;
+					narg--;
+					putchar(',');
+					umtxrwlockflags(*ip);
+					break;
+				}
+				ip++;
+				narg--;
 			}
 		}
 		while (narg > 0) {
@@ -1425,6 +1452,8 @@ ktrcsw(struct ktr_csw *cs)
 #define	UTRACE_PRELOAD_FINISHED		8
 #define	UTRACE_INIT_CALL		9
 #define	UTRACE_FINI_CALL		10
+#define	UTRACE_DLSYM_START		11
+#define	UTRACE_DLSYM_STOP		12
 
 struct utrace_rtld {
 	char sig[4];				/* 'RTLD' */
@@ -1437,9 +1466,10 @@ struct utrace_rtld {
 };
 
 void
-ktruser_rtld(int len, unsigned char *p)
+ktruser_rtld(int len, void *p)
 {
-	struct utrace_rtld *ut = (struct utrace_rtld *)p;
+	struct utrace_rtld *ut = p;
+	unsigned char *cp;
 	void *parent;
 	int mode;
 
@@ -1503,15 +1533,23 @@ ktruser_rtld(int len, unsigned char *p)
 		printf("RTLD: fini %p for %p (%s)\n", ut->mapbase, ut->handle,
 		    ut->name);
 		break;
+	case UTRACE_DLSYM_START:
+		printf("RTLD: dlsym(%p, %s)\n", ut->handle, ut->name);
+		break;
+	case UTRACE_DLSYM_STOP:
+		printf("RTLD: %p = dlsym(%p, %s)\n", ut->mapbase, ut->handle,
+		    ut->name);
+		break;
 	default:
-		p += 4;
+		cp = p;
+		cp += 4;
 		len -= 4;
 		printf("RTLD: %d ", len);
 		while (len--)
 			if (decimal)
-				printf(" %d", *p++);
+				printf(" %d", *cp++);
 			else
-				printf(" %02x", *p++);
+				printf(" %02x", *cp++);
 		printf("\n");
 	}
 }
@@ -1523,9 +1561,9 @@ struct utrace_malloc {
 };
 
 void
-ktruser_malloc(unsigned char *p)
+ktruser_malloc(void *p)
 {
-	struct utrace_malloc *ut = (struct utrace_malloc *)p;
+	struct utrace_malloc *ut = p;
 
 	if (ut->p == (void *)(intptr_t)(-1))
 		printf("malloc_init()\n");
@@ -1538,8 +1576,9 @@ ktruser_malloc(unsigned char *p)
 }
 
 void
-ktruser(int len, unsigned char *p)
+ktruser(int len, void *p)
 {
+	unsigned char *cp;
 
 	if (len >= 8 && bcmp(p, "RTLD", 4) == 0) {
 		ktruser_rtld(len, p);
@@ -1552,11 +1591,12 @@ ktruser(int len, unsigned char *p)
 	}
 
 	printf("%d ", len);
+	cp = p;
 	while (len--)
 		if (decimal)
-			printf(" %d", *p++);
+			printf(" %d", *cp++);
 		else
-			printf(" %02x", *p++);
+			printf(" %02x", *cp++);
 	printf("\n");
 }
 
@@ -1836,7 +1876,7 @@ void
 ktrfault(struct ktr_fault *ktr)
 {
 
-	printf("0x%jx ", ktr->vaddr);
+	printf("0x%jx ", (uintmax_t)ktr->vaddr);
 	vmprotname(ktr->type);
 	printf("\n");
 }

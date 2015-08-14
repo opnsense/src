@@ -305,6 +305,7 @@ struct vattr {
 #define	IO_NORMAL	0x0800		/* operate on regular data */
 #define	IO_NOMACCHECK	0x1000		/* MAC checks unnecessary */
 #define	IO_BUFLOCKED	0x2000		/* ffs flag; indir buf is locked */
+#define	IO_RANGELOCKED	0x4000		/* range locked */
 
 #define IO_SEQMAX	0x7F		/* seq heuristic max value */
 #define IO_SEQSHIFT	16		/* seq heuristic in upper 16 bits */
@@ -394,6 +395,7 @@ extern int		vttoif_tab[];
 #define	V_WAIT		0x0001	/* vn_start_write: sleep for suspend */
 #define	V_NOWAIT	0x0002	/* vn_start_write: don't sleep for suspend */
 #define	V_XSLEEP	0x0004	/* vn_start_write: just return after sleep */
+#define	V_MNTREF	0x0010	/* vn_start_write: mp is already ref-ed */
 
 #define	VR_START_WRITE	0x0001	/* vfs_write_resume: start write atomically */
 #define	VR_NO_SUSPCLR	0x0002	/* vfs_write_resume: do not clear suspension */
@@ -576,6 +578,7 @@ vn_canvmio(struct vnode *vp)
 /* vn_open_flags */
 #define	VN_OPEN_NOAUDIT		0x00000001
 #define	VN_OPEN_NOCAPCHECK	0x00000002
+#define	VN_OPEN_NAMECACHE	0x00000004
 
 /*
  * Public vnode manipulation functions.
@@ -755,6 +758,9 @@ int	vop_enoent(struct vop_generic_args *ap);
 int	vop_enotty(struct vop_generic_args *ap);
 int	vop_null(struct vop_generic_args *ap);
 int	vop_panic(struct vop_generic_args *ap);
+int	dead_poll(struct vop_poll_args *ap);
+int	dead_read(struct vop_read_args *ap);
+int	dead_write(struct vop_write_args *ap);
 
 /* These are called from within the actual VOPS. */
 void	vop_create_post(void *a, int rc);
@@ -814,6 +820,7 @@ void vnode_destroy_vobject(struct vnode *vp);
 extern struct vop_vector fifo_specops;
 extern struct vop_vector dead_vnodeops;
 extern struct vop_vector default_vnodeops;
+extern struct vop_vector devfs_specops;
 
 #define VOP_PANIC	((void*)(uintptr_t)vop_panic)
 #define VOP_NULL	((void*)(uintptr_t)vop_null)

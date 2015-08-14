@@ -89,9 +89,7 @@ memguard_sysctl_desc(SYSCTL_HANDLER_ARGS)
 		return (error);
 
 	mtx_lock(&malloc_mtx);
-	/*
-	 * If mtp is NULL, it will be initialized in memguard_cmp().
-	 */
+	/* If mtp is NULL, it will be initialized in memguard_cmp() */
 	vm_memguard_mtype = malloc_desc2type(desc);
 	strlcpy(vm_memguard_desc, desc, sizeof(vm_memguard_desc));
 	mtx_unlock(&malloc_mtx);
@@ -228,9 +226,9 @@ memguard_sysinit(void)
 
 	parent = SYSCTL_STATIC_CHILDREN(_vm_memguard);
 
-	SYSCTL_ADD_ULONG(NULL, parent, OID_AUTO, "mapstart", CTLFLAG_RD,
+	SYSCTL_ADD_UAUTO(NULL, parent, OID_AUTO, "mapstart", CTLFLAG_RD,
 	    &memguard_base, "MemGuard KVA base");
-	SYSCTL_ADD_ULONG(NULL, parent, OID_AUTO, "maplimit", CTLFLAG_RD,
+	SYSCTL_ADD_UAUTO(NULL, parent, OID_AUTO, "maplimit", CTLFLAG_RD,
 	    &memguard_mapsize, "MemGuard KVA size");
 #if 0
 	SYSCTL_ADD_ULONG(NULL, parent, OID_AUTO, "mapused", CTLFLAG_RD,
@@ -504,7 +502,7 @@ int
 memguard_cmp_zone(uma_zone_t zone)
 {
 
-	 if ((memguard_options & MG_GUARD_NOFREE) == 0 &&
+	if ((memguard_options & MG_GUARD_NOFREE) == 0 &&
 	    zone->uz_flags & UMA_ZONE_NOFREE)
 		return (0);
 

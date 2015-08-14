@@ -34,7 +34,7 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
-#include <sys/capability.h>
+#include <sys/capsicum.h>
 
 /*
  * Functions that perform the vfs operations required by the routines in
@@ -58,7 +58,10 @@ extern struct nfsrv_stablefirst nfsrv_stablefirst;
 extern void (*nfsd_call_servertimer)(void);
 extern SVCPOOL	*nfsrvd_pool;
 extern struct nfsv4lock nfsd_suspend_lock;
-extern struct nfssessionhash nfssessionhash[NFSSESSIONHASHSIZE];
+extern struct nfsclienthashhead *nfsclienthash;
+extern struct nfslockhashhead *nfslockhash;
+extern struct nfssessionhash *nfssessionhash;
+extern int nfsrv_sessionhashsize;
 struct vfsoptlist nfsv4root_opt, nfsv4root_newopt;
 NFSDLOCKMUTEX;
 struct nfsrchash_bucket nfsrchash_table[NFSRVCACHE_HASHSIZE];
@@ -1270,8 +1273,11 @@ nfsvno_fsync(struct vnode *vp, u_int64_t off, int cnt, struct ucred *cred,
 	 * file is done.  At this time VOP_FSYNC does not accept offset and
 	 * byte count parameters so call VOP_FSYNC the whole file for now.
 	 * The same is true for NFSv4: RFC 3530 Sec. 14.2.3.
+	 * File systems that do not use the buffer cache (as indicated
+	 * by MNTK_USES_BCACHE not being set) must use VOP_FSYNC().
 	 */
-	if (cnt == 0 || cnt > MAX_COMMIT_COUNT) {
+	if (cnt == 0 || cnt > MAX_COMMIT_COUNT ||
+	    (vp->v_mount->mnt_kern_flag & MNTK_USES_BCACHE) == 0) {
 		/*
 		 * Give up and do the whole thing
 		 */
@@ -2965,12 +2971,7 @@ nfsvno_advlock(struct vnode *vp, int ftype, u_int64_t first,
 
 	if (nfsrv_dolocallocks == 0)
 		goto out;
-
-	/* Check for VI_DOOMED here, so that VOP_ADVLOCK() isn't performed. */
-	if ((vp->v_iflag & VI_DOOMED) != 0) {
-		error = EPERM;
-		goto out;
-	}
+	ASSERT_VOP_UNLOCKED(vp, "nfsvno_advlock: vp locked");
 
 	fl.l_whence = SEEK_SET;
 	fl.l_type = ftype;
@@ -2994,14 +2995,12 @@ nfsvno_advlock(struct vnode *vp, int ftype, u_int64_t first,
 	fl.l_pid = (pid_t)0;
 	fl.l_sysid = (int)nfsv4_sysid;
 
-	NFSVOPUNLOCK(vp, 0);
 	if (ftype == F_UNLCK)
 		error = VOP_ADVLOCK(vp, (caddr_t)td->td_proc, F_UNLCK, &fl,
 		    (F_POSIX | F_REMOTE));
 	else
 		error = VOP_ADVLOCK(vp, (caddr_t)td->td_proc, F_SETLK, &fl,
 		    (F_POSIX | F_REMOTE));
-	NFSVOPLOCK(vp, LK_EXCLUSIVE | LK_RETRY);
 
 out:
 	NFSEXITCODE(error);
@@ -3329,9 +3328,6 @@ nfsd_modevent(module_t mod, int type, void *data)
 		mtx_init(&nfsrc_udpmtx, "nfsuc", NULL, MTX_DEF);
 		mtx_init(&nfs_v4root_mutex, "nfs4rt", NULL, MTX_DEF);
 		mtx_init(&nfsv4root_mnt.mnt_mtx, "nfs4mnt", NULL, MTX_DEF);
-		for (i = 0; i < NFSSESSIONHASHSIZE; i++)
-			mtx_init(&nfssessionhash[i].mtx, "nfssm",
-			    NULL, MTX_DEF);
 		lockinit(&nfsv4root_mnt.mnt_explock, PVFS, "explock", 0, 0);
 		nfsrvd_initcache();
 		nfsd_init();
@@ -3379,9 +3375,12 @@ nfsd_modevent(module_t mod, int type, void *data)
 		mtx_destroy(&nfsrc_udpmtx);
 		mtx_destroy(&nfs_v4root_mutex);
 		mtx_destroy(&nfsv4root_mnt.mnt_mtx);
-		for (i = 0; i < NFSSESSIONHASHSIZE; i++)
+		for (i = 0; i < nfsrv_sessionhashsize; i++)
 			mtx_destroy(&nfssessionhash[i].mtx);
 		lockdestroy(&nfsv4root_mnt.mnt_explock);
+		free(nfsclienthash, M_NFSDCLIENT);
+		free(nfslockhash, M_NFSDLOCKFILE);
+		free(nfssessionhash, M_NFSDSESSION);
 		loaded = 0;
 		break;
 	default:

@@ -1,5 +1,7 @@
 # $FreeBSD$
 
+.include <bsd.own.mk>
+
 MAN=	accept_filter.9 \
 	accf_data.9 \
 	accf_dns.9 \
@@ -46,6 +48,7 @@ MAN=	accept_filter.9 \
 	BUS_SETUP_INTR.9 \
 	bus_space.9 \
 	byteorder.9 \
+	casuword.9 \
 	cd.9 \
 	condvar.9 \
 	config_intrhook.9 \
@@ -269,7 +272,6 @@ MAN=	accept_filter.9 \
 	uidinfo.9 \
 	uio.9 \
 	unr.9 \
-	usbdi.9 \
 	utopia.9 \
 	vaccess.9 \
 	vaccess_acl_nfs4.9 \
@@ -566,6 +568,9 @@ MLINKS+=condvar.9 cv_broadcast.9 \
 MLINKS+=config_intrhook.9 config_intrhook_disestablish.9 \
 	config_intrhook.9 config_intrhook_establish.9
 MLINKS+=contigmalloc.9 contigfree.9
+MLINKS+=casuword.9 casueword.9 \
+	casuword.9 casueword32.9 \
+	casuword.9 casuword32.9
 MLINKS+=copy.9 copyin.9 \
 	copy.9 copyin_nofault.9 \
 	copy.9 copyinstr.9 \
@@ -668,7 +673,10 @@ MLINKS+=fetch.9 fubyte.9 \
 	fetch.9 fuword.9 \
 	fetch.9 fuword16.9 \
 	fetch.9 fuword32.9 \
-	fetch.9 fuword64.9
+	fetch.9 fuword64.9 \
+	fetch.9 fueword.9 \
+	fetch.9 fueword32.9 \
+	fetch.9 fueword64.9
 MLINKS+=fpu_kern.9 fpu_kern_alloc_ctx.9 \
 	fpu_kern.9 fpu_kern_free_ctx.9 \
 	fpu_kern.9 fpu_kern_enter.9 \
@@ -993,8 +1001,8 @@ MLINKS+=mutex.9 mtx_assert.9 \
 	mutex.9 mtx_unlock_spin.9 \
 	mutex.9 mtx_unlock_spin_flags.9
 MLINKS+=namei.9 NDFREE.9 \
-	namei.9 NDHASGIANT.9 \
 	namei.9 NDINIT.9
+MLINKS+=panic.9 vpanic.9
 MLINKS+=pbuf.9 getpbuf.9 \
 	pbuf.9 relpbuf.9 \
 	pbuf.9 trypbuf.9
@@ -1238,8 +1246,6 @@ MLINKS+=sleepqueue.9 init_sleepqueues.9 \
 	sleepqueue.9 sleepq_add.9 \
 	sleepqueue.9 sleepq_alloc.9 \
 	sleepqueue.9 sleepq_broadcast.9 \
-	sleepqueue.9 sleepq_calc_signal_retval.9 \
-	sleepqueue.9 sleepq_catch_signals.9 \
 	sleepqueue.9 sleepq_free.9 \
 	sleepqueue.9 sleepq_lookup.9 \
 	sleepqueue.9 sleepq_release.9 \
@@ -1345,6 +1351,7 @@ MLINKS+=taskqueue.9 TASK_INIT.9 \
 	taskqueue.9 TASK_INITIALIZER.9 \
 	taskqueue.9 taskqueue_block.9 \
 	taskqueue.9 taskqueue_cancel.9 \
+	taskqueue.9 taskqueue_cancel_timeout.9 \
 	taskqueue.9 taskqueue_create.9 \
 	taskqueue.9 taskqueue_create_fast.9 \
 	taskqueue.9 TASKQUEUE_DECLARE.9 \
@@ -1352,14 +1359,20 @@ MLINKS+=taskqueue.9 TASK_INIT.9 \
 	taskqueue.9 TASKQUEUE_DEFINE_THREAD.9 \
 	taskqueue.9 taskqueue_drain.9 \
 	taskqueue.9 taskqueue_drain_all.9 \
+	taskqueue.9 taskqueue_drain_timeout.9 \
 	taskqueue.9 taskqueue_enqueue.9 \
 	taskqueue.9 taskqueue_enqueue_fast.9 \
+	taskqueue.9 taskqueue_enqueue_timeout.9 \
 	taskqueue.9 TASKQUEUE_FAST_DEFINE.9 \
 	taskqueue.9 TASKQUEUE_FAST_DEFINE_THREAD.9 \
 	taskqueue.9 taskqueue_free.9 \
 	taskqueue.9 taskqueue_member.9 \
 	taskqueue.9 taskqueue_run.9 \
-	taskqueue.9 taskqueue_unblock.9
+	taskqueue.9 taskqueue_set_callback.9 \
+	taskqueue.9 taskqueue_start_threads.9 \
+	taskqueue.9 taskqueue_start_threads_pinned.9 \
+	taskqueue.9 taskqueue_unblock.9 \
+	taskqueue.9 TIMEOUT_TASK_INIT.9
 MLINKS+=time.9 boottime.9 \
 	time.9 time_second.9 \
 	time.9 time_uptime.9
@@ -1373,10 +1386,14 @@ MLINKS+=timeout.9 callout.9 \
 	timeout.9 callout_init_rw.9 \
 	timeout.9 callout_pending.9 \
 	timeout.9 callout_reset.9 \
-	timeout.9 callout_reset_sbt.9 \
 	timeout.9 callout_reset_on.9 \
+	timeout.9 callout_reset_sbt.9 \
+	timeout.9 callout_reset_sbt_curcpu.9 \
 	timeout.9 callout_reset_sbt_on.9 \
 	timeout.9 callout_schedule.9 \
+	timeout.9 callout_schedule_sbt.9 \
+	timeout.9 callout_schedule_sbt_curcpu.9 \
+	timeout.9 callout_schedule_sbt_on.9 \
 	timeout.9 callout_stop.9 \
 	timeout.9 untimeout.9
 MLINKS+=ucred.9 crcopy.9 \
@@ -1392,6 +1409,9 @@ MLINKS+=uidinfo.9 uifind.9 \
 	uidinfo.9 uihold.9
 MLINKS+=uio.9 uiomove.9 \
 	uio.9 uiomove_nofault.9
+
+.if ${MK_USB} != "no"
+MAN+=	usbdi.9
 MLINKS+=usbdi.9 usbd_do_request.9 \
 	usbdi.9 usbd_do_request_flags.9 \
 	usbdi.9 usbd_errstr.9 \
@@ -1443,6 +1463,7 @@ MLINKS+=usbdi.9 usbd_do_request.9 \
 	usbdi.9 usb_fifo_reset.9 \
 	usbdi.9 usb_fifo_softc.9 \
 	usbdi.9 usb_fifo_wakeup.9
+.endif
 MLINKS+=vcount.9 count_dev.9
 MLINKS+=vfsconf.9 vfs_modevent.9 \
 	vfsconf.9 vfs_register.9 \

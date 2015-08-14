@@ -180,7 +180,8 @@ struct inpcb {
 	uint32_t inp_flowid;		/* (x) flow id / queue id */
 	u_int	inp_refcount;		/* (i) refcount */
 	void	*inp_pspare[5];		/* (x) route caching / general use */
-	u_int	inp_ispare[6];		/* (x) route caching / user cookie /
+	uint32_t inp_flowtype;		/* (x) M_HASHTYPE value */
+	u_int	inp_ispare[5];		/* (x) route caching / user cookie /
 					 *     general use */
 
 	/* Local and foreign ports, local and foreign addr. */
@@ -524,8 +525,8 @@ short	inp_so_options(const struct inpcb *inp);
 #define	INP_ONESBCAST		0x02000000 /* send all-ones broadcast */
 #define	INP_DROPPED		0x04000000 /* protocol drop flag */
 #define	INP_SOCKREF		0x08000000 /* strong socket reference */
-#define	INP_SW_FLOWID           0x10000000 /* software generated flow id */
-#define	INP_HW_FLOWID           0x20000000 /* hardware generated flow id */
+#define	INP_RESERVED_0          0x10000000 /* reserved field */
+#define	INP_RESERVED_1          0x20000000 /* reserved field */
 #define	IN6P_RFC2292		0x40000000 /* used RFC2292 API on the socket */
 #define	IN6P_MTU		0x80000000 /* receive path MTU */
 

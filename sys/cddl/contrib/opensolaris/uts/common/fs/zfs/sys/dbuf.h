@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012, 2014 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2015 by Delphix. All rights reserved.
  * Copyright (c) 2013 by Saso Kiselkov. All rights reserved.
  */
 
@@ -228,7 +228,6 @@ typedef struct dmu_buf_impl {
 
 	/* stuff we store for the user (see dmu_buf_set_user) */
 	void *db_user_ptr;
-	void **db_user_data_ptr_ptr;
 	dmu_buf_evict_func_t *db_evict_func;
 
 	uint8_t db_immediate_evict;
@@ -288,7 +287,7 @@ void dbuf_evict(dmu_buf_impl_t *db);
 
 void dbuf_setdirty(dmu_buf_impl_t *db, dmu_tx_t *tx);
 void dbuf_unoverride(dbuf_dirty_record_t *dr);
-void dbuf_sync_list(list_t *list, dmu_tx_t *tx);
+void dbuf_sync_list(list_t *list, int level, dmu_tx_t *tx);
 void dbuf_release_bp(dmu_buf_impl_t *db);
 
 void dbuf_free_range(struct dnode *dn, uint64_t start, uint64_t end,

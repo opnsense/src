@@ -99,8 +99,8 @@ int cfcs_init(void);
 static void cfcs_poll(struct cam_sim *sim);
 static void cfcs_online(void *arg);
 static void cfcs_offline(void *arg);
-static int cfcs_lun_enable(void *arg, struct ctl_id target_id, int lun_id);
-static int cfcs_lun_disable(void *arg, struct ctl_id target_id, int lun_id);
+static int cfcs_lun_enable(void *arg, int lun_id);
+static int cfcs_lun_disable(void *arg, int lun_id);
 static void cfcs_datamove(union ctl_io *io);
 static void cfcs_done(union ctl_io *io);
 void cfcs_action(struct cam_sim *sim, union ccb *ccb);
@@ -164,7 +164,7 @@ cfcs_init(void)
 	port->max_targets = 1;
 	port->max_target_id = 15;
 
-	retval = ctl_port_register(port, /*master_SC*/ 1);
+	retval = ctl_port_register(port);
 	if (retval != 0) {
 		printf("%s: ctl_port_register() failed with error %d!\n",
 		       __func__, retval);
@@ -303,12 +303,12 @@ cfcs_offline(void *arg)
 }
 
 static int
-cfcs_lun_enable(void *arg, struct ctl_id target_id, int lun_id)
+cfcs_lun_enable(void *arg, int lun_id)
 {
 	return (0);
 }
 static int
-cfcs_lun_disable(void *arg, struct ctl_id target_id, int lun_id)
+cfcs_lun_disable(void *arg, int lun_id)
 {
 	return (0);
 }
@@ -401,8 +401,8 @@ cfcs_datamove(union ctl_io *io)
 	     i < cam_sg_count && j < ctl_sg_count;) {
 		uint8_t *cam_ptr, *ctl_ptr;
 
-		len_to_copy = ctl_min(cam_sglist[i].ds_len - cam_watermark,
-				      ctl_sglist[j].len - ctl_watermark);
+		len_to_copy = MIN(cam_sglist[i].ds_len - cam_watermark,
+				  ctl_sglist[j].len - ctl_watermark);
 
 		cam_ptr = (uint8_t *)cam_sglist[i].ds_addr;
 		cam_ptr = cam_ptr + cam_watermark;
@@ -545,7 +545,7 @@ cfcs_action(struct cam_sim *sim, union ccb *ccb)
 			return;
 		}
 
-		io = ctl_alloc_io(softc->port.ctl_pool_ref);
+		io = ctl_alloc_io_nowait(softc->port.ctl_pool_ref);
 		if (io == NULL) {
 			printf("%s: can't allocate ctl_io\n", __func__);
 			ccb->ccb_h.status = CAM_BUSY | CAM_DEV_QFRZN;
@@ -609,14 +609,16 @@ cfcs_action(struct cam_sim *sim, union ccb *ccb)
 		bcopy(csio->cdb_io.cdb_bytes, io->scsiio.cdb,
 		      io->scsiio.cdb_len);
 
+		ccb->ccb_h.status |= CAM_SIM_QUEUED;
 		err = ctl_queue(io);
 		if (err != CTL_RETVAL_COMPLETE) {
 			printf("%s: func %d: error %d returned by "
 			       "ctl_queue()!\n", __func__,
 			       ccb->ccb_h.func_code, err);
 			ctl_free_io(io);
-		} else {
-			ccb->ccb_h.status |= CAM_SIM_QUEUED;
+			ccb->ccb_h.status = CAM_REQ_INVALID;
+			xpt_done(ccb);
+			return;
 		}
 		break;
 	}
@@ -640,7 +642,7 @@ cfcs_action(struct cam_sim *sim, union ccb *ccb)
 			return;
 		}
 
-		io = ctl_alloc_io(softc->port.ctl_pool_ref);
+		io = ctl_alloc_io_nowait(softc->port.ctl_pool_ref);
 		if (io == NULL) {
 			ccb->ccb_h.status = CAM_BUSY | CAM_DEV_QFRZN;
 			xpt_freeze_devq(ccb->ccb_h.path, 1);
@@ -735,7 +737,7 @@ cfcs_action(struct cam_sim *sim, union ccb *ccb)
 			return;
 		}
 
-		io = ctl_alloc_io(softc->port.ctl_pool_ref);
+		io = ctl_alloc_io_nowait(softc->port.ctl_pool_ref);
 		if (io == NULL) {
 			ccb->ccb_h.status = CAM_BUSY | CAM_DEV_QFRZN;
 			xpt_freeze_devq(ccb->ccb_h.path, 1);

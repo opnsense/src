@@ -144,9 +144,9 @@ ip_output(struct mbuf *m, struct mbuf *opt, struct route *ro, int flags,
 	if (inp != NULL) {
 		INP_LOCK_ASSERT(inp);
 		M_SETFIB(m, inp->inp_inc.inc_fibnum);
-		if (inp->inp_flags & (INP_HW_FLOWID|INP_SW_FLOWID)) {
+		if (inp->inp_flowtype != M_HASHTYPE_NONE) {
 			m->m_pkthdr.flowid = inp->inp_flowid;
-			m->m_flags |= M_FLOWID;
+			M_HASHTYPE_SET(m, M_HASHTYPE_OPAQUE);
 		}
 	}
 
@@ -752,10 +752,8 @@ ip_fragment(struct ip *ip, struct mbuf **m_frag, int mtu,
 		 * be less than the receiver's page size ?
 		 */
 		int newlen;
-		struct mbuf *m;
 
-		for (m = m0, off = 0; m && (off+m->m_len) <= mtu; m = m->m_next)
-			off += m->m_len;
+		off = MIN(mtu, m0->m_pkthdr.len);
 
 		/*
 		 * firstlen (off - hlen) must be aligned on an 
@@ -798,7 +796,19 @@ smart_frag_failure:
 			IPSTAT_INC(ips_odropped);
 			goto done;
 		}
-		m->m_flags |= (m0->m_flags & M_MCAST);
+		/*
+		 * Make sure the complete packet header gets copied
+		 * from the originating mbuf to the newly created
+		 * mbuf. This also ensures that existing firewall
+		 * classification(s), VLAN tags and so on get copied
+		 * to the resulting fragmented packet(s):
+		 */
+		if (m_dup_pkthdr(m, m0, M_NOWAIT) == 0) {
+			m_free(m);
+			error = ENOBUFS;
+			IPSTAT_INC(ips_odropped);
+			goto done;
+		}
 		/*
 		 * In the first mbuf, leave room for the link header, then
 		 * copy the original IP header including options. The payload
@@ -828,11 +838,9 @@ smart_frag_failure:
 			goto done;
 		}
 		m->m_pkthdr.len = mhlen + len;
-		m->m_pkthdr.rcvif = NULL;
 #ifdef MAC
 		mac_netinet_fragment(m0, m);
 #endif
-		m->m_pkthdr.csum_flags = m0->m_pkthdr.csum_flags;
 		mhip->ip_off = htons(mhip->ip_off);
 		mhip->ip_sum = 0;
 		if (m->m_pkthdr.csum_flags & CSUM_IP & ~if_hwassist_flags) {

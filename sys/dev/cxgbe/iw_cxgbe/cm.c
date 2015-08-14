@@ -94,7 +94,7 @@ static void abort_socket(struct c4iw_ep *ep);
 static void send_mpa_req(struct c4iw_ep *ep);
 static int send_mpa_reject(struct c4iw_ep *ep, const void *pdata, u8 plen);
 static int send_mpa_reply(struct c4iw_ep *ep, const void *pdata, u8 plen);
-static void close_complete_upcall(struct c4iw_ep *ep);
+static void close_complete_upcall(struct c4iw_ep *ep, int status);
 static int abort_connection(struct c4iw_ep *ep);
 static void peer_close_upcall(struct c4iw_ep *ep);
 static void peer_abort_upcall(struct c4iw_ep *ep);
@@ -366,7 +366,7 @@ process_peer_close(struct c4iw_ep *ep)
 						C4IW_QP_ATTR_NEXT_STATE, &attrs, 1);
 			}
 			close_socket(&ep->com, 0);
-			close_complete_upcall(ep);
+			close_complete_upcall(ep, 0);
 			__state_set(&ep->com, DEAD);
 			release = 1;
 			disconnect = 0;
@@ -474,7 +474,7 @@ process_conn_error(struct c4iw_ep *ep)
 	if (state != ABORTING) {
 
 		CTR2(KTR_IW_CXGBE, "%s:pce1 %p", __func__, ep);
-		close_socket(&ep->com, 0);
+		close_socket(&ep->com, 1);
 		state_set(&ep->com, DEAD);
 		c4iw_put_ep(&ep->com);
 	}
@@ -528,7 +528,7 @@ process_close_complete(struct c4iw_ep *ep)
 				CTR2(KTR_IW_CXGBE, "%s:pcc4 %p", __func__, ep);
 				close_socket(&ep->com, 0);
 			}
-			close_complete_upcall(ep);
+			close_complete_upcall(ep, 0);
 			__state_set(&ep->com, DEAD);
 			release = 1;
 			break;
@@ -971,18 +971,14 @@ send_mpa_req(struct c4iw_ep *ep)
 	if (mpa_rev_to_use == 2)
 		mpalen += sizeof(struct mpa_v2_conn_params);
 
-	if (mpalen > MHLEN)
-		CXGBE_UNIMPLEMENTED(__func__);
-
-	m = m_gethdr(M_NOWAIT, MT_DATA);
-	if (m == NULL) {
+	mpa = malloc(mpalen, M_CXGBE, M_NOWAIT);
+	if (mpa == NULL) {
+failed:
 		connect_reply_upcall(ep, -ENOMEM);
 		return;
 	}
 
-	mpa = mtod(m, struct mpa_message *);
-	m->m_len = mpalen;
-	m->m_pkthdr.len = mpalen;
+	memset(mpa, 0, mpalen);
 	memcpy(mpa->key, MPA_KEY_REQ, sizeof(mpa->key));
 	mpa->flags = (crc_enabled ? MPA_CRC : 0) |
 		(markers_enabled ? MPA_MARKERS : 0) |
@@ -1029,11 +1025,18 @@ send_mpa_req(struct c4iw_ep *ep)
 		CTR2(KTR_IW_CXGBE, "%s:smr7 %p", __func__, ep);
 	}
 
-	err = sosend(ep->com.so, NULL, NULL, m, NULL, MSG_DONTWAIT, ep->com.thread);
-	if (err) {
-		connect_reply_upcall(ep, -ENOMEM);
-		return;
+	m = m_getm(NULL, mpalen, M_NOWAIT, MT_DATA);
+	if (m == NULL) {
+		free(mpa, M_CXGBE);
+		goto failed;
 	}
+	m_copyback(m, 0, mpalen, (void *)mpa);
+	free(mpa, M_CXGBE);
+
+	err = sosend(ep->com.so, NULL, NULL, m, NULL, MSG_DONTWAIT,
+	    ep->com.thread);
+	if (err)
+		goto failed;
 
 	START_EP_TIMER(ep);
 	state_set(&ep->com, MPA_REQ_SENT);
@@ -1060,22 +1063,11 @@ static int send_mpa_reject(struct c4iw_ep *ep, const void *pdata, u8 plen)
 		    ep->mpa_attr.version, mpalen);
 	}
 
-	if (mpalen > MHLEN)
-		CXGBE_UNIMPLEMENTED(__func__);
-
-	m = m_gethdr(M_NOWAIT, MT_DATA);
-	if (m == NULL) {
-
-		printf("%s - cannot alloc mbuf!\n", __func__);
-		CTR2(KTR_IW_CXGBE, "%s:smrej2 %p", __func__, ep);
+	mpa = malloc(mpalen, M_CXGBE, M_NOWAIT);
+	if (mpa == NULL)
 		return (-ENOMEM);
-	}
 
-
-	mpa = mtod(m, struct mpa_message *);
-	m->m_len = mpalen;
-	m->m_pkthdr.len = mpalen;
-	memset(mpa, 0, sizeof(*mpa));
+	memset(mpa, 0, mpalen);
 	memcpy(mpa->key, MPA_KEY_REP, sizeof(mpa->key));
 	mpa->flags = MPA_REJECT;
 	mpa->revision = mpa_rev;
@@ -1107,7 +1099,15 @@ static int send_mpa_reject(struct c4iw_ep *ep, const void *pdata, u8 plen)
 		if (plen)
 			memcpy(mpa->private_data, pdata, plen);
 
-	err = sosend(ep->com.so, NULL, NULL, m, NULL, MSG_DONTWAIT, ep->com.thread);
+	m = m_getm(NULL, mpalen, M_NOWAIT, MT_DATA);
+	if (m == NULL) {
+		free(mpa, M_CXGBE);
+		return (-ENOMEM);
+	}
+	m_copyback(m, 0, mpalen, (void *)mpa);
+	free(mpa, M_CXGBE);
+
+	err = -sosend(ep->com.so, NULL, NULL, m, NULL, MSG_DONTWAIT, ep->com.thread);
 	if (!err)
 		ep->snd_seq += mpalen;
 	CTR4(KTR_IW_CXGBE, "%s:smrejE %p %u %d", __func__, ep, ep->hwtid, err);
@@ -1133,21 +1133,10 @@ static int send_mpa_reply(struct c4iw_ep *ep, const void *pdata, u8 plen)
 		mpalen += sizeof(struct mpa_v2_conn_params);
 	}
 
-	if (mpalen > MHLEN)
-		CXGBE_UNIMPLEMENTED(__func__);
-
-	m = m_gethdr(M_NOWAIT, MT_DATA);
-	if (m == NULL) {
-
-		CTR2(KTR_IW_CXGBE, "%s:smrep2 %p", __func__, ep);
-		printf("%s - cannot alloc mbuf!\n", __func__);
+	mpa = malloc(mpalen, M_CXGBE, M_NOWAIT);
+	if (mpa == NULL)
 		return (-ENOMEM);
-	}
 
-
-	mpa = mtod(m, struct mpa_message *);
-	m->m_len = mpalen;
-	m->m_pkthdr.len = mpalen;
 	memset(mpa, 0, sizeof(*mpa));
 	memcpy(mpa->key, MPA_KEY_REP, sizeof(mpa->key));
 	mpa->flags = (ep->mpa_attr.crc_enabled ? MPA_CRC : 0) |
@@ -1198,9 +1187,18 @@ static int send_mpa_reply(struct c4iw_ep *ep, const void *pdata, u8 plen)
 		if (plen)
 			memcpy(mpa->private_data, pdata, plen);
 
+	m = m_getm(NULL, mpalen, M_NOWAIT, MT_DATA);
+	if (m == NULL) {
+		free(mpa, M_CXGBE);
+		return (-ENOMEM);
+	}
+	m_copyback(m, 0, mpalen, (void *)mpa);
+	free(mpa, M_CXGBE);
+
+
 	state_set(&ep->com, MPA_REP_SENT);
 	ep->snd_seq += mpalen;
-	err = sosend(ep->com.so, NULL, NULL, m, NULL, MSG_DONTWAIT,
+	err = -sosend(ep->com.so, NULL, NULL, m, NULL, MSG_DONTWAIT,
 			ep->com.thread);
 	CTR3(KTR_IW_CXGBE, "%s:smrepE %p %d", __func__, ep, err);
 	return err;
@@ -1208,13 +1206,14 @@ static int send_mpa_reply(struct c4iw_ep *ep, const void *pdata, u8 plen)
 
 
 
-static void close_complete_upcall(struct c4iw_ep *ep)
+static void close_complete_upcall(struct c4iw_ep *ep, int status)
 {
 	struct iw_cm_event event;
 
 	CTR2(KTR_IW_CXGBE, "%s:ccuB %p", __func__, ep);
 	memset(&event, 0, sizeof(event));
 	event.event = IW_CM_EVENT_CLOSE;
+	event.status = status;
 
 	if (ep->com.cm_id) {
 
@@ -1233,7 +1232,7 @@ static int abort_connection(struct c4iw_ep *ep)
 	int err;
 
 	CTR2(KTR_IW_CXGBE, "%s:abB %p", __func__, ep);
-	close_complete_upcall(ep);
+	close_complete_upcall(ep, -ECONNRESET);
 	state_set(&ep->com, ABORTING);
 	abort_socket(ep);
 	err = close_socket(&ep->com, 0);
@@ -2100,14 +2099,15 @@ int c4iw_connect(struct iw_cm_id *cm_id, struct iw_cm_conn_param *conn_param)
 		CTR2(KTR_IW_CXGBE, "%s:cc7 %p", __func__, ep);
 		printk(KERN_ERR MOD "%s - cannot find route.\n", __func__);
 		err = -EHOSTUNREACH;
-		goto fail3;
+		goto fail2;
 	}
 
-
-	if (!(rt->rt_ifp->if_flags & IFCAP_TOE)) {
+	if (!(rt->rt_ifp->if_capenable & IFCAP_TOE)) {
 
 		CTR2(KTR_IW_CXGBE, "%s:cc8 %p", __func__, ep);
 		printf("%s - interface not TOE capable.\n", __func__);
+		close_socket(&ep->com, 0);
+		err = -ENOPROTOOPT;
 		goto fail3;
 	}
 	tdev = TOEDEV(rt->rt_ifp);
@@ -2128,9 +2128,11 @@ int c4iw_connect(struct iw_cm_id *cm_id, struct iw_cm_conn_param *conn_param)
 		ep->com.thread);
 
 	if (!err) {
-
 		CTR2(KTR_IW_CXGBE, "%s:cca %p", __func__, ep);
 		goto out;
+	} else {
+		close_socket(&ep->com, 0);
+		goto fail2;
 	}
 
 fail3:
@@ -2227,7 +2229,7 @@ int c4iw_ep_disconnect(struct c4iw_ep *ep, int abrupt, gfp_t gfp)
 
 		CTR2(KTR_IW_CXGBE, "%s:ced1 %p", __func__, ep);
 		fatal = 1;
-		close_complete_upcall(ep);
+		close_complete_upcall(ep, -EIO);
 		ep->com.state = DEAD;
 	}
 	CTR3(KTR_IW_CXGBE, "%s:ced2 %p %s", __func__, ep,

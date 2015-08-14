@@ -650,6 +650,7 @@ static void mlx4_en_cache_mclist(struct net_device *dev)
 	struct mlx4_en_mc_list *tmp;
 	struct mlx4_en_priv *priv = netdev_priv(dev);
 
+        if_maddr_rlock(dev);
         TAILQ_FOREACH(ifma, &dev->if_multiaddrs, ifma_link) {
                 if (ifma->ifma_addr->sa_family != AF_LINK)
                         continue;
@@ -658,10 +659,13 @@ static void mlx4_en_cache_mclist(struct net_device *dev)
                         continue;
                 /* Make sure the list didn't grow. */
 		tmp = kzalloc(sizeof(struct mlx4_en_mc_list), GFP_ATOMIC);
+		if (tmp == NULL)
+			break;
 		memcpy(tmp->addr,
 			LLADDR((struct sockaddr_dl *)ifma->ifma_addr), ETH_ALEN);
 		list_add_tail(&tmp->list, &priv->mc_list);
         }
+        if_maddr_runlock(dev);
 }
 
 static void update_mclist_flags(struct mlx4_en_priv *priv,
@@ -970,6 +974,9 @@ static void mlx4_en_do_set_rx_mode(struct work_struct *work)
 			/* Important note: the following call for if_link_state_change
 			 * is needed for interface up scenario (start port, link state
 			 * change) */
+			/* update netif baudrate */
+			priv->dev->if_baudrate =
+			    IF_Mbps(priv->port_state.link_speed);
 			if_link_state_change(priv->dev, LINK_STATE_UP);
 			en_dbg(HW, priv, "Link Up\n");
 		}
@@ -1186,6 +1193,9 @@ static void mlx4_en_linkstate(struct work_struct *work)
 		if (linkstate == MLX4_DEV_EVENT_PORT_DOWN) {
 			en_info(priv, "Link Down\n");
 			if_link_state_change(priv->dev, LINK_STATE_DOWN);
+			/* update netif baudrate */
+			priv->dev->if_baudrate = 0;
+
 		/* make sure the port is up before notifying the OS. 
 		 * This is tricky since we get here on INIT_PORT and 
 		 * in such case we can't tell the OS the port is up.
@@ -1193,6 +1203,10 @@ static void mlx4_en_linkstate(struct work_struct *work)
 		 * in set_rx_mode.
 		 * */
 		} else if (priv->port_up && (linkstate == MLX4_DEV_EVENT_PORT_UP)){
+			if (mlx4_en_QUERY_PORT(priv->mdev, priv->port))
+				en_info(priv, "Query port failed\n");
+			priv->dev->if_baudrate =
+			    IF_Mbps(priv->port_state.link_speed);
 			en_info(priv, "Link Up\n");
 			if_link_state_change(priv->dev, LINK_STATE_UP);
 		}
@@ -1295,7 +1309,7 @@ int mlx4_en_start_port(struct net_device *dev)
 		cq = priv->tx_cq[i];
 		err = mlx4_en_activate_cq(priv, cq, i);
 		if (err) {
-			en_err(priv, "Failed allocating Tx CQ\n");
+			en_err(priv, "Failed activating Tx CQ\n");
 			goto tx_err;
 		}
 		err = mlx4_en_set_cq_moder(priv, cq);
@@ -1313,7 +1327,7 @@ int mlx4_en_start_port(struct net_device *dev)
 		err = mlx4_en_activate_tx_ring(priv, tx_ring, cq->mcq.cqn,
 					       i / priv->num_tx_rings_p_up);
 		if (err) {
-			en_err(priv, "Failed allocating Tx ring\n");
+			en_err(priv, "Failed activating Tx ring %d\n", i);
 			mlx4_en_deactivate_cq(priv, cq);
 			goto tx_err;
 		}
@@ -1906,19 +1920,22 @@ static int mlx4_en_ioctl(struct ifnet *dev, u_long command, caddr_t data)
 		error = -mlx4_en_change_mtu(dev, ifr->ifr_mtu);
 		break;
 	case SIOCSIFFLAGS:
-		mutex_lock(&mdev->state_lock);
 		if (dev->if_flags & IFF_UP) {
-			if ((dev->if_drv_flags & IFF_DRV_RUNNING) == 0)
+			if ((dev->if_drv_flags & IFF_DRV_RUNNING) == 0) {
+				mutex_lock(&mdev->state_lock);
 				mlx4_en_start_port(dev);
-			else
+				mutex_unlock(&mdev->state_lock);
+			} else {
 				mlx4_en_set_rx_mode(dev);
+			}
 		} else {
+			mutex_lock(&mdev->state_lock);
 			if (dev->if_drv_flags & IFF_DRV_RUNNING) {
 				mlx4_en_stop_port(dev);
-                                if_link_state_change(dev, LINK_STATE_DOWN);
+				if_link_state_change(dev, LINK_STATE_DOWN);
 			}
+			mutex_unlock(&mdev->state_lock);
 		}
-		mutex_unlock(&mdev->state_lock);
 		break;
 	case SIOCADDMULTI:
 	case SIOCDELMULTI:
@@ -1978,7 +1995,6 @@ int mlx4_en_init_netdev(struct mlx4_en_dev *mdev, int port,
 	dev->if_softc = priv;
 	if_initname(dev, "mlxen", atomic_fetchadd_int(&mlx4_en_unit, 1));
 	dev->if_mtu = ETHERMTU;
-	dev->if_baudrate = 1000000000;
 	dev->if_init = mlx4_en_open;
 	dev->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
 	dev->if_ioctl = mlx4_en_ioctl;
@@ -2097,12 +2113,12 @@ int mlx4_en_init_netdev(struct mlx4_en_dev *mdev, int port,
 
 	if (mdev->LSO_support)
 		dev->if_capabilities |= IFCAP_TSO4 | IFCAP_TSO6 | IFCAP_VLAN_HWTSO;
-#if 0
+
 	/* set TSO limits so that we don't have to drop TX packets */
 	dev->if_hw_tsomax = 65536 - (ETHER_HDR_LEN + ETHER_VLAN_ENCAP_LEN);
 	dev->if_hw_tsomaxsegcount = 16;
 	dev->if_hw_tsomaxsegsize = 65536;       /* XXX can do up to 4GByte */
-#endif
+
 	dev->if_capenable = dev->if_capabilities;
 
 	dev->if_hwassist = 0;
@@ -2180,6 +2196,7 @@ out:
 	mlx4_en_destroy_netdev(dev);
 	return err;
 }
+
 static int mlx4_en_set_ring_size(struct net_device *dev,
     int rx_size, int tx_size)
 {
@@ -2335,9 +2352,11 @@ static void mlx4_en_sysctl_conf(struct mlx4_en_priv *priv)
         struct sysctl_oid_list *node_list;
         struct sysctl_oid *coal;
         struct sysctl_oid_list *coal_list;
+	const char *pnameunit;
 
         dev = priv->dev;
         ctx = &priv->conf_ctx;
+	pnameunit = device_get_nameunit(priv->mdev->pdev->dev.bsddev);
 
         sysctl_ctx_init(ctx);
         priv->sysctl = SYSCTL_ADD_NODE(ctx, SYSCTL_STATIC_CHILDREN(_hw),
@@ -2350,10 +2369,10 @@ static void mlx4_en_sysctl_conf(struct mlx4_en_priv *priv)
             CTLFLAG_RW, &priv->msg_enable, 0,
             "Driver message enable bitfield");
         SYSCTL_ADD_UINT(ctx, node_list, OID_AUTO, "rx_rings",
-            CTLTYPE_INT | CTLFLAG_RD, &priv->rx_ring_num, 0,
+            CTLFLAG_RD, &priv->rx_ring_num, 0,
             "Number of receive rings");
         SYSCTL_ADD_UINT(ctx, node_list, OID_AUTO, "tx_rings",
-            CTLTYPE_INT | CTLFLAG_RD, &priv->tx_ring_num, 0,
+            CTLFLAG_RD, &priv->tx_ring_num, 0,
             "Number of transmit rings");
         SYSCTL_ADD_PROC(ctx, node_list, OID_AUTO, "rx_size",
             CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, priv, 0,
@@ -2367,6 +2386,12 @@ static void mlx4_en_sysctl_conf(struct mlx4_en_priv *priv)
         SYSCTL_ADD_PROC(ctx, node_list, OID_AUTO, "rx_ppp",
             CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, priv, 0,
             mlx4_en_set_rx_ppp, "I", "RX Per-priority pause");
+        SYSCTL_ADD_UINT(ctx, node_list, OID_AUTO, "port_num",
+            CTLFLAG_RD, &priv->port, 0,
+            "Port Number");
+        SYSCTL_ADD_STRING(ctx, node_list, OID_AUTO, "device_name",
+	    CTLFLAG_RD, __DECONST(void *, pnameunit), 0,
+	    "PCI device name");
 
         /* Add coalescer configuration. */
         coal = SYSCTL_ADD_NODE(ctx, node_list, OID_AUTO,
@@ -2391,7 +2416,6 @@ static void mlx4_en_sysctl_conf(struct mlx4_en_priv *priv)
             CTLFLAG_RW, &priv->adaptive_rx_coal, 0,
             "Enable adaptive rx coalescing");
 }
-
 
 static void mlx4_en_sysctl_stat(struct mlx4_en_priv *priv)
 {

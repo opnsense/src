@@ -90,6 +90,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/armreg.h>
 #include <machine/atags.h>
 #include <machine/cpu.h>
+#include <machine/cpuinfo.h>
 #include <machine/devmap.h>
 #include <machine/frame.h>
 #include <machine/intr.h>
@@ -376,7 +377,7 @@ cpu_startup(void *dummy)
 
 	bufinit();
 	vm_pager_bufferinit();
-	pcb->un_32.pcb32_sp = (u_int)thread0.td_kstack +
+	pcb->pcb_regs.sf_sp = (u_int)thread0.td_kstack +
 	    USPACE_SVC_STACK_TOP;
 	vector_page_setprot(VM_PROT_READ);
 	pmap_set_pcb_pagedir(pmap_kernel(), pcb);
@@ -619,7 +620,7 @@ spinlock_enter(void)
 
 	td = curthread;
 	if (td->td_md.md_spinlock_count == 0) {
-		cspr = disable_interrupts(I32_bit | F32_bit);
+		cspr = disable_interrupts(PSR_I | PSR_F);
 		td->td_md.md_spinlock_count = 1;
 		td->td_md.md_saved_cspr = cspr;
 	} else
@@ -697,7 +698,7 @@ get_mcontext(struct thread *td, mcontext_t *mcp, int clear_ret)
  * touch the cs selector.
  */
 int
-set_mcontext(struct thread *td, const mcontext_t *mcp)
+set_mcontext(struct thread *td, mcontext_t *mcp)
 {
 	struct trapframe *tf = td->td_frame;
 	const __greg_t *gr = mcp->__gregs;
@@ -746,7 +747,7 @@ sys_sigreturn(td, uap)
 	 */
 	spsr = uc.uc_mcontext.__gregs[_REG_CPSR];
 	if ((spsr & PSR_MODE) != PSR_USR32_MODE ||
-	    (spsr & (I32_bit | F32_bit)) != 0)
+	    (spsr & (PSR_I | PSR_F)) != 0)
 		return (EINVAL);
 		/* Restore register context. */
 	set_mcontext(td, &uc.uc_mcontext);
@@ -768,14 +769,18 @@ sys_sigreturn(td, uap)
 void
 makectx(struct trapframe *tf, struct pcb *pcb)
 {
-	pcb->un_32.pcb32_r8 = tf->tf_r8;
-	pcb->un_32.pcb32_r9 = tf->tf_r9;
-	pcb->un_32.pcb32_r10 = tf->tf_r10;
-	pcb->un_32.pcb32_r11 = tf->tf_r11;
-	pcb->un_32.pcb32_r12 = tf->tf_r12;
-	pcb->un_32.pcb32_pc = tf->tf_pc;
-	pcb->un_32.pcb32_lr = tf->tf_usr_lr;
-	pcb->un_32.pcb32_sp = tf->tf_usr_sp;
+	pcb->pcb_regs.sf_r4 = tf->tf_r4;
+	pcb->pcb_regs.sf_r5 = tf->tf_r5;
+	pcb->pcb_regs.sf_r6 = tf->tf_r6;
+	pcb->pcb_regs.sf_r7 = tf->tf_r7;
+	pcb->pcb_regs.sf_r8 = tf->tf_r8;
+	pcb->pcb_regs.sf_r9 = tf->tf_r9;
+	pcb->pcb_regs.sf_r10 = tf->tf_r10;
+	pcb->pcb_regs.sf_r11 = tf->tf_r11;
+	pcb->pcb_regs.sf_r12 = tf->tf_r12;
+	pcb->pcb_regs.sf_pc = tf->tf_pc;
+	pcb->pcb_regs.sf_lr = tf->tf_usr_lr;
+	pcb->pcb_regs.sf_sp = tf->tf_usr_sp;
 }
 
 /*
@@ -934,7 +939,6 @@ freebsd_parse_boot_param(struct arm_boot_params *abp)
 	ksym_start = MD_FETCH(kmdp, MODINFOMD_SSYM, uintptr_t);
 	ksym_end = MD_FETCH(kmdp, MODINFOMD_ESYM, uintptr_t);
 #endif
-	preload_addr_relocate = KERNVIRTADDR - abp->abp_physaddr;
 	return lastaddr;
 }
 #endif
@@ -1054,6 +1058,8 @@ initarm(struct arm_boot_params *abp)
 	arm_physmem_kernaddr = abp->abp_physaddr;
 
 	memsize = 0;
+
+	cpuinfo_init();
 	set_cpufuncs();
 
 	/*

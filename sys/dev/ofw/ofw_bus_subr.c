@@ -37,6 +37,8 @@ __FBSDID("$FreeBSD$");
 #include <sys/errno.h>
 #include <sys/libkern.h>
 
+#include <machine/resource.h>
+
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
 #include <dev/ofw/openfirm.h>
@@ -344,7 +346,7 @@ ofw_bus_search_intrmap(void *intr, int intrsz, void *regs, int physsz,
 	i = imapsz;
 	while (i > 0) {
 		bcopy(mptr + physsz + intrsz, &parent, sizeof(parent));
-		if (OF_searchencprop(OF_xref_phandle(parent),
+		if (OF_searchencprop(OF_node_from_xref(parent),
 		    "#interrupt-cells", &pintrsz, sizeof(pintrsz)) == -1)
 			pintrsz = 1;	/* default */
 		pintrsz *= sizeof(pcell_t);
@@ -367,3 +369,112 @@ ofw_bus_search_intrmap(void *intr, int intrsz, void *regs, int physsz,
 	return (0);
 }
 
+int
+ofw_bus_reg_to_rl(device_t dev, phandle_t node, pcell_t acells, pcell_t scells,
+    struct resource_list *rl)
+{
+	uint64_t phys, size;
+	ssize_t i, j, rid, nreg, ret;
+	uint32_t *reg;
+	char *name;
+
+	/*
+	 * This may be just redundant when having ofw_bus_devinfo
+	 * but makes this routine independent of it.
+	 */
+	ret = OF_getencprop_alloc(node, "name", sizeof(*name), (void **)&name);
+	if (ret == -1)
+		name = NULL;
+
+	ret = OF_getencprop_alloc(node, "reg", sizeof(*reg), (void **)&reg);
+	nreg = (ret == -1) ? 0 : ret;
+
+	if (nreg % (acells + scells) != 0) {
+		if (bootverbose)
+			device_printf(dev, "Malformed reg property on <%s>\n",
+			    (name == NULL) ? "unknown" : name);
+		nreg = 0;
+	}
+
+	for (i = 0, rid = 0; i < nreg; i += acells + scells, rid++) {
+		phys = size = 0;
+		for (j = 0; j < acells; j++) {
+			phys <<= 32;
+			phys |= reg[i + j];
+		}
+		for (j = 0; j < scells; j++) {
+			size <<= 32;
+			size |= reg[i + acells + j];
+		}
+		/* Skip the dummy reg property of glue devices like ssm(4). */
+		if (size != 0)
+			resource_list_add(rl, SYS_RES_MEMORY, rid,
+			    phys, phys + size - 1, size);
+	}
+	free(name, M_OFWPROP);
+	free(reg, M_OFWPROP);
+
+	return (0);
+}
+
+int
+ofw_bus_intr_to_rl(device_t dev, phandle_t node, struct resource_list *rl)
+{
+	phandle_t iparent;
+	uint32_t icells, *intr;
+	int err, i, irqnum, nintr, rid;
+	boolean_t extended;
+
+	nintr = OF_getencprop_alloc(node, "interrupts",  sizeof(*intr),
+	    (void **)&intr);
+	if (nintr > 0) {
+		if (OF_searchencprop(node, "interrupt-parent", &iparent,
+		    sizeof(iparent)) == -1) {
+			device_printf(dev, "No interrupt-parent found, "
+			    "assuming direct parent\n");
+			iparent = OF_parent(node);
+		}
+		if (OF_searchencprop(OF_node_from_xref(iparent), 
+		    "#interrupt-cells", &icells, sizeof(icells)) == -1) {
+			device_printf(dev, "Missing #interrupt-cells "
+			    "property, assuming <1>\n");
+			icells = 1;
+		}
+		if (icells < 1 || icells > nintr) {
+			device_printf(dev, "Invalid #interrupt-cells property "
+			    "value <%d>, assuming <1>\n", icells);
+			icells = 1;
+		}
+		extended = false;
+	} else {
+		nintr = OF_getencprop_alloc(node, "interrupts-extended",
+		    sizeof(*intr), (void **)&intr);
+		if (nintr <= 0)
+			return (0);
+		extended = true;
+	}
+	err = 0;
+	rid = 0;
+	for (i = 0; i < nintr; i += icells) {
+		if (extended) {
+			iparent = intr[i++];
+			if (OF_searchencprop(OF_node_from_xref(iparent), 
+			    "#interrupt-cells", &icells, sizeof(icells)) == -1) {
+				device_printf(dev, "Missing #interrupt-cells "
+				    "property\n");
+				err = ENOENT;
+				break;
+			}
+			if (icells < 1 || (i + icells) > nintr) {
+				device_printf(dev, "Invalid #interrupt-cells "
+				    "property value <%d>\n", icells);
+				err = ERANGE;
+				break;
+			}
+		}
+		irqnum = ofw_bus_map_intr(dev, iparent, icells, &intr[i]);
+		resource_list_add(rl, SYS_RES_IRQ, rid++, irqnum, irqnum, 1);
+	}
+	free(intr, M_OFWPROP);
+	return (err);
+}

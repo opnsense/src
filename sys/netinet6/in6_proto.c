@@ -331,6 +331,17 @@ struct ip6protosw inet6sw[] = {
 {
 	.pr_type =		SOCK_RAW,
 	.pr_domain =		&inet6domain,
+	.pr_protocol =		IPPROTO_GRE,
+	.pr_flags =		PR_ATOMIC|PR_ADDR|PR_LASTHDR,
+	.pr_input =		encap6_input,
+	.pr_output =		rip6_output,
+	.pr_ctloutput =		rip6_ctloutput,
+	.pr_init =		encap_init,
+	.pr_usrreqs =		&rip6_usrreqs
+},
+{
+	.pr_type =		SOCK_RAW,
+	.pr_domain =		&inet6domain,
 	.pr_protocol =		IPPROTO_PIM,
 	.pr_flags =		PR_ATOMIC|PR_ADDR|PR_LASTHDR,
 	.pr_input =		encap6_input,
@@ -474,8 +485,6 @@ sysctl_ip6_temppltime(SYSCTL_HANDLER_ARGS)
 	int error = 0;
 	int old;
 
-	VNET_SYSCTL_ARG(req, arg1);
-
 	error = SYSCTL_OUT(req, arg1, sizeof(int));
 	if (error || !req->newptr)
 		return (error);
@@ -494,8 +503,6 @@ sysctl_ip6_tempvltime(SYSCTL_HANDLER_ARGS)
 {
 	int error = 0;
 	int old;
-
-	VNET_SYSCTL_ARG(req, arg1);
 
 	error = SYSCTL_OUT(req, arg1, sizeof(int));
 	if (error || !req->newptr)

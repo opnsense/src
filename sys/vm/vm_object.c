@@ -166,6 +166,8 @@ vm_object_zdtor(void *mem, int size, void *arg)
 	vm_object_t object;
 
 	object = (vm_object_t)mem;
+	KASSERT(object->ref_count == 0,
+	    ("object %p ref_count = %d", object, object->ref_count));
 	KASSERT(TAILQ_EMPTY(&object->memq),
 	    ("object %p has resident pages in its memq", object));
 	KASSERT(vm_radix_is_empty(&object->rtree),
@@ -187,6 +189,9 @@ vm_object_zdtor(void *mem, int size, void *arg)
 	KASSERT(object->shadow_count == 0,
 	    ("object %p shadow_count = %d",
 	    object, object->shadow_count));
+	KASSERT(object->type == OBJT_DEAD,
+	    ("object %p has non-dead type %d",
+	    object, object->type));
 }
 #endif
 
@@ -200,6 +205,8 @@ vm_object_zinit(void *mem, int size, int flags)
 	rw_init_flags(&object->lock, "vm object", RW_DUPOK);
 
 	/* These are true for any object that has been freed */
+	object->type = OBJT_DEAD;
+	object->ref_count = 0;
 	object->rtree.rt_root = 0;
 	object->rtree.rt_flags = 0;
 	object->paging_in_progress = 0;
@@ -207,6 +214,10 @@ vm_object_zinit(void *mem, int size, int flags)
 	object->shadow_count = 0;
 	object->cache.rt_root = 0;
 	object->cache.rt_flags = 0;
+
+	mtx_lock(&vm_object_list_mtx);
+	TAILQ_INSERT_TAIL(&vm_object_list, object, object_list);
+	mtx_unlock(&vm_object_list_mtx);
 	return (0);
 }
 
@@ -253,10 +264,6 @@ _vm_object_allocate(objtype_t type, vm_pindex_t size, vm_object_t object)
 #if VM_NRESERVLEVEL > 0
 	LIST_INIT(&object->rvq);
 #endif
-
-	mtx_lock(&vm_object_list_mtx);
-	TAILQ_INSERT_TAIL(&vm_object_list, object, object_list);
-	mtx_unlock(&vm_object_list_mtx);
 }
 
 /*
@@ -468,7 +475,12 @@ vm_object_vndeallocate(vm_object_t object)
 	}
 #endif
 
-	if (object->ref_count > 1) {
+	/*
+	 * The test for text of vp vnode does not need a bypass to
+	 * reach right VV_TEXT there, since it is obtained from
+	 * object->handle.
+	 */
+	if (object->ref_count > 1 || (vp->v_vflag & VV_TEXT) == 0) {
 		object->ref_count--;
 		VM_OBJECT_WUNLOCK(object);
 		/* vrele may need the vnode lock. */
@@ -667,20 +679,9 @@ vm_object_destroy(vm_object_t object)
 {
 
 	/*
-	 * Remove the object from the global object list.
-	 */
-	mtx_lock(&vm_object_list_mtx);
-	TAILQ_REMOVE(&vm_object_list, object, object_list);
-	mtx_unlock(&vm_object_list_mtx);
-
-	/*
 	 * Release the allocation charge.
 	 */
 	if (object->cred != NULL) {
-		KASSERT(object->type == OBJT_DEFAULT ||
-		    object->type == OBJT_SWAP,
-		    ("vm_object_terminate: non-swap obj %p has cred",
-		     object));
 		swap_release_by_cred(object->charge, object->cred);
 		object->charge = 0;
 		crfree(object->cred);
@@ -784,6 +785,10 @@ vm_object_terminate(vm_object_t object)
 #endif
 	if (__predict_false(!vm_object_cache_is_empty(object)))
 		vm_page_cache_free(object, 0, 0);
+
+	KASSERT(object->cred == NULL || object->type == OBJT_DEFAULT ||
+	    object->type == OBJT_SWAP,
+	    ("%s: non-swap obj %p has cred", __func__, object));
 
 	/*
 	 * Let the pager know object is dead.
@@ -1058,9 +1063,9 @@ vm_object_sync(vm_object_t object, vm_ooffset_t offset, vm_size_t size,
 			 */
 			flags = OBJPR_NOTMAPPED;
 		else if (old_msync)
-			flags = OBJPR_NOTWIRED;
+			flags = 0;
 		else
-			flags = OBJPR_CLEANONLY | OBJPR_NOTWIRED;
+			flags = OBJPR_CLEANONLY;
 		vm_object_page_remove(object, OFF_TO_IDX(offset),
 		    OFF_TO_IDX(offset + size + PAGE_MASK), flags);
 	}
@@ -1623,7 +1628,7 @@ vm_object_backing_scan(vm_object_t object, int op)
 					p = next;
 					continue;
 				}
-				VM_OBJECT_WLOCK(backing_object);
+				VM_OBJECT_WUNLOCK(backing_object);
 				VM_OBJECT_WUNLOCK(object);
 				VM_WAIT;
 				VM_OBJECT_WLOCK(object);
@@ -1800,6 +1805,8 @@ vm_object_collapse(vm_object_t object)
 			KASSERT(backing_object->ref_count == 1, (
 "backing_object %p was somehow re-referenced during collapse!",
 			    backing_object));
+			backing_object->type = OBJT_DEAD;
+			backing_object->ref_count = 0;
 			VM_OBJECT_WUNLOCK(backing_object);
 			vm_object_destroy(backing_object);
 
@@ -1887,7 +1894,6 @@ vm_object_page_remove(vm_object_t object, vm_pindex_t start, vm_pindex_t end,
     int options)
 {
 	vm_page_t p, next;
-	int wirings;
 
 	VM_OBJECT_ASSERT_WLOCKED(object);
 	KASSERT((object->flags & OBJ_UNMANAGED) == 0 ||
@@ -1921,15 +1927,9 @@ again:
 			VM_OBJECT_WLOCK(object);
 			goto again;
 		}
-		if ((wirings = p->wire_count) != 0 &&
-		    (wirings = pmap_page_wired_mappings(p)) != p->wire_count) {
-			if ((options & (OBJPR_NOTWIRED | OBJPR_NOTMAPPED)) ==
-			    0) {
+		if (p->wire_count != 0) {
+			if ((options & OBJPR_NOTMAPPED) == 0)
 				pmap_remove_all(p);
-				/* Account for removal of wired mappings. */
-				if (wirings != 0)
-					p->wire_count -= wirings;
-			}
 			if ((options & OBJPR_CLEANONLY) == 0) {
 				p->valid = 0;
 				vm_page_undirty(p);
@@ -1950,19 +1950,8 @@ again:
 			if (p->dirty)
 				goto next;
 		}
-		if ((options & OBJPR_NOTMAPPED) == 0) {
-			if ((options & OBJPR_NOTWIRED) != 0 && wirings != 0)
-				goto next;
+		if ((options & OBJPR_NOTMAPPED) == 0)
 			pmap_remove_all(p);
-			/* Account for removal of wired mappings. */
-			if (wirings != 0) {
-				KASSERT(p->wire_count == wirings,
-				    ("inconsistent wire count %d %d %p",
-				    p->wire_count, wirings, p));
-				p->wire_count = 0;
-				atomic_subtract_int(&cnt.v_wire_count, 1);
-			}
-		}
 		vm_page_free(p);
 next:
 		vm_page_unlock(p);
@@ -2195,8 +2184,13 @@ vm_object_set_writeable_dirty(vm_object_t object)
 {
 
 	VM_OBJECT_ASSERT_WLOCKED(object);
-	if (object->type != OBJT_VNODE)
+	if (object->type != OBJT_VNODE) {
+		if ((object->flags & OBJ_TMPFS_NODE) != 0) {
+			KASSERT(object->type == OBJT_SWAP, ("non-swap tmpfs"));
+			vm_object_set_flag(object, OBJ_TMPFS_DIRTY);
+		}
 		return;
+	}
 	object->generation++;
 	if ((object->flags & OBJ_MIGHTBEDIRTY) != 0)
 		return;

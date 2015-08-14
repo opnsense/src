@@ -53,7 +53,6 @@
 
 #include <net/if.h>
 #include <net/pfil.h>
-#include <net/route.h>
 #include <net/netisr.h>
 #include <net/vnet.h>
 
@@ -308,26 +307,6 @@ _ipip_input(struct mbuf *m, int iphlen, struct ifnet *gifp)
 	/* Statistics */
 	IPIPSTAT_ADD(ipips_ibytes, m->m_pkthdr.len - iphlen);
 
-#ifdef DEV_ENC
-	switch (v >> 4) {
-#ifdef INET
-	case 4:
-		ipsec_bpf(m, NULL, AF_INET, ENC_IN|ENC_AFTER);
-		break;
-#endif
-#ifdef INET6
-	case 6:
-		ipsec_bpf(m, NULL, AF_INET6, ENC_IN|ENC_AFTER);
-		break;
-#endif
-	default:
-		panic("%s: bogus ip version %u", __func__, v>>4);
-	}
-	/* pass the mbuf to enc0 for packet filtering */
-	if (ipsec_filter(&m, PFIL_IN, ENC_IN|ENC_AFTER) != 0)
-		return;
-#endif
-
 	/*
 	 * Interface pointer stays the same; if no IPsec processing has
 	 * been done (or will be done), this will point to a normal
@@ -506,10 +485,10 @@ ipip_output(
 		ip6o->ip6_flow = 0;
 		ip6o->ip6_vfc &= ~IPV6_VERSION_MASK;
 		ip6o->ip6_vfc |= IPV6_VERSION;
-		ip6o->ip6_plen = htons(m->m_pkthdr.len);
-		ip6o->ip6_hlim = V_ip_defttl;
+		ip6o->ip6_hlim = IPV6_DEFHLIM;
 		ip6o->ip6_dst = saidx->dst.sin6.sin6_addr;
 		ip6o->ip6_src = saidx->src.sin6.sin6_addr;
+		ip6o->ip6_plen = htons(m->m_pkthdr.len - sizeof(*ip6));
 
 		switch (tp) {
 #ifdef INET
@@ -541,7 +520,7 @@ ipip_output(
 		}
 
 		otos = 0;
-		ip_ecn_ingress(ECN_ALLOWED, &otos, &itos);
+		ip_ecn_ingress(V_ip6_ipsec_ecn, &otos, &itos);
 		ip6o->ip6_flow |= htonl((u_int32_t) otos << 20);
 		break;
 #endif /* INET6 */

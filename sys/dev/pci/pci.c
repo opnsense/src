@@ -92,6 +92,9 @@ static int		pci_add_map(device_t bus, device_t dev, int reg,
 			    struct resource_list *rl, int force, int prefetch);
 static int		pci_probe(device_t dev);
 static int		pci_attach(device_t dev);
+#ifdef PCI_RES_BUS
+static int		pci_detach(device_t dev);
+#endif
 static void		pci_load_vendor_data(void);
 static int		pci_describe_parse_line(char **ptr, int *vendor,
 			    int *device, char **desc);
@@ -121,11 +124,17 @@ static void		pci_resume_msix(device_t dev);
 static int		pci_remap_intr_method(device_t bus, device_t dev,
 			    u_int irq);
 
+static uint16_t		pci_get_rid_method(device_t dev, device_t child);
+
 static device_method_t pci_methods[] = {
 	/* Device interface */
 	DEVMETHOD(device_probe,		pci_probe),
 	DEVMETHOD(device_attach,	pci_attach),
+#ifdef PCI_RES_BUS
+	DEVMETHOD(device_detach,	pci_detach),
+#else
 	DEVMETHOD(device_detach,	bus_generic_detach),
+#endif
 	DEVMETHOD(device_shutdown,	bus_generic_shutdown),
 	DEVMETHOD(device_suspend,	pci_suspend),
 	DEVMETHOD(device_resume,	pci_resume),
@@ -175,6 +184,7 @@ static device_method_t pci_methods[] = {
 	DEVMETHOD(pci_release_msi,	pci_release_msi_method),
 	DEVMETHOD(pci_msi_count,	pci_msi_count_method),
 	DEVMETHOD(pci_msix_count,	pci_msix_count_method),
+	DEVMETHOD(pci_get_rid,		pci_get_rid_method),
 
 	DEVMETHOD_END
 };
@@ -196,6 +206,7 @@ struct pci_quirk {
 #define	PCI_QUIRK_ENABLE_MSI_VM	3 /* Older chipset in VM where MSI works */
 #define	PCI_QUIRK_UNMAP_REG	4 /* Ignore PCI map register */
 #define	PCI_QUIRK_DISABLE_MSIX	5 /* MSI-X doesn't work */
+#define	PCI_QUIRK_MSI_INTX_BUG	6 /* PCIM_CMD_INTxDIS disables MSI */
 	int	arg1;
 	int	arg2;
 };
@@ -254,6 +265,26 @@ static const struct pci_quirk pci_quirks[] = {
 	 * For SB700 and later, it is unused and hardcoded to zero.
 	 */
 	{ 0x43851002, PCI_QUIRK_UNMAP_REG,	0x14,	0 },
+
+	/*
+	 * Atheros AR8161/AR8162/E2200 Ethernet controllers have a bug that
+	 * MSI interrupt does not assert if PCIM_CMD_INTxDIS bit of the
+	 * command register is set.
+	 */
+	{ 0x10911969, PCI_QUIRK_MSI_INTX_BUG,	0,	0 },
+	{ 0xE0911969, PCI_QUIRK_MSI_INTX_BUG,	0,	0 },
+	{ 0x10901969, PCI_QUIRK_MSI_INTX_BUG,	0,	0 },
+
+	/*
+	 * Broadcom BCM5714(S)/BCM5715(S)/BCM5780(S) Ethernet MACs don't
+	 * issue MSI interrupts with PCIM_CMD_INTxDIS set either.
+	 */
+	{ 0x166814e4, PCI_QUIRK_MSI_INTX_BUG,	0,	0 }, /* BCM5714 */
+	{ 0x166914e4, PCI_QUIRK_MSI_INTX_BUG,	0,	0 }, /* BCM5714S */
+	{ 0x166a14e4, PCI_QUIRK_MSI_INTX_BUG,	0,	0 }, /* BCM5780 */
+	{ 0x166b14e4, PCI_QUIRK_MSI_INTX_BUG,	0,	0 }, /* BCM5780S */
+	{ 0x167814e4, PCI_QUIRK_MSI_INTX_BUG,	0,	0 }, /* BCM5715 */
+	{ 0x167914e4, PCI_QUIRK_MSI_INTX_BUG,	0,	0 }, /* BCM5715S */
 
 	{ 0 }
 };
@@ -336,6 +367,18 @@ static int pci_clear_bars;
 TUNABLE_INT("hw.pci.clear_bars", &pci_clear_bars);
 SYSCTL_INT(_hw_pci, OID_AUTO, clear_bars, CTLFLAG_RDTUN, &pci_clear_bars, 0,
     "Ignore firmware-assigned resources for BARs.");
+
+#if defined(NEW_PCIB) && defined(PCI_RES_BUS)
+static int pci_clear_buses;
+TUNABLE_INT("hw.pci.clear_buses", &pci_clear_buses);
+SYSCTL_INT(_hw_pci, OID_AUTO, clear_buses, CTLFLAG_RDTUN, &pci_clear_buses, 0,
+    "Ignore firmware-assigned bus numbers.");
+#endif
+
+static int pci_enable_ari = 1;
+TUNABLE_INT("hw.pci.enable_ari", &pci_enable_ari);
+SYSCTL_INT(_hw_pci, OID_AUTO, enable_ari, CTLFLAG_RDTUN, &pci_enable_ari,
+    0, "Enable support for PCIe Alternative RID Interpretation");
 
 static int
 pci_has_quirk(uint32_t devid, int quirk)
@@ -542,6 +585,8 @@ pci_hdrtypedata(device_t pcib, int b, int s, int f, pcicfgregs *cfg)
 	case PCIM_HDRTYPE_NORMAL:
 		cfg->subvendor      = REG(PCIR_SUBVEND_0, 2);
 		cfg->subdevice      = REG(PCIR_SUBDEV_0, 2);
+		cfg->mingnt         = REG(PCIR_MINGNT, 1);
+		cfg->maxlat         = REG(PCIR_MAXLAT, 1);
 		cfg->nummaps	    = PCI_MAXMAPS_0;
 		break;
 	case PCIM_HDRTYPE_BRIDGE:
@@ -593,9 +638,6 @@ pci_read_device(device_t pcib, int d, int b, int s, int f, size_t size)
 		cfg->lattimer		= REG(PCIR_LATTIMER, 1);
 		cfg->intpin		= REG(PCIR_INTPIN, 1);
 		cfg->intline		= REG(PCIR_INTLINE, 1);
-
-		cfg->mingnt		= REG(PCIR_MINGNT, 1);
-		cfg->maxlat		= REG(PCIR_MAXLAT, 1);
 
 		cfg->mfdev		= (cfg->hdrtype & PCIM_MFDEV) != 0;
 		cfg->hdrtype		&= ~PCIM_MFDEV;
@@ -2324,7 +2366,7 @@ pci_set_powerstate_method(device_t dev, device_t child, int state)
 	struct pci_devinfo *dinfo = device_get_ivars(child);
 	pcicfgregs *cfg = &dinfo->cfg;
 	uint16_t status;
-	int result, oldstate, highest, delay;
+	int oldstate, highest, delay;
 
 	if (cfg->pp.pp_cap == 0)
 		return (EOPNOTSUPP);
@@ -2359,7 +2401,6 @@ pci_set_powerstate_method(device_t dev, device_t child, int state)
 	    delay = 0;
 	status = PCI_READ_CONFIG(dev, child, cfg->pp.pp_status, 2)
 	    & ~PCIM_PSTAT_DMASK;
-	result = 0;
 	switch (state) {
 	case PCI_POWERSTATE_D0:
 		status |= PCIM_PSTAT_D0;
@@ -2919,7 +2960,6 @@ static void
 pci_ata_maps(device_t bus, device_t dev, struct resource_list *rl, int force,
     uint32_t prefetchmask)
 {
-	struct resource *r;
 	int rid, type, progif;
 #if 0
 	/* if this device supports PCI native addressing use it */
@@ -2942,11 +2982,11 @@ pci_ata_maps(device_t bus, device_t dev, struct resource_list *rl, int force,
 	} else {
 		rid = PCIR_BAR(0);
 		resource_list_add(rl, type, rid, 0x1f0, 0x1f7, 8);
-		r = resource_list_reserve(rl, bus, dev, type, &rid, 0x1f0,
+		(void)resource_list_reserve(rl, bus, dev, type, &rid, 0x1f0,
 		    0x1f7, 8, 0);
 		rid = PCIR_BAR(1);
 		resource_list_add(rl, type, rid, 0x3f6, 0x3f6, 1);
-		r = resource_list_reserve(rl, bus, dev, type, &rid, 0x3f6,
+		(void)resource_list_reserve(rl, bus, dev, type, &rid, 0x3f6,
 		    0x3f6, 1, 0);
 	}
 	if (progif & PCIP_STORAGE_IDE_MODESEC) {
@@ -2957,11 +2997,11 @@ pci_ata_maps(device_t bus, device_t dev, struct resource_list *rl, int force,
 	} else {
 		rid = PCIR_BAR(2);
 		resource_list_add(rl, type, rid, 0x170, 0x177, 8);
-		r = resource_list_reserve(rl, bus, dev, type, &rid, 0x170,
+		(void)resource_list_reserve(rl, bus, dev, type, &rid, 0x170,
 		    0x177, 8, 0);
 		rid = PCIR_BAR(3);
 		resource_list_add(rl, type, rid, 0x376, 0x376, 1);
-		r = resource_list_reserve(rl, bus, dev, type, &rid, 0x376,
+		(void)resource_list_reserve(rl, bus, dev, type, &rid, 0x376,
 		    0x376, 1, 0);
 	}
 	pci_add_map(bus, dev, PCIR_BAR(4), rl, force,
@@ -3197,6 +3237,164 @@ xhci_early_takeover(device_t self)
 	bus_release_resource(self, SYS_RES_MEMORY, rid, res);
 }
 
+#if defined(NEW_PCIB) && defined(PCI_RES_BUS)
+static void
+pci_reserve_secbus(device_t bus, device_t dev, pcicfgregs *cfg,
+    struct resource_list *rl)
+{
+	struct resource *res;
+	char *cp;
+	u_long start, end, count;
+	int rid, sec_bus, sec_reg, sub_bus, sub_reg, sup_bus;
+
+	switch (cfg->hdrtype & PCIM_HDRTYPE) {
+	case PCIM_HDRTYPE_BRIDGE:
+		sec_reg = PCIR_SECBUS_1;
+		sub_reg = PCIR_SUBBUS_1;
+		break;
+	case PCIM_HDRTYPE_CARDBUS:
+		sec_reg = PCIR_SECBUS_2;
+		sub_reg = PCIR_SUBBUS_2;
+		break;
+	default:
+		return;
+	}
+
+	/*
+	 * If the existing bus range is valid, attempt to reserve it
+	 * from our parent.  If this fails for any reason, clear the
+	 * secbus and subbus registers.
+	 *
+	 * XXX: Should we reset sub_bus to sec_bus if it is < sec_bus?
+	 * This would at least preserve the existing sec_bus if it is
+	 * valid.
+	 */
+	sec_bus = PCI_READ_CONFIG(bus, dev, sec_reg, 1);
+	sub_bus = PCI_READ_CONFIG(bus, dev, sub_reg, 1);
+
+	/* Quirk handling. */
+	switch (pci_get_devid(dev)) {
+	case 0x12258086:		/* Intel 82454KX/GX (Orion) */
+		sup_bus = pci_read_config(dev, 0x41, 1);
+		if (sup_bus != 0xff) {
+			sec_bus = sup_bus + 1;
+			sub_bus = sup_bus + 1;
+			PCI_WRITE_CONFIG(bus, dev, sec_reg, sec_bus, 1);
+			PCI_WRITE_CONFIG(bus, dev, sub_reg, sub_bus, 1);
+		}
+		break;
+
+	case 0x00dd10de:
+		/* Compaq R3000 BIOS sets wrong subordinate bus number. */
+		if ((cp = getenv("smbios.planar.maker")) == NULL)
+			break;
+		if (strncmp(cp, "Compal", 6) != 0) {
+			freeenv(cp);
+			break;
+		}
+		freeenv(cp);
+		if ((cp = getenv("smbios.planar.product")) == NULL)
+			break;
+		if (strncmp(cp, "08A0", 4) != 0) {
+			freeenv(cp);
+			break;
+		}
+		freeenv(cp);
+		if (sub_bus < 0xa) {
+			sub_bus = 0xa;
+			PCI_WRITE_CONFIG(bus, dev, sub_reg, sub_bus, 1);
+		}
+		break;
+	}
+
+	if (bootverbose)
+		printf("\tsecbus=%d, subbus=%d\n", sec_bus, sub_bus);
+	if (sec_bus > 0 && sub_bus >= sec_bus) {
+		start = sec_bus;
+		end = sub_bus;
+		count = end - start + 1;
+
+		resource_list_add(rl, PCI_RES_BUS, 0, 0ul, ~0ul, count);
+
+		/*
+		 * If requested, clear secondary bus registers in
+		 * bridge devices to force a complete renumbering
+		 * rather than reserving the existing range.  However,
+		 * preserve the existing size.
+		 */
+		if (pci_clear_buses)
+			goto clear;
+
+		rid = 0;
+		res = resource_list_reserve(rl, bus, dev, PCI_RES_BUS, &rid,
+		    start, end, count, 0);
+		if (res != NULL)
+			return;
+
+		if (bootverbose)
+			device_printf(bus,
+			    "pci%d:%d:%d:%d secbus failed to allocate\n",
+			    pci_get_domain(dev), pci_get_bus(dev),
+			    pci_get_slot(dev), pci_get_function(dev));
+	}
+
+clear:
+	PCI_WRITE_CONFIG(bus, dev, sec_reg, 0, 1);
+	PCI_WRITE_CONFIG(bus, dev, sub_reg, 0, 1);
+}
+
+static struct resource *
+pci_alloc_secbus(device_t dev, device_t child, int *rid, u_long start,
+    u_long end, u_long count, u_int flags)
+{
+	struct pci_devinfo *dinfo;
+	pcicfgregs *cfg;
+	struct resource_list *rl;
+	struct resource *res;
+	int sec_reg, sub_reg;
+
+	dinfo = device_get_ivars(child);
+	cfg = &dinfo->cfg;
+	rl = &dinfo->resources;
+	switch (cfg->hdrtype & PCIM_HDRTYPE) {
+	case PCIM_HDRTYPE_BRIDGE:
+		sec_reg = PCIR_SECBUS_1;
+		sub_reg = PCIR_SUBBUS_1;
+		break;
+	case PCIM_HDRTYPE_CARDBUS:
+		sec_reg = PCIR_SECBUS_2;
+		sub_reg = PCIR_SUBBUS_2;
+		break;
+	default:
+		return (NULL);
+	}
+
+	if (*rid != 0)
+		return (NULL);
+
+	if (resource_list_find(rl, PCI_RES_BUS, *rid) == NULL)
+		resource_list_add(rl, PCI_RES_BUS, *rid, start, end, count);
+	if (!resource_list_reserved(rl, PCI_RES_BUS, *rid)) {
+		res = resource_list_reserve(rl, dev, child, PCI_RES_BUS, rid,
+		    start, end, count, flags & ~RF_ACTIVE);
+		if (res == NULL) {
+			resource_list_delete(rl, PCI_RES_BUS, *rid);
+			device_printf(child, "allocating %lu bus%s failed\n",
+			    count, count == 1 ? "" : "es");
+			return (NULL);
+		}
+		if (bootverbose)
+			device_printf(child,
+			    "Lazy allocation of %lu bus%s at %lu\n", count,
+			    count == 1 ? "" : "es", rman_get_start(res));
+		PCI_WRITE_CONFIG(dev, child, sec_reg, rman_get_start(res), 1);
+		PCI_WRITE_CONFIG(dev, child, sub_reg, rman_get_end(res), 1);
+	}
+	return (resource_list_alloc(rl, dev, child, PCI_RES_BUS, rid, start,
+	    end, count, flags));
+}
+#endif
+
 void
 pci_add_resources(device_t bus, device_t dev, int force, uint32_t prefetchmask)
 {
@@ -3269,6 +3467,27 @@ pci_add_resources(device_t bus, device_t dev, int force, uint32_t prefetchmask)
 		else if (pci_get_progif(dev) == PCIP_SERIALBUS_USB_UHCI)
 			uhci_early_takeover(dev);
 	}
+
+#if defined(NEW_PCIB) && defined(PCI_RES_BUS)
+	/*
+	 * Reserve resources for secondary bus ranges behind bridge
+	 * devices.
+	 */
+	pci_reserve_secbus(bus, dev, cfg, rl);
+#endif
+}
+
+static struct pci_devinfo *
+pci_identify_function(device_t pcib, device_t dev, int domain, int busno,
+    int slot, int func, size_t dinfo_size)
+{
+	struct pci_devinfo *dinfo;
+
+	dinfo = pci_read_device(pcib, domain, busno, slot, func, dinfo_size);
+	if (dinfo != NULL)
+		pci_add_child(dev, dinfo);
+
+	return (dinfo);
 }
 
 void
@@ -3280,11 +3499,29 @@ pci_add_children(device_t dev, int domain, int busno, size_t dinfo_size)
 	int maxslots;
 	int s, f, pcifunchigh;
 	uint8_t hdrtype;
+	int first_func;
+
+	/*
+	 * Try to detect a device at slot 0, function 0.  If it exists, try to
+	 * enable ARI.  We must enable ARI before detecting the rest of the
+	 * functions on this bus as ARI changes the set of slots and functions
+	 * that are legal on this bus.
+	 */
+	dinfo = pci_identify_function(pcib, dev, domain, busno, 0, 0,
+	    dinfo_size);
+	if (dinfo != NULL && pci_enable_ari)
+		PCIB_TRY_ENABLE_ARI(pcib, dinfo->cfg.dev);
+
+	/*
+	 * Start looking for new devices on slot 0 at function 1 because we
+	 * just identified the device at slot 0, function 0.
+	 */
+	first_func = 1;
 
 	KASSERT(dinfo_size >= sizeof(struct pci_devinfo),
 	    ("dinfo_size too small"));
 	maxslots = PCIB_MAXSLOTS(pcib);
-	for (s = 0; s <= maxslots; s++) {
+	for (s = 0; s <= maxslots; s++, first_func = 0) {
 		pcifunchigh = 0;
 		f = 0;
 		DELAY(1);
@@ -3292,14 +3529,10 @@ pci_add_children(device_t dev, int domain, int busno, size_t dinfo_size)
 		if ((hdrtype & PCIM_HDRTYPE) > PCI_MAXHDRTYPE)
 			continue;
 		if (hdrtype & PCIM_MFDEV)
-			pcifunchigh = PCI_FUNCMAX;
-		for (f = 0; f <= pcifunchigh; f++) {
-			dinfo = pci_read_device(pcib, domain, busno, s, f,
+			pcifunchigh = PCIB_MAXFUNCS(pcib);
+		for (f = first_func; f <= pcifunchigh; f++)
+			pci_identify_function(pcib, dev, domain, busno, s, f,
 			    dinfo_size);
-			if (dinfo != NULL) {
-				pci_add_child(dev, dinfo);
-			}
-		}
 	}
 #undef REG
 }
@@ -3334,10 +3567,22 @@ pci_attach_common(device_t dev)
 #ifdef PCI_DMA_BOUNDARY
 	int error, tag_valid;
 #endif
+#ifdef PCI_RES_BUS
+	int rid;
+#endif
 
 	sc = device_get_softc(dev);
 	domain = pcib_get_domain(dev);
 	busno = pcib_get_bus(dev);
+#ifdef PCI_RES_BUS
+	rid = 0;
+	sc->sc_bus = bus_alloc_resource(dev, PCI_RES_BUS, &rid, busno, busno,
+	    1, 0);
+	if (sc->sc_bus == NULL) {
+		device_printf(dev, "failed to allocate bus number\n");
+		return (ENXIO);
+	}
+#endif
 	if (bootverbose)
 		device_printf(dev, "domain=%d, physical bus=%d\n",
 		    domain, busno);
@@ -3382,12 +3627,26 @@ pci_attach(device_t dev)
 	return (bus_generic_attach(dev));
 }
 
+#ifdef PCI_RES_BUS
+static int
+pci_detach(device_t dev)
+{
+	struct pci_softc *sc;
+	int error;
+
+	error = bus_generic_detach(dev);
+	if (error)
+		return (error);
+	sc = device_get_softc(dev);
+	return (bus_release_resource(dev, PCI_RES_BUS, 0, sc->sc_bus));
+}
+#endif
+
 static void
 pci_set_power_children(device_t dev, device_t *devlist, int numdevs,
     int state)
 {
 	device_t child, pcib;
-	struct pci_devinfo *dinfo;
 	int dstate, i;
 
 	/*
@@ -3400,7 +3659,6 @@ pci_set_power_children(device_t dev, device_t *devlist, int numdevs,
 	pcib = device_get_parent(dev);
 	for (i = 0; i < numdevs; i++) {
 		child = devlist[i];
-		dinfo = device_get_ivars(child);
 		dstate = state;
 		if (device_is_attached(child) &&
 		    PCIB_POWER_FOR_SLEEP(pcib, dev, &dstate) == 0)
@@ -3624,8 +3882,16 @@ pci_setup_intr(device_t dev, device_t child, struct resource *irq, int flags,
 			mte->mte_handlers++;
 		}
 
-		/* Make sure that INTx is disabled if we are using MSI/MSIX */
-		pci_set_command_bit(dev, child, PCIM_CMD_INTxDIS);
+		/*
+		 * Make sure that INTx is disabled if we are using MSI/MSI-X,
+		 * unless the device is affected by PCI_QUIRK_MSI_INTX_BUG,
+		 * in which case we "enable" INTx so MSI/MSI-X actually works.
+		 */
+		if (!pci_has_quirk(pci_get_devid(child),
+		    PCI_QUIRK_MSI_INTX_BUG))
+			pci_set_command_bit(dev, child, PCIM_CMD_INTxDIS);
+		else
+			pci_clear_command_bit(dev, child, PCIM_CMD_INTxDIS);
 	bad:
 		if (error) {
 			(void)bus_generic_teardown_intr(dev, child, irq,
@@ -3717,6 +3983,7 @@ pci_print_child(device_t dev, device_t child)
 	retval += printf(" at device %d.%d", pci_get_slot(child),
 	    pci_get_function(child));
 
+	retval += bus_print_child_domain(dev, child);
 	retval += bus_print_child_footer(dev, child);
 
 	return (retval);
@@ -3888,6 +4155,10 @@ pci_child_detached(device_t dev, device_t child)
 		pci_printf(&dinfo->cfg, "Device leaked memory resources\n");
 	if (resource_list_release_active(rl, dev, child, SYS_RES_IOPORT) != 0)
 		pci_printf(&dinfo->cfg, "Device leaked I/O resources\n");
+#ifdef PCI_RES_BUS
+	if (resource_list_release_active(rl, dev, child, PCI_RES_BUS) != 0)
+		pci_printf(&dinfo->cfg, "Device leaked PCI bus numbers\n");
+#endif
 
 	pci_cfg_save(child, dinfo, 1);
 }
@@ -4088,9 +4359,17 @@ pci_read_ivar(device_t dev, device_t child, int which, uintptr_t *result)
 		*result = cfg->cachelnsz;
 		break;
 	case PCI_IVAR_MINGNT:
+		if (cfg->hdrtype != PCIM_HDRTYPE_NORMAL) {
+			*result = -1;
+			return (EINVAL);
+		}
 		*result = cfg->mingnt;
 		break;
 	case PCI_IVAR_MAXLAT:
+		if (cfg->hdrtype != PCIM_HDRTYPE_NORMAL) {
+			*result = -1;
+			return (EINVAL);
+		}
 		*result = cfg->maxlat;
 		break;
 	case PCI_IVAR_LATTIMER:
@@ -4304,6 +4583,11 @@ pci_alloc_resource(device_t dev, device_t child, int type, int *rid,
 	rl = &dinfo->resources;
 	cfg = &dinfo->cfg;
 	switch (type) {
+#if defined(NEW_PCIB) && defined(PCI_RES_BUS)
+	case PCI_RES_BUS:
+		return (pci_alloc_secbus(dev, child, rid, start, end, count,
+		    flags));
+#endif
 	case SYS_RES_IRQ:
 		/*
 		 * Can't alloc legacy interrupt once MSI messages have
@@ -4847,4 +5131,11 @@ pci_restore_state(device_t dev)
 
 	dinfo = device_get_ivars(dev);
 	pci_cfg_restore(dev, dinfo);
+}
+
+static uint16_t
+pci_get_rid_method(device_t dev, device_t child)
+{
+
+	return (PCIB_GET_RID(device_get_parent(dev), child));
 }

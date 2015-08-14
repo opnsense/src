@@ -747,24 +747,14 @@ init_secondary(void)
 	/* set up CPU registers and state */
 	cpu_setregs();
 
-	/* set up FPU state on the AP */
-	npxinit();
+	/* set up SSE/NX */
+	initializecpu();
 
-	/* set up SSE registers */
-	enable_sse();
+	/* set up FPU state on the AP */
+	npxinit(false);
 
 	if (cpu_ops.cpu_init)
 		cpu_ops.cpu_init();
-
-#ifdef PAE
-	/* Enable the PTE no-execute bit. */
-	if ((amd_feature & AMDID_NX) != 0) {
-		uint64_t msr;
-
-		msr = rdmsr(MSR_EFER) | EFER_NXE;
-		wrmsr(MSR_EFER, msr);
-	}
-#endif
 
 	/* A quick check from sanity claus */
 	cpuid = PCPU_GET(cpuid);
@@ -1150,14 +1140,27 @@ ipi_startup(int apic_id, int vector)
 {
 
 	/*
+	 * This attempts to follow the algorithm described in the
+	 * Intel Multiprocessor Specification v1.4 in section B.4.
+	 * For each IPI, we allow the local APIC ~20us to deliver the
+	 * IPI.  If that times out, we panic.
+	 */
+
+	/*
 	 * first we do an INIT IPI: this INIT IPI might be run, resetting
 	 * and running the target CPU. OR this INIT IPI might be latched (P5
 	 * bug), CPU waiting for STARTUP IPI. OR this INIT IPI might be
 	 * ignored.
 	 */
-	lapic_ipi_raw(APIC_DEST_DESTFLD | APIC_TRIGMOD_EDGE |
+	lapic_ipi_raw(APIC_DEST_DESTFLD | APIC_TRIGMOD_LEVEL |
 	    APIC_LEVEL_ASSERT | APIC_DESTMODE_PHY | APIC_DELMODE_INIT, apic_id);
-	lapic_ipi_wait(-1);
+	lapic_ipi_wait(100);
+
+	/* Explicitly deassert the INIT IPI. */
+	lapic_ipi_raw(APIC_DEST_DESTFLD | APIC_TRIGMOD_LEVEL |
+	    APIC_LEVEL_DEASSERT | APIC_DESTMODE_PHY | APIC_DELMODE_INIT,
+	    apic_id);
+
 	DELAY(10000);		/* wait ~10mS */
 
 	/*
@@ -1169,9 +1172,11 @@ ipi_startup(int apic_id, int vector)
 	 * will run.
 	 */
 	lapic_ipi_raw(APIC_DEST_DESTFLD | APIC_TRIGMOD_EDGE |
-	    APIC_LEVEL_DEASSERT | APIC_DESTMODE_PHY | APIC_DELMODE_STARTUP |
+	    APIC_LEVEL_ASSERT | APIC_DESTMODE_PHY | APIC_DELMODE_STARTUP |
 	    vector, apic_id);
-	lapic_ipi_wait(-1);
+	if (!lapic_ipi_wait(100))
+		panic("Failed to deliver first STARTUP IPI to APIC %d",
+		    apic_id);
 	DELAY(200);		/* wait ~200uS */
 
 	/*
@@ -1181,9 +1186,12 @@ ipi_startup(int apic_id, int vector)
 	 * recognized after hardware RESET or INIT IPI.
 	 */
 	lapic_ipi_raw(APIC_DEST_DESTFLD | APIC_TRIGMOD_EDGE |
-	    APIC_LEVEL_DEASSERT | APIC_DESTMODE_PHY | APIC_DELMODE_STARTUP |
+	    APIC_LEVEL_ASSERT | APIC_DESTMODE_PHY | APIC_DELMODE_STARTUP |
 	    vector, apic_id);
-	lapic_ipi_wait(-1);
+	if (!lapic_ipi_wait(100))
+		panic("Failed to deliver second STARTUP IPI to APIC %d",
+		    apic_id);
+
 	DELAY(200);		/* wait ~200uS */
 }
 
@@ -1524,12 +1532,13 @@ cpususpend_handler(void)
 
 	cpu = PCPU_GET(cpuid);
 	if (savectx(&susppcbs[cpu]->sp_pcb)) {
-		npxsuspend(&susppcbs[cpu]->sp_fpususpend);
+		npxsuspend(susppcbs[cpu]->sp_fpususpend);
 		wbinvd();
 		CPU_SET_ATOMIC(cpu, &suspended_cpus);
 	} else {
-		npxresume(&susppcbs[cpu]->sp_fpususpend);
+		npxresume(susppcbs[cpu]->sp_fpususpend);
 		pmap_init_pat();
+		initializecpu();
 		PCPU_SET(switchtime, 0);
 		PCPU_SET(switchticks, ticks);
 

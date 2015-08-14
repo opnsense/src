@@ -158,6 +158,8 @@ int	sbreserve_locked(struct sockbuf *sb, u_long cc, struct socket *so,
 	    struct thread *td);
 struct mbuf *
 	sbsndptr(struct sockbuf *sb, u_int off, u_int len, u_int *moff);
+struct mbuf *
+	sbsndmbuf(struct sockbuf *sb, u_int off, u_int *moff);
 void	sbtoxsockbuf(struct sockbuf *sb, struct xsockbuf *xsb);
 int	sbwait(struct sockbuf *sb);
 int	sblock(struct sockbuf *sb, int flags);
@@ -173,8 +175,7 @@ static __inline
 long
 sbspace(struct sockbuf *sb)
 {
-	long bleft;
-	long mleft;
+	int bleft, mleft;		/* size should match sockbuf fields */
 
 	if (sb->sb_flags & SB_STOP)
 		return(0);

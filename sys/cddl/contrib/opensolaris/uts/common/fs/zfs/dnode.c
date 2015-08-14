@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012, 2014 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2015 by Delphix. All rights reserved.
  */
 
 #include <sys/zfs_context.h>
@@ -81,15 +81,13 @@ dbuf_compare(const void *x1, const void *x2)
 		return (1);
 	}
 
-	if (d1->db_state < d2->db_state) {
+	if (d1->db_state == DB_SEARCH) {
+		ASSERT3S(d2->db_state, !=, DB_SEARCH);
 		return (-1);
-	}
-	if (d1->db_state > d2->db_state) {
+	} else if (d2->db_state == DB_SEARCH) {
+		ASSERT3S(d1->db_state, !=, DB_SEARCH);
 		return (1);
 	}
-
-	ASSERT3S(d1->db_state, !=, DB_SEARCH);
-	ASSERT3S(d2->db_state, !=, DB_SEARCH);
 
 	if ((uintptr_t)d1 < (uintptr_t)d2) {
 		return (-1);
@@ -513,10 +511,10 @@ dnode_allocate(dnode_t *dn, dmu_object_type_t ot, int blocksize, int ibs,
 {
 	int i;
 
+	ASSERT3U(blocksize, <=,
+	    spa_maxblocksize(dmu_objset_spa(dn->dn_objset)));
 	if (blocksize == 0)
 		blocksize = 1 << zfs_default_bs;
-	else if (blocksize > SPA_MAXBLOCKSIZE)
-		blocksize = SPA_MAXBLOCKSIZE;
 	else
 		blocksize = P2ROUNDUP(blocksize, SPA_MINBLOCKSIZE);
 
@@ -597,7 +595,8 @@ dnode_reallocate(dnode_t *dn, dmu_object_type_t ot, int blocksize,
 	int nblkptr;
 
 	ASSERT3U(blocksize, >=, SPA_MINBLOCKSIZE);
-	ASSERT3U(blocksize, <=, SPA_MAXBLOCKSIZE);
+	ASSERT3U(blocksize, <=,
+	    spa_maxblocksize(dmu_objset_spa(dn->dn_objset)));
 	ASSERT0(blocksize % SPA_MINBLOCKSIZE);
 	ASSERT(dn->dn_object != DMU_META_DNODE_OBJECT || dmu_tx_private_ok(tx));
 	ASSERT(tx->tx_txg != 0);
@@ -1120,7 +1119,7 @@ dnode_hold_impl(objset_t *os, uint64_t object, int flag,
 			zrl_init(&dnh[i].dnh_zrlock);
 			dnh[i].dnh_dnode = NULL;
 		}
-		if (winner = dmu_buf_set_user(&db->db, children_dnodes, NULL,
+		if (winner = dmu_buf_set_user(&db->db, children_dnodes,
 		    dnode_buf_pageout)) {
 
 			for (i = 0; i < epb; i++) {
@@ -1352,10 +1351,9 @@ dnode_set_blksz(dnode_t *dn, uint64_t size, int ibs, dmu_tx_t *tx)
 	dmu_buf_impl_t *db;
 	int err;
 
+	ASSERT3U(size, <=, spa_maxblocksize(dmu_objset_spa(dn->dn_objset)));
 	if (size == 0)
 		size = SPA_MINBLOCKSIZE;
-	if (size > SPA_MAXBLOCKSIZE)
-		size = SPA_MAXBLOCKSIZE;
 	else
 		size = P2ROUNDUP(size, SPA_MINBLOCKSIZE);
 
@@ -1494,6 +1492,16 @@ out:
 		rw_downgrade(&dn->dn_struct_rwlock);
 }
 
+static void
+dnode_dirty_l1(dnode_t *dn, uint64_t l1blkid, dmu_tx_t *tx)
+{
+	dmu_buf_impl_t *db = dbuf_hold_level(dn, 1, l1blkid, FTAG);
+	if (db != NULL) {
+		dmu_buf_will_dirty(&db->db, tx);
+		dbuf_rele(db, FTAG);
+	}
+}
+
 void
 dnode_free_range(dnode_t *dn, uint64_t off, uint64_t len, dmu_tx_t *tx)
 {
@@ -1614,27 +1622,67 @@ dnode_free_range(dnode_t *dn, uint64_t off, uint64_t len, dmu_tx_t *tx)
 		nblks += 1;
 
 	/*
-	 * Dirty the first and last indirect blocks, as they (and/or their
-	 * parents) will need to be written out if they were only
-	 * partially freed.  Interior indirect blocks will be themselves freed,
-	 * by free_children(), so they need not be dirtied.  Note that these
-	 * interior blocks have already been prefetched by dmu_tx_hold_free().
+	 * Dirty all the indirect blocks in this range.  Note that only
+	 * the first and last indirect blocks can actually be written
+	 * (if they were partially freed) -- they must be dirtied, even if
+	 * they do not exist on disk yet.  The interior blocks will
+	 * be freed by free_children(), so they will not actually be written.
+	 * Even though these interior blocks will not be written, we
+	 * dirty them for two reasons:
+	 *
+	 *  - It ensures that the indirect blocks remain in memory until
+	 *    syncing context.  (They have already been prefetched by
+	 *    dmu_tx_hold_free(), so we don't have to worry about reading
+	 *    them serially here.)
+	 *
+	 *  - The dirty space accounting will put pressure on the txg sync
+	 *    mechanism to begin syncing, and to delay transactions if there
+	 *    is a large amount of freeing.  Even though these indirect
+	 *    blocks will not be written, we could need to write the same
+	 *    amount of space if we copy the freed BPs into deadlists.
 	 */
 	if (dn->dn_nlevels > 1) {
 		uint64_t first, last;
 
 		first = blkid >> epbs;
-		if (db = dbuf_hold_level(dn, 1, first, FTAG)) {
-			dmu_buf_will_dirty(&db->db, tx);
-			dbuf_rele(db, FTAG);
-		}
+		dnode_dirty_l1(dn, first, tx);
 		if (trunc)
 			last = dn->dn_maxblkid >> epbs;
 		else
 			last = (blkid + nblks - 1) >> epbs;
-		if (last > first && (db = dbuf_hold_level(dn, 1, last, FTAG))) {
-			dmu_buf_will_dirty(&db->db, tx);
-			dbuf_rele(db, FTAG);
+		if (last != first)
+			dnode_dirty_l1(dn, last, tx);
+
+		int shift = dn->dn_datablkshift + dn->dn_indblkshift -
+		    SPA_BLKPTRSHIFT;
+		for (uint64_t i = first + 1; i < last; i++) {
+			/*
+			 * Set i to the blockid of the next non-hole
+			 * level-1 indirect block at or after i.  Note
+			 * that dnode_next_offset() operates in terms of
+			 * level-0-equivalent bytes.
+			 */
+			uint64_t ibyte = i << shift;
+			int err = dnode_next_offset(dn, DNODE_FIND_HAVELOCK,
+			    &ibyte, 2, 1, 0);
+			i = ibyte >> shift;
+			if (i >= last)
+				break;
+
+			/*
+			 * Normally we should not see an error, either
+			 * from dnode_next_offset() or dbuf_hold_level()
+			 * (except for ESRCH from dnode_next_offset).
+			 * If there is an i/o error, then when we read
+			 * this block in syncing context, it will use
+			 * ZIO_FLAG_MUSTSUCCEED, and thus hang/panic according
+			 * to the "failmode" property.  dnode_next_offset()
+			 * doesn't have a flag to indicate MUSTSUCCEED.
+			 */
+			if (err != 0)
+				break;
+
+			dnode_dirty_l1(dn, i, tx);
 		}
 	}
 

@@ -452,6 +452,7 @@ vendor GLOBESPAN	0x0915	Globespan
 vendor CONCORDCAMERA	0x0919	Concord Camera
 vendor GARMIN		0x091e	Garmin International
 vendor GOHUBS		0x0921	GoHubs
+vendor DYMO		0x0922	DYMO
 vendor XEROX		0x0924	Xerox
 vendor BIOMETRIC	0x0929	American Biometric Company
 vendor TOSHIBA		0x0930	Toshiba
@@ -695,6 +696,7 @@ vendor QCOM		0x18e8	Qcom
 vendor ELV		0x18ef	ELV
 vendor LINKSYS3		0x1915	Linksys
 vendor QUALCOMMINC	0x19d2	Qualcomm, Incorporated
+vendor QUALCOMM3	0x19f5	Qualcomm, Inc.
 vendor BAYER		0x1a79	Bayer
 vendor WCH2		0x1a86	QinHeng Electronics
 vendor STELERA		0x1a8d	Stelera Wireless
@@ -713,6 +715,7 @@ vendor LONGCHEER	0x1c9e	Longcheer Holdings, Ltd.
 vendor MPMAN		0x1cae	MpMan
 vendor DRESDENELEKTRONIK 0x1cf1 dresden elektronik
 vendor NEOTEL		0x1d09	Neotel
+vendor DREAMLINK	0x1d34	Dream Link
 vendor PEGATRON		0x1d4d	Pegatron
 vendor QISDA		0x1da5  Qisda
 vendor METAGEEK2	0x1dd5	MetaGeek
@@ -1624,6 +1627,8 @@ product DLINK DSB650		0xabc1	10/100 Ethernet
 product DLINK DUBH7		0xf103	DUB-H7 USB 2.0 7-Port Hub
 product DLINK DWR510_CD		0xa805	DWR-510 CD-ROM Mode
 product DLINK DWR510		0x7e12	DWR-510
+product DLINK DWM157		0x7d02  DWM-157
+product DLINK DWM157_CD		0xa707  DWM-157 CD-ROM Mode
 product DLINK RTL8188CU		0x3308	RTL8188CU
 product	DLINK RTL8192CU_1	0x3307	RTL8192CU
 product	DLINK RTL8192CU_2	0x3309	RTL8192CU
@@ -1657,10 +1662,17 @@ product DMI DISK		0x2bcf	Generic Disk
 /* DrayTek products */
 product DRAYTEK VIGOR550	0x0550	Vigor550
 
+/* Dream Link products */
+product DREAMLINK DL100B	0x0004	USB Webmail Notifier
+
 /* dresden elektronik products */
 product DRESDENELEKTRONIK SENSORTERMINALBOARD  0x0001 SensorTerminalBoard
 product DRESDENELEKTRONIK WIRELESSHANDHELDTERMINAL  0x0004 Wireless Handheld Terminal
+product DRESDENELEKTRONIK DE_RFNODE                 0x001c deRFnode
 product DRESDENELEKTRONIK LEVELSHIFTERSTICKLOWCOST  0x0022 Levelshifter Stick Low Cost
+
+/* DYMO */
+product DYMO LABELMANAGERPNP	0x1001	DYMO LabelManager PnP
 
 /* Dynastream Innovations */
 product DYNASTREAM ANTDEVBOARD	0x1003	ANT dev board
@@ -1671,7 +1683,7 @@ product DYNASTREAM ANTDEVBOARD2	0x1006	ANT dev board
 product EDIMAX EW7318USG	0x7318	USB Wireless dongle
 product EDIMAX RTL8192SU_1	0x7611	RTL8192SU
 product EDIMAX RTL8192SU_2	0x7612	RTL8192SU
-product EDIMAX RTL8192SU_3	0x7622	RTL8192SU
+product EDIMAX EW7622UMN	0x7622	EW-7622UMn
 product EDIMAX RT2870_1		0x7711	RT2870
 product EDIMAX EW7717		0x7717	EW-7717
 product EDIMAX EW7718		0x7718	EW-7718
@@ -1839,6 +1851,7 @@ product FREECOM HDD		0xfc05	Classic SL Hard Drive
 product FSC E5400		0x1009	PrismGT USB 2.0 WLAN
 
 /* Future Technology Devices products */
+product FTDI SCX8_USB_PHOENIX	0x5259  SCx8 USB Phoenix interface
 product FTDI SERIAL_8U100AX	0x8372	8U100AX Serial
 product FTDI SERIAL_8U232AM	0x6001	8U232AM Serial
 product FTDI SERIAL_8U232AM4	0x6004	8U232AM Serial
@@ -1848,7 +1861,8 @@ product FTDI 232H		0x6014	FTDI compatible adapter
 product FTDI 232EX		0x6015	FTDI compatible adapter
 product FTDI SERIAL_2232D	0x9e90	FT2232D Dual port Serial
 product FTDI SERIAL_4232H	0x6011	FT4232H Quad port Serial
-product FTDI BEAGLEBONE		0xa6d0	BeagleBone
+product FTDI XDS100V2		0xa6d0	TI XDS100V1/V2 and early Beaglebones
+product FTDI XDS100V3		0xa6d1	TI XDS100V3
 product FTDI KTLINK		0xbbe2	KT-LINK Embedded Hackers Multitool
 product FTDI TURTELIZER2	0xbdc8	egnite Turtelizer 2 JTAG/RS232 Adapter
 /* Gude Analog- und Digitalsysteme products also uses FTDI's id: */
@@ -2341,15 +2355,21 @@ product HUAWEI K4505		0x1464	3G modem
 product HUAWEI K3765		0x1465	3G modem
 product HUAWEI E1820		0x14ac	E1820 HSPA+ USB Slider
 product HUAWEI K3770		0x14c9  3G modem
+product HUAWEI K3772		0x14cf	K3772
 product HUAWEI K3770_INIT	0x14d1  K3770 Initial
 product HUAWEI E3131_INIT	0x14fe	3G modem initial
 product HUAWEI E392		0x1505	LTE modem
 product HUAWEI E3131		0x1506	3G modem
 product HUAWEI K3765_INIT	0x1520	K3765 Initial
 product HUAWEI K4505_INIT	0x1521	K4505 Initial
+product HUAWEI K3772_INIT	0x1526	K3772 Initial
+product HUAWEI E3272_INIT	0x155b	LTE modem initial
+product HUAWEI R215_INIT	0x1582	LTE modem initial
+product HUAWEI R215		0x1588	LTE modem
 product HUAWEI ETS2055		0x1803	CDMA modem
 product HUAWEI E173		0x1c05	3G modem
 product HUAWEI E173_INIT	0x1c0b	3G modem initial
+product HUAWEI E3272		0x1c1e	LTE modem
 
 /* HUAWEI 3com products */
 product HUAWEI3COM WUB320G	0x0009	Aolynk WUB320g
@@ -2396,6 +2416,8 @@ product INTEL EASYPC_CAMERA	0x0110	Easy PC Camera
 product INTEL TESTBOARD		0x9890	82930 test board
 product INTEL2 IRMH        	0x0020	Integrated Rate Matching Hub
 product INTEL2 IRMH2        	0x0024	Integrated Rate Matching Hub
+product INTEL2 IRMH3        	0x8000	Integrated Rate Matching Hub
+product INTEL2 IRMH4        	0x8008	Integrated Rate Matching Hub
 
 /* Interbiometric products */
 product INTERBIOMETRICS IOBOARD		0x1002	FTDI compatible adapter
@@ -2590,6 +2612,7 @@ product LENOVO ETHERNET		0x7203	USB 2.0 Ethernet
 /* Lexar products */
 product LEXAR JUMPSHOT		0x0001	jumpSHOT CompactFlash Reader
 product LEXAR CF_READER		0xb002	USB CF Reader
+product LEXAR JUMPDRIVE		0xa833	USB Jumpdrive Flash Drive
 
 /* Lexmark products */
 product LEXMARK S2450		0x0009	Optra S 2450
@@ -2973,11 +2996,12 @@ product MELCO WLRUCG		0x0116	WLR-UC-G
 product MELCO WLRUCGAOSS	0x0119	WLR-UC-G-AOSS
 product MELCO WLIUCAG300N	0x012e	WLI-UC-AG300N
 product MELCO WLIUCG		0x0137	WLI-UC-G
-product MELCO RT2870_1		0x0148	RT2870
+product MELCO WLIUCG300HP	0x0148	WLI-UC-G300HP
 product MELCO RT2870_2		0x0150	RT2870
 product MELCO WLIUCGN		0x015d	WLI-UC-GN
 product MELCO WLIUCG301N	0x016f	WLI-UC-G301N
 product MELCO WLIUCGNM		0x01a2	WLI-UC-GNM
+product MELCO WLIUCG300HPV1	0x01a8	WLI-UC-G300HP-V1
 product MELCO WLIUCGNM2		0x01ee	WLI-UC-GNM2
 
 /* Merlin products */
@@ -3236,6 +3260,7 @@ product NOVATEL EU740		0x2410	Expedite EU740
 product NOVATEL EU870D		0x2420	Expedite EU870D
 product NOVATEL U727		0x4100	Merlin U727 CDMA
 product NOVATEL MC950D		0x4400	Novatel MC950D HSUPA
+product NOVATEL MC990D		0x7001	Novatel MC990D
 product NOVATEL ZEROCD		0x5010	Novatel ZeroCD
 product NOVATEL MIFI2200V	0x5020	Novatel MiFi 2200 CDMA Virgin Mobile
 product NOVATEL ZEROCD2		0x5030	Novatel ZeroCD
@@ -3556,8 +3581,11 @@ product QUALCOMM2 CDMA_MSM	0x3196	CDMA Technologies MSM modem
 product QUALCOMM2 AC8700	0x6000	AC8700
 product QUALCOMM2 VW110L	0x1000	Vertex Wireless 110L modem
 product QUALCOMM2 SIM5218	0x9000	SIM5218
+product QUALCOMM2 WM620		0x9002	Neoway WM620
 product QUALCOMM2 GOBI2000_QDL	0x9204	Qualcomm Gobi 2000 QDL
 product QUALCOMM2 GOBI2000	0x9205	Qualcomm Gobi 2000 modem
+product QUALCOMM2 VT80N		0x6500	Venus VT80N
+product QUALCOMM3 VFAST2	0x9909	Venus Fast2 modem
 product QUALCOMMINC CDMA_MSM	0x0001	CDMA Technologies MSM modem
 product QUALCOMMINC E0002	0x0002	3G modem
 product QUALCOMMINC E0003	0x0003	3G modem
@@ -3625,10 +3653,16 @@ product QUALCOMMINC E0078	0x0078	3G modem
 product QUALCOMMINC E0082	0x0082	3G modem
 product QUALCOMMINC E0086	0x0086	3G modem
 product QUALCOMMINC SURFSTICK	0x0117	1&1 Surf Stick
-product QUALCOMMINC K3772_Z	0x1179	3G modem
+product QUALCOMMINC K3772_Z_INIT	0x1179	K3772-Z Initial
+product QUALCOMMINC K3772_Z	0x1181	K3772-Z
+product QUALCOMMINC ZTE_MF730M	0x1420	3G modem
+product QUALCOMMINC MF195E_INIT	0x1514	MF195E initial
+product QUALCOMMINC MF195E	0x1516	MF195E
 product QUALCOMMINC ZTE_STOR	0x2000	USB ZTE Storage
 product QUALCOMMINC E2002	0x2002	3G modem
 product QUALCOMMINC E2003	0x2003	3G modem
+product QUALCOMMINC AC682	0xffdd	CDMA 1xEVDO USB modem
+product QUALCOMMINC AC682_INIT	0xffde	CDMA 1xEVDO USB modem (initial)
 product QUALCOMMINC AC8710	0xfff1	3G modem
 product QUALCOMMINC AC2726	0xfff5	3G modem
 product QUALCOMMINC AC8700	0xfffe	CDMA 1xEVDO USB modem
@@ -3688,6 +3722,7 @@ product REALTEK USB20CRW	0x0158	USB20CRW Card Reader
 product REALTEK RTL8188ETV	0x0179	RTL8188ETV
 product REALTEK RTL8188CTV      0x018a  RTL8188CTV
 product REALTEK USBKR100	0x8150	USBKR100 USB Ethernet
+product REALTEK RTL8153		0x8153	RTL8153 USB Ethernet
 product REALTEK RTL8188CE_0     0x8170  RTL8188CE
 product REALTEK RTL8171		0x8171	RTL8171
 product REALTEK RTL8172		0x8172	RTL8172
@@ -3700,6 +3735,7 @@ product REALTEK RTL8188CU_1	0x817a	RTL8188CU
 product REALTEK RTL8188CU_2	0x817b	RTL8188CU
 product REALTEK RTL8187		0x8187	RTL8187 Wireless Adapter
 product REALTEK RTL8187B_0	0x8189	RTL8187B Wireless Adapter
+product REALTEK RTL8188CU_3	0x8191	RTL8188CU
 product REALTEK RTL8196EU	0x8196	RTL8196EU
 product REALTEK RTL8187B_1	0x8197	RTL8187B Wireless Adapter
 product REALTEK RTL8187B_2	0x8198	RTL8187B Wireless Adapter
@@ -3709,6 +3745,7 @@ product REALTEK RTL8191CU	0x8177	RTL8191CU
 product REALTEK RTL8192CU	0x8178	RTL8192CU
 product REALTEK RTL8192CE	0x817c	RTL8192CE
 product REALTEK RTL8188RU_1	0x817d	RTL8188RU
+product REALTEK RTL8188RU_3	0x817f	RTL8188RU
 product REALTEK RTL8712		0x8712	RTL8712
 product REALTEK RTL8713		0x8712	RTL8713
 product REALTEK RTL8188RU_2	0x317f	RTL8188RU
@@ -3786,6 +3823,7 @@ product SANDISK SDDR05		0x0005	ImageMate SDDR-05
 product SANDISK SDDR12		0x0100	ImageMate SDDR-12
 product SANDISK SDDR09		0x0200	ImageMate SDDR-09
 product SANDISK SDDR75		0x0810	ImageMate SDDR-75
+product SANDISK SDCZ2_128	0x7100	Cruzer Mini 128MB
 product SANDISK SDCZ2_256	0x7104	Cruzer Mini 256MB
 product SANDISK SDCZ4_128	0x7112	Cruzer Micro 128MB
 product SANDISK SDCZ4_256	0x7113	Cruzer Micro 256MB
@@ -3971,6 +4009,7 @@ product SIERRA C22		0x6891	C22
 product SIERRA E6892		0x6892	E6892
 product SIERRA E6893		0x6893	E6893
 product SIERRA MC8700		0x68A3	MC8700
+product SIERRA MC7354		0x6820	MC7354
 product SIERRA AIRCARD875	0x6820	Aircard 875 HSDPA
 product SIERRA AC313U		0x68aa	Sierra Wireless AirCard 313U
 product SIERRA TRUINSTALL	0x0fff	Aircard Tru Installer
@@ -4126,6 +4165,23 @@ product SMC 2862WG		0xee13	EZ Connect Wireless Adapter
 product SMC2 2020HUB		0x2020	USB Hub
 product SMC2 2514HUB		0x2514	USB Hub
 product SMC3 2662WUSB		0xa002	2662W-AR Wireless
+product SMC2 LAN9500_ETH	0x9500	USB/Ethernet
+product SMC2 LAN9505_ETH	0x9505	USB/Ethernet
+product SMC2 LAN9530_ETH	0x9530	USB/Ethernet
+product SMC2 LAN9730_ETH	0x9730	USB/Ethernet
+product SMC2 LAN9500_SAL10	0x9900	USB/Ethernet
+product SMC2 LAN9505_SAL10	0x9901	USB/Ethernet
+product SMC2 LAN9500A_SAL10	0x9902	USB/Ethernet
+product SMC2 LAN9505A_SAL10	0x9903	USB/Ethernet
+product SMC2 LAN9514_SAL10	0x9904	USB/Ethernet
+product SMC2 LAN9500A_HAL	0x9905	USB/Ethernet
+product SMC2 LAN9505A_HAL	0x9906	USB/Ethernet
+product SMC2 LAN9500_ETH_2	0x9907	USB/Ethernet
+product SMC2 LAN9500A_ETH_2	0x9908	USB/Ethernet
+product SMC2 LAN9514_ETH_2	0x9909	USB/Ethernet
+product SMC2 LAN9500A_ETH	0x9e00	USB/Ethernet
+product SMC2 LAN9505A_ETH	0x9e01	USB/Ethernet
+product SMC2 LAN89530_ETH	0x9e08	USB/Ethernet
 product SMC2 LAN9514_ETH	0xec00	USB/Ethernet
 
 /* SOHOware products */
@@ -4447,8 +4503,28 @@ product WESTERN COMBO		0x0200	Firewire USB Combo
 product WESTERN EXTHDD		0x0400	External HDD
 product WESTERN HUB		0x0500	USB HUB
 product WESTERN MYBOOK		0x0901	MyBook External HDD
-product WESTERN MYPASSWORD	0x0704	MyPassword External HDD
-product WESTERN MYPASSPORT	0x0748	MyPassport External HDD
+product WESTERN MYPASSPORT_00	0x0704	MyPassport External HDD
+product WESTERN MYPASSPORT_11	0x0741	MyPassport External HDD
+product WESTERN MYPASSPORT_01	0x0746	MyPassport External HDD
+product WESTERN MYPASSPORT_02	0x0748	MyPassport External HDD
+product WESTERN MYPASSPORT_03	0x074A	MyPassport External HDD
+product WESTERN MYPASSPORT_04	0x074C	MyPassport External HDD
+product WESTERN MYPASSPORT_05	0x074E	MyPassport External HDD
+product WESTERN MYPASSPORT_06	0x07A6	MyPassport External HDD
+product WESTERN MYPASSPORT_07	0x07A8	MyPassport External HDD
+product WESTERN MYPASSPORT_08	0x07AA	MyPassport External HDD
+product WESTERN MYPASSPORT_09	0x07AC	MyPassport External HDD
+product WESTERN MYPASSPORT_10	0x07AE	MyPassport External HDD
+product WESTERN MYPASSPORTES_00	0x070A	MyPassport Essential External HDD
+product WESTERN MYPASSPORTES_01	0x071A	MyPassport Essential External HDD
+product WESTERN MYPASSPORTES_02	0x0730	MyPassport Essential External HDD
+product WESTERN MYPASSPORTES_03	0x0732	MyPassport Essential External HDD
+product WESTERN MYPASSPORTES_04	0x0740	MyPassport Essential External HDD
+product WESTERN MYPASSPORTES_05	0x0742	MyPassport Essential External HDD
+product WESTERN MYPASSPORTES_06	0x0750	MyPassport Essential External HDD
+product WESTERN MYPASSPORTES_07	0x0752	MyPassport Essential External HDD
+product WESTERN MYPASSPORTES_08	0x07A0	MyPassport Essential External HDD
+product WESTERN MYPASSPORTES_09	0x07A2	MyPassport Essential External HDD
 
 /* WeTelecom products */
 product WETELECOM WM_D200	0x6801	WM-D200
@@ -4547,5 +4623,6 @@ product ZYXEL G220V2		0x340f	G-220 v2
 product ZYXEL G202		0x3410	G-202
 product ZYXEL RT2870_1		0x3416	RT2870
 product ZYXEL RT2870_2		0x341a	RT2870
+product ZYXEL RT3070		0x341e	NWD2105
 product ZYXEL RTL8192CU		0x341f	RTL8192CU
 product ZYXEL NWD2705		0x3421	NWD2705

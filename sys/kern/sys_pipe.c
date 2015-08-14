@@ -315,7 +315,7 @@ pipe_zone_init(void *mem, int size, int flags)
 
 	pp = (struct pipepair *)mem;
 
-	mtx_init(&pp->pp_mtx, "pipe mutex", NULL, MTX_DEF | MTX_RECURSE);
+	mtx_init(&pp->pp_mtx, "pipe mutex", NULL, MTX_DEF);
 	return (0);
 }
 
@@ -374,15 +374,16 @@ pipe_named_ctor(struct pipe **ppipe, struct thread *td)
 void
 pipe_dtor(struct pipe *dpipe)
 {
+	struct pipe *peer;
 	ino_t ino;
 
 	ino = dpipe->pipe_ino;
+	peer = (dpipe->pipe_state & PIPE_NAMED) != 0 ? dpipe->pipe_peer : NULL;
 	funsetown(&dpipe->pipe_sigio);
 	pipeclose(dpipe);
-	if (dpipe->pipe_state & PIPE_NAMED) {
-		dpipe = dpipe->pipe_peer;
-		funsetown(&dpipe->pipe_sigio);
-		pipeclose(dpipe);
+	if (peer != NULL) {
+		funsetown(&peer->pipe_sigio);
+		pipeclose(peer);
 	}
 	if (ino != 0 && ino != (ino_t)-1)
 		free_unr(pipeino_unr, ino);
@@ -1293,13 +1294,13 @@ pipe_write(fp, uio, active_cred, flags, td)
 	}
 
 	/*
-	 * Don't return EPIPE if I/O was successful
+	 * Don't return EPIPE if any byte was written.
+	 * EINTR and other interrupts are handled by generic I/O layer.
+	 * Do not pretend that I/O succeeded for obvious user error
+	 * like EFAULT.
 	 */
-	if ((wpipe->pipe_buffer.cnt == 0) &&
-	    (uio->uio_resid == 0) &&
-	    (error == EPIPE)) {
+	if (uio->uio_resid != orig_resid && error == EPIPE)
 		error = 0;
-	}
 
 	if (error == 0)
 		vfs_timestamp(&wpipe->pipe_mtime);
@@ -1770,7 +1771,7 @@ filt_piperead(struct knote *kn, long hint)
 	struct pipe *wpipe = rpipe->pipe_peer;
 	int ret;
 
-	PIPE_LOCK(rpipe);
+	PIPE_LOCK_ASSERT(rpipe, MA_OWNED);
 	kn->kn_data = rpipe->pipe_buffer.cnt;
 	if ((kn->kn_data == 0) && (rpipe->pipe_state & PIPE_DIRECTW))
 		kn->kn_data = rpipe->pipe_map.cnt;
@@ -1779,11 +1780,9 @@ filt_piperead(struct knote *kn, long hint)
 	    wpipe->pipe_present != PIPE_ACTIVE ||
 	    (wpipe->pipe_state & PIPE_EOF)) {
 		kn->kn_flags |= EV_EOF;
-		PIPE_UNLOCK(rpipe);
 		return (1);
 	}
 	ret = kn->kn_data > 0;
-	PIPE_UNLOCK(rpipe);
 	return ret;
 }
 
@@ -1794,12 +1793,11 @@ filt_pipewrite(struct knote *kn, long hint)
 	struct pipe *wpipe;
    
 	wpipe = kn->kn_hook;
-	PIPE_LOCK(wpipe);
+	PIPE_LOCK_ASSERT(wpipe, MA_OWNED);
 	if (wpipe->pipe_present != PIPE_ACTIVE ||
 	    (wpipe->pipe_state & PIPE_EOF)) {
 		kn->kn_data = 0;
 		kn->kn_flags |= EV_EOF;
-		PIPE_UNLOCK(wpipe);
 		return (1);
 	}
 	kn->kn_data = (wpipe->pipe_buffer.size > 0) ?
@@ -1807,7 +1805,6 @@ filt_pipewrite(struct knote *kn, long hint)
 	if (wpipe->pipe_state & PIPE_DIRECTW)
 		kn->kn_data = 0;
 
-	PIPE_UNLOCK(wpipe);
 	return (kn->kn_data >= PIPE_BUF);
 }
 

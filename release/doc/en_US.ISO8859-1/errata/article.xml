@@ -4,20 +4,22 @@
 <!ENTITY % release PUBLIC "-//FreeBSD//ENTITIES Release Specification//EN"
   "http://www.FreeBSD.org/release/XML/release.ent">
 %release;
+<!ENTITY security SYSTEM "../../share/xml/security.xml">
+<!ENTITY errata SYSTEM "../../share/xml/errata.xml">
 ]>
 
 <article xmlns="http://docbook.org/ns/docbook"
   xmlns:xlink="http://www.w3.org/1999/xlink" version="5.0">
 
   <info>
-    <title>&os; &release.current; Errata </title>
+    <title>&os; &release.prev; Errata </title>
 
     <author><orgname>The &os; Project</orgname></author>
 
     <pubdate>$FreeBSD$</pubdate>
 
     <copyright>
-      <year>2014</year>
+      <year>2015</year>
 
       <holder role="mailto:doc@FreeBSD.org">The &os; Documentation
 	Project</holder>
@@ -31,7 +33,7 @@
     </legalnotice>
 
     <abstract>
-      <para>This document lists errata items for &os; &release.current;,
+      <para>This document lists errata items for &os; &release.prev;,
 	containing significant information discovered after the
 	release or too late in the release cycle to be otherwise
 	included in the release documentation.  This information
@@ -41,7 +43,7 @@
 	always be consulted before installing this version of
 	&os;.</para>
 
-      <para>This errata document for &os; &release.current; will be
+      <para>This errata document for &os; &release.prev; will be
 	maintained until the release of &os; &release.next;.</para>
     </abstract>
   </info>
@@ -50,7 +52,7 @@
     <title>Introduction</title>
 
     <para>This errata document contains <quote>late-breaking
-	news</quote> about &os; &release.current; before installing this
+	news</quote> about &os; &release.prev; Before installing this
       version, it is important to consult this document to learn about
       any post-release discoveries or problems that may already have
       been found and fixed.</para>
@@ -76,28 +78,13 @@
   <sect1 xml:id="security">
     <title>Security Advisories</title>
 
-    <informaltable frame="none" pgwide="0">
-      <tgroup cols="3">
-	<colspec colwidth="1*" />
-	<colspec colwidth="1*" />
-	<colspec colwidth="3*" />
-	<thead>
-	  <row>
-	    <entry>Advisory</entry>
-	    <entry>Date</entry>
-	    <entry>Topic</entry>
-	  </row>
-	</thead>
+    &security;
+  </sect1>
 
-	<tbody>
-	  <row>
-	    <entry>No advisories.</entry>
-	    <entry>&nbsp;</entry>
-	    <entry>&nbsp;</entry>
-	  </row>
-	</tbody>
-      </tgroup>
-    </informaltable>
+  <sect1 xml:id="errata">
+    <title>Errata Notices</title>
+
+    &errata;
   </sect1>
 
   <sect1 xml:id="open-issues">
@@ -105,7 +92,7 @@
 
     <itemizedlist>
       <listitem>
-	<para>&os;/&arch.i386; &release.current; running as a guest
+	<para>&os;/&arch.i386; &release.prev; running as a guest
 	  operating system on <application>VirtualBox</application>
 	  can have a problem with disk I/O access.  It depends on some
 	  specific hardware configuration and does not depend on a
@@ -134,7 +121,7 @@ boot</screen>
       </listitem>
 
       <listitem>
-	<para>&os;/&arch.i386;&nbsp;&release.current; configured with
+	<para>&os;/&arch.i386;&nbsp;10.1-RELEASE configured with
 	  a multi-disk ZFS dataset (mirror, raidz1, raidz2, raidz3)
 	  may crash during boot when the ZFS pool mount is attempted
 	  while booting an unmodified <literal>GENERIC</literal>
@@ -167,11 +154,11 @@ boot</screen>
 
 	<note>
 	  <para>Although there is slight change in how the crash
-	    manifests on &os;/&arch.i386; between &release.prev; and
-	    &release.current;, and given the date of the
+	    manifests on &os;/&arch.i386; between 10.0-RELEASE and
+	    10.1-RELEASE, and given the date of the
 	    <filename>/usr/src/UPDATING</filename> entry, there is no
 	    evidence suggesting this is a regression between
-	    &os;&nbsp;&release.prev; and &os;&nbsp;&release.current;
+	    &os;&nbsp;10.0-RELEASE and &os;&nbsp;10.1-RELEASE
 	    directly.</para>
 	</note>
       </listitem>
@@ -224,6 +211,37 @@ boot</screen>
 
 	<screen>&prompt.root; pkg bootstrap
 &prompt.root; pkg install <replaceable>xorg-server</replaceable> <replaceable>xorg</replaceable> <replaceable>gnome2</replaceable> [...]</screen>
+      </listitem>
+
+      <listitem>
+	<para>[2015-02-06] <emphasis>Affects binary upgrade
+	    users:</emphasis> The second phase of
+	  <command>freebsd-update install</command>, the phase where
+	  the running userland is upgraded, fails on systems deployed
+	  with <literal>nss_ldap</literal> enabled in
+	  &man.nsswitch.conf.5; when upgrading from 10.0-RELEASE to
+	  10.1-RELEASE.</para>
+
+	<para>A workaround is to disable <literal>nss_ldap</literal>
+	  in &man.nsswitch.conf.5; prior to running
+	  <command>freebsd-update install</command> to upgrade the
+	  userland, after which it can be enabled again when the
+	  upgrade process is completed.</para>
+
+	<para>The problem is being investigated, and an Errata Notice
+	  is expected to be issued when a solution to the problem is
+	  identified.</para>
+      </listitem>
+
+      <listitem>
+	<para>[2015-03-31] Several reports were received regarding the
+	  <acronym>QCOW2</acronym> &os;&nbsp;virtual machine images
+	  crashing on boot.  As result of this, these images have been
+	  removed from the <acronym>FTP</acronym> mirrors, and the
+	  hashes removed from <filename>CHECKSUM.SHA256</filename> and
+	  <filename>CHECKSUM.MD5</filename> in the <filename
+	    class="directory">VM-IMAGES/</filename> directory on the
+	  <acronym>FTP</acronym> mirrors.</para>
       </listitem>
     </itemizedlist>
   </sect1>

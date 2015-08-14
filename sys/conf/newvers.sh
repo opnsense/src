@@ -31,8 +31,8 @@
 # $FreeBSD$
 
 TYPE="FreeBSD"
-REVISION="10.1"
-BRANCH="RELEASE-p17"
+REVISION="10.2"
+BRANCH="RELEASE"
 if [ "X${BRANCH_OVERRIDE}" != "X" ]; then
 	BRANCH=${BRANCH_OVERRIDE}
 fi
@@ -52,7 +52,7 @@ else
 fi
 
 b=share/examples/etc/bsd-style-copyright
-year=`date '+%Y'`
+year=$(sed -Ee '/^Copyright .* The FreeBSD Project/!d;s/^.*1992-([0-9]*) .*$/\1/g' ${SYSDIR}/../COPYRIGHT)
 # look for copyright template
 for bsd_copyright in ../$b ../../$b ../../../$b /usr/src/$b /usr/$b
 do

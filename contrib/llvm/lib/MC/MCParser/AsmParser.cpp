@@ -1695,7 +1695,7 @@ bool AsmParser::expandMacro(raw_svector_ostream &OS, StringRef Body,
                             const MCAsmMacroParameters &Parameters,
                             const MCAsmMacroArguments &A, const SMLoc &L) {
   unsigned NParameters = Parameters.size();
-  if (NParameters != 0 && NParameters != A.size())
+  if ((!IsDarwin || NParameters != 0) && NParameters != A.size())
     return Error(L, "Wrong number of arguments");
 
   // A macro without parameters is handled differently on Darwin:
@@ -1705,7 +1705,7 @@ bool AsmParser::expandMacro(raw_svector_ostream &OS, StringRef Body,
     std::size_t End = Body.size(), Pos = 0;
     for (; Pos != End; ++Pos) {
       // Check for a substitution or escape.
-      if (!NParameters) {
+      if (IsDarwin && !NParameters) {
         // This macro has no parameters, look for $0, $1, etc.
         if (Body[Pos] != '$' || Pos + 1 == End)
           continue;
@@ -1728,7 +1728,7 @@ bool AsmParser::expandMacro(raw_svector_ostream &OS, StringRef Body,
     if (Pos == End)
       break;
 
-    if (!NParameters) {
+    if (IsDarwin && !NParameters) {
       switch (Body[Pos + 1]) {
       // $$ => $
       case '$':
@@ -3370,21 +3370,27 @@ bool AsmParser::parseDirectiveSpace(StringRef IDVal) {
 }
 
 /// parseDirectiveLEB128
-/// ::= (.sleb128 | .uleb128) expression
+/// ::= (.sleb128 | .uleb128) [ expression (, expression)* ]
 bool AsmParser::parseDirectiveLEB128(bool Signed) {
   checkForValidSection();
   const MCExpr *Value;
 
-  if (parseExpression(Value))
-    return true;
+  for (;;) {
+    if (parseExpression(Value))
+      return true;
 
-  if (getLexer().isNot(AsmToken::EndOfStatement))
-    return TokError("unexpected token in directive");
+    if (Signed)
+      getStreamer().EmitSLEB128Value(Value);
+    else
+      getStreamer().EmitULEB128Value(Value);
 
-  if (Signed)
-    getStreamer().EmitSLEB128Value(Value);
-  else
-    getStreamer().EmitULEB128Value(Value);
+    if (getLexer().is(AsmToken::EndOfStatement))
+      break;
+
+    if (getLexer().isNot(AsmToken::Comma))
+      return TokError("unexpected token in directive");
+    Lex();
+  }
 
   return false;
 }

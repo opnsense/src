@@ -271,10 +271,9 @@ static void
 blksz_changed_cb(void *arg, uint64_t newval)
 {
 	zfsvfs_t *zfsvfs = arg;
-
-	if (newval < SPA_MINBLOCKSIZE ||
-	    newval > SPA_MAXBLOCKSIZE || !ISP2(newval))
-		newval = SPA_MAXBLOCKSIZE;
+	ASSERT3U(newval, <=, spa_maxblocksize(dmu_objset_spa(zfsvfs->z_os)));
+	ASSERT3U(newval, >=, SPA_MINBLOCKSIZE);
+	ASSERT(ISP2(newval));
 
 	zfsvfs->z_max_blksz = newval;
 	zfsvfs->z_vfs->mnt_stat.f_iosize = newval;
@@ -890,7 +889,7 @@ zfsvfs_create(const char *osname, zfsvfs_t **zfvp)
 	 */
 	zfsvfs->z_vfs = NULL;
 	zfsvfs->z_parent = zfsvfs;
-	zfsvfs->z_max_blksz = SPA_MAXBLOCKSIZE;
+	zfsvfs->z_max_blksz = SPA_OLD_MAXBLOCKSIZE;
 	zfsvfs->z_show_ctldir = ZFS_SNAPDIR_VISIBLE;
 	zfsvfs->z_os = os;
 
@@ -1223,9 +1222,6 @@ zfs_domount(vfs_t *vfsp, char *osname)
 	}
 
 	vfs_mountedfrom(vfsp, osname);
-	/* Grab extra reference. */
-	VERIFY(VFS_ROOT(vfsp, LK_EXCLUSIVE, &vp) == 0);
-	VOP_UNLOCK(vp, 0);
 
 	if (!zfsvfs->z_issnap)
 		zfsctl_create(zfsvfs);
@@ -1803,7 +1799,7 @@ zfs_root(vfs_t *vfsp, int flags, vnode_t **vpp)
 	znode_t *rootzp;
 	int error;
 
-	ZFS_ENTER_NOERROR(zfsvfs);
+	ZFS_ENTER(zfsvfs);
 
 	error = zfs_zget(zfsvfs, zfsvfs->z_root, &rootzp);
 	if (error == 0)
@@ -1978,7 +1974,7 @@ zfs_umount(vfs_t *vfsp, int fflag)
 	/*
 	 * Flush all the files.
 	 */
-	ret = vflush(vfsp, 1, (fflag & MS_FORCE) ? FORCECLOSE : 0, td);
+	ret = vflush(vfsp, 0, (fflag & MS_FORCE) ? FORCECLOSE : 0, td);
 	if (ret != 0) {
 		if (!zfsvfs->z_issnap) {
 			zfsctl_create(zfsvfs);
@@ -2301,8 +2297,10 @@ bail:
 		 * Since we couldn't setup the sa framework, try to force
 		 * unmount this file system.
 		 */
-		if (vn_vfswlock(zfsvfs->z_vfs->vfs_vnodecovered) == 0)
+		if (vn_vfswlock(zfsvfs->z_vfs->vfs_vnodecovered) == 0) {
+			vfs_ref(zfsvfs->z_vfs);
 			(void) dounmount(zfsvfs->z_vfs, MS_FORCE, curthread);
+		}
 	}
 	return (err);
 }

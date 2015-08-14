@@ -582,7 +582,6 @@ static int
 mappedread(vnode_t *vp, int nbytes, uio_t *uio)
 {
 	znode_t *zp = VTOZ(vp);
-	objset_t *os = zp->z_zfsvfs->z_os;
 	vm_object_t obj;
 	int64_t start;
 	caddr_t va;
@@ -613,7 +612,8 @@ mappedread(vnode_t *vp, int nbytes, uio_t *uio)
 			page_unhold(pp);
 		} else {
 			zfs_vmobject_wunlock(obj);
-			error = dmu_read_uio(os, zp->z_id, uio, bytes);
+			error = dmu_read_uio_dbuf(sa_get_db(zp->z_sa_hdl),
+			    uio, bytes);
 			zfs_vmobject_wlock(obj);
 		}
 		len -= bytes;
@@ -650,7 +650,6 @@ zfs_read(vnode_t *vp, uio_t *uio, int ioflag, cred_t *cr, caller_context_t *ct)
 {
 	znode_t		*zp = VTOZ(vp);
 	zfsvfs_t	*zfsvfs = zp->z_zfsvfs;
-	objset_t	*os;
 	ssize_t		n, nbytes;
 	int		error = 0;
 	rl_t		*rl;
@@ -658,7 +657,6 @@ zfs_read(vnode_t *vp, uio_t *uio, int ioflag, cred_t *cr, caller_context_t *ct)
 
 	ZFS_ENTER(zfsvfs);
 	ZFS_VERIFY_ZP(zp);
-	os = zfsvfs->z_os;
 
 	if (zp->z_pflags & ZFS_AV_QUARANTINED) {
 		ZFS_EXIT(zfsvfs);
@@ -756,10 +754,12 @@ zfs_read(vnode_t *vp, uio_t *uio, int ioflag, cred_t *cr, caller_context_t *ct)
 			error = mappedread_sf(vp, nbytes, uio);
 		else
 #endif /* __FreeBSD__ */
-		if (vn_has_cached_data(vp))
+		if (vn_has_cached_data(vp)) {
 			error = mappedread(vp, nbytes, uio);
-		else
-			error = dmu_read_uio(os, zp->z_id, uio, nbytes);
+		} else {
+			error = dmu_read_uio_dbuf(sa_get_db(zp->z_sa_hdl),
+			    uio, nbytes);
+		}
 		if (error) {
 			/* convert checksum errors into IO errors */
 			if (error == ECKSUM)
@@ -1013,8 +1013,14 @@ zfs_write(vnode_t *vp, uio_t *uio, int ioflag, cred_t *cr, caller_context_t *ct)
 			uint64_t new_blksz;
 
 			if (zp->z_blksz > max_blksz) {
+				/*
+				 * File's blocksize is already larger than the
+				 * "recordsize" property.  Only let it grow to
+				 * the next power of 2.
+				 */
 				ASSERT(!ISP2(zp->z_blksz));
-				new_blksz = MIN(end_size, SPA_MAXBLOCKSIZE);
+				new_blksz = MIN(end_size,
+				    1 << highbit64(zp->z_blksz));
 			} else {
 				new_blksz = MIN(end_size, max_blksz);
 			}
@@ -1532,7 +1538,7 @@ zfs_lookup(vnode_t *dvp, char *nm, vnode_t **vpp, struct componentname *cnp,
 	/*
 	 * Insert name into cache (as non-existent) if appropriate.
 	 */
-	if (error == ENOENT && (cnp->cn_flags & MAKEENTRY) && nameiop != CREATE)
+	if (error == ENOENT && (cnp->cn_flags & MAKEENTRY) != 0)
 		cache_enter(dvp, *vpp, cnp);
 	/*
 	 * Insert name into cache if appropriate.
@@ -3724,9 +3730,8 @@ static int
 zfs_rename(vnode_t *sdvp, char *snm, vnode_t *tdvp, char *tnm, cred_t *cr,
     caller_context_t *ct, int flags)
 {
-	znode_t		*tdzp, *szp, *tzp;
-	znode_t		*sdzp = VTOZ(sdvp);
-	zfsvfs_t	*zfsvfs = sdzp->z_zfsvfs;
+	znode_t		*tdzp, *sdzp, *szp, *tzp;
+	zfsvfs_t 	*zfsvfs;
 	zilog_t		*zilog;
 	vnode_t		*realvp;
 	zfs_dirlock_t	*sdl, *tdl;
@@ -3737,24 +3742,27 @@ zfs_rename(vnode_t *sdvp, char *snm, vnode_t *tdvp, char *tnm, cred_t *cr,
 	int		zflg = 0;
 	boolean_t	waited = B_FALSE;
 
-	ZFS_ENTER(zfsvfs);
-	ZFS_VERIFY_ZP(sdzp);
-	zilog = zfsvfs->z_log;
-
-	/*
-	 * Make sure we have the real vp for the target directory.
-	 */
-	if (VOP_REALVP(tdvp, &realvp, ct) == 0)
-		tdvp = realvp;
-
 	tdzp = VTOZ(tdvp);
 	ZFS_VERIFY_ZP(tdzp);
+	zfsvfs = tdzp->z_zfsvfs;
+	ZFS_ENTER(zfsvfs);
+	zilog = zfsvfs->z_log;
+	sdzp = VTOZ(sdvp);
+
+	/*
+	 * In case sdzp is not valid, let's be sure to exit from the right
+	 * zfsvfs_t.
+	 */
+	if (sdzp->z_sa_hdl == NULL) {
+		ZFS_EXIT(zfsvfs);
+		return (SET_ERROR(EIO));
+	}
 
 	/*
 	 * We check z_zfsvfs rather than v_vfsp here, because snapshots and the
 	 * ctldir appear to have the same v_vfsp.
 	 */
-	if (tdzp->z_zfsvfs != zfsvfs || zfsctl_is_node(tdvp)) {
+	if (sdzp->z_zfsvfs != zfsvfs || zfsctl_is_node(tdvp)) {
 		ZFS_EXIT(zfsvfs);
 		return (SET_ERROR(EXDEV));
 	}
@@ -5937,6 +5945,7 @@ top:
 		    &zp->z_pflags, 8);
 		zfs_tstamp_update_setup(zp, CONTENT_MODIFIED, mtime, ctime,
 		    B_TRUE);
+		(void)sa_bulk_update(zp->z_sa_hdl, bulk, count, tx);
 		zfs_log_write(zfsvfs->z_log, tx, TX_WRITE, zp, off, len, 0);
 
 		zfs_vmobject_wlock(object);
@@ -6148,15 +6157,20 @@ zfs_freebsd_create(ap)
 {
 	struct componentname *cnp = ap->a_cnp;
 	vattr_t *vap = ap->a_vap;
-	int mode;
+	int error, mode;
 
 	ASSERT(cnp->cn_flags & SAVENAME);
 
 	vattr_init_mask(vap);
 	mode = vap->va_mode & ALLPERMS;
 
-	return (zfs_create(ap->a_dvp, cnp->cn_nameptr, vap, !EXCL, mode,
-	    ap->a_vpp, cnp->cn_cred, cnp->cn_thread));
+	error = zfs_create(ap->a_dvp, cnp->cn_nameptr, vap, !EXCL, mode,
+	    ap->a_vpp, cnp->cn_cred, cnp->cn_thread);
+#ifdef FREEBSD_NAMECACHE
+	if (error == 0 && (cnp->cn_flags & MAKEENTRY) != 0)
+		cache_enter(ap->a_dvp, *ap->a_vpp, cnp);
+#endif
+	return (error);
 }
 
 static int

@@ -6,26 +6,29 @@
 
 <!-- Version of the OS we're describing.  This needs to be updated
      with each new release. -->
-<!ENTITY release.current "10.1-RELEASE">
+<!ENTITY release.current "10.2-RELEASE">
 
 <!-- The previous version used for comparison in the "What's New"
      section.  For -CURRENT, we might point back to the last
      branchpoint. -->
-<!ENTITY release.prev "10.0-RELEASE">
+<!ENTITY release.prev "10.1-RELEASE">
 
 <!-- The previous stable release, useful for pointing user's at the
      release they SHOULD be running if they don't want the bleeding
      edge. -->
-<!ENTITY release.prev.stable "9.3-RELEASE">
+<!ENTITY release.prev.stable "10.1-RELEASE">
 
 <!-- The next version to be released, usually used for snapshots. -->
-<!ENTITY release.next "10.2-RELEASE">
+<!ENTITY release.next "10.3-RELEASE">
 
 <!-- The name of this branch. -->
-<!ENTITY release.branch "10.1-STABLE">
+<!ENTITY release.branch "10.2-STABLE">
 
 <!-- The URL for obtaining this version of FreeBSD. -->
-<!ENTITY release.url "http://www.FreeBSD.org/releases/">
+<!ENTITY release.url "https://www.FreeBSD.org/releases/">
+
+<!-- The URL for Security Advisories and Errata Notices. -->
+<!ENTITY security.url "https://www.FreeBSD.org/security/advisories">
 
 <!-- The recommended mailing list to track. -->
 <!ENTITY release.maillist "stable">
@@ -51,7 +54,7 @@
 <!ENTITY release ''>
 
 <!-- The manpaths for man page references -->
-<!ENTITY release.man.url "http://www.FreeBSD.org/cgi/man.cgi">
+<!ENTITY release.man.url "https://www.FreeBSD.org/cgi/man.cgi">
 <!ENTITY release.manpath.xorg          "7.5.1">
 <!ENTITY release.manpath.netbsd        "5.1">
 <!ENTITY release.manpath.freebsd-ports "Ports">
@@ -74,16 +77,5 @@
 <!ENTITY arch.powerpc "powerpc">
 <!ENTITY arch.sparc64 "sparc64">
 
-<!-- Entities added after the doc/ tag for 10.1-RELEASE -->
-<!ENTITY amd.phenom "<trademark xmlns='http://docbook.org/ns/docbook'>AMD&nbsp;Phenom</trademark>">
-<!ENTITY amd.sempron "<trademark xmlns='http://docbook.org/ns/docbook'>AMD&nbsp;Sempron</trademark>">
-<!ENTITY amd.turion "<trademark xmlns='http://docbook.org/ns/docbook'>AMD&nbsp;Turion</trademark>">
-<!ENTITY centrino "<trademark xmlns='http://docbook.org/ns/docbook' class='registered'>Centrino</trademark>">
-<!ENTITY tm-attrib.intel "<para xmlns='http://docbook.org/ns/docbook'>Intel,
-  Celeron, Centrino, Core, EtherExpress, i386, i486, Itanium, Pentium,
-  and Xeon are trademarks or registered trademarks of Intel Corporation
-  or its subsidiaries in the United States and other countries.</para>">
-<!ENTITY tm-attrib.amd "<para xmlns='http://docbook.org/ns/docbook'>AMD,
-  AMD Athlon, AMD Opteron, AMD Phenom, AMD Sempron, AMD Turion, Athlon,
-  &Eacute;lan, Opteron, and PCnet are trademarks of Advanced Micro
-  Devices, Inc.</para>">
+<!-- Manual page references added after the doc tag -->
+<!ENTITY man.pms.4 "<citerefentry xmlns='http://docbook.org/ns/docbook'><refentrytitle>pms</refentrytitle><manvolnum>4</manvolnum></citerefentry>">

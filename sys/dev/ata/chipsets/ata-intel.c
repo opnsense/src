@@ -227,6 +227,18 @@ ata_intel_probe(device_t dev)
      { ATA_LPT_S4,       0, INTEL_6CH2, 0, ATA_SA300, "Lynx Point" },
      { ATA_LPT_R5,       0, INTEL_AHCI, 0, ATA_SA300, "Lynx Point" },
      { ATA_LPT_R6,       0, INTEL_AHCI, 0, ATA_SA300, "Lynx Point" },
+     { ATA_WCPT_S1,      0, INTEL_6CH,  0, ATA_SA300, "Wildcat Point" },
+     { ATA_WCPT_S2,      0, INTEL_6CH,  0, ATA_SA300, "Wildcat Point" },
+     { ATA_WCPT_AH1,     0, INTEL_AHCI, 0, ATA_SA300, "Wildcat Point" },
+     { ATA_WCPT_AH2,     0, INTEL_AHCI, 0, ATA_SA300, "Wildcat Point" },
+     { ATA_WCPT_R1,      0, INTEL_AHCI, 0, ATA_SA300, "Wildcat Point" },
+     { ATA_WCPT_R2,      0, INTEL_AHCI, 0, ATA_SA300, "Wildcat Point" },
+     { ATA_WCPT_R3,      0, INTEL_AHCI, 0, ATA_SA300, "Wildcat Point" },
+     { ATA_WCPT_R4,      0, INTEL_AHCI, 0, ATA_SA300, "Wildcat Point" },
+     { ATA_WCPT_S3,      0, INTEL_6CH2, 0, ATA_SA300, "Wildcat Point" },
+     { ATA_WCPT_S4,      0, INTEL_6CH2, 0, ATA_SA300, "Wildcat Point" },
+     { ATA_WCPT_R5,      0, INTEL_AHCI, 0, ATA_SA300, "Wildcat Point" },
+     { ATA_WCPT_R6,      0, INTEL_AHCI, 0, ATA_SA300, "Wildcat Point" },
      { ATA_WELLS_S1,     0, INTEL_6CH,  0, ATA_SA300, "Wellsburg" },
      { ATA_WELLS_S2,     0, INTEL_6CH2, 0, ATA_SA300, "Wellsburg" },
      { ATA_WELLS_S3,     0, INTEL_6CH,  0, ATA_SA300, "Wellsburg" },
@@ -252,7 +264,7 @@ ata_intel_probe(device_t dev)
     ata_set_desc(dev);
     ctlr->chipinit = ata_intel_chipinit;
     ctlr->chipdeinit = ata_intel_chipdeinit;
-    return (BUS_PROBE_DEFAULT);
+    return (BUS_PROBE_LOW_PRIORITY);
 }
 
 static int

@@ -1219,7 +1219,7 @@ isp_reset(ispsoftc_t *isp, int do_load_defaults)
 	 * work for them).
 	 */
 	if (IS_FC(isp) && isp->isp_nchan > 1) {
-		if (!IS_24XX(isp) || (fwt & ISP2400_FW_ATTR_MULTIID) == 0) {
+		if (!ISP_CAP_MULTI_ID(isp)) {
 			isp_prt(isp, ISP_LOGWARN, "non-MULTIID f/w loaded, only can enable 1 of %d channels", isp->isp_nchan);
 			isp->isp_nchan = 1;
 		}
@@ -1848,7 +1848,7 @@ isp_fibre_init(ispsoftc_t *isp)
 		icbp->icb_lunetimeout = ICB_LUN_ENABLE_TOV;
 	}
 #endif
-	if (fcp->isp_wwnn && fcp->isp_wwpn && (fcp->isp_wwnn >> 60) != 2) {
+	if (fcp->isp_wwnn && fcp->isp_wwpn) {
 		icbp->icb_fwoptions |= ICBOPT_BOTH_WWNS;
 		MAKE_NODE_NAME_FROM_WWN(icbp->icb_nodename, fcp->isp_wwnn);
 		MAKE_NODE_NAME_FROM_WWN(icbp->icb_portname, fcp->isp_wwpn);
@@ -2075,7 +2075,7 @@ isp_fibre_init_2400(ispsoftc_t *isp)
 	}
 	icbp->icb_logintime = ICB_LOGIN_TOV;
 
-	if (fcp->isp_wwnn && fcp->isp_wwpn && (fcp->isp_wwnn >> 60) != 2) {
+	if (fcp->isp_wwnn && fcp->isp_wwpn) {
 		icbp->icb_fwoptions1 |= ICB2400_OPT1_BOTH_WWNS;
 		MAKE_NODE_NAME_FROM_WWN(icbp->icb_portname, fcp->isp_wwpn);
 		MAKE_NODE_NAME_FROM_WWN(icbp->icb_nodename, fcp->isp_wwnn);
@@ -2181,6 +2181,11 @@ isp_fibre_init_2400(ispsoftc_t *isp)
 			pdst = (vp_port_info_t *) off;
 			isp_put_vp_port_info(isp, &pi, pdst);
 			amt += ICB2400_VPOPT_WRITE_SIZE;
+		}
+		if (isp->isp_dblev & ISP_LOGDEBUG1) {
+			isp_print_bytes(isp, "isp_fibre_init_2400",
+			    amt - ICB2400_VPINFO_OFF,
+			    (char *)fcp->isp_scratch + ICB2400_VPINFO_OFF);
 		}
 	}
 
@@ -5224,7 +5229,10 @@ again:
 			}
 			scsi_status = sp2->req_scsi_status;
 			completion_status = sp2->req_completion_status;
-			req_state_flags = 0;
+			if ((scsi_status & 0xff) != 0)
+				req_state_flags = RQSF_GOT_STATUS;
+			else
+				req_state_flags = 0;
 			resid = sp2->req_resid;
 		} else if (etype == RQSTYPE_RESPONSE) {
 			isp_get_response(isp, (ispstatusreq_t *) hp, sp);
@@ -7341,6 +7349,7 @@ isp_mboxcmd(ispsoftc_t *isp, mbreg_t *mbp)
 			isp_prt(isp, ISP_LOGERR, "Unknown Command 0x%x", opcode);
 			return;
 		}
+		cname = fc_mbcmd_names[opcode];
 		ibits = ISP_FC_IBITS(opcode);
 		obits = ISP_FC_OBITS(opcode);
 	} else {
@@ -7349,9 +7358,15 @@ isp_mboxcmd(ispsoftc_t *isp, mbreg_t *mbp)
 			isp_prt(isp, ISP_LOGERR, "Unknown Command 0x%x", opcode);
 			return;
 		}
+		cname = scsi_mbcmd_names[opcode];
 		ibits = ISP_SCSI_IBITS(opcode);
 		obits = ISP_SCSI_OBITS(opcode);
 	}
+	if (cname == NULL) {
+		cname = tname;
+		ISP_SNPRINTF(tname, sizeof tname, "opcode %x", opcode);
+	}
+	isp_prt(isp, ISP_LOGDEBUG3, "Mailbox Command '%s'", cname);
 
 	/*
 	 * Pick up any additional bits that the caller might have set.
@@ -7436,11 +7451,6 @@ isp_mboxcmd(ispsoftc_t *isp, mbreg_t *mbp)
  out:
 	if (mbp->logval == 0 || opcode == MBOX_EXEC_FIRMWARE) {
 		return;
-	}
-	cname = (IS_FC(isp))? fc_mbcmd_names[opcode] : scsi_mbcmd_names[opcode];
-	if (cname == NULL) {
-		cname = tname;
-		ISP_SNPRINTF(tname, sizeof tname, "opcode %x", opcode);
 	}
 
 	/*

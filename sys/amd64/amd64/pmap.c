@@ -130,6 +130,7 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_extern.h>
 #include <vm/vm_pageout.h>
 #include <vm/vm_pager.h>
+#include <vm/vm_phys.h>
 #include <vm/vm_radix.h>
 #include <vm/vm_reserv.h>
 #include <vm/uma.h>
@@ -146,6 +147,13 @@ __FBSDID("$FreeBSD$");
 #endif
 
 static __inline boolean_t
+pmap_type_guest(pmap_t pmap)
+{
+
+	return ((pmap->pm_type == PT_EPT) || (pmap->pm_type == PT_RVI));
+}
+
+static __inline boolean_t
 pmap_emulate_ad_bits(pmap_t pmap)
 {
 
@@ -159,6 +167,7 @@ pmap_valid_bit(pmap_t pmap)
 
 	switch (pmap->pm_type) {
 	case PT_X86:
+	case PT_RVI:
 		mask = X86_PG_V;
 		break;
 	case PT_EPT:
@@ -181,6 +190,7 @@ pmap_rw_bit(pmap_t pmap)
 
 	switch (pmap->pm_type) {
 	case PT_X86:
+	case PT_RVI:
 		mask = X86_PG_RW;
 		break;
 	case PT_EPT:
@@ -205,6 +215,7 @@ pmap_global_bit(pmap_t pmap)
 	case PT_X86:
 		mask = X86_PG_G;
 		break;
+	case PT_RVI:
 	case PT_EPT:
 		mask = 0;
 		break;
@@ -222,6 +233,7 @@ pmap_accessed_bit(pmap_t pmap)
 
 	switch (pmap->pm_type) {
 	case PT_X86:
+	case PT_RVI:
 		mask = X86_PG_A;
 		break;
 	case PT_EPT:
@@ -244,6 +256,7 @@ pmap_modified_bit(pmap_t pmap)
 
 	switch (pmap->pm_type) {
 	case PT_X86:
+	case PT_RVI:
 		mask = X86_PG_M;
 		break;
 	case PT_EPT:
@@ -824,6 +837,15 @@ pmap_bootstrap(vm_paddr_t *firstaddr)
 	 */
 	create_pagetables(firstaddr);
 
+	/*
+	 * Add a physical memory segment (vm_phys_seg) corresponding to the
+	 * preallocated kernel page table pages so that vm_page structures
+	 * representing these pages will be created.  The vm_page structures
+	 * are required for promotion of the corresponding kernel virtual
+	 * addresses to superpage mappings.
+	 */
+	vm_phys_add_seg(KPTphys, KPTphys + ptoa(nkpt));
+
 	virtual_avail = (vm_offset_t) KERNBASE + *firstaddr;
 	virtual_avail = pmap_kmem_choose(virtual_avail);
 
@@ -1048,8 +1070,7 @@ pmap_init(void)
 	/*
 	 * Calculate the size of the pv head table for superpages.
 	 */
-	for (i = 0; phys_avail[i + 1]; i += 2);
-	pv_npg = round_2mpage(phys_avail[(i - 2) + 1]) / NBPDR;
+	pv_npg = howmany(vm_phys_segs[vm_phys_nsegs - 1].end, NBPDR);
 
 	/*
 	 * Allocate memory for the pv head table for superpages.
@@ -1103,6 +1124,7 @@ pmap_swap_pat(pmap_t pmap, pt_entry_t entry)
 
 	switch (pmap->pm_type) {
 	case PT_X86:
+	case PT_RVI:
 		/* Verify that both PAT bits are not set at the same time */
 		KASSERT((entry & x86_pat_bits) != x86_pat_bits,
 		    ("Invalid PAT bits in entry %#lx", entry));
@@ -1138,6 +1160,7 @@ pmap_cache_bits(pmap_t pmap, int mode, boolean_t is_pde)
 
 	switch (pmap->pm_type) {
 	case PT_X86:
+	case PT_RVI:
 		/* The PAT bit is different for PTE's and PDE's. */
 		pat_flag = is_pde ? X86_PG_PDE_PAT : X86_PG_PTE_PAT;
 
@@ -1172,6 +1195,7 @@ pmap_cache_mask(pmap_t pmap, boolean_t is_pde)
 
 	switch (pmap->pm_type) {
 	case PT_X86:
+	case PT_RVI:
 		mask = is_pde ? X86_PG_PDE_CACHE : X86_PG_PTE_CACHE;
 		break;
 	case PT_EPT:
@@ -1198,6 +1222,7 @@ pmap_update_pde_store(pmap_t pmap, pd_entry_t *pde, pd_entry_t newpde)
 	switch (pmap->pm_type) {
 	case PT_X86:
 		break;
+	case PT_RVI:
 	case PT_EPT:
 		/*
 		 * XXX
@@ -1233,7 +1258,7 @@ pmap_update_pde_invalidate(pmap_t pmap, vm_offset_t va, pd_entry_t newpde)
 {
 	pt_entry_t PG_G;
 
-	if (pmap->pm_type == PT_EPT)
+	if (pmap_type_guest(pmap))
 		return;
 
 	KASSERT(pmap->pm_type == PT_X86,
@@ -1347,7 +1372,7 @@ pmap_invalidate_page(pmap_t pmap, vm_offset_t va)
 	cpuset_t other_cpus;
 	u_int cpuid;
 
-	if (pmap->pm_type == PT_EPT) {
+	if (pmap_type_guest(pmap)) {
 		pmap_invalidate_ept(pmap);
 		return;
 	}
@@ -1425,7 +1450,7 @@ pmap_invalidate_range(pmap_t pmap, vm_offset_t sva, vm_offset_t eva)
 	vm_offset_t addr;
 	u_int cpuid;
 
-	if (pmap->pm_type == PT_EPT) {
+	if (pmap_type_guest(pmap)) {
 		pmap_invalidate_ept(pmap);
 		return;
 	}
@@ -1484,7 +1509,7 @@ pmap_invalidate_all(pmap_t pmap)
 	uint64_t cr3;
 	u_int cpuid;
 
-	if (pmap->pm_type == PT_EPT) {
+	if (pmap_type_guest(pmap)) {
 		pmap_invalidate_ept(pmap);
 		return;
 	}
@@ -1606,7 +1631,7 @@ pmap_update_pde(pmap_t pmap, vm_offset_t va, pd_entry_t *pde, pd_entry_t newpde)
 	cpuid = PCPU_GET(cpuid);
 	other_cpus = all_cpus;
 	CPU_CLR(cpuid, &other_cpus);
-	if (pmap == kernel_pmap || pmap->pm_type == PT_EPT)
+	if (pmap == kernel_pmap || pmap_type_guest(pmap)) 
 		active = all_cpus;
 	else {
 		active = pmap->pm_active;
@@ -1644,6 +1669,7 @@ pmap_invalidate_page(pmap_t pmap, vm_offset_t va)
 		if (pmap == kernel_pmap || !CPU_EMPTY(&pmap->pm_active))
 			invlpg(va);
 		break;
+	case PT_RVI:
 	case PT_EPT:
 		pmap->pm_eptgen++;
 		break;
@@ -1663,6 +1689,7 @@ pmap_invalidate_range(pmap_t pmap, vm_offset_t sva, vm_offset_t eva)
 			for (addr = sva; addr < eva; addr += PAGE_SIZE)
 				invlpg(addr);
 		break;
+	case PT_RVI:
 	case PT_EPT:
 		pmap->pm_eptgen++;
 		break;
@@ -1680,6 +1707,7 @@ pmap_invalidate_all(pmap_t pmap)
 		if (pmap == kernel_pmap || !CPU_EMPTY(&pmap->pm_active))
 			invltlb();
 		break;
+	case PT_RVI:
 	case PT_EPT:
 		pmap->pm_eptgen++;
 		break;
@@ -1710,16 +1738,20 @@ pmap_update_pde(pmap_t pmap, vm_offset_t va, pd_entry_t *pde, pd_entry_t newpde)
 #define PMAP_CLFLUSH_THRESHOLD   (2 * 1024 * 1024)
 
 void
-pmap_invalidate_cache_range(vm_offset_t sva, vm_offset_t eva)
+pmap_invalidate_cache_range(vm_offset_t sva, vm_offset_t eva, boolean_t force)
 {
 
-	KASSERT((sva & PAGE_MASK) == 0,
-	    ("pmap_invalidate_cache_range: sva not page-aligned"));
-	KASSERT((eva & PAGE_MASK) == 0,
-	    ("pmap_invalidate_cache_range: eva not page-aligned"));
+	if (force) {
+		sva &= ~(vm_offset_t)cpu_clflush_line_size;
+	} else {
+		KASSERT((sva & PAGE_MASK) == 0,
+		    ("pmap_invalidate_cache_range: sva not page-aligned"));
+		KASSERT((eva & PAGE_MASK) == 0,
+		    ("pmap_invalidate_cache_range: eva not page-aligned"));
+	}
 
-	if (cpu_feature & CPUID_SS)
-		; /* If "Self Snoop" is supported, do nothing. */
+	if ((cpu_feature & CPUID_SS) != 0 && !force)
+		; /* If "Self Snoop" is supported and allowed, do nothing. */
 	else if ((cpu_feature & CPUID_CLFSH) != 0 &&
 	    eva - sva < PMAP_CLFLUSH_THRESHOLD) {
 
@@ -2571,7 +2603,7 @@ pmap_growkernel(vm_offset_t addr)
 	 * "kernel_vm_end" and the kernel page table as they were.
 	 *
 	 * The correctness of this action is based on the following
-	 * argument: vm_map_findspace() allocates contiguous ranges of the
+	 * argument: vm_map_insert() allocates contiguous ranges of the
 	 * kernel virtual address space.  It calls this function if a range
 	 * ends after "kernel_vm_end".  If the kernel is mapped between
 	 * "kernel_vm_end" and "addr", then the range cannot begin at
@@ -3988,7 +4020,6 @@ pmap_promote_pde(pmap_t pmap, pd_entry_t *pde, vm_offset_t va,
 	pd_entry_t newpde;
 	pt_entry_t *firstpte, oldpte, pa, *pte;
 	pt_entry_t PG_G, PG_A, PG_M, PG_RW, PG_V;
-	vm_offset_t oldpteva;
 	vm_page_t mpte;
 	int PG_PTE_CACHE;
 
@@ -4048,10 +4079,9 @@ setpte:
 			if (!atomic_cmpset_long(pte, oldpte, oldpte & ~PG_RW))
 				goto setpte;
 			oldpte &= ~PG_RW;
-			oldpteva = (oldpte & PG_FRAME & PDRMASK) |
-			    (va & ~PDRMASK);
 			CTR2(KTR_PMAP, "pmap_promote_pde: protect for va %#lx"
-			    " in pmap %p", oldpteva, pmap);
+			    " in pmap %p", (oldpte & PG_FRAME & PDRMASK) |
+			    (va & ~PDRMASK), pmap);
 		}
 		if ((oldpte & PG_PTE_PROMOTE) != (newpde & PG_PTE_PROMOTE)) {
 			atomic_add_long(&pmap_pde_p_failures, 1);
@@ -6222,7 +6252,7 @@ pmap_mapdev_attr(vm_paddr_t pa, vm_size_t size, int mode)
 	for (tmpsize = 0; tmpsize < size; tmpsize += PAGE_SIZE)
 		pmap_kenter_attr(va + tmpsize, pa + tmpsize, mode);
 	pmap_invalidate_range(kernel_pmap, va, va + tmpsize);
-	pmap_invalidate_cache_range(va, va + tmpsize);
+	pmap_invalidate_cache_range(va, va + tmpsize, FALSE);
 	return ((void *)(va + offset));
 }
 
@@ -6558,7 +6588,7 @@ pmap_change_attr_locked(vm_offset_t va, vm_size_t size, int mode)
 	 */
 	if (changed) {
 		pmap_invalidate_range(kernel_pmap, base, tmpva);
-		pmap_invalidate_cache_range(base, tmpva);
+		pmap_invalidate_cache_range(base, tmpva, FALSE);
 	}
 	return (error);
 }

@@ -133,6 +133,7 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_extern.h>
 #include <vm/vm_pageout.h>
 #include <vm/vm_pager.h>
+#include <vm/vm_phys.h>
 #include <vm/vm_radix.h>
 #include <vm/vm_reserv.h>
 #include <vm/uma.h>
@@ -213,7 +214,7 @@ vm_offset_t kernel_vm_end = KERNBASE + NKPT * NBPDR;
 extern u_int32_t KERNend;
 extern u_int32_t KPTphys;
 
-#ifdef PAE
+#if defined(PAE) || defined(PAE_TABLES)
 pt_entry_t pg_nx;
 static uma_zone_t pdptzone;
 #endif
@@ -338,7 +339,7 @@ static void _pmap_unwire_ptp(pmap_t pmap, vm_page_t m, struct spglist *free);
 static pt_entry_t *pmap_pte_quick(pmap_t pmap, vm_offset_t va);
 static void pmap_pte_release(pt_entry_t *pte);
 static int pmap_unuse_pt(pmap_t, vm_offset_t, struct spglist *);
-#ifdef PAE
+#if defined(PAE) || defined(PAE_TABLES)
 static void *pmap_pdpt_allocf(uma_zone_t zone, int bytes, u_int8_t *flags, int wait);
 #endif
 static void pmap_set_pg(void);
@@ -374,6 +375,15 @@ pmap_bootstrap(vm_paddr_t firstaddr)
 	int i;
 
 	/*
+	 * Add a physical memory segment (vm_phys_seg) corresponding to the
+	 * preallocated kernel page table pages so that vm_page structures
+	 * representing these pages will be created.  The vm_page structures
+	 * are required for promotion of the corresponding kernel virtual
+	 * addresses to superpage mappings.
+	 */
+	vm_phys_add_seg(KPTphys, KPTphys + ptoa(nkpt));
+
+	/*
 	 * Initialize the first available kernel virtual address.  However,
 	 * using "firstaddr" may waste a few pages of the kernel virtual
 	 * address space, because locore may not have mapped every physical
@@ -389,7 +399,7 @@ pmap_bootstrap(vm_paddr_t firstaddr)
 	 */
 	PMAP_LOCK_INIT(kernel_pmap);
 	kernel_pmap->pm_pdir = (pd_entry_t *) (KERNBASE + (u_int)IdlePTD);
-#ifdef PAE
+#if defined(PAE) || defined(PAE_TABLES)
 	kernel_pmap->pm_pdpt = (pdpt_entry_t *) (KERNBASE + (u_int)IdlePDPT);
 #endif
 	CPU_FILL(&kernel_pmap->pm_active);	/* don't allow deactivation */
@@ -646,7 +656,7 @@ pmap_page_init(vm_page_t m)
 	m->md.pat_mode = PAT_WRITE_BACK;
 }
 
-#ifdef PAE
+#if defined(PAE) || defined(PAE_TABLES)
 static void *
 pmap_pdpt_allocf(uma_zone_t zone, int bytes, u_int8_t *flags, int wait)
 {
@@ -659,7 +669,7 @@ pmap_pdpt_allocf(uma_zone_t zone, int bytes, u_int8_t *flags, int wait)
 #endif
 
 /*
- * ABuse the pte nodes for unmapped kva to thread a kva freelist through.
+ * Abuse the pte nodes for unmapped kva to thread a kva freelist through.
  * Requirements:
  *  - Must deal with pages in order to ensure that none of the PG_* bits
  *    are ever set, PG_V in particular.
@@ -778,9 +788,10 @@ pmap_init(void)
 
 	/*
 	 * Calculate the size of the pv head table for superpages.
+	 * Handle the possibility that "vm_phys_segs[...].end" is zero.
 	 */
-	for (i = 0; phys_avail[i + 1]; i += 2);
-	pv_npg = round_4mpage(phys_avail[(i - 2) + 1]) / NBPDR;
+	pv_npg = trunc_4mpage(vm_phys_segs[vm_phys_nsegs - 1].end -
+	    PAGE_SIZE) / NBPDR + 1;
 
 	/*
 	 * Allocate memory for the pv head table for superpages.
@@ -797,7 +808,7 @@ pmap_init(void)
 	if (pv_chunkbase == NULL)
 		panic("pmap_init: not enough kvm for pv chunks");
 	pmap_ptelist_init(&pv_vafree, pv_chunkbase, pv_maxchunks);
-#ifdef PAE
+#if defined(PAE) || defined(PAE_TABLES)
 	pdptzone = uma_zcreate("PDPT", NPGPTD * sizeof(pdpt_entry_t), NULL,
 	    NULL, NULL, NULL, (NPGPTD * sizeof(pdpt_entry_t)) - 1,
 	    UMA_ZONE_VM | UMA_ZONE_NOFREE);
@@ -1172,16 +1183,20 @@ pmap_update_pde(pmap_t pmap, vm_offset_t va, pd_entry_t *pde, pd_entry_t newpde)
 #define	PMAP_CLFLUSH_THRESHOLD	(2 * 1024 * 1024)
 
 void
-pmap_invalidate_cache_range(vm_offset_t sva, vm_offset_t eva)
+pmap_invalidate_cache_range(vm_offset_t sva, vm_offset_t eva, boolean_t force)
 {
 
-	KASSERT((sva & PAGE_MASK) == 0,
-	    ("pmap_invalidate_cache_range: sva not page-aligned"));
-	KASSERT((eva & PAGE_MASK) == 0,
-	    ("pmap_invalidate_cache_range: eva not page-aligned"));
+	if (force) {
+		sva &= ~(vm_offset_t)cpu_clflush_line_size;
+	} else {
+		KASSERT((sva & PAGE_MASK) == 0,
+		    ("pmap_invalidate_cache_range: sva not page-aligned"));
+		KASSERT((eva & PAGE_MASK) == 0,
+		    ("pmap_invalidate_cache_range: eva not page-aligned"));
+	}
 
-	if (cpu_feature & CPUID_SS)
-		; /* If "Self Snoop" is supported, do nothing. */
+	if ((cpu_feature & CPUID_SS) != 0 && !force)
+		; /* If "Self Snoop" is supported and allowed, do nothing. */
 	else if ((cpu_feature & CPUID_CLFSH) != 0 &&
 	    eva - sva < PMAP_CLFLUSH_THRESHOLD) {
 
@@ -1728,7 +1743,7 @@ pmap_pinit0(pmap_t pmap)
 	 * not need to be inserted into that list.
 	 */
 	pmap->pm_pdir = (pd_entry_t *)(KERNBASE + (vm_offset_t)IdlePTD);
-#ifdef PAE
+#if defined(PAE) || defined(PAE_TABLES)
 	pmap->pm_pdpt = (pdpt_entry_t *)(KERNBASE + (vm_offset_t)IdlePDPT);
 #endif
 	pmap->pm_root.rt_root = 0;
@@ -1757,7 +1772,7 @@ pmap_pinit(pmap_t pmap)
 		pmap->pm_pdir = (pd_entry_t *)kva_alloc(NBPTD);
 		if (pmap->pm_pdir == NULL)
 			return (0);
-#ifdef PAE
+#if defined(PAE) || defined(PAE_TABLES)
 		pmap->pm_pdpt = uma_zalloc(pdptzone, M_WAITOK | M_ZERO);
 		KASSERT(((vm_offset_t)pmap->pm_pdpt &
 		    ((NPGPTD * sizeof(pdpt_entry_t)) - 1)) == 0,
@@ -1799,7 +1814,7 @@ pmap_pinit(pmap_t pmap)
 	for (i = 0; i < NPGPTD; i++) {
 		pa = VM_PAGE_TO_PHYS(ptdpg[i]);
 		pmap->pm_pdir[PTDPTDI + i] = pa | PG_V | PG_RW | PG_A | PG_M;
-#ifdef PAE
+#if defined(PAE) || defined(PAE_TABLES)
 		pmap->pm_pdpt[i] = pa | PG_V;
 #endif
 	}
@@ -1958,7 +1973,7 @@ pmap_lazyfix(pmap_t pmap)
 		lsb--;
 		CPU_SETOF(lsb, &mask);
 		mtx_lock_spin(&smp_ipi_mtx);
-#ifdef PAE
+#if defined(PAE) || defined(PAE_TABLES)
 		lazyptd = vtophys(pmap->pm_pdpt);
 #else
 		lazyptd = vtophys(pmap->pm_pdir);
@@ -2042,7 +2057,7 @@ pmap_release(pmap_t pmap)
 
 	for (i = 0; i < NPGPTD; i++) {
 		m = ptdpg[i];
-#ifdef PAE
+#if defined(PAE) || defined(PAE_TABLES)
 		KASSERT(VM_PAGE_TO_PHYS(m) == (pmap->pm_pdpt[i] & PG_FRAME),
 		    ("pmap_release: got wrong ptd page"));
 #endif
@@ -3134,7 +3149,7 @@ retry:
 	}
 	if ((prot & VM_PROT_WRITE) == 0)
 		newpde &= ~(PG_RW | PG_M);
-#ifdef PAE
+#if defined(PAE) || defined(PAE_TABLES)
 	if ((prot & VM_PROT_EXECUTE) == 0)
 		newpde |= pg_nx;
 #endif
@@ -3167,7 +3182,7 @@ pmap_protect(pmap_t pmap, vm_offset_t sva, vm_offset_t eva, vm_prot_t prot)
 		return;
 	}
 
-#ifdef PAE
+#if defined(PAE) || defined(PAE_TABLES)
 	if ((prot & (VM_PROT_WRITE|VM_PROT_EXECUTE)) ==
 	    (VM_PROT_WRITE|VM_PROT_EXECUTE))
 		return;
@@ -3270,13 +3285,13 @@ retry:
 				}
 				pbits &= ~(PG_RW | PG_M);
 			}
-#ifdef PAE
+#if defined(PAE) || defined(PAE_TABLES)
 			if ((prot & VM_PROT_EXECUTE) == 0)
 				pbits |= pg_nx;
 #endif
 
 			if (pbits != obits) {
-#ifdef PAE
+#if defined(PAE) || defined(PAE_TABLES)
 				if (!atomic_cmpset_64(pte, obits, pbits))
 					goto retry;
 #else
@@ -3590,7 +3605,7 @@ validate:
 		if ((newpte & PG_MANAGED) != 0)
 			vm_page_aflag_set(m, PGA_WRITEABLE);
 	}
-#ifdef PAE
+#if defined(PAE) || defined(PAE_TABLES)
 	if ((prot & VM_PROT_EXECUTE) == 0)
 		newpte |= pg_nx;
 #endif
@@ -3617,7 +3632,7 @@ validate:
 					vm_page_aflag_set(om, PGA_REFERENCED);
 				if (opa != VM_PAGE_TO_PHYS(m))
 					invlva = TRUE;
-#ifdef PAE
+#if defined(PAE) || defined(PAE_TABLES)
 				if ((origpte & PG_NX) == 0 &&
 				    (newpte & PG_NX) != 0)
 					invlva = TRUE;
@@ -3688,7 +3703,7 @@ pmap_enter_pde(pmap_t pmap, vm_offset_t va, vm_page_t m, vm_prot_t prot)
 			return (FALSE);
 		}
 	}
-#ifdef PAE
+#if defined(PAE) || defined(PAE_TABLES)
 	if ((prot & VM_PROT_EXECUTE) == 0)
 		newpde |= pg_nx;
 #endif
@@ -3865,7 +3880,7 @@ pmap_enter_quick_locked(pmap_t pmap, vm_offset_t va, vm_page_t m,
 	pmap->pm_stats.resident_count++;
 
 	pa = VM_PAGE_TO_PHYS(m) | pmap_cache_bits(m->md.pat_mode, 0);
-#ifdef PAE
+#if defined(PAE) || defined(PAE_TABLES)
 	if ((prot & VM_PROT_EXECUTE) == 0)
 		pa |= pg_nx;
 #endif
@@ -5164,7 +5179,7 @@ pmap_mapdev_attr(vm_paddr_t pa, vm_size_t size, int mode)
 	for (tmpsize = 0; tmpsize < size; tmpsize += PAGE_SIZE)
 		pmap_kenter_attr(va + tmpsize, pa + tmpsize, mode);
 	pmap_invalidate_range(kernel_pmap, va, va + tmpsize);
-	pmap_invalidate_cache_range(va, va + size);
+	pmap_invalidate_cache_range(va, va + size, FALSE);
 	return ((void *)(va + offset));
 }
 
@@ -5370,7 +5385,7 @@ pmap_change_attr(vm_offset_t va, vm_size_t size, int mode)
 	 */
 	if (changed) {
 		pmap_invalidate_range(kernel_pmap, base, tmpva);
-		pmap_invalidate_cache_range(base, tmpva);
+		pmap_invalidate_cache_range(base, tmpva, FALSE);
 	}
 	return (0);
 }
@@ -5445,7 +5460,7 @@ pmap_activate(struct thread *td)
 	CPU_CLR(cpuid, &oldpmap->pm_active);
 	CPU_SET(cpuid, &pmap->pm_active);
 #endif
-#ifdef PAE
+#if defined(PAE) || defined(PAE_TABLES)
 	cr3 = vtophys(pmap->pm_pdpt);
 #else
 	cr3 = vtophys(pmap->pm_pdir);

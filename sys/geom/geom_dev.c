@@ -82,6 +82,8 @@ static struct cdevsw g_dev_cdevsw = {
 	.d_flags =	D_DISK | D_TRACKCLOSE,
 };
 
+static g_init_t g_dev_init;
+static g_fini_t g_dev_fini;
 static g_taste_t g_dev_taste;
 static g_orphan_t g_dev_orphan;
 static g_attrchanged_t g_dev_attrchanged;
@@ -89,6 +91,8 @@ static g_attrchanged_t g_dev_attrchanged;
 static struct g_class g_dev_class	= {
 	.name = "DEV",
 	.version = G_VERSION,
+	.init = g_dev_init,
+	.fini = g_dev_fini,
 	.taste = g_dev_taste,
 	.orphan = g_dev_orphan,
 	.attrchanged = g_dev_attrchanged
@@ -107,18 +111,73 @@ SYSCTL_QUAD(_kern_geom_dev, OID_AUTO, delete_max_sectors, CTLFLAG_RW,
     "delete request sent to the provider. Larger requests are chunked "
     "so they can be interrupted. (0 = disable chunking)");
 
+static char *dumpdev = NULL;
+static void
+g_dev_init(struct g_class *mp)
+{
+
+	dumpdev = getenv("dumpdev");
+}
+
+static void
+g_dev_fini(struct g_class *mp)
+{
+
+	freeenv(dumpdev);
+}
+
+static int
+g_dev_setdumpdev(struct cdev *dev)
+{
+	struct g_kerneldump kd;
+	struct g_consumer *cp;
+	int error, len;
+
+	if (dev == NULL)
+		return (set_dumper(NULL, NULL));
+
+	cp = dev->si_drv2;
+	len = sizeof(kd);
+	kd.offset = 0;
+	kd.length = OFF_MAX;
+	error = g_io_getattr("GEOM::kerneldump", cp, &len, &kd);
+	if (error == 0) {
+		error = set_dumper(&kd.di, devtoname(dev));
+		if (error == 0)
+			dev->si_flags |= SI_DUMPDEV;
+	}
+	return (error);
+}
+
+static void
+init_dumpdev(struct cdev *dev)
+{
+
+	if (dumpdev == NULL)
+		return;
+	if (strcmp(devtoname(dev), dumpdev) != 0)
+		return;
+	if (g_dev_setdumpdev(dev) == 0) {
+		freeenv(dumpdev);
+		dumpdev = NULL;
+	}
+}
+
 static void
 g_dev_destroy(void *arg, int flags __unused)
 {
 	struct g_consumer *cp;
 	struct g_geom *gp;
 	struct g_dev_softc *sc;
+	char buf[SPECNAMELEN + 6];
 
 	g_topology_assert();
 	cp = arg;
 	gp = cp->geom;
 	sc = cp->private;
 	g_trace(G_T_TOPOLOGY, "g_dev_destroy(%p(%s))", cp, gp->name);
+	snprintf(buf, sizeof(buf), "cdev=%s", gp->name);
+	devctl_notify_f("GEOM", "DEV", "DESTROY", buf, M_WAITOK);
 	if (cp->acr > 0 || cp->acw > 0 || cp->ace > 0)
 		g_access(cp, -cp->acr, -cp->acw, -cp->ace);
 	g_detach(cp);
@@ -153,10 +212,13 @@ g_dev_attrchanged(struct g_consumer *cp, const char *attr)
 		dev = sc->sc_dev;
 		snprintf(buf, sizeof(buf), "cdev=%s", dev->si_name);
 		devctl_notify_f("DEVFS", "CDEV", "MEDIACHANGE", buf, M_WAITOK);
+		devctl_notify_f("GEOM", "DEV", "MEDIACHANGE", buf, M_WAITOK);
 		dev = sc->sc_alias;
 		if (dev != NULL) {
 			snprintf(buf, sizeof(buf), "cdev=%s", dev->si_name);
 			devctl_notify_f("DEVFS", "CDEV", "MEDIACHANGE", buf,
+			    M_WAITOK);
+			devctl_notify_f("GEOM", "DEV", "MEDIACHANGE", buf,
 			    M_WAITOK);
 		}
 		return;
@@ -213,7 +275,7 @@ g_dev_taste(struct g_class *mp, struct g_provider *pp, int insist __unused)
 	struct g_dev_softc *sc;
 	int error, len;
 	struct cdev *dev, *adev;
-	char buf[64], *val;
+	char buf[SPECNAMELEN + 6], *val;
 
 	g_trace(G_T_TOPOLOGY, "dev_taste(%s,%s)", mp->name, pp->name);
 	g_topology_assert();
@@ -260,12 +322,16 @@ g_dev_taste(struct g_class *mp, struct g_provider *pp, int insist __unused)
 
 	dev->si_iosize_max = MAXPHYS;
 	dev->si_drv2 = cp;
+	init_dumpdev(dev);
 	if (adev != NULL) {
 		adev->si_iosize_max = MAXPHYS;
 		adev->si_drv2 = cp;
+		init_dumpdev(adev);
 	}
 
 	g_dev_attrchanged(cp, "GEOM::physpath");
+	snprintf(buf, sizeof(buf), "cdev=%s", gp->name);
+	devctl_notify_f("GEOM", "DEV", "CREATE", buf, M_WAITOK);
 
 	return (gp);
 }
@@ -356,10 +422,8 @@ g_dev_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread
 {
 	struct g_consumer *cp;
 	struct g_provider *pp;
-	struct g_kerneldump kd;
 	off_t offset, length, chunk;
 	int i, error;
-	u_int u;
 
 	cp = dev->si_drv2;
 	pp = cp->provider;
@@ -394,21 +458,10 @@ g_dev_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread
 		error = g_io_getattr("GEOM::frontstuff", cp, &i, data);
 		break;
 	case DIOCSKERNELDUMP:
-		u = *((u_int *)data);
-		if (!u) {
-			set_dumper(NULL, NULL);
-			error = 0;
-			break;
-		}
-		kd.offset = 0;
-		kd.length = OFF_MAX;
-		i = sizeof kd;
-		error = g_io_getattr("GEOM::kerneldump", cp, &i, &kd);
-		if (!error) {
-			error = set_dumper(&kd.di, devtoname(dev));
-			if (!error)
-				dev->si_flags |= SI_DUMPDEV;
-		}
+		if (*(u_int *)data == 0)
+			error = g_dev_setdumpdev(NULL);
+		else
+			error = g_dev_setdumpdev(dev);
 		break;
 	case DIOCGFLUSH:
 		error = g_io_flush(cp);
@@ -463,6 +516,16 @@ g_dev_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread
 		if (error == 0 && *(char *)data == '\0')
 			error = ENOENT;
 		break;
+	case DIOCGATTR: {
+		struct diocgattr_arg *arg = (struct diocgattr_arg *)data;
+
+		if (arg->len > sizeof(arg->value)) {
+			error = EINVAL;
+			break;
+		}
+		error = g_io_getattr(arg->name, cp, &arg->len, &arg->value);
+		break;
+	}
 	default:
 		if (cp->provider->geom->ioctl != NULL) {
 			error = cp->provider->geom->ioctl(cp->provider, cmd, data, fflag, td);

@@ -37,7 +37,7 @@
 __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
-#include <sys/capability.h>
+#include <sys/capsicum.h>
 #include <sys/condvar.h>
 #include <sys/conf.h>
 #include <sys/file.h>
@@ -152,7 +152,7 @@ icl_conn_receive(struct icl_conn *ic, size_t len)
 }
 
 static struct icl_pdu *
-icl_pdu_new(struct icl_conn *ic, int flags)
+icl_pdu_new_empty(struct icl_conn *ic, int flags)
 {
 	struct icl_pdu *ip;
 
@@ -193,11 +193,11 @@ icl_pdu_free(struct icl_pdu *ip)
  * Allocate icl_pdu with empty BHS to fill up by the caller.
  */
 struct icl_pdu *
-icl_pdu_new_bhs(struct icl_conn *ic, int flags)
+icl_pdu_new(struct icl_conn *ic, int flags)
 {
 	struct icl_pdu *ip;
 
-	ip = icl_pdu_new(ic, flags);
+	ip = icl_pdu_new_empty(ic, flags);
 	if (ip == NULL)
 		return (NULL);
 
@@ -547,7 +547,7 @@ icl_conn_receive_pdu(struct icl_conn *ic, size_t *availablep)
 	if (ic->ic_receive_state == ICL_CONN_STATE_BHS) {
 		KASSERT(ic->ic_receive_pdu == NULL,
 		    ("ic->ic_receive_pdu != NULL"));
-		request = icl_pdu_new(ic, M_NOWAIT);
+		request = icl_pdu_new_empty(ic, M_NOWAIT);
 		if (request == NULL) {
 			ICL_DEBUG("failed to allocate PDU; "
 			    "dropping connection");
@@ -776,6 +776,7 @@ icl_receive_thread(void *arg)
 
 	ICL_CONN_LOCK(ic);
 	ic->ic_receive_running = false;
+	cv_signal(&ic->ic_send_cv);
 	ICL_CONN_UNLOCK(ic);
 	kthread_exit();
 }
@@ -877,8 +878,6 @@ icl_conn_send_pdus(struct icl_conn *ic, struct icl_pdu_stailq *queue)
 	SOCKBUF_UNLOCK(&so->so_snd);
 
 	while (!STAILQ_EMPTY(queue)) {
-		if (ic->ic_disconnecting)
-			return;
 		request = STAILQ_FIRST(queue);
 		size = icl_pdu_size(request);
 		if (available < size) {
@@ -975,11 +974,6 @@ icl_send_thread(void *arg)
 	ic->ic_send_running = true;
 
 	for (;;) {
-		if (ic->ic_disconnecting) {
-			//ICL_DEBUG("terminating");
-			break;
-		}
-
 		for (;;) {
 			/*
 			 * If the local queue is empty, populate it from
@@ -1018,6 +1012,11 @@ icl_send_thread(void *arg)
 			break;
 		}
 
+		if (ic->ic_disconnecting) {
+			//ICL_DEBUG("terminating");
+			break;
+		}
+
 		cv_wait(&ic->ic_send_cv, ic->ic_lock);
 	}
 
@@ -1028,6 +1027,7 @@ icl_send_thread(void *arg)
 	STAILQ_CONCAT(&ic->ic_to_send, &queue);
 
 	ic->ic_send_running = false;
+	cv_signal(&ic->ic_send_cv);
 	ICL_CONN_UNLOCK(ic);
 	kthread_exit();
 }
@@ -1204,6 +1204,8 @@ icl_conn_start(struct icl_conn *ic)
 		icl_conn_close(ic);
 		return (error);
 	}
+	ic->ic_socket->so_snd.sb_flags |= SB_AUTOSIZE;
+	ic->ic_socket->so_rcv.sb_flags |= SB_AUTOSIZE;
 
 	/*
 	 * Disable Nagle.
@@ -1301,21 +1303,6 @@ icl_conn_handoff(struct icl_conn *ic, int fd)
 }
 
 void
-icl_conn_shutdown(struct icl_conn *ic)
-{
-	ICL_CONN_LOCK_ASSERT_NOT(ic);
-
-	ICL_CONN_LOCK(ic);
-	if (ic->ic_socket == NULL) {
-		ICL_CONN_UNLOCK(ic);
-		return;
-	}
-	ICL_CONN_UNLOCK(ic);
-
-	soshutdown(ic->ic_socket, SHUT_RDWR);
-}
-
-void
 icl_conn_close(struct icl_conn *ic)
 {
 	struct icl_pdu *pdu;
@@ -1347,15 +1334,11 @@ icl_conn_close(struct icl_conn *ic)
 	/*
 	 * Wake up the threads, so they can properly terminate.
 	 */
-	cv_signal(&ic->ic_receive_cv);
-	cv_signal(&ic->ic_send_cv);
 	while (ic->ic_receive_running || ic->ic_send_running) {
 		//ICL_DEBUG("waiting for send/receive threads to terminate");
-		ICL_CONN_UNLOCK(ic);
 		cv_signal(&ic->ic_receive_cv);
 		cv_signal(&ic->ic_send_cv);
-		pause("icl_close", 1 * hz);
-		ICL_CONN_LOCK(ic);
+		cv_wait(&ic->ic_send_cv, ic->ic_lock);
 	}
 	//ICL_DEBUG("send/receive threads terminated");
 

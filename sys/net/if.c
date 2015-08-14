@@ -162,6 +162,7 @@ static int	ifconf(u_long, caddr_t);
 static void	if_freemulti(struct ifmultiaddr *);
 static void	if_init(void *);
 static void	if_grow(void);
+static void	if_input_default(struct ifnet *, struct mbuf *);
 static void	if_route(struct ifnet *, int flag, int fam);
 static int	if_setflag(struct ifnet *, int, int, int *, int);
 static int	if_transmit(struct ifnet *ifp, struct mbuf *m);
@@ -174,8 +175,8 @@ static void	do_link_state_change(void *, int);
 static int	if_getgroup(struct ifgroupreq *, struct ifnet *);
 static int	if_getgroupmembers(struct ifgroupreq *);
 static void	if_delgroups(struct ifnet *);
-static void	if_attach_internal(struct ifnet *, int);
-static void	if_detach_internal(struct ifnet *, int);
+static void	if_attach_internal(struct ifnet *, int, struct if_clone *);
+static void	if_detach_internal(struct ifnet *, int, struct if_clone **);
 
 #ifdef INET6
 /*
@@ -570,6 +571,15 @@ ifq_delete(struct ifaltq *ifq)
  * tasks, given that we are moving from one vnet to another an ifnet which
  * has already been fully initialized.
  *
+ * Note that if_detach_internal() removes group membership unconditionally
+ * even when vmove flag is set, and if_attach_internal() adds only IFG_ALL.
+ * Thus, when if_vmove() is applied to a cloned interface, group membership
+ * is lost while a cloned one always joins a group whose name is
+ * ifc->ifc_name.  To recover this after if_detach_internal() and
+ * if_attach_internal(), the cloner should be specified to
+ * if_attach_internal() via ifc.  If it is non-NULL, if_attach_internal()
+ * attempts to join a group whose name is ifc->ifc_name.
+ *
  * XXX:
  *  - The decision to return void and thus require this function to
  *    succeed is questionable.
@@ -580,11 +590,62 @@ void
 if_attach(struct ifnet *ifp)
 {
 
-	if_attach_internal(ifp, 0);
+	if_attach_internal(ifp, 0, NULL);
+}
+
+/*
+ * Compute the least common TSO limit.
+ */
+void
+if_hw_tsomax_common(struct ifnet *ifp, struct ifnet_hw_tsomax *pmax)
+{
+	/*
+	 * 1) If there is no limit currently, take the limit from
+	 * the network adapter.
+	 *
+	 * 2) If the network adapter has a limit below the current
+	 * limit, apply it.
+	 */
+	if (pmax->tsomaxbytes == 0 || (ifp->if_hw_tsomax != 0 &&
+	    ifp->if_hw_tsomax < pmax->tsomaxbytes)) {
+		pmax->tsomaxbytes = ifp->if_hw_tsomax;
+	}
+	if (pmax->tsomaxsegcount == 0 || (ifp->if_hw_tsomaxsegcount != 0 &&
+	    ifp->if_hw_tsomaxsegcount < pmax->tsomaxsegcount)) {
+		pmax->tsomaxsegcount = ifp->if_hw_tsomaxsegcount;
+	}
+	if (pmax->tsomaxsegsize == 0 || (ifp->if_hw_tsomaxsegsize != 0 &&
+	    ifp->if_hw_tsomaxsegsize < pmax->tsomaxsegsize)) {
+		pmax->tsomaxsegsize = ifp->if_hw_tsomaxsegsize;
+	}
+}
+
+/*
+ * Update TSO limit of a network adapter.
+ *
+ * Returns zero if no change. Else non-zero.
+ */
+int
+if_hw_tsomax_update(struct ifnet *ifp, struct ifnet_hw_tsomax *pmax)
+{
+	int retval = 0;
+	if (ifp->if_hw_tsomax != pmax->tsomaxbytes) {
+		ifp->if_hw_tsomax = pmax->tsomaxbytes;
+		retval++;
+	}
+	if (ifp->if_hw_tsomaxsegsize != pmax->tsomaxsegsize) {
+		ifp->if_hw_tsomaxsegsize = pmax->tsomaxsegsize;
+		retval++;
+	}
+	if (ifp->if_hw_tsomaxsegcount != pmax->tsomaxsegcount) {
+		ifp->if_hw_tsomaxsegcount = pmax->tsomaxsegcount;
+		retval++;
+	}
+	return (retval);
 }
 
 static void
-if_attach_internal(struct ifnet *ifp, int vmove)
+if_attach_internal(struct ifnet *ifp, int vmove, struct if_clone *ifc)
 {
 	unsigned socksize, ifasize;
 	int namelen, masklen;
@@ -603,6 +664,10 @@ if_attach_internal(struct ifnet *ifp, int vmove)
 
 	if_addgroup(ifp, IFG_ALL);
 
+	/* Restore group membership for cloned interfaces. */
+	if (vmove && ifc != NULL)
+		if_clone_addgroup(ifp, ifc);
+
 	getmicrotime(&ifp->if_lastchange);
 	ifp->if_data.ifi_epoch = time_uptime;
 	ifp->if_data.ifi_datalen = sizeof(struct if_data);
@@ -614,7 +679,9 @@ if_attach_internal(struct ifnet *ifp, int vmove)
 		ifp->if_transmit = if_transmit;
 		ifp->if_qflush = if_qflush;
 	}
-	
+	if (ifp->if_input == NULL)
+		ifp->if_input = if_input_default;
+
 	if (!vmove) {
 #ifdef MAC
 		mac_ifnet_create(ifp);
@@ -657,13 +724,29 @@ if_attach_internal(struct ifnet *ifp, int vmove)
 		ifp->if_broadcastaddr = NULL;
 
 #if defined(INET) || defined(INET6)
-		/* Initialize to max value. */
-		if (ifp->if_hw_tsomax == 0)
-			ifp->if_hw_tsomax = min(IP_MAXPACKET, 32 * MCLBYTES -
+		/* Use defaults for TSO, if nothing is set */
+		if (ifp->if_hw_tsomax == 0 &&
+		    ifp->if_hw_tsomaxsegcount == 0 &&
+		    ifp->if_hw_tsomaxsegsize == 0) {
+			/*
+			 * The TSO defaults needs to be such that an
+			 * NFS mbuf list of 35 mbufs totalling just
+			 * below 64K works and that a chain of mbufs
+			 * can be defragged into at most 32 segments:
+			 */
+			ifp->if_hw_tsomax = min(IP_MAXPACKET, (32 * MCLBYTES) -
 			    (ETHER_HDR_LEN + ETHER_VLAN_ENCAP_LEN));
-		KASSERT(ifp->if_hw_tsomax <= IP_MAXPACKET &&
-		    ifp->if_hw_tsomax >= IP_MAXPACKET / 8,
-		    ("%s: tsomax outside of range", __func__));
+			ifp->if_hw_tsomaxsegcount = 35;
+			ifp->if_hw_tsomaxsegsize = 2048;	/* 2K */
+
+			/* XXX some drivers set IFCAP_TSO after ethernet attach */
+			if (ifp->if_capabilities & IFCAP_TSO) {
+				if_printf(ifp, "Using defaults for TSO: %u/%u/%u\n",
+				    ifp->if_hw_tsomax,
+				    ifp->if_hw_tsomaxsegcount,
+				    ifp->if_hw_tsomaxsegsize);
+			}
+		}
 #endif
 	}
 #ifdef VIMAGE
@@ -807,12 +890,12 @@ if_detach(struct ifnet *ifp)
 {
 
 	CURVNET_SET_QUIET(ifp->if_vnet);
-	if_detach_internal(ifp, 0);
+	if_detach_internal(ifp, 0, NULL);
 	CURVNET_RESTORE();
 }
 
 static void
-if_detach_internal(struct ifnet *ifp, int vmove)
+if_detach_internal(struct ifnet *ifp, int vmove, struct if_clone **ifcp)
 {
 	struct ifaddr *ifa;
 	struct radix_node_head	*rnh;
@@ -840,6 +923,10 @@ if_detach_internal(struct ifnet *ifp, int vmove)
 		else
 			return; /* XXX this should panic as well? */
 	}
+
+	/* Check if this is a cloned interface or not. */
+	if (vmove && ifcp != NULL)
+		*ifcp = if_clone_findifc(ifp);
 
 	/*
 	 * Remove/wait for pending events.
@@ -946,12 +1033,13 @@ void
 if_vmove(struct ifnet *ifp, struct vnet *new_vnet)
 {
 	u_short idx;
+	struct if_clone *ifc;
 
 	/*
 	 * Detach from current vnet, but preserve LLADDR info, do not
 	 * mark as dead etc. so that the ifnet can be reattached later.
 	 */
-	if_detach_internal(ifp, 1);
+	if_detach_internal(ifp, 1, &ifc);
 
 	/*
 	 * Unlink the ifnet from ifindex_table[] in current vnet, and shrink
@@ -985,7 +1073,7 @@ if_vmove(struct ifnet *ifp, struct vnet *new_vnet)
 	ifnet_setbyindex_locked(ifp->if_index, ifp);
 	IFNET_WUNLOCK();
 
-	if_attach_internal(ifp, 1);
+	if_attach_internal(ifp, 1, ifc);
 
 	CURVNET_RESTORE();
 }
@@ -1380,6 +1468,100 @@ if_rtdel(struct radix_node *rn, void *arg)
 	}
 
 	return (0);
+}
+
+/*
+ * A compatibility function returns ifnet counter values.
+ */
+uint64_t
+if_get_counter_default(struct ifnet *ifp, ift_counter cnt)
+{
+
+	KASSERT(cnt < IFCOUNTERS, ("%s: invalid cnt %d", __func__, cnt));
+	switch (cnt) {
+	case IFCOUNTER_IPACKETS:
+		return (ifp->if_ipackets);
+	case IFCOUNTER_IERRORS:
+		return (ifp->if_ierrors);
+	case IFCOUNTER_OPACKETS:
+		return (ifp->if_opackets);
+	case IFCOUNTER_OERRORS:
+		return (ifp->if_oerrors);
+	case IFCOUNTER_COLLISIONS:
+		return (ifp->if_collisions);
+	case IFCOUNTER_IBYTES:
+		return (ifp->if_ibytes);
+	case IFCOUNTER_OBYTES:
+		return (ifp->if_obytes);
+	case IFCOUNTER_IMCASTS:
+		return (ifp->if_imcasts);
+	case IFCOUNTER_OMCASTS:
+		return (ifp->if_omcasts);
+	case IFCOUNTER_IQDROPS:
+		return (ifp->if_iqdrops);
+#ifdef _IFI_OQDROPS
+	case IFCOUNTER_OQDROPS:
+		return (ifp->if_oqdrops);
+#endif
+	case IFCOUNTER_NOPROTO:
+		return (ifp->if_noproto);
+	default:
+		break;
+	};
+	return (0);
+}
+
+/*
+ * Increase an ifnet counter. Usually used for counters shared
+ * between the stack and a driver, but function supports them all.
+ */
+void
+if_inc_counter(struct ifnet *ifp, ift_counter cnt, int64_t inc)
+{
+
+	KASSERT(cnt < IFCOUNTERS, ("%s: invalid cnt %d", __func__, cnt));
+	switch (cnt) {
+	case IFCOUNTER_IPACKETS:
+		ifp->if_ipackets += inc;
+		break;
+	case IFCOUNTER_IERRORS:
+		ifp->if_ierrors += inc;
+		break;
+	case IFCOUNTER_OPACKETS:
+		ifp->if_opackets += inc;
+		break;
+	case IFCOUNTER_OERRORS:
+		ifp->if_oerrors += inc;
+		break;
+	case IFCOUNTER_COLLISIONS:
+		ifp->if_collisions += inc;
+		break;
+	case IFCOUNTER_IBYTES:
+		ifp->if_ibytes += inc;
+		break;
+	case IFCOUNTER_OBYTES:
+		ifp->if_obytes += inc;
+		break;
+	case IFCOUNTER_IMCASTS:
+		ifp->if_imcasts += inc;
+		break;
+	case IFCOUNTER_OMCASTS:
+		ifp->if_omcasts += inc;
+		break;
+	case IFCOUNTER_IQDROPS:
+		ifp->if_iqdrops += inc;
+		break;
+#ifdef _IFI_OQDROPS
+	case IFCOUNTER_OQDROPS:
+		ifp->if_oqdrops += inc;
+		break;
+#endif
+	case IFCOUNTER_NOPROTO:
+		ifp->if_noproto += inc;
+		break;
+	default:
+		break;
+	};
 }
 
 /*
@@ -2407,6 +2589,7 @@ ifhwioctl(u_long cmd, struct ifnet *ifp, caddr_t data, struct thread *td)
 	case SIOCGIFPDSTADDR:
 	case SIOCGLIFPHYADDR:
 	case SIOCGIFMEDIA:
+	case SIOCGIFXMEDIA:
 	case SIOCGIFGENERIC:
 		if (ifp->if_ioctl == NULL)
 			return (EOPNOTSUPP);
@@ -3407,6 +3590,13 @@ if_transmit(struct ifnet *ifp, struct mbuf *m)
 
 	IFQ_HANDOFF(ifp, m, error);
 	return (error);
+}
+
+static void
+if_input_default(struct ifnet *ifp __unused, struct mbuf *m)
+{
+
+	m_freem(m);
 }
 
 int

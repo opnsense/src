@@ -309,7 +309,7 @@ To build foo from foo.c with a manual page foo.2, add the line:
 
 If foo does not have a manual page at all, add the line:
 
-	NO_MAN=
+	MAN=
 
 If foo has multiple source files, add the line:
 
@@ -333,6 +333,13 @@ install, lint, and tags.  It has a limited number of suffixes, consistent
 with the current needs of the BSD tree.
 
 It sets/uses the following variables:
+
+LIB		The name of the library to build.
+
+LIB_CXX		The name of the library to build. It also causes
+		<bsd.lib.mk> to link the library with the
+		standard C++ library.  LIB_CXX overrides the value
+		of LIB if LIB is also set.
 
 LIBDIR		Target directory for libraries.
 

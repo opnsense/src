@@ -47,7 +47,6 @@ __FBSDID("$FreeBSD$");
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <time.h>
 #include <unistd.h>
 #include <ucl.h>
 
@@ -177,14 +176,11 @@ fetch_to_fd(const char *url, char *path)
 	/* To store _https._tcp. + hostname + \0 */
 	int fd;
 	int retry, max_retry;
-	off_t done, r;
-	time_t now, last;
+	ssize_t r;
 	char buf[10240];
 	char zone[MAXHOSTNAMELEN + 13];
 	static const char *mirror_type = NULL;
 
-	done = 0;
-	last = 0;
 	max_retry = 3;
 	current = mirrors = NULL;
 	remote = NULL;
@@ -202,7 +198,11 @@ fetch_to_fd(const char *url, char *path)
 
 	retry = max_retry;
 
-	u = fetchParseURL(url);
+	if ((u = fetchParseURL(url)) == NULL) {
+		warn("fetchParseURL('%s')", url);
+		return (-1);
+	}
+
 	while (remote == NULL) {
 		if (retry == max_retry) {
 			if (strcmp(u->scheme, "file") != 0 &&
@@ -234,22 +234,16 @@ fetch_to_fd(const char *url, char *path)
 		}
 	}
 
-	if (remote == NULL)
-		goto fetchfail;
-
-	while (done < st.size) {
-		if ((r = fread(buf, 1, sizeof(buf), remote)) < 1)
-			break;
-
+	while ((r = fread(buf, 1, sizeof(buf), remote)) > 0) {
 		if (write(fd, buf, r) != r) {
 			warn("write()");
 			goto fetchfail;
 		}
+	}
 
-		done += r;
-		now = time(NULL);
-		if (now > last || done == st.size)
-			last = now;
+	if (r != 0) {
+		warn("An error occurred while fetching pkg(8)");
+		goto fetchfail;
 	}
 
 	if (ferror(remote))
@@ -320,8 +314,7 @@ free_fingerprint_list(struct fingerprint_list* list)
 	struct fingerprint *fingerprint, *tmp;
 
 	STAILQ_FOREACH_SAFE(fingerprint, list, next, tmp) {
-		if (fingerprint->name)
-			free(fingerprint->name);
+		free(fingerprint->name);
 		free(fingerprint);
 	}
 	free(list);
@@ -375,8 +368,11 @@ load_fingerprints(const char *path, int *count)
 		return (NULL);
 	STAILQ_INIT(fingerprints);
 
-	if ((d = opendir(path)) == NULL)
+	if ((d = opendir(path)) == NULL) {
+		free(fingerprints);
+
 		return (NULL);
+	}
 
 	while ((ent = readdir(d))) {
 		if (strcmp(ent->d_name, ".") == 0 ||
@@ -720,12 +716,9 @@ cleanup:
 	if (revoked)
 		free_fingerprint_list(revoked);
 	if (sc) {
-		if (sc->cert)
-			free(sc->cert);
-		if (sc->sig)
-			free(sc->sig);
-		if (sc->name)
-			free(sc->name);
+		free(sc->cert);
+		free(sc->sig);
+		free(sc->name);
 		free(sc);
 	}
 
@@ -806,8 +799,11 @@ cleanup:
 		close(fd_sig);
 		unlink(tmpsig);
 	}
-	close(fd_pkg);
-	unlink(tmppkg);
+
+	if (fd_pkg != -1) {
+		close(fd_pkg);
+		unlink(tmppkg);
+	}
 
 	return (ret);
 }
@@ -815,6 +811,11 @@ cleanup:
 static const char confirmation_message[] =
 "The package management tool is not yet installed on your system.\n"
 "Do you want to fetch and install it now? [y/N]: ";
+
+static const char non_interactive_message[] =
+"The package management tool is not yet installed on your system.\n"
+"Please set ASSUME_ALWAYS_YES=yes environment variable to be able to bootstrap "
+"in non-interactive (stdin not being a tty)\n";
 
 static int
 pkg_query_yes_no(void)
@@ -851,7 +852,7 @@ bootstrap_pkg_local(const char *pkgpath, bool force)
 
 	if (config_string(SIGNATURE_TYPE, &signature_type) != 0) {
 		warnx("Error looking up SIGNATURE_TYPE");
-		return (-1);
+		goto cleanup;
 	}
 	if (signature_type != NULL &&
 	    strcasecmp(signature_type, "FINGERPRINTS") == 0) {
@@ -878,7 +879,7 @@ cleanup:
 }
 
 int
-main(__unused int argc, char *argv[])
+main(int argc, char *argv[])
 {
 	char pkgpath[MAXPATHLEN];
 	const char *pkgarg;
@@ -934,10 +935,12 @@ main(__unused int argc, char *argv[])
 		 */
 		config_bool(ASSUME_ALWAYS_YES, &yes);
 		if (!yes) {
-			printf("%s", confirmation_message);
-			if (!isatty(fileno(stdin)))
+			if (!isatty(fileno(stdin))) {
+				fprintf(stderr, non_interactive_message);
 				exit(EXIT_FAILURE);
+			}
 
+			printf("%s", confirmation_message);
 			if (pkg_query_yes_no() == 0)
 				exit(EXIT_FAILURE);
 		}

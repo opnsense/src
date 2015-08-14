@@ -102,7 +102,7 @@ static const STRUCT_USB_HOST_ID rsu_devs[] = {
 	RSU_DEV_HT(DLINK2,		RTL8192SU_2),
 	RSU_DEV_HT(EDIMAX,		RTL8192SU_1),
 	RSU_DEV_HT(EDIMAX,		RTL8192SU_2),
-	RSU_DEV_HT(EDIMAX,		RTL8192SU_3),
+	RSU_DEV_HT(EDIMAX,		EW7622UMN),
 	RSU_DEV_HT(GUILLEMOT,		HWGUN54),
 	RSU_DEV_HT(GUILLEMOT,		HWNUM300),
 	RSU_DEV_HT(HAWKING,		RTL8192SU_1),
@@ -326,11 +326,11 @@ rsu_attach(device_t self)
 	if (sc->cut != 3)
 		sc->cut = (sc->cut >> 1) + 1;
 	error = rsu_read_rom(sc);
+	RSU_UNLOCK(sc);
 	if (error != 0) {
 		device_printf(self, "could not read ROM\n");
 		goto fail_rom;
 	}
-	RSU_UNLOCK(sc);
 	IEEE80211_ADDR_COPY(sc->sc_bssid, &sc->rom[0x12]);
 	device_printf(self, "MAC/BB RTL8712 cut %d\n", sc->cut);
 	ifp = sc->sc_ifp = if_alloc(IFT_IEEE80211);
