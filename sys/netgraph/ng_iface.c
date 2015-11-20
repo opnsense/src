@@ -650,9 +650,9 @@ ng_iface_rcvmsg(node_p node, item_p item, hook_p lasthook)
                 //rt_ifannouncemsg(ifp, IFAN_DEPARTURE);
                 EVENTHANDLER_INVOKE(ifnet_departure_event, ifp);
 
+                IF_ADDR_WLOCK(ifp);
                 strlcpy(ifp->if_xname, new_name, sizeof(ifp->if_xname));
                 ifa = ifp->if_addr;
-                IFA_LOCK(ifa);
                 sdl = (struct sockaddr_dl *)ifa->ifa_addr;
                 namelen = strlen(new_name) + 1;
                 onamelen = sdl->sdl_nlen;
@@ -671,7 +671,7 @@ ng_iface_rcvmsg(node_p node, item_p item, hook_p lasthook)
                 bzero(sdl->sdl_data, onamelen);
                 while (namelen != 0)
                         sdl->sdl_data[--namelen] = 0xff;
-                IFA_UNLOCK(ifa);
+                IF_ADDR_WUNLOCK(ifp);
 
                 EVENTHANDLER_INVOKE(ifnet_arrival_event, ifp);
                 /* Announce the return of the interface. */
