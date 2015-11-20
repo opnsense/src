@@ -282,7 +282,7 @@ struct netmap_obj_params netmap_params[NETMAP_POOLS_NR] = {
 		.num  = 100,
 	},
 	[NETMAP_RING_POOL] = {
-		.size = 9*PAGE_SIZE,
+		.size = 18*PAGE_SIZE,
 		.num  = 200,
 	},
 	[NETMAP_BUF_POOL] = {
