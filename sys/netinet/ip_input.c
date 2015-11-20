@@ -422,7 +422,7 @@ ip_input(struct mbuf *m)
 
 	/* skip checksum checks if we came from dummynet, since we'll already
 	   have been here in that case */
-	if (!(m->m_flags & M_IPIN_SKIPPFIL)) {
+	if (!(m->m_flags & M_PROTO12)) {
 		if (m->m_pkthdr.csum_flags & CSUM_IP_CHECKED) {
 			sum = !(m->m_pkthdr.csum_flags & CSUM_IP_VALID);
 		} else {
@@ -486,7 +486,7 @@ tooshort:
 	/* Jump over all PFIL processing if hooks are not active. */
 	if (!PFIL_HOOKED(&V_inet_pfil_hook))
 		goto passin;
-	if (m->m_flags & M_IPIN_SKIPPFIL) {
+	if (m->m_flags & M_PROTO12) {
 		/* OPNsense (original from m0n0wall): packet has already been through dummynet, and therefore
 		   also through ipnat (reversed processing order in OPNsense);
 		   we skip the pfil hooks to avoid ipnat being called again on
@@ -498,7 +498,7 @@ tooshort:
 		if (ipfw_tag != NULL) {
 			m_tag_delete(m, ipfw_tag);
 		}
-		m->m_flags &= ~M_IPIN_SKIPPFIL;
+		m->m_flags &= ~M_PROTO12;
 		goto passin;
 	}
 
