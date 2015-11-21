@@ -167,7 +167,7 @@ SYSCTL_VNET_INT(_net_link_stf, OID_AUTO, stf_debug, CTLFLAG_RW,
 	"Enable displaying verbose debug message of stf interfaces");
 #endif
 
-static int stf_permit_rfc1918 = 0;
+static int stf_permit_rfc1918 = 1;
 TUNABLE_INT("net.link.stf.permit_rfc1918", &stf_permit_rfc1918);
 SYSCTL_INT(_net_link_stf, OID_AUTO, permit_rfc1918, CTLFLAG_RW | CTLFLAG_TUN,
     &stf_permit_rfc1918, 0, "Permit the use of private IPv4 addresses");
@@ -182,6 +182,10 @@ SYSCTL_INT(_net_link_stf, OID_AUTO, permit_rfc1918, CTLFLAG_RW | CTLFLAG_TUN,
 
 struct stf_softc {
 	struct ifnet	*sc_ifp;
+	in_addr_t dstv4_addr;
+	in_addr_t srcv4_addr;
+	in_addr_t inaddr;
+	u_int   v4prefixlen;
 	union {
 		struct route  __sc_ro4;
 		struct route_in6 __sc_ro6; /* just for safety */
@@ -191,9 +195,6 @@ struct stf_softc {
 	u_int	sc_fibnum;
 	const struct encaptab *encap_cookie;
 	u_int   sc_flags;
-	u_int   v4prefixlen;
-	in_addr_t inaddr;
-	in_addr_t dstv4_addr;
 	LIST_ENTRY(stf_softc) stf_list;
 };
 #define STF2IFP(sc)	((sc)->sc_ifp)
@@ -246,36 +247,16 @@ static struct sockaddr_in *stf_getin4addr_in6(struct stf_softc *, struct sockadd
 	struct ifaddr *, const struct in6_addr *);
 static struct sockaddr_in *stf_getin4addr_sin6(struct stf_softc *, struct sockaddr_in *,
 	struct ifaddr *, struct sockaddr_in6 *);
-static int stf_clone_create(struct if_clone *, char *, size_t, caddr_t);
-static int stf_clone_destroy(struct if_clone *, struct ifnet *);
-static int stf_clone_match(struct if_clone *, const char *);
+static int stf_clone_create(struct if_clone *, int, caddr_t);
+static void stf_clone_destroy(struct ifnet *);
 
 static struct if_clone *stf_cloner;
 
 static int
-stf_clone_match(struct if_clone *ifc, const char *name)
-{
-
-	if (strcmp(stfname, name) == 0)
-		return (1);
-
-	return (0);
-}
-
-static int
-stf_clone_create(struct if_clone *ifc, char *name, size_t len, caddr_t params)
+stf_clone_create(struct if_clone *ifc, int unit, caddr_t params)
 {
 	struct stf_softc *sc;
 	struct ifnet *ifp;
-	int unit, error;
-
-	error = ifc_name2unit(name, &unit);
-	if (error != 0)
-		return (error);
-
-	error = ifc_alloc_unit(ifc, &unit);
-	if (error != 0)
-		return (error);
 
 	sc = malloc(sizeof(struct stf_softc), M_STF, M_WAITOK | M_ZERO);
 	sc->sc_fibnum = curthread->td_proc->p_fibnum;
@@ -287,12 +268,13 @@ stf_clone_create(struct if_clone *ifc, char *name, size_t len, caddr_t params)
 	STF_LOCK_INIT(sc);
 	ifp->if_softc = sc;
 
-	if_initname(ifp, name, unit);
+	if_initname(ifp, stfname, unit);
 
 	sc->encap_cookie = encap_attach_func(AF_INET, IPPROTO_IPV6,
 	    stf_encapcheck, &in_stf_protosw, sc);
 	if (sc->encap_cookie == NULL) {
 		if_printf(ifp, "attach failed\n");
+		if_free(ifp);
 		free(sc, M_STF);
 		return (ENOMEM);
 	}
@@ -311,11 +293,10 @@ stf_clone_create(struct if_clone *ifc, char *name, size_t len, caddr_t params)
 	return (0);
 }
 
-static int
-stf_clone_destroy(struct if_clone *ifc, struct ifnet *ifp)
+static void
+stf_clone_destroy(struct ifnet *ifp)
 {
 	struct stf_softc *sc = ifp->if_softc;
-	int unit = ifp->if_dunit;
 	int err;
 
 	mtx_lock(&stf_mtx);
@@ -330,9 +311,6 @@ stf_clone_destroy(struct if_clone *ifc, struct ifnet *ifp)
 
 	STF_LOCK_DESTROY(sc);
 	free(sc, M_STF);
-	ifc_free_unit(ifc, unit);
-
-	return (0);
 }
 
 static void
@@ -351,8 +329,8 @@ stfmodevent(module_t mod, int type, void *data)
 	switch (type) {
 	case MOD_LOAD:
 		mtx_init(&stf_mtx, "stf_mtx", NULL, MTX_DEF);
-		stf_cloner = if_clone_advanced(stfname, 0, stf_clone_match,
-		    stf_clone_create, stf_clone_destroy);
+		stf_cloner = if_clone_simple(stfname,
+		    stf_clone_create, stf_clone_destroy, 0);
 		break;
 	case MOD_UNLOAD:
 		if_clone_detach(stf_cloner);
@@ -412,9 +390,15 @@ stf_encapcheck(const struct mbuf *m, int off, int proto, void *arg)
 	ia6 = stf_getsrcifa6(ifp);
 	if (ia6 == NULL)
 		return 0;
-	sin = stf_getin4addr(sc, &ia6_in4addr, &ia6->ia_ifa, STF_GETIN4_USE_CACHE);
-	if (sin == NULL)
-		return (0);
+	if (sc->srcv4_addr != INADDR_ANY) {
+		sin = &ia6_in4addr;
+		sin->sin_addr.s_addr = sc->srcv4_addr;
+		sin->sin_family = AF_INET;
+	} else {
+		sin = stf_getin4addr(sc, &ia6_in4addr, &ia6->ia_ifa, STF_GETIN4_USE_CACHE);
+		if (sin == NULL)
+			return (0);
+	}
 
 #if STF_DEBUG > 3
 	{
@@ -451,6 +435,7 @@ stf_encapcheck(const struct mbuf *m, int off, int proto, void *arg)
 	}
 
 	DEBUG_PRINTF(1, "%s: check2: ia6->ia_addr is 2002::/16?\n", __func__);
+
 	if (IN6_IS_ADDR_6TO4(&ia6->ia_addr.sin6_addr)) {
 		/* 6to4 (RFC 3056) */
 		/*
@@ -521,13 +506,19 @@ stf_getsrcifa6(struct ifnet *ifp)
 	struct in_ifaddr *ia4;
 	struct sockaddr_in *sin;
 	struct sockaddr_in in4;
+	struct stf_softc *sc;
+
+	sc = ifp->if_softc;
 
 	if_addr_rlock(ifp);
 	TAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) {
 		if (ifa->ifa_addr->sa_family != AF_INET6)
 			continue;
 
-		if ((sin = stf_getin4addr(ifp->if_softc, &in4, ifa,
+		if (sc->srcv4_addr != INADDR_ANY) {
+			in4.sin_addr.s_addr = sc->srcv4_addr;
+			sin = &in4;
+		} else if ((sin = stf_getin4addr(ifp->if_softc, &in4, ifa,
 		    STF_GETIN4_USE_CACHE)) == NULL)
 			continue;
 
@@ -624,17 +615,18 @@ stf_output(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
 	 *   dst6: destination addr specified in function argument.
 	 */
 	DEBUG_PRINTF(1, "%s: dst addr selection\n", __func__);
-	if (sc->dstv4_addr != INADDR_ANY)
-		in4.sin_addr.s_addr = sc->dstv4_addr;
-	else {
-		sin = stf_getin4addr_in6(sc, &in4, &ia6->ia_ifa, &ip6->ip6_dst);
-		if (sin == NULL)
+	sin = stf_getin4addr_in6(sc, &in4, &ia6->ia_ifa, &ip6->ip6_dst);
+	if (sin == NULL) {
+		if (sc->dstv4_addr != INADDR_ANY)
+			in4.sin_addr.s_addr = sc->dstv4_addr;
+		else {
 			sin = stf_getin4addr_in6(sc, &in4, &ia6->ia_ifa, &dst6->sin6_addr);
-		if (sin == NULL) {
-			ifa_free(&ia6->ia_ifa);
-			m_freem(m);
-			ifp->if_oerrors++;
-			return ENETUNREACH;
+			if (sin == NULL) {
+				ifa_free(&ia6->ia_ifa);
+				m_freem(m);
+				ifp->if_oerrors++;
+				return ENETUNREACH;
+			}
 		}
 	}
 #if STF_DEBUG > 3
@@ -671,12 +663,16 @@ stf_output(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
 	bzero(ip, sizeof(*ip));
 	bcopy(&in4.sin_addr, &ip->ip_dst, sizeof(ip->ip_dst));
 
-	sin = stf_getin4addr_sin6(sc, &in4, &ia6->ia_ifa, &ia6->ia_addr);
-	if (sin == NULL) {
-		ifa_free(&ia6->ia_ifa);
-		m_freem(m);
-		ifp->if_oerrors++;
-		return ENETUNREACH;
+	if (sc->srcv4_addr != INADDR_ANY)
+		in4.sin_addr.s_addr = sc->srcv4_addr;
+	else {
+		sin = stf_getin4addr_sin6(sc, &in4, &ia6->ia_ifa, &ia6->ia_addr);
+		if (sin == NULL) {
+			ifa_free(&ia6->ia_ifa);
+			m_freem(m);
+			ifp->if_oerrors++;
+			return ENETUNREACH;
+		}
 	}
 	bcopy(&in4.sin_addr, &ip->ip_src, sizeof(ip->ip_src));
 #if STF_DEBUG > 3
@@ -1014,224 +1010,228 @@ stf_rtrequest(int cmd, struct rtentry *rt, struct rt_addrinfo *info)
 
 static struct sockaddr_in *
 stf_getin4addr_in6(struct stf_softc *sc, struct sockaddr_in *sin,
-	struct ifaddr *ifa,
-	const struct in6_addr *in6)
+      struct ifaddr *ifa,
+      const struct in6_addr *in6)
 {
-	struct sockaddr_in6 sin6;
+      struct sockaddr_in6 sin6;
 
-	DEBUG_PRINTF(1, "%s: enter.\n", __func__);
-	if (ifa == NULL || in6 == NULL)
-		return NULL;
+      DEBUG_PRINTF(1, "%s: enter.\n", __func__);
+      if (ifa == NULL || in6 == NULL)
+              return NULL;
 
-	memset(&sin6, 0, sizeof(sin6));
-	memcpy(&sin6.sin6_addr, in6, sizeof(sin6.sin6_addr));
-	sin6.sin6_len = sizeof(sin6);
-	sin6.sin6_family = AF_INET6;
+      memset(&sin6, 0, sizeof(sin6));
+      memcpy(&sin6.sin6_addr, in6, sizeof(sin6.sin6_addr));
+      sin6.sin6_len = sizeof(sin6);
+      sin6.sin6_family = AF_INET6;
 
-	return(stf_getin4addr_sin6(sc, sin, ifa, &sin6));
+      return(stf_getin4addr_sin6(sc, sin, ifa, &sin6));
 }
 
 static struct sockaddr_in *
 stf_getin4addr_sin6(struct stf_softc *sc, struct sockaddr_in *sin,
-	struct ifaddr *ifa,
-	struct sockaddr_in6 *sin6)
+      struct ifaddr *ifa,
+      struct sockaddr_in6 *sin6)
 {
-	struct in6_ifaddr ia6;
-	int i;
+      struct in6_ifaddr ia6;
+      int i;
 
-	DEBUG_PRINTF(1, "%s: enter.\n", __func__);
-	if (ifa == NULL || sin6 == NULL)
-	return NULL;
+      DEBUG_PRINTF(1, "%s: enter.\n", __func__);
+      if (ifa == NULL || sin6 == NULL)
+      return NULL;
 
-	memset(&ia6, 0, sizeof(ia6));
-	memcpy(&ia6, ifatoia6(ifa), sizeof(ia6));
+      memset(&ia6, 0, sizeof(ia6));
+      memcpy(&ia6, ifatoia6(ifa), sizeof(ia6));
 
-	/*
-	* Use prefixmask information from ifa, and
-	* address information from sin6.
-	*/
-	ia6.ia_addr.sin6_family = AF_INET6;
-	ia6.ia_ifa.ifa_addr = (struct sockaddr *)&ia6.ia_addr;
-	ia6.ia_ifa.ifa_dstaddr = NULL;
-	ia6.ia_ifa.ifa_netmask = (struct sockaddr *)&ia6.ia_prefixmask;
+      /*
+      * Use prefixmask information from ifa, and
+      * address information from sin6.
+      */
+      ia6.ia_addr.sin6_family = AF_INET6;
+      ia6.ia_ifa.ifa_addr = (struct sockaddr *)&ia6.ia_addr;
+      ia6.ia_ifa.ifa_dstaddr = NULL;
+      ia6.ia_ifa.ifa_netmask = (struct sockaddr *)&ia6.ia_prefixmask;
 
 #if STF_DEBUG > 3
-	{
-		char buf[INET6_ADDRSTRLEN + 1];
-		memset(&buf, 0, sizeof(buf));
+      {
+              char buf[INET6_ADDRSTRLEN + 1];
+              memset(&buf, 0, sizeof(buf));
 
-		ip6_sprintf(buf, &sin6->sin6_addr);
-		DEBUG_PRINTF(1, "%s: sin6->sin6_addr = %s\n", __func__, buf);
-		ip6_sprintf(buf, &ia6.ia_addr.sin6_addr);
-		DEBUG_PRINTF(1, "%s: ia6.ia_addr.sin6_addr = %s\n", __func__, buf);
-		ip6_sprintf(buf, &ia6.ia_prefixmask.sin6_addr);
-		DEBUG_PRINTF(1, "%s: ia6.ia_prefixmask.sin6_addr = %s\n", __func__, buf);
-	}
+              ip6_sprintf(buf, &sin6->sin6_addr);
+              DEBUG_PRINTF(1, "%s: sin6->sin6_addr = %s\n", __func__, buf);
+              ip6_sprintf(buf, &ia6.ia_addr.sin6_addr);
+              DEBUG_PRINTF(1, "%s: ia6.ia_addr.sin6_addr = %s\n", __func__, buf);
+              ip6_sprintf(buf, &ia6.ia_prefixmask.sin6_addr);
+              DEBUG_PRINTF(1, "%s: ia6.ia_prefixmask.sin6_addr = %s\n", __func__, buf);
+      }
 #endif
 
-	/*
-	* When (src addr & src mask) != (dst (sin6) addr & src mask),
-	* the dst is not in the 6rd domain.  The IPv4 address must
-	* not be used.
-	*/
-	for (i = 0; i < sizeof(ia6.ia_addr.sin6_addr); i++) {
-		if ((((u_char *)&ia6.ia_addr.sin6_addr)[i] &
-		    ((u_char *)&ia6.ia_prefixmask.sin6_addr)[i])
-		    !=
-		    (((u_char *)&sin6->sin6_addr)[i] &
-		    ((u_char *)&ia6.ia_prefixmask.sin6_addr)[i]))
-		return NULL;
-	}
+      /*
+      * When (src addr & src mask) != (dst (sin6) addr & src mask),
+      * the dst is not in the 6rd domain.  The IPv4 address must
+      * not be used.
+      */
+      for (i = 0; i < sizeof(ia6.ia_addr.sin6_addr); i++) {
+              if ((((u_char *)&ia6.ia_addr.sin6_addr)[i] &
+                  ((u_char *)&ia6.ia_prefixmask.sin6_addr)[i])
+                  !=
+                  (((u_char *)&sin6->sin6_addr)[i] &
+                  ((u_char *)&ia6.ia_prefixmask.sin6_addr)[i]))
+              return NULL;
+      }
 
-	/* After the mask check, overwrite ia6.ia_addr with sin6. */
-	memcpy(&ia6.ia_addr, sin6, sizeof(ia6.ia_addr));
-	return(stf_getin4addr(sc, sin, (struct ifaddr *)&ia6, 0));
+      /* After the mask check, overwrite ia6.ia_addr with sin6. */
+      memcpy(&ia6.ia_addr, sin6, sizeof(ia6.ia_addr));
+      return(stf_getin4addr(sc, sin, (struct ifaddr *)&ia6, 0));
 }
 
 static struct sockaddr_in *
 stf_getin4addr(struct stf_softc *sc, struct sockaddr_in *sin,
-	struct ifaddr *ifa,
-	int flags)
+      struct ifaddr *ifa,
+      int flags)
 {
-	struct in_addr *in;
-	struct sockaddr_in6 *sin6;
-	struct in6_ifaddr *ia6;
+      struct in_addr *in;
+      struct sockaddr_in6 *sin6;
+      struct in6_ifaddr *ia6;
 
-	DEBUG_PRINTF(1, "%s: enter.\n", __func__);
-	if (ifa == NULL ||
-	    ifa->ifa_addr == NULL ||
-	    ifa->ifa_addr->sa_family != AF_INET6)
-	return NULL;
+      DEBUG_PRINTF(1, "%s: enter.\n", __func__);
+      if (ifa == NULL ||
+          ifa->ifa_addr == NULL ||
+          ifa->ifa_addr->sa_family != AF_INET6)
+      return NULL;
 
-	sin6 = satosin6(ifa->ifa_addr);
-	ia6 = ifatoia6(ifa);
+      sin6 = satosin6(ifa->ifa_addr);
+      ia6 = ifatoia6(ifa);
 
-	if ((flags & STF_GETIN4_USE_CACHE) &&
-	    (ifa->ifa_dstaddr != NULL) &&
-	    (ifa->ifa_dstaddr->sa_family == AF_INET)) {
-		/*
-		 * XXX: ifa_dstaddr is used as a cache of the
-		 * extracted IPv4 address.
-		 */
-		memcpy(sin, satosin(ifa->ifa_dstaddr), sizeof(*sin));
-
-#if STF_DEBUG > 3
-		{
-			char tmpbuf[INET6_ADDRSTRLEN + 1];
-			memset(&tmpbuf, 0, INET6_ADDRSTRLEN);
-
-			ip_sprintf(tmpbuf, &sin->sin_addr);
-			DEBUG_PRINTF(1, "%s: cached address was used = %s\n", __func__, tmpbuf);
-		}
-#endif
-		return (sin);
-	}
-	memset(sin, 0, sizeof(*sin));
-	in = &sin->sin_addr;
+      if ((flags & STF_GETIN4_USE_CACHE) &&
+          (ifa->ifa_dstaddr != NULL) &&
+          (ifa->ifa_dstaddr->sa_family == AF_INET)) {
+              /*
+               * XXX: ifa_dstaddr is used as a cache of the
+               * extracted IPv4 address.
+               */
+              memcpy(sin, satosin(ifa->ifa_dstaddr), sizeof(*sin));
 
 #if STF_DEBUG > 3
-	{
-		char tmpbuf[INET6_ADDRSTRLEN + 1];
-		memset(&tmpbuf, 0, INET6_ADDRSTRLEN);
+              {
+                      char tmpbuf[INET6_ADDRSTRLEN + 1];
+                      memset(&tmpbuf, 0, INET6_ADDRSTRLEN);
 
-		ip6_sprintf(tmpbuf, &sin6->sin6_addr);
-		DEBUG_PRINTF(1, "%s: sin6->sin6_addr = %s\n", __func__, tmpbuf);
-	}
+                      ip_sprintf(tmpbuf, &sin->sin_addr);
+                      DEBUG_PRINTF(1, "%s: cached address was used = %s\n", __func__, tmpbuf);
+              }
+#endif
+              return (sin);
+      }
+
+      memset(sin, 0, sizeof(*sin));
+      in = &sin->sin_addr;
+
+#if STF_DEBUG > 3
+      {
+              char tmpbuf[INET6_ADDRSTRLEN + 1];
+              memset(&tmpbuf, 0, INET6_ADDRSTRLEN);
+
+              ip6_sprintf(tmpbuf, &sin6->sin6_addr);
+              DEBUG_PRINTF(1, "%s: sin6->sin6_addr = %s\n", __func__, tmpbuf);
+      }
 #endif
 
-	if (IN6_IS_ADDR_6TO4(&sin6->sin6_addr)) {
-		/* 6to4 (RFC 3056) */
-		bcopy(GET_V4(&sin6->sin6_addr), in, sizeof(*in));
-		if (isrfc1918addr(in))
-			return NULL;
-	} else {
-		/* 6rd (RFC 5569) */
-		struct in6_addr buf;
-		u_char *p = (u_char *)&buf;
-		u_char *q = (u_char *)&in->s_addr;
-		u_int residue = 0, v4residue = 0;
-		u_char mask, v4mask = 0;
-		int i;
-		u_int plen, loop;
+      if (IN6_IS_ADDR_6TO4(&sin6->sin6_addr)) {
+              /* 6to4 (RFC 3056) */
+              bcopy(GET_V4(&sin6->sin6_addr), in, sizeof(*in));
+              if (isrfc1918addr(in))
+                      return NULL;
+      } else {
+              /* 6rd (RFC 5569) */
+              struct in6_addr buf;
+              u_char *p = (u_char *)&buf;
+              u_char *q = (u_char *)&in->s_addr;
+              u_int residue = 0, v4residue = 0;
+              u_char mask, v4mask = 0;
+              int i, j;
+              u_int plen, loop;
 
-		/*
-		 * 6rd-relays IPv6 prefix is located at a 32-bit just
-		 * after the prefix edge.
-		 */
-		plen = in6_mask2len(&satosin6(ifa->ifa_netmask)->sin6_addr, NULL);
-		if (64 < plen) {
-			DEBUG_PRINTF(1, "prefixlen is %d\n", plen);
-			return NULL;
-		}
+              /*
+               * 6rd-relays IPv6 prefix is located at a 32-bit just
+               * after the prefix edge.
+               */
+              plen = in6_mask2len(&satosin6(ifa->ifa_netmask)->sin6_addr, NULL);
+              if (64 < plen) {
+                      DEBUG_PRINTF(1, "prefixlen is %d\n", plen);
+                      return NULL;
+              }
 
-		memcpy(&buf, &sin6->sin6_addr, sizeof(buf));
-		if (sc->v4prefixlen == 0 || sc->v4prefixlen == 32)
-			loop = 4; /* Normal 6rd operation */
-		else {
-			loop = sc->v4prefixlen / 8;
-			v4residue = sc->v4prefixlen % 8;
-		}
+	      loop = 4; /* Normal 6rd operation */
+              memcpy(&buf, &sin6->sin6_addr, sizeof(buf));
+              if (sc->v4prefixlen != 0 && sc->v4prefixlen != 32) {
+                      v4residue = sc->v4prefixlen % 8;
+              }
+              p += plen / 8;
+	      //plen -= 32;
 
-		p += plen / 8;
-		residue = plen % 8;
-		mask = ~((u_char)(-1) >> residue);
-		if (v4residue) {
-			loop++;
-			v4mask = ((u_char)(-1) << v4residue);
-		}
-		/*
-		 * The p points head of the IPv4 address part in
-		 * bytes.  The residue is a bit-shift factor when
-		 * prefixlen is not a multiple of 8.
-		 */
-		DEBUG_PRINTF(2, "residue = %d\n", residue);
-		for (i = loop; i >= 0; i--) {
-			if (residue) {
-				DEBUG_PRINTF(2, "p[%d] << residue = %d-%x/%x\n",
-					i, p[i], p[i], p[i] >> residue);
-				p[i] = (p[i] >> residue);
-				DEBUG_PRINTF(2, "p[%d] = %d/%x - p[%d + 1] = %d-%x/%x\n",
-					i, p[i], p[i], i, p[i - 1], p[i - 1], p[i - 1] << (8 - residue));
-				p[i] |= (p[i - 1] << (8 - residue));
+              residue = plen % 8;
+              mask = ((u_char)(-1) >> (8 - residue));
+              if (v4residue) {
+                      loop++;
+                      v4mask = ((u_char)(-1) << v4residue);
+              }
+              /*
+               * The p points head of the IPv4 address part in
+               * bytes.  The residue is a bit-shift factor when
+               * prefixlen is not a multiple of 8.
+               */
+              DEBUG_PRINTF(2, "residue = %d 0x%x\n", residue, mask);
+              for (j = 0, i = (loop - (sc->v4prefixlen / 8)); i < loop; j++, i++) {
+                      if (residue) {
+                              q[i] = ((p[j] & mask) << (8 - residue));
+				q[i] |=  ((p[j + 1] >> residue) & mask);
+			      DEBUG_PRINTF(2, "FINAL  i = %d  q[%d] - p[%d/%d] %x\n",
+				      i, q[i], p[j], p[j + 1] >> residue, q[i]);
+                      } else {
+			      q[i] = p[j];
+			      DEBUG_PRINTF(2, "FINAL q[%d] - p[%d] %x\n",
+				      q[i], p[j], q[i]);
 			}
-			q[i - 1] = p[i];
-			DEBUG_PRINTF(2, "FINAL q[%d] - p[%d] %d/%x\n",
-				i, i, q[i - 1], q[i]);
-		}
-		if (v4residue)
-		q[i + 1] &= v4mask;
+              }
+              if (v4residue) {
+		      q[loop - (sc->v4prefixlen / 8)] &= v4mask;
 
-		if (sc->v4prefixlen)
-		in->s_addr |= (sc->inaddr & ((uint32_t)(-1) >> sc->v4prefixlen));
-	}
+		      if (sc->v4prefixlen > 0 && sc->v4prefixlen < 32)
+			      in->s_addr |= sc->inaddr;
+		}
+
+		//if (in->s_addr != sc->srcv4_addr)
+		//	printf("Wrong decoded address %x/%x!!!!\n", in->s_addr, sc->srcv4_addr);
+      }
 
 #if STF_DEBUG > 3
-	{
-		char tmpbuf[INET6_ADDRSTRLEN + 1];
-		memset(&tmpbuf, 0, INET_ADDRSTRLEN);
+      {
+              char tmpbuf[INET6_ADDRSTRLEN + 1];
+              memset(&tmpbuf, 0, INET_ADDRSTRLEN);
 
-		ip_sprintf(tmpbuf, in);
-		DEBUG_PRINTF(1, "%s: in->in_addr = %s\n", __func__, tmpbuf);
-		DEBUG_PRINTF(1, "%s: leave\n", __func__);
-	}
+              ip_sprintf(tmpbuf, in);
+              DEBUG_PRINTF(1, "%s: in->in_addr = %s\n", __func__, tmpbuf);
+              DEBUG_PRINTF(1, "%s: leave\n", __func__);
+      }
 #endif
 
-	if (flags & STF_GETIN4_USE_CACHE) {
-		DEBUG_PRINTF(1, "%s: try to access ifa->ifa_dstaddr.\n", __func__);
-		ifa->ifa_dstaddr = (struct sockaddr *)&ia6->ia_dstaddr;
-		DEBUG_PRINTF(1, "%s: try to memset 0 to ia_dstaddr.\n", __func__);
-			memset(&ia6->ia_dstaddr, 0, sizeof(ia6->ia_dstaddr));
-		DEBUG_PRINTF(1, "%s: try to memcpy ifa->ifa_dstaddr.\n", __func__);
-			memcpy((struct sockaddr_in *)ifa->ifa_dstaddr,
-			sin, sizeof(struct sockaddr_in));
-		DEBUG_PRINTF(1, "%s: try to set sa_family.\n", __func__);
-		ifa->ifa_dstaddr->sa_family = AF_INET;
-		DEBUG_PRINTF(1, "%s: in->in_addr is stored in ifa_dstaddr.\n",
-			__func__);
-	}
+      if (flags & STF_GETIN4_USE_CACHE) {
+              DEBUG_PRINTF(1, "%s: try to access ifa->ifa_dstaddr.\n", __func__);
+              ifa->ifa_dstaddr = (struct sockaddr *)&ia6->ia_dstaddr;
+              DEBUG_PRINTF(1, "%s: try to memset 0 to ia_dstaddr.\n", __func__);
+                      memset(&ia6->ia_dstaddr, 0, sizeof(ia6->ia_dstaddr));
+              DEBUG_PRINTF(1, "%s: try to memcpy ifa->ifa_dstaddr.\n", __func__);
+              memcpy((struct sockaddr_in *)ifa->ifa_dstaddr,
+                      sin, sizeof(struct sockaddr_in));
+              DEBUG_PRINTF(1, "%s: try to set sa_family.\n", __func__);
+              ifa->ifa_dstaddr->sa_family = AF_INET;
+              DEBUG_PRINTF(1, "%s: in->in_addr is stored in ifa_dstaddr.\n",
+                      __func__);
+      }
 
-	return (sin);
+      return (sin);
 }
+
 
 static int
 stf_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
@@ -1258,67 +1258,68 @@ stf_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			if (ifd->ifd_len != sizeof(args)) {
 				error = EINVAL;
 				break;
-		}
-		mtx_lock(&stf_mtx);
-		LIST_FOREACH(sc, &V_stf_softc_list, stf_list) {
-			if (sc == sc_cur)
-				continue;
-			if (sc->inaddr == 0 || sc->v4prefixlen == 0)
-				continue;
-
-			if ((ntohl(sc->inaddr) & ((uint32_t)(-1) << sc_cur->v4prefixlen)) == ntohl(sc_cur->inaddr)) {
-				error = EEXIST;
-				mtx_unlock(&stf_mtx);
-				return (error);
 			}
-			if ((ntohl(sc_cur->inaddr) & ((uint32_t)(-1) << sc->v4prefixlen)) == ntohl(sc->inaddr)) {
-				error = EEXIST;
-				mtx_unlock(&stf_mtx);
-				return (error);
-			}
-		}
-		mtx_unlock(&stf_mtx);
-		bzero(&args, sizeof args);
-		error = copyin(ifd->ifd_data, &args, ifd->ifd_len); 
-		if (error)
-			break;
+			mtx_lock(&stf_mtx);
+			LIST_FOREACH(sc, &V_stf_softc_list, stf_list) {
+				if (sc == sc_cur)
+					continue;
+				if (sc->inaddr == 0 || sc->v4prefixlen == 0)
+					continue;
 
-		sc_cur->inaddr = ntohl(args.inaddr.s_addr);
-		sc_cur->inaddr &= ((uint32_t)(-1) << args.prefix);
-		sc_cur->inaddr = htonl(sc_cur->inaddr);
-		sc_cur->v4prefixlen = args.prefix;
-		if (sc_cur->v4prefixlen == 32)
-			sc_cur->v4prefixlen = 0;
+				if ((ntohl(sc->inaddr) & ((uint32_t)(-1) << sc_cur->v4prefixlen)) == ntohl(sc_cur->inaddr)) {
+					error = EEXIST;
+					mtx_unlock(&stf_mtx);
+					return (error);
+				}
+				if ((ntohl(sc_cur->inaddr) & ((uint32_t)(-1) << sc->v4prefixlen)) == ntohl(sc->inaddr)) {
+					error = EEXIST;
+					mtx_unlock(&stf_mtx);
+					return (error);
+				}
+			}
+			mtx_unlock(&stf_mtx);
+			bzero(&args, sizeof args);
+			error = copyin(ifd->ifd_data, &args, ifd->ifd_len);
+			if (error)
+				break;
+
+			sc_cur->srcv4_addr = args.inaddr.s_addr;
+			sc_cur->inaddr = ntohl(args.inaddr.s_addr);
+			sc_cur->inaddr &= ((uint32_t)(-1) << args.prefix);
+			sc_cur->inaddr = htonl(sc_cur->inaddr);
+			sc_cur->v4prefixlen = args.prefix;
+			if (sc_cur->v4prefixlen == 0)
+				sc_cur->v4prefixlen = 32;
 		} else if (ifd->ifd_cmd == STF_SDSTV4) {
 			if (ifd->ifd_len != sizeof(args)) {
 				error = EINVAL;
 				break;
 			}
 			bzero(&args, sizeof args);
-			error = copyin(ifd->ifd_data, &args, ifd->ifd_len); 
+			error = copyin(ifd->ifd_data, &args, ifd->ifd_len);
 			if (error)
 				break;
 			sc_cur->dstv4_addr = args.dstv4_addr.s_addr;
 		} else
 			error = EINVAL;
 		break;
-		case SIOCGDRVSPEC:
-			ifd = (struct ifdrv *) data;
-			if (ifd->ifd_len != sizeof(args)) {
-				error = EINVAL;
-				break;
-			}
-			if (ifd->ifd_cmd != STF_GV4NET) {
-				error = EINVAL;
-				break;
-			}
-			bzero(&args, sizeof args);
-			args.inaddr.s_addr = sc_cur->inaddr;
-			args.dstv4_addr.s_addr = sc_cur->dstv4_addr;
-			args.prefix = sc_cur->v4prefixlen;
-			error = copyout(&args, ifd->ifd_data, ifd->ifd_len); 
-
+	case SIOCGDRVSPEC:
+		ifd = (struct ifdrv *) data;
+		if (ifd->ifd_len != sizeof(args)) {
+			error = EINVAL;
 			break;
+		}
+		if (ifd->ifd_cmd != STF_GV4NET) {
+			error = EINVAL;
+			break;
+		}
+		bzero(&args, sizeof args);
+		args.inaddr.s_addr = sc_cur->srcv4_addr;
+		args.dstv4_addr.s_addr = sc_cur->dstv4_addr;
+		args.prefix = sc_cur->v4prefixlen;
+		error = copyout(&args, ifd->ifd_data, ifd->ifd_len);
+
+		break;
 	case SIOCSIFADDR:
 		ifa = (struct ifaddr *)data;
 		if (ifa == NULL || ifa->ifa_addr->sa_family != AF_INET6) {
