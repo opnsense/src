@@ -2704,11 +2704,10 @@ vnet_ipfw_uninit(const void *unused)
 	V_ip_fw_ctl_ptr = NULL;
 	IPFW_UH_WLOCK(chain);
 	IPFW_UH_WUNLOCK(chain);
-	IPFW_UH_WLOCK(chain);
 
-	IPFW_WLOCK(chain);
 	ipfw_dyn_uninit(0);	/* run the callout_drain */
-	IPFW_WUNLOCK(chain);
+
+	IPFW_UH_WLOCK(chain);
 
 	ipfw_destroy_tables(chain);
 	reap = NULL;
