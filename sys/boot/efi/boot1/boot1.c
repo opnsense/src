@@ -601,7 +601,7 @@ efi_main(EFI_HANDLE Ximage, EFI_SYSTEM_TABLE *Xsystab)
 	conout->EnableCursor(conout, TRUE);
 	conout->ClearScreen(conout);
 
-	printf("\n>> FreeBSD EFI boot block\n");
+	printf("\n>> OPNsense EFI boot block\n");
 	printf("   Loader path: %s\n\n", PATH_LOADER_EFI);
 	printf("   Initializing modules:");
 	for (i = 0; i < NUM_BOOT_MODULES; i++) {

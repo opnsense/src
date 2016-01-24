@@ -3,6 +3,7 @@
 FILES+=	beastie.4th
 FILES+=	brand.4th
 FILES+=	brand-fbsd.4th
+FILES+=	brand-opnsense.4th
 FILES+=	check-password.4th
 FILES+=	color.4th
 FILES+=	delay.4th
@@ -13,6 +14,7 @@ FILES+=	loader.help
 FILES+=	logo-beastie.4th
 FILES+=	logo-beastiebw.4th
 FILES+=	logo-fbsdbw.4th
+FILES+=	logo-hourglass.4th
 FILES+=	logo-orb.4th
 FILES+=	logo-orbbw.4th
 FILES+=	menu.4th

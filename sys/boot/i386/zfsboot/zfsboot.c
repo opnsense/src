@@ -562,7 +562,7 @@ main(void)
 
     for (;;) {
 	if (!autoboot || !OPT_CHECK(RBX_QUIET)) {
-	    printf("\nFreeBSD/x86 boot\n");
+	    printf("\nOPNsense/x86 boot\n");
 	    if (zfs_rlookup(spa, zfsmount.rootobj, rootname) != 0)
 		printf("Default: %s/<0x%llx>:%s\n"
 		       "boot: ",
