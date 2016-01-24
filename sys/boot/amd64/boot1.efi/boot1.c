@@ -125,7 +125,7 @@ EFI_STATUS efi_main(EFI_HANDLE Ximage, EFI_SYSTEM_TABLE* Xsystab)
 		(void)ConsoleControl->SetMode(ConsoleControl,
 		    EfiConsoleControlScreenText);
 
-	printf(" \n>> FreeBSD EFI boot block\n");
+	printf(" \n>> OPNsense EFI boot block\n");
 	printf("   Loader path: %s\n", path);
 
 	status = systab->BootServices->LocateHandle(ByProtocol,

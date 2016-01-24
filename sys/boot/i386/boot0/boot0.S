@@ -646,9 +646,9 @@ os_dos:
 		.ascii "DO";   .byte 'S'|0x80
 #endif
 os_win:		.ascii "Wi";   .byte 'n'|0x80
-os_linux:	.ascii "Linu"; .byte 'x'|0x80
-os_freebsd:	.ascii "Free"
-os_bsd:		.ascii "BS";   .byte 'D'|0x80
+os_linux:	.ascii "Lin"; .byte 'x'|0x80
+os_freebsd:	.ascii "OPNs"
+os_bsd:		.ascii "ens";   .byte 'e'|0x80
 #ifndef SAVE_MORE_MEMORY
 os_ext:		.ascii "EX";   .byte 'T'|0x80
 #endif

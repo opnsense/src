@@ -24,7 +24,7 @@
 \ 
 \ $FreeBSD$
 
-46 logoX ! 7 logoY ! \ Initialize logo placement defaults
+48 logoX ! 8 logoY ! \ Initialize logo placement defaults
 
 : logo+ ( x y c-addr/u -- x y' )
 	2swap 2dup at-xy 2swap \ position the cursor
