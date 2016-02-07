@@ -1,5 +1,4 @@
 \ Copyright (c) 2006-2015 Devin Teske <dteske@FreeBSD.org>
-\ Copyright (c) 2016 Tobias Boertitz <tbor87@gmail.com>
 \ All rights reserved.
 \ 
 \ Redistribution and use in source and binary forms, with or without
@@ -25,7 +24,7 @@
 \ 
 \ $FreeBSD$
 
-17 brandX ! 1 brandY ! \ Initialize brand placement defaults
+2 brandX ! 1 brandY ! \ Initialize brand placement defaults
 
 : brand+ ( x y c-addr/u -- x y' )
 	2swap 2dup at-xy 2swap \ position the cursor
@@ -33,14 +32,15 @@
 	1+ \ increase y for next time we're called
 ;
 
-: brand ( x y -- ) \ "OPNsense" [wide] logo in B/W (6 rows x 47 columns)
+: brand ( x y -- ) \ "FreeBSD" [wide] logo in B/W (7 rows x 42 columns)
 
-	s"  ______  _____  _____                         " brand+
-	s" /  __  |/ ___ |/ __  |                        " brand+
-	s" | |  | | |__/ | |  | |___  ___ _ __  ___  ___ " brand+
-	s" | |  | |  ___/| |  | / __|/ _ \ '_ \/ __|/ _ \" brand+
-	s" | |__| | |    | |  | \__ \  __/ | | \__ \  __/" brand+
-	s" |_____/|_|    |_| /__|___/\___|_| |_|___/\___|" brand+
+	s"  ______               ____   _____ _____  " brand+
+	s" |  ____|             |  _ \ / ____|  __ \ " brand+
+	s" | |___ _ __ ___  ___ | |_) | (___ | |  | |" brand+
+	s" |  ___| '__/ _ \/ _ \|  _ < \___ \| |  | |" brand+
+	s" | |   | | |  __/  __/| |_) |____) | |__| |" brand+
+	s" | |   | | |    |    ||     |      |      |" brand+
+	s" |_|   |_|  \___|\___||____/|_____/|_____/ " brand+
 
 	2drop
 ;
