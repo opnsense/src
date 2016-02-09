@@ -35,6 +35,7 @@
 
 : logo ( x y -- ) \ B/W portal logo (15 rows x 30 columns)
 
+	s"                               " logo+
 	s"   @@@@@@@@@@@@@@@@@@@@@@@@@@@@" logo+
 	s" @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@" logo+
 	s" @@@@@                    @@@@@" logo+
