@@ -64,9 +64,9 @@ variable logoY
 		s" loader_logo" getenv dup -1 = over 0= or if
 			dup 0= if 2drop else drop then \ getenv result unused
 			loader_color? if
-				s" try-include /boot/logo-portal.4th"
+				s" try-include /boot/logo-hourglass.4th"
 			else
-				s" try-include /boot/logo-portalbw.4th"
+				s" try-include /boot/logo-hourglassbw.4th"
 			then
 		else
 			2drop ( c-addr/u -- ) \ getenv result unused

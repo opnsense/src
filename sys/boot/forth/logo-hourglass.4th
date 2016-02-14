@@ -25,7 +25,7 @@
 \
 \ $FreeBSD$
 
-48 logoX ! 8 logoY ! \ Initialize logo placement defaults
+48 logoX ! 9 logoY ! \ Initialize logo placement defaults
 
 : logo+ ( x y c-addr/u -- x y' )
 	2swap 2dup at-xy 2swap \ position the cursor
@@ -34,9 +34,8 @@
 	1+ \ increase y for next time we're called
 ;
 
-: logo ( x y -- ) \ color portal logo (15 rows x 30 columns)
+: logo ( x y -- ) \ color hourglass logo (15 rows x 32 columns)
 
-	s"                               " logo+
 	s" #[37;1m  @@@@@@@@@@@@@@@@@@@@@@@@@@@@" logo+
 	s" @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@" logo+
 	s" @@@@@                    @@@@@" logo+
