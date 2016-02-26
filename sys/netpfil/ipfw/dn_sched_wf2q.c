@@ -41,8 +41,12 @@
 #include <netinet/ip_var.h>		/* ipfw_rule_ref */
 #include <netinet/ip_fw.h>	/* flow_id */
 #include <netinet/ip_dummynet.h>
+
 #include <netpfil/ipfw/dn_heap.h>
 #include <netpfil/ipfw/ip_dn_private.h>
+#ifdef NEW_AQM
+#include <netpfil/ipfw/dn_aqm.h>
+#endif
 #include <netpfil/ipfw/dn_sched.h>
 #else
 #include <dn_test.h>
@@ -367,6 +371,10 @@ static struct dn_alg wf2qp_desc = {
 
 	_SI( .new_queue = ) wf2qp_new_queue,
 	_SI( .free_queue = ) wf2qp_free_queue,
+#ifdef NEW_AQM
+	_SI( .getconfig = )  NULL,
+#endif
+
 };
 
 

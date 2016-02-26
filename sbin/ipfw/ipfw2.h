@@ -165,8 +165,18 @@ enum tokens {
 	TOK_BURST,
 	TOK_RED,
 	TOK_GRED,
+	TOK_ECN,
 	TOK_DROPTAIL,
 	TOK_PROTO,
+#ifdef NEW_AQM
+	/* AQM tokens*/
+	TOK_CODEL, 
+	TOK_FQ_CODEL,
+	TOK_TARGET,
+	TOK_INTERVAL,
+	TOK_FLOWS,
+	TOK_QUANTUM,
+#endif
 	/* dummynet tokens */
 	TOK_WEIGHT,
 	TOK_LMAX,
