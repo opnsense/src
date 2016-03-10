@@ -154,7 +154,7 @@ SYSBEGIN(f4)
 
 SYSCTL_DECL(_net_inet);
 SYSCTL_DECL(_net_inet_ip);
-static SYSCTL_NODE(_net_inet_ip, OID_AUTO, dummynet, CTLFLAG_RW, 0, "Dummynet");
+SYSCTL_NODE(_net_inet_ip, OID_AUTO, dummynet, CTLFLAG_RW, 0, "Dummynet");
 
 /* wrapper to pass dn_cfg fields to SYSCTL_* */
 //#define DC(x)	(&(VNET_NAME(_base_dn_cfg).x))
