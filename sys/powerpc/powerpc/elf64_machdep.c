@@ -25,12 +25,15 @@
  * $FreeBSD$
  */
 
+#include "opt_pax.h"
+
 #include <sys/param.h>
 #include <sys/kernel.h>
 #include <sys/systm.h>
 #include <sys/exec.h>
 #include <sys/imgact.h>
 #include <sys/malloc.h>
+#include <sys/pax.h>
 #include <sys/proc.h>
 #include <sys/namei.h>
 #include <sys/fcntl.h>
@@ -83,6 +86,7 @@ struct sysentvec elf64_freebsd_sysvec = {
 	.sv_shared_page_base = SHAREDPAGE,
 	.sv_shared_page_len = PAGE_SIZE,
 	.sv_schedtail	= NULL,
+	.sv_pax_aslr_init	= pax_aslr_init_vmspace,
 };
 INIT_SYSENTVEC(elf64_sysvec, &elf64_freebsd_sysvec);
 

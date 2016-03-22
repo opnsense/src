@@ -31,6 +31,8 @@
  *	from: NetBSD: mdreloc.c,v 1.42 2008/04/28 20:23:04 martin Exp
  */
 
+#include "opt_pax.h"
+
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
@@ -40,6 +42,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/exec.h>
 #include <sys/imgact.h>
 #include <sys/linker.h>
+#include <sys/pax.h>
 #include <sys/proc.h>
 #include <sys/sysent.h>
 #include <sys/imgact_elf.h>
@@ -87,6 +90,7 @@ static struct sysentvec elf64_freebsd_sysvec = {
 	.sv_fetch_syscall_args = cpu_fetch_syscall_args,
 	.sv_syscallnames = syscallnames,
 	.sv_schedtail	= NULL,
+	.sv_pax_aslr_init	= pax_aslr_init_vmspace,
 };
 
 static Elf64_Brandinfo freebsd_brand_info = {
