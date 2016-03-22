@@ -2923,10 +2923,15 @@ ng_generic_msg(node_p here, item_p item, hook_p lasthook)
 
 	case NGM_ETHER_ATTACH:
 		{
-			struct ifnet *ifp;
-			ifp = ifunit((char *)msg->data);
-			if (ifp && ng_ether_attach_p != NULL) {
-				ng_ether_attach_p(ifp);
+			struct ifnet *ifp = ifunit((char *)msg->data);
+
+			if (ng_ether_attach_p) {
+				if (ifp && (ifp->if_type == IFT_ETHER ||
+				    && ifp->if_type == IFT_L2VLAN)) {
+					ng_ether_attach_p(ifp);
+				} else {
+					error = ENOENT;
+				}
 			}
 				
 			break;
