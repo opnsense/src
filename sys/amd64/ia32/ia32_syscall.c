@@ -230,7 +230,7 @@ setup_lcall_gate(void)
 	bzero(&uap, sizeof(uap));
 	uap.start = 0;
 	uap.num = 1;
-	lcall_addr = curproc->p_sysent->sv_psstrings - sz_lcall_tramp;
+	lcall_addr = curproc->p_psstrings - sz_lcall_tramp;
 	bzero(&desc, sizeof(desc));
 	desc.sd_type = SDT_MEMERA;
 	desc.sd_dpl = SEL_UPL;

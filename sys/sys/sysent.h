@@ -38,6 +38,7 @@ struct rlimit;
 struct sysent;
 struct thread;
 struct ksiginfo;
+struct proc;
 
 typedef	int	sy_call_t(struct thread *, void *);
 
@@ -130,6 +131,7 @@ struct sysentvec {
 	uint32_t	sv_timekeep_gen;
 	void		*sv_shared_page_obj;
 	void		(*sv_schedtail)(struct thread *);
+	void		(* const sv_pax_aslr_init)(struct proc *p);
 };
 
 #define	SV_ILP32	0x000100

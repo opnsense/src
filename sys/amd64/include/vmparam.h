@@ -63,7 +63,7 @@
 #define	DFLSSIZ		(8UL*1024*1024)		/* initial stack size limit */
 #endif
 #ifndef	MAXSSIZ
-#define	MAXSSIZ		(512UL*1024*1024)	/* max stack size */
+#define	MAXSSIZ		(1UL*1024*1024*1024)	/* max stack size */
 #endif
 #ifndef SGROWSIZ
 #define	SGROWSIZ	(128UL*1024)		/* amount to grow stack */
@@ -178,10 +178,11 @@
 #define	VM_MAXUSER_ADDRESS	UVADDR(NUPML4E, 0, 0, 0)
 
 #define	SHAREDPAGE		(VM_MAXUSER_ADDRESS - PAGE_SIZE)
-#define	USRSTACK		SHAREDPAGE
+#define	SHAREDPAGE_GUARD	(4 * PAGE_SIZE)
+#define	USRSTACK		(SHAREDPAGE - SHAREDPAGE_GUARD)
 
 #define	VM_MAX_ADDRESS		UPT_MAX_ADDRESS
-#define	VM_MIN_ADDRESS		(0)
+#define	VM_MIN_ADDRESS		(65536)
 
 #define	PHYS_TO_DMAP(x)		((x) | DMAP_MIN_ADDRESS)
 #define	DMAP_TO_PHYS(x)		((x) & ~DMAP_MIN_ADDRESS)
