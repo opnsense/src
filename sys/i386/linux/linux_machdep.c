@@ -508,7 +508,7 @@ linux_mmap_common(struct thread *td, l_uintptr_t addr, l_size_t len, l_int prot,
 			 * mmap's return value.
 			 */
 			PROC_LOCK(p);
-			p->p_vmspace->vm_maxsaddr = (char *)USRSTACK -
+			p->p_vmspace->vm_maxsaddr = (char *)p->p_usrstack -
 			    lim_cur(p, RLIMIT_STACK);
 			PROC_UNLOCK(p);
 		}

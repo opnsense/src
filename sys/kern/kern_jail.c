@@ -33,6 +33,7 @@ __FBSDID("$FreeBSD$");
 #include "opt_ddb.h"
 #include "opt_inet.h"
 #include "opt_inet6.h"
+#include "opt_pax.h"
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -253,6 +254,10 @@ prison0_init(void)
 	prison0.pr_cpuset = cpuset_ref(thread0.td_cpuset);
 	prison0.pr_osreldate = osreldate;
 	strlcpy(prison0.pr_osrelease, osrelease, sizeof(prison0.pr_osrelease));
+
+#ifdef PAX
+	pax_init_prison(&prison0);
+#endif
 }
 
 #ifdef INET
@@ -1370,6 +1375,10 @@ kern_jail_set(struct thread *td, struct uio *optuio, int flags)
 			prison_deref(pr, PD_LIST_XLOCKED);
 			goto done_releroot;
 		}
+
+#ifdef PAX
+		pax_init_prison(pr);
+#endif
 
 		mtx_lock(&pr->pr_mtx);
 		/*
@@ -4749,6 +4758,27 @@ db_show_prison(struct prison *pr)
 		db_printf(" %s %s\n",
 		    ii == 0 ? "ip6.addr        =" : "                 ",
 		    ip6_sprintf(ip6buf, &pr->pr_ip6[ii]));
+#endif
+#ifdef PAX
+	db_printf(" pr_hbsd = {\n");
+
+	db_printf(" .aslr = {\n");
+	db_printf("  .status		= %d\n",
+	    pr->pr_hbsd.aslr.status);
+	db_printf("  .compat_status	= %d\n",
+	    pr->pr_hbsd.aslr.compat_status);
+	db_printf("  .disallow_map32bit_status	= %d\n",
+	    pr->pr_hbsd.aslr.disallow_map32bit_status);
+	db_printf("  }\n");
+
+	db_printf("  .log = {\n");
+	db_printf("   .log		= %d\n",
+	    pr->pr_hbsd.log.log);
+	db_printf("   .ulog		= %d\n",
+	    pr->pr_hbsd.log.ulog);
+	db_printf("  }\n");
+
+	db_printf(" }\n");
 #endif
 }
 

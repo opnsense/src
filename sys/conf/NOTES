@@ -3002,3 +3002,8 @@ options 	RANDOM_RWFILE	# Read and write entropy cache
 
 # Intel em(4) driver
 options		EM_MULTIQUEUE # Activate multiqueue features/disable MSI-X
+
+# PAX and HardenedBSD related knobs
+options		PAX
+options		PAX_ASLR
+options		PAX_SYSCTLS

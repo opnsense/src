@@ -933,6 +933,21 @@ RACCT_DEFAULT_TO_DISABLED	opt_global.h
 # Resource Limits
 RCTL		opt_global.h
 
+# PaX-inspired hardening features
+PAX		opt_pax.h
+PAX_ASLR	opt_pax.h
+PAX_SYSCTLS	opt_pax.h
+
+# ASLR overwritable defaults
+PAX_ASLR_DELTA_MMAP_DEF_LEN		opt_pax.h
+PAX_ASLR_DELTA_STACK_DEF_LEN		opt_pax.h
+PAX_ASLR_DELTA_VDSO_DEF_LEN		opt_pax.h
+PAX_ASLR_DELTA_EXEC_DEF_LEN		opt_pax.h
+PAX_ASLR_COMPAT_DELTA_MMAP_DEF_LEN	opt_pax.h
+PAX_ASLR_COMPAT_DELTA_STACK_DEF_LEN	opt_pax.h
+PAX_ASLR_COMPAT_DELTA_EXEC_DEF_LEN	opt_pax.h
+PAX_ASLR_COMPAT_DELTA_VDSO_DEF_LEN	opt_pax.h
+
 # Random number generator(s)
 RANDOM_YARROW	opt_random.h
 RANDOM_FORTUNA	opt_random.h
