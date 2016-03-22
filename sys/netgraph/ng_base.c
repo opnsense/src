@@ -66,8 +66,8 @@
 
 #include <sys/socket.h>
 #include <net/if.h>
-#include <net/if_var.h>
 #include <net/if_types.h>
+#include <net/if_var.h>
 
 #include <net/netisr.h>
 #include <net/vnet.h>
@@ -2927,9 +2927,8 @@ ng_generic_msg(node_p here, item_p item, hook_p lasthook)
 			struct ifnet *ifp = ifunit((char *)msg->data);
 
 			if (ng_ether_attach_p) {
-				if (ifp &&
-				    (ifp->if_data.ifi_type == IFT_ETHER ||
-				    ifp->if_data.ifi_type == IFT_L2VLAN)) {
+				if (ifp && (ifp->if_type == IFT_ETHER ||
+				    ifp->if_type == IFT_L2VLAN)) {
 					ng_ether_attach_p(ifp);
 				} else {
 					error = ENOENT;
