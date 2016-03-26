@@ -69,11 +69,11 @@ __FBSDID("$FreeBSD$");
  * 	+-------+--------+--------+--------+
  * 	| MMAP	| 14 bit | 30 bit | 14 bit |
  * 	+-------+--------+--------+--------+
- * 	| STACK	| 10 bit | 42 bit | 10 bit |
+ * 	| STACK	| 14 bit | 42 bit | 14 bit |
  * 	+-------+--------+--------+--------+
  * 	| EXEC	| 14 bit | 30 bit | 14 bit |
  * 	+-------+--------+--------+--------+
- * 	| VDSO	| 10 bit | 28 bit | 10 bit |
+ * 	| VDSO	|  8 bit | 28 bit |  8 bit |
  * 	+-------+--------+--------+--------+
  * 	| M32B	|  N.A.  | 18 bit |  N.A.  |
  * 	+-------+--------+--------+--------+
@@ -140,7 +140,7 @@ __FBSDID("$FreeBSD$");
 #endif /* PAX_ASLR_DELTA_MMAP_DEF_LEN */
 
 #ifndef PAX_ASLR_DELTA_STACK_DEF_LEN
-#define	PAX_ASLR_DELTA_STACK_DEF_LEN	10
+#define	PAX_ASLR_DELTA_STACK_DEF_LEN	14
 #endif /* PAX_ASLR_DELTA_STACK_DEF_LEN */
 
 #ifndef PAX_ASLR_DELTA_EXEC_DEF_LEN
@@ -148,7 +148,7 @@ __FBSDID("$FreeBSD$");
 #endif /* PAX_ASLR_DELTA_EXEC_DEF_LEN */
 
 #ifndef PAX_ASLR_DELTA_VDSO_DEF_LEN
-#define	PAX_ASLR_DELTA_VDSO_DEF_LEN	10
+#define	PAX_ASLR_DELTA_VDSO_DEF_LEN	8
 #endif /* PAX_ASLR_DELTA_VDSO_DEF_LEN */
 
 #endif /* __LP64__ */
@@ -178,7 +178,7 @@ __FBSDID("$FreeBSD$");
 #endif /* PAX_ASLR_COMPAT_DELTA_MMAP_DEF_LEN */
 
 #ifndef PAX_ASLR_COMPAT_DELTA_STACK_DEF_LEN
-#define	PAX_ASLR_COMPAT_DELTA_STACK_DEF_LEN	10
+#define	PAX_ASLR_COMPAT_DELTA_STACK_DEF_LEN	14
 #endif /* PAX_ASLR_COMPAT_DELTA_STACK_DEF_LEN */
 
 #ifndef PAX_ASLR_COMPAT_DELTA_EXEC_DEF_LEN
@@ -186,7 +186,7 @@ __FBSDID("$FreeBSD$");
 #endif /* PAX_ASLR_COMPAT_DELTA_EXEC_DEF_LEN */
 
 #ifndef PAX_ASLR_COMPAT_DELTA_VDSO_DEF_LEN
-#define	PAX_ASLR_COMPAT_DELTA_VDSO_DEF_LEN	10
+#define	PAX_ASLR_COMPAT_DELTA_VDSO_DEF_LEN	8
 #endif /* PAX_ASLR_COMPAT_DELTA_VDSO_DEF_LEN */
 
 #endif
