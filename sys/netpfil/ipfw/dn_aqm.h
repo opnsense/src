@@ -36,11 +36,21 @@
 
 
 /* NOW is the current time in millisecond*/
-#define NOW ((dn_cfg.curr_time*tick)/1000)
-//#define UNOW (dn_cfg.curr_time*tick)
+#define NOW ((dn_cfg.curr_time * tick) / 1000)
+
+#define AQM_UNOW (dn_cfg.curr_time * tick)
+#define AQM_TIME_1US ((aqm_time_t)(1))
+#define AQM_TIME_1MS ((aqm_time_t)(1000))
+#define AQM_TIME_1S ((aqm_time_t)(AQM_TIME_1MS * 1000))
+
+/* aqm time allows to store up to 4294 seconds */
+typedef uint32_t aqm_time_t;
+typedef int32_t aqm_stime_t;
+
+#define DN_AQM_MTAG_TS 55345
 
 /* Macro for variable bounding */
-#define BOUND_VAR(x,l,h)  (x<l?l:x>h?h:x)
+#define BOUND_VAR(x,l,h)  (x < l? l : x > h? h : x)
 
 /* sysctl variable to count number of droped packets */
 extern unsigned long io_pkt_drop; 
@@ -123,7 +133,11 @@ update_stats(struct dn_queue *q, int len, int drop)
 	else if(len > 0)
 			inc = 1;
 
-	if(!drop){
+	if (drop) {
+			qni->drops++;
+			sni->drops++;
+			io_pkt_drop++;
+	} else {
 		/*update queue stats */
 		qni->length += inc;
 		qni->len_bytes += len;
@@ -131,12 +145,6 @@ update_stats(struct dn_queue *q, int len, int drop)
 		/*update scheduler instance stats */
 		sni->length += inc;
 		sni->len_bytes += len;
-	}
-
-	if (drop) {
-			qni->drops ++;
-			sni->drops ++;
-			io_pkt_drop ++;
 	}
 
 }

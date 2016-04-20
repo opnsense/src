@@ -79,9 +79,47 @@
 
 static struct dn_alg fq_codel_desc;
 
-/* fq_codel parameters including codel */
+/* fq_codel default parameters including codel */
 struct dn_sch_fq_codel_parms 
- fq_codel_sysctl = {{5,100,0},1024,10240,1514};	/* defaults */
+fq_codel_sysctl = {{5000 * AQM_TIME_1US, 100000 * AQM_TIME_1US, CODEL_ECN_ENABLED},
+		1024, 10240, 1514};
+
+static int
+fqcodel_sysctl_interval_handler(SYSCTL_HANDLER_ARGS)
+{
+	int error;
+	long  value;
+
+	value = fq_codel_sysctl.ccfg.interval;
+	value /= AQM_TIME_1US;
+	error = sysctl_handle_long(oidp, &value, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	if (value < 1 || value > 100 * AQM_TIME_1S)
+		return (EINVAL);
+	fq_codel_sysctl.ccfg.interval = value * AQM_TIME_1US ;
+
+	return (0);
+}
+
+static int
+fqcodel_sysctl_target_handler(SYSCTL_HANDLER_ARGS)
+{
+	int error;
+	long  value;
+
+	value = fq_codel_sysctl.ccfg.target;
+	value /= AQM_TIME_1US;
+	error = sysctl_handle_long(oidp, &value, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	if (value < 1 || value > 5 * AQM_TIME_1S)
+		return (EINVAL);
+	fq_codel_sysctl.ccfg.target = value * AQM_TIME_1US ;
+
+	return (0);
+}
+
 
 SYSBEGIN(f4)
 
@@ -91,16 +129,20 @@ SYSCTL_DECL(_net_inet_ip_dummynet);
 static SYSCTL_NODE(_net_inet_ip_dummynet, OID_AUTO, fqcodel, CTLFLAG_RW, 0, "FQ_CODEL");
 
 #ifdef SYSCTL_NODE
-SYSCTL_UINT(_net_inet_ip_dummynet_fqcodel, OID_AUTO, target,
-	CTLFLAG_RW, &fq_codel_sysctl.ccfg.target, 5, "Target in ms for FQ_CoDel");
-SYSCTL_UINT(_net_inet_ip_dummynet_fqcodel, OID_AUTO, interval,
-	CTLFLAG_RW, &fq_codel_sysctl.ccfg.interval, 100, "Interval in ms for FQ_CoDel");
+	
+SYSCTL_PROC(_net_inet_ip_dummynet_fqcodel, OID_AUTO, target, CTLTYPE_LONG | CTLFLAG_RW,
+	NULL, 0, fqcodel_sysctl_target_handler, "L",
+	"FQ_CoDel target in microsecond");
+SYSCTL_PROC(_net_inet_ip_dummynet_fqcodel, OID_AUTO, interval, CTLTYPE_LONG | CTLFLAG_RW,
+	NULL, 0, fqcodel_sysctl_interval_handler, "L",
+	"FQ_CoDel interval in microsecond");
+	
 SYSCTL_UINT(_net_inet_ip_dummynet_fqcodel, OID_AUTO, quantum,
-	CTLFLAG_RW, &fq_codel_sysctl.quantum, 1514, "quantum for FQ_CoDel");
+	CTLFLAG_RW, &fq_codel_sysctl.quantum, 1514, "FQ_CoDel quantum");
 SYSCTL_UINT(_net_inet_ip_dummynet_fqcodel, OID_AUTO, flows,
 	CTLFLAG_RW, &fq_codel_sysctl.flows_cnt, 1024, "Number of queues for FQ_CoDel");
 SYSCTL_UINT(_net_inet_ip_dummynet_fqcodel, OID_AUTO, limit,
-	CTLFLAG_RW, &fq_codel_sysctl.limit, 10240, "limit for FQ_CoDel");
+	CTLFLAG_RW, &fq_codel_sysctl.limit, 10240, "FQ_CoDel queues size limit");
 #endif
 
 /* Drop a packet form the head of codel queue */
@@ -136,15 +178,15 @@ codel_enqueue(struct fq_codel_flow *q, struct mbuf *m, struct fq_codel_si *si)
 
 	/* Add timestamp to mbuf as MTAG */
 	struct m_tag *mtag;
-	mtag = m_tag_locate(m, MTAG_ABI_COMPAT, DN_AQM_MTAG_CODEL, NULL);
+	mtag = m_tag_locate(m, MTAG_ABI_COMPAT, DN_AQM_MTAG_TS, NULL);
 	if (mtag == NULL)
-		mtag = m_tag_alloc(MTAG_ABI_COMPAT, DN_AQM_MTAG_CODEL, sizeof(uint64_t),
+		mtag = m_tag_alloc(MTAG_ABI_COMPAT, DN_AQM_MTAG_TS, sizeof(aqm_time_t),
 			M_NOWAIT);
 	if (mtag == NULL) {
 		m_freem(m); 
 		goto drop;
 	}
-	*(uint64_t *)(mtag + 1) = NOW;
+	*(aqm_time_t *)(mtag + 1) = AQM_UNOW;
 	m_tag_prepend(m, mtag);
 
 	mq_append(&q->mq, m);
@@ -169,7 +211,7 @@ fq_codel_classify_flow(struct mbuf *m, uint16_t fcount, struct fq_codel_si *si)
 	struct ip *ip;
 	struct tcphdr *th;
 	struct udphdr *uh;
-	uint8_t tuple[39];
+	uint8_t tuple[41];
 	uint16_t hash=0;
 
 //#ifdef INET6
@@ -180,28 +222,28 @@ fq_codel_classify_flow(struct mbuf *m, uint16_t fcount, struct fq_codel_si *si)
 	if(isip6) {
 		ip6 = mtod(m, struct ip6_hdr *);
 		*((uint8_t *) &tuple[0]) = ip6->ip6_nxt;
-		*((uint16_t *) &tuple[1]) = si->perturbation;
-		memcpy(&tuple[3],ip6->ip6_src.s6_addr,16);
-		memcpy(&tuple[19],ip6->ip6_dst.s6_addr,16);
+		*((uint32_t *) &tuple[1]) = si->perturbation;
+		memcpy(&tuple[5], ip6->ip6_src.s6_addr, 16);
+		memcpy(&tuple[21], ip6->ip6_dst.s6_addr, 16);
 
 		switch (ip6->ip6_nxt) {
 		case IPPROTO_TCP:
 			th = (struct tcphdr *)(ip6 + 1);
-			*((uint16_t *) &tuple[35]) =th->th_dport;
-			*((uint16_t *) &tuple[37]) = th->th_sport;
+			*((uint16_t *) &tuple[37]) = th->th_dport;
+			*((uint16_t *) &tuple[39]) = th->th_sport;
 			break;
 
 		case IPPROTO_UDP:
 			uh = (struct udphdr *)(ip6 + 1);
-			*((uint16_t *) &tuple[35]) = uh->uh_dport;
-			*((uint16_t *) &tuple[37]) = uh->uh_sport;
+			*((uint16_t *) &tuple[37]) = uh->uh_dport;
+			*((uint16_t *) &tuple[39]) = uh->uh_sport;
 			break;
 		default:
-			memset(&tuple[35],0,4);
-			
+			memset(&tuple[37], 0, 4);
+
 		}
 
-		hash = jenkins_hash(tuple, 39, HASHINIT) %  fcount;
+		hash = jenkins_hash(tuple, 41, HASHINIT) %  fcount;
 		return hash;
 	} 
 //#endif
@@ -209,27 +251,27 @@ fq_codel_classify_flow(struct mbuf *m, uint16_t fcount, struct fq_codel_si *si)
 	/* IPv4 */
 	ip = mtod(m, struct ip *);
 	*((uint8_t *) &tuple[0]) = ip->ip_p;
-	*((uint16_t *) &tuple[1]) = si->perturbation;
-	*((uint32_t *) &tuple[3]) = ip->ip_src.s_addr;
-	*((uint32_t *) &tuple[7]) = ip->ip_dst.s_addr;
+	*((uint32_t *) &tuple[1]) = si->perturbation;
+	*((uint32_t *) &tuple[5]) = ip->ip_src.s_addr;
+	*((uint32_t *) &tuple[9]) = ip->ip_dst.s_addr;
 
 	switch (ip->ip_p) {
 		case IPPROTO_TCP:
 			th = (struct tcphdr *)(ip + 1);
-			*((uint16_t *) &tuple[11]) =th->th_dport;
-			*((uint16_t *) &tuple[13]) = th->th_sport;
+			*((uint16_t *) &tuple[13]) = th->th_dport;
+			*((uint16_t *) &tuple[15]) = th->th_sport;
 			break;
 
 		case IPPROTO_UDP:
 			uh = (struct udphdr *)(ip + 1);
-			*((uint16_t *) &tuple[11]) = uh->uh_dport;
-			*((uint16_t *) &tuple[13]) = uh->uh_sport;
+			*((uint16_t *) &tuple[13]) = uh->uh_dport;
+			*((uint16_t *) &tuple[15]) = uh->uh_sport;
 			break;
 		default:
-			memset(&tuple[11],0,4);
+			memset(&tuple[13], 0, 4);
 
 	}
-	hash = jenkins_hash(tuple, 15, HASHINIT) %  fcount;
+	hash = jenkins_hash(tuple, 17, HASHINIT) %  fcount;
 
 	return hash;
 }
@@ -472,12 +514,12 @@ fq_codel_config(struct dn_schk *_schk)
 		if (ep->par[0] < 0)
 			fqc_cfg->ccfg.target = fq_codel_sysctl.ccfg.target;
 		else
-			fqc_cfg->ccfg.target = ep->par[0];
+			fqc_cfg->ccfg.target = ep->par[0] * AQM_TIME_1US;
 
 		if (ep->par[1] < 0)
 			fqc_cfg->ccfg.interval = fq_codel_sysctl.ccfg.interval;
 		else
-			fqc_cfg->ccfg.interval = ep->par[1];
+			fqc_cfg->ccfg.interval = ep->par[1] * AQM_TIME_1US;
 
 		if (ep->par[2] < 0)
 			fqc_cfg->ccfg.flags = 0;
@@ -501,10 +543,10 @@ fq_codel_config(struct dn_schk *_schk)
 			fqc_cfg->flows_cnt = ep->par[5];
 
 		/* Bound the configurations */
-		fqc_cfg->ccfg.target = BOUND_VAR(fqc_cfg->ccfg.target,1,1000); ;
-		fqc_cfg->ccfg.interval = BOUND_VAR(fqc_cfg->ccfg.interval,1,5000);
+		fqc_cfg->ccfg.target = BOUND_VAR(fqc_cfg->ccfg.target, 1 ,5 * AQM_TIME_1S); ;
+		fqc_cfg->ccfg.interval = BOUND_VAR(fqc_cfg->ccfg.interval, 1, 100 * AQM_TIME_1S);
 
-		fqc_cfg->quantum = BOUND_VAR(fqc_cfg->quantum,256,6056);
+		fqc_cfg->quantum = BOUND_VAR(fqc_cfg->quantum,256, 9000);
 		fqc_cfg->limit= BOUND_VAR(fqc_cfg->limit,1,20480);
 		fqc_cfg->flows_cnt= BOUND_VAR(fqc_cfg->flows_cnt,1,65536);
 	}
@@ -527,8 +569,8 @@ fq_codel_getconfig (struct dn_schk *_schk, struct dn_extra_parms *ep) {
 	fqc_cfg = &schk->cfg;
 
 	strcpy(ep->name, fq_codel_desc.name);
-	ep->par[0] = fqc_cfg->ccfg.target;
-	ep->par[1] = fqc_cfg->ccfg.interval;
+	ep->par[0] = fqc_cfg->ccfg.target / AQM_TIME_1US;
+	ep->par[1] = fqc_cfg->ccfg.interval / AQM_TIME_1US;
 	ep->par[2] = fqc_cfg->ccfg.flags;
 
 	ep->par[3] = fqc_cfg->quantum;

@@ -49,7 +49,6 @@
 
 
 // XXX How to choose MTAG?
-#define DN_AQM_MTAG_CODEL 55345
 #define FIX_POINT_BITS 16 
 
 enum {
@@ -58,31 +57,31 @@ enum {
 
 /* Codel parameters */
 struct dn_aqm_codel_parms {
-	uint32_t	target;
-	uint32_t	interval;
+	aqm_time_t	target;
+	aqm_time_t	interval;
 	uint32_t	flags;
 };
 
 /* codel status variables */
 struct codel_status {
-	uint16_t	count;	/* number of dropped pkts since entering drop state */
+	uint32_t	count;	/* number of dropped pkts since entering drop state */
 	uint16_t	dropping;	/* dropping state */
-	uint32_t	drop_next_time;	/* time for next drop */
-	uint32_t	first_above_time;	/* time for next drop */
+	aqm_time_t	drop_next_time;	/* time for next drop */
+	aqm_time_t	first_above_time;	/* time for first ts over target we observed */
 	uint16_t	isqrt;	/* last isqrt for control low */
 	uint16_t	maxpkt_size;	/* max packet size seen so far */
 };
 
-struct mbuf *codel_extract_head(struct dn_queue *, uint64_t *);
-uint64_t control_law(struct codel_status *, struct dn_aqm_codel_parms *, uint64_t );
+struct mbuf *codel_extract_head(struct dn_queue *, aqm_time_t *);
+aqm_time_t control_law(struct codel_status *, struct dn_aqm_codel_parms *, aqm_time_t );
 
 __inline static struct mbuf *
-codel_dodequeue(struct dn_queue *q, uint64_t now, uint16_t *ok_to_drop)
+codel_dodequeue(struct dn_queue *q, aqm_time_t now, uint16_t *ok_to_drop)
 {
 	struct mbuf * m;
 	struct dn_aqm_codel_parms *cprms;
 	struct codel_status *cst;
-	uint64_t  pkt_ts, sojourn_time;
+	aqm_time_t  pkt_ts, sojourn_time;
 
 	*ok_to_drop = 0;
 	m = codel_extract_head(q, &pkt_ts);
@@ -135,12 +134,12 @@ codel_dequeue(struct dn_queue *q)
 	struct mbuf *m;
 	struct dn_aqm_codel_parms *cprms;
 	struct codel_status *cst;
-	uint64_t now;
+	aqm_time_t now;
 	uint16_t ok_to_drop;
 
 	cst = q->aqm_status;;
 	cprms = q->fs->aqmcfg;
-	now = NOW;
+	now = AQM_UNOW;
 
 	m = codel_dodequeue(q, now, &ok_to_drop);
 	if (cst->dropping) {
@@ -157,17 +156,24 @@ codel_dequeue(struct dn_queue *q)
 		 */
 		while (now >= cst->drop_next_time && cst->dropping) {
 
-			if (!(cprms->flags & CODEL_ECN_ENABLED) || !ecn_mark(m)) {
-				update_stats(q, 0, 1);
-				FREE_PKT(m);
+			/* mark the packet */
+			if (cprms->flags & CODEL_ECN_ENABLED && ecn_mark(m)) {
+				cst->count++;
+				/* schedule the next mark. */
+				cst->drop_next_time = control_law(cst, cprms, cst->drop_next_time);
+				return m;
 			}
 
+			/* drop the packet */
+			update_stats(q, 0, 1);
+			FREE_PKT(m);
 			m = codel_dodequeue(q, now, &ok_to_drop);
+
 			if (!ok_to_drop) {
-				// leave dropping state
+				/* leave dropping state */
 				cst->dropping = false;
 			} else {
-					cst->count++;
+				cst->count++;
 				/* schedule the next drop. */
 				cst->drop_next_time = control_law(cst, cprms, cst->drop_next_time);
 			}
@@ -177,11 +183,16 @@ codel_dequeue(struct dn_queue *q)
 	 * above 'target' for 'interval' so enter dropping state.
 	 */
 	} else if (ok_to_drop) {
-				if (!(cprms->flags & CODEL_ECN_ENABLED) || !ecn_mark(m)) {
-					update_stats(q, 0, 1);
-					FREE_PKT(m);
-				}
-		m = codel_dodequeue(q, now, &ok_to_drop);
+
+		/* if ECN option is disabled or the packet cannot be marked,
+		 * drop the packet and extract another.
+		 */
+		if (!(cprms->flags & CODEL_ECN_ENABLED) || !ecn_mark(m)) {
+			update_stats(q, 0, 1);
+			FREE_PKT(m);
+			m = codel_dodequeue(q, now, &ok_to_drop);
+		}
+
 		cst->dropping = true;
 
 		/* If min went above target close to when it last went
@@ -192,8 +203,8 @@ codel_dequeue(struct dn_queue *q)
 		 * is a good approximation of the time from the last drop
 		 * until now.)
 		 */
-		cst->count = (cst->count > 2 && now - 
-			cst->drop_next_time < 8* cprms->interval)? cst->count - 2 : 1;
+		cst->count = (cst->count > 2 && ((aqm_stime_t)now - 
+			(aqm_stime_t)cst->drop_next_time) < 8* cprms->interval)? cst->count - 2 : 1;
 
 		/* set initial guess for Newton's method isqrt to 0.5 */
 		cst->isqrt = (1UL<<FIX_POINT_BITS) /2; 

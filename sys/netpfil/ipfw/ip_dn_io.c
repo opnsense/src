@@ -154,8 +154,11 @@ SYSBEGIN(f4)
 
 SYSCTL_DECL(_net_inet);
 SYSCTL_DECL(_net_inet_ip);
+#ifdef NEW_AQM
 SYSCTL_NODE(_net_inet_ip, OID_AUTO, dummynet, CTLFLAG_RW, 0, "Dummynet");
-
+#else
+static SYSCTL_NODE(_net_inet_ip, OID_AUTO, dummynet, CTLFLAG_RW, 0, "Dummynet");
+#endif
 /* wrapper to pass dn_cfg fields to SYSCTL_* */
 //#define DC(x)	(&(VNET_NAME(_base_dn_cfg).x))
 #define DC(x)	(&(dn_cfg.x))
@@ -257,12 +260,11 @@ dn_tag_get(struct mbuf *m)
 {
 	struct m_tag *mtag = m_tag_first(m);
 #ifdef NEW_AQM
-	/* XXX: to skip m_tag Codel timestamp. For Debugging only*/
-	#define DN_AQM_MTAG_CODEL 55345
-	if (mtag != NULL && mtag->m_tag_id == DN_AQM_MTAG_CODEL) {
+	/* XXX: to skip ts m_tag. For Debugging only*/
+	if (mtag != NULL && mtag->m_tag_id == DN_AQM_MTAG_TS) {
 		m_tag_delete(m,mtag); 
 		mtag = m_tag_first(m);
-		D("skip codel tag");
+		D("skip TS tag");
 	}
 #endif
 	KASSERT(mtag != NULL &&
@@ -890,6 +892,10 @@ dummynet_io(struct mbuf **m0, int dir, struct ip_fw_args *fwa)
 	if (fs->sched->fp->enqueue(si, q, m)) {
 		/* packet was dropped by enqueue() */
 		m = *m0 = NULL;
+
+		/* dn_enqueue already increases io_pkt_drop */
+		io_pkt_drop--;
+
 		goto dropit;
 	}
 

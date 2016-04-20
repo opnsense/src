@@ -98,7 +98,12 @@ fq_update_stats(struct fq_codel_flow *q, struct fq_codel_si *si, int len,
 	else if(len > 0)
 		inc = 1;
 
-	if(!drop) {
+	if (drop) {
+		si->main_q.ni.drops ++;
+		q->stats.drops ++;
+		si->_si.ni.drops ++;
+		io_pkt_drop ++;
+	} else {
 		/* Update stats for the main queue */
 		si->main_q.ni.length += inc;
 		si->main_q.ni.len_bytes += len;
@@ -123,18 +128,13 @@ fq_update_stats(struct fq_codel_flow *q, struct fq_codel_si *si, int len,
 		si->_si.ni.tot_pkts ++;
 	}
 
-	if (drop) {
-		si->main_q.ni.drops ++;
-		q->stats.drops ++;
-		si->_si.ni.drops ++;
-		io_pkt_drop ++;
-	}
+
 
 }
 
 /* extract the head of fq_codel sub-queue */
 __inline static struct mbuf *
-fq_codel_extract_head(struct fq_codel_flow *q, uint64_t *pkt_ts, struct fq_codel_si *si)
+fq_codel_extract_head(struct fq_codel_flow *q, aqm_time_t *pkt_ts, struct fq_codel_si *si)
 {
 	struct mbuf *m = q->mq.head;
 
@@ -149,12 +149,12 @@ fq_codel_extract_head(struct fq_codel_flow *q, uint64_t *pkt_ts, struct fq_codel
 
 	/* extract packet timestamp*/
 	struct m_tag *mtag;
-	mtag = m_tag_locate(m, MTAG_ABI_COMPAT, DN_AQM_MTAG_CODEL, NULL);
+	mtag = m_tag_locate(m, MTAG_ABI_COMPAT, DN_AQM_MTAG_TS, NULL);
 	if (mtag == NULL){
 		D("timestamp tag is not found!");
 		*pkt_ts = 0;
 	} else {
-		*pkt_ts = *(uint64_t *)(mtag + 1);
+		*pkt_ts = *(aqm_time_t *)(mtag + 1);
 		m_tag_delete(m,mtag); 
 	}
 

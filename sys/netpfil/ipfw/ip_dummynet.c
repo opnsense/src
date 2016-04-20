@@ -1,5 +1,5 @@
 /*-
- * Codel/FQ_Codel Code:
+ * Codel/FQ_Codel and PIE/FQ-PIE Code:
  * Copyright (C) 2016 Centre for Advanced Internet Architectures,
  *  Swinburne University of Technology, Melbourne, Australia.
  * Portions of this code were made possible in part by a gift from 
