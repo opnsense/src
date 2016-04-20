@@ -73,7 +73,42 @@
 static struct dn_aqm codel_desc;
 
 /* default codel parameters */
-struct dn_aqm_codel_parms codel_sysctl = {5, 100, 0};
+struct dn_aqm_codel_parms codel_sysctl = {5000 * AQM_TIME_1US, 100000 * AQM_TIME_1US, 0};
+
+static int
+codel_sysctl_interval_handler(SYSCTL_HANDLER_ARGS)
+{
+	int error;
+	long  value;
+
+	value = codel_sysctl.interval;
+	value /= AQM_TIME_1US;
+	error = sysctl_handle_long(oidp, &value, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	if (value < 1 || value > 100 * AQM_TIME_1S)
+		return (EINVAL);
+	codel_sysctl.interval = value * AQM_TIME_1US ;
+	return (0);
+}
+
+static int
+codel_sysctl_target_handler(SYSCTL_HANDLER_ARGS)
+{
+	int error;
+	long  value;
+
+	value = codel_sysctl.target;
+	value /= AQM_TIME_1US;
+	error = sysctl_handle_long(oidp, &value, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	D("%ld", value);
+	if (value < 1 || value > 5 * AQM_TIME_1S)
+		return (EINVAL);
+	codel_sysctl.target = value * AQM_TIME_1US ;
+	return (0);
+}
 
 /* defining Codel sysctl variables */
 SYSBEGIN(f4)
@@ -85,10 +120,13 @@ static SYSCTL_NODE(_net_inet_ip_dummynet, OID_AUTO,
 	codel, CTLFLAG_RW, 0, "CODEL");
 
 #ifdef SYSCTL_NODE
-SYSCTL_INT(_net_inet_ip_dummynet_codel, OID_AUTO, target,
-	CTLFLAG_RW, &codel_sysctl.target, 0, "Target ms for CoDel");
-SYSCTL_INT(_net_inet_ip_dummynet_codel, OID_AUTO, interval,
-	CTLFLAG_RW, &codel_sysctl.interval, 0, "Interval ms for CoDel");
+SYSCTL_PROC(_net_inet_ip_dummynet_codel, OID_AUTO, target, CTLTYPE_LONG | CTLFLAG_RW,
+	NULL, 0, codel_sysctl_target_handler, "L",
+	"CoDel target in microsecond");
+
+SYSCTL_PROC(_net_inet_ip_dummynet_codel, OID_AUTO, interval, CTLTYPE_LONG | CTLFLAG_RW,
+	NULL, 0, codel_sysctl_interval_handler, "L",
+	"CoDel interval in microsecond");
 #endif
 
 /* This function computes codel_interval/sqrt(count) 
@@ -96,12 +134,12 @@ SYSCTL_INT(_net_inet_ip_dummynet_codel, OID_AUTO, interval,
  * http://betterexplained.com/articles/
  * 	understanding-quakes-fast-inverse-square-root/ 
  */
-uint64_t 
+aqm_time_t 
 control_law(struct codel_status *cst, struct dn_aqm_codel_parms *cprms,
-	uint64_t t)
+	aqm_time_t t)
 {
-	uint16_t count;
-	uint32_t temp;
+	uint32_t count;
+	uint64_t temp;
 	count = cst->count;
 
 	/* we don't calculate isqrt(1) to get more accurate result*/
@@ -112,25 +150,33 @@ control_law(struct codel_status *cst, struct dn_aqm_codel_parms *cprms,
 		return t + cprms->interval;
 	}
 
-	/* newguess =g(1.5 - 0.5*c*g^2)
+	/* newguess = g(1.5 - 0.5*c*g^2)
 	 * Multiplying both sides by 2 to make all the constants intergers
 	 * newguess * 2  = g(3 - c*g^2) g=old guess, c=count
 	 * So, newguess = newguess /2
 	 * Fixed point operations are used here.  
 	 */
-	/* calculate g^2 */
-	temp=  ((uint32_t)cst->isqrt * cst->isqrt) 
-		>> FIX_POINT_BITS;
-	/* calculate (3 - c*g^2) i.e. (3 - c * temp) */
-	 temp = (3UL<< FIX_POINT_BITS) - (count * temp);
-	/* divide by 2 because we multiplied the original equation by two */
-	temp>>=1; 
-	/* calculate g(3 - c*g^2) i.e. g*temp */
-	 temp = (cst->isqrt * temp) >> FIX_POINT_BITS;
+
+	/* Calculate g^2 */
+	temp = (uint32_t) cst->isqrt * cst->isqrt;
+
+	/* Calculate (3 - c*g^2) i.e. (3 - c * temp) */
+	 temp = (3ULL<< (FIX_POINT_BITS*2)) - (count * temp);
+
+	/* 
+	 * Divide by 2 because we multiplied the original equation by two 
+	 * Also, we shift the result by 8 bits to prevent overflow. 
+	 * */
+	temp >>= (1 + 8); 
+
+	/*  Now, temp = (1.5 - 0.5*c*g^2)
+	 * Calculate g (1.5 - 0.5*c*g^2) i.e. g * temp 
+	 */
+	 temp = (cst->isqrt * temp) >> (FIX_POINT_BITS + FIX_POINT_BITS - 8);
 	 cst->isqrt = temp;
 
 	 /* calculate codel_interval/sqrt(count) */
-	 return t + (uint16_t)((cprms->interval * temp) >> FIX_POINT_BITS);
+	 return t + ((cprms->interval * temp) >> FIX_POINT_BITS);
 }
 
 /*
@@ -139,7 +185,7 @@ control_law(struct codel_status *cst, struct dn_aqm_codel_parms *cprms,
  * Also extract packet's timestamp from mtag.
  */
 struct mbuf *
-codel_extract_head(struct dn_queue *q, uint64_t *pkt_ts)
+codel_extract_head(struct dn_queue *q, aqm_time_t *pkt_ts)
 {
 	struct m_tag *mtag;
 	struct mbuf *m = q->mq.head;
@@ -155,12 +201,12 @@ codel_extract_head(struct dn_queue *q, uint64_t *pkt_ts)
 			q->q_time = dn_cfg.curr_time;
 
 	/* extract packet TS*/
-	mtag = m_tag_locate(m, MTAG_ABI_COMPAT, DN_AQM_MTAG_CODEL, NULL);
+	mtag = m_tag_locate(m, MTAG_ABI_COMPAT, DN_AQM_MTAG_TS, NULL);
 	if (mtag == NULL) {
 		D("Codel timestamp mtag not found!");
 		*pkt_ts = 0;
 	} else {
-		*pkt_ts = *(uint64_t *)(mtag + 1);
+		*pkt_ts = *(aqm_time_t *)(mtag + 1);
 		m_tag_delete(m,mtag); 
 	}
 
@@ -174,7 +220,6 @@ static int
 aqm_codel_enqueue(struct dn_queue *q, struct mbuf *m)
 {
 	struct dn_fs *f;
-
 	uint64_t len;
 	struct codel_status *cst;	/*codel status variables */
 	struct m_tag *mtag;
@@ -203,16 +248,16 @@ aqm_codel_enqueue(struct dn_queue *q, struct mbuf *m)
 	}
 
 	/* Add timestamp as mtag */
-	mtag = m_tag_locate(m, MTAG_ABI_COMPAT, DN_AQM_MTAG_CODEL, NULL);
+	mtag = m_tag_locate(m, MTAG_ABI_COMPAT, DN_AQM_MTAG_TS, NULL);
 	if (mtag == NULL)
-		mtag = m_tag_alloc(MTAG_ABI_COMPAT, DN_AQM_MTAG_CODEL,
-			sizeof(uint64_t), M_NOWAIT);
+		mtag = m_tag_alloc(MTAG_ABI_COMPAT, DN_AQM_MTAG_TS,
+			sizeof(aqm_time_t), M_NOWAIT);
 	if (mtag == NULL) {
 		m_freem(m); 
 		goto drop;
 	}
 
-	*(uint64_t *)(mtag + 1) = NOW;
+	*(aqm_time_t *)(mtag + 1) = AQM_UNOW;
 	m_tag_prepend(m, mtag);
 
 	mq_append(&q->mq, m);
@@ -226,7 +271,7 @@ drop:
 }
 
 
-/* Dequeue a pcaket form queue q */
+/* Dequeue a pcaket from queue q */
 static struct mbuf * 
 aqm_codel_dequeue(struct dn_queue *q)
 {
@@ -324,12 +369,12 @@ aqm_codel_config(struct dn_fsk* fs, struct dn_extra_parms *ep, int len)
 	if (ep->par[0] < 0)
 		ccfg->target = codel_sysctl.target;
 	else
-		ccfg->target = ep->par[0];
+		ccfg->target = ep->par[0] * AQM_TIME_1US;
 
 	if (ep->par[1] < 0)
 		ccfg->interval = codel_sysctl.interval;
 	else
-		ccfg->interval = ep->par[1];
+		ccfg->interval = ep->par[1] * AQM_TIME_1US;
 
 	if (ep->par[2] < 0)
 		ccfg->flags = 0;
@@ -337,8 +382,8 @@ aqm_codel_config(struct dn_fsk* fs, struct dn_extra_parms *ep, int len)
 		ccfg->flags = ep->par[2];
 
 	/* bound codel configurations */
-	ccfg->target = BOUND_VAR(ccfg->target,1,1000);
-	ccfg->interval = BOUND_VAR(ccfg->interval,1,5000);
+	ccfg->target = BOUND_VAR(ccfg->target,1, 5 * AQM_TIME_1S);
+	ccfg->interval = BOUND_VAR(ccfg->interval,1, 5 * AQM_TIME_1S);
 	/* increase config reference counter */
 	codel_desc.cfg_ref_count++;
 
@@ -374,8 +419,8 @@ aqm_codel_getconfig(struct dn_fsk *fs, struct dn_extra_parms * ep)
 	if (fs->aqmcfg) {
 		strcpy(ep->name, codel_desc.name);
 		ccfg = fs->aqmcfg;
-		ep->par[0] = ccfg->target;
-		ep->par[1] = ccfg->interval;
+		ep->par[0] = ccfg->target / AQM_TIME_1US;
+		ep->par[1] = ccfg->interval / AQM_TIME_1US;
 		ep->par[2] = ccfg->flags;
 		return 0;
 	}

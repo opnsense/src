@@ -48,12 +48,12 @@
 #define _IP_DN_SCHED_FQ_CODEL_HELPER_H
 
 __inline static struct mbuf *
-fqc_dodequeue(struct fq_codel_flow *q, uint64_t now, uint16_t *ok_to_drop,
+fqc_dodequeue(struct fq_codel_flow *q, aqm_time_t now, uint16_t *ok_to_drop,
 	struct fq_codel_si *si)
 {
 	struct mbuf * m;
 	struct fq_codel_schk *schk = (struct fq_codel_schk *)(si->_si.sched+1);
-	uint64_t  pkt_ts, sojourn_time;
+	aqm_time_t  pkt_ts, sojourn_time;
 
 	*ok_to_drop = 0;
 	m = fq_codel_extract_head(q, &pkt_ts, si);
@@ -100,14 +100,14 @@ fqc_codel_dequeue(struct fq_codel_flow *q, struct fq_codel_si *si)
 	struct mbuf *m;
 	struct dn_aqm_codel_parms *cprms;
 	struct codel_status *cst;
-	uint64_t now;
+	aqm_time_t now;
 	uint16_t ok_to_drop;
 	struct fq_codel_schk *schk = (struct fq_codel_schk *)(si->_si.sched+1);
 
 	cst = &q->cst;
 	cprms = &schk->cfg.ccfg;
 
-	now = NOW;
+	now = AQM_UNOW;
 	m = fqc_dodequeue(q, now, &ok_to_drop, si);
 
 	if (cst->dropping) {
@@ -123,17 +123,25 @@ fqc_codel_dequeue(struct fq_codel_flow *q, struct fq_codel_si *si)
 		 * happen now, hence the 'while' loop.
 		 */
 		while (now >= cst->drop_next_time && cst->dropping) {
-			if (!(cprms->flags & CODEL_ECN_ENABLED) || !ecn_mark(m)) {
-				fq_update_stats(q, si, 0, 1);
-				m_freem(m);
+
+			/* mark the packet */
+			if (cprms->flags & CODEL_ECN_ENABLED && ecn_mark(m)) {
+				cst->count++;
+				/* schedule the next mark. */
+				cst->drop_next_time = control_law(cst, cprms, cst->drop_next_time);
+				return m;
 			}
 
+			/* drop the packet */
+			fq_update_stats(q, si, 0, 1);
+			m_freem(m);
 			m = fqc_dodequeue(q, now, &ok_to_drop, si);
+
 			if (!ok_to_drop) {
 				/* leave dropping state */
 				cst->dropping = false;
 			} else {
-					cst->count++;
+				cst->count++;
 				/* schedule the next drop. */
 				cst->drop_next_time = control_law(cst, cprms, cst->drop_next_time);
 			}
@@ -143,11 +151,16 @@ fqc_codel_dequeue(struct fq_codel_flow *q, struct fq_codel_si *si)
 	 * above 'target' for 'interval' so enter dropping state.
 	 */
 	} else if (ok_to_drop) {
-				if (!(cprms->flags & CODEL_ECN_ENABLED) || !ecn_mark(m)) {
-					fq_update_stats(q, si, 0, 1);
-					m_freem(m);
-				}
-		m = fqc_dodequeue(q, now, &ok_to_drop,si);
+
+		/* if ECN option is disabled or the packet cannot be marked,
+		 * drop the packet and extract another.
+		 */
+		if (!(cprms->flags & CODEL_ECN_ENABLED) || !ecn_mark(m)) {
+			fq_update_stats(q, si, 0, 1);
+			m_freem(m);
+			m = fqc_dodequeue(q, now, &ok_to_drop,si);
+		}
+
 		cst->dropping = true;
 
 		/* If min went above target close to when it last went
@@ -158,8 +171,8 @@ fqc_codel_dequeue(struct fq_codel_flow *q, struct fq_codel_si *si)
 		 * is a good approximation of the time from the last drop
 		 * until now.)
 		 */
-		cst->count = (cst->count > 2 && now - 
-			cst->drop_next_time < 8* cprms->interval)? cst->count - 2 : 1;
+		cst->count = (cst->count > 2 && ((aqm_stime_t)now - 
+			(aqm_stime_t)cst->drop_next_time) < 8* cprms->interval)? cst->count - 2 : 1;
 		/* set initial guess for Newton's method isqrt to 0.5 */
 		cst->isqrt = (1UL<<FIX_POINT_BITS) /2; 
 		cst->drop_next_time = control_law(cst, cprms, now);
