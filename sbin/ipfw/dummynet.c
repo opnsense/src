@@ -1762,6 +1762,7 @@ end_mask:
 		errx(EX_USAGE, "enable red/gred for ECN");
 
 #endif
+
 	    if (fs->flags & DN_IS_RED) {
 		size_t len;
 		int lookup_depth, avg_pkt_size;

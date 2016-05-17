@@ -241,7 +241,6 @@ struct dn_fsk { /* kernel side of a flowset */
 #ifdef NEW_AQM
 	struct dn_aqm *aqmfp;	/* Pointer to AQM functions */
 	void *aqmcfg;	/* configuration parameters for AQM */
-	uint32_t nr_of_qes;	/* number of queues used by this fs */
 #endif
 };
 

@@ -41,7 +41,6 @@
 #include <netinet/ip_var.h>		/* ipfw_rule_ref */
 #include <netinet/ip_fw.h>	/* flow_id */
 #include <netinet/ip_dummynet.h>
-
 #include <netpfil/ipfw/dn_heap.h>
 #include <netpfil/ipfw/ip_dn_private.h>
 #ifdef NEW_AQM

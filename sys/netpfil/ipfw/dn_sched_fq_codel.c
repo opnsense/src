@@ -81,8 +81,8 @@ static struct dn_alg fq_codel_desc;
 
 /* fq_codel default parameters including codel */
 struct dn_sch_fq_codel_parms 
-fq_codel_sysctl = {{5000 * AQM_TIME_1US, 100000 * AQM_TIME_1US, CODEL_ECN_ENABLED},
-		1024, 10240, 1514};
+fq_codel_sysctl = {{5000 * AQM_TIME_1US, 100000 * AQM_TIME_1US,
+	CODEL_ECN_ENABLED}, 1024, 10240, 1514};
 
 static int
 fqcodel_sysctl_interval_handler(SYSCTL_HANDLER_ARGS)
@@ -126,21 +126,23 @@ SYSBEGIN(f4)
 SYSCTL_DECL(_net_inet);
 SYSCTL_DECL(_net_inet_ip);
 SYSCTL_DECL(_net_inet_ip_dummynet);
-static SYSCTL_NODE(_net_inet_ip_dummynet, OID_AUTO, fqcodel, CTLFLAG_RW, 0, "FQ_CODEL");
+static SYSCTL_NODE(_net_inet_ip_dummynet, OID_AUTO, fqcodel,
+	CTLFLAG_RW, 0, "FQ_CODEL");
 
 #ifdef SYSCTL_NODE
 	
-SYSCTL_PROC(_net_inet_ip_dummynet_fqcodel, OID_AUTO, target, CTLTYPE_LONG | CTLFLAG_RW,
-	NULL, 0, fqcodel_sysctl_target_handler, "L",
+SYSCTL_PROC(_net_inet_ip_dummynet_fqcodel, OID_AUTO, target,
+	CTLTYPE_LONG | CTLFLAG_RW, NULL, 0, fqcodel_sysctl_target_handler, "L",
 	"FQ_CoDel target in microsecond");
-SYSCTL_PROC(_net_inet_ip_dummynet_fqcodel, OID_AUTO, interval, CTLTYPE_LONG | CTLFLAG_RW,
-	NULL, 0, fqcodel_sysctl_interval_handler, "L",
+SYSCTL_PROC(_net_inet_ip_dummynet_fqcodel, OID_AUTO, interval,
+	CTLTYPE_LONG | CTLFLAG_RW, NULL, 0, fqcodel_sysctl_interval_handler, "L",
 	"FQ_CoDel interval in microsecond");
 	
 SYSCTL_UINT(_net_inet_ip_dummynet_fqcodel, OID_AUTO, quantum,
 	CTLFLAG_RW, &fq_codel_sysctl.quantum, 1514, "FQ_CoDel quantum");
 SYSCTL_UINT(_net_inet_ip_dummynet_fqcodel, OID_AUTO, flows,
-	CTLFLAG_RW, &fq_codel_sysctl.flows_cnt, 1024, "Number of queues for FQ_CoDel");
+	CTLFLAG_RW, &fq_codel_sysctl.flows_cnt, 1024, 
+	"Number of queues for FQ_CoDel");
 SYSCTL_UINT(_net_inet_ip_dummynet_fqcodel, OID_AUTO, limit,
 	CTLFLAG_RW, &fq_codel_sysctl.limit, 10240, "FQ_CoDel queues size limit");
 #endif
@@ -160,7 +162,7 @@ codel_drop_head(struct fq_codel_flow *q, struct fq_codel_si *si)
 	if (si->main_q.ni.length == 0) /* queue is now idle */
 			si->main_q.q_time = dn_cfg.curr_time;
 
-	m_freem(m);
+	FREE_PKT(m);
 }
 
 /* Enqueue a packet 'm' to a queue 'q' and add timestamp to that packet.
@@ -306,7 +308,7 @@ fq_codel_enqueue(struct dn_sch_inst *_si, struct dn_queue *_q,
 	if (drop)
 		return 1;
 	
-	/* If the flow (sub-queue) is not active ,then add it to tail of
+	/* If the flow (sub-queue) is not active ,then add it to the tail of
 	 * new flows list, initialize and activate it.
 	 */
 	if (!si->flows[idx].active ) {
@@ -315,12 +317,13 @@ fq_codel_enqueue(struct dn_sch_inst *_si, struct dn_queue *_q,
 		si->flows[idx].cst.dropping = false;
 		si->flows[idx].cst.first_above_time = 0;
 		si->flows[idx].active = 1;
+		//D("activate %d",idx);
 	}
 
 	/* check the limit for all queues and remove a packet from the
 	 * largest one 
 	 */
-	if (mainq->ni.length > schk->cfg.limit) {
+	if (mainq->ni.length > schk->cfg.limit) { D("over limit");
 		/* find first active flow */
 		for (maxidx = 0; maxidx < schk->cfg.flows_cnt; maxidx++)
 			if (si->flows[maxidx].active)
@@ -332,6 +335,7 @@ fq_codel_enqueue(struct dn_sch_inst *_si, struct dn_queue *_q,
 					si->flows[maxidx].stats.length)
 					maxidx = i;
 			codel_drop_head(&si->flows[maxidx], si);
+			D("maxidx = %d",maxidx);
 			drop = 1;
 		}
 	}
@@ -463,8 +467,6 @@ fq_codel_new_sched(struct dn_sch_inst *_si)
 
 	/* init the flows (sub-queues) */
 	for (i = 0; i < schk->cfg.flows_cnt; i++) {
-		/* init mq queue */
-		memset(&si->flows[i], 0, sizeof(si->flows[i]));
 		/* init codel */
 		si->flows[i].cst.maxpkt_size = 500;
 	}
@@ -543,10 +545,12 @@ fq_codel_config(struct dn_schk *_schk)
 			fqc_cfg->flows_cnt = ep->par[5];
 
 		/* Bound the configurations */
-		fqc_cfg->ccfg.target = BOUND_VAR(fqc_cfg->ccfg.target, 1 ,5 * AQM_TIME_1S); ;
-		fqc_cfg->ccfg.interval = BOUND_VAR(fqc_cfg->ccfg.interval, 1, 100 * AQM_TIME_1S);
+		fqc_cfg->ccfg.target = BOUND_VAR(fqc_cfg->ccfg.target, 1 , 
+			5 * AQM_TIME_1S); ;
+		fqc_cfg->ccfg.interval = BOUND_VAR(fqc_cfg->ccfg.interval, 1,
+			100 * AQM_TIME_1S);
 
-		fqc_cfg->quantum = BOUND_VAR(fqc_cfg->quantum,256, 9000);
+		fqc_cfg->quantum = BOUND_VAR(fqc_cfg->quantum,1, 9000);
 		fqc_cfg->limit= BOUND_VAR(fqc_cfg->limit,1,20480);
 		fqc_cfg->flows_cnt= BOUND_VAR(fqc_cfg->flows_cnt,1,65536);
 	}

@@ -146,7 +146,7 @@ update_stats(struct dn_queue *q, int len, int drop)
 		sni->length += inc;
 		sni->len_bytes += len;
 	}
-
+	/* tot_pkts  is updated in dn_enqueue function */
 }
 
 

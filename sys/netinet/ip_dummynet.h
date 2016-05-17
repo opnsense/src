@@ -111,9 +111,9 @@ enum {	/* user flags */
 	DN_IS_RED	= 0x0020,
 	DN_IS_GENTLE_RED= 0x0040,
 	DN_IS_ECN	= 0x0080,
-#ifdef NEW_AQM
-	DN_IS_AQM = 0x0100,	/* AQMs: e.g Codel & PIE */
-#endif
+	#ifdef NEW_AQM
+	DN_IS_AQM = 0x0100,     /* AQMs: e.g Codel & PIE */
+	#endif
 	DN_PIPE_CMD	= 0x1000,	/* pipe config... */
 };
 

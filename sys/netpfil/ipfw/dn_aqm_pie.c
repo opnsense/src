@@ -164,25 +164,31 @@ static SYSCTL_NODE(_net_inet_ip_dummynet, OID_AUTO,
 	pie, CTLFLAG_RW, 0, "PIE");
 
 #ifdef SYSCTL_NODE
-SYSCTL_PROC(_net_inet_ip_dummynet_pie, OID_AUTO, target, CTLTYPE_LONG | CTLFLAG_RW,
-	NULL, 0, pie_sysctl_target_tupdate_maxb_handler, "L",
+SYSCTL_PROC(_net_inet_ip_dummynet_pie, OID_AUTO, target,
+	CTLTYPE_LONG | CTLFLAG_RW, NULL, 0, 
+	pie_sysctl_target_tupdate_maxb_handler, "L",
 	"queue target in microsecond");
-SYSCTL_PROC(_net_inet_ip_dummynet_pie, OID_AUTO, tupdate, CTLTYPE_LONG | CTLFLAG_RW,
-	NULL, 0, pie_sysctl_target_tupdate_maxb_handler, "L",
+SYSCTL_PROC(_net_inet_ip_dummynet_pie, OID_AUTO, tupdate,
+	CTLTYPE_LONG | CTLFLAG_RW, NULL, 0,
+	pie_sysctl_target_tupdate_maxb_handler, "L",
 	"the frequency of drop probability calculation in microsecond");
-SYSCTL_PROC(_net_inet_ip_dummynet_pie, OID_AUTO, max_burst, CTLTYPE_LONG | CTLFLAG_RW,
-	NULL, 0, pie_sysctl_target_tupdate_maxb_handler, "L",
+SYSCTL_PROC(_net_inet_ip_dummynet_pie, OID_AUTO, max_burst,
+	CTLTYPE_LONG | CTLFLAG_RW, NULL, 0,
+	pie_sysctl_target_tupdate_maxb_handler, "L",
 	"Burst allowance interval in microsecond");
 
-SYSCTL_PROC(_net_inet_ip_dummynet_pie, OID_AUTO, max_ecnth, CTLTYPE_LONG | CTLFLAG_RW,
-	NULL, 0, pie_sysctl_max_ecnth_handler, "L",
+SYSCTL_PROC(_net_inet_ip_dummynet_pie, OID_AUTO, max_ecnth,
+	CTLTYPE_LONG | CTLFLAG_RW, NULL, 0,
+	pie_sysctl_max_ecnth_handler, "L",
 	"ECN safeguard threshold scaled by 1000");
 
-SYSCTL_PROC(_net_inet_ip_dummynet_pie, OID_AUTO, alpha, CTLTYPE_LONG | CTLFLAG_RW,
-	NULL, 0, pie_sysctl_alpha_beta_handler, "L",
+SYSCTL_PROC(_net_inet_ip_dummynet_pie, OID_AUTO, alpha,
+	CTLTYPE_LONG | CTLFLAG_RW, NULL, 0,
+	pie_sysctl_alpha_beta_handler, "L",
 	"PIE alpha scaled by 1000");
-SYSCTL_PROC(_net_inet_ip_dummynet_pie, OID_AUTO, beta, CTLTYPE_LONG | CTLFLAG_RW,
-	NULL, 0, pie_sysctl_alpha_beta_handler, "L",
+SYSCTL_PROC(_net_inet_ip_dummynet_pie, OID_AUTO, beta,
+	CTLTYPE_LONG | CTLFLAG_RW, NULL, 0,
+	pie_sysctl_alpha_beta_handler, "L",
 	"beta scaled by 1000");
 #endif
 
@@ -211,7 +217,7 @@ calculate_drop_prob(void *x)
 		mtx_unlock(&pst->lock_mtx);
 		mtx_destroy(&pst->lock_mtx);
 		free(x, M_DUMMYNET);
-		pst->pq->aqm_status = NULL;
+		//pst->pq->aqm_status = NULL;
 		pie_desc.ref_count--;
 		return;
 	}
@@ -222,8 +228,8 @@ calculate_drop_prob(void *x)
 
 	/* calculate current qdelay */
 	if (pprms->flags & PIE_DEPRATEEST_ENABLED) {
-		pst->current_qdelay = ((uint64_t)pst->pq->ni.len_bytes * pst->avg_dq_time) 
-			>> PIE_DQ_THRESHOLD_BITS;
+		pst->current_qdelay = ((uint64_t)pst->pq->ni.len_bytes *
+			pst->avg_dq_time) >> PIE_DQ_THRESHOLD_BITS;
 	}
 
 	/* calculate drop probability */
@@ -232,7 +238,7 @@ calculate_drop_prob(void *x)
 	p +=(int64_t) pprms->beta * 
 		((int64_t)pst->current_qdelay - (int64_t)pst->qdelay_old); 
 		
-	/* We PIE_MAX_PROB shift by 12-bits to increase the division precision  */
+	/* We PIE_MAX_PROB shift by 12-bits to increase the division precision */
 	p *= (PIE_MAX_PROB << 12) / AQM_TIME_1S;
 
 	/* auto-tune drop probability */
@@ -472,9 +478,16 @@ aqm_pie_enqueue(struct dn_queue *q, struct mbuf* m)
 	struct dn_aqm_pie_parms *pprms;
 	int t;
 
-	f = &(q->fs->fs);
 	len = m->m_pkthdr.len;
 	pst  = q->aqm_status;
+	if(!pst) {
+		DX(2, "PIE queue is not initialized\n");
+		update_stats(q, 0, 1);
+		FREE_PKT(m);
+		return 1;
+	}
+
+	f = &(q->fs->fs);
 	pprms = pst->parms;
 	t = ENQUE;
 
@@ -536,7 +549,7 @@ aqm_pie_enqueue(struct dn_queue *q, struct mbuf* m)
 		update_stats(q, len, 0);
 		return (0);
 	} else {
-		update_stats(q, len, 1);
+		update_stats(q, 0, 1);
 
 		/* reset accu_prob after packet drop */
 		pst->accu_prob = 0;
@@ -578,8 +591,6 @@ aqm_pie_init(struct dn_queue *q)
 		/* increase reference count for PIE module */
 		pie_desc.ref_count++;
 		
-		/* increase reference count for fs */
-		q->fs->nr_of_qes++;
 		pst->pq = q;
 		pst->parms = pprms;
 		
@@ -615,7 +626,7 @@ aqm_pie_cleanup(struct dn_queue *q)
 	}
 	struct pie_status *pst  = q->aqm_status;
 	if(!pst) {
-		D("queue is already cleaned up");
+		//D("queue is already cleaned up");
 		return 0;
 	}
 	if(!q->fs || !q->fs->aqmcfg) {
@@ -628,19 +639,17 @@ aqm_pie_cleanup(struct dn_queue *q)
 	}
 
 	mtx_lock(&pst->lock_mtx);
-	/* we decrease no.of queues for fs anyway*/
-	q->fs->nr_of_qes--;
-	
+
 	/* stop callout timer */
 	if (callout_stop(&pst->aqm_pie_callout) || !(pst->sflags & PIE_ACTIVE)) {
 		mtx_unlock(&pst->lock_mtx);
 		mtx_destroy(&pst->lock_mtx);
 		free(q->aqm_status, M_DUMMYNET);
 		q->aqm_status = NULL;
-
 		pie_desc.ref_count--;
 		return 0;
 	} else {
+		q->aqm_status = NULL;
 		mtx_unlock(&pst->lock_mtx);
 		DX(2, "PIE callout has not been stoped from cleanup!");
 		return EBUSY;
@@ -733,7 +742,7 @@ aqm_pie_config(struct dn_fsk* fs, struct dn_extra_parms *ep, int len)
 static int
 aqm_pie_deconfig(struct dn_fsk* fs)
 {
-	if (fs && fs->aqmcfg && fs->nr_of_qes == 0) {
+	if (fs && fs->aqmcfg) {
 		free(fs->aqmcfg, M_DUMMYNET);
 		fs->aqmcfg = NULL;
 		pie_desc.cfg_ref_count--;

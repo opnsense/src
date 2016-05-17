@@ -173,8 +173,9 @@ fqc_codel_dequeue(struct fq_codel_flow *q, struct fq_codel_si *si)
 		 */
 		cst->count = (cst->count > 2 && ((aqm_stime_t)now - 
 			(aqm_stime_t)cst->drop_next_time) < 8* cprms->interval)? cst->count - 2 : 1;
-		/* set initial guess for Newton's method isqrt to 0.5 */
-		cst->isqrt = (1UL<<FIX_POINT_BITS) /2; 
+
+		/* we don't have to set initial guess for Newton's method isqrt as
+		 * we initilaize  isqrt in control_law function when count == 1 */
 		cst->drop_next_time = control_law(cst, cprms, now);
 	}
 

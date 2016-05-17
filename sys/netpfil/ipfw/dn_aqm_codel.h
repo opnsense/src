@@ -73,7 +73,8 @@ struct codel_status {
 };
 
 struct mbuf *codel_extract_head(struct dn_queue *, aqm_time_t *);
-aqm_time_t control_law(struct codel_status *, struct dn_aqm_codel_parms *, aqm_time_t );
+aqm_time_t control_law(struct codel_status *,
+	struct dn_aqm_codel_parms *, aqm_time_t );
 
 __inline static struct mbuf *
 codel_dodequeue(struct dn_queue *q, aqm_time_t now, uint16_t *ok_to_drop)
@@ -160,7 +161,8 @@ codel_dequeue(struct dn_queue *q)
 			if (cprms->flags & CODEL_ECN_ENABLED && ecn_mark(m)) {
 				cst->count++;
 				/* schedule the next mark. */
-				cst->drop_next_time = control_law(cst, cprms, cst->drop_next_time);
+				cst->drop_next_time = control_law(cst, cprms,
+					cst->drop_next_time);
 				return m;
 			}
 
@@ -175,7 +177,8 @@ codel_dequeue(struct dn_queue *q)
 			} else {
 				cst->count++;
 				/* schedule the next drop. */
-				cst->drop_next_time = control_law(cst, cprms, cst->drop_next_time);
+				cst->drop_next_time = control_law(cst, cprms,
+					cst->drop_next_time);
 			}
 		}
 	/* If we get here we're not in dropping state. The 'ok_to_drop'
@@ -204,10 +207,10 @@ codel_dequeue(struct dn_queue *q)
 		 * until now.)
 		 */
 		cst->count = (cst->count > 2 && ((aqm_stime_t)now - 
-			(aqm_stime_t)cst->drop_next_time) < 8* cprms->interval)? cst->count - 2 : 1;
-
-		/* set initial guess for Newton's method isqrt to 0.5 */
-		cst->isqrt = (1UL<<FIX_POINT_BITS) /2; 
+			(aqm_stime_t)cst->drop_next_time) < 8* cprms->interval)?
+				cst->count - 2 : 1;
+		/* we don't have to set initial guess for Newton's method isqrt as
+		 * we initilaize  isqrt in control_law function when count == 1 */
 		cst->drop_next_time = control_law(cst, cprms, now);
 	}
 	

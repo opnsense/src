@@ -44,7 +44,6 @@
 #ifdef _KERNEL
 #include <sys/malloc.h>
 #include <sys/socket.h>
-//#include <sys/socketvar.h>
 #include <sys/kernel.h>
 #include <sys/mbuf.h>
 #include <sys/lock.h>
@@ -234,26 +233,33 @@ static SYSCTL_NODE(_net_inet_ip_dummynet, OID_AUTO, fqpie,
 
 #ifdef SYSCTL_NODE
 	
-SYSCTL_PROC(_net_inet_ip_dummynet_fqpie, OID_AUTO, target, CTLTYPE_LONG | CTLFLAG_RW,
-	NULL, 0, fqpie_sysctl_target_tupdate_maxb_handler, "L",
+SYSCTL_PROC(_net_inet_ip_dummynet_fqpie, OID_AUTO, target,
+	CTLTYPE_LONG | CTLFLAG_RW, NULL, 0,
+	fqpie_sysctl_target_tupdate_maxb_handler, "L",
 	"queue target in microsecond");
-SYSCTL_PROC(_net_inet_ip_dummynet_fqpie, OID_AUTO, tupdate, CTLTYPE_LONG | CTLFLAG_RW,
-	NULL, 0, fqpie_sysctl_target_tupdate_maxb_handler, "L",
+
+SYSCTL_PROC(_net_inet_ip_dummynet_fqpie, OID_AUTO, tupdate,
+	CTLTYPE_LONG | CTLFLAG_RW, NULL, 0,
+	fqpie_sysctl_target_tupdate_maxb_handler, "L",
 	"the frequency of drop probability calculation in microsecond");
-SYSCTL_PROC(_net_inet_ip_dummynet_fqpie, OID_AUTO, max_burst, CTLTYPE_LONG | CTLFLAG_RW,
-	NULL, 0, fqpie_sysctl_target_tupdate_maxb_handler, "L",
+
+SYSCTL_PROC(_net_inet_ip_dummynet_fqpie, OID_AUTO, max_burst,
+	CTLTYPE_LONG | CTLFLAG_RW, NULL, 0,
+	fqpie_sysctl_target_tupdate_maxb_handler, "L",
 	"Burst allowance interval in microsecond");
 
-SYSCTL_PROC(_net_inet_ip_dummynet_fqpie, OID_AUTO, max_ecnth, CTLTYPE_LONG | CTLFLAG_RW,
-	NULL, 0, fqpie_sysctl_max_ecnth_handler, "L",
+SYSCTL_PROC(_net_inet_ip_dummynet_fqpie, OID_AUTO, max_ecnth,
+	CTLTYPE_LONG | CTLFLAG_RW, NULL, 0,
+	fqpie_sysctl_max_ecnth_handler, "L",
 	"ECN safeguard threshold scaled by 1000");
 
-SYSCTL_PROC(_net_inet_ip_dummynet_fqpie, OID_AUTO, alpha, CTLTYPE_LONG | CTLFLAG_RW,
-	NULL, 0, fqpie_sysctl_alpha_beta_handler, "L",
-	"PIE alpha scaled by 1000");
-SYSCTL_PROC(_net_inet_ip_dummynet_fqpie, OID_AUTO, beta, CTLTYPE_LONG | CTLFLAG_RW,
-	NULL, 0, fqpie_sysctl_alpha_beta_handler, "L",
-	"beta scaled by 1000");
+SYSCTL_PROC(_net_inet_ip_dummynet_fqpie, OID_AUTO, alpha,
+	CTLTYPE_LONG | CTLFLAG_RW, NULL, 0,
+	fqpie_sysctl_alpha_beta_handler, "L", "PIE alpha scaled by 1000");
+
+SYSCTL_PROC(_net_inet_ip_dummynet_fqpie, OID_AUTO, beta,
+	CTLTYPE_LONG | CTLFLAG_RW, NULL, 0,
+	fqpie_sysctl_alpha_beta_handler, "L", "beta scaled by 1000");
 
 SYSCTL_UINT(_net_inet_ip_dummynet_fqpie, OID_AUTO, quantum,
 	CTLFLAG_RW, &fq_pie_sysctl.quantum, 1514, "quantum for FQ_PIE");
@@ -277,14 +283,17 @@ fq_update_stats(struct fq_pie_flow *q, struct fq_pie_si *si, int len,
 
 	if (len < 0) 
 		inc = -1;
-	else if(len > 0)
+	else if (len > 0)
 		inc = 1;
+
 	if (drop) {
 		si->main_q.ni.drops ++;
 		q->stats.drops ++;
 		si->_si.ni.drops ++;
 		io_pkt_drop ++;
-	} else {
+	} 
+
+	if (!drop || (drop && len < 0)) {
 		/* Update stats for the main queue */
 		si->main_q.ni.length += inc;
 		si->main_q.ni.len_bytes += len;
@@ -317,7 +326,8 @@ fq_update_stats(struct fq_pie_flow *q, struct fq_pie_si *si, int len,
  * If getts is set, also extract packet's timestamp from mtag.
  */
 __inline static struct mbuf *
-fq_pie_extract_head(struct fq_pie_flow *q, aqm_time_t *pkt_ts, struct fq_pie_si *si, int getts)
+fq_pie_extract_head(struct fq_pie_flow *q, aqm_time_t *pkt_ts,
+	struct fq_pie_si *si, int getts)
 {
 	struct mbuf *m = q->mq.head;
 
@@ -381,7 +391,7 @@ fq_calculate_drop_prob(void *x)
 
 	/* calculate current qdelay */
 	if (pprms->flags & PIE_DEPRATEEST_ENABLED) {
-		pst->current_qdelay = ((uint64_t)q->stats.len_bytes  * pst->avg_dq_time) 
+		pst->current_qdelay = ((uint64_t)q->stats.len_bytes  * pst->avg_dq_time)
 			>> PIE_DQ_THRESHOLD_BITS;
 	}
 
@@ -688,8 +698,8 @@ pie_enqueue(struct fq_pie_flow *q, struct mbuf* m, struct fq_pie_si *si)
 		struct m_tag *mtag;
 		mtag = m_tag_locate(m, MTAG_ABI_COMPAT, DN_AQM_MTAG_TS, NULL);
 		if (mtag == NULL)
-			mtag = m_tag_alloc(MTAG_ABI_COMPAT, DN_AQM_MTAG_TS, sizeof(aqm_time_t),
-				M_NOWAIT);
+			mtag = m_tag_alloc(MTAG_ABI_COMPAT, DN_AQM_MTAG_TS,
+				sizeof(aqm_time_t), M_NOWAIT);
 		if (mtag == NULL) {
 			m_freem(m); 
 			t = DROP;
@@ -996,7 +1006,6 @@ fq_pie_new_sched(struct dn_sch_inst *_si)
 
 	/* init the flows (sub-queues) */
 	for (i = 0; i < schk->cfg.flows_cnt; i++) {
-		memset(&si->flows[i], 0, sizeof(si->flows[i]));
 		si->flows[i].pst.parms = &schk->cfg.pcfg;
 		si->flows[i].psi = si;
 		pie_init(&si->flows[i]);
@@ -1062,10 +1071,16 @@ fq_pie_free_sched(struct dn_sch_inst *_si)
 		/* free the flows array */
 		free(si->flows , M_DUMMYNET);
 		si->flows = NULL;
+		mtx_lock(&freemem_mtx);
 		fq_pie_desc.ref_count--;
+		if (!fq_pie_desc.ref_count) {
+			mtx_unlock(&freemem_mtx);
+			mtx_destroy(&freemem_mtx);
+		} else
+			mtx_unlock(&freemem_mtx);
 		//D("ok!");
 		return 0;
-	} else 	{
+	} else {
 		/* memory leak happens here. So, we register a callout function to free
 		 *  flows memory later.
 		 */
@@ -1163,14 +1178,18 @@ fq_pie_config(struct dn_schk *_schk)
 			fqp_cfg->flows_cnt = ep->par[9];
 
 		/* Bound the configurations */
-		fqp_cfg->pcfg.qdelay_ref = BOUND_VAR(fqp_cfg->pcfg.qdelay_ref, 1, 5 * AQM_TIME_1S);
-		fqp_cfg->pcfg.tupdate = BOUND_VAR(fqp_cfg->pcfg.tupdate, 1, 5 * AQM_TIME_1S);
-		fqp_cfg->pcfg.max_burst = BOUND_VAR(fqp_cfg->pcfg.max_burst, 0, 5 * AQM_TIME_1S);
-		fqp_cfg->pcfg.max_ecnth = BOUND_VAR(fqp_cfg->pcfg.max_ecnth, 0, PIE_SCALE);
+		fqp_cfg->pcfg.qdelay_ref = BOUND_VAR(fqp_cfg->pcfg.qdelay_ref,
+			1, 5 * AQM_TIME_1S);
+		fqp_cfg->pcfg.tupdate = BOUND_VAR(fqp_cfg->pcfg.tupdate,
+			1, 5 * AQM_TIME_1S);
+		fqp_cfg->pcfg.max_burst = BOUND_VAR(fqp_cfg->pcfg.max_burst,
+			0, 5 * AQM_TIME_1S);
+		fqp_cfg->pcfg.max_ecnth = BOUND_VAR(fqp_cfg->pcfg.max_ecnth,
+			0, PIE_SCALE);
 		fqp_cfg->pcfg.alpha = BOUND_VAR(fqp_cfg->pcfg.alpha, 0, 7 * PIE_SCALE);
 		fqp_cfg->pcfg.beta = BOUND_VAR(fqp_cfg->pcfg.beta, 0, 7 * PIE_SCALE);
 
-		fqp_cfg->quantum = BOUND_VAR(fqp_cfg->quantum,256,6056);
+		fqp_cfg->quantum = BOUND_VAR(fqp_cfg->quantum,1,9000);
 		fqp_cfg->limit= BOUND_VAR(fqp_cfg->limit,1,20480);
 		fqp_cfg->flows_cnt= BOUND_VAR(fqp_cfg->flows_cnt,1,65536);
 	}
