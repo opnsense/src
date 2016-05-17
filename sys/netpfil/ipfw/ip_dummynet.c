@@ -656,8 +656,8 @@ fsk_new(uintptr_t key, int flags, void *arg)
 }
 
 #ifdef NEW_AQM
-/* callback to cleanup queue AQM status belong to a flowset connected
- * scheduler instance '_si' (for !DN_MULTIQUEUE only).
+/* callback function for cleaning up AQM queue status belongs to a flowset
+ * connected to scheduler instance '_si' (for !DN_MULTIQUEUE only).
  */
 static int
 si_cleanup_q(void *_si, void *arg)
@@ -673,21 +673,21 @@ si_cleanup_q(void *_si, void *arg)
 
 /* callback to clean up queue AQM status.*/
 static int
-q_cleanup(void *_q, void *arg)
+q_cleanup_q(void *_q, void *arg)
 {
 	struct dn_queue *q = _q;
 	q->fs->aqmfp->cleanup(q);
 	return 0;
 }
 
-/* Clean up all queues AQM status belonging to a flowset and then
+/* Clean up all AQM queues status belongs to flowset 'fs' and then
  * deconfig AQM for flowset 'fs'
  */
 static void 
 aqm_cleanup_deconfig_fs(struct dn_fsk *fs)
 {
 	struct dn_sch_inst *si;
-	
+
 	/* clean up AQM status for all queues for !DN_MULTIQUEUE sched*/
 	if (fs->fs.fs_nr > DN_MAX_ID) {
 		if (fs->sched && !(fs->sched->fp->flags & DN_MULTIQUEUE)) {
@@ -701,15 +701,15 @@ aqm_cleanup_deconfig_fs(struct dn_fsk *fs)
 			}
 		} 
 	}
-	
+
 	/* clean up AQM status for all queues for DN_MULTIQUEUE sched*/
 	if (fs->sched && fs->sched->fp->flags & DN_MULTIQUEUE && fs->qht) {
 			if (fs->fs.flags & DN_QHT_HASH)
-				dn_ht_scan(fs->qht, q_cleanup, NULL);
+				dn_ht_scan(fs->qht, q_cleanup_q, NULL);
 			else
 				fs->aqmfp->cleanup((struct dn_queue *)(fs->qht));
 	}
-	
+
 	/* deconfig AQM */
 	if(fs->aqmcfg && fs->aqmfp && fs->aqmfp->deconfig)
 		fs->aqmfp->deconfig(fs);
@@ -1317,7 +1317,7 @@ update_fs(struct dn_schk *s)
 }
 
 #ifdef NEW_AQM
-/* Retrieve AQM configurations to userland
+/* Retrieve AQM configurations to ipfw userland 
  */
 static int
 get_aqm_parms(struct sockopt *sopt)
@@ -1356,7 +1356,7 @@ get_aqm_parms(struct sockopt *sopt)
 			err = EINVAL;
 			break;
 		}
-		
+
 		if (fs->aqmfp && fs->aqmfp->getconfig) {
 			if(fs->aqmfp->getconfig(fs, ep)) {
 				D("Error while trying to get AQM params");
@@ -1372,7 +1372,7 @@ get_aqm_parms(struct sockopt *sopt)
 	return err;
 }
 
-/* Retrieve AQM configurations to userland
+/* Retrieve AQM configurations to ipfw userland
  */
 static int
 get_sched_parms(struct sockopt *sopt)
@@ -1428,10 +1428,10 @@ get_sched_parms(struct sockopt *sopt)
 }
 
 /* Configure AQM for flowset 'fs'.
- * extra parameters are originally pass from userland.
+ * extra parameters are passed from userland.
  */
 static int
-config_aqm(struct dn_fsk *fs, struct  dn_extra_parms *ep)
+config_aqm(struct dn_fsk *fs, struct  dn_extra_parms *ep, int busy)
 {
 	int err = 0;
 
@@ -1453,15 +1453,8 @@ config_aqm(struct dn_fsk *fs, struct  dn_extra_parms *ep)
 				break;
 		}
 
-		if (fs->sched && fs->sched->siht && !(fs->sched->fp->flags & DN_MULTIQUEUE)) {
-			D("cannot configure FS that already has si");
-			err = EINVAL;
-			break;
-		}
-
-		/* check if there are some queues for this flowset */
-		if (fs->aqmfp && fs->nr_of_qes) {
-			D("This flowset (%d) is busy now no. of q=%d!\n", fs->fs.fs_nr ,fs->nr_of_qes);
+		if (busy) {
+			D("Unable to configure flowset, flowset busy!");
 			err = EINVAL;
 			break;
 		}
@@ -1493,10 +1486,7 @@ config_aqm(struct dn_fsk *fs, struct  dn_extra_parms *ep)
 					fs->aqmfp = NULL;
 					break;
 			}
-
-			//D("AQM %s configured for fs=%d",fs->aqmfp->name, fs->fs.fs_nr);
 		}
-		
 	} while(0);
 
 	return err;
@@ -1626,14 +1616,6 @@ config_fs(struct dn_fs *nfs, struct dn_id *arg, int locked)
 		D("missing sched for flowset %d", i);
 	        break;
 	    }
-#ifdef NEW_AQM
-		/* don't allow to reconfigure AQM for  active fs (has active queue(s)) */
-		if(fs->nr_of_qes) {
-			D("The flowset (%d) is busy now, no. of queues=%d",i ,fs->nr_of_qes);
-			fs =  NULL;
-			break;
-		}
-#endif
 	    /* grab some defaults from the existing one */
 	    if (nfs->sched_nr == 0) /* reuse */
 		nfs->sched_nr = fs->fs.sched_nr;
@@ -1644,7 +1626,12 @@ config_fs(struct dn_fs *nfs, struct dn_id *arg, int locked)
 	    if (bcmp(&fs->fs, nfs, sizeof(*nfs)) == 0) {
 		ND("flowset %d unchanged", i);
 #ifdef NEW_AQM
-		config_aqm(fs, (struct dn_extra_parms *) arg);
+		/* reconfigure AQM as the parameters can be changed.
+		 * we consider the flowsetis  busy if it has scheduler instance(s) 
+		*/ 
+		s = locate_scheduler(nfs->sched_nr);
+		config_aqm(fs, (struct dn_extra_parms *) arg, 
+			s != NULL && s->siht != NULL);
 #endif
 		break; /* no change, nothing to do */
 	    }
@@ -1665,8 +1652,8 @@ config_fs(struct dn_fs *nfs, struct dn_id *arg, int locked)
 	    }
 	    fs->fs = *nfs; /* copy configuration */
 #ifdef NEW_AQM
-		fs->aqmfp = NULL;
-		config_aqm(fs, (struct dn_extra_parms *) arg);
+			fs->aqmfp = NULL;
+			config_aqm(fs, (struct dn_extra_parms *) arg, s != NULL && s->siht != NULL);
 #endif
 	    if (s != NULL)
 		fsk_attach(fs, s);
@@ -2752,5 +2739,4 @@ dn_aqm_modevent(module_t mod, int cmd, void *arg)
 #endif
 
 /* end of file */
-
 

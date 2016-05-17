@@ -73,7 +73,8 @@
 static struct dn_aqm codel_desc;
 
 /* default codel parameters */
-struct dn_aqm_codel_parms codel_sysctl = {5000 * AQM_TIME_1US, 100000 * AQM_TIME_1US, 0};
+struct dn_aqm_codel_parms codel_sysctl = {5000 * AQM_TIME_1US,
+	100000 * AQM_TIME_1US, 0};
 
 static int
 codel_sysctl_interval_handler(SYSCTL_HANDLER_ARGS)
@@ -120,12 +121,12 @@ static SYSCTL_NODE(_net_inet_ip_dummynet, OID_AUTO,
 	codel, CTLFLAG_RW, 0, "CODEL");
 
 #ifdef SYSCTL_NODE
-SYSCTL_PROC(_net_inet_ip_dummynet_codel, OID_AUTO, target, CTLTYPE_LONG | CTLFLAG_RW,
-	NULL, 0, codel_sysctl_target_handler, "L",
+SYSCTL_PROC(_net_inet_ip_dummynet_codel, OID_AUTO, target,
+	CTLTYPE_LONG | CTLFLAG_RW, NULL, 0,codel_sysctl_target_handler, "L",
 	"CoDel target in microsecond");
 
-SYSCTL_PROC(_net_inet_ip_dummynet_codel, OID_AUTO, interval, CTLTYPE_LONG | CTLFLAG_RW,
-	NULL, 0, codel_sysctl_interval_handler, "L",
+SYSCTL_PROC(_net_inet_ip_dummynet_codel, OID_AUTO, interval,
+	CTLTYPE_LONG | CTLFLAG_RW, NULL, 0, codel_sysctl_interval_handler, "L",
 	"CoDel interval in microsecond");
 #endif
 
@@ -159,9 +160,8 @@ control_law(struct codel_status *cst, struct dn_aqm_codel_parms *cprms,
 
 	/* Calculate g^2 */
 	temp = (uint32_t) cst->isqrt * cst->isqrt;
-
 	/* Calculate (3 - c*g^2) i.e. (3 - c * temp) */
-	 temp = (3ULL<< (FIX_POINT_BITS*2)) - (count * temp);
+	temp = (3ULL<< (FIX_POINT_BITS*2)) - (count * temp);
 
 	/* 
 	 * Divide by 2 because we multiplied the original equation by two 
@@ -172,8 +172,8 @@ control_law(struct codel_status *cst, struct dn_aqm_codel_parms *cprms,
 	/*  Now, temp = (1.5 - 0.5*c*g^2)
 	 * Calculate g (1.5 - 0.5*c*g^2) i.e. g * temp 
 	 */
-	 temp = (cst->isqrt * temp) >> (FIX_POINT_BITS + FIX_POINT_BITS - 8);
-	 cst->isqrt = temp;
+	temp = (cst->isqrt * temp) >> (FIX_POINT_BITS + FIX_POINT_BITS - 8);
+	cst->isqrt = temp;
 
 	 /* calculate codel_interval/sqrt(count) */
 	 return t + ((cprms->interval * temp) >> FIX_POINT_BITS);
@@ -231,7 +231,7 @@ aqm_codel_enqueue(struct dn_queue *q, struct mbuf *m)
 		D("Codel queue is not initialized\n");
 		goto drop;
 	}
-	
+
 	/* Finding maximum packet size */
 	// XXX we can get MTU from driver instead 
 	if (len > cst->maxpkt_size)
@@ -265,7 +265,7 @@ aqm_codel_enqueue(struct dn_queue *q, struct mbuf *m)
 	return (0);
 
 drop:
-	update_stats(q, len, 1);
+	update_stats(q, 0, 1);
 	FREE_PKT(m);
 	return (1);
 }
@@ -309,7 +309,6 @@ aqm_codel_init(struct dn_queue *q)
 
 	/* increase reference counters */
 	codel_desc.ref_count++;
-	q->fs->nr_of_qes++;
 
 	return 0;
 }
@@ -327,7 +326,6 @@ aqm_codel_cleanup(struct dn_queue *q)
 		q->aqm_status = NULL;
 		/* decrease reference counters */
 		codel_desc.ref_count--;
-		q->fs->nr_of_qes--;
 	}
 	else
 		D("Codel already cleaned up");

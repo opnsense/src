@@ -95,7 +95,7 @@ fq_update_stats(struct fq_codel_flow *q, struct fq_codel_si *si, int len,
 
 	if (len < 0) 
 		inc = -1;
-	else if(len > 0)
+	else if (len > 0)
 		inc = 1;
 
 	if (drop) {
@@ -103,7 +103,9 @@ fq_update_stats(struct fq_codel_flow *q, struct fq_codel_si *si, int len,
 		q->stats.drops ++;
 		si->_si.ni.drops ++;
 		io_pkt_drop ++;
-	} else {
+	} 
+
+	if (!drop || (drop && len < 0)) {
 		/* Update stats for the main queue */
 		si->main_q.ni.length += inc;
 		si->main_q.ni.len_bytes += len;
@@ -116,7 +118,7 @@ fq_update_stats(struct fq_codel_flow *q, struct fq_codel_si *si, int len,
 		si->_si.ni.length += inc;
 		si->_si.ni.len_bytes += len;
 	}
-	
+
 	if (inc > 0) {
 		si->main_q.ni.tot_bytes += len;
 		si->main_q.ni.tot_pkts ++;
@@ -127,8 +129,6 @@ fq_update_stats(struct fq_codel_flow *q, struct fq_codel_si *si, int len,
 		si->_si.ni.tot_bytes +=len;
 		si->_si.ni.tot_pkts ++;
 	}
-
-
 
 }
 
