@@ -14,10 +14,10 @@ CFLAGS+= -I${.CURDIR}
 CLEANDIRS+= FreeBSD
 CLEANFILES+= bootstrap
 
-#	$Id: Makefile,v 1.27 2014/06/20 14:51:54 sjg Exp $
+#	$Id: Makefile,v 1.49 2015/12/20 22:54:40 sjg Exp $
 
 # Base version on src date
-MAKE_VERSION= 20140620
+MAKE_VERSION= 20151220
 
 PROG?=	${.CURDIR:T}
 
@@ -34,6 +34,7 @@ SRCS= \
 	make.c \
 	make_malloc.c \
 	meta.c \
+	metachar.c \
 	parse.c \
 	str.c \
 	strlist.c \
@@ -147,9 +148,9 @@ COPTS.parse.c += -Wno-format-nonliteral
 COPTS.var.c += -Wno-format-nonliteral
 
 # Force these
-SHAREDIR= ${prefix}/share
-BINDIR= ${prefix}/bin
-MANDIR= ${SHAREDIR}/man
+SHAREDIR= ${SHAREDIR.bmake:U${prefix}/share}
+BINDIR= ${BINDIR.bmake:U${prefix}/bin}
+MANDIR= ${MANDIR.bmake:U${SHAREDIR}/man}
 
 .if !exists(.depend)
 ${OBJS}: config.h
@@ -166,7 +167,6 @@ accept test:
 # override some simple things
 BINDIR= /usr/bin
 MANDIR= /usr/share/man/man
-DEFAULT_SYS_PATH= /usr/share/mk
 
 # make sure we get this
 CFLAGS+= ${COPTS.${.IMPSRC:T}}

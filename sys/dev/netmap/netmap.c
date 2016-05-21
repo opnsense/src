@@ -2855,7 +2855,7 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
         if (space < 0)
                 space += kring->nkr_num_slots;
 	if (space + mbq_len(q) >= kring->nkr_num_slots - 1) { // XXX
-		NRD(10, "%s full hwcur %d hwtail %d qlen %d len %d m %p",
+		RD(10, "%s full hwcur %d hwtail %d qlen %d len %d m %p",
 			na->name, kring->nr_hwcur, kring->nr_hwtail, mbq_len(q),
 			len, m);
 	} else {

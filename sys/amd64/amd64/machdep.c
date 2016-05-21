@@ -384,10 +384,6 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	/* Align to 16 bytes. */
 	sfp = (struct sigframe *)((unsigned long)sp & ~0xFul);
 
-	/* Translate the signal if appropriate. */
-	if (p->p_sysent->sv_sigtbl && sig <= p->p_sysent->sv_sigsize)
-		sig = p->p_sysent->sv_sigtbl[_SIG_IDX(sig)];
-
 	/* Build the argument list for the signal handler. */
 	regs->tf_rdi = sig;			/* arg 1 in %rdi */
 	regs->tf_rdx = (register_t)&sfp->sf_uc;	/* arg 3 in %rdx */
@@ -425,7 +421,7 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	}
 
 	regs->tf_rsp = (long)sfp;
-	regs->tf_rip = p->p_sigcode_base;
+	regs->tf_rip = p->p_sysent->sv_sigcode_base;
 	regs->tf_rflags &= ~(PSL_T | PSL_D);
 	regs->tf_cs = _ucodesel;
 	regs->tf_ds = _udatasel;
@@ -1158,12 +1154,7 @@ struct soft_segment_descriptor gdt_segs[] = {
 };
 
 void
-setidt(idx, func, typ, dpl, ist)
-	int idx;
-	inthand_t *func;
-	int typ;
-	int dpl;
-	int ist;
+setidt(int idx, inthand_t *func, int typ, int dpl, int ist)
 {
 	struct gate_descriptor *ip;
 
@@ -1238,11 +1229,26 @@ DB_SHOW_COMMAND(sysregs, db_show_sysregs)
 	db_printf("cr2\t0x%016lx\n", rcr2());
 	db_printf("cr3\t0x%016lx\n", rcr3());
 	db_printf("cr4\t0x%016lx\n", rcr4());
-	db_printf("EFER\t%016lx\n", rdmsr(MSR_EFER));
-	db_printf("FEATURES_CTL\t%016lx\n", rdmsr(MSR_IA32_FEATURE_CONTROL));
-	db_printf("DEBUG_CTL\t%016lx\n", rdmsr(MSR_DEBUGCTLMSR));
-	db_printf("PAT\t%016lx\n", rdmsr(MSR_PAT));
-	db_printf("GSBASE\t%016lx\n", rdmsr(MSR_GSBASE));
+	if (rcr4() & CR4_XSAVE)
+		db_printf("xcr0\t0x%016lx\n", rxcr(0));
+	db_printf("EFER\t0x%016lx\n", rdmsr(MSR_EFER));
+	if (cpu_feature2 & (CPUID2_VMX | CPUID2_SMX))
+		db_printf("FEATURES_CTL\t%016lx\n",
+		    rdmsr(MSR_IA32_FEATURE_CONTROL));
+	db_printf("DEBUG_CTL\t0x%016lx\n", rdmsr(MSR_DEBUGCTLMSR));
+	db_printf("PAT\t0x%016lx\n", rdmsr(MSR_PAT));
+	db_printf("GSBASE\t0x%016lx\n", rdmsr(MSR_GSBASE));
+}
+
+DB_SHOW_COMMAND(dbregs, db_show_dbregs)
+{
+
+	db_printf("dr0\t0x%016lx\n", rdr0());
+	db_printf("dr1\t0x%016lx\n", rdr1());
+	db_printf("dr2\t0x%016lx\n", rdr2());
+	db_printf("dr3\t0x%016lx\n", rdr3());
+	db_printf("dr6\t0x%016lx\n", rdr6());
+	db_printf("dr7\t0x%016lx\n", rdr7());	
 }
 #endif
 
@@ -1334,8 +1340,10 @@ add_physmap_entry(uint64_t base, uint64_t length, vm_paddr_t *physmap,
 	/*
 	 * Find insertion point while checking for overlap.  Start off by
 	 * assuming the new entry will be added to the end.
+	 *
+	 * NB: physmap_idx points to the next free slot.
 	 */
-	insert_idx = physmap_idx + 2;
+	insert_idx = physmap_idx;
 	for (i = 0; i <= physmap_idx; i += 2) {
 		if (base < physmap[i + 1]) {
 			if (base + length <= physmap[i]) {
@@ -1373,7 +1381,7 @@ add_physmap_entry(uint64_t base, uint64_t length, vm_paddr_t *physmap,
 	 * Move the last 'N' entries down to make room for the new
 	 * entry if needed.
 	 */
-	for (i = physmap_idx; i > insert_idx; i -= 2) {
+	for (i = (physmap_idx - 2); i > insert_idx; i -= 2) {
 		physmap[i] = physmap[i - 2];
 		physmap[i + 1] = physmap[i - 1];
 	}
@@ -1538,7 +1546,6 @@ getmemsize(caddr_t kmdp, u_int64_t first)
 	int page_counter;
 
 	bzero(physmap, sizeof(physmap));
-	basemem = 0;
 	physmap_idx = 0;
 
 	efihdr = (struct efi_map_header *)preload_search_info(kmdp,
@@ -1556,21 +1563,29 @@ getmemsize(caddr_t kmdp, u_int64_t first)
 		panic("No BIOS smap or EFI map info from loader!");
 	}
 
+	physmap_idx -= 2;
+
 	/*
 	 * Find the 'base memory' segment for SMP
 	 */
 	basemem = 0;
 	for (i = 0; i <= physmap_idx; i += 2) {
-		if (physmap[i] == 0x00000000) {
+		if (physmap[i] <= 0xA0000) {
 			basemem = physmap[i + 1] / 1024;
 			break;
 		}
 	}
-	if (basemem == 0)
-		panic("BIOS smap did not include a basemem segment!");
+	if (basemem == 0 || basemem > 640) {
+		if (bootverbose)
+			printf(
+		"Memory map doesn't contain a basemem segment, faking it");
+		basemem = 640;
+	}
 
 #ifdef SMP
 	/* make hole for AP bootstrap code */
+	if (physmap[1] >= 0x100000000)
+		panic("Basemem segment is not suitable for AP bootstrap code!");
 	physmap[1] = mp_bootaddress(physmap[1] / 1024);
 #endif
 
@@ -1624,12 +1639,14 @@ getmemsize(caddr_t kmdp, u_int64_t first)
 	 */
 	physmem_start = (vm_guest > VM_GUEST_NO ? 1 : 16) << PAGE_SHIFT;
 	TUNABLE_ULONG_FETCH("hw.physmem.start", &physmem_start);
-	if (physmem_start < PAGE_SIZE)
-		physmap[0] = PAGE_SIZE;
-	else if (physmem_start >= physmap[1])
-		physmap[0] = round_page(physmap[1] - PAGE_SIZE);
-	else
-		physmap[0] = round_page(physmem_start);
+	if (physmap[0] < physmem_start) {
+		if (physmem_start < PAGE_SIZE)
+			physmap[0] = PAGE_SIZE;
+		else if (physmem_start >= physmap[1])
+			physmap[0] = round_page(physmap[1] - PAGE_SIZE);
+		else
+			physmap[0] = round_page(physmem_start);
+	}
 	pa_indx = 0;
 	da_indx = 1;
 	phys_avail[pa_indx++] = physmap[0];
@@ -1830,7 +1847,7 @@ hammer_time(u_int64_t modulep, u_int64_t physfree)
 	if (kmdp == NULL)
 		kmdp = preload_search_by_type("elf64 kernel");
 	boothowto = MD_FETCH(kmdp, MODINFOMD_HOWTO, int);
-	kern_envp = MD_FETCH(kmdp, MODINFOMD_ENVP, char *) + KERNBASE;
+	init_static_kenv(MD_FETCH(kmdp, MODINFOMD_ENVP, char *) + KERNBASE, 0);
 #ifdef DDB
 	ksym_start = MD_FETCH(kmdp, MODINFOMD_SSYM, uintptr_t);
 	ksym_end = MD_FETCH(kmdp, MODINFOMD_ESYM, uintptr_t);
@@ -1931,38 +1948,6 @@ hammer_time(u_int64_t modulep, u_int64_t physfree)
 	    MODINFO_METADATA | MODINFOMD_EFI_MAP) != NULL)
 		vty_set_preferred(VTY_VT);
 
-	/*
-	 * Initialize the console before we print anything out.
-	 */
-	cninit();
-
-#ifdef DEV_ISA
-#ifdef DEV_ATPIC
-	elcr_probe();
-	atpic_startup();
-#else
-	/* Reset and mask the atpics and leave them shut down. */
-	atpic_reset();
-
-	/*
-	 * Point the ICU spurious interrupt vectors at the APIC spurious
-	 * interrupt handler.
-	 */
-	setidt(IDT_IO_INTS + 7, IDTVEC(spuriousint), SDT_SYSIGT, SEL_KPL, 0);
-	setidt(IDT_IO_INTS + 15, IDTVEC(spuriousint), SDT_SYSIGT, SEL_KPL, 0);
-#endif
-#else
-#error "have you forgotten the isa device?";
-#endif
-
-	kdb_init();
-
-#ifdef KDB
-	if (boothowto & RB_KDB)
-		kdb_enter(KDB_WHY_BOOTFLAGS,
-		    "Boot flags requested debugger");
-#endif
-
 	identify_cpu();		/* Final stage of CPU initialization */
 	initializecpu();	/* Initialize CPU registers */
 	initializecpucache();
@@ -1999,6 +1984,35 @@ hammer_time(u_int64_t modulep, u_int64_t physfree)
 	init_param2(physmem);
 
 	/* now running on new page tables, configured,and u/iom is accessible */
+
+	cninit();
+
+#ifdef DEV_ISA
+#ifdef DEV_ATPIC
+	elcr_probe();
+	atpic_startup();
+#else
+	/* Reset and mask the atpics and leave them shut down. */
+	atpic_reset();
+
+	/*
+	 * Point the ICU spurious interrupt vectors at the APIC spurious
+	 * interrupt handler.
+	 */
+	setidt(IDT_IO_INTS + 7, IDTVEC(spuriousint), SDT_SYSIGT, SEL_KPL, 0);
+	setidt(IDT_IO_INTS + 15, IDTVEC(spuriousint), SDT_SYSIGT, SEL_KPL, 0);
+#endif
+#else
+#error "have you forgotten the isa device?";
+#endif
+
+	kdb_init();
+
+#ifdef KDB
+	if (boothowto & RB_KDB)
+		kdb_enter(KDB_WHY_BOOTFLAGS,
+		    "Boot flags requested debugger");
+#endif
 
 	msgbufinit(msgbufp, msgbufsize);
 	fpuinit();

@@ -28,8 +28,6 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
-#include "opt_pax.h"
-
 #include <sys/param.h>
 #include <sys/kernel.h>
 #include <sys/systm.h>
@@ -38,7 +36,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/linker.h>
 #include <sys/sysent.h>
 #include <sys/imgact_elf.h>
-#include <sys/pax.h>
 #include <sys/proc.h>
 #include <sys/syscall.h>
 #include <sys/signalvar.h>
@@ -86,7 +83,8 @@ struct sysentvec elf64_freebsd_sysvec = {
 	.sv_fetch_syscall_args = cpu_fetch_syscall_args,
 	.sv_syscallnames = syscallnames,
 	.sv_schedtail	= NULL,
-	.sv_pax_aslr_init	= pax_aslr_init_vmspace,
+	.sv_thread_detach = NULL,
+	.sv_trap	= NULL,
 };
 
 static Elf64_Brandinfo freebsd_brand_info = {
@@ -143,7 +141,8 @@ struct sysentvec elf32_freebsd_sysvec = {
 	.sv_fetch_syscall_args = cpu_fetch_syscall_args,
 	.sv_syscallnames = syscallnames,
 	.sv_schedtail	= NULL,
-	.sv_pax_aslr_init	= pax_aslr_init_vmspace,
+	.sv_thread_detach = NULL,
+	.sv_trap	= NULL,
 };
 
 static Elf32_Brandinfo freebsd_brand_info = {
@@ -179,6 +178,7 @@ elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
 	Elf_Word rtype = (Elf_Word)0, symidx;
 	const Elf_Rel *rel = NULL;
 	const Elf_Rela *rela = NULL;
+	int error;
 
 	/*
 	 * Stash R_MIPS_HI16 info so we can use it when processing R_MIPS_LO16
@@ -218,8 +218,8 @@ elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
 		break;
 
 	case R_MIPS_32:		/* S + A */
-		addr = lookup(lf, symidx, 1);
-		if (addr == 0)
+		error = lookup(lf, symidx, 1, &addr);
+		if (error != 0)
 			return (-1);
 		addr += addend;
 		if (*where != addr)
@@ -227,8 +227,8 @@ elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
 		break;
 
 	case R_MIPS_26:		/* ((A << 2) | (P & 0xf0000000) + S) >> 2 */
-		addr = lookup(lf, symidx, 1);
-		if (addr == 0)
+		error = lookup(lf, symidx, 1, &addr);
+		if (error != 0)
 			return (-1);
 
 		addend &= 0x03ffffff;
@@ -246,8 +246,8 @@ elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
 		break;
 
 	case R_MIPS_64:		/* S + A */
-		addr = lookup(lf, symidx, 1);
-		if (addr == 0)
+		error = lookup(lf, symidx, 1, &addr);
+		if (error != 0)
 			return (-1);
 		addr += addend;
 		if (*(Elf64_Addr*)where != addr)
@@ -256,8 +256,8 @@ elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
 
 	case R_MIPS_HI16:	/* ((AHL + S) - ((short)(AHL + S)) >> 16 */
 		if (rela != NULL) {
-			addr = lookup(lf, symidx, 1);
-			if (addr == 0)
+			error = lookup(lf, symidx, 1, &addr);
+			if (error != 0)
 				return (-1);
 			addr += addend;
 			*where &= 0xffff0000;
@@ -271,8 +271,8 @@ elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
 
 	case R_MIPS_LO16:	/* AHL + S */
 		if (rela != NULL) {
-			addr = lookup(lf, symidx, 1);
-			if (addr == 0)
+			error = lookup(lf, symidx, 1, &addr);
+			if (error != 0)
 				return (-1);
 			addr += addend;
 			*where &= 0xffff0000;
@@ -280,8 +280,8 @@ elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
 		}
 		else {
 			ahl += (int16_t)addend;
-			addr = lookup(lf, symidx, 1);
-			if (addr == 0)
+			error = lookup(lf, symidx, 1, &addr);
+			if (error != 0)
 				return (-1);
 
 			addend &= 0xffff0000;
@@ -297,8 +297,8 @@ elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
 		break;
 
 	case R_MIPS_HIGHER:	/* %higher(A+S) */
-		addr = lookup(lf, symidx, 1);
-		if (addr == 0)
+		error = lookup(lf, symidx, 1, &addr);
+		if (error != 0)
 			return (-1);
 		addr += addend;
 		*where &= 0xffff0000;
@@ -306,8 +306,8 @@ elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
 		break;
 
 	case R_MIPS_HIGHEST:	/* %highest(A+S) */
-		addr = lookup(lf, symidx, 1);
-		if (addr == 0)
+		error = lookup(lf, symidx, 1, &addr);
+		if (error != 0)
 			return (-1);
 		addr += addend;
 		*where &= 0xffff0000;

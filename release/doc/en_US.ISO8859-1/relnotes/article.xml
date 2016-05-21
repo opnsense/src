@@ -1,17 +1,23 @@
 <?xml version="1.0" encoding="iso-8859-1"?>
 <!DOCTYPE article PUBLIC "-//FreeBSD//DTD DocBook XML V5.0-Based Extension//EN"
-	"../../../share/xml/freebsd50.dtd" [
-<!ENTITY % release PUBLIC "-//FreeBSD//ENTITIES Release Specification//EN" "release.ent">
+	  "http://www.FreeBSD.org/XML/share/xml/freebsd50.dtd" [
+<!ENTITY % release PUBLIC "-//FreeBSD//ENTITIES Release Specification//EN"
+	 "http://www.FreeBSD.org/release/XML/share/xml/release.ent">
  %release;
-<!ENTITY % sponsor PUBLIC "-//FreeBSD//ENTITIES Sponsor Specification//EN" "sponsor.ent">
+<!ENTITY % sponsor PUBLIC "-//FreeBSD//ENTITIES Sponsor Specification//EN"
+	 "http://www.FreeBSD.org/release/XML/share/xml/sponsor.ent">
  %sponsor;
-<!ENTITY % vendor PUBLIC "-//FreeBSD//ENTITIES Vendor Specification//EN" "vendor.ent">
+<!ENTITY % vendor PUBLIC "-//FreeBSD//ENTITIES Vendor Specification//EN"
+	 "http://www.FreeBSD.org/release/XML/share/xml/vendor.ent">
  %vendor;
-<!ENTITY security SYSTEM "../../share/xml/security.xml">
-<!ENTITY errata SYSTEM "../../share/xml/errata.xml">
+<!ENTITY security PUBLIC "-//FreeBSD//ENTITIES Security Advisory List//EN"
+	 "http://www.FreeBSD.org/release/XML/share/xml/security.xml">
+<!ENTITY errata PUBLIC "-//FreeBSD//ENTITIES Errata List//EN"
+	 "http://www.FreeBSD.org/release/XML/share/xml/errata.xml">
 ]>
 <article xmlns="http://docbook.org/ns/docbook"
-  xmlns:xlink="http://www.w3.org/1999/xlink" version="5.0">
+  xmlns:xlink="http://www.w3.org/1999/xlink" version="5.0"
+  xml:id="top">
 
   <info>
     <title>&os; &release.current; Release Notes</title>
@@ -22,10 +28,11 @@
 
     <pubdate>$FreeBSD$</pubdate>
 
+    <!-- First rev: 285831 -->
     <!-- Last rev: 284813 -->
 
     <copyright>
-      <year>2015</year>
+      <year>2016</year>
       <holder role="mailto:doc@FreeBSD.org">The &os; Documentation
 	Project</holder>
     </copyright>
@@ -156,201 +163,196 @@
     <para>This section covers changes and additions to userland
       applications, contributed software, and system utilities.</para>
 
-    <sect2 xml:id="userland-config">
-      <title>Userland Configuration Changes</title>
-
-      <para revision="276991">The &man.termcap.5; file is installed
-	as-is from sources, instead of reordering, creating
-	<filename>/etc/termcap.db</filename> by default, providing
-	a performance improvements to applications that use the
-	&man.termcap.5; database, such as &man.vi.1; and
-	&man.ncurses.3;.</para>
-    </sect2>
-
     <sect2 xml:id="userland-programs">
       <title>Userland Application Changes</title>
 
-      <para revision="275040">A new utility, &man.dpv.1;, has been
-	added to the base system, providing a &man.dialog.1;-style
-	progress view from one or more input streams.  A corresponding
-	library, &man.dpv.3;, has also been added.</para>
+      <para revision="287326,288202" contrib="sponsor" sponsor="&ff;">The
+	&man.ar.1; utility now supports a <option>-D</option> flag to
+	prevent real mtime, uid, gid, and file mode values from being
+	inserted.  This is called <quote>deterministic mode</quote>
+	and useful for making the resulting archives reproducible.
+	This behavior is enabled by default, and can be disabled by
+	specifying a <literal>-U</literal> flag.</para>
 
-      <para revision="275945">The &man.elfdump.1; utility has been
-	updated to support capability mode provided by
-	&man.capsicum.4;.</para>
+      <para revision="286965">The &man.camcontrol.8;
+	<command>fwdownload</command> subcommand has been improved.
+	Changes include better support of SATA drives, downloading
+	firmaware to IBM LTO drives, <option>-q</option> flag to
+	suppress information output, and <command>opcodes</command>
+	subcommand to issue the <literal>REPORT SUPPORTED
+	  OPCODES</literal> service action of the <literal>SCSI
+	MAINTENANCE IN</literal> command.</para>
 
-      <para revision="277434" contrib="sponsor" sponsor="&ff;">The
-	&man.fstyp.8; utility has been added, which is used to
-	determine the filesystem on a specified device.</para>
+      <para revision="291774">The &man.cp.1; utility has been updated
+	to include a new flag, <literal>-s</literal>, which creates
+	a symbolic link to the specified source.</para>
 
-      <para revision="278968" contrib="sponsor" sponsor="&ff;">The
-	&man.mkimg.1; utility has been updated to support the
-	<acronym>MBR</acronym> <acronym>EFI</acronym> partition
-	type.</para>
+      <para revision="285929">A bug in the &man.ctladm.8; utility
+	which could return a non-zero value even if it succeeds has
+	been fixed.</para>
 
-      <para revision="281044">A regression in the &man.libarchive.3;
-	library that would prevent a directory from being included in
-	the archive when <literal>--one-file-system</literal> is used
-	has been fixed.</para>
-
-      <para revision="281161" contrib="sponsor"
-	sponsor="&limelight;">The &man.netstat.8; utility has been
-	updated to include a new flag, <literal>-R</literal>, which is
-	used to dump <acronym>RSS</acronym>/flow information.</para>
-
-      <para revision="281936" contrib="sponsor" sponsor="&ff;">The
-	&man.ar.1; utility has been updated to set
-	<literal>ARCHIVE_EXTRACT_SECURE_SYMLINKS</literal> and
-	<literal>ARCHIVE_EXTRACT_SECURE_NODOTDOT</literal> to disallow
-	directory traversal when extracting an archive, similar to
-	&man.tar.1;.</para>
-
-      <para revision="282278">A race condition in &man.wc.1; that
-	would cause final results to be sent to &man.stderr.4; when
-	receiving the <literal>SIGINFO</literal> signal has been
+      <para revision="288185">A bug in the &man.grdc.6; program which
+	caused a wrong display in the 12-hour mode has been
 	fixed.</para>
 
-      <para revision="282870" contrib="sponsor"
-	sponsor="&scaleengine;">The &man.freebsd-update.8; utility has
-	been updated to prevent fetching updated binary patches when
-	a previous upgrade has not been thoroughly completed.</para>
+      <para revision="286810" contrib="sponsor"
+	sponsor="&yandex;">The &man.ifconfig.8; utility now reports
+	SFP/SFP+ data when a <option>-v</option> flag is specified and
+	the NIC driver provides them.</para>
 
-      <para revision="282974" contrib="sponsor" sponsor="&ff;">The
-	&man.uefisign.8; utility has been added.</para>
+      <para revision="288048">Bugs in the &man.inetd.8; daemon which
+	could cause a crash when an RPC entry is defined and an IPv6
+	address is specified in <varname>-a</varname> flag have been
+	fixed.</para>
 
-      <para revision="283875" contrib="sponsor"
-	sponsor="&multiplay;">The &man.chflags.1;, &man.chgrp.1;,
-	&man.chmod.1;, and &man.chown.8; utilities now affect symbolic
-	links when the <literal>-R</literal> flag is specified, as
-	documented in &man.symlink.7;.</para>
+      <para revision="286064">The &man.jail.8; utility has been
+	updated to include a new flag, <literal>-l</literal>, which
+	ensures a clean environment in the target jail when used.
+	Additionally, &man.jail.8; will run a shell within the target
+	jail when run no commands are specified.</para>
 
-      <para revision="283258">The &man.date.1; utility has been
-	updated to print the modification time of the file passed as
-	an argument to the <literal>-r</literal> flag, improving
-	compatibility with the <acronym>GNU</acronym> &man.date.1;
-	utility behavior.</para>
+      <para revision="286952">The &man.last.1; utility now supports
+	<literal>reboot</literal> as a pseudo-user name which prints
+	all system reboot entries (<literal>SHUTDOWN_TIME</literal>
+	and <literal>BOOT_TIME</literal> records).  This was
+	accidentally removed as of &os; 9.0.</para>
 
-      <para revision="284523">The &man.mkimg.1; utility has been
-	updated to include a new flag, <literal>-c</literal>, which
-	allows specifying the capacity of the target disk
-	image.</para>
+      <para revision="287027">The &man.mv.1; utility now returns
+	<literal>1</literal> instead of <literal>64</literal>
+	when more than two arguments are specified and
+	the target is not a valid directory.</para>
 
-      <para revision="285092">The &man.pw.8; utility has been updated
-	with a new flag, <literal>-R</literal>, that sets the root
-	directory within which the utility will operate.</para>
+      <para revision="287122">The &man.mkimg.1; utility has been
+	updated to include support for <literal>NTFS</literal>
+	filesystems in both <acronym>MBR</acronym> and
+	<acronym>GPT</acronym> partitioning schemes.</para>
+
+      <para revision="287122">A bug in the &man.mkimg.1; utility
+	which prevented dynamic VHD format from working with QEMU
+	has been fixed.</para>
+
+      <para revision="287593">A bug in the &man.netstat.1; utility
+	which showed the statistics in the number of packets divided
+	by 1024, not 1000 has been fixed.</para>
+
+      <para revision="287746">The &man.pciconf.8; utility has been
+	updated to use the PCI ID database from the <filename
+	  role="package">misc/pciids</filename> package, if present,
+	falling back to the PCI ID database in the &os; base
+	system.</para>
+
+      <para revision="288710" contrib="sponsor" sponsor="&gandi;">A
+	new utility, &man.sesutil.8;, has been added, which is used
+	to manage &man.ses.4; devices.</para>
+
+      <para revision="292231">Support for a
+	<option>-manage-gids</option> flag has been added to
+	&man.nfsuserd.8;.  This option can be enabled at boot time by
+	setting an &man.rc.conf.5; variable
+	<varname>nfs_server_managegids</varname> to
+	<literal>YES</literal>.</para>
+
+      <para revision="287269">The &man.pkill.1; utility now supports
+	&man.jail.2; name in a <option>-j</option> option in addition to
+	&man.jail.2; ID.</para>
+
+      <para revision="287084"><command>userdel</command> and
+	<command>usermod</command> subcommand of the &man.pw.8; utility
+	now supports a <option>-y</option> flag.</para>
+
+      <para revision="292462" contrib="sponsor"
+	sponsor="&dellinc;">The resolver library has been updated to
+	reload <filename>/etc/resolv.conf</filename> if the
+	modification time has changed.</para>
+
+      <para revision="293744" contrib="sponsor" sponsor="&ff;">The
+	initial implementation of <quote>reroot</quote> support has
+	been added to the &man.reboot.8; utility, allowing the root
+	filesystem to be mounted from a temporary source filesystem
+	without requiring a full system reboot.</para>
+
+      <para revision="287392">The &man.timeout.1; utility has been
+	added.  This utility runs a command with a time limit and is
+	compatible with <application>GNU timeout</application>.</para>
+
+      <para revision="287080">The &man.watchdogd.8; daemon now supports
+	a <option>-x <replaceable>exit_timeout</replaceable></option>
+	option to specify the timeout period in seconds to
+	leave in effect when the program exits.</para>
+
+      <para revision="287375">The &man.ypinit.8; script now supports
+	<filename>eui64</filename> NIS map file.</para>
     </sect2>
 
     <sect2 xml:id="userland-contrib">
       <title>Contributed Software</title>
 
-      <para revision="282746" contrib="sponsor" sponsor="&ff;">The
-	&man.resolvconf.8; utility has been updated to version
-	3.7.0.</para>
+      <para revision="286082">A bug in &man.libarchive.3; library which
+	could report an error when handling a sparse file entry
+	in a tar file has been fixed
+	by importing changeset <literal>bf4f6ec64e</literal>.</para>
 
-      <para revision="283270">The &man.nc.1; utility has been updated
-	to the OpenBSD 5.7 version.</para>
+      <para revision="286751">Time zone database has been updated to
+	version <literal>2015f</literal>.</para>
 
-      <para revision="284398">Timezone data files have been updated to
-	version 2015e.</para>
+      <para revision="290152">The &man.file.1; utility has been
+	updated to version 5.25.</para>
 
-      <para revision="284460">The &man.acpi.4; subsystem has been
-	updated to version 20150515.</para>
+      <para revision="292588">The &man.xz.1; utility has been updated
+	to version 5.2.2, which provides support for multi-threaded
+	compression.</para>
 
-      <para revision="284778">The &man.file.1; utility has been
-	updated to version 5.23.</para>
+      <para revision="293650">The &man.ntpd.8; utility has been
+	updated to version 4.2.8p5.</para>
 
-      <para revision="285206">The &man.unbound.8; utility has been
-	updated to version 1.5.3.</para>
+      <para revision="294190">The &man.unbound.8; utility has been
+	updated to version 1.5.7.</para>
 
-      <para revision="285305">The <application>sendmail</application>
-	utility has been updated to version 8.15.2.</para>
+      <para revision="294286">The &man.less.1; utility has been
+	updated to version v481.</para>
 
-      <para revision="285330"><application>OpenSSL</application> has
-	been updated to version 1.0.1p.</para>
+      <para revision="295690">The
+	<literal>unbound-control-setup</literal> script has been
+	removed from the base system.</para>
 
-      <para revision="285612">The <application>ntp</application>
-	suite has been updated to version 4.2.8p3.</para>
+      <para revision="295691">The &man.unbound.8; utility has been
+	updated to enable the <literal>insecure-lan-zones</literal>
+	option in preference of listing each <acronym>AS112</acronym>
+	zone individually.</para>
 
-      <para revision="285750" contrib="sponsor" sponsor="&dell;">The
-	&man.ssh.1; utility has been updated to re-implement hostname
-	canonicalization before locating the host in
-	<filename>known_hosts</filename>.</para>
+      <para revision="296317">The <application>OpenSSL</application>
+	suite has been updated to version 1.0.1s.</para>
 
-      <para revision="286084">The &man.tar.1; utility has been updated
-	to fix an issue that would prevent compressing sparse
-	files.</para>
+      <para revision="296853">The <application>OpenSSH</application>
+	suite has been updated to version 7.2p2.</para>
     </sect2>
 
     <sect2 xml:id="userland-installer">
       <title>Installation and Configuration Tools</title>
 
-      <para revision="285769" contrib="sponsor"
-	sponsor="&scaleengine;">Support for detecting and implementing
-	a workaround for various laptops and motherboards that do not
-	boot properly from <acronym>GPT</acronym>-partitioned disks
-	has been added to &man.bsdinstall.8;.  Additionally, the
-	<literal>active</literal> flag will be set on the partition
-	when needed.</para>
-
-      <para revision="285721" contrib="sponsor"
-	sponsor="&scaleengine;">Support for detecting and implementing
-	aligning partitions on 1Mb boundaries has been added to
-	&man.bsdinstall.8;.</para>
-
-      <para revision="285769" contrib="sponsor"
-	sponsor="&scaleengine;">Support for selecting the partitioning
-	scheme when installing on the <acronym>UFS</acronym>
-	filesystem has been added to &man.bsdinstall.8;.</para>
+      <para revision="295264" contrib="sponsor"
+	sponsor="&scaleengine;">The &man.bsdinstall.8; utility has
+	been updated to support <acronym>ZFS</acronym> installation
+	on <acronym>EFI</acronym>-based systems.</para>
     </sect2>
 
     <sect2 xml:id="userland-rc">
       <title><filename class="directory">/etc/rc.d</filename>
 	Scripts</title>
 
-      <para revision="284009">A new &man.rc.8; script,
-	<filename>growfs</filename>, has been added, which will resize
-	the root filesystem on boot if <filename>/firstboot</filename>
-	exists.</para>
-    </sect2>
+      <para revision="294680">The <filename>rc.d/netwait</filename>
+	script has been updated to wait for network
+	interfaces that attach late in the boot process, such as some
+	<acronym>USB</acronym> network cards.</para>
 
-    <sect2 xml:id="userland-periodic">
-      <title><filename class="directory">/etc/periodic</filename>
-	Scripts</title>
+      <para revision="287091">Firewall rules set by
+	<literal>firewall_type="SIMPLE"</literal> now uses
+	&man.ipfw.4; <command>tables</command> for addresses to be
+	blocked.</para>
 
-      <para revision="277520" contrib="sponsor" sponsor="&ff;">A new
-	&man.periodic.8; script,
-	<filename>510.status-world-kernel</filename>, has been added,
-	which evaluates the running userland and kernel versions from
-	the &man.uname.1; <literal>-U</literal> and
-	<literal>-K</literal> arguments, and prints an error if the
-	system userland and kernel are not in sync.</para>
-    </sect2>
-
-    <sect2 xml:id="userland-libraries">
-      <title>Runtime Libraries and API</title>
-
-      <para revision="275040">A new file configuration library,
-	&man.figpar.3;, has been added to the base system.</para>
-
-      <para revision="276686" contrib="sponsor" sponsor="&ff;">The
-	&man.procctl.2; system call has been updated to include
-	a facility for non-&man.init.8; processes to be declared as
-	the reaper of child processes and their decendants.</para>
-
-      <para revision="280392">The &man.setmode.3; function has been
-	updated to consistently set <literal>errno</literal> on
-	failure.</para>
-    </sect2>
-
-    <sect2 xml:id="userland-abi">
-      <title>ABI Compatibility</title>
-
-      <para revision="275807">The &linux; compatibility version has
-	been updated to <literal>2.6.18</literal>.  The
-	<literal>compat.linux.osrelease</literal> &man.sysctl.8; is
-	evaluated when building the <filename
-	  role="package">emulators/linux-c6</filename> and related
-	ports.</para>
+      <para revision="287737">The <filename>rc.d/netif</filename>
+	script now updates only static routes when an interface
+	is specified.</para>
     </sect2>
   </sect1>
 
@@ -361,123 +363,51 @@
       tuning, and system control parameters that are not otherwise
       categorized.</para>
 
+    <para revision="286742">The &man.vt.4; terminal console driver now
+      supports <option>ALT_BREAK_TO_DEBUGGER</option> and
+      <varname>debug.kdb.alt_break_to_debugger</varname> sysctl
+      variable when kernel debugger support (<option>options
+      KDB</option>) is enabled.</para>
+
+    <para revision="287782">The &man.vt.4; terminal console driver now
+      supports <varname>kern.vt.bell_enable</varname> sysctl variable
+      to enable or disable terminal bell.  The default is
+      <literal>1</literal> (enabled).</para>
+
+    <para revision="286843">A <function>thread_create()</function>
+      function has been added as an API to create userspace thread in
+      kernel space.</para>
+
     <sect2 xml:id="kernel-bugfix">
       <title>Kernel Bug Fixes</title>
 
-      <para revision="276068">A kernel panic triggered when destroying
-	a &man.vnet.9; &man.jail.8; configured with &man.gif.4; has
-	been fixed.</para>
-
-      <para revision="284018">A kernel panic triggered when destroying
-	a &man.vnet.9; &man.jail.8; configured with &man.gre.4; has
-	been fixed.</para>
+      <para revision="288167" contrib="sponsor"
+	sponsor="&multiplay;">The &man.kqueue.2; system call has been
+	updated to handle write events to files larger than 2
+	gigabytes.</para>
     </sect2>
 
     <sect2 xml:id="kernel-config">
       <title>Kernel Configuration</title>
 
-      <para revision="282065" contrib="sponsor" sponsor="&ff;">The
-	<literal>PAE_TABLES</literal> kernel configuration option has
-	been added for &os;/&arch.i386;, which instructs &man.pmap.9;
-	to use <acronym>PAE</acronym> format for page tables while
-	maintaining a 32-bit physical address size elsewhere in the
-	kernel.  The use of this option can enhance application-level
-	security by enabling the creation of <quote>no execute</quote>
-	mappings on modern &arch.i386; processors.  Unlike the
-	<literal>PAE</literal> option, <literal>PAE_TABLES</literal>
-	preserves kernel binary interface (<acronym>KBI</acronym>)
-	compatibility with non-<literal>PAE</literal> kernels,
-	allowing non-<literal>PAE</literal> kernel modules and drivers
-	to work with a <literal>PAE_TABLES</literal>-enabled kernel.
-	Additionally, system limits are tuned for 4GB maximum
-	<acronym>RAM</acronym>, avoiding kernel virtual address space
-	(<acronym>KVA</acronym>) exhaustion.</para>
-
-      <para revision="282826">The <literal>SIFTR</literal> kernel
-	configuration has been added, allowing building &man.siftr.4;
-	statically into the kernel.</para>
-
-      <para revision="283076" contrib="sponsor" sponsor="&intelcorp;"
-	arch="amd64,i386">The &man.nvd.4; and &man.nvme.4; drivers are
-	now included in the <filename>GENERIC</filename> kernel
-	configuration by default.</para>
-
-      <para revision="283505" arch="arm">The &arch.arm; boot loader,
-	<filename>ubldr</filename>, is now relocatable.  In addition,
-	<filename>ubldr.bin</filename> is now created during build
-	time, which is a stripped binary with an entry point of
-	<literal>0</literal>, providing the ability to specify the
-	load address by running <literal>go
-	  &dollar;{loadaddr}</literal> in
-	<literal>u-boot</literal>.</para>
-
-      <para revision="284094" arch="arm">A new module for creating
-	<filename>rpi.dtb</filename> has been added for the Raspberry
-	Pi.</para>
-
-      <para revision="284094" arch="arm">The
-	<filename>rpi.dtb</filename> module is now installed to
-	<filename class="directory">/boot/dtb/</filename> by
-	default for the Raspberry Pi system.</para>
-
-      <para revision="284096" arch="arm">A new module for creating
-	the <filename>dtb</filename> module for AM335x systems has
-	been added.</para>
-
-      <para revision="284522" contrib="sponsor"
-	sponsor="&limelight;">A new kernel configuration option,
-	<literal>EM_MULTIQUEUE</literal>, has been added which enables
-	multi-queue support in the &man.em.4; driver.</para>
-
-      <note>
-	<para>Multi-queue support in the &man.em.4; driver is not
-	  officially supported by &intel;.</para>
-      </note>
+      <para revision="286132" contrib="sponsor"
+	sponsor="&ff;" arch="amd64,i386">The &man.pms.4; driver
+	has been removed from
+	<filename>GENERIC</filename> kernel.</para>
     </sect2>
 
     <sect2 xml:id="kernel-sysctl">
       <title>System Tuning and Controls</title>
 
-      <para revision="276986">Throttling via <acronym>ACPI</acronym>
-	and <acronym>P4TCC</acronym> via &man.device.hints.5; have
-	been turned off by default.</para>
+      <para revision="287438">A &man.sysctl.3; variable
+	<varname>kern.features.invariants</varname> has been added.
+	It shows if the kernel is compiled with <option>INVARIANTS</option>
+	or not.</para>
 
-      <para revision="278982" contrib="sponsor" sponsor="&ff;">The
-	&man.hwpmc.4; default and maximum callchain depths have been
-	increased.  The default has been increased from 16 to 32, and
-	the maximum increased from 32 to 128.</para>
-
-      <para revision="281255" contrib="sponsor"
-	sponsor="&ix;, &ff;">The &man.devfs.5; device filesystem has
-	been changed to update timestamps for read/write operations
-	using seconds precision.  A new &man.sysctl.8;,
-	<literal>vfs.devfs.dotimes</literal> has been added, which
-	when set to a non-zero value, enables default precision
-	timestamps for these operations.</para>
-
-      <para revision="280632">The <literal>kern.osrelease</literal>
-	and <literal>kern.osreldate</literal> are now configurable
-	&man.jail.8; parameters.</para>
-
-      <para revision="284665" contrib="sponsor" sponsor="&ff;">A new
-	&man.sysctl.8;, <literal>kern.racct.enable</literal>, has been
-	added, which when set to a non-zero value allows using
-	&man.rctl.8; with the <literal>GENERIC</literal> kernel.
-	A new kernel configuration option,
-	<literal>RACCT_DISABLED</literal> has also been added.</para>
-
-      <para revision="284665" contrib="sponsor" sponsor="&ff;">The
-	<literal>GENERIC</literal> kernel configuration now includes
-	<literal>RACCT</literal> and <literal>RCTL</literal> by
-	default.</para>
-
-      <note>
-	<para>To enable <literal>RACCT</literal> and
-	  <literal>RCTL</literal> on a system using the
-	  <literal>GENERIC</literal> kernel configuration, add
-	  <literal>kern.racct.enable=1</literal> to
-	  &man.loader.conf.5;, and reboot the system.</para>
-      </note>
+      <para revision="286322" contrib="sponsor"
+	sponsor="&ff;">A bug which could prevent a loader
+	tunable <varname>kern.racct.enable</varname> from working
+	has been fixed.</para>
     </sect2>
   </sect1>
 
@@ -490,57 +420,71 @@
     <sect2 xml:id="drivers-device">
       <title>Device Drivers</title>
 
-      <para revision="282199">The <literal>drm</literal> code has
-	been updated to match &linux; version 3.8.13.</para>
+      <para revision="287079" arch="arm">The <literal>imxwdt</literal>
+	driver, which supports Freescale i.MX watchdog, has been
+	fixed.</para>
 
-      <para revision="281708">The &man.psm.4; driver has been updated
-	to include improved support for newer Synaptics&nbsp;&reg;
-	touchpads and the ClickPad&nbsp;&reg; mouse on newer
-	Lenovo&nbsp;&trade; laptops.</para>
+      <para revision="287926">The &man.puc.4; driver now supports MSI
+	interrupts and prefers it to the legacy interrupts.  This
+	behavior can be disabled by setting
+	<varname>hw.puc.msi_disable</varname> loader tunable.</para>
+
+      <para revision="287037">A bug in the &man.uart.4; driver which
+	could cause a polarity reversal of PPS (Pulse Per Second)
+	capture events has been fixed.  The trailing edge of a
+	positive PPS pulse and the leading edge of the next pulse were
+	used as "assert" and "clear" event respectively.</para>
+
+      <para revision="287037">The &man.uart.4; driver now supports
+	runtime configuration of PPS signal source captured by the
+	driver via <varname>dev.uart.pps_mode</varname> and
+	<varname>dev.uart.<replaceable>0</replaceable>.pps_mode</varname>
+	sysctl variables.  The values <literal>0</literal>,
+	<literal>1</literal>, and <literal>2</literal> correspond to
+	disabled, capturing pulses on the CTS line,
+	and capturing pulses on the DCD line, respectively.
+	The default value is <literal>2</literal>.</para>
+
+      <para revision="287035">The &man.uftdi.4; driver now supports
+	<varname>UFTDIIOC_READ_EEPROM</varname>,
+	<varname>UFTDIIOC_WRITE_EEPROM</varname>,
+	and <varname>UFTDIIOC_ERASE_EEPROM</varname>
+	&man.ioctl.2; to
+	read/write serial EEPROM attached to the controller chip.</para>
     </sect2>
 
     <sect2 xml:id="drivers-storage">
       <title>Storage Drivers</title>
 
-      <para revision="283990">The &man.mpr.4; driver has been
-	updated to version 9.255.01.00-fbsd.</para>
+      <para revision="280451">Legacy &man.ata.4; drivers such as
+	<literal>ataahci</literal>, <literal>ataadaptec</literal>,
+	and <literal>mv_sata</literal> have been removed in favor of
+	the new drivers such as &man.ahci.4;, &man.siis.4;, and
+	&man.mvs.4;.</para>
 
-      <para revision="284879">The &man.hpt27xx.4; driver has been
-	updated to version 1.2.7.</para>
+      <para revision="288732" contrib="sponsor" sponsor="&ix;">The
+	<acronym>CTL</acronym> High Availability implementation has
+	been rewritten.</para>
 
-      <para revision="284935">The &man.hptnr.4; driver has been
-	updated to version 1.1.4.</para>
+      <para revision="288810">The &man.ctl.4; driver has been updated
+	to support CD-ROM and removable devices.</para>
+
+      <para contrib="sponsor" sponsor="&ix;">The &man.isp.4; driver has
+	been updated and improved: added support for 16Gbps FC cards,
+	improved target mode support, completed Multi-ID (NPIV)
+	functionality.</para>
     </sect2>
 
     <sect2 xml:id="drivers-network">
       <title>Network Drivers</title>
 
-      <para revision="274486">The &man.pf.4; interface default hash
-	has been changed from <literal>Jenkins</literal> to
-	<literal>Murmur3</literal>, providing a 3-percent performance
-	increase in packets-per-second.</para>
+      <para revision="295524" contrib="sponsor"
+	sponsor="&limelight;, &intelcorp;">The &man.ixgbe.4; driver
+	has been updated to version 3.1.13-k.</para>
 
-      <para revision="279157">The &man.ral.4; driver has been updated
-	to support the RT5390 and RT5392 chipsets.</para>
-
-      <para revision="284066" contrib="sponsor" sponsor="&yandex;">The
-	&man.gre.4; driver has been significantly overhauled, and has
-	been split into two separate modules, &man.gre.4; and
-	&man.me.4;.</para>
-
-      <para revision="284365">The &man.vxlan.4; driver has been added,
-	which creates a virtual Layer 2 (Ethernet) network overlaid in
-	a Layer 3 (IP/UDP) network.  The &man.vxlan.4; driver is
-	analogous to &man.vlan.4;, but is designed to be better suited
-	for large, multiple-tenant datacenter environments.</para>
-
-      <para revision="284499">The &man.cdce.4; driver has been updated
-	to include support for the RTL8153 chipset.</para>
-
-      <para revision="284555" contrib="sponsor"
-	sponsor="&solarflare;">The &man.sfxge.4; driver has been
-	updated to support Solarflare Flareon Ultra 7000-series
-	chipsets.</para>
+      <para revision="286895">Firmwares for model T4 and T5 bundled
+	with the &man.cxgbe.4; driver have been updated to
+	version 1.14.4.0.</para>
     </sect2>
   </sect1>
 
@@ -555,89 +499,17 @@
     <sect2 xml:id="hardware-support">
       <title>Hardware Support</title>
 
-      <para revision="278407">The &man.uart.4; driver has been updated
-	to include support for the <acronym>AMT</acronym> serial
-	interface found on the Lenovo&reg; ThinkPad&trade; T61.</para>
-
-      <para revision="279924">The &man.uart.4; driver has been updated
-	to include support for the <acronym>AMT</acronym> serial
-	interface found on the Lenovo&reg; ThinkPad&trade;
-	T400.</para>
-
-      <para revision="281963">The &man.snd.hda.4; driver has been
-	updated to support the Lenovo&reg; ThinkPad&trade; X1 20BS
-	model.</para>
+      <para revision="293675">The &man.ismt.4; driver has been added,
+	providing support for recent &intel; SMBus 2.0
+	controllers.</para>
     </sect2>
 
     <sect2 xml:id="hardware-virtualization">
       <title>Virtualization Support</title>
 
-      <para revision="275273">The &man.virtio.console.4; driver has
-	been added, which provides an interface to VirtIO console
-	devices through a &man.tty.4; device.</para>
-
-      <para revision="276403">The &man.bhyve.8; hypervisor has been
-	updated to support &amd; processors with
-	<acronym>SVM</acronym> and <acronym>AMD-V</acronym> hardware
-	extensions.</para>
-
-      <para revision="280370">The &man.bhyve.8; hypervisor has been
-	updated to support <literal>DSM TRIM</literal> commands for
-	virtual <acronym>AHCI</acronym> disks.</para>
-
-      <para revision="283280" contrib="sponsor" sponsor="&msostc;">The
-	Hyper-V&trade; drivers have been updated with several
-	enhancements:</para>
-
-      <itemizedlist>
-	<listitem>
-	  <para>The &man.hv.vmbus.4; driver now has multi-channel
-	    support.</para>
-	</listitem>
-
-	<listitem>
-	  <para>The &man.hv.storvsc.4; driver now has scatter/gather
-	    support, in addition to performance improvements.</para>
-	</listitem>
-
-	<listitem>
-	  <para>The &man.hv.kvp.4; driver has received several bug
-	    fixes.</para>
-	</listitem>
-      </itemizedlist>
-
-      <para revision="285236" contrib="sponsor" sponsor="&msostc;">The
-	&man.hv.netvsc.4; driver has been updated to support checksum
-	offloading and <acronym>TSO</acronym>.</para>
-    </sect2>
-
-    <sect2 xml:id="hardware-arm">
-      <title>ARM Support</title>
-
-      <para revision="278079">Support to turn off the BeagleBone Black
-	system with the &man.shutdown.8; <literal>-p</literal> flag or
-	by invoking &man.poweroff.8; has been added.</para>
-
-      <para revision="278599">Support for the Exynos 5420 Octa system
-	has been added.</para>
-
-      <para revision="278599">The <acronym>SMP</acronym> option has
-	been enabled for all Exynos 5 systems supported by
-	&os;.</para>
-
-      <para revision="278608">The <literal>bcm2835_cpufreq</literal>
-	driver has been added, which supports <acronym>CPU</acronym>
-	frequency and voltage control on the Raspberry Pi
-	<acronym>SOC</acronym>.</para>
-
-      <para revision="283500">Support for the Toradex Apalis i.MX6
-	development board has been added.</para>
-
-      <para revision="283500">Audio transmission drivers have been
-	added for Digital Audio Multiplexer
-	(<acronym>AUDMUXM</acronym>), Smart Direct Memory Access
-	Controller (<acronym>SDMA</acronym>), and Syncronous Serial
-	Interface (<acronym>SSI</acronym>).</para>
+      <para revision="287802">The &man.xen.4; driver has been updated
+	to include support for <literal>blkif</literal> indirect
+	segment I/O.</para>
     </sect2>
   </sect1>
 
@@ -647,80 +519,14 @@
     <para>This section covers changes and additions to file systems
       and other storage subsystems, both local and networked.</para>
 
-    <sect2 xml:id="storage-general">
-      <title>General Storage</title>
-
-      <para revision="279002" contrib="sponsor" sponsor="&ix;">The
-	&man.ctl.4; <acronym>LUN</acronym> mapping has been rewritten,
-	replacing <acronym>iSCSI</acronym>-specific mapping mechanisms
-	with a new mechanism that works for any port.</para>
-
-      <para revision="279055" contrib="sponsor" sponsor="&ix;">The
-	&man.ctld.8; utility has been updated to allow controlling
-	non-<acronym>iSCSI</acronym> &man.ctl.4; ports.</para>
-
-      <para revision="283223" contrib="sponsor" sponsor="&ff;">The
-	&man.autofs.5; subsystem has been updated to include a new
-	&man.auto.master.5; map, <literal>-media</literal>, which
-	allows automatically mounting removable media, such as
-	<acronym>CD</acronym> drives or <acronym>USB</acronym> flash
-	drives.</para>
-
-      <para revision="283242" contrib="sponsor" sponsor="&ff;">The
-	&man.autofs.5; subsystem has been updated to include a new
-	&man.auto.master.5; map, <literal>-noauto</literal>, which
-	handles &man.fstab.5; entries set to
-	<literal>noauto</literal>.</para>
-    </sect2>
-
-    <sect2 xml:id="storage-net">
-      <title>Networked Storage</title>
-
-      <para revision="274939" contrib="sponsor" sponsor="&ix;">The
-	&man.ctld.8; utility has been updated to include support for
-	registering <acronym>iSCSI</acronym> targets and portals on
-	<acronym>iSNS</acronym> servers.  This provides a mechanism
-	which allows <acronym>iSCSI</acronym> initiators to find
-	targets and portals without requiring active
-	discovery.</para>
-
-      <para revision="275249" contrib="sponsor" sponsor="&ff;">The
-	&man.mount.nfs.8; utility has been updated to include support
-	for the <literal>timeo</literal>, <literal>actimeo</literal>,
-	<literal>noac</literal>, and <literal>proto</literal>
-	options.</para>
-    </sect2>
-
     <sect2 xml:id="storage-zfs">
       <title>ZFS</title>
 
-      <para revision="275490">A new tunable,
-	<literal>vfs.zfs.spa_slop_shift</literal>, has been added,
-	which controls how much space is reserved by default.</para>
-
-      <para revision="277583">The <literal>arc_meta_limit</literal>
-	statistics are now visible through the
-	<literal>kstat</literal> &man.sysctl.8;.  As a result of this
-	change, the <literal>vfs.zfs.arc_meta_used</literal>
-	&man.sysctl.8; has been removed, and replaced with the
-	<literal>kstat.zfs.misc.arcstats.arc_meta_used</literal>
-	&man.sysctl.8;.</para>
-    </sect2>
-
-    <sect2 xml:id="storage-geom">
-      <title>GEOM</title>
-
-      <para revision="275891" contrib="sponsor" sponsor="&ix;">The
-	&man.ctl.4; subsystem has been updated, increasing the ports
-	limit from <literal>128</literal> to <literal>256</literal>,
-	and <acronym>LUN</acronym> limit from <literal>256</literal>
-	to <literal>1024</literal>.</para>
-
-      <para revision="282861">The &man.gpart.8; utility has been
-	updated to include support for the
-	<literal>apple-boot</literal>, <literal>apple-hfs</literal>,
-	and <literal>apple-ufs</literal> <acronym>MBR</acronym>
-	partitioning schemes.</para>
+      <para revision="287665" contrib="sponsor"
+	sponsor="&clusterhq;">The &man.zfs.8; <literal>l2arc</literal>
+	code has been updated to take <literal>ashift</literal> into
+	account when gathering buffers to be written to the
+	<literal>l2arc</literal> device.</para>
     </sect2>
   </sect1>
 
@@ -733,29 +539,28 @@
     <sect2 xml:id="boot-loader">
       <title>Boot Loader Changes</title>
 
-      <para revision="281323">Support for <literal>bzipfs</literal>
-	has been added to the <acronym>EFI</acronym> loader.</para>
+      <para revision="294445">Initial terminal emulation support has
+	been added to <filename>loader.efi</filename> for
+	<acronym>UEFI</acronym>-based systems.</para>
 
-      <para revision="281843">The boot loader has been updated to
-	support entering the <acronym>GELI</acronym> passphrase before
-	loading the kernel.  To enable this behavior, add
-	<literal>geom_eli_passphrase_prompt="YES"</literal> to
-	&man.loader.conf.5;.</para>
+      <para revision="294999" contrib="sponsor"
+	sponsor="&multiplay;">Initial <acronym>ZFS</acronym> boot
+	support has been added to the <acronym>EFI</acronym>
+	implementation.</para>
 
-      <para revision="283262" contrib="sponsor" sponsor="&ff;">The
-	memory test run at boot time on &os;/&arch.amd64; platforms
-	has been disabled by default.</para>
+      <para revision="295475" contrib="sponsor"
+	sponsor="&scaleengine;">The <acronym>UEFI</acronym> loader has
+	been updated to support multiple <acronym>ZFS</acronym> boot
+	environments, such as those provided by <filename
+	  role="package">sysutils/beadm</filename>.</para>
+    </sect2>
 
-      <para revision="283972">A new &man.ttys.5; class,
-	<literal>3wire</literal>, has been added.  This is similar to
-	the existing terminal classes, but does not have a defined
-	baudrate.</para>
+    <sect2 xml:id="boot-menu">
+      <title>Boot Menu Changes</title>
 
-      <para revision="284775" contrib="sponsor" sponsor="&ff;"
-	arch="arm">The &man.ttys.5; file for &os;/&arch.arm; has been
-	updated to enable <filename>ttyu1</filename>,
-	<filename>ttyu2</filename>, and <filename>ttyu3</filename> by
-	default, if the callin port is an active console port.</para>
+      <para revision="294446">The <acronym>UEFI</acronym> boot menu
+	has been updated to enable the <quote>Beastie</quote> menu,
+	similiar to the traditional &man.sc.4; boot menu.</para>
     </sect2>
   </sect1>
 
@@ -765,149 +570,39 @@
     <para>This section describes changes that affect networking in
       &os;.</para>
 
-    <sect2 xml:id="network-protocols">
-      <title>Network Protocols</title>
+    <para revision="287594,287723">The &man.epair.4; virtual
+      Ethernet interface and the &man.lagg.4; pseudo interface now
+      support <filename>VIMAGE</filename> kernel.</para>
 
-      <para revision="273838" contrib="sponsor"
-	sponsor="&limelight;">Support for <acronym>PLPMTUD</acronym>
-	blackhole detection (<acronym>RFC</acronym> 4821) has been
-	added to the &man.tcp.4; stack, disabled by default.  New
-	control tunables have been added:</para>
+    <para revision="287594">A bug in the &man.epair.4; virtual
+      Ethernet interface which could cause a panic when running
+      &man.ifconfig.8; <command>create</command> and
+      <command>destory</command> quickly has been fixed.</para>
 
-      <informaltable frame="none" pgwide="0">
-	<tgroup cols="2">
-	  <colspec colwidth="1*"/>
-	  <colspec colwidth="1*"/>
-	  <thead>
-	    <row>
-	      <entry>Tunable</entry>
-	      <entry>Description</entry>
-	    </row>
-	  </thead>
+    <para revision="287723">&man.sysctl.3; variables in the
+      &man.lagg.4; pseudo interface
+      <varname>net.link.lagg.<replaceable>N</replaceable>.<replaceable>*</replaceable></varname>
+      have been removed in favor of per-interface &man.ifconfig.8;
+      flags and options.  <command>ifconfig -v</command>
+      command shows them.</para>
 
-	  <tbody>
-	    <row>
-	      <entry><literal>net.inet.tcp.pmtud_blackhole_detection</literal></entry>
-	      <entry>Enables or disables <acronym>PLPMTUD</acronym>
-		blackhole detection</entry>
-	    </row>
+    <para revision="287723">Bugs in the
+      &man.lagg.4; pseudo interface which could cause a system
+      panic have been fixed.</para>
 
-	    <row>
-	      <entry><literal>net.inet.tcp.pmtud_blackhole_mss</literal></entry>
-	      <entry><acronym>MSS</acronym> to try for IPv4</entry>
-	    </row>
+    <para revision="286125" contrib="sponsor"
+      sponsor="&netgate;">A bug in &man.pf.4; packet filter which
+      could cause a rule with no <literal>log</literal> parameter to
+      log the matched packet has been fixed.</para>
 
-	    <row>
-	      <entry><literal>net.inet.tcp.v6pmtud_blackhole_mss</literal></entry>
-	      <entry><acronym>MSS to try for IPv6</acronym></entry>
-	    </row>
-	  </tbody>
-	</tgroup>
-      </informaltable>
+    <para revision="286316">A bug in &os; IPv6 stack which did not
+      invoke an <literal>LLENTRY_DELETED</literal> event when an L2
+      address was deleted from the link-level address table for
+      IPv6.</para>
 
-      <para>New monitoring &man.sysctl.8;s haven been added:</para>
-
-      <informaltable frame="none" pgwide="0">
-	<tgroup cols="2">
-	  <colspec colwidth="1*"/>
-	  <colspec colwidth="1*"/>
-	  <thead>
-	    <row>
-	      <entry>Tunable</entry>
-	      <entry>Description</entry>
-	    </row>
-	  </thead>
-
-	  <tbody>
-	    <row>
-	      <entry><literal>net.inet.tcp.pmtud_blackhole_activated</literal></entry>
-	      <entry>Number of times the code was activated to attempt
-		downshifting the <acronym>MSS</acronym></entry>
-	    </row>
-
-	    <row>
-	      <entry><literal>net.inet.tcp.pmtud_blackhole_min_activated</literal></entry>
-	      <entry>Number of times the blackhole
-		<acronym>MSS</acronym> was used in an attempt to
-		downshift</entry>
-	    </row>
-
-	    <row>
-	      <entry><literal>net.inet.tcp.pmtud_blackhole_failed</literal></entry>
-	      <entry>Number of times that the blackhole failed to
-		connect after downshifting the
-		<acronym>MSS</acronym></entry>
-	    </row>
-	  </tbody>
-	</tgroup>
-      </informaltable>
-    </sect2>
-  </sect1>
-
-  <sect1 xml:id="ports">
-    <title>Ports Collection and Package Infrastructure</title>
-
-    <para>This section covers changes to the &os;&nbsp;Ports
-      Collection, package infrastructure, and package maintenance and
-      installation tools.</para>
-
-    <sect2 xml:id="ports-versions">
-      <title>Ports and Package Versions</title>
-
-      <para>The <filename role="package">ports-mgmt/pkg</filename>
-	package has been updated to version 1.5.4 in the
-	<literal>quarterly</literal> branch, and version 1.5.5 in the
-	<literal>head</literal> branch.</para>
-
-      <para>The <filename
-	  role="package">x11-servers/xorg-server</filename> package
-	for &os;&nbsp;&release.current; has been updated to version
-	1.14.7_5.</para>
-
-      <para>The <filename role="package">x11/xorg</filename> package
-	for &os;&nbsp;&release.current; has been updated to version
-	7.7_2.</para>
-
-      <para>The <filename role="package">x11/gnome3</filename> package
-	for &os;&nbsp;&release.current; has been updated to version
-	3.14.2.</para>
-
-      <para>The <filename role="package">x11/kde4</filename> package
-	for &os;&nbsp;&release.current; has been updated to version
-	4.14.3.</para>
-    </sect2>
-  </sect1>
-
-  <sect1 xml:id="releng">
-    <title>Release Engineering and Integration</title>
-
-    <para>This section convers changes that are specific to the
-      &os;&nbsp;Release Engineering processes.</para>
-
-    <sect2 xml:id="releng-changes">
-      <title>Integration Changes</title>
-
-      <para revision="283161" contrib="sponsor" sponsor="&ff;">The
-	Release Engineering build tools have been updated to support
-	building &os;/&arch.arm; images without external utilities for
-	supported boards where a corresponding
-	<literal>u-boot</literal> port exists in the Ports
-	Collection.</para>
-
-      <para revision="283548" contrib="sponsor" sponsor="&ff;">The
-	&os;/&arch.i386; memory stick installation images are now
-	created using the &man.mkimg.1; utility, matching the way
-	the &os;/&arch.amd64; images are created.</para>
-
-      <para revision="285830" contrib="sponsor" sponsor="&ff;">The
-	default &man.pkg.8; repository set in
-	<filename>/etc/pkg/FreeBSD.conf</filename> now defaults to
-	the <literal>quarterly</literal> package set.  To use the
-	<literal>latest</literal> branch (as was the previous
-	default), the comment at the top of
-	<filename>/etc/pkg/FreeBSD.conf</filename> explains how to
-	disable the default repository and specify an alternative
-	repository.</para>
-    </sect2>
+    <para revision="287733">Obsolete APIs,
+      <literal>SIOCGDRLST_IN6</literal> and
+      <literal>SIOCGPRLST_IN6</literal> in &os; IPv6 stack have been
+      removed.</para>
   </sect1>
 </article>

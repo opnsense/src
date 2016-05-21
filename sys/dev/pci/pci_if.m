@@ -36,6 +36,12 @@ CODE {
 	{
 		return (0);
 	}
+
+	static int
+	null_msix_bar(device_t dev, device_t child)
+	{
+		return (-1);
+	}
 };
 
 
@@ -138,6 +144,26 @@ METHOD int alloc_msix {
 	int		*count;
 };
 
+METHOD void enable_msi {
+	device_t	dev;
+	device_t	child;
+	uint64_t	address;
+	uint16_t	data;
+};
+
+METHOD void enable_msix {
+	device_t	dev;
+	device_t	child;
+	u_int		index;
+	uint64_t	address;
+	uint32_t	data;
+};
+
+METHOD void disable_msi {
+	device_t	dev;
+	device_t	child;
+};
+
 METHOD int remap_msix {
 	device_t	dev;
 	device_t	child;
@@ -160,8 +186,22 @@ METHOD int msix_count {
 	device_t	child;
 } DEFAULT null_msi_count;
 
+METHOD int msix_pba_bar {
+	device_t	dev;
+	device_t	child;
+} DEFAULT null_msix_bar;
+
+METHOD int msix_table_bar {
+	device_t	dev;
+	device_t	child;
+} DEFAULT null_msix_bar;
+
 METHOD uint16_t get_rid {
 	device_t	dev;
 	device_t	child;
 };
 
+METHOD void child_added {
+	device_t	dev;
+	device_t	child;
+};

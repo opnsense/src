@@ -261,6 +261,7 @@ e_machines(u_int mach)
 	case EM_386:	return "EM_386";
 	case EM_68K:	return "EM_68K";
 	case EM_88K:	return "EM_88K";
+	case EM_IAMCU:	return "EM_IAMCU";
 	case EM_860:	return "EM_860";
 	case EM_MIPS:	return "EM_MIPS";
 	case EM_PPC:	return "EM_PPC";
@@ -271,6 +272,7 @@ e_machines(u_int mach)
 	case EM_IA_64:	return "EM_IA_64";
 	case EM_X86_64:	return "EM_X86_64";
 	case EM_AARCH64:return "EM_AARCH64";
+	case EM_RISCV:	return "EM_RISCV";
 	}
 	snprintf(machdesc, sizeof(machdesc),
 	    "(unknown machine) -- type 0x%x", mach);
@@ -377,7 +379,9 @@ sh_types(uint64_t machine, uint64_t sht) {
 			break;
 		case EM_MIPS:
 			switch (sht) {
+			case SHT_MIPS_REGINFO: return "SHT_MIPS_REGINFO";
 			case SHT_MIPS_OPTIONS: return "SHT_MIPS_OPTIONS";
+			case SHT_MIPS_ABIFLAGS: return "SHT_MIPS_ABIFLAGS";
 			}
 			break;
 		}

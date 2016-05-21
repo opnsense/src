@@ -402,9 +402,11 @@ _rm_rlock_hard(struct rmlock *rm, struct rm_priotracker *tracker, int trylock)
 				return (0);
 		}
 	} else {
-		if (rm->lock_object.lo_flags & LO_SLEEPABLE)
+		if (rm->lock_object.lo_flags & LO_SLEEPABLE) {
+			THREAD_SLEEPING_OK();
 			sx_xlock(&rm->rm_lock_sx);
-		else
+			THREAD_NO_SLEEPING();
+		} else
 			mtx_lock(&rm->rm_lock_mtx);
 	}
 
@@ -581,7 +583,7 @@ _rm_wunlock(struct rmlock *rm)
 		mtx_unlock(&rm->rm_lock_mtx);
 }
 
-#ifdef LOCK_DEBUG
+#if LOCK_DEBUG > 0
 
 void
 _rm_wlock_debug(struct rmlock *rm, const char *file, int line)

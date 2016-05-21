@@ -62,6 +62,10 @@
 # endif
 #endif
 
+#if defined(HAVE_SIGNALED_IO) && defined(DEBUG_TIMING)
+# undef DEBUG_TIMING
+#endif
+
 /*
  * setsockopt does not always have the same arg declaration
  * across all platforms. If it's not defined we make it empty
@@ -774,12 +778,6 @@ new_interface(
 	iface->ifnum = sys_ifnum++;
 	iface->starttime = current_time;
 
-#   ifdef HAVE_IO_COMPLETION_PORT
-	if (!io_completion_port_add_interface(iface)) {
-		msyslog(LOG_EMERG, "cannot register interface with IO engine -- will exit now");
-		exit(1);
-	}
-#   endif
 	return iface;
 }
 
@@ -787,14 +785,11 @@ new_interface(
 /*
  * return interface storage into free memory pool
  */
-static void
+static inline void
 delete_interface(
 	endpt *ep
 	)
 {
-#    ifdef HAVE_IO_COMPLETION_PORT
-	io_completion_port_remove_interface(ep);
-#    endif
 	free(ep);
 }
 
@@ -1012,9 +1007,6 @@ remove_interface(
 			ep->sent,
 			ep->notsent,
 			current_time - ep->starttime);
-#	    ifdef HAVE_IO_COMPLETION_PORT
-		io_completion_port_remove_socket(ep->fd, ep);
-#	    endif
 		close_and_delete_fd_from_list(ep->fd);
 		ep->fd = INVALID_SOCKET;
 	}
@@ -1023,15 +1015,10 @@ remove_interface(
 		msyslog(LOG_INFO,
 			"stop listening for broadcasts to %s on interface #%d %s",
 			stoa(&ep->bcast), ep->ifnum, ep->name);
-#	    ifdef HAVE_IO_COMPLETION_PORT
-		io_completion_port_remove_socket(ep->bfd, ep);
-#	    endif
 		close_and_delete_fd_from_list(ep->bfd);
 		ep->bfd = INVALID_SOCKET;
+		ep->flags &= ~INT_BCASTOPEN;
 	}
-#   ifdef HAVE_IO_COMPLETION_PORT
-	io_completion_port_remove_interface(ep);
-#   endif
 
 	ninterfaces--;
 	mon_clearinterface(ep);
@@ -2582,7 +2569,7 @@ io_setbclient(void)
 			continue;
 
 		/* Only IPv4 addresses are valid for broadcast */
-		REQUIRE(IS_IPV4(&interf->bcast));
+		REQUIRE(IS_IPV4(&interf->sin));
 
 		/* Do we already have the broadcast address open? */
 		if (interf->flags & INT_BCASTOPEN) {
@@ -2610,31 +2597,13 @@ io_setbclient(void)
 			msyslog(LOG_INFO,
 				"Listen for broadcasts to %s on interface #%d %s",
 				stoa(&interf->bcast), interf->ifnum, interf->name);
-		} else switch (errno) {
-			/* Silently ignore EADDRINUSE as we probably
-			 * opened the socket already for an address in
-			 * the same network */
-		case EADDRINUSE:
-			/* Some systems cannot bind a socket to a broadcast
-			 * address, as that is not a valid host address. */
-		case EADDRNOTAVAIL:
-#		    ifdef SYS_WINNT	/*TODO: use for other systems, too? */
-			/* avoid recurrence here -- if we already have a
-			 * regular socket, it's quite useless to try this
-			 * again.
-			 */
-			if (interf->fd != INVALID_SOCKET) {
-				interf->flags |= INT_BCASTOPEN;
-				nif++;
-			}
-#		    endif
-			break;
-
-		default:
-			msyslog(LOG_INFO,
-				"failed to listen for broadcasts to %s on interface #%d %s",
-				stoa(&interf->bcast), interf->ifnum, interf->name);
-			break;
+		} else {
+			/* silently ignore EADDRINUSE as we probably opened
+			   the socket already for an address in the same network */
+			if (errno != EADDRINUSE)
+				msyslog(LOG_INFO,
+					"failed to listen for broadcasts to %s on interface #%d %s",
+					stoa(&interf->bcast), interf->ifnum, interf->name);
 		}
 	}
 	set_reuseaddr(0);
@@ -2672,13 +2641,10 @@ io_unsetbclient(void)
 			msyslog(LOG_INFO,
 				"stop listening for broadcasts to %s on interface #%d %s",
 				stoa(&ep->bcast), ep->ifnum, ep->name);
-#		    ifdef HAVE_IO_COMPLETION_PORT
-			io_completion_port_remove_socket(ep->bfd, ep);
-#		    endif
 			close_and_delete_fd_from_list(ep->bfd);
 			ep->bfd = INVALID_SOCKET;
+			ep->flags &= ~INT_BCASTOPEN;
 		}
-		ep->flags &= ~INT_BCASTOPEN;
 	}
 	broadcast_client_enabled = ISC_FALSE;
 }
@@ -3054,11 +3020,11 @@ open_socket(
 		    fcntl(fd, F_GETFL, 0)));
 #endif /* SYS_WINNT || VMS */
 
-#if defined(HAVE_IO_COMPLETION_PORT)
+#if defined (HAVE_IO_COMPLETION_PORT)
 /*
  * Add the socket to the completion port
  */
-	if (!io_completion_port_add_socket(fd, interf, bcast)) {
+	if (io_completion_port_add_socket(fd, interf)) {
 		msyslog(LOG_ERR, "unable to set up io completion port - EXITING");
 		exit(1);
 	}
@@ -3067,6 +3033,10 @@ open_socket(
 }
 
 
+#ifdef SYS_WINNT
+#define sendto(fd, buf, len, flags, dest, destsz)	\
+	io_completion_port_sendto(fd, buf, len, (sockaddr_u *)(dest))
+#endif
 
 /* XXX ELIMINATE sendpkt similar in ntpq.c, ntpdc.c, ntp_io.c, ntptrace.c */
 /*
@@ -3154,9 +3124,6 @@ sendpkt(
 
 #ifdef SIM
 		cc = simulate_server(dest, src, pkt);
-#elif defined(HAVE_IO_COMPLETION_PORT)
-		cc = io_completion_port_sendto(src, src->fd, pkt,
-			(size_t)len, (sockaddr_u *)&dest->sa);
 #else
 		cc = sendto(src->fd, (char *)pkt, (u_int)len, 0,
 			    &dest->sa, SOCKLEN(dest));
@@ -3174,8 +3141,7 @@ sendpkt(
 }
 
 
-#if !defined(HAVE_IO_COMPLETION_PORT)
-#if !defined(HAVE_SIGNALED_IO)
+#if !defined(HAVE_IO_COMPLETION_PORT) && !defined(HAVE_SIGNALED_IO)
 /*
  * fdbits - generate ascii representation of fd_set (FAU debug support)
  * HFDF format - highest fd first.
@@ -3483,18 +3449,6 @@ read_network_packet(
 
 	DPRINTF(3, ("read_network_packet: fd=%d length %d from %s\n",
 		    fd, buflen, stoa(&rb->recv_srcadr)));
-
-#ifdef ENABLE_BUG3020_FIX
-	if (ISREFCLOCKADR(&rb->recv_srcadr)) {
-		msyslog(LOG_ERR, "recvfrom(%s) fd=%d: refclock srcadr on a network interface!",
-			stoa(&rb->recv_srcadr), fd);
-		DPRINTF(1, ("read_network_packet: fd=%d dropped (refclock srcadr))\n",
-			    fd));
-		packets_dropped++;
-		freerecvbuf(rb);
-		return (buflen);
-	}
-#endif
 
 	/*
 	** Bug 2672: Some OSes (MacOSX and Linux) don't block spoofed ::1
@@ -3835,7 +3789,7 @@ input_handler_scan(
 			lfptoms(&ts_e, 6));
 #endif /* DEBUG_TIMING */
 }
-#endif /* !HAVE_IO_COMPLETION_PORT */
+
 
 /*
  * find an interface suitable for the src address
@@ -4325,7 +4279,7 @@ io_addclock(
 		return 0;
 	}
 # elif defined(HAVE_IO_COMPLETION_PORT)
-	if (!io_completion_port_add_clock_io(rio)) {
+	if (io_completion_port_add_clock_io(rio)) {
 		UNBLOCKIO();
 		return 0;
 	}
@@ -4364,23 +4318,13 @@ io_closeclock(
 	rio->active = FALSE;
 	UNLINK_SLIST(unlinked, refio, rio, next, struct refclockio);
 	if (NULL != unlinked) {
-		/* Close the descriptor. The order of operations is
-		 * important here in case of async / overlapped IO:
-		 * only after we have removed the clock from the
-		 * IO completion port we can be sure no further
-		 * input is queued. So...
-		 *  - we first disable feeding to the queu by removing
-		 *    the clock from the IO engine
-		 *  - close the file (which brings down any IO on it)
-		 *  - clear the buffer from results for this fd
-		 */
-#	    ifdef HAVE_IO_COMPLETION_PORT
-		io_completion_port_remove_clock_io(rio);
-#	    endif
-		close_and_delete_fd_from_list(rio->fd);
 		purge_recv_buffers_for_fd(rio->fd);
-		rio->fd = -1;
+		/*
+		 * Close the descriptor.
+		 */
+		close_and_delete_fd_from_list(rio->fd);
 	}
+	rio->fd = -1;
 
 	UNBLOCKIO();
 }

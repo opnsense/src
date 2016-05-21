@@ -762,7 +762,7 @@ add_proc(struct cfjail *j, pid_t pid)
 	if (j->timeout.tv_sec == 0)
 		requeue(j, &sleeping);
 	else {
-		/* File the jail in the sleep queue acording to its timeout. */
+		/* File the jail in the sleep queue according to its timeout. */
 		TAILQ_REMOVE(j->queue, j, tq);
 		TAILQ_FOREACH(tj, &sleeping, tq) {
 			if (!tj->timeout.tv_sec ||
@@ -878,6 +878,7 @@ get_user_info(struct cfjail *j, const char *username,
 {
 	const struct passwd *pwd;
 
+	errno = 0;
 	*pwdp = pwd = username ? getpwnam(username) : getpwuid(getuid());
 	if (pwd == NULL) {
 		if (errno)

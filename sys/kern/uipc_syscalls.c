@@ -1787,9 +1787,6 @@ sockargs(mp, buf, buflen, type)
 	struct mbuf *m;
 	int error;
 
-	if (buflen < 0)
-		return (EINVAL);
-
 	if (buflen > MLEN) {
 #ifdef COMPAT_OLDSOCK
 		if (type == MT_SONAME && buflen <= 112)
@@ -2117,6 +2114,7 @@ sendfile_getobj(struct thread *td, struct file *fp, vm_object_t *obj_res,
 			goto out;
 		}
 	} else if (fp->f_type == DTYPE_SHM) {
+		error = 0;
 		shmfd = fp->f_data;
 		obj = shmfd->shm_object;
 		*obj_size = shmfd->shm_size;

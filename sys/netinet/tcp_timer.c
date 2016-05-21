@@ -71,6 +71,14 @@ __FBSDID("$FreeBSD$");
 #include <netinet/tcp_debug.h>
 #endif
 
+int    tcp_persmin;
+SYSCTL_PROC(_net_inet_tcp, OID_AUTO, persmin, CTLTYPE_INT|CTLFLAG_RW,
+    &tcp_persmin, 0, sysctl_msec_to_ticks, "I", "minimum persistence interval");
+
+int    tcp_persmax;
+SYSCTL_PROC(_net_inet_tcp, OID_AUTO, persmax, CTLTYPE_INT|CTLFLAG_RW,
+    &tcp_persmax, 0, sysctl_msec_to_ticks, "I", "maximum persistence interval");
+
 int	tcp_keepinit;
 SYSCTL_PROC(_net_inet_tcp, TCPCTL_KEEPINIT, keepinit, CTLTYPE_INT|CTLFLAG_RW,
     &tcp_keepinit, 0, sysctl_msec_to_ticks, "I", "time to establish connection");
@@ -596,7 +604,8 @@ tcp_timer_rexmt(void * xtp)
 	} else
 		tp->t_flags &= ~TF_PREVVALID;
 	TCPSTAT_INC(tcps_rexmttimeo);
-	if (tp->t_state == TCPS_SYN_SENT)
+	if ((tp->t_state == TCPS_SYN_SENT) ||
+	    (tp->t_state == TCPS_SYN_RECEIVED))
 		rexmt = TCPTV_RTOBASE * tcp_syn_backoff[tp->t_rxtshift];
 	else
 		rexmt = TCP_REXMTVAL(tp) * tcp_backoff[tp->t_rxtshift];
@@ -617,9 +626,15 @@ tcp_timer_rexmt(void * xtp)
 		int isipv6;
 #endif
 
+		/*
+		 * Idea here is that at each stage of mtu probe (usually, 1448
+		 * -> 1188 -> 524) should be given 2 chances to recover before
+		 *  further clamping down. 'tp->t_rxtshift % 2 == 0' should
+		 *  take care of that.
+		 */
 		if (((tp->t_flags2 & (TF2_PLPMTU_PMTUD|TF2_PLPMTU_MAXSEGSNT)) ==
 		    (TF2_PLPMTU_PMTUD|TF2_PLPMTU_MAXSEGSNT)) &&
-		    (tp->t_rxtshift <= 2)) {
+		    (tp->t_rxtshift >= 2 && tp->t_rxtshift % 2 == 0)) {
 			/*
 			 * Enter Path MTU Black-hole Detection mechanism:
 			 * - Disable Path MTU Discovery (IP "DF" bit).
@@ -687,9 +702,11 @@ tcp_timer_rexmt(void * xtp)
 			 * with a lowered MTU, maybe this isn't a blackhole and
 			 * we restore the previous MSS and blackhole detection
 			 * flags.
+			 * The limit '6' is determined by giving each probe
+			 * stage (1448, 1188, 524) 2 chances to recover.
 			 */
 			if ((tp->t_flags2 & TF2_PLPMTU_BLACKHOLE) &&
-			    (tp->t_rxtshift > 4)) {
+			    (tp->t_rxtshift > 6)) {
 				tp->t_flags2 |= TF2_PLPMTU_PMTUD;
 				tp->t_flags2 &= ~TF2_PLPMTU_BLACKHOLE;
 				optlen = tp->t_maxopd - tp->t_maxseg;

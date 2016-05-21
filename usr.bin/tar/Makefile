@@ -19,8 +19,8 @@ SRCS=	bsdtar.c	\
 SRCS+=	err.c		\
 	line_reader.c
 
-DPADD=	${LIBARCHIVE} ${LIBBZ2} ${LIBZ} ${LIBLZMA} ${LIBBSDXML}
-LDADD=	-larchive -lbz2 -lz -llzma -lbsdxml
+DPADD=	${LIBARCHIVE} ${LIBBZ2} ${LIBZ} ${LIBLZMA} ${LIBPTHREAD} ${LIBBSDXML}
+LDADD=	-larchive -lbz2 -lz -llzma -lpthread -lbsdxml
 .if ${MK_OPENSSL} != "no"
 DPADD+=	${LIBCRYPTO}
 LDADD+= -lcrypto
@@ -39,13 +39,9 @@ CFLAGS+=	-I${LIBARCHIVEDIR}/tar -I${LIBARCHIVEDIR}/libarchive
 CFLAGS+=	-I${LIBARCHIVEDIR}/libarchive_fe
 SYMLINKS=	bsdtar ${BINDIR}/tar
 MLINKS=	bsdtar.1 tar.1
-DEBUG_FLAGS=-g
 
-.PHONY: check test clean-test
-check test: $(PROG) bsdtar.1.gz
-	cd ${.CURDIR}/test && make obj && make test
-
-clean-test:
-	cd ${.CURDIR}/test && make clean
+.if ${MK_TESTS} != "no"
+SUBDIR+=	tests
+.endif
 
 .include <bsd.prog.mk>

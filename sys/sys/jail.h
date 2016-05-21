@@ -30,10 +30,6 @@
 #ifndef _SYS_JAIL_H_
 #define _SYS_JAIL_H_
 
-#if defined(_KERNEL) || defined(_WANT_PRISON)
-#include <sys/pax.h>
-#endif
-
 #ifdef _KERNEL
 struct jail_v0 {
 	u_int32_t	version;
@@ -191,7 +187,6 @@ struct prison {
 	char		 pr_domainname[MAXHOSTNAMELEN];	/* (p) jail domainname */
 	char		 pr_hostuuid[HOSTUUIDLEN];	/* (p) jail hostuuid */
 	char		 pr_osrelease[OSRELEASELEN];	/* (c) kern.osrelease value */
-	struct hbsd_features	pr_hbsd;		/* (p) PaX-inspired hardening features */
 };
 
 struct prison_racct {
@@ -237,7 +232,9 @@ struct prison_racct {
 #define	PR_ALLOW_MOUNT_PROCFS		0x0400
 #define	PR_ALLOW_MOUNT_TMPFS		0x0800
 #define	PR_ALLOW_MOUNT_FDESCFS		0x1000
-#define	PR_ALLOW_ALL			0x1fff
+#define	PR_ALLOW_MOUNT_LINPROCFS	0x2000
+#define	PR_ALLOW_MOUNT_LINSYSFS		0x4000
+#define	PR_ALLOW_ALL			0x7fff
 
 /*
  * OSD methods

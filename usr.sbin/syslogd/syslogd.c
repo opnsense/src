@@ -271,6 +271,7 @@ static struct filed *Files;	/* Log files that we write to */
 static struct filed consfile;	/* Console */
 
 static int	Debug;		/* debug flag */
+static int	Foreground = 0;	/* Run in foreground, instead of daemonizing */
 static int	resolve = 1;	/* resolve hostname */
 static char	LocalHostName[MAXHOSTNAMELEN];	/* our hostname */
 static const char *LocalDomain;	/* our local domain name */
@@ -339,6 +340,18 @@ static int	waitdaemon(int, int, int);
 static void	timedout(int);
 static void	increase_rcvbuf(int);
 
+static void
+close_filed(struct filed *f)
+{
+
+	if (f == NULL || f->f_file == -1)
+		return;
+
+	(void)close(f->f_file);
+	f->f_file = -1;
+	f->f_type = F_UNUSED;
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -360,7 +373,7 @@ main(int argc, char *argv[])
 		dprintf("madvise() failed: %s\n", strerror(errno));
 
 	bindhostname = NULL;
-	while ((ch = getopt(argc, argv, "468Aa:b:cCdf:kl:m:nNop:P:sS:Tuv"))
+	while ((ch = getopt(argc, argv, "468Aa:b:cCdf:Fkl:m:nNop:P:sS:Tuv"))
 	    != -1)
 		switch (ch) {
 		case '4':
@@ -395,6 +408,9 @@ main(int argc, char *argv[])
 			break;
 		case 'f':		/* configuration file */
 			ConfFile = optarg;
+			break;
+		case 'F':		/* run in foreground instead of daemon */
+			Foreground++;
 			break;
 		case 'k':		/* keep remote kern fac */
 			KeepKernFac = 1;
@@ -487,14 +503,14 @@ main(int argc, char *argv[])
 		warn("cannot open pid file");
 	}
 
-	if (!Debug) {
+	if ((!Foreground) && (!Debug)) {
 		ppid = waitdaemon(0, 0, 30);
 		if (ppid < 0) {
 			warn("could not become daemon");
 			pidfile_remove(pfh);
 			exit(1);
 		}
-	} else {
+	} else if (Debug) {
 		setlinebuf(stdout);
 	}
 
@@ -714,7 +730,7 @@ usage(void)
 {
 
 	fprintf(stderr, "%s\n%s\n%s\n%s\n",
-		"usage: syslogd [-468ACcdknosTuv] [-a allowed_peer]",
+		"usage: syslogd [-468ACcdFknosTuv] [-a allowed_peer]",
 		"               [-b bind_address] [-f config_file]",
 		"               [-l [mode:]path] [-m mark_interval]",
 		"               [-P pid_file] [-p log_socket]");
@@ -986,7 +1002,8 @@ logmsg(int pri, const char *msg, const char *from, int flags)
 			(void)strlcpy(f->f_lasttime, timestamp,
 				sizeof(f->f_lasttime));
 			fprintlog(f, flags, msg);
-			(void)close(f->f_file);
+			close(f->f_file);
+			f->f_file = -1;
 		}
 		(void)sigsetmask(omask);
 		return;
@@ -1275,8 +1292,7 @@ fprintlog(struct filed *f, int flags, const char *msg)
 			 */
 			if (errno != ENOSPC) {
 				int e = errno;
-				(void)close(f->f_file);
-				f->f_type = F_UNUSED;
+				close_filed(f);
 				errno = e;
 				logerror(f->f_un.f_fname);
 			}
@@ -1300,7 +1316,7 @@ fprintlog(struct filed *f, int flags, const char *msg)
 		}
 		if (writev(f->f_file, iov, IOV_SIZE) < 0) {
 			int e = errno;
-			(void)close(f->f_file);
+			close_filed(f);
 			if (f->f_un.f_pipe.f_pid > 0)
 				deadq_enter(f->f_un.f_pipe.f_pid,
 					    f->f_un.f_pipe.f_pname);
@@ -1408,7 +1424,7 @@ reapchild(int signo __unused)
 		for (f = Files; f; f = f->f_next)
 			if (f->f_type == F_PIPE &&
 			    f->f_un.f_pipe.f_pid == pid) {
-				(void)close(f->f_file);
+				close_filed(f);
 				f->f_un.f_pipe.f_pid = 0;
 				log_deadchild(pid, status,
 					      f->f_un.f_pipe.f_pname);
@@ -1512,7 +1528,7 @@ die(int signo)
 		if (f->f_prevcount)
 			fprintlog(f, 0, (char *)NULL);
 		if (f->f_type == F_PIPE && f->f_un.f_pipe.f_pid > 0) {
-			(void)close(f->f_file);
+			close_filed(f);
 			f->f_un.f_pipe.f_pid = 0;
 		}
 	}
@@ -1578,11 +1594,11 @@ init(int signo)
 		case F_FORW:
 		case F_CONSOLE:
 		case F_TTY:
-			(void)close(f->f_file);
+			close_filed(f);
 			break;
 		case F_PIPE:
 			if (f->f_un.f_pipe.f_pid > 0) {
-				(void)close(f->f_file);
+				close_filed(f);
 				deadq_enter(f->f_un.f_pipe.f_pid,
 					    f->f_un.f_pipe.f_pname);
 			}

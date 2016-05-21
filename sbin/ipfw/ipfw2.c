@@ -779,7 +779,7 @@ fill_dscp(ipfw_insn *cmd, char *av, int cblen)
 				errx(EX_DATAERR, "Invalid DSCP value");
 		}
 
-		if (code > 32)
+		if (code >= 32)
 			*high |= 1 << (code - 32);
 		else
 			*low |= 1 << code;
@@ -2268,14 +2268,14 @@ fill_ip(ipfw_insn_ip *cmd, char *av, int cblen)
 	case '/':
 		masklen = atoi(p);
 		if (masklen == 0)
-			d[1] = htonl(0);	/* mask */
+			d[1] = htonl(0U);	/* mask */
 		else if (masklen > 32)
 			errx(EX_DATAERR, "bad width ``%s''", p);
 		else
-			d[1] = htonl(~0 << (32 - masklen));
+			d[1] = htonl(~0U << (32 - masklen));
 		break;
 	case '{':	/* no mask, assume /24 and put back the '{' */
-		d[1] = htonl(~0 << (32 - 24));
+		d[1] = htonl(~0U << (32 - 24));
 		*(--p) = md;
 		break;
 
@@ -2284,7 +2284,7 @@ fill_ip(ipfw_insn_ip *cmd, char *av, int cblen)
 		/* FALLTHROUGH */
 	case 0:		/* initialization value */
 	default:
-		d[1] = htonl(~0);	/* force /32 */
+		d[1] = htonl(~0U);	/* force /32 */
 		break;
 	}
 	d[0] &= d[1];		/* mask base address with mask */
@@ -2990,7 +2990,7 @@ ipfw_add(char *av[])
 		action->opcode = O_NAT;
 		action->len = F_INSN_SIZE(ipfw_insn_nat);
 		CHECK_ACTLEN;
-		if (_substrcmp(*av, "global") == 0) {
+		if (*av != NULL && _substrcmp(*av, "global") == 0) {
 			action->arg1 = 0;
 			av++;
 			break;
@@ -4389,7 +4389,7 @@ table_list(uint16_t num, int need_header)
 			addr6 = &xent->k.addr6;
 
 
-			if (IN6_IS_ADDR_V4COMPAT(addr6)) {
+			if ((xent->flags & IPFW_TCF_INET) != 0) {
 				/* IPv4 address */
 				inet_ntop(AF_INET, &addr6->s6_addr32[3], tbuf, sizeof(tbuf));
 			} else {

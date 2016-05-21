@@ -38,7 +38,6 @@
 __FBSDID("$FreeBSD$");
 
 #include "opt_compat.h"
-#include "opt_pax.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -48,7 +47,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/mutex.h>
-#include <sys/pax.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/refcount.h>
@@ -633,11 +631,11 @@ lim_cb(void *arg)
 	 */
 	if (p->p_cpulimit == RLIM_INFINITY)
 		return;
-	PROC_SLOCK(p);
+	PROC_STATLOCK(p);
 	FOREACH_THREAD_IN_PROC(p, td) {
 		ruxagg(p, td);
 	}
-	PROC_SUNLOCK(p);
+	PROC_STATUNLOCK(p);
 	if (p->p_rux.rux_runtime > p->p_cpulimit * cpu_tickrate()) {
 		lim_rlimit(p, RLIMIT_CPU, &rlim);
 		if (p->p_rux.rux_runtime >= rlim.rlim_max * cpu_tickrate()) {
@@ -778,12 +776,12 @@ kern_proc_setrlimit(struct thread *td, struct proc *p, u_int which,
 			if (limp->rlim_cur > oldssiz.rlim_cur) {
 				prot = p->p_sysent->sv_stackprot;
 				size = limp->rlim_cur - oldssiz.rlim_cur;
-				addr = p->p_usrstack -
+				addr = p->p_sysent->sv_usrstack -
 				    limp->rlim_cur;
 			} else {
 				prot = VM_PROT_NONE;
 				size = oldssiz.rlim_cur - limp->rlim_cur;
-				addr = p->p_usrstack -
+				addr = p->p_sysent->sv_usrstack -
 				    oldssiz.rlim_cur;
 			}
 			addr = trunc_page(addr);
@@ -849,7 +847,7 @@ calcru(struct proc *p, struct timeval *up, struct timeval *sp)
 	uint64_t runtime, u;
 
 	PROC_LOCK_ASSERT(p, MA_OWNED);
-	PROC_SLOCK_ASSERT(p, MA_OWNED);
+	PROC_STATLOCK_ASSERT(p, MA_OWNED);
 	/*
 	 * If we are getting stats for the current process, then add in the
 	 * stats that this thread has accumulated in its current time slice.
@@ -881,7 +879,7 @@ rufetchtd(struct thread *td, struct rusage *ru)
 	uint64_t runtime, u;
 
 	p = td->td_proc;
-	PROC_SLOCK_ASSERT(p, MA_OWNED);
+	PROC_STATLOCK_ASSERT(p, MA_OWNED);
 	THREAD_LOCK_ASSERT(td, MA_OWNED);
 	/*
 	 * If we are getting stats for the current thread, then add in the
@@ -1017,11 +1015,11 @@ kern_getrusage(struct thread *td, int who, struct rusage *rup)
 		break;
 
 	case RUSAGE_THREAD:
-		PROC_SLOCK(p);
+		PROC_STATLOCK(p);
 		thread_lock(td);
 		rufetchtd(td, rup);
 		thread_unlock(td);
-		PROC_SUNLOCK(p);
+		PROC_STATUNLOCK(p);
 		break;
 
 	default:
@@ -1068,7 +1066,7 @@ ruxagg_locked(struct rusage_ext *rux, struct thread *td)
 {
 
 	THREAD_LOCK_ASSERT(td, MA_OWNED);
-	PROC_SLOCK_ASSERT(td->td_proc, MA_OWNED);
+	PROC_STATLOCK_ASSERT(td->td_proc, MA_OWNED);
 	rux->rux_runtime += td->td_incruntime;
 	rux->rux_uticks += td->td_uticks;
 	rux->rux_sticks += td->td_sticks;
@@ -1098,7 +1096,7 @@ rufetch(struct proc *p, struct rusage *ru)
 {
 	struct thread *td;
 
-	PROC_SLOCK_ASSERT(p, MA_OWNED);
+	PROC_STATLOCK_ASSERT(p, MA_OWNED);
 
 	*ru = p->p_ru;
 	if (p->p_numthreads > 0)  {
@@ -1119,10 +1117,10 @@ rufetchcalc(struct proc *p, struct rusage *ru, struct timeval *up,
     struct timeval *sp)
 {
 
-	PROC_SLOCK(p);
+	PROC_STATLOCK(p);
 	rufetch(p, ru);
 	calcru(p, up, sp);
-	PROC_SUNLOCK(p);
+	PROC_STATUNLOCK(p);
 }
 
 /*

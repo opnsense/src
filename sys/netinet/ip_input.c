@@ -420,23 +420,20 @@ ip_input(struct mbuf *m)
 		}
 	}
 
-	/* skip checksum checks if we came from dummynet, since we'll already
-	   have been here in that case */
-	if (!(m->m_flags & M_PROTO12)) {
-		if (m->m_pkthdr.csum_flags & CSUM_IP_CHECKED) {
-			sum = !(m->m_pkthdr.csum_flags & CSUM_IP_VALID);
+	if (m->m_pkthdr.csum_flags & CSUM_IP_CHECKED) {
+		sum = !(m->m_pkthdr.csum_flags & CSUM_IP_VALID);
+	} else {
+		if (hlen == sizeof(struct ip)) {
+			sum = in_cksum_hdr(ip);
 		} else {
-			if (hlen == sizeof(struct ip)) {
-				sum = in_cksum_hdr(ip);
-			} else {
-				sum = in_cksum(m, hlen);
-			}
-		}
-		if (sum) {
-			IPSTAT_INC(ips_badsum);
-			goto bad;
+			sum = in_cksum(m, hlen);
 		}
 	}
+	if (sum) {
+		IPSTAT_INC(ips_badsum);
+		goto bad;
+	}
+
 #ifdef ALTQ
 	if (altq_input != NULL && (*altq_input)(m, AF_INET) == 0)
 		/* packet is dropped by traffic conditioner */
@@ -486,21 +483,6 @@ tooshort:
 	/* Jump over all PFIL processing if hooks are not active. */
 	if (!PFIL_HOOKED(&V_inet_pfil_hook))
 		goto passin;
-	if (m->m_flags & M_PROTO12) {
-		/* OPNsense (original from m0n0wall): packet has already been through dummynet, and therefore
-		   also through ipnat (reversed processing order in OPNsense);
-		   we skip the pfil hooks to avoid ipnat being called again on
-		   this packet (this implicitly assumes that one_pass=1).
-		   However, we need to remove the ipfw tag, otherwise the
-		   packet will be treated improperly in ip_output. */
-		struct m_tag *ipfw_tag;
-		ipfw_tag = m_tag_locate(m, MTAG_IPFW_RULE, 0, NULL);
-		if (ipfw_tag != NULL) {
-			m_tag_delete(m, ipfw_tag);
-		}
-		m->m_flags &= ~M_PROTO12;
-		goto passin;
-	}
 
 	odst = ip->ip_dst;
 	if (pfil_run_hooks(&V_inet_pfil_hook, &m, ifp, PFIL_IN, NULL) != 0)
@@ -1363,6 +1345,7 @@ ip_forward(struct mbuf *m, int srcrt)
 	struct ip *ip = mtod(m, struct ip *);
 	struct in_ifaddr *ia;
 	struct mbuf *mcopy;
+	struct sockaddr_in *sin;
 	struct in_addr dest;
 	struct route ro;
 	int error, type = 0, code = 0, mtu = 0;
@@ -1384,7 +1367,23 @@ ip_forward(struct mbuf *m, int srcrt)
 	}
 #endif
 
-	ia = ip_rtaddr(ip->ip_dst, M_GETFIB(m));
+	bzero(&ro, sizeof(ro));
+	sin = (struct sockaddr_in *)&ro.ro_dst;
+	sin->sin_family = AF_INET;
+	sin->sin_len = sizeof(*sin);
+	sin->sin_addr = ip->ip_dst;
+#ifdef RADIX_MPATH
+	rtalloc_mpath_fib(&ro,
+	    ntohl(ip->ip_src.s_addr ^ ip->ip_dst.s_addr),
+	    M_GETFIB(m));
+#else
+	in_rtalloc_ign(&ro, 0, M_GETFIB(m));
+#endif
+	if (ro.ro_rt != NULL) {
+		ia = ifatoia(ro.ro_rt->rt_ifa);
+		ifa_ref(&ia->ia_ifa);
+	} else
+		ia = NULL;
 #ifndef IPSEC
 	/*
 	 * 'ia' may be NULL if there is no route for this destination.
@@ -1393,6 +1392,7 @@ ip_forward(struct mbuf *m, int srcrt)
 	 */
 	if (!srcrt && ia == NULL) {
 		icmp_error(m, ICMP_UNREACH, ICMP_UNREACH_HOST, 0, 0);
+		RO_RTFREE(&ro);
 		return;
 	}
 #endif
@@ -1449,15 +1449,7 @@ ip_forward(struct mbuf *m, int srcrt)
 	dest.s_addr = 0;
 	if (!srcrt && V_ipsendredirects &&
 	    ia != NULL && ia->ia_ifp == m->m_pkthdr.rcvif) {
-		struct sockaddr_in *sin;
 		struct rtentry *rt;
-
-		bzero(&ro, sizeof(ro));
-		sin = (struct sockaddr_in *)&ro.ro_dst;
-		sin->sin_family = AF_INET;
-		sin->sin_len = sizeof(*sin);
-		sin->sin_addr = ip->ip_dst;
-		in_rtalloc_ign(&ro, 0, M_GETFIB(m));
 
 		rt = ro.ro_rt;
 
@@ -1477,15 +1469,7 @@ ip_forward(struct mbuf *m, int srcrt)
 				code = ICMP_REDIRECT_HOST;
 			}
 		}
-		if (rt)
-			RTFREE(rt);
 	}
-
-	/*
-	 * Try to cache the route MTU from ip_output so we can consider it for
-	 * the ICMP_UNREACH_NEEDFRAG "Next-Hop MTU" field described in RFC1191.
-	 */
-	bzero(&ro, sizeof(ro));
 
 	error = ip_output(m, NULL, &ro, IP_FORWARDING, NULL, NULL);
 

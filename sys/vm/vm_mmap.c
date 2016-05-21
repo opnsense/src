@@ -45,7 +45,6 @@ __FBSDID("$FreeBSD$");
 
 #include "opt_compat.h"
 #include "opt_hwpmc_hooks.h"
-#include "opt_pax.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -55,7 +54,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/mutex.h>
 #include <sys/sysproto.h>
 #include <sys/filedesc.h>
-#include <sys/pax.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/procctl.h>
@@ -213,9 +211,6 @@ sys_mmap(td, uap)
 	off_t pos;
 	struct vmspace *vms = td->td_proc->p_vmspace;
 	cap_rights_t rights;
-#ifdef PAX_ASLR
-	int pax_aslr_done;
-#endif
 
 	addr = (vm_offset_t) uap->addr;
 	size = uap->len;
@@ -224,10 +219,6 @@ sys_mmap(td, uap)
 	pos = uap->pos;
 
 	fp = NULL;
-
-#ifdef PAX_ASLR
-	pax_aslr_done = 0;
-#endif
 
 	/*
 	 * Enforce the constraints.
@@ -306,13 +297,7 @@ sys_mmap(td, uap)
 		 */
 		if (addr + size > MAP_32BIT_MAX_ADDR)
 			addr = 0;
-#ifdef PAX_ASLR
-		PROC_LOCK(td->td_proc);
-		pax_aslr_mmap_map_32bit(td->td_proc, &addr, (vm_offset_t)uap->addr, flags);
-		pax_aslr_done = 1;
-		PROC_UNLOCK(td->td_proc);
-#endif /* PAX_ASLR */
-#endif /* MAP_32BIT */
+#endif
 	} else {
 		/*
 		 * XXX for non-fixed mappings where no hint is provided or
@@ -330,12 +315,6 @@ sys_mmap(td, uap)
 			addr = round_page((vm_offset_t)vms->vm_daddr +
 			    lim_max(td->td_proc, RLIMIT_DATA));
 		PROC_UNLOCK(td->td_proc);
-#ifdef PAX_ASLR
-		PROC_LOCK(td->td_proc);
-		pax_aslr_mmap(td->td_proc, &addr, (vm_offset_t)uap->addr, flags);
-		pax_aslr_done = 1;
-		PROC_UNLOCK(td->td_proc);
-#endif
 	}
 	if (flags & MAP_ANON) {
 		/*

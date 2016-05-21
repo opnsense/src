@@ -1247,6 +1247,7 @@ static int
 clock_adjust(void)
 {
 	register struct server *sp, *server;
+	s_fp absoffset;
 	int dostep;
 
 	for (sp = sys_servers; sp != NULL; sp = sp->next_server)
@@ -1269,15 +1270,10 @@ clock_adjust(void)
 	} else if (never_step) {
 		dostep = 0;
 	} else {
-		/* [Bug 3023] get absolute difference, avoiding signed
-		 * integer overflow like hell.
-		 */
-		u_fp absoffset;
-		if (server->soffset < 0)
-			absoffset = 1u + (u_fp)(-(server->soffset + 1));
-		else
-			absoffset = (u_fp)server->soffset;
-		dostep = (absoffset >= NTPDATE_THRESHOLD);
+		absoffset = server->soffset;
+		if (absoffset < 0)
+			absoffset = -absoffset;
+		dostep = (absoffset >= NTPDATE_THRESHOLD || absoffset < 0);
 	}
 
 	if (dostep) {

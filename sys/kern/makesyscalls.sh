@@ -57,7 +57,7 @@ case $# in
 	;;
 esac
 
-if [ -n "$2" -a -f "$2" ]; then
+if [ -n "$2" ]; then
 	. $2
 fi
 
@@ -408,6 +408,10 @@ s/\$//g
 				printf("\t\tcase %d:\n\t\t\tp = \"%s\";\n\t\t\tbreak;\n", i - 1, arg) > systracetmp
 				if (index(arg, "*") > 0 || arg == "caddr_t")
 					printf("\t\tuarg[%d] = (intptr_t) p->%s; /* %s */\n", \
+					     i - 1, \
+					     argname[i], arg) > systrace
+				else if (arg == "union l_semun")
+					printf("\t\tuarg[%d] = p->%s.buf; /* %s */\n", \
 					     i - 1, \
 					     argname[i], arg) > systrace
 				else if (substr(arg, 1, 1) == "u" || arg == "size_t")

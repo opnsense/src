@@ -38,6 +38,7 @@ static const char rcsid[] =
 #include <string.h>
 #include <stdlib.h>
 #include <sys/param.h>
+#include <err.h>
 
 #include "pwupd.h"
 
@@ -69,7 +70,6 @@ vnextpwent(char const *nam, uid_t uid, int doclose)
 	pw = NULL;
 	line = NULL;
 	linecap = 0;
-	linelen = 0;
 
 	if (pwd_fp != NULL || (pwd_fp = fopen(getpwpath(_MASTERPASSWD), "r")) != NULL) {
 		while ((linelen = getline(&line, &linecap, pwd_fp)) > 0) {
@@ -80,6 +80,9 @@ vnextpwent(char const *nam, uid_t uid, int doclose)
 			if (line[linelen - 1 ] == '\n')
 				line[linelen - 1] = '\0';
 			pw = pw_scan(line, PWSCAN_MASTER);
+			if (pw == NULL)
+				errx(EXIT_FAILURE, "Invalid user entry in '%s':"
+				    " '%s'", getpwpath(_MASTERPASSWD), line);
 			if (uid != (uid_t)-1) {
 				if (uid == pw->pw_uid)
 					break;
@@ -149,7 +152,6 @@ vnextgrent(char const *nam, gid_t gid, int doclose)
 	gr = NULL;
 	line = NULL;
 	linecap = 0;
-	linelen = 0;
 
 	if (grp_fp != NULL || (grp_fp = fopen(getgrpath(_GROUP), "r")) != NULL) {
 		while ((linelen = getline(&line, &linecap, grp_fp)) > 0) {
@@ -160,6 +162,9 @@ vnextgrent(char const *nam, gid_t gid, int doclose)
 			if (line[linelen - 1 ] == '\n')
 				line[linelen - 1] = '\0';
 			gr = gr_scan(line);
+			if (gr == NULL)
+				errx(EXIT_FAILURE, "Invalid group entry in '%s':"
+				    " '%s'", getgrpath(_GROUP), line);
 			if (gid != (gid_t)-1) {
 				if (gid == gr->gr_gid)
 					break;

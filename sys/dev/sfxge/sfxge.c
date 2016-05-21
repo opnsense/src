@@ -69,10 +69,10 @@ __FBSDID("$FreeBSD$");
 		   IFCAP_RXCSUM_IPV6 | IFCAP_TXCSUM_IPV6 |		\
 		   IFCAP_TSO4 | IFCAP_TSO6 |				\
 		   IFCAP_JUMBO_MTU |					\
-		   IFCAP_VLAN_HWTSO | IFCAP_LINKSTATE)
+		   IFCAP_VLAN_HWTSO | IFCAP_LINKSTATE | IFCAP_HWSTATS)
 #define	SFXGE_CAP_ENABLE SFXGE_CAP
 #define	SFXGE_CAP_FIXED (IFCAP_VLAN_MTU |				\
-			 IFCAP_JUMBO_MTU | IFCAP_LINKSTATE)
+			 IFCAP_JUMBO_MTU | IFCAP_LINKSTATE | IFCAP_HWSTATS)
 
 MALLOC_DEFINE(M_SFXGE, "sfxge", "Solarflare 10GigE driver");
 
@@ -93,6 +93,27 @@ TUNABLE_INT(SFXGE_PARAM_TX_RING, &sfxge_tx_ring_entries);
 SYSCTL_INT(_hw_sfxge, OID_AUTO, tx_ring, CTLFLAG_RDTUN,
 	   &sfxge_tx_ring_entries, 0,
 	   "Maximum number of descriptors in a transmit ring");
+
+#define	SFXGE_PARAM_STATS_UPDATE_PERIOD	SFXGE_PARAM(stats_update_period)
+static int sfxge_stats_update_period = SFXGE_CALLOUT_TICKS;
+TUNABLE_INT(SFXGE_PARAM_STATS_UPDATE_PERIOD,
+	    &sfxge_stats_update_period);
+SYSCTL_INT(_hw_sfxge, OID_AUTO, stats_update_period, CTLFLAG_RDTUN,
+	   &sfxge_stats_update_period, 0,
+	   "netstat interface statistics update period in ticks");
+
+#define	SFXGE_PARAM_RESTART_ATTEMPTS	SFXGE_PARAM(restart_attempts)
+static int sfxge_restart_attempts = 3;
+TUNABLE_INT(SFXGE_PARAM_RESTART_ATTEMPTS, &sfxge_restart_attempts);
+SYSCTL_INT(_hw_sfxge, OID_AUTO, restart_attempts, CTLFLAG_RDTUN,
+	   &sfxge_restart_attempts, 0,
+	   "Maximum number of attempts to bring interface up after reset");
+
+#if EFSYS_OPT_MCDI_LOGGING
+#define	SFXGE_PARAM_MCDI_LOGGING	SFXGE_PARAM(mcdi_logging)
+static int sfxge_mcdi_logging = 0;
+TUNABLE_INT(SFXGE_PARAM_MCDI_LOGGING, &sfxge_mcdi_logging);
+#endif
 
 static void
 sfxge_reset(void *arg, int npending);
@@ -486,6 +507,30 @@ sfxge_if_ioctl(struct ifnet *ifp, unsigned long command, caddr_t data)
 	case SIOCGIFMEDIA:
 		error = ifmedia_ioctl(ifp, ifr, &sc->media, command);
 		break;
+#ifdef SIOCGI2C
+	case SIOCGI2C:
+	{
+		struct ifi2creq i2c;
+
+		error = copyin(ifr->ifr_data, &i2c, sizeof(i2c));
+		if (error != 0)
+			break;
+
+		if (i2c.len > sizeof(i2c.data)) {
+			error = EINVAL;
+			break;
+		}
+
+		SFXGE_ADAPTER_LOCK(sc);
+		error = efx_phy_module_get_info(sc->enp, i2c.dev_addr,
+						i2c.offset, i2c.len,
+						&i2c.data[0]);
+		SFXGE_ADAPTER_UNLOCK(sc);
+		if (error == 0)
+			error = copyout(&i2c, ifr->ifr_data, sizeof(i2c));
+		break;
+	}
+#endif
 	case SIOCGPRIVATE_0:
 		error = priv_check(curthread, PRIV_DRIVER);
 		if (error != 0)
@@ -506,9 +551,23 @@ sfxge_if_ioctl(struct ifnet *ifp, unsigned long command, caddr_t data)
 }
 
 static void
+sfxge_tick(void *arg)
+{
+	struct sfxge_softc *sc = arg;
+
+	sfxge_port_update_stats(sc);
+	sfxge_tx_update_stats(sc);
+
+	callout_reset(&sc->tick_callout, sfxge_stats_update_period,
+		      sfxge_tick, sc);
+}
+
+static void
 sfxge_ifnet_fini(struct ifnet *ifp)
 {
 	struct sfxge_softc *sc = ifp->if_softc;
+
+	callout_drain(&sc->tick_callout);
 
 	SFXGE_ADAPTER_LOCK(sc);
 	sfxge_stop(sc);
@@ -537,6 +596,9 @@ sfxge_ifnet_init(struct ifnet *ifp, struct sfxge_softc *sc)
 
 	ifp->if_capabilities = SFXGE_CAP;
 	ifp->if_capenable = SFXGE_CAP_ENABLE;
+	ifp->if_hw_tsomax = SFXGE_TSO_MAX_SIZE;
+	ifp->if_hw_tsomaxsegcount = SFXGE_TX_MAPPING_MAX_SEG;
+	ifp->if_hw_tsomaxsegsize = PAGE_SIZE;
 
 #ifdef SFXGE_LRO
 	ifp->if_capabilities |= IFCAP_LRO;
@@ -555,9 +617,14 @@ sfxge_ifnet_init(struct ifnet *ifp, struct sfxge_softc *sc)
 	ifp->if_transmit = sfxge_if_transmit;
 	ifp->if_qflush = sfxge_if_qflush;
 
+	callout_init(&sc->tick_callout, B_TRUE);
+
 	DBGPRINT(sc->dev, "ifmedia_init");
 	if ((rc = sfxge_port_ifmedia_init(sc)) != 0)
 		goto fail;
+
+	callout_reset(&sc->tick_callout, sfxge_stats_update_period,
+		      sfxge_tick, sc);
 
 	return (0);
 
@@ -614,6 +681,9 @@ sfxge_create(struct sfxge_softc *sc)
 	efx_nic_t *enp;
 	int error;
 	char rss_param_name[sizeof(SFXGE_PARAM(%d.max_rss_channels))];
+#if EFSYS_OPT_MCDI_LOGGING
+	char mcdi_log_param_name[sizeof(SFXGE_PARAM(%d.mcdi_logging))];
+#endif
 
 	dev = sc->dev;
 
@@ -624,6 +694,13 @@ sfxge_create(struct sfxge_softc *sc)
 		 SFXGE_PARAM(%d.max_rss_channels),
 		 (int)device_get_unit(dev));
 	TUNABLE_INT_FETCH(rss_param_name, &sc->max_rss_channels);
+#if EFSYS_OPT_MCDI_LOGGING
+	sc->mcdi_logging = sfxge_mcdi_logging;
+	snprintf(mcdi_log_param_name, sizeof(mcdi_log_param_name),
+		 SFXGE_PARAM(%d.mcdi_logging),
+		 (int)device_get_unit(dev));
+	TUNABLE_INT_FETCH(mcdi_log_param_name, &sc->mcdi_logging);
+#endif
 
 	sc->stats_node = SYSCTL_ADD_NODE(
 		device_get_sysctl_ctx(dev),
@@ -972,7 +1049,7 @@ sfxge_reset(void *arg, int npending)
 
 	sfxge_stop(sc);
 	efx_nic_reset(sc->enp);
-	for (attempt = 0; attempt < 3; ++attempt) {
+	for (attempt = 0; attempt < sfxge_restart_attempts; ++attempt) {
 		if ((rc = sfxge_start(sc)) == 0)
 			goto done;
 

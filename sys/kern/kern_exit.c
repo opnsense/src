@@ -564,7 +564,7 @@ exit1(struct thread *td, int rv)
 		reason = CLD_DUMPED;
 	else if (WIFSIGNALED(rv))
 		reason = CLD_KILLED;
-	SDT_PROBE(proc, kernel, , exit, reason, 0, 0, 0, 0);
+	SDT_PROBE1(proc, kernel, , exit, reason);
 #endif
 
 	/*
@@ -660,7 +660,9 @@ exit1(struct thread *td, int rv)
 	/*
 	 * Save our children's rusage information in our exit rusage.
 	 */
+	PROC_STATLOCK(p);
 	ruadd(&p->p_ru, &p->p_rux, &p->p_stats->p_cru, &p->p_crux);
+	PROC_STATUNLOCK(p);
 
 	/*
 	 * Make sure the scheduler takes this thread out of its tables etc.
@@ -857,13 +859,13 @@ proc_reap(struct thread *td, struct proc *p, int *status, int options)
 	PROC_LOCK(q);
 	sigqueue_take(p->p_ksi);
 	PROC_UNLOCK(q);
-	PROC_UNLOCK(p);
 
 	/*
 	 * If we got the child via a ptrace 'attach', we need to give it back
 	 * to the old parent.
 	 */
-	if (p->p_oppid != 0) {
+	if (p->p_oppid != 0 && p->p_oppid != p->p_pptr->p_pid) {
+		PROC_UNLOCK(p);
 		t = proc_realparent(p);
 		PROC_LOCK(t);
 		PROC_LOCK(p);
@@ -880,6 +882,8 @@ proc_reap(struct thread *td, struct proc *p, int *status, int options)
 		sx_xunlock(&proctree_lock);
 		return;
 	}
+	p->p_oppid = 0;
+	PROC_UNLOCK(p);
 
 	/*
 	 * Remove other references to this process to ensure we have an
@@ -955,14 +959,13 @@ proc_reap(struct thread *td, struct proc *p, int *status, int options)
 	KASSERT(FIRST_THREAD_IN_PROC(p),
 	    ("proc_reap: no residual thread!"));
 	uma_zfree(proc_zone, p);
-	sx_xlock(&allproc_lock);
-	nprocs--;
-	sx_xunlock(&allproc_lock);
+	atomic_add_int(&nprocs, -1);
 }
 
 static int
 proc_to_reap(struct thread *td, struct proc *p, idtype_t idtype, id_t id,
-    int *status, int options, struct __wrusage *wrusage, siginfo_t *siginfo)
+    int *status, int options, struct __wrusage *wrusage, siginfo_t *siginfo,
+    int check_only)
 {
 	struct rusage *rup;
 
@@ -1043,8 +1046,6 @@ proc_to_reap(struct thread *td, struct proc *p, idtype_t idtype, id_t id,
 		return (0);
 	}
 
-	PROC_SLOCK(p);
-
 	if (siginfo != NULL) {
 		bzero(siginfo, sizeof(*siginfo));
 		siginfo->si_errno = 0;
@@ -1091,18 +1092,20 @@ proc_to_reap(struct thread *td, struct proc *p, idtype_t idtype, id_t id,
 	if (wrusage != NULL) {
 		rup = &wrusage->wru_self;
 		*rup = p->p_ru;
+		PROC_STATLOCK(p);
 		calcru(p, &rup->ru_utime, &rup->ru_stime);
+		PROC_STATUNLOCK(p);
 
 		rup = &wrusage->wru_children;
 		*rup = p->p_stats->p_cru;
 		calccru(p, &rup->ru_utime, &rup->ru_stime);
 	}
 
-	if (p->p_state == PRS_ZOMBIE) {
+	if (p->p_state == PRS_ZOMBIE && !check_only) {
+		PROC_SLOCK(p);
 		proc_reap(td, p, status, options);
 		return (-1);
 	}
-	PROC_SUNLOCK(p);
 	PROC_UNLOCK(p);
 	return (1);
 }
@@ -1192,7 +1195,7 @@ loop:
 	sx_xlock(&proctree_lock);
 	LIST_FOREACH(p, &q->p_children, p_sibling) {
 		ret = proc_to_reap(td, p, idtype, id, status, options,
-		    wrusage, siginfo);
+		    wrusage, siginfo, 0);
 		if (ret == 0)
 			continue;
 		else if (ret == 1)
@@ -1294,15 +1297,17 @@ loop:
 	 * for.  By maintaining a list of orphans we allow the parent
 	 * to successfully wait until the child becomes a zombie.
 	 */
-	LIST_FOREACH(p, &q->p_orphans, p_orphan) {
-		ret = proc_to_reap(td, p, idtype, id, status, options,
-		    wrusage, siginfo);
-		if (ret == 0)
-			continue;
-		else if (ret == 1)
-			nfound++;
-		else
-			return (0);
+	if (nfound == 0) {
+		LIST_FOREACH(p, &q->p_orphans, p_orphan) {
+			ret = proc_to_reap(td, p, idtype, id, NULL, options,
+			    NULL, NULL, 1);
+			if (ret != 0) {
+				KASSERT(ret != -1, ("reaped an orphan (pid %d)",
+				    (int)td->td_retval[0]));
+				nfound++;
+				break;
+			}
+		}
 	}
 	if (nfound == 0) {
 		sx_xunlock(&proctree_lock);

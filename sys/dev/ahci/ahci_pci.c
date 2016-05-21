@@ -184,14 +184,14 @@ static const struct {
 	{0x2365197b, 0x00, "JMicron JMB365",	AHCI_Q_NOFORCE},
 	{0x2366197b, 0x00, "JMicron JMB366",	AHCI_Q_NOFORCE},
 	{0x2368197b, 0x00, "JMicron JMB368",	AHCI_Q_NOFORCE},
-	{0x611111ab, 0x00, "Marvell 88SE6111",	AHCI_Q_NOFORCE | AHCI_Q_1CH |
-	    AHCI_Q_EDGEIS},
-	{0x612111ab, 0x00, "Marvell 88SE6121",	AHCI_Q_NOFORCE | AHCI_Q_2CH |
-	    AHCI_Q_EDGEIS | AHCI_Q_NONCQ | AHCI_Q_NOCOUNT},
-	{0x614111ab, 0x00, "Marvell 88SE6141",	AHCI_Q_NOFORCE | AHCI_Q_4CH |
-	    AHCI_Q_EDGEIS | AHCI_Q_NONCQ | AHCI_Q_NOCOUNT},
-	{0x614511ab, 0x00, "Marvell 88SE6145",	AHCI_Q_NOFORCE | AHCI_Q_4CH |
-	    AHCI_Q_EDGEIS | AHCI_Q_NONCQ | AHCI_Q_NOCOUNT},
+	{0x611111ab, 0x00, "Marvell 88SE6111",	AHCI_Q_NOFORCE | AHCI_Q_NOPMP |
+	    AHCI_Q_1CH | AHCI_Q_EDGEIS},
+	{0x612111ab, 0x00, "Marvell 88SE6121",	AHCI_Q_NOFORCE | AHCI_Q_NOPMP |
+	    AHCI_Q_2CH | AHCI_Q_EDGEIS | AHCI_Q_NONCQ | AHCI_Q_NOCOUNT},
+	{0x614111ab, 0x00, "Marvell 88SE6141",	AHCI_Q_NOFORCE | AHCI_Q_NOPMP |
+	    AHCI_Q_4CH | AHCI_Q_EDGEIS | AHCI_Q_NONCQ | AHCI_Q_NOCOUNT},
+	{0x614511ab, 0x00, "Marvell 88SE6145",	AHCI_Q_NOFORCE | AHCI_Q_NOPMP |
+	    AHCI_Q_4CH | AHCI_Q_EDGEIS | AHCI_Q_NONCQ | AHCI_Q_NOCOUNT},
 	{0x91201b4b, 0x00, "Marvell 88SE912x",	AHCI_Q_EDGEIS},
 	{0x91231b4b, 0x11, "Marvell 88SE912x",	AHCI_Q_ALTSIG},
 	{0x91231b4b, 0x00, "Marvell 88SE912x",	AHCI_Q_EDGEIS|AHCI_Q_SATA2},
@@ -326,6 +326,9 @@ ahci_probe(device_t dev)
 	    pci_get_subclass(dev) == PCIS_STORAGE_SATA &&
 	    pci_get_progif(dev) == PCIP_STORAGE_SATA_AHCI_1_0)
 		valid = 1;
+	else if (pci_get_class(dev) == PCIC_STORAGE &&
+	    pci_get_subclass(dev) == PCIS_STORAGE_RAID)
+		valid = 2;
 	/* Is this a known AHCI chip? */
 	for (i = 0; ahci_ids[i].id != 0; i++) {
 		if (ahci_ids[i].id == devid &&
@@ -342,7 +345,7 @@ ahci_probe(device_t dev)
 			return (BUS_PROBE_DEFAULT);
 		}
 	}
-	if (!valid)
+	if (valid != 1)
 		return (ENXIO);
 	device_set_desc_copy(dev, "AHCI SATA controller");
 	return (BUS_PROBE_DEFAULT);

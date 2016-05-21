@@ -1,6 +1,6 @@
 /******************************************************************************
 
-  Copyright (c) 2001-2013, Intel Corporation 
+  Copyright (c) 2001-2015, Intel Corporation 
   All rights reserved.
   
   Redistribution and use in source and binary forms, with or without 
@@ -32,11 +32,66 @@
 ******************************************************************************/
 /*$FreeBSD$*/
 
-#ifndef _IGB_H_DEFINED_
-#define _IGB_H_DEFINED_
+#ifndef _IF_IGB_H_
+#define _IF_IGB_H_
+
+#include <sys/param.h>
+#include <sys/systm.h>
+#ifndef IGB_LEGACY_TX
+#include <sys/buf_ring.h>
+#endif
+#include <sys/bus.h>
+#include <sys/endian.h>
+#include <sys/kernel.h>
+#include <sys/kthread.h>
+#include <sys/malloc.h>
+#include <sys/mbuf.h>
+#include <sys/module.h>
+#include <sys/rman.h>
+#include <sys/socket.h>
+#include <sys/sockio.h>
+#include <sys/sysctl.h>
+#include <sys/taskqueue.h>
+#include <sys/eventhandler.h>
+#include <sys/pcpu.h>
+#include <sys/smp.h>
+#include <machine/smp.h>
+#include <machine/bus.h>
+#include <machine/resource.h>
+
+#include <net/bpf.h>
+#include <net/ethernet.h>
+#include <net/if.h>
+#include <net/if_var.h>
+#include <net/if_arp.h>
+#include <net/if_dl.h>
+#include <net/if_media.h>
+#ifdef	RSS
+#include <net/rss_config.h>
+#include <netinet/in_rss.h>
+#endif
+
+#include <net/if_types.h>
+#include <net/if_vlan_var.h>
+
+#include <netinet/in_systm.h>
+#include <netinet/in.h>
+#include <netinet/if_ether.h>
+#include <netinet/ip.h>
+#include <netinet/ip6.h>
+#include <netinet/tcp.h>
+#include <netinet/tcp_lro.h>
+#include <netinet/udp.h>
+
+#include <machine/in_cksum.h>
+#include <dev/led/led.h>
+#include <dev/pci/pcivar.h>
+#include <dev/pci/pcireg.h>
+
+#include "e1000_api.h"
+#include "e1000_82575.h"
 
 /* Tunables */
-
 /*
  * IGB_TXD: Maximum number of Transmit Descriptors
  *
@@ -168,7 +223,7 @@
 /*
  * Micellaneous constants
  */
-#define IGB_VENDOR_ID			0x8086
+#define IGB_INTEL_VENDOR_ID			0x8086
 
 #define IGB_JUMBO_PBA			0x00000028
 #define IGB_DEFAULT_PBA			0x00000030
@@ -223,7 +278,7 @@
 #define HW_DEBUGOUT1(S, A)          if (DEBUG_HW) printf(S "\n", A)
 #define HW_DEBUGOUT2(S, A, B)       if (DEBUG_HW) printf(S "\n", A, B)
 
-#define IGB_MAX_SCATTER		64
+#define IGB_MAX_SCATTER		40
 #define IGB_VFTA_SIZE		128
 #define IGB_BR_SIZE		4096	/* ring buf size */
 #define IGB_TSO_SIZE		(65535 + sizeof(struct ether_vlan_header))
@@ -300,7 +355,6 @@ struct tx_ring {
 	volatile u16		tx_avail;
 	u16			next_avail_desc;
 	u16			next_to_clean;
-	u16			process_limit;
 	u16			num_desc;
 	enum {
 	    IGB_QUEUE_IDLE = 1,
@@ -458,20 +512,19 @@ struct adapter {
 	u8			*mta;
 
 	/* Misc stats maintained by the driver */
-	unsigned long   	dropped_pkts;
-	unsigned long   	mbuf_defrag_failed;
-	unsigned long   	mbuf_header_failed;
-	unsigned long   	mbuf_packet_failed;
-	unsigned long		no_tx_dma_setup;
-	unsigned long   	watchdog_events;
-	unsigned long		link_irq;
-	unsigned long		rx_overruns;
 	unsigned long		device_control;
-	unsigned long		rx_control;
-	unsigned long		int_mask;
+	unsigned long   	dropped_pkts;
 	unsigned long		eint_mask;
+	unsigned long		int_mask;
+	unsigned long		link_irq;
+	unsigned long   	mbuf_defrag_failed;
+	unsigned long		no_tx_dma_setup;
 	unsigned long		packet_buf_alloc_rx;
 	unsigned long		packet_buf_alloc_tx;
+	unsigned long		rx_control;
+	unsigned long		rx_overruns;
+	unsigned long   	watchdog_events;
+
 	/* Used in pf and vf */
 	void			*stats;
 
@@ -479,6 +532,7 @@ struct adapter {
 	int			has_manage;
 	int			wol;
 	int			rx_process_limit;
+	int			tx_process_limit;
 	u16			vf_ifp;  /* a VF interface */
 	bool			in_detach; /* Used only in igb_ioctl */
 
@@ -567,6 +621,6 @@ drbr_needs_enqueue(struct ifnet *ifp, struct buf_ring *br)
 }
 #endif
 
-#endif /* _IGB_H_DEFINED_ */
+#endif /* _IF_IGB_H_ */
 
 

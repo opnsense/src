@@ -1678,7 +1678,7 @@ do {								\
 					break;
 
 				/* DSCP bitmask is stored as low_u32 high_u32 */
-				if (x > 32)
+				if (x >= 32)
 					match = *(p + 1) & (1 << (x - 32));
 				else
 					match = *p & (1 << x);
@@ -2704,10 +2704,11 @@ vnet_ipfw_uninit(const void *unused)
 	V_ip_fw_ctl_ptr = NULL;
 	IPFW_UH_WLOCK(chain);
 	IPFW_UH_WUNLOCK(chain);
-
-	ipfw_dyn_uninit(0);	/* run the callout_drain */
-
 	IPFW_UH_WLOCK(chain);
+
+	IPFW_WLOCK(chain);
+	ipfw_dyn_uninit(0);	/* run the callout_drain */
+	IPFW_WUNLOCK(chain);
 
 	ipfw_destroy_tables(chain);
 	reap = NULL;

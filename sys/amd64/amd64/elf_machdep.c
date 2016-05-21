@@ -26,15 +26,12 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
-#include "opt_pax.h"
-
 #include <sys/param.h>
 #include <sys/kernel.h>
 #include <sys/systm.h>
 #include <sys/exec.h>
 #include <sys/imgact.h>
 #include <sys/linker.h>
-#include <sys/pax.h>
 #include <sys/proc.h>
 #include <sys/sysent.h>
 #include <sys/imgact_elf.h>
@@ -85,7 +82,8 @@ struct sysentvec elf64_freebsd_sysvec = {
 	.sv_shared_page_base = SHAREDPAGE,
 	.sv_shared_page_len = PAGE_SIZE,
 	.sv_schedtail	= NULL,
-	.sv_pax_aslr_init	= pax_aslr_init_vmspace,
+	.sv_thread_detach = NULL,
+	.sv_trap	= NULL,
 };
 INIT_SYSENTVEC(elf64_sysvec, &elf64_freebsd_sysvec);
 
@@ -171,6 +169,7 @@ elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
 	Elf_Size rtype, symidx;
 	const Elf_Rel *rel;
 	const Elf_Rela *rela;
+	int error;
 
 	switch (type) {
 	case ELF_RELOC_REL:
@@ -206,29 +205,29 @@ elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
 			break;
 
 		case R_X86_64_64:		/* S + A */
-			addr = lookup(lf, symidx, 1);
+			error = lookup(lf, symidx, 1, &addr);
 			val = addr + addend;
-			if (addr == 0)
+			if (error != 0)
 				return -1;
 			if (*where != val)
 				*where = val;
 			break;
 
 		case R_X86_64_PC32:	/* S + A - P */
-			addr = lookup(lf, symidx, 1);
+			error = lookup(lf, symidx, 1, &addr);
 			where32 = (Elf32_Addr *)where;
 			val32 = (Elf32_Addr)(addr + addend - (Elf_Addr)where);
-			if (addr == 0)
+			if (error != 0)
 				return -1;
 			if (*where32 != val32)
 				*where32 = val32;
 			break;
 
 		case R_X86_64_32S:	/* S + A sign extend */
-			addr = lookup(lf, symidx, 1);
+			error = lookup(lf, symidx, 1, &addr);
 			val32 = (Elf32_Addr)(addr + addend);
 			where32 = (Elf32_Addr *)where;
-			if (addr == 0)
+			if (error != 0)
 				return -1;
 			if (*where32 != val32)
 				*where32 = val32;
@@ -245,8 +244,8 @@ elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
 
 		case R_X86_64_GLOB_DAT:	/* S */
 		case R_X86_64_JMP_SLOT:	/* XXX need addend + offset */
-			addr = lookup(lf, symidx, 1);
-			if (addr == 0)
+			error = lookup(lf, symidx, 1, &addr);
+			if (error != 0)
 				return -1;
 			if (*where != addr)
 				*where = addr;

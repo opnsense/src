@@ -10,6 +10,12 @@
 
 __<bsd.test.mk>__:
 
+# Third-party software (kyua, etc) prefix.
+LOCALBASE?=	/usr/local
+
+# Tests install directory
+TESTSDIR?=	${TESTSBASE}/${RELDIR:H}
+
 # List of subdirectories containing tests into which to recurse.  This has the
 # same semantics as SUBDIR at build-time.  However, the directories listed here
 # get registered into the run-time test suite definitions so that the test
@@ -39,11 +45,19 @@ DISTRIBUTION:=	tests
 # Ordered list of directories to construct the PATH for the tests.
 TESTS_PATH+= ${DESTDIR}/bin ${DESTDIR}/sbin \
              ${DESTDIR}/usr/bin ${DESTDIR}/usr/sbin
+.if defined(.PARSEDIR)
 TESTS_ENV+= PATH=${TESTS_PATH:tW:C/ +/:/g}
+.else
+TESTS_ENV+= PATH=${TESTS_PATH:N :Q:S,\\ ,:,g}
+.endif
 
 # Ordered list of directories to construct the LD_LIBRARY_PATH for the tests.
 TESTS_LD_LIBRARY_PATH+= ${DESTDIR}/lib ${DESTDIR}/usr/lib
+.if defined(.PARSEDIR)
 TESTS_ENV+= LD_LIBRARY_PATH=${TESTS_LD_LIBRARY_PATH:tW:C/ +/:/g}
+.else
+TESTS_ENV+= LD_LIBRARY_PATH=${TESTS_LD_LIBRARY_PATH:N :Q:S,\\ ,:,g}
+.endif
 
 # List of all tests being built.  The various *.test.mk modules extend this
 # variable as needed.
@@ -85,10 +99,6 @@ test: beforetest realtest
 .if target(aftertest)
 .ORDER: realtest aftertest
 test: aftertest
-.endif
-
-.if !empty(SUBDIR)
-.include <bsd.subdir.mk>
 .endif
 
 .if !empty(PROGS) || !empty(PROGS_CXX) || !empty(SCRIPTS)

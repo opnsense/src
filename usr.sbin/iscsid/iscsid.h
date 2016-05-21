@@ -34,7 +34,6 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-#include <openssl/md5.h>
 
 #include <iscsi_ioctl.h>
 
@@ -82,11 +81,12 @@ struct keys {
 };
 
 #define	CHAP_CHALLENGE_LEN	1024
+#define	CHAP_DIGEST_LEN		16 /* Equal to MD5 digest size. */
 
 struct chap {
 	unsigned char	chap_id;
 	char		chap_challenge[CHAP_CHALLENGE_LEN];
-	char		chap_response[MD5_DIGEST_LENGTH];
+	char		chap_response[CHAP_DIGEST_LEN];
 };
 
 struct rchap {
@@ -115,7 +115,6 @@ void			keys_delete(struct keys *key);
 void			keys_load(struct keys *keys, const struct pdu *pdu);
 void			keys_save(struct keys *keys, struct pdu *pdu);
 const char		*keys_find(struct keys *keys, const char *name);
-int			keys_find_int(struct keys *keys, const char *name);
 void			keys_add(struct keys *keys,
 			    const char *name, const char *value);
 void			keys_add_int(struct keys *keys,

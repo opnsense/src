@@ -570,6 +570,33 @@ t5_probe(device_t dev)
 	return (ENXIO);
 }
 
+static void
+t5_attribute_workaround(device_t dev)
+{
+	device_t root_port;
+	uint32_t v;
+
+	/*
+	 * The T5 chips do not properly echo the No Snoop and Relaxed
+	 * Ordering attributes when replying to a TLP from a Root
+	 * Port.  As a workaround, find the parent Root Port and
+	 * disable No Snoop and Relaxed Ordering.  Note that this
+	 * affects all devices under this root port.
+	 */
+	root_port = pci_find_pcie_root_port(dev);
+	if (root_port == NULL) {
+		device_printf(dev, "Unable to find parent root port\n");
+		return;
+	}
+
+	v = pcie_adjust_config(root_port, PCIER_DEVICE_CTL,
+	    PCIEM_CTL_RELAXED_ORD_ENABLE | PCIEM_CTL_NOSNOOP_ENABLE, 0, 2);
+	if ((v & (PCIEM_CTL_RELAXED_ORD_ENABLE | PCIEM_CTL_NOSNOOP_ENABLE)) !=
+	    0)
+		device_printf(dev, "Disabled No Snoop/Relaxed Ordering on %s\n",
+		    device_get_nameunit(root_port));
+}
+
 static int
 t4_attach(device_t dev)
 {
@@ -586,7 +613,10 @@ t4_attach(device_t dev)
 
 	sc = device_get_softc(dev);
 	sc->dev = dev;
+	TUNABLE_INT_FETCH("hw.cxgbe.debug_flags", &sc->debug_flags);
 
+	if ((pci_get_device(dev) & 0xff00) == 0x5400)
+		t5_attribute_workaround(dev);
 	pci_enable_busmaster(dev);
 	if (pci_find_cap(dev, PCIY_EXPRESS, &i) == 0) {
 		uint32_t v;
@@ -1148,6 +1178,7 @@ cxgbe_detach(device_t dev)
 #ifdef INVARIANTS
 	sc->last_op = "t4detach";
 	sc->last_op_thr = curthread;
+	sc->last_op_flags = 0;
 #endif
 	ADAPTER_UNLOCK(sc);
 
@@ -1384,6 +1415,31 @@ fail:
 	case SIOCGIFMEDIA:
 		ifmedia_ioctl(ifp, ifr, &pi->media, cmd);
 		break;
+
+	case SIOCGI2C: {
+		struct ifi2creq i2c;
+
+		rc = copyin(ifr->ifr_data, &i2c, sizeof(i2c));
+		if (rc != 0)
+			break;
+		if (i2c.dev_addr != 0xA0 && i2c.dev_addr != 0xA2) {
+			rc = EPERM;
+			break;
+		}
+		if (i2c.len > sizeof(i2c.data)) {
+			rc = EINVAL;
+			break;
+		}
+		rc = begin_synchronized_op(sc, pi, SLEEP_OK | INTR_OK, "t4i2c");
+		if (rc)
+			return (rc);
+		rc = -t4_i2c_rd(sc, sc->mbox, pi->port_id, i2c.dev_addr,
+		    i2c.offset, i2c.len, &i2c.data[0]);
+		end_synchronized_op(sc, 0);
+		if (rc == 0)
+			rc = copyout(&i2c, ifr->ifr_data, sizeof(i2c));
+		break;
+	}
 
 	default:
 		rc = ether_ioctl(ifp, cmd, data);
@@ -3083,6 +3139,7 @@ begin_synchronized_op(struct adapter *sc, struct port_info *pi, int flags,
 #ifdef INVARIANTS
 	sc->last_op = wmesg;
 	sc->last_op_thr = curthread;
+	sc->last_op_flags = flags;
 #endif
 
 done:
@@ -4537,6 +4594,9 @@ t4_sysctls(struct adapter *sc)
 	sc->lro_timeout = 100;
 	SYSCTL_ADD_INT(ctx, children, OID_AUTO, "lro_timeout", CTLFLAG_RW,
 	    &sc->lro_timeout, 0, "lro inactive-flush timeout (in us)");
+
+	SYSCTL_ADD_INT(ctx, children, OID_AUTO, "debug_flags", CTLFLAG_RW,
+	    &sc->debug_flags, 0, "flags to enable runtime debugging");
 
 #ifdef SBUF_DRAIN
 	/*
@@ -6272,9 +6332,9 @@ sysctl_mps_tcam(SYSCTL_HANDLER_ARGS)
 				F_FW_CMD_REQUEST | F_FW_CMD_READ |
 				V_FW_LDST_CMD_ADDRSPACE(FW_LDST_ADDRSPC_MPS));
 			ldst_cmd.cycles_to_len16 = htobe32(FW_LEN16(ldst_cmd));
-			ldst_cmd.u.mps.fid_ctl =
+			ldst_cmd.u.mps.rplc.fid_idx =
 			    htobe16(V_FW_LDST_CMD_FID(FW_LDST_MPS_RPLC) |
-				V_FW_LDST_CMD_CTL(i));
+				V_FW_LDST_CMD_IDX(i));
 
 			rc = begin_synchronized_op(sc, NULL, SLEEP_OK | INTR_OK,
 			    "t4mps");
@@ -6290,10 +6350,10 @@ sysctl_mps_tcam(SYSCTL_HANDLER_ARGS)
 				rc = 0;
 			} else {
 				sbuf_printf(sb, " %08x %08x %08x %08x",
-				    be32toh(ldst_cmd.u.mps.rplc127_96),
-				    be32toh(ldst_cmd.u.mps.rplc95_64),
-				    be32toh(ldst_cmd.u.mps.rplc63_32),
-				    be32toh(ldst_cmd.u.mps.rplc31_0));
+				    be32toh(ldst_cmd.u.mps.rplc.rplc127_96),
+				    be32toh(ldst_cmd.u.mps.rplc.rplc95_64),
+				    be32toh(ldst_cmd.u.mps.rplc.rplc63_32),
+				    be32toh(ldst_cmd.u.mps.rplc.rplc31_0));
 			}
 		} else
 			sbuf_printf(sb, "%36s", "");

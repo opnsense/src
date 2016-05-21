@@ -203,7 +203,7 @@ _TARGET_ARCH?=	${MACHINE_ARCH}
 # The user can define ALWAYS_CHECK_MAKE to have this check performed
 # for all targets.
 #
-.if defined(ALWAYS_CHECK_MAKE)
+.if defined(ALWAYS_CHECK_MAKE) || !defined(.PARSEDIR)
 ${TGTS}: upgrade_checks
 .else
 buildworld: upgrade_checks
@@ -245,14 +245,14 @@ cleanworld:
 # Handle the user-driven targets, using the source relative mk files.
 #
 
-.if empty(.MAKEFLAGS:M-n)
+.if !(!empty(.MAKEFLAGS:M-n) && ${.MAKEFLAGS:M-n} == "-n")
 # skip this for -n to avoid changing previous behavior of 
-# 'make -n buildworld' etc.
+# 'make -n buildworld' etc.  Using -n -n will run it.
 ${TGTS}: .MAKE
 tinderbox toolchains kernel-toolchains: .MAKE
 .endif
 
-${TGTS}:
+${TGTS}: .PHONY
 	${_+_}@cd ${.CURDIR}; ${_MAKE} ${.TARGET}
 
 # The historic default "all" target creates files which may cause stale
@@ -358,7 +358,7 @@ MMAKE=		${MMAKEENV} ${MAKE} \
 		-D_UPGRADING \
 		-DNOMAN -DNO_MAN -DNOSHARED -DNO_SHARED \
 		-DNO_CPU_CFLAGS -DNO_WERROR \
-		DESTDIR= MK_TESTS=no PROGNAME=${MYMAKE:T}
+		DESTDIR= -DNO_TESTS PROGNAME=${MYMAKE:T}
 
 make bmake: .PHONY
 	@echo
@@ -366,21 +366,21 @@ make bmake: .PHONY
 	@echo ">>> Building an up-to-date make(1)"
 	@echo "--------------------------------------------------------------"
 	${_+_}@cd ${.CURDIR}/usr.bin/${.TARGET}; \
-		${MMAKE} obj && \
-		${MMAKE} depend && \
-		${MMAKE} all && \
+		${MMAKE} obj; \
+		${MMAKE} depend; \
+		${MMAKE} all; \
 		${MMAKE} install DESTDIR=${MYMAKE:H} BINDIR=
 
 tinderbox toolchains kernel-toolchains: upgrade_checks
 
 tinderbox:
-	@cd ${.CURDIR} && ${SUB_MAKE} DOING_TINDERBOX=YES universe
+	@cd ${.CURDIR}; ${SUB_MAKE} DOING_TINDERBOX=YES universe
 
 toolchains:
-	@cd ${.CURDIR} && ${SUB_MAKE} UNIVERSE_TARGET=toolchain universe
+	@cd ${.CURDIR}; ${SUB_MAKE} UNIVERSE_TARGET=toolchain universe
 
 kernel-toolchains:
-	@cd ${.CURDIR} && ${SUB_MAKE} UNIVERSE_TARGET=kernel-toolchain universe
+	@cd ${.CURDIR}; ${SUB_MAKE} UNIVERSE_TARGET=kernel-toolchain universe
 
 #
 # universe
@@ -467,7 +467,7 @@ universe_${target}_kernels: universe_${target}_prologue .MAKE
 	    (echo "${target} 'make LINT' failed," \
 	    "check _.${target}.makeLINT for details"| ${MAKEFAIL}))
 .endif
-	@cd ${.CURDIR} && ${SUB_MAKE} ${.MAKEFLAGS} TARGET=${target} \
+	@cd ${.CURDIR}; ${SUB_MAKE} ${.MAKEFLAGS} TARGET=${target} \
 	    universe_kernels
 .endif
 	@echo ">> ${target} completed on `LC_ALL=C date`"
@@ -482,7 +482,8 @@ _THINNER=cat
 _THINNER=xargs grep -L "^.NO_UNIVERSE" || true
 .endif
 KERNCONFS!=	cd ${KERNSRCDIR}/${TARGET}/conf && \
-		find [A-Z0-9]*[A-Z0-9] -type f -maxdepth 0 \
+		find [[:upper:][:digit:]]*[[:upper:][:digit:]] \
+		-type f -maxdepth 0 \
 		! -name DEFAULTS ! -name NOTES | \
 		${_THINNER}
 universe_kernconfs:

@@ -47,6 +47,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/protosw.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
+#include <sys/sysctl.h>
 
 #include <netinet/in.h>
 
@@ -202,13 +203,13 @@ struct protox {
 	  igmp_stats,	NULL,		"igmp",	1,	IPPROTO_IGMP },
 #ifdef IPSEC
 	{ -1,		N_IPSECSTAT,	1,	NULL,	/* keep as compat */
-	  ipsec_stats,	NULL,		"ipsec", 0,	0},
+	  ipsec_stats,	NULL,		"ipsec", 1,	0},
 	{ -1,		N_AHSTAT,	1,	NULL,
-	  ah_stats,	NULL,		"ah",	0,	0},
+	  ah_stats,	NULL,		"ah",	1,	0},
 	{ -1,		N_ESPSTAT,	1,	NULL,
-	  esp_stats,	NULL,		"esp",	0,	0},
+	  esp_stats,	NULL,		"esp",	1,	0},
 	{ -1,		N_IPCOMPSTAT,	1,	NULL,
-	  ipcomp_stats,	NULL,		"ipcomp", 0,	0},
+	  ipcomp_stats,	NULL,		"ipcomp", 1,	0},
 #endif
 	{ N_RIPCBINFO,	N_PIMSTAT,	1,	protopr,
 	  pim_stats,	NULL,		"pim",	1,	IPPROTO_PIM },
@@ -240,7 +241,7 @@ struct protox ip6protox[] = {
 #endif
 #ifdef IPSEC
 	{ -1,		N_IPSEC6STAT,	1,	NULL,
-	  ipsec_stats,	NULL,		"ipsec6", 0,	0 },
+	  ipsec_stats,	NULL,		"ipsec6", 1,	0 },
 #endif
 #ifdef notyet
 	{ -1,		N_PIM6STAT,	1,	NULL,
@@ -641,6 +642,29 @@ main(int argc, char *argv[])
 		    nl[N_UNP_DHEAD].n_value, nl[N_UNP_SHEAD].n_value,
 		    nl[N_UNP_SPHEAD].n_value);
 	exit(0);
+}
+
+int
+fetch_stats(const char *sysctlname, u_long off, void *stats, size_t len,
+    int (*kreadfn)(u_long, void *, size_t))
+{
+	int error;
+
+	if (live) {
+		memset(stats, 0, len);
+		if (zflag)
+			error = sysctlbyname(sysctlname, NULL, NULL, stats,
+			    len);
+		else
+			error = sysctlbyname(sysctlname, stats, &len, NULL, 0);
+		if (error == -1 && errno != ENOENT)
+			warn("sysctl %s", sysctlname);
+	} else {
+		if (off == 0)
+			return (1);
+		error = kreadfn(off, stats, len);
+	}
+	return (error);
 }
 
 /*

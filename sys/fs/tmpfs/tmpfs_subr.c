@@ -516,8 +516,7 @@ loop1:
 			goto loop1;
 		}
 		TMPFS_NODE_UNLOCK(node);
-		error = vget(vp, lkflag | LK_INTERLOCK | LK_CANRECURSE,
-		    curthread);
+		error = vget(vp, lkflag | LK_INTERLOCK, curthread);
 		if (error == ENOENT)
 			goto loop;
 		if (error != 0) {

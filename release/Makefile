@@ -21,6 +21,7 @@
 #            (by default, the directory above this one)
 #  PORTSDIR: location of ports tree to distribute (default: /usr/ports)
 #  DOCDIR:   location of doc tree (default: /usr/doc)
+#  XTRADIR:  xtra-bits-dir argument for <arch>/mkisoimages.sh
 #  NOPKG:    if set, do not distribute third-party packages
 #  NOPORTS:  if set, do not distribute ports tree
 #  NOSRC:    if set, do not distribute source tree
@@ -39,7 +40,6 @@ WORLDDIR?=	${.CURDIR}/..
 PORTSDIR?=	/usr/ports
 DOCDIR?=	/usr/doc
 RELNOTES_LANG?= en_US.ISO8859-1
-XZCMD?=		/usr/bin/xz
 
 .if !defined(TARGET) || empty(TARGET)
 TARGET=		${MACHINE}
@@ -160,16 +160,18 @@ kernel.txz:
 src.txz:
 	mkdir -p ${DISTDIR}/usr
 	ln -fs ${WORLDDIR} ${DISTDIR}/usr/src
-	cd ${DISTDIR} && tar cLvJf ${.OBJDIR}/src.txz --exclude .svn --exclude .zfs \
-	    --exclude .git --exclude @ --exclude usr/src/release/dist usr/src
+	cd ${DISTDIR} && tar cLvf - --exclude .svn --exclude .zfs \
+	    --exclude .git --exclude @ --exclude usr/src/release/dist usr/src | \
+	    ${XZ_CMD} > ${.OBJDIR}/src.txz
 
 ports.txz:
 	mkdir -p ${DISTDIR}/usr
 	ln -fs ${PORTSDIR} ${DISTDIR}/usr/ports
-	cd ${DISTDIR} && tar cLvJf ${.OBJDIR}/ports.txz \
+	cd ${DISTDIR} && tar cLvf - \
 	    --exclude .git --exclude .svn \
 	    --exclude usr/ports/distfiles --exclude usr/ports/packages \
-	    --exclude 'usr/ports/INDEX*' --exclude work usr/ports
+	    --exclude 'usr/ports/INDEX*' --exclude work usr/ports | \
+	    ${XZ_CMD} > ${.OBJDIR}/ports.txz
 
 reldoc:
 	cd ${.CURDIR}/doc && ${MAKE} all install clean 'FORMATS=html txt' \
@@ -248,7 +250,7 @@ dvd: packagesystem
 
 release.iso: disc1.iso
 disc1.iso: disc1
-	sh ${.CURDIR}/${TARGET}/mkisoimages.sh -b ${VOLUME_LABEL}_CD ${.TARGET} disc1
+	sh ${.CURDIR}/${TARGET}/mkisoimages.sh -b ${VOLUME_LABEL}_CD ${.TARGET} disc1 ${XTRADIR}
 
 uefi-disc1.iso: disc1
 .if exists(${.CURDIR}/${TARGET}/mkisoimages-uefi.sh)
@@ -263,7 +265,7 @@ uefi-bootonly.iso: bootonly
 .endif
 
 dvd1.iso: dvd pkg-stage
-	sh ${.CURDIR}/${TARGET}/mkisoimages.sh -b ${VOLUME_LABEL}_DVD ${.TARGET} dvd
+	sh ${.CURDIR}/${TARGET}/mkisoimages.sh -b ${VOLUME_LABEL}_DVD ${.TARGET} dvd ${XTRADIR}
 
 uefi-dvd1.iso: dvd pkg-stage
 .if exists(${.CURDIR}/${TARGET}/mkisoimages-uefi.sh)
@@ -272,7 +274,7 @@ uefi-dvd1.iso: dvd pkg-stage
 .endif
 
 bootonly.iso: bootonly
-	sh ${.CURDIR}/${TARGET}/mkisoimages.sh -b ${VOLUME_LABEL}_BO ${.TARGET} bootonly
+	sh ${.CURDIR}/${TARGET}/mkisoimages.sh -b ${VOLUME_LABEL}_BO ${.TARGET} bootonly ${XTRADIR}
 
 memstick: memstick.img
 memstick.img: disc1
@@ -316,7 +318,11 @@ ftp: packagesystem
 	cp *.txz MANIFEST ftp
 
 release:	real-release vm-release cloudware-release
-	touch ${.TARGET}
+	${MAKE} -C ${.CURDIR} ${.MAKEFLAGS} release-done
+	true
+
+release-done:
+	touch release
 
 real-release:
 	${MAKE} -C ${.CURDIR} ${.MAKEFLAGS} obj
@@ -332,10 +338,10 @@ release-install:
 .for I in ${IMAGES}
 	cp -p ${I} ${DESTDIR}/${OSRELEASE}-${I}
 . if defined(WITH_COMPRESSED_IMAGES) && !empty(WITH_COMPRESSED_IMAGES)
-	${XZCMD} -k ${DESTDIR}/${OSRELEASE}-${I}
+	${XZ_CMD} -k ${DESTDIR}/${OSRELEASE}-${I}
 . endif
 .endfor
+	cd ${DESTDIR} && sha512 ${OSRELEASE}* > ${DESTDIR}/CHECKSUM.SHA512
 	cd ${DESTDIR} && sha256 ${OSRELEASE}* > ${DESTDIR}/CHECKSUM.SHA256
-	cd ${DESTDIR} && md5 ${OSRELEASE}* > ${DESTDIR}/CHECKSUM.MD5
 
 .include "${.CURDIR}/Makefile.vm"

@@ -241,13 +241,6 @@ struct vmspace {
 	caddr_t vm_taddr;	/* (c) user virtual address of text */
 	caddr_t vm_daddr;	/* (c) user virtual address of data */
 	caddr_t vm_maxsaddr;	/* user VA at max stack growth */
-	vm_offset_t vm_aslr_delta_mmap;	/* mmap() random delta for ASLR */
-	vm_offset_t vm_aslr_delta_stack;	/* stack random delta for ASLR */
-	vm_offset_t vm_aslr_delta_exec;		/* exec base random delta for ASLR */
-	vm_offset_t vm_aslr_delta_vdso;		/* VDSO base random delta for ASLR */
-#ifdef __LP64__
-	vm_offset_t vm_aslr_delta_map32bit;	/* random for MAP_32BIT mappings */
-#endif
 	volatile int vm_refcnt;	/* number of references */
 	/*
 	 * Keep the PMAP last, so that CPU-specific variations of that
@@ -334,9 +327,9 @@ long vmspace_resident_count(struct vmspace *vmspace);
 /*
  * vm_fault option flags
  */
-#define VM_FAULT_NORMAL 0		/* Nothing special */
-#define VM_FAULT_CHANGE_WIRING 1	/* Change the wiring as appropriate */
-#define	VM_FAULT_DIRTY 2		/* Dirty the page; use w/VM_PROT_COPY */
+#define	VM_FAULT_NORMAL	0		/* Nothing special */
+#define	VM_FAULT_WIRE	1		/* Wire the mapped page */
+#define	VM_FAULT_DIRTY	2		/* Dirty the page; use w/VM_PROT_COPY */
 
 /*
  * Initially, mappings are slightly sequential.  The maximum window size must

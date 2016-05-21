@@ -33,7 +33,6 @@ __FBSDID("$FreeBSD$");
 #include "opt_ddb.h"
 #include "opt_inet.h"
 #include "opt_inet6.h"
-#include "opt_pax.h"
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -209,6 +208,8 @@ static char *pr_allow_names[] = {
 	"allow.mount.procfs",
 	"allow.mount.tmpfs",
 	"allow.mount.fdescfs",
+	"allow.mount.linprocfs",
+	"allow.mount.linsysfs",
 };
 const size_t pr_allow_names_size = sizeof(pr_allow_names);
 
@@ -226,6 +227,8 @@ static char *pr_allow_nonames[] = {
 	"allow.mount.noprocfs",
 	"allow.mount.notmpfs",
 	"allow.mount.nofdescfs",
+	"allow.mount.nolinprocfs",
+	"allow.mount.nolinsysfs",
 };
 const size_t pr_allow_nonames_size = sizeof(pr_allow_nonames);
 
@@ -250,10 +253,6 @@ prison0_init(void)
 	prison0.pr_cpuset = cpuset_ref(thread0.td_cpuset);
 	prison0.pr_osreldate = osreldate;
 	strlcpy(prison0.pr_osrelease, osrelease, sizeof(prison0.pr_osrelease));
-
-#ifdef PAX
-	pax_init_prison(&prison0);
-#endif
 }
 
 #ifdef INET
@@ -1372,10 +1371,6 @@ kern_jail_set(struct thread *td, struct uio *optuio, int flags)
 			goto done_releroot;
 		}
 
-#ifdef PAX
-		pax_init_prison(pr);
-#endif
-
 		mtx_lock(&pr->pr_mtx);
 		/*
 		 * New prisons do not yet have a reference, because we do not
@@ -1594,11 +1589,14 @@ kern_jail_set(struct thread *td, struct uio *optuio, int flags)
 #endif
 	onamelen = namelen = 0;
 	if (name != NULL) {
-		/* Give a default name of the jid. */
+		/* Give a default name of the jid.  Also allow the name to be
+		 * explicitly the jid - but not any other number, and only in
+		 * normal form (no leading zero/etc).
+		 */
 		if (name[0] == '\0')
 			snprintf(name = numbuf, sizeof(numbuf), "%d", jid);
-		else if (*namelc == '0' || (strtoul(namelc, &p, 10) != jid &&
-		    *p == '\0')) {
+		else if ((strtoul(namelc, &p, 10) != jid ||
+			  namelc[0] < '1' || namelc[0] > '9') && *p == '\0') {
 			error = EINVAL;
 			vfs_opterror(opts,
 			    "name cannot be numeric (unless it is the jid)");
@@ -4321,6 +4319,14 @@ SYSCTL_PROC(_security_jail, OID_AUTO, mount_procfs_allowed,
     CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
     NULL, PR_ALLOW_MOUNT_PROCFS, sysctl_jail_default_allow, "I",
     "Processes in jail can mount the procfs file system");
+SYSCTL_PROC(_security_jail, OID_AUTO, mount_linprocfs_allowed,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
+    NULL, PR_ALLOW_MOUNT_LINPROCFS, sysctl_jail_default_allow, "I",
+    "Processes in jail can mount the linprocfs file system");
+SYSCTL_PROC(_security_jail, OID_AUTO, mount_linsysfs_allowed,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
+    NULL, PR_ALLOW_MOUNT_LINSYSFS, sysctl_jail_default_allow, "I",
+    "Processes in jail can mount the linsysfs file system");
 SYSCTL_PROC(_security_jail, OID_AUTO, mount_tmpfs_allowed,
     CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
     NULL, PR_ALLOW_MOUNT_TMPFS, sysctl_jail_default_allow, "I",
@@ -4487,6 +4493,10 @@ SYSCTL_JAIL_PARAM(_allow_mount, nullfs, CTLTYPE_INT | CTLFLAG_RW,
     "B", "Jail may mount the nullfs file system");
 SYSCTL_JAIL_PARAM(_allow_mount, procfs, CTLTYPE_INT | CTLFLAG_RW,
     "B", "Jail may mount the procfs file system");
+SYSCTL_JAIL_PARAM(_allow_mount, linprocfs, CTLTYPE_INT | CTLFLAG_RW,
+    "B", "Jail may mount the linprocfs file system");
+SYSCTL_JAIL_PARAM(_allow_mount, linsysfs, CTLTYPE_INT | CTLFLAG_RW,
+    "B", "Jail may mount the linsysfs file system");
 SYSCTL_JAIL_PARAM(_allow_mount, tmpfs, CTLTYPE_INT | CTLFLAG_RW,
     "B", "Jail may mount the tmpfs file system");
 SYSCTL_JAIL_PARAM(_allow_mount, zfs, CTLTYPE_INT | CTLFLAG_RW,
@@ -4739,27 +4749,6 @@ db_show_prison(struct prison *pr)
 		db_printf(" %s %s\n",
 		    ii == 0 ? "ip6.addr        =" : "                 ",
 		    ip6_sprintf(ip6buf, &pr->pr_ip6[ii]));
-#endif
-#ifdef PAX
-	db_printf(" pr_hbsd = {\n");
-
-	db_printf(" .aslr = {\n");
-	db_printf("  .status		= %d\n",
-	    pr->pr_hbsd.aslr.status);
-	db_printf("  .compat_status	= %d\n",
-	    pr->pr_hbsd.aslr.compat_status);
-	db_printf("  .disallow_map32bit_status	= %d\n",
-	    pr->pr_hbsd.aslr.disallow_map32bit_status);
-	db_printf("  }\n");
-
-	db_printf("  .log = {\n");
-	db_printf("   .log		= %d\n",
-	    pr->pr_hbsd.log.log);
-	db_printf("   .ulog		= %d\n",
-	    pr->pr_hbsd.log.ulog);
-	db_printf("  }\n");
-
-	db_printf(" }\n");
 #endif
 }
 

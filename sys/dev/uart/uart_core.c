@@ -39,6 +39,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/malloc.h>
 #include <sys/queue.h>
 #include <sys/reboot.h>
+#include <sys/sysctl.h>
 #include <machine/bus.h>
 #include <sys/rman.h>
 #include <machine/resource.h>
@@ -47,6 +48,7 @@ __FBSDID("$FreeBSD$");
 #include <dev/uart/uart.h>
 #include <dev/uart/uart_bus.h>
 #include <dev/uart/uart_cpu.h>
+#include <dev/uart/uart_ppstypes.h>
 
 #include "uart_if.h"
 
@@ -63,6 +65,157 @@ static MALLOC_DEFINE(M_UART, "UART", "UART driver");
 #endif
 static int uart_poll_freq = UART_POLL_FREQ;
 TUNABLE_INT("debug.uart_poll_freq", &uart_poll_freq);
+
+static inline int
+uart_pps_mode_valid(int pps_mode)
+{
+	int opt;
+
+	switch(pps_mode & UART_PPS_SIGNAL_MASK) {
+	case UART_PPS_DISABLED:
+	case UART_PPS_CTS:
+	case UART_PPS_DCD:
+		break;
+	default:
+		return (false);
+	}
+
+	opt = pps_mode & UART_PPS_OPTION_MASK;
+	if ((opt & ~(UART_PPS_INVERT_PULSE | UART_PPS_NARROW_PULSE)) != 0)
+		return (false);
+
+	return (true);
+}
+
+static void
+uart_pps_print_mode(struct uart_softc *sc)
+{
+
+	device_printf(sc->sc_dev, "PPS capture mode: ");
+	switch(sc->sc_pps_mode) {
+	case UART_PPS_DISABLED:
+		printf("disabled");
+	case UART_PPS_CTS:
+		printf("CTS");
+	case UART_PPS_DCD:
+		printf("DCD");
+	default:
+		printf("invalid");
+	}
+	if (sc->sc_pps_mode & UART_PPS_INVERT_PULSE)
+		printf("-Inverted");
+	if (sc->sc_pps_mode & UART_PPS_NARROW_PULSE)
+		printf("-NarrowPulse");
+	printf("\n");
+}
+
+static int
+uart_pps_mode_sysctl(SYSCTL_HANDLER_ARGS)
+{
+	struct uart_softc *sc;
+	int err, tmp;
+
+	sc = arg1;
+	tmp = sc->sc_pps_mode;
+	err = sysctl_handle_int(oidp, &tmp, 0, req);
+	if (err != 0 || req->newptr == NULL)
+		return (err);
+	if (!uart_pps_mode_valid(tmp))
+		return (EINVAL);
+	sc->sc_pps_mode = tmp;
+	return(0);
+}
+
+static void
+uart_pps_process(struct uart_softc *sc, int ser_sig)
+{
+	sbintime_t now;
+	int is_assert, pps_sig;
+
+	/* Which signal is configured as PPS?  Early out if none. */
+	switch(sc->sc_pps_mode & UART_PPS_SIGNAL_MASK) {
+	case UART_PPS_CTS:
+		pps_sig = SER_CTS;
+		break;
+	case UART_PPS_DCD:
+		pps_sig = SER_DCD;
+		break;
+	default:
+		return;
+	}
+
+	/* Early out if there is no change in the signal configured as PPS. */
+	if ((ser_sig & SER_DELTA(pps_sig)) == 0)
+		return;
+
+	/*
+	 * In narrow-pulse mode we need to synthesize both capture and clear
+	 * events from a single "delta occurred" indication from the uart
+	 * hardware because the pulse width is too narrow to reliably detect
+	 * both edges.  However, when the pulse width is close to our interrupt
+	 * processing latency we might intermittantly catch both edges.  To
+	 * guard against generating spurious events when that happens, we use a
+	 * separate timer to ensure at least half a second elapses before we
+	 * generate another event.
+	 */
+	pps_capture(&sc->sc_pps);
+	if (sc->sc_pps_mode & UART_PPS_NARROW_PULSE) {
+		now = getsbinuptime();
+		if (now > sc->sc_pps_captime + 500 * SBT_1MS) {
+			sc->sc_pps_captime = now;
+			pps_event(&sc->sc_pps, PPS_CAPTUREASSERT);
+			pps_event(&sc->sc_pps, PPS_CAPTURECLEAR);
+		}
+	} else  {
+		is_assert = ser_sig & pps_sig;
+		if (sc->sc_pps_mode & UART_PPS_INVERT_PULSE)
+			is_assert = !is_assert;
+		pps_event(&sc->sc_pps, is_assert ? PPS_CAPTUREASSERT :
+		    PPS_CAPTURECLEAR);
+	}
+}
+
+static void
+uart_pps_init(struct uart_softc *sc)
+{
+	struct sysctl_ctx_list *ctx;
+	struct sysctl_oid *tree;
+
+	ctx = device_get_sysctl_ctx(sc->sc_dev);
+	tree = device_get_sysctl_tree(sc->sc_dev);
+
+	/*
+	 * The historical default for pps capture mode is either DCD or CTS,
+	 * depending on the UART_PPS_ON_CTS kernel option.  Start with that,
+	 * then try to fetch the tunable that overrides the mode for all uart
+	 * devices, then try to fetch the sysctl-tunable that overrides the mode
+	 * for one specific device.
+	 */
+#ifdef UART_PPS_ON_CTS
+	sc->sc_pps_mode = UART_PPS_CTS;
+#else
+	sc->sc_pps_mode = UART_PPS_DCD;
+#endif
+	TUNABLE_INT_FETCH("hw.uart.pps_mode", &sc->sc_pps_mode);
+	SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(tree), OID_AUTO, "pps_mode",
+	    CTLTYPE_INT | CTLFLAG_RWTUN, sc, 0, uart_pps_mode_sysctl, "I",
+	    "pulse mode: 0/1/2=disabled/CTS/DCD; "
+	    "add 0x10 to invert, 0x20 for narrow pulse");
+
+	if (!uart_pps_mode_valid(sc->sc_pps_mode)) {
+		device_printf(sc->sc_dev, 
+		    "Invalid pps_mode 0x%02x configured; disabling PPS capture\n",
+		    sc->sc_pps_mode);
+		sc->sc_pps_mode = UART_PPS_DISABLED;
+	} else if (bootverbose) {
+		uart_pps_print_mode(sc);
+	}
+
+	sc->sc_pps.ppscap = PPS_CAPTUREBOTH;
+	sc->sc_pps.driver_mtx = uart_tty_getlock(sc);
+	sc->sc_pps.driver_abi = PPS_ABI_VERSION;
+	pps_init_abi(&sc->sc_pps);
+}
 
 void
 uart_add_sysdev(struct uart_devinfo *di)
@@ -203,12 +356,12 @@ uart_intr_sigchg(void *arg)
 
 	sig = UART_GETSIG(sc);
 
+	/*
+	 * Time pulse counting support, invoked whenever the PPS parameters are
+	 * currently set to capture either edge of the signal.
+	 */
 	if (sc->sc_pps.ppsparam.mode & PPS_CAPTUREBOTH) {
-		if (sig & UART_SIG_DPPS) {
-			pps_capture(&sc->sc_pps);
-			pps_event(&sc->sc_pps, (sig & UART_SIG_PPS) ?
-			    PPS_CAPTUREASSERT : PPS_CAPTURECLEAR);
-		}
+		uart_pps_process(sc, sig);
 	}
 
 	/*
@@ -499,9 +652,6 @@ uart_bus_attach(device_t dev)
 		    sc->sc_sysdev->stopbits);
 	}
 
-	sc->sc_pps.ppscap = PPS_CAPTUREBOTH;
-	pps_init(&sc->sc_pps);
-
 	sc->sc_leaving = 0;
 	sc->sc_testintr = 1;
 	filt = uart_intr(sc);
@@ -554,10 +704,14 @@ uart_bus_attach(device_t dev)
 		printf("\n");
 	}
 
-	error = (sc->sc_sysdev != NULL && sc->sc_sysdev->attach != NULL)
-	    ? (*sc->sc_sysdev->attach)(sc) : uart_tty_attach(sc);
-	if (error)
-		goto fail;
+	if (sc->sc_sysdev != NULL && sc->sc_sysdev->attach != NULL) {
+		if ((error = sc->sc_sysdev->attach(sc)) != 0)
+			goto fail;
+	} else {
+		if ((error = uart_tty_attach(sc)) != 0)
+			goto fail;
+		uart_pps_init(sc);
+	}
 
 	if (sc->sc_sysdev != NULL)
 		sc->sc_sysdev->hwmtx = sc->sc_hwmtx;

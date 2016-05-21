@@ -144,7 +144,8 @@ static void	link_elf_reloc_local(linker_file_t);
 static long	link_elf_symtab_get(linker_file_t, const Elf_Sym **);
 static long	link_elf_strtab_get(linker_file_t, caddr_t *);
 
-static Elf_Addr elf_obj_lookup(linker_file_t lf, Elf_Size symidx, int deps);
+static int	elf_obj_lookup(linker_file_t lf, Elf_Size symidx, int deps,
+		    Elf_Addr *);
 
 static kobj_method_t link_elf_methods[] = {
 	KOBJMETHOD(linker_lookup_symbol,	link_elf_lookup_symbol),
@@ -256,6 +257,9 @@ link_elf_link_preload(linker_class_t cls, const char *filename,
 		switch (shdr[i].sh_type) {
 		case SHT_PROGBITS:
 		case SHT_NOBITS:
+#ifdef __amd64__
+		case SHT_AMD64_UNWIND:
+#endif
 			ef->nprogtab++;
 			break;
 		case SHT_SYMTAB:
@@ -326,9 +330,16 @@ link_elf_link_preload(linker_class_t cls, const char *filename,
 		switch (shdr[i].sh_type) {
 		case SHT_PROGBITS:
 		case SHT_NOBITS:
+#ifdef __amd64__
+		case SHT_AMD64_UNWIND:
+#endif
 			ef->progtab[pb].addr = (void *)shdr[i].sh_addr;
 			if (shdr[i].sh_type == SHT_PROGBITS)
 				ef->progtab[pb].name = "<<PROGBITS>>";
+#ifdef __amd64__
+			else if (shdr[i].sh_type == SHT_AMD64_UNWIND)
+				ef->progtab[pb].name = "<<UNWIND>>";
+#endif
 			else
 				ef->progtab[pb].name = "<<NOBITS>>";
 			ef->progtab[pb].size = shdr[i].sh_size;
@@ -552,6 +563,9 @@ link_elf_load_file(linker_class_t cls, const char *filename,
 		switch (shdr[i].sh_type) {
 		case SHT_PROGBITS:
 		case SHT_NOBITS:
+#ifdef __amd64__
+		case SHT_AMD64_UNWIND:
+#endif
 			ef->nprogtab++;
 			break;
 		case SHT_SYMTAB:
@@ -658,6 +672,9 @@ link_elf_load_file(linker_class_t cls, const char *filename,
 		switch (shdr[i].sh_type) {
 		case SHT_PROGBITS:
 		case SHT_NOBITS:
+#ifdef __amd64__
+		case SHT_AMD64_UNWIND:
+#endif
 			alignmask = shdr[i].sh_addralign - 1;
 			mapsize += alignmask;
 			mapsize &= ~alignmask;
@@ -725,6 +742,9 @@ link_elf_load_file(linker_class_t cls, const char *filename,
 		switch (shdr[i].sh_type) {
 		case SHT_PROGBITS:
 		case SHT_NOBITS:
+#ifdef __amd64__
+		case SHT_AMD64_UNWIND:
+#endif
 			alignmask = shdr[i].sh_addralign - 1;
 			mapbase += alignmask;
 			mapbase &= ~alignmask;
@@ -733,6 +753,10 @@ link_elf_load_file(linker_class_t cls, const char *filename,
 				    ef->shstrtab + shdr[i].sh_name;
 			else if (shdr[i].sh_type == SHT_PROGBITS)
 				ef->progtab[pb].name = "<<PROGBITS>>";
+#ifdef __amd64__
+			else if (shdr[i].sh_type == SHT_AMD64_UNWIND)
+				ef->progtab[pb].name = "<<UNWIND>>";
+#endif
 			else
 				ef->progtab[pb].name = "<<NOBITS>>";
 			if (ef->progtab[pb].name != NULL && 
@@ -754,7 +778,11 @@ link_elf_load_file(linker_class_t cls, const char *filename,
 			}
 			ef->progtab[pb].size = shdr[i].sh_size;
 			ef->progtab[pb].sec = i;
-			if (shdr[i].sh_type == SHT_PROGBITS) {
+			if (shdr[i].sh_type == SHT_PROGBITS
+#ifdef __amd64__
+			    || shdr[i].sh_type == SHT_AMD64_UNWIND
+#endif
+			    ) {
 				error = vn_rdwr(UIO_READ, nd.ni_vp,
 				    ef->progtab[pb].addr,
 				    shdr[i].sh_size, shdr[i].sh_offset,
@@ -1224,38 +1252,46 @@ elf_obj_cleanup_globals_cache(elf_file_t ef)
  * This is not only more efficient, it's also more correct. It's not always
  * the case that the symbol can be found through the hash table.
  */
-static Elf_Addr
-elf_obj_lookup(linker_file_t lf, Elf_Size symidx, int deps)
+static int
+elf_obj_lookup(linker_file_t lf, Elf_Size symidx, int deps, Elf_Addr *res)
 {
 	elf_file_t ef = (elf_file_t)lf;
 	Elf_Sym *sym;
 	const char *symbol;
-	Elf_Addr ret;
+	Elf_Addr res1;
 
 	/* Don't even try to lookup the symbol if the index is bogus. */
-	if (symidx >= ef->ddbsymcnt)
-		return (0);
+	if (symidx >= ef->ddbsymcnt) {
+		*res = 0;
+		return (EINVAL);
+	}
 
 	sym = ef->ddbsymtab + symidx;
 
 	/* Quick answer if there is a definition included. */
-	if (sym->st_shndx != SHN_UNDEF)
-		return (sym->st_value);
+	if (sym->st_shndx != SHN_UNDEF) {
+		*res = sym->st_value;
+		return (0);
+	}
 
 	/* If we get here, then it is undefined and needs a lookup. */
 	switch (ELF_ST_BIND(sym->st_info)) {
 	case STB_LOCAL:
 		/* Local, but undefined? huh? */
-		return (0);
+		*res = 0;
+		return (EINVAL);
 
 	case STB_GLOBAL:
+	case STB_WEAK:
 		/* Relative to Data or Function name */
 		symbol = ef->ddbstrtab + sym->st_name;
 
 		/* Force a lookup failure if the symbol name is bogus. */
-		if (*symbol == 0)
-			return (0);
-		ret = ((Elf_Addr)linker_file_lookup_symbol(lf, symbol, deps));
+		if (*symbol == 0) {
+			*res = 0;
+			return (EINVAL);
+		}
+		res1 = (Elf_Addr)linker_file_lookup_symbol(lf, symbol, deps);
 
 		/*
 		 * Cache global lookups during module relocation. The failure
@@ -1267,18 +1303,20 @@ elf_obj_lookup(linker_file_t lf, Elf_Size symidx, int deps)
 		 * restored to SHN_UNDEF in elf_obj_cleanup_globals_cache(),
 		 * above.
 		 */
-		if (ret != 0) {
+		if (res1 != 0) {
 			sym->st_shndx = SHN_FBSD_CACHED;
-			sym->st_value = ret;
+			sym->st_value = res1;
+			*res = res1;
+			return (0);
+		} else if (ELF_ST_BIND(sym->st_info) == STB_WEAK) {
+			sym->st_value = 0;
+			*res = 0;
+			return (0);
 		}
-		return (ret);
-
-	case STB_WEAK:
-		printf("link_elf_obj: Weak symbols not supported\n");
-		return (0);
+		return (EINVAL);
 
 	default:
-		return (0);
+		return (EINVAL);
 	}
 }
 

@@ -20,6 +20,18 @@ linux32_assym.h			optional	compat_linux32		\
 	no-obj no-implicit-rule before-depend				\
 	clean		"linux32_assym.h"
 #
+linux32_locore.o	optional	compat_linux32		\
+	dependency 	"linux32_assym.h $S/amd64/linux32/linux32_locore.s"	\
+	compile-with	"${CC} -x assembler-with-cpp -DLOCORE -m32 -shared -s -pipe -I. -I$S -Werror -Wall -fno-common -nostdinc -nostdlib -Wl,-T$S/amd64/linux32/linux32_vdso.lds.s -Wl,-soname=linux32_vdso.so,--eh-frame-hdr,-fPIC,-warn-common ${.IMPSRC} -o ${.TARGET}" \
+	no-obj no-implicit-rule						\
+	clean		"linux32_locore.o"
+#
+linux32_vdso.so		optional	compat_linux32			\
+	dependency 	"linux32_locore.o"				\
+	compile-with	"${OBJCOPY} --input-target binary --output-target elf64-x86-64-freebsd --binary-architecture i386 linux32_locore.o ${.TARGET}" \
+	no-implicit-rule						\
+	clean		"linux32_vdso.so"
+#
 ia32_genassym.o			standard				\
 	dependency 	"$S/compat/ia32/ia32_genassym.c"		\
 	compile-with	"${CC} ${CFLAGS:N-fno-common} -c ${.IMPSRC}"	\
@@ -258,6 +270,7 @@ dev/hyperv/vmbus/hv_channel.c				optional	hyperv
 dev/hyperv/vmbus/hv_channel_mgmt.c			optional	hyperv
 dev/hyperv/vmbus/hv_connection.c			optional	hyperv
 dev/hyperv/vmbus/hv_hv.c				optional	hyperv
+dev/hyperv/vmbus/hv_et.c				optional	hyperv
 dev/hyperv/vmbus/hv_ring_buffer.c			optional	hyperv
 dev/hyperv/vmbus/hv_vmbus_drv_freebsd.c			optional	hyperv
 dev/kbd/kbd.c			optional	atkbd | sc | ukbd | vt
@@ -305,6 +318,7 @@ dev/sfxge/common/efx_ev.c	optional	sfxge pci
 dev/sfxge/common/efx_filter.c	optional	sfxge pci
 dev/sfxge/common/efx_hash.c	optional	sfxge pci
 dev/sfxge/common/efx_intr.c	optional	sfxge pci
+dev/sfxge/common/efx_lic.c	optional	sfxge pci
 dev/sfxge/common/efx_mac.c	optional	sfxge pci
 dev/sfxge/common/efx_mcdi.c	optional	sfxge pci
 dev/sfxge/common/efx_mon.c	optional	sfxge pci
@@ -329,6 +343,7 @@ dev/sfxge/common/hunt_rx.c	optional	sfxge pci
 dev/sfxge/common/hunt_sram.c	optional	sfxge pci
 dev/sfxge/common/hunt_tx.c	optional	sfxge pci
 dev/sfxge/common/hunt_vpd.c	optional	sfxge pci
+dev/sfxge/common/medford_nic.c	optional	sfxge pci
 dev/sfxge/common/siena_mac.c	optional	sfxge pci
 dev/sfxge/common/siena_mcdi.c	optional	sfxge pci
 dev/sfxge/common/siena_nic.c	optional	sfxge pci
@@ -505,8 +520,6 @@ compat/linsysfs/linsysfs.c	optional	linsysfs
 # Linux/i386 binary support
 #
 amd64/linux32/linux32_dummy.c	optional	compat_linux32
-amd64/linux32/linux32_locore.s	optional	compat_linux32		\
-	dependency 	"linux32_assym.h"
 amd64/linux32/linux32_machdep.c	optional	compat_linux32
 amd64/linux32/linux32_support.s	optional	compat_linux32		\
 	dependency 	"linux32_assym.h"
@@ -529,6 +542,10 @@ compat/linux/linux_time.c	optional	compat_linux32
 compat/linux/linux_timer.c	optional	compat_linux32
 compat/linux/linux_uid16.c	optional	compat_linux32
 compat/linux/linux_util.c	optional	compat_linux32
+compat/linux/linux_vdso.c	optional	compat_linux32
+compat/linux/linux_common.c	optional	compat_linux32
+compat/linux/linux_event.c	optional	compat_linux32
+compat/linux/linux.c		optional	compat_linux32
 dev/amr/amr_linux.c		optional	compat_linux32 amr
 dev/mfi/mfi_linux.c		optional	compat_linux32 mfi
 #
@@ -588,6 +605,7 @@ x86/isa/nmi.c			standard
 x86/isa/orm.c			optional	isa
 x86/pci/pci_bus.c		optional	pci
 x86/pci/qpi.c			optional	pci
+x86/x86/bus_machdep.c		standard
 x86/x86/busdma_bounce.c		standard
 x86/x86/busdma_machdep.c	standard
 x86/x86/dump_machdep.c		standard

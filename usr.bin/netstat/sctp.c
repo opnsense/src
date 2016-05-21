@@ -572,25 +572,34 @@ sctp_statesprint(uint32_t state)
 	int idx;
 
 	switch (state) {
-	case SCTP_STATE_COOKIE_WAIT:
+	case SCTP_CLOSED:
+		idx = NETSTAT_SCTP_STATES_CLOSED;
+		break;
+	case SCTP_BOUND:
+		idx = NETSTAT_SCTP_STATES_BOUND;
+		break;
+	case SCTP_LISTEN:
+		idx = NETSTAT_SCTP_STATES_LISTEN;
+		break;
+	case SCTP_COOKIE_WAIT:
 		idx = NETSTAT_SCTP_STATES_COOKIE_WAIT;
 		break;
-	case SCTP_STATE_COOKIE_ECHOED:
+	case SCTP_COOKIE_ECHOED:
 		idx = NETSTAT_SCTP_STATES_COOKIE_ECHOED;
 		break;
-	case SCTP_STATE_OPEN:
+	case SCTP_ESTABLISHED:
 		idx = NETSTAT_SCTP_STATES_ESTABLISHED;
 		break;
-	case SCTP_STATE_SHUTDOWN_SENT:
+	case SCTP_SHUTDOWN_SENT:
 		idx = NETSTAT_SCTP_STATES_SHUTDOWN_SENT;
 		break;
-	case SCTP_STATE_SHUTDOWN_RECEIVED:
+	case SCTP_SHUTDOWN_RECEIVED:
 		idx = NETSTAT_SCTP_STATES_SHUTDOWN_RECEIVED;
 		break;
-	case SCTP_STATE_SHUTDOWN_ACK_SENT:
+	case SCTP_SHUTDOWN_ACK_SENT:
 		idx = NETSTAT_SCTP_STATES_SHUTDOWN_ACK_SENT;
 		break;
-	case SCTP_STATE_SHUTDOWN_PENDING:
+	case SCTP_SHUTDOWN_PENDING:
 		idx = NETSTAT_SCTP_STATES_SHUTDOWN_PENDING;
 		break;
 	default:
@@ -607,20 +616,11 @@ sctp_statesprint(uint32_t state)
 void
 sctp_stats(u_long off, const char *name, int af1 __unused, int proto __unused)
 {
-	struct sctpstat sctpstat, zerostat;
-	size_t len = sizeof(sctpstat);
+	struct sctpstat sctpstat;
 
-	if (live) {
-		if (zflag)
-			memset(&zerostat, 0, len);
-		if (sysctlbyname("net.inet.sctp.stats", &sctpstat, &len,
-		    zflag ? &zerostat : NULL, zflag ? len : 0) < 0) {
-			if (errno != ENOENT)
-				warn("sysctl: net.inet.sctp.stats");
-			return;
-		}
-	} else
-		kread(off, &sctpstat, len);
+	if (fetch_stats("net.inet.sctp.stats", off, &sctpstat,
+	    sizeof(sctpstat), kread) != 0)
+		return;
 
 	printf ("%s:\n", name);
 

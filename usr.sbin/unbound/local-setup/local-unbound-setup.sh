@@ -172,13 +172,18 @@ do_not_edit() {
 # the libc resolver will try unbound first.
 #
 gen_resolvconf_conf() {
+	local style="$1"
 	do_not_edit
 	echo "resolv_conf=\"/dev/null\" # prevent updating ${resolv_conf}"
-	echo "unbound_conf=\"${forward_conf}\""
-	echo "unbound_pid=\"${pidfile}\""
-	echo "unbound_service=\"${service}\""
-	# resolvconf(8) likes to restart rather than reload
-	echo "unbound_restart=\"service ${service} reload\""
+	if [ "${style}" = "dynamic" ] ; then
+		echo "unbound_conf=\"${forward_conf}\""
+		echo "unbound_pid=\"${pidfile}\""
+		echo "unbound_service=\"${service}\""
+		# resolvconf(8) likes to restart rather than reload
+		echo "unbound_restart=\"service ${service} reload\""
+	else
+		echo "# Static DNS configuration"
+	fi
 }
 
 #
@@ -205,31 +210,7 @@ gen_lanzones_conf() {
 	echo "server:"
 	echo "        # Unblock reverse lookups for LAN addresses"
 	echo "        unblock-lan-zones: yes"
-	echo "        domain-insecure: 10.in-addr.arpa."
-	echo "        domain-insecure: 127.in-addr.arpa."
-	echo "        domain-insecure: 16.172.in-addr.arpa."
-	echo "        domain-insecure: 17.172.in-addr.arpa."
-	echo "        domain-insecure: 18.172.in-addr.arpa."
-	echo "        domain-insecure: 19.172.in-addr.arpa."
-	echo "        domain-insecure: 20.172.in-addr.arpa."
-	echo "        domain-insecure: 21.172.in-addr.arpa."
-	echo "        domain-insecure: 22.172.in-addr.arpa."
-	echo "        domain-insecure: 23.172.in-addr.arpa."
-	echo "        domain-insecure: 24.172.in-addr.arpa."
-	echo "        domain-insecure: 25.172.in-addr.arpa."
-	echo "        domain-insecure: 26.172.in-addr.arpa."
-	echo "        domain-insecure: 27.172.in-addr.arpa."
-	echo "        domain-insecure: 28.172.in-addr.arpa."
-	echo "        domain-insecure: 29.172.in-addr.arpa."
-	echo "        domain-insecure: 30.172.in-addr.arpa."
-	echo "        domain-insecure: 31.172.in-addr.arpa."
-	echo "        domain-insecure: 168.192.in-addr.arpa."
-	echo "        domain-insecure: 254.169.in-addr.arpa."
-	echo "        domain-insecure: d.f.ip6.arpa."
-	echo "        domain-insecure: 8.e.ip6.arpa."
-	echo "        domain-insecure: 9.e.ip6.arpa."
-	echo "        domain-insecure: a.e.ip6.arpa."
-	echo "        domain-insecure: b.e.ip6.arpa."
+	echo "        insecure-lan-zones: yes"
 }
 
 #
@@ -379,6 +360,9 @@ main() {
 	if [ -z "$forwarders" ] ; then
 		echo "Extracting forwarders from ${resolv_conf}."
 		forwarders=$(get_nameservers <"${resolv_conf}")
+		style=dynamic
+	else
+		style=static
 	fi
 
 	#
@@ -440,7 +424,7 @@ main() {
 	# instead of resolv.conf.
 	#
 	local tmp_resolvconf_conf=$(mktemp -u "${resolvconf_conf}.XXXXX")
-	gen_resolvconf_conf | unexpand >"${tmp_resolvconf_conf}"
+	gen_resolvconf_conf "${style}" | unexpand >"${tmp_resolvconf_conf}"
 	replace "${resolvconf_conf}" "${tmp_resolvconf_conf}"
 
 	#

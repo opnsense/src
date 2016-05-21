@@ -249,7 +249,7 @@ find_bsp(phandle_t node, uint32_t bspid, u_int cpu_impl)
 {
 	char type[sizeof("cpu")];
 	phandle_t child;
-	uint32_t cpuid;
+	uint32_t portid;
 
 	for (; node != 0; node = OF_peer(node)) {
 		child = OF_child(node);
@@ -263,10 +263,10 @@ find_bsp(phandle_t node, uint32_t bspid, u_int cpu_impl)
 				continue;
 			if (strcmp(type, "cpu") != 0)
 				continue;
-			if (OF_getprop(node, cpu_cpuid_prop(cpu_impl), &cpuid,
-			    sizeof(cpuid)) <= 0)
+			if (OF_getprop(node, cpu_portid_prop(cpu_impl),
+			    &portid, sizeof(portid)) <= 0)
 				continue;
-			if (cpuid == bspid)
+			if (portid == bspid)
 				return (node);
 		}
 	}
@@ -274,7 +274,7 @@ find_bsp(phandle_t node, uint32_t bspid, u_int cpu_impl)
 }
 
 const char *
-cpu_cpuid_prop(u_int cpu_impl)
+cpu_portid_prop(u_int cpu_impl)
 {
 
 	switch (cpu_impl) {
@@ -383,7 +383,8 @@ sparc64_init(caddr_t mdp, u_long o1, u_long o2, u_long o3, ofw_vec_t *vec)
 		kmdp = preload_search_by_type("elf kernel");
 		if (kmdp != NULL) {
 			boothowto = MD_FETCH(kmdp, MODINFOMD_HOWTO, int);
-			kern_envp = MD_FETCH(kmdp, MODINFOMD_ENVP, char *);
+			init_static_kenv(MD_FETCH(kmdp, MODINFOMD_ENVP, char *),
+			    0);
 			end = MD_FETCH(kmdp, MODINFOMD_KERNEND, vm_offset_t);
 			kernel_tlb_slots = MD_FETCH(kmdp, MODINFOMD_DTLB_SLOTS,
 			    int);
@@ -657,10 +658,6 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	PROC_UNLOCK(p);
 
 	fp = (struct frame *)sfp - 1;
-
-	/* Translate the signal if appropriate. */
-	if (p->p_sysent->sv_sigtbl && sig <= p->p_sysent->sv_sigsize)
-		sig = p->p_sysent->sv_sigtbl[_SIG_IDX(sig)];
 
 	/* Build the argument list for the signal handler. */
 	tf->tf_out[0] = sig;
@@ -1003,7 +1000,7 @@ exec_setregs(struct thread *td, struct image_params *imgp, u_long stack)
 	bzero(pcb, sizeof(*pcb));
 	bzero(tf, sizeof(*tf));
 	tf->tf_out[0] = stack;
-	tf->tf_out[3] = p->p_psstrings;
+	tf->tf_out[3] = p->p_sysent->sv_psstrings;
 	tf->tf_out[6] = sp - SPOFF - sizeof(struct frame);
 	tf->tf_tnpc = imgp->entry_addr + 4;
 	tf->tf_tpc = imgp->entry_addr;

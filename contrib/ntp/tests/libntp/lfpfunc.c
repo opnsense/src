@@ -21,6 +21,9 @@
 }
 
 
+typedef int bool; // typedef enum { FALSE, TRUE } boolean; -> can't use this because TRUE and FALSE are already defined
+
+
 typedef struct  {
 	uint32_t h, l;
 } lfp_hl;

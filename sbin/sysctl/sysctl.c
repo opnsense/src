@@ -233,6 +233,12 @@ parse(const char *string, int lineno)
 		newval = cp;
 		newsize = strlen(cp);
 	}
+	/* Trim spaces */
+	cp = bufp + strlen(bufp) - 1;
+	while (cp >= bufp && isspace((int)*cp)) {
+		*cp = '\0';
+		cp--;
+	}
 	len = name2oid(bufp, mib);
 
 	if (len < 0) {
@@ -241,7 +247,11 @@ parse(const char *string, int lineno)
 		if (qflag)
 			return (1);
 		else {
-			warn("unknown oid '%s'%s", bufp, line);
+			if (errno == ENOENT) {
+				warnx("unknown oid '%s'%s", bufp, line);
+			} else {
+				warn("unknown oid '%s'%s", bufp, line);
+			}
 			return (1);
 		}
 	}

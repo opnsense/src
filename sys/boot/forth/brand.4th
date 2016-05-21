@@ -58,7 +58,7 @@ variable brandY
 		drop ( xt = 0 ) \ cruft
 		s" loader_brand" getenv dup -1 = over 0= or if
 			dup 0= if 2drop else drop then \ getenv result unused
-			s" try-include /boot/brand-opnsense.4th"
+			s" try-include /boot/brand-fbsd.4th"
 		else
 			2drop ( c-addr/u -- ) \ getenv result unused
 			s" try-include /boot/brand-${loader_brand}.4th"

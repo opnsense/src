@@ -2,8 +2,12 @@
 
 .include <bsd.own.mk>
 
-FILESDIR=	${TESTSBASE}/bin/sh/builtins
-KYUAFILE=	no
+TESTSDIR=	${TESTSBASE}/bin/sh/${.CURDIR:T}
+
+.PATH: ${.CURDIR:H}
+ATF_TESTS_SH=	functional_test
+
+FILESDIR=	${TESTSDIR}
 
 FILES=		alias.0 alias.0.stdout
 FILES+=		alias.1 alias.1.stderr
@@ -34,6 +38,7 @@ FILES+=		case16.0
 FILES+=		case17.0
 FILES+=		case18.0
 FILES+=		case19.0
+FILES+=		case20.0
 FILES+=		cd1.0
 FILES+=		cd2.0
 FILES+=		cd3.0

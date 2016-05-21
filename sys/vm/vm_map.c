@@ -65,15 +65,12 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
-#include "opt_pax.h"
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/ktr.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
-#include <sys/pax.h>
 #include <sys/proc.h>
 #include <sys/vmmeter.h>
 #include <sys/mman.h>
@@ -298,15 +295,6 @@ vmspace_alloc(vm_offset_t min, vm_offset_t max, pmap_pinit_t pinit)
 	vm->vm_taddr = 0;
 	vm->vm_daddr = 0;
 	vm->vm_maxsaddr = 0;
-#ifdef PAX_ASLR
-	vm->vm_aslr_delta_mmap = 0;
-	vm->vm_aslr_delta_stack = 0;
-	vm->vm_aslr_delta_exec = 0;
-	vm->vm_aslr_delta_vdso = 0;
-#ifdef __LP64__
-	vm->vm_aslr_delta_map32bit = 0;
-#endif
-#endif
 	return (vm);
 }
 
@@ -2615,7 +2603,7 @@ vm_map_wire(vm_map_t map, vm_offset_t start, vm_offset_t end,
 				 * it into the physical map.
 				 */
 				if ((rv = vm_fault(map, faddr, VM_PROT_NONE,
-				    VM_FAULT_CHANGE_WIRING)) != KERN_SUCCESS)
+				    VM_FAULT_WIRE)) != KERN_SUCCESS)
 					break;
 			} while ((faddr += PAGE_SIZE) < saved_end);
 			vm_map_lock(map);
@@ -3287,15 +3275,6 @@ vmspace_fork(struct vmspace *vm1, vm_ooffset_t *fork_charge)
 	vm2->vm_taddr = vm1->vm_taddr;
 	vm2->vm_daddr = vm1->vm_daddr;
 	vm2->vm_maxsaddr = vm1->vm_maxsaddr;
-#ifdef PAX_ASLR
-	vm2->vm_aslr_delta_exec = vm1->vm_aslr_delta_exec;
-	vm2->vm_aslr_delta_mmap = vm1->vm_aslr_delta_mmap;
-	vm2->vm_aslr_delta_stack = vm1->vm_aslr_delta_stack;
-	vm2->vm_aslr_delta_vdso = vm1->vm_aslr_delta_vdso;
-#ifdef __LP64__
-	vm2->vm_aslr_delta_map32bit = vm1->vm_aslr_delta_map32bit;
-#endif
-#endif
 	vm_map_lock(old_map);
 	if (old_map->busy)
 		vm_map_wait_busy(old_map);
@@ -3679,7 +3658,7 @@ Retry:
 	}
 
 	is_procstack = (addr >= (vm_offset_t)vm->vm_maxsaddr &&
-	    addr < (vm_offset_t)p->p_usrstack) ? 1 : 0;
+	    addr < (vm_offset_t)p->p_sysent->sv_usrstack) ? 1 : 0;
 
 	/*
 	 * If this is the main process stack, see if we're over the stack

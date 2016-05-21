@@ -323,8 +323,6 @@ in6_control(struct socket *so, u_long cmd, caddr_t data,
 		/* FALLTHROUGH */
 	case OSIOCGIFINFO_IN6:
 	case SIOCGIFINFO_IN6:
-	case SIOCGDRLST_IN6:
-	case SIOCGPRLST_IN6:
 	case SIOCGNBRINFO_IN6:
 	case SIOCGDEFIFACE_IN6:
 		return (nd6_ioctl(cmd, data, ifp));
@@ -1254,11 +1252,13 @@ in6_update_ifa(struct ifnet *ifp, struct in6_aliasreq *ifra,
 	 * source address.
 	 */
 	ia->ia6_flags &= ~IN6_IFF_DUPLICATED;	/* safety */
-	if (hostIsNew && in6if_do_dad(ifp))
-		ia->ia6_flags |= IN6_IFF_TENTATIVE;
 
-	/* DAD should be performed after ND6_IFF_IFDISABLED is cleared. */
-	if (ND_IFINFO(ifp)->flags & ND6_IFF_IFDISABLED)
+	/*
+	 * DAD should be performed for an new address or addresses on
+	 * an interface with ND6_IFF_IFDISABLED.
+	 */
+	if (in6if_do_dad(ifp) &&
+	    (hostIsNew || (ND_IFINFO(ifp)->flags & ND6_IFF_IFDISABLED)))
 		ia->ia6_flags |= IN6_IFF_TENTATIVE;
 
 	/*
@@ -1280,13 +1280,8 @@ in6_update_ifa(struct ifnet *ifp, struct in6_aliasreq *ifra,
 			goto cleanup;
 	}
 
-	/*
-	 * Perform DAD, if needed.
-	 * XXX It may be of use, if we can administratively disable DAD.
-	 */
-	if (in6if_do_dad(ifp) && ((ifra->ifra_flags & IN6_IFF_NODAD) == 0) &&
-	    (ia->ia6_flags & IN6_IFF_TENTATIVE))
-	{
+	/* Perform DAD, if the address is TENTATIVE. */
+	if ((ia->ia6_flags & IN6_IFF_TENTATIVE)) {
 		int mindelay, maxdelay;
 
 		delay = 0;
@@ -1619,6 +1614,10 @@ in6_purgeif(struct ifnet *ifp)
  * in the future.
  * RFC2373 defines interface id to be 64bit, but it allows non-RFC2374
  * address encoding scheme. (see figure on page 8)
+ * Notifies other subsystems about address change/arrival:
+ * 1) Notifies device handler on the first IPv6 address assignment
+ * 2) Handle routing table changes for P2P links and route
+ * 3) Handle routing table changes for address host route
  */
 static int
 in6_lifaddr_ioctl(struct socket *so, u_long cmd, caddr_t data,
@@ -2004,7 +2003,7 @@ in6ifa_llaonifp(struct ifnet *ifp)
 
 	if (ND_IFINFO(ifp)->flags & ND6_IFF_IFDISABLED)
 		return (NULL);
-	if_addr_rlock(ifp);
+	IF_ADDR_RLOCK(ifp);
 	TAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) {
 		if (ifa->ifa_addr->sa_family != AF_INET6)
 			continue;
@@ -2014,7 +2013,7 @@ in6ifa_llaonifp(struct ifnet *ifp)
 		    IN6_IS_ADDR_MC_NODELOCAL(&sin6->sin6_addr))
 			break;
 	}
-	if_addr_runlock(ifp);
+	IF_ADDR_RUNLOCK(ifp);
 
 	return ((struct in6_ifaddr *)ifa);
 }
@@ -2389,13 +2388,13 @@ in6if_do_dad(struct ifnet *ifp)
 		 * However, some interfaces can be up before the RUNNING
 		 * status.  Additionaly, users may try to assign addresses
 		 * before the interface becomes up (or running).
-		 * We simply skip DAD in such a case as a work around.
-		 * XXX: we should rather mark "tentative" on such addresses,
-		 * and do DAD after the interface becomes ready.
+		 * This function returns EAGAIN in that case.
+		 * The caller should mark "tentative" on the address instead of
+		 * performing DAD immediately.
 		 */
 		if (!((ifp->if_flags & IFF_UP) &&
 		    (ifp->if_drv_flags & IFF_DRV_RUNNING)))
-			return (0);
+			return (EAGAIN);
 
 		return (1);
 	}
@@ -2450,6 +2449,7 @@ in6_if2idlen(struct ifnet *ifp)
 #ifdef IFT_MIP
 	case IFT_MIP:	/* ditto */
 #endif
+	case IFT_BRIDGE:	/* bridge(4) only does Ethernet-like links */
 	case IFT_INFINIBAND:
 		return (64);
 	case IFT_FDDI:		/* RFC2467 */
@@ -2651,6 +2651,7 @@ in6_lltable_lookup(struct lltable *llt, u_int flags,
 		if (!(lle->la_flags & LLE_IFADDR) || (flags & LLE_IFADDR)) {
 			LLE_WLOCK(lle);
 			lle->la_flags |= LLE_DELETED;
+			EVENTHANDLER_INVOKE(lle_event, lle, LLENTRY_DELETED);
 #ifdef DIAGNOSTIC
 			log(LOG_INFO, "ifaddr cache = %p is deleted\n", lle);
 #endif

@@ -225,7 +225,8 @@ nfsrv_setclient(struct nfsrv_descript *nd, struct nfsclient **new_clpp,
 			break;
 		}
 	    }
-	    i++;
+	    if (gotit == 0)
+		i++;
 	}
 	if (!gotit ||
 	    (clp->lc_flags & (LCL_NEEDSCONFIRM | LCL_ADMINREVOKED))) {
@@ -405,9 +406,12 @@ nfsrv_setclient(struct nfsrv_descript *nd, struct nfsclient **new_clpp,
 	}
 
 	/* For NFSv4.1, mark that we found a confirmed clientid. */
-	if ((nd->nd_flag & ND_NFSV41) != 0)
+	if ((nd->nd_flag & ND_NFSV41) != 0) {
+		clientidp->lval[0] = clp->lc_clientid.lval[0];
+		clientidp->lval[1] = clp->lc_clientid.lval[1];
+		confirmp->lval[0] = 0;	/* Ignored by client */
 		confirmp->lval[1] = 1;
-	else {
+	} else {
 		/*
 		 * id and verifier match, so update the net address info
 		 * and get rid of any existing callback authentication
@@ -4184,10 +4188,23 @@ nfsrv_docallback(struct nfsclient *clp, int procnum,
 	if (!error) {
 		if ((nd->nd_flag & ND_NFSV41) != 0) {
 			KASSERT(sep != NULL, ("sep NULL"));
-			error = newnfs_request(nd, NULL, clp, &clp->lc_req,
-			    NULL, NULL, cred, clp->lc_program,
-			    clp->lc_req.nr_vers, NULL, 1, NULL,
-			    &sep->sess_cbsess);
+			if (sep->sess_cbsess.nfsess_xprt != NULL)
+				error = newnfs_request(nd, NULL, clp,
+				    &clp->lc_req, NULL, NULL, cred,
+				    clp->lc_program, clp->lc_req.nr_vers, NULL,
+				    1, NULL, &sep->sess_cbsess);
+			else {
+				/*
+				 * This should probably never occur, but if a
+				 * client somehow does an RPC without a
+				 * SequenceID Op that causes a callback just
+				 * after the nfsd threads have been terminated
+				 * and restared we could conceivably get here
+				 * without a backchannel xprt.
+				 */
+				printf("nfsrv_docallback: no xprt\n");
+				error = ECONNREFUSED;
+			}
 			nfsrv_freesession(sep, NULL);
 		} else
 			error = newnfs_request(nd, NULL, clp, &clp->lc_req,
@@ -5772,14 +5789,16 @@ nfsrv_checksequence(struct nfsrv_descript *nd, uint32_t sequenceid,
 	 * If this session handles the backchannel, save the nd_xprt for this
 	 * RPC, since this is the one being used.
 	 */
-	if (sep->sess_cbsess.nfsess_xprt != NULL &&
+	if (sep->sess_clp->lc_req.nr_client != NULL &&
 	    (sep->sess_crflags & NFSV4CRSESS_CONNBACKCHAN) != 0) {
 		savxprt = sep->sess_cbsess.nfsess_xprt;
 		SVC_ACQUIRE(nd->nd_xprt);
-		nd->nd_xprt->xp_p2 = savxprt->xp_p2;
+		nd->nd_xprt->xp_p2 =
+		    sep->sess_clp->lc_req.nr_client->cl_private;
 		nd->nd_xprt->xp_idletimeout = 0;	/* Disable timeout. */
 		sep->sess_cbsess.nfsess_xprt = nd->nd_xprt;
-		SVC_RELEASE(savxprt);
+		if (savxprt != NULL)
+			SVC_RELEASE(savxprt);
 	}
 
 	*sflagsp = 0;
@@ -6036,5 +6055,31 @@ nfsv4_getcbsession(struct nfsclient *clp, struct nfsdsession **sepp)
 	*sepp = sep;
 	NFSUNLOCKSTATE();
 	return (0);
+}
+
+/*
+ * Free up all backchannel xprts.  This needs to be done when the nfsd threads
+ * exit, since those transports will all be going away.
+ * This is only called after all the nfsd threads are done performing RPCs,
+ * so locking shouldn't be an issue.
+ */
+APPLESTATIC void
+nfsrv_freeallbackchannel_xprts(void)
+{
+	struct nfsdsession *sep;
+	struct nfsclient *clp;
+	SVCXPRT *xprt;
+	int i;
+
+	for (i = 0; i < nfsrv_clienthashsize; i++) {
+		LIST_FOREACH(clp, &nfsclienthash[i], lc_hash) {
+			LIST_FOREACH(sep, &clp->lc_session, sess_list) {
+				xprt = sep->sess_cbsess.nfsess_xprt;
+				sep->sess_cbsess.nfsess_xprt = NULL;
+				if (xprt != NULL)
+					SVC_RELEASE(xprt);
+			}
+		}
+	}
 }
 

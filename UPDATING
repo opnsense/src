@@ -16,141 +16,67 @@ from older versions of FreeBSD, try WITHOUT_CLANG to bootstrap to the tip of
 stable/10, and then rebuild without this option. The bootstrap process from
 older version of current is a bit fragile.
 
-20160517	p17	FreeBSD-SA-16:18.atkbd
-			FreeBSD-SA-16:19.sendmsg
+20160329:
+	10.3-RELEASE.
 
-	Fix buffer overflow in keyboard driver. [SA-16:18]
+20160124:
+	The NONE and HPN patches has been removed from OpenSSH.  They are
+	still available in the security/openssh-portable port.
 
-	Fix incorrect argument handling in sendmsg(2). [SA-16:19]
+20151214:
+	r292223 changed the internal interface between the nfsd.ko and
+	nfscommon.ko modules. As such, they must both be upgraded to-gether.
+	__FreeBSD_version has been bumped because of this.
 
-20160504	p16	FreeBSD-SA-16:17.openssl
-			FreeBSD-EN-16:07.ipi
-			FreeBSD-EN-16:08.zfs
+20151113:
+	Qlogic 24xx/25xx firmware images were updated from 5.5.0 to 7.3.0.
+	Kernel modules isp_2400_multi and isp_2500_multi were removed and
+	should be replaced with isp_2400 and isp_2500 modules respectively.
 
-	Fix multiple OpenSSL vulnerabilitites. [SA-16:17]
+20150806:
+	The menu.rc and loader.rc files will now be replaced during 
+	upgrades. Please migrate local changes to menu.rc.local and
+	loader.rc.local instead.
 
-	Fix excessive latency in x86 IPI delivery. [EN-16:07]
+20151026:
+	NTP has been upgraded to 4.2.8p4.
 
-	Fix memory leak in ZFS. [EN-16:08]
+20151025:
+	ALLOW_DEPRECATED_ATF_TOOLS/ATFFILE support has been removed from
+	atf.test.mk (included from bsd.test.mk). Please upgrade devel/atf
+	and devel/kyua to version 0.20+ and adjust any calling code to work
+	with Kyuafile and kyua.
 
-20160429	p15	FreeBSD-SA-16:16.ntp
+20150823:
+	The polarity of Pulse Per Second (PPS) capture events with the
+	uart(4) driver has been corrected.  Prior to this change the PPS
+	"assert" event corresponded to the trailing edge of a positive PPS
+	pulse and the "clear" event was the leading edge of the next pulse.
+	
+	As the width of a PPS pulse in a typical GPS receiver is on the
+	order of 1 millisecond, most users will not notice any significant
+	difference with this change.
+	
+	Anyone who has compensated for the historical polarity reversal by
+	configuring a negative offset equal to the pulse width will need to
+	remove that workaround.
 
-	Fix multiple vulnerabilities of ntp.
-
-20160316	p14	FreeBSD-SA-16:14.openssh-xauth
-			FreeBSD-SA-16:15.sysarch
-			FreeBSD-EN-16:04.hyperv
-			FreeBSD-EN-16:05.hv_netvsc
-
-	Fix OpenSSH xauth(1) command injection. [SA-16:14]
-	Fix incorrect argument validation in sysarch(2). [SA-16:15]
-	Fix Hyper-V KVP (Key-Value Pair) daemon indefinite sleep. [EN-16:04]
-	Fix hv_netvsc(4) incorrect TCP/IP checksums. [EN-16:05]
-
-20160303	p13	FreeBSD-SA-16:12.openssl
-
-	Fix multiple vulnerabilities of OpenSSL.
-
-20160130	p12	FreeBSD-SA-16:11.openssl
-
-	Fix OpenSSL SSLv2 ciphersuite downgrade vulnerability. [SA-16:11]
-
-20160127	p11	FreeBSD-SA-16:09.ntp
-			FreeBSD-SA-16:10.linux
-
-	Fix multiple vulnerabilities of ntp. [SA-16:09]
-
-	Fix Linux compatibility layer issetugid(2) system call
-	vulnerability. [SA-16:10]
-
-20160114	p10	FreeBSD-SA-16:07.openssh
-
-	Fix OpenSSH client information leak. [SA-16:07]
-
-20160114	p9	FreeBSD-EN-16:01.filemon
-			FreeBSD-EN-16:02.pf
-			FreeBSD-EN-16:03.yplib
-			FreeBSD-SA-16:01.sctp
-			FreeBSD-SA-16:02.ntp
-			FreeBSD-SA-16:03.linux
-			FreeBSD-SA-16:04.linux
-			FreeBSD-SA-16:05.tcp
-			FreeBSD-SA-16:06.bsnmpd
-
-	Fix multiple stability and locking problems in filemon(4). [EN-16:01]
-	Fix pf(4) generating bad TCP checksums. [EN-16:02]
-	Fix infinite loop in YP/NIS client library. [EN-16:03]
-	Fix remote denial of service in SCTP. [SA-16:01]
-	Update NTP to 4.2.8p5. [SA-16:02]
-	Fix kernel memory diclosure in Linux compatibility layer. [SA-16:03]
-	Fix kernel memory overwrite in Linux compatibility layer. [SA-16:04]
-	Fix crash in TCP MD5 signatures. [SA-16:05]
-	Fix insecure default permissions for snmpd.config. [SA-16:06]
-
-20151205	p8	FreeBSD-SA-15:26.openssl
-
-	Fix multiple OpenSSL vulnerabilities. [SA-15:26]
-
-20151104	p7	FreeBSD-SA-15:25.ntp [revised]
-			FreeBSD-EN-15:19.kqueue
-			FreeBSD-EN-15:20.vm
-
-	Fix regression in ntpd(8) lacking support for RAWDCF reference
-	clock in 10.2-RELEASE-p6. [SA-15:25]
-
-	Fix kqueue write events never fired for files greater 2GB. [EN-15:19]
-
-	Fix applications exiting due to segmentation violation on a correct
-	memory address. [EN-15:20.vm]
-
-20151026:	p6	FreeBSD-SA-15:25.ntp
-
-	Fix multiple NTP vulnerabilities. New NTP version is 4.2.8p4.
-
-20151002:	p5	FreeBSD-SA-15:24.rpcbind [revised]
-	Revised patch to address a regression that prevents NIS from working.
-
-20150929:	p4	FreeBSD-SA-15:24.rpcbind
-
-	Fix rpcbind(8) remote denial of service. [SA-15:24]
-
-20150916:	p3	FreeBSD-EN-15:16.pw
-			FreeBSD-EN-15:17.libc
-			FreeBSD-EN-15:18.pkg
-
-	Fix regression in pw(8) when creating numeric users or groups.
-	[EN-15:16]
-
-	Fix libc handling of signals for multi-threaded processes.
-	[EN-15:17]
-
-	Implement pubkey support for pkg(7) bootstrap. [EN-15:18]
-
-20150825:	p2	FreeBSD-SA-15:22.openssh
-			FreeBSD-EN-15:15.pkg
-	Fix OpenSSH multiple vulnerabilities. [SA-15:22]
-
-	Fix insufficient check of unsupported pkg(7) signature methods.
-	[EN-15:15]
-
-20150818:	p1	FreeBSD-SA-15:20.expat
-			FreeBSD-EN-15:11.toolchain
-			FreeBSD-EN-15:12.netstat
-			FreeBSD-EN-15:13.vidcontrol
-
-	Fix multiple integer overflows in expat (libbsdxml) XML parser.
-	[SA-15:20]
-
-	Fix make(1) syntax errors when upgrading from 9.x and earlier.
-	[EN-15:11]
-
-	Fix incorrect netstat(1) data handling on 32-bit systems.
-	[EN-15:12]
-
-	Allow size argument to vidcontrol(1) for syscons(4). [EN-15:13]
+20150822:
+	From legacy ata(4) driver was removed support for SATA controllers
+	supported by more functional drivers ahci(4), siis(4) and mvs(4).
+	Kernel modules ataahci and ataadaptec were removed completely,
+	replaced by ahci and mvs modules respectively.
 
 20150813:
 	10.2-RELEASE.
+
+20150731:
+	As ZFS requires more kernel stack pages than is the default on some
+	architectures e.g. i386, it now warns if KSTACK_PAGES is less than
+	ZFS_MIN_KSTACK_PAGES (which is 4 at the time of writing).
+
+	Please consider using 'options KSTACK_PAGES=X' where X is greater
+	than or equal to ZFS_MIN_KSTACK_PAGES i.e. 4 in such configurations.
 
 20150703:
 	The default Unbound configuration now enables remote control
@@ -490,14 +416,6 @@ older version of current is a bit fragile.
 	Most of network statistics structures were changed to be able
 	keep 64-bits counters. Thus all tools, that work with networking
 	statistics, must be rebuilt (netstat(1), bsnmpd(1), etc.)
-
-20130629:
-	Fix targets that run multiple make's to use && rather than ;
-	so that subsequent steps depend on success of previous.
-
-	NOTE: if building 'universe' with -j* on stable/8 or stable/9
-	it would be better to start the build using bmake, to avoid
-	overloading the machine.
 
 20130618:
 	Fix a bug that allowed a tracing process (e.g. gdb) to write

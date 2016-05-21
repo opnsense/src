@@ -6,11 +6,17 @@
 /set type=dir uname=root gname=wheel mode=0755
 .
     bin
+        cat
+        ..
         chown
         ..
         date
         ..
+        dd
+        ..
         expr
+        ..
+        ls
         ..
         mv
         ..
@@ -76,6 +82,8 @@
             test-programs
             ..
         ..
+        libarchive
+        ..
         libc
             c063
             ..
@@ -101,9 +109,15 @@
                     ..
                 ..
             ..
+            nss
+            ..
             regex
                 data
                 ..
+            ..
+            resolv
+            ..
+            rpc
             ..
             ssp
             ..
@@ -129,6 +143,8 @@
         libcrypt
         ..
         libmp
+        ..
+        libnv
         ..
         librt
         ..
@@ -180,6 +196,8 @@
         ..
     ..
     sys
+        acl
+        ..
         aio
         ..
         fifo
@@ -187,10 +205,20 @@
         file
         ..
         kern
+            acct
+            ..
             execve
+            ..
+            pipe
             ..
         ..
         kqueue
+        ..
+        mac
+            bsdextended
+            ..
+            portacl
+            ..
         ..
         mqueue
         ..
@@ -227,6 +255,10 @@
             ..
             unlink
             ..
+        ..
+        posixshm
+        ..
+        vfs
         ..
         vm
         ..
@@ -338,6 +370,10 @@
         ..
         cmp
         ..
+        cpio
+        ..
+        col
+        ..
         comm
         ..
         cut
@@ -356,6 +392,8 @@
         ..
         lastcomm
         ..
+        limits
+        ..
         m4
         ..
         ncal
@@ -367,6 +405,10 @@
         sed
             regress.multitest.out
             ..
+        ..
+        tar
+        ..
+        timeout
         ..
         tr
         ..
@@ -385,6 +427,10 @@
     ..
     usr.sbin
         etcupdate
+        ..
+        fstyp
+        ..
+        makefs
         ..
         newsyslog
         ..

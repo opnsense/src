@@ -1,6 +1,6 @@
 /******************************************************************************
 
-  Copyright (c) 2001-2013, Intel Corporation 
+  Copyright (c) 2001-2015, Intel Corporation 
   All rights reserved.
   
   Redistribution and use in source and binary forms, with or without 
@@ -41,67 +41,12 @@
 #include "opt_altq.h"
 #endif
 
-#include <sys/param.h>
-#include <sys/systm.h>
-#ifndef IGB_LEGACY_TX
-#include <sys/buf_ring.h>
-#endif
-#include <sys/bus.h>
-#include <sys/endian.h>
-#include <sys/kernel.h>
-#include <sys/kthread.h>
-#include <sys/malloc.h>
-#include <sys/mbuf.h>
-#include <sys/module.h>
-#include <sys/rman.h>
-#include <sys/socket.h>
-#include <sys/sockio.h>
-#include <sys/sysctl.h>
-#include <sys/taskqueue.h>
-#include <sys/eventhandler.h>
-#include <sys/pcpu.h>
-#include <sys/smp.h>
-#include <machine/smp.h>
-#include <machine/bus.h>
-#include <machine/resource.h>
-
-#include <net/bpf.h>
-#include <net/ethernet.h>
-#include <net/if.h>
-#include <net/if_arp.h>
-#include <net/if_dl.h>
-#include <net/if_media.h>
-
-#include <net/if_types.h>
-#include <net/if_vlan_var.h>
-
-#include <netinet/in_systm.h>
-#include <netinet/in.h>
-#include <netinet/if_ether.h>
-#include <netinet/ip.h>
-#include <netinet/ip6.h>
-#include <netinet/tcp.h>
-#include <netinet/tcp_lro.h>
-#include <netinet/udp.h>
-
-#include <machine/in_cksum.h>
-#include <dev/led/led.h>
-#include <dev/pci/pcivar.h>
-#include <dev/pci/pcireg.h>
-
-#include "e1000_api.h"
-#include "e1000_82575.h"
 #include "if_igb.h"
-
-/*********************************************************************
- *  Set this to one to display debug statistics
- *********************************************************************/
-int	igb_display_debug_stats = 0;
 
 /*********************************************************************
  *  Driver version:
  *********************************************************************/
-char igb_driver_version[] = "version - 2.4.0";
+char igb_driver_version[] = "2.5.3-k";
 
 
 /*********************************************************************
@@ -116,60 +61,47 @@ char igb_driver_version[] = "version - 2.4.0";
 
 static igb_vendor_info_t igb_vendor_info_array[] =
 {
-	{ 0x8086, E1000_DEV_ID_82575EB_COPPER,	PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_82575EB_FIBER_SERDES,
-						PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_82575GB_QUAD_COPPER,
-						PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_82576,		PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_82576_NS,	PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_82576_NS_SERDES,	PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_82576_FIBER,	PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_82576_SERDES,	PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_82576_SERDES_QUAD,
-						PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_82576_QUAD_COPPER,
-						PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_82576_QUAD_COPPER_ET2,
-						PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_82576_VF,	PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_82580_COPPER,	PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_82580_FIBER,	PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_82580_SERDES,	PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_82580_SGMII,	PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_82580_COPPER_DUAL,
-						PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_82580_QUAD_FIBER,
-						PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_DH89XXCC_SERDES,	PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_DH89XXCC_SGMII,	PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_DH89XXCC_SFP,	PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_DH89XXCC_BACKPLANE,
-						PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_I350_COPPER,	PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_I350_FIBER,	PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_I350_SERDES,	PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_I350_SGMII,	PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_I350_VF,		PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_I210_COPPER,	PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_I210_COPPER_IT,	PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_I210_COPPER_OEM1,
-						PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_I210_COPPER_FLASHLESS,
-						PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_I210_SERDES_FLASHLESS,
-						PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_I210_FIBER,	PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_I210_SERDES,	PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_I210_SGMII,	PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_I211_COPPER,	PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_I354_BACKPLANE_1GBPS,
-						PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_I354_BACKPLANE_2_5GBPS,
-						PCI_ANY_ID, PCI_ANY_ID, 0},
-	{ 0x8086, E1000_DEV_ID_I354_SGMII,	PCI_ANY_ID, PCI_ANY_ID, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_82575EB_COPPER, 0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_82575EB_FIBER_SERDES, 0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_82575GB_QUAD_COPPER, 0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_82576, 0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_82576_NS, 0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_82576_NS_SERDES, 0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_82576_FIBER,	0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_82576_SERDES, 0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_82576_SERDES_QUAD, 0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_82576_QUAD_COPPER, 0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_82576_QUAD_COPPER_ET2, 0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_82576_VF, 0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_82580_COPPER, 0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_82580_FIBER,	0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_82580_SERDES, 0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_82580_SGMII,	0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_82580_COPPER_DUAL, 0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_82580_QUAD_FIBER, 0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_DH89XXCC_SERDES, 0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_DH89XXCC_SGMII, 0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_DH89XXCC_SFP, 0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_DH89XXCC_BACKPLANE, 0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_I350_COPPER,	0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_I350_FIBER,	0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_I350_SERDES,	0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_I350_SGMII,	0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_I350_VF, 0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_I210_COPPER,	0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_I210_COPPER_IT, 0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_I210_COPPER_OEM1, 0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_I210_COPPER_FLASHLESS, 0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_I210_SERDES_FLASHLESS, 0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_I210_FIBER,	0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_I210_SERDES,	0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_I210_SGMII,	0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_I211_COPPER,	0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_I354_BACKPLANE_1GBPS, 0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_I354_BACKPLANE_2_5GBPS, 0, 0, 0},
+	{IGB_INTEL_VENDOR_ID, E1000_DEV_ID_I354_SGMII,	0, 0, 0},
 	/* required last entry */
-	{ 0, 0, 0, 0, 0}
+	{0, 0, 0, 0, 0}
 };
 
 /*********************************************************************
@@ -408,6 +340,13 @@ SYSCTL_INT(_hw_igb, OID_AUTO, rx_process_limit, CTLFLAG_RDTUN,
     &igb_rx_process_limit, 0,
     "Maximum number of received packets to process at a time, -1 means unlimited");
 
+/* How many packets txeof tries to clean at a time */
+static int igb_tx_process_limit = -1;
+TUNABLE_INT("hw.igb.tx_process_limit", &igb_tx_process_limit);
+SYSCTL_INT(_hw_igb, OID_AUTO, tx_process_limit, CTLFLAG_RDTUN,
+    &igb_tx_process_limit, 0,
+    "Maximum number of sent packets to process at a time, -1 means unlimited");
+
 #ifdef DEV_NETMAP	/* see ixgbe.c for details */
 #include <dev/netmap/if_igb_netmap.h>
 #endif /* DEV_NETMAP */
@@ -423,7 +362,7 @@ SYSCTL_INT(_hw_igb, OID_AUTO, rx_process_limit, CTLFLAG_RDTUN,
 static int
 igb_probe(device_t dev)
 {
-	char		adapter_name[60];
+	char		adapter_name[256];
 	uint16_t	pci_vendor_id = 0;
 	uint16_t	pci_device_id = 0;
 	uint16_t	pci_subvendor_id = 0;
@@ -433,7 +372,7 @@ igb_probe(device_t dev)
 	INIT_DEBUGOUT("igb_probe: begin");
 
 	pci_vendor_id = pci_get_vendor(dev);
-	if (pci_vendor_id != IGB_VENDOR_ID)
+	if (pci_vendor_id != IGB_INTEL_VENDOR_ID)
 		return (ENXIO);
 
 	pci_device_id = pci_get_device(dev);
@@ -446,11 +385,11 @@ igb_probe(device_t dev)
 		    (pci_device_id == ent->device_id) &&
 
 		    ((pci_subvendor_id == ent->subvendor_id) ||
-		    (ent->subvendor_id == PCI_ANY_ID)) &&
+		    (ent->subvendor_id == 0)) &&
 
 		    ((pci_subdevice_id == ent->subdevice_id) ||
-		    (ent->subdevice_id == PCI_ANY_ID))) {
-			sprintf(adapter_name, "%s %s",
+		    (ent->subdevice_id == 0))) {
+			sprintf(adapter_name, "%s, Version - %s",
 				igb_strings[ent->index],
 				igb_driver_version);
 			device_set_desc_copy(dev, adapter_name);
@@ -458,7 +397,6 @@ igb_probe(device_t dev)
 		}
 		ent++;
 	}
-
 	return (ENXIO);
 }
 
@@ -490,7 +428,7 @@ igb_attach(device_t dev)
 	adapter->dev = adapter->osdep.dev = dev;
 	IGB_CORE_LOCK_INIT(adapter, device_get_nameunit(dev));
 
-	/* SYSCTL stuff */
+	/* SYSCTLs */
 	SYSCTL_ADD_PROC(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)),
 	    OID_AUTO, "nvm", CTLTYPE_INT|CTLFLAG_RW, adapter, 0,
@@ -526,10 +464,14 @@ igb_attach(device_t dev)
 
 	e1000_get_bus_info(&adapter->hw);
 
-	/* Sysctl for limiting the amount of work done in the taskqueue */
+	/* Sysctls for limiting the amount of work done in the taskqueues */
 	igb_set_sysctl_value(adapter, "rx_processing_limit",
 	    "max number of rx packets to process",
 	    &adapter->rx_process_limit, igb_rx_process_limit);
+
+	igb_set_sysctl_value(adapter, "tx_processing_limit",
+	    "max number of tx packets to process",
+	    &adapter->tx_process_limit, igb_tx_process_limit);
 
 	/*
 	 * Validate number of transmit and receive descriptors. It
@@ -614,9 +556,9 @@ igb_attach(device_t dev)
 		    "Disable Energy Efficient Ethernet");
 		if (adapter->hw.phy.media_type == e1000_media_type_copper) {
 			if (adapter->hw.mac.type == e1000_i354)
-				e1000_set_eee_i354(&adapter->hw);
+				e1000_set_eee_i354(&adapter->hw, TRUE, TRUE);
 			else
-				e1000_set_eee_i350(&adapter->hw);
+				e1000_set_eee_i350(&adapter->hw, TRUE, TRUE);
 		}
 	}
 
@@ -1009,7 +951,6 @@ igb_mq_start_locked(struct ifnet *ifp, struct tx_ring *txr)
 	    adapter->link_active == 0)
 		return (ENETDOWN);
 
-
 	/* Process the queue */
 	while ((next = drbr_peek(ifp, txr->br)) != NULL) {
 		if ((err = igb_xmit(txr, &next)) != 0) {
@@ -1312,13 +1253,17 @@ igb_init_locked(struct adapter *adapter)
 	if (ifp->if_capenable & IFCAP_TXCSUM) {
 		ifp->if_hwassist |= (CSUM_TCP | CSUM_UDP);
 #if __FreeBSD_version >= 800000
-		if (adapter->hw.mac.type == e1000_82576)
+		if ((adapter->hw.mac.type == e1000_82576) ||
+		    (adapter->hw.mac.type == e1000_82580))
 			ifp->if_hwassist |= CSUM_SCTP;
 #endif
 	}
 
 	if (ifp->if_capenable & IFCAP_TSO)
 		ifp->if_hwassist |= CSUM_TSO;
+
+	/* Clear bad data from Rx FIFOs */
+	e1000_rx_fifo_flush_82575(&adapter->hw);
 
 	/* Configure for OS presence */
 	igb_init_manageability(adapter);
@@ -1383,9 +1328,9 @@ igb_init_locked(struct adapter *adapter)
 	/* Set Energy Efficient Ethernet */
 	if (adapter->hw.phy.media_type == e1000_media_type_copper) {
 		if (adapter->hw.mac.type == e1000_i354)
-			e1000_set_eee_i354(&adapter->hw);
+			e1000_set_eee_i354(&adapter->hw, TRUE, TRUE);
 		else
-			e1000_set_eee_i350(&adapter->hw);
+			e1000_set_eee_i350(&adapter->hw, TRUE, TRUE);
 	}
 }
 
@@ -1877,7 +1822,8 @@ retry:
 			/* Try it again? - one try */
 			if (remap == TRUE) {
 				remap = FALSE;
-				m = m_defrag(*m_headp, M_NOWAIT);
+				m = m_collapse(*m_headp, M_NOWAIT,
+				    IGB_MAX_SCATTER);
 				if (m == NULL) {
 					adapter->mbuf_defrag_failed++;
 					m_freem(*m_headp);
@@ -1888,9 +1834,6 @@ retry:
 				goto retry;
 			} else
 				return (error);
-		case ENOMEM:
-			txr->no_tx_dma_setup++;
-			return (error);
 		default:
 			txr->no_tx_dma_setup++;
 			m_freem(*m_headp);
@@ -2911,21 +2854,6 @@ igb_init_dmac(struct adapter *adapter, u32 pba)
 
 		E1000_WRITE_REG(hw, E1000_DMACR, reg);
 
-#ifdef I210_OBFF_SUPPORT
-		/*
-		 * Set the OBFF Rx threshold to DMA Coalescing Rx
-		 * threshold - 2KB and enable the feature in the
-		 * hardware for I210.
-		 */
-		if (hw->mac.type == e1000_i210) {
-			int obff = dmac - 2;
-			reg = E1000_READ_REG(hw, E1000_DOBFFCTL);
-			reg &= ~E1000_DOBFFCTL_OBFFTHR_MASK;
-			reg |= (obff & E1000_DOBFFCTL_OBFFTHR_MASK)
-			    | E1000_DOBFFCTL_EXIT_ACT_MASK;
-			E1000_WRITE_REG(hw, E1000_DOBFFCTL, reg);
-		}
-#endif
 		E1000_WRITE_REG(hw, E1000_DMCRTRH, 0);
 
 		/* Set the interval before transition */
@@ -3115,6 +3043,12 @@ igb_setup_interface(device_t dev, struct adapter *adapter)
 	ifp->if_softc = adapter;
 	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
 	ifp->if_ioctl = igb_ioctl;
+
+	/* TSO parameters */
+	ifp->if_hw_tsomax = IP_MAXPACKET;
+	ifp->if_hw_tsomaxsegcount = IGB_MAX_SCATTER;
+	ifp->if_hw_tsomaxsegsize = IGB_TSO_SEG_SIZE;
+
 #ifndef IGB_LEGACY_TX
 	ifp->if_transmit = igb_mq_start;
 	ifp->if_qflush = igb_qflush;
@@ -3258,7 +3192,6 @@ fail_2:
 	bus_dmamem_free(dma->dma_tag, dma->dma_vaddr, dma->dma_map);
 	bus_dma_tag_destroy(dma->dma_tag);
 fail_0:
-	dma->dma_map = NULL;
 	dma->dma_tag = NULL;
 
 	return (error);
@@ -3269,12 +3202,15 @@ igb_dma_free(struct adapter *adapter, struct igb_dma_alloc *dma)
 {
 	if (dma->dma_tag == NULL)
 		return;
-	if (dma->dma_map != NULL) {
+	if (dma->dma_paddr != 0) {
 		bus_dmamap_sync(dma->dma_tag, dma->dma_map,
 		    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 		bus_dmamap_unload(dma->dma_tag, dma->dma_map);
+		dma->dma_paddr = 0;
+	}
+	if (dma->dma_vaddr != NULL) {
 		bus_dmamem_free(dma->dma_tag, dma->dma_vaddr, dma->dma_map);
-		dma->dma_map = NULL;
+		dma->dma_vaddr = NULL;
 	}
 	bus_dma_tag_destroy(dma->dma_tag);
 	dma->dma_tag = NULL;
@@ -3956,7 +3892,7 @@ igb_txeof(struct tx_ring *txr)
 	struct adapter		*adapter = txr->adapter;
 	struct ifnet		*ifp = adapter->ifp;
 	u32			work, processed = 0;
-	u16			limit = txr->process_limit;
+	int			limit = adapter->tx_process_limit;
 	struct igb_tx_buf	*buf;
 	union e1000_adv_tx_desc *txd;
 
@@ -4598,8 +4534,9 @@ igb_initialize_receive_units(struct adapter *adapter)
 		rxcsum |= E1000_RXCSUM_PCSD;
 #if __FreeBSD_version >= 800000
 		/* For SCTP Offload */
-		if ((hw->mac.type == e1000_82576)
-		    && (ifp->if_capenable & IFCAP_RXCSUM))
+		if (((hw->mac.type == e1000_82576) ||
+		     (hw->mac.type == e1000_82580)) &&
+		    (ifp->if_capenable & IFCAP_RXCSUM))
 			rxcsum |= E1000_RXCSUM_CRCOFL;
 #endif
 	} else {
@@ -4607,7 +4544,8 @@ igb_initialize_receive_units(struct adapter *adapter)
 		if (ifp->if_capenable & IFCAP_RXCSUM) {
 			rxcsum |= E1000_RXCSUM_IPPCSE;
 #if __FreeBSD_version >= 800000
-			if (adapter->hw.mac.type == e1000_82576)
+			if ((adapter->hw.mac.type == e1000_82576) ||
+			    (adapter->hw.mac.type == e1000_82580))
 				rxcsum |= E1000_RXCSUM_CRCOFL;
 #endif
 		} else
@@ -5387,7 +5325,7 @@ igb_update_stats_counters(struct adapter *adapter)
 
 	stats = (struct e1000_hw_stats	*)adapter->stats;
 
-	if(adapter->hw.phy.media_type == e1000_media_type_copper ||
+	if (adapter->hw.phy.media_type == e1000_media_type_copper ||
 	   (E1000_READ_REG(hw, E1000_STATUS) & E1000_STATUS_LU)) {
 		stats->symerrs +=
 		    E1000_READ_REG(hw,E1000_SYMERRS);
@@ -5625,12 +5563,15 @@ igb_add_hw_stats(struct adapter *adapter)
 	char namebuf[QUEUE_NAME_LEN];
 
 	/* Driver Statistics */
-	SYSCTL_ADD_ULONG(ctx, child, OID_AUTO, "link_irq", 
-			CTLFLAG_RD, &adapter->link_irq,
-			"Link MSIX IRQ Handled");
 	SYSCTL_ADD_ULONG(ctx, child, OID_AUTO, "dropped", 
 			CTLFLAG_RD, &adapter->dropped_pkts,
 			"Driver dropped packets");
+	SYSCTL_ADD_ULONG(ctx, child, OID_AUTO, "link_irq", 
+			CTLFLAG_RD, &adapter->link_irq,
+			"Link MSIX IRQ Handled");
+	SYSCTL_ADD_ULONG(ctx, child, OID_AUTO, "mbuf_defrag_fail",
+			CTLFLAG_RD, &adapter->mbuf_defrag_failed,
+			"Defragmenting mbuf chain failed");
 	SYSCTL_ADD_ULONG(ctx, child, OID_AUTO, "tx_dma_fail", 
 			CTLFLAG_RD, &adapter->no_tx_dma_setup,
 			"Driver tx dma failure in xmit");
@@ -5864,18 +5805,18 @@ igb_add_hw_stats(struct adapter *adapter)
 			"1023-1522 byte frames received");
  	SYSCTL_ADD_QUAD(ctx, stat_list, OID_AUTO, "good_octets_recvd", 
  			CTLFLAG_RD, &stats->gorc, 
- 			"Good Octets Received");
- 	SYSCTL_ADD_QUAD(ctx, stat_list, OID_AUTO, "total_octets_recvd", 
- 			CTLFLAG_RD, &stats->tor, 
- 			"Total Octets Received");
+			"Good Octets Received");
+	SYSCTL_ADD_QUAD(ctx, stat_list, OID_AUTO, "total_octets_recvd", 
+			CTLFLAG_RD, &stats->tor, 
+			"Total Octets Received");
 
 	/* Packet Transmission Stats */
  	SYSCTL_ADD_QUAD(ctx, stat_list, OID_AUTO, "good_octets_txd", 
  			CTLFLAG_RD, &stats->gotc, 
  			"Good Octets Transmitted"); 
- 	SYSCTL_ADD_QUAD(ctx, stat_list, OID_AUTO, "total_octets_txd", 
- 			CTLFLAG_RD, &stats->tot, 
- 			"Total Octets Transmitted");
+	SYSCTL_ADD_QUAD(ctx, stat_list, OID_AUTO, "total_octets_txd", 
+			CTLFLAG_RD, &stats->tot, 
+			"Total Octets Transmitted");
 	SYSCTL_ADD_QUAD(ctx, stat_list, OID_AUTO, "total_pkts_txd",
 			CTLFLAG_RD, &stats->tpt,
 			"Total Packets Transmitted");
@@ -6136,7 +6077,7 @@ igb_sysctl_dmac(SYSCTL_HANDLER_ARGS)
 
 	switch (adapter->dmac) {
 		case 0:
-			/*Disabling */
+			/* Disabling */
 			break;
 		case 1: /* Just enable and use default */
 			adapter->dmac = 1000;

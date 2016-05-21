@@ -1845,6 +1845,7 @@ pfctl_set_debug(struct pfctl *pf, char *d)
 	}
 
 	pf->debug_set = 1;
+	level = pf->debug;
 
 	if ((pf->opts & PF_OPT_NOACTION) == 0)
 		if (ioctl(dev, DIOCSETDEBUG, &level))
@@ -1929,7 +1930,7 @@ pfctl_test_altqsupport(int dev, int opts)
 
 	if (ioctl(dev, DIOCGETALTQS, &pa)) {
 		if (errno == ENODEV) {
-			if (!(opts & PF_OPT_QUIET))
+			if (opts & PF_OPT_VERBOSE)
 				fprintf(stderr, "No ALTQ support in kernel\n"
 				    "ALTQ related functions disabled\n");
 			return (0);

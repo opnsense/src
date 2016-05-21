@@ -36,14 +36,14 @@ LDADD=	-lkadm5clnt -lkadm5srv -lhdb -lkrb5 -lhx509 \
 	-ledit -lncurses ${LDAPLDADD}
 LDFLAGS=${LDAPLDFLAGS}
 
+CLEANFILES=	kadmin-commands.h kadmin-commands.c
+
 .include <bsd.prog.mk>
 
 kadmin-commands.h: ${KRB5DIR}/kadmin/kadmin-commands.in
 	${SLC} ${.ALLSRC:M*.in}
 
-.for ext in o c
-kadmin-commands.${ext}: kadmin-commands.h
-.endfor
+kadmin-commands.c: kadmin-commands.h
 
 .PATH: ${KRB5DIR}/kadmin
 

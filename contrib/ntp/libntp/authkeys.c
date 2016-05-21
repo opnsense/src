@@ -30,7 +30,7 @@ struct savekey {
 	u_long		lifetime;	/* remaining lifetime */
 	keyid_t		keyid;		/* key identifier */
 	u_short		type;		/* OpenSSL digest NID */
-	size_t		secretsize;	/* secret octets */
+	u_short		secretsize;	/* secret octets */
 	u_short		flags;		/* KEY_ flags that wave */
 };
 
@@ -51,12 +51,12 @@ symkey_alloc *	authallocs;
 #endif	/* DEBUG */
 
 static u_short	auth_log2(size_t);
-static void		auth_resize_hashtable(void);
-static void		allocsymkey(keyid_t,	u_short,
-				    u_short, u_long, size_t, u_char *, KeyAccT *);
-static void		freesymkey(symkey *);
+static void	auth_resize_hashtable(void);
+static void	allocsymkey(symkey **, keyid_t,	u_short, u_short,
+			    u_long, u_short, u_char *, KeyAccT *);
+static void	freesymkey(symkey *, symkey **);
 #ifdef DEBUG
-static void		free_auth_mem(void);
+static void	free_auth_mem(void);
 #endif
 
 symkey	key_listhead;		/* list of all in-use keys */;
@@ -93,86 +93,13 @@ int authnumfreekeys;
 
 /*
  * The key cache. We cache the last key we looked at here.
- * Note: this should hold the last *trusted* key. Also the
- * cache is only loaded when the digest type / MAC algorithm
- * is valid.
  */
 keyid_t	cache_keyid;		/* key identifier */
 u_char *cache_secret;		/* secret */
-size_t	cache_secretsize;	/* secret length */
+u_short	cache_secretsize;	/* secret length */
 int	cache_type;		/* OpenSSL digest NID */
 u_short cache_flags;		/* flags that wave */
 KeyAccT *cache_keyacclist;	/* key access list */
-
-/* --------------------------------------------------------------------
- * manage key access lists
- * --------------------------------------------------------------------
- */
-/* allocate and populate new access node and pushes it on the list.
- * Returns the new head.
- */
-KeyAccT*
-keyacc_new_push(
-	KeyAccT          * head,
-	const sockaddr_u * addr
-	)
-{
-	KeyAccT *	node = emalloc(sizeof(KeyAccT));
-	
-	memcpy(&node->addr, addr, sizeof(sockaddr_u));
-	node->next = head;
-	return node;
-}
-
-/* ----------------------------------------------------------------- */
-/* pop and deallocate the first node of a list of access nodes, if
- * the list is not empty. Returns the tail of the list.
- */
-KeyAccT*
-keyacc_pop_free(
-	KeyAccT *head
-	)
-{
-	KeyAccT *	next = NULL;
-	if (head) {
-		next = head->next;
-		free(head);
-	}
-	return next;
-}
-
-/* ----------------------------------------------------------------- */
-/* deallocate the list; returns an empty list. */
-KeyAccT*
-keyacc_all_free(
-	KeyAccT * head
-	)
-{
-	while (head)
-		head = keyacc_pop_free(head);
-	return head;
-}
-
-/* ----------------------------------------------------------------- */
-/* scan a list to see if it contains a given address. Return the
- * default result value in case of an empty list.
- */
-int /*BOOL*/
-keyacc_contains(
-	const KeyAccT    *head,
-	const sockaddr_u *addr,
-	int               defv)
-{
-	if (head) {
-		do {
-			if (SOCK_EQ(&head->addr, addr))
-				return TRUE;
-		} while (NULL != (head = head->next));
-		return FALSE;
-	} else {
-		return !!defv;
-	}
-}
 
 
 /*
@@ -212,7 +139,7 @@ free_auth_mem(void)
 	symkey_alloc *	next_alloc;
 
 	while (NULL != (sk = HEAD_DLIST(key_listhead, llink))) {
-		freesymkey(sk);
+		freesymkey(sk, &key_hash[KEYHASH(sk->keyid)]);
 	}
 	free(key_hash);
 	key_hash = NULL;
@@ -316,21 +243,6 @@ auth_log2(size_t x)
 	return (u_short)r;
 }
 
-static void
-authcache_flush_id(
-	keyid_t id
-	)
-{
-	if (cache_keyid == id) {
-		cache_keyid = 0;
-		cache_type = 0;
-		cache_flags = 0;
-		cache_secret = NULL;
-		cache_secretsize = 0;
-		cache_keyacclist = NULL;
-	}
-}
-
 
 /*
  * auth_resize_hashtable
@@ -376,20 +288,17 @@ auth_resize_hashtable(void)
  */
 static void
 allocsymkey(
+	symkey **	bucket,
 	keyid_t		id,
 	u_short		flags,
 	u_short		type,
 	u_long		lifetime,
-	size_t		secretsize,
+	u_short		secretsize,
 	u_char *	secret,
 	KeyAccT *	ka
 	)
 {
 	symkey *	sk;
-	symkey **	bucket;
-
-	bucket = &key_hash[KEYHASH(id)];
-
 
 	if (authnumfreekeys < 1)
 		auth_moremem(-1);
@@ -414,19 +323,12 @@ allocsymkey(
  */
 static void
 freesymkey(
-	symkey *	sk
+	symkey *	sk,
+	symkey **	bucket
 	)
 {
-	symkey **	bucket;
 	symkey *	unlinked;
 
-	if (NULL == sk)
-		return;
-
-	authcache_flush_id(sk->keyid);
-	keyacc_all_free(sk->keyacclist);
-	
-	bucket = &key_hash[KEYHASH(sk->keyid)];
 	if (sk->secret != NULL) {
 		memset(sk->secret, '\0', sk->secretsize);
 		free(sk->secret);
@@ -452,26 +354,37 @@ auth_findkey(
 {
 	symkey *	sk;
 
-	for (sk = key_hash[KEYHASH(id)]; sk != NULL; sk = sk->hlink)
-		if (id == sk->keyid)
+	for (sk = key_hash[KEYHASH(id)]; sk != NULL; sk = sk->hlink) {
+		if (id == sk->keyid) {
 			return sk;
+		}
+	}
+
 	return NULL;
 }
 
 
 /*
- * auth_havekey - return TRUE if the key id is zero or known. The
- * key needs not to be trusted.
+ * auth_havekey - return TRUE if the key id is zero or known
  */
 int
 auth_havekey(
 	keyid_t		id
 	)
 {
-	return
-	    (0           == id) ||
-	    (cache_keyid == id) ||
-	    (NULL        != auth_findkey(id));
+	symkey *	sk;
+
+	if (0 == id || cache_keyid == id) {
+		return TRUE;
+	}
+
+	for (sk = key_hash[KEYHASH(id)]; sk != NULL; sk = sk->hlink) {
+		if (id == sk->keyid) {
+			return TRUE;
+		}
+	}
+
+	return FALSE;
 }
 
 
@@ -487,25 +400,35 @@ authhavekey(
 	symkey *	sk;
 
 	authkeylookups++;
-	if (0 == id || cache_keyid == id)
-		return !!(KEY_TRUSTED & cache_flags);
-
-	/*
-	 * Search the bin for the key. If not found, or found but the key
-	 * type is zero, somebody marked it trusted without specifying a
-	 * key or key type. In this case consider the key missing.
-	 */
-	authkeyuncached++;
-	sk = auth_findkey(id);
-	if ((sk == NULL) || (sk->type == 0)) {
-		authkeynotfound++;
-		return FALSE;
+	if (0 == id || cache_keyid == id) {
+		return TRUE;
 	}
 
 	/*
-	 * If the key is not trusted, the key is not considered found.
+	 * Seach the bin for the key. If found and the key type
+	 * is zero, somebody marked it trusted without specifying
+	 * a key or key type. In this case consider the key missing.
 	 */
-	if ( ! (KEY_TRUSTED & sk->flags)) {
+	authkeyuncached++;
+	for (sk = key_hash[KEYHASH(id)]; sk != NULL; sk = sk->hlink) {
+		if (id == sk->keyid) {
+			if (0 == sk->type) {
+				authkeynotfound++;
+				return FALSE;
+			}
+			break;
+		}
+	}
+
+	/*
+	 * If the key is not found, or if it is found but not trusted,
+	 * the key is not considered found.
+	 */
+	if (NULL == sk) {
+		authkeynotfound++;
+		return FALSE;
+	}
+	if (!(KEY_TRUSTED & sk->flags)) {
 		authnokey++;
 		return FALSE;
 	}
@@ -533,6 +456,7 @@ authtrust(
 	u_long		trust
 	)
 {
+	symkey **	bucket;
 	symkey *	sk;
 	u_long		lifetime;
 
@@ -540,9 +464,12 @@ authtrust(
 	 * Search bin for key; if it does not exist and is untrusted,
 	 * forget it.
 	 */
-
-	sk = auth_findkey(id);
-	if (!trust && sk == NULL)
+	bucket = &key_hash[KEYHASH(id)];
+	for (sk = *bucket; sk != NULL; sk = sk->hlink) {
+		if (id == sk->keyid)
+			break;
+	}
+	if (!trust && NULL == sk)
 		return;
 
 	/*
@@ -551,22 +478,27 @@ authtrust(
 	 * not to be trusted.
 	 */	
 	if (sk != NULL) {
+		if (cache_keyid == id) {
+			cache_flags = 0;
+			cache_keyid = 0;
+			cache_keyacclist = NULL;
+		}
+
 		/*
-		 * Key exists. If it is to be trusted, say so and update
-		 * its lifetime. If no longer trusted, return it to the
-		 * free list. Flush the cache first to be sure there are
-		 * no discrepancies.
+		 * Key exists. If it is to be trusted, say so and
+		 * update its lifetime. 
 		 */
-		authcache_flush_id(id);
 		if (trust > 0) {
 			sk->flags |= KEY_TRUSTED;
 			if (trust > 1)
 				sk->lifetime = current_time + trust;
 			else
 				sk->lifetime = 0;
-		} else {
-			freesymkey(sk);
+			return;
 		}
+
+		/* No longer trusted, return it to the free list. */
+		freesymkey(sk, bucket);
 		return;
 	}
 
@@ -579,7 +511,7 @@ authtrust(
 	} else {
 		lifetime = 0;
 	}
-	allocsymkey(id, KEY_TRUSTED, 0, lifetime, 0, NULL, NULL);
+	allocsymkey(bucket, id, KEY_TRUSTED, 0, lifetime, 0, NULL, NULL);
 }
 
 
@@ -588,17 +520,22 @@ authtrust(
  */
 int
 authistrusted(
-	keyid_t		id
+	keyid_t		keyno
 	)
 {
 	symkey *	sk;
+	symkey **	bucket;
 
-	if (id == cache_keyid)
+	if (keyno == cache_keyid)
 		return !!(KEY_TRUSTED & cache_flags);
 
 	authkeyuncached++;
-	sk = auth_findkey(id);
-	if (sk == NULL || !(KEY_TRUSTED & sk->flags)) {
+	bucket = &key_hash[KEYHASH(keyno)];
+	for (sk = *bucket; sk != NULL; sk = sk->hlink) {
+		if (keyno == sk->keyid)
+			break;
+	}
+	if (NULL == sk || !(KEY_TRUSTED & sk->flags)) {
 		authkeynotfound++;
 		return FALSE;
 	}
@@ -616,22 +553,37 @@ authistrusted(
 	)
 {
 	symkey *	sk;
+	symkey **	bucket;
+	KeyAccT *	kal;
+	KeyAccT *	k;
 
-	/* That specific key was already used to authenticate the
-	 * packet. Therefore, the key *must* exist...  There's a chance
-	 * that is not trusted, though.
-	 */
-	if (keyno == cache_keyid) {
-		return (KEY_TRUSTED & cache_flags) &&
-		    keyacc_contains(cache_keyacclist, sau, TRUE);
-	} else {
+	if (keyno == cache_keyid)
+		kal = cache_keyacclist;
+	else {
 		authkeyuncached++;
-		sk = auth_findkey(keyno);
-		INSIST(NULL != sk);
-		return (KEY_TRUSTED & sk->flags) &&
-		    keyacc_contains(sk->keyacclist, sau, TRUE);
+		bucket = &key_hash[KEYHASH(keyno)];
+		for (sk = *bucket; sk != NULL; sk = sk->hlink) {
+			if (keyno == sk->keyid)
+				break;
+		}
+		if (NULL == sk || !(KEY_TRUSTED & sk->flags)) {
+			INSIST(!"authistrustedip: keyid not found/trusted!");
+			return FALSE;
+		}
+		kal = sk->keyacclist;
 	}
+
+	if (NULL == kal)
+		return TRUE;
+
+	for (k = kal; k; k = k->next) {
+		if (SOCK_EQ(&k->addr, sau))
+			return TRUE;
+	}
+
+	return FALSE;
 }
+
 
 /* Note: There are two locations below where 'strncpy()' is used. While
  * this function is a hazard by itself, it's essential that it is used
@@ -649,66 +601,71 @@ MD5auth_setkey(
 	keyid_t keyno,
 	int	keytype,
 	const u_char *key,
-	size_t secretsize,
+	size_t	len,
 	KeyAccT *ka
 	)
 {
 	symkey *	sk;
+	symkey **	bucket;
 	u_char *	secret;
+	size_t		secretsize;
 	
 	DEBUG_ENSURE(keytype <= USHRT_MAX);
-	DEBUG_ENSURE(secretsize < 4 * 1024);
+	DEBUG_ENSURE(len < 4 * 1024);
 	/*
 	 * See if we already have the key.  If so just stick in the
 	 * new value.
 	 */
-	sk = auth_findkey(keyno);
-	if (sk != NULL && keyno == sk->keyid) {
+	bucket = &key_hash[KEYHASH(keyno)];
+	for (sk = *bucket; sk != NULL; sk = sk->hlink) {
+		if (keyno == sk->keyid) {
 			/* TALOS-CAN-0054: make sure we have a new buffer! */
-		if (NULL != sk->secret) {
-			memset(sk->secret, 0, sk->secretsize);
-			free(sk->secret);
-		}
-		sk->secret = emalloc(secretsize + 1);
-		sk->type = (u_short)keytype;
-		sk->secretsize = secretsize;
-		/* make sure access lists don't leak here! */
-		if (ka != sk->keyacclist) {
-			keyacc_all_free(sk->keyacclist);
+			if (NULL != sk->secret) {
+				memset(sk->secret, 0, sk->secretsize);
+				free(sk->secret);
+			}
+			sk->secret = emalloc(len);
+			sk->type = (u_short)keytype;
+			secretsize = len;
+			sk->secretsize = (u_short)secretsize;
 			sk->keyacclist = ka;
-		}
 #ifndef DISABLE_BUG1243_FIX
-		memcpy(sk->secret, key, secretsize);
+			memcpy(sk->secret, key, secretsize);
 #else
-		/* >MUST< use 'strncpy()' here! See above! */
-		strncpy((char *)sk->secret, (const char *)key,
-			secretsize);
+			/* >MUST< use 'strncpy()' here! See above! */
+			strncpy((char *)sk->secret, (const char *)key,
+				secretsize);
 #endif
-		authcache_flush_id(keyno);
-		return;
+			if (cache_keyid == keyno) {
+				cache_flags = 0;
+				cache_keyid = 0;
+				cache_keyacclist = NULL;
+			}
+			return;
+		}
 	}
 
 	/*
 	 * Need to allocate new structure.  Do it.
 	 */
-	secret = emalloc(secretsize + 1);
+	secretsize = len;
+	secret = emalloc(secretsize);
 #ifndef DISABLE_BUG1243_FIX
 	memcpy(secret, key, secretsize);
 #else
 	/* >MUST< use 'strncpy()' here! See above! */
 	strncpy((char *)secret, (const char *)key, secretsize);
 #endif
-	allocsymkey(keyno, 0, (u_short)keytype, 0,
-		    secretsize, secret, ka);
+	allocsymkey(bucket, keyno, 0, (u_short)keytype, 0,
+		    (u_short)secretsize, secret, ka);
 #ifdef DEBUG
 	if (debug >= 4) {
 		size_t	j;
 
 		printf("auth_setkey: key %d type %d len %d ", (int)keyno,
 		    keytype, (int)secretsize);
-		for (j = 0; j < secretsize; j++) {
+		for (j = 0; j < secretsize; j++)
 			printf("%02x", secret[j]);
-		}
 		printf("\n");
 	}	
 #endif
@@ -740,11 +697,10 @@ auth_delkeys(void)
 				free(sk->secret);
 				sk->secret = NULL; /* TALOS-CAN-0054 */
 			}
-			sk->keyacclist = keyacc_all_free(sk->keyacclist);
 			sk->secretsize = 0;
 			sk->lifetime = 0;
 		} else {
-			freesymkey(sk);
+			freesymkey(sk, &key_hash[KEYHASH(sk->keyid)]);
 		}
 	ITER_DLIST_END()
 }
@@ -760,7 +716,7 @@ auth_agekeys(void)
 
 	ITER_DLIST_BEGIN(key_listhead, sk, llink, symkey)
 		if (sk->lifetime > 0 && current_time > sk->lifetime) {
-			freesymkey(sk);
+			freesymkey(sk, &key_hash[KEYHASH(sk->keyid)]);
 			authkeyexpired++;
 		}
 	ITER_DLIST_END()

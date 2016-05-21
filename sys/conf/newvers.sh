@@ -31,8 +31,8 @@
 # $FreeBSD$
 
 TYPE="FreeBSD"
-REVISION="10.2"
-BRANCH="RELEASE-p17"
+REVISION="10.3"
+BRANCH="RELEASE"
 if [ "X${BRANCH_OVERRIDE}" != "X" ]; then
 	BRANCH=${BRANCH_OVERRIDE}
 fi
@@ -87,7 +87,15 @@ then
 fi
 
 touch version
-v=`cat version` u=${USER:-root} d=`pwd` h=${HOSTNAME:-`hostname`} t=`date`
+v=`cat version` u=${USER:-root} d=`pwd` h=${HOSTNAME:-`hostname`}
+if [ -n "$SOURCE_DATE_EPOCH" ]; then
+	if ! t=`date -r $SOURCE_DATE_EPOCH 2>/dev/null`; then
+		echo "Invalid SOURCE_DATE_EPOCH" >&2
+		exit 1
+	fi
+else
+	t=`date`
+fi
 i=`${MAKE:-make} -V KERN_IDENT`
 compiler_v=$($(${MAKE:-make} -V CC) -v 2>&1 | grep 'version')
 

@@ -30,7 +30,6 @@ __FBSDID("$FreeBSD$");
 #include "opt_compat.h"
 #include "opt_inet.h"
 #include "opt_inet6.h"
-#include "opt_pax.h"
 
 #define __ELF_WORD_SIZE 32
 
@@ -56,7 +55,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/mount.h>
 #include <sys/mutex.h>
 #include <sys/namei.h>
-#include <sys/pax.h>
 #include <sys/proc.h>
 #include <sys/procctl.h>
 #include <sys/reboot.h>
@@ -1428,6 +1426,49 @@ freebsd32_futimesat(struct thread *td, struct freebsd32_futimesat_args *uap)
 		sp = NULL;
 	return (kern_utimesat(td, uap->fd, uap->path, UIO_USERSPACE,
 		sp, UIO_SYSSPACE));
+}
+
+int
+freebsd32_futimens(struct thread *td, struct freebsd32_futimens_args *uap)
+{
+	struct timespec32 ts32[2];
+	struct timespec ts[2], *tsp;
+	int error;
+
+	if (uap->times != NULL) {
+		error = copyin(uap->times, ts32, sizeof(ts32));
+		if (error)
+			return (error);
+		CP(ts32[0], ts[0], tv_sec);
+		CP(ts32[0], ts[0], tv_nsec);
+		CP(ts32[1], ts[1], tv_sec);
+		CP(ts32[1], ts[1], tv_nsec);
+		tsp = ts;
+	} else
+		tsp = NULL;
+	return (kern_futimens(td, uap->fd, tsp, UIO_SYSSPACE));
+}
+
+int
+freebsd32_utimensat(struct thread *td, struct freebsd32_utimensat_args *uap)
+{
+	struct timespec32 ts32[2];
+	struct timespec ts[2], *tsp;
+	int error;
+
+	if (uap->times != NULL) {
+		error = copyin(uap->times, ts32, sizeof(ts32));
+		if (error)
+			return (error);
+		CP(ts32[0], ts[0], tv_sec);
+		CP(ts32[0], ts[0], tv_nsec);
+		CP(ts32[1], ts[1], tv_sec);
+		CP(ts32[1], ts[1], tv_nsec);
+		tsp = ts;
+	} else
+		tsp = NULL;
+	return (kern_utimensat(td, uap->fd, uap->path, UIO_USERSPACE,
+	    tsp, UIO_SYSSPACE, uap->flag));
 }
 
 int
@@ -2867,16 +2908,12 @@ freebsd32_copyout_strings(struct image_params *imgp)
 		execpath_len = strlen(imgp->execpath) + 1;
 	else
 		execpath_len = 0;
-	arginfo = (struct freebsd32_ps_strings *)curproc->p_psstrings;
-	imgp->proc->p_sigcode_base = imgp->proc->p_sysent->sv_sigcode_base;
-	if (imgp->proc->p_sigcode_base == 0)
+	arginfo = (struct freebsd32_ps_strings *)curproc->p_sysent->
+	    sv_psstrings;
+	if (imgp->proc->p_sysent->sv_sigcode_base == 0)
 		szsigcode = *(imgp->proc->p_sysent->sv_szsigcode);
-	else {
+	else
 		szsigcode = 0;
-#ifdef PAX_ASLR
-		pax_aslr_vdso(imgp->proc, &(imgp->proc->p_sigcode_base));
-#endif
-	}
 	destp =	(uintptr_t)arginfo;
 
 	/*

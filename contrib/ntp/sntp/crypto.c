@@ -1,7 +1,6 @@
 #include <config.h>
 #include "crypto.h"
 #include <ctype.h>
-#include "isc/string.h"
 
 struct key *key_ptr;
 size_t key_cnt = 0;
@@ -57,16 +56,11 @@ auth_md5(
 	pkt_ptr = pkt_data;
 	hash_len = make_mac(pkt_ptr, pkt_size, sizeof(digest), cmp_key,
 			    digest);
-	if (!hash_len) {
+	if (!hash_len)
 		authentic = FALSE;
-	} else {
-		/* isc_tsmemcmp will be better when its easy to link
-		 * with.  sntp is a 1-shot program, so snooping for
-		 * timing attacks is Harder.
-		 */
-		authentic = !memcmp(digest, pkt_data + pkt_size + 4,
+	else
+		authentic = !memcmp(digest, pkt_ptr + pkt_size + 4,
 				    hash_len);
-	}
 	return authentic;
 }
 

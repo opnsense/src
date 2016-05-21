@@ -39,6 +39,7 @@ MAN=	accept_filter.9 \
 	bus_generic_print_child.9 \
 	bus_generic_read_ivar.9 \
 	bus_generic_shutdown.9 \
+	bus_get_resource.9 \
 	BUS_NEW_PASS.9 \
 	BUS_PRINT_CHILD.9 \
 	BUS_READ_IVAR.9 \
@@ -849,7 +850,8 @@ MLINKS+=make_dev.9 destroy_dev.9 \
 	make_dev.9 make_dev_alias_p.9 \
 	make_dev.9 make_dev_cred.9 \
 	make_dev.9 make_dev_credf.9 \
-	make_dev.9 make_dev_p.9
+	make_dev.9 make_dev_p.9 \
+	make_dev.9 make_dev_s.9
 MLINKS+=malloc.9 free.9 \
 	malloc.9 MALLOC_DECLARE.9 \
 	malloc.9 MALLOC_DEFINE.9 \
@@ -888,6 +890,7 @@ MLINKS+=\
 	mbuf.9 m_cat.9 \
 	mbuf.9 MCHTYPE.9 \
 	mbuf.9 MCLGET.9 \
+	mbuf.9 m_collapse.9 \
 	mbuf.9 m_copyback.9 \
 	mbuf.9 m_copydata.9 \
 	mbuf.9 m_copym.9 \
@@ -897,12 +900,7 @@ MLINKS+=\
 	mbuf.9 m_dup.9 \
 	mbuf.9 m_dup_pkthdr.9 \
 	mbuf.9 MEXTADD.9 \
-	mbuf.9 MEXT_ADD_REF.9 \
-	mbuf.9 MEXTFREE.9 \
-	mbuf.9 MEXT_IS_REF.9 \
-	mbuf.9 MEXT_REM_REF.9 \
 	mbuf.9 m_fixhdr.9 \
-	mbuf.9 MFREE.9 \
 	mbuf.9 m_free.9 \
 	mbuf.9 m_freem.9 \
 	mbuf.9 MGET.9 \
@@ -1018,12 +1016,15 @@ MLINKS+=pci.9 pci_alloc_msi.9 \
 	pci.9 pci_find_device.9 \
 	pci.9 pci_find_extcap.9 \
 	pci.9 pci_find_htcap.9 \
+	pci.9 pci_find_pcie_root_port.9 \
 	pci.9 pci_get_max_read_req.9 \
 	pci.9 pci_get_powerstate.9 \
 	pci.9 pci_get_vpd_ident.9 \
 	pci.9 pci_get_vpd_readonly.9 \
 	pci.9 pci_msi_count.9 \
 	pci.9 pci_msix_count.9 \
+	pci.9 pci_msix_pba_bar.9 \
+	pci.9 pci_msix_table_bar.9 \
 	pci.9 pci_pending_msix.9 \
 	pci.9 pci_read_config.9 \
 	pci.9 pci_release_msi.9 \
@@ -1032,7 +1033,10 @@ MLINKS+=pci.9 pci_alloc_msi.9 \
 	pci.9 pci_save_state.9 \
 	pci.9 pci_set_powerstate.9 \
 	pci.9 pci_set_max_read_req.9 \
-	pci.9 pci_write_config.9
+	pci.9 pci_write_config.9 \
+	pci.9 pcie_adjust_config.9 \
+	pci.9 pcie_read_config.9 \
+	pci.9 pcie_write_config.9
 MLINKS+=pfil.9 pfil_add_hook.9 \
 	pfil.9 pfil_hook_get.9 \
 	pfil.9 pfil_remove_hook.9
@@ -1127,6 +1131,7 @@ MLINKS+=rwlock.9 rw_assert.9 \
 	rwlock.9 rw_initialized.9 \
 	rwlock.9 rw_rlock.9 \
 	rwlock.9 rw_runlock.9 \
+	rwlock.9 rw_unlock.9 \
 	rwlock.9 rw_sleep.9 \
 	rwlock.9 RW_SYSINIT.9 \
 	rwlock.9 rw_try_rlock.9 \

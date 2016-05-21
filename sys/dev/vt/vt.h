@@ -138,6 +138,7 @@ struct vt_device {
 	uint32_t		 vd_mstate;	/* (?) Mouse state. */
 	vt_axis_t		 vd_width;	/* (?) Screen width. */
 	vt_axis_t		 vd_height;	/* (?) Screen height. */
+	size_t			 vd_transpose;	/* (?) Screen offset in FB */
 	struct mtx		 vd_lock;	/* Per-device lock. */
 	struct cv		 vd_winswitch;	/* (d) Window switch notify. */
 	struct callout		 vd_timer;	/* (d) Display timer. */
@@ -154,6 +155,7 @@ struct vt_device {
 	int			 vd_keyboard;	/* (G) Keyboard index. */
 	unsigned int		 vd_kbstate;	/* (?) Device unit. */
 	unsigned int		 vd_unit;	/* (c) Device unit. */
+	int			 vd_altbrk;	/* (?) Alt break seq. state */
 };
 
 #define	VD_PASTEBUF(vd)	((vd)->vd_pastebuf.vpb_buf)

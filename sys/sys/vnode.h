@@ -417,6 +417,7 @@ extern int		vttoif_tab[];
  * Global vnode data.
  */
 extern	struct vnode *rootvnode;	/* root (i.e. "/") vnode */
+extern	struct mount *rootdevmp;	/* "/dev" mount */
 extern	int async_io_version;		/* 0 or POSIX version of AIO i'face */
 extern	int desiredvnodes;		/* number of vnodes desired */
 extern	struct uma_zone *namei_zone;
@@ -600,6 +601,7 @@ struct vnode;
 typedef int (*vn_get_ino_t)(struct mount *, void *, int, struct vnode **);
 
 /* cache_* may belong in namei.h. */
+void	cache_changesize(int newhashsize);
 #define	cache_enter(dvp, vp, cnp)					\
 	cache_enter_time(dvp, vp, cnp, NULL, NULL)
 void	cache_enter_time(struct vnode *dvp, struct vnode *vp,
@@ -821,7 +823,6 @@ void vnode_destroy_vobject(struct vnode *vp);
 extern struct vop_vector fifo_specops;
 extern struct vop_vector dead_vnodeops;
 extern struct vop_vector default_vnodeops;
-extern struct vop_vector devfs_specops;
 
 #define VOP_PANIC	((void*)(uintptr_t)vop_panic)
 #define VOP_NULL	((void*)(uintptr_t)vop_null)
@@ -837,6 +838,7 @@ int	fifo_printinfo(struct vnode *);
 /* vfs_hash.c */
 typedef int vfs_hash_cmp_t(struct vnode *vp, void *arg);
 
+void vfs_hash_changesize(int newhashsize);
 int vfs_hash_get(const struct mount *mp, u_int hash, int flags, struct thread *td, struct vnode **vpp, vfs_hash_cmp_t *fn, void *arg);
 u_int vfs_hash_index(struct vnode *vp);
 int vfs_hash_insert(struct vnode *vp, u_int hash, int flags, struct thread *td, struct vnode **vpp, vfs_hash_cmp_t *fn, void *arg);

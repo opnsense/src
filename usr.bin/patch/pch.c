@@ -33,6 +33,7 @@
 #include <ctype.h>
 #include <libgen.h>
 #include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -498,7 +499,7 @@ another_hunk(void)
 	LINENUM	fillcnt;			/* #lines of missing ptrn or repl */
 	LINENUM	fillsrc;			/* index of first line to copy */
 	LINENUM	filldst;			/* index of first missing line */
-	bool	ptrn_spaces_eaten;		/* ptrn was slightly misformed */
+	bool	ptrn_spaces_eaten;		/* ptrn was slightly malformed */
 	bool	repl_could_be_missing;		/* no + or ! lines in this hunk */
 	bool	repl_missing;			/* we are now backtracking */
 	off_t	repl_backtrack_position;	/* file pos of first repl line */

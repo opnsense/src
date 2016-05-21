@@ -34,10 +34,6 @@
  * John Polstra <jdp@polstra.com>.
  */
 
-#ifndef __GNUC__
-#error "GCC is needed to compile this file"
-#endif
-
 #include <sys/param.h>
 #include <sys/mount.h>
 #include <sys/mman.h>
@@ -1119,7 +1115,6 @@ digest_dynamic1(Obj_Entry *obj, int early, const Elf_Dyn **dyn_rpath,
 
 #ifndef __mips__
 	case DT_DEBUG:
-	    /* XXX - not implemented yet */
 	    if (!early)
 		dbg("Filling in DT_DEBUG entry");
 	    ((Elf_Dyn*)dynp)->d_un.d_ptr = (Elf_Addr) &r_debug;
@@ -4536,7 +4531,7 @@ allocate_tls_offset(Obj_Entry *obj)
 	return true;
     }
 
-    if (obj->tlsindex == 1)
+    if (tls_last_offset == 0)
 	off = calculate_first_tls_offset(obj->tlssize, obj->tlsalign);
     else
 	off = calculate_tls_offset(tls_last_offset, tls_last_size,

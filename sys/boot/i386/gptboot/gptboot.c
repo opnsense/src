@@ -37,11 +37,7 @@ __FBSDID("$FreeBSD$");
 #include "util.h"
 #include "cons.h"
 #include "gpt.h"
-
-#define PATH_DOTCONFIG  "/boot.config"
-#define PATH_CONFIG	"/boot/config"
-#define PATH_BOOT3	"/boot/loader"
-#define PATH_KERNEL	"/boot/kernel/kernel"
+#include "paths.h"
 
 #define ARGS		0x900
 #define NOPT		14
@@ -136,6 +132,7 @@ int
 main(void)
 {
 	char cmd[512], cmdtmp[512];
+	ssize_t sz;
 	int autoboot, dskupdated;
 	ufs_ino_t ino;
 
@@ -164,9 +161,10 @@ main(void)
 	for (;;) {
 		*kname = '\0';
 		if ((ino = lookup(PATH_CONFIG)) ||
-		    (ino = lookup(PATH_DOTCONFIG)))
-			fsread(ino, cmd, sizeof(cmd));
-
+		    (ino = lookup(PATH_DOTCONFIG))) {
+			sz = fsread(ino, cmd, sizeof(cmd) - 1);
+			cmd[(sz < 0) ? 0 : sz] = '\0';
+		}
 		if (*cmd != '\0') {
 			memcpy(cmdtmp, cmd, sizeof(cmdtmp));
 			if (parse(cmdtmp, &dskupdated))
@@ -180,7 +178,7 @@ main(void)
 
 		if (autoboot && keyhit(3)) {
 			if (*kname == '\0')
-				memcpy(kname, PATH_BOOT3, sizeof(PATH_BOOT3));
+				memcpy(kname, PATH_LOADER, sizeof(PATH_LOADER));
 			break;
 		}
 		autoboot = 0;
@@ -192,7 +190,7 @@ main(void)
 		 */
 		if (*kname != '\0')
 			load();
-		memcpy(kname, PATH_BOOT3, sizeof(PATH_BOOT3));
+		memcpy(kname, PATH_LOADER, sizeof(PATH_LOADER));
 		load();
 		memcpy(kname, PATH_KERNEL, sizeof(PATH_KERNEL));
 		load();

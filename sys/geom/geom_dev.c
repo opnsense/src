@@ -124,17 +124,18 @@ g_dev_fini(struct g_class *mp)
 {
 
 	freeenv(dumpdev);
+	dumpdev = NULL;
 }
 
 static int
-g_dev_setdumpdev(struct cdev *dev)
+g_dev_setdumpdev(struct cdev *dev, struct thread *td)
 {
 	struct g_kerneldump kd;
 	struct g_consumer *cp;
 	int error, len;
 
 	if (dev == NULL)
-		return (set_dumper(NULL, NULL));
+		return (set_dumper(NULL, NULL, td));
 
 	cp = dev->si_drv2;
 	len = sizeof(kd);
@@ -142,25 +143,45 @@ g_dev_setdumpdev(struct cdev *dev)
 	kd.length = OFF_MAX;
 	error = g_io_getattr("GEOM::kerneldump", cp, &len, &kd);
 	if (error == 0) {
-		error = set_dumper(&kd.di, devtoname(dev));
+		error = set_dumper(&kd.di, devtoname(dev), td);
 		if (error == 0)
 			dev->si_flags |= SI_DUMPDEV;
 	}
 	return (error);
 }
 
-static void
+static int
 init_dumpdev(struct cdev *dev)
 {
+	struct g_consumer *cp;
+	const char *devprefix = "/dev/", *devname;
+	int error;
+	size_t len;
 
 	if (dumpdev == NULL)
-		return;
-	if (strcmp(devtoname(dev), dumpdev) != 0)
-		return;
-	if (g_dev_setdumpdev(dev) == 0) {
+		return (0);
+
+	len = strlen(devprefix);
+	devname = devtoname(dev);
+	if (strcmp(devname, dumpdev) != 0 &&
+	   (strncmp(dumpdev, devprefix, len) != 0 ||
+	    strcmp(devname, dumpdev + len) != 0))
+		return (0);
+
+	cp = (struct g_consumer *)dev->si_drv2;
+	error = g_access(cp, 1, 0, 0);
+	if (error != 0)
+		return (error);
+
+	error = g_dev_setdumpdev(dev, curthread);
+	if (error == 0) {
 		freeenv(dumpdev);
 		dumpdev = NULL;
 	}
+
+	(void)g_access(cp, -1, 0, 0);
+
+	return (error);
 }
 
 static void
@@ -322,7 +343,10 @@ g_dev_taste(struct g_class *mp, struct g_provider *pp, int insist __unused)
 
 	dev->si_iosize_max = MAXPHYS;
 	dev->si_drv2 = cp;
-	init_dumpdev(dev);
+	error = init_dumpdev(dev);
+	if (error != 0)
+		printf("%s: init_dumpdev() failed (gp->name=%s, error=%d)\n",
+		    __func__, gp->name, error);
 	if (adev != NULL) {
 		adev->si_iosize_max = MAXPHYS;
 		adev->si_drv2 = cp;
@@ -356,6 +380,13 @@ g_dev_open(struct cdev *dev, int flags, int fmt, struct thread *td)
 #else
 	e = 0;
 #endif
+
+	/*
+	 * This happens on attempt to open a device node with O_EXEC.
+	 */
+	if (r + w + e == 0)
+		return (EINVAL);
+
 	if (w) {
 		/*
 		 * When running in very secure mode, do not allow
@@ -399,6 +430,20 @@ g_dev_close(struct cdev *dev, int flags, int fmt, struct thread *td)
 #else
 	e = 0;
 #endif
+
+	/*
+	 * The vgonel(9) - caused by eg. forced unmount of devfs - calls
+	 * VOP_CLOSE(9) on devfs vnode without any FREAD or FWRITE flags,
+	 * which would result in zero deltas, which in turn would cause
+	 * panic in g_access(9).
+	 *
+	 * Note that we cannot zero the counters (ie. do "r = cp->acr"
+	 * etc) instead, because the consumer might be opened in another
+	 * devfs instance.
+	 */
+	if (r + w + e == 0)
+		return (EINVAL);
+
 	sc = cp->private;
 	mtx_lock(&sc->sc_mtx);
 	sc->sc_open += r + w + e;
@@ -459,9 +504,9 @@ g_dev_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread
 		break;
 	case DIOCSKERNELDUMP:
 		if (*(u_int *)data == 0)
-			error = g_dev_setdumpdev(NULL);
+			error = g_dev_setdumpdev(NULL, td);
 		else
-			error = g_dev_setdumpdev(dev);
+			error = g_dev_setdumpdev(dev, td);
 		break;
 	case DIOCGFLUSH:
 		error = g_io_flush(cp);
@@ -570,7 +615,7 @@ g_dev_done(struct bio *bp2)
 	}
 	mtx_unlock(&sc->sc_mtx);
 	if (destroy)
-		g_post_event(g_dev_destroy, cp, M_WAITOK, NULL);
+		g_post_event(g_dev_destroy, cp, M_NOWAIT, NULL);
 	biodone(bp);
 }
 
@@ -679,7 +724,7 @@ g_dev_orphan(struct g_consumer *cp)
 
 	/* Reset any dump-area set on this device */
 	if (dev->si_flags & SI_DUMPDEV)
-		set_dumper(NULL, NULL);
+		(void)set_dumper(NULL, NULL, curthread);
 
 	/* Destroy the struct cdev *so we get no more requests */
 	destroy_dev_sched_cb(dev, g_dev_callback, cp);

@@ -8,7 +8,7 @@
 # and the main list to avoid needing a SUBDIR_DEPEND line on every library
 # naming just these few items.
 
-SUBDIR_ORDERED=	${_csu} \
+SUBDIR_ORDERED=	csu \
 	.WAIT \
 	libc \
 	libc_nonshared \
@@ -37,6 +37,7 @@ SUBDIR=	${SUBDIR_ORDERED} \
 	${_libcom_err} \
 	libcompat \
 	libcrypt \
+	libdevctl \
 	libdevinfo \
 	libdevstat \
 	libdpv \
@@ -70,6 +71,7 @@ SUBDIR=	${SUBDIR_ORDERED} \
 	libnetbsd \
 	${_libnetgraph} \
 	${_libngatm} \
+	libnv \
 	libopie \
 	libpam \
 	libpcap \
@@ -83,7 +85,7 @@ SUBDIR=	${SUBDIR_ORDERED} \
 	libsbuf \
 	${_libsdp} \
 	${_libsm} \
-	${_libsmb} \
+	libsmb \
 	${_libsmdb} \
 	${_libsmutil} \
 	libstand \
@@ -141,16 +143,7 @@ SUBDIR_DEPEND_libstdc++= msun
 SUBDIR_DEPEND_libtacplus= libmd
 SUBDIR_DEPEND_libulog= libmd
 SUBDIR_DEPEND_libunbound= ${_libldns}
-
-.if exists(${.CURDIR}/csu/${MACHINE_ARCH}-elf)
-_csu=csu/${MACHINE_ARCH}-elf
-.elif exists(${.CURDIR}/csu/${MACHINE_ARCH})
-_csu=csu/${MACHINE_ARCH}
-.elif exists(${.CURDIR}/csu/${MACHINE_CPUARCH}/Makefile)
-_csu=csu/${MACHINE_CPUARCH}
-.else
-_csu=csu
-.endif
+SUBDIR_DEPEND_liblzma= ${_libthr}
 
 # NB: keep these sorted by MK_* knobs
 
@@ -222,7 +215,6 @@ _libypclnt=	libypclnt
 .endif
 
 .if ${MACHINE_CPUARCH} == "i386" || ${MACHINE_CPUARCH} == "amd64"
-_libsmb=	libsmb
 _libvgl=	libvgl
 _libproc=	libproc
 _librtld_db=	librtld_db
@@ -236,7 +228,6 @@ _libvmmapi=	libvmmapi
 
 .if ${MACHINE_CPUARCH} == "ia64"
 _libefi=	libefi
-_libsmb=	libsmb
 .endif
 
 .if ${MACHINE_CPUARCH} == "mips"
@@ -247,11 +238,6 @@ _librtld_db=	librtld_db
 .if ${MACHINE_CPUARCH} == "powerpc"
 _libproc=	libproc
 _librtld_db=	librtld_db
-_libsmb=	libsmb
-.endif
-
-.if ${MACHINE_CPUARCH} == "sparc64"
-_libsmb=	libsmb
 .endif
 
 .if ${MK_OPENSSL} != "no"

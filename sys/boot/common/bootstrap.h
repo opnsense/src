@@ -56,7 +56,10 @@ typedef int	(bootblk_cmd_t)(int argc, char *argv[]);
 extern char	*command_errmsg;	
 extern char	command_errbuf[];	/* XXX blah, length */
 #define CMD_OK		0
-#define CMD_ERROR	1
+#define CMD_WARN	1
+#define CMD_ERROR	2
+#define CMD_CRIT	3
+#define CMD_FATAL	4
 
 /* interp.c */
 void	interact(void);
@@ -231,9 +234,9 @@ int			mod_load(char *name, struct mod_depend *verinfo, int argc, char *argv[]);
 int			mod_loadkld(const char *name, int argc, char *argv[]);
 
 struct preloaded_file *file_alloc(void);
-struct preloaded_file *file_findfile(char *name, char *type);
+struct preloaded_file *file_findfile(const char *name, const char *type);
 struct file_metadata *file_findmetadata(struct preloaded_file *fp, int type);
-struct preloaded_file *file_loadraw(char *name, char *type);
+struct preloaded_file *file_loadraw(const char *name, char *type, int insert);
 void file_discard(struct preloaded_file *fp);
 void file_addmetadata(struct preloaded_file *fp, int type, size_t size, void *p);
 int  file_addmodule(struct preloaded_file *fp, char *modname, int version,
@@ -257,6 +260,9 @@ int	__elfN(obj_loadfile)(char *filename, u_int64_t dest,
 int	__elfN(reloc)(struct elf_file *ef, symaddr_fn *symaddr,
 	    const void *reldata, int reltype, Elf_Addr relbase,
 	    Elf_Addr dataaddr, void *data, size_t len);
+int __elfN(loadfile_raw)(char *filename, u_int64_t dest,
+	    struct preloaded_file **result, int multiboot);
+int __elfN(load_modmetadata)(struct preloaded_file *fp, u_int64_t dest);
 #endif
 
 /*

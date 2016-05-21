@@ -33,6 +33,7 @@
 #include <sys/kernel.h>
 #include <sys/sysctl.h>
 #include <sys/proc.h>
+#include <sys/sglist.h>
 #include <sys/sleepqueue.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
@@ -63,6 +64,8 @@
 
 #include <vm/vm_pager.h>
 
+#include <linux/workqueue.h>
+
 MALLOC_DEFINE(M_KMALLOC, "linux", "Linux kmalloc compat");
 
 #include <linux/rbtree.h>
@@ -89,7 +92,50 @@ panic_cmp(struct rb_node *one, struct rb_node *two)
 }
 
 RB_GENERATE(linux_root, rb_node, __entry, panic_cmp);
- 
+
+int
+kobject_set_name_vargs(struct kobject *kobj, const char *fmt, va_list args)
+{
+	va_list tmp_va;
+	int len;
+	char *old;
+	char *name;
+	char dummy;
+
+	old = kobj->name;
+
+	if (old && fmt == NULL)
+		return (0);
+
+	/* compute length of string */
+	va_copy(tmp_va, args);
+	len = vsnprintf(&dummy, 0, fmt, tmp_va);
+	va_end(tmp_va);
+
+	/* account for zero termination */
+	len++;
+
+	/* check for error */
+	if (len < 1)
+		return (-EINVAL);
+
+	/* allocate memory for string */
+	name = kzalloc(len, GFP_KERNEL);
+	if (name == NULL)
+		return (-ENOMEM);
+	vsnprintf(name, len, fmt, args);
+	kobj->name = name;
+
+	/* free old string */
+	kfree(old);
+
+	/* filter new string */
+	for (; *name != '\0'; name++)
+		if (*name == '/')
+			*name = '!';
+	return (0);
+}
+
 int
 kobject_set_name(struct kobject *kobj, const char *fmt, ...)
 {
@@ -414,16 +460,6 @@ linux_dev_poll(struct cdev *dev, int events, struct thread *td)
 }
 
 static int
-linux_dev_mmap(struct cdev *dev, vm_ooffset_t offset, vm_paddr_t *paddr,
-    int nprot, vm_memattr_t *memattr)
-{
-
-	/* XXX memattr not honored. */
-	*paddr = offset;
-	return (0);
-}
-
-static int
 linux_dev_mmap_single(struct cdev *dev, vm_ooffset_t *offset,
     vm_size_t size, struct vm_object **object, int nprot)
 {
@@ -431,36 +467,41 @@ linux_dev_mmap_single(struct cdev *dev, vm_ooffset_t *offset,
 	struct linux_file *filp;
 	struct file *file;
 	struct vm_area_struct vma;
-	vm_paddr_t paddr;
-	vm_page_t m;
 	int error;
 
 	file = curthread->td_fpop;
 	ldev = dev->si_drv1;
 	if (ldev == NULL)
 		return (ENODEV);
-	if (size != PAGE_SIZE)
-		return (EINVAL);
 	if ((error = devfs_get_cdevpriv((void **)&filp)) != 0)
 		return (error);
 	filp->f_flags = file->f_flag;
 	vma.vm_start = 0;
-	vma.vm_end = PAGE_SIZE;
+	vma.vm_end = size;
 	vma.vm_pgoff = *offset / PAGE_SIZE;
 	vma.vm_pfn = 0;
-	vma.vm_page_prot = 0;
+	vma.vm_page_prot = VM_MEMATTR_DEFAULT;
 	if (filp->f_op->mmap) {
 		error = -filp->f_op->mmap(filp, &vma);
 		if (error == 0) {
-			paddr = (vm_paddr_t)vma.vm_pfn << PAGE_SHIFT;
-			*offset = paddr;
-			m = PHYS_TO_VM_PAGE(paddr);
-			*object = vm_pager_allocate(OBJT_DEVICE, dev,
-			    PAGE_SIZE, nprot, *offset, curthread->td_ucred);
-		        if (*object == NULL)
-               			 return (EINVAL);
-			if (vma.vm_page_prot != VM_MEMATTR_DEFAULT)
-				pmap_page_set_memattr(m, vma.vm_page_prot);
+			struct sglist *sg;
+
+			sg = sglist_alloc(1, M_WAITOK);
+			sglist_append_phys(sg,
+			    (vm_paddr_t)vma.vm_pfn << PAGE_SHIFT, vma.vm_len);
+			*object = vm_pager_allocate(OBJT_SG, sg, vma.vm_len,
+			    nprot, 0, curthread->td_ucred);
+		        if (*object == NULL) {
+				sglist_free(sg);
+				return (EINVAL);
+			}
+			*offset = 0;
+			if (vma.vm_page_prot != VM_MEMATTR_DEFAULT) {
+				VM_OBJECT_WLOCK(*object);
+				vm_object_set_memattr(*object,
+				    vma.vm_page_prot);
+				VM_OBJECT_WUNLOCK(*object);
+			}
 		}
 	} else
 		error = ENODEV;
@@ -477,7 +518,6 @@ struct cdevsw linuxcdevsw = {
 	.d_write = linux_dev_write,
 	.d_ioctl = linux_dev_ioctl,
 	.d_mmap_single = linux_dev_mmap_single,
-	.d_mmap = linux_dev_mmap,
 	.d_poll = linux_dev_poll,
 };
 
@@ -885,6 +925,50 @@ linux_completion_done(struct completion *c)
 		isdone = 0;
 	sleepq_release(c);
 	return (isdone);
+}
+
+void
+linux_delayed_work_fn(void *arg)
+{
+	struct delayed_work *work;
+
+	work = arg;
+	taskqueue_enqueue(work->work.taskqueue, &work->work.work_task);
+}
+
+void
+linux_work_fn(void *context, int pending)
+{
+	struct work_struct *work;
+
+	work = context;
+	work->fn(work);
+}
+
+void
+linux_flush_fn(void *context, int pending)
+{
+}
+
+struct workqueue_struct *
+linux_create_workqueue_common(const char *name, int cpus)
+{
+	struct workqueue_struct *wq;
+
+	wq = kmalloc(sizeof(*wq), M_WAITOK);
+	wq->taskqueue = taskqueue_create(name, M_WAITOK,
+	    taskqueue_thread_enqueue,  &wq->taskqueue);
+	atomic_set(&wq->draining, 0);
+	taskqueue_start_threads(&wq->taskqueue, cpus, PWAIT, "%s", name);
+
+	return (wq);
+}
+
+void
+destroy_workqueue(struct workqueue_struct *wq)
+{
+	taskqueue_free(wq->taskqueue);
+	kfree(wq);
 }
 
 static void

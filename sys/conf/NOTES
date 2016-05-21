@@ -351,6 +351,9 @@ options 	COMPAT_FREEBSD6
 # Enable FreeBSD7 compatibility syscalls
 options 	COMPAT_FREEBSD7
 
+# Enable Linux Kernel Programming Interface
+#options	COMPAT_LINUXKPI
+
 #
 # These three options provide support for System V Interface
 # Definition-style interprocess communication, in the form of shared
@@ -1719,10 +1722,8 @@ device		ata
 #device		atapci		# PCI bus support; only generic chipset support
 
 # PCI ATA chipsets
-#device		ataahci		# AHCI SATA
 #device		ataacard	# ACARD
 #device		ataacerlabs	# Acer Labs Inc. (ALI)
-#device		ataadaptec	# Adaptec
 #device		ataamd		# American Micro Devices (AMD)
 #device		ataati		# ATI
 #device		atacenatek	# Cenatek
@@ -1955,6 +1956,8 @@ device		xmphy		# XaQti XMAC II
 #	88E8062, 88E8035, 88E8036, 88E8038, 88E8050, 88E8052, 88E8053,
 #	88E8055, 88E8056 and D-Link 560T/550SX.
 # lmc:	Support for the LMC/SBE wide-area network interface cards.
+# mlx5:	Mellanox ConnectX-4 and ConnectX-4 LX IB and Eth shared code module.
+# mlx5en:Mellanox ConnectX-4 and ConnectX-4 LX PCIe Ethernet adapters.
 # my:	Myson Fast Ethernet (MTD80X, MTD89X)
 # nge:	Support for PCI gigabit ethernet adapters based on the National
 #	Semiconductor DP83820 and DP83821 chipset. This includes the
@@ -2073,6 +2076,8 @@ device		gem		# Apple GMAC/Sun ERI/Sun GEM
 device		hme		# Sun HME (Happy Meal Ethernet)
 device		jme		# JMicron JMC250 Gigabit/JMC260 Fast Ethernet
 device		lge		# Level 1 LXT1001 gigabit Ethernet
+#device		mlx5		# Shared code module between IB and Ethernet
+#device		mlx5en		# Mellanox ConnectX-4 and ConnectX-4 LX
 device		msk		# Marvell/SysKonnect Yukon II Gigabit Ethernet
 device		my		# Myson Fast Ethernet (MTD80X, MTD89X)
 device		nge		# NatSemi DP83820 gigabit Ethernet
@@ -2488,6 +2493,7 @@ device		sdhci
 # amdsmb	AMD 8111 SMBus 2.0 Controller
 # nfpm		NVIDIA nForce Power Management Unit
 # nfsmb		NVIDIA nForce2/3/4 MCP SMBus 2.0 Controller
+# ismt		Intel SMBus 2.0 controller chips (on Atom S1200, C2000)
 #
 device		smbus		# Bus support, required for smb below.
 
@@ -2499,6 +2505,7 @@ device		amdpm
 device		amdsmb
 device		nfpm
 device		nfsmb
+device		ismt
 
 device		smb
 
@@ -2700,6 +2707,8 @@ device		uvisor
 # USB serial support for DDI pocket's PHS
 device		uvscom
 #
+# USB ethernet support
+device		uether
 # ADMtek USB ethernet. Supports the LinkSys USB100TX,
 # the Billionton USB100, the Melco LU-ATX, the D-Link DSB-650TX
 # and the SMC 2202USB. Also works with the ADMtek AN986 Pegasus
@@ -2993,8 +3002,3 @@ options 	RANDOM_RWFILE	# Read and write entropy cache
 
 # Intel em(4) driver
 options		EM_MULTIQUEUE # Activate multiqueue features/disable MSI-X
-
-# PAX and HardenedBSD related knobs
-options		PAX
-options		PAX_ASLR
-options		PAX_SYSCTLS

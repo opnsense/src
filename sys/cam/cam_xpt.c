@@ -93,6 +93,8 @@ struct xpt_task {
 };
 
 struct xpt_softc {
+	uint32_t		xpt_generation;
+
 	/* number of high powered commands that can go through right now */
 	struct mtx		xpt_highpower_lock;
 	STAILQ_HEAD(highpowerlist, cam_ed)	highpowerq;
@@ -154,6 +156,8 @@ MTX_SYSINIT(xpt_topo_init, &xsoftc.xpt_topo_lock, "XPT topology lock", MTX_DEF);
 TUNABLE_INT("kern.cam.boot_delay", &xsoftc.boot_delay);
 SYSCTL_INT(_kern_cam, OID_AUTO, boot_delay, CTLFLAG_RDTUN,
            &xsoftc.boot_delay, 0, "Bus registration wait time");
+SYSCTL_UINT(_kern_cam, OID_AUTO, xpt_generation, CTLFLAG_RD,
+	    &xsoftc.xpt_generation, 0, "CAM peripheral generation count");
 
 struct cam_doneq {
 	struct mtx_padalign	cam_doneq_mtx;
@@ -536,7 +540,7 @@ xptdoioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flag, struct thread *
 			 * Map the pattern and match buffers into kernel
 			 * virtual address space.
 			 */
-			error = cam_periph_mapmem(inccb, &mapinfo);
+			error = cam_periph_mapmem(inccb, &mapinfo, MAXPHYS);
 
 			if (error) {
 				inccb->ccb_h.path = old_path;
@@ -981,6 +985,7 @@ xpt_add_periph(struct cam_periph *periph)
 		device->generation++;
 		SLIST_INSERT_HEAD(&device->periphs, periph, periph_links);
 		mtx_unlock(&device->target->bus->eb_mtx);
+		atomic_add_32(&xsoftc.xpt_generation, 1);
 	}
 
 	return (status);
@@ -997,6 +1002,7 @@ xpt_remove_periph(struct cam_periph *periph)
 		device->generation++;
 		SLIST_REMOVE(&device->periphs, periph, cam_periph, periph_links);
 		mtx_unlock(&device->target->bus->eb_mtx);
+		atomic_add_32(&xsoftc.xpt_generation, 1);
 	}
 }
 
@@ -3331,7 +3337,8 @@ xpt_merge_ccb(union ccb *master_ccb, union ccb *slave_ccb)
 }
 
 void
-xpt_setup_ccb(struct ccb_hdr *ccb_h, struct cam_path *path, u_int32_t priority)
+xpt_setup_ccb_flags(struct ccb_hdr *ccb_h, struct cam_path *path,
+		    u_int32_t priority, u_int32_t flags)
 {
 
 	CAM_DEBUG(path, CAM_DEBUG_TRACE, ("xpt_setup_ccb\n"));
@@ -3349,8 +3356,14 @@ xpt_setup_ccb(struct ccb_hdr *ccb_h, struct cam_path *path, u_int32_t priority)
 		ccb_h->target_lun = CAM_TARGET_WILDCARD;
 	}
 	ccb_h->pinfo.index = CAM_UNQUEUED_INDEX;
-	ccb_h->flags = 0;
+	ccb_h->flags = flags;
 	ccb_h->xflags = 0;
+}
+
+void
+xpt_setup_ccb(struct ccb_hdr *ccb_h, struct cam_path *path, u_int32_t priority)
+{
+	xpt_setup_ccb_flags(ccb_h, path, priority, /*flags*/ 0);
 }
 
 /* Path manipulation functions */
@@ -4262,8 +4275,10 @@ xpt_async(u_int32_t async_code, struct cam_path *path, void *async_arg)
 		}
 		memcpy(ccb->casync.async_arg_ptr, async_arg, size);
 		ccb->casync.async_arg_size = size;
-	} else if (size < 0)
+	} else if (size < 0) {
+		ccb->casync.async_arg_ptr = async_arg;
 		ccb->casync.async_arg_size = size;
+	}
 	if (path->device != NULL && path->device->lun_id != CAM_LUN_WILDCARD)
 		xpt_freeze_devq(path, 1);
 	else
@@ -4521,7 +4536,7 @@ xpt_get_ccb_nowait(struct cam_periph *periph)
 {
 	union ccb *new_ccb;
 
-	new_ccb = malloc(sizeof(*new_ccb), M_CAMCCB, M_NOWAIT);
+	new_ccb = malloc(sizeof(*new_ccb), M_CAMCCB, M_ZERO|M_NOWAIT);
 	if (new_ccb == NULL)
 		return (NULL);
 	periph->periph_allocated++;
@@ -4535,7 +4550,7 @@ xpt_get_ccb(struct cam_periph *periph)
 	union ccb *new_ccb;
 
 	cam_periph_unlock(periph);
-	new_ccb = malloc(sizeof(*new_ccb), M_CAMCCB, M_WAITOK);
+	new_ccb = malloc(sizeof(*new_ccb), M_CAMCCB, M_ZERO|M_WAITOK);
 	cam_periph_lock(periph);
 	periph->periph_allocated++;
 	cam_ccbq_take_opening(&periph->path->device->ccbq);

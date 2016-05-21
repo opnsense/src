@@ -94,6 +94,7 @@ MAN=	aac.4 \
 	${_ccd.4} \
 	cd.4 \
 	cdce.4 \
+	cfi.4 \
 	ch.4 \
 	ciss.4 \
 	cm.4 \
@@ -208,6 +209,7 @@ MAN=	aac.4 \
 	ipw.4 \
 	ipwfw.4 \
 	isci.4 \
+	ismt.4 \
 	isp.4 \
 	ispfw.4 \
 	iwi.4 \
@@ -260,6 +262,7 @@ MAN=	aac.4 \
 	mk48txx.4 \
 	mld.4 \
 	mlx.4 \
+	mlx5en.4 \
 	mly.4 \
 	mmc.4 \
 	mmcsd.4 \
@@ -297,7 +300,6 @@ MAN=	aac.4 \
 	ng_atm.4 \
 	ngatmbase.4 \
 	ng_atmllc.4 \
-	ng_bluetooth.4 \
 	ng_bpf.4 \
 	ng_bridge.4 \
 	ng_bt3c.4 \
@@ -574,6 +576,7 @@ MLINKS+=bwn.4 if_bwn.4
 MLINKS+=${_bxe.4} ${_if_bxe.4}
 MLINKS+=cas.4 if_cas.4
 MLINKS+=cdce.4 if_cdce.4
+MLINKS+=cfi.4 cfid.4
 MLINKS+=crypto.4 cryptodev.4
 MLINKS+=cue.4 if_cue.4
 MLINKS+=cxgb.4 if_cxgb.4
@@ -637,6 +640,7 @@ MLINKS+=lp.4 plip.4
 MLINKS+=malo.4 if_malo.4
 MLINKS+=md.4 vn.4
 MLINKS+=mem.4 kmem.4
+MLINKS+=mlx5en.4 mce.4
 MLINKS+=mn.4 if_mn.4
 MLINKS+=mos.4 if_mos.4
 MLINKS+=msk.4 if_msk.4
@@ -658,6 +662,7 @@ MLINKS+=pccbb.4 cbb.4
 MLINKS+=pcm.4 snd.4 \
 	pcm.4 sound.4
 MLINKS+=pcn.4 if_pcn.4
+MLINKS+=pms.4 pmspcv.4
 MLINKS+=ral.4 if_ral.4
 MLINKS+=re.4 if_re.4
 MLINKS+=rl.4 if_rl.4
@@ -813,6 +818,10 @@ _nvram2env.4=	nvram2env.4
 
 .if exists(${.CURDIR}/man4.${MACHINE_CPUARCH})
 SUBDIR=	man4.${MACHINE_CPUARCH}
+.endif
+
+.if ${MK_BLUETOOTH} != "no"
+MAN+=		ng_bluetooth.4
 .endif
 
 .if ${MK_CCD} != "no"

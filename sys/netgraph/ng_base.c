@@ -64,11 +64,6 @@
 #include <sys/unistd.h>
 #include <machine/cpu.h>
 
-#include <sys/socket.h>
-#include <net/if.h>
-#include <net/if_types.h>
-#include <net/if_var.h>
-
 #include <net/netisr.h>
 #include <net/vnet.h>
 
@@ -244,8 +239,6 @@ int	ng_make_node(const char *type, node_p *nodepp);
 int	ng_path_parse(char *addr, char **node, char **path, char **hook);
 void	ng_rmnode(node_p node, hook_p dummy1, void *dummy2, int dummy3);
 void	ng_unname(node_p node);
-
-extern void    (*ng_ether_attach_p)(struct ifnet *ifp);
 
 /* Our own netgraph malloc type */
 MALLOC_DEFINE(M_NETGRAPH, "netgraph", "netgraph structures and ctrl messages");
@@ -581,13 +574,6 @@ static const struct ng_cmdlist ng_generic_cmds[] = {
 	  &ng_parse_ng_mesg_type,
 	  &ng_parse_ng_mesg_type
 	},
-	{
-          NGM_GENERIC_COOKIE,
-          NGM_ETHER_ATTACH,
-          "attach",
-          &ng_parse_string_type,
-          NULL
-        },
 	{ 0 }
 };
 
@@ -2922,22 +2908,6 @@ ng_generic_msg(node_p here, item_p item, hook_p lasthook)
 		break;
 	    }
 
-	case NGM_ETHER_ATTACH:
-		{
-			struct ifnet *ifp = ifunit((char *)msg->data);
-
-			if (ng_ether_attach_p) {
-				if (ifp && (ifp->if_type == IFT_ETHER ||
-				    ifp->if_type == IFT_L2VLAN)) {
-					ng_ether_attach_p(ifp);
-				} else {
-					error = ENOENT;
-				}
-			}
-				
-			break;
-                }
-
 	case NGM_TEXT_CONFIG:
 	case NGM_TEXT_STATUS:
 		/*
@@ -2977,7 +2947,7 @@ uma_zone_t			ng_qzone;
 uma_zone_t			ng_qdzone;
 static int			numthreads = 0; /* number of queue threads */
 static int			maxalloc = 4096;/* limit the damage of a leak */
-static int			maxdata = 512;	/* limit the damage of a DoS */
+static int			maxdata = 4096;	/* limit the damage of a DoS */
 
 TUNABLE_INT("net.graph.threads", &numthreads);
 SYSCTL_INT(_net_graph, OID_AUTO, threads, CTLFLAG_RDTUN, &numthreads,

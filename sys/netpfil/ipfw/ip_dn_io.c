@@ -62,9 +62,6 @@ __FBSDID("$FreeBSD$");
 #include <netpfil/ipfw/ip_fw_private.h>
 #include <netpfil/ipfw/dn_heap.h>
 #include <netpfil/ipfw/ip_dn_private.h>
-#ifdef NEW_AQM
-#include <netpfil/ipfw/dn_aqm.h>
-#endif
 #include <netpfil/ipfw/dn_sched.h>
 
 /*
@@ -86,12 +83,8 @@ static long tick_diff;
 
 static unsigned long	io_pkt;
 static unsigned long	io_pkt_fast;
-
-#ifdef NEW_AQM
-unsigned long	io_pkt_drop;
-#else
 static unsigned long	io_pkt_drop;
-#endif
+
 /*
  * We use a heap to store entities for which we have pending timer events.
  * The heap is checked at every tick and all entities with expired events
@@ -154,11 +147,7 @@ SYSBEGIN(f4)
 
 SYSCTL_DECL(_net_inet);
 SYSCTL_DECL(_net_inet_ip);
-#ifdef NEW_AQM
-SYSCTL_NODE(_net_inet_ip, OID_AUTO, dummynet, CTLFLAG_RW, 0, "Dummynet");
-#else
 static SYSCTL_NODE(_net_inet_ip, OID_AUTO, dummynet, CTLFLAG_RW, 0, "Dummynet");
-#endif
 
 /* wrapper to pass dn_cfg fields to SYSCTL_* */
 //#define DC(x)	(&(VNET_NAME(_base_dn_cfg).x))
@@ -260,14 +249,6 @@ static struct dn_pkt_tag *
 dn_tag_get(struct mbuf *m)
 {
 	struct m_tag *mtag = m_tag_first(m);
-#ifdef NEW_AQM
-	/* XXX: to skip ts m_tag. For Debugging only*/
-	if (mtag != NULL && mtag->m_tag_id == DN_AQM_MTAG_TS) {
-		m_tag_delete(m,mtag); 
-		mtag = m_tag_first(m);
-		D("skip TS tag");
-	}
-#endif
 	KASSERT(mtag != NULL &&
 	    mtag->m_tag_cookie == MTAG_ABI_COMPAT &&
 	    mtag->m_tag_id == PACKET_TAG_DUMMYNET,
@@ -275,7 +256,6 @@ dn_tag_get(struct mbuf *m)
 	return (struct dn_pkt_tag *)(mtag+1);
 }
 
-#ifndef NEW_AQM
 static inline void
 mq_append(struct mq *q, struct mbuf *m)
 {
@@ -286,7 +266,6 @@ mq_append(struct mq *q, struct mbuf *m)
 	q->tail = m;
 	m->m_nextpkt = NULL;
 }
-#endif
 
 /*
  * Dispose a list of packet. Use a functions so if we need to do
@@ -358,8 +337,6 @@ red_drops (struct dn_queue *q, int len)
 		return (0);	/* accept packet */
 	}
 	if (q->avg >= fs->max_th) {	/* average queue >=  max threshold */
-		if (fs->fs.flags & DN_IS_ECN)
-			return (1);
 		if (fs->fs.flags & DN_IS_GENTLE_RED) {
 			/*
 			 * According to Gentle-RED, if avg is greater than
@@ -375,8 +352,6 @@ red_drops (struct dn_queue *q, int len)
 			return (1);
 		}
 	} else if (q->avg > fs->min_th) {
-		if (fs->fs.flags & DN_IS_ECN)
-			return (1);
 		/*
 		 * We compute p_b using the linear dropping function
 		 *	 p_b = c_1 * avg - c_2
@@ -406,73 +381,6 @@ red_drops (struct dn_queue *q, int len)
 
 	return (0);	/* accept */
 
-}
-
-/*
- * ECN/ECT Processing (partially adopted from altq)
- */
-#ifndef NEW_AQM
-static
-#endif
-int
-ecn_mark(struct mbuf* m)
-{
-	struct ip *ip;
-	ip = mtod(m, struct ip *);
-
-	switch (ip->ip_v) {
-	case IPVERSION:
-	{
-		u_int8_t otos;
-		int sum;
-
-		if ((ip->ip_tos & IPTOS_ECN_MASK) == IPTOS_ECN_NOTECT)
-			return (0);	/* not-ECT */
-		if ((ip->ip_tos & IPTOS_ECN_MASK) == IPTOS_ECN_CE)
-			return (1);	/* already marked */
-
-		/*
-		 * ecn-capable but not marked,
-		 * mark CE and update checksum
-		 */
-		otos = ip->ip_tos;
-		ip->ip_tos |= IPTOS_ECN_CE;
-		/*
-		 * update checksum (from RFC1624)
-		 *	   HC' = ~(~HC + ~m + m')
-		 */
-		sum = ~ntohs(ip->ip_sum) & 0xffff;
-		sum += (~otos & 0xffff) + ip->ip_tos;
-		sum = (sum >> 16) + (sum & 0xffff);
-		sum += (sum >> 16);  /* add carry */
-		ip->ip_sum = htons(~sum & 0xffff);
-		return (1);
-	}
-#ifdef INET6
-	case (IPV6_VERSION >> 4):
-	{
-		struct ip6_hdr *ip6 = mtod(m, struct ip6_hdr *);
-		u_int32_t flowlabel;
-
-		flowlabel = ntohl(ip6->ip6_flow);
-		if ((flowlabel >> 28) != 6)
-			return (0);	/* version mismatch! */
-		if ((flowlabel & (IPTOS_ECN_MASK << 20)) ==
-		    (IPTOS_ECN_NOTECT << 20))
-			return (0);	/* not-ECT */
-		if ((flowlabel & (IPTOS_ECN_MASK << 20)) ==
-		    (IPTOS_ECN_CE << 20))
-			return (1);	/* already marked */
-		/*
-		 * ecn-capable but not marked, mark CE
-		 */
-		flowlabel |= (IPTOS_ECN_CE << 20);
-		ip6->ip6_flow = htonl(flowlabel);
-		return (1);
-	}
-#endif
-	}
-	return (0);
 }
 
 /*
@@ -506,15 +414,8 @@ dn_enqueue(struct dn_queue *q, struct mbuf* m, int drop)
 		goto drop;
 	if (f->plr && random() < f->plr)
 		goto drop;
-#ifdef NEW_AQM
-	/* Call AQM enqueue function */
-	if (q->fs->aqmfp)
-		return q->fs->aqmfp->enqueue(q ,m);
-#endif
-	if (f->flags & DN_IS_RED && red_drops(q, m->m_pkthdr.len)) {
-		if (!(f->flags & DN_IS_ECN) || !ecn_mark(m))
+	if (f->flags & DN_IS_RED && red_drops(q, m->m_pkthdr.len))
 		goto drop;
-	}
 	if (f->flags & DN_QSIZE_BYTES) {
 		if (q->ni.len_bytes > f->qsize)
 			goto drop;
@@ -718,8 +619,8 @@ dummynet_task(void *context, int pending)
 		dn_drain_queue();
 	}
 
-	dn_reschedule();
 	DN_BH_WUNLOCK();
+	dn_reschedule();
 	if (q.head != NULL)
 		dummynet_send(q.head);
 	CURVNET_RESTORE();
@@ -761,7 +662,6 @@ dummynet_send(struct mbuf *m)
 			break ;
 
 		case DIR_IN :
-		        m->m_flags |= M_PROTO12;
 			netisr_dispatch(NETISR_IP, m);
 			break;
 
@@ -893,10 +793,6 @@ dummynet_io(struct mbuf **m0, int dir, struct ip_fw_args *fwa)
 	if (fs->sched->fp->enqueue(si, q, m)) {
 		/* packet was dropped by enqueue() */
 		m = *m0 = NULL;
-
-		/* dn_enqueue already increases io_pkt_drop */
-		io_pkt_drop--;
-
 		goto dropit;
 	}
 

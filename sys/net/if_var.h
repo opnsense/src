@@ -236,11 +236,12 @@ struct ifnet {
 	 * count limit does not apply. If all three fields are zero,
 	 * there is no TSO limit.
 	 *
-	 * NOTE: The TSO limits only apply to the data payload part of
-	 * a TCP/IP packet. That means there is no need to subtract
-	 * space for ethernet-, vlan-, IP- or TCP- headers from the
-	 * TSO limits unless the hardware driver in question requires
-	 * so.
+	 * NOTE: The TSO limits should reflect the values used in the
+	 * BUSDMA tag a network adapter is using to load a mbuf chain
+	 * for transmission. The TCP/IP network stack will subtract
+	 * space for all linklevel and protocol level headers and
+	 * ensure that the full mbuf chain passed to the network
+	 * adapter fits within the given limits.
 	 */
 	u_int	if_hw_tsomax;
 
@@ -846,6 +847,7 @@ struct ifaddr {
 	int	ifa_metric;		/* cost of going out this interface */
 	int (*ifa_claim_addr)		/* check if an addr goes to this if */
 		(struct ifaddr *, struct sockaddr *);
+	struct mtx ifa_mtx;
 };
 #define	IFA_ROUTE	RTF_UP		/* route installed */
 #define IFA_RTSELF	RTF_HOST	/* loopback route to self installed */
@@ -854,6 +856,8 @@ struct ifaddr {
 #define	ifa_list	ifa_link
 
 #ifdef _KERNEL
+#define	IFA_LOCK(ifa)		mtx_lock(&(ifa)->ifa_mtx)
+#define	IFA_UNLOCK(ifa)		mtx_unlock(&(ifa)->ifa_mtx)
 
 void	ifa_free(struct ifaddr *ifa);
 void	ifa_init(struct ifaddr *ifa);

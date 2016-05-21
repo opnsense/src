@@ -83,6 +83,9 @@ __FBSDID("$FreeBSD$");
 #include <netinet6/nd6.h>
 #endif
 
+#ifdef TCP_RFC7413
+#include <netinet/tcp_fastopen.h>
+#endif
 #include <netinet/tcp_fsm.h>
 #include <netinet/tcp_seq.h>
 #include <netinet/tcp_timer.h>
@@ -338,7 +341,7 @@ tcp_init(void)
 		 */
 		if (hashsize < 512)
 			hashsize = 512;
-		if (bootverbose)
+		if (bootverbose && IS_DEFAULT_VNET(curvnet))
 			printf("%s: %s auto tuned to %d\n", __func__,
 			    tcbhash_tuneable, hashsize);
 	}
@@ -397,6 +400,8 @@ tcp_init(void)
 	tcp_rexmit_min = TCPTV_MIN;
 	if (tcp_rexmit_min < 1)
 		tcp_rexmit_min = 1;
+	tcp_persmin = TCPTV_PERSMIN;
+	tcp_persmax = TCPTV_PERSMAX;
 	tcp_rexmit_slop = TCPTV_CPU_VAR;
 	tcp_finwait2_timeout = TCPTV_FINWAIT2_TIMEOUT;
 	tcp_tcbhashsize = hashsize;
@@ -427,6 +432,10 @@ tcp_init(void)
 		SHUTDOWN_PRI_DEFAULT);
 	EVENTHANDLER_REGISTER(maxsockets_change, tcp_zone_change, NULL,
 		EVENTHANDLER_PRI_ANY);
+
+#ifdef TCP_RFC7413
+	tcp_fastopen_init();
+#endif
 }
 
 #ifdef VIMAGE
@@ -434,6 +443,9 @@ void
 tcp_destroy(void)
 {
 
+#ifdef TCP_RFC7413
+	tcp_fastopen_destroy();
+#endif
 	tcp_hc_destroy();
 	syncache_destroy();
 	tcp_tw_destroy();
@@ -1101,6 +1113,17 @@ tcp_close(struct tcpcb *tp)
 #ifdef TCP_OFFLOAD
 	if (tp->t_state == TCPS_LISTEN)
 		tcp_offload_listen_stop(tp);
+#endif
+#ifdef TCP_RFC7413
+	/*
+	 * This releases the TFO pending counter resource for TFO listen
+	 * sockets as well as passively-created TFO sockets that transition
+	 * from SYN_RECEIVED to CLOSED.
+	 */
+	if (tp->t_tfo_pending) {
+		tcp_fastopen_decrement_counter(tp->t_tfo_pending);
+		tp->t_tfo_pending = NULL;
+	}
 #endif
 	in_pcbdrop(inp);
 	TCPSTAT_INC(tcps_closed);
@@ -1947,7 +1970,8 @@ ipsec_hdrsiz_tcp(struct tcpcb *tp)
 #endif
 	struct tcphdr *th;
 
-	if ((tp == NULL) || ((inp = tp->t_inpcb) == NULL))
+	if ((tp == NULL) || ((inp = tp->t_inpcb) == NULL) ||
+		(!key_havesp(IPSEC_DIR_OUTBOUND)))
 		return (0);
 	m = m_gethdr(M_NOWAIT, MT_DATA);
 	if (!m)

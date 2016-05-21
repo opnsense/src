@@ -107,6 +107,13 @@ clflush(u_long addr)
 }
 
 static __inline void
+clflushopt(u_long addr)
+{
+
+	__asm __volatile(".byte 0x66;clflush %0" : : "m" (*(char *)addr));
+}
+
+static __inline void
 clts(void)
 {
 
@@ -154,6 +161,14 @@ ffsl(long mask)
 	return (mask == 0 ? mask : (int)bsfq((u_long)mask) + 1);
 }
 
+#define	HAVE_INLINE_FFSLL
+
+static __inline int
+ffsll(long long mask)
+{
+	return (ffsl((long)mask));
+}
+
 #define	HAVE_INLINE_FLS
 
 static __inline int
@@ -168,6 +183,14 @@ static __inline int
 flsl(long mask)
 {
 	return (mask == 0 ? mask : (int)bsrq((u_long)mask) + 1);
+}
+
+#define	HAVE_INLINE_FLSLL
+
+static __inline int
+flsll(long long mask)
+{
+	return (flsl((long)mask));
 }
 
 #endif /* _KERNEL */

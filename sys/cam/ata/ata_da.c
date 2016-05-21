@@ -233,13 +233,28 @@ static struct ada_quirk_entry ada_quirk_table[] =
 		/*quirks*/ADA_Q_4K
 	},
 	{
+		/* WDC Caviar Red Advanced Format (4k) drives */
+		{ T_DIRECT, SIP_MEDIA_FIXED, "*", "WDC WD????CX*", "*" },
+		/*quirks*/ADA_Q_4K
+	},
+	{
 		/* WDC Caviar Green Advanced Format (4k) drives */
 		{ T_DIRECT, SIP_MEDIA_FIXED, "*", "WDC WD????RS*", "*" },
 		/*quirks*/ADA_Q_4K
 	},
 	{
-		/* WDC Caviar Green Advanced Format (4k) drives */
+		/* WDC Caviar Green/Red Advanced Format (4k) drives */
 		{ T_DIRECT, SIP_MEDIA_FIXED, "*", "WDC WD????RX*", "*" },
+		/*quirks*/ADA_Q_4K
+	},
+	{
+		/* WDC Caviar Red Advanced Format (4k) drives */
+		{ T_DIRECT, SIP_MEDIA_FIXED, "*", "WDC WD??????CX*", "*" },
+		/*quirks*/ADA_Q_4K
+	},
+	{
+		/* WDC Caviar Black Advanced Format (4k) drives */
+		{ T_DIRECT, SIP_MEDIA_FIXED, "*", "WDC WD??????EX*", "*" },
 		/*quirks*/ADA_Q_4K
 	},
 	{
@@ -627,8 +642,6 @@ static struct periph_driver adadriver =
 
 PERIPHDRIVER_DECLARE(ada, adadriver);
 
-static MALLOC_DEFINE(M_ATADA, "ata_da", "ata_da buffers");
-
 static int
 adaopen(struct disk *dp)
 {
@@ -760,10 +773,6 @@ adastrategy(struct bio *bp)
 	 * Place it in the queue of disk activities for this disk
 	 */
 	if (bp->bio_cmd == BIO_DELETE) {
-		KASSERT((softc->flags & ADA_FLAG_CAN_TRIM) ||
-			((softc->flags & ADA_FLAG_CAN_CFA) &&
-			 !(softc->flags & ADA_FLAG_CAN_48BIT)),
-			("BIO_DELETE but no supported TRIM method."));
 		bioq_disksort(&softc->trim_queue, bp);
 	} else {
 		if (ADA_SIO)
@@ -1361,12 +1370,9 @@ adaregister(struct cam_periph *periph, void *arg)
 
 	dp = &softc->params;
 	snprintf(announce_buf, sizeof(announce_buf),
-		"%juMB (%ju %u byte sectors: %dH %dS/T %dC)",
-		(uintmax_t)(((uintmax_t)dp->secsize *
-		dp->sectors) / (1024*1024)),
-		(uintmax_t)dp->sectors,
-		dp->secsize, dp->heads,
-		dp->secs_per_track, dp->cylinders);
+	    "%juMB (%ju %u byte sectors)",
+	    ((uintmax_t)dp->secsize * dp->sectors) / (1024 * 1024),
+	    (uintmax_t)dp->sectors, dp->secsize);
 	xpt_announce_periph(periph, announce_buf);
 	xpt_announce_quirks(periph, softc->quirks, ADA_Q_BIT_STRING);
 	if (legacy_id >= 0)
@@ -1537,7 +1543,12 @@ adastart(struct cam_periph *periph, union ccb *start_ccb)
 			    !(softc->flags & ADA_FLAG_CAN_48BIT)) {
 				ada_cfaerase(softc, bp, ataio);
 			} else {
-				panic("adastart: BIO_DELETE without method, not possible.");
+				/* This can happen if DMA was disabled. */
+				bioq_remove(&softc->trim_queue, bp);
+				biofinish(bp, NULL, EOPNOTSUPP);
+				xpt_release_ccb(start_ccb);
+				adaschedule(periph);
+				return;
 			}
 			softc->trim_running = 1;
 			start_ccb->ccb_h.ccb_state = ADA_CCB_TRIM;
@@ -1562,12 +1573,26 @@ adastart(struct cam_periph *periph, union ccb *start_ccb)
 		}
 		switch (bp->bio_cmd) {
 		case BIO_WRITE:
-			softc->flags |= ADA_FLAG_DIRTY;
-			/* FALLTHROUGH */
 		case BIO_READ:
 		{
 			uint64_t lba = bp->bio_pblkno;
 			uint16_t count = bp->bio_bcount / softc->params.secsize;
+			void *data_ptr;
+			int rw_op;
+
+			if (bp->bio_cmd == BIO_WRITE) {
+				softc->flags |= ADA_FLAG_DIRTY;
+				rw_op = CAM_DIR_OUT;
+			} else {
+				rw_op = CAM_DIR_IN;
+			}
+
+			data_ptr = bp->bio_data;
+			if ((bp->bio_flags & (BIO_UNMAPPED|BIO_VLIST)) != 0) {
+				rw_op |= CAM_DATA_BIO;
+				data_ptr = bp;
+			}
+
 #ifdef ADA_TEST_FAILURE
 			int fail = 0;
 
@@ -1599,9 +1624,7 @@ adastart(struct cam_periph *periph, union ccb *start_ccb)
 				}
 			}
 			if (fail) {
-				bp->bio_error = EIO;
-				bp->bio_flags |= BIO_ERROR;
-				biodone(bp);
+				biofinish(bp, NULL, EIO);
 				xpt_release_ccb(start_ccb);
 				adaschedule(periph);
 				return;
@@ -1614,12 +1637,9 @@ adastart(struct cam_periph *periph, union ccb *start_ccb)
 			cam_fill_ataio(ataio,
 			    ada_retry_count,
 			    adadone,
-			    (bp->bio_cmd == BIO_READ ? CAM_DIR_IN :
-				CAM_DIR_OUT) | ((bp->bio_flags & BIO_UNMAPPED)
-				!= 0 ? CAM_DATA_BIO : 0),
+			    rw_op,
 			    tag_code,
-			    ((bp->bio_flags & BIO_UNMAPPED) != 0) ? (void *)bp :
-				bp->bio_data,
+			    data_ptr,
 			    bp->bio_bcount,
 			    ada_default_timeout*1000);
 
@@ -1798,6 +1818,16 @@ adadone(struct cam_periph *periph, union ccb *done_ccb)
 
 			TAILQ_INIT(&queue);
 			TAILQ_CONCAT(&queue, &softc->trim_req.bps, bio_queue);
+			/*
+			 * Normally, the xpt_release_ccb() above would make sure
+			 * that when we have more work to do, that work would
+			 * get kicked off. However, we specifically keep
+			 * trim_running set to 0 before the call above to allow
+			 * other I/O to progress when many BIO_DELETE requests
+			 * are pushed down. We set trim_running to 0 and call
+			 * daschedule again so that we don't stall if there are
+			 * no other I/Os pending apart from BIO_DELETEs.
+			 */
 			softc->trim_running = 0;
 			adaschedule(periph);
 			cam_periph_unlock(periph);

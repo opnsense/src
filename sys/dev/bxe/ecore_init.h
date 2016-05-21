@@ -750,9 +750,9 @@ static inline void ecore_set_mcp_parity(struct bxe_softc *sc, uint8_t enable)
 		reg_val = REG_RD(sc, mcp_attn_ctl_regs[i].addr);
 
 		if (enable)
-			reg_val |= MISC_AEU_ENABLE_MCP_PRTY_BITS; /* Linux is using mcp_attn_ctl_regs[i].bits */
+			reg_val |= mcp_attn_ctl_regs[i].bits;
 		else
-			reg_val &= ~MISC_AEU_ENABLE_MCP_PRTY_BITS; /* Linux is using mcp_attn_ctl_regs[i].bits */
+			reg_val &= ~mcp_attn_ctl_regs[i].bits;
 
 		REG_WR(sc, mcp_attn_ctl_regs[i].addr, reg_val);
 	}

@@ -170,6 +170,7 @@ struct procdesc;
 struct racct;
 struct sbuf;
 struct sleepqueue;
+struct syscall_args;
 struct td_sched;
 struct thread;
 struct trapframe;
@@ -286,7 +287,6 @@ struct thread {
 	u_char		td_pri_class;	/* (t) Scheduling class. */
 	u_char		td_user_pri;	/* (t) User pri from estcpu and nice. */
 	u_char		td_base_user_pri; /* (t) Base user pri */
-	uint32_t	td_pax;		/* (b) Cached PaX settings from process. */
 #define	td_endcopy td_pcb
 
 /*
@@ -321,6 +321,9 @@ struct thread {
 	struct vm_page	**td_ma;	/* (k) uio pages held */
 	int		td_ma_cnt;	/* (k) size of *td_ma */
 	void		*td_su;		/* (k) FFS SU private */
+	u_int		td_dbg_sc_code;	/* (c) Syscall code to debugger. */
+	u_int		td_dbg_sc_narg;	/* (c) Syscall arg count to debugger.*/
+	void		*td_emuldata;	/* Emulator state data */
 };
 
 struct mtx *thread_lock_block(struct thread *);
@@ -556,18 +559,12 @@ struct proc {
 	int		p_osrel;	/* (x) osreldate for the
 					       binary (from ELF note, if any) */
 	char		p_comm[MAXCOMLEN + 1];	/* (b) Process name. */
-	struct pgrp	*p_pgrp;	/* (c + e) Pointer to process group. */
+	void		*p_pad0;
 	struct sysentvec *p_sysent;	/* (b) Syscall dispatch info. */
 	struct pargs	*p_args;	/* (c) Process arguments. */
 	rlim_t		p_cpulimit;	/* (c) Current CPU limit in seconds. */
 	signed char	p_nice;		/* (c) Process "nice" value. */
 	int		p_fibnum;	/* in this routing domain XXX MRT */
-	uint32_t	p_pax;		/* (b) PaX is enabled to this process */
-	vm_offset_t	p_usrstack;	/* (b) Process stack top. */
-	vm_offset_t	p_psstrings;	/* (b) Process psstrings address. */
-	vm_offset_t	p_timekeep_base;	/* (c) Address of timekeep structure. */
-	vm_offset_t	p_shared_page_base;	/* (c) Address of shared page. */
-	vm_offset_t	p_sigcode_base;	/* Address of sigcode. */
 /* End area that is copied on creation. */
 #define	p_endcopy	p_xstat
 
@@ -608,6 +605,7 @@ struct proc {
 	pid_t		p_reapsubtree;	/* (e) Pid of the direct child of the
 					       reaper which spawned
 					       our subtree. */
+	struct pgrp	*p_pgrp;	/* (c + e) Pointer to process group. */
 };
 
 #define	p_session	p_pgrp->pg_session
@@ -618,6 +616,18 @@ struct proc {
 #define	PROC_SLOCK(p)	mtx_lock_spin(&(p)->p_slock)
 #define	PROC_SUNLOCK(p)	mtx_unlock_spin(&(p)->p_slock)
 #define	PROC_SLOCK_ASSERT(p, type)	mtx_assert(&(p)->p_slock, (type))
+
+#define	PROC_STATLOCK(p)	mtx_lock_spin(&(p)->p_slock)
+#define	PROC_STATUNLOCK(p)	mtx_unlock_spin(&(p)->p_slock)
+#define	PROC_STATLOCK_ASSERT(p, type)	mtx_assert(&(p)->p_slock, (type))
+
+#define	PROC_ITIMLOCK(p)	mtx_lock_spin(&(p)->p_slock)
+#define	PROC_ITIMUNLOCK(p)	mtx_unlock_spin(&(p)->p_slock)
+#define	PROC_ITIMLOCK_ASSERT(p, type)	mtx_assert(&(p)->p_slock, (type))
+
+#define	PROC_PROFLOCK(p)	mtx_lock_spin(&(p)->p_slock)
+#define	PROC_PROFUNLOCK(p)	mtx_unlock_spin(&(p)->p_slock)
+#define	PROC_PROFLOCK_ASSERT(p, type)	mtx_assert(&(p)->p_slock, (type))
 
 /* These flags are kept in p_flag. */
 #define	P_ADVLOCK	0x00001	/* Process may hold a POSIX advisory lock. */
@@ -941,7 +951,6 @@ void	userret(struct thread *, struct trapframe *);
 
 void	cpu_exit(struct thread *);
 void	exit1(struct thread *, int) __dead2;
-struct syscall_args;
 int	cpu_fetch_syscall_args(struct thread *td, struct syscall_args *sa);
 void	cpu_fork(struct thread *, struct proc *, struct thread *, int);
 void	cpu_set_fork_handler(struct thread *, void (*)(void *), void *);
@@ -958,6 +967,8 @@ void	cpu_thread_swapin(struct thread *);
 void	cpu_thread_swapout(struct thread *);
 struct	thread *thread_alloc(int pages);
 int	thread_alloc_stack(struct thread *, int pages);
+int	thread_create(struct thread *td, struct rtprio *rtp,
+	    int (*initialize_thread)(struct thread *, void *), void *thunk);
 void	thread_exit(void) __dead2;
 void	thread_free(struct thread *td);
 void	thread_link(struct thread *td, struct proc *p);

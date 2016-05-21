@@ -253,6 +253,7 @@ main(int argc, char **argv)
 
 	gssd_syscall(_PATH_GSSDSOCK);
 	svc_run();
+	gssd_syscall("");
 
 	return (0);
 }
@@ -750,8 +751,8 @@ gssd_pname_to_uid_1_svc(pname_to_uid_args *argp, pname_to_uid_res *result, struc
 					buflen_hint = buflen;
 			}
 			if (pw) {
-				int len = NGRPS;
-				int groups[NGRPS];
+				int len = NGROUPS;
+				int groups[NGROUPS];
 				result->gid = pw->pw_gid;
 				getgrouplist(pw->pw_name, pw->pw_gid,
 				    groups, &len);
@@ -1284,6 +1285,7 @@ void gssd_terminate(int sig __unused)
 	if (hostbased_initiator_cred != 0)
 		unlink(GSSD_CREDENTIAL_CACHE_FILE);
 #endif
+	gssd_syscall("");
 	exit(0);
 }
 

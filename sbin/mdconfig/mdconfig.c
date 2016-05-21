@@ -88,8 +88,8 @@ usage(void)
 	fprintf(stderr, "\t\ttype = {malloc, vnode, swap}\n");
 	fprintf(stderr, "\t\toption = {cluster, compress, reserve}\n");
 	fprintf(stderr, "\t\tsize = %%d (512 byte blocks), %%db (B),\n");
-	fprintf(stderr, "\t\t       %%dk (kB), %%dm (MB), %%dg (GB) or\n");
-	fprintf(stderr, "\t\t       %%dt (TB)\n");
+	fprintf(stderr, "\t\t       %%dk (kB), %%dm (MB), %%dg (GB), \n");
+	fprintf(stderr, "\t\t       %%dt (TB), or %%dp (PB)\n");
 	exit(1);
 }
 
@@ -155,6 +155,9 @@ main(int argc, char **argv)
 			} else if (!strcmp(optarg, "swap")) {
 				mdio.md_type = MD_SWAP;
 				mdio.md_options |= MD_CLUSTER | MD_AUTOUNIT | MD_COMPRESS;
+			} else if (!strcmp(optarg, "null")) {
+				mdio.md_type = MD_NULL;
+				mdio.md_options |= MD_CLUSTER | MD_AUTOUNIT | MD_COMPRESS;
 			} else
 				errx(1, "unknown type: %s", optarg);
 			break;
@@ -214,6 +217,9 @@ main(int argc, char **argv)
 			else if (*p == 't' || *p == 'T') {
 				mdio.md_mediasize <<= 30;
 				mdio.md_mediasize <<= 10;
+			} else if (*p == 'p' || *p == 'P') {
+				mdio.md_mediasize <<= 30;
+				mdio.md_mediasize <<= 20;
 			} else
 				errx(1, "unknown suffix on -s argument");
 			break;
@@ -287,9 +293,10 @@ main(int argc, char **argv)
 			}
 		}
 
-		if ((mdio.md_type == MD_MALLOC || mdio.md_type == MD_SWAP) &&
-		    sflag == NULL)
-			errx(1, "must specify -s for -t malloc or -t swap");
+		if ((mdio.md_type == MD_MALLOC || mdio.md_type == MD_SWAP ||
+		    mdio.md_type == MD_NULL) && sflag == NULL)
+			errx(1, "must specify -s for -t malloc, -t swap, "
+			    "or -t null");
 		if (mdio.md_type == MD_VNODE && mdio.md_file[0] == '\0')
 			errx(1, "must specify -f for -t vnode");
 	} else {

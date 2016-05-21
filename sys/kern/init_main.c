@@ -46,7 +46,6 @@ __FBSDID("$FreeBSD$");
 
 #include "opt_ddb.h"
 #include "opt_init_path.h"
-#include "opt_pax.h"
 
 #include <sys/param.h>
 #include <sys/kernel.h>
@@ -61,7 +60,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/mutex.h>
 #include <sys/syscallsubr.h>
 #include <sys/sysctl.h>
-#include <sys/pax.h>
 #include <sys/proc.h>
 #include <sys/racct.h>
 #include <sys/resourcevar.h>
@@ -116,6 +114,10 @@ SYSCTL_INT(_debug, OID_AUTO, boothowto, CTLFLAG_RD, &boothowto, 0,
 int	bootverbose = BOOTVERBOSE;
 SYSCTL_INT(_debug, OID_AUTO, bootverbose, CTLFLAG_RW, &bootverbose, 0,
 	"Control the output of verbose kernel messages");
+
+#ifdef INVARIANTS
+FEATURE(invariants, "Kernel compiled with INVARIANTS, may affect performance");
+#endif
 
 /*
  * This ensures that there is at least one entry so that the sysinit_set
@@ -412,7 +414,8 @@ struct sysentvec null_sysvec = {
 	.sv_fetch_syscall_args = null_fetch_syscall_args,
 	.sv_syscallnames = NULL,
 	.sv_schedtail	= NULL,
-	.sv_pax_aslr_init	= NULL,
+	.sv_thread_detach = NULL,
+	.sv_trap	= NULL,
 };
 
 /*
@@ -476,14 +479,9 @@ proc0_init(void *dummy __unused)
 	session0.s_leader = p;
 
 	p->p_sysent = &null_sysvec;
-	p->p_flag = P_SYSTEM | P_INMEM;
+	p->p_flag = P_SYSTEM | P_INMEM | P_KTHREAD;
 	p->p_flag2 = 0;
 	p->p_state = PRS_NORMAL;
-#ifdef PAX
-	p->p_pax = PAX_NOTE_ALL_DISABLED;
-#endif
-	p->p_usrstack = USRSTACK;
-	p->p_psstrings = PS_STRINGS;
 	knlist_init_mtx(&p->p_klist, &p->p_mtx);
 	STAILQ_INIT(&p->p_ktr);
 	p->p_nice = NZERO;
@@ -501,9 +499,6 @@ proc0_init(void *dummy __unused)
 	td->td_flags = TDF_INMEM;
 	td->td_pflags = TDP_KTHREAD;
 	td->td_cpuset = cpuset_thread0();
-#ifdef PAX
-	td->td_pax = PAX_NOTE_ALL_DISABLED;
-#endif
 	prison0_init();
 	p->p_peers = 0;
 	p->p_leader = p;
@@ -615,9 +610,9 @@ proc0_post(void *dummy __unused)
 	sx_slock(&allproc_lock);
 	FOREACH_PROC_IN_SYSTEM(p) {
 		microuptime(&p->p_stats->p_start);
-		PROC_SLOCK(p);
+		PROC_STATLOCK(p);
 		rufetch(p, &ru);	/* Clears thread stats */
-		PROC_SUNLOCK(p);
+		PROC_STATUNLOCK(p);
 		p->p_rux.rux_runtime = 0;
 		p->p_rux.rux_uticks = 0;
 		p->p_rux.rux_sticks = 0;
@@ -724,7 +719,7 @@ start_init(void *dummy)
 	/*
 	 * Need just enough stack to hold the faked-up "execve()" arguments.
 	 */
-	addr = p->p_usrstack - PAGE_SIZE;
+	addr = p->p_sysent->sv_usrstack - PAGE_SIZE;
 	if (vm_map_find(&p->p_vmspace->vm_map, NULL, 0, &addr, PAGE_SIZE, 0,
 	    VMFS_NO_SPACE, VM_PROT_ALL, VM_PROT_ALL, 0) != 0)
 		panic("init: couldn't allocate argument space");
@@ -751,7 +746,7 @@ start_init(void *dummy)
 		 * Move out the boot flag argument.
 		 */
 		options = 0;
-		ucp = (char *)p->p_usrstack;
+		ucp = (char *)p->p_sysent->sv_usrstack;
 		(void)subyte(--ucp, 0);		/* trailing zero */
 		if (boothowto & RB_SINGLE) {
 			(void)subyte(--ucp, 's');

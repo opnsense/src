@@ -38,6 +38,7 @@ LIBCRYPT?=	${DESTDIR}${LIBDIR}/libcrypt.a
 LIBCRYPTO?=	${DESTDIR}${LIBDIR}/libcrypto.a
 LIBCTF?=	${DESTDIR}${LIBDIR}/libctf.a
 LIBCURSES?=	${DESTDIR}${LIBDIR}/libcurses.a
+LIBDEVCTL?=	${DESTDIR}${LIBDIR}/libdevctl.a
 LIBDEVINFO?=	${DESTDIR}${LIBDIR}/libdevinfo.a
 LIBDEVSTAT?=	${DESTDIR}${LIBDIR}/libdevstat.a
 LIBDIALOG?=	${DESTDIR}${LIBDIR}/libdialog.a
@@ -100,6 +101,7 @@ LIBNCURSES?=	${DESTDIR}${LIBDIR}/libncurses.a
 LIBNCURSESW?=	${DESTDIR}${LIBDIR}/libncursesw.a
 LIBNETGRAPH?=	${DESTDIR}${LIBDIR}/libnetgraph.a
 LIBNGATM?=	${DESTDIR}${LIBDIR}/libngatm.a
+LIBNV?=		${DESTDIR}${LIBDIR}/libnv.a
 LIBNVPAIR?=	${DESTDIR}${LIBDIR}/libnvpair.a
 LIBOPIE?=	${DESTDIR}${LIBDIR}/libopie.a
 

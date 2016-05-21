@@ -176,7 +176,7 @@ static int	if_getgroup(struct ifgroupreq *, struct ifnet *);
 static int	if_getgroupmembers(struct ifgroupreq *);
 static void	if_delgroups(struct ifnet *);
 static void	if_attach_internal(struct ifnet *, int, struct if_clone *);
-static void	if_detach_internal(struct ifnet *, int, struct if_clone **);
+static int	if_detach_internal(struct ifnet *, int, struct if_clone **);
 
 #ifdef INET6
 /*
@@ -894,7 +894,7 @@ if_detach(struct ifnet *ifp)
 	CURVNET_RESTORE();
 }
 
-static void
+static int
 if_detach_internal(struct ifnet *ifp, int vmove, struct if_clone **ifcp)
 {
 	struct ifaddr *ifa;
@@ -917,11 +917,19 @@ if_detach_internal(struct ifnet *ifp, int vmove, struct if_clone **ifcp)
 #endif
 	IFNET_WUNLOCK();
 	if (!found) {
+		/*
+		 * While we would want to panic here, we cannot
+		 * guarantee that the interface is indeed still on
+		 * the list given we don't hold locks all the way.
+		 */
+		return (ENOENT);
+#if 0
 		if (vmove)
 			panic("%s: ifp=%p not on the ifnet tailq %p",
 			    __func__, ifp, &V_ifnet);
 		else
 			return; /* XXX this should panic as well? */
+#endif
 	}
 
 	/* Check if this is a cloned interface or not. */
@@ -1019,6 +1027,8 @@ if_detach_internal(struct ifnet *ifp, int vmove, struct if_clone **ifcp)
 			(*dp->dom_ifdetach)(ifp,
 			    ifp->if_afdata[dp->dom_family]);
 	}
+
+	return (0);
 }
 
 #ifdef VIMAGE
@@ -1034,12 +1044,16 @@ if_vmove(struct ifnet *ifp, struct vnet *new_vnet)
 {
 	u_short idx;
 	struct if_clone *ifc;
+	int rc;
 
 	/*
 	 * Detach from current vnet, but preserve LLADDR info, do not
 	 * mark as dead etc. so that the ifnet can be reattached later.
+	 * If we cannot find it, we lost the race to someone else.
 	 */
-	if_detach_internal(ifp, 1, &ifc);
+	rc = if_detach_internal(ifp, 1, &ifc);
+	if (rc != 0)
+		return;
 
 	/*
 	 * Unlink the ifnet from ifindex_table[] in current vnet, and shrink
@@ -1605,6 +1619,7 @@ void
 ifa_init(struct ifaddr *ifa)
 {
 
+	mtx_init(&ifa->ifa_mtx, "ifaddr", NULL, MTX_DEF);
 	refcount_init(&ifa->ifa_refcnt, 1);
 	ifa->if_data.ifi_datalen = sizeof(ifa->if_data);
 }
@@ -1621,6 +1636,7 @@ ifa_free(struct ifaddr *ifa)
 {
 
 	if (refcount_release(&ifa->ifa_refcnt)) {
+		mtx_destroy(&ifa->ifa_mtx);
 		free(ifa, M_IFADDR);
 	}
 }
@@ -2435,9 +2451,9 @@ ifhwioctl(u_long cmd, struct ifnet *ifp, caddr_t data, struct thread *td)
 		log(LOG_INFO, "%s: changing name to '%s'\n",
 		    ifp->if_xname, new_name);
 
-		IF_ADDR_WLOCK(ifp);
 		strlcpy(ifp->if_xname, new_name, sizeof(ifp->if_xname));
 		ifa = ifp->if_addr;
+		IFA_LOCK(ifa);
 		sdl = (struct sockaddr_dl *)ifa->ifa_addr;
 		namelen = strlen(new_name);
 		onamelen = sdl->sdl_nlen;
@@ -2456,7 +2472,7 @@ ifhwioctl(u_long cmd, struct ifnet *ifp, caddr_t data, struct thread *td)
 		bzero(sdl->sdl_data, onamelen);
 		while (namelen != 0)
 			sdl->sdl_data[--namelen] = 0xff;
-		IF_ADDR_WUNLOCK(ifp);
+		IFA_UNLOCK(ifa);
 
 		EVENTHANDLER_INVOKE(ifnet_arrival_event, ifp);
 		/* Announce the return of the interface. */

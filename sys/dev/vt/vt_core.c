@@ -121,6 +121,7 @@ const struct terminal_class vt_termclass = {
 
 static SYSCTL_NODE(_kern, OID_AUTO, vt, CTLFLAG_RD, 0, "vt(9) parameters");
 VT_SYSCTL_INT(enable_altgr, 1, "Enable AltGr key (Do not assume R.Alt as Alt)");
+VT_SYSCTL_INT(enable_bell, 1, "Enable bell");
 VT_SYSCTL_INT(debug, 0, "vt(9) debug level");
 VT_SYSCTL_INT(deadtimer, 15, "Time to wait busy process in VT_PROCESS mode");
 VT_SYSCTL_INT(suspendswitch, 1, "Switch to VT0 before suspend");
@@ -251,8 +252,9 @@ vt_update_static(void *dummy)
 	if (!vty_enabled(VTY_VT))
 		return;
 	if (main_vd->vd_driver != NULL)
-		printf("VT: running with driver \"%s\".\n",
-		    main_vd->vd_driver->vd_name);
+		printf("VT(%s): %s %ux%u\n", main_vd->vd_driver->vd_name,
+		    (main_vd->vd_flags & VDF_TEXTMODE) ? "text" : "resolution",
+		    main_vd->vd_width, main_vd->vd_height);
 	else
 		printf("VT: init without driver.\n");
 
@@ -852,7 +854,9 @@ vt_processkey(keyboard_t *kbd, struct vt_device *vd, int c)
 				terminal_input_char(vw->vw_terminal, 0x1b);
 			}
 #endif
-
+#if defined(KDB)
+			kdb_alt_break(c, &vd->vd_altbrk);
+#endif
 			terminal_input_char(vw->vw_terminal, KEYCHAR(c));
 		} else
 			terminal_input_raw(vw->vw_terminal, c);
@@ -932,6 +936,9 @@ vtterm_bell(struct terminal *tm)
 	struct vt_window *vw = tm->tm_softc;
 	struct vt_device *vd = vw->vw_device;
 
+	if (!vt_enable_bell)
+		return;
+
 	if (vd->vd_flags & VDF_QUIET_BELL)
 		return;
 
@@ -942,6 +949,9 @@ static void
 vtterm_beep(struct terminal *tm, u_int param)
 {
 	u_int freq, period;
+
+	if (!vt_enable_bell)
+		return;
 
 	if ((param == 0) || ((param & 0xffff) == 0)) {
 		vtterm_bell(tm);

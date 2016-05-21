@@ -91,7 +91,7 @@ extern	void	freerecvbuf(struct recvbuf *);
 
 /* signal safe - no malloc */
 extern	struct recvbuf *get_free_recv_buffer(void);
-/* signal unsafe - may malloc, never returs NULL */
+/* signal unsafe - may malloc */
 extern	struct recvbuf *get_free_recv_buffer_alloc(void);
 
 /*   Add a buffer to the full list
@@ -113,7 +113,7 @@ extern	struct recvbuf *get_full_recv_buffer(void);
  * purge_recv_buffers_for_fd() - purges any previously-received input
  *				 from a given file descriptor.
  */
-extern	void purge_recv_buffers_for_fd(int);
+extern	void purge_recv_buffers_for_fd(SOCKET);
 
 /*
  * Checks to see if there are buffers to process

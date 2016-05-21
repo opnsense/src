@@ -90,11 +90,18 @@ int		pci_find_htcap_method(device_t dev, device_t child,
 		    int capability, int *capreg);
 int		pci_alloc_msi_method(device_t dev, device_t child, int *count);
 int		pci_alloc_msix_method(device_t dev, device_t child, int *count);
+void		pci_enable_msi_method(device_t dev, device_t child,
+		    uint64_t address, uint16_t data);
+void		pci_enable_msix_method(device_t dev, device_t child,
+		    u_int index, uint64_t address, uint32_t data);
+void		pci_disable_msi_method(device_t dev, device_t child);
 int		pci_remap_msix_method(device_t dev, device_t child,
 		    int count, const u_int *vectors);
 int		pci_release_msi_method(device_t dev, device_t child);
 int		pci_msi_count_method(device_t dev, device_t child);
 int		pci_msix_count_method(device_t dev, device_t child);
+int		pci_msix_pba_bar_method(device_t dev, device_t child);
+int		pci_msix_table_bar_method(device_t dev, device_t child);
 struct resource	*pci_alloc_resource(device_t dev, device_t child, 
 		    int type, int *rid, u_long start, u_long end, u_long count,
 		    u_int flags);
@@ -120,6 +127,7 @@ int		pci_assign_interrupt_method(device_t dev, device_t child);
 int		pci_resume(device_t dev);
 int		pci_suspend(device_t dev);
 bus_dma_tag_t pci_get_dma_tag(device_t bus, device_t dev);
+void		pci_child_added_method(device_t dev, device_t child);
 
 /** Restore the config register state.  The state must be previously
  * saved with pci_cfg_save.  However, the pci bus driver takes care of

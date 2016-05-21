@@ -272,9 +272,14 @@ int BN_mod_exp_recp(BIGNUM *r, const BIGNUM *a, const BIGNUM *p,
     }
 
     bits = BN_num_bits(p);
-
     if (bits == 0) {
-        ret = BN_one(r);
+        /* x**0 mod 1 is still zero. */
+        if (BN_is_one(m)) {
+            ret = 1;
+            BN_zero(r);
+        } else {
+            ret = BN_one(r);
+        }
         return ret;
     }
 
@@ -408,7 +413,13 @@ int BN_mod_exp_mont(BIGNUM *rr, const BIGNUM *a, const BIGNUM *p,
     }
     bits = BN_num_bits(p);
     if (bits == 0) {
-        ret = BN_one(rr);
+        /* x**0 mod 1 is still zero. */
+        if (BN_is_one(m)) {
+            ret = 1;
+            BN_zero(rr);
+        } else {
+            ret = BN_one(rr);
+        }
         return ret;
     }
 
@@ -618,7 +629,7 @@ static int MOD_EXP_CTIME_COPY_FROM_PREBUF(BIGNUM *b, int top,
  * precomputation memory layout to limit data-dependency to a minimum to
  * protect secret exponents (cf. the hyper-threading timing attacks pointed
  * out by Colin Percival,
- * http://www.daemong-consideredperthreading-considered-harmful/)
+ * http://www.daemonology.net/hyperthreading-considered-harmful/)
  */
 int BN_mod_exp_mont_consttime(BIGNUM *rr, const BIGNUM *a, const BIGNUM *p,
                               const BIGNUM *m, BN_CTX *ctx,
@@ -638,15 +649,22 @@ int BN_mod_exp_mont_consttime(BIGNUM *rr, const BIGNUM *a, const BIGNUM *p,
     bn_check_top(p);
     bn_check_top(m);
 
-    top = m->top;
-
-    if (!(m->d[0] & 1)) {
+    if (!BN_is_odd(m)) {
         BNerr(BN_F_BN_MOD_EXP_MONT_CONSTTIME, BN_R_CALLED_WITH_EVEN_MODULUS);
         return (0);
     }
+
+    top = m->top;
+
     bits = BN_num_bits(p);
     if (bits == 0) {
-        ret = BN_one(rr);
+        /* x**0 mod 1 is still zero. */
+        if (BN_is_one(m)) {
+            ret = 1;
+            BN_zero(rr);
+        } else {
+            ret = BN_one(rr);
+        }
         return ret;
     }
 
@@ -946,8 +964,9 @@ int BN_mod_exp_mont_word(BIGNUM *rr, BN_ULONG a, const BIGNUM *p,
         if (BN_is_one(m)) {
             ret = 1;
             BN_zero(rr);
-        } else
+        } else {
             ret = BN_one(rr);
+        }
         return ret;
     }
     if (a == 0) {
@@ -1061,9 +1080,14 @@ int BN_mod_exp_simple(BIGNUM *r, const BIGNUM *a, const BIGNUM *p,
     }
 
     bits = BN_num_bits(p);
-
-    if (bits == 0) {
-        ret = BN_one(r);
+   if (bits == 0) {
+        /* x**0 mod 1 is still zero. */
+        if (BN_is_one(m)) {
+            ret = 1;
+            BN_zero(r);
+        } else {
+            ret = BN_one(r);
+        }
         return ret;
     }
 

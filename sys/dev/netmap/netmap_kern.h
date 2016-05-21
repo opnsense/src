@@ -163,7 +163,6 @@ struct hrtimer {
 	} while (0)
 
 /* rate limited, lps indicates how many per second */
-#define NRD(lps, format, ...)
 #define RD(lps, format, ...)					\
 	do {							\
 		static int t0, __cnt;				\

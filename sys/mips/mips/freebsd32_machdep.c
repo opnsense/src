@@ -31,7 +31,6 @@
  */
 
 #include "opt_compat.h"
-#include "opt_pax.h"
 
 #define __ELF_WORD_SIZE 32
 
@@ -43,7 +42,6 @@
 #include <sys/exec.h>
 #include <sys/imgact.h>
 #include <sys/malloc.h>
-#include <sys/pax.h>
 #include <sys/proc.h>
 #include <sys/namei.h>
 #include <sys/fcntl.h>
@@ -108,7 +106,8 @@ struct sysentvec elf32_freebsd_sysvec = {
 	.sv_fetch_syscall_args = cpu_fetch_syscall_args,
 	.sv_syscallnames = freebsd32_syscallnames,
 	.sv_schedtail	= NULL,
-	.sv_pax_aslr_init	= pax_aslr_init_vmspace32,
+	.sv_thread_detach = NULL,
+	.sv_trap	= NULL,
 };
 INIT_SYSENTVEC(elf32_sysvec, &elf32_freebsd_sysvec);
 
@@ -421,12 +420,6 @@ freebsd32_sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 		sfp = (struct sigframe32 *)((vm_offset_t)(td->td_frame->sp - 
 		    sizeof(struct sigframe32)) & ~(sizeof(__int64_t) - 1));
 
-	/* Translate the signal if appropriate */
-	if (p->p_sysent->sv_sigtbl) {
-		if (sig <= p->p_sysent->sv_sigsize)
-			sig = p->p_sysent->sv_sigtbl[_SIG_IDX(sig)];
-	}
-
 	/* Build the argument list for the signal handler. */
 	td->td_frame->a0 = sig;
 	td->td_frame->a2 = (register_t)(intptr_t)&sfp->sf_uc;
@@ -467,7 +460,7 @@ freebsd32_sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	/*
 	 * Signal trampoline code is at base of user stack.
 	 */
-	td->td_frame->ra = (register_t)(intptr_t)p->p_psstrings - *(p->p_sysent->sv_szsigcode);
+	td->td_frame->ra = (register_t)(intptr_t)FREEBSD32_PS_STRINGS - *(p->p_sysent->sv_szsigcode);
 	PROC_LOCK(p);
 	mtx_lock(&psp->ps_mtx);
 }

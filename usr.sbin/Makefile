@@ -7,6 +7,7 @@ SUBDIR=	adduser \
 	arp \
 	binmiscctl \
 	bsdconfig \
+	camdd \
 	cdcontrol \
 	chkgrp \
 	chown \
@@ -19,11 +20,11 @@ SUBDIR=	adduser \
 	ctld \
 	daemon \
 	dconschat \
+	devctl \
 	devinfo \
 	digictl \
 	diskinfo \
 	dumpcis \
-	etcupdate \
 	extattr \
 	extattrctl \
 	fifolog \
@@ -44,6 +45,7 @@ SUBDIR=	adduser \
 	mixer \
 	mlxcontrol \
 	mountd \
+	mount_smbfs \
 	mptutil \
 	mtest \
 	${_mtree} \
@@ -73,6 +75,7 @@ SUBDIR=	adduser \
 	rtprio \
 	service \
 	services_mkdb \
+	sesutil \
 	setfib \
 	setfmac \
 	setpmac \
@@ -88,6 +91,7 @@ SUBDIR=	adduser \
 	tzsetup \
 	uefisign \
 	ugidfw \
+	vigr \
 	vipw \
 	wake \
 	watch \
@@ -299,6 +303,10 @@ SUBDIR+=	repquota
 
 .if ${MK_RCMDS} != "no"
 SUBDIR+=	rwhod
+.endif
+
+.if ${MK_RCS} != "no"
+SUBDIR+=	etcupdate
 .endif
 
 .if ${MK_SENDMAIL} != "no"

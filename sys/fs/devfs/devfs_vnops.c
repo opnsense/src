@@ -64,6 +64,7 @@
 #include <sys/vnode.h>
 
 static struct vop_vector devfs_vnodeops;
+static struct vop_vector devfs_specops;
 static struct fileops devfs_ops_f;
 
 #include <fs/devfs/devfs.h>
@@ -145,7 +146,7 @@ devfs_get_cdevpriv(void **datap)
 }
 
 int
-devfs_set_cdevpriv(void *priv, cdevpriv_dtr_t priv_dtr)
+devfs_set_cdevpriv(void *priv, d_priv_dtor_t *priv_dtr)
 {
 	struct file *fp;
 	struct cdev_priv *cdp;
@@ -238,18 +239,18 @@ devfs_populate_vp(struct vnode *vp)
 	if (DEVFS_DMP_DROP(dmp)) {
 		sx_xunlock(&dmp->dm_lock);
 		devfs_unmount_final(dmp);
-		return (EBADF);
+		return (ERESTART);
 	}
 	if ((vp->v_iflag & VI_DOOMED) != 0) {
 		sx_xunlock(&dmp->dm_lock);
-		return (EBADF);
+		return (ERESTART);
 	}
 	de = vp->v_data;
 	KASSERT(de != NULL,
 	    ("devfs_populate_vp: vp->v_data == NULL but vnode not doomed"));
 	if ((de->de_flags & DE_DOOMED) != 0) {
 		sx_xunlock(&dmp->dm_lock);
-		return (EBADF);
+		return (ERESTART);
 	}
 
 	return (0);
@@ -1113,7 +1114,7 @@ devfs_open(struct vop_open_args *ap)
 		error = dsw->d_fdopen(dev, ap->a_mode, td, fp);
 	else
 		error = dsw->d_open(dev, ap->a_mode, S_IFCHR, td);
-	/* cleanup any cdevpriv upon error */
+	/* Clean up any cdevpriv upon error. */
 	if (error != 0)
 		devfs_clear_cdevpriv();
 	td->td_fpop = fpop;
@@ -1532,11 +1533,15 @@ devfs_setattr(struct vop_setattr_args *ap)
 		return (EINVAL);
 	}
 
+	error = devfs_populate_vp(vp);
+	if (error != 0)
+		return (error);
+
 	de = vp->v_data;
 	if (vp->v_type == VDIR)
 		de = de->de_dir;
 
-	error = c = 0;
+	c = 0;
 	if (vap->va_uid == (uid_t)VNOVAL)
 		uid = de->de_uid;
 	else
@@ -1549,8 +1554,8 @@ devfs_setattr(struct vop_setattr_args *ap)
 		if ((ap->a_cred->cr_uid != de->de_uid) || uid != de->de_uid ||
 		    (gid != de->de_gid && !groupmember(gid, ap->a_cred))) {
 			error = priv_check(td, PRIV_VFS_CHOWN);
-			if (error)
-				return (error);
+			if (error != 0)
+				goto ret;
 		}
 		de->de_uid = uid;
 		de->de_gid = gid;
@@ -1560,8 +1565,8 @@ devfs_setattr(struct vop_setattr_args *ap)
 	if (vap->va_mode != (mode_t)VNOVAL) {
 		if (ap->a_cred->cr_uid != de->de_uid) {
 			error = priv_check(td, PRIV_VFS_ADMIN);
-			if (error)
-				return (error);
+			if (error != 0)
+				goto ret;
 		}
 		de->de_mode = vap->va_mode;
 		c = 1;
@@ -1570,7 +1575,7 @@ devfs_setattr(struct vop_setattr_args *ap)
 	if (vap->va_atime.tv_sec != VNOVAL || vap->va_mtime.tv_sec != VNOVAL) {
 		error = vn_utimes_perm(vp, vap, ap->a_cred, td);
 		if (error != 0)
-			return (error);
+			goto ret;
 		if (vap->va_atime.tv_sec != VNOVAL) {
 			if (vp->v_type == VCHR)
 				vp->v_rdev->si_atime = vap->va_atime;
@@ -1592,7 +1597,10 @@ devfs_setattr(struct vop_setattr_args *ap)
 		else
 			vfs_timestamp(&de->de_mtime);
 	}
-	return (0);
+
+ret:
+	sx_xunlock(&VFSTODEVFS(vp->v_mount)->dm_lock);
+	return (error);
 }
 
 #ifdef MAC
@@ -1763,7 +1771,7 @@ static struct vop_vector devfs_vnodeops = {
 	.vop_vptocnp =		devfs_vptocnp,
 };
 
-struct vop_vector devfs_specops = {
+static struct vop_vector devfs_specops = {
 	.vop_default =		&default_vnodeops,
 
 	.vop_access =		devfs_access,

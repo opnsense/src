@@ -485,7 +485,7 @@ os_nt:		.ascii "Windows NT/X";	.byte 'P'|0x80
 os_windows:	.ascii "Window";	.byte 's'|0x80
 os_unix:	.ascii "UNI";		.byte 'X'|0x80
 os_linux:	.ascii "Linu";		.byte 'x'|0x80
-os_freebsd:	.ascii "OPNsens";	.byte 'e'|0x80
+os_freebsd:	.ascii "FreeBS";	.byte 'D'|0x80
 os_openbsd:	.ascii "OpenBS";	.byte 'D'|0x80
 os_netbsd:	.ascii "NetBS";		.byte 'D'|0x80
 os_bsdos:	.ascii "BSD/O";		.byte 'S'|0x80

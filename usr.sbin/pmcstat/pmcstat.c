@@ -116,11 +116,10 @@ struct pmcstat_args args;
 static void
 pmcstat_clone_event_descriptor(struct pmcstat_ev *ev, const cpuset_t *cpumask)
 {
-	int cpu, mcpu;
+	int cpu;
 	struct pmcstat_ev *ev_clone;
 
-	mcpu = sizeof(*cpumask) * NBBY;
-	for (cpu = 0; cpu < mcpu; cpu++) {
+	for (cpu = 0; cpu < CPU_SETSIZE; cpu++) {
 		if (!CPU_ISSET(cpu, cpumask))
 			continue;
 
@@ -161,6 +160,7 @@ pmcstat_get_cpumask(const char *cpuspec, cpuset_t *cpumask)
 		CPU_SET(cpu, cpumask);
 		s = end + strspn(end, ", \t");
 	} while (*s);
+	assert(!CPU_EMPTY(cpumask));
 }
 
 void
@@ -506,6 +506,7 @@ pmcstat_show_usage(void)
 	    "\t -a <file>\t print sampled PCs and callgraph to \"file\"\n"
 	    "\t -c cpu-list\t set cpus for subsequent system-wide PMCs\n"
 	    "\t -d\t\t (toggle) track descendants\n"
+	    "\t -e\t\t use wide history counter for gprof(1) output\n"
 	    "\t -f spec\t pass \"spec\" to as plugin option\n"
 	    "\t -g\t\t produce gprof(1) compatible profiles\n"
 	    "\t -k dir\t\t set the path to the kernel\n"
@@ -550,10 +551,10 @@ pmcstat_topexit(void)
 int
 main(int argc, char **argv)
 {
-	cpuset_t cpumask;
+	cpuset_t cpumask, rootmask;
 	double interval;
 	double duration;
-	int hcpu, option, npmc, ncpu;
+	int option, npmc;
 	int c, check_driver_stats, current_sampling_count;
 	int do_callchain, do_descendants, do_logproccsw, do_logprocexit;
 	int do_print, do_read;
@@ -618,17 +619,16 @@ main(int argc, char **argv)
 		err(EX_OSERR, "ERROR: Cannot determine path of running kernel");
 
 	/*
-	 * The initial CPU mask specifies all non-halted CPUS in the
-	 * system.
+	 * The initial CPU mask specifies the root mask of this process
+	 * which is usually all CPUs in the system.
 	 */
-	len = sizeof(int);
-	if (sysctlbyname("hw.ncpu", &ncpu, &len, NULL, 0) < 0)
-		err(EX_OSERR, "ERROR: Cannot determine the number of CPUs");
-	for (hcpu = 0; hcpu < ncpu; hcpu++)
-		CPU_SET(hcpu, &cpumask);
+	if (cpuset_getaffinity(CPU_LEVEL_ROOT, CPU_WHICH_PID, -1,
+	    sizeof(rootmask), &rootmask) == -1)
+		err(EX_OSERR, "ERROR: Cannot determine the root set of CPUs");
+	CPU_COPY(&rootmask, &cpumask);
 
 	while ((option = getopt(argc, argv,
-	    "CD:EF:G:M:NO:P:R:S:TWa:c:df:gk:l:m:n:o:p:qr:s:t:vw:z:")) != -1)
+	    "CD:EF:G:M:NO:P:R:S:TWa:c:def:gk:l:m:n:o:p:qr:s:t:vw:z:")) != -1)
 		switch (option) {
 		case 'a':	/* Annotate + callgraph */
 			args.pa_flags |= FLAG_DO_ANNOTATE;
@@ -642,11 +642,9 @@ main(int argc, char **argv)
 			break;
 
 		case 'c':	/* CPU */
-
-			if (optarg[0] == '*' && optarg[1] == '\0') {
-				for (hcpu = 0; hcpu < ncpu; hcpu++)
-					CPU_SET(hcpu, &cpumask);
-			} else
+			if (optarg[0] == '*' && optarg[1] == '\0')
+				CPU_COPY(&rootmask, &cpumask);
+			else
 				pmcstat_get_cpumask(optarg, &cpumask);
 
 			args.pa_flags	 |= FLAGS_HAS_CPUMASK;
@@ -669,6 +667,10 @@ main(int argc, char **argv)
 		case 'd':	/* toggle descendents */
 			do_descendants = !do_descendants;
 			args.pa_required |= FLAG_HAS_PROCESS_PMCS;
+			break;
+
+		case 'e':	/* wide gprof metrics */
+			args.pa_flags |= FLAG_DO_WIDE_GPROF_HC;
 			break;
 
 		case 'F':	/* produce a system-wide calltree */
@@ -771,13 +773,9 @@ main(int argc, char **argv)
 			else
 				ev->ev_count = -1;
 
-			if (option == 'S' || option == 's') {
-				hcpu = sizeof(cpumask) * NBBY;
-				for (hcpu--; hcpu >= 0; hcpu--)
-					if (CPU_ISSET(hcpu, &cpumask))
-						break;
-				ev->ev_cpu = hcpu;
-			} else
+			if (option == 'S' || option == 's')
+				ev->ev_cpu = CPU_FFS(&cpumask) - 1;
+			else
 				ev->ev_cpu = PMC_CPU_ANY;
 
 			ev->ev_flags = 0;
@@ -804,11 +802,9 @@ main(int argc, char **argv)
 			STAILQ_INSERT_TAIL(&args.pa_events, ev, ev_next);
 
 			if (option == 's' || option == 'S') {
-				hcpu = CPU_ISSET(ev->ev_cpu, &cpumask);
 				CPU_CLR(ev->ev_cpu, &cpumask);
 				pmcstat_clone_event_descriptor(ev, &cpumask);
-				if (hcpu != 0)
-					CPU_SET(ev->ev_cpu, &cpumask);
+				CPU_SET(ev->ev_cpu, &cpumask);
 			}
 
 			break;
@@ -947,7 +943,7 @@ main(int argc, char **argv)
 		errx(EX_USAGE, "ERROR: options -T and -l are mutually "
 		    "exclusive.");
 
-	/* -m option is allowed with -R only. */
+	/* -a and -m require -R */
 	if (args.pa_flags & FLAG_DO_ANNOTATE && args.pa_inputpath == NULL)
 		errx(EX_USAGE, "ERROR: option %s requires an input file",
 		    args.pa_plugin == PMCSTAT_PL_ANNOTATE ? "-m" : "-a");
@@ -1029,6 +1025,13 @@ main(int argc, char **argv)
 	    !(args.pa_flags & (FLAG_HAS_SAMPLING_PMCS|FLAG_READ_LOGFILE)))
 		errx(EX_USAGE,
 "ERROR: options -g/-G/-m/-T require sampling PMCs or -R to be specified."
+		    );
+
+	/* check if -e was specified without -g */
+	if ((args.pa_flags & FLAG_DO_WIDE_GPROF_HC) &&
+	    !(args.pa_flags & FLAG_DO_GPROF))
+		errx(EX_USAGE,
+"ERROR: option -e requires gprof mode to be specified."
 		    );
 
 	/* check if -O was spuriously specified */
@@ -1509,14 +1512,24 @@ main(int argc, char **argv)
 			    "ERROR: Cannot retrieve driver statistics");
 		if (ds_start.pm_intr_bufferfull != ds_end.pm_intr_bufferfull &&
 		    args.pa_verbosity > 0)
-			warnx("WARNING: some samples were dropped.\n"
-"Please consider tuning the \"kern.hwpmc.nsamples\" tunable."
+			warnx(
+"WARNING: sampling was paused at least %u time%s.\n"
+"Please consider tuning the \"kern.hwpmc.nsamples\" tunable.",
+			    ds_end.pm_intr_bufferfull -
+			    ds_start.pm_intr_bufferfull,
+			    ((ds_end.pm_intr_bufferfull -
+			    ds_start.pm_intr_bufferfull) != 1) ? "s" : ""
 			    );
 		if (ds_start.pm_buffer_requests_failed !=
 		    ds_end.pm_buffer_requests_failed &&
 		    args.pa_verbosity > 0)
-			warnx("WARNING: some events were discarded.\n"
-"Please consider tuning the \"kern.hwpmc.nbuffers\" tunable."
+			warnx(
+"WARNING: at least %u event%s were discarded while running.\n"
+"Please consider tuning the \"kern.hwpmc.nbuffers\" tunable.",
+	 		    ds_end.pm_buffer_requests_failed -
+			    ds_start.pm_buffer_requests_failed,
+			    ((ds_end.pm_buffer_requests_failed -
+			    ds_start.pm_buffer_requests_failed) != 1) ? "s" : ""
 			    );
 	}
 

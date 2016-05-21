@@ -64,9 +64,9 @@ variable logoY
 		s" loader_logo" getenv dup -1 = over 0= or if
 			dup 0= if 2drop else drop then \ getenv result unused
 			loader_color? if
-				s" try-include /boot/logo-hourglass.4th"
+				s" try-include /boot/logo-orb.4th"
 			else
-				s" try-include /boot/logo-hourglassbw.4th"
+				s" try-include /boot/logo-orbbw.4th"
 			then
 		else
 			2drop ( c-addr/u -- ) \ getenv result unused
@@ -85,14 +85,10 @@ variable logoY
 also support-functions
 
 : beastie-start ( -- ) \ starts the menu
-	s" console" getenv dup -1 <> if
-		s" efi" 2swap contains? if
-			s" set beastie_disable=YES" evaluate
-		then
-	else drop then
 	s" beastie_disable" getenv dup -1 <> if
 		s" YES" compare-insensitive 0= if
 			any_conf_read? if
+				load_xen_throw
 				load_kernel
 				load_modules
 			then

@@ -337,7 +337,8 @@ chasync(void *callback_arg, u_int32_t code, struct cam_path *path, void *arg)
 
 		if (cgd->protocol != PROTO_SCSI)
 			break;
-
+		if (SID_QUAL(&cgd->inq_data) != SID_QUAL_LU_CONNECTED)
+			break;
 		if (SID_TYPE(&cgd->inq_data)!= T_CHANGER)
 			break;
 
@@ -371,6 +372,8 @@ chregister(struct cam_periph *periph, void *arg)
 	struct ch_softc *softc;
 	struct ccb_getdev *cgd;
 	struct ccb_pathinq cpi;
+	struct make_dev_args args;
+	int error;
 
 	cgd = (struct ccb_getdev *)arg;
 	if (cgd == NULL) {
@@ -430,11 +433,20 @@ chregister(struct cam_periph *periph, void *arg)
 
 
 	/* Register the device */
-	softc->dev = make_dev(&ch_cdevsw, periph->unit_number, UID_ROOT,
-			      GID_OPERATOR, 0600, "%s%d", periph->periph_name,
-			      periph->unit_number);
+	make_dev_args_init(&args);
+	args.mda_devsw = &ch_cdevsw;
+	args.mda_unit = periph->unit_number;
+	args.mda_uid = UID_ROOT;
+	args.mda_gid = GID_OPERATOR;
+	args.mda_mode = 0600;
+	args.mda_si_drv1 = periph;
+	error = make_dev_s(&args, &softc->dev, "%s%d", periph->periph_name,
+	    periph->unit_number);
 	cam_periph_lock(periph);
-	softc->dev->si_drv1 = periph;
+	if (error != 0) {
+		cam_periph_release_locked(periph);
+		return (CAM_REQ_CMP_ERR);
+	}
 
 	/*
 	 * Add an async callback so that we get
@@ -506,8 +518,6 @@ chclose(struct cdev *dev, int flag, int fmt, struct thread *td)
 	struct mtx *mtx;
 
 	periph = (struct cam_periph *)dev->si_drv1;
-	if (periph == NULL)
-		return(ENXIO);
 	mtx = cam_periph_mtx(periph);
 	mtx_lock(mtx);
 
@@ -654,11 +664,13 @@ chdone(struct cam_periph *periph, union ccb *done_ccb)
 				 */
 				return;
 			} else if (error != 0) {
-				int retry_scheduled;
 				struct scsi_mode_sense_6 *sms;
+				int frozen, retry_scheduled;
 
 				sms = (struct scsi_mode_sense_6 *)
 					done_ccb->csio.cdb_io.cdb_bytes;
+				frozen = (done_ccb->ccb_h.status &
+				    CAM_DEV_QFRZN) != 0;
 
 				/*
 				 * Check to see if block descriptors were
@@ -669,7 +681,8 @@ chdone(struct cam_periph *periph, union ccb *done_ccb)
 				 * block descriptors were disabled, enable
 				 * them and re-send the command.
 				 */
-				if (sms->byte2 & SMS_DBD) {
+				if ((sms->byte2 & SMS_DBD) != 0 &&
+				    (periph->flags & CAM_PERIPH_INVALID) == 0) {
 					sms->byte2 &= ~SMS_DBD;
 					xpt_action(done_ccb);
 					softc->quirks |= CH_Q_NO_DBD;
@@ -678,7 +691,7 @@ chdone(struct cam_periph *periph, union ccb *done_ccb)
 					retry_scheduled = 0;
 
 				/* Don't wedge this device's queue */
-				if ((done_ccb->ccb_h.status & CAM_DEV_QFRZN) != 0)
+				if (frozen)
 					cam_release_devq(done_ccb->ccb_h.path,
 						 /*relsim_flags*/0,
 						 /*reduction*/0,
@@ -750,9 +763,6 @@ chioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flag, struct thread *td)
 	int error;
 
 	periph = (struct cam_periph *)dev->si_drv1;
-	if (periph == NULL)
-		return(ENXIO);
-
 	cam_periph_lock(periph);
 	CAM_DEBUG(periph->path, CAM_DEBUG_TRACE, ("entering chioctl\n"));
 

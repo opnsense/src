@@ -197,6 +197,8 @@ SUBDIR=	\
 	${_linprocfs} \
 	${_linsysfs} \
 	${_linux} \
+	${_linux_common} \
+	${_linux64} \
 	lmc \
 	lpt \
 	mac_biba \
@@ -220,6 +222,8 @@ SUBDIR=	\
 	${_mlx4} \
 	${_mlx4ib} \
 	${_mlxen} \
+	${_mlx5} \
+	${_mlx5en} \
 	${_mly} \
 	mmc \
 	mmcsd \
@@ -545,6 +549,11 @@ _mlx4ib=	mlx4ib
 _mlxen=		mlxen
 _mthca=		mthca
 .endif
+_mlx5=		mlx5
+.if (${MK_INET_SUPPORT} != "no" && ${MK_INET6_SUPPORT} != "no") || \
+	defined(ALL_MODULES)
+_mlx5en=	mlx5en
+.endif
 _ncv=		ncv
 _ndis=		ndis
 _nsp=		nsp
@@ -742,12 +751,19 @@ _lindev=	lindev
 _linprocfs=	linprocfs
 _linsysfs=	linsysfs
 _linux=		linux
+_linux64=	linux64
+_linux_common=	linux_common
 _mly=		mly
 .if ${MK_OFED} != "no" || defined(ALL_MODULES)
 _mlx4=		mlx4
 _mlx4ib=	mlx4ib
 _mlxen=		mlxen
 _mthca=		mthca
+.endif
+_mlx5=		mlx5
+.if (${MK_INET_SUPPORT} != "no" && ${MK_INET6_SUPPORT} != "no") || \
+	defined(ALL_MODULES)
+_mlx5en=	mlx5en
 .endif
 _ndis=		ndis
 _nfe=		nfe

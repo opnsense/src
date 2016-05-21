@@ -231,12 +231,6 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	}
 
 	/*
-	 * Translate the signal if appropriate (Linux emu ?)
-	 */
-	if (p->p_sysent->sv_sigtbl && sig <= p->p_sysent->sv_sigsize)
-		sig = p->p_sysent->sv_sigtbl[_SIG_IDX(sig)];
-
-	/*
 	 * Save the floating-point state, if necessary, then copy it.
 	 */
 	/* XXX */
@@ -295,7 +289,7 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	mtx_unlock(&psp->ps_mtx);
 	PROC_UNLOCK(p);
 
-	tf->srr0 = (register_t)p->p_sigcode_base;
+	tf->srr0 = (register_t)p->p_sysent->sv_sigcode_base;
 
 	/*
 	 * copy the frame out to userland.

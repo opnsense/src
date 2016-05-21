@@ -270,8 +270,6 @@ nvme_attach(device_t dev)
 		return (status);
 	}
 
-	nvme_sysctl_initialize_ctrlr(ctrlr);
-
 	pci_enable_busmaster(dev);
 
 	ctrlr->config_hook.ich_func = nvme_ctrlr_start_config_hook;
@@ -389,6 +387,15 @@ nvme_notify_fail_consumers(struct nvme_controller *ctrlr)
 {
 	struct nvme_consumer	*cons;
 	uint32_t		i;
+
+	/*
+	 * This controller failed during initialization (i.e. IDENTIFY
+	 *  command failed or timed out).  Do not notify any nvme
+	 *  consumers of the failure here, since the consumer does not
+	 *  even know about the controller yet.
+	 */
+	if (!ctrlr->is_initialized)
+		return;
 
 	for (i = 0; i < NVME_MAX_CONSUMERS; i++) {
 		cons = &nvme_consumer[i];

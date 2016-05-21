@@ -139,6 +139,21 @@ struct sx proctree_lock;
 struct mtx ppeers_lock;
 uma_zone_t proc_zone;
 
+/*
+ * The offset of various fields in struct proc and struct thread.
+ * These are used by kernel debuggers to enumerate kernel threads and
+ * processes.
+ */
+const int proc_off_p_pid = offsetof(struct proc, p_pid);
+const int proc_off_p_comm = offsetof(struct proc, p_comm);
+const int proc_off_p_list = offsetof(struct proc, p_list);
+const int proc_off_p_threads = offsetof(struct proc, p_threads);
+const int thread_off_td_tid = offsetof(struct thread, td_tid);
+const int thread_off_td_name = offsetof(struct thread, td_name);
+const int thread_off_td_oncpu = offsetof(struct thread, td_oncpu);
+const int thread_off_td_pcb = offsetof(struct thread, td_pcb);
+const int thread_off_td_plist = offsetof(struct thread, td_plist);
+
 int kstack_pages = KSTACK_PAGES;
 SYSCTL_INT(_kern, OID_AUTO, kstack_pages, CTLFLAG_RD, &kstack_pages, 0,
     "Kernel stack size in pages");
@@ -181,9 +196,9 @@ proc_ctor(void *mem, int size, void *arg, int flags)
 	struct proc *p;
 
 	p = (struct proc *)mem;
-	SDT_PROBE(proc, kernel, ctor , entry, p, size, arg, flags, 0);
+	SDT_PROBE4(proc, kernel, ctor , entry, p, size, arg, flags);
 	EVENTHANDLER_INVOKE(process_ctor, p);
-	SDT_PROBE(proc, kernel, ctor , return, p, size, arg, flags, 0);
+	SDT_PROBE4(proc, kernel, ctor , return, p, size, arg, flags);
 	return (0);
 }
 
@@ -199,7 +214,7 @@ proc_dtor(void *mem, int size, void *arg)
 	/* INVARIANTS checks go here */
 	p = (struct proc *)mem;
 	td = FIRST_THREAD_IN_PROC(p);
-	SDT_PROBE(proc, kernel, dtor, entry, p, size, arg, td, 0);
+	SDT_PROBE4(proc, kernel, dtor, entry, p, size, arg, td);
 	if (td != NULL) {
 #ifdef INVARIANTS
 		KASSERT((p->p_numthreads == 1),
@@ -212,7 +227,7 @@ proc_dtor(void *mem, int size, void *arg)
 	EVENTHANDLER_INVOKE(process_dtor, p);
 	if (p->p_ksi != NULL)
 		KASSERT(! KSI_ONQ(p->p_ksi), ("SIGCHLD queue"));
-	SDT_PROBE(proc, kernel, dtor, return, p, size, arg, 0, 0);
+	SDT_PROBE3(proc, kernel, dtor, return, p, size, arg);
 }
 
 /*
@@ -224,7 +239,7 @@ proc_init(void *mem, int size, int flags)
 	struct proc *p;
 
 	p = (struct proc *)mem;
-	SDT_PROBE(proc, kernel, init, entry, p, size, flags, 0, 0);
+	SDT_PROBE3(proc, kernel, init, entry, p, size, flags);
 	p->p_sched = (struct p_sched *)&p[1];
 	bzero(&p->p_mtx, sizeof(struct mtx));
 	mtx_init(&p->p_mtx, "process lock", NULL, MTX_DEF | MTX_DUPOK);
@@ -234,7 +249,8 @@ proc_init(void *mem, int size, int flags)
 	TAILQ_INIT(&p->p_threads);	     /* all threads in proc */
 	EVENTHANDLER_INVOKE(process_init, p);
 	p->p_stats = pstats_alloc();
-	SDT_PROBE(proc, kernel, init, return, p, size, flags, 0, 0);
+	p->p_pgrp = NULL;
+	SDT_PROBE3(proc, kernel, init, return, p, size, flags);
 	return (0);
 }
 
@@ -692,7 +708,7 @@ orphanpg(pg)
 
 	LIST_FOREACH(p, &pg->pg_members, p_pglist) {
 		PROC_LOCK(p);
-		if (P_SHOULDSTOP(p)) {
+		if (P_SHOULDSTOP(p) == P_STOPPED_SIG) {
 			PROC_UNLOCK(p);
 			LIST_FOREACH(p, &pg->pg_members, p_pglist) {
 				PROC_LOCK(p);
@@ -871,11 +887,11 @@ fill_kinfo_proc_only(struct proc *p, struct kinfo_proc *kp)
 	kp->ki_fibnum = p->p_fibnum;
 	kp->ki_start = p->p_stats->p_start;
 	timevaladd(&kp->ki_start, &boottime);
-	PROC_SLOCK(p);
+	PROC_STATLOCK(p);
 	rufetch(p, &kp->ki_rusage);
 	kp->ki_runtime = cputick2usec(p->p_rux.rux_runtime);
 	calcru(p, &kp->ki_rusage.ru_utime, &kp->ki_rusage.ru_stime);
-	PROC_SUNLOCK(p);
+	PROC_STATUNLOCK(p);
 	calccru(p, &kp->ki_childutime, &kp->ki_childstime);
 	/* Some callers want child times in a single value. */
 	kp->ki_childtime = kp->ki_childstime;
@@ -940,7 +956,7 @@ fill_kinfo_thread(struct thread *td, struct kinfo_proc *kp, int preferthread)
 	PROC_LOCK_ASSERT(p, MA_OWNED);
 
 	if (preferthread)
-		PROC_SLOCK(p);
+		PROC_STATLOCK(p);
 	thread_lock(td);
 	if (td->td_wmesg != NULL)
 		strlcpy(kp->ki_wmesg, td->td_wmesg, sizeof(kp->ki_wmesg));
@@ -1007,7 +1023,7 @@ fill_kinfo_thread(struct thread *td, struct kinfo_proc *kp, int preferthread)
 	kp->ki_sigmask = td->td_sigmask;
 	thread_unlock(td);
 	if (preferthread)
-		PROC_SUNLOCK(p);
+		PROC_STATUNLOCK(p);
 }
 
 /*
@@ -1541,7 +1557,7 @@ get_proc_vector32(struct thread *td, struct proc *p, char ***proc_vectorp,
 	size_t vsize, size;
 	int i, error;
 
-	error = proc_read_mem(td, p, (vm_offset_t)(p->p_psstrings),
+	error = proc_read_mem(td, p, (vm_offset_t)(p->p_sysent->sv_psstrings),
 	    &pss, sizeof(pss));
 	if (error != 0)
 		return (error);
@@ -1617,7 +1633,7 @@ get_proc_vector(struct thread *td, struct proc *p, char ***proc_vectorp,
 	if (SV_PROC_FLAG(p, SV_ILP32) != 0)
 		return (get_proc_vector32(td, p, proc_vectorp, vsizep, type));
 #endif
-	error = proc_read_mem(td, p, (vm_offset_t)(p->p_psstrings),
+	error = proc_read_mem(td, p, (vm_offset_t)(p->p_sysent->sv_psstrings),
 	    &pss, sizeof(pss));
 	if (error != 0)
 		return (error);
@@ -2074,7 +2090,15 @@ sysctl_kern_proc_ovmmap(SYSCTL_HANDLER_ARGS)
 				vref(vp);
 				break;
 			case OBJT_SWAP:
-				kve->kve_type = KVME_TYPE_SWAP;
+				if ((lobj->flags & OBJ_TMPFS_NODE) != 0) {
+					kve->kve_type = KVME_TYPE_VNODE;
+					if ((lobj->flags & OBJ_TMPFS) != 0) {
+						vp = lobj->un_pager.swp.swp_tmpfs;
+						vref(vp);
+					}
+				} else {
+					kve->kve_type = KVME_TYPE_SWAP;
+				}
 				break;
 			case OBJT_DEVICE:
 				kve->kve_type = KVME_TYPE_DEVICE;
@@ -2204,7 +2228,7 @@ next:;
  * Must be called with the process locked and will return unlocked.
  */
 int
-kern_proc_vmmap_out(struct proc *p, struct sbuf *sb)
+kern_proc_vmmap_out(struct proc *p, struct sbuf *sb, ssize_t maxlen, int flags)
 {
 	vm_map_entry_t entry, tmp_entry;
 	struct vattr va;
@@ -2228,7 +2252,7 @@ kern_proc_vmmap_out(struct proc *p, struct sbuf *sb)
 		PRELE(p);
 		return (ESRCH);
 	}
-	kve = malloc(sizeof(*kve), M_TEMP, M_WAITOK);
+	kve = malloc(sizeof(*kve), M_TEMP, M_WAITOK | M_ZERO);
 
 	error = 0;
 	map = &vm->vm_map;
@@ -2300,7 +2324,15 @@ kern_proc_vmmap_out(struct proc *p, struct sbuf *sb)
 				vref(vp);
 				break;
 			case OBJT_SWAP:
-				kve->kve_type = KVME_TYPE_SWAP;
+				if ((lobj->flags & OBJ_TMPFS_NODE) != 0) {
+					kve->kve_type = KVME_TYPE_VNODE;
+					if ((lobj->flags & OBJ_TMPFS) != 0) {
+						vp = lobj->un_pager.swp.swp_tmpfs;
+						vref(vp);
+					}
+				} else {
+					kve->kve_type = KVME_TYPE_SWAP;
+				}
 				break;
 			case OBJT_DEVICE:
 				kve->kve_type = KVME_TYPE_DEVICE;
@@ -2355,10 +2387,23 @@ kern_proc_vmmap_out(struct proc *p, struct sbuf *sb)
 			free(freepath, M_TEMP);
 
 		/* Pack record size down */
-		kve->kve_structsize = offsetof(struct kinfo_vmentry, kve_path) +
-		    strlen(kve->kve_path) + 1;
+		if ((flags & KERN_VMMAP_PACK_KINFO) != 0)
+			kve->kve_structsize =
+			    offsetof(struct kinfo_vmentry, kve_path) +
+			    strlen(kve->kve_path) + 1;
+		else
+			kve->kve_structsize = sizeof(*kve);
 		kve->kve_structsize = roundup(kve->kve_structsize,
 		    sizeof(uint64_t));
+
+		/* Halt filling and truncate rather than exceeding maxlen */
+		if (maxlen != -1 && maxlen < kve->kve_structsize) {
+			error = 0;
+			vm_map_lock_read(map);
+			break;
+		} else if (maxlen != -1)
+			maxlen -= kve->kve_structsize;
+
 		if (sbuf_bcat(sb, kve, kve->kve_structsize) != 0)
 			error = ENOMEM;
 		vm_map_lock_read(map);
@@ -2390,7 +2435,7 @@ sysctl_kern_proc_vmmap(SYSCTL_HANDLER_ARGS)
 		sbuf_delete(&sb);
 		return (error);
 	}
-	error = kern_proc_vmmap_out(p, &sb);
+	error = kern_proc_vmmap_out(p, &sb, -1, KERN_VMMAP_PACK_KINFO);
 	error2 = sbuf_finish(&sb);
 	sbuf_delete(&sb);
 	return (error != 0 ? error : error2);
@@ -2609,13 +2654,13 @@ sysctl_kern_proc_ps_strings(SYSCTL_HANDLER_ARGS)
 		 * process.
 		 */
 		ps_strings32 = SV_PROC_FLAG(p, SV_ILP32) != 0 ?
-		    PTROUT(p->p_psstrings) : 0;
+		    PTROUT(p->p_sysent->sv_psstrings) : 0;
 		PROC_UNLOCK(p);
 		error = SYSCTL_OUT(req, &ps_strings32, sizeof(ps_strings32));
 		return (error);
 	}
 #endif
-	ps_strings = p->p_psstrings;
+	ps_strings = p->p_sysent->sv_psstrings;
 	PROC_UNLOCK(p);
 	error = SYSCTL_OUT(req, &ps_strings, sizeof(ps_strings));
 	return (error);
@@ -2719,13 +2764,13 @@ sysctl_kern_proc_sigtramp(SYSCTL_HANDLER_ARGS)
 		bzero(&kst32, sizeof(kst32));
 		if (SV_PROC_FLAG(p, SV_ILP32)) {
 			if (sv->sv_sigcode_base != 0) {
-				kst32.ksigtramp_start = p->p_sigcode_base;
-				kst32.ksigtramp_end = p->p_sigcode_base +
+				kst32.ksigtramp_start = sv->sv_sigcode_base;
+				kst32.ksigtramp_end = sv->sv_sigcode_base +
 				    *sv->sv_szsigcode;
 			} else {
-				kst32.ksigtramp_start = p->p_psstrings -
+				kst32.ksigtramp_start = sv->sv_psstrings -
 				    *sv->sv_szsigcode;
-				kst32.ksigtramp_end = p->p_psstrings;
+				kst32.ksigtramp_end = sv->sv_psstrings;
 			}
 		}
 		PROC_UNLOCK(p);
@@ -2735,13 +2780,13 @@ sysctl_kern_proc_sigtramp(SYSCTL_HANDLER_ARGS)
 #endif
 	bzero(&kst, sizeof(kst));
 	if (sv->sv_sigcode_base != 0) {
-		kst.ksigtramp_start = (char *)p->p_sigcode_base;
-		kst.ksigtramp_end = (char *)p->p_sigcode_base +
+		kst.ksigtramp_start = (char *)sv->sv_sigcode_base;
+		kst.ksigtramp_end = (char *)sv->sv_sigcode_base +
 		    *sv->sv_szsigcode;
 	} else {
-		kst.ksigtramp_start = (char *)p->p_psstrings -
+		kst.ksigtramp_start = (char *)sv->sv_psstrings -
 		    *sv->sv_szsigcode;
-		kst.ksigtramp_end = (char *)p->p_psstrings;
+		kst.ksigtramp_end = (char *)sv->sv_psstrings;
 	}
 	PROC_UNLOCK(p);
 	error = SYSCTL_OUT(req, &kst, sizeof(kst));
@@ -2782,7 +2827,7 @@ static SYSCTL_NODE(_kern_proc, KERN_PROC_PROC, proc, CTLFLAG_RD | CTLFLAG_MPSAFE
 	sysctl_kern_proc, "Return process table, no threads");
 
 static SYSCTL_NODE(_kern_proc, KERN_PROC_ARGS, args,
-	CTLFLAG_RW | CTLFLAG_ANYBODY | CTLFLAG_MPSAFE,
+	CTLFLAG_RW | CTLFLAG_CAPWR | CTLFLAG_ANYBODY | CTLFLAG_MPSAFE,
 	sysctl_kern_proc_args, "Process argument list");
 
 static SYSCTL_NODE(_kern_proc, KERN_PROC_ENV, env, CTLFLAG_RD | CTLFLAG_MPSAFE,

@@ -25,15 +25,12 @@
  * $FreeBSD$
  */
 
-#include "opt_pax.h"
-
 #include <sys/param.h>
 #include <sys/kernel.h>
 #include <sys/systm.h>
 #include <sys/exec.h>
 #include <sys/imgact.h>
 #include <sys/malloc.h>
-#include <sys/pax.h>
 #include <sys/proc.h>
 #include <sys/namei.h>
 #include <sys/fcntl.h>
@@ -86,7 +83,8 @@ struct sysentvec elf64_freebsd_sysvec = {
 	.sv_shared_page_base = SHAREDPAGE,
 	.sv_shared_page_len = PAGE_SIZE,
 	.sv_schedtail	= NULL,
-	.sv_pax_aslr_init	= pax_aslr_init_vmspace,
+	.sv_thread_detach = NULL,
+	.sv_trap	= NULL,
 };
 INIT_SYSENTVEC(elf64_sysvec, &elf64_freebsd_sysvec);
 
@@ -139,6 +137,7 @@ elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
 	Elf_Addr addend;
 	Elf_Word rtype, symidx;
 	const Elf_Rela *rela;
+	int error;
 
 	switch (type) {
 	case ELF_RELOC_REL:
@@ -157,30 +156,30 @@ elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
 
 	switch (rtype) {
 
-       	case R_PPC_NONE:
-	       	break;
+	case R_PPC_NONE:
+		break;
 
 	case R_PPC64_ADDR64:	/* doubleword64 S + A */
-       		addr = lookup(lf, symidx, 1);
-	       	if (addr == 0)
-	       		return -1;
+		error = lookup(lf, symidx, 1, &addr);
+		if (error != 0)
+			return -1;
 		addr += addend;
-	       	*where = addr;
-	       	break;
+		*where = addr;
+		break;
 
 	case R_PPC_RELATIVE:	/* doubleword64 B + A */
-       		*where = elf_relocaddr(lf, relocbase + addend);
-	       	break;
+		*where = elf_relocaddr(lf, relocbase + addend);
+		break;
 
 	case R_PPC_JMP_SLOT:	/* function descriptor copy */
-		addr = lookup(lf, symidx, 1);
+		lookup(lf, symidx, 1, &addr);
 		memcpy(where, (Elf_Addr *)addr, 3*sizeof(Elf_Addr));
 		__asm __volatile("dcbst 0,%0; sync" :: "r"(where) : "memory");
 		break;
 
 	default:
-       		printf("kldload: unexpected relocation type %d\n",
-	       	    (int) rtype);
+		printf("kldload: unexpected relocation type %d\n",
+		    (int) rtype);
 		return -1;
 	}
 	return(0);

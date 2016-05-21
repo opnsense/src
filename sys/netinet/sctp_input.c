@@ -85,7 +85,7 @@ static void
 sctp_handle_init(struct mbuf *m, int iphlen, int offset,
     struct sockaddr *src, struct sockaddr *dst, struct sctphdr *sh,
     struct sctp_init_chunk *cp, struct sctp_inpcb *inp,
-    struct sctp_tcb *stcb, int *abort_no_unlock,
+    struct sctp_tcb *stcb, struct sctp_nets *net, int *abort_no_unlock,
     uint8_t mflowtype, uint32_t mflowid,
     uint32_t vrf_id, uint16_t port)
 {
@@ -198,8 +198,8 @@ sctp_handle_init(struct mbuf *m, int iphlen, int offset,
 		sctp_chunk_output(inp, stcb, SCTP_OUTPUT_FROM_CONTROL_PROC, SCTP_SO_NOT_LOCKED);
 	} else {
 		SCTPDBG(SCTP_DEBUG_INPUT3, "sctp_handle_init: sending INIT-ACK\n");
-		sctp_send_initiate_ack(inp, stcb, m, iphlen, offset, src, dst,
-		    sh, cp,
+		sctp_send_initiate_ack(inp, stcb, net, m, iphlen, offset,
+		    src, dst, sh, cp,
 		    mflowtype, mflowid,
 		    vrf_id, port,
 		    ((stcb == NULL) ? SCTP_HOLDS_LOCK : SCTP_NOT_LOCKED));
@@ -357,14 +357,19 @@ sctp_process_init(struct sctp_init_chunk *cp, struct sctp_tcb *stcb)
 					sctp_free_a_strmoq(stcb, sp, SCTP_SO_NOT_LOCKED);
 					/* sa_ignore FREED_MEMORY */
 				}
+				outs->state = SCTP_STREAM_CLOSED;
 			}
 		}
 		/* cut back the count */
 		asoc->pre_open_streams = newcnt;
 	}
 	SCTP_TCB_SEND_UNLOCK(stcb);
-	asoc->strm_realoutsize = asoc->streamoutcnt = asoc->pre_open_streams;
-
+	asoc->streamoutcnt = asoc->pre_open_streams;
+	if (asoc->strmout) {
+		for (i = 0; i < asoc->streamoutcnt; i++) {
+			asoc->strmout[i].state = SCTP_STREAM_OPEN;
+		}
+	}
 	/* EY - nr_sack: initialize highest tsn in nr_mapping_array */
 	asoc->highest_tsn_inside_nr_map = asoc->highest_tsn_inside_map;
 	if (SCTP_BASE_SYSCTL(sctp_logging_level) & SCTP_MAP_LOGGING_ENABLE) {
@@ -518,7 +523,6 @@ sctp_process_init_ack(struct mbuf *m, int iphlen, int offset,
 	/* calculate the RTO */
 	net->RTO = sctp_calculate_rto(stcb, asoc, net, &asoc->time_entered, sctp_align_safe_nocopy,
 	    SCTP_RTT_FROM_NON_DATA);
-
 	retval = sctp_send_cookie_echo(m, offset, stcb, net);
 	if (retval < 0) {
 		/*
@@ -527,25 +531,21 @@ sctp_process_init_ack(struct mbuf *m, int iphlen, int offset,
 		 * abandon the peer, its broke.
 		 */
 		if (retval == -3) {
-			/* We abort with an error of missing mandatory param */
-			op_err = sctp_generate_cause(SCTP_CAUSE_MISSING_PARAM, "");
-			if (op_err) {
-				/*
-				 * Expand beyond to include the mandatory
-				 * param cookie
-				 */
-				struct sctp_inv_mandatory_param *mp;
+			uint16_t len;
 
-				SCTP_BUF_LEN(op_err) =
-				    sizeof(struct sctp_inv_mandatory_param);
-				mp = mtod(op_err,
-				    struct sctp_inv_mandatory_param *);
+			len = (uint16_t) (sizeof(struct sctp_error_missing_param) + sizeof(uint16_t));
+			/* We abort with an error of missing mandatory param */
+			op_err = sctp_get_mbuf_for_msg(len, 0, M_NOWAIT, 1, MT_DATA);
+			if (op_err != NULL) {
+				struct sctp_error_missing_param *cause;
+
+				SCTP_BUF_LEN(op_err) = len;
+				cause = mtod(op_err, struct sctp_error_missing_param *);
 				/* Subtract the reserved param */
-				mp->length =
-				    htons(sizeof(struct sctp_inv_mandatory_param) - 2);
-				mp->num_param = htonl(1);
-				mp->param = htons(SCTP_STATE_COOKIE);
-				mp->resv = 0;
+				cause->cause.code = htons(SCTP_CAUSE_MISSING_PARAM);
+				cause->cause.length = htons(len);
+				cause->num_missing_params = htonl(1);
+				cause->type[0] = htons(SCTP_STATE_COOKIE);
 			}
 			sctp_abort_association(stcb->sctp_ep, stcb, m, iphlen,
 			    src, dst, sh, op_err,
@@ -778,10 +778,10 @@ sctp_handle_abort(struct sctp_abort_chunk *abort,
 		 * Need to check the cause codes for our two magic nat
 		 * aborts which don't kill the assoc necessarily.
 		 */
-		struct sctp_missing_nat_state *natc;
+		struct sctp_gen_error_cause *cause;
 
-		natc = (struct sctp_missing_nat_state *)(abort + 1);
-		error = ntohs(natc->cause);
+		cause = (struct sctp_gen_error_cause *)(abort + 1);
+		error = ntohs(cause->code);
 		if (error == SCTP_CAUSE_NAT_COLLIDING_STATE) {
 			SCTPDBG(SCTP_DEBUG_INPUT2, "Received Colliding state abort flags:%x\n",
 			    abort->ch.chunk_flags);
@@ -864,6 +864,7 @@ sctp_handle_shutdown(struct sctp_shutdown_chunk *cp,
 {
 	struct sctp_association *asoc;
 	int some_on_streamwheel;
+	int old_state;
 
 #if defined(__APPLE__) || defined(SCTP_SO_LOCK_TESTING)
 	struct socket *so;
@@ -882,11 +883,11 @@ sctp_handle_shutdown(struct sctp_shutdown_chunk *cp,
 	if (ntohs(cp->ch.chunk_length) != sizeof(struct sctp_shutdown_chunk)) {
 		/* Shutdown NOT the expected size */
 		return;
-	} else {
-		sctp_update_acked(stcb, cp, abort_flag);
-		if (*abort_flag) {
-			return;
-		}
+	}
+	old_state = SCTP_GET_STATE(asoc);
+	sctp_update_acked(stcb, cp, abort_flag);
+	if (*abort_flag) {
+		return;
 	}
 	if (asoc->control_pdapi) {
 		/*
@@ -910,7 +911,9 @@ sctp_handle_shutdown(struct sctp_shutdown_chunk *cp,
 			return;
 		}
 #endif
-		sctp_sorwakeup(stcb->sctp_ep, stcb->sctp_socket);
+		if (stcb->sctp_socket) {
+			sctp_sorwakeup(stcb->sctp_ep, stcb->sctp_socket);
+		}
 #if defined(__APPLE__) || defined(SCTP_SO_LOCK_TESTING)
 		SCTP_SOCKET_UNLOCK(so, 1);
 #endif
@@ -956,12 +959,16 @@ sctp_handle_shutdown(struct sctp_shutdown_chunk *cp,
 		    (SCTP_GET_STATE(asoc) == SCTP_STATE_SHUTDOWN_RECEIVED)) {
 			SCTP_STAT_DECR_GAUGE32(sctps_currestab);
 		}
-		SCTP_SET_STATE(asoc, SCTP_STATE_SHUTDOWN_ACK_SENT);
 		SCTP_CLEAR_SUBSTATE(asoc, SCTP_STATE_SHUTDOWN_PENDING);
-		sctp_stop_timers_for_shutdown(stcb);
-		sctp_send_shutdown_ack(stcb, net);
-		sctp_timer_start(SCTP_TIMER_TYPE_SHUTDOWNACK, stcb->sctp_ep,
-		    stcb, net);
+		if (SCTP_GET_STATE(asoc) != SCTP_STATE_SHUTDOWN_ACK_SENT) {
+			SCTP_SET_STATE(asoc, SCTP_STATE_SHUTDOWN_ACK_SENT);
+			sctp_stop_timers_for_shutdown(stcb);
+			sctp_send_shutdown_ack(stcb, net);
+			sctp_timer_start(SCTP_TIMER_TYPE_SHUTDOWNACK,
+			    stcb->sctp_ep, stcb, net);
+		} else if (old_state == SCTP_STATE_SHUTDOWN_ACK_SENT) {
+			sctp_send_shutdown_ack(stcb, net);
+		}
 	}
 }
 
@@ -2100,6 +2107,7 @@ sctp_process_cookie_new(struct mbuf *m, int iphlen, int offset,
 	 */
 	stcb = sctp_aloc_assoc(inp, init_src, &error,
 	    ntohl(initack_cp->init.initiate_tag), vrf_id,
+	    ntohs(initack_cp->init.num_outbound_streams),
 	    (struct thread *)NULL
 	    );
 	if (stcb == NULL) {
@@ -2343,12 +2351,17 @@ sctp_process_cookie_new(struct mbuf *m, int iphlen, int offset,
 		sctp_timer_start(SCTP_TIMER_TYPE_AUTOCLOSE, inp, stcb, NULL);
 	}
 	(void)SCTP_GETTIME_TIMEVAL(&stcb->asoc.time_entered);
-	if ((netp) && (*netp)) {
+	if ((netp != NULL) && (*netp != NULL)) {
 		/* calculate the RTT and set the encaps port */
 		(*netp)->RTO = sctp_calculate_rto(stcb, asoc, *netp,
 		    &cookie->time_entered, sctp_align_unsafe_makecopy,
 		    SCTP_RTT_FROM_NON_DATA);
+#if defined(INET) || defined(INET6)
+		if (((*netp)->port == 0) && (port != 0)) {
+			sctp_pathmtu_adjustment(stcb, (*netp)->mtu - sizeof(struct udphdr));
+		}
 		(*netp)->port = port;
+#endif
 	}
 	/* respond with a COOKIE-ACK */
 	sctp_send_cookie_ack(stcb);
@@ -2431,8 +2444,8 @@ sctp_handle_cookie_echo(struct mbuf *m, int iphlen, int offset,
 	cookie_offset = offset + sizeof(struct sctp_chunkhdr);
 	cookie_len = ntohs(cp->ch.chunk_length);
 
-	if ((cookie->peerport != sh->src_port) &&
-	    (cookie->myport != sh->dest_port) &&
+	if ((cookie->peerport != sh->src_port) ||
+	    (cookie->myport != sh->dest_port) ||
 	    (cookie->my_vtag != sh->v_tag)) {
 		/*
 		 * invalid ports or bad tag.  Note that we always leave the
@@ -2550,27 +2563,27 @@ sctp_handle_cookie_echo(struct mbuf *m, int iphlen, int offset,
 	if (timevalcmp(&now, &time_expires, >)) {
 		/* cookie is stale! */
 		struct mbuf *op_err;
-		struct sctp_stale_cookie_msg *scm;
+		struct sctp_error_stale_cookie *cause;
 		uint32_t tim;
 
-		op_err = sctp_get_mbuf_for_msg(sizeof(struct sctp_stale_cookie_msg),
+		op_err = sctp_get_mbuf_for_msg(sizeof(struct sctp_error_stale_cookie),
 		    0, M_NOWAIT, 1, MT_DATA);
 		if (op_err == NULL) {
 			/* FOOBAR */
 			return (NULL);
 		}
 		/* Set the len */
-		SCTP_BUF_LEN(op_err) = sizeof(struct sctp_stale_cookie_msg);
-		scm = mtod(op_err, struct sctp_stale_cookie_msg *);
-		scm->ph.param_type = htons(SCTP_CAUSE_STALE_COOKIE);
-		scm->ph.param_length = htons((sizeof(struct sctp_paramhdr) +
+		SCTP_BUF_LEN(op_err) = sizeof(struct sctp_error_stale_cookie);
+		cause = mtod(op_err, struct sctp_error_stale_cookie *);
+		cause->cause.code = htons(SCTP_CAUSE_STALE_COOKIE);
+		cause->cause.length = htons((sizeof(struct sctp_paramhdr) +
 		    (sizeof(uint32_t))));
 		/* seconds to usec */
 		tim = (now.tv_sec - time_expires.tv_sec) * 1000000;
 		/* add in usec */
 		if (tim == 0)
 			tim = now.tv_usec - cookie->time_entered.tv_usec;
-		scm->time_usec = htonl(tim);
+		cause->stale_time = htonl(tim);
 		sctp_send_operr_to(src, dst, sh, cookie->peers_vtag, op_err,
 		    mflowtype, mflowid, l_inp->fibnum,
 		    vrf_id, port);
@@ -3506,6 +3519,28 @@ sctp_reset_out_streams(struct sctp_tcb *stcb, uint32_t number_entries, uint16_t 
 	sctp_ulp_notify(SCTP_NOTIFY_STR_RESET_SEND, stcb, number_entries, (void *)list, SCTP_SO_NOT_LOCKED);
 }
 
+static void
+sctp_reset_clear_pending(struct sctp_tcb *stcb, uint32_t number_entries, uint16_t * list)
+{
+	uint32_t i;
+	uint16_t temp;
+
+	if (number_entries > 0) {
+		for (i = 0; i < number_entries; i++) {
+			temp = ntohs(list[i]);
+			if (temp >= stcb->asoc.streamoutcnt) {
+				/* no such stream */
+				continue;
+			}
+			stcb->asoc.strmout[temp].state = SCTP_STREAM_OPEN;
+		}
+	} else {
+		for (i = 0; i < stcb->asoc.streamoutcnt; i++) {
+			stcb->asoc.strmout[i].state = SCTP_STREAM_OPEN;
+		}
+	}
+}
+
 
 struct sctp_stream_reset_request *
 sctp_find_stream_reset(struct sctp_tcb *stcb, uint32_t seq, struct sctp_tmit_chunk **bchk)
@@ -3604,6 +3639,8 @@ sctp_handle_stream_reset_response(struct sctp_tcb *stcb,
 			type = ntohs(req_param->ph.param_type);
 			lparm_len = ntohs(req_param->ph.param_length);
 			if (type == SCTP_STR_RESET_OUT_REQUEST) {
+				int no_clear = 0;
+
 				req_out_param = (struct sctp_stream_reset_out_request *)req_param;
 				number_entries = (lparm_len - sizeof(struct sctp_stream_reset_out_request)) / sizeof(uint16_t);
 				asoc->stream_reset_out_is_outstanding = 0;
@@ -3614,8 +3651,20 @@ sctp_handle_stream_reset_response(struct sctp_tcb *stcb,
 					sctp_reset_out_streams(stcb, number_entries, req_out_param->list_of_streams);
 				} else if (action == SCTP_STREAM_RESET_RESULT_DENIED) {
 					sctp_ulp_notify(SCTP_NOTIFY_STR_RESET_DENIED_OUT, stcb, number_entries, req_out_param->list_of_streams, SCTP_SO_NOT_LOCKED);
+				} else if (action == SCTP_STREAM_RESET_RESULT_IN_PROGRESS) {
+					/*
+					 * Set it up so we don't stop
+					 * retransmitting
+					 */
+					asoc->stream_reset_outstanding++;
+					stcb->asoc.str_reset_seq_out--;
+					asoc->stream_reset_out_is_outstanding = 1;
+					no_clear = 1;
 				} else {
 					sctp_ulp_notify(SCTP_NOTIFY_STR_RESET_FAILED_OUT, stcb, number_entries, req_out_param->list_of_streams, SCTP_SO_NOT_LOCKED);
+				}
+				if (no_clear == 0) {
+					sctp_reset_clear_pending(stcb, number_entries, req_out_param->list_of_streams);
 				}
 			} else if (type == SCTP_STR_RESET_IN_REQUEST) {
 				req_in_param = (struct sctp_stream_reset_in_request *)req_param;
@@ -3643,7 +3692,12 @@ sctp_handle_stream_reset_response(struct sctp_tcb *stcb,
 					asoc->stream_reset_outstanding--;
 				if (action == SCTP_STREAM_RESET_RESULT_PERFORMED) {
 					/* Put the new streams into effect */
-					stcb->asoc.streamoutcnt += num_stream;
+					int i;
+
+					for (i = asoc->streamoutcnt; i < (asoc->streamoutcnt + num_stream); i++) {
+						asoc->strmout[i].state = SCTP_STREAM_OPEN;
+					}
+					asoc->streamoutcnt += num_stream;
 					sctp_notify_stream_reset_add(stcb, stcb->asoc.streamincnt, stcb->asoc.streamoutcnt, 0);
 				} else if (action == SCTP_STREAM_RESET_RESULT_DENIED) {
 					sctp_notify_stream_reset_add(stcb, stcb->asoc.streamincnt, stcb->asoc.streamoutcnt,
@@ -3720,6 +3774,9 @@ sctp_handle_stream_reset_response(struct sctp_tcb *stcb,
 			}
 		}
 	}
+	if (asoc->stream_reset_outstanding == 0) {
+		sctp_send_stream_reset_out_if_possible(stcb, SCTP_SO_NOT_LOCKED);
+	}
 	return (0);
 }
 
@@ -3750,22 +3807,33 @@ sctp_handle_str_reset_request_in(struct sctp_tcb *stcb,
 		} else if (stcb->asoc.stream_reset_out_is_outstanding == 0) {
 			len = ntohs(req->ph.param_length);
 			number_entries = ((len - sizeof(struct sctp_stream_reset_in_request)) / sizeof(uint16_t));
-			for (i = 0; i < number_entries; i++) {
-				temp = ntohs(req->list_of_streams[i]);
-				req->list_of_streams[i] = temp;
+			if (number_entries) {
+				for (i = 0; i < number_entries; i++) {
+					temp = ntohs(req->list_of_streams[i]);
+					if (temp >= stcb->asoc.streamoutcnt) {
+						asoc->last_reset_action[0] = SCTP_STREAM_RESET_RESULT_DENIED;
+						goto bad_boy;
+					}
+					req->list_of_streams[i] = temp;
+				}
+				for (i = 0; i < number_entries; i++) {
+					if (stcb->asoc.strmout[req->list_of_streams[i]].state == SCTP_STREAM_OPEN) {
+						stcb->asoc.strmout[req->list_of_streams[i]].state = SCTP_STREAM_RESET_PENDING;
+					}
+				}
+			} else {
+				/* Its all */
+				for (i = 0; i < stcb->asoc.streamoutcnt; i++) {
+					if (stcb->asoc.strmout[i].state == SCTP_STREAM_OPEN)
+						stcb->asoc.strmout[i].state = SCTP_STREAM_RESET_PENDING;
+				}
 			}
 			asoc->last_reset_action[0] = SCTP_STREAM_RESET_RESULT_PERFORMED;
-			sctp_add_stream_reset_out(chk, number_entries, req->list_of_streams,
-			    asoc->str_reset_seq_out,
-			    seq, (asoc->sending_seq - 1));
-			asoc->stream_reset_out_is_outstanding = 1;
-			asoc->str_reset = chk;
-			sctp_timer_start(SCTP_TIMER_TYPE_STRRESET, stcb->sctp_ep, stcb, chk->whoTo);
-			stcb->asoc.stream_reset_outstanding++;
 		} else {
 			/* Can't do it, since we have sent one out */
 			asoc->last_reset_action[0] = SCTP_STREAM_RESET_RESULT_ERR_IN_PROGRESS;
 		}
+bad_boy:
 		sctp_add_stream_reset_result(chk, seq, asoc->last_reset_action[0]);
 		asoc->str_reset_seq_in++;
 	} else if (asoc->str_reset_seq_in - 1 == seq) {
@@ -3775,6 +3843,7 @@ sctp_handle_str_reset_request_in(struct sctp_tcb *stcb,
 	} else {
 		sctp_add_stream_reset_result(chk, seq, SCTP_STREAM_RESET_RESULT_ERR_BAD_SEQNO);
 	}
+	sctp_send_stream_reset_out_if_possible(stcb, SCTP_SO_NOT_LOCKED);
 }
 
 static int
@@ -3893,11 +3962,12 @@ sctp_handle_str_reset_request_out(struct sctp_tcb *stcb,
 				sctp_add_stream_reset_result(chk, seq, asoc->last_reset_action[0]);
 				return;
 			}
+			liste->seq = seq;
 			liste->tsn = tsn;
 			liste->number_entries = number_entries;
 			memcpy(&liste->list_of_streams, req->list_of_streams, number_entries * sizeof(uint16_t));
 			TAILQ_INSERT_TAIL(&asoc->resetHead, liste, next_resp);
-			asoc->last_reset_action[0] = SCTP_STREAM_RESET_RESULT_PERFORMED;
+			asoc->last_reset_action[0] = SCTP_STREAM_RESET_RESULT_IN_PROGRESS;
 		}
 		sctp_add_stream_reset_result(chk, seq, asoc->last_reset_action[0]);
 		asoc->str_reset_seq_in++;
@@ -4034,7 +4104,7 @@ sctp_handle_str_reset_add_out_strm(struct sctp_tcb *stcb, struct sctp_tmit_chunk
 			mychk += num_stream;
 			if (mychk < 0x10000) {
 				stcb->asoc.last_reset_action[0] = SCTP_STREAM_RESET_RESULT_PERFORMED;
-				if (sctp_send_str_reset_req(stcb, 0, NULL, 0, 0, 0, 1, num_stream, 0, 1)) {
+				if (sctp_send_str_reset_req(stcb, 0, NULL, 0, 0, 1, num_stream, 0, 1)) {
 					stcb->asoc.last_reset_action[0] = SCTP_STREAM_RESET_RESULT_DENIED;
 				}
 			} else {
@@ -4565,7 +4635,7 @@ __attribute__((noinline))
 			}
 		}
 		if (stcb == NULL) {
-			snprintf(msg, sizeof(msg), "OOTB, %s:%d at %s\n", __FILE__, __LINE__, __FUNCTION__);
+			snprintf(msg, sizeof(msg), "OOTB, %s:%d at %s", __FILE__, __LINE__, __func__);
 			op_err = sctp_generate_cause(SCTP_BASE_SYSCTL(sctp_diag_info_code),
 			    msg);
 			/* no association, so it's out of the blue... */
@@ -4609,7 +4679,7 @@ __attribute__((noinline))
 				if (locked_tcb) {
 					SCTP_TCB_UNLOCK(locked_tcb);
 				}
-				snprintf(msg, sizeof(msg), "OOTB, %s:%d at %s\n", __FILE__, __LINE__, __FUNCTION__);
+				snprintf(msg, sizeof(msg), "OOTB, %s:%d at %s", __FILE__, __LINE__, __func__);
 				op_err = sctp_generate_cause(SCTP_BASE_SYSCTL(sctp_diag_info_code),
 				    msg);
 				sctp_handle_ootb(m, iphlen, *offset, src, dst,
@@ -4755,13 +4825,11 @@ process_control_chunks:
 			/* The INIT chunk must be the only chunk. */
 			if ((num_chunks > 1) ||
 			    (length - *offset > (int)SCTP_SIZE32(chk_length))) {
-				op_err = sctp_generate_cause(SCTP_BASE_SYSCTL(sctp_diag_info_code),
-				    "INIT not the only chunk");
-				sctp_abort_association(inp, stcb, m, iphlen,
-				    src, dst, sh, op_err,
-				    mflowtype, mflowid,
-				    vrf_id, port);
+				/* RFC 4960 requires that no ABORT is sent */
 				*offset = length;
+				if (locked_tcb) {
+					SCTP_TCB_UNLOCK(locked_tcb);
+				}
 				return (NULL);
 			}
 			/* Honor our resource limit. */
@@ -4776,7 +4844,7 @@ process_control_chunks:
 			}
 			sctp_handle_init(m, iphlen, *offset, src, dst, sh,
 			    (struct sctp_init_chunk *)ch, inp,
-			    stcb, &abort_no_unlock,
+			    stcb, *netp, &abort_no_unlock,
 			    mflowtype, mflowid,
 			    vrf_id, port);
 			*offset = length;
@@ -4794,7 +4862,7 @@ process_control_chunks:
 				if ((stcb) && (stcb->asoc.total_output_queue_size)) {
 					;
 				} else {
-					if (locked_tcb != stcb) {
+					if ((locked_tcb != NULL) && (locked_tcb != stcb)) {
 						/* Very unlikely */
 						SCTP_TCB_UNLOCK(locked_tcb);
 					}
@@ -5519,39 +5587,27 @@ process_control_chunks:
 	unknown_chunk:
 			/* it's an unknown chunk! */
 			if ((ch->chunk_type & 0x40) && (stcb != NULL)) {
-				struct mbuf *mm;
-				struct sctp_paramhdr *phd;
+				struct sctp_gen_error_cause *cause;
 				int len;
 
-				mm = sctp_get_mbuf_for_msg(sizeof(struct sctp_paramhdr),
+				op_err = sctp_get_mbuf_for_msg(sizeof(struct sctp_gen_error_cause),
 				    0, M_NOWAIT, 1, MT_DATA);
-				if (mm) {
+				if (op_err != NULL) {
 					len = min(SCTP_SIZE32(chk_length), (uint32_t) (length - *offset));
-					phd = mtod(mm, struct sctp_paramhdr *);
-					/*
-					 * We cheat and use param type since
-					 * we did not bother to define a
-					 * error cause struct. They are the
-					 * same basic format with different
-					 * names.
-					 */
-					phd->param_type = htons(SCTP_CAUSE_UNRECOG_CHUNK);
-					phd->param_length = htons(len + sizeof(*phd));
-					SCTP_BUF_LEN(mm) = sizeof(*phd);
-					SCTP_BUF_NEXT(mm) = SCTP_M_COPYM(m, *offset, len, M_NOWAIT);
-					if (SCTP_BUF_NEXT(mm)) {
-						if (sctp_pad_lastmbuf(SCTP_BUF_NEXT(mm), SCTP_SIZE32(len) - len, NULL) == NULL) {
-							sctp_m_freem(mm);
-						} else {
+					cause = mtod(op_err, struct sctp_gen_error_cause *);
+					cause->code = htons(SCTP_CAUSE_UNRECOG_CHUNK);
+					cause->length = htons(len + sizeof(struct sctp_gen_error_cause));
+					SCTP_BUF_LEN(op_err) = sizeof(struct sctp_gen_error_cause);
+					SCTP_BUF_NEXT(op_err) = SCTP_M_COPYM(m, *offset, len, M_NOWAIT);
+					if (SCTP_BUF_NEXT(op_err) != NULL) {
 #ifdef SCTP_MBUF_LOGGING
-							if (SCTP_BASE_SYSCTL(sctp_logging_level) & SCTP_MBUF_LOGGING_ENABLE) {
-								sctp_log_mbc(SCTP_BUF_NEXT(mm), SCTP_MBUF_ICOPY);
-							}
-#endif
-							sctp_queue_op_err(stcb, mm);
+						if (SCTP_BASE_SYSCTL(sctp_logging_level) & SCTP_MBUF_LOGGING_ENABLE) {
+							sctp_log_mbc(SCTP_BUF_NEXT(op_err), SCTP_MBUF_ICOPY);
 						}
+#endif
+						sctp_queue_op_err(stcb, op_err);
 					} else {
-						sctp_m_freem(mm);
+						sctp_m_freem(op_err);
 					}
 				}
 			}
@@ -5588,30 +5644,6 @@ next_chunk:
 	return (stcb);
 }
 
-
-#ifdef INVARIANTS
-#ifdef __GNUC__
-__attribute__((noinline))
-#endif
-	void
-	     sctp_validate_no_locks(struct sctp_inpcb *inp)
-{
-	struct sctp_tcb *lstcb;
-
-	LIST_FOREACH(lstcb, &inp->sctp_asoc_list, sctp_tcblist) {
-		if (mtx_owned(&lstcb->tcb_mtx)) {
-			panic("Own lock on stcb at return from input");
-		}
-	}
-	if (mtx_owned(&inp->inp_create_mtx)) {
-		panic("Own create lock on inp");
-	}
-	if (mtx_owned(&inp->inp_mtx)) {
-		panic("Own inp lock on inp");
-	}
-}
-
-#endif
 
 /*
  * common input chunk processing (v4 and v6)
@@ -5656,9 +5688,18 @@ sctp_common_input_processing(struct mbuf **mm, int iphlen, int offset, int lengt
 			stcb = sctp_findassociation_addr(m, offset, src, dst,
 			    sh, ch, &inp, &net, vrf_id);
 #if defined(INET) || defined(INET6)
-			if ((net != NULL) && (port != 0)) {
+			if ((ch->chunk_type != SCTP_INITIATION) &&
+			    (net != NULL) && (net->port != port)) {
 				if (net->port == 0) {
-					sctp_pathmtu_adjustment(stcb, net->mtu - sizeof(struct udphdr));
+					/* UDP encapsulation turned on. */
+					net->mtu -= sizeof(struct udphdr);
+					if (stcb->asoc.smallest_mtu > net->mtu) {
+						sctp_pathmtu_adjustment(stcb, net->mtu);
+					}
+				} else if (port == 0) {
+					/* UDP encapsulation turned off. */
+					net->mtu += sizeof(struct udphdr);
+					/* XXX Update smallest_mtu */
 				}
 				net->port = port;
 			}
@@ -5687,9 +5728,18 @@ sctp_common_input_processing(struct mbuf **mm, int iphlen, int offset, int lengt
 	stcb = sctp_findassociation_addr(m, offset, src, dst,
 	    sh, ch, &inp, &net, vrf_id);
 #if defined(INET) || defined(INET6)
-	if ((net != NULL) && (port != 0)) {
+	if ((ch->chunk_type != SCTP_INITIATION) &&
+	    (net != NULL) && (net->port != port)) {
 		if (net->port == 0) {
-			sctp_pathmtu_adjustment(stcb, net->mtu - sizeof(struct udphdr));
+			/* UDP encapsulation turned on. */
+			net->mtu -= sizeof(struct udphdr);
+			if (stcb->asoc.smallest_mtu > net->mtu) {
+				sctp_pathmtu_adjustment(stcb, net->mtu);
+			}
+		} else if (port == 0) {
+			/* UDP encapsulation turned off. */
+			net->mtu += sizeof(struct udphdr);
+			/* XXX Update smallest_mtu */
 		}
 		net->port = port;
 	}
@@ -5777,7 +5827,7 @@ sctp_common_input_processing(struct mbuf **mm, int iphlen, int offset, int lengt
 			 */
 			SCTP_TCB_UNLOCK(stcb);
 			stcb = NULL;
-			snprintf(msg, sizeof(msg), "OOTB, %s:%d at %s\n", __FILE__, __LINE__, __FUNCTION__);
+			snprintf(msg, sizeof(msg), "OOTB, %s:%d at %s", __FILE__, __LINE__, __func__);
 			op_err = sctp_generate_cause(SCTP_BASE_SYSCTL(sctp_diag_info_code),
 			    msg);
 			sctp_handle_ootb(m, iphlen, offset, src, dst, sh, inp, op_err,
@@ -5801,9 +5851,18 @@ sctp_common_input_processing(struct mbuf **mm, int iphlen, int offset, int lengt
 			 */
 			inp = stcb->sctp_ep;
 #if defined(INET) || defined(INET6)
-			if ((net) && (port)) {
+			if ((ch->chunk_type != SCTP_INITIATION) &&
+			    (net != NULL) && (net->port != port)) {
 				if (net->port == 0) {
-					sctp_pathmtu_adjustment(stcb, net->mtu - sizeof(struct udphdr));
+					/* UDP encapsulation turned on. */
+					net->mtu -= sizeof(struct udphdr);
+					if (stcb->asoc.smallest_mtu > net->mtu) {
+						sctp_pathmtu_adjustment(stcb, net->mtu);
+					}
+				} else if (port == 0) {
+					/* UDP encapsulation turned off. */
+					net->mtu += sizeof(struct udphdr);
+					/* XXX Update smallest_mtu */
 				}
 				net->port = port;
 			}
@@ -5829,7 +5888,7 @@ sctp_common_input_processing(struct mbuf **mm, int iphlen, int offset, int lengt
 		}
 		if (stcb == NULL) {
 			/* out of the blue DATA chunk */
-			snprintf(msg, sizeof(msg), "OOTB, %s:%d at %s\n", __FILE__, __LINE__, __FUNCTION__);
+			snprintf(msg, sizeof(msg), "OOTB, %s:%d at %s", __FILE__, __LINE__, __func__);
 			op_err = sctp_generate_cause(SCTP_BASE_SYSCTL(sctp_diag_info_code),
 			    msg);
 			sctp_handle_ootb(m, iphlen, offset, src, dst, sh, inp, op_err,
@@ -5901,7 +5960,7 @@ sctp_common_input_processing(struct mbuf **mm, int iphlen, int offset, int lengt
 			/*
 			 * We consider OOTB any data sent during asoc setup.
 			 */
-			snprintf(msg, sizeof(msg), "OOTB, %s:%d at %s\n", __FILE__, __LINE__, __FUNCTION__);
+			snprintf(msg, sizeof(msg), "OOTB, %s:%d at %s", __FILE__, __LINE__, __func__);
 			op_err = sctp_generate_cause(SCTP_BASE_SYSCTL(sctp_diag_info_code),
 			    msg);
 			sctp_handle_ootb(m, iphlen, offset, src, dst, sh, inp, op_err,
@@ -5924,10 +5983,7 @@ sctp_common_input_processing(struct mbuf **mm, int iphlen, int offset, int lengt
 		}
 		/* plow through the data chunks while length > offset */
 		retval = sctp_process_data(mm, iphlen, &offset, length,
-		    src, dst, sh,
-		    inp, stcb, net, &high_tsn,
-		    mflowtype, mflowid,
-		    vrf_id, port);
+		    inp, stcb, net, &high_tsn);
 		if (retval == 2) {
 			/*
 			 * The association aborted, NO UNLOCK needed since
@@ -5979,7 +6035,7 @@ trigger_send:
 	if (!TAILQ_EMPTY(&stcb->asoc.control_send_queue)) {
 		cnt_ctrl_ready = stcb->asoc.ctrl_queue_cnt - stcb->asoc.ecn_echo_cnt_onq;
 	}
-	if (cnt_ctrl_ready ||
+	if (cnt_ctrl_ready || stcb->asoc.trigger_reset ||
 	    ((un_sent) &&
 	    (stcb->asoc.peers_rwnd > 0 ||
 	    (stcb->asoc.peers_rwnd <= 0 && stcb->asoc.total_flight == 0)))) {
@@ -6001,11 +6057,6 @@ out:
 		SCTP_INP_DECR_REF(inp_decr);
 		SCTP_INP_WUNLOCK(inp_decr);
 	}
-#ifdef INVARIANTS
-	if (inp != NULL) {
-		sctp_validate_no_locks(inp);
-	}
-#endif
 	return;
 }
 

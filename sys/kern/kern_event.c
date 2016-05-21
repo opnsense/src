@@ -731,13 +731,20 @@ filt_usertouch(struct knote *kn, struct kevent *kev, u_long type)
 int
 sys_kqueue(struct thread *td, struct kqueue_args *uap)
 {
+
+	return (kern_kqueue(td, 0));
+}
+
+int
+kern_kqueue(struct thread *td, int flags)
+{
 	struct filedesc *fdp;
 	struct kqueue *kq;
 	struct file *fp;
 	int fd, error;
 
 	fdp = td->td_proc->p_fd;
-	error = falloc(td, &fp, &fd, 0);
+	error = falloc(td, &fp, &fd, flags);
 	if (error)
 		goto done2;
 
@@ -863,12 +870,9 @@ int
 kern_kevent(struct thread *td, int fd, int nchanges, int nevents,
     struct kevent_copyops *k_ops, const struct timespec *timeout)
 {
-	struct kevent keva[KQ_NEVENTS];
-	struct kevent *kevp, *changes;
-	struct kqueue *kq;
-	struct file *fp;
 	cap_rights_t rights;
-	int i, n, nerrors, error;
+	struct file *fp;
+	int error;
 
 	cap_rights_init(&rights);
 	if (nchanges > 0)
@@ -879,9 +883,24 @@ kern_kevent(struct thread *td, int fd, int nchanges, int nevents,
 	if (error != 0)
 		return (error);
 
+	error = kern_kevent_fp(td, fp, nchanges, nevents, k_ops, timeout);
+	fdrop(fp, td);
+
+	return (error);
+}
+
+int
+kern_kevent_fp(struct thread *td, struct file *fp, int nchanges, int nevents,
+    struct kevent_copyops *k_ops, const struct timespec *timeout)
+{
+	struct kevent keva[KQ_NEVENTS];
+	struct kevent *kevp, *changes;
+	struct kqueue *kq;
+	int i, n, nerrors, error;
+
 	error = kqueue_acquire(fp, &kq);
 	if (error != 0)
-		goto done_norel;
+		return (error);
 
 	nerrors = 0;
 
@@ -921,8 +940,6 @@ kern_kevent(struct thread *td, int fd, int nchanges, int nevents,
 	error = kqueue_scan(kq, nevents, k_ops, timeout, keva, td);
 done:
 	kqueue_release(kq, 0);
-done_norel:
-	fdrop(fp, td);
 	return (error);
 }
 
@@ -1849,7 +1866,7 @@ void
 knote(struct knlist *list, long hint, int lockflags)
 {
 	struct kqueue *kq;
-	struct knote *kn;
+	struct knote *kn, *tkn;
 	int error;
 
 	if (list == NULL)
@@ -1861,14 +1878,13 @@ knote(struct knlist *list, long hint, int lockflags)
 		list->kl_lock(list->kl_lockarg); 
 
 	/*
-	 * If we unlock the list lock (and set KN_INFLUX), we can eliminate
-	 * the kqueue scheduling, but this will introduce four
-	 * lock/unlock's for each knote to test.  If we do, continue to use
-	 * SLIST_FOREACH, SLIST_FOREACH_SAFE is not safe in our case, it is
-	 * only safe if you want to remove the current item, which we are
-	 * not doing.
+	 * If we unlock the list lock (and set KN_INFLUX), we can
+	 * eliminate the kqueue scheduling, but this will introduce
+	 * four lock/unlock's for each knote to test.  Also, marker
+	 * would be needed to keep iteration position, since filters
+	 * or other threads could remove events.
 	 */
-	SLIST_FOREACH(kn, &list->kl_list, kn_selnext) {
+	SLIST_FOREACH_SAFE(kn, &list->kl_list, kn_selnext, tkn) {
 		kq = kn->kn_kq;
 		KQ_LOCK(kq);
 		if ((kn->kn_status & (KN_INFLUX | KN_SCAN)) == KN_INFLUX) {
