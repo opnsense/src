@@ -50,7 +50,7 @@
 	s" @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@" logo+
 	s" @@@@@@@@@@@@@@@@@@@@@@@@@@@@  " logo+
 	s"  #[m                              " logo+
-	s"    16.1   ``Crafty Coyote''   #[m" logo+
+	s"    16.7-RC  ``No, not yet''   #[m" logo+
 
 	2drop
 ;
