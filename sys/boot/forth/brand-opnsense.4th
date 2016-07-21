@@ -25,7 +25,7 @@
 \
 \ $FreeBSD$
 
-17 brandX ! 1 brandY ! \ Initialize brand placement defaults
+18 brandX ! 2 brandY ! \ Initialize brand placement defaults
 
 : brand+ ( x y c-addr/u -- x y' )
 	2swap 2dup at-xy 2swap \ position the cursor
