@@ -164,6 +164,7 @@ CFLAGS+=-DSYSCALL_COMPAT
 SUBDIR+=	tests
 .endif
 
+NOPIE=	yes
 .include <bsd.lib.mk>
 
 # Disable warnings in contributed sources.

@@ -371,6 +371,7 @@ __DEFAULT_YES_OPTIONS = \
     SENDMAIL \
     SETUID_LOGIN \
     SHAREDOCS \
+    SHARED_TOOLCHAIN \
     SOURCELESS \
     SOURCELESS_HOST \
     SOURCELESS_UCODE \
@@ -406,7 +407,6 @@ __DEFAULT_NO_OPTIONS = \
     NAND \
     OFED \
     PKGTOOLS \
-    SHARED_TOOLCHAIN \
     SVN \
     TESTS \
     USB_GADGET_EXAMPLES
@@ -473,6 +473,12 @@ __DEFAULT_NO_OPTIONS+=FDT
 __DEFAULT_YES_OPTIONS+=HYPERV
 .else
 __DEFAULT_NO_OPTIONS+=HYPERV
+.endif
+# PIE is only available for amd64 and i386.
+.if ${__T} == "amd64" || ${__T} == "i386"
+__DEFAULT_YES_OPTIONS+=PIE
+.else
+__DEFAULT_NO_OPTIONS+=PIE
 .endif
 .undef __T
 

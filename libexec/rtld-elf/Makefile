@@ -84,5 +84,7 @@ beforeinstall:
 
 .PATH: ${.CURDIR}/${RTLD_ARCH}
 
+NOPIE=	yes
+
 .include <bsd.symver.mk>
 .include <bsd.prog.mk>
