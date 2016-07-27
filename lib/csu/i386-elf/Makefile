@@ -48,4 +48,5 @@ Scrt1.o: Scrt1_c.o crt1_s.o
 	${LD} ${LDFLAGS} -o Scrt1.o -r crt1_s.o Scrt1_c.o
 	${OBJCOPY} --localize-symbol _start1 Scrt1.o
 
+NOPIE=	yes
 .include <bsd.prog.mk>

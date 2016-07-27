@@ -32,4 +32,5 @@ DPADD.tls_dlopen_test+=		${LIBPTHREAD}
 LDADD.tls_dlopen_test+=		-lpthread
 LDFLAGS.tls_dlopen_test+=	-Wl,-rpath,${TESTSDIR} -Wl,-export-dynamic
 
+NOPIE=	yes
 .include <bsd.test.mk>
