@@ -241,12 +241,12 @@ em_netmap_rxsync(struct netmap_kring *kring, int flags)
 		nm_i = netmap_idx_n2k(kring, nic_i);
 
 		for (n = 0; ; n++) { // XXX no need to count
-			union e1000_rx_desc_extended *curr = &rxr->rx_base[nic_i];
-			uint32_t staterr = le32toh(curr->wb.upper.status_error);
+			struct e1000_rx_desc *curr = &rxr->rx_base[nic_i];
+			uint32_t staterr = le32toh(curr->status);
 
 			if ((staterr & E1000_RXD_STAT_DD) == 0)
 				break;
-			ring->slot[nm_i].len = le16toh(curr->wb.upper.length);
+			ring->slot[nm_i].len = le16toh(curr->length);
 			ring->slot[nm_i].flags = slot_flags;
 			bus_dmamap_sync(rxr->rxtag, rxr->rx_buffers[nic_i].map,
 				BUS_DMASYNC_POSTREAD);
@@ -273,7 +273,7 @@ em_netmap_rxsync(struct netmap_kring *kring, int flags)
 			uint64_t paddr;
 			void *addr = PNMB(na, slot, &paddr);
 
-			union e1000_rx_desc_extended *curr = &rxr->rx_base[nic_i];
+			struct e1000_rx_desc *curr = &rxr->rx_base[nic_i];
 			struct em_rxbuffer *rxbuf = &rxr->rx_buffers[nic_i];
 
 			if (addr == NETMAP_BUF_BASE(na)) /* bad buf */
@@ -281,11 +281,11 @@ em_netmap_rxsync(struct netmap_kring *kring, int flags)
 
 			if (slot->flags & NS_BUF_CHANGED) {
 				/* buffer has changed, reload map */
-				curr->read.buffer_addr = htole64(paddr);
+				curr->buffer_addr = htole64(paddr);
 				netmap_reload_map(na, rxr->rxtag, rxbuf->map, addr);
 				slot->flags &= ~NS_BUF_CHANGED;
 			}
-			curr->wb.upper.status_error = 0;
+			curr->status = 0;
 			bus_dmamap_sync(rxr->rxtag, rxbuf->map,
 			    BUS_DMASYNC_PREREAD);
 			nm_i = nm_next(nm_i, lim);
