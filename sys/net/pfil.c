@@ -199,7 +199,7 @@ int
 pfil_head_unregister(struct pfil_head *ph)
 {
 	struct packet_filter_hook *pfh, *pfnext;
-		
+
 	PFIL_HEADLIST_LOCK();
 	LIST_REMOVE(ph, ph_list);
 	PFIL_HEADLIST_UNLOCK();
@@ -243,7 +243,7 @@ pfil_add_hook(pfil_func_t func, void *arg, int flags, struct pfil_head *ph)
 	int err;
 
 	if (flags & PFIL_IN) {
-		pfh1 = (struct packet_filter_hook *)malloc(sizeof(*pfh1), 
+		pfh1 = (struct packet_filter_hook *)malloc(sizeof(*pfh1),
 		    M_IFADDR, (flags & PFIL_WAITOK) ? M_WAITOK : M_NOWAIT);
 		if (pfh1 == NULL) {
 			err = ENOMEM;
@@ -333,11 +333,15 @@ pfil_chain_add(pfil_chain_t *chain, struct packet_filter_hook *pfh1, int flags)
 	/*
 	 * Insert the input list in reverse order of the output list so that
 	 * the same path is followed in or out of the kernel.
+	 * original from m0n0wall: insert hooks in reverse order (with respect to default
+	 * FreeBSD behavior) to ensure that the dynamically loaded ipfw
+	 * is called before ipfilter for outbound and after ipfilter for
+	 * inbound packets (due to NAT).
 	 */
 	if (flags & PFIL_IN)
-		TAILQ_INSERT_HEAD(chain, pfh1, pfil_chain);
-	else
 		TAILQ_INSERT_TAIL(chain, pfh1, pfil_chain);
+	else
+		TAILQ_INSERT_HEAD(chain, pfh1, pfil_chain);
 	return (0);
 }
 
@@ -396,7 +400,7 @@ vnet_pfil_uninit(const void *unused)
  */
 VNET_SYSINIT(vnet_pfil_init, PFIL_SYSINIT_ORDER, PFIL_VNET_ORDER,
     vnet_pfil_init, NULL);
- 
+
 /*
  * Closing up shop.  These are done in REVERSE ORDER.  Not called on reboot.
  *

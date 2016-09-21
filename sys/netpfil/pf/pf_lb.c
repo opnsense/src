@@ -637,6 +637,11 @@ pf_get_translation(struct pf_pdesc *pd, struct mbuf *m, int off, int direction,
 		}
 		break;
 	case PF_RDR: {
+		/**
+		 * OPNsense, when ipfw tries to forward our package, ignore pf redirect (captive portal)
+		 */
+		if (m->m_flags & (M_IP_NEXTHOP | M_IP6_NEXTHOP))
+			goto notrans;
 		if (pf_map_addr(pd->af, r, saddr, naddr, NULL, sn))
 			goto notrans;
 		if ((r->rpool.opts & PF_POOL_TYPEMASK) == PF_POOL_BITMASK)
