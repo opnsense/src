@@ -2080,7 +2080,7 @@ pf_change_ap(struct mbuf *m, struct pf_addr *a, u_int16_t *p, u_int16_t *ic,
 #endif /* INET6 */
 	}
 
-	if (m->m_pkthdr.csum_flags & (CSUM_DELAY_DATA |
+	if (m->m_pkthdr.csum_flags & (CSUM_DELAY_DATA | 
 	    CSUM_DELAY_DATA_IPV6)) {
 		*pc = ~*pc;
 		if (! *pc)
@@ -5322,16 +5322,6 @@ pf_route(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *oifp,
 		goto bad_locked;
 	}
 
-	/**
-	 * OPNsense, when ipfw tries to forward our package, ignore route-to (captive portal)
-	 */
-	if ((*m)->m_flags & M_IP_NEXTHOP) {
-		if (s) {
-			PF_STATE_UNLOCK(s);
-		}
-		return;
-	}
-
 	if (r->rt == PF_DUPTO) {
 		if ((m0 = m_dup(*m, M_NOWAIT)) == NULL) {
 			if (s)
@@ -5421,7 +5411,6 @@ pf_route(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *oifp,
 		in_delayed_cksum(m0);
 		m0->m_pkthdr.csum_flags &= ~CSUM_DELAY_DATA;
 	}
-
 #ifdef SCTP
 	if (m0->m_pkthdr.csum_flags & CSUM_SCTP & ~ifp->if_hwassist) {
 		sctp_delayed_cksum(m, (uint32_t)(ip->ip_hl << 2));
@@ -5511,17 +5500,6 @@ pf_route6(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *oifp,
 		m0 = *m;
 		*m = NULL;
 		goto bad_locked;
-	}
-
-
-	/**
-	 * OPNsense, when ipfw tries to forward our package, ignore route-to (captive portal)
-	 */
-	if ((*m)->m_flags & M_IP6_NEXTHOP) {
-		if (s) {
-			PF_STATE_UNLOCK(s);
-		}
-		return;
 	}
 
 	if (r->rt == PF_DUPTO) {
