@@ -569,6 +569,15 @@ ip6_input(struct mbuf *m)
 		goto passin;
 	}
 
+	if (m->m_flags & M_PASSIN) {
+		/*
+		 * Dummynet reinjected this packet.
+		 */
+		m->m_flags &= ~M_PASSIN;
+		ip6 = mtod(m, struct ip6_hdr *);
+		goto passin;
+	}
+
 	/*
 	 * mbuf statistics
 	 */
@@ -747,8 +756,8 @@ ip6_input(struct mbuf *m)
 		return;
 	ip6 = mtod(m, struct ip6_hdr *);
 	srcrt = !IN6_ARE_ADDR_EQUAL(&odst, &ip6->ip6_dst);
-	if ((m->m_flags & (M_IP6_NEXTHOP | M_FASTFWD_OURS)) == M_IP6_NEXTHOP &&
-	    m_tag_find(m, PACKET_TAG_IPFORWARD, NULL) != NULL) {
+passin:
+	if ((m->m_flags & (M_IP6_NEXTHOP | M_FASTFWD_OURS)) == M_IP6_NEXTHOP) {
 		/*
 		 * Directly ship the packet on.  This allows forwarding
 		 * packets originally destined to us to some other directly
@@ -758,7 +767,6 @@ ip6_input(struct mbuf *m)
 		return;
 	}
 
-passin:
 	/*
 	 * The check is deferred to here to give firewalls a chance to block
 	 * (and log) such packets.  ip6_tryforward() will not process such
