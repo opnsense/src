@@ -775,11 +775,17 @@ dummynet_send(struct mbuf *m)
 			break ;
 
 		case DIR_IN :
+		        m->m_flags |= M_PASSIN;
+			m_tag_delete(m, tag);
+
 			netisr_dispatch(NETISR_IP, m);
 			break;
 
 #ifdef INET6
 		case DIR_IN | PROTO_IPV6:
+		        m->m_flags |= M_PASSIN;
+			m_tag_delete(m, tag);
+
 			netisr_dispatch(NETISR_IPV6, m);
 			break;
 

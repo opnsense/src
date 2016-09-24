@@ -484,6 +484,16 @@ ip_input(struct mbuf *m)
 		goto ours;
 	}
 
+	if (m->m_flags & M_PASSIN) {
+		/* Dummynet reinjected this packet. */
+		m->m_flags &= ~M_PASSIN;
+		ip = mtod(m, struct ip *);
+		hlen = ip->ip_hl << 2;
+		ip_len = ntohs(ip->ip_len);
+		ifp = m->m_pkthdr.rcvif;
+		goto passin;
+	}
+
 	IPSTAT_INC(ips_total);
 
 	if (m->m_pkthdr.len < sizeof(struct ip))
@@ -632,8 +642,9 @@ tooshort:
 		m->m_flags &= ~M_FASTFWD_OURS;
 		goto ours;
 	}
+passin:
 	if (m->m_flags & M_IP_NEXTHOP) {
-		if (m_tag_find(m, PACKET_TAG_IPFORWARD, NULL) != NULL) {
+		{
 			/*
 			 * Directly ship the packet on.  This allows
 			 * forwarding packets originally destined to us
@@ -643,7 +654,6 @@ tooshort:
 			return;
 		}
 	}
-passin:
 
 	/*
 	 * Process options and, if not destined for us,
