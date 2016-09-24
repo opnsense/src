@@ -575,6 +575,15 @@ ip6_input(struct mbuf *m)
 		goto passin;
 	}
 
+	if (m->m_flags & M_SKIP_PFIL) {
+		/*
+		 * Dummynet reinjected this packet.
+		 */
+		m->m_flags &= ~M_SKIP_PFIL;
+		ip6 = mtod(m, struct ip6_hdr *);
+		goto reinjected;
+	}
+
 	/*
 	 * mbuf statistics
 	 */
@@ -765,6 +774,7 @@ ip6_input(struct mbuf *m)
 		return;
 	ip6 = mtod(m, struct ip6_hdr *);
 	srcrt = !IN6_ARE_ADDR_EQUAL(&odst, &ip6->ip6_dst);
+reinjected:
 	if ((m->m_flags & (M_IP6_NEXTHOP | M_FASTFWD_OURS)) == M_IP6_NEXTHOP &&
 	    m_tag_find(m, PACKET_TAG_IPFORWARD, NULL) != NULL) {
 		/*

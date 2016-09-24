@@ -654,6 +654,7 @@ struct ip6_mtuinfo {
 #define	M_AUTHIPDGM		M_PROTO7
 #define	M_RTALERT_MLD		M_PROTO8
 #define	M_FRAGMENTED		M_PROTO9	/* contained fragment header */
+#define	M_SKIP_PFIL		M_PROTO12	/* skip pfil processing */
 
 #ifdef _KERNEL
 struct cmsghdr;
