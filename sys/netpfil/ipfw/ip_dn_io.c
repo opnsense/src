@@ -760,14 +760,20 @@ dummynet_send(struct mbuf *m)
 			ip_output(m, NULL, NULL, IP_FORWARDING, NULL, NULL);
 			break ;
 
-		case DIR_IN :
+		case DIR_IN: {
+			m_tag_delete(m, tag);
+		        m->m_flags |= M_SKIP_PFIL;
 			netisr_dispatch(NETISR_IP, m);
 			break;
+		}
 
 #ifdef INET6
-		case DIR_IN | PROTO_IPV6:
+		case DIR_IN | PROTO_IPV6: {
+			m_tag_delete(m, tag);
+		        m->m_flags |= M_SKIP_PFIL;
 			netisr_dispatch(NETISR_IPV6, m);
 			break;
+		}
 
 		case DIR_OUT | PROTO_IPV6:
 			ip6_output(m, NULL, NULL, IPV6_FORWARDING, NULL, NULL, NULL);

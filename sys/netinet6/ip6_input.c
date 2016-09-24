@@ -444,6 +444,16 @@ ip6_input(struct mbuf *m)
 		goto hbhcheck;
 	}
 
+	if (m->m_flags & M_SKIP_PFIL) {
+		/*
+		 * Dummynet reinjected this packet.
+		 */
+		m->m_flags &= ~M_SKIP_PFIL;
+		deliverifp = m->m_pkthdr.rcvif;
+		ip6 = mtod(m, struct ip6_hdr *);
+		goto reinjected;
+	}
+
 	/*
 	 * mbuf statistics
 	 */
@@ -633,6 +643,7 @@ ip6_input(struct mbuf *m)
 		deliverifp = m->m_pkthdr.rcvif;
 		goto hbhcheck;
 	}
+reinjected:
 	if ((m->m_flags & M_IP6_NEXTHOP) &&
 	    m_tag_find(m, PACKET_TAG_IPFORWARD, NULL) != NULL) {
 		/*
