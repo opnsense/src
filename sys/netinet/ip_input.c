@@ -420,25 +420,20 @@ ip_input(struct mbuf *m)
 		}
 	}
 
-	/*
-	 * Skip checksum checks if we came from dummynet,
-	 * since we'll already have been here in that case.
-	 */
-	if (!(m->m_flags & M_PROTO12)) {
-		if (m->m_pkthdr.csum_flags & CSUM_IP_CHECKED) {
-			sum = !(m->m_pkthdr.csum_flags & CSUM_IP_VALID);
+	if (m->m_pkthdr.csum_flags & CSUM_IP_CHECKED) {
+		sum = !(m->m_pkthdr.csum_flags & CSUM_IP_VALID);
+	} else {
+		if (hlen == sizeof(struct ip)) {
+			sum = in_cksum_hdr(ip);
 		} else {
-			if (hlen == sizeof(struct ip)) {
-				sum = in_cksum_hdr(ip);
-			} else {
-				sum = in_cksum(m, hlen);
-			}
-		}
-		if (sum) {
-			IPSTAT_INC(ips_badsum);
-			goto bad;
+			sum = in_cksum(m, hlen);
 		}
 	}
+	if (sum) {
+		IPSTAT_INC(ips_badsum);
+		goto bad;
+	}
+
 #ifdef ALTQ
 	if (altq_input != NULL && (*altq_input)(m, AF_INET) == 0)
 		/* packet is dropped by traffic conditioner */
@@ -488,24 +483,6 @@ tooshort:
 	/* Jump over all PFIL processing if hooks are not active. */
 	if (!PFIL_HOOKED(&V_inet_pfil_hook))
 		goto passin;
-	if (m->m_flags & M_PROTO12) {
-		/*
-		 * Packet has already been through dummynet, and
-		 * therefore also through ipnat (reversed processing
-		 * order); we skip the pfil hooks to avoid ipnat being
-		 * called again on this packet (this implicitly assumes
-		 * that one_pass=1).  However, we need to remove the
-		 * ipfw tag, otherwise the packet will be treated
-		 * improperly in ip_output.
-		 */
-		struct m_tag *ipfw_tag;
-		ipfw_tag = m_tag_locate(m, MTAG_IPFW_RULE, 0, NULL);
-		if (ipfw_tag != NULL) {
-			m_tag_delete(m, ipfw_tag);
-		}
-		m->m_flags &= ~M_PROTO12;
-		goto passin;
-	}
 
 	odst = ip->ip_dst;
 	if (pfil_run_hooks(&V_inet_pfil_hook, &m, ifp, PFIL_IN, NULL) != 0)
