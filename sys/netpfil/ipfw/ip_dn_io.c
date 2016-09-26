@@ -761,12 +761,15 @@ dummynet_send(struct mbuf *m)
 			break ;
 
 		case DIR_IN :
-		        m->m_flags |= M_PROTO12;
+			m_tag_delete(m, tag);
+		        m->m_flags |= M_SKIP_PFIL;
 			netisr_dispatch(NETISR_IP, m);
 			break;
 
 #ifdef INET6
 		case DIR_IN | PROTO_IPV6:
+			m_tag_delete(m, tag);
+		        m->m_flags |= M_SKIP_PFIL;
 			netisr_dispatch(NETISR_IPV6, m);
 			break;
 
