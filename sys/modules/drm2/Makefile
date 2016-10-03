@@ -1,6 +1,7 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+SYSDIR?=${.CURDIR}/../..
+.include "${SYSDIR}/conf/kern.opts.mk"
 
 .if ${MACHINE_CPUARCH} == "amd64"
 _i915kms=	i915kms

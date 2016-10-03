@@ -115,7 +115,7 @@ static void tdma_vdetach(struct ieee80211vap *vap);
 static int tdma_newstate(struct ieee80211vap *, enum ieee80211_state, int);
 static void tdma_beacon_miss(struct ieee80211vap *vap);
 static void tdma_recv_mgmt(struct ieee80211_node *, struct mbuf *,
-	int subtype, int rssi, int nf);
+	int subtype, const struct ieee80211_rx_stats *rxs, int rssi, int nf);
 static int tdma_update(struct ieee80211vap *vap,
 	const struct ieee80211_tdma_param *tdma, struct ieee80211_node *ni,
 	int pickslot);
@@ -149,8 +149,9 @@ ieee80211_tdma_vattach(struct ieee80211vap *vap)
 	KASSERT(vap->iv_caps & IEEE80211_C_TDMA,
 	     ("not a tdma vap, caps 0x%x", vap->iv_caps));
 
-	ts = (struct ieee80211_tdma_state *) malloc(
-	     sizeof(struct ieee80211_tdma_state), M_80211_VAP, M_NOWAIT | M_ZERO);
+	ts = (struct ieee80211_tdma_state *) IEEE80211_MALLOC(
+	     sizeof(struct ieee80211_tdma_state), M_80211_VAP,
+	     IEEE80211_M_NOWAIT | IEEE80211_M_ZERO);
 	if (ts == NULL) {
 		printf("%s: cannot allocate TDMA state block\n", __func__);
 		/* NB: fall back to adhdemo mode */
@@ -199,7 +200,7 @@ tdma_vdetach(struct ieee80211vap *vap)
 		return;
 	}
 	ts->tdma_opdetach(vap);
-	free(vap->iv_tdma, M_80211_VAP);
+	IEEE80211_FREE(vap->iv_tdma, M_80211_VAP);
 	vap->iv_tdma = NULL;
 
 	setackpolicy(vap->iv_ic, 0);	/* enable ACK's */
@@ -320,7 +321,7 @@ tdma_beacon_miss(struct ieee80211vap *vap)
 
 static void
 tdma_recv_mgmt(struct ieee80211_node *ni, struct mbuf *m0,
-	int subtype, int rssi, int nf)
+	int subtype, const struct ieee80211_rx_stats *rxs, int rssi, int nf)
 {
 	struct ieee80211com *ic = ni->ni_ic;
 	struct ieee80211vap *vap = ni->ni_vap;
@@ -331,7 +332,8 @@ tdma_recv_mgmt(struct ieee80211_node *ni, struct mbuf *m0,
 		struct ieee80211_frame *wh = mtod(m0, struct ieee80211_frame *);
 		struct ieee80211_scanparams scan;
 
-		if (ieee80211_parse_beacon(ni, m0, &scan) != 0)
+		/* XXX TODO: use rxstatus to determine off-channel beacons */
+		if (ieee80211_parse_beacon(ni, m0, ic->ic_curchan, &scan) != 0)
 			return;
 		if (scan.tdma == NULL) {
 			/*
@@ -341,8 +343,7 @@ tdma_recv_mgmt(struct ieee80211_node *ni, struct mbuf *m0,
 			 */
 			IEEE80211_DISCARD(vap,
 			    IEEE80211_MSG_ELEMID | IEEE80211_MSG_INPUT,
-			    wh, ieee80211_mgt_subtype_name[subtype >>
-				IEEE80211_FC0_SUBTYPE_SHIFT],
+			    wh, ieee80211_mgt_subtype_name(subtype),
 			    "%s", "no TDMA ie");
 			vap->iv_stats.is_rx_mgtdiscard++;
 			return;
@@ -391,7 +392,7 @@ tdma_recv_mgmt(struct ieee80211_node *ni, struct mbuf *m0,
 		 *     2x parsing of the frame but should happen infrequently
 		 */
 	}
-	ts->tdma_recv_mgmt(ni, m0, subtype, rssi, nf);
+	ts->tdma_recv_mgmt(ni, m0, subtype, rxs, rssi, nf);
 }
 
 /*

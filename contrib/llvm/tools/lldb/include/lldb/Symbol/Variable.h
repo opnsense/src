@@ -1,4 +1,5 @@
-//===-- Variable.h ----------------------------------------------*- C++ -*-===//
+//===-- Variable.h ----------------------------------------------*- C++
+//-*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -10,6 +11,7 @@
 #ifndef liblldb_Variable_h_
 #define liblldb_Variable_h_
 
+#include <memory>
 #include <vector>
 
 #include "lldb/lldb-private.h"
@@ -21,7 +23,8 @@
 
 namespace lldb_private {
 
-class Variable : public UserID
+class Variable : public UserID,
+    public std::enable_shared_from_this<Variable>
 {
 public:
     //------------------------------------------------------------------
@@ -29,14 +32,15 @@ public:
     //------------------------------------------------------------------
     Variable (lldb::user_id_t uid,
               const char *name, 
-              const char *mangled,   // The mangled variable name for variables in namespaces
+              const char *mangled,  // The mangled or fully qualified name of the variable.
               const lldb::SymbolFileTypeSP &symfile_type_sp,
               lldb::ValueType scope,
               SymbolContextScope *owner_scope,
               Declaration* decl,
               const DWARFExpression& location,
               bool external,
-              bool artificial);
+              bool artificial,
+              bool static_member = false);
 
     virtual
     ~Variable();
@@ -55,8 +59,11 @@ public:
         return m_declaration;
     }
 
-    const ConstString&
+    ConstString
     GetName() const;
+
+    ConstString
+    GetUnqualifiedName() const;
 
     SymbolContextScope *
     GetSymbolContextScope() const
@@ -70,18 +77,16 @@ public:
     // function that can be called by commands and expression parsers to make
     // sure we match anything we come across.
     bool
-    NameMatches (const ConstString &name) const
-    {
-        if (m_name == name)
-            return true;
-        return m_mangled.NameMatches (name);
-    }
+    NameMatches (const ConstString &name) const;
 
     bool
     NameMatches (const RegularExpression& regex) const;
 
     Type *
     GetType();
+
+    lldb::LanguageType
+    GetLanguage () const;
 
     lldb::ValueType
     GetScope() const
@@ -99,6 +104,11 @@ public:
     IsArtificial() const
     {
         return m_artificial;
+    }
+
+    bool IsStaticMember() const
+    {
+        return m_static_member;
     }
 
     DWARFExpression &
@@ -163,6 +173,11 @@ public:
                   StringList &matches,
                   bool &word_complete);
 
+    CompilerDeclContext
+    GetDeclContext ();
+
+    CompilerDecl
+    GetDecl ();
 protected:
     ConstString m_name;                 // The basename of the variable (no namespaces)
     Mangled m_mangled;                  // The mangled name of the variable
@@ -173,7 +188,8 @@ protected:
     DWARFExpression m_location;         // The location of this variable that can be fed to DWARFExpression::Evaluate()
     uint8_t m_external:1,               // Visible outside the containing compile unit?
             m_artificial:1,             // Non-zero if the variable is not explicitly declared in source
-            m_loc_is_const_data:1;      // The m_location expression contains the constant variable value data, not a DWARF location
+            m_loc_is_const_data:1,      // The m_location expression contains the constant variable value data, not a DWARF location
+            m_static_member:1;          // Non-zero if variable is static member of a class or struct.
 private:
     Variable(const Variable& rhs);
     Variable& operator=(const Variable& rhs);

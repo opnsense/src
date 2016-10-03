@@ -76,7 +76,7 @@ enum wsp_log_level {
 };
 static int wsp_debug = WSP_LLEVEL_ERROR;/* the default is to only log errors */
 
-SYSCTL_INT(_hw_usb_wsp, OID_AUTO, debug, CTLFLAG_RW,
+SYSCTL_INT(_hw_usb_wsp, OID_AUTO, debug, CTLFLAG_RWTUN,
     &wsp_debug, WSP_LLEVEL_ERROR, "WSP debug level");
 #endif					/* USB_DEBUG */
 
@@ -109,17 +109,17 @@ wsp_runing_rangecheck(struct wsp_tuning *ptun)
 	WSP_CLAMP(ptun->scr_hor_threshold, 1, 255);
 }
 
-SYSCTL_INT(_hw_usb_wsp, OID_AUTO, scale_factor, CTLFLAG_RW,
+SYSCTL_INT(_hw_usb_wsp, OID_AUTO, scale_factor, CTLFLAG_RWTUN,
     &wsp_tuning.scale_factor, 0, "movement scale factor");
-SYSCTL_INT(_hw_usb_wsp, OID_AUTO, z_factor, CTLFLAG_RW,
+SYSCTL_INT(_hw_usb_wsp, OID_AUTO, z_factor, CTLFLAG_RWTUN,
     &wsp_tuning.z_factor, 0, "Z-axis scale factor");
-SYSCTL_INT(_hw_usb_wsp, OID_AUTO, pressure_touch_threshold, CTLFLAG_RW,
+SYSCTL_INT(_hw_usb_wsp, OID_AUTO, pressure_touch_threshold, CTLFLAG_RWTUN,
     &wsp_tuning.pressure_touch_threshold, 0, "touch pressure threshold");
-SYSCTL_INT(_hw_usb_wsp, OID_AUTO, pressure_untouch_threshold, CTLFLAG_RW,
+SYSCTL_INT(_hw_usb_wsp, OID_AUTO, pressure_untouch_threshold, CTLFLAG_RWTUN,
     &wsp_tuning.pressure_untouch_threshold, 0, "untouch pressure threshold");
-SYSCTL_INT(_hw_usb_wsp, OID_AUTO, pressure_tap_threshold, CTLFLAG_RW,
+SYSCTL_INT(_hw_usb_wsp, OID_AUTO, pressure_tap_threshold, CTLFLAG_RWTUN,
     &wsp_tuning.pressure_tap_threshold, 0, "tap pressure threshold");
-SYSCTL_INT(_hw_usb_wsp, OID_AUTO, scr_hor_threshold, CTLFLAG_RW,
+SYSCTL_INT(_hw_usb_wsp, OID_AUTO, scr_hor_threshold, CTLFLAG_RWTUN,
     &wsp_tuning.scr_hor_threshold, 0, "horizontal scrolling threshold");
 
 /*
@@ -1040,7 +1040,7 @@ wsp_intr_callback(struct usb_xfer *xfer, usb_error_t error)
 				if (sc->o_ntouch != ntouch)
 					dx = dy = 0;
 
-				/* Ignore unexpeted movment when typing */
+				/* Ignore unexpeted movement when typing */
 				if (ntouch == 1 && sc->index[0]->tool_major > 1200)
 					dx = dy = 0;
 
@@ -1395,3 +1395,4 @@ static devclass_t wsp_devclass;
 DRIVER_MODULE(wsp, uhub, wsp_driver, wsp_devclass, NULL, 0);
 MODULE_DEPEND(wsp, usb, 1, 1, 1);
 MODULE_VERSION(wsp, 1);
+USB_PNP_HOST_INFO(wsp_devs);

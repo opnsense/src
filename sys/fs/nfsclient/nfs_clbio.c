@@ -35,8 +35,6 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
-#include "opt_kdtrace.h"
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bio.h>
@@ -102,10 +100,10 @@ ncl_getpages(struct vop_getpages_args *ap)
 	cred = curthread->td_ucred;		/* XXX */
 	nmp = VFSTONFS(vp->v_mount);
 	pages = ap->a_m;
-	count = ap->a_count;
+	npages = ap->a_count;
 
 	if ((object = vp->v_object) == NULL) {
-		ncl_printf("nfs_getpages: called with non-merged cache vnode??\n");
+		printf("ncl_getpages: called with non-merged cache vnode\n");
 		return (VM_PAGER_ERROR);
 	}
 
@@ -113,7 +111,7 @@ ncl_getpages(struct vop_getpages_args *ap)
 		mtx_lock(&np->n_mtx);
 		if ((np->n_flag & NNONCACHE) && (vp->v_type == VREG)) {
 			mtx_unlock(&np->n_mtx);
-			ncl_printf("nfs_getpages: called on non-cacheable vnode??\n");
+			printf("ncl_getpages: called on non-cacheable vnode\n");
 			return (VM_PAGER_ERROR);
 		} else
 			mtx_unlock(&np->n_mtx);
@@ -128,30 +126,21 @@ ncl_getpages(struct vop_getpages_args *ap)
 	} else
 		mtx_unlock(&nmp->nm_mtx);
 
-	npages = btoc(count);
-
 	/*
 	 * If the requested page is partially valid, just return it and
 	 * allow the pager to zero-out the blanks.  Partially valid pages
 	 * can only occur at the file EOF.
+	 *
+	 * XXXGL: is that true for NFS, where short read can occur???
 	 */
 	VM_OBJECT_WLOCK(object);
-	if (pages[ap->a_reqpage]->valid != 0) {
-		for (i = 0; i < npages; ++i) {
-			if (i != ap->a_reqpage) {
-				vm_page_lock(pages[i]);
-				vm_page_free(pages[i]);
-				vm_page_unlock(pages[i]);
-			}
-		}
-		VM_OBJECT_WUNLOCK(object);
-		return (0);
-	}
+	if (pages[npages - 1]->valid != 0 && --npages == 0)
+		goto out;
 	VM_OBJECT_WUNLOCK(object);
 
 	/*
 	 * We use only the kva address for the buffer, but this is extremely
-	 * convienient and fast.
+	 * convenient and fast.
 	 */
 	bp = getpbuf(&ncl_pbuf_freecnt);
 
@@ -160,6 +149,7 @@ ncl_getpages(struct vop_getpages_args *ap)
 	PCPU_INC(cnt.v_vnodein);
 	PCPU_ADD(cnt.v_vnodepgsin, npages);
 
+	count = npages << PAGE_SHIFT;
 	iov.iov_base = (caddr_t) kva;
 	iov.iov_len = count;
 	uio.uio_iov = &iov;
@@ -176,16 +166,7 @@ ncl_getpages(struct vop_getpages_args *ap)
 	relpbuf(bp, &ncl_pbuf_freecnt);
 
 	if (error && (uio.uio_resid == count)) {
-		ncl_printf("nfs_getpages: error %d\n", error);
-		VM_OBJECT_WLOCK(object);
-		for (i = 0; i < npages; ++i) {
-			if (i != ap->a_reqpage) {
-				vm_page_lock(pages[i]);
-				vm_page_free(pages[i]);
-				vm_page_unlock(pages[i]);
-			}
-		}
-		VM_OBJECT_WUNLOCK(object);
+		printf("ncl_getpages: error %d\n", error);
 		return (VM_PAGER_ERROR);
 	}
 
@@ -220,7 +201,7 @@ ncl_getpages(struct vop_getpages_args *ap)
 		} else {
 			/*
 			 * Read operation was short.  If no error
-			 * occured we may have hit a zero-fill
+			 * occurred we may have hit a zero-fill
 			 * section.  We leave valid set to 0, and page
 			 * is freed by vm_page_readahead_finish() if
 			 * its index is not equal to requested, or
@@ -229,11 +210,14 @@ ncl_getpages(struct vop_getpages_args *ap)
 			 */
 			;
 		}
-		if (i != ap->a_reqpage)
-			vm_page_readahead_finish(m);
 	}
+out:
 	VM_OBJECT_WUNLOCK(object);
-	return (0);
+	if (ap->a_rbehind)
+		*ap->a_rbehind = 0;
+	if (ap->a_rahead)
+		*ap->a_rahead = 0;
+	return (VM_PAGER_OK);
 }
 
 /*
@@ -283,7 +267,7 @@ ncl_putpages(struct vop_putpages_args *ap)
 	if (newnfs_directio_enable && !newnfs_directio_allow_mmap &&
 	    (np->n_flag & NNONCACHE) && (vp->v_type == VREG)) {
 		mtx_unlock(&np->n_mtx);
-		ncl_printf("ncl_putpages: called on noncache-able vnode??\n");
+		printf("ncl_putpages: called on noncache-able vnode\n");
 		mtx_lock(&np->n_mtx);
 	}
 
@@ -302,7 +286,7 @@ ncl_putpages(struct vop_putpages_args *ap)
 
 	/*
 	 * We use only the kva address for the buffer, but this is extremely
-	 * convienient and fast.
+	 * convenient and fast.
 	 */
 	bp = getpbuf(&ncl_pbuf_freecnt);
 
@@ -694,10 +678,10 @@ ncl_bioread(struct vnode *vp, struct uio *uio, int ioflag, struct ucred *cred)
 			n = np->n_direofoffset - uio->uio_offset;
 		break;
 	    default:
-		ncl_printf(" ncl_bioread: type %x unexpected\n", vp->v_type);
+		printf(" ncl_bioread: type %x unexpected\n", vp->v_type);
 		bp = NULL;
 		break;
-	    };
+	    }
 
 	    if (n > 0) {
 		    error = vn_io_fault_uiomove(bp->b_data + on, (int)n, uio);
@@ -1137,7 +1121,7 @@ again:
 		 */
 
 		if (bp->b_dirtyend > bcount) {
-			ncl_printf("NFS append race @%lx:%d\n",
+			printf("NFS append race @%lx:%d\n",
 			    (long)bp->b_blkno * DEV_BSIZE,
 			    bp->b_dirtyend - bcount);
 			bp->b_dirtyend = bcount;
@@ -1204,7 +1188,7 @@ again:
 
 		/*
 		 * Get the partial update on the progress made from
-		 * uiomove, if an error occured.
+		 * uiomove, if an error occurred.
 		 */
 		if (error != 0)
 			n = local_resid - uio->uio_resid;
@@ -1496,7 +1480,7 @@ again:
 			}
 			/*
 			 * We might have lost our iod while sleeping,
-			 * so check and loop if nescessary.
+			 * so check and loop if necessary.
 			 */
 			goto again;
 		}
@@ -1678,9 +1662,9 @@ ncl_doio(struct vnode *vp, struct buf *bp, struct ucred *cr, struct thread *td,
 			bp->b_flags |= B_INVAL;
 		break;
 	    default:
-		ncl_printf("ncl_doio:  type %x unexpected\n", vp->v_type);
+		printf("ncl_doio:  type %x unexpected\n", vp->v_type);
 		break;
-	    };
+	    }
 	    if (error) {
 		bp->b_ioflags |= BIO_ERROR;
 		bp->b_error = error;

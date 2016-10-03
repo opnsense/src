@@ -1,3 +1,7 @@
+/*
+ * Define simple versions of assertion macros that won't recurse in case
+ * of assertion failures in malloc_*printf().
+ */
 #define	assert(e) do {							\
 	if (config_debug && !(e)) {					\
 		malloc_write("<jemalloc>: Failed assertion\n");		\
@@ -10,6 +14,7 @@
 		malloc_write("<jemalloc>: Unreachable code reached\n");	\
 		abort();						\
 	}								\
+	unreachable();							\
 } while (0)
 
 #define	not_implemented() do {						\
@@ -49,10 +54,14 @@ wrtmessage(void *cbopaque, const char *s)
 	 * Use syscall(2) rather than write(2) when possible in order to avoid
 	 * the possibility of memory allocation within libc.  This is necessary
 	 * on FreeBSD; most operating systems do not have this problem though.
+	 *
+	 * syscall() returns long or int, depending on platform, so capture the
+	 * unused result in the widest plausible type to avoid compiler
+	 * warnings.
 	 */
-	UNUSED int result = syscall(SYS_write, STDERR_FILENO, s, strlen(s));
+	UNUSED long result = syscall(SYS_write, STDERR_FILENO, s, strlen(s));
 #else
-	UNUSED int result = write(STDERR_FILENO, s, strlen(s));
+	UNUSED ssize_t result = write(STDERR_FILENO, s, strlen(s));
 #endif
 }
 
@@ -93,42 +102,44 @@ malloc_write(const char *s)
  * provide a wrapper.
  */
 int
-buferror(char *buf, size_t buflen)
+buferror(int err, char *buf, size_t buflen)
 {
 
 #ifdef _WIN32
-	FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM, NULL, GetLastError(), 0,
-	    (LPSTR)buf, buflen, NULL);
+	FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM, NULL, err, 0,
+	    (LPSTR)buf, (DWORD)buflen, NULL);
 	return (0);
-#elif defined(_GNU_SOURCE)
-	char *b = strerror_r(errno, buf, buflen);
+#elif defined(__GLIBC__) && defined(_GNU_SOURCE)
+	char *b = strerror_r(err, buf, buflen);
 	if (b != buf) {
 		strncpy(buf, b, buflen);
 		buf[buflen-1] = '\0';
 	}
 	return (0);
 #else
-	return (strerror_r(errno, buf, buflen));
+	return (strerror_r(err, buf, buflen));
 #endif
 }
 
 uintmax_t
-malloc_strtoumax(const char *nptr, char **endptr, int base)
+malloc_strtoumax(const char *restrict nptr, char **restrict endptr, int base)
 {
 	uintmax_t ret, digit;
-	int b;
+	unsigned b;
 	bool neg;
 	const char *p, *ns;
 
+	p = nptr;
 	if (base < 0 || base == 1 || base > 36) {
+		ns = p;
 		set_errno(EINVAL);
-		return (UINTMAX_MAX);
+		ret = UINTMAX_MAX;
+		goto label_return;
 	}
 	b = base;
 
 	/* Swallow leading whitespace and get sign, if any. */
 	neg = false;
-	p = nptr;
 	while (true) {
 		switch (*p) {
 		case '\t': case '\n': case '\v': case '\f': case '\r': case ' ':
@@ -162,7 +173,7 @@ malloc_strtoumax(const char *nptr, char **endptr, int base)
 			if (b == 8)
 				p++;
 			break;
-		case 'x':
+		case 'X': case 'x':
 			switch (p[2]) {
 			case '0': case '1': case '2': case '3': case '4':
 			case '5': case '6': case '7': case '8': case '9':
@@ -180,7 +191,9 @@ malloc_strtoumax(const char *nptr, char **endptr, int base)
 			}
 			break;
 		default:
-			break;
+			p++;
+			ret = 0;
+			goto label_return;
 		}
 	}
 	if (b == 0)
@@ -197,13 +210,22 @@ malloc_strtoumax(const char *nptr, char **endptr, int base)
 		if (ret < pret) {
 			/* Overflow. */
 			set_errno(ERANGE);
-			return (UINTMAX_MAX);
+			ret = UINTMAX_MAX;
+			goto label_return;
 		}
 		p++;
 	}
 	if (neg)
 		ret = -ret;
 
+	if (p == ns) {
+		/* No conversion performed. */
+		set_errno(EINVAL);
+		ret = UINTMAX_MAX;
+		goto label_return;
+	}
+
+label_return:
 	if (endptr != NULL) {
 		if (p == ns) {
 			/* No characters were converted. */
@@ -211,7 +233,6 @@ malloc_strtoumax(const char *nptr, char **endptr, int base)
 		} else
 			*endptr = (char *)p;
 	}
-
 	return (ret);
 }
 
@@ -270,7 +291,7 @@ d2s(intmax_t x, char sign, char *s, size_t *slen_p)
 		sign = '-';
 	switch (sign) {
 	case '-':
-		if (neg == false)
+		if (!neg)
 			break;
 		/* Fall through. */
 	case ' ':
@@ -310,10 +331,9 @@ x2s(uintmax_t x, bool alt_form, bool uppercase, char *s, size_t *slen_p)
 	return (s);
 }
 
-int
+size_t
 malloc_vsnprintf(char *str, size_t size, const char *format, va_list ap)
 {
-	int ret;
 	size_t i;
 	const char *f;
 
@@ -333,7 +353,7 @@ malloc_vsnprintf(char *str, size_t size, const char *format, va_list ap)
 	/* Left padding. */						\
 	size_t pad_len = (width == -1) ? 0 : ((slen < (size_t)width) ?	\
 	    (size_t)width - slen : 0);					\
-	if (left_justify == false && pad_len != 0) {			\
+	if (!left_justify && pad_len != 0) {				\
 		size_t j;						\
 		for (j = 0; j < pad_len; j++)				\
 			APPEND_C(' ');					\
@@ -347,7 +367,7 @@ malloc_vsnprintf(char *str, size_t size, const char *format, va_list ap)
 			APPEND_C(' ');					\
 	}								\
 } while (0)
-#define GET_ARG_NUMERIC(val, len) do {					\
+#define	GET_ARG_NUMERIC(val, len) do {					\
 	switch (len) {							\
 	case '?':							\
 		val = va_arg(ap, int);					\
@@ -370,6 +390,9 @@ malloc_vsnprintf(char *str, size_t size, const char *format, va_list ap)
 	case 'j':							\
 		val = va_arg(ap, intmax_t);				\
 		break;							\
+	case 'j' | 0x80:						\
+		val = va_arg(ap, uintmax_t);				\
+		break;							\
 	case 't':							\
 		val = va_arg(ap, ptrdiff_t);				\
 		break;							\
@@ -382,7 +405,9 @@ malloc_vsnprintf(char *str, size_t size, const char *format, va_list ap)
 	case 'p': /* Synthetic; used for %p. */				\
 		val = va_arg(ap, uintptr_t);				\
 		break;							\
-	default: not_reached();						\
+	default:							\
+		not_reached();						\
+		val = 0;						\
 	}								\
 } while (0)
 
@@ -399,30 +424,27 @@ malloc_vsnprintf(char *str, size_t size, const char *format, va_list ap)
 			int prec = -1;
 			int width = -1;
 			unsigned char len = '?';
+			char *s;
+			size_t slen;
 
 			f++;
-			if (*f == '%') {
-				/* %% */
-				APPEND_C(*f);
-				break;
-			}
 			/* Flags. */
 			while (true) {
 				switch (*f) {
 				case '#':
-					assert(alt_form == false);
+					assert(!alt_form);
 					alt_form = true;
 					break;
 				case '-':
-					assert(left_justify == false);
+					assert(!left_justify);
 					left_justify = true;
 					break;
 				case ' ':
-					assert(plus_space == false);
+					assert(!plus_space);
 					plus_space = true;
 					break;
 				case '+':
-					assert(plus_plus == false);
+					assert(!plus_plus);
 					plus_plus = true;
 					break;
 				default: goto label_width;
@@ -435,6 +457,10 @@ malloc_vsnprintf(char *str, size_t size, const char *format, va_list ap)
 			case '*':
 				width = va_arg(ap, int);
 				f++;
+				if (width < 0) {
+					left_justify = true;
+					width = -width;
+				}
 				break;
 			case '0': case '1': case '2': case '3': case '4':
 			case '5': case '6': case '7': case '8': case '9': {
@@ -444,19 +470,16 @@ malloc_vsnprintf(char *str, size_t size, const char *format, va_list ap)
 				assert(uwidth != UINTMAX_MAX || get_errno() !=
 				    ERANGE);
 				width = (int)uwidth;
-				if (*f == '.') {
-					f++;
-					goto label_precision;
-				} else
-					goto label_length;
 				break;
-			} case '.':
-				f++;
-				goto label_precision;
-			default: goto label_length;
+			} default:
+				break;
 			}
+			/* Width/precision separator. */
+			if (*f == '.')
+				f++;
+			else
+				goto label_length;
 			/* Precision. */
-			label_precision:
 			switch (*f) {
 			case '*':
 				prec = va_arg(ap, int);
@@ -485,24 +508,19 @@ malloc_vsnprintf(char *str, size_t size, const char *format, va_list ap)
 				} else
 					len = 'l';
 				break;
-			case 'j':
-				len = 'j';
-				f++;
-				break;
-			case 't':
-				len = 't';
-				f++;
-				break;
-			case 'z':
-				len = 'z';
+			case 'q': case 'j': case 't': case 'z':
+				len = *f;
 				f++;
 				break;
 			default: break;
 			}
 			/* Conversion specifier. */
 			switch (*f) {
-				char *s;
-				size_t slen;
+			case '%':
+				/* %% */
+				APPEND_C(*f);
+				f++;
+				break;
 			case 'd': case 'i': {
 				intmax_t val JEMALLOC_CC_SILENCE_INIT(0);
 				char buf[D2S_BUFSIZE];
@@ -556,7 +574,7 @@ malloc_vsnprintf(char *str, size_t size, const char *format, va_list ap)
 				assert(len == '?' || len == 'l');
 				assert_not_implemented(len != 'l');
 				s = va_arg(ap, char *);
-				slen = (prec == -1) ? strlen(s) : prec;
+				slen = (prec < 0) ? strlen(s) : (size_t)prec;
 				APPEND_PADDED_S(s, slen, width, left_justify);
 				f++;
 				break;
@@ -569,8 +587,7 @@ malloc_vsnprintf(char *str, size_t size, const char *format, va_list ap)
 				APPEND_PADDED_S(s, slen, width, left_justify);
 				f++;
 				break;
-			}
-			default: not_implemented();
+			} default: not_reached();
 			}
 			break;
 		} default: {
@@ -584,20 +601,19 @@ malloc_vsnprintf(char *str, size_t size, const char *format, va_list ap)
 		str[i] = '\0';
 	else
 		str[size - 1] = '\0';
-	ret = i;
 
 #undef APPEND_C
 #undef APPEND_S
 #undef APPEND_PADDED_S
 #undef GET_ARG_NUMERIC
-	return (ret);
+	return (i);
 }
 
-JEMALLOC_ATTR(format(printf, 3, 4))
-int
+JEMALLOC_FORMAT_PRINTF(3, 4)
+size_t
 malloc_snprintf(char *str, size_t size, const char *format, ...)
 {
-	int ret;
+	size_t ret;
 	va_list ap;
 
 	va_start(ap, format);
@@ -632,7 +648,7 @@ malloc_vcprintf(void (*write_cb)(void *, const char *), void *cbopaque,
  * Print to a callback function in such a way as to (hopefully) avoid memory
  * allocation.
  */
-JEMALLOC_ATTR(format(printf, 3, 4))
+JEMALLOC_FORMAT_PRINTF(3, 4)
 void
 malloc_cprintf(void (*write_cb)(void *, const char *), void *cbopaque,
     const char *format, ...)
@@ -645,7 +661,7 @@ malloc_cprintf(void (*write_cb)(void *, const char *), void *cbopaque,
 }
 
 /* Print to stderr in such a way as to avoid memory allocation. */
-JEMALLOC_ATTR(format(printf, 1, 2))
+JEMALLOC_FORMAT_PRINTF(1, 2)
 void
 malloc_printf(const char *format, ...)
 {
@@ -655,3 +671,12 @@ malloc_printf(const char *format, ...)
 	malloc_vcprintf(NULL, NULL, format, ap);
 	va_end(ap);
 }
+
+/*
+ * Restore normal assertion macros, in order to make it possible to compile all
+ * C files as a single concatenation.
+ */
+#undef assert
+#undef not_reached
+#undef not_implemented
+#include "jemalloc/internal/assert.h"

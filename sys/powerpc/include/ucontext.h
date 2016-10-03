@@ -42,10 +42,11 @@ typedef struct __mcontext {
 #define _MC_AV_VALID	0x02
 	int		mc_onstack;	  	/* saved onstack flag */
 	int		mc_len;			/* sizeof(__mcontext) */
-	uint64_t	mc_avec[32*2];		/* vector register file */
-	uint32_t	mc_av[2];
-	register_t	mc_frame[42];
-	uint64_t	mc_fpreg[33];
+	__uint64_t	mc_avec[32*2];		/* vector register file */
+	__uint32_t	mc_av[2];
+	__register_t	mc_frame[42];
+	__uint64_t	mc_fpreg[33];
+	__uint64_t	mc_vsxfpreg[32];	/* low-order half of VSR0-31 */
 } mcontext_t __aligned(16);
 
 #if defined(_KERNEL) && defined(__powerpc64__)
@@ -60,6 +61,7 @@ typedef struct __mcontext32 {
 	uint32_t	mc_av[2];
 	uint32_t	mc_frame[42];
 	uint64_t	mc_fpreg[33];
+	uint64_t	mc_vsxfpreg[32];	/* low-order half of VSR0-31 */
 } mcontext32_t __aligned(16);
 #endif
 

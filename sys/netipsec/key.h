@@ -76,11 +76,15 @@ extern void _key_freesp(struct secpolicy **, const char*, int);
 
 extern struct secasvar *key_allocsa(union sockaddr_union *, u_int, u_int32_t,
 	const char*, int);
+extern struct secasvar *key_allocsa_tunnel(union sockaddr_union *,
+    union sockaddr_union *, u_int, const char*, int);
 extern void key_addrefsa(struct secasvar *, const char*, int);
 extern void key_freesav(struct secasvar **, const char*, int);
 
 #define	KEY_ALLOCSA(dst, proto, spi)				\
 	key_allocsa(dst, proto, spi, __FILE__, __LINE__)
+#define	KEY_ALLOCSA_TUNNEL(src, dst, proto)				\
+	key_allocsa_tunnel(src, dst, proto, __FILE__, __LINE__)
 #define	KEY_ADDREFSA(sav)					\
 	key_addrefsa(sav, __FILE__, __LINE__)
 #define	KEY_FREESAV(psav)					\
@@ -96,7 +100,6 @@ extern struct secpolicy *key_msg2sp(struct sadb_x_policy *,
 extern struct mbuf *key_sp2msg(struct secpolicy *);
 extern int key_ismyaddr(struct sockaddr *);
 extern int key_spdacquire(struct secpolicy *);
-extern void key_timehandler(void);
 extern u_long key_random(void);
 extern void key_randomfill(void *, size_t);
 extern void key_freereg(struct socket *);
@@ -106,7 +109,6 @@ extern void key_init(void);
 extern void key_destroy(void);
 #endif
 extern void key_sa_recordxfer(struct secasvar *, struct mbuf *);
-extern void key_sa_stir_iv(struct secasvar *);
 #ifdef IPSEC_NAT_T
 u_int16_t key_portfromsaddr(struct sockaddr *);
 #define	KEY_PORTFROMSADDR(saddr)				\

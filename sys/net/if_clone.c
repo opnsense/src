@@ -32,6 +32,7 @@
  */
 
 #include <sys/param.h>
+#include <sys/eventhandler.h>
 #include <sys/malloc.h>
 #include <sys/limits.h>
 #include <sys/lock.h>
@@ -42,8 +43,8 @@
 #include <sys/socket.h>
 
 #include <net/if.h>
-#include <net/if_clone.h>
 #include <net/if_var.h>
+#include <net/if_clone.h>
 #include <net/radix.h>
 #include <net/route.h>
 #include <net/vnet.h>
@@ -102,15 +103,14 @@ static int     ifc_simple_match(struct if_clone *, const char *);
 static int     ifc_simple_create(struct if_clone *, char *, size_t, caddr_t);
 static int     ifc_simple_destroy(struct if_clone *, struct ifnet *);
 
-static struct mtx	if_cloners_mtx;
+static struct mtx if_cloners_mtx;
+MTX_SYSINIT(if_cloners_lock, &if_cloners_mtx, "if_cloners lock", MTX_DEF);
 static VNET_DEFINE(int, if_cloners_count);
 VNET_DEFINE(LIST_HEAD(, if_clone), if_cloners);
 
 #define	V_if_cloners_count	VNET(if_cloners_count)
 #define	V_if_cloners		VNET(if_cloners)
 
-#define IF_CLONERS_LOCK_INIT()		\
-    mtx_init(&if_cloners_mtx, "if_cloners lock", NULL, MTX_DEF)
 #define IF_CLONERS_LOCK_ASSERT()	mtx_assert(&if_cloners_mtx, MA_OWNED)
 #define IF_CLONERS_LOCK()		mtx_lock(&if_cloners_mtx)
 #define IF_CLONERS_UNLOCK()		mtx_unlock(&if_cloners_mtx)
@@ -166,13 +166,6 @@ vnet_if_clone_init(void)
 {
 
 	LIST_INIT(&V_if_cloners);
-}
-
-void
-if_clone_init(void)
-{
-
-	IF_CLONERS_LOCK_INIT();
 }
 
 /*
@@ -491,7 +484,7 @@ if_clone_list(struct if_clonereq *ifcr)
 	 * below, but that's not a major problem.  Not caping our
 	 * allocation to the number of cloners actually in the system
 	 * could be because that would let arbitrary users cause us to
-	 * allocate abritrary amounts of kernel memory.
+	 * allocate arbitrary amounts of kernel memory.
 	 */
 	buf_count = (V_if_cloners_count < ifcr->ifcr_count) ?
 	    V_if_cloners_count : ifcr->ifcr_count;

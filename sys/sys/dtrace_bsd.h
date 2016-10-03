@@ -38,18 +38,15 @@ struct thread;
 struct vattr;
 struct vnode;
 struct reg;
-struct devstat;
-struct bio;
+
+int dtrace_trap(struct trapframe *, u_int);
 
 /*
  * The dtrace module handles traps that occur during a DTrace probe.
  * This type definition is used in the trap handler to provide a
- * hook for the dtrace module to register it's handler with.
+ * hook for the dtrace module to register its handler with.
  */
 typedef int (*dtrace_trap_func_t)(struct trapframe *, u_int);
-
-int	dtrace_trap(struct trapframe *, u_int);
-
 extern dtrace_trap_func_t	dtrace_trap_func;
 
 /*
@@ -57,9 +54,7 @@ extern dtrace_trap_func_t	dtrace_trap_func;
  * handler. We want to ensure that DTrace doesn't trigger another trap, which
  * would result in a reset.
  */
-typedef	int (*dtrace_invop_func_t)(uintptr_t, uintptr_t *, uintptr_t);
 typedef void (*dtrace_doubletrap_func_t)(void);
-extern	dtrace_invop_func_t	dtrace_invop_func;
 extern	dtrace_doubletrap_func_t	dtrace_doubletrap_func;
 
 /* Pid provider hooks */
@@ -160,23 +155,6 @@ extern dtrace_nfsclient_nfs23_done_probe_func_t
     dtrace_nfsclient_nfs23_done_probe;
 extern dtrace_nfsclient_nfs23_done_probe_func_t
     dtrace_nfscl_nfs234_done_probe;
-
-/* IO Provider hooks, really hook into devstat */
-typedef void (*dtrace_io_start_probe_func_t)(uint32_t, struct bio *,
-					     struct devstat *);
-extern dtrace_io_start_probe_func_t dtrace_io_start_probe;
-
-typedef void (*dtrace_io_done_probe_func_t)(uint32_t, struct bio *,
-					    struct devstat *);
-extern dtrace_io_done_probe_func_t dtrace_io_done_probe;
-
-typedef void (*dtrace_io_wait_start_probe_func_t)(uint32_t, uintptr_t *, 
-						  struct devstat *);
-extern dtrace_io_wait_start_probe_func_t dtrace_io_wait_start_probe;
-
-typedef void (*dtrace_io_wait_done_probe_func_t)(uint32_t, uintptr_t *, 
-						 struct devstat *);
-extern dtrace_io_wait_done_probe_func_t dtrace_io_wait_done_probe;
 
 /*
  * Functions which allow the dtrace module to check that the kernel 

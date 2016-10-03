@@ -18,6 +18,7 @@
 #include <utility>
 
 // Other libraries and framework includes
+#include "llvm/ADT/StringRef.h"
 // Project includes
 #include "lldb/lldb-private-types.h"
 #include "lldb/lldb-types.h"
@@ -75,11 +76,9 @@ public:
     ///     A NULL terminated command that will be copied and split up
     ///     into arguments.
     ///
-    /// @see Args::SetCommandString(const char *)
+    /// @see Args::SetCommandString(llvm::StringRef)
     //------------------------------------------------------------------
-    Args (const char *command = NULL);
-
-    Args (const char *command, size_t len);
+    Args (llvm::StringRef command = llvm::StringRef());
 
     Args (const Args &rhs);
     
@@ -108,7 +107,7 @@ public:
     /// that can be accessed via the accessor functions.
     ///
     /// @param[in] command
-    ///     A NULL terminated command that will be copied and split up
+    ///     A command StringRef that will be copied and split up
     ///     into arguments.
     ///
     /// @see Args::GetArgumentCount() const
@@ -118,10 +117,7 @@ public:
     /// @see Args::Unshift (const char *)
     //------------------------------------------------------------------
     void
-    SetCommandString (const char *command);
-
-    void
-    SetCommandString (const char *command, size_t len);
+    SetCommandString (llvm::StringRef command);
 
     bool
     GetCommandString (std::string &command) const;
@@ -293,7 +289,7 @@ public:
     /// A copy \a arg_cstr will be made.
     ///
     /// @param[in] arg_cstr
-    ///     The argument to push on the front the the argument stack.
+    ///     The argument to push on the front of the argument stack.
     ///
     /// @param[in] quote_char
     ///     If the argument was originally quoted, put in the quote char here.
@@ -308,7 +304,7 @@ public:
     /// Parse the arguments in the contained arguments.
     ///
     /// The arguments that are consumed by the argument parsing process
-    /// will be removed from the argument vector. The arguements that
+    /// will be removed from the argument vector. The arguments that
     /// get processed start at the second argument. The first argument
     /// is assumed to be the command and will not be touched.
     ///
@@ -347,18 +343,6 @@ public:
                  bool trailing = true,
                  bool return_null_if_empty = true);
 
-    static int32_t
-    StringToSInt32 (const char *s, int32_t fail_value = 0, int base = 0, bool *success_ptr = NULL);
-
-    static uint32_t
-    StringToUInt32 (const char *s, uint32_t fail_value = 0, int base = 0, bool *success_ptr = NULL);
-
-    static int64_t
-    StringToSInt64 (const char *s, int64_t fail_value = 0, int base = 0, bool *success_ptr = NULL);
-
-    static uint64_t
-    StringToUInt64 (const char *s, uint64_t fail_value = 0, int base = 0, bool *success_ptr = NULL);
-
     static bool
     UInt64ValueIsValidForByteSize (uint64_t uval64, size_t total_byte_size)
     {
@@ -394,7 +378,9 @@ public:
 
     static bool
     StringToBoolean (const char *s, bool fail_value, bool *success_ptr);
-    
+
+    static char StringToChar(const char *s, char fail_value, bool *success_ptr);
+
     static int64_t
     StringToOptionEnum (const char *s, OptionEnumValueElement *enum_values, int32_t fail_value, Error &error);
 
@@ -430,13 +416,16 @@ public:
     EncodeEscapeSequences (const char *src, std::string &dst);
 
     // ExpandEscapeSequences will change a string of possibly non-printable
-    // characters and expand them into text. So '\n' will turn into two chracters
+    // characters and expand them into text. So '\n' will turn into two characters
     // like "\n" which is suitable for human reading. When a character is not
     // printable and isn't one of the common in escape sequences listed in the
     // help for EncodeEscapeSequences, then it will be encoded as octal. Printable
     // characters are left alone.
     static void
     ExpandEscapedCharacters (const char *src, std::string &dst);
+
+    static std::string
+    EscapeLLDBCommandArgument (const std::string& arg, char quote_char);
 
     // This one isn't really relevant to Arguments per se, but we're using the Args as a
     // general strings container, so...
@@ -459,6 +448,9 @@ protected:
 
     void
     UpdateArgvFromArgs ();
+
+    llvm::StringRef
+    ParseSingleArgument (llvm::StringRef command);
 };
 
 } // namespace lldb_private

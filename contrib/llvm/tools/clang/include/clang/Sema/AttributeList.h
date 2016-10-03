@@ -12,14 +12,15 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_SEMA_ATTRLIST_H
-#define LLVM_CLANG_SEMA_ATTRLIST_H
+#ifndef LLVM_CLANG_SEMA_ATTRIBUTELIST_H
+#define LLVM_CLANG_SEMA_ATTRIBUTELIST_H
 
 #include "clang/Basic/SourceLocation.h"
+#include "clang/Basic/TargetInfo.h"
 #include "clang/Basic/VersionTuple.h"
 #include "clang/Sema/Ownership.h"
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/PointerUnion.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Allocator.h"
 #include <cassert>
 
@@ -79,7 +80,11 @@ public:
     /// __declspec(...)
     AS_Declspec,
     /// __ptr16, alignas(...), etc.
-    AS_Keyword
+    AS_Keyword,
+    /// Context-sensitive version of a keyword attribute.
+    AS_ContextSensitiveKeyword,
+    /// #pragma ...
+    AS_Pragma
   };
 
 private:
@@ -91,10 +96,10 @@ private:
 
   /// The number of expression arguments this attribute has.
   /// The expressions themselves are stored after the object.
-  unsigned NumArgs : 16;
+  unsigned NumArgs : 15;
 
   /// Corresponds to the Syntax enum.
-  unsigned SyntaxUsed : 2;
+  unsigned SyntaxUsed : 3;
 
   /// True if already diagnosed as invalid.
   mutable unsigned Invalid : 1;
@@ -132,11 +137,9 @@ private:
   AttributeList *NextInPool;
 
   /// Arguments, if any, are stored immediately following the object.
-  ArgsUnion *getArgsBuffer() {
-    return reinterpret_cast<ArgsUnion*>(this+1);
-  }
+  ArgsUnion *getArgsBuffer() { return reinterpret_cast<ArgsUnion *>(this + 1); }
   ArgsUnion const *getArgsBuffer() const {
-    return reinterpret_cast<ArgsUnion const *>(this+1);
+    return reinterpret_cast<ArgsUnion const *>(this + 1);
   }
 
   enum AvailabilitySlot {
@@ -201,10 +204,10 @@ private:
     return *reinterpret_cast<const PropertyData*>(this + 1);
   }
 
-  AttributeList(const AttributeList &) LLVM_DELETED_FUNCTION;
-  void operator=(const AttributeList &) LLVM_DELETED_FUNCTION;
-  void operator delete(void *) LLVM_DELETED_FUNCTION;
-  ~AttributeList() LLVM_DELETED_FUNCTION;
+  AttributeList(const AttributeList &) = delete;
+  void operator=(const AttributeList &) = delete;
+  void operator delete(void *) = delete;
+  ~AttributeList() = delete;
 
   size_t allocated_size() const;
 
@@ -217,7 +220,7 @@ private:
       ScopeLoc(scopeLoc), EllipsisLoc(ellipsisLoc), NumArgs(numArgs),
       SyntaxUsed(syntaxUsed), Invalid(false), UsedAsTypeAttr(false),
       IsAvailability(false), IsTypeTagForDatatype(false), IsProperty(false),
-      HasParsedType(false), NextInPosition(0), NextInPool(0) {
+      HasParsedType(false), NextInPosition(nullptr), NextInPool(nullptr) {
     if (numArgs) memcpy(getArgsBuffer(), args, numArgs * sizeof(ArgsUnion));
     AttrKind = getKind(getName(), getScopeName(), syntaxUsed);
   }
@@ -236,7 +239,7 @@ private:
       Invalid(false), UsedAsTypeAttr(false), IsAvailability(true),
       IsTypeTagForDatatype(false), IsProperty(false), HasParsedType(false),
       UnavailableLoc(unavailable), MessageExpr(messageExpr),
-      NextInPosition(0), NextInPool(0) {
+      NextInPosition(nullptr), NextInPool(nullptr) {
     ArgsUnion PVal(Parm);
     memcpy(getArgsBuffer(), &PVal, sizeof(ArgsUnion));
     new (&getAvailabilitySlot(IntroducedSlot)) AvailabilityChange(introduced);
@@ -245,6 +248,26 @@ private:
     AttrKind = getKind(getName(), getScopeName(), syntaxUsed);
   }
 
+  /// Constructor for objc_bridge_related attributes.
+  AttributeList(IdentifierInfo *attrName, SourceRange attrRange,
+                IdentifierInfo *scopeName, SourceLocation scopeLoc,
+                IdentifierLoc *Parm1,
+                IdentifierLoc *Parm2,
+                IdentifierLoc *Parm3,
+                Syntax syntaxUsed)
+  : AttrName(attrName), ScopeName(scopeName), AttrRange(attrRange),
+    ScopeLoc(scopeLoc), EllipsisLoc(), NumArgs(3), SyntaxUsed(syntaxUsed),
+    Invalid(false), UsedAsTypeAttr(false), IsAvailability(false),
+    IsTypeTagForDatatype(false), IsProperty(false), HasParsedType(false),
+    NextInPosition(nullptr), NextInPool(nullptr) {
+    ArgsVector Args;
+    Args.push_back(Parm1);
+    Args.push_back(Parm2);
+    Args.push_back(Parm3);
+    memcpy(getArgsBuffer(), &Args[0], 3 * sizeof(ArgsUnion));
+    AttrKind = getKind(getName(), getScopeName(), syntaxUsed);
+  }
+  
   /// Constructor for type_tag_for_datatype attribute.
   AttributeList(IdentifierInfo *attrName, SourceRange attrRange,
                 IdentifierInfo *scopeName, SourceLocation scopeLoc,
@@ -254,7 +277,7 @@ private:
       ScopeLoc(scopeLoc), EllipsisLoc(), NumArgs(1), SyntaxUsed(syntaxUsed),
       Invalid(false), UsedAsTypeAttr(false), IsAvailability(false),
       IsTypeTagForDatatype(true), IsProperty(false), HasParsedType(false),
-      NextInPosition(NULL), NextInPool(NULL) {
+      NextInPosition(nullptr), NextInPool(nullptr) {
     ArgsUnion PVal(ArgKind);
     memcpy(getArgsBuffer(), &PVal, sizeof(ArgsUnion));
     TypeTagForDatatypeData &ExtraData = getTypeTagForDatatypeDataSlot();
@@ -272,7 +295,7 @@ private:
         ScopeLoc(scopeLoc), EllipsisLoc(), NumArgs(0), SyntaxUsed(syntaxUsed),
         Invalid(false), UsedAsTypeAttr(false), IsAvailability(false),
         IsTypeTagForDatatype(false), IsProperty(false), HasParsedType(true),
-        NextInPosition(0), NextInPool(0) {
+        NextInPosition(nullptr), NextInPool(nullptr) {
     new (&getTypeBuffer()) ParsedType(typeArg);
     AttrKind = getKind(getName(), getScopeName(), syntaxUsed);
   }
@@ -286,7 +309,7 @@ private:
       ScopeLoc(scopeLoc), EllipsisLoc(), NumArgs(0), SyntaxUsed(syntaxUsed),
       Invalid(false), UsedAsTypeAttr(false), IsAvailability(false),
       IsTypeTagForDatatype(false), IsProperty(true), HasParsedType(false),
-      NextInPosition(0), NextInPool(0) {
+      NextInPosition(nullptr), NextInPool(nullptr) {
     new (&getPropertyDataBuffer()) PropertyData(getterId, setterId);
     AttrKind = getKind(getName(), getScopeName(), syntaxUsed);
   }
@@ -320,14 +343,20 @@ public:
 
   bool isAlignasAttribute() const {
     // FIXME: Use a better mechanism to determine this.
-    return getKind() == AT_Aligned && SyntaxUsed == AS_Keyword;
+    return getKind() == AT_Aligned && isKeywordAttribute();
   }
 
   bool isDeclspecAttribute() const { return SyntaxUsed == AS_Declspec; }
   bool isCXX11Attribute() const {
     return SyntaxUsed == AS_CXX11 || isAlignasAttribute();
   }
-  bool isKeywordAttribute() const { return SyntaxUsed == AS_Keyword; }
+  bool isKeywordAttribute() const {
+    return SyntaxUsed == AS_Keyword || SyntaxUsed == AS_ContextSensitiveKeyword;
+  }
+
+  bool isContextSensitiveKeywordAttribute() const {
+    return SyntaxUsed == AS_ContextSensitiveKeyword;
+  }
 
   bool isInvalid() const { return Invalid; }
   void setInvalid(bool b = true) const { Invalid = b; }
@@ -366,44 +395,6 @@ public:
   }
   IdentifierLoc *getArgAsIdent(unsigned Arg) const {
     return getArg(Arg).get<IdentifierLoc*>();
-  }
-
-  class arg_iterator {
-    ArgsUnion const *X;
-    unsigned Idx;
-  public:
-    arg_iterator(ArgsUnion const *x, unsigned idx) : X(x), Idx(idx) {}
-
-    arg_iterator& operator++() {
-      ++Idx;
-      return *this;
-    }
-
-    bool operator==(const arg_iterator& I) const {
-      assert (X == I.X &&
-              "compared arg_iterators are for different argument lists");
-      return Idx == I.Idx;
-    }
-
-    bool operator!=(const arg_iterator& I) const {
-      return !operator==(I);
-    }
-
-    ArgsUnion operator*() const {
-      return X[Idx];
-    }
-
-    unsigned getArgNum() const {
-      return Idx+1;
-    }
-  };
-
-  arg_iterator arg_begin() const {
-    return arg_iterator(getArgsBuffer(), 0);
-  }
-
-  arg_iterator arg_end() const {
-    return arg_iterator(getArgsBuffer(), NumArgs);
   }
 
   const AvailabilityChange &getAvailabilityIntroduced() const {
@@ -464,9 +455,24 @@ public:
   /// to pretty print itself.
   unsigned getAttributeSpellingListIndex() const;
 
+  bool isTargetSpecificAttr() const;
+  bool isTypeAttr() const;
+
   bool hasCustomParsing() const;
   unsigned getMinArgs() const;
   unsigned getMaxArgs() const;
+  bool hasVariadicArg() const;
+  bool diagnoseAppertainsTo(class Sema &S, const Decl *D) const;
+  bool diagnoseLangOpts(class Sema &S) const;
+  bool existsInTarget(const TargetInfo &Target) const;
+  bool isKnownToGCC() const;
+
+  /// \brief If the parsed attribute has a semantic equivalent, and it would
+  /// have a semantic Spelling enumeration (due to having semantically-distinct
+  /// spelling variations), return the value of that semantic spelling. If the
+  /// parsed attribute does not have a semantic equivalent, or would not have
+  /// a Spelling enumeration, the value UINT_MAX is returned.
+  unsigned getSemanticSpelling() const;
 };
 
 /// A factory, from which one makes pools, from which one creates
@@ -549,11 +555,13 @@ class AttributePool {
 
 public:
   /// Create a new pool for a factory.
-  AttributePool(AttributeFactory &factory) : Factory(factory), Head(0) {}
+  AttributePool(AttributeFactory &factory) : Factory(factory), Head(nullptr) {}
+
+  AttributePool(const AttributePool &) = delete;
 
   /// Move the given pool's allocations to this pool.
-  AttributePool(AttributePool &pool) : Factory(pool.Factory), Head(pool.Head) {
-    pool.Head = 0;
+  AttributePool(AttributePool &&pool) : Factory(pool.Factory), Head(pool.Head) {
+    pool.Head = nullptr;
   }
 
   AttributeFactory &getFactory() const { return Factory; }
@@ -561,7 +569,7 @@ public:
   void clear() {
     if (Head) {
       Factory.reclaimPool(Head);
-      Head = 0;
+      Head = nullptr;
     }
   }
 
@@ -569,7 +577,7 @@ public:
   void takeAllFrom(AttributePool &pool) {
     if (pool.Head) {
       takePool(pool.Head);
-      pool.Head = 0;
+      pool.Head = nullptr;
     }
   }
 
@@ -607,8 +615,19 @@ public:
                                           syntax));
   }
 
-  AttributeList *createIntegerAttribute(ASTContext &C, IdentifierInfo *Name,
-                                        SourceLocation TokLoc, int Arg);
+  AttributeList *create(IdentifierInfo *attrName, SourceRange attrRange,
+                        IdentifierInfo *scopeName, SourceLocation scopeLoc,
+                        IdentifierLoc *Param1,
+                        IdentifierLoc *Param2,
+                        IdentifierLoc *Param3,
+                        AttributeList::Syntax syntax) {
+    size_t size = sizeof(AttributeList) + 3 * sizeof(ArgsUnion);
+    void *memory = allocate(size);
+    return add(new (memory) AttributeList(attrName, attrRange,
+                                          scopeName, scopeLoc,
+                                          Param1, Param2, Param3,
+                                          syntax));
+  }
 
   AttributeList *createTypeTagForDatatype(
                     IdentifierInfo *attrName, SourceRange attrRange,
@@ -647,40 +666,6 @@ public:
   }
 };
 
-/// addAttributeLists - Add two AttributeLists together
-/// The right-hand list is appended to the left-hand list, if any
-/// A pointer to the joined list is returned.
-/// Note: the lists are not left unmodified.
-inline AttributeList *addAttributeLists(AttributeList *Left,
-                                        AttributeList *Right) {
-  if (!Left)
-    return Right;
-
-  AttributeList *next = Left, *prev;
-  do {
-    prev = next;
-    next = next->getNext();
-  } while (next);
-  prev->setNext(Right);
-  return Left;
-}
-
-/// CXX11AttributeList - A wrapper around a C++11 attribute list.
-/// Stores, in addition to the list proper, whether or not an actual list was
-/// (as opposed to an empty list, which may be ill-formed in some places) and
-/// the source range of the list.
-struct CXX11AttributeList { 
-  AttributeList *AttrList;
-  SourceRange Range;
-  bool HasAttr;
-  CXX11AttributeList (AttributeList *attrList, SourceRange range, bool hasAttr)
-    : AttrList(attrList), Range(range), HasAttr (hasAttr) {
-  }
-  CXX11AttributeList ()
-    : AttrList(0), Range(), HasAttr(false) {
-  }
-};
-
 /// ParsedAttributes - A collection of parsed attributes.  Currently
 /// we don't differentiate between the various attribute syntaxes,
 /// which is basically silly.
@@ -690,21 +675,18 @@ struct CXX11AttributeList {
 class ParsedAttributes {
 public:
   ParsedAttributes(AttributeFactory &factory)
-    : pool(factory), list(0) {
+    : pool(factory), list(nullptr) {
   }
 
-  ParsedAttributes(ParsedAttributes &attrs)
-    : pool(attrs.pool), list(attrs.list) {
-    attrs.list = 0;
-  }
+  ParsedAttributes(const ParsedAttributes &) = delete;
 
   AttributePool &getPool() const { return pool; }
 
-  bool empty() const { return list == 0; }
+  bool empty() const { return list == nullptr; }
 
   void add(AttributeList *newAttr) {
     assert(newAttr);
-    assert(newAttr->getNext() == 0);
+    assert(newAttr->getNext() == nullptr);
     newAttr->setNext(list);
     list = newAttr;
   }
@@ -726,11 +708,11 @@ public:
 
   void takeAllFrom(ParsedAttributes &attrs) {
     addAll(attrs.list);
-    attrs.list = 0;
+    attrs.list = nullptr;
     pool.takeAllFrom(attrs.pool);
   }
 
-  void clear() { list = 0; pool.clear(); }
+  void clear() { list = nullptr; pool.clear(); }
   AttributeList *getList() const { return list; }
 
   /// Returns a reference to the attribute list.  Try not to introduce
@@ -763,6 +745,20 @@ public:
     AttributeList *attr =
       pool.create(attrName, attrRange, scopeName, scopeLoc, Param, introduced,
                   deprecated, obsoleted, unavailable, MessageExpr, syntax);
+    add(attr);
+    return attr;
+  }
+
+  /// Add objc_bridge_related attribute.
+  AttributeList *addNew(IdentifierInfo *attrName, SourceRange attrRange,
+                        IdentifierInfo *scopeName, SourceLocation scopeLoc,
+                        IdentifierLoc *Param1,
+                        IdentifierLoc *Param2,
+                        IdentifierLoc *Param3,
+                        AttributeList::Syntax syntax) {
+    AttributeList *attr =
+      pool.create(attrName, attrRange, scopeName, scopeLoc,
+                  Param1, Param2, Param3, syntax);
     add(attr);
     return attr;
   }
@@ -808,15 +804,6 @@ public:
     return attr;
   }
 
-  AttributeList *addNewInteger(ASTContext &C, IdentifierInfo *name,
-                               SourceLocation loc, int arg) {
-    AttributeList *attr =
-      pool.createIntegerAttribute(C, name, loc, arg);
-    add(attr);
-    return attr;
-  }
-
-
 private:
   mutable AttributePool pool;
   AttributeList *list;
@@ -829,6 +816,46 @@ enum AttributeArgumentNType {
   AANT_ArgumentIntegerConstant,
   AANT_ArgumentString,
   AANT_ArgumentIdentifier
+};
+
+/// These constants match the enumerated choices of
+/// warn_attribute_wrong_decl_type and err_attribute_wrong_decl_type.
+enum AttributeDeclKind {
+  ExpectedFunction,
+  ExpectedUnion,
+  ExpectedVariableOrFunction,
+  ExpectedFunctionOrMethod,
+  ExpectedParameter,
+  ExpectedFunctionMethodOrBlock,
+  ExpectedFunctionMethodOrClass,
+  ExpectedFunctionMethodOrParameter,
+  ExpectedClass,
+  ExpectedEnum,
+  ExpectedVariable,
+  ExpectedMethod,
+  ExpectedVariableFunctionOrLabel,
+  ExpectedFieldOrGlobalVar,
+  ExpectedStruct,
+  ExpectedVariableOrTypedef,
+  ExpectedTLSVar,
+  ExpectedVariableOrField,
+  ExpectedVariableFieldOrTag,
+  ExpectedTypeOrNamespace,
+  ExpectedObjectiveCInterface,
+  ExpectedMethodOrProperty,
+  ExpectedStructOrUnion,
+  ExpectedStructOrUnionOrClass,
+  ExpectedType,
+  ExpectedObjCInstanceMethod,
+  ExpectedObjCInterfaceDeclInitMethod,
+  ExpectedFunctionVariableOrClass,
+  ExpectedObjectiveCProtocol,
+  ExpectedFunctionGlobalVarMethodOrProperty,
+  ExpectedStructOrUnionOrTypedef,
+  ExpectedStructOrTypedef,
+  ExpectedObjectiveCInterfaceOrProtocol,
+  ExpectedKernelFunction,
+  ExpectedFunctionWithProtoType
 };
 
 }  // end namespace clang

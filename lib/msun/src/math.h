@@ -69,10 +69,6 @@ extern const union __nan_un {
 #define	math_errhandling	MATH_ERREXCEPT
 
 #define	FP_FAST_FMAF	1
-#ifdef __ia64__
-#define	FP_FAST_FMA	1
-#define	FP_FAST_FMAL	1
-#endif
 
 /* Symbolic constants to classify floating point numbers. */
 #define	FP_INFINITE	0x01
@@ -465,7 +461,7 @@ long double	fmal(long double, long double, long double);
 long double	fmaxl(long double, long double) __pure2;
 long double	fminl(long double, long double) __pure2;
 long double	fmodl(long double, long double);
-long double	frexpl(long double value, int *); /* fundamentally !__pure2 */
+long double	frexpl(long double, int *); /* fundamentally !__pure2 */
 long double	hypotl(long double, long double);
 int		ilogbl(long double) __pure2;
 long double	ldexpl(long double, int);

@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2013 Ruslan Bukin <br@bsdpad.com>
+ * Copyright (c) 2013-2014 Ruslan Bukin <br@bsdpad.com>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -33,57 +33,98 @@ __FBSDID("$FreeBSD$");
 #include <sys/mutex.h>
 #include <sys/smp.h>
 
+#include <vm/vm.h>
+#include <vm/pmap.h>
+
+#include <machine/cpu.h>
 #include <machine/smp.h>
 #include <machine/fdt.h>
 #include <machine/intr.h>
 
-#define	EXYNOS_SYSRAM			0x02020000
+#define	EXYNOS_CHIPID		0x10000000
 
-void
-platform_mp_init_secondary(void)
+#define	EXYNOS5250_SOC_ID	0x43520000
+#define	EXYNOS5420_SOC_ID	0xE5420000
+#define	EXYNOS5_SOC_ID_MASK	0xFFFFF000
+
+#define	EXYNOS_SYSRAM		0x02020000
+#define	EXYNOS5420_SYSRAM_NS	(EXYNOS_SYSRAM + 0x53000 + 0x1c)
+
+#define	EXYNOS_PMU_BASE		0x10040000
+#define	CORE_CONFIG(n)		(0x2000 + (0x80 * (n)))
+#define	CORE_STATUS(n)		(CORE_CONFIG(n) + 0x4)
+#define	CORE_PWR_EN		0x3
+
+static int
+exynos_get_soc_id(void)
 {
+	bus_addr_t chipid;
+	int reg;
 
-	gic_init_secondary();
+	if (bus_space_map(fdtbus_bs_tag, EXYNOS_CHIPID,
+		0x1000, 0, &chipid) != 0)
+		panic("Couldn't map chipid\n");
+	reg = bus_space_read_4(fdtbus_bs_tag, chipid, 0x0);
+	bus_space_unmap(fdtbus_bs_tag, chipid, 0x1000);
+
+	return (reg & EXYNOS5_SOC_ID_MASK);
 }
 
 void
 platform_mp_setmaxid(void)
 {
 
-	mp_maxid = 1;
-}
+	if (exynos_get_soc_id() == EXYNOS5420_SOC_ID)
+		mp_ncpus = 4;
+	else
+		mp_ncpus = 2;
 
-int
-platform_mp_probe(void)
-{
-
-	mp_ncpus = 2;
-	return (1);
+	mp_maxid = mp_ncpus - 1;
 }
 
 void
 platform_mp_start_ap(void)
 {
-	bus_addr_t sysram;
-	int err;
+	bus_addr_t sysram, pmu;
+	int err, i, j;
+	int status;
+	int reg;
 
-	err = bus_space_map(fdtbus_bs_tag, EXYNOS_SYSRAM, 0x100, 0, &sysram);
+	err = bus_space_map(fdtbus_bs_tag, EXYNOS_PMU_BASE, 0x20000, 0, &pmu);
+	if (err != 0)
+		panic("Couldn't map pmu\n");
+
+	if (exynos_get_soc_id() == EXYNOS5420_SOC_ID)
+		reg = EXYNOS5420_SYSRAM_NS;
+	else
+		reg = EXYNOS_SYSRAM;
+
+	err = bus_space_map(fdtbus_bs_tag, reg, 0x100, 0, &sysram);
 	if (err != 0)
 		panic("Couldn't map sysram\n");
+
+	/* Give power to CPUs */
+	for (i = 1; i < mp_ncpus; i++) {
+		bus_space_write_4(fdtbus_bs_tag, pmu, CORE_CONFIG(i),
+		    CORE_PWR_EN);
+
+		for (j = 10; j >= 0; j--) {
+			status = bus_space_read_4(fdtbus_bs_tag, pmu,
+			    CORE_STATUS(i));
+			if ((status & CORE_PWR_EN) == CORE_PWR_EN)
+				break;
+			DELAY(10);
+			if (j == 0)
+				printf("Can't power on CPU%d\n", i);
+		}
+	}
 
 	bus_space_write_4(fdtbus_bs_tag, sysram, 0x0,
 	    pmap_kextract((vm_offset_t)mpentry));
 
-	cpu_idcache_wbinv_all();
-	cpu_l2cache_wbinv_all();
+	dcache_wbinv_poc_all();
 
 	armv7_sev();
 	bus_space_unmap(fdtbus_bs_tag, sysram, 0x100);
-}
-
-void
-platform_ipi_send(cpuset_t cpus, u_int ipi)
-{
-
-	pic_ipi_send(cpus, ipi);
+	bus_space_unmap(fdtbus_bs_tag, pmu, 0x20000);
 }

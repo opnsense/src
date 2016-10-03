@@ -54,7 +54,7 @@ extern "C" {
 #include <sys/types.h>
 #include <sys/modctl.h>
 #include <sys/processor.h>
-#if defined(sun)
+#ifdef illumos
 #include <sys/systm.h>
 #else
 #include <sys/cpuvar.h>
@@ -65,7 +65,7 @@ extern "C" {
 typedef int model_t;
 #endif
 #include <sys/ctf_api.h>
-#if defined(sun)
+#ifdef illumos
 #include <sys/cyclic.h>
 #include <sys/int_limits.h>
 #else
@@ -87,7 +87,7 @@ typedef int model_t;
 
 #define	DTRACE_PROVNAMELEN	64
 #define	DTRACE_MODNAMELEN	64
-#define	DTRACE_FUNCNAMELEN	128
+#define	DTRACE_FUNCNAMELEN	192
 #define	DTRACE_NAMELEN		64
 #define	DTRACE_FULLNAMELEN	(DTRACE_PROVNAMELEN + DTRACE_MODNAMELEN + \
 				DTRACE_FUNCNAMELEN + DTRACE_NAMELEN + 4)
@@ -257,7 +257,7 @@ typedef enum dtrace_probespec {
 #define	DIF_VAR_ERRNO		0x0120	/* thread errno */
 #define	DIF_VAR_EXECARGS	0x0121	/* process arguments */
 
-#if !defined(sun)
+#ifndef illumos
 #define	DIF_VAR_CPU		0x0200
 #endif
 
@@ -1277,7 +1277,7 @@ typedef struct dtrace_providerdesc {
  * pseudodevice driver.  These ioctls comprise the user-kernel interface to
  * DTrace.
  */
-#if defined(sun)
+#ifdef illumos
 #define	DTRACEIOC		(('d' << 24) | ('t' << 16) | ('r' << 8))
 #define	DTRACEIOC_PROVIDER	(DTRACEIOC | 1)		/* provider query */
 #define	DTRACEIOC_PROBES	(DTRACEIOC | 2)		/* probe query */
@@ -1408,7 +1408,7 @@ typedef struct {
  * helpers and should no longer be used.  No other ioctls are valid on the
  * helper minor node.
  */
-#if defined(sun)
+#ifdef illumos
 #define	DTRACEHIOC		(('d' << 24) | ('t' << 16) | ('h' << 8))
 #define	DTRACEHIOC_ADD		(DTRACEHIOC | 1)	/* add helper */
 #define	DTRACEHIOC_REMOVE	(DTRACEHIOC | 2)	/* remove helper */
@@ -1423,8 +1423,9 @@ typedef struct dof_helper {
 	char dofhp_mod[DTRACE_MODNAMELEN];	/* executable or library name */
 	uint64_t dofhp_addr;			/* base address of object */
 	uint64_t dofhp_dof;			/* address of helper DOF */
-#if !defined(sun)
-	int gen;
+#ifdef __FreeBSD__
+	pid_t dofhp_pid;			/* target process ID */
+	int dofhp_gen;
 #endif
 } dof_helper_t;
 
@@ -2204,12 +2205,18 @@ extern void dtrace_probe(dtrace_id_t, uintptr_t arg0, uintptr_t arg1,
  *
  * 1.2.4  Caller's context
  *
- *   dtms_create_probe() is called from either ioctl() or module load context.
- *   The DTrace framework is locked in such a way that meta providers may not
- *   register or unregister. This means that the meta provider cannot call
- *   dtrace_meta_register() or dtrace_meta_unregister(). However, the context is
- *   such that the provider may (and is expected to) call provider-related
- *   DTrace provider APIs including dtrace_probe_create().
+ *   dtms_create_probe() is called from either ioctl() or module load context
+ *   in the context of a newly-created provider (that is, a provider that
+ *   is a result of a call to dtms_provide_pid()). The DTrace framework is
+ *   locked in such a way that meta providers may not register or unregister,
+ *   such that no other thread can call into a meta provider operation and that
+ *   atomicity is assured with respect to meta provider operations across
+ *   dtms_provide_pid() and subsequent calls to dtms_create_probe().
+ *   The context is thus effectively single-threaded with respect to the meta
+ *   provider, and that the meta provider cannot call dtrace_meta_register()
+ *   or dtrace_meta_unregister(). However, the context is such that the
+ *   provider may (and is expected to) call provider-related DTrace provider
+ *   APIs including dtrace_probe_create().
  *
  * 1.3  void *dtms_provide_pid(void *arg, dtrace_meta_provider_t *mprov,
  *	      pid_t pid)
@@ -2325,7 +2332,7 @@ typedef enum dtrace_vtime_state {
 	DTRACE_VTIME_ACTIVE_TNF		/* DTrace virtual time _and_ TNF */
 } dtrace_vtime_state_t;
 
-#if defined(sun)
+#ifdef illumos
 extern dtrace_vtime_state_t dtrace_vtime_active;
 #endif
 extern void dtrace_vtime_switch(kthread_t *next);
@@ -2337,7 +2344,7 @@ extern void dtrace_vtime_disable(void);
 struct regs;
 struct reg;
 
-#if defined(sun)
+#ifdef illumos
 extern int (*dtrace_pid_probe_ptr)(struct reg *);
 extern int (*dtrace_return_probe_ptr)(struct reg *);
 extern void (*dtrace_fasttrap_fork_ptr)(proc_t *, proc_t *);
@@ -2356,7 +2363,7 @@ extern void dtrace_membar_producer(void);
 extern void dtrace_membar_consumer(void);
 
 extern void (*dtrace_cpu_init)(processorid_t);
-#if defined(sun)
+#ifdef illumos
 extern void (*dtrace_modload)(modctl_t *);
 extern void (*dtrace_modunload)(modctl_t *);
 #endif
@@ -2370,7 +2377,7 @@ extern void (*dtrace_debugger_init)(void);
 extern void (*dtrace_debugger_fini)(void);
 extern dtrace_cacheid_t dtrace_predcache_id;
 
-#if defined(sun)
+#ifdef illumos
 extern hrtime_t dtrace_gethrtime(void);
 #else
 void dtrace_debug_printf(const char *, ...) __printflike(1, 2);
@@ -2391,15 +2398,16 @@ extern int dtrace_instr_size(uchar_t *instr);
 extern int dtrace_instr_size_isa(uchar_t *, model_t, int *);
 extern void dtrace_invop_callsite(void);
 #endif
-extern void dtrace_invop_add(int (*)(uintptr_t, uintptr_t *, uintptr_t));
-extern void dtrace_invop_remove(int (*)(uintptr_t, uintptr_t *, uintptr_t));
+extern void dtrace_invop_add(int (*)(uintptr_t, struct trapframe *, uintptr_t));
+extern void dtrace_invop_remove(int (*)(uintptr_t, struct trapframe *,
+    uintptr_t));
 
 #ifdef __sparc
 extern int dtrace_blksuword32(uintptr_t, uint32_t *, int);
 extern void dtrace_getfsr(uint64_t *);
 #endif
 
-#if !defined(sun)
+#ifndef illumos
 extern void dtrace_helpers_duplicate(proc_t *, proc_t *);
 extern void dtrace_helpers_destroy(proc_t *);
 #endif
@@ -2420,7 +2428,9 @@ extern void dtrace_helpers_destroy(proc_t *);
 #if defined(__i386) || defined(__amd64)
 
 #define	DTRACE_INVOP_PUSHL_EBP		1
+#define	DTRACE_INVOP_PUSHQ_RBP		DTRACE_INVOP_PUSHL_EBP
 #define	DTRACE_INVOP_POPL_EBP		2
+#define	DTRACE_INVOP_POPQ_RBP		DTRACE_INVOP_POPL_EBP
 #define	DTRACE_INVOP_LEAVE		3
 #define	DTRACE_INVOP_NOP		4
 #define	DTRACE_INVOP_RET		5
@@ -2433,6 +2443,67 @@ extern void dtrace_helpers_destroy(proc_t *);
 #define DTRACE_INVOP_JUMP	4
 #define DTRACE_INVOP_MFLR_R0	5
 #define DTRACE_INVOP_NOP	6
+
+#elif defined(__arm__)
+
+#define	DTRACE_INVOP_SHIFT	4
+#define	DTRACE_INVOP_MASK	((1 << DTRACE_INVOP_SHIFT) - 1)
+#define	DTRACE_INVOP_DATA(x)	((x) >> DTRACE_INVOP_SHIFT)
+
+#define DTRACE_INVOP_PUSHM	1
+#define DTRACE_INVOP_POPM	2
+#define DTRACE_INVOP_B		3
+
+#elif defined(__aarch64__)
+
+#define	INSN_SIZE	4
+
+#define	B_MASK		0xff000000
+#define	B_DATA_MASK	0x00ffffff
+#define	B_INSTR		0x14000000
+
+#define	RET_INSTR	0xd65f03c0
+
+#define	LDP_STP_MASK	0xffc00000
+#define	STP_32		0x29800000
+#define	STP_64		0xa9800000
+#define	LDP_32		0x28c00000
+#define	LDP_64		0xa8c00000
+#define	LDP_STP_PREIND	(1 << 24)
+#define	LDP_STP_DIR	(1 << 22) /* Load instruction */
+#define	ARG1_SHIFT	0
+#define	ARG1_MASK	0x1f
+#define	ARG2_SHIFT	10
+#define	ARG2_MASK	0x1f
+#define	OFFSET_SHIFT	15
+#define	OFFSET_SIZE	7
+#define	OFFSET_MASK	((1 << OFFSET_SIZE) - 1)
+
+#define	DTRACE_INVOP_PUSHM	1
+#define	DTRACE_INVOP_RET	2
+#define	DTRACE_INVOP_B		3
+
+#elif defined(__mips__)
+
+#define	INSN_SIZE		4
+
+/* Load/Store double RA to/from SP */
+#define	LDSD_RA_SP_MASK		0xffff0000
+#define	LDSD_DATA_MASK		0x0000ffff
+#define	SD_RA_SP		0xffbf0000
+#define	LD_RA_SP		0xdfbf0000
+
+#define	DTRACE_INVOP_SD		1
+#define	DTRACE_INVOP_LD		2
+
+#elif defined(__riscv__)
+
+#define	SD_RA_SP_MASK		0x1fff07f
+#define	SD_RA_SP		0x0113023
+
+#define	DTRACE_INVOP_SD		1
+#define	DTRACE_INVOP_RET	2
+#define	DTRACE_INVOP_NOP	3
 
 #endif
 

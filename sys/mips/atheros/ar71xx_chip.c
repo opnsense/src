@@ -55,8 +55,6 @@ __FBSDID("$FreeBSD$");
 #include <mips/atheros/ar71xx_chip.h>
 #include <mips/atheros/ar71xx_cpudef.h>
 
-#include <mips/sentry5/s5reg.h>
-
 /* XXX these should replace the current definitions in ar71xxreg.h */
 /* XXX perhaps an ar71xx_chip.h header file? */
 #define AR71XX_PLL_REG_CPU_CONFIG       AR71XX_PLL_CPU_BASE + 0x00
@@ -81,6 +79,7 @@ uint32_t u_ar71xx_ddr_freq;
 uint32_t u_ar71xx_uart_freq;
 uint32_t u_ar71xx_wdt_freq;
 uint32_t u_ar71xx_refclk;
+uint32_t u_ar71xx_mdio_freq;
 
 static void
 ar71xx_chip_detect_mem_size(void)
@@ -94,7 +93,7 @@ ar71xx_chip_detect_sys_frequency(void)
 	uint32_t freq;
 	uint32_t div;
 
-	u_ar71xx_refclk = AR71XX_BASE_FREQ;
+	u_ar71xx_mdio_freq = u_ar71xx_refclk = AR71XX_BASE_FREQ;
 
 	pll = ATH_READ_REG(AR71XX_PLL_REG_CPU_CONFIG);
 
@@ -253,27 +252,26 @@ ar71xx_chip_set_pll_ge(int unit, int speed, uint32_t pll)
 }
 
 static void
-ar71xx_chip_ddr_flush_ge(int unit)
+ar71xx_chip_ddr_flush(ar71xx_flush_ddr_id_t id)
 {
 
-	switch (unit) {
-	case 0:
+	switch (id) {
+	case AR71XX_CPU_DDR_FLUSH_GE0:
 		ar71xx_ddr_flush(AR71XX_WB_FLUSH_GE0);
 		break;
-	case 1:
+	case AR71XX_CPU_DDR_FLUSH_GE1:
 		ar71xx_ddr_flush(AR71XX_WB_FLUSH_GE1);
 		break;
+	case AR71XX_CPU_DDR_FLUSH_USB:
+		ar71xx_ddr_flush(AR71XX_WB_FLUSH_USB);
+		break;
+	case AR71XX_CPU_DDR_FLUSH_PCIE:
+		ar71xx_ddr_flush(AR71XX_WB_FLUSH_PCI);
+		break;
 	default:
-		printf("%s: invalid DDR flush for arge unit: %d\n",
-		    __func__, unit);
-		return;
+		printf("%s: invalid DDR flush id (%d)\n", __func__, id);
+		break;
 	}
-}
-
-static void
-ar71xx_chip_ddr_flush_ip2(void)
-{
-	ar71xx_ddr_flush(AR71XX_WB_FLUSH_PCI);
 }
 
 static uint32_t
@@ -333,8 +331,7 @@ struct ar71xx_cpu_def ar71xx_chip_def = {
 	&ar71xx_chip_set_pll_ge,
 	&ar71xx_chip_set_mii_speed,
 	&ar71xx_chip_set_mii_if,
-	&ar71xx_chip_ddr_flush_ge,
 	&ar71xx_chip_get_eth_pll,
-	&ar71xx_chip_ddr_flush_ip2,
+	&ar71xx_chip_ddr_flush,
 	&ar71xx_chip_init_usb_peripheral,
 };

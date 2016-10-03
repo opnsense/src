@@ -11,9 +11,13 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "Windows.h"
-#include "llvm/ADT/OwningPtr.h"
+#include "WindowsSupport.h"
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/ConvertUTF.h"
+#include "llvm/Support/Errc.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/WindowsError.h"
+#include "llvm/Support/raw_ostream.h"
 #include <cstdio>
 #include <fcntl.h>
 #include <io.h>
@@ -29,43 +33,75 @@ using namespace sys;
 
 ProcessInfo::ProcessInfo() : ProcessHandle(0), Pid(0), ReturnCode(0) {}
 
-// This function just uses the PATH environment variable to find the program.
-std::string sys::FindProgramByName(const std::string &progName) {
-  // Check some degenerate cases
-  if (progName.length() == 0) // no program
-    return "";
-  std::string temp = progName;
-  // Return paths with slashes verbatim.
-  if (progName.find('\\') != std::string::npos ||
-      progName.find('/') != std::string::npos)
-    return temp;
+ErrorOr<std::string> sys::findProgramByName(StringRef Name,
+                                            ArrayRef<StringRef> Paths) {
+  assert(!Name.empty() && "Must have a name!");
 
-  // At this point, the file name is valid and does not contain slashes.
-  // Let Windows search for it.
-  SmallVector<wchar_t, MAX_PATH> progNameUnicode;
-  if (windows::UTF8ToUTF16(progName, progNameUnicode))
-    return "";
+  if (Name.find_first_of("/\\") != StringRef::npos)
+    return std::string(Name);
 
-  SmallVector<wchar_t, MAX_PATH> buffer;
-  DWORD len = MAX_PATH;
-  do {
-    buffer.reserve(len);
-    len = ::SearchPathW(NULL, progNameUnicode.data(), L".exe",
-                        buffer.capacity(), buffer.data(), NULL);
+  const wchar_t *Path = nullptr;
+  std::wstring PathStorage;
+  if (!Paths.empty()) {
+    PathStorage.reserve(Paths.size() * MAX_PATH);
+    for (unsigned i = 0; i < Paths.size(); ++i) {
+      if (i)
+        PathStorage.push_back(L';');
+      StringRef P = Paths[i];
+      SmallVector<wchar_t, MAX_PATH> TmpPath;
+      if (std::error_code EC = windows::UTF8ToUTF16(P, TmpPath))
+        return EC;
+      PathStorage.append(TmpPath.begin(), TmpPath.end());
+    }
+    Path = PathStorage.c_str();
+  }
 
-    // See if it wasn't found.
-    if (len == 0)
-      return "";
+  SmallVector<wchar_t, MAX_PATH> U16Name;
+  if (std::error_code EC = windows::UTF8ToUTF16(Name, U16Name))
+    return EC;
 
-    // Buffer was too small; grow and retry.
-  } while (len > buffer.capacity());
+  SmallVector<StringRef, 12> PathExts;
+  PathExts.push_back("");
+  PathExts.push_back(".exe"); // FIXME: This must be in %PATHEXT%.
+  if (const char *PathExtEnv = std::getenv("PATHEXT"))
+    SplitString(PathExtEnv, PathExts, ";");
 
-  buffer.set_size(len);
-  SmallVector<char, MAX_PATH> result;
-  if (windows::UTF16ToUTF8(buffer.begin(), buffer.size(), result))
-    return "";
+  SmallVector<wchar_t, MAX_PATH> U16Result;
+  DWORD Len = MAX_PATH;
+  for (StringRef Ext : PathExts) {
+    SmallVector<wchar_t, MAX_PATH> U16Ext;
+    if (std::error_code EC = windows::UTF8ToUTF16(Ext, U16Ext))
+      return EC;
 
-  return std::string(result.data(), result.size());
+    do {
+      U16Result.reserve(Len);
+      // Lets attach the extension manually. That is needed for files
+      // with a point in name like aaa.bbb. SearchPathW will not add extension
+      // from its argument to such files because it thinks they already had one.
+      SmallVector<wchar_t, MAX_PATH> U16NameExt;
+      if (std::error_code EC =
+              windows::UTF8ToUTF16(Twine(Name + Ext).str(), U16NameExt))
+        return EC;
+
+      Len = ::SearchPathW(Path, c_str(U16NameExt), nullptr,
+                          U16Result.capacity(), U16Result.data(), nullptr);
+    } while (Len > U16Result.capacity());
+
+    if (Len != 0)
+      break; // Found it.
+  }
+
+  if (Len == 0)
+    return mapWindowsError(::GetLastError());
+
+  U16Result.set_size(Len);
+
+  SmallVector<char, MAX_PATH> U8Result;
+  if (std::error_code EC =
+          windows::UTF16ToUTF8(U16Result.data(), U16Result.size(), U8Result))
+    return EC;
+
+  return std::string(U8Result.begin(), U8Result.end());
 }
 
 static HANDLE RedirectIO(const StringRef *path, int fd, std::string* ErrMsg) {
@@ -90,15 +126,20 @@ static HANDLE RedirectIO(const StringRef *path, int fd, std::string* ErrMsg) {
   sa.bInheritHandle = TRUE;
 
   SmallVector<wchar_t, 128> fnameUnicode;
-  if (windows::UTF8ToUTF16(fname, fnameUnicode))
-    return INVALID_HANDLE_VALUE;
-
+  if (path->empty()) {
+    // Don't play long-path tricks on "NUL".
+    if (windows::UTF8ToUTF16(fname, fnameUnicode))
+      return INVALID_HANDLE_VALUE;
+  } else {
+    if (path::widenPath(fname, fnameUnicode))
+      return INVALID_HANDLE_VALUE;
+  }
   h = CreateFileW(fnameUnicode.data(), fd ? GENERIC_WRITE : GENERIC_READ,
                   FILE_SHARE_READ, &sa, fd == 0 ? OPEN_EXISTING : CREATE_ALWAYS,
                   FILE_ATTRIBUTE_NORMAL, NULL);
   if (h == INVALID_HANDLE_VALUE) {
-    MakeErrMsg(ErrMsg, std::string(fname) + ": Can't open file for " +
-        (fd ? "input: " : "output: "));
+    MakeErrMsg(ErrMsg, fname + ": Can't open file for " +
+        (fd ? "input" : "output"));
   }
 
   return h;
@@ -167,19 +208,7 @@ static unsigned int ArgLenWithQuotes(const char *Str) {
 
 }
 
-static bool Execute(ProcessInfo &PI, StringRef Program, const char **args,
-                    const char **envp, const StringRef **redirects,
-                    unsigned memoryLimit, std::string *ErrMsg) {
-  if (!sys::fs::can_execute(Program)) {
-    if (ErrMsg)
-      *ErrMsg = "program not executable";
-    return false;
-  }
-
-  // Windows wants a command line, not an array of args, to pass to the new
-  // process.  We have to concatenate them all, while quoting the args that
-  // have embedded spaces (or are empty).
-
+static std::unique_ptr<char[]> flattenArgs(const char **args) {
   // First, determine the length of the command line.
   unsigned len = 0;
   for (unsigned i = 0; args[i]; i++) {
@@ -187,7 +216,7 @@ static bool Execute(ProcessInfo &PI, StringRef Program, const char **args,
   }
 
   // Now build the command line.
-  OwningArrayPtr<char> command(new char[len+1]);
+  std::unique_ptr<char[]> command(new char[len+1]);
   char *p = command.get();
 
   for (unsigned i = 0; args[i]; i++) {
@@ -217,6 +246,30 @@ static bool Execute(ProcessInfo &PI, StringRef Program, const char **args,
   }
 
   *p = 0;
+  return command;
+}
+
+static bool Execute(ProcessInfo &PI, StringRef Program, const char **args,
+                    const char **envp, const StringRef **redirects,
+                    unsigned memoryLimit, std::string *ErrMsg) {
+  if (!sys::fs::can_execute(Program)) {
+    if (ErrMsg)
+      *ErrMsg = "program not executable";
+    return false;
+  }
+
+  // can_execute may succeed by looking at Program + ".exe". CreateProcessW
+  // will implicitly add the .exe if we provide a command line without an
+  // executable path, but since we use an explicit executable, we have to add
+  // ".exe" ourselves.
+  SmallString<64> ProgramStorage;
+  if (!sys::fs::exists(Program))
+    Program = Twine(Program + ".exe").toStringRef(ProgramStorage);
+
+  // Windows wants a command line, not an array of args, to pass to the new
+  // process.  We have to concatenate them all, while quoting the args that
+  // have embedded spaces (or are empty).
+  std::unique_ptr<char[]> command = flattenArgs(args);
 
   // The pointer to the environment block for the new process.
   std::vector<wchar_t> EnvBlock;
@@ -227,7 +280,7 @@ static bool Execute(ProcessInfo &PI, StringRef Program, const char **args,
     // an environment block by concatenating them.
     for (unsigned i = 0; envp[i]; ++i) {
       SmallVector<wchar_t, MAX_PATH> EnvString;
-      if (error_code ec = windows::UTF8ToUTF16(envp[i], EnvString)) {
+      if (std::error_code ec = windows::UTF8ToUTF16(envp[i], EnvString)) {
         SetLastError(ec.value());
         MakeErrMsg(ErrMsg, "Unable to convert environment variable to UTF-16");
         return false;
@@ -291,7 +344,7 @@ static bool Execute(ProcessInfo &PI, StringRef Program, const char **args,
   fflush(stderr);
 
   SmallVector<wchar_t, MAX_PATH> ProgramUtf16;
-  if (error_code ec = windows::UTF8ToUTF16(Program, ProgramUtf16)) {
+  if (std::error_code ec = path::widenPath(Program, ProgramUtf16)) {
     SetLastError(ec.value());
     MakeErrMsg(ErrMsg,
                std::string("Unable to convert application name to UTF-16"));
@@ -299,7 +352,7 @@ static bool Execute(ProcessInfo &PI, StringRef Program, const char **args,
   }
 
   SmallVector<wchar_t, MAX_PATH> CommandUtf16;
-  if (error_code ec = windows::UTF8ToUTF16(command.get(), CommandUtf16)) {
+  if (std::error_code ec = windows::UTF8ToUTF16(command.get(), CommandUtf16)) {
     SetLastError(ec.value());
     MakeErrMsg(ErrMsg,
                std::string("Unable to convert command-line to UTF-16"));
@@ -378,7 +431,7 @@ ProcessInfo sys::Wait(const ProcessInfo &PI, unsigned SecondsToWait,
     if (SecondsToWait) {
       if (!TerminateProcess(PI.ProcessHandle, 1)) {
         if (ErrMsg)
-          MakeErrMsg(ErrMsg, "Failed to terminate timed-out program.");
+          MakeErrMsg(ErrMsg, "Failed to terminate timed-out program");
 
         // -2 indicates a crash or timeout as opposed to failure to execute.
         WaitResult.ReturnCode = -2;
@@ -397,12 +450,13 @@ ProcessInfo sys::Wait(const ProcessInfo &PI, unsigned SecondsToWait,
   DWORD status;
   BOOL rc = GetExitCodeProcess(PI.ProcessHandle, &status);
   DWORD err = GetLastError();
-  CloseHandle(PI.ProcessHandle);
+  if (err != ERROR_INVALID_HANDLE)
+    CloseHandle(PI.ProcessHandle);
 
   if (!rc) {
     SetLastError(err);
     if (ErrMsg)
-      MakeErrMsg(ErrMsg, "Failed getting status for program.");
+      MakeErrMsg(ErrMsg, "Failed getting status for program");
 
     // -2 indicates a crash or timeout as opposed to failure to execute.
     WaitResult.ReturnCode = -2;
@@ -423,35 +477,73 @@ ProcessInfo sys::Wait(const ProcessInfo &PI, unsigned SecondsToWait,
   return WaitResult;
 }
 
-error_code sys::ChangeStdinToBinary(){
-  int result = _setmode( _fileno(stdin), _O_BINARY );
+std::error_code sys::ChangeStdinToBinary() {
+  int result = _setmode(_fileno(stdin), _O_BINARY);
   if (result == -1)
-    return error_code(errno, generic_category());
-  return make_error_code(errc::success);
+    return std::error_code(errno, std::generic_category());
+  return std::error_code();
 }
 
-error_code sys::ChangeStdoutToBinary(){
-  int result = _setmode( _fileno(stdout), _O_BINARY );
+std::error_code sys::ChangeStdoutToBinary() {
+  int result = _setmode(_fileno(stdout), _O_BINARY);
   if (result == -1)
-    return error_code(errno, generic_category());
-  return make_error_code(errc::success);
+    return std::error_code(errno, std::generic_category());
+  return std::error_code();
 }
 
-error_code sys::ChangeStderrToBinary(){
-  int result = _setmode( _fileno(stderr), _O_BINARY );
-  if (result == -1)
-    return error_code(errno, generic_category());
-  return make_error_code(errc::success);
+std::error_code
+llvm::sys::writeFileWithEncoding(StringRef FileName, StringRef Contents,
+                                 WindowsEncodingMethod Encoding) {
+  std::error_code EC;
+  llvm::raw_fd_ostream OS(FileName, EC, llvm::sys::fs::OpenFlags::F_Text);
+  if (EC)
+    return EC;
+
+  if (Encoding == WEM_UTF8) {
+    OS << Contents;
+  } else if (Encoding == WEM_CurrentCodePage) {
+    SmallVector<wchar_t, 1> ArgsUTF16;
+    SmallVector<char, 1> ArgsCurCP;
+
+    if ((EC = windows::UTF8ToUTF16(Contents, ArgsUTF16)))
+      return EC;
+
+    if ((EC = windows::UTF16ToCurCP(
+             ArgsUTF16.data(), ArgsUTF16.size(), ArgsCurCP)))
+      return EC;
+
+    OS.write(ArgsCurCP.data(), ArgsCurCP.size());
+  } else if (Encoding == WEM_UTF16) {
+    SmallVector<wchar_t, 1> ArgsUTF16;
+
+    if ((EC = windows::UTF8ToUTF16(Contents, ArgsUTF16)))
+      return EC;
+
+    // Endianness guessing
+    char BOM[2];
+    uint16_t src = UNI_UTF16_BYTE_ORDER_MARK_NATIVE;
+    memcpy(BOM, &src, 2);
+    OS.write(BOM, 2);
+    OS.write((char *)ArgsUTF16.data(), ArgsUTF16.size() << 1);
+  } else {
+    llvm_unreachable("Unknown encoding");
+  }
+
+  if (OS.has_error())
+    return make_error_code(errc::io_error);
+
+  return EC;
 }
 
-bool llvm::sys::argumentsFitWithinSystemLimits(ArrayRef<const char*> Args) {
+bool llvm::sys::commandLineFitsWithinSystemLimits(StringRef Program, ArrayRef<const char*> Args) {
   // The documented max length of the command line passed to CreateProcess.
   static const size_t MaxCommandStringLength = 32768;
-  size_t ArgLength = 0;
+  // Account for the trailing space for the program path and the
+  // trailing NULL of the last argument.
+  size_t ArgLength = ArgLenWithQuotes(Program.str().c_str()) + 2;
   for (ArrayRef<const char*>::iterator I = Args.begin(), E = Args.end();
        I != E; ++I) {
-    // Account for the trailing space for every arg but the last one and the
-    // trailing NULL of the last argument.
+    // Account for the trailing space for every arg
     ArgLength += ArgLenWithQuotes(*I) + 1;
     if (ArgLength > MaxCommandStringLength) {
       return false;

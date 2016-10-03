@@ -36,22 +36,27 @@ __FBSDID("$FreeBSD$");
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/ktr.h>
+#include <sys/lock.h>
+#include <sys/limits.h>
 #include <sys/module.h>
 #include <sys/protosw.h>
 #include <sys/domain.h>
+#include <sys/refcount.h>
+#include <sys/rmlock.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 #include <sys/taskqueue.h>
 #include <net/if.h>
+#include <net/if_var.h>
 #include <netinet/in.h>
 #include <netinet/in_pcb.h>
 #include <netinet/in_var.h>
 #include <netinet/ip.h>
 #include <netinet/ip6.h>
-#include <netinet/tcp_var.h>
 #include <netinet6/scope6_var.h>
 #define TCPSTATES
 #include <netinet/tcp_fsm.h>
+#include <netinet/tcp_var.h>
 #include <netinet/toecore.h>
 
 #ifdef TCP_OFFLOAD
@@ -104,8 +109,9 @@ static eventhandler_tag ifaddr_evhandler;
 static struct timeout_task clip_task;
 
 struct toepcb *
-alloc_toepcb(struct port_info *pi, int txqid, int rxqid, int flags)
+alloc_toepcb(struct vi_info *vi, int txqid, int rxqid, int flags)
 {
+	struct port_info *pi = vi->pi;
 	struct adapter *sc = pi->adapter;
 	struct toepcb *toep;
 	int tx_credits, txsd_total, len;
@@ -124,21 +130,21 @@ alloc_toepcb(struct port_info *pi, int txqid, int rxqid, int flags)
 	 * units of 16 byte.  Calculate the maximum work requests possible.
 	 */
 	txsd_total = tx_credits /
-	    howmany((sizeof(struct fw_ofld_tx_data_wr) + 1), 16);
+	    howmany(sizeof(struct fw_ofld_tx_data_wr) + 1, 16);
 
 	if (txqid < 0)
-		txqid = (arc4random() % pi->nofldtxq) + pi->first_ofld_txq;
-	KASSERT(txqid >= pi->first_ofld_txq &&
-	    txqid < pi->first_ofld_txq + pi->nofldtxq,
-	    ("%s: txqid %d for port %p (first %d, n %d)", __func__, txqid, pi,
-		pi->first_ofld_txq, pi->nofldtxq));
+		txqid = (arc4random() % vi->nofldtxq) + vi->first_ofld_txq;
+	KASSERT(txqid >= vi->first_ofld_txq &&
+	    txqid < vi->first_ofld_txq + vi->nofldtxq,
+	    ("%s: txqid %d for vi %p (first %d, n %d)", __func__, txqid, vi,
+		vi->first_ofld_txq, vi->nofldtxq));
 
 	if (rxqid < 0)
-		rxqid = (arc4random() % pi->nofldrxq) + pi->first_ofld_rxq;
-	KASSERT(rxqid >= pi->first_ofld_rxq &&
-	    rxqid < pi->first_ofld_rxq + pi->nofldrxq,
-	    ("%s: rxqid %d for port %p (first %d, n %d)", __func__, rxqid, pi,
-		pi->first_ofld_rxq, pi->nofldrxq));
+		rxqid = (arc4random() % vi->nofldrxq) + vi->first_ofld_rxq;
+	KASSERT(rxqid >= vi->first_ofld_rxq &&
+	    rxqid < vi->first_ofld_rxq + vi->nofldrxq,
+	    ("%s: rxqid %d for vi %p (first %d, n %d)", __func__, rxqid, vi,
+		vi->first_ofld_rxq, vi->nofldrxq));
 
 	len = offsetof(struct toepcb, txsd) +
 	    txsd_total * sizeof(struct ofld_tx_sdesc);
@@ -147,18 +153,30 @@ alloc_toepcb(struct port_info *pi, int txqid, int rxqid, int flags)
 	if (toep == NULL)
 		return (NULL);
 
+	refcount_init(&toep->refcount, 1);
 	toep->td = sc->tom_softc;
-	toep->port = pi;
+	toep->vi = vi;
 	toep->tx_total = tx_credits;
 	toep->tx_credits = tx_credits;
 	toep->ofld_txq = &sc->sge.ofld_txq[txqid];
 	toep->ofld_rxq = &sc->sge.ofld_rxq[rxqid];
 	toep->ctrlq = &sc->sge.ctrlq[pi->port_id];
+	mbufq_init(&toep->ulp_pduq, INT_MAX);
+	mbufq_init(&toep->ulp_pdu_reclaimq, INT_MAX);
 	toep->txsd_total = txsd_total;
 	toep->txsd_avail = txsd_total;
 	toep->txsd_pidx = 0;
 	toep->txsd_cidx = 0;
+	ddp_init_toep(toep);
 
+	return (toep);
+}
+
+struct toepcb *
+hold_toepcb(struct toepcb *toep)
+{
+
+	refcount_acquire(&toep->refcount);
 	return (toep);
 }
 
@@ -166,11 +184,15 @@ void
 free_toepcb(struct toepcb *toep)
 {
 
+	if (refcount_release(&toep->refcount) == 0)
+		return;
+
 	KASSERT(!(toep->flags & TPF_ATTACHED),
 	    ("%s: attached to an inpcb", __func__));
 	KASSERT(!(toep->flags & TPF_CPL_PENDING),
 	    ("%s: CPL pending", __func__));
 
+	ddp_uninit_toep(toep);
 	free(toep, M_CXGBE);
 }
 
@@ -252,6 +274,8 @@ undo_offload_socket(struct socket *so)
 	mtx_lock(&td->toep_list_lock);
 	TAILQ_REMOVE(&td->toep_list, toep, link);
 	mtx_unlock(&td->toep_list_lock);
+
+	free_toepcb(toep);
 }
 
 static void
@@ -269,8 +293,16 @@ release_offload_resources(struct toepcb *toep)
 	CTR5(KTR_CXGBE, "%s: toep %p (tid %d, l2te %p, ce %p)",
 	    __func__, toep, tid, toep->l2te, toep->ce);
 
-	if (toep->ulp_mode == ULP_MODE_TCPDDP)
-		release_ddp_resources(toep);
+	/*
+	 * These queues should have been emptied at approximately the same time
+	 * that a normal connection's socket's so_snd would have been purged or
+	 * drained.  Do _not_ clean up here.
+	 */
+	MPASS(mbufq_len(&toep->ulp_pduq) == 0);
+	MPASS(mbufq_len(&toep->ulp_pdu_reclaimq) == 0);
+#ifdef INVARIANTS
+	ddp_assert_empty(toep);
+#endif
 
 	if (toep->l2te)
 		t4_l2t_release(toep->l2te);
@@ -349,8 +381,9 @@ t4_ctloutput(struct toedev *tod, struct tcpcb *tp, int dir, int name)
 
 	switch (name) {
 	case TCP_NODELAY:
-		t4_set_tcb_field(sc, toep, 1, W_TCB_T_FLAGS, V_TF_NAGLE(1),
-		    V_TF_NAGLE(tp->t_flags & TF_NODELAY ? 0 : 1));
+		t4_set_tcb_field(sc, toep->ctrlq, toep->tid, W_TCB_T_FLAGS,
+		    V_TF_NAGLE(1), V_TF_NAGLE(tp->t_flags & TF_NODELAY ? 0 : 1),
+		    0, 0, toep->ofld_rxq->iq.abs_id);
 		break;
 	default:
 		break;
@@ -374,8 +407,11 @@ final_cpl_received(struct toepcb *toep)
 	CTR6(KTR_CXGBE, "%s: tid %d, toep %p (0x%x), inp %p (0x%x)",
 	    __func__, toep->tid, toep, toep->flags, inp, inp->inp_flags);
 
+	if (toep->ulp_mode == ULP_MODE_TCPDDP)
+		release_ddp_resources(toep);
 	toep->inp = NULL;
 	toep->flags &= ~TPF_CPL_PENDING;
+	mbufq_drain(&toep->ulp_pdu_reclaimq);
 
 	if (!(toep->flags & TPF_ATTACHED))
 		release_offload_resources(toep);
@@ -509,7 +545,7 @@ extern int always_keepalive;
  * socket so could be a listening socket too.
  */
 uint64_t
-calc_opt0(struct socket *so, struct port_info *pi, struct l2t_entry *e,
+calc_opt0(struct socket *so, struct vi_info *vi, struct l2t_entry *e,
     int mtu_idx, int rscale, int rx_credits, int ulp_mode)
 {
 	uint64_t opt0;
@@ -533,20 +569,20 @@ calc_opt0(struct socket *so, struct port_info *pi, struct l2t_entry *e,
 	if (e != NULL)
 		opt0 |= V_L2T_IDX(e->idx);
 
-	if (pi != NULL) {
-		opt0 |= V_SMAC_SEL(VIID_SMACIDX(pi->viid));
-		opt0 |= V_TX_CHAN(pi->tx_chan);
+	if (vi != NULL) {
+		opt0 |= V_SMAC_SEL(VIID_SMACIDX(vi->viid));
+		opt0 |= V_TX_CHAN(vi->pi->tx_chan);
 	}
 
 	return htobe64(opt0);
 }
 
 uint64_t
-select_ntuple(struct port_info *pi, struct l2t_entry *e)
+select_ntuple(struct vi_info *vi, struct l2t_entry *e)
 {
-	struct adapter *sc = pi->adapter;
+	struct adapter *sc = vi->pi->adapter;
 	struct tp_params *tp = &sc->params.tp;
-	uint16_t viid = pi->viid;
+	uint16_t viid = vi->viid;
 	uint64_t ntuple = 0;
 
 	/*
@@ -583,7 +619,6 @@ set_tcpddp_ulp_mode(struct toepcb *toep)
 
 	toep->ulp_mode = ULP_MODE_TCPDDP;
 	toep->ddp_flags = DDP_OK;
-	toep->ddp_score = DDP_LOW_SCORE;
 }
 
 int
@@ -761,6 +796,7 @@ t4_clip_task(void *arg, int count)
 static void
 update_clip_table(struct adapter *sc, struct tom_data *td)
 {
+	struct rm_priotracker in6_ifa_tracker;
 	struct in6_ifaddr *ia;
 	struct in6_addr *lip, tlip;
 	struct clip_head stale;
@@ -769,7 +805,7 @@ update_clip_table(struct adapter *sc, struct tom_data *td)
 
 	ASSERT_SYNCHRONIZED_OP(sc);
 
-	IN6_IFADDR_RLOCK();
+	IN6_IFADDR_RLOCK(&in6_ifa_tracker);
 	mtx_lock(&td->clip_table_lock);
 
 	if (gen == td->clip_gen)
@@ -861,7 +897,7 @@ next:
 	td->clip_gen = gen;
 done:
 	mtx_unlock(&td->clip_table_lock);
-	IN6_IFADDR_RUNLOCK();
+	IN6_IFADDR_RUNLOCK(&in6_ifa_tracker);
 }
 
 static void
@@ -895,8 +931,6 @@ free_tom_data(struct adapter *sc, struct tom_data *td)
 	KASSERT(td->lctx_count == 0,
 	    ("%s: lctx hash table is not empty.", __func__));
 
-	t4_uninit_l2t_cpl_handlers(sc);
-	t4_uninit_cpl_io_handlers(sc);
 	t4_uninit_ddp(sc, td);
 	destroy_clip_table(sc, td);
 
@@ -961,7 +995,9 @@ t4_tom_activate(struct adapter *sc)
 {
 	struct tom_data *td;
 	struct toedev *tod;
-	int i, rc;
+	struct vi_info *vi;
+	struct sge_ofld_rxq *ofld_rxq;
+	int i, j, rc, v;
 
 	ASSERT_SYNCHRONIZED_OP(sc);
 
@@ -995,12 +1031,6 @@ t4_tom_activate(struct adapter *sc)
 	/* CLIP table for IPv6 offload */
 	init_clip_table(sc, td);
 
-	/* CPL handlers */
-	t4_init_connect_cpl_handlers(sc);
-	t4_init_l2t_cpl_handlers(sc);
-	t4_init_listen_cpl_handlers(sc);
-	t4_init_cpl_io_handlers(sc);
-
 	/* toedev ops */
 	tod = &td->tod;
 	init_toedev(tod);
@@ -1020,8 +1050,15 @@ t4_tom_activate(struct adapter *sc)
 	tod->tod_offload_socket = t4_offload_socket;
 	tod->tod_ctloutput = t4_ctloutput;
 
-	for_each_port(sc, i)
-		TOEDEV(sc->port[i]->ifp) = &td->tod;
+	for_each_port(sc, i) {
+		for_each_vi(sc->port[i], v, vi) {
+			TOEDEV(vi->ifp) = &td->tod;
+			for_each_ofld_rxq(vi, j, ofld_rxq) {
+				ofld_rxq->iq.set_tcb_rpl = do_set_tcb_rpl;
+				ofld_rxq->iq.l2t_write_rpl = do_l2t_write_rpl2;
+			}
+		}
+	}
 
 	sc->tom_softc = td;
 	register_toedev(sc->tom_softc);
@@ -1088,12 +1125,21 @@ t4_tom_mod_load(void)
 	int rc;
 	struct protosw *tcp_protosw, *tcp6_protosw;
 
+	/* CPL handlers */
+	t4_init_connect_cpl_handlers();
+	t4_init_listen_cpl_handlers();
+	t4_init_cpl_io_handlers();
+
+	rc = t4_ddp_mod_load();
+	if (rc != 0)
+		return (rc);
+
 	tcp_protosw = pffindproto(PF_INET, IPPROTO_TCP, SOCK_STREAM);
 	if (tcp_protosw == NULL)
 		return (ENOPROTOOPT);
 	bcopy(tcp_protosw, &ddp_protosw, sizeof(ddp_protosw));
 	bcopy(tcp_protosw->pr_usrreqs, &ddp_usrreqs, sizeof(ddp_usrreqs));
-	ddp_usrreqs.pru_soreceive = t4_soreceive_ddp;
+	ddp_usrreqs.pru_aio_queue = t4_aio_queue_ddp;
 	ddp_protosw.pr_usrreqs = &ddp_usrreqs;
 
 	tcp6_protosw = pffindproto(PF_INET6, IPPROTO_TCP, SOCK_STREAM);
@@ -1101,7 +1147,7 @@ t4_tom_mod_load(void)
 		return (ENOPROTOOPT);
 	bcopy(tcp6_protosw, &ddp6_protosw, sizeof(ddp6_protosw));
 	bcopy(tcp6_protosw->pr_usrreqs, &ddp6_usrreqs, sizeof(ddp6_usrreqs));
-	ddp6_usrreqs.pru_soreceive = t4_soreceive_ddp;
+	ddp6_usrreqs.pru_aio_queue = t4_aio_queue_ddp;
 	ddp6_protosw.pr_usrreqs = &ddp6_usrreqs;
 
 	TIMEOUT_TASK_INIT(taskqueue_thread, &clip_task, 0, t4_clip_task, NULL);
@@ -1140,6 +1186,8 @@ t4_tom_mod_unload(void)
 		EVENTHANDLER_DEREGISTER(ifaddr_event, ifaddr_evhandler);
 		taskqueue_cancel_timeout(taskqueue_thread, &clip_task, NULL);
 	}
+
+	t4_ddp_mod_unload();
 
 	return (0);
 }

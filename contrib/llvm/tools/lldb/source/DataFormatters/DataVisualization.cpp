@@ -7,16 +7,12 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "lldb/lldb-python.h"
-
 #include "lldb/DataFormatters/DataVisualization.h"
 
 // C Includes
 // C++ Includes
 // Other libraries and framework includes
 // Project includes
-
-#include "lldb/Core/Debugger.h"
 
 using namespace lldb;
 using namespace lldb_private;
@@ -101,6 +97,18 @@ DataVisualization::GetSyntheticForType (lldb::TypeNameSpecifierImplSP type_sp)
 }
 #endif
 
+lldb::TypeValidatorImplSP
+DataVisualization::GetValidator (ValueObject& valobj, lldb::DynamicValueType use_dynamic)
+{
+    return GetFormatManager().GetValidator(valobj, use_dynamic);
+}
+
+lldb::TypeValidatorImplSP
+DataVisualization::GetValidatorForType (lldb::TypeNameSpecifierImplSP type_sp)
+{
+    return GetFormatManager().GetValidatorForType(type_sp);
+}
+
 bool
 DataVisualization::AnyMatches (ConstString type_name,
                                TypeCategoryImpl::FormatCategoryItems items,
@@ -121,6 +129,14 @@ DataVisualization::Categories::GetCategory (const ConstString &category, lldb::T
 {
     entry = GetFormatManager().GetCategory(category, allow_create);
     return (entry.get() != NULL);
+}
+
+bool
+DataVisualization::Categories::GetCategory (lldb::LanguageType language, lldb::TypeCategoryImplSP &entry)
+{
+    if (LanguageCategory *lang_category = GetFormatManager().GetCategoryForLanguage(language))
+        entry = lang_category->GetCategory();
+    return (entry.get() != nullptr);
 }
 
 void
@@ -154,7 +170,14 @@ DataVisualization::Categories::Enable (const ConstString& category,
 {
     if (GetFormatManager().GetCategory(category)->IsEnabled())
         GetFormatManager().DisableCategory(category);
-    GetFormatManager().EnableCategory(category, pos);
+    GetFormatManager().EnableCategory(category, pos, std::initializer_list<lldb::LanguageType>());
+}
+
+void
+DataVisualization::Categories::Enable (lldb::LanguageType lang_type)
+{
+    if (LanguageCategory* lang_category = GetFormatManager().GetCategoryForLanguage(lang_type))
+        lang_category->Enable();
 }
 
 void
@@ -162,6 +185,13 @@ DataVisualization::Categories::Disable (const ConstString& category)
 {
     if (GetFormatManager().GetCategory(category)->IsEnabled() == true)
         GetFormatManager().DisableCategory(category);
+}
+
+void
+DataVisualization::Categories::Disable (lldb::LanguageType lang_type)
+{
+    if (LanguageCategory* lang_category = GetFormatManager().GetCategoryForLanguage(lang_type))
+        lang_category->Disable();
 }
 
 void
@@ -184,9 +214,21 @@ DataVisualization::Categories::Disable (const lldb::TypeCategoryImplSP& category
 }
 
 void
-DataVisualization::Categories::LoopThrough (FormatManager::CategoryCallback callback, void* callback_baton)
+DataVisualization::Categories::EnableStar ()
 {
-    GetFormatManager().LoopThroughCategories(callback, callback_baton);
+    GetFormatManager().EnableAllCategories ();
+}
+
+void
+DataVisualization::Categories::DisableStar ()
+{
+    GetFormatManager().DisableAllCategories();
+}
+
+void
+DataVisualization::Categories::ForEach (TypeCategoryMap::ForEachCallback callback)
+{
+    GetFormatManager().ForEachCategory(callback);
 }
 
 uint32_t
@@ -226,9 +268,9 @@ DataVisualization::NamedSummaryFormats::Clear ()
 }
 
 void
-DataVisualization::NamedSummaryFormats::LoopThrough (TypeSummaryImpl::SummaryCallback callback, void* callback_baton)
+DataVisualization::NamedSummaryFormats::ForEach (std::function<bool(ConstString, const lldb::TypeSummaryImplSP&)> callback)
 {
-    GetFormatManager().GetNamedSummaryContainer().LoopThrough(callback, callback_baton);
+    GetFormatManager().GetNamedSummaryContainer().ForEach(callback);
 }
 
 uint32_t

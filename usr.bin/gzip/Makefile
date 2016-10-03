@@ -1,17 +1,15 @@
 #	$NetBSD: Makefile,v 1.18 2013/11/13 11:12:24 pettai Exp $
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 PROG=		gzip
 MAN=		gzip.1 gzexe.1 zdiff.1 zforce.1 zmore.1 znew.1
 
-DPADD=		${LIBZ} ${LIBLZMA} ${LIBPTHREAD}
-LDADD=		-lz -llzma -lpthread
+LIBADD=		z lzma
 
 .if ${MK_BZIP2_SUPPORT} != "no"
-DPADD+=		${LIBBZ2}
-LDADD+=		-lbz2
+LIBADD+=	bz2
 .else
 CFLAGS+=	-DNO_BZIP2_SUPPORT
 .endif

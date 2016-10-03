@@ -1,6 +1,6 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 PROG=	fstyp
 SRCS=	cd9660.c ext2fs.c fstyp.c geli.c msdosfs.c ntfs.c ufs.c
@@ -12,6 +12,8 @@ SRCS +=	zfs.c
 MAN=	fstyp.8
 
 WARNS?=	2
+
+.include <src.opts.mk>
 
 .if ${MK_TESTS} != "no"
 SUBDIR+=	tests
@@ -34,12 +36,10 @@ CFLAGS+= -I${.CURDIR}/../../sys/cddl/contrib/opensolaris/uts/common/sys
 CFLAGS+= -I${.CURDIR}/../../cddl/contrib/opensolaris/head
 .endif
 
-DPADD=   ${LIBGEOM} ${LIBMD}
-LDADD=   -lgeom -lmd
+LIBADD=	geom md
 
 .if ${MK_ZFS} != "no"
-DPADD += ${LIBNVPAIR} ${LIBZFS}
-LDADD += -lnvpair -lzfs
+LIBADD+=nvpair zfs
 .endif
 
 .include <bsd.prog.mk>

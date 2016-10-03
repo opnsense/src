@@ -39,7 +39,6 @@ __FBSDID("$FreeBSD$");
 
 #ifdef _KERNEL
 #include "opt_ddb.h"
-#include "opt_pax.h"
 #include "opt_printf.h"
 #endif  /* _KERNEL */
 
@@ -53,7 +52,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/kernel.h>
 #include <sys/msgbuf.h>
 #include <sys/malloc.h>
-#include <sys/pax.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/stddef.h>
@@ -111,23 +109,20 @@ static void  snprintf_func(int ch, void *arg);
 static int msgbufmapped;		/* Set when safe to use msgbuf */
 int msgbuftrigger;
 
-static int      log_console_output = 1;
-TUNABLE_INT("kern.log_console_output", &log_console_output);
-SYSCTL_INT(_kern, OID_AUTO, log_console_output, CTLFLAG_RW,
-    &log_console_output, 0, "Duplicate console output to the syslog.");
+static int log_console_output = 1;
+SYSCTL_INT(_kern, OID_AUTO, log_console_output, CTLFLAG_RWTUN,
+    &log_console_output, 0, "Duplicate console output to the syslog");
 
 /*
  * See the comment in log_console() below for more explanation of this.
  */
-static int log_console_add_linefeed = 0;
-TUNABLE_INT("kern.log_console_add_linefeed", &log_console_add_linefeed);
-SYSCTL_INT(_kern, OID_AUTO, log_console_add_linefeed, CTLFLAG_RW,
-    &log_console_add_linefeed, 0, "log_console() adds extra newlines.");
+static int log_console_add_linefeed;
+SYSCTL_INT(_kern, OID_AUTO, log_console_add_linefeed, CTLFLAG_RWTUN,
+    &log_console_add_linefeed, 0, "log_console() adds extra newlines");
 
-static int	always_console_output = 0;
-TUNABLE_INT("kern.always_console_output", &always_console_output);
-SYSCTL_INT(_kern, OID_AUTO, always_console_output, CTLFLAG_RW,
-    &always_console_output, 0, "Always output to console despite TIOCCONS.");
+static int always_console_output;
+SYSCTL_INT(_kern, OID_AUTO, always_console_output, CTLFLAG_RWTUN,
+    &always_console_output, 0, "Always output to console despite TIOCCONS");
 
 /*
  * Warn that a system table is full.
@@ -167,49 +162,6 @@ uprintf(const char *fmt, ...)
 	pca.tty = p->p_session->s_ttyp;
 	SESS_UNLOCK(p->p_session);
 	PROC_UNLOCK(p);
-	if (pca.tty == NULL) {
-		sx_sunlock(&proctree_lock);
-		return (0);
-	}
-	pca.flags = TOTTY;
-	pca.p_bufr = NULL;
-	va_start(ap, fmt);
-	tty_lock(pca.tty);
-	sx_sunlock(&proctree_lock);
-	retval = kvprintf(fmt, putchar, &pca, 10, ap);
-	tty_unlock(pca.tty);
-	va_end(ap);
-	return (retval);
-}
-
-int
-hbsd_uprintf(const char *fmt, ...)
-{
-	va_list ap;
-	struct putchar_arg pca;
-	struct proc *p;
-	struct thread *td;
-	int p_locked, retval;
-
-	td = curthread;
-	if (TD_IS_IDLETHREAD(td))
-		return (0);
-
-	sx_slock(&proctree_lock);
-	p = td->td_proc;
-	if ((p_locked = PROC_LOCKED(p)))
-		PROC_LOCK(p);
-	if ((p->p_flag & P_CONTROLT) == 0) {
-		if (p_locked)
-			PROC_UNLOCK(p);
-		sx_sunlock(&proctree_lock);
-		return (0);
-	}
-	SESS_LOCK(p->p_session);
-	pca.tty = p->p_session->s_ttyp;
-	SESS_UNLOCK(p->p_session);
-	if (p_locked)
-		PROC_UNLOCK(p);
 	if (pca.tty == NULL) {
 		sx_sunlock(&proctree_lock);
 		return (0);
@@ -350,9 +302,15 @@ log(int level, const char *fmt, ...)
 	va_list ap;
 
 	va_start(ap, fmt);
-	(void)_vprintf(level, log_open ? TOLOG : TOCONS | TOLOG, fmt, ap);
+	vlog(level, fmt, ap);
 	va_end(ap);
+}
 
+void
+vlog(int level, const char *fmt, va_list ap)
+{
+
+	(void)_vprintf(level, log_open ? TOLOG : TOCONS | TOLOG, fmt, ap);
 	msgbuftrigger = 1;
 }
 
@@ -653,7 +611,7 @@ ksprintn(char *nbuf, uintmax_t num, int base, int *lenp, int upper)
  * the next characters (up to a control character, i.e. a character <= 32),
  * give the name of the register.  Thus:
  *
- *	kvprintf("reg=%b\n", 3, "\10\2BITTWO\1BITONE\n");
+ *	kvprintf("reg=%b\n", 3, "\10\2BITTWO\1BITONE");
  *
  * would produce output:
  *
@@ -772,7 +730,15 @@ reswitch:	switch (ch = (u_char)*fmt++) {
 				PCHAR('>');
 			break;
 		case 'c':
+			width -= 1;
+
+			if (!ladjust && width > 0)
+				while (width--)
+					PCHAR(padc);
 			PCHAR(va_arg(ap, int));
+			if (ladjust && width > 0)
+				while (width--)
+					PCHAR(padc);
 			break;
 		case 'D':
 			up = va_arg(ap, u_char *);
@@ -966,7 +932,7 @@ number:
 			while (percent < fmt)
 				PCHAR(*percent++);
 			/*
-			 * Since we ignore a formatting argument it is no 
+			 * Since we ignore a formatting argument it is no
 			 * longer safe to obey the remaining formatting
 			 * arguments as the arguments will no longer match
 			 * the format specs.
@@ -1064,7 +1030,7 @@ sysctl_kern_msgbuf(SYSCTL_HANDLER_ARGS)
 		len = msgbuf_peekbytes(msgbufp, buf, sizeof(buf), &seq);
 		mtx_unlock(&msgbuf_lock);
 		if (len == 0)
-			return (0);
+			return (SYSCTL_OUT(req, "", 1)); /* add nulterm */
 
 		error = sysctl_handle_opaque(oidp, buf, len, req);
 		if (error)
@@ -1230,3 +1196,24 @@ sbuf_hexdump(struct sbuf *sb, const void *ptr, int length, const char *hdr,
 	}
 }
 
+#ifdef _KERNEL
+void
+counted_warning(unsigned *counter, const char *msg)
+{
+	struct thread *td;
+	unsigned c;
+
+	for (;;) {
+		c = *counter;
+		if (c == 0)
+			break;
+		if (atomic_cmpset_int(counter, c, c - 1)) {
+			td = curthread;
+			log(LOG_INFO, "pid %d (%s) %s%s\n",
+			    td->td_proc->p_pid, td->td_name, msg,
+			    c > 1 ? "" : " - not logging anymore");
+			break;
+		}
+	}
+}
+#endif

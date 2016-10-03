@@ -60,10 +60,11 @@ int mlx4_SET_VLAN_FLTR(struct mlx4_dev *dev, struct mlx4_en_priv *priv)
 	memset(filter, 0, sizeof(*filter));
 	for (i = VLAN_FLTR_SIZE - 1; i >= 0; i--) {
 		entry = 0;
-		for (j = 0; j < 32; j++)
+		for (j = 0; j < 32; j++) {
 			if (test_bit(index, priv->active_vlans))
 				entry |= 1 << j;
-                        index++;
+			index++;
+		}
 		filter->entry[i] = cpu_to_be32(entry);
 	}
 	err = mlx4_cmd(dev, mailbox->dma, priv->port, 0, MLX4_CMD_SET_VLAN_FLTR,
@@ -547,8 +548,30 @@ int mlx4_en_DUMP_ETH_STATS(struct mlx4_en_dev *mdev, u8 port, u8 reset)
 	}
 
 	if (!mlx4_is_mfunc(mdev->dev)) {
-		/* netdevice stats format */
-                dev                     = mdev->pndev[port];
+/* netdevice stats format */
+#if __FreeBSD_version >= 1100000
+		if (reset == 0) {
+			dev                     = mdev->pndev[port];
+			if_inc_counter(dev, IFCOUNTER_IPACKETS,
+			    priv->pkstats.rx_packets - priv->pkstats_last.rx_packets);
+			if_inc_counter(dev, IFCOUNTER_OPACKETS,
+			    priv->pkstats.tx_packets - priv->pkstats_last.tx_packets);
+			if_inc_counter(dev, IFCOUNTER_IBYTES,
+			    priv->pkstats.rx_bytes - priv->pkstats_last.rx_bytes);
+			if_inc_counter(dev, IFCOUNTER_OBYTES,
+			    priv->pkstats.tx_bytes - priv->pkstats_last.tx_bytes);
+			if_inc_counter(dev, IFCOUNTER_IERRORS,
+			    priv->pkstats.rx_errors - priv->pkstats_last.rx_errors);
+			if_inc_counter(dev, IFCOUNTER_IQDROPS,
+			    priv->pkstats.rx_dropped - priv->pkstats_last.rx_dropped);
+			if_inc_counter(dev, IFCOUNTER_IMCASTS,
+			    priv->pkstats.rx_multicast_packets - priv->pkstats_last.rx_multicast_packets);
+			if_inc_counter(dev, IFCOUNTER_OMCASTS,
+			    priv->pkstats.tx_multicast_packets - priv->pkstats_last.tx_multicast_packets);
+		}
+		priv->pkstats_last = priv->pkstats;
+#else
+		dev			= mdev->pndev[port];
 		dev->if_ipackets        = priv->pkstats.rx_packets;
 		dev->if_opackets        = priv->pkstats.tx_packets;
 		dev->if_ibytes          = priv->pkstats.rx_bytes;
@@ -556,8 +579,9 @@ int mlx4_en_DUMP_ETH_STATS(struct mlx4_en_dev *mdev, u8 port, u8 reset)
 		dev->if_ierrors         = priv->pkstats.rx_errors;
 		dev->if_iqdrops         = priv->pkstats.rx_dropped;
 		dev->if_imcasts         = priv->pkstats.rx_multicast_packets;
-                dev->if_omcasts         = priv->pkstats.tx_multicast_packets;
-                dev->if_collisions      = 0;
+		dev->if_omcasts         = priv->pkstats.tx_multicast_packets;
+		dev->if_collisions      = 0;
+#endif
 	}
 
 	spin_unlock(&priv->stats_lock);

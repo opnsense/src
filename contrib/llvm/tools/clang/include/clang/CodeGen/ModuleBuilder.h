@@ -24,15 +24,19 @@ namespace llvm {
 
 namespace clang {
   class DiagnosticsEngine;
+  class CoverageSourceInfo;
   class LangOptions;
+  class HeaderSearchOptions;
+  class PreprocessorOptions;
   class CodeGenOptions;
-  class TargetOptions;
+  class Decl;
 
   class CodeGenerator : public ASTConsumer {
     virtual void anchor();
   public:
     virtual llvm::Module* GetModule() = 0;
     virtual llvm::Module* ReleaseModule() = 0;
+    virtual const Decl *GetDeclForMangledName(llvm::StringRef MangledName) = 0;
   };
 
   /// CreateLLVMCodeGen - Create a CodeGenerator instance.
@@ -40,9 +44,11 @@ namespace clang {
   /// the allocated CodeGenerator instance.
   CodeGenerator *CreateLLVMCodeGen(DiagnosticsEngine &Diags,
                                    const std::string &ModuleName,
+                                   const HeaderSearchOptions &HeaderSearchOpts,
+                                   const PreprocessorOptions &PreprocessorOpts,
                                    const CodeGenOptions &CGO,
-                                   const TargetOptions &TO,
-                                   llvm::LLVMContext& C);
+                                   llvm::LLVMContext& C,
+                                   CoverageSourceInfo *CoverageInfo = nullptr);
 }
 
 #endif

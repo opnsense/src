@@ -63,7 +63,6 @@ static const char _rcsid[] = "$KAME: route6d.c,v 1.104 2003/10/31 00:30:20 itoju
 #include <sys/sysctl.h>
 #include <sys/uio.h>
 #include <net/if.h>
-#include <net/if_var.h>
 #include <net/route.h>
 #include <netinet/in.h>
 #include <netinet/in_var.h>
@@ -1593,7 +1592,7 @@ ifconfig1(const char *name,
 	if (IN6_IS_ADDR_SITELOCAL(&sin6->sin6_addr) && !lflag)
 		return (-1);
 	ifr.ifr_addr = *sin6;
-	strncpy(ifr.ifr_name, name, sizeof(ifr.ifr_name));
+	strlcpy(ifr.ifr_name, name, sizeof(ifr.ifr_name));
 	if (ioctl(s, SIOCGIFNETMASK_IN6, (char *)&ifr) < 0) {
 		syslog(LOG_INFO, "ioctl: SIOCGIFNETMASK_IN6");
 		return (-1);
@@ -2562,9 +2561,6 @@ do { \
 #ifdef IFF_NOTRAILERS
 	IFFLAG("NOTRAILERS", IFF_NOTRAILERS);
 #endif
-#ifdef IFF_SMART
-	IFFLAG("SMART", IFF_SMART);
-#endif
 	IFFLAG("RUNNING", IFF_RUNNING);
 	IFFLAG("NOARP", IFF_NOARP);
 	IFFLAG("PROMISC", IFF_PROMISC);
@@ -2602,8 +2598,10 @@ krtread(int again)
 			sleep(1);
 		retry++;
 		errmsg = NULL;
-		if (buf)
+		if (buf) {
 			free(buf);
+			buf = NULL;
+		}
 		if (sysctl(mib, 6, NULL, &msize, NULL, 0) < 0) {
 			errmsg = "sysctl estimate";
 			continue;

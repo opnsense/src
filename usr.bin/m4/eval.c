@@ -1,4 +1,4 @@
-/*	$OpenBSD: eval.c,v 1.70 2012/04/12 17:00:11 espie Exp $	*/
+/*	$OpenBSD: eval.c,v 1.74 2015/02/05 12:59:57 millert Exp $	*/
 /*	$NetBSD: eval.c,v 1.7 1996/11/10 21:21:29 pk Exp $	*/
 
 /*
@@ -48,8 +48,8 @@ __FBSDID("$FreeBSD$");
 #include <errno.h>
 #include <limits.h>
 #include <unistd.h>
-#include <stdint.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <stddef.h>
 #include <string.h>
@@ -267,7 +267,7 @@ expand_builtin(const char *argv[], int argc, int td)
 			doesyscmd(argv[2]);
 		break;
 	case INCLTYPE:
-		if (argc > 2)
+		if (argc > 2) {
 			if (!doincl(argv[2])) {
 				if (mimic_gnu) {
 					warn("%s at line %lu: include(%s)",
@@ -277,6 +277,7 @@ expand_builtin(const char *argv[], int argc, int td)
 					err(1, "%s at line %lu: include(%s)",
 					    CURRENT_NAME, CURRENT_LINE, argv[2]);
 			}
+		}
 		break;
 
 	case SINCTYPE:
@@ -794,7 +795,7 @@ dom4wrap(const char *text)
 			maxwraps = 16;
 		else
 			maxwraps *= 2;
-		m4wraps = xrealloc(m4wraps, maxwraps * sizeof(*m4wraps),
+		m4wraps = xreallocarray(m4wraps, maxwraps, sizeof(*m4wraps),
 		   "too many m4wraps");
 	}
 	m4wraps[wrapindex++] = xstrdup(text);
@@ -821,11 +822,10 @@ dodiv(int n)
 	if (outfile[n] == NULL) {
 		char fname[] = _PATH_DIVNAME;
 
-		if ((fd = mkstemp(fname)) < 0 || 
-			(outfile[n] = fdopen(fd, "w+")) == NULL)
-				err(1, "%s: cannot divert", fname);
-		if (unlink(fname) == -1)
-			err(1, "%s: cannot unlink", fname);
+		if ((fd = mkstemp(fname)) < 0 ||
+		    unlink(fname) == -1 ||
+		    (outfile[n] = fdopen(fd, "w+")) == NULL)
+			err(1, "%s: cannot divert", fname);
 	}
 	active = outfile[n];
 }
@@ -895,7 +895,7 @@ dosub(const char *argv[], int argc)
  * function of ICON language. Within mapvec, we replace every character 
  * of "from" with the corresponding character in "to". 
  * If "to" is shorter than "from", than the corresponding entries are null, 
- * which means that those characters dissapear altogether. 
+ * which means that those characters disappear altogether. 
  */
 static void
 map(char *dest, const char *src, const char *from, const char *to)

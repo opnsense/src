@@ -7,17 +7,16 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "lldb/lldb-python.h"
-
-#include "lldb/Target/ThreadPlan.h"
-
 // C Includes
-#include <string.h>
 // C++ Includes
+#include <cstring>
+
 // Other libraries and framework includes
 // Project includes
+#include "lldb/Target/ThreadPlan.h"
 #include "lldb/Core/ArchSpec.h"
 #include "lldb/Core/DataBufferHeap.h"
+#include "lldb/Core/DataExtractor.h"
 #include "lldb/Core/Debugger.h"
 #include "lldb/Core/Disassembler.h"
 #include "lldb/Core/Log.h"
@@ -26,6 +25,8 @@
 #include "lldb/Core/StreamFile.h"
 #include "lldb/Core/Value.h"
 #include "lldb/Symbol/TypeList.h"
+#include "lldb/Symbol/TypeSystem.h"
+#include "lldb/Target/ABI.h"
 #include "lldb/Target/RegisterContext.h"
 #include "lldb/Target/Thread.h"
 #include "lldb/Target/Process.h"
@@ -56,8 +57,7 @@ ThreadPlanTracer::ThreadPlanTracer (Thread &thread) :
 Stream *
 ThreadPlanTracer::GetLogStream ()
 {
-    
-    if (m_stream_sp.get())
+    if (m_stream_sp)
         return m_stream_sp.get();
     else
     {
@@ -65,7 +65,7 @@ ThreadPlanTracer::GetLogStream ()
         if (target_sp)
             return target_sp->GetDebugger().GetOutputFile().get();
     }
-    return NULL;
+    return nullptr;
 }
 
 void 
@@ -82,7 +82,6 @@ ThreadPlanTracer::Log()
         stream->Printf("\n");
         stream->Flush();
     }
-    
 }
 
 bool
@@ -91,10 +90,7 @@ ThreadPlanTracer::TracerExplainsStop ()
     if (m_enabled && m_single_step)
     {
         lldb::StopInfoSP stop_info = m_thread.GetStopInfo();
-        if (stop_info->GetStopReason() == eStopReasonTrace)
-            return true;
-        else 
-            return false;
+        return (stop_info->GetStopReason() == eStopReasonTrace);
     }
     else
         return false;
@@ -121,8 +117,8 @@ ThreadPlanAssemblyTracer::ThreadPlanAssemblyTracer (Thread &thread) :
 Disassembler *
 ThreadPlanAssemblyTracer::GetDisassembler ()
 {
-    if (m_disassembler_sp.get() == NULL)
-        m_disassembler_sp = Disassembler::FindPlugin(m_thread.GetProcess()->GetTarget().GetArchitecture(), NULL, NULL);
+    if (!m_disassembler_sp)
+        m_disassembler_sp = Disassembler::FindPlugin(m_thread.GetProcess()->GetTarget().GetArchitecture(), nullptr, nullptr);
     return m_disassembler_sp.get();
 }
 
@@ -134,29 +130,22 @@ ThreadPlanAssemblyTracer::GetIntPointerType()
         TargetSP target_sp (m_thread.CalculateTarget());
         if (target_sp)
         {
-            Module *exe_module = target_sp->GetExecutableModulePointer();
-        
-            if (exe_module)
-            {
-                m_intptr_type = TypeFromUser(exe_module->GetClangASTContext().GetBuiltinTypeForEncodingAndBitSize(eEncodingUint, target_sp->GetArchitecture().GetAddressByteSize() * 8));
-            }
+            TypeSystem *type_system = target_sp->GetScratchTypeSystemForLanguage(nullptr, eLanguageTypeC);
+            if (type_system)
+                m_intptr_type = TypeFromUser(type_system->GetBuiltinTypeForEncodingAndBitSize(eEncodingUint, target_sp->GetArchitecture().GetAddressByteSize() * 8));
         }        
     }
     return m_intptr_type;
 }
 
-
-
-ThreadPlanAssemblyTracer::~ThreadPlanAssemblyTracer()
-{
-}
+ThreadPlanAssemblyTracer::~ThreadPlanAssemblyTracer() = default;
 
 void 
 ThreadPlanAssemblyTracer::TracingStarted ()
 {
     RegisterContext *reg_ctx = m_thread.GetRegisterContext().get();
     
-    if (m_register_values.size() == 0)
+    if (m_register_values.empty())
         m_register_values.resize (reg_ctx->GetRegisterCount());
 }
 
@@ -164,17 +153,6 @@ void
 ThreadPlanAssemblyTracer::TracingEnded ()
 {
     m_register_values.clear();
-}
-
-static void
-PadOutTo (StreamString &stream, int target)
-{
-    stream.Flush();
-
-    int length = stream.GetString().length();
-
-    if (length + 1 < target)
-        stream.Printf("%*s", target - (length + 1) + 1, "");
 }
 
 void 
@@ -223,11 +201,16 @@ ThreadPlanAssemblyTracer::Log ()
                 const bool show_bytes = true;
                 const bool show_address = true;
                 Instruction *instruction = instruction_list.GetInstructionAtIndex(0).get();
-                instruction->Dump (stream,
-                                   max_opcode_byte_size,
-                                   show_address,
-                                   show_bytes,
-                                   NULL);
+                const FormatEntity::Entry *disassemble_format = m_thread.GetProcess()->GetTarget().GetDebugger().GetDisassemblyFormat();
+                instruction->Dump(stream,
+                                  max_opcode_byte_size,
+                                  show_address,
+                                  show_bytes,
+                                  nullptr,
+                                  nullptr,
+                                  nullptr,
+                                  disassemble_format,
+                                  0);
             }
         }
     }
@@ -245,7 +228,7 @@ ThreadPlanAssemblyTracer::Log ()
             Value value;
             value.SetValueType (Value::eValueTypeScalar);
 //            value.SetContext (Value::eContextTypeClangType, intptr_type.GetOpaqueQualType());
-            value.SetClangType (intptr_type);
+            value.SetCompilerType (intptr_type);
             value_list.PushValue (value);
         }
         
@@ -260,8 +243,7 @@ ThreadPlanAssemblyTracer::Log ()
             }
         }
     }
-    
-    
+
     RegisterValue reg_value;
     for (uint32_t reg_num = 0, num_registers = reg_ctx->GetRegisterCount();
          reg_num < num_registers;

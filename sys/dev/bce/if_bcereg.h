@@ -28,51 +28,6 @@
 #ifndef	_BCEREG_H_DEFINED
 #define _BCEREG_H_DEFINED
 
-#include <sys/param.h>
-#include <sys/endian.h>
-#include <sys/systm.h>
-#include <sys/sockio.h>
-#include <sys/mbuf.h>
-#include <sys/malloc.h>
-#include <sys/kernel.h>
-#include <sys/module.h>
-#include <sys/socket.h>
-#include <sys/sysctl.h>
-#include <sys/queue.h>
-
-#include <net/bpf.h>
-#include <net/ethernet.h>
-#include <net/if.h>
-#include <net/if_arp.h>
-#include <net/if_dl.h>
-#include <net/if_media.h>
-
-#include <net/if_types.h>
-#include <net/if_vlan_var.h>
-
-#include <netinet/in_systm.h>
-#include <netinet/in.h>
-#include <netinet/if_ether.h>
-#include <netinet/ip.h>
-#include <netinet/ip6.h>
-#include <netinet/tcp.h>
-#include <netinet/udp.h>
-
-#include <machine/bus.h>
-#include <machine/resource.h>
-#include <sys/bus.h>
-#include <sys/rman.h>
-
-#include <dev/mii/mii.h>
-#include <dev/mii/miivar.h>
-#include "miidevs.h"
-#include <dev/mii/brgphyreg.h>
-
-#include <dev/pci/pcireg.h>
-#include <dev/pci/pcivar.h>
-
-#include "miibus_if.h"
-
 /****************************************************************************/
 /* Conversion to FreeBSD type definitions.                                  */
 /****************************************************************************/
@@ -6134,7 +6089,7 @@ struct l2_fhdr {
 /****************************************************************************/
 /* The following definitions refer to pre-defined locations in processor    */
 /* memory space which allows the driver to enable particular functionality  */
-/* within the firmware or read specfic information about the running        */
+/* within the firmware or read specific information about the running        */
 /* firmware.                                                                */
 /****************************************************************************/
 
@@ -6219,7 +6174,7 @@ struct l2_fhdr {
 #define RX_IDX(x) ((x) & USABLE_RX_BD_PER_PAGE)
 
 /*
- * To accomodate jumbo frames, the page chain should
+ * To accommodate jumbo frames, the page chain should
  * be 4 times larger than the receive chain.
  */
 #define DEFAULT_PG_PAGES		(DEFAULT_RX_PAGES * 4)
@@ -6737,6 +6692,7 @@ struct bce_softc
 	u32			l2fhdr_error_count;
 	u32			dma_map_addr_tx_failed_count;
 	u32			dma_map_addr_rx_failed_count;
+	u32			watchdog_timeouts;
 
 	/* Host coalescing block command register */
 	u32			hc_command;

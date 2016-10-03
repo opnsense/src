@@ -52,6 +52,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/syslog.h>
 #include <sys/mbuf.h>
 #include <sys/user.h>
+#include <vm/uma.h>
 
 #include <cam/cam.h>
 #include <cam/cam_ccb.h>
@@ -68,7 +69,7 @@ static int ou_refcnt = 0;
 /*
  | function for freeing external storage for mbuf
  */
-static int
+static void
 ext_free(struct mbuf *m, void *a, void *b)
 {
      pduq_t *pq = b;
@@ -78,7 +79,6 @@ ext_free(struct mbuf *m, void *a, void *b)
 	  free(pq->buf, M_ISCSIBUF);
 	  pq->buf = NULL;
      }
-     return (EXT_FREE_OK);
 }
 
 int
@@ -111,7 +111,7 @@ isc_sendPDU(isc_session_t *sp, pduq_t *pq)
 	   | Add any AHS to the iSCSI hdr mbuf
 	   */
 	  if((mh->m_len + pp->ahs_len) < MHLEN) {
-	       MH_ALIGN(mh, mh->m_len + pp->ahs_len);
+	       M_ALIGN(mh, mh->m_len + pp->ahs_len);
 	       bcopy(&pp->ipdu, mh->m_data, mh->m_len);
 	       bcopy(pp->ahs_addr, mh->m_data + mh->m_len, pp->ahs_len);
 	       mh->m_len += pp->ahs_len;
@@ -120,7 +120,7 @@ isc_sendPDU(isc_session_t *sp, pduq_t *pq)
 	       panic("len AHS=%d too big, not impleneted yet", pp->ahs_len);
      }
      else {
-	  MH_ALIGN(mh, mh->m_len);
+	  M_ALIGN(mh, mh->m_len);
 	  bcopy(&pp->ipdu, mh->m_data, mh->m_len);
      }
      mh->m_pkthdr.len = mh->m_len;
@@ -134,7 +134,7 @@ isc_sendPDU(isc_session_t *sp, pduq_t *pq)
 	       int l;
 
 	       MGET(md, M_WAITOK, MT_DATA);
-	       md->m_ext.ref_cnt = &ou_refcnt;
+	       md->m_ext.ext_cnt = &ou_refcnt;
 	       l = min(MCLBYTES, len);
 	       debug(4, "setting ext_free(arg=%p len/l=%d/%d)", pq->buf, len, l);
 	       MEXTADD(md, pp->ds_addr + off, l, ext_free, 
@@ -222,7 +222,7 @@ isc_sendPDU(isc_session_t *sp, pduq_t *pq)
      if(pq->pdu.ds_addr &&  pp->ds_len) {
 	  iv->iov_base = pp->ds_addr;
 	  iv->iov_len = pp->ds_len;
-	  while(iv->iov_len & 03) // the specs say it must be int alligned
+	  while(iv->iov_len & 03) // the specs say it must be int aligned
 	       iv->iov_len++;
 	  uio->uio_resid += iv->iov_len ;
 	  iv++;

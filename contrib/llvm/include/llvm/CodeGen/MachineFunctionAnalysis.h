@@ -19,6 +19,7 @@
 namespace llvm {
 
 class MachineFunction;
+class MachineFunctionInitializer;
 class TargetMachine;
 
 /// MachineFunctionAnalysis - This class is a Pass that manages a
@@ -28,22 +29,25 @@ private:
   const TargetMachine &TM;
   MachineFunction *MF;
   unsigned NextFnNum;
+  MachineFunctionInitializer *MFInitializer;
+
 public:
   static char ID;
-  explicit MachineFunctionAnalysis(const TargetMachine &tm);
-  ~MachineFunctionAnalysis();
+  explicit MachineFunctionAnalysis(const TargetMachine &tm,
+                                   MachineFunctionInitializer *MFInitializer);
+  ~MachineFunctionAnalysis() override;
 
   MachineFunction &getMF() const { return *MF; }
-  
-  virtual const char* getPassName() const {
+
+  const char* getPassName() const override {
     return "Machine Function Analysis";
   }
 
 private:
-  virtual bool doInitialization(Module &M);
-  virtual bool runOnFunction(Function &F);
-  virtual void releaseMemory();
-  virtual void getAnalysisUsage(AnalysisUsage &AU) const;
+  bool doInitialization(Module &M) override;
+  bool runOnFunction(Function &F) override;
+  void releaseMemory() override;
+  void getAnalysisUsage(AnalysisUsage &AU) const override;
 };
 
 } // End llvm namespace

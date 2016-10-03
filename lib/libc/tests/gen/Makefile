@@ -2,8 +2,6 @@
 
 .include <bsd.own.mk>
 
-TESTSDIR=	${TESTSBASE}/lib/libc/gen
-
 ATF_TESTS_C+=		arc4random_test
 ATF_TESTS_C+=		fmtcheck2_test
 ATF_TESTS_C+=		fmtmsg_test
@@ -13,6 +11,7 @@ ATF_TESTS_C+=		ftw_test
 ATF_TESTS_C+=		popen_test
 ATF_TESTS_C+=		posix_spawn_test
 ATF_TESTS_C+=		wordexp_test
+ATF_TESTS_C+=		dlopen_empty_test
 
 # TODO: t_closefrom, t_cpuset, t_fmtcheck, t_randomid, t_sleep
 # TODO: t_siginfo (fixes require further inspection)
@@ -47,20 +46,14 @@ NETBSD_ATF_TESTS_C+=	vis_test
 
 .include "../Makefile.netbsd-tests"
 
-LDADD.humanize_number_test+=	-lutil
-DPADD.humanize_number_test+=	${LIBUTIL}
+LIBADD.humanize_number_test+=	util
 
-LDADD.fpclassify_test+=	-lm
-DPADD.fpclassify_test+=	${LIBM}
-LDADD.fpsetround_test+=	-lm
-DPADD.fpsetround_test+=	${LIBM}
-LDADD.siginfo_test+=	-lm
-DPADD.siginfo_test+=	${LIBM}
+LIBADD.fpclassify_test+=m
+LIBADD.fpsetround_test+=m
+LIBADD.siginfo_test+=	m
 
-LDADD.nice_test+=	-lpthread
-DPADD.nice_test+=	${LIBPTHREAD}
-LDADD.syslog_test+=	-lpthread
-DPADD.syslog_test+=	${LIBPTHREAD}
+LIBADD.nice_test+=	pthread
+LIBADD.syslog_test+=	pthread
 
 CFLAGS+=		-I${.CURDIR}
 

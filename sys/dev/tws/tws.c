@@ -113,7 +113,7 @@ static struct cdevsw tws_cdevsw = {
  */
 
 int
-tws_open(struct cdev *dev, int oflags, int devtype, d_thread_t *td)
+tws_open(struct cdev *dev, int oflags, int devtype, struct thread *td)
 {
     struct tws_softc *sc = dev->si_drv1;
 
@@ -123,7 +123,7 @@ tws_open(struct cdev *dev, int oflags, int devtype, d_thread_t *td)
 }
 
 int
-tws_close(struct cdev *dev, int fflag, int devtype, d_thread_t *td)
+tws_close(struct cdev *dev, int fflag, int devtype, struct thread *td)
 {
     struct tws_softc *sc = dev->si_drv1;
 
@@ -198,7 +198,7 @@ tws_attach(device_t dev)
     mtx_init( &sc->sim_lock,  "tws_sim_lock", NULL, MTX_DEF);
     mtx_init( &sc->gen_lock,  "tws_gen_lock", NULL, MTX_DEF);
     mtx_init( &sc->io_lock,  "tws_io_lock", NULL, MTX_DEF | MTX_RECURSE);
-    callout_init(&sc->stats_timer, CALLOUT_MPSAFE);
+    callout_init(&sc->stats_timer, 1);
 
     if ( tws_init_trace_q(sc) == FAILURE )
         printf("trace init failure\n");
@@ -245,8 +245,8 @@ tws_attach(device_t dev)
 
     /* allocate MMIO register space */ 
     sc->reg_res_id = TWS_PCI_BAR1; /* BAR1 offset */
-    if ((sc->reg_res = bus_alloc_resource(dev, SYS_RES_MEMORY,
-                                &(sc->reg_res_id), 0, ~0, 1, RF_ACTIVE))
+    if ((sc->reg_res = bus_alloc_resource_any(dev, SYS_RES_MEMORY,
+                                &(sc->reg_res_id), RF_ACTIVE))
                                 == NULL) {
         tws_log(sc, ALLOC_MEMORY_RES);
         goto attach_fail_1;
@@ -257,8 +257,8 @@ tws_attach(device_t dev)
 #ifndef TWS_PULL_MODE_ENABLE
     /* Allocate bus space for inbound mfa */ 
     sc->mfa_res_id = TWS_PCI_BAR2; /* BAR2 offset */
-    if ((sc->mfa_res = bus_alloc_resource(dev, SYS_RES_MEMORY,
-                          &(sc->mfa_res_id), 0, ~0, 0x100000, RF_ACTIVE))
+    if ((sc->mfa_res = bus_alloc_resource_any(dev, SYS_RES_MEMORY,
+                          &(sc->mfa_res_id), RF_ACTIVE))
                                 == NULL) {
         tws_log(sc, ALLOC_MEMORY_RES);
         goto attach_fail_2;
@@ -311,6 +311,12 @@ tws_attach(device_t dev)
 attach_fail_4:
     tws_teardown_intr(sc);
     destroy_dev(sc->tws_cdev);
+    if (sc->dma_mem_phys)
+	    bus_dmamap_unload(sc->cmd_tag, sc->cmd_map);
+    if (sc->dma_mem)
+	    bus_dmamem_free(sc->cmd_tag, sc->dma_mem, sc->cmd_map);
+    if (sc->cmd_tag)
+	    bus_dma_tag_destroy(sc->cmd_tag);
 attach_fail_3:
     for(i=0;i<sc->irqs;i++) {
         if ( sc->irq_res[i] ){
@@ -383,6 +389,13 @@ tws_detach(device_t dev)
     }
 
     tws_cam_detach(sc);
+
+    if (sc->dma_mem_phys)
+	    bus_dmamap_unload(sc->cmd_tag, sc->cmd_map);
+    if (sc->dma_mem)
+	    bus_dmamem_free(sc->cmd_tag, sc->dma_mem, sc->cmd_map);
+    if (sc->cmd_tag)
+	    bus_dma_tag_destroy(sc->cmd_tag);
 
     /* Release memory resource */
     if ( sc->mfa_res ){
@@ -706,7 +719,7 @@ tws_init_reqs(struct tws_softc *sc, u_int32_t dma_mem_size)
 
         sc->reqs[i].cmd_pkt->hdr.header_desc.size_header = 128;
 
-	callout_init(&sc->reqs[i].timeout, CALLOUT_MPSAFE);
+	callout_init(&sc->reqs[i].timeout, 1);
         sc->reqs[i].state = TWS_REQ_STATE_FREE;
         if ( i >= TWS_RESERVED_REQS )
             tws_q_insert_tail(sc, &sc->reqs[i], TWS_FREE_Q);

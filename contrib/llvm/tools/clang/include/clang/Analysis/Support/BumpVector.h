@@ -16,8 +16,8 @@
 // refactor this core logic into something common that is shared between
 // the two.  The main thing that is different is the allocation strategy.
 
-#ifndef LLVM_CLANG_BUMP_VECTOR
-#define LLVM_CLANG_BUMP_VECTOR
+#ifndef LLVM_CLANG_ANALYSIS_SUPPORT_BUMPVECTOR_H
+#define LLVM_CLANG_ANALYSIS_SUPPORT_BUMPVECTOR_H
 
 #include "llvm/ADT/PointerIntPair.h"
 #include "llvm/Support/Allocator.h"
@@ -35,7 +35,12 @@ public:
   /// Construct a new BumpVectorContext that creates a new BumpPtrAllocator
   /// and destroys it when the BumpVectorContext object is destroyed.
   BumpVectorContext() : Alloc(new llvm::BumpPtrAllocator(), 1) {}
-  
+
+  BumpVectorContext(BumpVectorContext &&Other) : Alloc(Other.Alloc) {
+    Other.Alloc.setInt(false);
+    Other.Alloc.setPointer(nullptr);
+  }
+
   /// Construct a new BumpVectorContext that reuses an existing
   /// BumpPtrAllocator.  This BumpPtrAllocator is not destroyed when the
   /// BumpVectorContext object is destroyed.
@@ -55,12 +60,12 @@ class BumpVector {
 public:
   // Default ctor - Initialize to empty.
   explicit BumpVector(BumpVectorContext &C, unsigned N)
-  : Begin(NULL), End(NULL), Capacity(NULL) {
+  : Begin(nullptr), End(nullptr), Capacity(nullptr) {
     reserve(C, N);
   }
   
   ~BumpVector() {
-    if (llvm::is_class<T>::value) {
+    if (std::is_class<T>::value) {
       // Destroy the constructed elements in the vector.
       destroy_range(Begin, End);
     }
@@ -130,7 +135,7 @@ public:
   }
   
   void clear() {
-    if (llvm::is_class<T>::value) {
+    if (std::is_class<T>::value) {
       destroy_range(Begin, End);
     }
     End = Begin;
@@ -223,14 +228,15 @@ void BumpVector<T>::grow(BumpVectorContext &C, size_t MinSize) {
   T *NewElts = C.getAllocator().template Allocate<T>(NewCapacity);
   
   // Copy the elements over.
-  if (llvm::is_class<T>::value) {
-    std::uninitialized_copy(Begin, End, NewElts);
-    // Destroy the original elements.
-    destroy_range(Begin, End);
-  }
-  else {
-    // Use memcpy for PODs (std::uninitialized_copy optimizes to memmove).
-    memcpy(NewElts, Begin, CurSize * sizeof(T));
+  if (Begin != End) {
+    if (std::is_class<T>::value) {
+      std::uninitialized_copy(Begin, End, NewElts);
+      // Destroy the original elements.
+      destroy_range(Begin, End);
+    } else {
+      // Use memcpy for PODs (std::uninitialized_copy optimizes to memmove).
+      memcpy(NewElts, Begin, CurSize * sizeof(T));
+    }
   }
 
   // For now, leak 'Begin'.  We can add it back to a freelist in
@@ -241,4 +247,4 @@ void BumpVector<T>::grow(BumpVectorContext &C, size_t MinSize) {
 }
 
 } // end: clang namespace
-#endif // end: LLVM_CLANG_BUMP_VECTOR
+#endif

@@ -169,6 +169,8 @@ const struct cpuidtab cpuids[] = {
 	{ CPU_ID_ARM1026EJS,	CPU_CLASS_ARM10EJ,	"ARM1026EJ-S",
 	  generic_steppings },
 
+	{ CPU_ID_CORTEXA5,	CPU_CLASS_CORTEXA,	"Cortex A5",
+	  generic_steppings },
 	{ CPU_ID_CORTEXA7,	CPU_CLASS_CORTEXA,	"Cortex A7",
 	  generic_steppings },
 	{ CPU_ID_CORTEXA8R1,	CPU_CLASS_CORTEXA,	"Cortex A8-r1",
@@ -183,6 +185,10 @@ const struct cpuidtab cpuids[] = {
 	  generic_steppings },
 	{ CPU_ID_CORTEXA9R3,	CPU_CLASS_CORTEXA,	"Cortex A9-r3",
 	  generic_steppings },
+	{ CPU_ID_CORTEXA9R4,	CPU_CLASS_CORTEXA,	"Cortex A9-r4",
+	  generic_steppings },
+	{ CPU_ID_CORTEXA12R0,	CPU_CLASS_CORTEXA,	"Cortex A12-r0",
+	  generic_steppings },
 	{ CPU_ID_CORTEXA15R0,	CPU_CLASS_CORTEXA,	"Cortex A15-r0",
 	  generic_steppings },
 	{ CPU_ID_CORTEXA15R1,	CPU_CLASS_CORTEXA,	"Cortex A15-r1",
@@ -191,7 +197,9 @@ const struct cpuidtab cpuids[] = {
 	  generic_steppings },
 	{ CPU_ID_CORTEXA15R3,	CPU_CLASS_CORTEXA,	"Cortex A15-r3",
 	  generic_steppings },
-	{ CPU_ID_KRAIT,		CPU_CLASS_KRAIT,	"Krait",
+	{ CPU_ID_KRAIT300R0,	CPU_CLASS_KRAIT,	"Krait 300-r0",
+	  generic_steppings },
+	{ CPU_ID_KRAIT300R1,	CPU_CLASS_KRAIT,	"Krait 300-r1",
 	  generic_steppings },
 
 	{ CPU_ID_80200,		CPU_CLASS_XSCALE,	"i80200",
@@ -313,7 +321,6 @@ print_enadis(int enadis, char *s)
 	printf(" %s %sabled", s, (enadis == 0) ? "dis" : "en");
 }
 
-extern int ctrl;
 enum cpu_class cpu_class = CPU_CLASS_NONE;
 
 u_int cpu_pfr(int num)
@@ -380,10 +387,11 @@ void
 identify_arm_cpu(void)
 {
 	u_int cpuid, reg, size, sets, ways;
-	u_int8_t type, linesize;
+	u_int8_t type, linesize, ctrl;
 	int i;
 
-	cpuid = cpu_id();
+	ctrl = cpu_get_control();
+	cpuid = cpu_ident();
 
 	if (cpuid == 0) {
 		printf("Processor failed probe - no CPU ID\n");

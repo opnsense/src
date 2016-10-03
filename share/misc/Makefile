@@ -1,7 +1,7 @@
 #	From: @(#)Makefile	8.1 (Berkeley) 6/8/93
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 .PATH:	${.CURDIR}/../../sys/dev/usb
 
@@ -11,7 +11,6 @@ FILES=	ascii birthtoken bsd-family-tree committers-doc.dot committers-ports.dot 
 	scsi_modes \
 	organization.dot
 
-NO_OBJ=
 FILESDIR=	${BINDIR}/misc
 
 .if ${MK_USB} != "no"

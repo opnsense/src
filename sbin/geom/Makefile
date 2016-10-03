@@ -1,5 +1,6 @@
 # $FreeBSD$
 
+PACKAGE=runtime
 .if defined(RESCUE) || defined(RELEASE_CRUNCH)
 
 .PATH:	${.CURDIR}/class/part \
@@ -14,8 +15,7 @@ MAN=
 WARNS?=	2
 CFLAGS+=-I${.CURDIR} -I${.CURDIR}/core -DSTATIC_GEOM_CLASSES
 
-DPADD=	${LIBGEOM} ${LIBSBUF} ${LIBBSDXML} ${LIBUTIL}
-LDADD=	-lgeom -lsbuf -lbsdxml -lutil
+LIBADD=	geom util
 
 .include <bsd.prog.mk>
 

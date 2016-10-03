@@ -99,6 +99,7 @@ Interface Power Management is disabled.
 This is the default value.
 .It 1
 The device is allowed to initiate a PM state change; the host is passive.
+.El
 .It Va hint.ata. Ns Ar X Ns Va .dev Ns Ar X Ns Va .sata_rev
 limits the initial SATA revision (speed) for the specified device
 on the specified channel.
@@ -235,10 +236,10 @@ work well on long cables, especially at high speeds.
 .Xr ada 4 ,
 .Xr ahci 4 ,
 .Xr cam 4 ,
-.Xr camcontrol 8 ,
 .Xr cd 4 ,
 .Xr mvs 4 ,
-.Xr siis 4
+.Xr siis 4 ,
+.Xr camcontrol 8
 .Sh HISTORY
 The
 .Nm
@@ -249,7 +250,5 @@ It was turned into a
 interface module in
 .Fx 9.0 .
 .Sh AUTHORS
-.An Alexander Motin
-.Aq mav@FreeBSD.org ,
-.An S\(/oren Schmidt
-.Aq sos@FreeBSD.org
+.An Alexander Motin Aq Mt mav@FreeBSD.org
+.An S\(/oren Schmidt Aq Mt sos@FreeBSD.org

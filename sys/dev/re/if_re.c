@@ -127,6 +127,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/taskqueue.h>
 
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_arp.h>
 #include <net/ethernet.h>
 #include <net/if_dl.h>
@@ -304,6 +305,7 @@ static void re_set_linkspeed	(struct rl_softc *);
 
 #ifdef DEV_NETMAP	/* see ixgbe.c for details */
 #include <dev/netmap/if_re_netmap.h>
+MODULE_DEPEND(re, netmap, 1, 1, 1);
 #endif /* !DEV_NETMAP */
 
 #ifdef RE_DIAG
@@ -951,7 +953,7 @@ re_probe(device_t dev)
 	}
 
 	t = re_devs;
-	for (i = 0; i < sizeof(re_devs) / sizeof(re_devs[0]); i++, t++) {
+	for (i = 0; i < nitems(re_devs); i++, t++) {
 		if (vendor == t->rl_vid && devid == t->rl_did) {
 			device_set_desc(dev, t->rl_name);
 			return (BUS_PROBE_DEFAULT);
@@ -1689,7 +1691,7 @@ re_attach(device_t dev)
 	 * Must appear after the call to ether_ifattach() because
 	 * ether_ifattach() sets ifi_hdrlen to the default value.
 	 */
-	ifp->if_data.ifi_hdrlen = sizeof(struct ether_vlan_header);
+	ifp->if_hdrlen = sizeof(struct ether_vlan_header);
 
 #ifdef DEV_NETMAP
 	re_netmap_attach(sc);
@@ -1825,10 +1827,10 @@ re_detach(device_t dev)
 	/* Unload and free the RX DMA ring memory and map */
 
 	if (sc->rl_ldata.rl_rx_list_tag) {
-		if (sc->rl_ldata.rl_rx_list_map)
+		if (sc->rl_ldata.rl_rx_list_addr)
 			bus_dmamap_unload(sc->rl_ldata.rl_rx_list_tag,
 			    sc->rl_ldata.rl_rx_list_map);
-		if (sc->rl_ldata.rl_rx_list_map && sc->rl_ldata.rl_rx_list)
+		if (sc->rl_ldata.rl_rx_list)
 			bus_dmamem_free(sc->rl_ldata.rl_rx_list_tag,
 			    sc->rl_ldata.rl_rx_list,
 			    sc->rl_ldata.rl_rx_list_map);
@@ -1838,10 +1840,10 @@ re_detach(device_t dev)
 	/* Unload and free the TX DMA ring memory and map */
 
 	if (sc->rl_ldata.rl_tx_list_tag) {
-		if (sc->rl_ldata.rl_tx_list_map)
+		if (sc->rl_ldata.rl_tx_list_addr)
 			bus_dmamap_unload(sc->rl_ldata.rl_tx_list_tag,
 			    sc->rl_ldata.rl_tx_list_map);
-		if (sc->rl_ldata.rl_tx_list_map && sc->rl_ldata.rl_tx_list)
+		if (sc->rl_ldata.rl_tx_list)
 			bus_dmamem_free(sc->rl_ldata.rl_tx_list_tag,
 			    sc->rl_ldata.rl_tx_list,
 			    sc->rl_ldata.rl_tx_list_map);
@@ -1883,10 +1885,10 @@ re_detach(device_t dev)
 	/* Unload and free the stats buffer and map */
 
 	if (sc->rl_ldata.rl_stag) {
-		if (sc->rl_ldata.rl_smap)
+		if (sc->rl_ldata.rl_stats_addr)
 			bus_dmamap_unload(sc->rl_ldata.rl_stag,
 			    sc->rl_ldata.rl_smap);
-		if (sc->rl_ldata.rl_smap && sc->rl_ldata.rl_stats)
+		if (sc->rl_ldata.rl_stats)
 			bus_dmamem_free(sc->rl_ldata.rl_stag,
 			    sc->rl_ldata.rl_stats, sc->rl_ldata.rl_smap);
 		bus_dma_tag_destroy(sc->rl_ldata.rl_stag);
@@ -2248,7 +2250,7 @@ re_rxeof(struct rl_softc *sc, int *rx_npktsp)
 			    (rxstat & RL_RDESC_STAT_ERRS) == RL_RDESC_STAT_GIANT)
 				rxerr = 0;
 			if (rxerr != 0) {
-				ifp->if_ierrors++;
+				if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 				/*
 				 * If this is part of a multi-fragment packet,
 				 * discard all the pieces.
@@ -2271,7 +2273,7 @@ re_rxeof(struct rl_softc *sc, int *rx_npktsp)
 		else
 			rxerr = re_newbuf(sc, i);
 		if (rxerr != 0) {
-			ifp->if_iqdrops++;
+			if_inc_counter(ifp, IFCOUNTER_IQDROPS, 1);
 			if (sc->rl_head != NULL) {
 				m_freem(sc->rl_head);
 				sc->rl_head = sc->rl_tail = NULL;
@@ -2313,7 +2315,7 @@ re_rxeof(struct rl_softc *sc, int *rx_npktsp)
 #ifdef RE_FIXUP_RX
 		re_fixup_rx(m);
 #endif
-		ifp->if_ipackets++;
+		if_inc_counter(ifp, IFCOUNTER_IPACKETS, 1);
 		m->m_pkthdr.rcvif = ifp;
 
 		/* Do RX checksumming if enabled */
@@ -2432,11 +2434,11 @@ re_txeof(struct rl_softc *sc)
 			txd->tx_m = NULL;
 			if (txstat & (RL_TDESC_STAT_EXCESSCOL|
 			    RL_TDESC_STAT_COLCNT))
-				ifp->if_collisions++;
+				if_inc_counter(ifp, IFCOUNTER_COLLISIONS, 1);
 			if (txstat & RL_TDESC_STAT_TXERRSUM)
-				ifp->if_oerrors++;
+				if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 			else
-				ifp->if_opackets++;
+				if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
 		}
 		sc->rl_ldata.rl_tx_free++;
 		ifp->if_drv_flags &= ~IFF_DRV_OACTIVE;
@@ -2551,7 +2553,7 @@ re_intr(void *arg)
                 return (FILTER_STRAY);
 	CSR_WRITE_2(sc, RL_IMR, 0);
 
-	taskqueue_enqueue_fast(taskqueue_fast, &sc->rl_inttask);
+	taskqueue_enqueue(taskqueue_fast, &sc->rl_inttask);
 
 	return (FILTER_HANDLED);
 }
@@ -2619,7 +2621,7 @@ re_int_task(void *arg, int npending)
 	RL_UNLOCK(sc);
 
         if ((CSR_READ_2(sc, RL_ISR) & RL_INTRS_CPLUS) || rval) {
-		taskqueue_enqueue_fast(taskqueue_fast, &sc->rl_inttask);
+		taskqueue_enqueue(taskqueue_fast, &sc->rl_inttask);
 		return;
 	}
 
@@ -3554,7 +3556,7 @@ re_watchdog(struct rl_softc *sc)
 	}
 
 	if_printf(ifp, "watchdog timeout\n");
-	ifp->if_oerrors++;
+	if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 
 	re_rxeof(sc, NULL);
 	ifp->if_drv_flags &= ~IFF_DRV_RUNNING;

@@ -43,7 +43,6 @@ __FBSDID("$FreeBSD$");
  */
 #include "opt_inet.h"
 #include "opt_inet6.h"
-#include "opt_global.h"
 
 #include "opt_sctp.h"
 
@@ -58,6 +57,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/sysctl.h>
 
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_arp.h>
 #include <net/ethernet.h>
 #include <net/if_dl.h>
@@ -87,8 +87,6 @@ __FBSDID("$FreeBSD$");
 #include <xen/interface/io/netif.h>
 #include <xen/xenbus/xenbusvar.h>
 
-#include <machine/xen/xenvar.h>
-
 /*--------------------------- Compile-time Tunables --------------------------*/
 
 /*---------------------------------- Macros ----------------------------------*/
@@ -98,7 +96,7 @@ __FBSDID("$FreeBSD$");
 static MALLOC_DEFINE(M_XENNETBACK, "xnb", "Xen Net Back Driver Data");
 
 #define	XNB_SG	1	/* netback driver supports feature-sg */
-#define	XNB_GSO_TCPV4 1	/* netback driver supports feature-gso-tcpv4 */
+#define	XNB_GSO_TCPV4 0	/* netback driver supports feature-gso-tcpv4 */
 #define	XNB_RX_COPY 1	/* netback driver supports feature-rx-copy */
 #define	XNB_RX_FLIP 0	/* netback driver does not support feature-rx-flip */
 
@@ -132,7 +130,7 @@ static MALLOC_DEFINE(M_XENNETBACK, "xnb", "Xen Net Back Driver Data");
 	req < rsp ? req : rsp;                                          \
 })
 
-#define	virt_to_mfn(x) (vtomach(x) >> PAGE_SHIFT)
+#define	virt_to_mfn(x) (vtophys(x) >> PAGE_SHIFT)
 #define	virt_to_offset(x) ((x) & (PAGE_SIZE - 1))
 
 /**
@@ -151,7 +149,6 @@ static void	xnb_attach_failed(struct xnb_softc *xnb,
 static int	xnb_shutdown(struct xnb_softc *xnb);
 static int	create_netdev(device_t dev);
 static int	xnb_detach(device_t dev);
-static int	xen_net_read_mac(device_t dev, uint8_t mac[]);
 static int	xnb_ifmedia_upd(struct ifnet *ifp);
 static void	xnb_ifmedia_sts(struct ifnet *ifp, struct ifmediareq *ifmr);
 static void 	xnb_intr(void *arg);
@@ -167,7 +164,7 @@ static void	xnb_txpkt2rsp(const struct xnb_pkt *pkt,
 			      netif_tx_back_ring_t *ring, int error);
 static struct mbuf *xnb_pkt2mbufc(const struct xnb_pkt *pkt, struct ifnet *ifp);
 static int	xnb_txpkt2gnttab(const struct xnb_pkt *pkt,
-				 const struct mbuf *mbufc,
+				 struct mbuf *mbufc,
 				 gnttab_copy_table gnttab,
 				 const netif_tx_back_ring_t *txb,
 				 domid_t otherend_id);
@@ -419,7 +416,7 @@ struct xnb_softc {
 	 * There are situations where the back and front ends can
 	 * have a different, native abi (e.g. intel x86_64 and
 	 * 32bit x86 domains on the same machine).  The back-end
-	 * always accomodates the front-end's native abi.  That
+	 * always accommodates the front-end's native abi.  That
 	 * value is pulled from the XenStore and recorded here.
 	 */
 	int			abi;
@@ -474,7 +471,6 @@ struct xnb_softc {
 	 */
 	gnttab_copy_table	tx_gnttab;
 
-#ifdef XENHVM
 	/**
 	 * Resource representing allocated physical address space
 	 * associated with our per-instance kva region.
@@ -483,7 +479,6 @@ struct xnb_softc {
 
 	/** Resource id for allocated physical address space. */
 	int			pseudo_phys_res_id;
-#endif
 
 	/** Ring mapping and interrupt configuration data. */
 	struct xnb_ring_config	ring_configs[XNB_NUM_RING_TYPES];
@@ -511,6 +506,9 @@ struct xnb_softc {
 
 	/** The size of the global kva pool. */
 	int			kva_size;
+
+	/** Name of the interface */
+	char			 if_name[IFNAMSIZ];
 };
 
 /*---------------------------- Debugging functions ---------------------------*/
@@ -526,13 +524,15 @@ xnb_dump_gnttab_copy(const struct gnttab_copy *entry)
 	if (entry->flags & GNTCOPY_dest_gref)
 		printf("gnttab dest ref=\t%u\n", entry->dest.u.ref);
 	else
-		printf("gnttab dest gmfn=\t%lu\n", entry->dest.u.gmfn);
+		printf("gnttab dest gmfn=\t%"PRI_xen_pfn"\n",
+		       entry->dest.u.gmfn);
 	printf("gnttab dest offset=\t%hu\n", entry->dest.offset);
 	printf("gnttab dest domid=\t%hu\n", entry->dest.domid);
 	if (entry->flags & GNTCOPY_source_gref)
 		printf("gnttab source ref=\t%u\n", entry->source.u.ref);
 	else
-		printf("gnttab source gmfn=\t%lu\n", entry->source.u.gmfn);
+		printf("gnttab source gmfn=\t%"PRI_xen_pfn"\n",
+		       entry->source.u.gmfn);
 	printf("gnttab source offset=\t%hu\n", entry->source.offset);
 	printf("gnttab source domid=\t%hu\n", entry->source.domid);
 	printf("gnttab len=\t%hu\n", entry->len);
@@ -624,16 +624,11 @@ static void
 xnb_free_communication_mem(struct xnb_softc *xnb)
 {
 	if (xnb->kva != 0) {
-#ifndef XENHVM
-		kva_free(xnb->kva, xnb->kva_size);
-#else
 		if (xnb->pseudo_phys_res != NULL) {
-			bus_release_resource(xnb->dev, SYS_RES_MEMORY,
-			    xnb->pseudo_phys_res_id,
+			xenmem_free(xnb->dev, xnb->pseudo_phys_res_id,
 			    xnb->pseudo_phys_res);
 			xnb->pseudo_phys_res = NULL;
 		}
-#endif /* XENHVM */
 	}
 	xnb->kva = 0;
 	xnb->gnt_base_addr = 0;
@@ -651,7 +646,8 @@ xnb_disconnect(struct xnb_softc *xnb)
 	int error;
 	int i;
 
-	xen_intr_unbind(xnb->xen_intr_handle);
+	if (xnb->xen_intr_handle != NULL)
+		xen_intr_unbind(&xnb->xen_intr_handle);
 
 	/*
 	 * We may still have another thread currently processing requests.  We
@@ -665,8 +661,10 @@ xnb_disconnect(struct xnb_softc *xnb)
 	mtx_unlock(&xnb->rx_lock);
 
 	/* Free malloc'd softc member variables */
-	if (xnb->bridge != NULL)
+	if (xnb->bridge != NULL) {
 		free(xnb->bridge, M_XENSTORE);
+		xnb->bridge = NULL;
+	}
 
 	/* All request processing has stopped, so unmap the rings */
 	for (i=0; i < XNB_NUM_RING_TYPES; i++) {
@@ -811,12 +809,7 @@ xnb_alloc_communication_mem(struct xnb_softc *xnb)
 	for (i=0; i < XNB_NUM_RING_TYPES; i++) {
 		xnb->kva_size += xnb->ring_configs[i].ring_pages * PAGE_SIZE;
 	}
-#ifndef XENHVM
-	xnb->kva = kva_alloc(xnb->kva_size);
-	if (xnb->kva == 0)
-		return (ENOMEM);
-	xnb->gnt_base_addr = xnb->kva;
-#else /* defined XENHVM */
+
 	/*
 	 * Reserve a range of pseudo physical memory that we can map
 	 * into kva.  These pages will only be backed by machine
@@ -825,17 +818,14 @@ xnb_alloc_communication_mem(struct xnb_softc *xnb)
 	 * into this space.
 	 */
 	xnb->pseudo_phys_res_id = 0;
-	xnb->pseudo_phys_res = bus_alloc_resource(xnb->dev, SYS_RES_MEMORY,
-						  &xnb->pseudo_phys_res_id,
-						  0, ~0, xnb->kva_size,
-						  RF_ACTIVE);
+	xnb->pseudo_phys_res = xenmem_alloc(xnb->dev, &xnb->pseudo_phys_res_id,
+	    xnb->kva_size);
 	if (xnb->pseudo_phys_res == NULL) {
 		xnb->kva = 0;
 		return (ENOMEM);
 	}
 	xnb->kva = (vm_offset_t)rman_get_virtual(xnb->pseudo_phys_res);
 	xnb->gnt_base_addr = rman_get_start(xnb->pseudo_phys_res);
-#endif /* !defined XENHVM */
 	return (0);
 }
 
@@ -1198,6 +1188,7 @@ create_netdev(device_t dev)
 	struct ifnet *ifp;
 	struct xnb_softc *xnb;
 	int err = 0;
+	uint32_t handle;
 
 	xnb = device_get_softc(dev);
 	mtx_init(&xnb->sc_lock, "xnb_softc", "xen netback softc lock", MTX_DEF);
@@ -1210,12 +1201,36 @@ create_netdev(device_t dev)
 	ifmedia_add(&xnb->sc_media, IFM_ETHER|IFM_MANUAL, 0, NULL);
 	ifmedia_set(&xnb->sc_media, IFM_ETHER|IFM_MANUAL);
 
-	err = xen_net_read_mac(dev, xnb->mac);
+	/*
+	 * Set the MAC address to a dummy value (00:00:00:00:00),
+	 * if the MAC address of the host-facing interface is set
+	 * to the same as the guest-facing one (the value found in
+	 * xenstore), the bridge would stop delivering packets to
+	 * us because it would see that the destination address of
+	 * the packet is the same as the interface, and so the bridge
+	 * would expect the packet has already been delivered locally
+	 * (and just drop it).
+	 */
+	bzero(&xnb->mac[0], sizeof(xnb->mac));
+
+	/* The interface will be named using the following nomenclature:
+	 *
+	 * xnb<domid>.<handle>
+	 *
+	 * Where handle is the oder of the interface referred to the guest.
+	 */
+	err = xs_scanf(XST_NIL, xenbus_get_node(xnb->dev), "handle", NULL,
+		       "%" PRIu32, &handle);
+	if (err != 0)
+		return (err);
+	snprintf(xnb->if_name, IFNAMSIZ, "xnb%" PRIu16 ".%" PRIu32,
+	    xenbus_get_otherend_id(dev), handle);
+
 	if (err == 0) {
 		/* Set up ifnet structure */
 		ifp = xnb->xnb_ifp = if_alloc(IFT_ETHER);
 		ifp->if_softc = xnb;
-		if_initname(ifp, "xnb",  device_get_unit(dev));
+		if_initname(ifp, xnb->if_name,  IF_DUNIT_NONE);
 		ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
 		ifp->if_ioctl = xnb_ioctl;
 		ifp->if_output = ether_output;
@@ -1312,7 +1327,7 @@ xnb_attach(device_t dev)
  *
  * \note A net back device may be detached at any time in its life-cycle,
  *       including part way through the attach process.  For this reason,
- *       initialization order and the intialization state checks in this
+ *       initialization order and the initialization state checks in this
  *       routine must be carefully coupled so that attach time failures
  *       are gracefully handled.
  */
@@ -1694,12 +1709,12 @@ xnb_pkt2mbufc(const struct xnb_pkt *pkt, struct ifnet *ifp)
  * \return 		The number of gnttab entries filled
  */
 static int
-xnb_txpkt2gnttab(const struct xnb_pkt *pkt, const struct mbuf *mbufc,
+xnb_txpkt2gnttab(const struct xnb_pkt *pkt, struct mbuf *mbufc,
 		 gnttab_copy_table gnttab, const netif_tx_back_ring_t *txb,
 		 domid_t otherend_id)
 {
 
-	const struct mbuf *mbuf = mbufc;/* current mbuf within the chain */
+	struct mbuf *mbuf = mbufc;/* current mbuf within the chain */
 	int gnt_idx = 0;		/* index into grant table */
 	RING_IDX r_idx = pkt->car;	/* index into tx ring buffer */
 	int r_ofs = 0;	/* offset of next data within tx request's data area */
@@ -1815,7 +1830,7 @@ xnb_recv(netif_tx_back_ring_t *txb, domid_t otherend, struct mbuf **mbufc,
 		return 0;	/* Nothing to receive */
 
 	/* update statistics independent of errors */
-	ifnet->if_ipackets++;
+	if_inc_counter(ifnet, IFCOUNTER_IPACKETS, 1);
 
 	/*
 	 * if we got here, then 1 or more requests was consumed, but the packet
@@ -1827,7 +1842,7 @@ xnb_recv(netif_tx_back_ring_t *txb, domid_t otherend, struct mbuf **mbufc,
 		txb->req_cons += num_consumed;
 		DPRINTF("xnb_intr: garbage packet, num_consumed=%d\n",
 				num_consumed);
-		ifnet->if_ierrors++;
+		if_inc_counter(ifnet, IFCOUNTER_IERRORS, 1);
 		return EINVAL;
 	}
 
@@ -1841,7 +1856,7 @@ xnb_recv(netif_tx_back_ring_t *txb, domid_t otherend, struct mbuf **mbufc,
 		xnb_txpkt2rsp(&pkt, txb, 1);
 		DPRINTF("xnb_intr: Couldn't allocate mbufs, num_consumed=%d\n",
 		    num_consumed);
-		ifnet->if_iqdrops++;
+		if_inc_counter(ifnet, IFCOUNTER_IQDROPS, 1);
 		return ENOMEM;
 	}
 
@@ -1916,7 +1931,7 @@ xnb_mbufc2pkt(const struct mbuf *mbufc, struct xnb_pkt *pkt,
 		 * into responses so that each response but the last uses all
 		 * PAGE_SIZE bytes.
 		 */
-		pkt->list_len = (pkt->size + PAGE_SIZE - 1) / PAGE_SIZE;
+		pkt->list_len = howmany(pkt->size, PAGE_SIZE);
 
 		if (pkt->list_len > 1) {
 			pkt->flags |= NETRXF_more_data;
@@ -2221,7 +2236,6 @@ xnb_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			mtx_unlock(&xnb->sc_lock);
 			break;
 		case SIOCSIFADDR:
-		case SIOCGIFADDR:
 #ifdef INET
 			mtx_lock(&xnb->sc_lock);
 			if (ifa->ifa_addr->sa_family == AF_INET) {
@@ -2350,12 +2364,12 @@ xnb_start_locked(struct ifnet *ifp)
 
 				case EINVAL:
 					/* OS gave a corrupt packet.  Drop it.*/
-					ifp->if_oerrors++;
+					if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 					/* FALLTHROUGH */
 				default:
 					/* Send succeeded, or packet had error.
 					 * Free the packet */
-					ifp->if_opackets++;
+					if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
 					if (mbufc)
 						m_freem(mbufc);
 					break;
@@ -2451,42 +2465,6 @@ xnb_ifinit(void *xsc)
 	xnb_ifinit_locked(xnb);
 	mtx_unlock(&xnb->sc_lock);
 }
-
-
-/**
- * Read the 'mac' node at the given device's node in the store, and parse that
- * as colon-separated octets, placing result the given mac array.  mac must be
- * a preallocated array of length ETHER_ADDR_LEN ETH_ALEN (as declared in
- * net/ethernet.h).
- * Return 0 on success, or errno on error.
- */
-static int
-xen_net_read_mac(device_t dev, uint8_t mac[])
-{
-	char *s, *e, *macstr;
-	const char *path;
-	int error = 0;
-	int i;
-
-	path = xenbus_get_node(dev);
-	error = xs_read(XST_NIL, path, "mac", NULL, (void **) &macstr);
-	if (error != 0) {
-		xenbus_dev_fatal(dev, error, "parsing %s/mac", path);
-	} else {
-	        s = macstr;
-	        for (i = 0; i < ETHER_ADDR_LEN; i++) {
-		        mac[i] = strtoul(s, &e, 16);
-		        if (s == e || (e[0] != ':' && e[0] != 0)) {
-				error = ENOENT;
-				break;
-		        }
-		        s = &e[1];
-	        }
-	        free(macstr, M_XENBUS);
-	}
-	return error;
-}
-
 
 /**
  * Callback used by the generic networking code to tell us when our carrier

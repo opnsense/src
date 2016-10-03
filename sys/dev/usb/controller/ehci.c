@@ -98,19 +98,14 @@ static int ehciiaadbug = 0;
 static int ehcilostintrbug = 0;
 
 static SYSCTL_NODE(_hw_usb, OID_AUTO, ehci, CTLFLAG_RW, 0, "USB ehci");
-SYSCTL_INT(_hw_usb_ehci, OID_AUTO, debug, CTLFLAG_RW | CTLFLAG_TUN,
+SYSCTL_INT(_hw_usb_ehci, OID_AUTO, debug, CTLFLAG_RWTUN,
     &ehcidebug, 0, "Debug level");
-TUNABLE_INT("hw.usb.ehci.debug", &ehcidebug);
-SYSCTL_INT(_hw_usb_ehci, OID_AUTO, no_hs, CTLFLAG_RW | CTLFLAG_TUN,
+SYSCTL_INT(_hw_usb_ehci, OID_AUTO, no_hs, CTLFLAG_RWTUN,
     &ehcinohighspeed, 0, "Disable High Speed USB");
-TUNABLE_INT("hw.usb.ehci.no_hs", &ehcinohighspeed);
-SYSCTL_INT(_hw_usb_ehci, OID_AUTO, iaadbug, CTLFLAG_RW | CTLFLAG_TUN,
+SYSCTL_INT(_hw_usb_ehci, OID_AUTO, iaadbug, CTLFLAG_RWTUN,
     &ehciiaadbug, 0, "Enable doorbell bug workaround");
-TUNABLE_INT("hw.usb.ehci.iaadbug", &ehciiaadbug);
-SYSCTL_INT(_hw_usb_ehci, OID_AUTO, lostintrbug, CTLFLAG_RW | CTLFLAG_TUN,
+SYSCTL_INT(_hw_usb_ehci, OID_AUTO, lostintrbug, CTLFLAG_RWTUN,
     &ehcilostintrbug, 0, "Enable lost interrupt bug workaround");
-TUNABLE_INT("hw.usb.ehci.lostintrbug", &ehcilostintrbug);
-
 
 static void ehci_dump_regs(ehci_softc_t *sc);
 static void ehci_dump_sqh(ehci_softc_t *sc, ehci_qh_t *sqh);
@@ -119,12 +114,12 @@ static void ehci_dump_sqh(ehci_softc_t *sc, ehci_qh_t *sqh);
 
 #define	EHCI_INTR_ENDPT 1
 
-extern struct usb_bus_methods ehci_bus_methods;
-extern struct usb_pipe_methods ehci_device_bulk_methods;
-extern struct usb_pipe_methods ehci_device_ctrl_methods;
-extern struct usb_pipe_methods ehci_device_intr_methods;
-extern struct usb_pipe_methods ehci_device_isoc_fs_methods;
-extern struct usb_pipe_methods ehci_device_isoc_hs_methods;
+static const struct usb_bus_methods ehci_bus_methods;
+static const struct usb_pipe_methods ehci_device_bulk_methods;
+static const struct usb_pipe_methods ehci_device_ctrl_methods;
+static const struct usb_pipe_methods ehci_device_intr_methods;
+static const struct usb_pipe_methods ehci_device_isoc_fs_methods;
+static const struct usb_pipe_methods ehci_device_isoc_hs_methods;
 
 static void ehci_do_poll(struct usb_bus *);
 static void ehci_device_done(struct usb_xfer *, usb_error_t);
@@ -194,24 +189,8 @@ ehci_reset(ehci_softc_t *sc)
 		usb_pause_mtx(NULL, hz / 128);
 		hcr = EOREAD4(sc, EHCI_USBCMD) & EHCI_CMD_HCRESET;
 		if (!hcr) {
-			if (sc->sc_flags & (EHCI_SCFLG_SETMODE | EHCI_SCFLG_BIGEMMIO)) {
-				/*
-				 * Force USBMODE as requested.  Controllers
-				 * may have multiple operating modes.
-				 */
-				uint32_t usbmode = EOREAD4(sc, EHCI_USBMODE);
-				if (sc->sc_flags & EHCI_SCFLG_SETMODE) {
-					usbmode = (usbmode &~ EHCI_UM_CM) | EHCI_UM_CM_HOST;
-					device_printf(sc->sc_bus.bdev,
-					    "set host controller mode\n");
-				}
-				if (sc->sc_flags & EHCI_SCFLG_BIGEMMIO) {
-					usbmode = (usbmode &~ EHCI_UM_ES) | EHCI_UM_ES_BE;
-					device_printf(sc->sc_bus.bdev,
-					    "set big-endian mode\n");
-				}
-				EOWRITE4(sc,  EHCI_USBMODE, usbmode);
-			}
+			if (sc->sc_vendor_post_reset != NULL)
+				sc->sc_vendor_post_reset(sc);
 			return (0);
 		}
 	}
@@ -1282,7 +1261,7 @@ done:
 static uint8_t
 ehci_check_transfer(struct usb_xfer *xfer)
 {
-	struct usb_pipe_methods *methods = xfer->endpoint->methods;
+	const struct usb_pipe_methods *methods = xfer->endpoint->methods;
 	ehci_softc_t *sc = EHCI_BUS2SC(xfer->xroot->bus);
 
 	uint32_t status;
@@ -1680,8 +1659,7 @@ restart:
 
 				/* update data toggle */
 
-				if (((average + temp->max_frame_size - 1) /
-				    temp->max_frame_size) & 1) {
+				if (howmany(average, temp->max_frame_size) & 1) {
 					temp->qtd_status ^=
 					    htohc32(temp->sc, EHCI_QTD_TOGGLE_MASK);
 				}
@@ -1774,7 +1752,7 @@ static void
 ehci_setup_standard_chain(struct usb_xfer *xfer, ehci_qh_t **qh_last)
 {
 	struct ehci_std_temp temp;
-	struct usb_pipe_methods *methods;
+	const struct usb_pipe_methods *methods;
 	ehci_qh_t *qh;
 	ehci_qtd_t *td;
 	uint32_t qh_endp;
@@ -2194,7 +2172,7 @@ ehci_isoc_hs_done(ehci_softc_t *sc, struct usb_xfer *xfer)
 static void
 ehci_device_done(struct usb_xfer *xfer, usb_error_t error)
 {
-	struct usb_pipe_methods *methods = xfer->endpoint->methods;
+	const struct usb_pipe_methods *methods = xfer->endpoint->methods;
 	ehci_softc_t *sc = EHCI_BUS2SC(xfer->xroot->bus);
 
 	USB_BUS_LOCK_ASSERT(&sc->sc_bus, MA_OWNED);
@@ -2298,7 +2276,7 @@ ehci_device_bulk_start(struct usb_xfer *xfer)
 	ehci_doorbell_async(sc);
 }
 
-struct usb_pipe_methods ehci_device_bulk_methods =
+static const struct usb_pipe_methods ehci_device_bulk_methods =
 {
 	.open = ehci_device_bulk_open,
 	.close = ehci_device_bulk_close,
@@ -2339,7 +2317,7 @@ ehci_device_ctrl_start(struct usb_xfer *xfer)
 	ehci_transfer_intr_enqueue(xfer);
 }
 
-struct usb_pipe_methods ehci_device_ctrl_methods =
+static const struct usb_pipe_methods ehci_device_ctrl_methods =
 {
 	.open = ehci_device_ctrl_open,
 	.close = ehci_device_ctrl_close,
@@ -2420,7 +2398,7 @@ ehci_device_intr_start(struct usb_xfer *xfer)
 	ehci_transfer_intr_enqueue(xfer);
 }
 
-struct usb_pipe_methods ehci_device_intr_methods =
+static const struct usb_pipe_methods ehci_device_intr_methods =
 {
 	.open = ehci_device_intr_open,
 	.close = ehci_device_intr_close,
@@ -2712,7 +2690,7 @@ ehci_device_isoc_fs_start(struct usb_xfer *xfer)
 	ehci_transfer_intr_enqueue(xfer);
 }
 
-struct usb_pipe_methods ehci_device_isoc_fs_methods =
+static const struct usb_pipe_methods ehci_device_isoc_fs_methods =
 {
 	.open = ehci_device_isoc_fs_open,
 	.close = ehci_device_isoc_fs_close,
@@ -2992,7 +2970,7 @@ ehci_device_isoc_hs_start(struct usb_xfer *xfer)
 	ehci_transfer_intr_enqueue(xfer);
 }
 
-struct usb_pipe_methods ehci_device_isoc_hs_methods =
+static const struct usb_pipe_methods ehci_device_isoc_hs_methods =
 {
 	.open = ehci_device_isoc_hs_open,
 	.close = ehci_device_isoc_hs_close,
@@ -3017,7 +2995,7 @@ struct usb_device_descriptor ehci_devd =
 	UDPROTO_HSHUBSTT,		/* protocol */
 	64,				/* max packet */
 	{0}, {0}, {0x00, 0x01},		/* device id */
-	1, 2, 0,			/* string indicies */
+	1, 2, 0,			/* string indexes */
 	1				/* # of configurations */
 };
 
@@ -3070,6 +3048,36 @@ struct usb_hub_descriptor ehci_hubd =
 	.bDescLength = 0,		/* dynamic length */
 	.bDescriptorType = UDESC_HUB,
 };
+
+uint16_t
+ehci_get_port_speed_portsc(struct ehci_softc *sc, uint16_t index)
+{
+	uint32_t v;
+
+	v = EOREAD4(sc, EHCI_PORTSC(index));
+	v = (v >> EHCI_PORTSC_PSPD_SHIFT) & EHCI_PORTSC_PSPD_MASK;
+
+	if (v == EHCI_PORT_SPEED_HIGH)
+		return (UPS_HIGH_SPEED);
+	if (v == EHCI_PORT_SPEED_LOW)
+		return (UPS_LOW_SPEED);
+	return (0);
+}
+
+uint16_t
+ehci_get_port_speed_hostc(struct ehci_softc *sc, uint16_t index)
+{
+	uint32_t v;
+
+	v = EOREAD4(sc, EHCI_HOSTC(index));
+	v = (v >> EHCI_HOSTC_PSPD_SHIFT) & EHCI_HOSTC_PSPD_MASK;
+
+	if (v == EHCI_PORT_SPEED_HIGH)
+		return (UPS_HIGH_SPEED);
+	if (v == EHCI_PORT_SPEED_LOW)
+		return (UPS_LOW_SPEED);
+	return (0);
+}
 
 static void
 ehci_disown(ehci_softc_t *sc, uint16_t index, uint8_t lowspeed)
@@ -3335,13 +3343,15 @@ ehci_roothub_exec(struct usb_device *udev,
 		}
 		v = EOREAD4(sc, EHCI_PORTSC(index));
 		DPRINTFN(9, "port status=0x%04x\n", v);
-		if (sc->sc_flags & (EHCI_SCFLG_FORCESPEED | EHCI_SCFLG_TT)) {
-			if ((v & 0xc000000) == 0x8000000)
+		if (sc->sc_flags & EHCI_SCFLG_TT) {
+			if (sc->sc_vendor_get_port_speed != NULL) {
+				i = sc->sc_vendor_get_port_speed(sc, index);
+			} else {
+				device_printf(sc->sc_bus.bdev,
+				    "EHCI_SCFLG_TT quirk is set but "
+				    "sc_vendor_get_hub_speed() is NULL\n");
 				i = UPS_HIGH_SPEED;
-			else if ((v & 0xc000000) == 0x4000000)
-				i = UPS_LOW_SPEED;
-			else
-				i = 0;
+			}
 		} else {
 			i = UPS_HIGH_SPEED;
 		}
@@ -3799,7 +3809,7 @@ ehci_device_resume(struct usb_device *udev)
 {
 	ehci_softc_t *sc = EHCI_BUS2SC(udev->bus);
 	struct usb_xfer *xfer;
-	struct usb_pipe_methods *methods;
+	const struct usb_pipe_methods *methods;
 
 	DPRINTF("\n");
 
@@ -3833,7 +3843,7 @@ ehci_device_suspend(struct usb_device *udev)
 {
 	ehci_softc_t *sc = EHCI_BUS2SC(udev->bus);
 	struct usb_xfer *xfer;
-	struct usb_pipe_methods *methods;
+	const struct usb_pipe_methods *methods;
 
 	DPRINTF("\n");
 
@@ -3947,7 +3957,7 @@ ehci_start_dma_delay(struct usb_xfer *xfer)
 	    (void (*)(void *))&ehci_start_dma_delay_second, 4);
 }
 
-struct usb_bus_methods ehci_bus_methods =
+static const struct usb_bus_methods ehci_bus_methods =
 {
 	.endpoint_init = ehci_ep_init,
 	.xfer_setup = ehci_xfer_setup,

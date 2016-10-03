@@ -24,23 +24,22 @@ using namespace llvm;
 InlineAsm::~InlineAsm() {
 }
 
-
-InlineAsm *InlineAsm::get(FunctionType *Ty, StringRef AsmString,
+InlineAsm *InlineAsm::get(FunctionType *FTy, StringRef AsmString,
                           StringRef Constraints, bool hasSideEffects,
                           bool isAlignStack, AsmDialect asmDialect) {
-  InlineAsmKeyType Key(AsmString, Constraints, hasSideEffects, isAlignStack,
-                       asmDialect);
-  LLVMContextImpl *pImpl = Ty->getContext().pImpl;
-  return pImpl->InlineAsms.getOrCreate(PointerType::getUnqual(Ty), Key);
+  InlineAsmKeyType Key(AsmString, Constraints, FTy, hasSideEffects,
+                       isAlignStack, asmDialect);
+  LLVMContextImpl *pImpl = FTy->getContext().pImpl;
+  return pImpl->InlineAsms.getOrCreate(PointerType::getUnqual(FTy), Key);
 }
 
-InlineAsm::InlineAsm(PointerType *Ty, const std::string &asmString,
+InlineAsm::InlineAsm(FunctionType *FTy, const std::string &asmString,
                      const std::string &constraints, bool hasSideEffects,
                      bool isAlignStack, AsmDialect asmDialect)
-  : Value(Ty, Value::InlineAsmVal),
-    AsmString(asmString), Constraints(constraints),
-    HasSideEffects(hasSideEffects), IsAlignStack(isAlignStack),
-    Dialect(asmDialect) {
+    : Value(PointerType::getUnqual(FTy), Value::InlineAsmVal),
+      AsmString(asmString), Constraints(constraints), FTy(FTy),
+      HasSideEffects(hasSideEffects), IsAlignStack(isAlignStack),
+      Dialect(asmDialect) {
 
   // Do various checks on the constraint string and type.
   assert(Verify(getFunctionType(), constraints) &&
@@ -53,7 +52,7 @@ void InlineAsm::destroyConstant() {
 }
 
 FunctionType *InlineAsm::getFunctionType() const {
-  return cast<FunctionType>(getType()->getElementType());
+  return FTy;
 }
     
 ///Default constructor.
@@ -62,16 +61,6 @@ InlineAsm::ConstraintInfo::ConstraintInfo() :
   MatchingInput(-1), isCommutative(false),
   isIndirect(false), isMultipleAlternative(false),
   currentAlternativeIndex(0) {
-}
-
-/// Copy constructor.
-InlineAsm::ConstraintInfo::ConstraintInfo(const ConstraintInfo &other) :
-  Type(other.Type), isEarlyClobber(other.isEarlyClobber),
-  MatchingInput(other.MatchingInput), isCommutative(other.isCommutative),
-  isIndirect(other.isIndirect), Codes(other.Codes),
-  isMultipleAlternative(other.isMultipleAlternative),
-  multipleAlternatives(other.multipleAlternatives),
-  currentAlternativeIndex(other.currentAlternativeIndex) {
 }
 
 /// Parse - Analyze the specified string (e.g. "==&{eax}") and fill in the
@@ -83,9 +72,9 @@ bool InlineAsm::ConstraintInfo::Parse(StringRef Str,
   unsigned multipleAlternativeCount = Str.count('|') + 1;
   unsigned multipleAlternativeIndex = 0;
   ConstraintCodeVector *pCodes = &Codes;
-  
+
   // Initialize
-  isMultipleAlternative = (multipleAlternativeCount > 1 ? true : false);
+  isMultipleAlternative = multipleAlternativeCount > 1;
   if (isMultipleAlternative) {
     multipleAlternatives.resize(multipleAlternativeCount);
     pCodes = &multipleAlternatives[0].Codes;
@@ -101,16 +90,20 @@ bool InlineAsm::ConstraintInfo::Parse(StringRef Str,
   if (*I == '~') {
     Type = isClobber;
     ++I;
+
+    // '{' must immediately follow '~'.
+    if (I != E && *I != '{')
+      return true;
   } else if (*I == '=') {
     ++I;
     Type = isOutput;
   }
-  
+
   if (*I == '*') {
     isIndirect = true;
     ++I;
   }
-  
+
   if (I == E) return true;  // Just a prefix, like "==" or "~".
   
   // Parse the modifiers.
@@ -166,6 +159,9 @@ bool InlineAsm::ConstraintInfo::Parse(StringRef Str,
       // If Operand N already has a matching input, reject this.  An output
       // can't be constrained to the same value as multiple inputs.
       if (isMultipleAlternative) {
+        if (multipleAlternativeIndex >=
+            ConstraintsSoFar[N].multipleAlternatives.size())
+          return true;
         InlineAsm::SubConstraintInfo &scInfo =
           ConstraintsSoFar[N].multipleAlternatives[multipleAlternativeIndex];
         if (scInfo.MatchingInput != -1)
@@ -173,7 +169,9 @@ bool InlineAsm::ConstraintInfo::Parse(StringRef Str,
         // Note that operand #n has a matching input.
         scInfo.MatchingInput = ConstraintsSoFar.size();
       } else {
-        if (ConstraintsSoFar[N].hasMatchingInput())
+        if (ConstraintsSoFar[N].hasMatchingInput() &&
+            (size_t)ConstraintsSoFar[N].MatchingInput !=
+                ConstraintsSoFar.size())
           return true;
         // Note that operand #n has a matching input.
         ConstraintsSoFar[N].MatchingInput = ConstraintsSoFar.size();
@@ -234,7 +232,10 @@ InlineAsm::ParseConstraints(StringRef Constraints) {
     I = ConstraintEnd;
     if (I != E) {
       ++I;
-      if (I == E) { Result.clear(); break; }    // don't allow "xyz,"
+      if (I == E) {
+        Result.clear();
+        break;
+      } // don't allow "xyz,"
     }
   }
   
@@ -284,7 +285,7 @@ bool InlineAsm::Verify(FunctionType *Ty, StringRef ConstStr) {
     break;
   default:
     StructType *STy = dyn_cast<StructType>(Ty->getReturnType());
-    if (STy == 0 || STy->getNumElements() != NumOutputs)
+    if (!STy || STy->getNumElements() != NumOutputs)
       return false;
     break;
   }      
@@ -292,4 +293,3 @@ bool InlineAsm::Verify(FunctionType *Ty, StringRef ConstStr) {
   if (Ty->getNumParams() != NumInputs) return false;
   return true;
 }
-

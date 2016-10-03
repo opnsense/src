@@ -1,13 +1,11 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
-
 KMOD=	sfxge
 
 SFXGE= ${.CURDIR}/../../dev/sfxge
 
 SRCS=	device_if.h bus_if.h pci_if.h
-SRCS+=	opt_inet.h opt_inet6.h opt_sched.h
+SRCS+=	opt_inet.h opt_inet6.h opt_sched.h opt_rss.h
 
 .PATH: ${.CURDIR}/../../dev/sfxge
 SRCS+=	sfxge.c sfxge_dma.c sfxge_ev.c
@@ -31,11 +29,11 @@ SRCS+=	siena_mac.c siena_mcdi.c siena_nic.c siena_nvram.c siena_phy.c
 SRCS+=	siena_sram.c siena_vpd.c
 SRCS+=	siena_flash.h siena_impl.h
 
+SRCS+=	ef10_ev.c ef10_filter.c ef10_intr.c ef10_mac.c ef10_mcdi.c ef10_nic.c
+SRCS+=	ef10_nvram.c ef10_phy.c ef10_rx.c ef10_tx.c ef10_vpd.c
 SRCS+=	ef10_impl.h
 
-SRCS+=	hunt_ev.c hunt_intr.c hunt_mac.c hunt_mcdi.c hunt_nic.c
-SRCS+=	hunt_nvram.c hunt_rx.c hunt_phy.c hunt_sram.c hunt_tx.c hunt_vpd.c
-SRCS+=	hunt_filter.c
+SRCS+=	hunt_nic.c hunt_phy.c
 SRCS+=	hunt_impl.h
 
 SRCS+=	medford_nic.c
@@ -43,17 +41,5 @@ SRCS+=	medford_impl.h
 
 # Extra debug checks
 #CFLAGS += -DDEBUG=1
-
-.if !defined(KERNBUILDDIR)
-.if ${MK_INET_SUPPORT} != "no"
-opt_inet.h:
-	@echo "#define INET 1" > ${.TARGET}
-.endif
-
-.if ${MK_INET6_SUPPORT} != "no"
-opt_inet6.h:
-	@echo "#define INET6 1" > ${.TARGET}
-.endif
-.endif
 
 .include <bsd.kmod.mk>

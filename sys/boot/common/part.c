@@ -104,7 +104,7 @@ parttype2str(enum partition_type type)
 {
 	size_t i;
 
-	for (i = 0; i < sizeof(ptypes) / sizeof(ptypes[0]); i++)
+	for (i = 0; i < nitems(ptypes); i++)
 		if (ptypes[i].type == type)
 			return (ptypes[i].desc);
 	return (ptypes[0].desc);
@@ -257,8 +257,9 @@ ptable_gptread(struct ptable *table, void *dev, diskread_t dread)
 	    table->sectorsize);
 	if (phdr != NULL) {
 		/* Read the primary GPT table. */
-		size = MIN(MAXTBLSZ, (phdr->hdr_entries * phdr->hdr_entsz +
-		    table->sectorsize - 1) / table->sectorsize);
+		size = MIN(MAXTBLSZ,
+		    howmany(phdr->hdr_entries * phdr->hdr_entsz,
+		        table->sectorsize));
 		if (dread(dev, tbl, size, phdr->hdr_lba_table) == 0 &&
 		    gpt_checktbl(phdr, tbl, size * table->sectorsize,
 		    table->sectors - 1) == 0) {
@@ -290,9 +291,9 @@ ptable_gptread(struct ptable *table, void *dev, diskread_t dread)
 		    hdr.hdr_entsz != phdr->hdr_entsz ||
 		    hdr.hdr_crc_table != phdr->hdr_crc_table) {
 			/* Read the backup GPT table. */
-			size = MIN(MAXTBLSZ, (phdr->hdr_entries *
-			    phdr->hdr_entsz + table->sectorsize - 1) /
-			    table->sectorsize);
+			size = MIN(MAXTBLSZ,
+				   howmany(phdr->hdr_entries * phdr->hdr_entsz,
+				       table->sectorsize));
 			if (dread(dev, tbl, size, phdr->hdr_lba_table) == 0 &&
 			    gpt_checktbl(phdr, tbl, size * table->sectorsize,
 			    table->sectors - 1) == 0) {
@@ -379,6 +380,7 @@ ptable_ebrread(struct ptable *table, void *dev, diskread_t dread)
 	buf = malloc(table->sectorsize);
 	if (buf == NULL)
 		return (table);
+	DEBUG("EBR detected");
 	for (i = 0; i < MAXEBRENTRIES; i++) {
 #if 0	/* Some BIOSes return an incorrect number of sectors */
 		if (offset >= table->sectors)
@@ -471,6 +473,7 @@ ptable_bsdread(struct ptable *table, void *dev, diskread_t dread)
 		DEBUG("invalid number of partitions");
 		goto out;
 	}
+	DEBUG("BSD detected");
 	part = &dl->d_partitions[0];
 	raw_offset = le32toh(part[RAW_PART].p_offset);
 	for (i = 0; i < dl->d_npartitions; i++, part++) {
@@ -512,7 +515,7 @@ vtoc8_parttype(uint16_t type)
 		return (PART_FREEBSD_VINUM);
 	case VTOC_TAG_FREEBSD_ZFS:
 		return (PART_FREEBSD_ZFS);
-	};
+	}
 	return (PART_UNKNOWN);
 }
 
@@ -554,6 +557,7 @@ ptable_vtoc8read(struct ptable *table, void *dev, diskread_t dread)
 		DEBUG("invalid geometry");
 		goto out;
 	}
+	DEBUG("VTOC8 detected");
 	for (i = 0; i < VTOC8_NPARTS; i++) {
 		dl->part[i].tag = be16toh(dl->part[i].tag);
 		if (i == VTOC_RAW_PART ||
@@ -671,6 +675,7 @@ ptable_open(void *dev, off_t sectors, uint16_t sectorsize,
 #endif
 #ifdef LOADER_MBR_SUPPORT
 	/* Read MBR. */
+	DEBUG("MBR detected");
 	table->type = PTABLE_MBR;
 	for (i = has_ext = 0; i < NDOSPART; i++) {
 		if (dp[i].dp_typ == 0)
@@ -824,7 +829,7 @@ ptable_getbestpart(const struct ptable *table, struct ptable_entry *part)
 	return (ENOENT);
 }
 
-void
+int
 ptable_iterate(const struct ptable *table, void *arg, ptable_iterate_t *iter)
 {
 	struct pentry *entry;
@@ -851,7 +856,9 @@ ptable_iterate(const struct ptable *table, void *arg, ptable_iterate_t *iter)
 		if (table->type == PTABLE_BSD)
 			sprintf(name, "%c", (u_char) 'a' +
 			    entry->part.index);
-		iter(arg, name, &entry->part);
+		if (iter(arg, name, &entry->part))
+			return 1;
 	}
+	return 0;
 }
 

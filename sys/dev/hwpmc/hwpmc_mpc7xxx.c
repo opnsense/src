@@ -311,9 +311,6 @@ static struct mpc7xxx_event_code_map mpc7xxx_event_codes[] = {
 	PMC_POWERPC_EVENT(PREFETCH_ENGINE_FULL, 0x20, 57)
 };
 
-const size_t mpc7xxx_event_codes_size = 
-	sizeof(mpc7xxx_event_codes) / sizeof(mpc7xxx_event_codes[0]);
-
 static pmc_value_t
 mpc7xxx_pmcn_read(unsigned int pmc)
 {
@@ -567,7 +564,7 @@ mpc7xxx_pcpu_init(struct pmc_mdep *md, int cpu)
 	    M_PMC, M_WAITOK|M_ZERO);
 	pac->pc_class = PMC_CLASS_PPC7450;
 	pc = pmc_pcpu[cpu];
-	first_ri = md->pmd_classdep[PMC_MDEP_CLASS_INDEX_PPC7450].pcd_ri;
+	first_ri = md->pmd_classdep[PMC_MDEP_CLASS_INDEX_POWERPC].pcd_ri;
 	KASSERT(pc != NULL, ("[powerpc,%d] NULL per-cpu pointer", __LINE__));
 
 	for (i = 0, phw = pac->pc_ppcpmcs; i < MPC7XXX_MAX_PMCS; i++, phw++) {
@@ -578,7 +575,8 @@ mpc7xxx_pcpu_init(struct pmc_mdep *md, int cpu)
 	}
 
 	/* Clear the MMCRs, and set FC, to disable all PMCs. */
-	mtspr(SPR_MMCR0, SPR_MMCR0_FC | SPR_MMCR0_PMXE | SPR_MMCR0_PMC1CE | SPR_MMCR0_PMCNCE);
+	mtspr(SPR_MMCR0, SPR_MMCR0_FC | SPR_MMCR0_PMXE |
+	    SPR_MMCR0_FCECE | SPR_MMCR0_PMC1CE | SPR_MMCR0_PMCNCE);
 	mtspr(SPR_MMCR1, 0);
 
 	return 0;
@@ -589,10 +587,13 @@ mpc7xxx_pcpu_fini(struct pmc_mdep *md, int cpu)
 {
 	uint32_t mmcr0 = mfspr(SPR_MMCR0);
 
+	mtmsr(mfmsr() & ~PSL_PMM);
 	mmcr0 |= SPR_MMCR0_FC;
 	mtspr(SPR_MMCR0, mmcr0);
+
 	free(powerpc_pcpu[cpu]->pc_ppcpmcs, M_PMC);
 	free(powerpc_pcpu[cpu], M_PMC);
+
 	return 0;
 }
 
@@ -612,14 +613,14 @@ mpc7xxx_allocate_pmc(int cpu, int ri, struct pmc *pm,
 	caps = a->pm_caps;
 
 	pe = a->pm_ev;
-	for (i = 0; i < mpc7xxx_event_codes_size; i++) {
+	for (i = 0; i < nitems(mpc7xxx_event_codes); i++) {
 		if (mpc7xxx_event_codes[i].pe_ev == pe) {
 			config = mpc7xxx_event_codes[i].pe_code;
 			counter =  mpc7xxx_event_codes[i].pe_counter_mask;
 			break;
 		}
 	}
-	if (i == mpc7xxx_event_codes_size)
+	if (i == nitems(mpc7xxx_event_codes))
 		return (EINVAL);
 
 	if ((counter & (1 << ri)) == 0)
@@ -663,7 +664,6 @@ mpc7xxx_intr(int cpu, struct trapframe *tf)
 	uint32_t config;
 	struct pmc *pm;
 	struct powerpc_cpu *pac;
-	pmc_value_t v;
 
 	KASSERT(cpu >= 0 && cpu < pmc_cpu_max(),
 	    ("[powerpc,%d] out of range CPU %d", __LINE__, cpu));
@@ -675,8 +675,7 @@ mpc7xxx_intr(int cpu, struct trapframe *tf)
 
 	pac = powerpc_pcpu[cpu];
 
-	config  = mfspr(SPR_MMCR0);
-	mtspr(SPR_MMCR0, config | SPR_MMCR0_FC);
+	config  = mfspr(SPR_MMCR0) & ~SPR_MMCR0_FC;
 
 	/*
 	 * look for all PMCs that have interrupted:
@@ -700,22 +699,22 @@ mpc7xxx_intr(int cpu, struct trapframe *tf)
 		if (pm->pm_state != PMC_STATE_RUNNING)
 			continue;
 
-		/* Stop the PMC, reload count. */
-		v       = pm->pm_sc.pm_reloadcount;
-		mpc7xxx_pmcn_write(i, v);
-
-		/* Restart the counter if logging succeeded. */
+		/* Stop the counter if logging fails. */
 		error = pmc_process_interrupt(cpu, PMC_HR, pm, tf,
 		    TRAPF_USERMODE(tf));
 		if (error != 0)
 			mpc7xxx_stop_pmc(cpu, i);
-		atomic_add_int(retval ? &pmc_stats.pm_intr_processed :
-				&pmc_stats.pm_intr_ignored, 1);
 
+		/* reload count. */
+		mpc7xxx_write_pmc(cpu, i, pm->pm_sc.pm_reloadcount);
 	}
 
+	atomic_add_int(retval ? &pmc_stats.pm_intr_processed :
+	    &pmc_stats.pm_intr_ignored, 1);
+
 	/* Re-enable PERF exceptions. */
-	mtspr(SPR_MMCR0, config | SPR_MMCR0_PMXE);
+	if (retval)
+		mtspr(SPR_MMCR0, config | SPR_MMCR0_PMXE);
 
 	return (retval);
 }
@@ -727,7 +726,7 @@ pmc_mpc7xxx_initialize(struct pmc_mdep *pmc_mdep)
 
 	pmc_mdep->pmd_cputype = PMC_CPU_PPC_7450;
 
-	pcd = &pmc_mdep->pmd_classdep[PMC_MDEP_CLASS_INDEX_PPC7450];
+	pcd = &pmc_mdep->pmd_classdep[PMC_MDEP_CLASS_INDEX_POWERPC];
 	pcd->pcd_caps  = POWERPC_PMC_CAPS;
 	pcd->pcd_class = PMC_CLASS_PPC7450;
 	pcd->pcd_num   = MPC7XXX_MAX_PMCS;

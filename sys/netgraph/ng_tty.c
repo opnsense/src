@@ -190,7 +190,7 @@ ngt_newhook(node_p node, hook_p hook, const char *name)
 
 /*
  * Set the hook into queueing mode (for outgoing packets),
- * so that we wont deliver mbuf thru the whole graph holding
+ * so that we wont deliver mbuf through the whole graph holding
  * tty locks.
  */
 static int
@@ -327,7 +327,6 @@ ngt_rcvdata(hook_p hook, item_p item)
 
 	IF_LOCK(&sc->outq);
 	if (_IF_QFULL(&sc->outq)) {
-		_IF_DROP(&sc->outq);
 		IF_UNLOCK(&sc->outq);
 		NG_FREE_M(m);
 		return (ENOBUFS);

@@ -2284,6 +2284,37 @@ s_unreq (int a ATTRIBUTE_UNUSED)
   demand_empty_rest_of_line ();
 }
 
+static void
+s_inst(int unused ATTRIBUTE_UNUSED)
+{
+	expressionS exp;
+
+	if (thumb_mode) {
+		as_bad(".inst not implemented for Thumb mode");
+		ignore_rest_of_line();
+		return;
+	}
+
+	if (is_it_end_of_statement()) {
+		demand_empty_rest_of_line();
+		return;
+	}
+
+	do {
+		expression(&exp);
+
+		if (exp.X_op != O_constant)
+			as_bad("constant expression required");
+		else
+			emit_expr(&exp, 4);
+
+	} while (*input_line_pointer++ == ',');
+
+	/* Put terminator back into stream. */
+	input_line_pointer--;
+	demand_empty_rest_of_line();
+}
+
 /* Directives: Instruction set selection.  */
 
 #ifdef OBJ_ELF
@@ -3837,10 +3868,10 @@ s_arm_eabi_attribute (int ignored ATTRIBUTE_UNUSED)
 #endif /* OBJ_ELF */
 
 static void s_arm_arch (int);
-static void s_arm_arch_extension (int);
 static void s_arm_object_arch (int);
 static void s_arm_cpu (int);
 static void s_arm_fpu (int);
+static void s_arm_arch_extension (int);
 
 #ifdef TE_PE
 
@@ -3892,9 +3923,10 @@ const pseudo_typeS md_pseudo_table[] =
   { "syntax",	   s_syntax,	  0 },
   { "cpu",	   s_arm_cpu,	  0 },
   { "arch",	   s_arm_arch,	  0 },
-  { "arch_extension",	   s_arm_arch_extension,	  0 },
   { "object_arch", s_arm_object_arch,	0 },
   { "fpu",	   s_arm_fpu,	  0 },
+  { "arch_extension",	   s_arm_arch_extension,	  0 },
+  { "inst",	   s_inst,	  0 },
 #ifdef OBJ_ELF
   { "word",	   s_arm_elf_cons, 4 },
   { "long",	   s_arm_elf_cons, 4 },
@@ -4687,6 +4719,23 @@ parse_address_main (char **str, int i, int group_relocations,
 	    if (my_get_expression (&inst.reloc.exp, &p, GE_IMM_PREFIX))
 	      return PARSE_OPERAND_FAIL;
 	}
+    }
+  else if (skip_past_char (&p, ':') == SUCCESS)
+    {
+      /* FIXME: '@' should be used here, but it's filtered out by generic
+         code before we get to see it here. This may be subject to
+         change.  */
+      expressionS exp;
+      my_get_expression (&exp, &p, GE_NO_PREFIX);
+      if (exp.X_op != O_constant)
+        {
+          inst.error = _("alignment must be constant");
+          return PARSE_OPERAND_FAIL;
+        }
+      inst.operands[i].imm = exp.X_add_number << 8;
+      inst.operands[i].immisalign = 1;
+      /* Alignments are not pre-indexes.  */
+      inst.operands[i].preind = 0;
     }
 
   if (skip_past_char (&p, ']') == FAIL)
@@ -6571,6 +6620,7 @@ do_barrier (void)
   if (inst.operands[0].present)
     {
       constraint ((inst.instruction & 0xf0) != 0x40
+		  && (inst.instruction & 0xf0) != 0x50
 		  && inst.operands[0].imm != 0xf,
 		  "bad barrier type");
       inst.instruction |= inst.operands[0].imm;
@@ -14698,10 +14748,18 @@ static const struct asm_cond conds[] =
 
 static struct asm_barrier_opt barrier_opt_names[] =
 {
-  { "sy",   0xf },
-  { "un",   0x7 },
-  { "st",   0xe },
-  { "unst", 0x6 }
+  { "sy",    0xf },
+  { "un",    0x7 },
+  { "st",    0xe },
+  { "unst",  0x6 },
+  { "ish",   0xb },
+  { "sh",    0xb },
+  { "ishst", 0xa },
+  { "shst",  0xa },
+  { "nsh",   0x7 },
+  { "nshst", 0x6 },
+  { "osh",   0x3 },
+  { "oshst", 0x2 }
 };
 
 /* Table of ARM-format instructions.	*/

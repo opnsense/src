@@ -1,5 +1,6 @@
 # $FreeBSD$
 
+PACKAGE=at
 MAINSRC=${.CURDIR}/../../usr.bin/at
 
 .include "${MAINSRC}/Makefile.inc"
@@ -17,8 +18,7 @@ CFLAGS+=-DLOGIN_CAP -DPAM
 WARNS?=	2
 WFORMAT=0
 
-DPADD=	${LIBPAM} ${LIBUTIL}
-LDADD=	${MINUSLPAM} -lutil
+LIBADD=	pam util
 
 atrun.8: atrun.man
 	@${ECHO} Making ${.TARGET:T} from ${.ALLSRC:T}; \

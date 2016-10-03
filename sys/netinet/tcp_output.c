@@ -35,7 +35,6 @@ __FBSDID("$FreeBSD$");
 #include "opt_inet.h"
 #include "opt_inet6.h"
 #include "opt_ipsec.h"
-#include "opt_kdtrace.h"
 #include "opt_tcpdebug.h"
 
 #include <sys/param.h>
@@ -56,7 +55,6 @@ __FBSDID("$FreeBSD$");
 #include <net/route.h>
 #include <net/vnet.h>
 
-#include <netinet/cc.h>
 #include <netinet/in.h>
 #include <netinet/in_kdtrace.h>
 #include <netinet/in_systm.h>
@@ -72,12 +70,17 @@ __FBSDID("$FreeBSD$");
 #ifdef TCP_RFC7413
 #include <netinet/tcp_fastopen.h>
 #endif
+#include <netinet/tcp.h>
 #define	TCPOUTFLAGS
 #include <netinet/tcp_fsm.h>
 #include <netinet/tcp_seq.h>
 #include <netinet/tcp_timer.h>
 #include <netinet/tcp_var.h>
 #include <netinet/tcpip.h>
+#include <netinet/cc/cc.h>
+#ifdef TCPPCAP
+#include <netinet/tcp_pcap.h>
+#endif
 #ifdef TCPDEBUG
 #include <netinet/tcp_debug.h>
 #endif
@@ -94,38 +97,48 @@ __FBSDID("$FreeBSD$");
 #include <security/mac/mac_framework.h>
 
 VNET_DEFINE(int, path_mtu_discovery) = 1;
-SYSCTL_VNET_INT(_net_inet_tcp, OID_AUTO, path_mtu_discovery, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, path_mtu_discovery, CTLFLAG_VNET | CTLFLAG_RW,
 	&VNET_NAME(path_mtu_discovery), 1,
 	"Enable Path MTU Discovery");
 
 VNET_DEFINE(int, tcp_do_tso) = 1;
 #define	V_tcp_do_tso		VNET(tcp_do_tso)
-SYSCTL_VNET_INT(_net_inet_tcp, OID_AUTO, tso, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, tso, CTLFLAG_VNET | CTLFLAG_RW,
 	&VNET_NAME(tcp_do_tso), 0,
 	"Enable TCP Segmentation Offload");
 
 VNET_DEFINE(int, tcp_sendspace) = 1024*32;
 #define	V_tcp_sendspace	VNET(tcp_sendspace)
-SYSCTL_VNET_INT(_net_inet_tcp, TCPCTL_SENDSPACE, sendspace, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_tcp, TCPCTL_SENDSPACE, sendspace, CTLFLAG_VNET | CTLFLAG_RW,
 	&VNET_NAME(tcp_sendspace), 0, "Initial send socket buffer size");
 
 VNET_DEFINE(int, tcp_do_autosndbuf) = 1;
 #define	V_tcp_do_autosndbuf	VNET(tcp_do_autosndbuf)
-SYSCTL_VNET_INT(_net_inet_tcp, OID_AUTO, sendbuf_auto, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, sendbuf_auto, CTLFLAG_VNET | CTLFLAG_RW,
 	&VNET_NAME(tcp_do_autosndbuf), 0,
 	"Enable automatic send buffer sizing");
 
 VNET_DEFINE(int, tcp_autosndbuf_inc) = 8*1024;
 #define	V_tcp_autosndbuf_inc	VNET(tcp_autosndbuf_inc)
-SYSCTL_VNET_INT(_net_inet_tcp, OID_AUTO, sendbuf_inc, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, sendbuf_inc, CTLFLAG_VNET | CTLFLAG_RW,
 	&VNET_NAME(tcp_autosndbuf_inc), 0,
 	"Incrementor step size of automatic send buffer");
 
 VNET_DEFINE(int, tcp_autosndbuf_max) = 2*1024*1024;
 #define	V_tcp_autosndbuf_max	VNET(tcp_autosndbuf_max)
-SYSCTL_VNET_INT(_net_inet_tcp, OID_AUTO, sendbuf_max, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, sendbuf_max, CTLFLAG_VNET | CTLFLAG_RW,
 	&VNET_NAME(tcp_autosndbuf_max), 0,
 	"Max size of automatic send buffer");
+
+/*
+ * Make sure that either retransmit or persist timer is set for SYN, FIN and
+ * non-ACK.
+ */
+#define TCP_XMIT_TIMER_ASSERT(tp, len, th_flags)			\
+	KASSERT(((len) == 0 && ((th_flags) & (TH_SYN | TH_FIN)) == 0) ||\
+	    tcp_timer_active((tp), TT_REXMT) ||				\
+	    tcp_timer_active((tp), TT_PERSIST),				\
+	    ("neither rexmt nor persist timer is set"))
 
 static void inline	hhook_run_tcp_est_out(struct tcpcb *tp,
 			    struct tcphdr *th, struct tcpopt *to,
@@ -212,7 +225,7 @@ tcp_output(struct tcpcb *tp)
 	 */
 	if ((tp->t_flags & TF_FASTOPEN) &&
 	    (tp->t_state == TCPS_SYN_RECEIVED) &&
-	    SEQ_GT(tp->snd_max, tp->snd_una) &&    /* inital SYN|ACK sent */
+	    SEQ_GT(tp->snd_max, tp->snd_una) &&    /* initial SYN|ACK sent */
 	    (tp->snd_nxt != tp->snd_una))          /* not a retransmit */
 		return (0);
 #endif
@@ -337,7 +350,7 @@ after_sack_rexmit:
 			 * to send then the probe will be the FIN
 			 * itself.
 			 */
-			if (off < so->so_snd.sb_cc)
+			if (off < sbused(&so->so_snd))
 				flags &= ~TH_FIN;
 			sendwin = 1;
 		} else {
@@ -363,7 +376,8 @@ after_sack_rexmit:
 	 */
 	if (sack_rxmit == 0) {
 		if (sack_bytes_rxmt == 0)
-			len = ((long)ulmin(so->so_snd.sb_cc, sendwin) - off);
+			len = ((long)ulmin(sbavail(&so->so_snd), sendwin) -
+			    off);
 		else {
 			long cwin;
 
@@ -372,8 +386,8 @@ after_sack_rexmit:
 			 * sending new data, having retransmitted all the
 			 * data possible in the scoreboard.
 			 */
-			len = ((long)ulmin(so->so_snd.sb_cc, tp->snd_wnd) 
-			       - off);
+			len = ((long)ulmin(sbavail(&so->so_snd), tp->snd_wnd) -
+			    off);
 			/*
 			 * Don't remove this (len > 0) check !
 			 * We explicitly check for len > 0 here (although it 
@@ -453,7 +467,7 @@ after_sack_rexmit:
 		 */
 		len = 0;
 		if ((sendwin == 0) && (TCPS_HAVEESTABLISHED(tp->t_state)) &&
-			(off < (int) so->so_snd.sb_cc)) {
+			(off < (int) sbavail(&so->so_snd))) {
 			tcp_timer_activate(tp, TT_REXMT, 0);
 			tp->t_rxtshift = 0;
 			tp->snd_nxt = tp->snd_una;
@@ -491,20 +505,23 @@ after_sack_rexmit:
 	 * and does at most one step per received ACK.  This fast
 	 * scaling has the drawback of growing the send buffer beyond
 	 * what is strictly necessary to make full use of a given
-	 * delay*bandwith product.  However testing has shown this not
+	 * delay*bandwidth product.  However testing has shown this not
 	 * to be much of an problem.  At worst we are trading wasting
-	 * of available bandwith (the non-use of it) for wasting some
+	 * of available bandwidth (the non-use of it) for wasting some
 	 * socket buffer memory.
 	 *
 	 * TODO: Shrink send buffer during idle periods together
 	 * with congestion window.  Requires another timer.  Has to
 	 * wait for upcoming tcp timer rewrite.
+	 *
+	 * XXXGL: should there be used sbused() or sbavail()?
 	 */
 	if (V_tcp_do_autosndbuf && so->so_snd.sb_flags & SB_AUTOSIZE) {
 		if ((tp->snd_wnd / 4 * 5) >= so->so_snd.sb_hiwat &&
-		    so->so_snd.sb_cc >= (so->so_snd.sb_hiwat / 8 * 7) &&
-		    so->so_snd.sb_cc < V_tcp_autosndbuf_max &&
-		    sendwin >= (so->so_snd.sb_cc - (tp->snd_nxt - tp->snd_una))) {
+		    sbused(&so->so_snd) >= (so->so_snd.sb_hiwat / 8 * 7) &&
+		    sbused(&so->so_snd) < V_tcp_autosndbuf_max &&
+		    sendwin >= (sbused(&so->so_snd) -
+		    (tp->snd_nxt - tp->snd_una))) {
 			if (!sbreserve_locked(&so->so_snd,
 			    min(so->so_snd.sb_hiwat + V_tcp_autosndbuf_inc,
 			     V_tcp_autosndbuf_max), so, curthread))
@@ -541,10 +558,11 @@ after_sack_rexmit:
 		tso = 1;
 
 	if (sack_rxmit) {
-		if (SEQ_LT(p->rxmit + len, tp->snd_una + so->so_snd.sb_cc))
+		if (SEQ_LT(p->rxmit + len, tp->snd_una + sbused(&so->so_snd)))
 			flags &= ~TH_FIN;
 	} else {
-		if (SEQ_LT(tp->snd_nxt + len, tp->snd_una + so->so_snd.sb_cc))
+		if (SEQ_LT(tp->snd_nxt + len, tp->snd_una +
+		    sbused(&so->so_snd)))
 			flags &= ~TH_FIN;
 	}
 
@@ -574,7 +592,7 @@ after_sack_rexmit:
 		 */
 		if (!(tp->t_flags & TF_MORETOCOME) &&	/* normal case */
 		    (idle || (tp->t_flags & TF_NODELAY)) &&
-		    len + off >= so->so_snd.sb_cc &&
+		    len + off >= sbavail(&so->so_snd) &&
 		    (tp->t_flags & TF_NOPUSH) == 0) {
 			goto send;
 		}
@@ -702,7 +720,7 @@ dontupdate:
 	 * if window is nonzero, transmit what we can,
 	 * otherwise force out a byte.
 	 */
-	if (so->so_snd.sb_cc && !tcp_timer_active(tp, TT_REXMT) &&
+	if (sbavail(&so->so_snd) && !tcp_timer_active(tp, TT_REXMT) &&
 	    !tcp_timer_active(tp, TT_PERSIST)) {
 		tp->t_rxtshift = 0;
 		tcp_setpersist(tp);
@@ -823,11 +841,11 @@ send:
 
 	/*
 	 * Adjust data length if insertion of options will
-	 * bump the packet length beyond the t_maxopd length.
+	 * bump the packet length beyond the t_maxseg length.
 	 * Clear the FIN bit because we cut off the tail of
 	 * the segment.
 	 */
-	if (len + optlen + ipoptlen > tp->t_maxopd) {
+	if (len + optlen + ipoptlen > tp->t_maxseg) {
 		flags &= ~TH_FIN;
 
 		if (tso) {
@@ -930,8 +948,8 @@ send:
 			 * fractional unless the send sockbuf can be
 			 * emptied:
 			 */
-			max_len = (tp->t_maxopd - optlen);
-			if ((off + len) < so->so_snd.sb_cc) {
+			max_len = (tp->t_maxseg - optlen);
+			if ((off + len) < sbavail(&so->so_snd)) {
 				moff = len % max_len;
 				if (moff != 0) {
 					len -= moff;
@@ -960,7 +978,7 @@ send:
 				sendalot = 1;
 
 		} else {
-			len = tp->t_maxopd - optlen - ipoptlen;
+			len = tp->t_maxseg - optlen - ipoptlen;
 			sendalot = 1;
 		}
 	} else
@@ -1047,7 +1065,7 @@ send:
 		 * give data to the user when a buffer fills or
 		 * a PUSH comes in.)
 		 */
-		if ((off + len == so->so_snd.sb_cc) && !(flags & TH_SYN))
+		if ((off + len == sbused(&so->so_snd)) && !(flags & TH_SYN))
 			flags |= TH_PUSH;
 		SOCKBUF_UNLOCK(&so->so_snd);
 	} else {
@@ -1070,7 +1088,7 @@ send:
 #ifdef INET6
 		if (isipv6 && (MHLEN < hdrlen + max_linkhdr) &&
 		    MHLEN >= hdrlen) {
-			MH_ALIGN(m, hdrlen);
+			M_ALIGN(m, hdrlen);
 		} else
 #endif
 		m->m_data += max_linkhdr;
@@ -1109,7 +1127,7 @@ send:
 	 * resend those bits a number of times as per
 	 * RFC 3168.
 	 */
-	if (tp->t_state == TCPS_SYN_SENT && V_tcp_do_ecn) {
+	if (tp->t_state == TCPS_SYN_SENT && V_tcp_do_ecn == 1) {
 		if (tp->t_rxtshift >= 1) {
 			if (tp->t_rxtshift <= V_tcp_ecn_maxretries)
 				flags |= TH_ECE|TH_CWR;
@@ -1268,13 +1286,12 @@ send:
 	/*
 	 * Enable TSO and specify the size of the segments.
 	 * The TCP pseudo header checksum is always provided.
-	 * XXX: Fixme: This is currently not the case for IPv6.
 	 */
 	if (tso) {
-		KASSERT(len > tp->t_maxopd - optlen,
+		KASSERT(len > tp->t_maxseg - optlen,
 		    ("%s: len <= tso_segsz", __func__));
 		m->m_pkthdr.csum_flags |= CSUM_TSO;
-		m->m_pkthdr.tso_segsz = tp->t_maxopd - optlen;
+		m->m_pkthdr.tso_segsz = tp->t_maxseg - optlen;
 	}
 
 #ifdef IPSEC
@@ -1310,6 +1327,7 @@ send:
 		ipov->ih_len = save;
 	}
 #endif /* TCPDEBUG */
+	TCP_PROBE3(debug__output, tp, th, mtod(m, const char *));
 
 	/*
 	 * Fill in IP length and desired time to live and
@@ -1318,7 +1336,7 @@ send:
 	 * the template, but need a way to checksum without them.
 	 */
 	/*
-	 * m->m_pkthdr.len should have been set before cksum calcuration,
+	 * m->m_pkthdr.len should have been set before checksum calculation,
 	 * because in6_cksum() need it.
 	 */
 #ifdef INET6
@@ -1341,7 +1359,7 @@ send:
 		 */
 		ip6->ip6_plen = htons(m->m_pkthdr.len - sizeof(*ip6));
 
-		if (V_path_mtu_discovery && tp->t_maxopd > V_tcp_minmss)
+		if (V_path_mtu_discovery && tp->t_maxseg > V_tcp_minmss)
 			tp->t_flags2 |= TF2_PLPMTU_PMTUD;
 		else
 			tp->t_flags2 &= ~TF2_PLPMTU_PMTUD;
@@ -1350,6 +1368,11 @@ send:
 			TCP_PROBE5(connect__request, NULL, tp, ip6, tp, th);
 
 		TCP_PROBE5(send, NULL, tp, ip6, tp, th);
+
+#ifdef TCPPCAP
+		/* Save packet, if requested. */
+		tcp_pcap_add(th, m, &(tp->t_outpkts));
+#endif
 
 		/* TODO: IPv6 IP6TOS_ECT bit on */
 		error = ip6_output(m, tp->t_inpcb->in6p_outputopts, &ro,
@@ -1366,9 +1389,6 @@ send:
 #endif
 #ifdef INET
     {
-	struct route ro;
-
-	bzero(&ro, sizeof(ro));
 	ip->ip_len = htons(m->m_pkthdr.len);
 #ifdef INET6
 	if (tp->t_inpcb->inp_vflag & INP_IPV6PROTO)
@@ -1382,7 +1402,7 @@ send:
 	 *
 	 * NB: Don't set DF on small MTU/MSS to have a safe fallback.
 	 */
-	if (V_path_mtu_discovery && tp->t_maxopd > V_tcp_minmss) {
+	if (V_path_mtu_discovery && tp->t_maxseg > V_tcp_minmss) {
 		ip->ip_off |= htons(IP_DF);
 		tp->t_flags2 |= TF2_PLPMTU_PMTUD;
 	} else {
@@ -1394,13 +1414,17 @@ send:
 
 	TCP_PROBE5(send, NULL, tp, ip, tp, th);
 
-	error = ip_output(m, tp->t_inpcb->inp_options, &ro,
+#ifdef TCPPCAP
+	/* Save packet, if requested. */
+	tcp_pcap_add(th, m, &(tp->t_outpkts));
+#endif
+
+	error = ip_output(m, tp->t_inpcb->inp_options, &tp->t_inpcb->inp_route,
 	    ((so->so_options & SO_DONTROUTE) ? IP_ROUTETOIF : 0), 0,
 	    tp->t_inpcb);
 
-	if (error == EMSGSIZE && ro.ro_rt != NULL)
-		mtu = ro.ro_rt->rt_mtu;
-	RO_RTFREE(&ro);
+	if (error == EMSGSIZE && tp->t_inpcb->inp_route.ro_rt != NULL)
+		mtu = tp->t_inpcb->inp_route.ro_rt->rt_mtu;
     }
 #endif /* INET */
 
@@ -1457,7 +1481,7 @@ timer:
 				tp->t_rxtshift = 0;
 			}
 			tcp_timer_activate(tp, TT_REXMT, tp->t_rxtcur);
-		} else if (len == 0 && so->so_snd.sb_cc &&
+		} else if (len == 0 && sbavail(&so->so_snd) &&
 		    !tcp_timer_active(tp, TT_REXMT) &&
 		    !tcp_timer_active(tp, TT_PERSIST)) {
 			/*
@@ -1531,9 +1555,7 @@ timer:
 			tp->t_softerror = error;
 			return (error);
 		case ENOBUFS:
-	                if (!tcp_timer_active(tp, TT_REXMT) &&
-			    !tcp_timer_active(tp, TT_PERSIST))
-	                        tcp_timer_activate(tp, TT_REXMT, tp->t_rxtcur);
+			TCP_XMIT_TIMER_ASSERT(tp, len, flags);
 			tp->snd_cwnd = tp->t_maxseg;
 			return (0);
 		case EMSGSIZE:
@@ -1605,7 +1627,7 @@ tcp_setpersist(struct tcpcb *tp)
 	if (tcp_timer_active(tp, TT_REXMT))
 		panic("tcp_setpersist: retransmit pending");
 	/*
-	 * Start/restart persistance timer.
+	 * Start/restart persistence timer.
 	 */
 	TCPT_RANGESET(tt, t * tcp_backoff[tp->t_rxtshift],
 		      tcp_persmin, tcp_persmax);
@@ -1634,7 +1656,7 @@ tcp_setpersist(struct tcpcb *tp)
 int
 tcp_addoptions(struct tcpopt *to, u_char *optp)
 {
-	u_int mask, optlen = 0;
+	u_int32_t mask, optlen = 0;
 
 	for (mask = 1; mask < TOF_MAXOPT; mask <<= 1) {
 		if ((to->to_flags & mask) != mask)

@@ -114,10 +114,6 @@ __FBSDID("$FreeBSD$");
 
 typedef int ofw_vec_t(void *);
 
-#ifdef DDB
-extern vm_offset_t ksym_start, ksym_end;
-#endif
-
 int dtlb_slots;
 int itlb_slots;
 struct tlb_entry *kernel_tlbs;
@@ -190,8 +186,8 @@ cpu_startup(void *arg)
 	EVENTHANDLER_REGISTER(shutdown_final, sparc64_shutdown_final, NULL,
 	    SHUTDOWN_PRI_LAST);
 
-	printf("avail memory = %lu (%lu MB)\n", cnt.v_free_count * PAGE_SIZE,
-	    cnt.v_free_count / ((1024 * 1024) / PAGE_SIZE));
+	printf("avail memory = %lu (%lu MB)\n", vm_cnt.v_free_count * PAGE_SIZE,
+	    vm_cnt.v_free_count / ((1024 * 1024) / PAGE_SIZE));
 
 	if (bootverbose)
 		printf("machine: %s\n", sparc64_model);
@@ -516,7 +512,7 @@ sparc64_init(caddr_t mdp, u_long o1, u_long o2, u_long o3, ofw_vec_t *vec)
 	 * Initialize tunables.
 	 */
 	init_param2(physmem);
-	env = getenv("kernelname");
+	env = kern_getenv("kernelname");
 	if (env != NULL) {
 		strlcpy(kernelname, env, sizeof(kernelname));
 		freeenv(env);
@@ -650,7 +646,7 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	/* Allocate and validate space for the signal handler context. */
 	if ((td->td_pflags & TDP_ALTSTACK) != 0 && !oonstack &&
 	    SIGISMEMBER(psp->ps_sigonstack, sig)) {
-		sfp = (struct sigframe *)(td->td_sigstk.ss_sp +
+		sfp = (struct sigframe *)((uintptr_t)td->td_sigstk.ss_sp +
 		    td->td_sigstk.ss_size - sizeof(struct sigframe));
 	} else
 		sfp = (struct sigframe *)sp - 1;
@@ -1000,7 +996,7 @@ exec_setregs(struct thread *td, struct image_params *imgp, u_long stack)
 	bzero(pcb, sizeof(*pcb));
 	bzero(tf, sizeof(*tf));
 	tf->tf_out[0] = stack;
-	tf->tf_out[3] = p->p_psstrings;
+	tf->tf_out[3] = p->p_sysent->sv_psstrings;
 	tf->tf_out[6] = sp - SPOFF - sizeof(struct frame);
 	tf->tf_tnpc = imgp->entry_addr + 4;
 	tf->tf_tpc = imgp->entry_addr;

@@ -30,13 +30,13 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
-#include "opt_pax.h"
+#include "opt_kstack_pages.h"
 
 #include <sys/param.h>
 #include <sys/cons.h>
 #include <sys/jail.h>
 #include <sys/kdb.h>
-#include <sys/pax.h>
+#include <sys/kernel.h>
 #include <sys/proc.h>
 #include <sys/sysent.h>
 #include <sys/systm.h>
@@ -78,7 +78,7 @@ DB_SHOW_ALL_COMMAND(procs, db_procs_cmd)
  * characters.
  */
 void
-db_ps(db_expr_t addr, boolean_t hasaddr, db_expr_t count, char *modif)
+db_ps(db_expr_t addr, bool hasaddr, db_expr_t count, char *modif)
 {
 	volatile struct proc *p, *pp;
 	volatile struct thread *td;
@@ -184,7 +184,8 @@ db_ps(db_expr_t addr, boolean_t hasaddr, db_expr_t count, char *modif)
 			strlcat(state, "V", sizeof(state));
 		if (p->p_flag & P_SYSTEM || p->p_lock > 0)
 			strlcat(state, "L", sizeof(state));
-		if (p->p_session != NULL && SESS_LEADER(p))
+		if (p->p_pgrp != NULL && p->p_session != NULL &&
+		    SESS_LEADER(p))
 			strlcat(state, "s", sizeof(state));
 		/* Cheated here and didn't compare pgid's. */
 		if (p->p_flag & P_CONTROLT)
@@ -302,11 +303,12 @@ DB_SHOW_COMMAND(thread, db_show_thread)
 {
 	struct thread *td;
 	struct lock_object *lock;
-	boolean_t comma;
+	bool comma;
+	int delta;
 
 	/* Determine which thread to examine. */
 	if (have_addr)
-		td = db_lookup_thread(addr, FALSE);
+		td = db_lookup_thread(addr, false);
 	else
 		td = kdb_thread;
 	lock = (struct lock_object *)td->td_lock;
@@ -319,9 +321,6 @@ DB_SHOW_COMMAND(thread, db_show_thread)
 	    (void *)(td->td_kstack + td->td_kstack_pages * PAGE_SIZE - 1));
 	db_printf(" flags: %#x ", td->td_flags);
 	db_printf(" pflags: %#x\n", td->td_pflags);
-#ifdef PAX
-	pax_db_printf_flags_td(td, PAX_LOG_DEFAULT);
-#endif
 	db_printf(" state: ");
 	switch (td->td_state) {
 	case TDS_INACTIVE:
@@ -338,28 +337,28 @@ DB_SHOW_COMMAND(thread, db_show_thread)
 		break;
 	case TDS_INHIBITED:
 		db_printf("INHIBITED: {");
-		comma = FALSE;
+		comma = false;
 		if (TD_IS_SLEEPING(td)) {
 			db_printf("SLEEPING");
-			comma = TRUE;
+			comma = true;
 		}
 		if (TD_IS_SUSPENDED(td)) {
 			if (comma)
 				db_printf(", ");
 			db_printf("SUSPENDED");
-			comma = TRUE;
+			comma = true;
 		}
 		if (TD_IS_SWAPPED(td)) {
 			if (comma)
 				db_printf(", ");
 			db_printf("SWAPPED");
-			comma = TRUE;
+			comma = true;
 		}
 		if (TD_ON_LOCK(td)) {
 			if (comma)
 				db_printf(", ");
 			db_printf("LOCK");
-			comma = TRUE;
+			comma = true;
 		}
 		if (TD_AWAITING_INTR(td)) {
 			if (comma)
@@ -380,6 +379,16 @@ DB_SHOW_COMMAND(thread, db_show_thread)
 		    td->td_wchan);
 	db_printf(" priority: %d\n", td->td_priority);
 	db_printf(" container lock: %s (%p)\n", lock->lo_name, lock);
+	if (td->td_swvoltick != 0) {
+		delta = (u_int)ticks - (u_int)td->td_swvoltick;
+		db_printf(" last voluntary switch: %d ms ago\n",
+		    1000 * delta / hz);
+	}
+	if (td->td_swinvoltick != 0) {
+		delta = (u_int)ticks - (u_int)td->td_swinvoltick;
+		db_printf(" last involuntary switch: %d ms ago\n",
+		    1000 * delta / hz);
+	}
 }
 
 DB_SHOW_COMMAND(proc, db_show_proc)
@@ -429,9 +438,6 @@ DB_SHOW_COMMAND(proc, db_show_proc)
 	if (p->p_args != NULL)
 		db_printf(" arguments: %.*s\n", (int)p->p_args->ar_length,
 		    p->p_args->ar_args);
-#ifdef PAX
-	pax_db_printf_flags(p, PAX_LOG_DEFAULT);
-#endif
 	db_printf(" threads: %d\n", p->p_numthreads);
 	FOREACH_THREAD_IN_PROC(p, td) {
 		dumpthread(p, td, 1);
@@ -441,8 +447,8 @@ DB_SHOW_COMMAND(proc, db_show_proc)
 }
 
 void
-db_findstack_cmd(db_expr_t addr, boolean_t have_addr,
-    db_expr_t dummy3 __unused, char *dummy4 __unused)
+db_findstack_cmd(db_expr_t addr, bool have_addr, db_expr_t dummy3 __unused,
+    char *dummy4 __unused)
 {
 	struct proc *p;
 	struct thread *td;
@@ -469,7 +475,7 @@ db_findstack_cmd(db_expr_t addr, boolean_t have_addr,
 	for (ks_ce = kstack_cache; ks_ce != NULL;
 	     ks_ce = ks_ce->next_ks_entry) {
 		if ((vm_offset_t)ks_ce <= saddr && saddr < (vm_offset_t)ks_ce +
-		    PAGE_SIZE * KSTACK_PAGES) {
+		    PAGE_SIZE * kstack_pages) {
 			db_printf("Cached stack %p\n", ks_ce);
 			return;
 		}

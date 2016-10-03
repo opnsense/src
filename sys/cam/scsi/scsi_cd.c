@@ -287,15 +287,12 @@ static int cd_retry_count = CD_DEFAULT_RETRY;
 static int cd_timeout = CD_DEFAULT_TIMEOUT;
 
 static SYSCTL_NODE(_kern_cam, OID_AUTO, cd, CTLFLAG_RD, 0, "CAM CDROM driver");
-SYSCTL_INT(_kern_cam_cd, OID_AUTO, poll_period, CTLFLAG_RW,
+SYSCTL_INT(_kern_cam_cd, OID_AUTO, poll_period, CTLFLAG_RWTUN,
            &cd_poll_period, 0, "Media polling period in seconds");
-TUNABLE_INT("kern.cam.cd.poll_period", &cd_poll_period);
-SYSCTL_INT(_kern_cam_cd, OID_AUTO, retry_count, CTLFLAG_RW,
+SYSCTL_INT(_kern_cam_cd, OID_AUTO, retry_count, CTLFLAG_RWTUN,
            &cd_retry_count, 0, "Normal I/O retry count");
-TUNABLE_INT("kern.cam.cd.retry_count", &cd_retry_count);
-SYSCTL_INT(_kern_cam_cd, OID_AUTO, timeout, CTLFLAG_RW,
+SYSCTL_INT(_kern_cam_cd, OID_AUTO, timeout, CTLFLAG_RWTUN,
 	   &cd_timeout, 0, "Timeout, in us, for read operations");
-TUNABLE_INT("kern.cam.cd.timeout", &cd_timeout);
 
 static MALLOC_DEFINE(M_SCSICD, "scsi_cd", "scsi_cd buffers");
 
@@ -581,7 +578,7 @@ cdregister(struct cam_periph *periph, void *arg)
 	 */
 	match = cam_quirkmatch((caddr_t)&cgd->inq_data,
 			       (caddr_t)cd_quirk_table,
-			       sizeof(cd_quirk_table)/sizeof(*cd_quirk_table),
+			       nitems(cd_quirk_table),
 			       sizeof(*cd_quirk_table), scsi_inquiry_match);
 
 	if (match != NULL)
@@ -1267,10 +1264,9 @@ cdgetpage(struct cd_mode_params *mode_params)
 static int
 cdgetpagesize(int page_num)
 {
-	int i;
+	u_int i;
 
-	for (i = 0; i < (sizeof(cd_page_size_table)/
-	     sizeof(cd_page_size_table[0])); i++) {
+	for (i = 0; i < nitems(cd_page_size_table); i++) {
 		if (cd_page_size_table[i].page == page_num)
 			return (cd_page_size_table[i].page_size);
 	}

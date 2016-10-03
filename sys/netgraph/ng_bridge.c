@@ -71,6 +71,7 @@
 #include <sys/ctype.h>
 
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/ethernet.h>
 #include <net/vnet.h>
 
@@ -326,7 +327,7 @@ ng_bridge_constructor(node_p node)
 	/*
 	 * This node has all kinds of stuff that could be screwed by SMP.
 	 * Until it gets it's own internal protection, we go through in 
-	 * single file. This could hurt a machine bridging beteen two 
+	 * single file. This could hurt a machine bridging between two 
 	 * GB ethernets so it should be fixed. 
 	 * When it's fixed the process SHOULD NOT SLEEP, spinlocks please!
 	 * (and atomic ops )
@@ -1045,7 +1046,7 @@ ng_bridge_nodename(node_p node)
 {
 	static char name[NG_NODESIZ];
 
-	if (NG_NODE_NAME(node) != NULL)
+	if (NG_NODE_HAS_NAME(node))
 		snprintf(name, sizeof(name), "%s", NG_NODE_NAME(node));
 	else
 		snprintf(name, sizeof(name), "[%x]", ng_node2ID(node));

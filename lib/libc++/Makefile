@@ -1,11 +1,15 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
-LIBCXXRTDIR=	${.CURDIR}/../../contrib/libcxxrt
+PACKAGE=	clibs
+_LIBCXXRTDIR=	${.CURDIR}/../../contrib/libcxxrt
 HDRDIR=		${.CURDIR}/../../contrib/libc++/include
 SRCDIR=		${.CURDIR}/../../contrib/libc++/src
 CXXINCLUDEDIR=	${INCLUDEDIR}/c++/v${SHLIB_MAJOR}
+.if ${MACHINE_CPUARCH} == "arm"
+STATIC_CXXFLAGS+= -mlong-calls
+.endif
 
 .PATH: ${SRCDIR}
 
@@ -14,6 +18,7 @@ SHLIB_MAJOR=	1
 SHLIB_LDSCRIPT=	libc++.ldscript
 
 SRCS+=		algorithm.cpp\
+		any.cpp\
 		bind.cpp\
 		chrono.cpp\
 		condition_variable.cpp\
@@ -51,19 +56,19 @@ CXXRT_SRCS+=	libelftc_dem_gnu3.c\
 		guard.cc
 
 .for _S in ${CXXRT_SRCS}
+CLEANFILES+=	cxxrt_${_S}
 STATICOBJS+=	cxxrt_${_S:R}.o
-cxxrt_${_S}:
-	ln -sf ${LIBCXXRTDIR}/${_S} ${.TARGET}
+cxxrt_${_S}: ${_LIBCXXRTDIR}/${_S} .NOMETA
+	ln -sf ${.ALLSRC} ${.TARGET}
 .endfor
 
 WARNS=		0
-CFLAGS+=	-I${HDRDIR} -I${LIBCXXRTDIR} -nostdlib -DLIBCXXRT
+CFLAGS+=	-isystem ${HDRDIR} -isystem ${_LIBCXXRTDIR} -nostdinc++ -nostdlib -DLIBCXXRT
 .if empty(CXXFLAGS:M-std=*)
 CXXFLAGS+=	-std=c++11
 .endif
 
-DPADD=		${LIBCXXRT}
-LDADD=		-lcxxrt
+LIBADD+=	cxxrt
 INCSGROUPS=	STD EXP EXT
 
 STD_HEADERS=	__bit_reference\
@@ -75,13 +80,14 @@ STD_HEADERS=	__bit_reference\
 		__hash_table\
 		__locale\
 		__mutex_base\
+		__nullptr\
 		__refstring\
 		__split_buffer\
 		__sso_allocator\
 		__std_stream\
 		__tree\
 		__tuple\
-		__tuple_03\
+		__undef___deallocate\
 		__undef_min_max\
 		algorithm\
 		array\
@@ -114,15 +120,19 @@ STD_HEADERS=	__bit_reference\
 		cstring\
 		ctgmath\
 		ctime\
+		ctype.h\
 		cwchar\
 		cwctype\
 		deque\
+		errno.h\
 		exception\
+		float.h\
 		forward_list\
 		fstream\
 		functional\
 		future\
 		initializer_list\
+		inttypes.h\
 		iomanip\
 		ios\
 		iosfwd\
@@ -133,6 +143,7 @@ STD_HEADERS=	__bit_reference\
 		list\
 		locale\
 		map\
+		math.h\
 		memory\
 		mutex\
 		new\
@@ -144,10 +155,14 @@ STD_HEADERS=	__bit_reference\
 		regex\
 		scoped_allocator\
 		set\
+		setjmp.h\
 		shared_mutex\
 		sstream\
 		stack\
+		stddef.h\
 		stdexcept\
+		stdio.h\
+		stdlib.h\
 		streambuf\
 		string\
 		strstream\
@@ -162,7 +177,9 @@ STD_HEADERS=	__bit_reference\
 		unordered_set\
 		utility\
 		valarray\
-		vector
+		vector\
+		wchar.h\
+		wctype.h
 RT_HEADERS=	cxxabi.h\
 		unwind.h\
 		unwind-arm.h\
@@ -170,17 +187,24 @@ RT_HEADERS=	cxxabi.h\
 
 .for hdr in ${STD_HEADERS}
 STD+=		${HDRDIR}/${hdr}
-INCSLINKS+=	${CXXINCLUDEDIR}/${hdr} ${CXXINCLUDEDIR}/tr1/${hdr}
+INCSLINKS+=	../${hdr} ${CXXINCLUDEDIR}/tr1/${hdr}
 .endfor
 .for hdr in ${RT_HEADERS}
-STD+=		${LIBCXXRTDIR}/${hdr}
+STD+=		${_LIBCXXRTDIR}/${hdr}
 .endfor
 STDDIR=		${CXXINCLUDEDIR}
 
 EXP_HEADERS=	__config\
+		algorithm\
+		any\
+		chrono\
 		dynarray\
+		functional\
 		optional\
+		ratio\
 		string_view\
+		system_error\
+		tuple\
 		type_traits\
 		utility
 
@@ -202,9 +226,9 @@ EXTDIR=		${CXXINCLUDEDIR}/ext
 CLEANFILES+=	libstdc++.so libstdc++.a
 
 afterinstall:
-	ln -sf ${DESTDIR}${LIBDIR}/lib${LIB}.so \
+	${INSTALL_SYMLINK} ${DESTDIR}${LIBDIR}/lib${LIB}.so \
 		${.OBJDIR}/libstdc++.so
-	ln -sf ${DESTDIR}${LIBDIR}/lib${LIB}.a \
+	${INSTALL_SYMLINK} ${DESTDIR}${LIBDIR}/lib${LIB}.a \
 		${.OBJDIR}/libstdc++.a
 .endif
 

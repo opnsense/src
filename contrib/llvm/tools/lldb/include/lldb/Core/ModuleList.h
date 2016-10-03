@@ -10,11 +10,17 @@
 #ifndef liblldb_ModuleList_h_
 #define liblldb_ModuleList_h_
 
-#include <vector>
+// C Includes
+// C++ Includes
+#include <functional>
 #include <list>
+#include <vector>
 
+// Other libraries and framework includes
+// Project includes
 #include "lldb/lldb-private.h"
 #include "lldb/Host/Mutex.h"
+#include "lldb/Utility/Iterable.h"
 
 namespace lldb_private {
 
@@ -28,10 +34,12 @@ namespace lldb_private {
 class ModuleList
 {
 public:
-    
     class Notifier
     {
     public:
+        virtual
+        ~Notifier() = default;
+
         virtual void
         ModuleAdded (const ModuleList& module_list, const lldb::ModuleSP& module_sp) = 0;
         virtual void
@@ -41,10 +49,6 @@ public:
                        const lldb::ModuleSP& new_module_sp) = 0;
         virtual void
         WillClearList (const ModuleList& module_list) = 0;
-        
-        virtual
-        ~Notifier ()
-        {}
     };
     
     //------------------------------------------------------------------
@@ -137,11 +141,12 @@ public:
     ///
     /// Clears the list of modules and releases a reference to each
     /// module object and if the reference count goes to zero, the
-    /// module will be deleted. Also relese all memory that might be
+    /// module will be deleted. Also release all memory that might be
     /// held by any collection classes (like std::vector)
     //------------------------------------------------------------------
     void
     Destroy();
+
     //------------------------------------------------------------------
     /// Dump the description of each module contained in this list.
     ///
@@ -149,7 +154,7 @@ public:
     /// the supplied stream \a s.
     ///
     /// @param[in] s
-    ///     The stream to which to dump the object descripton.
+    ///     The stream to which to dump the object description.
     ///
     /// @see Module::Dump(Stream *) const
     //------------------------------------------------------------------
@@ -207,7 +212,7 @@ public:
     ///     An index into this module collection.
     ///
     /// @return
-    ///     A pointer to a Module which can by NULL if \a idx is out
+    ///     A pointer to a Module which can by nullptr if \a idx is out
     ///     of range.
     ///
     /// @see ModuleList::GetSize()
@@ -224,7 +229,7 @@ public:
     ///     An index into this module collection.
     ///
     /// @return
-    ///     A pointer to a Module which can by NULL if \a idx is out
+    ///     A pointer to a Module which can by nullptr if \a idx is out
     ///     of range.
     ///
     /// @see ModuleList::GetSize()
@@ -278,6 +283,16 @@ public:
                          SymbolContextList& sc_list);
 
     //------------------------------------------------------------------
+    /// @see Module::FindFunctions ()
+    //------------------------------------------------------------------
+    size_t
+        FindFunctions(const RegularExpression &name,
+        bool include_symbols,
+        bool include_inlines,
+        bool append,
+        SymbolContextList& sc_list);
+
+    //------------------------------------------------------------------
     /// Find global and static variables by name.
     ///
     /// @param[in] name
@@ -307,7 +322,7 @@ public:
                          VariableList& variable_list) const;
 
     //------------------------------------------------------------------
-    /// Find global and static variables by regular exression.
+    /// Find global and static variables by regular expression.
     ///
     /// @param[in] regex
     ///     A regular expression to use when matching the name.
@@ -522,10 +537,10 @@ public:
     GetSize () const;
 
     bool
-    LoadScriptingResourcesInTarget (Target *target,
-                                    std::list<Error>& errors,
-                                    Stream* feedback_stream = NULL,
-                                    bool continue_on_error = true);
+    LoadScriptingResourcesInTarget(Target *target,
+                                   std::list<Error>& errors,
+                                   Stream* feedback_stream = nullptr,
+                                   bool continue_on_error = true);
     
     static bool
     ModuleIsInCache (const Module *module_ptr);
@@ -550,6 +565,9 @@ public:
     
     static bool
     RemoveSharedModuleIfOrphaned (const Module *module_ptr);
+
+    void
+    ForEach (std::function <bool (const lldb::ModuleSP &module_sp)> const &callback) const;
 
 protected:
     //------------------------------------------------------------------
@@ -577,8 +595,22 @@ protected:
 
     Notifier* m_notifier;
     
+public:
+    typedef LockingAdaptedIterable<collection, lldb::ModuleSP, vector_adapter> ModuleIterable;
+    ModuleIterable
+    Modules()
+    {
+        return ModuleIterable(m_modules, GetMutex());
+    }
+    
+    typedef AdaptedIterable<collection, lldb::ModuleSP, vector_adapter> ModuleIterableNoLocking;
+    ModuleIterableNoLocking
+    ModulesNoLocking ()
+    {
+        return ModuleIterableNoLocking(m_modules);
+    }
 };
 
 } // namespace lldb_private
 
-#endif  // liblldb_ModuleList_h_
+#endif // liblldb_ModuleList_h_

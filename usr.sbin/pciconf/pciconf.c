@@ -67,7 +67,7 @@ struct pci_vendor_info
     char				*desc;
 };
 
-TAILQ_HEAD(,pci_vendor_info)	pci_vendors;
+static TAILQ_HEAD(,pci_vendor_info)	pci_vendors;
 
 static struct pcisel getsel(const char *str);
 static void list_bridge(int fd, struct pci_conf *p);
@@ -241,9 +241,9 @@ list_devs(const char *name, int verbose, int bars, int bridge, int caps,
 		for (p = conf; p < &conf[pc.num_matches]; p++) {
 			printf("%s%d@pci%d:%d:%d:%d:\tclass=0x%06x card=0x%08x "
 			    "chip=0x%08x rev=0x%02x hdr=0x%02x\n",
-			    (p->pd_name && *p->pd_name) ? p->pd_name :
+			    *p->pd_name ? p->pd_name :
 			    "none",
-			    (p->pd_name && *p->pd_name) ? (int)p->pd_unit :
+			    *p->pd_name ? (int)p->pd_unit :
 			    none_count++, p->pc_sel.pc_domain,
 			    p->pc_sel.pc_bus, p->pc_sel.pc_dev,
 			    p->pc_sel.pc_func, (p->pc_class << 16) |
@@ -455,10 +455,7 @@ list_bridge(int fd, struct pci_conf *p)
 static void
 list_bars(int fd, struct pci_conf *p)
 {
-	struct pci_bar_io bar;
-	uint64_t base;
-	const char *type;
-	int i, range, max;
+	int i, max;
 
 	switch (p->pc_hdr & PCIM_HDRTYPE) {
 	case PCIM_HDRTYPE_NORMAL:
@@ -474,40 +471,50 @@ list_bars(int fd, struct pci_conf *p)
 		return;
 	}
 
-	for (i = 0; i <= max; i++) {
-		bar.pbi_sel = p->pc_sel;
-		bar.pbi_reg = PCIR_BAR(i);
-		if (ioctl(fd, PCIOCGETBAR, &bar) < 0)
-			continue;
-		if (PCI_BAR_IO(bar.pbi_base)) {
-			type = "I/O Port";
+	for (i = 0; i <= max; i++)
+		print_bar(fd, p, "bar   ", PCIR_BAR(i));
+}
+
+void
+print_bar(int fd, struct pci_conf *p, const char *label, uint16_t bar_offset)
+{
+	uint64_t base;
+	const char *type;
+	struct pci_bar_io bar;
+	int range;
+
+	bar.pbi_sel = p->pc_sel;
+	bar.pbi_reg = bar_offset;
+	if (ioctl(fd, PCIOCGETBAR, &bar) < 0)
+		return;
+	if (PCI_BAR_IO(bar.pbi_base)) {
+		type = "I/O Port";
+		range = 32;
+		base = bar.pbi_base & PCIM_BAR_IO_BASE;
+	} else {
+		if (bar.pbi_base & PCIM_BAR_MEM_PREFETCH)
+			type = "Prefetchable Memory";
+		else
+			type = "Memory";
+		switch (bar.pbi_base & PCIM_BAR_MEM_TYPE) {
+		case PCIM_BAR_MEM_32:
 			range = 32;
-			base = bar.pbi_base & PCIM_BAR_IO_BASE;
-		} else {
-			if (bar.pbi_base & PCIM_BAR_MEM_PREFETCH)
-				type = "Prefetchable Memory";
-			else
-				type = "Memory";
-			switch (bar.pbi_base & PCIM_BAR_MEM_TYPE) {
-			case PCIM_BAR_MEM_32:
-				range = 32;
-				break;
-			case PCIM_BAR_MEM_1MB:
-				range = 20;
-				break;
-			case PCIM_BAR_MEM_64:
-				range = 64;
-				break;
-			default:
-				range = -1;
-			}
-			base = bar.pbi_base & ~((uint64_t)0xf);
+			break;
+		case PCIM_BAR_MEM_1MB:
+			range = 20;
+			break;
+		case PCIM_BAR_MEM_64:
+			range = 64;
+			break;
+		default:
+			range = -1;
 		}
-		printf("    bar   [%02x] = type %s, range %2d, base %#jx, ",
-		    PCIR_BAR(i), type, range, (uintmax_t)base);
-		printf("size %ju, %s\n", (uintmax_t)bar.pbi_length,
-		    bar.pbi_enabled ? "enabled" : "disabled");
+		base = bar.pbi_base & ~((uint64_t)0xf);
 	}
+	printf("    %s[%02x] = type %s, range %2d, base %#jx, ",
+	    label, bar_offset, type, range, (uintmax_t)base);
+	printf("size %ju, %s\n", (uintmax_t)bar.pbi_length,
+	    bar.pbi_enabled ? "enabled" : "disabled");
 }
 
 static void
@@ -889,40 +896,39 @@ getdevice(const char *name)
 static struct pcisel
 parsesel(const char *str)
 {
-	char *ep = strchr(str, '@');
-	char *epbase;
+	const char *ep;
+	char *eppos;
 	struct pcisel sel;
 	unsigned long selarr[4];
 	int i;
 
-	if (ep == NULL)
-		ep = (char *)str;
-	else
+	ep = strchr(str, '@');
+	if (ep != NULL)
 		ep++;
-
-	epbase = ep;
+	else
+		ep = str;
 
 	if (strncmp(ep, "pci", 3) == 0) {
 		ep += 3;
 		i = 0;
-		do {
-			selarr[i++] = strtoul(ep, &ep, 10);
-		} while ((*ep == ':' || *ep == '.') && *++ep != '\0' && i < 4);
-
-		if (i > 2)
-			sel.pc_func = selarr[--i];
-		else
-			sel.pc_func = 0;
-		sel.pc_dev = selarr[--i];
-		sel.pc_bus = selarr[--i];
-		if (i > 0)
-			sel.pc_domain = selarr[--i];
-		else
-			sel.pc_domain = 0;
+		while (isdigit(*ep) && i < 4) {
+			selarr[i++] = strtoul(ep, &eppos, 10);
+			ep = eppos;
+			if (*ep == ':') {
+				ep++;
+				if (*ep  == '\0')
+					i = 0;
+			}
+		}
+		if (i > 0 && *ep == '\0') {
+			sel.pc_func = (i > 2) ? selarr[--i] : 0;
+			sel.pc_dev = (i > 0) ? selarr[--i] : 0;
+			sel.pc_bus = (i > 0) ? selarr[--i] : 0;
+			sel.pc_domain = (i > 0) ? selarr[--i] : 0;
+			return (sel);
+		}
 	}
-	if (*ep != '\x0' || ep == epbase)
-		errx(1, "cannot parse selector %s", str);
-	return sel;
+	errx(1, "cannot parse selector %s", str);
 }
 
 static struct pcisel

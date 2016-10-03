@@ -58,33 +58,7 @@ __FBSDID("$FreeBSD$");
 #include <xen/interface/vcpu.h>
 
 /*--------------------------- Forward Declarations ---------------------------*/
-#ifdef SMP
-static driver_filter_t xen_smp_rendezvous_action;
-static driver_filter_t xen_invltlb;
-static driver_filter_t xen_invlpg;
-static driver_filter_t xen_invlrng;
-static driver_filter_t xen_invlcache;
-#ifdef __i386__
-static driver_filter_t xen_lazypmap;
-#endif
-static driver_filter_t xen_ipi_bitmap_handler;
-static driver_filter_t xen_cpustop_handler;
-static driver_filter_t xen_cpususpend_handler;
-static driver_filter_t xen_cpustophard_handler;
-static void xen_ipi_vectored(u_int vector, int dest);
-#endif
 static void xen_hvm_cpu_init(void);
-
-/*---------------------------- Extern Declarations ---------------------------*/
-#ifdef __i386__
-extern void pmap_lazyfix_action(void);
-#endif
-#ifdef __amd64__
-extern int pmap_pcid_enabled;
-#endif
-
-/*---------------------------------- Macros ----------------------------------*/
-#define	IPI_TO_IDX(ipi) ((ipi) - APIC_IPI_INTS)
 
 /*-------------------------------- Local Types -------------------------------*/
 enum xen_hvm_init_type {
@@ -93,42 +67,17 @@ enum xen_hvm_init_type {
 	XEN_HVM_INIT_RESUME
 };
 
-struct xen_ipi_handler
-{
-	driver_filter_t	*filter;
-	const char	*description;
-};
-
 /*-------------------------------- Global Data -------------------------------*/
 enum xen_domain_type xen_domain_type = XEN_NATIVE;
 
 #ifdef SMP
 struct cpu_ops xen_hvm_cpu_ops = {
-	.ipi_vectored	= lapic_ipi_vectored,
 	.cpu_init	= xen_hvm_cpu_init,
 	.cpu_resume	= xen_hvm_cpu_init
 };
 #endif
 
 static MALLOC_DEFINE(M_XENHVM, "xen_hvm", "Xen HVM PV Support");
-
-#ifdef SMP
-static struct xen_ipi_handler xen_ipis[] = 
-{
-	[IPI_TO_IDX(IPI_RENDEZVOUS)]	= { xen_smp_rendezvous_action,	"r"   },
-	[IPI_TO_IDX(IPI_INVLTLB)]	= { xen_invltlb,		"itlb"},
-	[IPI_TO_IDX(IPI_INVLPG)]	= { xen_invlpg,			"ipg" },
-	[IPI_TO_IDX(IPI_INVLRNG)]	= { xen_invlrng,		"irg" },
-	[IPI_TO_IDX(IPI_INVLCACHE)]	= { xen_invlcache,		"ic"  },
-#ifdef __i386__
-	[IPI_TO_IDX(IPI_LAZYPMAP)]	= { xen_lazypmap,		"lp"  },
-#endif
-	[IPI_TO_IDX(IPI_BITMAP_VECTOR)] = { xen_ipi_bitmap_handler,	"b"   },
-	[IPI_TO_IDX(IPI_STOP)]		= { xen_cpustop_handler,	"st"  },
-	[IPI_TO_IDX(IPI_SUSPEND)]	= { xen_cpususpend_handler,	"sp"  },
-	[IPI_TO_IDX(IPI_STOP_HARD)]	= { xen_cpustophard_handler,	"sth" },
-};
-#endif
 
 /**
  * If non-zero, the hypervisor has been configured to use a direct
@@ -139,14 +88,10 @@ int xen_vector_callback_enabled;
 /*------------------------------- Per-CPU Data -------------------------------*/
 DPCPU_DEFINE(struct vcpu_info, vcpu_local_info);
 DPCPU_DEFINE(struct vcpu_info *, vcpu_info);
-#ifdef SMP
-DPCPU_DEFINE(xen_intr_handle_t, ipi_handle[nitems(xen_ipis)]);
-#endif
 
 /*------------------ Hypervisor Access Shared Memory Regions -----------------*/
-/** Hypercall table accessed via HYPERVISOR_*_op() methods. */
-char *hypercall_stubs;
 shared_info_t *HYPERVISOR_shared_info;
+start_info_t *HYPERVISOR_start_info;
 
 
 /*------------------------------ Sysctl tunables -----------------------------*/
@@ -154,207 +99,6 @@ int xen_disable_pv_disks = 0;
 int xen_disable_pv_nics = 0;
 TUNABLE_INT("hw.xen.disable_pv_disks", &xen_disable_pv_disks);
 TUNABLE_INT("hw.xen.disable_pv_nics", &xen_disable_pv_nics);
-
-#ifdef SMP
-/*---------------------------- XEN PV IPI Handlers ---------------------------*/
-/*
- * This are C clones of the ASM functions found in apic_vector.s
- */
-static int
-xen_ipi_bitmap_handler(void *arg)
-{
-	struct trapframe *frame;
-
-	frame = arg;
-	ipi_bitmap_handler(*frame);
-	return (FILTER_HANDLED);
-}
-
-static int
-xen_smp_rendezvous_action(void *arg)
-{
-#ifdef COUNT_IPIS
-	(*ipi_rendezvous_counts[PCPU_GET(cpuid)])++;
-#endif /* COUNT_IPIS */
-
-	smp_rendezvous_action();
-	return (FILTER_HANDLED);
-}
-
-static int
-xen_invltlb(void *arg)
-{
-
-	invltlb_handler();
-	return (FILTER_HANDLED);
-}
-
-#ifdef __amd64__
-static int
-xen_invltlb_pcid(void *arg)
-{
-
-	invltlb_pcid_handler();
-	return (FILTER_HANDLED);
-}
-#endif
-
-static int
-xen_invlpg(void *arg)
-{
-
-	invlpg_handler();
-	return (FILTER_HANDLED);
-}
-
-#ifdef __amd64__
-static int
-xen_invlpg_pcid(void *arg)
-{
-
-	invlpg_pcid_handler();
-	return (FILTER_HANDLED);
-}
-#endif
-
-static int
-xen_invlrng(void *arg)
-{
-
-	invlrng_handler();
-	return (FILTER_HANDLED);
-}
-
-static int
-xen_invlcache(void *arg)
-{
-
-	invlcache_handler();
-	return (FILTER_HANDLED);
-}
-
-#ifdef __i386__
-static int
-xen_lazypmap(void *arg)
-{
-
-	pmap_lazyfix_action();
-	return (FILTER_HANDLED);
-}
-#endif
-
-static int
-xen_cpustop_handler(void *arg)
-{
-
-	cpustop_handler();
-	return (FILTER_HANDLED);
-}
-
-static int
-xen_cpususpend_handler(void *arg)
-{
-
-	cpususpend_handler();
-	return (FILTER_HANDLED);
-}
-
-static int
-xen_cpustophard_handler(void *arg)
-{
-
-	ipi_nmi_handler();
-	return (FILTER_HANDLED);
-}
-
-/* Xen PV IPI sender */
-static void
-xen_ipi_vectored(u_int vector, int dest)
-{
-	xen_intr_handle_t *ipi_handle;
-	int ipi_idx, to_cpu, self;
-
-	ipi_idx = IPI_TO_IDX(vector);
-	if (ipi_idx > nitems(xen_ipis))
-		panic("IPI out of range");
-
-	switch(dest) {
-	case APIC_IPI_DEST_SELF:
-		ipi_handle = DPCPU_GET(ipi_handle);
-		xen_intr_signal(ipi_handle[ipi_idx]);
-		break;
-	case APIC_IPI_DEST_ALL:
-		CPU_FOREACH(to_cpu) {
-			ipi_handle = DPCPU_ID_GET(to_cpu, ipi_handle);
-			xen_intr_signal(ipi_handle[ipi_idx]);
-		}
-		break;
-	case APIC_IPI_DEST_OTHERS:
-		self = PCPU_GET(cpuid);
-		CPU_FOREACH(to_cpu) {
-			if (to_cpu != self) {
-				ipi_handle = DPCPU_ID_GET(to_cpu, ipi_handle);
-				xen_intr_signal(ipi_handle[ipi_idx]);
-			}
-		}
-		break;
-	default:
-		to_cpu = apic_cpuid(dest);
-		ipi_handle = DPCPU_ID_GET(to_cpu, ipi_handle);
-		xen_intr_signal(ipi_handle[ipi_idx]);
-		break;
-	}
-}
-
-/*---------------------- XEN diverged cpu operations -------------------------*/
-static void
-xen_cpu_ipi_init(int cpu)
-{
-	xen_intr_handle_t *ipi_handle;
-	const struct xen_ipi_handler *ipi;
-	device_t dev;
-	int idx, rc;
-
-	ipi_handle = DPCPU_ID_GET(cpu, ipi_handle);
-	dev = pcpu_find(cpu)->pc_device;
-	KASSERT((dev != NULL), ("NULL pcpu device_t"));
-
-	for (ipi = xen_ipis, idx = 0; idx < nitems(xen_ipis); ipi++, idx++) {
-
-		if (ipi->filter == NULL) {
-			ipi_handle[idx] = NULL;
-			continue;
-		}
-
-		rc = xen_intr_alloc_and_bind_ipi(dev, cpu, ipi->filter,
-		    INTR_TYPE_TTY, &ipi_handle[idx]);
-		if (rc != 0)
-			panic("Unable to allocate a XEN IPI port");
-		xen_intr_describe(ipi_handle[idx], "%s", ipi->description);
-	}
-}
-
-static void
-xen_setup_cpus(void)
-{
-	int i;
-
-	if (!xen_hvm_domain() || !xen_vector_callback_enabled)
-		return;
-
-#ifdef __amd64__
-	if (pmap_pcid_enabled) {
-		xen_ipis[IPI_TO_IDX(IPI_INVLTLB)].filter = xen_invltlb_pcid;
-		xen_ipis[IPI_TO_IDX(IPI_INVLPG)].filter = xen_invlpg_pcid;
-	}
-#endif
-	CPU_FOREACH(i)
-		xen_cpu_ipi_init(i);
-
-	/* Set the xen pv ipi ops to replace the native ones */
-	cpu_ops.ipi_vectored = xen_ipi_vectored;
-}
-#endif
 
 /*---------------------- XEN Hypervisor Probe and Setup ----------------------*/
 static uint32_t
@@ -375,37 +119,53 @@ xen_hvm_cpuid_base(void)
  * Allocate and fill in the hypcall page.
  */
 static int
-xen_hvm_init_hypercall_stubs(void)
+xen_hvm_init_hypercall_stubs(enum xen_hvm_init_type init_type)
 {
 	uint32_t base, regs[4];
 	int i;
+
+	if (xen_pv_domain()) {
+		/* hypercall page is already set in the PV case */
+		return (0);
+	}
 
 	base = xen_hvm_cpuid_base();
 	if (base == 0)
 		return (ENXIO);
 
-	if (hypercall_stubs == NULL) {
+	if (init_type == XEN_HVM_INIT_COLD) {
+		int major, minor;
+
 		do_cpuid(base + 1, regs);
-		printf("XEN: Hypervisor version %d.%d detected.\n",
-		    regs[0] >> 16, regs[0] & 0xffff);
+
+		major = regs[0] >> 16;
+		minor = regs[0] & 0xffff;
+		printf("XEN: Hypervisor version %d.%d detected.\n", major,
+			minor);
+
+		if (((major < 4) || (major == 4 && minor <= 5)) &&
+		    msix_disable_migration == -1) {
+			/*
+			 * Xen hypervisors prior to 4.6.0 do not properly
+			 * handle updates to enabled MSI-X table entries,
+			 * so disable MSI-X interrupt migration in that
+			 * case.
+			 */
+			if (bootverbose)
+				printf(
+"Disabling MSI-X interrupt migration due to Xen hypervisor bug.\n"
+"Set machdep.msix_disable_migration=0 to forcefully enable it.\n");
+			msix_disable_migration = 1;
+		}
 	}
 
 	/*
 	 * Find the hypercall pages.
 	 */
 	do_cpuid(base + 2, regs);
-	
-	if (hypercall_stubs == NULL) {
-		size_t call_region_size;
-
-		call_region_size = regs[0] * PAGE_SIZE;
-		hypercall_stubs = malloc(call_region_size, M_XENHVM, M_NOWAIT);
-		if (hypercall_stubs == NULL)
-			panic("Unable to allocate Xen hypercall region");
-	}
 
 	for (i = 0; i < regs[0]; i++)
-		wrmsr(regs[1], vtophys(hypercall_stubs + i * PAGE_SIZE) + i);
+		wrmsr(regs[1], vtophys(&hypercall_page + i * PAGE_SIZE) + i);
 
 	return (0);
 }
@@ -414,6 +174,14 @@ static void
 xen_hvm_init_shared_info_page(void)
 {
 	struct xen_add_to_physmap xatp;
+
+	if (xen_pv_domain()) {
+		/*
+		 * Already setup in the PV case, shared_info is passed inside
+		 * of the start_info struct at start of day.
+		 */
+		return;
+	}
 
 	if (HYPERVISOR_shared_info == NULL) {
 		HYPERVISOR_shared_info = malloc(PAGE_SIZE, M_XENHVM, M_NOWAIT);
@@ -493,6 +261,16 @@ xen_hvm_disable_emulated_devices(void)
 {
 	u_short disable_devs = 0;
 
+	if (xen_pv_domain()) {
+		/*
+		 * No emulated devices in the PV case, so no need to unplug
+		 * anything.
+		 */
+		if (xen_disable_pv_disks != 0 || xen_disable_pv_nics != 0)
+			printf("PV devices cannot be disabled in PV guests\n");
+		return;
+	}
+
 	if (inw(XEN_MAGIC_IOPORT) != XMI_MAGIC)
 		return;
 
@@ -520,18 +298,28 @@ xen_hvm_init(enum xen_hvm_init_type init_type)
 	if (init_type == XEN_HVM_INIT_CANCELLED_SUSPEND)
 		return;
 
-	error = xen_hvm_init_hypercall_stubs();
+	error = xen_hvm_init_hypercall_stubs(init_type);
 
 	switch (init_type) {
 	case XEN_HVM_INIT_COLD:
 		if (error != 0)
 			return;
 
+		/*
+		 * If xen_domain_type is not set at this point
+		 * it means we are inside a (PV)HVM guest, because
+		 * for PVH the guest type is set much earlier
+		 * (see hammer_time_xen).
+		 */
+		if (!xen_domain()) {
+			xen_domain_type = XEN_HVM_DOMAIN;
+			vm_guest = VM_GUEST_XEN;
+		}
+
 		setup_xen_features();
 #ifdef SMP
 		cpu_ops = xen_hvm_cpu_ops;
 #endif
- 		vm_guest = VM_GUEST_XEN;
 		break;
 	case XEN_HVM_INIT_RESUME:
 		if (error != 0)
@@ -546,9 +334,15 @@ xen_hvm_init(enum xen_hvm_init_type init_type)
 	}
 
 	xen_vector_callback_enabled = 0;
-	xen_domain_type = XEN_HVM_DOMAIN;
-	xen_hvm_init_shared_info_page();
 	xen_hvm_set_callback(NULL);
+
+	/*
+	 * On (PV)HVM domains we need to request the hypervisor to
+	 * fill the shared info page, for PVH guest the shared_info page
+	 * is passed inside the start_info struct and is already set, so this
+	 * functions are no-ops.
+	 */
+	xen_hvm_init_shared_info_page();
 	xen_hvm_disable_emulated_devices();
 } 
 
@@ -579,6 +373,9 @@ xen_set_vcpu_id(void)
 {
 	struct pcpu *pc;
 	int i;
+
+	if (!xen_hvm_domain())
+		return;
 
 	/* Set vcpu_id to acpi_id */
 	CPU_FOREACH(i) {
@@ -622,8 +419,5 @@ xen_hvm_cpu_init(void)
 }
 
 SYSINIT(xen_hvm_init, SI_SUB_HYPERVISOR, SI_ORDER_FIRST, xen_hvm_sysinit, NULL);
-#ifdef SMP
-SYSINIT(xen_setup_cpus, SI_SUB_SMP, SI_ORDER_FIRST, xen_setup_cpus, NULL);
-#endif
 SYSINIT(xen_hvm_cpu_init, SI_SUB_INTR, SI_ORDER_FIRST, xen_hvm_cpu_init, NULL);
 SYSINIT(xen_set_vcpu_id, SI_SUB_CPU, SI_ORDER_ANY, xen_set_vcpu_id, NULL);

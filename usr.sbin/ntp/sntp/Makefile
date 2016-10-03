@@ -1,6 +1,6 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 .PATH:	${.CURDIR}/../../../contrib/ntp/sntp
 
@@ -20,15 +20,12 @@ CFLAGS+= -I${.CURDIR}/../../../contrib/ntp/include \
 	-I${.CURDIR}/../libntpevent \
 	-I${.CURDIR}/../
 
-DPADD=	${LIBM} ${LIBOPTS} ${LIBNTP} ${LIBNTPEVENT} ${LIBPTHREAD}
-LDADD=	-lm ${LIBOPTS} ${LIBNTP} ${LIBNTPEVENT} -lpthread
+LIBADD=	m opts ntp ntpevent pthread
 
 .if ${MK_OPENSSL} != "no"
-DPADD+=	${LIBCRYPTO}
-LDADD+=	-lcrypto
+LIBADD+=	crypto
 .else
-DPADD+=	${LIBMD}
-LDADD+=	-lmd
+LIBADD+=	md
 .endif
 
 .include <bsd.prog.mk>

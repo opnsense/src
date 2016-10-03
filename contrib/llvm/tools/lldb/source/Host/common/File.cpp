@@ -22,8 +22,11 @@
 #include <sys/ioctl.h>
 #endif
 
+#include "llvm/Support/Process.h" // for llvm::sys::Process::FileDescriptorHasColors()
+
 #include "lldb/Core/DataBufferHeap.h"
 #include "lldb/Core/Error.h"
+#include "lldb/Core/Log.h"
 #include "lldb/Host/Config.h"
 #include "lldb/Host/FileSpec.h"
 
@@ -77,11 +80,11 @@ int File::kInvalidDescriptor = -1;
 FILE * File::kInvalidStream = NULL;
 
 File::File(const char *path, uint32_t options, uint32_t permissions) :
+    IOObject(eFDTypeFile, false),
     m_descriptor (kInvalidDescriptor),
     m_stream (kInvalidStream),
     m_options (),
     m_own_stream (false),
-    m_own_descriptor (false),
     m_is_interactive (eLazyBoolCalculate),
     m_is_real_terminal (eLazyBoolCalculate)
 {
@@ -91,11 +94,11 @@ File::File(const char *path, uint32_t options, uint32_t permissions) :
 File::File (const FileSpec& filespec,
             uint32_t options,
             uint32_t permissions) :
+    IOObject(eFDTypeFile, false),
     m_descriptor (kInvalidDescriptor),
     m_stream (kInvalidStream),
     m_options (0),
     m_own_stream (false),
-    m_own_descriptor (false),
     m_is_interactive (eLazyBoolCalculate),
     m_is_real_terminal (eLazyBoolCalculate)
 
@@ -107,11 +110,11 @@ File::File (const FileSpec& filespec,
 }
 
 File::File (const File &rhs) :
+    IOObject(eFDTypeFile, false),
     m_descriptor (kInvalidDescriptor),
     m_stream (kInvalidStream),
     m_options (0),
     m_own_stream (false),
-    m_own_descriptor (false),
     m_is_interactive (eLazyBoolCalculate),
     m_is_real_terminal (eLazyBoolCalculate)
 {
@@ -142,11 +145,24 @@ File::GetDescriptor() const
     // Don't open the file descriptor if we don't need to, just get it from the
     // stream if we have one.
     if (StreamIsValid())
-        return fileno (m_stream);
+    {
+#if defined(LLVM_ON_WIN32)
+        return _fileno(m_stream);
+#else
+        return fileno(m_stream);
+#endif
+    }
 
     // Invalid descriptor and invalid stream, return invalid descriptor.
     return kInvalidDescriptor;
 }
+
+IOObject::WaitableHandle
+File::GetWaitableHandle()
+{
+    return m_descriptor;
+}
+
 
 void
 File::SetDescriptor (int fd, bool transfer_ownership)
@@ -154,7 +170,7 @@ File::SetDescriptor (int fd, bool transfer_ownership)
     if (IsValid())
         Close();
     m_descriptor = fd;
-    m_own_descriptor = transfer_ownership;
+    m_should_close_fd = transfer_ownership;
 }
 
 
@@ -168,7 +184,7 @@ File::GetStream ()
             const char *mode = GetStreamOpenModeFromOptions (m_options);
             if (mode)
             {
-                if (!m_own_descriptor)
+                if (!m_should_close_fd)
                 {
                     // We must duplicate the file descriptor if we don't own it because
                     // when you call fdopen, the stream will own the fd
@@ -177,7 +193,7 @@ File::GetStream ()
 #else
                     m_descriptor = ::fcntl(GetDescriptor(), F_DUPFD);
 #endif
-                    m_own_descriptor = true;
+                    m_should_close_fd = true;
                 }
 
                 do
@@ -191,7 +207,7 @@ File::GetStream ()
                 if (m_stream)
                 {
                     m_own_stream = true;
-                    m_own_descriptor = false;
+                    m_should_close_fd = false;
                 }
             }
         }
@@ -228,7 +244,7 @@ File::Duplicate (const File &rhs)
         else
         {
             m_options = rhs.m_options;
-            m_own_descriptor = true;
+            m_should_close_fd = true;
         }
     }
     else
@@ -280,6 +296,8 @@ File::Open (const char *path, uint32_t options, uint32_t permissions)
 #ifndef _WIN32
     if (options & eOpenOptionNonBlocking)
         oflag |= O_NONBLOCK;
+    if (options & eOpenOptionCloseOnExec)
+        oflag |= O_CLOEXEC;
 #else
     oflag |= O_BINARY;
 #endif
@@ -307,7 +325,7 @@ File::Open (const char *path, uint32_t options, uint32_t permissions)
         error.SetErrorToErrno();
     else
     {
-        m_own_descriptor = true;
+        m_should_close_fd = true;
         m_options = options;
     }
     
@@ -315,12 +333,12 @@ File::Open (const char *path, uint32_t options, uint32_t permissions)
 }
 
 uint32_t
-File::GetPermissions (const char *path, Error &error)
+File::GetPermissions(const FileSpec &file_spec, Error &error)
 {
-    if (path && path[0])
+    if (file_spec)
     {
         struct stat file_stats;
-        if (::stat (path, &file_stats) == -1)
+        if (::stat(file_spec.GetCString(), &file_stats) == -1)
             error.SetErrorToErrno();
         else
         {
@@ -329,12 +347,7 @@ File::GetPermissions (const char *path, Error &error)
         }
     }
     else
-    {
-        if (path)
-            error.SetErrorString ("invalid path");
-        else
-            error.SetErrorString ("empty path");        
-    }
+        error.SetErrorString ("empty file spec");
     return 0;
 }
 
@@ -371,7 +384,7 @@ File::Close ()
             error.SetErrorToErrno();
     }
     
-    if (DescriptorIsValid() && m_own_descriptor)
+    if (DescriptorIsValid() && m_should_close_fd)
     {
         if (::close (m_descriptor) != 0)
             error.SetErrorToErrno();
@@ -380,7 +393,7 @@ File::Close ()
     m_stream = kInvalidStream;
     m_options = 0;
     m_own_stream = false;
-    m_own_descriptor = false;
+    m_should_close_fd = false;
     m_is_interactive = eLazyBoolCalculate;
     m_is_real_terminal = eLazyBoolCalculate;
     return error;
@@ -585,10 +598,49 @@ File::Sync ()
     return error;
 }
 
+#if defined (__APPLE__)
+// Darwin kernels only can read/write <= INT_MAX bytes
+#define MAX_READ_SIZE INT_MAX
+#define MAX_WRITE_SIZE INT_MAX
+#endif
+
 Error
 File::Read (void *buf, size_t &num_bytes)
 {
     Error error;
+
+#if defined (MAX_READ_SIZE)
+    if (num_bytes > MAX_READ_SIZE)
+    {
+        uint8_t *p = (uint8_t *)buf;
+        size_t bytes_left = num_bytes;
+        // Init the num_bytes read to zero
+        num_bytes = 0;
+
+        while (bytes_left > 0)
+        {
+            size_t curr_num_bytes;
+            if (bytes_left > MAX_READ_SIZE)
+                curr_num_bytes = MAX_READ_SIZE;
+            else
+                curr_num_bytes = bytes_left;
+
+            error = Read (p + num_bytes, curr_num_bytes);
+
+            // Update how many bytes were read
+            num_bytes += curr_num_bytes;
+            if (bytes_left < curr_num_bytes)
+                bytes_left = 0;
+            else
+                bytes_left -= curr_num_bytes;
+
+            if (error.Fail())
+                break;
+        }
+        return error;
+    }
+#endif
+
     ssize_t bytes_read = -1;
     if (DescriptorIsValid())
     {
@@ -632,6 +684,39 @@ Error
 File::Write (const void *buf, size_t &num_bytes)
 {
     Error error;
+
+#if defined (MAX_WRITE_SIZE)
+    if (num_bytes > MAX_WRITE_SIZE)
+    {
+        const uint8_t *p = (const uint8_t *)buf;
+        size_t bytes_left = num_bytes;
+        // Init the num_bytes written to zero
+        num_bytes = 0;
+
+        while (bytes_left > 0)
+        {
+            size_t curr_num_bytes;
+            if (bytes_left > MAX_WRITE_SIZE)
+                curr_num_bytes = MAX_WRITE_SIZE;
+            else
+                curr_num_bytes = bytes_left;
+
+            error = Write (p + num_bytes, curr_num_bytes);
+
+            // Update how many bytes were read
+            num_bytes += curr_num_bytes;
+            if (bytes_left < curr_num_bytes)
+                bytes_left = 0;
+            else
+                bytes_left -= curr_num_bytes;
+
+            if (error.Fail())
+                break;
+        }
+        return error;
+    }
+#endif
+
     ssize_t bytes_written = -1;
     if (DescriptorIsValid())
     {
@@ -669,6 +754,7 @@ File::Write (const void *buf, size_t &num_bytes)
         num_bytes = 0;
         error.SetErrorString("invalid file handle");
     }
+
     return error;
 }
 
@@ -676,8 +762,41 @@ File::Write (const void *buf, size_t &num_bytes)
 Error
 File::Read (void *buf, size_t &num_bytes, off_t &offset)
 {
-#ifndef _WIN32
     Error error;
+
+#if defined (MAX_READ_SIZE)
+    if (num_bytes > MAX_READ_SIZE)
+    {
+        uint8_t *p = (uint8_t *)buf;
+        size_t bytes_left = num_bytes;
+        // Init the num_bytes read to zero
+        num_bytes = 0;
+
+        while (bytes_left > 0)
+        {
+            size_t curr_num_bytes;
+            if (bytes_left > MAX_READ_SIZE)
+                curr_num_bytes = MAX_READ_SIZE;
+            else
+                curr_num_bytes = bytes_left;
+
+            error = Read (p + num_bytes, curr_num_bytes, offset);
+
+            // Update how many bytes were read
+            num_bytes += curr_num_bytes;
+            if (bytes_left < curr_num_bytes)
+                bytes_left = 0;
+            else
+                bytes_left -= curr_num_bytes;
+
+            if (error.Fail())
+                break;
+        }
+        return error;
+    }
+#endif
+
+#ifndef _WIN32
     int fd = GetDescriptor();
     if (fd != kInvalidDescriptor)
     {
@@ -703,15 +822,14 @@ File::Read (void *buf, size_t &num_bytes, off_t &offset)
         num_bytes = 0;
         error.SetErrorString("invalid file handle");
     }
-    return error;
 #else
     long cur = ::lseek(m_descriptor, 0, SEEK_CUR);
     SeekFromStart(offset);
-    Error error = Read(buf, num_bytes);
+    error = Read(buf, num_bytes);
     if (!error.Fail())
         SeekFromStart(cur);
-    return error;
 #endif
+    return error;
 }
 
 Error
@@ -733,8 +851,10 @@ File::Read (size_t &num_bytes, off_t &offset, bool null_terminate, DataBufferSP 
                     if (num_bytes > bytes_left)
                         num_bytes = bytes_left;
                         
+                    size_t num_bytes_plus_nul_char = num_bytes + (null_terminate ? 1 : 0);
                     std::unique_ptr<DataBufferHeap> data_heap_ap;
-                    data_heap_ap.reset(new DataBufferHeap(num_bytes + (null_terminate ? 1 : 0), '\0'));
+                    data_heap_ap.reset(new DataBufferHeap());
+                    data_heap_ap->SetByteSize(num_bytes_plus_nul_char);
                         
                     if (data_heap_ap.get())
                     {
@@ -743,8 +863,8 @@ File::Read (size_t &num_bytes, off_t &offset, bool null_terminate, DataBufferSP 
                         {
                             // Make sure we read exactly what we asked for and if we got
                             // less, adjust the array
-                            if (num_bytes < data_heap_ap->GetByteSize())
-                                data_heap_ap->SetByteSize(num_bytes);
+                            if (num_bytes_plus_nul_char < data_heap_ap->GetByteSize())
+                                data_heap_ap->SetByteSize(num_bytes_plus_nul_char);
                             data_buffer_sp.reset(data_heap_ap.release());
                             return error;
                         }
@@ -771,6 +891,39 @@ Error
 File::Write (const void *buf, size_t &num_bytes, off_t &offset)
 {
     Error error;
+
+#if defined (MAX_WRITE_SIZE)
+    if (num_bytes > MAX_WRITE_SIZE)
+    {
+        const uint8_t *p = (const uint8_t *)buf;
+        size_t bytes_left = num_bytes;
+        // Init the num_bytes written to zero
+        num_bytes = 0;
+
+        while (bytes_left > 0)
+        {
+            size_t curr_num_bytes;
+            if (bytes_left > MAX_WRITE_SIZE)
+                curr_num_bytes = MAX_WRITE_SIZE;
+            else
+                curr_num_bytes = bytes_left;
+
+            error = Write (p + num_bytes, curr_num_bytes, offset);
+
+            // Update how many bytes were read
+            num_bytes += curr_num_bytes;
+            if (bytes_left < curr_num_bytes)
+                bytes_left = 0;
+            else
+                bytes_left -= curr_num_bytes;
+
+            if (error.Fail())
+                break;
+        }
+        return error;
+    }
+#endif
+
     int fd = GetDescriptor();
     if (fd != kInvalidDescriptor)
     {
@@ -799,7 +952,6 @@ File::Write (const void *buf, size_t &num_bytes, off_t &offset)
         if (!error.Fail())
             SeekFromStart(cur);
 
-        ssize_t bytes_written = after - cur;
         offset = after;
 #endif
     }
@@ -887,7 +1039,13 @@ File::CalculateInteractiveAndTerminal ()
     {
         m_is_interactive = eLazyBoolNo;
         m_is_real_terminal = eLazyBoolNo;
-#ifndef _MSC_VER
+#if (defined(_WIN32) || defined(__ANDROID_NDK__))
+        if (_isatty(fd))
+        {
+            m_is_interactive = eLazyBoolYes;
+            m_is_real_terminal = eLazyBoolYes;
+        }
+#else
         if (isatty(fd))
         {
             m_is_interactive = eLazyBoolYes;
@@ -895,7 +1053,11 @@ File::CalculateInteractiveAndTerminal ()
             if (::ioctl (fd, TIOCGWINSZ, &window_size) == 0)
             {
                 if (window_size.ws_col > 0)
+                {
                     m_is_real_terminal = eLazyBoolYes;
+                    if (llvm::sys::Process::FileDescriptorHasColors(fd))
+                        m_supports_colors = eLazyBoolYes;
+                }
             }
         }
 #endif
@@ -916,5 +1078,13 @@ File::GetIsRealTerminal ()
     if (m_is_real_terminal == eLazyBoolCalculate)
         CalculateInteractiveAndTerminal();
     return m_is_real_terminal == eLazyBoolYes;
+}
+
+bool
+File::GetIsTerminalWithColors ()
+{
+    if (m_supports_colors == eLazyBoolCalculate)
+        CalculateInteractiveAndTerminal();
+    return m_supports_colors == eLazyBoolYes;
 }
 

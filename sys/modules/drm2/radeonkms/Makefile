@@ -1,7 +1,5 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
-
 .PATH:	${.CURDIR}/../../../dev/drm2/radeon
 
 KMOD	= radeonkms
@@ -116,7 +114,7 @@ SRCS	+=								\
 
 .include <bsd.kmod.mk>
 
-CFLAGS+=			-I${.CURDIR}/../../../dev/drm2/radeon ${GCC_MS_EXTENSIONS}
+CFLAGS+=			-I${.CURDIR}/../../../dev/drm2/radeon
 
 CWARNFLAGS.radeon_cp.c=		-Wno-unused-value
 CWARNFLAGS.r600_cp.c=		-Wno-unused-value

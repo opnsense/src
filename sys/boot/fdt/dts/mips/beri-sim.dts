@@ -80,6 +80,11 @@
 */
 	};
 
+	memory {
+		device_type = "memory";
+		reg = <0x0 0x4000000>;		// 64M at 0x0
+	};
+
 	soc {
 		#address-cells = <1>;
 		#size-cells = <1>;
@@ -91,11 +96,6 @@
 		 */
 		compatible = "simple-bus", "mips,mips4k";
 		ranges = <>;
-
-		memory {
-			device_type = "memory";
-			reg = <0x0 0x4000000>;		// 64M at 0x0
-		};
 
 		beripic0: beripic@7f804000 {
 			compatible = "sri-cambridge,beri-pic";
@@ -126,6 +126,18 @@
 		serial@7f002000 {
 			compatible = "altera,jtag_uart-11_0";
 			reg = <0x7f002000 0x40>;
+		};
+
+		virtio_mmio_platform0: virtio_mmio_platform@0 {
+			compatible = "beri,virtio_mmio_platform";
+			interrupts = <1>;
+			interrupt-parent = <&beripic0>;
+		};
+
+		virtio_block@7f020000 {
+			compatible = "virtio,mmio";
+			reg = <0x7f020000 0x1000>;
+			platform = <&virtio_mmio_platform0>;
 		};
 
 		sdcard@7f008000 {

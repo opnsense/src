@@ -18,7 +18,7 @@
 #include "lldb/Core/Module.h"
 #include "lldb/Core/State.h"
 #include "lldb/Core/Stream.h"
-#include "lldb/Symbol/ClangASTType.h"
+#include "lldb/Symbol/CompilerType.h"
 #include "lldb/Symbol/ClangASTContext.h"
 #include "lldb/Symbol/ObjectFile.h"
 #include "lldb/Symbol/SymbolContext.h"
@@ -35,7 +35,7 @@ using namespace lldb_private;
 Value::Value() :
     m_value (),
     m_vector (),
-    m_clang_type (),
+    m_compiler_type (),
     m_context (NULL),
     m_value_type (eValueTypeScalar),
     m_context_type (eContextTypeInvalid),
@@ -46,7 +46,7 @@ Value::Value() :
 Value::Value(const Scalar& scalar) :
     m_value (scalar),
     m_vector (),
-    m_clang_type (),
+    m_compiler_type (),
     m_context (NULL),
     m_value_type (eValueTypeScalar),
     m_context_type (eContextTypeInvalid),
@@ -55,29 +55,29 @@ Value::Value(const Scalar& scalar) :
 }
 
 
-Value::Value(const uint8_t *bytes, int len) :
+Value::Value(const void *bytes, int len) :
     m_value (),
     m_vector (),
-    m_clang_type (),
+    m_compiler_type (),
     m_context (NULL),
     m_value_type (eValueTypeHostAddress),
     m_context_type (eContextTypeInvalid),
     m_data_buffer ()
 {
-    m_data_buffer.CopyData(bytes, len);
-    m_value = (uintptr_t)m_data_buffer.GetBytes();
+    SetBytes(bytes, len);
 }
 
 Value::Value(const Value &v) :
     m_value (v.m_value),
     m_vector (v.m_vector),
-    m_clang_type (v.m_clang_type),
+    m_compiler_type (v.m_compiler_type),
     m_context (v.m_context),
     m_value_type (v.m_value_type),
     m_context_type (v.m_context_type),
     m_data_buffer ()
 {
-    if ((uintptr_t)v.m_value.ULongLong(LLDB_INVALID_ADDRESS) == (uintptr_t)v.m_data_buffer.GetBytes())
+    const uintptr_t rhs_value = (uintptr_t)v.m_value.ULongLong(LLDB_INVALID_ADDRESS);
+    if ((rhs_value != 0) && (rhs_value == (uintptr_t)v.m_data_buffer.GetBytes()))
     {
         m_data_buffer.CopyData(v.m_data_buffer.GetBytes(),
                                v.m_data_buffer.GetByteSize());
@@ -93,11 +93,12 @@ Value::operator=(const Value &rhs)
     {
         m_value = rhs.m_value;
         m_vector = rhs.m_vector;
-        m_clang_type = rhs.m_clang_type;
+        m_compiler_type = rhs.m_compiler_type;
         m_context = rhs.m_context;
         m_value_type = rhs.m_value_type;
         m_context_type = rhs.m_context_type;
-        if ((uintptr_t)rhs.m_value.ULongLong(LLDB_INVALID_ADDRESS) == (uintptr_t)rhs.m_data_buffer.GetBytes())
+        const uintptr_t rhs_value = (uintptr_t)rhs.m_value.ULongLong(LLDB_INVALID_ADDRESS);
+        if ((rhs_value != 0) && (rhs_value == (uintptr_t)rhs.m_data_buffer.GetBytes()))
         {
             m_data_buffer.CopyData(rhs.m_data_buffer.GetBytes(),
                                    rhs.m_data_buffer.GetByteSize());
@@ -106,6 +107,22 @@ Value::operator=(const Value &rhs)
         }
     }
     return *this;
+}
+
+void
+Value::SetBytes (const void *bytes, int len)
+{
+    m_value_type = eValueTypeHostAddress;
+    m_data_buffer.CopyData(bytes, len);
+    m_value = (uintptr_t)m_data_buffer.GetBytes();
+}
+
+void
+Value::AppendBytes (const void *bytes, int len)
+{
+    m_value_type = eValueTypeHostAddress;
+    m_data_buffer.AppendData (bytes, len);
+    m_value = (uintptr_t)m_data_buffer.GetBytes();
 }
 
 void
@@ -155,12 +172,74 @@ Value::GetType()
     return NULL;
 }
 
-void
+size_t
+Value::AppendDataToHostBuffer (const Value &rhs)
+{
+    size_t curr_size = m_data_buffer.GetByteSize();
+    Error error;
+    switch (rhs.GetValueType())
+    {
+    case eValueTypeScalar:
+        {
+            const size_t scalar_size = rhs.m_value.GetByteSize();
+            if (scalar_size > 0)
+            {
+                const size_t new_size = curr_size + scalar_size;
+                if (ResizeData(new_size) == new_size)
+                {
+                    rhs.m_value.GetAsMemoryData (m_data_buffer.GetBytes() + curr_size,
+                                                 scalar_size,
+                                                 endian::InlHostByteOrder(),
+                                                 error);
+                    return scalar_size;
+                }
+            }
+        }
+        break;
+    case eValueTypeVector:
+        {
+            const size_t vector_size = rhs.m_vector.length;
+            if (vector_size > 0)
+            {
+                const size_t new_size = curr_size + vector_size;
+                if (ResizeData(new_size) == new_size)
+                {
+                    ::memcpy (m_data_buffer.GetBytes() + curr_size,
+                              rhs.m_vector.bytes,
+                              vector_size);
+                    return vector_size;
+                }
+            }
+        }
+        break;
+    case eValueTypeFileAddress:
+    case eValueTypeLoadAddress:
+    case eValueTypeHostAddress:
+        {
+            const uint8_t *src = rhs.GetBuffer().GetBytes();
+            const size_t src_len = rhs.GetBuffer().GetByteSize();
+            if (src && src_len > 0)
+            {
+                const size_t new_size = curr_size + src_len;
+                if (ResizeData(new_size) == new_size)
+                {
+                    ::memcpy (m_data_buffer.GetBytes() + curr_size, src, src_len);
+                    return src_len;
+                }
+            }
+        }
+        break;
+    }
+    return 0;
+}
+
+size_t
 Value::ResizeData(size_t len)
 {
     m_value_type = eValueTypeHostAddress;
     m_data_buffer.SetByteSize(len);
     m_value = (uintptr_t)m_data_buffer.GetBytes();
+    return m_data_buffer.GetByteSize();
 }
 
 bool
@@ -181,7 +260,7 @@ Value::ValueOf(ExecutionContext *exe_ctx)
 }
 
 uint64_t
-Value::GetValueByteSize (Error *error_ptr)
+Value::GetValueByteSize (Error *error_ptr, ExecutionContext *exe_ctx)
 {
     uint64_t byte_size = 0;
 
@@ -196,9 +275,9 @@ Value::GetValueByteSize (Error *error_ptr)
     case eContextTypeLLDBType:         // Type *
     case eContextTypeVariable:         // Variable *
         {
-            const ClangASTType &ast_type = GetClangType();
+            const CompilerType &ast_type = GetCompilerType();
             if (ast_type.IsValid())
-                byte_size = ast_type.GetByteSize();
+                byte_size = ast_type.GetByteSize(exe_ctx ? exe_ctx->GetBestExecutionContextScope() : nullptr);
         }
         break;
     }
@@ -218,10 +297,10 @@ Value::GetValueByteSize (Error *error_ptr)
     return byte_size;
 }
 
-const ClangASTType &
-Value::GetClangType ()
+const CompilerType &
+Value::GetCompilerType ()
 {
-    if (!m_clang_type.IsValid())
+    if (!m_compiler_type.IsValid())
     {
         switch (m_context_type)
         {
@@ -229,13 +308,13 @@ Value::GetClangType ()
             break;
 
         case eContextTypeRegisterInfo:
-            break;    // TODO: Eventually convert into a clang type?
+            break;    // TODO: Eventually convert into a compiler type?
 
         case eContextTypeLLDBType:
             {
                 Type *lldb_type = GetType();
                 if (lldb_type)
-                    m_clang_type = lldb_type->GetClangForwardType();
+                    m_compiler_type = lldb_type->GetForwardCompilerType ();
             }
             break;
 
@@ -246,20 +325,20 @@ Value::GetClangType ()
                 {
                     Type *variable_type = variable->GetType();
                     if (variable_type)
-                        m_clang_type = variable_type->GetClangForwardType();
+                        m_compiler_type = variable_type->GetForwardCompilerType ();
                 }
             }
             break;
         }
     }
 
-    return m_clang_type;
+    return m_compiler_type;
 }
 
 void
-Value::SetClangType (const ClangASTType &clang_type)
+Value::SetCompilerType (const CompilerType &compiler_type)
 {
-    m_clang_type = clang_type;
+    m_compiler_type = compiler_type;
 }
 
 lldb::Format
@@ -276,7 +355,7 @@ Value::GetValueDefaultFormat ()
     case eContextTypeLLDBType:
     case eContextTypeVariable:
         {
-            const ClangASTType &ast_type = GetClangType();
+            const CompilerType &ast_type = GetCompilerType();
             if (ast_type.IsValid())
                 return ast_type.GetFormat();
         }
@@ -328,7 +407,7 @@ Value::GetValueAsData (ExecutionContext *exe_ctx,
     lldb::addr_t address = LLDB_INVALID_ADDRESS;
     AddressType address_type = eAddressTypeFile;
     Address file_so_addr;
-    const ClangASTType &ast_type = GetClangType();
+    const CompilerType &ast_type = GetCompilerType();
     switch (m_value_type)
     {
     case eValueTypeVector:
@@ -341,7 +420,7 @@ Value::GetValueAsData (ExecutionContext *exe_ctx,
 
     case eValueTypeScalar:
         {
-            data.SetByteOrder (lldb::endian::InlHostByteOrder());
+            data.SetByteOrder (endian::InlHostByteOrder());
             if (ast_type.IsValid())
                 data.SetAddressByteSize (ast_type.GetPointerByteSize());
             else
@@ -355,7 +434,7 @@ Value::GetValueAsData (ExecutionContext *exe_ctx,
                 lldb::Encoding type_encoding = ast_type.GetEncoding(type_encoding_count);
                 
                 if (type_encoding == eEncodingUint || type_encoding == eEncodingSint)
-                    limit_byte_size = ast_type.GetByteSize();
+                    limit_byte_size = ast_type.GetByteSize(exe_ctx ? exe_ctx->GetBestExecutionContextScope() : nullptr);
             }
             
             if (m_value.GetData (data, limit_byte_size))
@@ -544,7 +623,7 @@ Value::GetValueAsData (ExecutionContext *exe_ctx,
             }
         }
         // fallback to host settings
-        data.SetByteOrder(lldb::endian::InlHostByteOrder());
+        data.SetByteOrder(endian::InlHostByteOrder());
         data.SetAddressByteSize(sizeof(void *));
         break;
     }
@@ -560,7 +639,7 @@ Value::GetValueAsData (ExecutionContext *exe_ctx,
     }
 
     // If we got here, we need to read the value from memory
-    size_t byte_size = GetValueByteSize (&error);
+    size_t byte_size = GetValueByteSize (&error, exe_ctx);
 
     // Bail if we encountered any errors getting the byte size
     if (error.Fail())
@@ -579,7 +658,12 @@ Value::GetValueAsData (ExecutionContext *exe_ctx,
     {
         if (address_type == eAddressTypeHost)
         {
-            // The address is an address in this process, so just copy it
+            // The address is an address in this process, so just copy it.
+            if (address == 0)
+            {
+                error.SetErrorStringWithFormat("trying to read from host address of 0.");
+                return error;
+            }
             memcpy (dst, (uint8_t*)NULL + address, byte_size);
         }
         else if ((address_type == eAddressTypeLoad) || (address_type == eAddressTypeFile))
@@ -637,8 +721,8 @@ Value::GetValueAsData (ExecutionContext *exe_ctx,
 Scalar &
 Value::ResolveValue(ExecutionContext *exe_ctx)
 {
-    const ClangASTType &clang_type = GetClangType();
-    if (clang_type.IsValid())
+    const CompilerType &compiler_type = GetCompilerType();
+    if (compiler_type.IsValid())
     {
         switch (m_value_type)
         {
@@ -656,7 +740,7 @@ Value::ResolveValue(ExecutionContext *exe_ctx)
                 if (error.Success())
                 {
                     Scalar scalar;
-                    if (clang_type.GetValueAsScalar (data, 0, data.GetByteSize(), scalar))
+                    if (compiler_type.GetValueAsScalar (data, 0, data.GetByteSize(), scalar))
                     {
                         m_value = scalar;
                         m_value_type = eValueTypeScalar;
@@ -698,7 +782,7 @@ Value::Clear()
 {
     m_value.Clear();
     m_vector.Clear();
-    m_clang_type.Clear();
+    m_compiler_type.Clear();
     m_value_type = eValueTypeScalar;
     m_context = NULL;
     m_context_type = eContextTypeInvalid;

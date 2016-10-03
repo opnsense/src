@@ -15,7 +15,7 @@
 
 namespace lldb {
 
-class SBBreakpointLocation
+class LLDB_API SBBreakpointLocation
 {
 public:
 
@@ -59,6 +59,12 @@ public:
     GetCondition ();
 
     void
+    SetScriptCallbackFunction (const char *callback_function_name);
+
+    SBError
+    SetScriptCallbackBody (const char *script_body_text);
+    
+    void
     SetThreadID (lldb::tid_t sb_thread_id);
 
     lldb::tid_t
@@ -95,9 +101,7 @@ public:
 
 private:
     friend class SBBreakpoint;
-#ifndef LLDB_DISABLE_PYTHON
-    friend class lldb_private::ScriptInterpreterPython;
-#endif
+
     void
     SetLocation (const lldb::BreakpointLocationSP &break_loc_sp);
 

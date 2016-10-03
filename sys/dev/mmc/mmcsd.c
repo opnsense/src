@@ -65,6 +65,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/module.h>
 #include <sys/mutex.h>
 #include <sys/time.h>
+#include <geom/geom.h>
 #include <geom/geom_disk.h>
 
 #include <dev/mmc/mmcbrvar.h>
@@ -160,14 +161,13 @@ mmcsd_attach(device_t dev)
 	d->d_dump = mmcsd_dump;
 	d->d_name = "mmcsd";
 	d->d_drv1 = sc;
-	d->d_maxsize = 4*1024*1024;	/* Maximum defined SD card AU size. */
 	d->d_sectorsize = mmc_get_sector_size(dev);
+	d->d_maxsize = mmc_get_max_data(dev) * d->d_sectorsize;
 	d->d_mediasize = (off_t)mmc_get_media_size(dev) * d->d_sectorsize;
-	d->d_stripeoffset = 0;
 	d->d_stripesize = mmc_get_erase_sector(dev) * d->d_sectorsize;
 	d->d_unit = device_get_unit(dev);
 	d->d_flags = DISKFLAG_CANDELETE;
-	d->d_delmaxsize = mmc_get_erase_sector(dev) * d->d_sectorsize * 1; /* conservative */
+	d->d_delmaxsize = mmc_get_erase_sector(dev) * d->d_sectorsize;
 	strlcpy(d->d_ident, mmc_get_card_sn_string(dev), sizeof(d->d_ident));
 	strlcpy(d->d_descr, mmc_get_card_id_string(dev), sizeof(d->d_descr));
 
@@ -488,7 +488,7 @@ mmcsd_dump(void *arg, void *virtual, vm_offset_t physical,
 	if (!length)
 		return (0);
 
-	bzero(&bp, sizeof(struct bio));
+	g_reset_bio(&bp);
 	bp.bio_disk = disk;
 	bp.bio_pblkno = offset / disk->d_sectorsize;
 	bp.bio_bcount = length;

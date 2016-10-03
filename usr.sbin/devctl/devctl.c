@@ -70,12 +70,16 @@ DEVCTL_TABLE(top, set);
 static void
 usage(void)
 {
-	fprintf(stderr, "%s\n%s\n%s\n%s\n%s\n",
+	fprintf(stderr, "%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n",
 	    "usage: devctl attach device",
 	    "       devctl detach [-f] device",
 	    "       devctl disable [-f] device",
 	    "       devctl enable device",
-	    "       devctl set driver [-f] device driver");
+	    "       devctl suspend device",
+	    "       devctl resume device",
+	    "       devctl set driver [-f] device driver",
+	    "       devctl rescan device",
+	    "       devctl delete [-f] device");
 	exit(1);
 }
 
@@ -199,6 +203,30 @@ enable(int ac, char **av)
 }
 DEVCTL_COMMAND(top, enable, enable);
 
+static int
+suspend(int ac, char **av)
+{
+
+	if (ac != 2)
+		usage();
+	if (devctl_suspend(av[1]) < 0)
+		err(1, "Failed to suspend %s", av[1]);
+	return (0);
+}
+DEVCTL_COMMAND(top, suspend, suspend);
+
+static int
+resume(int ac, char **av)
+{
+
+	if (ac != 2)
+		usage();
+	if (devctl_resume(av[1]) < 0)
+		err(1, "Failed to resume %s", av[1]);
+	return (0);
+}
+DEVCTL_COMMAND(top, resume, resume);
+
 static void
 set_driver_usage(void)
 {
@@ -232,6 +260,52 @@ set_driver(int ac, char **av)
 	return (0);
 }
 DEVCTL_COMMAND(set, driver, set_driver);
+
+static int
+rescan(int ac, char **av)
+{
+
+	if (ac != 2)
+		usage();
+	if (devctl_rescan(av[1]) < 0)
+		err(1, "Failed to rescan %s", av[1]);
+	return (0);
+}
+DEVCTL_COMMAND(top, rescan, rescan);
+
+static void
+delete_usage(void)
+{
+
+	fprintf(stderr, "usage: devctl delete [-f] device\n");
+	exit(1);
+}
+
+static int
+delete(int ac, char **av)
+{
+	bool force;
+	int ch;
+
+	force = false;
+	while ((ch = getopt(ac, av, "f")) != -1)
+		switch (ch) {
+		case 'f':
+			force = true;
+			break;
+		default:
+			delete_usage();
+		}
+	ac -= optind;
+	av += optind;
+
+	if (ac != 1)
+		delete_usage();
+	if (devctl_delete(av[0], force) < 0)
+		err(1, "Failed to delete %s", av[0]);
+	return (0);
+}
+DEVCTL_COMMAND(top, delete, delete);
 
 int
 main(int ac, char *av[])

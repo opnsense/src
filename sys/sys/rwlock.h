@@ -95,12 +95,12 @@
 /* Acquire a write lock. */
 #define	__rw_wlock(rw, tid, file, line) do {				\
 	uintptr_t _tid = (uintptr_t)(tid);				\
-						                        \
-	if (!_rw_write_lock((rw), _tid))				\
+									\
+	if ((rw)->rw_lock != RW_UNLOCKED || !_rw_write_lock((rw), _tid))\
 		_rw_wlock_hard((rw), _tid, (file), (line));		\
 	else 								\
-		LOCKSTAT_PROFILE_OBTAIN_LOCK_SUCCESS(LS_RW_WLOCK_ACQUIRE, \
-		    rw, 0, 0, (file), (line));				\
+		LOCKSTAT_PROFILE_OBTAIN_RWLOCK_SUCCESS(rw__acquire, rw,	\
+		    0, 0, file, line, LOCKSTAT_WRITER);			\
 } while (0)
 
 /* Release a write lock. */
@@ -109,8 +109,12 @@
 									\
 	if ((rw)->rw_recurse)						\
 		(rw)->rw_recurse--;					\
-	else if (!_rw_write_unlock((rw), _tid))				\
-		_rw_wunlock_hard((rw), _tid, (file), (line));		\
+	else {								\
+		LOCKSTAT_PROFILE_RELEASE_RWLOCK(rw__release, rw,	\
+		    LOCKSTAT_WRITER);					\
+		if ((rw)->rw_lock != _tid || !_rw_write_unlock((rw), _tid))\
+			_rw_wunlock_hard((rw), _tid, (file), (line));	\
+	}								\
 } while (0)
 
 /*
@@ -211,7 +215,7 @@ void	__rw_assert(const volatile uintptr_t *c, int what, const char *file,
 	_sleep((chan), &(rw)->lock_object, (pri), (wmesg),		\
 	    tick_sbt * (timo), 0, C_HARDCLOCK)
 
-#define	rw_initialized(rw)	lock_initalized(&(rw)->lock_object)
+#define	rw_initialized(rw)	lock_initialized(&(rw)->lock_object)
 
 struct rw_args {
 	void		*ra_rw;
@@ -254,6 +258,7 @@ struct rw_args_flags {
 #define	RW_NOWITNESS	0x04
 #define	RW_QUIET	0x08
 #define	RW_RECURSE	0x10
+#define	RW_NEW		0x20
 
 /*
  * The INVARIANTS-enabled rw_assert() functionality.

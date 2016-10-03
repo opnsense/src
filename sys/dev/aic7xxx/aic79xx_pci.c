@@ -334,14 +334,12 @@ ahd_find_pci_device(aic_dev_softc_t pci)
 int
 ahd_pci_config(struct ahd_softc *ahd, struct ahd_pci_identity *entry)
 {
-	struct scb_data *shared_scb_data;
 	u_int		 command;
 	uint32_t	 devconfig;
 	uint16_t	 device; 
 	uint16_t	 subvendor; 
 	int		 error;
 
-	shared_scb_data = NULL;
 	ahd->description = entry->name;
 	/*
 	 * Record if this is a HostRAID board.
@@ -491,7 +489,7 @@ ahd_pci_test_register_access(struct ahd_softc *ahd)
 	 * Next create a situation where write combining
 	 * or read prefetching could be initiated by the
 	 * CPU or host bridge.  Our device does not support
-	 * either, so look for data corruption and/or flaged
+	 * either, so look for data corruption and/or flagged
 	 * PCI errors.  First pause without causing another
 	 * chip reset.
 	 */
@@ -1013,7 +1011,7 @@ ahd_aic790X_setup(struct ahd_softc *ahd)
 			  |  AHD_FAINT_LED_BUG;
 
 		/*
-		 * IO Cell paramter setup.
+		 * IO Cell parameter setup.
 		 */
 		AHD_SET_PRECOMP(ahd, AHD_PRECOMP_CUTBACK_29);
 
@@ -1034,7 +1032,7 @@ ahd_aic790X_setup(struct ahd_softc *ahd)
 				  |  AHD_BUSFREEREV_BUG;
 
 		/*
-		 * IO Cell paramter setup.
+		 * IO Cell parameter setup.
 		 */
 		AHD_SET_PRECOMP(ahd, AHD_PRECOMP_CUTBACK_29);
 		AHD_SET_SLEWRATE(ahd, AHD_SLEWRATE_DEF_REVB);

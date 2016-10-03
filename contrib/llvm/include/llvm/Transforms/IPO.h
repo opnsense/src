@@ -16,9 +16,11 @@
 #define LLVM_TRANSFORMS_IPO_H
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/StringRef.h"
 
 namespace llvm {
 
+class FunctionInfoIndex;
 class ModulePass;
 class Pass;
 class Function;
@@ -34,7 +36,7 @@ ModulePass *createStripSymbolsPass(bool OnlyDebugInfo = false);
 
 //===----------------------------------------------------------------------===//
 //
-// These functions strips symbols from functions and modules.  
+// These functions strips symbols from functions and modules.
 // Only debugging information is not stripped.
 //
 ModulePass *createStripNonDebugSymbolsPass();
@@ -58,13 +60,11 @@ ModulePass *createStripDeadDebugInfoPass();
 ///
 ModulePass *createConstantMergePass();
 
-
 //===----------------------------------------------------------------------===//
 /// createGlobalOptimizerPass - This function returns a new pass that optimizes
 /// non-address taken internal globals.
 ///
 ModulePass *createGlobalOptimizerPass();
-
 
 //===----------------------------------------------------------------------===//
 /// createGlobalDCEPass - This transform is designed to eliminate unreachable
@@ -72,26 +72,39 @@ ModulePass *createGlobalOptimizerPass();
 ///
 ModulePass *createGlobalDCEPass();
 
+//===----------------------------------------------------------------------===//
+/// This transform is designed to eliminate available external globals
+/// (functions or global variables)
+///
+ModulePass *createEliminateAvailableExternallyPass();
 
 //===----------------------------------------------------------------------===//
 /// createGVExtractionPass - If deleteFn is true, this pass deletes
 /// the specified global values. Otherwise, it deletes as much of the module as
 /// possible, except for the global values specified.
 ///
-ModulePass *createGVExtractionPass(std::vector<GlobalValue*>& GVs, bool 
+ModulePass *createGVExtractionPass(std::vector<GlobalValue*>& GVs, bool
                                    deleteFn = false);
+
+//===----------------------------------------------------------------------===//
+/// This pass performs iterative function importing from other modules.
+Pass *createFunctionImportPass(const FunctionInfoIndex *Index = nullptr);
 
 //===----------------------------------------------------------------------===//
 /// createFunctionInliningPass - Return a new pass object that uses a heuristic
 /// to inline direct function calls to small functions.
 ///
+/// The Threshold can be passed directly, or asked to be computed from the
+/// given optimization and size optimization arguments.
+///
 /// The -inline-threshold command line option takes precedence over the
 /// threshold given here.
 Pass *createFunctionInliningPass();
 Pass *createFunctionInliningPass(int Threshold);
+Pass *createFunctionInliningPass(unsigned OptLevel, unsigned SizeOptLevel);
 
 //===----------------------------------------------------------------------===//
-/// createAlwaysInlinerPass - Return a new pass object that inlines only 
+/// createAlwaysInlinerPass - Return a new pass object that inlines only
 /// functions that are marked as "always_inline".
 Pass *createAlwaysInlinerPass();
 Pass *createAlwaysInlinerPass(bool InsertLifetime);
@@ -170,12 +183,20 @@ ModulePass *createBlockExtractorPass();
 ModulePass *createStripDeadPrototypesPass();
 
 //===----------------------------------------------------------------------===//
-/// createFunctionAttrsPass - This pass discovers functions that do not access
-/// memory, or only read memory, and gives them the readnone/readonly attribute.
-/// It also discovers function arguments that are not captured by the function
-/// and marks them with the nocapture attribute.
+/// createPostOrderFunctionAttrsPass - This pass walks SCCs of the call graph
+/// in post-order to deduce and propagate function attributes. It can discover
+/// functions that do not access memory, or only read memory, and give them the
+/// readnone/readonly attribute. It also discovers function arguments that are
+/// not captured by the function and marks them with the nocapture attribute.
 ///
-Pass *createFunctionAttrsPass();
+Pass *createPostOrderFunctionAttrsPass();
+
+//===----------------------------------------------------------------------===//
+/// createReversePostOrderFunctionAttrsPass - This pass walks SCCs of the call
+/// graph in RPO to deduce and propagate function attributes. Currently it
+/// only handles synthesizing norecurse attributes.
+///
+Pass *createReversePostOrderFunctionAttrsPass();
 
 //===----------------------------------------------------------------------===//
 /// createMergeFunctionsPass - This pass discovers identical functions and
@@ -187,7 +208,7 @@ ModulePass *createMergeFunctionsPass();
 /// createPartialInliningPass - This pass inlines parts of functions.
 ///
 ModulePass *createPartialInliningPass();
-  
+
 //===----------------------------------------------------------------------===//
 // createMetaRenamerPass - Rename everything with metasyntatic names.
 //
@@ -197,6 +218,19 @@ ModulePass *createMetaRenamerPass();
 /// createBarrierNoopPass - This pass is purely a module pass barrier in a pass
 /// manager.
 ModulePass *createBarrierNoopPass();
+
+/// \brief This pass lowers bitset metadata and the llvm.bitset.test intrinsic
+/// to bitsets.
+ModulePass *createLowerBitSetsPass();
+
+/// \brief This pass export CFI checks for use by external modules.
+ModulePass *createCrossDSOCFIPass();
+
+//===----------------------------------------------------------------------===//
+// SampleProfilePass - Loads sample profile data from disk and generates
+// IR metadata to reflect the profile.
+ModulePass *createSampleProfileLoaderPass();
+ModulePass *createSampleProfileLoaderPass(StringRef Name);
 
 } // End llvm namespace
 

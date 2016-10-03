@@ -1,4 +1,4 @@
-/*	$OpenBSD: main.c,v 1.81 2012/04/12 17:00:11 espie Exp $	*/
+/*	$OpenBSD: main.c,v 1.86 2015/11/03 16:21:47 deraadt Exp $	*/
 /*	$NetBSD: main.c,v 1.12 1997/02/08 23:54:49 cgd Exp $	*/
 
 /*-
@@ -133,16 +133,13 @@ static struct keyblk keywrds[] = {	/* m4 keywords to be installed */
 	{ "traceon",	  TRACEONTYPE | NOARGS },
 	{ "traceoff",	  TRACEOFFTYPE | NOARGS },
 
-#if defined(unix) || defined(__unix__)
 	{ "unix",         SELFTYPE | NOARGS },
-#else
-#ifdef vms
-	{ "vms",          SELFTYPE | NOARGS },
-#endif
-#endif
 };
 
 #define MAXKEYS	(sizeof(keywrds)/sizeof(struct keyblk))
+
+extern int optind;
+extern char *optarg;
 
 #define MAXRECORD 50
 static struct position {
@@ -180,8 +177,8 @@ main(int argc, char *argv[])
 	initspaces();
 	STACKMAX = INITSTACKMAX;
 
-	mstack = (stae *)xalloc(sizeof(stae) * STACKMAX, NULL);
-	sstack = (char *)xalloc(STACKMAX, NULL);
+	mstack = xreallocarray(NULL, STACKMAX, sizeof(stae), NULL);
+	sstack = xalloc(STACKMAX, NULL);
 
 	maxout = 0;
 	outfile = NULL;
@@ -396,7 +393,7 @@ macro(void)
 		/*
 		 * now push the string arguments:
 		 */
-				pushs1(macro_getdef(p)->defn);	/* defn string */
+				pushdef(p);			/* defn string */
 				pushs1((char *)macro_name(p));	/* macro name  */
 				pushs(ep);			/* start next..*/
 
@@ -415,7 +412,8 @@ macro(void)
 				}
 			}
 		} else if (t == EOF) {
-			if (sp > -1 && ilevel <= 0) {
+			if (!mimic_gnu /* you can puke right there */
+			    && sp > -1 && ilevel <= 0) {
 				warnx( "unexpected end of input, unclosed parenthesis:");
 				dump_stack(paren, PARLEV);
 				exit(1);
@@ -473,14 +471,14 @@ macro(void)
 
 		default:
 			if (LOOK_AHEAD(t, scommt)) {
-				char *cp;
-				for (cp = scommt; *cp; cp++)
-					chrsave(*cp);
+				char *p;
+				for (p = scommt; *p; p++)
+					chrsave(*p);
 				for(;;) {
 					t = gpbc();
 					if (LOOK_AHEAD(t, ecommt)) {
-						for (cp = ecommt; *cp; cp++)
-							chrsave(*cp);
+						for (p = ecommt; *p; p++)
+							chrsave(*p);
 						break;
 					}
 					if (t == EOF)
@@ -625,7 +623,7 @@ static void
 enlarge_stack(void)
 {
 	STACKMAX += STACKMAX/2;
-	mstack = xrealloc(mstack, sizeof(stae) * STACKMAX,
+	mstack = xreallocarray(mstack, STACKMAX, sizeof(stae),
 	    "Evaluation stack overflow (%lu)",
 	    (unsigned long)STACKMAX);
 	sstack = xrealloc(sstack, STACKMAX,

@@ -13,12 +13,97 @@ unix		?=	We run FreeBSD, not UNIX.
 # and/or endian.  This is called MACHINE_CPU in NetBSD, but that's used
 # for something different in FreeBSD.
 #
-MACHINE_CPUARCH=${MACHINE_ARCH:C/mips(n32|64)?(el)?/mips/:C/arm(v6)?(eb)?/arm/:C/powerpc64/powerpc/}
+MACHINE_CPUARCH=${MACHINE_ARCH:C/mips(n32|64)?(el)?/mips/:C/arm(v6)?(eb|hf)?/arm/:C/powerpc64/powerpc/:C/riscv64/riscv/}
 .endif
 
-# Set any local definitions first. Place this early, but it needs
-# MACHINE_CPUARCH to be defined.
-.sinclude <local.sys.mk>
+
+# Some options we need now
+__DEFAULT_NO_OPTIONS= \
+	DIRDEPS_BUILD \
+	DIRDEPS_CACHE
+
+__DEFAULT_DEPENDENT_OPTIONS= \
+	AUTO_OBJ/DIRDEPS_BUILD \
+	META_MODE/DIRDEPS_BUILD \
+	STAGING/DIRDEPS_BUILD \
+	SYSROOT/DIRDEPS_BUILD
+
+__ENV_ONLY_OPTIONS:= \
+	${__DEFAULT_NO_OPTIONS} \
+	${__DEFAULT_YES_OPTIONS} \
+	${__DEFAULT_DEPENDENT_OPTIONS:H}
+
+# early include for customization
+# see local.sys.mk below
+# Not included when building in fmake compatibility mode (still needed
+# for older system support)
+.if defined(.PARSEDIR)
+.sinclude <local.sys.env.mk>
+
+.include <bsd.mkopt.mk>
+
+# Disable MK_META_MODE with make -B
+.if ${MK_META_MODE} == "yes" && defined(.MAKEFLAGS) && ${.MAKEFLAGS:M-B}
+MK_META_MODE=	no
+.endif
+
+.if ${MK_DIRDEPS_BUILD} == "yes"
+.sinclude <meta.sys.mk>
+.elif ${MK_META_MODE} == "yes"
+# verbose will show .MAKE.META.PREFIX for each target.
+META_MODE+=	meta verbose
+.if !defined(NO_META_MISSING)
+META_MODE+=	missing-meta=yes
+.endif
+# silent will hide command output if a .meta file is created.
+.if !defined(NO_SILENT)
+META_MODE+=	silent=yes
+.endif
+.if !exists(/dev/filemon)
+META_MODE+= nofilemon
+.endif
+# Require filemon data with bmake
+.if empty(META_MODE:Mnofilemon)
+META_MODE+= missing-filemon=yes
+.endif
+.endif
+META_MODE?= normal
+.export META_MODE
+.MAKE.MODE?= ${META_MODE}
+.if !empty(.MAKE.MODE:Mmeta) && !defined(NO_META_IGNORE_HOST)
+# Ignore host file changes that will otherwise cause
+# buildworld -> installworld -> buildworld to rebuild everything.
+# Since the build is self-reliant and bootstraps everything it needs,
+# this should not be a real problem for incremental builds.
+# XXX: This relies on the existing host tools retaining ABI compatibility
+# through upgrades since they won't be rebuilt on header/library changes.
+# Note that these are prefix matching, so /lib matches /libexec.
+.MAKE.META.IGNORE_PATHS+= \
+	${__MAKE_SHELL} \
+	/bin \
+	/lib \
+	/rescue \
+	/sbin \
+	/usr/bin \
+	/usr/include \
+	/usr/lib \
+	/usr/sbin \
+	/usr/share \
+
+.endif
+
+
+.if ${MK_AUTO_OBJ} == "yes"
+# This needs to be done early - before .PATH is computed
+# Don't do this for 'make showconfig' as it enables all options where meta mode
+# is not expected.
+.if !make(showconfig)
+.sinclude <auto.obj.mk>
+.endif
+.endif
+.else # bmake
+.include <bsd.mkopt.mk>
+.endif
 
 # If the special target .POSIX appears (without prerequisites or
 # commands) before the first noncomment line in the makefile, make shall
@@ -28,6 +113,10 @@ MACHINE_CPUARCH=${MACHINE_ARCH:C/mips(n32|64)?(el)?/mips/:C/arm(v6)?(eb)?/arm/:C
 #
 # The rules below use this macro to distinguish between Posix-compliant
 # and default behaviour.
+#
+# This functionality is currently broken, since make(1) processes sys.mk
+# before reading any other files, and consequently has no opportunity to
+# set the %POSIX macro before we read this point.
 
 .if defined(%POSIX)
 .SUFFIXES:	.o .c .y .l .a .sh .f
@@ -66,25 +155,28 @@ CFLAGS		+=	-fno-strict-aliasing
 .endif
 PO_CFLAGS	?=	${CFLAGS}
 
+# cp(1) is used to copy source files to ${.OBJDIR}, make sure it can handle
+# read-only files as non-root by passing -f.
+CP		?=	cp -f
+
+CPP		?=	cpp
+
 # C Type Format data is required for DTrace
 CTFFLAGS	?=	-L VERSION
 
 CTFCONVERT	?=	ctfconvert
 CTFMERGE	?=	ctfmerge
-DTRACE		?=	dtrace
+
 .if defined(CFLAGS) && (${CFLAGS:M-g} != "")
 CTFFLAGS	+=	-g
-.else
-# XXX: What to do here? Is removing the CFLAGS part completely ok here?
-# For now comment it out to not compile with -g unconditionally.
-#CFLAGS		+=	-g
 .endif
 
 CXX		?=	c++
 CXXFLAGS	?=	${CFLAGS:N-std=*:N-Wnested-externs:N-W*-prototypes:N-Wno-pointer-sign:N-Wold-style-definition}
 PO_CXXFLAGS	?=	${CXXFLAGS}
 
-CPP		?=	cpp
+DTRACE		?=	dtrace
+DTRACEFLAGS	?=	-C -x nolibs
 
 .if empty(.MAKEFLAGS:M-s)
 ECHO		?=	echo
@@ -98,13 +190,12 @@ ECHODIR		?=	true
 .endif
 .endif
 
-.if defined(.PARSEDIR)
-# _+_ appears to be a workaround for the special src .MAKE not working.
-# setting it to + interferes with -N
-_+_		?=
-.elif !empty(.MAKEFLAGS:M-n) && ${.MAKEFLAGS:M-n} == "-n"
-# the check above matches only a single -n, so -n -n will result
-# in _+_ = +
+.if ${.MAKEFLAGS:M-N}
+# bmake -N is supposed to skip executing anything but it does not skip
+# exeucting '+' commands.  The '+' feature is used where .MAKE
+# is not safe for the entire target.  -N is intended to skip building sub-makes
+# so it executing '+' commands is not right.  Work around the bug by not
+# setting '+' when -N is used.
 _+_		?=
 .else
 _+_		?=	+
@@ -125,7 +216,8 @@ LEX		?=	lex
 LFLAGS		?=
 
 LD		?=	ld
-LDFLAGS		?=
+LDFLAGS		?=				# LDFLAGS is for CC, 
+_LDFLAGS	=	${LDFLAGS:S/-Wl,//g}	# strip -Wl, for LD
 
 LINT		?=	lint
 LINTFLAGS	?=	-cghapbx
@@ -138,6 +230,7 @@ MAKE		?=	make
 
 .if !defined(%POSIX)
 NM		?=	nm
+NMFLAGS		?=
 
 OBJC		?=	cc
 OBJCFLAGS	?=	${OBJCINCLUDES} ${CFLAGS} -Wno-import
@@ -154,6 +247,10 @@ RFLAGS		?=
 .endif
 
 SHELL		?=	sh
+
+.if !defined(%POSIX)
+SIZE		?=	size
+.endif
 
 YACC		?=	yacc
 .if defined(%POSIX)
@@ -173,11 +270,9 @@ YFLAGS		?=	-d
 # SINGLE SUFFIX RULES
 .c:
 	${CC} ${CFLAGS} ${LDFLAGS} -o ${.TARGET} ${.IMPSRC}
-	${CTFCONVERT_CMD}
 
 .f:
 	${FC} ${FFLAGS} ${LDFLAGS} -o ${.TARGET} ${.IMPSRC}
-	${CTFCONVERT_CMD}
 
 .sh:
 	cp -f ${.IMPSRC} ${.TARGET}
@@ -187,25 +282,21 @@ YFLAGS		?=	-d
 
 .c.o:
 	${CC} ${CFLAGS} -c ${.IMPSRC}
-	${CTFCONVERT_CMD}
 
 .f.o:
 	${FC} ${FFLAGS} -c ${.IMPSRC}
-	${CTFCONVERT_CMD}
 
 .y.o:
 	${YACC} ${YFLAGS} ${.IMPSRC}
 	${CC} ${CFLAGS} -c y.tab.c
 	rm -f y.tab.c
 	mv y.tab.o ${.TARGET}
-	${CTFCONVERT_CMD}
 
 .l.o:
 	${LEX} ${LFLAGS} ${.IMPSRC}
 	${CC} ${CFLAGS} -c lex.yy.c
 	rm -f lex.yy.c
 	mv lex.yy.o ${.TARGET}
-	${CTFCONVERT_CMD}
 
 .y.c:
 	${YACC} ${YFLAGS} ${.IMPSRC}
@@ -230,7 +321,7 @@ YFLAGS		?=	-d
 # non-Posix rule set
 
 .sh:
-	cp -fp ${.IMPSRC} ${.TARGET}
+	cp -f ${.IMPSRC} ${.TARGET}
 	chmod a+x ${.TARGET}
 
 .c.ln:
@@ -271,11 +362,11 @@ YFLAGS		?=	-d
 	${FC} ${RFLAGS} ${EFLAGS} ${FFLAGS} -c ${.IMPSRC} -o ${.TARGET}
 
 .S.o:
-	${CC} ${CFLAGS} ${ACFLAGS} -c ${.IMPSRC} -o ${.TARGET}
+	${CC:N${CCACHE_BIN}} ${CFLAGS} ${ACFLAGS} -c ${.IMPSRC} -o ${.TARGET}
 	${CTFCONVERT_CMD}
 
 .asm.o:
-	${CC} -x assembler-with-cpp ${CFLAGS} ${ACFLAGS} -c ${.IMPSRC} \
+	${CC:N${CCACHE_BIN}} -x assembler-with-cpp ${CFLAGS} ${ACFLAGS} -c ${.IMPSRC} \
 	    -o ${.TARGET}
 	${CTFCONVERT_CMD}
 
@@ -327,10 +418,17 @@ YFLAGS		?=	-d
 	rm -f ${.PREFIX}.tmp.c
 	${CTFCONVERT_CMD}
 
-# FreeBSD build pollution.  Hide it in the non-POSIX part of the ifdef.
+# Pull in global settings.
 __MAKE_CONF?=/etc/make.conf
 .if exists(${__MAKE_CONF})
 .include "${__MAKE_CONF}"
+.endif
+
+# late include for customization
+.sinclude <local.sys.mk>
+
+.if defined(META_MODE)
+META_MODE:=	${META_MODE:O:u}
 .endif
 
 .if defined(__MAKE_SHELL) && !empty(__MAKE_SHELL)
@@ -338,37 +436,37 @@ SHELL=	${__MAKE_SHELL}
 .SHELL: path=${__MAKE_SHELL}
 .endif
 
-.if !defined(.PARSEDIR)
-# We are not bmake, which is more aggressive about searching .PATH
-# It is sometime necessary to curb its enthusiasm with .NOPATH
-# The following allows us to quietly ignore .NOPATH when not using bmake.
-.NOTMAIN: .NOPATH
-.NOPATH:
-
-# Toggle on warnings
-.WARN: dirsyntax
-.endif
-
-.endif
-
-.if defined(.PARSEDIR)
 # Tell bmake to expand -V VAR by default
 .MAKE.EXPAND_VARIABLES= yes
 
 # Tell bmake the makefile preference
 .MAKE.MAKEFILE_PREFERENCE= BSDmakefile makefile Makefile
 
+# Tell bmake to always pass job tokens, regardless of target depending on
+# .MAKE or looking like ${MAKE}/${.MAKE}/$(MAKE)/$(.MAKE)/make.
+.MAKE.ALWAYS_PASS_JOB_QUEUE= yes
+
 # By default bmake does *not* use set -e
 # when running target scripts, this is a problem for many makefiles here.
 # So define a shell that will do what FreeBSD expects.
 .ifndef WITHOUT_SHELL_ERRCTL
+__MAKE_SHELL?=/bin/sh
 .SHELL: name=sh \
 	quiet="set -" echo="set -v" filter="set -" \
 	hasErrCtl=yes check="set -e" ignore="set +e" \
 	echoFlag=v errFlag=e \
-	path=${__MAKE_SHELL:U/bin/sh}
+	path=${__MAKE_SHELL}
 .endif
 
-.endif
-
+# Hack for ports compatibility. Historically, ports makefiles have
+# assumed they can examine MACHINE_CPU without including anything
+# because this was automatically included in sys.mk. For /usr/src,
+# this file has moved to being included from bsd.opts.mk. Until all
+# the ports files are modernized, and a reasonable transition
+# period has passed, include it while we're in a ports tree here
+# to preserve historic behavior.
+.if exists(${.CURDIR}/../../Mk/bsd.port.mk)
 .include <bsd.cpu.mk>
+.endif
+
+.endif # ! Posix

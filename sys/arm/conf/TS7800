@@ -5,11 +5,11 @@
 #
 
 ident		TS7800
-include		"../mv/orion/std.ts7800"
+include 	"std.arm"
+include 	"../mv/orion/std.ts7800"
 
 options 	SOC_MV_ORION
 
-#makeoptions	DEBUG=-g		# Build kernel with gdb(1) debug symbols
 makeoptions	WERROR="-Werror"
 
 options 	SCHED_4BSD		# 4BSD scheduler
@@ -17,7 +17,7 @@ options 	INET			# InterNETworking
 options 	INET6			# IPv6 communications protocols
 options 	FFS			# Berkeley Fast Filesystem
 options 	SOFTUPDATES		# Enable FFS soft updates support
-options 	NFSCL			# New Network Filesystem Client
+options 	NFSCL			# Network Filesystem Client
 options 	NFSLOCKD		# Network Lock Manager
 options 	NFS_ROOT		# NFS usable as /, requires NFSCL
 options 	BOOTP
@@ -38,12 +38,6 @@ options 	RWLOCK_NOINLINE
 options 	NO_FFS_SNAPSHOT
 options 	NO_SWAPPING
 
-# Debugging
-options 	ALT_BREAK_TO_DEBUGGER
-options 	DDB
-options 	KDB
-options 	GDB			# Support remote GDB.
-
 device		mvs
 device		pci
 
@@ -59,6 +53,7 @@ device		uart
 device		ether
 device		mge			# Marvell Gigabit Ethernet controller
 device		mii
+device		mdio
 device		e1000phy
 device		bpf
 options 	HZ=1000
@@ -73,6 +68,9 @@ device		da
 
 # SATA
 device		ata
+
+# GPIO
+device		gpio
 
 # Flattened Device Tree
 options 	FDT

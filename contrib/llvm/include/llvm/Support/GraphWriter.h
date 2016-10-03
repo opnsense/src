@@ -24,10 +24,9 @@
 #define LLVM_SUPPORT_GRAPHWRITER_H
 
 #include "llvm/ADT/GraphTraits.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/Support/DOTGraphTraits.h"
-#include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
-#include <cassert>
 #include <vector>
 
 namespace llvm {
@@ -50,7 +49,7 @@ namespace GraphProgram {
    };
 }
 
-void DisplayGraph(StringRef Filename, bool wait = true,
+bool DisplayGraph(StringRef Filename, bool wait = true,
                   GraphProgram::Name program = GraphProgram::DOT);
 
 template<typename GraphType>
@@ -176,8 +175,9 @@ public:
       O << DOT::EscapeString(DTraits.getNodeLabel(Node, G));
 
       // If we should include the address of the node in the label, do so now.
-      if (DTraits.hasNodeAddressLabel(Node, G))
-        O << "|" << static_cast<const void*>(Node);
+      std::string Id = DTraits.getNodeIdentifierLabel(Node, G);
+      if (!Id.empty())
+        O << "|" << DOT::EscapeString(Id);
 
       std::string NodeDesc = DTraits.getNodeDescription(Node, G);
       if (!NodeDesc.empty())
@@ -200,8 +200,9 @@ public:
       O << DOT::EscapeString(DTraits.getNodeLabel(Node, G));
 
       // If we should include the address of the node in the label, do so now.
-      if (DTraits.hasNodeAddressLabel(Node, G))
-        O << "|" << static_cast<const void*>(Node);
+      std::string Id = DTraits.getNodeIdentifierLabel(Node, G);
+      if (!Id.empty())
+        O << "|" << DOT::EscapeString(Id);
 
       std::string NodeDesc = DTraits.getNodeDescription(Node, G);
       if (!NodeDesc.empty())
@@ -259,8 +260,8 @@ public:
 
   /// emitSimpleNode - Outputs a simple (non-record) node
   void emitSimpleNode(const void *ID, const std::string &Attr,
-                      const std::string &Label, unsigned NumEdgeSources = 0,
-                      const std::vector<std::string> *EdgeSourceLabels = 0) {
+                   const std::string &Label, unsigned NumEdgeSources = 0,
+                   const std::vector<std::string> *EdgeSourceLabels = nullptr) {
     O << "\tNode" << ID << "[ ";
     if (!Attr.empty())
       O << Attr << ",";
@@ -325,7 +326,10 @@ template <typename GraphType>
 std::string WriteGraph(const GraphType &G, const Twine &Name,
                        bool ShortNames = false, const Twine &Title = "") {
   int FD;
-  std::string Filename = createGraphFilename(Name, FD);
+  // Windows can't always handle long paths, so limit the length of the name.
+  std::string N = Name.str();
+  N = N.substr(0, std::min<std::size_t>(N.size(), 140));
+  std::string Filename = createGraphFilename(N, FD);
   raw_fd_ostream O(FD, /*shouldClose=*/ true);
 
   if (FD == -1) {
@@ -351,7 +355,7 @@ void ViewGraph(const GraphType &G, const Twine &Name,
   if (Filename.empty())
     return;
 
-  DisplayGraph(Filename, true, Program);
+  DisplayGraph(Filename, false, Program);
 }
 
 } // End llvm namespace

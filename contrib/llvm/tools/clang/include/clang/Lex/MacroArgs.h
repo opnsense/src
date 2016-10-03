@@ -11,8 +11,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_MACROARGS_H
-#define LLVM_CLANG_MACROARGS_H
+#ifndef LLVM_CLANG_LEX_MACROARGS_H
+#define LLVM_CLANG_LEX_MACROARGS_H
 
 #include "clang/Basic/LLVM.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -52,10 +52,12 @@ class MacroArgs {
   /// ArgCache - This is a linked list of MacroArgs objects that the
   /// Preprocessor owns which we use to avoid thrashing malloc/free.
   MacroArgs *ArgCache;
-  
+
   MacroArgs(unsigned NumToks, bool varargsElided)
-    : NumUnexpArgTokens(NumToks), VarargsElided(varargsElided), ArgCache(0) {}
-  ~MacroArgs() {}
+    : NumUnexpArgTokens(NumToks), VarargsElided(varargsElided),
+      ArgCache(nullptr) {}
+  ~MacroArgs() = default;
+
 public:
   /// MacroArgs ctor function - Create a new MacroArgs object with the specified
   /// macro and argument info.

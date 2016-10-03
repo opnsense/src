@@ -63,7 +63,7 @@ Opcode::Dump (Stream *s, uint32_t min_byte_width)
 
     // Add spaces to make sure bytes dispay comes out even in case opcodes
     // aren't all the same size
-    if (bytes_written < min_byte_width)
+    if (static_cast<uint32_t>(bytes_written) < min_byte_width)
         bytes_written = s->Printf ("%*s", min_byte_width - bytes_written, "");
     return bytes_written;
 }
@@ -82,7 +82,7 @@ Opcode::GetDataByteOrder () const
         case Opcode::eType16:
         case Opcode::eType16_2:
         case Opcode::eType32:
-        case Opcode::eType64:    return lldb::endian::InlHostByteOrder();
+        case Opcode::eType64:    return endian::InlHostByteOrder();
         case Opcode::eTypeBytes:
             break;
     }

@@ -43,6 +43,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/sx.h>
 
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/ethernet.h>
 #include <net/if_types.h>
 #include <net/if_media.h>
@@ -154,7 +155,7 @@ ue_sysctl_parent(SYSCTL_HANDLER_ARGS)
 	const char *name;
 
 	name = device_get_nameunit(ue->ue_dev);
-	return SYSCTL_OUT(req, name, strlen(name));
+	return SYSCTL_OUT_STR(req, name);
 }
 
 int
@@ -579,7 +580,7 @@ uether_rxmbuf(struct usb_ether *ue, struct mbuf *m,
 	UE_LOCK_ASSERT(ue, MA_OWNED);
 
 	/* finalize mbuf */
-	ifp->if_ipackets++;
+	if_inc_counter(ifp, IFCOUNTER_IPACKETS, 1);
 	m->m_pkthdr.rcvif = ifp;
 	m->m_pkthdr.len = m->m_len = len;
 
@@ -602,14 +603,14 @@ uether_rxbuf(struct usb_ether *ue, struct usb_page_cache *pc,
 
 	m = uether_newbuf();
 	if (m == NULL) {
-		ifp->if_iqdrops++;
+		if_inc_counter(ifp, IFCOUNTER_IQDROPS, 1);
 		return (ENOMEM);
 	}
 
 	usbd_copy_out(pc, offset, mtod(m, uint8_t *), len);
 
 	/* finalize mbuf */
-	ifp->if_ipackets++;
+	if_inc_counter(ifp, IFCOUNTER_IPACKETS, 1);
 	m->m_pkthdr.rcvif = ifp;
 	m->m_pkthdr.len = m->m_len = len;
 
@@ -640,5 +641,9 @@ uether_rxflush(struct usb_ether *ue)
 	}
 }
 
-DECLARE_MODULE(uether, uether_mod, SI_SUB_PSEUDO, SI_ORDER_ANY);
+/*
+ * USB net drivers are run by DRIVER_MODULE() thus SI_SUB_DRIVERS,
+ * SI_ORDER_MIDDLE.  Run uether after that.
+ */
+DECLARE_MODULE(uether, uether_mod, SI_SUB_DRIVERS, SI_ORDER_ANY);
 MODULE_VERSION(uether, 1);

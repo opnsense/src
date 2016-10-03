@@ -35,43 +35,82 @@ public:
       OwnsOutputFile(OwnsOutputFile_), ShowAllHeaders(ShowAllHeaders_),
       ShowDepth(ShowDepth_), MSStyle(MSStyle_) {}
 
-  ~HeaderIncludesCallback() {
+  ~HeaderIncludesCallback() override {
     if (OwnsOutputFile)
       delete OutputFile;
   }
 
-  virtual void FileChanged(SourceLocation Loc, FileChangeReason Reason,
-                           SrcMgr::CharacteristicKind FileType,
-                           FileID PrevFID);
+  void FileChanged(SourceLocation Loc, FileChangeReason Reason,
+                   SrcMgr::CharacteristicKind FileType,
+                   FileID PrevFID) override;
 };
 }
 
-void clang::AttachHeaderIncludeGen(Preprocessor &PP, bool ShowAllHeaders,
+static void PrintHeaderInfo(raw_ostream *OutputFile, const char* Filename,
+                            bool ShowDepth, unsigned CurrentIncludeDepth,
+                            bool MSStyle) {
+    // Write to a temporary string to avoid unnecessary flushing on errs().
+    SmallString<512> Pathname(Filename);
+    if (!MSStyle)
+      Lexer::Stringify(Pathname);
+
+    SmallString<256> Msg;
+    if (MSStyle)
+      Msg += "Note: including file:";
+
+    if (ShowDepth) {
+      // The main source file is at depth 1, so skip one dot.
+      for (unsigned i = 1; i != CurrentIncludeDepth; ++i)
+        Msg += MSStyle ? ' ' : '.';
+
+      if (!MSStyle)
+        Msg += ' ';
+    }
+    Msg += Pathname;
+    Msg += '\n';
+
+    OutputFile->write(Msg.data(), Msg.size());
+    OutputFile->flush();
+}
+
+void clang::AttachHeaderIncludeGen(Preprocessor &PP,
+                                   const std::vector<std::string> &ExtraHeaders,
+                                   bool ShowAllHeaders,
                                    StringRef OutputPath, bool ShowDepth,
                                    bool MSStyle) {
-  raw_ostream *OutputFile = &llvm::errs();
+  raw_ostream *OutputFile = MSStyle ? &llvm::outs() : &llvm::errs();
   bool OwnsOutputFile = false;
 
   // Open the output file, if used.
   if (!OutputPath.empty()) {
-    std::string Error;
+    std::error_code EC;
     llvm::raw_fd_ostream *OS = new llvm::raw_fd_ostream(
-        OutputPath.str().c_str(), Error, llvm::sys::fs::F_Append);
-    if (!Error.empty()) {
-      PP.getDiagnostics().Report(
-        clang::diag::warn_fe_cc_print_header_failure) << Error;
+        OutputPath.str(), EC, llvm::sys::fs::F_Append | llvm::sys::fs::F_Text);
+    if (EC) {
+      PP.getDiagnostics().Report(clang::diag::warn_fe_cc_print_header_failure)
+          << EC.message();
       delete OS;
     } else {
       OS->SetUnbuffered();
-      OS->SetUseAtomicWrites(true);
       OutputFile = OS;
       OwnsOutputFile = true;
     }
   }
 
-  PP.addPPCallbacks(new HeaderIncludesCallback(&PP, ShowAllHeaders,
-                                               OutputFile, OwnsOutputFile,
-                                               ShowDepth, MSStyle));
+  // Print header info for extra headers, pretending they were discovered
+  // by the regular preprocessor. The primary use case is to support
+  // proper generation of Make / Ninja file dependencies for implicit includes,
+  // such as sanitizer blacklists. It's only important for cl.exe
+  // compatibility, the GNU way to generate rules is -M / -MM / -MD / -MMD.
+  for (auto Header : ExtraHeaders) {
+    PrintHeaderInfo(OutputFile, Header.c_str(), ShowDepth, 2, MSStyle);
+  }
+  PP.addPPCallbacks(llvm::make_unique<HeaderIncludesCallback>(&PP,
+                                                              ShowAllHeaders,
+                                                              OutputFile,
+                                                              OwnsOutputFile,
+                                                              ShowDepth,
+                                                              MSStyle));
 }
 
 void HeaderIncludesCallback::FileChanged(SourceLocation Loc,
@@ -109,26 +148,7 @@ void HeaderIncludesCallback::FileChanged(SourceLocation Loc,
   // Dump the header include information we are past the predefines buffer or
   // are showing all headers.
   if (ShowHeader && Reason == PPCallbacks::EnterFile) {
-    // Write to a temporary string to avoid unnecessary flushing on errs().
-    SmallString<512> Filename(UserLoc.getFilename());
-    if (!MSStyle)
-      Lexer::Stringify(Filename);
-
-    SmallString<256> Msg;
-    if (MSStyle)
-      Msg += "Note: including file:";
-
-    if (ShowDepth) {
-      // The main source file is at depth 1, so skip one dot.
-      for (unsigned i = 1; i != CurrentIncludeDepth; ++i)
-        Msg += MSStyle ? ' ' : '.';
-
-      if (!MSStyle)
-        Msg += ' ';
-    }
-    Msg += Filename;
-    Msg += '\n';
-
-    OutputFile->write(Msg.data(), Msg.size());
+    PrintHeaderInfo(OutputFile, UserLoc.getFilename(),
+                    ShowDepth, CurrentIncludeDepth, MSStyle);
   }
 }

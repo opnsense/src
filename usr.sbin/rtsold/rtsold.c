@@ -38,7 +38,6 @@
 
 #include <net/if.h>
 #include <net/if_dl.h>
-#include <net/if_var.h>
 
 #include <netinet/in.h>
 #include <netinet/icmp6.h>
@@ -58,9 +57,7 @@
 #include <err.h>
 #include <stdarg.h>
 #include <ifaddrs.h>
-#ifdef HAVE_POLL_H
 #include <poll.h>
-#endif
 
 #include "rtsold.h"
 
@@ -117,13 +114,7 @@ main(int argc, char **argv)
 	int s, ch, once = 0;
 	struct timespec *timeout;
 	const char *opts;
-#ifdef HAVE_POLL_H
 	struct pollfd set[2];
-#else
-	fd_set *fdsetp, *selectfdp;
-	int fdmasks;
-	int maxfd;
-#endif
 	int rtsock;
 	char *argv0;
 
@@ -251,40 +242,16 @@ main(int argc, char **argv)
 		warnmsg(LOG_ERR, __func__, "failed to open a socket");
 		exit(1);
 	}
-#ifdef HAVE_POLL_H
 	set[0].fd = s;
 	set[0].events = POLLIN;
-#else
-	maxfd = s;
-#endif
-
-#ifdef HAVE_POLL_H
 	set[1].fd = -1;
-#endif
 
 	if ((rtsock = rtsock_open()) < 0) {
 		warnmsg(LOG_ERR, __func__, "failed to open a socket");
 		exit(1);
 	}
-#ifdef HAVE_POLL_H
 	set[1].fd = rtsock;
 	set[1].events = POLLIN;
-#else
-	if (rtsock > maxfd)
-		maxfd = rtsock;
-#endif
-
-#ifndef HAVE_POLL_H
-	fdmasks = howmany(maxfd + 1, NFDBITS) * sizeof(fd_mask);
-	if ((fdsetp = malloc(fdmasks)) == NULL) {
-		warnmsg(LOG_ERR, __func__, "malloc");
-		exit(1);
-	}
-	if ((selectfdp = malloc(fdmasks)) == NULL) {
-		warnmsg(LOG_ERR, __func__, "malloc");
-		exit(1);
-	}
-#endif
 
 	/* configuration per interface */
 	if (ifinit()) {
@@ -325,18 +292,8 @@ main(int argc, char **argv)
 			fclose(fp);
 		}
 	}
-#ifndef HAVE_POLL_H
-	memset(fdsetp, 0, fdmasks);
-	FD_SET(s, fdsetp);
-	FD_SET(rtsock, fdsetp);
-#endif
 	while (1) {		/* main loop */
 		int e;
-
-#ifndef HAVE_POLL_H
-		memcpy(selectfdp, fdsetp, fdmasks);
-#endif
-
 #ifndef SMALL
 		if (do_dump) {	/* SIGUSR1 */
 			do_dump = 0;
@@ -361,11 +318,7 @@ main(int argc, char **argv)
 			if (ifi == NULL)
 				break;
 		}
-#ifdef HAVE_POLL_H
 		e = poll(set, 2, timeout ? (timeout->tv_sec * 1000 + timeout->tv_nsec / 1000 / 1000) : INFTIM);
-#else
-		e = select(maxfd + 1, selectfdp, NULL, NULL, timeout);
-#endif
 		if (e < 1) {
 			if (e < 0 && errno != EINTR) {
 				warnmsg(LOG_ERR, __func__, "select: %s",
@@ -375,17 +328,9 @@ main(int argc, char **argv)
 		}
 
 		/* packet reception */
-#ifdef HAVE_POLL_H
 		if (set[1].revents & POLLIN)
-#else
-		if (FD_ISSET(rtsock, selectfdp))
-#endif
 			rtsock_input(rtsock);
-#ifdef HAVE_POLL_H
 		if (set[0].revents & POLLIN)
-#else
-		if (FD_ISSET(s, selectfdp))
-#endif
 			rtsol_input(s);
 	}
 	/* NOTREACHED */
@@ -944,7 +889,7 @@ autoifprobe(void)
 			warnmsg(LOG_WARNING, __func__,
 				"multiple interfaces found");
 
-		a = (char **)realloc(argv, (n + 1) * sizeof(char **));
+		a = realloc(argv, (n + 1) * sizeof(char *));
 		if (a == NULL) {
 			warnmsg(LOG_ERR, __func__, "realloc");
 			exit(1);
@@ -959,7 +904,7 @@ autoifprobe(void)
 	}
 
 	if (n) {
-		a = (char **)realloc(argv, (n + 1) * sizeof(char **));
+		a = realloc(argv, (n + 1) * sizeof(char *));
 		if (a == NULL) {
 			warnmsg(LOG_ERR, __func__, "realloc");
 			exit(1);

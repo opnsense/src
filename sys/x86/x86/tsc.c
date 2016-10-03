@@ -59,34 +59,28 @@ static eventhandler_tag tsc_levels_tag, tsc_pre_tag, tsc_post_tag;
 
 SYSCTL_INT(_kern_timecounter, OID_AUTO, invariant_tsc, CTLFLAG_RDTUN,
     &tsc_is_invariant, 0, "Indicates whether the TSC is P-state invariant");
-TUNABLE_INT("kern.timecounter.invariant_tsc", &tsc_is_invariant);
 
 #ifdef SMP
 int	smp_tsc;
 SYSCTL_INT(_kern_timecounter, OID_AUTO, smp_tsc, CTLFLAG_RDTUN, &smp_tsc, 0,
     "Indicates whether the TSC is safe to use in SMP mode");
-TUNABLE_INT("kern.timecounter.smp_tsc", &smp_tsc);
 
 int	smp_tsc_adjust = 0;
 SYSCTL_INT(_kern_timecounter, OID_AUTO, smp_tsc_adjust, CTLFLAG_RDTUN,
     &smp_tsc_adjust, 0, "Try to adjust TSC on APs to match BSP");
-TUNABLE_INT("kern.timecounter.smp_tsc_adjust", &smp_tsc_adjust);
 #endif
 
 static int	tsc_shift = 1;
 SYSCTL_INT(_kern_timecounter, OID_AUTO, tsc_shift, CTLFLAG_RDTUN,
     &tsc_shift, 0, "Shift to pre-apply for the maximum TSC frequency");
-TUNABLE_INT("kern.timecounter.tsc_shift", &tsc_shift);
 
 static int	tsc_disabled;
 SYSCTL_INT(_machdep, OID_AUTO, disable_tsc, CTLFLAG_RDTUN, &tsc_disabled, 0,
     "Disable x86 Time Stamp Counter");
-TUNABLE_INT("machdep.disable_tsc", &tsc_disabled);
 
 static int	tsc_skip_calibration;
 SYSCTL_INT(_machdep, OID_AUTO, disable_tsc_calibration, CTLFLAG_RDTUN,
     &tsc_skip_calibration, 0, "Disable TSC frequency calibration");
-TUNABLE_INT("machdep.disable_tsc_calibration", &tsc_skip_calibration);
 
 static void tsc_freq_changed(void *arg, const struct cf_level *level,
     int status);
@@ -528,17 +522,22 @@ init_TSC_tc(void)
 	}
 
 	/*
-	 * We cannot use the TSC if it stops incrementing while idle.
 	 * Intel CPUs without a C-state invariant TSC can stop the TSC
-	 * in either C2 or C3.
+	 * in either C2 or C3.  Disable use of C2 and C3 while using
+	 * the TSC as the timecounter.  The timecounter can be changed
+	 * to enable C2 and C3.
+	 *
+	 * Note that the TSC is used as the cputicker for computing
+	 * thread runtime regardless of the timecounter setting, so
+	 * using an alternate timecounter and enabling C2 or C3 can
+	 * result incorrect runtimes for kernel idle threads (but not
+	 * for any non-idle threads).
 	 */
 	if (cpu_deepest_sleep >= 2 && cpu_vendor_id == CPU_VENDOR_INTEL &&
 	    (amd_pminfo & AMDPM_TSC_INVARIANT) == 0) {
-		tsc_timecounter.tc_quality = -1000;
 		tsc_timecounter.tc_flags |= TC_FLAGS_C2STOP;
 		if (bootverbose)
-			printf("TSC timecounter disabled: C2/C3 may halt it.\n");
-		goto init;
+			printf("TSC timecounter disables C2 and C3.\n");
 	}
 
 	/*
@@ -726,21 +725,22 @@ tsc_get_timecount_low_mfence(struct timecounter *tc)
 }
 
 uint32_t
-cpu_fill_vdso_timehands(struct vdso_timehands *vdso_th)
+cpu_fill_vdso_timehands(struct vdso_timehands *vdso_th, struct timecounter *tc)
 {
 
-	vdso_th->th_x86_shift = (int)(intptr_t)timecounter->tc_priv;
+	vdso_th->th_x86_shift = (int)(intptr_t)tc->tc_priv;
 	bzero(vdso_th->th_res, sizeof(vdso_th->th_res));
-	return (timecounter == &tsc_timecounter);
+	return (tc == &tsc_timecounter);
 }
 
 #ifdef COMPAT_FREEBSD32
 uint32_t
-cpu_fill_vdso_timehands32(struct vdso_timehands32 *vdso_th32)
+cpu_fill_vdso_timehands32(struct vdso_timehands32 *vdso_th32,
+    struct timecounter *tc)
 {
 
-	vdso_th32->th_x86_shift = (int)(intptr_t)timecounter->tc_priv;
+	vdso_th32->th_x86_shift = (int)(intptr_t)tc->tc_priv;
 	bzero(vdso_th32->th_res, sizeof(vdso_th32->th_res));
-	return (timecounter == &tsc_timecounter);
+	return (tc == &tsc_timecounter);
 }
 #endif

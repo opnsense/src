@@ -37,14 +37,15 @@ __FBSDID("$FreeBSD$");
 #include <sys/socketvar.h>
 #include <sys/sockopt.h>
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/route.h>
 #include <netinet/in.h>
 #include <netinet/in_pcb.h>
 #include <netinet/tcp.h>
-#include <netinet/tcp_var.h>
 #include <netinet/tcp_offload.h>
 #define	TCPOUTFLAGS
 #include <netinet/tcp_fsm.h>
+#include <netinet/tcp_var.h>
 #include <netinet/toecore.h>
 
 int registered_toedevs;

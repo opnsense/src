@@ -18,10 +18,17 @@ struct reg {
 	register_t pc;
 };
 
-/* Must match pcb.pcb_fpu */
 struct fpreg {
 	double fpreg[32];
 	double fpscr;
+};
+
+/* Must match pcb.pcb_vec */
+struct vmxreg {
+	uint32_t vr[32][4];
+	uint32_t pad[2];
+	uint32_t vrsave;
+	uint32_t vscr;
 };
 
 struct dbreg {
@@ -41,6 +48,10 @@ struct reg32 {
 
 struct fpreg32 {
 	struct fpreg data;
+};
+
+struct vmxreg32 {
+	struct vmxreg data;
 };
 
 struct dbreg32 {

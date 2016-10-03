@@ -51,7 +51,10 @@ x86_bootmethod(void)
 const char *
 default_scheme(void)
 {
-	return ("GPT");
+	if (strcmp(x86_bootmethod(), "UEFI") == 0)
+		return ("GPT");
+	else
+		return ("MBR");
 }
 
 int
@@ -96,7 +99,7 @@ bootpart_size(const char *scheme)
 	if (strcmp(x86_bootmethod(), "BIOS") == 0)
 		return (512*1024);
 	else 
-		return (800*1024);
+		return (200*1024*1024);
 
 	return (0);
 }

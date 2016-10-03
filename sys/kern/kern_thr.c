@@ -54,6 +54,8 @@ __FBSDID("$FreeBSD$");
 #include <sys/umtx.h>
 #include <sys/limits.h>
 
+#include <vm/vm_domain.h>
+
 #include <machine/frame.h>
 
 #include <security/audit/audit.h>
@@ -161,7 +163,7 @@ thr_new_initthr(struct thread *td, void *thunk)
 	stack.ss_sp = param->stack_base;
 	stack.ss_size = param->stack_size;
 	/* Set upcall address to user thread entry function. */
-	cpu_set_upcall_kse(td, param->start_func, param->arg, &stack);
+	cpu_set_upcall(td, param->start_func, param->arg, &stack);
 	/* Setup user TLS address and TLS pointer register. */
 	return (cpu_set_user_tls(td, param->tls_base));
 }
@@ -211,11 +213,13 @@ thread_create(struct thread *td, struct rtprio *rtp,
 	}
 
 #ifdef RACCT
-	PROC_LOCK(td->td_proc);
-	error = racct_add(p, RACCT_NTHR, 1);
-	PROC_UNLOCK(td->td_proc);
-	if (error != 0)
-		return (EPROCLIM);
+	if (racct_enable) {
+		PROC_LOCK(p);
+		error = racct_add(p, RACCT_NTHR, 1);
+		PROC_UNLOCK(p);
+		if (error != 0)
+			return (EPROCLIM);
+	}
 #endif
 
 	/* Initialize our td */
@@ -223,36 +227,42 @@ thread_create(struct thread *td, struct rtprio *rtp,
 	if (error)
 		goto fail;
 
-	cpu_set_upcall(newtd, td);
+	cpu_copy_thread(newtd, td);
 
 	bzero(&newtd->td_startzero,
 	    __rangeof(struct thread, td_startzero, td_endzero));
-	newtd->td_su = NULL;
 	bcopy(&td->td_startcopy, &newtd->td_startcopy,
 	    __rangeof(struct thread, td_startcopy, td_endcopy));
 	newtd->td_proc = td->td_proc;
-	newtd->td_ucred = crhold(td->td_ucred);
-	newtd->td_dbg_sc_code = td->td_dbg_sc_code;
-	newtd->td_dbg_sc_narg = td->td_dbg_sc_narg;
+	newtd->td_rb_list = newtd->td_rbp_list = newtd->td_rb_inact = 0;
+	thread_cow_get(newtd, td);
 
 	error = initialize_thread(newtd, thunk);
 	if (error != 0) {
+		thread_cow_free(newtd);
 		thread_free(newtd);
-		crfree(td->td_ucred);
 		goto fail;
 	}
 
-	PROC_LOCK(td->td_proc);
-	td->td_proc->p_flag |= P_HADTHREADS;
-	thread_link(newtd, p); 
+	PROC_LOCK(p);
+	p->p_flag |= P_HADTHREADS;
+	thread_link(newtd, p);
 	bcopy(p->p_comm, newtd->td_name, sizeof(newtd->td_name));
-	newtd->td_pax = p->p_pax;
 	thread_lock(td);
 	/* let the scheduler know about these things. */
 	sched_fork_thread(td, newtd);
 	thread_unlock(td);
 	if (P_SHOULDSTOP(p))
 		newtd->td_flags |= TDF_ASTPENDING | TDF_NEEDSUSPCHK;
+	if (p->p_flag2 & P2_LWP_EVENTS)
+		newtd->td_dbgflags |= TDB_BORN;
+
+	/*
+	 * Copy the existing thread VM policy into the new thread.
+	 */
+	vm_domain_policy_localcopy(&newtd->td_vm_dom_policy,
+	    &td->td_vm_dom_policy);
+
 	PROC_UNLOCK(p);
 
 	tidhash_add(newtd);
@@ -299,6 +309,8 @@ sys_thr_exit(struct thread *td, struct thr_exit_args *uap)
     /* long *state */
 {
 
+	umtx_thread_exit(td);
+
 	/* Signal userland that it can free the stack. */
 	if ((void *)uap->state != NULL) {
 		suword_lwpid(uap->state, 1);
@@ -315,29 +327,53 @@ kern_thr_exit(struct thread *td)
 
 	p = td->td_proc;
 
-	rw_wlock(&tidhash_lock);
+	/*
+	 * If all of the threads in a process call this routine to
+	 * exit (e.g. all threads call pthread_exit()), exactly one
+	 * thread should return to the caller to terminate the process
+	 * instead of the thread.
+	 *
+	 * Checking p_numthreads alone is not sufficient since threads
+	 * might be committed to terminating while the PROC_LOCK is
+	 * dropped in either ptracestop() or while removing this thread
+	 * from the tidhash.  Instead, the p_pendingexits field holds
+	 * the count of threads in either of those states and a thread
+	 * is considered the "last" thread if all of the other threads
+	 * in a process are already terminating.
+	 */
 	PROC_LOCK(p);
-
-	if (p->p_numthreads != 1) {
-		racct_sub(p, RACCT_NTHR, 1);
-		LIST_REMOVE(td, td_hash);
-		rw_wunlock(&tidhash_lock);
-		tdsigcleanup(td);
-		umtx_thread_exit(td);
-		PROC_SLOCK(p);
-		thread_stopped(p);
-		thread_exit();
-		/* NOTREACHED */
+	if (p->p_numthreads == p->p_pendingexits + 1) {
+		/*
+		 * Ignore attempts to shut down last thread in the
+		 * proc.  This will actually call _exit(2) in the
+		 * usermode trampoline when it returns.
+		 */
+		PROC_UNLOCK(p);
+		return (0);
 	}
 
-	/*
-	 * Ignore attempts to shut down last thread in the proc.  This
-	 * will actually call _exit(2) in the usermode trampoline when
-	 * it returns.
-	 */
+	p->p_pendingexits++;
+	td->td_dbgflags |= TDB_EXIT;
+	if (p->p_flag & P_TRACED && p->p_flag2 & P2_LWP_EVENTS)
+		ptracestop(td, SIGTRAP);
 	PROC_UNLOCK(p);
-	rw_wunlock(&tidhash_lock);
-	return (0);
+	tidhash_remove(td);
+	PROC_LOCK(p);
+	p->p_pendingexits--;
+
+	/*
+	 * The check above should prevent all other threads from this
+	 * process from exiting while the PROC_LOCK is dropped, so
+	 * there must be at least one other thread other than the
+	 * current thread.
+	 */
+	KASSERT(p->p_numthreads > 1, ("too few threads"));
+	racct_sub(p, RACCT_NTHR, 1);
+	tdsigcleanup(td);
+	PROC_SLOCK(p);
+	thread_stopped(p);
+	thread_exit();
+	/* NOTREACHED */
 }
 
 int

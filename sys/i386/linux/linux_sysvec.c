@@ -29,8 +29,6 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
-#include "opt_pax.h"
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/exec.h>
@@ -43,7 +41,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/malloc.h>
 #include <sys/module.h>
 #include <sys/mutex.h>
-#include <sys/pax.h>
 #include <sys/proc.h>
 #include <sys/signalvar.h>
 #include <sys/syscallsubr.h>
@@ -187,7 +184,7 @@ static int _bsd_to_linux_trapcode[] = {
 	15			/* 30 T_RESERVED */
 };
 #define bsd_to_linux_trapcode(code) \
-    ((code)<sizeof(_bsd_to_linux_trapcode)/sizeof(*_bsd_to_linux_trapcode)? \
+    ((code)<nitems(_bsd_to_linux_trapcode)? \
      _bsd_to_linux_trapcode[(code)]: \
      LINUX_T_UNKNOWN)
 
@@ -247,14 +244,14 @@ elf_linux_fixup(register_t **stack_base, struct image_params *imgp)
 	    ("unsafe elf_linux_fixup(), should be curproc"));
 
 	p = imgp->proc;
-	arginfo = (struct ps_strings *)p->p_psstrings;
 	issetugid = imgp->proc->p_flag & P_SUGID ? 1 : 0;
+	arginfo = (struct ps_strings *)p->p_sysent->sv_psstrings;
 	uplatform = (Elf32_Addr *)((caddr_t)arginfo - linux_szplatform);
 	args = (Elf32_Auxargs *)imgp->auxargs;
 	pos = *stack_base + (imgp->args->argc + imgp->args->envc + 2);
 
 	AUXARGS_ENTRY(pos, LINUX_AT_SYSINFO_EHDR,
-	    imgp->proc->p_shared_page_base);
+	    imgp->proc->p_sysent->sv_shared_page_base);
 	AUXARGS_ENTRY(pos, LINUX_AT_SYSINFO, linux_vsyscall);
 	AUXARGS_ENTRY(pos, LINUX_AT_HWCAP, cpu_feature);
 
@@ -319,11 +316,11 @@ linux_copyout_strings(struct image_params *imgp)
 		execpath_len = strlen(imgp->execpath) + 1;
 	else
 		execpath_len = 0;
-	arginfo = (struct ps_strings *)p->p_psstrings;
+	arginfo = (struct ps_strings *)p->p_sysent->sv_psstrings;
 	destp = (caddr_t)arginfo - SPARE_USRSPACE - linux_szplatform -
 	    roundup(sizeof(canary), sizeof(char *)) -
 	    roundup(execpath_len, sizeof(char *)) -
-	    roundup((ARG_MAX - imgp->args->stringspace), sizeof(char *));
+	    roundup(ARG_MAX - imgp->args->stringspace, sizeof(char *));
 
 	/*
 	 * install LINUX_PLATFORM
@@ -454,7 +451,7 @@ linux_rt_sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	 */
 	if ((td->td_pflags & TDP_ALTSTACK) && !oonstack &&
 	    SIGISMEMBER(psp->ps_sigonstack, sig)) {
-		fp = (struct l_rt_sigframe *)(td->td_sigstk.ss_sp +
+		fp = (struct l_rt_sigframe *)((uintptr_t)td->td_sigstk.ss_sp +
 		    td->td_sigstk.ss_size - sizeof(struct l_rt_sigframe));
 	} else
 		fp = (struct l_rt_sigframe *)regs->tf_esp - 1;
@@ -594,7 +591,7 @@ linux_sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	 */
 	if ((td->td_pflags & TDP_ALTSTACK) && !oonstack &&
 	    SIGISMEMBER(psp->ps_sigonstack, sig)) {
-		fp = (struct l_sigframe *)(td->td_sigstk.ss_sp +
+		fp = (struct l_sigframe *)((uintptr_t)td->td_sigstk.ss_sp +
 		    td->td_sigstk.ss_size - sizeof(struct l_sigframe));
 	} else
 		fp = (struct l_sigframe *)regs->tf_esp - 1;
@@ -961,8 +958,6 @@ struct sysentvec linux_sysvec = {
 	.sv_size	= LINUX_SYS_MAXSYSCALL,
 	.sv_table	= linux_sysent,
 	.sv_mask	= 0,
-	.sv_sigsize	= 0,
-	.sv_sigtbl	= NULL,
 	.sv_errsize	= ELAST + 1,
 	.sv_errtbl	= bsd_to_linux_errno,
 	.sv_transtrap	= translate_traps,
@@ -970,7 +965,6 @@ struct sysentvec linux_sysvec = {
 	.sv_sendsig	= linux_sendsig,
 	.sv_sigcode	= &_binary_linux_locore_o_start,
 	.sv_szsigcode	= &linux_szsigcode,
-	.sv_prepsyscall	= NULL,
 	.sv_name	= "Linux a.out",
 	.sv_coredump	= NULL,
 	.sv_imgact_try	= exec_linux_imgact_try,
@@ -1001,8 +995,6 @@ struct sysentvec elf_linux_sysvec = {
 	.sv_size	= LINUX_SYS_MAXSYSCALL,
 	.sv_table	= linux_sysent,
 	.sv_mask	= 0,
-	.sv_sigsize	= 0,
-	.sv_sigtbl	= NULL,
 	.sv_errsize	= ELAST + 1,
 	.sv_errtbl	= bsd_to_linux_errno,
 	.sv_transtrap	= translate_traps,
@@ -1010,7 +1002,6 @@ struct sysentvec elf_linux_sysvec = {
 	.sv_sendsig	= linux_sendsig,
 	.sv_sigcode	= &_binary_linux_locore_o_start,
 	.sv_szsigcode	= &linux_szsigcode,
-	.sv_prepsyscall	= NULL,
 	.sv_name	= "Linux ELF",
 	.sv_coredump	= elf32_coredump,
 	.sv_imgact_try	= exec_linux_imgact_try,
@@ -1034,7 +1025,6 @@ struct sysentvec elf_linux_sysvec = {
 	.sv_schedtail	= linux_schedtail,
 	.sv_thread_detach = linux_thread_detach,
 	.sv_trap	= NULL,
-	.sv_pax_aslr_init	= pax_aslr_init_vmspace,
 };
 
 static void
@@ -1207,3 +1197,4 @@ static moduledata_t linux_elf_mod = {
 };
 
 DECLARE_MODULE_TIED(linuxelf, linux_elf_mod, SI_SUB_EXEC, SI_ORDER_ANY);
+FEATURE(linux, "Linux 32bit support");

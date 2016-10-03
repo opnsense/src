@@ -133,7 +133,7 @@
 #define		PREFETCH_CTRL_DATA_PREFETCH	(1 << 28)
 #define		PREFETCH_CTRL_INSTR_PREFETCH	(1 << 29)
 #define		PREFETCH_CTRL_DL		(1 << 30)
-#define PL310_POWER_CTRL		0xF60
+#define PL310_POWER_CTRL		0xF80
 #define		POWER_CTRL_ENABLE_GATING	(1 << 0)
 #define		POWER_CTRL_ENABLE_STANDBY	(1 << 1)
 
@@ -155,7 +155,7 @@ struct pl310_softc {
  *	pl310_write4 - write a 32-bit value from the PL310 registers
  *	@off: byte offset within the register set to read from
  *	@val: the value to write into the register
- *	
+ *
  *
  *	LOCKING:
  *	None
@@ -177,7 +177,6 @@ pl310_write4(struct pl310_softc *sc, bus_size_t off, uint32_t val)
 	bus_write_4(sc->sc_mem_res, off, val);
 }
 
-void pl310_print_config(struct pl310_softc *sc);
 void pl310_set_ram_latency(struct pl310_softc *sc, uint32_t which_reg,
     uint32_t read, uint32_t write, uint32_t setup);
 

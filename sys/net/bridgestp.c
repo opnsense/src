@@ -43,6 +43,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/socket.h>
 #include <sys/sockio.h>
 #include <sys/kernel.h>
+#include <sys/malloc.h>
 #include <sys/callout.h>
 #include <sys/module.h>
 #include <sys/proc.h>
@@ -51,6 +52,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/taskqueue.h>
 
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_dl.h>
 #include <net/if_types.h>
 #include <net/if_llc.h>
@@ -787,7 +789,7 @@ bstp_assign_roles(struct bstp_state *bs)
 	bs->bs_root_htime = bs->bs_bridge_htime;
 	bs->bs_root_port = NULL;
 
-	/* check if any recieved info supersedes us */
+	/* check if any received info supersedes us */
 	LIST_FOREACH(bp, &bs->bs_bplist, bp_next) {
 		if (bp->bp_infois != BSTP_INFO_RECEIVED)
 			continue;

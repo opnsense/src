@@ -42,6 +42,8 @@ __FBSDID("$FreeBSD$");
 #include <sys/module.h>
 #include <sys/kernel.h>
 #include <sys/lock.h>
+#include <sys/malloc.h>
+#include <sys/mbuf.h>
 #include <sys/mutex.h>
 #include <sys/errno.h>
 
@@ -52,9 +54,11 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/socket.h>
  
+#include <net/ethernet.h>
 #include <net/if.h>
 #include <net/if_media.h>
 #include <net/if_arp.h>
+#include <net/route.h>
 
 #include <net80211/ieee80211_var.h>
 

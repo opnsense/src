@@ -1,6 +1,6 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 LIB=	llvmcore
 
@@ -9,33 +9,41 @@ SRCS=	AsmWriter.cpp \
 	Attributes.cpp \
 	AutoUpgrade.cpp \
 	BasicBlock.cpp \
+	Comdat.cpp \
 	ConstantFold.cpp \
+	ConstantRange.cpp \
 	Constants.cpp \
 	Core.cpp \
 	DIBuilder.cpp \
 	DataLayout.cpp \
 	DebugInfo.cpp \
+	DebugInfoMetadata.cpp \
 	DebugLoc.cpp \
+	DiagnosticInfo.cpp \
+	DiagnosticPrinter.cpp \
 	Dominators.cpp \
 	Function.cpp \
+	FunctionInfo.cpp \
 	GCOV.cpp \
 	GVMaterializer.cpp \
 	Globals.cpp \
 	IRBuilder.cpp \
+	IRPrintingPasses.cpp \
 	InlineAsm.cpp \
 	Instruction.cpp \
 	Instructions.cpp \
 	IntrinsicInst.cpp \
 	LLVMContext.cpp \
 	LLVMContextImpl.cpp \
-	LeakDetector.cpp \
 	LegacyPassManager.cpp \
+	MDBuilder.cpp \
+	Mangler.cpp \
 	Metadata.cpp \
 	Module.cpp \
+	Operator.cpp \
 	Pass.cpp \
-	PassManager.cpp \
 	PassRegistry.cpp \
-	PrintModulePass.cpp \
+	Statepoint.cpp \
 	Type.cpp \
 	TypeFinder.cpp \
 	Use.cpp \
@@ -45,6 +53,12 @@ SRCS=	AsmWriter.cpp \
 	ValueTypes.cpp \
 	Verifier.cpp
 
-TGHDRS=	Intrinsics
+.if ${MK_CLANG_EXTRAS} != "no"
+SRCS+=	PassManager.cpp
+.endif
+
+TGHDRS=	Attributes \
+	AttributesCompatFunc \
+	Intrinsics
 
 .include "../clang.lib.mk"

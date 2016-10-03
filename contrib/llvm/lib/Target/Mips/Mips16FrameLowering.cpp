@@ -15,6 +15,8 @@
 #include "MCTargetDesc/MipsBaseInfo.h"
 #include "Mips16InstrInfo.h"
 #include "MipsInstrInfo.h"
+#include "MipsRegisterInfo.h"
+#include "MipsSubtarget.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -27,13 +29,21 @@
 
 using namespace llvm;
 
-void Mips16FrameLowering::emitPrologue(MachineFunction &MF) const {
-  MachineBasicBlock &MBB = MF.front();
+Mips16FrameLowering::Mips16FrameLowering(const MipsSubtarget &STI)
+    : MipsFrameLowering(STI, STI.stackAlignment()) {}
+
+void Mips16FrameLowering::emitPrologue(MachineFunction &MF,
+                                       MachineBasicBlock &MBB) const {
+  assert(&MF.front() == &MBB && "Shrink-wrapping not yet supported");
   MachineFrameInfo *MFI = MF.getFrameInfo();
   const Mips16InstrInfo &TII =
-    *static_cast<const Mips16InstrInfo*>(MF.getTarget().getInstrInfo());
+      *static_cast<const Mips16InstrInfo *>(STI.getInstrInfo());
   MachineBasicBlock::iterator MBBI = MBB.begin();
-  DebugLoc dl = MBBI != MBB.end() ? MBBI->getDebugLoc() : DebugLoc();
+
+  // Debug location must be unknown since the first debug location is used
+  // to determine the end of the prologue.
+  DebugLoc dl;
+
   uint64_t StackSize = MFI->getStackSize();
 
   // No need to allocate space on the stack.
@@ -47,30 +57,30 @@ void Mips16FrameLowering::emitPrologue(MachineFunction &MF) const {
   TII.makeFrame(Mips::SP, StackSize, MBB, MBBI);
 
   // emit ".cfi_def_cfa_offset StackSize"
-  MCSymbol *AdjustSPLabel = MMI.getContext().CreateTempSymbol();
-  BuildMI(MBB, MBBI, dl,
-          TII.get(TargetOpcode::PROLOG_LABEL)).addSym(AdjustSPLabel);
-  MMI.addFrameInst(
-      MCCFIInstruction::createDefCfaOffset(AdjustSPLabel, -StackSize));
+  unsigned CFIIndex = MMI.addFrameInst(
+      MCCFIInstruction::createDefCfaOffset(nullptr, -StackSize));
+  BuildMI(MBB, MBBI, dl, TII.get(TargetOpcode::CFI_INSTRUCTION))
+      .addCFIIndex(CFIIndex);
 
-  MCSymbol *CSLabel = MMI.getContext().CreateTempSymbol();
-  BuildMI(MBB, MBBI, dl,
-          TII.get(TargetOpcode::PROLOG_LABEL)).addSym(CSLabel);
-  unsigned S2 = MRI->getDwarfRegNum(Mips::S2, true);
-  MMI.addFrameInst(MCCFIInstruction::createOffset(CSLabel, S2, -8));
+  const std::vector<CalleeSavedInfo> &CSI = MFI->getCalleeSavedInfo();
 
-  unsigned S1 = MRI->getDwarfRegNum(Mips::S1, true);
-  MMI.addFrameInst(MCCFIInstruction::createOffset(CSLabel, S1, -12));
+  if (CSI.size()) {
+    const std::vector<CalleeSavedInfo> &CSI = MFI->getCalleeSavedInfo();
 
-  unsigned S0 = MRI->getDwarfRegNum(Mips::S0, true);
-  MMI.addFrameInst(MCCFIInstruction::createOffset(CSLabel, S0, -16));
-
-  unsigned RA = MRI->getDwarfRegNum(Mips::RA, true);
-  MMI.addFrameInst(MCCFIInstruction::createOffset(CSLabel, RA, -4));
-
+    for (std::vector<CalleeSavedInfo>::const_iterator I = CSI.begin(),
+         E = CSI.end(); I != E; ++I) {
+      int64_t Offset = MFI->getObjectOffset(I->getFrameIdx());
+      unsigned Reg = I->getReg();
+      unsigned DReg = MRI->getDwarfRegNum(Reg, true);
+      unsigned CFIIndex = MMI.addFrameInst(
+          MCCFIInstruction::createOffset(nullptr, DReg, Offset));
+      BuildMI(MBB, MBBI, dl, TII.get(TargetOpcode::CFI_INSTRUCTION))
+          .addCFIIndex(CFIIndex);
+    }
+  }
   if (hasFP(MF))
     BuildMI(MBB, MBBI, dl, TII.get(Mips::MoveR3216), Mips::S0)
-      .addReg(Mips::SP);
+      .addReg(Mips::SP).setMIFlag(MachineInstr::FrameSetup);
 
 }
 
@@ -79,7 +89,7 @@ void Mips16FrameLowering::emitEpilogue(MachineFunction &MF,
   MachineBasicBlock::iterator MBBI = MBB.getLastNonDebugInstr();
   MachineFrameInfo *MFI = MF.getFrameInfo();
   const Mips16InstrInfo &TII =
-    *static_cast<const Mips16InstrInfo*>(MF.getTarget().getInstrInfo());
+      *static_cast<const Mips16InstrInfo *>(STI.getInstrInfo());
   DebugLoc dl = MBBI->getDebugLoc();
   uint64_t StackSize = MFI->getStackSize();
 
@@ -101,7 +111,7 @@ spillCalleeSavedRegisters(MachineBasicBlock &MBB,
                           const std::vector<CalleeSavedInfo> &CSI,
                           const TargetRegisterInfo *TRI) const {
   MachineFunction *MF = MBB.getParent();
-  MachineBasicBlock *EntryBlock = MF->begin();
+  MachineBasicBlock *EntryBlock = &MF->front();
 
   //
   // Registers RA, S0,S1 are the callee saved registers and they
@@ -138,25 +148,6 @@ bool Mips16FrameLowering::restoreCalleeSavedRegisters(MachineBasicBlock &MBB,
   return true;
 }
 
-// Eliminate ADJCALLSTACKDOWN, ADJCALLSTACKUP pseudo instructions
-void Mips16FrameLowering::
-eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
-                              MachineBasicBlock::iterator I) const {
-  if (!hasReservedCallFrame(MF)) {
-    int64_t Amount = I->getOperand(0).getImm();
-
-    if (I->getOpcode() == Mips::ADJCALLSTACKDOWN)
-      Amount = -Amount;
-
-    const Mips16InstrInfo &TII =
-      *static_cast<const Mips16InstrInfo*>(MF.getTarget().getInstrInfo());
-
-    TII.adjustStackPtr(Mips::SP, Amount, MBB, I);
-  }
-
-  MBB.erase(I);
-}
-
 bool
 Mips16FrameLowering::hasReservedCallFrame(const MachineFunction &MF) const {
   const MachineFrameInfo *MFI = MF.getFrameInfo();
@@ -165,13 +156,19 @@ Mips16FrameLowering::hasReservedCallFrame(const MachineFunction &MF) const {
   return isInt<15>(MFI->getMaxCallFrameSize()) && !MFI->hasVarSizedObjects();
 }
 
-void Mips16FrameLowering::
-processFunctionBeforeCalleeSavedScan(MachineFunction &MF,
-                                     RegScavenger *RS) const {
-  MF.getRegInfo().setPhysRegUsed(Mips::RA);
-  MF.getRegInfo().setPhysRegUsed(Mips::S0);
-  MF.getRegInfo().setPhysRegUsed(Mips::S1);
-  MF.getRegInfo().setPhysRegUsed(Mips::S2);
+void Mips16FrameLowering::determineCalleeSaves(MachineFunction &MF,
+                                               BitVector &SavedRegs,
+                                               RegScavenger *RS) const {
+  TargetFrameLowering::determineCalleeSaves(MF, SavedRegs, RS);
+  const Mips16InstrInfo &TII =
+      *static_cast<const Mips16InstrInfo *>(STI.getInstrInfo());
+  const MipsRegisterInfo &RI = TII.getRegisterInfo();
+  const BitVector Reserved = RI.getReservedRegs(MF);
+  bool SaveS2 = Reserved[Mips::S2];
+  if (SaveS2)
+    SavedRegs.set(Mips::S2);
+  if (hasFP(MF))
+    SavedRegs.set(Mips::S0);
 }
 
 const MipsFrameLowering *

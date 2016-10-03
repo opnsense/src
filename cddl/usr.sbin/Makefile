@@ -1,12 +1,13 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 SUBDIR=	${_dtrace} \
-	${_dtruss} \
 	${_lockstat} \
+	${_plockstat} \
 	${_tests} \
 	${_zdb} \
+	${_zfsd} \
 	${_zhack}
 
 .if ${MK_TESTS} != "no"
@@ -18,11 +19,20 @@ _tests=	tests
 _zdb=	zdb
 _zhack=	zhack
 .endif
+. if ${MK_CXX} != "no"
+_zfsd=	zfsd
+. endif
 .endif
 
 .if ${MACHINE_ARCH} == "amd64" || ${MACHINE_ARCH} == "i386"
 _dtrace=	dtrace
-_dtruss=	dtruss
+_lockstat=	lockstat
+_plockstat=	plockstat
+.endif
+
+.if ${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "arm" || \
+    ${MACHINE_CPUARCH} == "riscv"
+_dtrace=	dtrace
 _lockstat=	lockstat
 .endif
 
@@ -32,7 +42,6 @@ _dtrace=	dtrace
 
 .if ${MACHINE_CPUARCH} == "powerpc"
 _dtrace=	dtrace
-_dtruss=	dtruss
 _lockstat=	lockstat
 .endif
 

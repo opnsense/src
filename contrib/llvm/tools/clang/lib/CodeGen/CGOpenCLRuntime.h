@@ -13,8 +13,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef CLANG_CODEGEN_OPENCLRUNTIME_H
-#define CLANG_CODEGEN_OPENCLRUNTIME_H
+#ifndef LLVM_CLANG_LIB_CODEGEN_CGOPENCLRUNTIME_H
+#define LLVM_CLANG_LIB_CODEGEN_CGOPENCLRUNTIME_H
 
 #include "clang/AST/Type.h"
 #include "llvm/IR/Type.h"
@@ -32,9 +32,10 @@ class CodeGenModule;
 class CGOpenCLRuntime {
 protected:
   CodeGenModule &CGM;
+  llvm::Type *PipeTy;
 
 public:
-  CGOpenCLRuntime(CodeGenModule &CGM) : CGM(CGM) {}
+  CGOpenCLRuntime(CodeGenModule &CGM) : CGM(CGM), PipeTy(nullptr) {}
   virtual ~CGOpenCLRuntime();
 
   /// Emit the IR required for a work-group-local variable declaration, and add
@@ -44,6 +45,8 @@ public:
                                          const VarDecl &D);
 
   virtual llvm::Type *convertOpenCLSpecificType(const Type *T);
+
+  virtual llvm::Type *getPipeType();
 };
 
 }

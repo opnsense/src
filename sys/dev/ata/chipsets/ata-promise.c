@@ -191,7 +191,7 @@ ata_promise_probe(device_t dev)
 	!BUS_READ_IVAR(device_get_parent(GRANDPARENT(dev)),
 		       GRANDPARENT(dev), PCI_IVAR_DEVID, &devid) &&
 	((devid == ATA_DEC_21150) || (devid == ATA_DEC_21150_1))) {
-	static long start = 0, end = 0;
+	static rman_res_t start = 0, end = 0;
 
 	if (pci_get_slot(dev) == 1) {
 	    bus_get_resource(dev, SYS_RES_IRQ, 0, &start, &end);
@@ -957,9 +957,9 @@ ata_promise_mio_softreset(device_t dev, int port)
 
     /* wait for BUSY to go inactive */
     for (timeout = 0; timeout < 100; timeout++) {
-	u_int8_t err, stat;
+	u_int8_t /* err, */ stat;
 
-	err = ATA_IDX_INB(ch, ATA_ERROR);
+	/* err = */ ATA_IDX_INB(ch, ATA_ERROR);
 	stat = ATA_IDX_INB(ch, ATA_STATUS);
 
 	//if (stat == err && timeout > (stat & ATA_S_BUSY ? 100 : 10))

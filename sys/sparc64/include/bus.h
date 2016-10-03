@@ -58,7 +58,7 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
- * 	from: NetBSD: bus.h,v 1.58 2008/04/28 20:23:36 martin Exp
+ *	from: NetBSD: bus.h,v 1.58 2008/04/28 20:23:36 martin Exp
  *	and
  *	from: FreeBSD: src/sys/alpha/include/bus.h,v 1.9 2001/01/09
  *
@@ -98,17 +98,13 @@ extern const int bus_stream_asi[];
 #define	BUS_SPACE_MAXSIZE	0xFFFFFFFFFFFFFFFF
 #define	BUS_SPACE_MAXADDR_24BIT	0xFFFFFF
 #define	BUS_SPACE_MAXADDR_32BIT 0xFFFFFFFF
-#define	BUS_SPACE_MAXADDR	0xFFFFFFFF
+#define	BUS_SPACE_MAXADDR	0xFFFFFFFFFFFFFFFF
 
 #define	BUS_SPACE_UNRESTRICTED	(~0)
 
 struct bus_space_tag {
 	void		*bst_cookie;
-	bus_space_tag_t	bst_parent;
 	int		bst_type;
-
-	void		(*bst_bus_barrier)(bus_space_tag_t, bus_space_handle_t,
-			    bus_size_t, bus_size_t, int);
 };
 
 /*
@@ -131,18 +127,18 @@ int bus_space_map(bus_space_tag_t tag, bus_addr_t address, bus_size_t size,
 void bus_space_unmap(bus_space_tag_t tag, bus_space_handle_t handle,
     bus_size_t size);
 
-/* This macro finds the first "upstream" implementation of method `f' */
-#define	_BS_CALL(t,f)							\
-	while (t->f == NULL)						\
-		t = t->bst_parent;					\
-	return (*(t)->f)
-
 static __inline void
-bus_space_barrier(bus_space_tag_t t, bus_space_handle_t h, bus_size_t o,
-    bus_size_t s, int f)
+bus_space_barrier(bus_space_tag_t t __unused, bus_space_handle_t h __unused,
+    bus_size_t o __unused, bus_size_t s __unused, int f __unused)
 {
 
-	_BS_CALL(t, bst_bus_barrier)(t, h, o, s, f);
+	/*
+	 * We have lots of alternatives depending on whether we're
+	 * synchronizing loads with loads, loads with stores, stores
+	 * with loads, or stores with stores.  The only ones that seem
+	 * generic are #Sync and #MemIssue.  We use #Sync for safety.
+	 */
+	membar(Sync);
 }
 
 static __inline int

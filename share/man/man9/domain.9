@@ -26,7 +26,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd December 7, 2012
+.Dd June 1, 2016
 .Dt DOMAIN 9
 .Os
 .Sh NAME
@@ -82,10 +82,9 @@ struct domain {
 		(void **, int);
 	int	(*dom_rtdetach)		/* clean up routing table */
 		(void **, int);
-	int	dom_rtoffset;		/* an arg to rtattach, in bits */
-	int	dom_maxrtkey;		/* for routing layer */
 	void	*(*dom_ifattach)(struct ifnet *);
 	void	(*dom_ifdetach)(struct ifnet *, void *);
+	int	(*dom_ifmtu)(struct ifnet *);
 					/* af-dependent data on ifnet */
 };
 .Ed
@@ -106,12 +105,11 @@ struct protosw {
 	pr_ctloutput_t *pr_ctloutput;	/* control output (from above) */
 /* utility hooks */
 	pr_init_t *pr_init;
-	pr_destroy_t *pr_destroy;
 	pr_fasttimo_t *pr_fasttimo;	/* fast timeout (200ms) */
 	pr_slowtimo_t *pr_slowtimo;	/* slow timeout (500ms) */
 	pr_drain_t *pr_drain;		/* flush any excess space possible */
 
-	struct	pr_usrreqs *pr_usrreqs;	/* supersedes pr_usrreq() */
+	struct	pr_usrreqs *pr_usrreqs;	/* user-protocol hook */
 };
 .Ed
 .Pp
@@ -240,4 +238,4 @@ types if the domain has a default raw protocol.
 .Xr socket 2
 .Sh AUTHORS
 This manual page was written by
-.An Chad David Aq davidc@acns.ab.ca .
+.An Chad David Aq Mt davidc@acns.ab.ca .

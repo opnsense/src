@@ -42,14 +42,17 @@
 #define	CONN_DIGEST_NONE		0
 #define	CONN_DIGEST_CRC32C		1
 
-#define CONN_MUTUAL_CHALLENGE_LEN	1024
+#define	CONN_MUTUAL_CHALLENGE_LEN	1024
 #define	SOCKBUF_SIZE			1048576
+#define	MAX_BURST_LENGTH		(256 * 1024)
+#define	FIRST_BURST_LENGTH		(128 * 1024)
 
 struct connection {
 	int			conn_iscsi_fd;
 	int			conn_socket;
 	unsigned int		conn_session_id;
 	struct iscsi_session_conf	conn_conf;
+	struct iscsi_session_limits	conn_limits;
 	char			conn_target_alias[ISCSI_ADDR_LEN];
 	uint8_t			conn_isid[6];
 	uint16_t		conn_tsih;

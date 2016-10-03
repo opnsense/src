@@ -659,6 +659,8 @@
 .as doc-str-St--susv2          " (\*[Lq]\*[doc-Tn-font-size]SUSv2\*[doc-str-St]\*[Rq])
 .ds doc-str-St--susv3          Version\~3 of the Single \*[doc-Tn-font-size]UNIX\*[doc-str-St] Specification
 .as doc-str-St--susv3          " (\*[Lq]\*[doc-Tn-font-size]SUSv3\*[doc-str-St]\*[Rq])
+.ds doc-str-St--susv4          Version\~4 of the Single \*[doc-Tn-font-size]UNIX\*[doc-str-St] Specification
+.as doc-str-St--susv4          " (\*[Lq]\*[doc-Tn-font-size]SUSv4\*[doc-str-St]\*[Rq])
 .ds doc-str-St--svid4          System\~V Interface Definition, Fourth Edition
 .as doc-str-St--svid4          " (\*[Lq]\*[doc-Tn-font-size]SVID\*[doc-str-St]\^4\*[Rq])
 .ds doc-str-St--xbd5           \*[doc-Tn-font-size]X/Open\*[doc-str-St] Base Definitions Issue\~5
@@ -780,7 +782,6 @@
 .ds doc-str-Lb-libfetch    File Transfer Library for URLs (libfetch, \-lfetch)
 .ds doc-str-Lb-libform     Curses Form Library (libform, \-lform)
 .ds doc-str-Lb-libgeom     Userland API Library for kernel GEOM subsystem (libgeom, \-lgeom)
-.ds doc-str-Lb-libgpib     General-Purpose Instrument Bus (GPIB) library (libgpib, \-lgpib)
 .ds doc-str-Lb-libi386     i386 Architecture Library (libi386, \-li386)
 .ds doc-str-Lb-libintl     Internationalized Message Handling Library (libintl, \-lintl)
 .ds doc-str-Lb-libipsec    IPsec Policy Control Library (libipsec, \-lipsec)

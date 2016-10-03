@@ -29,7 +29,6 @@
 __FBSDID("$FreeBSD$");
 
 #include "opt_compat.h"
-#include "opt_pax.h"
 
 #define __ELF_WORD_SIZE 32
 
@@ -43,7 +42,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/mutex.h>
 #include <sys/mman.h>
 #include <sys/namei.h>
-#include <sys/pax.h>
 #include <sys/pioctl.h>
 #include <sys/proc.h>
 #include <sys/procfs.h>
@@ -91,21 +89,16 @@ extern const char *freebsd32_syscallnames[];
 static SYSCTL_NODE(_compat, OID_AUTO, ia32, CTLFLAG_RW, 0, "ia32 mode");
 
 static u_long	ia32_maxdsiz = IA32_MAXDSIZ;
-SYSCTL_ULONG(_compat_ia32, OID_AUTO, maxdsiz, CTLFLAG_RW, &ia32_maxdsiz, 0, "");
-TUNABLE_ULONG("compat.ia32.maxdsiz", &ia32_maxdsiz);
+SYSCTL_ULONG(_compat_ia32, OID_AUTO, maxdsiz, CTLFLAG_RWTUN, &ia32_maxdsiz, 0, "");
 u_long	ia32_maxssiz = IA32_MAXSSIZ;
-SYSCTL_ULONG(_compat_ia32, OID_AUTO, maxssiz, CTLFLAG_RW, &ia32_maxssiz, 0, "");
-TUNABLE_ULONG("compat.ia32.maxssiz", &ia32_maxssiz);
+SYSCTL_ULONG(_compat_ia32, OID_AUTO, maxssiz, CTLFLAG_RWTUN, &ia32_maxssiz, 0, "");
 static u_long	ia32_maxvmem = IA32_MAXVMEM;
-SYSCTL_ULONG(_compat_ia32, OID_AUTO, maxvmem, CTLFLAG_RW, &ia32_maxvmem, 0, "");
-TUNABLE_ULONG("compat.ia32.maxvmem", &ia32_maxvmem);
+SYSCTL_ULONG(_compat_ia32, OID_AUTO, maxvmem, CTLFLAG_RWTUN, &ia32_maxvmem, 0, "");
 
 struct sysentvec ia32_freebsd_sysvec = {
 	.sv_size	= FREEBSD32_SYS_MAXSYSCALL,
 	.sv_table	= freebsd32_sysent,
 	.sv_mask	= 0,
-	.sv_sigsize	= 0,
-	.sv_sigtbl	= NULL,
 	.sv_errsize	= 0,
 	.sv_errtbl	= NULL,
 	.sv_transtrap	= NULL,
@@ -113,7 +106,6 @@ struct sysentvec ia32_freebsd_sysvec = {
 	.sv_sendsig	= ia32_sendsig,
 	.sv_sigcode	= ia32_sigcode,
 	.sv_szsigcode	= &sz_ia32_sigcode,
-	.sv_prepsyscall	= NULL,
 	.sv_name	= "FreeBSD ELF32",
 	.sv_coredump	= elf32_coredump,
 	.sv_imgact_try	= NULL,
@@ -130,7 +122,7 @@ struct sysentvec ia32_freebsd_sysvec = {
 	.sv_maxssiz	= &ia32_maxssiz,
 	.sv_flags	= SV_ABI_FREEBSD | SV_IA32 | SV_ILP32 |
 #ifdef __amd64__
-		SV_SHP
+		SV_SHP | SV_TIMEKEEP
 #else
 		0
 #endif
@@ -143,7 +135,6 @@ struct sysentvec ia32_freebsd_sysvec = {
 	.sv_schedtail	= NULL,
 	.sv_thread_detach = NULL,
 	.sv_trap	= NULL,
-	.sv_pax_aslr_init	= pax_aslr_init_vmspace32,
 };
 INIT_SYSENTVEC(elf_ia32_sysvec, &ia32_freebsd_sysvec);
 
@@ -197,7 +188,6 @@ SYSINIT(kia32, SI_SUB_EXEC, SI_ORDER_ANY,
 void
 elf32_dump_thread(struct thread *td, void *dst, size_t *off)
 {
-#ifdef __amd64__
 	void *buf;
 	size_t len;
 
@@ -215,7 +205,6 @@ elf32_dump_thread(struct thread *td, void *dst, size_t *off)
 			    cpu_max_ext_state_size, NULL);
 	}
 	*off = len;
-#endif
 }
 
 void

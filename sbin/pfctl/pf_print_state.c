@@ -208,22 +208,30 @@ void
 print_state(struct pfsync_state *s, int opts)
 {
 	struct pfsync_state_peer *src, *dst;
-	struct pfsync_state_key *sk, *nk;
+	struct pfsync_state_key *key, *sk, *nk;
 	struct protoent *p;
 	int min, sec;
+#ifndef __NO_STRICT_ALIGNMENT
+	struct pfsync_state_key aligned_key[2];
+
+	bcopy(&s->key, aligned_key, sizeof(aligned_key));
+	key = aligned_key;
+#else
+	key = s->key;
+#endif
 
 	if (s->direction == PF_OUT) {
 		src = &s->src;
 		dst = &s->dst;
-		sk = &s->key[PF_SK_STACK];
-		nk = &s->key[PF_SK_WIRE];
+		sk = &key[PF_SK_STACK];
+		nk = &key[PF_SK_WIRE];
 		if (s->proto == IPPROTO_ICMP || s->proto == IPPROTO_ICMPV6) 
 			sk->port[0] = nk->port[0];
 	} else {
 		src = &s->dst;
 		dst = &s->src;
-		sk = &s->key[PF_SK_WIRE];
-		nk = &s->key[PF_SK_STACK];
+		sk = &key[PF_SK_WIRE];
+		nk = &key[PF_SK_STACK];
 		if (s->proto == IPPROTO_ICMP || s->proto == IPPROTO_ICMPV6) 
 			sk->port[1] = nk->port[1];
 	}
@@ -285,8 +293,13 @@ print_state(struct pfsync_state *s, int opts)
 		const char *states[] = PFUDPS_NAMES;
 
 		printf("   %s:%s\n", states[src->state], states[dst->state]);
+#ifndef INET6
 	} else if (s->proto != IPPROTO_ICMP && src->state < PFOTHERS_NSTATES &&
 	    dst->state < PFOTHERS_NSTATES) {
+#else
+	} else if (s->proto != IPPROTO_ICMP && s->proto != IPPROTO_ICMPV6 &&
+	    src->state < PFOTHERS_NSTATES && dst->state < PFOTHERS_NSTATES) {
+#endif
 		/* XXX ICMP doesn't really have state levels */
 		const char *states[] = PFOTHERS_NAMES;
 

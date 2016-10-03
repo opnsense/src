@@ -29,6 +29,7 @@
  * Copyright (c) 2012 Martin Matuska <mm@FreeBSD.org>. All rights reserved.
  * Copyright (c) 2013 Steven Hartland. All rights reserved.
  * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright (c) 2014 Integros [integros.com]
  */
 
 #include <ctype.h>
@@ -1113,7 +1114,7 @@ zfs_valid_proplist(libzfs_handle_t *hdl, zfs_type_t type, nvlist_t *nvl,
 		}
 		case ZFS_PROP_MLSLABEL:
 		{
-#ifdef sun
+#ifdef illumos
 			/*
 			 * Verify the mlslabel string and convert to
 			 * internal hex label string.
@@ -1162,11 +1163,11 @@ badlabel:
 			    "invalid mlslabel '%s'"), strval);
 			(void) zfs_error(hdl, EZFS_BADPROP, errbuf);
 			m_label_free(new_sl);	/* OK if null */
-#else	/* !sun */
+#else	/* !illumos */
 			zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
 			    "mlslabel is not supported on FreeBSD"));
 			(void) zfs_error(hdl, EZFS_BADPROP, errbuf);
-#endif	/* !sun */
+#endif	/* illumos */
 			goto error;
 
 		}
@@ -1483,6 +1484,12 @@ zfs_setprop_error(libzfs_handle_t *hdl, zfs_prop_t prop, int err,
 		(void) zfs_error(hdl, EZFS_DSREADONLY, errbuf);
 		break;
 
+	case E2BIG:
+		zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
+		    "property value too long"));
+		(void) zfs_error(hdl, EZFS_BADPROP, errbuf);
+		break;
+
 	case ENOTSUP:
 		zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
 		    "pool and or dataset must be upgraded to set this "
@@ -1626,8 +1633,9 @@ zfs_prop_set_list(zfs_handle_t *zhp, nvlist_t *props)
 		 * its canmount property to 'on' or 'noauto'.  We only use
 		 * the changelist logic to unmount when setting canmount=off.
 		 */
-		if (!(prop == ZFS_PROP_CANMOUNT &&
-		    fnvpair_value_uint64(elem) != ZFS_CANMOUNT_OFF)) {
+		if (prop != ZFS_PROP_CANMOUNT ||
+		    (fnvpair_value_uint64(elem) == ZFS_CANMOUNT_OFF &&
+		     zfs_is_mounted(zhp, NULL))) {
 			cls[cl_idx] = changelist_gather(zhp, prop, 0, 0);
 			if (cls[cl_idx] == NULL)
 				goto error;
@@ -2057,8 +2065,7 @@ get_numeric_property(zfs_handle_t *zhp, zfs_prop_t prop, zprop_source_t *src,
 			zcmd_free_nvlists(&zc);
 			return (-1);
 		}
-		if (zplprops)
-			nvlist_free(zplprops);
+		nvlist_free(zplprops);
 		zcmd_free_nvlists(&zc);
 		break;
 
@@ -2504,7 +2511,7 @@ zfs_prop_get(zfs_handle_t *zhp, zfs_prop_t prop, char *propbuf, size_t proplen,
 
 	case ZFS_PROP_MLSLABEL:
 		{
-#ifdef sun
+#ifdef illumos
 			m_label_t *new_sl = NULL;
 			char *ascii = NULL;	/* human readable label */
 
@@ -2538,9 +2545,9 @@ zfs_prop_get(zfs_handle_t *zhp, zfs_prop_t prop, char *propbuf, size_t proplen,
 
 			(void) strlcpy(propbuf, ascii, proplen);
 			free(ascii);
-#else	/* !sun */
+#else	/* !illumos */
 			propbuf[0] = '\0';
-#endif	/* !sun */
+#endif	/* illumos */
 		}
 		break;
 
@@ -2652,7 +2659,7 @@ static int
 idmap_id_to_numeric_domain_rid(uid_t id, boolean_t isuser,
     char **domainp, idmap_rid_t *ridp)
 {
-#ifdef sun
+#ifdef illumos
 	idmap_get_handle_t *get_hdl = NULL;
 	idmap_stat status;
 	int err = EINVAL;
@@ -2677,10 +2684,10 @@ out:
 	if (get_hdl)
 		idmap_get_destroy(get_hdl);
 	return (err);
-#else	/* !sun */
+#else	/* !illumos */
 	assert(!"invalid code path");
 	return (EINVAL); // silence compiler warning
-#endif	/* !sun */
+#endif	/* illumos */
 }
 
 /*
@@ -2715,7 +2722,7 @@ userquota_propname_decode(const char *propname, boolean_t zoned,
 	cp = strchr(propname, '@') + 1;
 
 	if (strchr(cp, '@')) {
-#ifdef sun
+#ifdef illumos
 		/*
 		 * It's a SID name (eg "user@domain") that needs to be
 		 * turned into S-1-domainID-RID.
@@ -2761,9 +2768,9 @@ userquota_propname_decode(const char *propname, boolean_t zoned,
 		cp = numericsid;
 		*ridp = rid;
 		/* will be further decoded below */
-#else	/* !sun */
+#else	/* !illumos */
 		return (ENOENT);
-#endif	/* !sun */
+#endif	/* illumos */
 	}
 
 	if (strncmp(cp, "S-1-", 4) == 0) {
@@ -3219,7 +3226,7 @@ zfs_create(libzfs_handle_t *hdl, const char *path, zfs_type_t type,
 	uint64_t blocksize = zfs_prop_default_numeric(ZFS_PROP_VOLBLOCKSIZE);
 	char errbuf[1024];
 	uint64_t zoned;
-	dmu_objset_type_t ost;
+	enum lzc_dataset_type ost;
 
 	(void) snprintf(errbuf, sizeof (errbuf), dgettext(TEXT_DOMAIN,
 	    "cannot create '%s'"), path);
@@ -3246,9 +3253,9 @@ zfs_create(libzfs_handle_t *hdl, const char *path, zfs_type_t type,
 	}
 
 	if (type == ZFS_TYPE_VOLUME)
-		ost = DMU_OST_ZVOL;
+		ost = LZC_DATSET_TYPE_ZVOL;
 	else
-		ost = DMU_OST_ZFS;
+		ost = LZC_DATSET_TYPE_ZFS;
 
 	/* open zpool handle for prop validation */
 	char pool_path[MAXNAMELEN];
@@ -4286,7 +4293,7 @@ zfs_prune_proplist(zfs_handle_t *zhp, uint8_t *props)
 	}
 }
 
-#ifdef sun
+#ifdef illumos
 static int
 zfs_smb_acl_mgmt(libzfs_handle_t *hdl, char *dataset, char *path,
     zfs_smb_acl_op_t cmd, char *resource1, char *resource2)
@@ -4333,8 +4340,7 @@ zfs_smb_acl_mgmt(libzfs_handle_t *hdl, char *dataset, char *path,
 		return (-1);
 	}
 	error = ioctl(hdl->libzfs_fd, ZFS_IOC_SMB_ACL, &zc);
-	if (nvlist)
-		nvlist_free(nvlist);
+	nvlist_free(nvlist);
 	return (error);
 }
 
@@ -4368,7 +4374,7 @@ zfs_smb_acl_rename(libzfs_handle_t *hdl, char *dataset, char *path,
 	return (zfs_smb_acl_mgmt(hdl, dataset, path, ZFS_SMB_ACL_RENAME,
 	    oldname, newname));
 }
-#endif	/* sun */
+#endif	/* illumos */
 
 int
 zfs_userspace(zfs_handle_t *zhp, zfs_userquota_prop_t type,

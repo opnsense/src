@@ -86,6 +86,8 @@
 
 #ifdef _KERNEL
 
+#define	sx_recurse	lock_object.lo_data
+
 /*
  * Function prototipes.  Routines that start with an underscore are not part
  * of the public interface and are wrappered with a macro.
@@ -148,11 +150,12 @@ __sx_xlock(struct sx *sx, struct thread *td, int opts, const char *file,
 	uintptr_t tid = (uintptr_t)td;
 	int error = 0;
 
-	if (!atomic_cmpset_acq_ptr(&sx->sx_lock, SX_LOCK_UNLOCKED, tid))
+	if (sx->sx_lock != SX_LOCK_UNLOCKED ||
+	    !atomic_cmpset_acq_ptr(&sx->sx_lock, SX_LOCK_UNLOCKED, tid))
 		error = _sx_xlock_hard(sx, tid, opts, file, line);
 	else 
-		LOCKSTAT_PROFILE_OBTAIN_LOCK_SUCCESS(LS_SX_XLOCK_ACQUIRE,
-		    sx, 0, 0, file, line);
+		LOCKSTAT_PROFILE_OBTAIN_RWLOCK_SUCCESS(sx__acquire, sx,
+		    0, 0, file, line, LOCKSTAT_WRITER);
 
 	return (error);
 }
@@ -163,7 +166,11 @@ __sx_xunlock(struct sx *sx, struct thread *td, const char *file, int line)
 {
 	uintptr_t tid = (uintptr_t)td;
 
-	if (!atomic_cmpset_rel_ptr(&sx->sx_lock, tid, SX_LOCK_UNLOCKED))
+	if (sx->sx_recurse == 0)
+		LOCKSTAT_PROFILE_RELEASE_RWLOCK(sx__release, sx,
+		    LOCKSTAT_WRITER);
+	if (sx->sx_lock != tid ||
+	    !atomic_cmpset_rel_ptr(&sx->sx_lock, tid, SX_LOCK_UNLOCKED))
 		_sx_xunlock_hard(sx, tid, file, line);
 }
 
@@ -178,8 +185,8 @@ __sx_slock(struct sx *sx, int opts, const char *file, int line)
 	    !atomic_cmpset_acq_ptr(&sx->sx_lock, x, x + SX_ONE_SHARER))
 		error = _sx_slock_hard(sx, opts, file, line);
 	else
-		LOCKSTAT_PROFILE_OBTAIN_LOCK_SUCCESS(LS_SX_SLOCK_ACQUIRE, sx, 0,
-		    0, file, line);
+		LOCKSTAT_PROFILE_OBTAIN_RWLOCK_SUCCESS(sx__acquire, sx,
+		    0, 0, file, line, LOCKSTAT_READER);
 
 	return (error);
 }
@@ -196,6 +203,7 @@ __sx_sunlock(struct sx *sx, const char *file, int line)
 {
 	uintptr_t x = sx->sx_lock;
 
+	LOCKSTAT_PROFILE_RELEASE_RWLOCK(sx__release, sx, LOCKSTAT_READER);
 	if (x == (SX_SHARERS_LOCK(1) | SX_LOCK_EXCLUSIVE_WAITERS) ||
 	    !atomic_cmpset_rel_ptr(&sx->sx_lock, x, x - SX_ONE_SHARER))
 		_sx_sunlock_hard(sx, file, line);
@@ -287,6 +295,7 @@ __sx_sunlock(struct sx *sx, const char *file, int line)
 #define	SX_QUIET		0x08
 #define	SX_NOADAPTIVE		0x10
 #define	SX_RECURSE		0x20
+#define	SX_NEW			0x40
 
 /*
  * Options passed to sx_*lock_hard().
@@ -301,7 +310,7 @@ __sx_sunlock(struct sx *sx, const char *file, int line)
 #define	SA_RECURSED		LA_RECURSED
 #define	SA_NOTRECURSED		LA_NOTRECURSED
 
-/* Backwards compatability. */
+/* Backwards compatibility. */
 #define	SX_LOCKED		LA_LOCKED
 #define	SX_SLOCKED		LA_SLOCKED
 #define	SX_XLOCKED		LA_XLOCKED

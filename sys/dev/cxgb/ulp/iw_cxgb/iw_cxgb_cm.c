@@ -61,6 +61,7 @@ __FBSDID("$FreeBSD$");
 #include <net/route.h>
 #include <netinet/in_systm.h>
 #include <netinet/in.h>
+#include <netinet/in_fib.h>
 #include <netinet/in_pcb.h>
 #include <netinet/ip.h>
 #include <netinet/ip_var.h>
@@ -106,43 +107,35 @@ static char *states[] = {
 SYSCTL_NODE(_hw, OID_AUTO, iw_cxgb, CTLFLAG_RD, 0, "iw_cxgb driver parameters");
 
 static int ep_timeout_secs = 60;
-TUNABLE_INT("hw.iw_cxgb.ep_timeout_secs", &ep_timeout_secs);
-SYSCTL_INT(_hw_iw_cxgb, OID_AUTO, ep_timeout_secs, CTLFLAG_RW, &ep_timeout_secs, 0,
+SYSCTL_INT(_hw_iw_cxgb, OID_AUTO, ep_timeout_secs, CTLFLAG_RWTUN, &ep_timeout_secs, 0,
     "CM Endpoint operation timeout in seconds (default=60)");
 
 static int mpa_rev = 1;
-TUNABLE_INT("hw.iw_cxgb.mpa_rev", &mpa_rev);
-SYSCTL_INT(_hw_iw_cxgb, OID_AUTO, mpa_rev, CTLFLAG_RW, &mpa_rev, 0,
+SYSCTL_INT(_hw_iw_cxgb, OID_AUTO, mpa_rev, CTLFLAG_RWTUN, &mpa_rev, 0,
     "MPA Revision, 0 supports amso1100, 1 is spec compliant. (default=1)");
 
 static int markers_enabled = 0;
-TUNABLE_INT("hw.iw_cxgb.markers_enabled", &markers_enabled);
-SYSCTL_INT(_hw_iw_cxgb, OID_AUTO, markers_enabled, CTLFLAG_RW, &markers_enabled, 0,
+SYSCTL_INT(_hw_iw_cxgb, OID_AUTO, markers_enabled, CTLFLAG_RWTUN, &markers_enabled, 0,
     "Enable MPA MARKERS (default(0)=disabled)");
 
 static int crc_enabled = 1;
-TUNABLE_INT("hw.iw_cxgb.crc_enabled", &crc_enabled);
-SYSCTL_INT(_hw_iw_cxgb, OID_AUTO, crc_enabled, CTLFLAG_RW, &crc_enabled, 0,
+SYSCTL_INT(_hw_iw_cxgb, OID_AUTO, crc_enabled, CTLFLAG_RWTUN, &crc_enabled, 0,
     "Enable MPA CRC (default(1)=enabled)");
 
 static int rcv_win = 256 * 1024;
-TUNABLE_INT("hw.iw_cxgb.rcv_win", &rcv_win);
-SYSCTL_INT(_hw_iw_cxgb, OID_AUTO, rcv_win, CTLFLAG_RW, &rcv_win, 0,
+SYSCTL_INT(_hw_iw_cxgb, OID_AUTO, rcv_win, CTLFLAG_RWTUN, &rcv_win, 0,
     "TCP receive window in bytes (default=256KB)");
 
 static int snd_win = 32 * 1024;
-TUNABLE_INT("hw.iw_cxgb.snd_win", &snd_win);
-SYSCTL_INT(_hw_iw_cxgb, OID_AUTO, snd_win, CTLFLAG_RW, &snd_win, 0,
+SYSCTL_INT(_hw_iw_cxgb, OID_AUTO, snd_win, CTLFLAG_RWTUN, &snd_win, 0,
     "TCP send window in bytes (default=32KB)");
 
 static unsigned int nocong = 0;
-TUNABLE_INT("hw.iw_cxgb.nocong", &nocong);
-SYSCTL_UINT(_hw_iw_cxgb, OID_AUTO, nocong, CTLFLAG_RW, &nocong, 0,
+SYSCTL_UINT(_hw_iw_cxgb, OID_AUTO, nocong, CTLFLAG_RWTUN, &nocong, 0,
     "Turn off congestion control (default=0)");
 
 static unsigned int cong_flavor = 1;
-TUNABLE_INT("hw.iw_cxgb.cong_flavor", &cong_flavor);
-SYSCTL_UINT(_hw_iw_cxgb, OID_AUTO, cong_flavor, CTLFLAG_RW, &cong_flavor, 0,
+SYSCTL_UINT(_hw_iw_cxgb, OID_AUTO, cong_flavor, CTLFLAG_RWTUN, &cong_flavor, 0,
     "TCP Congestion control flavor (default=1)");
 
 static void ep_timeout(void *arg);
@@ -171,7 +164,7 @@ start_ep_timer(struct iwch_ep *ep)
 		 * XXX this looks racy
 		 */
 		get_ep(&ep->com);
-		callout_init(&ep->timer, TRUE);
+		callout_init(&ep->timer, 1);
 	}
 	callout_reset(&ep->timer, ep_timeout_secs * hz, ep_timeout, ep);
 }
@@ -267,25 +260,18 @@ alloc_ep(int size, int flags)
 void __free_ep(struct iwch_ep_common *epc)
 {
 	CTR3(KTR_IW_CXGB, "%s ep %p state %s", __FUNCTION__, epc, states[state_read(epc)]);
-	KASSERT(!epc->so, ("%s warning ep->so %p \n", __FUNCTION__, epc->so));
 	KASSERT(!epc->entry.tqe_prev, ("%s epc %p still on req list!\n", __FUNCTION__, epc));
 	free(epc, M_DEVBUF);
 }
 
-static struct rtentry *
+static int
 find_route(__be32 local_ip, __be32 peer_ip, __be16 local_port,
-    __be16 peer_port, u8 tos)
+    __be16 peer_port, u8 tos, struct nhop4_extended *pnh4)
 {
-        struct route iproute;
-        struct sockaddr_in *dst = (struct sockaddr_in *)&iproute.ro_dst;
- 
-        bzero(&iproute, sizeof iproute);
-	dst->sin_family = AF_INET;
-	dst->sin_len = sizeof *dst;
-        dst->sin_addr.s_addr = peer_ip;
- 
-        rtalloc(&iproute);
-	return iproute.ro_rt;
+	struct in_addr addr;
+
+	addr.s_addr = peer_ip;
+	return (fib4_lookup_nh_ext(RT_DEFAULT_FIB, addr, NHR_REF, 0, pnh4));
 }
 
 static void
@@ -1301,7 +1287,7 @@ iwch_connect(struct iw_cm_id *cm_id, struct iw_cm_conn_param *conn_param)
 	int err = 0;
 	struct iwch_dev *h = to_iwch_dev(cm_id->device);
 	struct iwch_ep *ep;
-	struct rtentry *rt;
+	struct nhop4_extended nh4;
 	struct toedev *tdev;
 	
 	if (is_loopback_dst(cm_id)) {
@@ -1315,7 +1301,7 @@ iwch_connect(struct iw_cm_id *cm_id, struct iw_cm_conn_param *conn_param)
 		err = (-ENOMEM);
 		goto out;
 	}
-	callout_init(&ep->timer, TRUE);
+	callout_init(&ep->timer, 1);
 	ep->plen = conn_param->private_data_len;
 	if (ep->plen)
 		memcpy(ep->mpa_pkt + sizeof(struct mpa_message),
@@ -1337,28 +1323,28 @@ iwch_connect(struct iw_cm_id *cm_id, struct iw_cm_conn_param *conn_param)
 		goto fail2;
 
 	/* find a route */
-	rt = find_route(cm_id->local_addr.sin_addr.s_addr,
+	err = find_route(cm_id->local_addr.sin_addr.s_addr,
 			cm_id->remote_addr.sin_addr.s_addr,
 			cm_id->local_addr.sin_port,
-			cm_id->remote_addr.sin_port, IPTOS_LOWDELAY);
-	if (!rt) {
+			cm_id->remote_addr.sin_port, IPTOS_LOWDELAY, &nh4);
+	if (err) {
 		printf("%s - cannot find route.\n", __FUNCTION__);
 		err = EHOSTUNREACH;
 		goto fail2;
 	}
 
-	if (!(rt->rt_ifp->if_flags & IFCAP_TOE)) {
+	if (!(nh4.nh_ifp->if_flags & IFCAP_TOE)) {
 		printf("%s - interface not TOE capable.\n", __FUNCTION__);
-		RTFREE(rt);
+		fib4_free_nh_ext(RT_DEFAULT_FIB, &nh4);
 		goto fail2;
 	}
-	tdev = TOEDEV(rt->rt_ifp);
+	tdev = TOEDEV(nh4.nh_ifp);
 	if (tdev == NULL) {
 		printf("%s - No toedev for interface.\n", __FUNCTION__);
-		RTFREE(rt);
+		fib4_free_nh_ext(RT_DEFAULT_FIB, &nh4);
 		goto fail2;
 	}
-	RTFREE(rt);
+	fib4_free_nh_ext(RT_DEFAULT_FIB, &nh4);
 
 	state_set(&ep->com, CONNECTING);
 	ep->com.local_addr = cm_id->local_addr;
@@ -1374,7 +1360,7 @@ out:
 }
 
 int
-iwch_create_listen(struct iw_cm_id *cm_id, int backlog)
+iwch_create_listen_ep(struct iw_cm_id *cm_id, int backlog)
 {
 	int err = 0;
 	struct iwch_listen_ep *ep;
@@ -1394,35 +1380,22 @@ iwch_create_listen(struct iw_cm_id *cm_id, int backlog)
 	state_set(&ep->com, LISTEN);
 
 	ep->com.so = cm_id->so;
-	err = init_sock(&ep->com);
-	if (err)
-		goto fail;
-
-	err = solisten(ep->com.so, ep->backlog, ep->com.thread);
-	if (!err) {
-		cm_id->provider_data = ep;
-		goto out;
-	}
-	close_socket(&ep->com, 0);
-fail:
-	cm_id->rem_ref(cm_id);
-	put_ep(&ep->com);
+	cm_id->provider_data = ep;
 out:
 	return err;
 }
 
-int
-iwch_destroy_listen(struct iw_cm_id *cm_id)
+void
+iwch_destroy_listen_ep(struct iw_cm_id *cm_id)
 {
 	struct iwch_listen_ep *ep = to_listen_ep(cm_id);
 
 	CTR2(KTR_IW_CXGB, "%s ep %p", __FUNCTION__, ep);
 
 	state_set(&ep->com, DEAD);
-	close_socket(&ep->com, 0);
 	cm_id->rem_ref(cm_id);
 	put_ep(&ep->com);
-	return 0;
+	return;
 }
 
 int
@@ -1515,11 +1488,11 @@ process_data(struct iwch_ep *ep)
 		process_mpa_request(ep);
 		break;
 	default:
-		if (ep->com.so->so_rcv.sb_cc) 
+		if (sbavail(&ep->com.so->so_rcv)) 
 			printf("%s Unexpected streaming data."
 			       " ep %p state %d so %p so_state %x so_rcv.sb_cc %u so_rcv.sb_mb %p\n",
 			       __FUNCTION__, ep, state_read(&ep->com), ep->com.so, ep->com.so->so_state,
-			       ep->com.so->so_rcv.sb_cc, ep->com.so->so_rcv.sb_mb);
+			       sbavail(&ep->com.so->so_rcv), ep->com.so->so_rcv.sb_mb);
 		break;
 	}
 	return;
@@ -1539,54 +1512,32 @@ process_connected(struct iwch_ep *ep)
 	}
 }
 
-static struct socket *
-dequeue_socket(struct socket *head, struct sockaddr_in **remote, struct iwch_ep *child_ep)
+void
+process_newconn(struct iw_cm_id *parent_cm_id, struct socket *child_so)
 {
-	struct socket *so;
-
-	ACCEPT_LOCK();
-	so = TAILQ_FIRST(&head->so_comp);
-	if (!so) {
-		ACCEPT_UNLOCK();
-		return NULL;
-	}
-	TAILQ_REMOVE(&head->so_comp, so, so_list);
-	head->so_qlen--;
-	SOCK_LOCK(so);
-	so->so_qstate &= ~SQ_COMP;
-	so->so_head = NULL;
-	soref(so);
-	soupcall_set(so, SO_RCV, iwch_so_upcall, child_ep);
-	so->so_state |= SS_NBIO;
-	PANIC_IF(!(so->so_state & SS_ISCONNECTED));
-	PANIC_IF(so->so_error);
-	SOCK_UNLOCK(so);
-	ACCEPT_UNLOCK();
-	soaccept(so, (struct sockaddr **)remote);
-	return so;
-}
-
-static void
-process_newconn(struct iwch_ep *parent_ep)
-{
-	struct socket *child_so;
 	struct iwch_ep *child_ep;
+	struct sockaddr_in *local;
 	struct sockaddr_in *remote;
+	struct iwch_ep *parent_ep = parent_cm_id->provider_data;
 
 	CTR3(KTR_IW_CXGB, "%s parent ep %p so %p", __FUNCTION__, parent_ep, parent_ep->com.so);
+	if (!child_so) {
+		log(LOG_ERR, "%s - invalid child socket!\n", __func__);
+		return;
+	}
 	child_ep = alloc_ep(sizeof(*child_ep), M_NOWAIT);
 	if (!child_ep) {
 		log(LOG_ERR, "%s - failed to allocate ep entry!\n",
 		       __FUNCTION__);
 		return;
 	}
-	child_so = dequeue_socket(parent_ep->com.so, &remote, child_ep);
-	if (!child_so) {
-		log(LOG_ERR, "%s - failed to dequeue child socket!\n",
-		       __FUNCTION__);
-		__free_ep(&child_ep->com);
-		return;
-	}
+	SOCKBUF_LOCK(&child_so->so_rcv);
+	soupcall_set(child_so, SO_RCV, iwch_so_upcall, child_ep);
+	SOCKBUF_UNLOCK(&child_so->so_rcv);
+
+	in_getsockaddr(child_so, (struct sockaddr **)&local);
+	in_getpeeraddr(child_so, (struct sockaddr **)&remote);
+
 	CTR3(KTR_IW_CXGB, "%s remote addr %s port %d", __FUNCTION__, 
 		inet_ntoa(remote->sin_addr), ntohs(remote->sin_port));
 	child_ep->com.tdev = parent_ep->com.tdev;
@@ -1603,10 +1554,10 @@ process_newconn(struct iwch_ep *parent_ep)
 	child_ep->com.thread = parent_ep->com.thread;
 	child_ep->parent_ep = parent_ep;
 
+	free(local, M_SONAME);
 	free(remote, M_SONAME);
 	get_ep(&parent_ep->com);
-	child_ep->parent_ep = parent_ep;
-	callout_init(&child_ep->timer, TRUE);
+	callout_init(&child_ep->timer, 1);
 	state_set(&child_ep->com, MPA_REQ_WAIT);
 	start_ep_timer(child_ep);
 
@@ -1643,7 +1594,10 @@ process_socket_event(struct iwch_ep *ep)
 	}
 
 	if (state == LISTEN) {
-		process_newconn(ep);
+		/* socket listening events are handled at IWCM */
+		CTR3(KTR_IW_CXGB, "%s Invalid ep state:%u, ep:%p", __func__,
+			ep->com.state, ep);
+		BUG();
 		return;
 	}
 

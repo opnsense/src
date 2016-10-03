@@ -31,6 +31,8 @@
  *
  */
 
+#define	LINUXKPI_PARAM_PREFIX mlx4_
+
 #include <linux/page.h>
 #include <linux/mlx4/cq.h>
 #include <linux/slab.h>
@@ -49,7 +51,6 @@
 #include <netinet/udp.h>
 
 #include "mlx4_en.h"
-#include "utils.h"
 
 enum {
 	MAX_INLINE = 104, /* 128 - 16 - 4 - 4 */
@@ -458,7 +459,7 @@ void mlx4_en_tx_irq(struct mlx4_cq *mcq)
 	struct mlx4_en_priv *priv = netdev_priv(cq->dev);
 	struct mlx4_en_tx_ring *ring = priv->tx_ring[cq->ring];
 
-	if (!spin_trylock(&ring->comp_lock))
+	if (priv->port_up == 0 || !spin_trylock(&ring->comp_lock))
 		return;
 	mlx4_en_process_tx_cq(cq->dev, cq);
 	mod_timer(&cq->timer, jiffies + 1);
@@ -474,6 +475,8 @@ void mlx4_en_poll_tx_cq(unsigned long data)
 
 	INC_PERF_COUNTER(priv->pstats.tx_poll);
 
+	if (priv->port_up == 0)
+		return;
 	if (!spin_trylock(&ring->comp_lock)) {
 		mod_timer(&cq->timer, jiffies + MLX4_EN_TX_POLL_TIMEOUT);
 		return;
@@ -494,6 +497,9 @@ static inline void mlx4_en_xmit_poll(struct mlx4_en_priv *priv, int tx_ind)
 {
 	struct mlx4_en_cq *cq = priv->tx_cq[tx_ind];
 	struct mlx4_en_tx_ring *ring = priv->tx_ring[tx_ind];
+
+	if (priv->port_up == 0)
+		return;
 
 	/* If we don't have a pending timer, set one up to catch our recent
 	   post in case the interface becomes idle */
@@ -620,12 +626,16 @@ mlx4_en_store_inline_header(volatile struct mlx4_wqe_data_seg *dseg,
 	}
 }
 
-static unsigned long hashrandom;
+static uint32_t hashrandom;
 static void hashrandom_init(void *arg)
 {
-	hashrandom = random();
+	/*
+	 * It is assumed that the random subsystem has been
+	 * initialized when this function is called:
+	 */
+	hashrandom = m_ether_tcpip_hash_init();
 }
-SYSINIT(hashrandom_init, SI_SUB_KLD, SI_ORDER_SECOND, &hashrandom_init, NULL);
+SYSINIT(hashrandom_init, SI_SUB_RANDOM, SI_ORDER_ANY, &hashrandom_init, NULL);
 
 u16 mlx4_en_select_queue(struct net_device *dev, struct mbuf *mb)
 {
@@ -641,7 +651,7 @@ u16 mlx4_en_select_queue(struct net_device *dev, struct mbuf *mb)
 	        up = (vlan_tag >> 13) % MLX4_EN_NUM_UP;
 	}
 #endif
-	queue_index = mlx4_en_hashmbuf(MLX4_F_HASHL3 | MLX4_F_HASHL4, mb, hashrandom);
+	queue_index = m_ether_tcpip_hash(MBUF_HASHFLAG_L3 | MBUF_HASHFLAG_L4, mb, hashrandom);
 
 	return ((queue_index % rings_p_up) + (up * rings_p_up));
 }
@@ -1038,7 +1048,9 @@ mlx4_en_tx_que(void *context, int pending)
 	priv = dev->if_softc;
 	tx_ind = cq->ring;
 	ring = priv->tx_ring[tx_ind];
-        if (dev->if_drv_flags & IFF_DRV_RUNNING) {
+
+	if (priv->port_up != 0 &&
+	    (dev->if_drv_flags & IFF_DRV_RUNNING) != 0) {
 		mlx4_en_xmit_poll(priv, tx_ind);
 		spin_lock(&ring->tx_lock);
                 if (!drbr_empty(dev, ring->br))
@@ -1055,9 +1067,14 @@ mlx4_en_transmit(struct ifnet *dev, struct mbuf *m)
 	struct mlx4_en_cq *cq;
 	int i, err = 0;
 
+	if (priv->port_up == 0) {
+		m_freem(m);
+		return (ENETDOWN);
+	}
+
 	/* Compute which queue to use */
 	if (M_HASHTYPE_GET(m) != M_HASHTYPE_NONE) {
-		i = m->m_pkthdr.flowid % priv->tx_ring_num;
+		i = (m->m_pkthdr.flowid % 128) % priv->tx_ring_num;
 	}
 	else {
 		i = mlx4_en_select_queue(dev, m);
@@ -1087,6 +1104,9 @@ mlx4_en_qflush(struct ifnet *dev)
 	struct mlx4_en_priv *priv = netdev_priv(dev);
 	struct mlx4_en_tx_ring *ring;
 	struct mbuf *m;
+
+	if (priv->port_up == 0)
+		return;
 
 	for (int i = 0; i < priv->tx_ring_num; i++) {
 		ring = priv->tx_ring[i];

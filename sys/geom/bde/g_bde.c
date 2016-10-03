@@ -44,7 +44,7 @@
 #include <sys/sysctl.h>
 
 #include <crypto/rijndael/rijndael-api-fst.h>
-#include <crypto/sha2/sha2.h>
+#include <crypto/sha2/sha512.h>
 #include <geom/geom.h>
 #include <geom/bde/g_bde.h>
 #define BDE_CLASS_NAME "BDE"
@@ -204,6 +204,23 @@ g_bde_create_geom(struct gctl_req *req, struct g_class *mp, struct g_provider *p
 	if (gp->softc != NULL)
 		g_free(gp->softc);
 	g_destroy_geom(gp);
+	switch (error) {
+	case ENOENT:
+		gctl_error(req, "Lock was destroyed");
+		break;
+	case ESRCH:
+		gctl_error(req, "Lock was nuked");
+		break;
+	case EINVAL:
+		gctl_error(req, "Could not open lock");
+		break;
+	case ENOTDIR:
+		gctl_error(req, "Lock not found");
+		break;
+	default:
+		gctl_error(req, "Could not open lock (%d)", error);
+		break;
+	}
 	return;
 }
 

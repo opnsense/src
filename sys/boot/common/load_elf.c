@@ -300,6 +300,7 @@ __elfN(loadimage)(struct preloaded_file *fp, elf_file_t ef, u_int64_t off)
     Elf_Ehdr	*ehdr;
     Elf_Phdr	*phdr, *php;
     Elf_Shdr	*shdr;
+    char	*shstr;
     int		ret;
     vm_offset_t firstaddr;
     vm_offset_t lastaddr;
@@ -308,6 +309,7 @@ __elfN(loadimage)(struct preloaded_file *fp, elf_file_t ef, u_int64_t off)
     Elf_Addr	ssym, esym;
     Elf_Dyn	*dp;
     Elf_Addr	adp;
+    Elf_Addr	ctors;
     int		ndp;
     int		symstrindex;
     int		symtabindex;
@@ -351,7 +353,7 @@ __elfN(loadimage)(struct preloaded_file *fp, elf_file_t ef, u_int64_t off)
 #endif
 	} else
 	    off = 0;
-#elif defined(__arm__)
+#elif defined(__arm__) && !defined(EFI)
 	/*
 	 * The elf headers in arm kernels specify virtual addresses in all
 	 * header fields, even the ones that should be physical addresses.
@@ -362,6 +364,11 @@ __elfN(loadimage)(struct preloaded_file *fp, elf_file_t ef, u_int64_t off)
 	 * translates it to a physical address.  We do the va->pa conversion on
 	 * the entry point address in the header now, so that later we can
 	 * launch the kernel by just jumping to that address.
+	 *
+	 * When booting from UEFI the copyin and copyout functions handle
+	 * adjusting the location relative to the first virtual address.
+	 * Because of this there is no need to adjust the offset or entry
+	 * point address as these will both be handled by the efi code.
 	 */
 	off -= ehdr->e_entry & ~PAGE_MASK;
 	ehdr->e_entry += off;
@@ -443,10 +450,11 @@ __elfN(loadimage)(struct preloaded_file *fp, elf_file_t ef, u_int64_t off)
     lastaddr = roundup(lastaddr, sizeof(long));
 
     /*
-     * Now grab the symbol tables.  This isn't easy if we're reading a
-     * .gz file.  I think the rule is going to have to be that you must
-     * strip a file to remove symbols before gzipping it so that we do not
-     * try to lseek() on it.
+     * Get the section headers.  We need this for finding the .ctors
+     * section as well as for loading any symbols.  Both may be hard
+     * to do if reading from a .gz file as it involves seeking.  I
+     * think the rule is going to have to be that you must strip a
+     * file to remove symbols before gzipping it.
      */
     chunk = ehdr->e_shnum * ehdr->e_shentsize;
     if (chunk == 0 || ehdr->e_shoff == 0)
@@ -459,6 +467,33 @@ __elfN(loadimage)(struct preloaded_file *fp, elf_file_t ef, u_int64_t off)
     }
     file_addmetadata(fp, MODINFOMD_SHDR, chunk, shdr);
 
+    /*
+     * Read the section string table and look for the .ctors section.
+     * We need to tell the kernel where it is so that it can call the
+     * ctors.
+     */
+    chunk = shdr[ehdr->e_shstrndx].sh_size;
+    if (chunk) {
+	shstr = alloc_pread(ef->fd, shdr[ehdr->e_shstrndx].sh_offset, chunk);
+	if (shstr) {
+	    for (i = 0; i < ehdr->e_shnum; i++) {
+		if (strcmp(shstr + shdr[i].sh_name, ".ctors") != 0)
+		    continue;
+		ctors = shdr[i].sh_addr;
+		file_addmetadata(fp, MODINFOMD_CTORS_ADDR, sizeof(ctors),
+		    &ctors);
+		size = shdr[i].sh_size;
+		file_addmetadata(fp, MODINFOMD_CTORS_SIZE, sizeof(size),
+		    &size);
+		break;
+	    }
+	    free(shstr);
+	}
+    }
+
+    /*
+     * Now load any symbols.
+     */
     symtabindex = -1;
     symstrindex = -1;
     for (i = 0; i < ehdr->e_shnum; i++) {
@@ -705,7 +740,7 @@ __elfN(load_modmetadata)(struct preloaded_file *fp, u_int64_t dest)
 	if (err != 0)
 		goto out;
 
-	if (ef.ehdr->e_type == ET_EXEC) {
+	if (ef.kernel == 1 || ef.ehdr->e_type == ET_EXEC) {
 		ef.kernel = 1;
 	} else if (ef.ehdr->e_type != ET_DYN) {
 		err = EFTYPE;

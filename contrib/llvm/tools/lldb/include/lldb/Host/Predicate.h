@@ -9,12 +9,17 @@
 
 #ifndef liblldb_Predicate_h_
 #define liblldb_Predicate_h_
-#if defined(__cplusplus)
 
-#include "lldb/Host/Mutex.h"
-#include "lldb/Host/Condition.h"
+// C Includes
 #include <stdint.h>
 #include <time.h>
+
+// C++ Includes
+// Other libraries and framework includes
+// Project includes
+#include "lldb/lldb-defines.h"
+#include "lldb/Host/Mutex.h"
+#include "lldb/Host/Condition.h"
 
 //#define DB_PTHREAD_LOG_EVENTS
 
@@ -28,7 +33,6 @@ typedef enum
     eBroadcastNever,    ///< No broadcast will be sent when the value is modified.
     eBroadcastAlways,   ///< Always send a broadcast when the value is modified.
     eBroadcastOnChange  ///< Only broadcast if the value changes when the value is modified.
-
 } PredicateBroadcastType;
 
 //----------------------------------------------------------------------
@@ -45,7 +49,6 @@ template <class T>
 class Predicate
 {
 public:
-
     //------------------------------------------------------------------
     /// Default constructor.
     ///
@@ -78,12 +81,9 @@ public:
     //------------------------------------------------------------------
     /// Destructor.
     ///
-    /// Destrory the condition, mutex, and T objects.
+    /// Destroy the condition, mutex, and T objects.
     //------------------------------------------------------------------
-    ~Predicate ()
-    {
-    }
-
+    ~Predicate() = default;
 
     //------------------------------------------------------------------
     /// Value get accessor.
@@ -112,7 +112,7 @@ public:
     ///     The new value to set.
     ///
     /// @param[in] broadcast_type
-    ///     A value indicating when and if to broadast. See the
+    ///     A value indicating when and if to broadcast. See the
     ///     PredicateBroadcastType enumeration for details.
     ///
     /// @see Predicate::Broadcast()
@@ -140,7 +140,7 @@ public:
     ///     The bits to set in \a m_value.
     ///
     /// @param[in] broadcast_type
-    ///     A value indicating when and if to broadast. See the
+    ///     A value indicating when and if to broadcast. See the
     ///     PredicateBroadcastType enumeration for details.
     ///
     /// @see Predicate::Broadcast()
@@ -168,7 +168,7 @@ public:
     ///     The bits to clear in \a m_value.
     ///
     /// @param[in] broadcast_type
-    ///     A value indicating when and if to broadast. See the
+    ///     A value indicating when and if to broadcast. See the
     ///     PredicateBroadcastType enumeration for details.
     ///
     /// @see Predicate::Broadcast()
@@ -204,7 +204,7 @@ public:
     ///     The bits we are waiting to be set in \a m_value.
     ///
     /// @param[in] abstime
-    ///     If non-NULL, the absolute time at which we should stop
+    ///     If non-nullptr, the absolute time at which we should stop
     ///     waiting, else wait an infinite amount of time.
     ///
     /// @return
@@ -213,7 +213,7 @@ public:
     ///     occurred.
     //------------------------------------------------------------------
     T
-    WaitForSetValueBits (T bits, const TimeValue *abstime = NULL)
+    WaitForSetValueBits(T bits, const TimeValue *abstime = nullptr)
     {
         int err = 0;
         // pthread_cond_timedwait() or pthread_cond_wait() will atomically
@@ -254,7 +254,7 @@ public:
     ///     The bits we are waiting to be reset in \a m_value.
     ///
     /// @param[in] abstime
-    ///     If non-NULL, the absolute time at which we should stop
+    ///     If non-nullptr, the absolute time at which we should stop
     ///     waiting, else wait an infinite amount of time.
     ///
     /// @return
@@ -262,7 +262,7 @@ public:
     ///     unrecoverable error occurs.
     //------------------------------------------------------------------
     T
-    WaitForResetValueBits (T bits, const TimeValue *abstime = NULL)
+    WaitForResetValueBits(T bits, const TimeValue *abstime = nullptr)
     {
         int err = 0;
 
@@ -305,7 +305,7 @@ public:
     ///     The value we want \a m_value to be equal to.
     ///
     /// @param[in] abstime
-    ///     If non-NULL, the absolute time at which we should stop
+    ///     If non-nullptr, the absolute time at which we should stop
     ///     waiting, else wait an infinite amount of time.
     ///
     /// @param[out] timed_out
@@ -317,7 +317,7 @@ public:
     ///     @li \b false otherwise
     //------------------------------------------------------------------
     bool
-    WaitForValueEqualTo (T value, const TimeValue *abstime = NULL, bool *timed_out = NULL)
+    WaitForValueEqualTo(T value, const TimeValue *abstime = nullptr, bool *timed_out = nullptr)
     {
         int err = 0;
         // pthread_cond_timedwait() or pthread_cond_wait() will atomically
@@ -365,7 +365,7 @@ public:
     ///     returned.
     ///
     /// @param[in] abstime
-    ///     If non-NULL, the absolute time at which we should stop
+    ///     If non-nullptr, the absolute time at which we should stop
     ///     waiting, else wait an infinite amount of time.
     ///
     /// @param[out] timed_out
@@ -377,7 +377,9 @@ public:
     ///     @li \b false otherwise
     //------------------------------------------------------------------
     bool
-    WaitForValueEqualToAndSetValueTo (T wait_value, T new_value, const TimeValue *abstime = NULL, bool *timed_out = NULL)
+    WaitForValueEqualToAndSetValueTo(T wait_value, T new_value,
+                                     const TimeValue *abstime = nullptr,
+                                     bool *timed_out = nullptr)
     {
         int err = 0;
         // pthread_cond_timedwait() or pthread_cond_wait() will atomically
@@ -407,7 +409,6 @@ public:
         return false;
     }
 
-
     //------------------------------------------------------------------
     /// Wait for \a m_value to not be equal to \a value.
     ///
@@ -429,7 +430,7 @@ public:
     ///     The new value if \b true is returned.
     ///
     /// @param[in] abstime
-    ///     If non-NULL, the absolute time at which we should stop
+    ///     If non-nullptr, the absolute time at which we should stop
     ///     waiting, else wait an infinite amount of time.
     ///
     /// @return
@@ -437,7 +438,7 @@ public:
     ///     @li \b false otherwise
     //------------------------------------------------------------------
     bool
-    WaitForValueNotEqualTo (T value, T &new_value, const TimeValue *abstime = NULL)
+    WaitForValueNotEqualTo(T value, T &new_value, const TimeValue *abstime = nullptr)
     {
         int err = 0;
         // pthread_cond_timedwait() or pthread_cond_wait() will atomically
@@ -464,7 +465,7 @@ public:
 
 protected:
     //----------------------------------------------------------------------
-    // pthread condition and mutex variable to controll access and allow
+    // pthread condition and mutex variable to control access and allow
     // blocking between the main thread and the spotlight index thread.
     //----------------------------------------------------------------------
     T           m_value;        ///< The templatized value T that we are protecting access to
@@ -472,12 +473,11 @@ protected:
     Condition   m_condition;    ///< The pthread condition variable to use for signaling that data available or changed.
 
 private:
-
     //------------------------------------------------------------------
     /// Broadcast if needed.
     ///
     /// Check to see if we need to broadcast to our condition variable
-    /// depedning on the \a old_value and on the \a broadcast_type.
+    /// depending on the \a old_value and on the \a broadcast_type.
     ///
     /// If \a broadcast_type is eBroadcastNever, no broadcast will be
     /// sent.
@@ -499,11 +499,9 @@ private:
             m_condition.Broadcast();
     }
 
-
     DISALLOW_COPY_AND_ASSIGN(Predicate);
 };
 
 } // namespace lldb_private
 
-#endif  // #if defined(__cplusplus)
-#endif // #ifndef liblldb_Predicate_h_
+#endif // liblldb_Predicate_h_

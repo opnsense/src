@@ -10,10 +10,19 @@
 #ifndef liblldb_Thread_h_
 #define liblldb_Thread_h_
 
+// C Includes
+// C++ Includes
+#include <memory>
+#include <string>
+#include <vector>
+
+// Other libraries and framework includes
+// Project includes
 #include "lldb/lldb-private.h"
 #include "lldb/Host/Mutex.h"
 #include "lldb/Core/Broadcaster.h"
 #include "lldb/Core/Event.h"
+#include "lldb/Core/StructuredData.h"
 #include "lldb/Core/UserID.h"
 #include "lldb/Core/UserSettingsController.h"
 #include "lldb/Target/ExecutionContextScope.h"
@@ -29,8 +38,7 @@ class ThreadProperties : public Properties
 public:
     ThreadProperties(bool is_global);
     
-    virtual
-    ~ThreadProperties();
+    ~ThreadProperties() override;
     
     //------------------------------------------------------------------
     /// The regular expression returned determines symbols that this
@@ -38,7 +46,7 @@ public:
     ///
     /// @return
     ///    A pointer to a regular expression to compare against symbols,
-    ///    or NULL if all symbols are allowed.
+    ///    or nullptr if all symbols are allowed.
     ///
     //------------------------------------------------------------------
     const RegularExpression *
@@ -49,6 +57,12 @@ public:
     
     bool
     GetTraceEnabledState() const;
+    
+    bool
+    GetStepInAvoidsNoDebug () const;
+    
+    bool
+    GetStepOutAvoidsNoDebug () const;
 };
 
 typedef std::shared_ptr<ThreadProperties> ThreadPropertiesSP;
@@ -75,7 +89,7 @@ public:
 
     static ConstString &GetStaticBroadcasterClass ();
     
-    virtual ConstString &GetBroadcasterClass() const
+    ConstString &GetBroadcasterClass() const override
     {
         return GetStaticBroadcasterClass();
     }
@@ -90,19 +104,19 @@ public:
         
         ThreadEventData();
         
-        virtual ~ThreadEventData();
+        ~ThreadEventData() override;
         
         static const ConstString &
         GetFlavorString ();
 
-        virtual const ConstString &
-        GetFlavor () const
+        const ConstString &
+        GetFlavor() const override
         {
             return ThreadEventData::GetFlavorString ();
         }
         
-        virtual void
-        Dump (Stream *s) const;
+        void
+        Dump(Stream *s) const override;
     
         static const ThreadEventData *
         GetEventDataFromEvent (const Event *event_ptr);
@@ -131,9 +145,9 @@ public:
     private:
         lldb::ThreadSP m_thread_sp;
         StackID        m_stack_id;
-    DISALLOW_COPY_AND_ASSIGN (ThreadEventData);
+
+        DISALLOW_COPY_AND_ASSIGN (ThreadEventData);
     };
-    
 
     struct ThreadStateCheckpoint
     {
@@ -144,6 +158,27 @@ public:
         lldb::addr_t       current_inlined_pc;
     };
 
+    //------------------------------------------------------------------
+    /// Constructor
+    ///
+    /// @param [in] process
+    ///
+    /// @param [in] tid
+    ///
+    /// @param [in] use_invalid_index_id
+    ///     Optional parameter, defaults to false.  The only subclass that
+    ///     is likely to set use_invalid_index_id == true is the HistoryThread
+    ///     class.  In that case, the Thread we are constructing represents
+    ///     a thread from earlier in the program execution.  We may have the 
+    ///     tid of the original thread that they represent but we don't want 
+    ///     to reuse the IndexID of that thread, or create a new one.  If a
+    ///     client wants to know the original thread's IndexID, they should use
+    ///     Thread::GetExtendedBacktraceOriginatingIndexID().
+    //------------------------------------------------------------------
+    Thread (Process &process, lldb::tid_t tid, bool use_invalid_index_id = false);
+
+    ~Thread() override;
+
     static void
     SettingsInitialize ();
 
@@ -152,9 +187,6 @@ public:
 
     static const ThreadPropertiesSP &
     GetGlobalProperties();
-
-    Thread (Process &process, lldb::tid_t tid);
-    virtual ~Thread();
 
     lldb::ProcessSP
     GetProcess() const
@@ -180,18 +212,46 @@ public:
     void
     SetState (lldb::StateType state);
 
+    //------------------------------------------------------------------
+    /// Sets the USER resume state for this thread.  If you set a thread to suspended with
+    /// this API, it won't take part in any of the arbitration for ShouldResume, and will stay
+    /// suspended even when other threads do get to run.
+    ///
+    /// N.B. This is not the state that is used internally by thread plans to implement
+    /// staying on one thread while stepping over a breakpoint, etc.  The is the
+    /// TemporaryResume state, and if you are implementing some bit of strategy in the stepping
+    /// machinery you should be using that state and not the user resume state.
+    ///
+    /// If you are just preparing all threads to run, you should not override the threads that are
+    /// marked as suspended by the debugger.  In that case, pass override_suspend = false.  If you want
+    /// to force the thread to run (e.g. the "thread continue" command, or are resetting the state
+    /// (e.g. in SBThread::Resume()), then pass true to override_suspend.
+    /// @return
+    ///    The User resume state for this thread.
+    //------------------------------------------------------------------
+    void
+    SetResumeState (lldb::StateType state, bool override_suspend = false)
+    {
+        if (m_resume_state == lldb::eStateSuspended && !override_suspend)
+            return;
+        m_resume_state = state;
+    }
+
+    //------------------------------------------------------------------
+    /// Gets the USER resume state for this thread.  This is not the same as what
+    /// this thread is going to do for any particular step, however if this thread
+    /// returns eStateSuspended, then the process control logic will never allow this
+    /// thread to run.
+    ///
+    /// @return
+    ///    The User resume state for this thread.
+    //------------------------------------------------------------------
     lldb::StateType
     GetResumeState () const
     {
         return m_resume_state;
     }
-
-    void
-    SetResumeState (lldb::StateType state)
-    {
-        m_resume_state = state;
-    }
-
+    
     // This function is called on all the threads before "ShouldResume" and
     // "WillResume" in case a thread needs to change its state before the
     // ThreadList polls all the threads to figure out which ones actually
@@ -250,6 +310,9 @@ public:
     lldb::StopReason
     GetStopReason();
 
+    bool
+    StopInfoIsUpToDate() const;
+
     // This sets the stop reason to a "blank" stop reason, so you can call functions on the thread
     // without having the called function run with whatever stop reason you stopped with.
     void
@@ -267,13 +330,35 @@ public:
     virtual const char *
     GetInfo ()
     {
-        return NULL;
+        return nullptr;
+    }
+
+    //------------------------------------------------------------------
+    /// Retrieve a dictionary of information about this thread 
+    ///
+    /// On Mac OS X systems there may be voucher information.
+    /// The top level dictionary returned will have an "activity" key and the
+    /// value of the activity is a dictionary.  Keys in that dictionary will 
+    /// be "name" and "id", among others.
+    /// There may also be "trace_messages" (an array) with each entry in that array
+    /// being a dictionary (keys include "message" with the text of the trace
+    /// message).
+    //------------------------------------------------------------------
+    StructuredData::ObjectSP
+    GetExtendedInfo ()
+    {
+        if (m_extended_info_fetched == false)
+        {
+            m_extended_info = FetchThreadExtendedInfo ();
+            m_extended_info_fetched = true;
+        }
+        return m_extended_info;
     }
 
     virtual const char *
     GetName ()
     {
-        return NULL;
+        return nullptr;
     }
 
     virtual void
@@ -281,6 +366,50 @@ public:
     {
     }
 
+    //------------------------------------------------------------------
+    /// Whether this thread can be associated with a libdispatch queue
+    /// 
+    /// The Thread may know if it is associated with a libdispatch queue,
+    /// it may know definitively that it is NOT associated with a libdispatch
+    /// queue, or it may be unknown whether it is associated with a libdispatch
+    /// queue.  
+    ///
+    /// @return
+    ///     eLazyBoolNo if this thread is definitely not associated with a
+    ///     libdispatch queue (e.g. on a non-Darwin system where GCD aka 
+    ///     libdispatch is not available).
+    ///
+    ///     eLazyBoolYes this thread is associated with a libdispatch queue.
+    ///
+    ///     eLazyBoolCalculate this thread may be associated with a libdispatch 
+    ///     queue but the thread doesn't know one way or the other.
+    //------------------------------------------------------------------
+    virtual lldb_private::LazyBool
+    GetAssociatedWithLibdispatchQueue ()
+    {
+        return eLazyBoolNo;
+    }
+
+    virtual void
+    SetAssociatedWithLibdispatchQueue (lldb_private::LazyBool associated_with_libdispatch_queue)
+    {
+    }
+
+    //------------------------------------------------------------------
+    /// Retrieve the Queue ID for the queue currently using this Thread
+    ///
+    /// If this Thread is doing work on behalf of a libdispatch/GCD queue,
+    /// retrieve the QueueID.
+    ///
+    /// This is a unique identifier for the libdispatch/GCD queue in a 
+    /// process.  Often starting at 1 for the initial system-created 
+    /// queues and incrementing, a QueueID will not be reused for a
+    /// different queue during the lifetime of a proces.
+    ///
+    /// @return
+    ///     A QueueID if the Thread subclass implements this, else
+    ///     LLDB_INVALID_QUEUE_ID.
+    //------------------------------------------------------------------
     virtual lldb::queue_id_t
     GetQueueID ()
     {
@@ -292,15 +421,110 @@ public:
     {
     }
 
+    //------------------------------------------------------------------
+    /// Retrieve the Queue name for the queue currently using this Thread
+    ///
+    /// If this Thread is doing work on behalf of a libdispatch/GCD queue,
+    /// retrieve the Queue name.
+    ///
+    /// @return
+    ///     The Queue name, if the Thread subclass implements this, else
+    ///     nullptr.
+    //------------------------------------------------------------------
     virtual const char *
     GetQueueName ()
     {
-        return NULL;
+        return nullptr;
     }
 
     virtual void
     SetQueueName (const char *name)
     {
+    }
+
+    //------------------------------------------------------------------
+    /// Retrieve the Queue kind for the queue currently using this Thread
+    ///
+    /// If this Thread is doing work on behalf of a libdispatch/GCD queue,
+    /// retrieve the Queue kind - either eQueueKindSerial or 
+    /// eQueueKindConcurrent, indicating that this queue processes work
+    /// items serially or concurrently.
+    ///
+    /// @return
+    ///     The Queue kind, if the Thread subclass implements this, else
+    ///     eQueueKindUnknown.
+    //------------------------------------------------------------------
+    virtual lldb::QueueKind
+    GetQueueKind ()
+    {
+        return lldb::eQueueKindUnknown;
+    }
+
+    virtual void
+    SetQueueKind (lldb::QueueKind kind)
+    {
+    }
+
+    //------------------------------------------------------------------
+    /// Retrieve the Queue for this thread, if any.
+    ///
+    /// @return
+    ///     A QueueSP for the queue that is currently associated with this 
+    ///     thread.
+    ///     An empty shared pointer indicates that this thread is not
+    ///     associated with a queue, or libdispatch queues are not 
+    ///     supported on this target.
+    //------------------------------------------------------------------
+    virtual lldb::QueueSP
+    GetQueue ()
+    {
+        return lldb::QueueSP();
+    }
+
+    //------------------------------------------------------------------
+    /// Retrieve the address of the libdispatch_queue_t struct for queue
+    /// currently using this Thread
+    ///
+    /// If this Thread is doing work on behalf of a libdispatch/GCD queue,
+    /// retrieve the address of the libdispatch_queue_t structure describing
+    /// the queue.
+    ///
+    /// This address may be reused for different queues later in the Process
+    /// lifetime and should not be used to identify a queue uniquely.  Use
+    /// the GetQueueID() call for that.
+    ///
+    /// @return
+    ///     The Queue's libdispatch_queue_t address if the Thread subclass
+    ///     implements this, else LLDB_INVALID_ADDRESS.
+    //------------------------------------------------------------------
+    virtual lldb::addr_t
+    GetQueueLibdispatchQueueAddress ()
+    {
+        return LLDB_INVALID_ADDRESS;
+    }
+
+    virtual void
+    SetQueueLibdispatchQueueAddress (lldb::addr_t dispatch_queue_t)
+    {
+    }
+
+    //------------------------------------------------------------------
+    /// Whether this Thread already has all the Queue information cached or not
+    ///
+    /// A Thread may be associated with a libdispatch work Queue at a given
+    /// public stop event.  If so, the thread can satisify requests like
+    /// GetQueueLibdispatchQueueAddress, GetQueueKind, GetQueueName, and GetQueueID
+    /// either from information from the remote debug stub when it is initially
+    /// created, or it can query the SystemRuntime for that information.
+    ///
+    /// This method allows the SystemRuntime to discover if a thread has this
+    /// information already, instead of calling the thread to get the information
+    /// and having the thread call the SystemRuntime again.
+    //------------------------------------------------------------------
+    virtual bool
+    ThreadHasQueueInformation () const
+    {
+        return false;
     }
 
     virtual uint32_t
@@ -337,7 +561,7 @@ public:
     ReturnFromFrame (lldb::StackFrameSP frame_sp, lldb::ValueObjectSP return_value_sp, bool broadcast = false);
 
     Error
-    JumpToLine (const FileSpec &file, uint32_t line, bool can_leave_function, std::string *warnings = NULL);
+    JumpToLine(const FileSpec &file, uint32_t line, bool can_leave_function, std::string *warnings = nullptr);
 
     virtual lldb::StackFrameSP
     GetFrameWithStackID (const StackID &stack_id)
@@ -354,15 +578,10 @@ public:
     }
 
     lldb::StackFrameSP
-    GetSelectedFrame ()
-    {
-        lldb::StackFrameListSP stack_frame_list_sp(GetStackFrameList());
-        return stack_frame_list_sp->GetFrameAtIndex (stack_frame_list_sp->GetSelectedFrameIndex());
-    }
+    GetSelectedFrame ();
 
     uint32_t
     SetSelectedFrame (lldb_private::StackFrame *frame, bool broadcast = false);
-
 
     bool
     SetSelectedFrameByIndex (uint32_t frame_idx, bool broadcast = false);
@@ -412,6 +631,9 @@ public:
     void
     DumpUsingSettingsFormat (Stream &strm, uint32_t frame_idx);
 
+    bool
+    GetDescription (Stream &s, lldb::DescriptionLevel level, bool print_json_thread, bool print_json_stopinfo);
+
     //------------------------------------------------------------------
     /// Default implementation for stepping into.
     ///
@@ -422,17 +644,22 @@ public:
     ///     If true and the frame has debug info, then do a source level
     ///     step in, else do a single instruction step in.
     ///
-    /// @param[in] avoid_code_without_debug_info
+    /// @param[in] step_in_avoids_code_without_debug_info
     ///     If \a true, then avoid stepping into code that doesn't have
-    ///     debug info, else step into any code regardless of wether it
+    ///     debug info, else step into any code regardless of whether it
     ///     has debug info.
+    ///
+    /// @param[in] step_out_avoids_code_without_debug_info
+    ///     If \a true, then if you step out to code with no debug info, keep
+    ///     stepping out till you get to code with debug info.
     ///
     /// @return
     ///     An error that describes anything that went wrong
     //------------------------------------------------------------------
     virtual Error
     StepIn (bool source_step,
-            bool avoid_code_without_debug_info);
+            LazyBool step_in_avoids_code_without_debug_info = eLazyBoolCalculate,
+            LazyBool step_out_avoids_code_without_debug_info = eLazyBoolCalculate);
 
     //------------------------------------------------------------------
     /// Default implementation for stepping over.
@@ -448,7 +675,8 @@ public:
     ///     An error that describes anything that went wrong
     //------------------------------------------------------------------
     virtual Error
-    StepOver (bool source_step);
+    StepOver (bool source_step,
+              LazyBool step_out_avoids_code_without_debug_info = eLazyBoolCalculate);
 
     //------------------------------------------------------------------
     /// Default implementation for stepping out.
@@ -461,6 +689,7 @@ public:
     //------------------------------------------------------------------
     virtual Error
     StepOut ();
+
     //------------------------------------------------------------------
     /// Retrieves the per-thread data area.
     /// Most OSs maintain a per-thread pointer (e.g. the FS register on
@@ -487,6 +716,19 @@ public:
     virtual lldb::addr_t
     GetThreadLocalData (const lldb::ModuleSP module);
 
+    //------------------------------------------------------------------
+    /// Check whether this thread is safe to run functions
+    ///
+    /// The SystemRuntime may know of certain thread states (functions in 
+    /// process of execution, for instance) which can make it unsafe for 
+    /// functions to be called.
+    ///
+    /// @return
+    ///     True if it is safe to call functions on this thread.
+    ///     False if function calls should be avoided on this thread.
+    //------------------------------------------------------------------
+    virtual bool
+    SafeToCallFunctions ();
 
     //------------------------------------------------------------------
     // Thread Plan Providers:
@@ -524,7 +766,7 @@ public:
     ///    Otherwise this plan will go on the end of the plan stack.
     ///
     /// @return
-    ///     A shared pointer to the newly queued thread plan, or NULL if the plan could not be queued.
+    ///     A shared pointer to the newly queued thread plan, or nullptr if the plan could not be queued.
     //------------------------------------------------------------------
     virtual lldb::ThreadPlanSP
     QueueFundamentalPlan (bool abort_other_plans);
@@ -543,7 +785,7 @@ public:
     ///    \b true if we will stop other threads while we single step this one.
     ///
     /// @return
-    ///     A shared pointer to the newly queued thread plan, or NULL if the plan could not be queued.
+    ///     A shared pointer to the newly queued thread plan, or nullptr if the plan could not be queued.
     //------------------------------------------------------------------
     virtual lldb::ThreadPlanSP
     QueueThreadPlanForStepSingleInstruction (bool step_over,
@@ -574,14 +816,28 @@ public:
     /// @param[in] stop_other_threads
     ///    \b true if we will stop other threads while we single step this one.
     ///
+    /// @param[in] step_out_avoids_code_without_debug_info
+    ///    If eLazyBoolYes, if the step over steps out it will continue to step out till it comes to a frame with debug info.
+    ///    If eLazyBoolCalculate, we will consult the default set in the thread.
+    ///
     /// @return
-    ///     A shared pointer to the newly queued thread plan, or NULL if the plan could not be queued.
+    ///     A shared pointer to the newly queued thread plan, or nullptr if the plan could not be queued.
     //------------------------------------------------------------------
     virtual lldb::ThreadPlanSP
     QueueThreadPlanForStepOverRange (bool abort_other_plans,
-                                 const AddressRange &range,
-                                 const SymbolContext &addr_context,
-                                 lldb::RunMode stop_other_threads);
+                                     const AddressRange &range,
+                                     const SymbolContext &addr_context,
+                                     lldb::RunMode stop_other_threads,
+                                     LazyBool step_out_avoids_code_without_debug_info = eLazyBoolCalculate);
+
+    // Helper function that takes a LineEntry to step, insted of an AddressRange.  This may combine multiple
+    // LineEntries of the same source line number to step over a longer address range in a single operation.
+    virtual lldb::ThreadPlanSP
+    QueueThreadPlanForStepOverRange (bool abort_other_plans,
+                                     const LineEntry &line_entry,
+                                     const SymbolContext &addr_context,
+                                     lldb::RunMode stop_other_threads,
+                                     LazyBool step_out_avoids_code_without_debug_info = eLazyBoolCalculate);
 
     //------------------------------------------------------------------
     /// Queues the plan used to step through an address range, stepping into functions.
@@ -609,19 +865,36 @@ public:
     /// @param[in] stop_other_threads
     ///    \b true if we will stop other threads while we single step this one.
     ///
-    /// @param[in] avoid_code_without_debug_info
-    ///    If \b true we will step out if we step into code with no debug info.
+    /// @param[in] step_in_avoids_code_without_debug_info
+    ///    If eLazyBoolYes we will step out if we step into code with no debug info.
+    ///    If eLazyBoolCalculate we will consult the default set in the thread.
+    ///
+    /// @param[in] step_out_avoids_code_without_debug_info
+    ///    If eLazyBoolYes, if the step over steps out it will continue to step out till it comes to a frame with debug info.
+    ///    If eLazyBoolCalculate, it will consult the default set in the thread.
     ///
     /// @return
-    ///     A shared pointer to the newly queued thread plan, or NULL if the plan could not be queued.
+    ///     A shared pointer to the newly queued thread plan, or nullptr if the plan could not be queued.
     //------------------------------------------------------------------
     virtual lldb::ThreadPlanSP
     QueueThreadPlanForStepInRange (bool abort_other_plans,
-                                 const AddressRange &range,
-                                 const SymbolContext &addr_context,
-                                 const char *step_in_target,
-                                 lldb::RunMode stop_other_threads,
-                                 bool avoid_code_without_debug_info);
+                                   const AddressRange &range,
+                                   const SymbolContext &addr_context,
+                                   const char *step_in_target,
+                                   lldb::RunMode stop_other_threads,
+                                   LazyBool step_in_avoids_code_without_debug_info = eLazyBoolCalculate,
+                                   LazyBool step_out_avoids_code_without_debug_info = eLazyBoolCalculate);
+
+    // Helper function that takes a LineEntry to step, insted of an AddressRange.  This may combine multiple
+    // LineEntries of the same source line number to step over a longer address range in a single operation.
+    virtual lldb::ThreadPlanSP
+    QueueThreadPlanForStepInRange (bool abort_other_plans,
+                                   const LineEntry &line_entry,
+                                   const SymbolContext &addr_context,
+                                   const char *step_in_target,
+                                   lldb::RunMode stop_other_threads,
+                                   LazyBool step_in_avoids_code_without_debug_info = eLazyBoolCalculate,
+                                   LazyBool step_out_avoids_code_without_debug_info = eLazyBoolCalculate);
 
     //------------------------------------------------------------------
     /// Queue the plan used to step out of the function at the current PC of
@@ -648,8 +921,12 @@ public:
     /// @param[in] run_vote
     ///    See standard meanings for the stop & run votes in ThreadPlan.h.
     ///
+    /// @param[in] step_out_avoids_code_without_debug_info
+    ///    If eLazyBoolYes, if the step over steps out it will continue to step out till it comes to a frame with debug info.
+    ///    If eLazyBoolCalculate, it will consult the default set in the thread.
+    ///
     /// @return
-    ///     A shared pointer to the newly queued thread plan, or NULL if the plan could not be queued.
+    ///     A shared pointer to the newly queued thread plan, or nullptr if the plan could not be queued.
     //------------------------------------------------------------------
     virtual lldb::ThreadPlanSP
     QueueThreadPlanForStepOut (bool abort_other_plans,
@@ -658,7 +935,57 @@ public:
                                bool stop_other_threads,
                                Vote stop_vote, // = eVoteYes,
                                Vote run_vote, // = eVoteNoOpinion);
-                               uint32_t frame_idx);
+                               uint32_t frame_idx,
+                               LazyBool step_out_avoids_code_without_debug_info = eLazyBoolCalculate);
+
+    //------------------------------------------------------------------
+    /// Queue the plan used to step out of the function at the current PC of
+    /// a thread.  This version does not consult the should stop here callback, and should only
+    /// be used by other thread plans when they need to retain control of the step out.
+    ///
+    /// @param[in] abort_other_plans
+    ///    \b true if we discard the currently queued plans and replace them with this one.
+    ///    Otherwise this plan will go on the end of the plan stack.
+    ///
+    /// @param[in] addr_context
+    ///    When dealing with stepping through inlined functions the current PC is not enough information to know
+    ///    what "step" means.  For instance a series of nested inline functions might start at the same address.
+    //     The \a addr_context provides the current symbol context the step
+    ///    is supposed to be out of.
+    //   FIXME: Currently unused.
+    ///
+    /// @param[in] first_insn
+    ///     \b true if this is the first instruction of a function.
+    ///
+    /// @param[in] stop_other_threads
+    ///    \b true if we will stop other threads while we single step this one.
+    ///
+    /// @param[in] stop_vote
+    /// @param[in] run_vote
+    ///    See standard meanings for the stop & run votes in ThreadPlan.h.
+    ///
+    /// @param[in] continue_to_next_branch
+    ///    Normally this will enqueue a plan that will put a breakpoint on the return address and continue
+    ///    to there.  If continue_to_next_branch is true, this is an operation not involving the user -- 
+    ///    e.g. stepping "next" in a source line and we instruction stepped into another function -- 
+    ///    so instead of putting a breakpoint on the return address, advance the breakpoint to the 
+    ///    end of the source line that is doing the call, or until the next flow control instruction.
+    ///    If the return value from the function call is to be retrieved / displayed to the user, you must stop
+    ///    on the return address.  The return value may be stored in volatile registers which are overwritten
+    ///    before the next branch instruction.
+    ///
+    /// @return
+    ///     A shared pointer to the newly queued thread plan, or nullptr if the plan could not be queued.
+    //------------------------------------------------------------------
+    virtual lldb::ThreadPlanSP
+    QueueThreadPlanForStepOutNoShouldStop (bool abort_other_plans,
+                                           SymbolContext *addr_context,
+                                           bool first_insn,
+                                           bool stop_other_threads,
+                                           Vote stop_vote, // = eVoteYes,
+                                           Vote run_vote, // = eVoteNoOpinion);
+                                           uint32_t frame_idx,
+                                           bool continue_to_next_branch = false);
 
     //------------------------------------------------------------------
     /// Gets the plan used to step through the code that steps from a function
@@ -677,7 +1004,7 @@ public:
     ///    \b true if we will stop other threads while we single step this one.
     ///
     /// @return
-    ///     A shared pointer to the newly queued thread plan, or NULL if the plan could not be queued.
+    ///     A shared pointer to the newly queued thread plan, or nullptr if the plan could not be queued.
     //------------------------------------------------------------------
     virtual lldb::ThreadPlanSP
     QueueThreadPlanForStepThrough (StackID &return_stack_id,
@@ -700,7 +1027,7 @@ public:
     ///    \b true if we will stop other threads while we single step this one.
     ///
     /// @return
-    ///     A shared pointer to the newly queued thread plan, or NULL if the plan could not be queued.
+    ///     A shared pointer to the newly queued thread plan, or nullptr if the plan could not be queued.
     //------------------------------------------------------------------
     virtual lldb::ThreadPlanSP
     QueueThreadPlanForRunToAddress (bool abort_other_plans,
@@ -713,6 +1040,11 @@ public:
                                  size_t num_addresses,
                                  bool stop_others,
                                  uint32_t frame_idx);
+
+    virtual lldb::ThreadPlanSP
+    QueueThreadPlanForStepScripted (bool abort_other_plans,
+                                    const char *class_name,
+                                    bool stop_other_threads);
 
     //------------------------------------------------------------------
     // Thread Plan accessors:
@@ -738,15 +1070,6 @@ public:
     Error
     UnwindInnermostExpression();
 
-private:
-    bool
-    PlanIsBasePlan (ThreadPlan *plan_ptr);
-    
-    void
-    BroadcastSelectedFrameChange(StackID &new_frame_id);
-    
-public:
-
     //------------------------------------------------------------------
     /// Gets the outer-most plan that was popped off the plan stack in the
     /// most recent stop.  Useful for printing the stop reason accurately.
@@ -766,6 +1089,17 @@ public:
     //------------------------------------------------------------------
     lldb::ValueObjectSP
     GetReturnValueObject ();
+
+    //------------------------------------------------------------------
+    /// Gets the outer-most expression variable from the completed plans
+    ///
+    /// @return
+    ///     A ExpressionVariableSP, either empty if there is no
+    ///     plan completed an expression during the current stop
+    ///     or the expression variable that was made for the completed expression.
+    //------------------------------------------------------------------
+    lldb::ExpressionVariableSP
+    GetExpressionVariable ();
 
     //------------------------------------------------------------------
     ///  Checks whether the given plan is in the completed plans for this
@@ -811,7 +1145,6 @@ public:
     void
     QueueThreadPlan (lldb::ThreadPlanSP &plan_sp, bool abort_other_plans);
 
-
     //------------------------------------------------------------------
     /// Discards the plans queued on the plan stack of the current thread.  This is
     /// arbitrated by the "Master" ThreadPlans, using the "OkayToDiscard" call.
@@ -832,6 +1165,20 @@ public:
 
     void
     DiscardThreadPlansUpToPlan (ThreadPlan *up_to_plan_ptr);
+
+    //------------------------------------------------------------------
+    /// Discards the plans queued on the plan stack of the current thread up to and
+    /// including the plan in that matches \a thread_index counting only
+    /// the non-Private plans.
+    ///
+    /// @param[in] up_to_plan_sp
+    ///   Discard all plans up to and including this user plan given by this index.
+    ///
+    /// @return
+    ///    \b true if there was a thread plan with that user index, \b false otherwise.
+    //------------------------------------------------------------------
+    bool
+    DiscardUserThreadPlansUpToIndex (uint32_t thread_index);
     
     //------------------------------------------------------------------
     /// Prints the current plan stack.
@@ -841,7 +1188,10 @@ public:
     ///
     //------------------------------------------------------------------
     void
-    DumpThreadPlans (Stream *s) const;
+    DumpThreadPlans (Stream *s,
+                     lldb::DescriptionLevel desc_level = lldb::eDescriptionLevelVerbose,
+                     bool include_internal = true,
+                     bool ignore_boring = false) const;
     
     virtual bool
     CheckpointThreadState (ThreadStateCheckpoint &saved_state);
@@ -900,20 +1250,20 @@ public:
     //------------------------------------------------------------------
     // lldb::ExecutionContextScope pure virtual functions
     //------------------------------------------------------------------
-    virtual lldb::TargetSP
-    CalculateTarget ();
+    lldb::TargetSP
+    CalculateTarget() override;
     
-    virtual lldb::ProcessSP
-    CalculateProcess ();
+    lldb::ProcessSP
+    CalculateProcess() override;
     
-    virtual lldb::ThreadSP
-    CalculateThread ();
+    lldb::ThreadSP
+    CalculateThread() override;
     
-    virtual lldb::StackFrameSP
-    CalculateStackFrame ();
+    lldb::StackFrameSP
+    CalculateStackFrame() override;
 
-    virtual void
-    CalculateExecutionContext (ExecutionContext &exe_ctx);
+    void
+    CalculateExecutionContext(ExecutionContext &exe_ctx) override;
     
     lldb::StackFrameSP
     GetStackFrameSPForStackFramePtr (StackFrame *stack_frame_ptr);
@@ -1024,7 +1374,6 @@ public:
     }
 
 protected:
-
     friend class ThreadPlan;
     friend class ThreadList;
     friend class ThreadEventData;
@@ -1066,10 +1415,25 @@ protected:
         return false;
     }
     
+    // Subclasses that have a way to get an extended info dictionary for this thread should
+    // fill 
+    virtual lldb_private::StructuredData::ObjectSP
+    FetchThreadExtendedInfo ()
+    {
+        return StructuredData::ObjectSP();
+    }
 
     lldb::StackFrameListSP
     GetStackFrameList ();
-    
+
+    void
+    SetTemporaryResumeState(lldb::StateType new_state)
+    {
+        m_temporary_resume_state = new_state;
+    }
+
+    void
+    FunctionOptimizationWarning (lldb_private::StackFrame *frame);
 
     //------------------------------------------------------------------
     // Classes that inherit from Process can see and modify these
@@ -1078,6 +1442,7 @@ protected:
     lldb::StopInfoSP    m_stop_info_sp;         ///< The private stop reason for this thread
     uint32_t            m_stop_info_stop_id;    // This is the stop id for which the StopInfo is valid.  Can use this so you know that
     // the thread's m_stop_info_sp is current and you don't have to fetch it again
+    uint32_t            m_stop_info_override_stop_id;    // The stop ID containing the last time the stop info was checked against the stop info override
     const uint32_t      m_index_id;             ///< A unique 1 based index assigned to each thread for easy UI/command line access.
     lldb::RegisterContextSP m_reg_context_sp;   ///< The register context for this thread's current register state.
     lldb::StateType     m_state;                ///< The state of our process.
@@ -1091,19 +1456,24 @@ protected:
     int                 m_resume_signal;        ///< The signal that should be used when continuing this thread.
     lldb::StateType     m_resume_state;         ///< This state is used to force a thread to be suspended from outside the ThreadPlan logic.
     lldb::StateType     m_temporary_resume_state; ///< This state records what the thread was told to do by the thread plan logic for the current resume.
-                                                  /// It gets set in Thread::ShoudResume.
+                                                  /// It gets set in Thread::ShouldResume.
     std::unique_ptr<lldb_private::Unwind> m_unwinder_ap;
     bool                m_destroy_called;       // This is used internally to make sure derived Thread classes call DestroyThread.
     LazyBool            m_override_should_notify;
 private:
-    //------------------------------------------------------------------
-    // For Thread only
-    //------------------------------------------------------------------
+    bool                m_extended_info_fetched;  // Have we tried to retrieve the m_extended_info for this thread?
+    StructuredData::ObjectSP m_extended_info;     // The extended info for this thread
 
+private:
+    bool
+    PlanIsBasePlan (ThreadPlan *plan_ptr);
+
+    void
+    BroadcastSelectedFrameChange(StackID &new_frame_id);
+    
     DISALLOW_COPY_AND_ASSIGN (Thread);
-
 };
 
 } // namespace lldb_private
 
-#endif  // liblldb_Thread_h_
+#endif // liblldb_Thread_h_

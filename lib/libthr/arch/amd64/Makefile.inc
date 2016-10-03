@@ -1,6 +1,6 @@
 #$FreeBSD$
 
-SRCS+=	pthread_md.c _umtx_op_err.S
+SRCS+=	_umtx_op_err.S
 
 # With the current compiler and libthr code, using SSE in libthr
 # does not provide enough performance improvement to outweigh

@@ -57,6 +57,7 @@ __FBSDID("$FreeBSD$");
 
 #include <arm/ti/ti_cpuid.h>
 #include <arm/ti/ti_prcm.h>
+#include <arm/ti/ti_hwmods.h>
 #include "gpio_if.h"
 
 struct ti_sdhci_softc {
@@ -66,7 +67,7 @@ struct ti_sdhci_softc {
 	struct resource *	irq_res;
 	void *			intr_cookie;
 	struct sdhci_slot	slot;
-	uint32_t		mmchs_device_id;
+	clk_ident_t		mmchs_clk_id;
 	uint32_t		mmchs_reg_off;
 	uint32_t		sdhci_reg_off;
 	uint32_t		baseclk_hz;
@@ -383,19 +384,18 @@ static void
 ti_sdhci_hw_init(device_t dev)
 {
 	struct ti_sdhci_softc *sc = device_get_softc(dev);
-	clk_ident_t clk;
 	uint32_t regval;
 	unsigned long timeout;
 
 	/* Enable the controller and interface/functional clocks */
-	clk = MMC0_CLK + sc->mmchs_device_id;
-	if (ti_prcm_clk_enable(clk) != 0) {
+	if (ti_prcm_clk_enable(sc->mmchs_clk_id) != 0) {
 		device_printf(dev, "Error: failed to enable MMC clock\n");
 		return;
 	}
 
 	/* Get the frequency of the source clock */
-	if (ti_prcm_clk_get_source_freq(clk, &sc->baseclk_hz) != 0) {
+	if (ti_prcm_clk_get_source_freq(sc->mmchs_clk_id,
+	    &sc->baseclk_hz) != 0) {
 		device_printf(dev, "Error: failed to get source clock freq\n");
 		return;
 	}
@@ -484,12 +484,10 @@ ti_sdhci_attach(device_t dev)
 	 * up and added in freebsd, it doesn't exist in the published bindings.
 	 */
 	node = ofw_bus_get_node(dev);
-	if ((OF_getprop(node, "mmchs-device-id", &prop, sizeof(prop))) <= 0) {
-		sc->mmchs_device_id = device_get_unit(dev);
-		device_printf(dev, "missing mmchs-device-id attribute in FDT, "
-		    "using unit number (%d)", sc->mmchs_device_id);
-	} else
-		sc->mmchs_device_id = fdt32_to_cpu(prop);
+	sc->mmchs_clk_id = ti_hwmods_get_clock(dev);
+	if (sc->mmchs_clk_id == INVALID_CLK_IDENT) {
+		device_printf(dev, "failed to get clock based on hwmods property\n");
+	}
 
 	/*
 	 * The hardware can inherently do dual-voltage (1p8v, 3p0v) on the first
@@ -500,7 +498,7 @@ ti_sdhci_attach(device_t dev)
 	 * be done once and never reset.
 	 */
 	sc->slot.host.caps |= MMC_OCR_LOW_VOLTAGE;
-	if (sc->mmchs_device_id == 0 || OF_hasprop(node, "ti,dual-volt")) {
+	if (sc->mmchs_clk_id == MMC1_CLK || OF_hasprop(node, "ti,dual-volt")) {
 		sc->slot.host.caps |= MMC_OCR_290_300 | MMC_OCR_300_310;
 	}
 
@@ -527,15 +525,21 @@ ti_sdhci_attach(device_t dev)
 	 * Set the offset from the device's memory start to the MMCHS registers.
 	 * Also for OMAP4 disable high speed mode due to erratum ID i626.
 	 */
-	if (ti_chip() == CHIP_OMAP_3)
-		sc->mmchs_reg_off = OMAP3_MMCHS_REG_OFFSET;
-	else if (ti_chip() == CHIP_OMAP_4) {
+	switch (ti_chip()) {
+#ifdef SOC_OMAP4
+	case CHIP_OMAP_4:
 		sc->mmchs_reg_off = OMAP4_MMCHS_REG_OFFSET;
 		sc->disable_highspeed = true;
-        } else if (ti_chip() == CHIP_AM335X)
+		break;
+#endif
+#ifdef SOC_TI_AM335X
+	case CHIP_AM335X:
 		sc->mmchs_reg_off = AM335X_MMCHS_REG_OFFSET;
-	else
+		break;
+#endif
+	default:
 		panic("Unknown OMAP device\n");
+	}
 
 	/*
 	 * The standard SDHCI registers are at a fixed offset (the same on all
@@ -717,3 +721,5 @@ static driver_t ti_sdhci_driver = {
 
 DRIVER_MODULE(sdhci_ti, simplebus, ti_sdhci_driver, ti_sdhci_devclass, 0, 0);
 MODULE_DEPEND(sdhci_ti, sdhci, 1, 1, 1);
+DRIVER_MODULE(mmc, sdhci_ti, mmc_driver, mmc_devclass, NULL, NULL);
+MODULE_DEPEND(sdhci_ti, mmc, 1, 1, 1);

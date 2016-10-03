@@ -53,12 +53,10 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_param.h>
 
 #include <machine/cpu.h>
-#include <machine/vm.h>
 #include <machine/pcb.h>
 #include <machine/smp.h>
 #include <x86/psl.h>
 #include <x86/apicreg.h>
-#include <machine/vmparam.h>
 
 #include <machine/vmm.h>
 #include <machine/vmm_dev.h>
@@ -76,7 +74,6 @@ __FBSDID("$FreeBSD$");
 #include "vlapic.h"
 #include "vpmtmr.h"
 #include "vrtc.h"
-#include "vmm_ipi.h"
 #include "vmm_stat.h"
 #include "vmm_lapic.h"
 
@@ -124,7 +121,7 @@ struct mem_seg {
 	bool	sysmem;
 	struct vm_object *object;
 };
-#define	VM_MAX_MEMSEGS	2
+#define	VM_MAX_MEMSEGS	3
 
 struct mem_map {
 	vm_paddr_t	gpa;
@@ -214,7 +211,6 @@ SYSCTL_NODE(_hw, OID_AUTO, vmm, CTLFLAG_RW, NULL, NULL);
  * interrupts disabled.
  */
 static int halt_detection_enabled = 1;
-TUNABLE_INT("hw.vmm.halt_detection", &halt_detection_enabled);
 SYSCTL_INT(_hw_vmm, OID_AUTO, halt_detection, CTLFLAG_RDTUN,
     &halt_detection_enabled, 0,
     "Halt VM if all vcpus execute HLT with interrupts disabled");
@@ -334,8 +330,8 @@ vmm_init(void)
 
 	vmm_host_state_init();
 
-	vmm_ipinum = vmm_ipi_alloc();
-	if (vmm_ipinum == 0)
+	vmm_ipinum = lapic_ipi_alloc(&IDTVEC(justreturn));
+	if (vmm_ipinum < 0)
 		vmm_ipinum = IPI_AST;
 
 	error = vmm_mem_init();
@@ -374,7 +370,7 @@ vmm_handler(module_t mod, int what, void *arg)
 			vmm_resume_p = NULL;
 			iommu_cleanup();
 			if (vmm_ipinum != IPI_AST)
-				vmm_ipi_free(vmm_ipinum);
+				lapic_ipi_free(vmm_ipinum);
 			error = VMM_CLEANUP();
 			/*
 			 * Something bad happened - prevent new
@@ -2193,7 +2189,7 @@ vmm_is_pptdev(int bus, int slot, int func)
 	/* set pptdevs="1/2/3 4/5/6 7/8/9 10/11/12" */
 	found = 0;
 	for (i = 0; names[i] != NULL && !found; i++) {
-		cp = val = getenv(names[i]);
+		cp = val = kern_getenv(names[i]);
 		while (cp != NULL && *cp != '\0') {
 			if ((cp2 = strchr(cp, ' ')) != NULL)
 				*cp2 = '\0';

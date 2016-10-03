@@ -15,6 +15,7 @@
 // Other libraries and framework includes
 // Project includes
 #include "lldb/Breakpoint/BreakpointResolver.h"
+#include "lldb/Core/ModuleSpec.h"
 
 namespace lldb_private {
 
@@ -31,30 +32,33 @@ public:
     BreakpointResolverAddress (Breakpoint *bkpt,
                        const Address &addr);
 
-    virtual
-    ~BreakpointResolverAddress ();
+    BreakpointResolverAddress (Breakpoint *bkpt,
+                       const Address &addr,
+                       const FileSpec &module_spec);
 
-    virtual void
-    ResolveBreakpoint (SearchFilter &filter);
+    ~BreakpointResolverAddress() override;
 
-    virtual void
+    void
+    ResolveBreakpoint (SearchFilter &filter) override;
+
+    void
     ResolveBreakpointInModules (SearchFilter &filter,
-                                ModuleList &modules);
+                                ModuleList &modules) override;
 
-    virtual Searcher::CallbackReturn
+    Searcher::CallbackReturn
     SearchCallback (SearchFilter &filter,
                     SymbolContext &context,
                     Address *addr,
-                    bool containing);
+                    bool containing) override;
 
-    virtual Searcher::Depth
-    GetDepth ();
+    Searcher::Depth
+    GetDepth () override;
 
-    virtual void
-    GetDescription (Stream *s);
+    void
+    GetDescription (Stream *s) override;
 
-    virtual void
-    Dump (Stream *s) const;
+    void
+    Dump (Stream *s) const override;
 
     /// Methods for support type inquiry through isa, cast, and dyn_cast:
     static inline bool classof(const BreakpointResolverAddress *) { return true; }
@@ -62,13 +66,19 @@ public:
         return V->getResolverID() == BreakpointResolver::AddressResolver;
     }
 
-protected:
-    Address m_addr;
+    lldb::BreakpointResolverSP
+    CopyForBreakpoint (Breakpoint &breakpoint) override;
 
+protected:
+    Address      m_addr;     // The address - may be Section Offset or may be just an offset
+    lldb::addr_t m_resolved_addr; // The current value of the resolved load address for this breakpoint,
+    FileSpec     m_module_filespec; // If this filespec is Valid, and m_addr is an offset, then it will be converted
+                                    // to a Section+Offset address in this module, whenever that module gets around to
+                                    // being loaded.
 private:
     DISALLOW_COPY_AND_ASSIGN(BreakpointResolverAddress);
 };
 
 } // namespace lldb_private
 
-#endif  // liblldb_BreakpointResolverAddress_h_
+#endif // liblldb_BreakpointResolverAddress_h_

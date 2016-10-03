@@ -7,8 +7,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "lldb/lldb-python.h"
-
 #include "lldb/Interpreter/OptionGroupValueObjectDisplay.h"
 
 // C Includes
@@ -16,6 +14,7 @@
 // Other libraries and framework includes
 // Project includes
 #include "lldb/DataFormatters/ValueObjectPrinter.h"
+#include "lldb/Host/StringConvert.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Interpreter/CommandInterpreter.h"
 #include "lldb/Utility/Utils.h"
@@ -34,18 +33,19 @@ OptionGroupValueObjectDisplay::~OptionGroupValueObjectDisplay ()
 static OptionDefinition
 g_option_table[] =
 {
-    { LLDB_OPT_SET_1, false, "dynamic-type",       'd', OptionParser::eRequiredArgument, g_dynamic_value_types, 0, eArgTypeNone,      "Show the object as its full dynamic type, not its static type, if available."},
-    { LLDB_OPT_SET_1, false, "synthetic-type",     'S', OptionParser::eRequiredArgument, NULL, 0, eArgTypeBoolean,   "Show the object obeying its synthetic provider, if available."},
-    { LLDB_OPT_SET_1, false, "depth",              'D', OptionParser::eRequiredArgument, NULL, 0, eArgTypeCount,     "Set the max recurse depth when dumping aggregate types (default is infinity)."},
-    { LLDB_OPT_SET_1, false, "flat",               'F', OptionParser::eNoArgument,       NULL, 0, eArgTypeNone,      "Display results in a flat format that uses expression paths for each variable or member."},
-    { LLDB_OPT_SET_1, false, "location",           'L', OptionParser::eNoArgument,       NULL, 0, eArgTypeNone,      "Show variable location information."},
-    { LLDB_OPT_SET_1, false, "object-description", 'O', OptionParser::eNoArgument,       NULL, 0, eArgTypeNone,      "Print as an Objective-C object."},
-    { LLDB_OPT_SET_1, false, "ptr-depth",          'P', OptionParser::eRequiredArgument, NULL, 0, eArgTypeCount,     "The number of pointers to be traversed when dumping values (default is zero)."},
-    { LLDB_OPT_SET_1, false, "show-types",         'T', OptionParser::eNoArgument,       NULL, 0, eArgTypeNone,      "Show variable types when dumping values."},
-    { LLDB_OPT_SET_1, false, "no-summary-depth",   'Y', OptionParser::eOptionalArgument, NULL, 0, eArgTypeCount,     "Set the depth at which omitting summary information stops (default is 1)."},
-    { LLDB_OPT_SET_1, false, "raw-output",         'R', OptionParser::eNoArgument,       NULL, 0, eArgTypeNone,      "Don't use formatting options."},
-    { LLDB_OPT_SET_1, false, "show-all-children",  'A', OptionParser::eNoArgument,       NULL, 0, eArgTypeNone,      "Ignore the upper bound on the number of children to show."},
-    { 0, false, NULL, 0, 0, NULL, 0, eArgTypeNone, NULL }
+    { LLDB_OPT_SET_1, false, "dynamic-type",       'd', OptionParser::eRequiredArgument, nullptr, g_dynamic_value_types, 0, eArgTypeNone,      "Show the object as its full dynamic type, not its static type, if available."},
+    { LLDB_OPT_SET_1, false, "synthetic-type",     'S', OptionParser::eRequiredArgument, nullptr, nullptr, 0, eArgTypeBoolean,   "Show the object obeying its synthetic provider, if available."},
+    { LLDB_OPT_SET_1, false, "depth",              'D', OptionParser::eRequiredArgument, nullptr, nullptr, 0, eArgTypeCount,     "Set the max recurse depth when dumping aggregate types (default is infinity)."},
+    { LLDB_OPT_SET_1, false, "flat",               'F', OptionParser::eNoArgument,       nullptr, nullptr, 0, eArgTypeNone,      "Display results in a flat format that uses expression paths for each variable or member."},
+    { LLDB_OPT_SET_1, false, "location",           'L', OptionParser::eNoArgument,       nullptr, nullptr, 0, eArgTypeNone,      "Show variable location information."},
+    { LLDB_OPT_SET_1, false, "object-description", 'O', OptionParser::eNoArgument,       nullptr, nullptr, 0, eArgTypeNone,      "Print as an Objective-C object."},
+    { LLDB_OPT_SET_1, false, "ptr-depth",          'P', OptionParser::eRequiredArgument, nullptr, nullptr, 0, eArgTypeCount,     "The number of pointers to be traversed when dumping values (default is zero)."},
+    { LLDB_OPT_SET_1, false, "show-types",         'T', OptionParser::eNoArgument,       nullptr, nullptr, 0, eArgTypeNone,      "Show variable types when dumping values."},
+    { LLDB_OPT_SET_1, false, "no-summary-depth",   'Y', OptionParser::eOptionalArgument, nullptr, nullptr, 0, eArgTypeCount,     "Set the depth at which omitting summary information stops (default is 1)."},
+    { LLDB_OPT_SET_1, false, "raw-output",         'R', OptionParser::eNoArgument,       nullptr, nullptr, 0, eArgTypeNone,      "Don't use formatting options."},
+    { LLDB_OPT_SET_1, false, "show-all-children",  'A', OptionParser::eNoArgument,       nullptr, nullptr, 0, eArgTypeNone,      "Ignore the upper bound on the number of children to show."},
+    { LLDB_OPT_SET_1, false, "validate",           'V',  OptionParser::eRequiredArgument, nullptr, nullptr, 0, eArgTypeBoolean,   "Show results of type validators."},
+    { 0, false, nullptr, 0, 0, nullptr, nullptr, 0, eArgTypeNone, nullptr }
 };
 
 uint32_t
@@ -88,13 +88,13 @@ OptionGroupValueObjectDisplay::SetOptionValue (CommandInterpreter &interpreter,
         case 'A':   ignore_cap   = true;  break;
             
         case 'D':
-            max_depth = Args::StringToUInt32 (option_arg, UINT32_MAX, 0, &success);
+            max_depth = StringConvert::ToUInt32 (option_arg, UINT32_MAX, 0, &success);
             if (!success)
                 error.SetErrorStringWithFormat("invalid max depth '%s'", option_arg);
             break;
             
         case 'P':
-            ptr_depth = Args::StringToUInt32 (option_arg, 0, 0, &success);
+            ptr_depth = StringConvert::ToUInt32 (option_arg, 0, 0, &success);
             if (!success)
                 error.SetErrorStringWithFormat("invalid pointer depth '%s'", option_arg);
             break;
@@ -102,7 +102,7 @@ OptionGroupValueObjectDisplay::SetOptionValue (CommandInterpreter &interpreter,
         case 'Y':
             if (option_arg)
             {
-                no_summary_depth = Args::StringToUInt32 (option_arg, 0, 0, &success);
+                no_summary_depth = StringConvert::ToUInt32 (option_arg, 0, 0, &success);
                 if (!success)
                     error.SetErrorStringWithFormat("invalid pointer depth '%s'", option_arg);
             }
@@ -115,6 +115,13 @@ OptionGroupValueObjectDisplay::SetOptionValue (CommandInterpreter &interpreter,
             if (!success)
                 error.SetErrorStringWithFormat("invalid synthetic-type '%s'", option_arg);
             break;
+            
+        case 'V':
+            run_validator = Args::StringToBoolean(option_arg, true, &success);
+            if (!success)
+                error.SetErrorStringWithFormat("invalid validate '%s'", option_arg);
+            break;
+            
         default:
             error.SetErrorStringWithFormat ("unrecognized option '%c'", short_option);
             break;
@@ -137,9 +144,10 @@ OptionGroupValueObjectDisplay::OptionParsingStarting (CommandInterpreter &interp
     use_synth         = true;
     be_raw            = false;
     ignore_cap        = false;
+    run_validator     = false;
     
     Target *target = interpreter.GetExecutionContext().GetTargetPtr();
-    if (target != NULL)
+    if (target != nullptr)
         use_dynamic = target->GetPreferDynamicValue();
     else
     {
@@ -154,7 +162,7 @@ OptionGroupValueObjectDisplay::GetAsDumpOptions (LanguageRuntimeDescriptionDispl
                                                  lldb::TypeSummaryImplSP summary_sp)
 {
     DumpValueObjectOptions options;
-    options.SetMaximumPointerDepth(ptr_depth);
+    options.SetMaximumPointerDepth( {DumpValueObjectOptions::PointerDepth::Mode::Always,ptr_depth} );
     if (use_objc)
         options.SetShowSummary(false);
     else
@@ -176,7 +184,9 @@ OptionGroupValueObjectDisplay::GetAsDumpOptions (LanguageRuntimeDescriptionDispl
         .SetHideValue(use_objc);
     
     if (be_raw)
-        options.SetRawDisplay(true);
+        options.SetRawDisplay();
+    
+    options.SetRunValidator(run_validator);
 
     return options;
 }

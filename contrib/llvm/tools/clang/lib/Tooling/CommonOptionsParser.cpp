@@ -25,6 +25,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Support/CommandLine.h"
+#include "clang/Tooling/ArgumentsAdjusters.h"
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Tooling.h"
 
@@ -53,28 +54,96 @@ const char *const CommonOptionsParser::HelpMessage =
     "\tsuffix of a path in the compile command database.\n"
     "\n";
 
-CommonOptionsParser::CommonOptionsParser(int &argc, const char **argv,
-                                         const char *Overview) {
-  static cl::opt<std::string> BuildPath(
-      "p", cl::desc("Build path"), cl::Optional);
+namespace {
+class ArgumentsAdjustingCompilations : public CompilationDatabase {
+public:
+  ArgumentsAdjustingCompilations(
+      std::unique_ptr<CompilationDatabase> Compilations)
+      : Compilations(std::move(Compilations)) {}
+
+  void appendArgumentsAdjuster(ArgumentsAdjuster Adjuster) {
+    Adjusters.push_back(Adjuster);
+  }
+
+  std::vector<CompileCommand>
+  getCompileCommands(StringRef FilePath) const override {
+    return adjustCommands(Compilations->getCompileCommands(FilePath));
+  }
+
+  std::vector<std::string> getAllFiles() const override {
+    return Compilations->getAllFiles();
+  }
+
+  std::vector<CompileCommand> getAllCompileCommands() const override {
+    return adjustCommands(Compilations->getAllCompileCommands());
+  }
+
+private:
+  std::unique_ptr<CompilationDatabase> Compilations;
+  std::vector<ArgumentsAdjuster> Adjusters;
+
+  std::vector<CompileCommand>
+  adjustCommands(std::vector<CompileCommand> Commands) const {
+    for (CompileCommand &Command : Commands)
+      for (const auto &Adjuster : Adjusters)
+        Command.CommandLine = Adjuster(Command.CommandLine, Command.Filename);
+    return Commands;
+  }
+};
+} // namespace
+
+CommonOptionsParser::CommonOptionsParser(
+    int &argc, const char **argv, cl::OptionCategory &Category,
+    llvm::cl::NumOccurrencesFlag OccurrencesFlag, const char *Overview) {
+  static cl::opt<bool> Help("h", cl::desc("Alias for -help"), cl::Hidden);
+
+  static cl::opt<std::string> BuildPath("p", cl::desc("Build path"),
+                                        cl::Optional, cl::cat(Category));
 
   static cl::list<std::string> SourcePaths(
-      cl::Positional, cl::desc("<source0> [... <sourceN>]"), cl::OneOrMore);
+      cl::Positional, cl::desc("<source0> [... <sourceN>]"), OccurrencesFlag,
+      cl::cat(Category));
 
-  Compilations.reset(FixedCompilationDatabase::loadFromCommandLine(argc,
-                                                                   argv));
+  static cl::list<std::string> ArgsAfter(
+      "extra-arg",
+      cl::desc("Additional argument to append to the compiler command line"),
+      cl::cat(Category));
+
+  static cl::list<std::string> ArgsBefore(
+      "extra-arg-before",
+      cl::desc("Additional argument to prepend to the compiler command line"),
+      cl::cat(Category));
+
+  cl::HideUnrelatedOptions(Category);
+
+  Compilations.reset(FixedCompilationDatabase::loadFromCommandLine(argc, argv));
   cl::ParseCommandLineOptions(argc, argv, Overview);
   SourcePathList = SourcePaths;
+  if ((OccurrencesFlag == cl::ZeroOrMore || OccurrencesFlag == cl::Optional) &&
+      SourcePathList.empty())
+    return;
   if (!Compilations) {
     std::string ErrorMessage;
     if (!BuildPath.empty()) {
-      Compilations.reset(CompilationDatabase::autoDetectFromDirectory(
-                              BuildPath, ErrorMessage));
+      Compilations =
+          CompilationDatabase::autoDetectFromDirectory(BuildPath, ErrorMessage);
     } else {
-      Compilations.reset(CompilationDatabase::autoDetectFromSource(
-                              SourcePaths[0], ErrorMessage));
+      Compilations = CompilationDatabase::autoDetectFromSource(SourcePaths[0],
+                                                               ErrorMessage);
     }
-    if (!Compilations)
-      llvm::report_fatal_error(ErrorMessage);
+    if (!Compilations) {
+      llvm::errs() << "Error while trying to load a compilation database:\n"
+                   << ErrorMessage << "Running without flags.\n";
+      Compilations.reset(
+          new FixedCompilationDatabase(".", std::vector<std::string>()));
+    }
   }
+  auto AdjustingCompilations =
+      llvm::make_unique<ArgumentsAdjustingCompilations>(
+          std::move(Compilations));
+  AdjustingCompilations->appendArgumentsAdjuster(
+      getInsertArgumentAdjuster(ArgsBefore, ArgumentInsertPosition::BEGIN));
+  AdjustingCompilations->appendArgumentsAdjuster(
+      getInsertArgumentAdjuster(ArgsAfter, ArgumentInsertPosition::END));
+  Compilations = std::move(AdjustingCompilations);
 }

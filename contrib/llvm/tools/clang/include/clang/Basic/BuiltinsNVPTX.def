@@ -50,7 +50,7 @@ BUILTIN(__builtin_ptx_read_lanemask_ge, "i", "nc")
 BUILTIN(__builtin_ptx_read_lanemask_gt, "i", "nc")
 
 BUILTIN(__builtin_ptx_read_clock, "i", "n")
-BUILTIN(__builtin_ptx_read_clock64, "Li", "n")
+BUILTIN(__builtin_ptx_read_clock64, "LLi", "n")
 
 BUILTIN(__builtin_ptx_read_pm0, "i", "n")
 BUILTIN(__builtin_ptx_read_pm1, "i", "n")
@@ -139,8 +139,8 @@ BUILTIN(__nvvm_brev64, "ULLiULLi", "")
 
 // Sad
 
-BUILTIN(__nvvm_sad_i, "iii", "")
-BUILTIN(__nvvm_sad_ui, "UiUiUi", "")
+BUILTIN(__nvvm_sad_i, "iiii", "")
+BUILTIN(__nvvm_sad_ui, "UiUiUiUi", "")
 
 // Floor, Ceil
 
@@ -255,19 +255,19 @@ BUILTIN(__nvvm_rsqrt_approx_d, "dd", "")
 
 // Add
 
-BUILTIN(__nvvm_add_rn_ftz_f, "ff", "")
-BUILTIN(__nvvm_add_rn_f, "ff", "")
-BUILTIN(__nvvm_add_rz_ftz_f, "ff", "")
-BUILTIN(__nvvm_add_rz_f, "ff", "")
-BUILTIN(__nvvm_add_rm_ftz_f, "ff", "")
-BUILTIN(__nvvm_add_rm_f, "ff", "")
-BUILTIN(__nvvm_add_rp_ftz_f, "ff", "")
-BUILTIN(__nvvm_add_rp_f, "ff", "")
+BUILTIN(__nvvm_add_rn_ftz_f, "fff", "")
+BUILTIN(__nvvm_add_rn_f, "fff", "")
+BUILTIN(__nvvm_add_rz_ftz_f, "fff", "")
+BUILTIN(__nvvm_add_rz_f, "fff", "")
+BUILTIN(__nvvm_add_rm_ftz_f, "fff", "")
+BUILTIN(__nvvm_add_rm_f, "fff", "")
+BUILTIN(__nvvm_add_rp_ftz_f, "fff", "")
+BUILTIN(__nvvm_add_rp_f, "fff", "")
 
-BUILTIN(__nvvm_add_rn_d, "dd", "")
-BUILTIN(__nvvm_add_rz_d, "dd", "")
-BUILTIN(__nvvm_add_rm_d, "dd", "")
-BUILTIN(__nvvm_add_rp_d, "dd", "")
+BUILTIN(__nvvm_add_rn_d, "ddd", "")
+BUILTIN(__nvvm_add_rz_d, "ddd", "")
+BUILTIN(__nvvm_add_rm_d, "ddd", "")
+BUILTIN(__nvvm_add_rp_d, "ddd", "")
 
 // Convert
 
@@ -453,6 +453,9 @@ BUILTIN(__nvvm_atom_add_gen_ll, "LLiLLiD*LLi", "n")
 BUILTIN(__nvvm_atom_add_g_f, "ffD*1f", "n")
 BUILTIN(__nvvm_atom_add_s_f, "ffD*3f", "n")
 BUILTIN(__nvvm_atom_add_gen_f, "ffD*f", "n")
+BUILTIN(__nvvm_atom_add_g_d, "ddD*1d", "n")
+BUILTIN(__nvvm_atom_add_s_d, "ddD*3d", "n")
+BUILTIN(__nvvm_atom_add_gen_d, "ddD*d", "n")
 
 BUILTIN(__nvvm_atom_sub_g_i, "iiD*1i", "n")
 BUILTIN(__nvvm_atom_sub_s_i, "iiD*3i", "n")
@@ -501,7 +504,7 @@ BUILTIN(__nvvm_atom_min_s_ui, "UiUiD*3Ui", "n")
 BUILTIN(__nvvm_atom_min_gen_ui, "UiUiD*Ui", "n")
 BUILTIN(__nvvm_atom_min_g_l, "LiLiD*1Li", "n")
 BUILTIN(__nvvm_atom_min_s_l, "LiLiD*3Li", "n")
-BUILTIN(__nvvm_atom_min_gen_l, "LiLi10D*Li", "n")
+BUILTIN(__nvvm_atom_min_gen_l, "LiLiD*Li", "n")
 BUILTIN(__nvvm_atom_min_g_ul, "ULiULiD*1ULi", "n")
 BUILTIN(__nvvm_atom_min_s_ul, "ULiULiD*3ULi", "n")
 BUILTIN(__nvvm_atom_min_gen_ul, "ULiULiD*ULi", "n")

@@ -1,6 +1,6 @@
 # $FreeBSD$
 
-NO_OBJ=
+PACKAGE=examples
 FILESDIR= ${SHAREDIR}/examples/smbfs/print
 FILES=	lj6l ljspool printcap.sample tolj
 

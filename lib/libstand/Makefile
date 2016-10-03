@@ -6,117 +6,92 @@
 #   quite large.
 #
 
-.include <bsd.own.mk>
+PACKAGE=lib${LIB}
+MK_PROFILE=	no
 MK_SSP=		no
 
+.include <src.opts.mk>
+
+LIBSTAND_SRC?=	${.CURDIR}
+LIBSTAND_CPUARCH?=${MACHINE_CPUARCH}
+LIBC_SRC=	${LIBSTAND_SRC}/../libc
+
 LIB=		stand
-NO_PROFILE=
 NO_PIC=
-INCS=		stand.h
-MAN=		libstand.3
+INCS?=		stand.h
+MAN?=		libstand.3
 
 WARNS?=		0
 
-CFLAGS+= -ffreestanding -Wformat
-CFLAGS+= -I${.CURDIR}
-
-.if ${MACHINE_CPUARCH} == "i386" || ${MACHINE_CPUARCH} == "amd64"
-CFLAGS+=	-mno-mmx -mno-3dnow -mno-sse -mno-sse2 -mno-sse3 -msoft-float
-.endif
-.if ${MACHINE_CPUARCH} == "i386"
-CFLAGS.gcc+=	-mpreferred-stack-boundary=2
-.endif
-.if ${MACHINE_CPUARCH} == "amd64"
-CFLAGS+=	-fPIC -mno-red-zone
-.endif
-.if ${MACHINE} == "pc98"
-CFLAGS+=	-Os
-.endif
-.if ${MACHINE_CPUARCH} == "powerpc"
-CFLAGS+=	-msoft-float -D_STANDALONE -DNETIF_DEBUG
-.endif
-.if ${MACHINE_CPUARCH} == "arm"
-CFLAGS+=	-msoft-float -D_STANDALONE
-.endif
-.if ${MACHINE_CPUARCH} == "mips"
-CFLAGS+=	-G0 -fno-pic -mno-abicalls
-.endif
+CFLAGS+= -I${LIBSTAND_SRC}
 
 # standalone components and stuff we have modified locally
-SRCS+=	gzguts.h zutil.h __main.c assert.c bcd.c bswap.c environment.c getopt.c gets.c \
+SRCS+=	gzguts.h zutil.h __main.c assert.c bcd.c environment.c getopt.c gets.c \
 	globals.c pager.c printf.c strdup.c strerror.c strtol.c strtoul.c random.c \
 	sbrk.c twiddle.c zalloc.c zalloc_malloc.c
 
 # private (pruned) versions of libc string functions
 SRCS+=	strcasecmp.c
 
-.PATH: ${.CURDIR}/../libc/net
+.PATH: ${LIBC_SRC}/net
 
 SRCS+= ntoh.c
 
 # string functions from libc
-.PATH: ${.CURDIR}/../libc/string
-.if ${MACHINE_CPUARCH} != "ia64"
-SRCS+=	bcmp.c bcopy.c bzero.c ffs.c memccpy.c memchr.c memcmp.c memcpy.c \
-	memmove.c memset.c qdivrem.c strcat.c strchr.c strcmp.c strcpy.c \
+.PATH: ${LIBC_SRC}/string
+SRCS+=	bcmp.c bcopy.c bzero.c ffs.c fls.c \
+	memccpy.c memchr.c memcmp.c memcpy.c memmove.c memset.c \
+	qdivrem.c strcat.c strchr.c strcmp.c strcpy.c \
 	strcspn.c strlcat.c strlcpy.c strlen.c strncat.c strncmp.c strncpy.c \
 	strpbrk.c strrchr.c strsep.c strspn.c strstr.c strtok.c swab.c
-.endif
 .if ${MACHINE_CPUARCH} == "arm"
-.PATH: ${.CURDIR}/../libc/arm/gen
+.PATH: ${LIBC_SRC}/arm/gen
 
-.if ${MK_ARM_EABI} == "no"
-SRCS+= divsi3.S
+# Do not generate movt/movw, because the relocation fixup for them does not
+# translate to the -Bsymbolic -pie format required by self_reloc() in loader(8).
+# Also, the fpu is not available in a standalone environment.
+.if ${COMPILER_VERSION} < 30800
+CFLAGS.clang+=	-mllvm -arm-use-movt=0
 .else
+CFLAGS.clang+=	-mno-movt
+.endif
+CFLAGS.clang+=	-mfpu=none
+
 # Compiler support functions
-.PATH: ${.CURDIR}/../../contrib/compiler-rt/lib/
+.PATH: ${LIBSTAND_SRC}/../../contrib/compiler-rt/lib/builtins/
 # __clzsi2 and ctzsi2 for various builtin functions
 SRCS+=	clzsi2.c ctzsi2.c
 # Divide and modulus functions called by the compiler
 SRCS+=	 divmoddi4.c  divmodsi4.c  divdi3.c  divsi3.c  moddi3.c  modsi3.c
 SRCS+=	udivmoddi4.c udivmodsi4.c udivdi3.c udivsi3.c umoddi3.c umodsi3.c
 
-.PATH: ${.CURDIR}/../../contrib/compiler-rt/lib/arm/
+.PATH: ${LIBSTAND_SRC}/../../contrib/compiler-rt/lib/builtins/arm/
 SRCS+=	aeabi_idivmod.S aeabi_ldivmod.S aeabi_uidivmod.S aeabi_uldivmod.S
 SRCS+=	aeabi_memcmp.S aeabi_memcpy.S aeabi_memmove.S aeabi_memset.S
 .endif
 
+.if ${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "riscv"
+.PATH: ${LIBC_SRC}/${MACHINE_CPUARCH}/gen
 .endif
-.if ${MACHINE_CPUARCH} == "ia64"
-.PATH: ${.CURDIR}/../libc/ia64/string
-SRCS+=	bcmp.c bcopy.S bzero.S ffs.S memccpy.c memchr.c memcmp.c memcpy.S \
-	memmove.S memset.c strcat.c strchr.c strcmp.c strcpy.c strcspn.c \
-	strlcat.c strlcpy.c \
-	strlen.c strncat.c strncmp.c strncpy.c strpbrk.c strrchr.c strsep.c \
-	strspn.c strstr.c strtok.c swab.c
 
-.PATH: ${.CURDIR}/../libc/ia64/gen
-SRCS+= __divdi3.S __divsi3.S __moddi3.S __modsi3.S
-SRCS+= __udivdi3.S __udivsi3.S __umoddi3.S __umodsi3.S
-.endif
 .if ${MACHINE_CPUARCH} == "powerpc"
-.PATH: ${.CURDIR}/../libc/quad
+.PATH: ${LIBC_SRC}/quad
 SRCS+=	ashldi3.c ashrdi3.c
-.PATH: ${.CURDIR}/../libc/powerpc/gen
 SRCS+=	syncicache.c
 .endif
 
 # uuid functions from libc
-.PATH: ${.CURDIR}/../libc/uuid
-SRCS+= uuid_equal.c uuid_is_nil.c
+.PATH: ${LIBC_SRC}/uuid
+SRCS+= uuid_create_nil.c uuid_equal.c uuid_from_string.c uuid_is_nil.c uuid_to_string.c
 
 # _setjmp/_longjmp
-.if ${MACHINE_ARCH} == "powerpc64"
-.PATH: ${.CURDIR}/powerpc
-.else
-.PATH: ${.CURDIR}/${MACHINE_CPUARCH}
-.endif
+.PATH: ${LIBSTAND_SRC}/${LIBSTAND_CPUARCH}
 SRCS+=	_setjmp.S
 
 # decompression functionality from libbz2
 # NOTE: to actually test this functionality after libbz2 upgrade compile
 # loader(8) with LOADER_BZIP2_SUPPORT defined
-.PATH: ${.CURDIR}/../../contrib/bzip2
+.PATH: ${LIBSTAND_SRC}/../../contrib/bzip2
 CFLAGS+= -DBZ_NO_STDIO -DBZ_NO_COMPRESS
 SRCS+=	libstand_bzlib_private.h
 
@@ -125,7 +100,8 @@ SRCS+=	_${file}
 CLEANFILES+=	_${file}
 
 _${file}: ${file}
-	sed "s|bzlib_private\.h|libstand_bzlib_private.h|" ${.ALLSRC} > ${.TARGET}
+	sed "s|bzlib_private\.h|libstand_bzlib_private.h|" \
+	    ${.ALLSRC} > ${.TARGET}
 .endfor
 
 CLEANFILES+= libstand_bzlib_private.h
@@ -134,8 +110,8 @@ libstand_bzlib_private.h: bzlib_private.h
 		${.ALLSRC} > ${.TARGET}
 
 # decompression functionality from libz
-.PATH: ${.CURDIR}/../libz
-CFLAGS+=-DHAVE_MEMCPY -I${.CURDIR}/../libz
+.PATH: ${LIBSTAND_SRC}/../libz
+CFLAGS+=-DHAVE_MEMCPY -I${LIBSTAND_SRC}/../libz
 SRCS+=	adler32.c crc32.c libstand_zutil.h libstand_gzguts.h
 
 .for file in infback.c inffast.c inflate.c inftrees.c zutil.c
@@ -174,9 +150,10 @@ SRCS+=	bootp.c rarp.c bootparam.c
 SRCS+=	ufs.c nfs.c cd9660.c tftp.c gzipfs.c bzipfs.c
 SRCS+=	dosfs.c ext2fs.c
 SRCS+=	splitfs.c
+SRCS+=	pkgfs.c
 .if ${MK_NAND} != "no"
 SRCS+=	nandfs.c
 .endif
 
+.include <bsd.stand.mk>
 .include <bsd.lib.mk>
-

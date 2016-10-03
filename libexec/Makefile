@@ -1,14 +1,16 @@
 #	@(#)Makefile	8.1 (Berkeley) 6/4/93
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 SUBDIR=	${_atf} \
 	${_atrun} \
+	${_blacklistd-helper} \
 	${_comsat} \
+	${_dma} \
 	getty \
-	${_hyperv} \
 	${_mail.local} \
+	${_makewhatis.local} \
 	${_mknetid} \
 	${_pppoed} \
 	revnetgroup \
@@ -32,6 +34,10 @@ SUBDIR=	${_atf} \
 _atrun=		atrun
 .endif
 
+.if ${MK_BLACKLIST} != "no"
+_blacklistd-helper+=	blacklistd-helper
+.endif
+
 .if ${MK_BOOTPD} != "no"
 SUBDIR+=	bootpd
 .endif
@@ -48,8 +54,8 @@ SUBDIR+=	ftpd
 _comsat=	comsat
 .endif
 
-.if ${MK_HYPERV} != "no"
-_hyperv=	hyperv
+.if ${MK_DMAGENT} != "no"
+_dma=		dma
 .endif
 
 .if ${MK_NIS} != "no"
@@ -83,6 +89,10 @@ _mail.local=	mail.local
 _smrsh=		smrsh
 .endif
 
+.if ${MK_MAN_UTILS} != "no"
+_makewhatis.local=	makewhatis.local
+.endif
+
 .if ${MK_TALK} != "no"
 SUBDIR+=	talkd
 .endif
@@ -103,5 +113,7 @@ SUBDIR+=	tftpd
 _atf=		atf
 _tests=		tests
 .endif
+
+.include <bsd.arch.inc.mk>
 
 .include <bsd.subdir.mk>

@@ -24,7 +24,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd June 18, 2014
+.Dd July 10, 2015
 .Dt GELI 8
 .Os
 .Sh NAME
@@ -51,7 +51,7 @@ utility:
 .Pp
 .Nm
 .Cm init
-.Op Fl bPv
+.Op Fl bgPTv
 .Op Fl a Ar aalgo
 .Op Fl B Ar backupfile
 .Op Fl e Ar ealgo
@@ -80,7 +80,7 @@ utility:
 .Cm detach
 .Nm
 .Cm onetime
-.Op Fl d
+.Op Fl dT
 .Op Fl a Ar aalgo
 .Op Fl e Ar ealgo
 .Op Fl l Ar keylen
@@ -88,7 +88,7 @@ utility:
 .Ar prov
 .Nm
 .Cm configure
-.Op Fl bB
+.Op Fl bBgGtT
 .Ar prov ...
 .Nm
 .Cm setkey
@@ -293,6 +293,11 @@ The default and recommended algorithm is
 .Nm AES-XTS .
 .Nm NULL
 is unencrypted.
+.It Fl g
+Enable booting from this encrypted root filesystem.
+The boot loader prompts for the passphrase and loads
+.Xr loader 8
+from the encrypted partition.
 .It Fl i Ar iterations
 Number of iterations to use with PKCS#5v2 when processing User Key
 passphrase component.
@@ -351,6 +356,17 @@ Change decrypted provider's sector size.
 Increasing the sector size allows increased performance,
 because encryption/decryption which requires an initialization vector
 is done per sector; fewer sectors means less computational work.
+.It Fl T
+Don't pass through
+.Dv BIO_DELETE
+calls (i.e., TRIM/UNMAP).
+This can prevent an attacker from knowing how much space you're actually
+using and which sectors contain live data, but will also prevent the
+backing store (SSD, etc) from reclaiming space you're not using, which
+may degrade its performance and lifespan.
+The underlying provider may or may not actually obliterate the deleted
+sectors when TRIM is enabled, so it should not be considered to add any
+security.
 .It Fl V Ar version
 Metadata version to use.
 This option is helpful when creating a provider that may be used by older
@@ -456,6 +472,11 @@ Change decrypted provider's sector size.
 For more information, see the description of the
 .Cm init
 subcommand.
+.It Fl T
+Disable TRIM/UNMAP passthru.
+For more information, see the description of the
+.Cm init
+subcommand.
 .El
 .It Cm configure
 Change configuration of the given providers.
@@ -469,6 +490,20 @@ For more information, see the description of the
 subcommand.
 .It Fl B
 Remove the BOOT flag from the given providers.
+.It Fl g
+Enable booting from this encrypted root filesystem.
+The boot loader prompts for the passphrase and loads
+.Xr loader 8
+from the encrypted partition.
+.It Fl G
+Deactivate booting from this encrypted root partition.
+.It Fl t
+Enable TRIM/UNMAP passthru.
+For more information, see the description of the
+.Cm init
+subcommand.
+.It Fl T
+Disable TRIM/UNMAP passthru.
 .El
 .It Cm setkey
 Install a copy of the Master Key into the selected slot, encrypted with
@@ -893,6 +928,13 @@ geli_da1s3a_keyfile0_type="da1s3a:geli_keyfile0"
 geli_da1s3a_keyfile0_name="/boot/keys/da1s3a.key"
 .Ed
 .Pp
+If there is only one keyfile, the index might be omitted:
+.Bd -literal -offset indent
+geli_da1s3a_keyfile_load="YES"
+geli_da1s3a_keyfile_type="da1s3a:geli_keyfile"
+geli_da1s3a_keyfile_name="/boot/keys/da1s3a.key"
+.Ed
+.Pp
 Not only configure encryption, but also data integrity verification using
 .Nm HMAC/SHA256 .
 .Bd -literal -offset indent
@@ -1057,4 +1099,4 @@ metadata version supported by the given FreeBSD version:
 .It Li 10.0 Ta 7
 .El
 .Sh AUTHORS
-.An Pawel Jakub Dawidek Aq pjd@FreeBSD.org
+.An Pawel Jakub Dawidek Aq Mt pjd@FreeBSD.org

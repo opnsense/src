@@ -175,6 +175,7 @@ dn_dequeue(struct dn_queue *q)
 		return q->fs->aqmfp->dequeue(q);
 #endif
 	q->mq.head = m->m_nextpkt;
+	q->mq.count--;
 
 	/* Update stats for the queue */
 	q->ni.length--;
@@ -195,6 +196,6 @@ int dn_sched_modevent(module_t mod, int cmd, void *arg);
 		#name, dn_sched_modevent, dnsched		\
 	};							\
 	DECLARE_MODULE(name, name##_mod, 			\
-		SI_SUB_PROTO_IFATTACHDOMAIN, SI_ORDER_ANY); 	\
-        MODULE_DEPEND(name, dummynet, 3, 3, 3);
+		SI_SUB_PROTO_FIREWALL, SI_ORDER_ANY); 		\
+        MODULE_DEPEND(name, dummynet, 3, 3, 3)
 #endif /* _DN_SCHED_H */

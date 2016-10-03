@@ -1,22 +1,26 @@
 # $FreeBSD$
 
-NO_PROFILE=
-.include <bsd.own.mk>
+MK_PROFILE=	no
 MK_SSP=		no
-.include "${.CURDIR}/../../usr.bin/cc/Makefile.tgt"
+
+.include <src.opts.mk>
 
 GCCDIR=	${.CURDIR}/../../../contrib/gcc
 GCCLIB=	${.CURDIR}/../../../contrib/gcclibs
+CCDIR=	${.CURDIR}/../../usr.bin/cc
+.include "${CCDIR}/Makefile.tgt"
+.include "${CCDIR}/cc_tools/Makefile.hdrs"
+
 .PATH: ${GCCDIR}/config/${GCC_CPU} ${GCCDIR}
 
 LIB=		gcov
 
 CFLAGS+=	-DIN_GCC -DIN_LIBGCC2 -D__GCC_FLOAT_NOT_NEEDED
 CFLAGS+=	-D_PTHREADS -DGTHREAD_USE_WEAK
-CFLAGS+=	-I${.CURDIR}/../../usr.bin/cc/cc_tools \
+CFLAGS+=	-I${CCDIR}/cc_tools \
 		-I${GCCLIB}/include -I${GCCDIR}/config -I${GCCDIR} -I.
 
-.if ${TARGET_CPUARCH} == "arm" && ${MK_ARM_EABI} != "no"
+.if ${TARGET_CPUARCH} == "arm"
 CFLAGS+=	-DTARGET_ARM_EABI
 .endif
 
@@ -43,9 +47,6 @@ CC_S =	${CC} -c ${CFLAGS} ${PICFLAG} -DSHARED
 
 COMMONHDRS=	tm.h tconfig.h gcov-iov.h options.h
 CLEANFILES+=	${COMMONHDRS} cs-tm.h cs-tconfig.h options.h optionlist
-
-${COMMONHDRS}: ${.CURDIR}/../../usr.bin/cc/cc_tools/Makefile
-	${MAKE} -f ${.ALLSRC} MFILE=${.ALLSRC} GCCDIR=${GCCDIR} ${.TARGET}
 
 ${OBJS} beforedepend: ${COMMONHDRS}
 

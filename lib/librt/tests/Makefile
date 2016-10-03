@@ -1,13 +1,6 @@
 # $FreeBSD$
 
-OBJTOP=		${.OBJDIR:H:H:H}
-SRCTOP=		${.CURDIR:H:H:H}
-TESTSRC=	${SRCTOP}/contrib/netbsd-tests/lib/librt
-
-TESTSDIR=	${TESTSBASE}/lib/librt
-
-DPADD+=		${LIBRT}
-LDADD+=		-lrt
+LIBADD=	rt
 
 NETBSD_ATF_TESTS_C=	sched_test
 NETBSD_ATF_TESTS_C+=	sem_test

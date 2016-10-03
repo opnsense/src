@@ -30,7 +30,7 @@
 
 #define	XHCI_MAX_DEVICES	MIN(USB_MAX_DEVICES, 128)
 #define	XHCI_MAX_ENDPOINTS	32	/* hardcoded - do not change */
-#define	XHCI_MAX_SCRATCHPADS	32
+#define	XHCI_MAX_SCRATCHPADS	256	/* theoretical max is 1023 */
 #define	XHCI_MAX_EVENTS		(16 * 13)
 #define	XHCI_MAX_COMMANDS	(16 * 1)
 #define	XHCI_MAX_RSEG		1
@@ -383,6 +383,7 @@ struct xhci_endpoint_ext {
 	uint8_t			trb_halted;
 	uint8_t			trb_running;
 	uint8_t			trb_ep_mode;
+	uint8_t			trb_ep_maxp;
 };
 
 enum {
@@ -465,6 +466,7 @@ struct xhci_softc {
 	struct usb_device	*sc_devices[XHCI_MAX_DEVICES];
 	struct resource		*sc_io_res;
 	struct resource		*sc_irq_res;
+	struct resource		*sc_msix_res;
 
 	void			*sc_intr_hdl;
 	bus_size_t		sc_io_size;
@@ -494,14 +496,15 @@ struct xhci_softc {
 	uint16_t		sc_command_idx;
 	uint16_t		sc_imod_default;
 
+	/* number of scratch pages */
+	uint16_t		sc_noscratch;
+
 	uint8_t			sc_event_ccs;
 	uint8_t			sc_command_ccs;
 	/* number of XHCI device slots */
 	uint8_t			sc_noslot;
 	/* number of ports on root HUB */
 	uint8_t			sc_noport;
-	/* number of scratch pages */
-	uint8_t			sc_noscratch;
 	/* root HUB device configuration */
 	uint8_t			sc_conf;
 	/* root HUB port event bitmap, max 256 ports */

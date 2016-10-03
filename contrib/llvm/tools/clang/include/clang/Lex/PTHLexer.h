@@ -11,8 +11,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_PTHLEXER_H
-#define LLVM_CLANG_PTHLEXER_H
+#ifndef LLVM_CLANG_LEX_PTHLEXER_H
+#define LLVM_CLANG_LEX_PTHLEXER_H
 
 #include "clang/Lex/PreprocessorLexer.h"
 
@@ -44,8 +44,8 @@ class PTHLexer : public PreprocessorLexer {
   ///  to process when doing quick skipping of preprocessor blocks.
   const unsigned char* CurPPCondPtr;
 
-  PTHLexer(const PTHLexer &) LLVM_DELETED_FUNCTION;
-  void operator=(const PTHLexer &) LLVM_DELETED_FUNCTION;
+  PTHLexer(const PTHLexer &) = delete;
+  void operator=(const PTHLexer &) = delete;
 
   /// ReadToken - Used by PTHLexer to read tokens TokBuf.
   void ReadToken(Token& T);
@@ -64,8 +64,7 @@ protected:
   PTHLexer(Preprocessor& pp, FileID FID, const unsigned char *D,
            const unsigned char* ppcond, PTHManager &PM);
 public:
-
-  ~PTHLexer() {}
+  ~PTHLexer() override {}
 
   /// Lex - Return the next token.
   bool Lex(Token &Tok);
@@ -90,11 +89,11 @@ public:
 
   /// IndirectLex - An indirect call to 'Lex' that can be invoked via
   ///  the PreprocessorLexer interface.
-  void IndirectLex(Token &Result) { Lex(Result); }
+  void IndirectLex(Token &Result) override { Lex(Result); }
 
   /// getSourceLocation - Return a source location for the token in
   /// the current file.
-  SourceLocation getSourceLocation();
+  SourceLocation getSourceLocation() override;
 
   /// SkipBlock - Used by Preprocessor to skip the current conditional block.
   bool SkipBlock();

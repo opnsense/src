@@ -22,7 +22,9 @@ __FBSDID("$FreeBSD$");
 
 #include "sha.h"
 #include "sha256.h"
+#include "sha384.h"
 #include "sha512.h"
+#include "sha512t.h"
 
 /* The following makes SHA default to SHA-1 if it has not already been
  * defined with C compiler flags. */
@@ -31,11 +33,20 @@ __FBSDID("$FreeBSD$");
 #endif
 
 #if SHA == 1
+#undef SHA_Data
 #define SHA_Data SHA1_Data
 #elif SHA == 256
+#undef SHA_Data
 #define SHA_Data SHA256_Data
+#elif SHA == 384
+#undef SHA_Data
+#define SHA_Data SHA384_Data
 #elif SHA == 512
+#undef SHA_Data
 #define SHA_Data SHA512_Data
+#elif SHA == 512256
+#undef SHA_Data
+#define SHA_Data SHA512_256_Data
 #endif
 
 /* Digests a string and prints the result. */

@@ -83,11 +83,9 @@ sys_obreak(td, uap)
 	int error = 0;
 	boolean_t do_map_wirefuture;
 
-	PROC_LOCK(td->td_proc);
-	datalim = lim_cur(td->td_proc, RLIMIT_DATA);
-	lmemlim = lim_cur(td->td_proc, RLIMIT_MEMLOCK);
-	vmemlim = lim_cur(td->td_proc, RLIMIT_VMEM);
-	PROC_UNLOCK(td->td_proc);
+	datalim = lim_cur(td, RLIMIT_DATA);
+	lmemlim = lim_cur(td, RLIMIT_MEMLOCK);
+	vmemlim = lim_cur(td, RLIMIT_VMEM);
 
 	do_map_wirefuture = FALSE;
 	new = round_page((vm_offset_t)uap->nsize);
@@ -166,7 +164,7 @@ sys_obreak(td, uap)
 #endif
 		prot = VM_PROT_RW;
 #ifdef COMPAT_FREEBSD32
-#if defined(__amd64__) || defined(__ia64__)
+#if defined(__amd64__)
 		if (i386_read_exec && SV_PROC_FLAG(td->td_proc, SV_ILP32))
 			prot |= VM_PROT_EXECUTE;
 #endif

@@ -1,4 +1,4 @@
-//===-- LanguageRuntime.cpp -------------------------------------------------*- C++ -*-===//
+//===-- LanguageRuntime.cpp -------------------------------------*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,29 +7,41 @@
 //
 //===----------------------------------------------------------------------===//
 
+// C Includes
+// C++ Includes
+// Other libraries and framework includes
+// Project includes
 #include "lldb/Target/LanguageRuntime.h"
+#include "Plugins/Language/CPlusPlus/CPlusPlusLanguage.h"
+#include "Plugins/Language/ObjC/ObjCLanguage.h"
+#include "lldb/Target/ObjCLanguageRuntime.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Core/PluginManager.h"
+#include "lldb/Core/SearchFilter.h"
+#include "lldb/Interpreter/CommandInterpreter.h"
 
 using namespace lldb;
 using namespace lldb_private;
-
 
 class ExceptionSearchFilter : public SearchFilter
 {
 public:
     ExceptionSearchFilter (const lldb::TargetSP &target_sp,
-                           lldb::LanguageType language) :
+                           lldb::LanguageType language,
+                           bool update_module_list = true) :
         SearchFilter (target_sp),
         m_language (language),
         m_language_runtime (NULL),
         m_filter_sp ()
     {
-        UpdateModuleListIfNeeded ();
+        if (update_module_list)
+            UpdateModuleListIfNeeded ();
     }
-    
-    virtual bool
-    ModulePasses (const lldb::ModuleSP &module_sp)
+
+    ~ExceptionSearchFilter() override = default;
+
+    bool
+    ModulePasses (const lldb::ModuleSP &module_sp) override
     {
         UpdateModuleListIfNeeded ();
         if (m_filter_sp)
@@ -37,26 +49,25 @@ public:
         return false;
     }
     
-    virtual bool
-    ModulePasses (const FileSpec &spec)
+    bool
+    ModulePasses (const FileSpec &spec) override
     {
         UpdateModuleListIfNeeded ();
         if (m_filter_sp)
             return m_filter_sp->ModulePasses (spec);
         return false;
-        
     }
     
-    virtual void
-    Search (Searcher &searcher)
+    void
+    Search (Searcher &searcher) override
     {
         UpdateModuleListIfNeeded ();
         if (m_filter_sp)
             m_filter_sp->Search (searcher);
     }
 
-    virtual void
-    GetDescription (Stream *s)
+    void
+    GetDescription (Stream *s) override
     {
         UpdateModuleListIfNeeded ();
         if (m_filter_sp)
@@ -67,6 +78,12 @@ protected:
     LanguageType m_language;
     LanguageRuntime *m_language_runtime;
     SearchFilterSP m_filter_sp;
+
+    SearchFilterSP
+    DoCopyForBreakpoint(Breakpoint &breakpoint) override
+    {
+        return SearchFilterSP(new ExceptionSearchFilter(TargetSP(), m_language, false));
+    }
 
     void
     UpdateModuleListIfNeeded ()
@@ -119,16 +136,13 @@ public:
     {
     }
 
-    virtual
-    ~ExceptionBreakpointResolver()
-    {
-    }
-    
-    virtual Searcher::CallbackReturn
+    ~ExceptionBreakpointResolver() override = default;
+
+    Searcher::CallbackReturn
     SearchCallback (SearchFilter &filter,
                     SymbolContext &context,
                     Address *addr,
-                    bool containing)
+                    bool containing) override
     {
         
         if (SetActualResolver())
@@ -137,8 +151,8 @@ public:
             return eCallbackReturnStop;
     }
     
-    virtual Searcher::Depth
-    GetDepth ()
+    Searcher::Depth
+    GetDepth () override
     {
         if (SetActualResolver())
             return m_actual_resolver_sp->GetDepth();
@@ -146,13 +160,15 @@ public:
             return eDepthTarget;
     }
     
-    virtual void
-    GetDescription (Stream *s)
+    void
+    GetDescription (Stream *s) override
     {
-        s->Printf ("Exception breakpoint (catch: %s throw: %s)",
-                   m_catch_bp ? "on" : "off",
-                   m_throw_bp ? "on" : "off");
-        
+       Language *language_plugin = Language::FindPlugin(m_language);
+       if (language_plugin)
+           language_plugin->GetExceptionResolverDescription(m_catch_bp, m_throw_bp, *s);
+       else
+           Language::GetDefaultExceptionResolverDescription(m_catch_bp, m_throw_bp, *s);
+           
         SetActualResolver();
         if (m_actual_resolver_sp)
         {
@@ -163,8 +179,8 @@ public:
             s->Printf (" the correct runtime exception handler will be determined when you run");
     }
 
-    virtual void
-    Dump (Stream *s) const
+    void
+    Dump (Stream *s) const override
     {
     }
     
@@ -173,7 +189,14 @@ public:
     static inline bool classof(const BreakpointResolver *V) {
         return V->getResolverID() == BreakpointResolver::ExceptionResolver;
     }
+
 protected:
+    BreakpointResolverSP
+    CopyForBreakpoint (Breakpoint &breakpoint) override
+    {
+        return BreakpointResolverSP(new ExceptionBreakpointResolver(m_language, m_catch_bp, m_throw_bp));
+    }
+
     bool
     SetActualResolver()
     {
@@ -224,7 +247,6 @@ protected:
     bool m_throw_bp;
 };
 
-
 LanguageRuntime*
 LanguageRuntime::FindPlugin (Process *process, lldb::LanguageType language)
 {
@@ -244,19 +266,28 @@ LanguageRuntime::FindPlugin (Process *process, lldb::LanguageType language)
     return NULL;
 }
 
-//----------------------------------------------------------------------
-// Constructor
-//----------------------------------------------------------------------
 LanguageRuntime::LanguageRuntime(Process *process) :
     m_process (process)
 {
 }
 
-//----------------------------------------------------------------------
-// Destructor
-//----------------------------------------------------------------------
-LanguageRuntime::~LanguageRuntime()
+LanguageRuntime::~LanguageRuntime() = default;
+
+Breakpoint::BreakpointPreconditionSP
+LanguageRuntime::CreateExceptionPrecondition (lldb::LanguageType language,
+                                              bool catch_bp,
+                                              bool throw_bp)
 {
+    switch (language)
+    {
+    case eLanguageTypeObjC:
+        if (throw_bp)
+            return Breakpoint::BreakpointPreconditionSP(new ObjCLanguageRuntime::ObjCExceptionPrecondition ());
+        break;
+    default:
+        break;
+    }
+    return Breakpoint::BreakpointPreconditionSP();
 }
 
 BreakpointSP
@@ -271,67 +302,44 @@ LanguageRuntime::CreateExceptionBreakpoint (Target &target,
     bool hardware = false;
     bool resolve_indirect_functions = false;
     BreakpointSP exc_breakpt_sp (target.CreateBreakpoint (filter_sp, resolver_sp, is_internal, hardware, resolve_indirect_functions));
-    if (is_internal)
-        exc_breakpt_sp->SetBreakpointKind("exception");
+    if (exc_breakpt_sp)
+    {
+        Breakpoint::BreakpointPreconditionSP precondition_sp = CreateExceptionPrecondition(language, catch_bp, throw_bp);
+        if (precondition_sp)
+            exc_breakpt_sp->SetPrecondition(precondition_sp);
+
+        if (is_internal)
+            exc_breakpt_sp->SetBreakpointKind("exception");
+    }
     
     return exc_breakpt_sp;
 }
 
-struct language_name_pair {
-    const char *name;
-    LanguageType type;
-};
-
-struct language_name_pair language_names[] =
+void
+LanguageRuntime::InitializeCommands (CommandObject* parent)
 {
-    // To allow GetNameForLanguageType to be a simple array lookup, the first
-    // part of this array must follow enum LanguageType exactly.
-    {   "unknown",          eLanguageTypeUnknown        },
-    {   "c89",              eLanguageTypeC89            },
-    {   "c",                eLanguageTypeC              },
-    {   "ada83",            eLanguageTypeAda83          },
-    {   "c++",              eLanguageTypeC_plus_plus    },
-    {   "cobol74",          eLanguageTypeCobol74        },
-    {   "cobol85",          eLanguageTypeCobol85        },
-    {   "fortran77",        eLanguageTypeFortran77      },
-    {   "fortran90",        eLanguageTypeFortran90      },
-    {   "pascal83",         eLanguageTypePascal83       },
-    {   "modula2",          eLanguageTypeModula2        },
-    {   "java",             eLanguageTypeJava           },
-    {   "c99",              eLanguageTypeC99            },
-    {   "ada95",            eLanguageTypeAda95          },
-    {   "fortran95",        eLanguageTypeFortran95      },
-    {   "pli",              eLanguageTypePLI            },
-    {   "objective-c",      eLanguageTypeObjC           },
-    {   "objective-c++",    eLanguageTypeObjC_plus_plus },
-    {   "upc",              eLanguageTypeUPC            },
-    {   "d",                eLanguageTypeD              },
-    {   "python",           eLanguageTypePython         },
-    // Now synonyms, in arbitrary order
-    {   "objc",             eLanguageTypeObjC           },
-    {   "objc++",           eLanguageTypeObjC_plus_plus }
-};
+    if (!parent)
+        return;
 
-static uint32_t num_languages = sizeof(language_names) / sizeof (struct language_name_pair);
+    if (!parent->IsMultiwordObject())
+        return;
 
-LanguageType
-LanguageRuntime::GetLanguageTypeFromString (const char *string)
-{
-    for (uint32_t i = 0; i < num_languages; i++)
+    LanguageRuntimeCreateInstance create_callback;
+
+    for (uint32_t idx = 0;
+         (create_callback = PluginManager::GetLanguageRuntimeCreateCallbackAtIndex(idx)) != nullptr;
+         ++idx)
     {
-        if (strcasecmp (language_names[i].name, string) == 0)
-            return (LanguageType) language_names[i].type;
+        if (LanguageRuntimeGetCommandObject command_callback = 
+                PluginManager::GetLanguageRuntimeGetCommandObjectAtIndex(idx))
+        {
+            CommandObjectSP command = command_callback(parent->GetCommandInterpreter());
+            if (command)
+            {
+                parent->LoadSubCommand(command->GetCommandName(), command);
+            }
+        }
     }
-    return eLanguageTypeUnknown;
-}
-
-const char *
-LanguageRuntime::GetNameForLanguageType (LanguageType language)
-{
-    if (language < num_languages)
-        return language_names[language].name;
-    else
-        return language_names[eLanguageTypeUnknown].name;
 }
 
 lldb::SearchFilterSP
@@ -339,6 +347,3 @@ LanguageRuntime::CreateExceptionSearchFilter ()
 {
     return m_process->GetTarget().GetSearchFilterForModule(NULL);
 }
-
-
-

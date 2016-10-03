@@ -1,4 +1,4 @@
-//=======-------- BlockFrequencyInfo.cpp - Block Frequency Analysis -------===//
+//===- BlockFrequencyInfo.cpp - Block Frequency Analysis ------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -12,17 +12,19 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/BlockFrequencyInfo.h"
-#include "llvm/Analysis/BlockFrequencyImpl.h"
+#include "llvm/Analysis/BlockFrequencyInfoImpl.h"
 #include "llvm/Analysis/BranchProbabilityInfo.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/Passes.h"
+#include "llvm/IR/CFG.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Support/CFG.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/GraphWriter.h"
 
 using namespace llvm;
+
+#define DEBUG_TYPE "block-freq"
 
 #ifndef NDEBUG
 enum GVDAGType {
@@ -53,7 +55,7 @@ struct GraphTraits<BlockFrequencyInfo *> {
   typedef Function::const_iterator nodes_iterator;
 
   static inline const NodeType *getEntryNode(const BlockFrequencyInfo *G) {
-    return G->getFunction()->begin();
+    return &G->getFunction()->front();
   }
   static ChildIteratorType child_begin(const NodeType *N) {
     return succ_begin(N);
@@ -83,10 +85,10 @@ struct DOTGraphTraits<BlockFrequencyInfo*> : public DefaultDOTGraphTraits {
     std::string Result;
     raw_string_ostream OS(Result);
 
-    OS << Node->getName().str() << ":";
+    OS << Node->getName() << ":";
     switch (ViewBlockFreqPropagationDAG) {
     case GVDT_Fraction:
-      Graph->getBlockFreq(Node).print(OS);
+      Graph->printBlockFreq(OS, Node);
       break;
     case GVDT_Integer:
       OS << Graph->getBlockFreq(Node).getFrequency();
@@ -103,45 +105,34 @@ struct DOTGraphTraits<BlockFrequencyInfo*> : public DefaultDOTGraphTraits {
 } // end namespace llvm
 #endif
 
-INITIALIZE_PASS_BEGIN(BlockFrequencyInfo, "block-freq",
-                      "Block Frequency Analysis", true, true)
-INITIALIZE_PASS_DEPENDENCY(BranchProbabilityInfo)
-INITIALIZE_PASS_END(BlockFrequencyInfo, "block-freq",
-                    "Block Frequency Analysis", true, true)
+BlockFrequencyInfo::BlockFrequencyInfo() {}
 
-char BlockFrequencyInfo::ID = 0;
-
-
-BlockFrequencyInfo::BlockFrequencyInfo() : FunctionPass(ID) {
-  initializeBlockFrequencyInfoPass(*PassRegistry::getPassRegistry());
-  BFI = new BlockFrequencyImpl<BasicBlock, Function, BranchProbabilityInfo>();
+BlockFrequencyInfo::BlockFrequencyInfo(const Function &F,
+                                       const BranchProbabilityInfo &BPI,
+                                       const LoopInfo &LI) {
+  calculate(F, BPI, LI);
 }
 
-BlockFrequencyInfo::~BlockFrequencyInfo() {
-  delete BFI;
-}
-
-void BlockFrequencyInfo::getAnalysisUsage(AnalysisUsage &AU) const {
-  AU.addRequired<BranchProbabilityInfo>();
-  AU.setPreservesAll();
-}
-
-bool BlockFrequencyInfo::runOnFunction(Function &F) {
-  BranchProbabilityInfo &BPI = getAnalysis<BranchProbabilityInfo>();
-  BFI->doFunction(&F, &BPI);
+void BlockFrequencyInfo::calculate(const Function &F,
+                                   const BranchProbabilityInfo &BPI,
+                                   const LoopInfo &LI) {
+  if (!BFI)
+    BFI.reset(new ImplType);
+  BFI->calculate(F, BPI, LI);
 #ifndef NDEBUG
   if (ViewBlockFreqPropagationDAG != GVDT_None)
     view();
 #endif
-  return false;
-}
-
-void BlockFrequencyInfo::print(raw_ostream &O, const Module *) const {
-  if (BFI) BFI->print(O);
 }
 
 BlockFrequency BlockFrequencyInfo::getBlockFreq(const BasicBlock *BB) const {
-  return BFI->getBlockFreq(BB);
+  return BFI ? BFI->getBlockFreq(BB) : 0;
+}
+
+void BlockFrequencyInfo::setBlockFreq(const BasicBlock *BB,
+                                      uint64_t Freq) {
+  assert(BFI && "Expected analysis to be available");
+  BFI->setBlockFreq(BB, Freq);
 }
 
 /// Pop up a ghostview window with the current block frequency propagation
@@ -157,5 +148,66 @@ void BlockFrequencyInfo::view() const {
 }
 
 const Function *BlockFrequencyInfo::getFunction() const {
-  return BFI->Fn;
+  return BFI ? BFI->getFunction() : nullptr;
+}
+
+raw_ostream &BlockFrequencyInfo::
+printBlockFreq(raw_ostream &OS, const BlockFrequency Freq) const {
+  return BFI ? BFI->printBlockFreq(OS, Freq) : OS;
+}
+
+raw_ostream &
+BlockFrequencyInfo::printBlockFreq(raw_ostream &OS,
+                                   const BasicBlock *BB) const {
+  return BFI ? BFI->printBlockFreq(OS, BB) : OS;
+}
+
+uint64_t BlockFrequencyInfo::getEntryFreq() const {
+  return BFI ? BFI->getEntryFreq() : 0;
+}
+
+void BlockFrequencyInfo::releaseMemory() { BFI.reset(); }
+
+void BlockFrequencyInfo::print(raw_ostream &OS) const {
+  if (BFI)
+    BFI->print(OS);
+}
+
+
+INITIALIZE_PASS_BEGIN(BlockFrequencyInfoWrapperPass, "block-freq",
+                      "Block Frequency Analysis", true, true)
+INITIALIZE_PASS_DEPENDENCY(BranchProbabilityInfoWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
+INITIALIZE_PASS_END(BlockFrequencyInfoWrapperPass, "block-freq",
+                    "Block Frequency Analysis", true, true)
+
+char BlockFrequencyInfoWrapperPass::ID = 0;
+
+
+BlockFrequencyInfoWrapperPass::BlockFrequencyInfoWrapperPass()
+    : FunctionPass(ID) {
+  initializeBlockFrequencyInfoWrapperPassPass(*PassRegistry::getPassRegistry());
+}
+
+BlockFrequencyInfoWrapperPass::~BlockFrequencyInfoWrapperPass() {}
+
+void BlockFrequencyInfoWrapperPass::print(raw_ostream &OS,
+                                          const Module *) const {
+  BFI.print(OS);
+}
+
+void BlockFrequencyInfoWrapperPass::getAnalysisUsage(AnalysisUsage &AU) const {
+  AU.addRequired<BranchProbabilityInfoWrapperPass>();
+  AU.addRequired<LoopInfoWrapperPass>();
+  AU.setPreservesAll();
+}
+
+void BlockFrequencyInfoWrapperPass::releaseMemory() { BFI.releaseMemory(); }
+
+bool BlockFrequencyInfoWrapperPass::runOnFunction(Function &F) {
+  BranchProbabilityInfo &BPI =
+      getAnalysis<BranchProbabilityInfoWrapperPass>().getBPI();
+  LoopInfo &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
+  BFI.calculate(F, BPI, LI);
+  return false;
 }

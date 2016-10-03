@@ -7,8 +7,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "lldb/lldb-python.h"
-
 #include "lldb/API/SBTypeCategory.h"
 
 #include "lldb/API/SBTypeFilter.h"
@@ -79,6 +77,29 @@ SBTypeCategory::GetName()
     if (!IsValid())
         return NULL;
     return m_opaque_sp->GetName();
+}
+
+lldb::LanguageType
+SBTypeCategory::GetLanguageAtIndex (uint32_t idx)
+{
+    if (IsValid())
+        return m_opaque_sp->GetLanguageAtIndex(idx);
+    return lldb::eLanguageTypeUnknown;
+}
+
+uint32_t
+SBTypeCategory::GetNumLanguages ()
+{
+    if (IsValid())
+        return m_opaque_sp->GetNumLanguages();
+    return 0;
+}
+
+void
+SBTypeCategory::AddLanguage (lldb::LanguageType language)
+{
+    if (IsValid())
+        m_opaque_sp->AddLanguage(language);
 }
 
 uint32_t
@@ -159,7 +180,7 @@ SBTypeCategory::GetFilterForType (SBTypeNameSpecifier spec)
     if (!spec.IsValid())
         return SBTypeFilter();
     
-    lldb::SyntheticChildrenSP children_sp;
+    lldb::TypeFilterImplSP children_sp;
     
     if (spec.IsRegex())
         m_opaque_sp->GetRegexTypeFiltersContainer()->GetExact(ConstString(spec.GetName()), children_sp);
@@ -353,7 +374,7 @@ SBTypeCategory::AddTypeSummary (SBTypeNameSpecifier type_name,
     // this should eventually be fixed by deciding a final location in the LLDB object space for formatters
     if (summary.IsFunctionCode())
     {
-        void *name_token = (void*)ConstString(type_name.GetName()).GetCString();
+        const void *name_token = (const void*)ConstString(type_name.GetName()).GetCString();
         const char* script = summary.GetData();
         StringList input; input.SplitIntoLines(script, strlen(script));
         uint32_t num_debuggers = lldb_private::Debugger::GetNumDebuggers();
@@ -461,7 +482,7 @@ SBTypeCategory::AddTypeSynthetic (SBTypeNameSpecifier type_name,
     // this should eventually be fixed by deciding a final location in the LLDB object space for formatters
     if (synth.IsClassCode())
     {
-        void *name_token = (void*)ConstString(type_name.GetName()).GetCString();
+        const void *name_token = (const void*)ConstString(type_name.GetName()).GetCString();
         const char* script = synth.GetData();
         StringList input; input.SplitIntoLines(script, strlen(script));
         uint32_t num_debuggers = lldb_private::Debugger::GetNumDebuggers();

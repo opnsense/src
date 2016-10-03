@@ -32,6 +32,7 @@
 __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
+#include <sys/capsicum.h>
 #include <sys/fcntl.h>
 #include <sys/filedesc.h>
 #include <sys/libkern.h>
@@ -94,7 +95,6 @@ static const struct aue_open_event aue_open[] = {
 	{ (O_WRONLY | O_CREAT | O_TRUNC),		AUE_OPEN_WTC },
 	{ (O_WRONLY | O_TRUNC),				AUE_OPEN_WT },
 };
-static const int aue_open_count = sizeof(aue_open) / sizeof(aue_open[0]);
 
 static const struct aue_open_event aue_openat[] = {
 	{ O_RDONLY,					AUE_OPENAT_R },
@@ -110,7 +110,6 @@ static const struct aue_open_event aue_openat[] = {
 	{ (O_WRONLY | O_CREAT | O_TRUNC),		AUE_OPENAT_WTC },
 	{ (O_WRONLY | O_TRUNC),				AUE_OPENAT_WT },
 };
-static const int aue_openat_count = sizeof(aue_openat) / sizeof(aue_openat[0]);
 
 /*
  * Look up the class for an audit event in the class mapping table.
@@ -295,7 +294,7 @@ audit_flags_and_error_to_openevent(int oflags, int error)
 	 * Need to check only those flags we care about.
 	 */
 	oflags = oflags & (O_RDONLY | O_CREAT | O_TRUNC | O_RDWR | O_WRONLY);
-	for (i = 0; i < aue_open_count; i++) {
+	for (i = 0; i < nitems(aue_open); i++) {
 		if (aue_open[i].aoe_flags == oflags)
 			return (aue_open[i].aoe_event);
 	}
@@ -311,7 +310,7 @@ audit_flags_and_error_to_openatevent(int oflags, int error)
 	 * Need to check only those flags we care about.
 	 */
 	oflags = oflags & (O_RDONLY | O_CREAT | O_TRUNC | O_RDWR | O_WRONLY);
-	for (i = 0; i < aue_openat_count; i++) {
+	for (i = 0; i < nitems(aue_openat); i++) {
 		if (aue_openat[i].aoe_flags == oflags)
 			return (aue_openat[i].aoe_event);
 	}
@@ -467,6 +466,7 @@ audit_canon_path(struct thread *td, int dirfd, char *path, char *cpath)
 	char *rbuf, *fbuf, *copy;
 	struct filedesc *fdp;
 	struct sbuf sbf;
+	cap_rights_t rights;
 	int error, needslash;
 
 	WITNESS_WARN(WARN_GIANTOK | WARN_SLEEPOK, NULL, "%s: at %s:%d",
@@ -495,7 +495,7 @@ audit_canon_path(struct thread *td, int dirfd, char *path, char *cpath)
 			vhold(cvnp);
 		} else {
 			/* XXX: fgetvp() that vhold()s vnode instead of vref()ing it would be better */
-			error = fgetvp(td, dirfd, NULL, &cvnp);
+			error = fgetvp(td, dirfd, cap_rights_init(&rights), &cvnp);
 			if (error) {
 				FILEDESC_SUNLOCK(fdp);
 				cpath[0] = '\0';

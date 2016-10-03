@@ -24,6 +24,9 @@
  * SUCH DAMAGE.
  */
 
+#include "opt_platform.h"
+#include "opt_at91.h"
+
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
@@ -71,6 +74,12 @@ __FBSDID("$FreeBSD$");
 
 #include <machine/bus.h>
 #include <machine/intr.h>
+
+#ifdef FDT
+#include <dev/fdt/fdt_common.h>
+#include <dev/ofw/ofw_bus.h>
+#include <dev/ofw/ofw_bus_subr.h>
+#endif
 
 /* "device miibus" required.  See GENERIC if you get errors here. */
 #include "miibus_if.h"
@@ -258,14 +267,14 @@ macb_free_desc_dma_tx(struct macb_softc *sc)
 
 	/* TX descriptor ring. */
 	if (sc->dmatag_data_tx != NULL) {
-		if (sc->dmamap_ring_tx != NULL)
+		if (sc->ring_paddr_tx != 0)
 			bus_dmamap_unload(sc->dmatag_data_tx,
 			    sc->dmamap_ring_tx);
-		if (sc->dmamap_ring_tx != NULL && sc->desc_tx != NULL)
+		if (sc->desc_tx != NULL)
 			bus_dmamem_free(sc->dmatag_data_tx, sc->desc_tx,
 			    sc->dmamap_ring_tx);
-		sc->dmamap_ring_tx = NULL;
-		sc->dmamap_ring_tx = NULL;
+		sc->ring_paddr_tx = 0;
+		sc->desc_tx = NULL;
 		bus_dma_tag_destroy(sc->dmatag_data_tx);
 		sc->dmatag_data_tx = NULL;
 	}
@@ -389,15 +398,14 @@ macb_free_desc_dma_rx(struct macb_softc *sc)
 	}
 	/* RX descriptor ring. */
 	if (sc->dmatag_data_rx != NULL) {
-		if (sc->dmamap_ring_rx != NULL)
+		if (sc->ring_paddr_rx != 0)
 			bus_dmamap_unload(sc->dmatag_data_rx,
 			    sc->dmamap_ring_rx);
-		if (sc->dmamap_ring_rx != NULL &&
-		    sc->desc_rx != NULL)
+		if (sc->desc_rx != NULL)
 			bus_dmamem_free(sc->dmatag_data_rx, sc->desc_rx,
 			    sc->dmamap_ring_rx);
+		sc->ring_paddr_rx = 0;
 		sc->desc_rx = NULL;
-		sc->dmamap_ring_rx = NULL;
 		bus_dma_tag_destroy(sc->dmatag_data_rx);
 		sc->dmatag_data_rx = NULL;
 	}
@@ -523,12 +531,12 @@ macb_watchdog(struct macb_softc *sc)
 	ifp = sc->ifp;
 	if ((sc->flags & MACB_FLAG_LINK) == 0) {
 		if_printf(ifp, "watchdog timeout (missed link)\n");
-		ifp->if_oerrors++;
+		if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 		return;
 	}
 
 	if_printf(ifp, "watchdog timeout\n");
-	ifp->if_oerrors++;
+	if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 	ifp->if_drv_flags &= ~IFF_DRV_RUNNING;
 	macbinit_locked(sc);
 	if (!IFQ_DRV_IS_EMPTY(&ifp->if_snd))
@@ -678,7 +686,7 @@ macb_tx_cleanup(struct macb_softc *sc)
 					  td->dmamap);
 			m_freem(td->buff);
 			td->buff = NULL;
-			ifp->if_opackets++;
+			if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
 		}
 
 		do {
@@ -733,7 +741,7 @@ macb_rx(struct macb_softc *sc)
 		bus_dmamap_sync(sc->dmatag_ring_rx,
 		    sc->rx_desc[sc->rx_cons].dmamap, BUS_DMASYNC_POSTREAD);
 		if (macb_new_rxbuf(sc, sc->rx_cons) != 0) {
-			ifp->if_iqdrops++;
+			if_inc_counter(ifp, IFCOUNTER_IQDROPS, 1);
 			first = sc->rx_cons;
 			
 			do  {
@@ -782,7 +790,7 @@ macb_rx(struct macb_softc *sc)
 			m->m_flags |= M_PKTHDR;
 			m->m_pkthdr.len = rxbytes;
 			m->m_pkthdr.rcvif = ifp;
-			ifp->if_ipackets++;
+			if_inc_counter(ifp, IFCOUNTER_IPACKETS, 1);
 
 			nsegs = 0;
 			MACB_UNLOCK(sc);
@@ -1197,6 +1205,11 @@ macbioctl(struct ifnet * ifp, u_long cmd, caddr_t data)
 static int
 macb_probe(device_t dev)
 {
+#ifdef FDT
+        if (!ofw_bus_is_compatible(dev, "cdns,at32ap7000-macb"))
+                return (ENXIO);
+#endif
+
 	device_set_desc(dev, "macb");
 	return (0);
 }
@@ -1281,6 +1294,52 @@ macb_get_mac(struct macb_softc *sc, u_char *eaddr)
 }
 
 
+#ifdef FDT
+/*
+ * We have to know if we're using MII or RMII attachment
+ * for the MACB to talk to the PHY correctly. With FDT,
+ * we must use rmii if there's a proprety phy-mode
+ * equal to "rmii". Otherwise we MII mode is used.
+ */
+static void
+macb_set_rmii(struct macb_softc *sc)
+{
+	phandle_t node;
+	char prop[10];
+	ssize_t len;
+
+	node = ofw_bus_get_node(sc->dev);
+	memset(prop, 0 ,sizeof(prop));
+	len = OF_getproplen(node, "phy-mode");
+	if (len != 4)
+		return;
+	if (OF_getprop(node, "phy-mode", prop, len) != len)
+		return;
+	if (strncmp(prop, "rmii", 4) == 0)
+		sc->use_rmii = USRIO_RMII;
+}
+#else
+/*
+ * We have to know if we're using MII or RMII attachment
+ * for the MACB to talk to the PHY correctly. Without FDT,
+ * there's no good way to do this. So, if the config file
+ * has 'option AT91_MACB_USE_RMII', then we'll force RMII.
+ * Otherwise, we'll use what the bootloader setup. Either
+ * it setup RMII or MII, in which case we'll get it right,
+ * or it did nothing, and we'll fall back to MII and the
+ * option would override if present.
+ */
+static void
+macb_set_rmii(struct macb_softc *sc)
+{
+#ifdef AT91_MACB_USE_RMII
+	sc->use_rmii = USRIO_RMII;
+#else
+	sc->use_rmii = read_4(sc, EMAC_USRIO) & USRIO_RMII;
+#endif
+}
+#endif
+
 static int
 macb_attach(device_t dev)
 {
@@ -1347,8 +1406,9 @@ macb_attach(device_t dev)
 
 	sc->clock = sc->clock << 10;
 
+	macb_set_rmii(sc);
 	write_4(sc, EMAC_NCFGR, sc->clock);
-	write_4(sc, EMAC_USRIO, USRIO_CLOCK);       //enable clock
+	write_4(sc, EMAC_USRIO, USRIO_CLOCK | sc->use_rmii);       //enable clock
 
 	write_4(sc, EMAC_NCR, MPE_ENABLE); //enable MPE
 
@@ -1547,7 +1607,11 @@ static driver_t macb_driver = {
 };
 
 
+#ifdef FDT
+DRIVER_MODULE(macb, simplebus, macb_driver, macb_devclass, NULL, NULL);
+#else
 DRIVER_MODULE(macb, atmelarm, macb_driver, macb_devclass, 0, 0);
+#endif
 DRIVER_MODULE(miibus, macb, miibus_driver, miibus_devclass, 0, 0);
 MODULE_DEPEND(macb, miibus, 1, 1, 1);
 MODULE_DEPEND(macb, ether, 1, 1, 1);

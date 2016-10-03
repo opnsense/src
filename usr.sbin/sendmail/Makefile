@@ -1,8 +1,9 @@
 #	@(#)Makefile	8.8 (Berkeley) 3/28/97
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
+PACKAGE=sendmail
 SENDMAIL_DIR=${.CURDIR}/../../contrib/sendmail
 SMDIR=	${SENDMAIL_DIR}/src
 .PATH: ${SMDIR}
@@ -40,31 +41,20 @@ CFLAGS+= -I${SMDIR} -I${SENDMAIL_DIR}/include -I.
 CFLAGS+= ${DBMDEF} ${NIS} -DTCPWRAPPERS ${MAPS}
 
 .if ${MK_INET6_SUPPORT} != "no"
-CFLAGS+= -DNETINET6 -DIPV6_FULL=0
+CFLAGS+= -DNETINET6
 .endif
 
 WARNS?=	0
 
-DPADD=	${LIBUTIL} ${LIBWRAP}
-LDADD=	-lutil -lwrap
-
-LIBSMDIR=	${.OBJDIR}/../../lib/libsm
-LIBSM=		${LIBSMDIR}/libsm.a
-
-LIBSMUTILDIR=	${.OBJDIR}/../../lib/libsmutil
-LIBSMUTIL=	${LIBSMUTILDIR}/libsmutil.a
-
-DPADD+=	${LIBSMUTIL} ${LIBSM}
-LDADD+=	${LIBSMUTIL} ${LIBSM}
+LIBADD=	util wrap sm smutil
 
 SRCS+=	sm_os.h
 CLEANFILES+=sm_os.h
 
-.if ${MK_OPENSSL} != "no" && !defined(RELEASE_CRUNCH)
+.if ${MK_OPENSSL} != "no"
 # STARTTLS support
 CFLAGS+=	-DSTARTTLS -D_FFR_TLS_1
-DPADD+=		${LIBSSL} ${LIBCRYPTO}
-LDADD+=		-lssl -lcrypto
+LIBADD+=	ssl crypto
 .endif
 
 # User customizations to the sendmail build environment
@@ -73,7 +63,7 @@ DPADD+=${SENDMAIL_DPADD}
 LDADD+=${SENDMAIL_LDADD}
 LDFLAGS+=${SENDMAIL_LDFLAGS}
 
-sm_os.h:
-	ln -sf ${SENDMAIL_DIR}/include/sm/os/sm_os_freebsd.h sm_os.h
+sm_os.h: ${SENDMAIL_DIR}/include/sm/os/sm_os_freebsd.h .NOMETA
+	ln -sf ${.ALLSRC} ${.TARGET}
 
 .include <bsd.prog.mk>

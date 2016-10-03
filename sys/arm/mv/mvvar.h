@@ -44,7 +44,6 @@
 #include <machine/bus.h>
 #include <vm/vm.h>
 #include <vm/pmap.h>
-#include <machine/vm.h>
 
 #include <dev/ofw/openfirm.h>
 
@@ -82,7 +81,6 @@ void mv_gpio_intr_mask(int pin);
 void mv_gpio_intr_unmask(int pin);
 void mv_gpio_out(uint32_t pin, uint8_t val, uint8_t enable);
 uint8_t mv_gpio_in(uint32_t pin);
-int platform_gpio_init(void);
 
 int soc_decode_win(void);
 void soc_id(uint32_t *dev, uint32_t *rev);
@@ -110,7 +108,7 @@ uint32_t get_l2clk(void);
 uint32_t read_cpu_ctrl(uint32_t);
 void write_cpu_ctrl(uint32_t, uint32_t);
 
-#if defined(SOC_MV_ARMADAXP)
+#if defined(SOC_MV_ARMADAXP) || defined(SOC_MV_ARMADA38X)
 uint32_t read_cpu_mp_clocks(uint32_t reg);
 void write_cpu_mp_clocks(uint32_t reg, uint32_t val);
 uint32_t read_cpu_misc(uint32_t reg);
@@ -137,9 +135,10 @@ uint32_t mv_drbl_get_msg(int mnr, int dir, int unit);
 
 int	mv_msi_data(int irq, uint64_t *addr, uint32_t *data);
 
-struct arm_devmap_entry;
+struct devmap_entry;
 
-int mv_pci_devmap(phandle_t, struct arm_devmap_entry *, vm_offset_t,
+int mv_pci_devmap(phandle_t, struct devmap_entry *, vm_offset_t,
     vm_offset_t);
+int fdt_localbus_devmap(phandle_t, struct devmap_entry *, int, int *);
 
 #endif /* _MVVAR_H_ */

@@ -4,7 +4,6 @@ PROG=	sesutil
 SRCS=	sesutil.c eltsub.c
 MAN=	sesutil.8
 
-DPADD=	${LIBSBUF}
-LDADD=	-lsbuf
+LIBADD=	sbuf
 
 .include <bsd.prog.mk>

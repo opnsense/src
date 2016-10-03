@@ -342,7 +342,7 @@ tmpfs_getattr(struct vop_getattr_args *v)
 {
 	struct vnode *vp = v->a_vp;
 	struct vattr *vap = v->a_vap;
-
+	vm_object_t obj;
 	struct tmpfs_node *node;
 
 	node = VP_TO_TMPFS_NODE(vp);
@@ -366,7 +366,11 @@ tmpfs_getattr(struct vop_getattr_args *v)
 	vap->va_flags = node->tn_flags;
 	vap->va_rdev = (vp->v_type == VBLK || vp->v_type == VCHR) ?
 		node->tn_rdev : NODEV;
-	vap->va_bytes = round_page(node->tn_size);
+	if (vp->v_type == VREG) {
+		obj = node->tn_reg.tn_aobj;
+		vap->va_bytes = (u_quad_t)obj->resident_page_count * PAGE_SIZE;
+	} else
+		vap->va_bytes = node->tn_size;
 	vap->va_filerev = 0;
 
 	return 0;
@@ -836,7 +840,7 @@ tmpfs_rename(struct vop_rename_args *v)
 	/* If re-naming a directory to another preexisting directory
 	 * ensure that the target directory is empty so that its
 	 * removal causes no side effects.
-	 * Kern_rename gurantees the destination to be a directory
+	 * Kern_rename guarantees the destination to be a directory
 	 * if the source is one. */
 	if (tvp != NULL) {
 		MPASS(tnode != NULL);

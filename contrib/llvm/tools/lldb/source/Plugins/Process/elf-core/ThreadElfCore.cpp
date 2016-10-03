@@ -8,19 +8,27 @@
 //===----------------------------------------------------------------------===//
 
 #include "lldb/Core/DataExtractor.h"
+#include "lldb/Core/Log.h"
 #include "lldb/Target/RegisterContext.h"
 #include "lldb/Target/StopInfo.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Target/Unwind.h"
-#include "ProcessPOSIXLog.h"
 
 #include "ThreadElfCore.h"
 #include "ProcessElfCore.h"
-#include "RegisterContextLinux_x86_64.h"
-#include "RegisterContextFreeBSD_i386.h"
-#include "RegisterContextFreeBSD_mips64.h"
-#include "RegisterContextFreeBSD_x86_64.h"
+#include "Plugins/Process/Utility/RegisterContextLinux_arm.h"
+#include "Plugins/Process/Utility/RegisterContextLinux_arm64.h"
+#include "Plugins/Process/Utility/RegisterContextLinux_x86_64.h"
+#include "Plugins/Process/Utility/RegisterContextFreeBSD_arm.h"
+#include "Plugins/Process/Utility/RegisterContextFreeBSD_arm64.h"
+#include "Plugins/Process/Utility/RegisterContextFreeBSD_i386.h"
+#include "Plugins/Process/Utility/RegisterContextFreeBSD_mips64.h"
+#include "Plugins/Process/Utility/RegisterContextFreeBSD_powerpc.h"
+#include "Plugins/Process/Utility/RegisterContextFreeBSD_x86_64.h"
+#include "RegisterContextPOSIXCore_arm.h"
+#include "RegisterContextPOSIXCore_arm64.h"
 #include "RegisterContextPOSIXCore_mips64.h"
+#include "RegisterContextPOSIXCore_powerpc.h"
 #include "RegisterContextPOSIXCore_x86_64.h"
 
 using namespace lldb;
@@ -29,14 +37,14 @@ using namespace lldb_private;
 //----------------------------------------------------------------------
 // Construct a Thread object with given data
 //----------------------------------------------------------------------
-ThreadElfCore::ThreadElfCore (Process &process, tid_t tid,
-                              const ThreadData &td) :
-    Thread(process, tid),
+ThreadElfCore::ThreadElfCore (Process &process, const ThreadData &td) :
+    Thread(process, td.tid),
     m_thread_name(td.name),
     m_thread_reg_ctx_sp (),
     m_signo(td.signo),
     m_gpregset_data(td.gpregset),
-    m_fpregset_data(td.fpregset)
+    m_fpregset_data(td.fpregset),
+    m_vregset_data(td.vregset)
 {
 }
 
@@ -74,7 +82,7 @@ ThreadElfCore::CreateRegisterContextForFrame (StackFrame *frame)
 {
     RegisterContextSP reg_ctx_sp;
     uint32_t concrete_frame_idx = 0;
-    Log *log (ProcessPOSIXLog::GetLogIfAllCategoriesSet (POSIX_LOG_THREAD));
+    Log *log (GetLogIfAllCategoriesSet(LIBLLDB_LOG_THREAD));
 
     if (frame)
         concrete_frame_idx = frame->GetConcreteFrameIndex ();
@@ -94,6 +102,18 @@ ThreadElfCore::CreateRegisterContextForFrame (StackFrame *frame)
             {
                 switch (arch.GetMachine())
                 {
+                    case llvm::Triple::aarch64:
+                        reg_interface = new RegisterContextFreeBSD_arm64(arch);
+                        break;
+                    case llvm::Triple::arm:
+                        reg_interface = new RegisterContextFreeBSD_arm(arch);
+                        break;
+                    case llvm::Triple::ppc:
+                        reg_interface = new RegisterContextFreeBSD_powerpc32(arch);
+                        break;
+                    case llvm::Triple::ppc64:
+                        reg_interface = new RegisterContextFreeBSD_powerpc64(arch);
+                        break;
                     case llvm::Triple::mips64:
                         reg_interface = new RegisterContextFreeBSD_mips64(arch);
                         break;
@@ -108,11 +128,17 @@ ThreadElfCore::CreateRegisterContextForFrame (StackFrame *frame)
                 }
                 break;
             }
- 
+
             case llvm::Triple::Linux:
             {
                 switch (arch.GetMachine())
                 {
+                    case llvm::Triple::arm:
+                        reg_interface = new RegisterContextLinux_arm(arch);
+                        break;
+                    case llvm::Triple::aarch64:
+                        reg_interface = new RegisterContextLinux_arm64(arch);
+                        break;
                     case llvm::Triple::x86_64:
                         reg_interface = new RegisterContextLinux_x86_64(arch);
                         break;
@@ -135,8 +161,18 @@ ThreadElfCore::CreateRegisterContextForFrame (StackFrame *frame)
 
         switch (arch.GetMachine())
         {
+            case llvm::Triple::aarch64:
+                m_thread_reg_ctx_sp.reset(new RegisterContextCorePOSIX_arm64 (*this, reg_interface, m_gpregset_data, m_fpregset_data));
+                break;
+            case llvm::Triple::arm:
+                m_thread_reg_ctx_sp.reset(new RegisterContextCorePOSIX_arm (*this, reg_interface, m_gpregset_data, m_fpregset_data));
+                break;
             case llvm::Triple::mips64:
                 m_thread_reg_ctx_sp.reset(new RegisterContextCorePOSIX_mips64 (*this, reg_interface, m_gpregset_data, m_fpregset_data));
+                break;
+            case llvm::Triple::ppc:
+            case llvm::Triple::ppc64:
+                m_thread_reg_ctx_sp.reset(new RegisterContextCorePOSIX_powerpc (*this, reg_interface, m_gpregset_data, m_fpregset_data, m_vregset_data));
                 break;
             case llvm::Triple::x86:
             case llvm::Triple::x86_64:

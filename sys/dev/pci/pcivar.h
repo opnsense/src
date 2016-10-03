@@ -39,6 +39,15 @@
 
 typedef uint64_t pci_addr_t;
 
+/* Config registers for PCI-PCI and PCI-Cardbus bridges. */
+struct pcicfg_bridge {
+    uint8_t	br_seclat;
+    uint8_t	br_subbus;
+    uint8_t	br_secbus;
+    uint8_t	br_pribus;
+    uint16_t	br_control;
+};
+
 /* Interesting values for PCI power management */
 struct pcicfg_pp {
     uint16_t	pp_cap;		/* PCI power management capabilities */
@@ -50,7 +59,7 @@ struct pcicfg_pp {
 struct pci_map {
     pci_addr_t	pm_value;	/* Raw BAR value */
     pci_addr_t	pm_size;
-    uint8_t	pm_reg;
+    uint16_t	pm_reg;
     STAILQ_ENTRY(pci_map) pm_link;
 };
 
@@ -143,6 +152,26 @@ struct pcicfg_pcix {
     uint8_t	pcix_location;	/* Offset of PCI-X capability registers. */
 };
 
+struct pcicfg_vf {
+       int index;
+};
+
+struct pci_ea_entry {
+    int		eae_bei;
+    uint32_t	eae_flags;
+    uint64_t	eae_base;
+    uint64_t	eae_max_offset;
+    uint32_t	eae_cfg_offset;
+    STAILQ_ENTRY(pci_ea_entry) eae_link;
+};
+
+struct pcicfg_ea {
+    int ea_location;	/* Structure offset in Configuration Header */
+    STAILQ_HEAD(, pci_ea_entry) ea_entries;	/* EA entries */
+};
+
+#define	PCICFG_VF	0x0001 /* Device is an SR-IOV Virtual Function */
+
 /* config header information common to all header types */
 typedef struct pcicfg {
     struct device *dev;		/* device which owns this */
@@ -179,6 +208,9 @@ typedef struct pcicfg {
     uint8_t	slot;		/* config space slot address */
     uint8_t	func;		/* config space function number */
 
+    uint32_t	flags;		/* flags defined above */
+
+    struct pcicfg_bridge bridge; /* Bridges */
     struct pcicfg_pp pp;	/* Power management */
     struct pcicfg_vpd vpd;	/* Vital product data */
     struct pcicfg_msi msi;	/* PCI MSI */
@@ -186,6 +218,9 @@ typedef struct pcicfg {
     struct pcicfg_ht ht;	/* HyperTransport */
     struct pcicfg_pcie pcie;	/* PCI Express */
     struct pcicfg_pcix pcix;	/* PCI-X */
+    struct pcicfg_iov *iov;	/* SR-IOV */
+    struct pcicfg_vf vf;	/* SR-IOV Virtual Function */
+    struct pcicfg_ea ea;	/* Enhanced Allocation */
 } pcicfgregs;
 
 /* additional type 1 device config header information (PCI to PCI bridge) */
@@ -376,7 +411,7 @@ pci_get_vpd_readonly(device_t dev, const char *kw, const char **vptr)
  * Check if the address range falls within the VGA defined address range(s)
  */
 static __inline int
-pci_is_vga_ioport_range(u_long start, u_long end)
+pci_is_vga_ioport_range(rman_res_t start, rman_res_t end)
 {
  
 	return (((start >= 0x3b0 && end <= 0x3bb) ||
@@ -384,7 +419,7 @@ pci_is_vga_ioport_range(u_long start, u_long end)
 }
 
 static __inline int
-pci_is_vga_memory_range(u_long start, u_long end)
+pci_is_vga_memory_range(rman_res_t start, rman_res_t end)
 {
 
 	return ((start >= 0xa0000 && end <= 0xbffff) ? 1 : 0);
@@ -507,10 +542,26 @@ pci_msix_table_bar(device_t dev)
     return (PCI_MSIX_TABLE_BAR(device_get_parent(dev), dev));
 }
 
+static __inline int
+pci_get_id(device_t dev, enum pci_id_type type, uintptr_t *id)
+{
+    return (PCI_GET_ID(device_get_parent(dev), dev, type, id));
+}
+
+/*
+ * This is the deprecated interface, there is no way to tell the difference
+ * between a failure and a valid value that happens to be the same as the
+ * failure value.
+ */
 static __inline uint16_t
 pci_get_rid(device_t dev)
 {
-	return (PCI_GET_RID(device_get_parent(dev), dev));
+    uintptr_t rid;
+
+    if (pci_get_id(dev, PCI_ID_RID, &rid) != 0)
+        return (0);
+
+    return (rid);
 }
 
 static __inline void
@@ -534,6 +585,7 @@ int	pci_msix_device_blacklisted(device_t dev);
 void	pci_ht_map_msi(device_t dev, uint64_t addr);
 
 device_t pci_find_pcie_root_port(device_t dev);
+int	pci_get_max_payload(device_t dev);
 int	pci_get_max_read_req(device_t dev);
 void	pci_restore_state(device_t dev);
 void	pci_save_state(device_t dev);
@@ -577,5 +629,6 @@ struct pcicfg_vpd *pci_fetch_vpd_list(device_t dev);
 int	vga_pci_is_boot_display(device_t dev);
 void *	vga_pci_map_bios(device_t dev, size_t *size);
 void	vga_pci_unmap_bios(device_t dev, void *bios);
+int	vga_pci_repost(device_t dev);
 
 #endif /* _PCIVAR_H_ */

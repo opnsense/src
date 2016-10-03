@@ -13,6 +13,7 @@
 // C Includes
 // C++ Includes
 #include <string>
+
 // Other libraries and framework includes
 // Project includes
 #include "lldb/lldb-private.h"
@@ -223,6 +224,7 @@ namespace lldb_private {
 //------------------------------------------------------------------
 
 class ThreadPlan :
+    public std::enable_shared_from_this<ThreadPlan>,
     public UserID
 {
 public:
@@ -241,6 +243,7 @@ public:
         eKindNull,
         eKindBase,
         eKindCallFunction,
+        eKindPython,
         eKindStepInstruction,
         eKindStepOut,
         eKindStepOverBreakpoint,
@@ -501,10 +504,25 @@ public:
         return m_thread.GetStopInfo ();
     }
     
+    // If the completion of the thread plan stepped out of a function, the return value of the function
+    // might have been captured by the thread plan (currently only ThreadPlanStepOut does this.)
+    // If so, the ReturnValueObject can be retrieved from here.
+    
     virtual lldb::ValueObjectSP
     GetReturnValueObject ()
     {
         return lldb::ValueObjectSP();
+    }
+
+    // If the thread plan managing the evaluation of a user expression lives longer than the command
+    // that instigated the expression (generally because the expression evaluation hit a breakpoint, and
+    // the user regained control at that point) a subsequent process control command step/continue/etc. might
+    // complete the expression evaluations.  If so, the result of the expression evaluation will show up here.
+    
+    virtual lldb::ExpressionVariableSP
+    GetExpressionVariable ()
+    {
+        return lldb::ExpressionVariableSP();
     }
     
     // If a thread plan stores the state before it was run, then you might
@@ -524,13 +542,35 @@ public:
         return false;
     }
     
+    virtual bool
+    SetIterationCount (size_t count)
+    {
+        if (m_takes_iteration_count)
+        {
+            // Don't tell me to do something 0 times...
+            if (count == 0)
+                return false;
+            m_iteration_count = count;
+        }
+        return m_takes_iteration_count;
+    }
+    
+    virtual size_t
+    GetIterationCount ()
+    {
+        if (!m_takes_iteration_count)
+            return 0;
+        else
+            return m_iteration_count;
+    }
+
 protected:
     //------------------------------------------------------------------
     // Classes that inherit from ThreadPlan can see and modify these
     //------------------------------------------------------------------
 
     virtual bool
-    DoWillResume (lldb::StateType resume_state, bool current_plan) { return true; };
+    DoWillResume (lldb::StateType resume_state, bool current_plan) { return true; }
 
     virtual bool
     DoPlanExplainsStop (Event *event_ptr) = 0;
@@ -575,9 +615,14 @@ protected:
     virtual lldb::StateType
     GetPlanRunState () = 0;
 
+    bool
+    IsUsuallyUnexplainedStopReason(lldb::StopReason);
+
     Thread &m_thread;
     Vote m_stop_vote;
     Vote m_run_vote;
+    bool m_takes_iteration_count = false;
+    int32_t m_iteration_count = 1;
 
 private:
     //------------------------------------------------------------------
@@ -613,46 +658,46 @@ class ThreadPlanNull : public ThreadPlan
 {
 public:
     ThreadPlanNull (Thread &thread);
-    virtual ~ThreadPlanNull ();
+    ~ThreadPlanNull() override;
     
-    virtual void
-    GetDescription (Stream *s,
-                    lldb::DescriptionLevel level);
+    void
+    GetDescription(Stream *s,
+		   lldb::DescriptionLevel level) override;
 
-    virtual bool
-    ValidatePlan (Stream *error);
+    bool
+    ValidatePlan(Stream *error) override;
 
-    virtual bool
-    ShouldStop (Event *event_ptr);
+    bool
+    ShouldStop(Event *event_ptr) override;
 
-    virtual bool
-    MischiefManaged ();
+    bool
+    MischiefManaged() override;
 
-    virtual bool
-    WillStop ();
+    bool
+    WillStop() override;
 
-    virtual bool
-    IsBasePlan()
+    bool
+    IsBasePlan() override
     {
         return true;
     }
     
-    virtual bool
-    OkayToDiscard ()
+    bool
+    OkayToDiscard() override
     {
         return false;
     }
 
 protected:
-    virtual bool
-    DoPlanExplainsStop (Event *event_ptr);
+    bool
+    DoPlanExplainsStop(Event *event_ptr) override;
     
-    virtual lldb::StateType
-    GetPlanRunState ();
-    
-};
+    lldb::StateType
+    GetPlanRunState() override;
 
+    DISALLOW_COPY_AND_ASSIGN(ThreadPlanNull);
+};
 
 } // namespace lldb_private
 
-#endif  // liblldb_ThreadPlan_h_
+#endif // liblldb_ThreadPlan_h_

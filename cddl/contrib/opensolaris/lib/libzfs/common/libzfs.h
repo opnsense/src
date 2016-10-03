@@ -28,6 +28,7 @@
  * Copyright (c) 2012 Martin Matuska <mm@FreeBSD.org>. All rights reserved.
  * Copyright (c) 2013 Steven Hartland. All rights reserved.
  * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright (c) 2014 Integros [integros.com]
  */
 
 #ifndef	_LIBZFS_H
@@ -326,7 +327,7 @@ typedef enum {
 	ZPOOL_STATUS_VERSION_OLDER,	/* older legacy on-disk version */
 	ZPOOL_STATUS_FEAT_DISABLED,	/* supported features are disabled */
 	ZPOOL_STATUS_RESILVERING,	/* device being resilvered */
-	ZPOOL_STATUS_OFFLINE_DEV,	/* device online */
+	ZPOOL_STATUS_OFFLINE_DEV,	/* device offline */
 	ZPOOL_STATUS_REMOVED_DEV,	/* removed device */
 	ZPOOL_STATUS_NON_NATIVE_ASHIFT,	/* (e.g. 512e dev with ashift of 9) */
 
@@ -800,10 +801,10 @@ extern boolean_t libzfs_fru_compare(libzfs_handle_t *, const char *,
 extern boolean_t libzfs_fru_notself(libzfs_handle_t *, const char *);
 extern int zpool_fru_set(zpool_handle_t *, uint64_t, const char *);
 
-#ifndef sun
+#ifndef illumos
 extern int zmount(const char *, const char *, int, char *, char *, int, char *,
     int);
-#endif	/* !sun */
+#endif
 
 #ifdef	__cplusplus
 }

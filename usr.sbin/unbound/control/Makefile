@@ -8,10 +8,8 @@ UNBOUNDDIR= ${.CURDIR}/../../../contrib/unbound
 
 PROG=	unbound-control
 SRCS=	unbound-control.c worker_cb.c
-CFLAGS=	-I${UNBOUNDDIR} -I${LDNSDIR}
-DPADD=	${LIBUNBOUND} ${LIBLDNS} ${LIBUTIL} ${LIBSSL} ${LIBCRYPTO} ${LIBPTHREAD}
-LDADD=	-lunbound -lldns -lutil -lssl -lcrypto -lpthread
-USEPRIVATELIB=	ldns
+CFLAGS+=	-I${UNBOUNDDIR} -I${LDNSDIR}
+LIBADD=	unbound crypto ssl pthread
 MAN=	unbound-control.8
 
 .include <bsd.prog.mk>

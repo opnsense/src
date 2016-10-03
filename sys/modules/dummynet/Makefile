@@ -1,7 +1,5 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
-
 .PATH:  ${.CURDIR}/../../netpfil/ipfw
 KMOD=   dummynet
 SRCS=   ip_dummynet.c
@@ -10,12 +8,5 @@ SRCS+= dn_aqm_codel.c dn_aqm_pie.c
 SRCS+= dn_heap.c dn_sched_fifo.c dn_sched_qfq.c dn_sched_rr.c dn_sched_wf2q.c 
 SRCS+= dn_sched_prio.c dn_sched_fq_codel.c dn_sched_fq_pie.c
 SRCS+=	opt_inet6.h
-
-.if !defined(KERNBUILDDIR)
-.if ${MK_INET6_SUPPORT} != "no"
-opt_inet6.h:
-	echo "#define INET6 1" > ${.TARGET}
-.endif
-.endif
 
 .include <bsd.kmod.mk>

@@ -1,5 +1,7 @@
 /*
  * PIE - Proportional Integral controller Enhanced AQM algorithm.
+ *
+ * $FreeBSD$
  * 
  * Copyright (C) 2016 Centre for Advanced Internet Architectures,
  *  Swinburne University of Technology, Melbourne, Australia.
@@ -224,20 +226,20 @@ calculate_drop_prob(void *x)
 	p *= (PIE_MAX_PROB << 12) / AQM_TIME_1S;
 
 	/* auto-tune drop probability */
-	if (prob< PIE_MAX_PROB * 0.000001)
-		p >>= 11 + PIE_FIX_POINT_BITS+12;
-	else if (prob < PIE_MAX_PROB * 0.00001)
-		p >>= 9 + PIE_FIX_POINT_BITS+12;
-	else if (prob < PIE_MAX_PROB * 0.0001)
-		p >>= 7 + PIE_FIX_POINT_BITS+12;
-	else if (prob < PIE_MAX_PROB * 0.001)
-		p >>= 5 + PIE_FIX_POINT_BITS+12;
-	else	if (prob < PIE_MAX_PROB * 0.01)
-		p >>= 3 + PIE_FIX_POINT_BITS+12;
-	else if (prob < PIE_MAX_PROB * 0.1)
-		p >>= 1 + PIE_FIX_POINT_BITS+12;
+	if (prob < (PIE_MAX_PROB / 1000000)) /* 0.000001 */
+		p >>= 11 + PIE_FIX_POINT_BITS + 12;
+	else if (prob < (PIE_MAX_PROB / 100000)) /* 0.00001 */
+		p >>= 9 + PIE_FIX_POINT_BITS + 12;
+	else if (prob < (PIE_MAX_PROB / 10000)) /* 0.0001 */
+		p >>= 7 + PIE_FIX_POINT_BITS + 12;
+	else if (prob < (PIE_MAX_PROB / 1000)) /* 0.001 */
+		p >>= 5 + PIE_FIX_POINT_BITS + 12;
+	else if (prob < (PIE_MAX_PROB / 100)) /* 0.01 */
+		p >>= 3 + PIE_FIX_POINT_BITS + 12;
+	else if (prob < (PIE_MAX_PROB / 10)) /* 0.1 */
+		p >>= 1 + PIE_FIX_POINT_BITS + 12;
 	else
-		p >>= PIE_FIX_POINT_BITS+12;
+		p >>= PIE_FIX_POINT_BITS + 12;
 
 	oldprob = prob;
 

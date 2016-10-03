@@ -560,7 +560,7 @@ If len is longer than 252 bytes (the maximum allowable
 .Tn SCSI
 sense data length), it will be truncated to that length.
 The sense data format is described in
-.Xr cam_cdparse 3 .
+.Xr cam_cdbparse 3 .
 .It Fl c
 The error injection should be persistent, instead of happening once.
 Persistent errors must be deleted with the
@@ -802,21 +802,21 @@ If you specify
 the entire LUN database is displayed in XML format.
 .El
 .It Ic islist
-Get a list of currently running iSCSI connections.
+Get a list of currently running iSCSI sessions.
 This includes initiator and target names and the unique connection IDs.
 .Bl -tag -width 11n
 .It Fl v
 Verbose mode.
 .It Fl x
 Dump the raw XML.
-The connections list information from the kernel comes in XML format, and this
+The sessions list information from the kernel comes in XML format, and this
 option allows the display of the raw XML data.
 .El
 .It Ic islogout
-Ask the initiator to log out iSCSI connections matching criteria.
+Ask the initiator to log out iSCSI sessions matching criteria.
 .Bl -tag -width 11n
 .It Fl a
-Log out all connections.
+Log out all sessions.
 .It Fl c
 Specify connection ID.
 .It Fl i
@@ -825,10 +825,10 @@ Specify initiator name.
 Specify initiator portal (hostname or IP address).
 .El
 .It Ic isterminate
-Forcibly terminate iSCSI connections matching criteria.
+Forcibly terminate iSCSI sessions matching criteria.
 .Bl -tag -width 11n
 .It Fl a
-Terminate all connections.
+Terminate all sessions.
 .It Fl c
 Specify connection ID.
 .It Fl i
@@ -1023,4 +1023,4 @@ The
 utility was originally written during the Winter/Spring of 2003 as an
 interface to CTL.
 .Sh AUTHORS
-.An Ken Merry Aq ken@FreeBSD.org
+.An Ken Merry Aq Mt ken@FreeBSD.org

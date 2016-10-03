@@ -27,11 +27,11 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#include <stand.h>
 #include <sys/param.h>
 #include <sys/endian.h>
 #include <sys/queue.h>
 #include <machine/stdarg.h>
-#include <stand.h>
 
 #include "bootstrap.h"
 
@@ -60,7 +60,7 @@ static struct {
 
 /* devsw I/F */
 static int md_init(void);
-static int md_strategy(void *, int, daddr_t, size_t, char *, size_t *);
+static int md_strategy(void *, int, daddr_t, size_t, size_t, char *, size_t *);
 static int md_open(struct open_file *, ...);
 static int md_close(struct open_file *);
 static void md_print(int);
@@ -84,8 +84,8 @@ md_init(void)
 }
 
 static int
-md_strategy(void *devdata, int rw, daddr_t blk, size_t size, char *buf,
-    size_t *rsize)
+md_strategy(void *devdata, int rw, daddr_t blk, size_t offset, size_t size,
+    char *buf, size_t *rsize)
 {
 	struct devdesc *dev = (struct devdesc *)devdata;
 	size_t ofs;

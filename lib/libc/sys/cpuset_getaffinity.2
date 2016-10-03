@@ -25,7 +25,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd September 10, 2010
+.Dd June 2, 2016
 .Dt CPUSET_GETAFFINITY 2
 .Os
 .Sh NAME
@@ -114,6 +114,8 @@ to the value in
 The following error codes may be set in
 .Va errno :
 .Bl -tag -width Er
+.\" When changing this list, consider updating share/man/man3/pthread_create.3,
+.\" since that function can return any of these errors.
 .It Bq Er EINVAL
 The
 .Fa level
@@ -153,11 +155,12 @@ operation.
 .Xr cpuset_getid 2 ,
 .Xr cpuset_setid 2 ,
 .Xr pthread_affinity_np 3 ,
-.Xr pthread_attr_affinity_np 3
+.Xr pthread_attr_affinity_np 3 ,
+.Xr cpuset 9
 .Sh HISTORY
 The
 .Nm
 family of system calls first appeared in
 .Fx 7.1 .
-.Sh AUTHOR
-.An Jeffrey Roberson Aq jeff@FreeBSD.org
+.Sh AUTHORS
+.An Jeffrey Roberson Aq Mt jeff@FreeBSD.org

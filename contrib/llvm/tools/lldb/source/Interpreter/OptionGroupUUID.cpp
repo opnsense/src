@@ -30,7 +30,7 @@ OptionGroupUUID::~OptionGroupUUID ()
 static OptionDefinition
 g_option_table[] =
 {
-    { LLDB_OPT_SET_1 , false, "uuid", 'u', OptionParser::eRequiredArgument, NULL, 0, eArgTypeNone, "A module UUID value."},
+    { LLDB_OPT_SET_1 , false, "uuid", 'u', OptionParser::eRequiredArgument, nullptr, nullptr, 0, eArgTypeNone, "A module UUID value."},
 };
 
 uint32_t
@@ -56,7 +56,7 @@ OptionGroupUUID::SetOptionValue (CommandInterpreter &interpreter,
     switch (short_option)
     {
         case 'u':
-            error = m_uuid.SetValueFromCString (option_arg);
+            error = m_uuid.SetValueFromString (option_arg);
             if (error.Success())
                 m_uuid.SetOptionWasSet();
             break;

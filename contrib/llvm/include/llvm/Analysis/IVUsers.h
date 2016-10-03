@@ -17,10 +17,11 @@
 
 #include "llvm/Analysis/LoopPass.h"
 #include "llvm/Analysis/ScalarEvolutionNormalization.h"
-#include "llvm/Support/ValueHandle.h"
+#include "llvm/IR/ValueHandle.h"
 
 namespace llvm {
 
+class AssumptionCache;
 class DominatorTree;
 class Instruction;
 class Value;
@@ -33,7 +34,7 @@ class DataLayout;
 /// The Expr member keeps track of the expression, User is the actual user
 /// instruction of the operand, and 'OperandValToReplace' is the operand of
 /// the User that is the use.
-class IVStrideUse : public CallbackVH, public ilist_node<IVStrideUse> {
+class IVStrideUse final : public CallbackVH, public ilist_node<IVStrideUse> {
   friend class IVUsers;
 public:
   IVStrideUse(IVUsers *P, Instruction* U, Value *O)
@@ -86,7 +87,7 @@ private:
 
   /// Deleted - Implementation of CallbackVH virtual function to
   /// receive notification when the User is deleted.
-  virtual void deleted();
+  void deleted() override;
 };
 
 template<> struct ilist_traits<IVStrideUse>
@@ -119,21 +120,24 @@ private:
 class IVUsers : public LoopPass {
   friend class IVStrideUse;
   Loop *L;
+  AssumptionCache *AC;
   LoopInfo *LI;
   DominatorTree *DT;
   ScalarEvolution *SE;
-  DataLayout *TD;
-  SmallPtrSet<Instruction*,16> Processed;
+  SmallPtrSet<Instruction*, 16> Processed;
 
   /// IVUses - A list of all tracked IV uses of induction variable expressions
   /// we are interested in.
   ilist<IVStrideUse> IVUses;
 
-  virtual void getAnalysisUsage(AnalysisUsage &AU) const;
+  // Ephemeral values used by @llvm.assume in this function.
+  SmallPtrSet<const Value *, 32> EphValues;
 
-  virtual bool runOnLoop(Loop *L, LPPassManager &LPM);
+  void getAnalysisUsage(AnalysisUsage &AU) const override;
 
-  virtual void releaseMemory();
+  bool runOnLoop(Loop *L, LPPassManager &LPM) override;
+
+  void releaseMemory() override;
 
 public:
   static char ID; // Pass ID, replacement for typeid
@@ -169,12 +173,12 @@ public:
     return Processed.count(Inst);
   }
 
-  void print(raw_ostream &OS, const Module* = 0) const;
+  void print(raw_ostream &OS, const Module* = nullptr) const override;
 
   /// dump - This method is used for debugging.
   void dump() const;
 protected:
-  bool AddUsersImpl(Instruction *I, SmallPtrSet<Loop*,16> &SimpleLoopNests);
+  bool AddUsersImpl(Instruction *I, SmallPtrSetImpl<Loop*> &SimpleLoopNests);
 };
 
 Pass *createIVUsersPass();

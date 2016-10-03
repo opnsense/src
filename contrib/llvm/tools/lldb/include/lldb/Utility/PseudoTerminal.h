@@ -23,7 +23,7 @@ namespace lldb_utility {
 /// @class PseudoTerminal PseudoTerminal.h "lldb/Core/PseudoTerminal.h"
 /// @brief A pseudo terminal helper class.
 ///
-/// The pseudo terminal class abtracts the use of pseudo terminals on
+/// The pseudo terminal class abstracts the use of pseudo terminals on
 /// the host system.
 //----------------------------------------------------------------------
 class PseudoTerminal
@@ -46,7 +46,7 @@ public:
     /// Destructor
     ///
     /// The destructor will close the master and slave file descriptors
-    /// if they are valid and ownwership has not been released using
+    /// if they are valid and ownership has not been released using
     /// one of:
     /// @li PseudoTerminal::ReleaseMasterFileDescriptor()
     /// @li PseudoTerminal::ReleaseSaveFileDescriptor()
@@ -175,7 +175,7 @@ public:
     ///     occur. This can be NULL if no error status is desired.
     ///
     /// @return
-    ///     @li \b true when the a master files descriptor is
+    ///     @li \b true when the master files descriptor is
     ///         successfully opened.
     ///     @li \b false if anything goes wrong.
     ///
@@ -207,7 +207,7 @@ public:
     ///     occur. This can be NULL if no error status is desired.
     ///
     /// @return
-    ///     @li \b true when the a master files descriptor is
+    ///     @li \b true when the master files descriptor is
     ///         successfully opened.
     ///     @li \b false if anything goes wrong.
     ///
@@ -260,7 +260,7 @@ private:
 
 };
 
-} // namespace lldb
+} // namespace lldb_utility
 
 #endif  // #if defined(__cplusplus)
 #endif // #ifndef liblldb_PseudoTerminal_h_

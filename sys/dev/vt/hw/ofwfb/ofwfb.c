@@ -54,8 +54,10 @@ struct ofwfb_softc {
 	phandle_t	sc_node;
 	ihandle_t	sc_handle;
 	bus_space_tag_t	sc_memt;
+	int		iso_palette;
 };
 
+static void ofwfb_initialize(struct vt_device *vd);
 static vd_probe_t	ofwfb_probe;
 static vd_init_t	ofwfb_init;
 static vd_bitblt_text_t	ofwfb_bitblt_text;
@@ -71,6 +73,12 @@ static const struct vt_driver vt_ofwfb_driver = {
 	.vd_fb_ioctl	= vt_fb_ioctl,
 	.vd_fb_mmap	= vt_fb_mmap,
 	.vd_priority	= VD_PRIORITY_GENERIC+1,
+};
+
+static unsigned char ofw_colors[16] = {
+	/* See "16-color Text Extension" Open Firmware document, page 4 */
+	0, 4, 2, 6, 1, 5, 3, 7,
+	8, 12, 10, 14, 9, 13, 11, 15
 };
 
 static struct ofwfb_softc ofwfb_conssoftc;
@@ -117,9 +125,26 @@ ofwfb_bitblt_bitmap(struct vt_device *vd, const struct vt_window *vw,
 		uint8_t	 c[4];
 	} ch1, ch2;
 
+#ifdef __powerpc__
+	/* Deal with unmapped framebuffers */
+	if (sc->fb_flags & FB_FLAG_NOWRITE) {
+		if (pmap_bootstrapped) {
+			sc->fb_flags &= ~FB_FLAG_NOWRITE;
+			ofwfb_initialize(vd);
+		} else {
+			return;
+		}
+	}
+#endif
+
 	fgc = sc->fb_cmap[fg];
 	bgc = sc->fb_cmap[bg];
 	b = m = 0;
+
+	if (((struct ofwfb_softc *)vd->vd_softc)->iso_palette) {
+		fg = ofw_colors[fg];
+		bg = ofw_colors[bg];
+	}
 
 	line = (sc->fb_stride * y) + x * sc->fb_bpp/8;
 	if (mask == NULL && sc->fb_bpp == 8 && (width % 8 == 0)) {
@@ -255,26 +280,37 @@ static void
 ofwfb_initialize(struct vt_device *vd)
 {
 	struct ofwfb_softc *sc = vd->vd_softc;
-	int i;
+	int i, err;
 	cell_t retval;
 	uint32_t oldpix;
+
+	sc->fb.fb_cmsize = 16;
+
+	if (sc->fb.fb_flags & FB_FLAG_NOWRITE)
+		return;
 
 	/*
 	 * Set up the color map
 	 */
 
+	sc->iso_palette = 0;
 	switch (sc->fb.fb_bpp) {
 	case 8:
 		vt_generate_cons_palette(sc->fb.fb_cmap, COLOR_FORMAT_RGB, 255,
 		    16, 255, 8, 255, 0);
 
 		for (i = 0; i < 16; i++) {
-			OF_call_method("color!", sc->sc_handle, 4, 1,
+			err = OF_call_method("color!", sc->sc_handle, 4, 1,
 			    (cell_t)((sc->fb.fb_cmap[i] >> 16) & 0xff),
 			    (cell_t)((sc->fb.fb_cmap[i] >> 8) & 0xff),
 			    (cell_t)((sc->fb.fb_cmap[i] >> 0) & 0xff),
 			    (cell_t)i, &retval);
+			if (err)
+				break;
 		}
+		if (i != 16)
+			sc->iso_palette = 1;
+				
 		break;
 
 	case 32:
@@ -300,8 +336,6 @@ ofwfb_initialize(struct vt_device *vd)
 		panic("Unknown color space depth %d", sc->fb.fb_bpp);
 		break;
         }
-
-	sc->fb.fb_cmsize = 16;
 }
 
 static int
@@ -446,8 +480,14 @@ ofwfb_init(struct vt_device *vd)
 			return (CN_DEAD);
 
 	#if defined(__powerpc__)
-		OF_decode_addr(node, fb_phys, &sc->sc_memt, &sc->fb.fb_vbase);
+		OF_decode_addr(node, fb_phys, &sc->sc_memt, &sc->fb.fb_vbase,
+		    NULL);
 		sc->fb.fb_pbase = sc->fb.fb_vbase; /* 1:1 mapped */
+		#ifdef __powerpc64__
+		/* Real mode under a hypervisor probably doesn't cover FB */
+		if (!(mfmsr() & (PSL_HV | PSL_DR)))
+			sc->fb.fb_flags |= FB_FLAG_NOWRITE;
+		#endif
 	#else
 		/* No ability to interpret assigned-addresses otherwise */
 		return (CN_DEAD);

@@ -172,7 +172,7 @@ static void lpe_ifmedia_sts(struct ifnet *, struct ifmediareq *);
 
 #define	lpe_lock(_sc)		mtx_lock(&(_sc)->lpe_mtx)
 #define	lpe_unlock(_sc)		mtx_unlock(&(_sc)->lpe_mtx)
-#define	lpe_lock_assert(sc)	mtx_assert(&(_sc)->lpe_mtx, MA_OWNED)
+#define	lpe_lock_assert(_sc)	mtx_assert(&(_sc)->lpe_mtx, MA_OWNED)
 
 #define	lpe_read_4(_sc, _reg)		\
     bus_space_read_4((_sc)->lpe_bst, (_sc)->lpe_bsh, (_reg))
@@ -754,7 +754,7 @@ lpe_rxintr(struct lpe_softc *sc)
 
 		/* Check received frame for errors */
 		if (hws->lhs_info & LPE_HWDESC_RXERRS) {
-			ifp->if_ierrors++;
+			if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 			lpe_discard_rxbuf(sc, cons);
 			lpe_init_rxbuf(sc, cons);
 			goto skip;
@@ -764,7 +764,7 @@ lpe_rxintr(struct lpe_softc *sc)
 		m->m_pkthdr.rcvif = ifp;
 		m->m_data += 2;
 
-		ifp->if_ipackets++;
+		if_inc_counter(ifp, IFCOUNTER_IPACKETS, 1);
 
 		lpe_unlock(sc);
 		(*ifp->if_input)(ifp, m);	
@@ -800,12 +800,12 @@ lpe_txintr(struct lpe_softc *sc)
 		bus_dmamap_sync(sc->lpe_cdata.lpe_tx_buf_tag,
 		    txd->lpe_txdesc_dmamap, BUS_DMASYNC_POSTWRITE);
 
-		ifp->if_collisions += LPE_HWDESC_COLLISIONS(hws->lhs_info);
+		if_inc_counter(ifp, IFCOUNTER_COLLISIONS, LPE_HWDESC_COLLISIONS(hws->lhs_info));
 
 		if (hws->lhs_info & LPE_HWDESC_TXERRS)
-			ifp->if_oerrors++;
+			if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 		else
-			ifp->if_opackets++;
+			if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
 
 		if (txd->lpe_txdesc_first) {
 			bus_dmamap_unload(sc->lpe_cdata.lpe_tx_buf_tag,

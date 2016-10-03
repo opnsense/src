@@ -354,7 +354,7 @@ ia32_osendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	/* Allocate space for the signal handler context. */
 	if ((td->td_pflags & TDP_ALTSTACK) && !oonstack &&
 	    SIGISMEMBER(psp->ps_sigonstack, sig)) {
-		fp = (struct ia32_sigframe3 *)(td->td_sigstk.ss_sp +
+		fp = (struct ia32_sigframe3 *)((uintptr_t)td->td_sigstk.ss_sp +
 		    td->td_sigstk.ss_size - sizeof(sf));
 		td->td_sigstk.ss_flags |= SS_ONSTACK;
 	} else
@@ -415,7 +415,7 @@ ia32_osendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	}
 
 	regs->tf_rsp = (uintptr_t)fp;
-	regs->tf_rip = p->p_ps_strings - sz_ia32_osigcode;
+	regs->tf_rip = p->p_sysent->sv_psstrings - sz_ia32_osigcode;
 	regs->tf_rflags &= ~(PSL_T | PSL_D);
 	regs->tf_cs = _ucode32sel;
 	regs->tf_ds = _udatasel;
@@ -488,7 +488,7 @@ freebsd4_ia32_sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	/* Allocate space for the signal handler context. */
 	if ((td->td_pflags & TDP_ALTSTACK) != 0 && !oonstack &&
 	    SIGISMEMBER(psp->ps_sigonstack, sig)) {
-		sfp = (struct ia32_sigframe4 *)(td->td_sigstk.ss_sp +
+		sfp = (struct ia32_sigframe4 *)((uintptr_t)td->td_sigstk.ss_sp +
 		    td->td_sigstk.ss_size - sizeof(sf));
 	} else
 		sfp = (struct ia32_sigframe4 *)regs->tf_rsp - 1;
@@ -526,7 +526,7 @@ freebsd4_ia32_sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	}
 
 	regs->tf_rsp = (uintptr_t)sfp;
-	regs->tf_rip = p->p_sigcode_base + sz_ia32_sigcode -
+	regs->tf_rip = p->p_sysent->sv_sigcode_base + sz_ia32_sigcode -
 	    sz_freebsd4_ia32_sigcode;
 	regs->tf_rflags &= ~(PSL_T | PSL_D);
 	regs->tf_cs = _ucode32sel;
@@ -622,7 +622,7 @@ ia32_sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	/* Allocate space for the signal handler context. */
 	if ((td->td_pflags & TDP_ALTSTACK) != 0 && !oonstack &&
 	    SIGISMEMBER(psp->ps_sigonstack, sig))
-		sp = td->td_sigstk.ss_sp + td->td_sigstk.ss_size;
+		sp = (char *)td->td_sigstk.ss_sp + td->td_sigstk.ss_size;
 	else
 		sp = (char *)regs->tf_rsp;
 	if (xfpusave != NULL) {
@@ -670,7 +670,7 @@ ia32_sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	}
 
 	regs->tf_rsp = (uintptr_t)sfp;
-	regs->tf_rip = p->p_sigcode_base;
+	regs->tf_rip = p->p_sysent->sv_sigcode_base;
 	regs->tf_rflags &= ~(PSL_T | PSL_D);
 	regs->tf_cs = _ucode32sel;
 	regs->tf_ss = _udatasel;

@@ -33,7 +33,6 @@
 __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
-#include <sys/types.h>
 #include <sys/socket.h>
 
 #include <netinet/in.h>
@@ -131,8 +130,7 @@ inet6_option_append(struct cmsghdr *cmsg, const u_int8_t *typep, int multx,
 
 	/* calculate pad length before the option. */
 	off = bp - (u_char *)eh;
-	padlen = (((off % multx) + (multx - 1)) & ~(multx - 1)) -
-		(off % multx);
+	padlen = roundup2(off % multx, multx) - (off % multx);
 	padlen += plusy;
 	padlen %= multx;	/* keep the pad as short as possible */
 	/* insert padding */
@@ -201,8 +199,7 @@ inet6_option_alloc(struct cmsghdr *cmsg, int datalen, int multx, int plusy)
 
 	/* calculate pad length before the option. */
 	off = bp - (u_char *)eh;
-	padlen = (((off % multx) + (multx - 1)) & ~(multx - 1)) -
-		(off % multx);
+	padlen = roundup2(off % multx, multx) - (off % multx);
 	padlen += plusy;
 	padlen %= multx;	/* keep the pad as short as possible */
 	/* insert padding */
@@ -393,11 +390,8 @@ inet6_opt_init(void *extbuf, socklen_t extlen)
 {
 	struct ip6_ext *ext = (struct ip6_ext *)extbuf;
 
-	if (extlen < 0 || (extlen % 8))
-		return(-1);
-
 	if (ext) {
-		if (extlen == 0)
+		if (extlen <= 0 || (extlen % 8))
 			return(-1);
 		ext->ip6e_len = (extlen >> 3) - 1;
 	}
@@ -422,7 +416,7 @@ inet6_opt_append(void *extbuf, socklen_t extlen, int offset, u_int8_t type,
 	 * The option data length must have a value between 0 and 255,
 	 * inclusive, and is the length of the option data that follows.
 	 */
-	if (len < 0 || len > 255)
+	if (len > 255 || len < 0 )
 		return(-1);
 
 	/*

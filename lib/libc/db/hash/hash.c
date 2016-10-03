@@ -160,8 +160,7 @@ __hash_open(const char *file, int flags, int mode,
 		 * maximum bucket number, so the number of buckets is
 		 * max_bucket + 1.
 		 */
-		nsegs = (hashp->MAX_BUCKET + 1 + hashp->SGSIZE - 1) /
-			 hashp->SGSIZE;
+		nsegs = howmany(hashp->MAX_BUCKET + 1, hashp->SGSIZE);
 		if (alloc_segs(hashp, nsegs))
 			/*
 			 * If alloc_segs fails, table will have been destroyed
@@ -771,7 +770,7 @@ next_bucket:
 		if (__big_keydata(hashp, bufp, key, data, 1))
 			return (ERROR);
 	} else {
-		if (hashp->cpage == 0)
+		if (hashp->cpage == NULL)
 			return (ERROR);
 		key->data = (u_char *)hashp->cpage->page + bp[ndx];
 		key->size = (ndx > 1 ? bp[ndx - 1] : hashp->BSIZE) - bp[ndx];
@@ -813,7 +812,7 @@ __expand_table(HTAB *hashp)
 			hashp->DSIZE = dirsize << 1;
 		}
 		if ((hashp->dir[new_segnum] =
-		    (SEGMENT)calloc(hashp->SGSIZE, sizeof(SEGMENT))) == NULL)
+		    calloc(hashp->SGSIZE, sizeof(SEGMENT))) == NULL)
 			return (-1);
 		hashp->exsegs++;
 		hashp->nsegs++;
@@ -882,7 +881,7 @@ alloc_segs(HTAB *hashp, int nsegs)
 	int save_errno;
 
 	if ((hashp->dir =
-	    (SEGMENT *)calloc(hashp->DSIZE, sizeof(SEGMENT *))) == NULL) {
+	    calloc(hashp->DSIZE, sizeof(SEGMENT *))) == NULL) {
 		save_errno = errno;
 		(void)hdestroy(hashp);
 		errno = save_errno;
@@ -892,8 +891,7 @@ alloc_segs(HTAB *hashp, int nsegs)
 	if (nsegs == 0)
 		return (0);
 	/* Allocate segments */
-	if ((store = (SEGMENT)calloc(nsegs << hashp->SSHIFT,
-	    sizeof(SEGMENT))) == NULL) {
+	if ((store = calloc(nsegs << hashp->SSHIFT, sizeof(SEGMENT))) == NULL) {
 		save_errno = errno;
 		(void)hdestroy(hashp);
 		errno = save_errno;

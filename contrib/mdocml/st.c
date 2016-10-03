@@ -1,4 +1,4 @@
-/*	$Id: st.c,v 1.9 2011/03/22 14:33:05 kristaps Exp $ */
+/*	$Id: st.c,v 1.13 2015/10/06 18:32:20 schwarze Exp $ */
 /*
  * Copyright (c) 2009 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -14,16 +14,14 @@
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
-#ifdef HAVE_CONFIG_H
 #include "config.h"
-#endif
 
-#include <stdlib.h>
+#include <sys/types.h>
+
 #include <string.h>
-#include <time.h>
 
+#include "roff.h"
 #include "mdoc.h"
-#include "mandoc.h"
 #include "libmdoc.h"
 
 #define LINE(x, y) \
@@ -35,5 +33,5 @@ mdoc_a2st(const char *p)
 
 #include "st.in"
 
-	return(NULL);
+	return NULL;
 }

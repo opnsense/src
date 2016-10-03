@@ -38,8 +38,6 @@
 #include <machine/asm.h>
 __FBSDID("$FreeBSD$");
 
-#include <machine/acle-compat.h>
-
 	.syntax	unified
 	.text
 	.align	2
@@ -67,6 +65,15 @@ ENTRY(copyin)
 	movle	r0, #0x00
 	movle	pc, lr			/* Bail early if length is <= 0 */
 
+	adds	r3, r0, r2
+	movcs	r0, #EFAULT
+	RETc(cs)
+
+	ldr	r12, =(VM_MAXUSER_ADDRESS + 1)
+	cmp	r3, r12
+	movcs	r0, #EFAULT
+	RETc(cs)
+
 	ldr	r3, .L_arm_memcpy
 	ldr	r3, [r3]
 	cmp	r3, #0
@@ -87,7 +94,7 @@ ENTRY(copyin)
 	ldmfd   sp!, {r0-r2, r4, lr}
 	moveq	r0, #0
 	RETeq
-					
+
 .Lnormal:
 	stmfd	sp!, {r10-r11, lr}
 
@@ -509,6 +516,15 @@ ENTRY(copyout)
 	movle	r0, #0x00
 	movle	pc, lr			/* Bail early if length is <= 0 */
 
+	adds	r3, r1, r2
+	movcs	r0, #EFAULT
+	RETc(cs)
+
+	ldr	r12, =(VM_MAXUSER_ADDRESS + 1)
+	cmp	r3, r12
+	movcs	r0, #EFAULT
+	RETc(cs)
+
 	ldr	r3, .L_arm_memcpy
 	ldr	r3, [r3]
 	cmp	r3, #0
@@ -529,8 +545,8 @@ ENTRY(copyout)
 	ldmfd   sp!, {r0-r2, r4, lr}
 	moveq	r0, #0
 	RETeq
-	
-.Lnormale:									
+
+.Lnormale:
 	stmfd	sp!, {r10-r11, lr}
 
 	GET_PCB(r10)
@@ -586,7 +602,7 @@ ENTRY(copyout)
 	ldrne	ip, [r0], #0x04
 	subne	r2, r2, #0x04
 	strtne	ip, [r1], #0x04
-	
+
 	stmfd	sp!, {r4-r9}		/* Free up some registers */
 	mov	r3, #-1			/* Signal restore r4-r9 */
 

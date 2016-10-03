@@ -98,7 +98,7 @@ at91_pit_delay(int us)
 
 	/* Max delay ~= 260s. @ 133Mhz */
 	pit_freq = at91_master_clock / PIT_PRESCALE;
-	cnt  = ((pit_freq * us) + (mhz -1)) / mhz;
+	cnt  = howmany(pit_freq * us, mhz);
 	cnt  = (cnt <= 0) ? 1 : cnt;
 
 	while (cnt > 0) {
@@ -214,9 +214,9 @@ static driver_t at91_pit_driver = {
 static devclass_t at91_pit_devclass;
 
 #ifdef FDT
-DRIVER_MODULE(at91_pit, simplebus, at91_pit_driver, at91_pit_devclass, NULL,
-    NULL);
+EARLY_DRIVER_MODULE(at91_pit, simplebus, at91_pit_driver, at91_pit_devclass,
+    NULL, NULL, BUS_PASS_TIMER);
 #else
-DRIVER_MODULE(at91_pit, atmelarm, at91_pit_driver, at91_pit_devclass, NULL,
-    NULL);
+EARLY_DRIVER_MODULE(at91_pit, atmelarm, at91_pit_driver, at91_pit_devclass,
+    NULL, NULL, BUS_PASS_TIMER);
 #endif

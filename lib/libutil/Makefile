@@ -1,15 +1,16 @@
 #	@(#)Makefile	8.1 (Berkeley) 6/4/93
 #	$FreeBSD$
 
+PACKAGE=lib${LIB}
 SHLIBDIR?= /lib
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 LIB=	util
 SHLIB_MAJOR= 9
 
 SRCS=	_secure_path.c auth.c expand_number.c flopen.c fparseln.c gr_util.c \
-	hexdump.c humanize_number.c kinfo_getfile.c kinfo_getfile.c \
+	hexdump.c humanize_number.c kinfo_getfile.c \
 	kinfo_getallproc.c kinfo_getproc.c kinfo_getvmmap.c \
 	kinfo_getvmobject.c kld.c \
 	login_auth.c login_cap.c \

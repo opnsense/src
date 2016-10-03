@@ -7,17 +7,18 @@ PROG_CXX=llvm-link
 SRCDIR=	tools/llvm-link
 SRCS=	llvm-link.cpp
 
-LIBDEPS=llvmirreader \
+TGHDRS=	Attributes
+
+LIBDEPS=llvmobject \
+	llvmmcparser \
+	llvmmc \
+	llvmirreader \
 	llvmasmparser \
 	llvmbitwriter \
 	llvmbitreader \
 	llvmlinker \
 	llvmtransformutils \
-	llvmipa \
 	llvmanalysis \
-	llvmtarget \
-	llvmmc \
-	llvmobject \
 	llvmcore \
 	llvmsupport
 

@@ -26,13 +26,14 @@
 #
 
 # PROVIDE: bridge
-# REQUIRE: netif faith ppp stf
+# REQUIRE: netif ppp stf
 # KEYWORD: nojail
 
 . /etc/rc.subr
 . /etc/network.subr
 
 name="bridge"
+desc="Network bridge setup"
 start_cmd="bridge_start"
 stop_cmd="bridge_stop"
 cmd=""

@@ -15,6 +15,7 @@
 #include "lldb/Core/Timer.h"
 #include "lldb/Core/ValueObject.h"
 #include "lldb/Symbol/ClangASTContext.h"
+#include "lldb/Symbol/SymbolContext.h"
 #include "lldb/Symbol/Type.h"
 #include "lldb/Symbol/TypeList.h"
 #include "lldb/Target/ObjCLanguageRuntime.h"
@@ -34,11 +35,15 @@ ObjCLanguageRuntime::~ObjCLanguageRuntime()
 
 ObjCLanguageRuntime::ObjCLanguageRuntime (Process *process) :
     LanguageRuntime (process),
+    m_impl_cache(),
     m_has_new_literals_and_indexing (eLazyBoolCalculate),
     m_isa_to_descriptor(),
-    m_isa_to_descriptor_stop_id (UINT32_MAX)
+    m_hash_to_isa_map(),
+    m_type_size_cache(),
+    m_isa_to_descriptor_stop_id (UINT32_MAX),
+    m_complete_class_cache(),
+    m_negative_complete_class_cache()
 {
-
 }
 
 bool
@@ -131,7 +136,7 @@ ObjCLanguageRuntime::LookupInCompleteClassCache (ConstString &name)
             {
                 TypeSP type_sp (types.GetTypeAtIndex(i));
                 
-                if (type_sp->GetClangForwardType().IsObjCObjectOrInterfaceType())
+                if (ClangASTContext::IsObjCObjectOrInterfaceType(type_sp->GetForwardCompilerType ()))
                 {
                     if (type_sp->IsCompleteObjCClass())
                     {
@@ -147,287 +152,10 @@ ObjCLanguageRuntime::LookupInCompleteClassCache (ConstString &name)
 }
 
 size_t
-ObjCLanguageRuntime::GetByteOffsetForIvar (ClangASTType &parent_qual_type, const char *ivar_name)
+ObjCLanguageRuntime::GetByteOffsetForIvar (CompilerType &parent_qual_type, const char *ivar_name)
 {
     return LLDB_INVALID_IVAR_OFFSET;
 }
-
-void
-ObjCLanguageRuntime::MethodName::Clear()
-{
-    m_full.Clear();
-    m_class.Clear();
-    m_category.Clear();
-    m_selector.Clear();
-    m_type = eTypeUnspecified;
-    m_category_is_valid = false;
-}
-
-//bool
-//ObjCLanguageRuntime::MethodName::SetName (const char *name, bool strict)
-//{
-//    Clear();
-//    if (name && name[0])
-//    {
-//        // If "strict" is true. then the method must be specified with a
-//        // '+' or '-' at the beginning. If "strict" is false, then the '+'
-//        // or '-' can be omitted
-//        bool valid_prefix = false;
-//        
-//        if (name[0] == '+' || name[0] == '-')
-//        {
-//            valid_prefix = name[1] == '[';
-//        }
-//        else if (!strict)
-//        {
-//            // "strict" is false, the name just needs to start with '['
-//            valid_prefix = name[0] == '[';
-//        }
-//
-//        if (valid_prefix)
-//        {
-//            static RegularExpression g_regex("^([-+]?)\\[([A-Za-z_][A-Za-z_0-9]*)(\\([A-Za-z_][A-Za-z_0-9]*\\))? ([A-Za-z_][A-Za-z_0-9:]*)\\]$");
-//            llvm::StringRef matches[4];
-//            // Since we are using a global regular expression, we must use the threadsafe version of execute
-//            if (g_regex.ExecuteThreadSafe(name, matches, 4))
-//            {
-//                m_full.SetCString(name);
-//                if (matches[0].empty())
-//                    m_type = eTypeUnspecified;
-//                else if (matches[0][0] == '+')
-//                    m_type = eTypeClassMethod;
-//                else
-//                    m_type = eTypeInstanceMethod;
-//                m_class.SetString(matches[1]);
-//                m_selector.SetString(matches[3]);
-//                if (!matches[2].empty())
-//                    m_category.SetString(matches[2]);
-//            }
-//        }
-//    }
-//    return IsValid(strict);
-//}
-
-bool
-ObjCLanguageRuntime::MethodName::SetName (const char *name, bool strict)
-{
-    Clear();
-    if (name && name[0])
-    {
-        // If "strict" is true. then the method must be specified with a
-        // '+' or '-' at the beginning. If "strict" is false, then the '+'
-        // or '-' can be omitted
-        bool valid_prefix = false;
-        
-        if (name[0] == '+' || name[0] == '-')
-        {
-            valid_prefix = name[1] == '[';
-            if (name[0] == '+')
-                m_type = eTypeClassMethod;
-            else
-                m_type = eTypeInstanceMethod;
-        }
-        else if (!strict)
-        {
-            // "strict" is false, the name just needs to start with '['
-            valid_prefix = name[0] == '[';
-        }
-        
-        if (valid_prefix)
-        {
-            int name_len = strlen (name);
-            // Objective C methods must have at least:
-            //      "-[" or "+[" prefix
-            //      One character for a class name
-            //      One character for the space between the class name
-            //      One character for the method name
-            //      "]" suffix
-            if (name_len >= (5 + (strict ? 1 : 0)) && name[name_len - 1] == ']')
-            {
-                m_full.SetCStringWithLength(name, name_len);
-            }
-        }
-    }
-    return IsValid(strict);
-}
-
-const ConstString &
-ObjCLanguageRuntime::MethodName::GetClassName ()
-{
-    if (!m_class)
-    {
-        if (IsValid(false))
-        {
-            const char *full = m_full.GetCString();
-            const char *class_start = (full[0] == '[' ? full + 1 : full + 2);
-            const char *paren_pos = strchr (class_start, '(');
-            if (paren_pos)
-            {
-                m_class.SetCStringWithLength (class_start, paren_pos - class_start);
-            }
-            else
-            {
-                // No '(' was found in the full name, we can definitively say
-                // that our category was valid (and empty).
-                m_category_is_valid = true;
-                const char *space_pos = strchr (full, ' ');
-                if (space_pos)
-                {
-                    m_class.SetCStringWithLength (class_start, space_pos - class_start);
-                    if (!m_class_category)
-                    {
-                        // No category in name, so we can also fill in the m_class_category
-                        m_class_category = m_class;
-                    }
-                }
-            }
-        }
-    }
-    return m_class;
-}
-
-const ConstString &
-ObjCLanguageRuntime::MethodName::GetClassNameWithCategory () 
-{
-    if (!m_class_category)
-    {
-        if (IsValid(false))
-        {
-            const char *full = m_full.GetCString();
-            const char *class_start = (full[0] == '[' ? full + 1 : full + 2);
-            const char *space_pos = strchr (full, ' ');
-            if (space_pos)
-            {
-                m_class_category.SetCStringWithLength (class_start, space_pos - class_start);
-                // If m_class hasn't been filled in and the class with category doesn't
-                // contain a '(', then we can also fill in the m_class
-                if (!m_class && strchr (m_class_category.GetCString(), '(') == NULL)
-                {
-                    m_class = m_class_category;
-                    // No '(' was found in the full name, we can definitively say
-                    // that our category was valid (and empty).
-                    m_category_is_valid = true;
-
-                }
-            }
-        }
-    }
-    return m_class_category;
-}
-
-const ConstString &
-ObjCLanguageRuntime::MethodName::GetSelector ()
-{
-    if (!m_selector)
-    {
-        if (IsValid(false))
-        {
-            const char *full = m_full.GetCString();
-            const char *space_pos = strchr (full, ' ');
-            if (space_pos)
-            {
-                ++space_pos; // skip the space
-                m_selector.SetCStringWithLength (space_pos, m_full.GetLength() - (space_pos - full) - 1);
-            }
-        }
-    }
-    return m_selector;
-}
-
-const ConstString &
-ObjCLanguageRuntime::MethodName::GetCategory ()
-{
-    if (!m_category_is_valid && !m_category)
-    {
-        if (IsValid(false))
-        {
-            m_category_is_valid = true;
-            const char *full = m_full.GetCString();
-            const char *class_start = (full[0] == '[' ? full + 1 : full + 2);
-            const char *open_paren_pos = strchr (class_start, '(');
-            if (open_paren_pos)
-            {
-                ++open_paren_pos; // Skip the open paren
-                const char *close_paren_pos = strchr (open_paren_pos, ')');
-                if (close_paren_pos)
-                    m_category.SetCStringWithLength (open_paren_pos, close_paren_pos - open_paren_pos);
-            }
-        }
-    }
-    return m_category;
-}
-
-ConstString
-ObjCLanguageRuntime::MethodName::GetFullNameWithoutCategory (bool empty_if_no_category)
-{
-    if (IsValid(false))
-    {
-        if (HasCategory())
-        {
-            StreamString strm;
-            if (m_type == eTypeClassMethod)
-                strm.PutChar('+');
-            else if (m_type == eTypeInstanceMethod)
-                strm.PutChar('-');
-            strm.Printf("[%s %s]", GetClassName().GetCString(), GetSelector().GetCString());
-            return ConstString(strm.GetString().c_str());
-        }
-        
-        if (!empty_if_no_category)
-        {
-            // Just return the full name since it doesn't have a category
-            return GetFullName();
-        }
-    }
-    return ConstString();
-}
-
-size_t
-ObjCLanguageRuntime::MethodName::GetFullNames (std::vector<ConstString> &names, bool append)
-{
-    if (!append)
-        names.clear();
-    if (IsValid(false))
-    {
-        StreamString strm;
-        const bool is_class_method = m_type == eTypeClassMethod;
-        const bool is_instance_method = m_type == eTypeInstanceMethod;
-        const ConstString &category = GetCategory();
-        if (is_class_method || is_instance_method)
-        {
-            names.push_back (m_full);
-            if (category)
-            {
-                strm.Printf("%c[%s %s]",
-                            is_class_method ? '+' : '-',
-                            GetClassName().GetCString(),
-                            GetSelector().GetCString());
-                names.push_back(ConstString(strm.GetString().c_str()));
-            }
-        }
-        else
-        {
-            const ConstString &class_name = GetClassName();
-            const ConstString &selector = GetSelector();
-            strm.Printf("+[%s %s]", class_name.GetCString(), selector.GetCString());
-            names.push_back(ConstString(strm.GetString().c_str()));
-            strm.Clear();
-            strm.Printf("-[%s %s]", class_name.GetCString(), selector.GetCString());
-            names.push_back(ConstString(strm.GetString().c_str()));
-            strm.Clear();
-            if (category)
-            {
-                strm.Printf("+[%s(%s) %s]", class_name.GetCString(), category.GetCString(), selector.GetCString());
-                names.push_back(ConstString(strm.GetString().c_str()));
-                strm.Clear();
-                strm.Printf("-[%s(%s) %s]", class_name.GetCString(), category.GetCString(), selector.GetCString());
-                names.push_back(ConstString(strm.GetString().c_str()));
-            }
-        }
-    }
-    return names.size();
-}
-
 
 bool
 ObjCLanguageRuntime::ClassDescriptor::IsPointerValid (lldb::addr_t value,
@@ -492,6 +220,18 @@ ObjCLanguageRuntime::GetDescriptorIterator (const ConstString &name)
     return end;
 }
 
+std::pair<ObjCLanguageRuntime::ISAToDescriptorIterator,ObjCLanguageRuntime::ISAToDescriptorIterator>
+ObjCLanguageRuntime::GetDescriptorIteratorPair (bool update_if_needed)
+{
+    if (update_if_needed)
+        UpdateISAToDescriptorMapIfNeeded();
+    
+    return std::pair<ObjCLanguageRuntime::ISAToDescriptorIterator,
+                     ObjCLanguageRuntime::ISAToDescriptorIterator>(
+                        m_isa_to_descriptor.begin(),
+                        m_isa_to_descriptor.end());
+}
+
 
 ObjCLanguageRuntime::ObjCISA
 ObjCLanguageRuntime::GetParentClass(ObjCLanguageRuntime::ObjCISA isa)
@@ -532,7 +272,7 @@ ObjCLanguageRuntime::GetClassDescriptor (ValueObject& valobj)
     // if we get an invalid VO (which might still happen when playing around
     // with pointers returned by the expression parser, don't consider this
     // a valid ObjC object)
-    if (valobj.GetClangType().IsValid())
+    if (valobj.GetCompilerType().IsValid())
     {
         addr_t isa_pointer = valobj.GetPointerValue();
         if (isa_pointer != LLDB_INVALID_ADDRESS)
@@ -602,4 +342,99 @@ ObjCLanguageRuntime::GetNonKVOClassDescriptor (ObjCISA isa)
 }
 
 
+CompilerType
+ObjCLanguageRuntime::EncodingToType::RealizeType (const char* name, bool for_expression)
+{
+    if (m_scratch_ast_ctx_ap)
+        return RealizeType(*m_scratch_ast_ctx_ap, name, for_expression);
+    return CompilerType();
+}
 
+CompilerType
+ObjCLanguageRuntime::EncodingToType::RealizeType (ClangASTContext& ast_ctx, const char* name, bool for_expression)
+{
+    clang::ASTContext *clang_ast = ast_ctx.getASTContext();
+    if (!clang_ast)
+        return CompilerType();
+    return RealizeType(*clang_ast, name, for_expression);
+}
+
+ObjCLanguageRuntime::EncodingToType::~EncodingToType() {}
+
+ObjCLanguageRuntime::EncodingToTypeSP
+ObjCLanguageRuntime::GetEncodingToType ()
+{
+    return nullptr;
+}
+
+bool
+ObjCLanguageRuntime::GetTypeBitSize (const CompilerType& compiler_type,
+                                     uint64_t &size)
+{
+    void *opaque_ptr = compiler_type.GetOpaqueQualType();
+    size = m_type_size_cache.Lookup(opaque_ptr);
+    // an ObjC object will at least have an ISA, so 0 is definitely not OK
+    if (size > 0)
+        return true;
+    
+    ClassDescriptorSP class_descriptor_sp = GetClassDescriptorFromClassName(compiler_type.GetTypeName());
+    if (!class_descriptor_sp)
+        return false;
+    
+    int32_t max_offset = INT32_MIN;
+    uint64_t sizeof_max = 0;
+    bool found = false;
+    
+    for (size_t idx = 0;
+         idx < class_descriptor_sp->GetNumIVars();
+         idx++)
+    {
+        const auto& ivar = class_descriptor_sp->GetIVarAtIndex(idx);
+        int32_t cur_offset = ivar.m_offset;
+        if (cur_offset > max_offset)
+        {
+            max_offset = cur_offset;
+            sizeof_max = ivar.m_size;
+            found = true;
+        }
+    }
+    
+    size = 8 * (max_offset + sizeof_max);
+    if (found)
+        m_type_size_cache.Insert(opaque_ptr, size);
+    
+    return found;
+}
+
+//------------------------------------------------------------------
+// Exception breakpoint Precondition class for ObjC:
+//------------------------------------------------------------------
+void
+ObjCLanguageRuntime::ObjCExceptionPrecondition::AddClassName(const char *class_name)
+{
+    m_class_names.insert(class_name);
+}
+
+ObjCLanguageRuntime::ObjCExceptionPrecondition::ObjCExceptionPrecondition()
+{
+}
+
+bool
+ObjCLanguageRuntime::ObjCExceptionPrecondition::EvaluatePrecondition(StoppointCallbackContext &context)
+{
+    return true;
+}
+
+void
+ObjCLanguageRuntime::ObjCExceptionPrecondition::GetDescription(Stream &stream, lldb::DescriptionLevel level)
+{
+}
+
+Error
+ObjCLanguageRuntime::ObjCExceptionPrecondition::ConfigurePrecondition(Args &args)
+{
+    Error error;
+    if (args.GetArgumentCount() > 0)
+        error.SetErrorString("The ObjC Exception breakpoint doesn't support extra options.");
+    return error;
+}

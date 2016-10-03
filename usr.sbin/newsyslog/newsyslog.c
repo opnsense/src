@@ -333,13 +333,15 @@ main(int argc, char **argv)
 			printf("Signal all daemon process(es)...\n");
 		SLIST_FOREACH(stmp, &swhead, sw_nextp)
 			do_sigwork(stmp);
-		if (noaction)
-			printf("\tsleep 10\n");
-		else {
-			if (verbose)
-				printf("Pause 10 seconds to allow daemon(s)"
-				    " to close log file(s)\n");
-			sleep(10);
+		if (!(rotatereq && nosignal)) {
+			if (noaction)
+				printf("\tsleep 10\n");
+			else {
+				if (verbose)
+					printf("Pause 10 seconds to allow "
+					    "daemon(s) to close log file(s)\n");
+				sleep(10);
+			}
 		}
 	}
 	/*
@@ -1271,20 +1273,6 @@ no_trimat:
 				working->flags |= CE_BINARY;
 				break;
 			case 'c':
-				/*
-				 * XXX - 	Ick! Ugly! Remove ASAP!
-				 * We want `c' and `C' for "create".  But we
-				 * will temporarily treat `c' as `g', because
-				 * FreeBSD releases <= 4.8 have a typo of
-				 * checking  ('G' || 'c')  for CE_GLOB.
-				 */
-				if (*q == 'c') {
-					warnx("Assuming 'g' for 'c' in flags for line:\n%s",
-					    errline);
-					warnx("The 'c' flag will eventually mean 'CREATE'");
-					working->flags |= CE_GLOB;
-					break;
-				}
 				working->flags |= CE_CREATE;
 				break;
 			case 'd':

@@ -102,6 +102,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/queue.h>
 #include <sys/types.h>
 #include <sys/systm.h>
+#include <sys/socket.h>
 #include <sys/kernel.h>
 #include <sys/bus.h>
 #include <sys/module.h>
@@ -114,6 +115,9 @@ __FBSDID("$FreeBSD$");
 #include <sys/callout.h>
 #include <sys/malloc.h>
 #include <sys/priv.h>
+
+#include <net/if.h>
+#include <net/if_var.h>
 
 #include <dev/usb/usb.h>
 #include <dev/usb/usbdi.h>
@@ -133,7 +137,7 @@ __FBSDID("$FreeBSD$");
 static int mos_debug = 0;
 
 static SYSCTL_NODE(_hw_usb, OID_AUTO, mos, CTLFLAG_RW, 0, "USB mos");
-SYSCTL_INT(_hw_usb_mos, OID_AUTO, debug, CTLFLAG_RW, &mos_debug, 0,
+SYSCTL_INT(_hw_usb_mos, OID_AUTO, debug, CTLFLAG_RWTUN, &mos_debug, 0,
     "Debug level");
 #endif
 
@@ -243,6 +247,7 @@ MODULE_DEPEND(mos, uether, 1, 1, 1);
 MODULE_DEPEND(mos, usb, 1, 1, 1);
 MODULE_DEPEND(mos, ether, 1, 1, 1);
 MODULE_DEPEND(mos, miibus, 1, 1, 1);
+USB_PNP_HOST_INFO(mos_devs);
 
 static const struct usb_ether_methods mos_ue_methods = {
 	.ue_attach_post = mos_attach_post,
@@ -413,7 +418,7 @@ mos_write_mcast(struct mos_softc *sc, u_char *hashtbl)
 }
 
 static int
-mos_miibus_readreg(struct device *dev, int phy, int reg)
+mos_miibus_readreg(device_t dev, int phy, int reg)
 {
 	struct mos_softc *sc = device_get_softc(dev);
 	uWord val;
@@ -603,7 +608,7 @@ mos_setmulti(struct usb_ether *ue)
 		if (ifma->ifma_addr->sa_family != AF_LINK) {
 			allmulti = 1;
 			continue;
-		};
+		}
 		h = ether_crc32_be(LLADDR((struct sockaddr_dl *)
 		    ifma->ifma_addr), ETHER_ADDR_LEN) >> 26;
 		hashtbl[h / 8] |= 1 << (h % 8);
@@ -788,7 +793,7 @@ mos_bulk_read_callback(struct usb_xfer *xfer, usb_error_t error)
 	case USB_ST_TRANSFERRED:
 		MOS_DPRINTFN("actlen : %d", actlen);
 		if (actlen <= 1) {
-			ifp->if_ierrors++;
+			if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 			goto tr_setup;
 		}
 		/* evaluate status byte at the end */
@@ -807,7 +812,7 @@ mos_bulk_read_callback(struct usb_xfer *xfer, usb_error_t error)
 				MOS_DPRINTFN("CRC error");
 			if (rxstat & MOS_RXSTS_ALIGN_ERROR)
 				MOS_DPRINTFN("alignment error");
-			ifp->if_ierrors++;
+			if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 			goto tr_setup;
 		}
 		/* Remember the last byte was used for the status fields */
@@ -816,7 +821,7 @@ mos_bulk_read_callback(struct usb_xfer *xfer, usb_error_t error)
 			MOS_DPRINTFN("error: pktlen %d is smaller "
 			    "than ether_header %zd", pktlen,
 			    sizeof(struct ether_header));
-			ifp->if_ierrors++;
+			if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 			goto tr_setup;
 		}
 		uether_rxbuf(ue, pc, 0, actlen);
@@ -855,7 +860,7 @@ mos_bulk_write_callback(struct usb_xfer *xfer, usb_error_t error)
 	switch (USB_GET_STATE(xfer)) {
 	case USB_ST_TRANSFERRED:
 		MOS_DPRINTFN("transfer of complete");
-		ifp->if_opackets++;
+		if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
 		/* FALLTHROUGH */
 	case USB_ST_SETUP:
 tr_setup:
@@ -882,11 +887,11 @@ tr_setup:
 
 		usbd_transfer_submit(xfer);
 
-		ifp->if_opackets++;
+		if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
 		return;
 	default:
 		MOS_DPRINTFN("usb error on tx: %s\n", usbd_errstr(error));
-		ifp->if_oerrors++;
+		if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 		if (error != USB_ERR_CANCELLED) {
 			usbd_xfer_set_stall(xfer);
 			goto tr_setup;
@@ -977,7 +982,7 @@ mos_intr_callback(struct usb_xfer *xfer, usb_error_t error)
 	uint32_t pkt;
 	int actlen;
 
-	ifp->if_oerrors++;
+	if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 
 	usbd_xfer_status(xfer, &actlen, NULL, NULL, NULL);
 	MOS_DPRINTFN("actlen %i", actlen);

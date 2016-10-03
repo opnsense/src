@@ -259,7 +259,6 @@ ffs_realloccg(ip, lbprev, bprev, bpref, osize, nsize, flags, cred, bpp)
 	static int curfail;
 	int64_t delta;
 
-	*bpp = 0;
 	vp = ITOV(ip);
 	fs = ip->i_fs;
 	bp = NULL;
@@ -319,6 +318,7 @@ retry:
 	/*
 	 * Check for extension in the existing location.
 	 */
+	*bpp = NULL;
 	cg = dtog(fs, bprev);
 	UFS_LOCK(ump);
 	bno = ffs_fragextend(ip, cg, bprev, osize, nsize);
@@ -481,9 +481,19 @@ ffs_reallocblks(ap)
 		struct cluster_save *a_buflist;
 	} */ *ap;
 {
+	struct ufsmount *ump;
 
-	if (doreallocblks == 0)
+	/*
+	 * If the underlying device can do deletes, then skip reallocating
+	 * the blocks of this file into contiguous sequences. Devices that
+	 * benefit from BIO_DELETE also benefit from not moving the data.
+	 * These devices are flash and therefore work less well with this
+	 * optimization. Also skip if reallocblks has been disabled globally.
+	 */
+	ump = VTOI(ap->a_vp)->i_ump;
+	if (ump->um_candelete || doreallocblks == 0)
 		return (ENOSPC);
+
 	/*
 	 * We can't wait in softdep prealloc as it may fsync and recurse
 	 * here.  Instead we simply fail to reallocate blocks if this
@@ -492,7 +502,7 @@ ffs_reallocblks(ap)
 	if (DOINGSOFTDEP(ap->a_vp))
 		if (softdep_prealloc(ap->a_vp, MNT_NOWAIT) != 0)
 			return (ENOSPC);
-	if (VTOI(ap->a_vp)->i_ump->um_fstype == UFS1)
+	if (ump->um_fstype == UFS1)
 		return (ffs_reallocblks_ufs1(ap));
 	return (ffs_reallocblks_ufs2(ap));
 }
@@ -508,7 +518,7 @@ ffs_reallocblks_ufs1(ap)
 	struct inode *ip;
 	struct vnode *vp;
 	struct buf *sbp, *ebp;
-	ufs1_daddr_t *bap, *sbap, *ebap = 0;
+	ufs1_daddr_t *bap, *sbap, *ebap;
 	struct cluster_save *buflist;
 	struct ufsmount *ump;
 	ufs_lbn_t start_lbn, end_lbn;
@@ -588,6 +598,7 @@ ffs_reallocblks_ufs1(ap)
 	/*
 	 * If the block range spans two block maps, get the second map.
 	 */
+	ebap = NULL;
 	if (end_lvl == 0 || (idp = &end_ap[end_lvl - 1])->in_off + 1 >= len) {
 		ssize = len;
 	} else {
@@ -757,7 +768,7 @@ ffs_reallocblks_ufs2(ap)
 	struct inode *ip;
 	struct vnode *vp;
 	struct buf *sbp, *ebp;
-	ufs2_daddr_t *bap, *sbap, *ebap = 0;
+	ufs2_daddr_t *bap, *sbap, *ebap;
 	struct cluster_save *buflist;
 	struct ufsmount *ump;
 	ufs_lbn_t start_lbn, end_lbn;
@@ -836,6 +847,7 @@ ffs_reallocblks_ufs2(ap)
 	/*
 	 * If the block range spans two block maps, get the second map.
 	 */
+	ebap = NULL;
 	if (end_lvl == 0 || (idp = &end_ap[end_lvl - 1])->in_off + 1 >= len) {
 		ssize = len;
 	} else {
@@ -892,7 +904,7 @@ ffs_reallocblks_ufs2(ap)
 	 */
 #ifdef DEBUG
 	if (prtrealloc)
-		printf("realloc: ino %d, lbns %jd-%jd\n\told:", ip->i_number,
+		printf("realloc: ino %ju, lbns %jd-%jd\n\told:", (uintmax_t)ip->i_number,
 		    (intmax_t)start_lbn, (intmax_t)end_lbn);
 #endif
 	blkno = newblk;
@@ -1076,8 +1088,8 @@ retry:
 	ip = VTOI(*vpp);
 	if (ip->i_mode) {
 dup_alloc:
-		printf("mode = 0%o, inum = %lu, fs = %s\n",
-		    ip->i_mode, (u_long)ip->i_number, fs->fs_fsmnt);
+		printf("mode = 0%o, inum = %ju, fs = %s\n",
+		    ip->i_mode, (uintmax_t)ip->i_number, fs->fs_fsmnt);
 		panic("ffs_valloc: dup alloc");
 	}
 	if (DIP(ip, i_blocks) && (fs->fs_flags & FS_UNCLEAN) == 0) {  /* XXX */
@@ -1090,8 +1102,8 @@ dup_alloc:
 	/*
 	 * Set up a new generation number for this inode.
 	 */
-	if (ip->i_gen == 0 || ++ip->i_gen == 0)
-		ip->i_gen = arc4random() / 2 + 1;
+	while (ip->i_gen == 0 || ++ip->i_gen == 0)
+		ip->i_gen = arc4random();
 	DIP_SET(ip, i_gen, ip->i_gen);
 	if (fs->fs_magic == FS_UFS2_MAGIC) {
 		vfs_timestamp(&ts);
@@ -1214,16 +1226,17 @@ ffs_dirpref(pip)
 	 * We scan from our preferred cylinder group forward looking
 	 * for a cylinder group that meets our criterion. If we get
 	 * to the final cylinder group and do not find anything,
-	 * we start scanning backwards from our preferred cylinder
-	 * group. The ideal would be to alternate looking forward
-	 * and backward, but that is just too complex to code for
-	 * the gain it would get. The most likely place where the
-	 * backward scan would take effect is when we start near
-	 * the end of the filesystem and do not find anything from
-	 * where we are to the end. In that case, scanning backward
-	 * will likely find us a suitable cylinder group much closer
-	 * to our desired location than if we were to start scanning
-	 * forward from the beginning of the filesystem.
+	 * we start scanning forwards from the beginning of the
+	 * filesystem. While it might seem sensible to start scanning
+	 * backwards or even to alternate looking forward and backward,
+	 * this approach fails badly when the filesystem is nearly full.
+	 * Specifically, we first search all the areas that have no space
+	 * and finally try the one preceding that. We repeat this on
+	 * every request and in the case of the final block end up
+	 * searching the entire filesystem. By jumping to the front
+	 * of the filesystem, our future forward searches always look
+	 * in new cylinder groups so finds every possible block after
+	 * one pass over the filesystem.
 	 */
 	prefcg = ino_to_cg(fs, pip->i_number);
 	for (cg = prefcg; cg < fs->fs_ncg; cg++)
@@ -1338,7 +1351,7 @@ ffs_blkpref_ufs1(ip, lbn, indx, bap)
 	/*
 	 * If we are at the beginning of a file, or we have already allocated
 	 * the maximum number of blocks per cylinder group, or we do not
-	 * have a block allocated immediately preceeding us, then we need
+	 * have a block allocated immediately preceding us, then we need
 	 * to decide where to start allocating new blocks.
 	 */
 	if (indx % fs->fs_maxbpg == 0 || bap[indx - 1] == 0) {
@@ -1443,7 +1456,7 @@ ffs_blkpref_ufs2(ip, lbn, indx, bap)
 	/*
 	 * If we are at the beginning of a file, or we have already allocated
 	 * the maximum number of blocks per cylinder group, or we do not
-	 * have a block allocated immediately preceeding us, then we need
+	 * have a block allocated immediately preceding us, then we need
 	 * to decide where to start allocating new blocks.
 	 */
 	if (indx % fs->fs_maxbpg == 0 || bap[indx - 1] == 0) {
@@ -2067,7 +2080,8 @@ gotit:
 		bzero(ibp->b_data, (int)fs->fs_bsize);
 		dp2 = (struct ufs2_dinode *)(ibp->b_data);
 		for (i = 0; i < INOPB(fs); i++) {
-			dp2->di_gen = arc4random() / 2 + 1;
+			while (dp2->di_gen == 0)
+				dp2->di_gen = arc4random();
 			dp2++;
 		}
 		/*
@@ -2259,8 +2273,6 @@ ffs_blkfree_cg(ump, fs, devvp, bno, size, inum, dephd)
 	bdwrite(bp);
 }
 
-TASKQUEUE_DEFINE_THREAD(ffs_trim);
-
 struct ffs_blkfree_trim_params {
 	struct task task;
 	struct ufsmount *ump;
@@ -2283,6 +2295,7 @@ ffs_blkfree_trim_task(ctx, pending)
 	ffs_blkfree_cg(tp->ump, tp->ump->um_fs, tp->devvp, tp->bno, tp->size,
 	    tp->inum, tp->pdephd);
 	vn_finished_secondary_write(UFSTOVFS(tp->ump));
+	atomic_add_int(&tp->ump->um_trim_inflight, -1);
 	free(tp, M_TEMP);
 }
 
@@ -2295,7 +2308,7 @@ ffs_blkfree_trim_completed(bip)
 	tp = bip->bio_caller2;
 	g_destroy_bio(bip);
 	TASK_INIT(&tp->task, 0, ffs_blkfree_trim_task, tp);
-	taskqueue_enqueue(taskqueue_ffs_trim, &tp->task);
+	taskqueue_enqueue(tp->ump->um_trim_tq, &tp->task);
 }
 
 void
@@ -2339,6 +2352,7 @@ ffs_blkfree(ump, fs, devvp, bno, size, inum, vtype, dephd)
 	 * reordering, TRIM might be issued after we reuse the block
 	 * and write some new data into it.
 	 */
+	atomic_add_int(&ump->um_trim_inflight, 1);
 	tp = malloc(sizeof(struct ffs_blkfree_trim_params), M_TEMP, M_WAITOK);
 	tp->ump = ump;
 	tp->devvp = devvp;
@@ -2747,13 +2761,12 @@ sysctl_ffs_fsck(SYSCTL_HANDLER_ARGS)
 	struct thread *td = curthread;
 	struct fsck_cmd cmd;
 	struct ufsmount *ump;
-	struct vnode *vp, *vpold, *dvp, *fdvp;
+	struct vnode *vp, *dvp, *fdvp;
 	struct inode *ip, *dp;
 	struct mount *mp;
 	struct fs *fs;
 	ufs2_daddr_t blkno;
 	long blkcnt, blksize;
-	struct filedesc *fdp;
 	struct file *fp, *vfp;
 	cap_rights_t rights;
 	int filetype, error;
@@ -2765,7 +2778,7 @@ sysctl_ffs_fsck(SYSCTL_HANDLER_ARGS)
 		return (error);
 	if (cmd.version != FFS_CMD_VERSION)
 		return (ERPCMISMATCH);
-	if ((error = getvnode(td->td_proc->p_fd, cmd.handle,
+	if ((error = getvnode(td, cmd.handle,
 	    cap_rights_init(&rights, CAP_FSCK), &fp)) != 0)
 		return (error);
 	vp = fp->f_data;
@@ -2774,7 +2787,8 @@ sysctl_ffs_fsck(SYSCTL_HANDLER_ARGS)
 		return (EINVAL);
 	}
 	vn_start_write(vp, &mp, V_WAIT);
-	if (mp == 0 || strncmp(mp->mnt_stat.f_fstypename, "ufs", MFSNAMELEN)) {
+	if (mp == NULL ||
+	    strncmp(mp->mnt_stat.f_fstypename, "ufs", MFSNAMELEN)) {
 		vn_finished_write(mp);
 		fdrop(fp, td);
 		return (EINVAL);
@@ -2967,12 +2981,7 @@ sysctl_ffs_fsck(SYSCTL_HANDLER_ARGS)
 			break;
 		}
 		VOP_UNLOCK(vp, 0);
-		fdp = td->td_proc->p_fd;
-		FILEDESC_XLOCK(fdp);
-		vpold = fdp->fd_cdir;
-		fdp->fd_cdir = vp;
-		FILEDESC_XUNLOCK(fdp);
-		vrele(vpold);
+		pwd_chdir(td, vp);
 		break;
 
 	case FFS_SET_DOTDOT:
@@ -3079,7 +3088,7 @@ sysctl_ffs_fsck(SYSCTL_HANDLER_ARGS)
 			    (intmax_t)cmd.value);
 		}
 #endif /* DEBUG */
-		if ((error = getvnode(td->td_proc->p_fd, cmd.value,
+		if ((error = getvnode(td, cmd.value,
 		    cap_rights_init(&rights, CAP_FSCK), &vfp)) != 0)
 			break;
 		if (vfp->f_vnode->v_type != VCHR) {

@@ -43,9 +43,7 @@ __FBSDID("$FreeBSD$");
 
 #include "opt_compat.h"
 #include "opt_ddb.h"
-#include "opt_global.h"
 #include "opt_ktrace.h"
-#include "opt_kdtrace.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -161,6 +159,8 @@ static void log_illegal_instruction(const char *, struct trapframe *);
 static void log_bad_page_fault(char *, struct trapframe *, int);
 static void log_frame_dump(struct trapframe *frame);
 static void get_mapping_info(vm_offset_t, pd_entry_t **, pt_entry_t **);
+
+int (*dtrace_invop_jump_addr)(struct trapframe *);
 
 #ifdef TRAP_DEBUG
 static void trap_frame_dump(struct trapframe *frame);
@@ -606,7 +606,7 @@ trap(struct trapframe *trapframe)
 	/*
 	 * A trap can occur while DTrace executes a probe. Before
 	 * executing the probe, DTrace blocks re-scheduling and sets
-	 * a flag in it's per-cpu flags to indicate that it doesn't
+	 * a flag in its per-cpu flags to indicate that it doesn't
 	 * want to fault. On returning from the probe, the no-fault
 	 * flag is cleared and finally re-scheduling is enabled.
 	 *
@@ -619,7 +619,8 @@ trap(struct trapframe *trapframe)
 	 * XXXDTRACE: add pid probe handler here (if ever)
 	 */
 	if (!usermode) {
-		if (dtrace_trap_func != NULL && (*dtrace_trap_func)(trapframe, type))
+		if (dtrace_trap_func != NULL &&
+		    (*dtrace_trap_func)(trapframe, type) != 0)
 			return (trapframe->pc);
 	}
 #endif
@@ -715,19 +716,7 @@ dofault:
 				goto nogo;
 			}
 
-			/*
-			 * Keep swapout from messing with us during this
-			 * critical time.
-			 */
-			PROC_LOCK(p);
-			++p->p_lock;
-			PROC_UNLOCK(p);
-
 			rv = vm_fault(map, va, ftype, VM_FAULT_NORMAL);
-
-			PROC_LOCK(p);
-			--p->p_lock;
-			PROC_UNLOCK(p);
 			/*
 			 * XXXDTRACE: add dtrace_doubletrap_func here?
 			 */
@@ -821,10 +810,18 @@ dofault:
 			return (trapframe->pc);
 		}
 
-#ifdef DDB
+#if defined(KDTRACE_HOOKS) || defined(DDB)
 	case T_BREAK:
+#ifdef KDTRACE_HOOKS
+		if (!usermode && dtrace_invop_jump_addr != 0) {
+			dtrace_invop_jump_addr(trapframe);
+			return (trapframe->pc);
+		}
+#endif
+#ifdef DDB
 		kdb_trap(type, 0, trapframe);
 		return (trapframe->pc);
+#endif
 #endif
 
 	case T_BREAK + T_USER:
@@ -1589,7 +1586,7 @@ mips_unaligned_load_store(struct trapframe *frame, int mode, register_t addr, re
 		return (0);
 	}
 
-	if (!useracc((void *)((vm_offset_t)addr & ~(size - 1)), size * 2, mode))
+	if (!useracc((void *)rounddown2((vm_offset_t)addr, size), size * 2, mode))
 		return (0);
 
 	/*
@@ -1673,11 +1670,25 @@ mips_unaligned_load_store(struct trapframe *frame, int mode, register_t addr, re
 }
 
 
+/*
+ * XXX TODO: SMP?
+ */
+static struct timeval unaligned_lasterr;
+static int unaligned_curerr;
+
+static int unaligned_pps_log_limit = 4;
+
+SYSCTL_INT(_machdep, OID_AUTO, unaligned_log_pps_limit, CTLFLAG_RWTUN,
+    &unaligned_pps_log_limit, 0,
+    "limit number of userland unaligned log messages per second");
+
 static int
 emulate_unaligned_access(struct trapframe *frame, int mode)
 {
 	register_t pc;
 	int access_type = 0;
+	struct thread *td = curthread;
+	struct proc *p = curproc;
 
 	pc = frame->pc + (DELAYBRANCH(frame->cause) ? 4 : 0);
 
@@ -1704,9 +1715,19 @@ emulate_unaligned_access(struct trapframe *frame, int mode)
 			else
 				frame->pc += 4;
 
-			log(LOG_INFO, "Unaligned %s: pc=%#jx, badvaddr=%#jx\n",
-			    access_name[access_type - 1], (intmax_t)pc,
-			    (intmax_t)frame->badvaddr);
+			if (ppsratecheck(&unaligned_lasterr,
+			    &unaligned_curerr, unaligned_pps_log_limit)) {
+				/* XXX TODO: keep global/tid/pid counters? */
+				log(LOG_INFO,
+				    "Unaligned %s: pid=%ld (%s), tid=%ld, "
+				    "pc=%#jx, badvaddr=%#jx\n",
+				    access_name[access_type - 1],
+				    (long) p->p_pid,
+				    p->p_comm,
+				    (long) td->td_tid,
+				    (intmax_t)pc,
+				    (intmax_t)frame->badvaddr);
+			}
 		}
 	}
 	return access_type;

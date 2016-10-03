@@ -47,6 +47,8 @@ __FBSDID("$FreeBSD$");
 #include <machine/bus.h>
 #if defined(__amd64__) || defined(__i386__)
 #include <machine/clock.h>
+#include <machine/specialreg.h>
+#include <machine/md_var.h>
 #endif
 #include <sys/rman.h>
 
@@ -70,6 +72,10 @@ struct acpi_cx {
     uint32_t		 power;		/* Power consumed (mW). */
     int			 res_type;	/* Resource type for p_lvlx. */
     int			 res_rid;	/* Resource ID for p_lvlx. */
+    bool		 do_mwait;
+    uint32_t		 mwait_hint;
+    bool		 mwait_hw_coord;
+    bool		 mwait_bm_avoidance;
 };
 #define MAX_CX_STATES	 8
 
@@ -128,12 +134,20 @@ struct acpi_cpu_device {
 #define PIIX4_STOP_BREAK_MASK	(PIIX4_BRLD_EN_IRQ0 | PIIX4_BRLD_EN_IRQ | PIIX4_BRLD_EN_IRQ8)
 #define PIIX4_PCNTRL_BST_EN	(1<<10)
 
+#define	CST_FFH_VENDOR_INTEL	1
+#define	CST_FFH_INTEL_CL_C1IO	1
+#define	CST_FFH_INTEL_CL_MWAIT	2
+#define	CST_FFH_MWAIT_HW_COORD	0x0001
+#define	CST_FFH_MWAIT_BM_AVOID	0x0002
+
 /* Allow users to ignore processor orders in MADT. */
 static int cpu_unordered;
-TUNABLE_INT("debug.acpi.cpu_unordered", &cpu_unordered);
 SYSCTL_INT(_debug_acpi, OID_AUTO, cpu_unordered, CTLFLAG_RDTUN,
     &cpu_unordered, 0,
     "Do not use the MADT to match ACPI Processor objects to CPUs.");
+
+/* Knob to disable acpi_cpu devices */
+bool acpi_cpu_disabled = false;
 
 /* Platform hardware resource information. */
 static uint32_t		 cpu_smi_cmd;	/* Value to write to SMI_CMD. */
@@ -169,14 +183,20 @@ static int	acpi_cpu_cx_cst(struct acpi_cpu_softc *sc);
 static void	acpi_cpu_startup(void *arg);
 static void	acpi_cpu_startup_cx(struct acpi_cpu_softc *sc);
 static void	acpi_cpu_cx_list(struct acpi_cpu_softc *sc);
+#if defined(__i386__) || defined(__amd64__)
 static void	acpi_cpu_idle(sbintime_t sbt);
+#endif
 static void	acpi_cpu_notify(ACPI_HANDLE h, UINT32 notify, void *context);
 static void	acpi_cpu_quirks(void);
 static void	acpi_cpu_quirks_piix4(void);
 static int	acpi_cpu_usage_sysctl(SYSCTL_HANDLER_ARGS);
+static int	acpi_cpu_usage_counters_sysctl(SYSCTL_HANDLER_ARGS);
 static int	acpi_cpu_set_cx_lowest(struct acpi_cpu_softc *sc);
 static int	acpi_cpu_cx_lowest_sysctl(SYSCTL_HANDLER_ARGS);
 static int	acpi_cpu_global_cx_lowest_sysctl(SYSCTL_HANDLER_ARGS);
+#if defined(__i386__) || defined(__amd64__)
+static int	acpi_cpu_method_sysctl(SYSCTL_HANDLER_ARGS);
+#endif
 
 static device_method_t acpi_cpu_methods[] = {
     /* Device interface */
@@ -222,7 +242,8 @@ acpi_cpu_probe(device_t dev)
     ACPI_OBJECT		   *obj;
     ACPI_STATUS		   status;
 
-    if (acpi_disabled("cpu") || acpi_get_type(dev) != ACPI_TYPE_PROCESSOR)
+    if (acpi_disabled("cpu") || acpi_get_type(dev) != ACPI_TYPE_PROCESSOR ||
+	    acpi_cpu_disabled)
 	return (ENXIO);
 
     handle = acpi_get_handle(dev);
@@ -275,7 +296,7 @@ static int
 acpi_cpu_attach(device_t dev)
 {
     ACPI_BUFFER		   buf;
-    ACPI_OBJECT		   arg[4], *obj;
+    ACPI_OBJECT		   arg, *obj;
     ACPI_OBJECT_LIST	   arglist;
     struct pcpu		   *pcpu_data;
     struct acpi_cpu_softc *sc;
@@ -334,9 +355,6 @@ acpi_cpu_attach(device_t dev)
 	cpu_sysctl_tree = SYSCTL_ADD_NODE(&cpu_sysctl_ctx,
 	    SYSCTL_CHILDREN(acpi_sc->acpi_sysctl_tree), OID_AUTO, "cpu",
 	    CTLFLAG_RD, 0, "node for CPU children");
-
-	/* Queue post cpu-probing task handler */
-	AcpiOsExecute(OSL_NOTIFY_HANDLER, acpi_cpu_startup, NULL);
     }
 
     /*
@@ -345,7 +363,18 @@ acpi_cpu_attach(device_t dev)
      * so advertise this ourselves.  Note this is not the same as independent
      * SMP control where each CPU can have different settings.
      */
-    sc->cpu_features = ACPI_CAP_SMP_SAME | ACPI_CAP_SMP_SAME_C3;
+    sc->cpu_features = ACPI_CAP_SMP_SAME | ACPI_CAP_SMP_SAME_C3 |
+      ACPI_CAP_C1_IO_HALT;
+
+#if defined(__i386__) || defined(__amd64__)
+    /*
+     * Ask for MWAIT modes if not disabled and interrupts work
+     * reasonable with MWAIT.
+     */
+    if (!acpi_disabled("mwait") && cpu_mwait_usable())
+	sc->cpu_features |= ACPI_CAP_SMP_C1_NATIVE | ACPI_CAP_SMP_C3_NATIVE;
+#endif
+
     if (devclass_get_drivers(acpi_cpu_devclass, &drivers, &drv_count) == 0) {
 	for (i = 0; i < drv_count; i++) {
 	    if (ACPI_GET_FEATURES(drivers[i], &features) == 0)
@@ -359,31 +388,19 @@ acpi_cpu_attach(device_t dev)
      * Intel Processor Vendor-Specific ACPI Interface Specification.
      */
     if (sc->cpu_features) {
-	arglist.Pointer = arg;
-	arglist.Count = 4;
-	arg[0].Type = ACPI_TYPE_BUFFER;
-	arg[0].Buffer.Length = sizeof(cpu_oscuuid);
-	arg[0].Buffer.Pointer = cpu_oscuuid;	/* UUID */
-	arg[1].Type = ACPI_TYPE_INTEGER;
-	arg[1].Integer.Value = 1;		/* revision */
-	arg[2].Type = ACPI_TYPE_INTEGER;
-	arg[2].Integer.Value = 1;		/* count */
-	arg[3].Type = ACPI_TYPE_BUFFER;
-	arg[3].Buffer.Length = sizeof(cap_set);	/* Capabilities buffer */
-	arg[3].Buffer.Pointer = (uint8_t *)cap_set;
-	cap_set[0] = 0;				/* status */
 	cap_set[1] = sc->cpu_features;
-	status = AcpiEvaluateObject(sc->cpu_handle, "_OSC", &arglist, NULL);
+	status = acpi_EvaluateOSC(sc->cpu_handle, cpu_oscuuid, 1, 2, cap_set,
+	    cap_set, false);
 	if (ACPI_SUCCESS(status)) {
 	    if (cap_set[0] != 0)
 		device_printf(dev, "_OSC returned status %#x\n", cap_set[0]);
 	}
 	else {
-	    arglist.Pointer = arg;
+	    arglist.Pointer = &arg;
 	    arglist.Count = 1;
-	    arg[0].Type = ACPI_TYPE_BUFFER;
-	    arg[0].Buffer.Length = sizeof(cap_set);
-	    arg[0].Buffer.Pointer = (uint8_t *)cap_set;
+	    arg.Type = ACPI_TYPE_BUFFER;
+	    arg.Buffer.Length = sizeof(cap_set);
+	    arg.Buffer.Pointer = (uint8_t *)cap_set;
 	    cap_set[0] = 1; /* revision */
 	    cap_set[1] = 1; /* number of capabilities integers */
 	    cap_set[2] = sc->cpu_features;
@@ -403,17 +420,32 @@ acpi_cpu_postattach(void *unused __unused)
     device_t *devices;
     int err;
     int i, n;
+    int attached;
 
     err = devclass_get_devices(acpi_cpu_devclass, &devices, &n);
     if (err != 0) {
 	printf("devclass_get_devices(acpi_cpu_devclass) failed\n");
 	return;
     }
+    attached = 0;
+    for (i = 0; i < n; i++)
+	if (device_is_attached(devices[i]) &&
+	    device_get_driver(devices[i]) == &acpi_cpu_driver)
+	    attached = 1;
     for (i = 0; i < n; i++)
 	bus_generic_probe(devices[i]);
     for (i = 0; i < n; i++)
 	bus_generic_attach(devices[i]);
     free(devices, M_TEMP);
+
+    if (attached) {
+#ifdef EARLY_AP_STARTUP
+	acpi_cpu_startup(NULL);
+#else
+	/* Queue post cpu-probing task handler */
+	AcpiOsExecute(OSL_NOTIFY_HANDLER, acpi_cpu_startup, NULL);
+#endif
+    }
 }
 
 SYSINIT(acpi_cpu, SI_SUB_CONFIGURE, SI_ORDER_MIDDLE,
@@ -445,12 +477,14 @@ enable_idle(struct acpi_cpu_softc *sc)
     sc->cpu_disable_idle = FALSE;
 }
 
+#if defined(__i386__) || defined(__amd64__)
 static int
 is_idle_disabled(struct acpi_cpu_softc *sc)
 {
 
     return (sc->cpu_disable_idle);
 }
+#endif
 
 /*
  * Disable any entry to the idle function during suspend and re-enable it
@@ -611,7 +645,7 @@ acpi_cpu_shutdown(device_t dev)
     disable_idle(device_get_softc(dev));
 
     /*
-     * CPU devices are not truely detached and remain referenced,
+     * CPU devices are not truly detached and remain referenced,
      * so their resources are not freed.
      */
 
@@ -717,6 +751,29 @@ acpi_cpu_generic_cx_probe(struct acpi_cpu_softc *sc)
     }
 }
 
+#if defined(__i386__) || defined(__amd64__)
+static void
+acpi_cpu_cx_cst_mwait(struct acpi_cx *cx_ptr, uint64_t address, int accsize)
+{
+
+	cx_ptr->do_mwait = true;
+	cx_ptr->mwait_hint = address & 0xffffffff;
+	cx_ptr->mwait_hw_coord = (accsize & CST_FFH_MWAIT_HW_COORD) != 0;
+	cx_ptr->mwait_bm_avoidance = (accsize & CST_FFH_MWAIT_BM_AVOID) != 0;
+}
+#endif
+
+static void
+acpi_cpu_cx_cst_free_plvlx(device_t cpu_dev, struct acpi_cx *cx_ptr)
+{
+
+	if (cx_ptr->p_lvlx == NULL)
+		return;
+	bus_release_resource(cpu_dev, cx_ptr->res_type, cx_ptr->res_rid,
+	    cx_ptr->p_lvlx);
+	cx_ptr->p_lvlx = NULL;
+}
+
 /*
  * Parse a _CST package and set up its Cx states.  Since the _CST object
  * can change dynamically, our notify handler may call this function
@@ -732,6 +789,10 @@ acpi_cpu_cx_cst(struct acpi_cpu_softc *sc)
     ACPI_OBJECT	*pkg;
     uint32_t	 count;
     int		 i;
+#if defined(__i386__) || defined(__amd64__)
+    uint64_t	 address;
+    int		 vendor, class, accsize;
+#endif
 
     ACPI_FUNCTION_TRACE((char *)(uintptr_t)__func__);
 
@@ -787,6 +848,30 @@ acpi_cpu_cx_cst(struct acpi_cpu_softc *sc)
 	/* Validate the state to see if we should use it. */
 	switch (cx_ptr->type) {
 	case ACPI_STATE_C1:
+	    acpi_cpu_cx_cst_free_plvlx(sc->cpu_dev, cx_ptr);
+#if defined(__i386__) || defined(__amd64__)
+	    if (acpi_PkgFFH_IntelCpu(pkg, 0, &vendor, &class, &address,
+	      &accsize) == 0 && vendor == CST_FFH_VENDOR_INTEL) {
+		if (class == CST_FFH_INTEL_CL_C1IO) {
+		    /* C1 I/O then Halt */
+		    cx_ptr->res_rid = sc->cpu_cx_count;
+		    bus_set_resource(sc->cpu_dev, SYS_RES_IOPORT,
+		      cx_ptr->res_rid, address, 1);
+		    cx_ptr->p_lvlx = bus_alloc_resource_any(sc->cpu_dev,
+		      SYS_RES_IOPORT, &cx_ptr->res_rid, RF_ACTIVE |
+		      RF_SHAREABLE);
+		    if (cx_ptr->p_lvlx == NULL) {
+			bus_delete_resource(sc->cpu_dev, SYS_RES_IOPORT,
+			  cx_ptr->res_rid);
+			device_printf(sc->cpu_dev,
+			  "C1 I/O failed to allocate port %d, "
+			  "degrading to C1 Halt", (int)address);
+		    }
+		} else if (class == CST_FFH_INTEL_CL_MWAIT) {
+		    acpi_cpu_cx_cst_mwait(cx_ptr, address, accsize);
+		}
+	    }
+#endif
 	    if (sc->cpu_cx_states[0].type == ACPI_STATE_C0) {
 		/* This is the first C1 state.  Use the reserved slot. */
 		sc->cpu_cx_states[0] = *cx_ptr;
@@ -815,23 +900,34 @@ acpi_cpu_cx_cst(struct acpi_cpu_softc *sc)
 	}
 
 	/* Free up any previous register. */
-	if (cx_ptr->p_lvlx != NULL) {
-	    bus_release_resource(sc->cpu_dev, cx_ptr->res_type, cx_ptr->res_rid,
-	        cx_ptr->p_lvlx);
-	    cx_ptr->p_lvlx = NULL;
-	}
+	acpi_cpu_cx_cst_free_plvlx(sc->cpu_dev, cx_ptr);
 
 	/* Allocate the control register for C2 or C3. */
-	cx_ptr->res_rid = sc->cpu_cx_count;
-	acpi_PkgGas(sc->cpu_dev, pkg, 0, &cx_ptr->res_type, &cx_ptr->res_rid,
-	    &cx_ptr->p_lvlx, RF_SHAREABLE);
-	if (cx_ptr->p_lvlx) {
+#if defined(__i386__) || defined(__amd64__)
+	if (acpi_PkgFFH_IntelCpu(pkg, 0, &vendor, &class, &address,
+	  &accsize) == 0 && vendor == CST_FFH_VENDOR_INTEL &&
+	  class == CST_FFH_INTEL_CL_MWAIT) {
+	    /* Native C State Instruction use (mwait) */
+	    acpi_cpu_cx_cst_mwait(cx_ptr, address, accsize);
 	    ACPI_DEBUG_PRINT((ACPI_DB_INFO,
-			     "acpi_cpu%d: Got C%d - %d latency\n",
-			     device_get_unit(sc->cpu_dev), cx_ptr->type,
-			     cx_ptr->trans_lat));
+	      "acpi_cpu%d: Got C%d/mwait - %d latency\n",
+	      device_get_unit(sc->cpu_dev), cx_ptr->type, cx_ptr->trans_lat));
 	    cx_ptr++;
 	    sc->cpu_cx_count++;
+	} else
+#endif
+	{
+	    cx_ptr->res_rid = sc->cpu_cx_count;
+	    acpi_PkgGas(sc->cpu_dev, pkg, 0, &cx_ptr->res_type,
+		&cx_ptr->res_rid, &cx_ptr->p_lvlx, RF_SHAREABLE);
+	    if (cx_ptr->p_lvlx) {
+		ACPI_DEBUG_PRINT((ACPI_DB_INFO,
+		     "acpi_cpu%d: Got C%d - %d latency\n",
+		     device_get_unit(sc->cpu_dev), cx_ptr->type,
+		     cx_ptr->trans_lat));
+		cx_ptr++;
+		sc->cpu_cx_count++;
+	    }
 	}
     }
     AcpiOsFree(buf.Pointer);
@@ -907,7 +1003,9 @@ acpi_cpu_startup(void *arg)
 	sc = device_get_softc(cpu_devices[i]);
 	enable_idle(sc);
     }
+#if defined(__i386__) || defined(__amd64__)
     cpu_idle_hook = acpi_cpu_idle;
+#endif
 }
 
 static void
@@ -948,6 +1046,18 @@ acpi_cpu_startup_cx(struct acpi_cpu_softc *sc)
 		    OID_AUTO, "cx_usage", CTLTYPE_STRING | CTLFLAG_RD,
 		    (void *)sc, 0, acpi_cpu_usage_sysctl, "A",
 		    "percent usage for each Cx state");
+    SYSCTL_ADD_PROC(&sc->cpu_sysctl_ctx,
+		    SYSCTL_CHILDREN(device_get_sysctl_tree(sc->cpu_dev)),
+		    OID_AUTO, "cx_usage_counters", CTLTYPE_STRING | CTLFLAG_RD,
+		    (void *)sc, 0, acpi_cpu_usage_counters_sysctl, "A",
+		    "Cx sleep state counters");
+#if defined(__i386__) || defined(__amd64__)
+    SYSCTL_ADD_PROC(&sc->cpu_sysctl_ctx,
+		    SYSCTL_CHILDREN(device_get_sysctl_tree(sc->cpu_dev)),
+		    OID_AUTO, "cx_method", CTLTYPE_STRING | CTLFLAG_RD,
+		    (void *)sc, 0, acpi_cpu_method_sysctl, "A",
+		    "Cx entrance methods");
+#endif
 
     /* Signal platform that we can handle _CST notification. */
     if (!cpu_cx_generic && cpu_cst_cnt != 0) {
@@ -957,6 +1067,7 @@ acpi_cpu_startup_cx(struct acpi_cpu_softc *sc)
     }
 }
 
+#if defined(__i386__) || defined(__amd64__)
 /*
  * Idle the CPU in the lowest state possible.  This function is called with
  * interrupts disabled.  Note that once it re-enables interrupts, a task
@@ -970,6 +1081,7 @@ acpi_cpu_idle(sbintime_t sbt)
     struct	acpi_cx *cx_next;
     uint64_t	cputicks;
     uint32_t	start_time, end_time;
+    ACPI_STATUS	status;
     int		bm_active, cx_next_idx, i, us;
 
     /*
@@ -1015,8 +1127,8 @@ acpi_cpu_idle(sbintime_t sbt)
      */
     if ((cpu_quirks & CPU_QUIRK_NO_BM_CTRL) == 0 &&
 	cx_next_idx > sc->cpu_non_c3) {
-	AcpiReadBitRegister(ACPI_BITREG_BUS_MASTER_STATUS, &bm_active);
-	if (bm_active != 0) {
+	status = AcpiReadBitRegister(ACPI_BITREG_BUS_MASTER_STATUS, &bm_active);
+	if (ACPI_SUCCESS(status) && bm_active != 0) {
 	    AcpiWriteBitRegister(ACPI_BITREG_BUS_MASTER_STATUS, 1);
 	    cx_next_idx = sc->cpu_non_c3;
 	}
@@ -1035,7 +1147,14 @@ acpi_cpu_idle(sbintime_t sbt)
      */
     if (cx_next->type == ACPI_STATE_C1) {
 	cputicks = cpu_ticks();
-	acpi_cpu_c1();
+	if (cx_next->p_lvlx != NULL) {
+	    /* C1 I/O then Halt */
+	    CPU_GET_REG(cx_next->p_lvlx, 1);
+	}
+	if (cx_next->do_mwait)
+	    acpi_cpu_idle_mwait(cx_next->mwait_hint);
+	else
+	    acpi_cpu_c1();
 	end_time = ((cpu_ticks() - cputicks) << 20) / cpu_tickrate();
 	if (curthread->td_critnest == 0)
 		end_time = min(end_time, 500000 / hz);
@@ -1047,7 +1166,7 @@ acpi_cpu_idle(sbintime_t sbt)
      * For C3, disable bus master arbitration and enable bus master wake
      * if BM control is available, otherwise flush the CPU cache.
      */
-    if (cx_next->type == ACPI_STATE_C3) {
+    if (cx_next->type == ACPI_STATE_C3 || cx_next->mwait_bm_avoidance) {
 	if ((cpu_quirks & CPU_QUIRK_NO_BM_CTRL) == 0) {
 	    AcpiWriteBitRegister(ACPI_BITREG_ARB_DISABLE, 1);
 	    AcpiWriteBitRegister(ACPI_BITREG_BUS_MASTER_RLD, 1);
@@ -1068,7 +1187,10 @@ acpi_cpu_idle(sbintime_t sbt)
 	start_time = 0;
 	cputicks = cpu_ticks();
     }
-    CPU_GET_REG(cx_next->p_lvlx, 1);
+    if (cx_next->do_mwait)
+	acpi_cpu_idle_mwait(cx_next->mwait_hint);
+    else
+	CPU_GET_REG(cx_next->p_lvlx, 1);
 
     /*
      * Read the end time twice.  Since it may take an arbitrary time
@@ -1084,8 +1206,8 @@ acpi_cpu_idle(sbintime_t sbt)
 	end_time = ((cpu_ticks() - cputicks) << 20) / cpu_tickrate();
 
     /* Enable bus master arbitration and disable bus master wakeup. */
-    if (cx_next->type == ACPI_STATE_C3 &&
-	(cpu_quirks & CPU_QUIRK_NO_BM_CTRL) == 0) {
+    if ((cx_next->type == ACPI_STATE_C3 || cx_next->mwait_bm_avoidance) &&
+      (cpu_quirks & CPU_QUIRK_NO_BM_CTRL) == 0) {
 	AcpiWriteBitRegister(ACPI_BITREG_ARB_DISABLE, 0);
 	AcpiWriteBitRegister(ACPI_BITREG_BUS_MASTER_RLD, 0);
     }
@@ -1093,6 +1215,7 @@ acpi_cpu_idle(sbintime_t sbt)
 
     sc->cpu_prev_sleep = (sc->cpu_prev_sleep * 3 + PM_USEC(end_time)) / 4;
 }
+#endif
 
 /*
  * Re-evaluate the _CST object when we are notified that it changed.
@@ -1171,6 +1294,7 @@ acpi_cpu_quirks_piix4(void)
 #ifdef __i386__
     device_t acpi_dev;
     uint32_t val;
+    ACPI_STATUS status;
 
     acpi_dev = pci_find_device(PCI_VENDOR_INTEL, PCI_DEVICE_82371AB_3);
     if (acpi_dev != NULL) {
@@ -1209,8 +1333,8 @@ acpi_cpu_quirks_piix4(void)
 	    	val |= PIIX4_STOP_BREAK_MASK;
 		pci_write_config(acpi_dev, PIIX4_DEVACTB_REG, val, 4);
 	    }
-	    AcpiReadBitRegister(ACPI_BITREG_BUS_MASTER_RLD, &val);
-	    if (val) {
+	    status = AcpiReadBitRegister(ACPI_BITREG_BUS_MASTER_RLD, &val);
+	    if (ACPI_SUCCESS(status) && val != 0) {
 		ACPI_DEBUG_PRINT((ACPI_DB_INFO,
 		    "acpi_cpu: PIIX4: reset BRLD_EN_BM\n"));
 		AcpiWriteBitRegister(ACPI_BITREG_BUS_MASTER_RLD, 0);
@@ -1254,6 +1378,73 @@ acpi_cpu_usage_sysctl(SYSCTL_HANDLER_ARGS)
 
     return (0);
 }
+
+/*
+ * XXX TODO: actually add support to count each entry/exit
+ * from the Cx states.
+ */
+static int
+acpi_cpu_usage_counters_sysctl(SYSCTL_HANDLER_ARGS)
+{
+    struct acpi_cpu_softc *sc;
+    struct sbuf	 sb;
+    char	 buf[128];
+    int		 i;
+
+    sc = (struct acpi_cpu_softc *) arg1;
+
+    /* Print out the raw counters */
+    sbuf_new(&sb, buf, sizeof(buf), SBUF_FIXEDLEN);
+
+    for (i = 0; i < sc->cpu_cx_count; i++) {
+        sbuf_printf(&sb, "%u ", sc->cpu_cx_stats[i]);
+    }
+
+    sbuf_trim(&sb);
+    sbuf_finish(&sb);
+    sysctl_handle_string(oidp, sbuf_data(&sb), sbuf_len(&sb), req);
+    sbuf_delete(&sb);
+
+    return (0);
+}
+
+#if defined(__i386__) || defined(__amd64__)
+static int
+acpi_cpu_method_sysctl(SYSCTL_HANDLER_ARGS)
+{
+	struct acpi_cpu_softc *sc;
+	struct acpi_cx *cx;
+	struct sbuf sb;
+	char buf[128];
+	int i;
+
+	sc = (struct acpi_cpu_softc *)arg1;
+	sbuf_new(&sb, buf, sizeof(buf), SBUF_FIXEDLEN);
+	for (i = 0; i < sc->cpu_cx_count; i++) {
+		cx = &sc->cpu_cx_states[i];
+		sbuf_printf(&sb, "C%d/", i + 1);
+		if (cx->do_mwait) {
+			sbuf_cat(&sb, "mwait");
+			if (cx->mwait_hw_coord)
+				sbuf_cat(&sb, "/hwc");
+			if (cx->mwait_bm_avoidance)
+				sbuf_cat(&sb, "/bma");
+		} else if (cx->type == ACPI_STATE_C1) {
+			sbuf_cat(&sb, "hlt");
+		} else {
+			sbuf_cat(&sb, "io");
+		}
+		if (cx->type == ACPI_STATE_C1 && cx->p_lvlx != NULL)
+			sbuf_cat(&sb, "/iohlt");
+		sbuf_putc(&sb, ' ');
+	}
+	sbuf_trim(&sb);
+	sbuf_finish(&sb);
+	sysctl_handle_string(oidp, sbuf_data(&sb), sbuf_len(&sb), req);
+	sbuf_delete(&sb);
+	return (0);
+}
+#endif
 
 static int
 acpi_cpu_set_cx_lowest(struct acpi_cpu_softc *sc)

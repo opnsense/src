@@ -27,7 +27,8 @@ namespace lldb_private
 /// This class encapsulates a group of memory objects that must be readable
 /// or writable from the host process regardless of whether the process
 /// exists.  This allows the IR interpreter as well as JITted code to access
-/// the same memory.
+/// the same memory.  All allocations made by this class are represented as
+/// disjoint intervals.
 ///
 /// Point queries against this group of memory objects can be made by the
 /// address in the tar at which they reside.  If the inferior does not
@@ -49,7 +50,12 @@ public:
         eAllocationPolicyProcessOnly            ///< The intent is that this allocation exist only in the process.
     };
 
-    lldb::addr_t Malloc (size_t size, uint8_t alignment, uint32_t permissions, AllocationPolicy policy, Error &error);
+    lldb::addr_t Malloc (size_t size,
+                         uint8_t alignment,
+                         uint32_t permissions,
+                         AllocationPolicy policy,
+                         bool zero_memory,
+                         Error &error);
     void Leak (lldb::addr_t process_address, Error &error);
     void Free (lldb::addr_t process_address, Error &error);
     
@@ -59,23 +65,31 @@ public:
     void ReadMemory (uint8_t *bytes, lldb::addr_t process_address, size_t size, Error &error);
     void ReadScalarFromMemory (Scalar &scalar, lldb::addr_t process_address, size_t size, Error &error);
     void ReadPointerFromMemory (lldb::addr_t *address, lldb::addr_t process_address, Error &error);
-    
+    bool GetAllocSize(lldb::addr_t address, size_t &size);
     void GetMemoryData (DataExtractor &extractor, lldb::addr_t process_address, size_t size, Error &error);
     
     lldb::ByteOrder GetByteOrder();
     uint32_t GetAddressByteSize();
     
     // This function can return NULL.
-    ExecutionContextScope *GetBestExecutionContextScope();
+    ExecutionContextScope *GetBestExecutionContextScope() const;
+
+    lldb::TargetSP
+    GetTarget ()
+    {
+        return m_target_wp.lock();
+    }
 
 protected:
     // This function should only be used if you know you are using the JIT.
     // Any other cases should use GetBestExecutionContextScope().
-    lldb::ProcessWP GetProcessWP ()
+
+    lldb::ProcessWP &
+    GetProcessWP ()
     {
         return m_process_wp;
     }
-    
+
 private:
     struct Allocation
     {
@@ -115,10 +129,15 @@ private:
     typedef std::map<lldb::addr_t, Allocation>  AllocationMap;
     AllocationMap                               m_allocations;
         
-    lldb::addr_t FindSpace (size_t size);
+    lldb::addr_t FindSpace (size_t size, bool zero_memory = false);
     bool ContainsHostOnlyAllocations ();
     AllocationMap::iterator FindAllocation (lldb::addr_t addr, size_t size);
-    bool IntersectsAllocation (lldb::addr_t addr, size_t size);
+
+    // Returns true if the given allocation intersects any allocation in the memory map.
+    bool IntersectsAllocation (lldb::addr_t addr, size_t size) const;
+
+    // Returns true if the two given allocations intersect each other.
+    static bool AllocationsIntersect (lldb::addr_t addr1, size_t size1, lldb::addr_t addr2, size_t size2);
 };
     
 }

@@ -45,14 +45,15 @@ __FBSDID("$FreeBSD$");
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
+#include <sys/devmap.h>
 
 #include <vm/vm.h>
 #include <vm/pmap.h>
 
 #include <machine/bus.h>
 #include <machine/fdt.h>
-#include <machine/devmap.h>
 #include <machine/machdep.h>
+#include <machine/platform.h> 
 
 #include <arm/lpc/lpcreg.h>
 #include <arm/lpc/lpcvar.h>
@@ -60,42 +61,42 @@ __FBSDID("$FreeBSD$");
 #include <dev/fdt/fdt_common.h>
 
 vm_offset_t
-initarm_lastaddr(void)
+platform_lastaddr(void)
 {
 
-	return (arm_devmap_lastaddr());
+	return (devmap_lastaddr());
 }
 
 void
-initarm_early_init(void)
+platform_probe_and_attach(void)
 {
 }
 
 void
-initarm_gpio_init(void)
+platform_gpio_init(void)
 {
 
 	/*
 	 * Set initial values of GPIO output ports
 	 */
-	platform_gpio_init();
+	lpc_gpio_init();
 }
 
 void
-initarm_late_init(void)
+platform_late_init(void)
 {
 }
 
 /*
  * Add a single static device mapping.
  * The values used were taken from the ranges property of the SoC node in the
- * dts file when this code was converted to arm_devmap_add_entry().
+ * dts file when this code was converted to devmap_add_entry().
  */
 int
-initarm_devmap_init(void)
+platform_devmap_init(void)
 {
 
-	arm_devmap_add_entry(LPC_DEV_PHYS_BASE, LPC_DEV_SIZE);
+	devmap_add_entry(LPC_DEV_PHYS_BASE, LPC_DEV_SIZE);
 	return (0);
 }
 

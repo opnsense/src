@@ -811,7 +811,6 @@ oce_config_nic_rss(POCE_SOFTC sc, uint32_t if_id, uint16_t enable_rss)
 	fwcmd->params.req.flush = OCE_FLUSH;
 	fwcmd->params.req.if_id = LE_32(if_id);
 
-	srandom(arc4random());	/* random entropy seed */
 	read_random(fwcmd->params.req.hash, sizeof(fwcmd->params.req.hash));
 	
 	rc = oce_rss_itbl_init(sc, fwcmd);
@@ -1876,7 +1875,7 @@ oce_mbox_cq_create(struct oce_cq *cq, uint32_t ncoalesce, uint32_t is_eventable)
 		ctx->v2.armed = 0;
 		ctx->v2.eq_id = cq->eq->eq_id;
 		if (ctx->v2.count == 3) {
-			if (cq->cq_cfg.q_len > (4*1024)-1)
+			if ((u_int)cq->cq_cfg.q_len > (4*1024)-1)
 				ctx->v2.cqe_count = (4*1024)-1;
 			else
 				ctx->v2.cqe_count = cq->cq_cfg.q_len;
@@ -2114,7 +2113,7 @@ oce_get_profile_config(POCE_SOFTC sc, uint32_t max_rss)
 			sc->nrssqs = MIN(sc->nrssqs, max_rss);
 		else
 			sc->nrssqs = max_rss;
-		sc->nrqs =  sc->nrssqs + 1; /* 1 for def RX */;
+		sc->nrqs =  sc->nrssqs + 1; /* 1 for def RX */
 
 	}
 error:
@@ -2214,7 +2213,7 @@ oce_get_func_config(POCE_SOFTC sc)
 			sc->nrssqs = MIN(sc->nrssqs, max_rss);
 		else
 			sc->nrssqs = max_rss;
-		sc->nrqs =  sc->nrssqs + 1; /* 1 for def RX */;
+		sc->nrqs =  sc->nrssqs + 1; /* 1 for def RX */
 	}
 error:
 	oce_dma_free(sc, &dma);

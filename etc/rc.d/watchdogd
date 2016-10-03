@@ -34,9 +34,13 @@
 . /etc/rc.subr
 
 name="watchdogd"
+desc="Watchdog daemon"
 rcvar="watchdogd_enable"
 command="/usr/sbin/${name}"
 pidfile="/var/run/${name}.pid"
 
 load_rc_config $name
+
+sig_stop="${watchdogd_sig_stop:-TERM}"
+
 run_rc_command "$1"

@@ -7,8 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#define DEBUG_TYPE "calcspillweights"
-
+#include "llvm/CodeGen/VirtRegMap.h"
 #include "llvm/CodeGen/CalcSpillWeights.h"
 #include "llvm/CodeGen/LiveIntervalAnalysis.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
@@ -18,12 +17,15 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetInstrInfo.h"
-#include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetRegisterInfo.h"
+#include "llvm/Target/TargetSubtargetInfo.h"
 using namespace llvm;
+
+#define DEBUG_TYPE "calcspillweights"
 
 void llvm::calculateSpillWeightsAndHints(LiveIntervals &LIS,
                            MachineFunction &MF,
+                           VirtRegMap *VRM,
                            const MachineLoopInfo &MLI,
                            const MachineBlockFrequencyInfo &MBFI,
                            VirtRegAuxInfo::NormalizingFn norm) {
@@ -31,7 +33,7 @@ void llvm::calculateSpillWeightsAndHints(LiveIntervals &LIS,
                << "********** Function: " << MF.getName() << '\n');
 
   MachineRegisterInfo &MRI = MF.getRegInfo();
-  VirtRegAuxInfo VRAI(MF, LIS, MLI, MBFI, norm);
+  VirtRegAuxInfo VRAI(MF, LIS, VRM, MLI, MBFI, norm);
   for (unsigned i = 0, e = MRI.getNumVirtRegs(); i != e; ++i) {
     unsigned Reg = TargetRegisterInfo::index2VirtReg(i);
     if (MRI.reg_nodbg_empty(Reg))
@@ -74,7 +76,10 @@ static unsigned copyHint(const MachineInstr *mi, unsigned reg,
 // Check if all values in LI are rematerializable
 static bool isRematerializable(const LiveInterval &LI,
                                const LiveIntervals &LIS,
+                               VirtRegMap *VRM,
                                const TargetInstrInfo &TII) {
+  unsigned Reg = LI.reg;
+  unsigned Original = VRM ? VRM->getOriginal(Reg) : 0;
   for (LiveInterval::const_vni_iterator I = LI.vni_begin(), E = LI.vni_end();
        I != E; ++I) {
     const VNInfo *VNI = *I;
@@ -86,6 +91,36 @@ static bool isRematerializable(const LiveInterval &LI,
     MachineInstr *MI = LIS.getInstructionFromIndex(VNI->def);
     assert(MI && "Dead valno in interval");
 
+    // Trace copies introduced by live range splitting.  The inline
+    // spiller can rematerialize through these copies, so the spill
+    // weight must reflect this.
+    if (VRM) {
+      while (MI->isFullCopy()) {
+        // The copy destination must match the interval register.
+        if (MI->getOperand(0).getReg() != Reg)
+          return false;
+
+        // Get the source register.
+        Reg = MI->getOperand(1).getReg();
+
+        // If the original (pre-splitting) registers match this
+        // copy came from a split.
+        if (!TargetRegisterInfo::isVirtualRegister(Reg) ||
+            VRM->getOriginal(Reg) != Original)
+          return false;
+
+        // Follow the copy live-in value.
+        const LiveInterval &SrcLI = LIS.getInterval(Reg);
+        LiveQueryResult SrcQ = SrcLI.Query(VNI->def);
+        VNI = SrcQ.valueIn();
+        assert(VNI && "Copy from non-existing value");
+        if (VNI->isPHIDef())
+          return false;
+        MI = LIS.getInstructionFromIndex(VNI->def);
+        assert(MI && "Dead valno in interval");
+      }
+    }
+
     if (!TII.isTriviallyReMaterializable(MI, LIS.getAliasAnalysis()))
       return false;
   }
@@ -95,11 +130,12 @@ static bool isRematerializable(const LiveInterval &LI,
 void
 VirtRegAuxInfo::calculateSpillWeightAndHint(LiveInterval &li) {
   MachineRegisterInfo &mri = MF.getRegInfo();
-  const TargetRegisterInfo &tri = *MF.getTarget().getRegisterInfo();
-  MachineBasicBlock *mbb = 0;
-  MachineLoop *loop = 0;
+  const TargetRegisterInfo &tri = *MF.getSubtarget().getRegisterInfo();
+  MachineBasicBlock *mbb = nullptr;
+  MachineLoop *loop = nullptr;
   bool isExiting = false;
   float totalWeight = 0;
+  unsigned numInstr = 0; // Number of instructions using li
   SmallPtrSet<MachineInstr*, 8> visited;
 
   // Find the best physreg hint and the best virtreg hint.
@@ -112,11 +148,14 @@ VirtRegAuxInfo::calculateSpillWeightAndHint(LiveInterval &li) {
   // Don't recompute spill weight for an unspillable register.
   bool Spillable = li.isSpillable();
 
-  for (MachineRegisterInfo::reg_iterator I = mri.reg_begin(li.reg);
-       MachineInstr *mi = I.skipInstruction();) {
+  for (MachineRegisterInfo::reg_instr_iterator
+       I = mri.reg_instr_begin(li.reg), E = mri.reg_instr_end();
+       I != E; ) {
+    MachineInstr *mi = &*(I++);
+    numInstr++;
     if (mi->isIdentityCopy() || mi->isImplicitDef() || mi->isDebugValue())
       continue;
-    if (!visited.insert(mi))
+    if (!visited.insert(mi).second)
       continue;
 
     float weight = 1.0f;
@@ -130,9 +169,9 @@ VirtRegAuxInfo::calculateSpillWeightAndHint(LiveInterval &li) {
 
       // Calculate instr weight.
       bool reads, writes;
-      tie(reads, writes) = mi->readsWritesVirtualRegister(li.reg);
+      std::tie(reads, writes) = mi->readsWritesVirtualRegister(li.reg);
       weight = LiveIntervals::getSpillWeight(
-          writes, reads, MBFI.getBlockFreq(mi->getParent()));
+        writes, reads, &MBFI, mi);
 
       // Give extra weight to what looks like a loop induction variable update.
       if (writes && isExiting && LIS.isLiveOutOfMBB(li, mbb))
@@ -147,7 +186,11 @@ VirtRegAuxInfo::calculateSpillWeightAndHint(LiveInterval &li) {
     unsigned hint = copyHint(mi, li.reg, tri, mri);
     if (!hint)
       continue;
-    float hweight = Hint[hint] += weight;
+    // Force hweight onto the stack so that x86 doesn't add hidden precision,
+    // making the comparison incorrectly pass (i.e., 1 > 1 == true??).
+    //
+    // FIXME: we probably shouldn't use floats at all.
+    volatile float hweight = Hint[hint] += weight;
     if (TargetRegisterInfo::isPhysicalRegister(hint)) {
       if (hweight > bestPhys && mri.isAllocatable(hint))
         bestPhys = hweight, hintPhys = hint;
@@ -170,8 +213,11 @@ VirtRegAuxInfo::calculateSpillWeightAndHint(LiveInterval &li) {
   if (!Spillable)
     return;
 
-  // Mark li as unspillable if all live ranges are tiny.
-  if (li.isZeroLength(LIS.getSlotIndexes())) {
+  // Mark li as unspillable if all live ranges are tiny and the interval
+  // is not live at any reg mask.  If the interval is live at a reg mask
+  // spilling may be required.
+  if (li.isZeroLength(LIS.getSlotIndexes()) &&
+      !li.isLiveAtIndexes(LIS.getRegMaskSlots())) {
     li.markNotSpillable();
     return;
   }
@@ -180,8 +226,8 @@ VirtRegAuxInfo::calculateSpillWeightAndHint(LiveInterval &li) {
   // it is a preferred candidate for spilling.
   // FIXME: this gets much more complicated once we support non-trivial
   // re-materialization.
-  if (isRematerializable(li, LIS, *MF.getTarget().getInstrInfo()))
+  if (isRematerializable(li, LIS, VRM, *MF.getSubtarget().getInstrInfo()))
     totalWeight *= 0.5F;
 
-  li.weight = normalize(totalWeight, li.getSize());
+  li.weight = normalize(totalWeight, li.getSize(), numInstr);
 }

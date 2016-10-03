@@ -11,8 +11,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_GR_SIMPLE_CONSTRAINT_MANAGER_H
-#define LLVM_CLANG_GR_SIMPLE_CONSTRAINT_MANAGER_H
+#ifndef LLVM_CLANG_LIB_STATICANALYZER_CORE_SIMPLECONSTRAINTMANAGER_H
+#define LLVM_CLANG_LIB_STATICANALYZER_CORE_SIMPLECONSTRAINTMANAGER_H
 
 #include "clang/StaticAnalyzer/Core/PathSensitive/ConstraintManager.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramState.h"
@@ -27,21 +27,34 @@ class SimpleConstraintManager : public ConstraintManager {
 public:
   SimpleConstraintManager(SubEngine *subengine, SValBuilder &SB)
     : SU(subengine), SVB(SB) {}
-  virtual ~SimpleConstraintManager();
+  ~SimpleConstraintManager() override;
 
   //===------------------------------------------------------------------===//
   // Common implementation for the interface provided by ConstraintManager.
   //===------------------------------------------------------------------===//
 
   ProgramStateRef assume(ProgramStateRef state, DefinedSVal Cond,
-                        bool Assumption);
+                        bool Assumption) override;
 
   ProgramStateRef assume(ProgramStateRef state, NonLoc Cond, bool Assumption);
+
+  ProgramStateRef assumeWithinInclusiveRange(ProgramStateRef State,
+                                             NonLoc Value,
+                                             const llvm::APSInt &From,
+                                             const llvm::APSInt &To,
+                                             bool InRange) override;
 
   ProgramStateRef assumeSymRel(ProgramStateRef state,
                               const SymExpr *LHS,
                               BinaryOperator::Opcode op,
                               const llvm::APSInt& Int);
+
+  ProgramStateRef assumeSymWithinInclusiveRange(ProgramStateRef State,
+                                                SymbolRef Sym,
+                                                const llvm::APSInt &From,
+                                                const llvm::APSInt &To,
+                                                bool InRange);
+
 
 protected:
 
@@ -75,6 +88,14 @@ protected:
                                      const llvm::APSInt& V,
                                      const llvm::APSInt& Adjustment) = 0;
 
+
+  virtual ProgramStateRef assumeSymbolWithinInclusiveRange(
+      ProgramStateRef State, SymbolRef Sym, const llvm::APSInt &From,
+      const llvm::APSInt &To, const llvm::APSInt &Adjustment) = 0;
+
+  virtual ProgramStateRef assumeSymbolOutOfInclusiveRange(
+      ProgramStateRef state, SymbolRef Sym, const llvm::APSInt &From,
+      const llvm::APSInt &To, const llvm::APSInt &Adjustment) = 0;
   //===------------------------------------------------------------------===//
   // Internal implementation.
   //===------------------------------------------------------------------===//
@@ -82,7 +103,7 @@ protected:
   BasicValueFactory &getBasicVals() const { return SVB.getBasicValueFactory(); }
   SymbolManager &getSymbolManager() const { return SVB.getSymbolManager(); }
 
-  bool canReasonAbout(SVal X) const;
+  bool canReasonAbout(SVal X) const override;
 
   ProgramStateRef assumeAux(ProgramStateRef state,
                                 NonLoc Cond,

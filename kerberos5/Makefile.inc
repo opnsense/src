@@ -1,21 +1,20 @@
 # $FreeBSD$
 
+.include <src.opts.mk>
+
 NO_LINT=
 
 KRB5DIR=	${.CURDIR}/../../../crypto/heimdal
 
 CFLAGS+=	-DHAVE_CONFIG_H -I${.CURDIR}/../../include
 
-.if defined(WITH_OPENLDAP) && !defined(COMPAT_32BIT)
+.if ${MK_OPENLDAP} != "no" && !defined(COMPAT_32BIT)
 OPENLDAPBASE?=	/usr/local
 LDAPLDADD=	-lldap -llber
 LDAPDPADD=	${LDAPLDADD:C;^-l(.*)$;${OPENLDAPBASE}/lib/lib\1.a;}
 LDAPCFLAGS=	-I${OPENLDAPBASE}/include -DOPENLDAP=1 -DLDAP_DEPRECATED=1
 LDAPLDFLAGS=	-L${OPENLDAPBASE}/lib -rpath ${OPENLDAPBASE}/lib
 .endif
-
-LIBVERS=	${.OBJDIR}/../../lib/libvers/libvers.a
-LIBSL=		${.OBJDIR}/../../lib/libsl/libsl.a
 
 .if defined(SRCS)
 
@@ -36,7 +35,8 @@ ETSRCS=	\
 .for _ET in ${ET:T:R}
 .if ${SRCS:M${_ET}.[ch]} != ""
 .ORDER: ${_ET}.h ${_ET}.c
-${_ET}.c ${_ET}.h: ${ET}
+${_ET}.c: .NOMETA
+${_ET}.h ${_ET}.c: ${ET}
 	compile_et ${.ALLSRC}
 CLEANFILES+=	${_ET}.h ${_ET}.c
 .endif

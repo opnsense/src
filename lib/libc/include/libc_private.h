@@ -168,6 +168,9 @@ typedef enum {
 	PJT_CLEANUP_PUSH_IMP,
 	PJT_CANCEL_ENTER,
 	PJT_CANCEL_LEAVE,
+	PJT_MUTEX_CONSISTENT,
+	PJT_MUTEXATTR_GETROBUST,
+	PJT_MUTEXATTR_SETROBUST,
 	PJT_MAX
 } pjt_index_t;
 
@@ -224,6 +227,7 @@ enum {
 	INTERPOS_kevent,
 	INTERPOS_wait6,
 	INTERPOS_ppoll,
+	INTERPOS_map_stacks_exec,
 	INTERPOS_MAX
 };
 
@@ -263,6 +267,12 @@ extern const char *__progname;
 void _malloc_thread_cleanup(void);
 
 /*
+ * This function is used by the threading libraries to notify libc that a
+ * thread is exiting, so its thread-local dtors should be called.
+ */
+void __cxa_thread_call_dtors(void);
+
+/*
  * These functions are used by the threading libraries in order to protect
  * malloc across fork().
  */
@@ -278,20 +288,11 @@ extern void (*__cleanup)(void) __hidden;
 
 /*
  * Get kern.osreldate to detect ABI revisions.  Explicitly
- * ignores value of $OSVERSION and caches result.  Prototypes
- * for the wrapped "new" pad-less syscalls are here for now.
+ * ignores value of $OSVERSION and caches result.
  */
 int __getosreldate(void);
 #include <sys/_types.h>
 #include <sys/_sigset.h>
-
-/* With pad */
-__off_t	__sys_freebsd6_lseek(int, int, __off_t, int);
-int	__sys_freebsd6_ftruncate(int, int, __off_t);
-int	__sys_freebsd6_truncate(const char *, int, __off_t);
-__ssize_t __sys_freebsd6_pread(int, void *, __size_t, int, __off_t);
-__ssize_t __sys_freebsd6_pwrite(int, const void *, __size_t, int, __off_t);
-void *	__sys_freebsd6_mmap(void *, __size_t, int, int, int, int, __off_t);
 
 struct aiocb;
 struct fd_set;
@@ -390,6 +391,7 @@ int _elf_aux_info(int aux, void *buf, int buflen);
 struct dl_phdr_info;
 int __elf_phdr_match_addr(struct dl_phdr_info *, void *);
 void __init_elf_aux_vector(void);
+void __libc_map_stacks_exec(void);
 
 void	_pthread_cancel_enter(int);
 void	_pthread_cancel_leave(int);

@@ -60,7 +60,6 @@ __FBSDID("$FreeBSD$");
 #include <xen/xenbus/xenbusvar.h>
 
 #include <machine/_inttypes.h>
-#include <machine/xen/xenvar.h>
 
 #include <geom/geom_disk.h>
 
@@ -163,7 +162,7 @@ xbd_free_command(struct xbd_command *cm)
 static void
 xbd_mksegarray(bus_dma_segment_t *segs, int nsegs,
     grant_ref_t * gref_head, int otherend_id, int readonly,
-    grant_ref_t * sg_ref, blkif_request_segment_t * sg)
+    grant_ref_t * sg_ref, struct blkif_request_segment *sg)
 {
 	struct blkif_request_segment *last_block_sg = sg + nsegs;
 	vm_paddr_t buffer_ma;
@@ -171,6 +170,11 @@ xbd_mksegarray(bus_dma_segment_t *segs, int nsegs,
 	int ref;
 
 	while (sg < last_block_sg) {
+		KASSERT(segs->ds_addr % (1 << XBD_SECTOR_SHFT) == 0,
+		    ("XEN disk driver I/O must be sector aligned"));
+		KASSERT(segs->ds_len % (1 << XBD_SECTOR_SHFT) == 0,
+		    ("XEN disk driver I/Os must be a multiple of "
+		    "the sector length"));
 		buffer_ma = segs->ds_addr;
 		fsect = (buffer_ma & PAGE_MASK) >> XBD_SECTOR_SHFT;
 		lsect = fsect + (segs->ds_len  >> XBD_SECTOR_SHFT) - 1;
@@ -294,8 +298,12 @@ xbd_queue_request(struct xbd_softc *sc, struct xbd_command *cm)
 {
 	int error;
 
-	error = bus_dmamap_load(sc->xbd_io_dmat, cm->cm_map, cm->cm_data,
-	    cm->cm_datalen, xbd_queue_cb, cm, 0);
+	if (cm->cm_bp != NULL)
+		error = bus_dmamap_load_bio(sc->xbd_io_dmat, cm->cm_map,
+		    cm->cm_bp, xbd_queue_cb, cm, 0);
+	else
+		error = bus_dmamap_load(sc->xbd_io_dmat, cm->cm_map,
+		    cm->cm_data, cm->cm_datalen, xbd_queue_cb, cm, 0);
 	if (error == EINPROGRESS) {
 		/*
 		 * Maintain queuing order by freezing the queue.  The next
@@ -355,8 +363,6 @@ xbd_bio_command(struct xbd_softc *sc)
 	}
 
 	cm->cm_bp = bp;
-	cm->cm_data = bp->bio_data;
-	cm->cm_datalen = bp->bio_bcount;
 	cm->cm_sector_number = (blkif_sector_t)bp->bio_pblkno;
 
 	switch (bp->bio_cmd) {
@@ -565,7 +571,7 @@ xbd_quiesce(struct xbd_softc *sc)
 	while (xbd_queue_length(sc, XBD_Q_BUSY) != 0) {
 		RING_FINAL_CHECK_FOR_RESPONSES(&sc->xbd_ring, mtd);
 		if (mtd) {
-			/* Recieved request completions, update queue. */
+			/* Received request completions, update queue. */
 			xbd_int(sc);
 		}
 		if (xbd_queue_length(sc, XBD_Q_BUSY) != 0) {
@@ -668,7 +674,7 @@ xbd_open(struct disk *dp)
 	struct xbd_softc *sc = dp->d_drv1;
 
 	if (sc == NULL) {
-		printf("xb%d: not found", sc->xbd_unit);
+		printf("xbd%d: not found", dp->d_unit);
 		return (ENXIO);
 	}
 
@@ -762,7 +768,7 @@ xbd_alloc_ring(struct xbd_softc *sc)
 	     i++, sring_page_addr += PAGE_SIZE) {
 
 		error = xenbus_grant_ring(sc->xbd_dev,
-		    (vtomach(sring_page_addr) >> PAGE_SHIFT),
+		    (vtophys(sring_page_addr) >> PAGE_SHIFT),
 		    &sc->xbd_ring_ref[i]);
 		if (error) {
 			xenbus_dev_fatal(sc->xbd_dev, error,
@@ -846,6 +852,20 @@ xbd_feature_string(struct xbd_softc *sc, char *features, size_t len)
 		if (feature_cnt != 0)
 			sbuf_printf(&sb, ", ");
 		sbuf_printf(&sb, "write_barrier");
+		feature_cnt++;
+	}
+
+	if ((sc->xbd_flags & XBDF_DISCARD) != 0) {
+		if (feature_cnt != 0)
+			sbuf_printf(&sb, ", ");
+		sbuf_printf(&sb, "discard");
+		feature_cnt++;
+	}
+
+	if ((sc->xbd_flags & XBDF_PERSISTENT) != 0) {
+		if (feature_cnt != 0)
+			sbuf_printf(&sb, ", ");
+		sbuf_printf(&sb, "persistent_grants");
 		feature_cnt++;
 	}
 
@@ -979,7 +999,8 @@ xbd_vdevice_to_unit(uint32_t vdevice, int *unit, const char **name)
 
 int
 xbd_instance_create(struct xbd_softc *sc, blkif_sector_t sectors,
-    int vdevice, uint16_t vdisk_info, unsigned long sector_size)
+    int vdevice, uint16_t vdisk_info, unsigned long sector_size,
+    unsigned long phys_sector_size)
 {
 	char features[80];
 	int unit, error = 0;
@@ -1007,10 +1028,12 @@ xbd_instance_create(struct xbd_softc *sc, blkif_sector_t sectors,
 	sc->xbd_disk->d_name = name;
 	sc->xbd_disk->d_drv1 = sc;
 	sc->xbd_disk->d_sectorsize = sector_size;
+	sc->xbd_disk->d_stripesize = phys_sector_size;
+	sc->xbd_disk->d_stripeoffset = 0;
 
 	sc->xbd_disk->d_mediasize = sectors * sector_size;
 	sc->xbd_disk->d_maxsize = sc->xbd_max_request_size;
-	sc->xbd_disk->d_flags = 0;
+	sc->xbd_disk->d_flags = DISKFLAG_UNMAPPED_BIO;
 	if ((sc->xbd_flags & (XBDF_FLUSH|XBDF_BARRIER)) != 0) {
 		sc->xbd_disk->d_flags |= DISKFLAG_CANFLUSHCACHE;
 		device_printf(sc->xbd_dev,
@@ -1095,7 +1118,7 @@ xbd_initialize(struct xbd_softc *sc)
 	 * Protocol negotiation.
 	 *
 	 * \note xs_gather() returns on the first encountered error, so
-	 *       we must use independant calls in order to guarantee
+	 *       we must use independent calls in order to guarantee
 	 *       we don't miss information in a sparsly populated back-end
 	 *       tree.
 	 *
@@ -1200,7 +1223,7 @@ static void
 xbd_connect(struct xbd_softc *sc)
 {
 	device_t dev = sc->xbd_dev;
-	unsigned long sectors, sector_size;
+	unsigned long sectors, sector_size, phys_sector_size;
 	unsigned int binfo;
 	int err, feature_barrier, feature_flush;
 	int i, j;
@@ -1222,6 +1245,11 @@ xbd_connect(struct xbd_softc *sc)
 		    xenbus_get_otherend_path(dev));
 		return;
 	}
+	err = xs_gather(XST_NIL, xenbus_get_otherend_path(dev),
+	     "physical-sector-size", "%lu", &phys_sector_size,
+	     NULL);
+	if (err || phys_sector_size <= sector_size)
+		phys_sector_size = 0;
 	err = xs_gather(XST_NIL, xenbus_get_otherend_path(dev),
 	     "feature-barrier", "%lu", &feature_barrier,
 	     NULL);
@@ -1305,7 +1333,7 @@ xbd_connect(struct xbd_softc *sc)
 		for (j = 0; j < sc->xbd_max_request_indirectpages; j++) {
 			if (gnttab_grant_foreign_access(
 			    xenbus_get_otherend_id(sc->xbd_dev),
-			    (vtomach(indirectpages) >> PAGE_SHIFT) + j,
+			    (vtophys(indirectpages) >> PAGE_SHIFT) + j,
 			    1 /* grant read-only access */,
 			    &cm->cm_indirectionrefs[j]))
 				break;
@@ -1324,7 +1352,7 @@ xbd_connect(struct xbd_softc *sc)
 		bus_print_child_footer(device_get_parent(dev), dev);
 
 		xbd_instance_create(sc, sectors, sc->xbd_vdevice, binfo,
-		    sector_size);
+		    sector_size, phys_sector_size);
 	}
 
 	(void)xenbus_set_state(dev, XenbusStateConnected); 
@@ -1367,10 +1395,8 @@ xbd_probe(device_t dev)
 	if (strcmp(xenbus_get_type(dev), "vbd") != 0)
 		return (ENXIO);
 
-#ifdef XENHVM
-	if (xen_disable_pv_disks != 0)
+	if (xen_hvm_domain() && xen_disable_pv_disks != 0)
 		return (ENXIO);
-#endif
 
 	if (xen_hvm_domain()) {
 		int error;

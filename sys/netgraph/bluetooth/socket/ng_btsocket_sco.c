@@ -906,7 +906,7 @@ ng_btsocket_sco_default_msg_input(struct ng_mesg *msg, hook_p hook)
 				sbdroprecord(&pcb->so->so_snd);
 
 			/* Send more if we have any */
-			if (pcb->so->so_snd.sb_cc > 0)
+			if (sbavail(&pcb->so->so_snd) > 0)
 				if (ng_btsocket_sco_send2(pcb) == 0)
 					ng_btsocket_sco_timeout(pcb);
 
@@ -1261,10 +1261,10 @@ ng_btsocket_sco_attach(struct socket *so, int proto, struct thread *td)
 	 * This is totally FUBAR. We could get here in two cases:
 	 *
 	 * 1) When user calls socket()
-	 * 2) When we need to accept new incomming connection and call
+	 * 2) When we need to accept new incoming connection and call
 	 *    sonewconn()
 	 *
-	 * In the first case we must aquire ng_btsocket_sco_sockets_mtx.
+	 * In the first case we must acquire ng_btsocket_sco_sockets_mtx.
 	 * In the second case we hold ng_btsocket_sco_sockets_mtx already.
 	 * So we now need to distinguish between these cases. From reading
 	 * /sys/kern/uipc_socket2.c we can find out that sonewconn() calls
@@ -1748,7 +1748,7 @@ ng_btsocket_sco_send2(ng_btsocket_sco_pcb_p pcb)
 	mtx_assert(&pcb->pcb_mtx, MA_OWNED);
 
 	while (pcb->rt->pending < pcb->rt->num_pkts &&
-	       pcb->so->so_snd.sb_cc > 0) {
+	       sbavail(&pcb->so->so_snd) > 0) {
 		/* Get a copy of the first packet on send queue */
 		m = m_dup(pcb->so->so_snd.sb_mb, M_NOWAIT);
 		if (m == NULL) {

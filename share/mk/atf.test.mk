@@ -30,8 +30,11 @@ BINDIR.${_T}= ${TESTSDIR}
 MAN.${_T}?= # empty
 SRCS.${_T}?= ${_T}.c
 DPADD.${_T}+= ${LIBATF_C}
-LDADD.${_T}+= -latf-c
-USEPRIVATELIB+= atf-c
+.if empty(LDFLAGS:M-static) && empty(LDFLAGS.${_T}:M-static)
+LDADD.${_T}+= ${LDADD_atf_c}
+.else
+LDADD.${_T}+= ${LIBATF_C}
+.endif
 TEST_INTERFACE.${_T}= atf
 .endfor
 .endif
@@ -44,8 +47,11 @@ BINDIR.${_T}= ${TESTSDIR}
 MAN.${_T}?= # empty
 SRCS.${_T}?= ${_T}${CXX_SUFFIX:U.cc}
 DPADD.${_T}+= ${LIBATF_CXX} ${LIBATF_C}
-LDADD.${_T}+= -latf-c++ -latf-c
-USEPRIVATELIB+= atf-c++
+.if empty(LDFLAGS:M-static) && empty(LDFLAGS.${_T}:M-static)
+LDADD.${_T}+= ${LDADD_atf_cxx} ${LDADD_atf_c}
+.else
+LDADD.${_T}+= ${LIBATF_CXX} ${LIBATF_C}
+.endif
 TEST_INTERFACE.${_T}= atf
 .endfor
 .endif

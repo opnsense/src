@@ -1,12 +1,14 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 .PATH: ${.CURDIR}/../../usr.bin/lastcomm
 
 PROG=	sa
 MAN=	sa.8
 SRCS=	main.c db.c pdb.c usrdb.c readrec.c
+
+PACKAGE=acct
 
 .if ${MK_TESTS} != "no"
 SUBDIR+= tests

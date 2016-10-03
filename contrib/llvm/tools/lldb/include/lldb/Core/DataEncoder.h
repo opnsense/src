@@ -173,7 +173,7 @@ public:
     }
 
     //------------------------------------------------------------------
-    /// Get a the data start pointer.
+    /// Get the data start pointer.
     ///
     /// @return
     ///     Returns a pointer to the first byte contained in this
@@ -234,7 +234,7 @@ public:
     ///     The size in byte of the integer to encode.
     ///
     /// @param[in] value
-    ///     The integer value to write. The least significate bytes of
+    ///     The integer value to write. The least significant bytes of
     ///     the integer value will be written if the size is less than
     ///     8 bytes.
     ///
@@ -252,8 +252,8 @@ public:
     ///     The offset in bytes into the contained data at which to
     ///     start encoding.
     ///
-    /// @param[int] src
-    ///     The buffer that contains the the bytes to encode.
+    /// @param[in] src
+    ///     The buffer that contains the bytes to encode.
     ///
     /// @param[in] src_len
     ///     The number of bytes to encode.
@@ -357,7 +357,7 @@ public:
     ///     The number of bytes that this object now contains.
     //------------------------------------------------------------------
     uint32_t
-    SetData (const void *bytes, uint32_t length, lldb::ByteOrder byte_order);
+    SetData (void *bytes, uint32_t length, lldb::ByteOrder byte_order);
 
     //------------------------------------------------------------------
     /// Adopt a subset of shared data in \a data_sp.
@@ -446,7 +446,7 @@ protected:
     uint8_t *m_end;     ///< A pointer to the byte that is past the end of the data.
     lldb::ByteOrder m_byte_order;   ///< The byte order of the data we are extracting from.
     uint8_t m_addr_size;            ///< The address size to use when extracting pointers or addresses
-    mutable lldb::DataBufferSP m_data_sp; ///< The shared pointer to data that can be shared among multilple instances
+    mutable lldb::DataBufferSP m_data_sp; ///< The shared pointer to data that can be shared among multiple instances
     
 private:
     DISALLOW_COPY_AND_ASSIGN (DataEncoder);

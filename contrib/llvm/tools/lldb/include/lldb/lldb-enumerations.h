@@ -10,12 +10,34 @@
 #ifndef LLDB_lldb_enumerations_h_
 #define LLDB_lldb_enumerations_h_
 
+#ifndef SWIG
+// With MSVC, the default type of an enum is always signed, even if one of the
+// enumerator values is too large to fit into a signed integer but would
+// otherwise fit into an unsigned integer.  As a result of this, all of LLDB's
+// flag-style enumerations that specify something like eValueFoo = 1u << 31
+// result in negative values.  This usually just results in a benign warning,
+// but in a few places we actually do comparisons on the enum values, which
+// would cause a real bug.  Furthermore, there's no way to silence only this
+// warning, as it's part of -Wmicrosoft which also catches a whole slew of
+// other useful issues.
+//
+// To make matters worse, early versions of SWIG don't recognize the syntax
+// of specifying the underlying type of an enum (and Python doesn't care anyway)
+// so we need a way to specify the underlying type when the enum is being used
+// from C++ code, but just use a regular enum when swig is pre-processing.
+#define FLAGS_ENUM(Name) enum Name : unsigned
+#define FLAGS_ANONYMOUS_ENUM() enum : unsigned
+#else
+#define FLAGS_ENUM(Name) enum Name
+#define FLAGS_ANONYMOUS_ENUM() enum
+#endif
+
 namespace lldb {
 
     //----------------------------------------------------------------------
     // Process and Thread States
     //----------------------------------------------------------------------
-    typedef enum StateType
+    enum StateType
     {
         eStateInvalid = 0,
         eStateUnloaded,     ///< Process is object is valid, but not currently loaded
@@ -31,62 +53,67 @@ namespace lldb {
         eStateSuspended     ///< Process or thread is in a suspended state as far
                             ///< as the debugger is concerned while other processes
                             ///< or threads get the chance to run.
-    } StateType;
+    };
 
     //----------------------------------------------------------------------
     // Launch Flags
     //----------------------------------------------------------------------
-    typedef enum LaunchFlags
+    FLAGS_ENUM(LaunchFlags)
     {
         eLaunchFlagNone         = 0u,
-        eLaunchFlagExec         = (1u << 0),  ///< Exec when launching and turn the calling process into a new process
-        eLaunchFlagDebug        = (1u << 1),  ///< Stop as soon as the process launches to allow the process to be debugged
-        eLaunchFlagStopAtEntry  = (1u << 2),  ///< Stop at the program entry point instead of auto-continuing when launching or attaching at entry point
-        eLaunchFlagDisableASLR  = (1u << 3),  ///< Disable Address Space Layout Randomization
-        eLaunchFlagDisableSTDIO = (1u << 4),  ///< Disable stdio for inferior process (e.g. for a GUI app)
-        eLaunchFlagLaunchInTTY  = (1u << 5),  ///< Launch the process in a new TTY if supported by the host 
-        eLaunchFlagLaunchInShell= (1u << 6),   ///< Launch the process inside a shell to get shell expansion
+        eLaunchFlagExec         = (1u << 0),       ///< Exec when launching and turn the calling process into a new process
+        eLaunchFlagDebug        = (1u << 1),       ///< Stop as soon as the process launches to allow the process to be debugged
+        eLaunchFlagStopAtEntry  = (1u << 2),       ///< Stop at the program entry point instead of auto-continuing when launching or attaching at entry point
+        eLaunchFlagDisableASLR  = (1u << 3),       ///< Disable Address Space Layout Randomization
+        eLaunchFlagDisableSTDIO = (1u << 4),       ///< Disable stdio for inferior process (e.g. for a GUI app)
+        eLaunchFlagLaunchInTTY  = (1u << 5),       ///< Launch the process in a new TTY if supported by the host
+        eLaunchFlagLaunchInShell= (1u << 6),       ///< Launch the process inside a shell to get shell expansion
         eLaunchFlagLaunchInSeparateProcessGroup = (1u << 7), ///< Launch the process in a separate process group
-        eLaunchFlagsDontMonitorProcess = (1u << 8)  ///< If you are going to hand the process off (e.g. to debugserver)
-                                                    ///< set this flag so lldb & the handee don't race to reap it.
-    } LaunchFlags;
+        eLaunchFlagDontSetExitStatus = (1u << 8), ///< If you are going to hand the process off (e.g. to debugserver)
+                                                   ///< set this flag so lldb & the handee don't race to set its exit status.
+        eLaunchFlagDetachOnError = (1u << 9),     ///< If set, then the client stub should detach rather than killing the debugee
+                                                   ///< if it loses connection with lldb.
+        eLaunchFlagShellExpandArguments  = (1u << 10),       ///< Perform shell-style argument expansion
+        eLaunchFlagCloseTTYOnExit = (1u << 11),    ///< Close the open TTY on exit
+    };
         
     //----------------------------------------------------------------------
     // Thread Run Modes
     //----------------------------------------------------------------------
-    typedef enum RunMode {
+    enum RunMode
+    {
         eOnlyThisThread,
         eAllThreads,
         eOnlyDuringStepping
-    } RunMode;
+    };
 
     //----------------------------------------------------------------------
     // Byte ordering definitions
     //----------------------------------------------------------------------
-    typedef enum ByteOrder
+    enum ByteOrder
     {
         eByteOrderInvalid   = 0,
         eByteOrderBig       = 1,
         eByteOrderPDP       = 2,
         eByteOrderLittle    = 4
-    } ByteOrder;
+    };
 
     //----------------------------------------------------------------------
     // Register encoding definitions
     //----------------------------------------------------------------------
-    typedef enum Encoding
+    enum Encoding
     {
         eEncodingInvalid = 0,
         eEncodingUint,               // unsigned integer
         eEncodingSint,               // signed integer
         eEncodingIEEE754,            // float
         eEncodingVector              // vector registers
-    } Encoding;
+    };
 
     //----------------------------------------------------------------------
     // Display format definitions
     //----------------------------------------------------------------------
-    typedef enum Format
+    enum Format
     {
         eFormatDefault = 0,
         eFormatInvalid = 0,
@@ -119,6 +146,7 @@ namespace lldb {
         eFormatVectorOfUInt32,
         eFormatVectorOfSInt64,
         eFormatVectorOfUInt64,
+        eFormatVectorOfFloat16,
         eFormatVectorOfFloat32,
         eFormatVectorOfFloat64,
         eFormatVectorOfUInt128,
@@ -129,47 +157,50 @@ namespace lldb {
         eFormatInstruction,         // Disassemble an opcode
         eFormatVoid,                // Do not print this
         kNumFormats
-    } Format;
+    };
 
     //----------------------------------------------------------------------
     // Description levels for "void GetDescription(Stream *, DescriptionLevel)" calls
     //----------------------------------------------------------------------
-    typedef enum DescriptionLevel
+    enum DescriptionLevel
     {
         eDescriptionLevelBrief = 0,
         eDescriptionLevelFull,
         eDescriptionLevelVerbose,
         eDescriptionLevelInitial,
         kNumDescriptionLevels
-    } DescriptionLevel;
+    };
 
     //----------------------------------------------------------------------
     // Script interpreter types
     //----------------------------------------------------------------------
-    typedef enum ScriptLanguage
+    enum ScriptLanguage
     {
         eScriptLanguageNone,
         eScriptLanguagePython,
         eScriptLanguageDefault = eScriptLanguagePython
-    } ScriptLanguage;
+    };
 
     //----------------------------------------------------------------------
     // Register numbering types
+    // See RegisterContext::ConvertRegisterKindToRegisterNumber to convert
+    // any of these to the lldb internal register numbering scheme 
+    // (eRegisterKindLLDB).
     //----------------------------------------------------------------------
-    typedef enum RegisterKind
+    enum RegisterKind
     {
-        eRegisterKindGCC = 0,    // the register numbers seen in eh_frame
-        eRegisterKindDWARF,      // the register numbers seen DWARF
-        eRegisterKindGeneric,    // insn ptr reg, stack ptr reg, etc not specific to any particular target
-        eRegisterKindGDB,        // the register numbers gdb uses (matches stabs numbers?)
-        eRegisterKindLLDB,       // lldb's internal register numbers
+        eRegisterKindEHFrame = 0,   // the register numbers seen in eh_frame
+        eRegisterKindDWARF,         // the register numbers seen DWARF
+        eRegisterKindGeneric,       // insn ptr reg, stack ptr reg, etc not specific to any particular target
+        eRegisterKindProcessPlugin, // num used by the process plugin - e.g. by the remote gdb-protocol stub program
+        eRegisterKindLLDB,          // lldb's internal register numbers
         kNumRegisterKinds
-    } RegisterKind;
+    };
 
     //----------------------------------------------------------------------
     // Thread stop reasons
     //----------------------------------------------------------------------
-    typedef enum StopReason
+    enum StopReason
     {
         eStopReasonInvalid = 0,
         eStopReasonNone,
@@ -180,13 +211,14 @@ namespace lldb {
         eStopReasonException,
         eStopReasonExec,        // Program was re-exec'ed
         eStopReasonPlanComplete,
-        eStopReasonThreadExiting
-    } StopReason;
+        eStopReasonThreadExiting,
+        eStopReasonInstrumentation
+    };
 
     //----------------------------------------------------------------------
     // Command Return Status Types
     //----------------------------------------------------------------------
-    typedef enum ReturnStatus
+    enum ReturnStatus
     {
         eReturnStatusInvalid,
         eReturnStatusSuccessFinishNoResult,
@@ -196,32 +228,51 @@ namespace lldb {
         eReturnStatusStarted,
         eReturnStatusFailed,
         eReturnStatusQuit
-    } ReturnStatus;
+    };
 
+
+    //----------------------------------------------------------------------
+    // The results of expression evaluation:
+    //----------------------------------------------------------------------
+    enum ExpressionResults
+    {
+        eExpressionCompleted = 0,
+        eExpressionSetupError,
+        eExpressionParseError,
+        eExpressionDiscarded,
+        eExpressionInterrupted,
+        eExpressionHitBreakpoint,
+        eExpressionTimedOut,
+        eExpressionResultUnavailable,
+        eExpressionStoppedForDebug
+    };
 
     //----------------------------------------------------------------------
     // Connection Status Types
     //----------------------------------------------------------------------
-    typedef enum ConnectionStatus
+    enum ConnectionStatus
     {
         eConnectionStatusSuccess,         // Success
         eConnectionStatusEndOfFile,       // End-of-file encountered
         eConnectionStatusError,           // Check GetError() for details
         eConnectionStatusTimedOut,        // Request timed out
         eConnectionStatusNoConnection,    // No connection
-        eConnectionStatusLostConnection   // Lost connection while connected to a valid connection
-    } ConnectionStatus;
+        eConnectionStatusLostConnection,  // Lost connection while connected to a valid connection
+        eConnectionStatusInterrupted      // Interrupted read
+    };
 
-    typedef enum ErrorType
+    enum ErrorType
     {
         eErrorTypeInvalid,
         eErrorTypeGeneric,      ///< Generic errors that can be any value.
         eErrorTypeMachKernel,   ///< Mach kernel error codes.
-        eErrorTypePOSIX         ///< POSIX error codes.
-    } ErrorType;
+        eErrorTypePOSIX,        ///< POSIX error codes.
+        eErrorTypeExpression,   ///< These are from the ExpressionResults enum.
+        eErrorTypeWin32         ///< Standard Win32 error codes.
+    };
 
 
-    typedef enum ValueType
+    enum ValueType
     {
         eValueTypeInvalid           = 0,
         eValueTypeVariableGlobal    = 1,    // globals variable
@@ -231,20 +282,20 @@ namespace lldb {
         eValueTypeRegister          = 5,    // stack frame register value
         eValueTypeRegisterSet       = 6,    // A collection of stack frame register values
         eValueTypeConstResult       = 7     // constant result variables
-    } ValueType;
+    };
 
     //----------------------------------------------------------------------
     // Token size/granularities for Input Readers
     //----------------------------------------------------------------------
 
-    typedef enum InputReaderGranularity
+    enum InputReaderGranularity
     {
         eInputReaderGranularityInvalid = 0,
         eInputReaderGranularityByte,
         eInputReaderGranularityWord,
         eInputReaderGranularityLine,
         eInputReaderGranularityAll
-    } InputReaderGranularity;
+    };
 
     //------------------------------------------------------------------
     /// These mask bits allow a common interface for queries that can
@@ -256,7 +307,7 @@ namespace lldb {
     /// in this class, and requests that that item be resolved, or
     /// indicates that the member did get resolved.
     //------------------------------------------------------------------
-    typedef enum SymbolContextItem
+    FLAGS_ENUM(SymbolContextItem)
     {
         eSymbolContextTarget     = (1u << 0), ///< Set when \a target is requested from a query, or was located in query results
         eSymbolContextModule     = (1u << 1), ///< Set when \a module is requested from a query, or was located in query results
@@ -265,17 +316,21 @@ namespace lldb {
         eSymbolContextBlock      = (1u << 4), ///< Set when the deepest \a block is requested from a query, or was located in query results
         eSymbolContextLineEntry  = (1u << 5), ///< Set when \a line_entry is requested from a query, or was located in query results
         eSymbolContextSymbol     = (1u << 6), ///< Set when \a symbol is requested from a query, or was located in query results
-        eSymbolContextEverything = ((eSymbolContextSymbol << 1) - 1u)  ///< Indicates to try and lookup everything up during a query.
-    } SymbolContextItem;
+        eSymbolContextEverything = ((eSymbolContextSymbol << 1) - 1u),  ///< Indicates to try and lookup everything up during a routine symbol context query.
+        eSymbolContextVariable   = (1u << 7)  ///< Set when \a global or static variable is requested from a query, or was located in query results.
+                                              ///< eSymbolContextVariable is potentially expensive to lookup so it isn't included in
+                                              ///< eSymbolContextEverything which stops it from being used during frame PC lookups and
+                                              ///< many other potential address to symbol context lookups.
+    };
 
-    typedef enum Permissions
+    FLAGS_ENUM(Permissions)
     {
         ePermissionsWritable    = (1u << 0),
         ePermissionsReadable    = (1u << 1),
         ePermissionsExecutable  = (1u << 2)
-    } Permissions;
+    };
 
-    typedef enum InputReaderAction
+    enum InputReaderAction
     {
         eInputReaderActivate,   // reader is newly pushed onto the reader stack 
         eInputReaderAsynchronousOutputWritten, // an async output event occurred; the reader may want to do something
@@ -285,9 +340,9 @@ namespace lldb {
         eInputReaderInterrupt,  // reader received an interrupt signal (probably from a control-c)
         eInputReaderEndOfFile,  // reader received an EOF char (probably from a control-d)
         eInputReaderDone        // reader was just popped off the stack and is done
-    } InputReaderAction;
+    };
 
-    typedef enum BreakpointEventType
+    FLAGS_ENUM(BreakpointEventType)
     {
         eBreakpointEventTypeInvalidType         = (1u << 0),
         eBreakpointEventTypeAdded               = (1u << 1),
@@ -301,9 +356,9 @@ namespace lldb {
         eBreakpointEventTypeConditionChanged    = (1u << 9),
         eBreakpointEventTypeIgnoreChanged       = (1u << 10),
         eBreakpointEventTypeThreadChanged       = (1u << 11)
-    } BreakpointEventType;
+    };
 
-    typedef enum WatchpointEventType
+    FLAGS_ENUM(WatchpointEventType)
     {
         eWatchpointEventTypeInvalidType         = (1u << 0),
         eWatchpointEventTypeAdded               = (1u << 1),
@@ -315,7 +370,7 @@ namespace lldb {
         eWatchpointEventTypeIgnoreChanged       = (1u << 10),
         eWatchpointEventTypeThreadChanged       = (1u << 11),
         eWatchpointEventTypeTypeChanged         = (1u << 12)
-    } WatchpointEventType;
+    };
 
 
     //----------------------------------------------------------------------
@@ -326,7 +381,7 @@ namespace lldb {
     /// The enum -> string code is in LanguageRuntime.cpp, don't change this
     /// table without updating that code as well.
     //----------------------------------------------------------------------
-    typedef enum LanguageType
+    enum LanguageType
     {
         eLanguageTypeUnknown         = 0x0000,   ///< Unknown or invalid language value.
         eLanguageTypeC89             = 0x0001,   ///< ISO C:1989.
@@ -349,26 +404,56 @@ namespace lldb {
         eLanguageTypeUPC             = 0x0012,   ///< Unified Parallel C.
         eLanguageTypeD               = 0x0013,   ///< D.
         eLanguageTypePython          = 0x0014,   ///< Python.
+        // NOTE: The below are DWARF5 constants, subject to change upon
+        // completion of the DWARF5 specification
+        eLanguageTypeOpenCL          = 0x0015,   ///< OpenCL.
+        eLanguageTypeGo              = 0x0016,   ///< Go.
+        eLanguageTypeModula3         = 0x0017,   ///< Modula 3.
+        eLanguageTypeHaskell         = 0x0018,   ///< Haskell.
+        eLanguageTypeC_plus_plus_03  = 0x0019,   ///< ISO C++:2003.
+        eLanguageTypeC_plus_plus_11  = 0x001a,   ///< ISO C++:2011.
+        eLanguageTypeOCaml           = 0x001b,   ///< OCaml.
+        eLanguageTypeRust            = 0x001c,   ///< Rust.
+        eLanguageTypeC11             = 0x001d,   ///< ISO C:2011.
+        eLanguageTypeSwift           = 0x001e,   ///< Swift.
+        eLanguageTypeJulia           = 0x001f,   ///< Julia.
+        eLanguageTypeDylan           = 0x0020,   ///< Dylan.
+        eLanguageTypeC_plus_plus_14  = 0x0021,   ///< ISO C++:2014.
+        eLanguageTypeFortran03       = 0x0022,   ///< ISO Fortran 2003.
+        eLanguageTypeFortran08       = 0x0023,   ///< ISO Fortran 2008.
+        // Vendor Extensions
+        // Note: Language::GetNameForLanguageType
+        // assumes these can be used as indexes into array language_names, and
+        // Language::SetLanguageFromCString and Language::AsCString
+        // assume these can be used as indexes into array g_languages.
+        eLanguageTypeMipsAssembler   = 0x0024,   ///< Mips_Assembler.
+        eLanguageTypeExtRenderScript = 0x0025,   ///< RenderScript.
         eNumLanguageTypes
-    } LanguageType;
+    };
+    
+    enum InstrumentationRuntimeType
+    {
+        eInstrumentationRuntimeTypeAddressSanitizer = 0x0000,
+        eNumInstrumentationRuntimeTypes
+    };
 
-    typedef enum DynamicValueType
+    enum DynamicValueType
     {
         eNoDynamicValues = 0,
         eDynamicCanRunTarget    = 1,
         eDynamicDontRunTarget   = 2
-    } DynamicValueType;
+    };
     
-    typedef enum AccessType
+    enum AccessType
     {
         eAccessNone,
         eAccessPublic,
         eAccessPrivate,
         eAccessProtected,
         eAccessPackage
-    } AccessType;
+    };
 
-    typedef enum CommandArgumentType
+   enum CommandArgumentType
     {
         eArgTypeAddress = 0,
         eArgTypeAddressOrExpression,
@@ -378,6 +463,7 @@ namespace lldb {
         eArgTypeBoolean,
         eArgTypeBreakpointID,
         eArgTypeBreakpointIDRange,
+        eArgTypeBreakpointName,
         eArgTypeByteSize,
         eArgTypeClassName,
         eArgTypeCommandName,
@@ -396,6 +482,7 @@ namespace lldb {
         eArgTypeFunctionName,
         eArgTypeFunctionOrSymbol,
         eArgTypeGDBFormat,
+        eArgTypeHelpText,
         eArgTypeIndex,
         eArgTypeLanguage,
         eArgTypeLineNum,
@@ -440,6 +527,7 @@ namespace lldb {
         eArgTypeThreadID,
         eArgTypeThreadIndex,
         eArgTypeThreadName,
+        eArgTypeTypeName,
         eArgTypeUnsignedInteger,
         eArgTypeUnixSignal,
         eArgTypeVarName,
@@ -451,12 +539,12 @@ namespace lldb {
         eArgTypeWatchpointIDRange,
         eArgTypeWatchType,
         eArgTypeLastArg  // Always keep this entry as the last entry in this enumeration!!
-    } CommandArgumentType;
+    };
 
     //----------------------------------------------------------------------
     // Symbol types
     //----------------------------------------------------------------------
-    typedef enum SymbolType
+    enum SymbolType
     {
         eSymbolTypeAny = 0,
         eSymbolTypeInvalid = 0,
@@ -488,9 +576,9 @@ namespace lldb {
         eSymbolTypeObjCMetaClass,
         eSymbolTypeObjCIVar,
         eSymbolTypeReExported
-    } SymbolType;
+    };
     
-    typedef enum SectionType
+    enum SectionType
     {
         eSectionTypeInvalid,
         eSectionTypeCode,
@@ -508,16 +596,19 @@ namespace lldb {
         eSectionTypeDataObjCMessageRefs,    // Pointer to function pointer + selector
         eSectionTypeDataObjCCFStrings,      // Objective C const CFString/NSString objects
         eSectionTypeDWARFDebugAbbrev,
+        eSectionTypeDWARFDebugAddr,
         eSectionTypeDWARFDebugAranges,
         eSectionTypeDWARFDebugFrame,
         eSectionTypeDWARFDebugInfo,
         eSectionTypeDWARFDebugLine,
         eSectionTypeDWARFDebugLoc,
         eSectionTypeDWARFDebugMacInfo,
+        eSectionTypeDWARFDebugMacro,
         eSectionTypeDWARFDebugPubNames,
         eSectionTypeDWARFDebugPubTypes,
         eSectionTypeDWARFDebugRanges,
         eSectionTypeDWARFDebugStr,
+        eSectionTypeDWARFDebugStrOffsets,
         eSectionTypeDWARFAppleNames,
         eSectionTypeDWARFAppleTypes,
         eSectionTypeDWARFAppleNamespaces,
@@ -527,18 +618,21 @@ namespace lldb {
         eSectionTypeELFRelocationEntries, // Elf SHT_REL or SHT_REL section
         eSectionTypeELFDynamicLinkInfo,   // Elf SHT_DYNAMIC section
         eSectionTypeEHFrame,
+        eSectionTypeARMexidx,
+        eSectionTypeARMextab,
+        eSectionTypeCompactUnwind,        // compact unwind section in Mach-O, __TEXT,__unwind_info
+        eSectionTypeGoSymtab,
         eSectionTypeOther
-        
-    } SectionType;
+    };
 
-    typedef enum EmulateInstructionOptions
+    FLAGS_ENUM(EmulateInstructionOptions)
     {
         eEmulateInstructionOptionNone               = (0u),
         eEmulateInstructionOptionAutoAdvancePC      = (1u << 0),
         eEmulateInstructionOptionIgnoreConditions   = (1u << 1)
-    } EmulateInstructionOptions;
+    };
 
-    typedef enum FunctionNameType 
+    FLAGS_ENUM(FunctionNameType)
     {
         eFunctionNameTypeNone       = 0u,
         eFunctionNameTypeAuto       = (1u << 1),    // Automatically figure out which FunctionNameType
@@ -553,13 +647,13 @@ namespace lldb {
         eFunctionNameTypeMethod     = (1u << 4),    // Find function by method name (C++) with no namespace or arguments
         eFunctionNameTypeSelector   = (1u << 5),    // Find function by selector name (ObjC) names
         eFunctionNameTypeAny        = eFunctionNameTypeAuto // DEPRECATED: use eFunctionNameTypeAuto
-    } FunctionNameType;
+    };
     
     
     //----------------------------------------------------------------------
     // Basic types enumeration for the public API SBType::GetBasicType()
     //----------------------------------------------------------------------
-    typedef enum BasicType
+    enum BasicType
     {
 		eBasicTypeInvalid = 0,
         eBasicTypeVoid = 1,
@@ -594,9 +688,9 @@ namespace lldb {
         eBasicTypeObjCSel,
         eBasicTypeNullPtr,
         eBasicTypeOther
-    } BasicType;
+    };
 
-    typedef enum TypeClass
+    FLAGS_ENUM(TypeClass)
     {
         eTypeClassInvalid           = (0u),
         eTypeClassArray             = (1u << 0),
@@ -621,9 +715,9 @@ namespace lldb {
         eTypeClassOther             = (1u << 31),
         // Define a mask that can be used for any type when finding types
         eTypeClassAny               = (0xffffffffu)
-    } TypeClass;
+    };
 
-    typedef enum TemplateArgumentKind
+    enum TemplateArgumentKind
     {
         eTemplateArgumentKindNull = 0,
         eTemplateArgumentKindType,
@@ -634,36 +728,46 @@ namespace lldb {
         eTemplateArgumentKindExpression,
         eTemplateArgumentKindPack
 
-    } TemplateArgumentKind;
+    };
 
     //----------------------------------------------------------------------
     // Options that can be set for a formatter to alter its behavior
     // Not all of these are applicable to all formatter types
     //----------------------------------------------------------------------
-    typedef enum TypeOptions
+    FLAGS_ENUM(TypeOptions)
     {
-        eTypeOptionNone            = (0u),
-        eTypeOptionCascade         = (1u << 0),
-        eTypeOptionSkipPointers    = (1u << 1),
-        eTypeOptionSkipReferences  = (1u << 2),
-        eTypeOptionHideChildren    = (1u << 3),
-        eTypeOptionHideValue       = (1u << 4),
-        eTypeOptionShowOneLiner    = (1u << 5),
-        eTypeOptionHideNames       = (1u << 6)
-    } TypeOptions;
+        eTypeOptionNone                = (0u),
+        eTypeOptionCascade             = (1u << 0),
+        eTypeOptionSkipPointers        = (1u << 1),
+        eTypeOptionSkipReferences      = (1u << 2),
+        eTypeOptionHideChildren        = (1u << 3),
+        eTypeOptionHideValue           = (1u << 4),
+        eTypeOptionShowOneLiner        = (1u << 5),
+        eTypeOptionHideNames           = (1u << 6),
+        eTypeOptionNonCacheable        = (1u << 7),
+        eTypeOptionHideEmptyAggregates = (1u << 8)
+    };
 
    //----------------------------------------------------------------------
-   // This is the return value for frame comparisons.  When frame A pushes
-   // frame B onto the stack, frame A is OLDER than frame B.
+   // This is the return value for frame comparisons.  If you are comparing frame A to frame B
+   // the following cases arise:
+   // 1) When frame A pushes frame B (or a frame that ends up pushing B) A is Older than B.
+   // 2) When frame A pushed frame B (or if frame A is on the stack but B is not) A is Younger than B
+   // 3) When frame A and frame B have the same StackID, they are Equal.
+   // 4) When frame A and frame B have the same immediate parent frame, but are not equal, the comparision yields
+   //    SameParent.
+   // 5) If the two frames are on different threads or processes the comparision is Invalid
+   // 6) If for some reason we can't figure out what went on, we return Unknown.
    //----------------------------------------------------------------------
-   typedef enum FrameComparison
+   enum FrameComparison
    {
        eFrameCompareInvalid,
        eFrameCompareUnknown,
        eFrameCompareEqual,
+       eFrameCompareSameParent,
        eFrameCompareYounger,
        eFrameCompareOlder
-   } FrameComparison;
+   };
    
     //----------------------------------------------------------------------
     // Address Class
@@ -675,7 +779,7 @@ namespace lldb {
     // might contain PC relative data and the object file might be able to
     // tell us that an address in code is data.
     //----------------------------------------------------------------------
-    typedef enum AddressClass
+    enum AddressClass
     {
         eAddressClassInvalid,
         eAddressClassUnknown,
@@ -684,7 +788,7 @@ namespace lldb {
         eAddressClassData,
         eAddressClassDebug,
         eAddressClassRuntime
-    } AddressClass;
+    };
 
     //----------------------------------------------------------------------
     // File Permissions
@@ -693,7 +797,7 @@ namespace lldb {
     // used with functions that set 'mode_t' to certain values for
     // permissions.
     //----------------------------------------------------------------------
-    typedef enum FilePermissions
+    FLAGS_ENUM(FilePermissions)
     {
         eFilePermissionsUserRead        = (1u << 8),
         eFilePermissionsUserWrite       = (1u << 7),
@@ -726,7 +830,7 @@ namespace lldb {
         eFilePermissionsEveryoneRWX = (eFilePermissionsEveryoneR   | eFilePermissionsEveryoneW      | eFilePermissionsEveryoneX     ),
         eFilePermissionsFileDefault = eFilePermissionsUserRW,
         eFilePermissionsDirectoryDefault = eFilePermissionsUserRWX,
-    } FilePermissions;
+    };
 
     //----------------------------------------------------------------------
     // Queue work item types
@@ -734,14 +838,225 @@ namespace lldb {
     // The different types of work that can be enqueued on a libdispatch
     // aka Grand Central Dispatch (GCD) queue.
     //----------------------------------------------------------------------
-    typedef enum QueueItemKind
+    enum QueueItemKind
     {
         eQueueItemKindUnknown = 0,
         eQueueItemKindFunction,
         eQueueItemKindBlock
-    } QueueItemKind;
+    };
+
+    //----------------------------------------------------------------------
+    // Queue type
+    // libdispatch aka Grand Central Dispatch (GCD) queues can be either serial
+    // (executing on one thread) or concurrent (executing on multiple threads).
+    //----------------------------------------------------------------------
+    enum QueueKind
+    {
+        eQueueKindUnknown = 0,
+        eQueueKindSerial,
+        eQueueKindConcurrent
+    };
+    
+    //----------------------------------------------------------------------
+    // Expression Evaluation Stages
+    // These are the cancellable stages of expression evaluation, passed to the
+    // expression evaluation callback, so that you can interrupt expression
+    // evaluation at the various points in its lifecycle.
+    //----------------------------------------------------------------------
+    enum ExpressionEvaluationPhase
+    {
+        eExpressionEvaluationParse = 0,
+        eExpressionEvaluationIRGen,
+        eExpressionEvaluationExecution,
+        eExpressionEvaluationComplete
+    };
+    
+
+    //----------------------------------------------------------------------
+    // Watchpoint Kind
+    // Indicates what types of events cause the watchpoint to fire.
+    // Used by Native*Protocol-related classes.
+    //----------------------------------------------------------------------
+    FLAGS_ENUM(WatchpointKind)
+    {
+        eWatchpointKindRead = (1u << 0),
+        eWatchpointKindWrite = (1u << 1)
+    };
+
+    enum GdbSignal
+    {
+        eGdbSignalBadAccess      = 0x91,
+        eGdbSignalBadInstruction = 0x92,
+        eGdbSignalArithmetic     = 0x93,
+        eGdbSignalEmulation      = 0x94,
+        eGdbSignalSoftware       = 0x95,
+        eGdbSignalBreakpoint     = 0x96
+    };
+
+    //----------------------------------------------------------------------
+    // Used with SBHost::GetPath (lldb::PathType) to find files that are
+    // related to LLDB on the current host machine. Most files are relative
+    // to LLDB or are in known locations.
+    //----------------------------------------------------------------------
+    enum PathType
+    {
+        ePathTypeLLDBShlibDir,            // The directory where the lldb.so (unix) or LLDB mach-o file in LLDB.framework (MacOSX) exists
+        ePathTypeSupportExecutableDir,    // Find LLDB support executable directory (debugserver, etc)
+        ePathTypeHeaderDir,               // Find LLDB header file directory
+        ePathTypePythonDir,               // Find Python modules (PYTHONPATH) directory
+        ePathTypeLLDBSystemPlugins,       // System plug-ins directory
+        ePathTypeLLDBUserPlugins,         // User plug-ins directory
+        ePathTypeLLDBTempSystemDir,       // The LLDB temp directory for this system that will be cleaned up on exit
+        ePathTypeGlobalLLDBTempSystemDir, // The LLDB temp directory for this system, NOT cleaned up on a process exit.
+        ePathTypeClangDir                 // Find path to Clang builtin headers
+    };
+    
+    //----------------------------------------------------------------------
+    // Kind of member function
+    // Used by the type system
+    //----------------------------------------------------------------------
+    enum MemberFunctionKind
+    {
+        eMemberFunctionKindUnknown = 0,     // Not sure what the type of this is
+        eMemberFunctionKindConstructor,     // A function used to create instances
+        eMemberFunctionKindDestructor,      // A function used to tear down existing instances
+        eMemberFunctionKindInstanceMethod,  // A function that applies to a specific instance
+        eMemberFunctionKindStaticMethod     // A function that applies to a type rather than any instance
+    };
+
+
+    //----------------------------------------------------------------------
+    // String matching algorithm used by SBTarget
+    //----------------------------------------------------------------------
+    enum MatchType
+    {
+        eMatchTypeNormal,
+        eMatchTypeRegex,
+        eMatchTypeStartsWith
+    };
+    
+    //----------------------------------------------------------------------
+    // Bitmask that describes details about a type
+    //----------------------------------------------------------------------
+    FLAGS_ENUM(TypeFlags)
+    {
+        eTypeHasChildren        = (1u <<  0),
+        eTypeHasValue           = (1u <<  1),
+        eTypeIsArray            = (1u <<  2),
+        eTypeIsBlock            = (1u <<  3),
+        eTypeIsBuiltIn          = (1u <<  4),
+        eTypeIsClass            = (1u <<  5),
+        eTypeIsCPlusPlus        = (1u <<  6),
+        eTypeIsEnumeration      = (1u <<  7),
+        eTypeIsFuncPrototype    = (1u <<  8),
+        eTypeIsMember           = (1u <<  9),
+        eTypeIsObjC             = (1u << 10),
+        eTypeIsPointer          = (1u << 11),
+        eTypeIsReference        = (1u << 12),
+        eTypeIsStructUnion      = (1u << 13),
+        eTypeIsTemplate         = (1u << 14),
+        eTypeIsTypedef          = (1u << 15),
+        eTypeIsVector           = (1u << 16),
+        eTypeIsScalar           = (1u << 17),
+        eTypeIsInteger          = (1u << 18),
+        eTypeIsFloat            = (1u << 19),
+        eTypeIsComplex          = (1u << 20),
+        eTypeIsSigned           = (1u << 21),
+        eTypeInstanceIsPointer  = (1u << 22)
+    };
+    
+    FLAGS_ENUM(CommandFlags)
+    {
+        //----------------------------------------------------------------------
+        // eCommandRequiresTarget
+        //
+        // Ensures a valid target is contained in m_exe_ctx prior to executing
+        // the command. If a target doesn't exist or is invalid, the command
+        // will fail and CommandObject::GetInvalidTargetDescription() will be
+        // returned as the error. CommandObject subclasses can override the
+        // virtual function for GetInvalidTargetDescription() to provide custom
+        // strings when needed.
+        //----------------------------------------------------------------------
+        eCommandRequiresTarget         = (1u << 0),
+        //----------------------------------------------------------------------
+        // eCommandRequiresProcess
+        //
+        // Ensures a valid process is contained in m_exe_ctx prior to executing
+        // the command. If a process doesn't exist or is invalid, the command
+        // will fail and CommandObject::GetInvalidProcessDescription() will be
+        // returned as the error. CommandObject subclasses can override the
+        // virtual function for GetInvalidProcessDescription() to provide custom
+        // strings when needed.
+        //----------------------------------------------------------------------
+        eCommandRequiresProcess        = (1u << 1),
+        //----------------------------------------------------------------------
+        // eCommandRequiresThread
+        //
+        // Ensures a valid thread is contained in m_exe_ctx prior to executing
+        // the command. If a thread doesn't exist or is invalid, the command
+        // will fail and CommandObject::GetInvalidThreadDescription() will be
+        // returned as the error. CommandObject subclasses can override the
+        // virtual function for GetInvalidThreadDescription() to provide custom
+        // strings when needed.
+        //----------------------------------------------------------------------
+        eCommandRequiresThread         = (1u << 2),
+        //----------------------------------------------------------------------
+        // eCommandRequiresFrame
+        //
+        // Ensures a valid frame is contained in m_exe_ctx prior to executing
+        // the command. If a frame doesn't exist or is invalid, the command
+        // will fail and CommandObject::GetInvalidFrameDescription() will be
+        // returned as the error. CommandObject subclasses can override the
+        // virtual function for GetInvalidFrameDescription() to provide custom
+        // strings when needed.
+        //----------------------------------------------------------------------
+        eCommandRequiresFrame          = (1u << 3),
+        //----------------------------------------------------------------------
+        // eCommandRequiresRegContext
+        //
+        // Ensures a valid register context (from the selected frame if there
+        // is a frame in m_exe_ctx, or from the selected thread from m_exe_ctx)
+        // is available from m_exe_ctx prior to executing the command. If a
+        // target doesn't exist or is invalid, the command will fail and
+        // CommandObject::GetInvalidRegContextDescription() will be returned as
+        // the error. CommandObject subclasses can override the virtual function
+        // for GetInvalidRegContextDescription() to provide custom strings when
+        // needed.
+        //----------------------------------------------------------------------
+        eCommandRequiresRegContext     = (1u << 4),
+        //----------------------------------------------------------------------
+        // eCommandTryTargetAPILock
+        //
+        // Attempts to acquire the target lock if a target is selected in the
+        // command interpreter. If the command object fails to acquire the API
+        // lock, the command will fail with an appropriate error message.
+        //----------------------------------------------------------------------
+        eCommandTryTargetAPILock       = (1u << 5),
+        //----------------------------------------------------------------------
+        // eCommandProcessMustBeLaunched
+        //
+        // Verifies that there is a launched process in m_exe_ctx, if there
+        // isn't, the command will fail with an appropriate error message.
+        //----------------------------------------------------------------------
+        eCommandProcessMustBeLaunched  = (1u << 6),
+        //----------------------------------------------------------------------
+        // eCommandProcessMustBePaused
+        //
+        // Verifies that there is a paused process in m_exe_ctx, if there
+        // isn't, the command will fail with an appropriate error message.
+        //----------------------------------------------------------------------
+        eCommandProcessMustBePaused    = (1u << 7)
+    };
+    
+    //----------------------------------------------------------------------
+    // Whether a summary should cap how much data it returns to users or not
+    //----------------------------------------------------------------------
+    enum TypeSummaryCapping
+    {
+        eTypeSummaryCapped = true,
+        eTypeSummaryUncapped = false
+    };
 
 } // namespace lldb
-
 
 #endif  // LLDB_lldb_enumerations_h_

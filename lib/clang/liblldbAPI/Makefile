@@ -6,6 +6,7 @@ LIB=	lldbAPI
 
 SRCDIR=	tools/lldb/source/API
 SRCS=	SBAddress.cpp \
+	SBAttachInfo.cpp \
 	SBBlock.cpp \
 	SBBreakpoint.cpp \
 	SBBreakpointLocation.cpp \
@@ -19,6 +20,7 @@ SRCS=	SBAddress.cpp \
 	SBDeclaration.cpp \
 	SBError.cpp \
 	SBEvent.cpp \
+	SBExecutionContext.cpp \
 	SBExpressionOptions.cpp \
 	SBFileSpec.cpp \
 	SBFileSpecList.cpp \
@@ -27,6 +29,8 @@ SRCS=	SBAddress.cpp \
 	SBHostOS.cpp \
 	SBInstruction.cpp \
 	SBInstructionList.cpp \
+	SBLanguageRuntime.cpp \
+	SBLaunchInfo.cpp \
 	SBLineEntry.cpp \
 	SBListener.cpp \
 	SBModule.cpp \
@@ -43,19 +47,27 @@ SRCS=	SBAddress.cpp \
 	SBSymbolContext.cpp \
 	SBSymbolContextList.cpp \
 	SBTarget.cpp \
+	SBThreadCollection.cpp \
+	SBThreadPlan.cpp \
 	SBThread.cpp \
 	SBType.cpp \
 	SBTypeCategory.cpp \
+	SBTypeEnumMember.cpp \
 	SBTypeFilter.cpp \
 	SBTypeFormat.cpp \
 	SBTypeNameSpecifier.cpp \
 	SBTypeSummary.cpp \
 	SBTypeSynthetic.cpp \
+	SBUnixSignals.cpp \
 	SBValue.cpp \
+	SBVariablesOptions.cpp \
 	SBValueList.cpp \
-	SBWatchpoint.cpp
+	SBWatchpoint.cpp \
+	SystemInitializerFull.cpp
 
-TGHDRS=	DiagnosticCommonKinds \
+TGHDRS=	AttrList \
+	Attrs \
+	DiagnosticCommonKinds \
 	DeclNodes \
 	StmtNodes \
 	CommentCommandList

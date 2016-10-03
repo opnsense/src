@@ -7,8 +7,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "lldb/lldb-python.h"
-
 #include "CommandObjectSettings.h"
 
 // C Includes
@@ -18,6 +16,7 @@
 #include "lldb/Interpreter/CommandInterpreter.h"
 #include "lldb/Interpreter/CommandReturnObject.h"
 #include "lldb/Interpreter/CommandCompletions.h"
+#include "lldb/Interpreter/OptionValueProperties.h"
 
 using namespace lldb;
 using namespace lldb_private;
@@ -61,37 +60,37 @@ public:
         m_arguments.push_back (arg2);
         
         SetHelpLong (
-"When setting a dictionary or array variable, you can set multiple entries \n\
-at once by giving the values to the set command.  For example: \n\
-\n\
-(lldb) settings set target.run-args value1 value2 value3 \n\
-(lldb) settings set target.env-vars MYPATH=~/.:/usr/bin  SOME_ENV_VAR=12345 \n\
-\n\
-(lldb) settings show target.run-args \n\
-  [0]: 'value1' \n\
-  [1]: 'value2' \n\
-  [3]: 'value3' \n\
-(lldb) settings show target.env-vars \n\
-  'MYPATH=~/.:/usr/bin'\n\
-  'SOME_ENV_VAR=12345' \n\
-\n\
-Warning:  The 'set' command re-sets the entire array or dictionary.  If you \n\
-just want to add, remove or update individual values (or add something to \n\
-the end), use one of the other settings sub-commands: append, replace, \n\
-insert-before or insert-after.\n");
+"\nWhen setting a dictionary or array variable, you can set multiple entries \
+at once by giving the values to the set command.  For example:" R"(
+
+(lldb) settings set target.run-args value1 value2 value3
+(lldb) settings set target.env-vars MYPATH=~/.:/usr/bin  SOME_ENV_VAR=12345
+
+(lldb) settings show target.run-args
+  [0]: 'value1'
+  [1]: 'value2'
+  [3]: 'value3'
+(lldb) settings show target.env-vars
+  'MYPATH=~/.:/usr/bin'
+  'SOME_ENV_VAR=12345'
+
+)" "Warning:  The 'set' command re-sets the entire array or dictionary.  If you \
+just want to add, remove or update individual values (or add something to \
+the end), use one of the other settings sub-commands: append, replace, \
+insert-before or insert-after."
+        );
 
     }
 
 
-    virtual
-    ~CommandObjectSettingsSet () {}
+    ~CommandObjectSettingsSet () override {}
 
     // Overrides base class's behavior where WantsCompletion = !WantsRawCommandString.
-    virtual bool
-    WantsCompletion() { return true; }
+    bool
+    WantsCompletion() override { return true; }
 
-    virtual Options *
-    GetOptions ()
+    Options *
+    GetOptions () override
     {
         return &m_options;
     }
@@ -106,11 +105,10 @@ insert-before or insert-after.\n");
         {
         }
 
-        virtual
-        ~CommandOptions () {}
+        ~CommandOptions () override {}
 
-        virtual Error
-        SetOptionValue (uint32_t option_idx, const char *option_arg)
+        Error
+        SetOptionValue (uint32_t option_idx, const char *option_arg) override
         {
             Error error;
             const int short_option = m_getopt_table[option_idx].val;
@@ -129,13 +127,13 @@ insert-before or insert-after.\n");
         }
 
         void
-        OptionParsingStarting ()
+        OptionParsingStarting () override
         {
             m_global = false;
         }
         
         const OptionDefinition*
-        GetDefinitions ()
+        GetDefinitions () override
         {
             return g_option_table;
         }
@@ -149,7 +147,7 @@ insert-before or insert-after.\n");
         bool m_global;
     };
 
-    virtual int
+    int
     HandleArgumentCompletion (Args &input,
                               int &cursor_index,
                               int &cursor_char_position,
@@ -157,14 +155,15 @@ insert-before or insert-after.\n");
                               int match_start_point,
                               int max_return_elements,
                               bool &word_complete,
-                              StringList &matches)
+                              StringList &matches) override
     {
         std::string completion_str (input.GetArgumentAtIndex (cursor_index), cursor_char_position);
 
         const size_t argc = input.GetArgumentCount();
         const char *arg = NULL;
         int setting_var_idx;
-        for (setting_var_idx = 1; setting_var_idx < argc; ++setting_var_idx)
+        for (setting_var_idx = 1; setting_var_idx < static_cast<int>(argc);
+             ++setting_var_idx)
         {
             arg = input.GetArgumentAtIndex(setting_var_idx);
             if (arg && arg[0] != '-')
@@ -214,8 +213,8 @@ insert-before or insert-after.\n");
     }
     
 protected:
-    virtual bool
-    DoExecute (const char *command, CommandReturnObject &result)
+    bool
+    DoExecute (const char *command, CommandReturnObject &result) override
     {
         Args cmd_args(command);
 
@@ -242,7 +241,7 @@ protected:
         // Split the raw command into var_name and value pair.
         llvm::StringRef raw_str(command);
         std::string var_value_string = raw_str.split(var_name).second.str();
-        const char *var_value_cstr = Args::StripSpaces(var_value_string, true, true, false);
+        const char *var_value_cstr = Args::StripSpaces(var_value_string, true, false, false);
 
         Error error;
         if (m_options.m_global)
@@ -288,8 +287,8 @@ private:
 OptionDefinition
 CommandObjectSettingsSet::CommandOptions::g_option_table[] =
 {
-    { LLDB_OPT_SET_2, false, "global", 'g', OptionParser::eNoArgument,   NULL, 0, eArgTypeNone, "Apply the new value to the global default value." },
-    { 0, false, NULL, 0, 0, NULL, 0, eArgTypeNone, NULL }
+    { LLDB_OPT_SET_2, false, "global", 'g', OptionParser::eNoArgument,   NULL, NULL, 0, eArgTypeNone, "Apply the new value to the global default value." },
+    { 0, false, NULL, 0, 0, NULL, NULL, 0, eArgTypeNone, NULL }
 };
 
 
@@ -320,11 +319,10 @@ public:
         m_arguments.push_back (arg1);
     }
 
-    virtual
-    ~CommandObjectSettingsShow () {}
+    ~CommandObjectSettingsShow () override {}
 
 
-    virtual int
+    int
     HandleArgumentCompletion (Args &input,
                               int &cursor_index,
                               int &cursor_char_position,
@@ -332,7 +330,7 @@ public:
                               int match_start_point,
                               int max_return_elements,
                               bool &word_complete,
-                              StringList &matches)
+                              StringList &matches) override
     {
         std::string completion_str (input.GetArgumentAtIndex (cursor_index), cursor_char_position);
 
@@ -348,8 +346,8 @@ public:
     }
 
 protected:
-    virtual bool
-    DoExecute (Args& args, CommandReturnObject &result)
+    bool
+    DoExecute (Args& args, CommandReturnObject &result) override
     {
         result.SetStatus (eReturnStatusSuccessFinishResult);
 
@@ -413,10 +411,9 @@ public:
         m_arguments.push_back (arg);
     }
 
-    virtual
-    ~CommandObjectSettingsList () {}
+    ~CommandObjectSettingsList () override {}
 
-    virtual int
+    int
     HandleArgumentCompletion (Args &input,
                               int &cursor_index,
                               int &cursor_char_position,
@@ -424,7 +421,7 @@ public:
                               int match_start_point,
                               int max_return_elements,
                               bool &word_complete,
-                              StringList &matches)
+                              StringList &matches) override
     {
         std::string completion_str (input.GetArgumentAtIndex (cursor_index), cursor_char_position);
 
@@ -440,8 +437,8 @@ public:
     }
 
 protected:
-    virtual bool
-    DoExecute (Args& args, CommandReturnObject &result)
+    bool
+    DoExecute (Args& args, CommandReturnObject &result) override
     {
         result.SetStatus (eReturnStatusSuccessFinishResult);
 
@@ -520,10 +517,9 @@ public:
         m_arguments.push_back (arg2);
     }
 
-    virtual
-    ~CommandObjectSettingsRemove () {}
+    ~CommandObjectSettingsRemove () override {}
 
-    virtual int
+    int
     HandleArgumentCompletion (Args &input,
                               int &cursor_index,
                               int &cursor_char_position,
@@ -531,7 +527,7 @@ public:
                               int match_start_point,
                               int max_return_elements,
                               bool &word_complete,
-                              StringList &matches)
+                              StringList &matches) override
     {
         std::string completion_str (input.GetArgumentAtIndex (cursor_index), cursor_char_position);
 
@@ -550,8 +546,8 @@ public:
     }
 
 protected:
-    virtual bool
-    DoExecute (const char *command, CommandReturnObject &result)
+    bool
+    DoExecute (const char *command, CommandReturnObject &result) override
     {
         result.SetStatus (eReturnStatusSuccessFinishNoResult);
      
@@ -651,14 +647,13 @@ public:
     }
 
 
-    virtual
-    ~CommandObjectSettingsReplace () {}
+    ~CommandObjectSettingsReplace () override {}
 
     // Overrides base class's behavior where WantsCompletion = !WantsRawCommandString.
-    virtual bool
-    WantsCompletion() { return true; }
+    bool
+    WantsCompletion() override { return true; }
 
-    virtual int
+    int
     HandleArgumentCompletion (Args &input,
                               int &cursor_index,
                               int &cursor_char_position,
@@ -666,7 +661,7 @@ public:
                               int match_start_point,
                               int max_return_elements,
                               bool &word_complete,
-                              StringList &matches)
+                              StringList &matches) override
     {
         std::string completion_str (input.GetArgumentAtIndex (cursor_index), cursor_char_position);
 
@@ -685,8 +680,8 @@ public:
     }
 
 protected:
-    virtual bool
-    DoExecute (const char *command, CommandReturnObject &result)
+    bool
+    DoExecute (const char *command, CommandReturnObject &result) override
     {
         result.SetStatus (eReturnStatusSuccessFinishNoResult);
 
@@ -772,14 +767,13 @@ public:
         m_arguments.push_back (arg3);
     }
 
-    virtual
-    ~CommandObjectSettingsInsertBefore () {}
+    ~CommandObjectSettingsInsertBefore () override {}
 
     // Overrides base class's behavior where WantsCompletion = !WantsRawCommandString.
-    virtual bool
-    WantsCompletion() { return true; }
+    bool
+    WantsCompletion() override { return true; }
 
-    virtual int
+    int
     HandleArgumentCompletion (Args &input,
                               int &cursor_index,
                               int &cursor_char_position,
@@ -787,7 +781,7 @@ public:
                               int match_start_point,
                               int max_return_elements,
                               bool &word_complete,
-                              StringList &matches)
+                              StringList &matches) override
     {
         std::string completion_str (input.GetArgumentAtIndex (cursor_index), cursor_char_position);
 
@@ -806,8 +800,8 @@ public:
     }
 
 protected:
-    virtual bool
-    DoExecute (const char *command, CommandReturnObject &result)
+    bool
+    DoExecute (const char *command, CommandReturnObject &result) override
     {
         result.SetStatus (eReturnStatusSuccessFinishNoResult);
 
@@ -896,14 +890,13 @@ public:
         m_arguments.push_back (arg3);
     }
 
-    virtual
-    ~CommandObjectSettingsInsertAfter () {}
+    ~CommandObjectSettingsInsertAfter () override {}
 
     // Overrides base class's behavior where WantsCompletion = !WantsRawCommandString.
-    virtual bool
-    WantsCompletion() { return true; }
+    bool
+    WantsCompletion() override { return true; }
 
-    virtual int
+    int
     HandleArgumentCompletion (Args &input,
                               int &cursor_index,
                               int &cursor_char_position,
@@ -911,7 +904,7 @@ public:
                               int match_start_point,
                               int max_return_elements,
                               bool &word_complete,
-                              StringList &matches)
+                              StringList &matches) override
     {
         std::string completion_str (input.GetArgumentAtIndex (cursor_index), cursor_char_position);
 
@@ -930,8 +923,8 @@ public:
     }
     
 protected:
-    virtual bool
-    DoExecute (const char *command, CommandReturnObject &result)
+    bool
+    DoExecute (const char *command, CommandReturnObject &result) override
     {
         result.SetStatus (eReturnStatusSuccessFinishNoResult);
 
@@ -1010,14 +1003,13 @@ public:
         m_arguments.push_back (arg2);
     }
 
-    virtual
-    ~CommandObjectSettingsAppend () {}
+    ~CommandObjectSettingsAppend () override {}
 
     // Overrides base class's behavior where WantsCompletion = !WantsRawCommandString.
-    virtual bool
-    WantsCompletion() { return true; }
+    bool
+    WantsCompletion() override { return true; }
 
-    virtual int
+    int
     HandleArgumentCompletion (Args &input,
                               int &cursor_index,
                               int &cursor_char_position,
@@ -1025,7 +1017,7 @@ public:
                               int match_start_point,
                               int max_return_elements,
                               bool &word_complete,
-                              StringList &matches)
+                              StringList &matches) override
     {
         std::string completion_str (input.GetArgumentAtIndex (cursor_index), cursor_char_position);
 
@@ -1044,8 +1036,8 @@ public:
     }
 
 protected:
-    virtual bool
-    DoExecute (const char *command, CommandReturnObject &result)
+    bool
+    DoExecute (const char *command, CommandReturnObject &result) override
     {
         result.SetStatus (eReturnStatusSuccessFinishNoResult);
         Args cmd_args(command);
@@ -1116,10 +1108,9 @@ public:
         m_arguments.push_back (arg);
     }
 
-    virtual
-    ~CommandObjectSettingsClear () {}
+    ~CommandObjectSettingsClear () override {}
 
-    virtual int
+    int
     HandleArgumentCompletion (Args &input,
                               int &cursor_index,
                               int &cursor_char_position,
@@ -1127,7 +1118,7 @@ public:
                               int match_start_point,
                               int max_return_elements,
                               bool &word_complete,
-                              StringList &matches)
+                              StringList &matches) override
     {
         std::string completion_str (input.GetArgumentAtIndex (cursor_index), cursor_char_position);
 
@@ -1146,15 +1137,15 @@ public:
     }
 
 protected:
-    virtual bool
-    DoExecute (Args& command, CommandReturnObject &result)
+    bool
+    DoExecute (Args& command, CommandReturnObject &result) override
     {
         result.SetStatus (eReturnStatusSuccessFinishNoResult);
         const size_t argc = command.GetArgumentCount ();
 
         if (argc != 1)
         {
-            result.AppendError ("'setttings clear' takes exactly one argument");
+            result.AppendError ("'settings clear' takes exactly one argument");
             result.SetStatus (eReturnStatusFailed);
             return false;
         }

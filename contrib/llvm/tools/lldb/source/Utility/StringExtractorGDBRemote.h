@@ -15,7 +15,7 @@
 #include <string>
 // Other libraries and framework includes
 // Project includes
-#include "Utility/StringExtractor.h"
+#include "lldb/Utility/StringExtractor.h"
 
 class StringExtractorGDBRemote : public StringExtractor
 {
@@ -50,18 +50,23 @@ public:
         eServerPacketType_qfProcessInfo,
         eServerPacketType_qsProcessInfo,
         eServerPacketType_qC,
+        eServerPacketType_qEcho,
         eServerPacketType_qGroupName,
         eServerPacketType_qHostInfo,
         eServerPacketType_qLaunchGDBServer,
+        eServerPacketType_qQueryGDBServer,
         eServerPacketType_qKillSpawnedProcess,
         eServerPacketType_qLaunchSuccess,
+        eServerPacketType_qModuleInfo,
         eServerPacketType_qProcessInfoPID,
         eServerPacketType_qSpeedTest,
         eServerPacketType_qUserName,
         eServerPacketType_qGetWorkingDir,
+        eServerPacketType_qFileLoadAddress,
         eServerPacketType_QEnvironment,
         eServerPacketType_QLaunchArch,
         eServerPacketType_QSetDisableASLR,
+        eServerPacketType_QSetDetachOnError,
         eServerPacketType_QSetSTDIN,
         eServerPacketType_QSetSTDOUT,
         eServerPacketType_QSetSTDERR,
@@ -93,6 +98,7 @@ public:
         eServerPacketType_QSyncThreadState,
         eServerPacketType_QThreadSuffixSupported,
 
+        eServerPacketType_jThreadsInfo,
         eServerPacketType_qsThreadInfo,
         eServerPacketType_qfThreadInfo,
         eServerPacketType_qGetPid,
@@ -105,12 +111,16 @@ public:
         eServerPacketType_qRegisterInfo,
         eServerPacketType_qShlibInfoAddr,
         eServerPacketType_qStepPacketSupported,
+        eServerPacketType_qSupported,
         eServerPacketType_qSyncThreadStateSupported,
         eServerPacketType_qThreadExtraInfo,
         eServerPacketType_qThreadStopInfo,
         eServerPacketType_qVAttachOrWaitSupported,
         eServerPacketType_qWatchpointSupportInfo,
         eServerPacketType_qWatchpointSupportInfoSupported,
+        eServerPacketType_qXfer_auxv_read,
+
+        eServerPacketType_jSignalsInfo,
 
         eServerPacketType_vAttach,
         eServerPacketType_vAttachWait,
@@ -127,6 +137,7 @@ public:
         eServerPacketType_g,
         eServerPacketType_G,
         eServerPacketType_H,
+        eServerPacketType_I, // stdin notification
         eServerPacketType_k,
         eServerPacketType_m,
         eServerPacketType_M,
@@ -135,11 +146,14 @@ public:
         eServerPacketType_s,
         eServerPacketType_S,
         eServerPacketType_T,
+        eServerPacketType_x,
+        eServerPacketType_X,
         eServerPacketType_Z,
         eServerPacketType_z,
 
         eServerPacketType__M,
         eServerPacketType__m,
+        eServerPacketType_notify, // '%' notification
     };
     
     ServerPacketType

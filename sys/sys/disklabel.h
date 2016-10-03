@@ -52,7 +52,7 @@
 
 /* XXX these should be defined per controller (or drive) elsewhere, not here! */
 #if defined(__i386__) || defined(__amd64__) || defined(__arm__) || \
-    defined(__ia64__) || defined(__powerpc__) || defined(__mips__)
+    defined(__powerpc__) || defined(__mips__)
 #define LABELSECTOR	1			/* sector containing label */
 #define LABELOFFSET	0			/* offset of label in sector */
 #endif
@@ -284,15 +284,8 @@ static const char *fstypenames[] = {
 #define	D_CHAIN		0x10		/* can do back-back transfers */
 
 /*
- * Disklabel-specific ioctls.
- *
  * NB: <sys/disk.h> defines ioctls from 'd'/128 and up.
  */
-		/* get and set disklabel */
-#define DIOCGDINFO	_IOR('d', 101, struct disklabel)/* get */
-#define DIOCSDINFO	_IOW('d', 102, struct disklabel)/* set */
-#define DIOCWDINFO	_IOW('d', 103, struct disklabel)/* set, update disk */
-#define DIOCBSDBB	_IOW('d', 110, void *)	/* write bootblocks */
 
 /*
  * Functions for proper encoding/decoding of struct disklabel into/from

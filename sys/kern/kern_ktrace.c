@@ -133,8 +133,7 @@ static u_int ktr_requestpool = KTRACE_REQUEST_POOL;
 TUNABLE_INT("kern.ktrace.request_pool", &ktr_requestpool);
 
 static u_int ktr_geniosize = PAGE_SIZE;
-TUNABLE_INT("kern.ktrace.genio_size", &ktr_geniosize);
-SYSCTL_UINT(_kern_ktrace, OID_AUTO, genio_size, CTLFLAG_RW, &ktr_geniosize,
+SYSCTL_UINT(_kern_ktrace, OID_AUTO, genio_size, CTLFLAG_RWTUN, &ktr_geniosize,
     0, "Maximum size of genio event payload");
 
 static int print_message = 1;
@@ -758,15 +757,16 @@ ktrstruct(name, data, datalen)
 	size_t datalen;
 {
 	struct ktr_request *req;
-	char *buf = NULL;
-	size_t buflen;
+	char *buf;
+	size_t buflen, namelen;
 
-	if (!data)
+	if (data == NULL)
 		datalen = 0;
-	buflen = strlen(name) + 1 + datalen;
+	namelen = strlen(name) + 1;
+	buflen = namelen + datalen;
 	buf = malloc(buflen, M_KTRACE, M_WAITOK);
 	strcpy(buf, name);
-	bcopy(data, buf + strlen(name) + 1, datalen);
+	bcopy(data, buf + namelen, datalen);
 	if ((req = ktr_getrequest(KTR_STRUCT)) == NULL) {
 		free(buf, M_KTRACE);
 		return;
@@ -1163,8 +1163,7 @@ ktr_writerequest(struct thread *td, struct ktr_request *req)
 	mtx_unlock(&ktrace_mtx);
 
 	kth = &req->ktr_header;
-	KASSERT(((u_short)kth->ktr_type & ~KTR_DROP) <
-	    sizeof(data_lengths) / sizeof(data_lengths[0]),
+	KASSERT(((u_short)kth->ktr_type & ~KTR_DROP) < nitems(data_lengths),
 	    ("data_lengths array overflow"));
 	datalen = data_lengths[(u_short)kth->ktr_type & ~KTR_DROP];
 	buflen = kth->ktr_len;

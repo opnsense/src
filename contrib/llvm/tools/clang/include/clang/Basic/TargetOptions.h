@@ -12,18 +12,16 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_FRONTEND_TARGETOPTIONS_H
-#define LLVM_CLANG_FRONTEND_TARGETOPTIONS_H
+#ifndef LLVM_CLANG_BASIC_TARGETOPTIONS_H
+#define LLVM_CLANG_BASIC_TARGETOPTIONS_H
 
-#include "clang/Basic/LLVM.h"
-#include "llvm/ADT/IntrusiveRefCntPtr.h"
 #include <string>
 #include <vector>
 
 namespace clang {
 
 /// \brief Options for controlling the target.
-class TargetOptions : public RefCountedBase<TargetOptions> {
+class TargetOptions {
 public:
   /// If given, the name of the target triple to compile for. If not given the
   /// target will be selected to match the host.
@@ -38,10 +36,6 @@ public:
   /// If given, the name of the target ABI to use.
   std::string ABI;
 
-  /// If given, the name of the target C++ ABI to use. If not given, defaults
-  /// to "itanium".
-  std::string CXXABI;
-
   /// If given, the version string of the linker in use.
   std::string LinkerVersion;
 
@@ -51,6 +45,8 @@ public:
   /// The list of target specific features to enable or disable -- this should
   /// be a list of strings starting with by '+' or '-'.
   std::vector<std::string> Features;
+  
+  std::vector<std::string> Reciprocals;
 };
 
 }  // end namespace clang

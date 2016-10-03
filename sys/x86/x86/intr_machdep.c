@@ -63,7 +63,7 @@
 #ifdef PC98
 #include <pc98/cbus/cbus.h>
 #else
-#include <x86/isa/isa.h>
+#include <isa/isareg.h>
 #endif
 #endif
 
@@ -77,7 +77,7 @@ static struct mtx intr_table_lock;
 static struct mtx intrcnt_lock;
 static TAILQ_HEAD(pics_head, pic) pics;
 
-#ifdef SMP
+#if defined(SMP) && !defined(EARLY_AP_STARTUP)
 static int assign_cpu;
 #endif
 
@@ -86,7 +86,7 @@ char intrnames[INTRCNT_COUNT * (MAXCOMLEN + 1)];
 size_t sintrcnt = sizeof(intrcnt);
 size_t sintrnames = sizeof(intrnames);
 
-static int	intr_assign_cpu(void *arg, u_char cpu);
+static int	intr_assign_cpu(void *arg, int cpu);
 static void	intr_disable_src(void *arg);
 static void	intr_init(void *__dummy);
 static int	intr_pic_registered(struct pic *pic);
@@ -197,28 +197,19 @@ int
 intr_remove_handler(void *cookie)
 {
 	struct intsrc *isrc;
-	int error, mtx_owned;
+	int error;
 
 	isrc = intr_handler_source(cookie);
 	error = intr_event_remove_handler(cookie);
 	if (error == 0) {
-		/*
-		 * Recursion is needed here so PICs can remove interrupts
-		 * while resuming. It was previously not possible due to
-		 * intr_resume holding the intr_table_lock and
-		 * intr_remove_handler recursing on it.
-		 */
-		mtx_owned = mtx_owned(&intr_table_lock);
-		if (mtx_owned == 0)
-			mtx_lock(&intr_table_lock);
+		mtx_lock(&intr_table_lock);
 		isrc->is_handlers--;
 		if (isrc->is_handlers == 0) {
 			isrc->is_pic->pic_disable_source(isrc, PIC_NO_EOI);
 			isrc->is_pic->pic_disable_intr(isrc);
 		}
 		intrcnt_updatename(isrc);
-		if (mtx_owned == 0)
-			mtx_unlock(&intr_table_lock);
+		mtx_unlock(&intr_table_lock);
 	}
 	return (error);
 }
@@ -314,17 +305,22 @@ intr_suspend(void)
 }
 
 static int
-intr_assign_cpu(void *arg, u_char cpu)
+intr_assign_cpu(void *arg, int cpu)
 {
 #ifdef SMP
 	struct intsrc *isrc;
 	int error;
 
+#ifdef EARLY_AP_STARTUP
+	MPASS(mp_ncpus == 1 || smp_started);
+	if (cpu != NOCPU) {
+#else
 	/*
 	 * Don't do anything during early boot.  We will pick up the
 	 * assignment once the APs are started.
 	 */
 	if (assign_cpu && cpu != NOCPU) {
+#endif
 		isrc = arg;
 		mtx_lock(&intr_table_lock);
 		error = isrc->is_pic->pic_assign_cpu(isrc, cpu_apic_ids[cpu]);
@@ -393,6 +389,21 @@ intr_init(void *dummy __unused)
 }
 SYSINIT(intr_init, SI_SUB_INTR, SI_ORDER_FIRST, intr_init, NULL);
 
+static void
+intr_init_final(void *dummy __unused)
+{
+
+	/*
+	 * Enable interrupts on the BSP after all of the interrupt
+	 * controllers are initialized.  Device interrupts are still
+	 * disabled in the interrupt controllers until interrupt
+	 * handlers are registered.  Interrupts are enabled on each AP
+	 * after their first context switch.
+	 */
+	enable_intr();
+}
+SYSINIT(intr_init_final, SI_SUB_INTR, SI_ORDER_ANY, intr_init_final, NULL);
+
 #ifndef DEV_ATPIC
 /* Initialize the two 8259A's to a known-good shutdown state. */
 void
@@ -432,6 +443,23 @@ intr_describe(u_int vector, void *ih, const char *descr)
 	return (0);
 }
 
+void
+intr_reprogram(void)
+{
+	struct intsrc *is;
+	int v;
+
+	mtx_lock(&intr_table_lock);
+	for (v = 0; v < NUM_IO_INTS; v++) {
+		is = interrupt_sources[v];
+		if (is == NULL)
+			continue;
+		if (is->is_pic->pic_reprogram_pin != NULL)
+			is->is_pic->pic_reprogram_pin(is);
+	}
+	mtx_unlock(&intr_table_lock);
+}
+
 #ifdef DDB
 /*
  * Dump data about interrupt handlers
@@ -458,7 +486,7 @@ DB_SHOW_COMMAND(irqs, db_show_irqs)
  * allocate CPUs round-robin.
  */
 
-static cpuset_t intr_cpus = CPUSET_T_INITIALIZER(0x1);
+cpuset_t intr_cpus = CPUSET_T_INITIALIZER(0x1);
 static int current_cpu;
 
 /*
@@ -470,9 +498,13 @@ intr_next_cpu(void)
 {
 	u_int apic_id;
 
+#ifdef EARLY_AP_STARTUP
+	MPASS(mp_ncpus == 1 || smp_started);
+#else
 	/* Leave all interrupts on the BSP during boot. */
 	if (!assign_cpu)
 		return (PCPU_GET(apic_id));
+#endif
 
 	mtx_lock_spin(&icu_lock);
 	apic_id = cpu_apic_ids[current_cpu];
@@ -514,6 +546,7 @@ intr_add_cpu(u_int cpu)
 	CPU_SET(cpu, &intr_cpus);
 }
 
+#ifndef EARLY_AP_STARTUP
 /*
  * Distribute all the interrupt sources among the available CPUs once the
  * AP's have been launched.
@@ -523,13 +556,6 @@ intr_shuffle_irqs(void *arg __unused)
 {
 	struct intsrc *isrc;
 	int i;
-
-#ifdef XEN
-	/*
-	 * Doesn't work yet
-	 */
-	return;
-#endif
 
 	/* Don't bother on UP. */
 	if (mp_ncpus == 1)
@@ -561,6 +587,7 @@ intr_shuffle_irqs(void *arg __unused)
 }
 SYSINIT(intr_shuffle_irqs, SI_SUB_SMP, SI_ORDER_SECOND, intr_shuffle_irqs,
     NULL);
+#endif
 #else
 /*
  * Always route interrupts to the current processor in the UP case.

@@ -134,7 +134,7 @@ struct malloc_type_header {
 	struct malloc_type type[1] = {					\
 		{ NULL, M_MAGIC, shortdesc, NULL }			\
 	};								\
-	SYSINIT(type##_init, SI_SUB_KMEM, SI_ORDER_SECOND, malloc_init,	\
+	SYSINIT(type##_init, SI_SUB_KMEM, SI_ORDER_THIRD, malloc_init,	\
 	    type);							\
 	SYSUNINIT(type##_uninit, SI_SUB_KMEM, SI_ORDER_ANY,		\
 	    malloc_uninit, type)
@@ -145,9 +145,6 @@ struct malloc_type_header {
 MALLOC_DECLARE(M_CACHE);
 MALLOC_DECLARE(M_DEVBUF);
 MALLOC_DECLARE(M_TEMP);
-
-MALLOC_DECLARE(M_IP6OPT); /* for INET6 */
-MALLOC_DECLARE(M_IP6NDP); /* for INET6 */
 
 /*
  * Deprecated macro versions of not-quite-malloc() and free().
@@ -173,9 +170,11 @@ typedef void malloc_type_list_func_t(struct malloc_type *, void *);
 void	contigfree(void *addr, unsigned long size, struct malloc_type *type);
 void	*contigmalloc(unsigned long size, struct malloc_type *type, int flags,
 	    vm_paddr_t low, vm_paddr_t high, unsigned long alignment,
-	    vm_paddr_t boundary) __malloc_like;
+	    vm_paddr_t boundary) __malloc_like __result_use_check
+	    __alloc_size(1) __alloc_align(6);
 void	free(void *addr, struct malloc_type *type);
-void	*malloc(unsigned long size, struct malloc_type *type, int flags) __malloc_like;
+void	*malloc(unsigned long size, struct malloc_type *type, int flags)
+	    __malloc_like __result_use_check __alloc_size(1);
 void	malloc_init(void *);
 int	malloc_last_fail(void);
 void	malloc_type_allocated(struct malloc_type *type, unsigned long size);
@@ -183,9 +182,9 @@ void	malloc_type_freed(struct malloc_type *type, unsigned long size);
 void	malloc_type_list(malloc_type_list_func_t *, void *);
 void	malloc_uninit(void *);
 void	*realloc(void *addr, unsigned long size, struct malloc_type *type,
-	    int flags);
+	    int flags) __result_use_check __alloc_size(2);
 void	*reallocf(void *addr, unsigned long size, struct malloc_type *type,
-	    int flags);
+	    int flags) __alloc_size(2);
 
 struct malloc_type *malloc_desc2type(const char *desc);
 #endif /* _KERNEL */

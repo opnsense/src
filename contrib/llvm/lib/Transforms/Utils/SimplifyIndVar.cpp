@@ -13,22 +13,25 @@
 //
 //===----------------------------------------------------------------------===//
 
-#define DEBUG_TYPE "indvars"
-
 #include "llvm/Transforms/Utils/SimplifyIndVar.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/Analysis/IVUsers.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/LoopPass.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/IR/Dominators.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
+
+#define DEBUG_TYPE "indvars"
 
 STATISTIC(NumElimIdentity, "Number of IV identities eliminated");
 STATISTIC(NumElimOperand,  "Number of IV operands folded into a use");
@@ -36,7 +39,7 @@ STATISTIC(NumElimRem     , "Number of IV remainder operations eliminated");
 STATISTIC(NumElimCmp     , "Number of IV comparisons eliminated");
 
 namespace {
-  /// SimplifyIndvar - This is a utility for simplifying induction variables
+  /// This is a utility for simplifying induction variables
   /// based on ScalarEvolution. It is the primary instrument of the
   /// IndvarSimplify pass, but it may also be directly invoked to cleanup after
   /// other loop passes that preserve SCEV.
@@ -44,21 +47,16 @@ namespace {
     Loop             *L;
     LoopInfo         *LI;
     ScalarEvolution  *SE;
-    const DataLayout *TD; // May be NULL
+    DominatorTree    *DT;
 
     SmallVectorImpl<WeakVH> &DeadInsts;
 
     bool Changed;
 
   public:
-    SimplifyIndvar(Loop *Loop, ScalarEvolution *SE, LPPassManager *LPM,
-                   SmallVectorImpl<WeakVH> &Dead, IVUsers *IVU = NULL) :
-      L(Loop),
-      LI(LPM->getAnalysisIfAvailable<LoopInfo>()),
-      SE(SE),
-      TD(LPM->getAnalysisIfAvailable<DataLayout>()),
-      DeadInsts(Dead),
-      Changed(false) {
+    SimplifyIndvar(Loop *Loop, ScalarEvolution *SE, DominatorTree *DT,
+                   LoopInfo *LI,SmallVectorImpl<WeakVH> &Dead)
+        : L(Loop), LI(LI), SE(SE), DT(DT), DeadInsts(Dead), Changed(false) {
       assert(LI && "IV simplification requires LoopInfo");
     }
 
@@ -66,19 +64,25 @@ namespace {
 
     /// Iteratively perform simplification on a worklist of users of the
     /// specified induction variable. This is the top-level driver that applies
-    /// all simplicitions to users of an IV.
-    void simplifyUsers(PHINode *CurrIV, IVVisitor *V = NULL);
+    /// all simplifications to users of an IV.
+    void simplifyUsers(PHINode *CurrIV, IVVisitor *V = nullptr);
 
     Value *foldIVUser(Instruction *UseInst, Instruction *IVOperand);
+
+    bool eliminateIdentitySCEV(Instruction *UseInst, Instruction *IVOperand);
 
     bool eliminateIVUser(Instruction *UseInst, Instruction *IVOperand);
     void eliminateIVComparison(ICmpInst *ICmp, Value *IVOperand);
     void eliminateIVRemainder(BinaryOperator *Rem, Value *IVOperand,
                               bool IsSigned);
+    bool strengthenOverflowingOperation(BinaryOperator *OBO, Value *IVOperand);
+
+    Instruction *splitOverflowIntrinsic(Instruction *IVUser,
+                                        const DominatorTree *DT);
   };
 }
 
-/// foldIVUser - Fold an IV operand into its use.  This removes increments of an
+/// Fold an IV operand into its use.  This removes increments of an
 /// aligned IV when used by a instruction that ignores the low bits.
 ///
 /// IVOperand is guaranteed SCEVable, but UseInst may not be.
@@ -87,25 +91,25 @@ namespace {
 /// be folded (in case more folding opportunities have been exposed).
 /// Otherwise return null.
 Value *SimplifyIndvar::foldIVUser(Instruction *UseInst, Instruction *IVOperand) {
-  Value *IVSrc = 0;
+  Value *IVSrc = nullptr;
   unsigned OperIdx = 0;
-  const SCEV *FoldedExpr = 0;
+  const SCEV *FoldedExpr = nullptr;
   switch (UseInst->getOpcode()) {
   default:
-    return 0;
+    return nullptr;
   case Instruction::UDiv:
   case Instruction::LShr:
     // We're only interested in the case where we know something about
     // the numerator and have a constant denominator.
     if (IVOperand != UseInst->getOperand(OperIdx) ||
         !isa<ConstantInt>(UseInst->getOperand(1)))
-      return 0;
+      return nullptr;
 
     // Attempt to fold a binary operator with constant operand.
     // e.g. ((I + 1) >> 2) => I >> 2
     if (!isa<BinaryOperator>(IVOperand)
         || !isa<ConstantInt>(IVOperand->getOperand(1)))
-      return 0;
+      return nullptr;
 
     IVSrc = IVOperand->getOperand(0);
     // IVSrc must be the (SCEVable) IV, since the other operand is const.
@@ -116,7 +120,7 @@ Value *SimplifyIndvar::foldIVUser(Instruction *UseInst, Instruction *IVOperand) 
       // Get a constant for the divisor. See createSCEV.
       uint32_t BitWidth = cast<IntegerType>(UseInst->getType())->getBitWidth();
       if (D->getValue().uge(BitWidth))
-        return 0;
+        return nullptr;
 
       D = ConstantInt::get(UseInst->getContext(),
                            APInt::getOneBitSet(BitWidth, D->getZExtValue()));
@@ -125,11 +129,11 @@ Value *SimplifyIndvar::foldIVUser(Instruction *UseInst, Instruction *IVOperand) 
   }
   // We have something that might fold it's operand. Compare SCEVs.
   if (!SE->isSCEVable(UseInst->getType()))
-    return 0;
+    return nullptr;
 
   // Bypass the operand if SCEV can prove it has no effect.
   if (SE->getSCEV(UseInst) != FoldedExpr)
-    return 0;
+    return nullptr;
 
   DEBUG(dbgs() << "INDVARS: Eliminated IV operand: " << *IVOperand
         << " -> " << *UseInst << '\n');
@@ -140,11 +144,11 @@ Value *SimplifyIndvar::foldIVUser(Instruction *UseInst, Instruction *IVOperand) 
   ++NumElimOperand;
   Changed = true;
   if (IVOperand->use_empty())
-    DeadInsts.push_back(IVOperand);
+    DeadInsts.emplace_back(IVOperand);
   return IVSrc;
 }
 
-/// eliminateIVComparison - SimplifyIVUsers helper for eliminating useless
+/// SimplifyIVUsers helper for eliminating useless
 /// comparisons against an induction variable.
 void SimplifyIndvar::eliminateIVComparison(ICmpInst *ICmp, Value *IVOperand) {
   unsigned IVOperIdx = 0;
@@ -165,22 +169,68 @@ void SimplifyIndvar::eliminateIVComparison(ICmpInst *ICmp, Value *IVOperand) {
   S = SE->getSCEVAtScope(S, ICmpLoop);
   X = SE->getSCEVAtScope(X, ICmpLoop);
 
+  ICmpInst::Predicate InvariantPredicate;
+  const SCEV *InvariantLHS, *InvariantRHS;
+
   // If the condition is always true or always false, replace it with
   // a constant value.
-  if (SE->isKnownPredicate(Pred, S, X))
+  if (SE->isKnownPredicate(Pred, S, X)) {
     ICmp->replaceAllUsesWith(ConstantInt::getTrue(ICmp->getContext()));
-  else if (SE->isKnownPredicate(ICmpInst::getInversePredicate(Pred), S, X))
+    DeadInsts.emplace_back(ICmp);
+    DEBUG(dbgs() << "INDVARS: Eliminated comparison: " << *ICmp << '\n');
+  } else if (SE->isKnownPredicate(ICmpInst::getInversePredicate(Pred), S, X)) {
     ICmp->replaceAllUsesWith(ConstantInt::getFalse(ICmp->getContext()));
-  else
+    DeadInsts.emplace_back(ICmp);
+    DEBUG(dbgs() << "INDVARS: Eliminated comparison: " << *ICmp << '\n');
+  } else if (isa<PHINode>(IVOperand) &&
+             SE->isLoopInvariantPredicate(Pred, S, X, ICmpLoop,
+                                          InvariantPredicate, InvariantLHS,
+                                          InvariantRHS)) {
+
+    // Rewrite the comparison to a loop invariant comparison if it can be done
+    // cheaply, where cheaply means "we don't need to emit any new
+    // instructions".
+
+    Value *NewLHS = nullptr, *NewRHS = nullptr;
+
+    if (S == InvariantLHS || X == InvariantLHS)
+      NewLHS =
+          ICmp->getOperand(S == InvariantLHS ? IVOperIdx : (1 - IVOperIdx));
+
+    if (S == InvariantRHS || X == InvariantRHS)
+      NewRHS =
+          ICmp->getOperand(S == InvariantRHS ? IVOperIdx : (1 - IVOperIdx));
+
+    for (Value *Incoming : cast<PHINode>(IVOperand)->incoming_values()) {
+      if (NewLHS && NewRHS)
+        break;
+
+      const SCEV *IncomingS = SE->getSCEV(Incoming);
+
+      if (!NewLHS && IncomingS == InvariantLHS)
+        NewLHS = Incoming;
+      if (!NewRHS && IncomingS == InvariantRHS)
+        NewRHS = Incoming;
+    }
+
+    if (!NewLHS || !NewRHS)
+      // We could not find an existing value to replace either LHS or RHS.
+      // Generating new instructions has subtler tradeoffs, so avoid doing that
+      // for now.
+      return;
+
+    DEBUG(dbgs() << "INDVARS: Simplified comparison: " << *ICmp << '\n');
+    ICmp->setPredicate(InvariantPredicate);
+    ICmp->setOperand(0, NewLHS);
+    ICmp->setOperand(1, NewRHS);
+  } else
     return;
 
-  DEBUG(dbgs() << "INDVARS: Eliminated comparison: " << *ICmp << '\n');
   ++NumElimCmp;
   Changed = true;
-  DeadInsts.push_back(ICmp);
 }
 
-/// eliminateIVRemainder - SimplifyIVUsers helper for eliminating useless
+/// SimplifyIVUsers helper for eliminating useless
 /// remainder operations operating on an induction variable.
 void SimplifyIndvar::eliminateIVRemainder(BinaryOperator *Rem,
                                       Value *IVOperand,
@@ -206,8 +256,7 @@ void SimplifyIndvar::eliminateIVRemainder(BinaryOperator *Rem,
     Rem->replaceAllUsesWith(Rem->getOperand(0));
   else {
     // (i+1) % n  -->  (i+1)==n?0:(i+1)  if i is in [0,n).
-    const SCEV *LessOne =
-      SE->getMinusSCEV(S, SE->getConstant(S->getType(), 1));
+    const SCEV *LessOne = SE->getMinusSCEV(S, SE->getOne(S->getType()));
     if (IsSigned && !SE->isKnownNonNegative(LessOne))
       return;
 
@@ -228,12 +277,12 @@ void SimplifyIndvar::eliminateIVRemainder(BinaryOperator *Rem,
   DEBUG(dbgs() << "INDVARS: Simplified rem: " << *Rem << '\n');
   ++NumElimRem;
   Changed = true;
-  DeadInsts.push_back(Rem);
+  DeadInsts.emplace_back(Rem);
 }
 
-/// eliminateIVUser - Eliminate an operation that consumes a simple IV and has
-/// no observable side-effect given the range of IV values.
-/// IVOperand is guaranteed SCEVable, but UseInst may not be.
+/// Eliminate an operation that consumes a simple IV and has no observable
+/// side-effect given the range of IV values.  IVOperand is guaranteed SCEVable,
+/// but UseInst may not be.
 bool SimplifyIndvar::eliminateIVUser(Instruction *UseInst,
                                      Instruction *IVOperand) {
   if (ICmpInst *ICmp = dyn_cast<ICmpInst>(UseInst)) {
@@ -248,10 +297,43 @@ bool SimplifyIndvar::eliminateIVUser(Instruction *UseInst,
     }
   }
 
-  // Eliminate any operation that SCEV can prove is an identity function.
+  if (eliminateIdentitySCEV(UseInst, IVOperand))
+    return true;
+
+  return false;
+}
+
+/// Eliminate any operation that SCEV can prove is an identity function.
+bool SimplifyIndvar::eliminateIdentitySCEV(Instruction *UseInst,
+                                           Instruction *IVOperand) {
   if (!SE->isSCEVable(UseInst->getType()) ||
       (UseInst->getType() != IVOperand->getType()) ||
       (SE->getSCEV(UseInst) != SE->getSCEV(IVOperand)))
+    return false;
+
+  // getSCEV(X) == getSCEV(Y) does not guarantee that X and Y are related in the
+  // dominator tree, even if X is an operand to Y.  For instance, in
+  //
+  //     %iv = phi i32 {0,+,1}
+  //     br %cond, label %left, label %merge
+  //
+  //   left:
+  //     %X = add i32 %iv, 0
+  //     br label %merge
+  //
+  //   merge:
+  //     %M = phi (%X, %iv)
+  //
+  // getSCEV(%M) == getSCEV(%X) == {0,+,1}, but %X does not dominate %M, and
+  // %M.replaceAllUsesWith(%X) would be incorrect.
+
+  if (isa<PHINode>(UseInst))
+    // If UseInst is not a PHI node then we know that IVOperand dominates
+    // UseInst directly from the legality of SSA.
+    if (!DT || !DT->dominates(IVOperand, UseInst))
+      return false;
+
+  if (!LI->replacementPreservesLCSSAForm(UseInst, IVOperand))
     return false;
 
   DEBUG(dbgs() << "INDVARS: Eliminated identity: " << *UseInst << '\n');
@@ -259,31 +341,155 @@ bool SimplifyIndvar::eliminateIVUser(Instruction *UseInst,
   UseInst->replaceAllUsesWith(IVOperand);
   ++NumElimIdentity;
   Changed = true;
-  DeadInsts.push_back(UseInst);
+  DeadInsts.emplace_back(UseInst);
   return true;
 }
 
-/// pushIVUsers - Add all uses of Def to the current IV's worklist.
+/// Annotate BO with nsw / nuw if it provably does not signed-overflow /
+/// unsigned-overflow.  Returns true if anything changed, false otherwise.
+bool SimplifyIndvar::strengthenOverflowingOperation(BinaryOperator *BO,
+                                                    Value *IVOperand) {
+
+  // Fastpath: we don't have any work to do if `BO` is `nuw` and `nsw`.
+  if (BO->hasNoUnsignedWrap() && BO->hasNoSignedWrap())
+    return false;
+
+  const SCEV *(ScalarEvolution::*GetExprForBO)(const SCEV *, const SCEV *,
+                                               SCEV::NoWrapFlags);
+
+  switch (BO->getOpcode()) {
+  default:
+    return false;
+
+  case Instruction::Add:
+    GetExprForBO = &ScalarEvolution::getAddExpr;
+    break;
+
+  case Instruction::Sub:
+    GetExprForBO = &ScalarEvolution::getMinusSCEV;
+    break;
+
+  case Instruction::Mul:
+    GetExprForBO = &ScalarEvolution::getMulExpr;
+    break;
+  }
+
+  unsigned BitWidth = cast<IntegerType>(BO->getType())->getBitWidth();
+  Type *WideTy = IntegerType::get(BO->getContext(), BitWidth * 2);
+  const SCEV *LHS = SE->getSCEV(BO->getOperand(0));
+  const SCEV *RHS = SE->getSCEV(BO->getOperand(1));
+
+  bool Changed = false;
+
+  if (!BO->hasNoUnsignedWrap()) {
+    const SCEV *ExtendAfterOp = SE->getZeroExtendExpr(SE->getSCEV(BO), WideTy);
+    const SCEV *OpAfterExtend = (SE->*GetExprForBO)(
+      SE->getZeroExtendExpr(LHS, WideTy), SE->getZeroExtendExpr(RHS, WideTy),
+      SCEV::FlagAnyWrap);
+    if (ExtendAfterOp == OpAfterExtend) {
+      BO->setHasNoUnsignedWrap();
+      SE->forgetValue(BO);
+      Changed = true;
+    }
+  }
+
+  if (!BO->hasNoSignedWrap()) {
+    const SCEV *ExtendAfterOp = SE->getSignExtendExpr(SE->getSCEV(BO), WideTy);
+    const SCEV *OpAfterExtend = (SE->*GetExprForBO)(
+      SE->getSignExtendExpr(LHS, WideTy), SE->getSignExtendExpr(RHS, WideTy),
+      SCEV::FlagAnyWrap);
+    if (ExtendAfterOp == OpAfterExtend) {
+      BO->setHasNoSignedWrap();
+      SE->forgetValue(BO);
+      Changed = true;
+    }
+  }
+
+  return Changed;
+}
+
+/// \brief Split sadd.with.overflow into add + sadd.with.overflow to allow
+/// analysis and optimization.
 ///
+/// \return A new value representing the non-overflowing add if possible,
+/// otherwise return the original value.
+Instruction *SimplifyIndvar::splitOverflowIntrinsic(Instruction *IVUser,
+                                                    const DominatorTree *DT) {
+  IntrinsicInst *II = dyn_cast<IntrinsicInst>(IVUser);
+  if (!II || II->getIntrinsicID() != Intrinsic::sadd_with_overflow)
+    return IVUser;
+
+  // Find a branch guarded by the overflow check.
+  BranchInst *Branch = nullptr;
+  Instruction *AddVal = nullptr;
+  for (User *U : II->users()) {
+    if (ExtractValueInst *ExtractInst = dyn_cast<ExtractValueInst>(U)) {
+      if (ExtractInst->getNumIndices() != 1)
+        continue;
+      if (ExtractInst->getIndices()[0] == 0)
+        AddVal = ExtractInst;
+      else if (ExtractInst->getIndices()[0] == 1 && ExtractInst->hasOneUse())
+        Branch = dyn_cast<BranchInst>(ExtractInst->user_back());
+    }
+  }
+  if (!AddVal || !Branch)
+    return IVUser;
+
+  BasicBlock *ContinueBB = Branch->getSuccessor(1);
+  if (std::next(pred_begin(ContinueBB)) != pred_end(ContinueBB))
+    return IVUser;
+
+  // Check if all users of the add are provably NSW.
+  bool AllNSW = true;
+  for (Use &U : AddVal->uses()) {
+    if (Instruction *UseInst = dyn_cast<Instruction>(U.getUser())) {
+      BasicBlock *UseBB = UseInst->getParent();
+      if (PHINode *PHI = dyn_cast<PHINode>(UseInst))
+        UseBB = PHI->getIncomingBlock(U);
+      if (!DT->dominates(ContinueBB, UseBB)) {
+        AllNSW = false;
+        break;
+      }
+    }
+  }
+  if (!AllNSW)
+    return IVUser;
+
+  // Go for it...
+  IRBuilder<> Builder(IVUser);
+  Instruction *AddInst = dyn_cast<Instruction>(
+    Builder.CreateNSWAdd(II->getOperand(0), II->getOperand(1)));
+
+  // The caller expects the new add to have the same form as the intrinsic. The
+  // IV operand position must be the same.
+  assert((AddInst->getOpcode() == Instruction::Add &&
+          AddInst->getOperand(0) == II->getOperand(0)) &&
+         "Bad add instruction created from overflow intrinsic.");
+
+  AddVal->replaceAllUsesWith(AddInst);
+  DeadInsts.emplace_back(AddVal);
+  return AddInst;
+}
+
+/// Add all uses of Def to the current IV's worklist.
 static void pushIVUsers(
   Instruction *Def,
   SmallPtrSet<Instruction*,16> &Simplified,
   SmallVectorImpl< std::pair<Instruction*,Instruction*> > &SimpleIVUsers) {
 
-  for (Value::use_iterator UI = Def->use_begin(), E = Def->use_end();
-       UI != E; ++UI) {
-    Instruction *User = cast<Instruction>(*UI);
+  for (User *U : Def->users()) {
+    Instruction *UI = cast<Instruction>(U);
 
     // Avoid infinite or exponential worklist processing.
     // Also ensure unique worklist users.
     // If Def is a LoopPhi, it may not be in the Simplified set, so check for
     // self edges first.
-    if (User != Def && Simplified.insert(User))
-      SimpleIVUsers.push_back(std::make_pair(User, Def));
+    if (UI != Def && Simplified.insert(UI).second)
+      SimpleIVUsers.push_back(std::make_pair(UI, Def));
   }
 }
 
-/// isSimpleIVUser - Return true if this instruction generates a simple SCEV
+/// Return true if this instruction generates a simple SCEV
 /// expression in terms of that IV.
 ///
 /// This is similar to IVUsers' isInteresting() but processes each instruction
@@ -304,15 +510,15 @@ static bool isSimpleIVUser(Instruction *I, const Loop *L, ScalarEvolution *SE) {
   return false;
 }
 
-/// simplifyUsers - Iteratively perform simplification on a worklist of users
+/// Iteratively perform simplification on a worklist of users
 /// of the specified induction variable. Each successive simplification may push
 /// more users which may themselves be candidates for simplification.
 ///
 /// This algorithm does not require IVUsers analysis. Instead, it simplifies
 /// instructions in-place during analysis. Rather than rewriting induction
 /// variables bottom-up from their users, it transforms a chain of IVUsers
-/// top-down, updating the IR only when it encouters a clear optimization
-/// opportunitiy.
+/// top-down, updating the IR only when it encounters a clear optimization
+/// opportunity.
 ///
 /// Once DisableIVRewrite is default, LSR will be the only client of IVUsers.
 ///
@@ -334,8 +540,16 @@ void SimplifyIndvar::simplifyUsers(PHINode *CurrIV, IVVisitor *V) {
   while (!SimpleIVUsers.empty()) {
     std::pair<Instruction*, Instruction*> UseOper =
       SimpleIVUsers.pop_back_val();
+    Instruction *UseInst = UseOper.first;
+
     // Bypass back edges to avoid extra work.
-    if (UseOper.first == CurrIV) continue;
+    if (UseInst == CurrIV) continue;
+
+    if (V && V->shouldSplitOverflowInstrinsics()) {
+      UseInst = splitOverflowIntrinsic(UseInst, V->getDomTree());
+      if (!UseInst)
+        continue;
+    }
 
     Instruction *IVOperand = UseOper.second;
     for (unsigned N = 0; IVOperand; ++N) {
@@ -353,6 +567,16 @@ void SimplifyIndvar::simplifyUsers(PHINode *CurrIV, IVVisitor *V) {
       pushIVUsers(IVOperand, Simplified, SimpleIVUsers);
       continue;
     }
+
+    if (BinaryOperator *BO = dyn_cast<BinaryOperator>(UseOper.first)) {
+      if (isa<OverflowingBinaryOperator>(BO) &&
+          strengthenOverflowingOperation(BO, IVOperand)) {
+        // re-queue uses of the now modified binary operator and fall
+        // through to the checks that remain.
+        pushIVUsers(IVOperand, Simplified, SimpleIVUsers);
+      }
+    }
+
     CastInst *Cast = dyn_cast<CastInst>(UseOper.first);
     if (V && Cast) {
       V->visitCast(Cast);
@@ -368,24 +592,23 @@ namespace llvm {
 
 void IVVisitor::anchor() { }
 
-/// simplifyUsersOfIV - Simplify instructions that use this induction variable
+/// Simplify instructions that use this induction variable
 /// by using ScalarEvolution to analyze the IV's recurrence.
-bool simplifyUsersOfIV(PHINode *CurrIV, ScalarEvolution *SE, LPPassManager *LPM,
-                       SmallVectorImpl<WeakVH> &Dead, IVVisitor *V)
-{
-  LoopInfo *LI = &LPM->getAnalysis<LoopInfo>();
-  SimplifyIndvar SIV(LI->getLoopFor(CurrIV->getParent()), SE, LPM, Dead);
+bool simplifyUsersOfIV(PHINode *CurrIV, ScalarEvolution *SE, DominatorTree *DT,
+                       LoopInfo *LI, SmallVectorImpl<WeakVH> &Dead,
+                       IVVisitor *V) {
+  SimplifyIndvar SIV(LI->getLoopFor(CurrIV->getParent()), SE, DT, LI, Dead);
   SIV.simplifyUsers(CurrIV, V);
   return SIV.hasChanged();
 }
 
-/// simplifyLoopIVs - Simplify users of induction variables within this
+/// Simplify users of induction variables within this
 /// loop. This does not actually change or add IVs.
-bool simplifyLoopIVs(Loop *L, ScalarEvolution *SE, LPPassManager *LPM,
-                     SmallVectorImpl<WeakVH> &Dead) {
+bool simplifyLoopIVs(Loop *L, ScalarEvolution *SE, DominatorTree *DT,
+                     LoopInfo *LI, SmallVectorImpl<WeakVH> &Dead) {
   bool Changed = false;
   for (BasicBlock::iterator I = L->getHeader()->begin(); isa<PHINode>(I); ++I) {
-    Changed |= simplifyUsersOfIV(cast<PHINode>(I), SE, LPM, Dead);
+    Changed |= simplifyUsersOfIV(cast<PHINode>(I), SE, DT, LI, Dead);
   }
   return Changed;
 }

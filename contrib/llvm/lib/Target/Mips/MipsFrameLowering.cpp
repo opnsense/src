@@ -82,26 +82,36 @@ using namespace llvm;
 //
 //===----------------------------------------------------------------------===//
 
-const MipsFrameLowering *MipsFrameLowering::create(MipsTargetMachine &TM,
-                                                   const MipsSubtarget &ST) {
-  if (TM.getSubtargetImpl()->inMips16Mode())
+const MipsFrameLowering *MipsFrameLowering::create(const MipsSubtarget &ST) {
+  if (ST.inMips16Mode())
     return llvm::createMips16FrameLowering(ST);
 
   return llvm::createMipsSEFrameLowering(ST);
 }
 
 // hasFP - Return true if the specified function should have a dedicated frame
-// pointer register.  This is true if the function has variable sized allocas or
-// if frame pointer elimination is disabled.
+// pointer register.  This is true if the function has variable sized allocas,
+// if it needs dynamic stack realignment, if frame pointer elimination is
+// disabled, or if the frame address is taken.
 bool MipsFrameLowering::hasFP(const MachineFunction &MF) const {
   const MachineFrameInfo *MFI = MF.getFrameInfo();
+  const TargetRegisterInfo *TRI = STI.getRegisterInfo();
+
   return MF.getTarget().Options.DisableFramePointerElim(MF) ||
-      MFI->hasVarSizedObjects() || MFI->isFrameAddressTaken();
+      MFI->hasVarSizedObjects() || MFI->isFrameAddressTaken() ||
+      TRI->needsStackRealignment(MF);
+}
+
+bool MipsFrameLowering::hasBP(const MachineFunction &MF) const {
+  const MachineFrameInfo *MFI = MF.getFrameInfo();
+  const TargetRegisterInfo *TRI = STI.getRegisterInfo();
+
+  return MFI->hasVarSizedObjects() && TRI->needsStackRealignment(MF);
 }
 
 uint64_t MipsFrameLowering::estimateStackSize(const MachineFunction &MF) const {
   const MachineFrameInfo *MFI = MF.getFrameInfo();
-  const TargetRegisterInfo &TRI = *MF.getTarget().getRegisterInfo();
+  const TargetRegisterInfo &TRI = *STI.getRegisterInfo();
 
   int64_t Offset = 0;
 
@@ -110,7 +120,7 @@ uint64_t MipsFrameLowering::estimateStackSize(const MachineFunction &MF) const {
     Offset = std::max(Offset, -MFI->getObjectOffset(I));
 
   // Conservatively assume all callee-saved registers will be saved.
-  for (const uint16_t *R = TRI.getCalleeSavedRegs(&MF); *R; ++R) {
+  for (const MCPhysReg *R = TRI.getCalleeSavedRegs(&MF); *R; ++R) {
     unsigned Size = TRI.getMinimalPhysRegClass(*R)->getSize();
     Offset = RoundUpToAlignment(Offset + Size, Size);
   }
@@ -131,4 +141,21 @@ uint64_t MipsFrameLowering::estimateStackSize(const MachineFunction &MF) const {
                                 std::max(MaxAlign, getStackAlignment()));
 
   return RoundUpToAlignment(Offset, getStackAlignment());
+}
+
+// Eliminate ADJCALLSTACKDOWN, ADJCALLSTACKUP pseudo instructions
+void MipsFrameLowering::
+eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
+                              MachineBasicBlock::iterator I) const {
+  unsigned SP = STI.getABI().IsN64() ? Mips::SP_64 : Mips::SP;
+
+  if (!hasReservedCallFrame(MF)) {
+    int64_t Amount = I->getOperand(0).getImm();
+    if (I->getOpcode() == Mips::ADJCALLSTACKDOWN)
+      Amount = -Amount;
+
+    STI.getInstrInfo()->adjustStackPtr(SP, Amount, MBB, I);
+  }
+
+  MBB.erase(I);
 }

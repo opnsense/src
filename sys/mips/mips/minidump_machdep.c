@@ -39,7 +39,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/msgbuf.h>
 #include <vm/vm.h>
 #include <vm/pmap.h>
-#include <machine/pmap.h>
 #include <machine/atomic.h>
 #include <machine/elf.h>
 #include <machine/md_var.h>
@@ -153,7 +152,7 @@ write_buffer(struct dumperinfo *di, char *ptr, size_t sz)
 	return (0);
 }
 
-void
+int
 minidumpsys(struct dumperinfo *di)
 {
 	struct minidumphdr mdhdr;
@@ -325,7 +324,7 @@ minidumpsys(struct dumperinfo *di)
 	/* Signal completion, signoff and exit stage left. */
 	dump_write(di, NULL, 0, 0, 0);
 	printf("\nDump complete\n");
-	return;
+	return (0);
 
 fail:
 	if (error < 0)
@@ -337,4 +336,5 @@ fail:
 		printf("\nDump failed. Partition too small.\n");
 	else
 		printf("\n** DUMP FAILED (ERROR %d) **\n", error);
+	return (error);
 }

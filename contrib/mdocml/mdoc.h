@@ -1,147 +1,145 @@
-/*	$Id: mdoc.h,v 1.122 2011/03/22 14:05:45 kristaps Exp $ */
+/*	$Id: mdoc.h,v 1.144 2015/11/07 14:01:16 schwarze Exp $ */
 /*
  * Copyright (c) 2008, 2009, 2010, 2011 Kristaps Dzonsons <kristaps@bsd.lv>
+ * Copyright (c) 2014, 2015 Ingo Schwarze <schwarze@openbsd.org>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
  *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHORS DISCLAIM ALL WARRANTIES
  * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR
  * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
  * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
-#ifndef MDOC_H
-#define MDOC_H
 
-enum	mdoct {
-	MDOC_Ap = 0,
-	MDOC_Dd,
-	MDOC_Dt,
-	MDOC_Os,
-	MDOC_Sh,
-	MDOC_Ss,
-	MDOC_Pp,
-	MDOC_D1,
-	MDOC_Dl,
-	MDOC_Bd,
-	MDOC_Ed,
-	MDOC_Bl,
-	MDOC_El,
-	MDOC_It,
-	MDOC_Ad,
-	MDOC_An,
-	MDOC_Ar,
-	MDOC_Cd,
-	MDOC_Cm,
-	MDOC_Dv,
-	MDOC_Er,
-	MDOC_Ev,
-	MDOC_Ex,
-	MDOC_Fa,
-	MDOC_Fd,
-	MDOC_Fl,
-	MDOC_Fn,
-	MDOC_Ft,
-	MDOC_Ic,
-	MDOC_In,
-	MDOC_Li,
-	MDOC_Nd,
-	MDOC_Nm,
-	MDOC_Op,
-	MDOC_Ot,
-	MDOC_Pa,
-	MDOC_Rv,
-	MDOC_St,
-	MDOC_Va,
-	MDOC_Vt,
-	MDOC_Xr,
-	MDOC__A,
-	MDOC__B,
-	MDOC__D,
-	MDOC__I,
-	MDOC__J,
-	MDOC__N,
-	MDOC__O,
-	MDOC__P,
-	MDOC__R,
-	MDOC__T,
-	MDOC__V,
-	MDOC_Ac,
-	MDOC_Ao,
-	MDOC_Aq,
-	MDOC_At,
-	MDOC_Bc,
-	MDOC_Bf,
-	MDOC_Bo,
-	MDOC_Bq,
-	MDOC_Bsx,
-	MDOC_Bx,
-	MDOC_Db,
-	MDOC_Dc,
-	MDOC_Do,
-	MDOC_Dq,
-	MDOC_Ec,
-	MDOC_Ef,
-	MDOC_Em,
-	MDOC_Eo,
-	MDOC_Fx,
-	MDOC_Ms,
-	MDOC_No,
-	MDOC_Ns,
-	MDOC_Nx,
-	MDOC_Ox,
-	MDOC_Pc,
-	MDOC_Pf,
-	MDOC_Po,
-	MDOC_Pq,
-	MDOC_Qc,
-	MDOC_Ql,
-	MDOC_Qo,
-	MDOC_Qq,
-	MDOC_Re,
-	MDOC_Rs,
-	MDOC_Sc,
-	MDOC_So,
-	MDOC_Sq,
-	MDOC_Sm,
-	MDOC_Sx,
-	MDOC_Sy,
-	MDOC_Tn,
-	MDOC_Ux,
-	MDOC_Xc,
-	MDOC_Xo,
-	MDOC_Fo,
-	MDOC_Fc,
-	MDOC_Oo,
-	MDOC_Oc,
-	MDOC_Bk,
-	MDOC_Ek,
-	MDOC_Bt,
-	MDOC_Hf,
-	MDOC_Fr,
-	MDOC_Ud,
-	MDOC_Lb,
-	MDOC_Lp,
-	MDOC_Lk,
-	MDOC_Mt,
-	MDOC_Brq,
-	MDOC_Bro,
-	MDOC_Brc,
-	MDOC__C,
-	MDOC_Es,
-	MDOC_En,
-	MDOC_Dx,
-	MDOC__Q,
-	MDOC_br,
-	MDOC_sp,
-	MDOC__U,
-	MDOC_Ta,
-	MDOC_MAX
-};
+#define	MDOC_Ap    0
+#define	MDOC_Dd    1
+#define	MDOC_Dt    2
+#define	MDOC_Os    3
+#define	MDOC_Sh    4
+#define	MDOC_Ss    5
+#define	MDOC_Pp    6
+#define	MDOC_D1    7
+#define	MDOC_Dl    8
+#define	MDOC_Bd    9
+#define	MDOC_Ed   10
+#define	MDOC_Bl   11
+#define	MDOC_El   12
+#define	MDOC_It   13
+#define	MDOC_Ad   14
+#define	MDOC_An   15
+#define	MDOC_Ar   16
+#define	MDOC_Cd   17
+#define	MDOC_Cm   18
+#define	MDOC_Dv   19
+#define	MDOC_Er   20
+#define	MDOC_Ev   21
+#define	MDOC_Ex   22
+#define	MDOC_Fa   23
+#define	MDOC_Fd   24
+#define	MDOC_Fl   25
+#define	MDOC_Fn   26
+#define	MDOC_Ft   27
+#define	MDOC_Ic   28
+#define	MDOC_In   29
+#define	MDOC_Li   30
+#define	MDOC_Nd   31
+#define	MDOC_Nm   32
+#define	MDOC_Op   33
+#define	MDOC_Ot   34
+#define	MDOC_Pa   35
+#define	MDOC_Rv   36
+#define	MDOC_St   37
+#define	MDOC_Va   38
+#define	MDOC_Vt   39
+#define	MDOC_Xr   40
+#define	MDOC__A   41
+#define	MDOC__B   42
+#define	MDOC__D   43
+#define	MDOC__I   44
+#define	MDOC__J   45
+#define	MDOC__N   46
+#define	MDOC__O   47
+#define	MDOC__P   48
+#define	MDOC__R   49
+#define	MDOC__T   50
+#define	MDOC__V   51
+#define	MDOC_Ac   52
+#define	MDOC_Ao   53
+#define	MDOC_Aq   54
+#define	MDOC_At   55
+#define	MDOC_Bc   56
+#define	MDOC_Bf   57
+#define	MDOC_Bo   58
+#define	MDOC_Bq   59
+#define	MDOC_Bsx  60
+#define	MDOC_Bx   61
+#define	MDOC_Db   62
+#define	MDOC_Dc   63
+#define	MDOC_Do   64
+#define	MDOC_Dq   65
+#define	MDOC_Ec   66
+#define	MDOC_Ef   67
+#define	MDOC_Em   68
+#define	MDOC_Eo   69
+#define	MDOC_Fx   70
+#define	MDOC_Ms   71
+#define	MDOC_No   72
+#define	MDOC_Ns   73
+#define	MDOC_Nx   74
+#define	MDOC_Ox   75
+#define	MDOC_Pc   76
+#define	MDOC_Pf   77
+#define	MDOC_Po   78
+#define	MDOC_Pq   79
+#define	MDOC_Qc   80
+#define	MDOC_Ql   81
+#define	MDOC_Qo   82
+#define	MDOC_Qq   83
+#define	MDOC_Re   84
+#define	MDOC_Rs   85
+#define	MDOC_Sc   86
+#define	MDOC_So   87
+#define	MDOC_Sq   88
+#define	MDOC_Sm   89
+#define	MDOC_Sx   90
+#define	MDOC_Sy   91
+#define	MDOC_Tn   92
+#define	MDOC_Ux   93
+#define	MDOC_Xc   94
+#define	MDOC_Xo   95
+#define	MDOC_Fo   96
+#define	MDOC_Fc   97
+#define	MDOC_Oo   98
+#define	MDOC_Oc   99
+#define	MDOC_Bk  100
+#define	MDOC_Ek  101
+#define	MDOC_Bt  102
+#define	MDOC_Hf  103
+#define	MDOC_Fr  104
+#define	MDOC_Ud  105
+#define	MDOC_Lb  106
+#define	MDOC_Lp  107
+#define	MDOC_Lk  108
+#define	MDOC_Mt  109
+#define	MDOC_Brq 110
+#define	MDOC_Bro 111
+#define	MDOC_Brc 112
+#define	MDOC__C  113
+#define	MDOC_Es  114
+#define	MDOC_En  115
+#define	MDOC_Dx  116
+#define	MDOC__Q  117
+#define	MDOC_br  118
+#define	MDOC_sp  119
+#define	MDOC__U  120
+#define	MDOC_Ta  121
+#define	MDOC_ll  122
+#define	MDOC_MAX 123
 
 enum	mdocargt {
 	MDOC_Split, /* -split */
@@ -174,65 +172,11 @@ enum	mdocargt {
 	MDOC_ARG_MAX
 };
 
-enum	mdoc_type {
-	MDOC_TEXT,
-	MDOC_ELEM,
-	MDOC_HEAD,
-	MDOC_TAIL,
-	MDOC_BODY,
-	MDOC_BLOCK,
-	MDOC_TBL,
-	MDOC_EQN,
-	MDOC_ROOT
-};
-
-/* 
- * Section (named/unnamed) of `Sh'.   Note that these appear in the
- * conventional order imposed by mdoc.7.  In the case of SEC_NONE, no
- * section has been invoked (this shouldn't happen).  SEC_CUSTOM refers
- * to other sections.
- */
-enum	mdoc_sec {
-	SEC_NONE = 0,
-	SEC_NAME, /* NAME */
-	SEC_LIBRARY, /* LIBRARY */
-	SEC_SYNOPSIS, /* SYNOPSIS */
-	SEC_DESCRIPTION, /* DESCRIPTION */
-	SEC_IMPLEMENTATION, /* IMPLEMENTATION NOTES */
-	SEC_RETURN_VALUES, /* RETURN VALUES */
-	SEC_ENVIRONMENT,  /* ENVIRONMENT */
-	SEC_FILES, /* FILES */
-	SEC_EXIT_STATUS, /* EXIT STATUS */
-	SEC_EXAMPLES, /* EXAMPLES */
-	SEC_DIAGNOSTICS, /* DIAGNOSTICS */
-	SEC_COMPATIBILITY, /* COMPATIBILITY */
-	SEC_ERRORS, /* ERRORS */
-	SEC_SEE_ALSO, /* SEE ALSO */
-	SEC_STANDARDS, /* STANDARDS */
-	SEC_HISTORY, /* HISTORY */
-	SEC_AUTHORS, /* AUTHORS */
-	SEC_CAVEATS, /* CAVEATS */
-	SEC_BUGS, /* BUGS */
-	SEC_SECURITY, /* SECURITY */
-	SEC_CUSTOM, 
-	SEC__MAX
-};
-
-struct	mdoc_meta {
-	char		 *msec; /* `Dt' section (1, 3p, etc.) */
-	char		 *vol; /* `Dt' volume (implied) */
-	char		 *arch; /* `Dt' arch (i386, etc.) */
-	char		 *date; /* `Dd' normalised date */
-	char		 *title; /* `Dt' title (FOO, etc.) */
-	char		 *os; /* `Os' system (OpenBSD, etc.) */
-	char		 *name; /* leading `Nm' name */
-};
-
-/* 
- * An argument to a macro (multiple values = `-column xxx yyy'). 
+/*
+ * An argument to a macro (multiple values = `-column xxx yyy').
  */
 struct	mdoc_argv {
-	enum mdocargt  	  arg; /* type of argument */
+	enum mdocargt	  arg; /* type of argument */
 	int		  line;
 	int		  pos;
 	size_t		  sz; /* elements in "value" */
@@ -244,20 +188,10 @@ struct	mdoc_argv {
  * blocks have multiple instances of the same arguments spread across
  * the HEAD, BODY, TAIL, and BLOCK node types.
  */
-struct 	mdoc_arg {
+struct	mdoc_arg {
 	size_t		  argc;
 	struct mdoc_argv *argv;
 	unsigned int	  refcnt;
-};
-
-/*
- * Indicates that a BODY's formatting has ended, but the scope is still
- * open.  Used for syntax-broken blocks.
- */
-enum	mdoc_endbody {
-	ENDBODY_NOT = 0,
-	ENDBODY_SPACE, /* is broken: append a space */
-	ENDBODY_NOSPACE /* is broken: don't append a space */
 };
 
 enum	mdoc_list {
@@ -278,7 +212,7 @@ enum	mdoc_list {
 
 enum	mdoc_disp {
 	DISP__NONE = 0,
-	DISP_centred, /* -centered */
+	DISP_centered, /* -centered */
 	DISP_ragged, /* -ragged */
 	DISP_unfilled, /* -unfilled */
 	DISP_filled, /* -filled */
@@ -311,6 +245,7 @@ struct	mdoc_bl {
 	int		  comp; /* -compact */
 	size_t		  ncols; /* -column arg count */
 	const char	**cols; /* -column val ptr */
+	int		  count; /* -enum counter */
 };
 
 struct	mdoc_bf {
@@ -331,62 +266,19 @@ struct	mdoc_rs {
  * provided, etc.
  */
 union	mdoc_data {
-	struct mdoc_an 	  An;
+	struct mdoc_an	  An;
 	struct mdoc_bd	  Bd;
 	struct mdoc_bf	  Bf;
 	struct mdoc_bl	  Bl;
+	struct roff_node *Es;
 	struct mdoc_rs	  Rs;
 };
 
-/* 
- * Single node in tree-linked AST. 
- */
-struct	mdoc_node {
-	struct mdoc_node *parent; /* parent AST node */
-	struct mdoc_node *child; /* first child AST node */
-	struct mdoc_node *last; /* last child AST node */
-	struct mdoc_node *next; /* sibling AST node */
-	struct mdoc_node *prev; /* prior sibling AST node */
-	int		  nchild; /* number children */
-	int		  line; /* parse line */
-	int		  pos; /* parse column */
-	enum mdoct	  tok; /* tok or MDOC__MAX if none */
-	int		  flags;
-#define	MDOC_VALID	 (1 << 0) /* has been validated */
-#define	MDOC_EOS	 (1 << 2) /* at sentence boundary */
-#define	MDOC_LINE	 (1 << 3) /* first macro/text on line */
-#define	MDOC_SYNPRETTY	 (1 << 4) /* SYNOPSIS-style formatting */
-#define	MDOC_ENDED	 (1 << 5) /* rendering has been ended */
-#define	MDOC_DELIMO	 (1 << 6)
-#define	MDOC_DELIMC	 (1 << 7)
-	enum mdoc_type	  type; /* AST node type */
-	enum mdoc_sec	  sec; /* current named section */
-	union mdoc_data	 *norm; /* normalised args */
-	/* FIXME: these can be union'd to shave a few bytes. */
-	struct mdoc_arg	 *args; /* BLOCK/ELEM */
-	struct mdoc_node *pending; /* BLOCK */
-	struct mdoc_node *head; /* BLOCK */
-	struct mdoc_node *body; /* BLOCK */
-	struct mdoc_node *tail; /* BLOCK */
-	char		 *string; /* TEXT */
-	const struct tbl_span *span; /* TBL */
-	const struct eqn *eqn; /* EQN */
-	enum mdoc_endbody end; /* BODY */
-};
-
-/* Names of macros.  Index is enum mdoct. */
+/* Names of macros. */
 extern	const char *const *mdoc_macronames;
 
 /* Names of macro args.  Index is enum mdocargt. */
 extern	const char *const *mdoc_argnames;
 
-__BEGIN_DECLS
 
-struct	mdoc;
-
-const struct mdoc_node *mdoc_node(const struct mdoc *);
-const struct mdoc_meta *mdoc_meta(const struct mdoc *);
-
-__END_DECLS
-
-#endif /*!MDOC_H*/
+void		 mdoc_validate(struct roff_man *);

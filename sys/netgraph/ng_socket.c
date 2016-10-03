@@ -301,7 +301,7 @@ ngc_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *addr,
 		}
 	}
 
-	item = ng_package_msg(msg, M_WAITOK);
+	item = ng_package_msg(msg, NG_WAITOK);
 	if ((error = ng_address_path((pcbp->sockdata->node), item, path, 0))
 	    != 0) {
 #ifdef TRACE_MESSAGES
@@ -360,7 +360,7 @@ ngc_bind(struct socket *so, struct sockaddr *nam, struct thread *td)
 {
 	struct ngpcb *const pcbp = sotongpcb(so);
 
-	if (pcbp == 0)
+	if (pcbp == NULL)
 		return (EINVAL);
 	return (ng_bind(nam, pcbp));
 }
@@ -474,7 +474,7 @@ ngd_connect(struct socket *so, struct sockaddr *nam, struct thread *td)
 {
 	struct ngpcb *const pcbp = sotongpcb(so);
 
-	if (pcbp == 0)
+	if (pcbp == NULL)
 		return (EINVAL);
 	return (ng_connect_data(nam, pcbp));
 }
@@ -1163,7 +1163,7 @@ struct domain ngdomain = {
 	.dom_family =		AF_NETGRAPH,
 	.dom_name =		"netgraph",
 	.dom_protosw =		ngsw,
-	.dom_protoswNPROTOSW =	&ngsw[sizeof(ngsw) / sizeof(ngsw[0])]
+	.dom_protoswNPROTOSW =	&ngsw[nitems(ngsw)]
 };
 
 /*

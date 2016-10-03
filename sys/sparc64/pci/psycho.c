@@ -161,7 +161,6 @@ EARLY_DRIVER_MODULE(psycho, nexus, psycho_driver, psycho_devclass, NULL, NULL,
 static SYSCTL_NODE(_hw, OID_AUTO, psycho, CTLFLAG_RD, 0, "psycho parameters");
 
 static u_int psycho_powerfail = 1;
-TUNABLE_INT("hw.psycho.powerfail", &psycho_powerfail);
 SYSCTL_UINT(_hw_psycho, OID_AUTO, powerfail, CTLFLAG_RDTUN, &psycho_powerfail,
     0, "powerfail action (0: none, 1: shutdown (default), 2: debugger)");
 
@@ -1039,7 +1038,7 @@ psycho_setup_intr(device_t dev, device_t child, struct resource *ires,
 
 static struct resource *
 psycho_alloc_resource(device_t bus, device_t child, int type, int *rid,
-    u_long start, u_long end, u_long count, u_int flags)
+    rman_res_t start, rman_res_t end, rman_res_t count, u_int flags)
 {
 	struct psycho_softc *sc;
 

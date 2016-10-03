@@ -14,7 +14,7 @@
 // Other libraries and framework includes
 
 // Clang headers like to use NDEBUG inside of them to enable/disable debug 
-// releated features using "#ifndef NDEBUG" preprocessor blocks to do one thing
+// related features using "#ifndef NDEBUG" preprocessor blocks to do one thing
 // or another. This is bad because it means that if clang was built in release
 // mode, it assumes that you are building in release mode which is not always
 // the case. You can end up with functions that are defined as empty in header
@@ -41,6 +41,7 @@
 #endif
 
 #include "lldb/Core/Log.h"
+#include "clang/AST/Decl.h"
 
 using namespace clang;
 using namespace lldb_private;
@@ -141,13 +142,12 @@ ClangExternalASTSourceCallbacks::CompleteType (ObjCInterfaceDecl *objc_decl)
         m_callback_objc_decl (m_callback_baton, objc_decl);
 }
 
-bool 
-ClangExternalASTSourceCallbacks::layoutRecordType(const clang::RecordDecl *Record,
-                                                  uint64_t &Size, 
-                                                  uint64_t &Alignment,
-                                                  llvm::DenseMap <const clang::FieldDecl *, uint64_t> &FieldOffsets,
-                                                  llvm::DenseMap <const clang::CXXRecordDecl *, clang::CharUnits> &BaseOffsets,
-                                                  llvm::DenseMap <const clang::CXXRecordDecl *, clang::CharUnits> &VirtualBaseOffsets)
+bool
+ClangExternalASTSourceCallbacks::layoutRecordType(
+    const clang::RecordDecl *Record, uint64_t &Size, uint64_t &Alignment,
+    llvm::DenseMap<const clang::FieldDecl *, uint64_t> &FieldOffsets,
+    llvm::DenseMap<const clang::CXXRecordDecl *, clang::CharUnits> &BaseOffsets,
+    llvm::DenseMap<const clang::CXXRecordDecl *, clang::CharUnits> &VirtualBaseOffsets)
 {
     if (m_callback_layout_record_type)
         return m_callback_layout_record_type(m_callback_baton,
@@ -159,5 +159,18 @@ ClangExternalASTSourceCallbacks::layoutRecordType(const clang::RecordDecl *Recor
                                              VirtualBaseOffsets);
     
     return false;
+}
+
+void
+ClangExternalASTSourceCallbacks::FindExternalLexicalDecls (const clang::DeclContext *decl_ctx,
+                                                           llvm::function_ref<bool(clang::Decl::Kind)> IsKindWeWant,
+                                                           llvm::SmallVectorImpl<clang::Decl *> &decls)
+{
+    if (m_callback_tag_decl && decl_ctx)
+    {
+        clang::TagDecl *tag_decl = llvm::dyn_cast<clang::TagDecl>(const_cast<clang::DeclContext *>(decl_ctx));
+        if (tag_decl)
+            CompleteType(tag_decl);
+    }
 }
 

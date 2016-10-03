@@ -58,12 +58,11 @@ sctp_init_sysctls()
 	SCTP_BASE_SYSCTL(sctp_multiple_asconfs) = SCTPCTL_MULTIPLEASCONFS_DEFAULT;
 	SCTP_BASE_SYSCTL(sctp_ecn_enable) = SCTPCTL_ECN_ENABLE_DEFAULT;
 	SCTP_BASE_SYSCTL(sctp_pr_enable) = SCTPCTL_PR_ENABLE_DEFAULT;
-	SCTP_BASE_SYSCTL(sctp_auth_disable) = SCTPCTL_AUTH_DISABLE_DEFAULT;
+	SCTP_BASE_SYSCTL(sctp_auth_enable) = SCTPCTL_AUTH_ENABLE_DEFAULT;
 	SCTP_BASE_SYSCTL(sctp_asconf_enable) = SCTPCTL_ASCONF_ENABLE_DEFAULT;
 	SCTP_BASE_SYSCTL(sctp_reconfig_enable) = SCTPCTL_RECONFIG_ENABLE_DEFAULT;
 	SCTP_BASE_SYSCTL(sctp_nrsack_enable) = SCTPCTL_NRSACK_ENABLE_DEFAULT;
 	SCTP_BASE_SYSCTL(sctp_pktdrop_enable) = SCTPCTL_PKTDROP_ENABLE_DEFAULT;
-	SCTP_BASE_SYSCTL(sctp_strict_sacks) = SCTPCTL_STRICT_SACKS_DEFAULT;
 	SCTP_BASE_SYSCTL(sctp_peer_chunk_oh) = SCTPCTL_PEER_CHKOH_DEFAULT;
 	SCTP_BASE_SYSCTL(sctp_max_burst_default) = SCTPCTL_MAXBURST_DEFAULT;
 	SCTP_BASE_SYSCTL(sctp_fr_max_burst_default) = SCTPCTL_FRMAXBURST_DEFAULT;
@@ -101,7 +100,6 @@ sctp_init_sysctls()
 	SCTP_BASE_SYSCTL(sctp_do_drain) = SCTPCTL_DO_SCTP_DRAIN_DEFAULT;
 	SCTP_BASE_SYSCTL(sctp_hb_maxburst) = SCTPCTL_HB_MAX_BURST_DEFAULT;
 	SCTP_BASE_SYSCTL(sctp_abort_if_one_2_one_hits_limit) = SCTPCTL_ABORT_AT_LIMIT_DEFAULT;
-	SCTP_BASE_SYSCTL(sctp_strict_data_order) = SCTPCTL_STRICT_DATA_ORDER_DEFAULT;
 	SCTP_BASE_SYSCTL(sctp_min_residual) = SCTPCTL_MIN_RESIDUAL_DEFAULT;
 	SCTP_BASE_SYSCTL(sctp_max_retran_chunk) = SCTPCTL_MAX_RETRAN_CHUNK_DEFAULT;
 	SCTP_BASE_SYSCTL(sctp_logging_level) = SCTPCTL_LOGGING_LEVEL_DEFAULT;
@@ -281,15 +279,6 @@ sctp_sysctl_copy_out_local_addresses(struct sctp_inpcb *inp, struct sctp_tcb *st
 						if (IN6_IS_ADDR_LINKLOCAL(&sin6->sin6_addr)) {
 							if (local_scope == 0)
 								continue;
-							if (sin6->sin6_scope_id == 0) {
-								/*
-								 * bad link
-								 * local
-								 * address
-								 */
-								if (sa6_recoverscope(sin6) != 0)
-									continue;
-							}
 						}
 						if ((site_scope == 0) && (IN6_IS_ADDR_SITELOCAL(&sin6->sin6_addr)))
 							continue;
@@ -426,7 +415,11 @@ sctp_sysctl_handle_assoclist(SYSCTL_HANDLER_ARGS)
 			xinpcb.maxqlen = 0;
 		} else {
 			xinpcb.qlen = so->so_qlen;
+			xinpcb.qlen_old = so->so_qlen > USHRT_MAX ?
+			    USHRT_MAX : (uint16_t) so->so_qlen;
 			xinpcb.maxqlen = so->so_qlimit;
+			xinpcb.maxqlen_old = so->so_qlimit > USHRT_MAX ?
+			    USHRT_MAX : (uint16_t) so->so_qlimit;
 		}
 		SCTP_INP_INCR_REF(inp);
 		SCTP_INP_RUNLOCK(inp);
@@ -600,21 +593,21 @@ sctp_sysctl_handle_auth(SYSCTL_HANDLER_ARGS)
 	int error;
 	uint32_t new;
 
-	new = SCTP_BASE_SYSCTL(sctp_auth_disable);
+	new = SCTP_BASE_SYSCTL(sctp_auth_enable);
 	error = sysctl_handle_int(oidp, &new, 0, req);
 	if ((error == 0) &&
 	    (req->newptr != NULL)) {
-#if (SCTPCTL_AUTH_DISABLE_MIN ==0)
-		if ((new > SCTPCTL_AUTH_DISABLE_MAX) ||
-		    ((new == 1) && (SCTP_BASE_SYSCTL(sctp_asconf_enable) == 1))) {
+#if (SCTPCTL_AUTH_ENABLE_MIN == 0)
+		if ((new > SCTPCTL_AUTH_ENABLE_MAX) ||
+		    ((new == 0) && (SCTP_BASE_SYSCTL(sctp_asconf_enable) == 1))) {
 #else
-		if ((new < SCTPCTL_AUTH_DISABLE_MIN) ||
-		    (new > SCTPCTL_AUTH_DISABLE_MAX) ||
-		    ((new == 1) && (SCTP_BASE_SYSCTL(sctp_asconf_enable) == 1))) {
+		if ((new < SCTPCTL_AUTH_ENABLE_MIN) ||
+		    (new > SCTPCTL_AUTH_ENABLE_MAX) ||
+		    ((new == 0) && (SCTP_BASE_SYSCTL(sctp_asconf_enable) == 1))) {
 #endif
 			error = EINVAL;
 		} else {
-			SCTP_BASE_SYSCTL(sctp_auth_disable) = new;
+			SCTP_BASE_SYSCTL(sctp_auth_enable) = new;
 		}
 	}
 	return (error);
@@ -632,11 +625,11 @@ sctp_sysctl_handle_asconf(SYSCTL_HANDLER_ARGS)
 	    (req->newptr != NULL)) {
 #if (SCTPCTL_ASCONF_ENABLE_MIN == 0)
 		if ((new > SCTPCTL_ASCONF_ENABLE_MAX) ||
-		    ((new == 1) && (SCTP_BASE_SYSCTL(sctp_auth_disable) == 1))) {
+		    ((new == 1) && (SCTP_BASE_SYSCTL(sctp_auth_enable) == 0))) {
 #else
 		if ((new < SCTPCTL_ASCONF_ENABLE_MIN) ||
 		    (new > SCTPCTL_ASCONF_ENABLE_MAX) ||
-		    ((new == 1) && (SCTP_BASE_SYSCTL(sctp_auth_disable) == 1))) {
+		    ((new == 1) && (SCTP_BASE_SYSCTL(sctp_auth_enable) == 0))) {
 #endif
 			error = EINVAL;
 		} else {
@@ -870,14 +863,13 @@ SCTP_UINT_SYSCTL(recvspace, sctp_recvspace, SCTPCTL_RECVSPACE)
 SCTP_UINT_SYSCTL(auto_asconf, sctp_auto_asconf, SCTPCTL_AUTOASCONF)
 SCTP_UINT_SYSCTL(ecn_enable, sctp_ecn_enable, SCTPCTL_ECN_ENABLE)
 SCTP_UINT_SYSCTL(pr_enable, sctp_pr_enable, SCTPCTL_PR_ENABLE)
-SYSCTL_PROC(_net_inet_sctp, OID_AUTO, auth_disable, CTLFLAG_VNET | CTLTYPE_UINT | CTLFLAG_RW,
-    NULL, 0, sctp_sysctl_handle_auth, "IU", SCTPCTL_AUTH_DISABLE_DESC);
+SYSCTL_PROC(_net_inet_sctp, OID_AUTO, auth_enable, CTLFLAG_VNET | CTLTYPE_UINT | CTLFLAG_RW,
+    NULL, 0, sctp_sysctl_handle_auth, "IU", SCTPCTL_AUTH_ENABLE_DESC);
 SYSCTL_PROC(_net_inet_sctp, OID_AUTO, asconf_enable, CTLFLAG_VNET | CTLTYPE_UINT | CTLFLAG_RW,
     NULL, 0, sctp_sysctl_handle_asconf, "IU", SCTPCTL_ASCONF_ENABLE_DESC);
 SCTP_UINT_SYSCTL(reconfig_enable, sctp_reconfig_enable, SCTPCTL_RECONFIG_ENABLE)
-SCTP_UINT_SYSCTL(nr_sack_on_off, sctp_nrsack_enable, SCTPCTL_NRSACK_ENABLE)
+SCTP_UINT_SYSCTL(nrsack_enable, sctp_nrsack_enable, SCTPCTL_NRSACK_ENABLE)
 SCTP_UINT_SYSCTL(pktdrop_enable, sctp_pktdrop_enable, SCTPCTL_PKTDROP_ENABLE)
-SCTP_UINT_SYSCTL(strict_sacks, sctp_strict_sacks, SCTPCTL_STRICT_SACKS)
 SCTP_UINT_SYSCTL(peer_chkoh, sctp_peer_chunk_oh, SCTPCTL_PEER_CHKOH)
 SCTP_UINT_SYSCTL(maxburst, sctp_max_burst_default, SCTPCTL_MAXBURST)
 SCTP_UINT_SYSCTL(fr_maxburst, sctp_fr_max_burst_default, SCTPCTL_FRMAXBURST)
@@ -915,7 +907,6 @@ SCTP_UINT_SYSCTL(max_chained_mbufs, sctp_mbuf_threshold_count, SCTPCTL_MAX_CHAIN
 SCTP_UINT_SYSCTL(do_sctp_drain, sctp_do_drain, SCTPCTL_DO_SCTP_DRAIN)
 SCTP_UINT_SYSCTL(hb_max_burst, sctp_hb_maxburst, SCTPCTL_HB_MAX_BURST)
 SCTP_UINT_SYSCTL(abort_at_limit, sctp_abort_if_one_2_one_hits_limit, SCTPCTL_ABORT_AT_LIMIT)
-SCTP_UINT_SYSCTL(strict_data_order, sctp_strict_data_order, SCTPCTL_STRICT_DATA_ORDER)
 SCTP_UINT_SYSCTL(min_residual, sctp_min_residual, SCTPCTL_MIN_RESIDUAL)
 SCTP_UINT_SYSCTL(max_retran_chunk, sctp_max_retran_chunk, SCTPCTL_MAX_RETRAN_CHUNK)
 SCTP_UINT_SYSCTL(log_level, sctp_logging_level, SCTPCTL_LOGGING_LEVEL)

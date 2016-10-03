@@ -341,7 +341,7 @@ oce_attach(device_t dev)
 
 	oce_add_sysctls(sc);
 
-	callout_init(&sc->timer, CALLOUT_MPSAFE);
+	callout_init(&sc->timer, 1);
 	rc = callout_reset(&sc->timer, 2 * hz, oce_local_timer, sc);
 	if (rc)
 		goto stats_free;
@@ -707,7 +707,7 @@ oce_fast_isr(void *arg)
 
 	oce_arm_eq(sc, ii->eq->eq_id, 0, FALSE, TRUE);
 
-	taskqueue_enqueue_fast(ii->tq, &ii->task);
+	taskqueue_enqueue(ii->tq, &ii->task);
 
  	ii->eq->intr++;	
 
@@ -989,7 +989,7 @@ retry:
 			pd->nsegs++;
 		}
 
-		sc->ifp->if_opackets++;
+		if_inc_counter(sc->ifp, IFCOUNTER_OPACKETS, 1);
 		wq->tx_stats.tx_reqs++;
 		wq->tx_stats.tx_wrbs += num_wqes;
 		wq->tx_stats.tx_bytes += m->m_pkthdr.len;
@@ -1065,7 +1065,7 @@ oce_tx_restart(POCE_SOFTC sc, struct oce_wq *wq)
 #else
 	if (!IFQ_DRV_IS_EMPTY(&sc->ifp->if_snd))
 #endif
-		taskqueue_enqueue_fast(taskqueue_swi, &wq->txtask);
+		taskqueue_enqueue(taskqueue_swi, &wq->txtask);
 
 }
 
@@ -1275,9 +1275,9 @@ oce_multiq_transmit(struct ifnet *ifp, struct mbuf *m, struct oce_wq *wq)
 			break;
 		}
 		drbr_advance(ifp, br);
-		ifp->if_obytes += next->m_pkthdr.len;
+		if_inc_counter(ifp, IFCOUNTER_OBYTES, next->m_pkthdr.len);
 		if (next->m_flags & M_MCAST)
-			ifp->if_omcasts++;
+			if_inc_counter(ifp, IFCOUNTER_OMCASTS, 1);
 		ETHER_BPF_MTAP(ifp, next);
 	}
 
@@ -1394,7 +1394,7 @@ oce_rx(struct oce_rq *rq, uint32_t rqe_idx, struct oce_nic_rx_cqe *cqe)
 			}
 		}
 
-		sc->ifp->if_ipackets++;
+		if_inc_counter(sc->ifp, IFCOUNTER_IPACKETS, 1);
 #if defined(INET6) || defined(INET)
 		/* Try to queue to LRO */
 		if (IF_LRO_ENABLED(sc) &&
@@ -1497,16 +1497,12 @@ static void
 oce_rx_flush_lro(struct oce_rq *rq)
 {
 	struct lro_ctrl	*lro = &rq->lro;
-	struct lro_entry *queued;
 	POCE_SOFTC sc = (POCE_SOFTC) rq->parent;
 
 	if (!IF_LRO_ENABLED(sc))
 		return;
 
-	while ((queued = SLIST_FIRST(&lro->lro_active)) != NULL) {
-		SLIST_REMOVE_HEAD(&lro->lro_active, next);
-		tcp_lro_flush(lro, queued);
-	}
+	tcp_lro_flush_all(lro);
 	rq->lro_pkts_queued = 0;
 	
 	return;
@@ -1637,7 +1633,7 @@ oce_rq_handler(void *arg)
 			oce_rx(rq, cqe->u0.s.frag_index, cqe);
 		} else {
 			rq->rx_stats.rxcp_err++;
-			sc->ifp->if_ierrors++;
+			if_inc_counter(sc->ifp, IFCOUNTER_IERRORS, 1);
 			/* Post L3/L4 errors to stack.*/
 			oce_rx(rq, cqe->u0.s.frag_index, cqe);
 		}
@@ -1728,7 +1724,7 @@ oce_attach_ifp(POCE_SOFTC sc)
 #endif
 	
 	sc->ifp->if_capenable = sc->ifp->if_capabilities;
-	if_initbaudrate(sc->ifp, IF_Gbps(10));
+	sc->ifp->if_baudrate = IF_Gbps(10);
 
 #if __FreeBSD_version >= 1000000
 	sc->ifp->if_hw_tsomax = 65536 - (ETHER_HDR_LEN + ETHER_VLAN_ENCAP_LEN);

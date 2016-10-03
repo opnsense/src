@@ -80,7 +80,7 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_map.h>
 #include <vm/vm_param.h>
 
-#include <x86/isa/isa.h>
+#include <isa/isareg.h>
 
 static void	cpu_reset_real(void);
 #ifdef SMP
@@ -93,6 +93,8 @@ _Static_assert(OFFSETOF_CURTHREAD == offsetof(struct pcpu, pc_curthread),
     "OFFSETOF_CURTHREAD does not correspond with offset of pc_curthread.");
 _Static_assert(OFFSETOF_CURPCB == offsetof(struct pcpu, pc_curpcb),
     "OFFSETOF_CURPCB does not correspond with offset of pc_curpcb.");
+_Static_assert(OFFSETOF_MONITORBUF == offsetof(struct pcpu, pc_monitorbuf),
+    "OFFSETOF_MONINORBUF does not correspond with offset of pc_monitorbuf.");
 
 struct savefpu *
 get_pcb_user_save_td(struct thread *td)
@@ -156,7 +158,6 @@ cpu_fork(td1, p2, td2, flags)
 	struct pcb *pcb2;
 	struct mdproc *mdp1, *mdp2;
 	struct proc_ldt *pldt;
-	pmap_t pmap2;
 
 	p1 = td1->td_proc;
 	if ((flags & RFPROC) == 0) {
@@ -219,8 +220,6 @@ cpu_fork(td1, p2, td2, flags)
 	 * Set registers for trampoline to user mode.  Leave space for the
 	 * return address on stack.  These are the kernel mode register values.
 	 */
-	pmap2 = vmspace_pmap(p2->p_vmspace);
-	pcb2->pcb_cr3 = pmap2->pm_cr3;
 	pcb2->pcb_r12 = (register_t)fork_return;	/* fork_trampoline argument */
 	pcb2->pcb_rbp = 0;
 	pcb2->pcb_rsp = (register_t)td2->td_frame - sizeof(void *);
@@ -237,6 +236,7 @@ cpu_fork(td1, p2, td2, flags)
 	/* Setup to release spin count in fork_exit(). */
 	td2->td_md.md_spinlock_count = 1;
 	td2->td_md.md_saved_flags = PSL_KERNEL | PSL_I;
+	td2->td_md.md_invl_gen.gen = 0;
 
 	/* As an i386, do not copy io permission bitmap. */
 	pcb2->pcb_tssp = NULL;
@@ -285,10 +285,7 @@ cpu_fork(td1, p2, td2, flags)
  * This is needed to make kernel threads stay in kernel mode.
  */
 void
-cpu_set_fork_handler(td, func, arg)
-	struct thread *td;
-	void (*func)(void *);
-	void *arg;
+cpu_fork_kthread_handler(struct thread *td, void (*func)(void *), void *arg)
 {
 	/*
 	 * Note that the trap frame follows the args, so the function
@@ -414,27 +411,21 @@ cpu_set_syscall_retval(struct thread *td, int error)
 		break;
 
 	default:
-		if (td->td_proc->p_sysent->sv_errsize) {
-			if (error >= td->td_proc->p_sysent->sv_errsize)
-				error = -1;	/* XXX */
-			else
-				error = td->td_proc->p_sysent->sv_errtbl[error];
-		}
-		td->td_frame->tf_rax = error;
+		td->td_frame->tf_rax = SV_ABI_ERRNO(td->td_proc, error);
 		td->td_frame->tf_rflags |= PSL_C;
 		break;
 	}
 }
 
 /*
- * Initialize machine state (pcb and trap frame) for a new thread about to
- * upcall. Put enough state in the new thread's PCB to get it to go back 
- * userret(), where we can intercept it again to set the return (upcall)
- * Address and stack, along with those from upcals that are from other sources
- * such as those generated in thread_userret() itself.
+ * Initialize machine state, mostly pcb and trap frame for a new
+ * thread, about to return to userspace.  Put enough state in the new
+ * thread's PCB to get it to go back to the fork_return(), which
+ * finalizes the thread state and handles peculiarities of the first
+ * return to userspace for the new thread.
  */
 void
-cpu_set_upcall(struct thread *td, struct thread *td0)
+cpu_copy_thread(struct thread *td, struct thread *td0)
 {
 	struct pcb *pcb2;
 
@@ -478,7 +469,6 @@ cpu_set_upcall(struct thread *td, struct thread *td0)
 	pcb2->pcb_rip = (register_t)fork_trampoline;
 	/*
 	 * If we didn't copy the pcb, we'd need to do the following registers:
-	 * pcb2->pcb_cr3:	cloned above.
 	 * pcb2->pcb_dr*:	cloned above.
 	 * pcb2->pcb_savefpu:	cloned above.
 	 * pcb2->pcb_onfault:	cloned above (always NULL here?).
@@ -491,13 +481,12 @@ cpu_set_upcall(struct thread *td, struct thread *td0)
 }
 
 /*
- * Set that machine state for performing an upcall that has to
- * be done in thread_userret() so that those upcalls generated
- * in thread_userret() itself can be done as well.
+ * Set that machine state for performing an upcall that starts
+ * the entry function with the given argument.
  */
 void
-cpu_set_upcall_kse(struct thread *td, void (*entry)(void *), void *arg,
-	stack_t *stack)
+cpu_set_upcall(struct thread *td, void (*entry)(void *), void *arg,
+    stack_t *stack)
 {
 
 	/* 
@@ -512,7 +501,7 @@ cpu_set_upcall_kse(struct thread *td, void (*entry)(void *), void *arg,
 #ifdef COMPAT_FREEBSD32
 	if (SV_PROC_FLAG(td->td_proc, SV_ILP32)) {
 		/*
-	 	 * Set the trap frame to point at the beginning of the uts
+		 * Set the trap frame to point at the beginning of the entry
 		 * function.
 		 */
 		td->td_frame->tf_rbp = 0;
@@ -520,10 +509,7 @@ cpu_set_upcall_kse(struct thread *td, void (*entry)(void *), void *arg,
 		   (((uintptr_t)stack->ss_sp + stack->ss_size - 4) & ~0x0f) - 4;
 		td->td_frame->tf_rip = (uintptr_t)entry;
 
-		/*
-		 * Pass the address of the mailbox for this kse to the uts
-		 * function as a parameter on the stack.
-		 */
+		/* Pass the argument to the entry point. */
 		suword32((void *)(td->td_frame->tf_rsp + sizeof(int32_t)),
 		    (uint32_t)(uintptr_t)arg);
 
@@ -546,10 +532,7 @@ cpu_set_upcall_kse(struct thread *td, void (*entry)(void *), void *arg,
 	td->td_frame->tf_gs = _ugssel;
 	td->td_frame->tf_flags = TF_HASSEGS;
 
-	/*
-	 * Pass the address of the mailbox for this kse to the uts
-	 * function as a parameter on the stack.
-	 */
+	/* Pass the argument to the entry point. */
 	td->td_frame->tf_rdi = (register_t)arg;
 }
 

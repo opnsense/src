@@ -103,6 +103,7 @@ static const uint32_t at91_pio_base[] = {
 
 static const struct cpu_devs at91_devs[] =
 {
+	DEVICE("at91_aic", AIC,  0),
 	DEVICE("at91_pmc", PMC,  0),
 	DEVICE("at91_wdt", WDT,  0),
 	DEVICE("at91_rst", RSTC, 0),
@@ -187,7 +188,7 @@ at91_clock_init(void)
 	 * PMC alogrithm choose the divisor that causes the input clock
 	 * to be near the optimal 2 MHz per datasheet.  We know
 	 * we are going to be using this for the USB clock at 96 MHz.
-	 * Causes no extra frequency deviation for all recomended crystal
+	 * Causes no extra frequency deviation for all recommended crystal
 	 * values.  See Note 1, table 40-16 SAM9260 doc.
 	 */
 	clk = at91_pmc_clock_ref("pllb");

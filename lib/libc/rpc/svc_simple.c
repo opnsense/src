@@ -42,7 +42,7 @@ __FBSDID("$FreeBSD$");
 
 /*
  * This interface creates a virtual listener for all the services
- * started thru rpc_reg(). It listens on the same endpoint for
+ * started through rpc_reg(). It listens on the same endpoint for
  * all the services and then executes the corresponding service
  * for the given prognum and procnum.
  */
@@ -92,16 +92,18 @@ static const char __no_mem_str[] = "out of memory";
  * is also limited by the recvsize for that transport, even if it is
  * a COTS transport. This may be wrong, but for cases like these, they
  * should not use the simplified interfaces like this.
+ *
+ * prognum - program number
+ * versnum - version number
+ * procnum - procedure number
+ * progname - Server routine
+ * inproc, outproc - in/out XDR procedures
+ * nettype - nettype
  */
-
 int
-rpc_reg(prognum, versnum, procnum, progname, inproc, outproc, nettype)
-	rpcprog_t prognum;			/* program number */
-	rpcvers_t versnum;			/* version number */
-	rpcproc_t procnum;			/* procedure number */
-	char *(*progname)(char *); /* Server routine */
-	xdrproc_t inproc, outproc;	/* in/out XDR procedures */
-	char *nettype;			/* nettype */
+rpc_reg(rpcprog_t prognum, rpcvers_t versnum, rpcproc_t procnum,
+    char *(*progname)(char *), xdrproc_t inproc, xdrproc_t outproc,
+    char *nettype)
 {
 	struct netconfig *nconf;
 	int done = FALSE;
@@ -227,7 +229,7 @@ rpc_reg(prognum, versnum, procnum, progname, inproc, outproc, nettype)
 	mutex_unlock(&proglst_lock);
 
 	if (done == FALSE) {
-		warnx("%s cant find suitable transport for %s",
+		warnx("%s can't find suitable transport for %s",
 			rpc_reg_msg, nettype);
 		return (-1);
 	}
@@ -240,9 +242,7 @@ rpc_reg(prognum, versnum, procnum, progname, inproc, outproc, nettype)
  */
 
 static void
-universal(rqstp, transp)
-	struct svc_req *rqstp;
-	SVCXPRT *transp;
+universal(struct svc_req *rqstp, SVCXPRT *transp)
 {
 	rpcprog_t prog;
 	rpcvers_t vers;
@@ -272,7 +272,7 @@ universal(rqstp, transp)
 			/* decode arguments into a CLEAN buffer */
 			xdrbuf = pl->p_xdrbuf;
 			/* Zero the arguments: reqd ! */
-			(void) memset(xdrbuf, 0, sizeof (pl->p_recvsz));
+			(void) memset(xdrbuf, 0, (size_t)pl->p_recvsz);
 			/*
 			 * Assuming that sizeof (xdrbuf) would be enough
 			 * for the arguments; if not then the program

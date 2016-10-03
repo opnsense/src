@@ -49,6 +49,7 @@
 #define	MAX_NAME_LEN			223
 #define	MAX_DATA_SEGMENT_LENGTH		(128 * 1024)
 #define	MAX_BURST_LENGTH		16776192
+#define	FIRST_BURST_LENGTH		(128 * 1024)
 #define	SOCKBUF_SIZE			1048576
 
 struct auth {
@@ -124,6 +125,7 @@ struct portal_group {
 	bool				pg_unassigned;
 	TAILQ_HEAD(, portal)		pg_portals;
 	TAILQ_HEAD(, port)		pg_ports;
+	char				*pg_offload;
 	char				*pg_redirection;
 
 	uint16_t			pg_tag;
@@ -240,8 +242,10 @@ struct connection {
 	struct sockaddr_storage	conn_initiator_sa;
 	uint32_t		conn_cmdsn;
 	uint32_t		conn_statsn;
+	size_t			conn_data_segment_limit;
 	size_t			conn_max_data_segment_length;
 	size_t			conn_max_burst_length;
+	size_t			conn_first_burst_length;
 	int			conn_immediate_data;
 	int			conn_header_digest;
 	int			conn_data_digest;
@@ -295,8 +299,10 @@ int			rchap_receive(struct rchap *rchap,
 char			*rchap_get_response(struct rchap *rchap);
 void			rchap_delete(struct rchap *rchap);
 
+int			parse_conf(struct conf *conf, const char *path);
+int			uclparse_conf(struct conf *conf, const char *path);
+
 struct conf		*conf_new(void);
-struct conf		*conf_new_from_file(const char *path, struct conf *old);
 struct conf		*conf_new_from_kernel(void);
 void			conf_delete(struct conf *conf);
 int			conf_verify(struct conf *conf);
@@ -340,6 +346,8 @@ int			portal_group_add_listen(struct portal_group *pg,
 			    const char *listen, bool iser);
 int			portal_group_set_filter(struct portal_group *pg,
 			    const char *filter);
+int			portal_group_set_offload(struct portal_group *pg,
+			    const char *offload);
 int			portal_group_set_redirection(struct portal_group *pg,
 			    const char *addr);
 
@@ -395,6 +403,8 @@ int			kernel_lun_add(struct lun *lun);
 int			kernel_lun_modify(struct lun *lun);
 int			kernel_lun_remove(struct lun *lun);
 void			kernel_handoff(struct connection *conn);
+void			kernel_limits(const char *offload,
+			    size_t *max_data_segment_length);
 int			kernel_port_add(struct port *port);
 int			kernel_port_update(struct port *port, struct port *old);
 int			kernel_port_remove(struct port *port);

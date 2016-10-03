@@ -10,6 +10,12 @@
 #ifndef liblldb_Block_h_
 #define liblldb_Block_h_
 
+// C Includes
+// C++ Includes
+#include <vector>
+
+// Other libraries and framework includes
+// Project includes
 #include "lldb/lldb-private.h"
 #include "lldb/Core/AddressRange.h"
 #include "lldb/Core/RangeMap.h"
@@ -17,7 +23,7 @@
 #include "lldb/Core/UserID.h"
 #include "lldb/Symbol/LineEntry.h"
 #include "lldb/Symbol/SymbolContext.h"
-#include "lldb/Symbol/ClangASTType.h"
+#include "lldb/Symbol/CompilerType.h"
 
 namespace lldb_private {
 
@@ -29,13 +35,13 @@ namespace lldb_private {
 /// Block objects. The BlockList object contains a section offset
 /// address range, and Block objects contain one or more ranges
 /// which are offsets into that range. Blocks are can have discontiguous
-/// ranges within the BlockList adress range, and each block can
+/// ranges within the BlockList address range, and each block can
 /// contain child blocks each with their own sets of ranges.
 ///
 /// Each block has a variable list that represents local, argument, and
 /// static variables that are scoped to the block.
 ///
-/// Inlined functions are representated by attaching a
+/// Inlined functions are represented by attaching a
 /// InlineFunctionInfo shared pointer object to a block. Inlined
 /// functions are represented as named blocks.
 //----------------------------------------------------------------------
@@ -76,7 +82,7 @@ public:
     //------------------------------------------------------------------
     /// Destructor.
     //------------------------------------------------------------------
-    virtual ~Block ();
+    ~Block() override;
 
     //------------------------------------------------------------------
     /// Add a child to this object.
@@ -110,20 +116,20 @@ public:
     ///
     /// @see SymbolContextScope
     //------------------------------------------------------------------
-    virtual void
-    CalculateSymbolContext(SymbolContext* sc);
+    void
+    CalculateSymbolContext(SymbolContext* sc) override;
 
-    virtual lldb::ModuleSP
-    CalculateSymbolContextModule ();
+    lldb::ModuleSP
+    CalculateSymbolContextModule() override;
 
-    virtual CompileUnit *
-    CalculateSymbolContextCompileUnit ();
+    CompileUnit *
+    CalculateSymbolContextCompileUnit() override;
 
-    virtual Function *
-    CalculateSymbolContextFunction ();
+    Function *
+    CalculateSymbolContextFunction() override;
 
-    virtual Block *
-    CalculateSymbolContextBlock ();
+    Block *
+    CalculateSymbolContextBlock() override;
 
     //------------------------------------------------------------------
     /// Check if an offset is in one of the block offset ranges.
@@ -169,7 +175,7 @@ public:
     /// Dump the block contents.
     ///
     /// @param[in] s
-    ///     The stream to which to dump the object descripton.
+    ///     The stream to which to dump the object description.
     ///
     /// @param[in] base_addr
     ///     The resolved start address of the Function's address
@@ -192,8 +198,8 @@ public:
     ///
     /// @see SymbolContextScope
     //------------------------------------------------------------------
-    virtual void
-    DumpSymbolContext(Stream *s);
+    void
+    DumpSymbolContext(Stream *s) override;
 
     void
     DumpAddressRanges (Stream *s,
@@ -209,12 +215,11 @@ public:
     /// Get the parent block.
     ///
     /// @return
-    ///     The parent block pointer, or NULL if this block has no 
+    ///     The parent block pointer, or nullptr if this block has no 
     ///     parent.
     //------------------------------------------------------------------
     Block *
     GetParent () const;
-    
     
     //------------------------------------------------------------------
     /// Get the inlined block that contains this block.
@@ -222,7 +227,7 @@ public:
     /// @return
     ///     If this block contains inlined function info, it will return
     ///     this block, else parent blocks will be searched to see if
-    ///     any contain this block. NULL will be returned if this block
+    ///     any contain this block. nullptr will be returned if this block
     ///     nor any parent blocks are inlined function blocks.
     //------------------------------------------------------------------
     Block *
@@ -232,7 +237,7 @@ public:
     /// Get the inlined parent block for this block.
     ///
     /// @return
-    ///     The parent block pointer, or NULL if this block has no 
+    ///     The parent block pointer, or nullptr if this block has no 
     ///     parent.
     //------------------------------------------------------------------
     Block *
@@ -242,7 +247,7 @@ public:
     /// Get the sibling block for this block.
     ///
     /// @return
-    ///     The sibling block pointer, or NULL if this block has no 
+    ///     The sibling block pointer, or nullptr if this block has no 
     ///     sibling.
     //------------------------------------------------------------------
     Block *
@@ -252,15 +257,13 @@ public:
     /// Get the first child block.
     ///
     /// @return
-    ///     The first child block pointer, or NULL if this block has no 
+    ///     The first child block pointer, or nullptr if this block has no 
     ///     children.
     //------------------------------------------------------------------
     Block *
     GetFirstChild () const
     {
-        if (m_children.empty())
-            return NULL;
-        return m_children.front().get();
+        return (m_children.empty() ? nullptr : m_children.front().get());
     }
 
     //------------------------------------------------------------------
@@ -277,7 +280,6 @@ public:
     //------------------------------------------------------------------
     lldb::VariableListSP
     GetBlockVariableList (bool can_create);
-
 
     //------------------------------------------------------------------
     /// Get the variable list for this block and optionally all child
@@ -330,7 +332,7 @@ public:
     ///     added to the variable list until there are no parent blocks
     ///     or the parent block has inlined function info.
     ///
-    /// @param[in/out] variable_list
+    /// @param[in,out] variable_list
     ///     All variables in this block, and optionally all parent
     ///     blocks will be added to this list.
     ///
@@ -348,7 +350,7 @@ public:
     /// Get const accessor for any inlined function information.
     ///
     /// @return
-    ///     A comst pointer to any inlined function information, or NULL
+    ///     A const pointer to any inlined function information, or nullptr
     ///     if this is a regular block.
     //------------------------------------------------------------------
     const InlineFunctionInfo*
@@ -357,8 +359,8 @@ public:
         return m_inlineInfoSP.get();
     }
     
-    clang::DeclContext *
-    GetClangDeclContext();
+    CompilerDeclContext
+    GetDeclContext();
 
     //------------------------------------------------------------------
     /// Get the memory cost of this object.
@@ -377,16 +379,16 @@ public:
     ///
     /// @param[in] name
     ///     The method name for the inlined function. This value should
-    ///     not be NULL.
+    ///     not be nullptr.
     ///
     /// @param[in] mangled
     ///     The mangled method name for the inlined function. This can
-    ///     be NULL if there is no mangled name for an inlined function
+    ///     be nullptr if there is no mangled name for an inlined function
     ///     or if the name is the same as \a name.
     ///
     /// @param[in] decl_ptr
     ///     A optional pointer to declaration information for the
-    ///     inlined function information. This value can be NULL to
+    ///     inlined function information. This value can be nullptr to
     ///     indicate that no declaration information is available.
     ///
     /// @param[in] call_decl_ptr
@@ -398,7 +400,6 @@ public:
                             const char *mangled,
                             const Declaration *decl_ptr,
                             const Declaration *call_decl_ptr);
-
 
     void
     SetParentScope (SymbolContextScope *parent_scope)
@@ -421,8 +422,6 @@ public:
     {
         m_variable_list_sp = variable_list_sp;
     }
-
-
 
     bool
     BlockInfoHasBeenParsed() const
@@ -455,7 +454,7 @@ public:
     GetRangeIndexContainingAddress (const Address& addr);
 
     //------------------------------------------------------------------
-    // Since blocks might have multiple discontiguous addresss ranges,
+    // Since blocks might have multiple discontiguous address ranges,
     // we need to be able to get at any of the address ranges in a block.
     //------------------------------------------------------------------
     bool
@@ -477,7 +476,7 @@ protected:
     collection m_children;
     RangeList m_ranges;
     lldb::InlineFunctionInfoSP m_inlineInfoSP; ///< Inlined function information.
-    lldb::VariableListSP m_variable_list_sp; ///< The variable list for all local, static and paramter variables scoped to this block.
+    lldb::VariableListSP m_variable_list_sp; ///< The variable list for all local, static and parameter variables scoped to this block.
     bool m_parsed_block_info:1,         ///< Set to true if this block and it's children have all been parsed
          m_parsed_block_variables:1,
          m_parsed_child_blocks:1;
@@ -491,7 +490,6 @@ private:
     DISALLOW_COPY_AND_ASSIGN (Block);
 };
 
-
 } // namespace lldb_private
 
-#endif  // liblldb_Block_h_
+#endif // liblldb_Block_h_

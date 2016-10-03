@@ -21,8 +21,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef X86INSTRBUILDER_H
-#define X86INSTRBUILDER_H
+#ifndef LLVM_LIB_TARGET_X86_X86INSTRBUILDER_H
+#define LLVM_LIB_TARGET_X86_X86INSTRBUILDER_H
 
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -52,7 +52,8 @@ struct X86AddressMode {
   unsigned GVOpFlags;
 
   X86AddressMode()
-    : BaseType(RegBase), Scale(1), IndexReg(0), Disp(0), GV(0), GVOpFlags(0) {
+    : BaseType(RegBase), Scale(1), IndexReg(0), Disp(0), GV(nullptr),
+      GVOpFlags(0) {
     Base.Reg = 0;
   }
 
@@ -155,10 +156,9 @@ addFrameReference(const MachineInstrBuilder &MIB, int FI, int Offset = 0) {
     Flags |= MachineMemOperand::MOLoad;
   if (MCID.mayStore())
     Flags |= MachineMemOperand::MOStore;
-  MachineMemOperand *MMO =
-    MF.getMachineMemOperand(MachinePointerInfo::getFixedStack(FI, Offset),
-                            Flags, MFI.getObjectSize(FI),
-                            MFI.getObjectAlignment(FI));
+  MachineMemOperand *MMO = MF.getMachineMemOperand(
+      MachinePointerInfo::getFixedStack(MF, FI, Offset), Flags,
+      MFI.getObjectSize(FI), MFI.getObjectAlignment(FI));
   return addOffset(MIB.addFrameIndex(FI), Offset)
             .addMemOperand(MMO);
 }

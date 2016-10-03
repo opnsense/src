@@ -30,6 +30,12 @@ CFLAGS+=	-DCOMSPEED=${BOOT_COMCONSOLE_SPEED}
 CFLAGS+= -DDISK_DEBUG
 .endif
 
+.if !defined(LOADER_NO_GELI_SUPPORT)
+# Decrypt encrypted drives
+CFLAGS+= -DLOADER_GELI_SUPPORT
+CFLAGS+= -I${.CURDIR}/../../geli
+.endif
+
 .if !defined(BOOT_HIDE_SERIAL_NUMBERS)
 # Export serial numbers, UUID, and asset tag from loader.
 CFLAGS+= -DSMBIOS_SERIAL_NUMBERS
@@ -55,12 +61,12 @@ CFLAGS+=	-I${.CURDIR}/../../common -I${.CURDIR}/../common \
 # the location of libstand
 CFLAGS+=	-I${.CURDIR}/../../../../lib/libstand/
 
-# Suppress warning from clang for FreeBSD %b and %D formats
-CFLAGS+= -fformat-extensions
+# Handle FreeBSD specific %b and %D printf format specifiers
+CFLAGS+= ${FORMAT_EXTENSIONS}
 
 .if ${MACHINE_CPUARCH} == "amd64"
 CLEANFILES+=	machine
-machine:
+machine: .NOMETA
 	ln -sf ${.CURDIR}/../../../i386/include machine
 .endif
 
@@ -69,7 +75,6 @@ machine:
 # XXX: clang integrated-as doesn't grok .codeNN directives yet
 CFLAGS.amd64_tramp.S=	${CLANG_NO_IAS}
 CFLAGS.multiboot_tramp.S=	${CLANG_NO_IAS}
-CFLAGS+=		${CFLAGS.${.IMPSRC:T}}
 
 .if ${MACHINE_CPUARCH} == "amd64"
 beforedepend ${OBJS}: machine

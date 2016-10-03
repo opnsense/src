@@ -70,6 +70,11 @@
 .Op Fl f Ar path_to_firmware
 .Op Fl a
 .Aq device id
+.Nm
+.Ic power
+.Op Fl l
+.Op Fl p power_state
+.Op fl w workload_hint
 .Sh DESCRIPTION
 NVM Express (NVMe) is a storage protocol standard, for SSDs and other
 high-speed storage devices over PCI Express.
@@ -84,7 +89,7 @@ Display a human-readable summary of the nvme0 IDENTIFY_CONTROLLER data.
 .Pp
 .Dl nvmecontrol identify -x -v nvme0ns1
 .Pp
-Display a hexadecimal dump of the nvme0 IDENTIFY_NAMESPACE data for namespace
+Display an hexadecimal dump of the nvme0 IDENTIFY_NAMESPACE data for namespace
 1.
 .Pp
 .Dl nvmecontrol perftest -n 32 -o read -s 512 -t 30 nvme0ns1
@@ -105,7 +110,7 @@ SMART/Health Information Log (ID=2), and Firmware Slot Log (ID=3).
 .Pp
 .Dl nvmecontrol logpage -p 1 -x nvme0
 .Pp
-Display a hexidecimal dump of the nvme0 controller's Error Information Log.
+Display a hexadecimal dump of the nvme0 controller's Error Information Log.
 .Pp
 .Dl nvmecontrol firmware -s 2 -f /tmp/nvme_firmware nvme0
 .Pp
@@ -120,11 +125,23 @@ Activate the firmware in slot 4 of the nvme0 controller on the next reset.
 .Pp
 Download the firmware image contained in "/tmp/nvme_firmware" to slot 7 of the
 nvme0 controller and activate it on the next reset.
+.Pp
+.Dl nvmecontrol power -l nvme0
+.Pp
+List all the current power modes.
+.Pp
+.Dl nvmecontrol power -p 3 nvme0
+.Pp
+Set the current power mode.
+.Pp
+.Dl nvmecontrol power nvme0
+.Pp
+Get the current power mode.
 .Sh AUTHORS
 .An -nosplit
 .Nm
 was developed by Intel and originally written by
-.An Jim Harris Aq jimharris@FreeBSD.org .
+.An Jim Harris Aq Mt jimharris@FreeBSD.org .
 .Pp
 This man page was written by
-.An Jim Harris Aq jimharris@FreeBSD.org .
+.An Jim Harris Aq Mt jimharris@FreeBSD.org .

@@ -13,8 +13,8 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/TableGen/Record.h"
 #include "llvm/TableGen/TableGenBackend.h"
-#include <cstring>
 #include <cctype>
+#include <cstring>
 #include <map>
 
 using namespace llvm;
@@ -149,10 +149,10 @@ void EmitOptParser(RecordKeeper &Records, raw_ostream &OS) {
                                     PE = I->first.end(); PI != PE; ++PI) {
       OS << "\"" << *PI << "\" COMMA ";
     }
-    OS << "0})\n";
+    OS << "nullptr})\n";
   }
   OS << "#undef COMMA\n";
-  OS << "#endif\n\n";
+  OS << "#endif // PREFIX\n\n";
 
   OS << "/////////\n";
   OS << "// Groups\n\n";
@@ -164,7 +164,7 @@ void EmitOptParser(RecordKeeper &Records, raw_ostream &OS) {
     OS << "OPTION(";
 
     // The option prefix;
-    OS << "0";
+    OS << "nullptr";
 
     // The option string.
     OS << ", \"" << R.getValueAsString("Name") << '"';
@@ -183,7 +183,7 @@ void EmitOptParser(RecordKeeper &Records, raw_ostream &OS) {
       OS << "INVALID";
 
     // The other option arguments (unused for groups).
-    OS << ", INVALID, 0, 0, 0";
+    OS << ", INVALID, nullptr, 0, 0";
 
     // The option help text.
     if (!isa<UnsetInit>(R.getValueInit("HelpText"))) {
@@ -191,10 +191,10 @@ void EmitOptParser(RecordKeeper &Records, raw_ostream &OS) {
       OS << "       ";
       write_cstring(OS, R.getValueAsString("HelpText"));
     } else
-      OS << ", 0";
+      OS << ", nullptr";
 
     // The option meta-variable name (unused).
-    OS << ", 0)\n";
+    OS << ", nullptr)\n";
   }
   OS << "\n";
 
@@ -221,9 +221,11 @@ void EmitOptParser(RecordKeeper &Records, raw_ostream &OS) {
 
     // The containing option group (if any).
     OS << ", ";
-    if (const DefInit *DI = dyn_cast<DefInit>(R.getValueInit("Group")))
+    const ListInit *GroupFlags = nullptr;
+    if (const DefInit *DI = dyn_cast<DefInit>(R.getValueInit("Group"))) {
+      GroupFlags = DI->getDef()->getValueAsListInit("Flags");
       OS << getOptionName(*DI->getDef());
-    else
+    } else
       OS << "INVALID";
 
     // The option alias (if any).
@@ -240,7 +242,7 @@ void EmitOptParser(RecordKeeper &Records, raw_ostream &OS) {
     OS << ", ";
     std::vector<std::string> AliasArgs = R.getValueAsListOfStrings("AliasArgs");
     if (AliasArgs.size() == 0) {
-      OS << "0";
+      OS << "nullptr";
     } else {
       OS << "\"";
       for (size_t i = 0, e = AliasArgs.size(); i != e; ++i)
@@ -249,17 +251,19 @@ void EmitOptParser(RecordKeeper &Records, raw_ostream &OS) {
     }
 
     // The option flags.
+    OS << ", ";
+    int NumFlags = 0;
     const ListInit *LI = R.getValueAsListInit("Flags");
-    if (LI->empty()) {
-      OS << ", 0";
-    } else {
-      OS << ", ";
-      for (unsigned i = 0, e = LI->size(); i != e; ++i) {
-        if (i)
-          OS << " | ";
-        OS << cast<DefInit>(LI->getElement(i))->getDef()->getName();
-      }
+    for (Init *I : *LI)
+      OS << (NumFlags++ ? " | " : "")
+         << cast<DefInit>(I)->getDef()->getName();
+    if (GroupFlags) {
+      for (Init *I : *GroupFlags)
+        OS << (NumFlags++ ? " | " : "")
+           << cast<DefInit>(I)->getDef()->getName();
     }
+    if (NumFlags == 0)
+      OS << '0';
 
     // The option parameter field.
     OS << ", " << R.getValueAsInt("NumArgs");
@@ -270,17 +274,17 @@ void EmitOptParser(RecordKeeper &Records, raw_ostream &OS) {
       OS << "       ";
       write_cstring(OS, R.getValueAsString("HelpText"));
     } else
-      OS << ", 0";
+      OS << ", nullptr";
 
     // The option meta-variable name.
     OS << ", ";
     if (!isa<UnsetInit>(R.getValueInit("MetaVarName")))
       write_cstring(OS, R.getValueAsString("MetaVarName"));
     else
-      OS << "0";
+      OS << "nullptr";
 
     OS << ")\n";
   }
-  OS << "#endif\n";
+  OS << "#endif // OPTION\n";
 }
 } // end namespace llvm

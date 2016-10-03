@@ -7,14 +7,11 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "lldb/Target/ThreadPlanStepOverRange.h"
-
 // C Includes
 // C++ Includes
 // Other libraries and framework includes
 // Project includes
-
-#include "lldb/lldb-private-log.h"
+#include "lldb/Target/ThreadPlanStepOverRange.h"
 #include "lldb/Core/Log.h"
 #include "lldb/Core/Stream.h"
 #include "lldb/Symbol/Block.h"
@@ -31,6 +28,7 @@
 using namespace lldb_private;
 using namespace lldb;
 
+uint32_t ThreadPlanStepOverRange::s_default_flag_values = 0;
 
 //----------------------------------------------------------------------
 // ThreadPlanStepOverRange: Step through a stack range, either stepping over or into
@@ -42,33 +40,74 @@ ThreadPlanStepOverRange::ThreadPlanStepOverRange
     Thread &thread,
     const AddressRange &range,
     const SymbolContext &addr_context,
-    lldb::RunMode stop_others
+    lldb::RunMode stop_others,
+    LazyBool step_out_avoids_code_without_debug_info
 ) :
     ThreadPlanStepRange (ThreadPlan::eKindStepOverRange, "Step range stepping over", thread, range, addr_context, stop_others),
+    ThreadPlanShouldStopHere (this),
     m_first_resume(true)
 {
+    SetFlagsToDefault();
+    SetupAvoidNoDebug(step_out_avoids_code_without_debug_info);
 }
 
-ThreadPlanStepOverRange::~ThreadPlanStepOverRange ()
-{
-}
+ThreadPlanStepOverRange::~ThreadPlanStepOverRange() = default;
 
 void
 ThreadPlanStepOverRange::GetDescription (Stream *s, lldb::DescriptionLevel level)
 {
     if (level == lldb::eDescriptionLevelBrief)
-        s->Printf("step over");
-    else
     {
-        s->Printf ("stepping through range (stepping over functions): ");
-        DumpRanges(s);    
+        s->Printf("step over");
+        return;
     }
+    s->Printf ("Stepping over");
+    bool printed_line_info = false;
+    if (m_addr_context.line_entry.IsValid())
+    {
+        s->Printf (" line ");
+        m_addr_context.line_entry.DumpStopContext (s, false);
+        printed_line_info = true;
+    }
+
+    if (!printed_line_info || level == eDescriptionLevelVerbose)
+    {
+        s->Printf (" using ranges: ");
+        DumpRanges(s);
+    }
+
+    s->PutChar('.');
+}
+
+void
+ThreadPlanStepOverRange::SetupAvoidNoDebug(LazyBool step_out_avoids_code_without_debug_info)
+{
+    bool avoid_nodebug = true;
+    switch (step_out_avoids_code_without_debug_info)
+    {
+        case eLazyBoolYes:
+            avoid_nodebug = true;
+            break;
+        case eLazyBoolNo:
+            avoid_nodebug = false;
+            break;
+        case eLazyBoolCalculate:
+            avoid_nodebug = m_thread.GetStepOutAvoidsNoDebug();
+            break;
+    }
+    if (avoid_nodebug)
+        GetFlags().Set (ThreadPlanShouldStopHere::eStepOutAvoidNoDebug);
+    else
+        GetFlags().Clear (ThreadPlanShouldStopHere::eStepOutAvoidNoDebug);
+    // Step Over plans should always avoid no-debug on step in.  Seems like you shouldn't
+    // have to say this, but a tail call looks more like a step in that a step out, so
+    // we want to catch this case.
+    GetFlags().Set (ThreadPlanShouldStopHere::eStepInAvoidNoDebug);
 }
 
 bool
 ThreadPlanStepOverRange::IsEquivalentContext(const SymbolContext &context)
 {
-
     // Match as much as is specified in the m_addr_context:
     // This is a fairly loose sanity check.  Note, sometimes the target doesn't get filled
     // in so I left out the target check.  And sometimes the module comes in as the .o file from the
@@ -107,14 +146,8 @@ ThreadPlanStepOverRange::ShouldStop (Event *event_ptr)
     // If we're out of the range but in the same frame or in our caller's frame
     // then we should stop.
     // When stepping out we only stop others if we are forcing running one thread.
-    bool stop_others;
-    if (m_stop_others == lldb::eOnlyThisThread)
-        stop_others = true;
-    else 
-        stop_others = false;
-
+    bool stop_others = (m_stop_others == lldb::eOnlyThisThread);
     ThreadPlanSP new_plan_sp;
-    
     FrameComparison frame_order = CompareCurrentFrameToStartFrame();
     
     if (frame_order == eFrameCompareOlder)
@@ -146,18 +179,22 @@ ThreadPlanStepOverRange::ShouldStop (Event *event_ptr)
             const SymbolContext &older_context = older_frame_sp->GetSymbolContext(eSymbolContextEverything);
             if (IsEquivalentContext(older_context))
             {
-                new_plan_sp = m_thread.QueueThreadPlanForStepOut (false,
-                                                           NULL,
-                                                           true,
-                                                           stop_others,
-                                                           eVoteNo,
-                                                           eVoteNoOpinion,
-                                                           0);
+                new_plan_sp = m_thread.QueueThreadPlanForStepOutNoShouldStop(false,
+                                                                             nullptr,
+                                                                             true,
+                                                                             stop_others,
+                                                                             eVoteNo,
+                                                                             eVoteNoOpinion,
+                                                                             0,
+                                                                             true);
                 break;
             }
             else
             {
                 new_plan_sp = m_thread.QueueThreadPlanForStepThrough (m_stack_id, false, stop_others);
+                // If we found a way through, then we should stop recursing.
+                if (new_plan_sp)
+                    break;
             }
         }
     }
@@ -169,7 +206,6 @@ ThreadPlanStepOverRange::ShouldStop (Event *event_ptr)
             SetNextBranchBreakpoint();
             return false;
         }
-
 
         if (!InSymbol())
         {
@@ -200,7 +236,7 @@ ThreadPlanStepOverRange::ShouldStop (Event *event_ptr)
                          && sc.comp_unit == m_addr_context.comp_unit
                          && sc.function == m_addr_context.function)
                     {
-                        // Okay, find the next occurance of this file in the line table:
+                        // Okay, find the next occurrence of this file in the line table:
                         LineTable *line_table = m_addr_context.comp_unit->GetLineTable();
                         if (line_table)
                         {
@@ -213,7 +249,7 @@ ThreadPlanStepOverRange::ShouldStop (Event *event_ptr)
                                 bool step_past_remaining_inline = false;
                                 if (entry_idx > 0)
                                 {
-                                    // We require the the previous line entry and the current line entry come
+                                    // We require the previous line entry and the current line entry come
                                     // from the same file.
                                     // The other requirement is that the previous line table entry be part of an
                                     // inlined block, we don't want to step past cases where people have inlined
@@ -237,7 +273,6 @@ ThreadPlanStepOverRange::ShouldStop (Event *event_ptr)
                                                     
                                                     step_past_remaining_inline = true;
                                                 }
-                                                
                                             }
                                         }
                                     }
@@ -257,10 +292,14 @@ ThreadPlanStepOverRange::ShouldStop (Event *event_ptr)
                                         if (next_line_entry.file == m_addr_context.line_entry.file)
                                         {
                                             const bool abort_other_plans = false;
-                                            const bool stop_other_threads = false;
-                                            new_plan_sp = m_thread.QueueThreadPlanForRunToAddress(abort_other_plans,
-                                                                                               next_line_address,
-                                                                                               stop_other_threads);
+                                            const RunMode stop_other_threads = RunMode::eAllThreads;
+                                            lldb::addr_t cur_pc = m_thread.GetStackFrameAtIndex(0)->GetRegisterContext()->GetPC();
+                                            AddressRange step_range(cur_pc, next_line_address.GetLoadAddress(&GetTarget()) - cur_pc);
+                                            
+                                            new_plan_sp = m_thread.QueueThreadPlanForStepOverRange (abort_other_plans,
+                                                                                                    step_range,
+                                                                                                    sc,
+                                                                                                    stop_other_threads);
                                             break;
                                         }
                                         look_ahead_step++;
@@ -277,10 +316,21 @@ ThreadPlanStepOverRange::ShouldStop (Event *event_ptr)
     // If we get to this point, we're not going to use a previously set "next branch" breakpoint, so delete it:
     ClearNextBranchBreakpoint();
     
+    
+    // If we haven't figured out something to do yet, then ask the ShouldStopHere callback:
+    if (!new_plan_sp)
+    {
+        new_plan_sp = CheckShouldStopHereAndQueueStepOut (frame_order);
+    }
+
     if (!new_plan_sp)
         m_no_more_plans = true;
     else
+    {
+        // Any new plan will be an implementation plan, so mark it private:
+        new_plan_sp->SetPrivate(true);
         m_no_more_plans = false;
+    }
 
     if (!new_plan_sp)
     {
@@ -311,27 +361,19 @@ ThreadPlanStepOverRange::DoPlanExplainsStop (Event *event_ptr)
     {
         StopReason reason = stop_info_sp->GetStopReason();
 
-        switch (reason)
+        if (reason == eStopReasonTrace)
         {
-        case eStopReasonTrace:
             return_value = true;
-            break;
-        case eStopReasonBreakpoint:
-            if (NextRangeBreakpointExplainsStop(stop_info_sp))
-                return_value = true;
-            else
-                return_value = false;
-            break;
-        case eStopReasonWatchpoint:
-        case eStopReasonSignal:
-        case eStopReasonException:
-        case eStopReasonExec:
-        case eStopReasonThreadExiting:
-        default:
+        }
+        else if (reason == eStopReasonBreakpoint)
+        {
+            return_value = NextRangeBreakpointExplainsStop(stop_info_sp);
+        }
+        else
+        {
             if (log)
                 log->PutCString ("ThreadPlanStepInRange got asked if it explains the stop for some reason other than step.");
             return_value = false;
-            break;
         }
     }
     else
@@ -373,7 +415,7 @@ ThreadPlanStepOverRange::DoWillResume (lldb::StateType resume_state, bool curren
                             const InlineFunctionInfo *inline_info = frame_block->GetInlinedFunctionInfo();
                             const char *name;
                             if (inline_info)
-                                name = inline_info->GetName().AsCString();
+                                name = inline_info->GetName(frame_block->CalculateSymbolContextFunction()->GetLanguage()).AsCString();
                             else
                                 name = "<unknown-notinlined>";
                             

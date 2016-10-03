@@ -36,6 +36,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/systm.h>
 #include <sys/socket.h>
 #include <sys/kernel.h>
+#include <sys/malloc.h>
 
 #include <sys/module.h>
 #include <sys/bus.h>
@@ -45,6 +46,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/resource.h>
 
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_arc.h>
 
 #include <dev/cm/smc90cx6reg.h>
@@ -61,8 +63,8 @@ cm_isa_probe(dev)
 	int rid;
 
 	rid = 0;
-	sc->port_res = bus_alloc_resource(
-	    dev, SYS_RES_IOPORT, &rid, 0ul, ~0ul, CM_IO_PORTS, RF_ACTIVE);
+	sc->port_res = bus_alloc_resource_anywhere(
+	    dev, SYS_RES_IOPORT, &rid, CM_IO_PORTS, RF_ACTIVE);
 	if (sc->port_res == NULL)
 		return (ENOENT);
 
@@ -72,8 +74,8 @@ cm_isa_probe(dev)
 	}
 
 	rid = 0;
-	sc->mem_res = bus_alloc_resource(
-	    dev, SYS_RES_MEMORY, &rid, 0ul, ~0ul, CM_MEM_SIZE, RF_ACTIVE);
+	sc->mem_res = bus_alloc_resource_anywhere(
+	    dev, SYS_RES_MEMORY, &rid, CM_MEM_SIZE, RF_ACTIVE);
 	if (sc->mem_res == NULL) {
 		cm_release_resources(dev);
 		return (ENOENT);

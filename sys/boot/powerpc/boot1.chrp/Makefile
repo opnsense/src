@@ -12,10 +12,10 @@ SRCS=		boot1.c ashldi3.c syncicache.c
 
 MAN=
 
-CFLAGS= -ffreestanding -msoft-float -Os \
+CFLAGS= -ffreestanding -msoft-float \
 	-I${.CURDIR}/../../common -I${.CURDIR}/../../../ \
 	-D_STANDALONE
-LDFLAGS=-nostdlib -static -N
+LDFLAGS=-nostdlib -static -Wl,-N
 
 .include "${.CURDIR}/../Makefile.inc"
 .PATH:  ${.CURDIR}/../../../libkern ${.CURDIR}/../../../../lib/libc/powerpc/gen ${.CURDIR}

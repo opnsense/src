@@ -54,33 +54,27 @@ __FBSDID("$FreeBSD$");
 #include <net/if.h>
 #include <net/if_var.h>
 #include <net/vnet.h>
-#include <net/raw_cb.h>
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
-#include <netinet/in_systm.h>
 #include <netinet/ip.h>
 #include <netinet/ip_encap.h>
 #include <netinet/ip_var.h>
-#include <machine/in_cksum.h>
 
 #ifdef INET6
 #include <netinet/ip6.h>
 #endif
 
-/* Needs IP headers. */
 #include <net/if_gre.h>
-#include <machine/stdarg.h>
 
 extern struct domain inetdomain;
-static void gre_input10(struct mbuf *, int);
 static const struct protosw in_gre_protosw = {
 	.pr_type =		SOCK_RAW,
 	.pr_domain =		&inetdomain,
 	.pr_protocol =		IPPROTO_GRE,
 	.pr_flags =		PR_ATOMIC|PR_ADDR,
-	.pr_input =		gre_input10,
-	.pr_output =		(pr_output_t *)rip_output,
+	.pr_input =		gre_input,
+	.pr_output =		rip_output,
 	.pr_ctlinput =		rip_ctlinput,
 	.pr_ctloutput =		rip_ctloutput,
 	.pr_usrreqs =		&rip_usrreqs
@@ -89,17 +83,8 @@ static const struct protosw in_gre_protosw = {
 #define	GRE_TTL			30
 VNET_DEFINE(int, ip_gre_ttl) = GRE_TTL;
 #define	V_ip_gre_ttl		VNET(ip_gre_ttl)
-SYSCTL_VNET_INT(_net_inet_ip, OID_AUTO, grettl, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_ip, OID_AUTO, grettl, CTLFLAG_VNET | CTLFLAG_RW,
 	&VNET_NAME(ip_gre_ttl), 0, "");
-
-static void
-gre_input10(struct mbuf *m, int off)
-{
-	int proto;
-
-	proto = (mtod(m, struct ip *))->ip_p;
-	gre_input(&m, &off, proto);
-}
 
 static int
 in_gre_encapcheck(const struct mbuf *m, int off, int proto, void *arg)
@@ -160,7 +145,7 @@ in_gre_output(struct mbuf *m, int af, int hlen)
 #ifdef INET6
 	case AF_INET6:
 		gi->gi_ip.ip_tos = 0; /* XXX */
-		gi->gi_ip.ip_id = ip_newid();
+		ip_fillid(&gi->gi_ip);
 		break;
 #endif
 	}

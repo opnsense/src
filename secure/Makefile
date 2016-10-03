@@ -1,6 +1,6 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 SUBDIR= lib .WAIT \
 	libexec ${_tests} usr.bin usr.sbin
@@ -24,7 +24,6 @@ secure: .MAKE .PHONY
 	cd ${.CURDIR}/../${entry}; \
 	${MAKE} cleandir; \
 	${MAKE} obj; \
-	${MAKE} depend; \
 	${MAKE} all; \
 	${MAKE} install
 .endfor
@@ -33,11 +32,10 @@ secure: .MAKE .PHONY
 insecure: .MAKE .PHONY
 .for entry in ${SPROGS}
 	cd ${.CURDIR}/../${entry}; \
-	${MAKE} -DWITHOUT_CRYPT cleandir; \
-	${MAKE} -DWITHOUT_CRYPT obj; \
-	${MAKE} -DWITHOUT_CRYPT depend; \
-	${MAKE} -DWITHOUT_CRYPT all; \
-	${MAKE} -DWITHOUT_CRYPT install
+	${MAKE} MK_CRYPT=no cleandir; \
+	${MAKE} MK_CRYPT=no obj; \
+	${MAKE} MK_CRYPT=no all; \
+	${MAKE} MK_CRYPT=no install
 .endfor
 
 .include <bsd.subdir.mk>

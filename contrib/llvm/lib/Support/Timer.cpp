@@ -12,19 +12,16 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Support/Timer.h"
-#include "llvm/ADT/OwningPtr.h"
+#include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Support/Debug.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/Mutex.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
-
-// CreateInfoOutputFile - Return a file stream to print our output on.
-namespace llvm { extern raw_ostream *CreateInfoOutputFile(); }
 
 // getLibSupportInfoOutputFilename - This ugly hack is brought to you courtesy
 // of constructor/destructor ordering being unspecified by C++.  Basically the
@@ -53,45 +50,43 @@ namespace {
                    cl::Hidden, cl::location(getLibSupportInfoOutputFilename()));
 }
 
-// CreateInfoOutputFile - Return a file stream to print our output on.
-raw_ostream *llvm::CreateInfoOutputFile() {
+// Return a file stream to print our output on.
+std::unique_ptr<raw_fd_ostream> llvm::CreateInfoOutputFile() {
   const std::string &OutputFilename = getLibSupportInfoOutputFilename();
   if (OutputFilename.empty())
-    return new raw_fd_ostream(2, false); // stderr.
+    return llvm::make_unique<raw_fd_ostream>(2, false); // stderr.
   if (OutputFilename == "-")
-    return new raw_fd_ostream(1, false); // stdout.
-  
+    return llvm::make_unique<raw_fd_ostream>(1, false); // stdout.
+
   // Append mode is used because the info output file is opened and closed
   // each time -stats or -time-passes wants to print output to it. To
   // compensate for this, the test-suite Makefiles have code to delete the
   // info output file before running commands which write to it.
-  std::string Error;
-  raw_ostream *Result =
-      new raw_fd_ostream(OutputFilename.c_str(), Error, sys::fs::F_Append);
-  if (Error.empty())
+  std::error_code EC;
+  auto Result = llvm::make_unique<raw_fd_ostream>(
+      OutputFilename, EC, sys::fs::F_Append | sys::fs::F_Text);
+  if (!EC)
     return Result;
-  
+
   errs() << "Error opening info-output-file '"
     << OutputFilename << " for appending!\n";
-  delete Result;
-  return new raw_fd_ostream(2, false); // stderr.
+  return llvm::make_unique<raw_fd_ostream>(2, false); // stderr.
 }
 
 
-static TimerGroup *DefaultTimerGroup = 0;
+static TimerGroup *DefaultTimerGroup = nullptr;
 static TimerGroup *getDefaultTimerGroup() {
   TimerGroup *tmp = DefaultTimerGroup;
   sys::MemoryFence();
   if (tmp) return tmp;
   
-  llvm_acquire_global_lock();
+  sys::SmartScopedLock<true> Lock(*TimerLock);
   tmp = DefaultTimerGroup;
   if (!tmp) {
     tmp = new TimerGroup("Miscellaneous Ungrouped Timers");
     sys::MemoryFence();
     DefaultTimerGroup = tmp;
   }
-  llvm_release_global_lock();
 
   return tmp;
 }
@@ -101,17 +96,13 @@ static TimerGroup *getDefaultTimerGroup() {
 //===----------------------------------------------------------------------===//
 
 void Timer::init(StringRef N) {
-  assert(TG == 0 && "Timer already initialized");
-  Name.assign(N.begin(), N.end());
-  Started = false;
-  TG = getDefaultTimerGroup();
-  TG->addTimer(*this);
+  init(N, *getDefaultTimerGroup());
 }
 
 void Timer::init(StringRef N, TimerGroup &tg) {
-  assert(TG == 0 && "Timer already initialized");
+  assert(!TG && "Timer already initialized");
   Name.assign(N.begin(), N.end());
-  Started = false;
+  Running = Triggered = false;
   TG = &tg;
   TG->addTimer(*this);
 }
@@ -144,25 +135,22 @@ TimeRecord TimeRecord::getCurrentTime(bool Start) {
   return Result;
 }
 
-static ManagedStatic<std::vector<Timer*> > ActiveTimers;
-
 void Timer::startTimer() {
-  Started = true;
-  ActiveTimers->push_back(this);
-  Time -= TimeRecord::getCurrentTime(true);
+  assert(!Running && "Cannot start a running timer");
+  Running = Triggered = true;
+  StartTime = TimeRecord::getCurrentTime(true);
 }
 
 void Timer::stopTimer() {
+  assert(Running && "Cannot stop a paused timer");
+  Running = false;
   Time += TimeRecord::getCurrentTime(false);
+  Time -= StartTime;
+}
 
-  if (ActiveTimers->back() == this) {
-    ActiveTimers->pop_back();
-  } else {
-    std::vector<Timer*>::iterator I =
-      std::find(ActiveTimers->begin(), ActiveTimers->end(), this);
-    assert(I != ActiveTimers->end() && "stop but no startTimer?");
-    ActiveTimers->erase(I);
-  }
+void Timer::clear() {
+  Running = Triggered = false;
+  Time = StartTime = TimeRecord();
 }
 
 static void printVal(double Val, double Total, raw_ostream &OS) {
@@ -236,11 +224,11 @@ static Timer &getNamedRegionTimer(StringRef Name) {
 
 NamedRegionTimer::NamedRegionTimer(StringRef Name,
                                    bool Enabled)
-  : TimeRegion(!Enabled ? 0 : &getNamedRegionTimer(Name)) {}
+  : TimeRegion(!Enabled ? nullptr : &getNamedRegionTimer(Name)) {}
 
 NamedRegionTimer::NamedRegionTimer(StringRef Name, StringRef GroupName,
                                    bool Enabled)
-  : TimeRegion(!Enabled ? 0 : &NamedGroupedTimers->get(Name, GroupName)) {}
+  : TimeRegion(!Enabled ? nullptr : &NamedGroupedTimers->get(Name, GroupName)){}
 
 //===----------------------------------------------------------------------===//
 //   TimerGroup Implementation
@@ -248,10 +236,10 @@ NamedRegionTimer::NamedRegionTimer(StringRef Name, StringRef GroupName,
 
 /// TimerGroupList - This is the global list of TimerGroups, maintained by the
 /// TimerGroup ctor/dtor and is protected by the TimerLock lock.
-static TimerGroup *TimerGroupList = 0;
+static TimerGroup *TimerGroupList = nullptr;
 
 TimerGroup::TimerGroup(StringRef name)
-  : Name(name.begin(), name.end()), FirstTimer(0) {
+  : Name(name.begin(), name.end()), FirstTimer(nullptr) {
     
   // Add the group to TimerGroupList.
   sys::SmartScopedLock<true> L(*TimerLock);
@@ -265,7 +253,7 @@ TimerGroup::TimerGroup(StringRef name)
 TimerGroup::~TimerGroup() {
   // If the timer group is destroyed before the timers it owns, accumulate and
   // print the timing data.
-  while (FirstTimer != 0)
+  while (FirstTimer)
     removeTimer(*FirstTimer);
   
   // Remove the group from the TimerGroupList.
@@ -280,10 +268,10 @@ void TimerGroup::removeTimer(Timer &T) {
   sys::SmartScopedLock<true> L(*TimerLock);
   
   // If the timer was started, move its data to TimersToPrint.
-  if (T.Started)
-    TimersToPrint.push_back(std::make_pair(T.Time, T.Name));
+  if (T.hasTriggered())
+    TimersToPrint.emplace_back(T.Time, T.Name);
 
-  T.TG = 0;
+  T.TG = nullptr;
   
   // Unlink the timer from our list.
   *T.Prev = T.Next;
@@ -292,12 +280,11 @@ void TimerGroup::removeTimer(Timer &T) {
   
   // Print the report when all timers in this group are destroyed if some of
   // them were started.
-  if (FirstTimer != 0 || TimersToPrint.empty())
+  if (FirstTimer || TimersToPrint.empty())
     return;
-  
-  raw_ostream *OutStream = CreateInfoOutputFile();
+
+  std::unique_ptr<raw_ostream> OutStream = CreateInfoOutputFile();
   PrintQueuedTimers(*OutStream);
-  delete OutStream;   // Close the file.
 }
 
 void TimerGroup::addTimer(Timer &T) {
@@ -316,8 +303,8 @@ void TimerGroup::PrintQueuedTimers(raw_ostream &OS) {
   std::sort(TimersToPrint.begin(), TimersToPrint.end());
   
   TimeRecord Total;
-  for (unsigned i = 0, e = TimersToPrint.size(); i != e; ++i)
-    Total += TimersToPrint[i].first;
+  for (auto &RecordNamePair : TimersToPrint)
+    Total += RecordNamePair.first;
   
   // Print out timing header.
   OS << "===" << std::string(73, '-') << "===\n";
@@ -367,12 +354,11 @@ void TimerGroup::print(raw_ostream &OS) {
   // See if any of our timers were started, if so add them to TimersToPrint and
   // reset them.
   for (Timer *T = FirstTimer; T; T = T->Next) {
-    if (!T->Started) continue;
-    TimersToPrint.push_back(std::make_pair(T->Time, T->Name));
+    if (!T->hasTriggered()) continue;
+    TimersToPrint.emplace_back(T->Time, T->Name);
     
     // Clear out the time.
-    T->Started = 0;
-    T->Time = TimeRecord();
+    T->clear();
   }
 
   // If any timers were started, print the group.

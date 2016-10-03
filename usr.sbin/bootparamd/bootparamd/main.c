@@ -83,7 +83,7 @@ main(int argc, char **argv)
 	if ( stat(bootpfile, &buf ) )
 	  err(1, "%s", bootpfile);
 
-	if (route_addr == -1) {
+	if (route_addr == INADDR_NONE) {
 	  get_myaddress(&my_addr);
 	  bcopy(&my_addr.sin_addr.s_addr, &route_addr, sizeof (route_addr));
 	}

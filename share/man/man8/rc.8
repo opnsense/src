@@ -12,11 +12,7 @@
 .\" 2. Redistributions in binary form must reproduce the above copyright
 .\"    notice, this list of conditions and the following disclaimer in the
 .\"    documentation and/or other materials provided with the distribution.
-.\" 3. All advertising materials mentioning features or use of this software
-.\"    must display the following acknowledgement:
-.\"	This product includes software developed by the University of
-.\"	California, Berkeley and its contributors.
-.\" 4. Neither the name of the University nor the names of its contributors
+.\" 3. Neither the name of the University nor the names of its contributors
 .\"    may be used to endorse or promote products derived from this software
 .\"    without specific prior written permission.
 .\"
@@ -35,7 +31,7 @@
 .\"     @(#)rc.8	8.2 (Berkeley) 12/11/93
 .\" $FreeBSD$
 .\"
-.Dd December 25, 2013
+.Dd April 23, 2016
 .Dt RC 8
 .Os
 .Sh NAME
@@ -327,6 +323,10 @@ If the script starts a process (rather than performing a one-off
 operation), show the status of the process.
 Otherwise it is not necessary to support this argument.
 Defaults to displaying the process ID of the program (if running).
+.It Cm describe
+Print a short description of what the script does.
+.It Cm extracommands
+Print the script's non-standard commands.
 .It Cm poll
 If the script starts a process (rather than performing a one-off
 operation), wait for the command to exit.
@@ -554,8 +554,8 @@ is unnecessary, but is often included.
 .Xr kill 1 ,
 .Xr rc.conf 5 ,
 .Xr init 8 ,
-.Xr rcorder 8 ,
 .Xr rc.subr 8 ,
+.Xr rcorder 8 ,
 .Xr reboot 8 ,
 .Xr savecore 8
 .Sh HISTORY

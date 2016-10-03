@@ -58,7 +58,6 @@
 #include <sys/rman.h>
 
 #include <machine/bus.h>
-#include <machine/fdt.h>
 
 #include <dev/fdt/fdt_common.h>
 #include <dev/fdt/fdt_pinctrl.h>
@@ -177,7 +176,7 @@ iomux_configure_pins(device_t dev, phandle_t cfgxref)
 			    cfg->padconf_reg, cfg->padconf_val);
 		}
 	}
-	free(cfgtuples, M_OFWPROP);
+	OF_prop_free(cfgtuples);
 	return (0);
 }
 

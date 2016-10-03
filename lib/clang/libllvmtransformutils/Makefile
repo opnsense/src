@@ -1,11 +1,13 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 LIB=	llvmtransformutils
 
 SRCDIR=	lib/Transforms/Utils
-SRCS=	BasicBlockUtils.cpp \
+SRCS=	ASanStackFrameLayout.cpp \
+	AddDiscriminators.cpp \
+	BasicBlockUtils.cpp \
 	BreakCriticalEdges.cpp \
 	BuildLibCalls.cpp \
 	BypassSlowDivision.cpp \
@@ -13,6 +15,7 @@ SRCS=	BasicBlockUtils.cpp \
 	CloneModule.cpp \
 	CmpInstAnalysis.cpp \
 	CodeExtractor.cpp \
+	CtorUtils.cpp \
 	DemoteRegToStack.cpp \
 	FlattenCFG.cpp \
 	GlobalStatus.cpp \
@@ -24,7 +27,8 @@ SRCS=	BasicBlockUtils.cpp \
 	LoopSimplify.cpp \
 	LoopUnroll.cpp \
 	LoopUnrollRuntime.cpp \
-	LowerExpectIntrinsic.cpp \
+	LoopUtils.cpp \
+	LoopVersioning.cpp \
 	LowerInvoke.cpp \
 	LowerSwitch.cpp \
 	Mem2Reg.cpp \
@@ -36,7 +40,8 @@ SRCS=	BasicBlockUtils.cpp \
 	SimplifyIndVar.cpp \
 	SimplifyInstructions.cpp \
 	SimplifyLibCalls.cpp \
-	SpecialCaseList.cpp \
+	SplitModule.cpp \
+	SymbolRewriter.cpp \
 	UnifyFunctionExitNodes.cpp \
 	ValueMapper.cpp
 
@@ -44,6 +49,7 @@ SRCS=	BasicBlockUtils.cpp \
 SRCS+=	Utils.cpp
 .endif
 
-TGHDRS=	Intrinsics
+TGHDRS=	Attributes \
+	Intrinsics
 
 .include "../clang.lib.mk"

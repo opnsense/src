@@ -26,16 +26,20 @@
 #
 
 # PROVIDE: netif
-# REQUIRE: atm1 FILESYSTEMS serial sppp sysctl
-# REQUIRE: ipfilter ipfs
+# REQUIRE: FILESYSTEMS iovctl serial sppp sysctl
+# REQUIRE: hostid ipfilter ipfs
 # KEYWORD: nojailvnet
 
 . /etc/rc.subr
 . /etc/network.subr
 
-name="network"
-start_cmd="network_start"
-stop_cmd="network_stop"
+name="netif"
+desc="Network interface setup"
+rcvar="${name}_enable"
+start_cmd="netif_start"
+stop_cmd="netif_stop"
+wlanup_cmd="wlan_up"
+wlandown_cmd="wlan_down"
 cloneup_cmd="clone_up"
 clonedown_cmd="clone_down"
 clear_cmd="doclear"
@@ -47,7 +51,7 @@ cmdifn=
 set_rcvar_obsolete ipv6_enable ipv6_activate_all_interfaces
 set_rcvar_obsolete ipv6_prefer
 
-network_start()
+netif_start()
 {
 	local _if
 
@@ -62,10 +66,10 @@ network_start()
 
 		# disable SIGINT (Ctrl-c) when running at startup
 		trap : 2
-
-		# Create Fast EtherChannel interfaces
-		fec_up
 	fi
+
+	# Create IEEE802.11 interface
+	wlan_up $cmdifn
 
 	# Create cloned interfaces
 	clone_up $cmdifn
@@ -74,7 +78,7 @@ network_start()
 	ifnet_rename $cmdifn
 
 	# Configure the interface(s).
-	network_common ifn_start $cmdifn
+	netif_common ifn_start $cmdifn
 
 	if [ -f /etc/rc.d/ipfilter ] ; then
 		# Resync ipfilter
@@ -90,19 +94,21 @@ network_start()
 	fi
 }
 
-network_stop()
+netif_stop()
 {
 	_clone_down=1
-	network_stop0 $*
+	_wlan_down=1
+	netif_stop0 $*
 }
 
 doclear()
 {
 	_clone_down=
-	network_stop0 $*
+	_wlan_down=
+	netif_stop0 $*
 }
 
-network_stop0()
+netif_stop0()
 {
 	local _if
 
@@ -111,7 +117,12 @@ network_stop0()
 	cmdifn=$*
 
 	# Deconfigure the interface(s)
-	network_common ifn_stop $cmdifn
+	netif_common ifn_stop $cmdifn
+
+	# Destroy wlan interfaces
+	if [ -n "$_wlan_down" ]; then
+		wlan_down $cmdifn
+	fi
 
 	# Destroy cloned interfaces
 	if [ -n "$_clone_down" ]; then
@@ -129,28 +140,28 @@ vnet_up()
 {
 	cmdifn=$*
 
-	network_common ifn_vnetup $cmdifn
+	netif_common ifn_vnetup $cmdifn
 }
 
 vnet_down()
 {
 	cmdifn=$*
 
-	network_common ifn_vnetdown $cmdifn
+	netif_common ifn_vnetdown $cmdifn
 }
 
-# network_common routine
+# netif_common routine
 #	Common configuration subroutine for network interfaces. This
 #	routine takes all the preparatory steps needed for configuriing
 #	an interface and then calls $routine.
-network_common()
+netif_common()
 {
 	local _cooked_list _tmp_list _fail _func _ok _str _cmdifn
 
 	_func=
 
 	if [ -z "$1" ]; then
-		err 1 "network_common(): No function name specified."
+		err 1 "netif_common(): No function name specified."
 	else
 		_func="$1"
 		shift
@@ -254,5 +265,8 @@ network_common()
 	debug "The following interfaces were not configured: $_fail"
 }
 
+# Load the old "network" config file also for compatibility.
+# This is needed for mfsBSD at least.
+load_rc_config network
 load_rc_config $name
 run_rc_command $*

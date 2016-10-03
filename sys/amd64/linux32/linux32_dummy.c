@@ -30,7 +30,6 @@
 __FBSDID("$FreeBSD$");
 
 #include "opt_compat.h"
-#include "opt_kdtrace.h"
 
 #include <sys/param.h>
 #include <sys/kernel.h>
@@ -70,7 +69,6 @@ DUMMY(mincore);
 DUMMY(ptrace);
 DUMMY(lookup_dcookie);
 DUMMY(remap_file_pages);
-DUMMY(fstatfs64);
 DUMMY(mbind);
 DUMMY(get_mempolicy);
 DUMMY(set_mempolicy);

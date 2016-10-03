@@ -159,10 +159,9 @@ struct ixpqmgr_softc {
 	uint32_t		aqmFreeSramAddress;	/* SRAM free space */
 };
 
-static int qmgr_debug = 0;
-SYSCTL_INT(_debug, OID_AUTO, qmgr, CTLFLAG_RW, &qmgr_debug,
+static int qmgr_debug;
+SYSCTL_INT(_debug, OID_AUTO, qmgr, CTLFLAG_RWTUN, &qmgr_debug,
 	   0, "IXP4XX Q-Manager debug msgs");
-TUNABLE_INT("debug.qmgr", &qmgr_debug);
 #define	DPRINTF(dev, fmt, ...) do {					\
 	if (qmgr_debug) printf(fmt, __VA_ARGS__);			\
 } while (0)
@@ -356,7 +355,7 @@ ixpqmgr_qconfig(int qId, int qEntries, int ne, int nf, int srcSel,
 	if (cb == NULL) {
 	    /* Reset to dummy callback */
 	    qi->cb = dummyCallback;
-	    qi->cbarg = 0;
+	    qi->cbarg = NULL;
 	} else {
 	    qi->cb = cb;
 	    qi->cbarg = cbarg;
@@ -422,7 +421,7 @@ ixpqmgr_qwrite(int qId, uint32_t entry)
 		    return ENOSPC;
 		}
 		/*
-		 * No overflow occured : someone is draining the queue
+		 * No overflow occurred : someone is draining the queue
 		 * and the current counter needs to be
 		 * updated from the current number of entries in the queue
 		 */

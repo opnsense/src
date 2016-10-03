@@ -1,16 +1,12 @@
 # $FreeBSD$
 
+SYSDIR?=${.CURDIR}/../..
+
 KMOD=	zfs
 
-SRCS=	bus_if.h device_if.h vnode_if.h
+SRCS=	bus_if.h device_if.h vnode_if.h opt_kstack_pages.h
 
-.if !defined(KERNBUILDDIR)
-SRCS+=	opt_kdtrace.h
-opt_kdtrace.h:
-	echo "" > ${.TARGET}
-.endif
-
-SUNW=	${.CURDIR}/../../cddl/contrib/opensolaris
+SUNW=	${SYSDIR}/cddl/contrib/opensolaris
 
 .PATH:	${SUNW}/common/acl
 SRCS+=	acl_common.c
@@ -20,10 +16,10 @@ SRCS+=	avl.c
 SRCS+=	opensolaris_nvpair.c
 SRCS+=	opensolaris_nvpair_alloc_fixed.c
 SRCS+=	opensolaris_fnvpair.c
-.PATH:	${.CURDIR}/../../cddl/contrib/opensolaris/common/unicode
+.PATH:	${SYSDIR}/cddl/contrib/opensolaris/common/unicode
 SRCS+=	u8_textprep.c
 
-.PATH:	${.CURDIR}/../../cddl/compat/opensolaris/kern
+.PATH:	${SYSDIR}/cddl/compat/opensolaris/kern
 SRCS+=	opensolaris_acl.c
 SRCS+=	opensolaris_dtrace.c
 SRCS+=	opensolaris_kobj.c
@@ -38,7 +34,7 @@ SRCS+=	opensolaris_vfs.c
 SRCS+=	opensolaris_vm.c
 SRCS+=	opensolaris_zone.c
 
-_A=${.CURDIR}/../../cddl/contrib/opensolaris/common/atomic
+_A=${SYSDIR}/cddl/contrib/opensolaris/common/atomic
 .if exists(${_A}/${MACHINE_CPUARCH}/opensolaris_atomic.S)
 .PATH:	${_A}/${MACHINE_CPUARCH}
 SRCS+=		opensolaris_atomic.S
@@ -71,8 +67,11 @@ SRCS+=	zmod.c
 SRCS+=	zmod_subr.c
 SRCS+=	zutil.c
 
-.PATH:	${.CURDIR}/../../crypto/sha2
-SRCS+=	sha2.c
+.PATH:	${SYSDIR}/crypto/sha2
+SRCS+=	sha256c.c sha512c.c
+
+.PATH:	${SYSDIR}/crypto/skein
+SRCS+=	skein.c skein_block.c
 
 .PATH:	${SUNW}/common/zfs
 .include "${SUNW}/uts/common/Makefile.files"
@@ -85,11 +84,11 @@ SRCS+=	trim_map.c
 # Use FreeBSD's namecache.
 CFLAGS+=-DFREEBSD_NAMECACHE
 
-CFLAGS+=-I${.CURDIR}/../../cddl/compat/opensolaris
+CFLAGS+=-I${SYSDIR}/cddl/compat/opensolaris
 CFLAGS+=-I${SUNW}/uts/common/fs/zfs
 CFLAGS+=-I${SUNW}/uts/common/zmod
 CFLAGS+=-I${SUNW}/uts/common
-CFLAGS+=-I${.CURDIR}/../..
+CFLAGS+=-I${SYSDIR}
 CFLAGS+=-I${SUNW}/common/zfs
 CFLAGS+=-I${SUNW}/common
 CFLAGS+=-DBUILDING_ZFS
@@ -98,14 +97,15 @@ CFLAGS+=-DBUILDING_ZFS
 CFLAGS+=-mminimal-toc
 .endif
 
-#CFLAGS+=-DDEBUG=1
-#DEBUG_FLAGS=-g
+.ifdef ZFS_DEBUG
+CFLAGS+=-DDEBUG=1
+DEBUG_FLAGS=-g
+.endif
 
 .include <bsd.kmod.mk>
 
-CFLAGS+=	-include ${.CURDIR}/../../cddl/compat/opensolaris/sys/debug_compat.h
+CFLAGS+=	-include ${SYSDIR}/cddl/compat/opensolaris/sys/debug_compat.h
 
-CWARNFLAGS+=-Wno-unknown-pragmas
 CWARNFLAGS+=-Wno-missing-prototypes
 CWARNFLAGS+=-Wno-undef
 CWARNFLAGS+=-Wno-strict-prototypes

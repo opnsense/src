@@ -87,21 +87,22 @@ int	 atoi(const char *);
 long	 atol(const char *);
 void	*bsearch(const void *, const void *, size_t,
 	    size_t, int (*)(const void *, const void *));
-void	*calloc(size_t, size_t) __malloc_like;
+void	*calloc(size_t, size_t) __malloc_like __result_use_check
+	     __alloc_size(1) __alloc_size(2);
 div_t	 div(int, int) __pure2;
 _Noreturn void	 exit(int);
 void	 free(void *);
 char	*getenv(const char *);
 long	 labs(long) __pure2;
 ldiv_t	 ldiv(long, long) __pure2;
-void	*malloc(size_t) __malloc_like;
+void	*malloc(size_t) __malloc_like __result_use_check __alloc_size(1);
 int	 mblen(const char *, size_t);
 size_t	 mbstowcs(wchar_t * __restrict , const char * __restrict, size_t);
 int	 mbtowc(wchar_t * __restrict, const char * __restrict, size_t);
 void	 qsort(void *, size_t, size_t,
 	    int (*)(const void *, const void *));
 int	 rand(void);
-void	*realloc(void *, size_t);
+void	*realloc(void *, size_t) __result_use_check __alloc_size(2);
 void	 srand(unsigned);
 double	 strtod(const char * __restrict, char ** __restrict);
 float	 strtof(const char * __restrict, char ** __restrict);
@@ -124,7 +125,7 @@ size_t	 wcstombs(char * __restrict, const wchar_t * __restrict, size_t);
  *
  * (The only other extension made by C99 in thie header is _Exit().)
  */
-#if __ISO_C_VISIBLE >= 1999
+#if __ISO_C_VISIBLE >= 1999 || defined(__cplusplus)
 #ifdef __LONG_LONG_SUPPORTED
 /* LONGLONG */
 typedef struct {
@@ -155,7 +156,8 @@ _Noreturn void	 _Exit(int);
  * If we're in a mode greater than C99, expose C11 functions.
  */
 #if __ISO_C_VISIBLE >= 2011 || __cplusplus >= 201103L
-void *	aligned_alloc(size_t, size_t) __malloc_like;
+void *	aligned_alloc(size_t, size_t) __malloc_like __alloc_align(1)
+	    __alloc_size(2);
 int	at_quick_exit(void (*)(void));
 _Noreturn void
 	quick_exit(int);
@@ -170,7 +172,7 @@ char	*realpath(const char * __restrict, char * __restrict);
 int	 rand_r(unsigned *);			/* (TSF) */
 #endif
 #if __POSIX_VISIBLE >= 200112
-int	 posix_memalign(void **, size_t, size_t); /* (ADV) */
+int	 posix_memalign(void **, size_t, size_t) __nonnull(1); /* (ADV) */
 int	 setenv(const char *, const char *, int);
 int	 unsetenv(const char *);
 #endif
@@ -257,6 +259,11 @@ void	 arc4random_buf(void *, size_t);
 void	 arc4random_stir(void);
 __uint32_t 
 	 arc4random_uniform(__uint32_t);
+#ifdef __BLOCKS__
+int	 atexit_b(void (^)(void));
+void	*bsearch_b(const void *, const void *, size_t,
+	    size_t, int (^)(const void *, const void *));
+#endif
 char	*getbsize(int *, long *);
 					/* getcap(3) functions */
 char	*cgetcap(char *, const char *, int);
@@ -272,23 +279,33 @@ int	 cgetustr(char *, const char *, char **);
 
 int	 daemon(int, int);
 char	*devname(__dev_t, __mode_t);
-char 	*devname_r(__dev_t, __mode_t, char *, int);
+char	*devname_r(__dev_t, __mode_t, char *, int);
 char	*fdevname(int);
-char 	*fdevname_r(int, char *, int);
+char	*fdevname_r(int, char *, int);
 int	 getloadavg(double [], int);
 const char *
 	 getprogname(void);
 
 int	 heapsort(void *, size_t, size_t, int (*)(const void *, const void *));
+#ifdef __BLOCKS__
+int	 heapsort_b(void *, size_t, size_t, int (^)(const void *, const void *));
+void	 qsort_b(void *, size_t, size_t,
+	    int (^)(const void *, const void *));
+#endif
 int	 l64a_r(long, char *, int);
 int	 mergesort(void *, size_t, size_t, int (*)(const void *, const void *));
+#ifdef __BLOCKS__
+int	 mergesort_b(void *, size_t, size_t, int (^)(const void *, const void *));
+#endif
 int	 mkostemp(char *, int);
 int	 mkostemps(char *, int, int);
 void	 qsort_r(void *, size_t, size_t, void *,
 	    int (*)(void *, const void *, const void *));
 int	 radixsort(const unsigned char **, int, const unsigned char *,
 	    unsigned);
-void    *reallocf(void *, size_t);
+void	*reallocarray(void *, size_t, size_t) __result_use_check __alloc_size(2)
+	    __alloc_size(3);
+void	*reallocf(void *, size_t) __alloc_size(2);
 int	 rpmatch(const char *);
 void	 setprogname(const char *);
 int	 sradixsort(const unsigned char **, int, const unsigned char *,

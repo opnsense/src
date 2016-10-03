@@ -198,7 +198,7 @@ usage(void)
 	if (vt4_mode)
 		fprintf(stderr, "%s\n%s\n%s\n%s\n%s\n",
 "usage: vidcontrol [-CHPpx] [-b color] [-c appearance] [-f [[size] file]]",
-"                  [-g geometry] [-h size] [-i adapter | mode]",
+"                  [-g geometry] [-h size] [-i active | adapter | mode]",
 "                  [-M char] [-m on | off] [-r foreground background]",
 "                  [-S on | off] [-s number] [-T xterm | cons25] [-t N | off]",
 "                  [mode] [foreground [background]] [show]");
@@ -1035,6 +1035,18 @@ static const char
 
 
 /*
+ * Show active VTY, ie current console number.
+ */
+
+static void
+show_active_info(void)
+{
+
+	printf("%d\n", cur_info.active_vty);
+}
+
+
+/*
  * Show graphics adapter information.
  */
 
@@ -1085,11 +1097,15 @@ show_mode_info(void)
 	printf("---------------------------------------"
 	       "---------------------------------------\n");
 
+	memset(&_info, 0, sizeof(_info));
 	for (mode = 0; mode <= M_VESA_MODE_MAX; ++mode) {
 		_info.vi_mode = mode;
 		if (ioctl(0, CONS_MODEINFO, &_info))
 			continue;
 		if (_info.vi_mode != mode)
+			continue;
+		if (_info.vi_width == 0 && _info.vi_height == 0 &&
+		    _info.vi_cwidth == 0 && _info.vi_cheight == 0)
 			continue;
 
 		printf("%3d (0x%03x)", mode, mode);
@@ -1149,13 +1165,16 @@ show_mode_info(void)
 static void
 show_info(char *arg)
 {
-	if (!strcmp(arg, "adapter")) {
+
+	if (!strcmp(arg, "active")) {
+		show_active_info();
+	} else if (!strcmp(arg, "adapter")) {
 		show_adapter_info();
 	} else if (!strcmp(arg, "mode")) {
 		show_mode_info();
 	} else {
 		revert();
-		errx(1, "argument to -i must be either adapter or mode");
+		errx(1, "argument to -i must be active, adapter, or mode");
 	}
 }
 

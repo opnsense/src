@@ -1,6 +1,7 @@
-/*	$Id: man_hash.c,v 1.25 2011/07/24 18:15:14 kristaps Exp $ */
+/*	$Id: man_hash.c,v 1.34 2015/10/06 18:32:19 schwarze Exp $ */
 /*
  * Copyright (c) 2008, 2009, 2010 Kristaps Dzonsons <kristaps@bsd.lv>
+ * Copyright (c) 2015 Ingo Schwarze <schwarze@openbsd.org>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -14,20 +15,17 @@
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
-#ifdef HAVE_CONFIG_H
 #include "config.h"
-#endif
 
 #include <sys/types.h>
 
 #include <assert.h>
 #include <ctype.h>
 #include <limits.h>
-#include <stdlib.h>
 #include <string.h>
 
+#include "roff.h"
 #include "man.h"
-#include "mandoc.h"
 #include "libman.h"
 
 #define	HASH_DEPTH	 6
@@ -49,19 +47,16 @@
  */
 static	unsigned char	 table[26 * HASH_DEPTH];
 
-/*
- * XXX - this hash has global scope, so if intended for use as a library
- * with multiple callers, it will need re-invocation protection.
- */
+
 void
 man_hash_init(void)
 {
 	int		 i, j, x;
 
-	memset(table, UCHAR_MAX, sizeof(table));
+	if (*table != '\0')
+		return;
 
-	assert(/* LINTED */ 
-			MAN_MAX < UCHAR_MAX);
+	memset(table, UCHAR_MAX, sizeof(table));
 
 	for (i = 0; i < (int)MAN_MAX; i++) {
 		x = man_macronames[i][0];
@@ -80,28 +75,27 @@ man_hash_init(void)
 	}
 }
 
-
-enum mant
+int
 man_hash_find(const char *tmp)
 {
 	int		 x, y, i;
-	enum mant	 tok;
+	int		 tok;
 
 	if ('\0' == (x = tmp[0]))
-		return(MAN_MAX);
+		return TOKEN_NONE;
 	if ( ! (isalpha((unsigned char)x)))
-		return(MAN_MAX);
+		return TOKEN_NONE;
 
 	HASH_ROW(x);
 
 	for (i = 0; i < HASH_DEPTH; i++) {
 		if (UCHAR_MAX == (y = table[x + i]))
-			return(MAN_MAX);
+			return TOKEN_NONE;
 
-		tok = (enum mant)y;
+		tok = y;
 		if (0 == strcmp(tmp, man_macronames[tok]))
-			return(tok);
+			return tok;
 	}
 
-	return(MAN_MAX);
+	return TOKEN_NONE;
 }

@@ -211,6 +211,17 @@ nfsrvd_getattr(struct nfsrv_descript *nd, int isdgram,
 		if (nd->nd_repstat == 0) {
 			accmode = 0;
 			NFSSET_ATTRBIT(&tmpbits, &attrbits);
+	
+			/*
+			 * GETATTR with write-only attr time_access_set and time_modify_set
+			 * should return NFS4ERR_INVAL.
+			 */
+			if (NFSISSET_ATTRBIT(&tmpbits, NFSATTRBIT_TIMEACCESSSET) ||
+					NFSISSET_ATTRBIT(&tmpbits, NFSATTRBIT_TIMEMODIFYSET)){
+				error = NFSERR_INVAL;
+				vput(vp);
+				goto out;
+			}
 			if (NFSISSET_ATTRBIT(&tmpbits, NFSATTRBIT_ACL)) {
 				NFSCLRBIT_ATTRBIT(&tmpbits, NFSATTRBIT_ACL);
 				accmode |= VREAD_ACL;
@@ -316,7 +327,7 @@ nfsrvd_setattr(struct nfsrv_descript *nd, __unused int isdgram,
 		stateid.seqid = fxdr_unsigned(u_int32_t, *tl++);
 		NFSBCOPY((caddr_t)tl,(caddr_t)stateid.other,NFSX_STATEIDOTHER);
 	}
-	error = nfsrv_sattr(nd, &nva, &attrbits, aclp, p);
+	error = nfsrv_sattr(nd, vp, &nva, &attrbits, aclp, p);
 	if (error)
 		goto nfsmout;
 	preat_ret = nfsvno_getattr(vp, &nva2, nd->nd_cred, p, 1);
@@ -1013,14 +1024,14 @@ nfsrvd_create(struct nfsrv_descript *nd, __unused int isdgram,
 				break;
 			default:
 				break;
-			};
+			}
 		} else {
 			NFSM_DISSECT(tl, u_int32_t *, NFSX_UNSIGNED);
 			how = fxdr_unsigned(int, *tl);
 			switch (how) {
 			case NFSCREATE_GUARDED:
 			case NFSCREATE_UNCHECKED:
-				error = nfsrv_sattr(nd, &nva, NULL, NULL, p);
+				error = nfsrv_sattr(nd, NULL, &nva, NULL, NULL, p);
 				if (error)
 					goto nfsmout;
 				break;
@@ -1030,7 +1041,7 @@ nfsrvd_create(struct nfsrv_descript *nd, __unused int isdgram,
 				cverf[1] = *tl;
 				exclusive_flag = 1;
 				break;
-			};
+			}
 			NFSVNO_SETATTRVAL(&nva, type, VREG);
 		}
 	}
@@ -1077,7 +1088,7 @@ nfsrvd_create(struct nfsrv_descript *nd, __unused int isdgram,
 			if (named.ni_vp == NULL)
 				NFSVNO_SETATTRVAL(&nva, mode, 0);
 			break;
-		};
+		}
 	}
 
 	/*
@@ -1205,7 +1216,7 @@ nfsrvd_mknod(struct nfsrv_descript *nd, __unused int isdgram,
 			NFSM_DISSECT(tl, u_int32_t *, NFSX_UNSIGNED);
 			vtyp = nfsv34tov_type(*tl);
 		}
-		error = nfsrv_sattr(nd, &nva, &attrbits, aclp, p);
+		error = nfsrv_sattr(nd, NULL, &nva, &attrbits, aclp, p);
 		if (error)
 			goto nfsmout;
 		nva.na_type = vtyp;
@@ -1851,7 +1862,7 @@ nfsrvd_mkdir(struct nfsrv_descript *nd, __unused int isdgram,
 	if (!nd->nd_repstat) {
 		NFSVNO_ATTRINIT(&nva);
 		if (nd->nd_flag & ND_NFSV3) {
-			error = nfsrv_sattr(nd, &nva, NULL, NULL, p);
+			error = nfsrv_sattr(nd, NULL, &nva, NULL, NULL, p);
 			if (error)
 				goto nfsmout;
 		} else {
@@ -1968,11 +1979,21 @@ nfsrvd_commit(struct nfsrv_descript *nd, __unused int isdgram,
 	int error = 0, for_ret = 1, aft_ret = 1, cnt;
 	u_int64_t off;
 
-	if (nd->nd_repstat) {
+       if (nd->nd_repstat) {
 		nfsrv_wcc(nd, for_ret, &bfor, aft_ret, &aft);
 		goto out;
 	}
+
+	/* Return NFSERR_ISDIR in NFSv4 when commit on a directory. */
+	if (vp->v_type != VREG) {
+		if (nd->nd_flag & ND_NFSV3)
+			error = NFSERR_NOTSUPP;
+		else
+			error = (vp->v_type == VDIR) ? NFSERR_ISDIR : NFSERR_INVAL;
+		goto nfsmout;
+	}
 	NFSM_DISSECT(tl, u_int32_t *, 3 * NFSX_UNSIGNED);
+
 	/*
 	 * XXX At this time VOP_FSYNC() does not accept offset and byte
 	 * count parameters, so these arguments are useless (someday maybe).
@@ -2185,7 +2206,7 @@ nfsrvd_lock(struct nfsrv_descript *nd, __unused int isdgram,
 	default:
 		nd->nd_repstat = NFSERR_BADXDR;
 		goto nfsmout;
-	};
+	}
 	if (*tl++ == newnfs_true)
 		flags |= NFSLCK_RECLAIM;
 	offset = fxdr_hyper(tl);
@@ -2379,7 +2400,7 @@ nfsrvd_lockt(struct nfsrv_descript *nd, __unused int isdgram,
 	default:
 		nd->nd_repstat = NFSERR_BADXDR;
 		goto nfsmout;
-	};
+	}
 	lo.lo_first = fxdr_hyper(tl);
 	tl += 2;
 	len = fxdr_hyper(tl);
@@ -2416,8 +2437,6 @@ nfsrvd_lockt(struct nfsrv_descript *nd, __unused int isdgram,
 	if (!nd->nd_repstat)
 	  nd->nd_repstat = nfsrv_lockctrl(vp, &stp, &lop, &cf, clientid,
 	    &stateid, exp, nd, p);
-	if (stp)
-		FREE((caddr_t)stp, M_NFSDSTATE);
 	if (nd->nd_repstat) {
 	    if (nd->nd_repstat == NFSERR_DENIED) {
 		NFSM_BUILD(tl, u_int32_t *, 7 * NFSX_UNSIGNED);
@@ -2439,6 +2458,8 @@ nfsrvd_lockt(struct nfsrv_descript *nd, __unused int isdgram,
 	    }
 	}
 	vput(vp);
+	if (stp)
+		FREE((caddr_t)stp, M_NFSDSTATE);
 	NFSEXITCODE2(0, nd);
 	return (0);
 nfsmout:
@@ -2488,7 +2509,7 @@ nfsrvd_locku(struct nfsrv_descript *nd, __unused int isdgram,
 		free(stp, M_NFSDSTATE);
 		free(lop, M_NFSDLOCK);
 		goto nfsmout;
-	};
+	}
 	stp->ls_ownerlen = 0;
 	stp->ls_uid = nd->nd_cred->cr_uid;
 	stp->ls_seq = fxdr_unsigned(int, *tl++);
@@ -2624,7 +2645,7 @@ nfsrvd_open(struct nfsrv_descript *nd, __unused int isdgram,
 		default:
 			/* nd_repstat will be set to NFSERR_INVAL below. */
 			break;
-		};
+		}
 	}
 	switch (i) {
 	case NFSV4OPEN_ACCESSREAD:
@@ -2638,7 +2659,7 @@ nfsrvd_open(struct nfsrv_descript *nd, __unused int isdgram,
 		break;
 	default:
 		nd->nd_repstat = NFSERR_INVAL;
-	};
+	}
 	i = fxdr_unsigned(int, *tl++);
 	switch (i) {
 	case NFSV4OPEN_DENYNONE:
@@ -2654,7 +2675,7 @@ nfsrvd_open(struct nfsrv_descript *nd, __unused int isdgram,
 		break;
 	default:
 		nd->nd_repstat = NFSERR_INVAL;
-	};
+	}
 	clientid.lval[0] = *tl++;
 	clientid.lval[1] = *tl;
 	if ((nd->nd_flag & ND_IMPLIEDCLID) != 0) {
@@ -2684,7 +2705,7 @@ nfsrvd_open(struct nfsrv_descript *nd, __unused int isdgram,
 		switch (how) {
 		case NFSCREATE_UNCHECKED:
 		case NFSCREATE_GUARDED:
-			error = nfsv4_sattr(nd, &nva, &attrbits, aclp, p);
+			error = nfsv4_sattr(nd, NULL, &nva, &attrbits, aclp, p);
 			if (error)
 				goto nfsmout;
 			/*
@@ -2708,7 +2729,7 @@ nfsrvd_open(struct nfsrv_descript *nd, __unused int isdgram,
 			NFSM_DISSECT(tl, u_int32_t *, NFSX_VERF);
 			cverf[0] = *tl++;
 			cverf[1] = *tl;
-			error = nfsv4_sattr(nd, &nva, &attrbits, aclp, p);
+			error = nfsv4_sattr(nd, vp, &nva, &attrbits, aclp, p);
 			if (error != 0)
 				goto nfsmout;
 			if (NFSISSET_ATTRBIT(&attrbits,
@@ -2729,7 +2750,7 @@ nfsrvd_open(struct nfsrv_descript *nd, __unused int isdgram,
 		default:
 			nd->nd_repstat = NFSERR_BADXDR;
 			goto nfsmout;
-		};
+		}
 	} else if (create != NFSV4OPEN_NOCREATE) {
 		nd->nd_repstat = NFSERR_BADXDR;
 		goto nfsmout;
@@ -2811,7 +2832,7 @@ nfsrvd_open(struct nfsrv_descript *nd, __unused int isdgram,
 		    case NFSCREATE_EXCLUSIVE41:
 			exclusive_flag = 1;
 			break;
-		    };
+		    }
 		}
 		nfsvno_open(nd, &named, clientid, &stateid, stp,
 		    &exclusive_flag, &nva, cverf, create, aclp, &attrbits,
@@ -2832,7 +2853,7 @@ nfsrvd_open(struct nfsrv_descript *nd, __unused int isdgram,
 			default:
 				nd->nd_repstat = NFSERR_BADXDR;
 				goto nfsmout;
-			};
+			}
 			stp->ls_flags |= NFSLCK_RECLAIM;
 		} else {
 			/* CLAIM_NULL_FH */
@@ -2859,7 +2880,7 @@ nfsrvd_open(struct nfsrv_descript *nd, __unused int isdgram,
 		 * The IETF working group decided that this is the correct
 		 * error return for all non-regular files.
 		 */
-		nd->nd_repstat = NFSERR_SYMLINK;
+		nd->nd_repstat = (vp->v_type == VDIR) ? NFSERR_ISDIR : NFSERR_SYMLINK;
 	}
 	if (!nd->nd_repstat && (stp->ls_flags & NFSLCK_WRITEACCESS))
 	    nd->nd_repstat = nfsvno_accchk(vp, VWRITE, nd->nd_cred,
@@ -3198,6 +3219,11 @@ nfsrvd_opendowngrade(struct nfsrv_descript *nd, __unused int isdgram,
 	nfsv4stateid_t stateid;
 	nfsquad_t clientid;
 
+	/* opendowngrade can only work on a file object.*/
+	if (vp->v_type != VREG) {
+		error = NFSERR_INVAL;
+		goto nfsmout;
+	}
 	NFSM_DISSECT(tl, u_int32_t *, NFSX_STATEID + 3 * NFSX_UNSIGNED);
 	stp->ls_ownerlen = 0;
 	stp->ls_op = nd->nd_rp;
@@ -3221,7 +3247,7 @@ nfsrvd_opendowngrade(struct nfsrv_descript *nd, __unused int isdgram,
 		break;
 	default:
 		nd->nd_repstat = NFSERR_BADXDR;
-	};
+	}
 	i = fxdr_unsigned(int, *tl);
 	switch (i) {
 	case NFSV4OPEN_DENYNONE:
@@ -3237,7 +3263,7 @@ nfsrvd_opendowngrade(struct nfsrv_descript *nd, __unused int isdgram,
 		break;
 	default:
 		nd->nd_repstat = NFSERR_BADXDR;
-	};
+	}
 
 	clientid.lval[0] = stp->ls_stateid.other[0];
 	clientid.lval[1] = stp->ls_stateid.other[1];

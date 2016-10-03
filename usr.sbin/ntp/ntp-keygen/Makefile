@@ -2,7 +2,7 @@
 
 MAN=
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 .PATH:	${.CURDIR}/../../../contrib/ntp/util \
 	${.CURDIR}/../../../contrib/ntp/ntpd
@@ -20,15 +20,10 @@ CFLAGS+= -I${.CURDIR}/../../../contrib/ntp/include \
 	-I${.CURDIR}/../../../lib/libc/${MACHINE_ARCH} \
 	-I${.CURDIR}/../
 
-DPADD=	${LIBNTP} ${LIBOPTS} ${LIBPTHREAD}
-LDADD=	${LIBNTP} ${LIBOPTS} -lpthread
+LIBADD+=	ntp opts pthread
 
 .if ${MK_OPENSSL} != "no"
-DPADD+=	${LIBCRYPTO}
-LDADD+=	-lcrypto
-.else
-DPADD+=	${LIBMD}
-LDADD+=	-lmd
+LIBADD+=	crypto
 .endif
 
 .include <bsd.prog.mk>

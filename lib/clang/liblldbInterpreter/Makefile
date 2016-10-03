@@ -11,6 +11,7 @@ SRCS=	Args.cpp \
 	CommandObject.cpp \
 	CommandObjectRegexCommand.cpp \
 	CommandObjectScript.cpp \
+	CommandOptionValidators.cpp \
 	CommandReturnObject.cpp \
 	OptionGroupArchitecture.cpp \
 	OptionGroupBoolean.cpp \
@@ -27,11 +28,14 @@ SRCS=	Args.cpp \
 	OptionValueArgs.cpp \
 	OptionValueArray.cpp \
 	OptionValueBoolean.cpp \
+	OptionValueChar.cpp \
 	OptionValueDictionary.cpp \
 	OptionValueEnumeration.cpp \
 	OptionValueFileSpec.cpp \
 	OptionValueFileSpecLIst.cpp \
 	OptionValueFormat.cpp \
+	OptionValueFormatEntity.cpp \
+	OptionValueLanguage.cpp \
 	OptionValuePathMappings.cpp \
 	OptionValueProperties.cpp \
 	OptionValueRegex.cpp \
@@ -43,12 +47,11 @@ SRCS=	Args.cpp \
 	OptionGroupWatchpoint.cpp \
 	Options.cpp \
 	Property.cpp \
-	PythonDataObjects.cpp \
-	ScriptInterpreter.cpp \
-	ScriptInterpreterNone.cpp \
-	ScriptInterpreterPython.cpp
+	ScriptInterpreter.cpp
 
-TGHDRS=	DiagnosticCommonKinds \
+TGHDRS=	AttrList \
+	Attrs \
+	DiagnosticCommonKinds \
 	DeclNodes \
 	StmtNodes \
 	CommentCommandList

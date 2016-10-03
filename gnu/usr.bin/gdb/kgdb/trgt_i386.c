@@ -139,7 +139,7 @@ kgdb_trgt_fetch_tss(void)
 	uintptr_t addr, cpu0prvpage, tss;
 
 	kt = kgdb_thr_lookup_tid(ptid_get_pid(inferior_ptid));
-	if (kt == NULL || kt->cpu == NOCPU)
+	if (kt == NULL || kt->cpu == NOCPU || kt->cpu < 0)
 		return (0);
 
 	addr = kgdb_lookup("gdt");
@@ -384,4 +384,17 @@ kgdb_trgt_trapframe_sniffer(struct frame_info *next_frame)
 		return (&kgdb_trgt_trapframe_unwind);
 	/* printf("%s: %llx =%s\n", __func__, pc, pname); */
 	return (NULL);
+}
+
+/*
+ * This function ensures, that the PC is inside the
+ * function section which is understood by GDB.
+ *
+ * Return 0 when fixup is necessary, -1 otherwise.
+ */
+int
+kgdb_trgt_pc_fixup(CORE_ADDR *pc __unused)
+{
+
+	return (-1);
 }

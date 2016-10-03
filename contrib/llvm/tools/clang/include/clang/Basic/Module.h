@@ -15,12 +15,15 @@
 #ifndef LLVM_CLANG_BASIC_MODULE_H
 #define LLVM_CLANG_BASIC_MODULE_H
 
+#include "clang/Basic/FileManager.h"
 #include "clang/Basic/SourceLocation.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/PointerIntPair.h"
 #include "llvm/ADT/PointerUnion.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include <string>
@@ -33,9 +36,6 @@ namespace llvm {
 
 namespace clang {
   
-class DirectoryEntry;
-class FileEntry;
-class FileManager;
 class LangOptions;
 class TargetInfo;
 class IdentifierInfo;
@@ -51,13 +51,24 @@ public:
   
   /// \brief The location of the module definition.
   SourceLocation DefinitionLoc;
-  
+
   /// \brief The parent of this module. This will be NULL for the top-level
   /// module.
   Module *Parent;
-  
+
+  /// \brief The build directory of this module. This is the directory in
+  /// which the module is notionally built, and relative to which its headers
+  /// are found.
+  const DirectoryEntry *Directory;
+
   /// \brief The umbrella header or directory.
   llvm::PointerUnion<const DirectoryEntry *, const FileEntry *> Umbrella;
+
+  /// \brief The module signature.
+  uint64_t Signature;
+
+  /// \brief The name of the umbrella entry, as written in the module map.
+  std::string UmbrellaAsWritten;
   
 private:
   /// \brief The submodules of this module, indexed by name.
@@ -80,15 +91,51 @@ private:
   /// \brief Cache of modules visible to lookup in this module.
   mutable llvm::DenseSet<const Module*> VisibleModulesCache;
 
+  /// The ID used when referencing this module within a VisibleModuleSet.
+  unsigned VisibilityID;
+
 public:
+  enum HeaderKind {
+    HK_Normal,
+    HK_Textual,
+    HK_Private,
+    HK_PrivateTextual,
+    HK_Excluded
+  };
+  static const int NumHeaderKinds = HK_Excluded + 1;
+
+  /// \brief Information about a header directive as found in the module map
+  /// file.
+  struct Header {
+    std::string NameAsWritten;
+    const FileEntry *Entry;
+
+    explicit operator bool() { return Entry; }
+  };
+
+  /// \brief Information about a directory name as found in the module map
+  /// file.
+  struct DirectoryName {
+    std::string NameAsWritten;
+    const DirectoryEntry *Entry;
+
+    explicit operator bool() { return Entry; }
+  };
+
   /// \brief The headers that are part of this module.
-  SmallVector<const FileEntry *, 2> NormalHeaders;
+  SmallVector<Header, 2> Headers[5];
 
-  /// \brief The headers that are explicitly excluded from this module.
-  SmallVector<const FileEntry *, 2> ExcludedHeaders;
+  /// \brief Stored information about a header directive that was found in the
+  /// module map file but has not been resolved to a file.
+  struct UnresolvedHeaderDirective {
+    SourceLocation FileNameLoc;
+    std::string FileName;
+    bool IsUmbrella;
+  };
 
-  /// \brief The headers that are private to this module.
-  llvm::SmallVector<const FileEntry *, 2> PrivateHeaders;
+  /// \brief Headers that are mentioned in the module map file but could not be
+  /// found on the file system.
+  SmallVector<UnresolvedHeaderDirective, 1> MissingHeaders;
 
   /// \brief An individual requirement: a feature name and a flag indicating
   /// the required state of that feature.
@@ -100,8 +147,16 @@ public:
   /// will be false to indicate that this (sub)module is not available.
   SmallVector<Requirement, 2> Requirements;
 
-  /// \brief Whether this module is available in the current
-  /// translation unit.
+  /// \brief Whether this module is missing a feature from \c Requirements.
+  unsigned IsMissingRequirement : 1;
+
+  /// \brief Whether we tried and failed to load a module file for this module.
+  unsigned HasIncompatibleModuleFile : 1;
+
+  /// \brief Whether this module is available in the current translation unit.
+  ///
+  /// If the module is missing headers or does not meet all requirements then
+  /// this bit will be 0.
   unsigned IsAvailable : 1;
 
   /// \brief Whether this module was loaded from a module file.
@@ -116,7 +171,15 @@ public:
   /// \brief Whether this is a "system" module (which assumes that all
   /// headers in it are system headers).
   unsigned IsSystem : 1;
-  
+
+  /// \brief Whether this is an 'extern "C"' module (which implicitly puts all
+  /// headers in it within an 'extern "C"' block, and allows the module to be
+  /// imported within such a block).
+  unsigned IsExternC : 1;
+
+  /// \brief Whether this is an inferred submodule (module * { ... }).
+  unsigned IsInferred : 1;
+
   /// \brief Whether we should infer submodules for this module based on 
   /// the headers.
   ///
@@ -142,15 +205,12 @@ public:
   /// particular module.
   enum NameVisibilityKind {
     /// \brief All of the names in this module are hidden.
-    ///
     Hidden,
-    /// \brief Only the macro names in this module are visible.
-    MacrosVisible,
     /// \brief All of the names in this module are visible.
     AllVisible
-  };  
-  
-  ///\ brief The visibility of names within this particular module.
+  };
+
+  /// \brief The visibility of names within this particular module.
   NameVisibilityKind NameVisibility;
 
   /// \brief The location of the inferred submodule.
@@ -158,7 +218,7 @@ public:
 
   /// \brief The set of modules imported by this module, and on which this
   /// module depends.
-  SmallVector<Module *, 2> Imports;
+  llvm::SmallSetVector<Module *, 2> Imports;
   
   /// \brief Describes an exported module.
   ///
@@ -243,19 +303,9 @@ public:
   /// \brief The list of conflicts.
   std::vector<Conflict> Conflicts;
 
-  /// \brief Construct a top-level module.
-  explicit Module(StringRef Name, SourceLocation DefinitionLoc,
-                  bool IsFramework)
-    : Name(Name), DefinitionLoc(DefinitionLoc), Parent(0),Umbrella(),ASTFile(0),
-      IsAvailable(true), IsFromModuleFile(false), IsFramework(IsFramework), 
-      IsExplicit(false), IsSystem(false),
-      InferSubmodules(false), InferExplicitSubmodules(false),
-      InferExportWildcard(false), ConfigMacrosExhaustive(false),
-      NameVisibility(Hidden) { }
-  
   /// \brief Construct a new module or submodule.
-  Module(StringRef Name, SourceLocation DefinitionLoc, Module *Parent, 
-         bool IsFramework, bool IsExplicit);
+  Module(StringRef Name, SourceLocation DefinitionLoc, Module *Parent,
+         bool IsFramework, bool IsExplicit, unsigned VisibilityID);
   
   ~Module();
   
@@ -276,14 +326,15 @@ public:
   /// this module.
   bool isAvailable(const LangOptions &LangOpts, 
                    const TargetInfo &Target,
-                   Requirement &Req) const;
+                   Requirement &Req,
+                   UnresolvedHeaderDirective &MissingHeader) const;
 
   /// \brief Determine whether this module is a submodule.
-  bool isSubModule() const { return Parent != 0; }
+  bool isSubModule() const { return Parent != nullptr; }
   
   /// \brief Determine whether this module is a submodule of the given other
   /// module.
-  bool isSubModuleOf(Module *Other) const;
+  bool isSubModuleOf(const Module *Other) const;
   
   /// \brief Determine whether this module is a part of a framework,
   /// either because it is a framework module or because it is a submodule
@@ -305,6 +356,12 @@ public:
   /// \brief Retrieve the full name of this module, including the path from
   /// its top-level module.
   std::string getFullModuleName() const;
+
+  /// \brief Whether the full name of this module is equal to joining
+  /// \p nameParts with "."s.
+  ///
+  /// This is more efficient than getFullModuleName().
+  bool fullModuleNameIs(ArrayRef<StringRef> nameParts) const;
 
   /// \brief Retrieve the top-level module for this (sub)module, which may
   /// be this module.
@@ -330,18 +387,21 @@ public:
 
   /// \brief Set the serialized AST file for the top-level module of this module.
   void setASTFile(const FileEntry *File) {
-    assert((getASTFile() == 0 || getASTFile() == File) && "file path changed");
+    assert((File == nullptr || getASTFile() == nullptr ||
+            getASTFile() == File) && "file path changed");
     getTopLevelModule()->ASTFile = File;
   }
 
   /// \brief Retrieve the directory for which this module serves as the
   /// umbrella.
-  const DirectoryEntry *getUmbrellaDir() const;
+  DirectoryName getUmbrellaDir() const;
 
   /// \brief Retrieve the header that serves as the umbrella header for this
   /// module.
-  const FileEntry *getUmbrellaHeader() const {
-    return Umbrella.dyn_cast<const FileEntry *>();
+  Header getUmbrellaHeader() const {
+    if (auto *E = Umbrella.dyn_cast<const FileEntry *>())
+      return Header{UmbrellaAsWritten, E};
+    return Header{};
   }
 
   /// \brief Determine whether this module has an umbrella directory that is
@@ -364,6 +424,10 @@ public:
   /// \brief The top-level headers associated with this module.
   ArrayRef<const FileEntry *> getTopHeaders(FileManager &FileMgr);
 
+  /// \brief Determine whether this module has declared its intention to
+  /// directly use another module.
+  bool directlyUses(const Module *Requested) const;
+
   /// \brief Add the given feature requirement to the list of features
   /// required by this module.
   ///
@@ -382,6 +446,9 @@ public:
                       const LangOptions &LangOpts,
                       const TargetInfo &Target);
 
+  /// \brief Mark this module and all of its submodules as unavailable.
+  void markUnavailable(bool MissingRequirement = false);
+
   /// \brief Find the submodule with the given name.
   ///
   /// \returns The submodule if found, or NULL otherwise.
@@ -389,11 +456,17 @@ public:
 
   /// \brief Determine whether the specified module would be visible to
   /// a lookup at the end of this module.
+  ///
+  /// FIXME: This may return incorrect results for (submodules of) the
+  /// module currently being built, if it's queried before we see all
+  /// of its imports.
   bool isModuleVisible(const Module *M) const {
     if (VisibleModulesCache.empty())
       buildVisibleModulesCache();
     return VisibleModulesCache.count(M);
   }
+
+  unsigned getVisibilityID() const { return VisibilityID; }
 
   typedef std::vector<Module *>::iterator submodule_iterator;
   typedef std::vector<Module *>::const_iterator submodule_const_iterator;
@@ -402,6 +475,13 @@ public:
   submodule_const_iterator submodule_begin() const {return SubModules.begin();}
   submodule_iterator submodule_end()   { return SubModules.end(); }
   submodule_const_iterator submodule_end() const { return SubModules.end(); }
+
+  llvm::iterator_range<submodule_iterator> submodules() {
+    return llvm::make_range(submodule_begin(), submodule_end());
+  }
+  llvm::iterator_range<submodule_const_iterator> submodules() const {
+    return llvm::make_range(submodule_begin(), submodule_end());
+  }
 
   /// \brief Appends this module's list of exported modules to \p Exported.
   ///
@@ -422,6 +502,65 @@ public:
 
 private:
   void buildVisibleModulesCache() const;
+};
+
+/// \brief A set of visible modules.
+class VisibleModuleSet {
+public:
+  VisibleModuleSet() : Generation(0) {}
+  VisibleModuleSet(VisibleModuleSet &&O)
+      : ImportLocs(std::move(O.ImportLocs)), Generation(O.Generation ? 1 : 0) {
+    O.ImportLocs.clear();
+    ++O.Generation;
+  }
+
+  /// Move from another visible modules set. Guaranteed to leave the source
+  /// empty and bump the generation on both.
+  VisibleModuleSet &operator=(VisibleModuleSet &&O) {
+    ImportLocs = std::move(O.ImportLocs);
+    O.ImportLocs.clear();
+    ++O.Generation;
+    ++Generation;
+    return *this;
+  }
+
+  /// \brief Get the current visibility generation. Incremented each time the
+  /// set of visible modules changes in any way.
+  unsigned getGeneration() const { return Generation; }
+
+  /// \brief Determine whether a module is visible.
+  bool isVisible(const Module *M) const {
+    return getImportLoc(M).isValid();
+  }
+
+  /// \brief Get the location at which the import of a module was triggered.
+  SourceLocation getImportLoc(const Module *M) const {
+    return M->getVisibilityID() < ImportLocs.size()
+               ? ImportLocs[M->getVisibilityID()]
+               : SourceLocation();
+  }
+
+  /// \brief A callback to call when a module is made visible (directly or
+  /// indirectly) by a call to \ref setVisible.
+  typedef llvm::function_ref<void(Module *M)> VisibleCallback;
+  /// \brief A callback to call when a module conflict is found. \p Path
+  /// consists of a sequence of modules from the conflicting module to the one
+  /// made visible, where each was exported by the next.
+  typedef llvm::function_ref<void(ArrayRef<Module *> Path,
+                                  Module *Conflict, StringRef Message)>
+      ConflictCallback;
+  /// \brief Make a specific module visible.
+  void setVisible(Module *M, SourceLocation Loc,
+                  VisibleCallback Vis = [](Module *) {},
+                  ConflictCallback Cb = [](ArrayRef<Module *>, Module *,
+                                           StringRef) {});
+
+private:
+  /// Import locations for each visible module. Indexed by the module's
+  /// VisibilityID.
+  std::vector<SourceLocation> ImportLocs;
+  /// Visibility generation, bumped every time the visibility state changes.
+  unsigned Generation;
 };
 
 } // end namespace clang

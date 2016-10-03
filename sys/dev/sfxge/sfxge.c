@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2010-2015 Solarflare Communications Inc.
+ * Copyright (c) 2010-2016 Solarflare Communications Inc.
  * All rights reserved.
  *
  * This software was developed in part by Philip Paeps under contract for
@@ -34,6 +34,8 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#include "opt_rss.h"
+
 #include <sys/param.h>
 #include <sys/kernel.h>
 #include <sys/bus.h>
@@ -54,8 +56,13 @@ __FBSDID("$FreeBSD$");
 
 #include <net/ethernet.h>
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_media.h>
 #include <net/if_types.h>
+
+#ifdef RSS
+#include <net/rss_config.h>
+#endif
 
 #include "common/efx.h"
 
@@ -94,14 +101,6 @@ SYSCTL_INT(_hw_sfxge, OID_AUTO, tx_ring, CTLFLAG_RDTUN,
 	   &sfxge_tx_ring_entries, 0,
 	   "Maximum number of descriptors in a transmit ring");
 
-#define	SFXGE_PARAM_STATS_UPDATE_PERIOD	SFXGE_PARAM(stats_update_period)
-static int sfxge_stats_update_period = SFXGE_CALLOUT_TICKS;
-TUNABLE_INT(SFXGE_PARAM_STATS_UPDATE_PERIOD,
-	    &sfxge_stats_update_period);
-SYSCTL_INT(_hw_sfxge, OID_AUTO, stats_update_period, CTLFLAG_RDTUN,
-	   &sfxge_stats_update_period, 0,
-	   "netstat interface statistics update period in ticks");
-
 #define	SFXGE_PARAM_RESTART_ATTEMPTS	SFXGE_PARAM(restart_attempts)
 static int sfxge_restart_attempts = 3;
 TUNABLE_INT(SFXGE_PARAM_RESTART_ATTEMPTS, &sfxge_restart_attempts);
@@ -134,7 +133,15 @@ sfxge_estimate_rsrc_limits(struct sfxge_softc *sc)
 	 *  - hardwire maximum RSS channels
 	 *  - administratively specified maximum RSS channels
 	 */
+#ifdef RSS
+	/*
+	 * Avoid extra limitations so that the number of queues
+	 * may be configured at administrator's will
+	 */
+	evq_max = MIN(MAX(rss_getnumbuckets(), 1), EFX_MAXRSS);
+#else
 	evq_max = MIN(mp_ncpus, EFX_MAXRSS);
+#endif
 	if (sc->max_rss_channels > 0)
 		evq_max = MIN(evq_max, sc->max_rss_channels);
 
@@ -169,6 +176,14 @@ sfxge_estimate_rsrc_limits(struct sfxge_softc *sc)
 
 	KASSERT(sc->evq_max <= evq_max,
 		("allocated more than maximum requested"));
+
+#ifdef RSS
+	if (sc->evq_max < rss_getnumbuckets())
+		device_printf(sc->dev, "The number of allocated queues (%u) "
+			      "is less than the number of RSS buckets (%u); "
+			      "performance degradation might be observed",
+			      sc->evq_max, rss_getnumbuckets());
+#endif
 
 	/*
 	 * NIC is kept initialized in the case of success to be able to
@@ -551,23 +566,9 @@ sfxge_if_ioctl(struct ifnet *ifp, unsigned long command, caddr_t data)
 }
 
 static void
-sfxge_tick(void *arg)
-{
-	struct sfxge_softc *sc = arg;
-
-	sfxge_port_update_stats(sc);
-	sfxge_tx_update_stats(sc);
-
-	callout_reset(&sc->tick_callout, sfxge_stats_update_period,
-		      sfxge_tick, sc);
-}
-
-static void
 sfxge_ifnet_fini(struct ifnet *ifp)
 {
 	struct sfxge_softc *sc = ifp->if_softc;
-
-	callout_drain(&sc->tick_callout);
 
 	SFXGE_ADAPTER_LOCK(sc);
 	sfxge_stop(sc);
@@ -617,14 +618,11 @@ sfxge_ifnet_init(struct ifnet *ifp, struct sfxge_softc *sc)
 	ifp->if_transmit = sfxge_if_transmit;
 	ifp->if_qflush = sfxge_if_qflush;
 
-	callout_init(&sc->tick_callout, B_TRUE);
+	ifp->if_get_counter = sfxge_get_counter;
 
 	DBGPRINT(sc->dev, "ifmedia_init");
 	if ((rc = sfxge_port_ifmedia_init(sc)) != 0)
 		goto fail;
-
-	callout_reset(&sc->tick_callout, sfxge_stats_update_period,
-		      sfxge_tick, sc);
 
 	return (0);
 
@@ -1171,6 +1169,11 @@ sfxge_probe(device_t dev)
 
 	if (family == EFX_FAMILY_HUNTINGTON) {
 		device_set_desc(dev, "Solarflare SFC9100 family");
+		return (0);
+	}
+
+	if (family == EFX_FAMILY_MEDFORD) {
+		device_set_desc(dev, "Solarflare SFC9200 family");
 		return (0);
 	}
 

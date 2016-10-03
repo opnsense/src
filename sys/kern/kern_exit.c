@@ -38,9 +38,7 @@
 __FBSDID("$FreeBSD$");
 
 #include "opt_compat.h"
-#include "opt_kdtrace.h"
 #include "opt_ktrace.h"
-#include "opt_procdesc.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -88,6 +86,7 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_map.h>
 #include <vm/vm_page.h>
 #include <vm/uma.h>
+#include <vm/vm_domain.h>
 
 #ifdef KDTRACE_HOOKS
 #include <sys/dtrace_bsd.h>
@@ -95,7 +94,7 @@ dtrace_execexit_func_t	dtrace_fasttrap_exit;
 #endif
 
 SDT_PROVIDER_DECLARE(proc);
-SDT_PROBE_DEFINE1(proc, kernel, , exit, "int");
+SDT_PROBE_DEFINE1(proc, , , exit, "int");
 
 /* Hook for NFS teardown procedure. */
 void (*nlminfo_release_p)(struct proc *p);
@@ -176,7 +175,7 @@ void
 sys_sys_exit(struct thread *td, struct sys_exit_args *uap)
 {
 
-	exit1(td, W_EXITCODE(uap->rval, 0));
+	exit1(td, uap->rval, 0);
 	/* NOTREACHED */
 }
 
@@ -186,13 +185,13 @@ sys_sys_exit(struct thread *td, struct sys_exit_args *uap)
  * and rusage for wait().  Check for child processes and orphan them.
  */
 void
-exit1(struct thread *td, int rv)
+exit1(struct thread *td, int rval, int signo)
 {
 	struct proc *p, *nq, *q, *t;
 	struct thread *tdt;
-	struct vnode *ttyvp = NULL;
 
 	mtx_assert(&Giant, MA_NOTOWNED);
+	KASSERT(rval == 0 || signo == 0, ("exit1 rv %d sig %d", rval, signo));
 
 	p = td->td_proc;
 	/*
@@ -201,8 +200,7 @@ exit1(struct thread *td, int rv)
 	 * shutdown on sparc64 when the gmirror worker process exists.
 	 */
 	if (p == initproc && rebooting == 0) {
-		printf("init died (signal %d, exit %d)\n",
-		    WTERMSIG(rv), WEXITSTATUS(rv));
+		printf("init died (signal %d, exit %d)\n", signo, rval);
 		panic("Going nowhere without my init!");
 	}
 
@@ -258,6 +256,11 @@ exit1(struct thread *td, int rv)
 	KASSERT(p->p_numthreads == 1,
 	    ("exit1: proc %p exiting with %d threads", p, p->p_numthreads));
 	racct_sub(p, RACCT_NTHR, 1);
+
+	/* Let event handler change exit status */
+	p->p_xexit = rval;
+	p->p_xsig = signo;
+
 	/*
 	 * Wakeup anyone in procfs' PIOCWAIT.  They should have a hold
 	 * on our vmspace, so we should block below until they have
@@ -265,7 +268,7 @@ exit1(struct thread *td, int rv)
 	 * requested S_EXIT stops we will block here until they ack
 	 * via PIOCCONT.
 	 */
-	_STOPEVENT(p, S_EXIT, rv);
+	_STOPEVENT(p, S_EXIT, 0);
 
 	/*
 	 * Ignore any pending request to stop due to a stop signal.
@@ -290,7 +293,6 @@ exit1(struct thread *td, int rv)
 	while (p->p_lock > 0)
 		msleep(&p->p_lock, &p->p_mtx, PWAIT, "exithold", 0);
 
-	p->p_xstat = rv;	/* Let event handler change exit status */
 	PROC_UNLOCK(p);
 	/* Drain the limit callout while we don't have the proc locked */
 	callout_drain(&p->p_limco);
@@ -302,12 +304,12 @@ exit1(struct thread *td, int rv)
 	 * it was.  The exit status is WEXITSTATUS(rv), but it's not clear
 	 * what the return value is.
 	 */
-	AUDIT_ARG_EXIT(WEXITSTATUS(rv), 0);
+	AUDIT_ARG_EXIT(rval, 0);
 	AUDIT_SYSCALL_EXIT(0, td);
 #endif
 
-	/* Are we a task leader? */
-	if (p == p->p_leader) {
+	/* Are we a task leader with peers? */
+	if (p->p_peers != NULL && p == p->p_leader) {
 		mtx_lock(&ppeers_lock);
 		q = p->p_peers;
 		while (q != NULL) {
@@ -323,7 +325,8 @@ exit1(struct thread *td, int rv)
 
 	/*
 	 * Check if any loadable modules need anything done at process exit.
-	 * E.g. SYSV IPC stuff
+	 * E.g. SYSV IPC stuff.
+	 * Event handler could change exit status.
 	 * XXX what if one of these generates an error?
 	 */
 	EVENTHANDLER_INVOKE(process_exit, p);
@@ -333,7 +336,6 @@ exit1(struct thread *td, int rv)
 	 * P_PPWAIT is set; we will wakeup the parent below.
 	 */
 	PROC_LOCK(p);
-	rv = p->p_xstat;	/* Event handler could change exit status */
 	stopprofclock(p);
 	p->p_flag &= ~(P_TRACED | P_PPWAIT | P_PPTRACE);
 
@@ -342,13 +344,16 @@ exit1(struct thread *td, int rv)
 	 * executing, prevent it from rearming itself and let it finish.
 	 */
 	if (timevalisset(&p->p_realtimer.it_value) &&
-	    callout_stop(&p->p_itcallout) == 0) {
+	    _callout_stop_safe(&p->p_itcallout, CS_EXECUTING, NULL) == 0) {
 		timevalclear(&p->p_realtimer.it_interval);
 		msleep(&p->p_itcallout, &p->p_mtx, PWAIT, "ritwait", 0);
 		KASSERT(!timevalisset(&p->p_realtimer.it_value),
 		    ("realtime timer is still armed"));
 	}
+
 	PROC_UNLOCK(p);
+
+	umtx_thread_exit(td);
 
 	/*
 	 * Reset any sigio structures pointing to us as a result of
@@ -378,71 +383,22 @@ exit1(struct thread *td, int rv)
 	/*
 	 * Remove ourself from our leader's peer list and wake our leader.
 	 */
-	mtx_lock(&ppeers_lock);
-	if (p->p_leader->p_peers) {
-		q = p->p_leader;
-		while (q->p_peers != p)
-			q = q->p_peers;
-		q->p_peers = p->p_peers;
-		wakeup(p->p_leader);
+	if (p->p_leader->p_peers != NULL) {
+		mtx_lock(&ppeers_lock);
+		if (p->p_leader->p_peers != NULL) {
+			q = p->p_leader;
+			while (q->p_peers != p)
+				q = q->p_peers;
+			q->p_peers = p->p_peers;
+			wakeup(p->p_leader);
+		}
+		mtx_unlock(&ppeers_lock);
 	}
-	mtx_unlock(&ppeers_lock);
 
 	vmspace_exit(td);
-
-	sx_xlock(&proctree_lock);
-	if (SESS_LEADER(p)) {
-		struct session *sp = p->p_session;
-		struct tty *tp;
-
-		/*
-		 * s_ttyp is not zero'd; we use this to indicate that
-		 * the session once had a controlling terminal. (for
-		 * logging and informational purposes)
-		 */
-		SESS_LOCK(sp);
-		ttyvp = sp->s_ttyvp;
-		tp = sp->s_ttyp;
-		sp->s_ttyvp = NULL;
-		sp->s_ttydp = NULL;
-		sp->s_leader = NULL;
-		SESS_UNLOCK(sp);
-
-		/*
-		 * Signal foreground pgrp and revoke access to
-		 * controlling terminal if it has not been revoked
-		 * already.
-		 *
-		 * Because the TTY may have been revoked in the mean
-		 * time and could already have a new session associated
-		 * with it, make sure we don't send a SIGHUP to a
-		 * foreground process group that does not belong to this
-		 * session.
-		 */
-
-		if (tp != NULL) {
-			tty_lock(tp);
-			if (tp->t_session == sp)
-				tty_signal_pgrp(tp, SIGHUP);
-			tty_unlock(tp);
-		}
-
-		if (ttyvp != NULL) {
-			sx_xunlock(&proctree_lock);
-			if (vn_lock(ttyvp, LK_EXCLUSIVE) == 0) {
-				VOP_REVOKE(ttyvp, REVOKEALL);
-				VOP_UNLOCK(ttyvp, 0);
-			}
-			sx_xlock(&proctree_lock);
-		}
-	}
-	fixjobc(p, p->p_pgrp, 0);
-	sx_xunlock(&proctree_lock);
+	killjobc();
 	(void)acct_process(td);
 
-	/* Release the TTY now we've unlocked everything. */
-	if (ttyvp != NULL)
-		vrele(ttyvp);
 #ifdef KTRACE
 	ktrprocexit(td);
 #endif
@@ -556,23 +512,16 @@ exit1(struct thread *td, int rv)
 	/*
 	 * Notify interested parties of our demise.
 	 */
-	KNOTE_LOCKED(&p->p_klist, NOTE_EXIT);
+	KNOTE_LOCKED(p->p_klist, NOTE_EXIT);
 
 #ifdef KDTRACE_HOOKS
 	int reason = CLD_EXITED;
-	if (WCOREDUMP(rv))
+	if (WCOREDUMP(signo))
 		reason = CLD_DUMPED;
-	else if (WIFSIGNALED(rv))
+	else if (WIFSIGNALED(signo))
 		reason = CLD_KILLED;
-	SDT_PROBE1(proc, kernel, , exit, reason);
+	SDT_PROBE1(proc, , , exit, reason);
 #endif
-
-	/*
-	 * Just delete all entries in the p_klist. At this point we won't
-	 * report any more events, and there are nasty race conditions that
-	 * can beat us if we don't.
-	 */
-	knlist_clear(&p->p_klist, 1);
 
 	/*
 	 * If this is a process with a descriptor, we may not need to deliver
@@ -580,9 +529,7 @@ exit1(struct thread *td, int rv)
 	 * procdesc_exit() to serialize concurrent calls to close() and
 	 * exit().
 	 */
-#ifdef PROCDESC
 	if (p->p_procdesc == NULL || procdesc_exit(p)) {
-#endif
 		/*
 		 * Notify parent that we're gone.  If parent has the
 		 * PS_NOCLDWAIT flag set, or if the handler is set to SIG_IGN,
@@ -619,10 +566,8 @@ exit1(struct thread *td, int rv)
 			else	/* LINUX thread */
 				kern_psignal(p->p_pptr, p->p_sigparent);
 		}
-#ifdef PROCDESC
 	} else
 		PROC_LOCK(p->p_pptr);
-#endif
 	sx_xunlock(&proctree_lock);
 
 	/*
@@ -646,16 +591,9 @@ exit1(struct thread *td, int rv)
 	wakeup(p->p_pptr);
 	cv_broadcast(&p->p_pwait);
 	sched_exit(p->p_pptr, td);
-	umtx_thread_exit(td);
 	PROC_SLOCK(p);
 	p->p_state = PRS_ZOMBIE;
 	PROC_UNLOCK(p->p_pptr);
-
-	/*
-	 * Hopefully no one will try to deliver a signal to the process this
-	 * late in the game.
-	 */
-	knlist_destroy(&p->p_klist);
 
 	/*
 	 * Save our children's rusage information in our exit rusage.
@@ -745,7 +683,7 @@ out:
 	sbuf_finish(sb);
 	log(LOG_INFO, "%s", sbuf_data(sb));
 	sbuf_delete(sb);
-	exit1(td, W_EXITCODE(0, sig));
+	exit1(td, 0, sig);
 	return (0);
 }
 
@@ -843,9 +781,8 @@ proc_reap(struct thread *td, struct proc *p, int *status, int options)
 	q = td->td_proc;
 
 	PROC_SUNLOCK(p);
-	td->td_retval[0] = p->p_pid;
 	if (status)
-		*status = p->p_xstat;	/* convert to int */
+		*status = KW_EXITCODE(p->p_xexit, p->p_xsig);
 	if (options & WNOWAIT) {
 		/*
 		 *  Only poll, returning the status.  Caller does not wish to
@@ -899,19 +836,23 @@ proc_reap(struct thread *td, struct proc *p, int *status, int options)
 	clear_orphan(p);
 	PROC_UNLOCK(p);
 	leavepgrp(p);
-#ifdef PROCDESC
 	if (p->p_procdesc != NULL)
 		procdesc_reap(p);
-#endif
 	sx_xunlock(&proctree_lock);
 
-	/*
-	 * As a side effect of this lock, we know that all other writes to
-	 * this proc are visible now, so no more locking is needed for p.
-	 */
 	PROC_LOCK(p);
-	p->p_xstat = 0;		/* XXX: why? */
+	knlist_detach(p->p_klist);
+	p->p_klist = NULL;
 	PROC_UNLOCK(p);
+
+	/*
+	 * Removal from allproc list and process group list paired with
+	 * PROC_LOCK which was executed during that time should guarantee
+	 * nothing can reach this process anymore. As such further locking
+	 * is unnecessary.
+	 */
+	p->p_xexit = p->p_xsig = 0;		/* XXX: why? */
+
 	PROC_LOCK(q);
 	ruadd(&q->p_stats->p_cru, &q->p_crux, &p->p_ru, &p->p_rux);
 	PROC_UNLOCK(q);
@@ -937,7 +878,7 @@ proc_reap(struct thread *td, struct proc *p, int *status, int options)
 	 * Free credentials, arguments, and sigacts.
 	 */
 	crfree(p->p_ucred);
-	p->p_ucred = NULL;
+	proc_set_cred(p, NULL);
 	pargs_drop(p->p_args);
 	p->p_args = NULL;
 	sigacts_free(p->p_sigacts);
@@ -956,6 +897,11 @@ proc_reap(struct thread *td, struct proc *p, int *status, int options)
 #ifdef MAC
 	mac_proc_destroy(p);
 #endif
+	/*
+	 * Free any domain policy that's still hiding around.
+	 */
+	vm_domain_policy_cleanup(&p->p_vm_dom_policy);
+
 	KASSERT(FIRST_THREAD_IN_PROC(p),
 	    ("proc_reap: no residual thread!"));
 	uma_zfree(proc_zone, p);
@@ -975,6 +921,10 @@ proc_to_reap(struct thread *td, struct proc *p, idtype_t idtype, id_t id,
 
 	switch (idtype) {
 	case P_ALL:
+		if (p->p_procdesc != NULL) {
+			PROC_UNLOCK(p);
+			return (0);
+		}
 		break;
 	case P_PID:
 		if (p->p_pid != (pid_t)id) {
@@ -1062,15 +1012,15 @@ proc_to_reap(struct thread *td, struct proc *p, idtype_t idtype, id_t id,
 		 *  This is still a rough estimate.  We will fix the
 		 *  cases TRAPPED, STOPPED, and CONTINUED later.
 		 */
-		if (WCOREDUMP(p->p_xstat)) {
+		if (WCOREDUMP(p->p_xsig)) {
 			siginfo->si_code = CLD_DUMPED;
-			siginfo->si_status = WTERMSIG(p->p_xstat);
-		} else if (WIFSIGNALED(p->p_xstat)) {
+			siginfo->si_status = WTERMSIG(p->p_xsig);
+		} else if (WIFSIGNALED(p->p_xsig)) {
 			siginfo->si_code = CLD_KILLED;
-			siginfo->si_status = WTERMSIG(p->p_xstat);
+			siginfo->si_status = WTERMSIG(p->p_xsig);
 		} else {
 			siginfo->si_code = CLD_EXITED;
-			siginfo->si_status = WEXITSTATUS(p->p_xstat);
+			siginfo->si_status = p->p_xexit;
 		}
 
 		siginfo->si_pid = p->p_pid;
@@ -1156,6 +1106,7 @@ kern_wait6(struct thread *td, idtype_t idtype, id_t id, int *status,
     int options, struct __wrusage *wrusage, siginfo_t *siginfo)
 {
 	struct proc *p, *q;
+	pid_t pid;
 	int error, nfound, ret;
 
 	AUDIT_ARG_VALUE((int)idtype);	/* XXX - This is likely wrong! */
@@ -1194,14 +1145,17 @@ loop:
 	nfound = 0;
 	sx_xlock(&proctree_lock);
 	LIST_FOREACH(p, &q->p_children, p_sibling) {
+		pid = p->p_pid;
 		ret = proc_to_reap(td, p, idtype, id, status, options,
 		    wrusage, siginfo, 0);
 		if (ret == 0)
 			continue;
 		else if (ret == 1)
 			nfound++;
-		else
+		else {
+			td->td_retval[0] = pid;
 			return (0);
+		}
 
 		PROC_LOCK(p);
 		PROC_SLOCK(p);
@@ -1215,12 +1169,11 @@ loop:
 			if ((options & WNOWAIT) == 0)
 				p->p_flag |= P_WAITED;
 			sx_xunlock(&proctree_lock);
-			td->td_retval[0] = p->p_pid;
 
 			if (status != NULL)
-				*status = W_STOPCODE(p->p_xstat);
+				*status = W_STOPCODE(p->p_xsig);
 			if (siginfo != NULL) {
-				siginfo->si_status = p->p_xstat;
+				siginfo->si_status = p->p_xsig;
 				siginfo->si_code = CLD_TRAPPED;
 			}
 			if ((options & WNOWAIT) == 0) {
@@ -1231,9 +1184,10 @@ loop:
 
 			CTR4(KTR_PTRACE,
 	    "wait: returning trapped pid %d status %#x (xstat %d) xthread %d",
-			    p->p_pid, W_STOPCODE(p->p_xstat), p->p_xstat,
+			    p->p_pid, W_STOPCODE(p->p_xsig), p->p_xsig,
 			    p->p_xthread != NULL ? p->p_xthread->td_tid : -1);
 			PROC_UNLOCK(p);
+			td->td_retval[0] = pid;
 			return (0);
 		}
 		if ((options & WUNTRACED) != 0 &&
@@ -1244,12 +1198,11 @@ loop:
 			if ((options & WNOWAIT) == 0)
 				p->p_flag |= P_WAITED;
 			sx_xunlock(&proctree_lock);
-			td->td_retval[0] = p->p_pid;
 
 			if (status != NULL)
-				*status = W_STOPCODE(p->p_xstat);
+				*status = W_STOPCODE(p->p_xsig);
 			if (siginfo != NULL) {
-				siginfo->si_status = p->p_xstat;
+				siginfo->si_status = p->p_xsig;
 				siginfo->si_code = CLD_STOPPED;
 			}
 			if ((options & WNOWAIT) == 0) {
@@ -1259,13 +1212,13 @@ loop:
 			}
 
 			PROC_UNLOCK(p);
+			td->td_retval[0] = pid;
 			return (0);
 		}
 		PROC_SUNLOCK(p);
 		if ((options & WCONTINUED) != 0 &&
 		    (p->p_flag & P_CONTINUED) != 0) {
 			sx_xunlock(&proctree_lock);
-			td->td_retval[0] = p->p_pid;
 			if ((options & WNOWAIT) == 0) {
 				p->p_flag &= ~P_CONTINUED;
 				PROC_LOCK(q);
@@ -1280,6 +1233,7 @@ loop:
 				siginfo->si_status = SIGCONT;
 				siginfo->si_code = CLD_CONTINUED;
 			}
+			td->td_retval[0] = pid;
 			return (0);
 		}
 		PROC_UNLOCK(p);

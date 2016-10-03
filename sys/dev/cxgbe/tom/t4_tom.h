@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2012 Chelsio Communications, Inc.
+ * Copyright (c) 2012, 2015 Chelsio Communications, Inc.
  * All rights reserved.
  * Written by: Navdeep Parhar <np@FreeBSD.org>
  *
@@ -74,6 +74,8 @@ enum {
 	DDP_ON		= (1 << 2),	/* DDP is turned on */
 	DDP_BUF0_ACTIVE	= (1 << 3),	/* buffer 0 in use (not invalidated) */
 	DDP_BUF1_ACTIVE	= (1 << 4),	/* buffer 1 in use (not invalidated) */
+	DDP_TASK_ACTIVE = (1 << 5),	/* requeue task is queued / running */
+	DDP_DEAD	= (1 << 6),	/* toepcb is shutting down */
 };
 
 struct ofld_tx_sdesc {
@@ -81,22 +83,39 @@ struct ofld_tx_sdesc {
 	uint8_t tx_credits;	/* firmware tx credits (unit is 16B) */
 };
 
-struct ddp_buffer {
-	uint32_t tag;	/* includes color, page pod addr, and DDP page size */
+struct pageset {
+	TAILQ_ENTRY(pageset) link;
+	vm_page_t *pages;
+	int npages;
+	int flags;
 	u_int ppod_addr;
 	int nppods;
-	int offset;
+	uint32_t tag;	/* includes color, page pod addr, and DDP page size */
+	int offset;		/* offset in first page */
 	int len;
-	int npages;
-	vm_page_t *pages;
+	struct vmspace *vm;
+	u_int vm_timestamp;
+};
+
+TAILQ_HEAD(pagesetq, pageset);
+
+#define	PS_WIRED		0x0001	/* Pages wired rather than held. */
+#define	PS_PPODS_WRITTEN	0x0002	/* Page pods written to the card. */
+
+struct ddp_buffer {
+	struct pageset *ps;
+
+	struct kaiocb *job;
+	int cancel_pending;
 };
 
 struct toepcb {
 	TAILQ_ENTRY(toepcb) link; /* toep_list */
 	u_int flags;		/* miscellaneous flags */
+	int refcount;
 	struct tom_data *td;
 	struct inpcb *inp;	/* backpointer to host stack's PCB */
-	struct port_info *port;	/* physical port */
+	struct vi_info *vi;	/* virtual interface */
 	struct sge_wrq *ofld_txq;
 	struct sge_ofld_rxq *ofld_rxq;
 	struct sge_wrq *ctrlq;
@@ -115,11 +134,22 @@ struct toepcb {
 	int rx_credits;		/* rx credits (in bytes) to be returned to hw */
 
 	u_int ulp_mode;	/* ULP mode */
+	void *ulpcb;
+	void *ulpcb2;
+	struct mbufq ulp_pduq;	/* PDUs waiting to be sent out. */
+	struct mbufq ulp_pdu_reclaimq;
 
 	u_int ddp_flags;
-	struct ddp_buffer *db[2];
-	time_t ddp_disabled;
-	uint8_t ddp_score;
+	struct ddp_buffer db[2];
+	TAILQ_HEAD(, pageset) ddp_cached_pagesets;
+	TAILQ_HEAD(, kaiocb) ddp_aiojobq;
+	u_int ddp_waiting_count;
+	u_int ddp_active_count;
+	u_int ddp_cached_count;
+	int ddp_active_id;	/* the currently active DDP buffer */
+	struct task ddp_requeue_task;
+	struct kaiocb *ddp_queueing;
+	struct mtx ddp_lock;
 
 	/* Tx software descriptor */
 	uint8_t txsd_total;
@@ -128,6 +158,10 @@ struct toepcb {
 	uint8_t txsd_avail;
 	struct ofld_tx_sdesc txsd[];
 };
+
+#define	DDP_LOCK(toep)		mtx_lock(&(toep)->ddp_lock)
+#define	DDP_UNLOCK(toep)	mtx_unlock(&(toep)->ddp_lock)
+#define	DDP_ASSERT_LOCKED(toep)	mtx_assert(&(toep)->ddp_lock, MA_OWNED)
 
 struct flowc_tx_params {
 	uint32_t snd_nxt;
@@ -220,8 +254,25 @@ td_adapter(struct tom_data *td)
 	return (td->tod.tod_softc);
 }
 
+static inline void
+set_mbuf_ulp_submode(struct mbuf *m, uint8_t ulp_submode)
+{
+
+	M_ASSERTPKTHDR(m);
+	m->m_pkthdr.PH_per.eight[0] = ulp_submode;
+}
+
+static inline uint8_t
+mbuf_ulp_submode(struct mbuf *m)
+{
+
+	M_ASSERTPKTHDR(m);
+	return (m->m_pkthdr.PH_per.eight[0]);
+}
+
 /* t4_tom.c */
-struct toepcb *alloc_toepcb(struct port_info *, int, int, int);
+struct toepcb *alloc_toepcb(struct vi_info *, int, int, int);
+struct toepcb *hold_toepcb(struct toepcb *);
 void free_toepcb(struct toepcb *);
 void offload_socket(struct socket *, struct toepcb *);
 void undo_offload_socket(struct socket *);
@@ -234,22 +285,22 @@ void release_tid(struct adapter *, int, struct sge_wrq *);
 int find_best_mtu_idx(struct adapter *, struct in_conninfo *, int);
 u_long select_rcv_wnd(struct socket *);
 int select_rcv_wscale(void);
-uint64_t calc_opt0(struct socket *, struct port_info *, struct l2t_entry *,
+uint64_t calc_opt0(struct socket *, struct vi_info *, struct l2t_entry *,
     int, int, int, int);
-uint64_t select_ntuple(struct port_info *, struct l2t_entry *);
+uint64_t select_ntuple(struct vi_info *, struct l2t_entry *);
 void set_tcpddp_ulp_mode(struct toepcb *);
 int negative_advice(int);
 struct clip_entry *hold_lip(struct tom_data *, struct in6_addr *);
 void release_lip(struct tom_data *, struct clip_entry *);
 
 /* t4_connect.c */
-void t4_init_connect_cpl_handlers(struct adapter *);
+void t4_init_connect_cpl_handlers(void);
 int t4_connect(struct toedev *, struct socket *, struct rtentry *,
     struct sockaddr *);
 void act_open_failure_cleanup(struct adapter *, u_int, u_int);
 
 /* t4_listen.c */
-void t4_init_listen_cpl_handlers(struct adapter *);
+void t4_init_listen_cpl_handlers(void);
 int t4_listen_start(struct toedev *, struct tcpcb *);
 int t4_listen_stop(struct toedev *, struct tcpcb *);
 void t4_syncache_added(struct toedev *, void *);
@@ -262,43 +313,39 @@ int do_abort_rpl_synqe(struct sge_iq *, const struct rss_header *,
 void t4_offload_socket(struct toedev *, void *, struct socket *);
 
 /* t4_cpl_io.c */
-void t4_init_cpl_io_handlers(struct adapter *);
-void t4_uninit_cpl_io_handlers(struct adapter *);
+void t4_init_cpl_io_handlers(void);
+void t4_uninit_cpl_io_handlers(void);
 void send_abort_rpl(struct adapter *, struct sge_wrq *, int , int);
 void send_flowc_wr(struct toepcb *, struct flowc_tx_params *);
 void send_reset(struct adapter *, struct toepcb *, uint32_t);
 void make_established(struct toepcb *, uint32_t, uint32_t, uint16_t);
 void t4_rcvd(struct toedev *, struct tcpcb *);
+void t4_rcvd_locked(struct toedev *, struct tcpcb *);
 int t4_tod_output(struct toedev *, struct tcpcb *);
 int t4_send_fin(struct toedev *, struct tcpcb *);
 int t4_send_rst(struct toedev *, struct tcpcb *);
-void t4_set_tcb_field(struct adapter *, struct toepcb *, int, uint16_t,
-    uint64_t, uint64_t);
+void t4_set_tcb_field(struct adapter *, struct sge_wrq *, int, uint16_t,
+    uint64_t, uint64_t, int, int, int);
 void t4_push_frames(struct adapter *sc, struct toepcb *toep, int drop);
+void t4_push_pdus(struct adapter *sc, struct toepcb *toep, int drop);
+int do_set_tcb_rpl(struct sge_iq *, const struct rss_header *, struct mbuf *);
 
 /* t4_ddp.c */
 void t4_init_ddp(struct adapter *, struct tom_data *);
 void t4_uninit_ddp(struct adapter *, struct tom_data *);
 int t4_soreceive_ddp(struct socket *, struct sockaddr **, struct uio *,
     struct mbuf **, struct mbuf **, int *);
-struct mbuf *get_ddp_mbuf(int);
-void enable_ddp(struct adapter *, struct toepcb *toep);
+int t4_aio_queue_ddp(struct socket *, struct kaiocb *);
+int t4_ddp_mod_load(void);
+void t4_ddp_mod_unload(void);
+void ddp_assert_empty(struct toepcb *);
+void ddp_init_toep(struct toepcb *);
+void ddp_uninit_toep(struct toepcb *);
+void ddp_queue_toep(struct toepcb *);
 void release_ddp_resources(struct toepcb *toep);
+void handle_ddp_close(struct toepcb *, struct tcpcb *, uint32_t);
+void handle_ddp_indicate(struct toepcb *);
+void handle_ddp_tcb_rpl(struct toepcb *, const struct cpl_set_tcb_rpl *);
 void insert_ddp_data(struct toepcb *, uint32_t);
 
-/* ULP related */
-#define CXGBE_ISCSI_MBUF_TAG          50
-int t4tom_cpl_handler_registered(struct adapter *, unsigned int);
-void t4tom_register_cpl_iscsi_callback(void (*fp)(struct tom_data *,
-    struct socket *, void *, unsigned int));
-void t4tom_register_queue_iscsi_callback(struct mbuf *(*fp)(struct socket *,
-    unsigned int, int *));
-void t4_ulp_push_frames(struct adapter *sc, struct toepcb *toep, int);
-int t4_cpl_iscsi_callback(struct tom_data *, struct toepcb *, void *, uint32_t);
-struct mbuf *t4_queue_iscsi_callback(struct socket *, struct toepcb *, uint32_t,
-    int *);
-extern void (*tom_cpl_iscsi_callback)(struct tom_data *, struct socket *,
-    void *, unsigned int);
-extern struct mbuf *(*tom_queue_iscsi_callback)(struct socket*, unsigned int,
-    int *);
 #endif

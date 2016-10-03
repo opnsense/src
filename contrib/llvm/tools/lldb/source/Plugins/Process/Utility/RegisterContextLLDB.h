@@ -10,12 +10,17 @@
 #ifndef lldb_RegisterContextLLDB_h_
 #define lldb_RegisterContextLLDB_h_
 
+// C Includes
+// C++ Includes
 #include <vector>
 
+// Other libraries and framework includes
+// Project includes
 #include "lldb/lldb-private.h"
 #include "lldb/Target/RegisterContext.h"
 #include "lldb/Symbol/UnwindPlan.h"
 #include "lldb/Symbol/SymbolContext.h"
+#include "lldb/Utility/RegisterNumber.h"
 #include "UnwindLLDB.h"
 
 namespace lldb_private {
@@ -32,42 +37,39 @@ public:
                          lldb_private::SymbolContext& sym_ctx,
                          uint32_t frame_number, lldb_private::UnwindLLDB& unwind_lldb);
 
-    ///
-    // pure virtual functions from the base class that we must implement
-    ///
+    ~RegisterContextLLDB() override = default;
 
-    virtual
-    ~RegisterContextLLDB () { }
+    void
+    InvalidateAllRegisters() override;
 
-    virtual void
-    InvalidateAllRegisters ();
+    size_t
+    GetRegisterCount() override;
 
-    virtual size_t
-    GetRegisterCount ();
+    const lldb_private::RegisterInfo *
+    GetRegisterInfoAtIndex(size_t reg) override;
 
-    virtual const lldb_private::RegisterInfo *
-    GetRegisterInfoAtIndex (size_t reg);
+    size_t
+    GetRegisterSetCount() override;
 
-    virtual size_t
-    GetRegisterSetCount ();
+    const lldb_private::RegisterSet *
+    GetRegisterSet(size_t reg_set) override;
 
-    virtual const lldb_private::RegisterSet *
-    GetRegisterSet (size_t reg_set);
+    bool
+    ReadRegister(const lldb_private::RegisterInfo *reg_info,
+                 lldb_private::RegisterValue &value) override;
 
-    virtual bool
-    ReadRegister (const lldb_private::RegisterInfo *reg_info, lldb_private::RegisterValue &value);
+    bool
+    WriteRegister(const lldb_private::RegisterInfo *reg_info,
+                  const lldb_private::RegisterValue &value) override;
 
-    virtual bool
-    WriteRegister (const lldb_private::RegisterInfo *reg_info, const lldb_private::RegisterValue &value);
+    bool
+    ReadAllRegisterValues(lldb::DataBufferSP &data_sp) override;
 
-    virtual bool
-    ReadAllRegisterValues (lldb::DataBufferSP &data_sp);
+    bool
+    WriteAllRegisterValues(const lldb::DataBufferSP &data_sp) override;
 
-    virtual bool
-    WriteAllRegisterValues (const lldb::DataBufferSP &data_sp);
-
-    virtual uint32_t
-    ConvertRegisterKindToRegisterNumber (uint32_t kind, uint32_t num);
+    uint32_t
+    ConvertRegisterKindToRegisterNumber(lldb::RegisterKind kind, uint32_t num) override;
 
     bool
     IsValid () const;
@@ -98,6 +100,11 @@ private:
     // UnwindLLDB needs to pass around references to RegisterLocations
     friend class UnwindLLDB;
 
+    // Returns true if we have an unwind loop -- the same stack frame unwinding 
+    // multiple times.
+    bool
+    CheckIfLoopingStack ();
+
     // Indicates whether this frame is frame zero -- the currently
     // executing frame -- or not.
     bool
@@ -122,7 +129,6 @@ private:
     // the program's actual stack in the unwind and we want to flag that for the user somehow.
     bool
     IsSkipFrame () const;
-
 
     //------------------------------------------------------------------
     /// Determines if a SymbolContext is a trap handler or not
@@ -175,10 +181,29 @@ private:
     bool
     TryFallbackUnwindPlan ();
 
+    //------------------------------------------------------------------
+    /// Switch to the fallback unwind plan unconditionally without any safety
+    /// checks that it is providing better results than the normal unwind plan.
+    ///
+    /// The only time it is valid to call this method is if the full unwindplan is
+    /// found to be fundamentally incorrect/impossible.
+    ///
+    /// Returns true if it was able to install the fallback unwind plan.
+    //------------------------------------------------------------------
+    bool
+    ForceSwitchToFallbackUnwindPlan ();
+
     // Get the contents of a general purpose (address-size) register for this frame
     // (usually retrieved from the next frame)
     bool
-    ReadGPRValue (int register_kind, uint32_t regnum, lldb::addr_t &value);
+    ReadGPRValue (lldb::RegisterKind register_kind, uint32_t regnum, lldb::addr_t &value);
+
+    bool
+    ReadGPRValue (const RegisterNumber &reg_num, lldb::addr_t &value);
+
+    // Get the CFA register for a given frame.
+    bool
+    ReadCFAValueForRow (lldb::RegisterKind register_kind, const UnwindPlan::RowSP &row, lldb::addr_t &value);
 
     lldb::UnwindPlanSP
     GetFastUnwindPlanForFrame ();
@@ -194,7 +219,6 @@ private:
 
     bool
     IsUnwindPlanValidForCurrentPC(lldb::UnwindPlanSP unwind_plan_sp, int &valid_pc_offset);
-
 
     lldb_private::Thread& m_thread;
 
@@ -243,4 +267,4 @@ private:
 
 } // namespace lldb_private
 
-#endif  // lldb_RegisterContextLLDB_h_
+#endif // lldb_RegisterContextLLDB_h_

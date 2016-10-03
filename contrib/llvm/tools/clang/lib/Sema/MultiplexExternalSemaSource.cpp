@@ -46,7 +46,12 @@ Decl *MultiplexExternalSemaSource::GetExternalDecl(uint32_t ID) {
   for(size_t i = 0; i < Sources.size(); ++i)
     if (Decl *Result = Sources[i]->GetExternalDecl(ID))
       return Result;
-  return 0;
+  return nullptr;
+}
+
+void MultiplexExternalSemaSource::CompleteRedeclChain(const Decl *D) {
+  for (size_t i = 0; i < Sources.size(); ++i)
+    Sources[i]->CompleteRedeclChain(D);
 }
 
 Selector MultiplexExternalSemaSource::GetExternalSelector(uint32_t ID) {
@@ -70,7 +75,7 @@ Stmt *MultiplexExternalSemaSource::GetExternalDeclStmt(uint64_t Offset) {
   for(size_t i = 0; i < Sources.size(); ++i)
     if (Stmt *Result = Sources[i]->GetExternalDeclStmt(Offset))
       return Result;
-  return 0;
+  return nullptr;
 }
 
 CXXBaseSpecifier *MultiplexExternalSemaSource::GetExternalCXXBaseSpecifiers(
@@ -78,7 +83,15 @@ CXXBaseSpecifier *MultiplexExternalSemaSource::GetExternalCXXBaseSpecifiers(
   for(size_t i = 0; i < Sources.size(); ++i)
     if (CXXBaseSpecifier *R = Sources[i]->GetExternalCXXBaseSpecifiers(Offset))
       return R;
-  return 0; 
+  return nullptr;
+}
+
+CXXCtorInitializer **
+MultiplexExternalSemaSource::GetExternalCXXCtorInitializers(uint64_t Offset) {
+  for (auto *S : Sources)
+    if (auto *R = S->GetExternalCXXCtorInitializers(Offset))
+      return R;
+  return nullptr;
 }
 
 bool MultiplexExternalSemaSource::
@@ -94,15 +107,11 @@ void MultiplexExternalSemaSource::completeVisibleDeclsMap(const DeclContext *DC)
     Sources[i]->completeVisibleDeclsMap(DC);
 }
 
-ExternalLoadResult MultiplexExternalSemaSource::
-FindExternalLexicalDecls(const DeclContext *DC,
-                         bool (*isKindWeWant)(Decl::Kind),
-                         SmallVectorImpl<Decl*> &Result) {
+void MultiplexExternalSemaSource::FindExternalLexicalDecls(
+    const DeclContext *DC, llvm::function_ref<bool(Decl::Kind)> IsKindWeWant,
+    SmallVectorImpl<Decl *> &Result) {
   for(size_t i = 0; i < Sources.size(); ++i)
-    // FIXME: The semantics of the return result is unclear to me...
-    Sources[i]->FindExternalLexicalDecls(DC, isKindWeWant, Result);
-
-  return ELR_Success;
+    Sources[i]->FindExternalLexicalDecls(DC, IsKindWeWant, Result);
 }
 
 void MultiplexExternalSemaSource::FindFileRegionDecls(FileID File, 
@@ -199,7 +208,15 @@ void MultiplexExternalSemaSource::ReadUndefinedButUsed(
   for(size_t i = 0; i < Sources.size(); ++i)
     Sources[i]->ReadUndefinedButUsed(Undefined);
 }
-  
+
+void MultiplexExternalSemaSource::ReadMismatchingDeleteExpressions(
+    llvm::MapVector<FieldDecl *,
+                    llvm::SmallVector<std::pair<SourceLocation, bool>, 4>> &
+        Exprs) {
+  for (auto &Source : Sources)
+    Source->ReadMismatchingDeleteExpressions(Exprs);
+}
+
 bool MultiplexExternalSemaSource::LookupUnqualified(LookupResult &R, Scope *S){ 
   for(size_t i = 0; i < Sources.size(); ++i)
     Sources[i]->LookupUnqualified(R, S);
@@ -231,16 +248,10 @@ void MultiplexExternalSemaSource::ReadExtVectorDecls(
     Sources[i]->ReadExtVectorDecls(Decls);
 }
 
-void MultiplexExternalSemaSource::ReadDynamicClasses(
-                                       SmallVectorImpl<CXXRecordDecl*> &Decls) {
+void MultiplexExternalSemaSource::ReadUnusedLocalTypedefNameCandidates(
+    llvm::SmallSetVector<const TypedefNameDecl *, 4> &Decls) {
   for(size_t i = 0; i < Sources.size(); ++i)
-    Sources[i]->ReadDynamicClasses(Decls);
-}
-
-void MultiplexExternalSemaSource::ReadLocallyScopedExternCDecls(
-                                           SmallVectorImpl<NamedDecl*> &Decls) {
-  for(size_t i = 0; i < Sources.size(); ++i)
-    Sources[i]->ReadLocallyScopedExternCDecls(Decls);
+    Sources[i]->ReadUnusedLocalTypedefNameCandidates(Decls);
 }
 
 void MultiplexExternalSemaSource::ReadReferencedSelectors(
@@ -269,7 +280,7 @@ void MultiplexExternalSemaSource::ReadPendingInstantiations(
 }
 
 void MultiplexExternalSemaSource::ReadLateParsedTemplates(
-    llvm::DenseMap<const FunctionDecl *, LateParsedTemplate *> &LPTMap) {
+    llvm::MapVector<const FunctionDecl *, LateParsedTemplate *> &LPTMap) {
   for (size_t i = 0; i < Sources.size(); ++i)
     Sources[i]->ReadLateParsedTemplates(LPTMap);
 }

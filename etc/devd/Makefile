@@ -1,8 +1,8 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
-FILES=
+FILEGROUPS=	FILES
 
 .if ${MACHINE} == "powerpc"
 FILES+=	apple.conf
@@ -16,8 +16,9 @@ FILES+=	asus.conf
 FILES+=	hyperv.conf
 .endif
 .endif
+
 .if ${MK_USB} != "no"
-FILES+=	uath.conf usb.conf
+FILES+=	uath.conf ulpt.conf usb.conf
 .endif
 
 .if ${MK_ZFS} != "no"

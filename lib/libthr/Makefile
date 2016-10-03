@@ -8,9 +8,10 @@
 # (for system call stubs) to CFLAGS below.  -DSYSLIBC_SCCS affects just the
 # system call stubs.
 
+PACKAGE=	clibs
 SHLIBDIR?= /lib
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 MK_SSP=	no
 
 LIB=thr
@@ -38,14 +39,16 @@ SYMBOL_MAPS=${.CURDIR}/pthread.map
 
 MAN=	libthr.3
 
-# enable extra internal consistancy checks
+# enable extra internal consistency checks
 CFLAGS+=-D_PTHREADS_INVARIANTS
 
 PRECIOUSLIB=
 
 .PATH: ${.CURDIR}/arch/${MACHINE_CPUARCH}/${MACHINE_CPUARCH}
 
+.if exists(${.CURDIR}/arch/${MACHINE_CPUARCH}/Makefile.inc)
 .include "${.CURDIR}/arch/${MACHINE_CPUARCH}/Makefile.inc"
+.endif
 .include "${.CURDIR}/sys/Makefile.inc"
 .include "${.CURDIR}/thread/Makefile.inc"
 
@@ -57,10 +60,6 @@ SYMLINKS+=lib${LIB}.so ${LIBDIR}/libpthread.so
 .endif
 .if ${MK_PROFILE} != "no"
 SYMLINKS+=lib${LIB}_p.a ${LIBDIR}/libpthread_p.a
-.endif
-
-.if !defined(WITHOUT_SYSCALL_COMPAT)
-CFLAGS+=-DSYSCALL_COMPAT
 .endif
 
 .if ${MK_TESTS} != "no"

@@ -41,8 +41,6 @@
 #ifndef MACHINE_ARMREG_H
 #define MACHINE_ARMREG_H
 
-#include <machine/acle-compat.h>
-
 #define INSN_SIZE	4
 #define INSN_COND_MASK	0xf0000000	/* Condition mask */
 #define PSR_MODE        0x0000001f      /* mode mask */
@@ -74,9 +72,15 @@
 #define CPU_ID_IMPLEMENTOR_MASK	0xff000000
 #define CPU_ID_ARM_LTD		0x41000000 /* 'A' */
 #define CPU_ID_DEC		0x44000000 /* 'D' */
-#define CPU_ID_INTEL		0x69000000 /* 'i' */
+#define	CPU_ID_MOTOROLA		0x4D000000 /* 'M' */
+#define	CPU_ID_QUALCOM		0x51000000 /* 'Q' */
 #define	CPU_ID_TI		0x54000000 /* 'T' */
+#define	CPU_ID_MARVELL		0x56000000 /* 'V' */
+#define	CPU_ID_INTEL		0x69000000 /* 'i' */
 #define	CPU_ID_FARADAY		0x66000000 /* 'f' */
+
+#define	CPU_ID_VARIANT_SHIFT	20
+#define	CPU_ID_VARIANT_MASK	0x00f00000
 
 /* How to decide what format the CPUID is in. */
 #define CPU_ID_ISOLD(x)		(((x) & 0x0000f000) == 0x00000000)
@@ -94,7 +98,6 @@
 #define CPU_ID_ARCH_V5TEJ	0x00060000
 #define CPU_ID_ARCH_V6		0x00070000
 #define CPU_ID_CPUID_SCHEME	0x000f0000
-#define CPU_ID_VARIANT_MASK	0x00f00000
 
 /* Next three nybbles are part number */
 #define CPU_ID_PARTNO_MASK	0x0000fff0
@@ -125,18 +128,36 @@
 #define CPU_ID_ARM1136JS	0x4107b360
 #define CPU_ID_ARM1136JSR1	0x4117b360
 #define CPU_ID_ARM1176JZS	0x410fb760
-#define CPU_ID_CORTEXA7 	0x410fc070
-#define CPU_ID_CORTEXA8R1	0x411fc080
-#define CPU_ID_CORTEXA8R2	0x412fc080
-#define CPU_ID_CORTEXA8R3	0x413fc080
-#define CPU_ID_CORTEXA9R1	0x411fc090
-#define CPU_ID_CORTEXA9R2	0x412fc090
-#define CPU_ID_CORTEXA9R3	0x413fc090
-#define CPU_ID_CORTEXA15R0	0x410fc0f0
-#define CPU_ID_CORTEXA15R1	0x411fc0f0
-#define CPU_ID_CORTEXA15R2	0x412fc0f0
-#define CPU_ID_CORTEXA15R3	0x413fc0f0
-#define	CPU_ID_KRAIT		0x510f06f0 /* Snapdragon S4 Pro/APQ8064 */
+
+/* CPUs that follow the CPUID scheme */
+#define	CPU_ID_SCHEME_MASK	\
+    (CPU_ID_IMPLEMENTOR_MASK | CPU_ID_ARCH_MASK | CPU_ID_PARTNO_MASK)
+
+#define	CPU_ID_CORTEXA5		(CPU_ID_ARM_LTD | CPU_ID_CPUID_SCHEME | 0xc050)
+#define	CPU_ID_CORTEXA7		(CPU_ID_ARM_LTD | CPU_ID_CPUID_SCHEME | 0xc070)
+#define	CPU_ID_CORTEXA8		(CPU_ID_ARM_LTD | CPU_ID_CPUID_SCHEME | 0xc080)
+#define	 CPU_ID_CORTEXA8R1	(CPU_ID_CORTEXA8 | (1 << CPU_ID_VARIANT_SHIFT))
+#define	 CPU_ID_CORTEXA8R2	(CPU_ID_CORTEXA8 | (2 << CPU_ID_VARIANT_SHIFT))
+#define	 CPU_ID_CORTEXA8R3	(CPU_ID_CORTEXA8 | (3 << CPU_ID_VARIANT_SHIFT))
+#define	CPU_ID_CORTEXA9		(CPU_ID_ARM_LTD | CPU_ID_CPUID_SCHEME | 0xc090)
+#define	 CPU_ID_CORTEXA9R1	(CPU_ID_CORTEXA9 | (1 << CPU_ID_VARIANT_SHIFT))
+#define	 CPU_ID_CORTEXA9R2	(CPU_ID_CORTEXA9 | (2 << CPU_ID_VARIANT_SHIFT))
+#define	 CPU_ID_CORTEXA9R3	(CPU_ID_CORTEXA9 | (3 << CPU_ID_VARIANT_SHIFT))
+#define	 CPU_ID_CORTEXA9R4	(CPU_ID_CORTEXA9 | (4 << CPU_ID_VARIANT_SHIFT))
+/* XXX: Cortx-A12 is the old name for this part, it has been renamed the A17 */
+#define	CPU_ID_CORTEXA12	(CPU_ID_ARM_LTD | CPU_ID_CPUID_SCHEME | 0xc0d0)
+#define	 CPU_ID_CORTEXA12R0	(CPU_ID_CORTEXA12 | (0 << CPU_ID_VARIANT_SHIFT))
+#define	CPU_ID_CORTEXA15	(CPU_ID_ARM_LTD | CPU_ID_CPUID_SCHEME | 0xc0f0)
+#define	 CPU_ID_CORTEXA15R0	(CPU_ID_CORTEXA15 | (0 << CPU_ID_VARIANT_SHIFT))
+#define	 CPU_ID_CORTEXA15R1	(CPU_ID_CORTEXA15 | (1 << CPU_ID_VARIANT_SHIFT))
+#define	 CPU_ID_CORTEXA15R2	(CPU_ID_CORTEXA15 | (2 << CPU_ID_VARIANT_SHIFT))
+#define	 CPU_ID_CORTEXA15R3	(CPU_ID_CORTEXA15 | (3 << CPU_ID_VARIANT_SHIFT))
+
+#define	CPU_ID_KRAIT300		(CPU_ID_QUALCOM | CPU_ID_CPUID_SCHEME | 0x06f0)
+/* Snapdragon S4 Pro/APQ8064 */
+#define	 CPU_ID_KRAIT300R0	(CPU_ID_KRAIT300 | (0 << CPU_ID_VARIANT_SHIFT))
+#define	 CPU_ID_KRAIT300R1	(CPU_ID_KRAIT300 | (1 << CPU_ID_VARIANT_SHIFT))
+
 #define	CPU_ID_TI925T		0x54029250
 #define CPU_ID_MV88FR131	0x56251310 /* Marvell Feroceon 88FR131 Core */
 #define CPU_ID_MV88FR331	0x56153310 /* Marvell Feroceon 88FR331 Core */
@@ -282,7 +303,7 @@
 					    * in r0 steppings. See errata
 					    * 364296.
 					    */
-/* ARM1176 Auxiliary Control Register (CP15 register 1, opcode2 1) */   
+/* ARM1176 Auxiliary Control Register (CP15 register 1, opcode2 1) */
 #define	ARM1176_AUXCTL_PHD	0x10000000 /* inst. prefetch halting disable */
 #define	ARM1176_AUXCTL_BFD	0x20000000 /* branch folding disable */
 #define	ARM1176_AUXCTL_FSD	0x40000000 /* force speculative ops disable */
@@ -344,6 +365,9 @@
 #define	CPUV7_CT_xSIZE_ASSOC(x)	(((x) >> 3) & 0x3ff)	/* associativity */
 #define	CPUV7_CT_xSIZE_SET(x)	(((x) >> 13) & 0x7fff)	/* num sets */
 
+#define	CPUV7_L2CTLR_NPROC_SHIFT	24
+#define	CPUV7_L2CTLR_NPROC(r)	((((r) >> CPUV7_L2CTLR_NPROC_SHIFT) & 3) + 1)
+
 #define	CPU_CLIDR_CTYPE(reg,x)	(((reg) >> ((x) * 3)) & 0x7)
 #define	CPU_CLIDR_LOUIS(reg)	(((reg) >> 21) & 0x7)
 #define	CPU_CLIDR_LOC(reg)	(((reg) >> 24) & 0x7)
@@ -397,7 +421,7 @@
 #define FAULT_PERM_L1		0x00D	/* Permission Fault (L1) */
 #define FAULT_EA_TRAN_L2	0x00E	/* External Translation Abort (L2) */
 #define FAULT_PERM_L2		0x00F	/* Permission Fault (L2) */
-#define FAULT_TLB_CONFLICT	0x010	/* Permission Fault (L2) */
+#define FAULT_TLB_CONFLICT	0x010	/* TLB Conflict Abort */
 #define FAULT_EA_IMPREC		0x016	/* Asynchronous External Abort */
 #define FAULT_PE_IMPREC		0x018	/* Asynchronous Parity Error */
 #define FAULT_PARITY		0x019	/* Parity Error */
@@ -437,6 +461,12 @@
 #define INSN_SIZE		4		/* Always 4 bytes */
 #define INSN_COND_MASK		0xf0000000	/* Condition mask */
 #define INSN_COND_AL		0xe0000000	/* Always condition */
+
+/* ARM register defines */
+#define	ARM_REG_SIZE		4
+#define	ARM_REG_NUM_PC		15
+#define	ARM_REG_NUM_LR		14
+#define	ARM_REG_NUM_SP		13
 
 #define THUMB_INSN_SIZE		2		/* Some are 4 bytes.  */
 

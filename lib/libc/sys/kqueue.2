@@ -24,7 +24,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd March 29, 2015
+.Dd May 3, 2016
 .Dt KQUEUE 2
 .Os
 .Sh NAME
@@ -288,6 +288,14 @@ Returns when the file pointer is not at the end of file.
 .Va data
 contains the offset from current position to end of file,
 and may be negative.
+.Pp
+This behavior is different from
+.Xr poll 2 ,
+where read events are triggered for regular files unconditionally.
+This event can be triggered unconditionally by setting the
+.Dv NOTE_FILE_POLL
+flag in
+.Va fflags .
 .It "Fifos, Pipes"
 Returns when the there is data to read;
 .Va data
@@ -359,26 +367,54 @@ Takes a file descriptor as the identifier and the events to watch for in
 .Va fflags ,
 and returns when one or more of the requested events occurs on the descriptor.
 The events to monitor are:
-.Bl -tag -width "Dv NOTE_RENAME"
+.Bl -tag -width "Dv NOTE_CLOSE_WRITE"
+.It Dv NOTE_ATTRIB
+The file referenced by the descriptor had its attributes changed.
+.It Dv NOTE_CLOSE
+A file descriptor referencing the monitored file, was closed.
+The closed file descriptor did not have write access.
+.It Dv NOTE_CLOSE_WRITE
+A file descriptor referencing the monitored file, was closed.
+The closed file descriptor has write access.
+.Pp
+This note, as well as
+.Dv NOTE_CLOSE ,
+are not activated when files are closed forcibly by
+.Xr unmount 2 or
+.Xr revoke 2 .
+Instead,
+.Dv NOTE_REVOKE
+is sent for such events.
 .It Dv NOTE_DELETE
 The
 .Fn unlink
-system call
-was called on the file referenced by the descriptor.
-.It Dv NOTE_WRITE
-A write occurred on the file referenced by the descriptor.
+system call was called on the file referenced by the descriptor.
 .It Dv NOTE_EXTEND
-The file referenced by the descriptor was extended.
-.It Dv NOTE_ATTRIB
-The file referenced by the descriptor had its attributes changed.
+For regular file, the file referenced by the descriptor was extended.
+.Pp
+For directory, reports that a directory entry was added or removed,
+as the result of rename operation.
+The
+.Dv NOTE_EXTEND
+event is not reported when a name is changed inside the directory.
 .It Dv NOTE_LINK
 The link count on the file changed.
+In particular, the
+.Dv NOTE_LINK
+event is reported if a subdirectory was created or deleted inside
+the directory referenced by the descriptor.
+.It Dv NOTE_OPEN
+The file referenced by the descriptor was opened.
+.It Dv NOTE_READ
+A read occurred on the file referenced by the descriptor.
 .It Dv NOTE_RENAME
 The file referenced by the descriptor was renamed.
 .It Dv NOTE_REVOKE
 Access to the file was revoked via
 .Xr revoke 2
 or the underlying file system was unmounted.
+.It Dv NOTE_WRITE
+A write occurred on the file referenced by the descriptor.
 .El
 .Pp
 On return,
@@ -427,6 +463,24 @@ set in
 and the child process will not signal a
 .Dv NOTE_CHILD
 event.
+.El
+.Pp
+On return,
+.Va fflags
+contains the events which triggered the filter.
+.It Dv EVFILT_PROCDESC
+Takes the process descriptor created by
+.Xr pdfork 2
+to monitor as the identifier and the events to watch for in
+.Va fflags ,
+and returns when the associated process performs one or more of the
+requested events.
+The events to monitor are:
+.Bl -tag -width "Dv NOTE_EXIT"
+.It Dv NOTE_EXIT
+The process has exited.
+The exit status will be stored in
+.Va data .
 .El
 .Pp
 On return,
@@ -577,6 +631,57 @@ will be set to indicate the error condition.
 If the time limit expires, then
 .Fn kevent
 returns 0.
+.Sh EXAMPLES
+.Bd -literal -compact
+#include <sys/types.h>
+#include <sys/event.h>
+#include <sys/time.h>
+#include <err.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+int
+main(int argc, char **argv)
+{
+    struct kevent event;    /* Event we want to monitor */
+    struct kevent tevent;   /* Event triggered */
+    int kq, fd, ret;
+
+    if (argc != 2)
+	err(EXIT_FAILURE, "Usage: %s path\en", argv[0]);
+    fd = open(argv[1], O_RDONLY);
+    if (fd == -1)
+	err(EXIT_FAILURE, "Failed to open '%s'", argv[1]);
+
+    /* Create kqueue. */
+    kq = kqueue();
+    if (kq == -1)
+	err(EXIT_FAILURE, "kqueue() failed");
+
+    /* Initialize kevent structure. */
+    EV_SET(&event, fd, EVFILT_VNODE, EV_ADD | EV_CLEAR, NOTE_WRITE,
+	0, NULL);
+    /* Attach event to the kqueue. */
+    ret = kevent(kq, &event, 1, NULL, 0, NULL);
+    if (ret == -1)
+	err(EXIT_FAILURE, "kevent register");
+    if (event.flags & EV_ERROR)
+	errx(EXIT_FAILURE, "Event error: %s", strerror(event.data));
+
+    for (;;) {
+	/* Sleep until something happens. */
+	ret = kevent(kq, NULL, 0, &tevent, 1, NULL);
+	if (ret == -1) {
+	    err(EXIT_FAILURE, "kevent wait");
+	} else if (ret > 0) {
+	    printf("Something was written in '%s'\en", argv[1]);
+	}
+    }
+}
+.Ed
 .Sh ERRORS
 The
 .Fn kqueue
@@ -584,6 +689,13 @@ system call fails if:
 .Bl -tag -width Er
 .It Bq Er ENOMEM
 The kernel failed to allocate enough memory for the kernel queue.
+.It Bq Er ENOMEM
+The
+.Dv RLIMIT_KQUEUES
+rlimit
+(see
+.Xr getrlimit 2 )
+for the current user would be exceeded.
 .It Bq Er EMFILE
 The per-process descriptor table is full.
 .It Bq Er ENFILE
@@ -651,7 +763,7 @@ system calls first appeared in
 The
 .Fn kqueue
 system and this manual page were written by
-.An Jonathan Lemon Aq jlemon@FreeBSD.org .
+.An Jonathan Lemon Aq Mt jlemon@FreeBSD.org .
 .Sh BUGS
 The
 .Fa timeout

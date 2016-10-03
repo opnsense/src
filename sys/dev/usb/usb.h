@@ -55,7 +55,6 @@ SYSCTL_DECL(_hw_usb);
 
 MALLOC_DECLARE(M_USB);
 MALLOC_DECLARE(M_USBDEV);
-MALLOC_DECLARE(M_USBHC);
 #endif /* _KERNEL */
 
 #ifndef USB_GLOBAL_INCLUDE_FILE
@@ -113,7 +112,7 @@ MALLOC_DECLARE(M_USBHC);
 
 /* Allow for marginal and non-conforming devices. */
 #define	USB_PORT_RESET_DELAY		50	/* ms */
-#define	USB_PORT_ROOT_RESET_DELAY	250	/* ms */
+#define	USB_PORT_ROOT_RESET_DELAY	200	/* ms */
 #define	USB_PORT_RESET_RECOVERY		250	/* ms */
 #define	USB_PORT_POWERUP_DELAY		300	/* ms */
 #define	USB_PORT_RESUME_DELAY		(20*2)	/* ms */
@@ -441,6 +440,7 @@ typedef struct usb_interface_assoc_descriptor usb_interface_assoc_descriptor_t;
 #define	UISUBCLASS_ETHERNET_EMULATION_MODEL 12
 #define	UISUBCLASS_NETWORK_CONTROL_MODEL 13
 
+#define	UIPROTO_CDC_NONE		0
 #define	UIPROTO_CDC_AT			1
 
 #define	UICLASS_HID		0x03

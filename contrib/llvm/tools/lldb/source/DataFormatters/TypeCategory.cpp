@@ -7,9 +7,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "lldb/lldb-python.h"
-
 #include "lldb/DataFormatters/TypeCategory.h"
+#include "lldb/Target/Language.h"
 
 // C Includes
 // C++ Includes
@@ -20,18 +19,130 @@ using namespace lldb;
 using namespace lldb_private;
 
 TypeCategoryImpl::TypeCategoryImpl(IFormatChangeListener* clist,
-                                   ConstString name) :
+                                   ConstString name,
+                                   std::initializer_list<lldb::LanguageType> langs) :
 m_format_cont("format","regex-format",clist),
 m_summary_cont("summary","regex-summary",clist),
 m_filter_cont("filter","regex-filter",clist),
 #ifndef LLDB_DISABLE_PYTHON
 m_synth_cont("synth","regex-synth",clist),
 #endif
+m_validator_cont("validator","regex-validator",clist),
 m_enabled(false),
 m_change_listener(clist),
 m_mutex(Mutex::eMutexTypeRecursive),
-m_name(name)
-{}
+m_name(name),
+m_languages()
+{
+    for (const lldb::LanguageType lang : langs)
+        AddLanguage(lang);
+}
+
+static bool
+IsApplicable(lldb::LanguageType category_lang,
+             lldb::LanguageType valobj_lang)
+{
+    switch (category_lang)
+    {
+            // these are not languages that LLDB would ordinarily deal with
+            // only allow an exact equality here, since we really don't know
+            // any better
+        case eLanguageTypeAda83:
+        case eLanguageTypeCobol74:
+        case eLanguageTypeCobol85:
+        case eLanguageTypeFortran77:
+        case eLanguageTypeFortran90:
+        case eLanguageTypePascal83:
+        case eLanguageTypeModula2:
+        case eLanguageTypeJava:
+        case eLanguageTypeAda95:
+        case eLanguageTypeFortran95:
+        case eLanguageTypePLI:
+        case eLanguageTypeUPC:
+        case eLanguageTypeD:
+        case eLanguageTypePython:
+            return category_lang == valobj_lang;
+            
+            // the C family, we consider it as one
+        case eLanguageTypeC89:
+        case eLanguageTypeC:
+        case eLanguageTypeC99:
+            return valobj_lang == eLanguageTypeC89 ||
+            valobj_lang == eLanguageTypeC ||
+            valobj_lang == eLanguageTypeC99;
+            
+            // ObjC knows about C and itself
+        case eLanguageTypeObjC:
+            return valobj_lang == eLanguageTypeC89 ||
+            valobj_lang == eLanguageTypeC ||
+            valobj_lang == eLanguageTypeC99 ||
+            valobj_lang == eLanguageTypeObjC;
+            
+            // C++ knows about C and C++
+        case eLanguageTypeC_plus_plus:
+            return valobj_lang == eLanguageTypeC89 ||
+            valobj_lang == eLanguageTypeC ||
+            valobj_lang == eLanguageTypeC99 ||
+            valobj_lang == eLanguageTypeC_plus_plus;
+            
+            // ObjC++ knows about C,C++,ObjC and ObjC++
+        case eLanguageTypeObjC_plus_plus:
+            return valobj_lang == eLanguageTypeC89 ||
+            valobj_lang == eLanguageTypeC ||
+            valobj_lang == eLanguageTypeC99 ||
+            valobj_lang == eLanguageTypeC_plus_plus ||
+            valobj_lang == eLanguageTypeObjC;
+            
+        default:
+        case eLanguageTypeUnknown:
+            return true;
+    }
+}
+
+bool
+TypeCategoryImpl::IsApplicable (ValueObject& valobj)
+{
+    lldb::LanguageType valobj_lang = valobj.GetObjectRuntimeLanguage();
+    for (size_t idx = 0;
+         idx < GetNumLanguages();
+         idx++)
+    {
+        const lldb::LanguageType category_lang = GetLanguageAtIndex(idx);
+        if (::IsApplicable(category_lang,valobj_lang))
+            return true;
+    }
+    return false;
+}
+
+size_t
+TypeCategoryImpl::GetNumLanguages ()
+{
+    if (m_languages.empty())
+        return 1;
+    return m_languages.size();
+}
+
+lldb::LanguageType
+TypeCategoryImpl::GetLanguageAtIndex (size_t idx)
+{
+    if (m_languages.empty())
+        return lldb::eLanguageTypeUnknown;
+    return m_languages[idx];
+}
+
+void
+TypeCategoryImpl::AddLanguage (lldb::LanguageType lang)
+{
+    m_languages.push_back(lang);
+}
+
+bool
+TypeCategoryImpl::HasLanguage (lldb::LanguageType lang)
+{
+    const auto iter = std::find(m_languages.begin(), m_languages.end(), lang),
+               end = m_languages.end();
+    return (iter != end);
+}
 
 bool
 TypeCategoryImpl::Get (ValueObject& valobj,
@@ -39,7 +150,7 @@ TypeCategoryImpl::Get (ValueObject& valobj,
                        lldb::TypeFormatImplSP& entry,
                        uint32_t* reason)
 {
-    if (!IsEnabled())
+    if (!IsEnabled() || !IsApplicable(valobj))
         return false;
     if (GetTypeFormatsContainer()->Get(candidates, entry, reason))
         return true;
@@ -55,7 +166,7 @@ TypeCategoryImpl::Get (ValueObject& valobj,
                        lldb::TypeSummaryImplSP& entry,
                        uint32_t* reason)
 {
-    if (!IsEnabled())
+    if (!IsEnabled() || !IsApplicable(valobj))
         return false;
     if (GetTypeSummariesContainer()->Get(candidates, entry, reason))
         return true;
@@ -71,7 +182,7 @@ TypeCategoryImpl::Get (ValueObject& valobj,
                        lldb::SyntheticChildrenSP& entry,
                        uint32_t* reason)
 {
-    if (!IsEnabled())
+    if (!IsEnabled() || !IsApplicable(valobj))
         return false;
     TypeFilterImpl::SharedPointer filter_sp;
     uint32_t reason_filter = 0;
@@ -129,6 +240,22 @@ TypeCategoryImpl::Get (ValueObject& valobj,
     return false;
 }
 
+bool
+TypeCategoryImpl::Get (ValueObject& valobj,
+                       const FormattersMatchVector& candidates,
+                       lldb::TypeValidatorImplSP& entry,
+                       uint32_t* reason)
+{
+    if (!IsEnabled())
+        return false;
+    if (GetTypeValidatorsContainer()->Get(candidates, entry, reason))
+        return true;
+    bool regex = GetRegexTypeValidatorsContainer()->Get(candidates, entry, reason);
+    if (regex && reason)
+        *reason |= lldb_private::eFormatterChoiceCriterionRegularExpressionSummary;
+    return regex;
+}
+
 void
 TypeCategoryImpl::Clear (FormatCategoryItems items)
 {
@@ -153,6 +280,11 @@ TypeCategoryImpl::Clear (FormatCategoryItems items)
     if ( (items & eFormatCategoryItemRegexSynth) == eFormatCategoryItemRegexSynth )
         GetRegexTypeSyntheticsContainer()->Clear();
 #endif
+    
+    if ( (items & eFormatCategoryItemValidator)  == eFormatCategoryItemValidator )
+        GetTypeValidatorsContainer()->Clear();
+    if ( (items & eFormatCategoryItemRegexValidator) == eFormatCategoryItemRegexValidator )
+        GetRegexTypeValidatorsContainer()->Clear();
 }
 
 bool
@@ -182,6 +314,12 @@ TypeCategoryImpl::Delete (ConstString name,
     if ( (items & eFormatCategoryItemRegexSynth) == eFormatCategoryItemRegexSynth )
         success = GetRegexTypeSyntheticsContainer()->Delete(name) || success;
 #endif
+    
+    if ( (items & eFormatCategoryItemValidator)  == eFormatCategoryItemValidator )
+        success = GetTypeValidatorsContainer()->Delete(name) || success;
+    if ( (items & eFormatCategoryItemRegexValidator) == eFormatCategoryItemRegexValidator )
+        success = GetRegexTypeValidatorsContainer()->Delete(name) || success;
+    
     return success;
 }
 
@@ -211,6 +349,12 @@ TypeCategoryImpl::GetCount (FormatCategoryItems items)
     if ( (items & eFormatCategoryItemRegexSynth) == eFormatCategoryItemRegexSynth )
         count += GetRegexTypeSyntheticsContainer()->GetCount();
 #endif
+    
+    if ( (items & eFormatCategoryItemValidator)  == eFormatCategoryItemValidator )
+        count += GetTypeValidatorsContainer()->GetCount();
+    if ( (items & eFormatCategoryItemRegexValidator) == eFormatCategoryItemRegexValidator )
+        count += GetRegexTypeValidatorsContainer()->GetCount();
+    
     return count;
 }
 
@@ -230,6 +374,7 @@ TypeCategoryImpl::AnyMatches(ConstString type_name,
 #ifndef LLDB_DISABLE_PYTHON
     ScriptedSyntheticChildren::SharedPointer synth_sp;
 #endif
+    TypeValidatorImpl::SharedPointer validator_sp;
     
     if ( (items & eFormatCategoryItemValue) == eFormatCategoryItemValue )
     {
@@ -324,6 +469,30 @@ TypeCategoryImpl::AnyMatches(ConstString type_name,
         }
     }
 #endif
+    
+    if ( (items & eFormatCategoryItemValidator)  == eFormatCategoryItemValidator )
+    {
+        if (GetTypeValidatorsContainer()->Get(type_name, validator_sp))
+        {
+            if (matching_category)
+                *matching_category = m_name.GetCString();
+            if (matching_type)
+                *matching_type = eFormatCategoryItemValidator;
+            return true;
+        }
+    }
+    if ( (items & eFormatCategoryItemRegexValidator) == eFormatCategoryItemRegexValidator )
+    {
+        if (GetRegexTypeValidatorsContainer()->Get(type_name, validator_sp))
+        {
+            if (matching_category)
+                *matching_category = m_name.GetCString();
+            if (matching_type)
+                *matching_type = eFormatCategoryItemRegexValidator;
+            return true;
+        }
+    }
+    
     return false;
 }
 
@@ -392,6 +561,22 @@ TypeCategoryImpl::GetSyntheticForType (lldb::TypeNameSpecifierImplSP type_sp)
     return retval;
 }
 #endif
+
+TypeCategoryImpl::ValidatorContainer::MapValueType
+TypeCategoryImpl::GetValidatorForType (lldb::TypeNameSpecifierImplSP type_sp)
+{
+    ValidatorContainer::MapValueType retval;
+    
+    if (type_sp)
+    {
+        if (type_sp->IsRegex())
+            GetRegexTypeValidatorsContainer()->GetExact(ConstString(type_sp->GetName()),retval);
+        else
+            GetTypeValidatorsContainer()->GetExact(ConstString(type_sp->GetName()),retval);
+    }
+    
+    return retval;
+}
 
 lldb::TypeNameSpecifierImplSP
 TypeCategoryImpl::GetTypeNameSpecifierForSummaryAtIndex (size_t index)
@@ -467,12 +652,57 @@ TypeCategoryImpl::GetTypeNameSpecifierForSyntheticAtIndex (size_t index)
 }
 #endif
 
+TypeCategoryImpl::ValidatorContainer::MapValueType
+TypeCategoryImpl::GetValidatorAtIndex (size_t index)
+{
+    if (index < GetTypeValidatorsContainer()->GetCount())
+        return GetTypeValidatorsContainer()->GetAtIndex(index);
+    else
+        return GetRegexTypeValidatorsContainer()->GetAtIndex(index-GetTypeValidatorsContainer()->GetCount());
+}
+
+lldb::TypeNameSpecifierImplSP
+TypeCategoryImpl::GetTypeNameSpecifierForValidatorAtIndex (size_t index)
+{
+    if (index < GetTypeValidatorsContainer()->GetCount())
+        return GetTypeValidatorsContainer()->GetTypeNameSpecifierAtIndex(index);
+    else
+        return GetRegexTypeValidatorsContainer()->GetTypeNameSpecifierAtIndex(index - GetTypeValidatorsContainer()->GetCount());
+}
+
 void
 TypeCategoryImpl::Enable (bool value, uint32_t position)
 {
     Mutex::Locker locker(m_mutex);
-    m_enabled = value;
-    m_enabled_position = position;
+    if ( (m_enabled = value) )
+        m_enabled_position = position;
     if (m_change_listener)
         m_change_listener->Changed();
+}
+
+std::string
+TypeCategoryImpl::GetDescription ()
+{
+    StreamString stream;
+    stream.Printf("%s (%s",
+                  GetName(),
+                  (IsEnabled() ? "enabled" : "disabled"));
+    StreamString lang_stream;
+    lang_stream.Printf(", applicable for language(s): ");
+    bool print_lang = false;
+    for (size_t idx = 0;
+         idx < GetNumLanguages();
+         idx++)
+    {
+        const lldb::LanguageType lang = GetLanguageAtIndex(idx);
+        if (lang != lldb::eLanguageTypeUnknown)
+            print_lang = true;
+        lang_stream.Printf("%s%s",
+                           Language::GetNameForLanguageType(lang),
+                           idx+1<GetNumLanguages() ? ", " : "");
+    }
+    if (print_lang)
+        stream.Printf("%s",lang_stream.GetData());
+    stream.PutChar(')');
+    return stream.GetData();
 }

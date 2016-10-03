@@ -20,12 +20,13 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Format.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Program.h"
-#include "llvm/Support/system_error.h"
 #include <cctype>
 #include <cerrno>
 #include <sys/stat.h>
+#include <system_error>
 
 // <fcntl.h> may provide O_BINARY.
 #if defined(HAVE_FCNTL_H)
@@ -54,6 +55,10 @@
 #ifndef STDERR_FILENO
 # define STDERR_FILENO 2
 #endif
+#endif
+
+#ifdef LLVM_ON_WIN32
+#include "Windows/WindowsSupport.h"
 #endif
 
 using namespace llvm;
@@ -87,8 +92,8 @@ void raw_ostream::SetBuffered() {
 
 void raw_ostream::SetBufferAndMode(char *BufferStart, size_t Size,
                                    BufferKind Mode) {
-  assert(((Mode == Unbuffered && BufferStart == 0 && Size == 0) ||
-          (Mode != Unbuffered && BufferStart && Size)) &&
+  assert(((Mode == Unbuffered && !BufferStart && Size == 0) ||
+          (Mode != Unbuffered && BufferStart && Size != 0)) &&
          "stream must be unbuffered or have at least one byte");
   // Make sure the current buffer is free of content (we can't flush here; the
   // child buffer management logic will be in write_impl).
@@ -227,15 +232,21 @@ raw_ostream &raw_ostream::operator<<(double N) {
   // On MSVCRT and compatible, output of %e is incompatible to Posix
   // by default. Number of exponent digits should be at least 2. "%+03d"
   // FIXME: Implement our formatter to here or Support/Format.h!
+#if __cplusplus >= 201103L && defined(__MINGW32__)
+  // FIXME: It should be generic to C++11.
+  if (N == 0.0 && std::signbit(N))
+    return *this << "-0.000000e+00";
+#else
   int fpcl = _fpclass(N);
 
   // negative zero
   if (fpcl == _FPCLASS_NZ)
     return *this << "-0.000000e+00";
+#endif
 
   char buf[16];
   unsigned len;
-  len = snprintf(buf, sizeof(buf), "%e", N);
+  len = format("%e", N).snprint(buf, sizeof(buf));
   if (len <= sizeof(buf) - 2) {
     if (len >= 5 && buf[len - 5] == 'e' && buf[len - 3] == '0') {
       int cs = buf[len - 4];
@@ -305,6 +316,7 @@ raw_ostream &raw_ostream::write(const char *Ptr, size_t Size) {
     // than the buffer. Directly write the chunk that is a multiple of the
     // preferred buffer size and put the remainder in the buffer.
     if (LLVM_UNLIKELY(OutBufCur == OutBufStart)) {
+      assert(NumBytes != 0 && "undefined behavior");
       size_t BytesToWrite = Size - (Size % NumBytes);
       write_impl(Ptr, BytesToWrite);
       size_t BytesRemaining = Size - BytesToWrite;
@@ -388,6 +400,65 @@ raw_ostream &raw_ostream::operator<<(const format_object_base &Fmt) {
   }
 }
 
+raw_ostream &raw_ostream::operator<<(const FormattedString &FS) {
+  unsigned Len = FS.Str.size(); 
+  int PadAmount = FS.Width - Len;
+  if (FS.RightJustify && (PadAmount > 0))
+    this->indent(PadAmount);
+  this->operator<<(FS.Str);
+  if (!FS.RightJustify && (PadAmount > 0))
+    this->indent(PadAmount);
+  return *this;
+}
+
+raw_ostream &raw_ostream::operator<<(const FormattedNumber &FN) {
+  if (FN.Hex) {
+    unsigned Nibbles = (64 - countLeadingZeros(FN.HexValue)+3)/4;
+    unsigned PrefixChars = FN.HexPrefix ? 2 : 0;
+    unsigned Width = std::max(FN.Width, Nibbles + PrefixChars);
+
+    char NumberBuffer[20] = "0x0000000000000000";
+    if (!FN.HexPrefix)
+      NumberBuffer[1] = '0';
+    char *EndPtr = NumberBuffer+Width;
+    char *CurPtr = EndPtr;
+    const char A = FN.Upper ? 'A' : 'a';
+    unsigned long long N = FN.HexValue;
+    while (N) {
+      uintptr_t x = N % 16;
+      *--CurPtr = (x < 10 ? '0' + x : A + x - 10);
+      N /= 16;
+    }
+
+    return write(NumberBuffer, Width);
+  } else {
+    // Zero is a special case.
+    if (FN.DecValue == 0) {
+      this->indent(FN.Width-1);
+      return *this << '0';
+    }
+    char NumberBuffer[32];
+    char *EndPtr = NumberBuffer+sizeof(NumberBuffer);
+    char *CurPtr = EndPtr;
+    bool Neg = (FN.DecValue < 0);
+    uint64_t N = Neg ? -static_cast<uint64_t>(FN.DecValue) : FN.DecValue;
+    while (N) {
+      *--CurPtr = '0' + char(N % 10);
+      N /= 10;
+    }
+    int Len = EndPtr - CurPtr;
+    int Pad = FN.Width - Len;
+    if (Neg) 
+      --Pad;
+    if (Pad > 0)
+      this->indent(Pad);
+    if (Neg)
+      *this << '-';
+    return write(CurPtr, Len);
+  }
+}
+
+
 /// indent - Insert 'NumSpaces' spaces.
 raw_ostream &raw_ostream::indent(unsigned NumSpaces) {
   static const char Spaces[] = "                                "
@@ -420,58 +491,53 @@ void format_object_base::home() {
 //  raw_fd_ostream
 //===----------------------------------------------------------------------===//
 
-/// raw_fd_ostream - Open the specified file for writing. If an error
-/// occurs, information about the error is put into ErrorInfo, and the
-/// stream should be immediately destroyed; the string will be empty
-/// if no error occurred.
-raw_fd_ostream::raw_fd_ostream(const char *Filename, std::string &ErrorInfo,
-                               sys::fs::OpenFlags Flags)
-    : Error(false), UseAtomicWrites(false), pos(0) {
-  assert(Filename != 0 && "Filename is null");
-  ErrorInfo.clear();
-
+static int getFD(StringRef Filename, std::error_code &EC,
+                 sys::fs::OpenFlags Flags) {
   // Handle "-" as stdout. Note that when we do this, we consider ourself
   // the owner of stdout. This means that we can do things like close the
   // file descriptor when we're done and set the "binary" flag globally.
-  if (Filename[0] == '-' && Filename[1] == 0) {
-    FD = STDOUT_FILENO;
+  if (Filename == "-") {
+    EC = std::error_code();
     // If user requested binary then put stdout into binary mode if
     // possible.
-    if (Flags & sys::fs::F_Binary)
+    if (!(Flags & sys::fs::F_Text))
       sys::ChangeStdoutToBinary();
-    // Close stdout when we're done, to detect any output errors.
-    ShouldClose = true;
-    return;
+    return STDOUT_FILENO;
   }
 
-  error_code EC = sys::fs::openFileForWrite(Filename, FD, Flags);
+  int FD;
+  EC = sys::fs::openFileForWrite(Filename, FD, Flags);
+  if (EC)
+    return -1;
 
-  if (EC) {
-    ErrorInfo = "Error opening output file '" + std::string(Filename) + "': " +
-                EC.message();
+  return FD;
+}
+
+raw_fd_ostream::raw_fd_ostream(StringRef Filename, std::error_code &EC,
+                               sys::fs::OpenFlags Flags)
+    : raw_fd_ostream(getFD(Filename, EC, Flags), true) {}
+
+/// FD is the file descriptor that this writes to.  If ShouldClose is true, this
+/// closes the file when the stream is destroyed.
+raw_fd_ostream::raw_fd_ostream(int fd, bool shouldClose, bool unbuffered)
+    : raw_pwrite_stream(unbuffered), FD(fd), ShouldClose(shouldClose),
+      Error(false) {
+  if (FD < 0 ) {
     ShouldClose = false;
     return;
   }
 
-  // Ok, we successfully opened the file, so it'll need to be closed.
-  ShouldClose = true;
-}
-
-/// raw_fd_ostream ctor - FD is the file descriptor that this writes to.  If
-/// ShouldClose is true, this closes the file when the stream is destroyed.
-raw_fd_ostream::raw_fd_ostream(int fd, bool shouldClose, bool unbuffered)
-  : raw_ostream(unbuffered), FD(fd),
-    ShouldClose(shouldClose), Error(false), UseAtomicWrites(false) {
-#ifdef O_BINARY
-  // Setting STDOUT and STDERR to binary mode is necessary in Win32
-  // to avoid undesirable linefeed conversion.
-  if (fd == STDOUT_FILENO || fd == STDERR_FILENO)
-    setmode(fd, O_BINARY);
-#endif
-
   // Get the starting position.
   off_t loc = ::lseek(FD, 0, SEEK_CUR);
-  if (loc == (off_t)-1)
+#ifdef LLVM_ON_WIN32
+  // MSVCRT's _lseek(SEEK_CUR) doesn't return -1 for pipes.
+  sys::fs::file_status Status;
+  std::error_code EC = status(FD, Status);
+  SupportsSeeking = !EC && Status.type() == sys::fs::file_type::regular_file;
+#else
+  SupportsSeeking = loc != (off_t)-1;
+#endif
+  if (!SupportsSeeking)
     pos = 0;
   else
     pos = static_cast<uint64_t>(loc);
@@ -480,12 +546,8 @@ raw_fd_ostream::raw_fd_ostream(int fd, bool shouldClose, bool unbuffered)
 raw_fd_ostream::~raw_fd_ostream() {
   if (FD >= 0) {
     flush();
-    if (ShouldClose)
-      while (::close(FD) != 0)
-        if (errno != EINTR) {
-          error_detected();
-          break;
-        }
+    if (ShouldClose && sys::Process::SafelyCloseFileDescriptor(FD))
+      error_detected();
   }
 
 #ifdef __MINGW32__
@@ -509,22 +571,21 @@ void raw_fd_ostream::write_impl(const char *Ptr, size_t Size) {
   assert(FD >= 0 && "File already closed.");
   pos += Size;
 
-  do {
-    ssize_t ret;
-
-    // Check whether we should attempt to use atomic writes.
-    if (LLVM_LIKELY(!UseAtomicWrites)) {
-      ret = ::write(FD, Ptr, Size);
-    } else {
-      // Use ::writev() where available.
-#if defined(HAVE_WRITEV)
-      const void *Addr = static_cast<const void *>(Ptr);
-      struct iovec IOV = {const_cast<void *>(Addr), Size };
-      ret = ::writev(FD, &IOV, 1);
+#ifndef LLVM_ON_WIN32
+  bool ShouldWriteInChunks = false;
 #else
-      ret = ::write(FD, Ptr, Size);
+  // Writing a large size of output to Windows console returns ENOMEM. It seems
+  // that, prior to Windows 8, WriteFile() is redirecting to WriteConsole(), and
+  // the latter has a size limit (66000 bytes or less, depending on heap usage).
+  bool ShouldWriteInChunks = !!::_isatty(FD) && !RunningWindows8OrGreater();
 #endif
-    }
+
+  do {
+    size_t ChunkSize = Size;
+    if (ChunkSize > 32767 && ShouldWriteInChunks)
+        ChunkSize = 32767;
+
+    ssize_t ret = ::write(FD, Ptr, ChunkSize);
 
     if (ret < 0) {
       // If it's a recoverable error, swallow it and retry the write.
@@ -559,20 +620,25 @@ void raw_fd_ostream::close() {
   assert(ShouldClose);
   ShouldClose = false;
   flush();
-  while (::close(FD) != 0)
-    if (errno != EINTR) {
-      error_detected();
-      break;
-    }
+  if (sys::Process::SafelyCloseFileDescriptor(FD))
+    error_detected();
   FD = -1;
 }
 
 uint64_t raw_fd_ostream::seek(uint64_t off) {
   flush();
   pos = ::lseek(FD, off, SEEK_SET);
-  if (pos != off)
+  if (pos == (uint64_t)-1)
     error_detected();
   return pos;
+}
+
+void raw_fd_ostream::pwrite_impl(const char *Ptr, size_t Size,
+                                 uint64_t Offset) {
+  uint64_t Pos = tell();
+  seek(Offset);
+  write(Ptr, Size);
+  seek(Pos);
 }
 
 size_t raw_fd_ostream::preferred_buffer_size() const {
@@ -653,9 +719,11 @@ bool raw_fd_ostream::has_colors() const {
 /// Use it like: outs() << "foo" << "bar";
 raw_ostream &llvm::outs() {
   // Set buffer settings to model stdout behavior.
-  // Delete the file descriptor when the program exists, forcing error
+  // Delete the file descriptor when the program exits, forcing error
   // detection. If you don't want this behavior, don't use outs().
-  static raw_fd_ostream S(STDOUT_FILENO, true);
+  std::error_code EC;
+  static raw_fd_ostream S("-", EC, sys::fs::F_None);
+  assert(!EC);
   return S;
 }
 
@@ -690,66 +758,15 @@ void raw_string_ostream::write_impl(const char *Ptr, size_t Size) {
 //  raw_svector_ostream
 //===----------------------------------------------------------------------===//
 
-// The raw_svector_ostream implementation uses the SmallVector itself as the
-// buffer for the raw_ostream. We guarantee that the raw_ostream buffer is
-// always pointing past the end of the vector, but within the vector
-// capacity. This allows raw_ostream to write directly into the correct place,
-// and we only need to set the vector size when the data is flushed.
-
-raw_svector_ostream::raw_svector_ostream(SmallVectorImpl<char> &O) : OS(O) {
-  // Set up the initial external buffer. We make sure that the buffer has at
-  // least 128 bytes free; raw_ostream itself only requires 64, but we want to
-  // make sure that we don't grow the buffer unnecessarily on destruction (when
-  // the data is flushed). See the FIXME below.
-  OS.reserve(OS.size() + 128);
-  SetBuffer(OS.end(), OS.capacity() - OS.size());
-}
-
-raw_svector_ostream::~raw_svector_ostream() {
-  // FIXME: Prevent resizing during this flush().
-  flush();
-}
-
-/// resync - This is called when the SmallVector we're appending to is changed
-/// outside of the raw_svector_ostream's control.  It is only safe to do this
-/// if the raw_svector_ostream has previously been flushed.
-void raw_svector_ostream::resync() {
-  assert(GetNumBytesInBuffer() == 0 && "Didn't flush before mutating vector");
-
-  if (OS.capacity() - OS.size() < 64)
-    OS.reserve(OS.capacity() * 2);
-  SetBuffer(OS.end(), OS.capacity() - OS.size());
-}
+uint64_t raw_svector_ostream::current_pos() const { return OS.size(); }
 
 void raw_svector_ostream::write_impl(const char *Ptr, size_t Size) {
-  // If we're writing bytes from the end of the buffer into the smallvector, we
-  // don't need to copy the bytes, just commit the bytes because they are
-  // already in the right place.
-  if (Ptr == OS.end()) {
-    assert(OS.size() + Size <= OS.capacity() && "Invalid write_impl() call!");
-    OS.set_size(OS.size() + Size);
-  } else {
-    assert(GetNumBytesInBuffer() == 0 &&
-           "Should be writing from buffer if some bytes in it");
-    // Otherwise, do copy the bytes.
-    OS.append(Ptr, Ptr+Size);
-  }
-
-  // Grow the vector if necessary.
-  if (OS.capacity() - OS.size() < 64)
-    OS.reserve(OS.capacity() * 2);
-
-  // Update the buffer position.
-  SetBuffer(OS.end(), OS.capacity() - OS.size());
+  OS.append(Ptr, Ptr + Size);
 }
 
-uint64_t raw_svector_ostream::current_pos() const {
-   return OS.size();
-}
-
-StringRef raw_svector_ostream::str() {
-  flush();
-  return StringRef(OS.begin(), OS.size());
+void raw_svector_ostream::pwrite_impl(const char *Ptr, size_t Size,
+                                      uint64_t Offset) {
+  memcpy(OS.data() + Offset, Ptr, Size);
 }
 
 //===----------------------------------------------------------------------===//
@@ -771,3 +788,6 @@ void raw_null_ostream::write_impl(const char *Ptr, size_t Size) {
 uint64_t raw_null_ostream::current_pos() const {
   return 0;
 }
+
+void raw_null_ostream::pwrite_impl(const char *Ptr, size_t Size,
+                                   uint64_t Offset) {}

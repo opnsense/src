@@ -12,8 +12,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef HexagonREGISTERINFO_H
-#define HexagonREGISTERINFO_H
+#ifndef LLVM_LIB_TARGET_HEXAGON_HEXAGONREGISTERINFO_H
+#define LLVM_LIB_TARGET_HEXAGON_HEXAGONREGISTERINFO_H
 
 #include "llvm/MC/MachineLocation.h"
 #include "llvm/Target/TargetRegisterInfo.h"
@@ -37,47 +37,51 @@
 #define HEXAGON_RESERVED_REG_2 Hexagon::R11
 
 namespace llvm {
-
-class HexagonSubtarget;
-class HexagonInstrInfo;
-class Type;
-
-struct HexagonRegisterInfo : public HexagonGenRegisterInfo {
-  HexagonSubtarget &Subtarget;
-
-  HexagonRegisterInfo(HexagonSubtarget &st);
+class HexagonRegisterInfo : public HexagonGenRegisterInfo {
+public:
+  HexagonRegisterInfo();
 
   /// Code Generation virtual methods...
-  const uint16_t *getCalleeSavedRegs(const MachineFunction *MF = 0) const;
+  const MCPhysReg *getCalleeSavedRegs(const MachineFunction *MF)
+        const override;
 
-  const TargetRegisterClass* const* getCalleeSavedRegClasses(
-                                     const MachineFunction *MF = 0) const;
 
-  BitVector getReservedRegs(const MachineFunction &MF) const;
+  BitVector getReservedRegs(const MachineFunction &MF) const override;
 
-  void eliminateFrameIndex(MachineBasicBlock::iterator II,
-                           int SPAdj, unsigned FIOperandNum,
-                           RegScavenger *RS = NULL) const;
+  void eliminateFrameIndex(MachineBasicBlock::iterator II, int SPAdj,
+        unsigned FIOperandNum, RegScavenger *RS = nullptr) const override;
 
-  /// determineFrameLayout - Determine the size of the frame and maximum call
-  /// frame size.
-  void determineFrameLayout(MachineFunction &MF) const;
-
-  /// requiresRegisterScavenging - returns true since we may need scavenging for
-  /// a temporary register when generating hardware loop instructions.
-  bool requiresRegisterScavenging(const MachineFunction &MF) const {
+  /// Returns true since we may need scavenging for a temporary register
+  /// when generating hardware loop instructions.
+  bool requiresRegisterScavenging(const MachineFunction &MF) const override {
     return true;
   }
 
-  bool trackLivenessAfterRegAlloc(const MachineFunction &MF) const {
+  /// Returns true. Spill code for predicate registers might need an extra
+  /// register.
+  bool requiresFrameIndexScavenging(const MachineFunction &MF) const override {
+    return true;
+  }
+
+  /// Returns true if the frame pointer is valid.
+  bool useFPForScavengingIndex(const MachineFunction &MF) const override;
+
+  bool trackLivenessAfterRegAlloc(const MachineFunction &MF) const override {
     return true;
   }
 
   // Debug information queries.
   unsigned getRARegister() const;
-  unsigned getFrameRegister(const MachineFunction &MF) const;
+  unsigned getFrameRegister(const MachineFunction &MF) const override;
   unsigned getFrameRegister() const;
   unsigned getStackRegister() const;
+
+  const MCPhysReg *getCallerSavedRegs(const MachineFunction *MF) const;
+
+  unsigned getFirstCallerSavedNonParamReg() const;
+
+  bool isEHReturnCalleeSaveReg(unsigned Reg) const;
+  bool isCalleeSaveReg(unsigned Reg) const;
 };
 
 } // end namespace llvm

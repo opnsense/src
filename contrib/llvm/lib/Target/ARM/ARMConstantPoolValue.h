@@ -11,8 +11,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_TARGET_ARM_CONSTANTPOOLVALUE_H
-#define LLVM_TARGET_ARM_CONSTANTPOOLVALUE_H
+#ifndef LLVM_LIB_TARGET_ARM_ARMCONSTANTPOOLVALUE_H
+#define LLVM_LIB_TARGET_ARM_ARMCONSTANTPOOLVALUE_H
 
 #include "llvm/CodeGen/MachineConstantPool.h"
 #include "llvm/Support/Casting.h"
@@ -39,8 +39,7 @@ namespace ARMCP {
   enum ARMCPModifier {
     no_modifier,
     TLSGD,
-    GOT,
-    GOTOFF,
+    GOT_PREL,
     GOTTPOFF,
     TPOFF
   };
@@ -86,7 +85,7 @@ protected:
   }
 
 public:
-  virtual ~ARMConstantPoolValue();
+  ~ARMConstantPoolValue() override;
 
   ARMCP::ARMCPModifier getModifier() const { return Modifier; }
   const char *getModifierText() const;
@@ -103,12 +102,10 @@ public:
   bool isLSDA() const { return Kind == ARMCP::CPLSDA; }
   bool isMachineBasicBlock() const{ return Kind == ARMCP::CPMachineBasicBlock; }
 
-  virtual unsigned getRelocationInfo() const { return 2; }
+  int getExistingMachineCPValue(MachineConstantPool *CP,
+                                unsigned Alignment) override;
 
-  virtual int getExistingMachineCPValue(MachineConstantPool *CP,
-                                        unsigned Alignment);
-
-  virtual void addSelectionDAGCSEId(FoldingSetNodeID &ID);
+  void addSelectionDAGCSEId(FoldingSetNodeID &ID) override;
 
   /// hasSameValue - Return true if this ARM constpool value can share the same
   /// constantpool entry as another ARM constpool value.
@@ -120,7 +117,7 @@ public:
       this->Modifier == A->Modifier;
   }
 
-  virtual void print(raw_ostream &O) const;
+  void print(raw_ostream &O) const override;
   void print(raw_ostream *O) const { if (O) print(*O); }
   void dump() const;
 };
@@ -164,16 +161,16 @@ public:
   const GlobalValue *getGV() const;
   const BlockAddress *getBlockAddress() const;
 
-  virtual int getExistingMachineCPValue(MachineConstantPool *CP,
-                                        unsigned Alignment);
+  int getExistingMachineCPValue(MachineConstantPool *CP,
+                                unsigned Alignment) override;
 
   /// hasSameValue - Return true if this ARM constpool value can share the same
   /// constantpool entry as another ARM constpool value.
-  virtual bool hasSameValue(ARMConstantPoolValue *ACPV);
+  bool hasSameValue(ARMConstantPoolValue *ACPV) override;
 
-  virtual void addSelectionDAGCSEId(FoldingSetNodeID &ID);
+  void addSelectionDAGCSEId(FoldingSetNodeID &ID) override;
 
-  virtual void print(raw_ostream &O) const;
+  void print(raw_ostream &O) const override;
   static bool classof(const ARMConstantPoolValue *APV) {
     return APV->isGlobalValue() || APV->isBlockAddress() || APV->isLSDA();
   }
@@ -198,16 +195,16 @@ public:
 
   const char *getSymbol() const { return S.c_str(); }
 
-  virtual int getExistingMachineCPValue(MachineConstantPool *CP,
-                                        unsigned Alignment);
+  int getExistingMachineCPValue(MachineConstantPool *CP,
+                                unsigned Alignment) override;
 
-  virtual void addSelectionDAGCSEId(FoldingSetNodeID &ID);
+  void addSelectionDAGCSEId(FoldingSetNodeID &ID) override;
 
   /// hasSameValue - Return true if this ARM constpool value can share the same
   /// constantpool entry as another ARM constpool value.
-  virtual bool hasSameValue(ARMConstantPoolValue *ACPV);
+  bool hasSameValue(ARMConstantPoolValue *ACPV) override;
 
-  virtual void print(raw_ostream &O) const;
+  void print(raw_ostream &O) const override;
 
   static bool classof(const ARMConstantPoolValue *ACPV) {
     return ACPV->isExtSymbol();
@@ -234,16 +231,16 @@ public:
 
   const MachineBasicBlock *getMBB() const { return MBB; }
 
-  virtual int getExistingMachineCPValue(MachineConstantPool *CP,
-                                        unsigned Alignment);
+  int getExistingMachineCPValue(MachineConstantPool *CP,
+                                unsigned Alignment) override;
 
-  virtual void addSelectionDAGCSEId(FoldingSetNodeID &ID);
+  void addSelectionDAGCSEId(FoldingSetNodeID &ID) override;
 
   /// hasSameValue - Return true if this ARM constpool value can share the same
   /// constantpool entry as another ARM constpool value.
-  virtual bool hasSameValue(ARMConstantPoolValue *ACPV);
+  bool hasSameValue(ARMConstantPoolValue *ACPV) override;
 
-  virtual void print(raw_ostream &O) const;
+  void print(raw_ostream &O) const override;
 
   static bool classof(const ARMConstantPoolValue *ACPV) {
     return ACPV->isMachineBasicBlock();

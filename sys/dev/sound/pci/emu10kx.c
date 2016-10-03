@@ -273,14 +273,17 @@ struct emu_memblk {
 	char		owner[16];
 	bus_addr_t	buf_addr;
 	uint32_t	pte_start, pte_size;
+	bus_dmamap_t	buf_map;
 };
 
 struct emu_mem {
 	uint8_t		bmap[EMU_MAXPAGES / 8];
 	uint32_t	*ptb_pages;
 	void		*silent_page;
-	bus_addr_t	silent_page_addr;
 	bus_addr_t	ptb_pages_addr;
+	bus_addr_t	silent_page_addr;
+	bus_dmamap_t	ptb_map;
+	bus_dmamap_t	silent_map;
 	bus_dma_tag_t	dmat;
 	struct emu_sc_info *card;
 	SLIST_HEAD(, emu_memblk) blocks;
@@ -377,8 +380,8 @@ struct emu_sc_info {
 };
 
 static void	emu_setmap(void *arg, bus_dma_segment_t * segs, int nseg, int error);
-static void*	emu_malloc(struct emu_mem *mem, uint32_t sz, bus_addr_t * addr);
-static void	emu_free(struct emu_mem *mem, void *dmabuf);
+static void*	emu_malloc(struct emu_mem *mem, uint32_t sz, bus_addr_t * addr, bus_dmamap_t *map);
+static void	emu_free(struct emu_mem *mem, void *dmabuf, bus_dmamap_t map);
 static void*	emu_memalloc(struct emu_mem *mem, uint32_t sz, bus_addr_t * addr, const char * owner);
 static int	emu_memfree(struct emu_mem *mem, void *membuf);
 static int	emu_memstart(struct emu_mem *mem, void *membuf);
@@ -561,16 +564,14 @@ emu_getcard(device_t dev)
 {
 	uint16_t device;
 	uint16_t subdevice;
-	int n_cards;
 	unsigned int thiscard;
 	int i;
 
 	device = pci_read_config(dev, PCIR_DEVICE, /* bytes */ 2);
 	subdevice = pci_read_config(dev, PCIR_SUBDEV_0, /* bytes */ 2);
 
-	n_cards = sizeof(emu_cards) / sizeof(struct emu_hwinfo);
 	thiscard = 0;
-	for (i = 1; i < n_cards; i++) {
+	for (i = 1; i < nitems(emu_cards); i++) {
 		if (device == emu_cards[i].device) {
 			if (subdevice == emu_cards[i].subdevice) {
 				thiscard = i;
@@ -586,8 +587,7 @@ emu_getcard(device_t dev)
 		}
 	}
 
-	n_cards = sizeof(emu_bad_cards) / sizeof(struct emu_hwinfo);
-	for (i = 0; i < n_cards; i++) {
+	for (i = 0; i < nitems(emu_bad_cards); i++) {
 		if (device == emu_bad_cards[i].device) {
 			if (subdevice == emu_bad_cards[i].subdevice) {
 				thiscard = 0;
@@ -1057,30 +1057,32 @@ emu_setmap(void *arg, bus_dma_segment_t * segs, int nseg, int error)
 }
 
 static void *
-emu_malloc(struct emu_mem *mem, uint32_t sz, bus_addr_t * addr)
+emu_malloc(struct emu_mem *mem, uint32_t sz, bus_addr_t * addr,
+    bus_dmamap_t *map)
 {
 	void *dmabuf;
-	bus_dmamap_t map;
 	int error;
 
 	*addr = 0;
-	if ((error = bus_dmamem_alloc(mem->dmat, &dmabuf, BUS_DMA_NOWAIT, &map))) {
+	if ((error = bus_dmamem_alloc(mem->dmat, &dmabuf, BUS_DMA_NOWAIT, map))) {
 		if (mem->card->dbg_level > 2)
 			device_printf(mem->card->dev, "emu_malloc: failed to alloc DMA map: %d\n", error);
 		return (NULL);
 		}
-	if ((error = bus_dmamap_load(mem->dmat, map, dmabuf, sz, emu_setmap, addr, 0)) || !*addr) {
+	if ((error = bus_dmamap_load(mem->dmat, *map, dmabuf, sz, emu_setmap, addr, 0)) || !*addr) {
 		if (mem->card->dbg_level > 2)
 			device_printf(mem->card->dev, "emu_malloc: failed to load DMA memory: %d\n", error);
+		bus_dmamem_free(mem->dmat, dmabuf, *map);
 		return (NULL);
 		}
 	return (dmabuf);
 }
 
 static void
-emu_free(struct emu_mem *mem, void *dmabuf)
+emu_free(struct emu_mem *mem, void *dmabuf, bus_dmamap_t map)
 {
-	bus_dmamem_free(mem->dmat, dmabuf, NULL);
+	bus_dmamap_unload(mem->dmat, map);
+	bus_dmamem_free(mem->dmat, dmabuf, map);
 }
 
 static void *
@@ -1121,7 +1123,7 @@ emu_memalloc(struct emu_mem *mem, uint32_t sz, bus_addr_t * addr, const char *ow
 		return (NULL);
 		}
 	bzero(blk, sizeof(*blk));
-	membuf = emu_malloc(mem, sz, &blk->buf_addr);
+	membuf = emu_malloc(mem, sz, &blk->buf_addr, &blk->buf_map);
 	*addr = blk->buf_addr;
 	if (membuf == NULL) {
 		if (mem->card->dbg_level > 2)
@@ -1159,7 +1161,7 @@ emu_memfree(struct emu_mem *mem, void *membuf)
 	if (blk == NULL)
 		return (EINVAL);
 	SLIST_REMOVE(&mem->blocks, blk, emu_memblk, link);
-	emu_free(mem, membuf);
+	emu_free(mem, membuf, blk->buf_map);
 	tmp = (uint32_t) (mem->silent_page_addr) << 1;
 	for (idx = blk->pte_start; idx < blk->pte_start + blk->pte_size; idx++) {
 		mem->bmap[idx >> 3] &= ~(1 << (idx & 7));
@@ -2311,7 +2313,7 @@ emu10kx_prepare(struct emu_sc_info *sc, struct sbuf *s)
 		}
 	if (sc->midi[0] != NULL)
 		if (device_is_attached(sc->midi[0])) {
-			sbuf_printf(s, "\tIR reciever MIDI events %s\n", sc->enable_ir ? "enabled" : "disabled");
+			sbuf_printf(s, "\tIR receiver MIDI events %s\n", sc->enable_ir ? "enabled" : "disabled");
 		}
 	sbuf_printf(s, "Card is in %s mode\n", (sc->mode == MODE_ANALOG) ? "analog" : "digital");
 
@@ -2346,7 +2348,7 @@ emu10kx_dev_uninit(struct emu_sc_info *sc)
 	}
 	if (sc->cdev)
 		destroy_dev(sc->cdev);
-	sc->cdev = 0;
+	sc->cdev = NULL;
 
 	mtx_destroy(&sc->emu10kx_lock);
 	return (0);
@@ -2724,13 +2726,13 @@ emu_init(struct emu_sc_info *sc)
 
 	sc->mem.card = sc;
 	SLIST_INIT(&sc->mem.blocks);
-	sc->mem.ptb_pages = emu_malloc(&sc->mem, EMU_MAXPAGES * sizeof(uint32_t), &sc->mem.ptb_pages_addr);
+	sc->mem.ptb_pages = emu_malloc(&sc->mem, EMU_MAXPAGES * sizeof(uint32_t), &sc->mem.ptb_pages_addr, &sc->mem.ptb_map);
 	if (sc->mem.ptb_pages == NULL)
 		return (ENOMEM);
 
-	sc->mem.silent_page = emu_malloc(&sc->mem, EMUPAGESIZE, &sc->mem.silent_page_addr);
+	sc->mem.silent_page = emu_malloc(&sc->mem, EMUPAGESIZE, &sc->mem.silent_page_addr, &sc->mem.silent_map);
 	if (sc->mem.silent_page == NULL) {
-		emu_free(&sc->mem, sc->mem.ptb_pages);
+		emu_free(&sc->mem, sc->mem.ptb_pages, sc->mem.ptb_map);
 		return (ENOMEM);
 	}
 	/* Clear page with silence & setup all pointers to this page */
@@ -2946,8 +2948,8 @@ emu_uninit(struct emu_sc_info *sc)
 		if (blk != NULL)
 		device_printf(sc->dev, "lost %d for %s\n", blk->pte_size, blk->owner);
 
-	emu_free(&sc->mem, sc->mem.ptb_pages);
-	emu_free(&sc->mem, sc->mem.silent_page);
+	emu_free(&sc->mem, sc->mem.ptb_pages, sc->mem.ptb_map);
+	emu_free(&sc->mem, sc->mem.silent_page, sc->mem.silent_map);
 
 	return (0);
 }
@@ -3198,9 +3200,7 @@ emu_pci_attach(device_t dev)
 	i = 0;
 	sc->irq = bus_alloc_resource_any(dev, SYS_RES_IRQ, &i, RF_ACTIVE | RF_SHAREABLE);
 	if ((sc->irq == NULL) || bus_setup_intr(dev, sc->irq, INTR_MPSAFE | INTR_TYPE_AV,
-#if __FreeBSD_version >= 700031
 	    NULL,
-#endif
 	    emu_intr, sc, &sc->ih)) {
 		device_printf(dev, "unable to map interrupt\n");
 		goto bad;
@@ -3222,7 +3222,7 @@ emu_pci_attach(device_t dev)
 		device_printf(dev, "unable to create control device\n");
 		goto bad;
 	}
-	snprintf(status, 255, "rev %d at io 0x%lx irq %ld", sc->rev, rman_get_start(sc->reg), rman_get_start(sc->irq));
+	snprintf(status, 255, "rev %d at io 0x%jx irq %jd", sc->rev, rman_get_start(sc->reg), rman_get_start(sc->irq));
 
 	/* Voices */
 	for (i = 0; i < NUM_G; i++) {

@@ -146,6 +146,18 @@ ahci_ctlr_reset(device_t dev)
 	}
 	/* Reenable AHCI mode */
 	ATA_OUTL(ctlr->r_mem, AHCI_GHC, AHCI_GHC_AE);
+
+	if (ctlr->quirks & AHCI_Q_RESTORE_CAP) {
+		/*
+		 * Restore capability field.
+		 * This is write to a read-only register to restore its state.
+		 * On fully standard-compliant hardware this is not needed and
+		 * this operation shall not take place. See ahci_pci.c for
+		 * platforms using this quirk.
+		 */
+		ATA_OUTL(ctlr->r_mem, AHCI_CAP, ctlr->caps);
+	}
+
 	return (0);
 }
 
@@ -154,8 +166,8 @@ int
 ahci_attach(device_t dev)
 {
 	struct ahci_controller *ctlr = device_get_softc(dev);
-	int error, i, u, speed, unit;
-	u_int32_t version;
+	int error, i, speed, unit;
+	uint32_t u, version;
 	device_t child;
 
 	ctlr->dev = dev;
@@ -169,12 +181,12 @@ ahci_attach(device_t dev)
 	ctlr->sc_iomem.rm_type = RMAN_ARRAY;
 	ctlr->sc_iomem.rm_descr = "I/O memory addresses";
 	if ((error = rman_init(&ctlr->sc_iomem)) != 0) {
-		bus_release_resource(dev, SYS_RES_MEMORY, ctlr->r_rid, ctlr->r_mem);
+		ahci_free_mem(dev);
 		return (error);
 	}
 	if ((error = rman_manage_region(&ctlr->sc_iomem,
 	    rman_get_start(ctlr->r_mem), rman_get_end(ctlr->r_mem))) != 0) {
-		bus_release_resource(dev, SYS_RES_MEMORY, ctlr->r_rid, ctlr->r_mem);
+		ahci_free_mem(dev);
 		rman_fini(&ctlr->sc_iomem);
 		return (error);
 	}
@@ -185,6 +197,22 @@ ahci_attach(device_t dev)
 		ctlr->caps2 = ATA_INL(ctlr->r_mem, AHCI_CAP2);
 	if (ctlr->caps & AHCI_CAP_EMS)
 		ctlr->capsem = ATA_INL(ctlr->r_mem, AHCI_EM_CTL);
+
+	if (ctlr->quirks & AHCI_Q_FORCE_PI) {
+		/*
+		 * Enable ports. 
+		 * The spec says that BIOS sets up bits corresponding to
+		 * available ports. On platforms where this information
+		 * is missing, the driver can define available ports on its own.
+		 */
+		int nports = (ctlr->caps & AHCI_CAP_NPMASK) + 1;
+		int nmask = (1 << nports) - 1;
+
+		ATA_OUTL(ctlr->r_mem, AHCI_PI, nmask);
+		device_printf(dev, "Forcing PI to %d ports (mask = %x)\n",
+		    nports, nmask);
+	}
+
 	ctlr->ichannels = ATA_INL(ctlr->r_mem, AHCI_PI);
 
 	/* Identify and set separate quirks for HBA and RAID f/w Marvells. */
@@ -222,8 +250,7 @@ ahci_attach(device_t dev)
 	    BUS_SPACE_MAXADDR_32BIT, BUS_SPACE_MAXADDR, NULL, NULL,
 	    BUS_SPACE_MAXSIZE, BUS_SPACE_UNRESTRICTED, BUS_SPACE_MAXSIZE,
 	    0, NULL, NULL, &ctlr->dma_tag)) {
-		bus_release_resource(dev, SYS_RES_MEMORY, ctlr->r_rid,
-		    ctlr->r_mem);
+		ahci_free_mem(dev);
 		rman_fini(&ctlr->sc_iomem);
 		return (ENXIO);
 	}
@@ -233,8 +260,7 @@ ahci_attach(device_t dev)
 	/* Setup interrupts. */
 	if ((error = ahci_setup_interrupt(dev)) != 0) {
 		bus_dma_tag_destroy(ctlr->dma_tag);
-		bus_release_resource(dev, SYS_RES_MEMORY, ctlr->r_rid,
-		    ctlr->r_mem);
+		ahci_free_mem(dev);
 		rman_fini(&ctlr->sc_iomem);
 		return (error);
 	}
@@ -339,9 +365,26 @@ ahci_detach(device_t dev)
 	bus_dma_tag_destroy(ctlr->dma_tag);
 	/* Free memory. */
 	rman_fini(&ctlr->sc_iomem);
+	ahci_free_mem(dev);
+	return (0);
+}
+
+void
+ahci_free_mem(device_t dev)
+{
+	struct ahci_controller *ctlr = device_get_softc(dev);
+
+	/* Release memory resources */
 	if (ctlr->r_mem)
 		bus_release_resource(dev, SYS_RES_MEMORY, ctlr->r_rid, ctlr->r_mem);
-	return (0);
+	if (ctlr->r_msix_table)
+		bus_release_resource(dev, SYS_RES_MEMORY,
+		    ctlr->r_msix_tab_rid, ctlr->r_msix_table);
+	if (ctlr->r_msix_pba)
+		bus_release_resource(dev, SYS_RES_MEMORY,
+		    ctlr->r_msix_pba_rid, ctlr->r_msix_pba);
+
+	ctlr->r_msix_pba = ctlr->r_mem = ctlr->r_msix_table = NULL;
 }
 
 int
@@ -440,6 +483,7 @@ ahci_intr(void *data)
 	/* AHCI declares level triggered IS. */
 	if (!(ctlr->quirks & AHCI_Q_EDGEIS))
 		ATA_OUTL(ctlr->r_mem, AHCI_IS, is);
+	ATA_RBL(ctlr->r_mem, AHCI_IS);
 }
 
 /*
@@ -458,6 +502,7 @@ ahci_intr_one(void *data)
 	    ctlr->interrupt[unit].function(arg);
 	/* AHCI declares level triggered IS. */
 	ATA_OUTL(ctlr->r_mem, AHCI_IS, 1 << unit);
+	ATA_RBL(ctlr->r_mem, AHCI_IS);
 }
 
 static void
@@ -473,15 +518,16 @@ ahci_intr_one_edge(void *data)
 	ATA_OUTL(ctlr->r_mem, AHCI_IS, 1 << unit);
 	if ((arg = ctlr->interrupt[unit].argument))
 		ctlr->interrupt[unit].function(arg);
+	ATA_RBL(ctlr->r_mem, AHCI_IS);
 }
 
 struct resource *
 ahci_alloc_resource(device_t dev, device_t child, int type, int *rid,
-    u_long start, u_long end, u_long count, u_int flags)
+    rman_res_t start, rman_res_t end, rman_res_t count, u_int flags)
 {
 	struct ahci_controller *ctlr = device_get_softc(dev);
 	struct resource *res;
-	long st;
+	rman_res_t st;
 	int offset, size, unit;
 
 	unit = (intptr_t)device_get_ivars(child);
@@ -626,6 +672,7 @@ ahci_ch_attach(device_t dev)
 	ch->unit = (intptr_t)device_get_ivars(dev);
 	ch->caps = ctlr->caps;
 	ch->caps2 = ctlr->caps2;
+	ch->start = ctlr->ch_start;
 	ch->quirks = ctlr->quirks;
 	ch->vendorid = ctlr->vendorid;
 	ch->deviceid = ctlr->deviceid;
@@ -1256,7 +1303,7 @@ ahci_ch_intr_main(struct ahci_channel *ch, uint32_t istatus)
 		err = 0;
 		port = -1;
 	}
-	/* Complete all successfull commands. */
+	/* Complete all successful commands. */
 	ok = ch->rslots & ~cstatus;
 	for (i = 0; i < ch->numslots; i++) {
 		if ((ok >> i) & 1)
@@ -1562,10 +1609,15 @@ ahci_execute_transaction(struct ahci_slot *slot)
 		if ((ch->quirks & AHCI_Q_NOBSYRES) == 0 &&
 		    (ch->quirks & AHCI_Q_ATI_PMP_BUG) == 0 &&
 		    softreset == 2 && et == AHCI_ERR_NONE) {
-			while ((val = fis[2]) & ATA_S_BUSY) {
-				DELAY(10);
-				if (count++ >= timeout)
+			for ( ; count < timeout; count++) {
+				bus_dmamap_sync(ch->dma.rfis_tag,
+				    ch->dma.rfis_map, BUS_DMASYNC_POSTREAD);
+				val = fis[2];
+				bus_dmamap_sync(ch->dma.rfis_tag,
+				    ch->dma.rfis_map, BUS_DMASYNC_PREREAD);
+				if ((val & ATA_S_BUSY) == 0)
 					break;
+				DELAY(10);
 			}
 		}
 
@@ -2086,6 +2138,10 @@ ahci_start(struct ahci_channel *ch, int fbs)
 {
 	u_int32_t cmd;
 
+	/* Run the channel start callback, if any. */
+	if (ch->start)
+		ch->start(ch);
+
 	/* Clear SATA error register */
 	ATA_OUTL(ch->r_mem, AHCI_P_SERR, 0xFFFFFFFF);
 	/* Clear any interrupts pending on this channel */
@@ -2355,14 +2411,19 @@ ahci_setup_fis(struct ahci_channel *ch, struct ahci_cmd_tab *ctp, union ccb *ccb
 		fis[11] = ccb->ataio.cmd.features_exp;
 		if (ccb->ataio.cmd.flags & CAM_ATAIO_FPDMA) {
 			fis[12] = tag << 3;
-			fis[13] = 0;
 		} else {
 			fis[12] = ccb->ataio.cmd.sector_count;
-			fis[13] = ccb->ataio.cmd.sector_count_exp;
 		}
+		fis[13] = ccb->ataio.cmd.sector_count_exp;
 		fis[15] = ATA_A_4BIT;
 	} else {
 		fis[15] = ccb->ataio.cmd.control;
+	}
+	if (ccb->ataio.ata_flags & ATA_FLAG_AUX) {
+		fis[16] =  ccb->ataio.aux        & 0xff;
+		fis[17] = (ccb->ataio.aux >>  8) & 0xff;
+		fis[18] = (ccb->ataio.aux >> 16) & 0xff;
+		fis[19] = (ccb->ataio.aux >> 24) & 0xff;
 	}
 	return (20);
 }
@@ -2618,7 +2679,7 @@ ahciaction(struct cam_sim *sim, union ccb *ccb)
 		if (ch->caps & AHCI_CAP_SPM)
 			cpi->hba_inquiry |= PI_SATAPM;
 		cpi->target_sprt = 0;
-		cpi->hba_misc = PIM_SEQSCAN | PIM_UNMAPPED;
+		cpi->hba_misc = PIM_SEQSCAN | PIM_UNMAPPED | PIM_ATA_EXT;
 		cpi->hba_eng_cnt = 0;
 		if (ch->caps & AHCI_CAP_SPM)
 			cpi->max_target = 15;

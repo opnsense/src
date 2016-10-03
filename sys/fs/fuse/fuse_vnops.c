@@ -335,8 +335,9 @@ fuse_vnop_create(struct vop_create_args *ap)
 
 	/* XXX:	Will we ever want devices ? */
 	if ((vap->va_type != VREG)) {
-		MPASS(vap->va_type != VFIFO);
-		goto bringup;
+		printf("fuse_vnop_create: unsupported va_type %d\n",
+		    vap->va_type);
+		return (EINVAL);
 	}
 	debug_printf("parent nid = %ju, mode = %x\n", (uintmax_t)parentnid,
 	    mode);
@@ -364,7 +365,7 @@ fuse_vnop_create(struct vop_create_args *ap)
 		debug_printf("create: got err=%d from daemon\n", err);
 		goto out;
 	}
-bringup:
+
 	feo = fdip->answ;
 
 	if ((err = fuse_internal_checkentry(feo, VREG))) {
@@ -1027,7 +1028,7 @@ out:
 				 * soon as we get those attrs... There is
 				 * one bit of info though not given us by
 				 * the daemon: whether his response is
-				 * authorative or not... His response should
+				 * authoritative or not... His response should
 				 * be ignored if something is mounted over
 				 * the dir in question. But that can be
 				 * known only by having the vnode...
@@ -1125,6 +1126,7 @@ fuse_vnop_open(struct vop_open_args *ap)
 	struct fuse_vnode_data *fvdat;
 
 	int error, isdir = 0;
+	int32_t fuse_open_flags;
 
 	FS_DEBUG2G("inode=%ju mode=0x%x\n", (uintmax_t)VTOI(vp), mode);
 
@@ -1136,14 +1138,24 @@ fuse_vnop_open(struct vop_open_args *ap)
 	if (vnode_isdir(vp)) {
 		isdir = 1;
 	}
+	fuse_open_flags = 0;
 	if (isdir) {
 		fufh_type = FUFH_RDONLY;
 	} else {
 		fufh_type = fuse_filehandle_xlate_from_fflags(mode);
+		/*
+		 * For WRONLY opens, force DIRECT_IO.  This is necessary
+		 * since writing a partial block through the buffer cache
+		 * will result in a read of the block and that read won't
+		 * be allowed by the WRONLY open.
+		 */
+		if (fufh_type == FUFH_WRONLY ||
+		    (fvdat->flag & FN_DIRECTIO) != 0)
+			fuse_open_flags = FOPEN_DIRECT_IO;
 	}
 
-	if (fuse_filehandle_valid(vp, fufh_type)) {
-		fuse_vnode_open(vp, 0, td);
+	if (fuse_filehandle_validrw(vp, fufh_type) != FUFH_INVALID) {
+		fuse_vnode_open(vp, fuse_open_flags, td);
 		return 0;
 	}
 	error = fuse_filehandle_open(vp, fufh_type, NULL, td, cred);
@@ -1730,7 +1742,6 @@ fuse_vnop_write(struct vop_write_args *ap)
         vm_page_t *a_m;
         int a_count;
         int a_reqpage;
-        vm_ooffset_t a_offset;
     };
 */
 static int
@@ -1753,40 +1764,29 @@ fuse_vnop_getpages(struct vop_getpages_args *ap)
 	td = curthread;			/* XXX */
 	cred = curthread->td_ucred;	/* XXX */
 	pages = ap->a_m;
-	count = ap->a_count;
+	npages = ap->a_count;
 
 	if (!fsess_opt_mmap(vnode_mount(vp))) {
 		FS_DEBUG("called on non-cacheable vnode??\n");
 		return (VM_PAGER_ERROR);
 	}
-	npages = btoc(count);
 
 	/*
-	 * If the requested page is partially valid, just return it and
-	 * allow the pager to zero-out the blanks.  Partially valid pages
-	 * can only occur at the file EOF.
+	 * If the last page is partially valid, just return it and allow
+	 * the pager to zero-out the blanks.  Partially valid pages can
+	 * only occur at the file EOF.
+	 *
+	 * XXXGL: is that true for FUSE, which is a local filesystem,
+	 * but still somewhat disconnected from the kernel?
 	 */
-
 	VM_OBJECT_WLOCK(vp->v_object);
-	fuse_vm_page_lock_queues();
-	if (pages[ap->a_reqpage]->valid != 0) {
-		for (i = 0; i < npages; ++i) {
-			if (i != ap->a_reqpage) {
-				fuse_vm_page_lock(pages[i]);
-				vm_page_free(pages[i]);
-				fuse_vm_page_unlock(pages[i]);
-			}
-		}
-		fuse_vm_page_unlock_queues();
-		VM_OBJECT_WUNLOCK(vp->v_object);
-		return 0;
-	}
-	fuse_vm_page_unlock_queues();
+	if (pages[npages - 1]->valid != 0 && --npages == 0)
+		goto out;
 	VM_OBJECT_WUNLOCK(vp->v_object);
 
 	/*
 	 * We use only the kva address for the buffer, but this is extremely
-	 * convienient and fast.
+	 * convenient and fast.
 	 */
 	bp = getpbuf(&fuse_pbuf_freecnt);
 
@@ -1795,6 +1795,7 @@ fuse_vnop_getpages(struct vop_getpages_args *ap)
 	PCPU_INC(cnt.v_vnodein);
 	PCPU_ADD(cnt.v_vnodepgsin, npages);
 
+	count = npages << PAGE_SHIFT;
 	iov.iov_base = (caddr_t)kva;
 	iov.iov_len = count;
 	uio.uio_iov = &iov;
@@ -1812,17 +1813,6 @@ fuse_vnop_getpages(struct vop_getpages_args *ap)
 
 	if (error && (uio.uio_resid == count)) {
 		FS_DEBUG("error %d\n", error);
-		VM_OBJECT_WLOCK(vp->v_object);
-		fuse_vm_page_lock_queues();
-		for (i = 0; i < npages; ++i) {
-			if (i != ap->a_reqpage) {
-				fuse_vm_page_lock(pages[i]);
-				vm_page_free(pages[i]);
-				fuse_vm_page_unlock(pages[i]);
-			}
-		}
-		fuse_vm_page_unlock_queues();
-		VM_OBJECT_WUNLOCK(vp->v_object);
 		return VM_PAGER_ERROR;
 	}
 	/*
@@ -1857,18 +1847,21 @@ fuse_vnop_getpages(struct vop_getpages_args *ap)
 			    ("fuse_getpages: page %p is dirty", m));
 		} else {
 			/*
-			 * Read operation was short.  If no error occured
+			 * Read operation was short.  If no error occurred
 			 * we may have hit a zero-fill section.   We simply
 			 * leave valid set to 0.
 			 */
 			;
 		}
-		if (i != ap->a_reqpage)
-			vm_page_readahead_finish(m);
 	}
 	fuse_vm_page_unlock_queues();
+out:
 	VM_OBJECT_WUNLOCK(vp->v_object);
-	return 0;
+	if (ap->a_rbehind)
+		*ap->a_rbehind = 0;
+	if (ap->a_rahead)
+		*ap->a_rahead = 0;
+	return (VM_PAGER_OK);
 }
 
 /*
@@ -1927,7 +1920,7 @@ fuse_vnop_putpages(struct vop_putpages_args *ap)
 	}
 	/*
 	 * We use only the kva address for the buffer, but this is extremely
-	 * convienient and fast.
+	 * convenient and fast.
 	 */
 	bp = getpbuf(&fuse_pbuf_freecnt);
 

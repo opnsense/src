@@ -722,7 +722,7 @@ IoGetDriverObjectExtension(drv, clid)
 
 	/*
 	 * Sanity check. Our dummy bus drivers don't have
-	 * any driver extentions.
+	 * any driver extensions.
 	 */
 
 	if (drv->dro_driverext == NULL)
@@ -3188,17 +3188,14 @@ atol(str)
 static int
 rand(void)
 {
-	struct timeval		tv;
 
-	microtime(&tv);
-	srandom(tv.tv_usec);
-	return ((int)random());
+	return (random());
 }
 
 static void
-srand(seed)
-	unsigned int		seed;
+srand(unsigned int seed)
 {
+
 	srandom(seed);
 }
 
@@ -3749,7 +3746,7 @@ ntoskrnl_insert_timer(timer, ticks)
 
 	timer->k_callout = c;
 
-	callout_init(c, CALLOUT_MPSAFE);
+	callout_init(c, 1);
 	callout_reset(c, ticks, ntoskrnl_timercall, timer);
 }
 
@@ -4207,7 +4204,7 @@ KeQueryInterruptTime(void)
 
 	ticks = tvtohz(&tv);
 
-	return ticks * ((10000000 + hz - 1) / hz);
+	return ticks * howmany(10000000, hz);
 }
 
 static struct thread *

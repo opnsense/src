@@ -7,8 +7,10 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <inttypes.h>
+
 #include "lldb/Interpreter/CommandHistory.h"
-#include "lldb/Interpreter/Args.h"
+#include "lldb/Host/StringConvert.h"
 
 using namespace lldb;
 using namespace lldb_private;
@@ -41,17 +43,17 @@ CommandHistory::FindString (const char* input_str) const
 {
     Mutex::Locker locker(m_mutex);
     if (!input_str)
-        return NULL;
+        return nullptr;
     if (input_str[0] != g_repeat_char)
-        return NULL;
+        return nullptr;
     if (input_str[1] == '-')
     {
         bool success;
-        size_t idx = Args::StringToUInt32 (input_str+2, 0, 0, &success);
+        size_t idx = StringConvert::ToUInt32 (input_str+2, 0, 0, &success);
         if (!success)
-            return NULL;
+            return nullptr;
         if (idx > m_history.size())
-            return NULL;
+            return nullptr;
         idx = m_history.size() - idx;
         return m_history[idx].c_str();
         
@@ -59,18 +61,18 @@ CommandHistory::FindString (const char* input_str) const
     else if (input_str[1] == g_repeat_char)
     {
         if (m_history.empty())
-            return NULL;
+            return nullptr;
         else
             return m_history.back().c_str();
     }
     else
     {
         bool success;
-        uint32_t idx = Args::StringToUInt32 (input_str+1, 0, 0, &success);
+        uint32_t idx = StringConvert::ToUInt32 (input_str+1, 0, 0, &success);
         if (!success)
-            return NULL;
+            return nullptr;
         if (idx >= m_history.size())
-            return NULL;
+            return nullptr;
         return m_history[idx].c_str();
     }
 }
@@ -81,7 +83,7 @@ CommandHistory::GetStringAtIndex (size_t idx) const
     Mutex::Locker locker(m_mutex);
     if (idx < m_history.size())
         return m_history[idx].c_str();
-    return NULL;
+    return nullptr;
 }
 
 const char*
@@ -95,7 +97,7 @@ CommandHistory::GetRecentmostString () const
 {
     Mutex::Locker locker(m_mutex);
     if (m_history.empty())
-        return NULL;
+        return nullptr;
     return m_history.back().c_str();
 }
 
@@ -128,16 +130,16 @@ CommandHistory::Dump (Stream& stream,
                       size_t stop_idx) const
 {
     Mutex::Locker locker(m_mutex);
-    stop_idx = std::min(stop_idx, m_history.size() - 1);
+    stop_idx = std::min(stop_idx + 1, m_history.size());
     for (size_t counter = start_idx;
-         counter <= stop_idx;
+         counter < stop_idx;
          counter++)
     {
         const std::string hist_item = m_history[counter];
         if (!hist_item.empty())
         {
             stream.Indent();
-            stream.Printf ("%4zu: %s\n", counter, hist_item.c_str());
+            stream.Printf("%4" PRIu64 ": %s\n", (uint64_t)counter, hist_item.c_str());
         }
     }
 }

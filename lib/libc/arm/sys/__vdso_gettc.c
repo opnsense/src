@@ -1,5 +1,8 @@
 /*-
- * Copyright (c) 2013 Konstantin Belousov <kib@FreeBSD.org>
+ * Copyright (c) 2015 The FreeBSD Foundation
+ *
+ * This software was developed by Konstantin Belousov
+ * under sponsorship from the FreeBSD Foundation.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -27,16 +30,51 @@
 __FBSDID("$FreeBSD$");
 
 #include <sys/types.h>
+#include <sys/elf.h>
 #include <sys/time.h>
 #include <sys/vdso.h>
-#include <errno.h>
+#include <machine/cpufunc.h>
+#include <machine/acle-compat.h>
+#include "libc_private.h"
+
+#if __ARM_ARCH >= 6
+static inline uint64_t
+cp15_cntvct_get(void)
+{
+	uint64_t reg;
+
+	__asm __volatile("mrrc\tp15, 1, %Q0, %R0, c14" : "=r" (reg));
+	return (reg);
+}
+
+static inline uint64_t
+cp15_cntpct_get(void)
+{
+	uint64_t reg;
+
+	__asm __volatile("mrrc\tp15, 0, %Q0, %R0, c14" : "=r" (reg));
+	return (reg);
+}
+#endif
 
 #pragma weak __vdso_gettc
 u_int
 __vdso_gettc(const struct vdso_timehands *th)
 {
+	uint64_t val;
 
-	return (0);
+#if __ARM_ARCH >= 6
+	/*
+	 * Userspace gettimeofday() is only enabled on ARMv7 CPUs, but
+	 * libc is compiled for ARMv6.  Due to clang issues, .arch
+	 * armv7-a directive does not work.
+	 */
+	__asm __volatile(".word\t0xf57ff06f" : : : "memory"); /* isb */
+	val = th->th_physical == 0 ? cp15_cntvct_get() : cp15_cntpct_get();
+#else
+	val = 0;
+#endif
+	return (val);
 }
 
 #pragma weak __vdso_gettimekeep
@@ -44,5 +82,5 @@ int
 __vdso_gettimekeep(struct vdso_timekeep **tk)
 {
 
-	return (ENOSYS);
+	return (_elf_aux_info(AT_TIMEKEEP, tk, sizeof(*tk)));
 }

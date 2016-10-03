@@ -525,7 +525,7 @@ shutdown_out:
 /*
  * Bug-for-bug compatibility with Linux!
  * Some apps will send commands with inlen and outlen set to 0,
- * even though they expect data to be transfered to them from the
+ * even though they expect data to be transferred to them from the
  * card.  Linux accidentally allows this by allocating a 4KB
  * buffer for the transfer anyways, but it then throws it away
  * without copying it back to the app.
@@ -563,7 +563,7 @@ amr_linux_ioctl_int(struct cdev *dev, u_long cmd, caddr_t addr, int32_t flag,
     struct amr_linux_ioctl	ali;
     void			*dp, *temp;
     int				error;
-    int				adapter, len, ac_flags = 0;
+    int				len, ac_flags = 0;
     int				logical_drives_changed = 0;
     u_int32_t			linux_version = 0x02100000;
     u_int8_t			status;
@@ -605,8 +605,6 @@ amr_linux_ioctl_int(struct cdev *dev, u_long cmd, caddr_t addr, int32_t flag,
 	    len = max(ali.outlen, ali.inlen);
 	else
 	    len = ali.ui.fcs.length;
-
-	adapter = (ali.ui.fcs.adapno) ^ 'm' << 8;
 
 	mb = (void *)&ali.mbox[0];
 
@@ -761,7 +759,7 @@ amr_ioctl(struct cdev *dev, u_long cmd, caddr_t addr, int32_t flag, struct threa
     void			*dp, *au_buffer;
     unsigned long		au_length, real_length;
     unsigned char		*au_cmd;
-    int				*au_statusp, au_direction;
+    int				*au_statusp;
     int				error;
     struct amr_passthrough	*ap;	/* 60 bytes */
     int				logical_drives_changed = 0;
@@ -793,7 +791,6 @@ amr_ioctl(struct cdev *dev, u_long cmd, caddr_t addr, int32_t flag, struct threa
 	au_cmd = arg.au32->au_cmd;
 	au_buffer = (void *)(u_int64_t)arg.au32->au_buffer;
 	au_length = arg.au32->au_length;
-	au_direction = arg.au32->au_direction;
 	au_statusp = &arg.au32->au_status;
 	break;
 #endif
@@ -803,7 +800,6 @@ amr_ioctl(struct cdev *dev, u_long cmd, caddr_t addr, int32_t flag, struct threa
 	au_cmd = arg.au->au_cmd;
 	au_buffer = (void *)arg.au->au_buffer;
 	au_length = arg.au->au_length;
-	au_direction = arg.au->au_direction;
 	au_statusp = &arg.au->au_status;
 	break;
 
@@ -1320,10 +1316,10 @@ amr_bio_command(struct amr_softc *sc, struct amr_command **acp)
     }
     amrd = (struct amrd_softc *)bio->bio_disk->d_drv1;
     driveno = amrd->amrd_drive - sc->amr_drive;
-    blkcount = (bio->bio_bcount + AMR_BLKSIZE - 1) / AMR_BLKSIZE;
+    blkcount = howmany(bio->bio_bcount, AMR_BLKSIZE);
 
     ac->ac_mailbox.mb_command = cmd;
-    if (bio->bio_cmd & (BIO_READ|BIO_WRITE)) {
+    if (bio->bio_cmd == BIO_READ || bio->bio_cmd == BIO_WRITE) {
 	ac->ac_mailbox.mb_blkcount = blkcount;
 	ac->ac_mailbox.mb_lba = bio->bio_pblkno;
 	if ((bio->bio_pblkno + blkcount) > sc->amr_drive[driveno].al_size) {
@@ -1788,7 +1784,7 @@ amr_start(struct amr_command *ac)
     /* Now we have a slot, we can map the command (unmapped in amr_complete). */
     if ((error = amr_mapcmd(ac)) == ENOMEM) {
 	/*
-	 * Memroy resources are short, so free the slot and let this be tried
+	 * Memory resources are short, so free the slot and let this be tried
 	 * later.
 	 */
 	amr_freeslot(ac);

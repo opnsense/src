@@ -51,9 +51,13 @@ struct mdthread {
 	register_t md_spurflt_addr;     /* (k) Spurious page fault address. */
 	int md_ptrace_instr;
 	int md_ptrace_addr;
+	int md_ptrace_instr_alt;
+	int md_ptrace_addr_alt;
 	register_t md_tp;
+#if __ARM_ARCH < 6
 	void *md_ras_start;
 	void *md_ras_end;
+#endif
 };
 
 struct mdproc {
@@ -61,22 +65,23 @@ struct mdproc {
 	void	*md_sigtramp;
 };
 
-#ifdef __ARM_EABI__
 #define	KINFO_PROC_SIZE 816
-#else
-#define	KINFO_PROC_SIZE 792
-#endif
 
 #define MAXARGS	8
+/*
+ * This holds the syscall state for a single system call.
+ * As some syscall arguments may be 64-bit aligned we need to ensure the
+ * args value is 64-bit aligned. The ABI will then ensure any 64-bit
+ * arguments are already correctly aligned, even if they were passed in
+ * via registers, we just need to make sure we copy them to an aligned
+ * buffer.
+ */
 struct syscall_args {
 	u_int code;
 	struct sysent *callp;
 	register_t args[MAXARGS];
 	int narg;
 	u_int nap;
-#ifndef __ARM_EABI__
-	u_int32_t insn;
-#endif
-};
+} __aligned(8);
 
 #endif /* !_MACHINE_PROC_H_ */

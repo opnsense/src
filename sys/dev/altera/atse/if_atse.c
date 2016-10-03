@@ -146,7 +146,7 @@ a_onchip_fifo_mem_core_read(struct resource *res, uint32_t off,
 	return (val4);
 }
 
-/* The FIFO does an endian convertion, so we must not do it as well. */
+/* The FIFO does an endian conversion, so we must not do it as well. */
 /* XXX-BZ in fact we should do a htobe32 so le would be fine as well? */
 #define	ATSE_TX_DATA_WRITE(sc, val4)					\
 	bus_write_4((sc)->atse_tx_mem_res, A_ONCHIP_FIFO_MEM_CORE_DATA, val4)
@@ -169,8 +169,8 @@ a_onchip_fifo_mem_core_read(struct resource *res, uint32_t off,
 	    A_ONCHIP_FIFO_MEM_CORE_STATUS_REG_FILL_LEVEL,		\
 	    "RX_FILL", __func__, __LINE__)
 
-/* The FIFO does an endian convertion, so we must not do it as well. */
-/* XXX-BZ in fact we shoudl do a htobe32 so le would be fine as well? */
+/* The FIFO does an endian conversion, so we must not do it as well. */
+/* XXX-BZ in fact we should do a htobe32 so le would be fine as well? */
 #define	ATSE_RX_DATA_READ(sc)						\
 	bus_read_4((sc)->atse_rx_mem_res, A_ONCHIP_FIFO_MEM_CORE_DATA)
 #define	ATSE_RX_META_READ(sc)						\
@@ -1159,7 +1159,7 @@ atse_watchdog(struct atse_softc *sc)
 		return;
 
 	device_printf(sc->atse_dev, "watchdog timeout\n");
-	sc->atse_ifp->if_oerrors++;
+	if_inc_counter(sc->atse_ifp, IFCOUNTER_OERRORS, 1);
 
 	atse_intr_debug(sc, "poll");
 
@@ -1241,7 +1241,7 @@ atse_rx_locked(struct atse_softc *sc)
 	do {
 outer:
 		if (sc->atse_rx_m == NULL) {
-			m = m_getcl(M_DONTWAIT, MT_DATA, M_PKTHDR);
+			m = m_getcl(M_NOWAIT, MT_DATA, M_PKTHDR);
 			if (m == NULL)
 				return (rx_npkts);
 			m->m_len = m->m_pkthdr.len = MCLBYTES;
@@ -1263,7 +1263,7 @@ outer:
 				atse_update_rx_err(sc, ((meta &
 				    A_ONCHIP_FIFO_MEM_CORE_ERROR_MASK) >>
 				    A_ONCHIP_FIFO_MEM_CORE_ERROR_SHIFT) & 0xff);
-				ifp->if_ierrors++;
+				if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 				sc->atse_rx_buf_len = 0;
 				/*
 				 * Should still read till EOP or next SOP.
@@ -1292,7 +1292,7 @@ outer:
 					    "without empty buffer: %u\n",
 					    __func__, sc->atse_rx_buf_len);
 					/* XXX-BZ any better counter? */
-					ifp->if_ierrors++;
+					if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 				}
 				
 				if ((sc->atse_flags & ATSE_FLAGS_SOP_SEEN) == 0)
@@ -1311,7 +1311,7 @@ outer:
 				 * XXX-BZ Error.  We need more mbufs and are
 				 * not setup for this yet.
 				 */
-				ifp->if_ierrors++;
+				if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 				sc->atse_flags |= ATSE_FLAGS_ERROR;
 			}
 			if ((sc->atse_flags & ATSE_FLAGS_ERROR) == 0)
@@ -1330,7 +1330,7 @@ outer:
 				    A_ONCHIP_FIFO_MEM_CORE_EMPTY_SHIFT;
 				sc->atse_rx_buf_len += (4 - empty);
 
-				ifp->if_ipackets++;
+				if_inc_counter(ifp, IFCOUNTER_IPACKETS, 1);
 				rx_npkts++;
 
 				m = sc->atse_rx_m;
@@ -1414,7 +1414,7 @@ atse_rx_intr(void *arg)
 		atse_update_rx_err(sc, ((rxe &
 		    A_ONCHIP_FIFO_MEM_CORE_ERROR_MASK) >>
 		    A_ONCHIP_FIFO_MEM_CORE_ERROR_SHIFT) & 0xff);
-		ifp->if_ierrors++;
+		if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 	}
 
 	/*
@@ -1469,7 +1469,7 @@ atse_tx_intr(void *arg)
 	if (txe & (A_ONCHIP_FIFO_MEM_CORE_EVENT_OVERFLOW|
 	    A_ONCHIP_FIFO_MEM_CORE_EVENT_UNDERFLOW)) {
 		/* XXX-BZ ERROR HANDLING. */
-		ifp->if_oerrors++;
+		if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 	}
 
 	/*
@@ -1527,12 +1527,12 @@ atse_poll(struct ifnet *ifp, enum poll_cmd cmd, int count)
 			atse_update_rx_err(sc, ((rx &
 			    A_ONCHIP_FIFO_MEM_CORE_ERROR_MASK) >>
 			    A_ONCHIP_FIFO_MEM_CORE_ERROR_SHIFT) & 0xff);
-			ifp->if_ierrors++;
+			if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 		}
 		if (tx & (A_ONCHIP_FIFO_MEM_CORE_EVENT_OVERFLOW|
 		    A_ONCHIP_FIFO_MEM_CORE_EVENT_UNDERFLOW)) {
 			/* XXX-BZ ERROR HANDLING. */
-			ifp->if_oerrors++;
+			if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 		}
 		if (ATSE_TX_READ_FILL_LEVEL(sc) == 0)
 			sc->atse_watchdog_timer = 0;
@@ -1727,8 +1727,7 @@ atse_sysctl_stats_attach(device_t dev)
         soid = device_get_sysctl_tree(dev);
 
 	/* MAC statistics. */
-	for (i = 0; i < sizeof(atse_mac_stats_regs) /
-	    sizeof(*atse_mac_stats_regs); i++) {
+	for (i = 0; i < nitems(atse_mac_stats_regs); i++) {
 		if (atse_mac_stats_regs[i].name == NULL ||
 		    atse_mac_stats_regs[i].descr == NULL)
 			continue;
@@ -1820,7 +1819,7 @@ atse_attach(device_t dev)
 	ether_ifattach(ifp, sc->atse_eth_addr);
 
 	/* Tell the upper layer(s) about vlan mtu support. */
-	ifp->if_data.ifi_hdrlen = sizeof(struct ether_vlan_header);
+	ifp->if_hdrlen = sizeof(struct ether_vlan_header);
 	ifp->if_capabilities |= IFCAP_VLAN_MTU;
 	ifp->if_capenable = ifp->if_capabilities;
 #ifdef DEVICE_POLLING

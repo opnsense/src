@@ -24,7 +24,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd January 28, 2015
+.Dd November 20, 2015
 .Dt RELEASE 7
 .Os
 .Sh NAME
@@ -256,6 +256,15 @@ Set to a non-empty value to compress the release images with
 The original
 .Pq uncompressed
 images are not removed.
+.It Va XZ_THREADS Pq Vt int
+Set to the number of threads
+.Xr xz 1
+should use when compressing images.
+By default,
+.Va XZ_THREADS
+is set to
+.Va 0 ,
+which uses all available cores on the system.
 .It Va VCSCMD
 The command run to obtain the source trees.
 Defaults to
@@ -360,7 +369,7 @@ variables are relevant only to virtual machine disk image builds:
 Set to a non-null value to build virtual machine disk images as part
 of the release build.
 .Va WITH_VMIMAGES
-may also be specified as an envirionment variable passed to
+may also be specified as an environment variable passed to
 .Xr make 1 .
 .Pp
 The option requires
@@ -426,7 +435,6 @@ include support for each hosting provider by default.
 The following
 .Xr make 1
 environment variables are supported:
-.Pp
 .Bl -tag -width Ev
 .It Va CLOUDWARE
 Set to a list of one or more cloud hosting providers, enclosed in quotes.
@@ -520,7 +528,7 @@ The
 target requires the
 .Va WITH_VMIMAGES
 .Xr make 1
-envirionment variable to be set to a non-null value.
+environment variable to be set to a non-null value.
 .It Cm vm-cloudware
 Builds
 .Fx
@@ -712,10 +720,6 @@ variable in
 .%U http://www.FreeBSD.org/doc/en_US.ISO8859-1/articles/releng/
 .Re
 .Rs
-.%T "FreeBSD Release Engineering of Third Party Packages"
-.%U http://www.FreeBSD.org/doc/en_US.ISO8859-1/articles/releng-packages/
-.Re
-.Rs
 .%T "FreeBSD Developers' Handbook"
 .%U http://www.FreeBSD.org/doc/en_US.ISO8859-1/books/developers-handbook/
 .Re
@@ -770,10 +774,10 @@ and
 .An Poul-Henning Kamp .
 .Pp
 This manual page was originally written by
-.An Murray Stokely Aq murray@FreeBSD.org .
+.An Murray Stokely Aq Mt murray@FreeBSD.org .
 .Pp
 It was updated by
-.An Nathan Whitehorn Aq nwhitehorn@FreeBSD.org
+.An Nathan Whitehorn Aq Mt nwhitehorn@FreeBSD.org
 to include the
 .Fa generate-release.sh
 script used for the
@@ -781,7 +785,7 @@ script used for the
 release cycle.
 .Pp
 It was later updated by
-.An Glen Barber Aq gjb@FreeBSD.org
+.An Glen Barber Aq Mt gjb@FreeBSD.org
 to include the
 .Fa release.sh
 script used for the

@@ -11,10 +11,10 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef CODEGEN_INTRINSIC_H
-#define CODEGEN_INTRINSIC_H
+#ifndef LLVM_UTILS_TABLEGEN_CODEGENINTRINSICS_H
+#define LLVM_UTILS_TABLEGEN_CODEGENINTRINSICS_H
 
-#include "llvm/CodeGen/ValueTypes.h"
+#include "llvm/CodeGen/MachineValueType.h"
 #include <string>
 #include <vector>
 
@@ -28,6 +28,7 @@ namespace llvm {
     std::string Name;          // The name of the LLVM function "llvm.bswap.i32"
     std::string EnumName;      // The name of the enum "bswap_i32"
     std::string GCCBuiltinName;// Name of the corresponding GCC builtin, or "".
+    std::string MSBuiltinName; // Name of the corresponding MS builtin, or "".
     std::string TargetPrefix;  // Target prefix, e.g. "ppc" for t-s intrinsics.
 
     /// IntrinsicSignature - This structure holds the return values and
@@ -59,9 +60,10 @@ namespace llvm {
     IntrinsicSignature IS;
 
     // Memory mod/ref behavior of this intrinsic.
-    enum {
+    enum ModRefKind {
       NoMem, ReadArgMem, ReadMem, ReadWriteArgMem, ReadWriteMem
-    } ModRef;
+    };
+    ModRefKind ModRef;
 
     /// This is set to true if the intrinsic is overloaded by its argument
     /// types.
@@ -73,8 +75,14 @@ namespace llvm {
     /// canThrow - True if the intrinsic can throw.
     bool canThrow;
 
+    /// isNoDuplicate - True if the intrinsic is marked as noduplicate.
+    bool isNoDuplicate;
+
     /// isNoReturn - True if the intrinsic is no-return.
     bool isNoReturn;
+
+    /// isConvergent - True if the intrinsic is marked as convergent.
+    bool isConvergent;
 
     enum ArgAttribute {
       NoCapture,

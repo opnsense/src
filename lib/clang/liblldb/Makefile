@@ -7,10 +7,12 @@ LIB=	lldb
 CFLAGS+=-I${.CURDIR}/../../../contrib/llvm/tools/lldb/source/Plugins/Process/POSIX
 
 SRCDIR=	tools/lldb/source
-SRCS=	lldb.cpp \
-	lldb-log.cpp
+SRCS=	lldb.cpp
 
-TGHDRS=	DiagnosticCommonKinds \
+
+TGHDRS=	AttrList \
+	Attrs \
+	DiagnosticCommonKinds \
 	DeclNodes \
 	StmtNodes \
 	CommentCommandList

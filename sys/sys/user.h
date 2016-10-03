@@ -84,7 +84,7 @@
  * it in two places: function fill_kinfo_proc in sys/kern/kern_proc.c and
  * function kvm_proclist in lib/libkvm/kvm_proc.c .
  */
-#define	KI_NSPARE_INT	7
+#define	KI_NSPARE_INT	4
 #define	KI_NSPARE_LONG	12
 #define	KI_NSPARE_PTR	6
 
@@ -171,8 +171,8 @@ struct kinfo_proc {
 	signed char ki_nice;		/* Process "nice" value */
 	char	ki_lock;		/* Process lock (prevent swap) count */
 	char	ki_rqindex;		/* Run queue index */
-	u_char	ki_oncpu;		/* Which cpu we are on */
-	u_char	ki_lastcpu;		/* Last cpu we were on */
+	u_char	ki_oncpu_old;		/* Which cpu we are on (legacy) */
+	u_char	ki_lastcpu_old;		/* Last cpu we were on (legacy) */
 	char	ki_tdname[TDNAMLEN+1];	/* thread name */
 	char	ki_wmesg[WMESGLEN+1];	/* wchan message */
 	char	ki_login[LOGNAMELEN+1];	/* setlogin name */
@@ -187,6 +187,9 @@ struct kinfo_proc {
 	 */
 	char	ki_sparestrings[50];	/* spare string space */
 	int	ki_spareints[KI_NSPARE_INT];	/* spare room for growth */
+	int	ki_oncpu;		/* Which cpu we are on */
+	int	ki_lastcpu;		/* Last cpu we were on */
+	int	ki_tracer;		/* Pid of tracing process */
 	int	ki_flag2;		/* P2_* flags */
 	int	ki_fibnum;		/* Default FIB number */
 	u_int	ki_cr_flags;		/* Credential flags */
@@ -271,7 +274,7 @@ struct user {
 #define	KF_FD_TYPE_CWD	-1	/* Current working directory */
 #define	KF_FD_TYPE_ROOT	-2	/* Root directory */
 #define	KF_FD_TYPE_JAIL	-3	/* Jail directory */
-#define	KF_FD_TYPE_TRACE	-4	/* ptrace vnode */
+#define	KF_FD_TYPE_TRACE	-4	/* Ktrace vnode */
 #define	KF_FD_TYPE_TEXT	-5	/* Text vnode */
 #define	KF_FD_TYPE_CTTY	-6	/* Controlling terminal */
 
@@ -293,7 +296,7 @@ struct user {
 
 /*
  * Old format.  Has variable hidden padding due to alignment.
- * This is a compatability hack for pre-build 7.1 packages.
+ * This is a compatibility hack for pre-build 7.1 packages.
  */
 #if defined(__amd64__)
 #define	KINFO_OFILE_SIZE	1328
@@ -554,6 +557,7 @@ struct sbuf;
 
 int	kern_proc_filedesc_out(struct proc *p, struct sbuf *sb, ssize_t maxlen,
 	int flags);
+int	kern_proc_cwd_out(struct proc *p, struct sbuf *sb, ssize_t maxlen);
 int	kern_proc_out(struct proc *p, struct sbuf *sb, int flags);
 int	kern_proc_vmmap_out(struct proc *p, struct sbuf *sb, ssize_t maxlen,
 	int flags);

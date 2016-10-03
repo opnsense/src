@@ -68,9 +68,9 @@ The default location is
 .Pa /var/run/iscsid.pid .
 .It Fl d
 Debug mode.
-The server sends verbose debug output to standard error, and does not
+The daemon sends verbose debug output to standard error, and does not
 put itself in the background.
-The server will also not fork and will exit after processing one connection.
+The daemon will also not fork and will exit after processing one connection.
 This option is only intended for debugging the initiator.
 .It Fl l Ar loglevel
 Specifies debug level.
@@ -111,5 +111,5 @@ command appeared in
 The
 .Nm
 utility was developed by
-.An Edward Tomasz Napierala Aq trasz@FreeBSD.org
+.An Edward Tomasz Napierala Aq Mt trasz@FreeBSD.org
 under sponsorship from the FreeBSD Foundation.

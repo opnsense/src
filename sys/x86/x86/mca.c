@@ -52,7 +52,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/systm.h>
 #include <sys/taskqueue.h>
 #include <machine/intr_machdep.h>
-#include <machine/apicvar.h>
+#include <x86/apicvar.h>
 #include <machine/cpu.h>
 #include <machine/cputypes.h>
 #include <x86/mca.h>
@@ -92,22 +92,20 @@ static SYSCTL_NODE(_hw, OID_AUTO, mca, CTLFLAG_RD, NULL,
     "Machine Check Architecture");
 
 static int mca_enabled = 1;
-TUNABLE_INT("hw.mca.enabled", &mca_enabled);
 SYSCTL_INT(_hw_mca, OID_AUTO, enabled, CTLFLAG_RDTUN, &mca_enabled, 0,
     "Administrative toggle for machine check support");
 
 static int amd10h_L1TP = 1;
-TUNABLE_INT("hw.mca.amd10h_L1TP", &amd10h_L1TP);
 SYSCTL_INT(_hw_mca, OID_AUTO, amd10h_L1TP, CTLFLAG_RDTUN, &amd10h_L1TP, 0,
     "Administrative toggle for logging of level one TLB parity (L1TP) errors");
 
 static int intel6h_HSD131;
-TUNABLE_INT("hw.mca.intel6h_hsd131", &intel6h_HSD131);
 SYSCTL_INT(_hw_mca, OID_AUTO, intel6h_HSD131, CTLFLAG_RDTUN, &intel6h_HSD131, 0,
     "Administrative toggle for logging of spurious corrected errors");
 
 int workaround_erratum383;
-SYSCTL_INT(_hw_mca, OID_AUTO, erratum383, CTLFLAG_RD, &workaround_erratum383, 0,
+SYSCTL_INT(_hw_mca, OID_AUTO, erratum383, CTLFLAG_RDTUN,
+    &workaround_erratum383, 0,
     "Is the workaround for Erratum 383 on AMD Family 10h processors enabled?");
 
 static STAILQ_HEAD(, mca_internal) mca_freelist;
@@ -511,7 +509,7 @@ mca_record_entry(enum scan_mode mode, const struct mca_record *record)
 	mca_count++;
 	mtx_unlock_spin(&mca_lock);
 	if (mode == CMCI)
-		taskqueue_enqueue_fast(mca_tq, &mca_refill_task);
+		taskqueue_enqueue(mca_tq, &mca_refill_task);
 }
 
 #ifdef DEV_APIC
@@ -689,7 +687,7 @@ static void
 mca_periodic_scan(void *arg)
 {
 
-	taskqueue_enqueue_fast(mca_tq, &mca_scan_task);
+	taskqueue_enqueue(mca_tq, &mca_scan_task);
 	callout_reset(&mca_timer, mca_ticks * hz, mca_periodic_scan, NULL);
 }
 
@@ -703,7 +701,7 @@ sysctl_mca_scan(SYSCTL_HANDLER_ARGS)
 	if (error)
 		return (error);
 	if (i)
-		taskqueue_enqueue_fast(mca_tq, &mca_scan_task);
+		taskqueue_enqueue(mca_tq, &mca_scan_task);
 	return (0);
 }
 
@@ -728,7 +726,11 @@ mca_startup(void *dummy)
 
 	callout_reset(&mca_timer, mca_ticks * hz, mca_periodic_scan, NULL);
 }
+#ifdef EARLY_AP_STARTUP
+SYSINIT(mca_startup, SI_SUB_KICK_SCHEDULER, SI_ORDER_ANY, mca_startup, NULL);
+#else
 SYSINIT(mca_startup, SI_SUB_SMP, SI_ORDER_ANY, mca_startup, NULL);
+#endif
 
 #ifdef DEV_APIC
 static void
@@ -765,7 +767,7 @@ mca_setup(uint64_t mcg_cap)
 	mtx_init(&mca_lock, "mca", NULL, MTX_SPIN);
 	STAILQ_INIT(&mca_records);
 	TASK_INIT(&mca_scan_task, 0, mca_scan_cpus, NULL);
-	callout_init(&mca_timer, CALLOUT_MPSAFE);
+	callout_init(&mca_timer, 1);
 	STAILQ_INIT(&mca_freelist);
 	TASK_INIT(&mca_refill_task, 0, mca_refill, NULL);
 	mca_fill_freelist();

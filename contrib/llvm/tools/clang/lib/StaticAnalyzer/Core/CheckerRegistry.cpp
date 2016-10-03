@@ -8,7 +8,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/StaticAnalyzer/Core/CheckerRegistry.h"
+#include "clang/Basic/Diagnostic.h"
+#include "clang/Frontend/FrontendDiagnostic.h"
 #include "clang/StaticAnalyzer/Core/CheckerOptInfo.h"
+#include "clang/StaticAnalyzer/Core/AnalyzerOptions.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -45,7 +48,7 @@ static void collectCheckers(const CheckerRegistry::CheckerInfoList &checkers,
                             const llvm::StringMap<size_t> &packageSizes,
                             CheckerOptInfo &opt, CheckerInfoSet &collected) {
   // Use a binary search to find the possible start of the package.
-  CheckerRegistry::CheckerInfo packageInfo(NULL, opt.getName(), "");
+  CheckerRegistry::CheckerInfo packageInfo(nullptr, opt.getName(), "");
   CheckerRegistry::CheckerInfoList::const_iterator e = checkers.end();
   CheckerRegistry::CheckerInfoList::const_iterator i =
     std::lower_bound(checkers.begin(), e, packageInfo, checkerNameLT);
@@ -84,14 +87,14 @@ void CheckerRegistry::addChecker(InitializationFunction fn, StringRef name,
 
   // Record the presence of the checker in its packages.
   StringRef packageName, leafName;
-  llvm::tie(packageName, leafName) = name.rsplit(PackageSeparator);
+  std::tie(packageName, leafName) = name.rsplit(PackageSeparator);
   while (!leafName.empty()) {
     Packages[packageName] += 1;
-    llvm::tie(packageName, leafName) = packageName.rsplit(PackageSeparator);
+    std::tie(packageName, leafName) = packageName.rsplit(PackageSeparator);
   }
 }
 
-void CheckerRegistry::initializeManager(CheckerManager &checkerMgr, 
+void CheckerRegistry::initializeManager(CheckerManager &checkerMgr,
                                   SmallVectorImpl<CheckerOptInfo> &opts) const {
   // Sort checkers for efficient collection.
   std::sort(Checkers.begin(), Checkers.end(), checkerNameLT);
@@ -106,7 +109,30 @@ void CheckerRegistry::initializeManager(CheckerManager &checkerMgr,
   // Initialize the CheckerManager with all enabled checkers.
   for (CheckerInfoSet::iterator
          i = enabledCheckers.begin(), e = enabledCheckers.end(); i != e; ++i) {
+    checkerMgr.setCurrentCheckName(CheckName((*i)->FullName));
     (*i)->Initialize(checkerMgr);
+  }
+}
+
+void CheckerRegistry::validateCheckerOptions(const AnalyzerOptions &opts,
+                                             DiagnosticsEngine &diags) const {
+  for (auto &config : opts.Config) {
+    size_t pos = config.getKey().find(':');
+    if (pos == StringRef::npos)
+      continue;
+
+    bool hasChecker = false;
+    StringRef checkerName = config.getKey().substr(0, pos);
+    for (auto &checker : Checkers) {
+      if (checker.FullName.startswith(checkerName) &&
+          (checker.FullName.size() == pos || checker.FullName[pos] == '.')) {
+        hasChecker = true;
+        break;
+      }
+    }
+    if (!hasChecker) {
+      diags.Report(diag::err_unknown_analyzer_checker) << checkerName;
+    }
   }
 }
 

@@ -7,13 +7,13 @@
 GROWFS= ${.CURDIR}/../growfs
 .PATH: ${GROWFS}
 
+PACKAGE=runtime
 PROG=	ffsinfo
 SRCS=	ffsinfo.c debug.c
 MAN=	ffsinfo.8
 
 WARNS?=	1
 CFLAGS+=-DFS_DEBUG -I${GROWFS}
-DPADD=	${LIBUFS}
-LDADD=	-lufs
+LIBADD=	ufs
 
 .include <bsd.prog.mk>

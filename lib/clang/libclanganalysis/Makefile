@@ -1,6 +1,6 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 LIB=	clanganalysis
 
@@ -12,6 +12,7 @@ SRCS=	AnalysisDeclContext.cpp \
 	CFGStmtMap.cpp \
 	CallGraph.cpp \
 	CocoaConventions.cpp \
+	CodeInjector.cpp \
 	Consumed.cpp \
 	Dominators.cpp \
 	FormatString.cpp \
@@ -24,9 +25,16 @@ SRCS=	AnalysisDeclContext.cpp \
 	ReachableCode.cpp \
 	ScanfFormatString.cpp \
 	ThreadSafety.cpp \
+	ThreadSafetyCommon.cpp \
+	ThreadSafetyTIL.cpp \
 	UninitializedValues.cpp
 
+.if ${MK_CLANG_EXTRAS} != "no"
+SRCS+=	ThreadSafetyLogical.cpp
+.endif
+
 TGHDRS=	AttrList \
+	AttrVisitor \
 	Attrs \
 	CommentCommandList \
 	CommentNodes \

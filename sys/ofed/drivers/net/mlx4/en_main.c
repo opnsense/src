@@ -31,6 +31,8 @@
  *
  */
 
+#define	LINUXKPI_PARAM_PREFIX mlx4_
+
 #include <linux/module.h>
 #include <linux/delay.h>
 #include <linux/netdevice.h>
@@ -327,8 +329,6 @@ static void __exit mlx4_en_cleanup(void)
 module_init(mlx4_en_init);
 module_exit(mlx4_en_cleanup);
 
-#undef MODULE_VERSION
-#include <sys/module.h>
 static int
 mlxen_evhand(module_t mod, int event, void *arg)
 {
@@ -340,3 +340,4 @@ static moduledata_t mlxen_mod = {
 };
 DECLARE_MODULE(mlxen, mlxen_mod, SI_SUB_OFED_PREINIT, SI_ORDER_ANY);
 MODULE_DEPEND(mlxen, mlx4, 1, 1, 1);
+MODULE_DEPEND(mlxen, linuxkpi, 1, 1, 1);

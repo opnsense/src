@@ -15,9 +15,8 @@
 #include "lldb/lldb-private.h"
 #include "lldb/Core/ModuleChild.h"
 #include "lldb/Core/PluginInterface.h"
-#include "lldb/Symbol/ClangNamespaceDecl.h"
 #include "lldb/Symbol/TypeList.h"
-
+#include "lldb/Symbol/TypeMap.h"
 
 namespace lldb_private {
 
@@ -45,8 +44,7 @@ public:
     //------------------------------------------------------------------
     SymbolVendor(const lldb::ModuleSP &module_sp);
 
-    virtual
-    ~SymbolVendor();
+    ~SymbolVendor() override;
 
     void
     AddSymbolFileRepresentation(const lldb::ObjectFileSP &objfile_sp);
@@ -64,8 +62,15 @@ public:
     ParseCompileUnitLineTable (const SymbolContext& sc);
 
     virtual bool
+    ParseCompileUnitDebugMacros (const SymbolContext& sc);
+
+    virtual bool
     ParseCompileUnitSupportFiles (const SymbolContext& sc,
                                   FileSpecList& support_files);
+    
+    virtual bool
+    ParseImportedModules (const SymbolContext &sc,
+                          std::vector<ConstString> &imported_modules);
 
     virtual size_t
     ParseFunctionBlocks (const SymbolContext& sc);
@@ -93,7 +98,7 @@ public:
 
     virtual size_t
     FindGlobalVariables (const ConstString &name,
-                         const ClangNamespaceDecl *namespace_decl,
+                         const CompilerDeclContext *parent_decl_ctx,
                          bool append,
                          size_t max_matches,
                          VariableList& variables);
@@ -106,7 +111,7 @@ public:
 
     virtual size_t
     FindFunctions (const ConstString &name,
-                   const ClangNamespaceDecl *namespace_decl,
+                   const CompilerDeclContext *parent_decl_ctx,
                    uint32_t name_type_mask,
                    bool include_inlines,
                    bool append,
@@ -121,15 +126,18 @@ public:
     virtual size_t
     FindTypes (const SymbolContext& sc, 
                const ConstString &name,
-               const ClangNamespaceDecl *namespace_decl, 
+               const CompilerDeclContext *parent_decl_ctx, 
                bool append, 
                size_t max_matches,
-               TypeList& types);
+               TypeMap& types);
 
-    virtual ClangNamespaceDecl
+    virtual size_t
+    FindTypes (const std::vector<CompilerContext> &context, bool append, TypeMap& types);
+
+    virtual CompilerDeclContext
     FindNamespace (const SymbolContext& sc, 
                    const ConstString &name,
-                   const ClangNamespaceDecl *parent_namespace_decl);
+                   const CompilerDeclContext *parent_decl_ctx);
     
     virtual size_t
     GetNumCompileUnits();
@@ -164,6 +172,9 @@ public:
         return m_sym_file_ap.get();
     }
 
+    FileSpec
+    GetMainFileSpec() const;
+
     // Get module unified section list symbol table.
     virtual Symtab *
     GetSymtab ();
@@ -173,13 +184,20 @@ public:
     ClearSymtab ();
 
     //------------------------------------------------------------------
+    /// Notify the SymbolVendor that the file addresses in the Sections
+    /// for this module have been changed.
+    //------------------------------------------------------------------
+    virtual void
+    SectionFileAddressesChanged ();
+
+    //------------------------------------------------------------------
     // PluginInterface protocol
     //------------------------------------------------------------------
-    virtual ConstString
-    GetPluginName();
+    ConstString
+    GetPluginName() override;
 
-    virtual uint32_t
-    GetPluginVersion();
+    uint32_t
+    GetPluginVersion() override;
 
 protected:
     //------------------------------------------------------------------
@@ -201,7 +219,6 @@ private:
     DISALLOW_COPY_AND_ASSIGN (SymbolVendor);
 };
 
-
 } // namespace lldb_private
 
-#endif  // liblldb_SymbolVendor_h_
+#endif // liblldb_SymbolVendor_h_

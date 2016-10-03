@@ -75,7 +75,6 @@ SX_SYSINIT(vfsconf, &vfsconf_sx, "vfsconf");
  * changing for file systems that use vfc_typenum in their fsid.
  */
 static int	vfs_typenumhash = 1;
-TUNABLE_INT("vfs.typenumhash", &vfs_typenumhash);
 SYSCTL_INT(_vfs, OID_AUTO, typenumhash, CTLFLAG_RDTUN, &vfs_typenumhash, 0,
     "Set vfc_typenum using a hash calculation on vfc_name, so that it does not"
     "change when file systems are loaded in a different order.");
@@ -292,8 +291,8 @@ vfs_register(struct vfsconf *vfc)
 	 * preserved by re-registering the oid after modifying its
 	 * number.
 	 */
-	sysctl_lock();
-	SLIST_FOREACH(oidp, &sysctl__vfs_children, oid_link) {
+	sysctl_wlock();
+	SLIST_FOREACH(oidp, SYSCTL_CHILDREN(&sysctl___vfs), oid_link) {
 		if (strcmp(oidp->oid_name, vfc->vfc_name) == 0) {
 			sysctl_unregister_oid(oidp);
 			oidp->oid_number = vfc->vfc_typenum;
@@ -301,7 +300,7 @@ vfs_register(struct vfsconf *vfc)
 			break;
 		}
 	}
-	sysctl_unlock();
+	sysctl_wunlock();
 
 	return (0);
 }

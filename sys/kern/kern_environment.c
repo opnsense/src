@@ -30,7 +30,7 @@
  * dynamic array of strings later when the VM subsystem is up.
  *
  * We make these available through the kenv(2) syscall for userland
- * and through getenv()/freeenv() setenv() unsetenv() testenv() for
+ * and through kern_getenv()/freeenv() kern_setenv() kern_unsetenv() testenv() for
  * the kernel.
  */
 
@@ -156,7 +156,7 @@ sys_kenv(td, uap)
 		if (error)
 			goto done;
 #endif
-		value = getenv(name);
+		value = kern_getenv(name);
 		if (value == NULL) {
 			error = ENOENT;
 			goto done;
@@ -188,7 +188,7 @@ sys_kenv(td, uap)
 		error = mac_kenv_check_set(td->td_ucred, name, value);
 		if (error == 0)
 #endif
-			setenv(name, value);
+			kern_setenv(name, value);
 		free(value, M_TEMP);
 		break;
 	case KENV_UNSET:
@@ -197,7 +197,7 @@ sys_kenv(td, uap)
 		if (error)
 			goto done;
 #endif
-		error = unsetenv(name);
+		error = kern_unsetenv(name);
 		if (error)
 			error = ENOENT;
 		break;
@@ -216,6 +216,9 @@ done:
  * This is called very early in MD startup, either to provide a copy of the
  * environment obtained from a boot loader, or to provide an empty buffer into
  * which MD code can store an initial environment using kern_setenv() calls.
+ *
+ * When a copy of an initial environment is passed in, we start by scanning that
+ * env for overrides to the compiled-in envmode and hintmode variables.
  *
  * If the global envmode is 1, the environment is initialized from the global
  * static_env[], regardless of the arguments passed.  This implements the env
@@ -238,6 +241,14 @@ done:
 void
 init_static_kenv(char *buf, size_t len)
 {
+	char *cp;
+	
+	for (cp = buf; cp != NULL && cp[0] != '\0'; cp += strlen(cp) + 1) {
+		if (strcmp(cp, "static_env.disabled=1") == 0)
+			envmode = 0;
+		if (strcmp(cp, "static_hints.disabled=1") == 0)
+			hintmode = 0;
+	}
 
 	if (envmode == 1) {
 		kern_envp = static_env;
@@ -256,7 +267,7 @@ init_static_kenv(char *buf, size_t len)
 static void
 init_dynamic_kenv(void *data __unused)
 {
-	char *cp;
+	char *cp, *cpnext;
 	size_t len;
 	int i;
 
@@ -264,7 +275,8 @@ init_dynamic_kenv(void *data __unused)
 		M_WAITOK | M_ZERO);
 	i = 0;
 	if (kern_envp && *kern_envp != '\0') {
-		for (cp = kern_envp; cp != NULL; cp = kernenv_next(cp)) {
+		for (cp = kern_envp; cp != NULL; cp = cpnext) {
+			cpnext = kernenv_next(cp);
 			len = strlen(cp) + 1;
 			if (len > KENV_MNAMELEN + 1 + KENV_MVALLEN + 1) {
 				printf(
@@ -275,6 +287,7 @@ init_dynamic_kenv(void *data __unused)
 			if (i < KENV_SIZE) {
 				kenvp[i] = malloc(len, M_KENV, M_WAITOK);
 				strcpy(kenvp[i++], cp);
+				memset(cp, 0, strlen(cp));
 			} else
 				printf(
 				"WARNING: too many kenv strings, ignoring %s\n",
@@ -292,8 +305,10 @@ void
 freeenv(char *env)
 {
 
-	if (dynamic_kenv)
+	if (dynamic_kenv && env != NULL) {
+		memset(env, 0, strlen(env));
 		free(env, M_KENV);
+	}
 }
 
 /*
@@ -344,7 +359,7 @@ _getenv_static(const char *name)
  * after use.
  */
 char *
-getenv(const char *name)
+kern_getenv(const char *name)
 {
 	char buf[KENV_MNAMELEN + 1 + KENV_MVALLEN + 1];
 	char *ret;
@@ -405,7 +420,7 @@ setenv_static(const char *name, const char *value)
  * Set an environment variable by name.
  */
 int
-setenv(const char *name, const char *value)
+kern_setenv(const char *name, const char *value)
 {
 	char *buf, *cp, *oldenv;
 	int namelen, vallen, i;
@@ -454,7 +469,7 @@ setenv(const char *name, const char *value)
  * Unset an environment variable string.
  */
 int
-unsetenv(const char *name)
+kern_unsetenv(const char *name)
 {
 	char *cp, *oldenv;
 	int i, j;
@@ -469,6 +484,7 @@ unsetenv(const char *name)
 			kenvp[i++] = kenvp[j];
 		kenvp[i] = NULL;
 		mtx_unlock(&kenv_lock);
+		memset(oldenv, 0, strlen(oldenv));
 		free(oldenv, M_KENV);
 		return (0);
 	}
@@ -525,6 +541,36 @@ getenv_uint(const char *name, unsigned int *data)
 	rval = getenv_quad(name, &tmp);
 	if (rval)
 		*data = (unsigned int) tmp;
+	return (rval);
+}
+
+/*
+ * Return an int64_t value from an environment variable.
+ */
+int
+getenv_int64(const char *name, int64_t *data)
+{
+	quad_t tmp;
+	int64_t rval;
+
+	rval = getenv_quad(name, &tmp);
+	if (rval)
+		*data = (int64_t) tmp;
+	return (rval);
+}
+
+/*
+ * Return an uint64_t value from an environment variable.
+ */
+int
+getenv_uint64(const char *name, uint64_t *data)
+{
+	quad_t tmp;
+	uint64_t rval;
+
+	rval = getenv_quad(name, &tmp);
+	if (rval)
+		*data = (uint64_t) tmp;
 	return (rval);
 }
 
@@ -631,6 +677,22 @@ tunable_ulong_init(void *data)
 	struct tunable_ulong *d = (struct tunable_ulong *)data;
 
 	TUNABLE_ULONG_FETCH(d->path, d->var);
+}
+
+void
+tunable_int64_init(void *data)
+{
+	struct tunable_int64 *d = (struct tunable_int64 *)data;
+
+	TUNABLE_INT64_FETCH(d->path, d->var);
+}
+
+void
+tunable_uint64_init(void *data)
+{
+	struct tunable_uint64 *d = (struct tunable_uint64 *)data;
+
+	TUNABLE_UINT64_FETCH(d->path, d->var);
 }
 
 void

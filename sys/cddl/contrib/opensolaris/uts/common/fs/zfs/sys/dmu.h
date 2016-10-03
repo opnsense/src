@@ -28,6 +28,7 @@
  * Copyright 2014 HybridCluster. All rights reserved.
  * Copyright (c) 2014 Spectra Logic Corporation, All rights reserved.
  * Copyright 2013 Saso Kiselkov. All rights reserved.
+ * Copyright (c) 2014 Integros [integros.com]
  */
 
 /* Portions Copyright 2010 Robert Milkowski */
@@ -322,6 +323,7 @@ typedef struct dmu_buf {
 #define	DMU_POOL_BPTREE_OBJ		"bptree_obj"
 #define	DMU_POOL_EMPTY_BPOBJ		"empty_bpobj"
 #define	DMU_POOL_CHECKSUM_SALT		"org.illumos:checksum_salt"
+#define	DMU_POOL_VDEV_ZAP_MAP		"com.delphix:vdev_zap_map"
 
 /*
  * Allocate an object from this objset.  The range of object numbers
@@ -561,7 +563,7 @@ extern void
 dmu_buf_init_user(dmu_buf_user_t *dbu, dmu_buf_evict_func_t *evict_func,
     dmu_buf_t **clear_on_evict_dbufp);
 #else /* __lint */
-static inline void
+inline void
 dmu_buf_init_user(dmu_buf_user_t *dbu, dmu_buf_evict_func_t *evict_func,
     dmu_buf_t **clear_on_evict_dbufp)
 {
@@ -724,7 +726,7 @@ int dmu_write_uio(objset_t *os, uint64_t object, struct uio *uio, uint64_t size,
 int dmu_write_uio_dbuf(dmu_buf_t *zdb, struct uio *uio, uint64_t size,
     dmu_tx_t *tx);
 #ifdef _KERNEL
-#ifdef sun
+#ifdef illumos
 int dmu_write_pages(objset_t *os, uint64_t object, uint64_t offset,
     uint64_t size, struct page *pp, dmu_tx_t *tx);
 #else

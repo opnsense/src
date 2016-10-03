@@ -1,12 +1,12 @@
 #	$NetBSD: Makefile,v 1.1 2002/03/01 11:21:58 ad Exp $
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
+PACKAGE=runtime
 PROG=	pkill
 
-DPADD=	${LIBKVM} ${LIBJAIL}
-LDADD=	-lkvm -ljail
+LIBADD=	kvm jail
 
 LINKS=	${BINDIR}/pkill ${BINDIR}/pgrep
 MLINKS=	pkill.1 pgrep.1

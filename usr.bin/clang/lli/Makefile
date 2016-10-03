@@ -5,41 +5,45 @@
 PROG_CXX=lli
 
 SRCDIR=	tools/lli
-SRCS=	lli.cpp \
-	RemoteMemoryManager.cpp \
-	RemoteTarget.cpp \
-	RemoteTargetExternal.cpp
+SRCS=	OrcLazyJIT.cpp \
+	lli.cpp
+
+TGHDRS=	Attributes \
+	Intrinsics
 
 LIBDEPS=llvmx86disassembler \
 	llvmx86asmparser \
 	llvmirreader \
 	llvmasmparser \
-	llvmbitreader \
 	llvmx86codegen \
 	llvmx86desc \
 	llvmx86info \
-	llvmx86instprinter \
+	llvmmcdisassembler \
+	llvmx86asmprinter \
 	llvmx86utils \
 	llvmselectiondag \
 	llvmasmprinter \
-	llvmmcparser \
 	llvminterpreter \
-	llvminstrumentation \
-	llvmmcjit \
-	llvmjit \
 	llvmcodegen \
-	llvmobjcarcopts \
 	llvmscalaropts \
 	llvminstcombine \
+	llvmbitwriter \
+	llvminstrumentation \
+	llvmprofiledata \
+	llvmorcjit \
 	llvmtransformutils \
-	llvmipa \
-	llvmanalysis \
-	llvmruntimedyld \
+	llvmmcjit \
 	llvmexecutionengine \
 	llvmtarget \
-	llvmmc \
+	llvmanalysis \
+	llvmruntimedyld \
 	llvmobject \
+	llvmmcparser \
+	llvmbitreader \
+	llvmmc \
 	llvmcore \
 	llvmsupport
+
+LIBADD+=	z
 
 .include "../clang.prog.mk"

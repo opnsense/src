@@ -33,6 +33,7 @@ __FBSDID("$FreeBSD$");
 #include "opt_platform.h"
 
 #include <sys/param.h>
+#include <sys/systm.h>
 #include <sys/bus.h>
 #include <sys/kernel.h>
 #include <sys/module.h>
@@ -67,7 +68,7 @@ int
 uart_fdt_get_clock(phandle_t node, pcell_t *cell)
 {
 
-	/* clock-frequency is a FreeBSD-only extention. */
+	/* clock-frequency is a FreeBSD-only extension. */
 	if ((OF_getencprop(node, "clock-frequency", cell,
 	    sizeof(*cell))) <= 0) {
 		/* Try to retrieve parent 'bus-frequency' */
@@ -85,7 +86,7 @@ uart_fdt_get_shift(phandle_t node, pcell_t *cell)
 {
 
 	if ((OF_getencprop(node, "reg-shift", cell, sizeof(*cell))) <= 0)
-		*cell = 0;
+		return (-1);
 	return (0);
 }
 
@@ -124,7 +125,8 @@ uart_fdt_probe(device_t dev)
 
 	if ((err = uart_fdt_get_clock(node, &clock)) != 0)
 		return (err);
-	uart_fdt_get_shift(node, &shift);
+	if (uart_fdt_get_shift(node, &shift) != 0)
+		shift = uart_getregshift(sc->sc_class);
 
 	return (uart_bus_probe(dev, (int)shift, (int)clock, 0, 0));
 }

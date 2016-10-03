@@ -26,26 +26,21 @@ namespace {
                                 Is64Bit ?  ELF::EM_SPARCV9 : ELF::EM_SPARC,
                                 /*HasRelocationAddend*/ true) {}
 
-    virtual ~SparcELFObjectWriter() {}
-  protected:
-    virtual unsigned GetRelocType(const MCValue &Target, const MCFixup &Fixup,
-                                  bool IsPCRel, bool IsRelocWithSymbol,
-                                  int64_t Addend) const;
+    ~SparcELFObjectWriter() override {}
 
-    virtual const MCSymbol *ExplicitRelSym(const MCAssembler &Asm,
-                                           const MCValue &Target,
-                                           const MCFragment &F,
-                                           const MCFixup &Fixup,
-                                           bool IsPCRel) const;
+  protected:
+    unsigned GetRelocType(const MCValue &Target, const MCFixup &Fixup,
+                          bool IsPCRel) const override;
+
+    bool needsRelocateWithSymbol(const MCSymbol &Sym,
+                                 unsigned Type) const override;
+
   };
 }
 
-
 unsigned SparcELFObjectWriter::GetRelocType(const MCValue &Target,
                                             const MCFixup &Fixup,
-                                            bool IsPCRel,
-                                            bool IsRelocWithSymbol,
-                                            int64_t Addend) const {
+                                            bool IsPCRel) const {
 
   if (const SparcMCExpr *SExpr = dyn_cast<SparcMCExpr>(Fixup.getValue())) {
     if (SExpr->getKind() == SparcMCExpr::VK_Sparc_R_DISP32)
@@ -114,26 +109,31 @@ unsigned SparcELFObjectWriter::GetRelocType(const MCValue &Target,
   return ELF::R_SPARC_NONE;
 }
 
-const MCSymbol *SparcELFObjectWriter::ExplicitRelSym(const MCAssembler &Asm,
-                                                     const MCValue &Target,
-                                                     const MCFragment &F,
-                                                     const MCFixup &Fixup,
-                                                     bool IsPCRel) const {
+bool SparcELFObjectWriter::needsRelocateWithSymbol(const MCSymbol &Sym,
+                                                 unsigned Type) const {
+  switch (Type) {
+    default:
+      return false;
 
-  if (!Target.getSymA())
-    return NULL;
-  switch((unsigned)Fixup.getKind()) {
-  default: break;
-  case Sparc::fixup_sparc_got22:
-  case Sparc::fixup_sparc_got10:
-    return &Target.getSymA()->getSymbol().AliasedSymbol();
+    // All relocations that use a GOT need a symbol, not an offset, as
+    // the offset of the symbol within the section is irrelevant to
+    // where the GOT entry is. Don't need to list all the TLS entries,
+    // as they're all marked as requiring a symbol anyways.
+    case ELF::R_SPARC_GOT10:
+    case ELF::R_SPARC_GOT13:
+    case ELF::R_SPARC_GOT22:
+    case ELF::R_SPARC_GOTDATA_HIX22:
+    case ELF::R_SPARC_GOTDATA_LOX10:
+    case ELF::R_SPARC_GOTDATA_OP_HIX22:
+    case ELF::R_SPARC_GOTDATA_OP_LOX10:
+      return true;
   }
-  return NULL;
 }
 
-MCObjectWriter *llvm::createSparcELFObjectWriter(raw_ostream &OS,
+MCObjectWriter *llvm::createSparcELFObjectWriter(raw_pwrite_stream &OS,
                                                  bool Is64Bit,
+                                                 bool IsLittleEndian,
                                                  uint8_t OSABI) {
   MCELFObjectTargetWriter *MOTW = new SparcELFObjectWriter(Is64Bit, OSABI);
-  return createELFObjectWriter(MOTW, OS,  /*IsLittleEndian=*/false);
+  return createELFObjectWriter(MOTW, OS, IsLittleEndian);
 }

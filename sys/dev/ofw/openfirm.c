@@ -394,6 +394,9 @@ OF_getencprop(phandle_t node, const char *propname, pcell_t *buf, size_t len)
 	KASSERT(len % 4 == 0, ("Need a multiple of 4 bytes"));
 
 	retval = OF_getprop(node, propname, buf, len);
+	if (retval <= 0)
+		return (retval);
+
 	for (i = 0; i < len/4; i++)
 		buf[i] = be32toh(buf[i]);
 
@@ -459,14 +462,26 @@ OF_getencprop_alloc(phandle_t package, const char *name, int elsz, void **buf)
 	int i;
 
 	retval = OF_getprop_alloc(package, name, elsz, buf);
-	if (retval == -1 || retval*elsz % 4 != 0)
+	if (retval == -1)
 		return (-1);
+ 	if (retval * elsz % 4 != 0) {
+		free(*buf, M_OFWPROP);
+		*buf = NULL;
+		return (-1);
+	}
 
 	cell = *buf;
-	for (i = 0; i < retval*elsz/4; i++)
+	for (i = 0; i < retval * elsz / 4; i++)
 		cell[i] = be32toh(cell[i]);
 
 	return (retval);
+}
+
+/* Free buffer allocated by OF_getencprop_alloc or OF_getprop_alloc */
+void OF_prop_free(void *buf)
+{
+
+	free(buf, M_OFWPROP);
 }
 
 /* Get the next property of a package. */
@@ -594,10 +609,9 @@ OF_xref_from_node(phandle_t node)
 		return (xi->xref);
 	}
 
-	if (OF_getencprop(node, "phandle", &xref, sizeof(xref)) ==
-	    -1 && OF_getencprop(node, "ibm,phandle", &xref,
-	    sizeof(xref)) == -1 && OF_getencprop(node,
-	    "linux,phandle", &xref, sizeof(xref)) == -1)
+	if (OF_getencprop(node, "phandle", &xref, sizeof(xref)) == -1 &&
+	    OF_getencprop(node, "ibm,phandle", &xref, sizeof(xref)) == -1 &&
+	    OF_getencprop(node, "linux,phandle", &xref, sizeof(xref)) == -1)
 		return (node);
 	return (xref);
 }

@@ -74,7 +74,7 @@ __FBSDID("$FreeBSD$");
 #include "tftp-options.h"
 #include "tftp.h"
 
-#define	MAXLINE		200
+#define	MAXLINE		(2 * MAXPATHLEN)
 #define	TIMEOUT		5		/* secs between rexmt's */
 
 typedef struct	sockaddr_storage peeraddr;
@@ -727,7 +727,7 @@ command(void)
 		if (vrbose) {
                         if ((bp = el_gets(el, &num)) == NULL || num == 0)
                                 exit(0);
-                        len = (num > MAXLINE) ? MAXLINE : num;
+                        len = MIN(MAXLINE, num);
                         memcpy(line, bp, len);
                         line[len] = '\0';
                         history(hist, &he, H_ENTER, bp);
@@ -753,7 +753,7 @@ command(void)
 			printf("?Ambiguous command\n");
 			continue;
 		}
-		if (c == 0) {
+		if (c == NULL) {
 			printf("?Invalid command\n");
 			continue;
 		}

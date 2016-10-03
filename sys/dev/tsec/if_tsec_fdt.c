@@ -35,7 +35,9 @@ __FBSDID("$FreeBSD$");
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/endian.h>
+#include <sys/lock.h>
 #include <sys/mbuf.h>
+#include <sys/mutex.h>
 #include <sys/kernel.h>
 #include <sys/module.h>
 #include <sys/socket.h>
@@ -48,9 +50,7 @@ __FBSDID("$FreeBSD$");
 
 #include <net/ethernet.h>
 #include <net/if.h>
-#include <net/if_dl.h>
 #include <net/if_media.h>
-#include <net/if_arp.h>
 
 #include <dev/fdt/fdt_common.h>
 #include <dev/mii/mii.h>
@@ -101,8 +101,6 @@ static driver_t tsec_fdt_driver = {
 };
 
 DRIVER_MODULE(tsec, simplebus, tsec_fdt_driver, tsec_devclass, 0, 0);
-MODULE_DEPEND(tsec, simplebus, 1, 1, 1);
-MODULE_DEPEND(tsec, ether, 1, 1, 1);
 
 static int
 tsec_fdt_probe(device_t dev)
@@ -117,7 +115,8 @@ tsec_fdt_probe(device_t dev)
 	    strcmp(ofw_bus_get_type(dev), "network") != 0)
 		return (ENXIO);
 
-	if (!ofw_bus_is_compatible(dev, "gianfar"))
+	if (!ofw_bus_is_compatible(dev, "gianfar") &&
+	    !ofw_bus_is_compatible(dev, "fsl,etsec2"))
 		return (ENXIO);
 
 	sc = device_get_softc(dev);
@@ -169,7 +168,7 @@ tsec_fdt_attach(device_t dev)
 	}
 
 	phy = OF_node_from_xref(phy);
-	OF_decode_addr(OF_parent(phy), 0, &sc->phy_bst, &sc->phy_bsh);
+	OF_decode_addr(OF_parent(phy), 0, &sc->phy_bst, &sc->phy_bsh, NULL);
 	OF_getencprop(phy, "reg", &sc->phyaddr, sizeof(sc->phyaddr));
 
 	/* Init timer */

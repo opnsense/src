@@ -274,7 +274,6 @@
 #define	RT2860_USB_TXOP_HALT		(1 << 20)
 #define	RT2860_USB_TX_CLEAR		(1 << 19)
 #define	RT2860_USB_PHY_WD_EN		(1 << 16)
-#define	RT2860_USB_PHY_MAN_RST		(1 << 15)
 #define	RT2860_USB_RX_AGG_LMT(x)	((x) << 8)	/* in unit of 1KB */
 #define	RT2860_USB_RX_AGG_TO(x)		((x) & 0xff)	/* in unit of 33ns */
 
@@ -962,31 +961,6 @@ struct rt2860_rxwi {
 #define	RT2860_RIDX_MAX		12
 
 /*
- * Control and status registers access macros.
- */
-#define RAL_READ(sc, reg)						\
-	bus_space_read_4((sc)->sc_st, (sc)->sc_sh, (reg))
-
-#define RAL_WRITE(sc, reg, val)						\
-	bus_space_write_4((sc)->sc_st, (sc)->sc_sh, (reg), (val))
-
-#define RAL_BARRIER_WRITE(sc)						\
-	bus_space_barrier((sc)->sc_st, (sc)->sc_sh, 0, 0x1800,		\
-	    BUS_SPACE_BARRIER_WRITE)
-
-#define RAL_BARRIER_READ_WRITE(sc)					\
-	bus_space_barrier((sc)->sc_st, (sc)->sc_sh, 0, 0x1800,		\
-	    BUS_SPACE_BARRIER_READ | BUS_SPACE_BARRIER_WRITE)
-
-#define RAL_WRITE_REGION_1(sc, offset, datap, count)			\
-	bus_space_write_region_1((sc)->sc_st, (sc)->sc_sh, (offset),	\
-	    (datap), (count))
-
-#define RAL_SET_REGION_4(sc, offset, val, count)			\
-	bus_space_set_region_4((sc)->sc_st, (sc)->sc_sh, (offset),	\
-	    (val), (count))
-
-/*
  * EEPROM access macro.
  */
 #define RT2860_EEPROM_CTL(sc, val) do {					\
@@ -1108,6 +1082,18 @@ struct rt2860_rxwi {
 	{ 134, 0xd0 },	\
 	{ 135, 0xf6 },	\
 	{ 137, 0x0f }
+
+/*
+ * Channel map for run(4) driver; taken from the table below.
+ */
+static const uint8_t run_chan_2ghz[] =
+	{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14 };
+
+static const uint8_t run_chan_5ghz[] =
+	{ 36, 38, 40, 44, 46, 48, 52, 54, 56, 60, 62, 64, 100, 102, 104,
+	  108, 110, 112, 116, 118, 120, 124, 126, 128, 132, 134, 136, 140,
+	  149, 151, 153, 157, 159, 161, 165, 167, 169, 171, 173,
+	  184, 188, 192, 196, 208, 212, 216 };
 
 /*
  * Default settings for RF registers; values derived from the reference driver.

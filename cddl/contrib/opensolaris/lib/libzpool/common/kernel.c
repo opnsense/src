@@ -366,10 +366,13 @@ cv_timedwait_hires(kcondvar_t *cv, kmutex_t *mp, hrtime_t tim, hrtime_t res,
 	timestruc_t ts;
 	hrtime_t delta;
 
-	ASSERT(flag == 0);
+	ASSERT(flag == 0 || flag == CALLOUT_FLAG_ABSOLUTE);
 
 top:
-	delta = tim - gethrtime();
+	delta = tim;
+	if (flag & CALLOUT_FLAG_ABSOLUTE)
+		delta -= gethrtime();
+
 	if (delta <= 0)
 		return (-1);
 
@@ -652,6 +655,9 @@ dprintf_setup(int *argc, char **argv)
 	 */
 	if (dprintf_find_string("on"))
 		dprintf_print_all = 1;
+
+	if (dprintf_string != NULL)
+		zfs_flags |= ZFS_DEBUG_DPRINTF;
 }
 
 int
@@ -689,7 +695,7 @@ __dprintf(const char *file, const char *func, int line, const char *fmt, ...)
 		if (dprintf_find_string("pid"))
 			(void) printf("%d ", getpid());
 		if (dprintf_find_string("tid"))
-			(void) printf("%ul ", thr_self());
+			(void) printf("%lu ", thr_self());
 #if 0
 		if (dprintf_find_string("cpu"))
 			(void) printf("%u ", getcpuid());

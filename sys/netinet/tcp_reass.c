@@ -38,6 +38,7 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/kernel.h>
+#include <sys/eventhandler.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/socket.h>
@@ -49,6 +50,7 @@ __FBSDID("$FreeBSD$");
 #include <vm/uma.h>
 
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/route.h>
 #include <net/vnet.h>
 
@@ -74,8 +76,6 @@ __FBSDID("$FreeBSD$");
 #include <netinet/tcp_debug.h>
 #endif /* TCPDEBUG */
 
-static int tcp_reass_sysctl_qsize(SYSCTL_HANDLER_ARGS);
-
 static SYSCTL_NODE(_net_inet_tcp, OID_AUTO, reass, CTLFLAG_RW, 0,
     "TCP Segment Reassembly Queue");
 
@@ -84,17 +84,10 @@ SYSCTL_INT(_net_inet_tcp_reass, OID_AUTO, maxsegments, CTLFLAG_RDTUN,
     &tcp_reass_maxseg, 0,
     "Global maximum number of TCP Segments in Reassembly Queue");
 
-SYSCTL_PROC(_net_inet_tcp_reass, OID_AUTO, cursegments,
-    (CTLTYPE_INT | CTLFLAG_RD), NULL, 0, &tcp_reass_sysctl_qsize, "I",
-    "Global number of TCP Segments currently in Reassembly Queue");
-
-static int tcp_reass_overflows = 0;
-SYSCTL_INT(_net_inet_tcp_reass, OID_AUTO, overflows,
-    CTLFLAG_RD,
-    &tcp_reass_overflows, 0,
-    "Global number of TCP Segment Reassembly Queue Overflows");
-
 static uma_zone_t tcp_reass_zone;
+SYSCTL_UMA_CUR(_net_inet_tcp_reass, OID_AUTO, cursegments, 0,
+    &tcp_reass_zone,
+    "Global number of TCP Segments currently in Reassembly Queue");
 
 /* Initialize TCP reassembly queue */
 static void
@@ -142,15 +135,6 @@ tcp_reass_flush(struct tcpcb *tp)
 	    tp, tp->t_segqlen));
 }
 
-static int
-tcp_reass_sysctl_qsize(SYSCTL_HANDLER_ARGS)
-{
-	int qsize;
-
-	qsize = uma_zone_get_cur(tcp_reass_zone);
-	return (sysctl_handle_int(oidp, &qsize, 0, req));
-}
-
 int
 tcp_reass(struct tcpcb *tp, struct tcphdr *th, int *tlenp, struct mbuf *m)
 {
@@ -195,15 +179,14 @@ tcp_reass(struct tcpcb *tp, struct tcphdr *th, int *tlenp, struct mbuf *m)
 	 */
 	if ((th->th_seq != tp->rcv_nxt || !TCPS_HAVEESTABLISHED(tp->t_state)) &&
 	    tp->t_segqlen >= (so->so_rcv.sb_hiwat / tp->t_maxseg) + 1) {
-		tcp_reass_overflows++;
-		TCPSTAT_INC(tcps_rcvmemdrop);
-		m_freem(m);
+		TCPSTAT_INC(tcps_rcvreassfull);
 		*tlenp = 0;
 		if ((s = tcp_log_addrs(&tp->t_inpcb->inp_inc, th, NULL, NULL))) {
 			log(LOG_DEBUG, "%s; %s: queue limit reached, "
 			    "segment dropped\n", s, __func__);
 			free(s, M_TCPLOG);
 		}
+		m_freem(m);
 		return (0);
 	}
 
@@ -339,13 +322,12 @@ present:
 		if (so->so_rcv.sb_state & SBS_CANTRCVMORE)
 			m_freem(q->tqe_m);
 		else
-			sbappendstream_locked(&so->so_rcv, q->tqe_m);
+			sbappendstream_locked(&so->so_rcv, q->tqe_m, 0);
 		if (q != &tqs)
 			uma_zfree(tcp_reass_zone, q);
 		tp->t_segqlen--;
 		q = nq;
 	} while (q && q->tqe_th->th_seq == tp->rcv_nxt);
-	ND6_HINT(tp);
 	sorwakeup_locked(so);
 	return (flags);
 }

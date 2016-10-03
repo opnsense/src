@@ -10,11 +10,17 @@
 #ifndef LLDB_SBTarget_h_
 #define LLDB_SBTarget_h_
 
+// C Includes
+// C++ Includes
+// Other libraries and framework includes
+// Project includes
 #include "lldb/API/SBDefines.h"
 #include "lldb/API/SBAddress.h"
+#include "lldb/API/SBAttachInfo.h"
 #include "lldb/API/SBBroadcaster.h"
 #include "lldb/API/SBFileSpec.h"
 #include "lldb/API/SBFileSpecList.h"
+#include "lldb/API/SBLaunchInfo.h"
 #include "lldb/API/SBSymbolContextList.h"
 #include "lldb/API/SBType.h"
 #include "lldb/API/SBValue.h"
@@ -22,211 +28,9 @@
 
 namespace lldb {
 
-class SBLaunchInfo
-{
-public:
-    SBLaunchInfo (const char **argv);
-    
-    ~SBLaunchInfo();
+class SBPlatform;
 
-    uint32_t
-    GetUserID();
-    
-    uint32_t
-    GetGroupID();
-    
-    bool
-    UserIDIsValid ();
-    
-    bool
-    GroupIDIsValid ();
-    
-    void
-    SetUserID (uint32_t uid);
-    
-    void
-    SetGroupID (uint32_t gid);
-    
-    uint32_t
-    GetNumArguments ();
-    
-    const char *
-    GetArgumentAtIndex (uint32_t idx);
-    
-    void
-    SetArguments (const char **argv, bool append);
-    
-    uint32_t
-    GetNumEnvironmentEntries ();
-    
-    const char *
-    GetEnvironmentEntryAtIndex (uint32_t idx);
-    
-    void
-    SetEnvironmentEntries (const char **envp, bool append);
-    
-    void
-    Clear ();
-    
-    const char *
-    GetWorkingDirectory () const;
-    
-    void
-    SetWorkingDirectory (const char *working_dir);
-    
-    uint32_t
-    GetLaunchFlags ();
-    
-    void
-    SetLaunchFlags (uint32_t flags);
-    
-    const char *
-    GetProcessPluginName ();
-    
-    void
-    SetProcessPluginName (const char *plugin_name);
-    
-    const char *
-    GetShell ();
-    
-    void
-    SetShell (const char * path);
-    
-    uint32_t
-    GetResumeCount ();
-    
-    void
-    SetResumeCount (uint32_t c);
-    
-    bool
-    AddCloseFileAction (int fd);
-    
-    bool
-    AddDuplicateFileAction (int fd, int dup_fd);
-    
-    bool
-    AddOpenFileAction (int fd, const char *path, bool read, bool write);
-    
-    bool
-    AddSuppressFileAction (int fd, bool read, bool write);
-    
-protected:
-    friend class SBTarget;
-    
-    lldb_private::ProcessLaunchInfo &
-    ref ();
-
-    ProcessLaunchInfoSP m_opaque_sp;
-};
-
-class SBAttachInfo
-{
-public:
-    SBAttachInfo ();
-    
-    SBAttachInfo (lldb::pid_t pid);
-    
-    SBAttachInfo (const char *path, bool wait_for);
-    
-    SBAttachInfo (const SBAttachInfo &rhs);
-    
-    ~SBAttachInfo();
-
-    SBAttachInfo &
-    operator = (const SBAttachInfo &rhs);
-    
-    lldb::pid_t
-    GetProcessID ();
-    
-    void
-    SetProcessID (lldb::pid_t pid);
-    
-    void
-    SetExecutable (const char *path);
-    
-    void
-    SetExecutable (lldb::SBFileSpec exe_file);
-    
-    bool
-    GetWaitForLaunch ();
-    
-    void
-    SetWaitForLaunch (bool b);
-    
-    bool
-    GetIgnoreExisting ();
-    
-    void
-    SetIgnoreExisting (bool b);
-    
-    uint32_t
-    GetResumeCount ();
-    
-    void
-    SetResumeCount (uint32_t c);
-    
-    const char *
-    GetProcessPluginName ();
-    
-    void
-    SetProcessPluginName (const char *plugin_name);
-    
-    uint32_t
-    GetUserID();
-    
-    uint32_t
-    GetGroupID();
-    
-    bool
-    UserIDIsValid ();
-    
-    bool
-    GroupIDIsValid ();
-    
-    void
-    SetUserID (uint32_t uid);
-    
-    void
-    SetGroupID (uint32_t gid);
-    
-    uint32_t
-    GetEffectiveUserID();
-    
-    uint32_t
-    GetEffectiveGroupID();
-    
-    bool
-    EffectiveUserIDIsValid ();
-    
-    bool
-    EffectiveGroupIDIsValid ();
-    
-    void
-    SetEffectiveUserID (uint32_t uid);
-    
-    void
-    SetEffectiveGroupID (uint32_t gid);
-    
-    lldb::pid_t
-    GetParentProcessID ();
-    
-    void
-    SetParentProcessID (lldb::pid_t pid);
-    
-    bool
-    ParentProcessIDIsValid();
-    
-    
-protected:
-    friend class SBTarget;
-
-    lldb_private::ProcessAttachInfo &
-    ref ();
-    
-    ProcessAttachInfoSP m_opaque_sp;
-};
-
-class SBTarget
+class LLDB_API SBTarget
 {
 public:
     //------------------------------------------------------------------
@@ -250,22 +54,46 @@ public:
 
     SBTarget (const lldb::TargetSP& target_sp);
     
-    const lldb::SBTarget&
-    operator = (const lldb::SBTarget& rhs);
-
     //------------------------------------------------------------------
     // Destructor
     //------------------------------------------------------------------
     ~SBTarget();
 
+    const lldb::SBTarget&
+    operator = (const lldb::SBTarget& rhs);
+
     bool
     IsValid() const;
+
+    static bool
+    EventIsTargetEvent (const lldb::SBEvent &event);
+
+    static lldb::SBTarget
+    GetTargetFromEvent (const lldb::SBEvent &event);
     
+    static uint32_t
+    GetNumModulesFromEvent (const lldb::SBEvent &event);
+
+    static lldb::SBModule
+    GetModuleAtIndexFromEvent (const uint32_t idx, const lldb::SBEvent &event);
+
     static const char *
     GetBroadcasterClassName ();
 
     lldb::SBProcess
     GetProcess ();
+
+    //------------------------------------------------------------------
+    /// Return the platform object associated with the target.
+    ///
+    /// After return, the platform object should be checked for
+    /// validity.
+    ///
+    /// @return
+    ///     A platform object.
+    //------------------------------------------------------------------
+    lldb::SBPlatform
+    GetPlatform ();
 
     //------------------------------------------------------------------
     /// Install any binaries that need to be installed.
@@ -311,17 +139,17 @@ public:
     ///
     /// @param[in] stdin_path
     ///     The path to use when re-directing the STDIN of the new
-    ///     process. If all stdXX_path arguments are NULL, a pseudo
+    ///     process. If all stdXX_path arguments are nullptr, a pseudo
     ///     terminal will be used.
     ///
     /// @param[in] stdout_path
     ///     The path to use when re-directing the STDOUT of the new
-    ///     process. If all stdXX_path arguments are NULL, a pseudo
+    ///     process. If all stdXX_path arguments are nullptr, a pseudo
     ///     terminal will be used.
     ///
     /// @param[in] stderr_path
     ///     The path to use when re-directing the STDERR of the new
-    ///     process. If all stdXX_path arguments are NULL, a pseudo
+    ///     process. If all stdXX_path arguments are nullptr, a pseudo
     ///     terminal will be used.
     ///
     /// @param[in] working_directory
@@ -331,10 +159,10 @@ public:
     ///     Some launch options specified by logical OR'ing 
     ///     lldb::LaunchFlags enumeration values together.
     ///
-    /// @param[in] stop_at_endtry
+    /// @param[in] stop_at_entry
     ///     If false do not stop the inferior at the entry point.
     ///
-    /// @param[out]
+    /// @param[out] error
     ///     An error object. Contains the reason if there is some failure.
     ///
     /// @return
@@ -351,8 +179,10 @@ public:
             uint32_t launch_flags,   // See LaunchFlags
             bool stop_at_entry,
             lldb::SBError& error);
-            
-    
+
+    SBProcess
+    LoadCore (const char *core_file);
+
     //------------------------------------------------------------------
     /// Launch a new process with sensible defaults.
     ///
@@ -388,9 +218,6 @@ public:
     Launch (SBLaunchInfo &launch_info, SBError& error);
     
     SBProcess
-    LoadCore (const char *core_file);
-
-    SBProcess
     Attach (SBAttachInfo &attach_info, SBError& error);
 
     //------------------------------------------------------------------
@@ -405,7 +232,7 @@ public:
     /// @param[in] pid
     ///     The process ID to attach to.
     ///
-    /// @param[out]
+    /// @param[out] error
     ///     An error explaining what went wrong if attach fails.
     ///
     /// @return
@@ -424,6 +251,7 @@ public:
                            ::pid_t pid,           // 32 bit int process ID
                            lldb::SBError& error); // DEPRECATED 
 #endif
+
     //------------------------------------------------------------------
     /// Attach to process with name.
     ///
@@ -439,7 +267,7 @@ public:
     /// @param[in] wait_for
     ///     If true wait for a new instance of 'name' to be launched.
     ///
-    /// @param[out]
+    /// @param[out] error
     ///     An error explaining what went wrong if attach fails.
     ///
     /// @return
@@ -464,9 +292,9 @@ public:
     ///     The url to connect to, e.g., 'connect://localhost:12345'.
     ///
     /// @param[in] plugin_name
-    ///     The plugin name to be used; can be NULL.
+    ///     The plugin name to be used; can be nullptr.
     ///
-    /// @param[out]
+    /// @param[out] error
     ///     An error explaining what went wrong if the connect fails.
     ///
     /// @return
@@ -523,6 +351,26 @@ public:
     GetTriple ();
 
     //------------------------------------------------------------------
+    /// Architecture data byte width accessor
+    ///
+    /// @return
+    /// The size in 8-bit (host) bytes of a minimum addressable
+    /// unit from the Architecture's data bus
+    //------------------------------------------------------------------
+    uint32_t
+    GetDataByteSize ();
+
+    //------------------------------------------------------------------
+    /// Architecture code byte width accessor
+    ///
+    /// @return
+    /// The size in 8-bit (host) bytes of a minimum addressable
+    /// unit from the Architecture's code bus
+    //------------------------------------------------------------------
+    uint32_t
+    GetCodeByteSize ();
+
+    //------------------------------------------------------------------
     /// Set the base load address for a module section.
     ///
     /// @param[in] section
@@ -577,10 +425,9 @@ public:
     lldb::SBError
     SetModuleLoadAddress (lldb::SBModule module,
                           int64_t sections_offset);
-    
 
     //------------------------------------------------------------------
-    /// The the section base load addresses for all sections in a module.
+    /// Clear the section base load addresses for all sections in a module.
     /// 
     /// @param[in] module
     ///     The module to unload.
@@ -642,9 +489,60 @@ public:
     //------------------------------------------------------------------
     lldb::SBValue
     FindFirstGlobalVariable (const char* name);
+
+    //------------------------------------------------------------------
+    /// Find global and static variables by pattern.
+    ///
+    /// @param[in] name
+    ///     The pattern to search for global or static variables
+    ///
+    /// @param[in] max_matches
+    ///     Allow the number of matches to be limited to \a max_matches.
+    /// 
+    /// @param[in] matchtype
+    ///     The match type to use.    
+    ///
+    /// @return
+    ///     A list of matched variables in an SBValueList.
+    //------------------------------------------------------------------
+    lldb::SBValueList
+        FindGlobalVariables(const char *name,
+                            uint32_t max_matches,
+                            MatchType matchtype);
     
+    //------------------------------------------------------------------
+    /// Find global functions by their name with pattern matching.
+    ///
+    /// @param[in] name
+    ///     The pattern to search for global or static variables
+    ///
+    /// @param[in] max_matches
+    ///     Allow the number of matches to be limited to \a max_matches.
+    /// 
+    /// @param[in] matchtype
+    ///     The match type to use.    
+    ///
+    /// @return
+    ///     A list of matched variables in an SBValueList.
+    //------------------------------------------------------------------
+    lldb::SBSymbolContextList
+        FindGlobalFunctions(const char *name,
+                           uint32_t max_matches,
+                           MatchType matchtype);
+
     void
     Clear ();
+
+    //------------------------------------------------------------------
+    /// Resolve a current file address into a section offset address.
+    ///
+    /// @param[in] file_addr
+    ///
+    /// @return
+    ///     An SBAddress which will be valid if...
+    //------------------------------------------------------------------
+    lldb::SBAddress
+    ResolveFileAddress (lldb::addr_t file_addr);
 
     //------------------------------------------------------------------
     /// Resolve a current load address into a section offset address.
@@ -691,6 +589,31 @@ public:
     ResolveSymbolContextForAddress (const SBAddress& addr, 
                                     uint32_t resolve_scope);
 
+    //------------------------------------------------------------------
+    /// Read target memory. If a target process is running then memory  
+    /// is read from here. Otherwise the memory is read from the object
+    /// files. For a target whose bytes are sized as a multiple of host
+    /// bytes, the data read back will preserve the target's byte order.
+    ///
+    /// @param[in] addr
+    ///     A target address to read from. 
+    ///
+    /// @param[out] buf
+    ///     The buffer to read memory into. 
+    ///
+    /// @param[in] size
+    ///     The maximum number of host bytes to read in the buffer passed
+    ///     into this call
+    ///
+    /// @param[out] error
+    ///     Error information is written here if the memory read fails.
+    ///
+    /// @return
+    ///     The amount of data read in host bytes.
+    //------------------------------------------------------------------
+    size_t
+    ReadMemory (const SBAddress addr, void *buf, size_t size, lldb::SBError &error);
+
     lldb::SBBreakpoint
     BreakpointCreateByLocation (const char *file, uint32_t line);
 
@@ -698,7 +621,7 @@ public:
     BreakpointCreateByLocation (const lldb::SBFileSpec &file_spec, uint32_t line);
 
     lldb::SBBreakpoint
-    BreakpointCreateByName (const char *symbol_name, const char *module_name = NULL);
+    BreakpointCreateByName(const char *symbol_name, const char *module_name = nullptr);
 
     // This version uses name_type_mask = eFunctionNameTypeAuto
     lldb::SBBreakpoint
@@ -713,6 +636,13 @@ public:
                             const SBFileSpecList &comp_unit_list);
 
     lldb::SBBreakpoint
+    BreakpointCreateByName (const char *symbol_name,
+                            uint32_t name_type_mask,           // Logical OR one or more FunctionNameType enum bits
+                            lldb::LanguageType symbol_language,
+                            const SBFileSpecList &module_list, 
+                            const SBFileSpecList &comp_unit_list);
+
+    lldb::SBBreakpoint
     BreakpointCreateByNames (const char *symbol_name[],
                              uint32_t num_names,
                              uint32_t name_type_mask,           // Logical OR one or more FunctionNameType enum bits
@@ -720,7 +650,15 @@ public:
                              const SBFileSpecList &comp_unit_list);
 
     lldb::SBBreakpoint
-    BreakpointCreateByRegex (const char *symbol_name_regex, const char *module_name = NULL);
+    BreakpointCreateByNames (const char *symbol_name[],
+                             uint32_t num_names,
+                             uint32_t name_type_mask,           // Logical OR one or more FunctionNameType enum bits
+                             lldb::LanguageType symbol_language,
+                             const SBFileSpecList &module_list,
+                             const SBFileSpecList &comp_unit_list);
+
+    lldb::SBBreakpoint
+    BreakpointCreateByRegex (const char *symbol_name_regex, const char *module_name = nullptr);
     
     lldb::SBBreakpoint
     BreakpointCreateByRegex (const char *symbol_name_regex, 
@@ -728,14 +666,20 @@ public:
                              const SBFileSpecList &comp_unit_list);
     
     lldb::SBBreakpoint
-    BreakpointCreateBySourceRegex (const char *source_regex, 
-                                   const lldb::SBFileSpec &source_file, 
-                                   const char *module_name = NULL);
+    BreakpointCreateByRegex (const char *symbol_name_regex,
+                             lldb::LanguageType symbol_language,
+                             const SBFileSpecList &module_list, 
+                             const SBFileSpecList &comp_unit_list);
+    
+    lldb::SBBreakpoint
+    BreakpointCreateBySourceRegex(const char *source_regex,
+                                  const SBFileSpec &source_file,
+                                  const char *module_name = nullptr);
 
     lldb::SBBreakpoint
-    BreakpointCreateBySourceRegex (const char *source_regex, 
-                                   const SBFileSpecList &module_list, 
-                                   const lldb::SBFileSpecList &source_file);
+    BreakpointCreateBySourceRegex (const char *source_regex,
+                                   const SBFileSpecList &module_list,
+                                   const SBFileSpecList &source_file);
     
     lldb::SBBreakpoint
     BreakpointCreateForException  (lldb::LanguageType language,
@@ -744,6 +688,9 @@ public:
 
     lldb::SBBreakpoint
     BreakpointCreateByAddress (addr_t address);
+
+    lldb::SBBreakpoint
+    BreakpointCreateBySBAddress (SBAddress &address);
 
     uint32_t
     GetNumBreakpoints () const;
@@ -804,6 +751,12 @@ public:
     
     lldb::SBValue
     CreateValueFromAddress (const char *name, lldb::SBAddress addr, lldb::SBType type);
+
+    lldb::SBValue
+    CreateValueFromData (const char *name, lldb::SBData data, lldb::SBType type);
+
+    lldb::SBValue
+    CreateValueFromExpression (const char *name, const char* expr);
     
     SBSourceManager
     GetSourceManager();
@@ -843,15 +796,25 @@ public:
     GetDescription (lldb::SBStream &description, lldb::DescriptionLevel description_level);
 
     lldb::SBValue
+    EvaluateExpression (const char *expr);
+
+    lldb::SBValue
     EvaluateExpression (const char *expr, const SBExpressionOptions &options);
 
     lldb::addr_t
     GetStackRedZoneSize();
+
+    lldb::SBLaunchInfo
+    GetLaunchInfo () const;
+
+    void
+    SetLaunchInfo (const lldb::SBLaunchInfo &launch_info);
     
 protected:
     friend class SBAddress;
     friend class SBBlock;
     friend class SBDebugger;
+    friend class SBExecutionContext;
     friend class SBFunction;
     friend class SBInstruction;
     friend class SBModule;
@@ -872,15 +835,10 @@ protected:
     void
     SetSP (const lldb::TargetSP& target_sp);
 
-
 private:
-    //------------------------------------------------------------------
-    // For Target only
-    //------------------------------------------------------------------
-
     lldb::TargetSP m_opaque_sp;
 };
 
 } // namespace lldb
 
-#endif  // LLDB_SBTarget_h_
+#endif // LLDB_SBTarget_h_

@@ -69,7 +69,7 @@ __FBSDID("$FreeBSD$");
  *					or name a tcpmux service 
  *					or specify a unix domain socket
  *	socket type			stream/dgram/raw/rdm/seqpacket
- *	protocol			tcp[4][6][/faith], udp[4][6], unix
+ *	protocol			tcp[4][6], udp[4][6], unix
  *	wait/nowait			single-threaded/multi-threaded
  *	user[:group][/login-class]	user/group/login-class to run daemon as
  *	server program			full path name
@@ -539,13 +539,8 @@ main(int argc, char **argv)
 		(void)setenv("inetd_dummy", dummy, 1);
 	}
 
-	if (pipe(signalpipe) != 0) {
+	if (pipe2(signalpipe, O_CLOEXEC) != 0) {
 		syslog(LOG_ERR, "pipe: %m");
-		exit(EX_OSERR);
-	}
-	if (fcntl(signalpipe[0], F_SETFD, FD_CLOEXEC) < 0 ||
-	    fcntl(signalpipe[1], F_SETFD, FD_CLOEXEC) < 0) {
-		syslog(LOG_ERR, "signalpipe: fcntl (F_SETFD, FD_CLOEXEC): %m");
 		exit(EX_OSERR);
 	}
 	FD_SET(signalpipe[0], &allsock);
@@ -1256,19 +1251,14 @@ setup(struct servtab *sep)
 {
 	int on = 1;
 
-	if ((sep->se_fd = socket(sep->se_family, sep->se_socktype, 0)) < 0) {
+	/* Set all listening sockets to close-on-exec. */
+	if ((sep->se_fd = socket(sep->se_family,
+	    sep->se_socktype | SOCK_CLOEXEC, 0)) < 0) {
 		if (debug)
 			warn("socket failed on %s/%s",
 				sep->se_service, sep->se_proto);
 		syslog(LOG_ERR, "%s/%s: socket: %m",
 		    sep->se_service, sep->se_proto);
-		return;
-	}
-	/* Set all listening sockets to close-on-exec. */
-	if (fcntl(sep->se_fd, F_SETFD, FD_CLOEXEC) < 0) {
-		syslog(LOG_ERR, "%s/%s: fcntl (F_SETFD, FD_CLOEXEC): %m",
-		    sep->se_service, sep->se_proto);
-		close(sep->se_fd);
 		return;
 	}
 #define	turnon(fd, opt) \
@@ -1296,14 +1286,6 @@ setsockopt(fd, SOL_SOCKET, opt, (char *)&on, sizeof (on))
 			syslog(LOG_ERR, "setsockopt (IPV6_V6ONLY): %m");
 	}
 #undef turnon
-#ifdef IPV6_FAITH
-	if (sep->se_type == FAITH_TYPE) {
-		if (setsockopt(sep->se_fd, IPPROTO_IPV6, IPV6_FAITH, &on,
-				sizeof(on)) < 0) {
-			syslog(LOG_ERR, "setsockopt (IPV6_FAITH): %m");
-		}
-	}
-#endif
 #ifdef IPSEC
 	ipsecsetup(sep);
 #endif
@@ -1735,15 +1717,15 @@ more:
 	arg = sskip(&cp);
 	if (strncmp(arg, "tcp", 3) == 0) {
 		sep->se_proto = newstr(strsep(&arg, "/"));
-		if (arg != NULL) {
-			if (strcmp(arg, "faith") == 0)
-				sep->se_type = FAITH_TYPE;
+		if (arg != NULL && (strcmp(arg, "faith") == 0)) {
+			syslog(LOG_ERR, "faith has been deprecated");
+			goto more;
 		}
 	} else {
 		if (sep->se_type == NORM_TYPE &&
 		    strncmp(arg, "faith/", 6) == 0) {
-			arg += 6;
-			sep->se_type = FAITH_TYPE;
+			syslog(LOG_ERR, "faith has been deprecated");
+			goto more;
 		}
 		sep->se_proto = newstr(arg);
 	}
@@ -1952,7 +1934,7 @@ more:
 		if (sep->se_bi && sep->se_bi->bi_maxchild >= 0)
 			sep->se_maxchild = sep->se_bi->bi_maxchild;
 		else if (sep->se_accept) 
-			sep->se_maxchild = maxchild > 0 ? maxchild : 0;
+			sep->se_maxchild = MAX(maxchild, 0);
 		else
 			sep->se_maxchild = 1;
 	}

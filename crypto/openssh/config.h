@@ -435,7 +435,7 @@
 /* #undef HAVE_EXIT_IN_UTMP */
 
 /* Define to 1 if you have the `explicit_bzero' function. */
-/* #undef HAVE_EXPLICIT_BZERO */
+#define HAVE_EXPLICIT_BZERO 1
 
 /* Define to 1 if you have the `fchmod' function. */
 #define HAVE_FCHMOD 1
@@ -886,7 +886,7 @@
 #define HAVE_READPASSPHRASE_H 1
 
 /* Define to 1 if you have the `reallocarray' function. */
-/* #undef HAVE_REALLOCARRAY */
+#define HAVE_REALLOCARRAY 1
 
 /* Define to 1 if you have the `realpath' function. */
 #define HAVE_REALPATH 1
@@ -1701,7 +1701,7 @@
 /* #undef WITH_SELINUX */
 
 /* include SSH protocol version 1 support */
-#define WITH_SSH1 1
+/* #undef WITH_SSH1 */
 
 /* Define WORDS_BIGENDIAN to 1 if your processor stores words with the most
    significant byte first (like Motorola and SPARC, unlike Intel). */

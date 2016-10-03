@@ -12,9 +12,10 @@ IBSRCDIR=	${IBCMDIR}/src
 
 LIB=		ibcm
 SHLIB_MAJOR=	1
-NO_PROFILE=
+MK_PROFILE=	no
 
 SRCS= cm.c
+LIBADD=	ibverbs
 CFLAGS+=	-I${IBCMDIR}/include
 
 MAN=

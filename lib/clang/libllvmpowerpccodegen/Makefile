@@ -6,26 +6,34 @@ LIB=	llvmpowerpccodegen
 
 SRCDIR=	lib/Target/PowerPC
 SRCS=	PPCAsmPrinter.cpp \
+	PPCBoolRetToInt.cpp \
 	PPCBranchSelector.cpp \
 	PPCCTRLoops.cpp \
-	PPCCodeEmitter.cpp \
-	PPCFastISel.cpp \
+	PPCEarlyReturn.cpp \
+ 	PPCFastISel.cpp \
 	PPCFrameLowering.cpp \
 	PPCHazardRecognizers.cpp \
 	PPCISelDAGToDAG.cpp \
 	PPCISelLowering.cpp \
 	PPCInstrInfo.cpp \
-	PPCJITInfo.cpp \
+	PPCLoopDataPrefetch.cpp \
+	PPCLoopPreIncPrep.cpp \
 	PPCMCInstLower.cpp \
+	PPCMIPeephole.cpp \
 	PPCMachineFunctionInfo.cpp \
 	PPCRegisterInfo.cpp \
-	PPCSelectionDAGInfo.cpp \
 	PPCSubtarget.cpp \
+	PPCTLSDynamicCall.cpp \
+	PPCTOCRegDeps.cpp \
 	PPCTargetMachine.cpp \
 	PPCTargetObjectFile.cpp \
-	PPCTargetTransformInfo.cpp
+	PPCTargetTransformInfo.cpp \
+	PPCVSXCopy.cpp \
+	PPCVSXFMAMutate.cpp \
+	PPCVSXSwapRemoval.cpp
 
-TGHDRS=	Intrinsics \
+TGHDRS=	Attributes \
+	Intrinsics \
 	PPCGenCallingConv \
 	PPCGenCodeEmitter \
 	PPCGenDAGISel \

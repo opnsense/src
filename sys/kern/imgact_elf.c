@@ -33,12 +33,13 @@ __FBSDID("$FreeBSD$");
 
 #include "opt_capsicum.h"
 #include "opt_compat.h"
-#include "opt_pax.h"
+#include "opt_gzio.h"
 
 #include <sys/param.h>
 #include <sys/capsicum.h>
 #include <sys/exec.h>
 #include <sys/fcntl.h>
+#include <sys/gzio.h>
 #include <sys/imgact.h>
 #include <sys/imgact_elf.h>
 #include <sys/jail.h>
@@ -48,7 +49,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/mount.h>
 #include <sys/mman.h>
 #include <sys/namei.h>
-#include <sys/pax.h>
 #include <sys/pioctl.h>
 #include <sys/proc.h>
 #include <sys/procfs.h>
@@ -69,8 +69,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/syslog.h>
 #include <sys/eventhandler.h>
 #include <sys/user.h>
-
-#include <net/zlib.h>
 
 #include <vm/vm.h>
 #include <vm/vm_kern.h>
@@ -106,25 +104,21 @@ static Elf_Word __elfN(untrans_prot)(vm_prot_t);
 SYSCTL_NODE(_kern, OID_AUTO, __CONCAT(elf, __ELF_WORD_SIZE), CTLFLAG_RW, 0,
     "");
 
-#ifdef COMPRESS_USER_CORES
-static int compress_core(gzFile, char *, char *, unsigned int,
-    struct thread * td);
-#endif
-#define CORE_BUF_SIZE	(16 * 1024)
+#define	CORE_BUF_SIZE	(16 * 1024)
 
 int __elfN(fallback_brand) = -1;
 SYSCTL_INT(__CONCAT(_kern_elf, __ELF_WORD_SIZE), OID_AUTO,
-    fallback_brand, CTLFLAG_RW, &__elfN(fallback_brand), 0,
+    fallback_brand, CTLFLAG_RWTUN, &__elfN(fallback_brand), 0,
     __XSTRING(__CONCAT(ELF, __ELF_WORD_SIZE)) " brand of last resort");
-TUNABLE_INT("kern.elf" __XSTRING(__ELF_WORD_SIZE) ".fallback_brand",
-    &__elfN(fallback_brand));
 
 static int elf_legacy_coredump = 0;
 SYSCTL_INT(_debug, OID_AUTO, __elfN(legacy_coredump), CTLFLAG_RW, 
-    &elf_legacy_coredump, 0, "");
+    &elf_legacy_coredump, 0,
+    "include all and only RW pages in core dumps");
 
 int __elfN(nxstack) =
-#if defined(__amd64__) || defined(__powerpc64__) /* both 64 and 32 bit */
+#if defined(__amd64__) || defined(__powerpc64__) /* both 64 and 32 bit */ || \
+    (defined(__arm__) && __ARM_ARCH >= 7) || defined(__aarch64__)
 	1;
 #else
 	0;
@@ -134,7 +128,7 @@ SYSCTL_INT(__CONCAT(_kern_elf, __ELF_WORD_SIZE), OID_AUTO,
     __XSTRING(__CONCAT(ELF, __ELF_WORD_SIZE)) ": enable non-executable stack");
 
 #if __ELF_WORD_SIZE == 32
-#if defined(__amd64__) || defined(__ia64__)
+#if defined(__amd64__)
 int i386_read_exec = 0;
 SYSCTL_INT(_kern_elf32, OID_AUTO, read_exec, CTLFLAG_RW, &i386_read_exec, 0,
     "enable execution from readable segments");
@@ -143,8 +137,8 @@ SYSCTL_INT(_kern_elf32, OID_AUTO, read_exec, CTLFLAG_RW, &i386_read_exec, 0,
 
 static Elf_Brandinfo *elf_brand_list[MAX_BRANDS];
 
-#define	trunc_page_ps(va, ps)	((va) & ~(ps - 1))
-#define	round_page_ps(va, ps)	(((va) + (ps - 1)) & ~(ps - 1))
+#define	trunc_page_ps(va, ps)	rounddown2(va, ps)
+#define	round_page_ps(va, ps)	roundup2(va, ps)
 #define	aligned(a, t)	(trunc_page_ps((u_long)(a), sizeof(t)) == (u_long)(a))
 
 static const char FREEBSD_ABI_VENDOR[] = "FreeBSD";
@@ -152,7 +146,7 @@ static const char FREEBSD_ABI_VENDOR[] = "FreeBSD";
 Elf_Brandnote __elfN(freebsd_brandnote) = {
 	.hdr.n_namesz	= sizeof(FREEBSD_ABI_VENDOR),
 	.hdr.n_descsz	= sizeof(int32_t),
-	.hdr.n_type	= 1,
+	.hdr.n_type	= NT_FREEBSD_ABI_TAG,
 	.vendor		= FREEBSD_ABI_VENDOR,
 	.flags		= BN_TRANSLATE_OSREL,
 	.trans_osrel	= __elfN(freebsd_trans_osrel)
@@ -282,6 +276,9 @@ __elfN(get_brandinfo)(struct image_params *imgp, const char *interp,
 		if (hdr->e_machine == bi->machine && (bi->flags &
 		    (BI_BRAND_NOTE|BI_BRAND_NOTE_MANDATORY)) != 0) {
 			ret = __elfN(check_note)(imgp, bi->brand_note, osrel);
+			/* Give brand a chance to veto check_note's guess */
+			if (ret && bi->header_supported)
+				ret = bi->header_supported(imgp);
 			/*
 			 * If note checker claimed the binary, but the
 			 * interpreter path in the image does not
@@ -313,8 +310,24 @@ __elfN(get_brandinfo)(struct image_params *imgp, const char *interp,
 		if (hdr->e_machine == bi->machine &&
 		    (hdr->e_ident[EI_OSABI] == bi->brand ||
 		    strncmp((const char *)&hdr->e_ident[OLD_EI_BRAND],
-		    bi->compat_3_brand, strlen(bi->compat_3_brand)) == 0))
-			return (bi);
+		    bi->compat_3_brand, strlen(bi->compat_3_brand)) == 0)) {
+			/* Looks good, but give brand a chance to veto */
+			if (!bi->header_supported || bi->header_supported(imgp))
+				return (bi);
+		}
+	}
+
+	/* No known brand, see if the header is recognized by any brand */
+	for (i = 0; i < MAX_BRANDS; i++) {
+		bi = elf_brand_list[i];
+		if (bi == NULL || bi->flags & BI_BRAND_NOTE_MANDATORY ||
+		    bi->header_supported == NULL)
+			continue;
+		if (hdr->e_machine == bi->machine) {
+			ret = bi->header_supported(imgp);
+			if (ret)
+				return (bi);
+		}
 	}
 
 	/* Lacking a known brand, search for a recognized interpreter. */
@@ -853,7 +866,16 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 			error = ENOEXEC;
 			goto ret;
 		}
-	}
+		/*
+		 * Honour the base load address from the dso if it is
+		 * non-zero for some reason.
+		 */
+		if (baddr == 0)
+			et_dyn_addr = ET_DYN_LOAD_ADDR;
+		else
+			et_dyn_addr = 0;
+	} else
+		et_dyn_addr = 0;
 	sv = brand_info->sysvec;
 	if (interp != NULL && brand_info->interp_newpath != NULL)
 		newinterp = brand_info->interp_newpath;
@@ -873,20 +895,6 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 
 	error = exec_new_vmspace(imgp, sv);
 	imgp->proc->p_sysent = sv;
-
-	et_dyn_addr = 0;
-	if (hdr->e_type == ET_DYN) {
-		/*
-		 * Honour the base load address from the dso if it is
-		 * non-zero for some reason.
-		 */
-		if (baddr == 0) {
-			et_dyn_addr = ET_DYN_LOAD_ADDR;
-#ifdef PAX_ASLR
-			pax_aslr_execbase(imgp->proc, &et_dyn_addr);
-#endif
-		}
-	}
 
 	vn_lock(imgp->vp, LK_EXCLUSIVE | LK_RETRY);
 	if (error != 0)
@@ -962,11 +970,11 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 	 * not actually fault in all the segments pages.
 	 */
 	PROC_LOCK(imgp->proc);
-	if (data_size > lim_cur(imgp->proc, RLIMIT_DATA))
+	if (data_size > lim_cur_proc(imgp->proc, RLIMIT_DATA))
 		err_str = "Data segment size exceeds process limit";
 	else if (text_size > maxtsiz)
 		err_str = "Text segment size exceeds system limit";
-	else if (total_size > lim_cur(imgp->proc, RLIMIT_VMEM))
+	else if (total_size > lim_cur_proc(imgp->proc, RLIMIT_VMEM))
 		err_str = "Total segment size exceeds process limit";
 	else if (racct_set(imgp->proc, RACCT_DATA, data_size) != 0)
 		err_str = "Data segment size exceeds resource limit";
@@ -991,11 +999,8 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 	 * calculation is that it leaves room for the heap to grow to
 	 * its maximum allowed size.
 	 */
-	addr = round_page((vm_offset_t)vmspace->vm_daddr + lim_max(imgp->proc,
+	addr = round_page((vm_offset_t)vmspace->vm_daddr + lim_max(td,
 	    RLIMIT_DATA));
-#ifdef PAX_ASLR
-	pax_aslr_rtld(imgp->proc, &addr);
-#endif
 	PROC_UNLOCK(imgp->proc);
 
 	imgp->entry_addr = entry;
@@ -1047,6 +1052,7 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 	elf_auxargs->base = addr;
 	elf_auxargs->flags = 0;
 	elf_auxargs->entry = entry;
+	elf_auxargs->hdr_eflags = hdr->e_flags;
 
 	imgp->auxargs = elf_auxargs;
 	imgp->interpreted = 0;
@@ -1079,6 +1085,9 @@ __elfN(freebsd_fixup)(register_t **stack_base, struct image_params *imgp)
 	AUXARGS_ENTRY(pos, AT_FLAGS, args->flags);
 	AUXARGS_ENTRY(pos, AT_ENTRY, args->entry);
 	AUXARGS_ENTRY(pos, AT_BASE, args->base);
+#ifdef AT_EHDRFLAGS
+	AUXARGS_ENTRY(pos, AT_EHDRFLAGS, args->hdr_eflags);
+#endif
 	if (imgp->execpathp != 0)
 		AUXARGS_ENTRY(pos, AT_EXECPATH, imgp->execpathp);
 	AUXARGS_ENTRY(pos, AT_OSRELDATE,
@@ -1094,7 +1103,7 @@ __elfN(freebsd_fixup)(register_t **stack_base, struct image_params *imgp)
 	}
 	if (imgp->sysent->sv_timekeep_base != 0) {
 		AUXARGS_ENTRY(pos, AT_TIMEKEEP,
-		    imgp->proc->p_timekeep_base);
+		    imgp->sysent->sv_timekeep_base);
 	}
 	AUXARGS_ENTRY(pos, AT_STACKPROT, imgp->sysent->sv_shared_page_obj
 	    != NULL && imgp->stack_prot != 0 ? imgp->stack_prot :
@@ -1140,11 +1149,23 @@ struct note_info {
 
 TAILQ_HEAD(note_info_list, note_info);
 
+/* Coredump output parameters. */
+struct coredump_params {
+	off_t		offset;
+	struct ucred	*active_cred;
+	struct ucred	*file_cred;
+	struct thread	*td;
+	struct vnode	*vp;
+	struct gzio_stream *gzs;
+};
+
 static void cb_put_phdr(vm_map_entry_t, void *);
 static void cb_size_segment(vm_map_entry_t, void *);
+static int core_write(struct coredump_params *, void *, size_t, off_t,
+    enum uio_seg);
 static void each_writable_segment(struct thread *, segment_callback, void *);
-static int __elfN(corehdr)(struct thread *, struct vnode *, struct ucred *,
-    int, void *, size_t, struct note_info_list *, size_t, gzFile);
+static int __elfN(corehdr)(struct coredump_params *, int, void *, size_t,
+    struct note_info_list *, size_t);
 static void __elfN(prepare_notes)(struct thread *, struct note_info_list *,
     size_t *);
 static void __elfN(puthdr)(struct thread *, void *, size_t, int, size_t);
@@ -1168,42 +1189,60 @@ static void note_procstat_rlimit(void *, struct sbuf *, size_t *);
 static void note_procstat_umask(void *, struct sbuf *, size_t *);
 static void note_procstat_vmmap(void *, struct sbuf *, size_t *);
 
-#ifdef COMPRESS_USER_CORES
-extern int compress_user_cores;
+#ifdef GZIO
 extern int compress_user_cores_gzlevel;
-#endif
 
+/*
+ * Write out a core segment to the compression stream.
+ */
 static int
-core_output(struct vnode *vp, void *base, size_t len, off_t offset,
-    struct ucred *active_cred, struct ucred *file_cred,
-    struct thread *td, char *core_buf, gzFile gzfile) {
-
+compress_chunk(struct coredump_params *p, char *base, char *buf, u_int len)
+{
+	u_int chunk_len;
 	int error;
-	if (gzfile) {
-#ifdef COMPRESS_USER_CORES
-		error = compress_core(gzfile, base, core_buf, len, td);
-#else
-		panic("shouldn't be here");
-#endif
-	} else {
-		error = vn_rdwr_inchunks(UIO_WRITE, vp, base, len, offset,
-		    UIO_USERSPACE, IO_UNIT | IO_DIRECT, active_cred, file_cred,
-		    NULL, td);
+
+	while (len > 0) {
+		chunk_len = MIN(len, CORE_BUF_SIZE);
+		copyin(base, buf, chunk_len);
+		error = gzio_write(p->gzs, buf, chunk_len);
+		if (error != 0)
+			break;
+		base += chunk_len;
+		len -= chunk_len;
 	}
 	return (error);
 }
 
-/* Coredump output parameters for sbuf drain routine. */
-struct sbuf_drain_core_params {
-	off_t		offset;
-	struct ucred	*active_cred;
-	struct ucred	*file_cred;
-	struct thread	*td;
-	struct vnode	*vp;
-#ifdef COMPRESS_USER_CORES
-	gzFile		gzfile;
+static int
+core_gz_write(void *base, size_t len, off_t offset, void *arg)
+{
+
+	return (core_write((struct coredump_params *)arg, base, len, offset,
+	    UIO_SYSSPACE));
+}
+#endif /* GZIO */
+
+static int
+core_write(struct coredump_params *p, void *base, size_t len, off_t offset,
+    enum uio_seg seg)
+{
+
+	return (vn_rdwr_inchunks(UIO_WRITE, p->vp, base, len, offset,
+	    seg, IO_UNIT | IO_DIRECT | IO_RANGELOCKED,
+	    p->active_cred, p->file_cred, NULL, p->td));
+}
+
+static int
+core_output(void *base, size_t len, off_t offset, struct coredump_params *p,
+    void *tmpbuf)
+{
+
+#ifdef GZIO
+	if (p->gzs != NULL)
+		return (compress_chunk(p, base, tmpbuf, len));
 #endif
-};
+	return (core_write(p, base, len, offset, UIO_USERSPACE));
+}
 
 /*
  * Drain into a core file.
@@ -1211,10 +1250,10 @@ struct sbuf_drain_core_params {
 static int
 sbuf_drain_core_output(void *arg, const char *data, int len)
 {
-	struct sbuf_drain_core_params *p;
+	struct coredump_params *p;
 	int error, locked;
 
-	p = (struct sbuf_drain_core_params *)arg;
+	p = (struct coredump_params *)arg;
 
 	/*
 	 * Some kern_proc out routines that print to this sbuf may
@@ -1227,16 +1266,13 @@ sbuf_drain_core_output(void *arg, const char *data, int len)
 	locked = PROC_LOCKED(p->td->td_proc);
 	if (locked)
 		PROC_UNLOCK(p->td->td_proc);
-#ifdef COMPRESS_USER_CORES
-	if (p->gzfile != Z_NULL)
-		error = compress_core(p->gzfile, NULL, __DECONST(char *, data),
-		    len, p->td);
+#ifdef GZIO
+	if (p->gzs != NULL)
+		error = gzio_write(p->gzs, __DECONST(char *, data), len);
 	else
 #endif
-		error = vn_rdwr_inchunks(UIO_WRITE, p->vp,
-		    __DECONST(void *, data), len, p->offset, UIO_SYSSPACE,
-		    IO_UNIT | IO_DIRECT, p->active_cred, p->file_cred, NULL,
-		    p->td);
+		error = core_write(p, __DECONST(void *, data), len, p->offset,
+		    UIO_SYSSPACE);
 	if (locked)
 		PROC_LOCK(p->td->td_proc);
 	if (error != 0)
@@ -1265,41 +1301,18 @@ __elfN(coredump)(struct thread *td, struct vnode *vp, off_t limit, int flags)
 	int error = 0;
 	struct sseg_closure seginfo;
 	struct note_info_list notelst;
+	struct coredump_params params;
 	struct note_info *ninfo;
-	void *hdr;
+	void *hdr, *tmpbuf;
 	size_t hdrsize, notesz, coresize;
+#ifdef GZIO
+	boolean_t compress;
 
-	gzFile gzfile = Z_NULL;
-	char *core_buf = NULL;
-#ifdef COMPRESS_USER_CORES
-	char gzopen_flags[8];
-	char *p;
-	int doing_compress = flags & IMGACT_CORE_COMPRESS;
+	compress = (flags & IMGACT_CORE_COMPRESS) != 0;
 #endif
-
 	hdr = NULL;
+	tmpbuf = NULL;
 	TAILQ_INIT(&notelst);
-
-#ifdef COMPRESS_USER_CORES
-        if (doing_compress) {
-                p = gzopen_flags;
-                *p++ = 'w';
-                if (compress_user_cores_gzlevel >= 0 &&
-                    compress_user_cores_gzlevel <= 9)
-                        *p++ = '0' + compress_user_cores_gzlevel;
-                *p = 0;
-                gzfile = gz_open("", gzopen_flags, vp);
-                if (gzfile == Z_NULL) {
-                        error = EFAULT;
-                        goto done;
-                }
-                core_buf = malloc(CORE_BUF_SIZE, M_TEMP, M_WAITOK | M_ZERO);
-                if (!core_buf) {
-                        error = ENOMEM;
-                        goto done;
-                }
-        }
-#endif
 
 	/* Size the program segments. */
 	seginfo.count = 0;
@@ -1312,6 +1325,14 @@ __elfN(coredump)(struct thread *td, struct vnode *vp, off_t limit, int flags)
 	hdrsize = sizeof(Elf_Ehdr) + sizeof(Elf_Phdr) * (1 + seginfo.count);
 	__elfN(prepare_notes)(td, &notelst, &notesz);
 	coresize = round_page(hdrsize + notesz) + seginfo.size;
+
+	/* Set up core dump parameters. */
+	params.offset = 0;
+	params.active_cred = cred;
+	params.file_cred = NOCRED;
+	params.td = td;
+	params.vp = vp;
+	params.gzs = NULL;
 
 #ifdef RACCT
 	if (racct_enable) {
@@ -1329,17 +1350,26 @@ __elfN(coredump)(struct thread *td, struct vnode *vp, off_t limit, int flags)
 		goto done;
 	}
 
+#ifdef GZIO
+	/* Create a compression stream if necessary. */
+	if (compress) {
+		params.gzs = gzio_init(core_gz_write, GZIO_DEFLATE,
+		    CORE_BUF_SIZE, compress_user_cores_gzlevel, &params);
+		if (params.gzs == NULL) {
+			error = EFAULT;
+			goto done;
+		}
+		tmpbuf = malloc(CORE_BUF_SIZE, M_TEMP, M_WAITOK | M_ZERO);
+        }
+#endif
+
 	/*
 	 * Allocate memory for building the header, fill it up,
 	 * and write it out following the notes.
 	 */
 	hdr = malloc(hdrsize, M_TEMP, M_WAITOK);
-	if (hdr == NULL) {
-		error = EINVAL;
-		goto done;
-	}
-	error = __elfN(corehdr)(td, vp, cred, seginfo.count, hdr, hdrsize,
-	    &notelst, notesz, gzfile);
+	error = __elfN(corehdr)(&params, seginfo.count, hdr, hdrsize, &notelst,
+	    notesz);
 
 	/* Write the contents of all of the writable segments. */
 	if (error == 0) {
@@ -1350,13 +1380,17 @@ __elfN(coredump)(struct thread *td, struct vnode *vp, off_t limit, int flags)
 		php = (Elf_Phdr *)((char *)hdr + sizeof(Elf_Ehdr)) + 1;
 		offset = round_page(hdrsize + notesz);
 		for (i = 0; i < seginfo.count; i++) {
-			error = core_output(vp, (caddr_t)(uintptr_t)php->p_vaddr,
-			    php->p_filesz, offset, cred, NOCRED, curthread, core_buf, gzfile);
+			error = core_output((caddr_t)(uintptr_t)php->p_vaddr,
+			    php->p_filesz, offset, &params, tmpbuf);
 			if (error != 0)
 				break;
 			offset += php->p_filesz;
 			php++;
 		}
+#ifdef GZIO
+		if (error == 0 && compress)
+			error = gzio_flush(params.gzs);
+#endif
 	}
 	if (error) {
 		log(LOG_WARNING,
@@ -1365,11 +1399,12 @@ __elfN(coredump)(struct thread *td, struct vnode *vp, off_t limit, int flags)
 	}
 
 done:
-#ifdef COMPRESS_USER_CORES
-	if (core_buf)
-		free(core_buf, M_TEMP);
-	if (gzfile)
-		gzclose(gzfile);
+#ifdef GZIO
+	if (compress) {
+		free(tmpbuf, M_TEMP);
+		if (params.gzs != NULL)
+			gzio_fini(params.gzs);
+	}
 #endif
 	while ((ninfo = TAILQ_FIRST(&notelst)) != NULL) {
 		TAILQ_REMOVE(&notelst, ninfo, link);
@@ -1494,29 +1529,19 @@ each_writable_segment(td, func, closure)
  * the page boundary.
  */
 static int
-__elfN(corehdr)(struct thread *td, struct vnode *vp, struct ucred *cred,
-    int numsegs, void *hdr, size_t hdrsize, struct note_info_list *notelst,
-    size_t notesz, gzFile gzfile)
+__elfN(corehdr)(struct coredump_params *p, int numsegs, void *hdr,
+    size_t hdrsize, struct note_info_list *notelst, size_t notesz)
 {
-	struct sbuf_drain_core_params params;
 	struct note_info *ninfo;
 	struct sbuf *sb;
 	int error;
 
 	/* Fill in the header. */
 	bzero(hdr, hdrsize);
-	__elfN(puthdr)(td, hdr, hdrsize, numsegs, notesz);
+	__elfN(puthdr)(p->td, hdr, hdrsize, numsegs, notesz);
 
-	params.offset = 0;
-	params.active_cred = cred;
-	params.file_cred = NOCRED;
-	params.td = td;
-	params.vp = vp;
-#ifdef COMPRESS_USER_CORES
-	params.gzfile = gzfile;
-#endif
 	sb = sbuf_new(NULL, NULL, CORE_BUF_SIZE, SBUF_FIXEDLEN);
-	sbuf_set_drain(sb, sbuf_drain_core_output, &params);
+	sbuf_set_drain(sb, sbuf_drain_core_output, p);
 	sbuf_start_section(sb, NULL);
 	sbuf_bcat(sb, hdr, hdrsize);
 	TAILQ_FOREACH(ninfo, notelst, link)
@@ -1931,8 +1956,10 @@ __elfN(note_procstat_proc)(void *arg, struct sbuf *sb, size_t *sizep)
 		KASSERT(*sizep == size, ("invalid size"));
 		structsize = sizeof(elf_kinfo_proc_t);
 		sbuf_bcat(sb, &structsize, sizeof(structsize));
+		sx_slock(&proctree_lock);
 		PROC_LOCK(p);
 		kern_proc_out(p, sb, ELF_KERN_PROC_MASK);
+		sx_sunlock(&proctree_lock);
 	}
 	*sizep = size;
 }
@@ -2078,7 +2105,7 @@ note_procstat_rlimit(void *arg, struct sbuf *sb, size_t *sizep)
 		sbuf_bcat(sb, &structsize, sizeof(structsize));
 		PROC_LOCK(p);
 		for (i = 0; i < RLIM_NLIMITS; i++)
-			lim_rlimit(p, i, &rlim[i]);
+			lim_rlimit_proc(p, i, &rlim[i]);
 		PROC_UNLOCK(p);
 		sbuf_bcat(sb, rlim, sizeof(rlim));
 	}
@@ -2117,9 +2144,9 @@ __elfN(note_procstat_psstrings)(void *arg, struct sbuf *sb, size_t *sizep)
 		KASSERT(*sizep == size, ("invalid size"));
 		structsize = sizeof(ps_strings);
 #if defined(COMPAT_FREEBSD32) && __ELF_WORD_SIZE == 32
-		ps_strings = PTROUT(p->p_psstrings);
+		ps_strings = PTROUT(p->p_sysent->sv_psstrings);
 #else
-		ps_strings = p->p_psstrings;
+		ps_strings = p->p_sysent->sv_psstrings;
 #endif
 		sbuf_bcat(sb, &structsize, sizeof(structsize));
 		sbuf_bcat(sb, &ps_strings, sizeof(ps_strings));
@@ -2263,58 +2290,6 @@ static struct execsw __elfN(execsw) = {
 };
 EXEC_SET(__CONCAT(elf, __ELF_WORD_SIZE), __elfN(execsw));
 
-#ifdef COMPRESS_USER_CORES
-/*
- * Compress and write out a core segment for a user process.
- *
- * 'inbuf' is the starting address of a VM segment in the process' address
- * space that is to be compressed and written out to the core file.  'dest_buf'
- * is a buffer in the kernel's address space.  The segment is copied from 
- * 'inbuf' to 'dest_buf' first before being processed by the compression
- * routine gzwrite().  This copying is necessary because the content of the VM
- * segment may change between the compression pass and the crc-computation pass
- * in gzwrite().  This is because realtime threads may preempt the UNIX kernel.
- *
- * If inbuf is NULL it is assumed that data is already copied to 'dest_buf'.
- */
-static int
-compress_core (gzFile file, char *inbuf, char *dest_buf, unsigned int len,
-    struct thread *td)
-{
-	int len_compressed;
-	int error = 0;
-	unsigned int chunk_len;
-
-	while (len) {
-		if (inbuf != NULL) {
-			chunk_len = (len > CORE_BUF_SIZE) ? CORE_BUF_SIZE : len;
-			copyin(inbuf, dest_buf, chunk_len);
-			inbuf += chunk_len;
-		} else {
-			chunk_len = len;
-		}
-		len_compressed = gzwrite(file, dest_buf, chunk_len);
-
-		EVENTHANDLER_INVOKE(app_coredump_progress, td, len_compressed);
-
-		if ((unsigned int)len_compressed != chunk_len) {
-			log(LOG_WARNING,
-			    "compress_core: length mismatch (0x%x returned, "
-			    "0x%x expected)\n", len_compressed, chunk_len);
-			EVENTHANDLER_INVOKE(app_coredump_error, td,
-			    "compress_core: length mismatch %x -> %x",
-			    chunk_len, len_compressed);
-			error = EFAULT;
-			break;
-		}
-		len -= chunk_len;
-		maybe_yield();
-	}
-
-	return (error);
-}
-#endif /* COMPRESS_USER_CORES */
-
 static vm_prot_t
 __elfN(trans_prot)(Elf_Word flags)
 {
@@ -2328,7 +2303,7 @@ __elfN(trans_prot)(Elf_Word flags)
 	if (flags & PF_R)
 		prot |= VM_PROT_READ;
 #if __ELF_WORD_SIZE == 32
-#if defined(__amd64__) || defined(__ia64__)
+#if defined(__amd64__)
 	if (i386_read_exec && (flags & PF_R))
 		prot |= VM_PROT_EXECUTE;
 #endif

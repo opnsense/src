@@ -13,6 +13,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#ifndef LLVM_UTILS_TABLEGEN_TABLEGENBACKENDS_H
+#define LLVM_UTILS_TABLEGEN_TABLEGENBACKENDS_H
 
 // A TableGen backend is a function that looks like
 //
@@ -76,5 +78,8 @@ void EmitSubtarget(RecordKeeper &RK, raw_ostream &OS);
 void EmitMapTable(RecordKeeper &RK, raw_ostream &OS);
 void EmitOptParser(RecordKeeper &RK, raw_ostream &OS);
 void EmitCTags(RecordKeeper &RK, raw_ostream &OS);
+void EmitAttributes(RecordKeeper &RK, raw_ostream &OS);
 
 } // End llvm namespace
+
+#endif

@@ -77,11 +77,11 @@ struct mtx iscsi_dbg_mtx;
 #endif
 
 static int max_sessions = MAX_SESSIONS;
-SYSCTL_INT(_net, OID_AUTO, iscsi_initiator_max_sessions, CTLFLAG_RDTUN, &max_sessions, MAX_SESSIONS,
-	   "Max sessions allowed");
+SYSCTL_INT(_net, OID_AUTO, iscsi_initiator_max_sessions, CTLFLAG_RDTUN,
+    &max_sessions, 0, "Max sessions allowed");
 static int max_pdus = MAX_PDUS;
-SYSCTL_INT(_net, OID_AUTO, iscsi_initiator_max_pdus, CTLFLAG_RDTUN, &max_pdus, MAX_PDUS,
-	   "Max pdu pool");
+SYSCTL_INT(_net, OID_AUTO, iscsi_initiator_max_pdus, CTLFLAG_RDTUN,
+    &max_pdus, 0, "Max PDU pool");
 
 static char isid[6+1] = {
      0x80,
@@ -150,7 +150,7 @@ iscsi_close(struct cdev *dev, int flag, int otyp, struct thread *td)
 	  sdebug(3, "sp->flags=%x", sp->flags );
 	  /*
 	   | if still in full phase, this probably means
-	   | that something went realy bad.
+	   | that something went really bad.
 	   | it could be a result from 'shutdown', in which case
 	   | we will ignore it (so buffers can be flushed).
 	   | the problem is that there is no way of differentiating
@@ -711,9 +711,6 @@ iscsi_start(void)
 {
      debug_called(8);
 
-     TUNABLE_INT_FETCH("net.iscsi_initiator.max_sessions", &max_sessions);
-     TUNABLE_INT_FETCH("net.iscsi_initiator.max_pdus", &max_pdus);
-
      isc =  malloc(sizeof(struct isc_softc), M_ISCSI, M_ZERO|M_WAITOK);
      mtx_init(&isc->isc_mtx, "iscsi-isc", NULL, MTX_DEF);
 
@@ -807,8 +804,6 @@ iscsi_stop(void)
      TAILQ_FOREACH_SAFE(sp, &isc->isc_sess, sp_link, sp_tmp) {
 	  //XXX: check for activity ...
 	  ism_stop(sp);
-	  if(sp->cam_sim != NULL)
-	       ic_destroy(sp);
      }
      mtx_destroy(&isc->isc_mtx);
      sx_destroy(&isc->unit_sx);

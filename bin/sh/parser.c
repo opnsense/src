@@ -66,7 +66,6 @@ __FBSDID("$FreeBSD$");
  * Shell command parser.
  */
 
-#define	EOFMARKLEN	79
 #define	PROMPTLEN	128
 
 /* values of checkkwd variable */
@@ -107,6 +106,8 @@ static int startlinno;		/* line # where last token started */
 static int funclinno;		/* line # where the current function started */
 static struct parser_temp *parser_temp;
 
+#define NOEOFMARK ((const char *)&heredoclist)
+
 
 static union node *list(int);
 static union node *andor(void);
@@ -126,6 +127,7 @@ static void consumetoken(int);
 static void synexpect(int) __dead2;
 static void synerror(const char *) __dead2;
 static void setprompt(int);
+static int pgetc_linecont(void);
 
 
 static void *
@@ -626,7 +628,7 @@ simplecmd(union node **rpp, union node *redir)
 
 	/* If we don't have any redirections already, then we must reset */
 	/* rpp to be the address of the local redir variable.  */
-	if (redir == 0)
+	if (redir == NULL)
 		rpp = &redir;
 
 	args = NULL;
@@ -751,7 +753,6 @@ parsefname(void)
 	if (n->type == NHERE) {
 		struct heredoc *here = heredoc;
 		struct heredoc *p;
-		int i;
 
 		if (quoteflag == 0)
 			n->type = NXHERE;
@@ -760,7 +761,7 @@ parsefname(void)
 			while (*wordtext == '\t')
 				wordtext++;
 		}
-		if (! noexpand(wordtext) || (i = strlen(wordtext)) == 0 || i > EOFMARKLEN)
+		if (! noexpand(wordtext))
 			synerror("Illegal eof marker for << redirection");
 		rmescapes(wordtext);
 		here->eofmark = wordtext;
@@ -924,7 +925,9 @@ xxreadtoken(void)
 				continue;
 			}
 			pungetc();
-			goto breakloop;
+			/* FALLTHROUGH */
+		default:
+			return readtoken1(c, BASESYNTAX, (char *)NULL, 0);
 		case '\n':
 			plinno++;
 			needprompt = doprompt;
@@ -932,17 +935,17 @@ xxreadtoken(void)
 		case PEOF:
 			RETURN(TEOF);
 		case '&':
-			if (pgetc() == '&')
+			if (pgetc_linecont() == '&')
 				RETURN(TAND);
 			pungetc();
 			RETURN(TBACKGND);
 		case '|':
-			if (pgetc() == '|')
+			if (pgetc_linecont() == '|')
 				RETURN(TOR);
 			pungetc();
 			RETURN(TPIPE);
 		case ';':
-			c = pgetc();
+			c = pgetc_linecont();
 			if (c == ';')
 				RETURN(TENDCASE);
 			else if (c == '&')
@@ -953,12 +956,8 @@ xxreadtoken(void)
 			RETURN(TLP);
 		case ')':
 			RETURN(TRP);
-		default:
-			goto breakloop;
 		}
 	}
-breakloop:
-	return readtoken1(c, BASESYNTAX, (char *)NULL, 0);
 #undef RETURN
 }
 
@@ -977,6 +976,102 @@ struct tokenstate
 	} category;
 };
 
+
+/*
+ * Check to see whether we are at the end of the here document.  When this
+ * is called, c is set to the first character of the next input line.  If
+ * we are at the end of the here document, this routine sets the c to PEOF.
+ * The new value of c is returned.
+ */
+
+static int
+checkend(int c, const char *eofmark, int striptabs)
+{
+	if (striptabs) {
+		while (c == '\t')
+			c = pgetc();
+	}
+	if (c == *eofmark) {
+		int c2;
+		const char *q;
+
+		for (q = eofmark + 1; c2 = pgetc(), *q != '\0' && c2 == *q; q++)
+			;
+		if ((c2 == PEOF || c2 == '\n') && *q == '\0') {
+			c = PEOF;
+			if (c2 == '\n') {
+				plinno++;
+				needprompt = doprompt;
+			}
+		} else {
+			pungetc();
+			pushstring(eofmark + 1, q - (eofmark + 1), NULL);
+		}
+	} else if (c == '\n' && *eofmark == '\0') {
+		c = PEOF;
+		plinno++;
+		needprompt = doprompt;
+	}
+	return (c);
+}
+
+
+/*
+ * Parse a redirection operator.  The variable "out" points to a string
+ * specifying the fd to be redirected.  The variable "c" contains the
+ * first character of the redirection operator.
+ */
+
+static void
+parseredir(char *out, int c)
+{
+	char fd = *out;
+	union node *np;
+
+	np = (union node *)stalloc(sizeof (struct nfile));
+	if (c == '>') {
+		np->nfile.fd = 1;
+		c = pgetc_linecont();
+		if (c == '>')
+			np->type = NAPPEND;
+		else if (c == '&')
+			np->type = NTOFD;
+		else if (c == '|')
+			np->type = NCLOBBER;
+		else {
+			np->type = NTO;
+			pungetc();
+		}
+	} else {	/* c == '<' */
+		np->nfile.fd = 0;
+		c = pgetc_linecont();
+		if (c == '<') {
+			if (sizeof (struct nfile) != sizeof (struct nhere)) {
+				np = (union node *)stalloc(sizeof (struct nhere));
+				np->nfile.fd = 0;
+			}
+			np->type = NHERE;
+			heredoc = (struct heredoc *)stalloc(sizeof (struct heredoc));
+			heredoc->here = np;
+			if ((c = pgetc_linecont()) == '-') {
+				heredoc->striptabs = 1;
+			} else {
+				heredoc->striptabs = 0;
+				pungetc();
+			}
+		} else if (c == '&')
+			np->type = NFROMFD;
+		else if (c == '>')
+			np->type = NFROMTO;
+		else {
+			np->type = NFROM;
+			pungetc();
+		}
+	}
+	if (fd != '\0')
+		np->nfile.fd = digit_val(fd);
+	redirnode = np;
+}
 
 /*
  * Called to parse command substitutions.
@@ -1039,25 +1134,12 @@ parsebackq(char *out, struct nodelist **pbqlist,
 				needprompt = 0;
 			}
 			CHECKSTRSPACE(2, oout);
-			switch (c = pgetc()) {
-			case '`':
-				goto done;
-
+			c = pgetc_linecont();
+			if (c == '`')
+				break;
+			switch (c) {
 			case '\\':
-                                if ((c = pgetc()) == '\n') {
-					plinno++;
-					if (doprompt)
-						setprompt(2);
-					else
-						setprompt(0);
-					/*
-					 * If eating a newline, avoid putting
-					 * the newline into the new character
-					 * stream (via the USTPUTC after the
-					 * switch).
-					 */
-					continue;
-				}
+				c = pgetc();
                                 if (c != '\\' && c != '`' && c != '$'
                                     && (!dblquote || c != '"'))
                                         USTPUTC('\\', oout);
@@ -1078,7 +1160,6 @@ parsebackq(char *out, struct nodelist **pbqlist,
 			}
 			USTPUTC(c, oout);
                 }
-done:
                 USTPUTC('\0', oout);
                 olen = oout - stackblock();
 		INTOFF;
@@ -1153,7 +1234,8 @@ done:
 static char *
 readcstyleesc(char *out)
 {
-	int c, v, i, n;
+	int c, vc, i, n;
+	unsigned int v;
 
 	c = pgetc();
 	switch (c) {
@@ -1268,24 +1350,31 @@ readcstyleesc(char *out)
 	default:
 		  synerror("Bad escape sequence");
 	}
-	v = (char)v;
+	vc = (char)v;
 	/*
 	 * We can't handle NUL bytes.
 	 * POSIX says we should skip till the closing quote.
 	 */
-	if (v == '\0') {
+	if (vc == '\0') {
 		while ((c = pgetc()) != '\'') {
 			if (c == '\\')
 				c = pgetc();
 			if (c == PEOF)
 				synerror("Unterminated quoted string");
+			if (c == '\n') {
+				plinno++;
+				if (doprompt)
+					setprompt(2);
+				else
+					setprompt(0);
+			}
 		}
 		pungetc();
 		return out;
 	}
-	if (SQSYNTAX[v] == CCTL)
+	if (SQSYNTAX[vc] == CCTL)
 		USTPUTC(CTLESC, out);
-	USTPUTC(v, out);
+	USTPUTC(vc, out);
 	return out;
 }
 
@@ -1302,8 +1391,6 @@ readcstyleesc(char *out)
  * will run code that appears at the end of readtoken1.
  */
 
-#define CHECKEND()	{goto checkend; checkend_return:;}
-#define PARSEREDIR()	{goto parseredir; parseredir_return:;}
 #define PARSESUB()	{goto parsesub; parsesub_return:;}
 #define	PARSEARITH()	{goto parsearith; parsearith_return:;}
 
@@ -1314,7 +1401,6 @@ readtoken1(int firstc, char const *initialsyntax, const char *eofmark,
 	int c = firstc;
 	char *out;
 	int len;
-	char line[EOFMARKLEN + 1];
 	struct nodelist *bqlist;
 	int quotef;
 	int newvarnest;
@@ -1336,7 +1422,9 @@ readtoken1(int firstc, char const *initialsyntax, const char *eofmark,
 
 	STARTSTACKSTR(out);
 	loop: {	/* for each line, until end of word */
-		CHECKEND();	/* set c to PEOF if at end of here document */
+		if (eofmark && eofmark != NOEOFMARK)
+			/* set c to PEOF if at end of here document */
+			c = checkend(c, eofmark, striptabs);
 		for (;;) {	/* until end of line or end of word */
 			CHECKSTRSPACE(4, out);	/* permit 4 calls to USTPUTC */
 
@@ -1447,7 +1535,7 @@ readtoken1(int firstc, char const *initialsyntax, const char *eofmark,
 					USTPUTC(c, out);
 					--state[level].parenlevel;
 				} else {
-					if (pgetc() == ')') {
+					if (pgetc_linecont() == ')') {
 						if (level > 0 &&
 						    state[level].category == TSTATE_ARITH) {
 							level--;
@@ -1502,7 +1590,7 @@ endword:
 		 && quotef == 0
 		 && len <= 2
 		 && (*out == '\0' || is_digit(*out))) {
-			PARSEREDIR();
+			parseredir(out, c);
 			return lasttoken = TREDIR;
 		} else {
 			pungetc();
@@ -1517,116 +1605,23 @@ endword:
 
 
 /*
- * Check to see whether we are at the end of the here document.  When this
- * is called, c is set to the first character of the next input line.  If
- * we are at the end of the here document, this routine sets the c to PEOF.
- */
-
-checkend: {
-	if (eofmark) {
-		if (striptabs) {
-			while (c == '\t')
-				c = pgetc();
-		}
-		if (c == *eofmark) {
-			if (pfgets(line, sizeof line) != NULL) {
-				const char *p, *q;
-
-				p = line;
-				for (q = eofmark + 1 ; *q && *p == *q ; p++, q++);
-				if ((*p == '\0' || *p == '\n') && *q == '\0') {
-					c = PEOF;
-					if (*p == '\n') {
-						plinno++;
-						needprompt = doprompt;
-					}
-				} else {
-					pushstring(line, strlen(line), NULL);
-				}
-			}
-		}
-	}
-	goto checkend_return;
-}
-
-
-/*
- * Parse a redirection operator.  The variable "out" points to a string
- * specifying the fd to be redirected.  The variable "c" contains the
- * first character of the redirection operator.
- */
-
-parseredir: {
-	char fd = *out;
-	union node *np;
-
-	np = (union node *)stalloc(sizeof (struct nfile));
-	if (c == '>') {
-		np->nfile.fd = 1;
-		c = pgetc();
-		if (c == '>')
-			np->type = NAPPEND;
-		else if (c == '&')
-			np->type = NTOFD;
-		else if (c == '|')
-			np->type = NCLOBBER;
-		else {
-			np->type = NTO;
-			pungetc();
-		}
-	} else {	/* c == '<' */
-		np->nfile.fd = 0;
-		c = pgetc();
-		if (c == '<') {
-			if (sizeof (struct nfile) != sizeof (struct nhere)) {
-				np = (union node *)stalloc(sizeof (struct nhere));
-				np->nfile.fd = 0;
-			}
-			np->type = NHERE;
-			heredoc = (struct heredoc *)stalloc(sizeof (struct heredoc));
-			heredoc->here = np;
-			if ((c = pgetc()) == '-') {
-				heredoc->striptabs = 1;
-			} else {
-				heredoc->striptabs = 0;
-				pungetc();
-			}
-		} else if (c == '&')
-			np->type = NFROMFD;
-		else if (c == '>')
-			np->type = NFROMTO;
-		else {
-			np->type = NFROM;
-			pungetc();
-		}
-	}
-	if (fd != '\0')
-		np->nfile.fd = digit_val(fd);
-	redirnode = np;
-	goto parseredir_return;
-}
-
-
-/*
  * Parse a substitution.  At this point, we have read the dollar sign
  * and nothing else.
  */
 
 parsesub: {
-	char buf[10];
 	int subtype;
 	int typeloc;
 	int flags;
 	char *p;
 	static const char types[] = "}-+?=";
-	int bracketed_name = 0; /* used to handle ${[0-9]*} variables */
 	int linno;
 	int length;
 	int c1;
 
-	c = pgetc();
+	c = pgetc_linecont();
 	if (c == '(') {	/* $(command) or $((arith)) */
-		if (pgetc() == '(') {
+		if (pgetc_linecont() == '(') {
 			PARSEARITH();
 		} else {
 			pungetc();
@@ -1643,8 +1638,7 @@ parsesub: {
 		subtype = VSNORMAL;
 		flags = 0;
 		if (c == '{') {
-			bracketed_name = 1;
-			c = pgetc();
+			c = pgetc_linecont();
 			subtype = 0;
 		}
 varname:
@@ -1652,41 +1646,44 @@ varname:
 			length = 0;
 			do {
 				STPUTC(c, out);
-				c = pgetc();
+				c = pgetc_linecont();
 				length++;
 			} while (!is_eof(c) && is_in_name(c));
 			if (length == 6 &&
 			    strncmp(out - length, "LINENO", length) == 0) {
 				/* Replace the variable name with the
 				 * current line number. */
+				STADJUST(-6, out);
+				CHECKSTRSPACE(11, out);
 				linno = plinno;
 				if (funclinno != 0)
 					linno -= funclinno - 1;
-				snprintf(buf, sizeof(buf), "%d", linno);
-				STADJUST(-6, out);
-				STPUTS(buf, out);
+				length = snprintf(out, 11, "%d", linno);
+				if (length > 10)
+					length = 10;
+				out += length;
 				flags |= VSLINENO;
 			}
 		} else if (is_digit(c)) {
-			if (bracketed_name) {
+			if (subtype != VSNORMAL) {
 				do {
 					STPUTC(c, out);
-					c = pgetc();
+					c = pgetc_linecont();
 				} while (is_digit(c));
 			} else {
-				STPUTC(c, out);
-				c = pgetc();
+				USTPUTC(c, out);
+				c = pgetc_linecont();
 			}
 		} else if (is_special(c)) {
 			c1 = c;
-			c = pgetc();
+			c = pgetc_linecont();
 			if (subtype == 0 && c1 == '#') {
 				subtype = VSLENGTH;
 				if (strchr(types, c) == NULL && c != ':' &&
 				    c != '#' && c != '%')
 					goto varname;
 				c1 = c;
-				c = pgetc();
+				c = pgetc_linecont();
 				if (c1 != '}' && c == '}') {
 					pungetc();
 					c = c1;
@@ -1711,7 +1708,7 @@ varname:
 			switch (c) {
 			case ':':
 				flags |= VSNUL;
-				c = pgetc();
+				c = pgetc_linecont();
 				/*FALLTHROUGH*/
 			default:
 				p = strchr(types, c);
@@ -1732,7 +1729,7 @@ varname:
 					int cc = c;
 					subtype = c == '#' ? VSTRIMLEFT :
 							     VSTRIMRIGHT;
-					c = pgetc();
+					c = pgetc_linecont();
 					if (c == cc)
 						subtype++;
 					else
@@ -1923,6 +1920,8 @@ synerror(const char *msg)
 {
 	if (commandname)
 		outfmt(out2, "%s: %d: ", commandname, startlinno);
+	else if (arg0)
+		outfmt(out2, "%s: ", arg0);
 	outfmt(out2, "Syntax error: %s\n", msg);
 	error((char *)NULL);
 }
@@ -1931,6 +1930,8 @@ static void
 setprompt(int which)
 {
 	whichprompt = which;
+	if (which == 0)
+		return;
 
 #ifndef NO_HISTORY
 	if (!el)
@@ -1941,6 +1942,29 @@ setprompt(int which)
 	}
 }
 
+static int
+pgetc_linecont(void)
+{
+	int c;
+
+	while ((c = pgetc_macro()) == '\\') {
+		c = pgetc();
+		if (c == '\n') {
+			plinno++;
+			if (doprompt)
+				setprompt(2);
+			else
+				setprompt(0);
+		} else {
+			pungetc();
+			/* Allow the backslash to be pushed back. */
+			pushstring("\\", 1, NULL);
+			return (pgetc());
+		}
+	}
+	return (c);
+}
+
 /*
  * called by editline -- any expansions to the prompt
  *    should be added here.
@@ -1949,7 +1973,7 @@ char *
 getprompt(void *unused __unused)
 {
 	static char ps[PROMPTLEN];
-	char *fmt;
+	const char *fmt;
 	const char *pwd;
 	int i, trim;
 	static char internal_error[] = "??";
@@ -1959,7 +1983,7 @@ getprompt(void *unused __unused)
 	 */
 	switch (whichprompt) {
 	case 0:
-		fmt = nullstr;
+		fmt = "";
 		break;
 	case 1:
 		fmt = ps1val();
@@ -1974,7 +1998,7 @@ getprompt(void *unused __unused)
 	/*
 	 * Format prompt string.
 	 */
-	for (i = 0; (i < 127) && (*fmt != '\0'); i++, fmt++)
+	for (i = 0; (i < PROMPTLEN - 1) && (*fmt != '\0'); i++, fmt++)
 		if (*fmt == '\\')
 			switch (*++fmt) {
 
@@ -1987,11 +2011,13 @@ getprompt(void *unused __unused)
 			case 'h':
 			case 'H':
 				ps[i] = '\0';
-				gethostname(&ps[i], PROMPTLEN - i);
+				gethostname(&ps[i], PROMPTLEN - i - 1);
+				ps[PROMPTLEN - 1] = '\0';
 				/* Skip to end of hostname. */
 				trim = (*fmt == 'h') ? '.' : '\0';
-				while ((ps[i+1] != '\0') && (ps[i+1] != trim))
+				while ((ps[i] != '\0') && (ps[i] != trim))
 					i++;
+				--i;
 				break;
 
 				/*
@@ -2003,7 +2029,7 @@ getprompt(void *unused __unused)
 			case 'W':
 			case 'w':
 				pwd = lookupvar("PWD");
-				if (pwd == NULL)
+				if (pwd == NULL || *pwd == '\0')
 					pwd = "?";
 				if (*fmt == 'W' &&
 				    *pwd == '/' && pwd[1] != '\0')
@@ -2036,8 +2062,9 @@ getprompt(void *unused __unused)
 				 * Emit unrecognized formats verbatim.
 				 */
 			default:
-				ps[i++] = '\\';
-				ps[i] = *fmt;
+				ps[i] = '\\';
+				if (i < PROMPTLEN - 2)
+					ps[++i] = *fmt;
 				break;
 			}
 		else
@@ -2063,7 +2090,7 @@ expandstr(const char *ps)
 		parser_temp = NULL;
 		setinputstring(ps, 1);
 		doprompt = 0;
-		readtoken1(pgetc(), DQSYNTAX, "\n\n", 0);
+		readtoken1(pgetc(), DQSYNTAX, NOEOFMARK, 0);
 		if (backquotelist != NULL)
 			error("Command substitution not allowed here");
 

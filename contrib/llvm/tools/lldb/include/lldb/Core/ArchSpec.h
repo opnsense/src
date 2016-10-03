@@ -12,9 +12,8 @@
 
 #if defined(__cplusplus)
 
-#include "lldb/lldb-private.h"
+#include "lldb/lldb-forward.h"
 #include "lldb/Core/ConstString.h"
-#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Triple.h"
 
 namespace lldb_private {
@@ -33,6 +32,46 @@ struct CoreDefinition;
 class ArchSpec
 {
 public:
+    enum MIPSSubType
+    {
+        eMIPSSubType_unknown,
+        eMIPSSubType_mips32,
+        eMIPSSubType_mips32r2,
+        eMIPSSubType_mips32r6,
+        eMIPSSubType_mips32el,
+        eMIPSSubType_mips32r2el,
+        eMIPSSubType_mips32r6el,
+        eMIPSSubType_mips64,
+        eMIPSSubType_mips64r2,
+        eMIPSSubType_mips64r6,
+        eMIPSSubType_mips64el,
+        eMIPSSubType_mips64r2el,
+        eMIPSSubType_mips64r6el,
+    };
+
+    // Masks for the ases word of an ABI flags structure.
+    enum MIPSASE
+    {
+        eMIPSAse_dsp        = 0x00000001,   // DSP ASE
+        eMIPSAse_dspr2      = 0x00000002,   // DSP R2 ASE
+        eMIPSAse_eva        = 0x00000004,   // Enhanced VA Scheme
+        eMIPSAse_mcu        = 0x00000008,   // MCU (MicroController) ASE
+        eMIPSAse_mdmx       = 0x00000010,   // MDMX ASE
+        eMIPSAse_mips3d     = 0x00000020,   // MIPS-3D ASE
+        eMIPSAse_mt         = 0x00000040,   // MT ASE
+        eMIPSAse_smartmips  = 0x00000080,   // SmartMIPS ASE
+        eMIPSAse_virt       = 0x00000100,   // VZ ASE
+        eMIPSAse_msa        = 0x00000200,   // MSA ASE
+        eMIPSAse_mips16     = 0x00000400,   // MIPS16 ASE
+        eMIPSAse_micromips  = 0x00000800,   // MICROMIPS ASE
+        eMIPSAse_xpa        = 0x00001000,   // XPA ASE
+        eMIPSAse_mask       = 0x00001fff,
+        eMIPSABI_O32        = 0x00002000,
+        eMIPSABI_N32        = 0x00004000,
+        eMIPSABI_N64        = 0x00008000,
+        eMIPSABI_mask       = 0x000ff000
+    };
+
     enum Core
     {
         eCore_arm_generic,
@@ -50,6 +89,7 @@ public:
         eCore_arm_armv7m,
         eCore_arm_armv7em,
         eCore_arm_xscale,  
+
         eCore_thumb,
         eCore_thumbv4t,
         eCore_thumbv5,
@@ -57,13 +97,35 @@ public:
         eCore_thumbv6,
         eCore_thumbv6m,
         eCore_thumbv7,
-        eCore_thumbv7f,
         eCore_thumbv7s,
         eCore_thumbv7k,
+        eCore_thumbv7f,
         eCore_thumbv7m,
         eCore_thumbv7em,
-        
+        eCore_arm_arm64,
+        eCore_arm_armv8,
+        eCore_arm_aarch64,
+
+        eCore_mips32,
+        eCore_mips32r2,
+        eCore_mips32r3,
+        eCore_mips32r5,
+        eCore_mips32r6,
+        eCore_mips32el,
+        eCore_mips32r2el,
+        eCore_mips32r3el,
+        eCore_mips32r5el,
+        eCore_mips32r6el,
         eCore_mips64,
+        eCore_mips64r2,
+        eCore_mips64r3,
+        eCore_mips64r5,
+        eCore_mips64r6,
+        eCore_mips64el,
+        eCore_mips64r2el,
+        eCore_mips64r3el,
+        eCore_mips64r5el,
+        eCore_mips64r6el,
 
         eCore_ppc_generic,
         eCore_ppc_ppc601,
@@ -89,6 +151,7 @@ public:
         eCore_x86_32_i386,
         eCore_x86_32_i486,
         eCore_x86_32_i486sx,
+        eCore_x86_32_i686,
         
         eCore_x86_64_x86_64,
         eCore_x86_64_x86_64h, // Haswell enabled x86_64
@@ -98,6 +161,11 @@ public:
 
         eCore_uknownMach32,
         eCore_uknownMach64,
+
+        eCore_kalimba3,
+        eCore_kalimba4,
+        eCore_kalimba5,
+
         kNumCores,
 
         kCore_invalid,
@@ -107,6 +175,7 @@ public:
         kCore_ppc_any,
         kCore_ppc64_any,
         kCore_x86_32_any,
+        kCore_x86_64_any,
         kCore_hexagon_any,
 
         kCore_arm_first     = eCore_arm_generic,
@@ -122,11 +191,35 @@ public:
         kCore_ppc64_last    = eCore_ppc64_ppc970_64,
 
         kCore_x86_32_first  = eCore_x86_32_i386,
-        kCore_x86_32_last   = eCore_x86_32_i486sx,
+        kCore_x86_32_last   = eCore_x86_32_i686,
+
+        kCore_x86_64_first  = eCore_x86_64_x86_64,
+        kCore_x86_64_last   = eCore_x86_64_x86_64h,
 
         kCore_hexagon_first  = eCore_hexagon_generic,
-        kCore_hexagon_last   = eCore_hexagon_hexagonv5
+        kCore_hexagon_last   = eCore_hexagon_hexagonv5,
+
+        kCore_kalimba_first = eCore_kalimba3,
+        kCore_kalimba_last = eCore_kalimba5,
+
+        kCore_mips32_first  = eCore_mips32,
+        kCore_mips32_last   = eCore_mips32r6,
+
+        kCore_mips32el_first  = eCore_mips32el,
+        kCore_mips32el_last   = eCore_mips32r6el,
+
+        kCore_mips64_first  = eCore_mips64,
+        kCore_mips64_last   = eCore_mips64r6,
+
+        kCore_mips64el_first  = eCore_mips64el,
+        kCore_mips64el_last   = eCore_mips64r6el,
+
+        kCore_mips_first  = eCore_mips32,
+        kCore_mips_last   = eCore_mips64r6el
+
     };
+
+    typedef void (* StopInfoOverrideCallbackType)(lldb_private::Thread &thread);
 
     //------------------------------------------------------------------
     /// Default constructor.
@@ -228,7 +321,7 @@ public:
     ///
     /// This will be something like "ubuntu", "fedora", etc. on Linux.
     /// This should be the same value returned by
-    /// Host::GetDistributionId ().
+    /// HostInfo::GetDistributionId ().
     ///------------------------------------------------------------------
     void
     SetDistributionId (const char* distribution_id);
@@ -252,62 +345,85 @@ public:
     }
 
     bool
+    TripleVendorIsUnspecifiedUnknown() const
+    {
+        return m_triple.getVendor() == llvm::Triple::UnknownVendor && m_triple.getVendorName().empty();
+    }
+
+    bool
     TripleOSWasSpecified() const
     {
         return !m_triple.getOSName().empty();
     }
+    
+    bool
+    TripleEnvironmentWasSpecified () const
+    {
+        return !m_triple.getEnvironmentName().empty();
+    }
+
+    bool
+    TripleOSIsUnspecifiedUnknown() const
+    {
+        return m_triple.getOS() == llvm::Triple::UnknownOS && m_triple.getOSName().empty();
+    }
 
     //------------------------------------------------------------------
-    /// Sets this ArchSpec according to the given architecture name.
+    /// Merges fields from another ArchSpec into this ArchSpec.
     ///
-    /// The architecture name can be one of the generic system default
-    /// values:
+    /// This will use the supplied ArchSpec to fill in any fields of
+    /// the triple in this ArchSpec which were unspecified.  This can
+    /// be used to refine a generic ArchSpec with a more specific one.
+    /// For example, if this ArchSpec's triple is something like
+    /// i386-unknown-unknown-unknown, and we have a triple which is
+    /// x64-pc-windows-msvc, then merging that triple into this one
+    /// will result in the triple i386-pc-windows-msvc.
     ///
-    /// @li \c LLDB_ARCH_DEFAULT - The arch the current system defaults
-    ///        to when a program is launched without any extra
-    ///        attributes or settings.
-    /// @li \c LLDB_ARCH_DEFAULT_32BIT - The default host architecture
-    ///        for 32 bit (if any).
-    /// @li \c LLDB_ARCH_DEFAULT_64BIT - The default host architecture
-    ///        for 64 bit (if any).
-    ///
-    /// Alternatively, if the object type of this ArchSpec has been
-    /// configured,  a concrete architecture can be specified to set
-    /// the CPU type ("x86_64" for example).
-    ///
-    /// Finally, an encoded object and archetecture format is accepted.
-    /// The format contains an object type (like "macho" or "elf"),
-    /// followed by a platform dependent encoding of CPU type and
-    /// subtype.  For example:
-    ///
-    ///     "macho"        : Specifies an object type of MachO.
-    ///     "macho-16-6"   : MachO specific encoding for ARMv6.
-    ///     "elf-43        : ELF specific encoding for Sparc V9.
-    ///
-    /// @param[in] arch_name The name of an architecture.
-    ///
-    /// @return True if @p arch_name was successfully translated, false
-    ///         otherwise.
     //------------------------------------------------------------------
-//    bool
-//    SetArchitecture (const llvm::StringRef& arch_name);
-//
-//    bool
-//    SetArchitecture (const char *arch_name);
+    void
+    MergeFrom(const ArchSpec &other);
     
     //------------------------------------------------------------------
-    /// Change the architecture object type and CPU type.
+    /// Change the architecture object type, CPU type and OS type.
     ///
     /// @param[in] arch_type The object type of this ArchSpec.
     ///
     /// @param[in] cpu The required CPU type.
     ///
-    /// @return True if the object and CPU type were sucessfully set.
+    /// @param[in] os The optional OS type
+    /// The default value of 0 was choosen to from the ELF spec value
+    /// ELFOSABI_NONE.  ELF is the only one using this parameter.  If another
+    /// format uses this parameter and 0 does not work, use a value over
+    /// 255 because in the ELF header this is value is only a byte.
+    ///
+    /// @return True if the object, and CPU were successfully set.
+    ///
+    /// As a side effect, the vendor value is usually set to unknown.
+    /// The exections are
+    ///   aarch64-apple-ios
+    ///   arm-apple-ios
+    ///   thumb-apple-ios
+    ///   x86-apple-
+    ///   x86_64-apple-
+    ///
+    /// As a side effect, the os value is usually set to unknown
+    /// The exceptions are
+    ///   *-*-aix
+    ///   aarch64-apple-ios
+    ///   arm-apple-ios
+    ///   thumb-apple-ios
+    ///   powerpc-apple-darwin
+    ///   *-*-freebsd
+    ///   *-*-linux
+    ///   *-*-netbsd
+    ///   *-*-openbsd
+    ///   *-*-solaris
     //------------------------------------------------------------------
     bool
     SetArchitecture (ArchitectureType arch_type, 
                      uint32_t cpu,
-                     uint32_t sub);
+                     uint32_t sub,
+                     uint32_t os = 0);
 
     //------------------------------------------------------------------
     /// Returns the byte order for the architecture specification.
@@ -351,6 +467,24 @@ public:
     GetMachOCPUSubType () const;
 
     //------------------------------------------------------------------
+    /// Architecture data byte width accessor
+    ///
+    /// @return the size in 8-bit (host) bytes of a minimum addressable
+    /// unit from the Architecture's data bus
+    //------------------------------------------------------------------
+    uint32_t
+    GetDataByteSize() const;
+
+    //------------------------------------------------------------------
+    /// Architecture code byte width accessor
+    ///
+    /// @return the size in 8-bit (host) bytes of a minimum addressable
+    /// unit from the Architecture's code bus
+    //------------------------------------------------------------------
+    uint32_t
+    GetCodeByteSize() const;
+ 
+    //------------------------------------------------------------------
     /// Architecture tripple accessor.
     ///
     /// @return A triple describing this ArchSpec.
@@ -371,6 +505,9 @@ public:
     {
         return m_triple;
     }
+
+    void
+    DumpTriple(Stream &s) const;
 
     //------------------------------------------------------------------
     /// Architecture tripple setter.
@@ -404,8 +541,18 @@ public:
     GetDefaultEndian () const;
 
     //------------------------------------------------------------------
-    /// Compare an ArchSpec to another ArchSpec, requiring an exact cpu 
-    /// type match between them.  
+    /// Returns true if 'char' is a signed type by defualt in the 
+    /// architecture false otherwise
+    ///
+    /// @return True if 'char' is a signed type by default on the
+    ///         architecture and false otherwise.
+    //------------------------------------------------------------------
+    bool
+    CharIsSignedByDefault () const;
+
+    //------------------------------------------------------------------
+    /// Compare an ArchSpec to another ArchSpec, requiring an exact cpu
+    /// type match between them.
     /// e.g. armv7s is not an exact match with armv7 - this would return false
     ///
     /// @return true if the two ArchSpecs match.
@@ -423,6 +570,53 @@ public:
     bool
     IsCompatibleMatch (const ArchSpec& rhs) const;
 
+    //------------------------------------------------------------------
+    /// Get a stop info override callback for the current architecture.
+    ///
+    /// Most platform specific code should go in lldb_private::Platform,
+    /// but there are cases where no matter which platform you are on
+    /// certain things hold true.
+    ///
+    /// This callback is currently intended to handle cases where a
+    /// program stops at an instruction that won't get executed and it
+    /// allows the stop reasonm, like "breakpoint hit", to be replaced
+    /// with a different stop reason like "no stop reason".
+    ///
+    /// This is specifically used for ARM in Thumb code when we stop in
+    /// an IT instruction (if/then/else) where the instruction won't get
+    /// executed and therefore it wouldn't be correct to show the program
+    /// stopped at the current PC. The code is generic and applies to all
+    /// ARM CPUs.
+    ///
+    /// @return NULL or a valid stop info override callback for the
+    ///     current architecture.
+    //------------------------------------------------------------------
+    StopInfoOverrideCallbackType
+    GetStopInfoOverrideCallback () const;
+    
+    bool
+    IsFullySpecifiedTriple () const;
+
+    void
+    PiecewiseTripleCompare (const ArchSpec &other,
+                            bool &arch_different,
+                            bool &vendor_different,
+                            bool &os_different,
+                            bool &os_version_different,
+                            bool &env_different);
+    
+    uint32_t
+    GetFlags () const
+    {
+        return m_flags;
+    }
+
+    void
+    SetFlags (uint32_t flags)
+    {
+        m_flags = flags;
+    }
+
 protected:
     bool
     IsEqualTo (const ArchSpec& rhs, bool exact_match) const;
@@ -430,6 +624,11 @@ protected:
     llvm::Triple m_triple;
     Core m_core;
     lldb::ByteOrder m_byte_order;
+
+    // Additional arch flags which we cannot get from triple and core
+    // For MIPS these are application specific extensions like 
+    // micromips, mips16 etc.
+    uint32_t m_flags;
 
     ConstString m_distribution_id;
 

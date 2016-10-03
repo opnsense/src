@@ -26,7 +26,6 @@ IBCS2			opt_dontuse.h
 COMPAT_LINUX		opt_dontuse.h
 COMPAT_SVR4		opt_dontuse.h
 DEBUG_SVR4		opt_svr4.h
-IMAGACT_BINMISC		opt_binmisc.h
 LINPROCFS		opt_dontuse.h
 LINSYSFS		opt_dontuse.h
 NDISAPI			opt_dontuse.h
@@ -115,7 +114,6 @@ NETGRAPH_CRONYX		opt_ng_cronyx.h
 DEV_APIC		opt_apic.h
 DEV_ATPIC		opt_atpic.h
 DEV_NPX			opt_npx.h
-ASR_COMPAT		opt_asr.h
 
 # Debugging
 NPX_DEBUG		opt_npx.h
@@ -123,11 +121,7 @@ NPX_DEBUG		opt_npx.h
 # BPF just-in-time compiler
 BPF_JITTER		opt_bpf.h
 
-NATIVE			opt_global.h
-XEN			opt_global.h
 XENHVM			opt_global.h
-
-HYPERV			opt_global.h
 
 # options for the Intel C600 SAS driver (isci)
 ISCI_LOGGING	opt_isci.h

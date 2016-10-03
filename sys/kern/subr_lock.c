@@ -75,8 +75,8 @@ lock_init(struct lock_object *lock, struct lock_class *class, const char *name,
 	int i;
 
 	/* Check for double-init and zero object. */
-	KASSERT(!lock_initalized(lock), ("lock \"%s\" %p already initialized",
-	    name, lock));
+	KASSERT(flags & LO_NEW || !lock_initialized(lock),
+	    ("lock \"%s\" %p already initialized", name, lock));
 
 	/* Look up lock class to find its index. */
 	for (i = 0; i < LOCK_CLASS_MAX; i++)
@@ -97,10 +97,38 @@ void
 lock_destroy(struct lock_object *lock)
 {
 
-	KASSERT(lock_initalized(lock), ("lock %p is not initialized", lock));
+	KASSERT(lock_initialized(lock), ("lock %p is not initialized", lock));
 	WITNESS_DESTROY(lock);
 	LOCK_LOG_DESTROY(lock, 0);
 	lock->lo_flags &= ~LO_INITIALIZED;
+}
+
+void
+lock_delay(struct lock_delay_arg *la)
+{
+	u_int i, delay, backoff, min, max;
+	struct lock_delay_config *lc = la->config;
+
+	delay = la->delay;
+
+	if (delay == 0)
+		delay = lc->initial;
+	else {
+		delay += lc->step;
+		max = lc->max;
+		if (delay > max)
+			delay = max;
+	}
+
+	backoff = cpu_ticks() % delay;
+	min = lc->min;
+	if (backoff < min)
+		backoff = min;
+	for (i = 0; i < backoff; i++)
+		cpu_spinwait();
+
+	la->delay = delay;
+	la->spin_cnt += backoff;
 }
 
 #ifdef DDB

@@ -40,12 +40,14 @@ __FBSDID("$FreeBSD$");
 #include <sys/param.h>
 #include <sys/jail.h>
 #include <sys/kernel.h>
+#include <sys/eventhandler.h>
 #include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/protosw.h>
+#include <sys/rmlock.h>
 #include <sys/rwlock.h>
 #include <sys/signalvar.h>
 #include <sys/socket.h>
@@ -57,6 +59,7 @@ __FBSDID("$FreeBSD$");
 #include <vm/uma.h>
 
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/route.h>
 #include <net/vnet.h>
 
@@ -68,15 +71,17 @@ __FBSDID("$FreeBSD$");
 #include <netinet/ip.h>
 #include <netinet/ip_var.h>
 #include <netinet/ip_mroute.h>
+#include <netinet/ip_icmp.h>
 
 #ifdef IPSEC
 #include <netipsec/ipsec.h>
 #endif /*IPSEC*/
 
+#include <machine/stdarg.h>
 #include <security/mac/mac_framework.h>
 
 VNET_DEFINE(int, ip_defttl) = IPDEFTTL;
-SYSCTL_VNET_INT(_net_inet_ip, IPCTL_DEFTTL, ttl, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_ip, IPCTL_DEFTTL, ttl, CTLFLAG_VNET | CTLFLAG_RW,
     &VNET_NAME(ip_defttl), 0,
     "Maximum TTL on IP packets");
 
@@ -123,10 +128,12 @@ int (*mrt_ioctl)(u_long, caddr_t, int);
 int (*legal_vif_num)(int);
 u_long (*ip_mcast_src)(int);
 
-void (*rsvp_input_p)(struct mbuf *m, int off);
+int (*rsvp_input_p)(struct mbuf **, int *, int);
 int (*ip_rsvp_vif)(struct socket *, struct sockopt *);
 void (*ip_rsvp_force_done)(struct socket *);
 #endif /* INET */
+
+extern	struct protosw inetsw[];
 
 u_long	rip_sendspace = 9216;
 SYSCTL_ULONG(_net_inet_raw, OID_AUTO, maxdgram, CTLFLAG_RW,
@@ -205,19 +212,19 @@ rip_init(void)
 {
 
 	in_pcbinfo_init(&V_ripcbinfo, "rip", &V_ripcb, INP_PCBHASH_RAW_SIZE,
-	    1, "ripcb", rip_inpcb_init, NULL, UMA_ZONE_NOFREE,
-	    IPI_HASHFIELDS_NONE);
+	    1, "ripcb", rip_inpcb_init, NULL, 0, IPI_HASHFIELDS_NONE);
 	EVENTHANDLER_REGISTER(maxsockets_change, rip_zone_change, NULL,
 	    EVENTHANDLER_PRI_ANY);
 }
 
 #ifdef VIMAGE
-void
-rip_destroy(void)
+static void
+rip_destroy(void *unused __unused)
 {
 
 	in_pcbinfo_destroy(&V_ripcbinfo);
 }
+VNET_SYSUNINIT(raw_ip, SI_SUB_PROTO_DOMAIN, SI_ORDER_FOURTH, rip_destroy, NULL);
 #endif
 
 #ifdef INET
@@ -269,15 +276,17 @@ rip_append(struct inpcb *last, struct ip *ip, struct mbuf *n,
  * Setup generic address and protocol structures for raw_input routine, then
  * pass them along with mbuf chain.
  */
-void
-rip_input(struct mbuf *m, int off)
+int
+rip_input(struct mbuf **mp, int *offp, int proto)
 {
 	struct ifnet *ifp;
+	struct mbuf *m = *mp;
 	struct ip *ip = mtod(m, struct ip *);
-	int proto = ip->ip_p;
 	struct inpcb *inp, *last;
 	struct sockaddr_in ripsrc;
 	int hash;
+
+	*mp = NULL;
 
 	bzero(&ripsrc, sizeof(ripsrc));
 	ripsrc.sin_len = sizeof(ripsrc);
@@ -286,11 +295,6 @@ rip_input(struct mbuf *m, int off)
 	last = NULL;
 
 	ifp = m->m_pkthdr.rcvif;
-	/*
-	 * Applications on raw sockets expect host byte order.
-	 */
-	ip->ip_len = ntohs(ip->ip_len);
-	ip->ip_off = ntohs(ip->ip_off);
 
 	hash = INP_PCBHASH_RAW(proto, ip->ip_src.s_addr,
 	    ip->ip_dst.s_addr, V_ripcbinfo.ipi_hashmask);
@@ -411,10 +415,15 @@ rip_input(struct mbuf *m, int off)
 			IPSTAT_INC(ips_delivered);
 		INP_RUNLOCK(last);
 	} else {
-		m_freem(m);
-		IPSTAT_INC(ips_noproto);
-		IPSTAT_DEC(ips_delivered);
+		if (inetsw[ip_protox[ip->ip_p]].pr_input == rip_input) {
+			IPSTAT_INC(ips_noproto);
+			IPSTAT_DEC(ips_delivered);
+			icmp_error(m, ICMP_UNREACH, ICMP_UNREACH_PROTOCOL, 0, 0);
+		} else {
+			m_freem(m);
+		}
 	}
+	return (IPPROTO_DONE);
 }
 
 /*
@@ -422,13 +431,19 @@ rip_input(struct mbuf *m, int off)
  * have setup with control call.
  */
 int
-rip_output(struct mbuf *m, struct socket *so, u_long dst)
+rip_output(struct mbuf *m, struct socket *so, ...)
 {
 	struct ip *ip;
 	int error;
 	struct inpcb *inp = sotoinpcb(so);
+	va_list ap;
+	u_long dst;
 	int flags = ((so->so_options & SO_DONTROUTE) ? IP_ROUTETOIF : 0) |
 	    IP_ALLOWBROADCAST;
+
+	va_start(ap, so);
+	dst = va_arg(ap, u_long);
+	va_end(ap);
 
 	/*
 	 * If the user handed us a complete IP packet, use it.  Otherwise,
@@ -493,21 +508,18 @@ rip_output(struct mbuf *m, struct socket *so, u_long dst)
 		 * and don't allow packet length sizes that will crash.
 		 */
 		if (((ip->ip_hl != (sizeof (*ip) >> 2)) && inp->inp_options)
-		    || (ip->ip_len > m->m_pkthdr.len)
-		    || (ip->ip_len < (ip->ip_hl << 2))) {
+		    || (ntohs(ip->ip_len) > m->m_pkthdr.len)
+		    || (ntohs(ip->ip_len) < (ip->ip_hl << 2))) {
 			INP_RUNLOCK(inp);
 			m_freem(m);
 			return (EINVAL);
 		}
-		if (ip->ip_id == 0)
-			ip->ip_id = ip_newid();
-
 		/*
-		 * Applications on raw sockets pass us packets
-		 * in host byte order.
+		 * This doesn't allow application to specify ID of zero,
+		 * but we got this limitation from the beginning of history.
 		 */
-		ip->ip_len = htons(ip->ip_len);
-		ip->ip_off = htons(ip->ip_off);
+		if (ip->ip_id == 0)
+			ip_fillid(ip);
 
 		/*
 		 * XXX prevent ip_output from overwriting header fields.
@@ -721,6 +733,7 @@ rip_ctloutput(struct socket *so, struct sockopt *sopt)
 void
 rip_ctlinput(int cmd, struct sockaddr *sa, void *vip)
 {
+	struct rm_priotracker in_ifa_tracker;
 	struct in_ifaddr *ia;
 	struct ifnet *ifp;
 	int err;
@@ -728,16 +741,16 @@ rip_ctlinput(int cmd, struct sockaddr *sa, void *vip)
 
 	switch (cmd) {
 	case PRC_IFDOWN:
-		IN_IFADDR_RLOCK();
+		IN_IFADDR_RLOCK(&in_ifa_tracker);
 		TAILQ_FOREACH(ia, &V_in_ifaddrhead, ia_link) {
 			if (ia->ia_ifa.ifa_addr == sa
 			    && (ia->ia_flags & IFA_ROUTE)) {
 				ifa_ref(&ia->ia_ifa);
-				IN_IFADDR_RUNLOCK();
+				IN_IFADDR_RUNLOCK(&in_ifa_tracker);
 				/*
-				 * in_ifscrub kills the interface route.
+				 * in_scrubprefix() kills the interface route.
 				 */
-				in_ifscrub(ia->ia_ifp, ia, 0);
+				in_scrubprefix(ia, 0);
 				/*
 				 * in_ifadown gets rid of all the rest of the
 				 * routes.  This is not quite the right thing
@@ -750,21 +763,21 @@ rip_ctlinput(int cmd, struct sockaddr *sa, void *vip)
 			}
 		}
 		if (ia == NULL)		/* If ia matched, already unlocked. */
-			IN_IFADDR_RUNLOCK();
+			IN_IFADDR_RUNLOCK(&in_ifa_tracker);
 		break;
 
 	case PRC_IFUP:
-		IN_IFADDR_RLOCK();
+		IN_IFADDR_RLOCK(&in_ifa_tracker);
 		TAILQ_FOREACH(ia, &V_in_ifaddrhead, ia_link) {
 			if (ia->ia_ifa.ifa_addr == sa)
 				break;
 		}
 		if (ia == NULL || (ia->ia_flags & IFA_ROUTE)) {
-			IN_IFADDR_RUNLOCK();
+			IN_IFADDR_RUNLOCK(&in_ifa_tracker);
 			return;
 		}
 		ifa_ref(&ia->ia_ifa);
-		IN_IFADDR_RUNLOCK();
+		IN_IFADDR_RUNLOCK(&in_ifa_tracker);
 		flags = RTF_UP;
 		ifp = ia->ia_ifa.ifa_ifp;
 
@@ -773,16 +786,12 @@ rip_ctlinput(int cmd, struct sockaddr *sa, void *vip)
 			flags |= RTF_HOST;
 
 		err = ifa_del_loopback_route((struct ifaddr *)ia, sa);
-		if (err == 0)
-			ia->ia_flags &= ~IFA_RTSELF;
 
 		err = rtinit(&ia->ia_ifa, RTM_ADD, flags);
 		if (err == 0)
 			ia->ia_flags |= IFA_ROUTE;
 
 		err = ifa_add_loopback_route((struct ifaddr *)ia, sa);
-		if (err == 0)
-			ia->ia_flags |= IFA_RTSELF;
 
 		ifa_free(&ia->ia_ifa);
 		break;
@@ -1045,7 +1054,7 @@ rip_pcblist(SYSCTL_HANDLER_ARGS)
 		return (error);
 
 	inp_list = malloc(n * sizeof *inp_list, M_TEMP, M_WAITOK);
-	if (inp_list == 0)
+	if (inp_list == NULL)
 		return (ENOMEM);
 
 	INP_INFO_RLOCK(&V_ripcbinfo);

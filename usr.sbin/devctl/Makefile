@@ -3,7 +3,6 @@
 PROG=	devctl
 MAN=	devctl.8
 
-DPADD=	${LIBDEVCTL}
-LDADD=	-ldevctl
+LIBADD=	devctl
 
 .include <bsd.prog.mk>

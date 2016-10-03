@@ -317,7 +317,7 @@ ar5212IsMacSupported(uint8_t macVersion, uint8_t macRev)
 static struct ath_hal *
 ar5212Attach(uint16_t devid, HAL_SOFTC sc,
 	HAL_BUS_TAG st, HAL_BUS_HANDLE sh, uint16_t *eepromdata,
-	HAL_STATUS *status)
+	HAL_OPS_CONFIG *ah_config, HAL_STATUS *status)
 {
 #define	AH_EEPROM_PROTECT(ah) \
 	(AH_PRIVATE(ah)->ah_ispcie)? AR_EEPROM_PROTECT_PCIE : AR_EEPROM_PROTECT)
@@ -885,7 +885,7 @@ ar5212FillCapabilityInfo(struct ath_hal *ah)
 		pCap->halRfSilentSupport = AH_TRUE;
 	}
 
-	/* NB: this is a guess, noone seems to know the answer */
+	/* NB: this is a guess, no one seems to know the answer */
 	ahpriv->ah_rxornIsFatal =
 	    (AH_PRIVATE(ah)->ah_macVersion < AR_SREV_VERSION_VENICE);
 

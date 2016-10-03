@@ -4,7 +4,6 @@
 .PATH:	${.CURDIR}/../../../dev/aic7xxx
 KMOD=	ahd
 
-WERROR=
 GENSRCS= aic79xx_seq.h aic79xx_reg.h
 REG_PRINT_OPT=
 AHD_REG_PRETTY_PRINT=1
@@ -27,7 +26,7 @@ ${GENSRCS}:								 \
 			-i ${.CURDIR}/../../../dev/aic7xxx/aic79xx_osm.h \
 			${.CURDIR}/../../../dev/aic7xxx/aic79xx.seq
 .else
-${GENSRCS}:
+${GENSRCS}: .NOMETA
 	@echo "Error: ${.TARGET} is missing.  Run 'make ahdfirmware'."
 .endif
 
@@ -45,4 +44,3 @@ CLEANFILES= ${GENSRCS}
 .include <bsd.kmod.mk>
 
 CWARNFLAGS.ahd_pci.c=	${NO_WCONSTANT_CONVERSION}
-CWARNFLAGS+=		${CWARNFLAGS.${.IMPSRC:T}}

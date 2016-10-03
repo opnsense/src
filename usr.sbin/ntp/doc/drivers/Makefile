@@ -1,6 +1,6 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 SUBDIR=		icons scripts
 FILESDIR=	${SHAREDIR}/doc/ntp/drivers

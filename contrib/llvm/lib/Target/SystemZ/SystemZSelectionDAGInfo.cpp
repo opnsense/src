@@ -11,19 +11,12 @@
 //
 //===----------------------------------------------------------------------===//
 
-#define DEBUG_TYPE "systemz-selectiondag-info"
 #include "SystemZTargetMachine.h"
 #include "llvm/CodeGen/SelectionDAG.h"
 
 using namespace llvm;
 
-SystemZSelectionDAGInfo::
-SystemZSelectionDAGInfo(const SystemZTargetMachine &TM)
-  : TargetSelectionDAGInfo(TM) {
-}
-
-SystemZSelectionDAGInfo::~SystemZSelectionDAGInfo() {
-}
+#define DEBUG_TYPE "systemz-selectiondag-info"
 
 // Decide whether it is best to use a loop or straight-line code for
 // a block operation of Size bytes with source address Src and destination
@@ -47,10 +40,10 @@ static SDValue emitMemMem(SelectionDAG &DAG, SDLoc DL, unsigned Sequence,
   // number of straight-line MVCs as 6 * 256 - 1.
   if (Size > 6 * 256)
     return DAG.getNode(Loop, DL, MVT::Other, Chain, Dst, Src,
-                       DAG.getConstant(Size, PtrVT),
-                       DAG.getConstant(Size / 256, PtrVT));
+                       DAG.getConstant(Size, DL, PtrVT),
+                       DAG.getConstant(Size / 256, DL, PtrVT));
   return DAG.getNode(Sequence, DL, MVT::Other, Chain, Dst, Src,
-                     DAG.getConstant(Size, PtrVT));
+                     DAG.getConstant(Size, DL, PtrVT));
 }
 
 SDValue SystemZSelectionDAGInfo::
@@ -62,7 +55,7 @@ EmitTargetCodeForMemcpy(SelectionDAG &DAG, SDLoc DL, SDValue Chain,
   if (IsVolatile)
     return SDValue();
 
-  if (ConstantSDNode *CSize = dyn_cast<ConstantSDNode>(Size))
+  if (auto *CSize = dyn_cast<ConstantSDNode>(Size))
     return emitMemMem(DAG, DL, SystemZISD::MVC, SystemZISD::MVC_LOOP,
                       Chain, Dst, Src, CSize->getZExtValue());
   return SDValue();
@@ -79,7 +72,8 @@ static SDValue memsetStore(SelectionDAG &DAG, SDLoc DL, SDValue Chain,
   for (unsigned I = 1; I < Size; ++I)
     StoreVal |= ByteVal << (I * 8);
   return DAG.getStore(Chain, DL,
-                      DAG.getConstant(StoreVal, MVT::getIntegerVT(Size * 8)),
+                      DAG.getConstant(StoreVal, DL,
+                                      MVT::getIntegerVT(Size * 8)),
                       Dst, DstPtrInfo, false, false, Align);
 }
 
@@ -93,18 +87,18 @@ EmitTargetCodeForMemset(SelectionDAG &DAG, SDLoc DL, SDValue Chain,
   if (IsVolatile)
     return SDValue();
 
-  if (ConstantSDNode *CSize = dyn_cast<ConstantSDNode>(Size)) {
+  if (auto *CSize = dyn_cast<ConstantSDNode>(Size)) {
     uint64_t Bytes = CSize->getZExtValue();
     if (Bytes == 0)
       return SDValue();
-    if (ConstantSDNode *CByte = dyn_cast<ConstantSDNode>(Byte)) {
+    if (auto *CByte = dyn_cast<ConstantSDNode>(Byte)) {
       // Handle cases that can be done using at most two of
       // MVI, MVHI, MVHHI and MVGHI.  The latter two can only be
       // used if ByteVal is all zeros or all ones; in other casees,
       // we can move at most 2 halfwords.
       uint64_t ByteVal = CByte->getZExtValue();
       if (ByteVal == 0 || ByteVal == 255 ?
-          Bytes <= 16 && CountPopulation_64(Bytes) <= 2 :
+          Bytes <= 16 && countPopulation(Bytes) <= 2 :
           Bytes <= 4) {
         unsigned Size1 = Bytes == 16 ? 8 : 1 << findLastSet(Bytes);
         unsigned Size2 = Bytes - Size1;
@@ -113,7 +107,7 @@ EmitTargetCodeForMemset(SelectionDAG &DAG, SDLoc DL, SDValue Chain,
         if (Size2 == 0)
           return Chain1;
         Dst = DAG.getNode(ISD::ADD, DL, PtrVT, Dst,
-                          DAG.getConstant(Size1, PtrVT));
+                          DAG.getConstant(Size1, DL, PtrVT));
         DstPtrInfo = DstPtrInfo.getWithOffset(Size1);
         SDValue Chain2 = memsetStore(DAG, DL, Chain, Dst, ByteVal, Size2,
                                      std::min(Align, Size1), DstPtrInfo);
@@ -127,7 +121,7 @@ EmitTargetCodeForMemset(SelectionDAG &DAG, SDLoc DL, SDValue Chain,
         if (Bytes == 1)
           return Chain1;
         SDValue Dst2 = DAG.getNode(ISD::ADD, DL, PtrVT, Dst,
-                                   DAG.getConstant(1, PtrVT));
+                                   DAG.getConstant(1, DL, PtrVT));
         SDValue Chain2 = DAG.getStore(Chain, DL, Byte, Dst2,
                                       DstPtrInfo.getWithOffset(1),
                                       false, false, 1);
@@ -137,7 +131,7 @@ EmitTargetCodeForMemset(SelectionDAG &DAG, SDLoc DL, SDValue Chain,
     assert(Bytes >= 2 && "Should have dealt with 0- and 1-byte cases already");
 
     // Handle the special case of a memset of 0, which can use XC.
-    ConstantSDNode *CByte = dyn_cast<ConstantSDNode>(Byte);
+    auto *CByte = dyn_cast<ConstantSDNode>(Byte);
     if (CByte && CByte->getZExtValue() == 0)
       return emitMemMem(DAG, DL, SystemZISD::XC, SystemZISD::XC_LOOP,
                         Chain, Dst, Dst, Bytes);
@@ -147,7 +141,7 @@ EmitTargetCodeForMemset(SelectionDAG &DAG, SDLoc DL, SDValue Chain,
     Chain = DAG.getStore(Chain, DL, Byte, Dst, DstPtrInfo,
                          false, false, Align);
     SDValue DstPlus1 = DAG.getNode(ISD::ADD, DL, PtrVT, Dst,
-                                   DAG.getConstant(1, PtrVT));
+                                   DAG.getConstant(1, DL, PtrVT));
     return emitMemMem(DAG, DL, SystemZISD::MVC, SystemZISD::MVC_LOOP,
                       Chain, DstPlus1, Dst, Bytes - 1);
   }
@@ -170,10 +164,10 @@ static SDValue emitCLC(SelectionDAG &DAG, SDLoc DL, SDValue Chain,
   // needs 2 branches, whereas a straight-line sequence would need 3 or more.
   if (Size > 3 * 256)
     return DAG.getNode(SystemZISD::CLC_LOOP, DL, VTs, Chain, Src1, Src2,
-                       DAG.getConstant(Size, PtrVT),
-                       DAG.getConstant(Size / 256, PtrVT));
+                       DAG.getConstant(Size, DL, PtrVT),
+                       DAG.getConstant(Size / 256, DL, PtrVT));
   return DAG.getNode(SystemZISD::CLC, DL, VTs, Chain, Src1, Src2,
-                     DAG.getConstant(Size, PtrVT));
+                     DAG.getConstant(Size, DL, PtrVT));
 }
 
 // Convert the current CC value into an integer that is 0 if CC == 0,
@@ -183,9 +177,9 @@ static SDValue emitCLC(SelectionDAG &DAG, SDLoc DL, SDValue Chain,
 static SDValue addIPMSequence(SDLoc DL, SDValue Glue, SelectionDAG &DAG) {
   SDValue IPM = DAG.getNode(SystemZISD::IPM, DL, MVT::i32, Glue);
   SDValue SRL = DAG.getNode(ISD::SRL, DL, MVT::i32, IPM,
-                            DAG.getConstant(SystemZ::IPM_CC, MVT::i32));
+                            DAG.getConstant(SystemZ::IPM_CC, DL, MVT::i32));
   SDValue ROTL = DAG.getNode(ISD::ROTL, DL, MVT::i32, SRL,
-                             DAG.getConstant(31, MVT::i32));
+                             DAG.getConstant(31, DL, MVT::i32));
   return ROTL;
 }
 
@@ -194,7 +188,7 @@ EmitTargetCodeForMemcmp(SelectionDAG &DAG, SDLoc DL, SDValue Chain,
                         SDValue Src1, SDValue Src2, SDValue Size,
                         MachinePointerInfo Op1PtrInfo,
                         MachinePointerInfo Op2PtrInfo) const {
-  if (ConstantSDNode *CSize = dyn_cast<ConstantSDNode>(Size)) {
+  if (auto *CSize = dyn_cast<ConstantSDNode>(Size)) {
     uint64_t Bytes = CSize->getZExtValue();
     assert(Bytes > 0 && "Caller should have handled 0-size case");
     Chain = emitCLC(DAG, DL, Chain, Src1, Src2, Bytes);
@@ -214,7 +208,7 @@ EmitTargetCodeForMemchr(SelectionDAG &DAG, SDLoc DL, SDValue Chain,
   Length = DAG.getZExtOrTrunc(Length, DL, PtrVT);
   Char = DAG.getZExtOrTrunc(Char, DL, MVT::i32);
   Char = DAG.getNode(ISD::AND, DL, MVT::i32, Char,
-                     DAG.getConstant(255, MVT::i32));
+                     DAG.getConstant(255, DL, MVT::i32));
   SDValue Limit = DAG.getNode(ISD::ADD, DL, PtrVT, Src, Length);
   SDValue End = DAG.getNode(SystemZISD::SEARCH_STRING, DL, VTs, Chain,
                             Limit, Src, Char);
@@ -223,14 +217,12 @@ EmitTargetCodeForMemchr(SelectionDAG &DAG, SDLoc DL, SDValue Chain,
 
   // Now select between End and null, depending on whether the character
   // was found.
-  SmallVector<SDValue, 5> Ops;
-  Ops.push_back(End);
-  Ops.push_back(DAG.getConstant(0, PtrVT));
-  Ops.push_back(DAG.getConstant(SystemZ::CCMASK_SRST, MVT::i32));
-  Ops.push_back(DAG.getConstant(SystemZ::CCMASK_SRST_FOUND, MVT::i32));
-  Ops.push_back(Glue);
+  SDValue Ops[] = {End, DAG.getConstant(0, DL, PtrVT),
+                   DAG.getConstant(SystemZ::CCMASK_SRST, DL, MVT::i32),
+                   DAG.getConstant(SystemZ::CCMASK_SRST_FOUND, DL, MVT::i32),
+                   Glue};
   VTs = DAG.getVTList(PtrVT, MVT::Glue);
-  End = DAG.getNode(SystemZISD::SELECT_CCMASK, DL, VTs, &Ops[0], Ops.size());
+  End = DAG.getNode(SystemZISD::SELECT_CCMASK, DL, VTs, Ops);
   return std::make_pair(End, Chain);
 }
 
@@ -241,7 +233,7 @@ EmitTargetCodeForStrcpy(SelectionDAG &DAG, SDLoc DL, SDValue Chain,
                         MachinePointerInfo SrcPtrInfo, bool isStpcpy) const {
   SDVTList VTs = DAG.getVTList(Dest.getValueType(), MVT::Other);
   SDValue EndDest = DAG.getNode(SystemZISD::STPCPY, DL, VTs, Chain, Dest, Src,
-                                DAG.getConstant(0, MVT::i32));
+                                DAG.getConstant(0, DL, MVT::i32));
   return std::make_pair(isStpcpy ? EndDest : Dest, EndDest.getValue(1));
 }
 
@@ -252,7 +244,7 @@ EmitTargetCodeForStrcmp(SelectionDAG &DAG, SDLoc DL, SDValue Chain,
                         MachinePointerInfo Op2PtrInfo) const {
   SDVTList VTs = DAG.getVTList(Src1.getValueType(), MVT::Other, MVT::Glue);
   SDValue Unused = DAG.getNode(SystemZISD::STRCMP, DL, VTs, Chain, Src1, Src2,
-                               DAG.getConstant(0, MVT::i32));
+                               DAG.getConstant(0, DL, MVT::i32));
   Chain = Unused.getValue(1);
   SDValue Glue = Chain.getValue(2);
   return std::make_pair(addIPMSequence(DL, Glue, DAG), Chain);
@@ -269,7 +261,7 @@ static std::pair<SDValue, SDValue> getBoundedStrlen(SelectionDAG &DAG, SDLoc DL,
   EVT PtrVT = Src.getValueType();
   SDVTList VTs = DAG.getVTList(PtrVT, MVT::Other, MVT::Glue);
   SDValue End = DAG.getNode(SystemZISD::SEARCH_STRING, DL, VTs, Chain,
-                            Limit, Src, DAG.getConstant(0, MVT::i32));
+                            Limit, Src, DAG.getConstant(0, DL, MVT::i32));
   Chain = End.getValue(1);
   SDValue Len = DAG.getNode(ISD::SUB, DL, PtrVT, End, Src);
   return std::make_pair(Len, Chain);
@@ -279,7 +271,7 @@ std::pair<SDValue, SDValue> SystemZSelectionDAGInfo::
 EmitTargetCodeForStrlen(SelectionDAG &DAG, SDLoc DL, SDValue Chain,
                         SDValue Src, MachinePointerInfo SrcPtrInfo) const {
   EVT PtrVT = Src.getValueType();
-  return getBoundedStrlen(DAG, DL, Chain, Src, DAG.getConstant(0, PtrVT));
+  return getBoundedStrlen(DAG, DL, Chain, Src, DAG.getConstant(0, DL, PtrVT));
 }
 
 std::pair<SDValue, SDValue> SystemZSelectionDAGInfo::

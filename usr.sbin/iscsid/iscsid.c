@@ -42,6 +42,7 @@ __FBSDID("$FreeBSD$");
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <libutil.h>
 #include <netdb.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -50,8 +51,6 @@ __FBSDID("$FreeBSD$");
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-
-#include <libutil.h>
 
 #include "iscsid.h"
 
@@ -151,8 +150,7 @@ resolve_addr(const struct connection *conn, const char *address,
 }
 
 static struct connection *
-connection_new(unsigned int session_id, const uint8_t isid[8], uint16_t tsih,
-    const struct iscsi_session_conf *conf, int iscsi_fd)
+connection_new(int iscsi_fd, const struct iscsi_daemon_request *request)
 {
 	struct connection *conn;
 	struct addrinfo *from_ai, *to_ai;
@@ -176,16 +174,13 @@ connection_new(unsigned int session_id, const uint8_t isid[8], uint16_t tsih,
 	conn->conn_max_data_segment_length = 8192;
 	conn->conn_max_burst_length = 262144;
 	conn->conn_first_burst_length = 65536;
-
-	conn->conn_session_id = session_id;
-	memcpy(&conn->conn_isid, isid, sizeof(conn->conn_isid));
-	conn->conn_tsih = tsih;
 	conn->conn_iscsi_fd = iscsi_fd;
 
-	/*
-	 * XXX: Should we sanitize this somehow?
-	 */
-	memcpy(&conn->conn_conf, conf, sizeof(conn->conn_conf));
+	conn->conn_session_id = request->idr_session_id;
+	memcpy(&conn->conn_conf, &request->idr_conf, sizeof(conn->conn_conf));
+	memcpy(&conn->conn_isid, &request->idr_isid, sizeof(conn->conn_isid));
+	conn->conn_tsih = request->idr_tsih;
+	memcpy(&conn->conn_limits, &request->idr_limits, sizeof(conn->conn_limits));
 
 	from_addr = conn->conn_conf.isc_initiator_addr;
 	to_addr = conn->conn_conf.isc_target_addr;
@@ -295,7 +290,9 @@ void
 fail(const struct connection *conn, const char *reason)
 {
 	struct iscsi_daemon_fail idf;
-	int error;
+	int error, saved_errno;
+
+	saved_errno = errno;
 
 	memset(&idf, 0, sizeof(idf));
 	idf.idf_session_id = conn->conn_session_id;
@@ -304,6 +301,8 @@ fail(const struct connection *conn, const char *reason)
 	error = ioctl(conn->conn_iscsi_fd, ISCSIDFAIL, &idf);
 	if (error != 0)
 		log_err(1, "ISCSIDFAIL");
+
+	errno = saved_errno;
 }
 
 /*
@@ -442,8 +441,7 @@ handle_request(int iscsi_fd, const struct iscsi_daemon_request *request, int tim
 		setproctitle("%s", request->idr_conf.isc_target_addr);
 	}
 
-	conn = connection_new(request->idr_session_id, request->idr_isid,
-	    request->idr_tsih, &request->idr_conf, iscsi_fd);
+	conn = connection_new(iscsi_fd, request);
 	set_timeout(timeout);
 	capsicate(conn);
 	login(conn);

@@ -1,13 +1,27 @@
+//===-- UnwindPlan.h --------------------------------------------*- C++ -*-===//
+//
+//                     The LLVM Compiler Infrastructure
+//
+// This file is distributed under the University of Illinois Open Source
+// License. See LICENSE.TXT for details.
+//
+//===----------------------------------------------------------------------===//
+
 #ifndef liblldb_UnwindPlan_h
 #define liblldb_UnwindPlan_h
 
+// C Includes
+// C++ Includes
+#include <map>
+#include <memory>
+#include <vector>
+
+// Other libraries and framework includes
+// Project includes
 #include "lldb/lldb-private.h"
 #include "lldb/Core/AddressRange.h"
 #include "lldb/Core/Stream.h"
 #include "lldb/Core/ConstString.h"
-
-#include <map>
-#include <vector>
 
 namespace lldb_private {
 
@@ -38,13 +52,11 @@ namespace lldb_private {
 
 class UnwindPlan {
 public:
-
     class Row {
     public:
         class RegisterLocation
         {
         public:
-    
             enum RestoreType
                 {
                     unspecified,        // not specified, we may be able to assume this 
@@ -58,13 +70,13 @@ public:
                     atDWARFExpression,  // reg = deref(eval(dwarf_expr))
                     isDWARFExpression   // reg = eval(dwarf_expr)
                 };
-    
+
             RegisterLocation() : 
                 m_type(unspecified), 
                 m_location() 
             {
             }
-    
+
             bool
             operator == (const RegisterLocation& rhs) const;
     
@@ -187,7 +199,7 @@ public:
                 }
                 else
                 {
-                    *opcodes = NULL;
+                    *opcodes = nullptr;
                     len = 0;
                 }
             }
@@ -203,7 +215,7 @@ public:
             {
                 if (m_type == atDWARFExpression || m_type == isDWARFExpression)
                     return m_location.expr.opcodes; 
-                return NULL;
+                return nullptr;
             }
 
             int
@@ -237,16 +249,177 @@ public:
             } m_location;
         };
     
+        class CFAValue
+        {
+        public:
+            enum ValueType
+            {
+                unspecified,                  // not specified
+                isRegisterPlusOffset,         // CFA = register + offset
+                isRegisterDereferenced,       // CFA = [reg]
+                isDWARFExpression             // CFA = eval(dwarf_expr)
+            };
+
+            CFAValue() :
+                m_type(unspecified),
+                m_value()
+            {
+            }
+
+            bool
+            operator == (const CFAValue& rhs) const;
+
+            bool
+            operator != (const CFAValue &rhs) const
+            {
+                return !(*this == rhs);
+            }
+
+            void
+            SetUnspecified()
+            {
+                m_type = unspecified;
+            }
+
+            bool
+            IsUnspecified () const
+            {
+                return m_type == unspecified;
+            }
+
+            bool
+            IsRegisterPlusOffset () const
+            {
+                return m_type == isRegisterPlusOffset;
+            }
+
+            void
+            SetIsRegisterPlusOffset (uint32_t reg_num, int32_t offset)
+            {
+                m_type = isRegisterPlusOffset;
+                m_value.reg.reg_num = reg_num;
+                m_value.reg.offset = offset;
+            }
+
+            bool
+            IsRegisterDereferenced () const
+            {
+                return m_type == isRegisterDereferenced;
+            }
+
+            void
+            SetIsRegisterDereferenced (uint32_t reg_num)
+            {
+                m_type = isRegisterDereferenced;
+                m_value.reg.reg_num = reg_num;
+            }
+
+            bool
+            IsDWARFExpression () const
+            {
+                return m_type == isDWARFExpression;
+            }
+
+            void
+            SetIsDWARFExpression (const uint8_t *opcodes, uint32_t len)
+            {
+                m_type = isDWARFExpression;
+                m_value.expr.opcodes = opcodes;
+                m_value.expr.length = len;
+            }
+
+            uint32_t
+            GetRegisterNumber () const
+            {
+                if (m_type == isRegisterDereferenced || m_type == isRegisterPlusOffset)
+                    return m_value.reg.reg_num;
+                return LLDB_INVALID_REGNUM;
+            }
+
+            ValueType
+            GetValueType () const
+            {
+                return m_type;
+            }
+
+            int32_t
+            GetOffset () const
+            {
+                if (m_type == isRegisterPlusOffset)
+                    return m_value.reg.offset;
+                return 0;
+            }
+
+            void IncOffset (int32_t delta)
+            {
+                if (m_type == isRegisterPlusOffset)
+                    m_value.reg.offset += delta;
+            }
+
+            void SetOffset (int32_t offset)
+            {
+                if (m_type == isRegisterPlusOffset)
+                    m_value.reg.offset = offset;
+            }
+
+            void
+            GetDWARFExpr (const uint8_t **opcodes, uint16_t& len) const
+            {
+                if (m_type == isDWARFExpression)
+                {
+                    *opcodes = m_value.expr.opcodes;
+                    len = m_value.expr.length;
+                }
+                else
+                {
+                    *opcodes = nullptr;
+                    len = 0;
+                }
+            }
+
+            const uint8_t *
+            GetDWARFExpressionBytes ()
+            {
+                if (m_type == isDWARFExpression)
+                    return m_value.expr.opcodes;
+                return nullptr;
+            }
+
+            int
+            GetDWARFExpressionLength ()
+            {
+                if (m_type == isDWARFExpression)
+                    return m_value.expr.length;
+                return 0;
+            }
+
+            void
+            Dump (Stream &s,
+                  const UnwindPlan* unwind_plan,
+                  Thread* thread) const;
+
+        private:
+            ValueType m_type;            // How do we compute CFA value?
+            union
+            {
+                struct {
+                    // For m_type == isRegisterPlusOffset or m_type == isRegisterDereferenced
+                    uint32_t reg_num; // The register number
+                    // For m_type == isRegisterPlusOffset
+                    int32_t offset;
+                } reg;
+                // For m_type == isDWARFExpression
+                struct {
+                    const uint8_t *opcodes;
+                    uint16_t length;
+                } expr;
+            } m_value;
+        }; // class CFAValue
+
     public:
         Row ();
-    
-        Row (const UnwindPlan::Row& rhs) : 
-            m_offset             (rhs.m_offset),
-            m_cfa_reg_num        (rhs.m_cfa_reg_num),
-            m_cfa_offset         (rhs.m_cfa_offset),
-            m_register_locations (rhs.m_register_locations)
-        {
-        }
+
+        Row (const UnwindPlan::Row& rhs) = default;
 
         bool
         operator == (const Row &rhs) const;
@@ -256,7 +429,10 @@ public:
     
         void
         SetRegisterInfo (uint32_t reg_num, const RegisterLocation register_location);
-    
+
+        void
+        RemoveRegisterInfo (uint32_t reg_num);
+
         lldb::addr_t
         GetOffset() const
         {
@@ -275,12 +451,11 @@ public:
             m_offset += offset;
         }
 
-        uint32_t
-        GetCFARegister () const
+        CFAValue& GetCFAValue()
         {
-            return m_cfa_reg_num;
+            return m_cfa_value;
         }
-        
+
         bool
         SetRegisterLocationToAtCFAPlusOffset (uint32_t reg_num, 
                                               int32_t offset, 
@@ -309,23 +484,6 @@ public:
         SetRegisterLocationToSame (uint32_t reg_num, 
                                    bool must_replace);
 
-
-
-        void
-        SetCFARegister (uint32_t reg_num);
-
-        int32_t
-        GetCFAOffset () const
-        {
-            return m_cfa_offset;
-        }
-
-        void
-        SetCFAOffset (int32_t offset)
-        {
-            m_cfa_offset = offset;
-        }
-
         void
         Clear ();
 
@@ -335,13 +493,12 @@ public:
     protected:
         typedef std::map<uint32_t, RegisterLocation> collection;
         lldb::addr_t m_offset;      // Offset into the function for this row
-        uint32_t m_cfa_reg_num;     // The Call Frame Address register number
-        int32_t  m_cfa_offset;      // The offset from the CFA for this row
+
+        CFAValue m_cfa_value;
         collection m_register_locations;
     }; // class Row
 
 public:
-
     typedef std::shared_ptr<Row> RowSP;
 
     UnwindPlan (lldb::RegisterKind reg_kind) : 
@@ -351,19 +508,38 @@ public:
         m_return_addr_register (LLDB_INVALID_REGNUM),
         m_source_name (),
         m_plan_is_sourced_from_compiler (eLazyBoolCalculate),
-        m_plan_is_valid_at_all_instruction_locations (eLazyBoolCalculate)
+        m_plan_is_valid_at_all_instruction_locations (eLazyBoolCalculate),
+        m_lsda_address (),
+        m_personality_func_addr ()
     {
     }
 
-    ~UnwindPlan ()
-	{
-	}
+    // Performs a deep copy of the plan, including all the rows (expensive).
+    UnwindPlan (const UnwindPlan &rhs) :
+        m_plan_valid_address_range (rhs.m_plan_valid_address_range),
+        m_register_kind (rhs.m_register_kind),
+        m_return_addr_register (rhs.m_return_addr_register),
+        m_source_name (rhs.m_source_name),
+        m_plan_is_sourced_from_compiler (rhs.m_plan_is_sourced_from_compiler),
+        m_plan_is_valid_at_all_instruction_locations (rhs.m_plan_is_valid_at_all_instruction_locations),
+        m_lsda_address (rhs.m_lsda_address),
+        m_personality_func_addr (rhs.m_personality_func_addr)
+    {
+        m_row_list.reserve (rhs.m_row_list.size());
+        for (const RowSP &row_sp: rhs.m_row_list)
+            m_row_list.emplace_back (new Row (*row_sp));
+    }
+
+    ~UnwindPlan() = default;
 
     void 
     Dump (Stream& s, Thread* thread, lldb::addr_t base_addr) const;
 
     void 
     AppendRow (const RowSP& row_sp);
+
+    void
+    InsertRow (const RowSP& row_sp);
 
     // Returns a pointer to the best row for the given offset into the function's instructions.
     // If offset is -1 it indicates that the function start is unknown - the final row in the UnwindPlan is returned.
@@ -401,7 +577,7 @@ public:
     {
         if (m_row_list.empty())
             return LLDB_INVALID_REGNUM;
-        return m_row_list.front()->GetCFARegister();
+        return m_row_list.front()->GetCFAValue().GetRegisterNumber();
     }
 
     // This UnwindPlan may not be valid at every address of the function span.  
@@ -474,14 +650,40 @@ public:
         m_plan_valid_address_range.Clear();
         m_register_kind = lldb::eRegisterKindDWARF;
         m_source_name.Clear();
+        m_plan_is_sourced_from_compiler = eLazyBoolCalculate;
+        m_plan_is_valid_at_all_instruction_locations = eLazyBoolCalculate;
+        m_lsda_address.Clear();
+        m_personality_func_addr.Clear();
     }
 
     const RegisterInfo *
     GetRegisterInfo (Thread* thread, uint32_t reg_num) const;
 
-private:
+    Address
+    GetLSDAAddress () const
+    {
+        return m_lsda_address;
+    }
 
-    
+    void
+    SetLSDAAddress (Address lsda_addr)
+    {
+        m_lsda_address = lsda_addr;
+    }
+
+    Address
+    GetPersonalityFunctionPtr () const
+    {
+        return m_personality_func_addr;
+    }
+
+    void
+    SetPersonalityFunctionPtr (Address presonality_func_ptr)
+    {
+        m_personality_func_addr = presonality_func_ptr;
+    }
+
+private:
     typedef std::vector<RowSP> collection;
     collection m_row_list;
     AddressRange m_plan_valid_address_range;
@@ -492,8 +694,13 @@ private:
     lldb_private::ConstString m_source_name;  // for logging, where this UnwindPlan originated from
     lldb_private::LazyBool m_plan_is_sourced_from_compiler;
     lldb_private::LazyBool m_plan_is_valid_at_all_instruction_locations;
+
+    Address m_lsda_address;                 // Where the language specific data area exists in the module - used 
+                                            // in exception handling.
+    Address m_personality_func_addr;        // The address of a pointer to the personality function - used in
+                                            // exception handling.
 }; // class UnwindPlan
 
 } // namespace lldb_private
 
-#endif //liblldb_UnwindPlan_h
+#endif // liblldb_UnwindPlan_h

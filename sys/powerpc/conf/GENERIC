@@ -32,10 +32,12 @@ options 	PSIM			#GDB PSIM ppc simulator
 options 	MAMBO			#IBM Mambo Full System Simulator
 options 	PSERIES			#PAPR-compliant systems
 
+options		FDT
 options 	SCHED_ULE		#ULE scheduler
 options 	PREEMPTION		#Enable kernel thread preemption
 options 	INET			#InterNETworking
 options 	INET6			#IPv6 communications protocols
+options 	IPSEC			# IP (v4/v6) security
 options 	SCTP			#Stream Control Transmission Protocol
 options 	FFS			#Berkeley Fast Filesystem
 options 	SOFTUPDATES		#Enable FFS soft updates support
@@ -44,8 +46,8 @@ options 	UFS_DIRHASH		#Improve performance on big directories
 options 	UFS_GJOURNAL		#Enable gjournal-based UFS journaling
 options 	QUOTA			#Enable disk quotas for UFS
 options 	MD_ROOT			#MD is a potential root device
-options 	NFSCL			#New Network Filesystem Client
-options 	NFSD			#New Network Filesystem Server
+options 	NFSCL			#Network Filesystem Client
+options 	NFSD			#Network Filesystem Server
 options 	NFSLOCKD		#Network Lock Manager
 options 	NFS_ROOT		#NFS usable as root device
 options 	MSDOSFS			#MSDOS Filesystem
@@ -59,6 +61,8 @@ options 	COMPAT_FREEBSD4		#Keep this for a while
 options 	COMPAT_FREEBSD5		#Compatible with FreeBSD5
 options 	COMPAT_FREEBSD6		#Compatible with FreeBSD6
 options 	COMPAT_FREEBSD7		#Compatible with FreeBSD7
+options 	COMPAT_FREEBSD9		# Compatible with FreeBSD9
+options 	COMPAT_FREEBSD10	# Compatible with FreeBSD10
 options 	SCSI_DELAY=5000		#Delay (in ms) before probing SCSI 
 options 	KTRACE			#ktrace(1) syscall trace support
 options 	STACK			#stack(9) support
@@ -70,7 +74,6 @@ options 	HWPMC_HOOKS		# Necessary kernel hooks for hwpmc(4)
 options 	AUDIT			# Security event auditing
 options 	CAPABILITY_MODE		# Capsicum capability mode
 options 	CAPABILITIES		# Capsicum capabilities
-options 	PROCDESC		# Support for process descriptors
 options 	MAC			# TrustedBSD MAC Framework
 options 	KDTRACE_HOOKS		# Kernel DTrace hooks
 options 	DDB_CTF			# Kernel ELF linker loads CTF data
@@ -91,6 +94,7 @@ device		cpufreq
 
 # Standard busses
 device		pci
+options 	PCI_HP			# PCI-Express native HotPlug
 device		agp
 
 # ATA controllers
@@ -117,12 +121,9 @@ device		sa		# Sequential Access (tape etc)
 device		cd		# CD
 device		pass		# Passthrough device (direct ATA/SCSI access)
 
-# syscons is the default console driver, resembling an SCO console
-device		sc
+# vt is the default console driver, resembling an SCO console
+device		vt		# Generic console driver (pulls in OF FB)
 device		kbdmux
-options 	SC_OFWFB	# OFW frame buffer
-options 	SC_DFLT_FONT	# compile font in
-makeoptions	SC_DFLT_FONT=cp437
 
 # Serial (COM) ports
 device		scc
@@ -151,7 +152,6 @@ device		tun		# Packet tunnel.
 device		md		# Memory "disks"
 device		ofwd		# Open Firmware disks
 device		gif		# IPv6 and IPv4 tunneling
-device		faith		# IPv6-to-IPv4 relaying/(translation)
 device		firmware	# firmware assist module
 
 # The `bpf' device enables the Berkeley Packet Filter.
@@ -195,7 +195,7 @@ device		fcu		# Apple Fan Control Unit
 device		max6690		# PowerMac7,2 temperature sensor
 device		powermac_nvram	# Open Firmware configuration NVRAM
 device		smu		# Apple System Management Unit
-device		windtunnel	# Apple G4 MDD fan controller
+device		adm1030		# Apple G4 MDD fan controller
 device		atibl		# ATI-based backlight driver for PowerBooks/iBooks
 device		nvbl		# nVidia-based backlight driver for PowerBooks/iBooks
 
@@ -210,3 +210,5 @@ device		snd_ai2s	# Apple I2S audio
 device		snd_davbus	# Apple DAVBUS audio
 device		snd_uaudio	# USB Audio
 
+# The crypto framework is required by IPSEC
+device		crypto			# Required by IPSEC

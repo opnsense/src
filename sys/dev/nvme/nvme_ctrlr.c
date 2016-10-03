@@ -27,6 +27,8 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#include "opt_cam.h"
+
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/buf.h>
@@ -52,8 +54,8 @@ nvme_ctrlr_allocate_bar(struct nvme_controller *ctrlr)
 
 	ctrlr->resource_id = PCIR_BAR(0);
 
-	ctrlr->resource = bus_alloc_resource(ctrlr->dev, SYS_RES_MEMORY,
-	    &ctrlr->resource_id, 0, ~0, 1, RF_ACTIVE);
+	ctrlr->resource = bus_alloc_resource_any(ctrlr->dev, SYS_RES_MEMORY,
+	    &ctrlr->resource_id, RF_ACTIVE);
 
 	if(ctrlr->resource == NULL) {
 		nvme_printf(ctrlr, "unable to allocate pci resource\n");
@@ -72,8 +74,8 @@ nvme_ctrlr_allocate_bar(struct nvme_controller *ctrlr)
 	 *  bus_alloc_resource() will just return NULL which is OK.
 	 */
 	ctrlr->bar4_resource_id = PCIR_BAR(4);
-	ctrlr->bar4_resource = bus_alloc_resource(ctrlr->dev, SYS_RES_MEMORY,
-	    &ctrlr->bar4_resource_id, 0, ~0, 1, RF_ACTIVE);
+	ctrlr->bar4_resource = bus_alloc_resource_any(ctrlr->dev, SYS_RES_MEMORY,
+	    &ctrlr->bar4_resource_id, RF_ACTIVE);
 
 	return (0);
 }
@@ -801,7 +803,7 @@ nvme_ctrlr_reset_task(void *arg, int pending)
 	atomic_cmpset_32(&ctrlr->is_resetting, 1, 0);
 }
 
-static void
+void
 nvme_ctrlr_intx_handler(void *arg)
 {
 	struct nvme_controller *ctrlr = arg;
@@ -883,7 +885,6 @@ nvme_ctrlr_passthrough_cmd(struct nvme_controller *ctrlr,
 			 */
 			PHOLD(curproc);
 			buf = getpbuf(NULL);
-			buf->b_saveaddr = buf->b_data;
 			buf->b_data = pt->buf;
 			buf->b_bufsize = pt->len;
 			buf->b_iocmd = pt->is_read ? BIO_READ : BIO_WRITE;

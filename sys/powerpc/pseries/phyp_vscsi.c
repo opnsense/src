@@ -290,7 +290,8 @@ vscsi_attach(device_t dev)
 	mtx_init(&sc->io_lock, "vscsi", NULL, MTX_DEF);
 
 	/* Get properties */
-	OF_getprop(ofw_bus_get_node(dev), "reg", &sc->unit, sizeof(sc->unit));
+	OF_getencprop(ofw_bus_get_node(dev), "reg", &sc->unit,
+	    sizeof(sc->unit));
 
 	/* Setup interrupt */
 	sc->irqid = 0;
@@ -426,7 +427,7 @@ vscsi_cam_action(struct cam_sim *sim, union ccb *ccb)
 		cpi->target_sprt = 0;
 		cpi->hba_eng_cnt = 0;
 		cpi->max_target = 0;
-		cpi->max_lun = ~(lun_id_t)(0);
+		cpi->max_lun = 0;
 		cpi->initiator_id = ~0;
 		strncpy(cpi->sim_vid, "FreeBSD", SIM_IDLEN);
 		strncpy(cpi->hba_vid, "IBM", HBA_IDLEN);
@@ -931,10 +932,11 @@ vscsi_check_response_queue(struct vscsi_softc *sc)
 
 	mtx_assert(&sc->io_lock, MA_OWNED);
 
-	phyp_hcall(H_VIO_SIGNAL, sc->unit, 0);
-	bus_dmamap_sync(sc->crq_tag, sc->crq_map, BUS_DMASYNC_POSTREAD);
-
 	while (sc->crq_queue[sc->cur_crq].valid != 0) {
+		/* The hypercalls at both ends of this are not optimal */
+		phyp_hcall(H_VIO_SIGNAL, sc->unit, 0);
+		bus_dmamap_sync(sc->crq_tag, sc->crq_map, BUS_DMASYNC_POSTREAD);
+
 		crq = &sc->crq_queue[sc->cur_crq];
 
 		switch (crq->valid) {
@@ -983,9 +985,9 @@ vscsi_check_response_queue(struct vscsi_softc *sc)
 
 		crq->valid = 0;
 		sc->cur_crq = (sc->cur_crq + 1) % sc->n_crqs;
-	};
 
-	bus_dmamap_sync(sc->crq_tag, sc->crq_map, BUS_DMASYNC_PREWRITE);
-	phyp_hcall(H_VIO_SIGNAL, sc->unit, 1);
+		bus_dmamap_sync(sc->crq_tag, sc->crq_map, BUS_DMASYNC_PREWRITE);
+		phyp_hcall(H_VIO_SIGNAL, sc->unit, 1);
+	}
 }
 

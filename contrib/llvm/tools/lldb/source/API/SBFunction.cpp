@@ -16,6 +16,7 @@
 #include "lldb/Symbol/CompileUnit.h"
 #include "lldb/Symbol/Function.h"
 #include "lldb/Symbol/Type.h"
+#include "lldb/Symbol/VariableList.h"
 #include "lldb/Target/ExecutionContext.h"
 #include "lldb/Target/Target.h"
 
@@ -60,15 +61,37 @@ SBFunction::GetName() const
 {
     const char *cstr = NULL;
     if (m_opaque_ptr)
-        cstr = m_opaque_ptr->GetMangled().GetName().AsCString();
+        cstr = m_opaque_ptr->GetName().AsCString();
 
     Log *log(lldb_private::GetLogIfAllCategoriesSet (LIBLLDB_LOG_API));
     if (log)
     {
         if (cstr)
-            log->Printf ("SBFunction(%p)::GetName () => \"%s\"", m_opaque_ptr, cstr);
+            log->Printf ("SBFunction(%p)::GetName () => \"%s\"",
+                         static_cast<void*>(m_opaque_ptr), cstr);
         else
-            log->Printf ("SBFunction(%p)::GetName () => NULL", m_opaque_ptr);
+            log->Printf ("SBFunction(%p)::GetName () => NULL",
+                         static_cast<void*>(m_opaque_ptr));
+    }
+    return cstr;
+}
+
+const char *
+SBFunction::GetDisplayName() const
+{
+    const char *cstr = NULL;
+    if (m_opaque_ptr)
+        cstr = m_opaque_ptr->GetMangled().GetDisplayDemangledName(m_opaque_ptr->GetLanguage()).AsCString();
+    
+    Log *log(lldb_private::GetLogIfAllCategoriesSet (LIBLLDB_LOG_API));
+    if (log)
+    {
+        if (cstr)
+        log->Printf ("SBFunction(%p)::GetDisplayName () => \"%s\"",
+                     static_cast<void*>(m_opaque_ptr), cstr);
+        else
+        log->Printf ("SBFunction(%p)::GetDisplayName () => NULL",
+                     static_cast<void*>(m_opaque_ptr));
     }
     return cstr;
 }
@@ -83,9 +106,11 @@ SBFunction::GetMangledName () const
     if (log)
     {
         if (cstr)
-            log->Printf ("SBFunction(%p)::GetMangledName () => \"%s\"", m_opaque_ptr, cstr);
+            log->Printf ("SBFunction(%p)::GetMangledName () => \"%s\"",
+                         static_cast<void*>(m_opaque_ptr), cstr);
         else
-            log->Printf ("SBFunction(%p)::GetMangledName () => NULL", m_opaque_ptr);
+            log->Printf ("SBFunction(%p)::GetMangledName () => NULL",
+                         static_cast<void*>(m_opaque_ptr));
     }
     return cstr;
 }
@@ -192,6 +217,24 @@ SBFunction::GetEndAddress ()
     return addr;
 }
 
+const char *
+SBFunction::GetArgumentName (uint32_t arg_idx)
+{
+    if (m_opaque_ptr)
+    {
+        Block &block = m_opaque_ptr->GetBlock(true);
+        VariableListSP variable_list_sp = block.GetBlockVariableList(true);
+        if (variable_list_sp)
+        {
+            VariableList arguments;
+            variable_list_sp->AppendVariablesWithScope (eValueTypeVariableArgument, arguments, true);
+            lldb::VariableSP variable_sp = arguments.GetVariableAtIndex(arg_idx);
+            if (variable_sp)
+                return variable_sp->GetName().GetCString();
+        }
+    }
+    return nullptr;
+}
 
 uint32_t
 SBFunction::GetPrologueByteSize ()
@@ -223,5 +266,24 @@ SBFunction::GetBlock ()
     return sb_block;
 }
 
+lldb::LanguageType
+SBFunction::GetLanguage ()
+{
+    if (m_opaque_ptr)
+    {
+        if (m_opaque_ptr->GetCompileUnit())
+            return m_opaque_ptr->GetCompileUnit()->GetLanguage();
+    }
+    return lldb::eLanguageTypeUnknown;
+}
 
-
+bool
+SBFunction::GetIsOptimized ()
+{
+    if (m_opaque_ptr)
+    {
+        if (m_opaque_ptr->GetCompileUnit())
+            return m_opaque_ptr->GetCompileUnit()->GetIsOptimized();
+    }
+    return false;
+}

@@ -63,11 +63,7 @@
 #include <sys/syslog.h>
 #include <sys/unistd.h>
 #include <machine/cpu.h>
-
-#include <sys/socket.h>
-#include <net/if.h>
-#include <net/if_types.h>
-#include <net/if_var.h>
+#include <vm/uma.h>
 
 #include <net/netisr.h>
 #include <net/vnet.h>
@@ -79,7 +75,12 @@
 MODULE_VERSION(netgraph, NG_ABI_VERSION);
 
 /* Mutex to protect topology events. */
-static struct mtx	ng_topo_mtx;
+static struct rwlock	ng_topo_lock;
+#define	TOPOLOGY_RLOCK()	rw_rlock(&ng_topo_lock)
+#define	TOPOLOGY_RUNLOCK()	rw_runlock(&ng_topo_lock)
+#define	TOPOLOGY_WLOCK()	rw_wlock(&ng_topo_lock)
+#define	TOPOLOGY_WUNLOCK()	rw_wunlock(&ng_topo_lock)
+#define	TOPOLOGY_NOTOWNED()	rw_assert(&ng_topo_lock, RA_UNLOCKED)
 
 #ifdef	NETGRAPH_DEBUG
 static struct mtx	ng_nodelist_mtx; /* protects global node/hook lists */
@@ -244,8 +245,6 @@ int	ng_make_node(const char *type, node_p *nodepp);
 int	ng_path_parse(char *addr, char **node, char **path, char **hook);
 void	ng_rmnode(node_p node, hook_p dummy1, void *dummy2, int dummy3);
 void	ng_unname(node_p node);
-
-extern void    (*ng_ether_attach_p)(struct ifnet *ifp);
 
 /* Our own netgraph malloc type */
 MALLOC_DEFINE(M_NETGRAPH, "netgraph", "netgraph structures and ctrl messages");
@@ -581,13 +580,6 @@ static const struct ng_cmdlist ng_generic_cmds[] = {
 	  &ng_parse_ng_mesg_type,
 	  &ng_parse_ng_mesg_type
 	},
-	{
-          NGM_GENERIC_COOKIE,
-          NGM_ETHER_ATTACH,
-          "attach",
-          &ng_parse_string_type,
-          NULL
-        },
 	{ 0 }
 };
 
@@ -767,7 +759,7 @@ ng_rmnode(node_p node, hook_p dummy1, void *dummy2, int dummy3)
 			/*
 			 * Well, blow me down if the node code hasn't declared
 			 * that it doesn't want to die.
-			 * Presumably it is a persistant node.
+			 * Presumably it is a persistent node.
 			 * If we REALLY want it to go away,
 			 *  e.g. hardware going away,
 			 * Our caller should set NGF_REALLY_DIE in nd_flags.
@@ -1176,7 +1168,7 @@ ng_destroy_hook(hook_p hook)
 	 * Protect divorce process with mutex, to avoid races on
 	 * simultaneous disconnect.
 	 */
-	mtx_lock(&ng_topo_mtx);
+	TOPOLOGY_WLOCK();
 
 	hook->hk_flags |= HK_INVALID;
 
@@ -1196,17 +1188,17 @@ ng_destroy_hook(hook_p hook)
 			 * If it's already divorced from a node,
 			 * just free it.
 			 */
-			mtx_unlock(&ng_topo_mtx);
+			TOPOLOGY_WUNLOCK();
 		} else {
-			mtx_unlock(&ng_topo_mtx);
+			TOPOLOGY_WUNLOCK();
 			ng_rmhook_self(peer); 	/* Send it a surprise */
 		}
 		NG_HOOK_UNREF(peer);		/* account for peer link */
 		NG_HOOK_UNREF(hook);		/* account for peer link */
 	} else
-		mtx_unlock(&ng_topo_mtx);
+		TOPOLOGY_WUNLOCK();
 
-	mtx_assert(&ng_topo_mtx, MA_NOTOWNED);
+	TOPOLOGY_NOTOWNED();
 
 	/*
 	 * Remove the hook from the node's list to avoid possible recursion
@@ -1247,9 +1239,9 @@ ng_bypass(hook_p hook1, hook_p hook2)
 		TRAP_ERROR();
 		return (EINVAL);
 	}
-	mtx_lock(&ng_topo_mtx);
+	TOPOLOGY_WLOCK();
 	if (NG_HOOK_NOT_VALID(hook1) || NG_HOOK_NOT_VALID(hook2)) {
-		mtx_unlock(&ng_topo_mtx);
+		TOPOLOGY_WUNLOCK();
 		return (EINVAL);
 	}
 	hook1->hk_peer->hk_peer = hook2->hk_peer;
@@ -1257,7 +1249,7 @@ ng_bypass(hook_p hook1, hook_p hook2)
 
 	hook1->hk_peer = &ng_deadhook;
 	hook2->hk_peer = &ng_deadhook;
-	mtx_unlock(&ng_topo_mtx);
+	TOPOLOGY_WUNLOCK();
 
 	NG_HOOK_UNREF(hook1);
 	NG_HOOK_UNREF(hook2);
@@ -1454,15 +1446,15 @@ ng_con_part2(node_p node, item_p item, hook_p hook)
 	/*
 	 * Acquire topo mutex to avoid race with ng_destroy_hook().
 	 */
-	mtx_lock(&ng_topo_mtx);
+	TOPOLOGY_RLOCK();
 	peer = hook->hk_peer;
 	if (peer == &ng_deadhook) {
-		mtx_unlock(&ng_topo_mtx);
+		TOPOLOGY_RUNLOCK();
 		printf("failed in ng_con_part2(B)\n");
 		ng_destroy_hook(hook);
 		ERROUT(ENOENT);
 	}
-	mtx_unlock(&ng_topo_mtx);
+	TOPOLOGY_RUNLOCK();
 
 	if ((error = ng_send_fn2(peer->hk_node, peer, item, &ng_con_part3,
 	    NULL, 0, NG_REUSE_ITEM))) {
@@ -1807,14 +1799,14 @@ ng_path2noderef(node_p here, const char *address, node_p *destp,
 		/* We have a segment, so look for a hook by that name */
 		hook = ng_findhook(node, segment);
 
-		mtx_lock(&ng_topo_mtx);
+		TOPOLOGY_WLOCK();
 		/* Can't get there from here... */
 		if (hook == NULL || NG_HOOK_PEER(hook) == NULL ||
 		    NG_HOOK_NOT_VALID(hook) ||
 		    NG_HOOK_NOT_VALID(NG_HOOK_PEER(hook))) {
 			TRAP_ERROR();
 			NG_NODE_UNREF(node);
-			mtx_unlock(&ng_topo_mtx);
+			TOPOLOGY_WUNLOCK();
 			return (ENOENT);
 		}
 
@@ -1831,7 +1823,7 @@ ng_path2noderef(node_p here, const char *address, node_p *destp,
 		NG_NODE_UNREF(oldnode);	/* XXX another race */
 		if (NG_NODE_NOT_VALID(node)) {
 			NG_NODE_UNREF(node);	/* XXX more races */
-			mtx_unlock(&ng_topo_mtx);
+			TOPOLOGY_WUNLOCK();
 			TRAP_ERROR();
 			return (ENXIO);
 		}
@@ -1844,11 +1836,11 @@ ng_path2noderef(node_p here, const char *address, node_p *destp,
 				} else
 					*lasthook = NULL;
 			}
-			mtx_unlock(&ng_topo_mtx);
+			TOPOLOGY_WUNLOCK();
 			*destp = node;
 			return (0);
 		}
-		mtx_unlock(&ng_topo_mtx);
+		TOPOLOGY_WUNLOCK();
 	}
 }
 
@@ -2064,7 +2056,7 @@ ng_acquire_read(node_p node, item_p item)
 			return (item);
 		}
 		cpu_spinwait();
-	};
+	}
 
 	/* Queue the request for later. */
 	ng_queue_rw(node, item, NGQRW_R);
@@ -2922,22 +2914,6 @@ ng_generic_msg(node_p here, item_p item, hook_p lasthook)
 		break;
 	    }
 
-	case NGM_ETHER_ATTACH:
-		{
-			struct ifnet *ifp = ifunit((char *)msg->data);
-
-			if (ng_ether_attach_p) {
-				if (ifp && (ifp->if_type == IFT_ETHER ||
-				    ifp->if_type == IFT_L2VLAN)) {
-					ng_ether_attach_p(ifp);
-				} else {
-					error = ENOENT;
-				}
-			}
-				
-			break;
-                }
-
 	case NGM_TEXT_CONFIG:
 	case NGM_TEXT_STATUS:
 		/*
@@ -2959,7 +2935,7 @@ ng_generic_msg(node_p here, item_p item, hook_p lasthook)
 	 * Sometimes a generic message may be statically allocated
 	 * to avoid problems with allocating when in tight memory situations.
 	 * Don't free it if it is so.
-	 * I break them appart here, because erros may cause a free if the item
+	 * I break them apart here, because erros may cause a free if the item
 	 * in which case we'd be doing it twice.
 	 * they are kept together above, to simplify freeing.
 	 */
@@ -2979,13 +2955,10 @@ static int			numthreads = 0; /* number of queue threads */
 static int			maxalloc = 4096;/* limit the damage of a leak */
 static int			maxdata = 4096;	/* limit the damage of a DoS */
 
-TUNABLE_INT("net.graph.threads", &numthreads);
 SYSCTL_INT(_net_graph, OID_AUTO, threads, CTLFLAG_RDTUN, &numthreads,
     0, "Number of queue processing threads");
-TUNABLE_INT("net.graph.maxalloc", &maxalloc);
 SYSCTL_INT(_net_graph, OID_AUTO, maxalloc, CTLFLAG_RDTUN, &maxalloc,
     0, "Maximum number of non-data queue items to allocate");
-TUNABLE_INT("net.graph.maxdata", &maxdata);
 SYSCTL_INT(_net_graph, OID_AUTO, maxdata, CTLFLAG_RDTUN, &maxdata,
     0, "Maximum number of data queue items to allocate");
 
@@ -3232,8 +3205,7 @@ ngb_mod_event(module_t mod, int event, void *data)
 		rw_init(&ng_typelist_lock, "netgraph types");
 		rw_init(&ng_idhash_lock, "netgraph idhash");
 		rw_init(&ng_namehash_lock, "netgraph namehash");
-		mtx_init(&ng_topo_mtx, "netgraph topology mutex", NULL,
-		    MTX_DEF);
+		rw_init(&ng_topo_lock, "netgraph topology mutex");
 #ifdef	NETGRAPH_DEBUG
 		mtx_init(&ng_nodelist_mtx, "netgraph nodelist mutex", NULL,
 		    MTX_DEF);
@@ -3609,13 +3581,13 @@ ng_address_hook(node_p here, item_p item, hook_p hook, ng_ID_t retaddr)
 	 * that the peer is still connected (even if invalid,) we know
 	 * that the peer node is present, though maybe invalid.
 	 */
-	mtx_lock(&ng_topo_mtx);
+	TOPOLOGY_RLOCK();
 	if ((hook == NULL) || NG_HOOK_NOT_VALID(hook) ||
 	    NG_HOOK_NOT_VALID(peer = NG_HOOK_PEER(hook)) ||
 	    NG_NODE_NOT_VALID(peernode = NG_PEER_NODE(hook))) {
 		NG_FREE_ITEM(item);
 		TRAP_ERROR();
-		mtx_unlock(&ng_topo_mtx);
+		TOPOLOGY_RUNLOCK();
 		return (ENETDOWN);
 	}
 
@@ -3628,7 +3600,7 @@ ng_address_hook(node_p here, item_p item, hook_p hook, ng_ID_t retaddr)
 	NGI_SET_NODE(item, peernode);
 	SET_RETADDR(item, here, retaddr);
 
-	mtx_unlock(&ng_topo_mtx);
+	TOPOLOGY_RUNLOCK();
 
 	return (0);
 }

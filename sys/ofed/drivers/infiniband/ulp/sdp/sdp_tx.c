@@ -328,7 +328,7 @@ sdp_poll_tx(struct sdp_sock *ssk)
 		SDPSTATS_COUNTER_INC(tx_poll_hit);
 
 	inflight = (u32) tx_ring_posted(ssk);
-	sdp_prf1(ssk->socket, NULL, "finished tx proccessing. inflight = %d",
+	sdp_prf1(ssk->socket, NULL, "finished tx processing. inflight = %d",
 	    inflight);
 
 	/* If there are still packets in flight and the timer has not already
@@ -438,7 +438,7 @@ sdp_tx_ring_create(struct sdp_sock *ssk, struct ib_device *device)
 	}
 
 	tx_cq = ib_create_cq(device, sdp_tx_irq, sdp_tx_cq_event_handler,
-			  ssk, SDP_TX_SIZE, IB_CQ_VECTOR_LEAST_ATTACHED);
+			  ssk, SDP_TX_SIZE, 0);
 
 	if (IS_ERR(tx_cq)) {
 		rc = PTR_ERR(tx_cq);

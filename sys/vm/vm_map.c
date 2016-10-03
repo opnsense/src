@@ -65,15 +65,12 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
-#include "opt_pax.h"
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/ktr.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
-#include <sys/pax.h>
 #include <sys/proc.h>
 #include <sys/vmmeter.h>
 #include <sys/mman.h>
@@ -136,6 +133,8 @@ static void _vm_map_init(vm_map_t map, pmap_t pmap, vm_offset_t min,
 static void vm_map_entry_deallocate(vm_map_entry_t entry, boolean_t system_map);
 static void vm_map_entry_dispose(vm_map_t map, vm_map_entry_t entry);
 static void vm_map_entry_unwire(vm_map_t map, vm_map_entry_t entry);
+static void vm_map_pmap_enter(vm_map_t map, vm_offset_t addr, vm_prot_t prot,
+    vm_object_t object, vm_pindex_t pindex, vm_size_t size, int flags);
 #ifdef INVARIANTS
 static void vm_map_zdtor(void *mem, int size, void *arg);
 static void vmspace_zdtor(void *mem, int size, void *arg);
@@ -298,15 +297,6 @@ vmspace_alloc(vm_offset_t min, vm_offset_t max, pmap_pinit_t pinit)
 	vm->vm_taddr = 0;
 	vm->vm_daddr = 0;
 	vm->vm_maxsaddr = 0;
-#ifdef PAX_ASLR
-	vm->vm_aslr_delta_mmap = 0;
-	vm->vm_aslr_delta_stack = 0;
-	vm->vm_aslr_delta_exec = 0;
-	vm->vm_aslr_delta_vdso = 0;
-#ifdef __LP64__
-	vm->vm_aslr_delta_map32bit = 0;
-#endif
-#endif
 	return (vm);
 }
 
@@ -355,7 +345,7 @@ vmspace_free(struct vmspace *vm)
 {
 
 	WITNESS_WARN(WARN_GIANTOK | WARN_SLEEPOK, NULL,
-	    "vmspace_free() called with non-sleepable lock held");
+	    "vmspace_free() called");
 
 	if (vm->vm_refcnt == 0)
 		panic("vmspace_free: attempt to free already freed vmspace");
@@ -459,6 +449,51 @@ vmspace_acquire_ref(struct proc *p)
 	}
 	PROC_VMSPACE_UNLOCK(p);
 	return (vm);
+}
+
+/*
+ * Switch between vmspaces in an AIO kernel process.
+ *
+ * The AIO kernel processes switch to and from a user process's
+ * vmspace while performing an I/O operation on behalf of a user
+ * process.  The new vmspace is either the vmspace of a user process
+ * obtained from an active AIO request or the initial vmspace of the
+ * AIO kernel process (when it is idling).  Because user processes
+ * will block to drain any active AIO requests before proceeding in
+ * exit() or execve(), the vmspace reference count for these vmspaces
+ * can never be 0.  This allows for a much simpler implementation than
+ * the loop in vmspace_acquire_ref() above.  Similarly, AIO kernel
+ * processes hold an extra reference on their initial vmspace for the
+ * life of the process so that this guarantee is true for any vmspace
+ * passed as 'newvm'.
+ */
+void
+vmspace_switch_aio(struct vmspace *newvm)
+{
+	struct vmspace *oldvm;
+
+	/* XXX: Need some way to assert that this is an aio daemon. */
+
+	KASSERT(newvm->vm_refcnt > 0,
+	    ("vmspace_switch_aio: newvm unreferenced"));
+
+	oldvm = curproc->p_vmspace;
+	if (oldvm == newvm)
+		return;
+
+	/*
+	 * Point to the new address space and refer to it.
+	 */
+	curproc->p_vmspace = newvm;
+	atomic_add_int(&newvm->vm_refcnt, 1);
+
+	/* Activate the new mapping. */
+	pmap_activate(curthread);
+
+	/* Remove the daemon's reference to the old address space. */
+	KASSERT(oldvm->vm_refcnt > 1,
+	    ("vmspace_switch_aio: oldvm dropping last reference"));
+	vmspace_free(oldvm);
 }
 
 void
@@ -1142,18 +1177,19 @@ vm_map_lookup_entry(
  */
 int
 vm_map_insert(vm_map_t map, vm_object_t object, vm_ooffset_t offset,
-	      vm_offset_t start, vm_offset_t end, vm_prot_t prot, vm_prot_t max,
-	      int cow)
+    vm_offset_t start, vm_offset_t end, vm_prot_t prot, vm_prot_t max, int cow)
 {
-	vm_map_entry_t new_entry;
-	vm_map_entry_t prev_entry;
-	vm_map_entry_t temp_entry;
+	vm_map_entry_t new_entry, prev_entry, temp_entry;
 	vm_eflags_t protoeflags;
 	struct ucred *cred;
 	vm_inherit_t inheritance;
-	boolean_t charge_prev_obj;
 
 	VM_MAP_ASSERT_LOCKED(map);
+	KASSERT((object != kmem_object && object != kernel_object) ||
+	    (cow & MAP_COPY_ON_WRITE) == 0,
+	    ("vm_map_insert: kmem or kernel object and COW"));
+	KASSERT(object == NULL || (cow & MAP_NOFAULT) == 0,
+	    ("vm_map_insert: paradoxical MAP_NOFAULT request"));
 
 	/*
 	 * Check that the start and end points are not bogus.
@@ -1179,21 +1215,18 @@ vm_map_insert(vm_map_t map, vm_object_t object, vm_ooffset_t offset,
 		return (KERN_NO_SPACE);
 
 	protoeflags = 0;
-	charge_prev_obj = FALSE;
-
 	if (cow & MAP_COPY_ON_WRITE)
-		protoeflags |= MAP_ENTRY_COW|MAP_ENTRY_NEEDS_COPY;
-
-	if (cow & MAP_NOFAULT) {
+		protoeflags |= MAP_ENTRY_COW | MAP_ENTRY_NEEDS_COPY;
+	if (cow & MAP_NOFAULT)
 		protoeflags |= MAP_ENTRY_NOFAULT;
-
-		KASSERT(object == NULL,
-			("vm_map_insert: paradoxical MAP_NOFAULT request"));
-	}
 	if (cow & MAP_DISABLE_SYNCER)
 		protoeflags |= MAP_ENTRY_NOSYNC;
 	if (cow & MAP_DISABLE_COREDUMP)
 		protoeflags |= MAP_ENTRY_NOCOREDUMP;
+	if (cow & MAP_STACK_GROWS_DOWN)
+		protoeflags |= MAP_ENTRY_GROWS_DOWN;
+	if (cow & MAP_STACK_GROWS_UP)
+		protoeflags |= MAP_ENTRY_GROWS_UP;
 	if (cow & MAP_VN_WRITECOUNT)
 		protoeflags |= MAP_ENTRY_VN_WRITECNT;
 	if (cow & MAP_INHERIT_SHARE)
@@ -1202,10 +1235,6 @@ vm_map_insert(vm_map_t map, vm_object_t object, vm_ooffset_t offset,
 		inheritance = VM_INHERIT_DEFAULT;
 
 	cred = NULL;
-	KASSERT((object != kmem_object && object != kernel_object) ||
-	    ((object == kmem_object || object == kernel_object) &&
-		!(protoeflags & MAP_ENTRY_NEEDS_COPY)),
-	    ("kmem or kernel object and cow"));
 	if (cow & (MAP_ACC_NO_CHARGE | MAP_NOFAULT))
 		goto charged;
 	if ((cow & MAP_ACC_CHARGED) || ((prot & VM_PROT_WRITE) &&
@@ -1216,9 +1245,6 @@ vm_map_insert(vm_map_t map, vm_object_t object, vm_ooffset_t offset,
 		    object->cred == NULL,
 		    ("OVERCOMMIT: vm_map_insert o %p", object));
 		cred = curthread->td_ucred;
-		crhold(cred);
-		if (object == NULL && !(protoeflags & MAP_ENTRY_NEEDS_COPY))
-			charge_prev_obj = TRUE;
 	}
 
 charged:
@@ -1249,7 +1275,8 @@ charged:
 		   vm_object_coalesce(prev_entry->object.vm_object,
 		       prev_entry->offset,
 		       (vm_size_t)(prev_entry->end - prev_entry->start),
-		       (vm_size_t)(end - prev_entry->end), charge_prev_obj)) {
+		       (vm_size_t)(end - prev_entry->end), cred != NULL &&
+		       (protoeflags & MAP_ENTRY_NEEDS_COPY) == 0)) {
 		/*
 		 * We were able to extend the object.  Determine if we
 		 * can extend the previous map entry to include the
@@ -1262,8 +1289,6 @@ charged:
 			prev_entry->end = end;
 			vm_map_entry_resize_free(map, prev_entry);
 			vm_map_simplify_entry(map, prev_entry);
-			if (cred != NULL)
-				crfree(cred);
 			return (KERN_SUCCESS);
 		}
 
@@ -1280,16 +1305,11 @@ charged:
 		if (cred != NULL && object != NULL && object->cred != NULL &&
 		    !(prev_entry->eflags & MAP_ENTRY_NEEDS_COPY)) {
 			/* Object already accounts for this uid. */
-			crfree(cred);
 			cred = NULL;
 		}
 	}
-
-	/*
-	 * NOTE: if conditionals fail, object can be NULL here.  This occurs
-	 * in things like the buffer map where we manage kva but do not manage
-	 * backing objects.
-	 */
+	if (cred != NULL)
+		crhold(cred);
 
 	/*
 	 * Create a new entry
@@ -1310,7 +1330,7 @@ charged:
 	new_entry->wired_count = 0;
 	new_entry->wiring_thread = NULL;
 	new_entry->read_ahead = VM_FAULT_READ_AHEAD_INIT;
-	new_entry->next_read = OFF_TO_IDX(offset);
+	new_entry->next_read = start;
 
 	KASSERT(cred == NULL || !ENTRY_CHARGED(new_entry),
 	    ("OVERCOMMIT: vm_map_insert leaks vm_map %p", new_entry));
@@ -1323,12 +1343,12 @@ charged:
 	map->size += new_entry->end - new_entry->start;
 
 	/*
-	 * It may be possible to merge the new entry with the next and/or
-	 * previous entries.  However, due to MAP_STACK_* being a hack, a
-	 * panic can result from merging such entries.
+	 * Try to coalesce the new entry with both the previous and next
+	 * entries in the list.  Previously, we only attempted to coalesce
+	 * with the previous entry when object is NULL.  Here, we handle the
+	 * other cases, which are less common.
 	 */
-	if ((cow & (MAP_STACK_GROWS_DOWN | MAP_STACK_GROWS_UP)) == 0)
-		vm_map_simplify_entry(map, new_entry);
+	vm_map_simplify_entry(map, new_entry);
 
 	if (cow & (MAP_PREFAULT|MAP_PREFAULT_PARTIAL)) {
 		vm_map_pmap_enter(map, start, prot,
@@ -1533,7 +1553,7 @@ again:
  *
  *	The map must be locked.
  *
- *	This routine guarentees that the passed entry remains valid (though
+ *	This routine guarantees that the passed entry remains valid (though
  *	possibly extended).  When merging, this routine may delete one or
  *	both neighbors.
  */
@@ -1543,7 +1563,8 @@ vm_map_simplify_entry(vm_map_t map, vm_map_entry_t entry)
 	vm_map_entry_t next, prev;
 	vm_size_t prevsize, esize;
 
-	if (entry->eflags & (MAP_ENTRY_IN_TRANSITION | MAP_ENTRY_IS_SUB_MAP))
+	if ((entry->eflags & (MAP_ENTRY_GROWS_DOWN | MAP_ENTRY_GROWS_UP |
+	    MAP_ENTRY_IN_TRANSITION | MAP_ENTRY_IS_SUB_MAP)) != 0)
 		return;
 
 	prev = entry->prev;
@@ -1841,7 +1862,7 @@ vm_map_submap(
  *	being created speculatively, cached pages are not reactivated and
  *	mapped.
  */
-void
+static void
 vm_map_pmap_enter(vm_map_t map, vm_offset_t addr, vm_prot_t prot,
     vm_object_t object, vm_pindex_t pindex, vm_size_t size, int flags)
 {
@@ -1891,7 +1912,7 @@ vm_map_pmap_enter(vm_map_t map, vm_offset_t addr, vm_prot_t prot,
 		 * free pages allocating pv entries.
 		 */
 		if (((flags & MAP_PREFAULT_MADVISE) != 0 &&
-		    cnt.v_free_count < cnt.v_free_reserved) ||
+		    vm_cnt.v_free_count < vm_cnt.v_free_reserved) ||
 		    ((flags & MAP_PREFAULT_PARTIAL) != 0 &&
 		    tmpidx >= threshold)) {
 			psize = tmpidx;
@@ -3287,15 +3308,6 @@ vmspace_fork(struct vmspace *vm1, vm_ooffset_t *fork_charge)
 	vm2->vm_taddr = vm1->vm_taddr;
 	vm2->vm_daddr = vm1->vm_daddr;
 	vm2->vm_maxsaddr = vm1->vm_maxsaddr;
-#ifdef PAX_ASLR
-	vm2->vm_aslr_delta_exec = vm1->vm_aslr_delta_exec;
-	vm2->vm_aslr_delta_mmap = vm1->vm_aslr_delta_mmap;
-	vm2->vm_aslr_delta_stack = vm1->vm_aslr_delta_stack;
-	vm2->vm_aslr_delta_vdso = vm1->vm_aslr_delta_vdso;
-#ifdef __LP64__
-	vm2->vm_aslr_delta_map32bit = vm1->vm_aslr_delta_map32bit;
-#endif
-#endif
 	vm_map_lock(old_map);
 	if (old_map->busy)
 		vm_map_wait_busy(old_map);
@@ -3457,10 +3469,8 @@ vm_map_stack(vm_map_t map, vm_offset_t addrbos, vm_size_t max_ssize,
 	growsize = sgrowsiz;
 	init_ssize = (max_ssize < growsize) ? max_ssize : growsize;
 	vm_map_lock(map);
-	PROC_LOCK(curproc);
-	lmemlim = lim_cur(curproc, RLIMIT_MEMLOCK);
-	vmemlim = lim_cur(curproc, RLIMIT_VMEM);
-	PROC_UNLOCK(curproc);
+	lmemlim = lim_cur(curthread, RLIMIT_MEMLOCK);
+	vmemlim = lim_cur(curthread, RLIMIT_VMEM);
 	if (!old_mlock && map->flags & MAP_WIREFUTURE) {
 		if (ptoa(pmap_wired_count(map->pmap)) + init_ssize > lmemlim) {
 			rv = KERN_NO_SPACE;
@@ -3509,7 +3519,7 @@ vm_map_stack_locked(vm_map_t map, vm_offset_t addrbos, vm_size_t max_ssize,
 		return (KERN_NO_SPACE);
 
 	/*
-	 * If we can't accomodate max_ssize in the current mapping, no go.
+	 * If we can't accommodate max_ssize in the current mapping, no go.
 	 * However, we need to be aware that subsequent user mappings might
 	 * map into the space we have reserved for stack, and currently this
 	 * space is not protected.
@@ -3542,25 +3552,24 @@ vm_map_stack_locked(vm_map_t map, vm_offset_t addrbos, vm_size_t max_ssize,
 
 	/* Now set the avail_ssize amount. */
 	if (rv == KERN_SUCCESS) {
-		if (prev_entry != &map->header)
-			vm_map_clip_end(map, prev_entry, bot);
 		new_entry = prev_entry->next;
 		if (new_entry->end != top || new_entry->start != bot)
 			panic("Bad entry start/end for new stack entry");
 
 		new_entry->avail_ssize = max_ssize - init_ssize;
-		if (orient & MAP_STACK_GROWS_DOWN)
-			new_entry->eflags |= MAP_ENTRY_GROWS_DOWN;
-		if (orient & MAP_STACK_GROWS_UP)
-			new_entry->eflags |= MAP_ENTRY_GROWS_UP;
+		KASSERT((orient & MAP_STACK_GROWS_DOWN) == 0 ||
+		    (new_entry->eflags & MAP_ENTRY_GROWS_DOWN) != 0,
+		    ("new entry lacks MAP_ENTRY_GROWS_DOWN"));
+		KASSERT((orient & MAP_STACK_GROWS_UP) == 0 ||
+		    (new_entry->eflags & MAP_ENTRY_GROWS_UP) != 0,
+		    ("new entry lacks MAP_ENTRY_GROWS_UP"));
 	}
 
 	return (rv);
 }
 
 static int stack_guard_page = 0;
-TUNABLE_INT("security.bsd.stack_guard_page", &stack_guard_page);
-SYSCTL_INT(_security_bsd, OID_AUTO, stack_guard_page, CTLFLAG_RW,
+SYSCTL_INT(_security_bsd, OID_AUTO, stack_guard_page, CTLFLAG_RWTUN,
     &stack_guard_page, 0,
     "Insert stack guard page ahead of the growable segments.");
 
@@ -3590,12 +3599,10 @@ vm_map_growstack(struct proc *p, vm_offset_t addr)
 	int error;
 #endif
 
+	lmemlim = lim_cur(curthread, RLIMIT_MEMLOCK);
+	stacklim = lim_cur(curthread, RLIMIT_STACK);
+	vmemlim = lim_cur(curthread, RLIMIT_VMEM);
 Retry:
-	PROC_LOCK(p);
-	lmemlim = lim_cur(p, RLIMIT_MEMLOCK);
-	stacklim = lim_cur(p, RLIMIT_STACK);
-	vmemlim = lim_cur(p, RLIMIT_VMEM);
-	PROC_UNLOCK(p);
 
 	vm_map_lock_read(map);
 
@@ -3679,7 +3686,7 @@ Retry:
 	}
 
 	is_procstack = (addr >= (vm_offset_t)vm->vm_maxsaddr &&
-	    addr < (vm_offset_t)p->p_usrstack) ? 1 : 0;
+	    addr < (vm_offset_t)p->p_sysent->sv_usrstack) ? 1 : 0;
 
 	/*
 	 * If this is the main process stack, see if we're over the stack
@@ -3779,21 +3786,21 @@ Retry:
 		}
 
 		rv = vm_map_insert(map, NULL, 0, addr, stack_entry->start,
-		    next_entry->protection, next_entry->max_protection, 0);
+		    next_entry->protection, next_entry->max_protection,
+		    MAP_STACK_GROWS_DOWN);
 
 		/* Adjust the available stack space by the amount we grew. */
 		if (rv == KERN_SUCCESS) {
-			if (prev_entry != &map->header)
-				vm_map_clip_end(map, prev_entry, addr);
 			new_entry = prev_entry->next;
 			KASSERT(new_entry == stack_entry->prev, ("foo"));
 			KASSERT(new_entry->end == stack_entry->start, ("foo"));
 			KASSERT(new_entry->start == addr, ("foo"));
+			KASSERT((new_entry->eflags & MAP_ENTRY_GROWS_DOWN) !=
+			    0, ("new entry lacks MAP_ENTRY_GROWS_DOWN"));
 			grow_amount = new_entry->end - new_entry->start;
 			new_entry->avail_ssize = stack_entry->avail_ssize -
 			    grow_amount;
 			stack_entry->eflags &= ~MAP_ENTRY_GROWS_DOWN;
-			new_entry->eflags |= MAP_ENTRY_GROWS_DOWN;
 		}
 	} else {
 		/*
@@ -3830,9 +3837,6 @@ Retry:
 			stack_entry->avail_ssize -= grow_amount;
 			vm_map_entry_resize_free(map, stack_entry);
 			rv = KERN_SUCCESS;
-
-			if (next_entry != &map->header)
-				vm_map_clip_start(map, next_entry, addr);
 		} else
 			rv = KERN_FAILURE;
 	}

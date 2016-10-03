@@ -1,12 +1,14 @@
 #	@(#)Makefile.inc	8.1 (Berkeley) 6/4/93
 # $FreeBSD$
 
-.PATH: ${.CURDIR}/${LIBC_ARCH}/string ${.CURDIR}/string
+.PATH: ${LIBC_SRCTOP}/${LIBC_ARCH}/string ${LIBC_SRCTOP}/string
+.PATH: ${LIBC_SRCTOP}/../../sys/libkern
 
-CFLAGS+= -I${.CURDIR}/locale
+CFLAGS+= -I${LIBC_SRCTOP}/locale
 
 # machine-independent string sources
-MISRCS+=bcmp.c bcopy.c bzero.c ffs.c ffsl.c ffsll.c fls.c flsl.c flsll.c \
+MISRCS+=bcmp.c bcopy.c bzero.c explicit_bzero.c \
+	ffs.c ffsl.c ffsll.c fls.c flsl.c flsll.c \
 	memccpy.c memchr.c memrchr.c memcmp.c \
 	memcpy.c memmem.c memmove.c memset.c \
 	stpcpy.c stpncpy.c strcasecmp.c \
@@ -22,11 +24,11 @@ MISRCS+=bcmp.c bcopy.c bzero.c ffs.c ffsl.c ffsll.c fls.c flsl.c flsll.c \
 	wmemcmp.c \
 	wmemcpy.c wmemmove.c wmemset.c
 
-SYM_MAPS+=	${.CURDIR}/string/Symbol.map
+SYM_MAPS+=	${LIBC_SRCTOP}/string/Symbol.map
 
 
 # machine-dependent string sources
-.sinclude "${.CURDIR}/${LIBC_ARCH}/string/Makefile.inc"
+.sinclude "${LIBC_SRCTOP}/${LIBC_ARCH}/string/Makefile.inc"
 
 MAN+=	bcmp.3 bcopy.3 bstring.3 bzero.3 ffs.3 index.3 memccpy.3 memchr.3 \
 	memcmp.3 memcpy.3 memmem.3 memmove.3 memset.3 strcasecmp.3 strcat.3 \
@@ -35,6 +37,7 @@ MAN+=	bcmp.3 bcopy.3 bstring.3 bzero.3 ffs.3 index.3 memccpy.3 memchr.3 \
 	strspn.3 strstr.3 strtok.3 strxfrm.3 swab.3 wcscoll.3 wcstok.3 \
 	wcswidth.3 wcsxfrm.3 wmemchr.3
 
+MLINKS+=bzero.3 explicit_bzero.3
 MLINKS+=ffs.3 ffsl.3 \
 	ffs.3 ffsll.3 \
 	ffs.3 fls.3 \

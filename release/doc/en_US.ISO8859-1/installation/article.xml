@@ -4,7 +4,7 @@
 <!ENTITY % release PUBLIC "-//FreeBSD//ENTITIES Release Specification//EN"
 	"http://www.FreeBSD.org/release/XML/share/xml/release.ent">
 %release;
-<!ENTITY local.rel "10.3">
+<!ENTITY local.rel "11.0">
 ]>
 
 <article xmlns="http://docbook.org/ns/docbook" xmlns:xlink="http://www.w3.org/1999/xlink" version="5.0"
@@ -76,7 +76,10 @@
 	upgrades of &arch.i386; and &arch.amd64; systems running
 	earlier FreeBSD releases. Systems running
 	<literal>9.3-RELEASE</literal>,
-	<literal>10.3-RC[12]</literal> can upgrade as follows:</para>
+	<literal>10.1-RELEASE</literal>,
+	<literal>10.2-RELEASE</literal>,
+	<literal>10.3-RELEASE</literal>,
+	<literal>11.0-RC[123]</literal> can upgrade as follows:</para>
 
       <screen>&prompt.root; freebsd-update fetch
 &prompt.root; freebsd-update install</screen>
@@ -87,36 +90,6 @@
 	configuration files.</para>
 
       <screen>&prompt.root; freebsd-update upgrade -r &local.rel;-RELEASE</screen>
-
-      <para>Due to changes in the way that &os; is packaged on the
-	release media, two complications may arise in this process if
-	upgrading from FreeBSD 9.3:</para>
-
-      <orderedlist>
-	<listitem>
-	  <para>The &os;, which previously could appear in either
-	    <filename>/boot/kernel</filename> or
-	    <filename>/boot/GENERIC</filename>, now only appears as
-	    <filename>/boot/kernel</filename>.  As a result, any
-	    kernel appearing in <filename>/boot/GENERIC</filename>
-	    will be deleted.  Please carefully read the output printed
-	    by &man.freebsd-update.8; and confirm that an updated
-	    kernel will be placed into
-	    <filename>/boot/kernel</filename> before proceeding beyond
-	    this point.</para>
-	</listitem>
-
-	<listitem>
-	  <para>The &os; source tree in <filename>/usr/src</filename>
-	    (if present) will be deleted.  (Normally the
-	    &man.freebsd-update.8; utility will update a source tree,
-	    but in this case the changes in release packaging result
-	    in the &man.freebsd-update.8; utility not recognizing that
-	    the source tree from the old release and the source tree
-	    from the new release correspond to the same part of
-	    &os;.)</para>
-	</listitem>
-      </orderedlist>
 
       <screen>&prompt.root; freebsd-update install</screen>
 
@@ -130,8 +103,8 @@
 
       <screen>&prompt.root; freebsd-update install</screen>
 
-      <para>At this point, users of systems being upgraded from &os;
-	9.3-RELEASE or earlier will be prompted by
+      <para>At this point, users of systems being upgraded from
+	earlier &os; releases will be prompted by
 	&man.freebsd-update.8; to rebuild all third-party applications
 	(e.g., ports installed from the ports tree) due to updates in
 	system libraries.</para>

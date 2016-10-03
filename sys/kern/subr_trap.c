@@ -46,7 +46,6 @@ __FBSDID("$FreeBSD$");
 
 #include "opt_hwpmc_hooks.h"
 #include "opt_ktrace.h"
-#include "opt_kdtrace.h"
 #include "opt_sched.h"
 
 #include <sys/param.h>
@@ -81,12 +80,6 @@ __FBSDID("$FreeBSD$");
 #include <net/vnet.h>
 #endif
 
-#ifdef XEN
-#include <vm/vm.h>
-#include <vm/vm_param.h>
-#include <vm/pmap.h>
-#endif
-
 #ifdef	HWPMC_HOOKS
 #include <sys/pmckern.h>
 #endif
@@ -108,17 +101,29 @@ userret(struct thread *td, struct trapframe *frame)
             td->td_name);
 	KASSERT((p->p_flag & P_WEXIT) == 0,
 	    ("Exiting process returns to usermode"));
-#if 0
 #ifdef DIAGNOSTIC
-	/* Check that we called signotify() enough. */
-	PROC_LOCK(p);
-	thread_lock(td);
-	if (SIGPENDING(td) && ((td->td_flags & TDF_NEEDSIGCHK) == 0 ||
-	    (td->td_flags & TDF_ASTPENDING) == 0))
-		printf("failed to set signal flags properly for ast()\n");
-	thread_unlock(td);
-	PROC_UNLOCK(p);
-#endif
+	/*
+	 * Check that we called signotify() enough.  For
+	 * multi-threaded processes, where signal distribution might
+	 * change due to other threads changing sigmask, the check is
+	 * racy and cannot be performed reliably.
+	 * If current process is vfork child, indicated by P_PPWAIT, then
+	 * issignal() ignores stops, so we block the check to avoid
+	 * classifying pending signals.
+	 */
+	if (p->p_numthreads == 1) {
+		PROC_LOCK(p);
+		thread_lock(td);
+		if ((p->p_flag & P_PPWAIT) == 0) {
+			KASSERT(!SIGPENDING(td) || (td->td_flags &
+			    (TDF_NEEDSIGCHK | TDF_ASTPENDING)) ==
+			    (TDF_NEEDSIGCHK | TDF_ASTPENDING),
+			    ("failed to set signal flags for ast p %p "
+			    "td %p fl %x", p, td, td->td_flags));
+		}
+		thread_unlock(td);
+		PROC_UNLOCK(p);
+	}
 #endif
 #ifdef KTRACE
 	KTRUSERRET(td);
@@ -142,9 +147,6 @@ userret(struct thread *td, struct trapframe *frame)
 	 * Let the scheduler adjust our priority etc.
 	 */
 	sched_userret(td);
-#ifdef XEN
-	PT_UPDATES_FLUSH();
-#endif
 
 	/*
 	 * Check for misbehavior.
@@ -159,6 +161,9 @@ userret(struct thread *td, struct trapframe *frame)
 	    ("userret: Returning in a critical section"));
 	KASSERT(td->td_locks == 0,
 	    ("userret: Returning with %d locks held", td->td_locks));
+	KASSERT(td->td_rw_rlocks == 0,
+	    ("userret: Returning with %d rwlocks held in read mode",
+	    td->td_rw_rlocks));
 	KASSERT((td->td_pflags & TDP_NOFAULTING) == 0,
 	    ("userret: Returning with pagefaults disabled"));
 	KASSERT(td->td_no_sleeping == 0,
@@ -167,7 +172,7 @@ userret(struct thread *td, struct trapframe *frame)
 	    ("userret: Returning with with pinned thread"));
 	KASSERT(td->td_vp_reserv == 0,
 	    ("userret: Returning while holding vnode reservation"));
-	KASSERT((td->td_flags & TDF_SBDRY) == 0,
+	KASSERT((td->td_flags & (TDF_SBDRY | TDF_SEINTR | TDF_SERESTART)) == 0,
 	    ("userret: Returning with stop signals deferred"));
 	KASSERT(td->td_su == NULL,
 	    ("userret: Returning with SU cleanup request not handled"));
@@ -179,10 +184,14 @@ userret(struct thread *td, struct trapframe *frame)
 	    (td->td_vnet_lpush != NULL) ? td->td_vnet_lpush : "N/A"));
 #endif
 #ifdef RACCT
-	if (racct_enable) {
+	if (racct_enable && p->p_throttled != 0) {
 		PROC_LOCK(p);
-		while (p->p_throttled == 1)
-			msleep(p->p_racct, &p->p_mtx, 0, "racct", 0);
+		while (p->p_throttled != 0) {
+			msleep(p->p_racct, &p->p_mtx, 0, "racct",
+			    p->p_throttled < 0 ? 0 : p->p_throttled);
+			if (p->p_throttled > 0)
+				p->p_throttled = 0;
+		}
 		PROC_UNLOCK(p);
 	}
 #endif
@@ -227,8 +236,8 @@ ast(struct trapframe *framep)
 	thread_unlock(td);
 	PCPU_INC(cnt.v_trap);
 
-	if (td->td_ucred != p->p_ucred) 
-		cred_update_thread(td);
+	if (td->td_cowgen != p->p_cowgen)
+		thread_cow_update(td);
 	if (td->td_pflags & TDP_OWEUPC && p->p_flag & P_PROFIL) {
 		addupc_task(td, td->td_profil_addr, td->td_profil_ticks);
 		td->td_profil_ticks = 0;
@@ -267,6 +276,29 @@ ast(struct trapframe *framep)
 			ktrcsw(0, 1, __func__);
 #endif
 	}
+
+#ifdef DIAGNOSTIC
+	if (p->p_numthreads == 1 && (flags & TDF_NEEDSIGCHK) == 0) {
+		PROC_LOCK(p);
+		thread_lock(td);
+		/*
+		 * Note that TDF_NEEDSIGCHK should be re-read from
+		 * td_flags, since signal might have been delivered
+		 * after we cleared td_flags above.  This is one of
+		 * the reason for looping check for AST condition.
+		 * See comment in userret() about P_PPWAIT.
+		 */
+		if ((p->p_flag & P_PPWAIT) == 0) {
+			KASSERT(!SIGPENDING(td) || (td->td_flags &
+			    (TDF_NEEDSIGCHK | TDF_ASTPENDING)) ==
+			    (TDF_NEEDSIGCHK | TDF_ASTPENDING),
+			    ("failed2 to set signal flags for ast p %p td %p "
+			    "fl %x %x", p, td, flags, td->td_flags));
+		}
+		thread_unlock(td);
+		PROC_UNLOCK(p);
+	}
+#endif
 
 	/*
 	 * Check for signals. Unlocked reads of p_pendingcnt or

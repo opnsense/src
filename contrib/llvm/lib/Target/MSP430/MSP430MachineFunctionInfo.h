@@ -1,4 +1,4 @@
-//===- MSP430MachineFuctionInfo.h - MSP430 machine function info -*- C++ -*-==//
+//=== MSP430MachineFunctionInfo.h - MSP430 machine function info -*- C++ -*-==//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -11,8 +11,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef MSP430MACHINEFUNCTIONINFO_H
-#define MSP430MACHINEFUNCTIONINFO_H
+#ifndef LLVM_LIB_TARGET_MSP430_MSP430MACHINEFUNCTIONINFO_H
+#define LLVM_LIB_TARGET_MSP430_MSP430MACHINEFUNCTIONINFO_H
 
 #include "llvm/CodeGen/MachineFunction.h"
 

@@ -578,7 +578,7 @@ p_simp_re(struct parse *p,
 	sopno subno;
 #	define	BACKSL	(1<<CHAR_BIT)
 
-	pos = HERE();		/* repetion op, if any, covers from here */
+	pos = HERE();		/* repetition op, if any, covers from here */
 
 	assert(MORE());		/* caller should have ensured this */
 	c = GETNEXT();
@@ -821,10 +821,10 @@ p_b_term(struct parse *p, cset *cs)
 				(void)REQUIRE((uch)start <= (uch)finish, REG_ERANGE);
 				CHaddrange(p, cs, start, finish);
 			} else {
-				(void)REQUIRE(__collate_range_cmp(table, start, finish) <= 0, REG_ERANGE);
+				(void)REQUIRE(__wcollate_range_cmp(table, start, finish) <= 0, REG_ERANGE);
 				for (i = 0; i <= UCHAR_MAX; i++) {
-					if (   __collate_range_cmp(table, start, i) <= 0
-					    && __collate_range_cmp(table, i, finish) <= 0
+					if (   __wcollate_range_cmp(table, start, i) <= 0
+					    && __wcollate_range_cmp(table, i, finish) <= 0
 					   )
 						CHadd(p, cs, i);
 				}
@@ -1422,8 +1422,8 @@ static void
 findmust(struct parse *p, struct re_guts *g)
 {
 	sop *scan;
-	sop *start;
-	sop *newstart;
+	sop *start = NULL;
+	sop *newstart = NULL;
 	sopno newlen;
 	sop s;
 	char *cp;
@@ -1726,13 +1726,13 @@ computematchjumps(struct parse *p, struct re_guts *g)
 	if (p->error != 0)
 		return;
 
-	pmatches = (int*) malloc(g->mlen * sizeof(unsigned int));
+	pmatches = (int*) malloc(g->mlen * sizeof(int));
 	if (pmatches == NULL) {
 		g->matchjump = NULL;
 		return;
 	}
 
-	g->matchjump = (int*) malloc(g->mlen * sizeof(unsigned int));
+	g->matchjump = (int*) malloc(g->mlen * sizeof(int));
 	if (g->matchjump == NULL) {	/* Not a fatal error */
 		free(pmatches);
 		return;

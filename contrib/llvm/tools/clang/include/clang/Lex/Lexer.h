@@ -11,8 +11,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_LEXER_H
-#define LLVM_CLANG_LEXER_H
+#ifndef LLVM_CLANG_LEX_LEXER_H
+#define LLVM_CLANG_LEX_LEXER_H
 
 #include "clang/Basic/LangOptions.h"
 #include "clang/Lex/PreprocessorLexer.h"
@@ -44,7 +44,7 @@ enum ConflictMarkerKind {
 /// or buffering/seeking of tokens, only forward lexing is supported.  It relies
 /// on the specified Preprocessor object to handle preprocessor directives, etc.
 class Lexer : public PreprocessorLexer {
-  virtual void anchor();
+  void anchor() override;
 
   //===--------------------------------------------------------------------===//
   // Constant configuration values for this lexer.
@@ -89,8 +89,8 @@ class Lexer : public PreprocessorLexer {
   // CurrentConflictMarkerState - The kind of conflict marker we are handling.
   ConflictMarkerKind CurrentConflictMarkerState;
 
-  Lexer(const Lexer &) LLVM_DELETED_FUNCTION;
-  void operator=(const Lexer &) LLVM_DELETED_FUNCTION;
+  Lexer(const Lexer &) = delete;
+  void operator=(const Lexer &) = delete;
   friend class Preprocessor;
 
   void InitLexer(const char *BufStart, const char *BufPtr, const char *BufEnd);
@@ -145,7 +145,7 @@ public:
 private:
   /// IndirectLex - An indirect call to 'Lex' that can be invoked via
   ///  the PreprocessorLexer interface.
-  void IndirectLex(Token &Result) { Lex(Result); }
+  void IndirectLex(Token &Result) override { Lex(Result); }
 
 public:
   /// LexFromRawLexer - Lex a token from a designated raw lexer (one with no
@@ -205,7 +205,7 @@ public:
 
   /// ReadToEndOfLine - Read the rest of the current preprocessor line as an
   /// uninterpreted string.  This switches the lexer out of directive mode.
-  void ReadToEndOfLine(SmallVectorImpl<char> *Result = 0);
+  void ReadToEndOfLine(SmallVectorImpl<char> *Result = nullptr);
 
 
   /// Diag - Forwarding function for diagnostics.  This translate a source
@@ -218,7 +218,9 @@ public:
 
   /// getSourceLocation - Return a source location for the next character in
   /// the current file.
-  SourceLocation getSourceLocation() { return getSourceLocation(BufferPtr); }
+  SourceLocation getSourceLocation() override {
+    return getSourceLocation(BufferPtr);
+  }
 
   /// \brief Return the current location in the buffer.
   const char *getBufferLocation() const { return BufferPtr; }
@@ -226,7 +228,7 @@ public:
   /// Stringify - Convert the specified string into a C string by escaping '\'
   /// and " characters.  This does not add surrounding ""'s to the string.
   /// If Charify is true, this escapes the ' character instead of ".
-  static std::string Stringify(const std::string &Str, bool Charify = false);
+  static std::string Stringify(StringRef Str, bool Charify = false);
 
   /// Stringify - Convert the specified string into a C string by escaping '\'
   /// and " characters.  This does not add surrounding ""'s to the string.
@@ -246,7 +248,7 @@ public:
   static unsigned getSpelling(const Token &Tok, const char *&Buffer, 
                               const SourceManager &SourceMgr,
                               const LangOptions &LangOpts,
-                              bool *Invalid = 0);
+                              bool *Invalid = nullptr);
   
   /// getSpelling() - Return the 'spelling' of the Tok token.  The spelling of a
   /// token is the characters used to represent the token in the source file
@@ -256,7 +258,7 @@ public:
   static std::string getSpelling(const Token &Tok,
                                  const SourceManager &SourceMgr,
                                  const LangOptions &LangOpts, 
-                                 bool *Invalid = 0);
+                                 bool *Invalid = nullptr);
 
   /// getSpelling - This method is used to get the spelling of the
   /// token at the given source location.  If, as is usually true, it
@@ -270,7 +272,7 @@ public:
                                SmallVectorImpl<char> &buffer,
                                const SourceManager &SourceMgr,
                                const LangOptions &LangOpts,
-                               bool *invalid = 0);
+                               bool *invalid = nullptr);
   
   /// MeasureTokenLength - Relex the token at the specified location and return
   /// its length in bytes in the input file.  If the token needs cleaning (e.g.
@@ -321,6 +323,26 @@ public:
                                             const SourceManager &SM,
                                             const LangOptions &LangOpts);
 
+  /// \brief Given a token range, produce a corresponding CharSourceRange that
+  /// is not a token range. This allows the source range to be used by
+  /// components that don't have access to the lexer and thus can't find the
+  /// end of the range for themselves.
+  static CharSourceRange getAsCharRange(SourceRange Range,
+                                        const SourceManager &SM,
+                                        const LangOptions &LangOpts) {
+    SourceLocation End = getLocForEndOfToken(Range.getEnd(), 0, SM, LangOpts);
+    return End.isInvalid() ? CharSourceRange()
+                           : CharSourceRange::getCharRange(
+                                 Range.getBegin(), End.getLocWithOffset(-1));
+  }
+  static CharSourceRange getAsCharRange(CharSourceRange Range,
+                                        const SourceManager &SM,
+                                        const LangOptions &LangOpts) {
+    return Range.isTokenRange()
+               ? getAsCharRange(Range.getAsRange(), SM, LangOpts)
+               : Range;
+  }
+
   /// \brief Returns true if the given MacroID location points at the first
   /// token of the macro expansion.
   ///
@@ -329,7 +351,7 @@ public:
   static bool isAtStartOfMacroExpansion(SourceLocation loc,
                                         const SourceManager &SM,
                                         const LangOptions &LangOpts,
-                                        SourceLocation *MacroBegin = 0);
+                                        SourceLocation *MacroBegin = nullptr);
 
   /// \brief Returns true if the given MacroID location points at the last
   /// token of the macro expansion.
@@ -339,7 +361,7 @@ public:
   static bool isAtEndOfMacroExpansion(SourceLocation loc,
                                       const SourceManager &SM,
                                       const LangOptions &LangOpts,
-                                      SourceLocation *MacroEnd = 0);
+                                      SourceLocation *MacroEnd = nullptr);
 
   /// \brief Accepts a range and returns a character range with file locations.
   ///
@@ -375,7 +397,7 @@ public:
   static StringRef getSourceText(CharSourceRange Range,
                                  const SourceManager &SM,
                                  const LangOptions &LangOpts,
-                                 bool *Invalid = 0);
+                                 bool *Invalid = nullptr);
 
   /// \brief Retrieve the name of the immediate macro expansion.
   ///
@@ -403,9 +425,9 @@ public:
   /// \returns The offset into the file where the preamble ends and the rest
   /// of the file begins along with a boolean value indicating whether 
   /// the preamble ends at the beginning of a new line.
-  static std::pair<unsigned, bool>
-  ComputePreamble(const llvm::MemoryBuffer *Buffer, const LangOptions &LangOpts,
-                  unsigned MaxLines = 0);
+  static std::pair<unsigned, bool> ComputePreamble(StringRef Buffer,
+                                                   const LangOptions &LangOpts,
+                                                   unsigned MaxLines = 0);
 
   /// \brief Checks that the given token is the first token that occurs after
   /// the given location (this excludes comments and whitespace). Returns the
@@ -546,7 +568,8 @@ private:
 
   /// getCharAndSizeSlow - Handle the slow/uncommon case of the getCharAndSize
   /// method.
-  char getCharAndSizeSlow(const char *Ptr, unsigned &Size, Token *Tok = 0);
+  char getCharAndSizeSlow(const char *Ptr, unsigned &Size,
+                          Token *Tok = nullptr);
 
   /// getEscapedNewLineSize - Return the size of the specified escaped newline,
   /// or 0 if it is not an escaped newline. P[-1] is known to be a "\" on entry
@@ -614,8 +637,28 @@ private:
   /// \return The Unicode codepoint specified by the UCN, or 0 if the UCN is
   ///         invalid.
   uint32_t tryReadUCN(const char *&CurPtr, const char *SlashLoc, Token *Tok);
-};
 
+  /// \brief Try to consume a UCN as part of an identifier at the current
+  /// location.
+  /// \param CurPtr Initially points to the range of characters in the source
+  ///               buffer containing the '\'. Updated to point past the end of
+  ///               the UCN on success.
+  /// \param Size The number of characters occupied by the '\' (including
+  ///             trigraphs and escaped newlines).
+  /// \param Result The token being produced. Marked as containing a UCN on
+  ///               success.
+  /// \return \c true if a UCN was lexed and it produced an acceptable
+  ///         identifier character, \c false otherwise.
+  bool tryConsumeIdentifierUCN(const char *&CurPtr, unsigned Size,
+                               Token &Result);
+
+  /// \brief Try to consume an identifier character encoded in UTF-8.
+  /// \param CurPtr Points to the start of the (potential) UTF-8 code unit
+  ///        sequence. On success, updated to point past the end of it.
+  /// \return \c true if a UTF-8 sequence mapping to an acceptable identifier
+  ///         character was lexed, \c false otherwise.
+  bool tryConsumeIdentifierUTF8Char(const char *&CurPtr);
+};
 
 }  // end namespace clang
 

@@ -52,10 +52,10 @@ RegisterContext (thread, concrete_frame_idx),
     m_pc_reg_info.format = eFormatPointer;
     m_pc_reg_info.invalidate_regs = NULL;
     m_pc_reg_info.value_regs = NULL;
-    m_pc_reg_info.kinds[eRegisterKindGCC] = LLDB_INVALID_REGNUM;
+    m_pc_reg_info.kinds[eRegisterKindEHFrame] = LLDB_INVALID_REGNUM;
     m_pc_reg_info.kinds[eRegisterKindDWARF] = LLDB_INVALID_REGNUM;
     m_pc_reg_info.kinds[eRegisterKindGeneric] = LLDB_REGNUM_GENERIC_PC;
-    m_pc_reg_info.kinds[eRegisterKindGDB] = LLDB_INVALID_REGNUM;
+    m_pc_reg_info.kinds[eRegisterKindProcessPlugin] = LLDB_INVALID_REGNUM;
     m_pc_reg_info.kinds[eRegisterKindLLDB] = LLDB_INVALID_REGNUM;
 }
 
@@ -130,7 +130,7 @@ RegisterContextHistory::WriteAllRegisterValues (const lldb::DataBufferSP &data_s
 }
 
 uint32_t
-RegisterContextHistory::ConvertRegisterKindToRegisterNumber (uint32_t kind, uint32_t num)
+RegisterContextHistory::ConvertRegisterKindToRegisterNumber (lldb::RegisterKind kind, uint32_t num)
 {
     if (kind == eRegisterKindGeneric && num == LLDB_REGNUM_GENERIC_PC)
         return 0;

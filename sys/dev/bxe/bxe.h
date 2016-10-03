@@ -51,16 +51,16 @@ __FBSDID("$FreeBSD$");
 #include <sys/limits.h>
 #include <sys/queue.h>
 #include <sys/taskqueue.h>
+#include <sys/zlib.h>
 
 #include <net/if.h>
 #include <net/if_types.h>
 #include <net/if_arp.h>
 #include <net/ethernet.h>
 #include <net/if_dl.h>
-#include <net/if_media.h>
 #include <net/if_var.h>
+#include <net/if_media.h>
 #include <net/if_vlan_var.h>
-#include <net/zlib.h>
 #include <net/bpf.h>
 
 #include <netinet/in.h>
@@ -110,6 +110,9 @@ __FBSDID("$FreeBSD$");
 #include "bxe_stats.h"
 
 #include "bxe_elink.h"
+
+#define VF_MAC_CREDIT_CNT 0
+#define VF_VLAN_CREDIT_CNT (0)
 
 #if __FreeBSD_version < 800054
 #if defined(__i386__) || defined(__amd64__)
@@ -933,7 +936,7 @@ struct bxe_fw_stats_data {
 struct bxe_slowpath {
 
     /* used by the DMAE command executer */
-    struct dmae_command dmae[MAX_DMAE_C];
+    struct dmae_cmd dmae[MAX_DMAE_C];
 
     /* statistics completion */
     uint32_t stats_comp;
@@ -1323,9 +1326,9 @@ enum {
 struct bxe_softc {
     /*
      * First entry must be a pointer to the BSD ifnet struct which
-     * has a first element of 'void *if_softc' (which is us).
+     * has a first element of 'void *if_softc' (which is us). XXX
      */
-    struct ifnet   *ifnet;
+    if_t 	    ifp;
     struct ifmedia  ifmedia; /* network interface media structure */
     int             media;
 
@@ -1480,22 +1483,22 @@ struct bxe_softc {
 #define BXE_MCAST_LOCK(sc)        \
     do {                          \
         mtx_lock(&sc->mcast_mtx); \
-        IF_ADDR_LOCK(sc->ifnet);  \
+        IF_ADDR_LOCK(sc->ifp);  \
     } while (0)
 #define BXE_MCAST_UNLOCK(sc)        \
     do {                            \
-        IF_ADDR_UNLOCK(sc->ifnet);  \
+        IF_ADDR_UNLOCK(sc->ifp);  \
         mtx_unlock(&sc->mcast_mtx); \
     } while (0)
 #else
 #define BXE_MCAST_LOCK(sc)         \
     do {                           \
         mtx_lock(&sc->mcast_mtx);  \
-        if_maddr_rlock(sc->ifnet); \
+        if_maddr_rlock(sc->ifp); \
     } while (0)
 #define BXE_MCAST_UNLOCK(sc)         \
     do {                             \
-        if_maddr_runlock(sc->ifnet); \
+        if_maddr_runlock(sc->ifp); \
         mtx_unlock(&sc->mcast_mtx);  \
     } while (0)
 #endif
@@ -1745,7 +1748,7 @@ struct bxe_softc {
     struct bxe_net_stats_old     net_stats_old;
     struct bxe_fw_port_stats_old fw_stats_old;
 
-    struct dmae_command stats_dmae; /* used by dmae command loader */
+    struct dmae_cmd stats_dmae; /* used by dmae command loader */
     int                 executer_idx;
 
     int mtu;
@@ -1783,8 +1786,13 @@ struct bxe_softc {
     int panic;
 
     struct cdev *ioctl_dev;
+
     void *grc_dump;
-    int grcdump_done;
+    unsigned int trigger_grcdump;
+    unsigned int  grcdump_done;
+    unsigned int grcdump_started;
+
+    void *eeprom;
 }; /* struct bxe_softc */
 
 /* IOCTL sub-commands for edebug and firmware upgrade */
@@ -1984,21 +1992,21 @@ void bxe_reg_write32(struct bxe_softc *sc, bus_size_t offset, uint32_t val);
 #define DMAE_COMP_REGULAR 0
 #define DMAE_COM_SET_ERR  1
 
-#define DMAE_CMD_SRC_PCI (DMAE_SRC_PCI << DMAE_COMMAND_SRC_SHIFT)
-#define DMAE_CMD_SRC_GRC (DMAE_SRC_GRC << DMAE_COMMAND_SRC_SHIFT)
-#define DMAE_CMD_DST_PCI (DMAE_DST_PCI << DMAE_COMMAND_DST_SHIFT)
-#define DMAE_CMD_DST_GRC (DMAE_DST_GRC << DMAE_COMMAND_DST_SHIFT)
+#define DMAE_CMD_SRC_PCI (DMAE_SRC_PCI << DMAE_CMD_SRC_SHIFT)
+#define DMAE_CMD_SRC_GRC (DMAE_SRC_GRC << DMAE_CMD_SRC_SHIFT)
+#define DMAE_CMD_DST_PCI (DMAE_DST_PCI << DMAE_CMD_DST_SHIFT)
+#define DMAE_CMD_DST_GRC (DMAE_DST_GRC << DMAE_CMD_DST_SHIFT)
 
-#define DMAE_CMD_C_DST_PCI (DMAE_COMP_PCI << DMAE_COMMAND_C_DST_SHIFT)
-#define DMAE_CMD_C_DST_GRC (DMAE_COMP_GRC << DMAE_COMMAND_C_DST_SHIFT)
+#define DMAE_CMD_C_DST_PCI (DMAE_COMP_PCI << DMAE_CMD_C_DST_SHIFT)
+#define DMAE_CMD_C_DST_GRC (DMAE_COMP_GRC << DMAE_CMD_C_DST_SHIFT)
 
-#define DMAE_CMD_ENDIANITY_NO_SWAP   (0 << DMAE_COMMAND_ENDIANITY_SHIFT)
-#define DMAE_CMD_ENDIANITY_B_SWAP    (1 << DMAE_COMMAND_ENDIANITY_SHIFT)
-#define DMAE_CMD_ENDIANITY_DW_SWAP   (2 << DMAE_COMMAND_ENDIANITY_SHIFT)
-#define DMAE_CMD_ENDIANITY_B_DW_SWAP (3 << DMAE_COMMAND_ENDIANITY_SHIFT)
+#define DMAE_CMD_ENDIANITY_NO_SWAP   (0 << DMAE_CMD_ENDIANITY_SHIFT)
+#define DMAE_CMD_ENDIANITY_B_SWAP    (1 << DMAE_CMD_ENDIANITY_SHIFT)
+#define DMAE_CMD_ENDIANITY_DW_SWAP   (2 << DMAE_CMD_ENDIANITY_SHIFT)
+#define DMAE_CMD_ENDIANITY_B_DW_SWAP (3 << DMAE_CMD_ENDIANITY_SHIFT)
 
 #define DMAE_CMD_PORT_0 0
-#define DMAE_CMD_PORT_1 DMAE_COMMAND_PORT
+#define DMAE_CMD_PORT_1 DMAE_CMD_PORT
 
 #define DMAE_SRC_PF 0
 #define DMAE_SRC_VF 1
@@ -2106,6 +2114,28 @@ static const uint32_t dmae_reg_go_c[] = {
 #define PCI_PM_D0    1
 #define PCI_PM_D3hot 2
 
+#ifndef DUPLEX_UNKNOWN
+#define DUPLEX_UNKNOWN (0xff)
+#endif
+
+#ifndef SPEED_UNKNOWN
+#define SPEED_UNKNOWN (-1)
+#endif
+
+/* Enable or disable autonegotiation. */
+#define AUTONEG_DISABLE         0x00
+#define AUTONEG_ENABLE          0x01
+
+/* Which connector port. */
+#define PORT_TP                 0x00
+#define PORT_AUI                0x01
+#define PORT_MII                0x02
+#define PORT_FIBRE              0x03
+#define PORT_BNC                0x04
+#define PORT_DA                 0x05
+#define PORT_NONE               0xef
+#define PORT_OTHER              0xff
+
 int  bxe_test_bit(int nr, volatile unsigned long * addr);
 void bxe_set_bit(unsigned int nr, volatile unsigned long * addr);
 void bxe_clear_bit(int nr, volatile unsigned long * addr);
@@ -2127,7 +2157,7 @@ uint32_t bxe_dmae_opcode_clr_src_reset(uint32_t opcode);
 uint32_t bxe_dmae_opcode(struct bxe_softc *sc, uint8_t src_type,
                          uint8_t dst_type, uint8_t with_comp,
                          uint8_t comp_type);
-void bxe_post_dmae(struct bxe_softc *sc, struct dmae_command *dmae, int idx);
+void bxe_post_dmae(struct bxe_softc *sc, struct dmae_cmd *dmae, int idx);
 void bxe_read_dmae(struct bxe_softc *sc, uint32_t src_addr, uint32_t len32);
 void bxe_write_dmae(struct bxe_softc *sc, bus_addr_t dma_addr,
                     uint32_t dst_addr, uint32_t len32);
@@ -2267,6 +2297,17 @@ void bxe_dump_mem(struct bxe_softc *sc, char *tag,
                   uint8_t *mem, uint32_t len);
 void bxe_dump_mbuf_data(struct bxe_softc *sc, char *pTag,
                         struct mbuf *m, uint8_t contents);
+extern int bxe_grc_dump(struct bxe_softc *sc);
+
+#if __FreeBSD_version >= 800000
+#if __FreeBSD_version >= 1000000
+#define BXE_SET_FLOWID(m) M_HASHTYPE_SET(m, M_HASHTYPE_OPAQUE)
+#define BXE_VALID_FLOWID(m) (M_HASHTYPE_GET(m) != M_HASHTYPE_NONE)
+#else
+#define BXE_VALID_FLOWID(m) ((m->m_flags & M_FLOWID) != 0)
+#define BXE_SET_FLOWID(m) m->m_flags |= M_FLOWID
+#endif
+#endif /* #if __FreeBSD_version >= 800000 */
 
 /***********/
 /* INLINES */

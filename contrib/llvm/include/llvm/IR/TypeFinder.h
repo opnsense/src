@@ -7,7 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file contains the declaration of the TypeFinder class. 
+// This file contains the declaration of the TypeFinder class.
 //
 //===----------------------------------------------------------------------===//
 
@@ -31,6 +31,7 @@ class TypeFinder {
   // To avoid walking constant expressions multiple times and other IR
   // objects, we keep several helper maps.
   DenseSet<const Value*> VisitedConstants;
+  DenseSet<const MDNode *> VisitedMetadata;
   DenseSet<Type*> VisitedTypes;
 
   std::vector<StructType*> StructTypes;

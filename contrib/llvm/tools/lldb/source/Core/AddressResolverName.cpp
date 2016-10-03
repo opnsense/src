@@ -13,11 +13,9 @@
 #include "lldb/Core/Log.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/StreamString.h"
-#include "lldb/Symbol/ClangNamespaceDecl.h"
 #include "lldb/Symbol/Function.h"
 #include "lldb/Symbol/SymbolContext.h"
 #include "lldb/Symbol/Symbol.h"
-#include "lldb/lldb-private-log.h"
 
 using namespace lldb;
 using namespace lldb_private;
@@ -148,7 +146,7 @@ AddressResolverName::SearchCallback
         break;
     }
 
-    // Remove any duplicates between the funcion list and the symbol list
+    // Remove any duplicates between the function list and the symbol list
     if (func_list.GetSize())
     {
         for (i = 0; i < func_list.GetSize(); i++)
@@ -166,7 +164,7 @@ AddressResolverName::SearchCallback
                 {
                     if (symbol_sc.symbol && symbol_sc.symbol->ValueIsAddress())
                     {
-                        if (sc.function->GetAddressRange().GetBaseAddress() == symbol_sc.symbol->GetAddress())
+                        if (sc.function->GetAddressRange().GetBaseAddress() == symbol_sc.symbol->GetAddressRef())
                         {
                             sym_list.RemoveContextAtIndex(j);
                             continue;   // Don't increment j
@@ -212,7 +210,7 @@ AddressResolverName::SearchCallback
         {
             if (sc.symbol && sc.symbol->ValueIsAddress())
             {
-                func_addr = sc.symbol->GetAddress();
+                func_addr = sc.symbol->GetAddressRef();
                 addr_t byte_size = sc.symbol->GetByteSize();
 
                 if (skip_prologue)

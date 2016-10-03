@@ -12,8 +12,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef Hexagon_ISELLOWERING_H
-#define Hexagon_ISELLOWERING_H
+#ifndef LLVM_LIB_TARGET_HEXAGON_HEXAGONISELLOWERING_H
+#define LLVM_LIB_TARGET_HEXAGON_HEXAGONISELLOWERING_H
 
 #include "Hexagon.h"
 #include "llvm/CodeGen/CallingConvLower.h"
@@ -21,158 +21,231 @@
 #include "llvm/Target/TargetLowering.h"
 
 namespace llvm {
-  namespace HexagonISD {
-    enum {
-      FIRST_NUMBER = ISD::BUILTIN_OP_END,
 
-      CONST32,
+// Return true when the given node fits in a positive half word.
+bool isPositiveHalfWord(SDNode *N);
+
+  namespace HexagonISD {
+    enum NodeType : unsigned {
+      OP_BEGIN = ISD::BUILTIN_OP_END,
+
+      CONST32 = OP_BEGIN,
       CONST32_GP,  // For marking data present in GP.
-      CONST32_Int_Real,
       FCONST32,
-      SETCC,
-      ADJDYNALLOC,
+      ALLOCA,
       ARGEXTEND,
 
-      CMPICC,      // Compare two GPR operands, set icc.
-      CMPFCC,      // Compare two FP operands, set fcc.
-      BRICC,       // Branch to dest on icc condition
-      BRFCC,       // Branch to dest on fcc condition
-      SELECT_ICC,  // Select between two values using the current ICC flags.
-      SELECT_FCC,  // Select between two values using the current FCC flags.
+      AT_GOT,      // Index in GOT.
+      AT_PCREL,    // Offset relative to PC.
 
-      Hi, Lo,      // Hi/Lo operations, typically on a global address.
+      CALLv3,      // A V3+ call instruction.
+      CALLv3nr,    // A V3+ call instruction that doesn't return.
+      CALLR,
 
-      FTOI,        // FP to Int within a FP register.
-      ITOF,        // Int to FP within a FP register.
-
-      CALL,        // A call instruction.
       RET_FLAG,    // Return with a flag operand.
-      BR_JT,       // Jump table.
       BARRIER,     // Memory barrier.
-      WrapperJT,
-      WrapperCP,
-      WrapperCombineII,
-      WrapperCombineRR,
-      WrapperCombineRI_V4,
-      WrapperCombineIR_V4,
-      WrapperPackhl,
-      WrapperSplatB,
-      WrapperSplatH,
-      WrapperShuffEB,
-      WrapperShuffEH,
-      WrapperShuffOB,
-      WrapperShuffOH,
+      JT,          // Jump table.
+      CP,          // Constant pool.
+
+      POPCOUNT,
+      COMBINE,
+      PACKHL,
+      VSPLATB,
+      VSPLATH,
+      SHUFFEB,
+      SHUFFEH,
+      SHUFFOB,
+      SHUFFOH,
+      VSXTBH,
+      VSXTBW,
+      VSRAW,
+      VSRAH,
+      VSRLW,
+      VSRLH,
+      VSHLW,
+      VSHLH,
+      VCMPBEQ,
+      VCMPBGT,
+      VCMPBGTU,
+      VCMPHEQ,
+      VCMPHGT,
+      VCMPHGTU,
+      VCMPWEQ,
+      VCMPWGT,
+      VCMPWGTU,
+
+      INSERT,
+      INSERTRP,
+      EXTRACTU,
+      EXTRACTURP,
+      VCOMBINE,
       TC_RETURN,
-      EH_RETURN
+      EH_RETURN,
+      DCFETCH,
+
+      OP_END
     };
   }
+
+  class HexagonSubtarget;
 
   class HexagonTargetLowering : public TargetLowering {
     int VarArgsFrameOffset;   // Frame offset to start of varargs area.
 
-    bool CanReturnSmallStruct(const Function* CalleeFn,
-                              unsigned& RetSize) const;
+    bool CanReturnSmallStruct(const Function* CalleeFn, unsigned& RetSize)
+        const;
+    void promoteLdStType(EVT VT, EVT PromotedLdStVT);
+    const HexagonTargetMachine &HTM;
+    const HexagonSubtarget &Subtarget;
 
   public:
-    HexagonTargetMachine &TM;
-    explicit HexagonTargetLowering(HexagonTargetMachine &targetmachine);
+    explicit HexagonTargetLowering(const TargetMachine &TM,
+                                   const HexagonSubtarget &ST);
 
     /// IsEligibleForTailCallOptimization - Check whether the call is eligible
     /// for tail call optimization. Targets which want to do tail call
     /// optimization should implement this function.
-    bool
-    IsEligibleForTailCallOptimization(SDValue Callee,
-                                      CallingConv::ID CalleeCC,
-                                      bool isVarArg,
-                                      bool isCalleeStructRet,
-                                      bool isCallerStructRet,
-                                      const
-                                      SmallVectorImpl<ISD::OutputArg> &Outs,
-                                      const SmallVectorImpl<SDValue> &OutVals,
-                                      const SmallVectorImpl<ISD::InputArg> &Ins,
-                                      SelectionDAG& DAG) const;
+    bool IsEligibleForTailCallOptimization(SDValue Callee,
+        CallingConv::ID CalleeCC, bool isVarArg, bool isCalleeStructRet,
+        bool isCallerStructRet, const SmallVectorImpl<ISD::OutputArg> &Outs,
+        const SmallVectorImpl<SDValue> &OutVals,
+        const SmallVectorImpl<ISD::InputArg> &Ins, SelectionDAG& DAG) const;
 
-    virtual bool isTruncateFree(Type *Ty1, Type *Ty2) const;
-    virtual bool isTruncateFree(EVT VT1, EVT VT2) const;
+    bool isTruncateFree(Type *Ty1, Type *Ty2) const override;
+    bool isTruncateFree(EVT VT1, EVT VT2) const override;
 
-    virtual bool allowTruncateForTailCall(Type *Ty1, Type *Ty2) const;
+    bool allowTruncateForTailCall(Type *Ty1, Type *Ty2) const override;
 
-    virtual SDValue LowerOperation(SDValue Op, SelectionDAG &DAG) const;
+    // Should we expand the build vector with shuffles?
+    bool shouldExpandBuildVectorWithShuffles(EVT VT,
+        unsigned DefinedValues) const override;
 
-    virtual const char *getTargetNodeName(unsigned Opcode) const;
-    SDValue  LowerBR_JT(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerOperation(SDValue Op, SelectionDAG &DAG) const override;
+    const char *getTargetNodeName(unsigned Opcode) const override;
+    SDValue LowerCONCAT_VECTORS(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerEXTRACT_VECTOR(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerINSERT_VECTOR(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerBUILD_VECTOR(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerDYNAMIC_STACKALLOC(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerINLINEASM(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerEH_LABEL(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerEH_RETURN(SDValue Op, SelectionDAG &DAG) const;
-    SDValue LowerFormalArguments(SDValue Chain,
-                                 CallingConv::ID CallConv, bool isVarArg,
-                                 const SmallVectorImpl<ISD::InputArg> &Ins,
-                                 SDLoc dl, SelectionDAG &DAG,
-                                 SmallVectorImpl<SDValue> &InVals) const;
+    SDValue LowerFormalArguments(SDValue Chain, CallingConv::ID CallConv,
+        bool isVarArg, const SmallVectorImpl<ISD::InputArg> &Ins, SDLoc dl,
+        SelectionDAG &DAG, SmallVectorImpl<SDValue> &InVals) const override;
     SDValue LowerGLOBALADDRESS(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerBlockAddress(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerGLOBAL_OFFSET_TABLE(SDValue Op, SelectionDAG &DAG) const;
 
     SDValue LowerCall(TargetLowering::CallLoweringInfo &CLI,
-                      SmallVectorImpl<SDValue> &InVals) const;
-
+        SmallVectorImpl<SDValue> &InVals) const override;
     SDValue LowerCallResult(SDValue Chain, SDValue InFlag,
-                            CallingConv::ID CallConv, bool isVarArg,
-                            const SmallVectorImpl<ISD::InputArg> &Ins,
-                            SDLoc dl, SelectionDAG &DAG,
-                            SmallVectorImpl<SDValue> &InVals,
-                            const SmallVectorImpl<SDValue> &OutVals,
-                            SDValue Callee) const;
+        CallingConv::ID CallConv, bool isVarArg,
+        const SmallVectorImpl<ISD::InputArg> &Ins, SDLoc dl,
+        SelectionDAG &DAG, SmallVectorImpl<SDValue> &InVals,
+        const SmallVectorImpl<SDValue> &OutVals, SDValue Callee) const;
 
-    SDValue LowerSELECT_CC(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerSETCC(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerVSELECT(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerCTPOP(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerFRAMEADDR(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerATOMIC_FENCE(SDValue Op, SelectionDAG& DAG) const;
     SDValue LowerRETURNADDR(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerLOAD(SDValue Op, SelectionDAG &DAG) const;
 
-    SDValue LowerReturn(SDValue Chain,
-                        CallingConv::ID CallConv, bool isVarArg,
-                        const SmallVectorImpl<ISD::OutputArg> &Outs,
-                        const SmallVectorImpl<SDValue> &OutVals,
-                        SDLoc dl, SelectionDAG &DAG) const;
+    SDValue LowerReturn(SDValue Chain, CallingConv::ID CallConv,
+        bool isVarArg, const SmallVectorImpl<ISD::OutputArg> &Outs,
+        const SmallVectorImpl<SDValue> &OutVals, SDLoc dl,
+        SelectionDAG &DAG) const override;
 
-    virtual MachineBasicBlock
-    *EmitInstrWithCustomInserter(MachineInstr *MI,
-                                 MachineBasicBlock *BB) const;
+    bool mayBeEmittedAsTailCall(CallInst *CI) const override;
+    MachineBasicBlock * EmitInstrWithCustomInserter(MachineInstr *MI,
+        MachineBasicBlock *BB) const override;
 
-    SDValue  LowerVASTART(SDValue Op, SelectionDAG &DAG) const;
-    SDValue  LowerConstantPool(SDValue Op, SelectionDAG &DAG) const;
-    virtual EVT getSetCCResultType(LLVMContext &C, EVT VT) const {
+    /// If a physical register, this returns the register that receives the
+    /// exception address on entry to an EH pad.
+    unsigned
+    getExceptionPointerRegister(const Constant *PersonalityFn) const override {
+      return Hexagon::R0;
+    }
+
+    /// If a physical register, this returns the register that receives the
+    /// exception typeid on entry to a landing pad.
+    unsigned
+    getExceptionSelectorRegister(const Constant *PersonalityFn) const override {
+      return Hexagon::R1;
+    }
+
+    SDValue LowerVASTART(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerConstantPool(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerJumpTable(SDValue Op, SelectionDAG &DAG) const;
+    EVT getSetCCResultType(const DataLayout &, LLVMContext &C,
+                           EVT VT) const override {
       if (!VT.isVector())
         return MVT::i1;
       else
         return EVT::getVectorVT(C, MVT::i1, VT.getVectorNumElements());
     }
 
-    virtual bool getPostIndexedAddressParts(SDNode *N, SDNode *Op,
-                                            SDValue &Base, SDValue &Offset,
-                                            ISD::MemIndexedMode &AM,
-                                            SelectionDAG &DAG) const;
+    bool getPostIndexedAddressParts(SDNode *N, SDNode *Op,
+                                    SDValue &Base, SDValue &Offset,
+                                    ISD::MemIndexedMode &AM,
+                                    SelectionDAG &DAG) const override;
 
-    std::pair<unsigned, const TargetRegisterClass*>
-    getRegForInlineAsmConstraint(const std::string &Constraint,
-                                 MVT VT) const;
+    std::pair<unsigned, const TargetRegisterClass *>
+    getRegForInlineAsmConstraint(const TargetRegisterInfo *TRI,
+                                 StringRef Constraint, MVT VT) const override;
+
+    unsigned
+    getInlineAsmMemConstraint(StringRef ConstraintCode) const override {
+      if (ConstraintCode == "o")
+        return InlineAsm::Constraint_o;
+      else if (ConstraintCode == "v")
+        return InlineAsm::Constraint_v;
+      return TargetLowering::getInlineAsmMemConstraint(ConstraintCode);
+    }
 
     // Intrinsics
-    virtual SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op,
-                                            SelectionDAG &DAG) const;
+    SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, SelectionDAG &DAG) const;
     /// isLegalAddressingMode - Return true if the addressing mode represented
     /// by AM is legal for this target, for a load/store of the specified type.
     /// The type may be VoidTy, in which case only return true if the addressing
     /// mode is legal for a load/store of any legal type.
     /// TODO: Handle pre/postinc as well.
-    virtual bool isLegalAddressingMode(const AddrMode &AM, Type *Ty) const;
-    virtual bool isFPImmLegal(const APFloat &Imm, EVT VT) const;
+    bool isLegalAddressingMode(const DataLayout &DL, const AddrMode &AM,
+                               Type *Ty, unsigned AS) const override;
+    /// Return true if folding a constant offset with the given GlobalAddress
+    /// is legal.  It is frequently not legal in PIC relocation models.
+    bool isOffsetFoldingLegal(const GlobalAddressSDNode *GA) const override;
+
+    bool isFPImmLegal(const APFloat &Imm, EVT VT) const override;
 
     /// isLegalICmpImmediate - Return true if the specified immediate is legal
     /// icmp immediate, that is the target has icmp instructions which can
     /// compare a register against the immediate without having to materialize
     /// the immediate into a register.
-    virtual bool isLegalICmpImmediate(int64_t Imm) const;
+    bool isLegalICmpImmediate(int64_t Imm) const override;
+
+    /// Returns relocation base for the given PIC jumptable.
+    SDValue getPICJumpTableRelocBase(SDValue Table, SelectionDAG &DAG)
+                                     const override;
+
+    // Handling of atomic RMW instructions.
+    Value *emitLoadLinked(IRBuilder<> &Builder, Value *Addr,
+        AtomicOrdering Ord) const override;
+    Value *emitStoreConditional(IRBuilder<> &Builder, Value *Val,
+        Value *Addr, AtomicOrdering Ord) const override;
+    AtomicExpansionKind shouldExpandAtomicLoadInIR(LoadInst *LI) const override;
+    bool shouldExpandAtomicStoreInIR(StoreInst *SI) const override;
+    AtomicExpansionKind
+    shouldExpandAtomicRMWInIR(AtomicRMWInst *AI) const override {
+      return AtomicExpansionKind::LLSC;
+    }
+
+  protected:
+    std::pair<const TargetRegisterClass*, uint8_t>
+    findRepresentativeClass(const TargetRegisterInfo *TRI, MVT VT)
+        const override;
   };
 } // end namespace llvm
 

@@ -61,11 +61,6 @@ __FBSDID("$FreeBSD$");
 #include <vm/pmap.h>
 #include <vm/vm_map.h>
 #include <sys/proc.h>
-#include <net/if.h>
-#include <netinet/in.h>
-#include <nfs/nfsproto.h>
-#include <nfsclient/nfs.h>
-#include <nfs/nfsdiskless.h>
 #include <x86/apicreg.h>
 #include <machine/cpu.h>
 #include <machine/pcb.h>
@@ -76,8 +71,6 @@ __FBSDID("$FreeBSD$");
 ASSYM(P_VMSPACE, offsetof(struct proc, p_vmspace));
 ASSYM(VM_PMAP, offsetof(struct vmspace, vm_pmap));
 ASSYM(PM_ACTIVE, offsetof(struct pmap, pm_active));
-ASSYM(PM_SAVE, offsetof(struct pmap, pm_save));
-ASSYM(PM_PCID, offsetof(struct pmap, pm_pcid));
 
 ASSYM(P_MD, offsetof(struct proc, p_md));
 ASSYM(MD_LDT, offsetof(struct mdproc, md_ldt));
@@ -100,7 +93,6 @@ ASSYM(TDP_KTHREAD, TDP_KTHREAD);
 ASSYM(V_TRAP, offsetof(struct vmmeter, v_trap));
 ASSYM(V_SYSCALL, offsetof(struct vmmeter, v_syscall));
 ASSYM(V_INTR, offsetof(struct vmmeter, v_intr));
-ASSYM(KSTACK_PAGES, KSTACK_PAGES);
 ASSYM(PAGE_SIZE, PAGE_SIZE);
 ASSYM(NPTEPG, NPTEPG);
 ASSYM(NPDEPG, NPDEPG);
@@ -224,13 +216,8 @@ ASSYM(PC_COMMONTSSP, offsetof(struct pcpu, pc_commontssp));
 ASSYM(PC_TSS, offsetof(struct pcpu, pc_tss));
 ASSYM(PC_PM_SAVE_CNT, offsetof(struct pcpu, pc_pm_save_cnt));
  
-ASSYM(LA_VER, offsetof(struct LAPIC, version));
-ASSYM(LA_TPR, offsetof(struct LAPIC, tpr));
-ASSYM(LA_EOI, offsetof(struct LAPIC, eoi));
-ASSYM(LA_SVR, offsetof(struct LAPIC, svr));
-ASSYM(LA_ICR_LO, offsetof(struct LAPIC, icr_lo));
-ASSYM(LA_ICR_HI, offsetof(struct LAPIC, icr_hi));
-ASSYM(LA_ISR, offsetof(struct LAPIC, isr0));
+ASSYM(LA_EOI, LAPIC_EOI * LAPIC_MEM_MUL);
+ASSYM(LA_ISR, LAPIC_ISR0 * LAPIC_MEM_MUL);
 
 ASSYM(KCSEL, GSEL(GCODE_SEL, SEL_KPL));
 ASSYM(KDSEL, GSEL(GDATA_SEL, SEL_KPL));
@@ -242,6 +229,8 @@ ASSYM(KUG32SEL, GSEL(GUGS32_SEL, SEL_UPL));
 ASSYM(TSSSEL, GSEL(GPROC0_SEL, SEL_KPL));
 ASSYM(LDTSEL, GSEL(GUSERLDT_SEL, SEL_KPL));
 ASSYM(SEL_RPL_MASK, SEL_RPL_MASK);
+
+ASSYM(__FreeBSD_version, __FreeBSD_version);
 
 #ifdef	HWPMC_HOOKS
 ASSYM(PMC_FN_USER_CALLCHAIN, PMC_FN_USER_CALLCHAIN);

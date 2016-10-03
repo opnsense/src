@@ -34,7 +34,6 @@ static char sccsid[] = "@(#)getservent.c	8.1 (Berkeley) 6/4/93";
 __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
-#include <sys/types.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <db.h>
@@ -321,7 +320,7 @@ files_servent(void *retval, void *mdata, va_list ap)
 		break;
 	default:
 		return NS_NOTFOUND;
-	};
+	}
 
 	serv = va_arg(ap, struct servent *);
 	buffer  = va_arg(ap, char *);
@@ -406,14 +405,14 @@ files_servent(void *retval, void *mdata, va_list ap)
 
 			continue;
 		gotname:
-			if (proto == 0 || strcmp(serv->s_proto, proto) == 0)
+			if (proto == NULL || strcmp(serv->s_proto, proto) == 0)
 				rv = NS_SUCCESS;
 			break;
 		case nss_lt_id:
 			if (port != serv->s_port)
 				continue;
 
-			if (proto == 0 || strcmp(serv->s_proto, proto) == 0)
+			if (proto == NULL || strcmp(serv->s_proto, proto) == 0)
 				rv = NS_SUCCESS;
 			break;
 		case nss_lt_all:
@@ -463,7 +462,7 @@ files_setservent(void *retval, void *mdata, va_list ap)
 		break;
 	default:
 		break;
-	};
+	}
 
 	st->compat_mode_active = 0;
 	return (NS_UNAVAIL);
@@ -522,7 +521,7 @@ db_servent(void *retval, void *mdata, va_list ap)
 		break;
 	default:
 		return NS_NOTFOUND;
-	};
+	}
 
 	serv = va_arg(ap, struct servent *);
 	buffer  = va_arg(ap, char *);
@@ -641,7 +640,7 @@ db_setservent(void *retval, void *mdata, va_list ap)
 		break;
 	default:
 		break;
-	};
+	}
 
 	return (NS_UNAVAIL);
 }
@@ -694,7 +693,7 @@ nis_servent(void *retval, void *mdata, va_list ap)
 		break;
 	default:
 		return NS_NOTFOUND;
-	};
+	}
 
 	serv = va_arg(ap, struct servent *);
 	buffer  = va_arg(ap, char *);
@@ -781,7 +780,7 @@ nis_servent(void *retval, void *mdata, va_list ap)
 				}
 			}
 			break;
-		};
+		}
 
 		rv = parse_result(serv, buffer, bufsize, resultbuf,
 		    resultbuflen, errnop);
@@ -815,7 +814,7 @@ nis_setservent(void *result, void *mdata, va_list ap)
 		break;
 	default:
 		break;
-	};
+	}
 
 	return (NS_UNAVAIL);
 }
@@ -1241,7 +1240,7 @@ setservent(int stayopen)
 }
 
 void
-endservent()
+endservent(void)
 {
 #ifdef NS_CACHING
 	static const nss_cache_info cache_info = NS_MP_CACHE_INFO_INITIALIZER(
@@ -1362,7 +1361,7 @@ getservbyport(int port, const char *proto)
 }
 
 struct servent *
-getservent()
+getservent(void)
 {
 	struct key key;
 

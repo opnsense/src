@@ -57,9 +57,6 @@ __FBSDID("$FreeBSD$");
 
 #include <sparc64/pci/ofw_pci.h>
 
-/* XXX */
-extern struct bus_space_tag nexus_bustag;
-
 int
 ofw_pci_attach_common(device_t dev, bus_dma_tag_t dmat, u_long iosize,
     u_long memsize)
@@ -103,12 +100,12 @@ ofw_pci_attach_common(device_t dev, bus_dma_tag_t dmat, u_long iosize,
 		if (sc->sc_pci_bh[j] != 0) {
 			device_printf(dev, "duplicate range for space %d\n",
 			    j);
-			free(range, M_OFWPROP);
+			OF_prop_free(range);
 			return (EINVAL);
 		}
 		sc->sc_pci_bh[j] = OFW_PCI_RANGE_PHYS(&range[i]);
 	}
-	free(range, M_OFWPROP);
+	OF_prop_free(range);
 
 	/*
 	 * Make sure that the expected ranges are actually present.
@@ -128,14 +125,12 @@ ofw_pci_attach_common(device_t dev, bus_dma_tag_t dmat, u_long iosize,
 	}
 
 	/* Allocate our tags. */
-	sc->sc_pci_iot = sparc64_alloc_bus_tag(NULL, &nexus_bustag,
-	    PCI_IO_BUS_SPACE, NULL);
+	sc->sc_pci_iot = sparc64_alloc_bus_tag(NULL, PCI_IO_BUS_SPACE);
 	if (sc->sc_pci_iot == NULL) {
 		device_printf(dev, "could not allocate PCI I/O tag\n");
 		return (ENXIO);
 	}
-	sc->sc_pci_cfgt = sparc64_alloc_bus_tag(NULL, &nexus_bustag,
-	    PCI_CONFIG_BUS_SPACE, NULL);
+	sc->sc_pci_cfgt = sparc64_alloc_bus_tag(NULL, PCI_CONFIG_BUS_SPACE);
 	if (sc->sc_pci_cfgt == NULL) {
 		device_printf(dev,
 		    "could not allocate PCI configuration space tag\n");
@@ -292,7 +287,7 @@ ofw_pci_read_ivar(device_t dev, device_t child __unused, int which,
 
 struct resource *
 ofw_pci_alloc_resource(device_t bus, device_t child, int type, int *rid,
-    u_long start, u_long end, u_long count, u_int flags)
+    rman_res_t start, rman_res_t end, rman_res_t count, u_int flags)
 {
 	struct ofw_pci_softc *sc;
 	struct resource *rv;
@@ -349,8 +344,7 @@ ofw_pci_activate_resource(device_t bus, device_t child, int type, int rid,
 		return (bus_generic_activate_resource(bus, child, type, rid,
 		    r));
 	case SYS_RES_MEMORY:
-		tag = sparc64_alloc_bus_tag(r, &nexus_bustag,
-		    PCI_MEMORY_BUS_SPACE, NULL);
+		tag = sparc64_alloc_bus_tag(r, PCI_MEMORY_BUS_SPACE);
 		if (tag == NULL)
 			return (ENOMEM);
 		rman_set_bustag(r, tag);
@@ -368,7 +362,7 @@ ofw_pci_activate_resource(device_t bus, device_t child, int type, int rid,
 
 int
 ofw_pci_adjust_resource(device_t bus, device_t child, int type,
-    struct resource *r, u_long start, u_long end)
+    struct resource *r, rman_res_t start, rman_res_t end)
 {
 	struct ofw_pci_softc *sc;
 	struct rman *rm;

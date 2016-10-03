@@ -49,14 +49,16 @@ __FBSDID("$FreeBSD$");
 #include <net/if_vlan_var.h>
 #include <net/route.h>
 #include <netinet/in.h>
+#include <netinet/in_fib.h>
 #include <netinet/in_pcb.h>
 #include <netinet/ip.h>
 #include <netinet/ip6.h>
+#include <netinet6/in6_fib.h>
 #include <netinet6/scope6_var.h>
 #include <netinet/tcp_timer.h>
-#include <netinet/tcp_var.h>
 #define TCPSTATES
 #include <netinet/tcp_fsm.h>
+#include <netinet/tcp_var.h>
 #include <netinet/toecore.h>
 
 #include "common/common.h"
@@ -72,7 +74,7 @@ static void free_stid(struct adapter *, struct listen_ctx *);
 
 /* lctx services */
 static struct listen_ctx *alloc_lctx(struct adapter *, struct inpcb *,
-    struct port_info *);
+    struct vi_info *);
 static int free_lctx(struct adapter *, struct listen_ctx *);
 static void hold_lctx(struct listen_ctx *);
 static void listen_hash_add(struct adapter *, struct listen_ctx *);
@@ -80,7 +82,7 @@ static struct listen_ctx *listen_hash_find(struct adapter *, struct inpcb *);
 static struct listen_ctx *listen_hash_del(struct adapter *, struct inpcb *);
 static struct inpcb *release_lctx(struct adapter *, struct listen_ctx *);
 
-static inline void save_qids_in_mbuf(struct mbuf *, struct port_info *);
+static inline void save_qids_in_mbuf(struct mbuf *, struct vi_info *);
 static inline void get_qids_from_mbuf(struct mbuf *m, int *, int *);
 static void send_reset_synqe(struct toedev *, struct synq_entry *);
 
@@ -187,7 +189,7 @@ free_stid(struct adapter *sc, struct listen_ctx *lctx)
 }
 
 static struct listen_ctx *
-alloc_lctx(struct adapter *sc, struct inpcb *inp, struct port_info *pi)
+alloc_lctx(struct adapter *sc, struct inpcb *inp, struct vi_info *vi)
 {
 	struct listen_ctx *lctx;
 
@@ -214,8 +216,8 @@ alloc_lctx(struct adapter *sc, struct inpcb *inp, struct port_info *pi)
 		}
 	}
 
-	lctx->ctrlq = &sc->sge.ctrlq[pi->port_id];
-	lctx->ofld_rxq = &sc->sge.ofld_rxq[pi->first_ofld_rxq];
+	lctx->ctrlq = &sc->sge.ctrlq[vi->pi->port_id];
+	lctx->ofld_rxq = &sc->sge.ofld_rxq[vi->first_ofld_rxq];
 	refcount_init(&lctx->refcount, 1);
 	TAILQ_INIT(&lctx->synq);
 
@@ -346,7 +348,8 @@ send_reset_synqe(struct toedev *tod, struct synq_entry *synqe)
 	struct adapter *sc = tod->tod_softc;
 	struct mbuf *m = synqe->syn;
 	struct ifnet *ifp = m->m_pkthdr.rcvif;
-	struct port_info *pi = ifp->if_softc;
+	struct vi_info *vi = ifp->if_softc;
+	struct port_info *pi = vi->pi;
 	struct l2t_entry *e = &sc->l2t->l2tab[synqe->l2e_idx];
 	struct wrqe *wr;
 	struct fw_flowc_wr *flowc;
@@ -355,7 +358,7 @@ send_reset_synqe(struct toedev *tod, struct synq_entry *synqe)
 	struct sge_wrq *ofld_txq;
 	struct sge_ofld_rxq *ofld_rxq;
 	const int nparams = 6;
-	unsigned int pfvf = G_FW_VIID_PFN(pi->viid) << S_FW_VIID_PFN;
+	unsigned int pfvf = G_FW_VIID_PFN(vi->viid) << S_FW_VIID_PFN;
 
 	INP_WLOCK_ASSERT(synqe->lctx->inp);
 
@@ -495,17 +498,18 @@ destroy_server(struct adapter *sc, struct listen_ctx *lctx)
 /*
  * Start a listening server by sending a passive open request to HW.
  *
- * Can't take adapter lock here and access to sc->flags, sc->open_device_map,
+ * Can't take adapter lock here and access to sc->flags,
  * sc->offload_map, if_capenable are all race prone.
  */
 int
 t4_listen_start(struct toedev *tod, struct tcpcb *tp)
 {
 	struct adapter *sc = tod->tod_softc;
+	struct vi_info *vi;
 	struct port_info *pi;
 	struct inpcb *inp = tp->t_inpcb;
 	struct listen_ctx *lctx;
-	int i, rc;
+	int i, rc, v;
 
 	INP_WLOCK_ASSERT(inp);
 
@@ -527,12 +531,9 @@ t4_listen_start(struct toedev *tod, struct tcpcb *tp)
 	    ("%s: TOM not initialized", __func__));
 #endif
 
-	if ((sc->open_device_map & sc->offload_map) == 0)
-		goto done;	/* no port that's UP with IFCAP_TOE enabled */
-
 	/*
-	 * Find a running port with IFCAP_TOE (4 or 6).  We'll use the first
-	 * such port's queues to send the passive open and receive the reply to
+	 * Find an initialized VI with IFCAP_TOE (4 or 6).  We'll use the first
+	 * such VI's queues to send the passive open and receive the reply to
 	 * it.
 	 *
 	 * XXX: need a way to mark a port in use by offload.  if_cxgbe should
@@ -540,18 +541,20 @@ t4_listen_start(struct toedev *tod, struct tcpcb *tp)
 	 * attempts to disable IFCAP_TOE on that port too?).
 	 */
 	for_each_port(sc, i) {
-		if (isset(&sc->open_device_map, i) &&
-		    sc->port[i]->ifp->if_capenable & IFCAP_TOE)
-				break;
+		pi = sc->port[i];
+		for_each_vi(pi, v, vi) {
+			if (vi->flags & VI_INIT_DONE &&
+			    vi->ifp->if_capenable & IFCAP_TOE)
+				goto found;
+		}
 	}
-	KASSERT(i < sc->params.nports,
-	    ("%s: no running port with TOE capability enabled.", __func__));
-	pi = sc->port[i];
+	goto done;	/* no port that's UP with IFCAP_TOE enabled */
+found:
 
 	if (listen_hash_find(sc, inp) != NULL)
 		goto done;	/* already setup */
 
-	lctx = alloc_lctx(sc, inp, pi);
+	lctx = alloc_lctx(sc, inp, vi);
 	if (lctx == NULL) {
 		log(LOG_ERR,
 		    "%s: listen request ignored, %s couldn't allocate lctx\n",
@@ -661,9 +664,6 @@ t4_syncache_removed(struct toedev *tod __unused, void *arg)
 
 	release_synqe(synqe);
 }
-
-/* XXX */
-extern void tcp_dooptions(struct tcpopt *, u_char *, int, int);
 
 int
 t4_syncache_respond(struct toedev *tod, void *arg, struct mbuf *m)
@@ -822,7 +822,7 @@ done_with_synqe(struct adapter *sc, struct synq_entry *synqe)
 {
 	struct listen_ctx *lctx = synqe->lctx;
 	struct inpcb *inp = lctx->inp;
-	struct port_info *pi = synqe->syn->m_pkthdr.rcvif->if_softc;
+	struct vi_info *vi = synqe->syn->m_pkthdr.rcvif->if_softc;
 	struct l2t_entry *e = &sc->l2t->l2tab[synqe->l2e_idx];
 
 	INP_WLOCK_ASSERT(inp);
@@ -832,7 +832,7 @@ done_with_synqe(struct adapter *sc, struct synq_entry *synqe)
 	if (inp)
 		INP_WUNLOCK(inp);
 	remove_tid(sc, synqe->tid);
-	release_tid(sc, synqe->tid, &sc->sge.ctrlq[pi->port_id]);
+	release_tid(sc, synqe->tid, &sc->sge.ctrlq[vi->pi->port_id]);
 	t4_l2t_release(e);
 	release_synqe(synqe);	/* removed from synq list */
 }
@@ -930,7 +930,7 @@ t4_offload_socket(struct toedev *tod, void *arg, struct socket *so)
 	struct cpl_pass_establish *cpl = mtod(synqe->syn, void *);
 	struct toepcb *toep = *(struct toepcb **)(cpl + 1);
 
-	INP_INFO_LOCK_ASSERT(&V_tcbinfo); /* prevents bad race with accept() */
+	INP_INFO_RLOCK_ASSERT(&V_tcbinfo); /* prevents bad race with accept() */
 	INP_WLOCK_ASSERT(inp);
 	KASSERT(synqe->flags & TPF_SYNQE,
 	    ("%s: %p not a synq_entry?", __func__, arg));
@@ -943,12 +943,12 @@ t4_offload_socket(struct toedev *tod, void *arg, struct socket *so)
 }
 
 static inline void
-save_qids_in_mbuf(struct mbuf *m, struct port_info *pi)
+save_qids_in_mbuf(struct mbuf *m, struct vi_info *vi)
 {
 	uint32_t txqid, rxqid;
 
-	txqid = (arc4random() % pi->nofldtxq) + pi->first_ofld_txq;
-	rxqid = (arc4random() % pi->nofldrxq) + pi->first_ofld_rxq;
+	txqid = (arc4random() % vi->nofldtxq) + vi->first_ofld_txq;
+	rxqid = (arc4random() % vi->nofldrxq) + vi->first_ofld_rxq;
 
 	m->m_pkthdr.flowid = (txqid << 16) | (rxqid & 0xffff);
 }
@@ -1090,103 +1090,49 @@ pass_accept_req_to_protohdrs(const struct mbuf *m, struct in_conninfo *inc,
 	}
 }
 
-static int
-ifnet_has_ip6(struct ifnet *ifp, struct in6_addr *ip6)
-{
-	struct ifaddr *ifa;
-	struct sockaddr_in6 *sin6;
-	int found = 0;
-	struct in6_addr in6 = *ip6;
-
-	/* Just as in ip6_input */
-	if (in6_clearscope(&in6) || in6_clearscope(&in6))
-		return (0);
-	in6_setscope(&in6, ifp, NULL);
-
-	if_addr_rlock(ifp);
-	TAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) {
-		sin6 = (void *)ifa->ifa_addr;
-		if (sin6->sin6_family != AF_INET6)
-			continue;
-
-		if (IN6_ARE_ADDR_EQUAL(&sin6->sin6_addr, &in6)) {
-			found = 1;
-			break;
-		}
-	}
-	if_addr_runlock(ifp);
-
-	return (found);
-}
-
 static struct l2t_entry *
 get_l2te_for_nexthop(struct port_info *pi, struct ifnet *ifp,
     struct in_conninfo *inc)
 {
-	struct rtentry *rt;
 	struct l2t_entry *e;
 	struct sockaddr_in6 sin6;
 	struct sockaddr *dst = (void *)&sin6;
  
 	if (inc->inc_flags & INC_ISIPV6) {
+		struct nhop6_basic nh6;
+
+		bzero(dst, sizeof(struct sockaddr_in6));
 		dst->sa_len = sizeof(struct sockaddr_in6);
 		dst->sa_family = AF_INET6;
-		((struct sockaddr_in6 *)dst)->sin6_addr = inc->inc6_faddr;
 
 		if (IN6_IS_ADDR_LINKLOCAL(&inc->inc6_laddr)) {
 			/* no need for route lookup */
 			e = t4_l2t_get(pi, ifp, dst);
 			return (e);
 		}
+
+		if (fib6_lookup_nh_basic(RT_DEFAULT_FIB, &inc->inc6_faddr,
+		    0, 0, 0, &nh6) != 0)
+			return (NULL);
+		if (nh6.nh_ifp != ifp)
+			return (NULL);
+		((struct sockaddr_in6 *)dst)->sin6_addr = nh6.nh_addr;
 	} else {
+		struct nhop4_basic nh4;
+
 		dst->sa_len = sizeof(struct sockaddr_in);
 		dst->sa_family = AF_INET;
-		((struct sockaddr_in *)dst)->sin_addr = inc->inc_faddr;
+
+		if (fib4_lookup_nh_basic(RT_DEFAULT_FIB, inc->inc_faddr, 0, 0,
+		    &nh4) != 0)
+			return (NULL);
+		if (nh4.nh_ifp != ifp)
+			return (NULL);
+		((struct sockaddr_in *)dst)->sin_addr = nh4.nh_addr;
 	}
 
-	rt = rtalloc1(dst, 0, 0);
-	if (rt == NULL)
-		return (NULL);
-	else {
-		struct sockaddr *nexthop;
-
-		RT_UNLOCK(rt);
-		if (rt->rt_ifp != ifp)
-			e = NULL;
-		else {
-			if (rt->rt_flags & RTF_GATEWAY)
-				nexthop = rt->rt_gateway;
-			else
-				nexthop = dst;
-			e = t4_l2t_get(pi, ifp, nexthop);
-		}
-		RTFREE(rt);
-	}
-
+	e = t4_l2t_get(pi, ifp, dst);
 	return (e);
-}
-
-static int
-ifnet_has_ip(struct ifnet *ifp, struct in_addr in)
-{
-	struct ifaddr *ifa;
-	struct sockaddr_in *sin;
-	int found = 0;
-
-	if_addr_rlock(ifp);
-	TAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) {
-		sin = (void *)ifa->ifa_addr;
-		if (sin->sin_family != AF_INET)
-			continue;
-
-		if (sin->sin_addr.s_addr == in.s_addr) {
-			found = 1;
-			break;
-		}
-	}
-	if_addr_runlock(ifp);
-
-	return (found);
 }
 
 #define REJECT_PASS_ACCEPT()	do { \
@@ -1224,11 +1170,12 @@ do_pass_accept_req(struct sge_iq *iq, const struct rss_header *rss,
 	struct tcphdr th;
 	struct tcpopt to;
 	struct port_info *pi;
+	struct vi_info *vi;
 	struct ifnet *hw_ifp, *ifp;
 	struct l2t_entry *e = NULL;
 	int rscale, mtu_idx, rx_credits, rxqid, ulp_mode;
 	struct synq_entry *synqe = NULL;
-	int reject_reason;
+	int reject_reason, v;
 	uint16_t vid;
 #ifdef INVARIANTS
 	unsigned int opcode = G_CPL_OPCODE(be32toh(OPCODE_TID(cpl)));
@@ -1245,7 +1192,26 @@ do_pass_accept_req(struct sge_iq *iq, const struct rss_header *rss,
 	t4opt_to_tcpopt(&cpl->tcpopt, &to);
 
 	pi = sc->port[G_SYN_INTF(be16toh(cpl->l2info))];
-	hw_ifp = pi->ifp;	/* the cxgbeX ifnet */
+
+	/*
+	 * Use the MAC index to lookup the associated VI.  If this SYN
+	 * didn't match a perfect MAC filter, punt.
+	 */
+	if (!(be16toh(cpl->l2info) & F_SYN_XACT_MATCH)) {
+		m_freem(m);
+		m = NULL;
+		REJECT_PASS_ACCEPT();
+	}
+	for_each_vi(pi, v, vi) {
+		if (vi->xact_addr_filt == G_SYN_MAC_IDX(be16toh(cpl->l2info)))
+			goto found;
+	}
+	m_freem(m);
+	m = NULL;
+	REJECT_PASS_ACCEPT();
+
+found:
+	hw_ifp = vi->ifp;	/* the (v)cxgbeX ifnet */
 	m->m_pkthdr.rcvif = hw_ifp;
 	tod = TOEDEV(hw_ifp);
 
@@ -1281,7 +1247,7 @@ do_pass_accept_req(struct sge_iq *iq, const struct rss_header *rss,
 		 * SYN must be directed to an IP6 address on this ifnet.  This
 		 * is more restrictive than in6_localip.
 		 */
-		if (!ifnet_has_ip6(ifp, &inc.inc6_laddr))
+		if (!in6_ifhasaddr(ifp, &inc.inc6_laddr))
 			REJECT_PASS_ACCEPT();
 	} else {
 
@@ -1293,7 +1259,7 @@ do_pass_accept_req(struct sge_iq *iq, const struct rss_header *rss,
 		 * SYN must be directed to an IP address on this ifnet.  This
 		 * is more restrictive than in_localip.
 		 */
-		if (!ifnet_has_ip(ifp, inc.inc_laddr))
+		if (!in_ifhasaddr(ifp, inc.inc_laddr))
 			REJECT_PASS_ACCEPT();
 	}
 
@@ -1311,14 +1277,15 @@ do_pass_accept_req(struct sge_iq *iq, const struct rss_header *rss,
 		REJECT_PASS_ACCEPT();
 	rpl = wrtod(wr);
 
-	INP_INFO_WLOCK(&V_tcbinfo);	/* for 4-tuple check, syncache_add */
+	INP_INFO_RLOCK(&V_tcbinfo);	/* for 4-tuple check */
 
 	/* Don't offload if the 4-tuple is already in use */
 	if (toe_4tuple_check(&inc, &th, ifp) != 0) {
-		INP_INFO_WUNLOCK(&V_tcbinfo);
+		INP_INFO_RUNLOCK(&V_tcbinfo);
 		free(wr, M_CXGBE);
 		REJECT_PASS_ACCEPT();
 	}
+	INP_INFO_RUNLOCK(&V_tcbinfo);
 
 	inp = lctx->inp;		/* listening socket, not owned by TOE */
 	INP_WLOCK(inp);
@@ -1331,11 +1298,11 @@ do_pass_accept_req(struct sge_iq *iq, const struct rss_header *rss,
 		 * resources tied to this listen context.
 		 */
 		INP_WUNLOCK(inp);
-		INP_INFO_WUNLOCK(&V_tcbinfo);
 		free(wr, M_CXGBE);
 		REJECT_PASS_ACCEPT();
 	}
 	so = inp->inp_socket;
+	CURVNET_SET(so->so_vnet);
 
 	mtu_idx = find_best_mtu_idx(sc, &inc, be16toh(cpl->tcpopt.mss));
 	rscale = cpl->tcpopt.wsf && V_tcp_do_rfc1323 ? select_rcv_wscale() : 0;
@@ -1344,7 +1311,7 @@ do_pass_accept_req(struct sge_iq *iq, const struct rss_header *rss,
 	rx_credits = min(select_rcv_wnd(so) >> 10, M_RCV_BUFSIZ);
 	SOCKBUF_UNLOCK(&so->so_rcv);
 
-	save_qids_in_mbuf(m, pi);
+	save_qids_in_mbuf(m, vi);
 	get_qids_from_mbuf(m, NULL, &rxqid);
 
 	if (is_t4(sc))
@@ -1359,7 +1326,7 @@ do_pass_accept_req(struct sge_iq *iq, const struct rss_header *rss,
 		synqe->flags |= TPF_SYNQE_TCPDDP;
 	} else
 		ulp_mode = ULP_MODE_NONE;
-	rpl->opt0 = calc_opt0(so, pi, e, mtu_idx, rscale, rx_credits, ulp_mode);
+	rpl->opt0 = calc_opt0(so, vi, e, mtu_idx, rscale, rx_credits, ulp_mode);
 	rpl->opt2 = calc_opt2p(sc, pi, rxqid, &cpl->tcpopt, &th, ulp_mode);
 
 	synqe->tid = tid;
@@ -1378,12 +1345,11 @@ do_pass_accept_req(struct sge_iq *iq, const struct rss_header *rss,
 
 	/*
 	 * If all goes well t4_syncache_respond will get called during
-	 * syncache_add.  Also note that syncache_add releases both pcbinfo and
-	 * pcb locks.
+	 * syncache_add.  Note that syncache_add releases the pcb lock.
 	 */
 	toe_syncache_add(&inc, &to, &th, inp, tod, synqe);
 	INP_UNLOCK_ASSERT(inp);	/* ok to assert, we have a ref on the inp */
-	INP_INFO_UNLOCK_ASSERT(&V_tcbinfo);
+	CURVNET_RESTORE();
 
 	/*
 	 * If we replied during syncache_add (synqe->wr has been consumed),
@@ -1486,7 +1452,7 @@ do_pass_establish(struct sge_iq *iq, const struct rss_header *rss,
     struct mbuf *m)
 {
 	struct adapter *sc = iq->adapter;
-	struct port_info *pi;
+	struct vi_info *vi;
 	struct ifnet *ifp;
 	const struct cpl_pass_establish *cpl = (const void *)(rss + 1);
 #if defined(KTR) || defined(INVARIANTS)
@@ -1495,7 +1461,7 @@ do_pass_establish(struct sge_iq *iq, const struct rss_header *rss,
 	unsigned int tid = GET_TID(cpl);
 	struct synq_entry *synqe = lookup_tid(sc, tid);
 	struct listen_ctx *lctx = synqe->lctx;
-	struct inpcb *inp = lctx->inp;
+	struct inpcb *inp = lctx->inp, *new_inp;
 	struct socket *so;
 	struct tcphdr th;
 	struct tcpopt to;
@@ -1513,7 +1479,7 @@ do_pass_establish(struct sge_iq *iq, const struct rss_header *rss,
 	KASSERT(synqe->flags & TPF_SYNQE,
 	    ("%s: tid %u (ctx %p) not a synqe", __func__, tid, synqe));
 
-	INP_INFO_WLOCK(&V_tcbinfo);	/* for syncache_expand */
+	INP_INFO_RLOCK(&V_tcbinfo);	/* for syncache_expand */
 	INP_WLOCK(inp);
 
 	CTR6(KTR_CXGBE,
@@ -1529,21 +1495,21 @@ do_pass_establish(struct sge_iq *iq, const struct rss_header *rss,
 		}
 
 		INP_WUNLOCK(inp);
-		INP_INFO_WUNLOCK(&V_tcbinfo);
+		INP_INFO_RUNLOCK(&V_tcbinfo);
 		return (0);
 	}
 
 	ifp = synqe->syn->m_pkthdr.rcvif;
-	pi = ifp->if_softc;
-	KASSERT(pi->adapter == sc,
-	    ("%s: pi %p, sc %p mismatch", __func__, pi, sc));
+	vi = ifp->if_softc;
+	KASSERT(vi->pi->adapter == sc,
+	    ("%s: vi %p, sc %p mismatch", __func__, vi, sc));
 
 	get_qids_from_mbuf(synqe->syn, &txqid, &rxqid);
 	KASSERT(rxqid == iq_to_ofld_rxq(iq) - &sc->sge.ofld_rxq[0],
 	    ("%s: CPL arrived on unexpected rxq.  %d %d", __func__, rxqid,
 	    (int)(iq_to_ofld_rxq(iq) - &sc->sge.ofld_rxq[0])));
 
-	toep = alloc_toepcb(pi, txqid, rxqid, M_NOWAIT);
+	toep = alloc_toepcb(vi, txqid, rxqid, M_NOWAIT);
 	if (toep == NULL) {
 reset:
 		/*
@@ -1554,7 +1520,7 @@ reset:
 		 */
 		send_reset_synqe(TOEDEV(ifp), synqe);
 		INP_WUNLOCK(inp);
-		INP_INFO_WUNLOCK(&V_tcbinfo);
+		INP_INFO_RUNLOCK(&V_tcbinfo);
 		return (0);
 	}
 	toep->tid = tid;
@@ -1588,6 +1554,10 @@ reset:
 		goto reset;
 	}
 
+	/* New connection inpcb is already locked by syncache_expand(). */
+	new_inp = sotoinpcb(so);
+	INP_WLOCK_ASSERT(new_inp);
+
 	/*
 	 * This is for the unlikely case where the syncache entry that we added
 	 * has been evicted from the syncache, but the syncache_expand above
@@ -1598,32 +1568,30 @@ reset:
 	 * this somewhat defeats the purpose of having a tod_offload_socket :-(
 	 */
 	if (__predict_false(!(synqe->flags & TPF_SYNQE_EXPANDED))) {
-		struct inpcb *new_inp = sotoinpcb(so);
-
-		INP_WLOCK(new_inp);
 		tcp_timer_activate(intotcpcb(new_inp), TT_KEEP, 0);
 		t4_offload_socket(TOEDEV(ifp), synqe, so);
-		INP_WUNLOCK(new_inp);
 	}
+
+	INP_WUNLOCK(new_inp);
 
 	/* Done with the synqe */
 	TAILQ_REMOVE(&lctx->synq, synqe, link);
 	inp = release_lctx(sc, lctx);
 	if (inp != NULL)
 		INP_WUNLOCK(inp);
-	INP_INFO_WUNLOCK(&V_tcbinfo);
+	INP_INFO_RUNLOCK(&V_tcbinfo);
 	release_synqe(synqe);
 
 	return (0);
 }
 
 void
-t4_init_listen_cpl_handlers(struct adapter *sc)
+t4_init_listen_cpl_handlers(void)
 {
 
-	t4_register_cpl_handler(sc, CPL_PASS_OPEN_RPL, do_pass_open_rpl);
-	t4_register_cpl_handler(sc, CPL_CLOSE_LISTSRV_RPL, do_close_server_rpl);
-	t4_register_cpl_handler(sc, CPL_PASS_ACCEPT_REQ, do_pass_accept_req);
-	t4_register_cpl_handler(sc, CPL_PASS_ESTABLISH, do_pass_establish);
+	t4_register_cpl_handler(CPL_PASS_OPEN_RPL, do_pass_open_rpl);
+	t4_register_cpl_handler(CPL_CLOSE_LISTSRV_RPL, do_close_server_rpl);
+	t4_register_cpl_handler(CPL_PASS_ACCEPT_REQ, do_pass_accept_req);
+	t4_register_cpl_handler(CPL_PASS_ESTABLISH, do_pass_establish);
 }
 #endif

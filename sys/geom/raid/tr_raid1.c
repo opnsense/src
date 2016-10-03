@@ -46,33 +46,25 @@ SYSCTL_DECL(_kern_geom_raid_raid1);
 
 #define RAID1_REBUILD_SLAB	(1 << 20) /* One transation in a rebuild */
 static int g_raid1_rebuild_slab = RAID1_REBUILD_SLAB;
-TUNABLE_INT("kern.geom.raid.raid1.rebuild_slab_size",
-    &g_raid1_rebuild_slab);
-SYSCTL_UINT(_kern_geom_raid_raid1, OID_AUTO, rebuild_slab_size, CTLFLAG_RW,
+SYSCTL_UINT(_kern_geom_raid_raid1, OID_AUTO, rebuild_slab_size, CTLFLAG_RWTUN,
     &g_raid1_rebuild_slab, 0,
     "Amount of the disk to rebuild each read/write cycle of the rebuild.");
 
 #define RAID1_REBUILD_FAIR_IO 20 /* use 1/x of the available I/O */
 static int g_raid1_rebuild_fair_io = RAID1_REBUILD_FAIR_IO;
-TUNABLE_INT("kern.geom.raid.raid1.rebuild_fair_io",
-    &g_raid1_rebuild_fair_io);
-SYSCTL_UINT(_kern_geom_raid_raid1, OID_AUTO, rebuild_fair_io, CTLFLAG_RW,
+SYSCTL_UINT(_kern_geom_raid_raid1, OID_AUTO, rebuild_fair_io, CTLFLAG_RWTUN,
     &g_raid1_rebuild_fair_io, 0,
     "Fraction of the I/O bandwidth to use when disk busy for rebuild.");
 
 #define RAID1_REBUILD_CLUSTER_IDLE 100
 static int g_raid1_rebuild_cluster_idle = RAID1_REBUILD_CLUSTER_IDLE;
-TUNABLE_INT("kern.geom.raid.raid1.rebuild_cluster_idle",
-    &g_raid1_rebuild_cluster_idle);
-SYSCTL_UINT(_kern_geom_raid_raid1, OID_AUTO, rebuild_cluster_idle, CTLFLAG_RW,
+SYSCTL_UINT(_kern_geom_raid_raid1, OID_AUTO, rebuild_cluster_idle, CTLFLAG_RWTUN,
     &g_raid1_rebuild_cluster_idle, 0,
     "Number of slabs to do each time we trigger a rebuild cycle");
 
 #define RAID1_REBUILD_META_UPDATE 1024 /* update meta data every 1GB or so */
 static int g_raid1_rebuild_meta_update = RAID1_REBUILD_META_UPDATE;
-TUNABLE_INT("kern.geom.raid.raid1.rebuild_meta_update",
-    &g_raid1_rebuild_meta_update);
-SYSCTL_UINT(_kern_geom_raid_raid1, OID_AUTO, rebuild_meta_update, CTLFLAG_RW,
+SYSCTL_UINT(_kern_geom_raid_raid1, OID_AUTO, rebuild_meta_update, CTLFLAG_RWTUN,
     &g_raid1_rebuild_meta_update, 0,
     "When to update the meta data.");
 
@@ -848,8 +840,8 @@ rebuild_round_done:
 		 * disk, remapping the bad sector.  Do we need to do that by
 		 * queueing a request to the main worker thread?  It doesn't
 		 * affect the return code of this current read, and can be
-		 * done at our liesure.  However, to make the code simpler, it
-		 * is done syncrhonously.
+		 * done at our leisure.  However, to make the code simpler, it
+		 * is done synchronously.
 		 */
 		G_RAID_LOGREQ(3, bp, "Recovered data from other drive");
 		cbp = g_clone_bio(pbp);
@@ -866,7 +858,7 @@ rebuild_round_done:
 	if (pbp->bio_pflags & G_RAID_BIO_FLAG_LOCKED) {
 		/*
 		 * We're done with a recovery, mark the range as unlocked.
-		 * For any write errors, we agressively fail the disk since
+		 * For any write errors, we aggressively fail the disk since
 		 * there was both a READ and a WRITE error at this location.
 		 * Both types of errors generally indicates the drive is on
 		 * the verge of total failure anyway.  Better to stop trusting

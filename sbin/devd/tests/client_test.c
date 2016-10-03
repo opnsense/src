@@ -34,6 +34,10 @@ __FBSDID("$FreeBSD$");
 #include <sys/un.h>
 
 #include <atf-c.h>
+
+const char create_pat[] = "!system=DEVFS subsystem=CDEV type=CREATE cdev=md";
+const char destroy_pat[] = "!system=DEVFS subsystem=CDEV type=DESTROY cdev=md";
+
 /* Helper functions*/
 
 /*
@@ -49,7 +53,7 @@ create_two_events(void)
 	char destroy_cmd[80];
 	char *error;
 
-	create_stdout = popen("mdconfig -a -s 64 -t swap", "r");
+	create_stdout = popen("mdconfig -a -s 64 -t null", "r");
 	ATF_REQUIRE(create_stdout != NULL);
 	error = fgets(mdname, sizeof(mdname), create_stdout);
 	ATF_REQUIRE(error != NULL);
@@ -58,8 +62,27 @@ create_two_events(void)
 
 	snprintf(destroy_cmd, nitems(destroy_cmd), "mdconfig -d -u %s", mdname);
 	destroy_stdout = popen(destroy_cmd, "r");
+	ATF_REQUIRE(destroy_stdout != NULL);
 	/* We expect no output */
 	ATF_REQUIRE_EQ(0, pclose(destroy_stdout));
+}
+
+/* Setup and return an open client socket */
+static int
+common_setup(int socktype, const char* sockpath) {
+	struct sockaddr_un devd_addr;
+	int s, error;
+
+	memset(&devd_addr, 0, sizeof(devd_addr));
+	devd_addr.sun_family = PF_LOCAL;
+	strlcpy(devd_addr.sun_path, sockpath, sizeof(devd_addr.sun_path));
+	s = socket(PF_LOCAL, socktype, 0);
+	ATF_REQUIRE(s >= 0);
+	error = connect(s, (struct sockaddr*)&devd_addr, SUN_LEN(&devd_addr));
+	ATF_REQUIRE_EQ(0, error);
+
+	create_two_events();
+	return (s);
 }
 
 /*
@@ -74,27 +97,10 @@ ATF_TC_WITHOUT_HEAD(seqpacket);
 ATF_TC_BODY(seqpacket, tc)
 {
 	int s;
-	int error;
-	struct sockaddr_un devd_addr;
 	bool got_create_event = false;
 	bool got_destroy_event = false;
-	const char create_pat[] =
-		"!system=DEVFS subsystem=CDEV type=CREATE cdev=md";
-	const char destroy_pat[] =
-		"!system=DEVFS subsystem=CDEV type=DESTROY cdev=md";
 
-	memset(&devd_addr, 0, sizeof(devd_addr));
-	devd_addr.sun_family = PF_LOCAL;
-	strlcpy(devd_addr.sun_path, "/var/run/devd.seqpacket.pipe",
-			sizeof(devd_addr.sun_path));
-
-	s = socket(PF_LOCAL, SOCK_SEQPACKET, 0);
-	ATF_REQUIRE(s >= 0);
-	error = connect(s, (struct sockaddr*)&devd_addr, SUN_LEN(&devd_addr));
-	ATF_REQUIRE_EQ(0, error);
-
-	create_two_events();
-
+	s = common_setup(SOCK_SEQPACKET, "/var/run/devd.seqpacket.pipe");
 	/*
 	 * Loop until both events are detected on _different_ reads
 	 * There may be extra events due to unrelated system activity
@@ -105,7 +111,8 @@ ATF_TC_BODY(seqpacket, tc)
 		ssize_t len;
 		char event[1024];
 
-		len = recv(s, event, sizeof(event), MSG_WAITALL);
+		/* Read 1 less than sizeof(event) to allow space for NULL */
+		len = recv(s, event, sizeof(event) - 1, MSG_WAITALL);
 		ATF_REQUIRE(len != -1);
 		/* NULL terminate the result */
 		event[len] = '\0';
@@ -118,6 +125,8 @@ ATF_TC_BODY(seqpacket, tc)
 		if (cmp == 0)
 			got_destroy_event = true;
 	}
+
+	close(s);
 }
 
 /*
@@ -128,31 +137,14 @@ ATF_TC_WITHOUT_HEAD(stream);
 ATF_TC_BODY(stream, tc)
 {
 	int s;
-	int error;
-	struct sockaddr_un devd_addr;
 	bool got_create_event = false;
 	bool got_destroy_event = false;
-	const char create_pat[] =
-		"!system=DEVFS subsystem=CDEV type=CREATE cdev=md";
-	const char destroy_pat[] =
-		"!system=DEVFS subsystem=CDEV type=DESTROY cdev=md";
 	ssize_t len = 0;
 
-	memset(&devd_addr, 0, sizeof(devd_addr));
-	devd_addr.sun_family = PF_LOCAL;
-	strlcpy(devd_addr.sun_path, "/var/run/devd.pipe",
-			sizeof(devd_addr.sun_path));
-
-	s = socket(PF_LOCAL, SOCK_STREAM, 0);
-	ATF_REQUIRE(s >= 0);
-	error = connect(s, (struct sockaddr*)&devd_addr, SUN_LEN(&devd_addr));
-	ATF_REQUIRE_EQ(0, error);
-
-	create_two_events();
-
+	s = common_setup(SOCK_STREAM, "/var/run/devd.pipe");
 	/*
-	 * Loop until both events are detected on _different_ reads
-	 * There may be extra events due to unrelated system activity
+	 * Loop until both events are detected on the same or different reads.
+	 * There may be extra events due to unrelated system activity.
 	 * If we never get both events, then the test will timeout.
 	 */
 	while (!(got_create_event && got_destroy_event)) {
@@ -160,11 +152,12 @@ ATF_TC_BODY(stream, tc)
 		ssize_t newlen;
 		char *create_pos, *destroy_pos;
 
-		newlen = read(s, &event[len], sizeof(event) - len);
+		/* Read 1 less than sizeof(event) to allow space for NULL */
+		newlen = read(s, &event[len], sizeof(event) - len - 1);
 		ATF_REQUIRE(newlen != -1);
 		len += newlen;
 		/* NULL terminate the result */
-		event[newlen] = '\0';
+		event[len] = '\0';
 		printf("%s", event);
 
 		create_pos = strstr(event, create_pat);
@@ -174,8 +167,9 @@ ATF_TC_BODY(stream, tc)
 		destroy_pos = strstr(event, destroy_pat);
 		if (destroy_pos != NULL)
 			got_destroy_event = true;
-
 	}
+
+	close(s);
 }
 
 /*

@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2010-2015 Solarflare Communications Inc.
+ * Copyright (c) 2010-2016 Solarflare Communications Inc.
  * All rights reserved.
  *
  * This software was developed in part by Philip Paeps under contract for
@@ -230,7 +230,7 @@ struct sfxge_txq {
 
 struct sfxge_evq;
 
-extern void sfxge_tx_update_stats(struct sfxge_softc *sc);
+extern uint64_t sfxge_tx_get_drops(struct sfxge_softc *sc);
 
 extern int sfxge_tx_init(struct sfxge_softc *sc);
 extern void sfxge_tx_fini(struct sfxge_softc *sc);

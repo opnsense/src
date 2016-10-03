@@ -39,6 +39,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/lock.h>
 #include <sys/ktr.h>
 #include <sys/mutex.h>
+#include <sys/proc.h>
 #include <sys/systm.h>
 #include <sys/smp.h>
 #include <sys/sysctl.h>
@@ -86,8 +87,8 @@ static void
 memr_merge(struct mem_region *from, struct mem_region *to)
 {
 	vm_offset_t end;
-	end = ulmax(to->mr_start + to->mr_size, from->mr_start + from->mr_size);
-	to->mr_start = ulmin(from->mr_start, to->mr_start);
+	end = uqmax(to->mr_start + to->mr_size, from->mr_start + from->mr_size);
+	to->mr_start = uqmin(from->mr_start, to->mr_start);
 	to->mr_size = end - to->mr_start;
 }
 
@@ -116,7 +117,7 @@ mem_regions(struct mem_region **phys, int *physsz, struct mem_region **avail,
 	int i, j, still_merging;
 
 	if (npregions == 0) {
-		PLATFORM_MEM_REGIONS(plat_obj, &pregions[0], &npregions,
+		PLATFORM_MEM_REGIONS(plat_obj, pregions, &npregions,
 		    aregions, &naregions);
 		qsort(pregions, npregions, sizeof(*pregions), mr_cmp);
 		qsort(aregions, naregions, sizeof(*aregions), mr_cmp);
@@ -148,6 +149,7 @@ mem_regions(struct mem_region **phys, int *physsz, struct mem_region **avail,
 				memcpy(&aregions[i], &aregions[i+1],
 				    (naregions - i - 1)*sizeof(*aregions));
 				naregions--;
+				i--;
 			}
 		}
 	}
@@ -249,6 +251,19 @@ void
 cpu_reset()
 {
         PLATFORM_RESET(plat_obj);
+}
+
+int
+cpu_idle_wakeup(int cpu)
+{
+	return (PLATFORM_IDLE_WAKEUP(plat_obj, cpu));
+}
+
+void
+platform_cpu_idle(int cpu)
+{
+
+	PLATFORM_IDLE(plat_obj, cpu);
 }
 
 /*

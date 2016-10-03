@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2009-2011 Spectra Logic Corporation
+ * Copyright (c) 2009-2012 Spectra Logic Corporation
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -39,8 +39,6 @@ __FBSDID("$FreeBSD$");
  * \brief Device driver supporting the vending of block storage from
  *        a FreeBSD domain to other domains.
  */
-
-#include "opt_kdtrace.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -174,7 +172,6 @@ struct xbb_xen_req;
 static void xbb_attach_failed(struct xbb_softc *xbb, int err, const char *fmt,
 			      ...) __attribute__((format(printf, 3, 4)));
 static int  xbb_shutdown(struct xbb_softc *xbb);
-static int  xbb_detach(device_t dev);
 
 /*------------------------------ Data Structures -----------------------------*/
 
@@ -621,7 +618,7 @@ struct xbb_softc {
 	 * There are situations where the back and front ends can
 	 * have a different, native abi (e.g. intel x86_64 and
 	 * 32bit x86 domains on the same machine).  The back-end
-	 * always accomodates the front-end's native abi.  That
+	 * always accommodates the front-end's native abi.  That
 	 * value is pulled from the XenStore and recorded here.
 	 */
 	int			  abi;
@@ -744,7 +741,6 @@ struct xbb_softc {
 	/** Mutex protecting per-instance data. */
 	struct mtx		  lock;
 
-#ifdef XENHVM
 	/**
 	 * Resource representing allocated physical address space
 	 * associated with our per-instance kva region.
@@ -753,7 +749,6 @@ struct xbb_softc {
 
 	/** Resource id for allocated physical address space. */
 	int			  pseudo_phys_res_id;
-#endif
 
 	/**
 	 * I/O statistics from BlockBack dispatch down.  These are
@@ -786,13 +781,19 @@ struct xbb_softc {
 	/** Number of requests we have completed*/
 	uint64_t		  reqs_completed;
 
-	/** How many forced dispatches (i.e. without coalescing) have happend */
+	/** Number of requests we queued but not pushed*/
+	uint64_t		  reqs_queued_for_completion;
+
+	/** Number of requests we completed with an error status*/
+	uint64_t		  reqs_completed_with_error;
+
+	/** How many forced dispatches (i.e. without coalescing) have happened */
 	uint64_t		  forced_dispatch;
 
-	/** How many normal dispatches have happend */
+	/** How many normal dispatches have happened */
 	uint64_t		  normal_dispatch;
 
-	/** How many total dispatches have happend */
+	/** How many total dispatches have happened */
 	uint64_t		  total_dispatch;
 
 	/** How many times we have run out of KVA */
@@ -800,6 +801,9 @@ struct xbb_softc {
 
 	/** How many times we have run out of request structures */
 	uint64_t		  request_shortages;
+
+	/** Watch to wait for hotplug script execution */
+	struct xs_watch		  hotplug_watch;
 };
 
 /*---------------------------- Request Processing ----------------------------*/
@@ -975,8 +979,8 @@ xbb_get_gntaddr(struct xbb_xen_reqlist *reqlist, int pagenr, int sector)
 static uint8_t *
 xbb_get_kva(struct xbb_softc *xbb, int nr_pages)
 {
-	intptr_t first_clear;
-	intptr_t num_clear;
+	int first_clear;
+	int num_clear;
 	uint8_t *free_kva;
 	int      i;
 
@@ -1025,7 +1029,7 @@ xbb_get_kva(struct xbb_softc *xbb, int nr_pages)
 				 first_clear + nr_pages - 1);
 
 			free_kva = xbb->kva +
-				(uint8_t *)(first_clear * PAGE_SIZE);
+				(uint8_t *)((intptr_t)first_clear * PAGE_SIZE);
 
 			KASSERT(free_kva >= (uint8_t *)xbb->kva &&
 				free_kva + (nr_pages * PAGE_SIZE) <=
@@ -1145,7 +1149,7 @@ xbb_release_reqlist(struct xbb_softc *xbb, struct xbb_xen_reqlist *reqlist,
 		    int wakeup)
 {
 
-	mtx_lock(&xbb->lock);
+	mtx_assert(&xbb->lock, MA_OWNED);
 
 	if (wakeup) {
 		wakeup = xbb->flags & XBBF_RESOURCE_SHORTAGE;
@@ -1168,8 +1172,6 @@ xbb_release_reqlist(struct xbb_softc *xbb, struct xbb_xen_reqlist *reqlist,
 		 */
 		xbb_shutdown(xbb);
 	}
-
-	mtx_unlock(&xbb->lock);
 
 	if (wakeup != 0)
 		taskqueue_enqueue(xbb->io_taskqueue, &xbb->io_task); 
@@ -1263,16 +1265,16 @@ bailout_error:
 	if (nreq != NULL)
 		xbb_release_req(xbb, nreq);
 
-	mtx_unlock(&xbb->lock);
-
 	if (nreqlist != NULL)
 		xbb_release_reqlist(xbb, nreqlist, /*wakeup*/ 0);
+
+	mtx_unlock(&xbb->lock);
 
 	return (1);
 }
 
 /**
- * Create and transmit a response to a blkif request.
+ * Create and queue a response to a blkif request.
  * 
  * \param xbb     Per-instance xbb configuration structure.
  * \param req     The request structure to which to respond.
@@ -1280,20 +1282,28 @@ bailout_error:
  *                in sys/xen/interface/io/blkif.h.
  */
 static void
-xbb_send_response(struct xbb_softc *xbb, struct xbb_xen_req *req, int status)
+xbb_queue_response(struct xbb_softc *xbb, struct xbb_xen_req *req, int status)
 {
 	blkif_response_t *resp;
-	int		  more_to_do;
-	int		  notify;
 
-	more_to_do = 0;
+	/*
+	 * The mutex is required here, and should be held across this call
+	 * until after the subsequent call to xbb_push_responses().  This
+	 * is to guarantee that another context won't queue responses and
+	 * push them while we're active.
+	 *
+	 * That could lead to the other end being notified of responses
+	 * before the resources have been freed on this end.  The other end
+	 * would then be able to queue additional I/O, and we may run out
+ 	 * of resources because we haven't freed them all yet.
+	 */
+	mtx_assert(&xbb->lock, MA_OWNED);
 
 	/*
 	 * Place on the response ring for the relevant domain.
 	 * For now, only the spacing between entries is different
 	 * in the different ABIs, not the response entry layout.
 	 */
-	mtx_lock(&xbb->lock);
 	switch (xbb->abi) {
 	case BLKIF_PROTOCOL_NATIVE:
 		resp = RING_GET_RESPONSE(&xbb->rings.native,
@@ -1317,8 +1327,38 @@ xbb_send_response(struct xbb_softc *xbb, struct xbb_xen_req *req, int status)
 	resp->operation = req->operation;
 	resp->status    = status;
 
+	if (status != BLKIF_RSP_OKAY)
+		xbb->reqs_completed_with_error++;
+
 	xbb->rings.common.rsp_prod_pvt++;
-	RING_PUSH_RESPONSES_AND_CHECK_NOTIFY(&xbb->rings.common, notify);
+
+	xbb->reqs_queued_for_completion++;
+
+}
+
+/**
+ * Send queued responses to blkif requests.
+ * 
+ * \param xbb            Per-instance xbb configuration structure.
+ * \param run_taskqueue  Flag that is set to 1 if the taskqueue
+ *			 should be run, 0 if it does not need to be run.
+ * \param notify	 Flag that is set to 1 if the other end should be
+ * 			 notified via irq, 0 if the other end should not be
+ *			 notified.
+ */
+static void
+xbb_push_responses(struct xbb_softc *xbb, int *run_taskqueue, int *notify)
+{
+	int more_to_do;
+
+	/*
+	 * The mutex is required here.
+	 */
+	mtx_assert(&xbb->lock, MA_OWNED);
+
+	more_to_do = 0;
+
+	RING_PUSH_RESPONSES_AND_CHECK_NOTIFY(&xbb->rings.common, *notify);
 
 	if (xbb->rings.common.rsp_prod_pvt == xbb->rings.common.req_cons) {
 
@@ -1333,15 +1373,10 @@ xbb_send_response(struct xbb_softc *xbb, struct xbb_xen_req *req, int status)
 		more_to_do = 1;
 	}
 
-	xbb->reqs_completed++;
+	xbb->reqs_completed += xbb->reqs_queued_for_completion;
+	xbb->reqs_queued_for_completion = 0;
 
-	mtx_unlock(&xbb->lock);
-
-	if (more_to_do)
-		taskqueue_enqueue(xbb->io_taskqueue, &xbb->io_task); 
-
-	if (notify)
-		xen_intr_signal(xbb->xen_intr_handle);
+	*run_taskqueue = more_to_do;
 }
 
 /**
@@ -1355,23 +1390,29 @@ xbb_complete_reqlist(struct xbb_softc *xbb, struct xbb_xen_reqlist *reqlist)
 {
 	struct xbb_xen_req *nreq;
 	off_t		    sectors_sent;
+	int		    notify, run_taskqueue;
 
 	sectors_sent = 0;
 
 	if (reqlist->flags & XBB_REQLIST_MAPPED)
 		xbb_unmap_reqlist(reqlist);
 
+	mtx_lock(&xbb->lock);
+
 	/*
-	 * All I/O is done, send the response.  A lock should not be
-	 * necessary here because the request list is complete, and
-	 * therefore this is the only context accessing this request
-	 * right now.  The functions we call do their own locking if
-	 * necessary.
+	 * All I/O is done, send the response. A lock is not necessary
+	 * to protect the request list, because all requests have
+	 * completed.  Therefore this is the only context accessing this
+	 * reqlist right now.  However, in order to make sure that no one
+	 * else queues responses onto the queue or pushes them to the other
+	 * side while we're active, we need to hold the lock across the
+	 * calls to xbb_queue_response() and xbb_push_responses().
 	 */
 	STAILQ_FOREACH(nreq, &reqlist->contig_req_list, links) {
 		off_t cur_sectors_sent;
 
-		xbb_send_response(xbb, nreq, reqlist->status);
+		/* Put this response on the ring, but don't push yet */
+		xbb_queue_response(xbb, nreq, reqlist->status);
 
 		/* We don't report bytes sent if there is an error. */
 		if (reqlist->status == BLKIF_RSP_OKAY)
@@ -1406,6 +1447,16 @@ xbb_complete_reqlist(struct xbb_softc *xbb, struct xbb_xen_reqlist *reqlist)
 				/*then*/&reqlist->ds_t0);
 
 	xbb_release_reqlist(xbb, reqlist, /*wakeup*/ 1);
+
+	xbb_push_responses(xbb, &run_taskqueue, &notify);
+
+	mtx_unlock(&xbb->lock);
+
+	if (run_taskqueue)
+		taskqueue_enqueue(xbb->io_taskqueue, &xbb->io_task); 
+
+	if (notify)
+		xen_intr_signal(xbb->xen_intr_handle);
 }
 
 /**
@@ -1692,7 +1743,7 @@ xbb_dispatch_io(struct xbb_softc *xbb, struct xbb_xen_reqlist *reqlist)
 		if (__predict_false(map->status != 0)) {
 			DPRINTF("invalid buffer -- could not remap "
 			        "it (%d)\n", map->status);
-			DPRINTF("Mapping(%d): Host Addr 0x%lx, flags "
+			DPRINTF("Mapping(%d): Host Addr 0x%"PRIx64", flags "
 			        "0x%x ref 0x%x, dom %d\n", seg_idx,
 				map->host_addr, map->flags, map->ref,
 				map->dom);
@@ -1908,7 +1959,7 @@ xbb_run_queue(void *context, int pending)
 			 * we've already consumed all necessary data out
 			 * of the version of the request in the ring buffer
 			 * (for native mode).  We must update the consumer
-			 * index  before issueing back-end I/O so there is
+			 * index  before issuing back-end I/O so there is
 			 * no possibility that it will complete and a
 			 * response be generated before we make room in 
 			 * the queue for that response.
@@ -2196,7 +2247,6 @@ xbb_dispatch_file(struct xbb_softc *xbb, struct xbb_xen_reqlist *reqlist,
 	struct xbb_file_data *file_data;
 	u_int                 seg_idx;
 	u_int		      nseg;
-	off_t		      sectors_sent;
 	struct uio            xuio;
 	struct xbb_sg        *xbb_sg;
 	struct iovec         *xiovec;
@@ -2207,7 +2257,6 @@ xbb_dispatch_file(struct xbb_softc *xbb, struct xbb_xen_reqlist *reqlist,
 	int                   error;
 
 	file_data = &xbb->backend.file;
-	sectors_sent = 0;
 	error = 0;
 	bzero(&xuio, sizeof(xuio));
 
@@ -2643,18 +2692,7 @@ xbb_open_backend(struct xbb_softc *xbb)
 	if ((xbb->flags & XBBF_READ_ONLY) == 0)
 		flags |= FWRITE;
 
-	if (!curthread->td_proc->p_fd->fd_cdir) {
-		curthread->td_proc->p_fd->fd_cdir = rootvnode;
-		VREF(rootvnode);
-	}
-	if (!curthread->td_proc->p_fd->fd_rdir) {
-		curthread->td_proc->p_fd->fd_rdir = rootvnode;
-		VREF(rootvnode);
-	}
-	if (!curthread->td_proc->p_fd->fd_jdir) {
-		curthread->td_proc->p_fd->fd_jdir = rootvnode;
-		VREF(rootvnode);
-	}
+	pwd_ensure_dirs();
 
  again:
 	NDINIT(&nd, LOOKUP, FOLLOW, UIO_SYSSPACE, xbb->dev_name, curthread);
@@ -2728,16 +2766,11 @@ static void
 xbb_free_communication_mem(struct xbb_softc *xbb)
 {
 	if (xbb->kva != 0) {
-#ifndef XENHVM
-		kva_free(xbb->kva, xbb->kva_size);
-#else
 		if (xbb->pseudo_phys_res != NULL) {
-			bus_release_resource(xbb->dev, SYS_RES_MEMORY,
-					     xbb->pseudo_phys_res_id,
-					     xbb->pseudo_phys_res);
+			xenmem_free(xbb->dev, xbb->pseudo_phys_res_id,
+			    xbb->pseudo_phys_res);
 			xbb->pseudo_phys_res = NULL;
 		}
-#endif
 	}
 	xbb->kva = 0;
 	xbb->gnt_base_addr = 0;
@@ -2936,10 +2969,6 @@ xbb_connect_ring(struct xbb_softc *xbb)
 	return 0;
 }
 
-/* Needed to make bit_alloc() macro work */
-#define	calloc(count, size) malloc((count)*(size), M_XENBLOCKBACK,	\
-				   M_NOWAIT|M_ZERO);
-
 /**
  * Size KVA and pseudo-physical address allocations based on negotiated
  * values for the size and number of I/O requests, and the size of our
@@ -2958,19 +2987,13 @@ xbb_alloc_communication_mem(struct xbb_softc *xbb)
 	xbb->kva_size = xbb->reqlist_kva_size +
 			(xbb->ring_config.ring_pages * PAGE_SIZE);
 
-	xbb->kva_free = bit_alloc(xbb->reqlist_kva_pages);
+	xbb->kva_free = bit_alloc(xbb->reqlist_kva_pages, M_XENBLOCKBACK, M_NOWAIT);
 	if (xbb->kva_free == NULL)
 		return (ENOMEM);
 
 	DPRINTF("%s: kva_size = %d, reqlist_kva_size = %d\n",
 		device_get_nameunit(xbb->dev), xbb->kva_size,
 		xbb->reqlist_kva_size);
-#ifndef XENHVM
-	xbb->kva = kva_alloc(xbb->kva_size);
-	if (xbb->kva == 0)
-		return (ENOMEM);
-	xbb->gnt_base_addr = xbb->kva;
-#else /* XENHVM */
 	/*
 	 * Reserve a range of pseudo physical memory that we can map
 	 * into kva.  These pages will only be backed by machine
@@ -2978,17 +3001,14 @@ xbb_alloc_communication_mem(struct xbb_softc *xbb)
 	 * via grant table operations.
 	 */
 	xbb->pseudo_phys_res_id = 0;
-	xbb->pseudo_phys_res = bus_alloc_resource(xbb->dev, SYS_RES_MEMORY,
-						  &xbb->pseudo_phys_res_id,
-						  0, ~0, xbb->kva_size,
-						  RF_ACTIVE);
+	xbb->pseudo_phys_res = xenmem_alloc(xbb->dev, &xbb->pseudo_phys_res_id,
+	    xbb->kva_size);
 	if (xbb->pseudo_phys_res == NULL) {
 		xbb->kva = 0;
 		return (ENOMEM);
 	}
 	xbb->kva = (vm_offset_t)rman_get_virtual(xbb->pseudo_phys_res);
 	xbb->gnt_base_addr = rman_get_start(xbb->pseudo_phys_res);
-#endif /* XENHVM */
 
 	DPRINTF("%s: kva: %#jx, gnt_base_addr: %#jx\n",
 		device_get_nameunit(xbb->dev), (uintmax_t)xbb->kva,
@@ -3040,7 +3060,7 @@ xbb_collect_frontend_info(struct xbb_softc *xbb)
 	 * and the new value is outside of its allowed range.
 	 *
 	 * \note xs_gather() returns on the first encountered error, so
-	 *       we must use independant calls in order to guarantee
+	 *       we must use independent calls in order to guarantee
 	 *       we don't miss information in a sparsly populated front-end
 	 *       tree.
 	 *
@@ -3288,7 +3308,7 @@ xbb_connect(struct xbb_softc *xbb)
 {
 	int error;
 
-	if (xenbus_get_state(xbb->dev) == XenbusStateConnected)
+	if (xenbus_get_state(xbb->dev) != XenbusStateInitialised)
 		return;
 
 	if (xbb_collect_frontend_info(xbb) != 0)
@@ -3385,6 +3405,12 @@ xbb_shutdown(struct xbb_softc *xbb)
 	xbb->flags |= XBBF_IN_SHUTDOWN;
 	mtx_unlock(&xbb->lock);
 
+	if (xbb->hotplug_watch.node != NULL) {
+		xs_unregister_watch(&xbb->hotplug_watch);
+		free(xbb->hotplug_watch.node, M_XENBLOCKBACK);
+		xbb->hotplug_watch.node = NULL;
+	}
+
 	if (xenbus_get_state(xbb->dev) < XenbusStateClosing)
 		xenbus_set_state(xbb->dev, XenbusStateClosing);
 
@@ -3392,8 +3418,8 @@ xbb_shutdown(struct xbb_softc *xbb)
 	mtx_lock(&xbb->lock);
 	xbb->flags &= ~XBBF_IN_SHUTDOWN;
 
-	/* The front can submit I/O until entering the closed state. */
-	if (frontState < XenbusStateClosed)
+	/* Wait for the frontend to disconnect (if it's connected). */
+	if (frontState == XenbusStateConnected)
 		return (EAGAIN);
 
 	DPRINTF("\n");
@@ -3450,7 +3476,9 @@ xbb_attach_failed(struct xbb_softc *xbb, int err, const char *fmt, ...)
 
 	xs_printf(XST_NIL, xenbus_get_node(xbb->dev),
 		  "online", "0");
-	xbb_detach(xbb->dev);
+	mtx_lock(&xbb->lock);
+	xbb_shutdown(xbb);
+	mtx_unlock(&xbb->lock);
 }
 
 /*---------------------------- NewBus Entrypoints ----------------------------*/
@@ -3515,6 +3543,16 @@ xbb_setup_sysctl(struct xbb_softc *xbb)
 			 "how many I/O requests have been completed");
 
 	SYSCTL_ADD_UQUAD(sysctl_ctx, SYSCTL_CHILDREN(sysctl_tree), OID_AUTO,
+			 "reqs_queued_for_completion", CTLFLAG_RW,
+			 &xbb->reqs_queued_for_completion,
+			 "how many I/O requests queued but not yet pushed");
+
+	SYSCTL_ADD_UQUAD(sysctl_ctx, SYSCTL_CHILDREN(sysctl_tree), OID_AUTO,
+			 "reqs_completed_with_error", CTLFLAG_RW,
+			 &xbb->reqs_completed_with_error,
+			 "how many I/O requests completed with error status");
+
+	SYSCTL_ADD_UQUAD(sysctl_ctx, SYSCTL_CHILDREN(sysctl_tree), OID_AUTO,
 			 "forced_dispatch", CTLFLAG_RW, &xbb->forced_dispatch,
 			 "how many I/O dispatches were forced");
 
@@ -3555,6 +3593,107 @@ xbb_setup_sysctl(struct xbb_softc *xbb)
 		        "communication channel pages (negotiated)");
 }
 
+static void
+xbb_attach_disk(struct xs_watch *watch, const char **vec, unsigned int len)
+{
+	device_t		 dev;
+	struct xbb_softc	*xbb;
+	int			 error;
+
+	dev = (device_t) watch->callback_data;
+	xbb = device_get_softc(dev);
+
+	error = xs_gather(XST_NIL, xenbus_get_node(dev), "physical-device-path",
+	    NULL, &xbb->dev_name, NULL);
+	if (error != 0)
+		return;
+
+	xs_unregister_watch(watch);
+	free(watch->node, M_XENBLOCKBACK);
+	watch->node = NULL;
+
+	/* Collect physical device information. */
+	error = xs_gather(XST_NIL, xenbus_get_otherend_path(xbb->dev),
+			  "device-type", NULL, &xbb->dev_type,
+			  NULL);
+	if (error != 0)
+		xbb->dev_type = NULL;
+
+	error = xs_gather(XST_NIL, xenbus_get_node(dev),
+                          "mode", NULL, &xbb->dev_mode,
+                          NULL);
+	if (error != 0) {
+		xbb_attach_failed(xbb, error, "reading backend fields at %s",
+				  xenbus_get_node(dev));
+                return;
+        }
+
+	/* Parse fopen style mode flags. */
+	if (strchr(xbb->dev_mode, 'w') == NULL)
+		xbb->flags |= XBBF_READ_ONLY;
+
+	/*
+	 * Verify the physical device is present and can support
+	 * the desired I/O mode.
+	 */
+	error = xbb_open_backend(xbb);
+	if (error != 0) {
+		xbb_attach_failed(xbb, error, "Unable to open %s",
+				  xbb->dev_name);
+		return;
+	}
+
+	/* Use devstat(9) for recording statistics. */
+	xbb->xbb_stats = devstat_new_entry("xbb", device_get_unit(xbb->dev),
+					   xbb->sector_size,
+					   DEVSTAT_ALL_SUPPORTED,
+					   DEVSTAT_TYPE_DIRECT
+					 | DEVSTAT_TYPE_IF_OTHER,
+					   DEVSTAT_PRIORITY_OTHER);
+
+	xbb->xbb_stats_in = devstat_new_entry("xbbi", device_get_unit(xbb->dev),
+					      xbb->sector_size,
+					      DEVSTAT_ALL_SUPPORTED,
+					      DEVSTAT_TYPE_DIRECT
+					    | DEVSTAT_TYPE_IF_OTHER,
+					      DEVSTAT_PRIORITY_OTHER);
+	/*
+	 * Setup sysctl variables.
+	 */
+	xbb_setup_sysctl(xbb);
+
+	/*
+	 * Create a taskqueue for doing work that must occur from a
+	 * thread context.
+	 */
+	xbb->io_taskqueue = taskqueue_create_fast(device_get_nameunit(dev),
+						  M_NOWAIT,
+						  taskqueue_thread_enqueue,
+						  /*contxt*/&xbb->io_taskqueue);
+	if (xbb->io_taskqueue == NULL) {
+		xbb_attach_failed(xbb, error, "Unable to create taskqueue");
+		return;
+	}
+
+	taskqueue_start_threads(&xbb->io_taskqueue,
+				/*num threads*/1,
+				/*priority*/PWAIT,
+				/*thread name*/
+				"%s taskq", device_get_nameunit(dev));
+
+	/* Update hot-plug status to satisfy xend. */
+	error = xs_printf(XST_NIL, xenbus_get_node(xbb->dev),
+			  "hotplug-status", "connected");
+	if (error) {
+		xbb_attach_failed(xbb, error, "writing %s/hotplug-status",
+				  xenbus_get_node(xbb->dev));
+		return;
+	}
+
+	/* Tell the front end that we are ready to connect. */
+	xenbus_set_state(dev, XenbusStateInitialised);
+}
+
 /**
  * Attach to a XenBus device that has been claimed by our probe routine.
  *
@@ -3568,6 +3707,7 @@ xbb_attach(device_t dev)
 	struct xbb_softc	*xbb;
 	int			 error;
 	u_int			 max_ring_page_order;
+	struct sbuf		*watch_path;
 
 	DPRINTF("Attaching to %s\n", xenbus_get_node(dev));
 
@@ -3611,88 +3751,25 @@ xbb_attach(device_t dev)
 		return (error);
 	}
 
-	/* Collect physical device information. */
-	error = xs_gather(XST_NIL, xenbus_get_otherend_path(xbb->dev),
-			  "device-type", NULL, &xbb->dev_type,
-			  NULL);
-	if (error != 0)
-		xbb->dev_type = NULL;
-
-	error = xs_gather(XST_NIL, xenbus_get_node(dev),
-                          "mode", NULL, &xbb->dev_mode,
-			  "params", NULL, &xbb->dev_name,
-                          NULL);
+	/*
+	 * We need to wait for hotplug script execution before
+	 * moving forward.
+	 */
+	watch_path = xs_join(xenbus_get_node(xbb->dev), "physical-device-path");
+	xbb->hotplug_watch.callback_data = (uintptr_t)dev;
+	xbb->hotplug_watch.callback = xbb_attach_disk;
+	KASSERT(xbb->hotplug_watch.node == NULL, ("watch node already setup"));
+	xbb->hotplug_watch.node = strdup(sbuf_data(watch_path), M_XENBLOCKBACK);
+	sbuf_delete(watch_path);
+	error = xs_register_watch(&xbb->hotplug_watch);
 	if (error != 0) {
-		xbb_attach_failed(xbb, error, "reading backend fields at %s",
-				  xenbus_get_node(dev));
-                return (ENXIO);
-        }
-
-	/* Parse fopen style mode flags. */
-	if (strchr(xbb->dev_mode, 'w') == NULL)
-		xbb->flags |= XBBF_READ_ONLY;
-
-	/*
-	 * Verify the physical device is present and can support
-	 * the desired I/O mode.
-	 */
-	DROP_GIANT();
-	error = xbb_open_backend(xbb);
-	PICKUP_GIANT();
-	if (error != 0) {
-		xbb_attach_failed(xbb, error, "Unable to open %s",
-				  xbb->dev_name);
-		return (ENXIO);
-	}
-
-	/* Use devstat(9) for recording statistics. */
-	xbb->xbb_stats = devstat_new_entry("xbb", device_get_unit(xbb->dev),
-					   xbb->sector_size,
-					   DEVSTAT_ALL_SUPPORTED,
-					   DEVSTAT_TYPE_DIRECT
-					 | DEVSTAT_TYPE_IF_OTHER,
-					   DEVSTAT_PRIORITY_OTHER);
-
-	xbb->xbb_stats_in = devstat_new_entry("xbbi", device_get_unit(xbb->dev),
-					      xbb->sector_size,
-					      DEVSTAT_ALL_SUPPORTED,
-					      DEVSTAT_TYPE_DIRECT
-					    | DEVSTAT_TYPE_IF_OTHER,
-					      DEVSTAT_PRIORITY_OTHER);
-	/*
-	 * Setup sysctl variables.
-	 */
-	xbb_setup_sysctl(xbb);
-
-	/*
-	 * Create a taskqueue for doing work that must occur from a
-	 * thread context.
-	 */
-	xbb->io_taskqueue = taskqueue_create_fast(device_get_nameunit(dev),
-						  M_NOWAIT,
-						  taskqueue_thread_enqueue,
-						  /*contxt*/&xbb->io_taskqueue);
-	if (xbb->io_taskqueue == NULL) {
-		xbb_attach_failed(xbb, error, "Unable to create taskqueue");
-		return (ENOMEM);
-	}
-
-	taskqueue_start_threads(&xbb->io_taskqueue,
-				/*num threads*/1,
-				/*priority*/PWAIT,
-				/*thread name*/
-				"%s taskq", device_get_nameunit(dev));
-
-	/* Update hot-plug status to satisfy xend. */
-	error = xs_printf(XST_NIL, xenbus_get_node(xbb->dev),
-			  "hotplug-status", "connected");
-	if (error) {
-		xbb_attach_failed(xbb, error, "writing %s/hotplug-status",
-				  xenbus_get_node(xbb->dev));
+		xbb_attach_failed(xbb, error, "failed to create watch on %s",
+		    xbb->hotplug_watch.node);
+		free(xbb->hotplug_watch.node, M_XENBLOCKBACK);
 		return (error);
 	}
 
-	/* Tell the front end that we are ready to connect. */
+	/* Tell the toolstack blkback has attached. */
 	xenbus_set_state(dev, XenbusStateInitWait);
 
 	return (0);
@@ -3707,7 +3784,7 @@ xbb_attach(device_t dev)
  * 
  * \note A block back device may be detached at any time in its life-cycle,
  *       including part way through the attach process.  For this reason,
- *       initialization order and the intialization state checks in this
+ *       initialization order and the initialization state checks in this
  *       routine must be carefully coupled so that attach time failures
  *       are gracefully handled.
  */
@@ -3740,17 +3817,17 @@ xbb_detach(device_t dev)
 	xbb_close_backend(xbb);
 
 	if (xbb->dev_mode != NULL) {
-		free(xbb->dev_mode, M_XENBUS);
+		free(xbb->dev_mode, M_XENSTORE);
 		xbb->dev_mode = NULL;
 	}
 
 	if (xbb->dev_type != NULL) {
-		free(xbb->dev_type, M_XENBUS);
+		free(xbb->dev_type, M_XENSTORE);
 		xbb->dev_type = NULL;
 	}
 
 	if (xbb->dev_name != NULL) {
-		free(xbb->dev_name, M_XENBUS);
+		free(xbb->dev_name, M_XENSTORE);
 		xbb->dev_name = NULL;
 	}
 

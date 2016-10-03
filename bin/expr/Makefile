@@ -1,7 +1,8 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
+PACKAGE=runtime
 PROG=	expr
 SRCS=	expr.y
 YFLAGS=

@@ -872,7 +872,7 @@ static void	arcmsr_srb_timeout(void *arg)
 	ARCMSR_LOCK_ACQUIRE(&acb->isr_lock);
 	if(srb->srb_state == ARCMSR_SRB_START)
 	{
-		cmd = srb->pccb->csio.cdb_io.cdb_bytes[0];
+		cmd = scsiio_cdb_ptr(&srb->pccb->csio)[0];
 		srb->srb_state = ARCMSR_SRB_TIMEOUT;
 		srb->pccb->ccb_h.status |= CAM_CMD_TIMEOUT;
 		arcmsr_srb_complete(srb, 1);
@@ -963,9 +963,9 @@ static void arcmsr_iop_reset(struct AdapterControlBlock *acb)
 				srb->srb_state = ARCMSR_SRB_ABORTED;
 				srb->pccb->ccb_h.status |= CAM_REQ_ABORTED;
 				arcmsr_srb_complete(srb, 1);
-				printf("arcmsr%d: scsi id=%d lun=%d srb='%p' aborted\n"
+				printf("arcmsr%d: scsi id=%d lun=%jx srb='%p' aborted\n"
 						, acb->pci_unit, srb->pccb->ccb_h.target_id
-						, srb->pccb->ccb_h.target_lun, srb);
+						, (uintmax_t)srb->pccb->ccb_h.target_lun, srb);
 			}
 		}
 		/* enable all outbound interrupt */
@@ -997,7 +997,7 @@ static void arcmsr_build_srb(struct CommandControlBlock *srb,
 	arcmsr_cdb->LUN = pccb->ccb_h.target_lun;
 	arcmsr_cdb->Function = 1;
 	arcmsr_cdb->CdbLength = (u_int8_t)pcsio->cdb_len;
-	bcopy(pcsio->cdb_io.cdb_bytes, arcmsr_cdb->Cdb, pcsio->cdb_len);
+	bcopy(scsiio_cdb_ptr(pcsio), arcmsr_cdb->Cdb, pcsio->cdb_len);
 	if(nseg != 0) {
 		struct AdapterControlBlock *acb = srb->acb;
 		bus_dmasync_op_t op;	
@@ -2453,10 +2453,11 @@ static int arcmsr_iop_message_xfer(struct AdapterControlBlock *acb, union ccb *p
 	struct CMD_MESSAGE_FIELD *pcmdmessagefld;
 	int retvalue = 0, transfer_len = 0;
 	char *buffer;
-	u_int32_t controlcode = (u_int32_t ) pccb->csio.cdb_io.cdb_bytes[5] << 24 |
-				(u_int32_t ) pccb->csio.cdb_io.cdb_bytes[6] << 16 |
-				(u_int32_t ) pccb->csio.cdb_io.cdb_bytes[7] << 8  |
-				(u_int32_t ) pccb->csio.cdb_io.cdb_bytes[8];
+	uint8_t *ptr = scsiio_cdb_ptr(&pccb->csio);
+	u_int32_t controlcode = (u_int32_t ) ptr[5] << 24 |
+				(u_int32_t ) ptr[6] << 16 |
+				(u_int32_t ) ptr[7] << 8  |
+				(u_int32_t ) ptr[8];
 					/* 4 bytes: Areca io control code */
 	if ((pccb->ccb_h.flags & CAM_DATA_MASK) == CAM_DATA_VADDR) {
 		buffer = pccb->csio.data_ptr;
@@ -2683,7 +2684,7 @@ static void arcmsr_execute_srb(void *arg, bus_dma_segment_t *dm_segs, int nseg, 
 	if(acb->devstate[target][lun] == ARECA_RAID_GONE) {
 		u_int8_t block_cmd, cmd;
 
-		cmd = pccb->csio.cdb_io.cdb_bytes[0];
+		cmd = scsiio_cdb_ptr(&pccb->csio)[0];
 		block_cmd = cmd & 0x0f;
 		if(block_cmd == 0x08 || block_cmd == 0x0a) {
 			printf("arcmsr%d:block 'read/write' command "
@@ -2753,10 +2754,10 @@ static u_int8_t arcmsr_seek_cmd2abort(union ccb *abortccb)
 			if(srb->srb_state == ARCMSR_SRB_START) {
 				if(srb->pccb == abortccb) {
 					srb->srb_state = ARCMSR_SRB_ABORTED;
-					printf("arcmsr%d:scsi id=%d lun=%d abort srb '%p'"
+					printf("arcmsr%d:scsi id=%d lun=%jx abort srb '%p'"
 						"outstanding command \n"
 						, acb->pci_unit, abortccb->ccb_h.target_id
-						, abortccb->ccb_h.target_lun, srb);
+						, (uintmax_t)abortccb->ccb_h.target_lun, srb);
 					arcmsr_polling_srbdone(acb, srb);
 					/* enable outbound Post Queue, outbound doorbell Interrupt */
 					arcmsr_enable_allintr(acb, intmask_org);
@@ -2800,7 +2801,7 @@ static void arcmsr_handle_virtual_command(struct AdapterControlBlock *acb,
 		return;
 	}
 	pccb->ccb_h.status |= CAM_REQ_CMP;
-	switch (pccb->csio.cdb_io.cdb_bytes[0]) {
+	switch (scsiio_cdb_ptr(&pccb->csio)[0]) {
 	case INQUIRY: {
 		unsigned char inqdata[36];
 		char *buffer = pccb->csio.data_ptr;
@@ -2852,6 +2853,12 @@ static void arcmsr_action(struct cam_sim *psim, union ccb *pccb)
 			struct CommandControlBlock *srb;
 			int target = pccb->ccb_h.target_id;
 			int error;
+
+			if (pccb->ccb_h.flags & CAM_CDB_PHYS) {
+				pccb->ccb_h.status = CAM_REQ_INVALID;
+				xpt_done(pccb);
+				return;
+			}
 
 			if(target == 16) {
 				/* virtual device for iop message transfer */
@@ -3203,11 +3210,11 @@ polling_ccb_retry:
 		poll_srb_done = (srb == poll_srb) ? 1:0;
 		if((srb->acb != acb) || (srb->srb_state != ARCMSR_SRB_START)) {
 			if(srb->srb_state == ARCMSR_SRB_ABORTED) {
-				printf("arcmsr%d: scsi id=%d lun=%d srb='%p'"
+				printf("arcmsr%d: scsi id=%d lun=%jx srb='%p'"
 					"poll command abort successfully \n"
 					, acb->pci_unit
 					, srb->pccb->ccb_h.target_id
-					, srb->pccb->ccb_h.target_lun, srb);
+					, (uintmax_t)srb->pccb->ccb_h.target_lun, srb);
 				srb->pccb->ccb_h.status |= CAM_REQ_ABORTED;
 				arcmsr_srb_complete(srb, 1);
 				continue;
@@ -3262,11 +3269,11 @@ polling_ccb_retry:
 		poll_srb_done = (srb == poll_srb) ? 1:0;
 		if((srb->acb != acb) || (srb->srb_state != ARCMSR_SRB_START)) {
 			if(srb->srb_state == ARCMSR_SRB_ABORTED) {
-				printf("arcmsr%d: scsi id=%d lun=%d srb='%p'"
+				printf("arcmsr%d: scsi id=%d lun=%jx srb='%p'"
 					"poll command abort successfully \n"
 					, acb->pci_unit
 					, srb->pccb->ccb_h.target_id
-					, srb->pccb->ccb_h.target_lun, srb);
+					, (uintmax_t)srb->pccb->ccb_h.target_lun, srb);
 				srb->pccb->ccb_h.status |= CAM_REQ_ABORTED;
 				arcmsr_srb_complete(srb, 1);		
 				continue;
@@ -3317,8 +3324,8 @@ polling_ccb_retry:
 			poll_srb_done = (srb == poll_srb) ? 1:0;
 		if((srb->acb != acb) || (srb->srb_state != ARCMSR_SRB_START)) {
 			if(srb->srb_state == ARCMSR_SRB_ABORTED) {
-				printf("arcmsr%d: scsi id=%d lun=%d srb='%p'poll command abort successfully \n"
-						, acb->pci_unit, srb->pccb->ccb_h.target_id, srb->pccb->ccb_h.target_lun, srb);
+				printf("arcmsr%d: scsi id=%d lun=%jx srb='%p'poll command abort successfully \n"
+						, acb->pci_unit, srb->pccb->ccb_h.target_id, (uintmax_t)srb->pccb->ccb_h.target_lun, srb);
 				srb->pccb->ccb_h.status |= CAM_REQ_ABORTED;
 				arcmsr_srb_complete(srb, 1);
 				continue;
@@ -3373,8 +3380,8 @@ polling_ccb_retry:
 			poll_srb_done = (srb == poll_srb) ? 1:0;
 		if((srb->acb != acb) || (srb->srb_state != ARCMSR_SRB_START)) {
 			if(srb->srb_state == ARCMSR_SRB_ABORTED) {
-				printf("arcmsr%d: scsi id=%d lun=%d srb='%p'poll command abort successfully \n"
-						, acb->pci_unit, srb->pccb->ccb_h.target_id, srb->pccb->ccb_h.target_lun, srb);
+				printf("arcmsr%d: scsi id=%d lun=%jx srb='%p'poll command abort successfully \n"
+						, acb->pci_unit, srb->pccb->ccb_h.target_id, (uintmax_t)srb->pccb->ccb_h.target_lun, srb);
 				srb->pccb->ccb_h.status |= CAM_REQ_ABORTED;
 				arcmsr_srb_complete(srb, 1);
 				continue;
@@ -4143,7 +4150,7 @@ static u_int32_t arcmsr_initialize(device_t dev)
 			u_int32_t rid0 = PCIR_BAR(0);
 			vm_offset_t	mem_base0;
 
-			acb->sys_res_arcmsr[0] = bus_alloc_resource(dev,SYS_RES_MEMORY, &rid0, 0ul, ~0ul, 0x1000, RF_ACTIVE);
+			acb->sys_res_arcmsr[0] = bus_alloc_resource_any(dev,SYS_RES_MEMORY, &rid0, RF_ACTIVE);
 			if(acb->sys_res_arcmsr[0] == NULL) {
 				arcmsr_free_resource(acb);
 				printf("arcmsr%d: bus_alloc_resource failure!\n", device_get_unit(dev));
@@ -4177,11 +4184,11 @@ static u_int32_t arcmsr_initialize(device_t dev)
 				size = sizeof(struct HBB_DOORBELL);
 			for(i=0; i < 2; i++) {
 				if(i == 0) {
-					acb->sys_res_arcmsr[i] = bus_alloc_resource(dev,SYS_RES_MEMORY, &rid[i],
-											0ul, ~0ul, size, RF_ACTIVE);
+					acb->sys_res_arcmsr[i] = bus_alloc_resource_any(dev,SYS_RES_MEMORY, &rid[i],
+											RF_ACTIVE);
 				} else {
-					acb->sys_res_arcmsr[i] = bus_alloc_resource(dev, SYS_RES_MEMORY, &rid[i],
-											0ul, ~0ul, sizeof(struct HBB_RWBUFFER), RF_ACTIVE);
+					acb->sys_res_arcmsr[i] = bus_alloc_resource_any(dev, SYS_RES_MEMORY, &rid[i],
+											RF_ACTIVE);
 				}
 				if(acb->sys_res_arcmsr[i] == NULL) {
 					arcmsr_free_resource(acb);
@@ -4224,7 +4231,7 @@ static u_int32_t arcmsr_initialize(device_t dev)
 			u_int32_t rid0 = PCIR_BAR(1);
 			vm_offset_t	mem_base0;
 
-			acb->sys_res_arcmsr[0] = bus_alloc_resource(dev,SYS_RES_MEMORY, &rid0, 0ul, ~0ul, sizeof(struct HBC_MessageUnit), RF_ACTIVE);
+			acb->sys_res_arcmsr[0] = bus_alloc_resource_any(dev,SYS_RES_MEMORY, &rid0, RF_ACTIVE);
 			if(acb->sys_res_arcmsr[0] == NULL) {
 				arcmsr_free_resource(acb);
 				printf("arcmsr%d: bus_alloc_resource failure!\n", device_get_unit(dev));
@@ -4251,7 +4258,7 @@ static u_int32_t arcmsr_initialize(device_t dev)
 			u_int32_t rid0 = PCIR_BAR(0);
 			vm_offset_t	mem_base0;
 
-			acb->sys_res_arcmsr[0] = bus_alloc_resource(dev,SYS_RES_MEMORY, &rid0, 0ul, ~0ul, sizeof(struct HBD_MessageUnit), RF_ACTIVE);
+			acb->sys_res_arcmsr[0] = bus_alloc_resource_any(dev,SYS_RES_MEMORY, &rid0, RF_ACTIVE);
 			if(acb->sys_res_arcmsr[0] == NULL) {
 				arcmsr_free_resource(acb);
 				printf("arcmsr%d: bus_alloc_resource failure!\n", device_get_unit(dev));
@@ -4323,7 +4330,7 @@ static int arcmsr_attach(device_t dev)
 	}
 	/* After setting up the adapter, map our interrupt */
 	rid = 0;
-	irqres = bus_alloc_resource(dev, SYS_RES_IRQ, &rid, 0ul, ~0ul, 1, RF_SHAREABLE | RF_ACTIVE);
+	irqres = bus_alloc_resource_any(dev, SYS_RES_IRQ, &rid, RF_SHAREABLE | RF_ACTIVE);
 	if(irqres == NULL || 
 #if __FreeBSD_version >= 700025
 		bus_setup_intr(dev, irqres, INTR_TYPE_CAM|INTR_ENTROPY|INTR_MPSAFE, NULL, arcmsr_intr_handler, acb, &acb->ih)) {

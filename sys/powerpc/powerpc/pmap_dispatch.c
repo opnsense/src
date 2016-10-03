@@ -43,7 +43,9 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/kernel.h>
+#include <sys/conf.h>
 #include <sys/lock.h>
+#include <sys/kerneldump.h>
 #include <sys/ktr.h>
 #include <sys/mutex.h>
 #include <sys/systm.h>
@@ -51,6 +53,8 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm.h>
 #include <vm/vm_page.h>
 
+#include <machine/dump.h>
+#include <machine/md_var.h>
 #include <machine/mmuvar.h>
 #include <machine/smp.h>
 
@@ -70,7 +74,7 @@ struct msgbuf *msgbufp;
 vm_offset_t    msgbuf_phys;
 
 vm_offset_t kernel_vm_end;
-vm_offset_t phys_avail[PHYS_AVAIL_SZ];
+vm_paddr_t phys_avail[PHYS_AVAIL_SZ];
 vm_offset_t virtual_avail;
 vm_offset_t virtual_end;
 
@@ -459,7 +463,7 @@ pmap_mapdev(vm_paddr_t pa, vm_size_t size)
 }
 
 void *
-pmap_mapdev_attr(vm_offset_t pa, vm_size_t size, vm_memattr_t attr)
+pmap_mapdev_attr(vm_paddr_t pa, vm_size_t size, vm_memattr_t attr)
 {
 
 	CTR4(KTR_PMAP, "%s(%#x, %#x, %#x)", __func__, pa, size, attr);
@@ -522,28 +526,49 @@ pmap_sync_icache(pmap_t pm, vm_offset_t va, vm_size_t sz)
 	return (MMU_SYNC_ICACHE(mmu_obj, pm, va, sz));
 }
 
-vm_offset_t
-pmap_dumpsys_map(struct pmap_md *md, vm_size_t ofs, vm_size_t *sz)
+void
+dumpsys_map_chunk(vm_paddr_t pa, size_t sz, void **va)
 {
 
-	CTR4(KTR_PMAP, "%s(%p, %#x, %#x)", __func__, md, ofs, *sz);
-	return (MMU_DUMPSYS_MAP(mmu_obj, md, ofs, sz));
+	CTR4(KTR_PMAP, "%s(%#jx, %#zx, %p)", __func__, (uintmax_t)pa, sz, va);
+	return (MMU_DUMPSYS_MAP(mmu_obj, pa, sz, va));
 }
 
 void
-pmap_dumpsys_unmap(struct pmap_md *md, vm_size_t ofs, vm_offset_t va)
+dumpsys_unmap_chunk(vm_paddr_t pa, size_t sz, void *va)
 {
 
-	CTR4(KTR_PMAP, "%s(%p, %#x, %#x)", __func__, md, ofs, va);
-	return (MMU_DUMPSYS_UNMAP(mmu_obj, md, ofs, va));
+	CTR4(KTR_PMAP, "%s(%#jx, %#zx, %p)", __func__, (uintmax_t)pa, sz, va);
+	return (MMU_DUMPSYS_UNMAP(mmu_obj, pa, sz, va));
 }
 
-struct pmap_md *
-pmap_scan_md(struct pmap_md *prev)
+void
+dumpsys_pa_init(void)
 {
 
-	CTR2(KTR_PMAP, "%s(%p)", __func__, prev);
-	return (MMU_SCAN_MD(mmu_obj, prev));
+	CTR1(KTR_PMAP, "%s()", __func__);
+	return (MMU_SCAN_INIT(mmu_obj));
+}
+
+vm_offset_t
+pmap_quick_enter_page(vm_page_t m)
+{
+	CTR2(KTR_PMAP, "%s(%p)", __func__, m);
+	return (MMU_QUICK_ENTER_PAGE(mmu_obj, m));
+}
+
+void
+pmap_quick_remove_page(vm_offset_t addr)
+{
+	CTR2(KTR_PMAP, "%s(%#x)", __func__, addr);
+	MMU_QUICK_REMOVE_PAGE(mmu_obj, addr);
+}
+
+int
+pmap_change_attr(vm_offset_t addr, vm_size_t size, vm_memattr_t mode)
+{
+	CTR4(KTR_PMAP, "%s(%#x, %#zx, %d)", __func__, addr, size, mode);
+	return (MMU_CHANGE_ATTR(mmu_obj, addr, size, mode));
 }
 
 /*

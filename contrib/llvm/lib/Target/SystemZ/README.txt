@@ -52,12 +52,6 @@ We don't use the TEST DATA CLASS instructions.
 
 --
 
-We could use the generic floating-point forms of LOAD COMPLEMENT,
-LOAD NEGATIVE and LOAD POSITIVE in cases where we don't need the
-condition codes.  For example, we could use LCDFR instead of LCDBR.
-
---
-
 We only use MVC, XC and CLC for constant-length block operations.
 We could extend them to variable-length operations too,
 using EXECUTE RELATIVE LONG.
@@ -163,13 +157,6 @@ Dynamic stack allocations round the size to 8 bytes and then allocate
 that rounded amount.  It would be simpler to subtract the unrounded
 size from the copy of the stack pointer and then align the result.
 See CodeGen/SystemZ/alloca-01.ll for an example.
-
---
-
-Atomic loads and stores use the default compare-and-swap based implementation.
-This is much too conservative in practice, since the architecture guarantees
-that 1-, 2-, 4- and 8-byte loads and stores to aligned addresses are
-inherently atomic.
 
 --
 

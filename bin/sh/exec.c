@@ -332,6 +332,7 @@ find_command(const char *name, struct cmdentry *entry, int act,
 	if (strchr(name, '/') != NULL) {
 		entry->cmdtype = CMDNORMAL;
 		entry->u.index = 0;
+		entry->special = 0;
 		return;
 	}
 
@@ -362,15 +363,13 @@ find_command(const char *name, struct cmdentry *entry, int act,
 
 	e = ENOENT;
 	idx = -1;
-loop:
-	while ((fullname = padvance(&path, name)) != NULL) {
-		stunalloc(fullname);
+	for (;(fullname = padvance(&path, name)) != NULL; stunalloc(fullname)) {
 		idx++;
 		if (pathopt) {
-			if (prefix("func", pathopt)) {
+			if (strncmp(pathopt, "func", 4) == 0) {
 				/* handled below */
 			} else {
-				goto loop;	/* ignore unimplemented options */
+				continue; /* ignore unimplemented options */
 			}
 		}
 		if (fullname[0] != '/')
@@ -378,13 +377,12 @@ loop:
 		if (stat(fullname, &statb) < 0) {
 			if (errno != ENOENT && errno != ENOTDIR)
 				e = errno;
-			goto loop;
+			continue;
 		}
 		e = EACCES;	/* if we fail, this will be the error */
 		if (!S_ISREG(statb.st_mode))
-			goto loop;
+			continue;
 		if (pathopt) {		/* this is a %func directory */
-			stalloc(strlen(fullname) + 1);
 			readcmdfile(fullname);
 			if ((cmdp = cmdlookup(name, 0)) == NULL || cmdp->cmdtype != CMDFUNCTION)
 				error("%s not defined in %s", name, fullname);
@@ -405,11 +403,13 @@ loop:
 #endif
 		TRACE(("searchexec \"%s\" returns \"%s\"\n", name, fullname));
 		INTOFF;
+		stunalloc(fullname);
 		cmdp = cmdlookup(name, 1);
 		if (cmdp->cmdtype == CMDFUNCTION)
 			cmdp = &loc_cmd;
 		cmdp->cmdtype = CMDNORMAL;
 		cmdp->param.index = idx;
+		cmdp->special = 0;
 		INTON;
 		goto success;
 	}
@@ -422,6 +422,7 @@ loop:
 	}
 	entry->cmdtype = CMDUNKNOWN;
 	entry->u.index = 0;
+	entry->special = 0;
 	return;
 
 success:
@@ -441,12 +442,14 @@ success:
 int
 find_builtin(const char *name, int *special)
 {
-	const struct builtincmd *bp;
+	const unsigned char *bp;
+	size_t len;
 
-	for (bp = builtincmd ; bp->name ; bp++) {
-		if (*bp->name == *name && equal(bp->name, name)) {
-			*special = bp->special;
-			return bp->code;
+	len = strlen(name);
+	for (bp = builtincmd ; *bp ; bp += 2 + bp[0]) {
+		if (bp[0] == len && memcmp(bp + 2, name, len) == 0) {
+			*special = (bp[1] & BUILTIN_SPECIAL) != 0;
+			return bp[1] & ~BUILTIN_SPECIAL;
 		}
 	}
 	return -1;
@@ -588,6 +591,7 @@ addcmdentry(const char *name, struct cmdentry *entry)
 	}
 	cmdp->cmdtype = entry->cmdtype;
 	cmdp->param = entry->u;
+	cmdp->special = entry->special;
 	INTON;
 }
 
@@ -604,6 +608,7 @@ defun(const char *name, union node *func)
 	INTOFF;
 	entry.cmdtype = CMDFUNCTION;
 	entry.u.func = copyfunc(func);
+	entry.special = 0;
 	addcmdentry(name, &entry);
 	INTON;
 }

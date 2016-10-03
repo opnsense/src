@@ -72,10 +72,10 @@ class SymbolContextScope
 {
 public:
     virtual
-    ~SymbolContextScope () {}
+    ~SymbolContextScope() = default;
 
     //------------------------------------------------------------------
-    /// Reconstruct the object's symbolc context into \a sc.
+    /// Reconstruct the object's symbol context into \a sc.
     ///
     /// The object should fill in as much of the SymbolContext as it
     /// can so function calls that require a symbol context can be made
@@ -87,7 +87,6 @@ public:
     virtual void
     CalculateSymbolContext (SymbolContext *sc) = 0;
 
-
     virtual lldb::ModuleSP
     CalculateSymbolContextModule ()
     {
@@ -97,33 +96,33 @@ public:
     virtual CompileUnit *
     CalculateSymbolContextCompileUnit ()
     {
-        return NULL;
+        return nullptr;
     }
 
     virtual Function *
     CalculateSymbolContextFunction ()
     {
-        return NULL;
+        return nullptr;
     }
 
     virtual Block *
     CalculateSymbolContextBlock ()
     {
-        return NULL;
+        return nullptr;
     }
 
     virtual Symbol *
     CalculateSymbolContextSymbol ()
     {
-        return NULL;
+        return nullptr;
     }
 
     //------------------------------------------------------------------
-    /// Dump the object's symbolc context to the stream \a s.
+    /// Dump the object's symbol context to the stream \a s.
     ///
     /// The object should dump its symbol context to the stream \a s.
     /// This function is widely used in the DumpDebug and verbose output
-    /// for lldb objets.
+    /// for lldb objects.
     ///
     /// @param[in] s
     ///     The stream to which to dump the object's symbol context.
@@ -134,4 +133,4 @@ public:
 
 } // namespace lldb_private
 
-#endif  // liblldb_SymbolContextScope_h_
+#endif // liblldb_SymbolContextScope_h_

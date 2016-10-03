@@ -8,11 +8,7 @@
 .\" 2. Redistributions in binary form must reproduce the above copyright
 .\"    notice, this list of conditions and the following disclaimer in the
 .\"    documentation and/or other materials provided with the distribution.
-.\" 3. All advertising materials mentioning features or use of this software
-.\"    must display the following acknowledgement:
-.\"	This product includes software developed by the University of
-.\"	California, Berkeley and its contributors.
-.\" 4. Neither the name of the University nor the names of its contributors
+.\" 3. Neither the name of the University nor the names of its contributors
 .\"    may be used to endorse or promote products derived from this software
 .\"    without specific prior written permission.
 .\"
@@ -394,16 +390,16 @@ is passed to
 .Tn SCTP
 else an error will be returned.
 .It Dv SCTP_STATUS
-This option is a read only option that returns
+This option is a read-only option that returns
 various status information about the specified association.
 .It Dv SCTP_GET_PEER_ADDR_INFO
-This read only option returns information about a peer
+This read-only option returns information about a peer
 address.
 .It Dv SCTP_PEER_AUTH_CHUNKS
-This read only option returns a list of the chunks
+This read-only option returns a list of the chunks
 the peer requires to be authenticated.
 .It Dv SCTP_LOCAL_AUTH_CHUNKS
-This read only option returns a list of the locally
+This read-only option returns a list of the locally
 required chunks that must be authenticated.
 .It Dv SCTP_RESET_STREAMS
 This socket option is used to cause a stream sequence

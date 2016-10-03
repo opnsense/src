@@ -15,10 +15,10 @@ SRCS=	Address.cpp \
 	Broadcaster.cpp \
 	Communication.cpp \
 	Connection.cpp \
-	ConnectionFileDescriptor.cpp \
 	ConnectionMachPort.cpp \
 	ConnectionSharedMemory.cpp \
 	ConstString.cpp \
+	CxaDemangle.cpp \
 	DataBufferHeap.cpp \
 	DataBufferMemoryMap.cpp \
 	DataEncoder.cpp \
@@ -29,13 +29,15 @@ SRCS=	Address.cpp \
 	EmulateInstruction.cpp \
 	Error.cpp \
 	Event.cpp \
+	FastDemangle.cpp \
 	FileLineResolver.cpp \
 	FileSpecList.cpp \
+	FormatEntity.cpp \
 	History.cpp \
 	IOHandler.cpp \
-	Language.cpp \
 	Listener.cpp \
 	Log.cpp \
+	Logging.cpp \
 	Mangled.cpp \
 	Module.cpp \
 	ModuleChild.cpp \
@@ -56,6 +58,7 @@ SRCS=	Address.cpp \
 	StreamGDBRemote.cpp \
 	StreamString.cpp \
 	StringList.cpp \
+	StructuredData.cpp \
 	Timer.cpp \
 	UserID.cpp \
 	UserSettingsController.cpp \
@@ -65,6 +68,7 @@ SRCS=	Address.cpp \
 	ValueObjectCast.cpp \
 	ValueObjectChild.cpp \
 	ValueObjectConstResult.cpp \
+	ValueObjectConstResultCast.cpp \
 	ValueObjectConstResultChild.cpp \
 	ValueObjectConstResultImpl.cpp \
 	ValueObjectDynamicValue.cpp \
@@ -75,7 +79,9 @@ SRCS=	Address.cpp \
 	ValueObjectVariable.cpp \
 	VMRange.cpp
 
-TGHDRS=	DiagnosticCommonKinds \
+TGHDRS=	AttrList \
+	Attrs \
+	DiagnosticCommonKinds \
 	DeclNodes \
 	StmtNodes \
 	CommentCommandList

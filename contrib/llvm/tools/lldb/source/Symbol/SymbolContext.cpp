@@ -13,7 +13,7 @@
 #include "lldb/Core/Module.h"
 #include "lldb/Core/ModuleSpec.h"
 #include "lldb/Host/Host.h"
-#include "lldb/Interpreter/Args.h"
+#include "lldb/Host/StringConvert.h"
 #include "lldb/Symbol/Block.h"
 #include "lldb/Symbol/ClangASTContext.h"
 #include "lldb/Symbol/CompileUnit.h"
@@ -21,6 +21,7 @@
 #include "lldb/Symbol/Symbol.h"
 #include "lldb/Symbol/SymbolFile.h"
 #include "lldb/Symbol/SymbolVendor.h"
+#include "lldb/Symbol/Variable.h"
 #include "lldb/Target/Target.h"
 
 using namespace lldb;
@@ -29,11 +30,12 @@ using namespace lldb_private;
 SymbolContext::SymbolContext() :
     target_sp   (),
     module_sp   (),
-    comp_unit   (NULL),
-    function    (NULL),
-    block       (NULL),
+    comp_unit   (nullptr),
+    function    (nullptr),
+    block       (nullptr),
     line_entry  (),
-    symbol      (NULL)
+    symbol      (nullptr),
+    variable    (nullptr)
 {
 }
 
@@ -44,7 +46,8 @@ SymbolContext::SymbolContext(const ModuleSP& m, CompileUnit *cu, Function *f, Bl
     function    (f),
     block       (b),
     line_entry  (),
-    symbol      (s)
+    symbol      (s),
+    variable    (nullptr)
 {
     if (le)
         line_entry = *le;
@@ -57,7 +60,8 @@ SymbolContext::SymbolContext(const TargetSP &t, const ModuleSP& m, CompileUnit *
     function    (f),
     block       (b),
     line_entry  (),
-    symbol      (s)
+    symbol      (s),
+    variable    (nullptr)
 {
     if (le)
         line_entry = *le;
@@ -70,7 +74,8 @@ SymbolContext::SymbolContext(const SymbolContext& rhs) :
     function    (rhs.function),
     block       (rhs.block),
     line_entry  (rhs.line_entry),
-    symbol      (rhs.symbol)
+    symbol      (rhs.symbol),
+    variable    (rhs.variable)
 {
 }
 
@@ -78,11 +83,12 @@ SymbolContext::SymbolContext(const SymbolContext& rhs) :
 SymbolContext::SymbolContext (SymbolContextScope *sc_scope) :
     target_sp   (),
     module_sp   (),
-    comp_unit   (NULL),
-    function    (NULL),
-    block       (NULL),
+    comp_unit   (nullptr),
+    function    (nullptr),
+    block       (nullptr),
     line_entry  (),
-    symbol      (NULL)
+    symbol      (nullptr),
+    variable    (nullptr)
 {
     sc_scope->CalculateSymbolContext (this);
 }
@@ -103,6 +109,7 @@ SymbolContext::operator= (const SymbolContext& rhs)
         block       = rhs.block;
         line_entry  = rhs.line_entry;
         symbol      = rhs.symbol;
+        variable    = rhs.variable;
     }
     return *this;
 }
@@ -113,22 +120,24 @@ SymbolContext::Clear(bool clear_target)
     if (clear_target)
         target_sp.reset();
     module_sp.reset();
-    comp_unit   = NULL;
-    function    = NULL;
-    block       = NULL;
+    comp_unit   = nullptr;
+    function    = nullptr;
+    block       = nullptr;
     line_entry.Clear();
-    symbol      = NULL;
+    symbol      = nullptr;
+    variable    = nullptr;
 }
 
 bool
-SymbolContext::DumpStopContext
-(
+SymbolContext::DumpStopContext (
     Stream *s,
     ExecutionContextScope *exe_scope,
     const Address &addr,
     bool show_fullpaths,
     bool show_module,
-    bool show_inlined_frames
+    bool show_inlined_frames,
+    bool show_function_arguments,
+    bool show_function_name
 ) const
 {
     bool dumped_something = false;
@@ -142,20 +151,36 @@ SymbolContext::DumpStopContext
         dumped_something = true;
     }
 
-    if (function != NULL)
+    if (function != nullptr)
     {
         SymbolContext inline_parent_sc;
         Address inline_parent_addr;
-        if (function->GetMangled().GetName())
+        if (show_function_name == false)
         {
+            s->Printf("<");
             dumped_something = true;
-            function->GetMangled().GetName().Dump(s);
+        }
+        else
+        {
+            ConstString name;
+            if (show_function_arguments == false)
+                name = function->GetNameNoArguments();
+            if (!name)
+                name = function->GetName();
+            if (name)
+                name.Dump(s);
         }
         
         if (addr.IsValid())
         {
             const addr_t function_offset = addr.GetOffset() - function->GetAddressRange().GetBaseAddress().GetOffset();
-            if (function_offset)
+            if (show_function_name == false)
+            {
+                // Print +offset even if offset is 0
+                dumped_something = true;
+                s->Printf("+%" PRIu64 ">", function_offset);
+            }
+            else if (function_offset)
             {
                 dumped_something = true;
                 s->Printf(" + %" PRIu64, function_offset);
@@ -167,7 +192,7 @@ SymbolContext::DumpStopContext
             dumped_something = true;
             Block *inlined_block = block->GetContainingInlinedBlock();
             const InlineFunctionInfo* inlined_block_info = inlined_block->GetInlinedFunctionInfo();
-            s->Printf (" [inlined] %s", inlined_block_info->GetName().GetCString());
+            s->Printf (" [inlined] %s", inlined_block_info->GetName(function->GetLanguage()).GetCString());
             
             lldb_private::AddressRange block_range;
             if (inlined_block->GetRangeContainingAddress(addr, block_range))
@@ -188,7 +213,8 @@ SymbolContext::DumpStopContext
             {
                 s->EOL();
                 s->Indent();
-                return inline_parent_sc.DumpStopContext (s, exe_scope, inline_parent_addr, show_fullpaths, show_module, show_inlined_frames);
+                const bool show_function_name = true;
+                return inline_parent_sc.DumpStopContext (s, exe_scope, inline_parent_addr, show_fullpaths, show_module, show_inlined_frames, show_function_arguments, show_function_name);
             }
         }
         else
@@ -202,20 +228,31 @@ SymbolContext::DumpStopContext
             }
         }
     }
-    else if (symbol != NULL)
+    else if (symbol != nullptr)
     {
-        if (symbol->GetMangled().GetName())
+        if (show_function_name == false)
+        {
+            s->Printf("<");
+            dumped_something = true;
+        }
+        else if (symbol->GetName())
         {
             dumped_something = true;
             if (symbol->GetType() == eSymbolTypeTrampoline)
                 s->PutCString("symbol stub for: ");
-            symbol->GetMangled().GetName().Dump(s);
+            symbol->GetName().Dump(s);
         }
 
         if (addr.IsValid() && symbol->ValueIsAddress())
         {
-            const addr_t symbol_offset = addr.GetOffset() - symbol->GetAddress().GetOffset();
-            if (symbol_offset)
+            const addr_t symbol_offset = addr.GetOffset() - symbol->GetAddressRef().GetOffset();
+            if (show_function_name == false)
+            {
+                // Print +offset even if offset is 0
+                dumped_something = true;
+                s->Printf("+%" PRIu64 ">", symbol_offset);
+            }
+            else if (symbol_offset)
             {
                 dumped_something = true;
                 s->Printf(" + %" PRIu64, symbol_offset);
@@ -243,14 +280,14 @@ SymbolContext::GetDescription(Stream *s, lldb::DescriptionLevel level, Target *t
         s->EOL();
     }
 
-    if (comp_unit != NULL)
+    if (comp_unit != nullptr)
     {
         s->Indent("CompileUnit: ");
         comp_unit->GetDescription (s, level);
         s->EOL();
     }
 
-    if (function != NULL)
+    if (function != nullptr)
     {
         s->Indent("   Function: ");
         function->GetDescription (s, level, target);
@@ -265,7 +302,7 @@ SymbolContext::GetDescription(Stream *s, lldb::DescriptionLevel level, Target *t
         }
     }
 
-    if (block != NULL)
+    if (block != nullptr)
     {
         std::vector<Block *> blocks;
         blocks.push_back (block);
@@ -297,11 +334,42 @@ SymbolContext::GetDescription(Stream *s, lldb::DescriptionLevel level, Target *t
         s->EOL();
     }
 
-    if (symbol != NULL)
+    if (symbol != nullptr)
     {
         s->Indent("     Symbol: ");
         symbol->GetDescription(s, level, target);
         s->EOL();
+    }
+
+    if (variable != nullptr)
+    {
+        s->Indent("   Variable: ");
+
+        s->Printf("id = {0x%8.8" PRIx64 "}, ", variable->GetID());
+
+        switch (variable->GetScope())
+        {
+            case eValueTypeVariableGlobal:
+                s->PutCString("kind = global, ");
+                break;
+
+            case eValueTypeVariableStatic:
+                s->PutCString("kind = static, ");
+                break;
+
+            case eValueTypeVariableArgument:
+                s->PutCString("kind = argument, ");
+                break;
+
+            case eValueTypeVariableLocal:
+                s->PutCString("kind = local, ");
+                break;
+
+            default:
+                break;
+        }
+
+        s->Printf ("name = \"%s\"\n", variable->GetName().GetCString());
     }
 }
 
@@ -316,31 +384,32 @@ SymbolContext::GetResolvedMask () const
     if (block)                  resolved_mask |= eSymbolContextBlock;
     if (line_entry.IsValid())   resolved_mask |= eSymbolContextLineEntry;
     if (symbol)                 resolved_mask |= eSymbolContextSymbol;
+    if (variable)               resolved_mask |= eSymbolContextVariable;
     return resolved_mask;
 }
 
 void
 SymbolContext::Dump(Stream *s, Target *target) const
 {
-    *s << (void *)this << ": ";
+    *s << this << ": ";
     s->Indent();
     s->PutCString("SymbolContext");
     s->IndentMore();
     s->EOL();
     s->IndentMore();
     s->Indent();
-    *s << "Module       = " << (void *)module_sp.get() << ' ';
+    *s << "Module       = " << module_sp.get() << ' ';
     if (module_sp)
         module_sp->GetFileSpec().Dump(s);
     s->EOL();
     s->Indent();
-    *s << "CompileUnit  = " << (void *)comp_unit;
-    if (comp_unit != NULL)
+    *s << "CompileUnit  = " << comp_unit;
+    if (comp_unit != nullptr)
         *s << " {0x" << comp_unit->GetID() << "} " << *(static_cast<FileSpec*> (comp_unit));
     s->EOL();
     s->Indent();
-    *s << "Function     = " << (void *)function;
-    if (function != NULL)
+    *s << "Function     = " << function;
+    if (function != nullptr)
     {
         *s << " {0x" << function->GetID() << "} " << function->GetType()->GetName() << ", address-range = ";
         function->GetAddressRange().Dump(s, target, Address::DumpStyleLoadAddress, Address::DumpStyleModuleWithFileAddress);
@@ -355,8 +424,8 @@ SymbolContext::Dump(Stream *s, Target *target) const
     }
     s->EOL();
     s->Indent();
-    *s << "Block        = " << (void *)block;
-    if (block != NULL)
+    *s << "Block        = " << block;
+    if (block != nullptr)
         *s << " {0x" << block->GetID() << '}';
     // Dump the block and pass it a negative depth to we print all the parent blocks
     //if (block != NULL)
@@ -367,10 +436,16 @@ SymbolContext::Dump(Stream *s, Target *target) const
     line_entry.Dump (s, target, true, Address::DumpStyleLoadAddress, Address::DumpStyleModuleWithFileAddress, true);
     s->EOL();
     s->Indent();
-    *s << "Symbol       = " << (void *)symbol;
-    if (symbol != NULL && symbol->GetMangled())
-        *s << ' ' << symbol->GetMangled().GetName().AsCString();
+    *s << "Symbol       = " << symbol;
+    if (symbol != nullptr && symbol->GetMangled())
+        *s << ' ' << symbol->GetName().AsCString();
     s->EOL();
+    *s << "Variable     = " << variable;
+    if (variable != nullptr)
+    {
+        *s << " {0x" << variable->GetID() << "} " << variable->GetType()->GetName();
+        s->EOL();
+    }
     s->IndentLess();
     s->IndentLess();
 }
@@ -383,7 +458,8 @@ lldb_private::operator== (const SymbolContext& lhs, const SymbolContext& rhs)
             && lhs.module_sp.get() == rhs.module_sp.get()
             && lhs.comp_unit == rhs.comp_unit
             && lhs.target_sp.get() == rhs.target_sp.get() 
-            && LineEntry::Compare(lhs.line_entry, rhs.line_entry) == 0;
+            && LineEntry::Compare(lhs.line_entry, rhs.line_entry) == 0
+            && lhs.variable == rhs.variable;
 }
 
 bool
@@ -394,7 +470,8 @@ lldb_private::operator!= (const SymbolContext& lhs, const SymbolContext& rhs)
             || lhs.module_sp.get() != rhs.module_sp.get()
             || lhs.comp_unit != rhs.comp_unit
             || lhs.target_sp.get() != rhs.target_sp.get() 
-            || LineEntry::Compare(lhs.line_entry, rhs.line_entry) != 0;
+            || LineEntry::Compare(lhs.line_entry, rhs.line_entry) != 0
+            || lhs.variable != rhs.variable;
 }
 
 bool
@@ -409,7 +486,7 @@ SymbolContext::GetAddressRange (uint32_t scope,
         return true;
     }
     
-    if ((scope & eSymbolContextBlock) && (block != NULL))
+    if ((scope & eSymbolContextBlock) && (block != nullptr))
     {
         if (use_inline_block_range)
         {
@@ -423,7 +500,7 @@ SymbolContext::GetAddressRange (uint32_t scope,
         }
     }
 
-    if ((scope & eSymbolContextFunction) && (function != NULL))
+    if ((scope & eSymbolContextFunction) && (function != nullptr))
     {
         if (range_idx == 0)
         {
@@ -432,13 +509,13 @@ SymbolContext::GetAddressRange (uint32_t scope,
         }            
     } 
     
-    if ((scope & eSymbolContextSymbol) && (symbol != NULL))
+    if ((scope & eSymbolContextSymbol) && (symbol != nullptr))
     {
         if (range_idx == 0)
         {
             if (symbol->ValueIsAddress())
             {
-                range.GetBaseAddress() = symbol->GetAddress();
+                range.GetBaseAddress() = symbol->GetAddressRef();
                 range.SetByteSize (symbol->GetByteSize());
                 return true;
             }
@@ -446,6 +523,38 @@ SymbolContext::GetAddressRange (uint32_t scope,
     }
     range.Clear();
     return false;
+}
+
+LanguageType
+SymbolContext::GetLanguage () const
+{
+    LanguageType lang;
+    if (function &&
+        (lang = function->GetLanguage()) != eLanguageTypeUnknown)
+    {
+        return lang;
+    }
+    else if (variable &&
+             (lang = variable->GetLanguage()) != eLanguageTypeUnknown)
+    {
+        return lang;
+    }
+    else if (symbol &&
+             (lang = symbol->GetLanguage()) != eLanguageTypeUnknown)
+    {
+        return lang;
+    }
+    else if (comp_unit &&
+             (lang = comp_unit->GetLanguage()) != eLanguageTypeUnknown)
+    {
+        return lang;
+    }
+    else if (symbol)
+    {
+        // If all else fails, try to guess the language from the name.
+        return symbol->GetMangled().GuessLanguage();
+    }
+    return eLanguageTypeUnknown;
 }
 
 bool
@@ -562,7 +671,7 @@ SymbolContext::GetFunctionBlock ()
         // the function itself.
         return &function->GetBlock(true);
     }
-    return NULL;
+    return nullptr;
 }
 
 bool
@@ -572,23 +681,124 @@ SymbolContext::GetFunctionMethodInfo (lldb::LanguageType &language,
 
 
 {
-    Block *function_block = GetFunctionBlock ();
+    Block *function_block = GetFunctionBlock();
     if (function_block)
     {
-        clang::DeclContext *decl_context = function_block->GetClangDeclContext();
-        
-        if (decl_context)
+        CompilerDeclContext decl_ctx = function_block->GetDeclContext();
+        if (decl_ctx)
+            return decl_ctx.IsClassMethod(&language, &is_instance_method, &language_object_name);
+    }
+    return false;
+}
+
+void
+SymbolContext::SortTypeList(TypeMap &type_map, TypeList &type_list) const
+{
+    Block * curr_block = block;
+    bool isInlinedblock = false;
+    if (curr_block != nullptr && curr_block->GetContainingInlinedBlock() != nullptr)
+        isInlinedblock = true;
+
+    //----------------------------------------------------------------------
+    // Find all types that match the current block if we have one and put
+    // them first in the list. Keep iterating up through all blocks.
+    //----------------------------------------------------------------------
+    while (curr_block != nullptr && !isInlinedblock)
+    {
+        type_map.ForEach([curr_block, &type_list](const lldb::TypeSP& type_sp) -> bool {
+            SymbolContextScope *scs = type_sp->GetSymbolContextScope();
+            if (scs && curr_block == scs->CalculateSymbolContextBlock())
+                type_list.Insert(type_sp);
+            return true; // Keep iterating
+        });
+
+        // Remove any entries that are now in "type_list" from "type_map"
+        // since we can't remove from type_map while iterating
+        type_list.ForEach([&type_map](const lldb::TypeSP& type_sp) -> bool {
+            type_map.Remove(type_sp);
+            return true; // Keep iterating
+        });
+        curr_block = curr_block->GetParent();
+    }
+    //----------------------------------------------------------------------
+    // Find all types that match the current function, if we have onem, and
+    // put them next in the list.
+    //----------------------------------------------------------------------
+    if (function != nullptr && !type_map.Empty())
+    {
+        const size_t old_type_list_size = type_list.GetSize();
+        type_map.ForEach([this, &type_list](const lldb::TypeSP& type_sp) -> bool {
+            SymbolContextScope *scs = type_sp->GetSymbolContextScope();
+            if (scs && function == scs->CalculateSymbolContextFunction())
+                type_list.Insert(type_sp);
+            return true; // Keep iterating
+        });
+
+        // Remove any entries that are now in "type_list" from "type_map"
+        // since we can't remove from type_map while iterating
+        const size_t new_type_list_size = type_list.GetSize();
+        if (new_type_list_size > old_type_list_size)
         {
-            return ClangASTContext::GetClassMethodInfoForDeclContext (decl_context,
-                                                                      language,
-                                                                      is_instance_method,
-                                                                      language_object_name);
+            for (size_t i=old_type_list_size; i<new_type_list_size; ++i)
+                type_map.Remove(type_list.GetTypeAtIndex(i));
         }
     }
-    language = eLanguageTypeUnknown;
-    is_instance_method = false;
-    language_object_name.Clear();
-    return false;
+    //----------------------------------------------------------------------
+    // Find all types that match the current compile unit, if we have one,
+    // and put them next in the list.
+    //----------------------------------------------------------------------
+    if (comp_unit != nullptr && !type_map.Empty())
+    {
+        const size_t old_type_list_size = type_list.GetSize();
+
+        type_map.ForEach([this, &type_list](const lldb::TypeSP& type_sp) -> bool {
+            SymbolContextScope *scs = type_sp->GetSymbolContextScope();
+            if (scs && comp_unit == scs->CalculateSymbolContextCompileUnit())
+                type_list.Insert(type_sp);
+            return true; // Keep iterating
+        });
+
+        // Remove any entries that are now in "type_list" from "type_map"
+        // since we can't remove from type_map while iterating
+        const size_t new_type_list_size = type_list.GetSize();
+        if (new_type_list_size > old_type_list_size)
+        {
+            for (size_t i=old_type_list_size; i<new_type_list_size; ++i)
+                type_map.Remove(type_list.GetTypeAtIndex(i));
+        }
+    }
+    //----------------------------------------------------------------------
+    // Find all types that match the current module, if we have one, and put
+    // them next in the list.
+    //----------------------------------------------------------------------
+    if (module_sp && !type_map.Empty())
+    {
+        const size_t old_type_list_size = type_list.GetSize();
+        type_map.ForEach([this, &type_list](const lldb::TypeSP& type_sp) -> bool {
+            SymbolContextScope *scs = type_sp->GetSymbolContextScope();
+            if (scs &&  module_sp == scs->CalculateSymbolContextModule())
+                type_list.Insert(type_sp);
+            return true; // Keep iterating
+        });
+        // Remove any entries that are now in "type_list" from "type_map"
+        // since we can't remove from type_map while iterating
+        const size_t new_type_list_size = type_list.GetSize();
+        if (new_type_list_size > old_type_list_size)
+        {
+            for (size_t i=old_type_list_size; i<new_type_list_size; ++i)
+                type_map.Remove(type_list.GetTypeAtIndex(i));
+        }
+    }
+    //----------------------------------------------------------------------
+    // Any types that are left get copied into the list an any order.
+    //----------------------------------------------------------------------
+    if (!type_map.Empty())
+    {
+        type_map.ForEach([&type_list](const lldb::TypeSP& type_sp) -> bool {
+            type_list.Insert(type_sp);
+            return true; // Keep iterating
+        });
+    }
 }
 
 ConstString
@@ -604,14 +814,14 @@ SymbolContext::GetFunctionName (Mangled::NamePreference preference) const
             {
                 const InlineFunctionInfo *inline_info = inlined_block->GetInlinedFunctionInfo();
                 if (inline_info)
-                    return inline_info->GetName();
+                    return inline_info->GetName(function->GetLanguage());
             }
         }
-        return function->GetMangled().GetName(preference);
+        return function->GetMangled().GetName(function->GetLanguage(), preference);
     }
     else if (symbol && symbol->ValueIsAddress())
     {
-        return symbol->GetMangled().GetName(preference);
+        return symbol->GetMangled().GetName(symbol->GetLanguage(), preference);
     }
     else
     {
@@ -724,12 +934,12 @@ SymbolContextSpecifier::AddSpecification (const char *spec_string, Specification
         m_type |= eFileSpecified;
         break;
     case eLineStartSpecified:
-        m_start_line = Args::StringToSInt32(spec_string, 0, 0, &return_value);
+        m_start_line = StringConvert::ToSInt32(spec_string, 0, 0, &return_value);
         if (return_value)
             m_type |= eLineStartSpecified;
         break;
     case eLineEndSpecified:
-        m_end_line = Args::StringToSInt32(spec_string, 0, 0, &return_value);
+        m_end_line = StringConvert::ToSInt32(spec_string, 0, 0, &return_value);
         if (return_value)
             m_type |= eLineEndSpecified;
         break;
@@ -777,7 +987,7 @@ SymbolContextSpecifier::SymbolContextMatches(SymbolContext &sc)
     {
         if (sc.module_sp)
         {
-            if (m_module_sp.get() != NULL)
+            if (m_module_sp.get() != nullptr)
             { 
                 if (m_module_sp.get() != sc.module_sp.get())
                     return false;
@@ -795,15 +1005,15 @@ SymbolContextSpecifier::SymbolContextMatches(SymbolContext &sc)
         if (m_file_spec_ap.get())
         {
             // If we don't have a block or a comp_unit, then we aren't going to match a source file.
-            if (sc.block == NULL && sc.comp_unit == NULL)
+            if (sc.block == nullptr && sc.comp_unit == nullptr)
                 return false;
                 
             // Check if the block is present, and if so is it inlined:
             bool was_inlined = false;
-            if (sc.block != NULL)
+            if (sc.block != nullptr)
             {
                 const InlineFunctionInfo *inline_info = sc.block->GetInlinedFunctionInfo();
-                if (inline_info != NULL)
+                if (inline_info != nullptr)
                 {
                     was_inlined = true;
                     if (!FileSpec::Equal (inline_info->GetDeclaration().GetFile(), *(m_file_spec_ap.get()), false))
@@ -812,7 +1022,7 @@ SymbolContextSpecifier::SymbolContextMatches(SymbolContext &sc)
             }
             
             // Next check the comp unit, but only if the SymbolContext was not inlined.
-            if (!was_inlined && sc.comp_unit != NULL)
+            if (!was_inlined && sc.comp_unit != nullptr)
             {
                 if (!FileSpec::Equal (*(sc.comp_unit), *(m_file_spec_ap.get()), false))
                     return false;
@@ -832,28 +1042,28 @@ SymbolContextSpecifier::SymbolContextMatches(SymbolContext &sc)
         bool was_inlined = false;
         ConstString func_name(m_function_spec.c_str());
         
-        if (sc.block != NULL)
+        if (sc.block != nullptr)
         {
             const InlineFunctionInfo *inline_info = sc.block->GetInlinedFunctionInfo();
-            if (inline_info != NULL)
+            if (inline_info != nullptr)
             {
                 was_inlined = true;
                 const Mangled &name = inline_info->GetMangled();
-                if (!name.NameMatches (func_name))
+                if (!name.NameMatches (func_name, sc.function->GetLanguage()))
                     return false;
             }
         }
         //  If it wasn't inlined, check the name in the function or symbol:
         if (!was_inlined)
         {
-            if (sc.function != NULL)
+            if (sc.function != nullptr)
             {
-                if (!sc.function->GetMangled().NameMatches(func_name))
+                if (!sc.function->GetMangled().NameMatches(func_name, sc.function->GetLanguage()))
                     return false;
             }
-            else if (sc.symbol != NULL)
+            else if (sc.symbol != nullptr)
             {
-                if (!sc.symbol->GetMangled().NameMatches(func_name))
+                if (!sc.symbol->GetMangled().NameMatches(func_name, sc.symbol->GetLanguage()))
                     return false;
             }
         }
@@ -873,7 +1083,7 @@ SymbolContextSpecifier::AddressMatches(lldb::addr_t addr)
     }
     else
     {
-        Address match_address (addr, NULL);
+        Address match_address (addr, nullptr);
         SymbolContext sc;
         m_target_sp->GetImages().ResolveSymbolContextForAddress(match_address, eSymbolContextEverything, sc);
         return SymbolContextMatches(sc);
@@ -903,22 +1113,22 @@ SymbolContextSpecifier::GetDescription (Stream *s, lldb::DescriptionLevel level)
             s->Printf ("Module: %s\n", m_module_spec.c_str());
     }
     
-    if (m_type == eFileSpecified  && m_file_spec_ap.get() != NULL)
+    if (m_type == eFileSpecified  && m_file_spec_ap.get() != nullptr)
     {
         m_file_spec_ap->GetPath (path_str, PATH_MAX);
         s->Indent();
         s->Printf ("File: %s", path_str);
         if (m_type == eLineStartSpecified)
         {
-            s->Printf (" from line %zu", m_start_line);
+            s->Printf (" from line %" PRIu64 "", (uint64_t)m_start_line);
             if (m_type == eLineEndSpecified)
-                s->Printf ("to line %zu", m_end_line);
+                s->Printf ("to line %" PRIu64 "", (uint64_t)m_end_line);
             else
                 s->Printf ("to end");
         }
         else if (m_type == eLineEndSpecified)
         {
-            s->Printf (" from start to line %zu", m_end_line);
+            s->Printf (" from start to line %" PRIu64 "", (uint64_t)m_end_line);
         }
         s->Printf (".\n");
     }
@@ -926,16 +1136,16 @@ SymbolContextSpecifier::GetDescription (Stream *s, lldb::DescriptionLevel level)
     if (m_type == eLineStartSpecified)
     {
         s->Indent();
-        s->Printf ("From line %zu", m_start_line);
+        s->Printf ("From line %" PRIu64 "", (uint64_t)m_start_line);
         if (m_type == eLineEndSpecified)
-            s->Printf ("to line %zu", m_end_line);
+            s->Printf ("to line %" PRIu64 "", (uint64_t)m_end_line);
         else
             s->Printf ("to end");
         s->Printf (".\n");
     }
     else if (m_type == eLineEndSpecified)
     {
-        s->Printf ("From start to line %zu.\n", m_end_line);
+        s->Printf ("From start to line %" PRIu64 ".\n", (uint64_t)m_end_line);
     }
     
     if (m_type == eFunctionSpecified)
@@ -950,7 +1160,7 @@ SymbolContextSpecifier::GetDescription (Stream *s, lldb::DescriptionLevel level)
         s->Printf ("Class name: %s.\n", m_class_name.c_str());
     }
     
-    if (m_type == eAddressRangeSpecified && m_address_range_ap.get() != NULL)
+    if (m_type == eAddressRangeSpecified && m_address_range_ap.get() != nullptr)
     {
         s->Indent();
         s->PutCString ("Address range: ");
@@ -1013,10 +1223,10 @@ SymbolContextList::AppendIfUnique (const SymbolContext& sc, bool merge_symbol_in
             return false;
     }
     if (merge_symbol_into_function 
-        && sc.symbol    != NULL
-        && sc.comp_unit == NULL
-        && sc.function  == NULL
-        && sc.block     == NULL
+        && sc.symbol    != nullptr
+        && sc.comp_unit == nullptr
+        && sc.function  == nullptr
+        && sc.block     == nullptr
         && sc.line_entry.IsValid() == false)
     {
         if (sc.symbol->ValueIsAddress())
@@ -1029,12 +1239,12 @@ SymbolContextList::AppendIfUnique (const SymbolContext& sc, bool merge_symbol_in
 
                 if (pos->function)
                 {
-                    if (pos->function->GetAddressRange().GetBaseAddress() == sc.symbol->GetAddress())
+                    if (pos->function->GetAddressRange().GetBaseAddress() == sc.symbol->GetAddressRef())
                     {
                         // Do we already have a function with this symbol?
                         if (pos->symbol == sc.symbol)
                             return false;
-                        if (pos->symbol == NULL)
+                        if (pos->symbol == nullptr)
                         {
                             pos->symbol = sc.symbol;
                             return false;
@@ -1053,10 +1263,10 @@ SymbolContextList::MergeSymbolContextIntoFunctionContext (const SymbolContext& s
                                                           uint32_t start_idx,
                                                           uint32_t stop_idx)
 {
-    if (symbol_sc.symbol    != NULL
-        && symbol_sc.comp_unit == NULL
-        && symbol_sc.function  == NULL
-        && symbol_sc.block     == NULL
+    if (symbol_sc.symbol    != nullptr
+        && symbol_sc.comp_unit == nullptr
+        && symbol_sc.function  == nullptr
+        && symbol_sc.block     == nullptr
         && symbol_sc.line_entry.IsValid() == false)
     {
         if (symbol_sc.symbol->ValueIsAddress())
@@ -1071,13 +1281,13 @@ SymbolContextList::MergeSymbolContextIntoFunctionContext (const SymbolContext& s
                 
                 if (function_sc.function)
                 {
-                    if (function_sc.function->GetAddressRange().GetBaseAddress() == symbol_sc.symbol->GetAddress())
+                    if (function_sc.function->GetAddressRange().GetBaseAddress() == symbol_sc.symbol->GetAddressRef())
                     {
                         // Do we already have a function with this symbol?
                         if (function_sc.symbol == symbol_sc.symbol)
                             return true; // Already have a symbol context with this symbol, return true
 
-                        if (function_sc.symbol == NULL)
+                        if (function_sc.symbol == nullptr)
                         {
                             // We successfully merged this symbol into an existing symbol context
                             m_symbol_contexts[i].symbol = symbol_sc.symbol;
@@ -1101,7 +1311,7 @@ void
 SymbolContextList::Dump(Stream *s, Target *target) const
 {
 
-    *s << (void *)this << ": ";
+    *s << this << ": ";
     s->Indent();
     s->PutCString("SymbolContextList");
     s->EOL();

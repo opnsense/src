@@ -31,6 +31,7 @@
 #include <net/if_arp.h>
 #include <sys/types.h>
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_vlan_var.h>
 
 int       copyright_print       = 0;
@@ -1456,7 +1457,7 @@ xge_ioctl_stats(xge_lldev_t *lldev, struct ifreq *ifreqp)
 
 	    case XGE_READ_VERSION:
 	        info = xge_os_malloc(NULL, XGE_BUFFER_SIZE);
-	        if(version != NULL) {
+	        if(info != NULL) {
 	            strcpy(info, XGE_DRIVER_VERSION);
 	            if(copyout(info, ifreqp->ifr_data, XGE_BUFFER_SIZE) == 0)
 	                retValue = 0;
@@ -1743,7 +1744,7 @@ xge_device_init(xge_lldev_t *lldev, xge_hal_channel_reopen_e option)
 	    return;
 
 	/* Initializing timer */
-	callout_init(&lldev->timer, CALLOUT_MPSAFE);
+	callout_init(&lldev->timer, 1);
 
 	xge_trace(XGE_TRACE, "Set MTU size");
 	status = xge_hal_device_mtu_set(hldev, ifnetp->if_mtu);

@@ -12,20 +12,56 @@
 
 // C Includes
 // C++ Includes
+#include <functional>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
 // Other libraries and framework includes
 // Project includes
+#include "lldb/lldb-private-forward.h"
 #include "lldb/lldb-public.h"
 #include "lldb/Core/ArchSpec.h"
 #include "lldb/Core/ConstString.h"
 #include "lldb/Core/PluginInterface.h"
+#include "lldb/Core/UserSettingsController.h"
 #include "lldb/Interpreter/Options.h"
+#include "lldb/Host/FileSpec.h"
 #include "lldb/Host/Mutex.h"
 
+// TODO pull NativeDelegate class out of NativeProcessProtocol so we
+// can just forward ref the NativeDelegate rather than include it here.
+#include "lldb/Host/common/NativeProcessProtocol.h"
+
 namespace lldb_private {
+
+class ModuleCache;
+    enum MmapFlags {
+      eMmapFlagsPrivate = 1,
+      eMmapFlagsAnon = 2
+    };
+
+    class PlatformProperties : public Properties
+    {
+    public:
+        PlatformProperties();
+
+        static ConstString
+        GetSettingName ();
+
+        bool
+        GetUseModuleCache () const;
+        bool
+        SetUseModuleCache (bool use_module_cache);
+
+        FileSpec
+        GetModuleCacheDirectory () const;
+        bool
+        SetModuleCacheDirectory (const FileSpec& dir_spec);
+    };
+
+    typedef std::shared_ptr<PlatformProperties> PlatformPropertiesSP;
 
     //----------------------------------------------------------------------
     /// @class Platform Platform.h "lldb/Target/Platform.h"
@@ -44,43 +80,6 @@ namespace lldb_private {
         public PluginInterface
     {
     public:
-
-        //------------------------------------------------------------------
-        /// Get the native host platform plug-in. 
-        ///
-        /// There should only be one of these for each host that LLDB runs
-        /// upon that should be statically compiled in and registered using
-        /// preprocessor macros or other similar build mechanisms in a 
-        /// PlatformSubclass::Initialize() function.
-        ///
-        /// This platform will be used as the default platform when launching
-        /// or attaching to processes unless another platform is specified.
-        //------------------------------------------------------------------
-        static lldb::PlatformSP
-        GetDefaultPlatform ();
-
-        static lldb::PlatformSP
-        GetPlatformForArchitecture (const ArchSpec &arch,
-                                    ArchSpec *platform_arch_ptr);
-
-        static const char *
-        GetHostPlatformName ();
-
-        static void
-        SetDefaultPlatform (const lldb::PlatformSP &platform_sp);
-
-        static lldb::PlatformSP
-        Create (const char *platform_name, Error &error);
-
-        static lldb::PlatformSP
-        Create (const ArchSpec &arch, ArchSpec *platform_arch_ptr, Error &error);
-        
-        static uint32_t
-        GetNumConnectedRemotePlatforms ();
-        
-        static lldb::PlatformSP
-        GetConnectedRemotePlatformAtIndex (uint32_t idx);
-
         //------------------------------------------------------------------
         /// Default Constructor
         //------------------------------------------------------------------
@@ -92,8 +91,56 @@ namespace lldb_private {
         /// The destructor is virtual since this class is designed to be
         /// inherited from by the plug-in instance.
         //------------------------------------------------------------------
-        virtual
-        ~Platform();
+        ~Platform() override;
+
+        static void
+        Initialize ();
+
+        static void
+        Terminate ();
+
+        static const PlatformPropertiesSP &
+        GetGlobalPlatformProperties ();
+
+        //------------------------------------------------------------------
+        /// Get the native host platform plug-in.
+        ///
+        /// There should only be one of these for each host that LLDB runs
+        /// upon that should be statically compiled in and registered using
+        /// preprocessor macros or other similar build mechanisms in a 
+        /// PlatformSubclass::Initialize() function.
+        ///
+        /// This platform will be used as the default platform when launching
+        /// or attaching to processes unless another platform is specified.
+        //------------------------------------------------------------------
+        static lldb::PlatformSP
+        GetHostPlatform ();
+
+        static lldb::PlatformSP
+        GetPlatformForArchitecture (const ArchSpec &arch,
+                                    ArchSpec *platform_arch_ptr);
+
+        static const char *
+        GetHostPlatformName ();
+
+        static void
+        SetHostPlatform (const lldb::PlatformSP &platform_sp);
+
+        // Find an existing platform plug-in by name
+        static lldb::PlatformSP
+        Find (const ConstString &name);
+
+        static lldb::PlatformSP
+        Create (const ConstString &name, Error &error);
+
+        static lldb::PlatformSP
+        Create (const ArchSpec &arch, ArchSpec *platform_arch_ptr, Error &error);
+        
+        static uint32_t
+        GetNumConnectedRemotePlatforms ();
+        
+        static lldb::PlatformSP
+        GetConnectedRemotePlatformAtIndex (uint32_t idx);
 
         //------------------------------------------------------------------
         /// Find a platform plugin for a given process.
@@ -107,10 +154,10 @@ namespace lldb_private {
         ///
         /// @param[in] plugin_name
         ///     An optional name of a specific platform plug-in that
-        ///     should be used. If NULL, pick the best plug-in.
+        ///     should be used. If nullptr, pick the best plug-in.
         //------------------------------------------------------------------
-        static Platform*
-        FindPlugin (Process *process, const ConstString &plugin_name);
+//        static lldb::PlatformSP
+//        FindPlugin (Process *process, const ConstString &plugin_name);
 
         //------------------------------------------------------------------
         /// Set the target's executable based off of the existing 
@@ -132,12 +179,10 @@ namespace lldb_private {
         ///     a suitable executable, \b false otherwise.
         //------------------------------------------------------------------
         virtual Error
-        ResolveExecutable (const FileSpec &exe_file,
-                           const ArchSpec &arch,
+        ResolveExecutable (const ModuleSpec &module_spec,
                            lldb::ModuleSP &module_sp,
                            const FileSpecList *module_search_paths_ptr);
 
-        
         //------------------------------------------------------------------
         /// Find a symbol file given a symbol file module specification.
         ///
@@ -174,13 +219,13 @@ namespace lldb_private {
         ///     m_arch - The architecture we are looking for when resolving
         ///              the symbol file.
         ///     m_uuid - The UUID of the executable and symbol file. This
-        ///              can often be used to match up an exectuable with
+        ///              can often be used to match up an executable with
         ///              a symbol file, or resolve an symbol file in a
         ///              symbol file bundle.
         ///
         /// @param[out] sym_file
         ///     The resolved symbol file spec if the returned error
-        ///     indicates succes.
+        ///     indicates success.
         ///
         /// @return
         ///     Returns an error that describes success or failure.
@@ -199,10 +244,21 @@ namespace lldb_private {
         ResolveRemotePath (const FileSpec &platform_path,
                            FileSpec &resolved_platform_path);
 
-        bool
+        //------------------------------------------------------------------
+        /// Get the OS version from a connected platform.
+        ///
+        /// Some platforms might not be connected to a remote platform, but
+        /// can figure out the OS version for a process. This is common for
+        /// simulator platforms that will run native programs on the current
+        /// host, but the simulator might be simulating a different OS. The
+        /// \a process parameter might be specified to help to determine
+        /// the OS version.
+        //------------------------------------------------------------------
+        virtual bool
         GetOSVersion (uint32_t &major, 
                       uint32_t &minor, 
-                      uint32_t &update);
+                      uint32_t &update,
+                      Process *process = nullptr);
            
         bool
         SetOSVersion (uint32_t major, 
@@ -215,12 +271,15 @@ namespace lldb_private {
         bool
         GetOSKernelDescription (std::string &s);
 
-        // Returns the the name of the platform
+        // Returns the name of the platform
         ConstString
         GetName ();
 
         virtual const char *
         GetHostname ();
+        
+        virtual ConstString
+        GetFullNameForDylib (ConstString basename);
 
         virtual const char *
         GetDescription () = 0;
@@ -241,7 +300,7 @@ namespace lldb_private {
         //
         // Remote classes must be connected for this to succeed. Local 
         // subclasses don't need to override this function as it will just
-        // call the Host::GetOSVersion().
+        // call the HostInfo::GetOSVersion().
         //------------------------------------------------------------------
         virtual bool
         GetRemoteOSVersion ()
@@ -269,15 +328,15 @@ namespace lldb_private {
         {
             return ArchSpec(); // Return an invalid architecture
         }
-        
-        virtual ConstString
+
+        virtual FileSpec
         GetRemoteWorkingDirectory()
         {
             return m_working_dir;
         }
         
         virtual bool
-        SetRemoteWorkingDirectory(const ConstString &path);
+        SetRemoteWorkingDirectory(const FileSpec &working_dir);
 
         virtual const char *
         GetUserName (uint32_t uid);
@@ -326,14 +385,21 @@ namespace lldb_private {
         //----------------------------------------------------------------------
         virtual FileSpecList
         LocateExecutableScriptingResources (Target *target,
-                                            Module &module);
-        
+                                            Module &module,
+                                            Stream* feedback_stream);
+
         virtual Error
-        GetSharedModule (const ModuleSpec &module_spec, 
+        GetSharedModule (const ModuleSpec &module_spec,
+                         Process* process,
                          lldb::ModuleSP &module_sp,
                          const FileSpecList *module_search_paths_ptr,
                          lldb::ModuleSP *old_module_sp_ptr,
                          bool *did_create_ptr);
+
+        virtual bool
+        GetModuleSpec (const FileSpec& module_file_spec,
+                       const ArchSpec& arch,
+                       ModuleSpec &module_spec);
 
         virtual Error
         ConnectRemote (Args& args);
@@ -349,7 +415,7 @@ namespace lldb_private {
         ///     A zero based architecture index
         ///
         /// @param[out] arch
-        ///     A copy of the archgitecture at index if the return value is
+        ///     A copy of the architecture at index if the return value is
         ///     \b true.
         ///
         /// @return
@@ -369,6 +435,22 @@ namespace lldb_private {
         //------------------------------------------------------------------
         virtual Error
         LaunchProcess (ProcessLaunchInfo &launch_info);
+
+        //------------------------------------------------------------------
+        /// Perform expansion of the command-line for this launch info
+        /// This can potentially involve wildcard expansion
+        //  environment variable replacement, and whatever other
+        //  argument magic the platform defines as part of its typical
+        //  user experience
+        //------------------------------------------------------------------
+        virtual Error
+        ShellExpandArguments (ProcessLaunchInfo &launch_info);
+        
+        //------------------------------------------------------------------
+        /// Kill process on a platform.
+        //------------------------------------------------------------------
+        virtual Error
+        KillProcess (const lldb::pid_t pid);
 
         //------------------------------------------------------------------
         /// Lets a platform answer if it is compatible with a given
@@ -402,9 +484,15 @@ namespace lldb_private {
         virtual lldb::ProcessSP
         DebugProcess (ProcessLaunchInfo &launch_info,
                       Debugger &debugger,
-                      Target *target,       // Can be NULL, if NULL create a new target, else use existing one
-                      Listener &listener,
+                      Target *target,       // Can be nullptr, if nullptr create a new target, else use existing one
                       Error &error);
+
+        virtual lldb::ProcessSP
+        ConnectProcess (const char* connect_url,
+                        const char* plugin_name,
+                        lldb_private::Debugger &debugger,
+                        lldb_private::Target *target,
+                        lldb_private::Error &error);
 
         //------------------------------------------------------------------
         /// Attach to an existing process using a process ID.
@@ -413,7 +501,7 @@ namespace lldb_private {
         /// attempt to attach to the process with the process ID of \a pid.
         /// The platform subclass should return an appropriate ProcessSP 
         /// subclass that is attached to the process, or an empty shared 
-        /// pointer with an appriopriate error.
+        /// pointer with an appropriate error.
         ///
         /// @param[in] pid
         ///     The process ID that we should attempt to attach to.
@@ -422,13 +510,12 @@ namespace lldb_private {
         ///     An appropriate ProcessSP containing a valid shared pointer
         ///     to the default Process subclass for the platform that is 
         ///     attached to the process, or an empty shared pointer with an
-        ///     appriopriate error fill into the \a error object.
+        ///     appropriate error fill into the \a error object.
         //------------------------------------------------------------------
         virtual lldb::ProcessSP
         Attach (ProcessAttachInfo &attach_info,
                 Debugger &debugger,
-                Target *target,       // Can be NULL, if NULL create a new target, else use existing one
-                Listener &listener,
+                Target *target,       // Can be nullptr, if nullptr create a new target, else use existing one
                 Error &error) = 0;
 
         //------------------------------------------------------------------
@@ -524,6 +611,7 @@ namespace lldb_private {
         {
             return m_max_uid_name_len;
         }
+
         // Used for column widths
         size_t
         GetMaxGroupIDNameLength() const
@@ -553,31 +641,40 @@ namespace lldb_private {
         SetSDKBuild (const ConstString &sdk_build)
         {
             m_sdk_build = sdk_build;
-        }    
+        }
+        
+        // Override this to return true if your platform supports Clang modules.
+        // You may also need to override AddClangModuleCompilationOptions to pass the right Clang flags for your platform.
+        virtual bool
+        SupportsModules () { return false; }
+        
+        // Appends the platform-specific options required to find the modules for the current platform.
+        virtual void
+        AddClangModuleCompilationOptions (Target *target, std::vector<std::string> &options);
 
-        ConstString
-        GetWorkingDirectory ();
-        
+        FileSpec
+        GetWorkingDirectory();
+
         bool
-        SetWorkingDirectory (const ConstString &path);
-        
+        SetWorkingDirectory(const FileSpec &working_dir);
+
         // There may be modules that we don't want to find by default for operations like "setting breakpoint by name".
         // The platform will return "true" from this call if the passed in module happens to be one of these.
         
         virtual bool
-        ModuleIsExcludedForNonModuleSpecificSearches (Target &target, const lldb::ModuleSP &module_sp)
+        ModuleIsExcludedForUnconstrainedSearches (Target &target, const lldb::ModuleSP &module_sp)
         {
             return false;
         }
         
         virtual Error
-        MakeDirectory (const char *path, uint32_t permissions);
-        
-        virtual Error
-        GetFilePermissions (const char *path, uint32_t &file_permissions);
+        MakeDirectory(const FileSpec &file_spec, uint32_t permissions);
 
         virtual Error
-        SetFilePermissions (const char *path, uint32_t file_permissions);
+        GetFilePermissions(const FileSpec &file_spec, uint32_t &file_permissions);
+
+        virtual Error
+        SetFilePermissions(const FileSpec &file_spec, uint32_t file_permissions);
 
         virtual lldb::user_id_t
         OpenFile (const FileSpec& file_spec,
@@ -634,8 +731,8 @@ namespace lldb_private {
                  uint32_t gid = UINT32_MAX);
 
         virtual Error
-        CreateSymlink (const char *src, // The name of the link is in src
-                       const char *dst);// The symlink points to dst
+        CreateSymlink(const FileSpec &src,  // The name of the link is in src
+                      const FileSpec &dst); // The symlink points to dst
 
         //----------------------------------------------------------------------
         /// Install a file or directory to the remote system.
@@ -671,7 +768,10 @@ namespace lldb_private {
         GetFileExists (const lldb_private::FileSpec& file_spec);
         
         virtual Error
-        Unlink (const char *path);
+        Unlink(const FileSpec &file_spec);
+
+        virtual uint64_t
+        ConvertMmapFlagsToPlatform(const ArchSpec &arch, unsigned flags);
 
         virtual bool
         GetSupportsRSync ()
@@ -748,17 +848,17 @@ namespace lldb_private {
         virtual lldb_private::OptionGroupOptions *
         GetConnectionOptions (CommandInterpreter& interpreter)
         {
-            return NULL;
+            return nullptr;
         }
         
         virtual lldb_private::Error
-        RunShellCommand (const char *command,           // Shouldn't be NULL
-                         const char *working_dir,       // Pass NULL to use the current working directory
-                         int *status_ptr,               // Pass NULL if you don't want the process exit status
-                         int *signo_ptr,                // Pass NULL if you don't want the signal that caused the process to exit
-                         std::string *command_output,   // Pass NULL if you don't want the command output
-                         uint32_t timeout_sec);         // Timeout in seconds to wait for shell program to finish
-        
+        RunShellCommand(const char *command,           // Shouldn't be nullptr
+                        const FileSpec &working_dir,   // Pass empty FileSpec to use the current working directory
+                        int *status_ptr,               // Pass nullptr if you don't want the process exit status
+                        int *signo_ptr,                // Pass nullptr if you don't want the signal that caused the process to exit
+                        std::string *command_output,   // Pass nullptr if you don't want the command output
+                        uint32_t timeout_sec);         // Timeout in seconds to wait for shell program to finish
+
         virtual void
         SetLocalCacheDirectory (const char* local);
         
@@ -781,6 +881,12 @@ namespace lldb_private {
         {
             return 1;
         }
+
+        virtual const lldb::UnixSignalsSP &
+        GetRemoteUnixSignals();
+
+        const lldb::UnixSignalsSP &
+        GetUnixSignals();
 
         //------------------------------------------------------------------
         /// Locate a queue name given a thread's qaddr
@@ -858,18 +964,114 @@ namespace lldb_private {
         virtual const std::vector<ConstString> &
         GetTrapHandlerSymbolNames ();
 
+        //------------------------------------------------------------------
+        /// Find a support executable that may not live within in the
+        /// standard locations related to LLDB.
+        ///
+        /// Executable might exist within the Platform SDK directories, or
+        /// in standard tool directories within the current IDE that is
+        /// running LLDB.
+        ///
+        /// @param[in] basename
+        ///     The basename of the executable to locate in the current
+        ///     platform.
+        ///
+        /// @return
+        ///     A FileSpec pointing to the executable on disk, or an invalid
+        ///     FileSpec if the executable cannot be found.
+        //------------------------------------------------------------------
+        virtual FileSpec
+        LocateExecutable (const char *basename)
+        {
+            return FileSpec();
+        }
+
+        //------------------------------------------------------------------
+        /// Allow the platform to set preferred memory cache line size. If non-zero (and the user
+        /// has not set cache line size explicitly), this value will be used as the cache line
+        /// size for memory reads.
+        //------------------------------------------------------------------
+        virtual uint32_t
+        GetDefaultMemoryCacheLineSize() { return 0; }
+
+        //------------------------------------------------------------------
+        /// Load a shared library into this process.
+        ///
+        /// Try and load a shared library into the current process. This
+        /// call might fail in the dynamic loader plug-in says it isn't safe
+        /// to try and load shared libraries at the moment.
+        ///
+        /// @param[in] process
+        ///     The process to load the image.
+        ///
+        /// @param[in] local_file
+        ///     The file spec that points to the shared library that you want
+        ///     to load if the library is located on the host. The library will
+        ///     be copied over to the location specified by remote_file or into
+        ///     the current working directory with the same filename if the
+        ///     remote_file isn't specified.
+        ///
+        /// @param[in] remote_file
+        ///     If local_file is specified then the location where the library
+        ///     should be copied over from the host. If local_file isn't
+        ///     specified, then the path for the shared library on the target
+        ///     what you want to load.
+        ///
+        /// @param[out] error
+        ///     An error object that gets filled in with any errors that
+        ///     might occur when trying to load the shared library.
+        ///
+        /// @return
+        ///     A token that represents the shared library that can be
+        ///     later used to unload the shared library. A value of
+        ///     LLDB_INVALID_IMAGE_TOKEN will be returned if the shared
+        ///     library can't be opened.
+        //------------------------------------------------------------------
+        uint32_t
+        LoadImage (lldb_private::Process* process,
+                   const lldb_private::FileSpec& local_file,
+                   const lldb_private::FileSpec& remote_file,
+                   lldb_private::Error& error);
+
+        virtual uint32_t
+        DoLoadImage (lldb_private::Process* process,
+                     const lldb_private::FileSpec& remote_file,
+                     lldb_private::Error& error);
+
+        virtual Error
+        UnloadImage (lldb_private::Process* process, uint32_t image_token);
+
+        //------------------------------------------------------------------
+        /// Connect to all processes waiting for a debugger to attach
+        ///
+        /// If the platform have a list of processes waiting for a debugger
+        /// to connect to them then connect to all of these pending processes.
+        ///
+        /// @param[in] debugger
+        ///     The debugger used for the connect.
+        ///
+        /// @param[out] error
+        ///     If an error occurred during the connect then this object will
+        ///     contain the error message.
+        ///
+        /// @return
+        ///     The number of processes we are succesfully connected to.
+        //------------------------------------------------------------------
+        virtual size_t
+        ConnectToWaitingProcesses(lldb_private::Debugger& debugger, lldb_private::Error& error);
+
     protected:
         bool m_is_host;
-        // Set to true when we are able to actually set the OS version while 
+        // Set to true when we are able to actually set the OS version while
         // being connected. For remote platforms, we might set the version ahead
         // of time before we actually connect and this version might change when
         // we actually connect to a remote platform. For the host platform this
-        // will be set to the once we call Host::GetOSVersion().
+        // will be set to the once we call HostInfo::GetOSVersion().
         bool m_os_version_set_while_connected;
         bool m_system_arch_set_while_connected;
         ConstString m_sdk_sysroot; // the root location of where the SDK files are all located
         ConstString m_sdk_build;
-        ConstString m_working_dir; // The working directory which is used when installing modules that have no install path set
+        FileSpec m_working_dir; // The working directory which is used when installing modules that have no install path set
         std::string m_remote_url;
         std::string m_name;
         uint32_t m_major_os_version;
@@ -877,8 +1079,7 @@ namespace lldb_private {
         uint32_t m_update_os_version;
         ArchSpec m_system_arch; // The architecture of the kernel or the remote platform
         typedef std::map<uint32_t, ConstString> IDToNameMap;
-        Mutex m_uid_map_mutex;
-        Mutex m_gid_map_mutex;
+        Mutex m_mutex; // Mutex for modifying Platform data structures that should only be used for non-reentrant code
         IDToNameMap m_uid_map;
         IDToNameMap m_gid_map;
         size_t m_max_uid_name_len;
@@ -892,6 +1093,7 @@ namespace lldb_private {
         std::string m_local_cache_directory;
         std::vector<ConstString> m_trap_handlers;
         bool m_calculated_trap_handlers;
+        const std::unique_ptr<ModuleCache> m_module_cache;
 
         //------------------------------------------------------------------
         /// Ask the Platform subclass to fill in the list of trap handler names
@@ -912,23 +1114,19 @@ namespace lldb_private {
         const char *
         GetCachedUserName (uint32_t uid)
         {
-            Mutex::Locker locker (m_uid_map_mutex);
-            IDToNameMap::iterator pos = m_uid_map.find (uid);
-            if (pos != m_uid_map.end())
-            {
-                // return the empty string if our string is NULL
-                // so we can tell when things were in the negative
-                // cached (didn't find a valid user name, don't keep
-                // trying)
-                return pos->second.AsCString("");
-            }
-            return NULL;
+            Mutex::Locker locker (m_mutex);
+            // return the empty string if our string is NULL
+            // so we can tell when things were in the negative
+            // cached (didn't find a valid user name, don't keep
+            // trying)
+            const auto pos = m_uid_map.find(uid);
+            return ((pos != m_uid_map.end()) ? pos->second.AsCString("") : nullptr);
         }
 
         const char *
         SetCachedUserName (uint32_t uid, const char *name, size_t name_len)
         {
-            Mutex::Locker locker (m_uid_map_mutex);
+            Mutex::Locker locker (m_mutex);
             ConstString const_name (name);
             m_uid_map[uid] = const_name;
             if (m_max_uid_name_len < name_len)
@@ -940,38 +1138,33 @@ namespace lldb_private {
         void
         SetUserNameNotFound (uint32_t uid)
         {
-            Mutex::Locker locker (m_uid_map_mutex);
+            Mutex::Locker locker (m_mutex);
             m_uid_map[uid] = ConstString();
         }
-        
 
         void
         ClearCachedUserNames ()
         {
-            Mutex::Locker locker (m_uid_map_mutex);
+            Mutex::Locker locker (m_mutex);
             m_uid_map.clear();
         }
     
         const char *
         GetCachedGroupName (uint32_t gid)
         {
-            Mutex::Locker locker (m_gid_map_mutex);
-            IDToNameMap::iterator pos = m_gid_map.find (gid);
-            if (pos != m_gid_map.end())
-            {
-                // return the empty string if our string is NULL
-                // so we can tell when things were in the negative
-                // cached (didn't find a valid group name, don't keep
-                // trying)
-                return pos->second.AsCString("");
-            }
-            return NULL;
+            Mutex::Locker locker (m_mutex);
+            // return the empty string if our string is NULL
+            // so we can tell when things were in the negative
+            // cached (didn't find a valid group name, don't keep
+            // trying)
+            const auto pos = m_gid_map.find(gid);
+            return ((pos != m_gid_map.end()) ? pos->second.AsCString("") : nullptr);
         }
 
         const char *
         SetCachedGroupName (uint32_t gid, const char *name, size_t name_len)
         {
-            Mutex::Locker locker (m_gid_map_mutex);
+            Mutex::Locker locker (m_mutex);
             ConstString const_name (name);
             m_gid_map[gid] = const_name;
             if (m_max_gid_name_len < name_len)
@@ -983,22 +1176,63 @@ namespace lldb_private {
         void
         SetGroupNameNotFound (uint32_t gid)
         {
-            Mutex::Locker locker (m_gid_map_mutex);
+            Mutex::Locker locker (m_mutex);
             m_gid_map[gid] = ConstString();
         }
 
         void
         ClearCachedGroupNames ()
         {
-            Mutex::Locker locker (m_gid_map_mutex);
+            Mutex::Locker locker (m_mutex);
             m_gid_map.clear();
         }
 
+        Error
+        GetCachedExecutable (ModuleSpec &module_spec,
+                             lldb::ModuleSP &module_sp,
+                             const FileSpecList *module_search_paths_ptr,
+                             Platform &remote_platform);
+
+        virtual Error
+        DownloadModuleSlice (const FileSpec& src_file_spec,
+                             const uint64_t src_offset,
+                             const uint64_t src_size,
+                             const FileSpec& dst_file_spec);
+        
+        virtual Error
+        DownloadSymbolFile (const lldb::ModuleSP& module_sp,
+                            const FileSpec& dst_file_spec);
+
+        virtual const char *
+        GetCacheHostname ();
+
     private:
+        typedef std::function<Error (const ModuleSpec &)> ModuleResolver;
+
+        Error
+        GetRemoteSharedModule (const ModuleSpec &module_spec,
+                               Process* process,
+                               lldb::ModuleSP &module_sp,
+                               const ModuleResolver &module_resolver,
+                               bool *did_create_ptr);
+
+        bool
+        GetCachedSharedModule (const ModuleSpec& module_spec,
+                               lldb::ModuleSP &module_sp,
+                               bool *did_create_ptr);
+
+        Error
+        LoadCachedExecutable (const ModuleSpec &module_spec,
+                              lldb::ModuleSP &module_sp,
+                              const FileSpecList *module_search_paths_ptr,
+                              Platform &remote_platform);
+
+        FileSpec
+        GetModuleCacheRoot ();
+
         DISALLOW_COPY_AND_ASSIGN (Platform);
     };
 
-    
     class PlatformList
     {
     public:
@@ -1008,11 +1242,9 @@ namespace lldb_private {
             m_selected_platform_sp()
         {
         }
-        
-        ~PlatformList()
-        {
-        }
-        
+
+        ~PlatformList() = default;
+
         void
         Append (const lldb::PlatformSP &platform_sp, bool set_selected)
         {
@@ -1095,22 +1327,21 @@ namespace lldb_private {
     public:
         OptionGroupPlatformRSync ();
         
-        virtual
-        ~OptionGroupPlatformRSync ();
+        ~OptionGroupPlatformRSync() override;
         
-        virtual lldb_private::Error
-        SetOptionValue (CommandInterpreter &interpreter,
-                        uint32_t option_idx,
-                        const char *option_value);
+        lldb_private::Error
+        SetOptionValue(CommandInterpreter &interpreter,
+		       uint32_t option_idx,
+		       const char *option_value) override;
         
         void
-        OptionParsingStarting (CommandInterpreter &interpreter);
+        OptionParsingStarting(CommandInterpreter &interpreter) override;
         
         const lldb_private::OptionDefinition*
-        GetDefinitions ();
+        GetDefinitions() override;
         
-        virtual uint32_t
-        GetNumDefinitions ();
+        uint32_t
+        GetNumDefinitions() override;
         
         // Options table: Required for subclasses of Options.
         
@@ -1131,22 +1362,21 @@ namespace lldb_private {
     public:
         OptionGroupPlatformSSH ();
         
-        virtual
-        ~OptionGroupPlatformSSH ();
+        ~OptionGroupPlatformSSH() override;
         
-        virtual lldb_private::Error
-        SetOptionValue (CommandInterpreter &interpreter,
-                        uint32_t option_idx,
-                        const char *option_value);
+        lldb_private::Error
+        SetOptionValue(CommandInterpreter &interpreter,
+		       uint32_t option_idx,
+		       const char *option_value) override;
         
         void
-        OptionParsingStarting (CommandInterpreter &interpreter);
+        OptionParsingStarting(CommandInterpreter &interpreter) override;
         
-        virtual uint32_t
-        GetNumDefinitions ();
+        uint32_t
+        GetNumDefinitions() override;
         
         const lldb_private::OptionDefinition*
-        GetDefinitions ();
+        GetDefinitions() override;
         
         // Options table: Required for subclasses of Options.
         
@@ -1158,7 +1388,6 @@ namespace lldb_private {
         std::string m_ssh_opts;
 
     private:
-
         DISALLOW_COPY_AND_ASSIGN(OptionGroupPlatformSSH);
     };
     
@@ -1167,22 +1396,21 @@ namespace lldb_private {
     public:
         OptionGroupPlatformCaching ();
         
-        virtual
-        ~OptionGroupPlatformCaching ();
+        ~OptionGroupPlatformCaching() override;
         
-        virtual lldb_private::Error
-        SetOptionValue (CommandInterpreter &interpreter,
-                        uint32_t option_idx,
-                        const char *option_value);
+        lldb_private::Error
+        SetOptionValue(CommandInterpreter &interpreter,
+		       uint32_t option_idx,
+		       const char *option_value) override;
         
         void
-        OptionParsingStarting (CommandInterpreter &interpreter);
+        OptionParsingStarting(CommandInterpreter &interpreter) override;
         
-        virtual uint32_t
-        GetNumDefinitions ();
+        uint32_t
+        GetNumDefinitions() override;
         
         const lldb_private::OptionDefinition*
-        GetDefinitions ();
+        GetDefinitions() override;
         
         // Options table: Required for subclasses of Options.
         
@@ -1191,10 +1419,11 @@ namespace lldb_private {
         // Instance variables to hold the values for command options.
         
         std::string m_cache_dir;
+
     private:
         DISALLOW_COPY_AND_ASSIGN(OptionGroupPlatformCaching);
     };
     
 } // namespace lldb_private
 
-#endif  // liblldb_Platform_h_
+#endif // liblldb_Platform_h_

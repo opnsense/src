@@ -86,7 +86,9 @@ __FBSDID("$FreeBSD$");
 
 int cluster_pbuf_freecnt = -1;	/* unlimited to begin with */
 
-static int dead_pager_getpages(vm_object_t, vm_page_t *, int, int);
+struct buf *swbuf;
+
+static int dead_pager_getpages(vm_object_t, vm_page_t *, int, int *, int *);
 static vm_object_t dead_pager_alloc(void *, vm_ooffset_t, vm_prot_t,
     vm_ooffset_t, struct ucred *);
 static void dead_pager_putpages(vm_object_t, vm_page_t *, int, int, int *);
@@ -94,13 +96,11 @@ static boolean_t dead_pager_haspage(vm_object_t, vm_pindex_t, int *, int *);
 static void dead_pager_dealloc(vm_object_t);
 
 static int
-dead_pager_getpages(obj, ma, count, req)
-	vm_object_t obj;
-	vm_page_t *ma;
-	int count;
-	int req;
+dead_pager_getpages(vm_object_t obj, vm_page_t *ma, int count, int *rbehind,
+    int *rahead)
 {
-	return VM_PAGER_FAIL;
+
+	return (VM_PAGER_FAIL);
 }
 
 static vm_object_t
@@ -165,8 +165,6 @@ struct pagerops *pagertab[] = {
 	&mgtdevicepagerops,	/* OBJT_MGTDEVICE */
 };
 
-static const int npagers = sizeof(pagertab) / sizeof(pagertab[0]);
-
 /*
  * Kernel address space for mapping pages.
  * Used by pagers where KVAs are needed for IO.
@@ -189,7 +187,7 @@ vm_pager_init()
 	/*
 	 * Initialize known pagers
 	 */
-	for (pgops = pagertab; pgops < &pagertab[npagers]; pgops++)
+	for (pgops = pagertab; pgops < &pagertab[nitems(pagertab)]; pgops++)
 		if ((*pgops)->pgo_init != NULL)
 			(*(*pgops)->pgo_init) ();
 }
@@ -215,6 +213,7 @@ vm_pager_bufferinit()
 
 	cluster_pbuf_freecnt = nswbuf / 2;
 	vnode_pbuf_freecnt = nswbuf / 2 + 1;
+	vnode_async_pbuf_freecnt = nswbuf / 2;
 }
 
 /*
@@ -249,8 +248,80 @@ vm_pager_deallocate(object)
 	(*pagertab[object->type]->pgo_dealloc) (object);
 }
 
+static void
+vm_pager_assert_in(vm_object_t object, vm_page_t *m, int count)
+{
+#ifdef INVARIANTS
+
+	VM_OBJECT_ASSERT_WLOCKED(object);
+	KASSERT(count > 0, ("%s: 0 count", __func__));
+	/*
+	 * All pages must be busied, not mapped, not fully valid,
+	 * not dirty and belong to the proper object.
+	 */
+	for (int i = 0 ; i < count; i++) {
+		vm_page_assert_xbusied(m[i]);
+		KASSERT(!pmap_page_is_mapped(m[i]),
+		    ("%s: page %p is mapped", __func__, m[i]));
+		KASSERT(m[i]->valid != VM_PAGE_BITS_ALL,
+		    ("%s: request for a valid page %p", __func__, m[i]));
+		KASSERT(m[i]->dirty == 0,
+		    ("%s: page %p is dirty", __func__, m[i]));
+		KASSERT(m[i]->object == object,
+		    ("%s: wrong object %p/%p", __func__, object, m[i]->object));
+	}
+#endif
+}
+
 /*
- * vm_pager_get_pages() - inline, see vm/vm_pager.h
+ * Page in the pages for the object using its associated pager.
+ * The requested page must be fully valid on successful return.
+ */
+int
+vm_pager_get_pages(vm_object_t object, vm_page_t *m, int count, int *rbehind,
+    int *rahead)
+{
+#ifdef INVARIANTS
+	vm_pindex_t pindex = m[0]->pindex;
+#endif
+	int r;
+
+	vm_pager_assert_in(object, m, count);
+
+	r = (*pagertab[object->type]->pgo_getpages)(object, m, count, rbehind,
+	    rahead);
+	if (r != VM_PAGER_OK)
+		return (r);
+
+	for (int i = 0; i < count; i++) {
+		/*
+		 * If pager has replaced a page, assert that it had
+		 * updated the array.
+		 */
+		KASSERT(m[i] == vm_page_lookup(object, pindex++),
+		    ("%s: mismatch page %p pindex %ju", __func__,
+		    m[i], (uintmax_t )pindex - 1));
+		/*
+		 * Zero out partially filled data.
+		 */
+		if (m[i]->valid != VM_PAGE_BITS_ALL)
+			vm_page_zero_invalid(m[i], TRUE);
+	}
+	return (VM_PAGER_OK);
+}
+
+int
+vm_pager_get_pages_async(vm_object_t object, vm_page_t *m, int count,
+    int *rbehind, int *rahead, pgo_getpages_iodone_t iodone, void *arg)
+{
+
+	vm_pager_assert_in(object, m, count);
+
+	return ((*pagertab[object->type]->pgo_getpages_async)(object, m,
+	    count, rbehind, rahead, iodone, arg));
+}
+
+/*
  * vm_pager_put_pages() - inline, see vm/vm_pager.h
  * vm_pager_has_page() - inline, see vm/vm_pager.h
  */
@@ -296,12 +367,11 @@ initpbuf(struct buf *bp)
 	bp->b_rcred = NOCRED;
 	bp->b_wcred = NOCRED;
 	bp->b_qindex = 0;	/* On no queue (QUEUE_NONE) */
-	bp->b_saveaddr = (caddr_t) (MAXPHYS * (bp - swbuf)) + swapbkva;
-	bp->b_data = bp->b_saveaddr;
-	bp->b_kvabase = bp->b_saveaddr;
+	bp->b_kvabase = (caddr_t) (MAXPHYS * (bp - swbuf)) + swapbkva;
+	bp->b_data = bp->b_kvabase;
 	bp->b_kvasize = MAXPHYS;
-	bp->b_xflags = 0;
 	bp->b_flags = 0;
+	bp->b_xflags = 0;
 	bp->b_ioflags = 0;
 	bp->b_iodone = NULL;
 	bp->b_error = 0;

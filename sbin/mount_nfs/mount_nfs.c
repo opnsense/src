@@ -476,7 +476,8 @@ main(int argc, char *argv[])
 	build_iovec(&iov, &iovlen, "errmsg", errmsg, sizeof(errmsg));
 
 	if (nmount(iov, iovlen, 0))
-		err(1, "%s, %s", mntpath, errmsg);
+		err(1, "nmount: %s%s%s", mntpath, errmsg[0] ? ", " : "",
+		    errmsg);
 
 	exit(0);
 }
@@ -1026,7 +1027,7 @@ xdr_fh(XDR *xdrsp, struct nfhret *np)
 		if (!authfnd && (authcnt > 0 || np->auth != AUTH_SYS))
 			np->stat = EAUTH;
 		return (1);
-	};
+	}
 	return (0);
 }
 

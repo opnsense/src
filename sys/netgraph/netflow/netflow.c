@@ -34,18 +34,20 @@ __FBSDID("$FreeBSD$");
 #include "opt_inet6.h"
 #include "opt_route.h"
 #include <sys/param.h>
+#include <sys/bitstring.h>
+#include <sys/systm.h>
+#include <sys/counter.h>
 #include <sys/kernel.h>
+#include <sys/ktr.h>
 #include <sys/limits.h>
 #include <sys/mbuf.h>
 #include <sys/syslog.h>
-#include <sys/systm.h>
 #include <sys/socket.h>
-#include <sys/endian.h>
-
-#include <machine/atomic.h>
-#include <machine/stdarg.h>
+#include <vm/uma.h>
 
 #include <net/if.h>
+#include <net/if_dl.h>
+#include <net/if_var.h>
 #include <net/route.h>
 #include <net/ethernet.h>
 #include <netinet/in.h>
@@ -79,8 +81,8 @@ __FBSDID("$FreeBSD$");
 
 /* Macros to shorten logical constructions */
 /* XXX: priv must exist in namespace */
-#define	INACTIVE(fle)	(time_uptime - fle->f.last > priv->info.nfinfo_inact_t)
-#define	AGED(fle)	(time_uptime - fle->f.first > priv->info.nfinfo_act_t)
+#define	INACTIVE(fle)	(time_uptime - fle->f.last > priv->nfinfo_inact_t)
+#define	AGED(fle)	(time_uptime - fle->f.first > priv->nfinfo_act_t)
 #define	ISFREE(fle)	(fle->f.packets == 0)
 
 /*
@@ -146,53 +148,18 @@ ip6_hash(struct flow6_rec *r)
 		    r->dst.r_dst6.__u6_addr.__u6_addr32[3]);
  	}
 }
-#endif
 
-/* This is callback from uma(9), called on alloc. */
-static int
-uma_ctor_flow(void *mem, int size, void *arg, int how)
+static inline int
+ip6_masklen(struct in6_addr *saddr, struct rt_addrinfo *info)
 {
-	priv_p priv = (priv_p )arg;
+	const int nbits = sizeof(*saddr) * NBBY;
+	int mlen;
 
-	if (atomic_load_acq_32(&priv->info.nfinfo_used) >= CACHESIZE)
-		return (ENOMEM);
-
-	atomic_add_32(&priv->info.nfinfo_used, 1);
-
-	return (0);
-}
-
-/* This is callback from uma(9), called on free. */
-static void
-uma_dtor_flow(void *mem, int size, void *arg)
-{
-	priv_p priv = (priv_p )arg;
-
-	atomic_subtract_32(&priv->info.nfinfo_used, 1);
-}
-
-#ifdef INET6
-/* This is callback from uma(9), called on alloc. */
-static int
-uma_ctor_flow6(void *mem, int size, void *arg, int how)
-{
-	priv_p priv = (priv_p )arg;
-
-	if (atomic_load_acq_32(&priv->info.nfinfo_used6) >= CACHESIZE)
-		return (ENOMEM);
-
-	atomic_add_32(&priv->info.nfinfo_used6, 1);
-
-	return (0);
-}
-
-/* This is callback from uma(9), called on free. */
-static void
-uma_dtor_flow6(void *mem, int size, void *arg)
-{
-	priv_p priv = (priv_p )arg;
-
-	atomic_subtract_32(&priv->info.nfinfo_used6, 1);
+	if (info->rti_addrs & RTA_NETMASK)
+		bit_count((bitstr_t *)saddr, 0, nbits, &mlen);
+	else
+		mlen = nbits;
+	return (mlen);
 }
 #endif
 
@@ -266,9 +233,9 @@ expire_flow(priv_p priv, fib_export_p fe, struct flow_entry *fle, int flags)
 	if ((priv->export != NULL) && (version == IPVERSION)) {
 		exp.item = get_export_dgram(priv, fe);
 		if (exp.item == NULL) {
-			atomic_add_32(&priv->info.nfinfo_export_failed, 1);
+			priv->nfinfo_export_failed++;
 			if (priv->export9 != NULL)
-				atomic_add_32(&priv->info.nfinfo_export9_failed, 1);
+				priv->nfinfo_export9_failed++;
 			/* fle definitely contains IPv4 flow. */
 			uma_zfree_arg(priv->zone, fle, priv);
 			return;
@@ -283,7 +250,7 @@ expire_flow(priv_p priv, fib_export_p fe, struct flow_entry *fle, int flags)
 	if (priv->export9 != NULL) {
 		exp.item9 = get_export9_dgram(priv, fe, &exp.item9_opt);
 		if (exp.item9 == NULL) {
-			atomic_add_32(&priv->info.nfinfo_export9_failed, 1);
+			priv->nfinfo_export9_failed++;
 			if (version == IPVERSION)
 				uma_zfree_arg(priv->zone, fle, priv);
 #ifdef INET6
@@ -316,8 +283,29 @@ void
 ng_netflow_copyinfo(priv_p priv, struct ng_netflow_info *i)
 {
 
-	/* XXX: atomic */
-	memcpy((void *)i, (void *)&priv->info, sizeof(priv->info));
+	i->nfinfo_bytes = counter_u64_fetch(priv->nfinfo_bytes);
+	i->nfinfo_packets = counter_u64_fetch(priv->nfinfo_packets);
+	i->nfinfo_bytes6 = counter_u64_fetch(priv->nfinfo_bytes6);
+	i->nfinfo_packets6 = counter_u64_fetch(priv->nfinfo_packets6);
+	i->nfinfo_sbytes = counter_u64_fetch(priv->nfinfo_sbytes);
+	i->nfinfo_spackets = counter_u64_fetch(priv->nfinfo_spackets);
+	i->nfinfo_sbytes6 = counter_u64_fetch(priv->nfinfo_sbytes6);
+	i->nfinfo_spackets6 = counter_u64_fetch(priv->nfinfo_spackets6);
+	i->nfinfo_act_exp = counter_u64_fetch(priv->nfinfo_act_exp);
+	i->nfinfo_inact_exp = counter_u64_fetch(priv->nfinfo_inact_exp);
+
+	i->nfinfo_used = uma_zone_get_cur(priv->zone);
+#ifdef INET6
+	i->nfinfo_used6 = uma_zone_get_cur(priv->zone6);
+#endif
+
+	i->nfinfo_alloc_failed = priv->nfinfo_alloc_failed;
+	i->nfinfo_export_failed = priv->nfinfo_export_failed;
+	i->nfinfo_export9_failed = priv->nfinfo_export9_failed;
+	i->nfinfo_realloc_mbuf = priv->nfinfo_realloc_mbuf;
+	i->nfinfo_alloc_fibs = priv->nfinfo_alloc_fibs;
+	i->nfinfo_inact_t = priv->nfinfo_inact_t;
+	i->nfinfo_act_t = priv->nfinfo_act_t;
 }
 
 /*
@@ -335,14 +323,15 @@ hash_insert(priv_p priv, struct flow_hash_entry *hsh, struct flow_rec *r,
 	int plen, uint8_t flags, uint8_t tcp_flags)
 {
 	struct flow_entry *fle;
-	struct sockaddr_in sin;
-	struct rtentry *rt;
+	struct sockaddr_in sin, sin_mask;
+	struct sockaddr_dl rt_gateway;
+	struct rt_addrinfo info;
 
 	mtx_assert(&hsh->mtx, MA_OWNED);
 
 	fle = uma_zalloc_arg(priv->zone, priv, M_NOWAIT);
 	if (fle == NULL) {
-		atomic_add_32(&priv->info.nfinfo_alloc_failed, 1);
+		priv->nfinfo_alloc_failed++;
 		return (ENOMEM);
 	}
 
@@ -367,23 +356,30 @@ hash_insert(priv_p priv, struct flow_hash_entry *hsh, struct flow_rec *r,
 		sin.sin_len = sizeof(struct sockaddr_in);
 		sin.sin_family = AF_INET;
 		sin.sin_addr = fle->f.r.r_dst;
-		rt = rtalloc1_fib((struct sockaddr *)&sin, 0, 0, r->fib);
-		if (rt != NULL) {
-			fle->f.fle_o_ifx = rt->rt_ifp->if_index;
 
-			if (rt->rt_flags & RTF_GATEWAY &&
-			    rt->rt_gateway->sa_family == AF_INET)
+		rt_gateway.sdl_len = sizeof(rt_gateway);
+		sin_mask.sin_len = sizeof(struct sockaddr_in);
+		bzero(&info, sizeof(info));
+
+		info.rti_info[RTAX_GATEWAY] = (struct sockaddr *)&rt_gateway;
+		info.rti_info[RTAX_NETMASK] = (struct sockaddr *)&sin_mask;
+
+		if (rib_lookup_info(r->fib, (struct sockaddr *)&sin, NHR_REF, 0,
+		    &info) == 0) {
+			fle->f.fle_o_ifx = info.rti_ifp->if_index;
+
+			if (info.rti_flags & RTF_GATEWAY &&
+			    rt_gateway.sdl_family == AF_INET)
 				fle->f.next_hop =
-				    ((struct sockaddr_in *)(rt->rt_gateway))->sin_addr;
+				    ((struct sockaddr_in *)&rt_gateway)->sin_addr;
 
-			if (rt_mask(rt))
-				fle->f.dst_mask =
-				    bitcount32(((struct sockaddr_in *)rt_mask(rt))->sin_addr.s_addr);
-			else if (rt->rt_flags & RTF_HOST)
+			if (info.rti_addrs & RTA_NETMASK)
+				fle->f.dst_mask = bitcount32(sin_mask.sin_addr.s_addr);
+			else if (info.rti_flags & RTF_HOST)
 				/* Give up. We can't determine mask :( */
 				fle->f.dst_mask = 32;
 
-			RTFREE_LOCKED(rt);
+			rib_free_info(&info);
 		}
 	}
 
@@ -393,16 +389,20 @@ hash_insert(priv_p priv, struct flow_hash_entry *hsh, struct flow_rec *r,
 		sin.sin_len = sizeof(struct sockaddr_in);
 		sin.sin_family = AF_INET;
 		sin.sin_addr = fle->f.r.r_src;
-		rt = rtalloc1_fib((struct sockaddr *)&sin, 0, 0, r->fib);
-		if (rt != NULL) {
-			if (rt_mask(rt))
+
+		sin_mask.sin_len = sizeof(struct sockaddr_in);
+		bzero(&info, sizeof(info));
+
+		info.rti_info[RTAX_NETMASK] = (struct sockaddr *)&sin_mask;
+
+		if (rib_lookup_info(r->fib, (struct sockaddr *)&sin, 0, 0,
+		    &info) == 0) {
+			if (info.rti_addrs & RTA_NETMASK)
 				fle->f.src_mask =
-				    bitcount32(((struct sockaddr_in *)rt_mask(rt))->sin_addr.s_addr);
-			else if (rt->rt_flags & RTF_HOST)
+				    bitcount32(sin_mask.sin_addr.s_addr);
+			else if (info.rti_flags & RTF_HOST)
 				/* Give up. We can't determine mask :( */
 				fle->f.src_mask = 32;
-
-			RTFREE_LOCKED(rt);
 		}
 	}
 
@@ -413,26 +413,20 @@ hash_insert(priv_p priv, struct flow_hash_entry *hsh, struct flow_rec *r,
 }
 
 #ifdef INET6
-/* XXX: make normal function, instead of.. */
-#define ipv6_masklen(x)		bitcount32((x).__u6_addr.__u6_addr32[0]) + \
-				bitcount32((x).__u6_addr.__u6_addr32[1]) + \
-				bitcount32((x).__u6_addr.__u6_addr32[2]) + \
-				bitcount32((x).__u6_addr.__u6_addr32[3])
-#define RT_MASK6(x)	(ipv6_masklen(((struct sockaddr_in6 *)rt_mask(x))->sin6_addr))
 static int
 hash6_insert(priv_p priv, struct flow_hash_entry *hsh6, struct flow6_rec *r,
 	int plen, uint8_t flags, uint8_t tcp_flags)
 {
 	struct flow6_entry *fle6;
-	struct sockaddr_in6 *src, *dst;
-	struct rtentry *rt;
-	struct route_in6 rin6;
+	struct sockaddr_in6 sin6, sin6_mask;
+	struct sockaddr_dl rt_gateway;
+	struct rt_addrinfo info;
 
 	mtx_assert(&hsh6->mtx, MA_OWNED);
 
 	fle6 = uma_zalloc_arg(priv->zone6, priv, M_NOWAIT);
 	if (fle6 == NULL) {
-		atomic_add_32(&priv->info.nfinfo_alloc_failed, 1);
+		priv->nfinfo_alloc_failed++;
 		return (ENOMEM);
 	}
 
@@ -454,52 +448,50 @@ hash6_insert(priv_p priv, struct flow_hash_entry *hsh6, struct flow6_rec *r,
 	 * fill in out_ifx, dst_mask, nexthop, and dst_as in future releases.
 	 */
 	if ((flags & NG_NETFLOW_CONF_NODSTLOOKUP) == 0) {
-		bzero(&rin6, sizeof(struct route_in6));
-		dst = (struct sockaddr_in6 *)&rin6.ro_dst;
-		dst->sin6_len = sizeof(struct sockaddr_in6);
-		dst->sin6_family = AF_INET6;
-		dst->sin6_addr = r->dst.r_dst6;
+		bzero(&sin6, sizeof(struct sockaddr_in6));
+		sin6.sin6_len = sizeof(struct sockaddr_in6);
+		sin6.sin6_family = AF_INET6;
+		sin6.sin6_addr = r->dst.r_dst6;
 
-		rin6.ro_rt = rtalloc1_fib((struct sockaddr *)dst, 0, 0, r->fib);
+		rt_gateway.sdl_len = sizeof(rt_gateway);
+		sin6_mask.sin6_len = sizeof(struct sockaddr_in6);
+		bzero(&info, sizeof(info));
 
-		if (rin6.ro_rt != NULL) {
-			rt = rin6.ro_rt;
-			fle6->f.fle_o_ifx = rt->rt_ifp->if_index;
+		info.rti_info[RTAX_GATEWAY] = (struct sockaddr *)&rt_gateway;
+		info.rti_info[RTAX_NETMASK] = (struct sockaddr *)&sin6_mask;
 
-			if (rt->rt_flags & RTF_GATEWAY &&
-			    rt->rt_gateway->sa_family == AF_INET6)
+		if (rib_lookup_info(r->fib, (struct sockaddr *)&sin6, NHR_REF,
+		    0, &info) == 0) {
+			fle6->f.fle_o_ifx = info.rti_ifp->if_index;
+
+			if (info.rti_flags & RTF_GATEWAY &&
+			    rt_gateway.sdl_family == AF_INET6)
 				fle6->f.n.next_hop6 =
-				    ((struct sockaddr_in6 *)(rt->rt_gateway))->sin6_addr;
+				    ((struct sockaddr_in6 *)&rt_gateway)->sin6_addr;
 
-			if (rt_mask(rt))
-				fle6->f.dst_mask = RT_MASK6(rt);
-			else
-				fle6->f.dst_mask = 128;
+			fle6->f.dst_mask =
+			    ip6_masklen(&sin6_mask.sin6_addr, &info);
 
-			RTFREE_LOCKED(rt);
+			rib_free_info(&info);
 		}
 	}
 
-	if ((flags & NG_NETFLOW_CONF_NODSTLOOKUP) == 0) {
+	if ((flags & NG_NETFLOW_CONF_NOSRCLOOKUP) == 0) {
 		/* Do route lookup on source address, to fill in src_mask. */
-		bzero(&rin6, sizeof(struct route_in6));
-		src = (struct sockaddr_in6 *)&rin6.ro_dst;
-		src->sin6_len = sizeof(struct sockaddr_in6);
-		src->sin6_family = AF_INET6;
-		src->sin6_addr = r->src.r_src6;
+		bzero(&sin6, sizeof(struct sockaddr_in6));
+		sin6.sin6_len = sizeof(struct sockaddr_in6);
+		sin6.sin6_family = AF_INET6;
+		sin6.sin6_addr = r->src.r_src6;
 
-		rin6.ro_rt = rtalloc1_fib((struct sockaddr *)src, 0, 0, r->fib);
+		sin6_mask.sin6_len = sizeof(struct sockaddr_in6);
+		bzero(&info, sizeof(info));
 
-		if (rin6.ro_rt != NULL) {
-			rt = rin6.ro_rt;
+		info.rti_info[RTAX_NETMASK] = (struct sockaddr *)&sin6_mask;
 
-			if (rt_mask(rt))
-				fle6->f.src_mask = RT_MASK6(rt);
-			else
-				fle6->f.src_mask = 128;
-
-			RTFREE_LOCKED(rt);
-		}
+		if (rib_lookup_info(r->fib, (struct sockaddr *)&sin6, 0, 0,
+		    &info) == 0)
+			fle6->f.src_mask =
+			    ip6_masklen(&sin6_mask.sin6_addr, &info);
 	}
 
 	/* Push new flow at the and of hash. */
@@ -507,8 +499,6 @@ hash6_insert(priv_p priv, struct flow_hash_entry *hsh6, struct flow6_rec *r,
 
 	return (0);
 }
-#undef ipv6_masklen
-#undef RT_MASK6
 #endif
 
 
@@ -525,13 +515,13 @@ ng_netflow_cache_init(priv_p priv)
 
 	/* Initialize cache UMA zone. */
 	priv->zone = uma_zcreate("NetFlow IPv4 cache",
-	    sizeof(struct flow_entry), uma_ctor_flow, uma_dtor_flow, NULL,
-	    NULL, UMA_ALIGN_CACHE, 0);
+	    sizeof(struct flow_entry), NULL, NULL, NULL, NULL,
+	    UMA_ALIGN_CACHE, 0);
 	uma_zone_set_max(priv->zone, CACHESIZE);
 #ifdef INET6	
 	priv->zone6 = uma_zcreate("NetFlow IPv6 cache",
-	    sizeof(struct flow6_entry), uma_ctor_flow6, uma_dtor_flow6, NULL,
-	    NULL, UMA_ALIGN_CACHE, 0);
+	    sizeof(struct flow6_entry), NULL, NULL, NULL, NULL,
+	    UMA_ALIGN_CACHE, 0);
 	uma_zone_set_max(priv->zone6, CACHESIZE);
 #endif	
 
@@ -556,6 +546,17 @@ ng_netflow_cache_init(priv_p priv)
 		TAILQ_INIT(&hsh->head);
 	}
 #endif
+
+	priv->nfinfo_bytes = counter_u64_alloc(M_WAITOK);
+	priv->nfinfo_packets = counter_u64_alloc(M_WAITOK);
+	priv->nfinfo_bytes6 = counter_u64_alloc(M_WAITOK);
+	priv->nfinfo_packets6 = counter_u64_alloc(M_WAITOK);
+	priv->nfinfo_sbytes = counter_u64_alloc(M_WAITOK);
+	priv->nfinfo_spackets = counter_u64_alloc(M_WAITOK);
+	priv->nfinfo_sbytes6 = counter_u64_alloc(M_WAITOK);
+	priv->nfinfo_spackets6 = counter_u64_alloc(M_WAITOK);
+	priv->nfinfo_act_exp = counter_u64_alloc(M_WAITOK);
+	priv->nfinfo_inact_exp = counter_u64_alloc(M_WAITOK);
 
 	ng_netflow_v9_cache_init(priv);
 	CTR0(KTR_NET, "ng_netflow startup()");
@@ -593,7 +594,7 @@ ng_netflow_fib_init(priv_p priv, int fib)
 		/* Increase counter for statistics */
 		CTR3(KTR_NET, "ng_netflow(): fib %d setup to %p (%p)",
 		    fib, fe, priv_to_fib(priv, fib));
-		atomic_fetchadd_32(&priv->info.nfinfo_alloc_fibs, 1);
+		priv->nfinfo_alloc_fibs++;
 	}
 	
 	return (0);
@@ -666,6 +667,17 @@ ng_netflow_cache_flush(priv_p priv)
 		free(fe, M_NETGRAPH);
 	}
 
+	counter_u64_free(priv->nfinfo_bytes);
+	counter_u64_free(priv->nfinfo_packets);
+	counter_u64_free(priv->nfinfo_bytes6);
+	counter_u64_free(priv->nfinfo_packets6);
+	counter_u64_free(priv->nfinfo_sbytes);
+	counter_u64_free(priv->nfinfo_spackets);
+	counter_u64_free(priv->nfinfo_sbytes6);
+	counter_u64_free(priv->nfinfo_spackets6);
+	counter_u64_free(priv->nfinfo_act_exp);
+	counter_u64_free(priv->nfinfo_inact_exp);
+
 	ng_netflow_v9_cache_flush(priv);
 }
 
@@ -733,9 +745,8 @@ ng_netflow_flow_add(priv_p priv, fib_export_p fe, struct ip *ip,
 			break;
 		}
 
-	atomic_fetchadd_32(&priv->info.nfinfo_packets, 1);
-	/* XXX: atomic */
-	priv->info.nfinfo_bytes += plen;
+	counter_u64_add(priv->nfinfo_packets, 1);
+	counter_u64_add(priv->nfinfo_bytes, plen);
 
 	/* Find hash slot. */
 	hsh = &priv->hash[ip_hash(&r)];
@@ -755,7 +766,7 @@ ng_netflow_flow_add(priv_p priv, fib_export_p fe, struct ip *ip,
 			TAILQ_REMOVE(&hsh->head, fle, fle_hash);
 			expire_flow(priv, priv_to_fib(priv, fle->f.r.fib),
 			    fle, NG_QUEUE);
-			atomic_add_32(&priv->info.nfinfo_act_exp, 1);
+			counter_u64_add(priv->nfinfo_act_exp, 1);
 		}
 	}
 
@@ -777,7 +788,7 @@ ng_netflow_flow_add(priv_p priv, fib_export_p fe, struct ip *ip,
 			TAILQ_REMOVE(&hsh->head, fle, fle_hash);
 			expire_flow(priv, priv_to_fib(priv, fle->f.r.fib),
 			    fle, NG_QUEUE);
-			atomic_add_32(&priv->info.nfinfo_act_exp, 1);
+			counter_u64_add(priv->nfinfo_act_exp, 1);
 		} else {
 			/*
 			 * It is the newest, move it to the tail,
@@ -852,9 +863,8 @@ ng_netflow_flow6_add(priv_p priv, fib_export_p fe, struct ip6_hdr *ip6,
 	r.r_ip_p = upper_proto;
 	r.r_i_ifx = src_if_index;
  
-	atomic_fetchadd_32(&priv->info.nfinfo_packets6, 1);
-	/* XXX: atomic */
-	priv->info.nfinfo_bytes6 += plen;
+	counter_u64_add(priv->nfinfo_packets6, 1);
+	counter_u64_add(priv->nfinfo_bytes6, plen);
 
 	/* Find hash slot. */
 	hsh = &priv->hash6[ip6_hash(&r)];
@@ -877,7 +887,7 @@ ng_netflow_flow6_add(priv_p priv, fib_export_p fe, struct ip6_hdr *ip6,
 			TAILQ_REMOVE(&hsh->head, fle, fle_hash);
 			expire_flow(priv, priv_to_fib(priv, fle->f.r.fib), fle,
 			    NG_QUEUE);
-			atomic_add_32(&priv->info.nfinfo_act_exp, 1);
+			counter_u64_add(priv->nfinfo_act_exp, 1);
 		}
 	}
 
@@ -900,7 +910,7 @@ ng_netflow_flow6_add(priv_p priv, fib_export_p fe, struct ip6_hdr *ip6,
 			TAILQ_REMOVE(&hsh->head, fle, fle_hash);
 			expire_flow(priv, priv_to_fib(priv, fle->f.r.fib), fle,
 			    NG_QUEUE);
-			atomic_add_32(&priv->info.nfinfo_act_exp, 1);
+			counter_u64_add(priv->nfinfo_act_exp, 1);
 		} else {
 			/*
 			 * It is the newest, move it to the tail,
@@ -1118,12 +1128,12 @@ ng_netflow_expire(void *arg)
 	struct flow_entry	*fle, *fle1;
 	struct flow_hash_entry	*hsh;
 	priv_p			priv = (priv_p )arg;
-	uint32_t		used;
-	int			i;
+	int			used, i;
 
 	/*
 	 * Going through all the cache.
 	 */
+	used = uma_zone_get_cur(priv->zone);
 	for (hsh = priv->hash, i = 0; i < NBUCKETS; hsh++, i++) {
 		/*
 		 * Skip entries, that are already being worked on.
@@ -1131,7 +1141,6 @@ ng_netflow_expire(void *arg)
 		if (mtx_trylock(&hsh->mtx) == 0)
 			continue;
 
-		used = atomic_load_acq_32(&priv->info.nfinfo_used);
 		TAILQ_FOREACH_SAFE(fle, &hsh->head, fle_hash, fle1) {
 			/*
 			 * Interrupt thread wants this entry!
@@ -1153,13 +1162,14 @@ ng_netflow_expire(void *arg)
 				expire_flow(priv, priv_to_fib(priv,
 				    fle->f.r.fib), fle, NG_NOFLAGS);
 				used--;
-				atomic_add_32(&priv->info.nfinfo_inact_exp, 1);
+				counter_u64_add(priv->nfinfo_inact_exp, 1);
 			}
 		}
 		mtx_unlock(&hsh->mtx);
 	}
 
 #ifdef INET6
+	used = uma_zone_get_cur(priv->zone6);
 	for (hsh = priv->hash6, i = 0; i < NBUCKETS; hsh++, i++) {
 		struct flow6_entry	*fle6;
 
@@ -1169,7 +1179,6 @@ ng_netflow_expire(void *arg)
 		if (mtx_trylock(&hsh->mtx) == 0)
 			continue;
 
-		used = atomic_load_acq_32(&priv->info.nfinfo_used6);
 		TAILQ_FOREACH_SAFE(fle, &hsh->head, fle_hash, fle1) {
 			fle6 = (struct flow6_entry *)fle;
 			/*
@@ -1192,7 +1201,7 @@ ng_netflow_expire(void *arg)
 				expire_flow(priv, priv_to_fib(priv,
 				    fle->f.r.fib), fle, NG_NOFLAGS);
 				used--;
-				atomic_add_32(&priv->info.nfinfo_inact_exp, 1);
+				counter_u64_add(priv->nfinfo_inact_exp, 1);
 			}
 		}
 		mtx_unlock(&hsh->mtx);

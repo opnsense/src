@@ -56,9 +56,10 @@ __FBSDID("$FreeBSD$");
 #include <sys/socket.h>
 #include <sys/sglist.h>
 
+#include <net/if.h>
+#include <net/if_var.h>
 #include <net/bpf.h>	
 #include <net/ethernet.h>
-#include <net/if.h>
 #include <net/if_vlan_var.h>
 
 #include <netinet/in_systm.h>
@@ -85,13 +86,11 @@ CTASSERT(NUM_CPL_HANDLERS >= NUM_CPL_CMDS);
 
 extern struct sysctl_oid_list sysctl__hw_cxgb_children;
 int cxgb_txq_buf_ring_size = TX_ETH_Q_SIZE;
-TUNABLE_INT("hw.cxgb.txq_mr_size", &cxgb_txq_buf_ring_size);
 SYSCTL_INT(_hw_cxgb, OID_AUTO, txq_mr_size, CTLFLAG_RDTUN, &cxgb_txq_buf_ring_size, 0,
     "size of per-queue mbuf ring");
 
 static int cxgb_tx_coalesce_force = 0;
-TUNABLE_INT("hw.cxgb.tx_coalesce_force", &cxgb_tx_coalesce_force);
-SYSCTL_INT(_hw_cxgb, OID_AUTO, tx_coalesce_force, CTLFLAG_RW,
+SYSCTL_INT(_hw_cxgb, OID_AUTO, tx_coalesce_force, CTLFLAG_RWTUN,
     &cxgb_tx_coalesce_force, 0,
     "coalesce small packets into a single work request regardless of ring state");
 
@@ -105,19 +104,15 @@ SYSCTL_INT(_hw_cxgb, OID_AUTO, tx_coalesce_force, CTLFLAG_RW,
 
 
 static int cxgb_tx_coalesce_enable_start = COALESCE_START_DEFAULT;
-TUNABLE_INT("hw.cxgb.tx_coalesce_enable_start",
-    &cxgb_tx_coalesce_enable_start);
-SYSCTL_INT(_hw_cxgb, OID_AUTO, tx_coalesce_enable_start, CTLFLAG_RW,
+SYSCTL_INT(_hw_cxgb, OID_AUTO, tx_coalesce_enable_start, CTLFLAG_RWTUN,
     &cxgb_tx_coalesce_enable_start, 0,
     "coalesce enable threshold");
 static int cxgb_tx_coalesce_enable_stop = COALESCE_STOP_DEFAULT;
-TUNABLE_INT("hw.cxgb.tx_coalesce_enable_stop", &cxgb_tx_coalesce_enable_stop);
-SYSCTL_INT(_hw_cxgb, OID_AUTO, tx_coalesce_enable_stop, CTLFLAG_RW,
+SYSCTL_INT(_hw_cxgb, OID_AUTO, tx_coalesce_enable_stop, CTLFLAG_RWTUN,
     &cxgb_tx_coalesce_enable_stop, 0,
     "coalesce disable threshold");
 static int cxgb_tx_reclaim_threshold = TX_RECLAIM_DEFAULT;
-TUNABLE_INT("hw.cxgb.tx_reclaim_threshold", &cxgb_tx_reclaim_threshold);
-SYSCTL_INT(_hw_cxgb, OID_AUTO, tx_reclaim_threshold, CTLFLAG_RW,
+SYSCTL_INT(_hw_cxgb, OID_AUTO, tx_reclaim_threshold, CTLFLAG_RWTUN,
     &cxgb_tx_reclaim_threshold, 0,
     "tx cleaning minimum threshold");
 
@@ -743,7 +738,7 @@ refill_fl(adapter_t *sc, struct sge_fl *q, int n)
 		    cl, q->buf_size, refill_fl_cb, &cb_arg, 0);
 		
 		if (err != 0 || cb_arg.error) {
-			if (q->zone == zone_pack)
+			if (q->zone != zone_pack)
 				uma_zfree(q->zone, cl);
 			m_free(m);
 			goto done;
@@ -800,12 +795,10 @@ free_rx_bufs(adapter_t *sc, struct sge_fl *q)
 			bus_dmamap_unload(q->entry_tag, d->map);
 			bus_dmamap_destroy(q->entry_tag, d->map);
 			if (q->zone == zone_pack) {
-				m_init(d->m, zone_pack, MCLBYTES,
-				    M_NOWAIT, MT_DATA, M_EXT);
+				m_init(d->m, M_NOWAIT, MT_DATA, M_EXT);
 				uma_zfree(zone_pack, d->m);
 			} else {
-				m_init(d->m, zone_mbuf, MLEN,
-				    M_NOWAIT, MT_DATA, 0);
+				m_init(d->m, M_NOWAIT, MT_DATA, 0);
 				uma_zfree(zone_mbuf, d->m);
 				uma_zfree(q->zone, d->rxsd_cl);
 			}			
@@ -1013,7 +1006,7 @@ sge_timer_cb(void *arg)
 int
 t3_sge_init_adapter(adapter_t *sc)
 {
-	callout_init(&sc->sge_timer_ch, CALLOUT_MPSAFE);
+	callout_init(&sc->sge_timer_ch, 1);
 	callout_reset(&sc->sge_timer_ch, TX_RECLAIM_PERIOD, sge_timer_cb, sc);
 	TASK_INIT(&sc->slow_intr_task, 0, sge_slow_intr_handler, sc);
 	return (0);
@@ -1122,9 +1115,10 @@ init_qset_cntxt(struct sge_qset *qs, u_int id)
 	qs->txq[TXQ_CTRL].cntxt_id = FW_CTRL_SGEEC_START + id;
 	qs->txq[TXQ_CTRL].token = FW_CTRL_TID_START + id;
 
-	mbufq_init(&qs->txq[TXQ_ETH].sendq);
-	mbufq_init(&qs->txq[TXQ_OFLD].sendq);
-	mbufq_init(&qs->txq[TXQ_CTRL].sendq);
+	/* XXX: a sane limit is needed instead of INT_MAX */
+	mbufq_init(&qs->txq[TXQ_ETH].sendq, INT_MAX);
+	mbufq_init(&qs->txq[TXQ_OFLD].sendq, INT_MAX);
+	mbufq_init(&qs->txq[TXQ_CTRL].sendq, INT_MAX);
 }
 
 
@@ -1825,8 +1819,8 @@ check_desc_avail(adapter_t *adap, struct sge_txq *q,
 	 * the control queue is only used for binding qsets which happens
 	 * at init time so we are guaranteed enough descriptors
 	 */
-	if (__predict_false(!mbufq_empty(&q->sendq))) {
-addq_exit:	mbufq_tail(&q->sendq, m);
+	if (__predict_false(mbufq_len(&q->sendq))) {
+addq_exit:	(void )mbufq_enqueue(&q->sendq, m);
 		return 1;
 	}
 	if (__predict_false(q->size - q->in_use < ndesc)) {
@@ -1941,7 +1935,7 @@ again:	reclaim_completed_tx_imm(q);
 		}
 		q->in_use++;
 	}
-	if (!mbufq_empty(&q->sendq)) {
+	if (mbufq_len(&q->sendq)) {
 		setbit(&qs->txq_stopped, TXQ_CTRL);
 
 		if (should_restart_tx(q) &&
@@ -2324,7 +2318,7 @@ restart_offloadq(void *data, int npending)
 	TXQ_LOCK(qs);
 again:	cleaned = reclaim_completed_tx(qs, 16, TXQ_OFLD);
 
-	while ((m = mbufq_peek(&q->sendq)) != NULL) {
+	while ((m = mbufq_first(&q->sendq)) != NULL) {
 		unsigned int gen, pidx;
 		struct ofld_hdr *oh = mtod(m, struct ofld_hdr *);
 		unsigned int ndesc = G_HDR_NDESC(oh->flags);
@@ -2490,7 +2484,7 @@ t3_sge_alloc_qset(adapter_t *sc, u_int id, int nports, int irq_vec_idx,
 			printf("error %d from alloc ring tx %i\n", ret, i);
 			goto err;
 		}
-		mbufq_init(&q->txq[i].sendq);
+		mbufq_init(&q->txq[i].sendq, INT_MAX);
 		q->txq[i].gen = 1;
 		q->txq[i].size = p->txq_size[i];
 	}
@@ -2729,7 +2723,7 @@ get_packet(adapter_t *adap, unsigned int drop_thres, struct sge_qset *qs,
 		if ((sopeop == RSPQ_SOP_EOP) ||
 		    (sopeop == RSPQ_SOP))
 			flags |= M_PKTHDR;
-		m_init(m, fl->zone, fl->buf_size, M_NOWAIT, MT_DATA, flags);
+		m_init(m, M_NOWAIT, MT_DATA, flags);
 		if (fl->zone == zone_pack) {
 			/*
 			 * restore clobbered data pointer
@@ -2906,7 +2900,8 @@ process_responses(adapter_t *adap, struct sge_qset *qs, int budget)
 			eop = get_packet(adap, drop_thresh, qs, mh, r);
 			if (eop) {
 				if (r->rss_hdr.hash_type && !adap->timestamp) {
-					M_HASHTYPE_SET(mh->mh_head, M_HASHTYPE_OPAQUE);
+					M_HASHTYPE_SET(mh->mh_head,
+					    M_HASHTYPE_OPAQUE_HASH);
 					mh->mh_head->m_pkthdr.flowid = rss_hash;
 				}
 			}
@@ -2982,11 +2977,7 @@ process_responses(adapter_t *adap, struct sge_qset *qs, int budget)
 
 #if defined(INET6) || defined(INET)
 	/* Flush LRO */
-	while (!SLIST_EMPTY(&lro_ctrl->lro_active)) {
-		struct lro_entry *queued = SLIST_FIRST(&lro_ctrl->lro_active);
-		SLIST_REMOVE_HEAD(&lro_ctrl->lro_active, next);
-		tcp_lro_flush(lro_ctrl, queued);
-	}
+	tcp_lro_flush_all(lro_ctrl);
 #endif
 
 	if (sleeping)
@@ -3153,9 +3144,6 @@ t3_dump_rspq(SYSCTL_HANDLER_ARGS)
 	}
 
 	err = sbuf_finish(sb);
-	/* Output a trailing NUL. */
-	if (err == 0)
-		err = SYSCTL_OUT(req, "", 1);
 	sbuf_delete(sb);
 	return (err);
 }	
@@ -3223,9 +3211,6 @@ t3_dump_txq_eth(SYSCTL_HANDLER_ARGS)
 
 	}
 	err = sbuf_finish(sb);
-	/* Output a trailing NUL. */
-	if (err == 0)
-		err = SYSCTL_OUT(req, "", 1);
 	sbuf_delete(sb);
 	return (err);
 }
@@ -3283,9 +3268,6 @@ t3_dump_txq_ctrl(SYSCTL_HANDLER_ARGS)
 
 	}
 	err = sbuf_finish(sb);
-	/* Output a trailing NUL. */
-	if (err == 0)
-		err = SYSCTL_OUT(req, "", 1);
 	sbuf_delete(sb);
 	return (err);
 }
@@ -3417,10 +3399,8 @@ sysctl_handle_macstat(SYSCTL_HANDLER_ARGS)
 	if (!p)
 		return (EINVAL);
 
+	cxgb_refresh_stats(p);
 	parg = (uint64_t *) ((uint8_t *)&p->mac.stats + arg2);
-	PORT_LOCK(p);
-	t3_mac_update_stats(&p->mac);
-	PORT_UNLOCK(p);
 
 	return (sysctl_handle_64(oidp, parg, 0, req));
 }
@@ -3528,7 +3508,7 @@ t3_add_configured_sysctls(adapter_t *sc)
 			    CTLFLAG_RD, &qs->txq[TXQ_ETH].txq_mr->br_drops,
 			    "#tunneled packets dropped");
 			SYSCTL_ADD_UINT(ctx, txqpoidlist, OID_AUTO, "sendqlen",
-			    CTLFLAG_RD, &qs->txq[TXQ_ETH].sendq.qlen,
+			    CTLFLAG_RD, &qs->txq[TXQ_ETH].sendq.mq_len,
 			    0, "#tunneled packets waiting to be sent");
 #if 0			
 			SYSCTL_ADD_UINT(ctx, txqpoidlist, OID_AUTO, "queue_pidx",
@@ -3594,11 +3574,11 @@ t3_add_configured_sysctls(adapter_t *sc)
 			    CTLTYPE_STRING | CTLFLAG_RD, &qs->txq[TXQ_CTRL],
 			    0, t3_dump_txq_ctrl, "A", "dump of the transmit queue");
 
-			SYSCTL_ADD_INT(ctx, lropoidlist, OID_AUTO, "lro_queued",
+			SYSCTL_ADD_U64(ctx, lropoidlist, OID_AUTO, "lro_queued",
 			    CTLFLAG_RD, &qs->lro.ctrl.lro_queued, 0, NULL);
-			SYSCTL_ADD_INT(ctx, lropoidlist, OID_AUTO, "lro_flushed",
+			SYSCTL_ADD_U64(ctx, lropoidlist, OID_AUTO, "lro_flushed",
 			    CTLFLAG_RD, &qs->lro.ctrl.lro_flushed, 0, NULL);
-			SYSCTL_ADD_INT(ctx, lropoidlist, OID_AUTO, "lro_bad_csum",
+			SYSCTL_ADD_U64(ctx, lropoidlist, OID_AUTO, "lro_bad_csum",
 			    CTLFLAG_RD, &qs->lro.ctrl.lro_bad_csum, 0, NULL);
 			SYSCTL_ADD_INT(ctx, lropoidlist, OID_AUTO, "lro_cnt",
 			    CTLFLAG_RD, &qs->lro.ctrl.lro_cnt, 0, NULL);

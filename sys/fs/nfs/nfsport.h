@@ -79,6 +79,7 @@
 #include <sys/kthread.h>
 #include <sys/syscallsubr.h>
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/radix.h>
 #include <net/route.h>
 #include <net/if_dl.h>
@@ -787,12 +788,14 @@ MALLOC_DECLARE(M_NEWNFSDSESSION);
 /*
  * Set the n_time in the client write rpc, as required.
  */
-#define	NFSWRITERPC_SETTIME(w, n, v4)					\
+#define	NFSWRITERPC_SETTIME(w, n, a, v4)				\
 	do {								\
 		if (w) {						\
-			(n)->n_mtime = (n)->n_vattr.na_vattr.va_mtime; \
+			mtx_lock(&((n)->n_mtx));			\
+			(n)->n_mtime = (a)->na_mtime;			\
 			if (v4)						\
-			    (n)->n_change = (n)->n_vattr.na_vattr.va_filerev; \
+				(n)->n_change = (a)->na_filerev;	\
+			mtx_unlock(&((n)->n_mtx));			\
 		}							\
 	} while (0)
 
@@ -929,24 +932,6 @@ void nfsd_mntinit(void);
 
 int newnfs_iosize(struct nfsmount *);
 
-#ifdef NFS_DEBUG
-
-extern int nfs_debug;
-#define	NFS_DEBUG_ASYNCIO	1 /* asynchronous i/o */
-#define	NFS_DEBUG_WG		2 /* server write gathering */
-#define	NFS_DEBUG_RC		4 /* server request caching */
-
-#define	NFS_DPF(cat, args)					\
-	do {							\
-		if (nfs_debug & NFS_DEBUG_##cat) printf args;	\
-	} while (0)
-
-#else
-
-#define	NFS_DPF(cat, args)
-
-#endif
-
 int newnfs_vncmpf(struct vnode *, void *);
 
 #ifndef NFS_MINDIRATTRTIMO
@@ -982,8 +967,8 @@ struct nfsreq {
 #endif
 
 /*
- * Name used by getnewvnode() to describe filesystem, "newnfs".
- * For perfomance reasons it is useful to have the same string
+ * Name used by getnewvnode() to describe filesystem, "nfs".
+ * For performance reasons it is useful to have the same string
  * used in both places that call getnewvnode().
  */
 extern const char nfs_vnode_tag[];

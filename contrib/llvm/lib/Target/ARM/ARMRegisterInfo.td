@@ -116,13 +116,13 @@ def D15 : ARMReg<15, "d15", [S30, S31]>, DwarfRegNum<[271]>;
 }
 
 // VFP3 defines 16 additional double registers
-def D16 : ARMFReg<16, "d16">, DwarfRegNum<[272]>; 
+def D16 : ARMFReg<16, "d16">, DwarfRegNum<[272]>;
 def D17 : ARMFReg<17, "d17">, DwarfRegNum<[273]>;
 def D18 : ARMFReg<18, "d18">, DwarfRegNum<[274]>;
 def D19 : ARMFReg<19, "d19">, DwarfRegNum<[275]>;
 def D20 : ARMFReg<20, "d20">, DwarfRegNum<[276]>;
 def D21 : ARMFReg<21, "d21">, DwarfRegNum<[277]>;
-def D22 : ARMFReg<22, "d22">, DwarfRegNum<[278]>; 
+def D22 : ARMFReg<22, "d22">, DwarfRegNum<[278]>;
 def D23 : ARMFReg<23, "d23">, DwarfRegNum<[279]>;
 def D24 : ARMFReg<24, "d24">, DwarfRegNum<[280]>;
 def D25 : ARMFReg<25, "d25">, DwarfRegNum<[281]>;
@@ -158,11 +158,11 @@ def Q15 : ARMReg<15, "q15", [D30, D31]>;
 // Current Program Status Register.
 // We model fpscr with two registers: FPSCR models the control bits and will be
 // reserved. FPSCR_NZCV models the flag bits and will be unreserved. APSR_NZCV
-// models the APSR when it's accessed by some special instructions. In such cases 
+// models the APSR when it's accessed by some special instructions. In such cases
 // it has the same encoding as PC.
 def CPSR       : ARMReg<0,  "cpsr">;
 def APSR       : ARMReg<1,  "apsr">;
-def APSR_NZCV  : ARMReg<15, "apsr_nzcv">; 
+def APSR_NZCV  : ARMReg<15, "apsr_nzcv">;
 def SPSR       : ARMReg<2,  "spsr">;
 def FPSCR      : ARMReg<3,  "fpscr">;
 def FPSCR_NZCV : ARMReg<3,  "fpscr_nzcv"> {
@@ -199,7 +199,7 @@ def GPR : RegisterClass<"ARM", [i32], 32, (add (sequence "R%u", 0, 12),
   // Thumb1 instructions that know how to use hi regs.
   let AltOrders = [(add LR, GPR), (trunc GPR, 8)];
   let AltOrderSelect = [{
-      return 1 + MF.getTarget().getSubtarget<ARMSubtarget>().isThumb1Only();
+      return 1 + MF.getSubtarget<ARMSubtarget>().isThumb1Only();
   }];
 }
 
@@ -209,17 +209,17 @@ def GPR : RegisterClass<"ARM", [i32], 32, (add (sequence "R%u", 0, 12),
 def GPRnopc : RegisterClass<"ARM", [i32], 32, (sub GPR, PC)> {
   let AltOrders = [(add LR, GPRnopc), (trunc GPRnopc, 8)];
   let AltOrderSelect = [{
-      return 1 + MF.getTarget().getSubtarget<ARMSubtarget>().isThumb1Only();
+      return 1 + MF.getSubtarget<ARMSubtarget>().isThumb1Only();
   }];
 }
 
 // GPRs without the PC but with APSR. Some instructions allow accessing the
-// APSR, while actually encoding PC in the register field. This is usefull
+// APSR, while actually encoding PC in the register field. This is useful
 // for assembly and disassembly only.
 def GPRwithAPSR : RegisterClass<"ARM", [i32], 32, (add (sub GPR, PC), APSR_NZCV)> {
   let AltOrders = [(add LR, GPRnopc), (trunc GPRnopc, 8)];
   let AltOrderSelect = [{
-      return 1 + MF.getTarget().getSubtarget<ARMSubtarget>().isThumb1Only();
+      return 1 + MF.getSubtarget<ARMSubtarget>().isThumb1Only();
   }];
 }
 
@@ -237,7 +237,7 @@ def GPRsp : RegisterClass<"ARM", [i32], 32, (add SP)>;
 def rGPR : RegisterClass<"ARM", [i32], 32, (sub GPR, SP, PC)> {
   let AltOrders = [(add LR, rGPR), (trunc rGPR, 8)];
   let AltOrderSelect = [{
-      return 1 + MF.getTarget().getSubtarget<ARMSubtarget>().isThumb1Only();
+      return 1 + MF.getSubtarget<ARMSubtarget>().isThumb1Only();
   }];
 }
 
@@ -255,7 +255,7 @@ def hGPR : RegisterClass<"ARM", [i32], 32, (sub GPR, tGPR)>;
 def tcGPR : RegisterClass<"ARM", [i32], 32, (add R0, R1, R2, R3, R12)> {
   let AltOrders = [(and tcGPR, tGPR)];
   let AltOrderSelect = [{
-      return MF.getTarget().getSubtarget<ARMSubtarget>().isThumb1Only();
+      return MF.getSubtarget<ARMSubtarget>().isThumb1Only();
   }];
 }
 
@@ -266,12 +266,19 @@ def CCR : RegisterClass<"ARM", [i32], 32, (add CPSR)> {
 }
 
 // Scalar single precision floating point register class..
-// FIXME: Allocation order changed to s0, s2, s4, ... as a quick hack to
-// avoid partial-write dependencies on D registers (S registers are
-// renamed as portions of D registers).
-def SPR : RegisterClass<"ARM", [f32], 32, (add (decimate
-                                                (sequence "S%u", 0, 31), 2),
-                                               (sequence "S%u", 0, 31))>;
+// FIXME: Allocation order changed to s0, s2, ... or s0, s4, ... as a quick hack
+// to avoid partial-write dependencies on D or Q (depending on platform)
+// registers (S registers are renamed as portions of D/Q registers).
+def SPR : RegisterClass<"ARM", [f32], 32, (sequence "S%u", 0, 31)> {
+  let AltOrders = [(add (decimate SPR, 2), SPR),
+                   (add (decimate SPR, 4),
+                        (decimate SPR, 2),
+                        (decimate (rotl SPR, 1), 4),
+                        (decimate (rotl SPR, 1), 2))];
+  let AltOrderSelect = [{
+    return 1 + MF.getSubtarget<ARMSubtarget>().useStride4VFPs(MF);
+  }];
+}
 
 // Subset of SPR which can be used as a source of NEON scalars for 16-bit
 // operations
@@ -281,25 +288,29 @@ def SPR_8 : RegisterClass<"ARM", [f32], 32, (sequence "S%u", 0, 15)>;
 // class.
 // ARM requires only word alignment for double. It's more performant if it
 // is double-word alignment though.
-def DPR : RegisterClass<"ARM", [f64, v8i8, v4i16, v2i32, v1i64, v2f32], 64,
+def DPR : RegisterClass<"ARM", [f64, v8i8, v4i16, v2i32, v1i64, v2f32, v4f16], 64,
                         (sequence "D%u", 0, 31)> {
-  // Allocate non-VFP2 registers D16-D31 first.
-  let AltOrders = [(rotl DPR, 16)];
-  let AltOrderSelect = [{ return 1; }];
+  // Allocate non-VFP2 registers D16-D31 first, and prefer even registers on
+  // Darwin platforms.
+  let AltOrders = [(rotl DPR, 16),
+                   (add (decimate (rotl DPR, 16), 2), (rotl DPR, 16))];
+  let AltOrderSelect = [{
+    return 1 + MF.getSubtarget<ARMSubtarget>().useStride4VFPs(MF);
+  }];
 }
 
 // Subset of DPR that are accessible with VFP2 (and so that also have
 // 32-bit SPR subregs).
-def DPR_VFP2 : RegisterClass<"ARM", [f64, v8i8, v4i16, v2i32, v1i64, v2f32], 64,
+def DPR_VFP2 : RegisterClass<"ARM", [f64, v8i8, v4i16, v2i32, v1i64, v2f32, v4f16], 64,
                              (trunc DPR, 16)>;
 
 // Subset of DPR which can be used as a source of NEON scalars for 16-bit
 // operations
-def DPR_8 : RegisterClass<"ARM", [f64, v8i8, v4i16, v2i32, v1i64, v2f32], 64,
+def DPR_8 : RegisterClass<"ARM", [f64, v8i8, v4i16, v2i32, v1i64, v2f32, v4f16], 64,
                           (trunc DPR, 8)>;
 
 // Generic 128-bit vector register class.
-def QPR : RegisterClass<"ARM", [v16i8, v8i16, v4i32, v2i64, v4f32, v2f64], 128,
+def QPR : RegisterClass<"ARM", [v16i8, v8i16, v4i32, v2i64, v4f32, v2f64, v8f16], 128,
                         (sequence "Q%u", 0, 15)> {
   // Allocate non-VFP2 aliases Q8-Q15 first.
   let AltOrders = [(rotl QPR, 8)];

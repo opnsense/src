@@ -58,6 +58,7 @@ namespace clang
     class DiagnosticsEngine;
     class DiagnosticOptions;
     class EnumDecl;
+    class EnumConstantDecl;
     class Expr;
     class ExternalASTSource;
     class ExtVectorElementExpr;
@@ -71,11 +72,14 @@ namespace clang
     class FunctionTemplateSpecializationInfo;
     class GotoStmt;
     class HeaderSearchOptions;
+    class IdentifierInfo;
     class IdentifierTable;
     class IntegerLiteral;
     class LabelStmt;
     class LangOptions;
+    class MacroDirective;
     class MemberExpr;
+    class Module;
     class NamedDecl;
     class NamespaceDecl;
     class NonTypeTemplateParmDecl;
@@ -128,6 +132,8 @@ namespace clang
 
 namespace llvm
 {
+    class APInt;
+    class APSInt;
     class LLVMContext;
     class ExecutionEngine;
 }

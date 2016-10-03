@@ -21,7 +21,7 @@
 #include "clang/AST/RecordLayout.h"
 #include "clang/AST/StmtObjC.h"
 #include "clang/CodeGen/CGFunctionInfo.h"
-#include "llvm/Support/CallSite.h"
+#include "llvm/IR/CallSite.h"
 
 using namespace clang;
 using namespace CodeGen;
@@ -65,7 +65,7 @@ static uint64_t LookupFieldBitOffset(CodeGen::CodeGenModule &CGM,
 uint64_t CGObjCRuntime::ComputeIvarBaseOffset(CodeGen::CodeGenModule &CGM,
                                               const ObjCInterfaceDecl *OID,
                                               const ObjCIvarDecl *Ivar) {
-  return LookupFieldBitOffset(CGM, OID, 0, Ivar) / 
+  return LookupFieldBitOffset(CGM, OID, nullptr, Ivar) /
     CGM.getContext().getCharWidth();
 }
 
@@ -116,7 +116,7 @@ LValue CGObjCRuntime::EmitValueForIvarAtOffset(CodeGen::CodeGenFunction &CGF,
   // Note, there is a subtle invariant here: we can only call this routine on
   // non-synthesized ivars but we may be called for synthesized ivars.  However,
   // a synthesized ivar can never be a bit-field, so this is safe.
-  uint64_t FieldBitOffset = LookupFieldBitOffset(CGF.CGM, OID, 0, Ivar);
+  uint64_t FieldBitOffset = LookupFieldBitOffset(CGF.CGM, OID, nullptr, Ivar);
   uint64_t BitOffset = FieldBitOffset % CGF.CGM.getContext().getCharWidth();
   uint64_t AlignmentBits = CGF.CGM.getTarget().getCharAlign();
   uint64_t BitFieldSize = Ivar->getBitWidthValue(CGF.getContext());
@@ -134,14 +134,15 @@ LValue CGObjCRuntime::EmitValueForIvarAtOffset(CodeGen::CodeGenFunction &CGF,
   CGBitFieldInfo *Info = new (CGF.CGM.getContext()) CGBitFieldInfo(
     CGBitFieldInfo::MakeInfo(CGF.CGM.getTypes(), Ivar, BitOffset, BitFieldSize,
                              CGF.CGM.getContext().toBits(StorageSize),
-                             Alignment.getQuantity()));
+                             CharUnits::fromQuantity(0)));
 
-  V = CGF.Builder.CreateBitCast(V,
-                                llvm::Type::getIntNPtrTy(CGF.getLLVMContext(),
+  Address Addr(V, Alignment);
+  Addr = CGF.Builder.CreateElementBitCast(Addr,
+                                   llvm::Type::getIntNTy(CGF.getLLVMContext(),
                                                          Info->StorageSize));
-  return LValue::MakeBitfield(V, *Info,
+  return LValue::MakeBitfield(Addr, *Info,
                               IvarTy.withCVRQualifiers(CVRQualifiers),
-                              Alignment);
+                              AlignmentSource::Decl);
 }
 
 namespace {
@@ -149,16 +150,16 @@ namespace {
     const VarDecl *Variable;
     const Stmt *Body;
     llvm::BasicBlock *Block;
-    llvm::Value *TypeInfo;
+    llvm::Constant *TypeInfo;
   };
 
-  struct CallObjCEndCatch : EHScopeStack::Cleanup {
+  struct CallObjCEndCatch final : EHScopeStack::Cleanup {
     CallObjCEndCatch(bool MightThrow, llvm::Value *Fn) :
       MightThrow(MightThrow), Fn(Fn) {}
     bool MightThrow;
     llvm::Value *Fn;
 
-    void Emit(CodeGenFunction &CGF, Flags flags) {
+    void Emit(CodeGenFunction &CGF, Flags flags) override {
       if (!MightThrow) {
         CGF.Builder.CreateCall(Fn)->setDoesNotThrow();
         return;
@@ -201,7 +202,7 @@ void CGObjCRuntime::EmitTryCatchStmt(CodeGenFunction &CGF,
 
       // @catch(...) always matches.
       if (!CatchDecl) {
-        Handler.TypeInfo = 0; // catch-all
+        Handler.TypeInfo = nullptr; // catch-all
         // Don't consider any other catches.
         break;
       }
@@ -242,7 +243,7 @@ void CGObjCRuntime::EmitTryCatchStmt(CodeGenFunction &CGF,
 
     if (endCatchFn) {
       // Add a cleanup to leave the catch.
-      bool EndCatchMightThrow = (Handler.Variable == 0);
+      bool EndCatchMightThrow = (Handler.Variable == nullptr);
 
       CGF.EHStack.pushCleanup<CallObjCEndCatch>(NormalAndEHCleanup,
                                                 EndCatchMightThrow,
@@ -255,24 +256,7 @@ void CGObjCRuntime::EmitTryCatchStmt(CodeGenFunction &CGF,
       llvm::Value *CastExn = CGF.Builder.CreateBitCast(Exn, CatchType);
 
       CGF.EmitAutoVarDecl(*CatchParam);
-
-      llvm::Value *CatchParamAddr = CGF.GetAddrOfLocalVar(CatchParam);
-
-      switch (CatchParam->getType().getQualifiers().getObjCLifetime()) {
-      case Qualifiers::OCL_Strong:
-        CastExn = CGF.EmitARCRetainNonBlock(CastExn);
-        // fallthrough
-
-      case Qualifiers::OCL_None:
-      case Qualifiers::OCL_ExplicitNone:
-      case Qualifiers::OCL_Autoreleasing:
-        CGF.Builder.CreateStore(CastExn, CatchParamAddr);
-        break;
-
-      case Qualifiers::OCL_Weak:
-        CGF.EmitARCInitWeak(CatchParamAddr, CastExn);
-        break;
-      }
+      EmitInitOfCatchParam(CGF, CastExn, CatchParam);
     }
 
     CGF.ObjCEHValueStack.push_back(Exn);
@@ -296,14 +280,38 @@ void CGObjCRuntime::EmitTryCatchStmt(CodeGenFunction &CGF,
     CGF.EmitBlock(Cont.getBlock());
 }
 
+void CGObjCRuntime::EmitInitOfCatchParam(CodeGenFunction &CGF,
+                                         llvm::Value *exn,
+                                         const VarDecl *paramDecl) {
+
+  Address paramAddr = CGF.GetAddrOfLocalVar(paramDecl);
+
+  switch (paramDecl->getType().getQualifiers().getObjCLifetime()) {
+  case Qualifiers::OCL_Strong:
+    exn = CGF.EmitARCRetainNonBlock(exn);
+    // fallthrough
+
+  case Qualifiers::OCL_None:
+  case Qualifiers::OCL_ExplicitNone:
+  case Qualifiers::OCL_Autoreleasing:
+    CGF.Builder.CreateStore(exn, paramAddr);
+    return;
+
+  case Qualifiers::OCL_Weak:
+    CGF.EmitARCInitWeak(paramAddr, exn);
+    return;
+  }
+  llvm_unreachable("invalid ownership qualifier");
+}
+
 namespace {
-  struct CallSyncExit : EHScopeStack::Cleanup {
+  struct CallSyncExit final : EHScopeStack::Cleanup {
     llvm::Value *SyncExitFn;
     llvm::Value *SyncArg;
     CallSyncExit(llvm::Value *SyncExitFn, llvm::Value *SyncArg)
       : SyncExitFn(SyncExitFn), SyncArg(SyncArg) {}
 
-    void Emit(CodeGenFunction &CGF, Flags flags) {
+    void Emit(CodeGenFunction &CGF, Flags flags) override {
       CGF.Builder.CreateCall(SyncExitFn, SyncArg)->setDoesNotThrow();
     }
   };

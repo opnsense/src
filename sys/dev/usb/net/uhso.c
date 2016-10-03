@@ -47,6 +47,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/bus.h>
 
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_types.h>
 #include <net/netisr.h>
 #include <net/bpf.h>
@@ -287,7 +288,7 @@ static const STRUCT_USB_HOST_ID uhso_devs[] = {
 
 static SYSCTL_NODE(_hw_usb, OID_AUTO, uhso, CTLFLAG_RW, 0, "USB uhso");
 static int uhso_autoswitch = 1;
-SYSCTL_INT(_hw_usb_uhso, OID_AUTO, auto_switch, CTLFLAG_RW,
+SYSCTL_INT(_hw_usb_uhso, OID_AUTO, auto_switch, CTLFLAG_RWTUN,
     &uhso_autoswitch, 0, "Automatically switch to modem mode");
 
 #ifdef USB_DEBUG
@@ -297,7 +298,7 @@ static int uhso_debug = UHSO_DEBUG;
 static int uhso_debug = -1;
 #endif
 
-SYSCTL_INT(_hw_usb_uhso, OID_AUTO, debug, CTLFLAG_RW,
+SYSCTL_INT(_hw_usb_uhso, OID_AUTO, debug, CTLFLAG_RWTUN,
     &uhso_debug, 0, "Debug level");
 
 #define UHSO_DPRINTF(n, x, ...) {\
@@ -496,6 +497,7 @@ DRIVER_MODULE(uhso, uhub, uhso_driver, uhso_devclass, uhso_driver_loaded, 0);
 MODULE_DEPEND(uhso, ucom, 1, 1, 1);
 MODULE_DEPEND(uhso, usb, 1, 1, 1);
 MODULE_VERSION(uhso, 1);
+USB_PNP_HOST_INFO(uhso_devs);
 
 static struct ucom_callback uhso_ucom_callback = {
 	.ucom_cfg_get_status = &uhso_ucom_cfg_get_status,
@@ -594,7 +596,7 @@ uhso_attach(device_t self)
 	    CTLFLAG_RD, uhso_port[UHSO_IFACE_PORT(sc->sc_type)], 0,
 	    "Port available at this interface");
 	SYSCTL_ADD_PROC(sctx, SYSCTL_CHILDREN(soid), OID_AUTO, "radio",
-	    CTLTYPE_INT | CTLFLAG_RW, sc, 0, uhso_radio_sysctl, "I", "Enable radio");
+	    CTLTYPE_INT | CTLFLAG_RWTUN, sc, 0, uhso_radio_sysctl, "I", "Enable radio");
 
 	/*
 	 * The default interface description on most Option devices isn't
@@ -1223,6 +1225,7 @@ uhso_mux_write_callback(struct usb_xfer *xfer, usb_error_t error)
 		    ht->ht_muxport);
 		/* FALLTHROUGH */
 	case USB_ST_SETUP:
+tr_setup:
 		pc = usbd_xfer_get_frame(xfer, 1);
 		if (ucom_get_data(&sc->sc_ucom[ht->ht_muxport], pc,
 		    0, 32, &actlen)) {
@@ -1253,7 +1256,8 @@ uhso_mux_write_callback(struct usb_xfer *xfer, usb_error_t error)
 		UHSO_DPRINTF(0, "error: %s\n", usbd_errstr(error));
 		if (error == USB_ERR_CANCELLED)
 			break;
-		break;
+		usbd_xfer_set_stall(xfer);
+		goto tr_setup;
 	}
 }
 
@@ -1664,7 +1668,7 @@ uhso_if_rxflush(void *arg)
 	struct ip6_hdr *ip6;
 #endif
 	uint16_t iplen;
-	int len, isr;
+	int isr;
 
 	m = NULL;
 	mwait = sc->sc_mwait;
@@ -1684,16 +1688,11 @@ uhso_if_rxflush(void *arg)
 
 			UHSO_DPRINTF(3, "partial m0=%p(%d), concat w/ m=%p(%d)\n",
 			    m0, m0->m_len, m, m->m_len);
-			len = m->m_len + m0->m_len;
 
-			/* Concat mbufs and fix headers */
-			m_cat(m0, m);
-			m0->m_pkthdr.len = len;
-			m->m_flags &= ~M_PKTHDR;
-
+			m_catpkt(m0, m);
 			m = m_pullup(m0, sizeof(struct ip));
 			if (m == NULL) {
-				ifp->if_ierrors++;
+				if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 				UHSO_DPRINTF(0, "m_pullup failed\n");
 				mtx_lock(&sc->sc_mtx);
 				continue;
@@ -1723,7 +1722,7 @@ uhso_if_rxflush(void *arg)
 		else {
 			UHSO_DPRINTF(0, "got unexpected ip version %d, "
 			    "m=%p, len=%d\n", (*cp & 0xf0) >> 4, m, m->m_len);
-			ifp->if_ierrors++;
+			if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 			UHSO_HEXDUMP(cp, 4);
 			m_freem(m);
 			m = NULL;
@@ -1733,7 +1732,7 @@ uhso_if_rxflush(void *arg)
 
 		if (iplen == 0) {
 			UHSO_DPRINTF(0, "Zero IP length\n");
-			ifp->if_ierrors++;
+			if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 			m_freem(m);
 			m = NULL;
 			mtx_lock(&sc->sc_mtx);
@@ -1774,7 +1773,7 @@ uhso_if_rxflush(void *arg)
 			continue;
 		}
 
-		ifp->if_ipackets++;
+		if_inc_counter(ifp, IFCOUNTER_IPACKETS, 1);
 		m->m_pkthdr.rcvif = ifp;
 
 		/* Dispatch to IP layer */
@@ -1802,7 +1801,7 @@ uhso_ifnet_write_callback(struct usb_xfer *xfer, usb_error_t error)
 
 	switch (USB_GET_STATE(xfer)) {
 	case USB_ST_TRANSFERRED:
-		ifp->if_opackets++;
+		if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
 		ifp->if_drv_flags &= ~IFF_DRV_OACTIVE;
 	case USB_ST_SETUP:
 tr_setup:
@@ -1897,10 +1896,10 @@ uhso_if_output(struct ifnet *ifp, struct mbuf *m0, const struct sockaddr *dst,
 
 	error = (ifp->if_transmit)(ifp, m0);
 	if (error) {
-		ifp->if_oerrors++;
+		if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 		return (ENOBUFS);
 	}
-	ifp->if_opackets++;
+	if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
 	return (0);
 }
 

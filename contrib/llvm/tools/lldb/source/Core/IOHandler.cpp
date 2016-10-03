@@ -7,18 +7,30 @@
 //
 //===----------------------------------------------------------------------===//
 
+// C Includes
+#ifndef LLDB_DISABLE_CURSES
+#include <curses.h>
+#include <panel.h>
+#endif
 
-#include "lldb/lldb-python.h"
-
+// C++ Includes
+#if defined(__APPLE__)
+#include <deque>
+#endif
 #include <string>
 
+// Other libraries and framework includes
+// Project includes
 #include "lldb/Breakpoint/BreakpointLocation.h"
 #include "lldb/Core/IOHandler.h"
 #include "lldb/Core/Debugger.h"
+#include "lldb/Core/Module.h"
 #include "lldb/Core/State.h"
 #include "lldb/Core/StreamFile.h"
 #include "lldb/Core/ValueObjectRegister.h"
+#ifndef LLDB_DISABLE_LIBEDIT
 #include "lldb/Host/Editline.h"
+#endif
 #include "lldb/Interpreter/CommandCompletions.h"
 #include "lldb/Interpreter/CommandInterpreter.h"
 #include "lldb/Symbol/Block.h"
@@ -27,16 +39,14 @@
 #include "lldb/Target/RegisterContext.h"
 #include "lldb/Target/ThreadPlan.h"
 
-#ifndef LLDB_DISABLE_CURSES
-#include <ncurses.h>
-#include <panel.h>
-#endif
+
 
 using namespace lldb;
 using namespace lldb_private;
 
-IOHandler::IOHandler (Debugger &debugger) :
+IOHandler::IOHandler (Debugger &debugger, IOHandler::Type type) :
     IOHandler (debugger,
+               type,
                StreamFileSP(),  // Adopt STDIN from top input reader
                StreamFileSP(),  // Adopt STDOUT from top input reader
                StreamFileSP(),  // Adopt STDERR from top input reader
@@ -44,8 +54,8 @@ IOHandler::IOHandler (Debugger &debugger) :
 {
 }
 
-
 IOHandler::IOHandler (Debugger &debugger,
+                      IOHandler::Type type,
                       const lldb::StreamFileSP &input_sp,
                       const lldb::StreamFileSP &output_sp,
                       const lldb::StreamFileSP &error_sp,
@@ -54,7 +64,9 @@ IOHandler::IOHandler (Debugger &debugger,
     m_input_sp (input_sp),
     m_output_sp (output_sp),
     m_error_sp (error_sp),
+    m_popped (false),
     m_flags (flags),
+    m_type (type),
     m_user_data (NULL),
     m_done (false),
     m_active (false)
@@ -66,10 +78,7 @@ IOHandler::IOHandler (Debugger &debugger,
                                                   m_error_sp);
 }
 
-IOHandler::~IOHandler()
-{
-}
-
+IOHandler::~IOHandler() = default;
 
 int
 IOHandler::GetInputFD()
@@ -131,7 +140,6 @@ IOHandler::GetOutputStreamFile()
     return m_output_sp;
 }
 
-
 StreamFileSP &
 IOHandler::GetErrorStreamFile()
 {
@@ -150,13 +158,40 @@ IOHandler::GetIsRealTerminal ()
     return GetInputStreamFile()->GetFile().GetIsRealTerminal();
 }
 
+void
+IOHandler::SetPopped (bool b)
+{
+    m_popped.SetValue(b, eBroadcastOnChange);
+}
+
+void
+IOHandler::WaitForPop ()
+{
+    m_popped.WaitForValueEqualTo(true);
+}
+
+void
+IOHandlerStack::PrintAsync (Stream *stream, const char *s, size_t len)
+{
+    if (stream)
+    {
+        Mutex::Locker locker (m_mutex);
+        if (m_top)
+            m_top->PrintAsync (stream, s, len);
+    }
+}
+
 IOHandlerConfirm::IOHandlerConfirm (Debugger &debugger,
                                     const char *prompt,
                                     bool default_response) :
     IOHandlerEditline(debugger,
+                      IOHandler::Type::Confirm,
                       NULL,     // NULL editline_name means no history loaded/saved
-                      NULL,
+                      NULL,     // No prompt
+                      NULL,     // No continuation prompt
                       false,    // Multi-line
+                      false,    // Don't colorize the prompt (i.e. the confirm message.)
+                      0,
                       *this),
     m_default_response (default_response),
     m_user_response (default_response)
@@ -172,10 +207,7 @@ IOHandlerConfirm::IOHandlerConfirm (Debugger &debugger,
     
 }
 
-
-IOHandlerConfirm::~IOHandlerConfirm ()
-{
-}
+IOHandlerConfirm::~IOHandlerConfirm() = default;
 
 int
 IOHandlerConfirm::IOHandlerComplete (IOHandler &io_handler,
@@ -302,81 +334,125 @@ IOHandlerDelegate::IOHandlerComplete (IOHandler &io_handler,
         break;
     }
     
-    
     return 0;
 }
 
-
 IOHandlerEditline::IOHandlerEditline (Debugger &debugger,
+                                      IOHandler::Type type,
                                       const char *editline_name, // Used for saving history files
                                       const char *prompt,
+                                      const char *continuation_prompt,
                                       bool multi_line,
+                                      bool color_prompts,
+                                      uint32_t line_number_start,
                                       IOHandlerDelegate &delegate) :
     IOHandlerEditline(debugger,
+                      type,
                       StreamFileSP(), // Inherit input from top input reader
                       StreamFileSP(), // Inherit output from top input reader
                       StreamFileSP(), // Inherit error from top input reader
                       0,              // Flags
                       editline_name,  // Used for saving history files
                       prompt,
+                      continuation_prompt,
                       multi_line,
+                      color_prompts,
+                      line_number_start,
                       delegate)
 {
 }
 
 IOHandlerEditline::IOHandlerEditline (Debugger &debugger,
+                                      IOHandler::Type type,
                                       const lldb::StreamFileSP &input_sp,
                                       const lldb::StreamFileSP &output_sp,
                                       const lldb::StreamFileSP &error_sp,
                                       uint32_t flags,
                                       const char *editline_name, // Used for saving history files
                                       const char *prompt,
+                                      const char *continuation_prompt,
                                       bool multi_line,
+                                      bool color_prompts,
+                                      uint32_t line_number_start,
                                       IOHandlerDelegate &delegate) :
-    IOHandler (debugger, input_sp, output_sp, error_sp, flags),
+    IOHandler (debugger, type, input_sp, output_sp, error_sp, flags),
+#ifndef LLDB_DISABLE_LIBEDIT
     m_editline_ap (),
+#endif
     m_delegate (delegate),
     m_prompt (),
-    m_multi_line (multi_line)
+    m_continuation_prompt(),
+    m_current_lines_ptr (NULL),
+    m_base_line_number (line_number_start),
+    m_curr_line_idx (UINT32_MAX),
+    m_multi_line (multi_line),
+    m_color_prompts (color_prompts),
+    m_interrupt_exits (true),
+    m_editing (false)
 {
     SetPrompt(prompt);
 
+#ifndef LLDB_DISABLE_LIBEDIT
     bool use_editline = false;
     
-#ifndef _MSC_VER
     use_editline = m_input_sp->GetFile().GetIsRealTerminal();
-#else
-    use_editline = true;
-#endif
 
     if (use_editline)
     {
         m_editline_ap.reset(new Editline (editline_name,
-                                          prompt ? prompt : "",
                                           GetInputFILE (),
                                           GetOutputFILE (),
-                                          GetErrorFILE ()));
-        m_editline_ap->SetLineCompleteCallback (LineCompletedCallback, this);
+                                          GetErrorFILE (),
+                                          m_color_prompts));
+        m_editline_ap->SetIsInputCompleteCallback (IsInputCompleteCallback, this);
         m_editline_ap->SetAutoCompleteCallback (AutoCompleteCallback, this);
+        // See if the delegate supports fixing indentation
+        const char *indent_chars = delegate.IOHandlerGetFixIndentationCharacters();
+        if (indent_chars)
+        {
+            // The delegate does support indentation, hook it up so when any indentation
+            // character is typed, the delegate gets a chance to fix it
+            m_editline_ap->SetFixIndentationCallback (FixIndentationCallback, this, indent_chars);
+        }
     }
-    
+#endif
+    SetBaseLineNumber (m_base_line_number);
+    SetPrompt(prompt ? prompt : "");
+    SetContinuationPrompt(continuation_prompt);    
 }
 
 IOHandlerEditline::~IOHandlerEditline ()
 {
+#ifndef LLDB_DISABLE_LIBEDIT
     m_editline_ap.reset();
+#endif
 }
 
+void
+IOHandlerEditline::Activate ()
+{
+    IOHandler::Activate();
+    m_delegate.IOHandlerActivated(*this);
+}
+
+void
+IOHandlerEditline::Deactivate ()
+{
+    IOHandler::Deactivate();
+    m_delegate.IOHandlerDeactivated(*this);
+}
 
 bool
-IOHandlerEditline::GetLine (std::string &line)
+IOHandlerEditline::GetLine (std::string &line, bool &interrupted)
 {
+#ifndef LLDB_DISABLE_LIBEDIT
     if (m_editline_ap)
     {
-        return m_editline_ap->GetLine(line).Success();
+        return m_editline_ap->GetLine (line, interrupted);
     }
     else
     {
+#endif
         line.clear();
 
         FILE *in = GetInputFILE();
@@ -384,7 +460,14 @@ IOHandlerEditline::GetLine (std::string &line)
         {
             if (GetIsInteractive())
             {
-                const char *prompt = GetPrompt();
+                const char *prompt = NULL;
+                
+                if (m_multi_line && m_curr_line_idx > 0)
+                    prompt = GetContinuationPrompt();
+                
+                if (prompt == NULL)
+                    prompt = GetPrompt();
+                
                 if (prompt && prompt[0])
                 {
                     FILE *out = GetOutputFILE();
@@ -398,10 +481,20 @@ IOHandlerEditline::GetLine (std::string &line)
             char buffer[256];
             bool done = false;
             bool got_line = false;
+            m_editing = true;
             while (!done)
             {
                 if (fgets(buffer, sizeof(buffer), in) == NULL)
-                    done = true;
+                {
+                    const int saved_errno = errno;
+                    if (feof(in))
+                        done = true;
+                    else if (ferror(in))
+                    {
+                        if (saved_errno != EINTR)
+                            done = true;
+                    }
+                }
                 else
                 {
                     got_line = true;
@@ -423,6 +516,7 @@ IOHandlerEditline::GetLine (std::string &line)
                     line.append(buffer, buffer_len);
                 }
             }
+            m_editing = false;
             // We might have gotten a newline on a line by itself
             // make sure to return true in this case.
             return got_line;
@@ -433,19 +527,30 @@ IOHandlerEditline::GetLine (std::string &line)
             SetIsDone(true);
         }
         return false;
+#ifndef LLDB_DISABLE_LIBEDIT
     }
+#endif
 }
 
 
-LineStatus
-IOHandlerEditline::LineCompletedCallback (Editline *editline,
+#ifndef LLDB_DISABLE_LIBEDIT
+bool
+IOHandlerEditline::IsInputCompleteCallback (Editline *editline,
                                           StringList &lines,
-                                          uint32_t line_idx,
-                                          Error &error,
                                           void *baton)
 {
     IOHandlerEditline *editline_reader = (IOHandlerEditline *) baton;
-    return editline_reader->m_delegate.IOHandlerLinesUpdated(*editline_reader, lines, line_idx, error);
+    return editline_reader->m_delegate.IOHandlerIsInputComplete(*editline_reader, lines);
+}
+
+int
+IOHandlerEditline::FixIndentationCallback (Editline *editline,
+                                           const StringList &lines,
+                                           int cursor_position,
+                                           void *baton)
+{
+    IOHandlerEditline *editline_reader = (IOHandlerEditline *) baton;
+    return editline_reader->m_delegate.IOHandlerFixIndentation(*editline_reader, lines, cursor_position);
 }
 
 int
@@ -468,14 +573,24 @@ IOHandlerEditline::AutoCompleteCallback (const char *current_line,
                                                               matches);
     return 0;
 }
+#endif
 
 const char *
 IOHandlerEditline::GetPrompt ()
 {
+#ifndef LLDB_DISABLE_LIBEDIT
     if (m_editline_ap)
+    {
         return m_editline_ap->GetPrompt ();
-    else if (m_prompt.empty())
-        return NULL;
+    }
+    else
+    {
+#endif
+        if (m_prompt.empty())
+            return NULL;
+#ifndef LLDB_DISABLE_LIBEDIT
+    }
+#endif
     return m_prompt.c_str();
 }
 
@@ -486,40 +601,96 @@ IOHandlerEditline::SetPrompt (const char *p)
         m_prompt = p;
     else
         m_prompt.clear();
+#ifndef LLDB_DISABLE_LIBEDIT
     if (m_editline_ap)
         m_editline_ap->SetPrompt (m_prompt.empty() ? NULL : m_prompt.c_str());
+#endif
     return true;
 }
 
-bool
-IOHandlerEditline::GetLines (StringList &lines)
+const char *
+IOHandlerEditline::GetContinuationPrompt ()
 {
+    if (m_continuation_prompt.empty())
+        return NULL;
+    return m_continuation_prompt.c_str();
+}
+
+void
+IOHandlerEditline::SetContinuationPrompt (const char *p)
+{
+    if (p && p[0])
+        m_continuation_prompt = p;
+    else
+        m_continuation_prompt.clear();
+
+#ifndef LLDB_DISABLE_LIBEDIT
+    if (m_editline_ap)
+        m_editline_ap->SetContinuationPrompt (m_continuation_prompt.empty() ? NULL : m_continuation_prompt.c_str());
+#endif
+}
+
+void
+IOHandlerEditline::SetBaseLineNumber (uint32_t line)
+{
+    m_base_line_number = line;
+}
+
+uint32_t
+IOHandlerEditline::GetCurrentLineIndex () const
+{
+#ifndef LLDB_DISABLE_LIBEDIT
+    if (m_editline_ap)
+        return m_editline_ap->GetCurrentLine();
+#endif
+    return m_curr_line_idx;
+}
+
+bool
+IOHandlerEditline::GetLines (StringList &lines, bool &interrupted)
+{
+    m_current_lines_ptr = &lines;
+    
     bool success = false;
+#ifndef LLDB_DISABLE_LIBEDIT
     if (m_editline_ap)
     {
-        std::string end_token;
-        success = m_editline_ap->GetLines(end_token, lines).Success();
+        return m_editline_ap->GetLines (m_base_line_number, lines, interrupted);
     }
     else
     {
-        LineStatus lines_status = LineStatus::Success;
+#endif
+        bool done = false;
+        Error error;
 
-        while (lines_status == LineStatus::Success)
+        while (!done)
         {
+            // Show line numbers if we are asked to
             std::string line;
-            if (GetLine(line))
+            if (m_base_line_number > 0 && GetIsInteractive())
+            {
+                FILE *out = GetOutputFILE();
+                if (out)
+                    ::fprintf(out, "%u%s", m_base_line_number + (uint32_t)lines.GetSize(), GetPrompt() == NULL ? " " : "");
+            }
+            
+            m_curr_line_idx = lines.GetSize();
+            
+            bool interrupted = false;
+            if (GetLine(line, interrupted) && !interrupted)
             {
                 lines.AppendString(line);
-                Error error;
-                lines_status = m_delegate.IOHandlerLinesUpdated(*this, lines, lines.GetSize() - 1, error);
+                done = m_delegate.IOHandlerIsInputComplete(*this, lines);
             }
             else
             {
-                lines_status = LineStatus::Done;
+                done = true;
             }
         }
         success = lines.GetSize() > 0;
+#ifndef LLDB_DISABLE_LIBEDIT
     }
+#endif
     return success;
 }
 
@@ -532,13 +703,23 @@ IOHandlerEditline::Run ()
     std::string line;
     while (IsActive())
     {
+        bool interrupted = false;
         if (m_multi_line)
         {
             StringList lines;
-            if (GetLines (lines))
+            if (GetLines (lines, interrupted))
             {
-                line = lines.CopyList();
-                m_delegate.IOHandlerInputComplete(*this, line);
+                if (interrupted)
+                {
+                    m_done = m_interrupt_exits;
+                    m_delegate.IOHandlerInputInterrupted (*this, line);
+
+                }
+                else
+                {
+                    line = lines.CopyList();
+                    m_delegate.IOHandlerInputComplete (*this, line);
+                }
             }
             else
             {
@@ -547,9 +728,12 @@ IOHandlerEditline::Run ()
         }
         else
         {
-            if (GetLine(line))
+            if (GetLine(line, interrupted))
             {
-                m_delegate.IOHandlerInputComplete(*this, line);
+                if (interrupted)
+                    m_delegate.IOHandlerInputInterrupted (*this, line);
+                else
+                    m_delegate.IOHandlerInputComplete (*this, line);
             }
             else
             {
@@ -560,52 +744,46 @@ IOHandlerEditline::Run ()
 }
 
 void
-IOHandlerEditline::Hide ()
-{
-    if (m_editline_ap && m_editline_ap->GettingLine())
-        m_editline_ap->Hide();
-}
-
-
-void
-IOHandlerEditline::Refresh ()
-{
-    if (m_editline_ap && m_editline_ap->GettingLine())
-        m_editline_ap->Refresh();
-    else
-    {
-        const char *prompt = GetPrompt();
-        if (prompt && prompt[0])
-        {
-            FILE *out = GetOutputFILE();
-            if (out)
-            {
-                ::fprintf(out, "%s", prompt);
-                ::fflush(out);
-            }
-        }
-    }
-}
-
-void
 IOHandlerEditline::Cancel ()
 {
+#ifndef LLDB_DISABLE_LIBEDIT
     if (m_editline_ap)
-        m_editline_ap->Interrupt ();
+        m_editline_ap->Cancel ();
+#endif
 }
 
-void
+bool
 IOHandlerEditline::Interrupt ()
 {
+    // Let the delgate handle it first
+    if (m_delegate.IOHandlerInterrupt(*this))
+        return true;
+
+#ifndef LLDB_DISABLE_LIBEDIT
     if (m_editline_ap)
-        m_editline_ap->Interrupt();
+        return m_editline_ap->Interrupt();
+#endif
+    return false;
 }
 
 void
 IOHandlerEditline::GotEOF()
 {
+#ifndef LLDB_DISABLE_LIBEDIT
     if (m_editline_ap)
         m_editline_ap->Interrupt();
+#endif
+}
+
+void
+IOHandlerEditline::PrintAsync (Stream *stream, const char *s, size_t len)
+{
+#ifndef LLDB_DISABLE_LIBEDIT
+    if (m_editline_ap)
+        m_editline_ap->PrintAsync(stream, s, len);
+    else
+#endif
+        IOHandler::PrintAsync(stream, s, len);
 }
 
 // we may want curses to be disabled for some builds
@@ -641,6 +819,7 @@ type summary add -s "x=${var.x}, y=${var.y}" curses::Point
 type summary add -s "w=${var.width}, h=${var.height}" curses::Size
 type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
 #endif
+
     struct Point
     {
         int x;
@@ -672,13 +851,13 @@ type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
         {
             printf ("(x=%i, y=%i)\n", x, y);
         }
-
     };
     
     bool operator == (const Point &lhs, const Point &rhs)
     {
         return lhs.x == rhs.x && lhs.y == rhs.y;
     }
+
     bool operator != (const Point &lhs, const Point &rhs)
     {
         return lhs.x != rhs.x || lhs.y != rhs.y;
@@ -706,13 +885,13 @@ type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
         {
             printf ("(w=%i, h=%i)\n", width, height);
         }
-
     };
     
     bool operator == (const Size &lhs, const Size &rhs)
     {
         return lhs.width == rhs.width && lhs.height == rhs.height;
     }
+
     bool operator != (const Size &lhs, const Size &rhs)
     {
         return lhs.width != rhs.width || lhs.height != rhs.height;
@@ -759,6 +938,7 @@ type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
                 size.height -= h*2;
             origin.y += h;
         }
+
         // Return a status bar rectangle which is the last line of
         // this rectangle. This rectangle will be modified to not
         // include the status bar area.
@@ -828,7 +1008,6 @@ type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
             VerticalSplit (left_width, left, right);
         }
 
-
         void
         VerticalSplit (int left_width, Rect &left, Rect &right) const
         {
@@ -852,6 +1031,7 @@ type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
     {
         return lhs.origin == rhs.origin && lhs.size == rhs.size;
     }
+
     bool operator != (const Rect &lhs, const Rect &rhs)
     {
         return lhs.origin != rhs.origin || lhs.size != rhs.size;
@@ -881,10 +1061,8 @@ type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
     {
     public:
         virtual
-        ~WindowDelegate()
-        {
-        }
-        
+        ~WindowDelegate() = default;
+
         virtual bool
         WindowDelegateDraw (Window &window, bool force)
         {
@@ -915,15 +1093,14 @@ type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
     {
     public:
         HelpDialogDelegate (const char *text, KeyHelp *key_help_array);
+
+        ~HelpDialogDelegate() override;
+
+        bool
+        WindowDelegateDraw (Window &window, bool force) override;
         
-        virtual
-        ~HelpDialogDelegate();
-        
-        virtual bool
-        WindowDelegateDraw (Window &window, bool force);
-        
-        virtual HandleCharResult
-        WindowDelegateHandleChar (Window &window, int key);
+        HandleCharResult
+        WindowDelegateHandleChar (Window &window, int key) override;
         
         size_t
         GetNumLines() const
@@ -942,11 +1119,9 @@ type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
         int m_first_visible_line;
     };
 
-
     class Window
     {
     public:
-
         Window (const char *name) :
             m_name (name),
             m_window (NULL),
@@ -1308,7 +1483,7 @@ type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
                     const size_t max_length = help_delegate_ap->GetMaxLineLength();
                     Rect bounds = GetBounds();
                     bounds.Inset(1, 1);
-                    if (max_length + 4 < bounds.size.width)
+                    if (max_length + 4 < static_cast<size_t>(bounds.size.width))
                     {
                         bounds.origin.x += (bounds.size.width - max_length + 4)/2;
                         bounds.size.width = max_length + 4;
@@ -1323,7 +1498,7 @@ type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
                         }
                     }
                     
-                    if (num_lines + 2 < bounds.size.height)
+                    if (num_lines + 2 < static_cast<size_t>(bounds.size.height))
                     {
                         bounds.origin.y += (bounds.size.height - num_lines + 2)/2;
                         bounds.size.height = num_lines + 2;
@@ -1544,6 +1719,7 @@ type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
         {
             return m_name.c_str();
         }
+
     protected:
         std::string m_name;
         WINDOW *m_window;
@@ -1565,8 +1741,8 @@ type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
     class MenuDelegate
     {
     public:
-        virtual ~MenuDelegate() {}
-        
+        virtual ~MenuDelegate() = default;
+
         virtual MenuActionResult
         MenuDelegateAction (Menu &menu) = 0;
     };
@@ -1590,11 +1766,8 @@ type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
               const char *key_name,
               int key_value,
               uint64_t identifier);
-        
-        virtual ~
-        Menu ()
-        {
-        }
+
+        ~Menu() override = default;
 
         const MenuDelegateSP &
         GetDelegate () const
@@ -1620,11 +1793,11 @@ type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
         void
         DrawMenuTitle (Window &window, bool highlight);
 
-        virtual bool
-        WindowDelegateDraw (Window &window, bool force);
+        bool
+        WindowDelegateDraw (Window &window, bool force) override;
         
-        virtual HandleCharResult
-        WindowDelegateHandleChar (Window &window, int key);
+        HandleCharResult
+        WindowDelegateHandleChar (Window &window, int key) override;
 
         MenuActionResult
         ActionPrivate (Menu &menu)
@@ -1731,7 +1904,6 @@ type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
             return m_max_submenu_name_length + m_max_submenu_key_name_length + 8;
         }
 
-        
         uint64_t
         GetIdentifier() const
         {
@@ -1821,9 +1993,9 @@ type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
         for (size_t i=0; i<num_submenus; ++i)
         {
             Menu *submenu = submenus[i].get();
-            if (m_max_submenu_name_length < submenu->m_name.size())
+            if (static_cast<size_t>(m_max_submenu_name_length) < submenu->m_name.size())
                 m_max_submenu_name_length = submenu->m_name.size();
-            if (m_max_submenu_key_name_length < submenu->m_key_name.size())
+            if (static_cast<size_t>(m_max_submenu_key_name_length) < submenu->m_key_name.size())
                 m_max_submenu_key_name_length = submenu->m_key_name.size();
         }
     }
@@ -1832,9 +2004,9 @@ type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
     Menu::AddSubmenu (const MenuSP &menu_sp)
     {
         menu_sp->m_parent = this;
-        if (m_max_submenu_name_length < menu_sp->m_name.size())
+        if (static_cast<size_t>(m_max_submenu_name_length) < menu_sp->m_name.size())
             m_max_submenu_name_length = menu_sp->m_name.size();
-        if (m_max_submenu_key_name_length < menu_sp->m_key_name.size())
+        if (static_cast<size_t>(m_max_submenu_key_name_length) < menu_sp->m_key_name.size())
             m_max_submenu_key_name_length = menu_sp->m_key_name.size();
         m_submenus.push_back(menu_sp);
     }
@@ -1850,7 +2022,7 @@ type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
             if (width > 2)
             {
                 width -= 2;
-                for (size_t i=0; i< width; ++i)
+                for (int i=0; i< width; ++i)
                     window.PutChar(ACS_HLINE);
             }
             window.PutChar(ACS_RTEE);
@@ -1951,7 +2123,8 @@ type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
                 window.Box();
                 for (size_t i=0; i<num_submenus; ++i)
                 {
-                    const bool is_selected = i == selected_idx;
+                    const bool is_selected =
+                      (i == static_cast<size_t>(selected_idx));
                     window.MoveCursor(x, y + i);
                     if (is_selected)
                     {
@@ -1990,7 +2163,7 @@ type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
                 case KEY_DOWN:
                 case KEY_UP:
                     // Show last menu or first menu
-                    if (selected_idx < num_submenus)
+                    if (selected_idx < static_cast<int>(num_submenus))
                         run_menu_sp = submenus[selected_idx];
                     else if (!submenus.empty())
                         run_menu_sp = submenus.front();
@@ -2000,9 +2173,9 @@ type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
                 case KEY_RIGHT:
                 {
                     ++m_selected;
-                    if (m_selected >= num_submenus)
+                    if (m_selected >= static_cast<int>(num_submenus))
                         m_selected = 0;
-                    if (m_selected < num_submenus)
+                    if (m_selected < static_cast<int>(num_submenus))
                         run_menu_sp = submenus[m_selected];
                     else if (!submenus.empty())
                         run_menu_sp = submenus.front();
@@ -2015,7 +2188,7 @@ type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
                     --m_selected;
                     if (m_selected < 0)
                         m_selected = num_submenus - 1;
-                    if (m_selected < num_submenus)
+                    if (m_selected < static_cast<int>(num_submenus))
                         run_menu_sp = submenus[m_selected];
                     else if (!submenus.empty())
                         run_menu_sp = submenus.front();
@@ -2041,7 +2214,7 @@ type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
             {
                 // Run the action on this menu in case we need to populate the
                 // menu with dynamic content and also in case check marks, and
-                // any other menu decorations need to be caclulated
+                // any other menu decorations need to be calculated
                 if (run_menu_sp->Action() == MenuActionResult::Quit)
                     return eQuitApplication;
 
@@ -2069,7 +2242,7 @@ type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
                         const int start_select = m_selected;
                         while (++m_selected != start_select)
                         {
-                            if (m_selected >= num_submenus)
+                            if (static_cast<size_t>(m_selected) >= num_submenus)
                                 m_selected = 0;
                             if (m_submenus[m_selected]->GetType() == Type::Separator)
                                 continue;
@@ -2086,7 +2259,7 @@ type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
                         const int start_select = m_selected;
                         while (--m_selected != start_select)
                         {
-                            if (m_selected < 0)
+                            if (m_selected < static_cast<int>(0))
                                 m_selected = num_submenus - 1;
                             if (m_submenus[m_selected]->GetType() == Type::Separator)
                                 continue;
@@ -2098,7 +2271,7 @@ type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
                     break;
                     
                 case KEY_RETURN:
-                    if (selected_idx < num_submenus)
+                    if (static_cast<size_t>(selected_idx) < num_submenus)
                     {
                         if (submenus[selected_idx]->Action() == MenuActionResult::Quit)
                             return eQuitApplication;
@@ -2113,13 +2286,11 @@ type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
                     
                 default:
                 {
-                    bool handled = false;
                     for (size_t i=0; i<num_submenus; ++i)
                     {
                         Menu *menu = submenus[i].get();
                         if (menu->GetKeyValue() == key)
                         {
-                            handled = true;
                             SetSelectedSubmenuIndex(i);
                             window.GetParent()->RemoveSubWindow(&window);
                             if (menu->Action() == MenuActionResult::Quit)
@@ -2134,11 +2305,9 @@ type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
         }
         else if (menu_type == Menu::Type::Separator)
         {
-            
         }
         return result;
     }
-
 
     class Application
     {
@@ -2288,6 +2457,7 @@ type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
                                     ConstString broadcaster_class (broadcaster->GetBroadcasterClass());
                                     if (broadcaster_class == broadcaster_class_process)
                                     {
+                                        debugger.GetCommandInterpreter().UpdateExecutionContext(NULL);
                                         update = true;
                                         continue; // Don't get any key, just update our view
                                     }
@@ -2302,6 +2472,7 @@ type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
                     switch (key_result)
                     {
                         case eKeyHandled:
+                            debugger.GetCommandInterpreter().UpdateExecutionContext(NULL);
                             update = true;
                             break;
                         case eKeyNotHandled:
@@ -2314,7 +2485,6 @@ type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
             }
             
             debugger.CancelForwardEvents (listener_sp);
-
         }
         
         WindowSP &
@@ -2338,10 +2508,8 @@ type summary add -s "${var.origin%S} ${var.size%S}" curses::Rect
         FILE *m_in;
         FILE *m_out;
     };
-    
 
 } // namespace curses
-
 
 using namespace curses;
 
@@ -2479,11 +2647,13 @@ class TreeDelegate
 {
 public:
     TreeDelegate() {}
-    virtual ~TreeDelegate() {}
+    virtual ~TreeDelegate() = default;
+
     virtual void TreeDelegateDrawTreeItem (TreeItem &item, Window &window) = 0;
     virtual void TreeDelegateGenerateChildren (TreeItem &item) = 0;
     virtual bool TreeDelegateItemSelected (TreeItem &item) = 0; // Return true if we need to update views
 };
+
 typedef std::shared_ptr<TreeDelegate> TreeDelegateSP;
 
 class TreeItem
@@ -2493,6 +2663,7 @@ public:
     TreeItem (TreeItem *parent, TreeDelegate &delegate, bool might_have_children) :
         m_parent (parent),
         m_delegate (delegate),
+        m_user_data (NULL),
         m_identifier (0),
         m_row_idx (-1),
         m_children (),
@@ -2508,6 +2679,7 @@ public:
         {
             m_parent = rhs.m_parent;
             m_delegate = rhs.m_delegate;
+            m_user_data = rhs.m_user_data;
             m_identifier = rhs.m_identifier;
             m_row_idx = rhs.m_row_idx;
             m_children = rhs.m_children;
@@ -2567,17 +2739,21 @@ public:
     {
         m_delegate.TreeDelegateItemSelected(*this);
     }
+
     void
     CalculateRowIndexes (int &row_idx)
     {
         SetRowIndex(row_idx);
         ++row_idx;
 
-        // The root item must calculate its children
-        if (m_parent == NULL)
+        const bool expanded = IsExpanded();
+
+        // The root item must calculate its children,
+        // or we must calculate the number of children
+        // if the item is expanded
+        if (m_parent == NULL || expanded)
             GetNumChildren();
         
-        const bool expanded = IsExpanded();
         for (auto &item : m_children)
         {
             if (expanded)
@@ -2650,7 +2826,8 @@ public:
                 window.PutChar (ACS_DIAMOND);
                 window.PutChar (ACS_HLINE);
             }
-            bool highlight = (selected_row_idx == m_row_idx) && window.IsActive();
+            bool highlight =
+              (selected_row_idx == static_cast<size_t>(m_row_idx)) && window.IsActive();
 
             if (highlight)
                 window.AttributeOn(A_REVERSE);
@@ -2717,11 +2894,9 @@ public:
     TreeItem *
     GetItemForRowIndex (uint32_t row_idx)
     {
-        if (m_row_idx == row_idx)
+        if (static_cast<uint32_t>(m_row_idx) == row_idx)
             return this;
         if (m_children.empty())
-            return NULL;
-        if (m_children.back().m_row_idx < row_idx)
             return NULL;
         if (IsExpanded())
         {
@@ -2735,17 +2910,18 @@ public:
         return NULL;
     }
     
-//    void *
-//    GetUserData() const
-//    {
-//        return m_user_data;
-//    }
-//    
-//    void
-//    SetUserData (void *user_data)
-//    {
-//        m_user_data = user_data;
-//    }
+    void *
+    GetUserData() const
+    {
+        return m_user_data;
+    }
+    
+    void
+    SetUserData (void *user_data)
+    {
+        m_user_data = user_data;
+    }
+
     uint64_t
     GetIdentifier() const
     {
@@ -2757,18 +2933,22 @@ public:
     {
         m_identifier = identifier;
     }
-    
+
+    void
+    SetMightHaveChildren (bool b)
+    {
+        m_might_have_children = b;
+    }
 
 protected:
     TreeItem *m_parent;
     TreeDelegate &m_delegate;
-    //void *m_user_data;
+    void *m_user_data;
     uint64_t m_identifier;
     int m_row_idx; // Zero based visible row index, -1 if not visible or for the root item
     std::vector<TreeItem> m_children;
     bool m_might_have_children;
     bool m_is_expanded;
-
 };
 
 class TreeWindowDelegate : public WindowDelegate
@@ -2795,8 +2975,8 @@ public:
         return m_max_y - m_min_y;
     }
 
-    virtual bool
-    WindowDelegateDraw (Window &window, bool force)
+    bool
+    WindowDelegateDraw (Window &window, bool force) override
     {
         ExecutionContext exe_ctx (m_debugger.GetCommandInterpreter().GetExecutionContext());
         Process *process = exe_ctx.GetProcessPtr();
@@ -2859,16 +3039,15 @@ public:
         
         return true; // Drawing handled
     }
-    
-    
-    virtual const char *
-    WindowDelegateGetHelpText ()
+
+    const char *
+    WindowDelegateGetHelpText () override
     {
         return "Thread window keyboard shortcuts:";
     }
     
-    virtual KeyHelp *
-    WindowDelegateGetKeyHelp ()
+    KeyHelp *
+    WindowDelegateGetKeyHelp () override
     {
         static curses::KeyHelp g_source_view_key_help[] = {
             { KEY_UP, "Select previous item" },
@@ -2886,8 +3065,8 @@ public:
         return g_source_view_key_help;
     }
     
-    virtual HandleCharResult
-    WindowDelegateHandleChar (Window &window, int c)
+    HandleCharResult
+    WindowDelegateHandleChar (Window &window, int c) override
     {
         switch(c)
         {
@@ -2932,6 +3111,7 @@ public:
                         m_selected_item->ItemWasSelected ();
                 }
                 return eKeyHandled;
+
             case KEY_DOWN:
                 if (m_selected_row_idx + 1 < m_num_rows)
                 {
@@ -2998,40 +3178,34 @@ protected:
     int m_min_y;
     int m_max_x;
     int m_max_y;
-
 };
 
 class FrameTreeDelegate : public TreeDelegate
 {
 public:
-    FrameTreeDelegate (const ThreadSP &thread_sp) :
-        TreeDelegate(),
-        m_thread_wp()
+    FrameTreeDelegate () :
+        TreeDelegate()
     {
-        if (thread_sp)
-            m_thread_wp = thread_sp;
+        FormatEntity::Parse ("frame #${frame.index}: {${function.name}${function.pc-offset}}}",
+                             m_format);
     }
-    
-    virtual ~FrameTreeDelegate()
+
+    ~FrameTreeDelegate() override = default;
+
+    void
+    TreeDelegateDrawTreeItem (TreeItem &item, Window &window) override
     {
-    }
-    
-    virtual void
-    TreeDelegateDrawTreeItem (TreeItem &item, Window &window)
-    {
-        ThreadSP thread_sp = m_thread_wp.lock();
-        if (thread_sp)
+        Thread* thread = (Thread*)item.GetUserData();
+        if (thread)
         {
             const uint64_t frame_idx = item.GetIdentifier();
-            StackFrameSP frame_sp = thread_sp->GetStackFrameAtIndex(frame_idx);
+            StackFrameSP frame_sp = thread->GetStackFrameAtIndex(frame_idx);
             if (frame_sp)
             {
                 StreamString strm;
                 const SymbolContext &sc = frame_sp->GetSymbolContext(eSymbolContextEverything);
                 ExecutionContext exe_ctx (frame_sp);
-                //const char *frame_format = "frame #${frame.index}: ${module.file.basename}{`${function.name}${function.pc-offset}}}";
-                const char *frame_format = "frame #${frame.index}: {${function.name}${function.pc-offset}}}";
-                if (Debugger::FormatPrompt (frame_format, &sc, &exe_ctx, NULL, strm))
+                if (FormatEntity::Format(m_format, strm, &sc, &exe_ctx, NULL, NULL, false, false))
                 {
                     int right_pad = 1;
                     window.PutCStringTruncated(strm.GetString().c_str(), right_pad);
@@ -3039,32 +3213,29 @@ public:
             }
         }
     }
-    virtual void
-    TreeDelegateGenerateChildren (TreeItem &item)
+
+    void
+    TreeDelegateGenerateChildren (TreeItem &item)  override
     {
         // No children for frames yet...
     }
     
-    virtual bool
-    TreeDelegateItemSelected (TreeItem &item)
+    bool
+    TreeDelegateItemSelected (TreeItem &item) override
     {
-        ThreadSP thread_sp = m_thread_wp.lock();
-        if (thread_sp)
+        Thread* thread = (Thread*)item.GetUserData();
+        if (thread)
         {
+            thread->GetProcess()->GetThreadList().SetSelectedThreadByID(thread->GetID());
             const uint64_t frame_idx = item.GetIdentifier();
-            thread_sp->SetSelectedFrameByIndex(frame_idx);
+            thread->SetSelectedFrameByIndex(frame_idx);
             return true;
         }
         return false;
     }
-    void
-    SetThread (ThreadSP thread_sp)
-    {
-        m_thread_wp = thread_sp;
-    }
-    
+
 protected:
-    ThreadWP m_thread_wp;
+    FormatEntity::Entry m_format;
 };
 
 class ThreadTreeDelegate : public TreeDelegate
@@ -3073,91 +3244,105 @@ public:
     ThreadTreeDelegate (Debugger &debugger) :
         TreeDelegate(),
         m_debugger (debugger),
-        m_thread_wp (),
         m_tid (LLDB_INVALID_THREAD_ID),
         m_stop_id (UINT32_MAX)
     {
+        FormatEntity::Parse ("thread #${thread.index}: tid = ${thread.id}{, stop reason = ${thread.stop-reason}}",
+                             m_format);
+    }
+
+    ~ThreadTreeDelegate() override = default;
+
+    ProcessSP
+    GetProcess ()
+    {
+        return m_debugger.GetCommandInterpreter().GetExecutionContext().GetProcessSP();
+    }
+
+    ThreadSP
+    GetThread (const TreeItem &item)
+    {
+        ProcessSP process_sp = GetProcess ();
+        if (process_sp)
+            return process_sp->GetThreadList().FindThreadByID(item.GetIdentifier());
+        return ThreadSP();
     }
     
-    virtual
-    ~ThreadTreeDelegate()
+    void
+    TreeDelegateDrawTreeItem (TreeItem &item, Window &window) override
     {
-    }
-    
-    virtual void
-    TreeDelegateDrawTreeItem (TreeItem &item, Window &window)
-    {
-        ThreadSP thread_sp = m_thread_wp.lock();
+        ThreadSP thread_sp = GetThread (item);
         if (thread_sp)
         {
             StreamString strm;
             ExecutionContext exe_ctx (thread_sp);
-            const char *format = "thread #${thread.index}: tid = ${thread.id}{, stop reason = ${thread.stop-reason}}";
-            if (Debugger::FormatPrompt (format, NULL, &exe_ctx, NULL, strm))
+            if (FormatEntity::Format (m_format, strm, NULL, &exe_ctx, NULL, NULL, false, false))
             {
                 int right_pad = 1;
                 window.PutCStringTruncated(strm.GetString().c_str(), right_pad);
             }
         }
     }
-    virtual void
-    TreeDelegateGenerateChildren (TreeItem &item)
-    {
-        TargetSP target_sp (m_debugger.GetSelectedTarget());
-        if (target_sp)
-        {
-            ProcessSP process_sp = target_sp->GetProcessSP();
-            if (process_sp && process_sp->IsAlive())
-            {
-                StateType state = process_sp->GetState();
-                if (StateIsStoppedState(state, true))
-                {
-                    ThreadSP thread_sp = process_sp->GetThreadList().GetSelectedThread();
-                    if (thread_sp)
-                    {
-                        if (m_stop_id == process_sp->GetStopID() && thread_sp->GetID() == m_tid)
-                            return; // Children are already up to date
-                        if (m_frame_delegate_sp)
-                            m_frame_delegate_sp->SetThread(thread_sp);
-                        else
-                        {
-                            // Always expand the thread item the first time we show it
-                            item.Expand();
-                            m_frame_delegate_sp.reset (new FrameTreeDelegate(thread_sp));
-                        }
 
-                        m_stop_id = process_sp->GetStopID();
-                        m_thread_wp = thread_sp;
-                        m_tid = thread_sp->GetID();
-                        
-                        TreeItem t (&item, *m_frame_delegate_sp, false);
-                        size_t num_frames = thread_sp->GetStackFrameCount();
-                        item.Resize (num_frames, t);
-                        for (size_t i=0; i<num_frames; ++i)
-                        {
-                            item[i].SetIdentifier(i);
-                        }
+    void
+    TreeDelegateGenerateChildren (TreeItem &item) override
+    {
+        ProcessSP process_sp = GetProcess ();
+        if (process_sp && process_sp->IsAlive())
+        {
+            StateType state = process_sp->GetState();
+            if (StateIsStoppedState(state, true))
+            {
+                ThreadSP thread_sp = GetThread (item);
+                if (thread_sp)
+                {
+                    if (m_stop_id == process_sp->GetStopID() && thread_sp->GetID() == m_tid)
+                        return; // Children are already up to date
+                    if (!m_frame_delegate_sp)
+                    {
+                        // Always expand the thread item the first time we show it
+                        m_frame_delegate_sp.reset (new FrameTreeDelegate());
                     }
-                    return;
+
+                    m_stop_id = process_sp->GetStopID();
+                    m_tid = thread_sp->GetID();
+                    
+                    TreeItem t (&item, *m_frame_delegate_sp, false);
+                    size_t num_frames = thread_sp->GetStackFrameCount();
+                    item.Resize (num_frames, t);
+                    for (size_t i=0; i<num_frames; ++i)
+                    {
+                        item[i].SetUserData(thread_sp.get());
+                        item[i].SetIdentifier(i);
+                    }
                 }
+                return;
             }
         }
         item.ClearChildren();
     }
     
-    virtual bool
-    TreeDelegateItemSelected (TreeItem &item)
+    bool
+    TreeDelegateItemSelected (TreeItem &item) override
     {
-        ThreadSP thread_sp = m_thread_wp.lock();
-        if (thread_sp)
+        ProcessSP process_sp = GetProcess ();
+        if (process_sp && process_sp->IsAlive())
         {
-            ThreadList &thread_list = thread_sp->GetProcess()->GetThreadList();
-            Mutex::Locker locker (thread_list.GetMutex());
-            ThreadSP selected_thread_sp = thread_list.GetSelectedThread();
-            if (selected_thread_sp->GetID() != thread_sp->GetID())
+            StateType state = process_sp->GetState();
+            if (StateIsStoppedState(state, true))
             {
-                thread_list.SetSelectedThreadByID(thread_sp->GetID());
-                return true;
+                ThreadSP thread_sp = GetThread (item);
+                if (thread_sp)
+                {
+                    ThreadList &thread_list = thread_sp->GetProcess()->GetThreadList();
+                    Mutex::Locker locker (thread_list.GetMutex());
+                    ThreadSP selected_thread_sp = thread_list.GetSelectedThread();
+                    if (selected_thread_sp->GetID() != thread_sp->GetID())
+                    {
+                        thread_list.SetSelectedThreadByID(thread_sp->GetID());
+                        return true;
+                    }
+                }
             }
         }
         return false;
@@ -3165,10 +3350,98 @@ public:
 
 protected:
     Debugger &m_debugger;
-    ThreadWP m_thread_wp;
     std::shared_ptr<FrameTreeDelegate> m_frame_delegate_sp;
     lldb::user_id_t m_tid;
     uint32_t m_stop_id;
+    FormatEntity::Entry m_format;
+};
+
+class ThreadsTreeDelegate : public TreeDelegate
+{
+public:
+    ThreadsTreeDelegate (Debugger &debugger) :
+        TreeDelegate(),
+        m_thread_delegate_sp (),
+        m_debugger (debugger),
+        m_stop_id (UINT32_MAX)
+    {
+        FormatEntity::Parse("process ${process.id}{, name = ${process.name}}",
+                            m_format);
+    }
+
+    ~ThreadsTreeDelegate() override = default;
+
+    ProcessSP
+    GetProcess ()
+    {
+        return m_debugger.GetCommandInterpreter().GetExecutionContext().GetProcessSP();
+    }
+
+    void
+    TreeDelegateDrawTreeItem (TreeItem &item, Window &window) override
+    {
+        ProcessSP process_sp = GetProcess ();
+        if (process_sp && process_sp->IsAlive())
+        {
+            StreamString strm;
+            ExecutionContext exe_ctx (process_sp);
+            if (FormatEntity::Format (m_format, strm, NULL, &exe_ctx, NULL, NULL, false, false))
+            {
+                int right_pad = 1;
+                window.PutCStringTruncated(strm.GetString().c_str(), right_pad);
+            }
+        }
+    }
+
+    void
+    TreeDelegateGenerateChildren (TreeItem &item) override
+    {
+        ProcessSP process_sp = GetProcess ();
+        if (process_sp && process_sp->IsAlive())
+        {
+            StateType state = process_sp->GetState();
+            if (StateIsStoppedState(state, true))
+            {
+                const uint32_t stop_id = process_sp->GetStopID();
+                if (m_stop_id == stop_id)
+                    return; // Children are already up to date
+                
+                m_stop_id = stop_id;
+
+                if (!m_thread_delegate_sp)
+                {
+                    // Always expand the thread item the first time we show it
+                    //item.Expand();
+                    m_thread_delegate_sp.reset (new ThreadTreeDelegate(m_debugger));
+                }
+                
+                TreeItem t (&item, *m_thread_delegate_sp, false);
+                ThreadList &threads = process_sp->GetThreadList();
+                Mutex::Locker locker (threads.GetMutex());
+                size_t num_threads = threads.GetSize();
+                item.Resize (num_threads, t);
+                for (size_t i=0; i<num_threads; ++i)
+                {
+                    item[i].SetIdentifier(threads.GetThreadAtIndex(i)->GetID());
+                    item[i].SetMightHaveChildren(true);
+                }
+                return;
+            }
+        }
+        item.ClearChildren();
+    }
+    
+    bool
+    TreeDelegateItemSelected (TreeItem &item) override
+    {
+        return false;
+    }
+    
+protected:
+    std::shared_ptr<ThreadTreeDelegate> m_thread_delegate_sp;
+    Debugger &m_debugger;
+    uint32_t m_stop_id;
+    FormatEntity::Entry m_format;
 };
 
 class ValueObjectListDelegate : public WindowDelegate
@@ -3198,11 +3471,8 @@ public:
     {
         SetValues (valobj_list);
     }
-    
-    virtual
-    ~ValueObjectListDelegate()
-    {
-    }
+
+    ~ValueObjectListDelegate() override = default;
 
     void
     SetValues (ValueObjectList &valobj_list)
@@ -3218,8 +3488,8 @@ public:
             m_rows.push_back(Row(m_valobj_list.GetValueObjectAtIndex(i), NULL));
     }
     
-    virtual bool
-    WindowDelegateDraw (Window &window, bool force)
+    bool
+    WindowDelegateDraw (Window &window, bool force) override
     {
         m_num_rows = 0;
         m_min_x = 2;
@@ -3261,8 +3531,8 @@ public:
         return true; // Drawing handled
     }
     
-    virtual KeyHelp *
-    WindowDelegateGetKeyHelp ()
+    KeyHelp *
+    WindowDelegateGetKeyHelp () override
     {
         static curses::KeyHelp g_source_view_key_help[] = {
             { KEY_UP, "Select previous item" },
@@ -3295,9 +3565,8 @@ public:
         return g_source_view_key_help;
     }
 
-    
-    virtual HandleCharResult
-    WindowDelegateHandleChar (Window &window, int c)
+    HandleCharResult
+    WindowDelegateHandleChar (Window &window, int c) override
     {
         switch(c)
         {
@@ -3330,7 +3599,7 @@ public:
                 // Page up key
                 if (m_first_visible_row > 0)
                 {
-                    if (m_first_visible_row > m_max_y)
+                    if (static_cast<int>(m_first_visible_row) > m_max_y)
                         m_first_visible_row -= m_max_y;
                     else
                         m_first_visible_row = 0;
@@ -3341,7 +3610,7 @@ public:
             case '.':
             case KEY_NPAGE:
                 // Page down key
-                if (m_num_rows > m_max_y)
+                if (m_num_rows > static_cast<size_t>(m_max_y))
                 {
                     if (m_first_visible_row + m_max_y < m_num_rows)
                     {
@@ -3355,6 +3624,7 @@ public:
                 if (m_selected_row_idx > 0)
                     --m_selected_row_idx;
                 return eKeyHandled;
+
             case KEY_DOWN:
                 if (m_selected_row_idx + 1 < m_num_rows)
                     ++m_selected_row_idx;
@@ -3493,6 +3763,7 @@ protected:
         
         return true;
     }
+
     void
     DisplayRows (Window &window,
                  std::vector<Row> &rows,
@@ -3508,7 +3779,7 @@ protected:
             // Save the row index in each Row structure
             row.row_idx = m_num_rows;
             if ((m_num_rows >= m_first_visible_row) &&
-                ((m_num_rows - m_first_visible_row) < NumVisibleRows()))
+                ((m_num_rows - m_first_visible_row) < static_cast<size_t>(NumVisibleRows())))
             {
                 row.x = m_min_x;
                 row.y = m_num_rows - m_first_visible_row + 1;
@@ -3554,6 +3825,7 @@ protected:
         }
         return row_count;
     }
+
     static Row *
     GetRowForRowIndexImpl (std::vector<Row> &rows, size_t &row_index)
     {
@@ -3599,20 +3871,17 @@ public:
         m_frame_block (NULL)
     {
     }
-    
-    virtual
-    ~FrameVariablesWindowDelegate()
-    {
-    }
-    
-    virtual const char *
-    WindowDelegateGetHelpText ()
+
+    ~FrameVariablesWindowDelegate() override = default;
+
+    const char *
+    WindowDelegateGetHelpText () override
     {
         return "Frame variable window keyboard shortcuts:";
     }
     
-    virtual bool
-    WindowDelegateDraw (Window &window, bool force)
+    bool
+    WindowDelegateDraw (Window &window, bool force) override
     {
         ExecutionContext exe_ctx (m_debugger.GetCommandInterpreter().GetExecutionContext());
         Process *process = exe_ctx.GetProcessPtr();
@@ -3633,7 +3902,7 @@ public:
                 return true; // Don't do any updating when we are running
             }
         }
-        
+
         ValueObjectList local_values;
         if (frame_block)
         {
@@ -3648,7 +3917,18 @@ public:
                     const DynamicValueType use_dynamic = eDynamicDontRunTarget;
                     const size_t num_locals = locals->GetSize();
                     for (size_t i=0; i<num_locals; ++i)
-                        local_values.Append(frame->GetValueObjectForFrameVariable (locals->GetVariableAtIndex(i), use_dynamic));
+                    {
+                        ValueObjectSP value_sp = frame->GetValueObjectForFrameVariable (locals->GetVariableAtIndex(i), use_dynamic);
+                        if (value_sp)
+                        {
+                            ValueObjectSP synthetic_value_sp = value_sp->GetSyntheticValue();
+                            if (synthetic_value_sp)
+                                local_values.Append(synthetic_value_sp);
+                            else
+                                local_values.Append(value_sp);
+
+                        }
+                    }
                     // Update the values
                     SetValues(local_values);
                 }
@@ -3662,14 +3942,12 @@ public:
         }
         
         return ValueObjectListDelegate::WindowDelegateDraw (window, force);
-
     }
 
 protected:
     Debugger &m_debugger;
     Block *m_frame_block;
 };
-
 
 class RegistersWindowDelegate : public ValueObjectListDelegate
 {
@@ -3679,20 +3957,17 @@ public:
         m_debugger (debugger)
     {
     }
-    
-    virtual
-    ~RegistersWindowDelegate()
-    {
-    }
-    
-    virtual const char *
-    WindowDelegateGetHelpText ()
+
+    ~RegistersWindowDelegate() override = default;
+
+    const char *
+    WindowDelegateGetHelpText () override
     {
         return "Register window keyboard shortcuts:";
     }
 
-    virtual bool
-    WindowDelegateDraw (Window &window, bool force)
+    bool
+    WindowDelegateDraw (Window &window, bool force) override
     {
         ExecutionContext exe_ctx (m_debugger.GetCommandInterpreter().GetExecutionContext());
         StackFrame *frame = exe_ctx.GetFramePtr();
@@ -3832,7 +4107,9 @@ CursesKeyToCString (int ch)
         case KEY_UNDO:      return "undo key";
         case KEY_MOUSE:     return "Mouse event has occurred";
         case KEY_RESIZE:    return "Terminal resize event";
+#ifdef KEY_EVENT
         case KEY_EVENT:     return "We were interrupted by an event";
+#endif
         case KEY_RETURN:    return "return";
         case ' ':           return "space";
         case '\t':          return "tab";
@@ -3867,9 +4144,7 @@ HelpDialogDelegate::HelpDialogDelegate (const char *text, KeyHelp *key_help_arra
     }
 }
 
-HelpDialogDelegate::~HelpDialogDelegate()
-{
-}
+HelpDialogDelegate::~HelpDialogDelegate() = default;
     
 bool
 HelpDialogDelegate::WindowDelegateDraw (Window &window, bool force)
@@ -3880,7 +4155,7 @@ HelpDialogDelegate::WindowDelegateDraw (Window &window, bool force)
     int y = 1;
     const int min_y = y;
     const int max_y = window_height - 1 - y;
-    const int num_visible_lines = max_y - min_y + 1;
+    const size_t num_visible_lines = max_y - min_y + 1;
     const size_t num_lines = m_text.GetSize();
     const char *bottom_message;
     if (num_lines <= num_visible_lines)
@@ -3928,21 +4203,23 @@ HelpDialogDelegate::WindowDelegateHandleChar (Window &window, int key)
             case ',':
                 if (m_first_visible_line > 0)
                 {
-                    if (m_first_visible_line >= num_visible_lines)
+                    if (static_cast<size_t>(m_first_visible_line) >= num_visible_lines)
                         m_first_visible_line -= num_visible_lines;
                     else
                         m_first_visible_line = 0;
                 }
                 break;
+
             case KEY_NPAGE:
             case '.':
                 if (m_first_visible_line + num_visible_lines < num_lines)
                 {
                     m_first_visible_line += num_visible_lines;
-                    if (m_first_visible_line > num_lines)
+                    if (static_cast<size_t>(m_first_visible_line) > num_lines)
                         m_first_visible_line = num_lines - num_visible_lines;
                 }
                 break;
+
             default:
                 done = true;
                 break;
@@ -3997,19 +4274,17 @@ public:
         m_debugger (debugger)
     {
     }
-    
-    virtual
-    ~ApplicationDelegate ()
-    {
-    }
-    virtual bool
-    WindowDelegateDraw (Window &window, bool force)
+
+    ~ApplicationDelegate() override = default;
+
+    bool
+    WindowDelegateDraw (Window &window, bool force) override
     {
         return false; // Drawing not handled, let standard window drawing happen
     }
     
-    virtual HandleCharResult
-    WindowDelegateHandleChar (Window &window, int key)
+    HandleCharResult
+    WindowDelegateHandleChar (Window &window, int key) override
     {
         switch (key)
         {
@@ -4029,10 +4304,9 @@ public:
         }
         return eKeyNotHandled;
     }
-    
-    
-    virtual const char *
-    WindowDelegateGetHelpText ()
+
+    const char *
+    WindowDelegateGetHelpText () override
     {
         return "Welcome to the LLDB curses GUI.\n\n"
         "Press the TAB key to change the selected view.\n"
@@ -4040,8 +4314,8 @@ public:
         "Common key bindings for all views:";
     }
     
-    virtual KeyHelp *
-    WindowDelegateGetKeyHelp ()
+    KeyHelp *
+    WindowDelegateGetKeyHelp () override
     {
         static curses::KeyHelp g_source_view_key_help[] = {
             { '\t', "Select next view" },
@@ -4059,8 +4333,8 @@ public:
         return g_source_view_key_help;
     }
     
-    virtual MenuActionResult
-    MenuDelegateAction (Menu &menu)
+    MenuActionResult
+    MenuDelegateAction (Menu &menu) override
     {
         switch (menu.GetIdentifier())
         {
@@ -4071,7 +4345,7 @@ public:
                     {
                         Process *process = exe_ctx.GetProcessPtr();
                         if (process && process->IsAlive() && StateIsStoppedState (process->GetState(), true))
-                            exe_ctx.GetThreadRef().StepIn(true, true);
+                            exe_ctx.GetThreadRef().StepIn(true);
                     }
                 }
                 return MenuActionResult::Handled;
@@ -4119,7 +4393,7 @@ public:
                     {
                         Process *process = exe_ctx.GetProcessPtr();
                         if (process && process->IsAlive())
-                            process->Destroy();
+                            process->Destroy(false);
                     }
                 }
                 return MenuActionResult::Handled;
@@ -4325,21 +4599,20 @@ protected:
     Debugger &m_debugger;
 };
 
-
 class StatusBarWindowDelegate : public WindowDelegate
 {
 public:
     StatusBarWindowDelegate (Debugger &debugger) :
         m_debugger (debugger)
     {
+        FormatEntity::Parse("Thread: ${thread.id%tid}",
+                            m_format);
     }
-    
-    virtual
-    ~StatusBarWindowDelegate ()
-    {
-    }
-    virtual bool
-    WindowDelegateDraw (Window &window, bool force)
+
+    ~StatusBarWindowDelegate() override = default;
+
+    bool
+    WindowDelegateDraw (Window &window, bool force) override
     {
         ExecutionContext exe_ctx = m_debugger.GetCommandInterpreter().GetExecutionContext();
         Process *process = exe_ctx.GetProcessPtr();
@@ -4355,9 +4628,12 @@ public:
 
             if (StateIsStoppedState(state, true))
             {
-                window.MoveCursor (40, 0);
-                if (thread)
-                    window.Printf ("Thread: 0x%4.4" PRIx64, thread->GetID());
+                StreamString strm;
+                if (thread && FormatEntity::Format (m_format, strm, NULL, &exe_ctx, NULL, NULL, false, false))
+                {
+                    window.MoveCursor (40, 0);
+                    window.PutCStringTruncated(strm.GetString().c_str(), 1);
+                }
 
                 window.MoveCursor (60, 0);
                 if (frame)
@@ -4379,6 +4655,7 @@ public:
 
 protected:
     Debugger &m_debugger;
+    FormatEntity::Entry m_format;
 };
 
 class SourceFileWindowDelegate : public WindowDelegate
@@ -4392,6 +4669,7 @@ public:
         m_disassembly_scope (NULL),
         m_disassembly_sp (),
         m_disassembly_range (),
+        m_title (),
         m_line_width (4),
         m_selected_line (0),
         m_pc_line (0),
@@ -4404,33 +4682,29 @@ public:
         m_max_y (0)
     {
     }
-    
-    
-    virtual
-    ~SourceFileWindowDelegate()
-    {
-    }
-    
+
+    ~SourceFileWindowDelegate() override = default;
+
     void
     Update (const SymbolContext &sc)
     {
         m_sc = sc;
     }
-    
+
     uint32_t
     NumVisibleLines () const
     {
         return m_max_y - m_min_y;
     }
-    
-    virtual const char *
-    WindowDelegateGetHelpText ()
+
+    const char *
+    WindowDelegateGetHelpText () override
     {
         return "Source/Disassembly window keyboard shortcuts:";
     }
-    
-    virtual KeyHelp *
-    WindowDelegateGetKeyHelp ()
+
+    KeyHelp *
+    WindowDelegateGetKeyHelp () override
     {
         static curses::KeyHelp g_source_view_key_help[] = {
             { KEY_RETURN, "Run to selected line with one shot breakpoint" },
@@ -4455,9 +4729,9 @@ public:
         };
         return g_source_view_key_help;
     }
-    
-    virtual bool
-    WindowDelegateDraw (Window &window, bool force)
+
+    bool
+    WindowDelegateDraw (Window &window, bool force) override
     {
         ExecutionContext exe_ctx = m_debugger.GetCommandInterpreter().GetExecutionContext();
         Process *process = exe_ctx.GetProcessPtr();
@@ -4473,20 +4747,18 @@ public:
                 update_location = true;
             }
         }
-        
+
         m_min_x = 1;
-        m_min_y = 1;
+        m_min_y = 2;
         m_max_x = window.GetMaxX()-1;
         m_max_y = window.GetMaxY()-1;
-        
+
         const uint32_t num_visible_lines = NumVisibleLines();
         StackFrameSP frame_sp;
         bool set_selected_line_to_pc = false;
 
-        
         if (update_location)
         {
-            
             const bool process_alive = process ? process->IsAlive() : false;
             bool thread_changed = false;
             if (process_alive)
@@ -4512,9 +4784,17 @@ public:
             const bool stop_id_changed = stop_id != m_stop_id;
             bool frame_changed = false;
             m_stop_id = stop_id;
+            m_title.Clear();
             if (frame_sp)
             {
                 m_sc = frame_sp->GetSymbolContext(eSymbolContextEverything);
+                if (m_sc.module_sp)
+                {
+                    m_title.Printf("%s", m_sc.module_sp->GetFileSpec().GetFilename().GetCString());
+                    ConstString func_name = m_sc.GetFunctionName();
+                    if (func_name)
+                        m_title.Printf("`%s", func_name.GetCString());
+                }
                 const uint32_t frame_idx = frame_sp->GetFrameIndex();
                 frame_changed = frame_idx != m_frame_idx;
                 m_frame_idx = frame_idx;
@@ -4525,9 +4805,9 @@ public:
                 frame_changed = m_frame_idx != UINT32_MAX;
                 m_frame_idx = UINT32_MAX;
             }
-            
+
             const bool context_changed = thread_changed || frame_changed || stop_id_changed;
-            
+
             if (process_alive)
             {
                 if (m_sc.line_entry.IsValid())
@@ -4543,7 +4823,7 @@ public:
                     {
                         // Same file, nothing to do, we should either have the
                         // lines or not (source file missing)
-                        if (m_selected_line >= m_first_visible_line)
+                        if (m_selected_line >= static_cast<size_t>(m_first_visible_line))
                         {
                             if (m_selected_line >= m_first_visible_line + num_visible_lines)
                                 m_first_visible_line = m_selected_line - 10;
@@ -4567,7 +4847,7 @@ public:
                             int m_line_width = 1;
                             for (size_t n = num_lines; n >= 10; n = n / 10)
                                 ++m_line_width;
-                            
+
                             snprintf (m_line_format, sizeof(m_line_format), " %%%iu ", m_line_width);
                             if (num_lines < num_visible_lines || m_selected_line < num_visible_lines)
                                 m_first_visible_line = 0;
@@ -4580,7 +4860,7 @@ public:
                 {
                     m_file_sp.reset();
                 }
-                
+
                 if (!m_file_sp || m_file_sp->GetNumLines() == 0)
                 {
                     // Show disassembly
@@ -4635,11 +4915,23 @@ public:
                 m_pc_line = UINT32_MAX;
             }
         }
-        
-            
+
+        const int window_width = window.GetWidth();
         window.Erase();
         window.DrawTitleBox ("Sources");
-        
+        if (!m_title.GetString().empty())
+        {
+            window.AttributeOn(A_REVERSE);
+            window.MoveCursor(1, 1);
+            window.PutChar(' ');
+            window.PutCStringTruncated(m_title.GetString().c_str(), 1);
+            int x = window.GetCursorX();
+            if (x < window_width - 1)
+            {
+                window.Printf ("%*s", window_width - x - 1, "");
+            }
+            window.AttributeOff(A_REVERSE);
+        }
 
         Target *target = exe_ctx.GetTargetPtr();
         const size_t num_source_lines = GetNumSourceLines();
@@ -4669,17 +4961,16 @@ public:
                     }
                 }
             }
-            
-        
+
             const attr_t selected_highlight_attr = A_REVERSE;
             const attr_t pc_highlight_attr = COLOR_PAIR(1);
 
-            for (int i=0; i<num_visible_lines; ++i)
+            for (size_t i=0; i<num_visible_lines; ++i)
             {
                 const uint32_t curr_line = m_first_visible_line + i;
                 if (curr_line < num_source_lines)
                 {
-                    const int line_y = 1+i;
+                    const int line_y = m_min_y+i;
                     window.MoveCursor(1, line_y);
                     const bool is_pc_line = curr_line == m_pc_line;
                     const bool line_is_selected = m_selected_line == curr_line;
@@ -4691,13 +4982,13 @@ public:
                         highlight_attr = pc_highlight_attr;
                     else if (line_is_selected)
                         highlight_attr = selected_highlight_attr;
-                    
+
                     if (bp_lines.find(curr_line+1) != bp_lines.end())
                         bp_attr = COLOR_PAIR(2);
 
                     if (bp_attr)
                         window.AttributeOn(bp_attr);
-                    
+
                     window.Printf (m_line_format, curr_line + 1);
 
                     if (bp_attr)
@@ -4709,7 +5000,7 @@ public:
                         window.PutChar(ACS_DIAMOND);
                     else
                         window.PutChar(' ');
-                    
+
                     if (highlight_attr)
                         window.AttributeOn(highlight_attr);
                     const uint32_t line_len = m_file_sp->GetLineLength(curr_line + 1, false);
@@ -4727,20 +5018,19 @@ public:
                             if (stop_description && stop_description[0])
                             {
                                 size_t stop_description_len = strlen(stop_description);
-                                int desc_x = window.GetWidth() - stop_description_len - 16;
+                                int desc_x = window_width - stop_description_len - 16;
                                 window.Printf ("%*s", desc_x - window.GetCursorX(), "");
-                                //window.MoveCursor(window.GetWidth() - stop_description_len - 15, line_y);
+                                //window.MoveCursor(window_width - stop_description_len - 15, line_y);
                                 window.Printf ("<<< Thread %u: %s ", thread->GetIndexID(), stop_description);
                             }
                         }
                         else
                         {
-                            window.Printf ("%*s", window.GetWidth() - window.GetCursorX() - 1, "");
+                            window.Printf ("%*s", window_width - window.GetCursorX() - 1, "");
                         }
                     }
                     if (highlight_attr)
                         window.AttributeOff(highlight_attr);
-
                 }
                 else
                 {
@@ -4777,16 +5067,15 @@ public:
                         }
                     }
                 }
-                
-                
+
                 const attr_t selected_highlight_attr = A_REVERSE;
                 const attr_t pc_highlight_attr = COLOR_PAIR(1);
-                
+
                 StreamString strm;
 
                 InstructionList &insts = m_disassembly_sp->GetInstructionList();
                 Address pc_address;
-                
+
                 if (frame_sp)
                     pc_address = frame_sp->GetFrameCodeAddress();
                 const uint32_t pc_idx = pc_address.IsValid() ? insts.GetIndexOfInstructionAtAddress (pc_address) : UINT32_MAX;
@@ -4796,12 +5085,12 @@ public:
                 }
 
                 const uint32_t non_visible_pc_offset = (num_visible_lines / 5);
-                if (m_first_visible_line >= num_disassembly_lines)
+                if (static_cast<size_t>(m_first_visible_line) >= num_disassembly_lines)
                     m_first_visible_line = 0;
 
                 if (pc_idx < num_disassembly_lines)
                 {
-                    if (pc_idx < m_first_visible_line ||
+                    if (pc_idx < static_cast<uint32_t>(m_first_visible_line) ||
                         pc_idx >= m_first_visible_line + num_visible_lines)
                         m_first_visible_line = pc_idx - non_visible_pc_offset;
                 }
@@ -4812,8 +5101,9 @@ public:
                     Instruction *inst = insts.GetInstructionAtIndex(inst_idx).get();
                     if (!inst)
                         break;
-                    
-                    window.MoveCursor(1, i+1);
+
+                    const int line_y = m_min_y+i;
+                    window.MoveCursor(1, line_y);
                     const bool is_pc_line = frame_sp && inst_idx == pc_idx;
                     const bool line_is_selected = m_selected_line == inst_idx;
                     // Highlight the line as the PC line first, then if the selected line
@@ -4824,28 +5114,29 @@ public:
                         highlight_attr = pc_highlight_attr;
                     else if (line_is_selected)
                         highlight_attr = selected_highlight_attr;
-                    
+
                     if (bp_file_addrs.find(inst->GetAddress().GetFileAddress()) != bp_file_addrs.end())
                         bp_attr = COLOR_PAIR(2);
-                    
+
                     if (bp_attr)
                         window.AttributeOn(bp_attr);
-                    
-                    window.Printf (" 0x%16.16llx ", inst->GetAddress().GetLoadAddress(target));
-                        
+
+                    window.Printf (" 0x%16.16llx ",
+                                   static_cast<unsigned long long>(inst->GetAddress().GetLoadAddress(target)));
+
                     if (bp_attr)
                         window.AttributeOff(bp_attr);
-                        
+
                     window.PutChar(ACS_VLINE);
                     // Mark the line with the PC with a diamond
                     if (is_pc_line)
                         window.PutChar(ACS_DIAMOND);
                     else
                         window.PutChar(' ');
-                    
+
                     if (highlight_attr)
                         window.AttributeOn(highlight_attr);
-                    
+
                     const char *mnemonic = inst->GetMnemonic(&exe_ctx);
                     const char *operands = inst->GetOperands(&exe_ctx);
                     const char *comment = inst->GetComment(&exe_ctx);
@@ -4856,7 +5147,7 @@ public:
                         operands = NULL;
                     if (comment && comment[0] == '\0')
                         comment = NULL;
-                    
+
                     strm.Clear();
 
                     if (mnemonic && operands && comment)
@@ -4865,10 +5156,10 @@ public:
                         strm.Printf ("%-8s %s", mnemonic, operands);
                     else if (mnemonic)
                         strm.Printf ("%s", mnemonic);
-                    
+
                     int right_pad = 1;
                     window.PutCStringTruncated(strm.GetString().c_str(), right_pad);
-                    
+
                     if (is_pc_line && frame_sp && frame_sp->GetConcreteFrameIndex() == 0)
                     {
                         StopInfoSP stop_info_sp;
@@ -4880,15 +5171,15 @@ public:
                             if (stop_description && stop_description[0])
                             {
                                 size_t stop_description_len = strlen(stop_description);
-                                int desc_x = window.GetWidth() - stop_description_len - 16;
+                                int desc_x = window_width - stop_description_len - 16;
                                 window.Printf ("%*s", desc_x - window.GetCursorX(), "");
-                                //window.MoveCursor(window.GetWidth() - stop_description_len - 15, line_y);
+                                //window.MoveCursor(window_width - stop_description_len - 15, line_y);
                                 window.Printf ("<<< Thread %u: %s ", thread->GetIndexID(), stop_description);
                             }
                         }
                         else
                         {
-                            window.Printf ("%*s", window.GetWidth() - window.GetCursorX() - 1, "");
+                            window.Printf ("%*s", window_width - window.GetCursorX() - 1, "");
                         }
                     }
                     if (highlight_attr)
@@ -4899,7 +5190,7 @@ public:
         window.DeferredRefresh();
         return true; // Drawing handled
     }
-    
+
     size_t
     GetNumLines ()
     {
@@ -4908,7 +5199,7 @@ public:
             num_lines = GetNumDisassemblyLines();
         return num_lines;
     }
-    
+
     size_t
     GetNumSourceLines () const
     {
@@ -4916,6 +5207,7 @@ public:
             return m_file_sp->GetNumLines();
         return 0;
     }
+
     size_t
     GetNumDisassemblyLines () const
     {
@@ -4924,8 +5216,8 @@ public:
         return 0;
     }
 
-    virtual HandleCharResult
-    WindowDelegateHandleChar (Window &window, int c)
+    HandleCharResult
+    WindowDelegateHandleChar (Window &window, int c) override
     {
         const uint32_t num_visible_lines = NumVisibleLines();
         const size_t num_lines = GetNumLines ();
@@ -4935,13 +5227,13 @@ public:
             case ',':
             case KEY_PPAGE:
                 // Page up key
-                if (m_first_visible_line > num_visible_lines)
+                if (static_cast<uint32_t>(m_first_visible_line) > num_visible_lines)
                     m_first_visible_line -= num_visible_lines;
                 else
                     m_first_visible_line = 0;
                 m_selected_line = m_first_visible_line;
                 return eKeyHandled;
-                
+
             case '.':
             case KEY_NPAGE:
                 // Page down key
@@ -4955,12 +5247,12 @@ public:
                     m_selected_line = m_first_visible_line;
                 }
                 return eKeyHandled;
-                
+
             case KEY_UP:
                 if (m_selected_line > 0)
                 {
                     m_selected_line--;
-                    if (m_first_visible_line > m_selected_line)
+                    if (static_cast<size_t>(m_first_visible_line) > m_selected_line)
                         m_first_visible_line = m_selected_line;
                 }
                 return eKeyHandled;
@@ -4973,7 +5265,7 @@ public:
                         m_first_visible_line++;
                 }
                 return eKeyHandled;
-                
+
             case '\r':
             case '\n':
             case KEY_ENTER:
@@ -4989,7 +5281,8 @@ public:
                                                                                       eLazyBoolCalculate,        // Check inlines using global setting
                                                                                       eLazyBoolCalculate,        // Skip prologue using global setting,
                                                                                       false,                     // internal
-                                                                                      false);                    // request_hardware
+                                                                                      false,                     // request_hardware
+                                                                                      eLazyBoolCalculate);       // move_to_nearest_code
                         // Make breakpoint one shot
                         bp_sp->GetOptions()->SetOneShot(true);
                         exe_ctx.GetProcessRef().Resume();
@@ -5024,7 +5317,8 @@ public:
                                                                                       eLazyBoolCalculate,        // Check inlines using global setting
                                                                                       eLazyBoolCalculate,        // Skip prologue using global setting,
                                                                                       false,                     // internal
-                                                                                      false);                    // request_hardware
+                                                                                      false,                     // request_hardware
+                                                                                      eLazyBoolCalculate);       // move_to_nearest_code
                     }
                 }
                 else if (m_selected_line < GetNumDisassemblyLines())
@@ -5055,7 +5349,7 @@ public:
                 {
                     ExecutionContext exe_ctx = m_debugger.GetCommandInterpreter().GetExecutionContext();
                     if (exe_ctx.HasProcessScope())
-                        exe_ctx.GetProcessRef().Destroy();
+                        exe_ctx.GetProcessRef().Destroy(false);
                 }
                 return eKeyHandled;
 
@@ -5067,7 +5361,7 @@ public:
                         exe_ctx.GetProcessRef().Resume();
                 }
                 return eKeyHandled;
-                
+
             case 'o':
                 // 'o' == step out
                 {
@@ -5078,6 +5372,7 @@ public:
                     }
                 }
                 return eKeyHandled;
+
             case 'n':   // 'n' == step over
             case 'N':   // 'N' == step over instruction
                 {
@@ -5089,6 +5384,7 @@ public:
                     }
                 }
                 return eKeyHandled;
+
             case 's':   // 's' == step into
             case 'S':   // 'S' == step into instruction
                 {
@@ -5096,12 +5392,11 @@ public:
                     if (exe_ctx.HasThreadScope() && StateIsStoppedState (exe_ctx.GetProcessRef().GetState(), true))
                     {
                         bool source_step = (c == 's');
-                        bool avoid_code_without_debug_info = true;
-                        exe_ctx.GetThreadRef().StepIn(source_step, avoid_code_without_debug_info);
+                        exe_ctx.GetThreadRef().StepIn(source_step);
                     }
                 }
                 return eKeyHandled;
-                
+
             case 'h':
                 window.CreateHelpSubwindow ();
                 return eKeyHandled;
@@ -5111,7 +5406,7 @@ public:
         }
         return eKeyNotHandled;
     }
-    
+
 protected:
     typedef std::set<uint32_t> BreakpointLines;
     typedef std::set<lldb::addr_t> BreakpointAddrs;
@@ -5122,6 +5417,7 @@ protected:
     SymbolContextScope *m_disassembly_scope;
     lldb::DisassemblerSP m_disassembly_sp;
     AddressRange m_disassembly_range;
+    StreamString m_title;
     lldb::user_id_t m_tid;
     char m_line_format[8];
     int m_line_width;
@@ -5134,13 +5430,12 @@ protected:
     int m_min_y;
     int m_max_x;
     int m_max_y;
-
 };
 
 DisplayOptions ValueObjectListDelegate::g_options = { true };
 
 IOHandlerCursesGUI::IOHandlerCursesGUI (Debugger &debugger) :
-    IOHandler (debugger)
+    IOHandler (debugger, IOHandler::Type::Curses)
 {
 }
 
@@ -5151,8 +5446,7 @@ IOHandlerCursesGUI::Activate ()
     if (!m_app_ap)
     {
         m_app_ap.reset (new Application (GetInputFILE(), GetOutputFILE()));
-        
-        
+
         // This is both a window and a menu delegate
         std::shared_ptr<ApplicationDelegate> app_delegate_sp(new ApplicationDelegate(*m_app_ap, m_debugger));
         
@@ -5235,7 +5529,7 @@ IOHandlerCursesGUI::Activate ()
         main_window_sp->SetDelegate (std::static_pointer_cast<WindowDelegate>(app_delegate_sp));
         source_window_sp->SetDelegate (WindowDelegateSP(new SourceFileWindowDelegate(m_debugger)));
         variables_window_sp->SetDelegate (WindowDelegateSP(new FrameVariablesWindowDelegate(m_debugger)));
-        TreeDelegateSP thread_delegate_sp (new ThreadTreeDelegate(m_debugger));
+        TreeDelegateSP thread_delegate_sp (new ThreadsTreeDelegate(m_debugger));
         threads_window_sp->SetDelegate (WindowDelegateSP(new TreeWindowDelegate(m_debugger, thread_delegate_sp)));
         status_window_sp->SetDelegate (WindowDelegateSP(new StatusBarWindowDelegate(m_debugger)));
 
@@ -5252,7 +5546,6 @@ IOHandlerCursesGUI::Activate ()
         init_pair (3, COLOR_MAGENTA , COLOR_WHITE );
         init_pair (4, COLOR_MAGENTA , COLOR_BLACK );
         init_pair (5, COLOR_RED     , COLOR_BLACK );
-
     }
 }
 
@@ -5269,37 +5562,22 @@ IOHandlerCursesGUI::Run ()
     SetIsDone(true);
 }
 
-
-IOHandlerCursesGUI::~IOHandlerCursesGUI ()
-{
-    
-}
-
-void
-IOHandlerCursesGUI::Hide ()
-{
-}
-
-
-void
-IOHandlerCursesGUI::Refresh ()
-{
-}
+IOHandlerCursesGUI::~IOHandlerCursesGUI() = default;
 
 void
 IOHandlerCursesGUI::Cancel ()
 {
 }
 
-void
+bool
 IOHandlerCursesGUI::Interrupt ()
 {
+    return false;
 }
-
 
 void
 IOHandlerCursesGUI::GotEOF()
 {
 }
 
-#endif // #ifndef LLDB_DISABLE_CURSES
+#endif // LLDB_DISABLE_CURSES

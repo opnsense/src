@@ -29,11 +29,14 @@ class LanguageRuntime :
     public PluginInterface
 {
 public:
-    virtual
-    ~LanguageRuntime();
+
+    ~LanguageRuntime() override;
     
     static LanguageRuntime* 
     FindPlugin (Process *process, lldb::LanguageType language);
+
+    static void
+    InitializeCommands (CommandObject* parent);
     
     virtual lldb::LanguageType
     GetLanguageType () const = 0;
@@ -49,12 +52,31 @@ public:
     GetDynamicTypeAndAddress (ValueObject &in_value, 
                               lldb::DynamicValueType use_dynamic, 
                               TypeAndOrName &class_type_or_name, 
-                              Address &address) = 0;
+                              Address &address,
+                              Value::ValueType &value_type) = 0;
+    
+    // This call should return a CompilerType given a generic type name
+    // and an ExecutionContextScope in which one can actually fetch
+    // any specialization information required.
+    virtual CompilerType
+    GetConcreteType (ExecutionContextScope *exe_scope,
+                     ConstString abstract_type_name)
+    {
+        return CompilerType();
+    }
     
     // This should be a fast test to determine whether it is likely that this value would
     // have a dynamic type.
     virtual bool
     CouldHaveDynamicValue (ValueObject &in_value) = 0;
+    
+    // The contract for GetDynamicTypeAndAddress() is to return a "bare-bones" dynamic type
+    // For instance, given a Base* pointer, GetDynamicTypeAndAddress() will return the type of
+    // Derived, not Derived*. The job of this API is to correct this misalignment between the
+    // static type and the discovered dynamic type
+    virtual TypeAndOrName
+    FixUpDynamicType (const TypeAndOrName& type_and_or_name,
+                      ValueObject& static_value) = 0;
 
     virtual void
     SetExceptionBreakpoints ()
@@ -80,21 +102,25 @@ public:
     
     static lldb::BreakpointSP
     CreateExceptionBreakpoint (Target &target,
-                               lldb::LanguageType language, 
+                               lldb::LanguageType language,
                                bool catch_bp, 
                                bool throw_bp, 
                                bool is_internal = false);
-                            
-    static lldb::LanguageType
-    GetLanguageTypeFromString (const char *string);
-    
-    static const char *
-    GetNameForLanguageType (lldb::LanguageType language);
-    
+
+    static Breakpoint::BreakpointPreconditionSP
+    CreateExceptionPrecondition (lldb::LanguageType language,
+                                 bool catch_bp,
+                                 bool throw_bp);
     Process *
     GetProcess()
     {
         return m_process;
+    }
+    
+    Target&
+    GetTargetRef()
+    {
+        return m_process->GetTarget();
     }
 
     virtual lldb::BreakpointResolverSP
@@ -102,6 +128,24 @@ public:
     
     virtual lldb::SearchFilterSP
     CreateExceptionSearchFilter ();
+    
+    virtual bool
+    GetTypeBitSize (const CompilerType& compiler_type,
+                    uint64_t &size)
+    {
+        return false;
+    }
+    
+    virtual bool
+    IsRuntimeSupportValue (ValueObject& valobj)
+    {
+        return false;
+    }
+
+    virtual void
+    ModulesDidLoad (const ModuleList &module_list)
+    {
+    }
 
 protected:
     //------------------------------------------------------------------
@@ -111,9 +155,10 @@ protected:
     LanguageRuntime(Process *process);
     Process *m_process;
 private:
+
     DISALLOW_COPY_AND_ASSIGN (LanguageRuntime);
 };
 
 } // namespace lldb_private
 
-#endif  // liblldb_LanguageRuntime_h_
+#endif // liblldb_LanguageRuntime_h_

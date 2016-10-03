@@ -49,6 +49,54 @@ __FBSDID("$FreeBSD$");
 
 #include "opt_bce.h"
 
+#include <sys/param.h>
+#include <sys/endian.h>
+#include <sys/systm.h>
+#include <sys/sockio.h>
+#include <sys/lock.h>
+#include <sys/mbuf.h>
+#include <sys/malloc.h>
+#include <sys/mutex.h>
+#include <sys/kernel.h>
+#include <sys/module.h>
+#include <sys/socket.h>
+#include <sys/sysctl.h>
+#include <sys/queue.h>
+
+#include <net/bpf.h>
+#include <net/ethernet.h>
+#include <net/if.h>
+#include <net/if_var.h>
+#include <net/if_arp.h>
+#include <net/if_dl.h>
+#include <net/if_media.h>
+
+#include <net/if_types.h>
+#include <net/if_vlan_var.h>
+
+#include <netinet/in_systm.h>
+#include <netinet/in.h>
+#include <netinet/if_ether.h>
+#include <netinet/ip.h>
+#include <netinet/ip6.h>
+#include <netinet/tcp.h>
+#include <netinet/udp.h>
+
+#include <machine/bus.h>
+#include <machine/resource.h>
+#include <sys/bus.h>
+#include <sys/rman.h>
+
+#include <dev/mii/mii.h>
+#include <dev/mii/miivar.h>
+#include "miidevs.h"
+#include <dev/mii/brgphyreg.h>
+
+#include <dev/pci/pcireg.h>
+#include <dev/pci/pcivar.h>
+
+#include "miibus_if.h"
+
 #include <dev/bce/if_bcereg.h>
 #include <dev/bce/if_bcefw.h>
 
@@ -409,9 +457,10 @@ static struct mbuf *bce_tso_setup	(struct bce_softc *,
     struct mbuf **, u16 *);
 static int  bce_tx_encap			(struct bce_softc *, struct mbuf **);
 static void bce_start_locked		(struct ifnet *);
-static void bce_start				(struct ifnet *);
-static int  bce_ioctl				(struct ifnet *, u_long, caddr_t);
-static void bce_watchdog			(struct bce_softc *);
+static void bce_start			(struct ifnet *);
+static int  bce_ioctl			(struct ifnet *, u_long, caddr_t);
+static uint64_t bce_get_counter		(struct ifnet *, ift_counter);
+static void bce_watchdog		(struct bce_softc *);
 static int  bce_ifmedia_upd		(struct ifnet *);
 static int  bce_ifmedia_upd_locked	(struct ifnet *);
 static void bce_ifmedia_sts		(struct ifnet *, struct ifmediareq *);
@@ -487,44 +536,37 @@ static SYSCTL_NODE(_hw, OID_AUTO, bce, CTLFLAG_RD, 0, "bce driver parameters");
 
 /* Allowable values are TRUE or FALSE */
 static int bce_verbose = TRUE;
-TUNABLE_INT("hw.bce.verbose", &bce_verbose);
 SYSCTL_INT(_hw_bce, OID_AUTO, verbose, CTLFLAG_RDTUN, &bce_verbose, 0,
     "Verbose output enable/disable");
 
 /* Allowable values are TRUE or FALSE */
 static int bce_tso_enable = TRUE;
-TUNABLE_INT("hw.bce.tso_enable", &bce_tso_enable);
 SYSCTL_INT(_hw_bce, OID_AUTO, tso_enable, CTLFLAG_RDTUN, &bce_tso_enable, 0,
     "TSO Enable/Disable");
 
 /* Allowable values are 0 (IRQ), 1 (MSI/IRQ), and 2 (MSI-X/MSI/IRQ) */
 /* ToDo: Add MSI-X support. */
 static int bce_msi_enable = 1;
-TUNABLE_INT("hw.bce.msi_enable", &bce_msi_enable);
 SYSCTL_INT(_hw_bce, OID_AUTO, msi_enable, CTLFLAG_RDTUN, &bce_msi_enable, 0,
     "MSI-X|MSI|INTx selector");
 
 /* Allowable values are 1, 2, 4, 8. */
 static int bce_rx_pages = DEFAULT_RX_PAGES;
-TUNABLE_INT("hw.bce.rx_pages", &bce_rx_pages);
 SYSCTL_UINT(_hw_bce, OID_AUTO, rx_pages, CTLFLAG_RDTUN, &bce_rx_pages, 0,
     "Receive buffer descriptor pages (1 page = 255 buffer descriptors)");
 
 /* Allowable values are 1, 2, 4, 8. */
 static int bce_tx_pages = DEFAULT_TX_PAGES;
-TUNABLE_INT("hw.bce.tx_pages", &bce_tx_pages);
 SYSCTL_UINT(_hw_bce, OID_AUTO, tx_pages, CTLFLAG_RDTUN, &bce_tx_pages, 0,
     "Transmit buffer descriptor pages (1 page = 255 buffer descriptors)");
 
 /* Allowable values are TRUE or FALSE. */
 static int bce_hdr_split = TRUE;
-TUNABLE_INT("hw.bce.hdr_split", &bce_hdr_split);
 SYSCTL_UINT(_hw_bce, OID_AUTO, hdr_split, CTLFLAG_RDTUN, &bce_hdr_split, 0,
     "Frame header/payload splitting Enable/Disable");
 
 /* Allowable values are TRUE or FALSE. */
 static int bce_strict_rx_mtu = FALSE;
-TUNABLE_INT("hw.bce.strict_rx_mtu", &bce_strict_rx_mtu);
 SYSCTL_UINT(_hw_bce, OID_AUTO, strict_rx_mtu, CTLFLAG_RDTUN,
     &bce_strict_rx_mtu, 0,
     "Enable/Disable strict RX frame size checking");
@@ -537,7 +579,6 @@ static int bce_tx_quick_cons_trip_int = 1;
 /* Generate 1 interrupt for every 20 transmit completions. */
 static int bce_tx_quick_cons_trip_int = DEFAULT_TX_QUICK_CONS_TRIP_INT;
 #endif
-TUNABLE_INT("hw.bce.tx_quick_cons_trip_int", &bce_tx_quick_cons_trip_int);
 SYSCTL_UINT(_hw_bce, OID_AUTO, tx_quick_cons_trip_int, CTLFLAG_RDTUN,
     &bce_tx_quick_cons_trip_int, 0,
     "Transmit BD trip point during interrupts");
@@ -550,7 +591,6 @@ static int bce_tx_quick_cons_trip = 1;
 /* Generate 1 interrupt for every 20 transmit completions. */
 static int bce_tx_quick_cons_trip = DEFAULT_TX_QUICK_CONS_TRIP;
 #endif
-TUNABLE_INT("hw.bce.tx_quick_cons_trip", &bce_tx_quick_cons_trip);
 SYSCTL_UINT(_hw_bce, OID_AUTO, tx_quick_cons_trip, CTLFLAG_RDTUN,
     &bce_tx_quick_cons_trip, 0,
     "Transmit BD trip point");
@@ -563,7 +603,6 @@ static int bce_tx_ticks_int = 0;
 /* Generate an interrupt if 80us have elapsed since the last TX completion. */
 static int bce_tx_ticks_int = DEFAULT_TX_TICKS_INT;
 #endif
-TUNABLE_INT("hw.bce.tx_ticks_int", &bce_tx_ticks_int);
 SYSCTL_UINT(_hw_bce, OID_AUTO, tx_ticks_int, CTLFLAG_RDTUN,
     &bce_tx_ticks_int, 0, "Transmit ticks count during interrupt");
 
@@ -575,7 +614,6 @@ static int bce_tx_ticks = 0;
 /* Generate an interrupt if 80us have elapsed since the last TX completion. */
 static int bce_tx_ticks = DEFAULT_TX_TICKS;
 #endif
-TUNABLE_INT("hw.bce.tx_ticks", &bce_tx_ticks);
 SYSCTL_UINT(_hw_bce, OID_AUTO, tx_ticks, CTLFLAG_RDTUN,
     &bce_tx_ticks, 0, "Transmit ticks count");
 
@@ -587,7 +625,6 @@ static int bce_rx_quick_cons_trip_int = 1;
 /* Generate 1 interrupt for every 6 received frames. */
 static int bce_rx_quick_cons_trip_int = DEFAULT_RX_QUICK_CONS_TRIP_INT;
 #endif
-TUNABLE_INT("hw.bce.rx_quick_cons_trip_int", &bce_rx_quick_cons_trip_int);
 SYSCTL_UINT(_hw_bce, OID_AUTO, rx_quick_cons_trip_int, CTLFLAG_RDTUN,
     &bce_rx_quick_cons_trip_int, 0,
     "Receive BD trip point duirng interrupts");
@@ -600,7 +637,6 @@ static int bce_rx_quick_cons_trip = 1;
 /* Generate 1 interrupt for every 6 received frames. */
 static int bce_rx_quick_cons_trip = DEFAULT_RX_QUICK_CONS_TRIP;
 #endif
-TUNABLE_INT("hw.bce.rx_quick_cons_trip", &bce_rx_quick_cons_trip);
 SYSCTL_UINT(_hw_bce, OID_AUTO, rx_quick_cons_trip, CTLFLAG_RDTUN,
     &bce_rx_quick_cons_trip, 0,
     "Receive BD trip point");
@@ -613,7 +649,6 @@ static int bce_rx_ticks_int = 0;
 /* Generate an int. if 18us have elapsed since the last received frame. */
 static int bce_rx_ticks_int = DEFAULT_RX_TICKS_INT;
 #endif
-TUNABLE_INT("hw.bce.rx_ticks_int", &bce_rx_ticks_int);
 SYSCTL_UINT(_hw_bce, OID_AUTO, rx_ticks_int, CTLFLAG_RDTUN,
     &bce_rx_ticks_int, 0, "Receive ticks count during interrupt");
 
@@ -625,7 +660,6 @@ static int bce_rx_ticks = 0;
 /* Generate an int. if 18us have elapsed since the last received frame. */
 static int bce_rx_ticks = DEFAULT_RX_TICKS;
 #endif
-TUNABLE_INT("hw.bce.rx_ticks", &bce_rx_ticks);
 SYSCTL_UINT(_hw_bce, OID_AUTO, rx_ticks, CTLFLAG_RDTUN,
     &bce_rx_ticks, 0, "Receive ticks count");
 
@@ -1356,6 +1390,7 @@ bce_attach(device_t dev)
 	ifp->if_flags	= IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
 	ifp->if_ioctl	= bce_ioctl;
 	ifp->if_start	= bce_start;
+	ifp->if_get_counter = bce_get_counter;
 	ifp->if_init	= bce_init;
 	ifp->if_mtu	= ETHERMTU;
 
@@ -2326,7 +2361,7 @@ bce_nvram_erase_page(struct bce_softc *sc, u32 offset)
 	    BCE_NVM_COMMAND_DOIT;
 
 	/*
-	 * Clear the DONE bit separately, set the NVRAM adress to erase,
+	 * Clear the DONE bit separately, set the NVRAM address to erase,
 	 * and issue the erase command.
 	 */
 	REG_WR(sc, BCE_NVM_COMMAND, BCE_NVM_COMMAND_DONE);
@@ -3012,7 +3047,7 @@ bce_get_rx_buffer_sizes(struct bce_softc *sc, int mtu)
 		sc->rx_bd_mbuf_alloc_size = MHLEN;
 		/* Make sure offset is 16 byte aligned for hardware. */
 		sc->rx_bd_mbuf_align_pad =
-			roundup2((MSIZE - MHLEN), 16) - (MSIZE - MHLEN);
+			roundup2(MSIZE - MHLEN, 16) - (MSIZE - MHLEN);
 		sc->rx_bd_mbuf_data_len = sc->rx_bd_mbuf_alloc_size -
 			sc->rx_bd_mbuf_align_pad;
 	} else {
@@ -3203,21 +3238,19 @@ bce_dma_free(struct bce_softc *sc)
 	DBENTER(BCE_VERBOSE_RESET | BCE_VERBOSE_UNLOAD | BCE_VERBOSE_CTX);
 
 	/* Free, unmap, and destroy the status block. */
+	if (sc->status_block_paddr != 0) {
+		bus_dmamap_unload(
+		    sc->status_tag,
+		    sc->status_map);
+		sc->status_block_paddr = 0;
+	}
+
 	if (sc->status_block != NULL) {
 		bus_dmamem_free(
 		   sc->status_tag,
 		    sc->status_block,
 		    sc->status_map);
 		sc->status_block = NULL;
-	}
-
-	if (sc->status_map != NULL) {
-		bus_dmamap_unload(
-		    sc->status_tag,
-		    sc->status_map);
-		bus_dmamap_destroy(sc->status_tag,
-		    sc->status_map);
-		sc->status_map = NULL;
 	}
 
 	if (sc->status_tag != NULL) {
@@ -3227,21 +3260,19 @@ bce_dma_free(struct bce_softc *sc)
 
 
 	/* Free, unmap, and destroy the statistics block. */
+	if (sc->stats_block_paddr != 0) {
+		bus_dmamap_unload(
+		    sc->stats_tag,
+		    sc->stats_map);
+		sc->stats_block_paddr = 0;
+	}
+
 	if (sc->stats_block != NULL) {
 		bus_dmamem_free(
 		    sc->stats_tag,
 		    sc->stats_block,
 		    sc->stats_map);
 		sc->stats_block = NULL;
-	}
-
-	if (sc->stats_map != NULL) {
-		bus_dmamap_unload(
-		    sc->stats_tag,
-		    sc->stats_map);
-		bus_dmamap_destroy(sc->stats_tag,
-		    sc->stats_map);
-		sc->stats_map = NULL;
 	}
 
 	if (sc->stats_tag != NULL) {
@@ -3253,22 +3284,19 @@ bce_dma_free(struct bce_softc *sc)
 	/* Free, unmap and destroy all context memory pages. */
 	if (BCE_CHIP_NUM(sc) == BCE_CHIP_NUM_5709) {
 		for (i = 0; i < sc->ctx_pages; i++ ) {
+			if (sc->ctx_paddr[i] != 0) {
+				bus_dmamap_unload(
+				    sc->ctx_tag,
+				    sc->ctx_map[i]);
+				sc->ctx_paddr[i] = 0;
+			}
+
 			if (sc->ctx_block[i] != NULL) {
 				bus_dmamem_free(
 				    sc->ctx_tag,
 				    sc->ctx_block[i],
 				    sc->ctx_map[i]);
 				sc->ctx_block[i] = NULL;
-			}
-
-			if (sc->ctx_map[i] != NULL) {
-				bus_dmamap_unload(
-				    sc->ctx_tag,
-				    sc->ctx_map[i]);
-				bus_dmamap_destroy(
-				    sc->ctx_tag,
-				    sc->ctx_map[i]);
-				sc->ctx_map[i] = NULL;
 			}
 		}
 
@@ -3282,22 +3310,19 @@ bce_dma_free(struct bce_softc *sc)
 
 	/* Free, unmap and destroy all TX buffer descriptor chain pages. */
 	for (i = 0; i < sc->tx_pages; i++ ) {
+		if (sc->tx_bd_chain_paddr[i] != 0) {
+			bus_dmamap_unload(
+			    sc->tx_bd_chain_tag,
+			    sc->tx_bd_chain_map[i]);
+			sc->tx_bd_chain_paddr[i] = 0;
+		}
+
 		if (sc->tx_bd_chain[i] != NULL) {
 			bus_dmamem_free(
 			    sc->tx_bd_chain_tag,
 			    sc->tx_bd_chain[i],
 			    sc->tx_bd_chain_map[i]);
 			sc->tx_bd_chain[i] = NULL;
-		}
-
-		if (sc->tx_bd_chain_map[i] != NULL) {
-			bus_dmamap_unload(
-			    sc->tx_bd_chain_tag,
-			    sc->tx_bd_chain_map[i]);
-			bus_dmamap_destroy(
-			    sc->tx_bd_chain_tag,
-			    sc->tx_bd_chain_map[i]);
-			sc->tx_bd_chain_map[i] = NULL;
 		}
 	}
 
@@ -3310,22 +3335,19 @@ bce_dma_free(struct bce_softc *sc)
 
 	/* Free, unmap and destroy all RX buffer descriptor chain pages. */
 	for (i = 0; i < sc->rx_pages; i++ ) {
+		if (sc->rx_bd_chain_paddr[i] != 0) {
+			bus_dmamap_unload(
+			    sc->rx_bd_chain_tag,
+			    sc->rx_bd_chain_map[i]);
+			sc->rx_bd_chain_paddr[i] = 0;
+		}
+
 		if (sc->rx_bd_chain[i] != NULL) {
 			bus_dmamem_free(
 			    sc->rx_bd_chain_tag,
 			    sc->rx_bd_chain[i],
 			    sc->rx_bd_chain_map[i]);
 			sc->rx_bd_chain[i] = NULL;
-		}
-
-		if (sc->rx_bd_chain_map[i] != NULL) {
-			bus_dmamap_unload(
-			    sc->rx_bd_chain_tag,
-			    sc->rx_bd_chain_map[i]);
-			bus_dmamap_destroy(
-			    sc->rx_bd_chain_tag,
-			    sc->rx_bd_chain_map[i]);
-			sc->rx_bd_chain_map[i] = NULL;
 		}
 	}
 
@@ -3339,22 +3361,19 @@ bce_dma_free(struct bce_softc *sc)
 	/* Free, unmap and destroy all page buffer descriptor chain pages. */
 	if (bce_hdr_split == TRUE) {
 		for (i = 0; i < sc->pg_pages; i++ ) {
+			if (sc->pg_bd_chain_paddr[i] != 0) {
+				bus_dmamap_unload(
+				    sc->pg_bd_chain_tag,
+				    sc->pg_bd_chain_map[i]);
+				sc->pg_bd_chain_paddr[i] = 0;
+			}
+
 			if (sc->pg_bd_chain[i] != NULL) {
 				bus_dmamem_free(
 				    sc->pg_bd_chain_tag,
 				    sc->pg_bd_chain[i],
 				    sc->pg_bd_chain_map[i]);
 				sc->pg_bd_chain[i] = NULL;
-			}
-
-			if (sc->pg_bd_chain_map[i] != NULL) {
-				bus_dmamap_unload(
-				    sc->pg_bd_chain_tag,
-				    sc->pg_bd_chain_map[i]);
-				bus_dmamap_destroy(
-				    sc->pg_bd_chain_tag,
-				    sc->pg_bd_chain_map[i]);
-				sc->pg_bd_chain_map[i] = NULL;
 			}
 		}
 
@@ -6730,9 +6749,7 @@ bce_rx_intr(struct bce_softc *sc)
 		    L2_FHDR_ERRORS_TOO_SHORT  | L2_FHDR_ERRORS_GIANT_FRAME)) {
 
 			/* Log the error and release the mbuf. */
-			ifp->if_ierrors++;
 			sc->l2fhdr_error_count++;
-
 			m_freem(m0);
 			m0 = NULL;
 			goto bce_rx_intr_next_rx;
@@ -6813,7 +6830,7 @@ bce_rx_intr(struct bce_softc *sc)
 		}
 
 		/* Increment received packet statistics. */
-		ifp->if_ipackets++;
+		if_inc_counter(ifp, IFCOUNTER_IPACKETS, 1);
 
 bce_rx_intr_next_rx:
 		sw_rx_cons = NEXT_RX_BD(sw_rx_cons);
@@ -6971,7 +6988,7 @@ bce_tx_intr(struct bce_softc *sc)
 			sc->tx_mbuf_ptr[sw_tx_chain_cons] = NULL;
 			DBRUN(sc->debug_tx_mbuf_alloc--);
 
-			ifp->if_opackets++;
+			if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
 		}
 
 		sc->used_tx_bd--;
@@ -7884,7 +7901,7 @@ bce_watchdog(struct bce_softc *sc)
 	sc->bce_ifp->if_drv_flags &= ~IFF_DRV_RUNNING;
 
 	bce_init_locked(sc);
-	sc->bce_ifp->if_oerrors++;
+	sc->watchdog_timeouts++;
 
 bce_watchdog_exit:
 	REG_WR(sc, BCE_EMAC_RX_STATUS, status);
@@ -7940,7 +7957,7 @@ bce_intr(void *xsc)
 		goto bce_intr_exit;
 	}
 
-	/* Ack the interrupt and stop others from occuring. */
+	/* Ack the interrupt and stop others from occurring. */
 	REG_WR(sc, BCE_PCICFG_INT_ACK_CMD,
 	    BCE_PCICFG_INT_ACK_CMD_USE_INT_HC_PARAM |
 	    BCE_PCICFG_INT_ACK_CMD_MASK_INT);
@@ -8140,26 +8157,13 @@ bce_set_rx_mode(struct bce_softc *sc)
 static void
 bce_stats_update(struct bce_softc *sc)
 {
-	struct ifnet *ifp;
 	struct statistics_block *stats;
 
 	DBENTER(BCE_EXTREME_MISC);
 
-	ifp = sc->bce_ifp;
-
 	bus_dmamap_sync(sc->stats_tag, sc->stats_map, BUS_DMASYNC_POSTREAD);
 
 	stats = (struct statistics_block *) sc->stats_block;
-
-	/*
-	 * Certain controllers don't report
-	 * carrier sense errors correctly.
-	 * See errata E11_5708CA0_1165.
-	 */
-	if (!(BCE_CHIP_NUM(sc) == BCE_CHIP_NUM_5706) &&
-	    !(BCE_CHIP_ID(sc) == BCE_CHIP_ID_5708_A0))
-		ifp->if_oerrors +=
-		    (u_long) stats->stat_Dot3StatsCarrierSenseErrors;
 
 	/*
 	 * Update the sysctl statistics from the
@@ -8342,33 +8346,49 @@ bce_stats_update(struct bce_softc *sc)
 
 	sc->com_no_buffers = REG_RD_IND(sc, 0x120084);
 
-	/*
-	 * Update the interface statistics from the
-	 * hardware statistics.
-	 */
-	ifp->if_collisions =
-	    (u_long) sc->stat_EtherStatsCollisions;
-
-	/* ToDo: This method loses soft errors. */
-	ifp->if_ierrors =
-	    (u_long) sc->stat_EtherStatsUndersizePkts +
-	    (u_long) sc->stat_EtherStatsOversizePkts +
-	    (u_long) sc->stat_IfInMBUFDiscards +
-	    (u_long) sc->stat_Dot3StatsAlignmentErrors +
-	    (u_long) sc->stat_Dot3StatsFCSErrors +
-	    (u_long) sc->stat_IfInRuleCheckerDiscards +
-	    (u_long) sc->stat_IfInFTQDiscards +
-	    (u_long) sc->com_no_buffers;
-
-	/* ToDo: This method loses soft errors. */
-	ifp->if_oerrors =
-	    (u_long) sc->stat_emac_tx_stat_dot3statsinternalmactransmiterrors +
-	    (u_long) sc->stat_Dot3StatsExcessiveCollisions +
-	    (u_long) sc->stat_Dot3StatsLateCollisions;
-
 	/* ToDo: Add additional statistics? */
 
 	DBEXIT(BCE_EXTREME_MISC);
+}
+
+static uint64_t
+bce_get_counter(struct ifnet *ifp, ift_counter cnt)
+{
+	struct bce_softc *sc;
+	uint64_t rv;
+
+	sc = if_getsoftc(ifp);
+
+	switch (cnt) {
+	case IFCOUNTER_COLLISIONS:
+		return (sc->stat_EtherStatsCollisions);
+	case IFCOUNTER_IERRORS:
+		return (sc->stat_EtherStatsUndersizePkts +
+		    sc->stat_EtherStatsOversizePkts +
+		    sc->stat_IfInMBUFDiscards +
+		    sc->stat_Dot3StatsAlignmentErrors +
+		    sc->stat_Dot3StatsFCSErrors +
+		    sc->stat_IfInRuleCheckerDiscards +
+		    sc->stat_IfInFTQDiscards +
+		    sc->l2fhdr_error_count +
+		    sc->com_no_buffers);
+	case IFCOUNTER_OERRORS:
+		rv = sc->stat_Dot3StatsExcessiveCollisions +
+		    sc->stat_emac_tx_stat_dot3statsinternalmactransmiterrors +
+		    sc->stat_Dot3StatsLateCollisions +
+		    sc->watchdog_timeouts;
+		/*
+		 * Certain controllers don't report
+		 * carrier sense errors correctly.
+		 * See errata E11_5708CA0_1165.
+		 */
+		if (!(BCE_CHIP_NUM(sc) == BCE_CHIP_NUM_5706) &&
+		    !(BCE_CHIP_ID(sc) == BCE_CHIP_ID_5708_A0))
+			rv += sc->stat_Dot3StatsCarrierSenseErrors;
+		return (rv);
+	default:
+		return (if_get_counter_default(ifp, cnt));
+	}
 }
 
 
@@ -9820,11 +9840,7 @@ bce_dump_mbuf(struct bce_softc *sc, struct mbuf *m)
 			BCE_PRINTF("- m_pkthdr: len = %d, flags = 0x%b, "
 			    "csum_flags = %b\n", mp->m_pkthdr.len,
 			    mp->m_flags, M_FLAG_PRINTF,
-			    mp->m_pkthdr.csum_flags,
-			    "\20\1CSUM_IP\2CSUM_TCP\3CSUM_UDP"
-			    "\5CSUM_FRAGMENT\6CSUM_TSO\11CSUM_IP_CHECKED"
-			    "\12CSUM_IP_VALID\13CSUM_DATA_VALID"
-			    "\14CSUM_PSEUDO_HDR");
+			    mp->m_pkthdr.csum_flags, CSUM_BITS);
 		}
 
 		if (mp->m_flags & M_EXT) {

@@ -93,6 +93,8 @@ static const struct {
 	{ HDA_INTEL_WELLS2,  "Intel Wellsburg",	0, 0 },
 	{ HDA_INTEL_LPTLP1,  "Intel Lynx Point-LP",	0, 0 },
 	{ HDA_INTEL_LPTLP2,  "Intel Lynx Point-LP",	0, 0 },
+	{ HDA_INTEL_SRPTLP,  "Intel Sunrise Point-LP",	0, 0 },
+	{ HDA_INTEL_SRPT,    "Intel Sunrise Point",	0, 0 },
 	{ HDA_INTEL_82801F,  "Intel 82801F",	0, 0 },
 	{ HDA_INTEL_63XXESB, "Intel 631x/632xESB",	0, 0 },
 	{ HDA_INTEL_82801G,  "Intel 82801G",	0, 0 },
@@ -159,6 +161,7 @@ static const struct {
 	{ HDA_ATI_RV940,     "ATI RV940",	0, 0 },
 	{ HDA_ATI_RV970,     "ATI RV970",	0, 0 },
 	{ HDA_ATI_R1000,     "ATI R1000",	0, 0 },
+	{ HDA_AMD_HUDSON2,   "AMD Hudson-2",	0, 0 },
 	{ HDA_RDC_M3010,     "RDC M3010",	0, 0 },
 	{ HDA_VIA_VT82XX,    "VIA VT8251/8237A",0, 0 },
 	{ HDA_SIS_966,       "SiS 966",		0, 0 },
@@ -167,6 +170,7 @@ static const struct {
 	{ HDA_INTEL_ALL,  "Intel",		0, 0 },
 	{ HDA_NVIDIA_ALL, "NVIDIA",		0, 0 },
 	{ HDA_ATI_ALL,    "ATI",		0, 0 },
+	{ HDA_AMD_ALL,    "AMD",		0, 0 },
 	{ HDA_VIA_ALL,    "VIA",		0, 0 },
 	{ HDA_SIS_ALL,    "SiS",		0, 0 },
 	{ HDA_ULI_ALL,    "ULI",		0, 0 },
@@ -614,19 +618,19 @@ hdac_dma_alloc_fail:
 static void
 hdac_dma_free(struct hdac_softc *sc, struct hdac_dma *dma)
 {
-	if (dma->dma_map != NULL) {
+	if (dma->dma_paddr != 0) {
 #if 0
 		/* Flush caches */
 		bus_dmamap_sync(dma->dma_tag, dma->dma_map,
 		    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 #endif
 		bus_dmamap_unload(dma->dma_tag, dma->dma_map);
+		dma->dma_paddr = 0;
 	}
 	if (dma->dma_vaddr != NULL) {
 		bus_dmamem_free(dma->dma_tag, dma->dma_vaddr, dma->dma_map);
 		dma->dma_vaddr = NULL;
 	}
-	dma->dma_map = NULL;
 	if (dma->dma_tag != NULL) {
 		bus_dma_tag_destroy(dma->dma_tag);
 		dma->dma_tag = NULL;
@@ -1110,7 +1114,7 @@ hdac_attach(device_t dev)
 	sc->lock = snd_mtxcreate(device_get_nameunit(dev), "HDA driver mutex");
 	sc->dev = dev;
 	TASK_INIT(&sc->unsolq_task, 0, hdac_unsolq_task, sc);
-	callout_init(&sc->poll_callout, CALLOUT_MPSAFE);
+	callout_init(&sc->poll_callout, 1);
 	for (i = 0; i < HDAC_CODEC_MAX; i++)
 		sc->codecs[i].dev = NULL;
 	if (devid >= 0) {

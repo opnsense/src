@@ -52,7 +52,7 @@
  * TODO
  * ----
  *
- * - Allow subsytems to register to submit files for inclusion in the text
+ * - Allow subsystems to register to submit files for inclusion in the text
  *   dump in a generic way.
  */
 
@@ -516,8 +516,7 @@ db_textdump_usage(void)
 }
 
 void
-db_textdump_cmd(db_expr_t addr, boolean_t have_addr, db_expr_t count,
-    char *modif)
+db_textdump_cmd(db_expr_t addr, bool have_addr, db_expr_t count, char *modif)
 {
 	int t;
 
@@ -543,7 +542,7 @@ db_textdump_cmd(db_expr_t addr, boolean_t have_addr, db_expr_t count,
 		db_printf("textdump unset\n");
 	} else if (strcmp(db_tok_string, "dump") == 0) {
 		textdump_pending = 1;
-		doadump(TRUE);
+		doadump(true);
 	} else {
 		db_textdump_usage();
 	}

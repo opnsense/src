@@ -2,6 +2,7 @@
 
 MAN=
 
+.include <src.opts.mk>
 .include <bsd.own.mk>
 
 .PATH: ${.CURDIR}/../../../contrib/ntp/ntpq
@@ -20,15 +21,12 @@ CFLAGS+= -I${.CURDIR}/../../../contrib/ntp/include \
 	-I${.CURDIR}/../../../contrib/ntp/sntp/libopts \
 	-I${.CURDIR}/../
 
-DPADD=	${LIBEDIT} ${LIBNTP} ${LIBOPTS} ${LIBM} ${LIBPTHREAD}
-LDADD=	-ledit ${LIBNTP} ${LIBOPTS} -lm -lpthread
+LIBADD+=	edit ntp opts m pthread
 
 .if ${MK_OPENSSL} != "no"
-DPADD+=	${LIBCRYPTO}
-LDADD+=	-lcrypto
+LIBADD+=	crypto
 .else
-DPADD+=	${LIBMD}
-LDADD+=	-lmd
+LIBADD+=	md
 .endif
 
 CFLAGS+=	-DHAVE_LIBEDIT -DHAVE_READLINE_READLINE_H \

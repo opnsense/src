@@ -23,7 +23,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd December 8, 2012
+.Dd May 9, 2016
 .Dt TUNING 7
 .Os
 .Sh NAME
@@ -451,12 +451,6 @@ of a slow-start TCP connection.
 While we are not sure we believe that
 the several FAQs related to packages such as SAMBA and SQUID which advise
 turning off delayed acks may be referring to the slow-start issue.
-In
-.Fx ,
-it would be more beneficial to increase the slow-start flightsize via
-the
-.Va net.inet.tcp.slowstart_flightsize
-sysctl rather than disable delayed acks.
 .Pp
 The
 .Va net.inet.ip.portrange.*
@@ -743,12 +737,12 @@ over services you export from your box (web services, email).
 .Xr systat 1 ,
 .Xr sendfile 2 ,
 .Xr ata 4 ,
+.Xr eventtimers 4 ,
 .Xr dummynet 4 ,
 .Xr login.conf 5 ,
 .Xr rc.conf 5 ,
 .Xr sysctl.conf 5 ,
 .Xr firewall 7 ,
-.Xr eventtimers 7 ,
 .Xr hier 7 ,
 .Xr ports 7 ,
 .Xr boot 8 ,
@@ -756,8 +750,8 @@ over services you export from your box (web services, email).
 .Xr ccdconfig 8 ,
 .Xr config 8 ,
 .Xr fsck 8 ,
-.Xr gpart 8 ,
 .Xr gjournal 8 ,
+.Xr gpart 8 ,
 .Xr gstripe 8 ,
 .Xr gvinum 8 ,
 .Xr ifconfig 8 ,
@@ -778,4 +772,4 @@ in
 .Fx 4.3 ,
 May 2001.
 The manual page was greatly modified by
-.An Eitan Adler Aq eadler@FreeBSD.org
+.An Eitan Adler Aq Mt eadler@FreeBSD.org .

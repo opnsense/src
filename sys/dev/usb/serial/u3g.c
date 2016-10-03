@@ -68,7 +68,7 @@
 static int u3g_debug = 0;
 
 static SYSCTL_NODE(_hw_usb, OID_AUTO, u3g, CTLFLAG_RW, 0, "USB 3g");
-SYSCTL_INT(_hw_usb_u3g, OID_AUTO, debug, CTLFLAG_RW,
+SYSCTL_INT(_hw_usb_u3g, OID_AUTO, debug, CTLFLAG_RWTUN,
     &u3g_debug, 0, "Debug level");
 #endif
 
@@ -197,11 +197,6 @@ static driver_t u3g_driver = {
 	.methods = u3g_methods,
 	.size = sizeof(struct u3g_softc),
 };
-
-DRIVER_MODULE(u3g, uhub, u3g_driver, u3g_devclass, u3g_driver_loaded, 0);
-MODULE_DEPEND(u3g, ucom, 1, 1, 1);
-MODULE_DEPEND(u3g, usb, 1, 1, 1);
-MODULE_VERSION(u3g, 1);
 
 static const STRUCT_USB_HOST_ID u3g_devs[] = {
 #define	U3G_DEV(v,p,i) { USB_VPI(USB_VENDOR_##v, USB_PRODUCT_##v##_##p, i) }
@@ -347,6 +342,7 @@ static const STRUCT_USB_HOST_ID u3g_devs[] = {
 	U3G_DEV(NOVATEL, MC547, 0),
 	U3G_DEV(NOVATEL, MC679, 0),
 	U3G_DEV(NOVATEL, MC950D, 0),
+	U3G_DEV(NOVATEL, MC990D, 0),
 	U3G_DEV(NOVATEL, MIFI2200, U3GINIT_SCSIEJECT),
 	U3G_DEV(NOVATEL, MIFI2200V, U3GINIT_SCSIEJECT),
 	U3G_DEV(NOVATEL, U720, 0),
@@ -477,6 +473,7 @@ static const STRUCT_USB_HOST_ID u3g_devs[] = {
 	U3G_DEV(QUALCOMMINC, E2003, 0),
 	U3G_DEV(QUALCOMMINC, K3772_Z, 0),
 	U3G_DEV(QUALCOMMINC, K3772_Z_INIT, U3GINIT_SCSIEJECT),
+	U3G_DEV(QUALCOMMINC, MF112, U3GINIT_ZTESTOR),
 	U3G_DEV(QUALCOMMINC, MF195E, 0),
 	U3G_DEV(QUALCOMMINC, MF195E_INIT, U3GINIT_SCSIEJECT),
 	U3G_DEV(QUALCOMMINC, MF626, 0),
@@ -585,6 +582,12 @@ static const STRUCT_USB_HOST_ID u3g_devs[] = {
 #undef	U3G_DEV
 };
 
+DRIVER_MODULE(u3g, uhub, u3g_driver, u3g_devclass, u3g_driver_loaded, 0);
+MODULE_DEPEND(u3g, ucom, 1, 1, 1);
+MODULE_DEPEND(u3g, usb, 1, 1, 1);
+MODULE_VERSION(u3g, 1);
+USB_PNP_HOST_INFO(u3g_devs);
+
 static int
 u3g_sierra_init(struct usb_device *udev)
 {
@@ -667,7 +670,7 @@ u3g_sael_m460_init(struct usb_device *udev)
 		return;
 	}
 
-	for (n = 0; n != (sizeof(setup)/sizeof(setup[0])); n++) {
+	for (n = 0; n != nitems(setup); n++) {
 
 		memcpy(&req, setup[n], sizeof(req));
 
@@ -775,7 +778,8 @@ u3g_test_autoinst(void *arg, struct usb_device *udev,
 			break;
 		case U3GINIT_ZTESTOR:
 			error = usb_msc_eject(udev, 0, MSC_EJECT_STOPUNIT);
-			error |= usb_msc_eject(udev, 0, MSC_EJECT_ZTESTOR);
+			if (error == 0)
+			    error = usb_msc_eject(udev, 0, MSC_EJECT_ZTESTOR);
 			break;
 		case U3GINIT_CMOTECH:
 			error = usb_msc_eject(udev, 0, MSC_EJECT_CMOTECH);

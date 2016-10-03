@@ -335,6 +335,9 @@ ACPI_STATUS	acpi_FindIndexedResource(ACPI_BUFFER *buf, int index,
 		    ACPI_RESOURCE **resp);
 ACPI_STATUS	acpi_AppendBufferResource(ACPI_BUFFER *buf,
 		    ACPI_RESOURCE *res);
+ACPI_STATUS	acpi_EvaluateOSC(ACPI_HANDLE handle, uint8_t *uuid,
+		    int revision, int count, uint32_t *caps_in,
+		    uint32_t *caps_out, bool query);
 ACPI_STATUS	acpi_OverrideInterruptLevel(UINT32 InterruptNumber);
 ACPI_STATUS	acpi_SetIntrModel(int model);
 int		acpi_ReqSleepState(struct acpi_softc *sc, int state);
@@ -383,7 +386,8 @@ ACPI_STATUS	acpi_lookup_irq_resource(device_t dev, int rid,
 ACPI_STATUS	acpi_parse_resources(device_t dev, ACPI_HANDLE handle,
 		    struct acpi_parse_resource_set *set, void *arg);
 struct resource *acpi_alloc_sysres(device_t child, int type, int *rid,
-		    u_long start, u_long end, u_long count, u_int flags);
+		    rman_res_t start, rman_res_t end, rman_res_t count,
+		    u_int flags);
 
 /* ACPI event handling */
 UINT32		acpi_event_power_button_sleep(void *context);
@@ -440,6 +444,8 @@ int		acpi_wakeup_machdep(struct acpi_softc *sc, int state,
 int		acpi_table_quirks(int *quirks);
 int		acpi_machdep_quirks(int *quirks);
 
+uint32_t	hpet_get_uid(device_t dev);
+
 /* Battery Abstraction. */
 struct acpi_battinfo;
 
@@ -467,6 +473,8 @@ int		acpi_PkgInt32(ACPI_OBJECT *res, int idx, uint32_t *dst);
 int		acpi_PkgStr(ACPI_OBJECT *res, int idx, void *dst, size_t size);
 int		acpi_PkgGas(device_t dev, ACPI_OBJECT *res, int idx, int *type,
 		    int *rid, struct resource **dst, u_int flags);
+int		acpi_PkgFFH_IntelCpu(ACPI_OBJECT *res, int idx, int *vendor,
+		    int *class, uint64_t *address, int *accsize);
 ACPI_HANDLE	acpi_GetReference(ACPI_HANDLE scope, ACPI_OBJECT *obj);
 
 /*
@@ -497,11 +505,10 @@ SYSCTL_DECL(_debug_acpi);
  *
  * Returns the VM domain ID if found, or -1 if not found / invalid.
  */
-#if MAXMEMDOM > 1
-extern	int acpi_map_pxm_to_vm_domainid(int pxm);
-#endif
-
-extern	int acpi_get_domain(device_t dev, device_t child, int *domain);
+int		acpi_map_pxm_to_vm_domainid(int pxm);
+int		acpi_get_cpus(device_t dev, device_t child, enum cpu_sets op,
+		    size_t setsize, cpuset_t *cpuset);
+int		acpi_get_domain(device_t dev, device_t child, int *domain);
 
 #endif /* _KERNEL */
 #endif /* !_ACPIVAR_H_ */

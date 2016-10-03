@@ -331,7 +331,7 @@ static void oce_fill_flash_img_data(POCE_SOFTC sc, const struct flash_sec_info *
 		case IMG_PXEBIOS:
 			pimg->optype = 3;
 			if (IS_BE3(sc)) {
-				pimg->img_offset =  13107200;;
+				pimg->img_offset =  13107200;
 				pimg->img_size   = 524288;
 			}
 			break;
@@ -415,8 +415,8 @@ oce_sh_be3_flashdata(POCE_SOFTC sc, const struct firmware *fw, int32_t num_imgs)
 		return EINVAL;
 	}
 
-	rc = oce_dma_alloc(sc, sizeof(struct mbx_common_read_write_flashrom)
-			+ 32*1024, &dma_mem, 0);
+	rc = oce_dma_alloc(sc, sizeof(struct mbx_common_read_write_flashrom),
+				&dma_mem, 0);
 	if (rc) {
 		device_printf(sc->dev,
 				"Memory allocation failure while flashing\n");

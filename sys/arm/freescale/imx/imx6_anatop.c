@@ -67,7 +67,6 @@ __FBSDID("$FreeBSD$");
 #include <dev/ofw/ofw_bus_subr.h>
 
 #include <machine/bus.h>
-#include <machine/fdt.h>
 
 #include <arm/arm/mpcore_timervar.h>
 #include <arm/freescale/fsl_ocotpreg.h>
@@ -79,7 +78,6 @@ __FBSDID("$FreeBSD$");
 
 static struct resource_spec imx6_anatop_spec[] = {
 	{ SYS_RES_MEMORY,	0,	RF_ACTIVE },
-	{ SYS_RES_IRQ,		0,	RF_ACTIVE },
 	{ -1, 0 }
 };
 #define	MEMRES	0
@@ -140,7 +138,7 @@ static struct oppt {
  */
 static uint32_t imx6_ocotp_mhz_tab[] = {792, 852, 996, 1200};
 
-#define	TZ_ZEROC	2732	/* deci-Kelvin <-> deci-Celcius offset. */
+#define	TZ_ZEROC	2731	/* deci-Kelvin <-> deci-Celcius offset. */
 
 uint32_t
 imx6_anatop_read_4(bus_size_t offset)
@@ -400,12 +398,12 @@ cpufreq_initialize(struct imx6_anatop_softc *sc)
 	    "CPU frequency");
 
 	SYSCTL_ADD_PROC(NULL, SYSCTL_STATIC_CHILDREN(_hw_imx), 
-	    OID_AUTO, "cpu_minmhz", CTLTYPE_INT | CTLFLAG_RWTUN, sc, 0,
-	    cpufreq_sysctl_minmhz, "IU", "Minimum CPU frequency");
+	    OID_AUTO, "cpu_minmhz", CTLTYPE_INT | CTLFLAG_RWTUN | CTLFLAG_NOFETCH,
+	    sc, 0, cpufreq_sysctl_minmhz, "IU", "Minimum CPU frequency");
 
 	SYSCTL_ADD_PROC(NULL, SYSCTL_STATIC_CHILDREN(_hw_imx),
-	    OID_AUTO, "cpu_maxmhz", CTLTYPE_INT | CTLFLAG_RWTUN, sc, 0,
-	    cpufreq_sysctl_maxmhz, "IU", "Maximum CPU frequency");
+	    OID_AUTO, "cpu_maxmhz", CTLTYPE_INT | CTLFLAG_RWTUN | CTLFLAG_NOFETCH,
+	    sc, 0, cpufreq_sysctl_maxmhz, "IU", "Maximum CPU frequency");
 
 	SYSCTL_ADD_INT(NULL, SYSCTL_STATIC_CHILDREN(_hw_imx),
 	    OID_AUTO, "cpu_maxmhz_hw", CTLFLAG_RD, &sc->cpu_maxmhz_hw, 0, 
@@ -437,9 +435,6 @@ cpufreq_initialize(struct imx6_anatop_softc *sc)
 	    FSL_OCOTP_CFG3_SPEED_MASK) >> FSL_OCOTP_CFG3_SPEED_SHIFT;
 	sc->cpu_maxmhz_hw = imx6_ocotp_mhz_tab[cfg3speed];
 	sc->cpu_maxmhz = sc->cpu_maxmhz_hw;
-
-	TUNABLE_INT_FETCH("hw.imx6.cpu_overclock_enable",
-	    &sc->cpu_overclock_enable);
 
 	TUNABLE_INT_FETCH("hw.imx6.cpu_minmhz", &sc->cpu_minmhz);
 	op = cpufreq_nearest_oppt(sc, sc->cpu_minmhz);
@@ -641,11 +636,20 @@ initialize_tempmon(struct imx6_anatop_softc *sc)
 static void
 intr_setup(void *arg)
 {
+	int rid;
 	struct imx6_anatop_softc *sc;
 
 	sc = arg;
-	bus_setup_intr(sc->dev, sc->res[IRQRES], INTR_TYPE_MISC | INTR_MPSAFE,
-	    tempmon_intr, NULL, sc, &sc->temp_intrhand);
+	rid = 0;
+	sc->res[IRQRES] = bus_alloc_resource_any(sc->dev, SYS_RES_IRQ, &rid,
+	    RF_ACTIVE);
+	if (sc->res[IRQRES] != NULL) {
+		bus_setup_intr(sc->dev, sc->res[IRQRES],
+		    INTR_TYPE_MISC | INTR_MPSAFE, tempmon_intr, NULL, sc,
+		    &sc->temp_intrhand);
+	} else {
+		device_printf(sc->dev, "Cannot allocate IRQ resource\n");
+	}
 	config_intrhook_disestablish(&sc->intr_setup_hook);
 }
 

@@ -1,6 +1,6 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 PROG_CXX=clang
 
@@ -11,6 +11,10 @@ SRCS=	cc1_main.cpp \
 
 .if ${MK_SHARED_TOOLCHAIN} == "no"
 NO_SHARED?= yes
+
+.if ${MACHINE_CPUARCH} == "arm"
+CFLAGS+= -mlong-calls
+.endif
 .endif
 
 LINKS=	${BINDIR}/clang ${BINDIR}/clang++ \
@@ -30,7 +34,8 @@ MLINKS+= clang.1 cc.1 \
 	clang.1 cpp.1
 .endif
 
-TGHDRS=	CC1AsOptions \
+TGHDRS=	Attributes \
+	Intrinsics \
 	DiagnosticCommonKinds \
 	DiagnosticDriverKinds \
 	DiagnosticFrontendKinds \
@@ -38,17 +43,14 @@ TGHDRS=	CC1AsOptions \
 	DiagnosticSemaKinds \
 	Options
 
-.if !defined(EARLY_BUILD) && defined(MK_CLANG_FULL) && ${MK_CLANG_FULL} != "no"
+.if ${MK_CLANG_FULL} != "no"
 _clangstaticanalyzer= \
 	clangstaticanalyzerfrontend \
 	clangstaticanalyzercheckers \
 	clangstaticanalyzercore
 _clangarcmigrate= \
 	clangarcmigrate
-_clangrewriter= \
-	clangrewritefrontend \
-	clangrewritecore
-.endif # !EARLY_BUILD && MK_CLANG_FULL
+.endif # MK_CLANG_FULL
 
 LIBDEPS=clangfrontendtool \
 	clangfrontend \
@@ -57,67 +59,73 @@ LIBDEPS=clangfrontendtool \
 	clangcodegen \
 	clangparse \
 	clangsema \
+	clangrewritefrontend \
+	clangrewrite \
 	${_clangstaticanalyzer} \
 	${_clangarcmigrate} \
-	${_clangrewriter} \
 	clanganalysis \
 	clangedit \
 	clangast \
-	clangbasic \
 	clanglex \
+	clangbasic \
 	llvmoption \
-	llvmlinker \
-	llvmirreader \
+	llvmobjcarcopts \
 	llvmipo \
 	llvmvectorize \
-	llvminstrumentation \
-	llvmbitwriter \
-	llvmbitreader \
+	llvmlinker \
+	llvmirreader \
 	llvmasmparser \
-	llvmarmdisassembler \
+	llvmaarch64codegen \
+	llvmaarch64asmparser \
+	llvmaarch64desc \
+	llvmaarch64info \
+	llvmaarch64asmprinter \
+	llvmaarch64utils \
 	llvmarmcodegen \
 	llvmarmasmparser \
 	llvmarmdesc \
 	llvmarminfo \
-	llvmarminstprinter \
-	llvmmipsdisassembler \
+	llvmarmasmprinter \
 	llvmmipscodegen \
 	llvmmipsasmparser \
 	llvmmipsdesc \
 	llvmmipsinfo \
-	llvmmipsinstprinter \
+	llvmmipsasmprinter \
 	llvmpowerpccodegen \
 	llvmpowerpcasmparser \
 	llvmpowerpcdesc \
 	llvmpowerpcinfo \
-	llvmpowerpcinstprinter \
-	llvmsparcdisassembler \
+	llvmpowerpcasmprinter \
 	llvmsparccodegen \
 	llvmsparcasmparser \
 	llvmsparcdesc \
 	llvmsparcinfo \
-	llvmsparcinstprinter \
-	llvmx86disassembler \
+	llvmsparcasmprinter \
 	llvmx86asmparser \
 	llvmx86codegen \
 	llvmselectiondag \
 	llvmasmprinter \
-	llvmmcparser \
 	llvmcodegen \
-	llvmobjcarcopts \
+	llvmtarget \
 	llvmscalaropts \
 	llvminstcombine \
+	llvminstrumentation \
+	llvmprofiledata \
 	llvmtransformutils \
-	llvmipa \
+	llvmbitwriter \
 	llvmanalysis \
 	llvmx86desc \
-	llvmx86info \
-	llvmtarget \
-	llvmx86instprinter \
-	llvmmc \
 	llvmobject \
+	llvmmcparser \
+	llvmbitreader \
+	llvmmcdisassembler \
+	llvmx86info \
+	llvmx86asmprinter \
+	llvmmc \
 	llvmx86utils \
 	llvmcore \
 	llvmsupport
+
+LIBADD+=	z
 
 .include "../clang.prog.mk"

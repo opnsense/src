@@ -29,13 +29,16 @@ __FBSDID("$FreeBSD$");
 #include "opt_wlan.h"
 
 #include <sys/param.h>
+#include <sys/systm.h>
 #include <sys/kernel.h>
+#include <sys/malloc.h>
 #include <sys/module.h>
 #include <sys/socket.h>
 #include <sys/sysctl.h>
 
 #include <net/if.h>
 #include <net/if_media.h>
+#include <net/ethernet.h>
 
 #ifdef INET
 #include <netinet/in.h>
@@ -53,7 +56,7 @@ none_init(struct ieee80211vap *vap)
 static void
 none_deinit(struct ieee80211vap *vap)
 {
-	free(vap->iv_rs, M_80211_RATECTL);
+	IEEE80211_FREE(vap->iv_rs, M_80211_RATECTL);
 }
 
 static void

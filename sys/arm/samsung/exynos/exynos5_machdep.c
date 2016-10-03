@@ -34,47 +34,52 @@ __FBSDID("$FreeBSD$");
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
+#include <sys/devmap.h>
 
 #include <vm/vm.h>
 
 #include <machine/armreg.h>
 #include <machine/bus.h>
-#include <machine/devmap.h>
 #include <machine/machdep.h>
-
-#include <dev/fdt/fdt_common.h>
+#include <machine/platform.h> 
 
 vm_offset_t
-initarm_lastaddr(void)
+platform_lastaddr(void)
 {
 
-	return (arm_devmap_lastaddr());
+	return (devmap_lastaddr());
 }
 
 void
-initarm_early_init(void)
-{
-
-}
-
-void
-initarm_gpio_init(void)
+platform_probe_and_attach(void)
 {
 
 }
 
 void
-initarm_late_init(void)
+platform_gpio_init(void)
+{
+
+}
+
+void
+platform_late_init(void)
 {
 
 }
 
 int
-initarm_devmap_init(void)
+platform_devmap_init(void)
 {
 
+	/* CHIP ID */
+	devmap_add_entry(0x10000000, 0x100000);
+
 	/* UART */
-	arm_devmap_add_entry(0x12C00000, 0x100000);
+	devmap_add_entry(0x12C00000, 0x100000);
+
+	/* DWMMC */
+	devmap_add_entry(0x12200000, 0x100000);
 
 	return (0);
 }

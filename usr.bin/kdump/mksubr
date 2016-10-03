@@ -156,7 +156,6 @@ _EOF_
 # C start
 
 cat <<_EOF_
-#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <sys/fcntl.h>
@@ -186,7 +185,6 @@ cat <<_EOF_
 #include <sys/ipc.h>
 #include <sys/rtprio.h>
 #include <sys/shm.h>
-#include <machine/atomic.h>
 #include <sys/umtx.h>
 #include <nfsserver/nfs.h>
 #include <ufs/ufs/quota.h>

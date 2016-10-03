@@ -55,7 +55,9 @@ ath_hal_probe(uint16_t vendorid, uint16_t devid)
  */
 struct ath_hal*
 ath_hal_attach(uint16_t devid, HAL_SOFTC sc,
-	HAL_BUS_TAG st, HAL_BUS_HANDLE sh, uint16_t *eepromdata, HAL_STATUS *error)
+	HAL_BUS_TAG st, HAL_BUS_HANDLE sh, uint16_t *eepromdata,
+	HAL_OPS_CONFIG *ah_config,
+	HAL_STATUS *error)
 {
 	struct ath_hal_chip * const *pchip;
 
@@ -66,7 +68,8 @@ ath_hal_attach(uint16_t devid, HAL_SOFTC sc,
 		/* XXX don't have vendorid, assume atheros one works */
 		if (chip->probe(ATHEROS_VENDOR_ID, devid) == AH_NULL)
 			continue;
-		ah = chip->attach(devid, sc, st, sh, eepromdata, error);
+		ah = chip->attach(devid, sc, st, sh, eepromdata, ah_config,
+		    error);
 		if (ah != AH_NULL) {
 			/* copy back private state to public area */
 			ah->ah_devid = AH_PRIVATE(ah)->ah_devid;
@@ -88,60 +91,60 @@ ath_hal_mac_name(struct ath_hal *ah)
 	switch (ah->ah_macVersion) {
 	case AR_SREV_VERSION_CRETE:
 	case AR_SREV_VERSION_MAUI_1:
-		return "5210";
+		return "AR5210";
 	case AR_SREV_VERSION_MAUI_2:
 	case AR_SREV_VERSION_OAHU:
-		return "5211";
+		return "AR5211";
 	case AR_SREV_VERSION_VENICE:
-		return "5212";
+		return "AR5212";
 	case AR_SREV_VERSION_GRIFFIN:
-		return "2413";
+		return "AR2413";
 	case AR_SREV_VERSION_CONDOR:
-		return "5424";
+		return "AR5424";
 	case AR_SREV_VERSION_EAGLE:
-		return "5413";
+		return "AR5413";
 	case AR_SREV_VERSION_COBRA:
-		return "2415";
+		return "AR2415";
 	case AR_SREV_2425:	/* Swan */
-		return "2425";
+		return "AR2425";
 	case AR_SREV_2417:	/* Nala */
-		return "2417";
+		return "AR2417";
 	case AR_XSREV_VERSION_OWL_PCI:
-		return "5416";
+		return "AR5416";
 	case AR_XSREV_VERSION_OWL_PCIE:
-		return "5418";
+		return "AR5418";
 	case AR_XSREV_VERSION_HOWL:
-		return "9130";
+		return "AR9130";
 	case AR_XSREV_VERSION_SOWL:
-		return "9160";
+		return "AR9160";
 	case AR_XSREV_VERSION_MERLIN:
 		if (AH_PRIVATE(ah)->ah_ispcie)
-			return "9280";
-		return "9220";
+			return "AR9280";
+		return "AR9220";
 	case AR_XSREV_VERSION_KITE:
-		return "9285";
+		return "AR9285";
 	case AR_XSREV_VERSION_KIWI:
 		if (AH_PRIVATE(ah)->ah_ispcie)
-			return "9287";
-		return "9227";
+			return "AR9287";
+		return "AR9227";
 	case AR_SREV_VERSION_AR9380:
 		if (ah->ah_macRev >= AR_SREV_REVISION_AR9580_10)
-			return "9580";
-		return "9380";
+			return "AR9580";
+		return "AR9380";
 	case AR_SREV_VERSION_AR9460:
-		return "9460";
+		return "AR9460";
 	case AR_SREV_VERSION_AR9330:
-		return "9330";
+		return "AR9330";
 	case AR_SREV_VERSION_AR9340:
-		return "9340";
+		return "AR9340";
 	case AR_SREV_VERSION_QCA9550:
-		/* XXX should say QCA, not AR */
-		return "9550";
+		return "QCA9550";
 	case AR_SREV_VERSION_AR9485:
-		return "9485";
+		return "AR9485";
 	case AR_SREV_VERSION_QCA9565:
-		/* XXX should say QCA, not AR */
-		return "9565";
+		return "QCA9565";
+	case AR_SREV_VERSION_QCA9530:
+		return "QCA9530";
 	}
 	return "????";
 }
@@ -359,7 +362,7 @@ ath_hal_computetxtime(struct ath_hal *ah,
 
 	kbps = rates->info[rateix].rateKbps;
 	/*
-	 * index can be invalid duting dynamic Turbo transitions. 
+	 * index can be invalid during dynamic Turbo transitions. 
 	 * XXX
 	 */
 	if (kbps == 0)
@@ -786,6 +789,8 @@ ath_hal_getcapability(struct ath_hal *ah, HAL_CAPABILITY_TYPE type,
 		return HAL_OK;
 	case HAL_CAP_RX_LNA_MIXING:	/* Hardware uses an RX LNA mixer to map 2 antennas to a 1 stream receiver */
 		return pCap->halRxUsingLnaMixing ? HAL_OK : HAL_ENOTSUPP;
+	case HAL_CAP_DO_MYBEACON:	/* Hardware supports filtering my-beacons */
+		return pCap->halRxDoMyBeacon ? HAL_OK : HAL_ENOTSUPP;
 	default:
 		return HAL_EINVAL;
 	}
@@ -848,10 +853,11 @@ ath_hal_getregdump(struct ath_hal *ah, const HAL_REGRANGE *regs,
 	int i;
 
 	for (i = 0; space >= 2*sizeof(uint32_t); i++) {
-		u_int r = regs[i].start;
-		u_int e = regs[i].end;
-		*dp++ = (r<<16) | e;
-		space -= sizeof(uint32_t);
+		uint32_t r = regs[i].start;
+		uint32_t e = regs[i].end;
+		*dp++ = r;
+		*dp++ = e;
+		space -= 2*sizeof(uint32_t);
 		do {
 			*dp++ = OS_REG_READ(ah, r);
 			r += sizeof(uint32_t);
@@ -875,6 +881,7 @@ ath_hal_getdiagstate(struct ath_hal *ah, int request,
 	const void *args, uint32_t argsize,
 	void **result, uint32_t *resultsize)
 {
+
 	switch (request) {
 	case HAL_DIAG_REVS:
 		*result = &AH_PRIVATE(ah)->ah_devid;
@@ -931,6 +938,10 @@ ath_hal_getdiagstate(struct ath_hal *ah, int request,
 			AH_PRIVATE(ah)->ah_11nCompat = *(const uint32_t *)args;
 		} else
 			return AH_FALSE;
+		return AH_TRUE;
+	case HAL_DIAG_CHANSURVEY:
+		*result = &AH_PRIVATE(ah)->ah_chansurvey;
+		*resultsize = sizeof(HAL_CHANNEL_SURVEY);
 		return AH_TRUE;
 	}
 	return AH_FALSE;
@@ -1417,13 +1428,42 @@ ath_hal_EepromDataRead(struct ath_hal *ah, u_int off, uint16_t *data)
  * This is the unmapped frequency which is programmed into the hardware.
  */
 int
-ath_hal_mhz2ieee_2ghz(struct ath_hal *ah, HAL_CHANNEL_INTERNAL *ichan)
+ath_hal_mhz2ieee_2ghz(struct ath_hal *ah, int freq)
 {
 
-	if (ichan->channel == 2484)
+	if (freq == 2484)
 		return 14;
-	if (ichan->channel < 2484)
-		return ((int) ichan->channel - 2407) / 5;
+	if (freq < 2484)
+		return ((int) freq - 2407) / 5;
 	else
-		return 15 + ((ichan->channel - 2512) / 20);
+		return 15 + ((freq - 2512) / 20);
+}
+
+/*
+ * Clear the current survey data.
+ *
+ * This should be done during a channel change.
+ */
+void
+ath_hal_survey_clear(struct ath_hal *ah)
+{
+
+	OS_MEMZERO(&AH_PRIVATE(ah)->ah_chansurvey,
+	    sizeof(AH_PRIVATE(ah)->ah_chansurvey));
+}
+
+/*
+ * Add a sample to the channel survey.
+ */
+void
+ath_hal_survey_add_sample(struct ath_hal *ah, HAL_SURVEY_SAMPLE *hs)
+{
+	HAL_CHANNEL_SURVEY *cs;
+
+	cs = &AH_PRIVATE(ah)->ah_chansurvey;
+
+	OS_MEMCPY(&cs->samples[cs->cur_sample], hs, sizeof(*hs));
+	cs->samples[cs->cur_sample].seq_num = cs->cur_seq;
+	cs->cur_sample = (cs->cur_sample + 1) % CHANNEL_SURVEY_SAMPLE_COUNT;
+	cs->cur_seq++;
 }

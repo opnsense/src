@@ -24,7 +24,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd February 15, 2016
+.Dd February 11, 2016
 .Dt UEFI 8
 .Os
 .Sh NAME
@@ -92,6 +92,13 @@ for
 The search begins with partitions on the device from which
 .Pa boot1.efi
 was loaded, and continues with other available partitions.
+If both
+.Li freebsd-ufs
+and
+.Li freebsd-zfs
+partitions exist on the same device the
+.Li freebsd-zfs
+partition is preferred.
 .Pa boot1.efi
 then loads and executes
 .Pa loader.efi .
@@ -133,7 +140,7 @@ typical non-default kernel (optional)
 .Xr boot.config 5 ,
 .Xr msdosfs 5 ,
 .Xr boot 8 ,
-.Xr gpart 8 , 
+.Xr gpart 8 ,
 .Xr uefisign 8
 .Sh HISTORY
 .Nm
@@ -144,7 +151,7 @@ boot support first appeared in
 .Nm
 boot support was developed by
 .An Benno Rice Aq Mt benno@FreeBSD.org ,
-.An Ed Maste Aq Mt emaste@FreeBSD.org ,
+.An \&Ed Maste Aq Mt emaste@FreeBSD.org ,
 and
 .An Nathan Whitehorn Aq Mt nwhitehorn@FreeBSD.org .
 The

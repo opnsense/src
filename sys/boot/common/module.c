@@ -37,6 +37,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/linker.h>
 #include <sys/module.h>
 #include <sys/queue.h>
+#include <sys/stdint.h>
 
 #include "bootstrap.h"
 
@@ -104,7 +105,7 @@ command_load(int argc, char *argv[])
     struct preloaded_file *fp;
     char	*typestr;
     int		dofile, dokld, ch, error;
-    
+
     dokld = dofile = 0;
     optind = 1;
     optreset = 1;
@@ -217,13 +218,11 @@ command_load_geli(int argc, char *argv[])
     return (file_loadraw(argv[2], typestr, 1) ? CMD_OK : CMD_ERROR);
 }
 
-COMMAND_SET(unload, "unload", "unload all modules", command_unload);
-
-static int
-command_unload(int argc, char *argv[])
+void
+unload(void)
 {
-    struct preloaded_file	*fp;
-    
+    struct preloaded_file *fp;
+
     while (preloaded_files != NULL) {
 	fp = preloaded_files;
 	preloaded_files = preloaded_files->f_next;
@@ -231,6 +230,14 @@ command_unload(int argc, char *argv[])
     }
     loadaddr = 0;
     unsetenv("kernelname");
+}
+
+COMMAND_SET(unload, "unload", "unload all modules", command_unload);
+
+static int
+command_unload(int argc, char *argv[])
+{
+    unload();
     return(CMD_OK);
 }
 
@@ -262,13 +269,16 @@ command_lsmod(int argc, char *argv[])
 
     pager_open();
     for (fp = preloaded_files; fp; fp = fp->f_next) {
-	sprintf(lbuf, " %p: %s (%s, 0x%lx)\n", 
-		(void *) fp->f_addr, fp->f_name, fp->f_type, (long) fp->f_size);
+	sprintf(lbuf, " %p: ", (void *) fp->f_addr);
+	pager_output(lbuf);
+	pager_output(fp->f_name);
+	sprintf(lbuf, " (%s, 0x%lx)\n", fp->f_type, (long)fp->f_size);
 	pager_output(lbuf);
 	if (fp->f_args != NULL) {
 	    pager_output("    args: ");
 	    pager_output(fp->f_args);
-	    pager_output("\n");
+	    if (pager_output("\n"))
+		    break;
 	}
 	if (fp->f_modules) {
 	    pager_output("  modules: ");
@@ -276,13 +286,15 @@ command_lsmod(int argc, char *argv[])
 		sprintf(lbuf, "%s.%d ", mp->m_name, mp->m_version);
 		pager_output(lbuf);
 	    }
-	    pager_output("\n");
-	}
+	    if (pager_output("\n"))
+		    break;
+	    	}
 	if (verbose) {
 	    /* XXX could add some formatting smarts here to display some better */
 	    for (md = fp->f_metadata; md != NULL; md = md->md_next) {
 		sprintf(lbuf, "      0x%04x, 0x%lx\n", md->md_type, (long) md->md_size);
-		pager_output(lbuf);
+		if (pager_output(lbuf))
+			break;
 	    }
 	}
     }
@@ -412,6 +424,8 @@ file_loadraw(const char *fname, char *type, int insert)
     if (archsw.arch_loadaddr != NULL)
 	loadaddr = archsw.arch_loadaddr(LOAD_RAW, name, loadaddr);
 
+    printf("%s ", name);
+
     laddr = loadaddr;
     for (;;) {
 	/* read in 4k chunks; size is not really important */
@@ -426,7 +440,9 @@ file_loadraw(const char *fname, char *type, int insert)
 	}
 	laddr += got;
     }
-    
+
+    printf("size=%#jx\n", (uintmax_t)(laddr - loadaddr));
+
     /* Looks OK so far; create & populate control structure */
     fp = file_alloc();
     fp->f_name = strdup(name);
@@ -503,7 +519,7 @@ mod_loadkld(const char *kldname, int argc, char *argv[])
 	sprintf(command_errbuf, "can't find '%s'", kldname);
 	return (ENOENT);
     }
-    /* 
+    /*
      * Check if KLD already loaded
      */
     fp = file_findfile(filename, NULL);
@@ -512,7 +528,7 @@ mod_loadkld(const char *kldname, int argc, char *argv[])
 	free(filename);
 	return (0);
     }
-    for (last_file = preloaded_files; 
+    for (last_file = preloaded_files;
 	 last_file != NULL && last_file->f_next != NULL;
 	 last_file = last_file->f_next)
 	;
@@ -571,7 +587,7 @@ file_findmodule(struct preloaded_file *fp, char *modname,
     if (fp == NULL) {
 	for (fp = preloaded_files; fp; fp = fp->f_next) {
 	    mp = file_findmodule(fp, modname, verinfo);
-    	    if (mp)
+	    if (mp)
 		return (mp);
 	}
 	return (NULL);
@@ -585,7 +601,7 @@ file_findmodule(struct preloaded_file *fp, char *modname,
 	    mver = mp->m_version;
 	    if (mver == verinfo->md_ver_preferred)
 		return (mp);
-	    if (mver >= verinfo->md_ver_minimum && 
+	    if (mver >= verinfo->md_ver_minimum &&
 		mver <= verinfo->md_ver_maximum &&
 		mver > bestver) {
 		best = mp;
@@ -731,7 +747,7 @@ file_search(const char *name, char **extlist)
 }
 
 #define	INT_ALIGN(base, ptr)	ptr = \
-	(base) + (((ptr) - (base) + sizeof(int) - 1) & ~(sizeof(int) - 1))
+	(base) + roundup2((ptr) - (base), sizeof(int))
 
 static char *
 mod_search_hints(struct moduledir *mdp, const char *modname,
@@ -756,7 +772,7 @@ mod_search_hints(struct moduledir *mdp, const char *modname,
 	intp = (int*)recptr;
 	reclen = *intp++;
 	ival = *intp++;
-	cp = (char*)intp;
+	cp = (u_char*)intp;
 	switch (ival) {
 	case MDT_VERSION:
 	    clen = *cp++;
@@ -771,7 +787,7 @@ mod_search_hints(struct moduledir *mdp, const char *modname,
 		found = 1;
 		break;
 	    }
-	    if (ival >= verinfo->md_ver_minimum && 
+	    if (ival >= verinfo->md_ver_minimum &&
 		ival <= verinfo->md_ver_maximum &&
 		ival > bestver) {
 		bestver = ival;
@@ -788,9 +804,9 @@ mod_search_hints(struct moduledir *mdp, const char *modname,
      * Finally check if KLD is in the place
      */
     if (found)
-	result = file_lookup(mdp->d_path, cp, clen, NULL);
+	result = file_lookup(mdp->d_path, (const char *)cp, clen, NULL);
     else if (best)
-	result = file_lookup(mdp->d_path, best, blen, NULL);
+	result = file_lookup(mdp->d_path, (const char *)best, blen, NULL);
 bad:
     /*
      * If nothing found or hints is absent - fallback to the old way
@@ -873,7 +889,7 @@ file_discard(struct preloaded_file *fp)
 	mp1 = mp;
 	mp = mp->m_next;
 	free(mp1);
-    }	
+    }
     if (fp->f_name != NULL)
 	free(fp->f_name);
     if (fp->f_type != NULL)
@@ -891,7 +907,7 @@ struct preloaded_file *
 file_alloc(void)
 {
     struct preloaded_file	*fp;
-    
+
     if ((fp = malloc(sizeof(struct preloaded_file))) != NULL) {
 	bzero(fp, sizeof(struct preloaded_file));
     }
@@ -946,7 +962,7 @@ moduledir_readhints(struct moduledir *mdp)
     path = moduledir_fullpath(mdp, "linker.hints");
     if (stat(path, &st) != 0 ||
 	st.st_size < (ssize_t)(sizeof(version) + sizeof(int)) ||
-	st.st_size > 100 * 1024 || (fd = open(path, O_RDONLY)) < 0) {
+	st.st_size > LINKER_HINTS_MAX || (fd = open(path, O_RDONLY)) < 0) {
 	free(path);
 	mdp->d_flags |= MDIR_NOHINTS;
 	return;

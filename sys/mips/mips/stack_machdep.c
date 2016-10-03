@@ -35,7 +35,6 @@ __FBSDID("$FreeBSD$");
 
 #include <machine/mips_opcode.h>
 
-#include <machine/param.h>
 #include <machine/pcb.h>
 #include <machine/regnum.h>
 
@@ -140,6 +139,13 @@ stack_save_td(struct stack *st, struct thread *td)
 	pc = td->td_pcb->pcb_regs.pc;
 	sp = td->td_pcb->pcb_regs.sp;
 	stack_capture(st, pc, sp);
+}
+
+int
+stack_save_td_running(struct stack *st, struct thread *td)
+{
+
+	return (EOPNOTSUPP);
 }
 
 void

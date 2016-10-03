@@ -7,8 +7,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "lldb/lldb-python.h"
-
 #include "lldb/Interpreter/OptionGroupFormat.h"
 
 // C Includes
@@ -42,10 +40,10 @@ OptionGroupFormat::~OptionGroupFormat ()
 static OptionDefinition 
 g_option_table[] =
 {
-{ LLDB_OPT_SET_1, false, "format"    ,'f', OptionParser::eRequiredArgument, NULL, 0, eArgTypeFormat   , "Specify a format to be used for display."},
-{ LLDB_OPT_SET_2, false, "gdb-format",'G', OptionParser::eRequiredArgument, NULL, 0, eArgTypeGDBFormat, "Specify a format using a GDB format specifier string."},
-{ LLDB_OPT_SET_3, false, "size"      ,'s', OptionParser::eRequiredArgument, NULL, 0, eArgTypeByteSize , "The size in bytes to use when displaying with the selected format."},
-{ LLDB_OPT_SET_4, false, "count"     ,'c', OptionParser::eRequiredArgument, NULL, 0, eArgTypeCount    , "The number of total items to display."},
+{ LLDB_OPT_SET_1, false, "format"    ,'f', OptionParser::eRequiredArgument, nullptr, nullptr, 0, eArgTypeFormat   , "Specify a format to be used for display."},
+{ LLDB_OPT_SET_2, false, "gdb-format",'G', OptionParser::eRequiredArgument, nullptr, nullptr, 0, eArgTypeGDBFormat, "Specify a format using a GDB format specifier string."},
+{ LLDB_OPT_SET_3, false, "size"      ,'s', OptionParser::eRequiredArgument, nullptr, nullptr, 0, eArgTypeByteSize , "The size in bytes to use when displaying with the selected format."},
+{ LLDB_OPT_SET_4, false, "count"     ,'c', OptionParser::eRequiredArgument, nullptr, nullptr, 0, eArgTypeCount    , "The number of total items to display."},
 };
 
 uint32_t
@@ -78,7 +76,7 @@ OptionGroupFormat::SetOptionValue (CommandInterpreter &interpreter,
     switch (short_option)
     {
         case 'f':
-            error = m_format.SetValueFromCString (option_arg);
+            error = m_format.SetValueFromString (option_arg);
             break;
 
         case 'c':
@@ -88,7 +86,7 @@ OptionGroupFormat::SetOptionValue (CommandInterpreter &interpreter,
             }
             else
             {
-                error = m_count.SetValueFromCString (option_arg);
+                error = m_count.SetValueFromString (option_arg);
                 if (m_count.GetCurrentValue() == 0)
                     error.SetErrorStringWithFormat("invalid --count option value '%s'", option_arg);
             }
@@ -101,7 +99,7 @@ OptionGroupFormat::SetOptionValue (CommandInterpreter &interpreter,
             }
             else
             {
-                error = m_byte_size.SetValueFromCString (option_arg);
+                error = m_byte_size.SetValueFromString (option_arg);
                 if (m_byte_size.GetCurrentValue() == 0)
                     error.SetErrorStringWithFormat("invalid --size option value '%s'", option_arg);
             }
@@ -109,7 +107,7 @@ OptionGroupFormat::SetOptionValue (CommandInterpreter &interpreter,
 
         case 'G':
             {
-                char *end = NULL;
+                char *end = nullptr;
                 const char *gdb_format_cstr = option_arg; 
                 uint64_t count = 0;
                 if (::isdigit (gdb_format_cstr[0]))

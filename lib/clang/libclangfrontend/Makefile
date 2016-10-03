@@ -11,6 +11,7 @@ SRCS=	ASTConsumers.cpp \
 	CacheTokens.cpp \
 	ChainedDiagnosticConsumer.cpp \
 	ChainedIncludesSource.cpp \
+	CodeGenOptions.cpp \
 	CompilerInstance.cpp \
 	CompilerInvocation.cpp \
 	CreateInvocationFromCommandLine.cpp \
@@ -26,17 +27,22 @@ SRCS=	ASTConsumers.cpp \
 	LangStandards.cpp \
 	LayoutOverrideSource.cpp \
 	LogDiagnosticPrinter.cpp \
+	ModuleDependencyCollector.cpp \
 	MultiplexConsumer.cpp \
+	PCHContainerOperations.cpp \
 	PrintPreprocessedOutput.cpp \
 	SerializedDiagnosticPrinter.cpp \
+	SerializedDiagnosticReader.cpp \
+	TestModuleFileExtension.cpp \
 	TextDiagnostic.cpp \
 	TextDiagnosticBuffer.cpp \
 	TextDiagnosticPrinter.cpp \
-	VerifyDiagnosticConsumer.cpp \
-	Warnings.cpp
+	VerifyDiagnosticConsumer.cpp
 
 TGHDRS=	AttrList \
 	AttrParsedAttrList \
+	AttrVisitor \
+	Attributes \
 	Attrs \
 	CommentCommandList \
 	CommentNodes \

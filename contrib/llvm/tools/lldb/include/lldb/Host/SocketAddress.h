@@ -16,7 +16,7 @@
 #ifdef _WIN32
 #include "lldb/Host/windows/windows.h"
 #include <winsock2.h>
-#include <WS2tcpip.h>
+#include <ws2tcpip.h>
 typedef ADDRESS_FAMILY sa_family_t;
 #else
 #include <sys/socket.h>
@@ -31,6 +31,7 @@ typedef ADDRESS_FAMILY sa_family_t;
 // C++ Includes
 // Other libraries and framework includes
 // Project includes
+#include <string>
 
 namespace lldb_private {
 
@@ -82,7 +83,7 @@ public:
     GetLength () const;
 
     //------------------------------------------------------------------
-    // Get the mex length for the the largest socket address supported.
+    // Get the max length for the largest socket address supported.
     //------------------------------------------------------------------
     static socklen_t
     GetMaxLength ();
@@ -98,6 +99,12 @@ public:
     //------------------------------------------------------------------
     void
     SetFamily (sa_family_t family);
+
+    //------------------------------------------------------------------
+    // Get the address
+    //------------------------------------------------------------------
+    std::string
+    GetIPAddress () const;
 
     //------------------------------------------------------------------
     // Get the port if the socket address for the family has a port
@@ -203,7 +210,7 @@ public:
     // Conversion operators to allow getting the contents of this class
     // as a pointer to the appropriate structure. This allows an instance
     // of this class to be used in calls that take one of the sockaddr
-    // structure variants without having to manally use the correct
+    // structure variants without having to manually use the correct
     // accessor function.
     //------------------------------------------------------------------
     

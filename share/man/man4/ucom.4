@@ -68,7 +68,7 @@ The
 .Nm
 driver can capture PPS timing information as defined in RFC 2783.
 The API, accessed via
-.Xr ioctl 8 ,
+.Xr ioctl 2 ,
 is available on the tty device.
 To use the PPS capture feature with
 .Xr ntpd 8 ,
@@ -104,8 +104,10 @@ Capture pulses on the DCD line.
 .Xr umcs 4 ,
 .Xr umct 4 ,
 .Xr umodem 4 ,
+.Xr umoscom 4 ,
 .Xr uplcom 4 ,
 .Xr usb 4 ,
+.Xr uslcom 4 ,
 .Xr uvisor 4 ,
 .Xr uvscom 4
 .Sh HISTORY
@@ -117,7 +119,7 @@ in March of 2002.
 This manual page was adopted from
 .Nx
 by
-.An Tom Rhodes Aq trhodes@FreeBSD.org
+.An Tom Rhodes Aq Mt trhodes@FreeBSD.org
 in April 2002.
 .Sh BUGS
 Prior to

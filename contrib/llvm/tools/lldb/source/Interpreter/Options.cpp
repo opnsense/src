@@ -7,8 +7,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "lldb/lldb-python.h"
-
 #include "lldb/Interpreter/Options.h"
 
 // C Includes
@@ -242,14 +240,14 @@ uint32_t
 Options::NumCommandOptions ()
 {
     const OptionDefinition *opt_defs = GetDefinitions ();
-    if (opt_defs == NULL) 
+    if (opt_defs == nullptr)
         return 0;
         
     int i = 0;
 
-    if (opt_defs != NULL)
+    if (opt_defs != nullptr)
     {
-        while (opt_defs[i].long_option != NULL)
+        while (opt_defs[i].long_option != nullptr)
             ++i;
     }
 
@@ -265,7 +263,7 @@ Options::GetLongOptions ()
         // Check to see if there are any options.
         const uint32_t num_options = NumCommandOptions();
         if (num_options == 0)
-            return NULL;
+            return nullptr;
 
         uint32_t i;
         const OptionDefinition *opt_defs = GetDefinitions();
@@ -277,9 +275,8 @@ Options::GetLongOptions ()
         {
             const int short_opt = opt_defs[i].short_option;
 
-            m_getopt_table[i].name    = opt_defs[i].long_option;
-            m_getopt_table[i].has_arg = opt_defs[i].option_has_arg;
-            m_getopt_table[i].flag    = NULL;
+            m_getopt_table[i].definition = &opt_defs[i];
+            m_getopt_table[i].flag    = nullptr;
             m_getopt_table[i].val     = short_opt;
 
             if (option_seen.find(short_opt) == option_seen.end())
@@ -297,7 +294,7 @@ Options::GetLongOptions ()
                                 opt_defs[i].long_option,
                                 short_opt,
                                 pos->second,
-                                m_getopt_table[pos->second].name,
+                                m_getopt_table[pos->second].definition->long_option,
                                 opt_defs[i].long_option);
                 else
                     Host::SystemLog (Host::eSystemLogError, "option[%u] --%s has a short option 0x%x that conflicts with option[%u] --%s, short option won't be used for --%s\n",
@@ -305,21 +302,20 @@ Options::GetLongOptions ()
                                 opt_defs[i].long_option,
                                 short_opt,
                                 pos->second,
-                                m_getopt_table[pos->second].name,
+                                m_getopt_table[pos->second].definition->long_option,
                                 opt_defs[i].long_option);
             }
         }
 
         //getopt_long_only requires a NULL final entry in the table:
 
-        m_getopt_table[i].name    = NULL;
-        m_getopt_table[i].has_arg = 0;
-        m_getopt_table[i].flag    = NULL;
-        m_getopt_table[i].val     = 0;
+        m_getopt_table[i].definition    = nullptr;
+        m_getopt_table[i].flag          = nullptr;
+        m_getopt_table[i].val           = 0;
     }
 
     if (m_getopt_table.empty())
-        return NULL;
+        return nullptr;
 
     return &m_getopt_table.front();
 }
@@ -336,18 +332,29 @@ void
 Options::OutputFormattedUsageText
 (
     Stream &strm,
-    const char *text,
+    const OptionDefinition &option_def,
     uint32_t output_max_columns
 )
 {
-    int len = strlen (text);
+    std::string actual_text;
+    if (option_def.validator)
+    {
+        const char *condition = option_def.validator->ShortConditionString();
+        if (condition)
+        {
+            actual_text = "[";
+            actual_text.append(condition);
+            actual_text.append("] ");
+        }
+    }
+    actual_text.append(option_def.usage_text);
 
     // Will it all fit on one line?
 
-    if ((len + strm.GetIndentLevel()) < output_max_columns)
+    if (static_cast<uint32_t>(actual_text.length() + strm.GetIndentLevel()) < output_max_columns)
     {
         // Output it as a single line.
-        strm.Indent (text);
+        strm.Indent (actual_text.c_str());
         strm.EOL();
     }
     else
@@ -357,13 +364,13 @@ Options::OutputFormattedUsageText
         int text_width = output_max_columns - strm.GetIndentLevel() - 1;
         int start = 0;
         int end = start;
-        int final_end = strlen (text);
+        int final_end = actual_text.length();
         int sub_len;
 
         while (end < final_end)
         {
             // Don't start the 'text' on a space, since we're already outputting the indentation.
-            while ((start < final_end) && (text[start] == ' '))
+            while ((start < final_end) && (actual_text[start] == ' '))
                 start++;
 
             end = start + text_width;
@@ -373,7 +380,7 @@ Options::OutputFormattedUsageText
             {
                 // If we're not at the end of the text, make sure we break the line on white space.
                 while (end > start
-                       && text[end] != ' ' && text[end] != '\t' && text[end] != '\n')
+                       && actual_text[end] != ' ' && actual_text[end] != '\t' && actual_text[end] != '\n')
                     end--;
             }
 
@@ -383,7 +390,7 @@ Options::OutputFormattedUsageText
             strm.Indent();
             assert (start < final_end);
             assert (start + sub_len <= final_end);
-            strm.Write(text + start, sub_len);
+            strm.Write(actual_text.c_str() + start, sub_len);
             start = end + 1;
         }
         strm.EOL();
@@ -592,7 +599,7 @@ Options::GenerateOptionUsage
             if (opt_defs[i].usage_mask & opt_set_mask && isprint8(opt_defs[i].short_option))
             {
                 if (opt_defs[i].required && opt_defs[i].option_has_arg != OptionParser::eNoArgument)
-                    PrintOption (opt_defs[i], eDisplayBestOption, " ", NULL, true, strm);
+                    PrintOption (opt_defs[i], eDisplayBestOption, " ", nullptr, true, strm);
             }
         }
 
@@ -605,7 +612,7 @@ Options::GenerateOptionUsage
                 // Add current option to the end of out_stream.
 
                 if (!opt_defs[i].required && opt_defs[i].option_has_arg != OptionParser::eNoArgument)
-                    PrintOption (opt_defs[i], eDisplayBestOption, " ", NULL, true, strm);
+                    PrintOption (opt_defs[i], eDisplayBestOption, " ", nullptr, true, strm);
             }
         }
         
@@ -630,7 +637,7 @@ Options::GenerateOptionUsage
     strm.Printf ("\n\n");
 
     // Now print out all the detailed information about the various options:  long form, short form and help text:
-    //   --long_name <argument>  ( -short <argument> )
+    //   -short <argument> ( --long_name <argument> )
     //   help text
 
     // This variable is used to keep track of which options' info we've printed out, because some options can be in
@@ -669,13 +676,13 @@ Options::GenerateOptionUsage
         strm.Indent ();
         if (opt_defs[i].short_option && isprint8(opt_defs[i].short_option))
         {
-            PrintOption (opt_defs[i], eDisplayShortOption, NULL, NULL, false, strm);
+            PrintOption (opt_defs[i], eDisplayShortOption, nullptr, nullptr, false, strm);
             PrintOption (opt_defs[i], eDisplayLongOption, " ( ", " )", false, strm);
         }
         else
         {
             // Short option is not printable, just print long option
-            PrintOption (opt_defs[i], eDisplayLongOption, NULL, NULL, false, strm);
+            PrintOption (opt_defs[i], eDisplayLongOption, nullptr, nullptr, false, strm);
         }
         strm.EOL();
         
@@ -683,13 +690,13 @@ Options::GenerateOptionUsage
         
         if (opt_defs[i].usage_text)
             OutputFormattedUsageText (strm,
-                                      opt_defs[i].usage_text,
+                                      opt_defs[i],
                                       screen_width);
-        if (opt_defs[i].enum_values != NULL)
+        if (opt_defs[i].enum_values != nullptr)
         {
             strm.Indent ();
             strm.Printf("Values: ");
-            for (int k = 0; opt_defs[i].enum_values[k].string_value != NULL; k++) 
+            for (int k = 0; opt_defs[i].enum_values[k].string_value != nullptr; k++)
             {
                 if (k == 0)
                     strm.Printf("%s", opt_defs[i].enum_values[k].string_value);
@@ -908,11 +915,11 @@ Options::HandleOptionArgumentCompletion
     // See if this is an enumeration type option, and if so complete it here:
     
     OptionEnumValueElement *enum_values = opt_defs[opt_defs_index].enum_values;
-    if (enum_values != NULL)
+    if (enum_values != nullptr)
     {
         bool return_value = false;
         std::string match_string(input.GetArgumentAtIndex (opt_arg_pos), input.GetArgumentAtIndex (opt_arg_pos) + char_pos);
-        for (int i = 0; enum_values[i].string_value != NULL; i++)
+        for (int i = 0; enum_values[i].string_value != nullptr; i++)
         {
             if (strstr(enum_values[i].string_value, match_string.c_str()) == enum_values[i].string_value)
             {
@@ -935,7 +942,7 @@ Options::HandleOptionArgumentCompletion
         lldb::CommandArgumentType option_arg_type = opt_defs[opt_defs_index].argument_type;
         if (option_arg_type != eArgTypeNone)
         {
-            CommandObject::ArgumentTableEntry *arg_entry = CommandObject::FindArgumentDataByType (opt_defs[opt_defs_index].argument_type);
+            const CommandObject::ArgumentTableEntry *arg_entry = CommandObject::FindArgumentDataByType (opt_defs[opt_defs_index].argument_type);
             if (arg_entry)
                 completion_mask = arg_entry->completion_type;
         }
@@ -1001,7 +1008,7 @@ OptionGroupOptions::GetGroupWithOption (char short_opt)
         if (opt_def.short_option == short_opt)
             return m_option_infos[i].option_group;
     }
-    return NULL;
+    return nullptr;
 }
 
 void
@@ -1026,7 +1033,7 @@ void
 OptionGroupOptions::Finalize ()
 {
     m_did_finalize = true;
-    OptionDefinition empty_option_def = { 0, false, NULL, 0, 0, NULL, 0, eArgTypeNone, NULL };
+    OptionDefinition empty_option_def = { 0, false, nullptr, 0, 0, nullptr, nullptr, 0, eArgTypeNone, nullptr };
     m_option_defs.push_back (empty_option_def);
 }
 

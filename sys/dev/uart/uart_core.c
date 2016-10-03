@@ -64,7 +64,12 @@ static MALLOC_DEFINE(M_UART, "UART", "UART driver");
 #define	UART_POLL_FREQ		50
 #endif
 static int uart_poll_freq = UART_POLL_FREQ;
-TUNABLE_INT("debug.uart_poll_freq", &uart_poll_freq);
+SYSCTL_INT(_debug, OID_AUTO, uart_poll_freq, CTLFLAG_RDTUN, &uart_poll_freq,
+    0, "UART poll frequency");
+
+static int uart_force_poll;
+SYSCTL_INT(_debug, OID_AUTO, uart_force_poll, CTLFLAG_RDTUN, &uart_force_poll,
+    0, "Force UART polling");
 
 static inline int
 uart_pps_mode_valid(int pps_mode)
@@ -239,6 +244,12 @@ int
 uart_getrange(struct uart_class *uc)
 {
 	return ((uc != NULL) ? uc->uc_range : 0);
+}
+
+u_int
+uart_getregshift(struct uart_class *uc)
+{
+	return ((uc != NULL) ? uc->uc_rshift : 0);
 }
 
 /*
@@ -506,14 +517,13 @@ uart_bus_probe(device_t dev, int regshft, int rclk, int rid, int chan)
 	 */
 	sc->sc_rrid = rid;
 	sc->sc_rtype = SYS_RES_IOPORT;
-	sc->sc_rres = bus_alloc_resource(dev, sc->sc_rtype, &sc->sc_rrid,
-	    0, ~0, uart_getrange(sc->sc_class), RF_ACTIVE);
+	sc->sc_rres = bus_alloc_resource_any(dev, sc->sc_rtype, &sc->sc_rrid,
+	    RF_ACTIVE);
 	if (sc->sc_rres == NULL) {
 		sc->sc_rrid = rid;
 		sc->sc_rtype = SYS_RES_MEMORY;
-		sc->sc_rres = bus_alloc_resource(dev, sc->sc_rtype,
-		    &sc->sc_rrid, 0, ~0, uart_getrange(sc->sc_class),
-		    RF_ACTIVE);
+		sc->sc_rres = bus_alloc_resource_any(dev, sc->sc_rtype,
+		    &sc->sc_rrid, RF_ACTIVE);
 		if (sc->sc_rres == NULL)
 			return (ENXIO);
 	}
@@ -588,8 +598,8 @@ uart_bus_attach(device_t dev)
 	 * Re-allocate. We expect that the softc contains the information
 	 * collected by uart_bus_probe() intact.
 	 */
-	sc->sc_rres = bus_alloc_resource(dev, sc->sc_rtype, &sc->sc_rrid,
-	    0, ~0, uart_getrange(sc->sc_class), RF_ACTIVE);
+	sc->sc_rres = bus_alloc_resource_any(dev, sc->sc_rtype, &sc->sc_rrid,
+	    RF_ACTIVE);
 	if (sc->sc_rres == NULL) {
 		mtx_destroy(&sc->sc_hwmtx_s);
 		return (ENXIO);
@@ -662,7 +672,7 @@ uart_bus_attach(device_t dev)
 	 * conditions. We may have broken H/W and polling is probably the
 	 * safest thing to do.
 	 */
-	if (filt != FILTER_SCHEDULE_THREAD) {
+	if (filt != FILTER_SCHEDULE_THREAD && !uart_force_poll) {
 		sc->sc_irid = 0;
 		sc->sc_ires = bus_alloc_resource_any(dev, SYS_RES_IRQ,
 		    &sc->sc_irid, RF_ACTIVE | RF_SHAREABLE);
@@ -688,6 +698,8 @@ uart_bus_attach(device_t dev)
 		/* No interrupt resource. Force polled mode. */
 		sc->sc_polled = 1;
 		callout_init(&sc->sc_timer, 1);
+		callout_reset(&sc->sc_timer, hz / uart_poll_freq,
+		    (timeout_t *)uart_intr, sc);
 	}
 
 	if (bootverbose && (sc->sc_fastintr || sc->sc_polled)) {

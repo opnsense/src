@@ -25,7 +25,7 @@
 #
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 SUBDIR=		libatf-c \
 		libatf-c++ \
@@ -34,7 +34,5 @@ SUBDIR=		libatf-c \
 .if ${MK_TESTS} != "no"
 _tests= 	tests
 .endif
-
-.ORDER: ${SUBDIR}
 
 .include <bsd.subdir.mk>

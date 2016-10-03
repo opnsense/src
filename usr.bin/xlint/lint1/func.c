@@ -517,7 +517,7 @@ label(int typ, sym_t *sym, tnode_t *tn)
 			ci->c_default = 1;
 		}
 		break;
-	};
+	}
 	reached = 1;
 }
 
@@ -652,7 +652,7 @@ switch2(void)
 
 	if (cstk->c_break) {
 		/*
-		 * end of switch alway reached (c_break is only set if the
+		 * end of switch always reached (c_break is only set if the
 		 * break statement can be reached).
 		 */
 		reached = 1;

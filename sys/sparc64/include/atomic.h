@@ -279,6 +279,35 @@ atomic_store_rel_ ## name(volatile ptype p, vtype v)			\
 	atomic_st_rel((p), (v), sz);					\
 }
 
+static __inline void
+atomic_thread_fence_acq(void)
+{
+
+	__compiler_membar();
+}
+
+static __inline void
+atomic_thread_fence_rel(void)
+{
+
+	__compiler_membar();
+}
+
+static __inline void
+atomic_thread_fence_acq_rel(void)
+{
+
+	__compiler_membar();
+}
+
+static __inline void
+atomic_thread_fence_seq_cst(void)
+{
+
+	membar(LoadLoad | LoadStore | StoreStore | StoreLoad);
+}
+
+
 ATOMIC_GEN(int, u_int *, u_int, u_int, 32);
 ATOMIC_GEN(32, uint32_t *, uint32_t, uint32_t, 32);
 
@@ -290,6 +319,7 @@ ATOMIC_GEN(ptr, uintptr_t *, uintptr_t, uintptr_t, 64);
 #define	atomic_fetchadd_int	atomic_add_int
 #define	atomic_fetchadd_32	atomic_add_32
 #define	atomic_fetchadd_long	atomic_add_long
+#define	atomic_fetchadd_64	atomic_add_64
 
 #undef ATOMIC_GEN
 #undef atomic_cas

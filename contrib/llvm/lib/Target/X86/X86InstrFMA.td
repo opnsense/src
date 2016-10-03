@@ -15,12 +15,31 @@
 // FMA3 - Intel 3 operand Fused Multiply-Add instructions
 //===----------------------------------------------------------------------===//
 
-let Constraints = "$src1 = $dst" in {
+// For all FMA opcodes declared in fma3p_rm and fma3s_rm milticlasses defined
+// below, both the register and memory variants are commutable.
+// For the register form the commutable operands are 1, 2 and 3.
+// For the memory variant the folded operand must be in 3. Thus,
+// in that case, only the operands 1 and 2 can be swapped.
+// Commuting some of operands may require the opcode change.
+// FMA*213*:
+//   operands 1 and 2 (memory & register forms): *213* --> *213*(no changes);
+//   operands 1 and 3 (register forms only):     *213* --> *231*;
+//   operands 2 and 3 (register forms only):     *213* --> *132*.
+// FMA*132*:
+//   operands 1 and 2 (memory & register forms): *132* --> *231*;
+//   operands 1 and 3 (register forms only):     *132* --> *132*(no changes);
+//   operands 2 and 3 (register forms only):     *132* --> *213*.
+// FMA*231*:
+//   operands 1 and 2 (memory & register forms): *231* --> *132*;
+//   operands 1 and 3 (register forms only):     *231* --> *213*;
+//   operands 2 and 3 (register forms only):     *231* --> *231*(no changes).
+
+let Constraints = "$src1 = $dst", hasSideEffects = 0, isCommutable = 1 in
 multiclass fma3p_rm<bits<8> opc, string OpcodeStr,
                     PatFrag MemFrag128, PatFrag MemFrag256,
                     ValueType OpVT128, ValueType OpVT256,
                     SDPatternOperator Op = null_frag> {
-  let isCommutable = 1 in
+  let usesCustomInserter = 1 in
   def r     : FMA3<opc, MRMSrcReg, (outs VR128:$dst),
                    (ins VR128:$src1, VR128:$src2, VR128:$src3),
                    !strconcat(OpcodeStr,
@@ -36,7 +55,7 @@ multiclass fma3p_rm<bits<8> opc, string OpcodeStr,
                    [(set VR128:$dst, (OpVT128 (Op VR128:$src2, VR128:$src1,
                                                (MemFrag128 addr:$src3))))]>;
 
-  let isCommutable = 1 in
+  let usesCustomInserter = 1 in
   def rY    : FMA3<opc, MRMSrcReg, (outs VR256:$dst),
                    (ins VR256:$src1, VR256:$src2, VR256:$src3),
                    !strconcat(OpcodeStr,
@@ -53,7 +72,6 @@ multiclass fma3p_rm<bits<8> opc, string OpcodeStr,
                      (OpVT256 (Op VR256:$src2, VR256:$src1,
                                (MemFrag256 addr:$src3))))]>, VEX_L;
 }
-} // Constraints = "$src1 = $dst"
 
 multiclass fma3p_forms<bits<8> opc132, bits<8> opc213, bits<8> opc231,
                        string OpcodeStr, string PackTy,
@@ -62,14 +80,12 @@ multiclass fma3p_forms<bits<8> opc132, bits<8> opc213, bits<8> opc231,
   defm r213 : fma3p_rm<opc213,
                        !strconcat(OpcodeStr, "213", PackTy),
                        MemFrag128, MemFrag256, OpTy128, OpTy256, Op>;
-let neverHasSideEffects = 1 in {
   defm r132 : fma3p_rm<opc132,
                        !strconcat(OpcodeStr, "132", PackTy),
                        MemFrag128, MemFrag256, OpTy128, OpTy256>;
   defm r231 : fma3p_rm<opc231,
                        !strconcat(OpcodeStr, "231", PackTy),
                        MemFrag128, MemFrag256, OpTy128, OpTy256>;
-} // neverHasSideEffects = 1
 }
 
 // Fused Multiply-Add
@@ -114,71 +130,122 @@ let ExeDomain = SSEPackedDouble in {
                                v4f64>, VEX_W;
 }
 
-let Constraints = "$src1 = $dst" in {
-multiclass fma3s_rm<bits<8> opc, string OpcodeStr, X86MemOperand x86memop,
-                    RegisterClass RC, ValueType OpVT, PatFrag mem_frag,
+// All source register operands of FMA opcodes defined in fma3s_rm multiclass
+// can be commuted. In many cases such commute transformation requres an opcode
+// adjustment, for example, commuting the operands 1 and 2 in FMA*132 form
+// would require an opcode change to FMA*231:
+//     FMA*132* reg1, reg2, reg3; // reg1 * reg3 + reg2;
+//     -->
+//     FMA*231* reg2, reg1, reg3; // reg1 * reg3 + reg2;
+// Please see more detailed comment at the very beginning of the section
+// defining FMA3 opcodes above.
+let Constraints = "$src1 = $dst", isCommutable = 1, hasSideEffects = 0 in
+multiclass fma3s_rm<bits<8> opc, string OpcodeStr,
+                    X86MemOperand x86memop, RegisterClass RC,
                     SDPatternOperator OpNode = null_frag> {
-  let isCommutable = 1 in
+  let usesCustomInserter = 1 in
   def r     : FMA3<opc, MRMSrcReg, (outs RC:$dst),
                    (ins RC:$src1, RC:$src2, RC:$src3),
                    !strconcat(OpcodeStr,
                               "\t{$src3, $src2, $dst|$dst, $src2, $src3}"),
-                   [(set RC:$dst,
-                     (OpVT (OpNode RC:$src2, RC:$src1, RC:$src3)))]>;
+                   [(set RC:$dst, (OpNode RC:$src2, RC:$src1, RC:$src3))]>;
+
   let mayLoad = 1 in
   def m     : FMA3<opc, MRMSrcMem, (outs RC:$dst),
                    (ins RC:$src1, RC:$src2, x86memop:$src3),
                    !strconcat(OpcodeStr,
                               "\t{$src3, $src2, $dst|$dst, $src2, $src3}"),
                    [(set RC:$dst,
-                     (OpVT (OpNode RC:$src2, RC:$src1,
-                            (mem_frag addr:$src3))))]>;
+                     (OpNode RC:$src2, RC:$src1, (load addr:$src3)))]>;
 }
 
-multiclass fma3s_rm_int<bits<8> opc, string OpcodeStr, Operand memop,
-                        ComplexPattern mem_cpat, Intrinsic IntId,
-                        RegisterClass RC> {
-  let isCommutable = 1 in
-  def r_Int : FMA3<opc, MRMSrcReg, (outs VR128:$dst),
-                   (ins VR128:$src1, VR128:$src2, VR128:$src3),
+// These FMA*_Int instructions are defined specially for being used when
+// the scalar FMA intrinsics are lowered to machine instructions, and in that
+// sense, they are similar to existing ADD*_Int, SUB*_Int, MUL*_Int, etc.
+// instructions.
+//
+// All of the FMA*_Int opcodes are defined as commutable here.
+// Commuting the 2nd and 3rd source register operands of FMAs is quite trivial
+// and the corresponding optimizations have been developed.
+// Commuting the 1st operand of FMA*_Int requires some additional analysis,
+// the commute optimization is legal only if all users of FMA*_Int use only
+// the lowest element of the FMA*_Int instruction. Even though such analysis
+// may be not implemented yet we allow the routines doing the actual commute
+// transformation to decide if one or another instruction is commutable or not.
+let Constraints = "$src1 = $dst", isCommutable = 1, isCodeGenOnly = 1,
+    hasSideEffects = 0 in
+multiclass fma3s_rm_int<bits<8> opc, string OpcodeStr,
+                        Operand memopr, RegisterClass RC> {
+  def r_Int : FMA3<opc, MRMSrcReg, (outs RC:$dst),
+                   (ins RC:$src1, RC:$src2, RC:$src3),
                    !strconcat(OpcodeStr,
                               "\t{$src3, $src2, $dst|$dst, $src2, $src3}"),
-                   [(set VR128:$dst, (IntId VR128:$src2, VR128:$src1,
-                     VR128:$src3))]>;
-  def m_Int : FMA3<opc, MRMSrcMem, (outs VR128:$dst),
-                   (ins VR128:$src1, VR128:$src2, memop:$src3),
+                   []>;
+
+  let mayLoad = 1 in
+  def m_Int : FMA3<opc, MRMSrcMem, (outs RC:$dst),
+                   (ins RC:$src1, RC:$src2, memopr:$src3),
                    !strconcat(OpcodeStr,
                               "\t{$src3, $src2, $dst|$dst, $src2, $src3}"),
-                   [(set VR128:$dst,
-                     (IntId VR128:$src2, VR128:$src1, mem_cpat:$src3))]>;
+                   []>;
 }
-} // Constraints = "$src1 = $dst"
 
 multiclass fma3s_forms<bits<8> opc132, bits<8> opc213, bits<8> opc231,
-                       string OpStr, string PackTy, Intrinsic Int,
-                       SDNode OpNode, RegisterClass RC, ValueType OpVT,
-                       X86MemOperand x86memop, Operand memop, PatFrag mem_frag,
-                       ComplexPattern mem_cpat> {
-let neverHasSideEffects = 1 in {
-  defm r132 : fma3s_rm<opc132, !strconcat(OpStr, "132", PackTy),
-                       x86memop, RC, OpVT, mem_frag>;
-  defm r231 : fma3s_rm<opc231, !strconcat(OpStr, "231", PackTy),
-                       x86memop, RC, OpVT, mem_frag>;
+                       string OpStr, string PackTy,
+                       SDNode OpNode, RegisterClass RC,
+                       X86MemOperand x86memop> {
+  defm r132 : fma3s_rm<opc132, !strconcat(OpStr, "132", PackTy), x86memop, RC>;
+  defm r213 : fma3s_rm<opc213, !strconcat(OpStr, "213", PackTy), x86memop, RC,
+                       OpNode>;
+  defm r231 : fma3s_rm<opc231, !strconcat(OpStr, "231", PackTy), x86memop, RC>;
 }
 
-defm r213 : fma3s_rm<opc213, !strconcat(OpStr, "213", PackTy),
-                     x86memop, RC, OpVT, mem_frag, OpNode>,
-            fma3s_rm_int<opc213, !strconcat(OpStr, "213", PackTy),
-                         memop, mem_cpat, Int, RC>;
+// The FMA 213 form is created for lowering of scalar FMA intrinscis
+// to machine instructions.
+// The FMA 132 form can trivially be get by commuting the 2nd and 3rd operands
+// of FMA 213 form.
+// The FMA 231 form can be get only by commuting the 1st operand of 213 or 132
+// forms and is possible only after special analysis of all uses of the initial
+// instruction. Such analysis do not exist yet and thus introducing the 231
+// form of FMA*_Int instructions is done using an optimistic assumption that
+// such analysis will be implemented eventually.
+multiclass fma3s_int_forms<bits<8> opc132, bits<8> opc213, bits<8> opc231,
+                           string OpStr, string PackTy,
+                           RegisterClass RC, Operand memop> {
+  defm r132 : fma3s_rm_int<opc132, !strconcat(OpStr, "132", PackTy),
+                           memop, RC>;
+  defm r213 : fma3s_rm_int<opc213, !strconcat(OpStr, "213", PackTy),
+                           memop, RC>;
+  defm r231 : fma3s_rm_int<opc231, !strconcat(OpStr, "231", PackTy),
+                           memop, RC>;
 }
 
 multiclass fma3s<bits<8> opc132, bits<8> opc213, bits<8> opc231,
                  string OpStr, Intrinsic IntF32, Intrinsic IntF64,
                  SDNode OpNode> {
-  defm SS : fma3s_forms<opc132, opc213, opc231, OpStr, "ss", IntF32, OpNode,
-                        FR32, f32, f32mem, ssmem, loadf32, sse_load_f32>;
-  defm SD : fma3s_forms<opc132, opc213, opc231, OpStr, "sd", IntF64, OpNode,
-                        FR64, f64, f64mem, sdmem, loadf64, sse_load_f64>, VEX_W;
+  let ExeDomain = SSEPackedSingle in
+  defm SS : fma3s_forms<opc132, opc213, opc231, OpStr, "ss", OpNode,
+                        FR32, f32mem>,
+            fma3s_int_forms<opc132, opc213, opc231, OpStr, "ss", VR128, ssmem>;
+
+  let ExeDomain = SSEPackedDouble in
+  defm SD : fma3s_forms<opc132, opc213, opc231, OpStr, "sd", OpNode,
+                        FR64, f64mem>,
+            fma3s_int_forms<opc132, opc213, opc231, OpStr, "sd", VR128, sdmem>,
+            VEX_W;
+
+  // These patterns use the 123 ordering, instead of 213, even though
+  // they match the intrinsic to the 213 version of the instruction.
+  // This is because src1 is tied to dest, and the scalar intrinsics
+  // require the pass-through values to come from the first source
+  // operand, not the second.
+  def : Pat<(IntF32 VR128:$src1, VR128:$src2, VR128:$src3),
+            (COPY_TO_REGCLASS(!cast<Instruction>(NAME#"SSr213r_Int") 
+             $src1, $src2, $src3), VR128)>;
+
+  def : Pat<(IntF64 VR128:$src1, VR128:$src2, VR128:$src3),
+            (COPY_TO_REGCLASS(!cast<Instruction>(NAME#"SDr213r_Int") 
+             $src1, $src2, $src3), VR128)>;
 }
 
 defm VFMADD : fma3s<0x99, 0xA9, 0xB9, "vfmadd", int_x86_fma_vfmadd_ss,
@@ -220,7 +287,7 @@ multiclass fma4s<bits<8> opc, string OpcodeStr, RegisterClass RC,
            [(set RC:$dst,
              (OpNode RC:$src1, (mem_frag addr:$src2), RC:$src3))]>, VEX_LIG;
 // For disassembler
-let isCodeGenOnly = 1, hasSideEffects = 0 in
+let isCodeGenOnly = 1, ForceDisassemble = 1, hasSideEffects = 0 in
   def rr_REV : FMA4<opc, MRMSrcReg, (outs RC:$dst),
                (ins RC:$src1, RC:$src2, RC:$src3),
                !strconcat(OpcodeStr,
@@ -230,6 +297,7 @@ let isCodeGenOnly = 1, hasSideEffects = 0 in
 
 multiclass fma4s_int<bits<8> opc, string OpcodeStr, Operand memop,
                      ComplexPattern mem_cpat, Intrinsic Int> {
+let isCodeGenOnly = 1 in {
   let isCommutable = 1 in
   def rr_Int : FMA4<opc, MRMSrcReg, (outs VR128:$dst),
                (ins VR128:$src1, VR128:$src2, VR128:$src3),
@@ -249,6 +317,7 @@ multiclass fma4s_int<bits<8> opc, string OpcodeStr, Operand memop,
                "\t{$src3, $src2, $src1, $dst|$dst, $src1, $src2, $src3}"),
                [(set VR128:$dst,
                  (Int VR128:$src1, mem_cpat:$src2, VR128:$src3))]>, VEX_LIG;
+} // isCodeGenOnly = 1
 }
 
 multiclass fma4p<bits<8> opc, string OpcodeStr, SDNode OpNode,
@@ -295,7 +364,7 @@ multiclass fma4p<bits<8> opc, string OpcodeStr, SDNode OpNode,
            [(set VR256:$dst, (OpNode VR256:$src1,
                               (ld_frag256 addr:$src2), VR256:$src3))]>, VEX_L;
 // For disassembler
-let isCodeGenOnly = 1, hasSideEffects = 0 in {
+let isCodeGenOnly = 1, ForceDisassemble = 1, hasSideEffects = 0 in {
   def rr_REV : FMA4<opc, MRMSrcReg, (outs VR128:$dst),
                (ins VR128:$src1, VR128:$src2, VR128:$src3),
                !strconcat(OpcodeStr,
@@ -308,36 +377,23 @@ let isCodeGenOnly = 1, hasSideEffects = 0 in {
 } // isCodeGenOnly = 1
 }
 
-defm VFMADDSS4  : fma4s<0x6A, "vfmaddss", FR32, f32mem, f32, X86Fmadd, loadf32>,
-                  fma4s_int<0x6A, "vfmaddss", ssmem, sse_load_f32,
-                            int_x86_fma_vfmadd_ss>;
-defm VFMADDSD4  : fma4s<0x6B, "vfmaddsd", FR64, f64mem, f64, X86Fmadd, loadf64>,
-                  fma4s_int<0x6B, "vfmaddsd", sdmem, sse_load_f64,
-                            int_x86_fma_vfmadd_sd>;
-defm VFMSUBSS4  : fma4s<0x6E, "vfmsubss", FR32, f32mem, f32, X86Fmsub, loadf32>,
-                  fma4s_int<0x6E, "vfmsubss", ssmem, sse_load_f32,
-                            int_x86_fma_vfmsub_ss>;
-defm VFMSUBSD4  : fma4s<0x6F, "vfmsubsd", FR64, f64mem, f64, X86Fmsub, loadf64>,
-                  fma4s_int<0x6F, "vfmsubsd", sdmem, sse_load_f64,
-                            int_x86_fma_vfmsub_sd>;
-defm VFNMADDSS4 : fma4s<0x7A, "vfnmaddss", FR32, f32mem, f32,
-                        X86Fnmadd, loadf32>,
-                  fma4s_int<0x7A, "vfnmaddss", ssmem, sse_load_f32,
-                            int_x86_fma_vfnmadd_ss>;
-defm VFNMADDSD4 : fma4s<0x7B, "vfnmaddsd", FR64, f64mem, f64,
-                        X86Fnmadd, loadf64>,
-                  fma4s_int<0x7B, "vfnmaddsd", sdmem, sse_load_f64,
-                            int_x86_fma_vfnmadd_sd>;
-defm VFNMSUBSS4 : fma4s<0x7E, "vfnmsubss", FR32, f32mem, f32,
-                        X86Fnmsub, loadf32>,
-                  fma4s_int<0x7E, "vfnmsubss", ssmem, sse_load_f32,
-                            int_x86_fma_vfnmsub_ss>;
-defm VFNMSUBSD4 : fma4s<0x7F, "vfnmsubsd", FR64, f64mem, f64,
-                        X86Fnmsub, loadf64>,
-                  fma4s_int<0x7F, "vfnmsubsd", sdmem, sse_load_f64,
-                            int_x86_fma_vfnmsub_sd>;
-
 let ExeDomain = SSEPackedSingle in {
+  // Scalar Instructions
+  defm VFMADDSS4  : fma4s<0x6A, "vfmaddss", FR32, f32mem, f32, X86Fmadd, loadf32>,
+                    fma4s_int<0x6A, "vfmaddss", ssmem, sse_load_f32,
+                              int_x86_fma_vfmadd_ss>;
+  defm VFMSUBSS4  : fma4s<0x6E, "vfmsubss", FR32, f32mem, f32, X86Fmsub, loadf32>,
+                    fma4s_int<0x6E, "vfmsubss", ssmem, sse_load_f32,
+                              int_x86_fma_vfmsub_ss>;
+  defm VFNMADDSS4 : fma4s<0x7A, "vfnmaddss", FR32, f32mem, f32,
+                          X86Fnmadd, loadf32>,
+                    fma4s_int<0x7A, "vfnmaddss", ssmem, sse_load_f32,
+                              int_x86_fma_vfnmadd_ss>;
+  defm VFNMSUBSS4 : fma4s<0x7E, "vfnmsubss", FR32, f32mem, f32,
+                          X86Fnmsub, loadf32>,
+                    fma4s_int<0x7E, "vfnmsubss", ssmem, sse_load_f32,
+                              int_x86_fma_vfnmsub_ss>;
+  // Packed Instructions
   defm VFMADDPS4    : fma4p<0x68, "vfmaddps", X86Fmadd, v4f32, v8f32,
                             loadv4f32, loadv8f32>;
   defm VFMSUBPS4    : fma4p<0x6C, "vfmsubps", X86Fmsub, v4f32, v8f32,
@@ -353,6 +409,22 @@ let ExeDomain = SSEPackedSingle in {
 }
 
 let ExeDomain = SSEPackedDouble in {
+  // Scalar Instructions
+  defm VFMADDSD4  : fma4s<0x6B, "vfmaddsd", FR64, f64mem, f64, X86Fmadd, loadf64>,
+                    fma4s_int<0x6B, "vfmaddsd", sdmem, sse_load_f64,
+                              int_x86_fma_vfmadd_sd>;
+  defm VFMSUBSD4  : fma4s<0x6F, "vfmsubsd", FR64, f64mem, f64, X86Fmsub, loadf64>,
+                    fma4s_int<0x6F, "vfmsubsd", sdmem, sse_load_f64,
+                              int_x86_fma_vfmsub_sd>;
+  defm VFNMADDSD4 : fma4s<0x7B, "vfnmaddsd", FR64, f64mem, f64,
+                          X86Fnmadd, loadf64>,
+                    fma4s_int<0x7B, "vfnmaddsd", sdmem, sse_load_f64,
+                              int_x86_fma_vfnmadd_sd>;
+  defm VFNMSUBSD4 : fma4s<0x7F, "vfnmsubsd", FR64, f64mem, f64,
+                          X86Fnmsub, loadf64>,
+                    fma4s_int<0x7F, "vfnmsubsd", sdmem, sse_load_f64,
+                              int_x86_fma_vfnmsub_sd>;
+  // Packed Instructions
   defm VFMADDPD4    : fma4p<0x69, "vfmaddpd", X86Fmadd, v2f64, v4f64,
                             loadv2f64, loadv4f64>;
   defm VFMSUBPD4    : fma4p<0x6D, "vfmsubpd", X86Fmsub, v2f64, v4f64,

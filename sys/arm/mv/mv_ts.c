@@ -35,7 +35,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/module.h>
 #include <sys/bus.h>
 #include <sys/sysctl.h>
-#include <machine/fdt.h>
 
 #include <dev/fdt/fdt_common.h>
 #include <dev/ofw/ofw_bus.h>
@@ -81,7 +80,7 @@ ts_probe(device_t dev)
 #define	MV_TEMP_SENS_OFFS	10
 #define	MV_TEMP_SENS_MASK	0x1ff
 #define	MV_TEMP_SENS_READ_MAX	16
-#define	TZ_ZEROC		2732
+#define	TZ_ZEROC		2731
 #define	MV_TEMP_CONVERT(x)	((((322 - x) * 100000) / 13625) + TZ_ZEROC)
 
 /*

@@ -30,7 +30,6 @@
 __FBSDID("$FreeBSD$");
 
 #include "opt_compat.h"
-#include "opt_kdtrace.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -43,6 +42,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/sched.h>
 #include <sys/syscallsubr.h>
 #include <sys/sx.h>
+#include <sys/umtx.h>
 #include <sys/unistd.h>
 #include <sys/wait.h>
 
@@ -65,6 +65,7 @@ __FBSDID("$FreeBSD$");
 int
 linux_fork(struct thread *td, struct linux_fork_args *args)
 {
+	struct fork_req fr;
 	int error;
 	struct proc *p2;
 	struct thread *td2;
@@ -74,8 +75,10 @@ linux_fork(struct thread *td, struct linux_fork_args *args)
 		printf(ARGS(fork, ""));
 #endif
 
-	if ((error = fork1(td, RFFDG | RFPROC | RFSTOPPED, 0, &p2, NULL, 0))
-	    != 0)
+	bzero(&fr, sizeof(fr));
+	fr.fr_flags = RFFDG | RFPROC | RFSTOPPED;
+	fr.fr_procp = &p2;
+	if ((error = fork1(td, &fr)) != 0)
 		return (error);
 
 	td2 = FIRST_THREAD_IN_PROC(p2);
@@ -98,6 +101,7 @@ linux_fork(struct thread *td, struct linux_fork_args *args)
 int
 linux_vfork(struct thread *td, struct linux_vfork_args *args)
 {
+	struct fork_req fr;
 	int error;
 	struct proc *p2;
 	struct thread *td2;
@@ -107,8 +111,10 @@ linux_vfork(struct thread *td, struct linux_vfork_args *args)
 		printf(ARGS(vfork, ""));
 #endif
 
-	if ((error = fork1(td, RFFDG | RFPROC | RFMEM | RFPPWAIT | RFSTOPPED,
-	    0, &p2, NULL, 0)) != 0)
+	bzero(&fr, sizeof(fr));
+	fr.fr_flags = RFFDG | RFPROC | RFMEM | RFPPWAIT | RFSTOPPED;
+	fr.fr_procp = &p2;
+	if ((error = fork1(td, &fr)) != 0)
 		return (error);
 
 	td2 = FIRST_THREAD_IN_PROC(p2);
@@ -131,6 +137,7 @@ linux_vfork(struct thread *td, struct linux_vfork_args *args)
 static int
 linux_clone_proc(struct thread *td, struct linux_clone_args *args)
 {
+	struct fork_req fr;
 	int error, ff = RFPROC | RFSTOPPED;
 	struct proc *p2;
 	struct thread *td2;
@@ -157,7 +164,7 @@ linux_clone_proc(struct thread *td, struct linux_clone_args *args)
 		ff |= RFSIGSHARE;
 	/*
 	 * XXX: In Linux, sharing of fs info (chroot/cwd/umask)
-	 * and open files is independant.  In FreeBSD, its in one
+	 * and open files is independent.  In FreeBSD, its in one
 	 * structure but in reality it does not cause any problems
 	 * because both of these flags are usually set together.
 	 */
@@ -171,7 +178,10 @@ linux_clone_proc(struct thread *td, struct linux_clone_args *args)
 	if (args->flags & LINUX_CLONE_VFORK)
 		ff |= RFPPWAIT;
 
-	error = fork1(td, ff, 0, &p2, NULL, 0);
+	bzero(&fr, sizeof(fr));
+	fr.fr_flags = ff;
+	fr.fr_procp = &p2;
+	error = fork1(td, &fr);
 	if (error)
 		return (error);
 
@@ -212,6 +222,18 @@ linux_clone_proc(struct thread *td, struct linux_clone_args *args)
 
 	if (args->flags & LINUX_CLONE_SETTLS)
 		linux_set_cloned_tls(td2, args->tls);
+
+	/*
+	 * If CLONE_PARENT is set, then the parent of the new process will be 
+	 * the same as that of the calling process.
+	 */
+	if (args->flags & LINUX_CLONE_PARENT) {
+		sx_xlock(&proctree_lock);
+		PROC_LOCK(p2);
+		proc_reparent(p2, td->td_proc->p_pptr);
+		PROC_UNLOCK(p2);
+		sx_xunlock(&proctree_lock);
+	}
 
 #ifdef DEBUG
 	if (ldebug(clone))
@@ -277,8 +299,8 @@ linux_clone_thread(struct thread *td, struct linux_clone_args *args)
 	error = kern_thr_alloc(p, 0, &newtd);
 	if (error)
 		goto fail;
-														
-	cpu_set_upcall(newtd, td);
+
+	cpu_copy_thread(newtd, td);
 
 	bzero(&newtd->td_startzero,
 	    __rangeof(struct thread, td_startzero, td_endzero));
@@ -286,7 +308,7 @@ linux_clone_thread(struct thread *td, struct linux_clone_args *args)
 	    __rangeof(struct thread, td_startcopy, td_endcopy));
 
 	newtd->td_proc = p;
-	newtd->td_ucred = crhold(td->td_ucred);
+	thread_cow_get(newtd, td);
 
 	/* create the emuldata */
 	linux_proc_init(td, newtd, args->flags);
@@ -389,6 +411,8 @@ linux_exit(struct thread *td, struct linux_exit_args *args)
 
 	LINUX_CTR2(exit, "thread(%d) (%d)", em->em_tid, args->rval);
 
+	umtx_thread_exit(td);
+
 	linux_thread_detach(td);
 
 	/*
@@ -396,7 +420,7 @@ linux_exit(struct thread *td, struct linux_exit_args *args)
 	 * exit via pthread_exit() try thr_exit() first.
 	 */
 	kern_thr_exit(td);
-	exit1(td, W_EXITCODE(args->rval, 0));
+	exit1(td, args->rval, 0);
 		/* NOTREACHED */
 }
 

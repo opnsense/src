@@ -6,6 +6,7 @@
 // License. See LICENSE.TXT for details.
 //
 //===----------------------------------------------------------------------===//
+#ifndef __ANDROID_NDK__
 
 #include "lldb/Core/ConnectionSharedMemory.h"
 
@@ -15,16 +16,16 @@
 #ifdef _WIN32
 #include "lldb/Host/windows/windows.h"
 #else
-#include <sys/file.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <fcntl.h>
 #endif
 
 // C++ Includes
 // Other libraries and framework includes
 // Project includes
-#include "lldb/lldb-private-log.h"
+#include "llvm/Support/MathExtras.h"
 #include "lldb/Core/Communication.h"
 #include "lldb/Core/Log.h"
 
@@ -105,6 +106,13 @@ ConnectionSharedMemory::Write (const void *src, size_t src_len, ConnectionStatus
     return 0;
 }
 
+std::string
+ConnectionSharedMemory::GetURI()
+{
+    // TODO: fix when Connect is fixed?
+    return "";
+}
+
 ConnectionStatus
 ConnectionSharedMemory::BytesAvailable (uint32_t timeout_usec, Error *error_ptr)
 {
@@ -125,8 +133,15 @@ ConnectionSharedMemory::Open (bool create, const char *name, size_t size, Error 
 
 #ifdef _WIN32
     HANDLE handle;
-    if (create)
-        handle = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, (DWORD)(size >> 32), (DWORD)(size), name);
+    if (create) {
+        handle = CreateFileMapping(
+            INVALID_HANDLE_VALUE,
+            NULL,
+            PAGE_READWRITE,
+            llvm::Hi_32(size),
+            llvm::Lo_32(size),
+            name);
+    }
     else
         handle = OpenFileMapping(FILE_MAP_ALL_ACCESS, FALSE, name);
 
@@ -148,3 +163,4 @@ ConnectionSharedMemory::Open (bool create, const char *name, size_t size, Error 
     return eConnectionStatusError;
 }
 
+#endif // __ANDROID_NDK__

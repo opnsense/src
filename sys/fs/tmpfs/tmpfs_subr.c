@@ -42,6 +42,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/namei.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
+#include <sys/random.h>
 #include <sys/rwlock.h>
 #include <sys/stat.h>
 #include <sys/systm.h>
@@ -104,7 +105,7 @@ tmpfs_mem_avail(void)
 {
 	vm_ooffset_t avail;
 
-	avail = swap_pager_avail + cnt.v_free_count + cnt.v_cache_count -
+	avail = swap_pager_avail + vm_cnt.v_free_count + vm_cnt.v_cache_count -
 	    tmpfs_pages_reserved;
 	if (__predict_false(avail < 0))
 		avail = 0;
@@ -516,8 +517,7 @@ loop1:
 			goto loop1;
 		}
 		TMPFS_NODE_UNLOCK(node);
-		error = vget(vp, lkflag | LK_INTERLOCK | LK_CANRECURSE,
-		    curthread);
+		error = vget(vp, lkflag | LK_INTERLOCK, curthread);
 		if (error == ENOENT)
 			goto loop;
 		if (error != 0) {
@@ -945,7 +945,7 @@ tmpfs_dir_attach_dup(struct tmpfs_node *dnode,
 		LIST_INSERT_BEFORE(de, nde, uh.td_dup.index_entries);
 		LIST_INSERT_HEAD(duphead, nde, uh.td_dup.entries);
 		return;
-	};
+	}
 }
 
 /*
@@ -1322,7 +1322,7 @@ tmpfs_reg_resize(struct vnode *vp, off_t newsize, boolean_t ignerr)
 	struct tmpfs_mount *tmp;
 	struct tmpfs_node *node;
 	vm_object_t uobj;
-	vm_page_t m, ma[1];
+	vm_page_t m;
 	vm_pindex_t idx, newpages, oldpages;
 	off_t oldsize;
 	int base, rv;
@@ -1369,11 +1369,10 @@ retry:
 					VM_WAIT;
 					VM_OBJECT_WLOCK(uobj);
 					goto retry;
-				} else if (m->valid != VM_PAGE_BITS_ALL) {
-					ma[0] = m;
-					rv = vm_pager_get_pages(uobj, ma, 1, 0);
-					m = vm_page_lookup(uobj, idx);
-				} else
+				} else if (m->valid != VM_PAGE_BITS_ALL)
+					rv = vm_pager_get_pages(uobj, &m, 1,
+					    NULL, NULL);
+				else
 					/* A cached page was reactivated. */
 					rv = VM_PAGER_OK;
 				vm_page_lock(m);
@@ -1711,20 +1710,18 @@ tmpfs_chtimes(struct vnode *vp, struct vattr *vap,
 	if (error != 0)
 		return (error);
 
-	if (vap->va_atime.tv_sec != VNOVAL && vap->va_atime.tv_nsec != VNOVAL)
+	if (vap->va_atime.tv_sec != VNOVAL)
 		node->tn_status |= TMPFS_NODE_ACCESSED;
 
-	if (vap->va_mtime.tv_sec != VNOVAL && vap->va_mtime.tv_nsec != VNOVAL)
+	if (vap->va_mtime.tv_sec != VNOVAL)
 		node->tn_status |= TMPFS_NODE_MODIFIED;
 
-	if (vap->va_birthtime.tv_nsec != VNOVAL &&
-	    vap->va_birthtime.tv_nsec != VNOVAL)
+	if (vap->va_birthtime.tv_sec != VNOVAL)
 		node->tn_status |= TMPFS_NODE_MODIFIED;
 
 	tmpfs_itimes(vp, &vap->va_atime, &vap->va_mtime);
 
-	if (vap->va_birthtime.tv_nsec != VNOVAL &&
-	    vap->va_birthtime.tv_nsec != VNOVAL)
+	if (vap->va_birthtime.tv_sec != VNOVAL)
 		node->tn_birthtime = vap->va_birthtime;
 	MPASS(VOP_ISLOCKED(vp));
 
@@ -1761,6 +1758,8 @@ tmpfs_itimes(struct vnode *vp, const struct timespec *acc,
 	}
 	node->tn_status &=
 	    ~(TMPFS_NODE_ACCESSED | TMPFS_NODE_MODIFIED | TMPFS_NODE_CHANGED);
+	/* XXX: FIX? The entropy here is desirable, but the harvesting may be expensive */
+	random_harvest_queue(node, sizeof(*node), 1, RANDOM_FS_ATIME);
 }
 
 void

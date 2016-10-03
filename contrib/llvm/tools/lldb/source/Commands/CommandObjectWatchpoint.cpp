@@ -7,8 +7,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "lldb/lldb-python.h"
-
 #include "CommandObjectWatchpoint.h"
 #include "CommandObjectWatchpointCommand.h"
 
@@ -21,12 +19,16 @@
 #include "lldb/Core/StreamString.h"
 #include "lldb/Core/ValueObject.h"
 #include "lldb/Core/ValueObjectVariable.h"
+#include "lldb/Host/StringConvert.h"
 #include "lldb/Interpreter/CommandInterpreter.h"
 #include "lldb/Interpreter/CommandReturnObject.h"
 #include "lldb/Interpreter/CommandCompletions.h"
 #include "lldb/Symbol/Variable.h"
 #include "lldb/Symbol/VariableList.h"
+#include "lldb/Target/StackFrame.h"
 #include "lldb/Target/Target.h"
+
+#include "llvm/ADT/StringRef.h"
 
 #include <vector>
 
@@ -60,14 +62,6 @@ CheckTargetForWatchpointOperations(Target *target, CommandReturnObject &result)
     }
     // Target passes our checks, return true.
     return true;
-}
-
-// FIXME: This doesn't seem to be the right place for this functionality.
-#include "llvm/ADT/StringRef.h"
-static inline void StripLeadingSpaces(llvm::StringRef &Str)
-{
-    while (!Str.empty() && isspace(Str[0]))
-        Str = Str.substr(1);
 }
 
 // Equivalent class: {"-", "to", "To", "TO"} of range specifier array.
@@ -110,7 +104,7 @@ CommandObjectMultiwordWatchpoint::VerifyWatchpointIDs(Target *target, Args &args
     std::pair<llvm::StringRef, llvm::StringRef> Pair;
     size_t i;
     int32_t idx;
-    // Go through the argments and make a canonical form of arg list containing
+    // Go through the arguments and make a canonical form of arg list containing
     // only numbers with possible "-" in between.
     for (i = 0; i < args.GetArgumentCount(); ++i) {
         llvm::StringRef Arg(args.GetArgumentAtIndex(i));
@@ -184,11 +178,10 @@ public:
         m_arguments.push_back(arg);
     }
 
-    virtual
-    ~CommandObjectWatchpointList () {}
+    ~CommandObjectWatchpointList () override {}
 
-    virtual Options *
-    GetOptions ()
+    Options *
+    GetOptions () override
     {
         return &m_options;
     }
@@ -203,11 +196,10 @@ public:
         {
         }
 
-        virtual
-        ~CommandOptions () {}
+        ~CommandOptions () override {}
 
-        virtual Error
-        SetOptionValue (uint32_t option_idx, const char *option_arg)
+        Error
+        SetOptionValue (uint32_t option_idx, const char *option_arg) override
         {
             Error error;
             const int short_option = m_getopt_table[option_idx].val;
@@ -232,13 +224,13 @@ public:
         }
 
         void
-        OptionParsingStarting ()
+        OptionParsingStarting () override
         {
             m_level = lldb::eDescriptionLevelFull;
         }
 
         const OptionDefinition *
-        GetDefinitions ()
+        GetDefinitions () override
         {
             return g_option_table;
         }
@@ -254,8 +246,8 @@ public:
     };
 
 protected:
-    virtual bool
-    DoExecute (Args& command, CommandReturnObject &result)
+    bool
+    DoExecute (Args& command, CommandReturnObject &result) override
     {
         Target *target = m_interpreter.GetDebugger().GetSelectedTarget().get();
         if (target == NULL)
@@ -335,16 +327,16 @@ private:
 OptionDefinition
 CommandObjectWatchpointList::CommandOptions::g_option_table[] =
 {
-    { LLDB_OPT_SET_1, false, "brief",    'b', OptionParser::eNoArgument, NULL, 0, eArgTypeNone,
+    { LLDB_OPT_SET_1, false, "brief",    'b', OptionParser::eNoArgument, NULL, NULL, 0, eArgTypeNone,
         "Give a brief description of the watchpoint (no location info)."},
 
-    { LLDB_OPT_SET_2, false, "full",    'f', OptionParser::eNoArgument, NULL, 0, eArgTypeNone,
+    { LLDB_OPT_SET_2, false, "full",    'f', OptionParser::eNoArgument, NULL, NULL, 0, eArgTypeNone,
         "Give a full description of the watchpoint and its locations."},
 
-    { LLDB_OPT_SET_3, false, "verbose", 'v', OptionParser::eNoArgument, NULL, 0, eArgTypeNone,
+    { LLDB_OPT_SET_3, false, "verbose", 'v', OptionParser::eNoArgument, NULL, NULL, 0, eArgTypeNone,
         "Explain everything we know about the watchpoint (for debugging debugger bugs)." },
 
-    { 0, false, NULL, 0, 0, NULL, 0, eArgTypeNone, NULL }
+    { 0, false, NULL, 0, 0, NULL, NULL, 0, eArgTypeNone, NULL }
 };
 
 //-------------------------------------------------------------------------
@@ -367,13 +359,12 @@ public:
         m_arguments.push_back(arg);
     }
 
-    virtual
-    ~CommandObjectWatchpointEnable () {}
+    ~CommandObjectWatchpointEnable () override {}
 
 protected:
-    virtual bool
+    bool
     DoExecute (Args& command,
-             CommandReturnObject &result)
+             CommandReturnObject &result) override
     {
         Target *target = m_interpreter.GetDebugger().GetSelectedTarget().get();
         if (!CheckTargetForWatchpointOperations(target, result))
@@ -397,7 +388,7 @@ protected:
         {
             // No watchpoint selected; enable all currently set watchpoints.
             target->EnableAllWatchpoints();
-            result.AppendMessageWithFormat("All watchpoints enabled. (%zu watchpoints)\n", num_watchpoints);
+            result.AppendMessageWithFormat("All watchpoints enabled. (%" PRIu64 " watchpoints)\n", (uint64_t)num_watchpoints);
             result.SetStatus(eReturnStatusSuccessFinishNoResult);
         }
         else
@@ -447,12 +438,11 @@ public:
     }
 
 
-    virtual
-    ~CommandObjectWatchpointDisable () {}
+    ~CommandObjectWatchpointDisable () override {}
 
 protected:
-    virtual bool
-    DoExecute (Args& command, CommandReturnObject &result)
+    bool
+    DoExecute (Args& command, CommandReturnObject &result) override
     {
         Target *target = m_interpreter.GetDebugger().GetSelectedTarget().get();
         if (!CheckTargetForWatchpointOperations(target, result))
@@ -476,7 +466,7 @@ protected:
             // No watchpoint selected; disable all currently set watchpoints.
             if (target->DisableAllWatchpoints())
             {
-                result.AppendMessageWithFormat("All watchpoints disabled. (%zu watchpoints)\n", num_watchpoints);
+                result.AppendMessageWithFormat("All watchpoints disabled. (%" PRIu64 " watchpoints)\n", (uint64_t)num_watchpoints);
                 result.SetStatus(eReturnStatusSuccessFinishNoResult);
             }
             else
@@ -530,12 +520,11 @@ public:
         m_arguments.push_back(arg);
     }
 
-    virtual
-    ~CommandObjectWatchpointDelete () {}
+    ~CommandObjectWatchpointDelete () override {}
 
 protected:
-    virtual bool
-    DoExecute (Args& command, CommandReturnObject &result)
+    bool
+    DoExecute (Args& command, CommandReturnObject &result) override
     {
         Target *target = m_interpreter.GetDebugger().GetSelectedTarget().get();
         if (!CheckTargetForWatchpointOperations(target, result))
@@ -564,7 +553,7 @@ protected:
             else
             {
                 target->RemoveAllWatchpoints();
-                result.AppendMessageWithFormat("All watchpoints removed. (%zu watchpoints)\n", num_watchpoints);
+                result.AppendMessageWithFormat("All watchpoints removed. (%" PRIu64 " watchpoints)\n", (uint64_t)num_watchpoints);
             }
             result.SetStatus (eReturnStatusSuccessFinishNoResult);
         }
@@ -613,11 +602,10 @@ public:
         m_arguments.push_back(arg);
     }
 
-    virtual
-    ~CommandObjectWatchpointIgnore () {}
+    ~CommandObjectWatchpointIgnore () override {}
 
-    virtual Options *
-    GetOptions ()
+    Options *
+    GetOptions () override
     {
         return &m_options;
     }
@@ -632,11 +620,10 @@ public:
         {
         }
 
-        virtual
-        ~CommandOptions () {}
+        ~CommandOptions () override {}
 
-        virtual Error
-        SetOptionValue (uint32_t option_idx, const char *option_arg)
+        Error
+        SetOptionValue (uint32_t option_idx, const char *option_arg) override
         {
             Error error;
             const int short_option = m_getopt_table[option_idx].val;
@@ -645,7 +632,7 @@ public:
             {
                 case 'i':
                 {
-                    m_ignore_count = Args::StringToUInt32(option_arg, UINT32_MAX, 0);
+                    m_ignore_count = StringConvert::ToUInt32(option_arg, UINT32_MAX, 0);
                     if (m_ignore_count == UINT32_MAX)
                        error.SetErrorStringWithFormat ("invalid ignore count '%s'", option_arg);
                 }
@@ -659,13 +646,13 @@ public:
         }
 
         void
-        OptionParsingStarting ()
+        OptionParsingStarting () override
         {
             m_ignore_count = 0;
         }
 
         const OptionDefinition *
-        GetDefinitions ()
+        GetDefinitions () override
         {
             return g_option_table;
         }
@@ -681,9 +668,9 @@ public:
     };
 
 protected:
-    virtual bool
+    bool
     DoExecute (Args& command,
-             CommandReturnObject &result)
+             CommandReturnObject &result) override
     {
         Target *target = m_interpreter.GetDebugger().GetSelectedTarget().get();
         if (!CheckTargetForWatchpointOperations(target, result))
@@ -706,7 +693,7 @@ protected:
         if (command.GetArgumentCount() == 0)
         {
             target->IgnoreAllWatchpoints(m_options.m_ignore_count);
-            result.AppendMessageWithFormat("All watchpoints ignored. (%zu watchpoints)\n", num_watchpoints);
+            result.AppendMessageWithFormat("All watchpoints ignored. (%" PRIu64 " watchpoints)\n", (uint64_t)num_watchpoints);
             result.SetStatus (eReturnStatusSuccessFinishNoResult);
         }
         else
@@ -740,8 +727,8 @@ private:
 OptionDefinition
 CommandObjectWatchpointIgnore::CommandOptions::g_option_table[] =
 {
-    { LLDB_OPT_SET_ALL, true, "ignore-count", 'i', OptionParser::eRequiredArgument, NULL, 0, eArgTypeCount, "Set the number of times this watchpoint is skipped before stopping." },
-    { 0,                false, NULL,            0 , 0,                 NULL, 0,    eArgTypeNone, NULL }
+    { LLDB_OPT_SET_ALL, true, "ignore-count", 'i', OptionParser::eRequiredArgument, NULL, NULL, 0, eArgTypeCount, "Set the number of times this watchpoint is skipped before stopping." },
+    { 0,                false, NULL,            0 , 0,                 NULL, NULL, 0,    eArgTypeNone, NULL }
 };
 
 
@@ -769,11 +756,10 @@ public:
         m_arguments.push_back (arg);   
     }
 
-    virtual
-    ~CommandObjectWatchpointModify () {}
+    ~CommandObjectWatchpointModify () override {}
 
-    virtual Options *
-    GetOptions ()
+    Options *
+    GetOptions () override
     {
         return &m_options;
     }
@@ -789,11 +775,10 @@ public:
         {
         }
 
-        virtual
-        ~CommandOptions () {}
+        ~CommandOptions () override {}
 
-        virtual Error
-        SetOptionValue (uint32_t option_idx, const char *option_arg)
+        Error
+        SetOptionValue (uint32_t option_idx, const char *option_arg) override
         {
             Error error;
             const int short_option = m_getopt_table[option_idx].val;
@@ -816,14 +801,14 @@ public:
         }
 
         void
-        OptionParsingStarting ()
+        OptionParsingStarting () override
         {
             m_condition.clear();
             m_condition_passed = false;
         }
         
         const OptionDefinition*
-        GetDefinitions ()
+        GetDefinitions () override
         {
             return g_option_table;
         }
@@ -839,8 +824,8 @@ public:
     };
 
 protected:
-    virtual bool
-    DoExecute (Args& command, CommandReturnObject &result)
+    bool
+    DoExecute (Args& command, CommandReturnObject &result) override
     {
         Target *target = m_interpreter.GetDebugger().GetSelectedTarget().get();
         if (!CheckTargetForWatchpointOperations(target, result))
@@ -903,8 +888,8 @@ private:
 OptionDefinition
 CommandObjectWatchpointModify::CommandOptions::g_option_table[] =
 {
-{ LLDB_OPT_SET_ALL, false, "condition",    'c', OptionParser::eRequiredArgument, NULL, 0, eArgTypeExpression, "The watchpoint stops only if this condition expression evaluates to true."},
-{ 0,                false, NULL,            0 , 0,                 NULL, 0,    eArgTypeNone, NULL }
+{ LLDB_OPT_SET_ALL, false, "condition",    'c', OptionParser::eRequiredArgument, NULL, NULL, 0, eArgTypeExpression, "The watchpoint stops only if this condition expression evaluates to true."},
+{ 0,                false, NULL,            0 , 0,                 NULL, NULL, 0,    eArgTypeNone, NULL }
 };
 
 //-------------------------------------------------------------------------
@@ -929,18 +914,22 @@ public:
                              "If watchpoint setting fails, consider disable/delete existing ones "
                              "to free up resources.",
                              NULL,
-                             eFlagRequiresFrame         |
-                             eFlagTryTargetAPILock      |
-                             eFlagProcessMustBeLaunched |
-                             eFlagProcessMustBePaused   ),
+                             eCommandRequiresFrame         |
+                             eCommandTryTargetAPILock      |
+                             eCommandProcessMustBeLaunched |
+                             eCommandProcessMustBePaused   ),
         m_option_group (interpreter),
         m_option_watchpoint ()
     {
         SetHelpLong(
-    "Examples: \n\
-    \n\
-        watchpoint set variable -w read_write my_global_var \n\
-        # Watch my_global_var for read/write access, with the region to watch corresponding to the byte size of the data type.\n");
+R"(
+Examples:
+
+(lldb) watchpoint set variable -w read_write my_global_var
+
+)" "    Watches my_global_var for read/write access, with the region to watch \
+corresponding to the byte size of the data type."
+        );
 
         CommandArgumentEntry arg;
         CommandArgumentData var_name_arg;
@@ -960,11 +949,10 @@ public:
         m_option_group.Finalize();
     }
 
-    virtual
-    ~CommandObjectWatchpointSetVariable () {}
+    ~CommandObjectWatchpointSetVariable () override {}
 
-    virtual Options *
-    GetOptions ()
+    Options *
+    GetOptions () override
     {
         return &m_option_group;
     }
@@ -985,8 +973,8 @@ protected:
         return 0;
     }
     
-    virtual bool
-    DoExecute (Args& command, CommandReturnObject &result)
+    bool
+    DoExecute (Args& command, CommandReturnObject &result) override
     {
         Target *target = m_interpreter.GetDebugger().GetSelectedTarget().get();
         StackFrame *frame = m_exe_ctx.GetFramePtr();
@@ -1050,7 +1038,7 @@ protected:
                 valobj_sp = valobj_list.GetValueObjectAtIndex(0);
         }
         
-        ClangASTType clang_type;
+        CompilerType compiler_type;
         
         if (valobj_sp)
         {
@@ -1063,7 +1051,7 @@ protected:
                 size = m_option_watchpoint.watch_size == 0 ? valobj_sp->GetByteSize()
                                                            : m_option_watchpoint.watch_size;
             }
-            clang_type = valobj_sp->GetClangType();
+            compiler_type = valobj_sp->GetCompilerType();
         }
         else
         {
@@ -1080,7 +1068,7 @@ protected:
         uint32_t watch_type = m_option_watchpoint.watch_type;
         
         error.Clear();
-        Watchpoint *wp = target->CreateWatchpoint(addr, size, &clang_type, watch_type, error).get();
+        Watchpoint *wp = target->CreateWatchpoint(addr, size, &compiler_type, watch_type, error).get();
         if (wp)
         {
             wp->SetWatchSpec(command.GetArgumentAtIndex(0));
@@ -1099,8 +1087,8 @@ protected:
         }
         else
         {
-            result.AppendErrorWithFormat("Watchpoint creation failed (addr=0x%" PRIx64 ", size=%zu, variable expression='%s').\n",
-                                         addr, size, command.GetArgumentAtIndex(0));
+            result.AppendErrorWithFormat("Watchpoint creation failed (addr=0x%" PRIx64 ", size=%" PRIu64 ", variable expression='%s').\n",
+                                         addr, (uint64_t)size, command.GetArgumentAtIndex(0));
             if (error.AsCString(NULL))
                 result.AppendError(error.AsCString());
             result.SetStatus(eReturnStatusFailed);
@@ -1136,18 +1124,21 @@ public:
                           "If watchpoint setting fails, consider disable/delete existing ones "
                           "to free up resources.",
                           NULL,
-                          eFlagRequiresFrame         |
-                          eFlagTryTargetAPILock      |
-                          eFlagProcessMustBeLaunched |
-                          eFlagProcessMustBePaused   ),
+                          eCommandRequiresFrame         |
+                          eCommandTryTargetAPILock      |
+                          eCommandProcessMustBeLaunched |
+                          eCommandProcessMustBePaused   ),
         m_option_group (interpreter),
         m_option_watchpoint ()
     {
         SetHelpLong(
-    "Examples: \n\
-    \n\
-        watchpoint set expression -w write -x 1 -- foo + 32\n\
-        # Watch write access for the 1-byte region pointed to by the address 'foo + 32'.\n");
+R"(
+Examples:
+
+(lldb) watchpoint set expression -w write -x 1 -- foo + 32
+
+    Watches write access for the 1-byte region pointed to by the address 'foo + 32')"
+        );
 
         CommandArgumentEntry arg;
         CommandArgumentData expression_arg;
@@ -1168,22 +1159,21 @@ public:
     }
 
 
-    virtual
-    ~CommandObjectWatchpointSetExpression () {}
+    ~CommandObjectWatchpointSetExpression () override {}
 
     // Overrides base class's behavior where WantsCompletion = !WantsRawCommandString.
-    virtual bool
-    WantsCompletion() { return true; }
+    bool
+    WantsCompletion() override { return true; }
 
-    virtual Options *
-    GetOptions ()
+    Options *
+    GetOptions () override
     {
         return &m_option_group;
     }
 
 protected:
-    virtual bool
-    DoExecute (const char *raw_command, CommandReturnObject &result)
+    bool
+    DoExecute (const char *raw_command, CommandReturnObject &result) override
     {
         m_option_group.NotifyOptionParsingStarting(); // This is a raw command, so notify the option group
         
@@ -1216,7 +1206,7 @@ protected:
             
             if (end_options)
             {
-                Args args (raw_command, end_options - raw_command);
+                Args args (llvm::StringRef(raw_command, end_options - raw_command));
                 if (!ParseOptions (args, result))
                     return false;
                 
@@ -1262,11 +1252,11 @@ protected:
         options.SetTryAllThreads(true);
         options.SetTimeoutUsec(0);
         
-        ExecutionResults expr_result = target->EvaluateExpression (expr, 
+        ExpressionResults expr_result = target->EvaluateExpression (expr, 
                                                                    frame, 
                                                                    valobj_sp,
                                                                    options);
-        if (expr_result != eExecutionCompleted)
+        if (expr_result != eExpressionCompleted)
         {
             result.GetErrorStream().Printf("error: expression evaluation of address to watch failed\n");
             result.GetErrorStream().Printf("expression evaluated: %s\n", expr);
@@ -1294,10 +1284,10 @@ protected:
         
         // Fetch the type from the value object, the type of the watched object is the pointee type
         /// of the expression, so convert to that if we  found a valid type.
-        ClangASTType clang_type(valobj_sp->GetClangType());
+        CompilerType compiler_type(valobj_sp->GetCompilerType());
         
         Error error;
-        Watchpoint *wp = target->CreateWatchpoint(addr, size, &clang_type, watch_type, error).get();
+        Watchpoint *wp = target->CreateWatchpoint(addr, size, &compiler_type, watch_type, error).get();
         if (wp)
         {
             Stream &output_stream = result.GetOutputStream();
@@ -1308,8 +1298,8 @@ protected:
         }
         else
         {
-            result.AppendErrorWithFormat("Watchpoint creation failed (addr=0x%" PRIx64 ", size=%zu).\n",
-                                         addr, size);
+            result.AppendErrorWithFormat("Watchpoint creation failed (addr=0x%" PRIx64 ", size=%" PRIu64 ").\n",
+                                         addr, (uint64_t)size);
             if (error.AsCString(NULL))
                 result.AppendError(error.AsCString());
             result.SetStatus(eReturnStatusFailed);
@@ -1344,8 +1334,7 @@ public:
     }
 
 
-    virtual
-    ~CommandObjectWatchpointSet () {}
+    ~CommandObjectWatchpointSet () override {}
 
 };
 

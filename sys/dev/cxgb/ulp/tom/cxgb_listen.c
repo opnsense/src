@@ -36,15 +36,17 @@ __FBSDID("$FreeBSD$");
 #include <sys/socketvar.h>
 #include <sys/sysctl.h>
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/route.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
+#include <netinet/in_fib.h>
 #include <netinet/in_pcb.h>
 #include <netinet/in_var.h>
 #include <netinet/tcp_timer.h>
-#include <netinet/tcp_var.h>
 #define TCPSTATES
 #include <netinet/tcp_fsm.h>
+#include <netinet/tcp_var.h>
 #include <netinet/toecore.h>
 
 #include "cxgb_include.h"
@@ -441,26 +443,13 @@ static struct synq_entry *
 mbuf_to_synq_entry(struct mbuf *m)
 {
 	int len = roundup(sizeof (struct synq_entry), 8);
-	uint8_t *buf;
-	int buflen;
 
 	if (__predict_false(M_TRAILINGSPACE(m) < len)) {
 	    panic("%s: no room for synq_entry (%td, %d)\n", __func__,
 	    M_TRAILINGSPACE(m), len);
 	}
 
-	if (m->m_flags & M_EXT) {
-		buf = m->m_ext.ext_buf;
-		buflen = m->m_ext.ext_size;
-	} else if (m->m_flags & M_PKTHDR) {
-		buf = &m->m_pktdat[0];
-		buflen = MHLEN;
-	} else {
-		buf = &m->m_dat[0];
-		buflen = MLEN;
-	}
-
-	return ((void *)(buf + buflen - len));
+	return ((void *)(M_START(m) + M_SIZE(m) - len));
 }
 
 #ifdef KTR
@@ -492,8 +481,8 @@ do_pass_accept_req(struct sge_qset *qs, struct rsp_desc *r, struct mbuf *m)
 	unsigned int tid = GET_TID(req);
 	struct listen_ctx *lctx = lookup_stid(&td->tid_maps, stid);
 	struct l2t_entry *e = NULL;
+	struct nhop4_basic nh4;
 	struct sockaddr_in nam;
-	struct rtentry *rt;
 	struct inpcb *inp;
 	struct socket *so;
 	struct port_info *pi;
@@ -537,27 +526,21 @@ do_pass_accept_req(struct sge_qset *qs, struct rsp_desc *r, struct mbuf *m)
 	nam.sin_len = sizeof(nam);
 	nam.sin_family = AF_INET;
 	nam.sin_addr = inc.inc_faddr;
-	rt = rtalloc1((struct sockaddr *)&nam, 0, 0);
-	if (rt == NULL)
+	if (fib4_lookup_nh_basic(RT_DEFAULT_FIB, nam.sin_addr, 0, 0, &nh4) != 0)
 		REJECT_PASS_ACCEPT();
 	else {
-		struct sockaddr *nexthop;
-
-		RT_UNLOCK(rt);
-		nexthop = rt->rt_flags & RTF_GATEWAY ? rt->rt_gateway :
-		    (struct sockaddr *)&nam;
-		if (rt->rt_ifp == ifp)
-			e = t3_l2t_get(pi, rt->rt_ifp, nexthop);
-		RTFREE(rt);
+		nam.sin_addr = nh4.nh_addr;
+		if (nh4.nh_ifp == ifp)
+			e = t3_l2t_get(pi, ifp, (struct sockaddr *)&nam);
 		if (e == NULL)
 			REJECT_PASS_ACCEPT();	/* no l2te, or ifp mismatch */
 	}
 
-	INP_INFO_WLOCK(&V_tcbinfo);
+	INP_INFO_RLOCK(&V_tcbinfo);
 
 	/* Don't offload if the 4-tuple is already in use */
 	if (toe_4tuple_check(&inc, &th, ifp) != 0) {
-		INP_INFO_WUNLOCK(&V_tcbinfo);
+		INP_INFO_RUNLOCK(&V_tcbinfo);
 		REJECT_PASS_ACCEPT();
 	}
 
@@ -570,7 +553,7 @@ do_pass_accept_req(struct sge_qset *qs, struct rsp_desc *r, struct mbuf *m)
 		 * resources tied to this listen context.
 		 */
 		INP_WUNLOCK(inp);
-		INP_INFO_WUNLOCK(&V_tcbinfo);
+		INP_INFO_RUNLOCK(&V_tcbinfo);
 		REJECT_PASS_ACCEPT();
 	}
 	so = inp->inp_socket;
@@ -698,7 +681,7 @@ do_pass_establish(struct sge_qset *qs, struct rsp_desc *r, struct mbuf *m)
 	struct toepcb *toep;
 	struct socket *so;
 	struct listen_ctx *lctx = synqe->lctx;
-	struct inpcb *inp = lctx->inp;
+	struct inpcb *inp = lctx->inp, *new_inp;
 	struct tcpopt to;
 	struct tcphdr th;
 	struct in_conninfo inc;
@@ -712,7 +695,7 @@ do_pass_establish(struct sge_qset *qs, struct rsp_desc *r, struct mbuf *m)
 	KASSERT(qs->idx == synqe->qset,
 	    ("%s qset mismatch %d %d", __func__, qs->idx, synqe->qset));
 
-	INP_INFO_WLOCK(&V_tcbinfo);	/* for syncache_expand */
+	INP_INFO_RLOCK(&V_tcbinfo);	/* for syncache_expand */
 	INP_WLOCK(inp);
 
 	if (__predict_false(inp->inp_flags & INP_DROPPED)) {
@@ -726,7 +709,7 @@ do_pass_establish(struct sge_qset *qs, struct rsp_desc *r, struct mbuf *m)
 		    ("%s: listen socket dropped but tid %u not aborted.",
 		    __func__, tid));
 		INP_WUNLOCK(inp);
-		INP_INFO_WUNLOCK(&V_tcbinfo);
+		INP_INFO_RUNLOCK(&V_tcbinfo);
 		m_freem(m);
 		return (0);
 	}
@@ -742,7 +725,7 @@ do_pass_establish(struct sge_qset *qs, struct rsp_desc *r, struct mbuf *m)
 reset:
 		t3_send_reset_synqe(tod, synqe);
 		INP_WUNLOCK(inp);
-		INP_INFO_WUNLOCK(&V_tcbinfo);
+		INP_INFO_RUNLOCK(&V_tcbinfo);
 		m_freem(m);
 		return (0);
 	}
@@ -760,21 +743,23 @@ reset:
 		goto reset;
 	}
 
-	if (__predict_false(!(synqe->flags & TP_SYNQE_EXPANDED))) {
-		struct inpcb *new_inp = sotoinpcb(so);
+	/* New connection inpcb is already locked by syncache_expand(). */
+	new_inp = sotoinpcb(so);
+	INP_WLOCK_ASSERT(new_inp);
 
-		INP_WLOCK(new_inp);
+	if (__predict_false(!(synqe->flags & TP_SYNQE_EXPANDED))) {
 		tcp_timer_activate(intotcpcb(new_inp), TT_KEEP, 0);
 		t3_offload_socket(tod, synqe, so);
-		INP_WUNLOCK(new_inp);
 	}
+
+	INP_WUNLOCK(new_inp);
 
 	/* Remove the synq entry and release its reference on the lctx */
 	TAILQ_REMOVE(&lctx->synq, synqe, link);
 	inp = release_lctx(td, lctx);
 	if (inp)
 		INP_WUNLOCK(inp);
-	INP_INFO_WUNLOCK(&V_tcbinfo);
+	INP_INFO_RUNLOCK(&V_tcbinfo);
 	release_synqe(synqe);
 
 	m_freem(m);
@@ -936,9 +921,6 @@ t3_syncache_removed(struct toedev *tod __unused, void *arg)
 
 	release_synqe(synqe);
 }
-
-/* XXX */
-extern void tcp_dooptions(struct tcpopt *, u_char *, int, int);
 
 int
 t3_syncache_respond(struct toedev *tod, void *arg, struct mbuf *m)
@@ -1140,7 +1122,7 @@ t3_offload_socket(struct toedev *tod, void *arg, struct socket *so)
 	struct cpl_pass_establish *cpl = synqe->cpl;
 	struct toepcb *toep = synqe->toep;
 
-	INP_INFO_LOCK_ASSERT(&V_tcbinfo); /* prevents bad race with accept() */
+	INP_INFO_RLOCK_ASSERT(&V_tcbinfo); /* prevents bad race with accept() */
 	INP_WLOCK_ASSERT(inp);
 
 	offload_socket(so, toep);

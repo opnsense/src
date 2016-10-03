@@ -1,9 +1,9 @@
 # $FreeBSD$
 
+PACKAGE=iscsi_legacy
 SRCS= iscontrol.c pdu.c fsm.c config.c login.c auth_subr.c misc.c
 PROG= iscontrol
-DPADD= ${LIBCAM} ${LIBMD}
-LDADD= -lcam -lmd
+LIBADD=	cam md
 S= ${.CURDIR}/../../sys
 
 WARNS?=	3

@@ -31,7 +31,7 @@ using namespace ento;
 
 namespace {
 class MacOSXAPIChecker : public Checker< check::PreStmt<CallExpr> > {
-  mutable OwningPtr<BugType> BT_dispatchOnce;
+  mutable std::unique_ptr<BugType> BT_dispatchOnce;
 
 public:
   void checkPreStmt(const CallExpr *CE, CheckerContext &C) const;
@@ -62,12 +62,12 @@ void MacOSXAPIChecker::CheckDispatchOnce(CheckerContext &C, const CallExpr *CE,
   if (!R || !isa<StackSpaceRegion>(R->getMemorySpace()))
     return;
 
-  ExplodedNode *N = C.generateSink(state);
+  ExplodedNode *N = C.generateErrorNode(state);
   if (!N)
     return;
 
   if (!BT_dispatchOnce)
-    BT_dispatchOnce.reset(new BugType("Improper use of 'dispatch_once'",
+    BT_dispatchOnce.reset(new BugType(this, "Improper use of 'dispatch_once'",
                                       "API Misuse (Apple)"));
 
   // Handle _dispatch_once.  In some versions of the OS X SDK we have the case
@@ -79,7 +79,7 @@ void MacOSXAPIChecker::CheckDispatchOnce(CheckerContext &C, const CallExpr *CE,
     if (TrimmedFName != FName)
       FName = TrimmedFName;
   }
-  
+
   SmallString<256> S;
   llvm::raw_svector_ostream os(S);
   os << "Call to '" << FName << "' uses";
@@ -92,9 +92,9 @@ void MacOSXAPIChecker::CheckDispatchOnce(CheckerContext &C, const CallExpr *CE,
   if (isa<VarRegion>(R) && isa<StackLocalsSpaceRegion>(R->getMemorySpace()))
     os << "  Perhaps you intended to declare the variable as 'static'?";
 
-  BugReport *report = new BugReport(*BT_dispatchOnce, os.str(), N);
+  auto report = llvm::make_unique<BugReport>(*BT_dispatchOnce, os.str(), N);
   report->addRange(CE->getArg(0)->getSourceRange());
-  C.emitReport(report);
+  C.emitReport(std::move(report));
 }
 
 //===----------------------------------------------------------------------===//
@@ -113,7 +113,7 @@ void MacOSXAPIChecker::checkPreStmt(const CallExpr *CE,
              "_dispatch_once",
              "dispatch_once_f",
              &MacOSXAPIChecker::CheckDispatchOnce)
-      .Default(NULL);
+      .Default(nullptr);
 
   if (SC)
     (this->*SC)(C, CE, Name);

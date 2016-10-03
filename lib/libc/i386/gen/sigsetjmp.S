@@ -78,8 +78,7 @@ ENTRY(sigsetjmp)
 	ret
 END(sigsetjmp)
 
-	.weak CNAME(siglongjmp);
-	.set CNAME(siglongjmp),CNAME(__siglongjmp)
+	WEAK_REFERENCE(__siglongjmp, siglongjmp)
 ENTRY(__siglongjmp)
 	movl	4(%esp),%edx
 	cmpl	$0,44(%edx)
@@ -98,7 +97,6 @@ ENTRY(__siglongjmp)
 	movl	12(%edx),%ebp
 	movl	16(%edx),%esi
 	movl	20(%edx),%edi
-	fninit
 	fldcw	24(%edx)
 	testl	%eax,%eax
 	jnz	1f

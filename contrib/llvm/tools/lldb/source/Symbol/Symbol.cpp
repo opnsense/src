@@ -36,6 +36,7 @@ Symbol::Symbol() :
     m_size_is_synthesized (false),
     m_size_is_valid (false),
     m_demangled_is_synthesized (false),
+    m_contains_linker_annotations (false),
     m_type (eSymbolTypeInvalid),
     m_mangled (),
     m_addr_range (),
@@ -57,6 +58,7 @@ Symbol::Symbol
     addr_t offset,
     addr_t size,
     bool size_is_valid,
+    bool contains_linker_annotations,
     uint32_t flags
 ) :
     SymbolContextScope (),
@@ -70,6 +72,7 @@ Symbol::Symbol
     m_size_is_synthesized (false),
     m_size_is_valid (size_is_valid || size > 0),
     m_demangled_is_synthesized (false),
+    m_contains_linker_annotations (contains_linker_annotations),
     m_type (type),
     m_mangled (ConstString(name), name_is_mangled),
     m_addr_range (section_sp, offset, size),
@@ -80,8 +83,7 @@ Symbol::Symbol
 Symbol::Symbol
 (
     uint32_t symID,
-    const char *name,
-    bool name_is_mangled,
+    const Mangled &mangled,
     SymbolType type,
     bool external,
     bool is_debug,
@@ -89,6 +91,7 @@ Symbol::Symbol
     bool is_artificial,
     const AddressRange &range,
     bool size_is_valid,
+    bool contains_linker_annotations,
     uint32_t flags
 ) :
     SymbolContextScope (),
@@ -102,8 +105,9 @@ Symbol::Symbol
     m_size_is_synthesized (false),
     m_size_is_valid (size_is_valid || range.GetByteSize() > 0),
     m_demangled_is_synthesized (false),
+    m_contains_linker_annotations (contains_linker_annotations),
     m_type (type),
-    m_mangled (ConstString(name), name_is_mangled),
+    m_mangled (mangled),
     m_addr_range (range),
     m_flags (flags)
 {
@@ -121,6 +125,7 @@ Symbol::Symbol(const Symbol& rhs):
     m_size_is_synthesized (false),
     m_size_is_valid (rhs.m_size_is_valid),
     m_demangled_is_synthesized (rhs.m_demangled_is_synthesized),
+    m_contains_linker_annotations (rhs.m_contains_linker_annotations),
     m_type (rhs.m_type),
     m_mangled (rhs.m_mangled),
     m_addr_range (rhs.m_addr_range),
@@ -144,6 +149,7 @@ Symbol::operator= (const Symbol& rhs)
         m_size_is_synthesized = rhs.m_size_is_sibling;
         m_size_is_valid = rhs.m_size_is_valid;
         m_demangled_is_synthesized = rhs.m_demangled_is_synthesized;
+        m_contains_linker_annotations = rhs.m_contains_linker_annotations;
         m_type = rhs.m_type;
         m_mangled = rhs.m_mangled;
         m_addr_range = rhs.m_addr_range;
@@ -166,6 +172,7 @@ Symbol::Clear()
     m_size_is_synthesized = false;
     m_size_is_valid = false;
     m_demangled_is_synthesized = false;
+    m_contains_linker_annotations = false;
     m_type = eSymbolTypeInvalid;
     m_flags = 0;
     m_addr_range.Clear();
@@ -174,7 +181,15 @@ Symbol::Clear()
 bool
 Symbol::ValueIsAddress() const
 {
-    return m_addr_range.GetBaseAddress().GetSection().get() != NULL;
+    return m_addr_range.GetBaseAddress().GetSection().get() != nullptr;
+}
+
+ConstString
+Symbol::GetDisplayName () const
+{
+    if (!m_mangled)
+        return ConstString();
+    return m_mangled.GetDisplayDemangledName(GetLanguage());
 }
 
 ConstString
@@ -209,18 +224,13 @@ Symbol::GetReExportedSymbolSharedLibrary() const
     return FileSpec();
 }
 
-bool
+void
 Symbol::SetReExportedSymbolName(const ConstString &name)
 {
-    if (m_type == eSymbolTypeReExported)
-    {
-        // For eSymbolTypeReExported, the "const char *" from a ConstString
-        // is used as the offset in the address range base address.
-        m_addr_range.GetBaseAddress().SetOffset((intptr_t)name.GetCString());
-        return true;
-    }
-    return false;
-    
+    SetType (eSymbolTypeReExported);
+    // For eSymbolTypeReExported, the "const char *" from a ConstString
+    // is used as the offset in the address range base address.
+    m_addr_range.GetBaseAddress().SetOffset((uintptr_t)name.GetCString());
 }
 
 bool
@@ -230,7 +240,7 @@ Symbol::SetReExportedSymbolSharedLibrary(const FileSpec &fspec)
     {
         // For eSymbolTypeReExported, the "const char *" from a ConstString
         // is used as the offset in the address range base address.
-        m_addr_range.SetByteSize((intptr_t)ConstString(fspec.GetPath().c_str()).GetCString());
+        m_addr_range.SetByteSize((uintptr_t)ConstString(fspec.GetPath().c_str()).GetCString());
         return true;
     }
     return false;
@@ -240,7 +250,7 @@ Symbol::SetReExportedSymbolSharedLibrary(const FileSpec &fspec)
 uint32_t
 Symbol::GetSiblingIndex() const
 {
-    return m_size_is_sibling ? m_addr_range.GetByteSize() : 0;
+    return m_size_is_sibling ? m_addr_range.GetByteSize() : UINT32_MAX;
 }
 
 bool
@@ -286,8 +296,9 @@ Symbol::GetDescription (Stream *s, lldb::DescriptionLevel level, Target *target)
         else
             s->Printf (", value = 0x%16.16" PRIx64, m_addr_range.GetBaseAddress().GetOffset());
     }
-    if (m_mangled.GetDemangledName())
-        s->Printf(", name=\"%s\"", m_mangled.GetDemangledName().AsCString());
+    ConstString demangled = m_mangled.GetDemangledName(GetLanguage());
+    if (demangled)
+        s->Printf(", name=\"%s\"", demangled.AsCString());
     if (m_mangled.GetMangledName())
         s->Printf(", mangled=\"%s\"", m_mangled.GetMangledName().AsCString());
 
@@ -296,10 +307,7 @@ Symbol::GetDescription (Stream *s, lldb::DescriptionLevel level, Target *target)
 void
 Symbol::Dump(Stream *s, Target *target, uint32_t index) const
 {
-//  s->Printf("%.*p: ", (int)sizeof(void*) * 2, this);
-//  s->Indent();
-//  s->Printf("Symbol[%5u] %6u %c%c %-12s ",
-    s->Printf("[%5u] %6u %c%c%c %-12s ",
+    s->Printf("[%5u] %6u %c%c%c %-15s ",
               index,
               GetID(),
               m_is_debug ? 'D' : ' ',
@@ -310,9 +318,10 @@ Symbol::Dump(Stream *s, Target *target, uint32_t index) const
     // Make sure the size of the symbol is up to date before dumping
     GetByteSize();
 
+    ConstString name = m_mangled.GetName(GetLanguage());
     if (ValueIsAddress())
     {
-        if (!m_addr_range.GetBaseAddress().Dump(s, NULL, Address::DumpStyleFileAddress))
+        if (!m_addr_range.GetBaseAddress().Dump(s, nullptr, Address::DumpStyleFileAddress))
             s->Printf("%*s", 18, "");
 
         s->PutChar(' ');
@@ -326,13 +335,13 @@ Symbol::Dump(Stream *s, Target *target, uint32_t index) const
         s->Printf(  format,
                     GetByteSize(),
                     m_flags,
-                    m_mangled.GetName().AsCString(""));
+                    name.AsCString(""));
     }
     else if (m_type == eSymbolTypeReExported)
     {
         s->Printf ("                                                         0x%8.8x %s",
                    m_flags,
-                   m_mangled.GetName().AsCString(""));
+                   name.AsCString(""));
         
         ConstString reexport_name = GetReExportedSymbolName();
         intptr_t shlib = m_addr_range.GetByteSize();
@@ -350,7 +359,7 @@ Symbol::Dump(Stream *s, Target *target, uint32_t index) const
                     m_addr_range.GetBaseAddress().GetOffset(),
                     GetByteSize(),
                     m_flags,
-                    m_mangled.GetName().AsCString(""));
+                    name.AsCString(""));
     }
 }
 
@@ -440,7 +449,7 @@ bool
 Symbol::Compare(const ConstString& name, SymbolType type) const
 {
     if (type == eSymbolTypeAny || m_type == type)
-        return m_mangled.GetMangledName() == name || m_mangled.GetDemangledName() == name;
+        return m_mangled.GetMangledName() == name || m_mangled.GetDemangledName(GetLanguage()) == name;
     return false;
 }
 
@@ -492,7 +501,7 @@ Symbol::CalculateSymbolContext (SymbolContext *sc)
     // Symbols can reconstruct the symbol and the module in the symbol context
     sc->symbol = this;
     if (ValueIsAddress())
-        sc->module_sp = GetAddress().GetModule();
+        sc->module_sp = GetAddressRef().GetModule();
     else
         sc->module_sp.reset();
 }
@@ -501,7 +510,7 @@ ModuleSP
 Symbol::CalculateSymbolContextModule ()
 {
     if (ValueIsAddress())
-        return GetAddress().GetModule();
+        return GetAddressRef().GetModule();
     return ModuleSP();
 }
 
@@ -517,7 +526,7 @@ Symbol::DumpSymbolContext (Stream *s)
     bool dumped_module = false;
     if (ValueIsAddress())
     {
-        ModuleSP module_sp (GetAddress().GetModule());
+        ModuleSP module_sp (GetAddressRef().GetModule());
         if (module_sp)
         {
             dumped_module = true;
@@ -536,49 +545,160 @@ Symbol::GetByteSize () const
     return m_addr_range.GetByteSize();
 }
 
+
 Symbol *
-Symbol::ResolveReExportedSymbol (Target &target)
+Symbol::ResolveReExportedSymbolInModuleSpec (Target &target,
+                                             ConstString &reexport_name,
+                                             ModuleSpec &module_spec,
+                                             ModuleList &seen_modules) const
+{
+    ModuleSP module_sp;
+    if (module_spec.GetFileSpec())
+    {
+        // Try searching for the module file spec first using the full path
+        module_sp = target.GetImages().FindFirstModule(module_spec);
+        if (!module_sp)
+        {
+            // Next try and find the module by basename in case environment
+            // variables or other runtime trickery causes shared libraries
+            // to be loaded from alternate paths
+            module_spec.GetFileSpec().GetDirectory().Clear();
+            module_sp = target.GetImages().FindFirstModule(module_spec);
+        }
+    }
+
+    if (module_sp)
+    {
+        // There should not be cycles in the reexport list, but we don't want to crash if there are so make sure
+        // we haven't seen this before:
+        if (!seen_modules.AppendIfNeeded(module_sp))
+            return nullptr;
+        
+        lldb_private::SymbolContextList sc_list;
+        module_sp->FindSymbolsWithNameAndType(reexport_name, eSymbolTypeAny, sc_list);
+        const size_t num_scs = sc_list.GetSize();
+        if (num_scs > 0)
+        {
+            for (size_t i=0; i<num_scs; ++i)
+            {
+                lldb_private::SymbolContext sc;
+                if (sc_list.GetContextAtIndex(i, sc))
+                {
+                    if (sc.symbol->IsExternal())
+                        return sc.symbol;
+                }
+            }
+        }
+        // If we didn't find the symbol in this module, it may be because this module re-exports some
+        // whole other library.  We have to search those as well:
+        seen_modules.Append(module_sp);
+        
+        FileSpecList reexported_libraries = module_sp->GetObjectFile()->GetReExportedLibraries();
+        size_t num_reexported_libraries = reexported_libraries.GetSize();
+        for (size_t idx = 0; idx < num_reexported_libraries; idx++)
+        {
+            ModuleSpec reexported_module_spec;
+            reexported_module_spec.GetFileSpec() = reexported_libraries.GetFileSpecAtIndex(idx);
+            Symbol *result_symbol = ResolveReExportedSymbolInModuleSpec(target,
+                                                                        reexport_name,
+                                                                        reexported_module_spec,
+                                                                        seen_modules);
+            if (result_symbol)
+                return result_symbol;
+        }
+    }
+    return nullptr;
+}
+
+Symbol *
+Symbol::ResolveReExportedSymbol (Target &target) const
 {
     ConstString reexport_name (GetReExportedSymbolName());
     if (reexport_name)
     {
         ModuleSpec module_spec;
-        ModuleSP module_sp;
+        ModuleList seen_modules;
         module_spec.GetFileSpec() = GetReExportedSymbolSharedLibrary();
         if (module_spec.GetFileSpec())
         {
-            // Try searching for the module file spec first using the full path
-            module_sp = target.GetImages().FindFirstModule(module_spec);
-            if (!module_sp)
-            {
-                // Next try and find the module by basename in case environment
-                // variables or other runtime trickery causes shared libraries
-                // to be loaded from alternate paths
-                module_spec.GetFileSpec().GetDirectory().Clear();
-                module_sp = target.GetImages().FindFirstModule(module_spec);
-            }
-        }
-        
-        if (module_sp)
-        {
-            lldb_private::SymbolContextList sc_list;
-            module_sp->FindSymbolsWithNameAndType(reexport_name, eSymbolTypeAny, sc_list);
-            const size_t num_scs = sc_list.GetSize();
-            if (num_scs > 0)
-            {
-                for (size_t i=0; i<num_scs; ++i)
-                {
-                    lldb_private::SymbolContext sc;
-                    if (sc_list.GetContextAtIndex(i, sc))
-                    {
-                        if (sc.symbol->IsExternal())
-                            return sc.symbol;
-                    }
-                }
-            }
+            return ResolveReExportedSymbolInModuleSpec(target, reexport_name, module_spec, seen_modules);
         }
     }
-    return NULL;
+    return nullptr;
+}
+
+lldb::addr_t
+Symbol::GetFileAddress () const
+{
+    if (ValueIsAddress())
+        return GetAddressRef().GetFileAddress();
+    else
+        return LLDB_INVALID_ADDRESS;
+}
+
+lldb::addr_t
+Symbol::GetLoadAddress (Target *target) const
+{
+    if (ValueIsAddress())
+        return GetAddressRef().GetLoadAddress(target);
+    else
+        return LLDB_INVALID_ADDRESS;
+}
+
+ConstString
+Symbol::GetName () const
+{
+    return m_mangled.GetName(GetLanguage());
+}
+
+ConstString
+Symbol::GetNameNoArguments () const
+{
+    return m_mangled.GetName(GetLanguage(), Mangled::ePreferDemangledWithoutArguments);
+}
+
+
+lldb::addr_t
+Symbol::ResolveCallableAddress(Target &target) const
+{
+    if (GetType() == lldb::eSymbolTypeUndefined)
+        return LLDB_INVALID_ADDRESS;
+    
+    Address func_so_addr;
+    
+    bool is_indirect = IsIndirect();
+    if (GetType() == eSymbolTypeReExported)
+    {
+        Symbol *reexported_symbol = ResolveReExportedSymbol(target);
+        if (reexported_symbol)
+        {
+            func_so_addr = reexported_symbol->GetAddress();
+            is_indirect = reexported_symbol->IsIndirect();
+        }
+    }
+    else
+    {
+        func_so_addr = GetAddress();
+        is_indirect = IsIndirect();
+    }
+
+    if (func_so_addr.IsValid())
+    {
+        if (!target.GetProcessSP() && is_indirect)
+        {
+            // can't resolve indirect symbols without calling a function...
+            return LLDB_INVALID_ADDRESS;
+        }
+        
+        lldb::addr_t load_addr = func_so_addr.GetCallableLoadAddress (&target, is_indirect);
+        
+        if (load_addr != LLDB_INVALID_ADDRESS)
+        {
+            return load_addr;
+        }
+    }
+    
+    return LLDB_INVALID_ADDRESS;
 }
 
 
@@ -592,7 +712,7 @@ Symbol::GetInstructions (const ExecutionContext &exe_ctx,
     {
         const bool prefer_file_cache = false;
         return Disassembler::DisassembleRange (module_sp->GetArchitecture(),
-                                               NULL,
+                                               nullptr,
                                                flavor,
                                                exe_ctx,
                                                m_addr_range,

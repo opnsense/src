@@ -59,8 +59,8 @@ __FBSDID("$FreeBSD$");
 
 #include <net/ethernet.h>
 #include <net/if.h>
-#include <net/if_clone.h>
 #include <net/if_var.h>
+#include <net/if_clone.h>
 #include <net/if_types.h>
 #include <net/netisr.h>
 #include <net/vnet.h>
@@ -86,8 +86,8 @@ __FBSDID("$FreeBSD$");
 #include <net/if_gre.h>
 
 #include <machine/in_cksum.h>
-
 #include <security/mac/mac_framework.h>
+
 #define	GREMTU			1500
 static const char grename[] = "gre";
 static MALLOC_DEFINE(M_GRE, grename, "Generic Routing Encapsulation");
@@ -353,7 +353,7 @@ gre_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			if (error != 0)
 				goto end;
 #endif
-		};
+		}
 		error = gre_set_tunnel(ifp, src, dst);
 		break;
 	case SIOCDIFPHYADDR:
@@ -605,7 +605,6 @@ gre_set_tunnel(struct ifnet *ifp, struct sockaddr *src,
 	}
 	GRE_LIST_UNLOCK();
 
-	error = 0;
 	switch (src->sa_family) {
 #ifdef INET
 	case AF_INET:
@@ -638,6 +637,7 @@ gre_set_tunnel(struct ifnet *ifp, struct sockaddr *src,
 	gre_updatehdr(sc);
 	GRE_WUNLOCK(sc);
 
+	error = 0;
 	switch (src->sa_family) {
 #ifdef INET
 	case AF_INET:
@@ -684,7 +684,7 @@ gre_input(struct mbuf **mp, int *offp, int proto)
 	struct mbuf *m;
 	uint32_t *opts;
 #ifdef notyet
-    uint32_t key;
+	uint32_t key;
 #endif
 	uint16_t flags;
 	int hlen, isr, af;
@@ -719,7 +719,7 @@ gre_input(struct mbuf **mp, int *offp, int proto)
 	}
 	if (flags & GRE_FLAGS_KP) {
 #ifdef notyet
-        /*
+        /* 
          * XXX: The current implementation uses the key only for outgoing
          * packets. But we can check the key value here, or even in the
          * encapcheck function.
@@ -732,6 +732,7 @@ gre_input(struct mbuf **mp, int *offp, int proto)
 #ifdef notyet
 	} else
 		key = 0;
+
 	if (sc->gre_key != 0 && (key != sc->gre_key || key != 0))
 		goto drop;
 #endif
@@ -769,15 +770,15 @@ gre_input(struct mbuf **mp, int *offp, int proto)
 	mac_ifnet_create_mbuf(ifp, m);
 #endif
 	BPF_MTAP2(ifp, &af, sizeof(af), m);
-	ifp->if_ipackets++;
-	ifp->if_ibytes += m->m_pkthdr.len;
+	if_inc_counter(ifp, IFCOUNTER_IPACKETS, 1);
+	if_inc_counter(ifp, IFCOUNTER_IBYTES, m->m_pkthdr.len);
 	if ((ifp->if_flags & IFF_MONITOR) != 0)
 		m_freem(m);
 	else
 		netisr_dispatch(isr, m);
 	return (IPPROTO_DONE);
 drop:
-	ifp->if_ierrors++;
+	if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 	m_freem(m);
 	return (IPPROTO_DONE);
 }
@@ -844,7 +845,7 @@ gre_output(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
 	return (ifp->if_transmit(ifp, m));
 drop:
 	m_freem(m);
-	ifp->if_oerrors++;
+	if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 	return (error);
 }
 
@@ -894,9 +895,9 @@ gre_transmit(struct ifnet *ifp, struct mbuf *m)
 	hlen = sc->gre_hlen;
 	want_seq = (sc->gre_options & GRE_ENABLE_SEQ) != 0;
 	if (want_seq)
-		oseq = sc->gre_oseq++;
+		oseq = sc->gre_oseq++; /* XXX */
 	else
-		oseq = 0;	/* Make compiler happy. */
+		oseq = 0;		/* Make compiler happy. */
 	want_csum = (sc->gre_options & GRE_ENABLE_CSUM) != 0;
 	M_SETFIB(m, sc->gre_fibnum);
 	M_PREPEND(m, hlen, M_NOWAIT);
@@ -959,13 +960,13 @@ gre_transmit(struct ifnet *ifp, struct mbuf *m)
 	default:
 		m_freem(m);
 		error = ENETDOWN;
-	};
+	}
 drop:
 	if (error)
-		ifp->if_oerrors++;
+		if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 	else {
-		ifp->if_opackets++;
-		ifp->if_obytes += plen;
+		if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
+		if_inc_counter(ifp, IFCOUNTER_OBYTES, plen);
 	}
 	return (error);
 }

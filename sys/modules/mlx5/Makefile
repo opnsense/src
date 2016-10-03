@@ -1,5 +1,5 @@
 # $FreeBSD$
-.PATH:	${.CURDIR}/../../dev/mlx5/mlx5_core ${.CURDIR}/../../ofed/include/linux
+.PATH:	${.CURDIR}/../../dev/mlx5/mlx5_core
 
 KMOD=mlx5
 SRCS= \
@@ -25,9 +25,7 @@ mlx5_uar.c \
 mlx5_vport.c \
 mlx5_wq.c \
 device_if.h bus_if.h vnode_if.h pci_if.h \
-        opt_inet.h opt_inet6.h opt_random.h
-
-SRCS+= linux_compat.c linux_radix.c linux_idr.c
+        opt_inet.h opt_inet6.h opt_rss.h
 
 CFLAGS+= -I${.CURDIR}/../../ofed/include
 CFLAGS+= -I${.CURDIR}/../../compat/linuxkpi/common/include

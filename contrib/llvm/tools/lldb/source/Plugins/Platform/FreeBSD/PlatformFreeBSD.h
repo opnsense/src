@@ -1,4 +1,4 @@
-//===-- PlatformFreeBSD.h -----------------------------------------*- C++ -*-===//
+//===-- PlatformFreeBSD.h ---------------------------------------*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -16,158 +16,162 @@
 // Project includes
 #include "lldb/Target/Platform.h"
 
-class PlatformFreeBSD : public lldb_private::Platform
-{
-public:
-    // Mostly taken from PlatformDarwin and PlatformMacOSX
+namespace lldb_private {
+namespace platform_freebsd {
 
-    //------------------------------------------------------------
-    // Class functions
-    //------------------------------------------------------------
-    static lldb_private::Platform*
-    CreateInstance (bool force, const lldb_private::ArchSpec *arch);
-
-    static void
-    Initialize ();
-
-    static void
-    Terminate ();
-
-    static lldb_private::ConstString
-    GetPluginNameStatic (bool is_host);
-
-    static const char *
-    GetDescriptionStatic (bool is_host);
-
-    //------------------------------------------------------------
-    // Class Methods
-    //------------------------------------------------------------
-    PlatformFreeBSD (bool is_host);
-
-    virtual
-    ~PlatformFreeBSD();
-
-    //------------------------------------------------------------
-    // lldb_private::PluginInterface functions
-    //------------------------------------------------------------
-    virtual lldb_private::ConstString
-    GetPluginName()
+    class PlatformFreeBSD : public Platform
     {
-        return GetPluginNameStatic (IsHost());
-    }
+    public:
+        PlatformFreeBSD(bool is_host);
 
-    virtual uint32_t
-    GetPluginVersion()
-    {
-        return 1;
-    }
+        ~PlatformFreeBSD() override;
 
-    virtual const char *
-    GetDescription ()
-    {
-        return GetDescriptionStatic(IsHost());
-    }
+        //------------------------------------------------------------
+        // Class functions
+        //------------------------------------------------------------
+        static lldb::PlatformSP
+        CreateInstance(bool force, const ArchSpec *arch);
 
-    //------------------------------------------------------------
-    // lldb_private::Platform functions
-    //------------------------------------------------------------
-    virtual lldb_private::Error
-    RunShellCommand (const char *command,
-                     const char *working_dir,
-                     int *status_ptr,
-                     int *signo_ptr,
-                     std::string *command_output,
-                     uint32_t timeout_sec);
+        static void
+        Initialize ();
 
-    virtual lldb_private::Error
-    ResolveExecutable (const lldb_private::FileSpec &exe_file,
-                       const lldb_private::ArchSpec &arch,
-                       lldb::ModuleSP &module_sp,
-                       const lldb_private::FileSpecList *module_search_paths_ptr);
+        static void
+        Terminate ();
 
-    virtual size_t
-    GetSoftwareBreakpointTrapOpcode (lldb_private::Target &target,
-                                     lldb_private::BreakpointSite *bp_site);
+        static ConstString
+        GetPluginNameStatic (bool is_host);
 
-    virtual bool
-    GetRemoteOSVersion ();
+        static const char *
+        GetDescriptionStatic (bool is_host);
 
-    virtual bool
-    GetRemoteOSBuildString (std::string &s);
+        //------------------------------------------------------------
+        // lldb_private::PluginInterface functions
+        //------------------------------------------------------------
+        ConstString
+        GetPluginName() override
+        {
+            return GetPluginNameStatic (IsHost());
+        }
 
-    virtual bool
-    GetRemoteOSKernelDescription (std::string &s);
+        uint32_t
+        GetPluginVersion() override
+        {
+            return 1;
+        }
 
-    // Remote Platform subclasses need to override this function
-    virtual lldb_private::ArchSpec
-    GetRemoteSystemArchitecture ();
+        const char *
+        GetDescription () override
+        {
+            return GetDescriptionStatic(IsHost());
+        }
 
-    virtual bool
-    IsConnected () const;
+        //------------------------------------------------------------
+        // lldb_private::Platform functions
+        //------------------------------------------------------------
+        bool
+        GetModuleSpec(const FileSpec& module_file_spec,
+                      const ArchSpec& arch,
+                      ModuleSpec &module_spec) override;
 
-    virtual lldb_private::Error
-    ConnectRemote (lldb_private::Args& args);
+        Error
+        RunShellCommand(const char *command,
+                        const FileSpec &working_dir,
+                        int *status_ptr,
+                        int *signo_ptr,
+                        std::string *command_output,
+                        uint32_t timeout_sec) override;
 
-    virtual lldb_private::Error
-    DisconnectRemote ();
+        Error
+        ResolveExecutable(const ModuleSpec &module_spec,
+                          lldb::ModuleSP &module_sp,
+                          const FileSpecList *module_search_paths_ptr) override;
 
-    virtual const char *
-    GetHostname ();
+        size_t
+        GetSoftwareBreakpointTrapOpcode(Target &target,
+                                        BreakpointSite *bp_site) override;
 
-    virtual const char *
-    GetUserName (uint32_t uid);
+        bool
+        GetRemoteOSVersion () override;
 
-    virtual const char *
-    GetGroupName (uint32_t gid);
+        bool
+        GetRemoteOSBuildString (std::string &s) override;
 
-    virtual bool
-    GetProcessInfo (lldb::pid_t pid,
-                    lldb_private::ProcessInstanceInfo &proc_info);
+        bool
+        GetRemoteOSKernelDescription (std::string &s) override;
 
-    virtual uint32_t
-    FindProcesses (const lldb_private::ProcessInstanceInfoMatch &match_info,
-                   lldb_private::ProcessInstanceInfoList &process_infos);
+        // Remote Platform subclasses need to override this function
+        ArchSpec
+        GetRemoteSystemArchitecture() override;
 
-    virtual lldb_private::Error
-    LaunchProcess (lldb_private::ProcessLaunchInfo &launch_info);
+        bool
+        IsConnected () const override;
 
-    virtual lldb::ProcessSP
-    Attach(lldb_private::ProcessAttachInfo &attach_info,
-           lldb_private::Debugger &debugger,
-           lldb_private::Target *target,
-           lldb_private::Listener &listener,
-           lldb_private::Error &error);
+        Error
+        ConnectRemote(Args& args) override;
 
-    // FreeBSD processes can not be launched by spawning and attaching.
-    virtual bool
-    CanDebugProcess () { return false; }
+        Error
+        DisconnectRemote() override;
 
-    // Only on PlatformMacOSX:
-    virtual lldb_private::Error
-    GetFileWithUUID (const lldb_private::FileSpec &platform_file,
-                     const lldb_private::UUID* uuid, lldb_private::FileSpec &local_file);
+        const char *
+        GetHostname () override;
 
-    lldb_private::Error
-    GetSharedModule (const lldb_private::ModuleSpec &module_spec,
-                     lldb::ModuleSP &module_sp,
-                     const lldb_private::FileSpecList *module_search_paths_ptr,
-                     lldb::ModuleSP *old_module_sp_ptr,
-                     bool *did_create_ptr);
+        const char *
+        GetUserName (uint32_t uid) override;
 
-    virtual bool
-    GetSupportedArchitectureAtIndex (uint32_t idx, lldb_private::ArchSpec &arch);
+        const char *
+        GetGroupName (uint32_t gid) override;
 
-    virtual void
-    GetStatus (lldb_private::Stream &strm);
+        bool
+        GetProcessInfo(lldb::pid_t pid,
+                       ProcessInstanceInfo &proc_info) override;
 
-    virtual void
-    CalculateTrapHandlerSymbolNames ();
+        uint32_t
+        FindProcesses(const ProcessInstanceInfoMatch &match_info,
+                      ProcessInstanceInfoList &process_infos) override;
 
-protected:
-    lldb::PlatformSP m_remote_platform_sp; // Allow multiple ways to connect to a remote freebsd OS
+        Error
+        LaunchProcess(ProcessLaunchInfo &launch_info) override;
 
-private:
-    DISALLOW_COPY_AND_ASSIGN (PlatformFreeBSD);
-};
+        lldb::ProcessSP
+        Attach(ProcessAttachInfo &attach_info,
+               Debugger &debugger,
+               Target *target,
+               Error &error) override;
 
-#endif  // liblldb_PlatformFreeBSD_h_
+        // FreeBSD processes can not be launched by spawning and attaching.
+        bool
+        CanDebugProcess () override { return false; }
+
+        // Only on PlatformMacOSX:
+        Error
+        GetFileWithUUID(const FileSpec &platform_file,
+                        const UUID* uuid, FileSpec &local_file) override;
+
+        Error
+        GetSharedModule(const ModuleSpec &module_spec,
+                        Process* process,
+                        lldb::ModuleSP &module_sp,
+                        const FileSpecList *module_search_paths_ptr,
+                        lldb::ModuleSP *old_module_sp_ptr,
+                        bool *did_create_ptr) override;
+
+        bool
+        GetSupportedArchitectureAtIndex(uint32_t idx, ArchSpec &arch) override;
+
+        void
+        GetStatus(Stream &strm) override;
+
+        void
+        CalculateTrapHandlerSymbolNames () override;
+
+    protected:
+        lldb::PlatformSP m_remote_platform_sp; // Allow multiple ways to connect to a remote freebsd OS
+
+    private:
+        DISALLOW_COPY_AND_ASSIGN (PlatformFreeBSD);
+    };
+
+} // namespace platform_freebsd
+} // namespace lldb_private
+
+#endif // liblldb_PlatformFreeBSD_h_

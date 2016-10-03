@@ -59,7 +59,6 @@ __FBSDID("$FreeBSD$");
 
 #include <machine/bus.h>
 #include <machine/cpu.h>
-#include <machine/pmap.h>
 
 #include <mips/malta/maltareg.h>
 
@@ -150,7 +149,7 @@ static void gt_pci_write_config(device_t, u_int, u_int, u_int, u_int,
     uint32_t, int);
 static int gt_pci_route_interrupt(device_t pcib, device_t dev, int pin);
 static struct resource * gt_pci_alloc_resource(device_t, device_t, int, 
-    int *, u_long, u_long, u_long, u_int);
+    int *, rman_res_t, rman_res_t, rman_res_t, u_int);
 
 static void
 gt_pci_mask_irq(void *source)
@@ -273,7 +272,7 @@ gt_pci_attach(device_t dev)
 	sc->sc_st = mips_bus_space_generic;
 
 	/* Use KSEG1 to access IO ports for it is uncached */
-	sc->sc_io = MIPS_PHYS_TO_KSEG1(MALTA_PCI0_IO_BASE);
+	sc->sc_io = MALTA_PCI0_IO_BASE;
 	sc->sc_io_rman.rm_type = RMAN_ARRAY;
 	sc->sc_io_rman.rm_descr = "GT64120 PCI I/O Ports";
 	/* 
@@ -286,7 +285,7 @@ gt_pci_attach(device_t dev)
 	}
 
 	/* Use KSEG1 to access PCI memory for it is uncached */
-	sc->sc_mem = MIPS_PHYS_TO_KSEG1(MALTA_PCIMEM1_BASE);
+	sc->sc_mem = MALTA_PCIMEM1_BASE;
 	sc->sc_mem_rman.rm_type = RMAN_ARRAY;
 	sc->sc_mem_rman.rm_descr = "GT64120 PCI Memory";
 	if (rman_init(&sc->sc_mem_rman) != 0 ||
@@ -311,9 +310,9 @@ gt_pci_attach(device_t dev)
 	if (bus_space_map(sc->sc_st, IO_ICU2, 2, 0, &sc->sc_ioh_icu2) != 0)
 		device_printf(dev, "unable to map ICU2 registers\n");
 #else
-	sc->sc_ioh_elcr = sc->sc_io + 0x4d0;
-	sc->sc_ioh_icu1 = sc->sc_io + IO_ICU1;
-	sc->sc_ioh_icu2 = sc->sc_io + IO_ICU2;
+	sc->sc_ioh_elcr = MIPS_PHYS_TO_KSEG1(sc->sc_io + 0x4d0);
+	sc->sc_ioh_icu1 = MIPS_PHYS_TO_KSEG1(sc->sc_io + IO_ICU1);
+	sc->sc_ioh_icu2 = MIPS_PHYS_TO_KSEG1(sc->sc_io + IO_ICU2);
 #endif	
 
 
@@ -415,7 +414,7 @@ gt_pci_attach(device_t dev)
 	}
 
 	/* Initialize memory and i/o rmans. */
-	device_add_child(dev, "pci", busno);
+	device_add_child(dev, "pci", -1);
 	return (bus_generic_attach(dev));
 }
 
@@ -631,7 +630,7 @@ gt_write_ivar(device_t dev, device_t child, int which, uintptr_t result)
 
 static struct resource *
 gt_pci_alloc_resource(device_t bus, device_t child, int type, int *rid,
-    u_long start, u_long end, u_long count, u_int flags)
+    rman_res_t start, rman_res_t end, rman_res_t count, u_int flags)
 {
 	struct gt_pci_softc *sc = device_get_softc(bus);	
 	struct resource *rv = NULL;

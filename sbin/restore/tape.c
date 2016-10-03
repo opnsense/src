@@ -104,9 +104,10 @@ static int	 checksum(int *);
 static void	 findinode(struct s_spcl *);
 static void	 findtapeblksize(void);
 static char	*setupextattr(int);
-static void	 xtrattr(char *, long);
+static void	 xtrattr(char *, size_t);
 static void	 set_extattr_link(char *, void *, int);
 static void	 set_extattr_fd(int, char *, void *, int);
+static void	 skiphole(void (*)(char *, size_t), size_t *);
 static int	 gethead(struct s_spcl *);
 static void	 readtape(char *);
 static void	 setdumpnum(void);
@@ -114,12 +115,12 @@ static u_long	 swabl(u_long);
 static u_char	*swablong(u_char *, int);
 static u_char	*swabshort(u_char *, int);
 static void	 terminateinput(void);
-static void	 xtrfile(char *, long);
-static void	 xtrlnkfile(char *, long);
-static void	 xtrlnkskip(char *, long);
-static void	 xtrmap(char *, long);
-static void	 xtrmapskip(char *, long);
-static void	 xtrskip(char *, long);
+static void	 xtrfile(char *, size_t);
+static void	 xtrlnkfile(char *, size_t);
+static void	 xtrlnkskip(char *, size_t);
+static void	 xtrmap(char *, size_t);
+static void	 xtrmapskip(char *, size_t);
+static void	 xtrskip(char *, size_t);
 
 /*
  * Set up an input source
@@ -131,7 +132,7 @@ setinput(char *source, int ispipecommand)
 	if (bflag)
 		newtapebuf(ntrec);
 	else
-		newtapebuf(NTREC > HIGHDENSITYTREC ? NTREC : HIGHDENSITYTREC);
+		newtapebuf(MAX(NTREC, HIGHDENSITYTREC));
 	terminal = stdin;
 
 	if (ispipecommand)
@@ -339,6 +340,7 @@ getvol(long nextvol)
 		}
 		if (volno == 1)
 			return;
+		newvol = 0;
 		goto gethdr;
 	}
 again:
@@ -564,25 +566,25 @@ printdumpinfo(void)
 int
 extractfile(char *name)
 {
-	int flags;
+	u_int flags;
 	uid_t uid;
 	gid_t gid;
 	mode_t mode;
 	int extsize;
-	struct timeval mtimep[2], ctimep[2];
+	struct timespec mtimep[2], ctimep[2];
 	struct entry *ep;
 	char *buf;
 
 	curfile.name = name;
 	curfile.action = USING;
 	mtimep[0].tv_sec = curfile.atime_sec;
-	mtimep[0].tv_usec = curfile.atime_nsec / 1000;
+	mtimep[0].tv_nsec = curfile.atime_nsec;
 	mtimep[1].tv_sec = curfile.mtime_sec;
-	mtimep[1].tv_usec = curfile.mtime_nsec / 1000;
+	mtimep[1].tv_nsec = curfile.mtime_nsec;
 	ctimep[0].tv_sec = curfile.atime_sec;
-	ctimep[0].tv_usec = curfile.atime_nsec / 1000;
+	ctimep[0].tv_nsec = curfile.atime_nsec;
 	ctimep[1].tv_sec = curfile.birthtime_sec;
-	ctimep[1].tv_usec = curfile.birthtime_nsec / 1000;
+	ctimep[1].tv_nsec = curfile.birthtime_nsec;
 	extsize = curfile.extsize;
 	uid = getuid();
 	if (uid == 0)
@@ -628,8 +630,10 @@ extractfile(char *name)
 				set_extattr_link(name, buf, extsize);
 			(void) lchown(name, uid, gid);
 			(void) lchmod(name, mode);
-			(void) lutimes(name, ctimep);
-			(void) lutimes(name, mtimep);
+			(void) utimensat(AT_FDCWD, name, ctimep,
+			    AT_SYMLINK_NOFOLLOW);
+			(void) utimensat(AT_FDCWD, name, mtimep,
+			    AT_SYMLINK_NOFOLLOW);
 			(void) lchflags(name, flags);
 			return (GOOD);
 		}
@@ -658,8 +662,8 @@ extractfile(char *name)
 		}
 		(void) chown(name, uid, gid);
 		(void) chmod(name, mode);
-		(void) utimes(name, ctimep);
-		(void) utimes(name, mtimep);
+		(void) utimensat(AT_FDCWD, name, ctimep, 0);
+		(void) utimensat(AT_FDCWD, name, mtimep, 0);
 		(void) chflags(name, flags);
 		return (GOOD);
 
@@ -688,8 +692,8 @@ extractfile(char *name)
 		}
 		(void) chown(name, uid, gid);
 		(void) chmod(name, mode);
-		(void) utimes(name, ctimep);
-		(void) utimes(name, mtimep);
+		(void) utimensat(AT_FDCWD, name, ctimep, 0);
+		(void) utimensat(AT_FDCWD, name, mtimep, 0);
 		(void) chflags(name, flags);
 		return (GOOD);
 
@@ -714,8 +718,8 @@ extractfile(char *name)
 			set_extattr_fd(ofile, name, buf, extsize);
 		(void) fchown(ofile, uid, gid);
 		(void) fchmod(ofile, mode);
-		(void) futimes(ofile, ctimep);
-		(void) futimes(ofile, mtimep);
+		(void) futimens(ofile, ctimep);
+		(void) futimens(ofile, mtimep);
 		(void) fchflags(ofile, flags);
 		(void) close(ofile);
 		return (GOOD);
@@ -925,25 +929,40 @@ skipfile(void)
 }
 
 /*
+ * Skip a hole in an output file
+ */
+static void
+skiphole(void (*skip)(char *, size_t), size_t *seekpos)
+{
+	char buf[MAXBSIZE];
+
+	if (*seekpos > 0) {
+		(*skip)(buf, *seekpos);
+		*seekpos = 0;
+	}
+}
+
+/*
  * Extract a file from the tape.
  * When an allocated block is found it is passed to the fill function;
  * when an unallocated block (hole) is found, a zeroed buffer is passed
  * to the skip function.
  */
 void
-getfile(void (*datafill)(char *, long), void (*attrfill)(char *, long),
-	void (*skip)(char *, long))
+getfile(void (*datafill)(char *, size_t), void (*attrfill)(char *, size_t),
+	void (*skip)(char *, size_t))
 {
 	int i;
-	off_t size;
+	volatile off_t size;
+	size_t seekpos;
 	int curblk, attrsize;
-	void (*fillit)(char *, long);
-	static char clearedbuf[MAXBSIZE];
+	void (*fillit)(char *, size_t);
 	char buf[MAXBSIZE / TP_BSIZE][TP_BSIZE];
 	char junk[TP_BSIZE];
 
 	curblk = 0;
 	size = spcl.c_size;
+	seekpos = 0;
 	attrsize = spcl.c_extsize;
 	if (spcl.c_type == TS_END)
 		panic("ran off end of tape\n");
@@ -972,22 +991,30 @@ loop:
 		if (readmapflag || spcl.c_addr[i]) {
 			readtape(&buf[curblk++][0]);
 			if (curblk == fssize / TP_BSIZE) {
+				skiphole(skip, &seekpos);
 				(*fillit)((char *)buf, (long)(size > TP_BSIZE ?
 				     fssize : (curblk - 1) * TP_BSIZE + size));
 				curblk = 0;
 			}
 		} else {
 			if (curblk > 0) {
+				skiphole(skip, &seekpos);
 				(*fillit)((char *)buf, (long)(size > TP_BSIZE ?
 				     curblk * TP_BSIZE :
 				     (curblk - 1) * TP_BSIZE + size));
 				curblk = 0;
 			}
-			(*skip)(clearedbuf, (long)(size > TP_BSIZE ?
-				TP_BSIZE : size));
+			/*
+			 * We have a block of a hole. Don't skip it
+			 * now, because there may be next adjacent
+			 * block of the hole in the file. Postpone the
+			 * seek until next file write.
+			 */
+			seekpos += (long)MIN(TP_BSIZE, size);
 		}
 		if ((size -= TP_BSIZE) <= 0) {
 			if (size > -TP_BSIZE && curblk > 0) {
+				skiphole(skip, &seekpos);
 				(*fillit)((char *)buf,
 					(long)((curblk * TP_BSIZE) + size));
 				curblk = 0;
@@ -1066,7 +1093,7 @@ setupextattr(int extsize)
  * Extract the next block of extended attributes.
  */
 static void
-xtrattr(char *buf, long size)
+xtrattr(char *buf, size_t size)
 {
 
 	if (extloc + size > extbufsize)
@@ -1079,7 +1106,7 @@ xtrattr(char *buf, long size)
  * Write out the next block of a file.
  */
 static void
-xtrfile(char *buf, long	size)
+xtrfile(char *buf, size_t size)
 {
 
 	if (Nflag)
@@ -1096,7 +1123,7 @@ xtrfile(char *buf, long	size)
  */
 /* ARGSUSED */
 static void
-xtrskip(char *buf, long size)
+xtrskip(char *buf, size_t size)
 {
 
 	if (lseek(ofile, size, SEEK_CUR) == -1) {
@@ -1111,7 +1138,7 @@ xtrskip(char *buf, long size)
  * Collect the next block of a symbolic link.
  */
 static void
-xtrlnkfile(char *buf, long size)
+xtrlnkfile(char *buf, size_t size)
 {
 
 	pathlen += size;
@@ -1128,7 +1155,7 @@ xtrlnkfile(char *buf, long size)
  */
 /* ARGSUSED */
 static void
-xtrlnkskip(char *buf, long size)
+xtrlnkskip(char *buf, size_t size)
 {
 
 	fprintf(stderr, "unallocated block in symbolic link %s\n",
@@ -1140,7 +1167,7 @@ xtrlnkskip(char *buf, long size)
  * Collect the next block of a bit map.
  */
 static void
-xtrmap(char *buf, long size)
+xtrmap(char *buf, size_t size)
 {
 
 	memmove(map, buf, size);
@@ -1152,7 +1179,7 @@ xtrmap(char *buf, long size)
  */
 /* ARGSUSED */
 static void
-xtrmapskip(char *buf, long size)
+xtrmapskip(char *buf, size_t size)
 {
 
 	panic("hole in map\n");
@@ -1164,7 +1191,7 @@ xtrmapskip(char *buf, long size)
  */
 /* ARGSUSED */
 void
-xtrnull(char *buf, long size)
+xtrnull(char *buf, size_t size)
 {
 
 	return;

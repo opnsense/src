@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2010-2015 Solarflare Communications Inc.
+ * Copyright (c) 2010-2016 Solarflare Communications Inc.
  * All rights reserved.
  *
  * This software was developed in part by Philip Paeps under contract for
@@ -62,7 +62,7 @@ sfxge_mac_stat_update(struct sfxge_softc *sc)
 	}
 
 	now = ticks;
-	if (now - port->mac_stats.update_time < hz) {
+	if ((unsigned int)(now - port->mac_stats.update_time) < (unsigned int)hz) {
 		rc = 0;
 		goto out;
 	}
@@ -87,39 +87,66 @@ out:
 	return (rc);
 }
 
-void
-sfxge_port_update_stats(struct sfxge_softc *sc)
+uint64_t
+sfxge_get_counter(struct ifnet *ifp, ift_counter c)
 {
-	struct ifnet *ifp;
+	struct sfxge_softc *sc = ifp->if_softc;
 	uint64_t *mac_stats;
+	uint64_t val;
 
 	SFXGE_PORT_LOCK(&sc->port);
 
 	/* Ignore error and use old values */
 	(void)sfxge_mac_stat_update(sc);
 
-	ifp = sc->ifnet;
 	mac_stats = (uint64_t *)sc->port.mac_stats.decode_buf;
 
-	ifp->if_ipackets = mac_stats[EFX_MAC_RX_PKTS];
-	ifp->if_ierrors = mac_stats[EFX_MAC_RX_ERRORS];
-	ifp->if_opackets = mac_stats[EFX_MAC_TX_PKTS];
-	ifp->if_oerrors = mac_stats[EFX_MAC_TX_ERRORS];
-	ifp->if_collisions =
-	    mac_stats[EFX_MAC_TX_SGL_COL_PKTS] +
-	    mac_stats[EFX_MAC_TX_MULT_COL_PKTS] +
-	    mac_stats[EFX_MAC_TX_EX_COL_PKTS] +
-	    mac_stats[EFX_MAC_TX_LATE_COL_PKTS];
-	ifp->if_ibytes = mac_stats[EFX_MAC_RX_OCTETS];
-	ifp->if_obytes = mac_stats[EFX_MAC_TX_OCTETS];
-	/* if_imcasts is maintained in net/if_ethersubr.c */
-	ifp->if_omcasts =
-	    mac_stats[EFX_MAC_TX_MULTICST_PKTS] +
-	    mac_stats[EFX_MAC_TX_BRDCST_PKTS];
-	/* if_iqdrops is maintained in net/if_ethersubr.c */
-	/* if_noproto is maintained in net/if_ethersubr.c */
+	switch (c) {
+	case IFCOUNTER_IPACKETS:
+		val = mac_stats[EFX_MAC_RX_PKTS];
+		break;
+	case IFCOUNTER_IERRORS:
+		val = mac_stats[EFX_MAC_RX_ERRORS];
+		break;
+	case IFCOUNTER_OPACKETS:
+		val = mac_stats[EFX_MAC_TX_PKTS];
+		break;
+	case IFCOUNTER_OERRORS:
+		val = mac_stats[EFX_MAC_TX_ERRORS];
+		break;
+	case IFCOUNTER_COLLISIONS:
+		val = mac_stats[EFX_MAC_TX_SGL_COL_PKTS] +
+		      mac_stats[EFX_MAC_TX_MULT_COL_PKTS] +
+		      mac_stats[EFX_MAC_TX_EX_COL_PKTS] +
+		      mac_stats[EFX_MAC_TX_LATE_COL_PKTS];
+		break;
+	case IFCOUNTER_IBYTES:
+		val = mac_stats[EFX_MAC_RX_OCTETS];
+		break;
+	case IFCOUNTER_OBYTES:
+		val = mac_stats[EFX_MAC_TX_OCTETS];
+		break;
+	case IFCOUNTER_OMCASTS:
+		val = mac_stats[EFX_MAC_TX_MULTICST_PKTS] +
+		      mac_stats[EFX_MAC_TX_BRDCST_PKTS];
+		break;
+	case IFCOUNTER_OQDROPS:
+		SFXGE_PORT_UNLOCK(&sc->port);
+		return (sfxge_tx_get_drops(sc));
+	case IFCOUNTER_IMCASTS:
+		/* if_imcasts is maintained in net/if_ethersubr.c */
+	case IFCOUNTER_IQDROPS:
+		/* if_iqdrops is maintained in net/if_ethersubr.c */
+	case IFCOUNTER_NOPROTO:
+		/* if_noproto is maintained in net/if_ethersubr.c */
+	default:
+		SFXGE_PORT_UNLOCK(&sc->port);
+		return (if_get_counter_default(ifp, c));
+	}
 
 	SFXGE_PORT_UNLOCK(&sc->port);
+
+	return (val);
 }
 
 static int
@@ -286,7 +313,7 @@ sfxge_mac_link_update(struct sfxge_softc *sc, efx_link_mode_t mode)
 	/* Push link state update to the OS */
 	link_state = (port->link_mode != EFX_LINK_DOWN ?
 		      LINK_STATE_UP : LINK_STATE_DOWN);
-	if_initbaudrate(sc->ifnet, sfxge_link_baudrate[port->link_mode]);
+	sc->ifnet->if_baudrate = sfxge_link_baudrate[port->link_mode];
 	if_link_state_change(sc->ifnet, link_state);
 }
 
@@ -543,7 +570,7 @@ sfxge_phy_stat_update(struct sfxge_softc *sc)
 	}
 
 	now = ticks;
-	if (now - port->phy_stats.update_time < hz) {
+	if ((unsigned int)(now - port->phy_stats.update_time) < (unsigned int)hz) {
 		rc = 0;
 		goto out;
 	}

@@ -7,22 +7,27 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file implements the auto-upgrade helper functions
+// This file implements the auto-upgrade helper functions.
+// This is where deprecated IR intrinsics and other IR features are updated to
+// current specifications.
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/AutoUpgrade.h"
-#include "llvm/DebugInfo.h"
+#include "llvm/IR/AutoUpgrade.h"
+#include "llvm/IR/CFG.h"
+#include "llvm/IR/CallSite.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/DIBuilder.h"
+#include "llvm/IR/DebugInfo.h"
+#include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
-#include "llvm/Support/CFG.h"
-#include "llvm/Support/CallSite.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/Regex.h"
 #include <cstring>
 using namespace llvm;
 
@@ -37,6 +42,22 @@ static bool UpgradeSSE41Function(Function* F, Intrinsic::ID IID,
     return false;
 
   // Yes, it's old, replace it with new version.
+  F->setName(F->getName() + ".old");
+  NewFn = Intrinsic::getDeclaration(F->getParent(), IID);
+  return true;
+}
+
+// Upgrade the declarations of intrinsic functions whose 8-bit immediate mask
+// arguments have changed their type from i32 to i8.
+static bool UpgradeX86IntrinsicsWith8BitMask(Function *F, Intrinsic::ID IID,
+                                             Function *&NewFn) {
+  // Check that the last argument is an i32.
+  Type *LastArgType = F->getFunctionType()->getParamType(
+     F->getFunctionType()->getNumParams() - 1);
+  if (!LastArgType->isIntegerTy(32))
+    return false;
+
+  // Move this function aside and map down.
   F->setName(F->getName() + ".old");
   NewFn = Intrinsic::getDeclaration(F->getParent(), IID);
   return true;
@@ -72,8 +93,42 @@ static bool UpgradeIntrinsicFunction1(Function *F, Function *&NewFn) {
                                         F->arg_begin()->getType());
       return true;
     }
+    Regex vldRegex("^arm\\.neon\\.vld([1234]|[234]lane)\\.v[a-z0-9]*$");
+    if (vldRegex.match(Name)) {
+      auto fArgs = F->getFunctionType()->params();
+      SmallVector<Type *, 4> Tys(fArgs.begin(), fArgs.end());
+      // Can't use Intrinsic::getDeclaration here as the return types might
+      // then only be structurally equal.
+      FunctionType* fType = FunctionType::get(F->getReturnType(), Tys, false);
+      NewFn = Function::Create(fType, F->getLinkage(),
+                               "llvm." + Name + ".p0i8", F->getParent());
+      return true;
+    }
+    Regex vstRegex("^arm\\.neon\\.vst([1234]|[234]lane)\\.v[a-z0-9]*$");
+    if (vstRegex.match(Name)) {
+      static const Intrinsic::ID StoreInts[] = {Intrinsic::arm_neon_vst1,
+                                                Intrinsic::arm_neon_vst2,
+                                                Intrinsic::arm_neon_vst3,
+                                                Intrinsic::arm_neon_vst4};
+
+      static const Intrinsic::ID StoreLaneInts[] = {
+        Intrinsic::arm_neon_vst2lane, Intrinsic::arm_neon_vst3lane,
+        Intrinsic::arm_neon_vst4lane
+      };
+
+      auto fArgs = F->getFunctionType()->params();
+      Type *Tys[] = {fArgs[0], fArgs[1]};
+      if (Name.find("lane") == StringRef::npos)
+        NewFn = Intrinsic::getDeclaration(F->getParent(),
+                                          StoreInts[fArgs.size() - 3], Tys);
+      else
+        NewFn = Intrinsic::getDeclaration(F->getParent(),
+                                          StoreLaneInts[fArgs.size() - 5], Tys);
+      return true;
+    }
     break;
   }
+
   case 'c': {
     if (Name.startswith("ctlz.") && F->arg_size() == 1) {
       F->setName(Name + ".old");
@@ -89,6 +144,7 @@ static bool UpgradeIntrinsicFunction1(Function *F, Function *&NewFn) {
     }
     break;
   }
+
   case 'o':
     // We only need to change the name to match the mangling including the
     // address space.
@@ -108,13 +164,45 @@ static bool UpgradeIntrinsicFunction1(Function *F, Function *&NewFn) {
         Name.startswith("x86.sse2.pcmpgt.") ||
         Name.startswith("x86.avx2.pcmpeq.") ||
         Name.startswith("x86.avx2.pcmpgt.") ||
+        Name.startswith("x86.avx2.vbroadcast") ||
+        Name.startswith("x86.avx2.pbroadcast") ||
         Name.startswith("x86.avx.vpermil.") ||
+        Name.startswith("x86.sse41.pmovsx") ||
+        Name == "x86.avx.vinsertf128.pd.256" ||
+        Name == "x86.avx.vinsertf128.ps.256" ||
+        Name == "x86.avx.vinsertf128.si.256" ||
+        Name == "x86.avx2.vinserti128" ||
+        Name == "x86.avx.vextractf128.pd.256" ||
+        Name == "x86.avx.vextractf128.ps.256" ||
+        Name == "x86.avx.vextractf128.si.256" ||
+        Name == "x86.avx2.vextracti128" ||
         Name == "x86.avx.movnt.dq.256" ||
         Name == "x86.avx.movnt.pd.256" ||
         Name == "x86.avx.movnt.ps.256" ||
         Name == "x86.sse42.crc32.64.8" ||
+        Name == "x86.avx.vbroadcast.ss" ||
+        Name == "x86.avx.vbroadcast.ss.256" ||
+        Name == "x86.avx.vbroadcast.sd.256" ||
+        Name == "x86.sse2.psll.dq" ||
+        Name == "x86.sse2.psrl.dq" ||
+        Name == "x86.avx2.psll.dq" ||
+        Name == "x86.avx2.psrl.dq" ||
+        Name == "x86.sse2.psll.dq.bs" ||
+        Name == "x86.sse2.psrl.dq.bs" ||
+        Name == "x86.avx2.psll.dq.bs" ||
+        Name == "x86.avx2.psrl.dq.bs" ||
+        Name == "x86.sse41.pblendw" ||
+        Name == "x86.sse41.blendpd" ||
+        Name == "x86.sse41.blendps" ||
+        Name == "x86.avx.blend.pd.256" ||
+        Name == "x86.avx.blend.ps.256" ||
+        Name == "x86.avx2.pblendw" ||
+        Name == "x86.avx2.pblendd.128" ||
+        Name == "x86.avx2.pblendd.256" ||
+        Name == "x86.avx2.vbroadcasti128" ||
+        Name == "x86.xop.vpcmov" ||
         (Name.startswith("x86.xop.vpcom") && F->arg_size() == 2)) {
-      NewFn = 0;
+      NewFn = nullptr;
       return true;
     }
     // SSE4.1 ptest functions may have an old signature.
@@ -126,6 +214,27 @@ static bool UpgradeIntrinsicFunction1(Function *F, Function *&NewFn) {
       if (Name == "x86.sse41.ptestnzc")
         return UpgradeSSE41Function(F, Intrinsic::x86_sse41_ptestnzc, NewFn);
     }
+    // Several blend and other instructions with masks used the wrong number of
+    // bits.
+    if (Name == "x86.sse41.insertps")
+      return UpgradeX86IntrinsicsWith8BitMask(F, Intrinsic::x86_sse41_insertps,
+                                              NewFn);
+    if (Name == "x86.sse41.dppd")
+      return UpgradeX86IntrinsicsWith8BitMask(F, Intrinsic::x86_sse41_dppd,
+                                              NewFn);
+    if (Name == "x86.sse41.dpps")
+      return UpgradeX86IntrinsicsWith8BitMask(F, Intrinsic::x86_sse41_dpps,
+                                              NewFn);
+    if (Name == "x86.sse41.mpsadbw")
+      return UpgradeX86IntrinsicsWith8BitMask(F, Intrinsic::x86_sse41_mpsadbw,
+                                              NewFn);
+    if (Name == "x86.avx.dp.ps.256")
+      return UpgradeX86IntrinsicsWith8BitMask(F, Intrinsic::x86_avx_dp_ps_256,
+                                              NewFn);
+    if (Name == "x86.avx2.mpsadbw")
+      return UpgradeX86IntrinsicsWith8BitMask(F, Intrinsic::x86_avx2_mpsadbw,
+                                              NewFn);
+
     // frcz.ss/sd may need to have an argument dropped
     if (Name.startswith("x86.xop.vfrcz.ss") && F->arg_size() == 2) {
       F->setName(Name + ".old");
@@ -157,21 +266,95 @@ static bool UpgradeIntrinsicFunction1(Function *F, Function *&NewFn) {
 }
 
 bool llvm::UpgradeIntrinsicFunction(Function *F, Function *&NewFn) {
-  NewFn = 0;
+  NewFn = nullptr;
   bool Upgraded = UpgradeIntrinsicFunction1(F, NewFn);
+  assert(F != NewFn && "Intrinsic function upgraded to the same function");
 
   // Upgrade intrinsic attributes.  This does not change the function.
   if (NewFn)
     F = NewFn;
-  if (unsigned id = F->getIntrinsicID())
-    F->setAttributes(Intrinsic::getAttributes(F->getContext(),
-                                              (Intrinsic::ID)id));
+  if (Intrinsic::ID id = F->getIntrinsicID())
+    F->setAttributes(Intrinsic::getAttributes(F->getContext(), id));
   return Upgraded;
 }
 
 bool llvm::UpgradeGlobalVariable(GlobalVariable *GV) {
   // Nothing to do yet.
   return false;
+}
+
+// Handles upgrading SSE2 and AVX2 PSLLDQ intrinsics by converting them
+// to byte shuffles.
+static Value *UpgradeX86PSLLDQIntrinsics(IRBuilder<> &Builder, LLVMContext &C,
+                                         Value *Op, unsigned NumLanes,
+                                         unsigned Shift) {
+  // Each lane is 16 bytes.
+  unsigned NumElts = NumLanes * 16;
+
+  // Bitcast from a 64-bit element type to a byte element type.
+  Op = Builder.CreateBitCast(Op,
+                             VectorType::get(Type::getInt8Ty(C), NumElts),
+                             "cast");
+  // We'll be shuffling in zeroes.
+  Value *Res = ConstantVector::getSplat(NumElts, Builder.getInt8(0));
+
+  // If shift is less than 16, emit a shuffle to move the bytes. Otherwise,
+  // we'll just return the zero vector.
+  if (Shift < 16) {
+    SmallVector<Constant*, 32> Idxs;
+    // 256-bit version is split into two 16-byte lanes.
+    for (unsigned l = 0; l != NumElts; l += 16)
+      for (unsigned i = 0; i != 16; ++i) {
+        unsigned Idx = NumElts + i - Shift;
+        if (Idx < NumElts)
+          Idx -= NumElts - 16; // end of lane, switch operand.
+        Idxs.push_back(Builder.getInt32(Idx + l));
+      }
+
+    Res = Builder.CreateShuffleVector(Res, Op, ConstantVector::get(Idxs));
+  }
+
+  // Bitcast back to a 64-bit element type.
+  return Builder.CreateBitCast(Res,
+                               VectorType::get(Type::getInt64Ty(C), 2*NumLanes),
+                               "cast");
+}
+
+// Handles upgrading SSE2 and AVX2 PSRLDQ intrinsics by converting them
+// to byte shuffles.
+static Value *UpgradeX86PSRLDQIntrinsics(IRBuilder<> &Builder, LLVMContext &C,
+                                         Value *Op, unsigned NumLanes,
+                                         unsigned Shift) {
+  // Each lane is 16 bytes.
+  unsigned NumElts = NumLanes * 16;
+
+  // Bitcast from a 64-bit element type to a byte element type.
+  Op = Builder.CreateBitCast(Op,
+                             VectorType::get(Type::getInt8Ty(C), NumElts),
+                             "cast");
+  // We'll be shuffling in zeroes.
+  Value *Res = ConstantVector::getSplat(NumElts, Builder.getInt8(0));
+
+  // If shift is less than 16, emit a shuffle to move the bytes. Otherwise,
+  // we'll just return the zero vector.
+  if (Shift < 16) {
+    SmallVector<Constant*, 32> Idxs;
+    // 256-bit version is split into two 16-byte lanes.
+    for (unsigned l = 0; l != NumElts; l += 16)
+      for (unsigned i = 0; i != 16; ++i) {
+        unsigned Idx = i + Shift;
+        if (Idx >= 16)
+          Idx += NumElts - 16; // end of lane, switch operand.
+        Idxs.push_back(Builder.getInt32(Idx + l));
+      }
+
+    Res = Builder.CreateShuffleVector(Op, Res, ConstantVector::get(Idxs));
+  }
+
+  // Bitcast back to a 64-bit element type.
+  return Builder.CreateBitCast(Res,
+                               VectorType::get(Type::getInt64Ty(C), 2*NumLanes),
+                               "cast");
 }
 
 // UpgradeIntrinsicCall - Upgrade a call to an old intrinsic to be a call the
@@ -181,7 +364,7 @@ void llvm::UpgradeIntrinsicCall(CallInst *CI, Function *NewFn) {
   Function *F = CI->getCalledFunction();
   LLVMContext &C = CI->getContext();
   IRBuilder<> Builder(C);
-  Builder.SetInsertPoint(CI->getParent(), CI);
+  Builder.SetInsertPoint(CI->getParent(), CI->getIterator());
 
   assert(F && "Intrinsic call is not direct?");
 
@@ -207,11 +390,12 @@ void llvm::UpgradeIntrinsicCall(CallInst *CI, Function *NewFn) {
                Name == "llvm.x86.avx.movnt.ps.256" ||
                Name == "llvm.x86.avx.movnt.pd.256") {
       IRBuilder<> Builder(C);
-      Builder.SetInsertPoint(CI->getParent(), CI);
+      Builder.SetInsertPoint(CI->getParent(), CI->getIterator());
 
       Module *M = F->getParent();
-      SmallVector<Value *, 1> Elts;
-      Elts.push_back(ConstantInt::get(Type::getInt32Ty(C), 1));
+      SmallVector<Metadata *, 1> Elts;
+      Elts.push_back(
+          ConstantAsMetadata::get(ConstantInt::get(Type::getInt32Ty(C), 1)));
       MDNode *Node = MDNode::get(C, Elts);
 
       Value *Arg0 = CI->getArgOperand(0);
@@ -223,7 +407,7 @@ void llvm::UpgradeIntrinsicCall(CallInst *CI, Function *NewFn) {
                                         "cast");
       StoreInst *SI = Builder.CreateStore(Arg1, BC);
       SI->setMetadata(M->getMDKindID("nontemporal"), Node);
-      SI->setAlignment(16);
+      SI->setAlignment(32);
 
       // Remove intrinsic.
       CI->eraseFromParent();
@@ -263,22 +447,204 @@ void llvm::UpgradeIntrinsicCall(CallInst *CI, Function *NewFn) {
         Imm = 4;
       else if (Name.startswith("ne"))
         Imm = 5;
-      else if (Name.startswith("true"))
-        Imm = 6;
       else if (Name.startswith("false"))
+        Imm = 6;
+      else if (Name.startswith("true"))
         Imm = 7;
       else
         llvm_unreachable("Unknown condition");
 
       Function *VPCOM = Intrinsic::getDeclaration(F->getParent(), intID);
-      Rep = Builder.CreateCall3(VPCOM, CI->getArgOperand(0),
-                                CI->getArgOperand(1), Builder.getInt8(Imm));
+      Rep =
+          Builder.CreateCall(VPCOM, {CI->getArgOperand(0), CI->getArgOperand(1),
+                                     Builder.getInt8(Imm)});
+    } else if (Name == "llvm.x86.xop.vpcmov") {
+      Value *Arg0 = CI->getArgOperand(0);
+      Value *Arg1 = CI->getArgOperand(1);
+      Value *Sel = CI->getArgOperand(2);
+      unsigned NumElts = CI->getType()->getVectorNumElements();
+      Constant *MinusOne = ConstantVector::getSplat(NumElts, Builder.getInt64(-1));
+      Value *NotSel = Builder.CreateXor(Sel, MinusOne);
+      Value *Sel0 = Builder.CreateAnd(Arg0, Sel);
+      Value *Sel1 = Builder.CreateAnd(Arg1, NotSel);
+      Rep = Builder.CreateOr(Sel0, Sel1);
     } else if (Name == "llvm.x86.sse42.crc32.64.8") {
       Function *CRC32 = Intrinsic::getDeclaration(F->getParent(),
                                                Intrinsic::x86_sse42_crc32_32_8);
       Value *Trunc0 = Builder.CreateTrunc(CI->getArgOperand(0), Type::getInt32Ty(C));
-      Rep = Builder.CreateCall2(CRC32, Trunc0, CI->getArgOperand(1));
+      Rep = Builder.CreateCall(CRC32, {Trunc0, CI->getArgOperand(1)});
       Rep = Builder.CreateZExt(Rep, CI->getType(), "");
+    } else if (Name.startswith("llvm.x86.avx.vbroadcast")) {
+      // Replace broadcasts with a series of insertelements.
+      Type *VecTy = CI->getType();
+      Type *EltTy = VecTy->getVectorElementType();
+      unsigned EltNum = VecTy->getVectorNumElements();
+      Value *Cast = Builder.CreateBitCast(CI->getArgOperand(0),
+                                          EltTy->getPointerTo());
+      Value *Load = Builder.CreateLoad(EltTy, Cast);
+      Type *I32Ty = Type::getInt32Ty(C);
+      Rep = UndefValue::get(VecTy);
+      for (unsigned I = 0; I < EltNum; ++I)
+        Rep = Builder.CreateInsertElement(Rep, Load,
+                                          ConstantInt::get(I32Ty, I));
+    } else if (Name.startswith("llvm.x86.sse41.pmovsx")) {
+      VectorType *SrcTy = cast<VectorType>(CI->getArgOperand(0)->getType());
+      VectorType *DstTy = cast<VectorType>(CI->getType());
+      unsigned NumDstElts = DstTy->getNumElements();
+
+      // Extract a subvector of the first NumDstElts lanes and sign extend.
+      SmallVector<int, 8> ShuffleMask;
+      for (int i = 0; i != (int)NumDstElts; ++i)
+        ShuffleMask.push_back(i);
+
+      Value *SV = Builder.CreateShuffleVector(
+          CI->getArgOperand(0), UndefValue::get(SrcTy), ShuffleMask);
+      Rep = Builder.CreateSExt(SV, DstTy);
+    } else if (Name == "llvm.x86.avx2.vbroadcasti128") {
+      // Replace vbroadcasts with a vector shuffle.
+      Type *VT = VectorType::get(Type::getInt64Ty(C), 2);
+      Value *Op = Builder.CreatePointerCast(CI->getArgOperand(0),
+                                            PointerType::getUnqual(VT));
+      Value *Load = Builder.CreateLoad(VT, Op);
+      const int Idxs[4] = { 0, 1, 0, 1 };
+      Rep = Builder.CreateShuffleVector(Load, UndefValue::get(Load->getType()),
+                                        Idxs);
+    } else if (Name.startswith("llvm.x86.avx2.pbroadcast") ||
+               Name.startswith("llvm.x86.avx2.vbroadcast")) {
+      // Replace vp?broadcasts with a vector shuffle.
+      Value *Op = CI->getArgOperand(0);
+      unsigned NumElts = CI->getType()->getVectorNumElements();
+      Type *MaskTy = VectorType::get(Type::getInt32Ty(C), NumElts);
+      Rep = Builder.CreateShuffleVector(Op, UndefValue::get(Op->getType()),
+                                        Constant::getNullValue(MaskTy));
+    } else if (Name == "llvm.x86.sse2.psll.dq") {
+      // 128-bit shift left specified in bits.
+      unsigned Shift = cast<ConstantInt>(CI->getArgOperand(1))->getZExtValue();
+      Rep = UpgradeX86PSLLDQIntrinsics(Builder, C, CI->getArgOperand(0), 1,
+                                       Shift / 8); // Shift is in bits.
+    } else if (Name == "llvm.x86.sse2.psrl.dq") {
+      // 128-bit shift right specified in bits.
+      unsigned Shift = cast<ConstantInt>(CI->getArgOperand(1))->getZExtValue();
+      Rep = UpgradeX86PSRLDQIntrinsics(Builder, C, CI->getArgOperand(0), 1,
+                                       Shift / 8); // Shift is in bits.
+    } else if (Name == "llvm.x86.avx2.psll.dq") {
+      // 256-bit shift left specified in bits.
+      unsigned Shift = cast<ConstantInt>(CI->getArgOperand(1))->getZExtValue();
+      Rep = UpgradeX86PSLLDQIntrinsics(Builder, C, CI->getArgOperand(0), 2,
+                                       Shift / 8); // Shift is in bits.
+    } else if (Name == "llvm.x86.avx2.psrl.dq") {
+      // 256-bit shift right specified in bits.
+      unsigned Shift = cast<ConstantInt>(CI->getArgOperand(1))->getZExtValue();
+      Rep = UpgradeX86PSRLDQIntrinsics(Builder, C, CI->getArgOperand(0), 2,
+                                       Shift / 8); // Shift is in bits.
+    } else if (Name == "llvm.x86.sse2.psll.dq.bs") {
+      // 128-bit shift left specified in bytes.
+      unsigned Shift = cast<ConstantInt>(CI->getArgOperand(1))->getZExtValue();
+      Rep = UpgradeX86PSLLDQIntrinsics(Builder, C, CI->getArgOperand(0), 1,
+                                       Shift);
+    } else if (Name == "llvm.x86.sse2.psrl.dq.bs") {
+      // 128-bit shift right specified in bytes.
+      unsigned Shift = cast<ConstantInt>(CI->getArgOperand(1))->getZExtValue();
+      Rep = UpgradeX86PSRLDQIntrinsics(Builder, C, CI->getArgOperand(0), 1,
+                                       Shift);
+    } else if (Name == "llvm.x86.avx2.psll.dq.bs") {
+      // 256-bit shift left specified in bytes.
+      unsigned Shift = cast<ConstantInt>(CI->getArgOperand(1))->getZExtValue();
+      Rep = UpgradeX86PSLLDQIntrinsics(Builder, C, CI->getArgOperand(0), 2,
+                                       Shift);
+    } else if (Name == "llvm.x86.avx2.psrl.dq.bs") {
+      // 256-bit shift right specified in bytes.
+      unsigned Shift = cast<ConstantInt>(CI->getArgOperand(1))->getZExtValue();
+      Rep = UpgradeX86PSRLDQIntrinsics(Builder, C, CI->getArgOperand(0), 2,
+                                       Shift);
+    } else if (Name == "llvm.x86.sse41.pblendw" ||
+               Name == "llvm.x86.sse41.blendpd" ||
+               Name == "llvm.x86.sse41.blendps" ||
+               Name == "llvm.x86.avx.blend.pd.256" ||
+               Name == "llvm.x86.avx.blend.ps.256" ||
+               Name == "llvm.x86.avx2.pblendw" ||
+               Name == "llvm.x86.avx2.pblendd.128" ||
+               Name == "llvm.x86.avx2.pblendd.256") {
+      Value *Op0 = CI->getArgOperand(0);
+      Value *Op1 = CI->getArgOperand(1);
+      unsigned Imm = cast <ConstantInt>(CI->getArgOperand(2))->getZExtValue();
+      VectorType *VecTy = cast<VectorType>(CI->getType());
+      unsigned NumElts = VecTy->getNumElements();
+
+      SmallVector<Constant*, 16> Idxs;
+      for (unsigned i = 0; i != NumElts; ++i) {
+        unsigned Idx = ((Imm >> (i%8)) & 1) ? i + NumElts : i;
+        Idxs.push_back(Builder.getInt32(Idx));
+      }
+
+      Rep = Builder.CreateShuffleVector(Op0, Op1, ConstantVector::get(Idxs));
+    } else if (Name == "llvm.x86.avx.vinsertf128.pd.256" ||
+               Name == "llvm.x86.avx.vinsertf128.ps.256" ||
+               Name == "llvm.x86.avx.vinsertf128.si.256" ||
+               Name == "llvm.x86.avx2.vinserti128") {
+      Value *Op0 = CI->getArgOperand(0);
+      Value *Op1 = CI->getArgOperand(1);
+      unsigned Imm = cast<ConstantInt>(CI->getArgOperand(2))->getZExtValue();
+      VectorType *VecTy = cast<VectorType>(CI->getType());
+      unsigned NumElts = VecTy->getNumElements();
+
+      // Mask off the high bits of the immediate value; hardware ignores those.
+      Imm = Imm & 1;
+
+      // Extend the second operand into a vector that is twice as big.
+      Value *UndefV = UndefValue::get(Op1->getType());
+      SmallVector<Constant*, 8> Idxs;
+      for (unsigned i = 0; i != NumElts; ++i) {
+        Idxs.push_back(Builder.getInt32(i));
+      }
+      Rep = Builder.CreateShuffleVector(Op1, UndefV, ConstantVector::get(Idxs));
+
+      // Insert the second operand into the first operand.
+
+      // Note that there is no guarantee that instruction lowering will actually
+      // produce a vinsertf128 instruction for the created shuffles. In
+      // particular, the 0 immediate case involves no lane changes, so it can
+      // be handled as a blend.
+
+      // Example of shuffle mask for 32-bit elements:
+      // Imm = 1  <i32 0, i32 1, i32 2,  i32 3,  i32 8, i32 9, i32 10, i32 11>
+      // Imm = 0  <i32 8, i32 9, i32 10, i32 11, i32 4, i32 5, i32 6,  i32 7 >
+
+      SmallVector<Constant*, 8> Idxs2;
+      // The low half of the result is either the low half of the 1st operand
+      // or the low half of the 2nd operand (the inserted vector).
+      for (unsigned i = 0; i != NumElts / 2; ++i) {
+        unsigned Idx = Imm ? i : (i + NumElts);
+        Idxs2.push_back(Builder.getInt32(Idx));
+      }
+      // The high half of the result is either the low half of the 2nd operand
+      // (the inserted vector) or the high half of the 1st operand.
+      for (unsigned i = NumElts / 2; i != NumElts; ++i) {
+        unsigned Idx = Imm ? (i + NumElts / 2) : i;
+        Idxs2.push_back(Builder.getInt32(Idx));
+      }
+      Rep = Builder.CreateShuffleVector(Op0, Rep, ConstantVector::get(Idxs2));
+    } else if (Name == "llvm.x86.avx.vextractf128.pd.256" ||
+               Name == "llvm.x86.avx.vextractf128.ps.256" ||
+               Name == "llvm.x86.avx.vextractf128.si.256" ||
+               Name == "llvm.x86.avx2.vextracti128") {
+      Value *Op0 = CI->getArgOperand(0);
+      unsigned Imm = cast<ConstantInt>(CI->getArgOperand(1))->getZExtValue();
+      VectorType *VecTy = cast<VectorType>(CI->getType());
+      unsigned NumElts = VecTy->getNumElements();
+
+      // Mask off the high bits of the immediate value; hardware ignores those.
+      Imm = Imm & 1;
+
+      // Get indexes for either the high half or low half of the input vector.
+      SmallVector<Constant*, 4> Idxs(NumElts);
+      for (unsigned i = 0; i != NumElts; ++i) {
+        unsigned Idx = Imm ? (i + NumElts) : i;
+        Idxs[i] = Builder.getInt32(Idx);
+      }
+
+      Value *UndefV = UndefValue::get(Op0->getType());
+      Rep = Builder.CreateShuffleVector(Op0, UndefV, ConstantVector::get(Idxs));
     } else {
       bool PD128 = false, PD256 = false, PS128 = false, PS256 = false;
       if (Name == "llvm.x86.avx.vpermil.pd.256")
@@ -323,48 +689,60 @@ void llvm::UpgradeIntrinsicCall(CallInst *CI, Function *NewFn) {
     return;
   }
 
-  std::string Name = CI->getName().str();
-  CI->setName(Name + ".old");
+  std::string Name = CI->getName();
+  if (!Name.empty())
+    CI->setName(Name + ".old");
 
   switch (NewFn->getIntrinsicID()) {
   default:
     llvm_unreachable("Unknown function for CallInst upgrade.");
 
+  case Intrinsic::arm_neon_vld1:
+  case Intrinsic::arm_neon_vld2:
+  case Intrinsic::arm_neon_vld3:
+  case Intrinsic::arm_neon_vld4:
+  case Intrinsic::arm_neon_vld2lane:
+  case Intrinsic::arm_neon_vld3lane:
+  case Intrinsic::arm_neon_vld4lane:
+  case Intrinsic::arm_neon_vst1:
+  case Intrinsic::arm_neon_vst2:
+  case Intrinsic::arm_neon_vst3:
+  case Intrinsic::arm_neon_vst4:
+  case Intrinsic::arm_neon_vst2lane:
+  case Intrinsic::arm_neon_vst3lane:
+  case Intrinsic::arm_neon_vst4lane: {
+    SmallVector<Value *, 4> Args(CI->arg_operands().begin(),
+                                 CI->arg_operands().end());
+    CI->replaceAllUsesWith(Builder.CreateCall(NewFn, Args));
+    CI->eraseFromParent();
+    return;
+  }
+
   case Intrinsic::ctlz:
   case Intrinsic::cttz:
     assert(CI->getNumArgOperands() == 1 &&
            "Mismatch between function args and call args");
-    CI->replaceAllUsesWith(Builder.CreateCall2(NewFn, CI->getArgOperand(0),
-                                               Builder.getFalse(), Name));
+    CI->replaceAllUsesWith(Builder.CreateCall(
+        NewFn, {CI->getArgOperand(0), Builder.getFalse()}, Name));
     CI->eraseFromParent();
     return;
 
   case Intrinsic::objectsize:
-    CI->replaceAllUsesWith(Builder.CreateCall2(NewFn,
-                                               CI->getArgOperand(0),
-                                               CI->getArgOperand(1),
-                                               Name));
+    CI->replaceAllUsesWith(Builder.CreateCall(
+        NewFn, {CI->getArgOperand(0), CI->getArgOperand(1)}, Name));
     CI->eraseFromParent();
     return;
 
-  case Intrinsic::arm_neon_vclz: {
-    // Change name from llvm.arm.neon.vclz.* to llvm.ctlz.*
-    CI->replaceAllUsesWith(Builder.CreateCall2(NewFn, CI->getArgOperand(0),
-                                               Builder.getFalse(),
-                                               "llvm.ctlz." + Name.substr(14)));
-    CI->eraseFromParent();
-    return;
-  }
   case Intrinsic::ctpop: {
-    CI->replaceAllUsesWith(Builder.CreateCall(NewFn, CI->getArgOperand(0)));
+    CI->replaceAllUsesWith(Builder.CreateCall(NewFn, {CI->getArgOperand(0)}));
     CI->eraseFromParent();
     return;
   }
 
   case Intrinsic::x86_xop_vfrcz_ss:
   case Intrinsic::x86_xop_vfrcz_sd:
-    CI->replaceAllUsesWith(Builder.CreateCall(NewFn, CI->getArgOperand(1),
-                                              Name));
+    CI->replaceAllUsesWith(
+        Builder.CreateCall(NewFn, {CI->getArgOperand(1)}, Name));
     CI->eraseFromParent();
     return;
 
@@ -382,16 +760,32 @@ void llvm::UpgradeIntrinsicCall(CallInst *CI, Function *NewFn) {
     // Old intrinsic, add bitcasts
     Value *Arg1 = CI->getArgOperand(1);
 
-    Value *BC0 =
-      Builder.CreateBitCast(Arg0,
-                            VectorType::get(Type::getInt64Ty(C), 2),
-                            "cast");
-    Value *BC1 =
-      Builder.CreateBitCast(Arg1,
-                            VectorType::get(Type::getInt64Ty(C), 2),
-                            "cast");
+    Type *NewVecTy = VectorType::get(Type::getInt64Ty(C), 2);
 
-    CallInst* NewCall = Builder.CreateCall2(NewFn, BC0, BC1, Name);
+    Value *BC0 = Builder.CreateBitCast(Arg0, NewVecTy, "cast");
+    Value *BC1 = Builder.CreateBitCast(Arg1, NewVecTy, "cast");
+
+    CallInst *NewCall = Builder.CreateCall(NewFn, {BC0, BC1}, Name);
+    CI->replaceAllUsesWith(NewCall);
+    CI->eraseFromParent();
+    return;
+  }
+
+  case Intrinsic::x86_sse41_insertps:
+  case Intrinsic::x86_sse41_dppd:
+  case Intrinsic::x86_sse41_dpps:
+  case Intrinsic::x86_sse41_mpsadbw:
+  case Intrinsic::x86_avx_dp_ps_256:
+  case Intrinsic::x86_avx2_mpsadbw: {
+    // Need to truncate the last argument from i32 to i8 -- this argument models
+    // an inherently 8-bit immediate operand to these x86 instructions.
+    SmallVector<Value *, 4> Args(CI->arg_operands().begin(),
+                                 CI->arg_operands().end());
+
+    // Replace the last argument with a trunc.
+    Args.back() = Builder.CreateTrunc(Args.back(), Type::getInt8Ty(C), "trunc");
+
+    CallInst *NewCall = Builder.CreateCall(NewFn, Args);
     CI->replaceAllUsesWith(NewCall);
     CI->eraseFromParent();
     return;
@@ -408,16 +802,14 @@ void llvm::UpgradeCallsToIntrinsic(Function* F) {
   // Upgrade the function and check if it is a totaly new function.
   Function *NewFn;
   if (UpgradeIntrinsicFunction(F, NewFn)) {
-    if (NewFn != F) {
-      // Replace all uses to the old function with the new one if necessary.
-      for (Value::use_iterator UI = F->use_begin(), UE = F->use_end();
-           UI != UE; ) {
-        if (CallInst *CI = dyn_cast<CallInst>(*UI++))
-          UpgradeIntrinsicCall(CI, NewFn);
-      }
-      // Remove old function, no longer used, from the module.
-      F->eraseFromParent();
+    // Replace all uses to the old function with the new one if necessary.
+    for (Value::user_iterator UI = F->user_begin(), UE = F->user_end();
+         UI != UE;) {
+      if (CallInst *CI = dyn_cast<CallInst>(*UI++))
+        UpgradeIntrinsicCall(CI, NewFn);
     }
+    // Remove old function, no longer used, from the module.
+    F->eraseFromParent();
   }
 }
 
@@ -429,22 +821,18 @@ void llvm::UpgradeInstWithTBAATag(Instruction *I) {
     return;
 
   if (MD->getNumOperands() == 3) {
-    Value *Elts[] = {
-      MD->getOperand(0),
-      MD->getOperand(1)
-    };
+    Metadata *Elts[] = {MD->getOperand(0), MD->getOperand(1)};
     MDNode *ScalarType = MDNode::get(I->getContext(), Elts);
     // Create a MDNode <ScalarType, ScalarType, offset 0, const>
-    Value *Elts2[] = {
-      ScalarType, ScalarType,
-      Constant::getNullValue(Type::getInt64Ty(I->getContext())),
-      MD->getOperand(2)
-    };
+    Metadata *Elts2[] = {ScalarType, ScalarType,
+                         ConstantAsMetadata::get(Constant::getNullValue(
+                             Type::getInt64Ty(I->getContext()))),
+                         MD->getOperand(2)};
     I->setMetadata(LLVMContext::MD_tbaa, MDNode::get(I->getContext(), Elts2));
   } else {
     // Create a MDNode <MD, MD, offset 0>
-    Value *Elts[] = {MD, MD,
-      Constant::getNullValue(Type::getInt64Ty(I->getContext()))};
+    Metadata *Elts[] = {MD, MD, ConstantAsMetadata::get(Constant::getNullValue(
+                                    Type::getInt64Ty(I->getContext())))};
     I->setMetadata(LLVMContext::MD_tbaa, MDNode::get(I->getContext(), Elts));
   }
 }
@@ -452,9 +840,9 @@ void llvm::UpgradeInstWithTBAATag(Instruction *I) {
 Instruction *llvm::UpgradeBitCastInst(unsigned Opc, Value *V, Type *DestTy,
                                       Instruction *&Temp) {
   if (Opc != Instruction::BitCast)
-    return 0;
+    return nullptr;
 
-  Temp = 0;
+  Temp = nullptr;
   Type *SrcTy = V->getType();
   if (SrcTy->isPtrOrPtrVectorTy() && DestTy->isPtrOrPtrVectorTy() &&
       SrcTy->getPointerAddressSpace() != DestTy->getPointerAddressSpace()) {
@@ -468,12 +856,12 @@ Instruction *llvm::UpgradeBitCastInst(unsigned Opc, Value *V, Type *DestTy,
     return CastInst::Create(Instruction::IntToPtr, Temp, DestTy);
   }
 
-  return 0;
+  return nullptr;
 }
 
 Value *llvm::UpgradeBitCastExpr(unsigned Opc, Constant *C, Type *DestTy) {
   if (Opc != Instruction::BitCast)
-    return 0;
+    return nullptr;
 
   Type *SrcTy = C->getType();
   if (SrcTy->isPtrOrPtrVectorTy() && DestTy->isPtrOrPtrVectorTy() &&
@@ -488,14 +876,29 @@ Value *llvm::UpgradeBitCastExpr(unsigned Opc, Constant *C, Type *DestTy) {
                                      DestTy);
   }
 
-  return 0;
+  return nullptr;
 }
 
 /// Check the debug info version number, if it is out-dated, drop the debug
 /// info. Return true if module is modified.
 bool llvm::UpgradeDebugInfo(Module &M) {
-  if (getDebugMetadataVersionFromModule(M) == DEBUG_METADATA_VERSION)
+  unsigned Version = getDebugMetadataVersionFromModule(M);
+  if (Version == DEBUG_METADATA_VERSION)
     return false;
 
-  return StripDebugInfo(M);
+  bool RetCode = StripDebugInfo(M);
+  if (RetCode) {
+    DiagnosticInfoDebugMetadataVersion DiagVersion(M, Version);
+    M.getContext().diagnose(DiagVersion);
+  }
+  return RetCode;
+}
+
+void llvm::UpgradeMDStringConstant(std::string &String) {
+  const std::string OldPrefix = "llvm.vectorizer.";
+  if (String == "llvm.vectorizer.unroll") {
+    String = "llvm.loop.interleave.count";
+  } else if (String.find(OldPrefix) == 0) {
+    String.replace(0, OldPrefix.size(), "llvm.loop.vectorize.");
+  }
 }

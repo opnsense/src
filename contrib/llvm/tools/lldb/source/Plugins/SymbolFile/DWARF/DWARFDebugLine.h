@@ -20,7 +20,6 @@
 #include "DWARFDefines.h"
 
 class SymbolFileDWARF;
-class DWARFDebugInfoEntry;
 
 //----------------------------------------------------------------------
 // DWARFDebugLine
@@ -34,14 +33,14 @@ public:
     struct FileNameEntry
     {
         FileNameEntry() :
-            name(),
+            name(nullptr),
             dir_idx(0),
             mod_time(0),
             length(0)
         {
         }
 
-        std::string     name;
+        const char*     name;
         dw_sleb128_t    dir_idx;
         dw_sleb128_t    mod_time;
         dw_sleb128_t    length;
@@ -75,12 +74,13 @@ public:
         uint16_t    version;        // Version identifier for the statement information format.
         uint32_t    prologue_length;// The number of bytes following the prologue_length field to the beginning of the first byte of the statement program itself.
         uint8_t     min_inst_length;// The size in bytes of the smallest target machine instruction. Statement program opcodes that alter the address register first multiply their operands by this value.
+        uint8_t     maximum_operations_per_instruction; // New in DWARF4. The maximum number of individual operations that may be encoded in an instruction.
         uint8_t     default_is_stmt;// The initial value of theis_stmtregister.
         int8_t      line_base;      // This parameter affects the meaning of the special opcodes. See below.
         uint8_t     line_range;     // This parameter affects the meaning of the special opcodes. See below.
         uint8_t     opcode_base;    // The number assigned to the first special opcode.
         std::vector<uint8_t>            standard_opcode_lengths;
-        std::vector<std::string>        include_directories;
+        std::vector<const char *>       include_directories;
         std::vector<FileNameEntry>      file_names;
 
         int32_t MaxLineIncrementForSpecialOpcode() const { return line_base + (int8_t)line_range - 1; }
@@ -95,7 +95,7 @@ public:
             include_directories.clear();
             file_names.clear();
         }
-        bool GetFile(uint32_t file_idx, std::string& file, std::string& dir) const;
+        bool GetFile(uint32_t file_idx, const char *comp_dir, lldb_private::FileSpec &file) const;
 
     };
 

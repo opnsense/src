@@ -37,10 +37,11 @@
 
 #define	AUXARGS_ENTRY(pos, id, val) {suword(pos++, id); suword(pos++, val);}
 
+struct image_params;
 struct thread;
 
 /*
- * Structure used to pass infomation from the loader to the
+ * Structure used to pass information from the loader to the
  * stack fixup routine.
  */
 typedef struct {
@@ -52,6 +53,7 @@ typedef struct {
 	Elf_Size	base;
 	Elf_Size	flags;
 	Elf_Size	entry;
+	Elf_Word	hdr_eflags;		/* e_flags field from ehdr */
 } __ElfN(Auxargs);
 
 typedef struct {
@@ -74,6 +76,7 @@ typedef struct {
 	const char *interp_newpath;
 	int flags;
 	Elf_Brandnote *brand_note;
+	boolean_t	(*header_supported)(struct image_params *);
 #define	BI_CAN_EXEC_DYN		0x0001
 #define	BI_BRAND_NOTE		0x0002	/* May have note.ABI-tag section. */
 #define	BI_BRAND_NOTE_MANDATORY	0x0004	/* Must have note.ABI-tag section. */

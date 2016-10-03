@@ -7,16 +7,12 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "lldb/lldb-python.h"
-
 #include "CommandObjectLog.h"
 
 // C Includes
 // C++ Includes
 // Other libraries and framework includes
 // Project includes
-#include "lldb/lldb-private-log.h"
-
 #include "lldb/Interpreter/Args.h"
 #include "lldb/Core/Debugger.h"
 #include "lldb/Host/FileSpec.h"
@@ -29,6 +25,7 @@
 #include "lldb/Core/Timer.h"
 
 #include "lldb/Core/Debugger.h"
+#include "lldb/Host/StringConvert.h"
 #include "lldb/Interpreter/CommandInterpreter.h"
 #include "lldb/Interpreter/CommandReturnObject.h"
 
@@ -80,13 +77,12 @@ public:
         m_arguments.push_back (arg2);
     }
 
-    virtual
-    ~CommandObjectLogEnable()
+    ~CommandObjectLogEnable() override
     {
     }
 
     Options *
-    GetOptions ()
+    GetOptions () override
     {
         return &m_options;
     }
@@ -125,13 +121,12 @@ public:
         }
 
 
-        virtual
-        ~CommandOptions ()
+        ~CommandOptions () override
         {
         }
 
-        virtual Error
-        SetOptionValue (uint32_t option_idx, const char *option_arg)
+        Error
+        SetOptionValue (uint32_t option_idx, const char *option_arg) override
         {
             Error error;
             const int short_option = m_getopt_table[option_idx].val;
@@ -147,6 +142,7 @@ public:
             case 'p':  log_options |= LLDB_LOG_OPTION_PREPEND_PROC_AND_THREAD;break;
             case 'n':  log_options |= LLDB_LOG_OPTION_PREPEND_THREAD_NAME;    break;
             case 'S':  log_options |= LLDB_LOG_OPTION_BACKTRACE;              break;
+            case 'a':  log_options |= LLDB_LOG_OPTION_APPEND;                 break;
             default:
                 error.SetErrorStringWithFormat ("unrecognized option '%c'", short_option);
                 break;
@@ -156,14 +152,14 @@ public:
         }
 
         void
-        OptionParsingStarting ()
+        OptionParsingStarting () override
         {
             log_file.Clear();
             log_options = 0;
         }
 
         const OptionDefinition*
-        GetDefinitions ()
+        GetDefinitions () override
         {
             return g_option_table;
         }
@@ -179,9 +175,9 @@ public:
     };
 
 protected:
-    virtual bool
+    bool
     DoExecute (Args& args,
-             CommandReturnObject &result)
+             CommandReturnObject &result) override
     {
         if (args.GetArgumentCount() < 2)
         {
@@ -215,16 +211,17 @@ protected:
 OptionDefinition
 CommandObjectLogEnable::CommandOptions::g_option_table[] =
 {
-{ LLDB_OPT_SET_1, false, "file",       'f', OptionParser::eRequiredArgument, NULL, 0, eArgTypeFilename,   "Set the destination file to log to."},
-{ LLDB_OPT_SET_1, false, "threadsafe", 't', OptionParser::eNoArgument,       NULL, 0, eArgTypeNone,        "Enable thread safe logging to avoid interweaved log lines." },
-{ LLDB_OPT_SET_1, false, "verbose",    'v', OptionParser::eNoArgument,       NULL, 0, eArgTypeNone,       "Enable verbose logging." },
-{ LLDB_OPT_SET_1, false, "debug",      'g', OptionParser::eNoArgument,       NULL, 0, eArgTypeNone,       "Enable debug logging." },
-{ LLDB_OPT_SET_1, false, "sequence",   's', OptionParser::eNoArgument,       NULL, 0, eArgTypeNone,       "Prepend all log lines with an increasing integer sequence id." },
-{ LLDB_OPT_SET_1, false, "timestamp",  'T', OptionParser::eNoArgument,       NULL, 0, eArgTypeNone,       "Prepend all log lines with a timestamp." },
-{ LLDB_OPT_SET_1, false, "pid-tid",    'p', OptionParser::eNoArgument,       NULL, 0, eArgTypeNone,       "Prepend all log lines with the process and thread ID that generates the log line." },
-{ LLDB_OPT_SET_1, false, "thread-name",'n', OptionParser::eNoArgument,       NULL, 0, eArgTypeNone,       "Prepend all log lines with the thread name for the thread that generates the log line." },
-{ LLDB_OPT_SET_1, false, "stack",      'S', OptionParser::eNoArgument,       NULL, 0, eArgTypeNone,       "Append a stack backtrace to each log line." },
-{ 0, false, NULL,                       0,  0,                 NULL, 0, eArgTypeNone,       NULL }
+{ LLDB_OPT_SET_1, false, "file",       'f', OptionParser::eRequiredArgument, NULL, NULL, 0, eArgTypeFilename,   "Set the destination file to log to."},
+{ LLDB_OPT_SET_1, false, "threadsafe", 't', OptionParser::eNoArgument,       NULL, NULL, 0, eArgTypeNone,        "Enable thread safe logging to avoid interweaved log lines." },
+{ LLDB_OPT_SET_1, false, "verbose",    'v', OptionParser::eNoArgument,       NULL, NULL, 0, eArgTypeNone,       "Enable verbose logging." },
+{ LLDB_OPT_SET_1, false, "debug",      'g', OptionParser::eNoArgument,       NULL, NULL, 0, eArgTypeNone,       "Enable debug logging." },
+{ LLDB_OPT_SET_1, false, "sequence",   's', OptionParser::eNoArgument,       NULL, NULL, 0, eArgTypeNone,       "Prepend all log lines with an increasing integer sequence id." },
+{ LLDB_OPT_SET_1, false, "timestamp",  'T', OptionParser::eNoArgument,       NULL, NULL, 0, eArgTypeNone,       "Prepend all log lines with a timestamp." },
+{ LLDB_OPT_SET_1, false, "pid-tid",    'p', OptionParser::eNoArgument,       NULL, NULL, 0, eArgTypeNone,       "Prepend all log lines with the process and thread ID that generates the log line." },
+{ LLDB_OPT_SET_1, false, "thread-name",'n', OptionParser::eNoArgument,       NULL, NULL, 0, eArgTypeNone,       "Prepend all log lines with the thread name for the thread that generates the log line." },
+{ LLDB_OPT_SET_1, false, "stack",      'S', OptionParser::eNoArgument,       NULL, NULL, 0, eArgTypeNone,       "Append a stack backtrace to each log line." },
+{ LLDB_OPT_SET_1, false, "append",     'a', OptionParser::eNoArgument,       NULL, NULL, 0, eArgTypeNone,       "Append to the log file instead of overwriting." },
+{ 0, false, NULL,                       0,  0,                 NULL, NULL, 0, eArgTypeNone,       NULL }
 };
 
 class CommandObjectLogDisable : public CommandObjectParsed
@@ -261,15 +258,14 @@ public:
         m_arguments.push_back (arg2);
     }
 
-    virtual
-    ~CommandObjectLogDisable()
+    ~CommandObjectLogDisable() override
     {
     }
 
 protected:
-    virtual bool
+    bool
     DoExecute (Args& args,
-             CommandReturnObject &result)
+             CommandReturnObject &result) override
     {
         const size_t argc = args.GetArgumentCount();
         if (argc == 0)
@@ -333,15 +329,14 @@ public:
         m_arguments.push_back (arg);
     }
 
-    virtual
-    ~CommandObjectLogList()
+    ~CommandObjectLogList() override
     {
     }
 
 protected:
-    virtual bool
+    bool
     DoExecute (Args& args,
-             CommandReturnObject &result)
+             CommandReturnObject &result) override
     {
         const size_t argc = args.GetArgumentCount();
         if (argc == 0)
@@ -397,15 +392,14 @@ public:
     {
     }
 
-    virtual
-    ~CommandObjectLogTimer()
+    ~CommandObjectLogTimer() override
     {
     }
 
 protected:
-    virtual bool
+    bool
     DoExecute (Args& args,
-             CommandReturnObject &result)
+             CommandReturnObject &result) override
     {
         const size_t argc = args.GetArgumentCount();
         result.SetStatus(eReturnStatusFailed);
@@ -444,7 +438,7 @@ protected:
             if (strcasecmp(sub_command, "enable") == 0)
             {
                 bool success;
-                uint32_t depth = Args::StringToUInt32(args.GetArgumentAtIndex(1), 0, 0, &success);
+                uint32_t depth = StringConvert::ToUInt32(args.GetArgumentAtIndex(1), 0, 0, &success);
                 if (success)
                 {
                     Timer::SetDisplayDepth (depth);

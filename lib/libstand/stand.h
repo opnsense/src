@@ -124,6 +124,7 @@ extern struct fs_ops bzipfs_fsops;
 extern struct fs_ops dosfs_fsops;
 extern struct fs_ops ext2fs_fsops;
 extern struct fs_ops splitfs_fsops;
+extern struct fs_ops pkgfs_fsops;
 
 /* where values for lseek(2) */
 #define	SEEK_SET	0	/* set file offset to offset */
@@ -137,8 +138,8 @@ struct devsw {
     const char	dv_name[8];
     int		dv_type;		/* opaque type constant, arch-dependant */
     int		(*dv_init)(void);	/* early probe call */
-    int		(*dv_strategy)(void *devdata, int rw, daddr_t blk, size_t size,
-			       char *buf, size_t *rsize);
+    int		(*dv_strategy)(void *devdata, int rw, daddr_t blk,
+			size_t offset, size_t size, char *buf, size_t *rsize);
     int		(*dv_open)(struct open_file *f, ...);
     int		(*dv_close)(struct open_file *f);
     int		(*dv_ioctl)(struct open_file *f, u_long cmd, void *data);
@@ -152,6 +153,24 @@ struct devsw {
 extern struct devsw netdev;
 
 extern int errno;
+
+/*
+ * Generic device specifier; architecture-dependent
+ * versions may be larger, but should be allowed to
+ * overlap.
+ */
+struct devdesc
+{
+    struct devsw	*d_dev;
+    int			d_type;
+#define DEVT_NONE	0
+#define DEVT_DISK	1
+#define DEVT_NET	2
+#define DEVT_CD		3
+#define DEVT_ZFS	4
+    int			d_unit;
+    void		*d_opendata;
+};
 
 struct open_file {
     int			f_flags;	/* see F_* below */
@@ -334,11 +353,6 @@ static __inline quad_t qmin(quad_t a, quad_t b) { return (a < b ? a : b); }
 static __inline u_long ulmax(u_long a, u_long b) { return (a > b ? a : b); }
 static __inline u_long ulmin(u_long a, u_long b) { return (a < b ? a : b); }
 
-/* swaps (undocumented, useful?) */
-#ifdef __i386__
-extern u_int32_t	bswap32(u_int32_t x);
-extern u_int64_t	bswap64(u_int64_t x);
-#endif
 
 /* null functions for device/filesystem switches (undocumented) */
 extern int	nodev(void);
@@ -365,6 +379,7 @@ extern int		devopen(struct open_file *, const char *, const char **);
 extern int		devclose(struct open_file *f);
 extern void		panic(const char *, ...) __dead2 __printflike(1, 2);
 extern struct fs_ops	*file_system[];
+extern struct fs_ops	*exclusive_file_system;
 extern struct devsw	*devsw[];
 
 /*

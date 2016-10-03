@@ -1,6 +1,5 @@
 # $FreeBSD$
 
-TESTSDIR=		${TESTSBASE}/lib/libc/rpc
 SRCS.xdr_test=		${RPCSRC:.x=_xdr.c} t_xdr.c ${RPCSRC:.x=.h} \
 			h_testbits.h
 
@@ -19,8 +18,7 @@ h_testbits_xdr.c: ${RPCSRC} h_testbits.h
 CLEANFILES+=	${RPCSRC:.x=.h} ${RPCSRC:.x=.c} h_testbits_xdr.c
 CFLAGS+=	-I${.OBJDIR}
 
-LDADD+=		-lrpcsvc -lutil
-DPADD+=		${LIBRPCSVC} ${LIBUTIL}
+LIBADD+=	rpcsvc util
 
 .include "../Makefile.netbsd-tests"
 

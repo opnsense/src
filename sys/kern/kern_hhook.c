@@ -101,7 +101,8 @@ hhook_run_hooks(struct hhook_head *hhh, void *ctx_data, struct osd *hosd)
 
 	HHH_RLOCK(hhh, &rmpt);
 	STAILQ_FOREACH(hhk, &hhh->hhh_hooks, hhk_next) {
-		if (hhk->hhk_helper->h_flags & HELPER_NEEDS_OSD) {
+		if (hhk->hhk_helper != NULL &&
+		    hhk->hhk_helper->h_flags & HELPER_NEEDS_OSD) {
 			hdata = osd_get(OSD_KHELP, hosd, hhk->hhk_helper->h_id);
 			if (hdata == NULL)
 				continue;
@@ -509,7 +510,7 @@ hhook_vnet_uninit(const void *unused __unused)
 /*
  * When a vnet is created and being initialised, init the V_hhook_vhead_list.
  */
-VNET_SYSINIT(hhook_vnet_init, SI_SUB_MBUF, SI_ORDER_FIRST,
+VNET_SYSINIT(hhook_vnet_init, SI_SUB_INIT_IF, SI_ORDER_FIRST,
     hhook_vnet_init, NULL);
 
 /*
@@ -517,5 +518,5 @@ VNET_SYSINIT(hhook_vnet_init, SI_SUB_MBUF, SI_ORDER_FIRST,
  * points to clean up on vnet tear down, but in case the KPI is misused,
  * provide a function to clean up and free memory for a vnet being destroyed.
  */
-VNET_SYSUNINIT(hhook_vnet_uninit, SI_SUB_MBUF, SI_ORDER_ANY,
+VNET_SYSUNINIT(hhook_vnet_uninit, SI_SUB_INIT_IF, SI_ORDER_FIRST,
     hhook_vnet_uninit, NULL);

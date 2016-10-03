@@ -43,7 +43,6 @@ CFLAGS+=	-DHAVE_CONFIG_H \
 		-I${LZMALIBDIR} \
 		-I${XZDIR}/common
 
-DPADD=	${LIBLZMA} ${LIBPTHREAD}
-LDADD=	-llzma -lpthread
+LIBADD=	lzma
 
 .include <bsd.prog.mk>

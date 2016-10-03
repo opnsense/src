@@ -37,7 +37,7 @@ StreamString::Flush ()
 size_t
 StreamString::Write (const void *s, size_t length)
 {
-    m_packet.append ((char *)s, length);
+    m_packet.append (reinterpret_cast<const char *>(s), length);
     return length;
 }
 
@@ -63,6 +63,22 @@ size_t
 StreamString::GetSize () const
 {
     return m_packet.size();
+}
+
+size_t
+StreamString::GetSizeOfLastLine () const
+{
+    const size_t length = m_packet.size();
+    size_t last_line_begin_pos = m_packet.find_last_of("\r\n");
+    if (last_line_begin_pos == std::string::npos)
+    {
+        return length;
+    }
+    else
+    {
+        ++last_line_begin_pos;
+        return length - last_line_begin_pos;
+    }
 }
 
 std::string &

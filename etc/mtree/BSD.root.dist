@@ -30,9 +30,13 @@
         ..
         bluetooth
         ..
+        casper
+        ..
         defaults
         ..
         devd
+        ..
+        dma
         ..
         gss
         ..
@@ -76,6 +80,8 @@
         ..
     ..
     lib
+        casper
+        ..
         geom
         ..
     ..

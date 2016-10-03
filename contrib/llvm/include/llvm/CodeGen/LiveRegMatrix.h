@@ -25,7 +25,6 @@
 #define LLVM_CODEGEN_LIVEREGMATRIX_H
 
 #include "llvm/ADT/BitVector.h"
-#include "llvm/ADT/OwningPtr.h"
 #include "llvm/CodeGen/LiveIntervalUnion.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 
@@ -33,13 +32,11 @@ namespace llvm {
 
 class LiveInterval;
 class LiveIntervalAnalysis;
-class MachineRegisterInfo;
 class TargetRegisterInfo;
 class VirtRegMap;
 
 class LiveRegMatrix : public MachineFunctionPass {
   const TargetRegisterInfo *TRI;
-  MachineRegisterInfo *MRI;
   LiveIntervals *LIS;
   VirtRegMap *VRM;
 
@@ -51,7 +48,7 @@ class LiveRegMatrix : public MachineFunctionPass {
   LiveIntervalUnion::Array Matrix;
 
   // Cached queries per register unit.
-  OwningArrayPtr<LiveIntervalUnion::Query> Queries;
+  std::unique_ptr<LiveIntervalUnion::Query[]> Queries;
 
   // Cached register mask interference info.
   unsigned RegMaskTag;
@@ -59,9 +56,9 @@ class LiveRegMatrix : public MachineFunctionPass {
   BitVector RegMaskUsable;
 
   // MachineFunctionPass boilerplate.
-  virtual void getAnalysisUsage(AnalysisUsage&) const;
-  virtual bool runOnMachineFunction(MachineFunction&);
-  virtual void releaseMemory();
+  void getAnalysisUsage(AnalysisUsage&) const override;
+  bool runOnMachineFunction(MachineFunction&) override;
+  void releaseMemory() override;
 public:
   static char ID;
   LiveRegMatrix();
@@ -114,6 +111,9 @@ public:
   /// Assuming that VirtReg was previously assigned to a PhysReg, this undoes
   /// the assignment and updates VirtRegMap accordingly.
   void unassign(LiveInterval &VirtReg);
+
+  /// Returns true if the given \p PhysReg has any live intervals assigned.
+  bool isPhysRegUsed(unsigned PhysReg) const;
 
   //===--------------------------------------------------------------------===//
   // Low-level interface.

@@ -52,6 +52,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/queue.h>
 #include <sys/types.h>
 #include <sys/systm.h>
+#include <sys/socket.h>
 #include <sys/kernel.h>
 #include <sys/bus.h>
 #include <sys/module.h>
@@ -64,6 +65,9 @@ __FBSDID("$FreeBSD$");
 #include <sys/callout.h>
 #include <sys/malloc.h>
 #include <sys/priv.h>
+
+#include <net/if.h>
+#include <net/if_var.h>
 
 #include <dev/usb/usb.h>
 #include <dev/usb/usbdi.h>
@@ -161,6 +165,21 @@ static driver_t udav_driver = {
 
 static devclass_t udav_devclass;
 
+static const STRUCT_USB_HOST_ID udav_devs[] = {
+	/* ShanTou DM9601 USB NIC */
+	{USB_VPI(USB_VENDOR_SHANTOU, USB_PRODUCT_SHANTOU_DM9601, 0)},
+	/* ShanTou ST268 USB NIC */
+	{USB_VPI(USB_VENDOR_SHANTOU, USB_PRODUCT_SHANTOU_ST268, 0)},
+	/* Corega USB-TXC */
+	{USB_VPI(USB_VENDOR_COREGA, USB_PRODUCT_COREGA_FETHER_USB_TXC, 0)},
+	/* ShanTou AMD8515 USB NIC */
+	{USB_VPI(USB_VENDOR_SHANTOU, USB_PRODUCT_SHANTOU_ADM8515, 0)},
+	/* Kontron AG USB Ethernet */
+	{USB_VPI(USB_VENDOR_KONTRON, USB_PRODUCT_KONTRON_DM9601, 0)},
+	{USB_VPI(USB_VENDOR_KONTRON, USB_PRODUCT_KONTRON_JP1082,
+	    UDAV_FLAG_NO_PHY)},
+};
+
 DRIVER_MODULE(udav, uhub, udav_driver, udav_devclass, NULL, 0);
 DRIVER_MODULE(miibus, udav, miibus_driver, miibus_devclass, 0, 0);
 MODULE_DEPEND(udav, uether, 1, 1, 1);
@@ -168,6 +187,7 @@ MODULE_DEPEND(udav, usb, 1, 1, 1);
 MODULE_DEPEND(udav, ether, 1, 1, 1);
 MODULE_DEPEND(udav, miibus, 1, 1, 1);
 MODULE_VERSION(udav, 1);
+USB_PNP_HOST_INFO(udav_devs);
 
 static const struct usb_ether_methods udav_ue_methods = {
 	.ue_attach_post = udav_attach_post,
@@ -194,7 +214,7 @@ static const struct usb_ether_methods udav_ue_methods_nophy = {
 static int udav_debug = 0;
 
 static SYSCTL_NODE(_hw_usb, OID_AUTO, udav, CTLFLAG_RW, 0, "USB udav");
-SYSCTL_INT(_hw_usb_udav, OID_AUTO, debug, CTLFLAG_RW, &udav_debug, 0,
+SYSCTL_INT(_hw_usb_udav, OID_AUTO, debug, CTLFLAG_RWTUN, &udav_debug, 0,
     "Debug level");
 #endif
 
@@ -203,21 +223,6 @@ SYSCTL_INT(_hw_usb_udav, OID_AUTO, debug, CTLFLAG_RW, &udav_debug, 0,
 
 #define	UDAV_CLRBIT(sc, reg, x)	\
 	udav_csr_write1(sc, reg, udav_csr_read1(sc, reg) & ~(x))
-
-static const STRUCT_USB_HOST_ID udav_devs[] = {
-	/* ShanTou DM9601 USB NIC */
-	{USB_VPI(USB_VENDOR_SHANTOU, USB_PRODUCT_SHANTOU_DM9601, 0)},
-	/* ShanTou ST268 USB NIC */
-	{USB_VPI(USB_VENDOR_SHANTOU, USB_PRODUCT_SHANTOU_ST268, 0)},
-	/* Corega USB-TXC */
-	{USB_VPI(USB_VENDOR_COREGA, USB_PRODUCT_COREGA_FETHER_USB_TXC, 0)},
-	/* ShanTou AMD8515 USB NIC */
-	{USB_VPI(USB_VENDOR_SHANTOU, USB_PRODUCT_SHANTOU_ADM8515, 0)},
-	/* Kontron AG USB Ethernet */
-	{USB_VPI(USB_VENDOR_KONTRON, USB_PRODUCT_KONTRON_DM9601, 0)},
-	{USB_VPI(USB_VENDOR_KONTRON, USB_PRODUCT_KONTRON_JP1082,
-	    UDAV_FLAG_NO_PHY)},
-};
 
 static void
 udav_attach_post(struct usb_ether *ue)
@@ -578,7 +583,7 @@ udav_bulk_write_callback(struct usb_xfer *xfer, usb_error_t error)
 	switch (USB_GET_STATE(xfer)) {
 	case USB_ST_TRANSFERRED:
 		DPRINTFN(11, "transfer complete\n");
-		ifp->if_opackets++;
+		if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
 
 		/* FALLTHROUGH */
 	case USB_ST_SETUP:
@@ -634,7 +639,7 @@ tr_setup:
 		DPRINTFN(11, "transfer error, %s\n",
 		    usbd_errstr(error));
 
-		ifp->if_oerrors++;
+		if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 
 		if (error != USB_ERR_CANCELLED) {
 			/* try to clear stall first */
@@ -662,7 +667,7 @@ udav_bulk_read_callback(struct usb_xfer *xfer, usb_error_t error)
 	case USB_ST_TRANSFERRED:
 
 		if (actlen < (int)(sizeof(stat) + ETHER_CRC_LEN)) {
-			ifp->if_ierrors++;
+			if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 			goto tr_setup;
 		}
 		pc = usbd_xfer_get_frame(xfer, 0);
@@ -672,11 +677,11 @@ udav_bulk_read_callback(struct usb_xfer *xfer, usb_error_t error)
 		len -= ETHER_CRC_LEN;
 
 		if (stat.rxstat & UDAV_RSR_LCS) {
-			ifp->if_collisions++;
+			if_inc_counter(ifp, IFCOUNTER_COLLISIONS, 1);
 			goto tr_setup;
 		}
 		if (stat.rxstat & UDAV_RSR_ERR) {
-			ifp->if_ierrors++;
+			if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 			goto tr_setup;
 		}
 		uether_rxbuf(ue, pc, sizeof(stat), len);

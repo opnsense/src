@@ -45,8 +45,9 @@
  * loadable kernel module ABI, and should not be changed across minor
  * releases.
  *
- * When adding a new privilege, remember to determine if it's appropriate for
- * use in jail, and update the privilege switch in kern_jail.c as necessary.
+ * When adding a new privilege, remember to determine if it's appropriate
+ * for use in jail, and update the privilege switch in prison_priv_check()
+ * in kern_jail.c as necessary.
  */
 
 /*
@@ -133,7 +134,7 @@
 #define	PRIV_JAIL_REMOVE	112	/* Remove a jail. */
 
 /*
- * Kernel environment priveleges.
+ * Kernel environment privileges.
  */
 #define	PRIV_KENV_SET		120	/* Set kernel env. variables. */
 #define	PRIV_KENV_UNSET		121	/* Unset kernel env. variables. */
@@ -341,6 +342,7 @@
 #define	PRIV_NET_SETIFDESCR	418	/* Set interface description. */
 #define	PRIV_NET_SETIFFIB	419	/* Set interface fib. */
 #define	PRIV_NET_VXLAN		420	/* Administer vxlan. */
+#define	PRIV_NET_SETVLANPCP	421	/* Set VLAN priority. */
 
 /*
  * 802.11-related privileges.
@@ -349,9 +351,9 @@
 #define	PRIV_NET80211_MANAGE	441	/* Administer 802.11. */
 
 /*
- * AppleTalk privileges.
+ * Placeholder for AppleTalk privileges, not supported anymore.
  */
-#define	PRIV_NETATALK_RESERVEDPORT	450	/* Bind low port number. */
+#define	_PRIV_NETATALK_RESERVEDPORT	450	/* Bind low port number. */
 
 /*
  * ATM privileges.
@@ -392,12 +394,13 @@
 #define	PRIV_NETINET_REUSEPORT	504	/* Allow [rapid] port/address reuse. */
 #define	PRIV_NETINET_SETHDROPTS	505	/* Set certain IPv4/6 header options. */
 #define	PRIV_NETINET_BINDANY	506	/* Allow bind to any address. */
+#define	PRIV_NETINET_HASHKEY	507	/* Get and set hash keys for IPv4/6. */
 
 /*
- * IPX/SPX privileges.
+ * Placeholders for IPX/SPX privileges, not supported any more.
  */
-#define	PRIV_NETIPX_RESERVEDPORT	520	/* Bind low port number. */
-#define	PRIV_NETIPX_RAW		521	/* Open netipx raw socket. */
+#define	_PRIV_NETIPX_RESERVEDPORT	520	/* Bind low port number. */
+#define	_PRIV_NETIPX_RAW		521	/* Open netipx raw socket. */
 
 /*
  * NCP privileges.

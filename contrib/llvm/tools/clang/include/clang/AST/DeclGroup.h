@@ -15,6 +15,7 @@
 #define LLVM_CLANG_AST_DECLGROUP_H
 
 #include "llvm/Support/DataTypes.h"
+#include "llvm/Support/TrailingObjects.h"
 #include <cassert>
 
 namespace clang {
@@ -24,13 +25,9 @@ class Decl;
 class DeclGroup;
 class DeclGroupIterator;
 
-class DeclGroup {
+class DeclGroup final : private llvm::TrailingObjects<DeclGroup, Decl *> {
   // FIXME: Include a TypeSpecifier object.
-  union {
-    unsigned NumDecls;
-
-    Decl *Aligner;
-  };
+  unsigned NumDecls;
 
 private:
   DeclGroup() : NumDecls(0) {}
@@ -43,13 +40,15 @@ public:
 
   Decl*& operator[](unsigned i) {
     assert (i < NumDecls && "Out-of-bounds access.");
-    return ((Decl**) (this+1))[i];
+    return getTrailingObjects<Decl *>()[i];
   }
 
   Decl* const& operator[](unsigned i) const {
     assert (i < NumDecls && "Out-of-bounds access.");
-    return ((Decl* const*) (this+1))[i];
+    return getTrailingObjects<Decl *>()[i];
   }
+
+  friend TrailingObjects;
 };
 
 class DeclGroupRef {
@@ -63,7 +62,7 @@ class DeclGroupRef {
   }
 
 public:
-  DeclGroupRef() : D(0) {}
+  DeclGroupRef() : D(nullptr) {}
 
   explicit DeclGroupRef(Decl* d) : D(d) {}
   explicit DeclGroupRef(DeclGroup* dg)
@@ -80,7 +79,7 @@ public:
   typedef Decl** iterator;
   typedef Decl* const * const_iterator;
 
-  bool isNull() const { return D == 0; }
+  bool isNull() const { return D == nullptr; }
   bool isSingleDecl() const { return getKind() == SingleDeclKind; }
   bool isDeclGroup() const { return getKind() == DeclGroupKind; }
 
@@ -102,26 +101,26 @@ public:
 
   iterator begin() {
     if (isSingleDecl())
-      return D ? &D : 0;
+      return D ? &D : nullptr;
     return &getDeclGroup()[0];
   }
 
   iterator end() {
     if (isSingleDecl())
-      return D ? &D+1 : 0;
+      return D ? &D+1 : nullptr;
     DeclGroup &G = getDeclGroup();
     return &G[0] + G.size();
   }
 
   const_iterator begin() const {
     if (isSingleDecl())
-      return D ? &D : 0;
+      return D ? &D : nullptr;
     return &getDeclGroup()[0];
   }
 
   const_iterator end() const {
     if (isSingleDecl())
-      return D ? &D+1 : 0;
+      return D ? &D+1 : nullptr;
     const DeclGroup &G = getDeclGroup();
     return &G[0] + G.size();
   }

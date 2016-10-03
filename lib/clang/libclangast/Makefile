@@ -34,23 +34,27 @@ SRCS=	APValue.cpp \
 	ExprCXX.cpp \
 	ExprClassification.cpp \
 	ExprConstant.cpp \
+	ExprObjC.cpp \
 	ExternalASTSource.cpp \
 	InheritViz.cpp \
 	ItaniumCXXABI.cpp \
 	ItaniumMangle.cpp \
 	Mangle.cpp \
-	MangleNumberingContext.cpp \
 	MicrosoftCXXABI.cpp \
 	MicrosoftMangle.cpp \
 	NSAPI.cpp \
 	NestedNameSpecifier.cpp \
+	OpenMPClause.cpp \
 	ParentMap.cpp \
 	RawCommentList.cpp \
 	RecordLayout.cpp \
 	RecordLayoutBuilder.cpp \
 	SelectorLocationsKind.cpp \
 	Stmt.cpp \
+	StmtCXX.cpp \
 	StmtIterator.cpp \
+	StmtObjC.cpp \
+	StmtOpenMP.cpp \
 	StmtPrinter.cpp \
 	StmtProfile.cpp \
 	StmtViz.cpp \
@@ -65,6 +69,7 @@ SRCS=	APValue.cpp \
 TGHDRS=	AttrDump \
 	AttrImpl \
 	AttrList \
+	AttrVisitor \
 	Attrs \
 	CommentCommandInfo \
 	CommentCommandList \
@@ -76,6 +81,7 @@ TGHDRS=	AttrDump \
 	DiagnosticASTKinds \
 	DiagnosticCommentKinds \
 	DiagnosticCommonKinds \
+	DiagnosticFrontendKinds \
 	DiagnosticSemaKinds \
 	StmtNodes
 

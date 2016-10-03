@@ -29,6 +29,7 @@ namespace clang {
   class DeclarationNameExtra;
   class IdentifierInfo;
   class MultiKeywordSelector;
+  enum OverloadedOperatorKind : int;
   class QualType;
   class Type;
   class TypeSourceInfo;
@@ -58,6 +59,7 @@ public:
     CXXLiteralOperatorName,
     CXXUsingDirective
   };
+  static const unsigned NumNameKinds = CXXUsingDirective + 1;
 
 private:
   /// StoredNameKind - The kind of name that is actually stored in the
@@ -116,20 +118,20 @@ private:
     NameKind Kind = getNameKind();
     if (Kind >= CXXConstructorName && Kind <= CXXConversionFunctionName)
       return reinterpret_cast<CXXSpecialName *>(Ptr & ~PtrMask);
-    return 0;
+    return nullptr;
   }
 
   /// getAsCXXOperatorIdName
   CXXOperatorIdName *getAsCXXOperatorIdName() const {
     if (getNameKind() == CXXOperatorName)
       return reinterpret_cast<CXXOperatorIdName *>(Ptr & ~PtrMask);
-    return 0;
+    return nullptr;
   }
 
   CXXLiteralOperatorIdName *getAsCXXLiteralOperatorIdName() const {
     if (getNameKind() == CXXLiteralOperatorName)
       return reinterpret_cast<CXXLiteralOperatorIdName *>(Ptr & ~PtrMask);
-    return 0;
+    return nullptr;
   }
 
   // Construct a declaration name from the name of a C++ constructor,
@@ -182,7 +184,7 @@ public:
 
   // operator bool() - Evaluates true when this declaration name is
   // non-empty.
-  LLVM_EXPLICIT operator bool() const {
+  explicit operator bool() const {
     return ((Ptr & PtrMask) != 0) ||
            (reinterpret_cast<IdentifierInfo *>(Ptr & ~PtrMask));
   }
@@ -221,7 +223,7 @@ public:
   IdentifierInfo *getAsIdentifierInfo() const {
     if (isIdentifier())
       return reinterpret_cast<IdentifierInfo *>(Ptr);
-    return 0;
+    return nullptr;
   }
 
   /// getAsOpaqueInteger - Get the representation of this declaration
@@ -342,8 +344,8 @@ class DeclarationNameTable {
   CXXOperatorIdName *CXXOperatorNames; // Operator names
   void *CXXLiteralOperatorNames; // Actually a CXXOperatorIdName*
 
-  DeclarationNameTable(const DeclarationNameTable&) LLVM_DELETED_FUNCTION;
-  void operator=(const DeclarationNameTable&) LLVM_DELETED_FUNCTION;
+  DeclarationNameTable(const DeclarationNameTable&) = delete;
+  void operator=(const DeclarationNameTable&) = delete;
 
 public:
   DeclarationNameTable(const ASTContext &C);
@@ -393,7 +395,7 @@ struct DeclarationNameLoc {
   // Locations (if any) for the tilde (destructor) or operator keyword
   // (conversion) are stored elsewhere.
   struct NT {
-    TypeSourceInfo* TInfo;
+    TypeSourceInfo *TInfo;
   };
 
   // The location (if any) of the operator keyword is stored elsewhere.

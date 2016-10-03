@@ -33,7 +33,6 @@
 #include "opt_ddb.h"
 
 #include <machine/asmacros.h>
-#include <machine/intr_machdep.h>
 #include <machine/pmap.h>
 
 #include "assym.s"
@@ -65,17 +64,10 @@ END(bzero)
 /* Address: %rdi */
 ENTRY(pagezero)
 	PUSH_FRAME_POINTER
-	movq	$-PAGE_SIZE,%rdx
-	subq	%rdx,%rdi
+	movq	$PAGE_SIZE/8,%rcx
 	xorl	%eax,%eax
-1:
-	movnti	%rax,(%rdi,%rdx)
-	movnti	%rax,8(%rdi,%rdx)
-	movnti	%rax,16(%rdi,%rdx)
-	movnti	%rax,24(%rdi,%rdx)
-	addq	$32,%rdx
-	jne	1b
-	sfence
+	rep
+	stosq
 	POP_FRAME_POINTER
 	ret
 END(pagezero)
@@ -152,6 +144,7 @@ END(bcopy)
  */
 ENTRY(memcpy)
 	PUSH_FRAME_POINTER
+	movq	%rdi,%rax
 	movq	%rdx,%rcx
 	shrq	$3,%rcx				/* copy by 64-bit words */
 	cld					/* copy forwards */

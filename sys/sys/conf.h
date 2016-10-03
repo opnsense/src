@@ -106,24 +106,6 @@ struct clonedevs;
 struct vm_object;
 struct vnode;
 
-/*
- * Note: d_thread_t is provided as a transition aid for those drivers
- * that treat struct proc/struct thread as an opaque data type and
- * exist in substantially the same form in both 4.x and 5.x.  Writers
- * of drivers that dips into the d_thread_t structure should use
- * struct thread or struct proc as appropriate for the version of the
- * OS they are using.  It is provided in lieu of each device driver
- * inventing its own way of doing this.  While it does violate style(9)
- * in a number of ways, this violation is deemed to be less
- * important than the benefits that a uniform API between releases
- * gives.
- *
- * Users of struct thread/struct proc that aren't device drivers should
- * not use d_thread_t.
- */
-
-typedef struct thread d_thread_t;
-
 typedef int d_open_t(struct cdev *dev, int oflags, int devtype, struct thread *td);
 typedef int d_fdopen_t(struct cdev *dev, int oflags, struct thread *td, struct file *fp);
 typedef int d_close_t(struct cdev *dev, int fflag, int devtype, struct thread *td);
@@ -156,7 +138,7 @@ typedef int dumper_t(
 #define	D_TAPE	0x0001
 #define	D_DISK	0x0002
 #define	D_TTY	0x0004
-#define	D_MEM	0x0008
+#define	D_MEM	0x0008	/* /dev/(k)mem */
 
 #ifdef _KERNEL
 
@@ -280,8 +262,6 @@ void	dev_depends(struct cdev *_pdev, struct cdev *_cdev);
 void	dev_ref(struct cdev *dev);
 void	dev_refl(struct cdev *dev);
 void	dev_rel(struct cdev *dev);
-void	dev_strategy(struct cdev *dev, struct buf *bp);
-void	dev_strategy_csw(struct cdev *dev, struct cdevsw *csw, struct buf *bp);
 struct cdev *make_dev(struct cdevsw *_devsw, int _unit, uid_t _uid, gid_t _gid,
 		int _perms, const char *_fmt, ...) __printflike(6, 7);
 struct cdev *make_dev_cred(struct cdevsw *_devsw, int _unit,
@@ -319,7 +299,6 @@ typedef void d_priv_dtor_t(void *data);
 int	devfs_get_cdevpriv(void **datap);
 int	devfs_set_cdevpriv(void *priv, d_priv_dtor_t *dtr);
 void	devfs_clear_cdevpriv(void);
-void	devfs_fpdrop(struct file *fp);	/* XXX This is not public KPI */
 
 ino_t	devfs_alloc_cdp_inode(void);
 void	devfs_free_cdp_inode(ino_t ino);
@@ -335,6 +314,7 @@ void	devfs_free_cdp_inode(ino_t ino);
 #define		GID_OPERATOR	5
 #define		GID_BIN		7
 #define		GID_GAMES	13
+#define		GID_VIDEO	44
 #define		GID_DIALER	68
 #define		GID_NOBODY	65534
 
@@ -348,16 +328,18 @@ EVENTHANDLER_DECLARE(dev_clone, dev_clone_fn);
 
 struct dumperinfo {
 	dumper_t *dumper;	/* Dumping function. */
-	void    *priv;		/* Private parts. */
-	u_int   blocksize;	/* Size of block in bytes. */
+	void	*priv;		/* Private parts. */
+	u_int	blocksize;	/* Size of block in bytes. */
 	u_int	maxiosize;	/* Max size allowed for an individual I/O */
-	off_t   mediaoffset;	/* Initial offset in bytes. */
-	off_t   mediasize;	/* Space available in bytes. */
+	off_t	mediaoffset;	/* Initial offset in bytes. */
+	off_t	mediasize;	/* Space available in bytes. */
+	void	*blockbuf;	/* Buffer for padding shorter dump blocks */
 };
 
 int set_dumper(struct dumperinfo *, const char *_devname, struct thread *td);
 int dump_write(struct dumperinfo *, void *, vm_offset_t, off_t, size_t);
-void dumpsys(struct dumperinfo *);
+int dump_write_pad(struct dumperinfo *, void *, vm_offset_t, off_t, size_t,
+    size_t *);
 int doadump(boolean_t);
 extern int dumping;		/* system is dumping */
 

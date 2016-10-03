@@ -293,7 +293,7 @@ struct em_int_delay_info {
 
 /* Our adapter structure */
 struct adapter {
-	struct ifnet	*ifp;
+	if_t		ifp;
 	struct e1000_hw	hw;
 
 	/* FreeBSD operating-system-specific structures. */

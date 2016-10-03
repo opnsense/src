@@ -16,10 +16,11 @@
 #ifndef LLVM_MC_MCSYMBOLIZER_H
 #define LLVM_MC_MCSYMBOLIZER_H
 
-#include "llvm/ADT/OwningPtr.h"
 #include "llvm/MC/MCRelocationInfo.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/DataTypes.h"
+#include <cassert>
+#include <memory>
 
 namespace llvm {
 
@@ -37,16 +38,19 @@ class raw_ostream;
 /// operands are actually symbolizable, and in what way. I don't think this
 /// information exists right now.
 class MCSymbolizer {
-  MCSymbolizer(const MCSymbolizer &) LLVM_DELETED_FUNCTION;
-  void operator=(const MCSymbolizer &) LLVM_DELETED_FUNCTION;
+  MCSymbolizer(const MCSymbolizer &) = delete;
+  void operator=(const MCSymbolizer &) = delete;
 
 protected:
   MCContext &Ctx;
-  OwningPtr<MCRelocationInfo> RelInfo;
+  std::unique_ptr<MCRelocationInfo> RelInfo;
 
 public:
   /// \brief Construct an MCSymbolizer, taking ownership of \p RelInfo.
-  MCSymbolizer(MCContext &Ctx, OwningPtr<MCRelocationInfo> &RelInfo);
+  MCSymbolizer(MCContext &Ctx, std::unique_ptr<MCRelocationInfo> RelInfo)
+    : Ctx(Ctx), RelInfo(std::move(RelInfo)) {
+  }
+
   virtual ~MCSymbolizer();
 
   /// \brief Try to add a symbolic operand instead of \p Value to the MCInst.
@@ -55,14 +59,14 @@ public:
   /// represent this immediate in a more understandable way, for instance as a
   /// symbol or an offset from a symbol. Relocations can also be used to enrich
   /// the symbolic expression.
-  /// @param Inst      - The MCInst where to insert the symbolic operand.
-  /// @param cStream   - Stream to print comments and annotations on.
-  /// @param Value     - Operand value, pc-adjusted by the caller if necessary.
-  /// @param Address   - Load address of the instruction.
-  /// @param IsBranch  - Is the instruction a branch?
-  /// @param Offset    - Byte offset of the operand inside the inst.
-  /// @param InstSize  - Size of the instruction in bytes.
-  /// @return Whether a symbolic operand was added.
+  /// \param Inst      - The MCInst where to insert the symbolic operand.
+  /// \param cStream   - Stream to print comments and annotations on.
+  /// \param Value     - Operand value, pc-adjusted by the caller if necessary.
+  /// \param Address   - Load address of the instruction.
+  /// \param IsBranch  - Is the instruction a branch?
+  /// \param Offset    - Byte offset of the operand inside the inst.
+  /// \param InstSize  - Size of the instruction in bytes.
+  /// \return Whether a symbolic operand was added.
   virtual bool tryAddingSymbolicOperand(MCInst &Inst, raw_ostream &cStream,
                                         int64_t Value, uint64_t Address,
                                         bool IsBranch, uint64_t Offset,

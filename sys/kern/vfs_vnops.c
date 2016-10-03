@@ -43,9 +43,12 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#include "opt_hwpmc_hooks.h"
+
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/disk.h>
+#include <sys/fail.h>
 #include <sys/fcntl.h>
 #include <sys/file.h>
 #include <sys/kdb.h>
@@ -54,6 +57,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/proc.h>
 #include <sys/limits.h>
 #include <sys/lock.h>
+#include <sys/mman.h>
 #include <sys/mount.h>
 #include <sys/mutex.h>
 #include <sys/namei.h>
@@ -69,6 +73,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/conf.h>
 #include <sys/syslog.h>
 #include <sys/unistd.h>
+#include <sys/user.h>
 
 #include <security/audit/audit.h>
 #include <security/mac/mac_framework.h>
@@ -79,6 +84,11 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_map.h>
 #include <vm/vm_object.h>
 #include <vm/vm_page.h>
+#include <vm/vnode_pager.h>
+
+#ifdef HWPMC_HOOKS
+#include <sys/pmckern.h>
+#endif
 
 static fo_rdwr_t	vn_read;
 static fo_rdwr_t	vn_write;
@@ -89,6 +99,7 @@ static fo_poll_t	vn_poll;
 static fo_kqfilter_t	vn_kqfilter;
 static fo_stat_t	vn_statfile;
 static fo_close_t	vn_closefile;
+static fo_mmap_t	vn_mmap;
 
 struct 	fileops vnops = {
 	.fo_read = vn_io_fault,
@@ -103,6 +114,8 @@ struct 	fileops vnops = {
 	.fo_chown = vn_chown,
 	.fo_sendfile = vn_sendfile,
 	.fo_seek = vn_seek,
+	.fo_fill_kinfo = vn_fill_kinfo,
+	.fo_mmap = vn_mmap,
 	.fo_flags = DFLAG_PASSABLE | DFLAG_SEEKABLE
 };
 
@@ -286,10 +299,9 @@ int
 vn_open_vnode(struct vnode *vp, int fmode, struct ucred *cred,
     struct thread *td, struct file *fp)
 {
-	struct mount *mp;
 	accmode_t accmode;
 	struct flock lf;
-	int error, have_flock, lock_flags, type;
+	int error, lock_flags, type;
 
 	if (vp->v_type == VLNK)
 		return (EMLINK);
@@ -310,9 +322,15 @@ vn_open_vnode(struct vnode *vp, int fmode, struct ucred *cred,
 	if ((fmode & O_APPEND) && (fmode & FWRITE))
 		accmode |= VAPPEND;
 #ifdef MAC
+	if (fmode & O_CREAT)
+		accmode |= VCREAT;
+	if (fmode & O_VERIFY)
+		accmode |= VVERIFY;
 	error = mac_vnode_check_open(cred, vp, accmode);
 	if (error)
 		return (error);
+
+	accmode &= ~(VCREAT | VVERIFY);
 #endif
 	if ((fmode & O_CREAT) == 0) {
 		if (accmode & VWRITE) {
@@ -346,10 +364,12 @@ vn_open_vnode(struct vnode *vp, int fmode, struct ucred *cred,
 		if ((fmode & FNONBLOCK) == 0)
 			type |= F_WAIT;
 		error = VOP_ADVLOCK(vp, (caddr_t)fp, F_SETLK, &lf, type);
-		have_flock = (error == 0);
+		if (error == 0)
+			fp->f_flag |= FHASLOCK;
 		vn_lock(vp, lock_flags | LK_RETRY);
 		if (error == 0 && vp->v_iflag & VI_DOOMED)
 			error = ENOENT;
+
 		/*
 		 * Another thread might have used this vnode as an
 		 * executable while the vnode lock was dropped.
@@ -358,34 +378,24 @@ vn_open_vnode(struct vnode *vp, int fmode, struct ucred *cred,
 		 */
 		if (error == 0 && accmode & VWRITE)
 			error = vn_writechk(vp);
-		if (error) {
-			VOP_UNLOCK(vp, 0);
-			if (have_flock) {
-				lf.l_whence = SEEK_SET;
-				lf.l_start = 0;
-				lf.l_len = 0;
-				lf.l_type = F_UNLCK;
-				(void) VOP_ADVLOCK(vp, fp, F_UNLCK, &lf,
-				    F_FLOCK);
+
+		if (error != 0) {
+			fp->f_flag |= FOPENFAILED;
+			fp->f_vnode = vp;
+			if (fp->f_ops == &badfileops) {
+				fp->f_type = DTYPE_VNODE;
+				fp->f_ops = &vnops;
 			}
-			vn_start_write(vp, &mp, V_WAIT);
-			vn_lock(vp, lock_flags | LK_RETRY);
-			(void)VOP_CLOSE(vp, fmode, cred, td);
-			vn_finished_write(mp);
-			/* Prevent second close from fdrop()->vn_close(). */
-			if (fp != NULL)
-				fp->f_ops= &badfileops;
-			return (error);
+			vref(vp);
 		}
-		fp->f_flag |= FHASLOCK;
 	}
-	if (fmode & FWRITE) {
+	if (error == 0 && fmode & FWRITE) {
 		VOP_ADD_WRITECOUNT(vp, 1);
 		CTR3(KTR_VFS, "%s: vp %p v_writecount increased to %d",
 		    __func__, vp, vp->v_writecount);
 	}
 	ASSERT_VOP_LOCKED(vp, "vn_open_vnode");
-	return (0);
+	return (error);
 }
 
 /*
@@ -430,7 +440,8 @@ vn_close(vp, flags, file_cred, td)
 
 	vn_start_write(vp, &mp, V_WAIT);
 	vn_lock(vp, lock_flags | LK_RETRY);
-	if (flags & FWRITE) {
+	AUDIT_ARG_VNODE1(vp);
+	if ((flags & (FWRITE | FOPENFAILED)) == FWRITE) {
 		VNASSERT(vp->v_writecount > 0, vp, 
 		    ("vn_close: negative writecount"));
 		VOP_ADD_WRITECOUNT(vp, -1);
@@ -758,10 +769,9 @@ vn_read(fp, uio, active_cred, flags, td)
 	struct thread *td;
 {
 	struct vnode *vp;
-	struct mtx *mtxp;
+	off_t orig_offset;
 	int error, ioflag;
 	int advice;
-	off_t offset, start, end;
 
 	KASSERT(uio->uio_td == td, ("uio_td %p is not td %p",
 	    uio->uio_td, td));
@@ -785,7 +795,7 @@ vn_read(fp, uio, active_cred, flags, td)
 		/* Disable read-ahead for random I/O. */
 		break;
 	}
-	offset = uio->uio_offset;
+	orig_offset = uio->uio_offset;
 
 #ifdef MAC
 	error = mac_vnode_check_read(active_cred, fp->f_cred, vp);
@@ -795,39 +805,14 @@ vn_read(fp, uio, active_cred, flags, td)
 	fp->f_nextoff = uio->uio_offset;
 	VOP_UNLOCK(vp, 0);
 	if (error == 0 && advice == POSIX_FADV_NOREUSE &&
-	    offset != uio->uio_offset) {
+	    orig_offset != uio->uio_offset)
 		/*
-		 * Use POSIX_FADV_DONTNEED to flush clean pages and
-		 * buffers for the backing file after a
-		 * POSIX_FADV_NOREUSE read(2).  To optimize the common
-		 * case of using POSIX_FADV_NOREUSE with sequential
-		 * access, track the previous implicit DONTNEED
-		 * request and grow this request to include the
-		 * current read(2) in addition to the previous
-		 * DONTNEED.  With purely sequential access this will
-		 * cause the DONTNEED requests to continously grow to
-		 * cover all of the previously read regions of the
-		 * file.  This allows filesystem blocks that are
-		 * accessed by multiple calls to read(2) to be flushed
-		 * once the last read(2) finishes.
+		 * Use POSIX_FADV_DONTNEED to flush pages and buffers
+		 * for the backing file after a POSIX_FADV_NOREUSE
+		 * read(2).
 		 */
-		start = offset;
-		end = uio->uio_offset - 1;
-		mtxp = mtx_pool_find(mtxpool_sleep, fp);
-		mtx_lock(mtxp);
-		if (fp->f_advice != NULL &&
-		    fp->f_advice->fa_advice == POSIX_FADV_NOREUSE) {
-			if (start != 0 && fp->f_advice->fa_prevend + 1 == start)
-				start = fp->f_advice->fa_prevstart;
-			else if (fp->f_advice->fa_prevstart != 0 &&
-			    fp->f_advice->fa_prevstart == end + 1)
-				end = fp->f_advice->fa_prevend;
-			fp->f_advice->fa_prevstart = start;
-			fp->f_advice->fa_prevend = end;
-		}
-		mtx_unlock(mtxp);
-		error = VOP_ADVISE(vp, start, end, POSIX_FADV_DONTNEED);
-	}
+		error = VOP_ADVISE(vp, orig_offset, uio->uio_offset - 1,
+		    POSIX_FADV_DONTNEED);
 	return (error);
 }
 
@@ -844,10 +829,9 @@ vn_write(fp, uio, active_cred, flags, td)
 {
 	struct vnode *vp;
 	struct mount *mp;
-	struct mtx *mtxp;
+	off_t orig_offset;
 	int error, ioflag, lock_flags;
 	int advice;
-	off_t offset, start, end;
 
 	KASSERT(uio->uio_td == td, ("uio_td %p is not td %p",
 	    uio->uio_td, td));
@@ -890,7 +874,7 @@ vn_write(fp, uio, active_cred, flags, td)
 		/* XXX: Is this correct? */
 		break;
 	}
-	offset = uio->uio_offset;
+	orig_offset = uio->uio_offset;
 
 #ifdef MAC
 	error = mac_vnode_check_write(active_cred, fp->f_cred, vp);
@@ -902,55 +886,14 @@ vn_write(fp, uio, active_cred, flags, td)
 	if (vp->v_type != VCHR)
 		vn_finished_write(mp);
 	if (error == 0 && advice == POSIX_FADV_NOREUSE &&
-	    offset != uio->uio_offset) {
+	    orig_offset != uio->uio_offset)
 		/*
-		 * Use POSIX_FADV_DONTNEED to flush clean pages and
-		 * buffers for the backing file after a
-		 * POSIX_FADV_NOREUSE write(2).  To optimize the
-		 * common case of using POSIX_FADV_NOREUSE with
-		 * sequential access, track the previous implicit
-		 * DONTNEED request and grow this request to include
-		 * the current write(2) in addition to the previous
-		 * DONTNEED.  With purely sequential access this will
-		 * cause the DONTNEED requests to continously grow to
-		 * cover all of the previously written regions of the
-		 * file.
-		 *
-		 * Note that the blocks just written are almost
-		 * certainly still dirty, so this only works when
-		 * VOP_ADVISE() calls from subsequent writes push out
-		 * the data written by this write(2) once the backing
-		 * buffers are clean.  However, as compared to forcing
-		 * IO_DIRECT, this gives much saner behavior.  Write
-		 * clustering is still allowed, and clean pages are
-		 * merely moved to the cache page queue rather than
-		 * outright thrown away.  This means a subsequent
-		 * read(2) can still avoid hitting the disk if the
-		 * pages have not been reclaimed.
-		 *
-		 * This does make POSIX_FADV_NOREUSE largely useless
-		 * with non-sequential access.  However, sequential
-		 * access is the more common use case and the flag is
-		 * merely advisory.
+		 * Use POSIX_FADV_DONTNEED to flush pages and buffers
+		 * for the backing file after a POSIX_FADV_NOREUSE
+		 * write(2).
 		 */
-		start = offset;
-		end = uio->uio_offset - 1;
-		mtxp = mtx_pool_find(mtxpool_sleep, fp);
-		mtx_lock(mtxp);
-		if (fp->f_advice != NULL &&
-		    fp->f_advice->fa_advice == POSIX_FADV_NOREUSE) {
-			if (start != 0 && fp->f_advice->fa_prevend + 1 == start)
-				start = fp->f_advice->fa_prevstart;
-			else if (fp->f_advice->fa_prevstart != 0 &&
-			    fp->f_advice->fa_prevstart == end + 1)
-				end = fp->f_advice->fa_prevend;
-			fp->f_advice->fa_prevstart = start;
-			fp->f_advice->fa_prevend = end;
-		}
-		mtx_unlock(mtxp);
-		error = VOP_ADVISE(vp, start, end, POSIX_FADV_DONTNEED);
-	}
-	
+		error = VOP_ADVISE(vp, orig_offset, uio->uio_offset - 1,
+		    POSIX_FADV_DONTNEED);
 unlock:
 	return (error);
 }
@@ -1372,6 +1315,8 @@ vn_truncate(struct file *fp, off_t length, struct ucred *active_cred,
 	if (error == 0) {
 		VATTR_NULL(&vattr);
 		vattr.va_size = length;
+		if ((fp->f_flag & O_FSYNC) != 0)
+			vattr.va_vaflags |= VA_SYNC;
 		error = VOP_SETATTR(vp, &vattr, fp->f_cred);
 	}
 out:
@@ -1418,6 +1363,7 @@ vn_stat(vp, sb, active_cred, file_cred, td)
 	int error;
 	u_short mode;
 
+	AUDIT_ARG_VNODE1(vp);
 #ifdef MAC
 	error = mac_vnode_check_stat(active_cred, file_cred, vp);
 	if (error)
@@ -1478,7 +1424,7 @@ vn_stat(vp, sb, active_cred, file_cred, td)
 		break;
 	default:
 		return (EBADF);
-	};
+	}
 	sb->st_mode = mode;
 	sb->st_nlink = vap->va_nlink;
 	sb->st_uid = vap->va_uid;
@@ -1567,6 +1513,7 @@ vn_poll(fp, events, active_cred, td)
 	vp = fp->f_vnode;
 #ifdef MAC
 	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
+	AUDIT_ARG_VNODE1(vp);
 	error = mac_vnode_check_poll(active_cred, fp->f_cred, vp);
 	VOP_UNLOCK(vp, 0);
 	if (!error)
@@ -1595,7 +1542,7 @@ _vn_lock(struct vnode *vp, int flags, char *file, int line)
 		error = VOP_LOCK1(vp, flags, file, line);
 		flags &= ~LK_INTERLOCK;	/* Interlock is always dropped. */
 		KASSERT((flags & LK_RETRY) == 0 || error == 0,
-		    ("LK_RETRY set with incompatible flags (0x%x) or an error occured (%d)",
+		    ("LK_RETRY set with incompatible flags (0x%x) or an error occurred (%d)",
 		    flags, error));
 		/*
 		 * Callers specify LK_RETRY if they wish to get dead vnodes.
@@ -1640,6 +1587,13 @@ vn_closefile(fp, td)
 		vrele(vp);
 	}
 	return (error);
+}
+
+static bool
+vn_suspendable(struct mount *mp)
+{
+
+	return (mp->mnt_op->vfs_susp_clean != NULL);
 }
 
 /*
@@ -1709,6 +1663,12 @@ vn_start_write(struct vnode *vp, struct mount **mpp, int flags)
 	if ((mp = *mpp) == NULL)
 		return (0);
 
+	if (!vn_suspendable(mp)) {
+		if (vp != NULL || (flags & V_MNTREF) != 0)
+			vfs_rel(mp);
+		return (0);
+	}
+
 	/*
 	 * VOP_GETWRITEMOUNT() returns with the mp refcount held through
 	 * a vfs_ref().
@@ -1755,6 +1715,12 @@ vn_start_secondary_write(struct vnode *vp, struct mount **mpp, int flags)
 	if ((mp = *mpp) == NULL)
 		return (0);
 
+	if (!vn_suspendable(mp)) {
+		if (vp != NULL || (flags & V_MNTREF) != 0)
+			vfs_rel(mp);
+		return (0);
+	}
+
 	/*
 	 * VOP_GETWRITEMOUNT() returns with the mp refcount held through
 	 * a vfs_ref().
@@ -1797,7 +1763,7 @@ void
 vn_finished_write(mp)
 	struct mount *mp;
 {
-	if (mp == NULL)
+	if (mp == NULL || !vn_suspendable(mp))
 		return;
 	MNT_ILOCK(mp);
 	MNT_REL(mp);
@@ -1820,7 +1786,7 @@ void
 vn_finished_secondary_write(mp)
 	struct mount *mp;
 {
-	if (mp == NULL)
+	if (mp == NULL || !vn_suspendable(mp))
 		return;
 	MNT_ILOCK(mp);
 	MNT_REL(mp);
@@ -1842,6 +1808,8 @@ int
 vfs_write_suspend(struct mount *mp, int flags)
 {
 	int error;
+
+	MPASS(vn_suspendable(mp));
 
 	MNT_ILOCK(mp);
 	if (mp->mnt_susp_owner == curthread) {
@@ -1884,6 +1852,8 @@ void
 vfs_write_resume(struct mount *mp, int flags)
 {
 
+	MPASS(vn_suspendable(mp));
+
 	MNT_ILOCK(mp);
 	if ((mp->mnt_kern_flag & MNTK_SUSPEND) != 0) {
 		KASSERT(mp->mnt_susp_owner == curthread, ("mnt_susp_owner"));
@@ -1917,6 +1887,7 @@ vfs_write_suspend_umnt(struct mount *mp)
 {
 	int error;
 
+	MPASS(vn_suspendable(mp));
 	KASSERT((curthread->td_pflags & TDP_IGNSUSP) == 0,
 	    ("vfs_write_suspend_umnt: recursed"));
 
@@ -2126,19 +2097,18 @@ vn_vget_ino_gen(struct vnode *vp, vn_get_ino_t alloc, void *alloc_arg,
 
 int
 vn_rlimit_fsize(const struct vnode *vp, const struct uio *uio,
-    const struct thread *td)
+    struct thread *td)
 {
 
 	if (vp->v_type != VREG || td == NULL)
 		return (0);
-	PROC_LOCK(td->td_proc);
 	if ((uoff_t)uio->uio_offset + uio->uio_resid >
-	    lim_cur(td->td_proc, RLIMIT_FSIZE)) {
+	    lim_cur(td, RLIMIT_FSIZE)) {
+		PROC_LOCK(td->td_proc);
 		kern_psignal(td->td_proc, SIGXFSZ);
 		PROC_UNLOCK(td->td_proc);
 		return (EFBIG);
 	}
-	PROC_UNLOCK(td->td_proc);
 	return (0);
 }
 
@@ -2300,7 +2270,7 @@ vn_seek(struct file *fp, off_t offset, int whence, struct thread *td)
 	if (error != 0)
 		goto drop;
 	VFS_KNOTE_UNLOCKED(vp, 0);
-	*(off_t *)(td->td_retval) = offset;
+	td->td_uretoff.tdu_off = offset;
 drop:
 	foffset_unlock(fp, offset, error != 0 ? FOF_NOUPDATE : 0);
 	return (error);
@@ -2326,5 +2296,177 @@ vn_utimes_perm(struct vnode *vp, struct vattr *vap, struct ucred *cred,
 	error = VOP_ACCESSX(vp, VWRITE_ATTRIBUTES, cred, td);
 	if (error != 0 && (vap->va_vaflags & VA_UTIMES_NULL) != 0)
 		error = VOP_ACCESS(vp, VWRITE, cred, td);
+	return (error);
+}
+
+int
+vn_fill_kinfo(struct file *fp, struct kinfo_file *kif, struct filedesc *fdp)
+{
+	struct vnode *vp;
+	int error;
+
+	if (fp->f_type == DTYPE_FIFO)
+		kif->kf_type = KF_TYPE_FIFO;
+	else
+		kif->kf_type = KF_TYPE_VNODE;
+	vp = fp->f_vnode;
+	vref(vp);
+	FILEDESC_SUNLOCK(fdp);
+	error = vn_fill_kinfo_vnode(vp, kif);
+	vrele(vp);
+	FILEDESC_SLOCK(fdp);
+	return (error);
+}
+
+static inline void
+vn_fill_junk(struct kinfo_file *kif)
+{
+	size_t len, olen;
+
+	/*
+	 * Simulate vn_fullpath returning changing values for a given
+	 * vp during e.g. coredump.
+	 */
+	len = (arc4random() % (sizeof(kif->kf_path) - 2)) + 1;
+	olen = strlen(kif->kf_path);
+	if (len < olen)
+		strcpy(&kif->kf_path[len - 1], "$");
+	else
+		for (; olen < len; olen++)
+			strcpy(&kif->kf_path[olen], "A");
+}
+
+int
+vn_fill_kinfo_vnode(struct vnode *vp, struct kinfo_file *kif)
+{
+	struct vattr va;
+	char *fullpath, *freepath;
+	int error;
+
+	kif->kf_vnode_type = vntype_to_kinfo(vp->v_type);
+	freepath = NULL;
+	fullpath = "-";
+	error = vn_fullpath(curthread, vp, &fullpath, &freepath);
+	if (error == 0) {
+		strlcpy(kif->kf_path, fullpath, sizeof(kif->kf_path));
+	}
+	if (freepath != NULL)
+		free(freepath, M_TEMP);
+
+	KFAIL_POINT_CODE(DEBUG_FP, fill_kinfo_vnode__random_path,
+		vn_fill_junk(kif);
+	);
+
+	/*
+	 * Retrieve vnode attributes.
+	 */
+	va.va_fsid = VNOVAL;
+	va.va_rdev = NODEV;
+	vn_lock(vp, LK_SHARED | LK_RETRY);
+	error = VOP_GETATTR(vp, &va, curthread->td_ucred);
+	VOP_UNLOCK(vp, 0);
+	if (error != 0)
+		return (error);
+	if (va.va_fsid != VNOVAL)
+		kif->kf_un.kf_file.kf_file_fsid = va.va_fsid;
+	else
+		kif->kf_un.kf_file.kf_file_fsid =
+		    vp->v_mount->mnt_stat.f_fsid.val[0];
+	kif->kf_un.kf_file.kf_file_fileid = va.va_fileid;
+	kif->kf_un.kf_file.kf_file_mode = MAKEIMODE(va.va_type, va.va_mode);
+	kif->kf_un.kf_file.kf_file_size = va.va_size;
+	kif->kf_un.kf_file.kf_file_rdev = va.va_rdev;
+	return (0);
+}
+
+int
+vn_mmap(struct file *fp, vm_map_t map, vm_offset_t *addr, vm_size_t size,
+    vm_prot_t prot, vm_prot_t cap_maxprot, int flags, vm_ooffset_t foff,
+    struct thread *td)
+{
+#ifdef HWPMC_HOOKS
+	struct pmckern_map_in pkm;
+#endif
+	struct mount *mp;
+	struct vnode *vp;
+	vm_object_t object;
+	vm_prot_t maxprot;
+	boolean_t writecounted;
+	int error;
+
+#if defined(COMPAT_FREEBSD7) || defined(COMPAT_FREEBSD6) || \
+    defined(COMPAT_FREEBSD5) || defined(COMPAT_FREEBSD4)
+	/*
+	 * POSIX shared-memory objects are defined to have
+	 * kernel persistence, and are not defined to support
+	 * read(2)/write(2) -- or even open(2).  Thus, we can
+	 * use MAP_ASYNC to trade on-disk coherence for speed.
+	 * The shm_open(3) library routine turns on the FPOSIXSHM
+	 * flag to request this behavior.
+	 */
+	if ((fp->f_flag & FPOSIXSHM) != 0)
+		flags |= MAP_NOSYNC;
+#endif
+	vp = fp->f_vnode;
+
+	/*
+	 * Ensure that file and memory protections are
+	 * compatible.  Note that we only worry about
+	 * writability if mapping is shared; in this case,
+	 * current and max prot are dictated by the open file.
+	 * XXX use the vnode instead?  Problem is: what
+	 * credentials do we use for determination? What if
+	 * proc does a setuid?
+	 */
+	mp = vp->v_mount;
+	if (mp != NULL && (mp->mnt_flag & MNT_NOEXEC) != 0)
+		maxprot = VM_PROT_NONE;
+	else
+		maxprot = VM_PROT_EXECUTE;
+	if ((fp->f_flag & FREAD) != 0)
+		maxprot |= VM_PROT_READ;
+	else if ((prot & VM_PROT_READ) != 0)
+		return (EACCES);
+
+	/*
+	 * If we are sharing potential changes via MAP_SHARED and we
+	 * are trying to get write permission although we opened it
+	 * without asking for it, bail out.
+	 */
+	if ((flags & MAP_SHARED) != 0) {
+		if ((fp->f_flag & FWRITE) != 0)
+			maxprot |= VM_PROT_WRITE;
+		else if ((prot & VM_PROT_WRITE) != 0)
+			return (EACCES);
+	} else {
+		maxprot |= VM_PROT_WRITE;
+		cap_maxprot |= VM_PROT_WRITE;
+	}
+	maxprot &= cap_maxprot;
+
+	writecounted = FALSE;
+	error = vm_mmap_vnode(td, size, prot, &maxprot, &flags, vp,
+	    &foff, &object, &writecounted);
+	if (error != 0)
+		return (error);
+	error = vm_mmap_object(map, addr, size, prot, maxprot, flags, object,
+	    foff, writecounted, td);
+	if (error != 0) {
+		/*
+		 * If this mapping was accounted for in the vnode's
+		 * writecount, then undo that now.
+		 */
+		if (writecounted)
+			vnode_pager_release_writecount(object, 0, size);
+		vm_object_deallocate(object);
+	}
+#ifdef HWPMC_HOOKS
+	/* Inform hwpmc(4) if an executable is being mapped. */
+	if (error == 0 && (prot & VM_PROT_EXECUTE) != 0) {
+		pkm.pm_file = vp;
+		pkm.pm_address = (uintptr_t) *addr;
+		PMC_CALL_HOOK(td, PMC_FN_MMAP, (void *) &pkm);
+	}
+#endif
 	return (error);
 }

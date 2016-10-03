@@ -70,10 +70,9 @@ protected:
 
 public:
   Option(const OptTable::Info *Info, const OptTable *Owner);
-  ~Option();
 
   bool isValid() const {
-    return Info != 0;
+    return Info != nullptr;
   }
 
   unsigned getID() const {
@@ -196,6 +195,7 @@ public:
   ///                start.
   Arg *accept(const ArgList &Args, unsigned &Index, unsigned ArgSize) const;
 
+  void print(raw_ostream &O) const;
   void dump() const;
 };
 

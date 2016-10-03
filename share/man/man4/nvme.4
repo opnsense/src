@@ -85,12 +85,12 @@ the format
 .Pa /dev/nvmeXnsY .
 Note that the NVM Express specification starts numbering namespaces at 1,
 not 0, and this driver follows that convention.
-.El
 .Sh CONFIGURATION
 By default,
 .Nm
 will create an I/O queue pair for each CPU, provided enough MSI-X vectors
-and NVMe queue pairs can be allocated.  If not enough vectors or queue
+and NVMe queue pairs can be allocated.
+If not enough vectors or queue
 pairs are available, nvme(4) will use a smaller number of queue pairs and
 assign multiple CPUs per queue pair.
 .Pp
@@ -171,14 +171,16 @@ and completion queues to the console.
 The
 .Nm
 driver first appeared in
-.Fx 9.2.
+.Fx 9.2 .
 .Sh AUTHORS
 .An -nosplit
 The
 .Nm
 driver was developed by Intel and originally written by
-.An Jim Harris Aq jimharris@FreeBSD.org ,
-with contributions from Joe Golio at EMC.
+.An Jim Harris Aq Mt jimharris@FreeBSD.org ,
+with contributions from
+.An Joe Golio
+at EMC.
 .Pp
 This man page was written by
-.An Jim Harris Aq jimharris@FreeBSD.org .
+.An Jim Harris Aq Mt jimharris@FreeBSD.org .

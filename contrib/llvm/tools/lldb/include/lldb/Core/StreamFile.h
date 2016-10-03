@@ -37,10 +37,13 @@ public:
 
     StreamFile (const char *path);
 
+    StreamFile (const char *path,
+                uint32_t options,
+                uint32_t permissions = lldb::eFilePermissionsFileDefault);
+
     StreamFile (FILE *fh, bool transfer_ownership);
 
-    virtual
-    ~StreamFile();
+    ~StreamFile() override;
 
     File &
     GetFile ()
@@ -54,11 +57,11 @@ public:
         return m_file;
     }
 
-    virtual void
-    Flush ();
+    void
+    Flush () override;
 
-    virtual size_t
-    Write (const void *s, size_t length);
+    size_t
+    Write (const void *s, size_t length) override;
 
 protected:
     //------------------------------------------------------------------
@@ -72,4 +75,4 @@ private:
 
 } // namespace lldb_private
 
-#endif  // liblldb_StreamFile_h_
+#endif // liblldb_StreamFile_h_

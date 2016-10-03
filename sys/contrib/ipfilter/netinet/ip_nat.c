@@ -133,8 +133,6 @@ static const char rcsid[] = "@(#)$FreeBSD$";
 #define	NBUMPSIDEDF(y,x)do { softn->ipf_nat_stats.ns_side[y].x++; \
 			     DT1(x, fr_info_t *, fin); } while (0)
 
-frentry_t	ipfnatblock;
-
 static ipftuneable_t ipf_nat_tuneables[] = {
 	/* nat */
 	{ { (void *)offsetof(ipf_nat_softc_t, ipf_nat_lock) },
@@ -275,9 +273,6 @@ static	void	ipf_nat_tabmove __P((ipf_nat_softc_t *, nat_t *));
 int
 ipf_nat_main_load()
 {
-	bzero((char *)&ipfnatblock, sizeof(ipfnatblock));
-	ipfnatblock.fr_flags = FR_BLOCK|FR_QUICK;
-	ipfnatblock.fr_ref = 1;
 
 	return 0;
 }
@@ -5221,7 +5216,7 @@ ipf_nat_out(fin, nat, natadd, nflags)
 		}
 
 		ip = MTOD(m, ip_t *);
-		ip->ip_id = htons(ipf_nextipid(fin));
+		ip_fillid(ip);
 		s2 = ntohs(ip->ip_id);
 
 		s1 = ip->ip_len;
@@ -5666,7 +5661,7 @@ ipf_nat_in(fin, nat, natadd, nflags)
 		}
 
 		ip = MTOD(m, ip_t *);
-		ip->ip_id = htons(ipf_nextipid(fin));
+		ip_fillid(ip);
 		sum1 = ntohs(ip->ip_len);
 		ip->ip_len = ntohs(ip->ip_len);
 		ip->ip_len += fin->fin_plen;
@@ -8075,13 +8070,13 @@ ipf_nat_rehash(softc, t, p)
 	 * the outbound lookup table and the hash chain length for each.
 	 */
 	KMALLOCS(newtab[0], nat_t **, newsize * sizeof(nat_t *));
-	if (newtab == NULL) {
+	if (newtab[0] == NULL) {
 		error = 60063;
 		goto badrehash;
 	}
 
 	KMALLOCS(newtab[1], nat_t **, newsize * sizeof(nat_t *));
-	if (newtab == NULL) {
+	if (newtab[1] == NULL) {
 		error = 60064;
 		goto badrehash;
 	}

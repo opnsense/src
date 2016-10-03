@@ -32,23 +32,25 @@
 #include <sys/bus.h>
 #include <sys/errno.h>
 #include <sys/kernel.h>
+#include <sys/lock.h>
+#include <sys/malloc.h>
 #include <sys/module.h>
+#include <sys/mutex.h>
 #include <sys/socket.h>
 #include <sys/sockio.h>
 #include <sys/sysctl.h>
 #include <sys/systm.h>
 
 #include <net/if.h>
-#include <net/if_arp.h>
+#include <net/if_var.h>
 #include <net/ethernet.h>
-#include <net/if_dl.h>
 #include <net/if_media.h>
 #include <net/if_types.h>
 
 #include <machine/bus.h>
 #include <dev/mii/mii.h>
 #include <dev/mii/miivar.h>
-#include <dev/etherswitch/mdio.h>
+#include <dev/mdio/mdio.h>
 
 #include <dev/etherswitch/etherswitch.h>
 

@@ -11,6 +11,7 @@
 . /etc/rc.subr
 
 name="jail"
+desc="Manage system jails"
 rcvar="jail_enable"
 
 start_cmd="jail_start"
@@ -33,7 +34,8 @@ need_dad_wait=
 #	set it to $param.  If not defined, $defval is used.
 #	When $num is [0-9]*, ${jail_$jv_$name$num} are looked up and
 #	$param is set by using +=.  $num=0 is optional (params may start at 1).
-#	When $num is YN or NY, the value is interpret as boolean.
+#	When $num is YN or NY, the value is interpreted as boolean.
+#	When $num is @, the value is interpreted as an array separted by IFS.
 extract_var()
 {
 	local i _jv _name _param _num _def _name1 _name2
@@ -77,6 +79,20 @@ extract_var()
 			fi
 			i=$(($i + 1))
 		done
+	;;
+	@)
+		_name1=jail_${_jv}_${_name}
+		_name2=jail_${_name}
+		eval _tmpargs=\"\${$_name1:-\${$_name2:-$_def}}\"
+		set -- $_tmpargs
+		if [ $# -gt 0 ]; then
+			echo -n "	$_param = "
+			while [ $# -gt 1 ]; do
+				echo -n "\"$1\", "
+				shift
+			done
+			echo "\"$1\";"
+		fi
 	;;
 	*)
 		_name1=jail_${_jv}_${_name}
@@ -190,7 +206,7 @@ parse_options()
 			    allow.raw_sockets NY YES
 		else
 			echo "	vnet;"
-			extract_var $_jv vnet_interface vnet.interface - ""
+			extract_var $_jv vnet_interface vnet.interface @ ""
 		fi
 
 		echo "	exec.clean;"
@@ -244,6 +260,8 @@ parse_options()
 
 		extract_var $_jv set_hostname_allow allow.set_hostname YN NO
 		extract_var $_jv sysvipc_allow allow.sysvipc YN NO
+		extract_var $_jv osreldate osreldate
+		extract_var $_jv osrelease osrelease
 		for _p in $_parameters; do
 			echo "	${_p%\;};"
 		done
@@ -422,7 +440,7 @@ jail_status()
 
 jail_start()
 {
-	local _j _jv _jid _jl _id _name
+	local _j _jv _jid _id _name
 
 	if [ $# = 0 ]; then
 		return
@@ -433,6 +451,9 @@ jail_start()
 		command=$jail_program
 		rc_flags=$jail_flags
 		command_args="-f $jail_conf -c"
+		if ! checkyesno jail_parallel_start; then
+			command_args="$command_args -p1"
+		fi
 		_tmp=`mktemp -t jail` || exit 3
 		if $command $rc_flags $command_args >> $_tmp 2>&1; then
 			$jail_jls jid name | while read _id _name; do
@@ -440,7 +461,7 @@ jail_start()
 				echo $_id > /var/run/jail_${_name}.id
 			done
 		else
-			tail -1 $_tmp
+			cat $_tmp
 		fi
 		rm -f $_tmp
 		echo '.'
@@ -452,30 +473,30 @@ jail_start()
 		# Start jails in parallel and then check jail id when
 		# jail_parallel_start is YES.
 		#
-		_jl=
 		for _j in $@; do
 			_j=$(echo $_j | tr /. _)
 			_jv=$(echo -n $_j | tr -c '[:alnum:]' _)
 			parse_options $_j $_jv || continue
 
-			_jl="$_jl $_j"
 			eval rc_flags=\${jail_${_jv}_flags:-$jail_flags}
 			eval command=\${jail_${_jv}_program:-$jail_program}
 			command_args="-i -f $_conf -c $_j"
-			$command $rc_flags $command_args \
-			    >/dev/null 2>&1 </dev/null &
+			(
+				_tmp=`mktemp -t jail_${_j}` || exit 3
+				if $command $rc_flags $command_args \
+				    >> $_tmp 2>&1 </dev/null; then
+					echo -n " ${_hostname:-${_j}}"
+					_jid=$($jail_jls -j $_j jid)
+					echo $_jid > /var/run/jail_${_j}.id
+				else
+					echo " cannot start jail " \
+					    "\"${_hostname:-${_j}}\": "
+					cat $_tmp
+				fi
+				rm -f $_tmp
+			) &
 		done
-		sleep 1
-		for _j in $_jl; do
-			echo -n " ${_hostname:-${_j}}"
-			if _jid=$($jail_jls -j $_j jid); then
-				echo "$_jid" > /var/run/jail_${_j}.id
-			else
-				rm -f /var/run/jail_${_j}.id
-				echo " cannot start jail " \
-				    "\"${_hostname:-${_j}}\": "
-			fi
-		done
+		wait
 	else
 		#
 		# Start jails one-by-one when jail_parallel_start is NO.
@@ -495,7 +516,6 @@ jail_start()
 				_jid=$($jail_jls -j $_j jid)
 				echo $_jid > /var/run/jail_${_j}.id
 			else
-				rm -f /var/run/jail_${_j}.id
 				echo " cannot start jail " \
 				    "\"${_hostname:-${_j}}\": "
 				cat $_tmp
@@ -519,12 +539,16 @@ jail_stop()
 		command=$jail_program
 		rc_flags=$jail_flags
 		command_args="-f $jail_conf -r"
-		$jail_jls name | while read _j; do
+		if checkyesno jail_reverse_stop; then
+			$jail_jls name | tail -r
+		else
+			$jail_jls name
+		fi | while read _j; do
 			echo -n " $_j"
 			_tmp=`mktemp -t jail` || exit 3
 			$command $rc_flags $command_args $_j >> $_tmp 2>&1
 			if $jail_jls -j $_j > /dev/null 2>&1; then
-				tail -1 $_tmp
+				cat $_tmp
 			else
 				rm -f /var/run/jail_${_j}.id
 			fi
@@ -534,6 +558,7 @@ jail_stop()
 		return
 	;;
 	esac
+	checkyesno jail_reverse_stop && set -- $(reverse_list $@)
 	for _j in $@; do
 		_j=$(echo $_j | tr /. _)
 		_jv=$(echo -n $_j | tr -c '[:alnum:]' _)
@@ -546,7 +571,7 @@ jail_stop()
 		_tmp=`mktemp -t jail` || exit 3
 		$command -q -f $_conf -r $_j >> $_tmp 2>&1
 		if $jail_jls -j $_j > /dev/null 2>&1; then
-			tail -1 $_tmp
+			cat $_tmp
 		else
 			rm -f /var/run/jail_${_j}.id
 		fi
@@ -561,7 +586,7 @@ jail_warn()
 	# To relieve confusion, show a warning message.
 	case $_confwarn in
 	1)	warn "Per-jail configuration via jail_* variables " \
-		    "is obsolete.  Please consider to migrate to $jail_conf."
+		    "is obsolete.  Please consider migrating to $jail_conf."
 	;;
 	esac
 }
@@ -569,5 +594,6 @@ jail_warn()
 load_rc_config $name
 case $# in
 1)	run_rc_command $@ ${jail_list:-_ALL} ;;
-*)	run_rc_command $@ ;;
+*)	jail_reverse_stop="no"
+	run_rc_command $@ ;;
 esac

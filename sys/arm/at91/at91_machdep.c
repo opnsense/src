@@ -36,12 +36,15 @@
  *
  * machdep.c
  *
- * Machine dependant functions for kernel setup
+ * Machine dependent functions for kernel setup
  *
  * This file needs a lot of work.
  *
  * Created      : 17/09/94
  */
+
+#include "opt_kstack_pages.h"
+#include "opt_platform.h"
 
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
@@ -68,6 +71,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/exec.h>
 #include <sys/kdb.h>
 #include <sys/msgbuf.h>
+#include <sys/devmap.h>
 #include <machine/physmem.h>
 #include <machine/reg.h>
 #include <machine/cpu.h>
@@ -78,7 +82,6 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_object.h>
 #include <vm/vm_page.h>
 #include <vm/vm_map.h>
-#include <machine/devmap.h>
 #include <machine/vmparam.h>
 #include <machine/pcb.h>
 #include <machine/undefined.h>
@@ -114,7 +117,7 @@ __FBSDID("$FreeBSD$");
 struct pv_addr kernel_pt_table[NUM_KERNEL_PTS];
 
 /* Static device mappings. */
-const struct arm_devmap_entry at91_devmap[] = {
+const struct devmap_entry at91_devmap[] = {
 	/*
 	 * Map the critical on-board devices. The interrupt vector at
 	 * 0xffff0000 makes it impossible to map them PA == VA, so we map all
@@ -125,8 +128,6 @@ const struct arm_devmap_entry at91_devmap[] = {
 		0xdff00000,
 		0xfff00000,
 		0x00100000,
-		VM_PROT_READ|VM_PROT_WRITE,
-		PTE_DEVICE,
 	},
 	/* There's a notion that we should do the rest of these lazily. */
 	/*
@@ -149,16 +150,12 @@ const struct arm_devmap_entry at91_devmap[] = {
 		AT91RM92_OHCI_VA_BASE,
 		AT91RM92_OHCI_BASE,
 		0x00100000,
-		VM_PROT_READ|VM_PROT_WRITE,
-		PTE_DEVICE,
 	},
 	{
 		/* CompactFlash controller. Portion of EBI CS4 1MB */
 		AT91RM92_CF_VA_BASE,
 		AT91RM92_CF_BASE,
 		0x00100000,
-		VM_PROT_READ|VM_PROT_WRITE,
-		PTE_DEVICE,
 	},
 	/*
 	 * The next two should be good for the 9260, 9261 and 9G20 since
@@ -169,16 +166,12 @@ const struct arm_devmap_entry at91_devmap[] = {
 		AT91SAM9G20_OHCI_VA_BASE,
 		AT91SAM9G20_OHCI_BASE,
 		0x00100000,
-		VM_PROT_READ|VM_PROT_WRITE,
-		PTE_DEVICE,
 	},
 	{
 		/* EBI CS3 256MB */
 		AT91SAM9G20_NAND_VA_BASE,
 		AT91SAM9G20_NAND_BASE,
 		AT91SAM9G20_NAND_SIZE,
-		VM_PROT_READ|VM_PROT_WRITE,
-		PTE_DEVICE,
 	},
 	/*
 	 * The next should be good for the 9G45.
@@ -188,20 +181,9 @@ const struct arm_devmap_entry at91_devmap[] = {
 		AT91SAM9G45_OHCI_VA_BASE,
 		AT91SAM9G45_OHCI_BASE,
 		0x00100000,
-		VM_PROT_READ|VM_PROT_WRITE,
-		PTE_DEVICE,
 	},
-	{ 0, 0, 0, 0, 0, }
+	{ 0, 0, 0, }
 };
-
-/* Physical and virtual addresses for some global pages */
-
-struct pv_addr systempage;
-struct pv_addr msgbufpv;
-struct pv_addr irqstack;
-struct pv_addr undstack;
-struct pv_addr abtstack;
-struct pv_addr kernelstack;
 
 #ifdef LINUX_BOOT_ABI
 extern int membanks;
@@ -424,7 +406,7 @@ at91_try_id(uint32_t dbgu_base)
 	return (1);
 }
 
-static void
+void
 at91_soc_id(void)
 {
 
@@ -443,6 +425,16 @@ board_init(void)
 	return -1;
 }
 #endif
+
+#ifndef FDT
+/* Physical and virtual addresses for some global pages */
+
+struct pv_addr msgbufpv;
+struct pv_addr kernelstack;
+struct pv_addr systempage;
+struct pv_addr irqstack;
+struct pv_addr abtstack;
+struct pv_addr undstack;
 
 void *
 initarm(struct arm_boot_params *abp)
@@ -506,7 +498,7 @@ initarm(struct arm_boot_params *abp)
 	valloc_pages(irqstack, IRQ_STACK_SIZE * MAXCPU);
 	valloc_pages(abtstack, ABT_STACK_SIZE * MAXCPU);
 	valloc_pages(undstack, UND_STACK_SIZE * MAXCPU);
-	valloc_pages(kernelstack, KSTACK_PAGES * MAXCPU);
+	valloc_pages(kernelstack, kstack_pages * MAXCPU);
 	valloc_pages(msgbufpv, round_page(msgbufsize) / PAGE_SIZE);
 
 	/*
@@ -523,9 +515,9 @@ initarm(struct arm_boot_params *abp)
 		pmap_link_l2pt(l1pagetable, KERNBASE + i * L1_S_SIZE,
 		    &kernel_pt_table[KERNEL_PT_KERN + i]);
 	pmap_map_chunk(l1pagetable, KERNBASE, PHYSADDR,
-	   (((uint32_t)lastaddr - KERNBASE) + PAGE_SIZE) & ~(PAGE_SIZE - 1),
-	    VM_PROT_READ|VM_PROT_WRITE, PTE_CACHE);
-	afterkern = round_page((lastaddr + L1_S_SIZE) & ~(L1_S_SIZE - 1));
+	   rounddown2(((uint32_t)lastaddr - KERNBASE) + PAGE_SIZE, PAGE_SIZE),
+	   VM_PROT_READ|VM_PROT_WRITE, PTE_CACHE);
+	afterkern = round_page(rounddown2(lastaddr + L1_S_SIZE, L1_S_SIZE));
 	for (i = 0; i < KERNEL_PT_AFKERNEL_NUM; i++) {
 		pmap_link_l2pt(l1pagetable, afterkern + i * L1_S_SIZE,
 		    &kernel_pt_table[KERNEL_PT_AFKERNEL + i]);
@@ -547,7 +539,7 @@ initarm(struct arm_boot_params *abp)
 	pmap_map_chunk(l1pagetable, undstack.pv_va, undstack.pv_pa,
 	    UND_STACK_SIZE * PAGE_SIZE, VM_PROT_READ|VM_PROT_WRITE, PTE_CACHE);
 	pmap_map_chunk(l1pagetable, kernelstack.pv_va, kernelstack.pv_pa,
-	    KSTACK_PAGES * PAGE_SIZE, VM_PROT_READ|VM_PROT_WRITE, PTE_CACHE);
+	    kstack_pages * PAGE_SIZE, VM_PROT_READ|VM_PROT_WRITE, PTE_CACHE);
 
 	pmap_map_chunk(l1pagetable, kernel_l1pt.pv_va, kernel_l1pt.pv_pa,
 	    L1_TABLE_SIZE, VM_PROT_READ|VM_PROT_WRITE, PTE_PAGETABLE);
@@ -560,9 +552,9 @@ initarm(struct arm_boot_params *abp)
 		    VM_PROT_READ|VM_PROT_WRITE, PTE_PAGETABLE);
 	}
 
-	arm_devmap_bootstrap(l1pagetable, at91_devmap);
+	devmap_bootstrap(l1pagetable, at91_devmap);
 	cpu_domains((DOMAIN_CLIENT << (PMAP_DOMAIN_KERNEL * 2)) | DOMAIN_CLIENT);
-	setttb(kernel_l1pt.pv_pa);
+	cpu_setttb(kernel_l1pt.pv_pa);
 	cpu_tlb_flushID();
 	cpu_domains(DOMAIN_CLIENT << (PMAP_DOMAIN_KERNEL * 2));
 
@@ -592,6 +584,10 @@ initarm(struct arm_boot_params *abp)
 		memsize = 16 * 1024 * 1024;
 	}
 
+	/* Enable MMU (set SCTLR), and do other cpu-specific setup. */
+	cpu_control(CPU_CONTROL_MMU_ENABLE, CPU_CONTROL_MMU_ENABLE);
+	cpu_setup();
+
 	/*
 	 * Pages were allocated during the secondary bootstrap for the
 	 * stacks for different CPU modes.
@@ -600,15 +596,12 @@ initarm(struct arm_boot_params *abp)
 	 * Since the ARM stacks use STMFD etc. we must set r13 to the top end
 	 * of the stack memory.
 	 */
-	cpu_control(CPU_CONTROL_MMU_ENABLE, CPU_CONTROL_MMU_ENABLE);
-	cpu_setup("");
-
 	set_stackptrs(0);
 
 	/*
 	 * We must now clean the cache again....
 	 * Cleaning may be done by reading new data to displace any
-	 * dirty data in the cache. This will have happened in setttb()
+	 * dirty data in the cache. This will have happened in cpu_setttb()
 	 * but since we are boot strapping the addresses used for the read
 	 * may have just been remapped and thus the cache could be out
 	 * of sync. A re-clean after the switch will cure this.
@@ -651,6 +644,7 @@ initarm(struct arm_boot_params *abp)
 	return ((void *)(kernelstack.pv_va + USPACE_SVC_STACK_TOP -
 	    sizeof(struct pcb)));
 }
+#endif
 
 /*
  * These functions are handled elsewhere, so make them nops here.

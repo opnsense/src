@@ -56,8 +56,6 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
-#include <sys/capsicum.h>
-
 #include "dhcpd.h"
 #include "privsep.h"
 
@@ -393,7 +391,7 @@ main(int argc, char *argv[])
 		if (path_dhclient_pidfile == NULL)
 			error("asprintf");
 	}
-	pidfile = pidfile_open(path_dhclient_pidfile, 0600, &otherpid);
+	pidfile = pidfile_open(path_dhclient_pidfile, 0644, &otherpid);
 	if (pidfile == NULL) {
 		if (errno == EEXIST)
 			error("dhclient already running, pid: %d.", otherpid);
@@ -1572,7 +1570,7 @@ make_discover(struct interface_info *ip, struct client_lease *lease)
 	}
 
 	/* set unique client identifier */
-	char client_ident[sizeof(struct hardware)];
+	char client_ident[sizeof(ip->hw_address.haddr) + 1];
 	if (!options[DHO_DHCP_CLIENT_IDENTIFIER]) {
 		int hwlen = (ip->hw_address.hlen < sizeof(client_ident)-1) ?
 				ip->hw_address.hlen : sizeof(client_ident)-1;

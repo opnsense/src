@@ -11,17 +11,21 @@
 //
 //===----------------------------------------------------------------------===//
 
-#define DEBUG_TYPE "asm-printer"
 #include "PPCInstPrinter.h"
 #include "MCTargetDesc/PPCMCTargetDesc.h"
 #include "MCTargetDesc/PPCPredicates.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstrInfo.h"
+#include "llvm/MC/MCRegisterInfo.h"
+#include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/MC/MCSymbol.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetOpcodes.h"
 using namespace llvm;
+
+#define DEBUG_TYPE "asm-printer"
 
 // FIXME: Once the integrated assembler supports full register names, tie this
 // to the verbose-asm setting.
@@ -29,14 +33,28 @@ static cl::opt<bool>
 FullRegNames("ppc-asm-full-reg-names", cl::Hidden, cl::init(false),
              cl::desc("Use full register names when printing assembly"));
 
+#define PRINT_ALIAS_INSTR
 #include "PPCGenAsmWriter.inc"
 
 void PPCInstPrinter::printRegName(raw_ostream &OS, unsigned RegNo) const {
-  OS << getRegisterName(RegNo);
+  const char *RegName = getRegisterName(RegNo);
+  if (RegName[0] == 'q' /* QPX */) {
+    // The system toolchain on the BG/Q does not understand QPX register names
+    // in .cfi_* directives, so print the name of the floating-point
+    // subregister instead.
+    std::string RN(RegName);
+
+    RN[0] = 'f';
+    OS << RN;
+
+    return;
+  }
+
+  OS << RegName;
 }
 
 void PPCInstPrinter::printInst(const MCInst *MI, raw_ostream &O,
-                               StringRef Annot) {
+                               StringRef Annot, const MCSubtargetInfo &STI) {
   // Check for slwi/srwi mnemonics.
   if (MI->getOpcode() == PPC::RLWINM) {
     unsigned char SH = MI->getOperand(2).getImm();
@@ -85,6 +103,38 @@ void PPCInstPrinter::printInst(const MCInst *MI, raw_ostream &O,
       return;
     }
   }
+
+  // dcbt[st] is printed manually here because:
+  //  1. The assembly syntax is different between embedded and server targets
+  //  2. We must print the short mnemonics for TH == 0 because the
+  //     embedded/server syntax default will not be stable across assemblers
+  //  The syntax for dcbt is:
+  //    dcbt ra, rb, th [server]
+  //    dcbt th, ra, rb [embedded]
+  //  where th can be omitted when it is 0. dcbtst is the same.
+  if (MI->getOpcode() == PPC::DCBT || MI->getOpcode() == PPC::DCBTST) {
+    unsigned char TH = MI->getOperand(0).getImm();
+    O << "\tdcbt";
+    if (MI->getOpcode() == PPC::DCBTST)
+      O << "st";
+    if (TH == 16)
+      O << "t";
+    O << " ";
+
+    bool IsBookE = STI.getFeatureBits()[PPC::FeatureBookE];
+    if (IsBookE && TH != 0 && TH != 16)
+      O << (unsigned int) TH << ", ";
+
+    printOperand(MI, 1, O);
+    O << ", ";
+    printOperand(MI, 2, O);
+
+    if (!IsBookE && TH != 0 && TH != 16)
+      O << ", " << (unsigned int) TH;
+
+    printAnnotation(O, Annot);
+    return;
+  }
   
   // For fast-isel, a COPY_TO_REGCLASS may survive this long.  This is
   // used when converting a 32-bit float to a 64-bit float as part of
@@ -96,8 +146,9 @@ void PPCInstPrinter::printInst(const MCInst *MI, raw_ostream &O,
   // precision).  FIXME: Is there a better solution?
   if (MI->getOpcode() == TargetOpcode::COPY_TO_REGCLASS)
     return;
-  
-  printInstruction(MI, O);
+
+  if (!printAliasInstr(MI, O))
+    printInstruction(MI, O);
   printAnnotation(O, Annot);
 }
 
@@ -149,6 +200,9 @@ void PPCInstPrinter::printPredicateOperand(const MCInst *MI, unsigned OpNo,
     case PPC::PRED_NU:
       O << "nu";
       return;
+    case PPC::PRED_BIT_SET:
+    case PPC::PRED_BIT_UNSET:
+      llvm_unreachable("Invalid use of bit predicate code");
     }
     llvm_unreachable("Invalid predicate code");
   }
@@ -184,6 +238,9 @@ void PPCInstPrinter::printPredicateOperand(const MCInst *MI, unsigned OpNo,
     case PPC::PRED_NU_PLUS:
       O << "+";
       return;
+    case PPC::PRED_BIT_SET:
+    case PPC::PRED_BIT_UNSET:
+      llvm_unreachable("Invalid use of bit predicate code");
     }
     llvm_unreachable("Invalid predicate code");
   }
@@ -191,6 +248,34 @@ void PPCInstPrinter::printPredicateOperand(const MCInst *MI, unsigned OpNo,
   assert(StringRef(Modifier) == "reg" &&
          "Need to specify 'cc', 'pm' or 'reg' as predicate op modifier!");
   printOperand(MI, OpNo+1, O);
+}
+
+void PPCInstPrinter::printU1ImmOperand(const MCInst *MI, unsigned OpNo,
+                                       raw_ostream &O) {
+  unsigned int Value = MI->getOperand(OpNo).getImm();
+  assert(Value <= 1 && "Invalid u1imm argument!");
+  O << (unsigned int)Value;
+}
+
+void PPCInstPrinter::printU2ImmOperand(const MCInst *MI, unsigned OpNo,
+                                       raw_ostream &O) {
+  unsigned int Value = MI->getOperand(OpNo).getImm();
+  assert(Value <= 3 && "Invalid u2imm argument!");
+  O << (unsigned int)Value;
+}
+
+void PPCInstPrinter::printU3ImmOperand(const MCInst *MI, unsigned OpNo,
+                                       raw_ostream &O) {
+  unsigned int Value = MI->getOperand(OpNo).getImm();
+  assert(Value <= 8 && "Invalid u3imm argument!");
+  O << (unsigned int)Value;
+}
+
+void PPCInstPrinter::printU4ImmOperand(const MCInst *MI, unsigned OpNo,
+                                       raw_ostream &O) {
+  unsigned int Value = MI->getOperand(OpNo).getImm();
+  assert(Value <= 15 && "Invalid u4imm argument!");
+  O << (unsigned int)Value;
 }
 
 void PPCInstPrinter::printS5ImmOperand(const MCInst *MI, unsigned OpNo,
@@ -212,6 +297,20 @@ void PPCInstPrinter::printU6ImmOperand(const MCInst *MI, unsigned OpNo,
   unsigned int Value = MI->getOperand(OpNo).getImm();
   assert(Value <= 63 && "Invalid u6imm argument!");
   O << (unsigned int)Value;
+}
+
+void PPCInstPrinter::printU10ImmOperand(const MCInst *MI, unsigned OpNo,
+                                        raw_ostream &O) {
+  unsigned short Value = MI->getOperand(OpNo).getImm();
+  assert(Value <= 1023 && "Invalid u10imm argument!");
+  O << (unsigned short)Value;
+}
+
+void PPCInstPrinter::printU12ImmOperand(const MCInst *MI, unsigned OpNo,
+                                        raw_ostream &O) {
+  unsigned short Value = MI->getOperand(OpNo).getImm();
+  assert(Value <= 4095 && "Invalid u12imm argument!");
+  O << (unsigned short)Value;
 }
 
 void PPCInstPrinter::printS16ImmOperand(const MCInst *MI, unsigned OpNo,
@@ -246,7 +345,7 @@ void PPCInstPrinter::printAbsBranchOperand(const MCInst *MI, unsigned OpNo,
   if (!MI->getOperand(OpNo).isImm())
     return printOperand(MI, OpNo, O);
 
-  O << (int)MI->getOperand(OpNo).getImm()*4;
+  O << SignExtend32<32>((unsigned)MI->getOperand(OpNo).getImm() << 2);
 }
 
 
@@ -294,10 +393,16 @@ void PPCInstPrinter::printMemRegReg(const MCInst *MI, unsigned OpNo,
 
 void PPCInstPrinter::printTLSCall(const MCInst *MI, unsigned OpNo,
                                   raw_ostream &O) {
-  printBranchOperand(MI, OpNo, O);
+  // On PPC64, VariantKind is VK_None, but on PPC32, it's VK_PLT, and it must
+  // come at the _end_ of the expression.
+  const MCOperand &Op = MI->getOperand(OpNo);
+  const MCSymbolRefExpr &refExp = cast<MCSymbolRefExpr>(*Op.getExpr());
+  O << refExp.getSymbol().getName();
   O << '(';
   printOperand(MI, OpNo+1, O);
   O << ')';
+  if (refExp.getKind() != MCSymbolRefExpr::VK_None)
+    O << '@' << MCSymbolRefExpr::getVariantKindName(refExp.getKind());
 }
 
 
@@ -310,7 +415,11 @@ static const char *stripRegisterPrefix(const char *RegName) {
   switch (RegName[0]) {
   case 'r':
   case 'f':
-  case 'v': return RegName + 1;
+  case 'q': // for QPX
+  case 'v':
+    if (RegName[1] == 's')
+      return RegName + 2;
+    return RegName + 1;
   case 'c': if (RegName[1] == 'r') return RegName + 2;
   }
   
@@ -336,6 +445,6 @@ void PPCInstPrinter::printOperand(const MCInst *MI, unsigned OpNo,
   }
   
   assert(Op.isExpr() && "unknown operand kind in printOperand");
-  O << *Op.getExpr();
+  Op.getExpr()->print(O, &MAI);
 }
 

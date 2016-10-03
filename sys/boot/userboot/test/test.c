@@ -36,6 +36,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -272,7 +273,7 @@ test_diskioctl(void *arg, int unit, u_long cmd, void *data)
 		break;
 	default:
 		return (ENOTTY);
-	};
+	}
 	return (0);
 }
 
@@ -292,6 +293,7 @@ test_copyin(void *arg, const void *from, uint64_t to, size_t size)
 	if (to + size > image_size)
 		size = image_size - to;
 	memcpy(&image[to], from, size);
+	return(0);
 }
 
 int
@@ -304,6 +306,7 @@ test_copyout(void *arg, uint64_t from, void *to, size_t size)
 	if (from + size > image_size)
 		size = image_size - from;
 	memcpy(to, &image[from], size);
+	return(0);
 }
 
 void
@@ -333,7 +336,7 @@ test_setgdt(void *arg, uint64_t v, size_t sz)
 void
 test_exec(void *arg, uint64_t pc)
 {
-	printf("Execute at 0x%llx\n", pc);
+	printf("Execute at 0x%"PRIu64"\n", pc);
 	test_exit(arg, 0);
 }
 
@@ -411,7 +414,7 @@ void
 usage()
 {
 
-	printf("usage: %s [-d <disk image path>] [-h <host filesystem path>\n");
+	printf("usage: [-b <userboot shared object>] [-d <disk image path>] [-h <host filesystem path>\n");
 	exit(1);
 }
 
@@ -422,9 +425,14 @@ main(int argc, char** argv)
 	void (*func)(struct loader_callbacks *, void *, int, int);
 	int opt;
 	char *disk_image = NULL;
+	const char *userboot_obj = "/boot/userboot.so";
 
-	while ((opt = getopt(argc, argv, "d:h:")) != -1) {
+	while ((opt = getopt(argc, argv, "b:d:h:")) != -1) {
 		switch (opt) {
+		case 'b':
+			userboot_obj = optarg;
+			break;
+
 		case 'd':
 			disk_image = optarg;
 			break;
@@ -438,8 +446,7 @@ main(int argc, char** argv)
 		}
 	}
 
-	h = dlopen("/boot/userboot.so",
-            RTLD_LOCAL);
+	h = dlopen(userboot_obj, RTLD_LOCAL);
 	if (!h) {
 		printf("%s\n", dlerror());
 		return (1);

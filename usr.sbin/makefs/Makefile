@@ -1,6 +1,6 @@
 #	$FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 PROG=	makefs
 
@@ -32,13 +32,7 @@ SRCS+=	pack_dev.c
 SRCS+=	ffs_tables.c
 
 CFLAGS+=	-I${.CURDIR}/../../lib/libnetbsd
-LIBNETBSDDIR=	${.OBJDIR}/../../lib/libnetbsd
-LIBNETBSD=	${LIBNETBSDDIR}/libnetbsd.a
-DPADD+=		${LIBNETBSD}
-LDADD+=		${LIBNETBSD}
-
-DPADD+=  ${LIBSBUF} ${LIBUTIL}
-LDADD+=  -lsbuf -lutil
+LIBADD=		netbsd util sbuf
 
 .if ${MK_TESTS} != "no"
 SUBDIR+=	tests

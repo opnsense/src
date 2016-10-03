@@ -26,7 +26,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd December 20 2011
+.Dd December 20, 2011
 .Dt PFSYNC 4
 .Os
 .Sh NAME
@@ -189,7 +189,6 @@ vhids should be set to something higher than
 the primary's.
 For example, if firewall B is the backup, its
 carp1 configuration would look like this:
-would look like this:
 .Bd -literal -offset indent
 ifconfig_sis1_alias0="inet 192.168.0.1/24 vhid 2 pass bar advskew 100"
 .Ed
@@ -200,6 +199,7 @@ The following must also be added to
 net.inet.carp.preempt=1
 .Ed
 .Sh SEE ALSO
+.Xr tcpdump 1 ,
 .Xr bpf 4 ,
 .Xr carp 4 ,
 .Xr enc 4 ,
@@ -211,8 +211,7 @@ net.inet.carp.preempt=1
 .Xr pf.conf 5 ,
 .Xr protocols 5 ,
 .Xr rc.conf 5 ,
-.Xr ifconfig 8 ,
-.Xr tcpdump 1
+.Xr ifconfig 8
 .Sh HISTORY
 The
 .Nm

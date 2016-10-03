@@ -3,8 +3,8 @@
  */
 
 /*
- * It'd be nice to have this automatically generated, but we don't
- * know to what version they will eventually belong, so for now
+ * It'd be nice to automatically generate the syscall symbols, but we
+ * don't know to what version they will eventually belong to, so for now
  * it has to be manual.
  */
 FBSD_1.0 {
@@ -34,9 +34,7 @@ FBSD_1.0 {
 	__setugid;
 	__syscall;
 	__sysctl;
-	_umtx_lock;
 	_umtx_op;
-	_umtx_unlock;
 	abort2;
 	accept;
 	access;
@@ -56,7 +54,6 @@ FBSD_1.0 {
 	bind;
 	chdir;
 	chflags;
-	__chk_fail;
 	chmod;
 	chown;
 	chroot;
@@ -201,9 +198,6 @@ FBSD_1.0 {
 	nstat;
 	ntp_adjtime;
 	ntp_gettime;
-	oaio_read;
-	oaio_write;
-	olio_listio;
 	open;
 	pathconf;
 	pipe;
@@ -281,8 +275,6 @@ FBSD_1.0 {
 	sigwaitinfo;
 	socket;
 	socketpair;
-	__stack_chk_fail;
-	__stack_chk_guard;
 	stat;
 	statfs;
 	swapoff;
@@ -400,6 +392,10 @@ FBSD_1.4 {
 	futimens;
 	ppoll;
 	utimensat;
+	numa_setaffinity;
+	numa_getaffinity;
+	sendmmsg;
+	recvmmsg;
 };
 
 FBSDprivate_1.0 {
@@ -457,12 +453,8 @@ FBSDprivate_1.0 {
 	__sys___syscall;
 	___sysctl;
 	__sys___sysctl;
-	__umtx_lock;
-	__sys__umtx_lock;
 	__umtx_op;
 	__sys__umtx_op;
-	__umtx_unlock;
-	__sys__umtx_unlock;
 	_abort2;
 	__sys_abort2;
 	_accept;
@@ -808,12 +800,6 @@ FBSDprivate_1.0 {
 	__sys_ntp_adjtime;
 	_ntp_gettime;
 	__sys_ntp_gettime;
-	_oaio_read;
-	__sys_oaio_read;
-	_oaio_write;
-	__sys_oaio_write;
-	_olio_listio;
-	__sys_olio_listio;
 	_open;
 	__sys_open;
 	_openat;

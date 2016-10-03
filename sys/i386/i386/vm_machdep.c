@@ -89,13 +89,10 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_map.h>
 #include <vm/vm_param.h>
 
-#ifdef XEN
-#include <xen/hypervisor.h>
-#endif
 #ifdef PC98
 #include <pc98/cbus/cbus.h>
 #else
-#include <x86/isa/isa.h>
+#include <isa/isareg.h>
 #endif
 
 #ifdef XBOX
@@ -114,6 +111,8 @@ _Static_assert(OFFSETOF_CURTHREAD == offsetof(struct pcpu, pc_curthread),
     "OFFSETOF_CURTHREAD does not correspond with offset of pc_curthread.");
 _Static_assert(OFFSETOF_CURPCB == offsetof(struct pcpu, pc_curpcb),
     "OFFSETOF_CURPCB does not correspond with offset of pc_curpcb.");
+_Static_assert(__OFFSETOF_MONITORBUF == offsetof(struct pcpu, pc_monitorbuf),
+    "__OFFSETOF_MONINORBUF does not correspond with offset of pc_monitorbuf.");
 
 static void	cpu_reset_real(void);
 #ifdef SMP
@@ -122,42 +121,11 @@ static u_int	cpu_reset_proxyid;
 static volatile u_int	cpu_reset_proxy_active;
 #endif
 
-static int nsfbufs;
-static int nsfbufspeak;
-static int nsfbufsused;
-
-SYSCTL_INT(_kern_ipc, OID_AUTO, nsfbufs, CTLFLAG_RDTUN, &nsfbufs, 0,
-    "Maximum number of sendfile(2) sf_bufs available");
-SYSCTL_INT(_kern_ipc, OID_AUTO, nsfbufspeak, CTLFLAG_RD, &nsfbufspeak, 0,
-    "Number of sendfile(2) sf_bufs at peak usage");
-SYSCTL_INT(_kern_ipc, OID_AUTO, nsfbufsused, CTLFLAG_RD, &nsfbufsused, 0,
-    "Number of sendfile(2) sf_bufs in use");
-
-static void	sf_buf_init(void *arg);
-SYSINIT(sock_sf, SI_SUB_MBUF, SI_ORDER_ANY, sf_buf_init, NULL);
-
-LIST_HEAD(sf_head, sf_buf);
-
-/*
- * A hash table of active sendfile(2) buffers
- */
-static struct sf_head *sf_buf_active;
-static u_long sf_buf_hashmask;
-
-#define	SF_BUF_HASH(m)	(((m) - vm_page_array) & sf_buf_hashmask)
-
-static TAILQ_HEAD(, sf_buf) sf_buf_freelist;
-static u_int	sf_buf_alloc_want;
-
-/*
- * A lock used to synchronize access to the hash table and free list
- */
-static struct mtx sf_buf_lock;
-
 union savefpu *
 get_pcb_user_save_td(struct thread *td)
 {
 	vm_offset_t p;
+
 	p = td->td_kstack + td->td_kstack_pages * PAGE_SIZE -
 	    roundup2(cpu_max_ext_state_size, XSAVE_AREA_ALIGN);
 	KASSERT((p % XSAVE_AREA_ALIGN) == 0, ("Unaligned pcb_user_save area"));
@@ -202,7 +170,6 @@ alloc_fpusave(int flags)
 #endif
 	return (res);
 }
-
 /*
  * Finish a fork operation, with process p2 nearly set up.
  * Copy and update the pcb, set up the stack so that the child
@@ -337,10 +304,8 @@ cpu_fork(td1, p2, td2, flags)
 
 	/* Setup to release spin count in fork_exit(). */
 	td2->td_md.md_spinlock_count = 1;
-	/*
-	 * XXX XEN need to check on PSL_USER is handled
-	 */
 	td2->td_md.md_saved_flags = PSL_KERNEL | PSL_I;
+
 	/*
 	 * Now, cpu_switch() can schedule the new process.
 	 * pcb_esp is loaded pointing to the cpu_switch() stack frame
@@ -359,10 +324,7 @@ cpu_fork(td1, p2, td2, flags)
  * This is needed to make kernel threads stay in kernel mode.
  */
 void
-cpu_set_fork_handler(td, func, arg)
-	struct thread *td;
-	void (*func)(void *);
-	void *arg;
+cpu_fork_kthread_handler(struct thread *td, void (*func)(void *), void *arg)
 {
 	/*
 	 * Note that the trap frame follows the args, so the function
@@ -486,27 +448,21 @@ cpu_set_syscall_retval(struct thread *td, int error)
 		break;
 
 	default:
-		if (td->td_proc->p_sysent->sv_errsize) {
-			if (error >= td->td_proc->p_sysent->sv_errsize)
-				error = -1;	/* XXX */
-			else
-				error = td->td_proc->p_sysent->sv_errtbl[error];
-		}
-		td->td_frame->tf_eax = error;
+		td->td_frame->tf_eax = SV_ABI_ERRNO(td->td_proc, error);
 		td->td_frame->tf_eflags |= PSL_C;
 		break;
 	}
 }
 
 /*
- * Initialize machine state (pcb and trap frame) for a new thread about to
- * upcall. Put enough state in the new thread's PCB to get it to go back 
- * userret(), where we can intercept it again to set the return (upcall)
- * Address and stack, along with those from upcals that are from other sources
- * such as those generated in thread_userret() itself.
+ * Initialize machine state, mostly pcb and trap frame for a new
+ * thread, about to return to userspace.  Put enough state in the new
+ * thread's PCB to get it to go back to the fork_return(), which
+ * finalizes the thread state and handles peculiarities of the first
+ * return to userspace for the new thread.
  */
 void
-cpu_set_upcall(struct thread *td, struct thread *td0)
+cpu_copy_thread(struct thread *td, struct thread *td0)
 {
 	struct pcb *pcb2;
 
@@ -568,13 +524,12 @@ cpu_set_upcall(struct thread *td, struct thread *td0)
 }
 
 /*
- * Set that machine state for performing an upcall that has to
- * be done in thread_userret() so that those upcalls generated
- * in thread_userret() itself can be done as well.
+ * Set that machine state for performing an upcall that starts
+ * the entry function with the given argument.
  */
 void
-cpu_set_upcall_kse(struct thread *td, void (*entry)(void *), void *arg,
-	stack_t *stack)
+cpu_set_upcall(struct thread *td, void (*entry)(void *), void *arg,
+    stack_t *stack)
 {
 
 	/* 
@@ -587,7 +542,7 @@ cpu_set_upcall_kse(struct thread *td, void (*entry)(void *), void *arg,
 	cpu_thread_clean(td);
 
 	/*
-	 * Set the trap frame to point at the beginning of the uts
+	 * Set the trap frame to point at the beginning of the entry
 	 * function.
 	 */
 	td->td_frame->tf_ebp = 0; 
@@ -595,10 +550,7 @@ cpu_set_upcall_kse(struct thread *td, void (*entry)(void *), void *arg,
 	    (((int)stack->ss_sp + stack->ss_size - 4) & ~0x0f) - 4;
 	td->td_frame->tf_eip = (int)entry;
 
-	/*
-	 * Pass the address of the mailbox for this kse to the uts
-	 * function as a parameter on the stack.
-	 */
+	/* Pass the argument to the entry point. */
 	suword((void *)(td->td_frame->tf_esp + sizeof(void *)),
 	    (int)arg);
 }
@@ -731,12 +683,6 @@ cpu_reset_real()
 #endif
 
 	disable_intr();
-#ifdef XEN
-	if (smp_processor_id() == 0)
-		HYPERVISOR_shutdown(SHUTDOWN_reboot);
-	else
-		HYPERVISOR_shutdown(SHUTDOWN_poweroff);
-#endif 
 #ifdef CPU_ELAN
 	if (elan_mmcr != NULL)
 		elan_mmcr->RESCFG = 1;
@@ -814,121 +760,12 @@ cpu_reset_real()
 }
 
 /*
- * Allocate a pool of sf_bufs (sendfile(2) or "super-fast" if you prefer. :-))
- */
-static void
-sf_buf_init(void *arg)
-{
-	struct sf_buf *sf_bufs;
-	vm_offset_t sf_base;
-	int i;
-
-	nsfbufs = NSFBUFS;
-	TUNABLE_INT_FETCH("kern.ipc.nsfbufs", &nsfbufs);
-
-	sf_buf_active = hashinit(nsfbufs, M_TEMP, &sf_buf_hashmask);
-	TAILQ_INIT(&sf_buf_freelist);
-	sf_base = kva_alloc(nsfbufs * PAGE_SIZE);
-	sf_bufs = malloc(nsfbufs * sizeof(struct sf_buf), M_TEMP,
-	    M_NOWAIT | M_ZERO);
-	for (i = 0; i < nsfbufs; i++) {
-		sf_bufs[i].kva = sf_base + i * PAGE_SIZE;
-		TAILQ_INSERT_TAIL(&sf_buf_freelist, &sf_bufs[i], free_entry);
-	}
-	sf_buf_alloc_want = 0;
-	mtx_init(&sf_buf_lock, "sf_buf", NULL, MTX_DEF);
-}
-
-/*
- * Invalidate the cache lines that may belong to the page, if
- * (possibly old) mapping of the page by sf buffer exists.  Returns
- * TRUE when mapping was found and cache invalidated.
- */
-boolean_t
-sf_buf_invalidate_cache(vm_page_t m)
-{
-	struct sf_head *hash_list;
-	struct sf_buf *sf;
-	boolean_t ret;
-
-	hash_list = &sf_buf_active[SF_BUF_HASH(m)];
-	ret = FALSE;
-	mtx_lock(&sf_buf_lock);
-	LIST_FOREACH(sf, hash_list, list_entry) {
-		if (sf->m == m) {
-			/*
-			 * Use pmap_qenter to update the pte for
-			 * existing mapping, in particular, the PAT
-			 * settings are recalculated.
-			 */
-			pmap_qenter(sf->kva, &m, 1);
-			pmap_invalidate_cache_range(sf->kva, sf->kva +
-			    PAGE_SIZE, FALSE);
-			ret = TRUE;
-			break;
-		}
-	}
-	mtx_unlock(&sf_buf_lock);
-	return (ret);
-}
-
-/*
  * Get an sf_buf from the freelist.  May block if none are available.
  */
-struct sf_buf *
-sf_buf_alloc(struct vm_page *m, int flags)
+void
+sf_buf_map(struct sf_buf *sf, int flags)
 {
 	pt_entry_t opte, *ptep;
-	struct sf_head *hash_list;
-	struct sf_buf *sf;
-#ifdef SMP
-	cpuset_t other_cpus;
-	u_int cpuid;
-#endif
-	int error;
-
-	KASSERT(curthread->td_pinned > 0 || (flags & SFB_CPUPRIVATE) == 0,
-	    ("sf_buf_alloc(SFB_CPUPRIVATE): curthread not pinned"));
-	hash_list = &sf_buf_active[SF_BUF_HASH(m)];
-	mtx_lock(&sf_buf_lock);
-	LIST_FOREACH(sf, hash_list, list_entry) {
-		if (sf->m == m) {
-			sf->ref_count++;
-			if (sf->ref_count == 1) {
-				TAILQ_REMOVE(&sf_buf_freelist, sf, free_entry);
-				nsfbufsused++;
-				nsfbufspeak = imax(nsfbufspeak, nsfbufsused);
-			}
-#ifdef SMP
-			goto shootdown;	
-#else
-			goto done;
-#endif
-		}
-	}
-	while ((sf = TAILQ_FIRST(&sf_buf_freelist)) == NULL) {
-		if (flags & SFB_NOWAIT)
-			goto done;
-		sf_buf_alloc_want++;
-		SFSTAT_INC(sf_allocwait);
-		error = msleep(&sf_buf_freelist, &sf_buf_lock,
-		    (flags & SFB_CATCH) ? PCATCH | PVM : PVM, "sfbufa", 0);
-		sf_buf_alloc_want--;
-
-		/*
-		 * If we got a signal, don't risk going back to sleep. 
-		 */
-		if (error)
-			goto done;
-	}
-	TAILQ_REMOVE(&sf_buf_freelist, sf, free_entry);
-	if (sf->m != NULL)
-		LIST_REMOVE(sf, list_entry);
-	LIST_INSERT_HEAD(hash_list, sf, list_entry);
-	sf->ref_count = 1;
-	sf->m = m;
-	nsfbufsused++;
-	nsfbufspeak = imax(nsfbufspeak, nsfbufsused);
 
 	/*
 	 * Update the sf_buf's virtual-to-physical mapping, flushing the
@@ -939,13 +776,8 @@ sf_buf_alloc(struct vm_page *m, int flags)
 	 */
 	ptep = vtopte(sf->kva);
 	opte = *ptep;
-#ifdef XEN
-       PT_SET_MA(sf->kva, xpmap_ptom(VM_PAGE_TO_PHYS(m)) | pgeflag
-	   | PG_RW | PG_V | pmap_cache_bits(m->md.pat_mode, 0));
-#else
-	*ptep = VM_PAGE_TO_PHYS(m) | pgeflag | PG_RW | PG_V |
-	    pmap_cache_bits(m->md.pat_mode, 0);
-#endif
+	*ptep = VM_PAGE_TO_PHYS(sf->m) | pgeflag | PG_RW | PG_V |
+	    pmap_cache_bits(sf->m->md.pat_mode, 0);
 
 	/*
 	 * Avoid unnecessary TLB invalidations: If the sf_buf's old
@@ -956,7 +788,21 @@ sf_buf_alloc(struct vm_page *m, int flags)
 #ifdef SMP
 	if ((opte & (PG_V | PG_A)) ==  (PG_V | PG_A))
 		CPU_ZERO(&sf->cpumask);
-shootdown:
+
+	sf_buf_shootdown(sf, flags);
+#else
+	if ((opte & (PG_V | PG_A)) ==  (PG_V | PG_A))
+		pmap_invalidate_page(kernel_pmap, sf->kva);
+#endif
+}
+
+#ifdef SMP
+void
+sf_buf_shootdown(struct sf_buf *sf, int flags)
+{
+	cpuset_t other_cpus;
+	u_int cpuid;
+
 	sched_pin();
 	cpuid = PCPU_GET(cpuid);
 	if (!CPU_ISSET(cpuid, &sf->cpumask)) {
@@ -973,42 +819,43 @@ shootdown:
 		}
 	}
 	sched_unpin();
-#else
-	if ((opte & (PG_V | PG_A)) ==  (PG_V | PG_A))
-		pmap_invalidate_page(kernel_pmap, sf->kva);
+}
 #endif
-done:
-	mtx_unlock(&sf_buf_lock);
-	return (sf);
+
+/*
+ * MD part of sf_buf_free().
+ */
+int
+sf_buf_unmap(struct sf_buf *sf)
+{
+
+	return (0);
+}
+
+static void
+sf_buf_invalidate(struct sf_buf *sf)
+{
+	vm_page_t m = sf->m;
+
+	/*
+	 * Use pmap_qenter to update the pte for
+	 * existing mapping, in particular, the PAT
+	 * settings are recalculated.
+	 */
+	pmap_qenter(sf->kva, &m, 1);
+	pmap_invalidate_cache_range(sf->kva, sf->kva + PAGE_SIZE, FALSE);
 }
 
 /*
- * Remove a reference from the given sf_buf, adding it to the free
- * list when its reference count reaches zero.  A freed sf_buf still,
- * however, retains its virtual-to-physical mapping until it is
- * recycled or reactivated by sf_buf_alloc(9).
+ * Invalidate the cache lines that may belong to the page, if
+ * (possibly old) mapping of the page by sf buffer exists.  Returns
+ * TRUE when mapping was found and cache invalidated.
  */
-void
-sf_buf_free(struct sf_buf *sf)
+boolean_t
+sf_buf_invalidate_cache(vm_page_t m)
 {
 
-	mtx_lock(&sf_buf_lock);
-	sf->ref_count--;
-	if (sf->ref_count == 0) {
-		TAILQ_INSERT_TAIL(&sf_buf_freelist, sf, free_entry);
-		nsfbufsused--;
-#ifdef XEN
-/*
- * Xen doesn't like having dangling R/W mappings
- */
-		pmap_qremove(sf->kva, 1);
-		sf->m = NULL;
-		LIST_REMOVE(sf, list_entry);
-#endif
-		if (sf_buf_alloc_want > 0)
-			wakeup(&sf_buf_freelist);
-	}
-	mtx_unlock(&sf_buf_lock);
+	return (sf_buf_process_page(m, sf_buf_invalidate));
 }
 
 /*

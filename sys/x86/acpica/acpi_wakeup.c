@@ -30,6 +30,11 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#if defined(__amd64__)
+#define DEV_APIC
+#else
+#include "opt_apic.h"
+#endif
 #ifdef __i386__
 #include "opt_npx.h"
 #endif
@@ -51,12 +56,14 @@ __FBSDID("$FreeBSD$");
 #include <machine/intr_machdep.h>
 #include <x86/mca.h>
 #include <machine/pcb.h>
-#include <machine/pmap.h>
 #include <machine/specialreg.h>
 #include <machine/md_var.h>
 
-#ifdef SMP
+#ifdef DEV_APIC
 #include <x86/apicreg.h>
+#include <x86/apicvar.h>
+#endif
+#ifdef SMP
 #include <machine/smp.h>
 #include <machine/vmparam.h>
 #endif
@@ -202,7 +209,7 @@ acpi_sleep_machdep(struct acpi_softc *sc, int state)
 	if (acpi_resume_beep != 0)
 		timer_spkr_acquire();
 
-	AcpiSetFirmwareWakingVector(WAKECODE_PADDR(sc));
+	AcpiSetFirmwareWakingVector(WAKECODE_PADDR(sc), 0);
 
 	intr_suspend();
 
@@ -270,6 +277,9 @@ acpi_wakeup_machdep(struct acpi_softc *sc, int state, int sleep_result,
 			initializecpu();
 			PCPU_SET(switchtime, 0);
 			PCPU_SET(switchticks, ticks);
+#ifdef DEV_APIC
+			lapic_xapic_mode();
+#endif
 #ifdef SMP
 			if (!CPU_EMPTY(&suspcpus))
 				acpi_wakeup_cpus(sc);
@@ -287,7 +297,7 @@ acpi_wakeup_machdep(struct acpi_softc *sc, int state, int sleep_result,
 #endif
 		intr_resume(/*suspend_cancelled*/false);
 
-		AcpiSetFirmwareWakingVector(0);
+		AcpiSetFirmwareWakingVector(0, 0);
 	} else {
 		/* Wakeup MD procedures in interrupt enabled context */
 		if (sleep_result == 1 && mem_range_softc.mr_op != NULL &&
@@ -312,7 +322,7 @@ acpi_alloc_wakeup_handler(void)
 	 * page-aligned.
 	 */
 	wakeaddr = contigmalloc((ACPI_PAGETABLES + 1) * PAGE_SIZE, M_DEVBUF,
-	    M_WAITOK, 0x500, 0xa0000, PAGE_SIZE, 0ul);
+	    M_NOWAIT, 0x500, 0xa0000, PAGE_SIZE, 0ul);
 	if (wakeaddr == NULL) {
 		printf("%s: can't alloc wake memory\n", __func__);
 		return (NULL);

@@ -397,7 +397,7 @@ sbbc_pci_attach(device_t dev)
 
 static struct resource *
 sbbc_bus_alloc_resource(device_t dev, device_t child __unused, int type,
-    int *rid, u_long start, u_long end, u_long count, u_int flags)
+    int *rid, rman_res_t start, rman_res_t end, rman_res_t count, u_int flags)
 {
 	struct sbbc_softc *sc;
 
@@ -435,8 +435,8 @@ sbbc_bus_deactivate_resource(device_t bus, device_t child, int type, int rid,
 
 static int
 sbbc_bus_adjust_resource(device_t bus __unused, device_t child __unused,
-    int type __unused, struct resource *res __unused, u_long start __unused,
-    u_long end __unused)
+    int type __unused, struct resource *res __unused, rman_res_t start __unused,
+    rman_res_t end __unused)
 {
 
 	return (ENXIO);
@@ -813,7 +813,8 @@ struct uart_class uart_sbbc_class = {
 	sizeof(struct uart_softc),
 	.uc_ops = &sbbc_uart_ops,
 	.uc_range = 1,
-	.uc_rclk = 0x5bbc	/* arbitrary */
+	.uc_rclk = 0x5bbc,	/* arbitrary */
+	.uc_rshift = 0
 };
 
 #define	SIGCHG(c, i, s, d)						\

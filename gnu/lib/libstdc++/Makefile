@@ -1,6 +1,6 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 GCCVER=	4.2
 GCCDIR=	${.CURDIR}/../../../contrib/gcc
@@ -16,9 +16,6 @@ LIB=		stdc++
 SHLIB_MAJOR=	6
 
 CFLAGS+=	-DIN_GLIBCPP_V3 -DHAVE_CONFIG_H
-.if ${MACHINE_CPUARCH} == "arm" && ${MK_ARM_EABI} == "no"
-CFLAGS+=	-D_GLIBCXX_SJLJ_EXCEPTIONS=1
-.endif
 CFLAGS+=	-I${.CURDIR} -I${SUPDIR} -I${GCCDIR} -I${SRCDIR}/include
 CFLAGS+=	-I${GCCLIB}/include -I${SRCDIR}/include -I.
 CFLAGS+=	-frandom-seed=RepeatabilityConsideredGood
@@ -26,8 +23,8 @@ CXXFLAGS+=	-fno-implicit-templates -ffunction-sections -fdata-sections \
 		-Wno-deprecated
 PO_CXXFLAGS=	${CXXFLAGS:N-ffunction-sections}
 
-DPADD=		${LIBM}
-LDADD=		-lm  -Wl,-f,libsupc++.so.1
+LIBADD+=	m
+LDADD=		-Wl,-f,libsupc++.so.1
 
 # libstdc++ sources
 SRCS+=	bitmap_allocator.cc pool_allocator.cc \
@@ -91,7 +88,7 @@ ATOMICITY_H=	${SRCDIR}/config/cpu/generic/atomicity_builtins/atomicity.h
 .endif
 .endif
 
-atomicity.cc:	${ATOMICITY_H}
+atomicity.cc:	${ATOMICITY_H} .NOMETA
 	ln -sf ${.ALLSRC} ${.TARGET}
 CLEANFILES+=	atomicity.cc
 
@@ -596,13 +593,13 @@ gthr-default.h: ${GCCDIR}/gthr-posix.h
 
 CLEANFILES+=	${THRHDRS}
 
-.if ${MACHINE_CPUARCH} == "arm" && ${MK_ARM_EABI} != "no"
+.if ${MACHINE_CPUARCH} == "arm"
 unwind.h: ${GCCDIR}/config/arm/unwind-arm.h
 .else
 unwind.h: ${GCCDIR}/unwind-generic.h
 .endif
 
-unwind.h:
+unwind.h: .NOMETA
 	ln -sf ${.ALLSRC} ${.TARGET}
 
 SRCS+=		unwind.h
@@ -627,14 +624,14 @@ CLEANFILES+=	c++config.h
 
 VERSION_MAP=  	libstdc++.map
 
-${VERSION_MAP}: ${SRCDIR}/config/abi/pre/gnu.ver
+${VERSION_MAP}: ${SRCDIR}/config/abi/pre/gnu.ver .NOMETA
 	ln -sf ${.ALLSRC} ${.TARGET}
 
 CLEANFILES+=	${VERSION_MAP}
+
+CXXFLAGS.clang+= -stdlib=libstdc++
 
 .include <bsd.lib.mk>
 
 # Filter out libc++-specific flags, and -std= flags above c++98 or gnu++98.
 CXXFLAGS:=	${CXXFLAGS:N-stdlib=libc++:N-std=c++[01][13x]:N-std=gnu++[01][13x]}
-
-CXXFLAGS.clang+= -stdlib=libstdc++

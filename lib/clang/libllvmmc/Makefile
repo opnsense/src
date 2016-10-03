@@ -1,11 +1,12 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 LIB=	llvmmc
 
 SRCDIR=	lib/MC
-SRCS=	ELFObjectWriter.cpp \
+SRCS=	ConstantPools.cpp \
+	ELFObjectWriter.cpp \
 	MCAsmBackend.cpp \
 	MCAsmInfo.cpp \
 	MCAsmInfoCOFF.cpp \
@@ -13,34 +14,27 @@ SRCS=	ELFObjectWriter.cpp \
 	MCAsmInfoELF.cpp \
 	MCAsmStreamer.cpp \
 	MCAssembler.cpp \
-	MCAtom.cpp \
 	MCCodeEmitter.cpp \
 	MCCodeGenInfo.cpp \
 	MCContext.cpp \
 	MCDwarf.cpp \
-	MCELF.cpp \
 	MCELFObjectTargetWriter.cpp \
 	MCELFStreamer.cpp \
 	MCExpr.cpp \
-	MCExternalSymbolizer.cpp \
-	MCFunction.cpp \
+	MCFragment.cpp \
 	MCInst.cpp \
 	MCInstPrinter.cpp \
 	MCInstrAnalysis.cpp \
-	MCLabel.cpp \
+	MCInstrDesc.cpp \
+	MCLinkerOptimizationHint.cpp \
 	MCMachOStreamer.cpp \
 	MCMachObjectTargetWriter.cpp \
-	MCModule.cpp \
-	MCModuleYAML.cpp \
 	MCNullStreamer.cpp \
-	MCObjectDisassembler.cpp \
 	MCObjectFileInfo.cpp \
 	MCObjectStreamer.cpp \
-	MCObjectSymbolizer.cpp \
 	MCObjectWriter.cpp \
-	MCPureStreamer.cpp \
 	MCRegisterInfo.cpp \
-	MCRelocationInfo.cpp \
+	MCSchedule.cpp \
 	MCSection.cpp \
 	MCSectionCOFF.cpp \
 	MCSectionELF.cpp \
@@ -48,16 +42,24 @@ SRCS=	ELFObjectWriter.cpp \
 	MCStreamer.cpp \
 	MCSubtargetInfo.cpp \
 	MCSymbol.cpp \
-	MCSymbolizer.cpp \
+	MCSymbolELF.cpp \
+	MCTargetOptions.cpp \
 	MCValue.cpp \
 	MCWin64EH.cpp \
+	MCWinEH.cpp \
 	MachObjectWriter.cpp \
+	StringTableBuilder.cpp \
 	SubtargetFeature.cpp \
 	WinCOFFObjectWriter.cpp \
 	WinCOFFStreamer.cpp
 
+.if ${MK_CLANG_EXTRAS} != "no"
+SRCS+=	MCLabel.cpp \
+	YAML.cpp
+.endif
+
 .if ${MK_CLANG_EXTRAS} != "no" || ${MK_LLDB} != "no"
-SRCS+=	MCDisassembler.cpp
+SRCS+=	MCSymbolizer.cpp
 .endif
 
 .include "../clang.lib.mk"

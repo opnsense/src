@@ -12,7 +12,7 @@ RDMAMANDIR=	${RDMACMDIR}/man
 
 LIB=		rdmacm
 SHLIB_MAJOR=	1
-NO_PROFILE=
+MK_PROFILE=	no
 
 SRCS=	cma.c
 
@@ -27,6 +27,7 @@ MAN+=	rdma_resolve_route.3 rdma_disconnect.3 rdma_set_option.3
 MAN+=	rdma_event_str.3 rping.1 rdma_free_devices.3 ucmatose.1
 MAN+=	rdma_get_cm_event.3 udaddy.1
 
+LIBADD=	ibverbs
 
 VERSION_MAP= ${RDMASRCDIR}/librdmacm.map
 

@@ -17,15 +17,15 @@
 # $ cd ~/svn/vendor/tzdata
 # $ svn cp svn+ssh://svn.freebsd.org/base/vendor/tzdata/dist \
 #	svn+ssh://svn.freebsd.org/base/vendor/tzdata/tzdata2008X
-# $ svn update	# Commit message: "Tag of tzdata2008X"
+# $ svn commit	# Commit message: "Tag of tzdata2008X"
 #
 # Merge-from-vendor
 #
-# $ cd ~/svn/head/share/zoneinfo
+# $ cd ~/svn/head/contrib/tzdata
 # $ svn update
 # $ svn merge -c X --accept=postpone \
 #	svn+ssh://svn.freebsd.org/base/vendor/tzdata/dist .
-# $ svn update	# Commit message: "MFV of tzdata2008X"
+# $ svn commit	# Commit message: "MFV of tzdata2008X"
 #
 
 CLEANFILES+=	yearistype
@@ -67,9 +67,11 @@ TZBUILDSUBDIRS=	\
 		Pacific \
 		SystemV
 
+.if !defined(_SKIP_BUILD)
 all: zoneinfo
+.endif
+META_TARGETS+=	zoneinfo install-zoneinfo
 
-.PHONY: zoneinfo
 zoneinfo: yearistype ${TDATA}
 	mkdir -p ${TZBUILDDIR}
 	cd ${TZBUILDDIR}; mkdir -p ${TZBUILDSUBDIRS}
@@ -77,12 +79,13 @@ zoneinfo: yearistype ${TDATA}
 	zic -D -d ${TZBUILDDIR} -p ${POSIXRULES} -m ${NOBINMODE} \
 	    ${LEAPFILE} -y ${.OBJDIR}/yearistype ${TZFILES}
 
-beforeinstall:
+beforeinstall: install-zoneinfo
+install-zoneinfo:
 	cd ${TZBUILDDIR} && \
-	    find -s * -type f -print -exec ${INSTALL} \
+	    find -s * -type f -print -exec ${INSTALL} ${TAG_ARGS} \
 	    -o ${BINOWN} -g ${BINGRP} -m ${NOBINMODE} \
 	    \{} ${DESTDIR}/usr/share/zoneinfo/\{} \;
-	${INSTALL} -o ${BINOWN} -g ${BINGRP} -m ${NOBINMODE} \
+	${INSTALL} ${TAG_ARGS} -o ${BINOWN} -g ${BINGRP} -m ${NOBINMODE} \
 	    ${CONTRIBDIR}/zone.tab ${DESTDIR}/usr/share/zoneinfo/
 
 afterinstall:

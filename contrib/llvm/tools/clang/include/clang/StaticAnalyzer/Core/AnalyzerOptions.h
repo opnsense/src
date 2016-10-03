@@ -12,8 +12,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_ANALYZEROPTIONS_H
-#define LLVM_CLANG_ANALYZEROPTIONS_H
+#ifndef LLVM_CLANG_STATICANALYZER_CORE_ANALYZEROPTIONS_H
+#define LLVM_CLANG_STATICANALYZER_CORE_ANALYZEROPTIONS_H
 
 #include "clang/Basic/LLVM.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
@@ -27,6 +27,10 @@ class ASTConsumer;
 class DiagnosticsEngine;
 class Preprocessor;
 class LangOptions;
+
+namespace ento {
+class CheckerBase;
+}
 
 /// Analysis - Set of available source code analyses.
 enum Analyses {
@@ -54,6 +58,7 @@ NumConstraints
 enum AnalysisDiagClients {
 #define ANALYSIS_DIAGNOSTICS(NAME, CMDFLAG, DESC, CREATFN) PD_##NAME,
 #include "clang/StaticAnalyzer/Core/Analyses.def"
+PD_NONE,
 NUM_ANALYSIS_DIAG_CLIENTS
 };
 
@@ -136,11 +141,18 @@ public:
   unsigned maxBlockVisitOnPath;
   
   
+  /// \brief Disable all analyzer checks.
+  ///
+  /// This flag allows one to disable analyzer checks on the code processed by
+  /// the given analysis consumer. Note, the code will get parsed and the
+  /// command-line options will get checked.
+  unsigned DisableAllChecks : 1;
+
   unsigned ShowCheckerHelp : 1;
   unsigned AnalyzeAll : 1;
   unsigned AnalyzerDisplayProgress : 1;
   unsigned AnalyzeNestedBlocks : 1;
-  
+
   /// \brief The flag regulates if we should eagerly assume evaluations of
   /// conditionals, thus, bifurcating the path.
   ///
@@ -198,8 +210,11 @@ private:
   /// \sa mayInlineTemplateFunctions
   Optional<bool> InlineTemplateFunctions;
 
-  /// \sa mayInlineCXXContainerCtorsAndDtors
-  Optional<bool> InlineCXXContainerCtorsAndDtors;
+  /// \sa mayInlineCXXAllocator
+  Optional<bool> InlineCXXAllocator;
+
+  /// \sa mayInlineCXXContainerMethods
+  Optional<bool> InlineCXXContainerMethods;
 
   /// \sa mayInlineCXXSharedPtrDtor
   Optional<bool> InlineCXXSharedPtrDtor;
@@ -229,27 +244,123 @@ private:
   /// \sa reportIssuesInMainSourceFile
   Optional<bool> ReportIssuesInMainSourceFile;
 
+  /// \sa StableReportFilename
+  Optional<bool> StableReportFilename;
+
   /// \sa getGraphTrimInterval
   Optional<unsigned> GraphTrimInterval;
 
   /// \sa getMaxTimesInlineLarge
   Optional<unsigned> MaxTimesInlineLarge;
 
+  /// \sa getMinCFGSizeTreatFunctionsAsLarge
+  Optional<unsigned> MinCFGSizeTreatFunctionsAsLarge;
+
   /// \sa getMaxNodesPerTopLevelFunction
   Optional<unsigned> MaxNodesPerTopLevelFunction;
 
+  /// \sa shouldInlineLambdas
+  Optional<bool> InlineLambdas;
+
+  /// \sa shouldWidenLoops
+  Optional<bool> WidenLoops;
+
+  /// A helper function that retrieves option for a given full-qualified
+  /// checker name.
+  /// Options for checkers can be specified via 'analyzer-config' command-line
+  /// option.
+  /// Example:
+  /// @code-analyzer-config unix.Malloc:OptionName=CheckerOptionValue @endcode
+  /// or @code-analyzer-config unix:OptionName=GroupOptionValue @endcode
+  /// for groups of checkers.
+  /// @param [in] CheckerName  Full-qualified checker name, like
+  /// alpha.unix.StreamChecker.
+  /// @param [in] OptionName  Name of the option to get.
+  /// @param [in] Default  Default value if no option is specified.
+  /// @param [in] SearchInParents If set to true and the searched option was not
+  /// specified for the given checker the options for the parent packages will
+  /// be searched as well. The inner packages take precedence over the outer
+  /// ones.
+  /// @retval CheckerOptionValue  An option for a checker if it was specified.
+  /// @retval GroupOptionValue  An option for group if it was specified and no
+  /// checker-specific options were found. The closer group to checker,
+  /// the more priority it has. For example, @c coregroup.subgroup has more
+  /// priority than @c coregroup for @c coregroup.subgroup.CheckerName checker.
+  /// @retval Default  If nor checker option, nor group option was found.
+  StringRef getCheckerOption(StringRef CheckerName, StringRef OptionName,
+                             StringRef Default,
+                             bool SearchInParents = false);
+
 public:
-  /// Interprets an option's string value as a boolean.
+  /// Interprets an option's string value as a boolean. The "true" string is
+  /// interpreted as true and the "false" string is interpreted as false.
   ///
-  /// Accepts the strings "true" and "false".
   /// If an option value is not provided, returns the given \p DefaultVal.
-  bool getBooleanOption(StringRef Name, bool DefaultVal);
+  /// @param [in] Name Name for option to retrieve.
+  /// @param [in] DefaultVal Default value returned if no such option was
+  /// specified.
+  /// @param [in] C The optional checker parameter that can be used to restrict
+  /// the search to the options of this particular checker (and its parents
+  /// dependening on search mode).
+  /// @param [in] SearchInParents If set to true and the searched option was not
+  /// specified for the given checker the options for the parent packages will
+  /// be searched as well. The inner packages take precedence over the outer
+  /// ones.
+  bool getBooleanOption(StringRef Name, bool DefaultVal,
+                        const ento::CheckerBase *C = nullptr,
+                        bool SearchInParents = false);
 
   /// Variant that accepts a Optional value to cache the result.
-  bool getBooleanOption(Optional<bool> &V, StringRef Name, bool DefaultVal);
+  ///
+  /// @param [in,out] V Return value storage, returned if parameter contains
+  /// an existing valid option, else it is used to store a return value
+  /// @param [in] Name Name for option to retrieve.
+  /// @param [in] DefaultVal Default value returned if no such option was
+  /// specified.
+  /// @param [in] C The optional checker parameter that can be used to restrict
+  /// the search to the options of this particular checker (and its parents
+  /// dependening on search mode).
+  /// @param [in] SearchInParents If set to true and the searched option was not
+  /// specified for the given checker the options for the parent packages will
+  /// be searched as well. The inner packages take precedence over the outer
+  /// ones.
+  bool getBooleanOption(Optional<bool> &V, StringRef Name, bool DefaultVal,
+                        const ento::CheckerBase *C  = nullptr,
+                        bool SearchInParents = false);
 
   /// Interprets an option's string value as an integer value.
-  int getOptionAsInteger(StringRef Name, int DefaultVal);
+  ///
+  /// If an option value is not provided, returns the given \p DefaultVal.
+  /// @param [in] Name Name for option to retrieve.
+  /// @param [in] DefaultVal Default value returned if no such option was
+  /// specified.
+  /// @param [in] C The optional checker parameter that can be used to restrict
+  /// the search to the options of this particular checker (and its parents
+  /// dependening on search mode).
+  /// @param [in] SearchInParents If set to true and the searched option was not
+  /// specified for the given checker the options for the parent packages will
+  /// be searched as well. The inner packages take precedence over the outer
+  /// ones.
+  int getOptionAsInteger(StringRef Name, int DefaultVal,
+                         const ento::CheckerBase *C = nullptr,
+                         bool SearchInParents = false);
+
+  /// Query an option's string value.
+  ///
+  /// If an option value is not provided, returns the given \p DefaultVal.
+  /// @param [in] Name Name for option to retrieve.
+  /// @param [in] DefaultVal Default value returned if no such option was
+  /// specified.
+  /// @param [in] C The optional checker parameter that can be used to restrict
+  /// the search to the options of this particular checker (and its parents
+  /// dependening on search mode).
+  /// @param [in] SearchInParents If set to true and the searched option was not
+  /// specified for the given checker the options for the parent packages will
+  /// be searched as well. The inner packages take precedence over the outer
+  /// ones.
+  StringRef getOptionAsString(StringRef Name, StringRef DefaultVal,
+                              const ento::CheckerBase *C = nullptr,
+                              bool SearchInParents = false);
 
   /// \brief Retrieves and sets the UserMode. This is a high-level option,
   /// which is used to set other low-level options. It is not accessible
@@ -290,12 +401,18 @@ public:
   /// accepts the values "true" and "false".
   bool mayInlineTemplateFunctions();
 
-  /// Returns whether or not constructors and destructors of C++ container
-  /// objects may be considered for inlining.
+  /// Returns whether or not allocator call may be considered for inlining.
+  ///
+  /// This is controlled by the 'c++-allocator-inlining' config option, which
+  /// accepts the values "true" and "false".
+  bool mayInlineCXXAllocator();
+
+  /// Returns whether or not methods of C++ container objects may be considered
+  /// for inlining.
   ///
   /// This is controlled by the 'c++-container-inlining' config option, which
   /// accepts the values "true" and "false".
-  bool mayInlineCXXContainerCtorsAndDtors();
+  bool mayInlineCXXContainerMethods();
 
   /// Returns whether or not the destructor of C++ 'shared_ptr' may be
   /// considered for inlining.
@@ -349,6 +466,12 @@ public:
   /// which accepts the values "true" and "false".
   bool shouldReportIssuesInMainSourceFile();
 
+  /// Returns whether or not the report filename should be random or not.
+  ///
+  /// This is controlled by the 'stable-report-filename' config option,
+  /// which accepts the values "true" and "false". Default = false
+  bool shouldWriteStableReportFilename();
+
   /// Returns whether irrelevant parts of a bug report path should be pruned
   /// out of the final output.
   ///
@@ -388,6 +511,13 @@ public:
   /// This is controlled by the 'max-times-inline-large' config option.
   unsigned getMaxTimesInlineLarge();
 
+  /// Returns the number of basic blocks a function needs to have to be
+  /// considered large for the 'max-times-inline-large' config option.
+  ///
+  /// This is controlled by the 'min-cfg-size-treat-functions-as-large' config
+  /// option.
+  unsigned getMinCFGSizeTreatFunctionsAsLarge();
+
   /// Returns the maximum number of nodes the analyzer can generate while
   /// exploring a top level function (for each exploded graph).
   /// 150000 is default; 0 means no limit.
@@ -395,12 +525,21 @@ public:
   /// This is controlled by the 'max-nodes' config option.
   unsigned getMaxNodesPerTopLevelFunction();
 
+  /// Returns true if lambdas should be inlined. Otherwise a sink node will be
+  /// generated each time a LambdaExpr is visited.
+  bool shouldInlineLambdas();
+
+  /// Returns true if the analysis should try to widen loops.
+  /// This is controlled by the 'widen-loops' config option.
+  bool shouldWidenLoops();
+
 public:
   AnalyzerOptions() :
     AnalysisStoreOpt(RegionStoreModel),
     AnalysisConstraintsOpt(RangeConstraintsModel),
     AnalysisDiagOpt(PD_HTML),
     AnalysisPurgeOpt(PurgeStmt),
+    DisableAllChecks(0),
     ShowCheckerHelp(0),
     AnalyzeAll(0),
     AnalyzerDisplayProgress(0),

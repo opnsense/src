@@ -63,7 +63,7 @@ ip175c_reset(struct ip17x_softc *sc)
 	if (ip17x_writephy(sc->sc_dev, IP175C_RESET_PHY, IP175C_RESET_REG,
 	    0x175c))
 		return (-1);
-	DELAY(2);
+	DELAY(2000);
 
 	/* Force IP175C mode. */
 	data = ip17x_readphy(sc->sc_dev, IP175C_MODE_PHY, IP175C_MODE_REG);
@@ -210,7 +210,7 @@ ip175c_set_vlan_mode(struct ip17x_softc *sc, uint32_t mode)
 		ip17x_updatephy(sc->sc_dev, 30, 9, 0x80, 0);
 		sc->vlan_mode = ETHERSWITCH_VLAN_PORT;
 		break;
-	};
+	}
 
 	/* Reset vlans. */
 	ip17x_reset_vlans(sc, sc->vlan_mode);

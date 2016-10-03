@@ -139,7 +139,6 @@ The
 determines how quickly a host must jump from one link to another
 before we declare a loopback condition.
 The default is one second.
-.Pp
 .It Dv NGM_BRIDGE_GET_CONFIG Pq Ic getconfig
 Returns the current configuration as a
 .Dv "struct ng_bridge_config" .
@@ -187,8 +186,8 @@ This command sets the persistent flag on the node, and takes no arguments.
 .Sh SHUTDOWN
 This node shuts down upon receipt of a
 .Dv NGM_SHUTDOWN
-control message, or when all hooks have been disconnected.  Setting the
-persistent flag via a
+control message, or when all hooks have been disconnected.
+Setting the persistent flag via a
 .Dv NGM_BRIDGE_SET_PERSISTENT
 control message disables automatic node shutdown when the last hook gets
 disconnected.
@@ -210,4 +209,4 @@ The
 node type was implemented in
 .Fx 4.2 .
 .Sh AUTHORS
-.An Archie Cobbs Aq archie@FreeBSD.org
+.An Archie Cobbs Aq Mt archie@FreeBSD.org

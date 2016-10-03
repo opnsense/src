@@ -134,32 +134,28 @@ static SYSCTL_NODE(_hw, OID_AUTO, cbb, CTLFLAG_RD, 0, "CBB parameters");
 
 /* There's no way to say TUNEABLE_LONG to get the right types */
 u_long cbb_start_mem = CBB_START_MEM;
-TUNABLE_ULONG("hw.cbb.start_memory", &cbb_start_mem);
-SYSCTL_ULONG(_hw_cbb, OID_AUTO, start_memory, CTLFLAG_RW,
+SYSCTL_ULONG(_hw_cbb, OID_AUTO, start_memory, CTLFLAG_RWTUN,
     &cbb_start_mem, CBB_START_MEM,
     "Starting address for memory allocations");
 
 u_long cbb_start_16_io = CBB_START_16_IO;
-TUNABLE_ULONG("hw.cbb.start_16_io", &cbb_start_16_io);
-SYSCTL_ULONG(_hw_cbb, OID_AUTO, start_16_io, CTLFLAG_RW,
+SYSCTL_ULONG(_hw_cbb, OID_AUTO, start_16_io, CTLFLAG_RWTUN,
     &cbb_start_16_io, CBB_START_16_IO,
     "Starting ioport for 16-bit cards");
 
 u_long cbb_start_32_io = CBB_START_32_IO;
-TUNABLE_ULONG("hw.cbb.start_32_io", &cbb_start_32_io);
-SYSCTL_ULONG(_hw_cbb, OID_AUTO, start_32_io, CTLFLAG_RW,
+SYSCTL_ULONG(_hw_cbb, OID_AUTO, start_32_io, CTLFLAG_RWTUN,
     &cbb_start_32_io, CBB_START_32_IO,
     "Starting ioport for 32-bit cards");
 
 int cbb_debug = 0;
-TUNABLE_INT("hw.cbb.debug", &cbb_debug);
-SYSCTL_INT(_hw_cbb, OID_AUTO, debug, CTLFLAG_RW, &cbb_debug, 0,
+SYSCTL_INT(_hw_cbb, OID_AUTO, debug, CTLFLAG_RWTUN, &cbb_debug, 0,
     "Verbose cardbus bridge debugging");
 
 static void	cbb_insert(struct cbb_softc *sc);
 static void	cbb_removal(struct cbb_softc *sc);
 static uint32_t	cbb_detect_voltage(device_t brdev);
-static void	cbb_cardbus_reset_power(device_t brdev, device_t child, int on);
+static int	cbb_cardbus_reset_power(device_t brdev, device_t child, int on);
 static int	cbb_cardbus_io_open(device_t brdev, int win, uint32_t start,
 		    uint32_t end);
 static int	cbb_cardbus_mem_open(device_t brdev, int win,
@@ -170,8 +166,8 @@ static int	cbb_cardbus_activate_resource(device_t brdev, device_t child,
 static int	cbb_cardbus_deactivate_resource(device_t brdev,
 		    device_t child, int type, int rid, struct resource *res);
 static struct resource	*cbb_cardbus_alloc_resource(device_t brdev,
-		    device_t child, int type, int *rid, u_long start,
-		    u_long end, u_long count, u_int flags);
+		    device_t child, int type, int *rid, rman_res_t start,
+		    rman_res_t end, rman_res_t count, u_int flags);
 static int	cbb_cardbus_release_resource(device_t brdev, device_t child,
 		    int type, int rid, struct resource *res);
 static int	cbb_cardbus_power_enable_socket(device_t brdev,
@@ -233,7 +229,7 @@ cbb_destroy_res(struct cbb_softc *sc)
 	while ((rle = SLIST_FIRST(&sc->rl)) != NULL) {
 		device_printf(sc->dev, "Danger Will Robinson: Resource "
 		    "left allocated!  This is a bug... "
-		    "(rid=%x, type=%d, addr=%lx)\n", rle->rid, rle->type,
+		    "(rid=%x, type=%d, addr=%jx)\n", rle->rid, rle->type,
 		    rman_get_start(rle->res));
 		SLIST_REMOVE_HEAD(&sc->rl, link);
 		free(rle, M_DEVBUF);
@@ -334,7 +330,7 @@ cbb_detach(device_t brdev)
 
 	/*
 	 * Wait for the thread to die.  kproc_exit will do a wakeup
-	 * on the event thread's struct thread * so that we know it is
+	 * on the event thread's struct proc * so that we know it is
 	 * safe to proceed.  IF the thread is running, set the please
 	 * die flag and wait for it to comply.  Since the wakeup on
 	 * the event thread happens only in kproc_exit, we don't
@@ -726,7 +722,7 @@ cbb_o2micro_power_hack(struct cbb_softc *sc)
 
 /*
  * Restore the damage that cbb_o2micro_power_hack does to EXCA_INTR so
- * we don't have an interrupt storm on power on.  This has the efect of
+ * we don't have an interrupt storm on power on.  This has the effect of
  * disabling card status change interrupts for the duration of poweron.
  */
 static void
@@ -962,12 +958,12 @@ cbb_do_power(device_t brdev)
 /* CardBus power functions						*/
 /************************************************************************/
 
-static void
+static int
 cbb_cardbus_reset_power(device_t brdev, device_t child, int on)
 {
 	struct cbb_softc *sc = device_get_softc(brdev);
-	uint32_t b;
-	int delay, count;
+	uint32_t b, h;
+	int delay, count, zero_seen, func;
 
 	/*
 	 * Asserting reset for 20ms is necessary for most bridges.  For some
@@ -1006,23 +1002,30 @@ cbb_cardbus_reset_power(device_t brdev, device_t child, int on)
 		    0xfffffffful && --count >= 0);
 		if (count < 0)
 			device_printf(brdev, "Warning: Bus reset timeout\n");
+
+		/*
+		 * Some cards (so far just an atheros card I have) seem to
+		 * come out of reset in a funky state. They report they are
+		 * multi-function cards, but have nonsense for some of the
+		 * higher functions.  So if the card claims to be MFDEV, and
+		 * any of the higher functions' ID is 0, then we've hit the
+		 * bug and we'll try again.
+		 */
+		h = PCIB_READ_CONFIG(brdev, b, 0, 0, PCIR_HDRTYPE, 1);
+		if ((h & PCIM_MFDEV) == 0)
+			return 0;
+		zero_seen = 0;
+		for (func = 1; func < 8; func++) {
+			h = PCIB_READ_CONFIG(brdev, b, 0, func,
+			    PCIR_DEVVENDOR, 4);
+			if (h == 0)
+				zero_seen++;
+		}
+		if (!zero_seen)
+			return 0;
+		return (EINVAL);
 	}
-}
-
-static int
-cbb_cardbus_power_enable_socket(device_t brdev, device_t child)
-{
-	struct cbb_softc *sc = device_get_softc(brdev);
-	int err;
-
-	if (!CBB_CARD_PRESENT(cbb_get(sc, CBB_SOCKET_STATE)))
-		return (ENODEV);
-
-	err = cbb_do_power(brdev);
-	if (err)
-		return (err);
-	cbb_cardbus_reset_power(brdev, child, 1);
-	return (0);
+	return 0;
 }
 
 static int
@@ -1030,6 +1033,30 @@ cbb_cardbus_power_disable_socket(device_t brdev, device_t child)
 {
 	cbb_power(brdev, CARD_OFF);
 	cbb_cardbus_reset_power(brdev, child, 0);
+	return (0);
+}
+
+static int
+cbb_cardbus_power_enable_socket(device_t brdev, device_t child)
+{
+	struct cbb_softc *sc = device_get_softc(brdev);
+	int err, count;
+
+	if (!CBB_CARD_PRESENT(cbb_get(sc, CBB_SOCKET_STATE)))
+		return (ENODEV);
+
+	count = 10;
+	do {
+		err = cbb_do_power(brdev);
+		if (err)
+			return (err);
+		err = cbb_cardbus_reset_power(brdev, child, 1);
+		if (err) {
+			device_printf(brdev, "Reset failed, trying again.\n");
+			cbb_cardbus_power_disable_socket(brdev, child);
+			pause("cbbErr1", hz / 10); /* wait 100ms */
+		}
+	} while (err != 0 && count-- > 0);
 	return (0);
 }
 
@@ -1128,7 +1155,7 @@ cbb_cardbus_auto_open(struct cbb_softc *sc, int type)
 		if (starts[i] == START_NONE)
 			continue;
 		starts[i] &= ~(align - 1);
-		ends[i] = ((ends[i] + align - 1) & ~(align - 1)) - 1;
+		ends[i] = roundup2(ends[i], align) - 1;
 	}
 	if (starts[0] != START_NONE && starts[1] != START_NONE) {
 		if (starts[0] < starts[1]) {
@@ -1203,19 +1230,19 @@ cbb_cardbus_deactivate_resource(device_t brdev, device_t child, int type,
 
 static struct resource *
 cbb_cardbus_alloc_resource(device_t brdev, device_t child, int type,
-    int *rid, u_long start, u_long end, u_long count, u_int flags)
+    int *rid, rman_res_t start, rman_res_t end, rman_res_t count, u_int flags)
 {
 	struct cbb_softc *sc = device_get_softc(brdev);
 	int tmp;
 	struct resource *res;
-	u_long align;
+	rman_res_t align;
 
 	switch (type) {
 	case SYS_RES_IRQ:
 		tmp = rman_get_start(sc->irq_res);
 		if (start > tmp || end < tmp || count != 1) {
-			device_printf(child, "requested interrupt %ld-%ld,"
-			    "count = %ld not supported by cbb\n",
+			device_printf(child, "requested interrupt %jd-%jd,"
+			    "count = %jd not supported by cbb\n",
 			    start, end, count);
 			return (NULL);
 		}
@@ -1368,7 +1395,7 @@ cbb_pcic_deactivate_resource(device_t brdev, device_t child, int type,
 
 static struct resource *
 cbb_pcic_alloc_resource(device_t brdev, device_t child, int type, int *rid,
-    u_long start, u_long end, u_long count, u_int flags)
+    rman_res_t start, rman_res_t end, rman_res_t count, u_int flags)
 {
 	struct resource *res = NULL;
 	struct cbb_softc *sc = device_get_softc(brdev);
@@ -1398,8 +1425,8 @@ cbb_pcic_alloc_resource(device_t brdev, device_t child, int type, int *rid,
 	case SYS_RES_IRQ:
 		tmp = rman_get_start(sc->irq_res);
 		if (start > tmp || end < tmp || count != 1) {
-			device_printf(child, "requested interrupt %ld-%ld,"
-			    "count = %ld not supported by cbb\n",
+			device_printf(child, "requested interrupt %jd-%jd,"
+			    "count = %jd not supported by cbb\n",
 			    start, end, count);
 			return (NULL);
 		}
@@ -1511,7 +1538,7 @@ cbb_deactivate_resource(device_t brdev, device_t child, int type,
 
 struct resource *
 cbb_alloc_resource(device_t brdev, device_t child, int type, int *rid,
-    u_long start, u_long end, u_long count, u_int flags)
+    rman_res_t start, rman_res_t end, rman_res_t count, u_int flags)
 {
 	struct cbb_softc *sc = device_get_softc(brdev);
 

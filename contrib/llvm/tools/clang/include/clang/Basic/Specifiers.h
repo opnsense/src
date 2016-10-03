@@ -16,6 +16,10 @@
 #ifndef LLVM_CLANG_BASIC_SPECIFIERS_H
 #define LLVM_CLANG_BASIC_SPECIFIERS_H
 
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Support/DataTypes.h"
+#include "llvm/Support/ErrorHandling.h"
+
 namespace clang {
   /// \brief Specifies the width of a type, e.g., short, long, or long long.
   enum TypeSpecifierWidth {
@@ -32,6 +36,11 @@ namespace clang {
     TSS_unsigned
   };
   
+  enum TypeSpecifiersPipe {
+    TSP_unspecified,
+    TSP_pipe
+  };
+
   /// \brief Specifies the kind of type.
   enum TypeSpecifierType {
     TST_unspecified,
@@ -61,23 +70,16 @@ namespace clang {
     TST_underlyingType,   // __underlying_type for C++11
     TST_auto,             // C++11 auto
     TST_decltype_auto,    // C++1y decltype(auto)
+    TST_auto_type,        // __auto_type extension
     TST_unknown_anytype,  // __unknown_anytype extension
     TST_atomic,           // C11 _Atomic
-    TST_image1d_t,        // OpenCL image1d_t
-    TST_image1d_array_t,  // OpenCL image1d_array_t
-    TST_image1d_buffer_t, // OpenCL image1d_buffer_t
-    TST_image2d_t,        // OpenCL image2d_t
-    TST_image2d_array_t,  // OpenCL image2d_array_t
-    TST_image3d_t,        // OpenCL image3d_t
-    TST_sampler_t,        // OpenCL sampler_t
-    TST_event_t,          // OpenCL event_t
     TST_error         // erroneous type
   };
   
   /// \brief Structure that packs information about the type specifiers that
   /// were written in a particular type specifier sequence.
   struct WrittenBuiltinSpecs {
-    /*DeclSpec::TST*/ unsigned Type  : 6;
+    /*DeclSpec::TST*/ unsigned Type  : 5;
     /*DeclSpec::TSS*/ unsigned Sign  : 2;
     /*DeclSpec::TSW*/ unsigned Width : 2;
     bool ModeAttr : 1;
@@ -161,6 +163,24 @@ namespace clang {
     return Kind != TSK_Undeclared && Kind != TSK_ExplicitSpecialization;
   }
 
+  /// \brief True if this template specialization kind is an explicit
+  /// specialization, explicit instantiation declaration, or explicit
+  /// instantiation definition.
+  inline bool isTemplateExplicitInstantiationOrSpecialization(
+      TemplateSpecializationKind Kind) {
+    switch (Kind) {
+    case TSK_ExplicitSpecialization:
+    case TSK_ExplicitInstantiationDeclaration:
+    case TSK_ExplicitInstantiationDefinition:
+      return true;
+
+    case TSK_Undeclared:
+    case TSK_ImplicitInstantiation:
+      return false;
+    }
+    llvm_unreachable("bad template specialization kind");
+  }
+
   /// \brief Thread storage-class-specifier.
   enum ThreadStorageClassSpecifier {
     TSCS_unspecified,
@@ -183,7 +203,6 @@ namespace clang {
     SC_PrivateExtern,
 
     // These are only legal on variables.
-    SC_OpenCLWorkGroupLocal,
     SC_Auto,
     SC_Register
   };
@@ -211,25 +230,31 @@ namespace clang {
     CC_X86StdCall,  // __attribute__((stdcall))
     CC_X86FastCall, // __attribute__((fastcall))
     CC_X86ThisCall, // __attribute__((thiscall))
+    CC_X86VectorCall, // __attribute__((vectorcall))
     CC_X86Pascal,   // __attribute__((pascal))
     CC_X86_64Win64, // __attribute__((ms_abi))
     CC_X86_64SysV,  // __attribute__((sysv_abi))
     CC_AAPCS,       // __attribute__((pcs("aapcs")))
     CC_AAPCS_VFP,   // __attribute__((pcs("aapcs-vfp")))
-    CC_PnaclCall,   // __attribute__((pnaclcall))
-    CC_IntelOclBicc // __attribute__((intel_ocl_bicc))
+    CC_IntelOclBicc, // __attribute__((intel_ocl_bicc))
+    CC_SpirFunction, // default for OpenCL functions on SPIR target
+    CC_SpirKernel    // inferred for OpenCL kernels on SPIR target
   };
 
-  /// \brief Checks whether the given calling convention is callee-cleanup.
-  inline bool isCalleeCleanup(CallingConv CC) {
+  /// \brief Checks whether the given calling convention supports variadic
+  /// calls. Unprototyped calls also use the variadic call rules.
+  inline bool supportsVariadicCall(CallingConv CC) {
     switch (CC) {
     case CC_X86StdCall:
     case CC_X86FastCall:
     case CC_X86ThisCall:
     case CC_X86Pascal:
-      return true;
-    default:
+    case CC_X86VectorCall:
+    case CC_SpirFunction:
+    case CC_SpirKernel:
       return false;
+    default:
+      return true;
     }
   }
 
@@ -241,6 +266,23 @@ namespace clang {
     SD_Static,         ///< Static storage duration.
     SD_Dynamic         ///< Dynamic storage duration.
   };
+
+  /// Describes the nullability of a particular type.
+  enum class NullabilityKind : uint8_t {
+    /// Values of this type can never be null.
+    NonNull = 0,
+    /// Values of this type can be null.
+    Nullable,
+    /// Whether values of this type can be null is (explicitly)
+    /// unspecified. This captures a (fairly rare) case where we
+    /// can't conclude anything about the nullability of the type even
+    /// though it has been considered.
+    Unspecified
+  };
+
+  /// Retrieve the spelling of the given nullability kind.
+  llvm::StringRef getNullabilitySpelling(NullabilityKind kind,
+                                         bool isContextSensitive = false);
 } // end namespace clang
 
 #endif // LLVM_CLANG_BASIC_SPECIFIERS_H

@@ -15,7 +15,7 @@
 .\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd May 3, 2014
+.Dd October 15, 2015
 .Dt RSU 4
 .Os
 .Sh NAME
@@ -41,7 +41,7 @@ if_rsu_load="YES"
 .Ed
 .Pp
 After you have read the license in
-.Pa /usr/share/doc/legal/realtek
+.Pa /usr/share/doc/legal/realtek.LICENSE
 you will want to add the following lines to
 .Xr loader.conf 5 :
 .Bd -literal -offset indent
@@ -119,6 +119,7 @@ wireless network adapters, including:
 .It Sitecom WL-349 v1
 .It Sitecom WL-353
 .It Sweex LW154
+.It TRENDnet TEW-646UBH
 .It TRENDnet TEW-648UB
 .It TRENDnet TEW-649UB
 .El
@@ -152,9 +153,9 @@ This should not happen.
 .El
 .Sh SEE ALSO
 .Xr intro 1 ,
-.Xr usb 4 ,
 .Xr netintro 4 ,
 .Xr rsufw 4 ,
+.Xr usb 4 ,
 .Xr wlan 4 ,
 .Xr arp 8 ,
 .Xr hostapd 8 ,
@@ -171,11 +172,13 @@ driver first appeared in
 The
 .Nm
 driver was written by
-.An Damien Bergamini Aq damien@openbsd.org
+.An Damien Bergamini Aq Mt damien@openbsd.org
 and ported by
-.An Rui Paulo Aq rpaulo@freebsd.org .
+.An Rui Paulo Aq Mt rpaulo@freebsd.org .
+The 802.11n support was added by
+.An Adrian Chadd Aq Mt adrian@freebsd.org .
 .Sh CAVEATS
 The
 .Nm
-driver does not support any of the 802.11n capabilities offered by the
-adapters.
+driver currently does not support 802.11n transmit aggregation,
+either A-MSDU or A-MPDU.

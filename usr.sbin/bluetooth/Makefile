@@ -1,7 +1,7 @@
 # $Id: Makefile,v 1.5 2003/09/08 02:28:35 max Exp $
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 SUBDIR= \
 	bt3cfw \

@@ -224,7 +224,7 @@ nextarg(OPTION *option, char ***argvp)
 {
 	char *arg;
 
-	if ((arg = **argvp) == 0)
+	if ((arg = **argvp) == NULL)
 		errx(1, "%s: requires additional arguments", option->name);
 	(*argvp)++;
 	return arg;
@@ -670,7 +670,13 @@ doexec:	if ((plan->flags & F_NEEDOK) && !queryuser(plan->e_argv))
 		plan->e_psize = plan->e_pbsize;
 	}
 	pid = waitpid(pid, &status, 0);
-	return (pid != -1 && WIFEXITED(status) && !WEXITSTATUS(status));
+	if (pid != -1 && WIFEXITED(status) && !WEXITSTATUS(status))
+		return (1);
+	if (plan->flags & F_EXECPLUS) {
+		exitstatus = 1;
+		return (1);
+	}
+	return (0);
 }
 
 /*
@@ -1551,7 +1557,12 @@ c_sparse(OPTION *option, char ***argvp __unused)
 int
 f_type(PLAN *plan, FTSENT *entry)
 {
-	return (entry->fts_statp->st_mode & S_IFMT) == plan->m_data;
+	if (plan->m_data == S_IFDIR)
+		return (entry->fts_info == FTS_D || entry->fts_info == FTS_DC ||
+		    entry->fts_info == FTS_DNR || entry->fts_info == FTS_DOT ||
+		    entry->fts_info == FTS_DP);
+	else
+		return (entry->fts_statp->st_mode & S_IFMT) == plan->m_data;
 }
 
 PLAN *
@@ -1562,7 +1573,8 @@ c_type(OPTION *option, char ***argvp)
 	mode_t  mask;
 
 	typestring = nextarg(option, argvp);
-	ftsoptions &= ~FTS_NOSTAT;
+	if (typestring[0] != 'd')
+		ftsoptions &= ~FTS_NOSTAT;
 
 	switch (typestring[0]) {
 	case 'b':
@@ -1768,7 +1780,7 @@ int
 f_quit(PLAN *plan __unused, FTSENT *entry __unused)
 {
 	finish_execplus();
-	exit(0);
+	exit(exitstatus);
 }
 
 /* c_quit == c_simple */

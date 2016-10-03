@@ -29,6 +29,8 @@
  * Copyright (c) 2012 Martin Matuska <mm@FreeBSD.org>. All rights reserved.
  * Copyright (c) 2013 Steven Hartland.  All rights reserved.
  * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright (c) 2014 Integros [integros.com]
+ * Copyright 2016 Igor Kozhukhov <ikozhukhov@gmail.com>.
  */
 
 #include <assert.h>
@@ -65,7 +67,7 @@
 #include <zfs_prop.h>
 #include <zfs_deleg.h>
 #include <libuutil.h>
-#ifdef sun
+#ifdef illumos
 #include <aclutils.h>
 #include <directory.h>
 #include <idmap.h>
@@ -329,7 +331,8 @@ get_usage(zfs_help_t idx)
 	case HELP_HOLD:
 		return (gettext("\thold [-r] <tag> <snapshot> ...\n"));
 	case HELP_HOLDS:
-		return (gettext("\tholds [-r] <snapshot> ...\n"));
+		return (gettext("\tholds [-Hp] [-r|-d depth] "
+		    "<filesystem|volume|snapshot> ...\n"));
 	case HELP_RELEASE:
 		return (gettext("\trelease [-r] <tag> <snapshot> ...\n"));
 	case HELP_DIFF:
@@ -750,7 +753,7 @@ zfs_do_create(int argc, char **argv)
 {
 	zfs_type_t type = ZFS_TYPE_FILESYSTEM;
 	zfs_handle_t *zhp = NULL;
-	uint64_t volsize;
+	uint64_t volsize = 0;
 	int c;
 	boolean_t noreserve = B_FALSE;
 	boolean_t bflag = B_FALSE;
@@ -845,14 +848,14 @@ zfs_do_create(int argc, char **argv)
 
 	if (type == ZFS_TYPE_VOLUME && !noreserve) {
 		zpool_handle_t *zpool_handle;
-		nvlist_t *real_props;
+		nvlist_t *real_props = NULL;
 		uint64_t spa_version;
 		char *p;
 		zfs_prop_t resv_prop;
 		char *strval;
 		char msg[1024];
 
-		if (p = strchr(argv[0], '/'))
+		if ((p = strchr(argv[0], '/')) != NULL)
 			*p = '\0';
 		zpool_handle = zpool_open(g_zfs, argv[0]);
 		if (p != NULL)
@@ -1712,7 +1715,7 @@ zfs_do_get(int argc, char **argv)
 				default:
 					(void) fprintf(stderr,
 					    gettext("invalid column name "
-					    "'%s'\n"), value);
+					    "'%s'\n"), suboptarg);
 					usage(B_FALSE);
 				}
 			}
@@ -1749,7 +1752,7 @@ zfs_do_get(int argc, char **argv)
 				default:
 					(void) fprintf(stderr,
 					    gettext("invalid source "
-					    "'%s'\n"), value);
+					    "'%s'\n"), suboptarg);
 					usage(B_FALSE);
 				}
 			}
@@ -1785,7 +1788,7 @@ zfs_do_get(int argc, char **argv)
 				default:
 					(void) fprintf(stderr,
 					    gettext("invalid type '%s'\n"),
-					    value);
+					    suboptarg);
 					usage(B_FALSE);
 				}
 			}
@@ -2359,6 +2362,9 @@ us_compare(const void *larg, const void *rarg, void *unused)
 			if (rv64 != lv64)
 				rc = (rv64 < lv64) ? 1 : -1;
 			break;
+
+		default:
+			break;
 		}
 
 		if (rc != 0) {
@@ -2414,7 +2420,7 @@ userspace_cb(void *arg, const char *domain, uid_t rid, uint64_t space)
 	nvlist_t *props;
 	us_node_t *n;
 	zfs_sort_column_t *sortcol = cb->cb_sortcol;
-	unsigned type;
+	unsigned type = 0;
 	const char *typestr;
 	size_t namelen;
 	size_t typelen;
@@ -2433,7 +2439,7 @@ userspace_cb(void *arg, const char *domain, uid_t rid, uint64_t space)
 		/* SMB */
 		char sid[ZFS_MAXNAMELEN + 32];
 		uid_t id;
-#ifdef sun
+#ifdef illumos
 		int err;
 		int flag = IDMAP_REQ_FLG_USE_CACHE;
 #endif
@@ -2444,17 +2450,17 @@ userspace_cb(void *arg, const char *domain, uid_t rid, uint64_t space)
 
 		if (prop == ZFS_PROP_GROUPUSED || prop == ZFS_PROP_GROUPQUOTA) {
 			type = USTYPE_SMB_GRP;
-#ifdef sun
+#ifdef illumos
 			err = sid_to_id(sid, B_FALSE, &id);
 #endif
 		} else {
 			type = USTYPE_SMB_USR;
-#ifdef sun
+#ifdef illumos
 			err = sid_to_id(sid, B_TRUE, &id);
 #endif
 		}
 
-#ifdef sun
+#ifdef illumos
 		if (err == 0) {
 			rid = id;
 			if (!cb->cb_sid2posix) {
@@ -3155,7 +3161,7 @@ zfs_do_list(int argc, char **argv)
 				default:
 					(void) fprintf(stderr,
 					    gettext("invalid type '%s'\n"),
-					    value);
+					    suboptarg);
 					usage(B_FALSE);
 				}
 			}
@@ -3579,7 +3585,7 @@ zfs_do_set(int argc, char **argv)
 {
 	nvlist_t *props = NULL;
 	int ds_start = -1; /* argv idx of first dataset arg */
-	int i, ret = 0;
+	int ret = 0;
 
 	/* check for options */
 	if (argc > 1 && argv[1][0] == '-') {
@@ -3605,7 +3611,7 @@ zfs_do_set(int argc, char **argv)
 	}
 
 	/* validate argument order:  prop=val args followed by dataset args */
-	for (i = 1; i < argc; i++) {
+	for (int i = 1; i < argc; i++) {
 		if (strchr(argv[i], '=') != NULL) {
 			if (ds_start > 0) {
 				/* out-of-order prop=val argument */
@@ -3625,7 +3631,7 @@ zfs_do_set(int argc, char **argv)
 	/* Populate a list of property settings */
 	if (nvlist_alloc(&props, NV_UNIQUE_NAME, 0) != 0)
 		nomem();
-	for (i = 1; i < ds_start; i++) {
+	for (int i = 1; i < ds_start; i++) {
 		if ((ret = parseprop(props, argv[i])) != 0)
 			goto error;
 	}
@@ -3972,7 +3978,7 @@ zfs_do_send(int argc, char **argv)
 static int
 zfs_do_receive(int argc, char **argv)
 {
-	int c, err;
+	int c, err = 0;
 	recvflags_t flags = { 0 };
 	boolean_t abort_resumable = B_FALSE;
 
@@ -4232,7 +4238,7 @@ deleg_perm_type(zfs_deleg_note_t note)
 	}
 }
 
-static int inline
+static int
 who_type2weight(zfs_deleg_who_type_t who_type)
 {
 	int res;
@@ -4452,7 +4458,7 @@ fs_perm_fini(fs_perm_t *fsperm)
 	uu_avl_destroy(fsperm->fsp_uge_avl);
 }
 
-static void inline
+static void
 set_deleg_perm_node(uu_avl_t *avl, deleg_perm_node_t *node,
     zfs_deleg_who_type_t who_type, const char *name, char locality)
 {
@@ -4520,7 +4526,7 @@ parse_fs_perm(fs_perm_t *fsperm, nvlist_t *nvl)
 		nvlist_t *nvl2 = NULL;
 		const char *name = nvpair_name(nvp);
 		uu_avl_t *avl = NULL;
-		uu_avl_pool_t *avl_pool;
+		uu_avl_pool_t *avl_pool = NULL;
 		zfs_deleg_who_type_t perm_type = name[0];
 		char perm_locality = name[1];
 		const char *perm_name = name + 3;
@@ -4549,6 +4555,9 @@ parse_fs_perm(fs_perm_t *fsperm, nvlist_t *nvl)
 			avl_pool = fspset->fsps_who_perm_avl_pool;
 			avl = fsperm->fsp_uge_avl;
 			break;
+
+		default:
+			assert(!"unhandled zfs_deleg_who_type_t");
 		}
 
 		if (is_set) {
@@ -4583,6 +4592,9 @@ parse_fs_perm(fs_perm_t *fsperm, nvlist_t *nvl)
 						g = getgrgid(rid);
 						if (g)
 							nice_name = g->gr_name;
+						break;
+
+					default:
 						break;
 					}
 
@@ -4852,11 +4864,12 @@ parse_allow_args(int argc, char **argv, boolean_t un, struct allow_opts *opts)
 		allow_usage(un, B_FALSE,
 		    gettext("-u, -g, and -e are mutually exclusive\n"));
 
-	if (opts->prt_usage)
+	if (opts->prt_usage) {
 		if (argc == 0 && all_sum == 0)
 			allow_usage(un, B_TRUE, NULL);
 		else
 			usage(B_FALSE);
+	}
 
 	if (opts->set) {
 		if (csuge_sum > 1)
@@ -4905,8 +4918,8 @@ store_allow_perm(zfs_deleg_who_type_t type, boolean_t local, boolean_t descend,
 	int i;
 	char ld[2] = { '\0', '\0' };
 	char who_buf[ZFS_MAXNAMELEN+32];
-	char base_type;
-	char set_type;
+	char base_type = '\0';
+	char set_type = '\0';
 	nvlist_t *base_nvl = NULL;
 	nvlist_t *set_nvl = NULL;
 	nvlist_t *nvl;
@@ -4955,6 +4968,10 @@ store_allow_perm(zfs_deleg_who_type_t type, boolean_t local, boolean_t descend,
 			ld[0] = ZFS_DELEG_LOCAL;
 		if (descend)
 			ld[1] = ZFS_DELEG_DESCENDENT;
+		break;
+
+	default:
+		assert(set_type != '\0' && base_type != '\0');
 	}
 
 	if (perms != NULL) {
@@ -5059,7 +5076,7 @@ construct_fsacl_list(boolean_t un, struct allow_opts *opts, nvlist_t **nvlp)
 
 		while (curr < end) {
 			const char *who;
-			zfs_deleg_who_type_t who_type;
+			zfs_deleg_who_type_t who_type = ZFS_DELEG_WHO_UNKNOWN;
 			char *endch;
 			char *delim = strchr(curr, ',');
 			char errbuf[256];
@@ -5109,12 +5126,13 @@ construct_fsacl_list(boolean_t un, struct allow_opts *opts, nvlist_t **nvlp)
 					p = getpwuid(rid);
 				}
 
-				if (p == NULL)
+				if (p == NULL) {
 					if (*endch != '\0') {
 						g = getgrnam(curr);
 					} else {
 						g = getgrgid(rid);
 					}
+				}
 
 				if (p != NULL) {
 					who_type = ZFS_DELEG_USER;
@@ -5187,7 +5205,7 @@ print_set_creat_perms(uu_avl_t *who_avl)
 	}
 }
 
-static void inline
+static void
 print_uge_deleg_perms(uu_avl_t *who_avl, boolean_t local, boolean_t descend,
     const char *title)
 {
@@ -5238,6 +5256,10 @@ print_uge_deleg_perms(uu_avl_t *who_avl, boolean_t local, boolean_t descend,
 				case ZFS_DELEG_EVERYONE:
 					who = gettext("everyone");
 					who_name = NULL;
+					break;
+
+				default:
+					assert(who != NULL);
 				}
 
 				prt_who = B_FALSE;
@@ -5406,8 +5428,7 @@ zfs_do_allow_unallow_impl(int argc, char **argv, boolean_t un)
 
 cleanup0:
 	nvlist_free(perm_nvl);
-	if (update_perm_nvl != NULL)
-		nvlist_free(update_perm_nvl);
+	nvlist_free(update_perm_nvl);
 cleanup1:
 	fs_perm_set_fini(&fs_perm_set);
 cleanup2:
@@ -5543,7 +5564,8 @@ typedef struct holds_cbdata {
  *
  */
 static void
-print_holds(boolean_t scripted, size_t nwidth, size_t tagwidth, nvlist_t *nvl)
+print_holds(boolean_t scripted, boolean_t literal, size_t nwidth,
+    size_t tagwidth, nvlist_t *nvl)
 {
 	int i;
 	nvpair_t *nvp = NULL;
@@ -5576,10 +5598,14 @@ print_holds(boolean_t scripted, size_t nwidth, size_t tagwidth, nvlist_t *nvl)
 			size_t sepnum = scripted ? 1 : 2;
 
 			(void) nvpair_value_uint64(nvp2, &val);
-			time = (time_t)val;
-			(void) localtime_r(&time, &t);
-			(void) strftime(tsbuf, DATETIME_BUF_LEN,
-			    gettext(STRFTIME_FMT_STR), &t);
+			if (literal)
+				snprintf(tsbuf, DATETIME_BUF_LEN, "%llu", val);
+			else {
+				time = (time_t)val;
+				(void) localtime_r(&time, &t);
+				(void) strftime(tsbuf, DATETIME_BUF_LEN,
+				    gettext(STRFTIME_FMT_STR), &t);
+			}
 
 			(void) printf("%-*s%*c%-*s%*c%s\n", nwidth, zname,
 			    sepnum, sep, tagwidth, tagname, sepnum, sep, tsbuf);
@@ -5600,7 +5626,7 @@ holds_callback(zfs_handle_t *zhp, void *data)
 	const char *zname = zfs_get_name(zhp);
 	size_t znamelen = strnlen(zname, ZFS_MAXNAMELEN);
 
-	if (cbp->cb_recursive) {
+	if (cbp->cb_recursive && cbp->cb_snapname != NULL) {
 		const char *snapname;
 		char *delim  = strchr(zname, '@');
 		if (delim == NULL)
@@ -5628,9 +5654,12 @@ holds_callback(zfs_handle_t *zhp, void *data)
 }
 
 /*
- * zfs holds [-r] <snap> ...
+ * zfs holds [-Hp] [-r | -d max] <dataset|snap> ...
  *
- *	-r	Recursively hold
+ *	-H	Suppress header output
+ *	-p	Output literal values
+ *	-r	Recursively search for holds
+ *	-d max	Limit depth of recursive search
  */
 static int
 zfs_do_holds(int argc, char **argv)
@@ -5639,8 +5668,9 @@ zfs_do_holds(int argc, char **argv)
 	int c;
 	int i;
 	boolean_t scripted = B_FALSE;
+	boolean_t literal = B_FALSE;
 	boolean_t recursive = B_FALSE;
-	const char *opts = "rH";
+	const char *opts = "d:rHp";
 	nvlist_t *nvl;
 
 	int types = ZFS_TYPE_SNAPSHOT;
@@ -5653,11 +5683,18 @@ zfs_do_holds(int argc, char **argv)
 	/* check options */
 	while ((c = getopt(argc, argv, opts)) != -1) {
 		switch (c) {
+		case 'd':
+			limit = parse_depth(optarg, &flags);
+			recursive = B_TRUE;
+			break;
 		case 'r':
 			recursive = B_TRUE;
 			break;
 		case 'H':
 			scripted = B_TRUE;
+			break;
+		case 'p':
+			literal = B_TRUE;
 			break;
 		case '?':
 			(void) fprintf(stderr, gettext("invalid option '%c'\n"),
@@ -5684,18 +5721,14 @@ zfs_do_holds(int argc, char **argv)
 	for (i = 0; i < argc; ++i) {
 		char *snapshot = argv[i];
 		const char *delim;
-		const char *snapname;
+		const char *snapname = NULL;
 
 		delim = strchr(snapshot, '@');
-		if (delim == NULL) {
-			(void) fprintf(stderr,
-			    gettext("'%s' is not a snapshot\n"), snapshot);
-			++errors;
-			continue;
+		if (delim != NULL) {
+			snapname = delim + 1;
+			if (recursive)
+				snapshot[delim - snapshot] = '\0';
 		}
-		snapname = delim + 1;
-		if (recursive)
-			snapshot[delim - snapshot] = '\0';
 
 		cb.cb_recursive = recursive;
 		cb.cb_snapname = snapname;
@@ -5713,7 +5746,8 @@ zfs_do_holds(int argc, char **argv)
 	/*
 	 *  2. print holds data
 	 */
-	print_holds(scripted, cb.cb_max_namelen, cb.cb_max_taglen, nvl);
+	print_holds(scripted, literal, cb.cb_max_namelen, cb.cb_max_taglen,
+	    nvl);
 
 	if (nvlist_empty(nvl))
 		(void) printf(gettext("no datasets available\n"));
@@ -5942,7 +5976,7 @@ share_mount_one(zfs_handle_t *zhp, int op, int flags, char *protocol,
 		shared_nfs = zfs_is_shared_nfs(zhp, NULL);
 		shared_smb = zfs_is_shared_smb(zhp, NULL);
 
-		if (shared_nfs && shared_smb ||
+		if ((shared_nfs && shared_smb) ||
 		    (shared_nfs && strcmp(shareopts, "on") == 0 &&
 		    strcmp(smbshareopts, "off") == 0) ||
 		    (shared_smb && strcmp(smbshareopts, "on") == 0 &&
@@ -6264,7 +6298,7 @@ unshare_unmount_path(int op, char *path, int flags, boolean_t is_manual)
 	/*
 	 * Search for the given (major,minor) pair in the mount table.
 	 */
-#ifdef sun
+#ifdef illumos
 	rewind(mnttab_file);
 	while ((ret = getextmntent(mnttab_file, &entry, 0)) == 0) {
 		if (entry.mnt_major == major(statbuf.st_dev) &&
@@ -6416,7 +6450,7 @@ unshare_unmount(int op, int argc, char **argv)
 		 */
 		struct mnttab entry;
 		uu_avl_pool_t *pool;
-		uu_avl_t *tree;
+		uu_avl_t *tree = NULL;
 		unshare_unmount_node_t *node;
 		uu_avl_index_t idx;
 		uu_avl_walk_t *walk;
@@ -6910,7 +6944,7 @@ zfs_do_diff(int argc, char **argv)
 	if (copy == NULL)
 		usage(B_FALSE);
 
-	if (atp = strchr(copy, '@'))
+	if ((atp = strchr(copy, '@')) != NULL)
 		*atp = '\0';
 
 	if ((zhp = zfs_open(g_zfs, copy, ZFS_TYPE_FILESYSTEM)) == NULL)

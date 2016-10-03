@@ -41,6 +41,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/rman.h>
 #include <sys/taskqueue.h>
 #include <sys/tree.h>
+#include <sys/vmem.h>
 #include <machine/bus.h>
 #include <contrib/dev/acpica/include/acpi.h>
 #include <contrib/dev/acpica/include/accommon.h>
@@ -178,7 +179,7 @@ done:
 	}
 
 	if (enqueue) {
-		taskqueue_enqueue_fast(unit->fault_taskqueue,
+		taskqueue_enqueue(unit->fault_taskqueue,
 		    &unit->fault_task);
 	}
 	return (FILTER_HANDLED);

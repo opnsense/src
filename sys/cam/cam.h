@@ -39,16 +39,12 @@
 
 typedef u_int path_id_t;
 typedef u_int target_id_t;
-typedef u_int lun_id_t;
-typedef union {
-	u_int64_t	lun64;
-	u_int8_t	lun[8];
-} lun64_id_t;
+typedef u_int64_t lun_id_t;
 
 #define	CAM_XPT_PATH_ID	((path_id_t)~0)
 #define	CAM_BUS_WILDCARD ((path_id_t)~0)
 #define	CAM_TARGET_WILDCARD ((target_id_t)~0)
-#define	CAM_LUN_WILDCARD ((lun_id_t)~0)
+#define	CAM_LUN_WILDCARD (~(u_int)0)
 
 #define CAM_EXTLUN_BYTE_SWIZZLE(lun) (	\
 	((((u_int64_t)lun) & 0xffff000000000000L) >> 48) | \
@@ -81,7 +77,7 @@ typedef enum {
     CAM_RL_VALUES
 } cam_rl;
 /*
- * The generation number is incremented everytime a new entry is entered into
+ * The generation number is incremented every time a new entry is entered into
  * the queue giving round robin per priority level scheduling.
  */
 typedef struct {
@@ -122,7 +118,7 @@ typedef enum {
 enum {
 	SF_RETRY_UA		= 0x01,	/* Retry UNIT ATTENTION conditions. */
 	SF_NO_PRINT		= 0x02,	/* Never print error status. */
-	SF_QUIET_IR		= 0x04,	/* Be quiet about Illegal Request reponses */
+	SF_QUIET_IR		= 0x04,	/* Be quiet about Illegal Request responses */
 	SF_PRINT_ALWAYS		= 0x08,	/* Always print error status. */
 	SF_NO_RECOVERY		= 0x10,	/* Don't do active error recovery. */
 	SF_NO_RETRY		= 0x20,	/* Don't do any retries. */

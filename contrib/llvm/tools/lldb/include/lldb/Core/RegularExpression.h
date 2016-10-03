@@ -7,9 +7,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef liblldb_DBRegex_h_
-#define liblldb_DBRegex_h_
-#if defined(__cplusplus)
+#ifndef liblldb_RegularExpression_h_
+#define liblldb_RegularExpression_h_
 
 #ifdef _WIN32
 #include "../lib/Support/regex_impl.h"
@@ -37,8 +36,10 @@ inline void regfree(llvm_regex_t * a)
 {
     llvm_regfree(a);
 }
-
 #else
+#if __ANDROID_NDK__
+#include <regex>
+#endif
 #include <regex.h>
 #endif
 #include <stdint.h>
@@ -49,7 +50,7 @@ inline void regfree(llvm_regex_t * a)
 namespace llvm
 {
     class StringRef;
-}
+} // namespace llvm
 
 namespace lldb_private {
 
@@ -92,9 +93,7 @@ public:
         regmatch_t *
         GetData ()
         {
-            if (m_matches.empty())
-                return NULL;
-            return m_matches.data();
+            return (m_matches.empty() ? nullptr : m_matches.data());
         }
         
         bool
@@ -107,9 +106,9 @@ public:
         GetMatchSpanningIndices (const char* s, uint32_t idx1, uint32_t idx2, llvm::StringRef& match_str) const;
 
     protected:
-        
         std::vector<regmatch_t> m_matches; ///< Where parenthesized subexpressions results are stored
     };
+
     //------------------------------------------------------------------
     /// Default constructor.
     ///
@@ -118,30 +117,13 @@ public:
     //------------------------------------------------------------------
     RegularExpression ();
 
-    //------------------------------------------------------------------
-    /// Constructor that takes a regulare expression with flags.
-    ///
-    /// Constructor that compiles \a re using \a flags and stores the
-    /// resulting compiled regular expression into this object.
-    ///
-    /// @param[in] re
-    ///     A c string that represents the regular expression to
-    ///     compile.
-    ///
-    /// @param[in] flags
-    ///     Flags that are passed the the \c regcomp() function.
-    //------------------------------------------------------------------
-    explicit
-    RegularExpression (const char* re, int flags);
-
-    // This one uses flags = REG_EXTENDED.
     explicit
     RegularExpression (const char* re);
 
     //------------------------------------------------------------------
     /// Destructor.
     ///
-    /// Any previosuly compiled regular expression contained in this
+    /// Any previously compiled regular expression contained in this
     /// object will be freed.
     //------------------------------------------------------------------
     ~RegularExpression ();
@@ -154,18 +136,15 @@ public:
     /// Compile a regular expression.
     ///
     /// Compile a regular expression using the supplied regular
-    /// expression text and flags. The compied regular expression lives
+    /// expression text. The compiled regular expression lives
     /// in this object so that it can be readily used for regular
     /// expression matches. Execute() can be called after the regular
-    /// expression is compiled. Any previosuly compiled regular
+    /// expression is compiled. Any previously compiled regular
     /// expression contained in this object will be freed.
     ///
     /// @param[in] re
     ///     A NULL terminated C string that represents the regular
     ///     expression to compile.
-    ///
-    /// @param[in] flags
-    ///     Flags that are passed the the \c regcomp() function.
     ///
     /// @return
     ///     \b true if the regular expression compiles successfully,
@@ -174,9 +153,6 @@ public:
     bool
     Compile (const char* re);
 
-    bool
-    Compile (const char* re, int flags);
-
     //------------------------------------------------------------------
     /// Executes a regular expression.
     ///
@@ -184,8 +160,7 @@ public:
     /// expression that is already in this object against the match
     /// string \a s. If any parens are used for regular expression
     /// matches \a match_count should indicate the number of regmatch_t
-    /// values that are present in \a match_ptr. The regular expression
-    /// will be executed using the \a execute_flags
+    /// values that are present in \a match_ptr.
     ///
     /// @param[in] string
     ///     The string to match against the compile regular expression.
@@ -193,17 +168,14 @@ public:
     /// @param[in] match
     ///     A pointer to a RegularExpression::Match structure that was
     ///     properly initialized with the desired number of maximum
-    ///     matches, or NULL if no parenthesized matching is needed.
-    ///
-    /// @param[in] execute_flags
-    ///     Flags to pass to the \c regexec() function.
+    ///     matches, or nullptr if no parenthesized matching is needed.
     ///
     /// @return
     ///     \b true if \a string matches the compiled regular
     ///     expression, \b false otherwise.
     //------------------------------------------------------------------
     bool
-    Execute (const char* string, Match *match = NULL, int execute_flags = 0) const;
+    Execute(const char* string, Match *match = nullptr) const;
 
     size_t
     GetErrorAsCString (char *err_str, size_t err_str_max_len) const;
@@ -230,12 +202,6 @@ public:
     const char*
     GetText () const;
     
-    int
-    GetCompileFlags () const
-    {
-        return m_compile_flags;
-    }
-
     //------------------------------------------------------------------
     /// Test if valid.
     ///
@@ -253,7 +219,6 @@ public:
     {
         Free();
         m_re.clear();
-        m_compile_flags = 0;
         m_comp_err = 1;
     }
     
@@ -273,10 +238,8 @@ private:
     std::string m_re;   ///< A copy of the original regular expression text
     int m_comp_err;     ///< Error code for the regular expression compilation
     regex_t m_preg;     ///< The compiled regular expression
-    int     m_compile_flags; ///< Stores the flags from the last compile.
 };
 
 } // namespace lldb_private
 
-#endif  // #if defined(__cplusplus)
-#endif  // liblldb_DBRegex_h_
+#endif // liblldb_RegularExpression_h_

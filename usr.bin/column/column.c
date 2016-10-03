@@ -233,18 +233,18 @@ maketbl(void)
 	wchar_t *last;
 
 	if ((t = tbl = calloc(entries, sizeof(TBL))) == NULL)
-		err(1, (char *)NULL);
+		err(1, NULL);
 	if ((cols = calloc((maxcols = DEFCOLS), sizeof(*cols))) == NULL)
-		err(1, (char *)NULL);
+		err(1, NULL);
 	if ((lens = calloc(maxcols, sizeof(int))) == NULL)
-		err(1, (char *)NULL);
+		err(1, NULL);
 	for (cnt = 0, lp = list; cnt < entries; ++cnt, ++lp, ++t) {
 		for (coloff = 0, p = *lp;
 		    (cols[coloff] = wcstok(p, separator, &last));
 		    p = NULL)
 			if (++coloff == maxcols) {
 				if (!(cols = realloc(cols, ((u_int)maxcols +
-				    DEFCOLS) * sizeof(char *))) ||
+				    DEFCOLS) * sizeof(wchar_t *))) ||
 				    !(lens = realloc(lens,
 				    ((u_int)maxcols + DEFCOLS) * sizeof(int))))
 					err(1, NULL);
@@ -253,9 +253,9 @@ maketbl(void)
 				maxcols += DEFCOLS;
 			}
 		if ((t->list = calloc(coloff, sizeof(*t->list))) == NULL)
-			err(1, (char *)NULL);
+			err(1, NULL);
 		if ((t->len = calloc(coloff, sizeof(int))) == NULL)
-			err(1, (char *)NULL);
+			err(1, NULL);
 		for (t->cols = coloff; --coloff >= 0;) {
 			t->list[coloff] = cols[coloff];
 			t->len[coloff] = width(cols[coloff]);
@@ -284,7 +284,7 @@ input(FILE *fp)
 	if (!list)
 		if ((list = calloc((maxentry = DEFNUM), sizeof(*list))) ==
 		    NULL)
-			err(1, (char *)NULL);
+			err(1, NULL);
 	while (fgetws(buf, MAXLINELEN, fp)) {
 		for (p = buf; *p && iswspace(*p); ++p);
 		if (!*p)

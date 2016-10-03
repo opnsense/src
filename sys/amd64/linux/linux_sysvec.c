@@ -35,7 +35,6 @@
 __FBSDID("$FreeBSD$");
 
 #include "opt_compat.h"
-#include "opt_pax.h"
 
 #define	__ELF_WORD_SIZE	64
 
@@ -51,7 +50,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/malloc.h>
 #include <sys/module.h>
 #include <sys/mutex.h>
-#include <sys/pax.h>
 #include <sys/proc.h>
 #include <sys/resourcevar.h>
 #include <sys/signalvar.h>
@@ -188,7 +186,7 @@ static int _bsd_to_linux_trapcode[] = {
 	15			/* 30 T_RESERVED */
 };
 #define bsd_to_linux_trapcode(code) \
-    ((code)<sizeof(_bsd_to_linux_trapcode)/sizeof(*_bsd_to_linux_trapcode)? \
+    ((code)<nitems(_bsd_to_linux_trapcode)? \
      _bsd_to_linux_trapcode[(code)]: \
      LINUX_T_UNKNOWN)
 
@@ -276,7 +274,7 @@ elf_linux_fixup(register_t **stack_base, struct image_params *imgp)
 	int issetugid;
 
 	p = imgp->proc;
-	arginfo = (struct ps_strings *)p->p_psstrings;
+	arginfo = (struct ps_strings *)p->p_sysent->sv_psstrings;
 
 	KASSERT(curthread->td_proc == imgp->proc,
 	    ("unsafe elf_linux_fixup(), should be curproc"));
@@ -286,7 +284,7 @@ elf_linux_fixup(register_t **stack_base, struct image_params *imgp)
 
 	issetugid = p->p_flag & P_SUGID ? 1 : 0;
 	AUXARGS_ENTRY(pos, LINUX_AT_SYSINFO_EHDR,
-	    imgp->proc->p_shared_page_base);
+	    imgp->proc->p_sysent->sv_shared_page_base);
 	AUXARGS_ENTRY(pos, LINUX_AT_HWCAP, cpu_feature);
 	AUXARGS_ENTRY(pos, LINUX_AT_CLKTCK, stclohz);
 	AUXARGS_ENTRY(pos, AT_PHDR, args->phdr);
@@ -344,11 +342,11 @@ linux_copyout_strings(struct image_params *imgp)
 		execpath_len = 0;
 
 	p = imgp->proc;
-	arginfo = (struct ps_strings *)p->p_psstrings;
+	arginfo = (struct ps_strings *)p->p_sysent->sv_psstrings;
 	destp =	(caddr_t)arginfo - SPARE_USRSPACE -
 	    roundup(sizeof(canary), sizeof(char *)) -
 	    roundup(execpath_len, sizeof(char *)) -
-	    roundup((ARG_MAX - imgp->args->stringspace), sizeof(char *));
+	    roundup(ARG_MAX - imgp->args->stringspace, sizeof(char *));
 
 	if (execpath_len != 0) {
 		imgp->execpathp = (uintptr_t)arginfo - execpath_len;
@@ -632,7 +630,7 @@ linux_rt_sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	/* Allocate space for the signal handler context. */
 	if ((td->td_pflags & TDP_ALTSTACK) != 0 && !oonstack &&
 	    SIGISMEMBER(psp->ps_sigonstack, sig)) {
-		sp = td->td_sigstk.ss_sp + td->td_sigstk.ss_size -
+		sp = (caddr_t)td->td_sigstk.ss_sp + td->td_sigstk.ss_size -
 		    sizeof(struct l_rt_sigframe);
 	} else
 		sp = (caddr_t)regs->tf_rsp - sizeof(struct l_rt_sigframe) - 128;
@@ -802,8 +800,6 @@ struct sysentvec elf_linux_sysvec = {
 	.sv_size	= LINUX_SYS_MAXSYSCALL,
 	.sv_table	= linux_sysent,
 	.sv_mask	= 0,
-	.sv_sigsize	= 0,
-	.sv_sigtbl	= NULL,
 	.sv_errsize	= ELAST + 1,
 	.sv_errtbl	= bsd_to_linux_errno,
 	.sv_transtrap	= translate_traps,
@@ -811,7 +807,6 @@ struct sysentvec elf_linux_sysvec = {
 	.sv_sendsig	= linux_rt_sendsig,
 	.sv_sigcode	= &_binary_linux_locore_o_start,
 	.sv_szsigcode	= &linux_szsigcode,
-	.sv_prepsyscall	= NULL,
 	.sv_name	= "Linux ELF64",
 	.sv_coredump	= elf64_coredump,
 	.sv_imgact_try	= exec_linux_imgact_try,
@@ -835,7 +830,6 @@ struct sysentvec elf_linux_sysvec = {
 	.sv_schedtail	= linux_schedtail,
 	.sv_thread_detach = linux_thread_detach,
 	.sv_trap	= linux_vsyscall,
-	.sv_pax_aslr_init	= pax_aslr_init_vmspace,
 };
 
 static void
@@ -998,3 +992,4 @@ static moduledata_t linux64_elf_mod = {
 
 DECLARE_MODULE_TIED(linux64elf, linux64_elf_mod, SI_SUB_EXEC, SI_ORDER_ANY);
 MODULE_DEPEND(linux64elf, linux_common, 1, 1, 1);
+FEATURE(linux64, "Linux 64bit support");

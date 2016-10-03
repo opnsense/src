@@ -51,7 +51,7 @@
 static int umoscom_debug = 0;
 
 static SYSCTL_NODE(_hw_usb, OID_AUTO, umoscom, CTLFLAG_RW, 0, "USB umoscom");
-SYSCTL_INT(_hw_usb_umoscom, OID_AUTO, debug, CTLFLAG_RW,
+SYSCTL_INT(_hw_usb_umoscom, OID_AUTO, debug, CTLFLAG_RWTUN,
     &umoscom_debug, 0, "Debug level");
 #endif
 
@@ -278,14 +278,15 @@ static driver_t umoscom_driver = {
 	.size = sizeof(struct umoscom_softc),
 };
 
+static const STRUCT_USB_HOST_ID umoscom_devs[] = {
+	{USB_VPI(USB_VENDOR_MOSCHIP, USB_PRODUCT_MOSCHIP_MCS7703, 0)}
+};
+
 DRIVER_MODULE(umoscom, uhub, umoscom_driver, umoscom_devclass, NULL, 0);
 MODULE_DEPEND(umoscom, ucom, 1, 1, 1);
 MODULE_DEPEND(umoscom, usb, 1, 1, 1);
 MODULE_VERSION(umoscom, 1);
-
-static const STRUCT_USB_HOST_ID umoscom_devs[] = {
-	{USB_VPI(USB_VENDOR_MOSCHIP, USB_PRODUCT_MOSCHIP_MCS7703, 0)}
-};
+USB_PNP_HOST_INFO(umoscom_devs);
 
 static int
 umoscom_probe(device_t dev)

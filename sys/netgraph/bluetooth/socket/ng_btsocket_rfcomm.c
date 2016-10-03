@@ -434,7 +434,7 @@ ng_btsocket_rfcomm_attach(struct socket *so, int proto, struct thread *td)
 	pcb->rx_cred = RFCOMM_DEFAULT_CREDITS;
 
 	mtx_init(&pcb->pcb_mtx, "btsocks_rfcomm_pcb_mtx", NULL, MTX_DEF);
-	callout_handle_init(&pcb->timo);
+	callout_init_mtx(&pcb->timo, &pcb->pcb_mtx, 0);
 
 	/* Add the PCB to the list */
 	mtx_lock(&ng_btsocket_rfcomm_sockets_mtx);
@@ -972,7 +972,7 @@ ng_btsocket_rfcomm_send(struct socket *so, int flags, struct mbuf *m,
 	}
 
 	/* Put the packet on the socket's send queue and wakeup RFCOMM task */
-	sbappend(&pcb->so->so_snd, m);
+	sbappend(&pcb->so->so_snd, m, flags);
 	m = NULL;
 	
 	if (!(pcb->flags & NG_BTSOCKET_RFCOMM_DLC_SENDING)) {
@@ -1339,6 +1339,8 @@ ng_btsocket_rfcomm_session_create(ng_btsocket_rfcomm_session_p *sp,
 	l2sa.l2cap_family = AF_BLUETOOTH;
 	l2sa.l2cap_psm = (dst == NULL)? htole16(NG_L2CAP_PSM_RFCOMM) : 0;
 	bcopy(src, &l2sa.l2cap_bdaddr, sizeof(l2sa.l2cap_bdaddr));
+	l2sa.l2cap_cid = 0;
+	l2sa.l2cap_bdaddr_type = BDADDR_BREDR;
 
 	error = sobind(s->l2so, (struct sockaddr *) &l2sa, td);
 	if (error != 0)
@@ -1360,6 +1362,8 @@ ng_btsocket_rfcomm_session_create(ng_btsocket_rfcomm_session_p *sp,
 		l2sa.l2cap_family = AF_BLUETOOTH;
 		l2sa.l2cap_psm = htole16(NG_L2CAP_PSM_RFCOMM);
 	        bcopy(dst, &l2sa.l2cap_bdaddr, sizeof(l2sa.l2cap_bdaddr));
+		l2sa.l2cap_cid = 0;
+		l2sa.l2cap_bdaddr_type = BDADDR_BREDR;
 
 		error = soconnect(s->l2so, (struct sockaddr *) &l2sa, td);
 		if (error != 0)
@@ -1471,7 +1475,7 @@ ng_btsocket_rfcomm_session_accept(ng_btsocket_rfcomm_session_p s0)
 			s->state = NG_BTSOCKET_RFCOMM_SESSION_CONNECTED;
 
 			/*
-			 * Adjust MTU on incomming connection. Reserve 5 bytes:
+			 * Adjust MTU on incoming connection. Reserve 5 bytes:
 			 * RFCOMM frame header, one extra byte for length and 
 			 * one extra byte for credits.
 			 */
@@ -2392,7 +2396,7 @@ ng_btsocket_rfcomm_receive_uih(ng_btsocket_rfcomm_session_p s, int dlci,
 			error = ENOBUFS;
 		} else {
 			/* Append packet to the socket receive queue */
-			sbappend(&pcb->so->so_rcv, m0);
+			sbappend(&pcb->so->so_rcv, m0, 0);
 			m0 = NULL;
 
 			sorwakeup(pcb->so);
@@ -2877,7 +2881,7 @@ ng_btsocket_rfcomm_receive_pn(ng_btsocket_rfcomm_session_p s, struct mbuf *m0)
 
 		mtx_unlock(&pcb->pcb_mtx);
 	} else if (RFCOMM_CR(hdr->type)) {
-		/* PN request to non-existing dlci - incomming connection */
+		/* PN request to non-existing dlci - incoming connection */
 		pcb = ng_btsocket_rfcomm_connect_ind(s,
 				RFCOMM_SRVCHANNEL(pn->dlci));
 		if (pcb != NULL) {
@@ -3279,7 +3283,7 @@ ng_btsocket_rfcomm_pcb_send(ng_btsocket_rfcomm_pcb_p pcb, int limit)
 	}
 
 	for (error = 0, sent = 0; sent < limit; sent ++) { 
-		length = min(pcb->mtu, pcb->so->so_snd.sb_cc);
+		length = min(pcb->mtu, sbavail(&pcb->so->so_snd));
 		if (length == 0)
 			break;
 
@@ -3451,8 +3455,8 @@ ng_btsocket_rfcomm_timeout(ng_btsocket_rfcomm_pcb_p pcb)
 	if (!(pcb->flags & NG_BTSOCKET_RFCOMM_DLC_TIMO)) {
 		pcb->flags |= NG_BTSOCKET_RFCOMM_DLC_TIMO;
 		pcb->flags &= ~NG_BTSOCKET_RFCOMM_DLC_TIMEDOUT;
-		pcb->timo = timeout(ng_btsocket_rfcomm_process_timeout, pcb,
-					ng_btsocket_rfcomm_timo * hz);
+		callout_reset(&pcb->timo, ng_btsocket_rfcomm_timo * hz,
+		    ng_btsocket_rfcomm_process_timeout, pcb);
 	} else
 		panic("%s: Duplicated socket timeout?!\n", __func__);
 } /* ng_btsocket_rfcomm_timeout */
@@ -3467,7 +3471,7 @@ ng_btsocket_rfcomm_untimeout(ng_btsocket_rfcomm_pcb_p pcb)
 	mtx_assert(&pcb->pcb_mtx, MA_OWNED);
 
 	if (pcb->flags & NG_BTSOCKET_RFCOMM_DLC_TIMO) {
-		untimeout(ng_btsocket_rfcomm_process_timeout, pcb, pcb->timo);
+		callout_stop(&pcb->timo);
 		pcb->flags &= ~NG_BTSOCKET_RFCOMM_DLC_TIMO;
 		pcb->flags &= ~NG_BTSOCKET_RFCOMM_DLC_TIMEDOUT;
 	} else
@@ -3483,7 +3487,7 @@ ng_btsocket_rfcomm_process_timeout(void *xpcb)
 {
 	ng_btsocket_rfcomm_pcb_p	pcb = (ng_btsocket_rfcomm_pcb_p) xpcb;
 
-	mtx_lock(&pcb->pcb_mtx);
+	mtx_assert(&pcb->pcb_mtx, MA_OWNED);
 
 	NG_BTSOCKET_RFCOMM_INFO(
 "%s: Timeout, so=%p, dlci=%d, state=%d, flags=%#x\n",
@@ -3510,8 +3514,6 @@ ng_btsocket_rfcomm_process_timeout(void *xpcb)
 	}
 
 	ng_btsocket_rfcomm_task_wakeup();
-
-	mtx_unlock(&pcb->pcb_mtx);
 } /* ng_btsocket_rfcomm_process_timeout */
 
 /*

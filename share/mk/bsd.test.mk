@@ -16,6 +16,12 @@ LOCALBASE?=	/usr/local
 # Tests install directory
 TESTSDIR?=	${TESTSBASE}/${RELDIR:H}
 
+PACKAGE?=	tests
+
+FILESGROUPS+=	${PACKAGE}FILES
+${PACKAGE}FILESPACKAGE=	${PACKAGE}
+${PACKAGE}FILESDIR=	${TESTSDIR}
+
 # List of subdirectories containing tests into which to recurse.  This has the
 # same semantics as SUBDIR at build-time.  However, the directories listed here
 # get registered into the run-time test suite definitions so that the test
@@ -45,19 +51,11 @@ DISTRIBUTION:=	tests
 # Ordered list of directories to construct the PATH for the tests.
 TESTS_PATH+= ${DESTDIR}/bin ${DESTDIR}/sbin \
              ${DESTDIR}/usr/bin ${DESTDIR}/usr/sbin
-.if defined(.PARSEDIR)
 TESTS_ENV+= PATH=${TESTS_PATH:tW:C/ +/:/g}
-.else
-TESTS_ENV+= PATH=${TESTS_PATH:N :Q:S,\\ ,:,g}
-.endif
 
 # Ordered list of directories to construct the LD_LIBRARY_PATH for the tests.
 TESTS_LD_LIBRARY_PATH+= ${DESTDIR}/lib ${DESTDIR}/usr/lib
-.if defined(.PARSEDIR)
 TESTS_ENV+= LD_LIBRARY_PATH=${TESTS_LD_LIBRARY_PATH:tW:C/ +/:/g}
-.else
-TESTS_ENV+= LD_LIBRARY_PATH=${TESTS_LD_LIBRARY_PATH:N :Q:S,\\ ,:,g}
-.endif
 
 # List of all tests being built.  The various *.test.mk modules extend this
 # variable as needed.
@@ -68,42 +66,33 @@ _TESTS=
 .include <plain.test.mk>
 .include <tap.test.mk>
 
+# kyua automatically descends directories; only run make check on the
+# top-level directory
+.if !make(check)
 .for ts in ${TESTS_SUBDIRS}
 .if empty(SUBDIR:M${ts})
 SUBDIR+= ${ts}
 .endif
 .endfor
+SUBDIR_PARALLEL= t
+.endif
 
 # it is rare for test cases to have man pages
 .if !defined(MAN)
 MAN=
 .endif
 
-# tell progs.mk we might want to install things
-PROG_VARS+= BINDIR
-PROGS_TARGETS+= install
-
 .if !defined(NOT_FOR_TEST_SUITE)
 .include <suite.test.mk>
 .endif
 
-.if !target(realtest)
-realtest: .PHONY
+.if !target(realcheck)
+realcheck: .PHONY
 	@echo "$@ not defined; skipping"
 .endif
 
-test: .PHONY
-.ORDER: beforetest realtest
-test: beforetest realtest
+beforecheck realcheck aftercheck check: .PHONY
+.ORDER: beforecheck realcheck aftercheck
+check: beforecheck realcheck aftercheck
 
-.if target(aftertest)
-.ORDER: realtest aftertest
-test: aftertest
-.endif
-
-.if !empty(PROGS) || !empty(PROGS_CXX) || !empty(SCRIPTS)
 .include <bsd.progs.mk>
-.endif
-.include <bsd.files.mk>
-
-.include <bsd.obj.mk>

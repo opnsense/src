@@ -36,6 +36,7 @@
 #ifndef IXGBE_STANDALONE_BUILD
 #include "opt_inet.h"
 #include "opt_inet6.h"
+#include "opt_rss.h"
 #endif
 
 #include "ixgbe.h"
@@ -270,18 +271,15 @@ static SYSCTL_NODE(_hw, OID_AUTO, ix, CTLFLAG_RD, 0,
 ** traffic for that interrupt vector
 */
 static int ixgbe_enable_aim = TRUE;
-TUNABLE_INT("hw.ix.enable_aim", &ixgbe_enable_aim);
 SYSCTL_INT(_hw_ix, OID_AUTO, enable_aim, CTLFLAG_RWTUN, &ixgbe_enable_aim, 0,
     "Enable adaptive interrupt moderation");
 
 static int ixgbe_max_interrupt_rate = (4000000 / IXGBE_LOW_LATENCY);
-TUNABLE_INT("hw.ix.max_interrupt_rate", &ixgbe_max_interrupt_rate);
 SYSCTL_INT(_hw_ix, OID_AUTO, max_interrupt_rate, CTLFLAG_RDTUN,
     &ixgbe_max_interrupt_rate, 0, "Maximum interrupts per second");
 
 /* How many packets rxeof tries to clean at a time */
 static int ixgbe_rx_process_limit = 256;
-TUNABLE_INT("hw.ix.rx_process_limit", &ixgbe_rx_process_limit);
 SYSCTL_INT(_hw_ix, OID_AUTO, rx_process_limit, CTLFLAG_RDTUN,
     &ixgbe_rx_process_limit, 0,
     "Maximum number of received packets to process at a time,"
@@ -289,7 +287,6 @@ SYSCTL_INT(_hw_ix, OID_AUTO, rx_process_limit, CTLFLAG_RDTUN,
 
 /* How many packets txeof tries to clean at a time */
 static int ixgbe_tx_process_limit = 256;
-TUNABLE_INT("hw.ix.tx_process_limit", &ixgbe_tx_process_limit);
 SYSCTL_INT(_hw_ix, OID_AUTO, tx_process_limit, CTLFLAG_RDTUN,
     &ixgbe_tx_process_limit, 0,
     "Maximum number of sent packets to process at a time,"
@@ -319,7 +316,6 @@ static int ixgbe_smart_speed = ixgbe_smart_speed_on;
  * but this allows it to be forced off for testing.
  */
 static int ixgbe_enable_msix = 1;
-TUNABLE_INT("hw.ix.enable_msix", &ixgbe_enable_msix);
 SYSCTL_INT(_hw_ix, OID_AUTO, enable_msix, CTLFLAG_RDTUN, &ixgbe_enable_msix, 0,
     "Enable MSI-X interrupts");
 
@@ -330,10 +326,8 @@ SYSCTL_INT(_hw_ix, OID_AUTO, enable_msix, CTLFLAG_RDTUN, &ixgbe_enable_msix, 0,
  * can be overriden manually here.
  */
 static int ixgbe_num_queues = 0;
-TUNABLE_INT("hw.ix.num_queues", &ixgbe_num_queues);
 SYSCTL_INT(_hw_ix, OID_AUTO, num_queues, CTLFLAG_RDTUN, &ixgbe_num_queues, 0,
-    "Number of queues to configure up to a mximum of 8,"
-    "0 indicates autoconfigure");
+    "Number of queues to configure, 0 indicates autoconfigure");
 
 /*
 ** Number of TX descriptors per ring,
@@ -341,13 +335,11 @@ SYSCTL_INT(_hw_ix, OID_AUTO, num_queues, CTLFLAG_RDTUN, &ixgbe_num_queues, 0,
 ** the better performing choice.
 */
 static int ixgbe_txd = PERFORM_TXD;
-TUNABLE_INT("hw.ix.txd", &ixgbe_txd);
 SYSCTL_INT(_hw_ix, OID_AUTO, txd, CTLFLAG_RDTUN, &ixgbe_txd, 0,
     "Number of transmit descriptors per queue");
 
 /* Number of RX descriptors per ring */
 static int ixgbe_rxd = PERFORM_RXD;
-TUNABLE_INT("hw.ix.rxd", &ixgbe_rxd);
 SYSCTL_INT(_hw_ix, OID_AUTO, rxd, CTLFLAG_RDTUN, &ixgbe_rxd, 0,
     "Number of receive descriptors per queue");
 
@@ -469,6 +461,7 @@ ixgbe_attach(device_t dev)
 	adapter->init_locked = ixgbe_init_locked;
 	adapter->stop_locked = ixgbe_stop;
 #endif
+
 	/* Core Lock Init*/
 	IXGBE_CORE_LOCK_INIT(adapter, device_get_nameunit(dev));
 
@@ -900,7 +893,8 @@ ixgbe_ioctl(struct ifnet * ifp, u_long command, caddr_t data)
 			ifp->if_mtu = ifr->ifr_mtu;
 			adapter->max_frame_size =
 				ifp->if_mtu + IXGBE_MTU_HDR;
-			ixgbe_init_locked(adapter);
+			if (ifp->if_drv_flags & IFF_DRV_RUNNING)
+				ixgbe_init_locked(adapter);
 #ifdef PCI_IOV
 			ixgbe_recalculate_max_frame(adapter);
 #endif
@@ -978,7 +972,7 @@ ixgbe_ioctl(struct ifnet * ifp, u_long command, caddr_t data)
 		VLAN_CAPABILITIES(ifp);
 		break;
 	}
-#if __FreeBSD_version >= 1002500
+#if __FreeBSD_version >= 1100036
 	case SIOCGI2C:
 	{
 		struct ixgbe_hw *hw = &adapter->hw;
@@ -2129,7 +2123,7 @@ ixgbe_mc_array_itr(struct ixgbe_hw *hw, u8 **update_ptr, u32 *vmdq)
 	mta = (struct ixgbe_mc_addr *)*update_ptr;
 	*vmdq = mta->vmdq;
 
-	*update_ptr = (u8*)(mta + 1);;
+	*update_ptr = (u8*)(mta + 1);
 	return (mta->addr);
 }
 
@@ -2830,7 +2824,7 @@ ixgbe_setup_interface(device_t dev, struct adapter *adapter)
 		return (-1);
 	}
 	if_initname(ifp, device_get_name(dev), device_get_unit(dev));
-	if_initbaudrate(ifp, IF_Gbps(10));
+	ifp->if_baudrate = IF_Gbps(10);
 	ifp->if_init = ixgbe_init;
 	ifp->if_softc = adapter;
 	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
@@ -4522,10 +4516,10 @@ ixgbe_add_hw_stats(struct adapter *adapter)
 		SYSCTL_ADD_UQUAD(ctx, queue_list, OID_AUTO, "rx_copies",
 				CTLFLAG_RD, &rxr->rx_copies,
 				"Copied RX Frames");
-		SYSCTL_ADD_INT(ctx, queue_list, OID_AUTO, "lro_queued",
+		SYSCTL_ADD_U64(ctx, queue_list, OID_AUTO, "lro_queued",
 				CTLFLAG_RD, &lro->lro_queued, 0,
 				"LRO Queued");
-		SYSCTL_ADD_INT(ctx, queue_list, OID_AUTO, "lro_flushed",
+		SYSCTL_ADD_U64(ctx, queue_list, OID_AUTO, "lro_flushed",
 				CTLFLAG_RD, &lro->lro_flushed, 0,
 				"LRO Flushed");
 	}
@@ -4756,10 +4750,6 @@ ixgbe_sysctl_advertise(SYSCTL_HANDLER_ARGS)
 	if ((error) || (req->newptr == NULL))
 		return (error);
 
-	/* Checks to validate new value */
-	if (adapter->advertise == advertise) /* no change */
-		return (0);
-
 	return ixgbe_set_advertise(adapter, advertise);
 }
 
@@ -4769,6 +4759,10 @@ ixgbe_set_advertise(struct adapter *adapter, int advertise)
 	device_t		dev;
 	struct ixgbe_hw		*hw;
 	ixgbe_link_speed	speed;
+
+	/* Checks to validate new value */
+	if (adapter->advertise == advertise) /* no change */
+		return (0);
 
 	hw = &adapter->hw;
 	dev = adapter->dev;

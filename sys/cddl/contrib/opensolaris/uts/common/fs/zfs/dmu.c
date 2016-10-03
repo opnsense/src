@@ -47,6 +47,7 @@
 #include <sys/sa.h>
 #include <sys/zfeature.h>
 #ifdef _KERNEL
+#include <sys/racct.h>
 #include <sys/vm.h>
 #include <sys/zfs_znode.h>
 #endif
@@ -56,7 +57,6 @@
  */
 int zfs_nopwrite_enabled = 1;
 SYSCTL_DECL(_vfs_zfs);
-TUNABLE_INT("vfs.zfs.nopwrite_enabled", &zfs_nopwrite_enabled);
 SYSCTL_INT(_vfs_zfs, OID_AUTO, nopwrite_enabled, CTLFLAG_RDTUN,
     &zfs_nopwrite_enabled, 0, "Enable nopwrite feature");
 
@@ -428,6 +428,15 @@ dmu_buf_hold_array_by_dnode(dnode_t *dn, uint64_t offset, uint64_t length,
 	}
 	dbp = kmem_zalloc(sizeof (dmu_buf_t *) * nblks, KM_SLEEP);
 
+#if defined(_KERNEL) && defined(RACCT)
+	if (racct_enable && !read) {
+		PROC_LOCK(curproc);
+		racct_add_force(curproc, RACCT_WRITEBPS, length);
+		racct_add_force(curproc, RACCT_WRITEIOPS, nblks);
+		PROC_UNLOCK(curproc);
+	}
+#endif
+
 	zio = zio_root(dn->dn_objset->os_spa, NULL, NULL, ZIO_FLAG_CANFAIL);
 	blkid = dbuf_whichblock(dn, 0, offset);
 	for (i = 0; i < nblks; i++) {
@@ -449,9 +458,10 @@ dmu_buf_hold_array_by_dnode(dnode_t *dn, uint64_t offset, uint64_t length,
 		dbp[i] = &db->db;
 	}
 
-	if ((flags & DMU_READ_NO_PREFETCH) == 0 && read &&
-	    length <= zfetch_array_rd_sz) {
-		dmu_zfetch(&dn->dn_zfetch, blkid, nblks);
+	if ((flags & DMU_READ_NO_PREFETCH) == 0 &&
+	    DNODE_META_IS_CACHEABLE(dn) && length <= zfetch_array_rd_sz) {
+		dmu_zfetch(&dn->dn_zfetch, blkid, nblks,
+		    read && DNODE_IS_CACHEABLE(dn));
 	}
 	rw_exit(&dn->dn_struct_rwlock);
 
@@ -1082,8 +1092,13 @@ dmu_read_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size)
 			else
 				XUIOSTAT_BUMP(xuiostat_rbuf_copied);
 		} else {
+#ifdef illumos
 			err = uiomove((char *)db->db_data + bufoff, tocpy,
 			    UIO_READ, uio);
+#else
+			err = vn_io_fault_uiomove((char *)db->db_data + bufoff,
+			    tocpy, uio);
+#endif
 		}
 		if (err)
 			break;
@@ -1177,6 +1192,7 @@ dmu_write_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size, dmu_tx_t *tx)
 		else
 			dmu_buf_will_dirty(db, tx);
 
+#ifdef illumos
 		/*
 		 * XXX uiomove could block forever (eg. nfs-backed
 		 * pages).  There needs to be a uiolockdown() function
@@ -1185,6 +1201,10 @@ dmu_write_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size, dmu_tx_t *tx)
 		 */
 		err = uiomove((char *)db->db_data + bufoff, tocpy,
 		    UIO_WRITE, uio);
+#else
+		err = vn_io_fault_uiomove((char *)db->db_data + bufoff, tocpy,
+		    uio);
+#endif
 
 		if (tocpy == db->db_size)
 			dmu_buf_fill_done(db, tx);
@@ -1253,7 +1273,7 @@ dmu_write_uio(objset_t *os, uint64_t object, uio_t *uio, uint64_t size,
 	return (err);
 }
 
-#ifdef sun
+#ifdef illumos
 int
 dmu_write_pages(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
     page_t *pp, dmu_tx_t *tx)
@@ -1309,7 +1329,7 @@ dmu_write_pages(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
 	return (err);
 }
 
-#else
+#else	/* !illumos */
 
 int
 dmu_write_pages(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
@@ -1366,8 +1386,8 @@ dmu_write_pages(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
 	dmu_buf_rele_array(dbp, numbufs, FTAG);
 	return (err);
 }
-#endif	/* sun */
-#endif
+#endif	/* illumos */
+#endif	/* _KERNEL */
 
 /*
  * Allocate a loaned anonymous arc buffer.
@@ -1421,6 +1441,17 @@ dmu_assign_arcbuf(dmu_buf_t *handle, uint64_t offset, arc_buf_t *buf,
 	 */
 	if (offset == db->db.db_offset && blksz == db->db.db_size &&
 	    DBUF_GET_BUFC_TYPE(db) == ARC_BUFC_DATA) {
+#ifdef _KERNEL
+		curthread->td_ru.ru_oublock++;
+#ifdef RACCT
+		if (racct_enable) {
+			PROC_LOCK(curproc);
+			racct_add_force(curproc, RACCT_WRITEBPS, blksz);
+			racct_add_force(curproc, RACCT_WRITEIOPS, 1);
+			PROC_UNLOCK(curproc);
+		}
+#endif /* RACCT */
+#endif /* _KERNEL */
 		dbuf_assign_arcbuf(db, buf, tx);
 		dbuf_rele(db, FTAG);
 	} else {
@@ -1793,8 +1824,7 @@ dmu_object_set_compress(objset_t *os, uint64_t object, uint8_t compress,
 }
 
 int zfs_mdcomp_disable = 0;
-TUNABLE_INT("vfs.zfs.mdcomp_disable", &zfs_mdcomp_disable);
-SYSCTL_INT(_vfs_zfs, OID_AUTO, mdcomp_disable, CTLFLAG_RW,
+SYSCTL_INT(_vfs_zfs, OID_AUTO, mdcomp_disable, CTLFLAG_RWTUN,
     &zfs_mdcomp_disable, 0, "Disable metadata compression");
 
 /*

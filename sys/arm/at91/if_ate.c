@@ -228,22 +228,81 @@ static void	ate_rxfilter(struct ate_softc *sc);
 static int	ate_miibus_readreg(device_t dev, int phy, int reg);
 
 static int	ate_miibus_writereg(device_t dev, int phy, int reg, int data);
+
 /*
  * The AT91 family of products has the ethernet interface called EMAC.
  * However, it isn't self identifying.  It is anticipated that the parent bus
  * code will take care to only add ate devices where they really are.  As
  * such, we do nothing here to identify the device and just set its name.
+ * However, FDT makes it self-identifying.
  */
 static int
 ate_probe(device_t dev)
 {
 #ifdef FDT
-	if (!ofw_bus_is_compatible(dev, "cdns,at32ap7000-macb"))
+	if (!ofw_bus_is_compatible(dev, "cdns,at91rm9200-emac") &&
+	    !ofw_bus_is_compatible(dev, "cdns,emac") &&
+	    !ofw_bus_is_compatible(dev, "cdns,at32ap7000-macb"))
 		return (ENXIO);
 #endif
 	device_set_desc(dev, "EMAC");
 	return (0);
 }
+
+#ifdef FDT
+/*
+ * We have to know if we're using MII or RMII attachment
+ * for the MACB to talk to the PHY correctly. With FDT,
+ * we must use rmii if there's a proprety phy-mode
+ * equal to "rmii". Otherwise we MII mode is used.
+ */
+static void
+ate_set_rmii(struct ate_softc *sc)
+{
+	phandle_t node;
+	char prop[10];
+	ssize_t len;
+
+	node = ofw_bus_get_node(sc->dev);
+	memset(prop, 0 ,sizeof(prop));
+	len = OF_getproplen(node, "phy-mode");
+	if (len != 4)
+		return;
+	if (OF_getprop(node, "phy-mode", prop, len) != len)
+		return;
+	if (strncmp(prop, "rmii", 4) == 0)
+		sc->use_rmii = 1;
+}
+
+#else
+/*
+ * We have to know if we're using MII or RMII attachment
+ * for the MACB to talk to the PHY correctly. Without FDT,
+ * there's no good way to do this. So, if the config file
+ * has 'option AT91_ATE_USE_RMII', then we'll force RMII.
+ * Otherwise, we'll use what the bootloader setup. Either
+ * it setup RMII or MII, in which case we'll get it right,
+ * or it did nothing, and we'll fall back to MII and the
+ * option would override if present.
+ */
+static void
+ate_set_rmii(struct ate_softc *sc)
+{
+
+	/* Default to what boot rom did */
+	if (!sc->is_emacb)
+		sc->use_rmii =
+		    (RD4(sc, ETH_CFG) & ETH_CFG_RMII) == ETH_CFG_RMII;
+	else
+		sc->use_rmii =
+		    (RD4(sc, ETHB_UIO) & ETHB_UIO_RMII) == ETHB_UIO_RMII;
+
+#ifdef AT91_ATE_USE_RMII
+	/* Compile time override */
+	sc->use_rmii = 1;
+#endif
+}
+#endif
 
 static int
 ate_attach(device_t dev)
@@ -278,25 +337,19 @@ ate_attach(device_t dev)
 	}
 
 	/* New or old version, chooses buffer size. */
+#ifdef FDT
+	sc->is_emacb = ofw_bus_is_compatible(dev, "cdns,at32ap7000-macb");
+#else
 	sc->is_emacb = at91_is_sam9() || at91_is_sam9xe();
+#endif
 	sc->rx_buf_size = RX_BUF_SIZE(sc);
 
 	err = ate_activate(dev);
 	if (err)
 		goto out;
 
-	/* Default to what boot rom did */
-	if (!sc->is_emacb)
-		sc->use_rmii =
-		    (RD4(sc, ETH_CFG) & ETH_CFG_RMII) == ETH_CFG_RMII;
-	else
-		sc->use_rmii =
-		    (RD4(sc, ETHB_UIO) & ETHB_UIO_RMII) == ETHB_UIO_RMII;
+	ate_set_rmii(sc);
 
-#ifdef AT91_ATE_USE_RMII
-	/* Compile time override */
-	sc->use_rmii = 1;
-#endif
 	/* Sysctls */
 	sctx = device_get_sysctl_ctx(dev);
 	soid = device_get_sysctl_tree(dev);
@@ -598,7 +651,7 @@ ate_activate(device_t dev)
 	    ate_getaddr, &sc->tx_desc_phys, 0) != 0)
 		goto errout;
 
-	/* Initilize descriptors; mark all empty */
+	/* Initialize descriptors; mark all empty */
 	for (i = 0; i < ATE_MAX_TX_BUFFERS; i++) {
 		sc->tx_descs[i].addr =0;
 		sc->tx_descs[i].status = ETHB_TX_USED;
@@ -671,7 +724,6 @@ ate_deactivate(struct ate_softc *sc)
 			bus_dmamem_free(sc->rx_tag, sc->rx_buf[i],
 			    sc->rx_map[i]);
 			sc->rx_buf[i] = NULL;
-			sc->rx_map[i] = NULL;
 		}
 		bus_dma_tag_destroy(sc->rx_tag);
 	}
@@ -777,19 +829,19 @@ ate_tick(void *xsc)
 	sc->mibdata.dot3StatsAlignmentErrors += RD4(sc, ETH_ALE);
 	sc->mibdata.dot3StatsFCSErrors += RD4(sc, ETH_SEQE);
 	c = RD4(sc, ETH_SCOL);
-	ifp->if_collisions += c;
+	if_inc_counter(ifp, IFCOUNTER_COLLISIONS, c);
 	sc->mibdata.dot3StatsSingleCollisionFrames += c;
 	c = RD4(sc, ETH_MCOL);
 	sc->mibdata.dot3StatsMultipleCollisionFrames += c;
-	ifp->if_collisions += c;
+	if_inc_counter(ifp, IFCOUNTER_COLLISIONS, c);
 	sc->mibdata.dot3StatsSQETestErrors += RD4(sc, ETH_SQEE);
 	sc->mibdata.dot3StatsDeferredTransmissions += RD4(sc, ETH_DTE);
 	c = RD4(sc, ETH_LCOL);
 	sc->mibdata.dot3StatsLateCollisions += c;
-	ifp->if_collisions += c;
+	if_inc_counter(ifp, IFCOUNTER_COLLISIONS, c);
 	c = RD4(sc, ETH_ECOL);
 	sc->mibdata.dot3StatsExcessiveCollisions += c;
-	ifp->if_collisions += c;
+	if_inc_counter(ifp, IFCOUNTER_COLLISIONS, c);
 	sc->mibdata.dot3StatsCarrierSenseErrors += RD4(sc, ETH_CSE);
 	sc->mibdata.dot3StatsFrameTooLongs += RD4(sc, ETH_ELR);
 	sc->mibdata.dot3StatsInternalMacReceiveErrors += RD4(sc, ETH_DRFC);
@@ -798,9 +850,9 @@ ate_tick(void *xsc)
 	 * Not sure where to lump these, so count them against the errors
 	 * for the interface.
 	 */
-	sc->ifp->if_oerrors += RD4(sc, ETH_TUE);
-	sc->ifp->if_ierrors += RD4(sc, ETH_CDE) + RD4(sc, ETH_RJB) +
-	    RD4(sc, ETH_USF);
+	if_inc_counter(sc->ifp, IFCOUNTER_OERRORS, RD4(sc, ETH_TUE));
+	if_inc_counter(sc->ifp, IFCOUNTER_IERRORS,
+	    RD4(sc, ETH_CDE) + RD4(sc, ETH_RJB) + RD4(sc, ETH_USF));
 
 	/* Schedule another timeout one second from now. */
 	callout_reset(&sc->tick_ch, hz, ate_tick, sc);
@@ -867,7 +919,7 @@ ate_intr(void *xsc)
 				/*
 				 * Simulate SAM9 FIRST/LAST bits for RM9200.
 				 * RM9200 EMAC has only on Rx buffer per packet.
-				 * But sometime we are handed a zero lenght packet.
+				 * But sometime we are handed a zero length packet.
 				 */
 				if ((rxdhead->status & ETH_LEN_MASK) == 0)
 					rxdhead->status = 0; /* Mark error */
@@ -915,7 +967,7 @@ ate_intr(void *xsc)
 			mb = m_get2(remain + ETHER_ALIGN, M_NOWAIT, MT_DATA,
 			    M_PKTHDR);
 			if (mb == NULL) {
-				sc->ifp->if_iqdrops++;
+				if_inc_counter(sc->ifp, IFCOUNTER_IQDROPS, 1);
 				rxdhead->status = 0;
 				continue;
 			}
@@ -928,7 +980,7 @@ ate_intr(void *xsc)
 			do {
 
 				/* Last buffer may just be 1-4 bytes of FCS so remain
-				 * may be zero for last decriptor.  */
+				 * may be zero for last descriptor.  */
 				if (remain > 0) {
 						/* Make sure we get the current bytes */
 						bus_dmamap_sync(sc->rx_tag, sc->rx_map[sc->rxhead],
@@ -937,7 +989,7 @@ ate_intr(void *xsc)
 						count = MIN(remain, sc->rx_buf_size);
 
 						/* XXX Performance robbing copy. Could
-						 * recieve directly to mbufs if not an
+						 * receive directly to mbufs if not an
 						 * RM9200. And even then we could likely
 						 * copy just the protocol headers. XXX  */
 						m_append(mb, count, sc->rx_buf[sc->rxhead]);
@@ -958,7 +1010,7 @@ ate_intr(void *xsc)
 
 			} while (!done);
 
-			ifp->if_ipackets++;
+			if_inc_counter(ifp, IFCOUNTER_IPACKETS, 1);
 			(*ifp->if_input)(ifp, mb);
 		}
 	}
@@ -991,7 +1043,7 @@ ate_intr(void *xsc)
 			m_freem(sc->sent_mbuf[sc->txtail]);
 			sc->tx_descs[sc->txtail].addr = 0;
 			sc->sent_mbuf[sc->txtail] = NULL;
-			ifp->if_opackets++;
+			if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
 			sc->txtail = NEXT_TX_IDX(sc, sc->txtail);
 		}
 
@@ -1132,7 +1184,7 @@ atestart_locked(struct ifnet *ifp)
 		}
 
 		IFQ_DRV_DEQUEUE(&ifp->if_snd, m);
-		if (m == 0)
+		if (m == NULL)
 			break;
 
 		e = bus_dmamap_load_mbuf_sg(sc->mtag, sc->tx_map[sc->txhead], m,
@@ -1163,7 +1215,7 @@ atestart_locked(struct ifnet *ifp)
 			    BUS_DMASYNC_POSTWRITE);
 			bus_dmamap_unload(sc->mtag, sc->tx_map[sc->txtail]);
 			m_free(sc->sent_mbuf[sc->txhead]);
-			ifp->if_opackets++;
+			if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
 		}
 		
 		sc->sent_mbuf[sc->txhead] = m;
@@ -1416,7 +1468,7 @@ ate_miibus_readreg(device_t dev, int phy, int reg)
 	int val;
 
 	/*
-	 * XXX if we implement agressive power savings, then we need
+	 * XXX if we implement aggressive power savings, then we need
 	 * XXX to make sure that the clock to the emac is on here
 	 */
 
@@ -1436,7 +1488,7 @@ ate_miibus_writereg(device_t dev, int phy, int reg, int data)
 	struct ate_softc *sc;
 
 	/*
-	 * XXX if we implement agressive power savings, then we need
+	 * XXX if we implement aggressive power savings, then we need
 	 * XXX to make sure that the clock to the emac is on here
 	 */
 

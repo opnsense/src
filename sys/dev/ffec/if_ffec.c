@@ -96,6 +96,7 @@ enum {
 	FECTYPE_GENERIC,
 	FECTYPE_IMX53,
 	FECTYPE_IMX6,
+	FECTYPE_MVF,
 };
 
 /*
@@ -112,8 +113,8 @@ static struct ofw_compat_data compat_data[] = {
 	{"fsl,imx51-fec",	FECTYPE_GENERIC},
 	{"fsl,imx53-fec",	FECTYPE_IMX53},
 	{"fsl,imx6q-fec",	FECTYPE_IMX6 | FECFLAG_GBE},
-	{"fsl,mvf600-fec",	FECTYPE_GENERIC},
-	{"fsl,vf-fec",		FECTYPE_GENERIC},
+	{"fsl,mvf600-fec",	FECTYPE_MVF},
+	{"fsl,mvf-fec",		FECTYPE_MVF},
 	{NULL,		 	FECTYPE_NONE},
 };
 
@@ -172,7 +173,7 @@ struct ffec_softc {
 	struct ffec_hwdesc	*txdesc_ring;
 	bus_addr_t		txdesc_ring_paddr;
 	bus_dma_tag_t		txbuf_tag;
-	struct ffec_bufmap	txbuf_map[RX_DESC_COUNT];
+	struct ffec_bufmap	txbuf_map[TX_DESC_COUNT];
 	uint32_t		tx_idx_head;
 	uint32_t		tx_idx_tail;
 	int			txcount;
@@ -498,23 +499,21 @@ ffec_harvest_stats(struct ffec_softc *sc)
 	sc->stats_harvest_count = 0;
 	ifp = sc->ifp;
 
-	ifp->if_ipackets   += RD4(sc, FEC_RMON_R_PACKETS);
-	ifp->if_imcasts    += RD4(sc, FEC_RMON_R_MC_PKT);
-	ifp->if_ierrors    += RD4(sc, FEC_RMON_R_CRC_ALIGN);
-	ifp->if_ierrors    += RD4(sc, FEC_RMON_R_UNDERSIZE);
-	ifp->if_ierrors    += RD4(sc, FEC_RMON_R_OVERSIZE);
-	ifp->if_ierrors    += RD4(sc, FEC_RMON_R_FRAG);
-	ifp->if_ierrors    += RD4(sc, FEC_RMON_R_JAB);
+	if_inc_counter(ifp, IFCOUNTER_IPACKETS, RD4(sc, FEC_RMON_R_PACKETS));
+	if_inc_counter(ifp, IFCOUNTER_IMCASTS, RD4(sc, FEC_RMON_R_MC_PKT));
+	if_inc_counter(ifp, IFCOUNTER_IERRORS,
+	    RD4(sc, FEC_RMON_R_CRC_ALIGN) + RD4(sc, FEC_RMON_R_UNDERSIZE) +
+	    RD4(sc, FEC_RMON_R_OVERSIZE) + RD4(sc, FEC_RMON_R_FRAG) +
+	    RD4(sc, FEC_RMON_R_JAB));
 
-	ifp->if_opackets   += RD4(sc, FEC_RMON_T_PACKETS);
-	ifp->if_omcasts    += RD4(sc, FEC_RMON_T_MC_PKT);
-	ifp->if_oerrors    += RD4(sc, FEC_RMON_T_CRC_ALIGN);
-	ifp->if_oerrors    += RD4(sc, FEC_RMON_T_UNDERSIZE);
-	ifp->if_oerrors    += RD4(sc, FEC_RMON_T_OVERSIZE );
-	ifp->if_oerrors    += RD4(sc, FEC_RMON_T_FRAG);
-	ifp->if_oerrors    += RD4(sc, FEC_RMON_T_JAB);
+	if_inc_counter(ifp, IFCOUNTER_OPACKETS, RD4(sc, FEC_RMON_T_PACKETS));
+	if_inc_counter(ifp, IFCOUNTER_OMCASTS, RD4(sc, FEC_RMON_T_MC_PKT));
+	if_inc_counter(ifp, IFCOUNTER_OERRORS,
+	    RD4(sc, FEC_RMON_T_CRC_ALIGN) + RD4(sc, FEC_RMON_T_UNDERSIZE) +
+	    RD4(sc, FEC_RMON_T_OVERSIZE) + RD4(sc, FEC_RMON_T_FRAG) +
+	    RD4(sc, FEC_RMON_T_JAB));
 
-	ifp->if_collisions += RD4(sc, FEC_RMON_T_COL);
+	if_inc_counter(ifp, IFCOUNTER_COLLISIONS, RD4(sc, FEC_RMON_T_COL));
 
 	ffec_clear_stats(sc);
 }
@@ -788,7 +787,7 @@ ffec_rxfinish_onebuf(struct ffec_softc *sc, int len)
 	 *  mbuf, which is still mapped and loaded.
 	 */
 	if ((newmbuf = ffec_alloc_mbufcl(sc)) == NULL) {
-		++sc->ifp->if_iqdrops;
+		if_inc_counter(sc->ifp, IFCOUNTER_IQDROPS, 1);
 		ffec_setup_rxdesc(sc, sc->rx_idx, 
 		    sc->rxdesc_ring[sc->rx_idx].buf_paddr);
 		return;
@@ -897,9 +896,9 @@ ffec_rxfinish_locked(struct ffec_softc *sc)
 	}
 
 	if (produced_empty_buffer) {
-		bus_dmamap_sync(sc->rxdesc_tag, sc->txdesc_map, BUS_DMASYNC_PREWRITE);
+		bus_dmamap_sync(sc->rxdesc_tag, sc->rxdesc_map, BUS_DMASYNC_PREWRITE);
 		WR4(sc, FEC_RDAR_REG, FEC_RDAR_RDAR);
-		bus_dmamap_sync(sc->rxdesc_tag, sc->txdesc_map, BUS_DMASYNC_POSTWRITE);
+		bus_dmamap_sync(sc->rxdesc_tag, sc->rxdesc_map, BUS_DMASYNC_POSTWRITE);
 	}
 }
 
@@ -1685,7 +1684,7 @@ ffec_attach(device_t dev)
 	IFQ_SET_MAXLEN(&ifp->if_snd, TX_DESC_COUNT - 1);
 	ifp->if_snd.ifq_drv_maxlen = TX_DESC_COUNT - 1;
 	IFQ_SET_READY(&ifp->if_snd);
-	ifp->if_data.ifi_hdrlen = sizeof(struct ether_vlan_header);
+	ifp->if_hdrlen = sizeof(struct ether_vlan_header);
 
 #if 0 /* XXX The hardware keeps stats we could use for these. */
 	ifp->if_linkmib = &sc->mibdata;
@@ -1697,7 +1696,8 @@ ffec_attach(device_t dev)
 
 	/* Attach the mii driver. */
 	error = mii_attach(dev, &sc->miibus, ifp, ffec_media_change,
-	    ffec_media_status, BMSR_DEFCAPMASK, MII_PHY_ANY, MII_OFFSET_ANY, 0);
+	    ffec_media_status, BMSR_DEFCAPMASK, MII_PHY_ANY, MII_OFFSET_ANY,
+	    (sc->fectype & FECTYPE_MVF) ? MIIF_FORCEANEG : 0);
 	if (error != 0) {
 		device_printf(dev, "PHY attach failed\n");
 		goto out;

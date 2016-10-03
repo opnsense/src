@@ -75,6 +75,7 @@ static const ns_src defaultsrc[] = {
 	{ NULL, 0 }
 };
 
+int	 __getgroupmembership(const char *, gid_t, gid_t *, int, int *);
 int	 __gr_match_entry(const char *, size_t, enum nss_lookup_type,
 	    const char *, gid_t);
 int	 __gr_parse_entry(char *, size_t, struct group *, char *, size_t,
@@ -895,7 +896,7 @@ files_group(void *retval, void *mdata, va_list ap)
 			break;
 		pos = ftello(st->fp);
 	}
-	if (!stayopen && st->fp != NULL) {
+	if (st->fp != NULL && !stayopen) {
 		fclose(st->fp);
 		st->fp = NULL;
 	}
@@ -1172,8 +1173,10 @@ nis_group(void *retval, void *mdata, va_list ap)
 		 * terminator, alignment padding, and one (char *)
 		 * pointer for the member list terminator.
 		 */
-		if (resultlen >= bufsize - _ALIGNBYTES - sizeof(char *))
+		if (resultlen >= bufsize - _ALIGNBYTES - sizeof(char *)) {
+			free(result);
 			goto erange;
+		}
 		memcpy(buffer, result, resultlen);
 		buffer[resultlen] = '\0';
 		free(result);
@@ -1236,13 +1239,12 @@ compat_setgrent(void *retval, void *mdata, va_list ap)
 
 #define set_setent(x, y) do {	 				\
 	int i;							\
-								\
-	for (i = 0; i < (sizeof(x)/sizeof(x[0])) - 1; i++)	\
+	for (i = 0; i < (int)(nitems(x) - 1); i++)		\
 		x[i].mdata = (void *)y;				\
 } while (0)
 
 	rv = compat_getstate(&st);
-	if (rv != 0) 
+	if (rv != 0)
 		return (NS_UNAVAIL);
 	switch ((enum constants)mdata) {
 	case SETGRENT:
@@ -1306,8 +1308,7 @@ compat_group(void *retval, void *mdata, va_list ap)
 
 #define set_lookup_type(x, y) do { 				\
 	int i;							\
-								\
-	for (i = 0; i < (sizeof(x)/sizeof(x[0])) - 1; i++)	\
+	for (i = 0; i < (int)(nitems(x) - 1); i++)		\
 		x[i].mdata = (void *)y;				\
 } while (0)
 
@@ -1449,7 +1450,7 @@ docompat:
 		pos = ftello(st->fp);
 	}
 fin:
-	if (!stayopen && st->fp != NULL) {
+	if (st->fp != NULL && !stayopen) {
 		fclose(st->fp);
 		st->fp = NULL;
 	}

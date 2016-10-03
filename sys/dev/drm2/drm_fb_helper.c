@@ -75,7 +75,7 @@ vt_kms_postswitch(void *arg)
 	sc = (struct vt_kms_softc *)arg;
 
 	if (!kdb_active && panicstr == NULL)
-		taskqueue_enqueue_fast(taskqueue_thread, &sc->fb_mode_task);
+		taskqueue_enqueue(taskqueue_thread, &sc->fb_mode_task);
 	else
 		drm_fb_helper_restore_fbdev_mode(sc->fb_helper);
 
@@ -130,9 +130,9 @@ fb_get_options(const char *connector_name, char **option)
 	DRM_INFO("Connector %s: get mode from tunables:\n", connector_name);
 	DRM_INFO("  - %s\n", tunable);
 	DRM_INFO("  - kern.vt.fb.default_mode\n");
-	*option = getenv(tunable);
+	*option = kern_getenv(tunable);
 	if (*option == NULL)
-		*option = getenv("kern.vt.fb.default_mode");
+		*option = kern_getenv("kern.vt.fb.default_mode");
 
 	return (*option != NULL ? 0 : -ENOENT);
 }
@@ -921,19 +921,21 @@ int drm_fb_helper_single_fb_probe(struct drm_fb_helper *fb_helper,
 
 	info = fb_helper->fbdev;
 
+	kdev = fb_helper->dev->dev;
+	info->fb_video_dev = device_get_parent(kdev);
+
 	/* set the fb pointer */
 	for (i = 0; i < fb_helper->crtc_count; i++)
 		fb_helper->crtc_info[i].mode_set.fb = fb_helper->fb;
 
 #if defined(__FreeBSD__)
 	if (new_fb) {
-		device_t fbd;
 		int ret;
 
-		kdev = fb_helper->dev->dev;
-		fbd = device_add_child(kdev, "fbd", device_get_unit(kdev));
-		if (fbd != NULL) 
-			ret = device_probe_and_attach(fbd);
+		info->fb_fbd_dev = device_add_child(kdev, "fbd",
+		    device_get_unit(kdev));
+		if (info->fb_fbd_dev != NULL)
+			ret = device_probe_and_attach(info->fb_fbd_dev);
 		else
 			ret = ENODEV;
 #ifdef DEV_VT

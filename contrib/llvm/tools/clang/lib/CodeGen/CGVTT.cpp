@@ -18,7 +18,7 @@
 using namespace clang;
 using namespace CodeGen;
 
-static llvm::Constant *
+static llvm::GlobalVariable *
 GetAddrOfVTTVTable(CodeGenVTables &CGVT, CodeGenModule &CGM,
                    const CXXRecordDecl *MostDerivedClass,
                    const VTTVTable &VTable,
@@ -47,8 +47,8 @@ CodeGenVTables::EmitVTTDefinition(llvm::GlobalVariable *VTT,
   llvm::Type *Int8PtrTy = CGM.Int8PtrTy, *Int64Ty = CGM.Int64Ty;
   llvm::ArrayType *ArrayType = 
     llvm::ArrayType::get(Int8PtrTy, Builder.getVTTComponents().size());
-  
-  SmallVector<llvm::Constant *, 8> VTables;
+
+  SmallVector<llvm::GlobalVariable *, 8> VTables;
   SmallVector<VTableAddressPointsMapTy, 8> VTableAddressPoints;
   for (const VTTVTable *i = Builder.getVTTVTables().begin(),
                        *e = Builder.getVTTVTables().end(); i != e; ++i) {
@@ -61,12 +61,13 @@ CodeGenVTables::EmitVTTDefinition(llvm::GlobalVariable *VTT,
   for (const VTTComponent *i = Builder.getVTTComponents().begin(),
                           *e = Builder.getVTTComponents().end(); i != e; ++i) {
     const VTTVTable &VTTVT = Builder.getVTTVTables()[i->VTableIndex];
-    llvm::Constant *VTable = VTables[i->VTableIndex];
+    llvm::GlobalVariable *VTable = VTables[i->VTableIndex];
     uint64_t AddressPoint;
     if (VTTVT.getBase() == RD) {
       // Just get the address point for the regular vtable.
       AddressPoint =
-          ItaniumVTContext.getVTableLayout(RD).getAddressPoint(i->VTableBase);
+          getItaniumVTableContext().getVTableLayout(RD).getAddressPoint(
+              i->VTableBase);
       assert(AddressPoint != 0 && "Did not find vtable address point!");
     } else {
       AddressPoint = VTableAddressPoints[i->VTableIndex].lookup(i->VTableBase);
@@ -78,8 +79,8 @@ CodeGenVTables::EmitVTTDefinition(llvm::GlobalVariable *VTT,
        llvm::ConstantInt::get(Int64Ty, AddressPoint)
      };
 
-     llvm::Constant *Init = 
-       llvm::ConstantExpr::getInBoundsGetElementPtr(VTable, Idxs);
+     llvm::Constant *Init = llvm::ConstantExpr::getInBoundsGetElementPtr(
+         VTable->getValueType(), VTable, Idxs);
 
      Init = llvm::ConstantExpr::getBitCast(Init, Int8PtrTy);
 
@@ -93,8 +94,11 @@ CodeGenVTables::EmitVTTDefinition(llvm::GlobalVariable *VTT,
   // Set the correct linkage.
   VTT->setLinkage(Linkage);
 
+  if (CGM.supportsCOMDAT() && VTT->isWeakForLinker())
+    VTT->setComdat(CGM.getModule().getOrInsertComdat(VTT->getName()));
+
   // Set the right visibility.
-  CGM.setTypeVisibility(VTT, RD, CodeGenModule::TVK_ForVTT);
+  CGM.setGlobalVisibility(VTT, RD);
 }
 
 llvm::GlobalVariable *CodeGenVTables::GetAddrOfVTT(const CXXRecordDecl *RD) {
@@ -104,7 +108,6 @@ llvm::GlobalVariable *CodeGenVTables::GetAddrOfVTT(const CXXRecordDecl *RD) {
   llvm::raw_svector_ostream Out(OutName);
   cast<ItaniumMangleContext>(CGM.getCXXABI().getMangleContext())
       .mangleCXXVTT(RD, Out);
-  Out.flush();
   StringRef Name = OutName.str();
 
   // This will also defer the definition of the VTT.
@@ -173,4 +176,3 @@ CodeGenVTables::getSecondaryVirtualPointerIndex(const CXXRecordDecl *RD,
   
   return I->second;
 }
-

@@ -12,6 +12,8 @@
 
 # $FreeBSD$
 
+#NO_UNIVERSE
+
 include		"AR724X_BASE"
 ident		"WZR-300HP"
 hints		"WZR-300HP.hints"
@@ -21,21 +23,12 @@ options 	AR71XX_REALMEM=64*1024*1024
 options 	AR71XX_ENV_UBOOT
 
 options 	BOOTVERBOSE
-# Don't include the SCSI/CAM strings in the default build
-options 	SCSI_NO_SENSE_STRINGS
-options 	SCSI_NO_OP_STRINGS
-
-# .. And no sysctl strings
-options 	NO_SYSCTL_DESCR
 
 # GEOM modules
 device		geom_map	# to get access to the SPI flash partitions
-device		geom_uncompress	# compressed in-memory filesystem hackery!
+device		geom_uzip	# compressed in-memory filesystem hackery!
 
-options 	ROOTDEVNAME=\"ufs:/dev/map/rootfs.uncompress\"
-
-# options 	MD_ROOT
-# options 	MD_ROOT_SIZE="6144"
+options 	ROOTDEVNAME=\"ufs:/dev/map/rootfs.uzip\"
 
 options 	AR71XX_ATH_EEPROM	# Fetch EEPROM/PCI config from flash
 options 	ATH_EEPROM_FIRMWARE	# Use EEPROM from flash
@@ -48,10 +41,11 @@ device          miiproxy                # MDIO bus <-> MII PHY rendezvous
 device          etherswitch
 device          arswitch
 
-# Enable GPIO
-device         gpio
-device         gpioled
-
 # hwpmc
 device		hwpmc_mips24k
 device		hwpmc
+
+# load these via modules, shrink kernel
+nodevice	if_bridge
+nodevice	bridgestp
+nodevice	random

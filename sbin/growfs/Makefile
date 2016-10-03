@@ -4,10 +4,11 @@
 # $FreeBSD$
 #
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 .PATH:	${.CURDIR}/../mount
 
+PACKAGE=runtime
 PROG=   growfs
 SRCS=   growfs.c getmntopts.c
 MAN=	growfs.8
@@ -19,11 +20,10 @@ CFLAGS+= -DFS_DEBUG
 NO_WCAST_ALIGN= yes
 .endif  
 
-DPADD=	${LIBUTIL}
-LDADD=	-lutil
+LIBADD=	util
 
 .if ${MK_TESTS} != "no"
 SUBDIR+=    tests
 .endif
 
-.include <bsd.prog.mk>      
+.include <bsd.prog.mk>

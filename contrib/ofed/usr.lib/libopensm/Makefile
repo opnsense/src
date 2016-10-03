@@ -9,9 +9,11 @@ SHLIBDIR?=	/usr/lib
 
 LIB=		opensm
 SHLIB_MAJOR=	1
-NO_PROFILE=
+MK_PROFILE=	no
 
 SRCS=	osm_log.c osm_mad_pool.c osm_helper.c
+
+LIBADD= pthread
 
 VERSION_MAP= ${OPENSMDIR}/opensm/libopensm.map
 

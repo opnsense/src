@@ -33,7 +33,6 @@
  * This file contains the driver for the Mentor Graphics Inventra USB
  * 2.0 High Speed Dual-Role controller.
  *
- * NOTE: The current implementation only supports Device Side Mode!
  */
 
 #ifdef USB_GLOBAL_INCLUDE_FILE
@@ -91,7 +90,7 @@
 static int musbotgdebug = 0;
 
 static SYSCTL_NODE(_hw_usb, OID_AUTO, musbotg, CTLFLAG_RW, 0, "USB musbotg");
-SYSCTL_INT(_hw_usb_musbotg, OID_AUTO, debug, CTLFLAG_RW,
+SYSCTL_INT(_hw_usb_musbotg, OID_AUTO, debug, CTLFLAG_RWTUN,
     &musbotgdebug, 0, "Debug level");
 #endif
 
@@ -99,11 +98,11 @@ SYSCTL_INT(_hw_usb_musbotg, OID_AUTO, debug, CTLFLAG_RW,
 
 /* prototypes */
 
-struct usb_bus_methods musbotg_bus_methods;
-struct usb_pipe_methods musbotg_device_bulk_methods;
-struct usb_pipe_methods musbotg_device_ctrl_methods;
-struct usb_pipe_methods musbotg_device_intr_methods;
-struct usb_pipe_methods musbotg_device_isoc_methods;
+static const struct usb_bus_methods musbotg_bus_methods;
+static const struct usb_pipe_methods musbotg_device_bulk_methods;
+static const struct usb_pipe_methods musbotg_device_ctrl_methods;
+static const struct usb_pipe_methods musbotg_device_intr_methods;
+static const struct usb_pipe_methods musbotg_device_isoc_methods;
 
 /* Control transfers: Device mode */
 static musbotg_cmd_t musbotg_dev_ctrl_setup_rx;
@@ -131,7 +130,7 @@ static void	musbotg_do_poll(struct usb_bus *);
 static void	musbotg_standard_done(struct usb_xfer *);
 static void	musbotg_interrupt_poll(struct musbotg_softc *);
 static void	musbotg_root_intr(struct musbotg_softc *);
-static int	musbotg_channel_alloc(struct musbotg_softc *, struct musbotg_td *td);
+static int	musbotg_channel_alloc(struct musbotg_softc *, struct musbotg_td *td, uint8_t);
 static void	musbotg_channel_free(struct musbotg_softc *, struct musbotg_td *td);
 static void	musbotg_ep_int_set(struct musbotg_softc *sc, int channel, int on);
 
@@ -149,7 +148,7 @@ static const struct usb_hw_ep_profile musbotg_ep_profile[1] = {
 };
 
 static int
-musbotg_channel_alloc(struct musbotg_softc *sc, struct musbotg_td *td)
+musbotg_channel_alloc(struct musbotg_softc *sc, struct musbotg_td *td, uint8_t is_tx)
 {
 	int ch;
 	int ep;
@@ -173,12 +172,23 @@ musbotg_channel_alloc(struct musbotg_softc *sc, struct musbotg_td *td)
 		return (0);
 	}
 
-	for (ch = 1; ch < MUSB2_EP_MAX; ch++) {
-		if (!(sc->sc_channel_mask & (1 << ch))) {
-			sc->sc_channel_mask |= (1 << ch);
-			musbotg_ep_int_set(sc, ch, 1);
-			return (ch);
+	for (ch = sc->sc_ep_max; ch != 0; ch--) {
+		if (sc->sc_channel_mask & (1 << ch))
+			continue;
+
+		/* check FIFO size requirement */
+		if (is_tx) {
+			if (td->max_frame_size >
+			    sc->sc_hw_ep_profile[ch].max_in_frame_size)
+				continue;
+		} else {
+			if (td->max_frame_size >
+			    sc->sc_hw_ep_profile[ch].max_out_frame_size)
+				continue;
 		}
+		sc->sc_channel_mask |= (1 << ch);
+		musbotg_ep_int_set(sc, ch, 1);
+		return (ch);
 	}
 
 	DPRINTFN(-1, "No available channels. Mask: %04x\n",  sc->sc_channel_mask);
@@ -377,7 +387,7 @@ musbotg_dev_ctrl_setup_rx(struct musbotg_td *td)
 	sc = MUSBOTG_PC2SC(td->pc);
 
 	if (td->channel == -1)
-		td->channel = musbotg_channel_alloc(sc, td);
+		td->channel = musbotg_channel_alloc(sc, td, 0);
 
 	/* EP0 is busy, wait */
 	if (td->channel == -1)
@@ -503,7 +513,7 @@ musbotg_host_ctrl_setup_tx(struct musbotg_td *td)
 	sc = MUSBOTG_PC2SC(td->pc);
 
 	if (td->channel == -1)
-		td->channel = musbotg_channel_alloc(sc, td);
+		td->channel = musbotg_channel_alloc(sc, td, 1);
 
 	/* EP0 is busy, wait */
 	if (td->channel == -1)
@@ -875,7 +885,7 @@ musbotg_host_ctrl_data_rx(struct musbotg_td *td)
 	sc = MUSBOTG_PC2SC(td->pc);
 
 	if (td->channel == -1)
-		td->channel = musbotg_channel_alloc(sc, td);
+		td->channel = musbotg_channel_alloc(sc, td, 0);
 
 	/* EP0 is busy, wait */
 	if (td->channel == -1)
@@ -1054,7 +1064,7 @@ musbotg_host_ctrl_data_tx(struct musbotg_td *td)
 	sc = MUSBOTG_PC2SC(td->pc);
 
 	if (td->channel == -1)
-		td->channel = musbotg_channel_alloc(sc, td);
+		td->channel = musbotg_channel_alloc(sc, td, 1);
 
 	/* No free EPs */
 	if (td->channel == -1)
@@ -1264,7 +1274,7 @@ musbotg_host_ctrl_status_rx(struct musbotg_td *td)
 	sc = MUSBOTG_PC2SC(td->pc);
 
 	if (td->channel == -1)
-		td->channel = musbotg_channel_alloc(sc, td);
+		td->channel = musbotg_channel_alloc(sc, td, 0);
 
 	/* EP0 is busy, wait */
 	if (td->channel == -1)
@@ -1351,7 +1361,7 @@ musbotg_host_ctrl_status_tx(struct musbotg_td *td)
 	sc = MUSBOTG_PC2SC(td->pc);
 
 	if (td->channel == -1)
-		td->channel = musbotg_channel_alloc(sc, td);
+		td->channel = musbotg_channel_alloc(sc, td, 1);
 
 	/* EP0 is busy, wait */
 	if (td->channel == -1)
@@ -1424,7 +1434,7 @@ musbotg_dev_data_rx(struct musbotg_td *td)
 	sc = MUSBOTG_PC2SC(td->pc);
 
 	if (td->channel == -1)
-		td->channel = musbotg_channel_alloc(sc, td);
+		td->channel = musbotg_channel_alloc(sc, td, 0);
 
 	/* EP0 is busy, wait */
 	if (td->channel == -1)
@@ -1572,7 +1582,7 @@ musbotg_dev_data_tx(struct musbotg_td *td)
 	sc = MUSBOTG_PC2SC(td->pc);
 
 	if (td->channel == -1)
-		td->channel = musbotg_channel_alloc(sc, td);
+		td->channel = musbotg_channel_alloc(sc, td, 1);
 
 	/* EP0 is busy, wait */
 	if (td->channel == -1)
@@ -1700,7 +1710,7 @@ musbotg_host_data_rx(struct musbotg_td *td)
 	sc = MUSBOTG_PC2SC(td->pc);
 
 	if (td->channel == -1)
-		td->channel = musbotg_channel_alloc(sc, td);
+		td->channel = musbotg_channel_alloc(sc, td, 0);
 
 	/* No free EPs */
 	if (td->channel == -1)
@@ -1922,7 +1932,7 @@ musbotg_host_data_tx(struct musbotg_td *td)
 	sc = MUSBOTG_PC2SC(td->pc);
 
 	if (td->channel == -1)
-		td->channel = musbotg_channel_alloc(sc, td);
+		td->channel = musbotg_channel_alloc(sc, td, 1);
 
 	/* No free EPs */
 	if (td->channel == -1)
@@ -2415,7 +2425,8 @@ musbotg_setup_standard_chain(struct usb_xfer *xfer)
 	temp.td = NULL;
 	temp.td_next = xfer->td_start[0];
 	temp.offset = 0;
-	temp.setup_alt_next = xfer->flags_int.short_frames_ok;
+	temp.setup_alt_next = xfer->flags_int.short_frames_ok ||
+	    xfer->flags_int.isochronous_xfr;
 	temp.did_stall = !xfer->flags_int.control_stall;
 	temp.channel = -1;
 	temp.dev_addr = dev_addr;
@@ -2726,7 +2737,8 @@ musbotg_standard_done_sub(struct usb_xfer *xfer)
 		}
 		/* Check for short transfer */
 		if (len > 0) {
-			if (xfer->flags_int.short_frames_ok) {
+			if (xfer->flags_int.short_frames_ok ||
+			    xfer->flags_int.isochronous_xfr) {
 				/* follow alt next */
 				if (td->alt_next) {
 					td = td->obj_next;
@@ -3236,6 +3248,7 @@ musbotg_init(struct musbotg_softc *sc)
 			pf->support_out = 1;
 		} else if (frx && (temp <= nrx)) {
 			pf->max_out_frame_size = 1 << frx;
+			pf->max_in_frame_size = 0;
 			pf->is_simplex = 1;	/* simplex */
 			pf->support_multi_buffer = 1;
 			pf->support_bulk = 1;
@@ -3244,6 +3257,7 @@ musbotg_init(struct musbotg_softc *sc)
 			pf->support_out = 1;
 		} else if (ftx && (temp <= ntx)) {
 			pf->max_in_frame_size = 1 << ftx;
+			pf->max_out_frame_size = 0;
 			pf->is_simplex = 1;	/* simplex */
 			pf->support_multi_buffer = 1;
 			pf->support_bulk = 1;
@@ -3297,18 +3311,6 @@ musbotg_uninit(struct musbotg_softc *sc)
 }
 
 static void
-musbotg_suspend(struct musbotg_softc *sc)
-{
-	/* TODO */
-}
-
-static void
-musbotg_resume(struct musbotg_softc *sc)
-{
-	/* TODO */
-}
-
-static void
 musbotg_do_poll(struct usb_bus *bus)
 {
 	struct musbotg_softc *sc = MUSBOTG_BUS2SC(bus);
@@ -3347,7 +3349,7 @@ musbotg_device_bulk_start(struct usb_xfer *xfer)
 	musbotg_start_standard_chain(xfer);
 }
 
-struct usb_pipe_methods musbotg_device_bulk_methods =
+static const struct usb_pipe_methods musbotg_device_bulk_methods =
 {
 	.open = musbotg_device_bulk_open,
 	.close = musbotg_device_bulk_close,
@@ -3384,7 +3386,7 @@ musbotg_device_ctrl_start(struct usb_xfer *xfer)
 	musbotg_start_standard_chain(xfer);
 }
 
-struct usb_pipe_methods musbotg_device_ctrl_methods =
+static const struct usb_pipe_methods musbotg_device_ctrl_methods =
 {
 	.open = musbotg_device_ctrl_open,
 	.close = musbotg_device_ctrl_close,
@@ -3421,7 +3423,7 @@ musbotg_device_intr_start(struct usb_xfer *xfer)
 	musbotg_start_standard_chain(xfer);
 }
 
-struct usb_pipe_methods musbotg_device_intr_methods =
+static const struct usb_pipe_methods musbotg_device_intr_methods =
 {
 	.open = musbotg_device_intr_open,
 	.close = musbotg_device_intr_close,
@@ -3510,7 +3512,7 @@ musbotg_device_isoc_start(struct usb_xfer *xfer)
 	musbotg_start_standard_chain(xfer);
 }
 
-struct usb_pipe_methods musbotg_device_isoc_methods =
+static const struct usb_pipe_methods musbotg_device_isoc_methods =
 {
 	.open = musbotg_device_isoc_open,
 	.close = musbotg_device_isoc_close,
@@ -4224,20 +4226,20 @@ musbotg_set_hw_power_sleep(struct usb_bus *bus, uint32_t state)
 
 	switch (state) {
 	case USB_HW_POWER_SUSPEND:
-		musbotg_suspend(sc);
+		musbotg_uninit(sc);
 		break;
 	case USB_HW_POWER_SHUTDOWN:
 		musbotg_uninit(sc);
 		break;
 	case USB_HW_POWER_RESUME:
-		musbotg_resume(sc);
+		musbotg_init(sc);
 		break;
 	default:
 		break;
 	}
 }
 
-struct usb_bus_methods musbotg_bus_methods =
+static const struct usb_bus_methods musbotg_bus_methods =
 {
 	.endpoint_init = &musbotg_ep_init,
 	.get_dma_delay = &musbotg_get_dma_delay,

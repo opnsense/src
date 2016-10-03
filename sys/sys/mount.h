@@ -312,17 +312,21 @@ void          __mnt_vnode_markerfree_active(struct vnode **mvp, struct mount *);
  * External filesystem command modifier flags.
  * Unmount can use the MNT_FORCE flag.
  * XXX: These are not STATES and really should be somewhere else.
- * XXX: MNT_BYFSID collides with MNT_ACLS, but because MNT_ACLS is only used for
- *      mount(2) and MNT_BYFSID is only used for unmount(2) it's harmless.
+ * XXX: MNT_BYFSID and MNT_NONBUSY collide with MNT_ACLS and MNT_MULTILABEL,
+ *      but because MNT_ACLS and MNT_MULTILABEL are only used for mount(2),
+ *      and MNT_BYFSID and MNT_NONBUSY are only used for unmount(2),
+ *      it's harmless.
  */
 #define	MNT_UPDATE	0x0000000000010000ULL /* not real mount, just update */
 #define	MNT_DELEXPORT	0x0000000000020000ULL /* delete export host lists */
 #define	MNT_RELOAD	0x0000000000040000ULL /* reload filesystem data */
 #define	MNT_FORCE	0x0000000000080000ULL /* force unmount or readonly */
 #define	MNT_SNAPSHOT	0x0000000001000000ULL /* snapshot the filesystem */
+#define	MNT_NONBUSY	0x0000000004000000ULL /* check vnode use counts. */
 #define	MNT_BYFSID	0x0000000008000000ULL /* specify filesystem by ID. */
 #define MNT_CMDFLAGS   (MNT_UPDATE	| MNT_DELEXPORT	| MNT_RELOAD	| \
-			MNT_FORCE	| MNT_SNAPSHOT	| MNT_BYFSID)
+			MNT_FORCE	| MNT_SNAPSHOT	| MNT_NONBUSY	| \
+			MNT_BYFSID)
 /*
  * Internal filesystem control flags stored in mnt_kern_flag.
  *
@@ -362,7 +366,7 @@ void          __mnt_vnode_markerfree_active(struct vnode **mvp, struct mount *);
 #define	MNTK_SUSPEND	0x08000000	/* request write suspension */
 #define	MNTK_SUSPEND2	0x04000000	/* block secondary writes */
 #define	MNTK_SUSPENDED	0x10000000	/* write operations are suspended */
-#define	MNTK_UNUSED25	0x20000000	/*  --available-- */
+#define	MNTK_UNUSED1	0x20000000
 #define MNTK_LOOKUP_SHARED	0x40000000 /* FS supports shared lock lookups */
 #define	MNTK_NOKNOTE	0x80000000	/* Don't send KNOTEs from VOP hooks */
 
@@ -590,7 +594,6 @@ struct uio;
 MALLOC_DECLARE(M_MOUNT);
 #endif
 extern int maxvfsconf;		/* highest defined filesystem type */
-extern int nfs_mount_type;	/* vfc_typenum for nfs, or -1 */
 
 TAILQ_HEAD(vfsconfhead, vfsconf);
 extern struct vfsconfhead vfsconf;
@@ -654,15 +657,15 @@ vfs_statfs_t	__vfs_statfs;
 
 #define	VFS_PROLOGUE(MP)	do {					\
 	struct mount *mp__;						\
-	int _enable_stops;						\
+	int _prev_stops;						\
 									\
 	mp__ = (MP);							\
-	_enable_stops = (mp__ != NULL &&				\
-	    (mp__->mnt_vfc->vfc_flags & VFCF_SBDRY) && sigdeferstop())
+	_prev_stops = sigdeferstop((mp__ != NULL &&			\
+	    (mp__->mnt_vfc->vfc_flags & VFCF_SBDRY) != 0) ?		\
+	    SIGDEFERSTOP_SILENT : SIGDEFERSTOP_NOP);
 
 #define	VFS_EPILOGUE(MP)						\
-	if (_enable_stops)						\
-		sigallowstop();						\
+	sigallowstop(_prev_stops);					\
 } while (0)
 
 #define	VFS_MOUNT(MP) ({						\
@@ -824,8 +827,6 @@ vfs_statfs_t	__vfs_statfs;
 		& fsname ## _vfsconf				\
 	};							\
 	DECLARE_MODULE(fsname, fsname ## _mod, SI_SUB_VFS, SI_ORDER_MIDDLE)
-
-extern	char *mountrootfsname;
 
 /*
  * exported vnode operations

@@ -10,6 +10,10 @@
 #ifndef liblldb_AddressRange_h_
 #define liblldb_AddressRange_h_
 
+// C Includes
+// C++ Includes
+// Other libraries and framework includes
+// Project includes
 #include "lldb/Core/Address.h"
 
 namespace lldb_private {
@@ -62,7 +66,7 @@ public:
     /// @param[in] section_list
     ///     A list of sections, one of which may contain the \a vaddr.
     //------------------------------------------------------------------
-    AddressRange (lldb::addr_t file_addr, lldb::addr_t byte_size, const SectionList *section_list = NULL);
+    AddressRange(lldb::addr_t file_addr, lldb::addr_t byte_size, const SectionList *section_list = nullptr);
 
     //------------------------------------------------------------------
     /// Construct with a Address object address and byte size.
@@ -189,7 +193,7 @@ public:
     /// how the base address gets displayed.
     ///
     /// @param[in] s
-    ///     The stream to which to dump the object descripton.
+    ///     The stream to which to dump the object description.
     ///
     /// @param[in] style
     ///     The display style for the address.
@@ -215,7 +219,7 @@ public:
     /// and pointer values, reference counts, etc.
     ///
     /// @param[in] s
-    ///     The stream to which to dump the object descripton.
+    ///     The stream to which to dump the object description.
     //------------------------------------------------------------------
     void
     DumpDebug (Stream *s) const;
@@ -281,4 +285,4 @@ protected:
 
 } // namespace lldb_private
 
-#endif  // liblldb_AddressRange_h_
+#endif // liblldb_AddressRange_h_

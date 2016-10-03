@@ -27,6 +27,7 @@
 #
 
 #include <sys/bus.h>
+#include <dev/pci/pcivar.h>
 
 INTERFACE pci;
 
@@ -42,7 +43,24 @@ CODE {
 	{
 		return (-1);
 	}
+
+	static device_t
+	null_create_iov_child(device_t bus, device_t pf, uint16_t rid,
+	    uint16_t vid, uint16_t did)
+	{
+		device_printf(bus, "PCI_IOV not implemented on this bus.\n");
+		return (NULL);
+	}
 };
+
+HEADER {
+	struct nvlist;
+
+	enum pci_id_type {
+	    PCI_ID_RID,
+	    PCI_ID_MSI,
+	};
+}
 
 
 METHOD u_int32_t read_config {
@@ -196,12 +214,38 @@ METHOD int msix_table_bar {
 	device_t	child;
 } DEFAULT null_msix_bar;
 
-METHOD uint16_t get_rid {
+METHOD int get_id {
 	device_t	dev;
 	device_t	child;
+	enum pci_id_type type;
+	uintptr_t	*id;
+};
+
+METHOD struct pci_devinfo * alloc_devinfo {
+	device_t	dev;
 };
 
 METHOD void child_added {
 	device_t	dev;
 	device_t	child;
 };
+
+METHOD int iov_attach {
+	device_t	dev;
+	device_t	child;
+	struct nvlist	*pf_schema;
+	struct nvlist	*vf_schema;
+};
+
+METHOD int iov_detach {
+	device_t	dev;
+	device_t	child;
+};
+
+METHOD device_t create_iov_child {
+	device_t bus;
+	device_t pf;
+	uint16_t rid;
+	uint16_t vid;
+	uint16_t did;
+} DEFAULT null_create_iov_child;

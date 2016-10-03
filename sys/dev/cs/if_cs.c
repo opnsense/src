@@ -56,6 +56,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/resource.h>
 
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_arp.h>
 #include <net/if_dl.h>
 #include <net/if_media.h>
@@ -106,14 +107,12 @@ driver_intr_t	csintr;
 static SYSCTL_NODE(_hw, OID_AUTO, cs, CTLFLAG_RD, 0, "cs device parameters");
 
 int	cs_ignore_cksum_failure = 0;
-TUNABLE_INT("hw.cs.ignore_checksum_failure", &cs_ignore_cksum_failure);
-SYSCTL_INT(_hw_cs, OID_AUTO, ignore_checksum_failure, CTLFLAG_RW,
+SYSCTL_INT(_hw_cs, OID_AUTO, ignore_checksum_failure, CTLFLAG_RWTUN,
     &cs_ignore_cksum_failure, 0,
   "ignore checksum errors in cs card EEPROM");
 
 static int	cs_recv_delay = 570;
-TUNABLE_INT("hw.cs.recv_delay", &cs_recv_delay);
-SYSCTL_INT(_hw_cs, OID_AUTO, recv_delay, CTLFLAG_RW, &cs_recv_delay, 570, "");
+SYSCTL_INT(_hw_cs, OID_AUTO, recv_delay, CTLFLAG_RWTUN, &cs_recv_delay, 570, "");
 
 static int cs8900_eeint2irq[16] = {
 	 10,  11,  12,   5, 255, 255, 255, 255,
@@ -181,7 +180,7 @@ wait_eeprom_ready(struct cs_softc *sc)
 	 *
 	 * Before we issue the command, we should be !busy, so that will
 	 * be fast.  The datasheet suggests that clock out from the part
-	 * per word will be on the order of 25us, which is consistant with
+	 * per word will be on the order of 25us, which is consistent with
 	 * the 1MHz serial clock and 16bits...  We should never hit 100,
 	 * let alone 15,000 here.  The original code did an unconditional
 	 * 30ms DELAY here.  Bad Kharma.  cs_readreg takes ~2us.
@@ -259,13 +258,13 @@ cs_cs89x0_probe(device_t dev)
 {
 	int i;
 	int error;
-	u_long irq, junk;
+	rman_res_t irq, junk;
 	struct cs_softc *sc = device_get_softc(dev);
 	unsigned rev_type = 0;
 	uint16_t id;
 	char chip_revision;
 	uint16_t eeprom_buff[CHKSUM_LEN];
-	int chip_type, pp_isaint, pp_isadma;
+	int chip_type, pp_isaint;
 
 	sc->dev = dev;
 	error = cs_alloc_port(dev, 0, CS_89x0_IO_PORTS);
@@ -300,11 +299,9 @@ cs_cs89x0_probe(device_t dev)
 
 	if (chip_type == CS8900) {
 		pp_isaint = PP_CS8900_ISAINT;
-		pp_isadma = PP_CS8900_ISADMA;
 		sc->send_cmd = TX_CS8900_AFTER_ALL;
 	} else {
 		pp_isaint = PP_CS8920_ISAINT;
-		pp_isadma = PP_CS8920_ISADMA;
 		sc->send_cmd = TX_CS8920_AFTER_ALL;
 	}
 
@@ -382,17 +379,6 @@ cs_cs89x0_probe(device_t dev)
 	if (!(sc->flags & CS_NO_IRQ))
 		cs_writereg(sc, pp_isaint, irq);
 
-	/*
-	 * Temporary disabled
-	 *
-	if (drq>0)
-		cs_writereg(sc, pp_isadma, drq);
-	else {
-		device_printf(dev, "incorrect drq\n",);
-		return (0);
-	}
-	*/
-
 	if (bootverbose)
 		 device_printf(dev, "CS89%c0%s rev %c media%s%s%s\n",
 			chip_type == CS8900 ? '0' : '2',
@@ -420,8 +406,8 @@ cs_alloc_port(device_t dev, int rid, int size)
 	struct cs_softc *sc = device_get_softc(dev);
 	struct resource *res;
 
-	res = bus_alloc_resource(dev, SYS_RES_IOPORT, &rid,
-	    0ul, ~0ul, size, RF_ACTIVE);
+	res = bus_alloc_resource_anywhere(dev, SYS_RES_IOPORT, &rid,
+	    size, RF_ACTIVE);
 	if (res == NULL)
 		return (ENOENT);
 	sc->port_rid = rid;
@@ -703,7 +689,6 @@ cs_get_packet(struct cs_softc *sc)
 {
 	struct ifnet *ifp = sc->ifp;
 	int status, length;
-	struct ether_header *eh;
 	struct mbuf *m;
 
 #ifdef CS_DEBUG
@@ -722,7 +707,7 @@ cs_get_packet(struct cs_softc *sc)
 #ifdef CS_DEBUG
 		device_printf(sc->dev, "bad pkt stat %x\n", status);
 #endif
-		ifp->if_ierrors++;
+		if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 		return (-1);
 	}
 
@@ -731,8 +716,7 @@ cs_get_packet(struct cs_softc *sc)
 		return (-1);
 
 	if (length > MHLEN) {
-		MCLGET(m, M_NOWAIT);
-		if (!(m->m_flags & M_EXT)) {
+		if (!(MCLGET(m, M_NOWAIT))) {
 			m_freem(m);
 			return (-1);
 		}
@@ -747,8 +731,6 @@ cs_get_packet(struct cs_softc *sc)
 	bus_read_multi_2(sc->port_res, RX_FRAME_PORT, mtod(m, uint16_t *),
 	    (length + 1) >> 1);
 
-	eh = mtod(m, struct ether_header *);
-
 #ifdef CS_DEBUG
 	for (i=0;i<length;i++)
 	     printf(" %02x",(unsigned char)*((char *)(m->m_data+i)));
@@ -759,7 +741,7 @@ cs_get_packet(struct cs_softc *sc)
 	    (ifp->if_flags & IFF_MULTICAST && status & RX_HASHED)) {
 		/* Feed the packet to the upper layer */
 		(*ifp->if_input)(ifp, m);
-		ifp->if_ipackets++;
+		if_inc_counter(ifp, IFCOUNTER_IPACKETS, 1);
 		if (length == ETHER_MAX_LEN-ETHER_CRC_LEN)
 			DELAY(cs_recv_delay);
 	} else {
@@ -797,9 +779,9 @@ csintr(void *arg)
 
 		case ISQ_TRANSMITTER_EVENT:
 			if (status & TX_OK)
-				ifp->if_opackets++;
+				if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
 			else
-				ifp->if_oerrors++;
+				if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 			ifp->if_drv_flags &= ~IFF_DRV_OACTIVE;
 			sc->tx_timeout = 0;
 			break;
@@ -813,16 +795,16 @@ csintr(void *arg)
 			if (status & TX_UNDERRUN) {
 				ifp->if_drv_flags &= ~IFF_DRV_OACTIVE;
 				sc->tx_timeout = 0;
-				ifp->if_oerrors++;
+				if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 			}
 			break;
 
 		case ISQ_RX_MISS_EVENT:
-			ifp->if_ierrors+=(status>>6);
+			if_inc_counter(ifp, IFCOUNTER_IERRORS, status >> 6);
 			break;
 
 		case ISQ_TX_COL_EVENT:
-			ifp->if_collisions+=(status>>6);
+			if_inc_counter(ifp, IFCOUNTER_COLLISIONS, status >> 6);
 			break;
 		}
 	}
@@ -1131,7 +1113,7 @@ cs_watchdog(void *arg)
 
 	CS_ASSERT_LOCKED(sc);
 	if (sc->tx_timeout && --sc->tx_timeout == 0) {
-		ifp->if_oerrors++;
+		if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 		log(LOG_ERR, "%s: device timeout\n", ifp->if_xname);
 
 		/* Reset the interface */

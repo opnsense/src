@@ -53,11 +53,16 @@ uma_small_alloc(uma_zone_t zone, vm_size_t bytes, u_int8_t *flags, int wait)
 
 	for (;;) {
 		m = vm_page_alloc_freelist(VM_FREELIST_DIRECT, pflags);
+#ifndef __mips_n64
+		if (m == NULL && vm_page_reclaim_contig(pflags, 1,
+		    0, MIPS_KSEG0_LARGEST_PHYS, PAGE_SIZE, 0))
+			continue;
+#endif
 		if (m == NULL) {
 			if (wait & M_NOWAIT)
 				return (NULL);
 			else
-				pmap_grow_direct_page_cache();
+				VM_WAIT;
 		} else
 			break;
 	}
@@ -79,5 +84,5 @@ uma_small_free(void *mem, vm_size_t size, u_int8_t flags)
 	m = PHYS_TO_VM_PAGE(pa);
 	m->wire_count--;
 	vm_page_free(m);
-	atomic_subtract_int(&cnt.v_wire_count, 1);
+	atomic_subtract_int(&vm_cnt.v_wire_count, 1);
 }

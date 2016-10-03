@@ -9,15 +9,15 @@
 
 #include "lldb/Symbol/CompileUnit.h"
 #include "lldb/Core/Module.h"
-#include "lldb/Core/Language.h"
 #include "lldb/Symbol/LineTable.h"
 #include "lldb/Symbol/SymbolVendor.h"
 #include "lldb/Symbol/VariableList.h"
+#include "lldb/Target/Language.h"
 
 using namespace lldb;
 using namespace lldb_private;
 
-CompileUnit::CompileUnit (const lldb::ModuleSP &module_sp, void *user_data, const char *pathname, const lldb::user_id_t cu_sym_id, lldb::LanguageType language) :
+CompileUnit::CompileUnit (const lldb::ModuleSP &module_sp, void *user_data, const char *pathname, const lldb::user_id_t cu_sym_id, lldb::LanguageType language, bool is_optimized) :
     ModuleChild(module_sp),
     FileSpec (pathname, false),
     UserID(cu_sym_id),
@@ -27,14 +27,15 @@ CompileUnit::CompileUnit (const lldb::ModuleSP &module_sp, void *user_data, cons
     m_functions (),
     m_support_files (),
     m_line_table_ap (),
-    m_variables()
+    m_variables(),
+    m_is_optimized (is_optimized)
 {
     if (language != eLanguageTypeUnknown)
         m_flags.Set(flagsParsedLanguage);
     assert(module_sp);
 }
 
-CompileUnit::CompileUnit (const lldb::ModuleSP &module_sp, void *user_data, const FileSpec &fspec, const lldb::user_id_t cu_sym_id, lldb::LanguageType language) :
+CompileUnit::CompileUnit (const lldb::ModuleSP &module_sp, void *user_data, const FileSpec &fspec, const lldb::user_id_t cu_sym_id, lldb::LanguageType language, bool is_optimized) :
     ModuleChild(module_sp),
     FileSpec (fspec),
     UserID(cu_sym_id),
@@ -44,7 +45,8 @@ CompileUnit::CompileUnit (const lldb::ModuleSP &module_sp, void *user_data, cons
     m_functions (),
     m_support_files (),
     m_line_table_ap (),
-    m_variables()
+    m_variables(),
+    m_is_optimized (is_optimized)
 {
     if (language != eLanguageTypeUnknown)
         m_flags.Set(flagsParsedLanguage);
@@ -85,7 +87,7 @@ CompileUnit::DumpSymbolContext(Stream *s)
 void
 CompileUnit::GetDescription(Stream *s, lldb::DescriptionLevel level) const
 {
-    Language language(m_language);
+    const char* language = Language::GetNameForLanguageType(m_language);
     *s << "id = " << (const UserID&)*this << ", file = \"" << (const FileSpec&)*this << "\", language = \"" << language << '"';
 }
 
@@ -99,11 +101,13 @@ CompileUnit::GetDescription(Stream *s, lldb::DescriptionLevel level) const
 void
 CompileUnit::Dump(Stream *s, bool show_context) const
 {
-    s->Printf("%p: ", this);
+    const char* language = Language::GetNameForLanguageType(m_language);
+    
+    s->Printf("%p: ", static_cast<const void*>(this));
     s->Indent();
-    *s << "CompileUnit" << (const UserID&)*this
-        << ", language = \"" << (const Language&)*this
-        << "\", file = '" << (const FileSpec&)*this << "'\n";
+    *s << "CompileUnit" << static_cast<const UserID&>(*this)
+       << ", language = \"" << language
+       << "\", file = '" << static_cast<const FileSpec&>(*this) << "'\n";
 
 //  m_types.Dump(s);
 
@@ -149,9 +153,9 @@ CompileUnit::GetFunctionAtIndex (size_t idx)
 }
 
 //----------------------------------------------------------------------
-// Find functions using the a Mangled::Tokens token list. This
-// function currently implements an interative approach designed to find
-// all instances of certain functions. It isn't designed to the the
+// Find functions using the Mangled::Tokens token list. This
+// function currently implements an interactive approach designed to find
+// all instances of certain functions. It isn't designed to the
 // quickest way to lookup functions as it will need to iterate through
 // all functions and see if they match, though it does provide a powerful
 // and context sensitive way to search for all functions with a certain
@@ -237,7 +241,7 @@ CompileUnit::GetLanguage()
 LineTable*
 CompileUnit::GetLineTable()
 {
-    if (m_line_table_ap.get() == NULL)
+    if (m_line_table_ap.get() == nullptr)
     {
         if (m_flags.IsClear(flagsParsedLineTable))
         {
@@ -257,17 +261,48 @@ CompileUnit::GetLineTable()
 void
 CompileUnit::SetLineTable(LineTable* line_table)
 {
-    if (line_table == NULL)
+    if (line_table == nullptr)
         m_flags.Clear(flagsParsedLineTable);
     else
         m_flags.Set(flagsParsedLineTable);
     m_line_table_ap.reset(line_table);
 }
 
+DebugMacros*
+CompileUnit::GetDebugMacros()
+{
+    if (m_debug_macros_sp.get() == nullptr)
+    {
+        if (m_flags.IsClear(flagsParsedDebugMacros))
+        {
+            m_flags.Set(flagsParsedDebugMacros);
+            SymbolVendor* symbol_vendor = GetModule()->GetSymbolVendor();
+            if (symbol_vendor)
+            {
+                SymbolContext sc;
+                CalculateSymbolContext(&sc);
+                symbol_vendor->ParseCompileUnitDebugMacros(sc);
+            }
+        }
+    }
+
+    return m_debug_macros_sp.get();
+}
+
+void
+CompileUnit::SetDebugMacros(const DebugMacrosSP &debug_macros_sp)
+{
+    if (debug_macros_sp.get() == nullptr)
+        m_flags.Clear(flagsParsedDebugMacros);
+    else
+        m_flags.Set(flagsParsedDebugMacros);
+    m_debug_macros_sp = debug_macros_sp;
+}
+
 VariableListSP
 CompileUnit::GetVariableList(bool can_create)
 {
-    if (m_variables.get() == NULL && can_create)
+    if (m_variables.get() == nullptr && can_create)
     {
         SymbolContext sc;
         CalculateSymbolContext(&sc);
@@ -292,7 +327,7 @@ CompileUnit::FindLineEntry (uint32_t start_idx, uint32_t line, const FileSpec* f
     else
     {
         // All the line table entries actually point to the version of the Compile
-        // Unit that is in the support files (the one at 0 was artifically added.)
+        // Unit that is in the support files (the one at 0 was artificially added.)
         // So prefer the one further on in the support files if it exists...
         FileSpecList &support_files = GetSupportFiles();
         const bool full = true;
@@ -325,18 +360,19 @@ CompileUnit::ResolveSymbolContext
     // when finding file indexes
     std::vector<uint32_t> file_indexes;
     const bool full_match = (bool)file_spec.GetDirectory();
-    bool file_spec_matches_cu_file_spec = FileSpec::Equal(file_spec, *this, full_match);
+    const bool remove_backup_dots = true;
+    bool file_spec_matches_cu_file_spec = FileSpec::Equal(file_spec, *this, full_match, remove_backup_dots);
 
     // If we are not looking for inlined functions and our file spec doesn't
     // match then we are done...
     if (file_spec_matches_cu_file_spec == false && check_inlines == false)
         return 0;
 
-    uint32_t file_idx = GetSupportFiles().FindFileIndex (1, file_spec, true);
+    uint32_t file_idx = GetSupportFiles().FindFileIndex (1, file_spec, true, remove_backup_dots);
     while (file_idx != UINT32_MAX)
     {
         file_indexes.push_back (file_idx);
-        file_idx = GetSupportFiles().FindFileIndex (file_idx + 1, file_spec, true);
+        file_idx = GetSupportFiles().FindFileIndex (file_idx + 1, file_spec, true, remove_backup_dots);
     }
     
     const size_t num_file_indexes = file_indexes.size();
@@ -353,7 +389,7 @@ CompileUnit::ResolveSymbolContext
     {
         LineTable *line_table = sc.comp_unit->GetLineTable();
 
-        if (line_table != NULL)
+        if (line_table != nullptr)
         {
             uint32_t found_line;
             uint32_t line_idx;
@@ -429,10 +465,33 @@ CompileUnit::ResolveSymbolContext
     return sc_list.GetSize() - prev_size;
 }
 
+bool
+CompileUnit::GetIsOptimized ()
+{
+    return m_is_optimized;
+}
+
 void
 CompileUnit::SetVariableList(VariableListSP &variables)
 {
     m_variables = variables;
+}
+
+const std::vector<ConstString> &
+CompileUnit::GetImportedModules ()
+{
+    if (m_imported_modules.empty() &&
+        m_flags.IsClear(flagsParsedImportedModules))
+    {
+        m_flags.Set(flagsParsedImportedModules);
+        if (SymbolVendor *symbol_vendor = GetModule()->GetSymbolVendor())
+        {
+            SymbolContext sc;
+            CalculateSymbolContext(&sc);
+            symbol_vendor->ParseImportedModules(sc, m_imported_modules);
+        }
+    }
+    return m_imported_modules;
 }
 
 FileSpecList&

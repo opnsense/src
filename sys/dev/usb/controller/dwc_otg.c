@@ -93,17 +93,6 @@
 #define	DWC_OTG_PC2UDEV(pc) \
    (USB_DMATAG_TO_XROOT((pc)->tag_parent)->udev)
 
-#define	DWC_OTG_MSK_GINT_ENABLED	\
-   (GINTMSK_ENUMDONEMSK |		\
-   GINTMSK_USBRSTMSK |			\
-   GINTMSK_USBSUSPMSK |			\
-   GINTMSK_IEPINTMSK |			\
-   GINTMSK_SESSREQINTMSK |		\
-   GINTMSK_RXFLVLMSK |			\
-   GINTMSK_HCHINTMSK |			\
-   GINTMSK_OTGINTMSK |			\
-   GINTMSK_PRTINTMSK)
-
 #define	DWC_OTG_MSK_GINT_THREAD_IRQ				\
    (GINTSTS_USBRST | GINTSTS_ENUMDONE | GINTSTS_PRTINT |	\
    GINTSTS_WKUPINT | GINTSTS_USBSUSP | GINTMSK_OTGINTMSK |	\
@@ -122,12 +111,11 @@ static int dwc_otg_phy_type = DWC_OTG_PHY_DEFAULT;
 static SYSCTL_NODE(_hw_usb, OID_AUTO, dwc_otg, CTLFLAG_RW, 0, "USB DWC OTG");
 SYSCTL_INT(_hw_usb_dwc_otg, OID_AUTO, phy_type, CTLFLAG_RDTUN,
     &dwc_otg_phy_type, 0, "DWC OTG PHY TYPE - 0/1/2 - ULPI/HSIC/INTERNAL");
-TUNABLE_INT("hw.usb.dwc_otg.phy_type", &dwc_otg_phy_type);
 
 #ifdef USB_DEBUG
 static int dwc_otg_debug;
 
-SYSCTL_INT(_hw_usb_dwc_otg, OID_AUTO, debug, CTLFLAG_RW,
+SYSCTL_INT(_hw_usb_dwc_otg, OID_AUTO, debug, CTLFLAG_RWTUN,
     &dwc_otg_debug, 0, "DWC OTG debug level");
 #endif
 
@@ -135,9 +123,9 @@ SYSCTL_INT(_hw_usb_dwc_otg, OID_AUTO, debug, CTLFLAG_RW,
 
 /* prototypes */
 
-struct usb_bus_methods dwc_otg_bus_methods;
-struct usb_pipe_methods dwc_otg_device_non_isoc_methods;
-struct usb_pipe_methods dwc_otg_device_isoc_methods;
+static const struct usb_bus_methods dwc_otg_bus_methods;
+static const struct usb_pipe_methods dwc_otg_device_non_isoc_methods;
+static const struct usb_pipe_methods dwc_otg_device_isoc_methods;
 
 static dwc_otg_cmd_t dwc_otg_setup_rx;
 static dwc_otg_cmd_t dwc_otg_data_rx;
@@ -377,6 +365,11 @@ dwc_otg_init_fifo(struct dwc_otg_softc *sc, uint8_t mode)
 		/* enable all host channel interrupts */
 		DWC_OTG_WRITE_4(sc, DOTG_HAINTMSK,
 		    (1U << sc->sc_host_ch_max) - 1U);
+
+		/* enable proper host channel interrupts */
+		sc->sc_irq_mask |= GINTMSK_HCHINTMSK;
+		sc->sc_irq_mask &= ~GINTMSK_IEPINTMSK;
+		DWC_OTG_WRITE_4(sc, DOTG_GINTMSK, sc->sc_irq_mask);
 	}
 
 	if (mode == DWC_MODE_DEVICE) {
@@ -437,6 +430,11 @@ dwc_otg_init_fifo(struct dwc_otg_softc *sc, uint8_t mode)
 		    pf->usb.max_in_frame_size,
 		    pf->usb.max_out_frame_size);
 	    }
+
+	    /* enable proper device channel interrupts */
+	    sc->sc_irq_mask &= ~GINTMSK_HCHINTMSK;
+	    sc->sc_irq_mask |= GINTMSK_IEPINTMSK;
+	    DWC_OTG_WRITE_4(sc, DOTG_GINTMSK, sc->sc_irq_mask);
 	}
 
 	/* reset RX FIFO */
@@ -2811,7 +2809,12 @@ dwc_otg_vbus_interrupt(struct dwc_otg_softc *sc, uint8_t is_on)
 {
 	DPRINTFN(5, "vbus = %u\n", is_on);
 
-	if (is_on) {
+	/*
+	 * If the USB host mode is forced, then assume VBUS is always
+	 * present else rely on the input to this function:
+	 */
+	if ((is_on != 0) || (sc->sc_mode == DWC_MODE_HOST)) {
+
 		if (!sc->sc_flags.status_vbus) {
 			sc->sc_flags.status_vbus = 1;
 
@@ -2866,10 +2869,13 @@ dwc_otg_filter_interrupt(void *arg)
 
 		for (x = 0; x != sc->sc_dev_in_ep_max; x++) {
 			temp = DWC_OTG_READ_4(sc, DOTG_DIEPINT(x));
-			if (temp & DIEPMSK_XFERCOMPLMSK) {
-				DWC_OTG_WRITE_4(sc, DOTG_DIEPINT(x),
-				    DIEPMSK_XFERCOMPLMSK);
-			}
+			/*
+			 * NOTE: Need to clear all interrupt bits,
+			 * because some appears to be unmaskable and
+			 * can cause an interrupt loop:
+			 */
+			if (temp != 0)
+				DWC_OTG_WRITE_4(sc, DOTG_DIEPINT(x), temp);
 		}
 	}
 
@@ -2981,7 +2987,8 @@ dwc_otg_interrupt(void *arg)
 		else
 			sc->sc_flags.status_bus_reset = 0;
 
-		if (hprt & HPRT_PRTENCHNG)
+		if ((hprt & HPRT_PRTENCHNG) &&
+		    (hprt & HPRT_PRTENA) == 0)
 			sc->sc_flags.change_enabled = 1;
 
 		if (hprt & HPRT_PRTENA)
@@ -3328,7 +3335,7 @@ dwc_otg_setup_standard_chain(struct usb_xfer *xfer)
 		 * type in general, as a means to workaround
 		 * that. This trick should work for both FULL and LOW
 		 * speed USB traffic going through a TT. For non-TT
-		 * traffic it works aswell. The reason for using
+		 * traffic it works as well. The reason for using
 		 * CONTROL type instead of BULK is that some TTs might
 		 * reject LOW speed BULK traffic.
 		 */
@@ -3969,13 +3976,13 @@ dwc_otg_init(struct dwc_otg_softc *sc)
 	    sc->sc_host_ch_max);
 
 	/* setup FIFO */
-	if (dwc_otg_init_fifo(sc, DWC_MODE_OTG)) {
+	if (dwc_otg_init_fifo(sc, sc->sc_mode)) {
 		USB_BUS_UNLOCK(&sc->sc_bus);
 		return (EINVAL);
 	}
 
 	/* enable interrupts */
-	sc->sc_irq_mask = DWC_OTG_MSK_GINT_ENABLED;
+	sc->sc_irq_mask |= DWC_OTG_MSK_GINT_THREAD_IRQ;
 	DWC_OTG_WRITE_4(sc, DOTG_GINTMSK, sc->sc_irq_mask);
 
 	if (sc->sc_mode == DWC_MODE_OTG || sc->sc_mode == DWC_MODE_DEVICE) {
@@ -4117,7 +4124,7 @@ dwc_otg_device_non_isoc_start(struct usb_xfer *xfer)
 	dwc_otg_start_standard_chain(xfer);
 }
 
-struct usb_pipe_methods dwc_otg_device_non_isoc_methods =
+static const struct usb_pipe_methods dwc_otg_device_non_isoc_methods =
 {
 	.open = dwc_otg_device_non_isoc_open,
 	.close = dwc_otg_device_non_isoc_close,
@@ -4224,7 +4231,7 @@ dwc_otg_device_isoc_start(struct usb_xfer *xfer)
 	dwc_otg_start_standard_chain(xfer);
 }
 
-struct usb_pipe_methods dwc_otg_device_isoc_methods =
+static const struct usb_pipe_methods dwc_otg_device_isoc_methods =
 {
 	.open = dwc_otg_device_isoc_open,
 	.close = dwc_otg_device_isoc_close,
@@ -4741,6 +4748,8 @@ tr_handle_get_port_status:
 
 	value = 0;
 
+	if (sc->sc_flags.change_enabled)
+		value |= UPS_C_PORT_ENABLED;
 	if (sc->sc_flags.change_connect)
 		value |= UPS_C_CONNECT_STATUS;
 	if (sc->sc_flags.change_suspend)
@@ -4959,7 +4968,7 @@ dwc_otg_device_suspend(struct usb_device *udev)
 	DPRINTF("\n");
 }
 
-struct usb_bus_methods dwc_otg_bus_methods =
+static const struct usb_bus_methods dwc_otg_bus_methods =
 {
 	.endpoint_init = &dwc_otg_ep_init,
 	.xfer_setup = &dwc_otg_xfer_setup,

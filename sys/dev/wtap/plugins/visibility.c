@@ -41,7 +41,6 @@
 #include <sys/ucred.h>
 #include <sys/jail.h>
 
-#include <sys/types.h>
 #include <sys/sockio.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
@@ -231,7 +230,7 @@ vis_ioctl(struct cdev *sdev, u_long cmd, caddr_t data,
 #endif
 		break;
 	default:
-		DWTAP_PRINTF("Unkown WTAP IOCTL\n");
+		DWTAP_PRINTF("Unknown WTAP IOCTL\n");
 		error = EINVAL;
 	}
 

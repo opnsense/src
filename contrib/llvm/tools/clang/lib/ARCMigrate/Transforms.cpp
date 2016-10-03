@@ -16,6 +16,7 @@
 #include "clang/Basic/SourceManager.h"
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Lex/Lexer.h"
+#include "clang/Lex/Preprocessor.h"
 #include "clang/Sema/Sema.h"
 #include "clang/Sema/SemaDiagnostic.h"
 #include "llvm/ADT/DenseSet.h"
@@ -41,7 +42,7 @@ bool MigrationPass::CFBridgingFunctionsDefined() {
 
 bool trans::canApplyWeak(ASTContext &Ctx, QualType type,
                          bool AllowOnUnknownClass) {
-  if (!Ctx.getLangOpts().ObjCARCWeak)
+  if (!Ctx.getLangOpts().ObjCWeakRuntime)
     return false;
 
   QualType T = type;
@@ -49,7 +50,8 @@ bool trans::canApplyWeak(ASTContext &Ctx, QualType type,
     return false;
 
   // iOS is always safe to use 'weak'.
-  if (Ctx.getTargetInfo().getTriple().isiOS())
+  if (Ctx.getTargetInfo().getTriple().isiOS() ||
+      Ctx.getTargetInfo().getTriple().isWatchOS())
     AllowOnUnknownClass = true;
 
   while (const PointerType *ptr = T->getAs<PointerType>())
@@ -88,7 +90,7 @@ bool trans::isPlusOne(const Expr *E) {
   if (const CallExpr *
         callE = dyn_cast<CallExpr>(E->IgnoreParenCasts())) {
     if (const FunctionDecl *FD = callE->getDirectCallee()) {
-      if (FD->getAttr<CFReturnsRetainedAttr>())
+      if (FD->hasAttr<CFReturnsRetainedAttr>())
         return true;
 
       if (FD->isGlobal() &&
@@ -111,10 +113,7 @@ bool trans::isPlusOne(const Expr *E) {
   while (implCE && implCE->getCastKind() ==  CK_BitCast)
     implCE = dyn_cast<ImplicitCastExpr>(implCE->getSubExpr());
 
-  if (implCE && implCE->getCastKind() == CK_ARCConsumeObject)
-    return true;
-
-  return false;
+  return implCE && implCE->getCastKind() == CK_ARCConsumeObject;
 }
 
 /// \brief 'Loc' is the end of a statement range. This returns the location
@@ -212,11 +211,8 @@ bool trans::isGlobalVar(Expr *E) {
   return false;  
 }
 
-StringRef trans::getNilString(ASTContext &Ctx) {
-  if (Ctx.Idents.get("nil").hasMacroDefinition())
-    return "nil";
-  else
-    return "0";
+StringRef trans::getNilString(MigrationPass &Pass) {
+  return Pass.SemaRef.PP.isMacroDefined("nil") ? "nil" : "0";
 }
 
 namespace {
@@ -264,9 +260,8 @@ public:
   }
   
   bool VisitCompoundStmt(CompoundStmt *S) {
-    for (CompoundStmt::body_iterator
-        I = S->body_begin(), E = S->body_end(); I != E; ++I)
-      mark(*I);
+    for (auto *I : S->body())
+      mark(I);
     return true;
   }
   
@@ -414,8 +409,7 @@ bool MigrationContext::rewritePropertyAttribute(StringRef fromAttr,
   if (tok.isNot(tok::at)) return false;
   lexer.LexFromRawLexer(tok);
   if (tok.isNot(tok::raw_identifier)) return false;
-  if (StringRef(tok.getRawIdentifierData(), tok.getLength())
-        != "property")
+  if (tok.getRawIdentifier() != "property")
     return false;
   lexer.LexFromRawLexer(tok);
   if (tok.isNot(tok::l_paren)) return false;
@@ -431,8 +425,7 @@ bool MigrationContext::rewritePropertyAttribute(StringRef fromAttr,
 
   while (1) {
     if (tok.isNot(tok::raw_identifier)) return false;
-    StringRef ident(tok.getRawIdentifierData(), tok.getLength());
-    if (ident == fromAttr) {
+    if (tok.getRawIdentifier() == fromAttr) {
       if (!toAttr.empty()) {
         Pass.TA.replaceText(tok.getLocation(), fromAttr, toAttr);
         return true;
@@ -497,8 +490,7 @@ bool MigrationContext::addPropertyAttribute(StringRef attr,
   if (tok.isNot(tok::at)) return false;
   lexer.LexFromRawLexer(tok);
   if (tok.isNot(tok::raw_identifier)) return false;
-  if (StringRef(tok.getRawIdentifierData(), tok.getLength())
-        != "property")
+  if (tok.getRawIdentifier() != "property")
     return false;
   lexer.LexFromRawLexer(tok);
 
@@ -538,15 +530,12 @@ static void GCRewriteFinalize(MigrationPass &pass) {
   impl_iterator;
   for (impl_iterator I = impl_iterator(DC->decls_begin()),
        E = impl_iterator(DC->decls_end()); I != E; ++I) {
-    for (ObjCImplementationDecl::instmeth_iterator
-         MI = I->instmeth_begin(),
-         ME = I->instmeth_end(); MI != ME; ++MI) {
-      ObjCMethodDecl *MD = *MI;
+    for (const auto *MD : I->instance_methods()) {
       if (!MD->hasBody())
         continue;
       
       if (MD->isInstanceMethod() && MD->getSelector() == FinalizeSel) {
-        ObjCMethodDecl *FinalizeM = MD;
+        const ObjCMethodDecl *FinalizeM = MD;
         Transaction Trans(TA);
         TA.insert(FinalizeM->getSourceRange().getBegin(), 
                   "#if !__has_feature(objc_arc)\n");

@@ -54,9 +54,7 @@ __FBSDID("$FreeBSD$");
  * XDR a call message
  */
 bool_t
-xdr_callmsg(xdrs, cmsg)
-	XDR *xdrs;
-	struct rpc_msg *cmsg;
+xdr_callmsg(XDR *xdrs, struct rpc_msg *cmsg)
 {
 	enum msg_type *prm_direction;
 	int32_t *buf;
@@ -195,11 +193,11 @@ xdr_callmsg(xdrs, cmsg)
 	    xdr_u_int32_t(xdrs, &(cmsg->rm_xid)) &&
 	    xdr_enum(xdrs, (enum_t *) prm_direction) &&
 	    (cmsg->rm_direction == CALL) &&
-	    xdr_u_int32_t(xdrs, &(cmsg->rm_call.cb_rpcvers)) &&
+	    xdr_rpcvers(xdrs, &(cmsg->rm_call.cb_rpcvers)) &&
 	    (cmsg->rm_call.cb_rpcvers == RPC_MSG_VERSION) &&
-	    xdr_u_int32_t(xdrs, &(cmsg->rm_call.cb_prog)) &&
-	    xdr_u_int32_t(xdrs, &(cmsg->rm_call.cb_vers)) &&
-	    xdr_u_int32_t(xdrs, &(cmsg->rm_call.cb_proc)) &&
+	    xdr_rpcprog(xdrs, &(cmsg->rm_call.cb_prog)) &&
+	    xdr_rpcvers(xdrs, &(cmsg->rm_call.cb_vers)) &&
+	    xdr_rpcproc(xdrs, &(cmsg->rm_call.cb_proc)) &&
 	    xdr_opaque_auth(xdrs, &(cmsg->rm_call.cb_cred)) )
 		return (xdr_opaque_auth(xdrs, &(cmsg->rm_call.cb_verf)));
 	return (FALSE);

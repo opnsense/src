@@ -38,10 +38,12 @@
 #include <sys/selinfo.h>		/* for struct selinfo */
 #include <sys/_lock.h>
 #include <sys/_mutex.h>
+#include <sys/osd.h>
 #include <sys/_sx.h>
 #include <sys/sockbuf.h>
 #include <sys/sockstate.h>
 #ifdef _KERNEL
+#include <sys/caprights.h>
 #include <sys/sockopt.h>
 #endif
 
@@ -62,7 +64,6 @@ struct socket;
  * (a) constant after allocation, no locking required.
  * (b) locked by SOCK_LOCK(so).
  * (c) locked by SOCKBUF_LOCK(&so->so_rcv).
- * (d) locked by SOCKBUF_LOCK(&so->so_snd).
  * (e) locked by ACCEPT_LOCK().
  * (f) not locked since integer reads/writes are atomic.
  * (g) used only as a sleep/wakeup address, no value.
@@ -93,16 +94,15 @@ struct socket {
 	TAILQ_HEAD(, socket) so_incomp;	/* (e) queue of partial unaccepted connections */
 	TAILQ_HEAD(, socket) so_comp;	/* (e) queue of complete unaccepted connections */
 	TAILQ_ENTRY(socket) so_list;	/* (e) list of unaccepted connections */
-	u_short	so_qlen;		/* (e) number of unaccepted connections */
-	u_short	so_incqlen;		/* (e) number of unaccepted incomplete
+	u_int	so_qlen;		/* (e) number of unaccepted connections */
+	u_int	so_incqlen;		/* (e) number of unaccepted incomplete
 					   connections */
-	u_short	so_qlimit;		/* (e) max number queued connections */
+	u_int	so_qlimit;		/* (e) max number queued connections */
 	short	so_timeo;		/* (g) connection timeout */
 	u_short	so_error;		/* (f) error affecting connection */
 	struct	sigio *so_sigio;	/* [sg] information for async I/O or
 					   out of band data (SIGURG) */
 	u_long	so_oobmark;		/* (c) chars to oob mark */
-	TAILQ_HEAD(, aiocblist) so_aiojobq; /* AIO ops waiting on socket */
 
 	struct sockbuf so_rcv, so_snd;
 
@@ -117,6 +117,7 @@ struct socket {
 		void	*so_accept_filter_arg;	/* saved filter args */
 		char	*so_accept_filter_str;	/* saved user args */
 	} *so_accf;
+	struct	osd	osd;		/* Object Specific extensions */
 	/*
 	 * so_fibnum, so_user_cookie and friends can be used to attach
 	 * some user-specified metadata to a socket, which then can be
@@ -125,6 +126,9 @@ struct socket {
 	 */
 	int so_fibnum;		/* routing domain for this socket */
 	uint32_t so_user_cookie;
+
+	void *so_pspare[2];	/* packet pacing / general use */
+	int so_ispare[2];	/* packet pacing / general use */
 };
 
 /*
@@ -169,9 +173,9 @@ struct xsocket {
 	caddr_t	so_pcb;		/* another convenient handle */
 	int	xso_protocol;
 	int	xso_family;
-	u_short	so_qlen;
-	u_short	so_incqlen;
-	u_short	so_qlimit;
+	u_int	so_qlen;
+	u_int	so_incqlen;
+	u_int	so_qlimit;
 	short	so_timeo;
 	u_short	so_error;
 	pid_t	so_pgid;
@@ -205,7 +209,7 @@ struct xsocket {
 
 /* can we read something from so? */
 #define	soreadabledata(so) \
-    ((so)->so_rcv.sb_cc >= (so)->so_rcv.sb_lowat || \
+    (sbavail(&(so)->so_rcv) >= (so)->so_rcv.sb_lowat || \
 	!TAILQ_EMPTY(&(so)->so_comp) || (so)->so_error)
 #define	soreadable(so) \
 	(soreadabledata(so) || ((so)->so_rcv.sb_state & SBS_CANTRCVMORE))
@@ -292,10 +296,32 @@ MALLOC_DECLARE(M_PCB);
 MALLOC_DECLARE(M_SONAME);
 #endif
 
+/*
+ * Socket specific helper hook point identifiers
+ * Do not leave holes in the sequence, hook registration is a loop.
+ */
+#define HHOOK_SOCKET_OPT		0
+#define HHOOK_SOCKET_CREATE		1
+#define HHOOK_SOCKET_RCV 		2
+#define HHOOK_SOCKET_SND		3
+#define HHOOK_FILT_SOREAD		4
+#define HHOOK_FILT_SOWRITE		5
+#define HHOOK_SOCKET_CLOSE		6
+#define HHOOK_SOCKET_LAST		HHOOK_SOCKET_CLOSE
+
+struct socket_hhook_data {
+	struct socket	*so;
+	struct mbuf	*m;
+	void		*hctx;		/* hook point specific data*/
+	int		status;
+};
+
 extern int	maxsockets;
 extern u_long	sb_max;
 extern so_gen_t so_gencnt;
 
+struct file;
+struct filedesc;
 struct mbuf;
 struct sockaddr;
 struct ucred;
@@ -312,10 +338,14 @@ struct uio;
 /*
  * From uipc_socket and friends
  */
-int	sockargs(struct mbuf **mp, caddr_t buf, int buflen, int type);
 int	getsockaddr(struct sockaddr **namp, caddr_t uaddr, size_t len);
+int	getsock_cap(struct thread *td, int fd, cap_rights_t *rightsp,
+	    struct file **fpp, u_int *fflagp);
 void	soabort(struct socket *so);
 int	soaccept(struct socket *so, struct sockaddr **nam);
+void	soaio_enqueue(struct task *task);
+void	soaio_rcv(void *context, int pending);
+void	soaio_snd(void *context, int pending);
 int	socheckuid(struct socket *so, uid_t uid);
 int	sobind(struct socket *so, struct sockaddr *nam, struct thread *td);
 int	sobindat(int fd, struct socket *so, struct sockaddr *nam,
@@ -370,6 +400,7 @@ void	soupcall_clear(struct socket *so, int which);
 void	soupcall_set(struct socket *so, int which,
 	    int (*func)(struct socket *, void *, int), void *arg);
 void	sowakeup(struct socket *so, struct sockbuf *sb);
+void	sowakeup_aio(struct socket *so, struct sockbuf *sb);
 int	selsocket(struct socket *so, int events, struct timeval *tv,
 	    struct thread *td);
 

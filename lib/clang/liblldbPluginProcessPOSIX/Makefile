@@ -10,22 +10,13 @@ CFLAGS+=-I${.CURDIR}/../../../contrib/llvm/tools/lldb/source/Plugins/Process/Uti
 CFLAGS+=-I${.CURDIR}/../../../contrib/llvm/tools/lldb/source/Plugins/Process/FreeBSD
 
 SRCDIR=	tools/lldb/source/Plugins/Process/POSIX
-SRCS=	POSIXStopInfo.cpp \
-	POSIXThread.cpp \
+SRCS=	CrashReason.cpp \
 	ProcessMessage.cpp \
-	ProcessPOSIX.cpp \
-	ProcessPOSIXLog.cpp \
-	RegisterContextFreeBSD_i386.cpp \
-	RegisterContextFreeBSD_mips64.cpp \
-	RegisterContextFreeBSD_x86_64.cpp \
-	RegisterContextLinux_i386.cpp \
-	RegisterContextLinux_x86_64.cpp \
-	RegisterContextPOSIXProcessMonitor_mips64.cpp \
-	RegisterContextPOSIXProcessMonitor_x86.cpp \
-	RegisterContextPOSIX_mips64.cpp \
-	RegisterContextPOSIX_x86.cpp
+	ProcessPOSIXLog.cpp
 
-TGHDRS=	DiagnosticCommonKinds \
+TGHDRS=	AttrList \
+	Attrs \
+	DiagnosticCommonKinds \
 	DeclNodes \
 	StmtNodes \
 	CommentCommandList

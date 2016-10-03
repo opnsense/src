@@ -11,10 +11,11 @@ IBSRCDIR=	${UMADDIR}/src
 
 LIB=		ibumad
 SHLIB_MAJOR=	1
-NO_PROFILE=
+MK_PROFILE=	no
 
 SRCS=	umad.c
 
+LIBADD=	ibcommon
 CFLAGS+= -DHAVE_CONFIG_H
 
 VERSION_MAP= ${IBSRCDIR}/libibumad.map

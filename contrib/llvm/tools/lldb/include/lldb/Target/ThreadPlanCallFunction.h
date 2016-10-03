@@ -26,46 +26,46 @@ class ThreadPlanCallFunction : public ThreadPlan
 {
     // Create a thread plan to call a function at the address passed in the "function"
     // argument.  If you plan to call GetReturnValueObject, then pass in the 
-    // return type, otherwise just pass in an invalid ClangASTType.
+    // return type, otherwise just pass in an invalid CompilerType.
 public:
     ThreadPlanCallFunction (Thread &thread,
                             const Address &function,
-                            const ClangASTType &return_type,
+                            const CompilerType &return_type,
                             llvm::ArrayRef<lldb::addr_t> args,
                             const EvaluateExpressionOptions &options);
 
-    virtual
-    ~ThreadPlanCallFunction ();
+    ThreadPlanCallFunction(Thread &thread,
+                           const Address &function,
+                           const EvaluateExpressionOptions &options);
 
-    virtual void
-    GetDescription (Stream *s, lldb::DescriptionLevel level);
+    ~ThreadPlanCallFunction() override;
 
-    virtual bool
-    ValidatePlan (Stream *error);
+    void
+    GetDescription(Stream *s, lldb::DescriptionLevel level) override;
 
-    virtual bool
-    ShouldStop (Event *event_ptr);
+    bool
+    ValidatePlan(Stream *error) override;
+
+    bool
+    ShouldStop(Event *event_ptr) override;
     
-    virtual Vote
-    ShouldReportStop(Event *event_ptr);
+    Vote
+    ShouldReportStop(Event *event_ptr) override;
 
-    virtual bool
-    StopOthers ();
+    bool
+    StopOthers() override;
     
-    virtual void
-    SetStopOthers (bool new_value);
+    lldb::StateType
+    GetPlanRunState() override;
 
-    virtual lldb::StateType
-    GetPlanRunState ();
+    void
+    DidPush() override;
 
-    virtual void
-    DidPush ();
+    bool
+    WillStop() override;
 
-    virtual bool
-    WillStop ();
-
-    virtual bool
-    MischiefManaged ();
+    bool
+    MischiefManaged() override;
 
     // To get the return value from a function call you must create a 
     // lldb::ValueSP that contains a valid clang type in its context and call
@@ -76,8 +76,8 @@ public:
     // plan is complete, you can call "GetReturnValue()" to retrieve the value
     // that was extracted.
 
-    virtual lldb::ValueObjectSP
-    GetReturnValueObject ()
+    lldb::ValueObjectSP
+    GetReturnValueObject() override
     {
         return m_return_valobj_sp;
     }
@@ -92,11 +92,11 @@ public:
         return m_function_sp;
     }
     
-    // Classes that derive from ClangFunction, and implement
+    // Classes that derive from FunctionCaller, and implement
     // their own WillPop methods should call this so that the
     // thread state gets restored if the plan gets discarded.
-    virtual void
-    WillPop ();
+    void
+    WillPop() override;
     
     // If the thread plan stops mid-course, this will be the stop reason that interrupted us.
     // Once DoTakedown is called, this will be the real stop reason at the end of the function call.
@@ -104,8 +104,8 @@ public:
     // This is needed because we want the CallFunction thread plans not to show up as the stop reason.
     // But if something bad goes wrong, it is nice to be able to tell the user what really happened.
 
-    virtual lldb::StopInfoSP
-    GetRealStopInfo()
+    lldb::StopInfoSP
+    GetRealStopInfo() override
     {
         if (m_real_stop_info_sp)
             return m_real_stop_info_sp;
@@ -119,22 +119,26 @@ public:
         return m_stop_address;
     }
 
-    virtual bool
-    RestoreThreadState();
+    bool
+    RestoreThreadState() override;
     
-    virtual void
-    ThreadDestroyed ()
+    void
+    ThreadDestroyed() override
     {
         m_takedown_done = true;
     }
     
-protected:    
+    void
+    SetStopOthers(bool new_value) override;
+    
+protected:
     void ReportRegisterState (const char *message);
 
-    virtual bool
-    DoPlanExplainsStop (Event *event_ptr);
+    bool
+    DoPlanExplainsStop(Event *event_ptr) override;
 
-private:
+    virtual void
+    SetReturnValue();
 
     bool
     ConstructorSetup (Thread &thread,
@@ -153,7 +157,7 @@ private:
     
     bool
     BreakpointsExplainStop ();
-    
+
     bool                                            m_valid;
     bool                                            m_stop_other_threads;
     bool                                            m_unwind_on_error;
@@ -172,16 +176,17 @@ private:
                                                                          // it's nice to know the real stop reason.
                                                                          // This gets set in DoTakedown.
     StreamString                                    m_constructor_errors;
-    ClangASTType                                    m_return_type;
     lldb::ValueObjectSP                             m_return_valobj_sp;  // If this contains a valid pointer, use the ABI to extract values when complete
     bool                                            m_takedown_done;    // We want to ensure we only do the takedown once.  This ensures that.
     bool                                            m_should_clear_objc_exception_bp;
     bool                                            m_should_clear_cxx_exception_bp;
     lldb::addr_t                                    m_stop_address;     // This is the address we stopped at.  Also set in DoTakedown;
 
+private:
+    CompilerType                                    m_return_type;
     DISALLOW_COPY_AND_ASSIGN (ThreadPlanCallFunction);
 };
 
 } // namespace lldb_private
 
-#endif  // liblldb_ThreadPlanCallFunction_h_
+#endif // liblldb_ThreadPlanCallFunction_h_

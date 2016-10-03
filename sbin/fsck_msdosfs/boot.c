@@ -181,7 +181,7 @@ readboot(int dosfs, struct bootblock *boot)
 	    boot->bpbResSectors + boot->bpbFATs * boot->FATsecs -
 	    CLUST_FIRST * boot->bpbSecPerClust;
 
-	if (boot->bpbBytesPerSec % DOSBOOTBLOCKSIZE != 0) {
+	if (boot->bpbBytesPerSec % DOSBOOTBLOCKSIZE_REAL != 0) {
 		pfatal("Invalid sector size: %u", boot->bpbBytesPerSec);
 		return FSFATAL;
 	}
@@ -221,7 +221,7 @@ readboot(int dosfs, struct bootblock *boot)
 		break;
 	}
 
-	if (boot->NumFatEntries < boot->NumClusters) {
+	if (boot->NumFatEntries < boot->NumClusters - CLUST_FIRST) {
 		pfatal("FAT size too small, %u entries won't fit into %u sectors\n",
 		       boot->NumClusters, boot->FATsecs);
 		return FSFATAL;

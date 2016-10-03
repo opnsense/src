@@ -113,7 +113,7 @@ __FBSDID("$FreeBSD$");
 static int umodem_debug = 0;
 
 static SYSCTL_NODE(_hw_usb, OID_AUTO, umodem, CTLFLAG_RW, 0, "USB umodem");
-SYSCTL_INT(_hw_usb_umodem, OID_AUTO, debug, CTLFLAG_RW,
+SYSCTL_INT(_hw_usb_umodem, OID_AUTO, debug, CTLFLAG_RWTUN,
     &umodem_debug, 0, "Debug level");
 #endif
 
@@ -122,6 +122,9 @@ static const STRUCT_USB_DUAL_ID umodem_dual_devs[] = {
 	{USB_IFACE_CLASS(UICLASS_CDC),
 		USB_IFACE_SUBCLASS(UISUBCLASS_ABSTRACT_CONTROL_MODEL),
 		USB_IFACE_PROTOCOL(UIPROTO_CDC_AT)},
+	{USB_IFACE_CLASS(UICLASS_CDC),
+		USB_IFACE_SUBCLASS(UISUBCLASS_ABSTRACT_CONTROL_MODEL),
+		USB_IFACE_PROTOCOL(UIPROTO_CDC_NONE)},
 };
 
 static const STRUCT_USB_HOST_ID umodem_host_devs[] = {
@@ -295,6 +298,8 @@ DRIVER_MODULE(umodem, uhub, umodem_driver, umodem_devclass, NULL, 0);
 MODULE_DEPEND(umodem, ucom, 1, 1, 1);
 MODULE_DEPEND(umodem, usb, 1, 1, 1);
 MODULE_VERSION(umodem, UMODEM_MODVER);
+USB_PNP_DUAL_INFO(umodem_dual_devs);
+USB_PNP_HOST_INFO(umodem_host_devs);
 
 static int
 umodem_probe(device_t dev)

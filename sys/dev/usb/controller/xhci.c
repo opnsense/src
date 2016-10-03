@@ -90,9 +90,8 @@
 static SYSCTL_NODE(_hw_usb, OID_AUTO, xhci, CTLFLAG_RW, 0, "USB XHCI");
 
 static int xhcistreams;
-SYSCTL_INT(_hw_usb_xhci, OID_AUTO, streams, CTLFLAG_RW | CTLFLAG_TUN,
+SYSCTL_INT(_hw_usb_xhci, OID_AUTO, streams, CTLFLAG_RWTUN,
     &xhcistreams, 0, "Set to enable streams mode support");
-TUNABLE_INT("hw.usb.xhci.streams", &xhcistreams);
 
 #ifdef USB_DEBUG
 static int xhcidebug;
@@ -100,18 +99,14 @@ static int xhciroute;
 static int xhcipolling;
 static int xhcidma32;
 
-SYSCTL_INT(_hw_usb_xhci, OID_AUTO, debug, CTLFLAG_RW | CTLFLAG_TUN,
+SYSCTL_INT(_hw_usb_xhci, OID_AUTO, debug, CTLFLAG_RWTUN,
     &xhcidebug, 0, "Debug level");
-TUNABLE_INT("hw.usb.xhci.debug", &xhcidebug);
-SYSCTL_INT(_hw_usb_xhci, OID_AUTO, xhci_port_route, CTLFLAG_RW | CTLFLAG_TUN,
+SYSCTL_INT(_hw_usb_xhci, OID_AUTO, xhci_port_route, CTLFLAG_RWTUN,
     &xhciroute, 0, "Routing bitmap for switching EHCI ports to the XHCI controller");
-TUNABLE_INT("hw.usb.xhci.xhci_port_route", &xhciroute);
-SYSCTL_INT(_hw_usb_xhci, OID_AUTO, use_polling, CTLFLAG_RW | CTLFLAG_TUN,
+SYSCTL_INT(_hw_usb_xhci, OID_AUTO, use_polling, CTLFLAG_RWTUN,
     &xhcipolling, 0, "Set to enable software interrupt polling for the XHCI controller");
-TUNABLE_INT("hw.usb.xhci.use_polling", &xhcipolling);
 SYSCTL_INT(_hw_usb_xhci, OID_AUTO, dma32, CTLFLAG_RWTUN,
     &xhcidma32, 0, "Set to only use 32-bit DMA for the XHCI controller");
-TUNABLE_INT("hw.usb.xhci.dma32", &xhcidma32);
 #else
 #define	xhciroute 0
 #define	xhcidma32 0
@@ -165,7 +160,7 @@ static void xhci_ctx_set_le64(struct xhci_softc *sc, volatile uint64_t *ptr, uin
 static uint64_t xhci_ctx_get_le64(struct xhci_softc *sc, volatile uint64_t *ptr);
 #endif
 
-extern struct usb_bus_methods xhci_bus_methods;
+static const struct usb_bus_methods xhci_bus_methods;
 
 #ifdef USB_DEBUG
 static void
@@ -215,7 +210,7 @@ static void
 xhci_iterate_hw_softc(struct usb_bus *bus, usb_bus_mem_sub_cb_t *cb)
 {
 	struct xhci_softc *sc = XHCI_BUS2SC(bus);
-	uint8_t i;
+	uint16_t i;
 
 	cb(bus, &sc->sc_hw.root_pc, &sc->sc_hw.root_pg,
 	   sizeof(struct xhci_hw_root), XHCI_PAGE_SIZE);
@@ -223,7 +218,7 @@ xhci_iterate_hw_softc(struct usb_bus *bus, usb_bus_mem_sub_cb_t *cb)
 	cb(bus, &sc->sc_hw.ctx_pc, &sc->sc_hw.ctx_pg,
 	   sizeof(struct xhci_dev_ctx_addr), XHCI_PAGE_SIZE);
 
-	for (i = 0; i != XHCI_MAX_SCRATCHPADS; i++) {
+	for (i = 0; i != sc->sc_noscratch; i++) {
 		cb(bus, &sc->sc_hw.scratch_pc[i], &sc->sc_hw.scratch_pg[i],
 		    XHCI_PAGE_SIZE, XHCI_PAGE_SIZE);
 	}
@@ -1835,8 +1830,8 @@ restart:
 			}
 
 			/* set up npkt */
-			npkt = (len_old - npkt_off + temp->max_packet_size - 1) /
-			    temp->max_packet_size;
+			npkt = howmany(len_old - npkt_off,
+				       temp->max_packet_size);
 
 			if (npkt == 0)
 				npkt = 1;
@@ -2190,10 +2185,9 @@ xhci_setup_generic_chain(struct usb_xfer *xfer)
 				temp.len = xfer->max_frame_size;
 
 			/* compute TD packet count */
-			tdpc = (temp.len + xfer->max_packet_size - 1) /
-			    xfer->max_packet_size;
+			tdpc = howmany(temp.len, xfer->max_packet_size);
 
-			temp.tbc = ((tdpc + mult - 1) / mult) - 1;
+			temp.tbc = howmany(tdpc, mult) - 1;
 			temp.tlbpc = (tdpc % mult);
 
 			if (temp.tlbpc == 0)
@@ -2363,6 +2357,8 @@ xhci_configure_endpoint(struct usb_device *udev,
 
 	/* store endpoint mode */
 	pepext->trb_ep_mode = ep_mode;
+	/* store bMaxPacketSize for control endpoints */
+	pepext->trb_ep_maxp = edesc->wMaxPacketSize[0];
 	usb_pc_cpu_flush(pepext->page_cache);
 
 	if (ep_mode == USB_EP_MODE_STREAMS) {
@@ -2909,6 +2905,17 @@ xhci_transfer_insert(struct usb_xfer *xfer)
 		return (USB_ERR_NOMEM);
 	}
 
+	/* check if bMaxPacketSize changed */
+	if (xfer->flags_int.control_xfr != 0 &&
+	    pepext->trb_ep_maxp != xfer->endpoint->edesc->wMaxPacketSize[0]) {
+
+		DPRINTFN(8, "Reconfigure control endpoint\n");
+
+		/* force driver to reconfigure endpoint */
+		pepext->trb_halted = 1;
+		pepext->trb_running = 0;
+	}
+
 	/* check for stopped condition, after putting transfer on interrupt queue */
 	if (pepext->trb_running == 0) {
 		struct xhci_softc *sc = XHCI_BUS2SC(xfer->xroot->bus);
@@ -3141,7 +3148,7 @@ xhci_device_generic_start(struct usb_xfer *xfer)
 		usbd_transfer_timeout_ms(xfer, &xhci_timeout, xfer->timeout);
 }
 
-struct usb_pipe_methods xhci_device_generic_methods =
+static const struct usb_pipe_methods xhci_device_generic_methods =
 {
 	.open = xhci_device_generic_open,
 	.close = xhci_device_generic_close,
@@ -4307,7 +4314,7 @@ xhci_set_endpoint_mode(struct usb_device *udev, struct usb_endpoint *ep,
 	}
 }
 
-struct usb_bus_methods xhci_bus_methods = {
+static const struct usb_bus_methods xhci_bus_methods = {
 	.endpoint_init = xhci_ep_init,
 	.endpoint_uninit = xhci_ep_uninit,
 	.xfer_setup = xhci_xfer_setup,

@@ -62,11 +62,11 @@ __FBSDID("$FreeBSD$");
 
 #include <net/vnet.h>
 
-#include <netinet/cc.h>
+#include <netinet/tcp.h>
 #include <netinet/tcp_seq.h>
 #include <netinet/tcp_timer.h>
 #include <netinet/tcp_var.h>
-
+#include <netinet/cc/cc.h>
 #include <netinet/cc/cc_module.h>
 
 /* Fixed point math shifts. */
@@ -346,8 +346,10 @@ htcp_mod_init(void)
 static void
 htcp_post_recovery(struct cc_var *ccv)
 {
+	int pipe;
 	struct htcp *htcp_data;
 
+	pipe = 0;
 	htcp_data = ccv->cc_data;
 
 	if (IN_FASTRECOVERY(CCV(ccv, t_flags))) {
@@ -358,10 +360,13 @@ htcp_post_recovery(struct cc_var *ccv)
 		 *
 		 * XXXLAS: Find a way to do this without needing curack
 		 */
-		if (SEQ_GT(ccv->curack + CCV(ccv, snd_ssthresh),
-		    CCV(ccv, snd_max)))
-			CCV(ccv, snd_cwnd) = CCV(ccv, snd_max) - ccv->curack +
-			    CCV(ccv, t_maxseg);
+		if (V_tcp_do_rfc6675_pipe)
+			pipe = tcp_compute_pipe(ccv->ccvc.tcp);
+		else
+			pipe = CCV(ccv, snd_max) - ccv->curack;
+		
+		if (pipe < CCV(ccv, snd_ssthresh))
+			CCV(ccv, snd_cwnd) = pipe + CCV(ccv, t_maxseg);
 		else
 			CCV(ccv, snd_cwnd) = max(1, ((htcp_data->beta *
 			    htcp_data->prev_cwnd / CCV(ccv, t_maxseg))
@@ -440,7 +445,7 @@ htcp_recalc_beta(struct cc_var *ccv)
 	/*
 	 * TCPTV_SRTTBASE is the initialised value of each connection's SRTT, so
 	 * we only calc beta if the connection's SRTT has been changed from its
-	 * inital value. beta is bounded to ensure it is always between
+	 * initial value. beta is bounded to ensure it is always between
 	 * HTCP_MINBETA and HTCP_MAXBETA.
 	 */
 	if (V_htcp_adaptive_backoff && htcp_data->minrtt != TCPTV_SRTTBASE &&
@@ -512,9 +517,11 @@ htcp_ssthresh_update(struct cc_var *ccv)
 SYSCTL_DECL(_net_inet_tcp_cc_htcp);
 SYSCTL_NODE(_net_inet_tcp_cc, OID_AUTO, htcp, CTLFLAG_RW,
     NULL, "H-TCP related settings");
-SYSCTL_VNET_UINT(_net_inet_tcp_cc_htcp, OID_AUTO, adaptive_backoff, CTLFLAG_RW,
-    &VNET_NAME(htcp_adaptive_backoff), 0, "enable H-TCP adaptive backoff");
-SYSCTL_VNET_UINT(_net_inet_tcp_cc_htcp, OID_AUTO, rtt_scaling, CTLFLAG_RW,
-    &VNET_NAME(htcp_rtt_scaling), 0, "enable H-TCP RTT scaling");
+SYSCTL_UINT(_net_inet_tcp_cc_htcp, OID_AUTO, adaptive_backoff,
+    CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(htcp_adaptive_backoff), 0,
+    "enable H-TCP adaptive backoff");
+SYSCTL_UINT(_net_inet_tcp_cc_htcp, OID_AUTO, rtt_scaling,
+    CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(htcp_rtt_scaling), 0,
+    "enable H-TCP RTT scaling");
 
 DECLARE_CC_MODULE(htcp, &htcp_cc_algo);

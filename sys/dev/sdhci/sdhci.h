@@ -63,6 +63,8 @@
 #define	SDHCI_QUIRK_WAITFOR_RESET_ASSERTED		(1<<14)
 /* Leave controller in standard mode when putting card in HS mode. */
 #define	SDHCI_QUIRK_DONT_SET_HISPD_BIT			(1<<15)
+/* Alternate clock source is required when supplying a 400 KHz clock. */
+#define	SDHCI_QUIRK_BCM577XX_400KHZ_CLKSRC		(1<<16)
 
 /*
  * Controller registers
@@ -151,6 +153,9 @@
 #define  SDHCI_CLOCK_CARD_EN	0x0004
 #define  SDHCI_CLOCK_INT_STABLE	0x0002
 #define  SDHCI_CLOCK_INT_EN	0x0001
+#define  SDHCI_DIVIDERS_MASK	\
+    ((SDHCI_DIVIDER_MASK << SDHCI_DIVIDER_SHIFT) | \
+    (SDHCI_DIVIDER_HI_MASK << SDHCI_DIVIDER_HI_SHIFT))
 
 #define SDHCI_TIMEOUT_CONTROL	0x2E
 
@@ -271,6 +276,7 @@ struct sdhci_slot {
 #define SDHCI_HAVE_DMA			1
 #define SDHCI_PLATFORM_TRANSFER		2
 	u_char		version;
+	int		timeout;	/* Transfer timeout */
 	uint32_t	max_clk;	/* Max possible freq */
 	uint32_t	timeout_clk;	/* Timeout freq */
 	bus_dma_tag_t 	dmatag;

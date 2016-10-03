@@ -16,8 +16,9 @@
 #include "BugDriver.h"
 #include "ToolRunner.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
-#include "llvm/Linker.h"
+#include "llvm/Linker/Linker.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileUtilities.h"
@@ -70,39 +71,44 @@ BugDriver::BugDriver(const char *toolname, bool find_bugs,
                      unsigned timeout, unsigned memlimit, bool use_valgrind,
                      LLVMContext& ctxt)
   : Context(ctxt), ToolName(toolname), ReferenceOutputFile(OutputFile),
-    Program(0), Interpreter(0), SafeInterpreter(0), gcc(0),
-    run_find_bugs(find_bugs), Timeout(timeout),
+    Program(nullptr), Interpreter(nullptr), SafeInterpreter(nullptr),
+    cc(nullptr), run_find_bugs(find_bugs), Timeout(timeout),
     MemoryLimit(memlimit), UseValgrind(use_valgrind) {}
 
 BugDriver::~BugDriver() {
   delete Program;
+  if (Interpreter != SafeInterpreter)
+    delete Interpreter;
+  delete SafeInterpreter;
+  delete cc;
 }
 
-
-/// ParseInputFile - Given a bitcode or assembly input filename, parse and
-/// return it, or return null if not possible.
-///
-Module *llvm::ParseInputFile(const std::string &Filename,
-                             LLVMContext& Ctxt) {
+std::unique_ptr<Module> llvm::parseInputFile(StringRef Filename,
+                                             LLVMContext &Ctxt) {
   SMDiagnostic Err;
-  Module *Result = ParseIRFile(Filename, Err, Ctxt);
-  if (!Result)
+  std::unique_ptr<Module> Result = parseIRFile(Filename, Err, Ctxt);
+  if (!Result) {
     Err.print("bugpoint", errs());
+    return Result;
+  }
+
+  if (verifyModule(*Result, &errs())) {
+    errs() << "bugpoint: " << Filename << ": error: input module is broken!\n";
+    return std::unique_ptr<Module>();
+  }
 
   // If we don't have an override triple, use the first one to configure
   // bugpoint, or use the host triple if none provided.
-  if (Result) {
-    if (TargetTriple.getTriple().empty()) {
-      Triple TheTriple(Result->getTargetTriple());
+  if (TargetTriple.getTriple().empty()) {
+    Triple TheTriple(Result->getTargetTriple());
 
-      if (TheTriple.getTriple().empty())
-        TheTriple.setTriple(sys::getDefaultTargetTriple());
+    if (TheTriple.getTriple().empty())
+      TheTriple.setTriple(sys::getDefaultTargetTriple());
 
-      TargetTriple.setTriple(TheTriple.getTriple());
-    }
-
-    Result->setTargetTriple(TargetTriple.getTriple());  // override the triple
+    TargetTriple.setTriple(TheTriple.getTriple());
   }
+
+  Result->setTargetTriple(TargetTriple.getTriple()); // override the triple
   return Result;
 }
 
@@ -112,27 +118,22 @@ Module *llvm::ParseInputFile(const std::string &Filename,
 // parsed), and false on success.
 //
 bool BugDriver::addSources(const std::vector<std::string> &Filenames) {
-  assert(Program == 0 && "Cannot call addSources multiple times!");
+  assert(!Program && "Cannot call addSources multiple times!");
   assert(!Filenames.empty() && "Must specify at least on input filename!");
 
   // Load the first input file.
-  Program = ParseInputFile(Filenames[0], Context);
-  if (Program == 0) return true;
+  Program = parseInputFile(Filenames[0], Context).release();
+  if (!Program) return true;
 
   outs() << "Read input file      : '" << Filenames[0] << "'\n";
 
   for (unsigned i = 1, e = Filenames.size(); i != e; ++i) {
-    OwningPtr<Module> M(ParseInputFile(Filenames[i], Context));
-    if (M.get() == 0) return true;
+    std::unique_ptr<Module> M = parseInputFile(Filenames[i], Context);
+    if (!M.get()) return true;
 
     outs() << "Linking in input file: '" << Filenames[i] << "'\n";
-    std::string ErrorMessage;
-    if (Linker::LinkModules(Program, M.get(), Linker::DestroySource,
-                            &ErrorMessage)) {
-      errs() << ToolName << ": error linking in '" << Filenames[i] << "': "
-             << ErrorMessage << '\n';
+    if (Linker::linkModules(*Program, std::move(M)))
       return true;
-    }
   }
 
   outs() << "*** All input ok\n";

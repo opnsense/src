@@ -5,10 +5,12 @@
 LIB=	clangbasic
 
 SRCDIR=	tools/clang/lib/Basic
-SRCS=	Builtins.cpp \
+SRCS=	Attributes.cpp \
+	Builtins.cpp \
 	CharInfo.cpp \
 	Diagnostic.cpp \
 	DiagnosticIDs.cpp \
+	DiagnosticOptions.cpp \
 	FileManager.cpp \
 	FileSystemStatCache.cpp \
 	IdentifierTable.cpp \
@@ -17,15 +19,20 @@ SRCS=	Builtins.cpp \
 	ObjCRuntime.cpp \
 	OpenMPKinds.cpp \
 	OperatorPrecedence.cpp \
+	SanitizerBlacklist.cpp \
+	Sanitizers.cpp \
 	SourceLocation.cpp \
 	SourceManager.cpp \
 	TargetInfo.cpp \
 	Targets.cpp \
 	TokenKinds.cpp \
 	Version.cpp \
-	VersionTuple.cpp
+	VersionTuple.cpp \
+	VirtualFileSystem.cpp \
+	Warnings.cpp
 
-TGHDRS=	DiagnosticAnalysisKinds \
+TGHDRS=	AttrHasAttributeImpl \
+	DiagnosticAnalysisKinds \
 	DiagnosticASTKinds \
 	DiagnosticCommentKinds \
 	DiagnosticCommonKinds \
@@ -40,3 +47,9 @@ TGHDRS=	DiagnosticAnalysisKinds \
 	arm_neon
 
 .include "../clang.lib.mk"
+
+# XX: work around GCC bug 67888
+CFLAGS.gcc += -fpermissive
+
+# Ensure FREEBSD_CC_VERSION is defined for Targets.cpp
+CFLAGS.Targets.cpp+= -include ../freebsd_cc_version.h

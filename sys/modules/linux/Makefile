@@ -16,8 +16,8 @@ SRCS=	linux_fork.c linux${SFX}_dummy.c linux_file.c linux_event.c \
 	linux_socket.c linux_stats.c linux_sysctl.c linux${SFX}_sysent.c \
 	linux${SFX}_sysvec.c linux_uid16.c linux_time.c \
 	linux_timer.c linux_vdso.c \
-	opt_inet6.h opt_compat.h opt_kdtrace.h opt_posix.h opt_usb.h \
-	vnode_if.h device_if.h bus_if.h assym.s \
+	opt_inet6.h opt_compat.h opt_posix.h opt_usb.h vnode_if.h \
+	device_if.h bus_if.h assym.s \
 	linux${SFX}_support.s
 DPSRCS=	linux${SFX}_genassym.c
 
@@ -30,7 +30,7 @@ SRCS+=	opt_apic.h
 OBJS=	${VDSO}.so
 
 .if ${MACHINE_CPUARCH} == "i386"
-SRCS+=	linux_ptrace.c imgact_linux.c linux_util.c linux_mib.c \
+SRCS+=	linux_ptrace.c imgact_linux.c linux_util.c linux_mib.c linux_mmap.c \
 	linux_emul.c opt_cpu.h linux.c
 .endif
 
@@ -51,9 +51,9 @@ linux${SFX}_assym.h: linux${SFX}_genassym.o
 linux${SFX}_locore.o: linux${SFX}_assym.h assym.s
 	${CC} -x assembler-with-cpp -DLOCORE -m32 -shared -s			\
 	-pipe -I. -I${SYSDIR} -Werror -Wall -fno-common -nostdinc -nostdlib	\
-	-fno-omit-frame-pointer							\
+	-fno-omit-frame-pointer -fPIC						\
 	-Wl,-T${.CURDIR}/../../${MACHINE_CPUARCH}/linux${SFX}/${VDSO}.lds.s	\
-	-Wl,-soname=${VDSO}.so.1,--eh-frame-hdr,-fPIC,-warn-common		\
+	-Wl,-soname=${VDSO}.so.1,--eh-frame-hdr,-warn-common		\
 	    ${.IMPSRC} -o ${.TARGET}
 
 linux${SFX}_support.o: linux${SFX}_assym.h assym.s
@@ -74,8 +74,6 @@ linux${SFX}_genassym.o:
 	${CC} -c ${CFLAGS:N-fno-common} ${.IMPSRC}
 
 .if !defined(KERNBUILDDIR)
-opt_inet6.h:
-	echo "#define INET6 1" > ${.TARGET}
 .if defined(KTR)
 CFLAGS+=	-DKTR
 .endif

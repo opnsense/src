@@ -27,7 +27,6 @@ namespace lldb_private {
 class OptionGroupPlatform : public OptionGroup
 {
 public:
-    
     OptionGroupPlatform (bool include_platform_option) :
         OptionGroup(),
         m_platform_name (),
@@ -39,24 +38,21 @@ public:
     {
     }
 
-    virtual
-    ~OptionGroupPlatform ()
-    {
-    }
+    ~OptionGroupPlatform() override = default;
     
-    virtual uint32_t
-    GetNumDefinitions ();
+    uint32_t
+    GetNumDefinitions() override;
     
-    virtual const OptionDefinition*
-    GetDefinitions ();
+    const OptionDefinition*
+    GetDefinitions() override;
     
-    virtual Error
-    SetOptionValue (CommandInterpreter &interpreter,
-                    uint32_t option_idx,
-                    const char *option_value);
+    Error
+    SetOptionValue(CommandInterpreter &interpreter,
+                   uint32_t option_idx,
+                   const char *option_value) override;
     
-    virtual void
-    OptionParsingStarting (CommandInterpreter &interpreter);
+    void
+    OptionParsingStarting(CommandInterpreter &interpreter) override;
     
     lldb::PlatformSP 
     CreatePlatformWithOptions (CommandInterpreter &interpreter,
@@ -102,8 +98,10 @@ public:
     SetSDKBuild (const ConstString &sdk_build)
     {
         m_sdk_build = sdk_build;
-    }    
-    
+    }
+
+    bool
+    PlatformMatches(const lldb::PlatformSP &platform_sp) const;
 
 protected:
     std::string m_platform_name;
@@ -117,4 +115,4 @@ protected:
 
 } // namespace lldb_private
 
-#endif  // liblldb_OptionGroupPlatform_h_
+#endif // liblldb_OptionGroupPlatform_h_

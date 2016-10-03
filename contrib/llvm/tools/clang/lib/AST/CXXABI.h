@@ -12,14 +12,17 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_AST_CXXABI_H
-#define LLVM_CLANG_AST_CXXABI_H
+#ifndef LLVM_CLANG_LIB_AST_CXXABI_H
+#define LLVM_CLANG_LIB_AST_CXXABI_H
 
 #include "clang/AST/Type.h"
 
 namespace clang {
 
 class ASTContext;
+class CXXConstructorDecl;
+class DeclaratorDecl;
+class Expr;
 class MemberPointerType;
 class MangleNumberingContext;
 
@@ -41,10 +44,34 @@ public:
 
   /// Returns a new mangling number context for this C++ ABI.
   virtual MangleNumberingContext *createMangleNumberingContext() const = 0;
+
+  /// Adds a mapping from class to copy constructor for this C++ ABI.
+  virtual void addCopyConstructorForExceptionObject(CXXRecordDecl *,
+                                                    CXXConstructorDecl *) = 0;
+
+  /// Retrieves the mapping from class to copy constructor for this C++ ABI.
+  virtual const CXXConstructorDecl *
+  getCopyConstructorForExceptionObject(CXXRecordDecl *) = 0;
+
+  virtual void addDefaultArgExprForConstructor(const CXXConstructorDecl *CD,
+                                               unsigned ParmIdx, Expr *DAE) = 0;
+
+  virtual Expr *getDefaultArgExprForConstructor(const CXXConstructorDecl *CD,
+                                                unsigned ParmIdx) = 0;
+
+  virtual void addTypedefNameForUnnamedTagDecl(TagDecl *TD,
+                                               TypedefNameDecl *DD) = 0;
+
+  virtual TypedefNameDecl *
+  getTypedefNameForUnnamedTagDecl(const TagDecl *TD) = 0;
+
+  virtual void addDeclaratorForUnnamedTagDecl(TagDecl *TD,
+                                              DeclaratorDecl *DD) = 0;
+
+  virtual DeclaratorDecl *getDeclaratorForUnnamedTagDecl(const TagDecl *TD) = 0;
 };
 
 /// Creates an instance of a C++ ABI class.
-CXXABI *CreateARMCXXABI(ASTContext &Ctx);
 CXXABI *CreateItaniumCXXABI(ASTContext &Ctx);
 CXXABI *CreateMicrosoftCXXABI(ASTContext &Ctx);
 }

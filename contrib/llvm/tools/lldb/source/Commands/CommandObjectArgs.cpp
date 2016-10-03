@@ -7,8 +7,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "lldb/lldb-python.h"
-
 #include "CommandObjectArgs.h"
 
 // C Includes
@@ -19,14 +17,14 @@
 #include "lldb/Core/Debugger.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/Value.h"
-#include "lldb/Expression/ClangExpression.h"
-#include "lldb/Expression/ClangExpressionVariable.h"
-#include "lldb/Expression/ClangFunction.h"
+#include "Plugins/ExpressionParser/Clang/ClangExpressionVariable.h"
 #include "lldb/Host/Host.h"
 #include "lldb/Interpreter/CommandInterpreter.h"
 #include "lldb/Interpreter/CommandReturnObject.h"
+#include "lldb/Symbol/ClangASTContext.h"
 #include "lldb/Symbol/ObjectFile.h"
 #include "lldb/Symbol/Variable.h"
+#include "lldb/Target/ABI.h"
 #include "lldb/Target/Process.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Target/Thread.h"
@@ -57,13 +55,7 @@ CommandObjectArgs::CommandOptions::SetOptionValue (uint32_t option_idx, const ch
     Error error;
     
     const int short_option = m_getopt_table[option_idx].val;
-    
-    switch (short_option)
-    {
-        default:
-            error.SetErrorStringWithFormat("invalid short option character '%c'", short_option);
-            break;
-    }
+    error.SetErrorStringWithFormat("invalid short option character '%c'", short_option);
     
     return error;
 }
@@ -154,8 +146,14 @@ CommandObjectArgs::DoExecute (Args& args, CommandReturnObject &result)
         result.SetStatus (eReturnStatusFailed);
         return false;
     }
-    
-    ClangASTContext &ast_context = thread_module_sp->GetClangASTContext();
+
+    TypeSystem *type_system = thread_module_sp->GetTypeSystemForLanguage(eLanguageTypeC);
+    if (type_system == nullptr)
+    {
+        result.AppendError ("Unable to create C type system.");
+        result.SetStatus (eReturnStatusFailed);
+        return false;
+    }
     
     ValueList value_list;
     
@@ -164,7 +162,7 @@ CommandObjectArgs::DoExecute (Args& args, CommandReturnObject &result)
         const char *arg_type_cstr = args.GetArgumentAtIndex(arg_index);
         Value value;
         value.SetValueType(Value::eValueTypeScalar);
-        ClangASTType clang_type;
+        CompilerType compiler_type;
         
         char *int_pos;
         if ((int_pos = strstr (const_cast<char*>(arg_type_cstr), "int")))
@@ -206,10 +204,9 @@ CommandObjectArgs::DoExecute (Args& args, CommandReturnObject &result)
                 result.SetStatus (eReturnStatusFailed);
                 return false;
             }
+            compiler_type = type_system->GetBuiltinTypeForEncodingAndBitSize(encoding, width);
             
-            clang_type = ast_context.GetBuiltinTypeForEncodingAndBitSize(encoding, width);
-            
-            if (!clang_type.IsValid())
+            if (!compiler_type.IsValid())
             {
                 result.AppendErrorWithFormat ("Couldn't get Clang type for format %s (%s integer, width %d).\n",
                                              arg_type_cstr,
@@ -223,9 +220,9 @@ CommandObjectArgs::DoExecute (Args& args, CommandReturnObject &result)
         else if (strchr (arg_type_cstr, '*'))
         {
             if (!strcmp (arg_type_cstr, "void*"))
-                clang_type = ast_context.GetBasicType(eBasicTypeVoid).GetPointerType();
+                compiler_type = type_system->GetBasicTypeFromAST(eBasicTypeVoid).GetPointerType();
             else if (!strcmp (arg_type_cstr, "char*"))
-                clang_type = ast_context.GetCStringType (false);
+                compiler_type = type_system->GetBasicTypeFromAST(eBasicTypeChar).GetPointerType();
             else
             {
                 result.AppendErrorWithFormat ("Invalid format: %s.\n", arg_type_cstr);
@@ -240,7 +237,7 @@ CommandObjectArgs::DoExecute (Args& args, CommandReturnObject &result)
             return false;
         }
                      
-        value.SetClangType (clang_type);
+        value.SetCompilerType (compiler_type);
         value_list.PushValue(value);
     }
     
@@ -255,7 +252,7 @@ CommandObjectArgs::DoExecute (Args& args, CommandReturnObject &result)
 
     for (arg_index = 0; arg_index < num_args; ++arg_index)
     {
-        result.GetOutputStream ().Printf ("%zu (%s): ", arg_index, args.GetArgumentAtIndex (arg_index));
+        result.GetOutputStream ().Printf ("%" PRIu64 " (%s): ", (uint64_t)arg_index, args.GetArgumentAtIndex (arg_index));
         value_list.GetValueAtIndex (arg_index)->Dump (&result.GetOutputStream ());
         result.GetOutputStream ().Printf("\n");
     }
@@ -266,7 +263,7 @@ CommandObjectArgs::DoExecute (Args& args, CommandReturnObject &result)
 OptionDefinition
 CommandObjectArgs::CommandOptions::g_option_table[] =
 {
-    { LLDB_OPT_SET_1, false, "debug", 'g', OptionParser::eNoArgument, NULL, 0, eArgTypeNone, "Enable verbose debug logging of the expression parsing and evaluation."},
-    { 0, false, NULL, 0, 0, NULL, 0, eArgTypeNone, NULL }
+    { LLDB_OPT_SET_1, false, "debug", 'g', OptionParser::eNoArgument, NULL, NULL, 0, eArgTypeNone, "Enable verbose debug logging of the expression parsing and evaluation."},
+    { 0, false, NULL, 0, 0, NULL, NULL, 0, eArgTypeNone, NULL }
 };
 

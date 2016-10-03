@@ -208,9 +208,7 @@ we_askshell(const char *words, wordexp_t *we, int flags)
 	 */
 	switch (we_read_fully(pdes[0], buf, 34)) {
 	case 1:
-		error = buf[0] == 'C' ? WRDE_CMDSUB :
-		    flags & WRDE_UNDEF ? WRDE_BADVAL :
-		    WRDE_SYNTAX;
+		error = buf[0] == 'C' ? WRDE_CMDSUB : WRDE_BADVAL;
 		serrno = errno;
 		goto cleanup;
 	case 34:
@@ -253,7 +251,7 @@ we_askshell(const char *words, wordexp_t *we, int flags)
 	we->we_strings = nstrings;
 
 	if (we_read_fully(pdes[0], we->we_strings + sofs, nbytes) != nbytes) {
-		error = flags & WRDE_UNDEF ? WRDE_BADVAL : WRDE_SYNTAX;
+		error = WRDE_NOSPACE; /* abort for unknown reason */
 		serrno = errno;
 		goto cleanup;
 	}
@@ -270,7 +268,7 @@ cleanup:
 		return (error);
 	}
 	if (wpid < 0 || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
-		return (flags & WRDE_UNDEF ? WRDE_BADVAL : WRDE_SYNTAX);
+		return (WRDE_NOSPACE); /* abort for unknown reason */
 
 	/*
 	 * Break the null-terminated expanded word strings out into

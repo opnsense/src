@@ -11,7 +11,7 @@
 # 2. Redistributions in binary form must reproduce the above copyright
 #    notice, this list of conditions and the following disclaimer in the
 #    documentation and/or other materials provided with the distribution.
-# 4. Neither the name of the University nor the names of its contributors
+# 3. Neither the name of the University nor the names of its contributors
 #    may be used to endorse or promote products derived from this software
 #    without specific prior written permission.
 #
@@ -31,19 +31,19 @@
 # $FreeBSD$
 
 TYPE="FreeBSD"
-REVISION="10.3"
-BRANCH="RELEASE-p9"
-if [ "X${BRANCH_OVERRIDE}" != "X" ]; then
+REVISION="11.0"
+BRANCH="RELEASE"
+if [ -n "${BRANCH_OVERRIDE}" ]; then
 	BRANCH=${BRANCH_OVERRIDE}
 fi
 RELEASE="${REVISION}-${BRANCH}"
 VERSION="${TYPE} ${RELEASE}"
 
-if [ "X${SYSDIR}" = "X" ]; then
+if [ -z "${SYSDIR}" ]; then
     SYSDIR=$(dirname $0)/..
 fi
 
-if [ "X${PARAMFILE}" != "X" ]; then
+if [ -n "${PARAMFILE}" ]; then
 	RELDATE=$(awk '/__FreeBSD_version.*propagated to newvers/ {print $3}' \
 		${PARAMFILE})
 else
@@ -52,7 +52,11 @@ else
 fi
 
 b=share/examples/etc/bsd-style-copyright
-year=$(sed -Ee '/^Copyright .* The FreeBSD Project/!d;s/^.*1992-([0-9]*) .*$/\1/g' ${SYSDIR}/../COPYRIGHT)
+if [ -r "${SYSDIR}/../COPYRIGHT" ]; then
+	year=$(sed -Ee '/^Copyright .* The FreeBSD Project/!d;s/^.*1992-([0-9]*) .*$/\1/g' ${SYSDIR}/../COPYRIGHT)
+else
+	year=$(date +%Y)
+fi
 # look for copyright template
 for bsd_copyright in ../$b ../../$b ../../../$b /usr/src/$b /usr/$b
 do
@@ -68,7 +72,7 @@ do
 done
 
 # no copyright found, use a dummy
-if [ X"$COPYRIGHT" = X ]; then
+if [ -z "$COPYRIGHT" ]; then
 	COPYRIGHT="/*-
  * Copyright (c) 1992-$year The FreeBSD Project.
  * All rights reserved.
@@ -80,6 +84,12 @@ fi
 COPYRIGHT="$COPYRIGHT
 "
 
+# VARS_ONLY means no files should be generated, this is just being
+# included.
+if [ -n "$VARS_ONLY" ]; then
+	return 0
+fi
+
 LC_ALL=C; export LC_ALL
 if [ ! -r version ]
 then
@@ -87,7 +97,10 @@ then
 fi
 
 touch version
-v=`cat version` u=${USER:-root} d=`pwd` h=${HOSTNAME:-`hostname`}
+v=`cat version`
+u=${USER:-root}
+d=`pwd`
+h=${HOSTNAME:-`hostname`}
 if [ -n "$SOURCE_DATE_EPOCH" ]; then
 	if ! t=`date -r $SOURCE_DATE_EPOCH 2>/dev/null`; then
 		echo "Invalid SOURCE_DATE_EPOCH" >&2
@@ -97,7 +110,7 @@ else
 	t=`date`
 fi
 i=`${MAKE:-make} -V KERN_IDENT`
-compiler_v=$($(${MAKE:-make} -V CC) -v 2>&1 | grep 'version')
+compiler_v=$($(${MAKE:-make} -V CC) -v 2>&1 | grep -w 'version')
 
 for dir in /usr/bin /usr/local/bin; do
 	if [ ! -z "${svnversion}" ] ; then

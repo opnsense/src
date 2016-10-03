@@ -22,8 +22,7 @@ BOOT2_UFS?=	UFS1_AND_UFS2
 #BOOT2_UFS?=	UFS2_ONLY
 #BOOT2_UFS?=	UFS1_ONLY
 
-CFLAGS=	-Os \
-	-fomit-frame-pointer \
+CFLAGS=	-fomit-frame-pointer \
 	-mrtd \
 	-mregparm=3 \
 	-DUSE_XREAD \
@@ -37,15 +36,17 @@ CFLAGS=	-Os \
 	-Wall -Waggregate-return -Wbad-function-cast -Wcast-align \
 	-Wmissing-declarations -Wmissing-prototypes -Wnested-externs \
 	-Wpointer-arith -Wshadow -Wstrict-prototypes -Wwrite-strings \
-	-Winline \
-	${CLANG_OPT_SMALL}
+	-Winline
 
-CFLAGS.gcc+=	-fno-guess-branch-probability \
+CFLAGS.gcc+=	-Os \
+		-fno-guess-branch-probability \
 		-fno-unit-at-a-time \
 		--param max-inline-insns-single=100
 .if ${COMPILER_TYPE} == "gcc" && ${COMPILER_VERSION} <= 40201
 CFLAGS.gcc+=   -mno-align-long-strings
 .endif
+
+CFLAGS.clang+=	-Oz ${CLANG_OPT_SMALL}
 
 LD_FLAGS=-static -N --gc-sections
 
@@ -71,14 +72,14 @@ CLEANFILES+=	boot2 boot2.ld boot2.ldr boot2.bin boot2.out boot2.o \
 boot2: boot2.ld
 	@set -- `ls -l boot2.ld`; x=$$((7680-$$5)); \
 	    echo "$$x bytes available"; test $$x -ge 0
-	dd if=boot2.ld of=${.TARGET} obs=7680 conv=osync
+	dd if=boot2.ld of=${.TARGET} obs=7680 conv=osync status=none
 
 boot2.ld: boot2.ldr boot2.bin ${BTXKERN}
 	btxld -v -E ${ORG2} -f bin -b ${BTXKERN} -l boot2.ldr \
 	    -o ${.TARGET} -P 1 boot2.bin
 
 boot2.ldr:
-	dd if=/dev/zero of=${.TARGET} bs=512 count=1
+	dd if=/dev/zero of=${.TARGET} bs=512 count=1 status=none
 
 boot2.bin: boot2.out
 	${OBJCOPY} -S -O binary boot2.out ${.TARGET}
@@ -106,12 +107,11 @@ boot2.h: boot1.out
 .if ${MACHINE_CPUARCH} == "amd64"
 beforedepend boot2.s: machine
 CLEANFILES+=	machine
-machine:
-	ln -sf ${.CURDIR}/../../../i386/include machine
+machine: ${.CURDIR}/../../../i386/include .NOMETA
+	ln -sf ${.ALLSRC} ${.TARGET}
 .endif
 
 .include <bsd.prog.mk>
 
 # XXX: clang integrated-as doesn't grok .codeNN directives yet
 CFLAGS.boot1.S=		${CLANG_NO_IAS}
-CFLAGS+=		${CFLAGS.${.IMPSRC:T}}

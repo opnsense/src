@@ -12,11 +12,11 @@ MTHCASRCDIR=	${MTHCADIR}/src
 
 LIB=		mthca
 SHLIB_MAJOR=	1
-NO_PROFILE=
+MK_PROFILE=	no
 
 SRCS=	ah.c buf.c cq.c memfree.c mthca.c qp.c srq.c verbs.c
 
-
+LIBADD=	ibverbs pthread
 CFLAGS+= -DHAVE_CONFIG_H 
 CFLAGS+= -I${.CURDIR} -I${MTHCASRCDIR} -I${IBVERBSDIR}/include
 

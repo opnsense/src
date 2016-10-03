@@ -108,22 +108,6 @@ RELEASE_TARGETS+= mini-memstick.img
 IMAGES+=	memstick.img
 IMAGES+=	mini-memstick.img
 .endif
-.if exists(${.CURDIR}/${TARGET}/make-uefi-memstick.sh)
-RELEASE_TARGETS+=uefi-memstick.img
-RELEASE_TARGETS+=uefi-mini-memstick.img
-IMAGES+=	uefi-memstick.img
-IMAGES+=	uefi-mini-memstick.img
-.endif
-.if exists(${.CURDIR}/${TARGET}/mkisoimages-uefi.sh)
-RELEASE_TARGETS+=uefi-disc1.iso
-RELEASE_TARGETS+=uefi-bootonly.iso
-IMAGES+=	uefi-disc1.iso
-IMAGES+=	uefi-bootonly.iso
-. if defined(WITH_DVD) && !empty(WITH_DVD)
-RELEASE_TARGETS+=uefi-dvd1.iso
-IMAGES+=	uefi-dvd1.iso
-. endif
-.endif
 
 CLEANFILES=	packagesystem *.txz MANIFEST release ${IMAGES}
 .if defined(WITH_COMPRESSED_IMAGES) && !empty(WITH_COMPRESSED_IMAGES)
@@ -135,6 +119,9 @@ CLEANFILES+=	${I}.xz
 CLEANFILES+=	pkg-stage
 .endif
 CLEANDIRS=	dist ftp disc1 bootonly dvd
+.if !defined(NODOC)
+CLEANDIRS+=    reldoc rdoc
+.endif
 beforeclean:
 	chflags -R noschg .
 .include <bsd.obj.mk>
@@ -187,11 +174,15 @@ disc1: packagesystem
 # Install system
 	mkdir -p ${.TARGET}
 	cd ${WORLDDIR} && ${IMAKE} installkernel installworld distribution \
-		DESTDIR=${.OBJDIR}/${.TARGET} WITHOUT_RESCUE=1 WITHOUT_KERNEL_SYMBOLS=1 \
-		WITHOUT_PROFILE=1 WITHOUT_SENDMAIL=1 WITHOUT_ATF=1 WITHOUT_LIB32=1
+		DESTDIR=${.OBJDIR}/${.TARGET} MK_RESCUE=no MK_KERNEL_SYMBOLS=no \
+		MK_PROFILE=no MK_MAIL=no MK_TESTS=no MK_LIB32=no \
+		MK_DEBUG_FILES=no MK_LLDB=no \
+		MK_TOOLCHAIN=no
 # Copy distfiles
 	mkdir -p ${.TARGET}/usr/freebsd-dist
-	cp *.txz MANIFEST ${.TARGET}/usr/freebsd-dist
+	for dist in MANIFEST $$(ls *.txz | grep -vE -- '(base|lib32|kernel)-dbg'); \
+	    do cp $${dist} ${.TARGET}/usr/freebsd-dist; \
+	done
 # Copy documentation, if generated
 .if !defined(NODOC)
 	cp reldoc/* ${.TARGET}
@@ -208,12 +199,12 @@ bootonly: packagesystem
 # Install system
 	mkdir -p ${.TARGET}
 	cd ${WORLDDIR} && ${IMAKE} installkernel installworld distribution \
-	    DESTDIR=${.OBJDIR}/${.TARGET} WITHOUT_AMD=1 WITHOUT_AT=1 \
-	    WITHOUT_GAMES=1 WITHOUT_GROFF=1 \
-	    WITHOUT_INSTALLLIB=1 WITHOUT_LIB32=1 WITHOUT_MAIL=1 \
-	    WITHOUT_NCP=1 WITHOUT_TOOLCHAIN=1 WITHOUT_PROFILE=1 \
-	    WITHOUT_INSTALLIB=1 WITHOUT_RESCUE=1 WITHOUT_DICT=1 \
-	    WITHOUT_KERNEL_SYMBOLS=1
+	    DESTDIR=${.OBJDIR}/${.TARGET} MK_AMD=no MK_AT=no \
+	    MK_GAMES=no MK_GROFF=no \
+	    MK_INSTALLLIB=no MK_LIB32=no MK_MAIL=no \
+	    MK_NCP=no MK_TOOLCHAIN=no MK_PROFILE=no \
+	    MK_RESCUE=no MK_DICT=no \
+	    MK_KERNEL_SYMBOLS=no MK_TESTS=no MK_DEBUG_FILES=no
 # Copy manifest only (no distfiles) to get checksums
 	mkdir -p ${.TARGET}/usr/freebsd-dist
 	cp MANIFEST ${.TARGET}/usr/freebsd-dist
@@ -232,10 +223,13 @@ dvd: packagesystem
 # Install system
 	mkdir -p ${.TARGET}
 	cd ${WORLDDIR} && ${IMAKE} installkernel installworld distribution \
-		DESTDIR=${.OBJDIR}/${.TARGET} WITHOUT_RESCUE=1 WITHOUT_KERNEL_SYMBOLS=1
+		DESTDIR=${.OBJDIR}/${.TARGET} MK_RESCUE=no MK_KERNEL_SYMBOLS=no \
+		MK_TESTS=no MK_DEBUG_FILES=no
 # Copy distfiles
 	mkdir -p ${.TARGET}/usr/freebsd-dist
-	cp *.txz MANIFEST ${.TARGET}/usr/freebsd-dist
+	for dist in MANIFEST $$(ls *.txz | grep -v -- '(base|lib32)-dbg'); \
+	    do cp $${dist} ${.TARGET}/usr/freebsd-dist; \
+	done
 # Copy documentation, if generated
 .if !defined(NODOC)
 	cp reldoc/* ${.TARGET}
@@ -252,26 +246,8 @@ release.iso: disc1.iso
 disc1.iso: disc1
 	sh ${.CURDIR}/${TARGET}/mkisoimages.sh -b ${VOLUME_LABEL}_CD ${.TARGET} disc1 ${XTRADIR}
 
-uefi-disc1.iso: disc1
-.if exists(${.CURDIR}/${TARGET}/mkisoimages-uefi.sh)
-	sh ${.CURDIR}/${TARGET}/mkisoimages-uefi.sh -b ${VOLUME_LABEL}_UEFICD \
-		${.TARGET} disc1
-.endif
-
-uefi-bootonly.iso: bootonly
-.if exists(${.CURDIR}/${TARGET}/mkisoimages-uefi.sh)
-	sh ${.CURDIR}/${TARGET}/mkisoimages-uefi.sh -b ${VOLUME_LABEL}_UEFIBO \
-		${.TARGET} bootonly
-.endif
-
 dvd1.iso: dvd pkg-stage
 	sh ${.CURDIR}/${TARGET}/mkisoimages.sh -b ${VOLUME_LABEL}_DVD ${.TARGET} dvd ${XTRADIR}
-
-uefi-dvd1.iso: dvd pkg-stage
-.if exists(${.CURDIR}/${TARGET}/mkisoimages-uefi.sh)
-	sh ${.CURDIR}/${TARGET}/mkisoimages-uefi.sh -b ${VOLUME_LABEL}_UEFIDVD \
-		${.TARGET} dvd
-.endif
 
 bootonly.iso: bootonly
 	sh ${.CURDIR}/${TARGET}/mkisoimages.sh -b ${VOLUME_LABEL}_BO ${.TARGET} bootonly ${XTRADIR}
@@ -283,18 +259,6 @@ memstick.img: disc1
 mini-memstick: mini-memstick.img
 mini-memstick.img: bootonly
 	sh ${.CURDIR}/${TARGET}/make-memstick.sh bootonly ${.TARGET}
-
-uefi-memstick: uefi-memstick.img
-uefi-memstick.img: disc1
-.if exists(${.CURDIR}/${TARGET}/make-uefi-memstick.sh)
-	sh ${.CURDIR}/${TARGET}/make-uefi-memstick.sh disc1 ${.TARGET}
-.endif
-
-uefi-mini-memstick: uefi-mini-memstick.img
-uefi-mini-memstick.img: bootonly
-.if exists(${.CURDIR}/${TARGET}/make-uefi-memstick.sh)
-	sh ${.CURDIR}/${TARGET}/make-uefi-memstick.sh bootonly ${.TARGET}
-.endif
 
 packagesystem: base.txz kernel.txz ${EXTRA_PACKAGES}
 	sh ${.CURDIR}/scripts/make-manifest.sh *.txz > MANIFEST
@@ -328,7 +292,7 @@ real-release:
 	${MAKE} -C ${.CURDIR} ${.MAKEFLAGS} obj
 	${MAKE} -C ${.CURDIR} ${.MAKEFLAGS} ${RELEASE_TARGETS}
 
-install:	release-install vm-install cloudware-install
+install:	release-install vm-install
 
 release-install:
 .if defined(DESTDIR) && !empty(DESTDIR)

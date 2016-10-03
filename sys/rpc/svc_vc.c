@@ -189,11 +189,11 @@ svc_vc_create(SVCPOOL *pool, struct socket *so, size_t sendsize,
 	SOCKBUF_UNLOCK(&so->so_rcv);
 
 	return (xprt);
+
 cleanup_svc_vc_create:
-	if (xprt) {
-		sx_destroy(&xprt->xp_lock);
-		svc_xprt_free(xprt);
-	}
+	sx_destroy(&xprt->xp_lock);
+	svc_xprt_free(xprt);
+
 	return (NULL);
 }
 
@@ -203,8 +203,8 @@ cleanup_svc_vc_create:
 SVCXPRT *
 svc_vc_create_conn(SVCPOOL *pool, struct socket *so, struct sockaddr *raddr)
 {
-	SVCXPRT *xprt = NULL;
-	struct cf_conn *cd = NULL;
+	SVCXPRT *xprt;
+	struct cf_conn *cd;
 	struct sockaddr* sa = NULL;
 	struct sockopt opt;
 	int one = 1;
@@ -279,12 +279,10 @@ svc_vc_create_conn(SVCPOOL *pool, struct socket *so, struct sockaddr *raddr)
 
 	return (xprt);
 cleanup_svc_vc_create:
-	if (xprt) {
-		sx_destroy(&xprt->xp_lock);
-		svc_xprt_free(xprt);
-	}
-	if (cd)
-		mem_free(cd, sizeof(*cd));
+	sx_destroy(&xprt->xp_lock);
+	svc_xprt_free(xprt);
+	mem_free(cd, sizeof(*cd));
+
 	return (NULL);
 }
 
@@ -416,7 +414,7 @@ svc_vc_rendezvous_recv(SVCXPRT *xprt, struct rpc_msg *msg,
 
 	sx_xunlock(&xprt->xp_lock);
 
-	sa = 0;
+	sa = NULL;
 	error = soaccept(so, &sa);
 
 	if (error) {
@@ -552,7 +550,7 @@ svc_vc_ack(SVCXPRT *xprt, uint32_t *ack)
 {
 
 	*ack = atomic_load_acq_32(&xprt->xp_snt_cnt);
-	*ack -= xprt->xp_socket->so_snd.sb_cc;
+	*ack -= sbused(&xprt->xp_socket->so_snd);
 	return (TRUE);
 }
 
@@ -866,7 +864,7 @@ svc_vc_reply(SVCXPRT *xprt, struct rpc_msg *msg,
 		len = mrep->m_pkthdr.len;
 		*mtod(mrep, uint32_t *) =
 			htonl(0x80000000 | (len - sizeof(uint32_t)));
-		atomic_add_acq_32(&xprt->xp_snd_cnt, len);
+		atomic_add_32(&xprt->xp_snd_cnt, len);
 		error = sosend(xprt->xp_socket, NULL, NULL, mrep, NULL,
 		    0, curthread);
 		if (!error) {

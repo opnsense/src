@@ -67,7 +67,7 @@ static void usage(const char* argv0)
 			"[-O output_format]\n"
 		"\t\t[-o output_file] [-R entries] [-S bytes] [-p bytes]"
 			"[-V blob_version]\n"
-		"\t\t-W [no-]checker_name] input_file\n", basename(argv0));
+		"\t\t-W [no-]checker_name] input_file\n", basename((char*)argv0));
 }
 
 /**
@@ -100,7 +100,7 @@ main(int argc, char **argv)
 	clock_t c0 = clock();
 	class device_tree tree;
 	fdt::checking::check_manager checks;
-	const char *options = "hqI:O:o:V:d:R:S:p:b:fisvH:W:E:DP:";
+	const char *options = "hqI:O:o:V:d:R:S:p:b:fi:svH:W:E:DP:";
 
 	// Don't forget to update the man page if any more options are added.
 	while ((ch = getopt(argc, argv, options)) != -1)

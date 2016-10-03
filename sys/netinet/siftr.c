@@ -64,6 +64,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/param.h>
 #include <sys/alq.h>
 #include <sys/errno.h>
+#include <sys/eventhandler.h>
 #include <sys/hash.h>
 #include <sys/kernel.h>
 #include <sys/kthread.h>
@@ -74,6 +75,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/pcpu.h>
 #include <sys/proc.h>
 #include <sys/sbuf.h>
+#include <sys/sdt.h>
 #include <sys/smp.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
@@ -81,9 +83,11 @@ __FBSDID("$FreeBSD$");
 #include <sys/unistd.h>
 
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/pfil.h>
 
 #include <netinet/in.h>
+#include <netinet/in_kdtrace.h>
 #include <netinet/in_pcb.h>
 #include <netinet/in_systm.h>
 #include <netinet/in_var.h>
@@ -788,9 +792,9 @@ siftr_siftdata(struct pkt_node *pn, struct inpcb *inp, struct tcpcb *tp,
 	pn->flags = tp->t_flags;
 	pn->rxt_length = tp->t_rxtcur;
 	pn->snd_buf_hiwater = inp->inp_socket->so_snd.sb_hiwat;
-	pn->snd_buf_cc = inp->inp_socket->so_snd.sb_cc;
+	pn->snd_buf_cc = sbused(&inp->inp_socket->so_snd);
 	pn->rcv_buf_hiwater = inp->inp_socket->so_rcv.sb_hiwat;
-	pn->rcv_buf_cc = inp->inp_socket->so_rcv.sb_cc;
+	pn->rcv_buf_cc = sbused(&inp->inp_socket->so_rcv);
 	pn->sent_inflight_bytes = tp->snd_max - tp->snd_una;
 	pn->t_segqlen = tp->t_segqlen;
 	pn->flowid = inp->inp_flowid;
@@ -809,6 +813,8 @@ siftr_siftdata(struct pkt_node *pn, struct inpcb *inp, struct tcpcb *tp,
 	 * maximum pps throughput processing when SIFTR is loaded and enabled.
 	 */
 	microtime(&pn->tval);
+	TCP_PROBE1(siftr, &pn);
+
 }
 
 
@@ -1555,6 +1561,6 @@ static moduledata_t siftr_mod = {
  *          Defines the initialisation order of this kld relative to others
  *          within the same subsystem as defined by param 3
  */
-DECLARE_MODULE(siftr, siftr_mod, SI_SUB_SMP, SI_ORDER_ANY);
+DECLARE_MODULE(siftr, siftr_mod, SI_SUB_LAST, SI_ORDER_ANY);
 MODULE_DEPEND(siftr, alq, 1, 1, 1);
 MODULE_VERSION(siftr, MODVERSION);

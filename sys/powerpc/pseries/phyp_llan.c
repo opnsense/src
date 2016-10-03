@@ -31,20 +31,21 @@ __FBSDID("$FreeBSD$");
 #include <sys/systm.h>
 #include <sys/sockio.h>
 #include <sys/endian.h>
+#include <sys/lock.h>
 #include <sys/mbuf.h>
 #include <sys/module.h>
 #include <sys/malloc.h>
+#include <sys/mutex.h>
 #include <sys/kernel.h>
 #include <sys/socket.h>
 
 #include <net/bpf.h>
 #include <net/if.h>
-#include <net/if_arp.h>
+#include <net/if_var.h>
 #include <net/ethernet.h>
 #include <net/if_dl.h>
 #include <net/if_media.h>
 #include <net/if_types.h>
-#include <net/if_vlan_var.h>
 
 #include <dev/ofw/openfirm.h>
 #include <dev/ofw/ofw_bus.h>
@@ -86,6 +87,8 @@ struct llan_softc {
 	cell_t		unit;
 	uint8_t		mac_address[8];
 
+	struct ifmedia	media;
+
 	int		irqid;
 	struct resource	*irq;
 	void		*irq_cookie;
@@ -115,6 +118,8 @@ static void	llan_intr(void *xsc);
 static void	llan_init(void *xsc);
 static void	llan_start(struct ifnet *ifp);
 static int	llan_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data);
+static void	llan_media_status(struct ifnet *ifp, struct ifmediareq *ifmr);
+static int	llan_media_change(struct ifnet *ifp);
 static void	llan_rx_load_cb(void *xsc, bus_dma_segment_t *segs, int nsegs,
 		    int err);
 static int	llan_add_rxbuf(struct llan_softc *sc, struct llan_xfer *rx);
@@ -158,7 +163,7 @@ llan_attach(device_t dev)
 	node = ofw_bus_get_node(dev);
 	OF_getprop(node, "local-mac-address", sc->mac_address,
 	    sizeof(sc->mac_address));
-	OF_getprop(node, "reg", &sc->unit, sizeof(sc->unit));
+	OF_getencprop(node, "reg", &sc->unit, sizeof(sc->unit));
 
 	mtx_init(&sc->io_lock, "llan", NULL, MTX_DEF);
 
@@ -219,13 +224,43 @@ llan_attach(device_t dev)
 	sc->ifp->if_ioctl = llan_ioctl;
 	sc->ifp->if_init = llan_init;
 
+	ifmedia_init(&sc->media, IFM_IMASK, llan_media_change,
+	    llan_media_status);
+	ifmedia_add(&sc->media, IFM_ETHER | IFM_AUTO, 0, NULL);
+	ifmedia_set(&sc->media, IFM_ETHER | IFM_AUTO);
+
 	IFQ_SET_MAXLEN(&sc->ifp->if_snd, LLAN_MAX_TX_PACKETS);
 	sc->ifp->if_snd.ifq_drv_maxlen = LLAN_MAX_TX_PACKETS;
 	IFQ_SET_READY(&sc->ifp->if_snd);
 
 	ether_ifattach(sc->ifp, &sc->mac_address[2]);
 
+	/* We don't have link state reporting, so make it always up */
+	if_link_state_change(sc->ifp, LINK_STATE_UP);
+
 	return (0);
+}
+
+static int
+llan_media_change(struct ifnet *ifp)
+{
+	struct llan_softc *sc = ifp->if_softc;
+
+	if (IFM_TYPE(sc->media.ifm_media) != IFM_ETHER)
+		return (EINVAL);
+
+	if (IFM_SUBTYPE(sc->media.ifm_media) != IFM_AUTO)
+		return (EINVAL);
+
+	return (0);
+}
+
+static void
+llan_media_status(struct ifnet *ifp, struct ifmediareq *ifmr)
+{
+
+	ifmr->ifm_status = IFM_AVALID | IFM_ACTIVE | IFM_UNKNOWN | IFM_FDX;
+	ifmr->ifm_active = IFM_ETHER;
 }
 
 static void
@@ -272,6 +307,9 @@ llan_init(void *xsc)
 	sc->ifp->if_drv_flags &= ~IFF_DRV_OACTIVE;
 
 	mtx_unlock(&sc->io_lock);
+
+	/* Check for pending receives scheduled before interrupt enable */
+	llan_intr(sc);
 }
 
 static int
@@ -334,6 +372,7 @@ llan_intr(void *xsc)
 	struct mbuf *m;
 
 	mtx_lock(&sc->io_lock);
+restart:
 	phyp_hcall(H_VIO_SIGNAL, sc->unit, 0);
 
 	while ((sc->rx_buf[sc->rx_dma_slot].control >> 7) == sc->rx_valid_val) {
@@ -344,13 +383,13 @@ llan_intr(void *xsc)
 
 		/* llan_add_rxbuf does DMA sync and unload as well as requeue */
 		if (llan_add_rxbuf(sc, rx) != 0) {
-			sc->ifp->if_ierrors++;
+			if_inc_counter(sc->ifp, IFCOUNTER_IERRORS, 1);
 			phyp_hcall(H_ADD_LOGICAL_LAN_BUFFER, sc->unit,
 			    rx->rx_bufdesc);
 			continue;
 		}
 
-		sc->ifp->if_ipackets++;
+		if_inc_counter(sc->ifp, IFCOUNTER_IPACKETS, 1);
 		m_adj(m, sc->rx_buf[sc->rx_dma_slot].offset);
 		m->m_len = sc->rx_buf[sc->rx_dma_slot].length;
 		m->m_pkthdr.rcvif = sc->ifp;
@@ -368,6 +407,15 @@ llan_intr(void *xsc)
 	}
 
 	phyp_hcall(H_VIO_SIGNAL, sc->unit, 1);
+
+	/*
+	 * H_VIO_SIGNAL enables interrupts for future packets only.
+	 * Make sure none were queued between the end of the loop and the
+	 * enable interrupts call.
+	 */
+	if ((sc->rx_buf[sc->rx_dma_slot].control >> 7) == sc->rx_valid_val)
+		goto restart;
+
 	mtx_unlock(&sc->io_lock);
 }
 
@@ -486,6 +534,10 @@ llan_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		if ((sc->ifp->if_drv_flags & IFF_DRV_RUNNING) != 0)
 			llan_set_multicast(sc);
 		mtx_unlock(&sc->io_lock);
+		break;
+	case SIOCGIFMEDIA:
+	case SIOCSIFMEDIA:
+		err = ifmedia_ioctl(ifp, (struct ifreq *)data, &sc->media, cmd);
 		break;
 	case SIOCSIFFLAGS:
 	default:

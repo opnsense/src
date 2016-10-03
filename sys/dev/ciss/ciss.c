@@ -345,21 +345,22 @@ static struct
     { 0x103C, 0x1928, CISS_BOARD_SA5,   "HP Smart Array P230i" },
     { 0x103C, 0x1929, CISS_BOARD_SA5,   "HP Smart Array P530" },
     { 0x103C, 0x192A, CISS_BOARD_SA5,   "HP Smart Array P531" },
-    { 0x103C, 0x21BD, CISS_BOARD_SA5,   "HP Smart Array TBD" },
-    { 0x103C, 0x21BE, CISS_BOARD_SA5,   "HP Smart Array TBD" },
-    { 0x103C, 0x21BF, CISS_BOARD_SA5,   "HP Smart Array TBD" },
-    { 0x103C, 0x21C0, CISS_BOARD_SA5,   "HP Smart Array TBD" },
-    { 0x103C, 0x21C2, CISS_BOARD_SA5,   "HP Smart Array TBD" },
-    { 0x103C, 0x21C3, CISS_BOARD_SA5,   "HP Smart Array TBD" },
-    { 0x103C, 0x21C5, CISS_BOARD_SA5,   "HP Smart Array TBD" },
-    { 0x103C, 0x21C6, CISS_BOARD_SA5,   "HP Smart Array TBD" },
-    { 0x103C, 0x21C7, CISS_BOARD_SA5,   "HP Smart Array TBD" },
-    { 0x103C, 0x21C8, CISS_BOARD_SA5,   "HP Smart Array TBD" },
-    { 0x103C, 0x21CA, CISS_BOARD_SA5,   "HP Smart Array TBD" },
-    { 0x103C, 0x21CB, CISS_BOARD_SA5,   "HP Smart Array TBD" },
+    { 0x103C, 0x21BD, CISS_BOARD_SA5,   "HP Smart Array P244br" },
+    { 0x103C, 0x21BE, CISS_BOARD_SA5,   "HP Smart Array P741m" },
+    { 0x103C, 0x21BF, CISS_BOARD_SA5,   "HP Smart Array H240ar" },
+    { 0x103C, 0x21C0, CISS_BOARD_SA5,   "HP Smart Array P440ar" },
+    { 0x103C, 0x21C1, CISS_BOARD_SA5,   "HP Smart Array P840ar" },
+    { 0x103C, 0x21C2, CISS_BOARD_SA5,   "HP Smart Array P440" },
+    { 0x103C, 0x21C3, CISS_BOARD_SA5,   "HP Smart Array P441" },
+    { 0x103C, 0x21C5, CISS_BOARD_SA5,   "HP Smart Array P841" },
+    { 0x103C, 0x21C6, CISS_BOARD_SA5,   "HP Smart Array H244br" },
+    { 0x103C, 0x21C7, CISS_BOARD_SA5,   "HP Smart Array H240" },
+    { 0x103C, 0x21C8, CISS_BOARD_SA5,   "HP Smart Array H241" },
+    { 0x103C, 0x21CA, CISS_BOARD_SA5,   "HP Smart Array P246br" },
+    { 0x103C, 0x21CB, CISS_BOARD_SA5,   "HP Smart Array P840" },
     { 0x103C, 0x21CC, CISS_BOARD_SA5,   "HP Smart Array TBD" },
-    { 0x103C, 0x21CD, CISS_BOARD_SA5,   "HP Smart Array TBD" },
-    { 0x103C, 0x21CE, CISS_BOARD_SA5,   "HP Smart Array TBD" },
+    { 0x103C, 0x21CD, CISS_BOARD_SA5,   "HP Smart Array P240nr" },
+    { 0x103C, 0x21CE, CISS_BOARD_SA5,   "HP Smart Array H240nr" },
     { 0, 0, 0, NULL }
 };
 
@@ -464,7 +465,7 @@ ciss_attach(device_t dev)
     ciss_initq_notify(sc);
 
     /*
-     * Initalize device sysctls.
+     * Initialize device sysctls.
      */
     ciss_init_sysctl(sc);
 
@@ -619,7 +620,7 @@ ciss_init_pci(struct ciss_softc *sc)
 	/*
 	 * XXX Big hammer, masks/unmasks all possible interrupts.  This should
 	 * work on all hardware variants.  Need to add code to handle the
-	 * "controller crashed" interupt bit that this unmasks.
+	 * "controller crashed" interrupt bit that this unmasks.
 	 */
 	sqmask = ~0;
     }
@@ -1431,7 +1432,7 @@ ciss_init_logical(struct ciss_softc *sc)
 	goto out;
     }
 
-    for (i = 0; i <= sc->ciss_max_logical_bus; i++) {
+    for (i = 0; i < sc->ciss_max_logical_bus; i++) {
 	sc->ciss_logical[i] =
 	    malloc(sc->ciss_cfg->max_logical_supported *
 		   sizeof(struct ciss_ldrive),
@@ -2030,7 +2031,7 @@ ciss_free(struct ciss_softc *sc)
     if (sc->ciss_parent_dmat)
 	bus_dma_tag_destroy(sc->ciss_parent_dmat);
     if (sc->ciss_logical) {
-	for (i = 0; i <= sc->ciss_max_logical_bus; i++) {
+	for (i = 0; i < sc->ciss_max_logical_bus; i++) {
 	    for (j = 0; j < sc->ciss_cfg->max_logical_supported; j++) {
 		if (sc->ciss_logical[i][j].cl_ldrive)
 		    free(sc->ciss_logical[i][j].cl_ldrive, CISS_MALLOC_CLASS);
@@ -3438,11 +3439,9 @@ ciss_name_device(struct ciss_softc *sc, int bus, int target)
 			     target, 0);
 
     if (status == CAM_REQ_CMP) {
-	mtx_lock(&sc->ciss_mtx);
 	xpt_path_lock(path);
 	periph = cam_periph_find(path, NULL);
 	xpt_path_unlock(path);
-	mtx_unlock(&sc->ciss_mtx);
 	xpt_free_path(path);
 	if (periph != NULL) {
 		sprintf(sc->ciss_logical[bus][target].cl_name, "%s%d",
@@ -4163,9 +4162,7 @@ ciss_notify_thread(void *arg)
     struct ciss_notify		*cn;
 
     sc = (struct ciss_softc *)arg;
-#if __FreeBSD_version >= 500000
     mtx_lock(&sc->ciss_mtx);
-#endif
 
     for (;;) {
 	if (STAILQ_EMPTY(&sc->ciss_notify) != 0 &&
@@ -4200,9 +4197,7 @@ ciss_notify_thread(void *arg)
     sc->ciss_notify_thread = NULL;
     wakeup(&sc->ciss_notify_thread);
 
-#if __FreeBSD_version >= 500000
     mtx_unlock(&sc->ciss_mtx);
-#endif
     kproc_exit(0);
 }
 
@@ -4213,15 +4208,9 @@ static void
 ciss_spawn_notify_thread(struct ciss_softc *sc)
 {
 
-#if __FreeBSD_version > 500005
     if (kproc_create((void(*)(void *))ciss_notify_thread, sc,
 		       &sc->ciss_notify_thread, 0, 0, "ciss_notify%d",
 		       device_get_unit(sc->ciss_dev)))
-#else
-    if (kproc_create((void(*)(void *))ciss_notify_thread, sc,
-		       &sc->ciss_notify_thread, "ciss_notify%d",
-		       device_get_unit(sc->ciss_dev)))
-#endif
 	panic("Could not create notify thread\n");
 }
 
@@ -4499,7 +4488,7 @@ ciss_name_ldrive_org(int org)
     case CISS_LDRIVE_RAIDADG:
 	return("RAID ADG");
     }
-    return("unkown");
+    return("unknown");
 }
 
 /************************************************************************

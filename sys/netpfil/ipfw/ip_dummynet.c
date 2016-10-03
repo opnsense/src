@@ -48,6 +48,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/kernel.h>
 #include <sys/lock.h>
 #include <sys/module.h>
+#include <sys/mutex.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/rwlock.h>
@@ -93,7 +94,7 @@ dummynet(void *arg)
 {
 
 	(void)arg;	/* UNUSED */
-	taskqueue_enqueue_fast(dn_tq, &dn_task);
+	taskqueue_enqueue(dn_tq, &dn_task);
 }
 
 void
@@ -1202,7 +1203,10 @@ config_red(struct dn_fsk *fs)
 	fs->min_th = SCALE(fs->fs.min_th);
 	fs->max_th = SCALE(fs->fs.max_th);
 
-	fs->c_1 = fs->max_p / (fs->fs.max_th - fs->fs.min_th);
+	if (fs->fs.max_th == fs->fs.min_th)
+		fs->c_1 = fs->max_p;
+	else
+		fs->c_1 = SCALE((int64_t)(fs->max_p)) / (fs->fs.max_th - fs->fs.min_th);
 	fs->c_2 = SCALE_MUL(fs->c_1, SCALE(fs->fs.min_th));
 
 	if (fs->fs.flags & DN_IS_GENTLE_RED) {
@@ -1943,7 +1947,7 @@ dummynet_flush(void)
  * with an oid which is at least a dn_id.
  * - the first object is the command (config, delete, flush, ...)
  * - config_link must be issued after the corresponding config_sched
- * - parameters (DN_TXT) for an object must preceed the object
+ * - parameters (DN_TXT) for an object must precede the object
  *   processed on a config_sched.
  */
 int
@@ -2499,7 +2503,7 @@ ip_dn_init(void)
 	    taskqueue_thread_enqueue, &dn_tq);
 	taskqueue_start_threads(&dn_tq, 1, PI_NET, "dummynet");
 
-	callout_init(&dn_timeout, CALLOUT_MPSAFE);
+	callout_init(&dn_timeout, 1);
 	dn_reschedule();
 
 	/* Initialize curr_time adjustment mechanics. */
@@ -2625,10 +2629,10 @@ static moduledata_t dummynet_mod = {
 	"dummynet", dummynet_modevent, NULL
 };
 
-#define	DN_SI_SUB	SI_SUB_PROTO_IFATTACHDOMAIN
+#define	DN_SI_SUB	SI_SUB_PROTO_FIREWALL
 #define	DN_MODEV_ORD	(SI_ORDER_ANY - 128) /* after ipfw */
 DECLARE_MODULE(dummynet, dummynet_mod, DN_SI_SUB, DN_MODEV_ORD);
-MODULE_DEPEND(dummynet, ipfw, 2, 2, 2);
+MODULE_DEPEND(dummynet, ipfw, 3, 3, 3);
 MODULE_VERSION(dummynet, 3);
 
 /*

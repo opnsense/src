@@ -125,7 +125,7 @@
 /* mod 128 saturating subtract of two 64-bit values in big-endian order */
 static int satsub64be(const unsigned char *v1, const unsigned char *v2)
 {
-    int ret, sat, brw, i;
+    int ret, i;
 
     if (sizeof(long) == 8)
         do {
@@ -157,28 +157,51 @@ static int satsub64be(const unsigned char *v1, const unsigned char *v2)
                 return (int)l;
         } while (0);
 
-    ret = (int)v1[7] - (int)v2[7];
-    sat = 0;
-    brw = ret >> 8;             /* brw is either 0 or -1 */
-    if (ret & 0x80) {
-        for (i = 6; i >= 0; i--) {
-            brw += (int)v1[i] - (int)v2[i];
-            sat |= ~brw;
-            brw >>= 8;
-        }
-    } else {
-        for (i = 6; i >= 0; i--) {
-            brw += (int)v1[i] - (int)v2[i];
-            sat |= brw;
-            brw >>= 8;
+    ret = 0;
+    for (i=0; i<7; i++) {
+        if (v1[i] > v2[i]) {
+            /* v1 is larger... but by how much? */
+            if (v1[i] != v2[i] + 1)
+                return 128;
+            while (++i <= 6) {
+                if (v1[i] != 0x00 || v2[i] != 0xff)
+                    return 128; /* too much */
+            }
+            /* We checked all the way to the penultimate byte,
+             * so despite higher bytes changing we actually
+             * know that it only changed from (e.g.)
+             *       ... (xx)  ff ff ff ??
+             * to   ... (xx+1) 00 00 00 ??
+             * so we add a 'bias' of 256 for the carry that
+             * happened, and will eventually return
+             * 256 + v1[7] - v2[7]. */
+            ret = 256;
+            break;
+        } else if (v2[i] > v1[i]) {
+            /* v2 is larger... but by how much? */
+            if (v2[i] != v1[i] + 1)
+                return -128;
+            while (++i <= 6) {
+                if (v2[i] != 0x00 || v1[i] != 0xff)
+                    return -128; /* too much */
+            }
+            /* Similar to the case above, we know it changed
+             * from    ... (xx)  00 00 00 ??
+             * to     ... (xx-1) ff ff ff ??
+             * so we add a 'bias' of -256 for the borrow,
+             * to return -256 + v1[7] - v2[7]. */
+            ret = -256;
         }
     }
-    brw <<= 8;                  /* brw is either 0 or -256 */
 
-    if (sat & 0xff)
-        return brw | 0x80;
+    ret += (int)v1[7] - (int)v2[7];
+
+    if (ret > 128)
+        return 128;
+    else if (ret < -128)
+        return -128;
     else
-        return brw + (ret & 0xFF);
+        return ret;
 }
 
 static int have_handshake_fragment(SSL *s, int type, unsigned char *buf,
@@ -665,6 +688,10 @@ int dtls1_get_record(SSL *s)
 
         p = s->packet;
 
+        if (s->msg_callback)
+            s->msg_callback(0, 0, SSL3_RT_HEADER, p, DTLS1_RT_HEADER_LENGTH,
+                            s, s->msg_callback_arg);
+
         /* Pull apart the header into the DTLS1_RECORD */
         rr->type = *(p++);
         ssl_major = *(p++);
@@ -923,6 +950,13 @@ int dtls1_read_bytes(SSL *s, int type, unsigned char *buf, int len, int peek)
         rr->length = 0;
         goto start;
     }
+
+    /*
+     * Reset the count of consecutive warning alerts if we've got a non-empty
+     * record that isn't an alert.
+     */
+    if (rr->type != SSL3_RT_ALERT && rr->length != 0)
+        s->cert->alert_count = 0;
 
     /* we now have a packet which can be read and processed */
 
@@ -1190,6 +1224,14 @@ int dtls1_read_bytes(SSL *s, int type, unsigned char *buf, int len, int peek)
 
         if (alert_level == SSL3_AL_WARNING) {
             s->s3->warn_alert = alert_descr;
+
+            s->cert->alert_count++;
+            if (s->cert->alert_count == MAX_WARN_ALERT_COUNT) {
+                al = SSL_AD_UNEXPECTED_MESSAGE;
+                SSLerr(SSL_F_DTLS1_READ_BYTES, SSL_R_TOO_MANY_WARN_ALERTS);
+                goto f_err;
+            }
+
             if (alert_descr == SSL_AD_CLOSE_NOTIFY) {
 #ifndef OPENSSL_NO_SCTP
                 /*
@@ -1247,7 +1289,7 @@ int dtls1_read_bytes(SSL *s, int type, unsigned char *buf, int len, int peek)
             BIO_snprintf(tmp, sizeof tmp, "%d", alert_descr);
             ERR_add_error_data(2, "SSL alert number ", tmp);
             s->shutdown |= SSL_RECEIVED_SHUTDOWN;
-            SSL_CTX_remove_session(s->ctx, s->session);
+            SSL_CTX_remove_session(s->session_ctx, s->session);
             return (0);
         } else {
             al = SSL_AD_ILLEGAL_PARAMETER;
@@ -1538,10 +1580,10 @@ int do_dtls1_write(SSL *s, int type, const unsigned char *buf,
     unsigned char *p, *pseq;
     int i, mac_size, clear = 0;
     int prefix_len = 0;
+    int eivlen;
     SSL3_RECORD *wr;
     SSL3_BUFFER *wb;
     SSL_SESSION *sess;
-    int bs;
 
     /*
      * first check if there is a SSL3_BUFFER still being written out.  This
@@ -1620,27 +1662,41 @@ int do_dtls1_write(SSL *s, int type, const unsigned char *buf,
 
     *(p++) = type & 0xff;
     wr->type = type;
-
-    *(p++) = (s->version >> 8);
-    *(p++) = s->version & 0xff;
+    /*
+     * Special case: for hello verify request, client version 1.0 and we
+     * haven't decided which version to use yet send back using version 1.0
+     * header: otherwise some clients will ignore it.
+     */
+    if (s->method->version == DTLS_ANY_VERSION) {
+        *(p++) = DTLS1_VERSION >> 8;
+        *(p++) = DTLS1_VERSION & 0xff;
+    } else {
+        *(p++) = s->version >> 8;
+        *(p++) = s->version & 0xff;
+    }
 
     /* field where we are to write out packet epoch, seq num and len */
     pseq = p;
     p += 10;
 
+    /* Explicit IV length, block ciphers appropriate version flag */
+    if (s->enc_write_ctx) {
+        int mode = EVP_CIPHER_CTX_mode(s->enc_write_ctx);
+        if (mode == EVP_CIPH_CBC_MODE) {
+            eivlen = EVP_CIPHER_CTX_iv_length(s->enc_write_ctx);
+            if (eivlen <= 1)
+                eivlen = 0;
+        }
+        /* Need explicit part of IV for GCM mode */
+        else if (mode == EVP_CIPH_GCM_MODE)
+            eivlen = EVP_GCM_TLS_EXPLICIT_IV_LEN;
+        else
+            eivlen = 0;
+    } else
+        eivlen = 0;
+
     /* lets setup the record stuff. */
-
-    /*
-     * Make space for the explicit IV in case of CBC. (this is a bit of a
-     * boundary violation, but what the heck).
-     */
-    if (s->enc_write_ctx &&
-        (EVP_CIPHER_mode(s->enc_write_ctx->cipher) & EVP_CIPH_CBC_MODE))
-        bs = EVP_CIPHER_block_size(s->enc_write_ctx->cipher);
-    else
-        bs = 0;
-
-    wr->data = p + bs;          /* make room for IV in case of CBC */
+    wr->data = p + eivlen;      /* make room for IV in case of CBC */
     wr->length = (int)len;
     wr->input = (unsigned char *)buf;
 
@@ -1666,7 +1722,7 @@ int do_dtls1_write(SSL *s, int type, const unsigned char *buf,
      */
 
     if (mac_size != 0) {
-        if (s->method->ssl3_enc->mac(s, &(p[wr->length + bs]), 1) < 0)
+        if (s->method->ssl3_enc->mac(s, &(p[wr->length + eivlen]), 1) < 0)
             goto err;
         wr->length += mac_size;
     }
@@ -1675,14 +1731,8 @@ int do_dtls1_write(SSL *s, int type, const unsigned char *buf,
     wr->input = p;
     wr->data = p;
 
-    /* ssl3_enc can only have an error on read */
-    if (bs) {                   /* bs != 0 in case of CBC */
-        RAND_pseudo_bytes(p, bs);
-        /*
-         * master IV and last CBC residue stand for the rest of randomness
-         */
-        wr->length += bs;
-    }
+    if (eivlen)
+        wr->length += eivlen;
 
     if (s->method->ssl3_enc->enc(s, 1) < 1)
         goto err;
@@ -1705,6 +1755,10 @@ int do_dtls1_write(SSL *s, int type, const unsigned char *buf,
     memcpy(pseq, &(s->s3->write_sequence[2]), 6);
     pseq += 6;
     s2n(wr->length, pseq);
+
+    if (s->msg_callback)
+        s->msg_callback(1, 0, SSL3_RT_HEADER, pseq - DTLS1_RT_HEADER_LENGTH,
+                        DTLS1_RT_HEADER_LENGTH, s, s->msg_callback_arg);
 
     /*
      * we should now have wr->data pointing to the encrypted data, which is

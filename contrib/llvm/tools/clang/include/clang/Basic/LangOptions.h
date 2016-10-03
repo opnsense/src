@@ -12,25 +12,18 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_LANGOPTIONS_H
-#define LLVM_CLANG_LANGOPTIONS_H
+#ifndef LLVM_CLANG_BASIC_LANGOPTIONS_H
+#define LLVM_CLANG_BASIC_LANGOPTIONS_H
 
 #include "clang/Basic/CommentOptions.h"
 #include "clang/Basic/LLVM.h"
 #include "clang/Basic/ObjCRuntime.h"
+#include "clang/Basic/Sanitizers.h"
 #include "clang/Basic/Visibility.h"
-#include "llvm/ADT/IntrusiveRefCntPtr.h"
 #include <string>
+#include <vector>
 
 namespace clang {
-
-struct SanitizerOptions {
-#define SANITIZER(NAME, ID) unsigned ID : 1;
-#include "clang/Basic/Sanitizers.def"
-
-  /// \brief Cached set of sanitizer options with all sanitizers disabled.
-  static const SanitizerOptions Disabled;
-};
 
 /// Bitfields of LangOptions, split out from LangOptions in order to ensure that
 /// this large collection of bitfields is a trivial class type.
@@ -41,7 +34,6 @@ public:
 #define ENUM_LANGOPT(Name, Type, Bits, Default, Description)
 #include "clang/Basic/LangOptions.def"
 
-  SanitizerOptions Sanitize;
 protected:
   // Define language options of enumeration type. These are private, and will
   // have accessors (below).
@@ -53,12 +45,12 @@ protected:
 
 /// \brief Keeps track of the various options that can be
 /// enabled, which controls the dialect of C or C++ that is accepted.
-class LangOptions : public RefCountedBase<LangOptions>, public LangOptionsBase {
+class LangOptions : public LangOptionsBase {
 public:
   typedef clang::Visibility Visibility;
   
   enum GCMode { NonGC, GCOnly, HybridGC };
-  enum StackProtectorMode { SSPOff, SSPOn, SSPReq };
+  enum StackProtectorMode { SSPOff, SSPOn, SSPStrong, SSPReq };
   
   enum SignedOverflowBehaviorTy {
     SOB_Undefined,  // Default C standard behavior.
@@ -66,9 +58,30 @@ public:
     SOB_Trapping    // -ftrapv
   };
 
+  enum PragmaMSPointersToMembersKind {
+    PPTMK_BestCase,
+    PPTMK_FullGeneralitySingleInheritance,
+    PPTMK_FullGeneralityMultipleInheritance,
+    PPTMK_FullGeneralityVirtualInheritance
+  };
+
   enum AddrSpaceMapMangling { ASMM_Target, ASMM_On, ASMM_Off };
 
+  enum MSVCMajorVersion {
+    MSVC2010 = 16,
+    MSVC2012 = 17,
+    MSVC2013 = 18,
+    MSVC2015 = 19
+  };
+
 public:
+  /// \brief Set of enabled sanitizers.
+  SanitizerSet Sanitize;
+
+  /// \brief Paths to blacklist files specifying which objects
+  /// (files, functions, variables) should not be instrumented.
+  std::vector<std::string> SanitizerBlacklistFiles;
+
   clang::ObjCRuntime ObjCRuntime;
 
   std::string ObjCConstantStringClass;
@@ -82,9 +95,31 @@ public:
   /// \brief The name of the current module.
   std::string CurrentModule;
 
+  /// \brief The name of the module that the translation unit is an
+  /// implementation of. Prevents semantic imports, but does not otherwise
+  /// treat this as the CurrentModule.
+  std::string ImplementationOfModule;
+
+  /// \brief The names of any features to enable in module 'requires' decls
+  /// in addition to the hard-coded list in Module.cpp and the target features.
+  ///
+  /// This list is sorted.
+  std::vector<std::string> ModuleFeatures;
+
   /// \brief Options for parsing comments.
   CommentOptions CommentOpts;
-  
+
+  /// \brief A list of all -fno-builtin-* function names (e.g., memset).
+  std::vector<std::string> NoBuiltinFuncs;
+
+  /// \brief Triples of the OpenMP targets that the host code codegen should
+  /// take into account in order to generate accurate offloading descriptors.
+  std::vector<llvm::Triple> OMPTargetTriples;
+
+  /// \brief Name of the IR file that contains the result of the OpenMP target
+  /// host code generation.
+  std::string OMPHostIRFile;
+
   LangOptions();
 
   // Define accessors/mutators for language options of enumeration type.
@@ -103,9 +138,17 @@ public:
            !ObjCSubscriptingLegacyRuntime;
   }
 
+  bool isCompatibleWithMSVC(MSVCMajorVersion MajorVersion) const {
+    return MSCompatibilityVersion >= MajorVersion * 10000000U;
+  }
+
   /// \brief Reset all of the options that are not considered when building a
   /// module.
   void resetNonModularOptions();
+
+  /// \brief Is this a libc/libm function that is no longer recognized as a
+  /// builtin because a -fno-builtin-* option has been specified?
+  bool isNoBuiltinFunc(const char *Name) const;
 };
 
 /// \brief Floating point control options

@@ -87,8 +87,6 @@ vn_is_readonly(vnode_t *vp)
 #define	VN_RELE(v)	vrele(v)
 #define	VN_URELE(v)	vput(v)
 
-#define	VOP_REALVP(vp, vpp, ct)	(*(vpp) = (vp), 0)
-
 #define	vnevent_create(vp, ct)			do { } while (0)
 #define	vnevent_link(vp, ct)			do { } while (0)
 #define	vnevent_remove(vp, dvp, name, ct)	do { } while (0)
@@ -162,7 +160,6 @@ vn_openat(char *pnamep, enum uio_seg seg, int filemode, int createmode,
     int fd)
 {
 	struct thread *td = curthread;
-	struct filedesc *fdc;
 	struct nameidata nd;
 	int error, operation;
 
@@ -179,17 +176,7 @@ vn_openat(char *pnamep, enum uio_seg seg, int filemode, int createmode,
 	}
 	ASSERT(umask == 0);
 
-	fdc = td->td_proc->p_fd;
-	FILEDESC_XLOCK(fdc);
-	if (fdc->fd_rdir == NULL) {
-		fdc->fd_rdir = rootvnode;
-		vref(fdc->fd_rdir);
-	}
-	if (fdc->fd_cdir == NULL) {
-		fdc->fd_cdir = rootvnode;
-		vref(fdc->fd_rdir);
-	}
-	FILEDESC_XUNLOCK(fdc);
+	pwd_ensure_dirs();
 
 	if (startvp != NULL)
 		vref(startvp);
@@ -282,7 +269,7 @@ vn_rename(char *from, char *to, enum uio_seg seg)
 
 	ASSERT(seg == UIO_SYSSPACE);
 
-	return (kern_rename(curthread, from, to, seg));
+	return (kern_renameat(curthread, AT_FDCWD, from, AT_FDCWD, to, seg));
 }
 
 static __inline int
@@ -292,7 +279,7 @@ vn_remove(char *fnamep, enum uio_seg seg, enum rm dirflag)
 	ASSERT(seg == UIO_SYSSPACE);
 	ASSERT(dirflag == RMFILE);
 
-	return (kern_unlink(curthread, fnamep, seg));
+	return (kern_unlinkat(curthread, AT_FDCWD, fnamep, seg, 0));
 }
 
 #endif	/* _KERNEL */

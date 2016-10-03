@@ -17,6 +17,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 
@@ -24,16 +25,16 @@ static void appendToGlobalArray(const char *Array,
                                 Module &M, Function *F, int Priority) {
   IRBuilder<> IRB(M.getContext());
   FunctionType *FnTy = FunctionType::get(IRB.getVoidTy(), false);
-  StructType *Ty = StructType::get(
-      IRB.getInt32Ty(), PointerType::getUnqual(FnTy), NULL);
-
-  Constant *RuntimeCtorInit = ConstantStruct::get(
-      Ty, IRB.getInt32(Priority), F, NULL);
 
   // Get the current set of static global constructors and add the new ctor
   // to the list.
   SmallVector<Constant *, 16> CurrentCtors;
-  if (GlobalVariable * GVCtor = M.getNamedGlobal(Array)) {
+  StructType *EltTy;
+  if (GlobalVariable *GVCtor = M.getNamedGlobal(Array)) {
+    // If there is a global_ctors array, use the existing struct type, which can
+    // have 2 or 3 fields.
+    ArrayType *ATy = cast<ArrayType>(GVCtor->getType()->getElementType());
+    EltTy = cast<StructType>(ATy->getElementType());
     if (Constant *Init = GVCtor->getInitializer()) {
       unsigned n = Init->getNumOperands();
       CurrentCtors.reserve(n + 1);
@@ -41,13 +42,26 @@ static void appendToGlobalArray(const char *Array,
         CurrentCtors.push_back(cast<Constant>(Init->getOperand(i)));
     }
     GVCtor->eraseFromParent();
+  } else {
+    // Use the new three-field struct if there isn't one already.
+    EltTy = StructType::get(IRB.getInt32Ty(), PointerType::getUnqual(FnTy),
+                            IRB.getInt8PtrTy(), nullptr);
   }
+
+  // Build a 2 or 3 field global_ctor entry.  We don't take a comdat key.
+  Constant *CSVals[3];
+  CSVals[0] = IRB.getInt32(Priority);
+  CSVals[1] = F;
+  // FIXME: Drop support for the two element form in LLVM 4.0.
+  if (EltTy->getNumElements() >= 3)
+    CSVals[2] = llvm::Constant::getNullValue(IRB.getInt8PtrTy());
+  Constant *RuntimeCtorInit =
+      ConstantStruct::get(EltTy, makeArrayRef(CSVals, EltTy->getNumElements()));
 
   CurrentCtors.push_back(RuntimeCtorInit);
 
   // Create a new initializer.
-  ArrayType *AT = ArrayType::get(RuntimeCtorInit->getType(),
-                                 CurrentCtors.size());
+  ArrayType *AT = ArrayType::get(EltTy, CurrentCtors.size());
   Constant *NewInit = ConstantArray::get(AT, CurrentCtors);
 
   // Create the new global variable and replace all uses of
@@ -65,7 +79,7 @@ void llvm::appendToGlobalDtors(Module &M, Function *F, int Priority) {
 }
 
 GlobalVariable *
-llvm::collectUsedGlobalVariables(Module &M, SmallPtrSet<GlobalValue *, 8> &Set,
+llvm::collectUsedGlobalVariables(Module &M, SmallPtrSetImpl<GlobalValue *> &Set,
                                  bool CompilerUsed) {
   const char *Name = CompilerUsed ? "llvm.compiler.used" : "llvm.used";
   GlobalVariable *GV = M.getGlobalVariable(Name);
@@ -80,3 +94,42 @@ llvm::collectUsedGlobalVariables(Module &M, SmallPtrSet<GlobalValue *, 8> &Set,
   }
   return GV;
 }
+
+Function *llvm::checkSanitizerInterfaceFunction(Constant *FuncOrBitcast) {
+  if (isa<Function>(FuncOrBitcast))
+    return cast<Function>(FuncOrBitcast);
+  FuncOrBitcast->dump();
+  std::string Err;
+  raw_string_ostream Stream(Err);
+  Stream << "Sanitizer interface function redefined: " << *FuncOrBitcast;
+  report_fatal_error(Err);
+}
+
+std::pair<Function *, Function *> llvm::createSanitizerCtorAndInitFunctions(
+    Module &M, StringRef CtorName, StringRef InitName,
+    ArrayRef<Type *> InitArgTypes, ArrayRef<Value *> InitArgs,
+    StringRef VersionCheckName) {
+  assert(!InitName.empty() && "Expected init function name");
+  assert(InitArgTypes.size() == InitArgTypes.size() &&
+         "Sanitizer's init function expects different number of arguments");
+  Function *Ctor = Function::Create(
+      FunctionType::get(Type::getVoidTy(M.getContext()), false),
+      GlobalValue::InternalLinkage, CtorName, &M);
+  BasicBlock *CtorBB = BasicBlock::Create(M.getContext(), "", Ctor);
+  IRBuilder<> IRB(ReturnInst::Create(M.getContext(), CtorBB));
+  Function *InitFunction =
+      checkSanitizerInterfaceFunction(M.getOrInsertFunction(
+          InitName, FunctionType::get(IRB.getVoidTy(), InitArgTypes, false),
+          AttributeSet()));
+  InitFunction->setLinkage(Function::ExternalLinkage);
+  IRB.CreateCall(InitFunction, InitArgs);
+  if (!VersionCheckName.empty()) {
+    Function *VersionCheckFunction =
+        checkSanitizerInterfaceFunction(M.getOrInsertFunction(
+            VersionCheckName, FunctionType::get(IRB.getVoidTy(), {}, false),
+            AttributeSet()));
+    IRB.CreateCall(VersionCheckFunction, {});
+  }
+  return std::make_pair(Ctor, InitFunction);
+}
+

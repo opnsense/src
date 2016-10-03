@@ -50,5 +50,5 @@ SRCS+= device_if.h bus_if.h pci_if.h
 #CFLAGS += -DQL_ENABLE_ISCSI_TLV
 #CFLAGS += -DQL_LDFLASH_FW
 
-.include <bsd.kmod.mk>
 
+.include <bsd.kmod.mk>

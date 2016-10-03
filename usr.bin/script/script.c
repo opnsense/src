@@ -74,13 +74,12 @@ static int child;
 static const char *fname;
 static char *fmfname;
 static int fflg, qflg, ttyflg;
-static int usesleep, rawout;
+static int usesleep, rawout, showexit;
 
 static struct termios tt;
 
 static void done(int) __dead2;
 static void doshell(char **);
-static void fail(void);
 static void finish(void);
 static void record(FILE *, char *, size_t, int);
 static void consume(FILE *, off_t, char *, int);
@@ -98,24 +97,28 @@ main(int argc, char *argv[])
 	char obuf[BUFSIZ];
 	char ibuf[BUFSIZ];
 	fd_set rfd;
-	int aflg, kflg, pflg, ch, k, n;
+	int aflg, Fflg, kflg, pflg, ch, k, n;
 	int flushtime, readstdin;
 	int fm_fd, fm_log;
 
-	aflg = kflg = pflg = 0;
+	aflg = Fflg = kflg = pflg = 0;
 	usesleep = 1;
 	rawout = 0;
 	flushtime = 30;
 	fm_fd = -1;	/* Shut up stupid "may be used uninitialized" GCC
 			   warning. (not needed w/clang) */
+	showexit = 0;
 
-	while ((ch = getopt(argc, argv, "adfkpqrt:")) != -1)
+	while ((ch = getopt(argc, argv, "adFfkpqrt:")) != -1)
 		switch(ch) {
 		case 'a':
 			aflg = 1;
 			break;
 		case 'd':
 			usesleep = 0;
+			break;
+		case 'F':
+			Fflg = 1;
 			break;
 		case 'f':
 			fflg = 1;
@@ -158,17 +161,14 @@ main(int argc, char *argv[])
 		asprintf(&fmfname, "%s.filemon", fname);
 		if (!fmfname)
 			err(1, "%s.filemon", fname);
-		if ((fm_fd = open("/dev/filemon", O_RDWR)) == -1)
+		if ((fm_fd = open("/dev/filemon", O_RDWR | O_CLOEXEC)) == -1)
 			err(1, "open(\"/dev/filemon\", O_RDWR)");
-		if ((fm_log = open(fmfname, O_WRONLY | O_CREAT | O_TRUNC,
+		if ((fm_log = open(fmfname,
+		    O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC,
 		    S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)) == -1)
 			err(1, "open(%s)", fmfname);
 		if (ioctl(fm_fd, FILEMON_SET_FD, &fm_log) < 0)
 			err(1, "Cannot set filemon log file descriptor");
-
-		/* Set up these two fd's to close on exec. */
-		(void)fcntl(fm_fd, F_SETFD, FD_CLOEXEC);
-		(void)fcntl(fm_log, F_SETFD, FD_CLOEXEC);
 	}
 
 	if (pflg)
@@ -196,7 +196,8 @@ main(int argc, char *argv[])
 			(void)fprintf(fscript, "Script started on %s",
 			    ctime(&tvec));
 			if (argv[0]) {
-				fprintf(fscript, "command: ");
+				showexit = 1;
+				fprintf(fscript, "Command: ");
 				for (k = 0 ; argv[k] ; ++k)
 					fprintf(fscript, "%s%s", k ? " " : "",
 						argv[k]);
@@ -292,6 +293,8 @@ main(int argc, char *argv[])
 			fflush(fscript);
 			start = tvec;
 		}
+		if (Fflg)
+			fflush(fscript);
 	}
 	finish();
 	done(0);
@@ -342,14 +345,7 @@ doshell(char **av)
 		execl(shell, shell, "-i", (char *)NULL);
 		warn("%s", shell);
 	}
-	fail();
-}
-
-static void
-fail(void)
-{
-	(void)kill(0, SIGTERM);
-	done(1);
+	exit(1);
 }
 
 static void
@@ -363,9 +359,13 @@ done(int eno)
 	if (rawout)
 		record(fscript, NULL, 0, 'e');
 	if (!qflg) {
-		if (!rawout)
+		if (!rawout) {
+			if (showexit)
+				(void)fprintf(fscript, "\nCommand exit status:"
+				    " %d", eno);
 			(void)fprintf(fscript,"\nScript done on %s",
 			    ctime(&tvec));
+		}
 		(void)printf("\nScript done, output file is %s\n", fname);
 		if (fflg) {
 			(void)printf("Filemon done, output file is %s\n",

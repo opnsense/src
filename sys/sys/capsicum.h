@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2008-2010 Robert N. M. Watson
+ * Copyright (c) 2008-2010, 2015 Robert N. M. Watson
  * Copyright (c) 2012 FreeBSD Foundation
  * All rights reserved.
  *
@@ -150,16 +150,16 @@
 #define	CAP_FUTIMES		CAPRIGHT(0, 0x0000000000200000ULL)
 /* Allows for futimens(2), futimes(2), futimesat(2) and utimensat(2). */
 #define	CAP_FUTIMESAT		(CAP_FUTIMES | CAP_LOOKUP)
-/* Allows for linkat(2) and renameat(2) (destination directory descriptor). */
-#define	CAP_LINKAT		(CAP_LOOKUP | 0x0000000000400000ULL)
+/* Allows for linkat(2) (target directory descriptor). */
+#define	CAP_LINKAT_TARGET	(CAP_LOOKUP | 0x0000000000400000ULL)
 /* Allows for mkdirat(2). */
 #define	CAP_MKDIRAT		(CAP_LOOKUP | 0x0000000000800000ULL)
 /* Allows for mkfifoat(2). */
 #define	CAP_MKFIFOAT		(CAP_LOOKUP | 0x0000000001000000ULL)
 /* Allows for mknodat(2). */
 #define	CAP_MKNODAT		(CAP_LOOKUP | 0x0000000002000000ULL)
-/* Allows for renameat(2). */
-#define	CAP_RENAMEAT		(CAP_LOOKUP | 0x0000000004000000ULL)
+/* Allows for renameat(2) (source directory descriptor). */
+#define	CAP_RENAMEAT_SOURCE	(CAP_LOOKUP | 0x0000000004000000ULL)
 /* Allows for symlinkat(2). */
 #define	CAP_SYMLINKAT		(CAP_LOOKUP | 0x0000000008000000ULL)
 /*
@@ -197,6 +197,11 @@
 /* Allows for connectat(2) on a directory descriptor. */
 #define	CAP_CONNECTAT		(CAP_LOOKUP | 0x0000010000000000ULL)
 
+/* Allows for linkat(2) (source directory descriptor). */
+#define	CAP_LINKAT_SOURCE	(CAP_LOOKUP | 0x0000020000000000ULL)
+/* Allows for renameat(2) (target directory descriptor). */
+#define	CAP_RENAMEAT_TARGET	(CAP_LOOKUP | 0x0000040000000000ULL)
+
 #define	CAP_SOCK_CLIENT \
 	(CAP_CONNECT | CAP_GETPEERNAME | CAP_GETSOCKNAME | CAP_GETSOCKOPT | \
 	 CAP_PEELOFF | CAP_RECV | CAP_SEND | CAP_SETSOCKOPT | CAP_SHUTDOWN)
@@ -206,10 +211,10 @@
 	 CAP_SETSOCKOPT | CAP_SHUTDOWN)
 
 /* All used bits for index 0. */
-#define	CAP_ALL0		CAPRIGHT(0, 0x0000007FFFFFFFFFULL)
+#define	CAP_ALL0		CAPRIGHT(0, 0x000007FFFFFFFFFFULL)
 
 /* Available bits for index 0. */
-#define	CAP_UNUSED0_40		CAPRIGHT(0, 0x0000008000000000ULL)
+#define	CAP_UNUSED0_44		CAPRIGHT(0, 0x0000080000000000ULL)
 /* ... */
 #define	CAP_UNUSED0_57		CAPRIGHT(0, 0x0100000000000000ULL)
 
@@ -302,33 +307,29 @@
  */
 #define	CAP_FCNTL_GETFL		(1 << F_GETFL)
 #define	CAP_FCNTL_SETFL		(1 << F_SETFL)
-#if __BSD_VISIBLE || __XSI_VISIBLE || __POSIX_VISIBLE >= 200112
 #define	CAP_FCNTL_GETOWN	(1 << F_GETOWN)
 #define	CAP_FCNTL_SETOWN	(1 << F_SETOWN)
-#endif
-#if __BSD_VISIBLE || __XSI_VISIBLE || __POSIX_VISIBLE >= 200112
 #define	CAP_FCNTL_ALL		(CAP_FCNTL_GETFL | CAP_FCNTL_SETFL | \
 				 CAP_FCNTL_GETOWN | CAP_FCNTL_SETOWN)
-#else
-#define	CAP_FCNTL_ALL		(CAP_FCNTL_GETFL | CAP_FCNTL_SETFL)
-#endif
 
 #define	CAP_IOCTLS_ALL	SSIZE_MAX
+
+__BEGIN_DECLS
 
 #define	cap_rights_init(...)						\
 	__cap_rights_init(CAP_RIGHTS_VERSION, __VA_ARGS__, 0ULL)
 cap_rights_t *__cap_rights_init(int version, cap_rights_t *rights, ...);
 
-#define	cap_rights_set(rights, ...)					\
-	__cap_rights_set((rights), __VA_ARGS__, 0ULL)
+#define	cap_rights_set(...)						\
+	__cap_rights_set(__VA_ARGS__, 0ULL)
 cap_rights_t *__cap_rights_set(cap_rights_t *rights, ...);
 
-#define	cap_rights_clear(rights, ...)					\
-	__cap_rights_clear((rights), __VA_ARGS__, 0ULL)
+#define	cap_rights_clear(...)						\
+	__cap_rights_clear(__VA_ARGS__, 0ULL)
 cap_rights_t *__cap_rights_clear(cap_rights_t *rights, ...);
 
-#define	cap_rights_is_set(rights, ...)					\
-	__cap_rights_is_set((rights), __VA_ARGS__, 0ULL)
+#define	cap_rights_is_set(...)						\
+	__cap_rights_is_set(__VA_ARGS__, 0ULL)
 bool __cap_rights_is_set(const cap_rights_t *rights, ...);
 
 bool cap_rights_is_valid(const cap_rights_t *rights);
@@ -336,11 +337,13 @@ cap_rights_t *cap_rights_merge(cap_rights_t *dst, const cap_rights_t *src);
 cap_rights_t *cap_rights_remove(cap_rights_t *dst, const cap_rights_t *src);
 bool cap_rights_contains(const cap_rights_t *big, const cap_rights_t *little);
 
+__END_DECLS
+
 #ifdef _KERNEL
 
 #include <sys/systm.h>
 
-#define IN_CAPABILITY_MODE(td) ((td->td_ucred->cr_flags & CRED_FLAG_CAPMODE) != 0)
+#define IN_CAPABILITY_MODE(td) (((td)->td_ucred->cr_flags & CRED_FLAG_CAPMODE) != 0)
 
 struct filedesc;
 struct filedescent;
@@ -394,18 +397,19 @@ int cap_rights_limit(int fd, const cap_rights_t *rights);
 /*
  * Returns capability rights for the given descriptor.
  */
-#define	cap_rights_get(fd, rights)	__cap_rights_get(CAP_RIGHTS_VERSION, (fd), (rights))
-int __cap_rights_get(int version, int fd, cap_rights_t *rightsp);
+#define	cap_rights_get(fd, rights)					\
+	__cap_rights_get(CAP_RIGHTS_VERSION, (fd), (rights))
+int __cap_rights_get(int version, int fd, cap_rights_t *rights);
 /*
  * Limits allowed ioctls for the given descriptor.
  */
-int cap_ioctls_limit(int fd, const unsigned long *cmds, size_t ncmds);
+int cap_ioctls_limit(int fd, const cap_ioctl_t *cmds, size_t ncmds);
 /*
  * Returns array of allowed ioctls for the given descriptor.
  * If all ioctls are allowed, the cmds array is not populated and
  * the function returns CAP_IOCTLS_ALL.
  */
-ssize_t cap_ioctls_get(int fd, unsigned long *cmds, size_t maxcmds);
+ssize_t cap_ioctls_get(int fd, cap_ioctl_t *cmds, size_t maxcmds);
 /*
  * Limits allowed fcntls for the given descriptor (CAP_FCNTL_*).
  */

@@ -5,8 +5,10 @@
 LIB=	llvmruntimedyld
 
 SRCDIR=	lib/ExecutionEngine/RuntimeDyld
-SRCS=	GDBRegistrar.cpp \
+SRCS=	RTDyldMemoryManager.cpp \
 	RuntimeDyld.cpp \
+	RuntimeDyldCOFF.cpp \
+	RuntimeDyldChecker.cpp \
 	RuntimeDyldELF.cpp \
 	RuntimeDyldMachO.cpp
 

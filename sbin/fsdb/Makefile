@@ -2,6 +2,7 @@
 #	@(#)Makefile	8.1 (Berkeley) 6/5/93
 # $FreeBSD$
 
+PACKAGE=runtime
 PROG=	fsdb
 MAN=	fsdb.8
 SRCS=	fsdb.c fsdbutil.c \
@@ -9,8 +10,7 @@ SRCS=	fsdb.c fsdbutil.c \
 	pass5.c setup.c utilities.c ffs_subr.c ffs_tables.c globs.c
 CFLAGS+= -I${.CURDIR}/../fsck_ffs
 WARNS?= 2
-LDADD=	-ledit -ltermcap
-DPADD=	${LIBEDIT} ${LIBTERMCAP}
+LIBADD=	edit
 .PATH:	${.CURDIR}/../fsck_ffs ${.CURDIR}/../../sys/ufs/ffs
 
 .include <bsd.prog.mk>

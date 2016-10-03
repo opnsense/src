@@ -46,10 +46,8 @@ struct StoredDeclsList {
 public:
   StoredDeclsList() {}
 
-  StoredDeclsList(const StoredDeclsList &RHS) : Data(RHS.Data) {
-    if (DeclsTy *RHSVec = RHS.getAsVector())
-      Data = DeclsAndHasExternalTy(new DeclsTy(*RHSVec),
-                                   RHS.hasExternalDecls());
+  StoredDeclsList(StoredDeclsList &&RHS) : Data(RHS.Data) {
+    RHS.Data = (NamedDecl *)nullptr;
   }
 
   ~StoredDeclsList() {
@@ -58,12 +56,11 @@ public:
       delete Vector;
   }
 
-  StoredDeclsList &operator=(const StoredDeclsList &RHS) {
+  StoredDeclsList &operator=(StoredDeclsList &&RHS) {
     if (DeclsTy *Vector = getAsVector())
       delete Vector;
     Data = RHS.Data;
-    if (DeclsTy *RHSVec = RHS.getAsVector())
-      Data = DeclsAndHasExternalTy(new DeclsTy(*RHSVec), hasExternalDecls());
+    RHS.Data = (NamedDecl *)nullptr;
     return *this;
   }
 
@@ -110,7 +107,7 @@ public:
     if (NamedDecl *Singleton = getAsDecl()) {
       assert(Singleton == D && "list is different singleton");
       (void)Singleton;
-      Data = (NamedDecl *)0;
+      Data = (NamedDecl *)nullptr;
       return;
     }
 
@@ -145,31 +142,29 @@ public:
   /// represents.
   DeclContext::lookup_result getLookupResult() {
     if (isNull())
-      return DeclContext::lookup_result(DeclContext::lookup_iterator(0),
-                                        DeclContext::lookup_iterator(0));
+      return DeclContext::lookup_result();
 
     // If we have a single NamedDecl, return it.
-    if (getAsDecl()) {
+    if (NamedDecl *ND = getAsDecl()) {
       assert(!isNull() && "Empty list isn't allowed");
 
       // Data is a raw pointer to a NamedDecl*, return it.
-      void *Ptr = &Data;
-      return DeclContext::lookup_result((NamedDecl**)Ptr, (NamedDecl**)Ptr+1);
+      return DeclContext::lookup_result(ND);
     }
 
     assert(getAsVector() && "Must have a vector at this point");
     DeclsTy &Vector = *getAsVector();
 
     // Otherwise, we have a range result.
-    return DeclContext::lookup_result(Vector.begin(), Vector.end());
+    return DeclContext::lookup_result(Vector);
   }
 
   /// HandleRedeclaration - If this is a redeclaration of an existing decl,
   /// replace the old one with D and return true.  Otherwise return false.
-  bool HandleRedeclaration(NamedDecl *D) {
+  bool HandleRedeclaration(NamedDecl *D, bool IsKnownNewer) {
     // Most decls only have one entry in their list, special case it.
     if (NamedDecl *OldD = getAsDecl()) {
-      if (!D->declarationReplaces(OldD))
+      if (!D->declarationReplaces(OldD, IsKnownNewer))
         return false;
       setOnlyValue(D);
       return true;
@@ -180,7 +175,7 @@ public:
     for (DeclsTy::iterator OD = Vec.begin(), ODEnd = Vec.end();
          OD != ODEnd; ++OD) {
       NamedDecl *OldD = *OD;
-      if (D->declarationReplaces(OldD)) {
+      if (D->declarationReplaces(OldD, IsKnownNewer)) {
         *OD = D;
         return true;
       }
@@ -255,7 +250,7 @@ private:
 
 class DependentStoredDeclsMap : public StoredDeclsMap {
 public:
-  DependentStoredDeclsMap() : FirstDiagnostic(0) {}
+  DependentStoredDeclsMap() : FirstDiagnostic(nullptr) {}
 
 private:
   friend class DependentDiagnostic;

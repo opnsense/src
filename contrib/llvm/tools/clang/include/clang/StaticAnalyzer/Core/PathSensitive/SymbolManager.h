@@ -12,8 +12,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_GR_SYMMGR_H
-#define LLVM_CLANG_GR_SYMMGR_H
+#ifndef LLVM_CLANG_STATICANALYZER_CORE_PATHSENSITIVE_SYMBOLMANAGER_H
+#define LLVM_CLANG_STATICANALYZER_CORE_PATHSENSITIVE_SYMBOLMANAGER_H
 
 #include "clang/AST/Decl.h"
 #include "clang/AST/Expr.h"
@@ -23,11 +23,8 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/FoldingSet.h"
+#include "llvm/Support/Allocator.h"
 #include "llvm/Support/DataTypes.h"
-
-namespace llvm {
-class BumpPtrAllocator;
-}
 
 namespace clang {
   class ASTContext;
@@ -45,14 +42,22 @@ namespace ento {
 class SymExpr : public llvm::FoldingSetNode {
   virtual void anchor();
 public:
-  enum Kind { RegionValueKind, ConjuredKind, DerivedKind, ExtentKind,
-              MetadataKind,
-              BEGIN_SYMBOLS = RegionValueKind,
-              END_SYMBOLS = MetadataKind,
-              SymIntKind, IntSymKind, SymSymKind,
-              BEGIN_BINARYSYMEXPRS = SymIntKind,
-              END_BINARYSYMEXPRS = SymSymKind,
-              CastSymbolKind };
+  enum Kind {
+    SymbolRegionValueKind,
+    SymbolConjuredKind,
+    SymbolDerivedKind,
+    SymbolExtentKind,
+    SymbolMetadataKind,
+    BEGIN_SYMBOLS = SymbolRegionValueKind,
+    END_SYMBOLS = SymbolMetadataKind,
+    SymIntExprKind,
+    IntSymExprKind,
+    SymSymExprKind,
+    BEGIN_BINARYSYMEXPRS = SymIntExprKind,
+    END_BINARYSYMEXPRS = SymSymExprKind,
+    SymbolCastKind
+  };
+
 private:
   Kind K;
 
@@ -105,14 +110,14 @@ typedef unsigned SymbolID;
 /// \brief A symbol representing data which can be stored in a memory location
 /// (region).
 class SymbolData : public SymExpr {
-  virtual void anchor();
+  void anchor() override;
   const SymbolID Sym;
 
 protected:
   SymbolData(Kind k, SymbolID sym) : SymExpr(k), Sym(sym) {}
 
 public:
-  virtual ~SymbolData() {}
+  ~SymbolData() override {}
 
   SymbolID getSymbolID() const { return Sym; }
 
@@ -129,26 +134,26 @@ class SymbolRegionValue : public SymbolData {
 
 public:
   SymbolRegionValue(SymbolID sym, const TypedValueRegion *r)
-    : SymbolData(RegionValueKind, sym), R(r) {}
+    : SymbolData(SymbolRegionValueKind, sym), R(r) {}
 
   const TypedValueRegion* getRegion() const { return R; }
 
   static void Profile(llvm::FoldingSetNodeID& profile, const TypedValueRegion* R) {
-    profile.AddInteger((unsigned) RegionValueKind);
+    profile.AddInteger((unsigned) SymbolRegionValueKind);
     profile.AddPointer(R);
   }
 
-  virtual void Profile(llvm::FoldingSetNodeID& profile) {
+  void Profile(llvm::FoldingSetNodeID& profile) override {
     Profile(profile, R);
   }
 
-  virtual void dumpToStream(raw_ostream &os) const;
+  void dumpToStream(raw_ostream &os) const override;
 
-  QualType getType() const;
+  QualType getType() const override;
 
   // Implement isa<T> support.
   static inline bool classof(const SymExpr *SE) {
-    return SE->getKind() == RegionValueKind;
+    return SE->getKind() == SymbolRegionValueKind;
   }
 };
 
@@ -163,24 +168,22 @@ class SymbolConjured : public SymbolData {
 
 public:
   SymbolConjured(SymbolID sym, const Stmt *s, const LocationContext *lctx,
-		 QualType t, unsigned count,
-                 const void *symbolTag)
-    : SymbolData(ConjuredKind, sym), S(s), T(t), Count(count),
-      LCtx(lctx),
-      SymbolTag(symbolTag) {}
+                 QualType t, unsigned count, const void *symbolTag)
+      : SymbolData(SymbolConjuredKind, sym), S(s), T(t), Count(count),
+        LCtx(lctx), SymbolTag(symbolTag) {}
 
   const Stmt *getStmt() const { return S; }
   unsigned getCount() const { return Count; }
   const void *getTag() const { return SymbolTag; }
 
-  QualType getType() const;
+  QualType getType() const override;
 
-  virtual void dumpToStream(raw_ostream &os) const;
+  void dumpToStream(raw_ostream &os) const override;
 
   static void Profile(llvm::FoldingSetNodeID& profile, const Stmt *S,
                       QualType T, unsigned Count, const LocationContext *LCtx,
                       const void *SymbolTag) {
-    profile.AddInteger((unsigned) ConjuredKind);
+    profile.AddInteger((unsigned) SymbolConjuredKind);
     profile.AddPointer(S);
     profile.AddPointer(LCtx);
     profile.Add(T);
@@ -188,13 +191,13 @@ public:
     profile.AddPointer(SymbolTag);
   }
 
-  virtual void Profile(llvm::FoldingSetNodeID& profile) {
+  void Profile(llvm::FoldingSetNodeID& profile) override {
     Profile(profile, S, T, Count, LCtx, SymbolTag);
   }
 
   // Implement isa<T> support.
   static inline bool classof(const SymExpr *SE) {
-    return SE->getKind() == ConjuredKind;
+    return SE->getKind() == SymbolConjuredKind;
   }
 };
 
@@ -206,29 +209,29 @@ class SymbolDerived : public SymbolData {
 
 public:
   SymbolDerived(SymbolID sym, SymbolRef parent, const TypedValueRegion *r)
-    : SymbolData(DerivedKind, sym), parentSymbol(parent), R(r) {}
+    : SymbolData(SymbolDerivedKind, sym), parentSymbol(parent), R(r) {}
 
   SymbolRef getParentSymbol() const { return parentSymbol; }
   const TypedValueRegion *getRegion() const { return R; }
 
-  QualType getType() const;
+  QualType getType() const override;
 
-  virtual void dumpToStream(raw_ostream &os) const;
+  void dumpToStream(raw_ostream &os) const override;
 
   static void Profile(llvm::FoldingSetNodeID& profile, SymbolRef parent,
                       const TypedValueRegion *r) {
-    profile.AddInteger((unsigned) DerivedKind);
+    profile.AddInteger((unsigned) SymbolDerivedKind);
     profile.AddPointer(r);
     profile.AddPointer(parent);
   }
 
-  virtual void Profile(llvm::FoldingSetNodeID& profile) {
+  void Profile(llvm::FoldingSetNodeID& profile) override {
     Profile(profile, parentSymbol, R);
   }
 
   // Implement isa<T> support.
   static inline bool classof(const SymExpr *SE) {
-    return SE->getKind() == DerivedKind;
+    return SE->getKind() == SymbolDerivedKind;
   }
 };
 
@@ -240,26 +243,26 @@ class SymbolExtent : public SymbolData {
   
 public:
   SymbolExtent(SymbolID sym, const SubRegion *r)
-  : SymbolData(ExtentKind, sym), R(r) {}
+  : SymbolData(SymbolExtentKind, sym), R(r) {}
 
   const SubRegion *getRegion() const { return R; }
 
-  QualType getType() const;
+  QualType getType() const override;
 
-  virtual void dumpToStream(raw_ostream &os) const;
+  void dumpToStream(raw_ostream &os) const override;
 
   static void Profile(llvm::FoldingSetNodeID& profile, const SubRegion *R) {
-    profile.AddInteger((unsigned) ExtentKind);
+    profile.AddInteger((unsigned) SymbolExtentKind);
     profile.AddPointer(R);
   }
 
-  virtual void Profile(llvm::FoldingSetNodeID& profile) {
+  void Profile(llvm::FoldingSetNodeID& profile) override {
     Profile(profile, R);
   }
 
   // Implement isa<T> support.
   static inline bool classof(const SymExpr *SE) {
-    return SE->getKind() == ExtentKind;
+    return SE->getKind() == SymbolExtentKind;
   }
 };
 
@@ -276,21 +279,21 @@ class SymbolMetadata : public SymbolData {
 public:
   SymbolMetadata(SymbolID sym, const MemRegion* r, const Stmt *s, QualType t,
                  unsigned count, const void *tag)
-  : SymbolData(MetadataKind, sym), R(r), S(s), T(t), Count(count), Tag(tag) {}
+  : SymbolData(SymbolMetadataKind, sym), R(r), S(s), T(t), Count(count), Tag(tag) {}
 
   const MemRegion *getRegion() const { return R; }
   const Stmt *getStmt() const { return S; }
   unsigned getCount() const { return Count; }
   const void *getTag() const { return Tag; }
 
-  QualType getType() const;
+  QualType getType() const override;
 
-  virtual void dumpToStream(raw_ostream &os) const;
+  void dumpToStream(raw_ostream &os) const override;
 
   static void Profile(llvm::FoldingSetNodeID& profile, const MemRegion *R,
                       const Stmt *S, QualType T, unsigned Count,
                       const void *Tag) {
-    profile.AddInteger((unsigned) MetadataKind);
+    profile.AddInteger((unsigned) SymbolMetadataKind);
     profile.AddPointer(R);
     profile.AddPointer(S);
     profile.Add(T);
@@ -298,13 +301,13 @@ public:
     profile.AddPointer(Tag);
   }
 
-  virtual void Profile(llvm::FoldingSetNodeID& profile) {
+  void Profile(llvm::FoldingSetNodeID& profile) override {
     Profile(profile, R, S, T, Count, Tag);
   }
 
   // Implement isa<T> support.
   static inline bool classof(const SymExpr *SE) {
-    return SE->getKind() == MetadataKind;
+    return SE->getKind() == SymbolMetadataKind;
   }
 };
 
@@ -318,29 +321,29 @@ class SymbolCast : public SymExpr {
 
 public:
   SymbolCast(const SymExpr *In, QualType From, QualType To) :
-    SymExpr(CastSymbolKind), Operand(In), FromTy(From), ToTy(To) { }
+    SymExpr(SymbolCastKind), Operand(In), FromTy(From), ToTy(To) { }
 
-  QualType getType() const { return ToTy; }
+  QualType getType() const override { return ToTy; }
 
   const SymExpr *getOperand() const { return Operand; }
 
-  virtual void dumpToStream(raw_ostream &os) const;
+  void dumpToStream(raw_ostream &os) const override;
 
   static void Profile(llvm::FoldingSetNodeID& ID,
                       const SymExpr *In, QualType From, QualType To) {
-    ID.AddInteger((unsigned) CastSymbolKind);
+    ID.AddInteger((unsigned) SymbolCastKind);
     ID.AddPointer(In);
     ID.Add(From);
     ID.Add(To);
   }
 
-  void Profile(llvm::FoldingSetNodeID& ID) {
+  void Profile(llvm::FoldingSetNodeID& ID) override {
     Profile(ID, Operand, FromTy, ToTy);
   }
 
   // Implement isa<T> support.
   static inline bool classof(const SymExpr *SE) {
-    return SE->getKind() == CastSymbolKind;
+    return SE->getKind() == SymbolCastKind;
   }
 };
 
@@ -356,7 +359,7 @@ protected:
 public:
   // FIXME: We probably need to make this out-of-line to avoid redundant
   // generation of virtual functions.
-  QualType getType() const { return T; }
+  QualType getType() const override { return T; }
 
   BinaryOperator::Opcode getOpcode() const { return Op; }
 
@@ -375,9 +378,9 @@ class SymIntExpr : public BinarySymExpr {
 public:
   SymIntExpr(const SymExpr *lhs, BinaryOperator::Opcode op,
              const llvm::APSInt& rhs, QualType t)
-    : BinarySymExpr(SymIntKind, op, t), LHS(lhs), RHS(rhs) {}
+    : BinarySymExpr(SymIntExprKind, op, t), LHS(lhs), RHS(rhs) {}
 
-  virtual void dumpToStream(raw_ostream &os) const;
+  void dumpToStream(raw_ostream &os) const override;
 
   const SymExpr *getLHS() const { return LHS; }
   const llvm::APSInt &getRHS() const { return RHS; }
@@ -385,20 +388,20 @@ public:
   static void Profile(llvm::FoldingSetNodeID& ID, const SymExpr *lhs,
                       BinaryOperator::Opcode op, const llvm::APSInt& rhs,
                       QualType t) {
-    ID.AddInteger((unsigned) SymIntKind);
+    ID.AddInteger((unsigned) SymIntExprKind);
     ID.AddPointer(lhs);
     ID.AddInteger(op);
     ID.AddPointer(&rhs);
     ID.Add(t);
   }
 
-  void Profile(llvm::FoldingSetNodeID& ID) {
+  void Profile(llvm::FoldingSetNodeID& ID) override {
     Profile(ID, LHS, getOpcode(), RHS, getType());
   }
 
   // Implement isa<T> support.
   static inline bool classof(const SymExpr *SE) {
-    return SE->getKind() == SymIntKind;
+    return SE->getKind() == SymIntExprKind;
   }
 };
 
@@ -410,9 +413,9 @@ class IntSymExpr : public BinarySymExpr {
 public:
   IntSymExpr(const llvm::APSInt& lhs, BinaryOperator::Opcode op,
              const SymExpr *rhs, QualType t)
-    : BinarySymExpr(IntSymKind, op, t), LHS(lhs), RHS(rhs) {}
+    : BinarySymExpr(IntSymExprKind, op, t), LHS(lhs), RHS(rhs) {}
 
-  virtual void dumpToStream(raw_ostream &os) const;
+  void dumpToStream(raw_ostream &os) const override;
 
   const SymExpr *getRHS() const { return RHS; }
   const llvm::APSInt &getLHS() const { return LHS; }
@@ -420,20 +423,20 @@ public:
   static void Profile(llvm::FoldingSetNodeID& ID, const llvm::APSInt& lhs,
                       BinaryOperator::Opcode op, const SymExpr *rhs,
                       QualType t) {
-    ID.AddInteger((unsigned) IntSymKind);
+    ID.AddInteger((unsigned) IntSymExprKind);
     ID.AddPointer(&lhs);
     ID.AddInteger(op);
     ID.AddPointer(rhs);
     ID.Add(t);
   }
 
-  void Profile(llvm::FoldingSetNodeID& ID) {
+  void Profile(llvm::FoldingSetNodeID& ID) override {
     Profile(ID, LHS, getOpcode(), RHS, getType());
   }
 
   // Implement isa<T> support.
   static inline bool classof(const SymExpr *SE) {
-    return SE->getKind() == IntSymKind;
+    return SE->getKind() == IntSymExprKind;
   }
 };
 
@@ -445,29 +448,29 @@ class SymSymExpr : public BinarySymExpr {
 public:
   SymSymExpr(const SymExpr *lhs, BinaryOperator::Opcode op, const SymExpr *rhs,
              QualType t)
-    : BinarySymExpr(SymSymKind, op, t), LHS(lhs), RHS(rhs) {}
+    : BinarySymExpr(SymSymExprKind, op, t), LHS(lhs), RHS(rhs) {}
 
   const SymExpr *getLHS() const { return LHS; }
   const SymExpr *getRHS() const { return RHS; }
 
-  virtual void dumpToStream(raw_ostream &os) const;
+  void dumpToStream(raw_ostream &os) const override;
 
   static void Profile(llvm::FoldingSetNodeID& ID, const SymExpr *lhs,
                     BinaryOperator::Opcode op, const SymExpr *rhs, QualType t) {
-    ID.AddInteger((unsigned) SymSymKind);
+    ID.AddInteger((unsigned) SymSymExprKind);
     ID.AddPointer(lhs);
     ID.AddInteger(op);
     ID.AddPointer(rhs);
     ID.Add(t);
   }
 
-  void Profile(llvm::FoldingSetNodeID& ID) {
+  void Profile(llvm::FoldingSetNodeID& ID) override {
     Profile(ID, LHS, getOpcode(), RHS, getType());
   }
 
   // Implement isa<T> support.
   static inline bool classof(const SymExpr *SE) {
-    return SE->getKind() == SymSymKind;
+    return SE->getKind() == SymSymExprKind;
   }
 };
 
@@ -501,12 +504,12 @@ public:
                                       const LocationContext *LCtx,
                                       QualType T,
                                       unsigned VisitCount,
-                                      const void *SymbolTag = 0);
+                                      const void *SymbolTag = nullptr);
 
   const SymbolConjured* conjureSymbol(const Expr *E,
                                       const LocationContext *LCtx,
                                       unsigned VisitCount,
-                                      const void *SymbolTag = 0) {
+                                      const void *SymbolTag = nullptr) {
     return conjureSymbol(E, LCtx, E->getType(), VisitCount, SymbolTag);
   }
 
@@ -519,9 +522,9 @@ public:
   ///
   /// VisitCount can be used to differentiate regions corresponding to
   /// different loop iterations, thus, making the symbol path-dependent.
-  const SymbolMetadata* getMetadataSymbol(const MemRegion* R, const Stmt *S,
+  const SymbolMetadata *getMetadataSymbol(const MemRegion *R, const Stmt *S,
                                           QualType T, unsigned VisitCount,
-                                          const void *SymbolTag = 0);
+                                          const void *SymbolTag = nullptr);
 
   const SymbolCast* getCastSymbol(const SymExpr *Operand,
                                   QualType From, QualType To);
@@ -590,9 +593,7 @@ public:
   SymbolReaper(const StackFrameContext *Ctx, const Stmt *s, SymbolManager& symmgr,
                StoreManager &storeMgr)
    : LCtx(Ctx), Loc(s), SymMgr(symmgr),
-     reapedStore(0, storeMgr) {}
-
-  ~SymbolReaper() {}
+     reapedStore(nullptr, storeMgr) {}
 
   const LocationContext *getLocationContext() const { return LCtx; }
 
@@ -644,6 +645,7 @@ public:
   }
   
   void markLive(const MemRegion *region);
+  void markElementIndicesLive(const MemRegion *region);
   
   /// \brief Set to the value of the symbolic store after
   /// StoreManager::removeDeadBindings has been called.
@@ -655,14 +657,20 @@ private:
 };
 
 class SymbolVisitor {
+protected:
+  ~SymbolVisitor() = default;
+
 public:
+  SymbolVisitor() = default;
+  SymbolVisitor(const SymbolVisitor &) = default;
+  SymbolVisitor(SymbolVisitor &&) {}
+
   /// \brief A visitor method invoked by ProgramStateManager::scanReachableSymbols.
   ///
   /// The method returns \c true if symbols should continue be scanned and \c
   /// false otherwise.
   virtual bool VisitSymbol(SymbolRef sym) = 0;
   virtual bool VisitMemRegion(const MemRegion *region) { return true; }
-  virtual ~SymbolVisitor();
 };
 
 } // end GR namespace

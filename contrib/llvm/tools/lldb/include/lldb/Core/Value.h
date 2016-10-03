@@ -12,23 +12,21 @@
 
 // C Includes
 // C++ Includes
-#include <string>
 #include <vector>
+
 // Other libraries and framework includes
 // Project includes
 #include "lldb/lldb-private.h"
-#include "lldb/Core/ClangForward.h"
 #include "lldb/Core/DataBufferHeap.h"
 #include "lldb/Core/Error.h"
 #include "lldb/Core/Scalar.h"
-#include "lldb/Symbol/ClangASTType.h"
+#include "lldb/Symbol/CompilerType.h"
 
 namespace lldb_private {
 
 class Value
 {
 public:
-
     // Values Less than zero are an error, greater than or equal to zero
     // returns what the Scalar result is.
     enum ValueType
@@ -101,6 +99,7 @@ public:
         // Casts a vector, if valid, to an unsigned int of matching or largest supported size.
         // Truncates to the beginning of the vector if required.
         // Returns a default constructed Scalar if the Vector data is internally inconsistent.
+        llvm::APInt rhs = llvm::APInt(BITWIDTH_INT128, NUM_OF_WORDS_INT128, ((type128 *)bytes)->x);
         Scalar 
 		GetAsScalar() const 
 		{
@@ -111,11 +110,7 @@ public:
                 else if (length == 2) scalar = *(const uint16_t *)bytes;
                 else if (length == 4) scalar = *(const uint32_t *)bytes;
                 else if (length == 8) scalar = *(const uint64_t *)bytes;
-#if defined (ENABLE_128_BIT_SUPPORT)
-                else if (length >= 16) scalar = *(const __uint128_t *)bytes;
-#else
-                else if (length >= 16) scalar = *(const uint64_t *)bytes;
-#endif
+                else if (length >= 16) scalar = rhs;
             }
             return scalar;
         }
@@ -124,17 +119,23 @@ public:
     Value();
     Value(const Scalar& scalar);
     Value(const Vector& vector);
-    Value(const uint8_t *bytes, int len);
+    Value(const void *bytes, int len);
     Value(const Value &rhs);
     
+    void
+    SetBytes (const void *bytes, int len);
+    
+    void
+    AppendBytes (const void *bytes, int len);
+
     Value &
     operator=(const Value &rhs);
 
-    const ClangASTType &
-    GetClangType();
+    const CompilerType &
+    GetCompilerType();
     
     void
-    SetClangType (const ClangASTType &clang_type);
+    SetCompilerType (const CompilerType &compiler_type);
 
     ValueType
     GetValueType() const;
@@ -157,7 +158,7 @@ public:
     void
     ClearContext ()
     {
-        m_context = NULL;
+        m_context = nullptr;
         m_context_type = eContextTypeInvalid;
     }
 
@@ -232,8 +233,23 @@ public:
         return false;
     }
 
-    void
+    size_t
     ResizeData(size_t len);
+    
+    size_t
+    AppendDataToHostBuffer (const Value &rhs);
+
+    DataBufferHeap &
+    GetBuffer ()
+    {
+        return m_data_buffer;
+    }
+
+    const DataBufferHeap &
+    GetBuffer () const
+    {
+        return m_data_buffer;
+    }
 
     bool
     ValueOf(ExecutionContext *exe_ctx);
@@ -248,13 +264,13 @@ public:
     GetValueDefaultFormat ();
 
     uint64_t
-    GetValueByteSize (Error *error_ptr);
+    GetValueByteSize (Error *error_ptr, ExecutionContext *exe_ctx);
 
     Error
-    GetValueAsData (ExecutionContext *exe_ctx, 
-                    DataExtractor &data, 
-                    uint32_t data_offset,
-                    Module *module);     // Can be NULL
+    GetValueAsData(ExecutionContext *exe_ctx, 
+                   DataExtractor &data, 
+                   uint32_t data_offset,
+                   Module *module);     // Can be nullptr
 
     static const char *
     GetValueTypeAsCString (ValueType context_type);
@@ -271,7 +287,7 @@ public:
 protected:
     Scalar          m_value;
     Vector          m_vector;
-    ClangASTType    m_clang_type;
+    CompilerType    m_compiler_type;
     void *          m_context;
     ValueType       m_value_type;
     ContextType     m_context_type;
@@ -288,9 +304,7 @@ public:
 
     ValueList (const ValueList &rhs);
 
-    ~ValueList () 
-    {
-    }
+    ~ValueList() = default;
 
     const ValueList & operator= (const ValueList &rhs);
 
@@ -301,8 +315,6 @@ public:
     Value *GetValueAtIndex(size_t idx);
     void Clear();
 
-protected:
-
 private:
     typedef std::vector<Value> collection;
 
@@ -311,4 +323,4 @@ private:
 
 } // namespace lldb_private
 
-#endif  // liblldb_Value_h_
+#endif // liblldb_Value_h_

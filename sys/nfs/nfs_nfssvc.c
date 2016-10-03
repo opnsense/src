@@ -70,7 +70,7 @@ int (*nfsd_call_nfscl)(struct thread *, struct nfssvc_args *) = NULL;
 int (*nfsd_call_nfsd)(struct thread *, struct nfssvc_args *) = NULL;
 
 /*
- * Nfs server psuedo system call for the nfsd's
+ * Nfs server pseudo system call for the nfsd's
  */
 int
 sys_nfssvc(struct thread *td, struct nfssvc_args *uap)
@@ -123,7 +123,7 @@ nfssvc_modevent(module_t mod, int type, void *data)
 	switch (type) {
 	case MOD_LOAD:
 		error = syscall_register(&nfssvc_offset, &nfssvc_sysent,
-		    &nfssvc_prev_sysent);
+		    &nfssvc_prev_sysent, SY_THR_STATIC_KLD);
 		if (error)
 			break;
 		registered = 1;

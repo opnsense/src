@@ -54,7 +54,7 @@ counter_u64_fetch_inline(uint64_t *p)
 	int i;
 
 	r = 0;
-	for (i = 0; i < mp_ncpus; i++)
+	CPU_FOREACH(i)
 		r += counter_u64_read_one((uint64_t *)p, i);
 
 	return (r);
@@ -95,7 +95,7 @@ counter_u64_add(counter_u64_t c, int64_t inc)
 	    "bne-	1b"
 	    : "=&b" (ccpu), "=&r" (old)
 	    : "r" ((char *)c - (char *)&__pcpu[0]), "r" (inc)
-	    : "cc", "memory");
+	    : "cr0", "memory");
 }
 
 #else	/* !64bit */

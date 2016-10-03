@@ -18,6 +18,11 @@
 // Other libraries and framework includes
 #include "lldb/lldb-defines.h"
 #include "lldb/lldb-types.h"
+#include "lldb/Host/FileSpec.h"
+
+#include "lldb/Core/LoadedModuleInfoList.h"
+
+using lldb_private::LoadedModuleInfoList;
 
 namespace lldb_private {
 class Process;
@@ -142,18 +147,18 @@ public:
     /// This object is a rough analogue to the struct link_map object which
     /// actually lives in the inferiors memory.
     struct SOEntry {
-        lldb::addr_t link_addr; ///< Address of this link_map.
-        lldb::addr_t base_addr; ///< Base address of the loaded object.
-        lldb::addr_t path_addr; ///< String naming the shared object.
-        lldb::addr_t dyn_addr;  ///< Dynamic section of shared object.
-        lldb::addr_t next;      ///< Address of next so_entry.
-        lldb::addr_t prev;      ///< Address of previous so_entry.
-        std::string  path;      ///< File name of shared object.
+        lldb::addr_t link_addr;           ///< Address of this link_map.
+        lldb::addr_t base_addr;           ///< Base address of the loaded object.
+        lldb::addr_t path_addr;           ///< String naming the shared object.
+        lldb::addr_t dyn_addr;            ///< Dynamic section of shared object.
+        lldb::addr_t next;                ///< Address of next so_entry.
+        lldb::addr_t prev;                ///< Address of previous so_entry.
+        lldb_private::FileSpec file_spec; ///< File spec of shared object.
 
         SOEntry() { clear(); }
 
         bool operator ==(const SOEntry &entry) {
-            return this->path == entry.path;
+            return file_spec == entry.file_spec;
         }
 
         void clear() {
@@ -163,7 +168,7 @@ public:
             dyn_addr  = 0;
             next = 0;
             prev = 0;
-            path.clear();
+            file_spec.Clear();
         }
     };
 
@@ -190,8 +195,8 @@ public:
 protected:
     lldb_private::Process *m_process;
 
-    // Cached copy of executable pathname
-    char m_exe_path[PATH_MAX];
+    // Cached copy of executable file spec
+    lldb_private::FileSpec m_exe_file_spec;
 
     /// Location of the r_debug structure in the inferiors address space.
     lldb::addr_t m_rendezvous_addr;
@@ -199,6 +204,9 @@ protected:
     /// Current and previous snapshots of the rendezvous structure.
     Rendezvous m_current;
     Rendezvous m_previous;
+
+    /// List of currently loaded SO modules
+    LoadedModuleInfoList m_loaded_modules;
 
     /// List of SOEntry objects corresponding to the current link map state.
     SOEntryList m_soentries;
@@ -239,13 +247,32 @@ protected:
     /// Updates the current set of SOEntries, the set of added entries, and the
     /// set of removed entries.
     bool
-    UpdateSOEntries();
+    UpdateSOEntries(bool fromRemote = false);
 
     bool
-    UpdateSOEntriesForAddition();
+    FillSOEntryFromModuleInfo (LoadedModuleInfoList::LoadedModuleInfo const & modInfo,
+                               SOEntry &entry);
 
     bool
-    UpdateSOEntriesForDeletion();
+    SaveSOEntriesFromRemote(LoadedModuleInfoList &module_list);
+
+    bool
+    AddSOEntriesFromRemote(LoadedModuleInfoList &module_list);
+
+    bool
+    RemoveSOEntriesFromRemote(LoadedModuleInfoList &module_list);
+
+    bool
+    AddSOEntries();
+
+    bool
+    RemoveSOEntries();
+
+    void
+    UpdateBaseAddrIfNecessary(SOEntry &entry, std::string const &file_path);
+
+    bool
+    SOEntryIsMainExecutable(const SOEntry &entry);
 
     /// Reads the current list of shared objects according to the link map
     /// supplied by the runtime linker.

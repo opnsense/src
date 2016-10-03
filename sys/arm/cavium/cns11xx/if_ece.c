@@ -565,13 +565,15 @@ ece_free_desc_dma_tx(struct ece_softc *sc)
 		}
 	}
 
-	if (sc->dmamap_ring_tx) {
+	if (sc->ring_paddr_tx) {
 		bus_dmamap_unload(sc->dmatag_data_tx, sc->dmamap_ring_tx);
-		if (sc->desc_tx) {
-			bus_dmamem_free(sc->dmatag_data_tx,
-			    sc->desc_tx, sc->dmamap_ring_tx);
-		}
-		sc->dmamap_ring_tx = 0;
+		sc->ring_paddr_tx = 0;
+	}
+
+	if (sc->desc_tx) {
+		bus_dmamem_free(sc->dmatag_data_tx,
+		    sc->desc_tx, sc->dmamap_ring_tx);
+		sc->desc_tx = NULL;
 	}
 
 	if (sc->dmatag_data_tx) {
@@ -679,18 +681,24 @@ ece_free_desc_dma_rx(struct ece_softc *sc)
 	for (i = 0; i < ECE_MAX_RX_BUFFERS; i++) {
 		if (sc->rx_desc[i].buff) {
 			m_freem(sc->rx_desc[i].buff);
-			sc->rx_desc[i].buff= 0;
+			sc->rx_desc[i].buff = NULL;
 		}
 	}
 
-	if (sc->dmatag_data_rx) {
+	if (sc->ring_paddr_rx) {
 		bus_dmamap_unload(sc->dmatag_data_rx, sc->dmamap_ring_rx);
+		sc->ring_paddr_rx = 0;
+	}
+
+	if (sc->desc_rx) {
 		bus_dmamem_free(sc->dmatag_data_rx, sc->desc_rx,
 		    sc->dmamap_ring_rx);
+		sc->desc_rx = NULL;
+	}
+
+	if (sc->dmatag_data_rx) {
 		bus_dma_tag_destroy(sc->dmatag_data_rx);
-		sc->dmatag_data_rx = 0;
-		sc->dmamap_ring_rx = 0;
-		sc->desc_rx = 0;
+		sc->dmatag_data_rx = NULL;
 	}
 
 	if (sc->dmatag_ring_rx) {
@@ -699,7 +707,7 @@ ece_free_desc_dma_rx(struct ece_softc *sc)
 			    sc->rx_desc[i].dmamap);
 		bus_dmamap_destroy(sc->dmatag_ring_rx, sc->rx_sparemap);
 		bus_dma_tag_destroy(sc->dmatag_ring_rx);
-		sc->dmatag_ring_rx = 0;
+		sc->dmatag_ring_rx = NULL;
 	}
 }
 
@@ -1056,8 +1064,8 @@ clear_mac_entries(struct ece_softc *ec, int include_this_mac)
 	struct mac_list * current;
 	char mac[ETHER_ADDR_LEN];
 
-	current = 0;
-	mac_list_header = 0;
+	current = NULL;
+	mac_list_header = NULL;
 
 	table_end = read_mac_entry(ec, mac, 1);
 	while (!table_end) {
@@ -1371,7 +1379,7 @@ ece_intr_rx_locked(struct ece_softc *sc, int count)
 		if (desc->length < ETHER_MIN_LEN - ETHER_CRC_LEN ||
 		    desc->length > ETHER_MAX_LEN - ETHER_CRC_LEN +
 		    ETHER_VLAN_ENCAP_LEN) {
-			ifp->if_ierrors++;
+			if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 			desc->cown = 0;
 			desc->length = MCLBYTES - 2;
 			/* Invalid packet, skip and process next
@@ -1381,7 +1389,7 @@ ece_intr_rx_locked(struct ece_softc *sc, int count)
 		}
 
 		if (ece_new_rxbuf(sc, rxdesc) != 0) {
-			ifp->if_iqdrops++;
+			if_inc_counter(ifp, IFCOUNTER_IQDROPS, 1);
 			desc->cown = 0;
 			desc->length = MCLBYTES - 2;
 			break;
@@ -1470,7 +1478,7 @@ ece_intr_status(void *xsc)
 
 	if ((ifp->if_drv_flags & IFF_DRV_RUNNING) != 0) {
 		if ((stat & ERROR_MASK) != 0)
-			ifp->if_iqdrops++;
+			if_inc_counter(ifp, IFCOUNTER_IQDROPS, 1);
 	}
 }
 
@@ -1600,7 +1608,7 @@ ece_encap(struct ece_softc *sc, struct mbuf *m0)
 	struct ifnet *ifp;
 	bus_dma_segment_t segs[MAX_FRAGMENT];
 	bus_dmamap_t mapp;
-	eth_tx_desc_t *desc = 0;
+	eth_tx_desc_t *desc = NULL;
 	int csum_flags;
 	int desc_no;
 	int error;
@@ -1677,7 +1685,7 @@ ece_encap(struct ece_softc *sc, struct mbuf *m0)
 
 	/*
 	 * After all descriptors are set, we set the flags to start the
-	 * sending proces.
+	 * sending process.
 	 */
 	for (seg = 0; seg < nsegs; seg++) {
 		desc->cown = 0;

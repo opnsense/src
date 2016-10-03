@@ -31,7 +31,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd September 14, 2015
+.Dd May 31, 2016
 .Dt ZFS 8
 .Os
 .Sh NAME
@@ -272,8 +272,10 @@
 .Ar tag snapshot Ns ...
 .Nm
 .Cm holds
-.Op Fl r
-.Ar snapshot Ns ...
+.Op Fl Hp
+.Op Fl r Ns | Ns Fl d Ar depth
+.Ar filesystem Ns | Ns Ar volume Ns | Ns Ar snapshot Ns
+.Ns ...
 .Nm
 .Cm release
 .Op Fl r
@@ -938,7 +940,7 @@ command or unmounted by the
 command.
 .Pp
 This property is not inherited.
-.It Sy checksum Ns = Ns Cm on | off | fletcher2 | fletcher4 | sha256 | noparity
+.It Sy checksum Ns = Ns Cm on | off | fletcher2 | fletcher4 | sha256 | noparity | sha512 | skein
 Controls the checksum used to verify data integrity. The default value is
 .Cm on ,
 which automatically selects an appropriate algorithm (currently,
@@ -955,6 +957,16 @@ not be used by any other dataset.
 Disabling checksums is
 .Em NOT
 a recommended practice.
+The
+.Sy sha512 ,
+and
+.Sy skein
+checksum algorithms require enabling the appropriate features on the pool.
+Please see
+.Xr zpool-features 7
+for more information on these algorithms.
+.Pp
+Changing this property affects only newly-written data.
 .It Sy compression Ns = Ns Cm on | off | lzjb | gzip | gzip- Ns Ar N | Cm zle | Cm lz4
 Controls the compression algorithm used for this dataset.
 Setting compression to
@@ -1034,7 +1046,7 @@ Changing this property only affects newly-written data. Therefore, set this
 property at file system creation time by using the
 .Fl o Cm copies= Ns Ar N
 option.
-.It Sy dedup Ns = Ns Cm on | off | verify | sha256 Ns Op Cm ,verify
+.It Sy dedup Ns = Ns Cm on | off | verify | sha256 Ns Oo Cm ,verify Oc | Sy sha512 Ns Oo Cm ,verify Oc | Sy skein Ns Oo Cm ,verify Oc
 Configures deduplication for a dataset. The default value is
 .Cm off .
 The default deduplication checksum is
@@ -2839,8 +2851,11 @@ Do not actually receive the stream. This can be useful in conjunction with the
 option to verify the name the receive operation would use.
 .It Fl o Sy origin Ns = Ns Ar snapshot
 Forces the stream to be received as a clone of the given snapshot.
-This is only valid if the stream is an incremental stream whose source
-is the same as the provided origin.
+If the stream is a full send stream, this will create the filesystem
+described by the stream as a clone of the specified snapshot. Which
+snapshot was specified will not affect the success or failure of the
+receive, as long as the snapshot does exist.  If the stream is an
+incremental send stream, all the normal verification will be performed.
 .It Fl F
 Force a rollback of the file system to the most recent snapshot before
 performing the receive operation. If receiving an incremental replication
@@ -3159,15 +3174,26 @@ snapshots of all descendent file systems.
 .It Xo
 .Nm
 .Cm holds
-.Op Fl r
-.Ar snapshot Ns ...
+.Op Fl Hp
+.Op Fl r Ns | Ns Fl d Ar depth
+.Ar filesystem Ns | Ns Ar volume Ns | Ns Ar snapshot Ns
+.Ns ...
 .Xc
 .Pp
-Lists all existing user references for the given snapshot or snapshots.
+Lists all existing user references for the given dataset or datasets.
 .Bl -tag -width indent
+.It Fl H
+Used for scripting mode. Do not print headers and separate fields by a single
+tab instead of arbitrary white space.
+.It Fl p
+Display numbers in parsable (exact) values.
 .It Fl r
-Lists the holds that are set on the named descendent snapshots, in addition to
-listing the holds on the named snapshot.
+Lists the holds that are set on the descendent snapshots of the named datasets
+or snapshots, in addition to listing the holds on the named snapshots, if any.
+.It Fl d Ar depth
+Recursively display any holds on the named snapshots, or descendent snapshots of
+the named datasets or snapshots, limiting the recursion to
+.Ar depth .
 .El
 .It Xo
 .Nm

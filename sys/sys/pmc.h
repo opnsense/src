@@ -94,13 +94,28 @@
 	__PMC_CPU(INTEL_ATOM_SILVERMONT, 0x92,	"Intel Atom Silvermont")    \
 	__PMC_CPU(INTEL_NEHALEM_EX, 0x93,   "Intel Nehalem Xeon 7500")	\
 	__PMC_CPU(INTEL_WESTMERE_EX, 0x94,   "Intel Westmere Xeon E7")	\
-        __PMC_CPU(INTEL_HASWELL_XEON, 0x95,   "Intel Haswell Xeon E5 v3") \
+	__PMC_CPU(INTEL_HASWELL_XEON, 0x95,   "Intel Haswell Xeon E5 v3") \
+	__PMC_CPU(INTEL_BROADWELL, 0x96,   "Intel Broadwell") \
+	__PMC_CPU(INTEL_BROADWELL_XEON, 0x97,   "Intel Broadwell Xeon") \
+	__PMC_CPU(INTEL_SKYLAKE, 0x98,   "Intel Skylake")		\
+	__PMC_CPU(INTEL_SKYLAKE_XEON, 0x99,   "Intel Skylake Xeon")	\
 	__PMC_CPU(INTEL_XSCALE,	0x100,	"Intel XScale")		\
 	__PMC_CPU(MIPS_24K,     0x200,  "MIPS 24K")		\
 	__PMC_CPU(MIPS_OCTEON,  0x201,  "Cavium Octeon")	\
+	__PMC_CPU(MIPS_74K,     0x202,  "MIPS 74K")		\
 	__PMC_CPU(PPC_7450,     0x300,  "PowerPC MPC7450")	\
+	__PMC_CPU(PPC_E500,     0x340,  "PowerPC e500 Core")	\
+	__PMC_CPU(PPC_MPC85XX,  0x340,  "Freescale PowerPC MPC85XX")	\
 	__PMC_CPU(PPC_970,      0x380,  "IBM PowerPC 970")	\
-	__PMC_CPU(GENERIC, 	0x400,  "Generic")
+	__PMC_CPU(GENERIC, 	0x400,  "Generic")		\
+	__PMC_CPU(ARMV7_CORTEX_A5,	0x500,	"ARMv7 Cortex A5")	\
+	__PMC_CPU(ARMV7_CORTEX_A7,	0x501,	"ARMv7 Cortex A7")	\
+	__PMC_CPU(ARMV7_CORTEX_A8,	0x502,	"ARMv7 Cortex A8")	\
+	__PMC_CPU(ARMV7_CORTEX_A9,	0x503,	"ARMv7 Cortex A9")	\
+	__PMC_CPU(ARMV7_CORTEX_A15,	0x504,	"ARMv7 Cortex A15")	\
+	__PMC_CPU(ARMV7_CORTEX_A17,	0x505,	"ARMv7 Cortex A17")	\
+	__PMC_CPU(ARMV8_CORTEX_A53,	0x600,	"ARMv8 Cortex A53")	\
+	__PMC_CPU(ARMV8_CORTEX_A57,	0x601,	"ARMv8 Cortex A57")
 
 enum pmc_cputype {
 #undef	__PMC_CPU
@@ -116,31 +131,35 @@ enum pmc_cputype {
  */
 
 #define	__PMC_CLASSES()							\
-	__PMC_CLASS(TSC)	/* CPU Timestamp counter */		\
-	__PMC_CLASS(K7)		/* AMD K7 performance counters */	\
-	__PMC_CLASS(K8)		/* AMD K8 performance counters */	\
-	__PMC_CLASS(P5)		/* Intel Pentium counters */		\
-	__PMC_CLASS(P6)		/* Intel Pentium Pro counters */	\
-	__PMC_CLASS(P4)		/* Intel Pentium-IV counters */		\
-	__PMC_CLASS(IAF)	/* Intel Core2/Atom, fixed function */	\
-	__PMC_CLASS(IAP)	/* Intel Core...Atom, programmable */	\
-	__PMC_CLASS(UCF)	/* Intel Uncore fixed function */	\
-	__PMC_CLASS(UCP)	/* Intel Uncore programmable */		\
-	__PMC_CLASS(XSCALE)	/* Intel XScale counters */		\
-	__PMC_CLASS(MIPS24K)	/* MIPS 24K */				\
-	__PMC_CLASS(OCTEON)	/* Cavium Octeon */			\
-	__PMC_CLASS(PPC7450)	/* Motorola MPC7450 class */		\
-	__PMC_CLASS(PPC970)	/* IBM PowerPC 970 class */		\
-	__PMC_CLASS(SOFT)	/* Software events */
+	__PMC_CLASS(TSC,	0x00,	"CPU Timestamp counter")	\
+	__PMC_CLASS(K7,		0x01,	"AMD K7 performance counters")	\
+	__PMC_CLASS(K8,		0x02,	"AMD K8 performance counters")	\
+	__PMC_CLASS(P5,		0x03,	"Intel Pentium counters")	\
+	__PMC_CLASS(P6,		0x04,	"Intel Pentium Pro counters")	\
+	__PMC_CLASS(P4,		0x05,	"Intel Pentium-IV counters")	\
+	__PMC_CLASS(IAF,	0x06,	"Intel Core2/Atom, fixed function") \
+	__PMC_CLASS(IAP,	0x07,	"Intel Core...Atom, programmable") \
+	__PMC_CLASS(UCF,	0x08,	"Intel Uncore fixed function")	\
+	__PMC_CLASS(UCP,	0x09,	"Intel Uncore programmable")	\
+	__PMC_CLASS(XSCALE,	0x0A,	"Intel XScale counters")	\
+	__PMC_CLASS(MIPS24K,	0x0B,	"MIPS 24K")			\
+	__PMC_CLASS(OCTEON,	0x0C,	"Cavium Octeon")		\
+	__PMC_CLASS(PPC7450,	0x0D,	"Motorola MPC7450 class")	\
+	__PMC_CLASS(PPC970,	0x0E,	"IBM PowerPC 970 class")	\
+	__PMC_CLASS(SOFT,	0x0F,	"Software events")		\
+	__PMC_CLASS(ARMV7,	0x10,	"ARMv7")			\
+	__PMC_CLASS(ARMV8,	0x11,	"ARMv8")			\
+	__PMC_CLASS(MIPS74K,	0x12,	"MIPS 74K")			\
+	__PMC_CLASS(E500,	0x13,	"Freescale e500 class")
 
 enum pmc_class {
 #undef  __PMC_CLASS
-#define	__PMC_CLASS(N)	PMC_CLASS_##N ,
+#define	__PMC_CLASS(S,V,D)	PMC_CLASS_##S = V,
 	__PMC_CLASSES()
 };
 
 #define	PMC_CLASS_FIRST	PMC_CLASS_TSC
-#define	PMC_CLASS_LAST	PMC_CLASS_SOFT
+#define	PMC_CLASS_LAST	PMC_CLASS_E500
 
 /*
  * A PMC can be in the following states:
@@ -264,7 +283,7 @@ enum pmc_disp {
 	__PMC_CAP(THRESHOLD,	4, "ignore events below a threshold")	\
 	__PMC_CAP(READ,		5, "read PMC counter")			\
 	__PMC_CAP(WRITE,	6, "reprogram PMC counter")		\
-	__PMC_CAP(INVERT,	7, "invert comparision sense")		\
+	__PMC_CAP(INVERT,	7, "invert comparison sense")		\
 	__PMC_CAP(QUALIFIER,	8, "further qualify monitored events")	\
 	__PMC_CAP(PRECISE,	9, "perform precise sampling")		\
 	__PMC_CAP(TAGGING,	10, "tag upstream events")		\
@@ -568,7 +587,7 @@ struct pmc_op_writelog {
 /*
  * OP GETMSR
  *
- * Retrieve the machine specific address assoicated with the allocated
+ * Retrieve the machine specific address associated with the allocated
  * PMC.  This number can be used subsequently with a read-performance-counter
  * instruction.
  */
@@ -1014,7 +1033,7 @@ extern struct pmc_debugflags pmc_debugflags;
 #define	KTR_PMC			KTR_SUBSYS
 
 #define	PMC_DEBUG_STRSIZE		128
-#define	PMC_DEBUG_DEFAULT_FLAGS		{ 0, 0, 0, 0, 0, 0, 0, 0 }
+#define	PMC_DEBUG_DEFAULT_FLAGS		{ 0, 0, 0, 0, 0, 0, 0, 0, 0 }
 
 #define	PMCDBG0(M, N, L, F) do {					\
 	if (pmc_debugflags.pdb_ ## M & (1 << PMC_DEBUG_MIN_ ## N))	\

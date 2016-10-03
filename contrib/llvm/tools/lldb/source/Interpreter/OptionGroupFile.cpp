@@ -30,8 +30,9 @@ OptionGroupFile::OptionGroupFile (uint32_t usage_mask,
     m_option_definition.required = required;
     m_option_definition.long_option = long_option;
     m_option_definition.short_option = short_option;
+    m_option_definition.validator = nullptr;
     m_option_definition.option_has_arg = OptionParser::eRequiredArgument;
-    m_option_definition.enum_values = NULL;
+    m_option_definition.enum_values = nullptr;
     m_option_definition.completion_type = completion_type;
     m_option_definition.argument_type = argument_type;
     m_option_definition.usage_text = usage_text;
@@ -46,7 +47,7 @@ OptionGroupFile::SetOptionValue (CommandInterpreter &interpreter,
                                  uint32_t option_idx,
                                  const char *option_arg)
 {
-    Error error (m_file.SetValueFromCString (option_arg));
+    Error error (m_file.SetValueFromString (option_arg));
     return error;
 }
 
@@ -70,8 +71,9 @@ OptionGroupFileList::OptionGroupFileList (uint32_t usage_mask,
     m_option_definition.required = required;
     m_option_definition.long_option = long_option;
     m_option_definition.short_option = short_option;
+    m_option_definition.validator = nullptr;
     m_option_definition.option_has_arg = OptionParser::eRequiredArgument;
-    m_option_definition.enum_values = NULL;
+    m_option_definition.enum_values = nullptr;
     m_option_definition.completion_type = completion_type;
     m_option_definition.argument_type = argument_type;
     m_option_definition.usage_text = usage_text;
@@ -86,7 +88,7 @@ OptionGroupFileList::SetOptionValue (CommandInterpreter &interpreter,
                                      uint32_t option_idx,
                                      const char *option_arg)
 {
-    Error error (m_file_list.SetValueFromCString (option_arg));
+    Error error (m_file_list.SetValueFromString (option_arg));
     return error;
 }
 

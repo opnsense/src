@@ -13,16 +13,20 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Utils/ValueMapper.h"
+#include "llvm/IR/CallSite.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Metadata.h"
+#include "llvm/IR/Operator.h"
 using namespace llvm;
 
 // Out of line method to get vtable etc for class.
 void ValueMapTypeRemapper::anchor() {}
 void ValueMaterializer::anchor() {}
+void ValueMaterializer::materializeInitFor(GlobalValue *New, GlobalValue *Old) {
+}
 
 Value *llvm::MapValue(const Value *V, ValueToValueMapTy &VM, RemapFlags Flags,
                       ValueMapTypeRemapper *TypeMapper,
@@ -34,15 +38,28 @@ Value *llvm::MapValue(const Value *V, ValueToValueMapTy &VM, RemapFlags Flags,
   
   // If we have a materializer and it can materialize a value, use that.
   if (Materializer) {
-    if (Value *NewV = Materializer->materializeValueFor(const_cast<Value*>(V)))
-      return VM[V] = NewV;
+    if (Value *NewV =
+            Materializer->materializeDeclFor(const_cast<Value *>(V))) {
+      VM[V] = NewV;
+      if (auto *NewGV = dyn_cast<GlobalValue>(NewV))
+        Materializer->materializeInitFor(
+            NewGV, const_cast<GlobalValue *>(cast<GlobalValue>(V)));
+      return NewV;
+    }
   }
 
   // Global values do not need to be seeded into the VM if they
   // are using the identity mapping.
-  if (isa<GlobalValue>(V) || isa<MDString>(V))
+  if (isa<GlobalValue>(V)) {
+    if (Flags & RF_NullMapMissingGlobalValues) {
+      assert(!(Flags & RF_IgnoreMissingEntries) &&
+             "Illegal to specify both RF_NullMapMissingGlobalValues and "
+             "RF_IgnoreMissingEntries");
+      return nullptr;
+    }
     return VM[V] = const_cast<Value*>(V);
-  
+  }
+
   if (const InlineAsm *IA = dyn_cast<InlineAsm>(V)) {
     // Inline asm may need *type* remapping.
     FunctionType *NewTy = IA->getFunctionType();
@@ -56,64 +73,32 @@ Value *llvm::MapValue(const Value *V, ValueToValueMapTy &VM, RemapFlags Flags,
     
     return VM[V] = const_cast<Value*>(V);
   }
-  
 
-  if (const MDNode *MD = dyn_cast<MDNode>(V)) {
+  if (const auto *MDV = dyn_cast<MetadataAsValue>(V)) {
+    const Metadata *MD = MDV->getMetadata();
     // If this is a module-level metadata and we know that nothing at the module
     // level is changing, then use an identity mapping.
-    if (!MD->isFunctionLocal() && (Flags & RF_NoModuleLevelChanges))
-      return VM[V] = const_cast<Value*>(V);
-    
-    // Create a dummy node in case we have a metadata cycle.
-    MDNode *Dummy = MDNode::getTemporary(V->getContext(), None);
-    VM[V] = Dummy;
-    
-    // Check all operands to see if any need to be remapped.
-    for (unsigned i = 0, e = MD->getNumOperands(); i != e; ++i) {
-      Value *OP = MD->getOperand(i);
-      if (OP == 0) continue;
-      Value *Mapped_OP = MapValue(OP, VM, Flags, TypeMapper, Materializer);
-      // Use identity map if Mapped_Op is null and we can ignore missing
-      // entries.
-      if (Mapped_OP == OP ||
-          (Mapped_OP == 0 && (Flags & RF_IgnoreMissingEntries)))
-        continue;
+    if (!isa<LocalAsMetadata>(MD) && (Flags & RF_NoModuleLevelChanges))
+      return VM[V] = const_cast<Value *>(V);
 
-      // Ok, at least one operand needs remapping.  
-      SmallVector<Value*, 4> Elts;
-      Elts.reserve(MD->getNumOperands());
-      for (i = 0; i != e; ++i) {
-        Value *Op = MD->getOperand(i);
-        if (Op == 0)
-          Elts.push_back(0);
-        else {
-          Value *Mapped_Op = MapValue(Op, VM, Flags, TypeMapper, Materializer);
-          // Use identity map if Mapped_Op is null and we can ignore missing
-          // entries.
-          if (Mapped_Op == 0 && (Flags & RF_IgnoreMissingEntries))
-            Mapped_Op = Op;
-          Elts.push_back(Mapped_Op);
-        }
-      }
-      MDNode *NewMD = MDNode::get(V->getContext(), Elts);
-      Dummy->replaceAllUsesWith(NewMD);
-      VM[V] = NewMD;
-      MDNode::deleteTemporary(Dummy);
-      return NewMD;
-    }
+    auto *MappedMD = MapMetadata(MD, VM, Flags, TypeMapper, Materializer);
+    if (MD == MappedMD || (!MappedMD && (Flags & RF_IgnoreMissingEntries)))
+      return VM[V] = const_cast<Value *>(V);
 
-    VM[V] = const_cast<Value*>(V);
-    MDNode::deleteTemporary(Dummy);
-
-    // No operands needed remapping.  Use an identity mapping.
-    return const_cast<Value*>(V);
+    // FIXME: This assert crashes during bootstrap, but I think it should be
+    // correct.  For now, just match behaviour from before the metadata/value
+    // split.
+    //
+    //    assert((MappedMD || (Flags & RF_NullMapMissingGlobalValues)) &&
+    //           "Referenced metadata value not in value map");
+    return VM[V] = MetadataAsValue::get(V->getContext(), MappedMD);
   }
 
   // Okay, this either must be a constant (which may or may not be mappable) or
   // is something that is not in the mapping table.
   Constant *C = const_cast<Constant*>(dyn_cast<Constant>(V));
-  if (C == 0)
-    return 0;
+  if (!C)
+    return nullptr;
   
   if (BlockAddress *BA = dyn_cast<BlockAddress>(C)) {
     Function *F = 
@@ -126,7 +111,7 @@ Value *llvm::MapValue(const Value *V, ValueToValueMapTy &VM, RemapFlags Flags,
   // Otherwise, we have some other constant to remap.  Start by checking to see
   // if all operands have an identity remapping.
   unsigned OpNo = 0, NumOperands = C->getNumOperands();
-  Value *Mapped = 0;
+  Value *Mapped = nullptr;
   for (; OpNo != NumOperands; ++OpNo) {
     Value *Op = C->getOperand(OpNo);
     Mapped = MapValue(Op, VM, Flags, TypeMapper, Materializer);
@@ -159,9 +144,13 @@ Value *llvm::MapValue(const Value *V, ValueToValueMapTy &VM, RemapFlags Flags,
       Ops.push_back(MapValue(cast<Constant>(C->getOperand(OpNo)), VM,
                              Flags, TypeMapper, Materializer));
   }
-  
+  Type *NewSrcTy = nullptr;
+  if (TypeMapper)
+    if (auto *GEPO = dyn_cast<GEPOperator>(C))
+      NewSrcTy = TypeMapper->remapType(GEPO->getSourceElementType());
+
   if (ConstantExpr *CE = dyn_cast<ConstantExpr>(C))
-    return VM[V] = CE->getWithOperands(Ops, NewTy);
+    return VM[V] = CE->getWithOperands(Ops, NewTy, false, NewSrcTy);
   if (isa<ConstantArray>(C))
     return VM[V] = ConstantArray::get(cast<ArrayType>(NewTy), Ops);
   if (isa<ConstantStruct>(C))
@@ -177,6 +166,267 @@ Value *llvm::MapValue(const Value *V, ValueToValueMapTy &VM, RemapFlags Flags,
   return VM[V] = ConstantPointerNull::get(cast<PointerType>(NewTy));
 }
 
+static Metadata *mapToMetadata(ValueToValueMapTy &VM, const Metadata *Key,
+                               Metadata *Val, ValueMaterializer *Materializer,
+                               RemapFlags Flags) {
+  VM.MD()[Key].reset(Val);
+  if (Materializer && !(Flags & RF_HaveUnmaterializedMetadata)) {
+    auto *N = dyn_cast_or_null<MDNode>(Val);
+    // Need to invoke this once we have non-temporary MD.
+    if (!N || !N->isTemporary())
+      Materializer->replaceTemporaryMetadata(Key, Val);
+  }
+  return Val;
+}
+
+static Metadata *mapToSelf(ValueToValueMapTy &VM, const Metadata *MD,
+                           ValueMaterializer *Materializer, RemapFlags Flags) {
+  return mapToMetadata(VM, MD, const_cast<Metadata *>(MD), Materializer, Flags);
+}
+
+static Metadata *MapMetadataImpl(const Metadata *MD,
+                                 SmallVectorImpl<MDNode *> &DistinctWorklist,
+                                 ValueToValueMapTy &VM, RemapFlags Flags,
+                                 ValueMapTypeRemapper *TypeMapper,
+                                 ValueMaterializer *Materializer);
+
+static Metadata *mapMetadataOp(Metadata *Op,
+                               SmallVectorImpl<MDNode *> &DistinctWorklist,
+                               ValueToValueMapTy &VM, RemapFlags Flags,
+                               ValueMapTypeRemapper *TypeMapper,
+                               ValueMaterializer *Materializer) {
+  if (!Op)
+    return nullptr;
+
+  if (Materializer && !Materializer->isMetadataNeeded(Op))
+    return nullptr;
+
+  if (Metadata *MappedOp = MapMetadataImpl(Op, DistinctWorklist, VM, Flags,
+                                           TypeMapper, Materializer))
+    return MappedOp;
+  // Use identity map if MappedOp is null and we can ignore missing entries.
+  if (Flags & RF_IgnoreMissingEntries)
+    return Op;
+
+  // FIXME: This assert crashes during bootstrap, but I think it should be
+  // correct.  For now, just match behaviour from before the metadata/value
+  // split.
+  //
+  //    assert((Flags & RF_NullMapMissingGlobalValues) &&
+  //           "Referenced metadata not in value map!");
+  return nullptr;
+}
+
+/// Resolve uniquing cycles involving the given metadata.
+static void resolveCycles(Metadata *MD, bool AllowTemps) {
+  if (auto *N = dyn_cast_or_null<MDNode>(MD)) {
+    if (AllowTemps && N->isTemporary())
+      return;
+    if (!N->isResolved()) {
+      if (AllowTemps)
+        // Note that this will drop RAUW support on any temporaries, which
+        // blocks uniquing. If this ends up being an issue, in the future
+        // we can experiment with delaying resolving these nodes until
+        // after metadata is fully materialized (i.e. when linking metadata
+        // as a postpass after function importing).
+        N->resolveNonTemporaries();
+      else
+        N->resolveCycles();
+    }
+  }
+}
+
+/// Remap the operands of an MDNode.
+///
+/// If \c Node is temporary, uniquing cycles are ignored.  If \c Node is
+/// distinct, uniquing cycles are resolved as they're found.
+///
+/// \pre \c Node.isDistinct() or \c Node.isTemporary().
+static bool remapOperands(MDNode &Node,
+                          SmallVectorImpl<MDNode *> &DistinctWorklist,
+                          ValueToValueMapTy &VM, RemapFlags Flags,
+                          ValueMapTypeRemapper *TypeMapper,
+                          ValueMaterializer *Materializer) {
+  assert(!Node.isUniqued() && "Expected temporary or distinct node");
+  const bool IsDistinct = Node.isDistinct();
+
+  bool AnyChanged = false;
+  for (unsigned I = 0, E = Node.getNumOperands(); I != E; ++I) {
+    Metadata *Old = Node.getOperand(I);
+    Metadata *New = mapMetadataOp(Old, DistinctWorklist, VM, Flags, TypeMapper,
+                                  Materializer);
+    if (Old != New) {
+      AnyChanged = true;
+      Node.replaceOperandWith(I, New);
+
+      // Resolve uniquing cycles underneath distinct nodes on the fly so they
+      // don't infect later operands.
+      if (IsDistinct)
+        resolveCycles(New, Flags & RF_HaveUnmaterializedMetadata);
+    }
+  }
+
+  return AnyChanged;
+}
+
+/// Map a distinct MDNode.
+///
+/// Whether distinct nodes change is independent of their operands.  If \a
+/// RF_MoveDistinctMDs, then they are reused, and their operands remapped in
+/// place; effectively, they're moved from one graph to another.  Otherwise,
+/// they're cloned/duplicated, and the new copy's operands are remapped.
+static Metadata *mapDistinctNode(const MDNode *Node,
+                                 SmallVectorImpl<MDNode *> &DistinctWorklist,
+                                 ValueToValueMapTy &VM, RemapFlags Flags,
+                                 ValueMapTypeRemapper *TypeMapper,
+                                 ValueMaterializer *Materializer) {
+  assert(Node->isDistinct() && "Expected distinct node");
+
+  MDNode *NewMD;
+  if (Flags & RF_MoveDistinctMDs)
+    NewMD = const_cast<MDNode *>(Node);
+  else
+    NewMD = MDNode::replaceWithDistinct(Node->clone());
+
+  // Remap operands later.
+  DistinctWorklist.push_back(NewMD);
+  return mapToMetadata(VM, Node, NewMD, Materializer, Flags);
+}
+
+/// \brief Map a uniqued MDNode.
+///
+/// Uniqued nodes may not need to be recreated (they may map to themselves).
+static Metadata *mapUniquedNode(const MDNode *Node,
+                                SmallVectorImpl<MDNode *> &DistinctWorklist,
+                                ValueToValueMapTy &VM, RemapFlags Flags,
+                                ValueMapTypeRemapper *TypeMapper,
+                                ValueMaterializer *Materializer) {
+  assert(((Flags & RF_HaveUnmaterializedMetadata) || Node->isUniqued()) &&
+         "Expected uniqued node");
+
+  // Create a temporary node and map it upfront in case we have a uniquing
+  // cycle.  If necessary, this mapping will get updated by RAUW logic before
+  // returning.
+  auto ClonedMD = Node->clone();
+  mapToMetadata(VM, Node, ClonedMD.get(), Materializer, Flags);
+  if (!remapOperands(*ClonedMD, DistinctWorklist, VM, Flags, TypeMapper,
+                     Materializer)) {
+    // No operands changed, so use the original.
+    ClonedMD->replaceAllUsesWith(const_cast<MDNode *>(Node));
+    // Even though replaceAllUsesWith would have replaced the value map
+    // entry, we need to explictly map with the final non-temporary node
+    // to replace any temporary metadata via the callback.
+    return mapToSelf(VM, Node, Materializer, Flags);
+  }
+
+  // Uniquify the cloned node. Explicitly map it with the final non-temporary
+  // node so that replacement of temporary metadata via the callback occurs.
+  return mapToMetadata(VM, Node,
+                       MDNode::replaceWithUniqued(std::move(ClonedMD)),
+                       Materializer, Flags);
+}
+
+static Metadata *MapMetadataImpl(const Metadata *MD,
+                                 SmallVectorImpl<MDNode *> &DistinctWorklist,
+                                 ValueToValueMapTy &VM, RemapFlags Flags,
+                                 ValueMapTypeRemapper *TypeMapper,
+                                 ValueMaterializer *Materializer) {
+  // If the value already exists in the map, use it.
+  if (Metadata *NewMD = VM.MD().lookup(MD).get())
+    return NewMD;
+
+  if (isa<MDString>(MD))
+    return mapToSelf(VM, MD, Materializer, Flags);
+
+  if (isa<ConstantAsMetadata>(MD))
+    if ((Flags & RF_NoModuleLevelChanges))
+      return mapToSelf(VM, MD, Materializer, Flags);
+
+  if (const auto *VMD = dyn_cast<ValueAsMetadata>(MD)) {
+    Value *MappedV =
+        MapValue(VMD->getValue(), VM, Flags, TypeMapper, Materializer);
+    if (VMD->getValue() == MappedV ||
+        (!MappedV && (Flags & RF_IgnoreMissingEntries)))
+      return mapToSelf(VM, MD, Materializer, Flags);
+
+    // FIXME: This assert crashes during bootstrap, but I think it should be
+    // correct.  For now, just match behaviour from before the metadata/value
+    // split.
+    //
+    //    assert((MappedV || (Flags & RF_NullMapMissingGlobalValues)) &&
+    //           "Referenced metadata not in value map!");
+    if (MappedV)
+      return mapToMetadata(VM, MD, ValueAsMetadata::get(MappedV), Materializer,
+                           Flags);
+    return nullptr;
+  }
+
+  // Note: this cast precedes the Flags check so we always get its associated
+  // assertion.
+  const MDNode *Node = cast<MDNode>(MD);
+
+  // If this is a module-level metadata and we know that nothing at the
+  // module level is changing, then use an identity mapping.
+  if (Flags & RF_NoModuleLevelChanges)
+    return mapToSelf(VM, MD, Materializer, Flags);
+
+  // Require resolved nodes whenever metadata might be remapped.
+  assert(((Flags & RF_HaveUnmaterializedMetadata) || Node->isResolved()) &&
+         "Unexpected unresolved node");
+
+  if (Materializer && Node->isTemporary()) {
+    assert(Flags & RF_HaveUnmaterializedMetadata);
+    Metadata *TempMD =
+        Materializer->mapTemporaryMetadata(const_cast<Metadata *>(MD));
+    // If the above callback returned an existing temporary node, use it
+    // instead of the current temporary node. This happens when earlier
+    // function importing passes already created and saved a temporary
+    // metadata node for the same value id.
+    if (TempMD) {
+      mapToMetadata(VM, MD, TempMD, Materializer, Flags);
+      return TempMD;
+    }
+  }
+
+  if (Node->isDistinct())
+    return mapDistinctNode(Node, DistinctWorklist, VM, Flags, TypeMapper,
+                           Materializer);
+
+  return mapUniquedNode(Node, DistinctWorklist, VM, Flags, TypeMapper,
+                        Materializer);
+}
+
+Metadata *llvm::MapMetadata(const Metadata *MD, ValueToValueMapTy &VM,
+                            RemapFlags Flags, ValueMapTypeRemapper *TypeMapper,
+                            ValueMaterializer *Materializer) {
+  SmallVector<MDNode *, 8> DistinctWorklist;
+  Metadata *NewMD = MapMetadataImpl(MD, DistinctWorklist, VM, Flags, TypeMapper,
+                                    Materializer);
+
+  // When there are no module-level changes, it's possible that the metadata
+  // graph has temporaries.  Skip the logic to resolve cycles, since it's
+  // unnecessary (and invalid) in that case.
+  if (Flags & RF_NoModuleLevelChanges)
+    return NewMD;
+
+  // Resolve cycles involving the entry metadata.
+  resolveCycles(NewMD, Flags & RF_HaveUnmaterializedMetadata);
+
+  // Remap the operands of distinct MDNodes.
+  while (!DistinctWorklist.empty())
+    remapOperands(*DistinctWorklist.pop_back_val(), DistinctWorklist, VM, Flags,
+                  TypeMapper, Materializer);
+
+  return NewMD;
+}
+
+MDNode *llvm::MapMetadata(const MDNode *MD, ValueToValueMapTy &VM,
+                          RemapFlags Flags, ValueMapTypeRemapper *TypeMapper,
+                          ValueMaterializer *Materializer) {
+  return cast<MDNode>(MapMetadata(static_cast<const Metadata *>(MD), VM, Flags,
+                                  TypeMapper, Materializer));
+}
+
 /// RemapInstruction - Convert the instruction operands from referencing the
 /// current values into those specified by VMap.
 ///
@@ -187,7 +437,7 @@ void llvm::RemapInstruction(Instruction *I, ValueToValueMapTy &VMap,
   for (User::op_iterator op = I->op_begin(), E = I->op_end(); op != E; ++op) {
     Value *V = MapValue(*op, VMap, Flags, TypeMapper, Materializer);
     // If we aren't ignoring missing entries, assert that something happened.
-    if (V != 0)
+    if (V)
       *op = V;
     else
       assert((Flags & RF_IgnoreMissingEntries) &&
@@ -199,7 +449,7 @@ void llvm::RemapInstruction(Instruction *I, ValueToValueMapTy &VMap,
     for (unsigned i = 0, e = PN->getNumIncomingValues(); i != e; ++i) {
       Value *V = MapValue(PN->getIncomingBlock(i), VMap, Flags);
       // If we aren't ignoring missing entries, assert that something happened.
-      if (V != 0)
+      if (V)
         PN->setIncomingBlock(i, cast<BasicBlock>(V));
       else
         assert((Flags & RF_IgnoreMissingEntries) &&
@@ -210,15 +460,34 @@ void llvm::RemapInstruction(Instruction *I, ValueToValueMapTy &VMap,
   // Remap attached metadata.
   SmallVector<std::pair<unsigned, MDNode *>, 4> MDs;
   I->getAllMetadata(MDs);
-  for (SmallVectorImpl<std::pair<unsigned, MDNode *> >::iterator
-       MI = MDs.begin(), ME = MDs.end(); MI != ME; ++MI) {
-    MDNode *Old = MI->second;
-    MDNode *New = MapValue(Old, VMap, Flags, TypeMapper, Materializer);
+  for (const auto &MI : MDs) {
+    MDNode *Old = MI.second;
+    MDNode *New = MapMetadata(Old, VMap, Flags, TypeMapper, Materializer);
     if (New != Old)
-      I->setMetadata(MI->first, New);
+      I->setMetadata(MI.first, New);
   }
   
+  if (!TypeMapper)
+    return;
+
   // If the instruction's type is being remapped, do so now.
-  if (TypeMapper)
-    I->mutateType(TypeMapper->remapType(I->getType()));
+  if (auto CS = CallSite(I)) {
+    SmallVector<Type *, 3> Tys;
+    FunctionType *FTy = CS.getFunctionType();
+    Tys.reserve(FTy->getNumParams());
+    for (Type *Ty : FTy->params())
+      Tys.push_back(TypeMapper->remapType(Ty));
+    CS.mutateFunctionType(FunctionType::get(
+        TypeMapper->remapType(I->getType()), Tys, FTy->isVarArg()));
+    return;
+  }
+  if (auto *AI = dyn_cast<AllocaInst>(I))
+    AI->setAllocatedType(TypeMapper->remapType(AI->getAllocatedType()));
+  if (auto *GEP = dyn_cast<GetElementPtrInst>(I)) {
+    GEP->setSourceElementType(
+        TypeMapper->remapType(GEP->getSourceElementType()));
+    GEP->setResultElementType(
+        TypeMapper->remapType(GEP->getResultElementType()));
+  }
+  I->mutateType(TypeMapper->remapType(I->getType()));
 }

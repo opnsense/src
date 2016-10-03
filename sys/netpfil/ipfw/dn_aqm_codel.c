@@ -1,5 +1,7 @@
 /*
  * Codel - The Controlled-Delay Active Queue Management algorithm.
+ *
+ * $FreeBSD$
  * 
  * Copyright (C) 2016 Centre for Advanced Internet Architectures,
  *  Swinburne University of Technology, Melbourne, Australia.
@@ -28,7 +30,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
 
 #include <sys/cdefs.h>
 #include "opt_inet6.h"

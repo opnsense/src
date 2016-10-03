@@ -32,6 +32,7 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/callout.h>
+#include <sys/eventhandler.h>
 #include <sys/mbuf.h>
 #include <sys/systm.h>
 #include <sys/malloc.h>
@@ -42,8 +43,10 @@ __FBSDID("$FreeBSD$");
 #include <machine/stdarg.h>
 #include <sys/lock.h>
 #include <sys/rwlock.h>
+#include <sys/taskqueue.h>
 
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_dl.h>
 #include <net/ethernet.h>
 #include <net/if_media.h>
@@ -526,18 +529,15 @@ lacp_port_create(struct lagg_port *lgp)
 	boolean_t active = TRUE; /* XXX should be configurable */
 	boolean_t fast = FALSE; /* Configurable via ioctl */ 
 
-	bzero((char *)&sdl, sizeof(sdl));
-	sdl.sdl_len = sizeof(sdl);
-	sdl.sdl_family = AF_LINK;
-	sdl.sdl_index = ifp->if_index;
-	sdl.sdl_type = IFT_ETHER;
+	link_init_sdl(ifp, (struct sockaddr *)&sdl, IFT_ETHER);
 	sdl.sdl_alen = ETHER_ADDR_LEN;
 
 	bcopy(&ethermulticastaddr_slowprotocols,
 	    LLADDR(&sdl), ETHER_ADDR_LEN);
 	error = if_addmulti(ifp, (struct sockaddr *)&sdl, &rifma);
 	if (error) {
-		printf("%s: ADDMULTI failed on %s\n", __func__, lgp->lp_ifname);
+		printf("%s: ADDMULTI failed on %s\n", __func__,
+		    lgp->lp_ifp->if_xname);
 		return (error);
 	}
 
@@ -547,7 +547,7 @@ lacp_port_create(struct lagg_port *lgp)
 		return (ENOMEM);
 
 	LACP_LOCK(lsc);
-	lgp->lp_psc = (caddr_t)lp;
+	lgp->lp_psc = lp;
 	lp->lp_ifp = ifp;
 	lp->lp_lagg = lgp;
 	lp->lp_lsc = lsc;
@@ -595,7 +595,7 @@ lacp_port_destroy(struct lagg_port *lgp)
 }
 
 void
-lacp_req(struct lagg_softc *sc, caddr_t data)
+lacp_req(struct lagg_softc *sc, void *data)
 {
 	struct lacp_opreq *req = (struct lacp_opreq *)data;
 	struct lacp_softc *lsc = LACP_SOFTC(sc);
@@ -603,7 +603,7 @@ lacp_req(struct lagg_softc *sc, caddr_t data)
 
 	bzero(req, sizeof(struct lacp_opreq));
 	
-	/* 
+	/*
 	 * If the LACP softc is NULL, return with the opreq structure full of
 	 * zeros.  It is normal for the softc to be NULL while the lagg is
 	 * being destroyed.
@@ -634,7 +634,7 @@ lacp_req(struct lagg_softc *sc, caddr_t data)
 }
 
 void
-lacp_portreq(struct lagg_port *lgp, caddr_t data)
+lacp_portreq(struct lagg_port *lgp, void *data)
 {
 	struct lacp_opreq *req = (struct lacp_opreq *)data;
 	struct lacp_port *lp = LACP_PORT(lgp);
@@ -765,10 +765,10 @@ lacp_attach(struct lagg_softc *sc)
 
 	lsc = malloc(sizeof(struct lacp_softc), M_DEVBUF, M_WAITOK | M_ZERO);
 
-	sc->sc_psc = (caddr_t)lsc;
+	sc->sc_psc = lsc;
 	lsc->lsc_softc = sc;
 
-	lsc->lsc_hashkey = arc4random();
+	lsc->lsc_hashkey = m_ether_tcpip_hash_init();
 	lsc->lsc_active_aggregator = NULL;
 	lsc->lsc_strict_mode = VNET(lacp_default_strict_mode);
 	LACP_LOCK_INIT(lsc);
@@ -783,7 +783,7 @@ lacp_attach(struct lagg_softc *sc)
 		lacp_init(sc);
 }
 
-int
+void
 lacp_detach(void *psc)
 {
 	struct lacp_softc *lsc = (struct lacp_softc *)psc;
@@ -798,7 +798,6 @@ lacp_detach(void *psc)
 
 	LACP_LOCK_DESTROY(lsc);
 	free(lsc, M_DEVBUF);
-	return (0);
 }
 
 void
@@ -845,7 +844,7 @@ lacp_select_tx_port(struct lagg_softc *sc, struct mbuf *m)
 	    M_HASHTYPE_GET(m) != M_HASHTYPE_NONE)
 		hash = m->m_pkthdr.flowid >> sc->flowid_shift;
 	else
-		hash = lagg_hashmbuf(sc, m, lsc->lsc_hashkey);
+		hash = m_ether_tcpip_hash(sc->sc_flags, m, lsc->lsc_hashkey);
 	hash %= pm->pm_count;
 	lp = pm->pm_map[hash];
 
@@ -954,13 +953,13 @@ lacp_select_active_aggregator(struct lacp_softc *lsc)
 		    lacp_format_lagid_aggregator(la, buf, sizeof(buf)),
 		    speed, la->la_nports));
 
-		/* This aggregator is chosen if
-		 *      the partner has a better system priority
-		 *  or, the total aggregated speed is higher
-		 *  or, it is already the chosen aggregator
+		/*
+		 * This aggregator is chosen if the partner has a better
+		 * system priority or, the total aggregated speed is higher
+		 * or, it is already the chosen aggregator
 		 */
 		if ((best_la != NULL && LACP_SYS_PRI(la->la_partner) <
-		     LACP_SYS_PRI(best_la->la_partner)) ||
+		    LACP_SYS_PRI(best_la->la_partner)) ||
 		    speed > best_speed ||
 		    (speed == best_speed &&
 		    la == lsc->lsc_active_aggregator)) {

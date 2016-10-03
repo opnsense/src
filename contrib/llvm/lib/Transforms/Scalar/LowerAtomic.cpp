@@ -12,7 +12,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#define DEBUG_TYPE "loweratomic"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
@@ -20,8 +19,10 @@
 #include "llvm/Pass.h"
 using namespace llvm;
 
+#define DEBUG_TYPE "loweratomic"
+
 static bool LowerAtomicCmpXchgInst(AtomicCmpXchgInst *CXI) {
-  IRBuilder<> Builder(CXI->getParent(), CXI);
+  IRBuilder<> Builder(CXI);
   Value *Ptr = CXI->getPointerOperand();
   Value *Cmp = CXI->getCompareOperand();
   Value *Val = CXI->getNewValOperand();
@@ -31,18 +32,21 @@ static bool LowerAtomicCmpXchgInst(AtomicCmpXchgInst *CXI) {
   Value *Res = Builder.CreateSelect(Equal, Val, Orig);
   Builder.CreateStore(Res, Ptr);
 
-  CXI->replaceAllUsesWith(Orig);
+  Res = Builder.CreateInsertValue(UndefValue::get(CXI->getType()), Orig, 0);
+  Res = Builder.CreateInsertValue(Res, Equal, 1);
+
+  CXI->replaceAllUsesWith(Res);
   CXI->eraseFromParent();
   return true;
 }
 
 static bool LowerAtomicRMWInst(AtomicRMWInst *RMWI) {
-  IRBuilder<> Builder(RMWI->getParent(), RMWI);
+  IRBuilder<> Builder(RMWI);
   Value *Ptr = RMWI->getPointerOperand();
   Value *Val = RMWI->getValOperand();
 
   LoadInst *Orig = Builder.CreateLoad(Ptr);
-  Value *Res = NULL;
+  Value *Res = nullptr;
 
   switch (RMWI->getOperation()) {
   default: llvm_unreachable("Unexpected RMW operation");
@@ -111,10 +115,12 @@ namespace {
     LowerAtomic() : BasicBlockPass(ID) {
       initializeLowerAtomicPass(*PassRegistry::getPassRegistry());
     }
-    bool runOnBasicBlock(BasicBlock &BB) {
+    bool runOnBasicBlock(BasicBlock &BB) override {
+      if (skipOptnoneFunction(BB))
+        return false;
       bool Changed = false;
       for (BasicBlock::iterator DI = BB.begin(), DE = BB.end(); DI != DE; ) {
-        Instruction *Inst = DI++;
+        Instruction *Inst = &*DI++;
         if (FenceInst *FI = dyn_cast<FenceInst>(Inst))
           Changed |= LowerFenceInst(FI);
         else if (AtomicCmpXchgInst *CXI = dyn_cast<AtomicCmpXchgInst>(Inst))

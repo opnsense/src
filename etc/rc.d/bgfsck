@@ -9,7 +9,8 @@
 
 . /etc/rc.subr
 
-name="background-fsck"
+name="background_fsck"
+desc="Run fsck in background"
 rcvar="background_fsck"
 start_cmd="bgfsck_start"
 start_precmd="bgfsck_start_precmd"

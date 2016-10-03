@@ -44,7 +44,7 @@
 SND_DECLARE_FILE("$FreeBSD$");
 
 static int dsp_mmap_allow_prot_exec = 0;
-SYSCTL_INT(_hw_snd, OID_AUTO, compat_linux_mmap, CTLFLAG_RW,
+SYSCTL_INT(_hw_snd, OID_AUTO, compat_linux_mmap, CTLFLAG_RWTUN,
     &dsp_mmap_allow_prot_exec, 0,
     "linux mmap compatibility (-1=force disable 0=auto 1=force enable)");
 
@@ -52,7 +52,6 @@ static int dsp_basename_clone = 1;
 SYSCTL_INT(_hw_snd, OID_AUTO, basename_clone, CTLFLAG_RWTUN,
     &dsp_basename_clone, 0,
     "DSP basename cloning (0: Disable; 1: Enabled)");
-TUNABLE_INT("hw.snd.basename_clone", &dsp_basename_clone);
 
 struct dsp_cdevinfo {
 	struct pcm_channel *rdch, *wrch;
@@ -2330,9 +2329,7 @@ dsp_stdclone(char *name, char *namep, char *sep, int use_sep, int *u, int *c)
 
 static void
 dsp_clone(void *arg,
-#if __FreeBSD_version >= 600034
     struct ucred *cred,
-#endif
     char *name, int namelen, struct cdev **dev)
 {
 	struct snddev_info *d;

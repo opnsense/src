@@ -12,30 +12,34 @@
 //
 //===----------------------------------------------------------------------===//
 
-#define DEBUG_TYPE "iv-users"
-#include "llvm/Analysis/IVUsers.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Analysis/Dominators.h"
+#include "llvm/Analysis/AssumptionCache.h"
+#include "llvm/Analysis/CodeMetrics.h"
+#include "llvm/Analysis/IVUsers.h"
 #include "llvm/Analysis/LoopPass.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Analysis/ValueTracking.h"
-#include "llvm/Assembly/Writer.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 using namespace llvm;
 
+#define DEBUG_TYPE "iv-users"
+
 char IVUsers::ID = 0;
 INITIALIZE_PASS_BEGIN(IVUsers, "iv-users",
                       "Induction Variable Users", false, true)
-INITIALIZE_PASS_DEPENDENCY(LoopInfo)
-INITIALIZE_PASS_DEPENDENCY(DominatorTree)
-INITIALIZE_PASS_DEPENDENCY(ScalarEvolution)
+INITIALIZE_PASS_DEPENDENCY(AssumptionCacheTracker)
+INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
 INITIALIZE_PASS_END(IVUsers, "iv-users",
                       "Induction Variable Users", false, true)
 
@@ -84,8 +88,8 @@ static bool isInteresting(const SCEV *S, const Instruction *I, const Loop *L,
 /// form.
 static bool isSimplifiedLoopNest(BasicBlock *BB, const DominatorTree *DT,
                                  const LoopInfo *LI,
-                                 SmallPtrSet<Loop*,16> &SimpleLoopNests) {
-  Loop *NearestLoop = 0;
+                                 SmallPtrSetImpl<Loop*> &SimpleLoopNests) {
+  Loop *NearestLoop = nullptr;
   for (DomTreeNode *Rung = DT->getNode(BB);
        Rung; Rung = Rung->getIDom()) {
     BasicBlock *DomBB = Rung->getBlock();
@@ -112,10 +116,12 @@ static bool isSimplifiedLoopNest(BasicBlock *BB, const DominatorTree *DT,
 /// reducible SCEV, recursively add its users to the IVUsesByStride set and
 /// return true.  Otherwise, return false.
 bool IVUsers::AddUsersImpl(Instruction *I,
-                           SmallPtrSet<Loop*,16> &SimpleLoopNests) {
+                           SmallPtrSetImpl<Loop*> &SimpleLoopNests) {
+  const DataLayout &DL = I->getModule()->getDataLayout();
+
   // Add this IV user to the Processed set before returning false to ensure that
   // all IV users are members of the set. See IVUsers::isIVUserOrOperand.
-  if (!Processed.insert(I))
+  if (!Processed.insert(I).second)
     return true;    // Instruction already handled.
 
   if (!SE->isSCEVable(I->getType()))
@@ -124,14 +130,19 @@ bool IVUsers::AddUsersImpl(Instruction *I,
   // IVUsers is used by LSR which assumes that all SCEV expressions are safe to
   // pass to SCEVExpander. Expressions are not safe to expand if they represent
   // operations that are not safe to speculate, namely integer division.
-  if (!isa<PHINode>(I) && !isSafeToSpeculativelyExecute(I, TD))
+  if (!isa<PHINode>(I) && !isSafeToSpeculativelyExecute(I))
     return false;
 
   // LSR is not APInt clean, do not touch integers bigger than 64-bits.
   // Also avoid creating IVs of non-native types. For example, we don't want a
   // 64-bit IV in 32-bit code just because the loop has one 64-bit cast.
   uint64_t Width = SE->getTypeSizeInBits(I->getType());
-  if (Width > 64 || (TD && !TD->isLegalInteger(Width)))
+  if (Width > 64 || !DL.isLegalInteger(Width))
+    return false;
+
+  // Don't attempt to promote ephemeral values to indvars. They will be removed
+  // later anyway.
+  if (EphValues.count(I))
     return false;
 
   // Get the symbolic expression for this instruction.
@@ -143,10 +154,9 @@ bool IVUsers::AddUsersImpl(Instruction *I,
     return false;
 
   SmallPtrSet<Instruction *, 4> UniqueUsers;
-  for (Value::use_iterator UI = I->use_begin(), E = I->use_end();
-       UI != E; ++UI) {
-    Instruction *User = cast<Instruction>(*UI);
-    if (!UniqueUsers.insert(User))
+  for (Use &U : I->uses()) {
+    Instruction *User = cast<Instruction>(U.getUser());
+    if (!UniqueUsers.insert(User).second)
       continue;
 
     // Do not infinitely recurse on PHI nodes.
@@ -158,7 +168,7 @@ bool IVUsers::AddUsersImpl(Instruction *I,
     BasicBlock *UseBB = User->getParent();
     // A phi's use is live out of its predecessor block.
     if (PHINode *PHI = dyn_cast<PHINode>(User)) {
-      unsigned OperandNo = UI.getOperandNo();
+      unsigned OperandNo = U.getOperandNo();
       unsigned ValNo = PHINode::getIncomingValueNumForOperand(OperandNo);
       UseBB = PHI->getIncomingBlock(ValNo);
     }
@@ -242,32 +252,38 @@ IVUsers::IVUsers()
 }
 
 void IVUsers::getAnalysisUsage(AnalysisUsage &AU) const {
-  AU.addRequired<LoopInfo>();
-  AU.addRequired<DominatorTree>();
-  AU.addRequired<ScalarEvolution>();
+  AU.addRequired<AssumptionCacheTracker>();
+  AU.addRequired<LoopInfoWrapperPass>();
+  AU.addRequired<DominatorTreeWrapperPass>();
+  AU.addRequired<ScalarEvolutionWrapperPass>();
   AU.setPreservesAll();
 }
 
 bool IVUsers::runOnLoop(Loop *l, LPPassManager &LPM) {
 
   L = l;
-  LI = &getAnalysis<LoopInfo>();
-  DT = &getAnalysis<DominatorTree>();
-  SE = &getAnalysis<ScalarEvolution>();
-  TD = getAnalysisIfAvailable<DataLayout>();
+  AC = &getAnalysis<AssumptionCacheTracker>().getAssumptionCache(
+      *L->getHeader()->getParent());
+  LI = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
+  DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+  SE = &getAnalysis<ScalarEvolutionWrapperPass>().getSE();
+
+  // Collect ephemeral values so that AddUsersIfInteresting skips them.
+  EphValues.clear();
+  CodeMetrics::collectEphemeralValues(L, AC, EphValues);
 
   // Find all uses of induction variables in this loop, and categorize
   // them by stride.  Start by finding all of the PHI nodes in the header for
   // this loop.  If they are induction variables, inspect their uses.
   for (BasicBlock::iterator I = L->getHeader()->begin(); isa<PHINode>(I); ++I)
-    (void)AddUsersIfInteresting(I);
+    (void)AddUsersIfInteresting(&*I);
 
   return false;
 }
 
 void IVUsers::print(raw_ostream &OS, const Module *M) const {
   OS << "IV Users for loop ";
-  WriteAsOperand(OS, L->getHeader(), false);
+  L->getHeader()->printAsOperand(OS, false);
   if (SE->hasLoopInvariantBackedgeTakenCount(L)) {
     OS << " with backedge-taken count "
        << *SE->getBackedgeTakenCount(L);
@@ -277,17 +293,20 @@ void IVUsers::print(raw_ostream &OS, const Module *M) const {
   for (ilist<IVStrideUse>::const_iterator UI = IVUses.begin(),
        E = IVUses.end(); UI != E; ++UI) {
     OS << "  ";
-    WriteAsOperand(OS, UI->getOperandValToReplace(), false);
+    UI->getOperandValToReplace()->printAsOperand(OS, false);
     OS << " = " << *getReplacementExpr(*UI);
     for (PostIncLoopSet::const_iterator
          I = UI->PostIncLoops.begin(),
          E = UI->PostIncLoops.end(); I != E; ++I) {
       OS << " (post-inc with loop ";
-      WriteAsOperand(OS, (*I)->getHeader(), false);
+      (*I)->getHeader()->printAsOperand(OS, false);
       OS << ")";
     }
     OS << " in  ";
-    UI->getUser()->print(OS);
+    if (UI->getUser())
+      UI->getUser()->print(OS);
+    else
+      OS << "Printing <null> User";
     OS << '\n';
   }
 }
@@ -330,16 +349,16 @@ static const SCEVAddRecExpr *findAddRecForLoop(const SCEV *S, const Loop *L) {
          I != E; ++I)
       if (const SCEVAddRecExpr *AR = findAddRecForLoop(*I, L))
         return AR;
-    return 0;
+    return nullptr;
   }
 
-  return 0;
+  return nullptr;
 }
 
 const SCEV *IVUsers::getStride(const IVStrideUse &IU, const Loop *L) const {
   if (const SCEVAddRecExpr *AR = findAddRecForLoop(getExpr(IU), L))
     return AR->getStepRecurrence(*SE);
-  return 0;
+  return nullptr;
 }
 
 void IVStrideUse::transformToPostInc(const Loop *L) {

@@ -7,6 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "lldb/Host/Config.h"
 #include "lldb/Utility/PseudoTerminal.h"
 
 #include <errno.h>
@@ -19,6 +20,7 @@
 
 #ifdef _WIN32
 #include "lldb/Host/windows/win32.h"
+typedef uint32_t pid_t;
 // empty functions
 int posix_openpt(int flag) { return 0; }
 
@@ -30,6 +32,9 @@ char *ptsname(int fd) { return 0; }
 
 pid_t fork(void) { return 0; }
 pid_t setsid(void) { return 0; }
+#elif defined(__ANDROID_NDK__)
+#include "lldb/Host/android/Android.h"
+int posix_openpt(int flags);
 #endif
 
 using namespace lldb_utility;
@@ -47,7 +52,7 @@ PseudoTerminal::PseudoTerminal () :
 // Destructor
 //
 // The destructor will close the master and slave file descriptors
-// if they are valid and ownwership has not been released using the
+// if they are valid and ownership has not been released using the
 // ReleaseMasterFileDescriptor() or the ReleaseSaveFileDescriptor()
 // member functions.
 //----------------------------------------------------------------------
@@ -65,7 +70,11 @@ PseudoTerminal::CloseMasterFileDescriptor ()
 {
     if (m_master_fd >= 0)
     {
+    // Don't call 'close' on m_master_fd for Windows as a dummy implementation of
+    // posix_openpt above always gives it a 0 value.
+#ifndef _WIN32
         ::close (m_master_fd);
+#endif
         m_master_fd = invalid_fd;
     }
 }
@@ -155,7 +164,7 @@ PseudoTerminal::OpenSlave (int oflag, char *error_str, size_t error_len)
     // Open the master side of a pseudo terminal
     const char *slave_name = GetSlaveName (error_str, error_len);
 
-    if (slave_name == NULL)
+    if (slave_name == nullptr)
         return false;
 
     m_slave_fd = ::open (slave_name, oflag);
@@ -193,11 +202,11 @@ PseudoTerminal::GetSlaveName (char *error_str, size_t error_len) const
     {
         if (error_str)
             ::snprintf (error_str, error_len, "%s", "master file descriptor is invalid");
-        return NULL;
+        return nullptr;
     }
     const char *slave_name = ::ptsname (m_master_fd);
 
-    if (error_str && slave_name == NULL)
+    if (error_str && slave_name == nullptr)
         ::strerror_r (errno, error_str, error_len);
 
     return slave_name;
@@ -230,9 +239,11 @@ PseudoTerminal::Fork (char *error_str, size_t error_len)
 {
     if (error_str)
         error_str[0] = '\0';
-
     pid_t pid = LLDB_INVALID_PROCESS_ID;
-    if (OpenFirstAvailableMaster (O_RDWR, error_str, error_len))
+#if !defined(LLDB_DISABLE_POSIX)
+    int flags = O_RDWR;
+    flags |= O_CLOEXEC;
+    if (OpenFirstAvailableMaster (flags, error_str, error_len))
     {
         // Successfully opened our master pseudo terminal
 
@@ -251,7 +262,8 @@ PseudoTerminal::Fork (char *error_str, size_t error_len)
             if (OpenSlave (O_RDWR, error_str, error_len))
             {
                 // Successfully opened slave
-                // We are done with the master in the child process so lets close it
+
+                // Master FD should have O_CLOEXEC set, but let's close it just in case...
                 CloseMasterFileDescriptor ();
 
 #if defined(TIOCSCTTY)
@@ -288,6 +300,7 @@ PseudoTerminal::Fork (char *error_str, size_t error_len)
             // Do nothing and let the pid get returned!
         }
     }
+#endif
     return pid;
 }
 

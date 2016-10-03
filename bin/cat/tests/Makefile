@@ -1,17 +1,11 @@
 # $FreeBSD$
 
-OBJTOP=		${.OBJDIR}/../../..
-SRCTOP=		${.CURDIR}/../../..
-TESTSRC=	${SRCTOP}/contrib/netbsd-tests/bin/cat
-
-TESTSDIR=	${TESTSBASE}/bin/cat
+PACKAGE=	tests
 
 NETBSD_ATF_TESTS_SH=		cat_test
 
-FILESDIR=	${TESTSDIR}
-
-FILES=		d_align.in
-FILES+=		d_align.out
+${PACKAGE}FILES+=		d_align.in
+${PACKAGE}FILES+=		d_align.out
 
 .include <netbsd-tests.test.mk>
 

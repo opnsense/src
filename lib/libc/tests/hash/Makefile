@@ -1,8 +1,8 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+PACKAGE=	tests
 
-TESTSDIR=	${TESTSBASE}/lib/libc/hash
+.include <src.opts.mk>
 
 NETBSD_ATF_TESTS_C=
 
@@ -16,21 +16,22 @@ BINDIR=		${TESTSDIR}
 
 PROGS+=		h_hash
 
-FILESDIR=	${TESTSDIR}/data
+FILESGROUPS+=	${PACKAGE}DATA_FILES
+${PACKAGE}DATA_FILESPACKAGE=	tests
 
-FILES+=		data/md5test-in
-FILES+=		data/md5test-out
-FILES+=		data/sha1test-in
-FILES+=		data/sha1test-out
-FILES+=		data/sha1test2-out
+${PACKAGE}DATA_FILESDIR=	${TESTSDIR}/data
 
-DPADD+=		${LIBMD}
-LDADD+=		-lmd
-DPADD.sha2_test+=	${LIBCRYPTO}
-LDADD.sha2_test+=	-lcrypto
+${PACKAGE}DATA_FILES+=	data/md5test-in
+${PACKAGE}DATA_FILES+=	data/md5test-out
+${PACKAGE}DATA_FILES+=	data/sha1test-in
+${PACKAGE}DATA_FILES+=	data/sha1test-out
+${PACKAGE}DATA_FILES+=	data/sha1test2-out
 
-CFLAGS.sha2_test+=	-I${.CURDIR}/../../../../crypto/openssh/openbsd-compat
-CFLAGS.sha2_test+=	-I${.CURDIR}/../../../../crypto/openssh
+LIBADD+=		md
+LIBADD.sha2_test+=	crypto
+
+CFLAGS.sha2_test+=	-I${SRCTOP}/crypto/openssh/openbsd-compat
+CFLAGS.sha2_test+=	-I${SRCTOP}/crypto/openssh
 
 .include "../Makefile.netbsd-tests"
 

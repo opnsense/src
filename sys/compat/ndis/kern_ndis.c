@@ -57,6 +57,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/rman.h>
 
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_arp.h>
 #include <net/ethernet.h>
 #include <net/if_dl.h>
@@ -347,13 +348,13 @@ ndis_create_sysctls(arg)
 	ndis_add_sysctl(sc, "BusType", "Bus Type", buf, NDIS_FLAG_RDONLY);
 
 	if (sc->ndis_res_io != NULL) {
-		sprintf(buf, "0x%lx", rman_get_start(sc->ndis_res_io));
+		sprintf(buf, "0x%jx", rman_get_start(sc->ndis_res_io));
 		ndis_add_sysctl(sc, "IOBaseAddress",
 		    "Base I/O Address", buf, NDIS_FLAG_RDONLY);
 	}
 
 	if (sc->ndis_irq != NULL) {
-		sprintf(buf, "%lu", rman_get_start(sc->ndis_irq));
+		sprintf(buf, "%ju", rman_get_start(sc->ndis_irq));
 		ndis_add_sysctl(sc, "InterruptNumber",
 		    "Interrupt Number", buf, NDIS_FLAG_RDONLY);
 	}
@@ -491,14 +492,14 @@ ndis_return(dobj, arg)
 	KeReleaseSpinLock(&block->nmb_returnlock, irql);
 }
 
-int
+void
 ndis_return_packet(struct mbuf *m, void *buf, void *arg)
 {
 	ndis_packet		*p;
 	ndis_miniport_block	*block;
 
 	if (arg == NULL)
-		return (EXT_FREE_OK);
+		return;
 
 	p = arg;
 
@@ -507,7 +508,7 @@ ndis_return_packet(struct mbuf *m, void *buf, void *arg)
 
 	/* Release packet when refcount hits zero, otherwise return. */
 	if (p->np_refcnt)
-		return (EXT_FREE_OK);
+		return;
 
 	block = ((struct ndis_softc *)p->np_softc)->ndis_block;
 
@@ -519,8 +520,6 @@ ndis_return_packet(struct mbuf *m, void *buf, void *arg)
 	IoQueueWorkItem(block->nmb_returnitem,
 	    (io_workitem_func)kernndis_functbl[7].ipt_wrap,
 	    WORKQUEUE_CRITICAL, block);
-
-	return (EXT_FREE_OK);
 }
 
 void
@@ -718,7 +717,7 @@ ndis_ptom(m0, p)
  * send routine.
  *
  * NDIS packets consist of two parts: an ndis_packet structure,
- * which is vaguely analagous to the pkthdr portion of an mbuf,
+ * which is vaguely analogous to the pkthdr portion of an mbuf,
  * and one or more ndis_buffer structures, which define the
  * actual memory segments in which the packet data resides.
  * We need to allocate one ndis_buffer for each mbuf in a chain,

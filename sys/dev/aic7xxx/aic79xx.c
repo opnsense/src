@@ -1059,9 +1059,7 @@ ahd_handle_seqint(struct ahd_softc *ahd, u_int intstat)
 		{
 			struct	ahd_devinfo devinfo;
 			struct	scb *scb;
-			struct	ahd_initiator_tinfo *targ_info;
 			struct	ahd_tmode_tstate *tstate;
-			struct	ahd_transinfo *tinfo;
 			u_int	scbid;
 
 			/*
@@ -1090,12 +1088,11 @@ ahd_handle_seqint(struct ahd_softc *ahd, u_int intstat)
 					    SCB_GET_LUN(scb),
 					    SCB_GET_CHANNEL(ahd, scb),
 					    ROLE_INITIATOR);
-			targ_info = ahd_fetch_transinfo(ahd,
-							devinfo.channel,
-							devinfo.our_scsiid,
-							devinfo.target,
-							&tstate);
-			tinfo = &targ_info->curr;
+			ahd_fetch_transinfo(ahd,
+					    devinfo.channel,
+					    devinfo.our_scsiid,
+					    devinfo.target,
+					    &tstate);
 			ahd_set_width(ahd, &devinfo, MSG_EXT_WDTR_BUS_8_BIT,
 				      AHD_TRANS_ACTIVE, /*paused*/TRUE);
 			ahd_set_syncrate(ahd, &devinfo, /*period*/0,
@@ -1209,7 +1206,7 @@ ahd_handle_seqint(struct ahd_softc *ahd, u_int intstat)
 		 * that requires host assistance for completion.
 		 * While handling the message phase(s), we will be
 		 * notified by the sequencer after each byte is
-		 * transfered so we can track bus phase changes.
+		 * transferred so we can track bus phase changes.
 		 *
 		 * If this is the first time we've seen a HOST_MSG_LOOP
 		 * interrupt, initialize the state of the host message
@@ -1623,7 +1620,7 @@ ahd_handle_scsiint(struct ahd_softc *ahd, u_int intstat)
 		/*
 		 * Although the driver does not care about the
 		 * 'Selection in Progress' status bit, the busy
-		 * LED does.  SELINGO is only cleared by a sucessfull
+		 * LED does.  SELINGO is only cleared by a successful
 		 * selection, so we must manually clear it to insure
 		 * the LED turns off just incase no future successful
 		 * selections occur (e.g. no devices on the bus).
@@ -1817,7 +1814,6 @@ ahd_handle_transmission_error(struct ahd_softc *ahd)
 	struct	scb *scb;
 	u_int	scbid;
 	u_int	lqistat1;
-	u_int	lqistat2;
 	u_int	msg_out;
 	u_int	curphase;
 	u_int	lastphase;
@@ -1828,7 +1824,7 @@ ahd_handle_transmission_error(struct ahd_softc *ahd)
 	scb = NULL;
 	ahd_set_modes(ahd, AHD_MODE_SCSI, AHD_MODE_SCSI);
 	lqistat1 = ahd_inb(ahd, LQISTAT1) & ~(LQIPHASE_LQ|LQIPHASE_NLQ);
-	lqistat2 = ahd_inb(ahd, LQISTAT2);
+	ahd_inb(ahd, LQISTAT2);
 	if ((lqistat1 & (LQICRCI_NLQ|LQICRCI_LQ)) == 0
 	 && (ahd->bugs & AHD_NLQICRC_DELAYED_BUG) != 0) {
 		u_int lqistate;
@@ -2699,7 +2695,7 @@ ahd_clear_critical_section(struct ahd_softc *ahd)
 		ahd_outb(ahd, SEQCTL0, ahd_inb(ahd, SEQCTL0) & ~STEP);
   		ahd_outb(ahd, SIMODE1, simode1);
 		/*
-		 * SCSIINT seems to glitch occassionally when
+		 * SCSIINT seems to glitch occasionally when
 		 * the interrupt masks are restored.  Clear SCSIINT
 		 * one more time so that only persistent errors
 		 * are seen as a real interrupt.
@@ -2780,10 +2776,8 @@ ahd_dump_sglist(struct scb *scb)
 			sg_list = (struct ahd_dma64_seg*)scb->sg_list;
 			for (i = 0; i < scb->sg_count; i++) {
 				uint64_t addr;
-				uint32_t len;
 
 				addr = aic_le64toh(sg_list[i].addr);
-				len = aic_le32toh(sg_list[i].len);
 				printf("sg[%d] - Addr 0x%x%x : Length %d%s\n",
 				       i,
 				       (uint32_t)((addr >> 32) & 0xFFFFFFFF),
@@ -3029,7 +3023,7 @@ ahd_validate_width(struct ahd_softc *ahd, struct ahd_initiator_tinfo *tinfo,
 
 /*
  * Update the bitmask of targets for which the controller should
- * negotiate with at the next convenient oportunity.  This currently
+ * negotiate with at the next convenient opportunity.  This currently
  * means the next time we send the initial identify messages for
  * a new transaction.
  */
@@ -3380,7 +3374,7 @@ ahd_update_neg_table(struct ahd_softc *ahd, struct ahd_devinfo *devinfo,
 
 	/*
 	 * During packetized transfers, the target will
-	 * give us the oportunity to send command packets
+	 * give us the opportunity to send command packets
 	 * without us asserting attention.
 	 */
 	if ((tinfo->ppr_options & MSG_EXT_PPR_IU_REQ) == 0)
@@ -3418,13 +3412,12 @@ ahd_update_pending_scbs(struct ahd_softc *ahd)
 	pending_scb_count = 0;
 	LIST_FOREACH(pending_scb, &ahd->pending_scbs, pending_links) {
 		struct ahd_devinfo devinfo;
-		struct ahd_initiator_tinfo *tinfo;
 		struct ahd_tmode_tstate *tstate;
 
 		ahd_scb_devinfo(ahd, &devinfo, pending_scb);
-		tinfo = ahd_fetch_transinfo(ahd, devinfo.channel,
-					    devinfo.our_scsiid,
-					    devinfo.target, &tstate);
+		ahd_fetch_transinfo(ahd, devinfo.channel,
+				    devinfo.our_scsiid,
+				    devinfo.target, &tstate);
 		if ((tstate->auto_negotiate & devinfo.target_mask) == 0
 		 && (pending_scb->flags & SCB_AUTO_NEGOTIATE) != 0) {
 			pending_scb->flags &= ~SCB_AUTO_NEGOTIATE;
@@ -4845,7 +4838,7 @@ ahd_handle_msg_reject(struct ahd_softc *ahd, struct ahd_devinfo *devinfo)
 
 		/*
 		 * Requeue all tagged commands for this target
-		 * currently in our posession so they can be
+		 * currently in our possession so they can be
 		 * converted to untagged commands.
 		 */
 		ahd_search_qinfifo(ahd, SCB_GET_TARGET(ahd, scb),
@@ -5420,8 +5413,6 @@ ahd_free(struct ahd_softc *ahd)
 	case 3:
 		aic_dmamem_free(ahd, ahd->shared_data_dmat, ahd->qoutfifo,
 				ahd->shared_data_map.dmamap);
-		aic_dmamap_destroy(ahd, ahd->shared_data_dmat,
-				   ahd->shared_data_map.dmamap);
 		/* FALLTHROUGH */
 	case 2:
 		aic_dma_tag_destroy(ahd, ahd->shared_data_dmat);
@@ -5498,7 +5489,7 @@ ahd_shutdown(void *arg)
 /*
  * Reset the controller and record some information about it
  * that is only available just after a reset.  If "reinit" is
- * non-zero, this reset occured after initial configuration
+ * non-zero, this reset occurred after initial configuration
  * and the caller requests that the chip be fully reinitialized
  * to a runable state.  Chip interrupts are *not* enabled after
  * a reinitialization.  The caller must enable interrupts via
@@ -5751,7 +5742,7 @@ ahd_init_scbdata(struct ahd_softc *ahd)
 	}
 
 	/*
-	 * Note that we were successfull
+	 * Note that we were successful
 	 */
 	return (0); 
 
@@ -8794,7 +8785,7 @@ ahd_check_patch(struct ahd_softc *ahd, struct patch **start_patch,
 			cur_patch += cur_patch->skip_patch;
 		} else {
 			/* Accepted this patch.  Advance to the next
-			 * one and wait for our intruction pointer to
+			 * one and wait for our instruction pointer to
 			 * hit this point.
 			 */
 			cur_patch++;
@@ -9673,7 +9664,7 @@ ahd_write_seeprom(struct ahd_softc *ahd, uint16_t *buf,
 		return (error);
 
 	/*
-	 * Write the data.  If we don't get throught the loop at
+	 * Write the data.  If we don't get through the loop at
 	 * least once, the arguments were invalid.
 	 */
 	retval = EINVAL;

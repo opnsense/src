@@ -242,13 +242,11 @@ aac_cam_event(struct aac_softc *sc, struct aac_event *event, void *arg)
 static int
 aac_cam_probe(device_t dev)
 {
-	struct aac_softc *sc;
 	struct aac_cam *camsc;
 
 	camsc = (struct aac_cam *)device_get_softc(dev);
 	if (!camsc->inf)
 		return (0);
-	sc = camsc->inf->aac_sc;
 	fwprintf(sc, HBA_FLAGS_DBG_FUNCTION_ENTRY_B, "");
 	return (0);
 }
@@ -570,9 +568,11 @@ aac_container_special_command(struct cam_sim *sim, union ccb *ccb,
 				p->additional_length = 31;
 				p->flags = SID_WBus16|SID_Sync|SID_CmdQue;
 				/* OEM Vendor defines */
-				strcpy(p->vendor,"Adaptec ");
-				strcpy(p->product,"Array           ");
-				strcpy(p->revision,"V1.0");
+				strncpy(p->vendor, "Adaptec ", sizeof(p->vendor));
+				strncpy(p->product, "Array           ",
+				    sizeof(p->product));
+				strncpy(p->revision, "V1.0",
+				    sizeof(p->revision));
 			}	
 		} else {
 			if (inq->page_code == SVPD_SUPPORTED_PAGE_LIST) {
@@ -1133,11 +1133,9 @@ aac_cam_poll(struct cam_sim *sim)
 static void
 aac_container_complete(struct aac_command *cm)
 {
-	struct	aac_softc *sc;
 	union	ccb *ccb;
 	u_int32_t status;
 
-	sc = cm->cm_sc;
 	fwprintf(sc, HBA_FLAGS_DBG_FUNCTION_ENTRY_B, "");
 	ccb = cm->cm_ccb;
 	status = ((u_int32_t *)cm->cm_fib->data)[0];
@@ -1183,7 +1181,7 @@ aac_cam_complete(struct aac_command *cm)
 	} else {
 		/*
 		 * The SRB error codes just happen to match the CAM error
-		 * codes.  How convienient!
+		 * codes.  How convenient!
 		 */
 		ccb->ccb_h.status = srbr->srb_status;
 

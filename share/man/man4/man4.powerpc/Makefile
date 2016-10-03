@@ -1,11 +1,14 @@
 # $FreeBSD$
 
+PACKAGE=runtime-manuals
+
 MAN=	adb.4 \
 	akbd.4 \
 	abtn.4 \
 	ams.4 \
 	bm.4 \
 	cuda.4 \
+	llan.4 \
 	pmu.4 \
 	powermac_nvram.4 \
 	smu.4 \

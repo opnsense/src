@@ -19,80 +19,78 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_TRANSFORMS_SCALAR_ARCRUNTIMEENTRYPOINTS_H
-#define LLVM_TRANSFORMS_SCALAR_ARCRUNTIMEENTRYPOINTS_H
+#ifndef LLVM_LIB_TRANSFORMS_OBJCARC_ARCRUNTIMEENTRYPOINTS_H
+#define LLVM_LIB_TRANSFORMS_OBJCARC_ARCRUNTIMEENTRYPOINTS_H
 
 #include "ObjCARC.h"
 
 namespace llvm {
 namespace objcarc {
 
+enum class ARCRuntimeEntryPointKind {
+  AutoreleaseRV,
+  Release,
+  Retain,
+  RetainBlock,
+  Autorelease,
+  StoreStrong,
+  RetainRV,
+  RetainAutorelease,
+  RetainAutoreleaseRV,
+};
+
 /// Declarations for ObjC runtime functions and constants. These are initialized
 /// lazily to avoid cluttering up the Module with unused declarations.
 class ARCRuntimeEntryPoints {
 public:
-  enum EntryPointType {
-    EPT_AutoreleaseRV,
-    EPT_Release,
-    EPT_Retain,
-    EPT_RetainBlock,
-    EPT_Autorelease,
-    EPT_StoreStrong,
-    EPT_RetainRV,
-    EPT_RetainAutorelease,
-    EPT_RetainAutoreleaseRV
-  };
+  ARCRuntimeEntryPoints() : TheModule(nullptr),
+                            AutoreleaseRV(nullptr),
+                            Release(nullptr),
+                            Retain(nullptr),
+                            RetainBlock(nullptr),
+                            Autorelease(nullptr),
+                            StoreStrong(nullptr),
+                            RetainRV(nullptr),
+                            RetainAutorelease(nullptr),
+                            RetainAutoreleaseRV(nullptr) { }
 
-  ARCRuntimeEntryPoints() : TheModule(0),
-                            AutoreleaseRV(0),
-                            Release(0),
-                            Retain(0),
-                            RetainBlock(0),
-                            Autorelease(0),
-                            StoreStrong(0),
-                            RetainRV(0),
-                            RetainAutorelease(0),
-                            RetainAutoreleaseRV(0) { }
-
-  ~ARCRuntimeEntryPoints() { }
-
-  void Initialize(Module *M) {
+  void init(Module *M) {
     TheModule = M;
-    AutoreleaseRV = 0;
-    Release = 0;
-    Retain = 0;
-    RetainBlock = 0;
-    Autorelease = 0;
-    StoreStrong = 0;
-    RetainRV = 0;
-    RetainAutorelease = 0;
-    RetainAutoreleaseRV = 0;
+    AutoreleaseRV = nullptr;
+    Release = nullptr;
+    Retain = nullptr;
+    RetainBlock = nullptr;
+    Autorelease = nullptr;
+    StoreStrong = nullptr;
+    RetainRV = nullptr;
+    RetainAutorelease = nullptr;
+    RetainAutoreleaseRV = nullptr;
   }
 
-  Constant *get(const EntryPointType entry) {
-    assert(TheModule != 0 && "Not initialized.");
+  Constant *get(ARCRuntimeEntryPointKind kind) {
+    assert(TheModule != nullptr && "Not initialized.");
 
-    switch (entry) {
-    case EPT_AutoreleaseRV:
+    switch (kind) {
+    case ARCRuntimeEntryPointKind::AutoreleaseRV:
       return getI8XRetI8XEntryPoint(AutoreleaseRV,
                                     "objc_autoreleaseReturnValue", true);
-    case EPT_Release:
+    case ARCRuntimeEntryPointKind::Release:
       return getVoidRetI8XEntryPoint(Release, "objc_release");
-    case EPT_Retain:
+    case ARCRuntimeEntryPointKind::Retain:
       return getI8XRetI8XEntryPoint(Retain, "objc_retain", true);
-    case EPT_RetainBlock:
+    case ARCRuntimeEntryPointKind::RetainBlock:
       return getI8XRetI8XEntryPoint(RetainBlock, "objc_retainBlock", false);
-    case EPT_Autorelease:
+    case ARCRuntimeEntryPointKind::Autorelease:
       return getI8XRetI8XEntryPoint(Autorelease, "objc_autorelease", true);
-    case EPT_StoreStrong:
+    case ARCRuntimeEntryPointKind::StoreStrong:
       return getI8XRetI8XXI8XEntryPoint(StoreStrong, "objc_storeStrong");
-    case EPT_RetainRV:
+    case ARCRuntimeEntryPointKind::RetainRV:
       return getI8XRetI8XEntryPoint(RetainRV,
                                     "objc_retainAutoreleasedReturnValue", true);
-    case EPT_RetainAutorelease:
+    case ARCRuntimeEntryPointKind::RetainAutorelease:
       return getI8XRetI8XEntryPoint(RetainAutorelease, "objc_retainAutorelease",
                                     true);
-    case EPT_RetainAutoreleaseRV:
+    case ARCRuntimeEntryPointKind::RetainAutoreleaseRV:
       return getI8XRetI8XEntryPoint(RetainAutoreleaseRV,
                                     "objc_retainAutoreleaseReturnValue", true);
     }
@@ -183,4 +181,4 @@ private:
 } // namespace objcarc
 } // namespace llvm
 
-#endif // LLVM_TRANSFORMS_SCALAR_ARCRUNTIMEENTRYPOINTS_H
+#endif

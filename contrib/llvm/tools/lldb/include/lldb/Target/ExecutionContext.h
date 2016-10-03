@@ -6,6 +6,21 @@
 // License. See LICENSE.TXT for details.
 //
 //===----------------------------------------------------------------------===//
+
+#ifndef liblldb_ExecutionContext_h_
+#define liblldb_ExecutionContext_h_
+
+// C Includes
+// C++ Includes
+// Other libraries and framework includes
+// Project includes
+#include "lldb/lldb-private.h"
+#include "lldb/Target/StackID.h"
+#include "lldb/Host/Mutex.h"
+
+namespace lldb_private {
+
+//===----------------------------------------------------------------------===//
 /// Execution context objects refer to objects in the execution of the
 /// program that is being debugged. The consist of one or more of the 
 /// following objects: target, process, thread, and frame. Many objects
@@ -18,10 +33,10 @@
 /// variable value from a data section in one of the object files in 
 /// a target). There are two types of objects that hold onto execution
 /// contexts: ExecutionContextRef and ExecutionContext. Both of these
-/// objects are deascribed below.
+/// objects are described below.
 /// 
 /// Not all objects in an ExectionContext objects will be valid. If you want
-/// to refer stronly (ExectionContext) or weakly (ExectionContextRef) to
+/// to refer strongly (ExectionContext) or weakly (ExectionContextRef) to
 /// a process, then only the process and target references will be valid.
 /// For threads, only the thread, process and target references will be
 /// filled in. For frames, all of the objects will be filled in.
@@ -29,17 +44,6 @@
 /// These classes are designed to be used as baton objects that get passed
 /// to a wide variety of functions that require execution contexts.
 //===----------------------------------------------------------------------===//
-
-
-
-#ifndef liblldb_ExecutionContext_h_
-#define liblldb_ExecutionContext_h_
-
-#include "lldb/lldb-private.h"
-#include "lldb/Target/StackID.h"
-#include "lldb/Host/Mutex.h"
-
-namespace lldb_private {
 
 //----------------------------------------------------------------------
 /// @class ExecutionContextRef ExecutionContext.h "lldb/Target/ExecutionContext.h"
@@ -49,7 +53,7 @@ namespace lldb_private {
 /// context that might change over time. For example, if an object wants
 /// to refer to a stack frame, it should hold onto an ExecutionContextRef
 /// to a frame object. The backing object that represents the stack frame
-/// might change over time and instaces of this object can track the logical
+/// might change over time and instances of this object can track the logical
 /// object that refers to a frame even if it does change.
 ///
 /// These objects also don't keep execution objects around longer than they
@@ -64,7 +68,7 @@ namespace lldb_private {
 /// don't keep these objects around, they are safe to keep around. 
 ///
 /// The general rule of thumb is all long lived objects that want to
-/// refer to execution contexts should use ExecutionContextRef objcts. 
+/// refer to execution contexts should use ExecutionContextRef objects.
 /// The ExecutionContext class is used to temporarily get shared 
 /// pointers to any execution context objects that are still around
 /// so they are guaranteed to exist during a function that requires the
@@ -86,10 +90,10 @@ public:
     ExecutionContextRef (const ExecutionContextRef &rhs);
 
     //------------------------------------------------------------------
-    /// Construct using an ExecutionContext object that might be NULL.
+    /// Construct using an ExecutionContext object that might be nullptr.
     /// 
     /// If \a exe_ctx_ptr is valid, then make weak references to any
-    /// valid objects in the ExecutionContext, othewise no weak 
+    /// valid objects in the ExecutionContext, otherwise no weak 
     /// references to any execution context objects will be made.
     //------------------------------------------------------------------
     ExecutionContextRef (const ExecutionContext *exe_ctx_ptr);
@@ -100,22 +104,6 @@ public:
     /// Make weak references to any valid objects in the ExecutionContext.
     //------------------------------------------------------------------
     ExecutionContextRef (const ExecutionContext &exe_ctx);
-
-    //------------------------------------------------------------------
-    /// Assignment operator
-    /// 
-    /// Copy all weak refernces in \a rhs.
-    //------------------------------------------------------------------
-    ExecutionContextRef &
-    operator =(const ExecutionContextRef &rhs);
-
-    //------------------------------------------------------------------
-    /// Assignment operator from a ExecutionContext
-    /// 
-    /// Make weak refernces to any stringly referenced objects in \a exe_ctx.
-    //------------------------------------------------------------------
-    ExecutionContextRef &
-    operator =(const ExecutionContext &exe_ctx);
 
     //------------------------------------------------------------------
     /// Construct using the target and all the selected items inside of it
@@ -129,13 +117,13 @@ public:
     /// Construct using an execution context scope.
     ///
     /// If the ExecutionContextScope object is valid and refers to a frame,
-    /// make weak refernces too the frame, thread, process and target.
+    /// make weak references too the frame, thread, process and target.
     /// If the ExecutionContextScope object is valid and refers to a thread,
-    /// make weak refernces too the thread, process and target.
+    /// make weak references too the thread, process and target.
     /// If the ExecutionContextScope object is valid and refers to a process,
-    /// make weak refernces too the process and target.
+    /// make weak references too the process and target.
     /// If the ExecutionContextScope object is valid and refers to a target,
-    /// make weak refernces too the target.
+    /// make weak references too the target.
     //------------------------------------------------------------------
     ExecutionContextRef (ExecutionContextScope *exe_scope);
 
@@ -143,21 +131,38 @@ public:
     /// Construct using an execution context scope.
     ///
     /// If the ExecutionContextScope object refers to a frame,
-    /// make weak refernces too the frame, thread, process and target.
+    /// make weak references too the frame, thread, process and target.
     /// If the ExecutionContextScope object refers to a thread,
-    /// make weak refernces too the thread, process and target.
+    /// make weak references too the thread, process and target.
     /// If the ExecutionContextScope object refers to a process,
-    /// make weak refernces too the process and target.
+    /// make weak references too the process and target.
     /// If the ExecutionContextScope object refers to a target,
-    /// make weak refernces too the target.
+    /// make weak references too the target.
     //------------------------------------------------------------------
     ExecutionContextRef (ExecutionContextScope &exe_scope);
 
     ~ExecutionContextRef();
+
+    //------------------------------------------------------------------
+    /// Assignment operator
+    /// 
+    /// Copy all weak references in \a rhs.
+    //------------------------------------------------------------------
+    ExecutionContextRef &
+    operator =(const ExecutionContextRef &rhs);
+
+    //------------------------------------------------------------------
+    /// Assignment operator from a ExecutionContext
+    /// 
+    /// Make weak references to any strongly referenced objects in \a exe_ctx.
+    //------------------------------------------------------------------
+    ExecutionContextRef &
+    operator =(const ExecutionContext &exe_ctx);
+
     //------------------------------------------------------------------
     /// Clear the object's state.
     ///
-    /// Sets the process and thread to NULL, and the frame index to an
+    /// Sets the process and thread to nullptr, and the frame index to an
     /// invalid value.
     //------------------------------------------------------------------
     void
@@ -302,8 +307,8 @@ public:
 
     //------------------------------------------------------------------
     /// Returns true if this object has a weak reference to a thread.
-    /// The return value is only an indication of wether this object has
-    /// a weak reference and does not indicate wether the weak rerference
+    /// The return value is only an indication of whether this object has
+    /// a weak reference and does not indicate whether the weak reference
     /// is valid or not.
     //------------------------------------------------------------------
     bool
@@ -314,8 +319,8 @@ public:
 
     //------------------------------------------------------------------
     /// Returns true if this object has a weak reference to a frame.
-    /// The return value is only an indication of wether this object has
-    /// a weak reference and does not indicate wether the weak rerference
+    /// The return value is only an indication of whether this object has
+    /// a weak reference and does not indicate whether the weak reference
     /// is valid or not.
     //------------------------------------------------------------------
     bool
@@ -394,6 +399,7 @@ public:
     ExecutionContext (const lldb::ProcessSP &process_sp);
     ExecutionContext (const lldb::ThreadSP &thread_sp);
     ExecutionContext (const lldb::StackFrameSP &frame_sp);
+
     //------------------------------------------------------------------
     // Create execution contexts from weak pointers
     //------------------------------------------------------------------
@@ -413,16 +419,6 @@ public:
     //------------------------------------------------------------------
     ExecutionContext (ExecutionContextScope *exe_scope);
     ExecutionContext (ExecutionContextScope &exe_scope);
-    
-
-    ExecutionContext &
-    operator =(const ExecutionContext &rhs);
-
-    bool
-    operator ==(const ExecutionContext &rhs) const;
-    
-    bool
-    operator !=(const ExecutionContext &rhs) const;
 
     //------------------------------------------------------------------
     /// Construct with process, thread, and frame index.
@@ -438,16 +434,26 @@ public:
     /// @param[in] frame
     ///     The frame index for this execution context.
     //------------------------------------------------------------------
-    ExecutionContext (Process* process,
-                      Thread *thread = NULL,
-                      StackFrame * frame = NULL);
+    ExecutionContext(Process* process,
+                     Thread *thread = nullptr,
+                     StackFrame * frame = nullptr);
 
 
     ~ExecutionContext();
+
+    ExecutionContext &
+    operator =(const ExecutionContext &rhs);
+
+    bool
+    operator ==(const ExecutionContext &rhs) const;
+    
+    bool
+    operator !=(const ExecutionContext &rhs) const;
+
     //------------------------------------------------------------------
     /// Clear the object's state.
     ///
-    /// Sets the process and thread to NULL, and the frame index to an
+    /// Sets the process and thread to nullptr, and the frame index to an
     /// invalid value.
     //------------------------------------------------------------------
     void
@@ -468,10 +474,10 @@ public:
     //------------------------------------------------------------------
     /// Returns a pointer to the target object.
     ///
-    /// The returned pointer might be NULL. Calling HasTargetScope(), 
+    /// The returned pointer might be nullptr. Calling HasTargetScope(), 
     /// HasProcessScope(), HasThreadScope(), or HasFrameScope() 
     /// can help to pre-validate this pointer so that this accessor can
-    /// freely be used without having to check for NULL each time.
+    /// freely be used without having to check for nullptr each time.
     ///
     /// @see ExecutionContext::HasTargetScope() const
     /// @see ExecutionContext::HasProcessScope() const
@@ -484,10 +490,10 @@ public:
     //------------------------------------------------------------------
     /// Returns a pointer to the process object.
     ///
-    /// The returned pointer might be NULL. Calling HasProcessScope(), 
+    /// The returned pointer might be nullptr. Calling HasProcessScope(), 
     /// HasThreadScope(), or HasFrameScope()  can help to pre-validate 
     /// this pointer so that this accessor can freely be used without
-    /// having to check for NULL each time.
+    /// having to check for nullptr each time.
     ///
     /// @see ExecutionContext::HasProcessScope() const
     /// @see ExecutionContext::HasThreadScope() const
@@ -499,10 +505,10 @@ public:
     //------------------------------------------------------------------
     /// Returns a pointer to the thread object.
     ///
-    /// The returned pointer might be NULL. Calling HasThreadScope() or
+    /// The returned pointer might be nullptr. Calling HasThreadScope() or
     /// HasFrameScope() can help to pre-validate this pointer so that 
     /// this accessor can freely be used without having to check for 
-    /// NULL each time.
+    /// nullptr each time.
     ///
     /// @see ExecutionContext::HasThreadScope() const
     /// @see ExecutionContext::HasFrameScope() const
@@ -516,9 +522,9 @@ public:
     //------------------------------------------------------------------
     /// Returns a pointer to the frame object.
     ///
-    /// The returned pointer might be NULL. Calling HasFrameScope(),
+    /// The returned pointer might be nullptr. Calling HasFrameScope(),
     /// can help to pre-validate this pointer so that this accessor can
-    /// freely be used without having to check for NULL each time.
+    /// freely be used without having to check for nullptr each time.
     ///
     /// @see ExecutionContext::HasFrameScope() const
     //------------------------------------------------------------------
@@ -776,6 +782,7 @@ protected:
     lldb::ThreadSP m_thread_sp;     ///< The thread that owns the frame
     lldb::StackFrameSP m_frame_sp;  ///< The stack frame in thread.
 };
+
 } // namespace lldb_private
 
-#endif  // liblldb_ExecutionContext_h_
+#endif // liblldb_ExecutionContext_h_

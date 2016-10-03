@@ -43,8 +43,9 @@ __FBSDID("$FreeBSD$");
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/sockio.h>
-#include <sys/mbuf.h>
 #include <sys/kernel.h>
+#include <sys/malloc.h>
+#include <sys/mbuf.h>
 #include <sys/socket.h>
 #include <sys/sysctl.h>
 #include <sys/syslog.h>
@@ -57,6 +58,7 @@ __FBSDID("$FreeBSD$");
 
 #include <net/ethernet.h>
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_arp.h>
 #include <net/if_dl.h>
 #include <net/if_mib.h>
@@ -162,8 +164,8 @@ ed_alloc_port(device_t dev, int rid, int size)
 	struct ed_softc *sc = device_get_softc(dev);
 	struct resource *res;
 
-	res = bus_alloc_resource(dev, SYS_RES_IOPORT, &rid,
-	    0ul, ~0ul, size, RF_ACTIVE);
+	res = bus_alloc_resource_anywhere(dev, SYS_RES_IOPORT, &rid,
+	    size, RF_ACTIVE);
 	if (res) {
 		sc->port_res = res;
 		sc->port_used = size;
@@ -183,8 +185,8 @@ ed_alloc_memory(device_t dev, int rid, int size)
 	struct ed_softc *sc = device_get_softc(dev);
 	struct resource *res;
 
-	res = bus_alloc_resource(dev, SYS_RES_MEMORY, &rid,
-	    0ul, ~0ul, size, RF_ACTIVE);
+	res = bus_alloc_resource_anywhere(dev, SYS_RES_MEMORY, &rid,
+	    size, RF_ACTIVE);
 	if (res) {
 		sc->mem_res = res;
 		sc->mem_used = size;
@@ -484,7 +486,7 @@ ed_watchdog(struct ed_softc *sc)
 
 	ifp = sc->ifp;
 	log(LOG_ERR, "%s: device timeout\n", ifp->if_xname);
-	ifp->if_oerrors++;
+	if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 
 	ed_reset(ifp);
 }
@@ -899,7 +901,7 @@ ed_rint(struct ed_softc *sc)
 			 */
 			ed_get_packet(sc, packet_ptr + sizeof(struct ed_ring),
 				      len - sizeof(struct ed_ring));
-			ifp->if_ipackets++;
+			if_inc_counter(ifp, IFCOUNTER_IPACKETS, 1);
 		} else {
 			/*
 			 * Really BAD. The ring pointers are corrupted.
@@ -907,7 +909,7 @@ ed_rint(struct ed_softc *sc)
 			log(LOG_ERR,
 			    "%s: NIC memory corrupt - invalid packet length %d\n",
 			    ifp->if_xname, len);
-			ifp->if_ierrors++;
+			if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 			ed_reset(ifp);
 			return;
 		}
@@ -975,8 +977,10 @@ edintr(void *arg)
 	/*
 	 * loop until there are no more new interrupts.  When the card goes
 	 * away, the hardware will read back 0xff.  Looking at the interrupts,
-	 * it would appear that 0xff is impossible, or at least extremely
-	 * unlikely.
+	 * it would appear that 0xff is impossible as ED_ISR_RST is normally
+	 * clear. ED_ISR_RDC is also normally clear and only set while
+	 * we're transferring memory to the card and we're holding the
+	 * ED_LOCK (so we can't get into here).
 	 */
 	while ((isr = ed_nic_inb(sc, ED_P0_ISR)) != 0 && isr != 0xff) {
 
@@ -1054,14 +1058,14 @@ edintr(void *arg)
 				/*
 				 * update output errors counter
 				 */
-				ifp->if_oerrors++;
+				if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 			} else {
 
 				/*
 				 * Update total number of successfully
 				 * transmitted packets.
 				 */
-				ifp->if_opackets++;
+				if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
 			}
 
 			/*
@@ -1079,7 +1083,7 @@ edintr(void *arg)
 			 * Add in total number of collisions on last
 			 * transmission.
 			 */
-			ifp->if_collisions += collisions;
+			if_inc_counter(ifp, IFCOUNTER_COLLISIONS, collisions);
 			switch(collisions) {
 			case 0:
 			case 16:
@@ -1122,7 +1126,7 @@ edintr(void *arg)
 			 * fixed in later revs. -DG
 			 */
 			if (isr & ED_ISR_OVW) {
-				ifp->if_ierrors++;
+				if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 #ifdef DIAGNOSTIC
 				log(LOG_WARNING,
 				    "%s: warning - receiver ring buffer overrun\n",
@@ -1149,7 +1153,7 @@ edintr(void *arg)
 						sc->mibdata.dot3StatsAlignmentErrors++;
 					if (rsr & ED_RSR_FO)
 						sc->mibdata.dot3StatsInternalMacReceiveErrors++;
-					ifp->if_ierrors++;
+					if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 #ifdef ED_DEBUG
 					if_printf(ifp, "receive error %x\n",
 					       ed_nic_inb(sc, ED_P0_RSR));
@@ -1322,10 +1326,7 @@ ed_get_packet(struct ed_softc *sc, bus_size_t buf, u_short len)
 	 */
 	if ((len + 2) > MHLEN) {
 		/* Attach an mbuf cluster */
-		MCLGET(m, M_NOWAIT);
-
-		/* Insist on getting a cluster */
-		if ((m->m_flags & M_EXT) == 0) {
+		if (!(MCLGET(m, M_NOWAIT))) {
 			m_freem(m);
 			return;
 		}

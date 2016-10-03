@@ -28,7 +28,7 @@
  */
 
 /*
- * This file defines compatiblity symbol versions for old system calls.  It
+ * This file defines compatibility symbol versions for old system calls.  It
  * is included in all generated system call files.
  */
 
@@ -38,18 +38,18 @@
 #define	__sym_compat(sym,impl,verid)	\
 	.symver impl, sym@verid
 
+#ifndef NO_COMPAT7
 __sym_compat(__semctl, freebsd7___semctl, FBSD_1.0);
 __sym_compat(msgctl, freebsd7_msgctl, FBSD_1.0);
 __sym_compat(shmctl, freebsd7_shmctl, FBSD_1.0);
+#endif
 
 #undef __sym_compat
 
 #define	__weak_reference(sym,alias)	\
 	.weak	alias;.equ	alias,sym
 
-#ifndef SYSCALL_COMPAT
 __weak_reference(__sys_fcntl,__fcntl_compat)
-#endif
 
 #undef __weak_reference
 

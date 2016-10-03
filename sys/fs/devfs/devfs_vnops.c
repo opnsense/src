@@ -51,6 +51,7 @@
 #include <sys/kernel.h>
 #include <sys/lock.h>
 #include <sys/malloc.h>
+#include <sys/mman.h>
 #include <sys/mount.h>
 #include <sys/namei.h>
 #include <sys/priv.h>
@@ -71,6 +72,10 @@ static struct fileops devfs_ops_f;
 #include <fs/devfs/devfs_int.h>
 
 #include <security/mac/mac_framework.h>
+
+#include <vm/vm.h>
+#include <vm/vm_extern.h>
+#include <vm/vm_object.h>
 
 static MALLOC_DEFINE(M_CDEVPDATA, "DEVFSP", "Metainfo for cdev-fp data");
 
@@ -180,6 +185,8 @@ devfs_destroy_cdevpriv(struct cdev_privdata *p)
 {
 
 	mtx_assert(&cdevpriv_mtx, MA_OWNED);
+	KASSERT(p->cdpd_fp->f_cdevpriv == p,
+	    ("devfs_destoy_cdevpriv %p != %p", p->cdpd_fp->f_cdevpriv, p));
 	p->cdpd_fp->f_cdevpriv = NULL;
 	LIST_REMOVE(p, cdpd_list);
 	mtx_unlock(&cdevpriv_mtx);
@@ -187,7 +194,7 @@ devfs_destroy_cdevpriv(struct cdev_privdata *p)
 	free(p, M_CDEVPDATA);
 }
 
-void
+static void
 devfs_fpdrop(struct file *fp)
 {
 	struct cdev_privdata *p;
@@ -526,6 +533,7 @@ devfs_access(struct vop_access_args *ap)
 {
 	struct vnode *vp = ap->a_vp;
 	struct devfs_dirent *de;
+	struct proc *p;
 	int error;
 
 	de = vp->v_data;
@@ -538,23 +546,31 @@ devfs_access(struct vop_access_args *ap)
 		return (0);
 	if (error != EACCES)
 		return (error);
+	p = ap->a_td->td_proc;
 	/* We do, however, allow access to the controlling terminal */
-	if (!(ap->a_td->td_proc->p_flag & P_CONTROLT))
+	PROC_LOCK(p);
+	if (!(p->p_flag & P_CONTROLT)) {
+		PROC_UNLOCK(p);
 		return (error);
-	if (ap->a_td->td_proc->p_session->s_ttydp == de->de_cdp)
-		return (0);
+	}
+	if (p->p_session->s_ttydp == de->de_cdp)
+		error = 0;
+	PROC_UNLOCK(p);
 	return (error);
 }
 
-/* ARGSUSED */
+_Static_assert(((FMASK | FCNTLFLAGS) & (FLASTCLOSE | FREVOKE)) == 0,
+    "devfs-only flag reuse failed");
+
 static int
 devfs_close(struct vop_close_args *ap)
 {
 	struct vnode *vp = ap->a_vp, *oldvp;
 	struct thread *td = ap->a_td;
+	struct proc *p;
 	struct cdev *dev = vp->v_rdev;
 	struct cdevsw *dsw;
-	int vp_locked, error, ref;
+	int dflags, error, ref, vp_locked;
 
 	/*
 	 * XXX: Don't call d_close() if we were called because of
@@ -572,22 +588,31 @@ devfs_close(struct vop_close_args *ap)
 	 * if the reference count is 2 (this last descriptor
 	 * plus the session), release the reference from the session.
 	 */
-	oldvp = NULL;
-	sx_xlock(&proctree_lock);
-	if (td && vp == td->td_proc->p_session->s_ttyvp) {
-		SESS_LOCK(td->td_proc->p_session);
-		VI_LOCK(vp);
-		if (count_dev(dev) == 2 && (vp->v_iflag & VI_DOOMED) == 0) {
-			td->td_proc->p_session->s_ttyvp = NULL;
-			td->td_proc->p_session->s_ttydp = NULL;
-			oldvp = vp;
-		}
-		VI_UNLOCK(vp);
-		SESS_UNLOCK(td->td_proc->p_session);
+	if (td != NULL) {
+		p = td->td_proc;
+		PROC_LOCK(p);
+		if (vp == p->p_session->s_ttyvp) {
+			PROC_UNLOCK(p);
+			oldvp = NULL;
+			sx_xlock(&proctree_lock);
+			if (vp == p->p_session->s_ttyvp) {
+				SESS_LOCK(p->p_session);
+				VI_LOCK(vp);
+				if (count_dev(dev) == 2 &&
+				    (vp->v_iflag & VI_DOOMED) == 0) {
+					p->p_session->s_ttyvp = NULL;
+					p->p_session->s_ttydp = NULL;
+					oldvp = vp;
+				}
+				VI_UNLOCK(vp);
+				SESS_UNLOCK(p->p_session);
+			}
+			sx_xunlock(&proctree_lock);
+			if (oldvp != NULL)
+				vrele(oldvp);
+		} else
+			PROC_UNLOCK(p);
 	}
-	sx_xunlock(&proctree_lock);
-	if (oldvp != NULL)
-		vrele(oldvp);
 	/*
 	 * We do not want to really close the device if it
 	 * is still in use unless we are trying to close it
@@ -600,9 +625,11 @@ devfs_close(struct vop_close_args *ap)
 	dsw = dev_refthread(dev, &ref);
 	if (dsw == NULL)
 		return (ENXIO);
+	dflags = 0;
 	VI_LOCK(vp);
 	if (vp->v_iflag & VI_DOOMED) {
 		/* Forced close. */
+		dflags |= FREVOKE | FNONBLOCK;
 	} else if (dsw->d_flags & D_TRACKCLOSE) {
 		/* Keep device updated on status. */
 	} else if (count_dev(dev) > 1) {
@@ -610,13 +637,15 @@ devfs_close(struct vop_close_args *ap)
 		dev_relthread(dev, ref);
 		return (0);
 	}
+	if (count_dev(dev) == 1)
+		dflags |= FLASTCLOSE;
 	vholdl(vp);
 	VI_UNLOCK(vp);
 	vp_locked = VOP_ISLOCKED(vp);
 	VOP_UNLOCK(vp, 0);
 	KASSERT(dev->si_refcount > 0,
 	    ("devfs_close() on un-referenced struct cdev *(%s)", devtoname(dev)));
-	error = dsw->d_close(dev, ap->a_fflag, S_IFCHR, td);
+	error = dsw->d_close(dev, ap->a_fflag | dflags, S_IFCHR, td);
 	dev_relthread(dev, ref);
 	vn_lock(vp, vp_locked | LK_RETRY);
 	vdrop(vp);
@@ -840,6 +869,7 @@ devfs_prison_check(struct devfs_dirent *de, struct thread *td)
 {
 	struct cdev_priv *cdp;
 	struct ucred *dcr;
+	struct proc *p;
 	int error;
 
 	cdp = de->de_cdp;
@@ -853,10 +883,15 @@ devfs_prison_check(struct devfs_dirent *de, struct thread *td)
 	if (error == 0)
 		return (0);
 	/* We do, however, allow access to the controlling terminal */
-	if (!(td->td_proc->p_flag & P_CONTROLT))
+	p = td->td_proc;
+	PROC_LOCK(p);
+	if (!(p->p_flag & P_CONTROLT)) {
+		PROC_UNLOCK(p);
 		return (error);
-	if (td->td_proc->p_session->s_ttydp == cdp)
-		return (0);
+	}
+	if (p->p_session->s_ttydp == cdp)
+		error = 0;
+	PROC_UNLOCK(p);
 	return (error);
 }
 
@@ -1325,10 +1360,10 @@ devfs_readlink(struct vop_readlink_args *ap)
 static int
 devfs_reclaim(struct vop_reclaim_args *ap)
 {
-	struct vnode *vp = ap->a_vp;
+	struct vnode *vp;
 	struct devfs_dirent *de;
-	struct cdev *dev;
 
+	vp = ap->a_vp;
 	mtx_lock(&devfs_de_interlock);
 	de = vp->v_data;
 	if (de != NULL) {
@@ -1336,24 +1371,31 @@ devfs_reclaim(struct vop_reclaim_args *ap)
 		vp->v_data = NULL;
 	}
 	mtx_unlock(&devfs_de_interlock);
-
 	vnode_destroy_vobject(vp);
+	return (0);
+}
+
+static int
+devfs_reclaim_vchr(struct vop_reclaim_args *ap)
+{
+	struct vnode *vp;
+	struct cdev *dev;
+
+	vp = ap->a_vp;
+	MPASS(vp->v_type == VCHR);
+
+	devfs_reclaim(ap);
 
 	VI_LOCK(vp);
 	dev_lock();
 	dev = vp->v_rdev;
 	vp->v_rdev = NULL;
-
-	if (dev == NULL) {
-		dev_unlock();
-		VI_UNLOCK(vp);
-		return (0);
-	}
-
-	dev->si_usecount -= vp->v_usecount;
+	if (dev != NULL)
+		dev->si_usecount -= vp->v_usecount;
 	dev_unlock();
 	VI_UNLOCK(vp);
-	dev_rel(dev);
+	if (dev != NULL)
+		dev_rel(dev);
 	return (0);
 }
 
@@ -1409,7 +1451,7 @@ devfs_revoke(struct vop_revoke_args *ap)
 	struct cdev *dev;
 	struct cdev_priv *cdp;
 	struct devfs_dirent *de;
-	int i;
+	u_int i;
 
 	KASSERT((ap->a_flags & REVOKEALL) != 0, ("devfs_revoke !REVOKEALL"));
 
@@ -1724,6 +1766,76 @@ devfs_write_f(struct file *fp, struct uio *uio, struct ucred *cred,
 	return (error);
 }
 
+static int
+devfs_mmap_f(struct file *fp, vm_map_t map, vm_offset_t *addr, vm_size_t size,
+    vm_prot_t prot, vm_prot_t cap_maxprot, int flags, vm_ooffset_t foff,
+    struct thread *td)
+{
+	struct cdev *dev;
+	struct cdevsw *dsw;
+	struct mount *mp;
+	struct vnode *vp;
+	struct file *fpop;
+	vm_object_t object;
+	vm_prot_t maxprot;
+	int error, ref;
+
+	vp = fp->f_vnode;
+
+	/*
+	 * Ensure that file and memory protections are
+	 * compatible.
+	 */
+	mp = vp->v_mount;
+	if (mp != NULL && (mp->mnt_flag & MNT_NOEXEC) != 0)
+		maxprot = VM_PROT_NONE;
+	else
+		maxprot = VM_PROT_EXECUTE;
+	if ((fp->f_flag & FREAD) != 0)
+		maxprot |= VM_PROT_READ;
+	else if ((prot & VM_PROT_READ) != 0)
+		return (EACCES);
+
+	/*
+	 * If we are sharing potential changes via MAP_SHARED and we
+	 * are trying to get write permission although we opened it
+	 * without asking for it, bail out.
+	 *
+	 * Note that most character devices always share mappings.
+	 * The one exception is that D_MMAP_ANON devices
+	 * (i.e. /dev/zero) permit private writable mappings.
+	 *
+	 * Rely on vm_mmap_cdev() to fail invalid MAP_PRIVATE requests
+	 * as well as updating maxprot to permit writing for
+	 * D_MMAP_ANON devices rather than doing that here.
+	 */
+	if ((flags & MAP_SHARED) != 0) {
+		if ((fp->f_flag & FWRITE) != 0)
+			maxprot |= VM_PROT_WRITE;
+		else if ((prot & VM_PROT_WRITE) != 0)
+			return (EACCES);
+	}
+	maxprot &= cap_maxprot;
+
+	fpop = td->td_fpop;
+	error = devfs_fp_check(fp, &dev, &dsw, &ref);
+	if (error != 0)
+		return (error);
+
+	error = vm_mmap_cdev(td, size, prot, &maxprot, &flags, dev, dsw, &foff,
+	    &object);
+	td->td_fpop = fpop;
+	dev_relthread(dev, ref);
+	if (error != 0)
+		return (error);
+
+	error = vm_mmap_object(map, addr, size, prot, maxprot, flags, object,
+	    foff, FALSE, td);
+	if (error != 0)
+		vm_object_deallocate(object);
+	return (error);
+}
+
 dev_t
 dev2udev(struct cdev *x)
 {
@@ -1745,6 +1857,8 @@ static struct fileops devfs_ops_f = {
 	.fo_chown =	vn_chown,
 	.fo_sendfile =	vn_sendfile,
 	.fo_seek =	vn_seek,
+	.fo_fill_kinfo = vn_fill_kinfo,
+	.fo_mmap =	devfs_mmap_f,
 	.fo_flags =	DFLAG_PASSABLE | DFLAG_SEEKABLE
 };
 
@@ -1791,7 +1905,7 @@ static struct vop_vector devfs_specops = {
 	.vop_readdir =		VOP_PANIC,
 	.vop_readlink =		VOP_PANIC,
 	.vop_reallocblks =	VOP_PANIC,
-	.vop_reclaim =		devfs_reclaim,
+	.vop_reclaim =		devfs_reclaim_vchr,
 	.vop_remove =		devfs_remove,
 	.vop_rename =		VOP_PANIC,
 	.vop_revoke =		devfs_revoke,

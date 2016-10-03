@@ -51,9 +51,9 @@ __FBSDID("$FreeBSD$");
  */
 
 int
-getpagesize()
+getpagesize(void)
 {
-	int mib[2]; 
+	int mib[2];
 	static int value;
 	size_t size;
 	int error;
@@ -68,7 +68,7 @@ getpagesize()
 	mib[0] = CTL_HW;
 	mib[1] = HW_PAGESIZE;
 	size = sizeof value;
-	if (sysctl(mib, 2, &value, &size, NULL, 0) == -1)
+	if (sysctl(mib, nitems(mib), &value, &size, NULL, 0) == -1)
 		return (-1);
 
 	return (value);

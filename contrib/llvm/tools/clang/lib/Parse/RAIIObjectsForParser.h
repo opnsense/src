@@ -12,8 +12,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_PARSE_RAII_OBJECTS_FOR_PARSER_H
-#define LLVM_CLANG_PARSE_RAII_OBJECTS_FOR_PARSER_H
+#ifndef LLVM_CLANG_LIB_PARSE_RAIIOBJECTSFORPARSER_H
+#define LLVM_CLANG_LIB_PARSE_RAIIOBJECTSFORPARSER_H
 
 #include "clang/Parse/ParseDiagnostic.h"
 #include "clang/Parse/Parser.h"
@@ -50,7 +50,7 @@ namespace clang {
   public:
     /// Begin suppressing access-like checks 
     SuppressAccessChecks(Parser &P, bool activate = true)
-        : S(P.getActions()), DiagnosticPool(NULL) {
+        : S(P.getActions()), DiagnosticPool(nullptr) {
       if (activate) {
         State = S.PushParsingDeclaration(DiagnosticPool);
         Active = true;
@@ -58,10 +58,16 @@ namespace clang {
         Active = false;
       }
     }
+    SuppressAccessChecks(SuppressAccessChecks &&Other)
+      : S(Other.S), DiagnosticPool(std::move(Other.DiagnosticPool)),
+        State(Other.State), Active(Other.Active) {
+      Other.Active = false;
+    }
+    void operator=(SuppressAccessChecks &&Other) = delete;
 
     void done() {
       assert(Active && "trying to end an inactive suppression");
-      S.PopParsingDeclaration(State, NULL);
+      S.PopParsingDeclaration(State, nullptr);
       Active = false;
     }
 
@@ -87,13 +93,13 @@ namespace clang {
     Sema::ParsingDeclState State;
     bool Popped;
 
-    ParsingDeclRAIIObject(const ParsingDeclRAIIObject &) LLVM_DELETED_FUNCTION;
-    void operator=(const ParsingDeclRAIIObject &) LLVM_DELETED_FUNCTION;
+    ParsingDeclRAIIObject(const ParsingDeclRAIIObject &) = delete;
+    void operator=(const ParsingDeclRAIIObject &) = delete;
 
   public:
     enum NoParent_t { NoParent };
     ParsingDeclRAIIObject(Parser &P, NoParent_t _)
-        : Actions(P.getActions()), DiagnosticPool(NULL) {
+        : Actions(P.getActions()), DiagnosticPool(nullptr) {
       push();
     }
 
@@ -109,7 +115,7 @@ namespace clang {
     /// RAII object (which is assumed to be the current top pool).
     ParsingDeclRAIIObject(Parser &P, ParsingDeclRAIIObject *other)
         : Actions(P.getActions()),
-          DiagnosticPool(other ? other->DiagnosticPool.getParent() : NULL) {
+          DiagnosticPool(other ? other->DiagnosticPool.getParent() : nullptr) {
       if (other) {
         DiagnosticPool.steal(other->DiagnosticPool);
         other->abort();
@@ -137,7 +143,7 @@ namespace clang {
     /// Signals that the context was completed without an appropriate
     /// declaration being parsed.
     void abort() {
-      pop(0);
+      pop(nullptr);
     }
 
     void complete(Decl *D) {
@@ -148,7 +154,7 @@ namespace clang {
     /// Unregister this object from Sema, but remember all the
     /// diagnostics that were emitted into it.
     void abortAndRemember() {
-      pop(0);
+      pop(nullptr);
     }
 
   private:
@@ -244,8 +250,8 @@ namespace clang {
   /// the way they used to be.  This is used to handle __extension__ in the
   /// parser.
   class ExtensionRAIIObject {
-    ExtensionRAIIObject(const ExtensionRAIIObject &) LLVM_DELETED_FUNCTION;
-    void operator=(const ExtensionRAIIObject &) LLVM_DELETED_FUNCTION;
+    ExtensionRAIIObject(const ExtensionRAIIObject &) = delete;
+    void operator=(const ExtensionRAIIObject &) = delete;
 
     DiagnosticsEngine &Diags;
   public:
@@ -415,15 +421,21 @@ namespace clang {
       
       return diagnoseOverflow();
     }
-    
-    bool expectAndConsume(unsigned DiagID,
+
+    bool expectAndConsume(unsigned DiagID = diag::err_expected,
                           const char *Msg = "",
                           tok::TokenKind SkipToTok = tok::unknown);
     bool consumeClose() {
       if (P.Tok.is(Close)) {
         LClose = (P.*Consumer)();
         return false;
-      } 
+      } else if (P.Tok.is(tok::semi) && P.NextToken().is(Close)) {
+        SourceLocation SemiLoc = P.ConsumeToken();
+        P.Diag(SemiLoc, diag::err_unexpected_semi)
+            << Close << FixItHint::CreateRemoval(SourceRange(SemiLoc, SemiLoc));
+        LClose = (P.*Consumer)();
+        return false;
+      }
       
       return diagnoseMissingClose();
     }

@@ -12,8 +12,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef SYSTEMZINSTRBUILDER_H
-#define SYSTEMZINSTRBUILDER_H
+#ifndef LLVM_LIB_TARGET_SYSTEMZ_SYSTEMZINSTRBUILDER_H
+#define LLVM_LIB_TARGET_SYSTEMZ_SYSTEMZINSTRBUILDER_H
 
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -35,14 +35,12 @@ addFrameReference(const MachineInstrBuilder &MIB, int FI) {
   if (MCID.mayStore())
     Flags |= MachineMemOperand::MOStore;
   int64_t Offset = 0;
-  MachineMemOperand *MMO =
-    MF.getMachineMemOperand(MachinePointerInfo(
-                              PseudoSourceValue::getFixedStack(FI), Offset),
-                            Flags, MFFrame->getObjectSize(FI),
-                            MFFrame->getObjectAlignment(FI));
+  MachineMemOperand *MMO = MF.getMachineMemOperand(
+      MachinePointerInfo::getFixedStack(MF, FI, Offset), Flags,
+      MFFrame->getObjectSize(FI), MFFrame->getObjectAlignment(FI));
   return MIB.addFrameIndex(FI).addImm(Offset).addReg(0).addMemOperand(MMO);
 }
 
-} // End llvm namespace
+} // end namespace llvm
 
 #endif

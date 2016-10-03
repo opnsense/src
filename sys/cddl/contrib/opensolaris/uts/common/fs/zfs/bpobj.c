@@ -21,6 +21,7 @@
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
+ * Copyright (c) 2014 Integros [integros.com]
  */
 
 #include <sys/bpobj.h>
@@ -300,8 +301,10 @@ bpobj_iterate_impl(bpobj_t *bpo, bpobj_itor_t func, void *arg, dmu_tx_t *tx,
 		if (free) {
 			err = bpobj_space(&sublist,
 			    &used_before, &comp_before, &uncomp_before);
-			if (err)
+			if (err != 0) {
+				bpobj_close(&sublist);
 				break;
+			}
 		}
 		err = bpobj_iterate_impl(&sublist, func, arg, tx, free);
 		if (free) {

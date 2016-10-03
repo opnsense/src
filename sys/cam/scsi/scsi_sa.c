@@ -309,7 +309,7 @@ struct sa_prot_map {
 	  /*min_val*/ 0, /*max_val*/ 1, NULL }
 };
 
-#define	SA_NUM_PROT_ENTS sizeof(sa_prot_table)/sizeof(sa_prot_table[0])
+#define	SA_NUM_PROT_ENTS nitems(sa_prot_table)
 
 #define	SA_PROT_ENABLED(softc) ((softc->flags & SA_FLAG_PROTECT_SUPP)	\
 	&& (softc->prot_info.cur_prot_state.initialized != 0)		\
@@ -614,9 +614,10 @@ static int sa_allow_io_split = SA_DEFAULT_IO_SPLIT;
  * is bad behavior, because it hides the true tape block size from the
  * application.
  */
-TUNABLE_INT("kern.cam.sa.allow_io_split", &sa_allow_io_split);
 static SYSCTL_NODE(_kern_cam, OID_AUTO, sa, CTLFLAG_RD, 0,
 		  "CAM Sequential Access Tape Driver");
+SYSCTL_INT(_kern_cam_sa, OID_AUTO, allow_io_split, CTLFLAG_RDTUN,
+    &sa_allow_io_split, 0, "Default I/O split value");
 
 static struct periph_driver sadriver =
 {
@@ -1312,7 +1313,7 @@ safindparament(struct mtparamset *ps)
 {
 	unsigned int i;
 
-	for (i = 0; i < sizeof(sa_param_table) /sizeof(sa_param_table[0]); i++){
+	for (i = 0; i < nitems(sa_param_table); i++){
 		/*
 		 * For entries, we compare all of the characters.  For
 		 * nodes, we only compare the first N characters.  The node
@@ -2374,7 +2375,7 @@ saregister(struct cam_periph *periph, void *arg)
 	 */
 	match = cam_quirkmatch((caddr_t)&cgd->inq_data,
 			       (caddr_t)sa_quirk_table,
-			       sizeof(sa_quirk_table)/sizeof(*sa_quirk_table),
+			       nitems(sa_quirk_table),
 			       sizeof(*sa_quirk_table), scsi_inquiry_match);
 
 	if (match != NULL) {
@@ -2861,7 +2862,7 @@ samount(struct cam_periph *periph, int oflags, struct cdev *dev)
 	softc = (struct sa_softc *)periph->softc;
 
 	/*
-	 * This should determine if something has happend since the last
+	 * This should determine if something has happened since the last
 	 * open/mount that would invalidate the mount. We do *not* want
 	 * to retry this command- we just want the status. But we only
 	 * do this if we're mounted already- if we're not mounted,
@@ -4960,10 +4961,6 @@ sasetpos(struct cam_periph *periph, int hard, struct mtlocate *locate_info)
 			       /*sense_len*/ SSD_FULL_SIZE,
 			       /*timeout*/ SPACE_TIMEOUT);
 	} else {
-		uint32_t blk_pointer;
-
-		blk_pointer = locate_info->logical_id;
-
 		scsi_locate_10(&ccb->csio,
 			       /*retries*/ 1,
 			       /*cbfcnp*/ sadone,

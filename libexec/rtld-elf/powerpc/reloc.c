@@ -94,8 +94,8 @@ do_copy_relocations(Obj_Entry *dstobj)
 		req.ventry = fetch_ventry(dstobj, ELF_R_SYM(rela->r_info));
 		req.flags = SYMLOOK_EARLY;
 
-		for (srcobj = dstobj->next;  srcobj != NULL;
-		     srcobj = srcobj->next) {
+		for (srcobj = globallist_next(dstobj); srcobj != NULL;
+		     srcobj = globallist_next(srcobj)) {
 			res = symlook_obj(&req, srcobj);
 			if (res == 0) {
 				srcsym = req.sym_out;
@@ -126,7 +126,7 @@ do_copy_relocations(Obj_Entry *dstobj)
 void
 reloc_non_plt_self(Elf_Dyn *dynp, Elf_Addr relocbase)
 {
-	const Elf_Rela *rela = 0, *relalim;
+	const Elf_Rela *rela = NULL, *relalim;
 	Elf_Addr relasz = 0;
 	Elf_Addr *where;
 
@@ -483,7 +483,7 @@ reloc_jmpslot(Elf_Addr *wherep, Elf_Addr target, const Obj_Entry *defobj,
 	 */
 	offset = target - (Elf_Addr)wherep;
 
-	if (abs(offset) < 32*1024*1024) {     /* inside 32MB? */
+	if (abs((int)offset) < 32*1024*1024) {     /* inside 32MB? */
 		/* b    value   # branch directly */
 		*wherep = 0x48000000 | (offset & 0x03fffffc);
 		__syncicache(wherep, 4);
@@ -622,8 +622,7 @@ init_pltgot(Obj_Entry *obj)
 void
 allocate_initial_tls(Obj_Entry *list)
 {
-	register Elf_Addr **tp __asm__("r2");
-	Elf_Addr **_tp;
+	Elf_Addr **tp;
 
 	/*
 	* Fix the size of the static TLS block by using the maximum
@@ -633,22 +632,23 @@ allocate_initial_tls(Obj_Entry *list)
 
 	tls_static_space = tls_last_offset + tls_last_size + RTLD_STATIC_TLS_EXTRA;
 
-	_tp = (Elf_Addr **) ((char *) allocate_tls(list, NULL, TLS_TCB_SIZE, 8) 
+	tp = (Elf_Addr **) ((char *) allocate_tls(list, NULL, TLS_TCB_SIZE, 8) 
 	    + TLS_TP_OFFSET + TLS_TCB_SIZE);
 
 	/*
 	 * XXX gcc seems to ignore 'tp = _tp;' 
 	 */
 	 
-	__asm __volatile("mr %0,%1" : "=r"(tp) : "r"(_tp));
+	__asm __volatile("mr 2,%0" :: "r"(tp));
 }
 
 void*
 __tls_get_addr(tls_index* ti)
 {
-	register Elf_Addr **tp __asm__("r2");
+	register Elf_Addr **tp;
 	char *p;
 
+	__asm __volatile("mr %0,2" : "=r"(tp));
 	p = tls_get_addr_common((Elf_Addr**)((Elf_Addr)tp - TLS_TP_OFFSET 
 	    - TLS_TCB_SIZE), ti->ti_module, ti->ti_offset);
 

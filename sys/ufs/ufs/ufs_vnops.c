@@ -384,8 +384,7 @@ relock:
 
 	/*
 	 * If immutable bit set, nobody gets to write it.  "& ~VADMIN_PERMS"
-	 * is here, because without it, * it would be impossible for the owner
-	 * to remove the IMMUTABLE flag.
+	 * permits the owner of the file to remove the IMMUTABLE flag.
 	 */
 	if ((accmode & (VMODIFY_PERMS & ~VADMIN_PERMS)) &&
 	    (ip->i_flags & (IMMUTABLE | SF_SNAPSHOT)))
@@ -626,7 +625,8 @@ ufs_setattr(ap)
 			 */
 			return (0);
 		}
-		if ((error = UFS_TRUNCATE(vp, vap->va_size, IO_NORMAL,
+		if ((error = UFS_TRUNCATE(vp, vap->va_size, IO_NORMAL |
+		    ((vap->va_vaflags & VA_SYNC) != 0 ? IO_SYNC : 0),
 		    cred)) != 0)
 			return (error);
 	}
@@ -1913,13 +1913,13 @@ ufs_mkdir(ap)
 	dirtemplate = *dtp;
 	dirtemplate.dot_ino = ip->i_number;
 	dirtemplate.dotdot_ino = dp->i_number;
+	vnode_pager_setsize(tvp, DIRBLKSIZ);
 	if ((error = UFS_BALLOC(tvp, (off_t)0, DIRBLKSIZ, cnp->cn_cred,
 	    BA_CLRBUF, &bp)) != 0)
 		goto bad;
 	ip->i_size = DIRBLKSIZ;
 	DIP_SET(ip, i_size, DIRBLKSIZ);
 	ip->i_flag |= IN_CHANGE | IN_UPDATE;
-	vnode_pager_setsize(tvp, (u_long)ip->i_size);
 	bcopy((caddr_t)&dirtemplate, (caddr_t)bp->b_data, sizeof dirtemplate);
 	if (DOINGSOFTDEP(tvp)) {
 		/*

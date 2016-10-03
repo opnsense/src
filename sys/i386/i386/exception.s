@@ -37,7 +37,6 @@
 #include "opt_apic.h"
 #include "opt_atpic.h"
 #include "opt_hwpmc_hooks.h"
-#include "opt_kdtrace.h"
 #include "opt_npx.h"
 
 #include <machine/asmacros.h>
@@ -235,7 +234,7 @@ IDTVEC(lcall_syscall)
 	pushfl				/* save eflags */
 	popl	8(%esp)			/* shuffle into tf_eflags */
 	pushl	$7			/* sizeof "lcall 7,0" */
-	subl	$4,%esp			/* skip over tf_trapno */
+	pushl	$0			/* tf_trapno */
 	pushal
 	pushl	$0
 	movw	%ds,(%esp)
@@ -264,7 +263,7 @@ IDTVEC(lcall_syscall)
 	SUPERALIGN_TEXT
 IDTVEC(int0x80_syscall)
 	pushl	$2			/* sizeof "int 0x80" */
-	subl	$4,%esp			/* skip over tf_trapno */
+	pushl	$0			/* tf_trapno */
 	pushal
 	pushl	$0
 	movw	%ds,(%esp)
@@ -344,6 +343,7 @@ MCOUNT_LABEL(eintr)
 	.text
 	SUPERALIGN_TEXT
 	.type	doreti,@function
+	.globl	doreti
 doreti:
 	FAKE_MCOUNT($bintr)		/* init "from" bintr -> doreti */
 doreti_next:

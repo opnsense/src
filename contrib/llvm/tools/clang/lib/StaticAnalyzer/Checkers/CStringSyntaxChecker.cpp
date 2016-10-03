@@ -31,6 +31,7 @@ using namespace ento;
 
 namespace {
 class WalkAST: public StmtVisitor<WalkAST> {
+  const CheckerBase *Checker;
   BugReporter &BR;
   AnalysisDeclContext* AC;
 
@@ -81,9 +82,8 @@ class WalkAST: public StmtVisitor<WalkAST> {
   bool containsBadStrncatPattern(const CallExpr *CE);
 
 public:
-  WalkAST(BugReporter &br, AnalysisDeclContext* ac) :
-      BR(br), AC(ac) {
-  }
+  WalkAST(const CheckerBase *checker, BugReporter &br, AnalysisDeclContext *ac)
+      : Checker(checker), BR(br), AC(ac) {}
 
   // Statement visitor methods.
   void VisitChildren(Stmt *S);
@@ -157,8 +157,9 @@ void WalkAST::VisitCallExpr(CallExpr *CE) {
         os << "U";
       os << "se a safer 'strlcat' API";
 
-      BR.EmitBasicReport(FD, "Anti-pattern in the argument", "C String API",
-                         os.str(), Loc, LenArg->getSourceRange());
+      BR.EmitBasicReport(FD, Checker, "Anti-pattern in the argument",
+                         "C String API", os.str(), Loc,
+                         LenArg->getSourceRange());
     }
   }
 
@@ -167,10 +168,9 @@ void WalkAST::VisitCallExpr(CallExpr *CE) {
 }
 
 void WalkAST::VisitChildren(Stmt *S) {
-  for (Stmt::child_iterator I = S->child_begin(), E = S->child_end(); I != E;
-      ++I)
-    if (Stmt *child = *I)
-      Visit(child);
+  for (Stmt *Child : S->children())
+    if (Child)
+      Visit(Child);
 }
 
 namespace {
@@ -179,7 +179,7 @@ public:
 
   void checkASTCodeBody(const Decl *D, AnalysisManager& Mgr,
       BugReporter &BR) const {
-    WalkAST walker(BR, Mgr.getAnalysisDeclContext(D));
+    WalkAST walker(this, BR, Mgr.getAnalysisDeclContext(D));
     walker.Visit(D->getBody());
   }
 };

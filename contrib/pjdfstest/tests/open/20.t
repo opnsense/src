@@ -8,13 +8,19 @@ dir=`dirname $0`
 
 [ "${os}:${fs}" = "FreeBSD:UFS" ] || quick_exit
 
+requires_exec
+
 echo "1..4"
 
 n0=`namegen`
 
 cp -pf `which sleep` ${n0}
 ./${n0} 3 &
+while ! pkill -0 -f ./${n0}; do
+	sleep 0.1
+done
 expect ETXTBSY open ${n0} O_WRONLY
 expect ETXTBSY open ${n0} O_RDWR
 expect ETXTBSY open ${n0} O_RDONLY,O_TRUNC
+pkill -9 -f ./${n0}
 expect 0 unlink ${n0}

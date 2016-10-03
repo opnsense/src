@@ -32,6 +32,8 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#include "opt_ktrace.h"
+
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/limits.h>
@@ -54,6 +56,9 @@ __FBSDID("$FreeBSD$");
 #include <sys/timers.h>
 #include <sys/timetc.h>
 #include <sys/vnode.h>
+#ifdef KTRACE
+#include <sys/ktrace.h>
+#endif
 
 #include <vm/vm.h>
 #include <vm/vm_extern.h>
@@ -398,7 +403,8 @@ kern_clock_settime(struct thread *td, clockid_t clock_id, struct timespec *ats)
 		return (error);
 	if (clock_id != CLOCK_REALTIME)
 		return (EINVAL);
-	if (ats->tv_nsec < 0 || ats->tv_nsec >= 1000000000)
+	if (ats->tv_nsec < 0 || ats->tv_nsec >= 1000000000 ||
+	    ats->tv_sec < 0)
 		return (EINVAL);
 	/* XXX Don't convert nsec->usec and back */
 	TIMESPEC_TO_TIMEVAL(&atv, ats);
@@ -452,7 +458,7 @@ kern_clock_getres(struct thread *td, clockid_t clock_id, struct timespec *ts)
 	case CLOCK_VIRTUAL:
 	case CLOCK_PROF:
 		/* Accurately round up here because we can do so cheaply. */
-		ts->tv_nsec = (1000000000 + hz - 1) / hz;
+		ts->tv_nsec = howmany(1000000000, hz);
 		break;
 	case CLOCK_SECOND:
 		ts->tv_sec = 1;
@@ -618,7 +624,8 @@ kern_settimeofday(struct thread *td, struct timeval *tv, struct timezone *tzp)
 		return (error);
 	/* Verify all parameters before changing time. */
 	if (tv) {
-		if (tv->tv_usec < 0 || tv->tv_usec >= 1000000)
+		if (tv->tv_usec < 0 || tv->tv_usec >= 1000000 ||
+		    tv->tv_sec < 0)
 			return (EINVAL);
 		error = settime(td, tv);
 	}
@@ -699,6 +706,10 @@ kern_getitimer(struct thread *td, u_int which, struct itimerval *aitv)
 		*aitv = p->p_stats->p_timer[which];
 		PROC_ITIMUNLOCK(p);
 	}
+#ifdef KTRACE
+	if (KTRPOINT(td, KTR_STRUCT))
+		ktritimerval(aitv);
+#endif
 	return (0);
 }
 
@@ -740,6 +751,10 @@ kern_setitimer(struct thread *td, u_int which, struct itimerval *aitv,
 
 	if (which > ITIMER_PROF)
 		return (EINVAL);
+#ifdef KTRACE
+	if (KTRPOINT(td, KTR_STRUCT))
+		ktritimerval(aitv);
+#endif
 	if (itimerfix(&aitv->it_value) ||
 	    aitv->it_value.tv_sec > INT32_MAX / 2)
 		return (EINVAL);
@@ -784,6 +799,10 @@ kern_setitimer(struct thread *td, u_int which, struct itimerval *aitv,
 		p->p_stats->p_timer[which] = *aitv;
 		PROC_ITIMUNLOCK(p);
 	}
+#ifdef KTRACE
+	if (KTRPOINT(td, KTR_STRUCT))
+		ktritimerval(oitv);
+#endif
 	return (0);
 }
 

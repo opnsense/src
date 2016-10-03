@@ -20,6 +20,7 @@ namespace llvm {
   class LiveIntervals;
   class MachineBlockFrequencyInfo;
   class MachineLoopInfo;
+  class VirtRegMap;
 
   /// \brief Normalize the spill weight of a live interval
   ///
@@ -30,8 +31,10 @@ namespace llvm {
   /// @param UseDefFreq Expected number of executed use and def instructions
   ///                   per function call. Derived from block frequencies.
   /// @param Size       Size of live interval as returnexd by getSize()
+  /// @param NumInstr   Number of instructions using this live interval
   ///
-  static inline float normalizeSpillWeight(float UseDefFreq, unsigned Size) {
+  static inline float normalizeSpillWeight(float UseDefFreq, unsigned Size,
+                                           unsigned NumInstr) {
     // The constant 25 instructions is added to avoid depending too much on
     // accidental SlotIndex gaps for small intervals. The effect is that small
     // intervals have a spill weight that is mostly proportional to the number
@@ -44,11 +47,12 @@ namespace llvm {
   /// spill weight and allocation hint.
   class VirtRegAuxInfo {
   public:
-    typedef float (*NormalizingFn)(float, unsigned);
+    typedef float (*NormalizingFn)(float, unsigned, unsigned);
 
   private:
     MachineFunction &MF;
     LiveIntervals &LIS;
+    VirtRegMap *VRM;
     const MachineLoopInfo &Loops;
     const MachineBlockFrequencyInfo &MBFI;
     DenseMap<unsigned, float> Hint;
@@ -56,10 +60,10 @@ namespace llvm {
 
   public:
     VirtRegAuxInfo(MachineFunction &mf, LiveIntervals &lis,
-                   const MachineLoopInfo &loops,
+                   VirtRegMap *vrm, const MachineLoopInfo &loops,
                    const MachineBlockFrequencyInfo &mbfi,
                    NormalizingFn norm = normalizeSpillWeight)
-        : MF(mf), LIS(lis), Loops(loops), MBFI(mbfi), normalize(norm) {}
+        : MF(mf), LIS(lis), VRM(vrm), Loops(loops), MBFI(mbfi), normalize(norm) {}
 
     /// \brief (re)compute li's spill weight and allocation hint.
     void calculateSpillWeightAndHint(LiveInterval &li);
@@ -68,6 +72,7 @@ namespace llvm {
   /// \brief Compute spill weights and allocation hints for all virtual register
   /// live intervals.
   void calculateSpillWeightsAndHints(LiveIntervals &LIS, MachineFunction &MF,
+                                     VirtRegMap *VRM,
                                      const MachineLoopInfo &MLI,
                                      const MachineBlockFrequencyInfo &MBFI,
                                      VirtRegAuxInfo::NormalizingFn norm =

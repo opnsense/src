@@ -122,12 +122,14 @@ __FBSDID("$FreeBSD$");
 #include <sys/sched.h>
 #include <sys/smp.h>
 #include <sys/eventhandler.h>
+#include <sys/timetc.h>
 
 #include <geom/geom.h>
 
 #include <machine/_inttypes.h>
 #include <machine/intr_machdep.h>
-#include <machine/apicvar.h>
+
+#include <x86/apicvar.h>
 
 #include <vm/vm.h>
 #include <vm/vm_extern.h>
@@ -139,17 +141,12 @@ __FBSDID("$FreeBSD$");
 #include <xen/gnttab.h>
 #include <xen/xen_intr.h>
 
-#ifdef XENHVM
 #include <xen/hvm.h>
-#endif
 
 #include <xen/interface/event_channel.h>
 #include <xen/interface/grant_table.h>
 
 #include <xen/xenbus/xenbusvar.h>
-
-#include <machine/xen/xenvar.h>
-#include <machine/xen/xenfunc.h>
 
 /*--------------------------- Forward Declarations --------------------------*/
 /** Function signature for shutdown event handlers. */
@@ -193,148 +190,6 @@ xctrl_reboot()
 	shutdown_nice(0);
 }
 
-#ifndef XENHVM
-extern void xencons_suspend(void);
-extern void xencons_resume(void);
-
-/* Full PV mode suspension. */
-static void
-xctrl_suspend()
-{
-	int i, j, k, fpp, suspend_cancelled;
-	unsigned long max_pfn, start_info_mfn;
-
-	EVENTHANDLER_INVOKE(power_suspend);
-
-#ifdef SMP
-	struct thread *td;
-	cpuset_t map;
-	u_int cpuid;
-
-	/*
-	 * Bind us to CPU 0 and stop any other VCPUs.
-	 */
-	td = curthread;
-	thread_lock(td);
-	sched_bind(td, 0);
-	thread_unlock(td);
-	cpuid = PCPU_GET(cpuid);
-	KASSERT(cpuid == 0, ("xen_suspend: not running on cpu 0"));
-
-	map = all_cpus;
-	CPU_CLR(cpuid, &map);
-	CPU_NAND(&map, &stopped_cpus);
-	if (!CPU_EMPTY(&map))
-		stop_cpus(map);
-#endif
-
-	/*
-	 * Be sure to hold Giant across DEVICE_SUSPEND/RESUME since non-MPSAFE
-	 * drivers need this.
-	 */
-	mtx_lock(&Giant);
-	if (DEVICE_SUSPEND(root_bus) != 0) {
-		mtx_unlock(&Giant);
-		printf("%s: device_suspend failed\n", __func__);
-#ifdef SMP
-		if (!CPU_EMPTY(&map))
-			restart_cpus(map);
-#endif
-		return;
-	}
-	mtx_unlock(&Giant);
-
-	local_irq_disable();
-
-	xencons_suspend();
-	gnttab_suspend();
-	intr_suspend();
-
-	max_pfn = HYPERVISOR_shared_info->arch.max_pfn;
-
-	void *shared_info = HYPERVISOR_shared_info;
-	HYPERVISOR_shared_info = NULL;
-	pmap_kremove((vm_offset_t) shared_info);
-	PT_UPDATES_FLUSH();
-
-	xen_start_info->store_mfn = MFNTOPFN(xen_start_info->store_mfn);
-	xen_start_info->console.domU.mfn = MFNTOPFN(xen_start_info->console.domU.mfn);
-
-	/*
-	 * We'll stop somewhere inside this hypercall. When it returns,
-	 * we'll start resuming after the restore.
-	 */
-	start_info_mfn = VTOMFN(xen_start_info);
-	pmap_suspend();
-	suspend_cancelled = HYPERVISOR_suspend(start_info_mfn);
-	pmap_resume();
-
-	pmap_kenter_ma((vm_offset_t) shared_info, xen_start_info->shared_info);
-	HYPERVISOR_shared_info = shared_info;
-
-	HYPERVISOR_shared_info->arch.pfn_to_mfn_frame_list_list =
-		VTOMFN(xen_pfn_to_mfn_frame_list_list);
-  
-	fpp = PAGE_SIZE/sizeof(unsigned long);
-	for (i = 0, j = 0, k = -1; i < max_pfn; i += fpp, j++) {
-		if ((j % fpp) == 0) {
-			k++;
-			xen_pfn_to_mfn_frame_list_list[k] = 
-				VTOMFN(xen_pfn_to_mfn_frame_list[k]);
-			j = 0;
-		}
-		xen_pfn_to_mfn_frame_list[k][j] = 
-			VTOMFN(&xen_phys_machine[i]);
-	}
-	HYPERVISOR_shared_info->arch.max_pfn = max_pfn;
-
-	gnttab_resume();
-	intr_resume(suspend_cancelled != 0);
-	local_irq_enable();
-	xencons_resume();
-
-#ifdef CONFIG_SMP
-	for_each_cpu(i)
-		vcpu_prepare(i);
-
-#endif
-
-	/* 
-	 * Only resume xenbus /after/ we've prepared our VCPUs; otherwise
-	 * the VCPU hotplug callback can race with our vcpu_prepare
-	 */
-	mtx_lock(&Giant);
-	DEVICE_RESUME(root_bus);
-	mtx_unlock(&Giant);
-
-#ifdef SMP
-	thread_lock(curthread);
-	sched_unbind(curthread);
-	thread_unlock(curthread);
-	if (!CPU_EMPTY(&map))
-		restart_cpus(map);
-#endif
-	EVENTHANDLER_INVOKE(power_resume);
-}
-
-static void
-xen_pv_shutdown_final(void *arg, int howto)
-{
-	/*
-	 * Inform the hypervisor that shutdown is complete.
-	 * This is not necessary in HVM domains since Xen
-	 * emulates ACPI in that mode and FreeBSD's ACPI
-	 * support will request this transition.
-	 */
-	if (howto & (RB_HALT | RB_POWEROFF))
-		HYPERVISOR_shutdown(SHUTDOWN_poweroff);
-	else
-		HYPERVISOR_shutdown(SHUTDOWN_reboot);
-}
-
-#else
-
-/* HVM mode suspension. */
 static void
 xctrl_suspend()
 {
@@ -343,13 +198,22 @@ xctrl_suspend()
 #endif
 	int suspend_cancelled;
 
+	EVENTHANDLER_INVOKE(power_suspend_early);
+	stop_all_proc();
 	EVENTHANDLER_INVOKE(power_suspend);
 
+#ifdef EARLY_AP_STARTUP
+	MPASS(mp_ncpus == 1 || smp_started);
+	thread_lock(curthread);
+	sched_bind(curthread, 0);
+	thread_unlock(curthread);
+#else
 	if (smp_started) {
 		thread_lock(curthread);
 		sched_bind(curthread, 0);
 		thread_unlock(curthread);
 	}
+#endif
 	KASSERT((PCPU_GET(cpuid) == 0), ("Not running on CPU#0"));
 
 	/*
@@ -368,9 +232,19 @@ xctrl_suspend()
 		printf("%s: device_suspend failed\n", __func__);
 		return;
 	}
-	mtx_unlock(&Giant);
 
 #ifdef SMP
+#ifdef EARLY_AP_STARTUP
+	/*
+	 * Suspend other CPUs. This prevents IPIs while we
+	 * are resuming, and will allow us to reset per-cpu
+	 * vcpu_info on resume.
+	 */
+	cpu_suspend_map = all_cpus;
+	CPU_CLR(PCPU_GET(cpuid), &cpu_suspend_map);
+	if (!CPU_EMPTY(&cpu_suspend_map))
+		suspend_cpus(cpu_suspend_map);
+#else
 	CPU_ZERO(&cpu_suspend_map);	/* silence gcc */
 	if (smp_started) {
 		/*
@@ -383,6 +257,7 @@ xctrl_suspend()
 		if (!CPU_EMPTY(&cpu_suspend_map))
 			suspend_cpus(cpu_suspend_map);
 	}
+#endif
 #endif
 
 	/*
@@ -401,17 +276,17 @@ xctrl_suspend()
 	/*
 	 * Reset grant table info.
 	 */
-	gnttab_resume();
+	gnttab_resume(NULL);
 
 #ifdef SMP
-	/* Send an IPI_BITMAP in case there are pending bitmap IPIs. */
-	lapic_ipi_vectored(IPI_BITMAP_VECTOR, APIC_IPI_DEST_ALL);
-	if (smp_started && !CPU_EMPTY(&cpu_suspend_map)) {
+	if (!CPU_EMPTY(&cpu_suspend_map)) {
 		/*
 		 * Now that event channels have been initialized,
 		 * resume CPUs.
 		 */
 		resume_cpus(cpu_suspend_map);
+		/* Send an IPI_BITMAP in case there are pending bitmap IPIs. */
+		lapic_ipi_vectored(IPI_BITMAP_VECTOR, APIC_IPI_DEST_ALL);
 	}
 #endif
 
@@ -419,15 +294,29 @@ xctrl_suspend()
 	 * FreeBSD really needs to add DEVICE_SUSPEND_CANCEL or
 	 * similar.
 	 */
-	mtx_lock(&Giant);
 	DEVICE_RESUME(root_bus);
 	mtx_unlock(&Giant);
 
+	/*
+	 * Warm up timecounter again and reset system clock.
+	 */
+	timecounter->tc_get_timecount(timecounter);
+	timecounter->tc_get_timecount(timecounter);
+	inittodr(time_second);
+
+#ifdef EARLY_AP_STARTUP
+	thread_lock(curthread);
+	sched_unbind(curthread);
+	thread_unlock(curthread);
+#else
 	if (smp_started) {
 		thread_lock(curthread);
 		sched_unbind(curthread);
 		thread_unlock(curthread);
 	}
+#endif
+
+	resume_all_proc();
 
 	EVENTHANDLER_INVOKE(power_resume);
 
@@ -435,12 +324,26 @@ xctrl_suspend()
 		printf("System resumed after suspension\n");
 
 }
-#endif
 
 static void
 xctrl_crash()
 {
 	panic("Xen directed crash");
+}
+
+static void
+xen_pv_shutdown_final(void *arg, int howto)
+{
+	/*
+	 * Inform the hypervisor that shutdown is complete.
+	 * This is not necessary in HVM domains since Xen
+	 * emulates ACPI in that mode and FreeBSD's ACPI
+	 * support will request this transition.
+	 */
+	if (howto & (RB_HALT | RB_POWEROFF))
+		HYPERVISOR_shutdown(SHUTDOWN_poweroff);
+	else
+		HYPERVISOR_shutdown(SHUTDOWN_reboot);
 }
 
 /*------------------------------ Event Reception -----------------------------*/
@@ -490,7 +393,7 @@ xctrl_identify(driver_t *driver __unused, device_t parent)
 }
 
 /**
- * \brief Probe for the existance of the Xen Control device
+ * \brief Probe for the existence of the Xen Control device
  *
  * \param dev  NewBus device_t for this Xen control instance.
  *
@@ -501,7 +404,7 @@ xctrl_probe(device_t dev)
 {
 	device_set_desc(dev, "Xen Control Device");
 
-	return (0);
+	return (BUS_PROBE_NOWILDCARD);
 }
 
 /**
@@ -525,10 +428,9 @@ xctrl_attach(device_t dev)
 	xctrl->xctrl_watch.callback_data = (uintptr_t)xctrl;
 	xs_register_watch(&xctrl->xctrl_watch);
 
-#ifndef XENHVM
-	EVENTHANDLER_REGISTER(shutdown_final, xen_pv_shutdown_final, NULL,
-			      SHUTDOWN_PRI_LAST);
-#endif
+	if (xen_pv_domain())
+		EVENTHANDLER_REGISTER(shutdown_final, xen_pv_shutdown_final, NULL,
+		                      SHUTDOWN_PRI_LAST);
 
 	return (0);
 }

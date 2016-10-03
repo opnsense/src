@@ -97,7 +97,6 @@ static int ext2_chown(struct vnode *, uid_t, gid_t, struct ucred *,
 static vop_close_t	ext2_close;
 static vop_create_t	ext2_create;
 static vop_fsync_t	ext2_fsync;
-static vop_getpages_t	ext2_getpages;
 static vop_getattr_t	ext2_getattr;
 static vop_ioctl_t	ext2_ioctl;
 static vop_link_t	ext2_link;
@@ -128,7 +127,8 @@ struct vop_vector ext2_vnodeops = {
 	.vop_close =		ext2_close,
 	.vop_create =		ext2_create,
 	.vop_fsync =		ext2_fsync,
-	.vop_getpages =		ext2_getpages,
+	.vop_getpages =		vnode_pager_local_getpages,
+	.vop_getpages_async =	vnode_pager_local_getpages_async,
 	.vop_getattr =		ext2_getattr,
 	.vop_inactive =		ext2_inactive,
 	.vop_ioctl =		ext2_ioctl,
@@ -464,16 +464,14 @@ ext2_setattr(struct vop_setattr_args *ap)
 		    ((vap->va_vaflags & VA_UTIMES_NULL) == 0 ||
 		    (error = VOP_ACCESS(vp, VWRITE, cred, td))))
 			return (error);
-		if (vap->va_atime.tv_sec != VNOVAL)
-			ip->i_flag |= IN_ACCESS;
-		if (vap->va_mtime.tv_sec != VNOVAL)
-			ip->i_flag |= IN_CHANGE | IN_UPDATE;
-		ext2_itimes(vp);
+		ip->i_flag |= IN_CHANGE | IN_MODIFIED;
 		if (vap->va_atime.tv_sec != VNOVAL) {
+			ip->i_flag &= ~IN_ACCESS;
 			ip->i_atime = vap->va_atime.tv_sec;
 			ip->i_atimensec = vap->va_atime.tv_nsec;
 		}
 		if (vap->va_mtime.tv_sec != VNOVAL) {
+			ip->i_flag &= ~IN_UPDATE;
 			ip->i_mtime = vap->va_mtime.tv_sec;
 			ip->i_mtimensec = vap->va_mtime.tv_nsec;
 		}
@@ -1369,7 +1367,7 @@ ext2_print(struct vop_print_args *ap)
 	struct vnode *vp = ap->a_vp;
 	struct inode *ip = VTOI(vp);
 
-	vn_printf(ip->i_devvp, "\tino %lu", (u_long)ip->i_number);
+	vn_printf(ip->i_devvp, "\tino %ju", (uintmax_t)ip->i_number);
 	if (vp->v_type == VFIFO)
 		fifo_printinfo(vp);
 	printf("\n");
@@ -1790,6 +1788,7 @@ ext2_ioctl(struct vop_ioctl_args *ap)
 static int
 ext4_ext_read(struct vop_read_args *ap)
 {
+	static unsigned char zeroes[EXT2_MAX_BLOCK_SIZE];
 	struct vnode *vp;
 	struct inode *ip;
 	struct uio *uio;
@@ -1834,11 +1833,15 @@ ext4_ext_read(struct vop_read_args *ap)
 		switch (cache_type) {
 		case EXT4_EXT_CACHE_NO:
 			ext4_ext_find_extent(fs, ip, lbn, &path);
-			ep = path.ep_ext;
+			if (path.ep_is_sparse)
+				ep = &path.ep_sparse_ext;
+			else
+				ep = path.ep_ext;
 			if (ep == NULL)
 				return (EIO);
 
-			ext4_ext_put_cache(ip, ep, EXT4_EXT_CACHE_IN);
+			ext4_ext_put_cache(ip, ep,
+			    path.ep_is_sparse ? EXT4_EXT_CACHE_GAP : EXT4_EXT_CACHE_IN);
 
 			newblk = lbn - ep->e_blk + (ep->e_start_lo |
 			    (daddr_t)ep->e_start_hi << 32);
@@ -1851,7 +1854,7 @@ ext4_ext_read(struct vop_read_args *ap)
 
 		case EXT4_EXT_CACHE_GAP:
 			/* block has not been allocated yet */
-			return (0);
+			break;
 
 		case EXT4_EXT_CACHE_IN:
 			newblk = lbn - nex.e_blk + (nex.e_start_lo |
@@ -1862,24 +1865,34 @@ ext4_ext_read(struct vop_read_args *ap)
 			panic("%s: invalid cache type", __func__);
 		}
 
-		error = bread(ip->i_devvp, fsbtodb(fs, newblk), size, NOCRED, &bp);
-		if (error) {
-			brelse(bp);
-			return (error);
-		}
-
-		size -= bp->b_resid;
-		if (size < xfersize) {
-			if (size == 0) {
-				bqrelse(bp);
-				break;
+		if (cache_type == EXT4_EXT_CACHE_GAP ||
+		    (cache_type == EXT4_EXT_CACHE_NO && path.ep_is_sparse)) {
+			if (xfersize > sizeof(zeroes))
+				xfersize = sizeof(zeroes);
+			error = uiomove(zeroes, xfersize, uio);
+			if (error)
+				return (error);
+		} else {
+			error = bread(ip->i_devvp, fsbtodb(fs, newblk), size,
+			    NOCRED, &bp);
+			if (error) {
+				brelse(bp);
+				return (error);
 			}
-			xfersize = size;
+
+			size -= bp->b_resid;
+			if (size < xfersize) {
+				if (size == 0) {
+					bqrelse(bp);
+					break;
+				}
+				xfersize = size;
+			}
+			error = uiomove(bp->b_data + blkoffset, xfersize, uio);
+			bqrelse(bp);
+			if (error)
+				return (error);
 		}
-		error = uiomove(bp->b_data + blkoffset, (int)xfersize, uio);
-		bqrelse(bp);
-		if (error)
-			return (error);
 	}
 
 	return (0);
@@ -2064,44 +2077,4 @@ ext2_write(struct vop_write_args *ap)
 			error = ext2_update(vp, 1);
 	}
 	return (error);
-}
-
-/*
- * get page routine
- */
-static int
-ext2_getpages(struct vop_getpages_args *ap)
-{
-	int i;
-	vm_page_t mreq;
-	int pcount;
-
-	pcount = round_page(ap->a_count) / PAGE_SIZE;
-	mreq = ap->a_m[ap->a_reqpage];
-
-	/*
-	 * if ANY DEV_BSIZE blocks are valid on a large filesystem block,
-	 * then the entire page is valid.  Since the page may be mapped,
-	 * user programs might reference data beyond the actual end of file
-	 * occuring within the page.  We have to zero that data.
-	 */
-	VM_OBJECT_WLOCK(mreq->object);
-	if (mreq->valid) {
-		if (mreq->valid != VM_PAGE_BITS_ALL)
-			vm_page_zero_invalid(mreq, TRUE);
-		for (i = 0; i < pcount; i++) {
-			if (i != ap->a_reqpage) {
-				vm_page_lock(ap->a_m[i]);
-				vm_page_free(ap->a_m[i]);
-				vm_page_unlock(ap->a_m[i]);
-			}
-		}
-		VM_OBJECT_WUNLOCK(mreq->object);
-		return VM_PAGER_OK;
-	}
-	VM_OBJECT_WUNLOCK(mreq->object);
-
-	return vnode_pager_generic_getpages(ap->a_vp, ap->a_m,
-					    ap->a_count,
-					    ap->a_reqpage);
 }

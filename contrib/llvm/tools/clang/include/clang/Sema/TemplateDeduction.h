@@ -10,8 +10,8 @@
 // routines.
 //
 //===----------------------------------------------------------------------===/
-#ifndef LLVM_CLANG_SEMA_TEMPLATE_DEDUCTION_H
-#define LLVM_CLANG_SEMA_TEMPLATE_DEDUCTION_H
+#ifndef LLVM_CLANG_SEMA_TEMPLATEDEDUCTION_H
+#define LLVM_CLANG_SEMA_TEMPLATEDEDUCTION_H
 
 #include "clang/AST/DeclTemplate.h"
 #include "clang/Basic/PartialDiagnostic.h"
@@ -19,6 +19,7 @@
 
 namespace clang {
 
+struct DeducedPack;
 class TemplateArgumentList;
 class Sema;
 
@@ -43,12 +44,13 @@ class TemplateDeductionInfo {
   /// SFINAE while performing template argument deduction.
   SmallVector<PartialDiagnosticAt, 4> SuppressedDiagnostics;
 
-  TemplateDeductionInfo(const TemplateDeductionInfo &) LLVM_DELETED_FUNCTION;
-  void operator=(const TemplateDeductionInfo &) LLVM_DELETED_FUNCTION;
+  TemplateDeductionInfo(const TemplateDeductionInfo &) = delete;
+  void operator=(const TemplateDeductionInfo &) = delete;
 
 public:
   TemplateDeductionInfo(SourceLocation Loc)
-    : Deduced(0), Loc(Loc), HasSFINAEDiagnostic(false), Expression(0) { }
+    : Deduced(nullptr), Loc(Loc), HasSFINAEDiagnostic(false),
+      Expression(nullptr) {}
 
   /// \brief Returns the location at which template argument is
   /// occurring.
@@ -59,7 +61,7 @@ public:
   /// \brief Take ownership of the deduced template argument list.
   TemplateArgumentList *take() {
     TemplateArgumentList *Result = Deduced;
-    Deduced = 0;
+    Deduced = nullptr;
     return Result;
   }
 
@@ -89,9 +91,7 @@ public:
     if (HasSFINAEDiagnostic)
       return;
     SuppressedDiagnostics.clear();
-    SuppressedDiagnostics.push_back(
-        std::make_pair(Loc, PartialDiagnostic::NullDiagnostic()));
-    SuppressedDiagnostics.back().second.swap(PD);
+    SuppressedDiagnostics.emplace_back(Loc, std::move(PD));
     HasSFINAEDiagnostic = true;
   }
 
@@ -100,9 +100,7 @@ public:
                                PartialDiagnostic PD) {
     if (HasSFINAEDiagnostic)
       return;
-    SuppressedDiagnostics.push_back(
-        std::make_pair(Loc, PartialDiagnostic::NullDiagnostic()));
-    SuppressedDiagnostics.back().second.swap(PD);
+    SuppressedDiagnostics.emplace_back(Loc, std::move(PD));
   }
 
   /// \brief Iterator over the set of suppressed diagnostics.
@@ -142,6 +140,9 @@ public:
   ///   TDK_SubstitutionFailure: this argument is the template
   ///   argument we were instantiating when we encountered an error.
   ///
+  ///   TDK_DeducedMismatch: this is the parameter type, after substituting
+  ///   deduced arguments.
+  ///
   ///   TDK_NonDeducedMismatch: this is the component of the 'parameter'
   ///   of the deduction, directly provided in the source code.
   TemplateArgument FirstArg;
@@ -149,18 +150,37 @@ public:
   /// \brief The second template argument to which the template
   /// argument deduction failure refers.
   ///
+  ///   TDK_Inconsistent: this argument is the second value deduced
+  ///   for the corresponding template parameter.
+  ///
+  ///   TDK_DeducedMismatch: this is the (adjusted) call argument type.
+  ///
   ///   TDK_NonDeducedMismatch: this is the mismatching component of the
   ///   'argument' of the deduction, from which we are deducing arguments.
   ///
   /// FIXME: Finish documenting this.
   TemplateArgument SecondArg;
 
-  /// \brief The expression which caused a deduction failure.
+  union {
+    /// \brief The expression which caused a deduction failure.
+    ///
+    ///   TDK_FailedOverloadResolution: this argument is the reference to
+    ///   an overloaded function which could not be resolved to a specific
+    ///   function.
+    Expr *Expression;
+
+    /// \brief The index of the function argument that caused a deduction
+    /// failure.
+    ///
+    ///   TDK_DeducedMismatch: this is the index of the argument that had a
+    ///   different argument type from its substituted parameter type.
+    unsigned CallArgIndex;
+  };
+
+  /// \brief Information on packs that we're currently expanding.
   ///
-  ///   TDK_FailedOverloadResolution: this argument is the reference to
-  ///   an overloaded function which could not be resolved to a specific
-  ///   function.
-  Expr *Expression;
+  /// FIXME: This should be kept internal to SemaTemplateDeduction.
+  SmallVector<DeducedPack *, 8> PendingDeducedPacks;
 };
 
 } // end namespace sema
@@ -208,6 +228,10 @@ struct DeductionFailureInfo {
   /// if any.
   Expr *getExpr();
 
+  /// \brief Return the index of the call argument that this deduction
+  /// failure refers to, if any.
+  llvm::Optional<unsigned> getCallArgIndex();
+
   /// \brief Free any memory associated with this deduction failure.
   void Destroy();
 };
@@ -233,7 +257,7 @@ struct TemplateSpecCandidate {
   }
 
   /// Diagnose a template argument deduction failure.
-  void NoteDeductionFailure(Sema &S);
+  void NoteDeductionFailure(Sema &S, bool ForTakingAddress);
 };
 
 /// TemplateSpecCandidateSet - A set of generalized overload candidates,
@@ -243,15 +267,20 @@ struct TemplateSpecCandidate {
 class TemplateSpecCandidateSet {
   SmallVector<TemplateSpecCandidate, 16> Candidates;
   SourceLocation Loc;
+  // Stores whether we're taking the address of these candidates. This helps us
+  // produce better error messages when dealing with the pass_object_size
+  // attribute on parameters.
+  bool ForTakingAddress;
 
   TemplateSpecCandidateSet(
-      const TemplateSpecCandidateSet &) LLVM_DELETED_FUNCTION;
-  void operator=(const TemplateSpecCandidateSet &) LLVM_DELETED_FUNCTION;
+      const TemplateSpecCandidateSet &) = delete;
+  void operator=(const TemplateSpecCandidateSet &) = delete;
 
   void destroyCandidates();
 
 public:
-  TemplateSpecCandidateSet(SourceLocation Loc) : Loc(Loc) {}
+  TemplateSpecCandidateSet(SourceLocation Loc, bool ForTakingAddress = false)
+      : Loc(Loc), ForTakingAddress(ForTakingAddress) {}
   ~TemplateSpecCandidateSet() { destroyCandidates(); }
 
   SourceLocation getLocation() const { return Loc; }
@@ -270,7 +299,7 @@ public:
   /// \brief Add a new candidate with NumConversions conversion sequence slots
   /// to the overload set.
   TemplateSpecCandidate &addCandidate() {
-    Candidates.push_back(TemplateSpecCandidate());
+    Candidates.emplace_back();
     return Candidates.back();
   }
 

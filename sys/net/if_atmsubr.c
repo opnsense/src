@@ -53,6 +53,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/malloc.h>
 
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/netisr.h>
 #include <net/route.h>
 #include <net/if_dl.h>
@@ -191,7 +192,7 @@ atm_output(struct ifnet *ifp, struct mbuf *m0, const struct sockaddr *dst,
 		if (atm_flags & ATM_PH_LLCSNAP)
 			sz += 8;	/* sizeof snap == 8 */
 		M_PREPEND(m, sz, M_NOWAIT);
-		if (m == 0)
+		if (m == NULL)
 			senderr(ENOBUFS);
 		ad = mtod(m, struct atm_pseudohdr *);
 		*ad = atmdst;
@@ -251,7 +252,7 @@ atm_input(struct ifnet *ifp, struct atm_pseudohdr *ah, struct mbuf *m,
 #ifdef MAC
 	mac_ifnet_create_mbuf(ifp, m);
 #endif
-	ifp->if_ibytes += m->m_pkthdr.len;
+	if_inc_counter(ifp, IFCOUNTER_IBYTES, m->m_pkthdr.len);
 
 	if (ng_atm_input_p != NULL) {
 		(*ng_atm_input_p)(ifp, &m, ah, rxhand);
@@ -294,7 +295,7 @@ atm_input(struct ifnet *ifp, struct atm_pseudohdr *ah, struct mbuf *m,
 			struct atmllc *alc;
 
 			if (m->m_len < sizeof(*alc) &&
-			    (m = m_pullup(m, sizeof(*alc))) == 0)
+			    (m = m_pullup(m, sizeof(*alc))) == NULL)
 				return; /* failed */
 			alc = mtod(m, struct atmllc *);
 			if (bcmp(alc, ATMLLC_HDR, 6)) {

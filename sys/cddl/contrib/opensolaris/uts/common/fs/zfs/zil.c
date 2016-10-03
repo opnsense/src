@@ -21,6 +21,7 @@
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
+ * Copyright (c) 2014 Integros [integros.com]
  */
 
 /* Portions Copyright 2010 Robert Milkowski */
@@ -70,8 +71,7 @@
  */
 int zil_replay_disable = 0;
 SYSCTL_DECL(_vfs_zfs);
-TUNABLE_INT("vfs.zfs.zil_replay_disable", &zil_replay_disable);
-SYSCTL_INT(_vfs_zfs, OID_AUTO, zil_replay_disable, CTLFLAG_RW,
+SYSCTL_INT(_vfs_zfs, OID_AUTO, zil_replay_disable, CTLFLAG_RWTUN,
     &zil_replay_disable, 0, "Disable intent logging replay");
 
 /*
@@ -80,12 +80,10 @@ SYSCTL_INT(_vfs_zfs, OID_AUTO, zil_replay_disable, CTLFLAG_RW,
  * out-of-order write cache is enabled.
  */
 boolean_t zfs_nocacheflush = B_FALSE;
-TUNABLE_INT("vfs.zfs.cache_flush_disable", &zfs_nocacheflush);
 SYSCTL_INT(_vfs_zfs, OID_AUTO, cache_flush_disable, CTLFLAG_RDTUN,
     &zfs_nocacheflush, 0, "Disable cache flush");
 boolean_t zfs_trim_enabled = B_TRUE;
 SYSCTL_DECL(_vfs_zfs_trim);
-TUNABLE_INT("vfs.zfs.trim.enabled", &zfs_trim_enabled);
 SYSCTL_INT(_vfs_zfs_trim, OID_AUTO, enabled, CTLFLAG_RDTUN, &zfs_trim_enabled, 0,
     "Enable ZFS TRIM");
 
@@ -2092,7 +2090,6 @@ zil_replay(objset_t *os, void *arg, zil_replay_func_t *replay_func[TX_MAX_TYPE])
 		zil_destroy(zilog, B_TRUE);
 		return;
 	}
-	//printf("ZFS: Replaying ZIL on %s...\n", os->os->os_spa->spa_name);
 
 	zr.zr_replay = replay_func;
 	zr.zr_arg = arg;
@@ -2114,7 +2111,6 @@ zil_replay(objset_t *os, void *arg, zil_replay_func_t *replay_func[TX_MAX_TYPE])
 	zil_destroy(zilog, B_FALSE);
 	txg_wait_synced(zilog->zl_dmu_pool, zilog->zl_destroy_txg);
 	zilog->zl_replay = B_FALSE;
-	//printf("ZFS: Replay of ZIL on %s finished.\n", os->os->os_spa->spa_name);
 }
 
 boolean_t

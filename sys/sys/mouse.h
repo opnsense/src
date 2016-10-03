@@ -108,6 +108,9 @@ typedef struct synapticshw {
 	int capPalmDetect;
 	int capPassthrough;
 	int capMiddle;
+	int capLowPower;
+	int capMultiFingerReport;
+	int capBallistics;
 	int nExtendedButtons;
 	int nExtendedQueries;
 	int capClickPad;
@@ -125,6 +128,13 @@ typedef struct synapticshw {
 	int verticalScroll;
 	int horizontalScroll;
 	int verticalWheel;
+	int capEWmode;
+	int minimumXCoord;
+	int minimumYCoord;
+	int maximumXCoord;
+	int maximumYCoord;
+	int infoXupmm;
+	int infoYupmm;
 } synapticshw_t;
 
 /* iftype */

@@ -227,7 +227,7 @@ bwsdup(const struct bwstring *s)
 }
 
 /*
- * Create a new binary string from a raw binary buffer.
+ * Create a new binary string from a wide character buffer.
  */
 struct bwstring *
 bwssbdup(const wchar_t *str, size_t len)
@@ -297,7 +297,7 @@ bwscsbdup(const unsigned char *str, size_t len)
 						/* NOTREACHED */
 						err(2, "mbrtowc error");
 					cptr += charlen;
-				};
+				}
 			}
 
 			ret->len = chars;

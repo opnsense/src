@@ -5,8 +5,9 @@
 #
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
+PACKAGE=atm
 PROG=	atmconfig
 SRCS=	main.c diag.c natm.c
 MAN=	atmconfig.8
@@ -17,11 +18,9 @@ CFLAGS+= -I${.OBJDIR}
 .if !defined(RESCUE) && ${MK_BSNMP} != "no"
 CFLAGS+=	-DWITH_BSNMP
 SRCS+=	oid.h atmconfig_device.c
-DPADD+=	${LIBBSNMP}
-LDADD+=	-lbsnmp
+LIBADD+=	bsnmp
 . if ${MK_DYNAMICROOT} == "no" && ${MK_OPENSSL} != "no"
-DPADD+=	${LIBCRYPTO}
-LDADD+= -lcrypto
+LIBADD+=	crypto
 . endif
 .endif
 

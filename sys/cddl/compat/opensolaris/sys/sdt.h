@@ -29,9 +29,6 @@
 #ifndef _OPENSOLARIS_SYS_SDT_H_
 #define	_OPENSOLARIS_SYS_SDT_H_
 
-#ifdef _KERNEL
-#include <opt_kdtrace.h>
-#endif
 #include_next <sys/sdt.h>
 
 #ifdef KDTRACE_HOOKS

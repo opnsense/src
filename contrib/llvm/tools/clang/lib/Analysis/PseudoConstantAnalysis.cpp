@@ -70,7 +70,7 @@ const Decl *PseudoConstantAnalysis::getDecl(const Expr *E) {
   if (const DeclRefExpr *DR = dyn_cast<DeclRefExpr>(E))
     return DR->getDecl();
   else
-    return 0;
+    return nullptr;
 }
 
 void PseudoConstantAnalysis::RunAnalysis() {
@@ -171,10 +171,9 @@ void PseudoConstantAnalysis::RunAnalysis() {
     case Stmt::DeclStmtClass: {
       const DeclStmt *DS = cast<DeclStmt>(Head);
       // Iterate over each decl and see if any of them contain reference decls
-      for (DeclStmt::const_decl_iterator I = DS->decl_begin(),
-          E = DS->decl_end(); I != E; ++I) {
+      for (const auto *I : DS->decls()) {
         // We only care about VarDecls
-        const VarDecl *VD = dyn_cast<VarDecl>(*I);
+        const VarDecl *VD = dyn_cast<VarDecl>(I);
         if (!VD)
           continue;
 
@@ -221,8 +220,8 @@ void PseudoConstantAnalysis::RunAnalysis() {
     } // switch (head->getStmtClass())
 
     // Add all substatements to the worklist
-    for (Stmt::const_child_range I = Head->children(); I; ++I)
-      if (*I)
-        WorkList.push_back(*I);
+    for (const Stmt *SubStmt : Head->children())
+      if (SubStmt)
+        WorkList.push_back(SubStmt);
   } // while (!WorkList.empty())
 }

@@ -126,7 +126,7 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	/* Allocate and validate space for the signal handler context. */
 	if ((td->td_pflags & TDP_ALTSTACK) != 0 && !oonstack &&
 	    SIGISMEMBER(psp->ps_sigonstack, sig)) {
-		sfp = (struct sigframe *)((vm_offset_t)(td->td_sigstk.ss_sp +
+		sfp = (struct sigframe *)(((uintptr_t)td->td_sigstk.ss_sp +
 		    td->td_sigstk.ss_size - sizeof(struct sigframe))
 		    & ~(sizeof(__int64_t) - 1));
 	} else
@@ -173,31 +173,10 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	/*
 	 * Signal trampoline code is at base of user stack.
 	 */
-	regs->ra = (register_t)(intptr_t)p->p_psstrings - *(p->p_sysent->sv_szsigcode);
+	regs->ra = (register_t)(intptr_t)PS_STRINGS - *(p->p_sysent->sv_szsigcode);
 	PROC_LOCK(p);
 	mtx_lock(&psp->ps_mtx);
 }
-
-#ifdef GONE_IN_7
-/*
- * Build siginfo_t for SA thread
- */
-void
-cpu_thread_siginfo(int sig, u_long code, siginfo_t *si)
-{
-	struct proc *p;
-	struct thread *td;
-
-	td = curthread;
-	p = td->td_proc;
-	PROC_LOCK_ASSERT(p, MA_OWNED);
-
-	bzero(si, sizeof(*si));
-	si->si_signo = sig;
-	si->si_code = code;
-	/* XXXKSE fill other fields */
-}
-#endif
 
 /*
  * System call to cleanup state after a signal
@@ -235,39 +214,19 @@ ptrace_set_pc(struct thread *td, unsigned long addr)
 static int
 ptrace_read_int(struct thread *td, off_t addr, int *v)
 {
-	struct iovec iov;
-	struct uio uio;
 
-	PROC_LOCK_ASSERT(td->td_proc, MA_NOTOWNED);
-	iov.iov_base = (caddr_t) v;
-	iov.iov_len = sizeof(int);
-	uio.uio_iov = &iov;
-	uio.uio_iovcnt = 1;
-	uio.uio_offset = (off_t)addr;
-	uio.uio_resid = sizeof(int);
-	uio.uio_segflg = UIO_SYSSPACE;
-	uio.uio_rw = UIO_READ;
-	uio.uio_td = td;
-	return proc_rwmem(td->td_proc, &uio);
+	if (proc_readmem(td, td->td_proc, addr, v, sizeof(*v)) != sizeof(*v))
+		return (ENOMEM);
+	return (0);
 }
 
 static int
 ptrace_write_int(struct thread *td, off_t addr, int v)
 {
-	struct iovec iov;
-	struct uio uio;
 
-	PROC_LOCK_ASSERT(td->td_proc, MA_NOTOWNED);
-	iov.iov_base = (caddr_t) &v;
-	iov.iov_len = sizeof(int);
-	uio.uio_iov = &iov;
-	uio.uio_iovcnt = 1;
-	uio.uio_offset = (off_t)addr;
-	uio.uio_resid = sizeof(int);
-	uio.uio_segflg = UIO_SYSSPACE;
-	uio.uio_rw = UIO_WRITE;
-	uio.uio_td = td;
-	return proc_rwmem(td->td_proc, &uio);
+	if (proc_writemem(td, td->td_proc, addr, &v, sizeof(v)) != sizeof(v))
+		return (ENOMEM);
+	return (0);
 }
 
 int
@@ -407,7 +366,7 @@ set_mcontext(struct thread *td, mcontext_t *mcp)
 	td->td_frame->mullo = mcp->mullo;
 	td->td_frame->mulhi = mcp->mulhi;
 	td->td_md.md_tls = mcp->mc_tls;
-	/* Dont let user to set any bits in Status and casue registers */
+	/* Dont let user to set any bits in status and cause registers. */
 
 	return (0);
 }

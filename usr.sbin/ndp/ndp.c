@@ -83,7 +83,6 @@
 #include <sys/queue.h>
 
 #include <net/if.h>
-#include <net/if_var.h>
 #include <net/if_dl.h>
 #include <net/if_types.h>
 #include <net/route.h>
@@ -109,11 +108,6 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include "gmt2local.h"
-
-/* packing rule for routing socket */
-#define ROUNDUP(a) \
-	((a) > 0 ? (1 + (((a) - 1) | (sizeof(long) - 1))) : sizeof(long))
-#define ADVANCE(x, n) (x += ROUNDUP((n)->sa_len))
 
 #define NEXTADDR(w, s) \
 	if (rtm->rtm_addrs & (w)) { \
@@ -431,7 +425,7 @@ set(int argc, char **argv)
 		/* NOTREACHED */
 	}
 	sin = (struct sockaddr_in6 *)(rtm + 1);
-	sdl = (struct sockaddr_dl *)(ROUNDUP(sin->sin6_len) + (char *)sin);
+	sdl = (struct sockaddr_dl *)(ALIGN(sin->sin6_len) + (char *)sin);
 	if (IN6_ARE_ADDR_EQUAL(&sin->sin6_addr, &sin_m.sin6_addr)) {
 		if (sdl->sdl_family == AF_LINK &&
 		    !(rtm->rtm_flags & RTF_GATEWAY)) {
@@ -520,7 +514,7 @@ delete(char *host)
 		/* NOTREACHED */
 	}
 	sin = (struct sockaddr_in6 *)(rtm + 1);
-	sdl = (struct sockaddr_dl *)(ROUNDUP(sin->sin6_len) + (char *)sin);
+	sdl = (struct sockaddr_dl *)(ALIGN(sin->sin6_len) + (char *)sin);
 	if (IN6_ARE_ADDR_EQUAL(&sin->sin6_addr, &sin_m.sin6_addr)) {
 		if (sdl->sdl_family == AF_LINK &&
 		    !(rtm->rtm_flags & RTF_GATEWAY)) {
@@ -569,8 +563,8 @@ dump(struct sockaddr_in6 *addr, int cflag)
 	struct sockaddr_in6 *sin;
 	struct sockaddr_dl *sdl;
 	extern int h_errno;
-	struct in6_nbrinfo *nbi;
 	struct timeval now;
+	u_long expire;
 	int addrwidth;
 	int llwidth;
 	int ifwidth;
@@ -610,7 +604,7 @@ again:;
 
 		rtm = (struct rt_msghdr *)next;
 		sin = (struct sockaddr_in6 *)(rtm + 1);
-		sdl = (struct sockaddr_dl *)((char *)sin + ROUNDUP(sin->sin6_len));
+		sdl = (struct sockaddr_dl *)((char *)sin + ALIGN(sin->sin6_len));
 
 		/*
 		 * Some OSes can produce a route that has the LINK flag but
@@ -682,51 +676,45 @@ again:;
 		    llwidth, llwidth, ether_str(sdl), ifwidth, ifwidth, ifname);
 
 		/* Print neighbor discovery specific information */
-		nbi = getnbrinfo(&sin->sin6_addr, sdl->sdl_index, 1);
-		if (nbi) {
-			if (nbi->expire > now.tv_sec) {
-				printf(" %-9.9s",
-				    sec2str(nbi->expire - now.tv_sec));
-			} else if (nbi->expire == 0)
-				printf(" %-9.9s", "permanent");
-			else
-				printf(" %-9.9s", "expired");
+		expire = rtm->rtm_rmx.rmx_expire;
+		if (expire > now.tv_sec)
+			printf(" %-9.9s", sec2str(expire - now.tv_sec));
+		else if (expire == 0)
+			printf(" %-9.9s", "permanent");
+		else
+			printf(" %-9.9s", "expired");
 
-			switch (nbi->state) {
-			case ND6_LLINFO_NOSTATE:
-				 printf(" N");
-				 break;
+		switch (rtm->rtm_rmx.rmx_state) {
+		case ND6_LLINFO_NOSTATE:
+			printf(" N");
+			break;
 #ifdef ND6_LLINFO_WAITDELETE
-			case ND6_LLINFO_WAITDELETE:
-				 printf(" W");
-				 break;
+		case ND6_LLINFO_WAITDELETE:
+			printf(" W");
+			break;
 #endif
-			case ND6_LLINFO_INCOMPLETE:
-				 printf(" I");
-				 break;
-			case ND6_LLINFO_REACHABLE:
-				 printf(" R");
-				 break;
-			case ND6_LLINFO_STALE:
-				 printf(" S");
-				 break;
-			case ND6_LLINFO_DELAY:
-				 printf(" D");
-				 break;
-			case ND6_LLINFO_PROBE:
-				 printf(" P");
-				 break;
-			default:
-				 printf(" ?");
-				 break;
-			}
-
-			isrouter = nbi->isrouter;
-			prbs = nbi->asked;
-		} else {
-			warnx("failed to get neighbor information");
-			printf("  ");
+		case ND6_LLINFO_INCOMPLETE:
+			printf(" I");
+			break;
+		case ND6_LLINFO_REACHABLE:
+			printf(" R");
+			break;
+		case ND6_LLINFO_STALE:
+			printf(" S");
+			break;
+		case ND6_LLINFO_DELAY:
+			printf(" D");
+			break;
+		case ND6_LLINFO_PROBE:
+			printf(" P");
+			break;
+		default:
+			printf(" ?");
+			break;
 		}
+
+		isrouter = rtm->rtm_flags & RTF_GATEWAY;
+		prbs = rtm->rtm_rmx.rmx_pksent;
 
 		/*
 		 * other flags. R: router, P: proxy, W: ??
@@ -736,9 +724,9 @@ again:;
 			    isrouter ? "R" : "",
 			    (rtm->rtm_flags & RTF_ANNOUNCE) ? "p" : "");
 		} else {
+#if 0	/* W and P are mystery even for us */
 			sin = (struct sockaddr_in6 *)
 			    (sdl->sdl_len + (char *)sdl);
-#if 0	/* W and P are mystery even for us */
 			snprintf(flgbuf, sizeof(flgbuf), "%s%s%s%s",
 			    isrouter ? "R" : "",
 			    !IN6_IS_ADDR_UNSPECIFIED(&sin->sin6_addr) ? "P" : "",

@@ -38,7 +38,6 @@
 __FBSDID("$FreeBSD$");
 
 #include "opt_capsicum.h"
-#include "opt_kdtrace.h"
 #include "opt_ktrace.h"
 
 #include <sys/param.h>
@@ -97,9 +96,40 @@ nameiinit(void *dummy __unused)
 SYSINIT(vfs, SI_SUB_VFS, SI_ORDER_SECOND, nameiinit, NULL);
 
 static int lookup_shared = 1;
-SYSCTL_INT(_vfs, OID_AUTO, lookup_shared, CTLFLAG_RW, &lookup_shared, 0,
+SYSCTL_INT(_vfs, OID_AUTO, lookup_shared, CTLFLAG_RWTUN, &lookup_shared, 0,
     "Enables/Disables shared locks for path name translation");
-TUNABLE_INT("vfs.lookup_shared", &lookup_shared);
+
+static void
+namei_cleanup_cnp(struct componentname *cnp)
+{
+	uma_zfree(namei_zone, cnp->cn_pnbuf);
+#ifdef DIAGNOSTIC
+	cnp->cn_pnbuf = NULL;
+	cnp->cn_nameptr = NULL;
+#endif
+}
+
+static int
+namei_handle_root(struct nameidata *ndp, struct vnode **dpp)
+{
+	struct componentname *cnp;
+
+	cnp = &ndp->ni_cnd;
+	if (ndp->ni_strictrelative != 0) {
+#ifdef KTRACE
+		if (KTRPOINT(curthread, KTR_CAPFAIL))
+			ktrcapfail(CAPFAIL_LOOKUP, NULL, NULL);
+#endif
+		return (ENOTCAPABLE);
+	}
+	while (*(cnp->cn_nameptr) == '/') {
+		cnp->cn_nameptr++;
+		ndp->ni_pathlen--;
+	}
+	*dpp = ndp->ni_rootdir;
+	VREF(*dpp);
+	return (0);
+}
 
 /*
  * Convert a pathname into a pointer to a locked vnode.
@@ -121,16 +151,6 @@ TUNABLE_INT("vfs.lookup_shared", &lookup_shared);
  *		if symbolic link, massage name in buffer and continue
  *	}
  */
-static void
-namei_cleanup_cnp(struct componentname *cnp)
-{
-	uma_zfree(namei_zone, cnp->cn_pnbuf);
-#ifdef DIAGNOSTIC
-	cnp->cn_pnbuf = NULL;
-	cnp->cn_nameptr = NULL;
-#endif
-}
-
 int
 namei(struct nameidata *ndp)
 {
@@ -139,7 +159,7 @@ namei(struct nameidata *ndp)
 	struct vnode *dp;	/* the directory we are searching */
 	struct iovec aiov;		/* uio for reading symbolic links */
 	struct uio auio;
-	int error, linklen;
+	int error, linklen, startdir_used;
 	struct componentname *cnp = &ndp->ni_cnd;
 	struct thread *td = cnp->cn_thread;
 	struct proc *p = td->td_proc;
@@ -150,6 +170,8 @@ namei(struct nameidata *ndp)
 	    ("namei: nameiop contaminated with flags"));
 	KASSERT((cnp->cn_flags & OPMASK) == 0,
 	    ("namei: flags contaminated with nameiops"));
+	MPASS(ndp->ni_startdir == NULL || ndp->ni_startdir->v_type == VDIR ||
+	    ndp->ni_startdir->v_type == VBAD);
 	if (!lookup_shared)
 		cnp->cn_flags &= ~LOCKSHARED;
 	fdp = p->p_fd;
@@ -173,7 +195,7 @@ namei(struct nameidata *ndp)
 	/*
 	 * Don't allow empty pathnames.
 	 */
-	if (!error && *cnp->cn_pnbuf == '\0')
+	if (error == 0 && *cnp->cn_pnbuf == '\0')
 		error = ENOENT;
 
 #ifdef CAPABILITY_MODE
@@ -194,7 +216,7 @@ namei(struct nameidata *ndp)
 		}
 	}
 #endif
-	if (error) {
+	if (error != 0) {
 		namei_cleanup_cnp(cnp);
 		ndp->ni_vp = NULL;
 		return (error);
@@ -212,6 +234,7 @@ namei(struct nameidata *ndp)
 	 */
 	FILEDESC_SLOCK(fdp);
 	ndp->ni_rootdir = fdp->fd_rdir;
+	VREF(ndp->ni_rootdir);
 	ndp->ni_topdir = fdp->fd_jdir;
 
 	/*
@@ -222,12 +245,19 @@ namei(struct nameidata *ndp)
 	if (cnp->cn_flags & AUDITVNODE2)
 		AUDIT_ARG_UPATH2(td, ndp->ni_dirfd, cnp->cn_pnbuf);
 
+	startdir_used = 0;
 	dp = NULL;
-	if (cnp->cn_pnbuf[0] != '/') {
+	cnp->cn_nameptr = cnp->cn_pnbuf;
+	if (cnp->cn_pnbuf[0] == '/') {
+		error = namei_handle_root(ndp, &dp);
+	} else {
 		if (ndp->ni_startdir != NULL) {
 			dp = ndp->ni_startdir;
-			error = 0;
-		} else if (ndp->ni_dirfd != AT_FDCWD) {
+			startdir_used = 1;
+		} else if (ndp->ni_dirfd == AT_FDCWD) {
+			dp = fdp->fd_cdir;
+			VREF(dp);
+		} else {
 			cap_rights_t rights;
 
 			rights = ndp->ni_rightsneeded;
@@ -239,6 +269,8 @@ namei(struct nameidata *ndp)
 				AUDIT_ARG_ATFD2(ndp->ni_dirfd);
 			error = fgetvp_rights(td, ndp->ni_dirfd,
 			    &rights, &ndp->ni_filecaps, &dp);
+			if (error == EINVAL)
+				error = ENOTDIR;
 #ifdef CAPABILITIES
 			/*
 			 * If file descriptor doesn't have all rights,
@@ -254,53 +286,26 @@ namei(struct nameidata *ndp)
 			}
 #endif
 		}
-		if (error != 0 || dp != NULL) {
-			FILEDESC_SUNLOCK(fdp);
-			if (error == 0 && dp->v_type != VDIR) {
-				vrele(dp);
-				error = ENOTDIR;
-			}
-		}
-		if (error) {
-			namei_cleanup_cnp(cnp);
-			return (error);
-		}
+		if (error == 0 && dp->v_type != VDIR)
+			error = ENOTDIR;
 	}
-	if (dp == NULL) {
-		dp = fdp->fd_cdir;
-		VREF(dp);
-		FILEDESC_SUNLOCK(fdp);
-		if (ndp->ni_startdir != NULL)
-			vrele(ndp->ni_startdir);
+	FILEDESC_SUNLOCK(fdp);
+	if (ndp->ni_startdir != NULL && !startdir_used)
+		vrele(ndp->ni_startdir);
+	if (error != 0) {
+		if (dp != NULL)
+			vrele(dp);
+		vrele(ndp->ni_rootdir);
+		namei_cleanup_cnp(cnp);
+		return (error);
 	}
 	SDT_PROBE3(vfs, namei, lookup, entry, dp, cnp->cn_pnbuf,
 	    cnp->cn_flags);
 	for (;;) {
-		/*
-		 * Check if root directory should replace current directory.
-		 * Done at start of translation and after symbolic link.
-		 */
-		cnp->cn_nameptr = cnp->cn_pnbuf;
-		if (*(cnp->cn_nameptr) == '/') {
-			vrele(dp);
-			if (ndp->ni_strictrelative != 0) {
-#ifdef KTRACE
-				if (KTRPOINT(curthread, KTR_CAPFAIL))
-					ktrcapfail(CAPFAIL_LOOKUP, NULL, NULL);
-#endif
-				namei_cleanup_cnp(cnp);
-				return (ENOTCAPABLE);
-			}
-			while (*(cnp->cn_nameptr) == '/') {
-				cnp->cn_nameptr++;
-				ndp->ni_pathlen--;
-			}
-			dp = ndp->ni_rootdir;
-			VREF(dp);
-		}
 		ndp->ni_startdir = dp;
 		error = lookup(ndp);
-		if (error) {
+		if (error != 0) {
+			vrele(ndp->ni_rootdir);
 			namei_cleanup_cnp(cnp);
 			SDT_PROBE2(vfs, namei, lookup, return, error, NULL);
 			return (error);
@@ -309,6 +314,7 @@ namei(struct nameidata *ndp)
 		 * If not a symbolic link, we're done.
 		 */
 		if ((cnp->cn_flags & ISSYMLINK) == 0) {
+			vrele(ndp->ni_rootdir);
 			if ((cnp->cn_flags & (SAVENAME | SAVESTART)) == 0) {
 				namei_cleanup_cnp(cnp);
 			} else
@@ -325,7 +331,7 @@ namei(struct nameidata *ndp)
 		if ((cnp->cn_flags & NOMACCHECK) == 0) {
 			error = mac_vnode_check_readlink(td->td_ucred,
 			    ndp->ni_vp);
-			if (error)
+			if (error != 0)
 				break;
 		}
 #endif
@@ -343,7 +349,7 @@ namei(struct nameidata *ndp)
 		auio.uio_td = td;
 		auio.uio_resid = MAXPATHLEN;
 		error = VOP_READLINK(ndp->ni_vp, &auio, cnp->cn_cred);
-		if (error) {
+		if (error != 0) {
 			if (ndp->ni_pathlen > 1)
 				uma_zfree(namei_zone, cp);
 			break;
@@ -370,7 +376,21 @@ namei(struct nameidata *ndp)
 		ndp->ni_pathlen += linklen;
 		vput(ndp->ni_vp);
 		dp = ndp->ni_dvp;
+		/*
+		 * Check if root directory should replace current directory.
+		 */
+		cnp->cn_nameptr = cnp->cn_pnbuf;
+		if (*(cnp->cn_nameptr) == '/') {
+			vrele(dp);
+			error = namei_handle_root(ndp, &dp);
+			if (error != 0) {
+				vrele(ndp->ni_rootdir);
+				namei_cleanup_cnp(cnp);
+				return (error);
+			}
+		}
 	}
+	vrele(ndp->ni_rootdir);
 	namei_cleanup_cnp(cnp);
 	vput(ndp->ni_vp);
 	ndp->ni_vp = NULL;
@@ -466,7 +486,7 @@ int
 lookup(struct nameidata *ndp)
 {
 	char *cp;		/* pointer into pathname argument */
-	struct vnode *dp = 0;	/* the directory we are searching */
+	struct vnode *dp = NULL;	/* the directory we are searching */
 	struct vnode *tdp;		/* saved dp */
 	struct mount *mp;		/* mount table entry */
 	struct prison *pr;
@@ -475,6 +495,7 @@ lookup(struct nameidata *ndp)
 	int rdonly;			/* lookup read-only flag bit */
 	int error = 0;
 	int dpunlocked = 0;		/* dp has already been unlocked */
+	int relookup = 0;		/* do not consume the path component */
 	struct componentname *cnp = &ndp->ni_cnd;
 	int lkflags_save;
 	int ni_dvp_unlocked;
@@ -517,7 +538,6 @@ dirloop:
 	 * the name set the SAVENAME flag. When done, they assume
 	 * responsibility for freeing the pathname buffer.
 	 */
-	cnp->cn_consume = 0;
 	for (cp = cnp->cn_nameptr; *cp != 0 && *cp != '/'; cp++)
 		continue;
 	cnp->cn_namelen = cp - cnp->cn_nameptr;
@@ -706,8 +726,9 @@ unionlookup:
 	lkflags_save = cnp->cn_lkflags;
 	cnp->cn_lkflags = compute_cn_lkflags(dp->v_mount, cnp->cn_lkflags,
 	    cnp->cn_flags);
-	if ((error = VOP_LOOKUP(dp, &ndp->ni_vp, cnp)) != 0) {
-		cnp->cn_lkflags = lkflags_save;
+	error = VOP_LOOKUP(dp, &ndp->ni_vp, cnp);
+	cnp->cn_lkflags = lkflags_save;
+	if (error != 0) {
 		KASSERT(ndp->ni_vp == NULL, ("leaf should be empty"));
 #ifdef NAMEI_DIAGNOSTIC
 		printf("not found\n");
@@ -723,6 +744,14 @@ unionlookup:
 			    compute_cn_lkflags(dp->v_mount, cnp->cn_lkflags |
 			    LK_RETRY, cnp->cn_flags));
 			goto unionlookup;
+		}
+
+		if (error == ERELOOKUP) {
+			vref(dp);
+			ndp->ni_vp = dp;
+			error = 0;
+			relookup = 1;
+			goto good;
 		}
 
 		if (error != EJUSTRETURN)
@@ -755,22 +784,12 @@ unionlookup:
 			VREF(ndp->ni_startdir);
 		}
 		goto success;
-	} else
-		cnp->cn_lkflags = lkflags_save;
+	}
+
+good:
 #ifdef NAMEI_DIAGNOSTIC
 	printf("found\n");
 #endif
-	/*
-	 * Take into account any additional components consumed by
-	 * the underlying filesystem.
-	 */
-	if (cnp->cn_consume > 0) {
-		cnp->cn_nameptr += cnp->cn_consume;
-		ndp->ni_next += cnp->cn_consume;
-		ndp->ni_pathlen -= cnp->cn_consume;
-		cnp->cn_consume = 0;
-	}
-
 	dp = ndp->ni_vp;
 
 	/*
@@ -836,6 +855,14 @@ nextname:
 	 */
 	KASSERT((cnp->cn_flags & ISLASTCN) || *ndp->ni_next == '/',
 	    ("lookup: invalid path state."));
+	if (relookup) {
+		relookup = 0;
+		if (ndp->ni_dvp != dp)
+			vput(ndp->ni_dvp);
+		else
+			vrele(ndp->ni_dvp);
+		goto dirloop;
+	}
 	if (*ndp->ni_next == '/') {
 		cnp->cn_nameptr = ndp->ni_next;
 		while (*cnp->cn_nameptr == '/') {
@@ -922,7 +949,7 @@ bad:
 int
 relookup(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp)
 {
-	struct vnode *dp = 0;		/* the directory we are searching */
+	struct vnode *dp = NULL;		/* the directory we are searching */
 	int wantparent;			/* 1 => wantparent or lockparent flag */
 	int rdonly;			/* lookup read-only flag bit */
 	int error = 0;
@@ -1127,7 +1154,7 @@ NDFREE(struct nameidata *ndp, const u_int flags)
  * Determine if there is a suitable alternate filename under the specified
  * prefix for the specified path.  If the create flag is set, then the
  * alternate prefix will be used so long as the parent directory exists.
- * This is used by the various compatiblity ABIs so that Linux binaries prefer
+ * This is used by the various compatibility ABIs so that Linux binaries prefer
  * files under /compat/linux for example.  The chosen path (whether under
  * the prefix or under /) is returned in a kernel malloc'd buffer pointed
  * to by pathbuf.  The caller is responsible for free'ing the buffer from

@@ -33,11 +33,9 @@
  * SOFTWARE.
  */
 
+#define	LINUXKPI_PARAM_PREFIX mlx4_
+
 #include <linux/kmod.h>
-/* 
- * kmod.h must be included before module.h since it includes (indirectly) sys/module.h
- * To use the FBSD macro sys/module.h should define MODULE_VERSION before linux/module does.
-*/
 #include <linux/module.h>
 #include <linux/errno.h>
 #include <linux/pci.h>
@@ -163,12 +161,12 @@ MODULE_PARM_DESC(high_rate_steer, "Enable steering mode for higher packet rate"
 static int fast_drop;
 module_param_named(fast_drop, fast_drop, int, 0444);
 MODULE_PARM_DESC(fast_drop,
-		 "Enable fast packet drop when no recieve WQEs are posted");
+		 "Enable fast packet drop when no receive WQEs are posted");
 
 int mlx4_enable_64b_cqe_eqe = 1;
 module_param_named(enable_64b_cqe_eqe, mlx4_enable_64b_cqe_eqe, int, 0644);
 MODULE_PARM_DESC(enable_64b_cqe_eqe,
-		 "Enable 64 byte CQEs/EQEs when the the FW supports this if non-zero (default: 1)");
+		 "Enable 64 byte CQEs/EQEs when the FW supports this if non-zero (default: 1)");
 
 #define HCA_GLOBAL_CAP_MASK            0
 
@@ -2456,7 +2454,7 @@ EXPORT_SYMBOL_GPL(mlx4_counter_alloc);
 
 void __mlx4_counter_free(struct mlx4_dev *dev, int slave, int port, u32 idx)
 {
-	/* check if native or slave and deletes acordingly */
+	/* check if native or slave and deletes accordingly */
 	struct mlx4_priv *priv = mlx4_priv(dev);
 	struct counter_index *pf, *tmp_pf;
 	struct counter_index *vf, *tmp_vf;
@@ -3869,7 +3867,6 @@ static void __exit mlx4_cleanup(void)
 module_init_order(mlx4_init, SI_ORDER_MIDDLE);
 module_exit(mlx4_cleanup);
 
-#include <sys/module.h>
 static int
 mlx4_evhand(module_t mod, int event, void *arg)
 {
@@ -3882,3 +3879,5 @@ static moduledata_t mlx4_mod = {
 };
 MODULE_VERSION(mlx4, 1);
 DECLARE_MODULE(mlx4, mlx4_mod, SI_SUB_OFED_PREINIT, SI_ORDER_ANY);
+MODULE_DEPEND(mlx4, linuxkpi, 1, 1, 1);
+

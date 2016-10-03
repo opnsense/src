@@ -178,8 +178,8 @@ namespace clang {
   class LocalInstantiationScope {
   public:
     /// \brief A set of declarations.
-    typedef SmallVector<Decl *, 4> DeclArgumentPack;
-    
+    typedef SmallVector<ParmVarDecl *, 4> DeclArgumentPack;
+
   private:
     /// \brief Reference to the semantic analysis that is performing
     /// this template instantiation.
@@ -239,14 +239,14 @@ namespace clang {
 
     // This class is non-copyable
     LocalInstantiationScope(
-      const LocalInstantiationScope &) LLVM_DELETED_FUNCTION;
-    void operator=(const LocalInstantiationScope &) LLVM_DELETED_FUNCTION;
+      const LocalInstantiationScope &) = delete;
+    void operator=(const LocalInstantiationScope &) = delete;
 
   public:
     LocalInstantiationScope(Sema &SemaRef, bool CombineWithOuterScope = false)
       : SemaRef(SemaRef), Outer(SemaRef.CurrentInstantiationScope),
         Exited(false), CombineWithOuterScope(CombineWithOuterScope),
-        PartiallySubstitutedPack(0)
+        PartiallySubstitutedPack(nullptr)
     {
       SemaRef.CurrentInstantiationScope = this;
     }
@@ -273,10 +273,15 @@ namespace clang {
     /// outermost scope.
     LocalInstantiationScope *cloneScopes(LocalInstantiationScope *Outermost) {
       if (this == Outermost) return this;
+
+      // Save the current scope from SemaRef since the LocalInstantiationScope
+      // will overwrite it on construction
+      LocalInstantiationScope *oldScope = SemaRef.CurrentInstantiationScope;
+
       LocalInstantiationScope *newScope =
         new LocalInstantiationScope(SemaRef, CombineWithOuterScope);
 
-      newScope->Outer = 0;
+      newScope->Outer = nullptr;
       if (Outer)
         newScope->Outer = Outer->cloneScopes(Outermost);
 
@@ -299,6 +304,8 @@ namespace clang {
           newScope->ArgumentPacks.push_back(NewPack);
         }
       }
+      // Restore the saved scope to SemaRef
+      SemaRef.CurrentInstantiationScope = oldScope;
       return newScope;
     }
 
@@ -319,13 +326,13 @@ namespace clang {
     /// \param D The declaration whose instantiation we are searching for.
     ///
     /// \returns A pointer to the declaration or argument pack of declarations
-    /// to which the declaration \c D is instantiataed, if found. Otherwise,
+    /// to which the declaration \c D is instantiated, if found. Otherwise,
     /// returns NULL.
     llvm::PointerUnion<Decl *, DeclArgumentPack *> *
     findInstantiationOf(const Decl *D);
 
     void InstantiatedLocal(const Decl *D, Decl *Inst);
-    void InstantiatedLocalPackArg(const Decl *D, Decl *Inst);
+    void InstantiatedLocalPackArg(const Decl *D, ParmVarDecl *Inst);
     void MakeInstantiatedLocalArgPack(const Decl *D);
     
     /// \brief Note that the given parameter pack has been partially substituted
@@ -348,17 +355,17 @@ namespace clang {
     /// interest.
     void ResetPartiallySubstitutedPack() {
       assert(PartiallySubstitutedPack && "No partially-substituted pack");
-      PartiallySubstitutedPack = 0;
-      ArgsInPartiallySubstitutedPack = 0;
+      PartiallySubstitutedPack = nullptr;
+      ArgsInPartiallySubstitutedPack = nullptr;
       NumArgsInPartiallySubstitutedPack = 0;
     }
 
     /// \brief Retrieve the partially-substitued template parameter pack.
     ///
     /// If there is no partially-substituted parameter pack, returns NULL.
-    NamedDecl *getPartiallySubstitutedPack(
-                                      const TemplateArgument **ExplicitArgs = 0,
-                                           unsigned *NumExplicitArgs = 0) const;
+    NamedDecl *
+    getPartiallySubstitutedPack(const TemplateArgument **ExplicitArgs = nullptr,
+                                unsigned *NumExplicitArgs = nullptr) const;
   };
 
   class TemplateDeclInstantiator
@@ -391,8 +398,8 @@ namespace clang {
                              const MultiLevelTemplateArgumentList &TemplateArgs)
       : SemaRef(SemaRef),
         SubstIndex(SemaRef, SemaRef.ArgumentPackSubstitutionIndex),
-        Owner(Owner), TemplateArgs(TemplateArgs), LateAttrs(0), StartingScope(0)
-    { }
+        Owner(Owner), TemplateArgs(TemplateArgs), LateAttrs(nullptr),
+        StartingScope(nullptr) {}
 
 // Define all the decl visitors using DeclNodes.inc
 #define DECL(DERIVED, BASE) \
@@ -406,6 +413,7 @@ namespace clang {
 #define LINKAGESPEC(DERIVED, BASE)
 #define OBJCCOMPATIBLEALIAS(DERIVED, BASE)
 #define OBJCMETHOD(DERIVED, BASE)
+#define OBJCTYPEPARAM(DERIVED, BASE)
 #define OBJCIVAR(DERIVED, BASE)
 #define OBJCPROPERTY(DERIVED, BASE)
 #define OBJCPROPERTYIMPL(DERIVED, BASE)
@@ -436,8 +444,8 @@ namespace clang {
 
     // Disable late instantiation of attributes.
     void disableLateAttributeInstantiation() {
-      LateAttrs = 0;
-      StartingScope = 0;
+      LateAttrs = nullptr;
+      StartingScope = nullptr;
     }
 
     LocalInstantiationScope *getStartingScope() const { return StartingScope; }
@@ -493,7 +501,7 @@ namespace clang {
     Decl *VisitVarTemplateSpecializationDecl(
         VarTemplateDecl *VarTemplate, VarDecl *FromVar, void *InsertPos,
         const TemplateArgumentListInfo &TemplateArgsInfo,
-        llvm::ArrayRef<TemplateArgument> Converted);
+        ArrayRef<TemplateArgument> Converted);
 
     Decl *InstantiateTypedefNameDecl(TypedefNameDecl *D, bool IsTypeAlias);
     ClassTemplatePartialSpecializationDecl *

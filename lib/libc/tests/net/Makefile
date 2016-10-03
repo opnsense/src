@@ -1,6 +1,6 @@
 # $FreeBSD$
 
-TESTSDIR=	${TESTSBASE}/lib/libc/net
+PACKAGE=	tests
 
 ATF_TESTS_C+=	ether_test
 ATF_TESTS_C+=	eui64_aton_test
@@ -25,20 +25,17 @@ PROGS+=		h_protoent
 PROGS+=		h_servent
 PROGS+=		h_dns_server
 
-DPADD.h_nsd_recurse+=	${LIBPTHREAD}
-LDADD.h_nsd_recurse+=	-lpthread
-
-__MAKE_SHELL?=	/bin/sh
+LIBADD.h_nsd_recurse+=	pthread
 
 CLEANFILES+=	aton_ether_subr.c
-aton_ether_subr.c: gen_ether_subr ${.CURDIR:H:H:H:H}/sys/net/if_ethersubr.c
+aton_ether_subr.c: gen_ether_subr ${SRCTOP}/sys/net/if_ethersubr.c
 	${__MAKE_SHELL} ${.ALLSRC} ${.TARGET}
 
 .include "../Makefile.netbsd-tests"
 
 # TODO: the testcases needs to be ported to FreeBSD
 #TESTS_SUBDIRS=	getaddrinfo
-FILES+=	hosts
-FILES+=	resolv.conf
+${PACKAGE}FILES+=	hosts
+${PACKAGE}FILES+=	resolv.conf
 
 .include <bsd.test.mk>

@@ -64,7 +64,7 @@ __FBSDID("$FreeBSD$");
 
 struct gss_resource {
 	LIST_ENTRY(gss_resource) gr_link;
-	uint64_t	gr_id;	/* indentifier exported to kernel */
+	uint64_t	gr_id;	/* identifier exported to kernel */
 	void*		gr_res;	/* GSS-API resource pointer */
 };
 LIST_HEAD(gss_resource_list, gss_resource) gss_resources;
@@ -193,7 +193,8 @@ main(int argc, char **argv)
 	gssd_load_mech();
 
 	if (!debug_level) {
-		daemon(0, 0);
+		if (daemon(0, 0) != 0)
+			err(1, "Can't daemonize");
 		signal(SIGINT, SIG_IGN);
 		signal(SIGQUIT, SIG_IGN);
 		signal(SIGHUP, SIG_IGN);
@@ -206,7 +207,7 @@ main(int argc, char **argv)
 	strcpy(sun.sun_path, _PATH_GSSDSOCK);
 	sun.sun_len = SUN_LEN(&sun);
 	fd = socket(AF_LOCAL, SOCK_STREAM, 0);
-	if (!fd) {
+	if (fd < 0) {
 		if (debug_level == 0) {
 			syslog(LOG_ERR, "Can't create local gssd socket");
 			exit(1);

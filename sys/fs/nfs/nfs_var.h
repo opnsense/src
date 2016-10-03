@@ -306,7 +306,7 @@ void nfscl_reqstart(struct nfsrv_descript *, int, struct nfsmount *,
 nfsuint64 *nfscl_getcookie(struct nfsnode *, off_t off, int);
 void nfscl_fillsattr(struct nfsrv_descript *, struct vattr *,
       vnode_t, int, u_int32_t);
-u_int8_t *nfscl_getmyip(struct nfsmount *, int *);
+u_int8_t *nfscl_getmyip(struct nfsmount *, struct in6_addr *, int *);
 int nfsm_getfh(struct nfsrv_descript *, struct nfsfh **);
 int nfscl_mtofh(struct nfsrv_descript *, struct nfsfh **,
         struct nfsvattr *, int *);
@@ -647,9 +647,9 @@ int nfsvno_updfilerev(vnode_t, struct nfsvattr *, struct ucred *,
 int nfsvno_fillattr(struct nfsrv_descript *, struct mount *, vnode_t,
     struct nfsvattr *, fhandle_t *, int, nfsattrbit_t *,
     struct ucred *, NFSPROC_T *, int, int, int, int, uint64_t);
-int nfsrv_sattr(struct nfsrv_descript *, struct nfsvattr *, nfsattrbit_t *,
+int nfsrv_sattr(struct nfsrv_descript *, vnode_t, struct nfsvattr *, nfsattrbit_t *,
     NFSACL_T *, NFSPROC_T *);
-int nfsv4_sattr(struct nfsrv_descript *, struct nfsvattr *, nfsattrbit_t *,
+int nfsv4_sattr(struct nfsrv_descript *, vnode_t, struct nfsvattr *, nfsattrbit_t *,
     NFSACL_T *, NFSPROC_T *);
 int nfsvno_checkexp(mount_t, NFSSOCKADDR_T, struct nfsexstuff *,
     struct ucred **);

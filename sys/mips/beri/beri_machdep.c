@@ -1,6 +1,6 @@
 /*-
  * Copyright (c) 2006 Wojciech A. Koszek <wkoszek@FreeBSD.org>
- * Copyright (c) 2012 Robert N. M. Watson
+ * Copyright (c) 2012-2014 Robert N. M. Watson
  * All rights reserved.
  *
  * This software was developed by SRI International and the University of
@@ -65,6 +65,7 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_object.h>
 #include <vm/vm_page.h>
 
+#include <machine/bootinfo.h>
 #include <machine/clock.h>
 #include <machine/cpu.h>
 #include <machine/cpuregs.h>
@@ -87,6 +88,12 @@ static void
 mips_init(void)
 {
 	int i;
+#ifdef FDT
+	struct mem_region mr[FDT_MEM_REGIONS];
+	uint64_t val;
+	int mr_cnt;
+	int j;
+#endif
 
 	for (i = 0; i < 10; i++) {
 		phys_avail[i] = 0;
@@ -100,6 +107,29 @@ mips_init(void)
 	dump_avail[1] = phys_avail[1];
 
 	physmem = realmem;
+
+#ifdef FDT
+	if (fdt_get_mem_regions(mr, &mr_cnt, &val) == 0) {
+
+		physmem = btoc(val);
+
+		KASSERT((phys_avail[0] >= mr[0].mr_start) && \
+			(phys_avail[0] < (mr[0].mr_start + mr[0].mr_size)),
+			("First region is not within FDT memory range"));
+
+		/* Limit size of the first region */
+		phys_avail[1] = (mr[0].mr_start + MIN(mr[0].mr_size, ctob(realmem)));
+		dump_avail[1] = phys_avail[1];
+
+		/* Add the rest of regions */
+		for (i = 1, j = 2; i < mr_cnt; i++, j+=2) {
+			phys_avail[j] = mr[i].mr_start;
+			phys_avail[j+1] = (mr[i].mr_start + mr[i].mr_size);
+			dump_avail[j] = phys_avail[j];
+			dump_avail[j+1] = phys_avail[j+1];
+		}
+	}
+#endif
 
 	init_param1();
 	init_param2(physmem);
@@ -163,9 +193,9 @@ _parse_bootargs(char *cmdline)
 		} else {
 			n = strsep(&v, "=");
 			if (v == NULL)
-				setenv(n, "1");
+				kern_setenv(n, "1");
 			else
-				setenv(n, v);
+				kern_setenv(n, v);
 		}
 	}
 }
@@ -175,12 +205,13 @@ void
 platform_start(__register_t a0, __register_t a1,  __register_t a2, 
     __register_t a3)
 {
+	struct bootinfo *bootinfop;
 	vm_offset_t kernend;
 	uint64_t platform_counter_freq;
 	int argc = a0;
 	char **argv = (char **)a1;
 	char **envp = (char **)a2;
-	unsigned int memsize = a3;
+	long memsize;
 #ifdef FDT
 	char buf[2048];		/* early stack supposedly big enough */
 	vm_offset_t dtbp;
@@ -197,15 +228,31 @@ platform_start(__register_t a0, __register_t a1,  __register_t a2,
 
 	mips_pcpu0_init();
 
+	/*
+	 * Over time, we've changed out boot-time binary interface for the
+	 * kernel.  Miniboot simply provides a 'memsize' in a3, whereas the
+	 * FreeBSD boot loader provides a 'bootinfo *' in a3.  While slightly
+	 * grody, we support both here by detecting 'pointer-like' values in
+	 * a3 and assuming physical memory can never be that back.
+	 *
+	 * XXXRW: Pull more values than memsize out of bootinfop -- e.g.,
+	 * module information.
+	 */
+	if (a3 >= 0x9800000000000000ULL) {
+		bootinfop = (void *)a3;
+		memsize = bootinfop->bi_memsize;
+		preload_metadata = (caddr_t)bootinfop->bi_modulep;
+	} else {
+		bootinfop = NULL;
+		memsize = a3;
+	}
+
 #ifdef FDT
 	/*
 	 * Find the dtb passed in by the boot loader (currently fictional).
 	 */
 	kmdp = preload_search_by_type("elf kernel");
-	if (kmdp != NULL)
-		dtbp = MD_FETCH(kmdp, MODINFOMD_DTBP, vm_offset_t);
-	else
-		dtbp = (vm_offset_t)NULL;
+	dtbp = MD_FETCH(kmdp, MODINFOMD_DTBP, vm_offset_t);
 
 #if defined(FDT_DTB_STATIC)
 	/*
@@ -222,6 +269,12 @@ platform_start(__register_t a0, __register_t a1,  __register_t a2,
 		while (1);
 	if (OF_init((void *)dtbp) != 0)
 		while (1);
+
+	/*
+	 * Configure more boot-time parameters passed in by loader.
+	 */
+	boothowto = MD_FETCH(kmdp, MODINFOMD_HOWTO, int);
+	init_static_kenv(MD_FETCH(kmdp, MODINFOMD_ENVP, char *), 0);
 
 	/*
 	 * Get bootargs from FDT if specified.
@@ -252,7 +305,10 @@ platform_start(__register_t a0, __register_t a1,  __register_t a2,
 		for (i = 0; envp[i]; i += 2)
 			printf("\t%s = %s\n", envp[i], envp[i+1]);
 
-		printf("memsize = %08x\n", memsize);
+		if (bootinfop != NULL)
+			printf("bootinfo found at %p\n", bootinfop);
+
+		printf("memsize = %p\n", (void *)memsize);
 	}
 
 	realmem = btoc(memsize);

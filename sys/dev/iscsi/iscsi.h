@@ -45,6 +45,7 @@ struct iscsi_outstanding {
 	size_t				io_received;
 	uint32_t			io_initiator_task_tag;
 	uint32_t			io_datasn;
+	void				*io_icl_prv;
 };
 
 struct iscsi_session {
@@ -118,7 +119,7 @@ struct iscsi_session {
 	char				is_reason[ISCSI_REASON_LEN];
 
 #ifdef ICL_KERNEL_PROXY
-	struct cv			is_login_cv;;
+	struct cv			is_login_cv;
 	struct icl_pdu			*is_login_pdu;
 #endif
 };

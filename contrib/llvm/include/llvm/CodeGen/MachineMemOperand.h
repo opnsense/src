@@ -16,14 +16,19 @@
 #ifndef LLVM_CODEGEN_MACHINEMEMOPERAND_H
 #define LLVM_CODEGEN_MACHINEMEMOPERAND_H
 
+#include "llvm/ADT/PointerUnion.h"
+#include "llvm/CodeGen/PseudoSourceValue.h"
+#include "llvm/IR/Metadata.h"
+#include "llvm/IR/Value.h"  // PointerLikeTypeTraits<Value*>
 #include "llvm/Support/DataTypes.h"
 
 namespace llvm {
 
-class Value;
 class FoldingSetNodeID;
 class MDNode;
 class raw_ostream;
+class MachineFunction;
+class ModuleSlotTracker;
 
 /// MachinePointerInfo - This class contains a discriminated union of
 /// information about pointers in memory operands, relating them back to LLVM IR
@@ -33,17 +38,23 @@ struct MachinePointerInfo {
   /// V - This is the IR pointer value for the access, or it is null if unknown.
   /// If this is null, then the access is to a pointer in the default address
   /// space.
-  const Value *V;
+  PointerUnion<const Value *, const PseudoSourceValue *> V;
 
   /// Offset - This is an offset from the base Value*.
   int64_t Offset;
 
-  explicit MachinePointerInfo(const Value *v = 0, int64_t offset = 0)
+  explicit MachinePointerInfo(const Value *v = nullptr, int64_t offset = 0)
+    : V(v), Offset(offset) {}
+
+  explicit MachinePointerInfo(const PseudoSourceValue *v,
+                              int64_t offset = 0)
     : V(v), Offset(offset) {}
 
   MachinePointerInfo getWithOffset(int64_t O) const {
-    if (V == 0) return MachinePointerInfo(0, 0);
-    return MachinePointerInfo(V, Offset+O);
+    if (V.isNull()) return MachinePointerInfo();
+    if (V.is<const Value*>())
+      return MachinePointerInfo(V.get<const Value*>(), Offset+O);
+    return MachinePointerInfo(V.get<const PseudoSourceValue*>(), Offset+O);
   }
 
   /// getAddrSpace - Return the LLVM IR address space number that this pointer
@@ -52,22 +63,23 @@ struct MachinePointerInfo {
 
   /// getConstantPool - Return a MachinePointerInfo record that refers to the
   /// constant pool.
-  static MachinePointerInfo getConstantPool();
+  static MachinePointerInfo getConstantPool(MachineFunction &MF);
 
   /// getFixedStack - Return a MachinePointerInfo record that refers to the
   /// the specified FrameIndex.
-  static MachinePointerInfo getFixedStack(int FI, int64_t offset = 0);
+  static MachinePointerInfo getFixedStack(MachineFunction &MF, int FI,
+                                          int64_t Offset = 0);
 
   /// getJumpTable - Return a MachinePointerInfo record that refers to a
   /// jump table entry.
-  static MachinePointerInfo getJumpTable();
+  static MachinePointerInfo getJumpTable(MachineFunction &MF);
 
   /// getGOT - Return a MachinePointerInfo record that refers to a
   /// GOT entry.
-  static MachinePointerInfo getGOT();
+  static MachinePointerInfo getGOT(MachineFunction &MF);
 
   /// getStack - stack pointer relative access.
-  static MachinePointerInfo getStack(int64_t Offset);
+  static MachinePointerInfo getStack(MachineFunction &MF, int64_t Offset);
 };
 
 
@@ -83,7 +95,7 @@ class MachineMemOperand {
   MachinePointerInfo PtrInfo;
   uint64_t Size;
   unsigned Flags;
-  const MDNode *TBAAInfo;
+  AAMDNodes AAInfo;
   const MDNode *Ranges;
 
 public:
@@ -109,8 +121,9 @@ public:
   /// MachineMemOperand - Construct an MachineMemOperand object with the
   /// specified PtrInfo, flags, size, and base alignment.
   MachineMemOperand(MachinePointerInfo PtrInfo, unsigned flags, uint64_t s,
-                    unsigned base_alignment, const MDNode *TBAAInfo = 0,
-                    const MDNode *Ranges = 0);
+                    unsigned base_alignment,
+                    const AAMDNodes &AAInfo = AAMDNodes(),
+                    const MDNode *Ranges = nullptr);
 
   const MachinePointerInfo &getPointerInfo() const { return PtrInfo; }
 
@@ -121,7 +134,13 @@ public:
   /// other PseudoSourceValue member functions which return objects which stand
   /// for frame/stack pointer relative references and other special references
   /// which are not representable in the high-level IR.
-  const Value *getValue() const { return PtrInfo.V; }
+  const Value *getValue() const { return PtrInfo.V.dyn_cast<const Value*>(); }
+
+  const PseudoSourceValue *getPseudoValue() const {
+    return PtrInfo.V.dyn_cast<const PseudoSourceValue*>();
+  }
+
+  const void *getOpaqueValue() const { return PtrInfo.V.getOpaqueValue(); }
 
   /// getFlags - Return the raw flags of the source value, \see MemOperandFlags.
   unsigned int getFlags() const { return Flags & ((1 << MOMaxBits) - 1); }
@@ -134,6 +153,8 @@ public:
   /// number.
   int64_t getOffset() const { return PtrInfo.Offset; }
 
+  unsigned getAddrSpace() const { return PtrInfo.getAddrSpace(); }
+
   /// getSize - Return the size in bytes of the memory reference.
   uint64_t getSize() const { return Size; }
 
@@ -145,8 +166,8 @@ public:
   /// base address, without the offset.
   uint64_t getBaseAlignment() const { return (1u << (Flags >> MOMaxBits)) >> 1; }
 
-  /// getTBAAInfo - Return the TBAA tag for the memory reference.
-  const MDNode *getTBAAInfo() const { return TBAAInfo; }
+  /// getAAInfo - Return the AA tags for the memory reference.
+  AAMDNodes getAAInfo() const { return AAInfo; }
 
   /// getRanges - Return the range tag for the memory reference.
   const MDNode *getRanges() const { return Ranges; }
@@ -175,14 +196,42 @@ public:
   /// should only be used when an object is being relocated and all references
   /// to it are being updated.
   void setValue(const Value *NewSV) { PtrInfo.V = NewSV; }
+  void setValue(const PseudoSourceValue *NewSV) { PtrInfo.V = NewSV; }
   void setOffset(int64_t NewOffset) { PtrInfo.Offset = NewOffset; }
 
   /// Profile - Gather unique data for the object.
   ///
   void Profile(FoldingSetNodeID &ID) const;
+
+  /// Support for operator<<.
+  /// @{
+  void print(raw_ostream &OS) const;
+  void print(raw_ostream &OS, ModuleSlotTracker &MST) const;
+  /// @}
+
+  friend bool operator==(const MachineMemOperand &LHS,
+                         const MachineMemOperand &RHS) {
+    return LHS.getValue() == RHS.getValue() &&
+           LHS.getPseudoValue() == RHS.getPseudoValue() &&
+           LHS.getSize() == RHS.getSize() &&
+           LHS.getOffset() == RHS.getOffset() &&
+           LHS.getFlags() == RHS.getFlags() &&
+           LHS.getAAInfo() == RHS.getAAInfo() &&
+           LHS.getRanges() == RHS.getRanges() &&
+           LHS.getAlignment() == RHS.getAlignment() &&
+           LHS.getAddrSpace() == RHS.getAddrSpace();
+  }
+
+  friend bool operator!=(const MachineMemOperand &LHS,
+                         const MachineMemOperand &RHS) {
+    return !(LHS == RHS);
+  }
 };
 
-raw_ostream &operator<<(raw_ostream &OS, const MachineMemOperand &MRO);
+inline raw_ostream &operator<<(raw_ostream &OS, const MachineMemOperand &MRO) {
+  MRO.print(OS);
+  return OS;
+}
 
 } // End llvm namespace
 

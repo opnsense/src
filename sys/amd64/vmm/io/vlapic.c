@@ -45,7 +45,6 @@ __FBSDID("$FreeBSD$");
 
 #include <machine/vmm.h>
 
-#include "vmm_ipi.h"
 #include "vmm_lapic.h"
 #include "vmm_ktr.h"
 #include "vmm_stat.h"
@@ -842,7 +841,7 @@ vlapic_calcdest(struct vm *vm, cpuset_t *dmask, uint32_t dest, bool phys,
 	} else {
 		/*
 		 * In the "Flat Model" the MDA is interpreted as an 8-bit wide
-		 * bitmask. This model is only avilable in the xAPIC mode.
+		 * bitmask. This model is only available in the xAPIC mode.
 		 */
 		mda_flat_ldest = dest & 0xff;
 

@@ -7,8 +7,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "lldb/lldb-python.h"
-
 // C Includes
 #include <cstdlib>
 // C++ Includes
@@ -19,13 +17,13 @@
 #include "lldb/Core/StreamFile.h"
 #include "lldb/Core/StreamString.h"
 #include "lldb/DataFormatters/FormatManager.h"
+#include "lldb/Host/StringConvert.h"
 #include "lldb/Interpreter/Options.h"
+#include "lldb/Interpreter/CommandInterpreter.h"
 #include "lldb/Interpreter/CommandReturnObject.h"
 #include "lldb/Target/Process.h"
-//#include "lldb/Target/RegisterContext.h"
 #include "lldb/Target/StackFrame.h"
 #include "lldb/Target/Target.h"
-//#include "lldb/Target/Thread.h"
 
 using namespace lldb;
 using namespace lldb_private;
@@ -33,24 +31,14 @@ using namespace lldb_private;
 //----------------------------------------------------------------------
 // Args constructor
 //----------------------------------------------------------------------
-Args::Args (const char *command) :
+Args::Args (llvm::StringRef command) :
     m_args(),
     m_argv(),
     m_args_quote_char()
 {
-    if (command)
-        SetCommandString (command);
+    SetCommandString (command);
 }
 
-
-Args::Args (const char *command, size_t len) :
-    m_args(),
-    m_argv(),
-    m_args_quote_char()
-{
-    if (command && len)
-        SetCommandString (command, len);
-}
 
 //----------------------------------------------------------------------
 // We have to be very careful on the copy constructor of this class
@@ -146,216 +134,158 @@ Args::GetQuotedCommandString (std::string &command) const
     return argc > 0;
 }
 
-void
-Args::SetCommandString (const char *command, size_t len)
+// A helper function for argument parsing.
+// Parses the initial part of the first argument using normal double quote rules:
+// backslash escapes the double quote and itself. The parsed string is appended to the second
+// argument. The function returns the unparsed portion of the string, starting at the closing
+// quote.
+static llvm::StringRef
+ParseDoubleQuotes(llvm::StringRef quoted, std::string &result)
 {
-    // Use std::string to make sure we get a NULL terminated string we can use
-    // as "command" could point to a string within a large string....
-    std::string null_terminated_command(command, len);
-    SetCommandString(null_terminated_command.c_str());
+    // Inside double quotes, '\' and '"' are special.
+    static const char *k_escapable_characters = "\"\\";
+    while (true)
+    {
+        // Skip over over regular characters and append them.
+        size_t regular = quoted.find_first_of(k_escapable_characters);
+        result += quoted.substr(0, regular);
+        quoted = quoted.substr(regular);
+
+        // If we have reached the end of string or the closing quote, we're done.
+        if (quoted.empty() || quoted.front() == '"')
+            break;
+
+        // We have found a backslash.
+        quoted = quoted.drop_front();
+
+        if (quoted.empty())
+        {
+            // A lone backslash at the end of string, let's just append it.
+            result += '\\';
+            break;
+        }
+
+        // If the character after the backslash is not a whitelisted escapable character, we
+        // leave the character sequence untouched.
+        if (strchr(k_escapable_characters, quoted.front()) == nullptr)
+            result += '\\';
+
+        result += quoted.front();
+        quoted = quoted.drop_front();
+    }
+
+    return quoted;
+}
+
+// A helper function for SetCommandString.
+// Parses a single argument from the command string, processing quotes and backslashes in a
+// shell-like manner. The parsed argument is appended to the m_args array. The function returns
+// the unparsed portion of the string, starting at the first unqouted, unescaped whitespace
+// character.
+llvm::StringRef
+Args::ParseSingleArgument(llvm::StringRef command)
+{
+    // Argument can be split into multiple discontiguous pieces,
+    // for example:
+    //  "Hello ""World"
+    // this would result in a single argument "Hello World" (without/
+    // the quotes) since the quotes would be removed and there is
+    // not space between the strings.
+
+    std::string arg;
+
+    // Since we can have multiple quotes that form a single command
+    // in a command like: "Hello "world'!' (which will make a single
+    // argument "Hello world!") we remember the first quote character
+    // we encounter and use that for the quote character.
+    char first_quote_char = '\0';
+
+    bool arg_complete = false;
+    do
+    {
+        // Skip over over regular characters and append them.
+        size_t regular = command.find_first_of(" \t\"'`\\");
+        arg += command.substr(0, regular);
+        command = command.substr(regular);
+
+        if (command.empty())
+            break;
+
+        char special = command.front();
+        command = command.drop_front();
+        switch (special)
+        {
+        case '\\':
+            if (command.empty())
+            {
+                arg += '\\';
+                break;
+            }
+
+            // If the character after the backslash is not a whitelisted escapable character, we
+            // leave the character sequence untouched.
+            if (strchr(" \t\\'\"`", command.front()) == nullptr)
+                arg += '\\';
+
+            arg += command.front();
+            command = command.drop_front();
+
+            break;
+
+        case ' ':
+        case '\t':
+            // We are not inside any quotes, we just found a space after an
+            // argument. We are done.
+            arg_complete = true;
+            break;
+
+        case '"':
+        case '\'':
+        case '`':
+            // We found the start of a quote scope.
+            if (first_quote_char == '\0')
+                first_quote_char = special;
+
+            if (special == '"')
+                command = ParseDoubleQuotes(command, arg);
+            else
+            {
+                // For single quotes, we simply skip ahead to the matching quote character
+                // (or the end of the string).
+                size_t quoted = command.find(special);
+                arg += command.substr(0, quoted);
+                command = command.substr(quoted);
+            }
+
+            // If we found a closing quote, skip it.
+            if (! command.empty())
+                command = command.drop_front();
+
+            break;
+        }
+    } while (!arg_complete);
+
+    m_args.push_back(arg);
+    m_args_quote_char.push_back (first_quote_char);
+    return command;
 }
 
 void
-Args::SetCommandString (const char *command)
+Args::SetCommandString (llvm::StringRef command)
 {
     m_args.clear();
     m_argv.clear();
     m_args_quote_char.clear();
 
-    if (command && command[0])
+    static const char *k_space_separators = " \t";
+    command = command.ltrim(k_space_separators);
+    while (!command.empty())
     {
-        static const char *k_space_separators = " \t";
-        static const char *k_space_separators_with_slash_and_quotes = " \t \\'\"";
-        const char *arg_end = NULL;
-        const char *arg_pos;
-        for (arg_pos = command;
-             arg_pos && arg_pos[0];
-             arg_pos = arg_end)
-        {
-            // Skip any leading space separators
-            const char *arg_start = ::strspn (arg_pos, k_space_separators) + arg_pos;
-            
-            // If there were only space separators to the end of the line, then
-            // we're done.
-            if (*arg_start == '\0')
-                break;
-
-            // Arguments can be split into multiple discontiguous pieces,
-            // for example:
-            //  "Hello ""World"
-            // this would result in a single argument "Hello World" (without/
-            // the quotes) since the quotes would be removed and there is 
-            // not space between the strings. So we need to keep track of the
-            // current start of each argument piece in "arg_piece_start"
-            const char *arg_piece_start = arg_start;
-            arg_pos = arg_piece_start;
-
-            std::string arg;
-            // Since we can have multiple quotes that form a single command
-            // in a command like: "Hello "world'!' (which will make a single
-            // argument "Hello world!") we remember the first quote character
-            // we encounter and use that for the quote character.
-            char first_quote_char = '\0';
-            char quote_char = '\0';
-            bool arg_complete = false;
-
-            do
-            {
-                arg_end = ::strcspn (arg_pos, k_space_separators_with_slash_and_quotes) + arg_pos;
-
-                switch (arg_end[0])
-                {
-                default:
-                    assert (!"Unhandled case statement, we must handle this...");
-                    break;
-
-                case '\0':
-                    // End of C string
-                    if (arg_piece_start && arg_piece_start[0])
-                        arg.append (arg_piece_start);
-                    arg_complete = true;
-                    break;
-                    
-                case '\\':
-                    // Backslash character
-                    switch (arg_end[1])
-                    {
-                        case '\0':
-                            arg.append (arg_piece_start);
-                            ++arg_end;
-                            arg_complete = true;
-                            break;
-
-                        default:
-                            if (quote_char == '\0')
-                            {
-                                arg.append (arg_piece_start, arg_end - arg_piece_start);
-                                if (arg_end[1] != '\0')
-                                {
-                                    arg.append (arg_end + 1, 1);
-                                    arg_pos = arg_end + 2;
-                                    arg_piece_start = arg_pos;
-                                }
-                            }
-                            else
-                                arg_pos = arg_end + 2;
-                            break;
-                    }
-                    break;
-                
-                case '"':
-                case '\'':
-                case '`':
-                    // Quote characters 
-                    if (quote_char)
-                    {
-                        // We found a quote character while inside a quoted
-                        // character argument. If it matches our current quote
-                        // character, this ends the effect of the quotes. If it
-                        // doesn't we ignore it.
-                        if (quote_char == arg_end[0])
-                        {
-                            arg.append (arg_piece_start, arg_end - arg_piece_start);
-                            // Clear the quote character and let parsing
-                            // continue (we need to watch for things like:
-                            // "Hello ""World"
-                            // "Hello "World
-                            // "Hello "'World'
-                            // All of which will result in a single argument "Hello World"
-                            quote_char = '\0'; // Note that we are no longer inside quotes
-                            arg_pos = arg_end + 1; // Skip the quote character
-                            arg_piece_start = arg_pos; // Note we are starting from later in the string
-                        }
-                        else
-                        {
-                            // different quote, skip it and keep going
-                            arg_pos = arg_end + 1;
-                        }
-                    }
-                    else
-                    {
-                        // We found the start of a quote scope.
-                        // Make sure there isn't a string that precedes
-                        // the start of a quote scope like:
-                        // Hello" World"
-                        // If so, then add the "Hello" to the arg
-                        if (arg_end > arg_piece_start)
-                            arg.append (arg_piece_start, arg_end - arg_piece_start);
-                            
-                        // Enter into a quote scope
-                        quote_char = arg_end[0];
-                        
-                        if (first_quote_char == '\0')
-                            first_quote_char = quote_char;
-
-                        arg_pos = arg_end;
-                        ++arg_pos;                 // Skip the quote character
-                        arg_piece_start = arg_pos; // Note we are starting from later in the string
-                        
-                        // Skip till the next quote character
-                        const char *end_quote = ::strchr (arg_piece_start, quote_char);
-                        while (end_quote && end_quote[-1] == '\\')
-                        {
-                            // Don't skip the quote character if it is 
-                            // preceded by a '\' character
-                            end_quote = ::strchr (end_quote + 1, quote_char);
-                        }
-                        
-                        if (end_quote)
-                        {
-                            if (end_quote > arg_piece_start)
-                                arg.append (arg_piece_start, end_quote - arg_piece_start);
-
-                            // If the next character is a space or the end of 
-                            // string, this argument is complete...
-                            if (end_quote[1] == ' ' || end_quote[1] == '\t' || end_quote[1] == '\0')
-                            {
-                                arg_complete = true;
-                                arg_end = end_quote + 1;
-                            }
-                            else
-                            {
-                                arg_pos = end_quote + 1;
-                                arg_piece_start = arg_pos;
-                            }
-                            quote_char = '\0';
-                        }
-                        else
-                        {
-                            // Consume the rest of the string as there was no terminating quote
-                            arg.append(arg_piece_start);
-                            arg_end = arg_piece_start + strlen(arg_piece_start);
-                            arg_complete = true;
-                        }
-                    }
-                    break;
-
-                case ' ':
-                case '\t':
-                    if (quote_char)
-                    {
-                        // We are currently processing a quoted character and found
-                        // a space character, skip any spaces and keep trying to find
-                        // the end of the argument. 
-                        arg_pos = ::strspn (arg_end, k_space_separators) + arg_end;
-                    }
-                    else
-                    {
-                        // We are not inside any quotes, we just found a space after an
-                        // argument
-                        if (arg_end > arg_piece_start)
-                            arg.append (arg_piece_start, arg_end - arg_piece_start);
-                        arg_complete = true;
-                    }
-                    break;
-                }
-            } while (!arg_complete);
-
-            m_args.push_back(arg);
-            m_args_quote_char.push_back (first_quote_char);
-        }
-        UpdateArgvFromArgs();
+        command = ParseSingleArgument(command);
+        command = command.ltrim(k_space_separators);
     }
+
+    UpdateArgvFromArgs();
 }
 
 void
@@ -371,7 +301,7 @@ Args::UpdateArgsAfterOptionParsing()
          ++argv_pos)
     {
         const char *argv_cstr = *argv_pos;
-        if (argv_cstr == NULL)
+        if (argv_cstr == nullptr)
             break;
 
         while (args_pos != m_args.end())
@@ -407,7 +337,7 @@ Args::UpdateArgvFromArgs()
     arg_sstr_collection::const_iterator pos, end = m_args.end();
     for (pos = m_args.begin(); pos != end; ++pos)
         m_argv.push_back(pos->c_str());
-    m_argv.push_back(NULL);
+    m_argv.push_back(nullptr);
     // Make sure we have enough arg quote chars in the array
     if (m_args_quote_char.size() < m_args.size())
         m_args_quote_char.resize (m_argv.size());
@@ -426,7 +356,7 @@ Args::GetArgumentAtIndex (size_t idx) const
 {
     if (idx < m_argv.size())
         return m_argv[idx];
-    return NULL;
+    return nullptr;
 }
 
 char
@@ -441,16 +371,16 @@ char **
 Args::GetArgumentVector()
 {
     if (!m_argv.empty())
-        return (char **)&m_argv[0];
-    return NULL;
+        return const_cast<char **>(&m_argv[0]);
+    return nullptr;
 }
 
 const char **
 Args::GetConstArgumentVector() const
 {
     if (!m_argv.empty())
-        return (const char **)&m_argv[0];
-    return NULL;
+        return const_cast<const char **>(&m_argv[0]);
+    return nullptr;
 }
 
 void
@@ -480,7 +410,8 @@ Args::AppendArguments (const Args &rhs)
 {
     const size_t rhs_argc = rhs.GetArgumentCount();
     for (size_t i=0; i<rhs_argc; ++i)
-        AppendArgument(rhs.GetArgumentAtIndex(i));
+        AppendArgument(rhs.GetArgumentAtIndex(i),
+                       rhs.GetArgumentQuoteCharAtIndex(i));
 }
 
 void
@@ -545,7 +476,7 @@ Args::ReplaceArgumentAtIndex (size_t idx, const char *arg_cstr, char quote_char)
         m_args_quote_char[idx] = quote_char;
         return GetArgumentAtIndex(idx);
     }
-    return NULL;
+    return nullptr;
 }
 
 void
@@ -621,20 +552,20 @@ Args::ParseOptions (Options &options)
     StreamString sstr;
     Error error;
     Option *long_options = options.GetLongOptions();
-    if (long_options == NULL)
+    if (long_options == nullptr)
     {
         error.SetErrorStringWithFormat("invalid long options");
         return error;
     }
 
-    for (int i=0; long_options[i].name != NULL; ++i)
+    for (int i=0; long_options[i].definition != nullptr; ++i)
     {
-        if (long_options[i].flag == NULL)
+        if (long_options[i].flag == nullptr)
         {
             if (isprint8(long_options[i].val))
             {
                 sstr << (char)long_options[i].val;
-                switch (long_options[i].has_arg)
+                switch (long_options[i].definition->option_has_arg)
                 {
                 default:
                 case OptionParser::eNoArgument:                       break;
@@ -644,7 +575,8 @@ Args::ParseOptions (Options &options)
             }
         }
     }
-    OptionParser::Prepare();
+    Mutex::Locker options_locker(NULL);
+    OptionParser::Prepare(options_locker);
     int val;
     while (1)
     {
@@ -673,7 +605,7 @@ Args::ParseOptions (Options &options)
         if (long_options_index == -1)
         {
             for (int i=0;
-                 long_options[i].name || long_options[i].has_arg || long_options[i].flag || long_options[i].val;
+                 long_options[i].definition || long_options[i].flag || long_options[i].val;
                  ++i)
             {
                 if (long_options[i].val == val)
@@ -684,10 +616,20 @@ Args::ParseOptions (Options &options)
             }
         }
         // Call the callback with the option
-        if (long_options_index >= 0)
+        if (long_options_index >= 0 && long_options[long_options_index].definition)
         {
-            error = options.SetOptionValue(long_options_index,
-                                           long_options[long_options_index].has_arg == OptionParser::eNoArgument ? NULL : OptionParser::GetOptionArgument());
+            const OptionDefinition *def = long_options[long_options_index].definition;
+            CommandInterpreter &interpreter = options.GetInterpreter();
+            OptionValidator *validator = def->validator;
+            if (validator && !validator->IsValid(*interpreter.GetPlatform(true), interpreter.GetExecutionContext()))
+            {
+                error.SetErrorStringWithFormat("Option \"%s\" invalid.  %s", def->long_option, def->validator->LongConditionString());
+            }
+            else
+            {
+                error = options.SetOptionValue(long_options_index,
+                                               (def->option_has_arg == OptionParser::eNoArgument) ? nullptr : OptionParser::GetOptionArgument());
+            }
         }
         else
         {
@@ -711,84 +653,13 @@ Args::Clear ()
     m_args_quote_char.clear();
 }
 
-int32_t
-Args::StringToSInt32 (const char *s, int32_t fail_value, int base, bool *success_ptr)
-{
-    if (s && s[0])
-    {
-        char *end = NULL;
-        const long sval = ::strtol (s, &end, base);
-        if (*end == '\0')
-        {
-            if (success_ptr)
-                *success_ptr = ((sval <= INT32_MAX) && (sval >= INT32_MIN));
-            return (int32_t)sval; // All characters were used, return the result
-        }
-    }
-    if (success_ptr) *success_ptr = false;
-    return fail_value;
-}
-
-uint32_t
-Args::StringToUInt32 (const char *s, uint32_t fail_value, int base, bool *success_ptr)
-{
-    if (s && s[0])
-    {
-        char *end = NULL;
-        const unsigned long uval = ::strtoul (s, &end, base);
-        if (*end == '\0')
-        {
-            if (success_ptr)
-                *success_ptr = (uval <= UINT32_MAX);
-            return (uint32_t)uval; // All characters were used, return the result
-        }
-    }
-    if (success_ptr) *success_ptr = false;
-    return fail_value;
-}
-
-
-int64_t
-Args::StringToSInt64 (const char *s, int64_t fail_value, int base, bool *success_ptr)
-{
-    if (s && s[0])
-    {
-        char *end = NULL;
-        int64_t uval = ::strtoll (s, &end, base);
-        if (*end == '\0')
-        {
-            if (success_ptr) *success_ptr = true;
-            return uval; // All characters were used, return the result
-        }
-    }
-    if (success_ptr) *success_ptr = false;
-    return fail_value;
-}
-
-uint64_t
-Args::StringToUInt64 (const char *s, uint64_t fail_value, int base, bool *success_ptr)
-{
-    if (s && s[0])
-    {
-        char *end = NULL;
-        uint64_t uval = ::strtoull (s, &end, base);
-        if (*end == '\0')
-        {
-            if (success_ptr) *success_ptr = true;
-            return uval; // All characters were used, return the result
-        }
-    }
-    if (success_ptr) *success_ptr = false;
-    return fail_value;
-}
-
 lldb::addr_t
 Args::StringToAddress (const ExecutionContext *exe_ctx, const char *s, lldb::addr_t fail_value, Error *error_ptr)
 {
     bool error_set = false;
     if (s && s[0])
     {
-        char *end = NULL;
+        char *end = nullptr;
         lldb::addr_t addr = ::strtoull (s, &end, 0);
         if (*end == '\0')
         {
@@ -817,16 +688,19 @@ Args::StringToAddress (const ExecutionContext *exe_ctx, const char *s, lldb::add
                 options.SetKeepInMemory(false);
                 options.SetTryAllThreads(true);
                 
-                ExecutionResults expr_result = target->EvaluateExpression(s,
-                                                                          exe_ctx->GetFramePtr(),
-                                                                          valobj_sp,
-                                                                          options);
+                ExpressionResults expr_result = target->EvaluateExpression(s,
+                                                                           exe_ctx->GetFramePtr(),
+                                                                           valobj_sp,
+                                                                           options);
 
                 bool success = false;
-                if (expr_result == eExecutionCompleted)
+                if (expr_result == eExpressionCompleted)
                 {
+                    if (valobj_sp)
+                        valobj_sp = valobj_sp->GetQualifiedRepresentationIfAvailable(valobj_sp->GetDynamicValueType(), true);
                     // Get the address to watch.
-                    addr = valobj_sp->GetValueAsUnsigned(fail_value, &success);
+                    if (valobj_sp)
+                        addr = valobj_sp->GetValueAsUnsigned(fail_value, &success);
                     if (success)
                     {
                         if (error_ptr)
@@ -846,7 +720,7 @@ Args::StringToAddress (const ExecutionContext *exe_ctx, const char *s, lldb::add
                 else
                 {
                     // Since the compiler can't handle things like "main + 12" we should
-                    // try to do this for now. The compliler doesn't like adding offsets
+                    // try to do this for now. The compiler doesn't like adding offsets
                     // to function pointer types.
                     static RegularExpression g_symbol_plus_offset_regex("^(.*)([-\\+])[[:space:]]*(0x[0-9A-Fa-f]+|[0-9]+)[[:space:]]*$");
                     RegularExpression::Match regex_match(3);
@@ -864,7 +738,7 @@ Args::StringToAddress (const ExecutionContext *exe_ctx, const char *s, lldb::add
                                 
                                 if (regex_match.GetMatchAtIndex(s, 3, str))
                                 {
-                                    offset = Args::StringToUInt64(str.c_str(), 0, 0, &success);
+                                    offset = StringConvert::ToUInt64(str.c_str(), 0, 0, &success);
                                     
                                     if (success)
                                     {
@@ -923,36 +797,54 @@ Args::StripSpaces (std::string &s, bool leading, bool trailing, bool return_null
         }
     }
     if (return_null_if_empty && s.empty())
-        return NULL;
+        return nullptr;
     return s.c_str();
 }
 
 bool
 Args::StringToBoolean (const char *s, bool fail_value, bool *success_ptr)
 {
-    if (s && s[0])
+    llvm::StringRef ref = llvm::StringRef(s).trim();
+    if (ref.equals_lower("false") ||
+        ref.equals_lower("off") ||
+        ref.equals_lower("no") ||
+        ref.equals_lower("0"))
     {
-        if (::strcasecmp (s, "false") == 0 ||
-            ::strcasecmp (s, "off") == 0 ||
-            ::strcasecmp (s, "no") == 0 ||
-                ::strcmp (s, "0") == 0)
-        {
-            if (success_ptr)
-                *success_ptr = true;
-            return false;
-        }
-        else
-        if (::strcasecmp (s, "true") == 0 ||
-            ::strcasecmp (s, "on") == 0 ||
-            ::strcasecmp (s, "yes") == 0 ||
-                ::strcmp (s, "1") == 0)
-        {
-            if (success_ptr) *success_ptr = true;
-            return true;
-        }
+        if (success_ptr)
+            *success_ptr = true;
+        return false;
+    }
+    else
+    if (ref.equals_lower("true") ||
+        ref.equals_lower("on") ||
+        ref.equals_lower("yes") ||
+        ref.equals_lower("1"))
+    {
+        if (success_ptr) *success_ptr = true;
+        return true;
     }
     if (success_ptr) *success_ptr = false;
     return fail_value;
+}
+
+char
+Args::StringToChar(const char *s, char fail_value, bool *success_ptr)
+{
+    bool success = false;
+    char result = fail_value;
+
+    if (s)
+    {
+        size_t length = strlen(s);
+        if (length == 1)
+        {
+            success = true;
+            result = s[0];
+        }
+    }
+    if (success_ptr)
+        *success_ptr = success;
+    return result;
 }
 
 const char *
@@ -964,7 +856,7 @@ Args::StringToVersion (const char *s, uint32_t &major, uint32_t &minor, uint32_t
 
     if (s && s[0])
     {
-        char *pos = NULL;
+        char *pos = nullptr;
         unsigned long uval32 = ::strtoul (s, &pos, 0);
         if (pos == s)
             return s;
@@ -991,7 +883,7 @@ Args::StringToVersion (const char *s, uint32_t &major, uint32_t &minor, uint32_t
             return pos;
         }
     }
-    return 0;
+    return nullptr;
 }
 
 const char *
@@ -1022,7 +914,7 @@ Args::StringToOptionEnum (const char *s, OptionEnumValueElement *enum_values, in
     {
         if (s && s[0])
         {
-            for (int i = 0; enum_values[i].string_value != NULL ; i++) 
+            for (int i = 0; enum_values[i].string_value != nullptr ; i++)
             {
                 if (strstr(enum_values[i].string_value, s) == enum_values[i].string_value)
                 {
@@ -1034,7 +926,7 @@ Args::StringToOptionEnum (const char *s, OptionEnumValueElement *enum_values, in
 
         StreamString strm;
         strm.PutCString ("invalid enumeration value, valid values are: ");
-        for (int i = 0; enum_values[i].string_value != NULL; i++) 
+        for (int i = 0; enum_values[i].string_value != nullptr; i++)
         {
             strm.Printf ("%s\"%s\"", 
                          i > 0 ? ", " : "",
@@ -1087,7 +979,7 @@ Args::StringToFormat
         {
             if (isdigit (s[0]))
             {
-                char *format_char = NULL;
+                char *format_char = nullptr;
                 unsigned long byte_size = ::strtoul (s, &format_char, 0);
                 if (byte_size != ULONG_MAX)
                     *byte_size_ptr = byte_size;
@@ -1155,7 +1047,7 @@ Args::StringToGenericRegister (const char *s)
             return LLDB_REGNUM_GENERIC_SP;
         else if (strcmp(s, "fp") == 0)
             return LLDB_REGNUM_GENERIC_FP;
-        else if (strcmp(s, "ra") == 0)
+        else if (strcmp(s, "ra") == 0 || strcmp(s, "lr") == 0)
             return LLDB_REGNUM_GENERIC_RA;
         else if (strcmp(s, "flags") == 0)
             return LLDB_REGNUM_GENERIC_FLAGS;
@@ -1222,7 +1114,7 @@ Args::FindArgumentIndexForOption (Option *long_options, int long_options_index)
     char short_buffer[3];
     char long_buffer[255];
     ::snprintf (short_buffer, sizeof (short_buffer), "-%c", long_options[long_options_index].val);
-    ::snprintf (long_buffer, sizeof (long_buffer),  "--%s", long_options[long_options_index].name);
+    ::snprintf (long_buffer, sizeof (long_buffer),  "--%s", long_options[long_options_index].definition->long_option);
     size_t end = GetArgumentCount ();
     size_t idx = 0;
     while (idx < end)
@@ -1241,11 +1133,11 @@ Args::FindArgumentIndexForOption (Option *long_options, int long_options_index)
 bool
 Args::IsPositionalArgument (const char *arg)
 {
-    if (arg == NULL)
+    if (arg == nullptr)
         return false;
         
     bool is_positional = true;
-    char *cptr = (char *) arg;
+    const char *cptr = arg;
     
     if (cptr[0] == '%')
     {
@@ -1271,19 +1163,19 @@ Args::ParseAliasOptions (Options &options,
     int i;
     Option *long_options = options.GetLongOptions();
 
-    if (long_options == NULL)
+    if (long_options == nullptr)
     {
         result.AppendError ("invalid long options");
         result.SetStatus (eReturnStatusFailed);
         return;
     }
 
-    for (i = 0; long_options[i].name != NULL; ++i)
+    for (i = 0; long_options[i].definition != nullptr; ++i)
     {
-        if (long_options[i].flag == NULL)
+        if (long_options[i].flag == nullptr)
         {
             sstr << (char) long_options[i].val;
-            switch (long_options[i].has_arg)
+            switch (long_options[i].definition->option_has_arg)
             {
                 default:
                 case OptionParser::eNoArgument:
@@ -1298,7 +1190,8 @@ Args::ParseAliasOptions (Options &options,
         }
     }
 
-    OptionParser::Prepare();
+    Mutex::Locker options_locker(NULL);
+    OptionParser::Prepare(options_locker);
     int val;
     while (1)
     {
@@ -1322,13 +1215,13 @@ Args::ParseAliasOptions (Options &options,
         if (val == 0)
             continue;
 
-        ((Options *) &options)->OptionSeen (val);
+        options.OptionSeen (val);
 
         // Look up the long option index
         if (long_options_index == -1)
         {
             for (int j = 0;
-                 long_options[j].name || long_options[j].has_arg || long_options[j].flag || long_options[j].val;
+                 long_options[j].definition || long_options[j].flag || long_options[j].val;
                  ++j)
             {
                 if (long_options[j].val == val)
@@ -1344,8 +1237,10 @@ Args::ParseAliasOptions (Options &options,
         {
             StreamString option_str;
             option_str.Printf ("-%c", val);
+            const OptionDefinition *def = long_options[long_options_index].definition;
+            int has_arg = (def == nullptr) ? OptionParser::eNoArgument : def->option_has_arg;
 
-            switch (long_options[long_options_index].has_arg)
+            switch (has_arg)
             {
             case OptionParser::eNoArgument:
                 option_arg_vector->push_back (OptionArgPair (std::string (option_str.GetData()), 
@@ -1353,7 +1248,7 @@ Args::ParseAliasOptions (Options &options,
                 result.SetStatus (eReturnStatusSuccessFinishNoResult);
                 break;
             case OptionParser::eRequiredArgument:
-                if (OptionParser::GetOptionArgument() != NULL)
+                if (OptionParser::GetOptionArgument() != nullptr)
                 {
                     option_arg_vector->push_back (OptionArgPair (std::string (option_str.GetData()),
                                                                  OptionArgValue (OptionParser::eRequiredArgument,
@@ -1368,7 +1263,7 @@ Args::ParseAliasOptions (Options &options,
                 }
                 break;
             case OptionParser::eOptionalArgument:
-                if (OptionParser::GetOptionArgument() != NULL)
+                if (OptionParser::GetOptionArgument() != nullptr)
                 {
                     option_arg_vector->push_back (OptionArgPair (std::string (option_str.GetData()),
                                                                  OptionArgValue (OptionParser::eOptionalArgument,
@@ -1410,8 +1305,8 @@ Args::ParseAliasOptions (Options &options,
                         raw_input_string.erase (pos, strlen (tmp_arg));
                 }
                 ReplaceArgumentAtIndex (idx, "");
-                if ((long_options[long_options_index].has_arg != OptionParser::eNoArgument)
-                    && (OptionParser::GetOptionArgument() != NULL)
+                if ((long_options[long_options_index].definition->option_has_arg != OptionParser::eNoArgument)
+                    && (OptionParser::GetOptionArgument() != nullptr)
                     && (idx+1 < GetArgumentCount())
                     && (strcmp (OptionParser::GetOptionArgument(), GetArgumentAtIndex(idx+1)) == 0))
                 {
@@ -1444,7 +1339,7 @@ Args::ParseArgsForCompletion
     Option *long_options = options.GetLongOptions();
     option_element_vector.clear();
 
-    if (long_options == NULL)
+    if (long_options == nullptr)
     {
         return;
     }
@@ -1453,12 +1348,12 @@ Args::ParseArgsForCompletion
     // to suppress error messages.
 
     sstr << ":";
-    for (int i = 0; long_options[i].name != NULL; ++i)
+    for (int i = 0; long_options[i].definition != nullptr; ++i)
     {
-        if (long_options[i].flag == NULL)
+        if (long_options[i].flag == nullptr)
         {
             sstr << (char) long_options[i].val;
-            switch (long_options[i].has_arg)
+            switch (long_options[i].definition->option_has_arg)
             {
                 default:
                 case OptionParser::eNoArgument:
@@ -1473,7 +1368,8 @@ Args::ParseArgsForCompletion
         }
     }
 
-    OptionParser::Prepare();
+    Mutex::Locker options_locker(NULL);
+    OptionParser::Prepare(options_locker);
     OptionParser::EnableError(false);
 
     int val;
@@ -1494,7 +1390,7 @@ Args::ParseArgsForCompletion
         int long_options_index = -1;
         
         val = OptionParser::Parse (dummy_vec.size() - 1,
-                                  (char *const *) &dummy_vec.front(),
+                                  const_cast<char *const *>(&dummy_vec.front()),
                                   sstr.GetData(),
                                   long_options,
                                   &long_options_index);
@@ -1516,11 +1412,11 @@ Args::ParseArgsForCompletion
             // were passed.  This will be useful when we come to restricting completions based on what other
             // options we've seen on the line.
 
-            if (OptionParser::GetOptionIndex() < dummy_vec.size() - 1
+            if (static_cast<size_t>(OptionParser::GetOptionIndex()) < dummy_vec.size() - 1
                 && (strcmp (dummy_vec[OptionParser::GetOptionIndex()-1], "--") == 0))
             {
                 dash_dash_pos = OptionParser::GetOptionIndex() - 1;
-                if (OptionParser::GetOptionIndex() - 1 == cursor_index)
+                if (static_cast<size_t>(OptionParser::GetOptionIndex() - 1) == cursor_index)
                 {
                     option_element_vector.push_back (OptionArgElement (OptionArgElement::eBareDoubleDash, OptionParser::GetOptionIndex() - 1,
                                                                    OptionArgElement::eBareDoubleDash));
@@ -1555,7 +1451,7 @@ Args::ParseArgsForCompletion
         if (long_options_index == -1)
         {
             for (int j = 0;
-                 long_options[j].name || long_options[j].has_arg || long_options[j].flag || long_options[j].val;
+                 long_options[j].definition || long_options[j].flag || long_options[j].val;
                  ++j)
             {
                 if (long_options[j].val == val)
@@ -1581,13 +1477,15 @@ Args::ParseArgsForCompletion
                 }
             }
 
-            switch (long_options[long_options_index].has_arg)
+            const OptionDefinition *def = long_options[long_options_index].definition;
+            int has_arg = (def == nullptr) ? OptionParser::eNoArgument : def->option_has_arg;
+            switch (has_arg)
             {
             case OptionParser::eNoArgument:
                 option_element_vector.push_back (OptionArgElement (opt_defs_index, OptionParser::GetOptionIndex() - 1, 0));
                 break;
             case OptionParser::eRequiredArgument:
-                if (OptionParser::GetOptionArgument() != NULL)
+                if (OptionParser::GetOptionArgument() != nullptr)
                 {
                     int arg_index;
                     if (missing_argument)
@@ -1603,7 +1501,7 @@ Args::ParseArgsForCompletion
                 }
                 break;
             case OptionParser::eOptionalArgument:
-                if (OptionParser::GetOptionArgument() != NULL)
+                if (OptionParser::GetOptionArgument() != nullptr)
                 {
                     option_element_vector.push_back (OptionArgElement (opt_defs_index, OptionParser::GetOptionIndex() - 2, OptionParser::GetOptionIndex() - 1));
                 }
@@ -1629,8 +1527,10 @@ Args::ParseArgsForCompletion
     // Finally we have to handle the case where the cursor index points at a single "-".  We want to mark that in
     // the option_element_vector, but only if it is not after the "--".  But it turns out that OptionParser::Parse just ignores
     // an isolated "-".  So we have to look it up by hand here.  We only care if it is AT the cursor position.
+    // Note, a single quoted dash is not the same as a single dash...
     
-    if ((dash_dash_pos == -1 || cursor_index < dash_dash_pos)
+    if ((static_cast<int32_t>(dash_dash_pos) == -1 || cursor_index < dash_dash_pos)
+         && m_args_quote_char[cursor_index] == '\0'
          && strcmp (GetArgumentAtIndex(cursor_index), "-") == 0)
     {
         option_element_vector.push_back (OptionArgElement (OptionArgElement::eBareDash, cursor_index, 
@@ -1686,7 +1586,7 @@ Args::EncodeEscapeSequences (const char *src, std::string &dst)
                         // the main for loop will do this for us, so we advance p by
                         // one less than i (even if i is zero)
                         p += i - 1;
-                        unsigned long octal_value = ::strtoul (oct_str, NULL, 8);
+                        unsigned long octal_value = ::strtoul (oct_str, nullptr, 8);
                         if (octal_value <= UINT8_MAX)
                         {
                             dst.append(1, (char)octal_value);
@@ -1709,7 +1609,7 @@ Args::EncodeEscapeSequences (const char *src, std::string &dst)
                                 hex_str[1] = *p;
                             }
                             
-                            unsigned long hex_value = strtoul (hex_str, NULL, 16);
+                            unsigned long hex_value = strtoul (hex_str, nullptr, 16);
                             if (hex_value <= UINT8_MAX)
                                 dst.append (1, (char)hex_value);
                         }
@@ -1769,5 +1669,35 @@ Args::ExpandEscapedCharacters (const char *src, std::string &dst)
             }
         }
     }
+}
+
+std::string
+Args::EscapeLLDBCommandArgument (const std::string& arg, char quote_char)
+{
+    const char* chars_to_escape = nullptr;
+    switch (quote_char)
+    {
+        case '\0':
+            chars_to_escape = " \t\\'\"`";
+            break;
+        case '\'':
+            chars_to_escape = "";
+            break;
+        case '"':
+            chars_to_escape = "$\"`\\";
+            break;
+        default:
+            assert(false && "Unhandled quote character");
+    }
+
+    std::string res;
+    res.reserve(arg.size());
+    for (char c : arg)
+    {
+        if (::strchr(chars_to_escape, c))
+            res.push_back('\\');
+        res.push_back(c);
+    }
+    return res;
 }
 

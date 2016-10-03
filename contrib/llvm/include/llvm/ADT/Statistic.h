@@ -28,9 +28,11 @@
 
 #include "llvm/Support/Atomic.h"
 #include "llvm/Support/Valgrind.h"
+#include <memory>
 
 namespace llvm {
 class raw_ostream;
+class raw_fd_ostream;
 
 class Statistic {
 public:
@@ -46,7 +48,7 @@ public:
   /// construct - This should only be called for non-global statistics.
   void construct(const char *name, const char *desc) {
     Name = name; Desc = desc;
-    Value = 0; Initialized = 0;
+    Value = 0; Initialized = false;
   }
 
   // Allow use of this class as the value itself.
@@ -169,6 +171,9 @@ void EnableStatistics();
 
 /// \brief Check if statistics are enabled.
 bool AreStatisticsEnabled();
+
+/// \brief Return a file stream to print our output on.
+std::unique_ptr<raw_fd_ostream> CreateInfoOutputFile();
 
 /// \brief Print statistics to the file returned by CreateInfoOutputFile().
 void PrintStatistics();

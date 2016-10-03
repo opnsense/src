@@ -313,7 +313,7 @@ typedef enum {
  *
  * namelen:	Length of the name field, including the terminating NUL.
  *
- * name:	Name of the paramter.  This must be NUL-terminated.
+ * name:	Name of the parameter.  This must be NUL-terminated.
  *
  * flags:	Flags for the parameter, see above for values.
  *
@@ -485,7 +485,7 @@ struct ctl_lun_req {
  * NEED_MORE_SPACE:	The allocated length of the entries field is too
  * 			small for the available data.
  *
- * ERROR:		An error occured, look at the error string for a
+ * ERROR:		An error occurred, look at the error string for a
  *			description of the error.
  */
 typedef enum {
@@ -573,7 +573,7 @@ struct ctl_req {
  *
  * OK:			Request completed successfully.
  *
- * ERROR:		An error occured, look at the error string for a
+ * ERROR:		An error occurred, look at the error string for a
  *			description of the error.
  *
  * CTL_ISCSI_LIST_NEED_MORE_SPACE:
@@ -591,6 +591,7 @@ typedef enum {
 	CTL_ISCSI_LIST,
 	CTL_ISCSI_LOGOUT,
 	CTL_ISCSI_TERMINATE,
+	CTL_ISCSI_LIMITS,
 #if defined(ICL_KERNEL_PROXY) || 1
 	/*
 	 * We actually need those in all cases, but leave the ICL_KERNEL_PROXY,
@@ -611,6 +612,7 @@ typedef enum {
 #define	CTL_ISCSI_NAME_LEN	224	/* 223 bytes, by RFC 3720, + '\0' */
 #define	CTL_ISCSI_ADDR_LEN	47	/* INET6_ADDRSTRLEN + '\0' */
 #define	CTL_ISCSI_ALIAS_LEN	128	/* Arbitrary. */
+#define	CTL_ISCSI_OFFLOAD_LEN	8	/* Arbitrary. */
 
 struct ctl_iscsi_handoff_params {
 	char			initiator_name[CTL_ISCSI_NAME_LEN];
@@ -632,11 +634,12 @@ struct ctl_iscsi_handoff_params {
 	uint32_t		max_burst_length;
 	uint32_t		first_burst_length;
 	uint32_t		immediate_data;
+	char			offload[CTL_ISCSI_OFFLOAD_LEN];
 #ifdef ICL_KERNEL_PROXY
 	int			connection_id;
-	int			spare[3];
+	int			spare[1];
 #else
-	int			spare[4];
+	int			spare[2];
 #endif
 };
 
@@ -664,6 +667,14 @@ struct ctl_iscsi_terminate_params {
 	char			initiator_addr[CTL_ISCSI_NAME_LEN];
 						/* passed to kernel */
 	int			all;		/* passed to kernel */
+	int			spare[4];
+};
+
+struct ctl_iscsi_limits_params {
+	char			offload[CTL_ISCSI_OFFLOAD_LEN];
+						/* passed to kernel */
+	size_t			data_segment_limit;
+						/* passed to userland */
 	int			spare[4];
 };
 
@@ -714,6 +725,7 @@ union ctl_iscsi_data {
 	struct ctl_iscsi_list_params		list;
 	struct ctl_iscsi_logout_params		logout;
 	struct ctl_iscsi_terminate_params	terminate;
+	struct ctl_iscsi_limits_params		limits;
 #ifdef ICL_KERNEL_PROXY
 	struct ctl_iscsi_listen_params		listen;
 	struct ctl_iscsi_accept_params		accept;

@@ -45,6 +45,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/acl.h>
 #include <sys/event.h>
 #include <sys/extattr.h>
+#include <sys/proc.h>
 
 #include <ufs/ufs/quota.h>
 #include <ufs/ufs/inode.h>
@@ -219,7 +220,7 @@ ufs_getacl_nfs4(struct vop_getacl_args *ap)
 
 /*
  * Read POSIX.1e ACL from an EA.  Return error if its not found
- * or if any other error has occured.
+ * or if any other error has occurred.
  */
 static int
 ufs_get_oldacl(acl_type_t type, struct oldacl *old, struct vnode *vp,

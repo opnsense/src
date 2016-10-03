@@ -10,6 +10,7 @@
 . /etc/rc.subr
 
 name="mountd"
+desc="Service remote NFS mount requests"
 rcvar="mountd_enable"
 command="/usr/sbin/${name}"
 pidfile="/var/run/${name}.pid"
@@ -31,12 +32,6 @@ mountd_precmd()
 		if checkyesno mountd_enable; then
 			checkyesno weak_mountd_authentication && rc_flags="-n"
 		fi
-	fi
-
-	# If oldnfs_server_enable is yes, force use of the old NFS server
-	#
-	if checkyesno oldnfs_server_enable; then
-		rc_flags="-o ${rc_flags}"
 	fi
 
 	if checkyesno zfs_enable; then

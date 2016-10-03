@@ -39,8 +39,6 @@
  * unloaded; in particular, probes may not span multiple kernel modules.
  */
 
-#include "opt_kdtrace.h"
-
 #include <sys/cdefs.h>
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -52,6 +50,7 @@
 #include <sys/linker.h>
 #include <sys/linker_set.h>
 #include <sys/lock.h>
+#include <sys/lockstat.h>
 #include <sys/malloc.h>
 #include <sys/module.h>
 #include <sys/mutex.h>
@@ -207,6 +206,8 @@ sdt_enable(void *arg __unused, dtrace_id_t id, void *parg)
 
 	probe->id = id;
 	probe->sdtp_lf->nenabled++;
+	if (strcmp(probe->prov->name, "lockstat") == 0)
+		lockstat_enabled++;
 }
 
 static void
@@ -216,6 +217,8 @@ sdt_disable(void *arg __unused, dtrace_id_t id, void *parg)
 
 	KASSERT(probe->sdtp_lf->nenabled > 0, ("no probes enabled"));
 
+	if (strcmp(probe->prov->name, "lockstat") == 0)
+		lockstat_enabled--;
 	probe->id = 0;
 	probe->sdtp_lf->nenabled--;
 }
@@ -381,27 +384,19 @@ sdt_unload()
 static int
 sdt_modevent(module_t mod __unused, int type, void *data __unused)
 {
-	int error = 0;
 
 	switch (type) {
 	case MOD_LOAD:
-		sdt_load();
-		break;
-
 	case MOD_UNLOAD:
-		error = sdt_unload();
-		break;
-
 	case MOD_SHUTDOWN:
-		break;
-
+		return (0);
 	default:
-		error = EOPNOTSUPP;
-		break;
+		return (EOPNOTSUPP);
 	}
-
-	return (error);
 }
+
+SYSINIT(sdt_load, SI_SUB_DTRACE_PROVIDER, SI_ORDER_ANY, sdt_load, NULL);
+SYSUNINIT(sdt_unload, SI_SUB_DTRACE_PROVIDER, SI_ORDER_ANY, sdt_unload, NULL);
 
 DEV_MODULE(sdt, sdt_modevent, NULL);
 MODULE_VERSION(sdt, 1);

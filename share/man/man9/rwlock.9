@@ -24,7 +24,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd June 20, 2013
+.Dd March 28, 2016
 .Dt RWLOCK 9
 .Os
 .Sh NAME
@@ -154,6 +154,15 @@ Do not log any operations for this lock via
 .It Dv RW_RECURSE
 Allow threads to recursively acquire exclusive locks for
 .Fa rw .
+.It Dv RW_NEW
+If the kernel has been compiled with
+.Cd "option INVARIANTS" ,
+.Fn rw_init_flags
+will assert that the
+.Fa rw
+has not been initialized multiple times without intervening calls to
+.Fn rw_destroy
+unless this option is specified.
 .El
 .It Fn rw_rlock "struct rwlock *rw"
 Lock
@@ -304,18 +313,19 @@ facility was written by
 This manual page was written by
 .An "Gleb Smirnoff" .
 .Sh BUGS
-If
+A kernel without
 .Dv WITNESS
-is not included in the kernel,
-then it is impossible to assert that the current thread does or does not
-hold a read lock.
-In the
-.Pf non- Dv WITNESS
-case, the
+cannot assert whether the current thread does or does not hold a read lock.
 .Dv RA_LOCKED
 and
 .Dv RA_RLOCKED
-assertions merely check that some thread holds a read lock.
+can only assert that
+.Em any
+thread holds a read lock.
+They cannot ensure that the current thread holds a read lock.
+Further,
+.Dv RA_UNLOCKED
+can only assert that the current thread does not hold a write lock.
 .Pp
 Reader/writer is a bit of an awkward name.
 An

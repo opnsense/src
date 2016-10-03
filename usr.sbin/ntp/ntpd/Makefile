@@ -2,7 +2,7 @@
 
 MAN=
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 .PATH:	${.CURDIR}/../../../contrib/ntp/ntpd \
 	${.OBJDIR}
@@ -27,9 +27,6 @@ SRCS=	cmd_args.c ntp_config.c ntp_control.c ntp_crypto.c ntp_filegen.c \
 	refclock_tt560.c refclock_ulink.c refclock_wwv.c refclock_wwvb.c \
 	refclock_zyfer.c version.c
 
-DPADD=	${LIBPARSE} ${LIBNTP} ${LIBM} ${LIBOPTS} ${LIBPTHREAD}
-LDADD=	${LIBPARSE} ${LIBNTP} -lm ${LIBOPTS} -lpthread
-
 CFLAGS+= -I${.CURDIR}/../../../contrib/ntp/ntpd \
 	-I${.CURDIR}/../../../contrib/ntp/include \
 	-I${.CURDIR}/../../../contrib/ntp/lib/isc/include \
@@ -39,12 +36,12 @@ CFLAGS+= -I${.CURDIR}/../../../contrib/ntp/ntpd \
 	-I${.CURDIR}/../ \
 	-I${.CURDIR}
 
+LIBADD=	parse ntp m opts pthread
+
 .if ${MK_OPENSSL} != "no"
-DPADD+=	${LIBCRYPTO}
-LDADD+=	-lcrypto
+LIBADD+=	crypto
 .else
-DPADD+=	${LIBMD}
-LDADD+=	-lmd
+LIBADD+=	md
 .endif
 
 CLEANFILES+= .version version.c

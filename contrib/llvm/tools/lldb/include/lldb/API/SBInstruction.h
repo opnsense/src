@@ -20,7 +20,7 @@
 
 namespace lldb {
 
-class SBInstruction
+class LLDB_API SBInstruction
 {
 public:
 
@@ -59,6 +59,9 @@ public:
 
     bool
     DoesBranch ();
+
+    bool
+    HasDelaySlot ();
 
     void
     Print (FILE *out);

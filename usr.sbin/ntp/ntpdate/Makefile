@@ -1,6 +1,6 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 .PATH: ${.CURDIR}/../../../contrib/ntp/ntpdate
 
@@ -14,15 +14,12 @@ CFLAGS+= -I${.CURDIR}/../../../contrib/ntp/include \
 	-I${.CURDIR}/../../../contrib/ntp/lib/isc/pthreads/include \
 	-I${.CURDIR}/../
 
-DPADD=	${LIBNTP} ${LIBM} ${LIBPTHREAD}
-LDADD=	${LIBNTP} -lm -lpthread
+LIBADD=	ntp m pthread
 
 .if ${MK_OPENSSL} != "no"
-DPADD+=	${LIBCRYPTO}
-LDADD+=	-lcrypto
+LIBADD+=	crypto
 .else
-DPADD+=	${LIBMD}
-LDADD+=	-lmd
+LIBADD+=	md
 .endif
 
 CLEANFILES+= .version version.c

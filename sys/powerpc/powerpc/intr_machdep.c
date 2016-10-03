@@ -127,6 +127,11 @@ static u_int nirqs = 0;		/* Allocated IRQs. */
 #endif
 static u_int stray_count;
 
+u_long intrcnt[INTR_VECTORS];
+char intrnames[INTR_VECTORS * MAXCOMLEN];
+size_t sintrcnt = sizeof(intrcnt);
+size_t sintrnames = sizeof(intrnames);
+
 device_t root_pic;
 
 #ifdef SMP
@@ -293,7 +298,7 @@ powerpc_intr_post_ithread(void *arg)
 }
 
 static int
-powerpc_assign_intr_cpu(void *arg, u_char cpu)
+powerpc_assign_intr_cpu(void *arg, int cpu)
 {
 #ifdef SMP
 	struct powerpc_intr *i = arg;
@@ -347,6 +352,9 @@ powerpc_register_pic(device_t dev, uint32_t node, u_int irqs, u_int ipis,
 		npics++;
 	}
 
+	KASSERT(npics < MAX_PICS,
+	    ("Number of PICs exceeds maximum (%d)", MAX_PICS));
+
 	mtx_unlock(&intr_table_lock);
 }
 
@@ -379,6 +387,9 @@ powerpc_get_irq(uint32_t node, u_int pin)
 	piclist[idx].base = nirqs;
 	nirqs += 128;
 	npics++;
+
+	KASSERT(npics < MAX_PICS,
+	    ("Number of PICs exceeds maximum (%d)", MAX_PICS));
 
 	mtx_unlock(&intr_table_lock);
 
@@ -603,4 +614,28 @@ stray:
 	}
 	if (i != NULL)
 		PIC_MASK(i->pic, i->intline);
+}
+
+void
+powerpc_intr_mask(u_int irq)
+{
+	struct powerpc_intr *i;
+
+	i = intr_lookup(irq);
+	if (i == NULL || i->pic == NULL)
+		return;
+
+	PIC_MASK(i->pic, i->intline);
+}
+
+void
+powerpc_intr_unmask(u_int irq)
+{
+	struct powerpc_intr *i;
+
+	i = intr_lookup(irq);
+	if (i == NULL || i->pic == NULL)
+		return;
+
+	PIC_UNMASK(i->pic, i->intline);
 }

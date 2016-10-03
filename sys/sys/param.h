@@ -50,7 +50,7 @@
  * there.
  * Currently this lives here in the doc/ repository:
  *
- *	head/en_US.ISO8859-1/books/porters-handbook/book.xml
+ *	head/en_US.ISO8859-1/books/porters-handbook/versions/chapter.xml
  *
  * scheme is:  <major><two digit minor>Rxx
  *		'R' is in the range 0 to 4 if this is a release branch or
@@ -58,7 +58,7 @@
  *		in the range 5 to 9.
  */
 #undef __FreeBSD_version
-#define __FreeBSD_version 1003000	/* Master, propagated to newvers */
+#define __FreeBSD_version 1100122	/* Master, propagated to newvers */
 
 /*
  * __FreeBSD_kernel__ indicates that this system uses the kernel of FreeBSD,
@@ -77,11 +77,13 @@
 #define __FreeBSD_kernel__
 
 #ifdef _KERNEL
-#define	P_OSREL_SIGWAIT		700000
-#define	P_OSREL_SIGSEGV		700004
-#define	P_OSREL_MAP_ANON	800104
+#define	P_OSREL_SIGWAIT			700000
+#define	P_OSREL_SIGSEGV			700004
+#define	P_OSREL_MAP_ANON		800104
+#define	P_OSREL_MAP_FSTRICT		1100036
+#define	P_OSREL_SHUTDOWN_ENOTCONN	1100077
 
-#define	P_OSREL_MAJOR(x)	((x) / 100000)
+#define	P_OSREL_MAJOR(x)		((x) / 100000)
 #endif
 
 #ifndef LOCORE

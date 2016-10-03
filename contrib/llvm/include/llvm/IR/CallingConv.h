@@ -20,10 +20,13 @@ namespace llvm {
 /// the well-known calling conventions.
 ///
 namespace CallingConv {
+  /// LLVM IR allows to use arbitrary numbers as calling convention identifiers.
+  typedef unsigned ID;
+
   /// A set of enums which specify the assigned numeric values for known llvm
   /// calling conventions.
   /// @brief LLVM Calling Convention Representation
-  enum ID {
+  enum {
     /// C - The default llvm calling convention, compatible with C.  This
     /// convention is the only calling convention that supports varargs calls.
     /// As with typical C calling conventions, the callee/caller have to
@@ -57,6 +60,20 @@ namespace CallingConv {
     // AnyReg - Calling convention for dynamic register based calls (e.g.
     // stackmap and patchpoint intrinsics).
     AnyReg = 13,
+
+    // PreserveMost - Calling convention for runtime calls that preserves most
+    // registers.
+    PreserveMost = 14,
+
+    // PreserveAll - Calling convention for runtime calls that preserves
+    // (almost) all registers.
+    PreserveAll = 15,
+
+    // Swift - Calling convention for Swift.
+    Swift = 16,
+
+    // CXX_FAST_TLS - Calling convention for access functions.
+    CXX_FAST_TLS = 17,
 
     // Target - This is the start of the target-specific calling conventions,
     // e.g. fastcall and thiscall on X86.
@@ -129,7 +146,30 @@ namespace CallingConv {
     /// convention differs from the more common \c X86_64_SysV convention
     /// in a number of ways, most notably in that XMM registers used to pass
     /// arguments are shadowed by GPRs, and vice versa.
-    X86_64_Win64 = 79
+    X86_64_Win64 = 79,
+
+    /// \brief MSVC calling convention that passes vectors and vector aggregates
+    /// in SSE registers.
+    X86_VectorCall = 80,
+
+    /// \brief Calling convention used by HipHop Virtual Machine (HHVM) to
+    /// perform calls to and from translation cache, and for calling PHP
+    /// functions.
+    /// HHVM calling convention supports tail/sibling call elimination.
+    HHVM = 81,
+
+    /// \brief HHVM calling convention for invoking C/C++ helpers.
+    HHVM_C = 82,
+
+    /// X86_INTR - x86 hardware interrupt context. Callee may take one or two
+    /// parameters, where the 1st represents a pointer to hardware context frame
+    /// and the 2nd represents hardware error code, the presence of the later
+    /// depends on the interrupt vector taken. Valid for both 32- and 64-bit
+    /// subtargets.
+    X86_INTR = 83,
+
+    /// The highest possible calling convention ID. Must be some 2^k - 1.
+    MaxID = 1023
   };
 } // End CallingConv namespace
 

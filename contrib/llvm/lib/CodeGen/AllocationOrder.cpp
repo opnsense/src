@@ -14,7 +14,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#define DEBUG_TYPE "regalloc"
 #include "AllocationOrder.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
@@ -25,15 +24,18 @@
 
 using namespace llvm;
 
+#define DEBUG_TYPE "regalloc"
+
 // Compare VirtRegMap::getRegAllocPref().
 AllocationOrder::AllocationOrder(unsigned VirtReg,
                                  const VirtRegMap &VRM,
-                                 const RegisterClassInfo &RegClassInfo)
+                                 const RegisterClassInfo &RegClassInfo,
+                                 const LiveRegMatrix *Matrix)
   : Pos(0) {
   const MachineFunction &MF = VRM.getMachineFunction();
   const TargetRegisterInfo *TRI = &VRM.getTargetRegInfo();
   Order = RegClassInfo.getOrder(MF.getRegInfo().getRegClass(VirtReg));
-  TRI->getRegAllocationHints(VirtReg, Order, Hints, MF, &VRM);
+  TRI->getRegAllocationHints(VirtReg, Order, Hints, MF, &VRM, Matrix);
   rewind();
 
   DEBUG({

@@ -72,7 +72,7 @@ This driver corresponds to RFC 2784.
 Encapsulated datagrams are prepended an outer datagram and a GRE header.
 The GRE header specifies
 the type of the encapsulated datagram and thus allows for tunneling other
-protocols than IP like e.g.\& AppleTalk.
+protocols than IP.
 GRE mode is also the default tunnel mode on Cisco routers.
 .Nm
 also supports Cisco WCCP protocol, both version 1 and version 2.
@@ -91,7 +91,6 @@ Enables checksum calculation for outgoing packets.
 Enables use of sequence number field in the GRE header for outgoing packets.
 .El
 .Sh EXAMPLES
-.Pp
 .Bd -literal
 192.168.1.* --- Router A  -------tunnel-------- Router B --- 192.168.2.*
                    \\                              /
@@ -155,7 +154,6 @@ ifconfig greN create
 ifconfig greN inet 198.51.100.1 203.0.113.1
 ifconfig greN inet tunnel 198.51.100.1 203.0.113.1 tunnelfib 1
 .Ed
-.Pp
 .Sh NOTES
 The MTU of
 .Nm
@@ -175,7 +173,6 @@ The kernel must be set to forward datagrams by setting the
 .Xr sysctl 8
 variable to non-zero.
 .Sh SEE ALSO
-.\" Xr atalk 4 ,
 .Xr gif 4 ,
 .Xr inet 4 ,
 .Xr ip 4 ,
@@ -190,7 +187,6 @@ A description of GRE encapsulation can be found in RFC 2784 and RFC 2890.
 .An Andrey V. Elsukov Aq Mt ae@FreeBSD.org
 .An Heiko W.Rupp Aq Mt hwr@pilhuhn.de
 .Sh BUGS
-.Pp
 The current implementation uses the key only for outgoing packets.
 Incoming packets with a different key or without a key will be treated as if they
 would belong to this interface.

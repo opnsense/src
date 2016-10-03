@@ -161,6 +161,7 @@ void	kmod_ipstat_dec(int statnum);
 #define	IP_SENDTOIF		0x8		/* send on specific ifnet */
 #define IP_ROUTETOIF		SO_DONTROUTE	/* 0x10 bypass routing tables */
 #define IP_ALLOWBROADCAST	SO_BROADCAST	/* 0x20 can send broadcast packets */
+#define	IP_NODEFAULTFLOWID	0x40		/* Don't set the flowid from inp */
 
 #ifdef __NO_STRICT_ALIGNMENT
 #define IP_HDR_ALIGNED_P(ip)	1
@@ -173,7 +174,6 @@ struct inpcb;
 struct route;
 struct sockopt;
 
-VNET_DECLARE(u_short, ip_id);			/* ip packet ctr, for ids */
 VNET_DECLARE(int, ip_defttl);			/* default IP ttl */
 VNET_DECLARE(int, ipforwarding);		/* ip forwarding */
 #ifdef IPSTEALTH
@@ -209,9 +209,6 @@ int	ip_fragment(struct ip *ip, struct mbuf **m_frag, int mtu,
 	    u_long if_hwassist_flags);
 void	ip_forward(struct mbuf *m, int srcrt);
 void	ip_init(void);
-#ifdef VIMAGE
-void	ip_destroy(void);
-#endif
 extern int
 	(*ip_mforward)(struct ip *, struct ifnet *, struct mbuf *,
 	    struct ip_moptions *);
@@ -222,27 +219,22 @@ int	ipproto_register(short);
 int	ipproto_unregister(short);
 struct mbuf *
 	ip_reass(struct mbuf *);
-struct in_ifaddr *
-	ip_rtaddr(struct in_addr, u_int fibnum);
 void	ip_savecontrol(struct inpcb *, struct mbuf **, struct ip *,
 	    struct mbuf *);
 void	ip_slowtimo(void);
-u_int16_t	ip_randomid(void);
+void	ip_fillid(struct ip *);
 int	rip_ctloutput(struct socket *, struct sockopt *);
 void	rip_ctlinput(int, struct sockaddr *, void *);
 void	rip_init(void);
-#ifdef VIMAGE
-void	rip_destroy(void);
-#endif
-void	rip_input(struct mbuf *, int);
-int	rip_output(struct mbuf *, struct socket *, u_long);
-void	ipip_input(struct mbuf *, int);
-void	rsvp_input(struct mbuf *, int);
+int	rip_input(struct mbuf **, int *, int);
+int	rip_output(struct mbuf *, struct socket *, ...);
+int	ipip_input(struct mbuf **, int *, int);
+int	rsvp_input(struct mbuf **, int *, int);
 int	ip_rsvp_init(struct socket *);
 int	ip_rsvp_done(void);
 extern int	(*ip_rsvp_vif)(struct socket *, struct sockopt *);
 extern void	(*ip_rsvp_force_done)(struct socket *);
-extern void	(*rsvp_input_p)(struct mbuf *m, int off);
+extern int	(*rsvp_input_p)(struct mbuf **, int *, int);
 
 VNET_DECLARE(struct pfil_head, inet_pfil_hook);	/* packet filter hooks */
 #define	V_inet_pfil_hook	VNET(inet_pfil_hook)
@@ -281,7 +273,7 @@ enum {
 	IPFW_IS_MASK	= 0x30000000,	/* which source ? */
 	IPFW_IS_DIVERT	= 0x20000000,
 	IPFW_IS_DUMMYNET =0x10000000,
-	IPFW_IS_PIPE	= 0x08000000,	/* pip1=1, queue = 0 */
+	IPFW_IS_PIPE	= 0x08000000,	/* pipe=1, queue = 0 */
 };
 #define MTAG_IPFW	1148380143	/* IPFW-tagged cookie */
 #define MTAG_IPFW_RULE	1262273568	/* rule reference */
@@ -301,12 +293,6 @@ extern int	(*ng_ipfw_input_p)(struct mbuf **, int,
 
 extern int	(*ip_dn_ctl_ptr)(struct sockopt *);
 extern int	(*ip_dn_io_ptr)(struct mbuf **, int, struct ip_fw_args *);
-
-VNET_DECLARE(int, ip_do_randomid);
-#define	V_ip_do_randomid	VNET(ip_do_randomid)
-#define	ip_newid()	((V_ip_do_randomid != 0) ? ip_randomid() : \
-			    htons(V_ip_id++))
-
 #endif /* _KERNEL */
 
 #endif /* !_NETINET_IP_VAR_H_ */

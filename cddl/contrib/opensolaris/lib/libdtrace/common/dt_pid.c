@@ -33,7 +33,7 @@
 #include <stdio.h>
 #include <errno.h>
 #include <ctype.h>
-#if defined(sun)
+#ifdef illumos
 #include <alloca.h>
 #endif
 #include <libgen.h>
@@ -44,10 +44,15 @@
 #include <dt_program.h>
 #include <dt_pid.h>
 #include <dt_string.h>
-#if !defined(sun)
-#include <libproc_compat.h>
-#endif
 #include <dt_module.h>
+
+#ifndef illumos
+#include <sys/sysctl.h>
+#include <unistd.h>
+#include <libproc_compat.h>
+#include <libelf.h>
+#include <gelf.h>
+#endif
 
 typedef struct dt_pid_probe {
 	dtrace_hdl_t *dpp_dtp;
@@ -74,7 +79,7 @@ typedef struct dt_pid_probe {
 static void
 dt_pid_objname(char *buf, size_t len, Lmid_t lmid, const char *obj)
 {
-#if defined(sun)
+#ifdef illumos
 	if (lmid == LM_ID_BASE)
 		(void) strncpy(buf, obj, len);
 	else
@@ -126,7 +131,7 @@ dt_pid_per_sym(dt_pid_probe_t *pp, const GElf_Sym *symp, const char *func)
 	int isdash = strcmp("-", func) == 0;
 	pid_t pid;
 
-#if defined(sun)
+#ifdef illumos
 	pid = Pstatus(pp->dpp_pr)->pr_pid;
 #else
 	pid = proc_getpid(pp->dpp_pr);
@@ -270,7 +275,7 @@ dt_pid_per_mod(void *arg, const prmap_t *pmp, const char *obj)
 	if (obj == NULL)
 		return (0);
 
-#if defined(sun)
+#ifdef illumos
 	(void) Plmid(pp->dpp_pr, pmp->pr_vaddr, &pp->dpp_lmid);
 #endif
 	
@@ -279,7 +284,7 @@ dt_pid_per_mod(void *arg, const prmap_t *pmp, const char *obj)
 		pp->dpp_obj = obj;
 	else
 		pp->dpp_obj++;
-#if defined(sun)
+#ifdef illumos
 	if (Pxlookup_by_name(pp->dpp_pr, pp->dpp_lmid, obj, ".stret1", &sym,
 	    NULL) == 0)
 		pp->dpp_stret[0] = sym.st_value;
@@ -337,7 +342,7 @@ dt_pid_per_mod(void *arg, const prmap_t *pmp, const char *obj)
 				    GELF_ST_INFO(STB_LOCAL, STT_FUNC);
 				sym.st_other = 0;
 				sym.st_value = 0;
-#if defined(sun)
+#ifdef illumos
 				sym.st_size = Pstatus(pp->dpp_pr)->pr_dmodel ==
 				    PR_MODEL_ILP32 ? -1U : -1ULL;
 #else
@@ -404,7 +409,7 @@ dt_pid_mod_filt(void *arg, const prmap_t *pmp, const char *obj)
 	if (gmatch(obj, pp->dpp_mod))
 		return (dt_pid_per_mod(pp, pmp, obj));
 
-#if defined(sun)
+#ifdef illumos
 	(void) Plmid(pp->dpp_pr, pmp->pr_vaddr, &pp->dpp_lmid);
 #else
 	pp->dpp_lmid = 0;
@@ -418,7 +423,7 @@ dt_pid_mod_filt(void *arg, const prmap_t *pmp, const char *obj)
 	if (gmatch(pp->dpp_obj, pp->dpp_mod))
 		return (dt_pid_per_mod(pp, pmp, obj));
 
-#if defined(sun)
+#ifdef illumos
 	(void) Plmid(pp->dpp_pr, pmp->pr_vaddr, &pp->dpp_lmid);
 #endif
 
@@ -434,15 +439,10 @@ static const prmap_t *
 dt_pid_fix_mod(dtrace_probedesc_t *pdp, struct ps_prochandle *P)
 {
 	char m[MAXPATHLEN];
-#if defined(sun)
 	Lmid_t lmid = PR_LMID_EVERY;
-#else
-	Lmid_t lmid = 0;
-#endif
 	const char *obj;
 	const prmap_t *pmp;
 
-#if defined(sun)
 	/*
 	 * Pick apart the link map from the library name.
 	 */
@@ -463,20 +463,17 @@ dt_pid_fix_mod(dtrace_probedesc_t *pdp, struct ps_prochandle *P)
 	} else {
 		obj = pdp->dtpd_mod;
 	}
-#else
-	obj = pdp->dtpd_mod;
-#endif
 
 	if ((pmp = Plmid_to_map(P, lmid, obj)) == NULL)
 		return (NULL);
 
-#if defined(sun)
 	(void) Pobjname(P, pmp->pr_vaddr, m, sizeof (m));
 	if ((obj = strrchr(m, '/')) == NULL)
 		obj = &m[0];
 	else
 		obj++;
 
+#ifdef illumos
 	(void) Plmid(P, pmp->pr_vaddr, &lmid);
 #endif
 
@@ -571,9 +568,7 @@ dt_pid_usdt_mapping(void *data, const prmap_t *pmp, const char *oname)
 {
 	struct ps_prochandle *P = data;
 	GElf_Sym sym;
-#if defined(sun)
 	prsyminfo_t sip;
-#endif
 	dof_helper_t dh;
 	GElf_Half e_type;
 	const char *mname;
@@ -609,13 +604,21 @@ dt_pid_usdt_mapping(void *data, const prmap_t *pmp, const char *oname)
 		dh.dofhp_addr = (e_type == ET_EXEC) ? 0 : pmp->pr_vaddr;
 
 		dt_pid_objname(dh.dofhp_mod, sizeof (dh.dofhp_mod),
-#if defined(sun)
 		    sip.prs_lmid, mname);
-#else
-		    0, mname);
-#endif
 
-#if defined(sun)
+#ifdef __FreeBSD__
+		dh.dofhp_pid = proc_getpid(P);
+
+		if (fd == -1 &&
+		    (fd = open("/dev/dtrace/helper", O_RDWR, 0)) < 0) {
+			dt_dprintf("open of helper device failed: %s\n",
+			    strerror(errno));
+			return (-1); /* errno is set for us */
+		}
+
+		if (ioctl(fd, DTRACEHIOC_ADDDOF, &dh, sizeof (dh)) < 0)
+			dt_dprintf("DOF was rejected for %s\n", dh.dofhp_mod);
+#else
 		if (fd == -1 &&
 		    (fd = pr_open(P, "/dev/dtrace/helper", O_RDWR, 0)) < 0) {
 			dt_dprintf("pr_open of helper device failed: %s\n",
@@ -628,8 +631,10 @@ dt_pid_usdt_mapping(void *data, const prmap_t *pmp, const char *oname)
 #endif
 	}
 
-#if defined(sun)
 	if (fd != -1)
+#ifdef __FreeBSD__
+		(void) close(fd);
+#else
 		(void) pr_close(P, fd);
 #endif
 
@@ -644,21 +649,17 @@ dt_pid_create_usdt_probes(dtrace_probedesc_t *pdp, dtrace_hdl_t *dtp,
 	int ret = 0;
 
 	assert(DT_MUTEX_HELD(&dpr->dpr_lock));
-#if defined(sun)
 	(void) Pupdate_maps(P);
 	if (Pobject_iter(P, dt_pid_usdt_mapping, P) != 0) {
 		ret = -1;
 		(void) dt_pid_error(dtp, pcb, dpr, NULL, D_PROC_USDT,
 		    "failed to instantiate probes for pid %d: %s",
-#if defined(sun)
+#ifdef illumos
 		    (int)Pstatus(P)->pr_pid, strerror(errno));
 #else
 		    (int)proc_getpid(P), strerror(errno));
 #endif
 	}
-#else
-	ret = 0;
-#endif
 
 	/*
 	 * Put the module name in its canonical form.
@@ -852,11 +853,7 @@ dt_pid_get_types(dtrace_hdl_t *dtp, const dtrace_probedesc_t *pdp,
 	ctf_funcinfo_t f;
 	ctf_id_t argv[32];
 	GElf_Sym sym;
-#if defined(sun)
 	prsyminfo_t si;
-#else
-	void *si;
-#endif
 	struct ps_prochandle *p;
 	int i, args;
 	char buf[DTRACE_ARGTYPELEN];
@@ -941,13 +938,11 @@ dt_pid_get_types(dtrace_hdl_t *dtp, const dtrace_probedesc_t *pdp,
 		    pdp->dtpd_func, pdp->dtpd_provider, pdp->dtpd_mod);
 		goto out;
 	}
-#if defined(sun)
 	if (ctf_func_info(fp, si.prs_id, &f) == CTF_ERR) {
 		dt_dprintf("failed to get ctf information for %s in %s`%s\n",
 		    pdp->dtpd_func, pdp->dtpd_provider, pdp->dtpd_mod);
 		goto out;
 	}
-#endif
 
 	(void) snprintf(buf, sizeof (buf), "%s`%s", pdp->dtpd_provider,
 	    pdp->dtpd_mod);
@@ -977,7 +972,6 @@ dt_pid_get_types(dtrace_hdl_t *dtp, const dtrace_probedesc_t *pdp,
 		(void) ctf_type_qname(fp, f.ctc_return, adp->dtargd_native +
 		    ret, DTRACE_ARGTYPELEN - ret, buf);
 		*nargs = 2;
-#if defined(sun)
 	} else {
 		if (ctf_func_args(fp, si.prs_id, argc, argv) == CTF_ERR)
 			goto out;
@@ -993,7 +987,6 @@ dt_pid_get_types(dtrace_hdl_t *dtp, const dtrace_probedesc_t *pdp,
 			(void) ctf_type_qname(fp, argv[i], adp->dtargd_native +
 			    ret, DTRACE_ARGTYPELEN - ret, buf);
 		}
-#endif
 	}
 out:
 	dt_proc_unlock(dtp, p);

@@ -1,6 +1,6 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 LIB=	ssh
 PRIVATELIB=	true
@@ -24,13 +24,14 @@ SRCS+=	authfd.c authfile.c bufaux.c bufbn.c bufec.c buffer.c \
 	kexdhc.c kexgexc.c kexecdhc.c kexc25519c.c \
 	kexdhs.c kexgexs.c kexecdhs.c kexc25519s.c \
 	platform-pledge.c
+PACKAGE=	ssh
 
 # gss-genr.c should be in $SRCS but causes linking problems, so it is
 # compiled directly into sshd instead.
 
 # Portability layer
 SRCS+=	bcrypt_pbkdf.c blowfish.c bsd-misc.c explicit_bzero.c fmt_scaled.c \
-	glob.c openssl-compat.c port-tun.c reallocarray.c realpath.c strtonum.c \
+	glob.c openssl-compat.c port-tun.c realpath.c strtonum.c \
 	timingsafe_bcmp.c vis.c xcrypt.c xmmap.c
 
 .if ${MK_LDNS} == "no"
@@ -39,9 +40,7 @@ SRCS+=	getrrsetbyname.c
 LDNSDIR=	${.CURDIR}/../../../contrib/ldns
 CFLAGS+=	-DHAVE_LDNS=1 -I${LDNSDIR}
 SRCS+=	getrrsetbyname-ldns.c
-DPADD+=	${LIBLDNS}
-LDADD+=	-lldns
-USEPRIVATELIB+= ldns
+LIBADD+=	ldns
 .endif
 
 CFLAGS+= -I${SSHDIR} -include ssh_namespace.h
@@ -50,14 +49,11 @@ SRCS+=	 ssh_namespace.h
 .if ${MK_KERBEROS_SUPPORT} != "no"
 CFLAGS+= -include krb5_config.h
 SRCS+=	 krb5_config.h
-DPADD+=	${LIBGSSAPI} ${LIBKRB5} ${LIBHX509} ${LIBASN1} ${LIBCOM_ERR} ${LIBMD} ${LIBROKEN}
-LDADD+=	-lgssapi -lkrb5 -lhx509 -lasn1 -lcom_err -lmd -lroken
 .endif
 
 NO_LINT=
 
-DPADD+=	${LIBCRYPTO} ${LIBCRYPT} ${LIBZ}
-LDADD+=	-lcrypto -lcrypt -lz
+LIBADD+=	crypto crypt z
 
 .include <bsd.lib.mk>
 

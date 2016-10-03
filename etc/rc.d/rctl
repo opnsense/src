@@ -10,6 +10,8 @@
 . /etc/rc.subr
 
 name="rctl"
+desc="Manage resource limits"
+rcvar="rctl_enable"
 start_cmd="rctl_start"
 stop_cmd="rctl_stop"
 
@@ -22,10 +24,10 @@ rctl_start()
 			\#*|'')
 				;;
 			*)
-				rctl -a "${var}"
+				echo "${var}"
 				;;
 			esac
-		done < ${rctl_rules}
+		done < ${rctl_rules} | xargs rctl -a
 	fi
 }
 

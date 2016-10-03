@@ -486,7 +486,7 @@ fi
 SOURCEDIR=$(realpath "$SOURCEDIR")
 
 # Setup make to use system files from SOURCEDIR
-MM_MAKE="make ${ARCHSTRING} -m ${SOURCEDIR}/share/mk"
+MM_MAKE="make ${ARCHSTRING} -m ${SOURCEDIR}/share/mk -DNO_FILEMON"
 
 # Check DESTDIR against the mergemaster mtree database to see what
 # files the user changed from the reference files.
@@ -699,7 +699,8 @@ case "${RERUN}" in
   # or spwd.db.  Instead, we want to compare the text versions, and run *_mkdb.
   # Prompt the user to do so below, as needed.
   #
-  rm -f ${TEMPROOT}/etc/*.db ${TEMPROOT}/etc/passwd
+  rm -f ${TEMPROOT}/etc/*.db ${TEMPROOT}/etc/passwd \
+      ${TEMPROOT}/var/db/services.db
 
   # We only need to compare things like freebsd.cf once
   find ${TEMPROOT}/usr/obj -type f -delete 2>/dev/null
@@ -759,7 +760,7 @@ CONFIRMED_UMASK=${NEW_UMASK:-0022}
 # Warn users who still have old rc files
 #
 for file in atm devfs diskless1 diskless2 network network6 pccard \
-  serial syscons sysctl alpha amd64 i386 ia64 sparc64; do
+  serial syscons sysctl alpha amd64 i386 sparc64; do
   if [ -f "${DESTDIR}/etc/rc.${file}" ]; then
     OLD_RC_PRESENT=1
     break
@@ -785,7 +786,7 @@ case "${OLD_RC_PRESENT}" in
     *)
       mkdir -p /var/tmp/mergemaster/old_rc
         for file in atm devfs diskless1 diskless2 network network6 pccard \
-          serial syscons sysctl alpha amd64 i386 ia64 sparc64; do
+          serial syscons sysctl alpha amd64 i386 sparc64; do
           if [ -f "${DESTDIR}/etc/rc.${file}" ]; then
             mv ${DESTDIR}/etc/rc.${file} /var/tmp/mergemaster/old_rc/
           fi

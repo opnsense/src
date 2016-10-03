@@ -246,7 +246,6 @@ bt_free_softc(device_t dev)
 	case 6:
 		bus_dmamem_free(bt->ccb_dmat, bt->bt_ccb_array,
 				bt->ccb_dmamap);
-		bus_dmamap_destroy(bt->ccb_dmat, bt->ccb_dmamap);
 		/* FALLTHROUGH */
 	case 5:
 		bus_dma_tag_destroy(bt->ccb_dmat);
@@ -257,7 +256,6 @@ bt_free_softc(device_t dev)
 	case 3:
 		bus_dmamem_free(bt->mailbox_dmat, bt->in_boxes,
 				bt->mailbox_dmamap);
-		bus_dmamap_destroy(bt->mailbox_dmat, bt->mailbox_dmamap);
 		/* FALLTHROUGH */
 	case 2:
 		bus_dma_tag_destroy(bt->buffer_dmat);
@@ -1580,7 +1578,7 @@ btdone(struct bt_softc *bt, struct bt_ccb *bccb, bt_mbi_comp_code_t comp_code)
 		struct ccb_hdr *ccb_h;
 		cam_status error;
 
-		/* Notify all clients that a BDR occured */
+		/* Notify all clients that a BDR occurred */
 		error = xpt_create_path(&path, /*periph*/NULL,
 					cam_sim_path(bt->sim),
 					bccb->hccb.target_id,
@@ -1626,12 +1624,12 @@ btdone(struct bt_softc *bt, struct bt_ccb *bccb, bt_mbi_comp_code_t comp_code)
 	case BMBI_ABORT:
 	case BMBI_ERROR:
 		if (bootverbose) {
-			printf("bt: ccb %p - error %x occured.  "
+			printf("bt: ccb %p - error %x occurred.  "
 			       "btstat = %x, sdstat = %x\n",
 			       (void *)bccb, comp_code, bccb->hccb.btstat,
 			       bccb->hccb.sdstat);
 		}
-		/* An error occured */
+		/* An error occurred */
 		switch(bccb->hccb.btstat) {
 		case BTSTAT_DATARUN_ERROR:
 			if (bccb->hccb.data_len == 0) {
@@ -2319,7 +2317,7 @@ bttimeout(void *arg)
 	 * means that the driver attempts to clear only one error
 	 * condition at a time.  In general, timeouts that occur
 	 * close together are related anyway, so there is no benefit
-	 * in attempting to handle errors in parrallel.  Timeouts will
+	 * in attempting to handle errors in parallel.  Timeouts will
 	 * be reinstated when the recovery process ends.
 	 */
 	if ((bccb->flags & BCCB_DEVICE_RESET) == 0) {

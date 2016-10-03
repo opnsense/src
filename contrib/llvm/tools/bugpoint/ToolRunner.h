@@ -14,8 +14,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef BUGPOINT_TOOLRUNNER_H
-#define BUGPOINT_TOOLRUNNER_H
+#ifndef LLVM_TOOLS_BUGPOINT_TOOLRUNNER_H
+#define LLVM_TOOLS_BUGPOINT_TOOLRUNNER_H
 
 #include "llvm/ADT/Triple.h"
 #include "llvm/Support/CommandLine.h"
@@ -33,22 +33,22 @@ extern Triple TargetTriple;
 class LLC;
 
 //===---------------------------------------------------------------------===//
-// GCC abstraction
+// CC abstraction
 //
-class GCC {
-  std::string GCCPath;                // The path to the gcc executable.
+class CC {
+  std::string CCPath;                // The path to the cc executable.
   std::string RemoteClientPath;       // The path to the rsh / ssh executable.
-  std::vector<std::string> gccArgs; // GCC-specific arguments.
-  GCC(StringRef gccPath, StringRef RemotePath,
-      const std::vector<std::string> *GCCArgs)
-    : GCCPath(gccPath), RemoteClientPath(RemotePath) {
-    if (GCCArgs) gccArgs = *GCCArgs;
+  std::vector<std::string> ccArgs; // CC-specific arguments.
+  CC(StringRef ccPath, StringRef RemotePath,
+      const std::vector<std::string> *CCArgs)
+    : CCPath(ccPath), RemoteClientPath(RemotePath) {
+    if (CCArgs) ccArgs = *CCArgs;
   }
 public:
   enum FileType { AsmFile, ObjectFile, CFile };
 
-  static GCC *create(std::string &Message,
-                     const std::string &GCCBinary,
+  static CC *create(std::string &Message,
+                     const std::string &CCBinary,
                      const std::vector<std::string> *Args);
 
   /// ExecuteProgram - Execute the program specified by "ProgramFile" (which is
@@ -63,8 +63,8 @@ public:
                      FileType fileType,
                      const std::string &InputFile,
                      const std::string &OutputFile,
-                     std::string *Error = 0,
-                     const std::vector<std::string> &GCCArgs =
+                     std::string *Error = nullptr,
+                     const std::vector<std::string> &CCArgs =
                          std::vector<std::string>(),
                      unsigned Timeout = 0,
                      unsigned MemoryLimit = 0);
@@ -74,7 +74,7 @@ public:
   ///
   int MakeSharedObject(const std::string &InputFile, FileType fileType,
                        std::string &OutputFile,
-                       const std::vector<std::string> &ArgsForGCC,
+                       const std::vector<std::string> &ArgsForCC,
                        std::string &Error);
 };
 
@@ -88,16 +88,18 @@ class AbstractInterpreter {
   virtual void anchor();
 public:
   static LLC *createLLC(const char *Argv0, std::string &Message,
-                        const std::string              &GCCBinary,
-                        const std::vector<std::string> *Args = 0,
-                        const std::vector<std::string> *GCCArgs = 0,
+                        const std::string              &CCBinary,
+                        const std::vector<std::string> *Args = nullptr,
+                        const std::vector<std::string> *CCArgs = nullptr,
                         bool UseIntegratedAssembler = false);
 
-  static AbstractInterpreter* createLLI(const char *Argv0, std::string &Message,
-                                        const std::vector<std::string> *Args=0);
+  static AbstractInterpreter*
+  createLLI(const char *Argv0, std::string &Message,
+            const std::vector<std::string> *Args = nullptr);
 
-  static AbstractInterpreter* createJIT(const char *Argv0, std::string &Message,
-                                        const std::vector<std::string> *Args=0);
+  static AbstractInterpreter*
+  createJIT(const char *Argv0, std::string &Message,
+            const std::vector<std::string> *Args = nullptr);
 
   static AbstractInterpreter*
   createCustomCompiler(std::string &Message,
@@ -117,15 +119,15 @@ public:
                               unsigned Timeout = 0, unsigned MemoryLimit = 0) {}
 
   /// OutputCode - Compile the specified program from bitcode to code
-  /// understood by the GCC driver (either C or asm).  If the code generator
+  /// understood by the CC driver (either C or asm).  If the code generator
   /// fails, it sets Error, otherwise, this function returns the type of code
   /// emitted.
-  virtual GCC::FileType OutputCode(const std::string &Bitcode,
+  virtual CC::FileType OutputCode(const std::string &Bitcode,
                                    std::string &OutFile, std::string &Error,
                                    unsigned Timeout = 0,
                                    unsigned MemoryLimit = 0) {
     Error = "OutputCode not supported by this AbstractInterpreter!";
-    return GCC::AsmFile;
+    return CC::AsmFile;
   }
 
   /// ExecuteProgram - Run the specified bitcode file, emitting output to the
@@ -138,7 +140,7 @@ public:
                              const std::string &InputFile,
                              const std::string &OutputFile,
                              std::string *Error,
-                             const std::vector<std::string> &GCCArgs =
+                             const std::vector<std::string> &CCArgs =
                                std::vector<std::string>(),
                              const std::vector<std::string> &SharedLibs =
                                std::vector<std::string>(),
@@ -152,45 +154,45 @@ public:
 class LLC : public AbstractInterpreter {
   std::string LLCPath;               // The path to the LLC executable.
   std::vector<std::string> ToolArgs; // Extra args to pass to LLC.
-  GCC *gcc;
+  CC *cc;
   bool UseIntegratedAssembler;
 public:
-  LLC(const std::string &llcPath, GCC *Gcc,
+  LLC(const std::string &llcPath, CC *cc,
       const std::vector<std::string> *Args,
       bool useIntegratedAssembler)
-    : LLCPath(llcPath), gcc(Gcc),
+    : LLCPath(llcPath), cc(cc),
       UseIntegratedAssembler(useIntegratedAssembler) {
     ToolArgs.clear();
     if (Args) ToolArgs = *Args;
   }
-  ~LLC() { delete gcc; }
+  ~LLC() override { delete cc; }
 
   /// compileProgram - Compile the specified program from bitcode to executable
   /// code.  This does not produce any output, it is only used when debugging
   /// the code generator.  Returns false if the code generator fails.
-  virtual void compileProgram(const std::string &Bitcode, std::string *Error,
-                              unsigned Timeout = 0, unsigned MemoryLimit = 0);
+  void compileProgram(const std::string &Bitcode, std::string *Error,
+                      unsigned Timeout = 0, unsigned MemoryLimit = 0) override;
 
-  virtual int ExecuteProgram(const std::string &Bitcode,
-                             const std::vector<std::string> &Args,
-                             const std::string &InputFile,
-                             const std::string &OutputFile,
-                             std::string *Error,
-                             const std::vector<std::string> &GCCArgs =
-                               std::vector<std::string>(),
-                             const std::vector<std::string> &SharedLibs =
-                                std::vector<std::string>(),
-                             unsigned Timeout = 0,
-                             unsigned MemoryLimit = 0);
+  int ExecuteProgram(const std::string &Bitcode,
+                     const std::vector<std::string> &Args,
+                     const std::string &InputFile,
+                     const std::string &OutputFile,
+                     std::string *Error,
+                     const std::vector<std::string> &CCArgs =
+                       std::vector<std::string>(),
+                     const std::vector<std::string> &SharedLibs =
+                        std::vector<std::string>(),
+                     unsigned Timeout = 0,
+                     unsigned MemoryLimit = 0) override;
 
   /// OutputCode - Compile the specified program from bitcode to code
-  /// understood by the GCC driver (either C or asm).  If the code generator
+  /// understood by the CC driver (either C or asm).  If the code generator
   /// fails, it sets Error, otherwise, this function returns the type of code
   /// emitted.
-  virtual GCC::FileType OutputCode(const std::string &Bitcode,
-                                   std::string &OutFile, std::string &Error,
-                                   unsigned Timeout = 0,
-                                   unsigned MemoryLimit = 0);
+  CC::FileType OutputCode(const std::string &Bitcode,
+                           std::string &OutFile, std::string &Error,
+                           unsigned Timeout = 0,
+                           unsigned MemoryLimit = 0) override;
 };
 
 } // End llvm namespace

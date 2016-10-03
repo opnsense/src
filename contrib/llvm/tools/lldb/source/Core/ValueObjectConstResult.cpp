@@ -16,7 +16,7 @@
 #include "lldb/Core/ValueObjectDynamicValue.h"
 #include "lldb/Core/ValueObjectList.h"
 
-#include "lldb/Symbol/ClangASTType.h"
+#include "lldb/Symbol/CompilerType.h"
 #include "lldb/Symbol/ObjectFile.h"
 #include "lldb/Symbol/SymbolContext.h"
 #include "lldb/Symbol/Type.h"
@@ -61,21 +61,21 @@ ValueObjectSP
 ValueObjectConstResult::Create
 (
     ExecutionContextScope *exe_scope,
-    const ClangASTType &clang_type,
+    const CompilerType &compiler_type,
     const ConstString &name,
     const DataExtractor &data,
     lldb::addr_t address
 )
 {
     return (new ValueObjectConstResult (exe_scope,
-                                        clang_type,
+                                        compiler_type,
                                         name,
                                         data,
                                         address))->GetSP();
 }
 
 ValueObjectConstResult::ValueObjectConstResult (ExecutionContextScope *exe_scope,
-                                                const ClangASTType &clang_type,
+                                                const CompilerType &compiler_type,
                                                 const ConstString &name,
                                                 const DataExtractor &data,
                                                 lldb::addr_t address) :
@@ -94,7 +94,7 @@ ValueObjectConstResult::ValueObjectConstResult (ExecutionContextScope *exe_scope
     
     m_value.GetScalar() = (uintptr_t)m_data.GetDataStart();
     m_value.SetValueType(Value::eValueTypeHostAddress);
-    m_value.SetClangType(clang_type);
+    m_value.SetCompilerType(compiler_type);
     m_name = name;
     SetIsConstant ();
     SetValueIsValid(true);
@@ -103,7 +103,7 @@ ValueObjectConstResult::ValueObjectConstResult (ExecutionContextScope *exe_scope
 
 ValueObjectSP
 ValueObjectConstResult::Create (ExecutionContextScope *exe_scope,
-                                const ClangASTType &clang_type,
+                                const CompilerType &compiler_type,
                                 const ConstString &name,
                                 const lldb::DataBufferSP &data_sp,
                                 lldb::ByteOrder data_byte_order,
@@ -111,7 +111,7 @@ ValueObjectConstResult::Create (ExecutionContextScope *exe_scope,
                                 lldb::addr_t address)
 {
     return (new ValueObjectConstResult (exe_scope,
-                                        clang_type,
+                                        compiler_type,
                                         name,
                                         data_sp,
                                         data_byte_order,
@@ -122,13 +122,14 @@ ValueObjectConstResult::Create (ExecutionContextScope *exe_scope,
 ValueObjectSP
 ValueObjectConstResult::Create (ExecutionContextScope *exe_scope,
                                 Value &value,
-                                const ConstString &name)
+                                const ConstString &name,
+                                Module *module)
 {
-    return (new ValueObjectConstResult (exe_scope, value, name))->GetSP();
+    return (new ValueObjectConstResult (exe_scope, value, name, module))->GetSP();
 }
 
 ValueObjectConstResult::ValueObjectConstResult (ExecutionContextScope *exe_scope,
-                                                const ClangASTType &clang_type,
+                                                const CompilerType &compiler_type,
                                                 const ConstString &name,
                                                 const lldb::DataBufferSP &data_sp,
                                                 lldb::ByteOrder data_byte_order, 
@@ -144,8 +145,8 @@ ValueObjectConstResult::ValueObjectConstResult (ExecutionContextScope *exe_scope
     m_data.SetData(data_sp);
     m_value.GetScalar() = (uintptr_t)data_sp->GetBytes();
     m_value.SetValueType(Value::eValueTypeHostAddress);
-    //m_value.SetContext(Value::eContextTypeClangType, clang_type);
-    m_value.SetClangType (clang_type);
+    //m_value.SetContext(Value::eContextTypeClangType, compiler_type);
+    m_value.SetCompilerType (compiler_type);
     m_name = name;
     SetIsConstant ();
     SetValueIsValid(true);
@@ -154,14 +155,14 @@ ValueObjectConstResult::ValueObjectConstResult (ExecutionContextScope *exe_scope
 
 ValueObjectSP
 ValueObjectConstResult::Create (ExecutionContextScope *exe_scope,
-                                const ClangASTType &clang_type,
+                                const CompilerType &compiler_type,
                                 const ConstString &name,
                                 lldb::addr_t address,
                                 AddressType address_type,
                                 uint32_t addr_byte_size)
 {
     return (new ValueObjectConstResult (exe_scope,
-                                        clang_type,
+                                        compiler_type,
                                         name,
                                         address,
                                         address_type,
@@ -169,7 +170,7 @@ ValueObjectConstResult::Create (ExecutionContextScope *exe_scope,
 }
 
 ValueObjectConstResult::ValueObjectConstResult (ExecutionContextScope *exe_scope,
-                                                const ClangASTType &clang_type,
+                                                const CompilerType &compiler_type,
                                                 const ConstString &name,
                                                 lldb::addr_t address,
                                                 AddressType address_type,
@@ -190,8 +191,8 @@ ValueObjectConstResult::ValueObjectConstResult (ExecutionContextScope *exe_scope
     case eAddressTypeLoad:      m_value.SetValueType(Value::eValueTypeLoadAddress); break;    
     case eAddressTypeHost:      m_value.SetValueType(Value::eValueTypeHostAddress); break;
     }
-//    m_value.SetContext(Value::eContextTypeClangType, clang_type);
-    m_value.SetClangType (clang_type);
+//    m_value.SetContext(Value::eContextTypeClangType, compiler_type);
+    m_value.SetCompilerType (compiler_type);
     m_name = name;
     SetIsConstant ();
     SetValueIsValid(true);
@@ -222,24 +223,28 @@ ValueObjectConstResult::ValueObjectConstResult (ExecutionContextScope *exe_scope
 
 ValueObjectConstResult::ValueObjectConstResult (ExecutionContextScope *exe_scope,
                                                 const Value &value,
-                                                const ConstString &name) :
+                                                const ConstString &name,
+                                                Module *module) :
     ValueObject (exe_scope),
     m_type_name (),
     m_byte_size (0),
     m_impl(this)
 {
     m_value = value;
-    m_value.GetData(m_data);
+    m_name = name;
+    ExecutionContext exe_ctx;
+    exe_scope->CalculateExecutionContext(exe_ctx);
+    m_error = m_value.GetValueAsData(&exe_ctx, m_data, 0, module);
 }
 
 ValueObjectConstResult::~ValueObjectConstResult()
 {
 }
 
-ClangASTType
-ValueObjectConstResult::GetClangTypeImpl()
+CompilerType
+ValueObjectConstResult::GetCompilerTypeImpl()
 {
-    return m_value.GetClangType();
+    return m_value.GetCompilerType();
 }
 
 lldb::ValueType
@@ -251,8 +256,10 @@ ValueObjectConstResult::GetValueType() const
 uint64_t
 ValueObjectConstResult::GetByteSize()
 {
+    ExecutionContext exe_ctx(GetExecutionContextRef());
+
     if (m_byte_size == 0)
-        m_byte_size = GetClangType().GetByteSize();
+        SetByteSize(GetCompilerType().GetByteSize(exe_ctx.GetBestExecutionContextScope()));
     return m_byte_size;
 }
 
@@ -263,17 +270,24 @@ ValueObjectConstResult::SetByteSize (size_t size)
 }
 
 size_t
-ValueObjectConstResult::CalculateNumChildren()
+ValueObjectConstResult::CalculateNumChildren(uint32_t max)
 {
-    return GetClangType().GetNumChildren (true);
+    auto children_count = GetCompilerType().GetNumChildren (true);
+    return children_count <= max ? children_count : max;
 }
 
 ConstString
 ValueObjectConstResult::GetTypeName()
 {
     if (m_type_name.IsEmpty())
-        m_type_name = GetClangType().GetConstTypeName ();
+        m_type_name = GetCompilerType().GetConstTypeName ();
     return m_type_name;
+}
+
+ConstString
+ValueObjectConstResult::GetDisplayTypeName()
+{
+    return GetCompilerType().GetDisplayTypeName();
 }
 
 bool
@@ -300,7 +314,7 @@ ValueObjectConstResult::Dereference (Error &error)
 }
 
 lldb::ValueObjectSP
-ValueObjectConstResult::GetSyntheticChildAtOffset(uint32_t offset, const ClangASTType& type, bool can_create)
+ValueObjectConstResult::GetSyntheticChildAtOffset(uint32_t offset, const CompilerType& type, bool can_create)
 {
     return m_impl.GetSyntheticChildAtOffset(offset, type, can_create);
 }
@@ -352,3 +366,16 @@ ValueObjectConstResult::GetDynamicValue (lldb::DynamicValueType use_dynamic)
     return ValueObjectSP();
 }
 
+lldb::ValueObjectSP
+ValueObjectConstResult::Cast (const CompilerType &compiler_type)
+{
+    return m_impl.Cast(compiler_type);
+}
+
+lldb::LanguageType
+ValueObjectConstResult::GetPreferredDisplayLanguage ()
+{
+    if (m_preferred_display_language != lldb::eLanguageTypeUnknown)
+        return m_preferred_display_language;
+    return GetCompilerTypeImpl().GetMinimumLanguage();
+}

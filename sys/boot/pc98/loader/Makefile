@@ -1,7 +1,8 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 MK_SSP=		no
+MAN=
 
 LOADER?=	loader
 PROG=		${LOADER}.sym

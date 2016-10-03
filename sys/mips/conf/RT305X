@@ -24,7 +24,7 @@ makeoptions	MIPS_LITTLE_ENDIAN=defined
 makeoptions	KERNLOADADDR=0x80001000
 
 # Don't build any modules yet.
-makeoptions	MODULES_OVERRIDE="wlan_xauth wlan_wep wlan_tkip wlan_acl wlan_amrr wlan_ccmp wlan_rssadapt random if_bridge bridgestp msdosfs md ipfw dummynet libalias geom/geom_label ufs usb/uplcom usb/u3g usb/umodem usb/umass usb/ucom cam zlib"
+makeoptions	MODULES_OVERRIDE="wlan_xauth wlan_wep wlan_tkip wlan_acl wlan_amrr wlan_ccmp wlan_rssadapt if_bridge bridgestp msdosfs md ipfw dummynet libalias geom/geom_label ufs usb/uplcom usb/u3g usb/umodem usb/umass usb/ucom cam zlib"
 makeoptions	RT3052F
 
 include		"../rt305x/std.rt305x"
@@ -32,6 +32,9 @@ include		"../rt305x/std.rt305x"
 hints		"RT305X.hints"		#Default places to look for devices.
 
 #makeoptions	DEBUG=-g		#Build kernel with gdb(1) debug symbols
+
+options		RT3052F
+options		RT305X_UBOOT
 
 # Debugging for use in -current
 #options 	DEADLKRES		#Enable the deadlock resolver
@@ -61,7 +64,7 @@ options 	BOOTP_NFSV3
 options 	BOOTP_WIRED_TO=rt0
 options 	BOOTP_COMPAT
 options 	CD9660			# ISO 9660 Filesystem
-options 	ROOTDEVNAME=\"cd9660:/dev/map/rootfs.uncompress\"
+options 	ROOTDEVNAME=\"cd9660:/dev/map/rootfs.uzip\"
 options 	TMPFS			# TMP Memory Filesystem
 
 #options 	FFS			#Berkeley Fast Filesystem
@@ -115,7 +118,7 @@ device		cfid
 device		nvram2env
 
 device		usb
-#device		dotg			# DWC like USB OTG Controller driver
+#device		dwcotg			# DWC like USB OTG Controller driver
 #device		u3g
 #device		umodem
 #device		uplcom

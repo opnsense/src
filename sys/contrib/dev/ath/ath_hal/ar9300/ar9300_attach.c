@@ -38,9 +38,13 @@
 #include "ar9300/ar9485.ini"
 #include "ar9300/ar9485_1_1.ini"
 #include "ar9300/ar9300_jupiter10.ini"
+/* TODO: convert the 2.0 code to use the new initvals from ath9k */
 #include "ar9300/ar9300_jupiter20.ini"
+#include "ar9300/ar9462_2p0_initvals.h"
+#include "ar9300/ar9462_2p1_initvals.h"
 #include "ar9300/ar9580.ini"
 #include "ar9300/ar955x.ini"
+#include "ar9300/ar953x.ini"
 #include "ar9300/ar9300_aphrodite10.ini"
 
 
@@ -302,6 +306,7 @@ static const struct ath_hal_private ar9300hal = {
         ar9300_get_desc_info,              /* ah_get_desc_info */
         ar9300_select_ant_config,          /* ah_select_ant_config */
         ar9300_ant_ctrl_common_get,        /* ah_ant_ctrl_common_get */
+        ar9300_ant_swcom_sel,              /* ah_ant_swcom_sel */
         ar9300_enable_tpc,                 /* ah_enable_tpc */
         AH_NULL,                           /* ah_olpc_temp_compensation */
 #if ATH_SUPPORT_CRDC
@@ -319,7 +324,9 @@ static const struct ath_hal_private ar9300hal = {
         ar9300_set_key_cache_entry,        /* ah_set_key_cache_entry */
         ar9300_set_key_cache_entry_mac,    /* ah_set_key_cache_entry_mac */
         ar9300_print_keycache,             /* ah_print_key_cache */
-
+#if ATH_SUPPORT_KEYPLUMB_WAR
+        ar9300_check_key_cache_entry,      /* ah_check_key_cache_entry */
+#endif
         /* Power Management Functions */
         ar9300_set_power_mode,             /* ah_set_power_mode */
         ar9300_set_sm_power_mode,          /* ah_set_sm_ps_mode */
@@ -342,6 +349,8 @@ static const struct ath_hal_private ar9300hal = {
         /* Get Channel Noise */
         ath_hal_get_chan_noise,            /* ah_get_chan_noise */
         ar9300_chain_noise_floor,          /* ah_get_chain_noise_floor */
+        ar9300_get_nf_from_reg,            /* ah_get_nf_from_reg */
+        ar9300_get_rx_nf_offset,           /* ah_get_rx_nf_offset */
 
         /* Beacon Functions */
         ar9300_beacon_init,                /* ah_beacon_init */
@@ -499,11 +508,11 @@ static const struct ath_hal_private ar9300hal = {
 #else
         AH_NULL,
         AH_NULL,
-        ar9300TX99TgtChannelPwrUpdate,		/* ah_tx99channelpwrupdate */
-        ar9300TX99TgtStart,					/* ah_tx99start */
-        ar9300TX99TgtStop,					/* ah_tx99stop */
-        ar9300TX99TgtChainmskSetup,			/* ah_tx99_chainmsk_setup */
-        ar9300TX99SetSingleCarrier,			/* ah_tx99_set_single_carrier */
+        ar9300_tx99_channel_pwr_update,		/* ah_tx99channelpwrupdate */
+        ar9300_tx99_start,					/* ah_tx99start */
+        ar9300_tx99_stop,					/* ah_tx99stop */
+        ar9300_tx99_chainmsk_setup,			/* ah_tx99_chainmsk_setup */
+        ar9300_tx99_set_single_carrier,		/* ah_tx99_set_single_carrier */
 #endif
 #endif
         ar9300_chk_rssi_update_tx_pwr,
@@ -525,6 +534,8 @@ static const struct ath_hal_private ar9300hal = {
         ar9300_dump_keycache,              /* ah_dump_keycache */
         ar9300_is_ani_noise_spur,         /* ah_is_ani_noise_spur */
         ar9300_set_hw_beacon_proc,         /* ah_set_hw_beacon_proc */
+        ar9300_set_ctl_pwr,                 /* ah_set_ctl_pwr */
+        ar9300_set_txchainmaskopt,          /* ah_set_txchainmaskopt */
     },
 
     ar9300_get_channel_edges,              /* ah_get_channel_edges */
@@ -558,6 +569,9 @@ ar9300_read_revisions(struct ath_hal *ah)
     } else if(AH_PRIVATE(ah)->ah_devid == AR9300_DEVID_QCA955X) {
         /* XXX: AR_SREV register in Scorpion reads 0 */
        AH_PRIVATE(ah)->ah_macVersion = AR_SREV_VERSION_SCORPION;
+    } else if(AH_PRIVATE(ah)->ah_devid == AR9300_DEVID_QCA953X) {
+        /* XXX: AR_SREV register in HoneyBEE reads 0 */
+       AH_PRIVATE(ah)->ah_macVersion = AR_SREV_VERSION_HONEYBEE;
     } else {
         /*
          * Include 6-bit Chip Type (masked to 0)
@@ -618,7 +632,8 @@ ar9300_read_revisions(struct ath_hal *ah)
  */
 struct ath_hal *
 ar9300_attach(u_int16_t devid, HAL_SOFTC sc, HAL_BUS_TAG st,
-  HAL_BUS_HANDLE sh, uint16_t *eepromdata, HAL_STATUS *status)
+  HAL_BUS_HANDLE sh, uint16_t *eepromdata, HAL_OPS_CONFIG *ah_config,
+  HAL_STATUS *status)
 {
     struct ath_hal_9300     *ahp;
     struct ath_hal          *ah;
@@ -628,7 +643,7 @@ ar9300_attach(u_int16_t devid, HAL_SOFTC sc, HAL_BUS_TAG st,
     HAL_NO_INTERSPERSED_READS;
 
     /* NB: memory is returned zero'd */
-    ahp = ar9300_new_state(devid, sc, st, sh, eepromdata, status);
+    ahp = ar9300_new_state(devid, sc, st, sh, eepromdata, ah_config, status);
     if (ahp == AH_NULL) {
         return AH_NULL;
     }
@@ -653,12 +668,6 @@ ar9300_attach(u_int16_t devid, HAL_SOFTC sc, HAL_BUS_TAG st,
 
     /* XXX FreeBSD: enable RX mitigation */
     ah->ah_config.ath_hal_intr_mitigation_rx = 1;
-
-    /*
-     * XXX what's this do? Check in the qcamain driver code
-     * as to what it does.
-     */
-    ah->ah_config.ath_hal_ext_atten_margin_cfg = 0;
 
     /* interrupt mitigation */
 #ifdef AR5416_INT_MITIGATION
@@ -716,10 +725,10 @@ ar9300_attach(u_int16_t devid, HAL_SOFTC sc, HAL_BUS_TAG st,
 
 #if ATH_SUPPORT_MCI
     if (AR_SREV_JUPITER(ah) || AR_SREV_APHRODITE(ah)) {
-#if 0
-        ah->ah_bt_coex_set_weights = ar9300_mci_bt_coex_set_weights;
-        ah->ah_bt_coex_disable = ar9300_mci_bt_coex_disable;
-        ah->ah_bt_coex_enable = ar9300_mci_bt_coex_enable;
+#if 1
+        ah->ah_btCoexSetWeights = ar9300_mci_bt_coex_set_weights;
+        ah->ah_btCoexDisable = ar9300_mci_bt_coex_disable;
+        ah->ah_btCoexEnable = ar9300_mci_bt_coex_enable;
 #endif
         ahp->ah_mci_ready = AH_FALSE;
         ahp->ah_mci_bt_state = MCI_BT_SLEEP;
@@ -796,6 +805,11 @@ ar9300_attach(u_int16_t devid, HAL_SOFTC sc, HAL_BUS_TAG st,
 #undef AR9340_SOC_SEL_25M_40M
 #undef AR9340_REF_CLK_40
     }
+
+    if (AR_SREV_HONEYBEE(ah)) {
+            ahp->clk_25mhz = 1;
+    }
+
     ar9300_init_pll(ah, AH_NULL);
 
     if (!ar9300_set_power_mode(ah, HAL_PM_AWAKE, AH_TRUE)) {
@@ -820,6 +834,7 @@ ar9300_attach(u_int16_t devid, HAL_SOFTC sc, HAL_BUS_TAG st,
         ahpriv->ah_macVersion != AR_SREV_VERSION_HORNET &&
         ahpriv->ah_macVersion != AR_SREV_VERSION_POSEIDON &&
         ahpriv->ah_macVersion != AR_SREV_VERSION_SCORPION &&
+        ahpriv->ah_macVersion != AR_SREV_VERSION_HONEYBEE &&
         ahpriv->ah_macVersion != AR_SREV_VERSION_JUPITER &&
         ahpriv->ah_macVersion != AR_SREV_VERSION_APHRODITE) ) {
         HALDEBUG(ah, HAL_DEBUG_RESET,
@@ -842,6 +857,18 @@ ar9300_attach(u_int16_t devid, HAL_SOFTC sc, HAL_BUS_TAG st,
 
     /* Enable RIFS */
     ahp->ah_rifs_enabled = AH_TRUE;
+
+    /* by default, stop RX also in abort txdma, due to
+       "Unable to stop TxDMA" msg observed */
+    ahp->ah_abort_txdma_norx = AH_TRUE;
+
+    /* do not use optional tx chainmask by default */
+    ahp->ah_tx_chainmaskopt = 0;
+
+    ahp->ah_skip_rx_iq_cal = AH_FALSE;
+    ahp->ah_rx_cal_complete = AH_FALSE;
+    ahp->ah_rx_cal_chan = 0;
+    ahp->ah_rx_cal_chan_flag = 0;
 
     HALDEBUG(ah, HAL_DEBUG_RESET,
         "%s: This Mac Chip Rev 0x%02x.%x is \n", __func__,
@@ -1361,6 +1388,15 @@ ar9300_attach(u_int16_t devid, HAL_SOFTC sc, HAL_BUS_TAG st,
             ar9340Modes_fast_clock_wasp_1p0,
             ARRAY_LENGTH(ar9340Modes_fast_clock_wasp_1p0), 3);
 
+        /* XXX TODO: need to add this for freebsd; it's missing from the current .ini files */
+#if 0
+        /* Japan 2484Mhz CCK settings */
+        INIT_INI_ARRAY(&ahp->ah_ini_japan2484,
+            ar9340_wasp_1p0_baseband_core_txfir_coeff_japan_2484,
+            ARRAY_LENGTH(
+                ar9340_wasp_1p0_baseband_core_txfir_coeff_japan_2484), 2);
+#endif
+
         /* Additional setttings for 40Mhz */
         INIT_INI_ARRAY(&ahp->ah_ini_modes_additional_40mhz, 
             ar9340_wasp_1p0_radio_core_40M,
@@ -1430,6 +1466,67 @@ ar9300_attach(u_int16_t devid, HAL_SOFTC sc, HAL_BUS_TAG st,
         //INIT_INI_ARRAY(&ahp->ah_ini_modes_additional_40M,
         //                ar955x_scorpion_1p0_radio_core_40M,
         //                ARRAY_LENGTH(ar955x_scorpion_1p0_radio_core_40M), 2);
+    } else if (AR_SREV_HONEYBEE(ah)) {
+        /* mac */
+        INIT_INI_ARRAY(&ahp->ah_ini_mac[ATH_INI_PRE], NULL, 0, 0);
+        INIT_INI_ARRAY(&ahp->ah_ini_mac[ATH_INI_CORE],
+                        qca953x_honeybee_1p0_mac_core,
+                        ARRAY_LENGTH(qca953x_honeybee_1p0_mac_core), 2);
+        INIT_INI_ARRAY(&ahp->ah_ini_mac[ATH_INI_POST],
+                        qca953x_honeybee_1p0_mac_postamble,
+                        ARRAY_LENGTH(qca953x_honeybee_1p0_mac_postamble), 5);
+
+        /* bb */
+        INIT_INI_ARRAY(&ahp->ah_ini_bb[ATH_INI_PRE], NULL, 0, 0);
+        INIT_INI_ARRAY(&ahp->ah_ini_bb[ATH_INI_CORE],
+                        qca953x_honeybee_1p0_baseband_core,
+                        ARRAY_LENGTH(qca953x_honeybee_1p0_baseband_core), 2);
+        INIT_INI_ARRAY(&ahp->ah_ini_bb[ATH_INI_POST],
+                        qca953x_honeybee_1p0_baseband_postamble,
+                        ARRAY_LENGTH(qca953x_honeybee_1p0_baseband_postamble), 5);
+
+        /* radio */
+        INIT_INI_ARRAY(&ahp->ah_ini_radio[ATH_INI_PRE], NULL, 0, 0);
+        INIT_INI_ARRAY(&ahp->ah_ini_radio[ATH_INI_CORE],
+                        qca953x_honeybee_1p0_radio_core,
+                        ARRAY_LENGTH(qca953x_honeybee_1p0_radio_core), 2);
+        INIT_INI_ARRAY(&ahp->ah_ini_radio[ATH_INI_POST],
+                        qca953x_honeybee_1p0_radio_postamble,
+                        ARRAY_LENGTH(qca953x_honeybee_1p0_radio_postamble), 5);
+
+        /* soc */
+        INIT_INI_ARRAY(&ahp->ah_ini_soc[ATH_INI_PRE],
+                        qca953x_honeybee_1p0_soc_preamble,
+                        ARRAY_LENGTH(qca953x_honeybee_1p0_soc_preamble), 2);
+        INIT_INI_ARRAY(&ahp->ah_ini_soc[ATH_INI_CORE], NULL, 0, 0);
+        INIT_INI_ARRAY(&ahp->ah_ini_soc[ATH_INI_POST],
+                        qca953x_honeybee_1p0_soc_postamble,
+                        ARRAY_LENGTH(qca953x_honeybee_1p0_soc_postamble), 5);
+
+        /* rx/tx gain */
+        INIT_INI_ARRAY(&ahp->ah_ini_modes_rxgain,
+                        qca953xCommon_wo_xlna_rx_gain_table_honeybee_1p0,
+                        ARRAY_LENGTH(qca953xCommon_wo_xlna_rx_gain_table_honeybee_1p0), 2);
+        INIT_INI_ARRAY(&ahp->ah_ini_modes_rxgain_bounds,
+                        qca953xCommon_wo_xlna_rx_gain_bounds_honeybee_1p0,
+                        ARRAY_LENGTH(qca953xCommon_wo_xlna_rx_gain_bounds_honeybee_1p0), 5);
+        INIT_INI_ARRAY(&ahp->ah_ini_modes_txgain,
+                        qca953xModes_no_xpa_tx_gain_table_honeybee_1p0,
+                        ARRAY_LENGTH(qca953xModes_no_xpa_tx_gain_table_honeybee_1p0), 2);
+
+        /*ath_hal_pciePowerSaveEnable should be 2 for OWL/Condor and 0 for merlin */
+        ah->ah_config.ath_hal_pcie_power_save_enable = 0;
+
+        /* Fast clock modal settings */
+        INIT_INI_ARRAY(&ahp->ah_ini_modes_additional,
+                        qca953xModes_fast_clock_honeybee_1p0,
+                        ARRAY_LENGTH(qca953xModes_fast_clock_honeybee_1p0), 3);
+
+        /* Additional setttings for 40Mhz */
+        //INIT_INI_ARRAY(&ahp->ah_ini_modes_additional_40M,
+        //                qca953x_honeybee_1p0_radio_core_40M,
+        //                ARRAY_LENGTH(qca953x_honeybee_1p0_radio_core_40M), 2);
+
     } else if (AR_SREV_JUPITER_10(ah)) {
         /* Jupiter: new INI format (pre, core, post arrays per subsystem) */
 
@@ -1581,14 +1678,25 @@ ar9300_attach(u_int16_t devid, HAL_SOFTC sc, HAL_BUS_TAG st,
             ar9300_jupiter_1p0_baseband_core_txfir_coeff_japan_2484), 2);
 
     }
-    else if (AR_SREV_JUPITER_20(ah)) {
+    else if (AR_SREV_JUPITER_20_OR_LATER(ah)) {
         /* Jupiter: new INI format (pre, core, post arrays per subsystem) */
+
+        /* FreeBSD: just override the registers for jupiter 2.1 */
+        /* XXX TODO: refactor this stuff out; reinit all the 2.1 registers */
 
         /* mac */
         INIT_INI_ARRAY(&ahp->ah_ini_mac[ATH_INI_PRE], NULL, 0, 0);
-        INIT_INI_ARRAY(&ahp->ah_ini_mac[ATH_INI_CORE],
-            ar9300_jupiter_2p0_mac_core, 
-            ARRAY_LENGTH(ar9300_jupiter_2p0_mac_core), 2);
+
+        if (AR_SREV_JUPITER_21(ah)) {
+            INIT_INI_ARRAY(&ahp->ah_ini_mac[ATH_INI_CORE],
+              ar9462_2p1_mac_core,
+              ARRAY_LENGTH(ar9462_2p1_mac_core), 2);
+        } else {
+            INIT_INI_ARRAY(&ahp->ah_ini_mac[ATH_INI_CORE],
+                ar9300_jupiter_2p0_mac_core, 
+                ARRAY_LENGTH(ar9300_jupiter_2p0_mac_core), 2);
+        }
+
         INIT_INI_ARRAY(&ahp->ah_ini_mac[ATH_INI_POST],
             ar9300_jupiter_2p0_mac_postamble,
             ARRAY_LENGTH(ar9300_jupiter_2p0_mac_postamble), 5);
@@ -1598,9 +1706,16 @@ ar9300_attach(u_int16_t devid, HAL_SOFTC sc, HAL_BUS_TAG st,
         INIT_INI_ARRAY(&ahp->ah_ini_bb[ATH_INI_CORE],
             ar9300_jupiter_2p0_baseband_core,
             ARRAY_LENGTH(ar9300_jupiter_2p0_baseband_core), 2);
-        INIT_INI_ARRAY(&ahp->ah_ini_bb[ATH_INI_POST],
-            ar9300_jupiter_2p0_baseband_postamble,
-            ARRAY_LENGTH(ar9300_jupiter_2p0_baseband_postamble), 5);
+
+        if (AR_SREV_JUPITER_21(ah)) {
+            INIT_INI_ARRAY(&ahp->ah_ini_bb[ATH_INI_POST],
+                ar9462_2p1_baseband_postamble,
+                ARRAY_LENGTH(ar9462_2p1_baseband_postamble), 5);
+        } else {
+            INIT_INI_ARRAY(&ahp->ah_ini_bb[ATH_INI_POST],
+                ar9300_jupiter_2p0_baseband_postamble,
+                ARRAY_LENGTH(ar9300_jupiter_2p0_baseband_postamble), 5);
+        }
 
         /* radio */
         INIT_INI_ARRAY(&ahp->ah_ini_radio[ATH_INI_PRE], NULL, 0, 0);
@@ -1615,9 +1730,15 @@ ar9300_attach(u_int16_t devid, HAL_SOFTC sc, HAL_BUS_TAG st,
             ARRAY_LENGTH(ar9300_jupiter_2p0_radio_postamble_sys2ant), 5);
 
         /* soc */
-        INIT_INI_ARRAY(&ahp->ah_ini_soc[ATH_INI_PRE],
-            ar9300_jupiter_2p0_soc_preamble, 
-            ARRAY_LENGTH(ar9300_jupiter_2p0_soc_preamble), 2);
+        if (AR_SREV_JUPITER_21(ah)) {
+            INIT_INI_ARRAY(&ahp->ah_ini_soc[ATH_INI_PRE],
+              ar9462_2p1_soc_preamble,
+              ARRAY_LENGTH(ar9462_2p1_soc_preamble), 2);
+        } else {
+            INIT_INI_ARRAY(&ahp->ah_ini_soc[ATH_INI_PRE],
+              ar9300_jupiter_2p0_soc_preamble, 
+              ARRAY_LENGTH(ar9300_jupiter_2p0_soc_preamble), 2);
+        }
         INIT_INI_ARRAY(&ahp->ah_ini_soc[ATH_INI_CORE], NULL, 0, 0);
         INIT_INI_ARRAY(&ahp->ah_ini_soc[ATH_INI_POST],
             ar9300_jupiter_2p0_soc_postamble, 
@@ -2378,7 +2499,9 @@ ar9300_detach(struct ath_hal *ah)
 struct ath_hal_9300 *
 ar9300_new_state(u_int16_t devid, HAL_SOFTC sc,
     HAL_BUS_TAG st, HAL_BUS_HANDLE sh,
-    uint16_t *eepromdata, HAL_STATUS *status)
+    uint16_t *eepromdata,
+    HAL_OPS_CONFIG *ah_config,
+    HAL_STATUS *status)
 {
     static const u_int8_t defbssidmask[IEEE80211_ADDR_LEN] =
         { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
@@ -2430,7 +2553,7 @@ ar9300_new_state(u_int16_t devid, HAL_SOFTC sc,
     ** Initialize factory defaults in the private space
     */
 //    ath_hal_factory_defaults(AH_PRIVATE(ah), hal_conf_parm);
-    ar9300_config_defaults_freebsd(ah);
+    ar9300_config_defaults_freebsd(ah, ah_config);
 
     /* XXX FreeBSD: cal is always in EEPROM */
 #if 0
@@ -2456,6 +2579,7 @@ ar9300_new_state(u_int16_t devid, HAL_SOFTC sc,
     AH_PRIVATE(ah)->ah_tpScale = HAL_TP_SCALE_MAX;  /* no scaling */
 
     ahp->ah_atim_window = 0;         /* [0..1000] */
+
     ahp->ah_diversity_control =
         ah->ah_config.ath_hal_diversity_control;
     ahp->ah_antenna_switch_swap =
@@ -2654,7 +2778,7 @@ ar9300_fill_capability_info(struct ath_hal *ah)
     p_cap->halBurstSupport = AH_TRUE;
     p_cap->halChapTuningSupport = AH_TRUE;
     p_cap->halTurboPrimeSupport = AH_TRUE;
-    p_cap->halFastFramesSupport = AH_FALSE;
+    p_cap->halFastFramesSupport = AH_TRUE;
 
     p_cap->halTurboGSupport = p_cap->halWirelessModes & HAL_MODE_108G;
 
@@ -2802,6 +2926,7 @@ ar9300_fill_capability_info(struct ath_hal *ah)
         p_cap->halMciSupport = AH_FALSE;
     }
 
+    /* XXX TODO: jupiter 2.1? */
     if (AR_SREV_JUPITER_20(ah)) {
         p_cap->halRadioRetentionSupport = AH_TRUE;
     } else {
@@ -2912,7 +3037,7 @@ ar9300_fill_capability_info(struct ath_hal *ah)
     /* XXX is this a flag, or a chainmask number? */
     p_cap->halApmEnable = !! ar9300_eeprom_get(ahp, EEP_CHAIN_MASK_REDUCE);
 #if ATH_ANT_DIV_COMB        
-    if (AR_SREV_HORNET(ah) || AR_SREV_POSEIDON_11_OR_LATER(ah)) {
+    if (AR_SREV_HORNET(ah) || AR_SREV_POSEIDON_11_OR_LATER(ah) || AR_SREV_APHRODITE(ah)) {
         if (ahp->ah_diversity_control == HAL_ANT_VARIABLE) {
             u_int8_t ant_div_control1 = 
                 ar9300_eeprom_get(ahp, EEP_ANTDIV_control);
@@ -2934,6 +3059,10 @@ ar9300_fill_capability_info(struct ath_hal *ah)
         p_cap->halRxUsingLnaMixing = AH_TRUE;
     }
 
+    /*
+     * AR5416 and later NICs support MYBEACON filtering.
+     */
+    p_cap->halRxDoMyBeacon = AH_TRUE;
 
 #if ATH_WOW_OFFLOAD
     if (AR_SREV_JUPITER_20_OR_LATER(ah) || AR_SREV_APHRODITE(ah)) {
@@ -3408,13 +3537,55 @@ void ar9300_rx_gain_table_apply(struct ath_hal *ah)
                 ar9300_common_mixed_rx_gain_table_jupiter_1p0,
                 ARRAY_LENGTH(ar9300_common_mixed_rx_gain_table_jupiter_1p0), 2);
             break;
-        }        
+        }
         else if (AR_SREV_JUPITER_20(ah)) {
             INIT_INI_ARRAY(&ahp->ah_ini_modes_rxgain, 
                 ar9300Common_mixed_rx_gain_table_jupiter_2p0,
                 ARRAY_LENGTH(ar9300Common_mixed_rx_gain_table_jupiter_2p0), 2);
+            INIT_INI_ARRAY(&ahp->ah_ini_modes_rxgain_bb_core,
+                ar9462_2p0_baseband_core_mix_rxgain,
+                ARRAY_LENGTH(ar9462_2p0_baseband_core_mix_rxgain), 2);
+            INIT_INI_ARRAY(&ahp->ah_ini_modes_rxgain_bb_postamble,
+                ar9462_2p0_baseband_postamble_mix_rxgain,
+                ARRAY_LENGTH(ar9462_2p0_baseband_postamble_mix_rxgain), 2);
+            INIT_INI_ARRAY(&ahp->ah_ini_modes_rxgain_xlna,
+                ar9462_2p0_baseband_postamble_5g_xlna,
+                ARRAY_LENGTH(ar9462_2p0_baseband_postamble_5g_xlna), 2);
             break;
         }
+        else if (AR_SREV_JUPITER_21(ah)) {
+            INIT_INI_ARRAY(&ahp->ah_ini_modes_rxgain, 
+                ar9462_2p1_common_mixed_rx_gain,
+                ARRAY_LENGTH(ar9462_2p1_common_mixed_rx_gain), 2);
+            INIT_INI_ARRAY(&ahp->ah_ini_modes_rxgain_bb_core,
+                ar9462_2p1_baseband_core_mix_rxgain,
+                ARRAY_LENGTH(ar9462_2p1_baseband_core_mix_rxgain), 2);
+            INIT_INI_ARRAY(&ahp->ah_ini_modes_rxgain_bb_postamble,
+                ar9462_2p1_baseband_postamble_mix_rxgain,
+                ARRAY_LENGTH(ar9462_2p1_baseband_postamble_mix_rxgain), 2);
+            INIT_INI_ARRAY(&ahp->ah_ini_modes_rxgain_xlna,
+                ar9462_2p1_baseband_postamble_5g_xlna,
+                ARRAY_LENGTH(ar9462_2p1_baseband_postamble_5g_xlna), 2);
+
+            break;
+        }
+    case 3:
+        if (AR_SREV_JUPITER_21(ah)) {
+            INIT_INI_ARRAY(&ahp->ah_ini_modes_rxgain,
+                ar9462_2p1_common_5g_xlna_only_rxgain,
+                ARRAY_LENGTH(ar9462_2p1_common_5g_xlna_only_rxgain), 2);
+            INIT_INI_ARRAY(&ahp->ah_ini_modes_rxgain_xlna,
+                ar9462_2p1_baseband_postamble_5g_xlna,
+                ARRAY_LENGTH(ar9462_2p1_baseband_postamble_5g_xlna), 2);
+        } else if (AR_SREV_JUPITER_20(ah)) {
+            INIT_INI_ARRAY(&ahp->ah_ini_modes_rxgain,
+                ar9462_2p0_common_5g_xlna_only_rxgain,
+                ARRAY_LENGTH(ar9462_2p0_common_5g_xlna_only_rxgain), 2);
+            INIT_INI_ARRAY(&ahp->ah_ini_modes_rxgain_xlna,
+                ar9462_2p0_baseband_postamble_5g_xlna,
+                ARRAY_LENGTH(ar9462_2p0_baseband_postamble_5g_xlna), 2);
+        }
+        break;
     case 0:
     default:
         if (AR_SREV_HORNET_12(ah)) {
@@ -3458,6 +3629,10 @@ void ar9300_rx_gain_table_apply(struct ath_hal *ah)
             INIT_INI_ARRAY(&ahp->ah_ini_modes_rxgain, 
                 ar9300Common_rx_gain_table_jupiter_2p0,
                 ARRAY_LENGTH(ar9300Common_rx_gain_table_jupiter_2p0), 2);
+        } else if (AR_SREV_JUPITER_21(ah)) {
+            INIT_INI_ARRAY(&ahp->ah_ini_modes_rxgain,
+                ar9462_2p1_common_rx_gain,
+                ARRAY_LENGTH(ar9462_2p1_common_rx_gain), 2);
         } else if (AR_SREV_AR9580(ah)) {
             INIT_INI_ARRAY(&ahp->ah_ini_modes_rxgain,
                 ar9300_common_rx_gain_table_ar9580_1p0,
@@ -3473,6 +3648,13 @@ void ar9300_rx_gain_table_apply(struct ath_hal *ah)
             INIT_INI_ARRAY(&ahp->ah_ini_modes_rxgain_bounds,
                 ar955xCommon_rx_gain_bounds_scorpion_1p0,
                 ARRAY_LENGTH(ar955xCommon_rx_gain_bounds_scorpion_1p0), 5);
+        } else if (AR_SREV_HONEYBEE(ah)) {
+            INIT_INI_ARRAY(&ahp->ah_ini_modes_rxgain,
+                qca953xCommon_rx_gain_table_honeybee_1p0,
+                ARRAY_LENGTH(qca953xCommon_rx_gain_table_honeybee_1p0), 2);
+            INIT_INI_ARRAY(&ahp->ah_ini_modes_rxgain_bounds,
+                qca953xCommon_rx_gain_bounds_honeybee_1p0,
+                ARRAY_LENGTH(qca953xCommon_rx_gain_bounds_honeybee_1p0), 5);
         } else {
             INIT_INI_ARRAY(&ahp->ah_ini_modes_rxgain,
                 ar9300_common_rx_gain_table_osprey_2p2,
@@ -3506,6 +3688,11 @@ void ar9300_rx_gain_table_apply(struct ath_hal *ah)
                 ar9300Common_wo_xlna_rx_gain_table_jupiter_2p0,
                 ARRAY_LENGTH(ar9300Common_wo_xlna_rx_gain_table_jupiter_2p0),
                 2);
+        } else if (AR_SREV_JUPITER_21(ah)) {
+            INIT_INI_ARRAY(&ahp->ah_ini_modes_rxgain,
+                ar9462_2p1_common_wo_xlna_rx_gain,
+                ARRAY_LENGTH(ar9462_2p1_common_wo_xlna_rx_gain),
+                2);
         } else if (AR_SREV_APHRODITE(ah)) {
             INIT_INI_ARRAY(&ahp->ah_ini_modes_rxgain, 
                 ar956XCommon_wo_xlna_rx_gain_table_aphrodite_1p0,
@@ -3526,6 +3713,13 @@ void ar9300_rx_gain_table_apply(struct ath_hal *ah)
             INIT_INI_ARRAY(&ahp->ah_ini_modes_rxgain_bounds,
                 ar955xCommon_wo_xlna_rx_gain_bounds_scorpion_1p0,
                 ARRAY_LENGTH(ar955xCommon_wo_xlna_rx_gain_bounds_scorpion_1p0), 5);
+        } else if (AR_SREV_HONEYBEE(ah)) {
+            INIT_INI_ARRAY(&ahp->ah_ini_modes_rxgain,
+                qca953xCommon_wo_xlna_rx_gain_table_honeybee_1p0,
+                ARRAY_LENGTH(qca953xCommon_wo_xlna_rx_gain_table_honeybee_1p0), 2);
+            INIT_INI_ARRAY(&ahp->ah_ini_modes_rxgain_bounds,
+                qca953xCommon_wo_xlna_rx_gain_bounds_honeybee_1p0,
+                ARRAY_LENGTH(qca953xCommon_wo_xlna_rx_gain_bounds_honeybee_1p0), 5);
         } else {
             INIT_INI_ARRAY(&ahp->ah_ini_modes_rxgain,
                 ar9300Common_wo_xlna_rx_gain_table_osprey_2p2,
@@ -3579,11 +3773,21 @@ void ar9300_tx_gain_table_apply(struct ath_hal *ah)
                 ar9300_modes_low_ob_db_tx_gain_table_jupiter_1p0,
                 ARRAY_LENGTH(ar9300_modes_low_ob_db_tx_gain_table_jupiter_1p0),
                 5);
-        } else if (AR_SREV_JUPITER_20(ah)) {
+         } else if (AR_SREV_JUPITER_20(ah)) {
             INIT_INI_ARRAY(&ahp->ah_ini_modes_txgain,
                 ar9300Modes_low_ob_db_tx_gain_table_jupiter_2p0,
                 ARRAY_LENGTH(ar9300Modes_low_ob_db_tx_gain_table_jupiter_2p0),
                 5);
+       } else if (AR_SREV_JUPITER_21(ah)) {
+            INIT_INI_ARRAY(&ahp->ah_ini_modes_txgain,
+                ar9462_2p1_modes_low_ob_db_tx_gain,
+                ARRAY_LENGTH(ar9462_2p1_modes_low_ob_db_tx_gain),
+                5);
+        } else if (AR_SREV_HONEYBEE(ah)) {
+            INIT_INI_ARRAY(&ahp->ah_ini_modes_txgain,
+           	qca953xModes_xpa_tx_gain_table_honeybee_1p0,
+                ARRAY_LENGTH(qca953xModes_xpa_tx_gain_table_honeybee_1p0),
+                2);
         } else if (AR_SREV_APHRODITE(ah)) {
             INIT_INI_ARRAY(&ahp->ah_ini_modes_txgain,
                 ar956XModes_low_ob_db_tx_gain_table_aphrodite_1p0,
@@ -3636,11 +3840,26 @@ void ar9300_tx_gain_table_apply(struct ath_hal *ah)
                 ar9300Modes_high_ob_db_tx_gain_table_jupiter_2p0,
                 ARRAY_LENGTH(
                 ar9300Modes_high_ob_db_tx_gain_table_jupiter_2p0), 5);
+        } else if (AR_SREV_JUPITER_21(ah)) {
+            INIT_INI_ARRAY(&ahp->ah_ini_modes_txgain,
+                ar9462_2p1_modes_high_ob_db_tx_gain,
+                ARRAY_LENGTH(
+                ar9462_2p1_modes_high_ob_db_tx_gain), 5);
         } else if (AR_SREV_APHRODITE(ah)) {
             INIT_INI_ARRAY(&ahp->ah_ini_modes_txgain,
                 ar956XModes_high_ob_db_tx_gain_table_aphrodite_1p0,
                 ARRAY_LENGTH(
                 ar956XModes_high_ob_db_tx_gain_table_aphrodite_1p0), 5);
+        } else if (AR_SREV_HONEYBEE(ah)) {
+            if (AR_SREV_HONEYBEE_11(ah)) {
+                INIT_INI_ARRAY(&ahp->ah_ini_modes_txgain,
+                    qca953xModes_no_xpa_tx_gain_table_honeybee_1p1,
+                    ARRAY_LENGTH(qca953xModes_no_xpa_tx_gain_table_honeybee_1p1), 2);
+            } else {
+                INIT_INI_ARRAY(&ahp->ah_ini_modes_txgain,
+                    qca953xModes_no_xpa_tx_gain_table_honeybee_1p0,
+                    ARRAY_LENGTH(qca953xModes_no_xpa_tx_gain_table_honeybee_1p0), 2);
+            }
         } else {
             INIT_INI_ARRAY(&ahp->ah_ini_modes_txgain,
                 ar9300Modes_high_ob_db_tx_gain_table_osprey_2p2,
@@ -3831,6 +4050,11 @@ ar9300_ant_div_comb_get_config(struct ath_hal *ah,
     } else {
         div_comb_conf->antdiv_configgroup = DEFAULT_ANTDIV_CONFIG_GROUP;
     }
+
+    /*
+     * XXX TODO: allow the HAL to override the rssithres and fast_div_bias
+     * values (eg CUS198.)
+     */
 }
 
 void
@@ -4109,6 +4333,10 @@ ar9300_probe(uint16_t vendorid, uint16_t devid)
         return "Qualcomm Atheros QCA955x";
     case AR9300_DEVID_QCA9565: /* Aphrodite */
          return "Qualcomm Atheros AR9565";
+    case AR9300_DEVID_QCA953X: /* Honeybee */
+         return "Qualcomm Atheros QCA953x";
+    case AR9300_DEVID_AR1111_PCIE:
+         return "Atheros AR1111";
     default:
         return AH_NULL;
     }

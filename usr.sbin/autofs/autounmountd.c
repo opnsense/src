@@ -37,13 +37,13 @@ __FBSDID("$FreeBSD$");
 #include <sys/time.h>
 #include <assert.h>
 #include <errno.h>
+#include <libutil.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <libutil.h>
 
 #include "common.h"
 
@@ -161,7 +161,7 @@ unmount_by_fsid(const fsid_t fsid, const char *mountpoint)
 	if (ret < 0)
 		log_err(1, "asprintf");
 
-	error = unmount(fsid_str, MNT_BYFSID);
+	error = unmount(fsid_str, MNT_NONBUSY | MNT_BYFSID);
 	if (error != 0) {
 		if (errno == EBUSY) {
 			log_debugx("cannot unmount %s (%s): %s",

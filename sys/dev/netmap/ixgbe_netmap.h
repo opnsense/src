@@ -121,7 +121,7 @@ ixgbe_netmap_reg(struct netmap_adapter *na, int onoff)
 	struct adapter *adapter = ifp->if_softc;
 
 	IXGBE_CORE_LOCK(adapter);
-	ixgbe_disable_intr(adapter); // XXX maybe ixgbe_stop ?
+	adapter->stop_locked(adapter);
 
 	if (!IXGBE_IS_VF(adapter))
 		set_crcstrip(&adapter->hw, onoff);
@@ -131,7 +131,7 @@ ixgbe_netmap_reg(struct netmap_adapter *na, int onoff)
 	} else {
 		nm_clear_native_flags(na);
 	}
-	ixgbe_init_locked(adapter);	/* also enables intr */
+	adapter->init_locked(adapter);	/* also enables intr */
 	if (!IXGBE_IS_VF(adapter))
 		set_crcstrip(&adapter->hw, onoff); // XXX why twice ?
 	IXGBE_CORE_UNLOCK(adapter);
@@ -323,8 +323,6 @@ ixgbe_netmap_txsync(struct netmap_kring *kring, int flags)
 		}
 	}
 
-	nm_txsync_finalize(kring);
-
 	return 0;
 }
 
@@ -352,7 +350,7 @@ ixgbe_netmap_rxsync(struct netmap_kring *kring, int flags)
 	u_int nic_i;	/* index into the NIC ring */
 	u_int n;
 	u_int const lim = kring->nkr_num_slots - 1;
-	u_int const head = nm_rxsync_prologue(kring);
+	u_int const head = kring->rhead;
 	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
 
 	/* device-specific */
@@ -458,9 +456,6 @@ ixgbe_netmap_rxsync(struct netmap_kring *kring, int flags)
 		nic_i = nm_prev(nic_i, lim);
 		IXGBE_WRITE_REG(&adapter->hw, rxr->tail, nic_i);
 	}
-
-	/* tell userspace that there might be new packets */
-	nm_rxsync_finalize(kring);
 
 	return 0;
 

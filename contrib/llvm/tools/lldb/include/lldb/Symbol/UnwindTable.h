@@ -13,7 +13,8 @@
 
 #include <map>
 
-#include "lldb/lldb-private.h"
+#include "lldb/lldb-private.h" 
+#include "lldb/Host/Mutex.h"
 
 namespace lldb_private {
 
@@ -30,6 +31,12 @@ public:
     lldb_private::DWARFCallFrameInfo *
     GetEHFrameInfo ();
 
+    lldb_private::CompactUnwindInfo *
+    GetCompactUnwindInfo ();
+
+    ArmUnwindInfo *
+    GetArmUnwindInfo ();
+
     lldb::FuncUnwindersSP
     GetFuncUnwindersContainingAddress (const Address& addr, SymbolContext &sc);
 
@@ -41,6 +48,9 @@ public:
 // uncached FuncUnwinders is expected to be short so in practice this will not be a problem.
     lldb::FuncUnwindersSP
     GetUncachedFuncUnwindersContainingAddress (const Address& addr, SymbolContext &sc);
+
+    bool
+    GetArchitecture (lldb_private::ArchSpec &arch);
 
 private:
     void
@@ -56,11 +66,12 @@ private:
     collection          m_unwinds;
 
     bool                m_initialized;  // delay some initialization until ObjectFile is set up
+    Mutex               m_mutex;
 
-    lldb::UnwindAssemblySP m_assembly_profiler;
+    std::unique_ptr<DWARFCallFrameInfo> m_eh_frame_up;
+    std::unique_ptr<CompactUnwindInfo>  m_compact_unwind_up;
+    std::unique_ptr<ArmUnwindInfo>      m_arm_unwind_up;
 
-    DWARFCallFrameInfo* m_eh_frame;
-    
     DISALLOW_COPY_AND_ASSIGN (UnwindTable);
 };
 

@@ -32,9 +32,6 @@ class ASTUnresolvedSet {
 
   DeclsTy Decls;
 
-  ASTUnresolvedSet(const ASTUnresolvedSet &) LLVM_DELETED_FUNCTION;
-  void operator=(const ASTUnresolvedSet &) LLVM_DELETED_FUNCTION;
-
   friend class LazyASTUnresolvedSet;
 
 public:
@@ -79,7 +76,7 @@ public:
   }
 
   void append(ASTContext &C, iterator I, iterator E) {
-    Decls.append(C, I.ir, E.ir);
+    Decls.append(C, I.I, E.I);
   }
 
   DeclAccessPair &operator[](unsigned I) { return Decls[I]; }

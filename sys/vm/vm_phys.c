@@ -48,13 +48,14 @@ __FBSDID("$FreeBSD$");
 #include <sys/kernel.h>
 #include <sys/malloc.h>
 #include <sys/mutex.h>
-#if MAXMEMDOM > 1
 #include <sys/proc.h>
-#endif
 #include <sys/queue.h>
+#include <sys/rwlock.h>
 #include <sys/sbuf.h>
 #include <sys/sysctl.h>
+#include <sys/tree.h>
 #include <sys/vmmeter.h>
+#include <sys/seq.h>
 
 #include <ddb/ddb.h>
 
@@ -65,23 +66,40 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_page.h>
 #include <vm/vm_phys.h>
 
+#include <vm/vm_domain.h>
+
 _Static_assert(sizeof(long) * NBBY >= VM_PHYSSEG_MAX,
     "Too many physsegs.");
 
+#ifdef VM_NUMA_ALLOC
 struct mem_affinity *mem_affinity;
+int *mem_locality;
+#endif
 
 int vm_ndomains = 1;
 
 struct vm_phys_seg vm_phys_segs[VM_PHYSSEG_MAX];
 int vm_phys_nsegs;
 
-#define VM_PHYS_FICTITIOUS_NSEGS	8
-static struct vm_phys_fictitious_seg {
+struct vm_phys_fictitious_seg;
+static int vm_phys_fictitious_cmp(struct vm_phys_fictitious_seg *,
+    struct vm_phys_fictitious_seg *);
+
+RB_HEAD(fict_tree, vm_phys_fictitious_seg) vm_phys_fictitious_tree =
+    RB_INITIALIZER(_vm_phys_fictitious_tree);
+
+struct vm_phys_fictitious_seg {
+	RB_ENTRY(vm_phys_fictitious_seg) node;
+	/* Memory region data */
 	vm_paddr_t	start;
 	vm_paddr_t	end;
 	vm_page_t	first_page;
-} vm_phys_fictitious_segs[VM_PHYS_FICTITIOUS_NSEGS];
-static struct mtx vm_phys_fictitious_reg_mtx;
+};
+
+RB_GENERATE_STATIC(fict_tree, vm_phys_fictitious_seg, node,
+    vm_phys_fictitious_cmp);
+
+static struct rwlock vm_phys_fictitious_reg_lock;
 MALLOC_DEFINE(M_FICT_PAGES, "vm_fictitious", "Fictitious VM pages");
 
 static struct vm_freelist
@@ -126,21 +144,140 @@ static int sysctl_vm_phys_segs(SYSCTL_HANDLER_ARGS);
 SYSCTL_OID(_vm, OID_AUTO, phys_segs, CTLTYPE_STRING | CTLFLAG_RD,
     NULL, 0, sysctl_vm_phys_segs, "A", "Phys Seg Info");
 
+#ifdef VM_NUMA_ALLOC
+static int sysctl_vm_phys_locality(SYSCTL_HANDLER_ARGS);
+SYSCTL_OID(_vm, OID_AUTO, phys_locality, CTLTYPE_STRING | CTLFLAG_RD,
+    NULL, 0, sysctl_vm_phys_locality, "A", "Phys Locality Info");
+#endif
+
 SYSCTL_INT(_vm, OID_AUTO, ndomains, CTLFLAG_RD,
     &vm_ndomains, 0, "Number of physical memory domains available.");
 
+/*
+ * Default to first-touch + round-robin.
+ */
+static struct mtx vm_default_policy_mtx;
+MTX_SYSINIT(vm_default_policy, &vm_default_policy_mtx, "default policy mutex",
+    MTX_DEF);
+#ifdef VM_NUMA_ALLOC
+static struct vm_domain_policy vm_default_policy =
+    VM_DOMAIN_POLICY_STATIC_INITIALISER(VM_POLICY_FIRST_TOUCH_ROUND_ROBIN, 0);
+#else
+/* Use round-robin so the domain policy code will only try once per allocation */
+static struct vm_domain_policy vm_default_policy =
+    VM_DOMAIN_POLICY_STATIC_INITIALISER(VM_POLICY_ROUND_ROBIN, 0);
+#endif
+
 static vm_page_t vm_phys_alloc_domain_pages(int domain, int flind, int pool,
     int order);
+static vm_page_t vm_phys_alloc_seg_contig(struct vm_phys_seg *seg,
+    u_long npages, vm_paddr_t low, vm_paddr_t high, u_long alignment,
+    vm_paddr_t boundary);
 static void _vm_phys_create_seg(vm_paddr_t start, vm_paddr_t end, int domain);
 static void vm_phys_create_seg(vm_paddr_t start, vm_paddr_t end);
 static int vm_phys_paddr_to_segind(vm_paddr_t pa);
 static void vm_phys_split_pages(vm_page_t m, int oind, struct vm_freelist *fl,
     int order);
 
+static int
+sysctl_vm_default_policy(SYSCTL_HANDLER_ARGS)
+{
+	char policy_name[32];
+	int error;
+
+	mtx_lock(&vm_default_policy_mtx);
+
+	/* Map policy to output string */
+	switch (vm_default_policy.p.policy) {
+	case VM_POLICY_FIRST_TOUCH:
+		strcpy(policy_name, "first-touch");
+		break;
+	case VM_POLICY_FIRST_TOUCH_ROUND_ROBIN:
+		strcpy(policy_name, "first-touch-rr");
+		break;
+	case VM_POLICY_ROUND_ROBIN:
+	default:
+		strcpy(policy_name, "rr");
+		break;
+	}
+	mtx_unlock(&vm_default_policy_mtx);
+
+	error = sysctl_handle_string(oidp, &policy_name[0],
+	    sizeof(policy_name), req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+
+	mtx_lock(&vm_default_policy_mtx);
+	/* Set: match on the subset of policies that make sense as a default */
+	if (strcmp("first-touch-rr", policy_name) == 0) {
+		vm_domain_policy_set(&vm_default_policy,
+		    VM_POLICY_FIRST_TOUCH_ROUND_ROBIN, 0);
+	} else if (strcmp("first-touch", policy_name) == 0) {
+		vm_domain_policy_set(&vm_default_policy,
+		    VM_POLICY_FIRST_TOUCH, 0);
+	} else if (strcmp("rr", policy_name) == 0) {
+		vm_domain_policy_set(&vm_default_policy,
+		    VM_POLICY_ROUND_ROBIN, 0);
+	} else {
+		error = EINVAL;
+		goto finish;
+	}
+
+	error = 0;
+finish:
+	mtx_unlock(&vm_default_policy_mtx);
+	return (error);
+}
+
+SYSCTL_PROC(_vm, OID_AUTO, default_policy, CTLTYPE_STRING | CTLFLAG_RW,
+    0, 0, sysctl_vm_default_policy, "A",
+    "Default policy (rr, first-touch, first-touch-rr");
+
+/*
+ * Red-black tree helpers for vm fictitious range management.
+ */
+static inline int
+vm_phys_fictitious_in_range(struct vm_phys_fictitious_seg *p,
+    struct vm_phys_fictitious_seg *range)
+{
+
+	KASSERT(range->start != 0 && range->end != 0,
+	    ("Invalid range passed on search for vm_fictitious page"));
+	if (p->start >= range->end)
+		return (1);
+	if (p->start < range->start)
+		return (-1);
+
+	return (0);
+}
+
+static int
+vm_phys_fictitious_cmp(struct vm_phys_fictitious_seg *p1,
+    struct vm_phys_fictitious_seg *p2)
+{
+
+	/* Check if this is a search for a page */
+	if (p1->end == 0)
+		return (vm_phys_fictitious_in_range(p1, p2));
+
+	KASSERT(p2->end != 0,
+    ("Invalid range passed as second parameter to vm fictitious comparison"));
+
+	/* Searching to add a new range */
+	if (p1->end <= p2->start)
+		return (-1);
+	if (p1->start >= p2->end)
+		return (1);
+
+	panic("Trying to add overlapping vm fictitious ranges:\n"
+	    "[%#jx:%#jx] and [%#jx:%#jx]", (uintmax_t)p1->start,
+	    (uintmax_t)p1->end, (uintmax_t)p2->start, (uintmax_t)p2->end);
+}
+
 static __inline int
 vm_rr_selectdomain(void)
 {
-#if MAXMEMDOM > 1
+#ifdef VM_NUMA_ALLOC
 	struct thread *td;
 
 	td = curthread;
@@ -151,6 +288,53 @@ vm_rr_selectdomain(void)
 #else
 	return (0);
 #endif
+}
+
+/*
+ * Initialise a VM domain iterator.
+ *
+ * Check the thread policy, then the proc policy,
+ * then default to the system policy.
+ *
+ * Later on the various layers will have this logic
+ * plumbed into them and the phys code will be explicitly
+ * handed a VM domain policy to use.
+ */
+static void
+vm_policy_iterator_init(struct vm_domain_iterator *vi)
+{
+#ifdef VM_NUMA_ALLOC
+	struct vm_domain_policy lcl;
+#endif
+
+	vm_domain_iterator_init(vi);
+
+#ifdef VM_NUMA_ALLOC
+	/* Copy out the thread policy */
+	vm_domain_policy_localcopy(&lcl, &curthread->td_vm_dom_policy);
+	if (lcl.p.policy != VM_POLICY_NONE) {
+		/* Thread policy is present; use it */
+		vm_domain_iterator_set_policy(vi, &lcl);
+		return;
+	}
+
+	vm_domain_policy_localcopy(&lcl,
+	    &curthread->td_proc->p_vm_dom_policy);
+	if (lcl.p.policy != VM_POLICY_NONE) {
+		/* Process policy is present; use it */
+		vm_domain_iterator_set_policy(vi, &lcl);
+		return;
+	}
+#endif
+	/* Use system default policy */
+	vm_domain_iterator_set_policy(vi, &vm_default_policy);
+}
+
+static void
+vm_policy_iterator_finish(struct vm_domain_iterator *vi)
+{
+
+	vm_domain_iterator_cleanup(vi);
 }
 
 boolean_t
@@ -242,6 +426,54 @@ sysctl_vm_phys_segs(SYSCTL_HANDLER_ARGS)
 	return (error);
 }
 
+/*
+ * Return affinity, or -1 if there's no affinity information.
+ */
+int
+vm_phys_mem_affinity(int f, int t)
+{
+
+#ifdef VM_NUMA_ALLOC
+	if (mem_locality == NULL)
+		return (-1);
+	if (f >= vm_ndomains || t >= vm_ndomains)
+		return (-1);
+	return (mem_locality[f * vm_ndomains + t]);
+#else
+	return (-1);
+#endif
+}
+
+#ifdef VM_NUMA_ALLOC
+/*
+ * Outputs the VM locality table.
+ */
+static int
+sysctl_vm_phys_locality(SYSCTL_HANDLER_ARGS)
+{
+	struct sbuf sbuf;
+	int error, i, j;
+
+	error = sysctl_wire_old_buffer(req, 0);
+	if (error != 0)
+		return (error);
+	sbuf_new_for_sysctl(&sbuf, NULL, 128, req);
+
+	sbuf_printf(&sbuf, "\n");
+
+	for (i = 0; i < vm_ndomains; i++) {
+		sbuf_printf(&sbuf, "%d: ", i);
+		for (j = 0; j < vm_ndomains; j++) {
+			sbuf_printf(&sbuf, "%d ", vm_phys_mem_affinity(i, j));
+		}
+		sbuf_printf(&sbuf, "\n");
+	}
+	error = sbuf_finish(&sbuf);
+	sbuf_delete(&sbuf);
+	return (error);
+}
+#endif
+
 static void
 vm_freelist_add(struct vm_freelist *fl, vm_page_t m, int order, int tail)
 {
@@ -288,6 +520,7 @@ _vm_phys_create_seg(vm_paddr_t start, vm_paddr_t end, int domain)
 static void
 vm_phys_create_seg(vm_paddr_t start, vm_paddr_t end)
 {
+#ifdef VM_NUMA_ALLOC
 	int i;
 
 	if (mem_affinity == NULL) {
@@ -312,6 +545,9 @@ vm_phys_create_seg(vm_paddr_t start, vm_paddr_t end)
 		    mem_affinity[i].domain);
 		start = mem_affinity[i].end;
 	}
+#else
+	_vm_phys_create_seg(start, end, 0);
+#endif
 }
 
 /*
@@ -472,7 +708,8 @@ vm_phys_init(void)
 			}
 		}
 	}
-	mtx_init(&vm_phys_fictitious_reg_mtx, "vmfctr", NULL, MTX_DEF);
+
+	rw_init(&vm_phys_fictitious_reg_lock, "vmfctr");
 }
 
 /*
@@ -502,7 +739,7 @@ vm_phys_add_page(vm_paddr_t pa)
 	vm_page_t m;
 	struct vm_domain *vmd;
 
-	cnt.v_page_count++;
+	vm_cnt.v_page_count++;
 	m = vm_phys_paddr_to_vm_page(pa);
 	m->phys_addr = pa;
 	m->queue = PQ_NONE;
@@ -510,7 +747,6 @@ vm_phys_add_page(vm_paddr_t pa)
 	vmd = vm_phys_domain(m);
 	vmd->vmd_page_count++;
 	vmd->vmd_segs |= 1UL << m->segind;
-	m->flags = PG_FREE;
 	KASSERT(m->order == VM_NFREEORDER,
 	    ("vm_phys_add_page: page %p has unexpected order %d",
 	    m, m->order));
@@ -532,15 +768,17 @@ vm_page_t
 vm_phys_alloc_pages(int pool, int order)
 {
 	vm_page_t m;
-	int dom, domain, flind;
+	int domain, flind;
+	struct vm_domain_iterator vi;
 
 	KASSERT(pool < VM_NFREEPOOL,
 	    ("vm_phys_alloc_pages: pool %d is out of range", pool));
 	KASSERT(order < VM_NFREEORDER,
 	    ("vm_phys_alloc_pages: order %d is out of range", order));
 
-	for (dom = 0; dom < vm_ndomains; dom++) {
-		domain = vm_rr_selectdomain();
+	vm_policy_iterator_init(&vi);
+
+	while ((vm_domain_iterator_run(&vi, &domain)) == 0) {
 		for (flind = 0; flind < vm_nfreelists; flind++) {
 			m = vm_phys_alloc_domain_pages(domain, flind, pool,
 			    order);
@@ -548,6 +786,8 @@ vm_phys_alloc_pages(int pool, int order)
 				return (m);
 		}
 	}
+
+	vm_policy_iterator_finish(&vi);
 	return (NULL);
 }
 
@@ -562,7 +802,8 @@ vm_page_t
 vm_phys_alloc_freelist_pages(int freelist, int pool, int order)
 {
 	vm_page_t m;
-	int dom, domain;
+	struct vm_domain_iterator vi;
+	int domain;
 
 	KASSERT(freelist < VM_NFREELIST,
 	    ("vm_phys_alloc_freelist_pages: freelist %d is out of range",
@@ -571,13 +812,17 @@ vm_phys_alloc_freelist_pages(int freelist, int pool, int order)
 	    ("vm_phys_alloc_freelist_pages: pool %d is out of range", pool));
 	KASSERT(order < VM_NFREEORDER,
 	    ("vm_phys_alloc_freelist_pages: order %d is out of range", order));
-	for (dom = 0; dom < vm_ndomains; dom++) {
-		domain = vm_rr_selectdomain();
+
+	vm_policy_iterator_init(&vi);
+
+	while ((vm_domain_iterator_run(&vi, &domain)) == 0) {
 		m = vm_phys_alloc_domain_pages(domain,
 		    vm_freelist_to_flind[freelist], pool, order);
 		if (m != NULL)
 			return (m);
 	}
+
+	vm_policy_iterator_finish(&vi);
 	return (NULL);
 }
 
@@ -641,21 +886,36 @@ vm_phys_paddr_to_vm_page(vm_paddr_t pa)
 vm_page_t
 vm_phys_fictitious_to_vm_page(vm_paddr_t pa)
 {
-	struct vm_phys_fictitious_seg *seg;
+	struct vm_phys_fictitious_seg tmp, *seg;
 	vm_page_t m;
-	int segind;
 
 	m = NULL;
-	for (segind = 0; segind < VM_PHYS_FICTITIOUS_NSEGS; segind++) {
-		seg = &vm_phys_fictitious_segs[segind];
-		if (pa >= seg->start && pa < seg->end) {
-			m = &seg->first_page[atop(pa - seg->start)];
-			KASSERT((m->flags & PG_FICTITIOUS) != 0,
-			    ("%p not fictitious", m));
-			break;
-		}
-	}
+	tmp.start = pa;
+	tmp.end = 0;
+
+	rw_rlock(&vm_phys_fictitious_reg_lock);
+	seg = RB_FIND(fict_tree, &vm_phys_fictitious_tree, &tmp);
+	rw_runlock(&vm_phys_fictitious_reg_lock);
+	if (seg == NULL)
+		return (NULL);
+
+	m = &seg->first_page[atop(pa - seg->start)];
+	KASSERT((m->flags & PG_FICTITIOUS) != 0, ("%p not fictitious", m));
+
 	return (m);
+}
+
+static inline void
+vm_phys_fictitious_init_range(vm_page_t range, vm_paddr_t start,
+    long page_count, vm_memattr_t memattr)
+{
+	long i;
+
+	for (i = 0; i < page_count; i++) {
+		vm_page_initfake(&range[i], start + PAGE_SIZE * i, memattr);
+		range[i].oflags &= ~VPO_UNMANAGED;
+		range[i].busy_lock = VPB_UNBUSIED;
+	}
 }
 
 int
@@ -664,86 +924,145 @@ vm_phys_fictitious_reg_range(vm_paddr_t start, vm_paddr_t end,
 {
 	struct vm_phys_fictitious_seg *seg;
 	vm_page_t fp;
-	long i, page_count;
-	int segind;
+	long page_count;
 #ifdef VM_PHYSSEG_DENSE
-	long pi;
-	boolean_t malloced;
+	long pi, pe;
+	long dpage_count;
 #endif
+
+	KASSERT(start < end,
+	    ("Start of segment isn't less than end (start: %jx end: %jx)",
+	    (uintmax_t)start, (uintmax_t)end));
 
 	page_count = (end - start) / PAGE_SIZE;
 
 #ifdef VM_PHYSSEG_DENSE
 	pi = atop(start);
-	if (pi >= first_page && pi < vm_page_array_size + first_page) {
-		if (atop(end) >= vm_page_array_size + first_page)
-			return (EINVAL);
+	pe = atop(end);
+	if (pi >= first_page && (pi - first_page) < vm_page_array_size) {
 		fp = &vm_page_array[pi - first_page];
-		malloced = FALSE;
-	} else
+		if ((pe - first_page) > vm_page_array_size) {
+			/*
+			 * We have a segment that starts inside
+			 * of vm_page_array, but ends outside of it.
+			 *
+			 * Use vm_page_array pages for those that are
+			 * inside of the vm_page_array range, and
+			 * allocate the remaining ones.
+			 */
+			dpage_count = vm_page_array_size - (pi - first_page);
+			vm_phys_fictitious_init_range(fp, start, dpage_count,
+			    memattr);
+			page_count -= dpage_count;
+			start += ptoa(dpage_count);
+			goto alloc;
+		}
+		/*
+		 * We can allocate the full range from vm_page_array,
+		 * so there's no need to register the range in the tree.
+		 */
+		vm_phys_fictitious_init_range(fp, start, page_count, memattr);
+		return (0);
+	} else if (pe > first_page && (pe - first_page) < vm_page_array_size) {
+		/*
+		 * We have a segment that ends inside of vm_page_array,
+		 * but starts outside of it.
+		 */
+		fp = &vm_page_array[0];
+		dpage_count = pe - first_page;
+		vm_phys_fictitious_init_range(fp, ptoa(first_page), dpage_count,
+		    memattr);
+		end -= ptoa(dpage_count);
+		page_count -= dpage_count;
+		goto alloc;
+	} else if (pi < first_page && pe > (first_page + vm_page_array_size)) {
+		/*
+		 * Trying to register a fictitious range that expands before
+		 * and after vm_page_array.
+		 */
+		return (EINVAL);
+	} else {
+alloc:
 #endif
-	{
 		fp = malloc(page_count * sizeof(struct vm_page), M_FICT_PAGES,
 		    M_WAITOK | M_ZERO);
 #ifdef VM_PHYSSEG_DENSE
-		malloced = TRUE;
+	}
 #endif
-	}
-	for (i = 0; i < page_count; i++) {
-		vm_page_initfake(&fp[i], start + PAGE_SIZE * i, memattr);
-		fp[i].oflags &= ~VPO_UNMANAGED;
-		fp[i].busy_lock = VPB_UNBUSIED;
-	}
-	mtx_lock(&vm_phys_fictitious_reg_mtx);
-	for (segind = 0; segind < VM_PHYS_FICTITIOUS_NSEGS; segind++) {
-		seg = &vm_phys_fictitious_segs[segind];
-		if (seg->start == 0 && seg->end == 0) {
-			seg->start = start;
-			seg->end = end;
-			seg->first_page = fp;
-			mtx_unlock(&vm_phys_fictitious_reg_mtx);
-			return (0);
-		}
-	}
-	mtx_unlock(&vm_phys_fictitious_reg_mtx);
-#ifdef VM_PHYSSEG_DENSE
-	if (malloced)
-#endif
-		free(fp, M_FICT_PAGES);
-	return (EBUSY);
+	vm_phys_fictitious_init_range(fp, start, page_count, memattr);
+
+	seg = malloc(sizeof(*seg), M_FICT_PAGES, M_WAITOK | M_ZERO);
+	seg->start = start;
+	seg->end = end;
+	seg->first_page = fp;
+
+	rw_wlock(&vm_phys_fictitious_reg_lock);
+	RB_INSERT(fict_tree, &vm_phys_fictitious_tree, seg);
+	rw_wunlock(&vm_phys_fictitious_reg_lock);
+
+	return (0);
 }
 
 void
 vm_phys_fictitious_unreg_range(vm_paddr_t start, vm_paddr_t end)
 {
-	struct vm_phys_fictitious_seg *seg;
-	vm_page_t fp;
-	int segind;
+	struct vm_phys_fictitious_seg *seg, tmp;
 #ifdef VM_PHYSSEG_DENSE
-	long pi;
+	long pi, pe;
 #endif
+
+	KASSERT(start < end,
+	    ("Start of segment isn't less than end (start: %jx end: %jx)",
+	    (uintmax_t)start, (uintmax_t)end));
 
 #ifdef VM_PHYSSEG_DENSE
 	pi = atop(start);
-#endif
-
-	mtx_lock(&vm_phys_fictitious_reg_mtx);
-	for (segind = 0; segind < VM_PHYS_FICTITIOUS_NSEGS; segind++) {
-		seg = &vm_phys_fictitious_segs[segind];
-		if (seg->start == start && seg->end == end) {
-			seg->start = seg->end = 0;
-			fp = seg->first_page;
-			seg->first_page = NULL;
-			mtx_unlock(&vm_phys_fictitious_reg_mtx);
-#ifdef VM_PHYSSEG_DENSE
-			if (pi < first_page || atop(end) >= vm_page_array_size)
-#endif
-				free(fp, M_FICT_PAGES);
+	pe = atop(end);
+	if (pi >= first_page && (pi - first_page) < vm_page_array_size) {
+		if ((pe - first_page) <= vm_page_array_size) {
+			/*
+			 * This segment was allocated using vm_page_array
+			 * only, there's nothing to do since those pages
+			 * were never added to the tree.
+			 */
 			return;
 		}
+		/*
+		 * We have a segment that starts inside
+		 * of vm_page_array, but ends outside of it.
+		 *
+		 * Calculate how many pages were added to the
+		 * tree and free them.
+		 */
+		start = ptoa(first_page + vm_page_array_size);
+	} else if (pe > first_page && (pe - first_page) < vm_page_array_size) {
+		/*
+		 * We have a segment that ends inside of vm_page_array,
+		 * but starts outside of it.
+		 */
+		end = ptoa(first_page);
+	} else if (pi < first_page && pe > (first_page + vm_page_array_size)) {
+		/* Since it's not possible to register such a range, panic. */
+		panic(
+		    "Unregistering not registered fictitious range [%#jx:%#jx]",
+		    (uintmax_t)start, (uintmax_t)end);
 	}
-	mtx_unlock(&vm_phys_fictitious_reg_mtx);
-	KASSERT(0, ("Unregistering not registered fictitious range"));
+#endif
+	tmp.start = start;
+	tmp.end = 0;
+
+	rw_wlock(&vm_phys_fictitious_reg_lock);
+	seg = RB_FIND(fict_tree, &vm_phys_fictitious_tree, &tmp);
+	if (seg->start != start || seg->end != end) {
+		rw_wunlock(&vm_phys_fictitious_reg_lock);
+		panic(
+		    "Unregistering not registered fictitious range [%#jx:%#jx]",
+		    (uintmax_t)start, (uintmax_t)end);
+	}
+	RB_REMOVE(fict_tree, &vm_phys_fictitious_tree, seg);
+	rw_wunlock(&vm_phys_fictitious_reg_lock);
+	free(seg->first_page, M_FICT_PAGES);
+	free(seg, M_FICT_PAGES);
 }
 
 /*
@@ -848,6 +1167,56 @@ vm_phys_free_contig(vm_page_t m, u_long npages)
 		vm_phys_free_pages(m, order);
 		m += n;
 	}
+}
+
+/*
+ * Scan physical memory between the specified addresses "low" and "high" for a
+ * run of contiguous physical pages that satisfy the specified conditions, and
+ * return the lowest page in the run.  The specified "alignment" determines
+ * the alignment of the lowest physical page in the run.  If the specified
+ * "boundary" is non-zero, then the run of physical pages cannot span a
+ * physical address that is a multiple of "boundary".
+ *
+ * "npages" must be greater than zero.  Both "alignment" and "boundary" must
+ * be a power of two.
+ */
+vm_page_t
+vm_phys_scan_contig(u_long npages, vm_paddr_t low, vm_paddr_t high,
+    u_long alignment, vm_paddr_t boundary, int options)
+{
+	vm_paddr_t pa_end;
+	vm_page_t m_end, m_run, m_start;
+	struct vm_phys_seg *seg;
+	int segind;
+
+	KASSERT(npages > 0, ("npages is 0"));
+	KASSERT(powerof2(alignment), ("alignment is not a power of 2"));
+	KASSERT(powerof2(boundary), ("boundary is not a power of 2"));
+	if (low >= high)
+		return (NULL);
+	for (segind = 0; segind < vm_phys_nsegs; segind++) {
+		seg = &vm_phys_segs[segind];
+		if (seg->start >= high)
+			break;
+		if (low >= seg->end)
+			continue;
+		if (low <= seg->start)
+			m_start = seg->first_page;
+		else
+			m_start = &seg->first_page[atop(low - seg->start)];
+		if (high < seg->end)
+			pa_end = high;
+		else
+			pa_end = seg->end;
+		if (pa_end - VM_PAGE_TO_PHYS(m_start) < ptoa(npages))
+			continue;
+		m_end = &seg->first_page[atop(pa_end - seg->start)];
+		m_run = vm_page_scan_contig(npages, m_start, m_end,
+		    alignment, boundary, options);
+		if (m_run != NULL)
+			return (m_run);
+	}
+	return (NULL);
 }
 
 /*
@@ -988,85 +1357,123 @@ vm_page_t
 vm_phys_alloc_contig(u_long npages, vm_paddr_t low, vm_paddr_t high,
     u_long alignment, vm_paddr_t boundary)
 {
-	struct vm_freelist *fl;
+	vm_paddr_t pa_end, pa_start;
+	vm_page_t m_run;
+	struct vm_domain_iterator vi;
 	struct vm_phys_seg *seg;
-	vm_paddr_t pa, pa_last, size;
+	int domain, segind;
+
+	KASSERT(npages > 0, ("npages is 0"));
+	KASSERT(powerof2(alignment), ("alignment is not a power of 2"));
+	KASSERT(powerof2(boundary), ("boundary is not a power of 2"));
+	mtx_assert(&vm_page_queue_free_mtx, MA_OWNED);
+	if (low >= high)
+		return (NULL);
+	vm_policy_iterator_init(&vi);
+restartdom:
+	if (vm_domain_iterator_run(&vi, &domain) != 0) {
+		vm_policy_iterator_finish(&vi);
+		return (NULL);
+	}
+	m_run = NULL;
+	for (segind = vm_phys_nsegs - 1; segind >= 0; segind--) {
+		seg = &vm_phys_segs[segind];
+		if (seg->start >= high || seg->domain != domain)
+			continue;
+		if (low >= seg->end)
+			break;
+		if (low <= seg->start)
+			pa_start = seg->start;
+		else
+			pa_start = low;
+		if (high < seg->end)
+			pa_end = high;
+		else
+			pa_end = seg->end;
+		if (pa_end - pa_start < ptoa(npages))
+			continue;
+		m_run = vm_phys_alloc_seg_contig(seg, npages, low, high,
+		    alignment, boundary);
+		if (m_run != NULL)
+			break;
+	}
+	if (m_run == NULL && !vm_domain_iterator_isdone(&vi))
+		goto restartdom;
+	vm_policy_iterator_finish(&vi);
+	return (m_run);
+}
+
+/*
+ * Allocate a run of contiguous physical pages from the free list for the
+ * specified segment.
+ */
+static vm_page_t
+vm_phys_alloc_seg_contig(struct vm_phys_seg *seg, u_long npages,
+    vm_paddr_t low, vm_paddr_t high, u_long alignment, vm_paddr_t boundary)
+{
+	struct vm_freelist *fl;
+	vm_paddr_t pa, pa_end, size;
 	vm_page_t m, m_ret;
 	u_long npages_end;
-	int dom, domain, flind, oind, order, pind;
+	int oind, order, pind;
 
+	KASSERT(npages > 0, ("npages is 0"));
+	KASSERT(powerof2(alignment), ("alignment is not a power of 2"));
+	KASSERT(powerof2(boundary), ("boundary is not a power of 2"));
 	mtx_assert(&vm_page_queue_free_mtx, MA_OWNED);
-	size = npages << PAGE_SHIFT;
-	KASSERT(size != 0,
-	    ("vm_phys_alloc_contig: size must not be 0"));
-	KASSERT((alignment & (alignment - 1)) == 0,
-	    ("vm_phys_alloc_contig: alignment must be a power of 2"));
-	KASSERT((boundary & (boundary - 1)) == 0,
-	    ("vm_phys_alloc_contig: boundary must be a power of 2"));
 	/* Compute the queue that is the best fit for npages. */
 	for (order = 0; (1 << order) < npages; order++);
-	dom = 0;
-restartdom:
-	domain = vm_rr_selectdomain();
-	for (flind = 0; flind < vm_nfreelists; flind++) {
-		for (oind = min(order, VM_NFREEORDER - 1); oind < VM_NFREEORDER; oind++) {
-			for (pind = 0; pind < VM_NFREEPOOL; pind++) {
-				fl = &vm_phys_free_queues[domain][flind][pind][0];
-				TAILQ_FOREACH(m_ret, &fl[oind].pl, plinks.q) {
+	/* Search for a run satisfying the specified conditions. */
+	size = npages << PAGE_SHIFT;
+	for (oind = min(order, VM_NFREEORDER - 1); oind < VM_NFREEORDER;
+	    oind++) {
+		for (pind = 0; pind < VM_NFREEPOOL; pind++) {
+			fl = (*seg->free_queues)[pind];
+			TAILQ_FOREACH(m_ret, &fl[oind].pl, plinks.q) {
+				/*
+				 * Is the size of this allocation request
+				 * larger than the largest block size?
+				 */
+				if (order >= VM_NFREEORDER) {
 					/*
-					 * A free list may contain physical pages
-					 * from one or more segments.
-					 */
-					seg = &vm_phys_segs[m_ret->segind];
-					if (seg->start > high ||
-					    low >= seg->end)
-						continue;
-
-					/*
-					 * Is the size of this allocation request
-					 * larger than the largest block size?
-					 */
-					if (order >= VM_NFREEORDER) {
-						/*
-						 * Determine if a sufficient number
-						 * of subsequent blocks to satisfy
-						 * the allocation request are free.
-						 */
-						pa = VM_PAGE_TO_PHYS(m_ret);
-						pa_last = pa + size;
-						for (;;) {
-							pa += 1 << (PAGE_SHIFT + VM_NFREEORDER - 1);
-							if (pa >= pa_last)
-								break;
-							if (pa < seg->start ||
-							    pa >= seg->end)
-								break;
-							m = &seg->first_page[atop(pa - seg->start)];
-							if (m->order != VM_NFREEORDER - 1)
-								break;
-						}
-						/* If not, continue to the next block. */
-						if (pa < pa_last)
-							continue;
-					}
-
-					/*
-					 * Determine if the blocks are within the given range,
-					 * satisfy the given alignment, and do not cross the
-					 * given boundary.
+					 * Determine if a sufficient number of
+					 * subsequent blocks to satisfy the
+					 * allocation request are free.
 					 */
 					pa = VM_PAGE_TO_PHYS(m_ret);
-					if (pa >= low &&
-					    pa + size <= high &&
-					    (pa & (alignment - 1)) == 0 &&
-					    ((pa ^ (pa + size - 1)) & ~(boundary - 1)) == 0)
-						goto done;
+					pa_end = pa + size;
+					for (;;) {
+						pa += 1 << (PAGE_SHIFT +
+						    VM_NFREEORDER - 1);
+						if (pa >= pa_end ||
+						    pa < seg->start ||
+						    pa >= seg->end)
+							break;
+						m = &seg->first_page[atop(pa -
+						    seg->start)];
+						if (m->order != VM_NFREEORDER -
+						    1)
+							break;
+					}
+					/* If not, go to the next block. */
+					if (pa < pa_end)
+						continue;
 				}
+
+				/*
+				 * Determine if the blocks are within the
+				 * given range, satisfy the given alignment,
+				 * and do not cross the given boundary.
+				 */
+				pa = VM_PAGE_TO_PHYS(m_ret);
+				pa_end = pa + size;
+				if (pa >= low && pa_end <= high &&
+				    (pa & (alignment - 1)) == 0 &&
+				    rounddown2(pa ^ (pa_end - 1), boundary) == 0)
+					goto done;
 			}
 		}
 	}
-	if (++dom < vm_ndomains)
-		goto restartdom;
 	return (NULL);
 done:
 	for (m = m_ret; m < &m_ret[npages]; m = &m[1 << oind]) {

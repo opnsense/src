@@ -11,8 +11,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_PRAGMA_H
-#define LLVM_CLANG_PRAGMA_H
+#ifndef LLVM_CLANG_LEX_PRAGMA_H
+#define LLVM_CLANG_LEX_PRAGMA_H
 
 #include "clang/Basic/LLVM.h"
 #include "llvm/ADT/StringMap.h"
@@ -69,17 +69,17 @@ public:
 
   /// getIfNamespace - If this is a namespace, return it.  This is equivalent to
   /// using a dynamic_cast, but doesn't require RTTI.
-  virtual PragmaNamespace *getIfNamespace() { return 0; }
+  virtual PragmaNamespace *getIfNamespace() { return nullptr; }
 };
 
 /// EmptyPragmaHandler - A pragma handler which takes no action, which can be
 /// used to ignore particular pragmas.
 class EmptyPragmaHandler : public PragmaHandler {
 public:
-  EmptyPragmaHandler();
+  explicit EmptyPragmaHandler(StringRef Name = StringRef());
 
-  virtual void HandlePragma(Preprocessor &PP, PragmaIntroducerKind Introducer,
-                            Token &FirstToken);
+  void HandlePragma(Preprocessor &PP, PragmaIntroducerKind Introducer,
+                    Token &FirstToken) override;
 };
 
 /// PragmaNamespace - This PragmaHandler subdivides the namespace of pragmas,
@@ -93,7 +93,7 @@ class PragmaNamespace : public PragmaHandler {
   llvm::StringMap<PragmaHandler*> Handlers;
 public:
   explicit PragmaNamespace(StringRef Name) : PragmaHandler(Name) {}
-  virtual ~PragmaNamespace();
+  ~PragmaNamespace() override;
 
   /// FindHandler - Check to see if there is already a handler for the
   /// specified name.  If not, return the handler for the null name if it
@@ -114,10 +114,10 @@ public:
     return Handlers.empty();
   }
 
-  virtual void HandlePragma(Preprocessor &PP, PragmaIntroducerKind Introducer,
-                            Token &FirstToken);
+  void HandlePragma(Preprocessor &PP, PragmaIntroducerKind Introducer,
+                    Token &FirstToken) override;
 
-  virtual PragmaNamespace *getIfNamespace() { return this; }
+  PragmaNamespace *getIfNamespace() override { return this; }
 };
 
 

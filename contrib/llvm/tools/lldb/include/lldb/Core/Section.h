@@ -64,9 +64,6 @@ public:
     lldb::SectionSP
     FindSectionContainingFileAddress (lldb::addr_t addr, uint32_t depth = UINT32_MAX) const;
 
-    bool
-    GetSectionData (const DataExtractor& module_data, DataExtractor& section_data) const;
-
     // Get the number of sections in this list only
     size_t
     GetSize () const
@@ -119,7 +116,9 @@ public:
              lldb::addr_t vm_size,
              lldb::offset_t file_offset,
              lldb::offset_t file_size,
-             uint32_t flags);
+             uint32_t log2align,
+             uint32_t flags,
+             uint32_t target_byte_size = 1);
 
     // Create a section that is a child of parent_section_sp
     Section (const lldb::SectionSP &parent_section_sp,    // NULL for top level sections, non-NULL for child sections
@@ -132,7 +131,9 @@ public:
              lldb::addr_t vm_size,
              lldb::offset_t file_offset,
              lldb::offset_t file_size,
-             uint32_t flags);
+             uint32_t log2align,
+             uint32_t flags,
+             uint32_t target_byte_size = 1);
 
     ~Section ();
 
@@ -284,6 +285,63 @@ public:
         return m_obj_file;
     }
 
+    //------------------------------------------------------------------
+    /// Read the section data from the object file that the section
+    /// resides in.
+    ///
+    /// @param[in] dst
+    ///     Where to place the data
+    ///
+    /// @param[in] dst_len
+    ///     How many bytes of section data to read
+    ///
+    /// @param[in] offset
+    ///     The offset in bytes within this section's data at which to
+    ///     start copying data from.
+    ///
+    /// @return
+    ///     The number of bytes read from the section, or zero if the
+    ///     section has no data or \a offset is not a valid offset
+    ///     in this section.
+    //------------------------------------------------------------------
+    lldb::offset_t
+    GetSectionData (void *dst, lldb::offset_t dst_len, lldb::offset_t offset = 0);
+    
+    //------------------------------------------------------------------
+    /// Get the shared reference to the section data from the object
+    /// file that the section resides in. No copies of the data will be
+    /// make unless the object file has been read from memory. If the
+    /// object file is on disk, it will shared the mmap data for the
+    /// entire object file.
+    ///
+    /// @param[in] data
+    ///     Where to place the data, address byte size, and byte order
+    ///
+    /// @return
+    ///     The number of bytes read from the section, or zero if the
+    ///     section has no data or \a offset is not a valid offset
+    ///     in this section.
+    //------------------------------------------------------------------
+    lldb::offset_t
+    GetSectionData (DataExtractor& data) const;
+
+    uint32_t GetLog2Align()
+    {
+        return m_log2align;
+    }
+
+    void
+    SetLog2Align(uint32_t align)
+    {
+        m_log2align = align;
+    }
+
+    // Get the number of host bytes required to hold a target byte
+    uint32_t
+    GetTargetByteSize() const
+    {
+        return m_target_byte_size; 
+    }     
 
 protected:
 
@@ -296,6 +354,7 @@ protected:
     lldb::addr_t    m_byte_size;        // Size in bytes that this section will occupy in memory at runtime
     lldb::offset_t  m_file_offset;      // Object file offset (if any)
     lldb::offset_t  m_file_size;        // Object file size (can be smaller than m_byte_size for zero filled sections...)
+    uint32_t        m_log2align;        // log_2(align) of the section (i.e. section has to be aligned to 2^m_log2align)
     SectionList     m_children;         // Child sections
     bool            m_fake:1,           // If true, then this section only can contain the address if one of its
                                         // children contains an address. This allows for gaps between the children
@@ -303,6 +362,8 @@ protected:
                                         // hits unless the children contain the address.
                     m_encrypted:1,      // Set to true if the contents are encrypted
                     m_thread_specific:1;// This section is thread specific
+    uint32_t        m_target_byte_size; // Some architectures have non-8-bit byte size. This is specified as
+                                        // as a multiple number of a host bytes   
 private:
     DISALLOW_COPY_AND_ASSIGN (Section);
 };

@@ -96,7 +96,7 @@ static uint32_t	urndis_ctrl_halt(struct urndis_softc *sc);
 #ifdef USB_DEBUG
 static int urndis_debug = 0;
 static	SYSCTL_NODE(_hw_usb, OID_AUTO, urndis, CTLFLAG_RW, 0, "USB RNDIS-Ethernet");
-SYSCTL_INT(_hw_usb_urndis, OID_AUTO, debug, CTLFLAG_RW, &urndis_debug, 0,
+SYSCTL_INT(_hw_usb_urndis, OID_AUTO, debug, CTLFLAG_RWTUN, &urndis_debug, 0,
     "Debug level");
 #endif
 
@@ -161,21 +161,6 @@ static driver_t urndis_driver = {
 
 static devclass_t urndis_devclass;
 
-DRIVER_MODULE(urndis, uhub, urndis_driver, urndis_devclass, NULL, NULL);
-MODULE_VERSION(urndis, 1);
-MODULE_DEPEND(urndis, uether, 1, 1, 1);
-MODULE_DEPEND(urndis, usb, 1, 1, 1);
-MODULE_DEPEND(urndis, ether, 1, 1, 1);
-
-static const struct usb_ether_methods urndis_ue_methods = {
-	.ue_attach_post = urndis_attach_post,
-	.ue_start = urndis_start,
-	.ue_init = urndis_init,
-	.ue_stop = urndis_stop,
-	.ue_setmulti = urndis_setmulti,
-	.ue_setpromisc = urndis_setpromisc,
-};
-
 static const STRUCT_USB_HOST_ID urndis_host_devs[] = {
 	/* Generic RNDIS class match */
 	{USB_IFACE_CLASS(UICLASS_CDC),
@@ -189,6 +174,22 @@ static const STRUCT_USB_HOST_ID urndis_host_devs[] = {
 	{USB_VENDOR(USB_VENDOR_PALM), USB_IFACE_CLASS(UICLASS_CDC),
 		USB_IFACE_SUBCLASS(UISUBCLASS_ABSTRACT_CONTROL_MODEL),
 		USB_IFACE_PROTOCOL(0xff)},
+};
+
+DRIVER_MODULE(urndis, uhub, urndis_driver, urndis_devclass, NULL, NULL);
+MODULE_VERSION(urndis, 1);
+MODULE_DEPEND(urndis, uether, 1, 1, 1);
+MODULE_DEPEND(urndis, usb, 1, 1, 1);
+MODULE_DEPEND(urndis, ether, 1, 1, 1);
+USB_PNP_HOST_INFO(urndis_host_devs);
+
+static const struct usb_ether_methods urndis_ue_methods = {
+	.ue_attach_post = urndis_attach_post,
+	.ue_start = urndis_start,
+	.ue_init = urndis_init,
+	.ue_stop = urndis_stop,
+	.ue_setmulti = urndis_setmulti,
+	.ue_setpromisc = urndis_setpromisc,
 };
 
 static int
@@ -234,7 +235,7 @@ urndis_attach(device_t dev)
 
 	cmd = usbd_find_descriptor(uaa->device, NULL, uaa->info.bIfaceIndex,
 	    UDESC_CS_INTERFACE, 0xFF, UDESCSUB_CDC_CM, 0xFF);
-	if (cmd != 0) {
+	if (cmd != NULL) {
 		DPRINTF("Call Mode Descriptor found, dataif=%d\n", cmd->bDataInterface);
 		iface_index[0] = cmd->bDataInterface;
 	}
@@ -708,7 +709,7 @@ urndis_ctrl_halt(struct urndis_softc *sc)
 }
 
 /*
- * NB: Querying a device has the requirment of using an input buffer the size
+ * NB: Querying a device has the requirement of using an input buffer the size
  *     of the expected reply or larger, except for variably sized replies.
  */
 static uint32_t
@@ -880,12 +881,12 @@ urndis_bulk_read_callback(struct usb_xfer *xfer, usb_error_t error)
 				    rm_dataoffset), actlen);
 				goto tr_setup;
 			} else if (msg.rm_datalen < (uint32_t)sizeof(struct ether_header)) {
-				ifp->if_ierrors++;
+				if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 				DPRINTF("invalid ethernet size "
 				    "%u < %u\n", msg.rm_datalen, (unsigned)sizeof(struct ether_header));
 				goto tr_setup;
 			} else if (msg.rm_datalen > (uint32_t)(MCLBYTES - ETHER_ALIGN)) {
-				ifp->if_ierrors++;
+				if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 				DPRINTF("invalid ethernet size "
 				    "%u > %u\n",
 				    msg.rm_datalen, (unsigned)MCLBYTES);
@@ -908,7 +909,7 @@ urndis_bulk_read_callback(struct usb_xfer *xfer, usb_error_t error)
 				/* enqueue */
 				uether_rxmbuf(&sc->sc_ue, m, msg.rm_datalen);
 			} else {
-				ifp->if_ierrors++;
+				if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 			}
 			offset += msg.rm_len;
 			actlen -= msg.rm_len;
@@ -954,7 +955,7 @@ urndis_bulk_write_callback(struct usb_xfer *xfer, usb_error_t error)
 	case USB_ST_TRANSFERRED:
 		DPRINTFN(11, "%u bytes in %u frames\n", actlen, aframes);
 
-		ifp->if_opackets++;
+		if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
 
 		/* FALLTHROUGH */
 	case USB_ST_SETUP:
@@ -974,7 +975,7 @@ next_pkt:
 
 			if ((m->m_pkthdr.len + sizeof(msg)) > RNDIS_TX_MAXLEN) {
 				DPRINTF("Too big packet\n");
-				ifp->if_oerrors++;
+				if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 
 				/* Free buffer */
 				m_freem(m);
@@ -1010,7 +1011,7 @@ next_pkt:
 		DPRINTFN(11, "transfer error, %s\n", usbd_errstr(error));
 
 		/* count output errors */
-		ifp->if_oerrors++;
+		if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 
 		if (error != USB_ERR_CANCELLED) {
 			/* try to clear stall first */

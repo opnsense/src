@@ -10,6 +10,9 @@
 // C Includes
 #include <stdlib.h>
 
+// C++ Includes
+#include <mutex>
+
 // Other libraries and framework includes
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Core/Module.h"
@@ -17,9 +20,12 @@
 #include "lldb/Core/Section.h"
 #include "lldb/Core/State.h"
 #include "lldb/Core/DataBufferHeap.h"
+#include "lldb/Core/Log.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Target/DynamicLoader.h"
-#include "ProcessPOSIXLog.h"
+#include "lldb/Target/UnixSignals.h"
+
+#include "llvm/Support/ELF.h"
 
 #include "Plugins/ObjectFile/ELF/ObjectFileELF.h"
 #include "Plugins/DynamicLoader/POSIX-DYLD/DynamicLoaderPOSIXDYLD.h"
@@ -51,22 +57,39 @@ ProcessElfCore::Terminate()
 
 
 lldb::ProcessSP
-ProcessElfCore::CreateInstance (Target &target, Listener &listener, const FileSpec *crash_file)
+ProcessElfCore::CreateInstance (lldb::TargetSP target_sp, Listener &listener, const FileSpec *crash_file)
 {
     lldb::ProcessSP process_sp;
-    if (crash_file) 
-        process_sp.reset(new ProcessElfCore (target, listener, *crash_file));
+    if (crash_file)
+    {
+        // Read enough data for a ELF32 header or ELF64 header
+        const size_t header_size = sizeof(llvm::ELF::Elf64_Ehdr);
+
+        lldb::DataBufferSP data_sp (crash_file->ReadFileContents(0, header_size));
+        if (data_sp && data_sp->GetByteSize() == header_size &&
+            elf::ELFHeader::MagicBytesMatch (data_sp->GetBytes()))
+        {
+            elf::ELFHeader elf_header;
+            DataExtractor data(data_sp, lldb::eByteOrderLittle, 4);
+            lldb::offset_t data_offset = 0;
+            if (elf_header.Parse(data, &data_offset))
+            {
+                if (elf_header.e_type == llvm::ELF::ET_CORE)
+                    process_sp.reset(new ProcessElfCore (target_sp, listener, *crash_file));
+            }
+        }
+    }
     return process_sp;
 }
 
 bool
-ProcessElfCore::CanDebug(Target &target, bool plugin_specified_by_name)
+ProcessElfCore::CanDebug(lldb::TargetSP target_sp, bool plugin_specified_by_name)
 {
     // For now we are just making sure the file exists for a given module
     if (!m_core_module_sp && m_core_file.Exists())
     {
-        ModuleSpec core_module_spec(m_core_file, target.GetArchitecture());
-        Error error (ModuleList::GetSharedModule (core_module_spec, m_core_module_sp, 
+        ModuleSpec core_module_spec(m_core_file, target_sp->GetArchitecture());
+        Error error (ModuleList::GetSharedModule (core_module_spec, m_core_module_sp,
                                                   NULL, NULL, NULL));
         if (m_core_module_sp)
         {
@@ -81,12 +104,13 @@ ProcessElfCore::CanDebug(Target &target, bool plugin_specified_by_name)
 //----------------------------------------------------------------------
 // ProcessElfCore constructor
 //----------------------------------------------------------------------
-ProcessElfCore::ProcessElfCore(Target& target, Listener &listener,
+ProcessElfCore::ProcessElfCore(lldb::TargetSP target_sp, Listener &listener,
                                const FileSpec &core_file) :
-    Process (target, listener),
+    Process (target_sp, listener),
     m_core_module_sp (),
     m_core_file (core_file),
     m_dyld_plugin_name (),
+    m_os(llvm::Triple::UnknownOS),
     m_thread_data_valid(false),
     m_thread_data(),
     m_core_aranges ()
@@ -154,21 +178,21 @@ ProcessElfCore::DoLoadCore ()
     Error error;
     if (!m_core_module_sp)
     {
-        error.SetErrorString ("invalid core module");   
+        error.SetErrorString ("invalid core module");
         return error;
     }
 
     ObjectFileELF *core = (ObjectFileELF *)(m_core_module_sp->GetObjectFile());
     if (core == NULL)
     {
-        error.SetErrorString ("invalid core object file");   
+        error.SetErrorString ("invalid core object file");
         return error;
     }
 
     const uint32_t num_segments = core->GetProgramHeaderCount();
     if (num_segments == 0)
     {
-        error.SetErrorString ("core file has no sections");   
+        error.SetErrorString ("core file has no segments");
         return error;
     }
 
@@ -209,8 +233,29 @@ ProcessElfCore::DoLoadCore ()
     // it to match the core file which is always single arch.
     ArchSpec arch (m_core_module_sp->GetArchitecture());
     if (arch.IsValid())
-        m_target.SetArchitecture(arch);            
+        GetTarget().SetArchitecture(arch);
 
+    SetUnixSignals(UnixSignals::Create(GetArchitecture()));
+
+    // Core files are useless without the main executable. See if we can locate the main
+    // executable using data we found in the core file notes.
+    lldb::ModuleSP exe_module_sp = GetTarget().GetExecutableModule();
+    if (!exe_module_sp)
+    {
+        // The first entry in the NT_FILE might be our executable
+        if (!m_nt_file_entries.empty())
+        {
+            ModuleSpec exe_module_spec;
+            exe_module_spec.GetArchitecture() = arch;
+            exe_module_spec.GetFileSpec().SetFile(m_nt_file_entries[0].path.GetCString(), false);
+            if (exe_module_spec.GetFileSpec())
+            {
+                exe_module_sp = GetTarget().GetSharedModule(exe_module_spec);
+                if (exe_module_sp)
+                    GetTarget().SetExecutableModule(exe_module_sp, false);
+            }
+        }
+    }
     return error;
 }
 
@@ -232,7 +277,7 @@ ProcessElfCore::UpdateThreadList (ThreadList &old_thread_list, ThreadList &new_t
     for (lldb::tid_t tid = 0; tid < num_threads; ++tid)
     {
         const ThreadData &td = m_thread_data[tid];
-        lldb::ThreadSP thread_sp(new ThreadElfCore (*this, tid, td));
+        lldb::ThreadSP thread_sp(new ThreadElfCore (*this, td));
         new_thread_list.AddThread (thread_sp);
     }
     return new_thread_list.GetSize(false) > 0;
@@ -324,29 +369,31 @@ void
 ProcessElfCore::Clear()
 {
     m_thread_list.Clear();
+    m_os = llvm::Triple::UnknownOS;
+
+    SetUnixSignals(std::make_shared<UnixSignals>());
 }
 
 void
 ProcessElfCore::Initialize()
 {
-    static bool g_initialized = false;
-    
-    if (g_initialized == false)
+    static std::once_flag g_once_flag;
+
+    std::call_once(g_once_flag, []()
     {
-        g_initialized = true;
-        PluginManager::RegisterPlugin (GetPluginNameStatic(), GetPluginDescriptionStatic(), CreateInstance);
-    }
+        PluginManager::RegisterPlugin (GetPluginNameStatic(),
+          GetPluginDescriptionStatic(), CreateInstance);
+    });
 }
 
 lldb::addr_t
 ProcessElfCore::GetImageInfoAddress()
 {
-    Target *target = &GetTarget();
-    ObjectFile *obj_file = target->GetExecutableModule()->GetObjectFile();
-    Address addr = obj_file->GetImageInfoAddress(target);
+    ObjectFile *obj_file = GetTarget().GetExecutableModule()->GetObjectFile();
+    Address addr = obj_file->GetImageInfoAddress(&GetTarget());
 
     if (addr.IsValid())
-        return addr.GetLoadAddress(target);
+        return addr.GetLoadAddress(&GetTarget());
     return LLDB_INVALID_ADDRESS;
 }
 
@@ -357,16 +404,22 @@ enum {
     NT_PRPSINFO,
     NT_TASKSTRUCT,
     NT_PLATFORM,
-    NT_AUXV
+    NT_AUXV,
+    NT_FILE = 0x46494c45
 };
 
+namespace FREEBSD {
+
 enum {
-    NT_FREEBSD_PRSTATUS      = 1,
-    NT_FREEBSD_FPREGSET,
-    NT_FREEBSD_PRPSINFO,
-    NT_FREEBSD_THRMISC       = 7,
-    NT_FREEBSD_PROCSTAT_AUXV = 16
+    NT_PRSTATUS      = 1,
+    NT_FPREGSET,
+    NT_PRPSINFO,
+    NT_THRMISC       = 7,
+    NT_PROCSTAT_AUXV = 16,
+    NT_PPC_VMX       = 0x100
 };
+
+}
 
 // Parse a FreeBSD NT_PRSTATUS note - see FreeBSD sys/procfs.h for details.
 static void
@@ -374,11 +427,13 @@ ParseFreeBSDPrStatus(ThreadData &thread_data, DataExtractor &data,
                      ArchSpec &arch)
 {
     lldb::offset_t offset = 0;
-    bool lp64 = (arch.GetMachine() == llvm::Triple::mips64 ||
+    bool lp64 = (arch.GetMachine() == llvm::Triple::aarch64 ||
+                 arch.GetMachine() == llvm::Triple::mips64 ||
+                 arch.GetMachine() == llvm::Triple::ppc64 ||
                  arch.GetMachine() == llvm::Triple::x86_64);
     int pr_version = data.GetU32(&offset);
 
-    Log *log (ProcessPOSIXLog::GetLogIfAllCategoriesSet (POSIX_LOG_PROCESS));
+    Log *log (GetLogIfAllCategoriesSet(LIBLLDB_LOG_PROCESS));
     if (log)
     {
         if (pr_version > 1)
@@ -392,10 +447,10 @@ ParseFreeBSDPrStatus(ThreadData &thread_data, DataExtractor &data,
         offset += 16;
 
     thread_data.signo = data.GetU32(&offset); // pr_cursig
-    offset += 4;        // pr_pid
+    thread_data.tid = data.GetU32(&offset); // pr_pid
     if (lp64)
         offset += 4;
-    
+
     size_t len = data.GetByteSize() - offset;
     thread_data.gpregset = DataExtractor(data, offset, len);
 }
@@ -421,7 +476,7 @@ ParseFreeBSDThrMisc(ThreadData &thread_data, DataExtractor &data)
 ///    a) Each thread context(2 or more NOTE entries) contained in its own segment (PT_NOTE)
 ///    b) All thread context is stored in a single segment(PT_NOTE).
 ///        This case is little tricker since while parsing we have to find where the
-///        new thread starts. The current implementation marks beginning of 
+///        new thread starts. The current implementation marks beginning of
 ///        new thread when it finds NT_PRSTATUS or NT_PRPSINFO NOTE entry.
 ///    For case (b) there may be either one NT_PRPSINFO per thread, or a single
 ///    one that applies to all threads (depending on the platform type).
@@ -466,32 +521,37 @@ ProcessElfCore::ParseThreadContextsFromNoteSegment(const elf::ELFProgramHeader *
 
         // Store the NOTE information in the current thread
         DataExtractor note_data (segment_data, note_start, note_size);
+        note_data.SetAddressByteSize(m_core_module_sp->GetArchitecture().GetAddressByteSize());
         if (note.n_name == "FreeBSD")
         {
+            m_os = llvm::Triple::FreeBSD;
             switch (note.n_type)
             {
-                case NT_FREEBSD_PRSTATUS:
+                case FREEBSD::NT_PRSTATUS:
                     have_prstatus = true;
                     ParseFreeBSDPrStatus(*thread_data, note_data, arch);
                     break;
-                case NT_FREEBSD_FPREGSET:
+                case FREEBSD::NT_FPREGSET:
                     thread_data->fpregset = note_data;
                     break;
-                case NT_FREEBSD_PRPSINFO:
+                case FREEBSD::NT_PRPSINFO:
                     have_prpsinfo = true;
                     break;
-                case NT_FREEBSD_THRMISC:
+                case FREEBSD::NT_THRMISC:
                     ParseFreeBSDThrMisc(*thread_data, note_data);
                     break;
-                case NT_FREEBSD_PROCSTAT_AUXV:
+                case FREEBSD::NT_PROCSTAT_AUXV:
                     // FIXME: FreeBSD sticks an int at the beginning of the note
                     m_auxv = DataExtractor(segment_data, note_start + 4, note_size - 4);
+                    break;
+                case FREEBSD::NT_PPC_VMX:
+                    thread_data->vregset = note_data;
                     break;
                 default:
                     break;
             }
         }
-        else
+        else if (note.n_name == "CORE")
         {
             switch (note.n_type)
             {
@@ -502,6 +562,8 @@ ProcessElfCore::ParseThreadContextsFromNoteSegment(const elf::ELFProgramHeader *
                     header_size = ELFLinuxPrStatus::GetSize(arch);
                     len = note_data.GetByteSize() - header_size;
                     thread_data->gpregset = DataExtractor(note_data, header_size, len);
+                    // FIXME: Obtain actual tid on Linux
+                    thread_data->tid = m_thread_data.size();
                     break;
                 case NT_FPREGSET:
                     thread_data->fpregset = note_data;
@@ -513,6 +575,28 @@ ProcessElfCore::ParseThreadContextsFromNoteSegment(const elf::ELFProgramHeader *
                     break;
                 case NT_AUXV:
                     m_auxv = DataExtractor(note_data);
+                    break;
+                case NT_FILE:
+                    {
+                        m_nt_file_entries.clear();
+                        lldb::offset_t offset = 0;
+                        const uint64_t count = note_data.GetAddress(&offset);
+                        note_data.GetAddress(&offset); // Skip page size
+                        for (uint64_t i = 0; i<count; ++i)
+                        {
+                            NT_FILE_Entry entry;
+                            entry.start = note_data.GetAddress(&offset);
+                            entry.end = note_data.GetAddress(&offset);
+                            entry.file_ofs = note_data.GetAddress(&offset);
+                            m_nt_file_entries.push_back(entry);
+                        }
+                        for (uint64_t i = 0; i<count; ++i)
+                        {
+                            const char *path = note_data.GetCStr(&offset);
+                            if (path && path[0])
+                                m_nt_file_entries[i].path.SetCString(path);
+                        }
+                    }
                     break;
                 default:
                     break;
@@ -553,4 +637,3 @@ ProcessElfCore::GetAuxvData()
     lldb::DataBufferSP buffer(new lldb_private::DataBufferHeap(start, len));
     return buffer;
 }
-

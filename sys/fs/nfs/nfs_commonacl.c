@@ -347,6 +347,8 @@ nfsrv_buildace(struct nfsrv_descript *nd, u_char *name, int namelen,
 			acemask |= NFSV4ACE_WRITEACL;
 		if (ace->ae_perm & ACL_WRITE_OWNER)
 			acemask |= NFSV4ACE_WRITEOWNER;
+		if (ace->ae_perm & ACL_SYNCHRONIZE)
+			acemask |= NFSV4ACE_SYNCHRONIZE;
 	} else {
 		if (ace->ae_perm & ACL_READ_DATA)
 			acemask |= NFSV4ACE_READDATA;
@@ -434,7 +436,7 @@ nfsrv_buildacl(struct nfsrv_descript *nd, NFSACL_T *aclp, enum vtype type,
 			break;
 		default:
 			continue;
-		};
+		}
 		retlen += nfsrv_buildace(nd, name, namelen, type, isgroup,
 		    isowner, &aclp->acl_entry[i]);
 		entrycnt++;
@@ -503,7 +505,7 @@ nfsrv_compareacl(NFSACL_T *aclp1, NFSACL_T *aclp2)
 		case ACL_OTHER:
 			if (acep1->ae_perm != acep2->ae_perm)
 				return (1);
-		};
+		}
 		acep1++;
 		acep2++;
 	}

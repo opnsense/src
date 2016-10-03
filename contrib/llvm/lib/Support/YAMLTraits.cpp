@@ -8,14 +8,17 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Support/YAMLTraits.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/Errc.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Format.h"
+#include "llvm/Support/LineIterator.h"
 #include "llvm/Support/YAMLParser.h"
 #include "llvm/Support/raw_ostream.h"
-#include <cstring>
 #include <cctype>
+#include <cstring>
 using namespace llvm;
 using namespace yaml;
 
@@ -47,7 +50,7 @@ Input::Input(StringRef InputContent,
              void *DiagHandlerCtxt)
   : IO(Ctxt),
     Strm(new Stream(InputContent, SrcMgr)),
-    CurrentNode(NULL) {
+    CurrentNode(nullptr) {
   if (DiagHandler)
     SrcMgr.setDiagHandler(DiagHandler, DiagHandlerCtxt);
   DocIterator = Strm->begin();
@@ -56,16 +59,16 @@ Input::Input(StringRef InputContent,
 Input::~Input() {
 }
 
-error_code Input::error() {
-  return EC;
-}
+std::error_code Input::error() { return EC; }
 
 // Pin the vtables to this file.
 void Input::HNode::anchor() {}
 void Input::EmptyHNode::anchor() {}
 void Input::ScalarHNode::anchor() {}
+void Input::MapHNode::anchor() {}
+void Input::SequenceHNode::anchor() {}
 
-bool Input::outputting() const {
+bool Input::outputting() {
   return false;
 }
 
@@ -83,15 +86,19 @@ bool Input::setCurrentDocument() {
       ++DocIterator;
       return setCurrentDocument();
     }
-    TopNode.reset(this->createHNodes(N));
+    TopNode = this->createHNodes(N);
     CurrentNode = TopNode.get();
     return true;
   }
   return false;
 }
 
-void Input::nextDocument() {
-  ++DocIterator;
+bool Input::nextDocument() {
+  return ++DocIterator != Strm->end();
+}
+
+const Node *Input::getCurrentNode() const {
+  return CurrentNode ? CurrentNode->_node : nullptr;
 }
 
 bool Input::mapTag(StringRef Tag, bool Default) {
@@ -134,7 +141,7 @@ bool Input::preflightKey(const char *Key, bool Required, bool, bool &UseDefault,
     return false;
   }
   MN->ValidKeys.push_back(Key);
-  HNode *Value = MN->Mapping[Key];
+  HNode *Value = MN->Mapping[Key].get();
   if (!Value) {
     if (Required)
       setError(CurrentNode, Twine("missing required key '") + Key + "'");
@@ -158,19 +165,30 @@ void Input::endMapping() {
   MapHNode *MN = dyn_cast_or_null<MapHNode>(CurrentNode);
   if (!MN)
     return;
-  for (MapHNode::NameToNode::iterator i = MN->Mapping.begin(),
-       End = MN->Mapping.end(); i != End; ++i) {
-    if (!MN->isValidKey(i->first())) {
-      setError(i->second, Twine("unknown key '") + i->first() + "'");
+  for (const auto &NN : MN->Mapping) {
+    if (!MN->isValidKey(NN.first())) {
+      setError(NN.second.get(), Twine("unknown key '") + NN.first() + "'");
       break;
     }
   }
 }
 
+void Input::beginFlowMapping() { beginMapping(); }
+
+void Input::endFlowMapping() { endMapping(); }
+
 unsigned Input::beginSequence() {
-  if (SequenceHNode *SQ = dyn_cast<SequenceHNode>(CurrentNode)) {
+  if (SequenceHNode *SQ = dyn_cast<SequenceHNode>(CurrentNode))
     return SQ->Entries.size();
+  if (isa<EmptyHNode>(CurrentNode))
+    return 0;
+  // Treat case where there's a scalar "null" value as an empty sequence.
+  if (ScalarHNode *SN = dyn_cast<ScalarHNode>(CurrentNode)) {
+    if (isNull(SN->value()))
+      return 0;
   }
+  // Any other type of HNode is an error.
+  setError(CurrentNode, "not a sequence");
   return 0;
 }
 
@@ -182,7 +200,7 @@ bool Input::preflightElement(unsigned Index, void *&SaveInfo) {
     return false;
   if (SequenceHNode *SQ = dyn_cast<SequenceHNode>(CurrentNode)) {
     SaveInfo = CurrentNode;
-    CurrentNode = SQ->Entries[Index];
+    CurrentNode = SQ->Entries[Index].get();
     return true;
   }
   return false;
@@ -192,19 +210,14 @@ void Input::postflightElement(void *SaveInfo) {
   CurrentNode = reinterpret_cast<HNode *>(SaveInfo);
 }
 
-unsigned Input::beginFlowSequence() {
-  if (SequenceHNode *SQ = dyn_cast<SequenceHNode>(CurrentNode)) {
-    return SQ->Entries.size();
-  }
-  return 0;
-}
+unsigned Input::beginFlowSequence() { return beginSequence(); }
 
 bool Input::preflightFlowElement(unsigned index, void *&SaveInfo) {
   if (EC)
     return false;
   if (SequenceHNode *SQ = dyn_cast<SequenceHNode>(CurrentNode)) {
     SaveInfo = CurrentNode;
-    CurrentNode = SQ->Entries[index];
+    CurrentNode = SQ->Entries[index].get();
     return true;
   }
   return false;
@@ -233,6 +246,13 @@ bool Input::matchEnumScalar(const char *Str, bool) {
   return false;
 }
 
+bool Input::matchEnumFallback() {
+  if (ScalarMatchFound)
+    return false;
+  ScalarMatchFound = true;
+  return true;
+}
+
 void Input::endEnumScalar() {
   if (!ScalarMatchFound) {
     setError(CurrentNode, "unknown enumerated scalar");
@@ -255,9 +275,8 @@ bool Input::bitSetMatch(const char *Str, bool) {
     return false;
   if (SequenceHNode *SQ = dyn_cast<SequenceHNode>(CurrentNode)) {
     unsigned Index = 0;
-    for (std::vector<HNode *>::iterator i = SQ->Entries.begin(),
-         End = SQ->Entries.end(); i != End; ++i) {
-      if (ScalarHNode *SN = dyn_cast<ScalarHNode>(*i)) {
+    for (auto &N : SQ->Entries) {
+      if (ScalarHNode *SN = dyn_cast<ScalarHNode>(N.get())) {
         if (SN->value().equals(Str)) {
           BitValuesUsed[Index] = true;
           return true;
@@ -280,20 +299,22 @@ void Input::endBitSetScalar() {
     assert(BitValuesUsed.size() == SQ->Entries.size());
     for (unsigned i = 0; i < SQ->Entries.size(); ++i) {
       if (!BitValuesUsed[i]) {
-        setError(SQ->Entries[i], "unknown bit value");
+        setError(SQ->Entries[i].get(), "unknown bit value");
         return;
       }
     }
   }
 }
 
-void Input::scalarString(StringRef &S) {
+void Input::scalarString(StringRef &S, bool) {
   if (ScalarHNode *SN = dyn_cast<ScalarHNode>(CurrentNode)) {
     S = SN->value();
   } else {
     setError(CurrentNode, "unexpected scalar");
   }
 }
+
+void Input::blockScalarString(StringRef &S) { scalarString(S, false); }
 
 void Input::setError(HNode *hnode, const Twine &message) {
   assert(hnode && "HNode must not be NULL");
@@ -305,60 +326,59 @@ void Input::setError(Node *node, const Twine &message) {
   EC = make_error_code(errc::invalid_argument);
 }
 
-Input::HNode *Input::createHNodes(Node *N) {
+std::unique_ptr<Input::HNode> Input::createHNodes(Node *N) {
   SmallString<128> StringStorage;
   if (ScalarNode *SN = dyn_cast<ScalarNode>(N)) {
     StringRef KeyStr = SN->getValue(StringStorage);
     if (!StringStorage.empty()) {
       // Copy string to permanent storage
-      unsigned Len = StringStorage.size();
-      char *Buf = StringAllocator.Allocate<char>(Len);
-      memcpy(Buf, &StringStorage[0], Len);
-      KeyStr = StringRef(Buf, Len);
+      KeyStr = StringStorage.str().copy(StringAllocator);
     }
-    return new ScalarHNode(N, KeyStr);
+    return llvm::make_unique<ScalarHNode>(N, KeyStr);
+  } else if (BlockScalarNode *BSN = dyn_cast<BlockScalarNode>(N)) {
+    StringRef ValueCopy = BSN->getValue().copy(StringAllocator);
+    return llvm::make_unique<ScalarHNode>(N, ValueCopy);
   } else if (SequenceNode *SQ = dyn_cast<SequenceNode>(N)) {
-    SequenceHNode *SQHNode = new SequenceHNode(N);
-    for (SequenceNode::iterator i = SQ->begin(), End = SQ->end(); i != End;
-         ++i) {
-      HNode *Entry = this->createHNodes(i);
+    auto SQHNode = llvm::make_unique<SequenceHNode>(N);
+    for (Node &SN : *SQ) {
+      auto Entry = this->createHNodes(&SN);
       if (EC)
         break;
-      SQHNode->Entries.push_back(Entry);
+      SQHNode->Entries.push_back(std::move(Entry));
     }
-    return SQHNode;
+    return std::move(SQHNode);
   } else if (MappingNode *Map = dyn_cast<MappingNode>(N)) {
-    MapHNode *mapHNode = new MapHNode(N);
-    for (MappingNode::iterator i = Map->begin(), End = Map->end(); i != End;
-         ++i) {
-      ScalarNode *KeyScalar = dyn_cast<ScalarNode>(i->getKey());
+    auto mapHNode = llvm::make_unique<MapHNode>(N);
+    for (KeyValueNode &KVN : *Map) {
+      Node *KeyNode = KVN.getKey();
+      ScalarNode *KeyScalar = dyn_cast<ScalarNode>(KeyNode);
+      if (!KeyScalar) {
+        setError(KeyNode, "Map key must be a scalar");
+        break;
+      }
       StringStorage.clear();
       StringRef KeyStr = KeyScalar->getValue(StringStorage);
       if (!StringStorage.empty()) {
         // Copy string to permanent storage
-        unsigned Len = StringStorage.size();
-        char *Buf = StringAllocator.Allocate<char>(Len);
-        memcpy(Buf, &StringStorage[0], Len);
-        KeyStr = StringRef(Buf, Len);
+        KeyStr = StringStorage.str().copy(StringAllocator);
       }
-      HNode *ValueHNode = this->createHNodes(i->getValue());
+      auto ValueHNode = this->createHNodes(KVN.getValue());
       if (EC)
         break;
-      mapHNode->Mapping[KeyStr] = ValueHNode;
+      mapHNode->Mapping[KeyStr] = std::move(ValueHNode);
     }
-    return mapHNode;
+    return std::move(mapHNode);
   } else if (isa<NullNode>(N)) {
-    return new EmptyHNode(N);
+    return llvm::make_unique<EmptyHNode>(N);
   } else {
     setError(N, "unknown node kind");
-    return NULL;
+    return nullptr;
   }
 }
 
 bool Input::MapHNode::isValidKey(StringRef Key) {
-  for (SmallVectorImpl<const char *>::iterator i = ValidKeys.begin(),
-       End = ValidKeys.end(); i != End; ++i) {
-    if (Key.equals(*i))
+  for (const char *K : ValidKeys) {
+    if (Key.equals(K))
       return true;
   }
   return false;
@@ -372,31 +392,17 @@ bool Input::canElideEmptySequence() {
   return false;
 }
 
-Input::MapHNode::~MapHNode() {
-  for (MapHNode::NameToNode::iterator i = Mapping.begin(), End = Mapping.end();
-                                                                i != End; ++i) {
-    delete i->second;
-  }
-}
-
-Input::SequenceHNode::~SequenceHNode() {
-  for (std::vector<HNode*>::iterator i = Entries.begin(), End = Entries.end();
-                                                                i != End; ++i) {
-    delete *i;
-  }
-}
-
-
-
 //===----------------------------------------------------------------------===//
 //  Output
 //===----------------------------------------------------------------------===//
 
-Output::Output(raw_ostream &yout, void *context)
+Output::Output(raw_ostream &yout, void *context, int WrapColumn)
     : IO(context),
       Out(yout),
+      WrapColumn(WrapColumn),
       Column(0),
       ColumnAtFlowStart(0),
+      ColumnAtMapFlowStart(0),
       NeedBitValueComma(false),
       NeedFlowSequenceComma(false),
       EnumerationMatchFound(false),
@@ -406,7 +412,7 @@ Output::Output(raw_ostream &yout, void *context)
 Output::~Output() {
 }
 
-bool Output::outputting() const {
+bool Output::outputting() {
   return true;
 }
 
@@ -431,8 +437,13 @@ bool Output::preflightKey(const char *Key, bool Required, bool SameAsDefault,
                           bool &UseDefault, void *&) {
   UseDefault = false;
   if (Required || !SameAsDefault) {
-    this->newLineCheck();
-    this->paddedKey(Key);
+    auto State = StateStack.back();
+    if (State == inFlowMapFirstKey || State == inFlowMapOtherKey) {
+      flowKey(Key);
+    } else {
+      this->newLineCheck();
+      this->paddedKey(Key);
+    }
     return true;
   }
   return false;
@@ -442,7 +453,22 @@ void Output::postflightKey(void *) {
   if (StateStack.back() == inMapFirstKey) {
     StateStack.pop_back();
     StateStack.push_back(inMapOtherKey);
+  } else if (StateStack.back() == inFlowMapFirstKey) {
+    StateStack.pop_back();
+    StateStack.push_back(inFlowMapOtherKey);
   }
+}
+
+void Output::beginFlowMapping() {
+  StateStack.push_back(inFlowMapFirstKey);
+  this->newLineCheck();
+  ColumnAtMapFlowStart = Column;
+  output("{ ");
+}
+
+void Output::endFlowMapping() {
+  StateStack.pop_back();
+  this->outputUpToEndOfLine(" }");
 }
 
 void Output::beginDocuments() {
@@ -496,7 +522,7 @@ void Output::endFlowSequence() {
 bool Output::preflightFlowElement(unsigned, void *&) {
   if (NeedFlowSequenceComma)
     output(", ");
-  if (Column > 70) {
+  if (WrapColumn && Column > WrapColumn) {
     output("\n");
     for (int i = 0; i < ColumnAtFlowStart; ++i)
       output(" ");
@@ -521,6 +547,13 @@ bool Output::matchEnumScalar(const char *Str, bool Match) {
     EnumerationMatchFound = true;
   }
   return false;
+}
+
+bool Output::matchEnumFallback() {
+  if (EnumerationMatchFound)
+    return false;
+  EnumerationMatchFound = true;
+  return true;
 }
 
 void Output::endEnumScalar() {
@@ -550,10 +583,7 @@ void Output::endBitSetScalar() {
   this->outputUpToEndOfLine(" ]");
 }
 
-void Output::scalarString(StringRef &S) {
-  const char ScalarSafeChars[] = "abcdefghijklmnopqrstuvwxyz"
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-/^., \t";
-
+void Output::scalarString(StringRef &S, bool MustQuote) {
   this->newLineCheck();
   if (S.empty()) {
     // Print '' for the empty string because leaving the field empty is not
@@ -561,10 +591,8 @@ void Output::scalarString(StringRef &S) {
     this->outputUpToEndOfLine("''");
     return;
   }
-  if (S.find_first_not_of(ScalarSafeChars) == StringRef::npos &&
-      !isspace(S.front()) && !isspace(S.back())) {
-    // If the string consists only of safe characters, print it out without
-    // quotes.
+  if (!MustQuote) {
+    // Only quote if we must.
     this->outputUpToEndOfLine(S);
     return;
   }
@@ -584,6 +612,24 @@ void Output::scalarString(StringRef &S) {
   }
   output(StringRef(&Base[i], j - i));
   this->outputUpToEndOfLine("'"); // Ending single quote.
+}
+
+void Output::blockScalarString(StringRef &S) {
+  if (!StateStack.empty())
+    newLineCheck();
+  output(" |");
+  outputNewLine();
+
+  unsigned Indent = StateStack.empty() ? 1 : StateStack.size();
+
+  auto Buffer = MemoryBuffer::getMemBuffer(S, "", false);
+  for (line_iterator Lines(*Buffer, false); !Lines.is_at_end(); ++Lines) {
+    for (unsigned I = 0; I < Indent; ++I) {
+      output("  ");
+    }
+    output(*Lines);
+    outputNewLine();
+  }
 }
 
 void Output::setError(const Twine &message) {
@@ -609,7 +655,9 @@ void Output::output(StringRef s) {
 
 void Output::outputUpToEndOfLine(StringRef s) {
   this->output(s);
-  if (StateStack.empty() || StateStack.back() != inFlowSeq)
+  if (StateStack.empty() || (StateStack.back() != inFlowSeq &&
+                             StateStack.back() != inFlowMapFirstKey &&
+                             StateStack.back() != inFlowMapOtherKey))
     NeedsNewLine = true;
 }
 
@@ -635,7 +683,9 @@ void Output::newLineCheck() {
 
   if (StateStack.back() == inSeq) {
     OutputDash = true;
-  } else if ((StateStack.size() > 1) && (StateStack.back() == inMapFirstKey) &&
+  } else if ((StateStack.size() > 1) && ((StateStack.back() == inMapFirstKey) ||
+             (StateStack.back() == inFlowSeq) ||
+             (StateStack.back() == inFlowMapFirstKey)) &&
              (StateStack[StateStack.size() - 2] == inSeq)) {
     --Indent;
     OutputDash = true;
@@ -658,6 +708,20 @@ void Output::paddedKey(StringRef key) {
     output(&spaces[key.size()]);
   else
     output(" ");
+}
+
+void Output::flowKey(StringRef Key) {
+  if (StateStack.back() == inFlowMapOtherKey)
+    output(", ");
+  if (WrapColumn && Column > WrapColumn) {
+    output("\n");
+    for (int I = 0; I < ColumnAtMapFlowStart; ++I)
+      output(" ");
+    Column = ColumnAtMapFlowStart;
+    output("  ");
+  }
+  output(Key);
+  output(": ");
 }
 
 //===----------------------------------------------------------------------===//
@@ -687,6 +751,17 @@ void ScalarTraits<StringRef>::output(const StringRef &Val, void *,
 StringRef ScalarTraits<StringRef>::input(StringRef Scalar, void *,
                                          StringRef &Val) {
   Val = Scalar;
+  return StringRef();
+}
+
+void ScalarTraits<std::string>::output(const std::string &Val, void *,
+                                     raw_ostream &Out) {
+  Out << Val;
+}
+
+StringRef ScalarTraits<std::string>::input(StringRef Scalar, void *,
+                                         std::string &Val) {
+  Val = Scalar.str();
   return StringRef();
 }
 

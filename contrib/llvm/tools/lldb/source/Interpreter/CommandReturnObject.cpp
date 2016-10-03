@@ -46,7 +46,9 @@ CommandReturnObject::CommandReturnObject () :
     m_out_stream (),
     m_err_stream (),
     m_status (eReturnStatusStarted),
-    m_did_change_process_state (false)
+    m_did_change_process_state (false),
+    m_interactive (true),
+    m_abnormal_stop_was_expected(false)
 {
 }
 
@@ -141,7 +143,7 @@ void
 CommandReturnObject::SetError (const Error &error, const char *fallback_error_cstr)
 {
     const char *error_cstr = error.AsCString();
-    if (error_cstr == NULL)
+    if (error_cstr == nullptr)
         error_cstr = fallback_error_cstr;
     SetError(error_cstr);
 }
@@ -203,6 +205,7 @@ CommandReturnObject::Clear()
         static_cast<StreamString *>(stream_sp.get())->Clear();
     m_status = eReturnStatusStarted;
     m_did_change_process_state = false;
+    m_interactive = true;
 }
 
 bool
@@ -216,4 +219,18 @@ CommandReturnObject::SetDidChangeProcessState (bool b)
 {
     m_did_change_process_state = b;
 }
+
+
+bool
+CommandReturnObject::GetInteractive () const
+{
+    return m_interactive;
+}
+
+void
+CommandReturnObject::SetInteractive (bool b)
+{
+    m_interactive = b;
+}
+
 

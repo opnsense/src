@@ -162,7 +162,7 @@ keycode2scancode(int keycode, int shift, int up)
 	int scancode;
 
 	scancode = keycode;
-	if ((keycode >= 89) && (keycode < 89 + sizeof(scan) / sizeof(scan[0])))
+	if ((keycode >= 89) && (keycode < 89 + nitems(scan)))
 	scancode = scan[keycode - 89] | SCAN_PREFIX_E0;
 	/* pause/break */
 	if ((keycode == 104) && !(shift & CTLS))
@@ -424,7 +424,7 @@ adb_kbd_receive_packet(device_t dev, u_char status,
 
 	mtx_lock(&sc->sc_mutex);
 		/* 0x7f is always the power button */
-		if (data[0] == 0x7f && devctl_process_running()) {
+		if (data[0] == 0x7f) {
 			devctl_notify("PMU", "Button", "pressed", NULL);
 			mtx_unlock(&sc->sc_mutex);
 			return (0);

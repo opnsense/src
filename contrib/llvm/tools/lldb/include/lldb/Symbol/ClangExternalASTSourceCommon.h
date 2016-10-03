@@ -11,7 +11,7 @@
 #define liblldb_ClangExternalASTSourceCommon_h
 
 // Clang headers like to use NDEBUG inside of them to enable/disable debug 
-// releated features using "#ifndef NDEBUG" preprocessor blocks to do one thing
+// related features using "#ifndef NDEBUG" preprocessor blocks to do one thing
 // or another. This is bad because it means that if clang was built in release
 // mode, it assumes that you are building in release mode which is not always
 // the case. You can end up with functions that are defined as empty in header
@@ -20,14 +20,13 @@
 // file. So we have to define NDEBUG when including clang headers to avoid any
 // mismatches. This is covered by rdar://problem/8691220
 
+// C Includes
 #if !defined(NDEBUG) && !defined(LLVM_NDEBUG_OFF)
 #define LLDB_DEFINED_NDEBUG_FOR_CLANG
 #define NDEBUG
 // Need to include assert.h so it is as clang would expect it to be (disabled)
 #include <assert.h>
 #endif
-
-#include "clang/AST/ExternalASTSource.h"
 
 #ifdef LLDB_DEFINED_NDEBUG_FOR_CLANG
 #undef NDEBUG
@@ -36,6 +35,11 @@
 #include <assert.h>
 #endif
 
+// C++ Includes
+// Other libraries and framework includes
+#include "clang/AST/ExternalASTSource.h"
+
+// Project includes
 #include "lldb/lldb-defines.h"
 #include "lldb/lldb-enumerations.h"
 #include "lldb/Core/dwarf.h"
@@ -124,8 +128,8 @@ public:
                 return lldb::eLanguageTypeC_plus_plus;
         }
         return lldb::eLanguageTypeUnknown;
-            
     }
+
     const char *
     GetObjectPtrName() const
     {
@@ -137,7 +141,7 @@ public:
                 return "this";
         }
         else
-            return NULL;
+            return nullptr;
     }
     
     bool
@@ -155,34 +159,33 @@ private:
         lldb::user_id_t m_user_id;
         uint64_t  m_isa_ptr;
     };
+
     bool m_union_is_user_id : 1,
          m_union_is_isa_ptr : 1,
          m_has_object_ptr : 1,
          m_is_self : 1,
          m_is_dynamic_cxx : 1;
-    
 };
 
 class ClangExternalASTSourceCommon : public clang::ExternalASTSource 
 {
 public:
     ClangExternalASTSourceCommon();
-    ~ClangExternalASTSourceCommon();
+    ~ClangExternalASTSourceCommon() override;
 
-    virtual ClangASTMetadata *GetMetadata(const void *object);
-    virtual void SetMetadata(const void *object, ClangASTMetadata &metadata);
-    virtual bool HasMetadata(const void *object);
-private:
+    ClangASTMetadata *GetMetadata(const void *object);
+    void SetMetadata(const void *object, ClangASTMetadata &metadata);
+    bool HasMetadata(const void *object);
+    
+    static ClangExternalASTSourceCommon *
+    Lookup(clang::ExternalASTSource *source);
+
+private:    
     typedef llvm::DenseMap<const void *, ClangASTMetadata> MetadataMap;
     
     MetadataMap m_metadata;
-    uint64_t    m_magic;        ///< Because we don't have RTTI, we must take it
-                                ///< on faith that any valid ExternalASTSource that
-                                ///< we try to use the *Metadata APIs on inherits
-                                ///< from ClangExternalASTSourceCommon.  This magic
-                                ///< number exists to enforce that.
 };
 
-}
+} // namespace lldb_private
 
-#endif
+#endif // liblldb_ClangExternalASTSourceCommon_h

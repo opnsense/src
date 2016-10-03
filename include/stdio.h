@@ -47,7 +47,7 @@ typedef	__size_t	size_t;
 #define	_SIZE_T_DECLARED
 #endif
 
-#if __BSD_VISIBLE || __POSIX_VISIBLE >= 200809
+#if __POSIX_VISIBLE >= 200809
 #ifndef _OFF_T_DECLARED
 #define	_OFF_T_DECLARED
 typedef	__off_t		off_t;
@@ -58,7 +58,12 @@ typedef	__ssize_t	ssize_t;
 #endif
 #endif
 
-#if __BSD_VISIBLE || __POSIX_VISIBLE >= 200112 || __XSI_VISIBLE
+#ifndef _OFF64_T_DECLARED
+#define	_OFF64_T_DECLARED
+typedef	__off64_t	off64_t;
+#endif
+
+#if __POSIX_VISIBLE >= 200112 || __XSI_VISIBLE
 #ifndef _VA_LIST_DECLARED
 typedef	__va_list	va_list;
 #define	_VA_LIST_DECLARED
@@ -293,7 +298,7 @@ int	 vsscanf(const char * __restrict, const char * __restrict, __va_list)
 /*
  * Functions defined in all versions of POSIX 1003.1.
  */
-#if __BSD_VISIBLE || __POSIX_VISIBLE <= 199506
+#if __BSD_VISIBLE || (__POSIX_VISIBLE && __POSIX_VISIBLE <= 199506)
 #define	L_cuserid	17	/* size for cuserid(3); MAXLOGNAME, legacy */
 #endif
 
@@ -345,7 +350,7 @@ int	 putw(int, FILE *);
 char	*tempnam(const char *, const char *);
 #endif
 
-#if __BSD_VISIBLE || __POSIX_VISIBLE >= 200809
+#if __POSIX_VISIBLE >= 200809
 FILE	*fmemopen(void * __restrict, size_t, const char * __restrict);
 ssize_t	 getdelim(char ** __restrict, size_t * __restrict, int,
 	    FILE * __restrict);
@@ -390,7 +395,7 @@ ssize_t	 getline(char ** __restrict, size_t * __restrict, FILE * __restrict);
 int	 (dprintf)(int, const char * __restrict, ...);
 #endif
 
-#endif /* __BSD_VISIBLE || __POSIX_VISIBLE >= 200809 */
+#endif /* __POSIX_VISIBLE >= 200809 */
 
 /*
  * Routines that are purely local.
@@ -426,6 +431,18 @@ FILE	*funopen(const void *,
 	    int (*)(void *));
 #define	fropen(cookie, fn) funopen(cookie, fn, 0, 0, 0)
 #define	fwopen(cookie, fn) funopen(cookie, 0, fn, 0, 0)
+
+typedef __ssize_t cookie_read_function_t(void *, char *, size_t);
+typedef __ssize_t cookie_write_function_t(void *, const char *, size_t);
+typedef int cookie_seek_function_t(void *, off64_t *, int);
+typedef int cookie_close_function_t(void *);
+typedef struct {
+	cookie_read_function_t	*read;
+	cookie_write_function_t	*write;
+	cookie_seek_function_t	*seek;
+	cookie_close_function_t	*close;
+} cookie_io_functions_t;
+FILE	*fopencookie(void *, const char *, cookie_io_functions_t);
 
 /*
  * Portability hacks.  See <sys/types.h>.

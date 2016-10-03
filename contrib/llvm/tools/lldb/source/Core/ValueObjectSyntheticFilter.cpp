@@ -1,4 +1,4 @@
-//===-- ValueObjectSyntheticFilter.cpp -----------------------------*- C++ -*-===//
+//===-- ValueObjectSyntheticFilter.cpp --------------------------*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,14 +7,11 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "lldb/lldb-python.h"
-
-#include "lldb/Core/ValueObjectSyntheticFilter.h"
-
 // C Includes
 // C++ Includes
 // Other libraries and framework includes
 // Project includes
+#include "lldb/Core/ValueObjectSyntheticFilter.h"
 #include "lldb/Core/ValueObject.h"
 #include "lldb/DataFormatters/TypeSynthetic.h"
 
@@ -28,35 +25,34 @@ public:
     {}
 
     size_t
-    CalculateNumChildren()
+    CalculateNumChildren() override
     {
         return m_backend.GetNumChildren();
     }
     
     lldb::ValueObjectSP
-    GetChildAtIndex (size_t idx)
+    GetChildAtIndex(size_t idx) override
     {
         return m_backend.GetChildAtIndex(idx, true);
     }
-    
+
     size_t
-    GetIndexOfChildWithName (const ConstString &name)
+    GetIndexOfChildWithName(const ConstString &name) override
     {
         return m_backend.GetIndexOfChildWithName(name);
     }
     
     bool
-    MightHaveChildren ()
+    MightHaveChildren() override
     {
         return true;
     }
     
     bool
-    Update()
+    Update() override
     {
         return false;
     }
-
 };
 
 ValueObjectSynthetic::ValueObjectSynthetic (ValueObject &parent, lldb::SyntheticChildrenSP filter) :
@@ -66,27 +62,26 @@ ValueObjectSynthetic::ValueObjectSynthetic (ValueObject &parent, lldb::Synthetic
     m_name_toindex(),
     m_synthetic_children_count(UINT32_MAX),
     m_parent_type_name(parent.GetTypeName()),
-    m_might_have_children(eLazyBoolCalculate)
+    m_might_have_children(eLazyBoolCalculate),
+    m_provides_value(eLazyBoolCalculate)
 {
-#ifdef LLDB_CONFIGURATION_DEBUG
+#ifdef FOOBAR
     std::string new_name(parent.GetName().AsCString());
     new_name += "$$__synth__";
     SetName (ConstString(new_name.c_str()));
 #else
     SetName(parent.GetName());
 #endif
-    CopyParentData();
+    CopyValueData(m_parent);
     CreateSynthFilter();
 }
 
-ValueObjectSynthetic::~ValueObjectSynthetic()
-{
-}
+ValueObjectSynthetic::~ValueObjectSynthetic() = default;
 
-ClangASTType
-ValueObjectSynthetic::GetClangTypeImpl ()
+CompilerType
+ValueObjectSynthetic::GetCompilerTypeImpl ()
 {
-    return m_parent->GetClangType();
+    return m_parent->GetCompilerType();
 }
 
 ConstString
@@ -101,13 +96,23 @@ ValueObjectSynthetic::GetQualifiedTypeName()
     return m_parent->GetQualifiedTypeName();
 }
 
+ConstString
+ValueObjectSynthetic::GetDisplayTypeName()
+{
+    return m_parent->GetDisplayTypeName();
+}
+
 size_t
-ValueObjectSynthetic::CalculateNumChildren()
+ValueObjectSynthetic::CalculateNumChildren(uint32_t max)
 {
     UpdateValueIfNeeded();
     if (m_synthetic_children_count < UINT32_MAX)
-        return m_synthetic_children_count;
-    return (m_synthetic_children_count = m_synth_filter_ap->CalculateNumChildren());
+        return m_synthetic_children_count <= max ? m_synthetic_children_count : max;
+
+    if (max < UINT32_MAX)
+        return m_synth_filter_ap->CalculateNumChildren(max);
+    else
+        return (m_synthetic_children_count = m_synth_filter_ap->CalculateNumChildren(max));
 }
 
 lldb::ValueObjectSP
@@ -175,8 +180,8 @@ ValueObjectSynthetic::UpdateValue ()
     if (m_synth_filter_ap->Update() == false)
     {
         // filter said that cached values are stale
-        m_children_byindex.clear();
-        m_name_toindex.clear();
+        m_children_byindex.Clear();
+        m_name_toindex.Clear();
         // usually, an object's value can change but this does not alter its children count
         // for a synthetic VO that might indeed happen, so we need to tell the upper echelons
         // that they need to come back to us asking for children
@@ -185,7 +190,20 @@ ValueObjectSynthetic::UpdateValue ()
         m_might_have_children = eLazyBoolCalculate;
     }
     
-    CopyParentData();
+    m_provides_value = eLazyBoolCalculate;
+    
+    lldb::ValueObjectSP synth_val(m_synth_filter_ap->GetSyntheticValue());
+    
+    if (synth_val && synth_val->CanProvideValue())
+    {
+        m_provides_value = eLazyBoolYes;
+        CopyValueData(synth_val.get());
+    }
+    else
+    {
+        m_provides_value = eLazyBoolNo;
+        CopyValueData(m_parent);
+    }
     
     SetValueIsValid(true);
     return true;
@@ -196,23 +214,23 @@ ValueObjectSynthetic::GetChildAtIndex (size_t idx, bool can_create)
 {
     UpdateValueIfNeeded();
     
-    ByIndexIterator iter = m_children_byindex.find(idx);
-    
-    if (iter == m_children_byindex.end())
+    ValueObject *valobj;
+    if (m_children_byindex.GetValueForKey(idx, valobj) == false)
     {
-        if (can_create && m_synth_filter_ap.get() != NULL)
+        if (can_create && m_synth_filter_ap.get() != nullptr)
         {
             lldb::ValueObjectSP synth_guy = m_synth_filter_ap->GetChildAtIndex (idx);
             if (!synth_guy)
                 return synth_guy;
-            m_children_byindex[idx]= synth_guy.get();
+            m_children_byindex.SetValueForKey(idx, synth_guy.get());
+            synth_guy->SetPreferredDisplayLanguageIfNeeded(GetPreferredDisplayLanguage());
             return synth_guy;
         }
         else
             return lldb::ValueObjectSP();
     }
     else
-        return iter->second->GetSP();
+        return valobj->GetSP();
 }
 
 lldb::ValueObjectSP
@@ -233,20 +251,21 @@ ValueObjectSynthetic::GetIndexOfChildWithName (const ConstString &name)
 {
     UpdateValueIfNeeded();
     
-    NameToIndexIterator iter = m_name_toindex.find(name.GetCString());
+    uint32_t found_index = UINT32_MAX;
+    bool did_find = m_name_toindex.GetValueForKey(name.GetCString(), found_index);
     
-    if (iter == m_name_toindex.end() && m_synth_filter_ap.get() != NULL)
+    if (!did_find && m_synth_filter_ap.get() != nullptr)
     {
         uint32_t index = m_synth_filter_ap->GetIndexOfChildWithName (name);
         if (index == UINT32_MAX)
             return index;
-        m_name_toindex[name.GetCString()] = index;
+        m_name_toindex.SetValueForKey(name.GetCString(), index);
         return index;
     }
-    else if (iter == m_name_toindex.end() && m_synth_filter_ap.get() == NULL)
+    else if (!did_find && m_synth_filter_ap.get() == nullptr)
         return UINT32_MAX;
     else /*if (iter != m_name_toindex.end())*/
-        return iter->second;
+        return found_index;
 }
 
 bool
@@ -262,9 +281,84 @@ ValueObjectSynthetic::GetNonSyntheticValue ()
 }
 
 void
-ValueObjectSynthetic::CopyParentData ()
+ValueObjectSynthetic::CopyValueData (ValueObject *source)
 {
-    m_value = m_parent->GetValue();
+    m_value = (source->UpdateValueIfNeeded(), source->GetValue());
     ExecutionContext exe_ctx (GetExecutionContextRef());
     m_error = m_value.GetValueAsData (&exe_ctx, m_data, 0, GetModule().get());
+}
+
+bool
+ValueObjectSynthetic::CanProvideValue ()
+{
+    if (!UpdateValueIfNeeded())
+        return false;
+    if (m_provides_value == eLazyBoolYes)
+        return true;
+    return m_parent->CanProvideValue();
+}
+
+bool
+ValueObjectSynthetic::SetValueFromCString (const char *value_str, Error& error)
+{
+    return m_parent->SetValueFromCString(value_str, error);
+}
+
+void
+ValueObjectSynthetic::SetFormat (lldb::Format format)
+{
+    if (m_parent)
+    {
+        m_parent->ClearUserVisibleData(eClearUserVisibleDataItemsAll);
+        m_parent->SetFormat(format);
+    }
+    this->ValueObject::SetFormat(format);
+    this->ClearUserVisibleData(eClearUserVisibleDataItemsAll);
+}
+
+void
+ValueObjectSynthetic::SetPreferredDisplayLanguage (lldb::LanguageType lang)
+{
+    this->ValueObject::SetPreferredDisplayLanguage(lang);
+    if (m_parent)
+        m_parent->SetPreferredDisplayLanguage(lang);
+}
+
+lldb::LanguageType
+ValueObjectSynthetic::GetPreferredDisplayLanguage ()
+{
+    if (m_preferred_display_language == lldb::eLanguageTypeUnknown)
+    {
+        if (m_parent)
+            return m_parent->GetPreferredDisplayLanguage();
+        return lldb::eLanguageTypeUnknown;
+    }
+    else
+        return m_preferred_display_language;
+}
+
+bool
+ValueObjectSynthetic::GetDeclaration (Declaration &decl)
+{
+    if (m_parent)
+        return m_parent->GetDeclaration(decl);
+
+    return ValueObject::GetDeclaration(decl);
+}
+
+uint64_t
+ValueObjectSynthetic::GetLanguageFlags ()
+{
+    if (m_parent)
+        return m_parent->GetLanguageFlags();
+    return this->ValueObject::GetLanguageFlags();
+}
+
+void
+ValueObjectSynthetic::SetLanguageFlags (uint64_t flags)
+{
+    if (m_parent)
+        m_parent->SetLanguageFlags(flags);
+    else
+        this->ValueObject::SetLanguageFlags(flags);
 }

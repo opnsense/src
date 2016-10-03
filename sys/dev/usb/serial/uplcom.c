@@ -112,7 +112,7 @@ __FBSDID("$FreeBSD$");
 static int uplcom_debug = 0;
 
 static SYSCTL_NODE(_hw_usb, OID_AUTO, uplcom, CTLFLAG_RW, 0, "USB uplcom");
-SYSCTL_INT(_hw_usb_uplcom, OID_AUTO, debug, CTLFLAG_RW,
+SYSCTL_INT(_hw_usb_uplcom, OID_AUTO, debug, CTLFLAG_RWTUN,
     &uplcom_debug, 0, "Debug level");
 #endif
 
@@ -326,6 +326,7 @@ DRIVER_MODULE(uplcom, uhub, uplcom_driver, uplcom_devclass, NULL, 0);
 MODULE_DEPEND(uplcom, ucom, 1, 1, 1);
 MODULE_DEPEND(uplcom, usb, 1, 1, 1);
 MODULE_VERSION(uplcom, UPLCOM_MODVER);
+USB_PNP_HOST_INFO(uplcom_devs);
 
 static int
 uplcom_probe(device_t dev)
@@ -641,7 +642,7 @@ static const uint32_t uplcom_rates[] = {
 	230400, 460800, 614400, 921600, 1228800
 };
 
-#define	N_UPLCOM_RATES	(sizeof(uplcom_rates)/sizeof(uplcom_rates[0]))
+#define	N_UPLCOM_RATES	nitems(uplcom_rates)
 
 static int
 uplcom_pre_param(struct ucom_softc *ucom, struct termios *t)

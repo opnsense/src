@@ -39,7 +39,6 @@
 #ifndef _MACHINE_ASM_H_
 #define _MACHINE_ASM_H_
 #include <sys/cdefs.h>
-#include <machine/acle-compat.h>
 #include <machine/sysreg.h>
 
 #define	_C_LABEL(x)	x
@@ -49,14 +48,16 @@
 # define _ALIGN_TEXT .align 2
 #endif
 
-#if defined(__ARM_EABI__) && !defined(_STANDALONE)
+#ifndef _STANDALONE
 #define	STOP_UNWINDING	.cantunwind
 #define	_FNSTART	.fnstart
 #define	_FNEND		.fnend
+#define	_SAVE(...)	.save __VA_ARGS__
 #else
 #define	STOP_UNWINDING
 #define	_FNSTART
 #define	_FNEND
+#define	_SAVE(...)
 #endif
 
 /*
@@ -77,7 +78,7 @@
 
 /*
  * EENTRY()/EEND() mark "extra" entry/exit points from a function.
- * LEENTRY()/LEEND() are the the same for local symbols.
+ * LEENTRY()/LEEND() are the same for local symbols.
  * The unwind info cannot handle the concept of a nested function, or a function
  * with multiple .fnstart directives, but some of our assembler code is written
  * with multiple labels to allow entry at several points.  The EENTRY() macro
@@ -87,7 +88,13 @@
  */
 #define	GLOBAL(x)	.global x
 
-#define	_LEENTRY(x) 	.type x,_ASM_TYPE_FUNCTION; x:
+#ifdef __thumb__
+#define	_FUNC_MODE	.code 16; .thumb_func
+#else
+#define	_FUNC_MODE	.code 32
+#endif
+
+#define	_LEENTRY(x) 	.type x,_ASM_TYPE_FUNCTION; _FUNC_MODE; x:
 #define	_LEEND(x)	/* nothing */
 #define	_EENTRY(x) 	GLOBAL(x); _LEENTRY(x)
 #define	_EEND(x)	_LEEND(x)
@@ -126,7 +133,7 @@
 	ldr	x, [x, got]
 #define	GOT_INIT(got,gotsym,pclabel) \
 	ldr	got, gotsym;	\
-	pclabel: add	got, got, pc
+	pclabel: add	got, pc
 #ifdef __thumb__
 #define	GOT_INITSYM(gotsym,pclabel) \
 	.align 2;		\
@@ -159,7 +166,7 @@
 #else
 #define __FBSDID(s)     /* nothing */
 #endif
-	
+
 
 #define	WEAK_ALIAS(alias,sym)						\
 	.weak alias;							\

@@ -70,7 +70,7 @@ void (*ncl_call_invalcaches)(struct vnode *) = NULL;
 static int nfs_realign_test;
 static int nfs_realign_count;
 
-SYSCTL_NODE(_vfs, OID_AUTO, nfs, CTLFLAG_RW, 0, "New NFS filesystem");
+SYSCTL_NODE(_vfs, OID_AUTO, nfs, CTLFLAG_RW, 0, "NFS filesystem");
 SYSCTL_INT(_vfs_nfs, OID_AUTO, realign_test, CTLFLAG_RW, &nfs_realign_test,
     0, "Number of realign tests done");
 SYSCTL_INT(_vfs_nfs, OID_AUTO, realign_count, CTLFLAG_RW, &nfs_realign_count,
@@ -79,8 +79,7 @@ SYSCTL_STRING(_vfs_nfs, OID_AUTO, callback_addr, CTLFLAG_RW,
     nfsv4_callbackaddr, sizeof(nfsv4_callbackaddr),
     "NFSv4 callback addr for server to use");
 SYSCTL_INT(_vfs_nfs, OID_AUTO, debuglevel, CTLFLAG_RW, &nfscl_debuglevel,
-    0, "Debug level for new nfs client");
-TUNABLE_INT("vfs.nfs.userhashsize", &nfsrv_lughashsize);
+    0, "Debug level for NFS client");
 SYSCTL_INT(_vfs_nfs, OID_AUTO, userhashsize, CTLFLAG_RDTUN, &nfsrv_lughashsize,
     0, "Size of hash tables for uid/name mapping");
 
@@ -104,12 +103,12 @@ MALLOC_DEFINE(M_NEWNFSCLDELEG, "NFSCL deleg", "NFSCL Delegation");
 MALLOC_DEFINE(M_NEWNFSCLCLIENT, "NFSCL client", "NFSCL Client");
 MALLOC_DEFINE(M_NEWNFSCLLOCKOWNER, "NFSCL lckown", "NFSCL Lock Owner");
 MALLOC_DEFINE(M_NEWNFSCLLOCK, "NFSCL lck", "NFSCL Lock");
-MALLOC_DEFINE(M_NEWNFSV4NODE, "NEWNFSnode", "New nfs vnode");
-MALLOC_DEFINE(M_NEWNFSDIRECTIO, "NEWdirectio", "New nfs Direct IO buffer");
+MALLOC_DEFINE(M_NEWNFSV4NODE, "NEWNFSnode", "NFS vnode");
+MALLOC_DEFINE(M_NEWNFSDIRECTIO, "NEWdirectio", "NFS Direct IO buffer");
 MALLOC_DEFINE(M_NEWNFSDIROFF, "NFSCL diroffdiroff",
-    "New NFS directory offset data");
+    "NFS directory offset data");
 MALLOC_DEFINE(M_NEWNFSDROLLBACK, "NFSD rollback",
-    "New NFS local lock rollback");
+    "NFS local lock rollback");
 MALLOC_DEFINE(M_NEWNFSLAYOUT, "NFSCL layout", "NFSv4.1 Layout");
 MALLOC_DEFINE(M_NEWNFSFLAYOUT, "NFSCL flayout", "NFSv4.1 File Layout");
 MALLOC_DEFINE(M_NEWNFSDEVINFO, "NFSCL devinfo", "NFSv4.1 Device Info");
@@ -156,7 +155,7 @@ newnfs_realign(struct mbuf **pm, int how)
  *	we cannot afford to overwrite them.
  *
  *	We would prefer to avoid this situation entirely.  The situation does
- *	not occur with NFS/UDP and is supposed to only occassionally occur
+ *	not occur with NFS/UDP and is supposed to only occasionally occur
  *	with TCP.  Use vfs.nfs.realign_count and realign_test to check this.
  *
  */
@@ -338,7 +337,7 @@ nfsvno_pathconf(struct vnode *vp, int flag, register_t *retf,
 			 */
 			*retf = 0;
 			printf("nfsrvd pathconf flag=%d not supp\n", flag);
-		};
+		}
 		error = 0;
 	}
 	NFSEXITCODE(error);
@@ -609,7 +608,7 @@ nfscommon_modevent(module_t mod, int type, void *data)
 		mtx_init(&nfs_req_mutex, "nfs_req_mutex", NULL, MTX_DEF);
 		mtx_init(&nfsrv_nfsuserdsock.nr_mtx, "nfsuserd", NULL,
 		    MTX_DEF);
-		callout_init(&newnfsd_callout, CALLOUT_MPSAFE);
+		callout_init(&newnfsd_callout, 1);
 		newnfs_init();
 		nfsd_call_nfscommon = nfssvc_nfscommon;
 		loaded = 1;

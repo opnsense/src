@@ -77,7 +77,7 @@ __FBSDID("$FreeBSD$");
 static int ums_debug = 0;
 
 static SYSCTL_NODE(_hw_usb, OID_AUTO, ums, CTLFLAG_RW, 0, "USB ums");
-SYSCTL_INT(_hw_usb_ums, OID_AUTO, debug, CTLFLAG_RW,
+SYSCTL_INT(_hw_usb_ums, OID_AUTO, debug, CTLFLAG_RWTUN,
     &ums_debug, 0, "Debug level");
 #endif
 
@@ -572,7 +572,7 @@ ums_attach(device_t dev)
 	 * The Microsoft Wireless Notebook Optical Mouse seems to be in worse
 	 * shape than the Wireless Intellimouse 2.0, as its X, Y, wheel, and
 	 * all of its other button positions are all off. It also reports that
-	 * it has two addional buttons and a tilt wheel.
+	 * it has two additional buttons and a tilt wheel.
 	 */
 	if (usb_test_quirk(uaa, UQ_MS_BAD_CLASS)) {
 
@@ -1052,3 +1052,4 @@ static driver_t ums_driver = {
 DRIVER_MODULE(ums, uhub, ums_driver, ums_devclass, NULL, 0);
 MODULE_DEPEND(ums, usb, 1, 1, 1);
 MODULE_VERSION(ums, 1);
+USB_PNP_HOST_INFO(ums_devs);

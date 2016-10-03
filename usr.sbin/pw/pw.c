@@ -120,8 +120,8 @@ main(int argc, char *argv[])
 	memset(&conf, 0, sizeof(conf));
 	strlcpy(conf.rootdir, "/", sizeof(conf.rootdir));
 	strlcpy(conf.etcpath, _PATH_PWD, sizeof(conf.etcpath));
-	conf.checkduplicate = true;
 	conf.fd = -1;
+	conf.checkduplicate = true;
 
 	setlocale(LC_ALL, "");
 

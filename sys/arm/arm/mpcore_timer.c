@@ -65,7 +65,6 @@ __FBSDID("$FreeBSD$");
 #include <dev/ofw/ofw_bus_subr.h>
 
 #include <machine/bus.h>
-#include <machine/fdt.h>
 
 #include <arm/arm/mpcore_timervar.h>
 
@@ -368,7 +367,7 @@ attach_et(struct arm_tmr_softc *sc)
  *	globally and registers both the timecount and eventtimer objects.
  *
  *	RETURNS
- *	Zero on sucess or ENXIO if an error occuried.
+ *	Zero on success or ENXIO if an error occuried.
  */
 static int
 arm_tmr_attach(device_t dev)
@@ -415,7 +414,7 @@ arm_tmr_attach(device_t dev)
 		if (!arm_tmr_freq_varies)
 			tc_err = attach_tc(sc);
 		else if (bootverbose)
-			device_printf(sc->dev, 
+			device_printf(sc->dev,
 			    "not using variable-frequency device as timecounter");
 		sc->memrid++;
 		sc->irqrid++;
@@ -458,7 +457,7 @@ EARLY_DRIVER_MODULE(mp_tmr, ofwbus, arm_tmr_driver, arm_tmr_devclass, 0, 0,
 /*
  * Handle a change in clock frequency.  The mpcore timer runs at half the CPU
  * frequency.  When the CPU frequency changes due to power-saving or thermal
- * managment, the platform-specific code that causes the frequency change calls
+ * management, the platform-specific code that causes the frequency change calls
  * this routine to inform the clock driver, and we in turn inform the event
  * timer system, which actually updates the value in et->frequency for us and
  * reschedules the current event(s) in a way that's atomic with respect to
@@ -489,7 +488,7 @@ arm_tmr_change_frequency(uint64_t newfreq)
  *	@usec: number of microseconds to delay by
  *
  *	This function is called all over the kernel and is suppose to provide a
- *	consistent delay.  This function may also be called before the console 
+ *	consistent delay.  This function may also be called before the console
  *	is setup so no printf's can be called here.
  *
  *	RETURNS:

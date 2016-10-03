@@ -20,10 +20,10 @@ DEBUG_FLAGS+= -D_DEBUG_MSG
 DEBUG_FLAGS+= -DFUSE4BSD_VERSION="\"${F4BVERS}\""
 .endif
 
+PACKAGE=runtime
 PROG=	mount_fusefs
 SRCS=	mount_fusefs.c getmntopts.c
 MAN8=	mount_fusefs.8
-NO_MANCOMPRESS?=	yes
 
 MOUNT=	${.CURDIR}/../mount
 CFLAGS+=	-I${MOUNT}

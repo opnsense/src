@@ -19,10 +19,8 @@ class ValueLocker;
 
 namespace lldb {
 
-class SBValue
+class LLDB_API SBValue
 {
-friend class ValueLocker;
-
 public:
     SBValue ();
 
@@ -50,6 +48,9 @@ public:
 
     const char *
     GetTypeName ();
+    
+    const char *
+    GetDisplayTypeName ();
 
     size_t
     GetByteSize ();
@@ -81,6 +82,7 @@ public:
     ValueType
     GetValueType ();
 
+    // If you call this on a newly created ValueObject, it will always return false.
     bool
     GetValueDidChange ();
 
@@ -88,7 +90,14 @@ public:
     GetSummary ();
     
     const char *
+    GetSummary (lldb::SBStream& stream,
+                lldb::SBTypeSummaryOptions& options);
+    
+    const char *
     GetObjectDescription ();
+    
+    const char *
+    GetTypeValidatorResult ();
     
     lldb::SBValue
     GetDynamicValue (lldb::DynamicValueType use_dynamic);
@@ -130,10 +139,8 @@ public:
     lldb::SBTypeFormat
     GetTypeFormat ();
     
-#ifndef LLDB_DISABLE_PYTHON
     lldb::SBTypeSummary
     GetTypeSummary ();
-#endif
 
     lldb::SBTypeFilter
     GetTypeFilter ();
@@ -149,6 +156,7 @@ public:
     lldb::SBValue
     CreateChildAtOffset (const char *name, uint32_t offset, lldb::SBType type);
     
+    // Deprecated - use the expression evaluator to perform type casting
     lldb::SBValue
     Cast (lldb::SBType type);
     
@@ -173,7 +181,7 @@ public:
     //------------------------------------------------------------------
     /// Get a child value by index from a value.
     ///
-    /// Structs, unions, classes, arrays and and pointers have child
+    /// Structs, unions, classes, arrays and pointers have child
     /// values that can be access by index. 
     ///
     /// Structs and unions access child members using a zero based index
@@ -196,7 +204,11 @@ public:
     /// pointer to a 'Point' type, then the child at index zero will be
     /// the 'x' member, and the child at index 1 will be the 'y' member
     /// (the child at index zero won't be a 'Point' instance).
-    /// 
+    ///
+    /// If you actually need an SBValue that represents the type pointed
+    /// to by a SBValue for which GetType().IsPointeeType() returns true,
+    /// regardless of the pointee type, you can do that with SBValue::Dereference.
+    ///
     /// Arrays have a preset number of children that can be accessed by
     /// index and will returns invalid child values for indexes that are
     /// out of bounds unless the \a synthetic_allowed is \b true. In this
@@ -208,11 +220,11 @@ public:
     ///     The index of the child value to get
     ///
     /// @param[in] use_dynamic
-    ///     An enumeration that specifies wether to get dynamic values,
+    ///     An enumeration that specifies whether to get dynamic values,
     ///     and also if the target can be run to figure out the dynamic
     ///     type of the child value.
     ///
-    /// @param[in] synthetic_allowed
+    /// @param[in] can_create_synthetic
     ///     If \b true, then allow child values to be created by index
     ///     for pointers and arrays for indexes that normally wouldn't
     ///     be allowed.
@@ -315,9 +327,15 @@ public:
     //------------------------------------------------------------------
     bool
     MightHaveChildren ();
+    
+    bool
+    IsRuntimeSupportValue ();
 
     uint32_t
     GetNumChildren ();
+
+    uint32_t
+    GetNumChildren (uint32_t max);
 
     void *
     GetOpaqueType();
@@ -337,11 +355,15 @@ public:
     lldb::SBValue
     Dereference ();
 
+    // Deprecated - please use GetType().IsPointerType() instead.
     bool
     TypeIsPointerType ();
     
     lldb::SBType
     GetType();
+    
+    lldb::SBValue
+    Persist ();
 
     bool
     GetDescription (lldb::SBStream &description);
@@ -372,7 +394,7 @@ public:
     /// @param[in] write
     ///     Stop when this value is modified
     ///
-    /// @param[out]
+    /// @param[out] error
     ///     An error object. Contains the reason if there is some failure.
     ///
     /// @return
@@ -405,7 +427,7 @@ public:
     /// @param[in] write
     ///     Stop when this value is modified
     ///
-    /// @param[out]
+    /// @param[out] error
     ///     An error object. Contains the reason if there is some failure.
     ///
     /// @return

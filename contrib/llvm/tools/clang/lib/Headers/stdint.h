@@ -28,8 +28,7 @@
 /* If we're hosted, fall back to the system's stdint.h, which might have
  * additional definitions.
  */
-#if __STDC_HOSTED__ && \
-    defined(__has_include_next) && __has_include_next(<stdint.h>)
+#if __STDC_HOSTED__ && __has_include_next(<stdint.h>)
 
 // C99 7.18.3 Limits of other integer types
 //
@@ -78,14 +77,14 @@
  * C99 7.18.1.2 Minimum-width integer types.
  * C99 7.18.1.3 Fastest minimum-width integer types.
  *
- * The standard requires that exact-width type be defined for 8-, 16-, 32-, and 
+ * The standard requires that exact-width type be defined for 8-, 16-, 32-, and
  * 64-bit types if they are implemented. Other exact width types are optional.
  * This implementation defines an exact-width types for every integer width
  * that is represented in the standard integer types.
  *
  * The standard also requires minimum-width types be defined for 8-, 16-, 32-,
  * and 64-bit widths regardless of whether there are corresponding exact-width
- * types. 
+ * types.
  *
  * To accommodate targets that are missing types that are exactly 8, 16, 32, or
  * 64 bits wide, this implementation takes an approach of cascading
@@ -98,16 +97,16 @@
  * suboptimal.
  *
  * In violation of the standard, some targets do not implement a type that is
- * wide enough to represent all of the required widths (8-, 16-, 32-, 64-bit).  
+ * wide enough to represent all of the required widths (8-, 16-, 32-, 64-bit).
  * To accommodate these targets, a required minimum-width type is only
  * defined if there exists an exact-width type of equal or greater width.
  */
 
 #ifdef __INT64_TYPE__
 # ifndef __int8_t_defined /* glibc sys/types.h also defines int64_t*/
-typedef signed __INT64_TYPE__ int64_t;
+typedef __INT64_TYPE__ int64_t;
 # endif /* __int8_t_defined */
-typedef unsigned __INT64_TYPE__ uint64_t;
+typedef __UINT64_TYPE__ uint64_t;
 # define __int_least64_t int64_t
 # define __uint_least64_t uint64_t
 # define __int_least32_t int64_t
@@ -126,8 +125,8 @@ typedef __uint_least64_t uint_fast64_t;
 #endif /* __int_least64_t */
 
 #ifdef __INT56_TYPE__
-typedef signed __INT56_TYPE__ int56_t;
-typedef unsigned __INT56_TYPE__ uint56_t;
+typedef __INT56_TYPE__ int56_t;
+typedef __UINT56_TYPE__ uint56_t;
 typedef int56_t int_least56_t;
 typedef uint56_t uint_least56_t;
 typedef int56_t int_fast56_t;
@@ -142,8 +141,8 @@ typedef uint56_t uint_fast56_t;
 
 
 #ifdef __INT48_TYPE__
-typedef signed __INT48_TYPE__ int48_t;
-typedef unsigned __INT48_TYPE__ uint48_t;
+typedef __INT48_TYPE__ int48_t;
+typedef __UINT48_TYPE__ uint48_t;
 typedef int48_t int_least48_t;
 typedef uint48_t uint_least48_t;
 typedef int48_t int_fast48_t;
@@ -158,8 +157,8 @@ typedef uint48_t uint_fast48_t;
 
 
 #ifdef __INT40_TYPE__
-typedef signed __INT40_TYPE__ int40_t;
-typedef unsigned __INT40_TYPE__ uint40_t;
+typedef __INT40_TYPE__ int40_t;
+typedef __UINT40_TYPE__ uint40_t;
 typedef int40_t int_least40_t;
 typedef uint40_t uint_least40_t;
 typedef int40_t int_fast40_t;
@@ -176,12 +175,12 @@ typedef uint40_t uint_fast40_t;
 #ifdef __INT32_TYPE__
 
 # ifndef __int8_t_defined /* glibc sys/types.h also defines int32_t*/
-typedef signed __INT32_TYPE__ int32_t;
+typedef __INT32_TYPE__ int32_t;
 # endif /* __int8_t_defined */
 
 # ifndef __uint32_t_defined  /* more glibc compatibility */
 # define __uint32_t_defined
-typedef unsigned __INT32_TYPE__ uint32_t;
+typedef __UINT32_TYPE__ uint32_t;
 # endif /* __uint32_t_defined */
 
 # define __int_least32_t int32_t
@@ -200,8 +199,8 @@ typedef __uint_least32_t uint_fast32_t;
 #endif /* __int_least32_t */
 
 #ifdef __INT24_TYPE__
-typedef signed __INT24_TYPE__ int24_t;
-typedef unsigned __INT24_TYPE__ uint24_t;
+typedef __INT24_TYPE__ int24_t;
+typedef __UINT24_TYPE__ uint24_t;
 typedef int24_t int_least24_t;
 typedef uint24_t uint_least24_t;
 typedef int24_t int_fast24_t;
@@ -214,9 +213,9 @@ typedef uint24_t uint_fast24_t;
 
 #ifdef __INT16_TYPE__
 #ifndef __int8_t_defined /* glibc sys/types.h also defines int16_t*/
-typedef signed __INT16_TYPE__ int16_t;
+typedef __INT16_TYPE__ int16_t;
 #endif /* __int8_t_defined */
-typedef unsigned __INT16_TYPE__ uint16_t;
+typedef __UINT16_TYPE__ uint16_t;
 # define __int_least16_t int16_t
 # define __uint_least16_t uint16_t
 # define __int_least8_t int16_t
@@ -233,9 +232,9 @@ typedef __uint_least16_t uint_fast16_t;
 
 #ifdef __INT8_TYPE__
 #ifndef __int8_t_defined  /* glibc sys/types.h also defines int8_t*/
-typedef signed __INT8_TYPE__ int8_t;
+typedef __INT8_TYPE__ int8_t;
 #endif /* __int8_t_defined */
-typedef unsigned __INT8_TYPE__ uint8_t;
+typedef __UINT8_TYPE__ uint8_t;
 # define __int_least8_t int8_t
 # define __uint_least8_t uint8_t
 #endif /* __INT8_TYPE__ */
@@ -248,7 +247,7 @@ typedef __uint_least8_t uint_fast8_t;
 #endif /* __int_least8_t */
 
 /* prevent glibc sys/types.h from defining conflicting types */
-#ifndef __int8_t_defined  
+#ifndef __int8_t_defined
 # define __int8_t_defined
 #endif /* __int8_t_defined */
 
@@ -281,9 +280,9 @@ typedef __UINTMAX_TYPE__ uintmax_t;
  *
  * The standard requires that integer constant macros be defined for all the
  * minimum-width types defined above. As 8-, 16-, 32-, and 64-bit minimum-width
- * types are required, the corresponding integer constant macros are defined 
+ * types are required, the corresponding integer constant macros are defined
  * here. This implementation also defines minimum-width types for every other
- * integer width that the target implements, so corresponding macros are 
+ * integer width that the target implements, so corresponding macros are
  * defined below, too.
  *
  * These macros are defined using the same successive-shrinking approach as
@@ -453,7 +452,7 @@ typedef __UINTMAX_TYPE__ uintmax_t;
 #endif /* __int_least8_t */
 
 
-/* C99 7.18.2.1 Limits of exact-width integer types. 
+/* C99 7.18.2.1 Limits of exact-width integer types.
  * C99 7.18.2.2 Limits of minimum-width integer types.
  * C99 7.18.2.3 Limits of fastest minimum-width integer types.
  *

@@ -78,9 +78,8 @@ struct scsi_quirk_entry {
 #define SCSI_QUIRK(dev)	((struct scsi_quirk_entry *)((dev)->quirk))
 
 static int cam_srch_hi = 0;
-TUNABLE_INT("kern.cam.cam_srch_hi", &cam_srch_hi);
 static int sysctl_cam_search_luns(SYSCTL_HANDLER_ARGS);
-SYSCTL_PROC(_kern_cam, OID_AUTO, cam_srch_hi, CTLTYPE_INT|CTLFLAG_RW, 0, 0,
+SYSCTL_PROC(_kern_cam, OID_AUTO, cam_srch_hi, CTLTYPE_INT | CTLFLAG_RWTUN, 0, 0,
     sysctl_cam_search_luns, "I",
     "allow search above LUN 7 for SCSI3 and greater devices");
 
@@ -101,10 +100,8 @@ SYSCTL_PROC(_kern_cam, OID_AUTO, cam_srch_hi, CTLTYPE_INT|CTLFLAG_RW, 0, 0,
 		(lval) |=  (lp)->luns[(i)].lundata[1];			\
 	}
 #define	CAM_GET_LUN(lp, i, lval)					\
-	(lval) = scsi_4btoul((lp)->luns[(i)].lundata);			\
-	(lval) = ((lval) >> 16) | ((lval) << 16);
-#define CAM_LUN_ONLY_32BITS(lp, i)				\
-	(scsi_4btoul(&((lp)->luns[(i)].lundata[4])) == 0)
+	(lval) = scsi_8btou64((lp)->luns[(i)].lundata);			\
+	(lval) = CAM_EXTLUN_BYTE_SWIZZLE(lval);
 
 /*
  * If we're not quirked to search <= the first 8 luns
@@ -459,7 +456,7 @@ static struct scsi_quirk_entry scsi_quirk_table[] =
 	},
 	{
 		/*
-		 * The Hitachi CJ series with J8A8 firmware apparantly has
+		 * The Hitachi CJ series with J8A8 firmware apparently has
 		 * problems with tagged commands.
 		 * PR: 23536
 		 * Reported by: amagai@nue.org
@@ -558,9 +555,6 @@ static struct scsi_quirk_entry scsi_quirk_table[] =
 		/*quirks*/0, /*mintags*/2, /*maxtags*/255
 	},
 };
-
-static const int scsi_quirk_table_size =
-	sizeof(scsi_quirk_table) / sizeof(*scsi_quirk_table);
 
 static cam_status	proberegister(struct cam_periph *periph,
 				      void *arg);
@@ -1565,13 +1559,22 @@ probe_device_check:
 				(u_int8_t *)malloc((serial_buf->length + 1),
 						   M_CAMXPT, M_NOWAIT);
 			if (path->device->serial_num != NULL) {
+				int start, slen;
+
+				start = strspn(serial_buf->serial_num, " ");
+				slen = serial_buf->length - start;
+				if (slen <= 0) {
+					/* 
+					 * SPC5r05 says that an all-space serial
+					 * number means no product serial number
+					 * is available
+					 */
+					slen = 0;
+				}
 				memcpy(path->device->serial_num,
-				       serial_buf->serial_num,
-				       serial_buf->length);
-				path->device->serial_num_len =
-				    serial_buf->length;
-				path->device->serial_num[serial_buf->length]
-				    = '\0';
+				       &serial_buf->serial_num[start], slen);
+				path->device->serial_num_len = slen;
+				path->device->serial_num[slen] = '\0';
 			}
 		} else if (cam_periph_error(done_ccb, 0,
 					    SF_RETRY_UA|SF_NO_PRINT,
@@ -1827,8 +1830,6 @@ probe_purge_old(struct cam_path *path, struct scsi_report_luns_data *new,
 				continue;
 			CAM_GET_SIMPLE_LUN(old, idx1, this_lun);
 		}
-		if (!CAM_LUN_ONLY_32BITS(old, idx1))
-			continue;
 
 		if (xpt_create_path(&tp, NULL, xpt_path_path_id(path),
 		    xpt_path_target_id(path), this_lun) == CAM_REQ_CMP) {
@@ -1853,8 +1854,7 @@ scsi_find_quirk(struct cam_ed *device)
 
 	match = cam_quirkmatch((caddr_t)&device->inq_data,
 			       (caddr_t)scsi_quirk_table,
-			       sizeof(scsi_quirk_table) /
-			       sizeof(*scsi_quirk_table),
+			       nitems(scsi_quirk_table),
 			       sizeof(*scsi_quirk_table), scsi_inquiry_match);
 
 	if (match == NULL)
@@ -2091,10 +2091,6 @@ scsi_scan_bus(struct cam_periph *periph, union ccb *request_ccb)
 					break;
 				}
 
-				/* XXX print warning? */
-				if (!CAM_LUN_ONLY_32BITS(target->luns,
-				    scan_info->lunindex[target_id]))
-					continue;
 				if (CAM_CAN_GET_SIMPLE_LUN(target->luns,
 				    scan_info->lunindex[target_id])) {
 					CAM_GET_SIMPLE_LUN(target->luns,
@@ -2376,7 +2372,7 @@ scsi_alloc_device(struct cam_eb *bus, struct cam_et *target, lun_id_t lun_id)
 	 * Take the default quirk entry until we have inquiry
 	 * data and can determine a better quirk to use.
 	 */
-	quirk = &scsi_quirk_table[scsi_quirk_table_size - 1];
+	quirk = &scsi_quirk_table[nitems(scsi_quirk_table) - 1];
 	device->quirk = (void *)quirk;
 	device->mintags = quirk->mintags;
 	device->maxtags = quirk->maxtags;
@@ -2442,7 +2438,7 @@ scsi_devise_transport(struct cam_path *path)
 			path->device->transport_version =
 			    otherdev->transport_version;
 		} else {
-			/* Until we know better, opt for safty */
+			/* Until we know better, opt for safety */
 			path->device->protocol_version = 2;
 			if (path->device->transport == XPORT_SPI)
 				path->device->transport_version = 2;

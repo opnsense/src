@@ -17,6 +17,7 @@
 
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclTemplate.h"
+#include "clang/AST/TypeLoc.h"
 #include "llvm/Support/Compiler.h"
 
 namespace clang {
@@ -36,7 +37,9 @@ namespace clang {
 /// @endcode
 ///
 /// The semantic context of a friend decl is its declaring class.
-class FriendDecl : public Decl {
+class FriendDecl final
+    : public Decl,
+      private llvm::TrailingObjects<FriendDecl, TemplateParameterList *> {
   virtual void anchor();
 public:
   typedef llvm::PointerUnion<NamedDecl*,TypeSourceInfo*> FriendUnion;
@@ -61,14 +64,6 @@ private:
   //     template <class T> friend class A<T>::B;
   unsigned NumTPLists : 31;
 
-  // The tail-allocated friend type template parameter lists (if any).
-  TemplateParameterList* const *getTPLists() const {
-    return reinterpret_cast<TemplateParameterList* const *>(this + 1);
-  }
-  TemplateParameterList **getTPLists() {
-    return reinterpret_cast<TemplateParameterList**>(this + 1);
-  }
-
   friend class CXXRecordDecl::friend_iterator;
   friend class CXXRecordDecl;
 
@@ -82,7 +77,7 @@ private:
       UnsupportedFriend(false),
       NumTPLists(FriendTypeTPLists.size()) {
     for (unsigned i = 0; i < NumTPLists; ++i)
-      getTPLists()[i] = FriendTypeTPLists[i];
+      getTrailingObjects<TemplateParameterList *>()[i] = FriendTypeTPLists[i];
   }
 
   FriendDecl(EmptyShell Empty, unsigned NumFriendTypeTPLists)
@@ -91,7 +86,7 @@ private:
 
   FriendDecl *getNextFriend() {
     if (!NextFriend.isOffset())
-      return cast_or_null<FriendDecl>(NextFriend.get(0));
+      return cast_or_null<FriendDecl>(NextFriend.get(nullptr));
     return getNextFriendSlowCase();
   }
   FriendDecl *getNextFriendSlowCase();
@@ -117,7 +112,7 @@ public:
   }
   TemplateParameterList *getFriendTypeTemplateParameterList(unsigned N) const {
     assert(N < NumTPLists);
-    return getTPLists()[N];
+    return getTrailingObjects<TemplateParameterList *>()[N];
   }
 
   /// If this friend declaration doesn't name a type, return the inner
@@ -132,10 +127,14 @@ public:
   }
 
   /// Retrieves the source range for the friend declaration.
-  SourceRange getSourceRange() const LLVM_READONLY {
+  SourceRange getSourceRange() const override LLVM_READONLY {
     if (NamedDecl *ND = getFriendDecl()) {
+      if (FunctionDecl *FD = dyn_cast<FunctionDecl>(ND))
+        return FD->getSourceRange();
       if (FunctionTemplateDecl *FTD = dyn_cast<FunctionTemplateDecl>(ND))
         return FTD->getSourceRange();
+      if (ClassTemplateDecl *CTD = dyn_cast<ClassTemplateDecl>(ND))
+        return CTD->getSourceRange();
       if (DeclaratorDecl *DD = dyn_cast<DeclaratorDecl>(ND)) {
         if (DD->getOuterLocStart() != DD->getInnerLocStart())
           return DD->getSourceRange();
@@ -143,9 +142,10 @@ public:
       return SourceRange(getFriendLoc(), ND->getLocEnd());
     }
     else if (TypeSourceInfo *TInfo = getFriendType()) {
-      SourceLocation StartL = (NumTPLists == 0)
-        ? getFriendLoc()
-        : getTPLists()[0]->getTemplateLoc();
+      SourceLocation StartL =
+          (NumTPLists == 0) ? getFriendLoc()
+                            : getTrailingObjects<TemplateParameterList *>()[0]
+                                  ->getTemplateLoc();
       return SourceRange(StartL, TInfo->getTypeLoc().getEndLoc());
     }
     else
@@ -166,6 +166,7 @@ public:
 
   friend class ASTDeclReader;
   friend class ASTDeclWriter;
+  friend TrailingObjects;
 };
 
 /// An iterator over the friend declarations of a class.
@@ -224,7 +225,11 @@ inline CXXRecordDecl::friend_iterator CXXRecordDecl::friend_begin() const {
 }
 
 inline CXXRecordDecl::friend_iterator CXXRecordDecl::friend_end() const {
-  return friend_iterator(0);
+  return friend_iterator(nullptr);
+}
+
+inline CXXRecordDecl::friend_range CXXRecordDecl::friends() const {
+  return friend_range(friend_begin(), friend_end());
 }
 
 inline void CXXRecordDecl::pushFriendDecl(FriendDecl *FD) {

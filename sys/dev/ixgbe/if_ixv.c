@@ -195,7 +195,7 @@ TUNABLE_INT("hw.ixv.flow_control", &ixv_flow_control);
 
 /*
  * Header split: this causes the hardware to DMA
- * the header into a seperate mbuf from the payload,
+ * the header into a separate mbuf from the payload,
  * it can be a performance win in some workloads, but
  * in others it actually hurts, its off by default.
  */
@@ -326,15 +326,6 @@ ixv_attach(device_t dev)
 		error = ENXIO;
 		goto err_out;
 	}
-
-	/* Sysctls for limiting the amount of work done in the taskqueues */
-	ixv_set_sysctl_value(adapter, "rx_processing_limit",
-	    "max number of rx packets to process",
-	    &adapter->rx_process_limit, ixv_rx_process_limit);
-
-	ixv_set_sysctl_value(adapter, "tx_processing_limit",
-	    "max number of tx packets to process",
-	    &adapter->tx_process_limit, ixv_tx_process_limit);
 
 	/* Sysctls for limiting the amount of work done in the taskqueues */
 	ixv_set_sysctl_value(adapter, "rx_processing_limit",
@@ -587,7 +578,8 @@ ixv_ioctl(struct ifnet * ifp, u_long command, caddr_t data)
 			ifp->if_mtu = ifr->ifr_mtu;
 			adapter->max_frame_size =
 				ifp->if_mtu + IXGBE_MTU_HDR;
-			ixv_init_locked(adapter);
+			if (ifp->if_drv_flags & IFF_DRV_RUNNING)
+				ixv_init_locked(adapter);
 			IXGBE_CORE_UNLOCK(adapter);
 		}
 		break;
@@ -1150,7 +1142,7 @@ ixv_local_timer(void *arg)
 
 	}
 
-	/* Only truely watchdog if all queues show hung */
+	/* Only truly watchdog if all queues show hung */
 	if (hung == adapter->num_queues)
 		goto watchdog;
 	else if (queues != 0) { /* Force an IRQ on queues with work */
@@ -1703,7 +1695,7 @@ ixv_initialize_receive_units(struct adapter *adapter)
 		reg |= IXGBE_SRRCTL_DESCTYPE_ADV_ONEBUF;
 		IXGBE_WRITE_REG(hw, IXGBE_VFSRRCTL(i), reg);
 
-		/* Capture  Rx Tail register */
+		/* Capture Rx Tail index */
 		rxr->tail = IXGBE_VFRDT(rxr->me);
 
 		/* Do the queue enabling last */
@@ -1967,7 +1959,7 @@ ixv_handle_mbx(void *context, int pending)
 }
 
 /*
-** The VF stats registers never have a truely virgin
+** The VF stats registers never have a truly virgin
 ** starting point, so this routine tries to make an
 ** artificial one, marking ground zero on attach as
 ** it were.
@@ -2130,9 +2122,7 @@ ixv_add_stats_sysctls(struct adapter *adapter)
 	SYSCTL_ADD_UQUAD(ctx, queue_list, OID_AUTO, "tx_packets",
 			CTLFLAG_RD, &(txr->total_packets),
 			"TX Packets");
-	SYSCTL_ADD_UINT(ctx, queue_list, OID_AUTO, "tx_bytes",
-			CTLFLAG_RD, &(txr->bytes), 0,
-			"TX Bytes");
+
 	SYSCTL_ADD_UQUAD(ctx, queue_list, OID_AUTO, "tx_no_desc",
 			CTLFLAG_RD, &(txr->no_desc_avail),
 			"# of times not enough descriptors were available during TX");
@@ -2178,10 +2168,10 @@ ixv_print_debug_info(struct adapter *adapter)
                     rxr->me, (long long)rxr->rx_packets);
                 device_printf(dev,"RX(%d) Bytes Received: %lu\n",
                     rxr->me, (long)rxr->rx_bytes);
-                device_printf(dev,"RX(%d) LRO Queued= %d\n",
-                    rxr->me, lro->lro_queued);
-                device_printf(dev,"RX(%d) LRO Flushed= %d\n",
-                    rxr->me, lro->lro_flushed);
+                device_printf(dev,"RX(%d) LRO Queued= %lld\n",
+                    rxr->me, (long long)lro->lro_queued);
+                device_printf(dev,"RX(%d) LRO Flushed= %lld\n",
+                    rxr->me, (long long)lro->lro_flushed);
                 device_printf(dev,"TX(%d) Packets Sent: %lu\n",
                     txr->me, (long)txr->total_packets);
                 device_printf(dev,"TX(%d) NO Desc Avail: %lu\n",

@@ -24,6 +24,7 @@
  * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2014 Spectra Logic Corporation, All rights reserved.
  * Copyright 2013 Saso Kiselkov. All rights reserved.
+ * Copyright (c) 2014 Integros [integros.com]
  */
 
 #ifndef _SYS_SPA_H
@@ -625,7 +626,7 @@ extern int spa_get_stats(const char *pool, nvlist_t **config, char *altroot,
     size_t buflen);
 extern int spa_create(const char *pool, nvlist_t *config, nvlist_t *props,
     nvlist_t *zplprops);
-#if defined(sun)
+#ifdef illumos
 extern int spa_import_rootpool(char *devpath, char *devid);
 #else
 extern int spa_import_rootpool(const char *name);

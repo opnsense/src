@@ -184,7 +184,7 @@ build_tree()
 {
 	local destdir dir file make
 
-	make="make $MAKE_OPTIONS"
+	make="make $MAKE_OPTIONS -DNO_FILEMON"
 
 	log "Building tree at $1 with $make"
 	mkdir -p $1/usr/obj >&3 2>&1
@@ -213,7 +213,8 @@ build_tree()
 
 	# Purge auto-generated files.  Only the source files need to
 	# be updated after which these files are regenerated.
-	rm -f $1/etc/*.db $1/etc/passwd >&3 2>&1 || return 1
+	rm -f $1/etc/*.db $1/etc/passwd $1/var/db/services.db >&3 2>&1 || \
+	    return 1
 
 	# Remove empty files.  These just clutter the output of 'diff'.
 	find $1 -type f -size 0 -delete >&3 2>&1 || return 1
@@ -514,7 +515,7 @@ post_update()
 			fi
 		else
 			warn "Needs update: /etc/localtime (required" \
-			    "manual update via tzsetup(1))"
+			    "manual update via tzsetup(8))"
 		fi
 	fi
 }

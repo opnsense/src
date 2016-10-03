@@ -1,11 +1,11 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
+PACKAGE=lib${LIB}
 LIB=		mp
 SHLIB_MAJOR=	7
-DPADD=		${LIBCRYPTO}
-LDADD=		-lcrypto
+LIBADD=		crypto
 MAN=		libmp.3
 INCS=		mp.h
 SRCS=		mpasbn.c

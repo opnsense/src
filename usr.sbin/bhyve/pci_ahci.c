@@ -427,7 +427,6 @@ ahci_port_stop(struct ahci_port *p)
 	struct ahci_ioreq *aior;
 	uint8_t *cfis;
 	int slot;
-	int ncq;
 	int error;
 
 	assert(pthread_mutex_isowned_np(&p->pr_sc->mtx));
@@ -445,10 +444,7 @@ ahci_port_stop(struct ahci_port *p)
 		if (cfis[2] == ATA_WRITE_FPDMA_QUEUED ||
 		    cfis[2] == ATA_READ_FPDMA_QUEUED ||
 		    cfis[2] == ATA_SEND_FPDMA_QUEUED)
-			ncq = 1;
-
-		if (ncq)
-			p->sact &= ~(1 << slot);
+			p->sact &= ~(1 << slot);	/* NCQ */
 		else
 			p->ci &= ~(1 << slot);
 
@@ -745,7 +741,7 @@ read_prdt(struct ahci_port *p, int slot, uint8_t *cfis,
 
 		dbcsz = (prdt->dbc & DBCMASK) + 1;
 		ptr = paddr_guest2host(ahci_ctx(p->pr_sc), prdt->dba, dbcsz);
-		sublen = len < dbcsz ? len : dbcsz;
+		sublen = MIN(len, dbcsz);
 		memcpy(to, ptr, sublen);
 		len -= sublen;
 		to += sublen;
@@ -788,7 +784,15 @@ next:
 	done += 8;
 	if (elen == 0) {
 		if (done >= len) {
-			ahci_write_fis_d2h(p, slot, cfis, ATA_S_READY | ATA_S_DSC);
+			if (ncq) {
+				if (first)
+					ahci_write_fis_d2h_ncq(p, slot);
+				ahci_write_fis_sdb(p, slot, cfis,
+				    ATA_S_READY | ATA_S_DSC);
+			} else {
+				ahci_write_fis_d2h(p, slot, cfis,
+				    ATA_S_READY | ATA_S_DSC);
+			}
 			p->pending &= ~(1 << slot);
 			ahci_check_stopped(p);
 			if (!first)
@@ -851,7 +855,7 @@ write_prdt(struct ahci_port *p, int slot, uint8_t *cfis,
 
 		dbcsz = (prdt->dbc & DBCMASK) + 1;
 		ptr = paddr_guest2host(ahci_ctx(p->pr_sc), prdt->dba, dbcsz);
-		sublen = len < dbcsz ? len : dbcsz;
+		sublen = MIN(len, dbcsz);
 		memcpy(ptr, from, sublen);
 		len -= sublen;
 		from += sublen;
@@ -1201,10 +1205,9 @@ atapi_read_toc(struct ahci_port *p, int slot, uint8_t *cfis)
 	{
 		int msf, size;
 		uint64_t sectors;
-		uint8_t start_track, *bp, buf[50];
+		uint8_t *bp, buf[50];
 
 		msf = (acmd[1] >> 1) & 1;
-		start_track = acmd[6];
 		bp = buf + 2;
 		*bp++ = 1;
 		*bp++ = 1;
@@ -1312,13 +1315,11 @@ atapi_read(struct ahci_port *p, int slot, uint8_t *cfis, uint32_t done)
 	struct ahci_cmd_hdr *hdr;
 	struct ahci_prdt_entry *prdt;
 	struct blockif_req *breq;
-	struct pci_ahci_softc *sc;
 	uint8_t *acmd;
 	uint64_t lba;
 	uint32_t len;
 	int err;
 
-	sc = p->pr_sc;
 	acmd = cfis + 0x40;
 	hdr = (struct ahci_cmd_hdr *)(p->cmd_lst + slot * AHCI_CL_SIZE);
 	prdt = (struct ahci_prdt_entry *)(cfis + 0x80);
@@ -1672,7 +1673,7 @@ ahci_handle_cmd(struct ahci_port *p, int slot, uint8_t *cfis)
 	case ATA_SEND_FPDMA_QUEUED:
 		if ((cfis[13] & 0x1f) == ATA_SFPDMA_DSM &&
 		    cfis[17] == 0 && cfis[16] == ATA_DSM_TRIM &&
-		    cfis[11] == 0 && cfis[13] == 1) {
+		    cfis[11] == 0 && cfis[3] == 1) {
 			ahci_handle_dsm_trim(p, slot, cfis, 0);
 			break;
 		}
@@ -1724,19 +1725,25 @@ static void
 ahci_handle_slot(struct ahci_port *p, int slot)
 {
 	struct ahci_cmd_hdr *hdr;
+#ifdef AHCI_DEBUG
 	struct ahci_prdt_entry *prdt;
+#endif
 	struct pci_ahci_softc *sc;
 	uint8_t *cfis;
+#ifdef AHCI_DEBUG
 	int cfl;
+#endif
 
 	sc = p->pr_sc;
 	hdr = (struct ahci_cmd_hdr *)(p->cmd_lst + slot * AHCI_CL_SIZE);
+#ifdef AHCI_DEBUG
 	cfl = (hdr->flags & 0x1f) * 4;
+#endif
 	cfis = paddr_guest2host(ahci_ctx(sc), hdr->ctba,
 			0x80 + hdr->prdtl * sizeof(struct ahci_prdt_entry));
+#ifdef AHCI_DEBUG
 	prdt = (struct ahci_prdt_entry *)(cfis + 0x80);
 
-#ifdef AHCI_DEBUG
 	DPRINTF("\ncfis:");
 	for (i = 0; i < cfl; i++) {
 		if (i % 10 == 0)

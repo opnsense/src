@@ -35,7 +35,6 @@ __FBSDID("$FreeBSD$");
 
 #include "namespace.h"
 #include <sys/param.h>
-#include <sys/types.h>
 #include <sys/stat.h>
 #include <errno.h>
 #include <unistd.h>
@@ -131,9 +130,7 @@ execlp(const char *name, const char *arg, ...)
 }
 
 int
-execv(name, argv)
-	const char *name;
-	char * const *argv;
+execv(const char *name, char * const *argv)
 {
 	(void)_execve(name, argv, environ);
 	return (-1);

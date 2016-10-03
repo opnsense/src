@@ -282,11 +282,6 @@ options 	EPSON_BOUNCEDMA
 options 	EPSON_MEMWIN
 
 #
-# PCI bus & PCI options:
-#
-device		pci
-
-#
 # AGP GART support
 device		agp
 
@@ -506,7 +501,7 @@ options 	KVA_PAGES=260
 # ABI Emulation
 
 # Enable iBCS2 runtime support for SCO and ISC binaries
-options 	IBCS2
+#options 	IBCS2
 
 # Emulate spx device for client side of SVR3 local X interface
 options 	SPX_HACK
@@ -544,9 +539,6 @@ options 	LINSYSFS
 options 	COMPAT_SVR4	# build emulator statically
 options 	DEBUG_SVR4	# enable verbose debugging
 device		streams		# STREAMS network driver (required for svr4).
-
-# Linux-specific pseudo devices support
-device		lindev
 
 
 #####################################################################

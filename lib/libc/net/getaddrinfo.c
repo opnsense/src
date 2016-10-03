@@ -30,8 +30,6 @@
  */
 
 /*
- * "#ifdef FAITH" part is local hack for supporting IPv4-v6 translator.
- *
  * Issues to be discussed:
  * - Return values.  There are nonstandard return values defined and used
  *   in the source code.  This is because RFC2553 is silent about which error
@@ -57,7 +55,6 @@
 __FBSDID("$FreeBSD$");
 
 #include "namespace.h"
-#include <sys/types.h>
 #include <sys/param.h>
 #include <sys/socket.h>
 #include <net/if.h>
@@ -66,7 +63,6 @@ __FBSDID("$FreeBSD$");
 #include <ifaddrs.h>
 #include <sys/queue.h>
 #ifdef INET6
-#include <net/if_var.h>
 #include <sys/sysctl.h>
 #include <sys/ioctl.h>
 #include <netinet6/in6_var.h>
@@ -100,10 +96,6 @@ __FBSDID("$FreeBSD$");
 #include "libc_private.h"
 #ifdef NS_CACHING
 #include "nscache.h"
-#endif
-
-#if defined(__KAME__) && defined(INET6)
-# define FAITH
 #endif
 
 #define ANY 0
@@ -145,13 +137,20 @@ static const struct afd {
 	 offsetof(struct sockaddr_in6, sin6_addr),
 	 in6_addrany, in6_loopback, 1},
 #define	N_INET 1
+#define	N_LOCAL 2
 #else
 #define	N_INET 0
+#define	N_LOCAL 1
 #endif
 	{PF_INET, sizeof(struct in_addr),
 	 sizeof(struct sockaddr_in),
 	 offsetof(struct sockaddr_in, sin_addr),
 	 in_addrany, in_loopback, 0},
+#define	sizeofmember(type, member)	(sizeof(((type *)0)->member))
+	{PF_LOCAL, sizeofmember(struct sockaddr_un, sun_path),
+	 sizeof(struct sockaddr_un),
+	 offsetof(struct sockaddr_un, sun_path),
+	 NULL, NULL, 0},
 	{0, 0, 0, 0, NULL, NULL, 0},
 };
 
@@ -160,29 +159,47 @@ struct explore {
 	int e_socktype;
 	int e_protocol;
 	int e_wild;
-#define WILD_AF(ex)		((ex)->e_wild & 0x01)
-#define WILD_SOCKTYPE(ex)	((ex)->e_wild & 0x02)
-#define WILD_PROTOCOL(ex)	((ex)->e_wild & 0x04)
+#define	AF_ANY		0x01
+#define	SOCKTYPE_ANY	0x02
+#define	PROTOCOL_ANY	0x04
+#define WILD_AF(ex)		((ex)->e_wild & AF_ANY)
+#define WILD_SOCKTYPE(ex)	((ex)->e_wild & SOCKTYPE_ANY)
+#define WILD_PROTOCOL(ex)	((ex)->e_wild & PROTOCOL_ANY)
 };
 
 static const struct explore explore[] = {
-#if 0
-	{ PF_LOCAL, ANY, ANY, 0x01 },
-#endif
 #ifdef INET6
-	{ PF_INET6, SOCK_DGRAM, IPPROTO_UDP, 0x07 },
-	{ PF_INET6, SOCK_STREAM, IPPROTO_TCP, 0x07 },
-	{ PF_INET6, SOCK_STREAM, IPPROTO_SCTP, 0x03 },
-	{ PF_INET6, SOCK_SEQPACKET, IPPROTO_SCTP, 0x07 },
-	{ PF_INET6, SOCK_DGRAM, IPPROTO_UDPLITE, 0x03 },
-	{ PF_INET6, SOCK_RAW, ANY, 0x05 },
+	{ PF_INET6, SOCK_DGRAM,	 IPPROTO_UDP,
+	    AF_ANY | SOCKTYPE_ANY | PROTOCOL_ANY },
+	{ PF_INET6, SOCK_STREAM, IPPROTO_TCP,
+	    AF_ANY | SOCKTYPE_ANY | PROTOCOL_ANY },
+	{ PF_INET6, SOCK_STREAM, IPPROTO_SCTP,
+	    AF_ANY | SOCKTYPE_ANY },
+	{ PF_INET6, SOCK_SEQPACKET, IPPROTO_SCTP,
+	    AF_ANY | SOCKTYPE_ANY | PROTOCOL_ANY },
+	{ PF_INET6, SOCK_DGRAM,	IPPROTO_UDPLITE,
+	    AF_ANY | SOCKTYPE_ANY },
+	{ PF_INET6, SOCK_RAW, ANY,
+	    AF_ANY | PROTOCOL_ANY },
 #endif
-	{ PF_INET, SOCK_DGRAM, IPPROTO_UDP, 0x07 },
-	{ PF_INET, SOCK_STREAM, IPPROTO_TCP, 0x07 },
-	{ PF_INET, SOCK_STREAM, IPPROTO_SCTP, 0x03 },
-	{ PF_INET, SOCK_SEQPACKET, IPPROTO_SCTP, 0x07 },
-	{ PF_INET, SOCK_DGRAM, IPPROTO_UDPLITE, 0x03 },
-	{ PF_INET, SOCK_RAW, ANY, 0x05 },
+	{ PF_INET, SOCK_DGRAM, IPPROTO_UDP,
+	    AF_ANY | SOCKTYPE_ANY | PROTOCOL_ANY },
+	{ PF_INET, SOCK_STREAM,	IPPROTO_TCP,
+	    AF_ANY | SOCKTYPE_ANY | PROTOCOL_ANY },
+	{ PF_INET, SOCK_STREAM, IPPROTO_SCTP,
+	    AF_ANY | SOCKTYPE_ANY },
+	{ PF_INET, SOCK_SEQPACKET, IPPROTO_SCTP,
+	    AF_ANY | SOCKTYPE_ANY | PROTOCOL_ANY },
+	{ PF_INET, SOCK_DGRAM, IPPROTO_UDPLITE,
+	    AF_ANY | SOCKTYPE_ANY },
+	{ PF_INET, SOCK_RAW, ANY,
+	    AF_ANY | PROTOCOL_ANY },
+	{ PF_LOCAL, SOCK_DGRAM,	ANY,
+	    AF_ANY | SOCKTYPE_ANY | PROTOCOL_ANY },
+	{ PF_LOCAL, SOCK_STREAM, ANY,
+	    AF_ANY | SOCKTYPE_ANY | PROTOCOL_ANY },
+	{ PF_LOCAL, SOCK_SEQPACKET, ANY,
+	    AF_ANY | SOCKTYPE_ANY | PROTOCOL_ANY },
 	{ -1, 0, 0, 0 },
 };
 
@@ -380,7 +397,7 @@ getaddrinfo(const char *hostname, const char *servname,
 	struct addrinfo *pai;
 	const struct afd *afd;
 	const struct explore *ex;
-	struct addrinfo *afailist[sizeof(afdl)/sizeof(afdl[0])];
+	struct addrinfo *afailist[nitems(afdl)];
 	struct addrinfo *afai_unspec;
 	int found;
 	int numeric = 0;
@@ -416,6 +433,7 @@ getaddrinfo(const char *hostname, const char *servname,
 			ERR(EAI_BADFLAGS);
 		switch (hints->ai_family) {
 		case PF_UNSPEC:
+		case PF_LOCAL:
 		case PF_INET:
 #ifdef INET6
 		case PF_INET6:
@@ -454,7 +472,7 @@ getaddrinfo(const char *hostname, const char *servname,
 	/*
 	 * RFC 3493: AI_ALL and AI_V4MAPPED are effective only against
 	 * AF_INET6 query.  They need to be ignored if specified in other
-	 * occassions.
+	 * occasions.
 	 */
 	switch (pai->ai_flags & (AI_ALL | AI_V4MAPPED)) {
 	case AI_V4MAPPED:
@@ -717,13 +735,13 @@ get_addrselectpolicy(struct policyhead *head)
 	char *buf;
 	struct in6_addrpolicy *pol, *ep;
 
-	if (sysctl(mib, sizeof(mib) / sizeof(mib[0]), NULL, &l, NULL, 0) < 0)
+	if (sysctl(mib, nitems(mib), NULL, &l, NULL, 0) < 0)
 		return (0);
 	if (l == 0)
 		return (0);
 	if ((buf = malloc(l)) == NULL)
 		return (0);
-	if (sysctl(mib, sizeof(mib) / sizeof(mib[0]), buf, &l, NULL, 0) < 0) {
+	if (sysctl(mib, nitems(mib), buf, &l, NULL, 0) < 0) {
 		free(buf);
 		return (0);
 	}
@@ -1165,6 +1183,9 @@ explore_null(const struct addrinfo *pai, const char *servname,
 	*res = NULL;
 	ai = NULL;
 
+	if (pai->ai_family == PF_LOCAL)
+		return (0);
+
 	/*
 	 * filter out AFs that are not supported by the kernel
 	 * XXX errno?
@@ -1207,8 +1228,11 @@ explore_numeric(const struct addrinfo *pai, const char *hostname,
 	const struct afd *afd;
 	struct addrinfo *ai, ai0;
 	int error;
-	char pton[PTON_MAX];
+	char pton[PTON_MAX], path[PATH_MAX], *p;
 
+#ifdef CTASSERT
+	CTASSERT(sizeofmember(struct sockaddr_un, sun_path) <= PATH_MAX);
+#endif
 	*res = NULL;
 	ai = NULL;
 
@@ -1217,6 +1241,15 @@ explore_numeric(const struct addrinfo *pai, const char *hostname,
 		return 0;
 
 	switch (afd->a_af) {
+	case AF_LOCAL:
+		if (hostname[0] != '/')
+			ERR(EAI_NONAME);
+		if (strlen(hostname) > afd->a_addrlen)
+			ERR(EAI_MEMORY);
+		/* NUL-termination does not need to be guaranteed. */
+		strncpy(path, hostname, afd->a_addrlen);
+		p = &path[0];
+		break;
 	case AF_INET:
 		/*
 		 * RFC3493 requires getaddrinfo() to accept AF_INET formats
@@ -1227,6 +1260,7 @@ explore_numeric(const struct addrinfo *pai, const char *hostname,
 		 */
 		if (inet_aton(hostname, (struct in_addr *)pton) != 1)
 			return 0;
+		p = pton;
 		break;
 	default:
 		if (inet_pton(afd->a_af, hostname, pton) != 1) {
@@ -1240,13 +1274,16 @@ explore_numeric(const struct addrinfo *pai, const char *hostname,
 			ai0.ai_family = AF_INET;
 			pai = &ai0;
 		}
+		p = pton;
 		break;
 	}
 
 	if (pai->ai_family == afd->a_af) {
-		GET_AI(ai, afd, pton);
+		GET_AI(ai, afd, p);
 		GET_PORT(ai, servname);
-		if ((pai->ai_flags & AI_CANONNAME)) {
+		if ((pai->ai_family == AF_INET ||
+		     pai->ai_family == AF_INET6) &&
+		    (pai->ai_flags & AI_CANONNAME)) {
 			/*
 			 * Set the numeric address itself as the canonical
 			 * name, based on a clarification in RFC3493.
@@ -1353,52 +1390,9 @@ get_ai(const struct addrinfo *pai, const struct afd *afd, const char *addr)
 {
 	char *p;
 	struct addrinfo *ai;
-#ifdef FAITH
-	struct in6_addr faith_prefix;
-	char *fp_str;
-	int translate = 0;
-#endif
 #ifdef INET6
 	struct in6_addr mapaddr;
-#endif
 
-#ifdef FAITH
-	/*
-	 * Transfrom an IPv4 addr into a special IPv6 addr format for
-	 * IPv6->IPv4 translation gateway. (only TCP is supported now)
-	 *
-	 * +-----------------------------------+------------+
-	 * | faith prefix part (12 bytes)      | embedded   |
-	 * |                                   | IPv4 addr part (4 bytes)
-	 * +-----------------------------------+------------+
-	 *
-	 * faith prefix part is specified as ascii IPv6 addr format
-	 * in environmental variable GAI.
-	 * For FAITH to work correctly, routing to faith prefix must be
-	 * setup toward a machine where a FAITH daemon operates.
-	 * Also, the machine must enable some mechanizm
-	 * (e.g. faith interface hack) to divert those packet with
-	 * faith prefixed destination addr to user-land FAITH daemon.
-	 */
-	fp_str = getenv("GAI");
-	if (fp_str && inet_pton(AF_INET6, fp_str, &faith_prefix) == 1 &&
-	    afd->a_af == AF_INET && pai->ai_socktype == SOCK_STREAM) {
-		u_int32_t v4a;
-		u_int8_t v4a_top;
-
-		memcpy(&v4a, addr, sizeof v4a);
-		v4a_top = v4a >> IN_CLASSA_NSHIFT;
-		if (!IN_MULTICAST(v4a) && !IN_EXPERIMENTAL(v4a) &&
-		    v4a_top != 0 && v4a != IN_LOOPBACKNET) {
-			afd = &afdl[N_INET6];
-			memcpy(&faith_prefix.s6_addr[12], addr,
-			       sizeof(struct in_addr));
-			translate = 1;
-		}
-	}
-#endif
-
-#ifdef INET6
 	if (afd->a_af == AF_INET && (pai->ai_flags & AI_V4MAPPED) != 0) {
 		afd = &afdl[N_INET6];
 		_map_v4v6_address(addr, (char *)&mapaddr);
@@ -1416,13 +1410,14 @@ get_ai(const struct addrinfo *pai, const struct afd *afd, const char *addr)
 	memset(ai->ai_addr, 0, (size_t)afd->a_socklen);
 	ai->ai_addr->sa_len = afd->a_socklen;
 	ai->ai_addrlen = afd->a_socklen;
+	if (ai->ai_family == PF_LOCAL) {
+		size_t n = strnlen(addr, afd->a_addrlen);
+
+		ai->ai_addrlen -= afd->a_addrlen - n;
+		ai->ai_addr->sa_len -= afd->a_addrlen - n;
+	}
 	ai->ai_addr->sa_family = ai->ai_family = afd->a_af;
 	p = (char *)(void *)(ai->ai_addr);
-#ifdef FAITH
-	if (translate == 1)
-		memcpy(p + afd->a_off, &faith_prefix, (size_t)afd->a_addrlen);
-	else
-#endif
 	memcpy(p + afd->a_off, addr, (size_t)afd->a_addrlen);
 	return ai;
 }
@@ -1479,6 +1474,9 @@ get_port(struct addrinfo *ai, const char *servname, int matchonly)
 	if (servname == NULL)
 		return 0;
 	switch (ai->ai_family) {
+	case AF_LOCAL:
+		/* AF_LOCAL ignores servname silently. */
+		return (0);
 	case AF_INET:
 #ifdef AF_INET6
 	case AF_INET6:

@@ -39,7 +39,6 @@ __FBSDID("$FreeBSD$");
  * vnode op calls for Sun NFS version 2, 3 and 4
  */
 
-#include "opt_kdtrace.h"
 #include "opt_inet.h"
 
 #include <sys/param.h>
@@ -139,7 +138,6 @@ static vop_rmdir_t	nfs_rmdir;
 static vop_symlink_t	nfs_symlink;
 static vop_readdir_t	nfs_readdir;
 static vop_strategy_t	nfs_strategy;
-static vop_lock1_t	nfs_lock1;
 static	int	nfs_lookitup(struct vnode *, char *, int,
 		    struct ucred *, struct thread *, struct nfsnode **);
 static	int	nfs_sillyrename(struct vnode *, struct vnode *,
@@ -168,7 +166,6 @@ struct vop_vector newnfs_vnodeops = {
 	.vop_putpages =		ncl_putpages,
 	.vop_inactive =		ncl_inactive,
 	.vop_link =		nfs_link,
-	.vop_lock1 = 		nfs_lock1,
 	.vop_lookup =		nfs_lookup,
 	.vop_mkdir =		nfs_mkdir,
 	.vop_mknod =		nfs_mknod,
@@ -975,7 +972,7 @@ nfs_setattr(struct vop_setattr_args *ap)
 			mtx_lock(&np->n_mtx);
  			np->n_vattr.na_size = np->n_size = vap->va_size;
 			mtx_unlock(&np->n_mtx);
-  		};
+  		}
   	} else {
 		mtx_lock(&np->n_mtx);
 		if ((vap->va_mtime.tv_sec != VNOVAL || vap->va_atime.tv_sec != VNOVAL) && 
@@ -1788,7 +1785,7 @@ nfs_rename(struct vop_rename_args *ap)
 	}
 
 	if (fvp == tvp) {
-		ncl_printf("nfs_rename: fvp == tvp (can't happen)\n");
+		printf("nfs_rename: fvp == tvp (can't happen)\n");
 		error = 0;
 		goto out;
 	}
@@ -2316,7 +2313,7 @@ ncl_readdirrpc(struct vnode *vp, struct uio *uiop, struct ucred *cred,
 			dnp->n_direofoffset = uiop->uio_offset;
 		else {
 			if (uiop->uio_resid > 0)
-				ncl_printf("EEK! readdirrpc resid > 0\n");
+				printf("EEK! readdirrpc resid > 0\n");
 			ncl_dircookie_lock(dnp);
 			cookiep = ncl_getcookie(dnp, uiop->uio_offset, 1);
 			*cookiep = cookie;
@@ -2375,7 +2372,7 @@ ncl_readdirplusrpc(struct vnode *vp, struct uio *uiop, struct ucred *cred,
 			dnp->n_direofoffset = uiop->uio_offset;
 		else {
 			if (uiop->uio_resid > 0)
-				ncl_printf("EEK! readdirplusrpc resid > 0\n");
+				printf("EEK! readdirplusrpc resid > 0\n");
 			ncl_dircookie_lock(dnp);
 			cookiep = ncl_getcookie(dnp, uiop->uio_offset, 1);
 			*cookiep = cookie;
@@ -2415,7 +2412,7 @@ nfs_sillyrename(struct vnode *dvp, struct vnode *vp, struct componentname *cnp)
 
 	/* 
 	 * Fudge together a funny name.
-	 * Changing the format of the funny name to accomodate more 
+	 * Changing the format of the funny name to accommodate more 
 	 * sillynames per directory.
 	 * The name is now changed to .nfs.<ticks>.<pid>.4, where ticks is 
 	 * CPU ticks since boot.
@@ -3100,10 +3097,14 @@ nfs_advlock(struct vop_advlock_args *ap)
 			}
 		}
 		if (error == 0 && ap->a_op == F_SETLK) {
-			/* Mark that a file lock has been acquired. */
-			mtx_lock(&np->n_mtx);
-			np->n_flag |= NHASBEENLOCKED;
-			mtx_unlock(&np->n_mtx);
+			error = NFSVOPLOCK(vp, LK_SHARED);
+			if (error == 0) {
+				/* Mark that a file lock has been acquired. */
+				mtx_lock(&np->n_mtx);
+				np->n_flag |= NHASBEENLOCKED;
+				mtx_unlock(&np->n_mtx);
+				NFSVOPUNLOCK(vp, 0);
+			}
 		}
 	}
 	return (error);
@@ -3144,8 +3145,8 @@ nfs_print(struct vop_print_args *ap)
 	struct vnode *vp = ap->a_vp;
 	struct nfsnode *np = VTONFS(vp);
 
-	ncl_printf("\tfileid %ld fsid 0x%x",
-	   np->n_vattr.na_fileid, np->n_vattr.na_fsid);
+	printf("\tfileid %ld fsid 0x%x", np->n_vattr.na_fileid,
+	    np->n_vattr.na_fsid);
 	if (vp->v_type == VFIFO)
 		fifo_printinfo(vp);
 	printf("\n");
@@ -3349,37 +3350,6 @@ struct buf_ops buf_ops_newnfs = {
 	.bop_sync	=	bufsync,
 	.bop_bdflush	=	bufbdflush,
 };
-
-/*
- * Cloned from vop_stdlock(), and then the ugly hack added.
- */
-static int
-nfs_lock1(struct vop_lock1_args *ap)
-{
-	struct vnode *vp = ap->a_vp;
-	int error = 0;
-
-	/*
-	 * Since vfs_hash_get() calls vget() and it will no longer work
-	 * for FreeBSD8 with flags == 0, I can only think of this horrible
-	 * hack to work around it. I call vfs_hash_get() with LK_EXCLOTHER
-	 * and then handle it here. All I want for this case is a v_usecount
-	 * on the vnode to use for recovery, while another thread might
-	 * hold a lock on the vnode. I have the other threads blocked, so
-	 * there isn't any race problem.
-	 */
-	if ((ap->a_flags & LK_TYPE_MASK) == LK_EXCLOTHER) {
-		if ((ap->a_flags & LK_INTERLOCK) == 0)
-			panic("ncllock1");
-		if ((vp->v_iflag & VI_DOOMED))
-			error = ENOENT;
-		VI_UNLOCK(vp);
-		return (error);
-	}
-	return (_lockmgr_args(vp->v_vnlock, ap->a_flags, VI_MTX(vp),
-	    LK_WMESG_DEFAULT, LK_PRIO_DEFAULT, LK_TIMO_DEFAULT, ap->a_file,
-	    ap->a_line));
-}
 
 static int
 nfs_getacl(struct vop_getacl_args *ap)

@@ -15,18 +15,20 @@
 #ifndef LLVM_TARGET_TARGETOPTIONS_H
 #define LLVM_TARGET_TARGETOPTIONS_H
 
+#include "llvm/Target/TargetRecip.h"
+#include "llvm/MC/MCTargetOptions.h"
 #include <string>
 
 namespace llvm {
   class MachineFunction;
+  class Module;
   class StringRef;
 
-  // Possible float ABI settings. Used with FloatABIType in TargetOptions.h.
   namespace FloatABI {
     enum ABIType {
-      Default, // Target-specific (either soft or hard depending on triple,etc).
-      Soft, // Soft float.
-      Hard  // Hard float.
+      Default, // Target-specific (either soft or hard depending on triple, etc).
+      Soft,    // Soft float.
+      Hard     // Hard float.
     };
   }
 
@@ -38,31 +40,76 @@ namespace llvm {
     };
   }
 
+  namespace JumpTable {
+    enum JumpTableType {
+      Single,          // Use a single table for all indirect jumptable calls.
+      Arity,           // Use one table per number of function parameters.
+      Simplified,      // Use one table per function type, with types projected
+                       // into 4 types: pointer to non-function, struct,
+                       // primitive, and function pointer.
+      Full             // Use one table per unique function type
+    };
+  }
+
+  namespace ThreadModel {
+    enum Model {
+      POSIX,  // POSIX Threads
+      Single  // Single Threaded Environment
+    };
+  }
+
+  enum class EABI {
+    Unknown,
+    Default, // Default means not specified
+    EABI4,   // Target-specific (either 4, 5 or gnu depending on triple).
+    EABI5,
+    GNU
+  };
+
+  /// Identify a debugger for "tuning" the debug info.
+  ///
+  /// The "debugger tuning" concept allows us to present a more intuitive
+  /// interface that unpacks into different sets of defaults for the various
+  /// individual feature-flag settings, that suit the preferences of the
+  /// various debuggers.  However, it's worth remembering that debuggers are
+  /// not the only consumers of debug info, and some variations in DWARF might
+  /// better be treated as target/platform issues. Fundamentally,
+  /// o if the feature is useful (or not) to a particular debugger, regardless
+  ///   of the target, that's a tuning decision;
+  /// o if the feature is useful (or not) on a particular platform, regardless
+  ///   of the debugger, that's a target decision.
+  /// It's not impossible to see both factors in some specific case.
+  ///
+  /// The "tuning" should be used to set defaults for individual feature flags
+  /// in DwarfDebug; if a given feature has a more specific command-line option,
+  /// that option should take precedence over the tuning.
+  enum class DebuggerKind {
+    Default,  // No specific tuning requested.
+    GDB,      // Tune debug info for gdb.
+    LLDB,     // Tune debug info for lldb.
+    SCE       // Tune debug info for SCE targets (e.g. PS4).
+  };
+
   class TargetOptions {
   public:
     TargetOptions()
-        : PrintMachineCode(false), NoFramePointerElim(false),
-          LessPreciseFPMADOption(false),
-          UnsafeFPMath(false), NoInfsFPMath(false),
-          NoNaNsFPMath(false), HonorSignDependentRoundingFPMathOption(false),
-          UseSoftFloat(false), NoZerosInBSS(false),
-          JITEmitDebugInfo(false), JITEmitDebugInfoToDisk(false),
-          GuaranteedTailCallOpt(false), DisableTailCalls(false),
-          StackAlignmentOverride(0),
+        : PrintMachineCode(false), LessPreciseFPMADOption(false),
+          UnsafeFPMath(false), NoInfsFPMath(false), NoNaNsFPMath(false),
+          HonorSignDependentRoundingFPMathOption(false), NoZerosInBSS(false),
+          GuaranteedTailCallOpt(false), StackAlignmentOverride(0),
           EnableFastISel(false), PositionIndependentExecutable(false),
-          EnableSegmentedStacks(false), UseInitArray(false), TrapFuncName(""),
-          FloatABIType(FloatABI::Default), AllowFPOpFusion(FPOpFusion::Standard)
-    {}
+          UseInitArray(false), DisableIntegratedAS(false),
+          CompressDebugSections(false), FunctionSections(false),
+          DataSections(false), UniqueSectionNames(true), TrapUnreachable(false),
+          EmulatedTLS(false), FloatABIType(FloatABI::Default),
+          AllowFPOpFusion(FPOpFusion::Standard), Reciprocals(TargetRecip()),
+          JTType(JumpTable::Single), ThreadModel(ThreadModel::POSIX),
+          EABIVersion(EABI::Default), DebuggerTuning(DebuggerKind::Default) {}
 
     /// PrintMachineCode - This flag is enabled when the -print-machineinstrs
     /// option is specified on the command line, and should enable debugging
     /// output from the code generator.
     unsigned PrintMachineCode : 1;
-
-    /// NoFramePointerElim - This flag is enabled when the -disable-fp-elim is
-    /// specified on the command line.  If the target supports the frame pointer
-    /// elimination optimization, this option should disable it.
-    unsigned NoFramePointerElim : 1;
 
     /// DisableFramePointerElim - This returns true if frame pointer elimination
     /// optimization should be disabled for the given machine function.
@@ -106,25 +153,10 @@ namespace llvm {
     unsigned HonorSignDependentRoundingFPMathOption : 1;
     bool HonorSignDependentRoundingFPMath() const;
 
-    /// UseSoftFloat - This flag is enabled when the -soft-float flag is
-    /// specified on the command line.  When this flag is on, the code generator
-    /// will generate libcalls to the software floating point library instead of
-    /// target FP instructions.
-    unsigned UseSoftFloat : 1;
-
     /// NoZerosInBSS - By default some codegens place zero-initialized data to
     /// .bss section. This flag disables such behaviour (necessary, e.g. for
     /// crt*.o compiling).
     unsigned NoZerosInBSS : 1;
-
-    /// JITEmitDebugInfo - This flag indicates that the JIT should try to emit
-    /// debug information and notify a debugger about it.
-    unsigned JITEmitDebugInfo : 1;
-
-    /// JITEmitDebugInfoToDisk - This flag indicates that the JIT should write
-    /// the object files generated by the JITEmitDebugInfo flag to disk.  This
-    /// flag is hidden and is only for debugging the debug info.
-    unsigned JITEmitDebugInfoToDisk : 1;
 
     /// GuaranteedTailCallOpt - This flag is enabled when -tailcallopt is
     /// specified on the commandline. When the flag is on, participating targets
@@ -133,10 +165,6 @@ namespace llvm {
     /// criteria (being at the end of a function, having the same return type
     /// as their parent function, etc.), using an alternate ABI if necessary.
     unsigned GuaranteedTailCallOpt : 1;
-
-    /// DisableTailCalls - This flag controls whether we will use tail calls.
-    /// Disabling them may be useful to maintain a correct call stack.
-    unsigned DisableTailCalls : 1;
 
     /// StackAlignmentOverride - Override default stack alignment for target.
     unsigned StackAlignmentOverride;
@@ -152,24 +180,37 @@ namespace llvm {
     /// if the relocation model is anything other than PIC.
     unsigned PositionIndependentExecutable : 1;
 
-    unsigned EnableSegmentedStacks : 1;
-
     /// UseInitArray - Use .init_array instead of .ctors for static
     /// constructors.
     unsigned UseInitArray : 1;
 
-    /// getTrapFunctionName - If this returns a non-empty string, this means
-    /// isel should lower Intrinsic::trap to a call to the specified function
-    /// name instead of an ISD::TRAP node.
-    std::string TrapFuncName;
-    StringRef getTrapFunctionName() const;
+    /// Disable the integrated assembler.
+    unsigned DisableIntegratedAS : 1;
+
+    /// Compress DWARF debug sections.
+    unsigned CompressDebugSections : 1;
+
+    /// Emit functions into separate sections.
+    unsigned FunctionSections : 1;
+
+    /// Emit data into separate sections.
+    unsigned DataSections : 1;
+
+    unsigned UniqueSectionNames : 1;
+
+    /// Emit target-specific trap instruction for 'unreachable' IR instructions.
+    unsigned TrapUnreachable : 1;
+
+    /// EmulatedTLS - This flag enables emulated TLS model, using emutls
+    /// function in the runtime library..
+    unsigned EmulatedTLS : 1;
 
     /// FloatABIType - This setting is set by -float-abi=xxx option is specfied
     /// on the command line. This setting may either be Default, Soft, or Hard.
     /// Default selects the target's default behavior. Soft selects the ABI for
-    /// UseSoftFloat, but does not indicate that FP hardware may not be used.
-    /// Such a combination is unfortunately popular (e.g. arm-apple-darwin).
-    /// Hard presumes that the normal FP ABI is used.
+    /// software floating point, but does not indicate that FP hardware may not
+    /// be used. Such a combination is unfortunately popular (e.g.
+    /// arm-apple-darwin). Hard presumes that the normal FP ABI is used.
     FloatABI::ABIType FloatABIType;
 
     /// AllowFPOpFusion - This flag is set by the -fuse-fp-ops=xxx option.
@@ -189,6 +230,26 @@ namespace llvm {
     /// via the llvm.fma.* intrinsic) will always be honored, regardless of
     /// the value of this option.
     FPOpFusion::FPOpFusionMode AllowFPOpFusion;
+
+    /// This class encapsulates options for reciprocal-estimate code generation.
+    TargetRecip Reciprocals;
+
+    /// JTType - This flag specifies the type of jump-instruction table to
+    /// create for functions that have the jumptable attribute.
+    JumpTable::JumpTableType JTType;
+
+    /// ThreadModel - This flag specifies the type of threading model to assume
+    /// for things like atomics
+    ThreadModel::Model ThreadModel;
+
+    /// EABIVersion - This flag specifies the EABI version
+    EABI EABIVersion;
+
+    /// Which debugger to tune for.
+    DebuggerKind DebuggerTuning;
+
+    /// Machine level options.
+    MCTargetOptions MCOptions;
   };
 
 // Comparison operators:
@@ -202,20 +263,22 @@ inline bool operator==(const TargetOptions &LHS,
     ARE_EQUAL(NoInfsFPMath) &&
     ARE_EQUAL(NoNaNsFPMath) &&
     ARE_EQUAL(HonorSignDependentRoundingFPMathOption) &&
-    ARE_EQUAL(UseSoftFloat) &&
     ARE_EQUAL(NoZerosInBSS) &&
-    ARE_EQUAL(JITEmitDebugInfo) &&
-    ARE_EQUAL(JITEmitDebugInfoToDisk) &&
     ARE_EQUAL(GuaranteedTailCallOpt) &&
-    ARE_EQUAL(DisableTailCalls) &&
     ARE_EQUAL(StackAlignmentOverride) &&
     ARE_EQUAL(EnableFastISel) &&
     ARE_EQUAL(PositionIndependentExecutable) &&
-    ARE_EQUAL(EnableSegmentedStacks) &&
     ARE_EQUAL(UseInitArray) &&
-    ARE_EQUAL(TrapFuncName) &&
+    ARE_EQUAL(TrapUnreachable) &&
+    ARE_EQUAL(EmulatedTLS) &&
     ARE_EQUAL(FloatABIType) &&
-    ARE_EQUAL(AllowFPOpFusion);
+    ARE_EQUAL(AllowFPOpFusion) &&
+    ARE_EQUAL(Reciprocals) &&
+    ARE_EQUAL(JTType) &&
+    ARE_EQUAL(ThreadModel) &&
+    ARE_EQUAL(EABIVersion) &&
+    ARE_EQUAL(DebuggerTuning) &&
+    ARE_EQUAL(MCOptions);
 #undef ARE_EQUAL
 }
 

@@ -1,6 +1,6 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 PROG=	ssh-keysign
 SRCS=	ssh-keysign.c readconf.c
@@ -9,19 +9,15 @@ CFLAGS+=-I${SSHDIR} -include ssh_namespace.h
 SRCS+=	ssh_namespace.h
 BINMODE=4555
 
-DPADD=	${LIBSSH}
-LDADD=	-lssh
-USEPRIVATELIB= ssh
+LIBADD=	ssh
 
 .if ${MK_LDNS} != "no"
 CFLAGS+=	-DHAVE_LDNS=1
 #DPADD+=	${LIBLDNS}
 #LDADD+=	-lldns
-#USEPRIVATELIB+= ldns
 .endif
 
-DPADD+= ${LIBCRYPT} ${LIBCRYPTO} ${LIBZ}
-LDADD+= -lcrypt -lcrypto -lz
+LIBADD+=	crypto
 
 .include <bsd.prog.mk>
 

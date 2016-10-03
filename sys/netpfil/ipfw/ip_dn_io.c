@@ -39,6 +39,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/kernel.h>
 #include <sys/lock.h>
 #include <sys/module.h>
+#include <sys/mutex.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/rwlock.h>
@@ -279,10 +280,39 @@ dn_tag_get(struct mbuf *m)
 static inline void
 mq_append(struct mq *q, struct mbuf *m)
 {
+#ifdef USERSPACE
+	// buffers from netmap need to be copied
+	// XXX note that the routine is not expected to fail
+	ND("append %p to %p", m, q);
+	if (m->m_flags & M_STACK) {
+		struct mbuf *m_new;
+		void *p;
+		int l, ofs;
+
+		ofs = m->m_data - m->__m_extbuf;
+		// XXX allocate
+		MGETHDR(m_new, M_NOWAIT, MT_DATA);
+		ND("*** WARNING, volatile buf %p ext %p %d dofs %d m_new %p",
+			m, m->__m_extbuf, m->__m_extlen, ofs, m_new);
+		p = m_new->__m_extbuf;	/* new pointer */
+		l = m_new->__m_extlen;	/* new len */
+		if (l <= m->__m_extlen) {
+			panic("extlen too large");
+		}
+
+		*m_new = *m;	// copy
+		m_new->m_flags &= ~M_STACK;
+		m_new->__m_extbuf = p; // point to new buffer
+		_pkt_copy(m->__m_extbuf, p, m->__m_extlen);
+		m_new->m_data = p + ofs;
+		m = m_new;
+	}
+#endif /* USERSPACE */
 	if (q->head == NULL)
 		q->head = m;
 	else
 		q->tail->m_nextpkt = m;
+	q->count++;
 	q->tail = m;
 	m->m_nextpkt = NULL;
 }
@@ -423,8 +453,7 @@ ecn_mark(struct mbuf* m)
 	switch (ip->ip_v) {
 	case IPVERSION:
 	{
-		u_int8_t otos;
-		int sum;
+		uint16_t old;
 
 		if ((ip->ip_tos & IPTOS_ECN_MASK) == IPTOS_ECN_NOTECT)
 			return (0);	/* not-ECT */
@@ -435,17 +464,9 @@ ecn_mark(struct mbuf* m)
 		 * ecn-capable but not marked,
 		 * mark CE and update checksum
 		 */
-		otos = ip->ip_tos;
+		old = *(uint16_t *)ip;
 		ip->ip_tos |= IPTOS_ECN_CE;
-		/*
-		 * update checksum (from RFC1624)
-		 *	   HC' = ~(~HC + ~m + m')
-		 */
-		sum = ~ntohs(ip->ip_sum) & 0xffff;
-		sum += (~otos & 0xffff) + ip->ip_tos;
-		sum = (sum >> 16) + (sum & 0xffff);
-		sum += (sum >> 16);  /* add carry */
-		ip->ip_sum = htons(~sum & 0xffff);
+		ip->ip_sum = cksum_adjust(ip->ip_sum, old, *(uint16_t *)ip);
 		return (1);
 	}
 #ifdef INET6
@@ -513,7 +534,7 @@ dn_enqueue(struct dn_queue *q, struct mbuf* m, int drop)
 #endif
 	if (f->flags & DN_IS_RED && red_drops(q, m->m_pkthdr.len)) {
 		if (!(f->flags & DN_IS_ECN) || !ecn_mark(m))
-		goto drop;
+			goto drop;
 	}
 	if (f->flags & DN_QSIZE_BYTES) {
 		if (q->ni.len_bytes > f->qsize)
@@ -526,14 +547,14 @@ dn_enqueue(struct dn_queue *q, struct mbuf* m, int drop)
 	q->ni.len_bytes += len;
 	ni->length++;
 	ni->len_bytes += len;
-	return 0;
+	return (0);
 
 drop:
 	io_pkt_drop++;
 	q->ni.drops++;
 	ni->drops++;
 	FREE_PKT(m);
-	return 1;
+	return (1);
 }
 
 /*
@@ -553,6 +574,7 @@ transmit_event(struct mq *q, struct delay_line *dline, uint64_t now)
 		if (!DN_KEY_LEQ(pkt->output_time, now))
 			break;
 		dline->mq.head = m->m_nextpkt;
+		dline->mq.count--;
 		mq_append(q, m);
 	}
 	if (m != NULL) {
@@ -749,10 +771,15 @@ dummynet_send(struct mbuf *m)
 			/* extract the dummynet info, rename the tag
 			 * to carry reinject info.
 			 */
-			dst = pkt->dn_dir;
-			ifp = pkt->ifp;
-			tag->m_tag_cookie = MTAG_IPFW_RULE;
-			tag->m_tag_id = 0;
+			if (pkt->dn_dir == (DIR_OUT | PROTO_LAYER2) &&
+				pkt->ifp == NULL) {
+				dst = DIR_DROP;
+			} else {
+				dst = pkt->dn_dir;
+				ifp = pkt->ifp;
+				tag->m_tag_cookie = MTAG_IPFW_RULE;
+				tag->m_tag_id = 0;
+			}
 		}
 
 		switch (dst) {
@@ -761,15 +788,11 @@ dummynet_send(struct mbuf *m)
 			break ;
 
 		case DIR_IN :
-			m_tag_delete(m, tag);
-		        m->m_flags |= M_SKIP_PFIL;
 			netisr_dispatch(NETISR_IP, m);
 			break;
 
 #ifdef INET6
 		case DIR_IN | PROTO_IPV6:
-			m_tag_delete(m, tag);
-		        m->m_flags |= M_SKIP_PFIL;
 			netisr_dispatch(NETISR_IPV6, m);
 			break;
 

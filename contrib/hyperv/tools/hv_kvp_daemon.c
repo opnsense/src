@@ -811,7 +811,7 @@ kvp_get_ip_info(int family, char *if_name, int op,
 	int error = 0;
 	char *buffer;
 	size_t buffer_length;
-	struct hv_kvp_ipaddr_value *ip_buffer;
+	struct hv_kvp_ipaddr_value *ip_buffer = NULL;
 	char cidr_mask[5];
 	int weight;
 	int i;
@@ -1437,7 +1437,7 @@ main(int argc, char *argv[])
 
 
 	for (;;) {
-		r = poll (hv_kvp_poll_fd, 1, 100);
+		r = poll (hv_kvp_poll_fd, 1, INFTIM);
 
 		KVP_LOG(LOG_DEBUG, "poll returned r = %d, revent = 0x%x\n",
 		    r, hv_kvp_poll_fd[0].revents);

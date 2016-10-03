@@ -7,8 +7,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "lldb/lldb-python.h"
-
 // C Includes
 // C++ Includes
 
@@ -44,156 +42,134 @@ public:
     CommandObjectBreakpointCommandAdd (CommandInterpreter &interpreter) :
         CommandObjectParsed (interpreter,
                              "add",
-                             "Add a set of commands to a breakpoint, to be executed whenever the breakpoint is hit.",
+                             "Add a set of commands to a breakpoint, to be executed whenever the breakpoint is hit."
+                             "  If no breakpoint is specified, adds the commands to the last created breakpoint.",
                              NULL),
-    IOHandlerDelegateMultiline ("DONE", IOHandlerDelegate::Completion::LLDBCommand),
+        IOHandlerDelegateMultiline ("DONE", IOHandlerDelegate::Completion::LLDBCommand),
         m_options (interpreter)
     {
         SetHelpLong (
-"\nGeneral information about entering breakpoint commands\n\
-------------------------------------------------------\n\
-\n\
-This command will cause you to be prompted to enter the command or set of\n\
-commands you wish to be executed when the specified breakpoint is hit. You\n\
-will be told to enter your command(s), and will see a '> 'prompt. Because\n\
-you can enter one or many commands to be executed when a breakpoint is hit,\n\
-you will continue to be prompted after each new-line that you enter, until you\n\
-enter the word 'DONE', which will cause the commands you have entered to be\n\
-stored with the breakpoint and executed when the breakpoint is hit.\n\
-\n\
-Syntax checking is not necessarily done when breakpoint commands are entered.\n\
-An improperly written breakpoint command will attempt to get executed when the\n\
-breakpoint gets hit, and usually silently fail.  If your breakpoint command does\n\
-not appear to be getting executed, go back and check your syntax.\n\
-\n\
-Special information about PYTHON breakpoint commands\n\
-----------------------------------------------------\n\
-\n\
-You may enter either one line of Python, multiple lines of Python (including\n\
-function definitions), or specify a Python function in a module that has already,\n\
-or will be imported.  If you enter a single line of Python, that will be passed\n\
-to the Python interpreter 'as is' when the breakpoint gets hit.  If you enter\n\
-function definitions, they will be passed to the Python interpreter as soon as\n\
-you finish entering the breakpoint command, and they can be called later (don't\n\
-forget to add calls to them, if you want them called when the breakpoint is\n\
-hit).  If you enter multiple lines of Python that are not function definitions,\n\
-they will be collected into a new, automatically generated Python function, and\n\
-a call to the newly generated function will be attached to the breakpoint.\n\
-\n\
-\n\
-This auto-generated function is passed in three arguments:\n\
-\n\
-    frame:  a lldb.SBFrame object for the frame which hit breakpoint.\n\
-    bp_loc: a lldb.SBBreakpointLocation object that represents the breakpoint\n\
-            location that was hit.\n\
-    dict:   the python session dictionary hit.\n\
-\n\
-When specifying a python function with the --python-function option, you need\n\
-to supply the function name prepended by the module name. So if you import a\n\
-module named 'myutils' that contains a 'breakpoint_callback' function, you would\n\
-specify the option as:\n\
-\n\
-    --python-function myutils.breakpoint_callback\n\
-\n\
-The function itself must have the following prototype:\n\
-\n\
-def breakpoint_callback(frame, bp_loc, dict):\n\
-  # Your code goes here\n\
-\n\
-The arguments are the same as the 3 auto generation function arguments listed\n\
-above. Note that the global variable 'lldb.frame' will NOT be setup when this\n\
-function is called, so be sure to use the 'frame' argument. The 'frame' argument\n\
-can get you to the thread (frame.GetThread()), the thread can get you to the\n\
-process (thread.GetProcess()), and the process can get you back to the target\n\
-(process.GetTarget()).\n\
-\n\
-Important Note: Because loose Python code gets collected into functions, if you\n\
-want to access global variables in the 'loose' code, you need to specify that\n\
-they are global, using the 'global' keyword.  Be sure to use correct Python\n\
-syntax, including indentation, when entering Python breakpoint commands.\n\
-\n\
-As a third option, you can pass the name of an already existing Python function\n\
-and that function will be attached to the breakpoint. It will get passed the\n\
-frame and bp_loc arguments mentioned above.\n\
-\n\
-Example Python one-line breakpoint command:\n\
-\n\
-(lldb) breakpoint command add -s python 1\n\
-Enter your Python command(s). Type 'DONE' to end.\n\
-> print \"Hit this breakpoint!\"\n\
-> DONE\n\
-\n\
-As a convenience, this also works for a short Python one-liner:\n\
-(lldb) breakpoint command add -s python 1 -o \"import time; print time.asctime()\"\n\
-(lldb) run\n\
-Launching '.../a.out'  (x86_64)\n\
-(lldb) Fri Sep 10 12:17:45 2010\n\
-Process 21778 Stopped\n\
-* thread #1: tid = 0x2e03, 0x0000000100000de8 a.out`c + 7 at main.c:39, stop reason = breakpoint 1.1, queue = com.apple.main-thread\n\
-  36   	\n\
-  37   	int c(int val)\n\
-  38   	{\n\
-  39 ->	    return val + 3;\n\
-  40   	}\n\
-  41   	\n\
-  42   	int main (int argc, char const *argv[])\n\
-(lldb)\n\
-\n\
-Example multiple line Python breakpoint command, using function definition:\n\
-\n\
-(lldb) breakpoint command add -s python 1\n\
-Enter your Python command(s). Type 'DONE' to end.\n\
-> def breakpoint_output (bp_no):\n\
->     out_string = \"Hit breakpoint number \" + repr (bp_no)\n\
->     print out_string\n\
->     return True\n\
-> breakpoint_output (1)\n\
-> DONE\n\
-\n\
-\n\
-Example multiple line Python breakpoint command, using 'loose' Python:\n\
-\n\
-(lldb) breakpoint command add -s p 1\n\
-Enter your Python command(s). Type 'DONE' to end.\n\
-> global bp_count\n\
-> bp_count = bp_count + 1\n\
-> print \"Hit this breakpoint \" + repr(bp_count) + \" times!\"\n\
-> DONE\n\
-\n\
-In this case, since there is a reference to a global variable,\n\
-'bp_count', you will also need to make sure 'bp_count' exists and is\n\
-initialized:\n\
-\n\
-(lldb) script\n\
->>> bp_count = 0\n\
->>> quit()\n\
-\n\
-(lldb)\n\
-\n\
-\n\
-Your Python code, however organized, can optionally return a value.\n\
-If the returned value is False, that tells LLDB not to stop at the breakpoint\n\
-to which the code is associated. Returning anything other than False, or even\n\
-returning None, or even omitting a return statement entirely, will cause\n\
-LLDB to stop.\n\
-\n\
-Final Note:  If you get a warning that no breakpoint command was generated, but\n\
-you did not get any syntax errors, you probably forgot to add a call to your\n\
-functions.\n\
-\n\
-Special information about debugger command breakpoint commands\n\
---------------------------------------------------------------\n\
-\n\
-You may enter any debugger command, exactly as you would at the debugger prompt.\n\
-You may enter as many debugger commands as you like, but do NOT enter more than\n\
-one command per line.\n" );
+R"(
+General information about entering breakpoint commands
+------------------------------------------------------
+
+)" "This command will prompt for commands to be executed when the specified \
+breakpoint is hit.  Each command is typed on its own line following the '> ' \
+prompt until 'DONE' is entered." R"(
+
+)" "Syntactic errors may not be detected when initially entered, and many \
+malformed commands can silently fail when executed.  If your breakpoint commands \
+do not appear to be executing, double-check the command syntax." R"(
+
+)" "Note: You may enter any debugger command exactly as you would at the debugger \
+prompt.  There is no limit to the number of commands supplied, but do NOT enter \
+more than one command per line." R"(
+
+Special information about PYTHON breakpoint commands
+----------------------------------------------------
+
+)" "You may enter either one or more lines of Python, including function \
+definitions or calls to functions that will have been imported by the time \
+the code executes.  Single line breakpoint commands will be interpreted 'as is' \
+when the breakpoint is hit.  Multiple lines of Python will be wrapped in a \
+generated function, and a call to the function will be attached to the breakpoint." R"(
+
+This auto-generated function is passed in three arguments:
+
+    frame:  an lldb.SBFrame object for the frame which hit breakpoint.
+
+    bp_loc: an lldb.SBBreakpointLocation object that represents the breakpoint location that was hit.
+
+    dict:   the python session dictionary hit.
+
+)" "When specifying a python function with the --python-function option, you need \
+to supply the function name prepended by the module name:" R"(
+
+    --python-function myutils.breakpoint_callback
+
+The function itself must have the following prototype:
+
+def breakpoint_callback(frame, bp_loc, dict):
+  # Your code goes here
+
+)" "The arguments are the same as the arguments passed to generated functions as \
+described above.  Note that the global variable 'lldb.frame' will NOT be updated when \
+this function is called, so be sure to use the 'frame' argument. The 'frame' argument \
+can get you to the thread via frame.GetThread(), the thread can get you to the \
+process via thread.GetProcess(), and the process can get you back to the target \
+via process.GetTarget()." R"(
+
+)" "Important Note: As Python code gets collected into functions, access to global \
+variables requires explicit scoping using the 'global' keyword.  Be sure to use correct \
+Python syntax, including indentation, when entering Python breakpoint commands." R"(
+
+Example Python one-line breakpoint command:
+
+(lldb) breakpoint command add -s python 1
+Enter your Python command(s). Type 'DONE' to end.
+> print "Hit this breakpoint!"
+> DONE
+
+As a convenience, this also works for a short Python one-liner:
+
+(lldb) breakpoint command add -s python 1 -o 'import time; print time.asctime()'
+(lldb) run
+Launching '.../a.out'  (x86_64)
+(lldb) Fri Sep 10 12:17:45 2010
+Process 21778 Stopped
+* thread #1: tid = 0x2e03, 0x0000000100000de8 a.out`c + 7 at main.c:39, stop reason = breakpoint 1.1, queue = com.apple.main-thread
+  36
+  37   	int c(int val)
+  38   	{
+  39 ->	    return val + 3;
+  40   	}
+  41
+  42   	int main (int argc, char const *argv[])
+
+Example multiple line Python breakpoint command:
+
+(lldb) breakpoint command add -s p 1
+Enter your Python command(s). Type 'DONE' to end.
+> global bp_count
+> bp_count = bp_count + 1
+> print "Hit this breakpoint " + repr(bp_count) + " times!"
+> DONE
+
+Example multiple line Python breakpoint command, using function definition:
+
+(lldb) breakpoint command add -s python 1
+Enter your Python command(s). Type 'DONE' to end.
+> def breakpoint_output (bp_no):
+>     out_string = "Hit breakpoint number " + repr (bp_no)
+>     print out_string
+>     return True
+> breakpoint_output (1)
+> DONE
+
+)" "In this case, since there is a reference to a global variable, \
+'bp_count', you will also need to make sure 'bp_count' exists and is \
+initialized:" R"(
+
+(lldb) script
+>>> bp_count = 0
+>>> quit()
+
+)" "Your Python code, however organized, can optionally return a value.  \
+If the returned value is False, that tells LLDB not to stop at the breakpoint \
+to which the code is associated. Returning anything other than False, or even \
+returning None, or even omitting a return statement entirely, will cause \
+LLDB to stop." R"(
+
+)" "Final Note: A warning that no breakpoint command was generated when there \
+are no syntax errors may indicate that a function was declared but never called."
+        );
 
         CommandArgumentEntry arg;
         CommandArgumentData bp_id_arg;
 
         // Define the first (and only) variant of this arg.
         bp_id_arg.arg_type = eArgTypeBreakpointID;
-        bp_id_arg.arg_repetition = eArgRepeatPlain;
+        bp_id_arg.arg_repetition = eArgRepeatOptional;
 
         // There is only one variant this argument could be; put it into the argument entry.
         arg.push_back (bp_id_arg);
@@ -202,17 +178,16 @@ one command per line.\n" );
         m_arguments.push_back (arg);
     }
 
-    virtual
-    ~CommandObjectBreakpointCommandAdd () {}
+    ~CommandObjectBreakpointCommandAdd () override {}
 
-    virtual Options *
-    GetOptions ()
+    Options *
+    GetOptions () override
     {
         return &m_options;
     }
 
-    virtual void
-    IOHandlerActivated (IOHandler &io_handler)
+    void
+    IOHandlerActivated (IOHandler &io_handler) override
     {
         StreamFileSP output_sp(io_handler.GetOutputStreamFile());
         if (output_sp)
@@ -223,14 +198,17 @@ one command per line.\n" );
     }
     
     
-    virtual void
-    IOHandlerInputComplete (IOHandler &io_handler, std::string &line)
+    void
+    IOHandlerInputComplete (IOHandler &io_handler, std::string &line) override
     {
         io_handler.SetIsDone(true);
         
-        BreakpointOptions *bp_options = (BreakpointOptions *) io_handler.GetUserData();
-        if (bp_options)
+        std::vector<BreakpointOptions *> *bp_options_vec = (std::vector<BreakpointOptions *> *)io_handler.GetUserData();
+        for (BreakpointOptions *bp_options : *bp_options_vec)
         {
+            if (!bp_options)
+                continue;
+                    
             std::unique_ptr<BreakpointOptions::CommandData> data_ap(new BreakpointOptions::CommandData());
             if (data_ap.get())
             {
@@ -239,36 +217,37 @@ one command per line.\n" );
                 bp_options->SetCallback (BreakpointOptionsCallbackFunction, baton_sp);
             }
         }
-
     }
     
     void
-    CollectDataForBreakpointCommandCallback (BreakpointOptions *bp_options, 
+    CollectDataForBreakpointCommandCallback (std::vector<BreakpointOptions *> &bp_options_vec,
                                              CommandReturnObject &result)
     {
         m_interpreter.GetLLDBCommandsFromIOHandler ("> ",           // Prompt
                                                     *this,          // IOHandlerDelegate
                                                     true,           // Run IOHandler in async mode
-                                                    bp_options);    // Baton for the "io_handler" that will be passed back into our IOHandlerDelegate functions
+                                                    &bp_options_vec);    // Baton for the "io_handler" that will be passed back into our IOHandlerDelegate functions
     }
     
     /// Set a one-liner as the callback for the breakpoint.
     void 
-    SetBreakpointCommandCallback (BreakpointOptions *bp_options,
+    SetBreakpointCommandCallback (std::vector<BreakpointOptions *> &bp_options_vec,
                                   const char *oneliner)
     {
-        std::unique_ptr<BreakpointOptions::CommandData> data_ap(new BreakpointOptions::CommandData());
+        for (auto bp_options : bp_options_vec)
+        {
+            std::unique_ptr<BreakpointOptions::CommandData> data_ap(new BreakpointOptions::CommandData());
 
-        // It's necessary to set both user_source and script_source to the oneliner.
-        // The former is used to generate callback description (as in breakpoint command list)
-        // while the latter is used for Python to interpret during the actual callback.
-        data_ap->user_source.AppendString (oneliner);
-        data_ap->script_source.assign (oneliner);
-        data_ap->stop_on_error = m_options.m_stop_on_error;
+            // It's necessary to set both user_source and script_source to the oneliner.
+            // The former is used to generate callback description (as in breakpoint command list)
+            // while the latter is used for Python to interpret during the actual callback.
+            data_ap->user_source.AppendString (oneliner);
+            data_ap->script_source.assign (oneliner);
+            data_ap->stop_on_error = m_options.m_stop_on_error;
 
-        BatonSP baton_sp (new BreakpointOptions::CommandBaton (data_ap.release()));
-        bp_options->SetCallback (BreakpointOptionsCallbackFunction, baton_sp);
-
+            BatonSP baton_sp (new BreakpointOptions::CommandBaton (data_ap.release()));
+            bp_options->SetCallback (BreakpointOptionsCallbackFunction, baton_sp);
+        }
         return;
     }
     
@@ -302,17 +281,16 @@ one command per line.\n" );
                 result.SetImmediateOutputStream (output_stream);
                 result.SetImmediateErrorStream (error_stream);
         
-                bool stop_on_continue = true;
-                bool echo_commands    = false;
-                bool print_results    = true;
+                CommandInterpreterRunOptions options;
+                options.SetStopOnContinue(true);
+                options.SetStopOnError (data->stop_on_error);
+                options.SetEchoCommands (true);
+                options.SetPrintResults (true);
+                options.SetAddToHistory (false);
 
-                debugger.GetCommandInterpreter().HandleCommands (commands, 
+                debugger.GetCommandInterpreter().HandleCommands (commands,
                                                                  &exe_ctx,
-                                                                 stop_on_continue, 
-                                                                 data->stop_on_error, 
-                                                                 echo_commands, 
-                                                                 print_results,
-                                                                 eLazyBoolNo,
+                                                                 options,
                                                                  result);
                 result.GetImmediateOutputStream()->Flush();
                 result.GetImmediateErrorStream()->Flush();
@@ -336,11 +314,10 @@ one command per line.\n" );
         {
         }
 
-        virtual
-        ~CommandOptions () {}
+        ~CommandOptions () override {}
 
-        virtual Error
-        SetOptionValue (uint32_t option_idx, const char *option_arg)
+        Error
+        SetOptionValue (uint32_t option_idx, const char *option_arg) override
         {
             Error error;
             const int short_option = m_getopt_table[option_idx].val;
@@ -385,13 +362,17 @@ one command per line.\n" );
                 }
                 break;
 
+            case 'D':
+                m_use_dummy = true;
+                break;
+
             default:
                 break;
             }
             return error;
         }
         void
-        OptionParsingStarting ()
+        OptionParsingStarting () override
         {
             m_use_commands = true;
             m_use_script_language = false;
@@ -401,10 +382,11 @@ one command per line.\n" );
             m_stop_on_error = true;
             m_one_liner.clear();
             m_function_name.clear();
+            m_use_dummy = false;
         }
 
         const OptionDefinition*
-        GetDefinitions ()
+        GetDefinitions () override
         {
             return g_option_table;
         }
@@ -424,13 +406,14 @@ one command per line.\n" );
         std::string m_one_liner;
         bool m_stop_on_error;
         std::string m_function_name;
+        bool m_use_dummy;
     };
 
 protected:
-    virtual bool
-    DoExecute (Args& command, CommandReturnObject &result)
+    bool
+    DoExecute (Args& command, CommandReturnObject &result) override
     {
-        Target *target = m_interpreter.GetDebugger().GetSelectedTarget().get();
+        Target *target = GetSelectedOrDummyTarget(m_options.m_use_dummy);
 
         if (target == NULL)
         {
@@ -457,17 +440,13 @@ protected:
         }
         
         BreakpointIDList valid_bp_ids;
-        CommandObjectMultiwordBreakpoint::VerifyBreakpointIDs (command, target, result, &valid_bp_ids);
+        CommandObjectMultiwordBreakpoint::VerifyBreakpointOrLocationIDs (command, target, result, &valid_bp_ids);
 
+        m_bp_options_vec.clear();
+        
         if (result.Succeeded())
         {
             const size_t count = valid_bp_ids.GetSize();
-            if (count > 1)
-            {
-                result.AppendError ("can only add commands to one breakpoint at a time.");
-                result.SetStatus (eReturnStatusFailed);
-                return false;
-            }
             
             for (size_t i = 0; i < count; ++i)
             {
@@ -489,50 +468,45 @@ protected:
                         if (bp_loc_sp)
                             bp_options = bp_loc_sp->GetLocationOptions();
                     }
-
-                    // Skip this breakpoint if bp_options is not good.
-                    if (bp_options == NULL) continue;
-
-                    // If we are using script language, get the script interpreter
-                    // in order to set or collect command callback.  Otherwise, call
-                    // the methods associated with this object.
-                    if (m_options.m_use_script_language)
-                    {
-                        // Special handling for one-liner specified inline.
-                        if (m_options.m_use_one_liner)
-                        {
-                            m_interpreter.GetScriptInterpreter()->SetBreakpointCommandCallback (bp_options,
-                                                                                                m_options.m_one_liner.c_str());
-                        }
-                        // Special handling for using a Python function by name
-                        // instead of extending the breakpoint callback data structures, we just automatize
-                        // what the user would do manually: make their breakpoint command be a function call
-                        else if (m_options.m_function_name.size())
-                        {
-                            std::string oneliner("return ");
-                            oneliner += m_options.m_function_name;
-                            oneliner += "(frame, bp_loc, internal_dict)";
-                            m_interpreter.GetScriptInterpreter()->SetBreakpointCommandCallback (bp_options,
-                                                                                                oneliner.c_str());
-                        }
-                        else
-                        {
-                            m_interpreter.GetScriptInterpreter()->CollectDataForBreakpointCommandCallback (bp_options,
-                                                                                                           result);
-                        }
-                    }
-                    else
-                    {
-                        // Special handling for one-liner specified inline.
-                        if (m_options.m_use_one_liner)
-                            SetBreakpointCommandCallback (bp_options,
-                                                          m_options.m_one_liner.c_str());
-                        else
-                            CollectDataForBreakpointCommandCallback (bp_options, 
-                                                                     result);
-                    }
+                    if (bp_options)
+                        m_bp_options_vec.push_back (bp_options);
                 }
             }
+
+            // If we are using script language, get the script interpreter
+            // in order to set or collect command callback.  Otherwise, call
+            // the methods associated with this object.
+            if (m_options.m_use_script_language)
+            {
+                ScriptInterpreter *script_interp = m_interpreter.GetScriptInterpreter();
+                // Special handling for one-liner specified inline.
+                if (m_options.m_use_one_liner)
+                {
+                    script_interp->SetBreakpointCommandCallback (m_bp_options_vec,
+                                                                 m_options.m_one_liner.c_str());
+                }
+                else if (m_options.m_function_name.size())
+                {
+                    script_interp->SetBreakpointCommandCallbackFunction (m_bp_options_vec,
+                                                                         m_options.m_function_name.c_str());
+                }
+                else
+                {
+                    script_interp->CollectDataForBreakpointCommandCallback (m_bp_options_vec,
+                                                                            result);
+                }
+            }
+            else
+            {
+                // Special handling for one-liner specified inline.
+                if (m_options.m_use_one_liner)
+                    SetBreakpointCommandCallback (m_bp_options_vec,
+                                                  m_options.m_one_liner.c_str());
+                else
+                    CollectDataForBreakpointCommandCallback (m_bp_options_vec,
+                                                             result);
+            }
+
         }
 
         return result.Succeeded();
@@ -540,6 +514,17 @@ protected:
 
 private:
     CommandOptions m_options;
+    std::vector<BreakpointOptions *> m_bp_options_vec;  // This stores the breakpoint options that we are currently
+                                                        // collecting commands for.  In the CollectData... calls we need
+                                                        // to hand this off to the IOHandler, which may run asynchronously.
+                                                        // So we have to have some way to keep it alive, and not leak it.
+                                                        // Making it an ivar of the command object, which never goes away
+                                                        // achieves this.  Note that if we were able to run
+                                                        // the same command concurrently in one interpreter we'd have to
+                                                        // make this "per invocation".  But there are many more reasons
+                                                        // why it is not in general safe to do that in lldb at present,
+                                                        // so it isn't worthwhile to come up with a more complex mechanism
+                                                        // to address this particular weakness right now.
     static const char *g_reader_instructions;
 
 };
@@ -562,19 +547,22 @@ g_script_option_enumeration[4] =
 OptionDefinition
 CommandObjectBreakpointCommandAdd::CommandOptions::g_option_table[] =
 {
-    { LLDB_OPT_SET_1, false, "one-liner", 'o', OptionParser::eRequiredArgument, NULL, 0, eArgTypeOneLiner,
+    { LLDB_OPT_SET_1, false, "one-liner", 'o', OptionParser::eRequiredArgument, NULL, NULL, 0, eArgTypeOneLiner,
         "Specify a one-line breakpoint command inline. Be sure to surround it with quotes." },
 
-    { LLDB_OPT_SET_ALL, false, "stop-on-error", 'e', OptionParser::eRequiredArgument, NULL, 0, eArgTypeBoolean,
+    { LLDB_OPT_SET_ALL, false, "stop-on-error", 'e', OptionParser::eRequiredArgument, NULL, NULL, 0, eArgTypeBoolean,
         "Specify whether breakpoint command execution should terminate on error." },
 
-    { LLDB_OPT_SET_ALL,   false, "script-type",     's', OptionParser::eRequiredArgument, g_script_option_enumeration, 0, eArgTypeNone,
+    { LLDB_OPT_SET_ALL,   false, "script-type",     's', OptionParser::eRequiredArgument, NULL, g_script_option_enumeration, 0, eArgTypeNone,
         "Specify the language for the commands - if none is specified, the lldb command interpreter will be used."},
 
-    { LLDB_OPT_SET_2,   false, "python-function",     'F', OptionParser::eRequiredArgument, NULL, 0, eArgTypePythonFunction,
+    { LLDB_OPT_SET_2,   false, "python-function",     'F', OptionParser::eRequiredArgument, NULL, NULL, 0, eArgTypePythonFunction,
         "Give the name of a Python function to run as command for this breakpoint. Be sure to give a module name if appropriate."},
     
-    { 0, false, NULL, 0, 0, NULL, 0, eArgTypeNone, NULL }
+    { LLDB_OPT_SET_ALL, false, "dummy-breakpoints", 'D', OptionParser::eNoArgument, NULL, NULL, 0, eArgTypeNone,
+        "Sets Dummy breakpoints - i.e. breakpoints set before a file is provided, which prime new targets."},
+
+    { 0, false, NULL, 0, 0, NULL, NULL, 0, eArgTypeNone, NULL }
 };
 
 //-------------------------------------------------------------------------
@@ -588,7 +576,8 @@ public:
         CommandObjectParsed (interpreter, 
                              "delete",
                              "Delete the set of commands from a breakpoint.",
-                             NULL)
+                             NULL),
+        m_options (interpreter)
     {
         CommandArgumentEntry arg;
         CommandArgumentData bp_id_arg;
@@ -605,14 +594,71 @@ public:
     }
 
 
-    virtual
-    ~CommandObjectBreakpointCommandDelete () {}
+    ~CommandObjectBreakpointCommandDelete () override {}
+
+    Options *
+    GetOptions () override
+    {
+        return &m_options;
+    }
+
+    class CommandOptions : public Options
+    {
+    public:
+
+        CommandOptions (CommandInterpreter &interpreter) :
+            Options (interpreter),
+            m_use_dummy (false)
+        {
+        }
+
+        ~CommandOptions () override {}
+
+        Error
+        SetOptionValue (uint32_t option_idx, const char *option_arg) override
+        {
+            Error error;
+            const int short_option = m_getopt_table[option_idx].val;
+
+            switch (short_option)
+            {
+                case 'D':
+                    m_use_dummy = true;
+                    break;
+
+                default:
+                    error.SetErrorStringWithFormat ("unrecognized option '%c'", short_option);
+                    break;
+            }
+
+            return error;
+        }
+
+        void
+        OptionParsingStarting () override
+        {
+            m_use_dummy = false;
+        }
+
+        const OptionDefinition*
+        GetDefinitions () override
+        {
+            return g_option_table;
+        }
+
+        // Options table: Required for subclasses of Options.
+
+        static OptionDefinition g_option_table[];
+
+        // Instance variables to hold the values for command options.
+        bool m_use_dummy;
+    };
 
 protected:
-    virtual bool
-    DoExecute (Args& command, CommandReturnObject &result)
+    bool
+    DoExecute (Args& command, CommandReturnObject &result) override
     {
-        Target *target = m_interpreter.GetDebugger().GetSelectedTarget().get();
+        Target *target = GetSelectedOrDummyTarget(m_options.m_use_dummy);
 
         if (target == NULL)
         {
@@ -639,7 +685,7 @@ protected:
         }
 
         BreakpointIDList valid_bp_ids;
-        CommandObjectMultiwordBreakpoint::VerifyBreakpointIDs (command, target, result, &valid_bp_ids);
+        CommandObjectMultiwordBreakpoint::VerifyBreakpointOrLocationIDs (command, target, result, &valid_bp_ids);
 
         if (result.Succeeded())
         {
@@ -673,7 +719,19 @@ protected:
         }
         return result.Succeeded();
     }
+private:
+    CommandOptions m_options;
 };
+
+OptionDefinition
+CommandObjectBreakpointCommandDelete::CommandOptions::g_option_table[] =
+{
+    { LLDB_OPT_SET_1, false, "dummy-breakpoints", 'D', OptionParser::eNoArgument, NULL, NULL, 0, eArgTypeNone,
+        "Delete commands from Dummy breakpoints - i.e. breakpoints set before a file is provided, which prime new targets."},
+
+    { 0, false, NULL, 0, 0, NULL, NULL, 0, eArgTypeNone, NULL }
+};
+
 
 //-------------------------------------------------------------------------
 // CommandObjectBreakpointCommandList
@@ -702,13 +760,12 @@ public:
         m_arguments.push_back (arg);
     }
 
-    virtual
-    ~CommandObjectBreakpointCommandList () {}
+    ~CommandObjectBreakpointCommandList () override {}
 
 protected:
-    virtual bool
+    bool
     DoExecute (Args& command,
-             CommandReturnObject &result)
+             CommandReturnObject &result) override
     {
         Target *target = m_interpreter.GetDebugger().GetSelectedTarget().get();
 
@@ -737,7 +794,7 @@ protected:
         }
 
         BreakpointIDList valid_bp_ids;
-        CommandObjectMultiwordBreakpoint::VerifyBreakpointIDs (command, target, result, &valid_bp_ids);
+        CommandObjectMultiwordBreakpoint::VerifyBreakpointOrLocationIDs (command, target, result, &valid_bp_ids);
 
         if (result.Succeeded())
         {
@@ -814,7 +871,7 @@ protected:
 CommandObjectBreakpointCommand::CommandObjectBreakpointCommand (CommandInterpreter &interpreter) :
     CommandObjectMultiword (interpreter,
                             "command",
-                            "A set of commands for adding, removing and examining bits of code to be executed when the breakpoint is hit (breakpoint 'commmands').",
+                            "A set of commands for adding, removing and examining bits of code to be executed when the breakpoint is hit (breakpoint 'commands').",
                             "command <sub-command> [<sub-command-options>] <breakpoint-id>")
 {
     CommandObjectSP add_command_object (new CommandObjectBreakpointCommandAdd (interpreter));

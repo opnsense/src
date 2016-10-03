@@ -14,38 +14,39 @@
 #ifndef LLVM_OBJECT_ERROR_H
 #define LLVM_OBJECT_ERROR_H
 
-#include "llvm/Support/system_error.h"
+#include <system_error>
 
 namespace llvm {
 namespace object {
 
-const error_category &object_category();
+const std::error_category &object_category();
 
-struct object_error {
-  enum Impl {
-    success = 0,
-    arch_not_found,
-    invalid_file_type,
-    parse_failed,
-    unexpected_eof
-  };
-  Impl V;
-
-  object_error(Impl V) : V(V) {}
-  operator Impl() const { return V; }
+enum class object_error {
+  // Error code 0 is absent. Use std::error_code() instead.
+  arch_not_found = 1,
+  invalid_file_type,
+  parse_failed,
+  unexpected_eof,
+  string_table_non_null_end,
+  invalid_section_index,
+  bitcode_section_not_found,
+  elf_invalid_dynamic_table_size,
+  macho_small_load_command,
+  macho_load_segment_too_many_sections,
+  macho_load_segment_too_small,
 };
 
-inline error_code make_error_code(object_error e) {
-  return error_code(static_cast<int>(e), object_category());
+inline std::error_code make_error_code(object_error e) {
+  return std::error_code(static_cast<int>(e), object_category());
 }
 
 } // end namespace object.
 
-template <> struct is_error_code_enum<object::object_error> : true_type { };
-
-template <> struct is_error_code_enum<object::object_error::Impl> : true_type {
-};
-
 } // end namespace llvm.
+
+namespace std {
+template <>
+struct is_error_code_enum<llvm::object::object_error> : std::true_type {};
+}
 
 #endif

@@ -35,21 +35,53 @@
 #include <machine/armreg.h>
 #include <machine/sysreg.h>
 #include <machine/cpuconf.h>
-#include <machine/pte.h>
+#include <machine/pte-v6.h>
 
 __FBSDID("$FreeBSD$");
 
-#ifndef ARM_NEW_PMAP
-#define	PTE1_OFFSET	L1_S_OFFSET
-#define	PTE1_SHIFT	L1_S_SHIFT
-#define	PTE1_SIZE	L1_S_SIZE
+
+#if __ARM_ARCH >= 7
+#if defined(__ARM_ARCH_7VE__) || defined(__clang__)
+/*
+ * HYP support is in bintuils >= 2.21 and gcc >= 4.9 defines __ARM_ARCH_7VE__
+ * when enabled. llvm >= 3.6 supports it too.
+ */
+.arch_extension virt
+#define	MSR_ELR_HYP(regnum)	msr	elr_hyp, lr
+#define	ERET	eret
+#else
+#define MSR_ELR_HYP(regnum) .word (0xe12ef300 | regnum)
+#define ERET .word 0xe160006e
 #endif
+#endif /* __ARM_ARCH >= 7 */
 
 /* A small statically-allocated stack used only during initarm() and AP startup. */
 #define	INIT_ARM_STACK_SIZE	2048
 
 	.text
 	.align	2
+
+#if __ARM_ARCH >= 7
+#define	LEAVE_HYP							\
+	/* Leave HYP mode */						;\
+	mrs	r0, cpsr						;\
+	and	r0, r0, #(PSR_MODE)   /* Mode is in the low 5 bits of CPSR */ ;\
+	teq	r0, #(PSR_HYP32_MODE) /* Hyp Mode? */			;\
+	bne	1f							;\
+	/* Ensure that IRQ, FIQ and Aborts will be disabled after eret */ ;\
+	mrs	r0, cpsr						;\
+	bic	r0, r0, #(PSR_MODE)					;\
+	orr	r0, r0, #(PSR_SVC32_MODE)				;\
+	orr	r0, r0, #(PSR_I | PSR_F | PSR_A)			;\
+	msr	spsr_cxsf, r0						;\
+	/* Exit hypervisor mode */					;\
+	adr	lr, 1f							;\
+	MSR_ELR_HYP(14)							;\
+	ERET								;\
+1:
+#else
+#define	LEAVE_HYP
+#endif /* __ARM_ARCH >= 7 */
 
 /*
  * On entry for FreeBSD boot ABI:
@@ -76,6 +108,8 @@ ASENTRY_NP(_start)
 	mov	r10, r2		/* Save meta data */
 	mov	r11, r3		/* Future expansion */
 
+	LEAVE_HYP
+
 	/*
 	 * Check whether data cache is enabled.  If it is, then we know
 	 * current tags are valid (not power-on garbage values) and there
@@ -95,12 +129,12 @@ ASENTRY_NP(_start)
 	 */
 1:
 	bic	r7, #CPU_CONTROL_DC_ENABLE
+	bic	r7, #CPU_CONTROL_AFLT_ENABLE
 	bic	r7, #CPU_CONTROL_MMU_ENABLE
 	bic	r7, #CPU_CONTROL_IC_ENABLE
-	bic	r7, #CPU_CONTROL_UNAL_ENABLE
 	bic	r7, #CPU_CONTROL_BPRD_ENABLE
 	bic	r7, #CPU_CONTROL_SW_ENABLE
-	orr	r7, #CPU_CONTROL_AFLT_ENABLE
+	orr	r7, #CPU_CONTROL_UNAL_ENABLE
 	orr	r7, #CPU_CONTROL_VECRELOC
 	mcr	CP15_SCTLR(r7)
 	DSB
@@ -245,19 +279,17 @@ ASENTRY_NP(init_mmu)
 	mcr	CP15_CONTEXTIDR(r0)	/* Set ASID to 0 */
 
 	/* Set the Domain Access register */
-	mov	r0, #((DOMAIN_CLIENT <<	(PMAP_DOMAIN_KERNEL*2)) | DOMAIN_CLIENT)
+	mov	r0, #DOMAIN_CLIENT	/* Only domain #0 is used */
 	mcr	CP15_DACR(r0)
 
-#ifdef ARM_NEW_PMAP
 	/*
 	 * Set TEX remap registers
 	 *  - All is set to uncacheable memory
 	 */
 	ldr	r0, =0xAAAAA
-	mrc	CP15_PRRR(r0)
+	mcr	CP15_PRRR(r0)
 	mov	r0, #0
 	mcr	CP15_NMRR(r0)
-#endif
 	mcr	CP15_TLBIALL		/* Flush TLB */
 	DSB
 	ISB
@@ -266,9 +298,7 @@ ASENTRY_NP(init_mmu)
 	mrc	CP15_SCTLR(r0)
 	orr	r0, r0,	#CPU_CONTROL_MMU_ENABLE
 	orr	r0, r0,	#CPU_CONTROL_V6_EXTPAGE
-#ifdef ARM_NEW_PMAP
 	orr	r0, r0,	#CPU_CONTROL_TR_ENABLE
-#endif
 	orr	r0, r0,	#CPU_CONTROL_AF_ENABLE
 	mcr	CP15_SCTLR(r0)
 	DSB
@@ -359,23 +389,11 @@ END(reinit_mmu)
  * Addresses must be 1MiB aligned
  */
 build_device_pagetables:
-#if defined(ARM_NEW_PMAP)
 	ldr	r4, =PTE1_V|PTE1_A|PTE1_AP_KRW|TEX1_CLASS_0
-#elif defined(SMP)
-	ldr	r4, =(L1_TYPE_S|L1_S_AP(AP_KRW)|L1_SHARED)
-#else
-	ldr	r4, =(L1_TYPE_S|L1_S_AP(AP_KRW))
-#endif
 	b	1f
 build_pagetables:
 	/* Set the required page attributed */
-#if defined(ARM_NEW_PMAP)
 	ldr	r4, =PTE1_V|PTE1_A|PTE1_AP_KRW|TEX1_CLASS_0
-#elif defined(SMP)
-	ldr	r4, =(L1_TYPE_S|L1_S_C|L1_S_AP(AP_KRW)|L1_SHARED)
-#else
-	ldr	r4, =(L1_TYPE_S|L1_S_C|L1_S_AP(AP_KRW))
-#endif
 1:
 	orr	r1, r4
 
@@ -430,15 +448,17 @@ ASENTRY_NP(mpentry)
 	/* Make sure interrupts are disabled. */
 	cpsid	ifa
 
+	LEAVE_HYP
+
 	/* Setup core, disable all caches. */
 	mrc	CP15_SCTLR(r0)
 	bic	r0, #CPU_CONTROL_MMU_ENABLE
+	bic	r0, #CPU_CONTROL_AFLT_ENABLE
 	bic	r0, #CPU_CONTROL_DC_ENABLE
 	bic	r0, #CPU_CONTROL_IC_ENABLE
-	bic	r0, #CPU_CONTROL_UNAL_ENABLE
 	bic	r0, #CPU_CONTROL_BPRD_ENABLE
 	bic	r0, #CPU_CONTROL_SW_ENABLE
-	orr	r0, #CPU_CONTROL_AFLT_ENABLE
+	orr	r0, #CPU_CONTROL_UNAL_ENABLE
 	orr	r0, #CPU_CONTROL_VECRELOC
 	mcr	CP15_SCTLR(r0)
 	DSB

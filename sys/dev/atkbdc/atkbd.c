@@ -49,8 +49,25 @@ __FBSDID("$FreeBSD$");
 #include <dev/atkbdc/atkbdreg.h>
 #include <dev/atkbdc/atkbdcreg.h>
 
-static timeout_t	atkbd_timeout;
+typedef struct atkbd_state {
+	KBDC		kbdc;		/* keyboard controller */
+	int		ks_mode;	/* input mode (K_XLATE,K_RAW,K_CODE) */
+	int		ks_flags;	/* flags */
+#define COMPOSE		(1 << 0)
+	int		ks_polling;
+	int		ks_state;	/* shift/lock key state */
+	int		ks_accents;	/* accent key index (> 0) */
+	u_int		ks_composed_char; /* composed char code (> 0) */
+	u_char		ks_prefix;	/* AT scan code prefix */
+	struct callout	ks_timer;
+} atkbd_state_t;
+
+static void		atkbd_timeout(void *arg);
 static void		atkbd_shutdown_final(void *v);
+static int		atkbd_reset(KBDC kbdc, int flags, int c);
+
+#define HAS_QUIRK(p, q)		(((atkbdc_softc_t *)(p))->quirks & q)
+#define ALLOW_DISABLE_KBD(kbdc)	!HAS_QUIRK(kbdc, KBDC_QUIRK_KEEP_ACTIVATED)
 
 #define DEFAULT_DELAY		0x1  /* 500ms */
 #define DEFAULT_RATE		0x10 /* 14Hz */
@@ -78,6 +95,7 @@ int
 atkbd_attach_unit(device_t dev, keyboard_t **kbd, int irq, int flags)
 {
 	keyboard_switch_t *sw;
+	atkbd_state_t *state;
 	int args[2];
 	int error;
 	int unit;
@@ -110,6 +128,8 @@ atkbd_attach_unit(device_t dev, keyboard_t **kbd, int irq, int flags)
 	 * This is a kludge to compensate for lost keyboard interrupts.
 	 * A similar code used to be in syscons. See below. XXX
 	 */
+	state = (atkbd_state_t *)(*kbd)->kb_data;
+	callout_init(&state->ks_timer, 0);
 	atkbd_timeout(*kbd);
 
 	if (bootverbose)
@@ -124,6 +144,7 @@ atkbd_attach_unit(device_t dev, keyboard_t **kbd, int irq, int flags)
 static void
 atkbd_timeout(void *arg)
 {
+	atkbd_state_t *state;
 	keyboard_t *kbd;
 	int s;
 
@@ -165,24 +186,13 @@ atkbd_timeout(void *arg)
 			kbdd_intr(kbd, NULL);
 	}
 	splx(s);
-	timeout(atkbd_timeout, arg, hz/10);
+	state = (atkbd_state_t *)kbd->kb_data;
+	callout_reset(&state->ks_timer, hz / 10, atkbd_timeout, arg);
 }
 
 /* LOW-LEVEL */
 
 #define ATKBD_DEFAULT	0
-
-typedef struct atkbd_state {
-	KBDC		kbdc;		/* keyboard controller */
-	int		ks_mode;	/* input mode (K_XLATE,K_RAW,K_CODE) */
-	int		ks_flags;	/* flags */
-#define COMPOSE		(1 << 0)
-	int		ks_polling;
-	int		ks_state;	/* shift/lock key state */
-	int		ks_accents;	/* accent key index (> 0) */
-	u_int		ks_composed_char; /* composed char code (> 0) */
-	u_char		ks_prefix;	/* AT scan code prefix */
-} atkbd_state_t;
 
 /* keyboard driver declaration */
 static int		atkbd_configure(int flags);
@@ -352,8 +362,7 @@ atkbd_init(int unit, keyboard_t **kbdp, void *arg, int flags)
 		keymap = &default_keymap;
 		accmap = &default_accentmap;
 		fkeymap = default_fkeytab;
-		fkeymap_size =
-			sizeof(default_fkeytab)/sizeof(default_fkeytab[0]);
+		fkeymap_size = nitems(default_fkeytab);
 		needfree = 0;
 	} else if (*kbdp == NULL) {
 		*kbdp = kbd = malloc(sizeof(*kbd), M_DEVBUF, M_NOWAIT | M_ZERO);
@@ -460,7 +469,10 @@ bad:
 static int
 atkbd_term(keyboard_t *kbd)
 {
+	atkbd_state_t *state = (atkbd_state_t *)kbd->kb_data;
+
 	kbd_unregister(kbd);
+	callout_drain(&state->ks_timer);
 	return 0;
 }
 
@@ -1076,6 +1088,39 @@ atkbd_shutdown_final(void *v)
 #endif
 }
 
+static int
+atkbd_reset(KBDC kbdc, int flags, int c)
+{
+	/* reset keyboard hardware */
+	if (!(flags & KB_CONF_NO_RESET) && !reset_kbd(kbdc)) {
+		/*
+		 * KEYBOARD ERROR
+		 * Keyboard reset may fail either because the keyboard
+		 * doen't exist, or because the keyboard doesn't pass
+		 * the self-test, or the keyboard controller on the
+		 * motherboard and the keyboard somehow fail to shake hands.
+		 * It is just possible, particularly in the last case,
+		 * that the keyboard controller may be left in a hung state.
+		 * test_controller() and test_kbd_port() appear to bring
+		 * the keyboard controller back (I don't know why and how,
+		 * though.)
+		 */
+		empty_both_buffers(kbdc, 10);
+		test_controller(kbdc);
+		test_kbd_port(kbdc);
+		/*
+		 * We could disable the keyboard port and interrupt... but, 
+		 * the keyboard may still exist (see above). 
+		 */
+		set_controller_command_byte(kbdc,
+		    ALLOW_DISABLE_KBD(kbdc) ? 0xff : KBD_KBD_CONTROL_BITS, c);
+		if (bootverbose)
+			printf("atkbd: failed to reset the keyboard.\n");
+		return (EIO);
+	}
+	return (0);
+}
+
 /* local functions */
 
 static int
@@ -1193,13 +1238,14 @@ probe_keyboard(KBDC kbdc, int flags)
 		kbdc_set_device_mask(kbdc, m | KBD_KBD_CONTROL_BITS);
 	} else {
 		/* try to restore the command byte as before */
-		set_controller_command_byte(kbdc, 0xff, c);
+		set_controller_command_byte(kbdc,
+		    ALLOW_DISABLE_KBD(kbdc) ? 0xff : KBD_KBD_CONTROL_BITS, c);
 		kbdc_set_device_mask(kbdc, m);
 	}
 #endif
 
 	kbdc_lock(kbdc, FALSE);
-	return err;
+	return (HAS_QUIRK(kbdc, KBDC_QUIRK_IGNORE_PROBE_RESULT) ? 0 : err);
 }
 
 static int
@@ -1238,6 +1284,12 @@ init_keyboard(KBDC kbdc, int *type, int flags)
 	if (setup_kbd_port(kbdc, TRUE, FALSE)) {
 		/* CONTROLLER ERROR: there is very little we can do... */
 		printf("atkbd: unable to set the command byte.\n");
+		kbdc_lock(kbdc, FALSE);
+		return EIO;
+	}
+
+	if (HAS_QUIRK(kbdc, KBDC_QUIRK_RESET_AFTER_PROBE) &&
+	    atkbd_reset(kbdc, flags, c)) {
 		kbdc_lock(kbdc, FALSE);
 		return EIO;
 	}
@@ -1286,31 +1338,9 @@ init_keyboard(KBDC kbdc, int *type, int flags)
 	if (bootverbose)
 		printf("atkbd: keyboard ID 0x%x (%d)\n", id, *type);
 
-	/* reset keyboard hardware */
-	if (!(flags & KB_CONF_NO_RESET) && !reset_kbd(kbdc)) {
-		/*
-		 * KEYBOARD ERROR
-		 * Keyboard reset may fail either because the keyboard
-		 * doen't exist, or because the keyboard doesn't pass
-		 * the self-test, or the keyboard controller on the
-		 * motherboard and the keyboard somehow fail to shake hands.
-		 * It is just possible, particularly in the last case,
-		 * that the keyboard controller may be left in a hung state.
-		 * test_controller() and test_kbd_port() appear to bring
-		 * the keyboard controller back (I don't know why and how,
-		 * though.)
-		 */
-		empty_both_buffers(kbdc, 10);
-		test_controller(kbdc);
-		test_kbd_port(kbdc);
-		/*
-		 * We could disable the keyboard port and interrupt... but, 
-		 * the keyboard may still exist (see above). 
-		 */
-		set_controller_command_byte(kbdc, 0xff, c);
+	if (!HAS_QUIRK(kbdc, KBDC_QUIRK_RESET_AFTER_PROBE) &&
+	    atkbd_reset(kbdc, flags, c)) {
 		kbdc_lock(kbdc, FALSE);
-		if (bootverbose)
-			printf("atkbd: failed to reset the keyboard.\n");
 		return EIO;
 	}
 
@@ -1330,7 +1360,8 @@ init_keyboard(KBDC kbdc, int *type, int flags)
 			 * The XT kbd isn't usable unless the proper scan
 			 * code set is selected. 
 			 */
-			set_controller_command_byte(kbdc, 0xff, c);
+			set_controller_command_byte(kbdc, ALLOW_DISABLE_KBD(kbdc)
+			    ? 0xff : KBD_KBD_CONTROL_BITS, c);
 			kbdc_lock(kbdc, FALSE);
 			printf("atkbd: unable to set the XT keyboard mode.\n");
 			return EIO;
@@ -1345,6 +1376,17 @@ init_keyboard(KBDC kbdc, int *type, int flags)
 	c |= KBD_TRANSLATION;
 #endif
 
+	/*
+	 * Some keyboards require a SETLEDS command to be sent after
+	 * the reset command before they will send keystrokes to us
+	 */
+	if (HAS_QUIRK(kbdc, KBDC_QUIRK_SETLEDS_ON_INIT) &&
+	    send_kbd_command_and_data(kbdc, KBDC_SET_LEDS, 0) != KBD_ACK) {
+		printf("atkbd: setleds failed\n");
+	}
+	if (!ALLOW_DISABLE_KBD(kbdc))
+	    send_kbd_command(kbdc, KBDC_ENABLE_KBD);
+
 	/* enable the keyboard port and intr. */
 	if (!set_controller_command_byte(kbdc, 
 		KBD_KBD_CONTROL_BITS | KBD_TRANSLATION | KBD_OVERRIDE_KBD_LOCK,
@@ -1355,7 +1397,9 @@ init_keyboard(KBDC kbdc, int *type, int flags)
 		 * This is serious; we are left with the disabled
 		 * keyboard intr. 
 		 */
-		set_controller_command_byte(kbdc, 0xff, c);
+		set_controller_command_byte(kbdc, ALLOW_DISABLE_KBD(kbdc)
+		    ? 0xff : (KBD_KBD_CONTROL_BITS | KBD_TRANSLATION |
+			KBD_OVERRIDE_KBD_LOCK), c);
 		kbdc_lock(kbdc, FALSE);
 		printf("atkbd: unable to enable the keyboard port and intr.\n");
 		return EIO;
@@ -1461,12 +1505,12 @@ typematic(int delay, int rate)
 	int value;
 	int i;
 
-	for (i = sizeof(delays)/sizeof(delays[0]) - 1; i > 0; --i) {
+	for (i = nitems(delays) - 1; i > 0; --i) {
 		if (delay >= delays[i])
 			break;
 	}
 	value = i << 5;
-	for (i = sizeof(rates)/sizeof(rates[0]) - 1; i > 0; --i) {
+	for (i = nitems(rates) - 1; i > 0; --i) {
 		if (rate >= rates[i])
 			break;
 	}

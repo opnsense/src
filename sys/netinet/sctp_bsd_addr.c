@@ -298,7 +298,7 @@ sctp_addr_change(struct ifaddr *ifa, int cmd)
 	}
 	/*
 	 * BSD only has one VRF, if this changes we will need to hook in the
-	 * right things here to get the id to pass to the address managment
+	 * right things here to get the id to pass to the address management
 	 * routine.
 	 */
 	if (SCTP_BASE_VAR(first_time) == 0) {
@@ -384,17 +384,7 @@ sctp_get_mbuf_for_msg(unsigned int space_needed, int want_header,
 		return (m);
 	}
 	if (allonebuf) {
-		int siz;
-
-		if (SCTP_BUF_IS_EXTENDED(m)) {
-			siz = SCTP_BUF_EXTEND_SIZE(m);
-		} else {
-			if (want_header)
-				siz = MHLEN;
-			else
-				siz = MLEN;
-		}
-		if (siz < space_needed) {
+		if (SCTP_BUF_SIZE(m) < space_needed) {
 			m_freem(m);
 			return (NULL);
 		}

@@ -15,6 +15,16 @@
 #include <limits.h>
 #include <fcntl.h>
 
+// Includes for pipe()
+#if defined(_WIN32)
+#include <io.h>
+#include <fcntl.h>
+#elif defined(__ANDROID_NDK__)
+#include <errno.h>
+#else
+#include <unistd.h>
+#endif
+
 #include <string>
 
 #include <thread>
@@ -25,11 +35,16 @@
 #include "lldb/API/SBDebugger.h"
 #include "lldb/API/SBEvent.h"
 #include "lldb/API/SBHostOS.h"
+#include "lldb/API/SBLanguageRuntime.h"
 #include "lldb/API/SBListener.h"
 #include "lldb/API/SBStream.h"
 #include "lldb/API/SBTarget.h"
 #include "lldb/API/SBThread.h"
 #include "lldb/API/SBProcess.h"
+
+#if !defined(__APPLE__)
+#include "llvm/Support/DataTypes.h"
+#endif
 
 using namespace lldb;
 
@@ -37,7 +52,6 @@ static void reset_stdin_termios ();
 static bool g_old_stdin_termios_is_valid = false;
 static struct termios g_old_stdin_termios;
 
-static char *g_debugger_name =  (char *) "";
 static Driver *g_driver = NULL;
 
 // In the Driver::MainLoop, we change the terminal settings.  This function is
@@ -96,8 +110,15 @@ static OptionDefinition g_options[] =
         "Tells the debugger to read in and execute the lldb commands in the given file, before any file provided on the command line has been loaded." },
     { LLDB_3_TO_5,       false, "one-line-before-file"         , 'O', required_argument, 0,  eArgTypeNone,
         "Tells the debugger to execute this one-line lldb command before any file provided on the command line has been loaded." },
+    { LLDB_3_TO_5,       false, "one-line-on-crash"         , 'k', required_argument, 0,  eArgTypeNone,
+        "When in batch mode, tells the debugger to execute this one-line lldb command if the target crashes." },
+    { LLDB_3_TO_5,       false, "source-on-crash"         , 'K', required_argument, 0,  eArgTypeFilename,
+        "When in batch mode, tells the debugger to source this file of lldb commands if the target crashes." },
     { LLDB_3_TO_5,       false, "source-quietly"          , 'Q', no_argument      , 0,  eArgTypeNone,
-        "Tells the debugger suppress output from commands provided in the -s, -S, -O and -o commands." },
+        "Tells the debugger to execute this one-line lldb command before any file provided on the command line has been loaded." },
+    { LLDB_3_TO_5,       false, "batch"          , 'b', no_argument      , 0,  eArgTypeNone,
+        "Tells the debugger to running the commands from -s, -S, -o & -O, and then quit.  However if any run command stopped due to a signal or crash, "
+        "the debugger will return to the interactive prompt at the place of the crash." },
     { LLDB_3_TO_5,       false, "editor"         , 'e', no_argument      , 0,  eArgTypeNone,
         "Tells the debugger to open source files using the host's \"external editor\" mechanism." },
     { LLDB_3_TO_5,       false, "no-lldbinit"    , 'x', no_argument      , 0,  eArgTypeNone,
@@ -112,6 +133,10 @@ static OptionDefinition g_options[] =
         "extensions have been implemented." },
     { LLDB_3_TO_5,       false, "debug"          , 'd', no_argument      , 0,  eArgTypeNone,
         "Tells the debugger to print out extra information for debugging itself." },
+    { LLDB_OPT_SET_7,  true , "repl"               , 'r', optional_argument, 0,  eArgTypeNone,
+        "Runs lldb in REPL mode with a stub process." },
+    { LLDB_OPT_SET_7,  true , "repl-language"      , 'R', required_argument, 0,  eArgTypeNone,
+        "Chooses the language for the REPL." },
     { 0,                 false, NULL             , 0  , 0                , 0,  eArgTypeNone,         NULL }
 };
 
@@ -125,16 +150,12 @@ Driver::Driver () :
     // We want to be able to handle CTRL+D in the terminal to have it terminate
     // certain input
     m_debugger.SetCloseInputOnEOF (false);
-    g_debugger_name = (char *) m_debugger.GetInstanceName();
-    if (g_debugger_name == NULL)
-        g_debugger_name = (char *) "";
     g_driver = this;
 }
 
 Driver::~Driver ()
 {
     g_driver = NULL;
-    g_debugger_name = NULL;
 }
 
 
@@ -325,21 +346,27 @@ ShowUsage (FILE *out, OptionDefinition *option_table, Driver::OptionData data)
              indent_level, "");
     indent_level += 5;
     
-    fprintf (out, "\n%*sMultiple \"-s\" and \"-o\" options can be provided.  They will be processed from left to right in order, "
-                  "\n%*swith the source files and commands interleaved.  The same is true of the \"-S\" and \"-O\" options."
-                  "\n%*sThe before file and after file sets can intermixed freely, the command parser will sort them out."
-                  "\n%*sThe order of the file specifiers (\"-c\", \"-f\", etc.) is not significant in this regard.\n\n",
+    fprintf (out, "\n%*sMultiple \"-s\" and \"-o\" options can be provided.  They will be processed"
+                  "\n%*sfrom left to right in order, with the source files and commands"
+                  "\n%*sinterleaved.  The same is true of the \"-S\" and \"-O\" options.  The before"
+                  "\n%*sfile and after file sets can intermixed freely, the command parser will"
+                  "\n%*ssort them out.  The order of the file specifiers (\"-c\", \"-f\", etc.) is"
+                  "\n%*snot significant in this regard.\n\n",
              indent_level, "", 
              indent_level, "", 
+             indent_level, "",
+             indent_level, "",
              indent_level, "",
              indent_level, "");
     
-    fprintf (out, "\n%*sIf you don't provide -f then the first argument will be the file to be debugged"
-                  "\n%*swhich means that '%s -- <filename> [<ARG1> [<ARG2>]]' also works."
-                  "\n%*sBut remember to end the options with \"--\" if any of your arguments have a \"-\" in them.\n\n",
+    fprintf (out, "\n%*sIf you don't provide -f then the first argument will be the file to be"
+                  "\n%*sdebugged which means that '%s -- <filename> [<ARG1> [<ARG2>]]' also"
+                  "\n%*sworks.  But remember to end the options with \"--\" if any of your"
+                  "\n%*sarguments have a \"-\" in them.\n\n",
              indent_level, "", 
              indent_level, "",
              name, 
+             indent_level, "",
              indent_level, "");
 }
 
@@ -385,15 +412,20 @@ Driver::OptionData::OptionData () :
     m_crash_log (),
     m_initial_commands (),
     m_after_file_commands (),
+    m_after_crash_commands(),
     m_debug_mode (false),
     m_source_quietly(false),
     m_print_version (false),
     m_print_python_path (false),
     m_print_help (false),
     m_wait_for(false),
+    m_repl (false),
+    m_repl_lang (eLanguageTypeUnknown),
+    m_repl_options (),
     m_process_name(),
     m_process_pid(LLDB_INVALID_PROCESS_ID),
     m_use_external_editor(false),
+    m_batch(false),
     m_seen_options()
 {
 }
@@ -409,6 +441,16 @@ Driver::OptionData::Clear ()
     m_script_lang = lldb::eScriptLanguageDefault;
     m_initial_commands.clear ();
     m_after_file_commands.clear ();
+    // If there is a local .lldbinit, source that:
+    SBFileSpec local_lldbinit("./.lldbinit", true);
+    if (local_lldbinit.Exists())
+    {
+        char path[2048];
+        local_lldbinit.GetPath(path, 2047);
+        InitialCmdEntry entry(path, true, true);
+        m_after_file_commands.push_back (entry);
+    }
+    
     m_debug_mode = false;
     m_source_quietly = false;
     m_print_help = false;
@@ -417,35 +459,45 @@ Driver::OptionData::Clear ()
     m_use_external_editor = false;
     m_wait_for = false;
     m_process_name.erase();
+    m_batch = false;
+    m_after_crash_commands.clear();
+
     m_process_pid = LLDB_INVALID_PROCESS_ID;
 }
 
 void
-Driver::OptionData::AddInitialCommand (const char *command, bool before_file, bool is_file, SBError &error)
+Driver::OptionData::AddInitialCommand (const char *command, CommandPlacement placement, bool is_file, SBError &error)
 {
-    std::vector<std::pair<bool, std::string> > *command_set;
-    if (before_file)
+    std::vector<InitialCmdEntry> *command_set;
+    switch (placement)
+    {
+    case eCommandPlacementBeforeFile:
         command_set = &(m_initial_commands);
-    else
+        break;
+    case eCommandPlacementAfterFile:
         command_set = &(m_after_file_commands);
+        break;
+    case eCommandPlacementAfterCrash:
+        command_set = &(m_after_crash_commands);
+        break;
+    }
 
     if (is_file)
     {
         SBFileSpec file(command);
         if (file.Exists())
-            command_set->push_back (std::pair<bool, std::string> (true, optarg));
+            command_set->push_back (InitialCmdEntry(command, is_file));
         else if (file.ResolveExecutableLocation())
         {
             char final_path[PATH_MAX];
             file.GetPath (final_path, sizeof(final_path));
-            std::string path_str (final_path);
-            command_set->push_back (std::pair<bool, std::string> (true, path_str));
+            command_set->push_back (InitialCmdEntry(final_path, is_file));
         }
         else
             error.SetErrorStringWithFormat("file specified in --source (-s) option doesn't exist: '%s'", optarg);
     }
     else
-        command_set->push_back (std::pair<bool, std::string> (false, optarg));
+        command_set->push_back (InitialCmdEntry(command, is_file));
 }
 
 void
@@ -477,63 +529,33 @@ Driver::GetScriptLanguage() const
 }
 
 void
-Driver::ExecuteInitialCommands (bool before_file)
+Driver::WriteCommandsForSourcing (CommandPlacement placement, SBStream &strm)
 {
-    size_t num_commands;
-    std::vector<std::pair<bool, std::string> > *command_set;
-    if (before_file)
-        command_set = &(m_option_data.m_initial_commands);
-    else
-        command_set = &(m_option_data.m_after_file_commands);
-    
-    num_commands = command_set->size();
-    SBCommandReturnObject result;
-    bool old_async = GetDebugger().GetAsync();
-    GetDebugger().SetAsync(false);
-    for (size_t idx = 0; idx < num_commands; idx++)
+    std::vector<OptionData::InitialCmdEntry> *command_set;
+    switch (placement)
     {
-        bool is_file = (*command_set)[idx].first;
-        const char *command = (*command_set)[idx].second.c_str();
-        char command_string[PATH_MAX * 2];
-        const bool dump_stream_only_if_no_immediate = true;
-        const char *executed_command = command;
-        if (is_file)
-        {
-            ::snprintf (command_string, sizeof(command_string), "command source -s %i '%s'", m_option_data.m_source_quietly, command);
-            executed_command = command_string;
-        }
-        
-        m_debugger.GetCommandInterpreter().HandleCommand (executed_command, result, false);
-        if (!m_option_data.m_source_quietly || result.Succeeded() == false)
-        {
-            const size_t output_size = result.GetOutputSize();
-            if (output_size > 0)
-            {
-                const char *cstr = result.GetOutput(dump_stream_only_if_no_immediate);
-                if (cstr)
-                    printf ("%s", cstr);
-            }
-            const size_t error_size = result.GetErrorSize();
-            if (error_size > 0)
-            {
-                const char *cstr = result.GetError(dump_stream_only_if_no_immediate);
-                if (cstr)
-                    printf ("%s", cstr);
-            }
-        }
-        
-        if (result.Succeeded() == false)
-        {
-            const char *type = before_file ? "before file" : "after_file";
-            if (is_file)
-                ::fprintf(stderr, "Aborting %s command execution, command file: '%s' failed.\n", type, command);
-            else
-                ::fprintf(stderr, "Aborting %s command execution, command: '%s' failed.\n", type, command);
-            break;
-        }
-        result.Clear();
+    case eCommandPlacementBeforeFile:
+        command_set = &m_option_data.m_initial_commands;
+        break;
+    case eCommandPlacementAfterFile:
+        command_set = &m_option_data.m_after_file_commands;
+        break;
+    case eCommandPlacementAfterCrash:
+        command_set = &m_option_data.m_after_crash_commands;
+        break;
     }
-    GetDebugger().SetAsync(old_async);
+    
+    for (const auto &command_entry : *command_set)
+    {
+        const char *command = command_entry.contents.c_str();
+        if (command_entry.is_file)
+        {
+            bool source_quietly = m_option_data.m_source_quietly || command_entry.source_quietly;
+            strm.Printf("command source -s %i '%s'\n", source_quietly, command);
+        }
+        else
+            strm.Printf("%s\n", command);
+    }
 }
 
 bool
@@ -673,6 +695,10 @@ Driver::ParseArgs (int argc, const char *argv[], FILE *out_fh, bool &exiting)
                         m_option_data.m_print_python_path = true;
                         break;
 
+                    case 'b':
+                        m_option_data.m_batch = true;
+                        break;
+
                     case 'c':
                         {
                             SBFileSpec file(optarg);
@@ -733,6 +759,13 @@ Driver::ParseArgs (int argc, const char *argv[], FILE *out_fh, bool &exiting)
                         m_option_data.m_source_quietly = true;
                         break;
 
+                    case 'K':
+                        m_option_data.AddInitialCommand(optarg, eCommandPlacementAfterCrash, true, error);
+                        break;
+                    case 'k':
+                        m_option_data.AddInitialCommand(optarg, eCommandPlacementAfterCrash, false, error);
+                        break;
+
                     case 'n':
                         m_option_data.m_process_name = optarg;
                         break;
@@ -750,17 +783,34 @@ Driver::ParseArgs (int argc, const char *argv[], FILE *out_fh, bool &exiting)
                                                                 optarg);
                         }
                         break;
+                        
+                    case 'r':
+                        m_option_data.m_repl = true;
+                        if (optarg && optarg[0])
+                            m_option_data.m_repl_options = optarg;
+                        else
+                            m_option_data.m_repl_options.clear();
+                        break;
+                    
+                    case 'R':
+                        m_option_data.m_repl_lang = SBLanguageRuntime::GetLanguageTypeFromString (optarg);
+                        if (m_option_data.m_repl_lang == eLanguageTypeUnknown)
+                        {
+                            error.SetErrorStringWithFormat ("Unrecognized language name: \"%s\"", optarg);
+                        }
+                        break;
+
                     case 's':
-                        m_option_data.AddInitialCommand(optarg, false, true, error);
+                        m_option_data.AddInitialCommand(optarg, eCommandPlacementAfterFile, true, error);
                         break;
                     case 'o':
-                        m_option_data.AddInitialCommand(optarg, false, false, error);
+                        m_option_data.AddInitialCommand(optarg, eCommandPlacementAfterFile, false, error);
                         break;
                     case 'S':
-                        m_option_data.AddInitialCommand(optarg, true, true, error);
+                        m_option_data.AddInitialCommand(optarg, eCommandPlacementBeforeFile, true, error);
                         break;
                     case 'O':
-                        m_option_data.AddInitialCommand(optarg, true, false, error);
+                        m_option_data.AddInitialCommand(optarg, eCommandPlacementBeforeFile, false, error);
                         break;
                     default:
                         m_option_data.m_print_help = true;
@@ -843,6 +893,103 @@ Driver::ParseArgs (int argc, const char *argv[], FILE *out_fh, bool &exiting)
     return error;
 }
 
+static ::FILE *
+PrepareCommandsForSourcing (const char *commands_data, size_t commands_size, int fds[2])
+{
+    enum PIPES { READ, WRITE }; // Constants 0 and 1 for READ and WRITE
+
+    ::FILE *commands_file = NULL;
+    fds[0] = -1;
+    fds[1] = -1;
+    int err = 0;
+#ifdef _WIN32
+    err = _pipe(fds, commands_size, O_BINARY);
+#else
+    err = pipe(fds);
+#endif
+    if (err == 0)
+    {
+        ssize_t nrwr = write(fds[WRITE], commands_data, commands_size);
+        if (nrwr < 0)
+        {
+            fprintf(stderr, "error: write(%i, %p, %" PRIu64 ") failed (errno = %i) "
+                            "when trying to open LLDB commands pipe\n",
+                    fds[WRITE], commands_data, static_cast<uint64_t>(commands_size), errno);
+        }
+        else if (static_cast<size_t>(nrwr) == commands_size)
+        {
+            // Close the write end of the pipe so when we give the read end to
+            // the debugger/command interpreter it will exit when it consumes all
+            // of the data
+#ifdef _WIN32
+            _close(fds[WRITE]); fds[WRITE] = -1;
+#else
+            close(fds[WRITE]); fds[WRITE] = -1;
+#endif
+            // Now open the read file descriptor in a FILE * that we can give to
+            // the debugger as an input handle
+            commands_file = fdopen(fds[READ], "r");
+            if (commands_file)
+            {
+                fds[READ] = -1; // The FILE * 'commands_file' now owns the read descriptor
+                // Hand ownership if the FILE * over to the debugger for "commands_file".
+            }
+            else
+            {
+                fprintf(stderr,
+                        "error: fdopen(%i, \"r\") failed (errno = %i) when "
+                        "trying to open LLDB commands pipe\n",
+                        fds[READ], errno);
+            }
+        }
+    }
+    else
+    {
+        fprintf(stderr, "error: can't create pipe file descriptors for LLDB commands\n");
+    }
+
+    return commands_file;
+}
+
+void
+CleanupAfterCommandSourcing (int fds[2])
+{
+     enum PIPES { READ, WRITE }; // Constants 0 and 1 for READ and WRITE
+
+   // Close any pipes that we still have ownership of
+    if ( fds[WRITE] != -1)
+    {
+#ifdef _WIN32
+        _close(fds[WRITE]); fds[WRITE] = -1;
+#else
+        close(fds[WRITE]); fds[WRITE] = -1;
+#endif
+        
+    }
+
+    if ( fds[READ] != -1)
+    {
+#ifdef _WIN32
+        _close(fds[READ]); fds[READ] = -1;
+#else
+        close(fds[READ]); fds[READ] = -1;
+#endif
+    }
+
+}
+
+std::string
+EscapeString (std::string arg)
+{
+    std::string::size_type pos = 0;
+    while ((pos = arg.find_first_of("\"\\", pos)) != std::string::npos)
+    {
+        arg.insert (pos, 1, '\\');
+        pos += 2;
+    }
+    return '"' + arg + '"';
+}
+
 void
 Driver::MainLoop ()
 {
@@ -857,8 +1004,8 @@ Driver::MainLoop ()
 
     m_debugger.SetErrorFileHandle (stderr, false);
     m_debugger.SetOutputFileHandle (stdout, false);
-    m_debugger.SetInputFileHandle (stdin, true);
-    
+    m_debugger.SetInputFileHandle (stdin, false); // Don't take ownership of STDIN yet...
+
     m_debugger.SetUseExternalEditor(m_option_data.m_use_external_editor);
 
     struct winsize window_size;
@@ -882,80 +1029,55 @@ Driver::MainLoop ()
     }
 
     // Now we handle options we got from the command line
+    SBStream commands_stream;
+    
     // First source in the commands specified to be run before the file arguments are processed.
-    ExecuteInitialCommands(true);
-    
-    // Was there a core file specified?
-    std::string core_file_spec("");
-    if (!m_option_data.m_core_file.empty())
-        core_file_spec.append("--core ").append(m_option_data.m_core_file);
-    
-    char command_string[PATH_MAX * 2];
+    WriteCommandsForSourcing(eCommandPlacementBeforeFile, commands_stream);
+        
     const size_t num_args = m_option_data.m_args.size();
     if (num_args > 0)
     {
         char arch_name[64];
         if (m_debugger.GetDefaultArchitecture (arch_name, sizeof (arch_name)))
-            ::snprintf (command_string,
-                        sizeof (command_string),
-                        "target create --arch=%s %s \"%s\"",
-                        arch_name,
-                        core_file_spec.c_str(),
-                        m_option_data.m_args[0].c_str());
+            commands_stream.Printf("target create --arch=%s %s", arch_name, EscapeString(m_option_data.m_args[0]).c_str());
         else
-            ::snprintf (command_string,
-                        sizeof(command_string),
-                        "target create %s \"%s\"",
-                        core_file_spec.c_str(),
-                        m_option_data.m_args[0].c_str());
-        
-        m_debugger.HandleCommand (command_string);
+            commands_stream.Printf("target create %s", EscapeString(m_option_data.m_args[0]).c_str());
+
+        if (!m_option_data.m_core_file.empty())
+        {
+            commands_stream.Printf(" --core %s", EscapeString(m_option_data.m_core_file).c_str());
+        }
+        commands_stream.Printf("\n");
         
         if (num_args > 1)
         {
-            m_debugger.HandleCommand ("settings clear target.run-args");
-            char arg_cstr[1024];
+            commands_stream.Printf ("settings set -- target.run-args ");
             for (size_t arg_idx = 1; arg_idx < num_args; ++arg_idx)
-            {
-                ::snprintf (arg_cstr,
-                            sizeof(arg_cstr),
-                            "settings append target.run-args \"%s\"",
-                            m_option_data.m_args[arg_idx].c_str());
-                m_debugger.HandleCommand (arg_cstr);
-            }
+                commands_stream.Printf(" %s", EscapeString(m_option_data.m_args[arg_idx]).c_str());
+            commands_stream.Printf("\n");
         }
     }
-    else if (!core_file_spec.empty())
+    else if (!m_option_data.m_core_file.empty())
     {
-        ::snprintf (command_string,
-                    sizeof(command_string),
-                    "target create %s",
-                    core_file_spec.c_str());
-        m_debugger.HandleCommand (command_string);;
+        commands_stream.Printf("target create --core %s\n", EscapeString(m_option_data.m_core_file).c_str());
     }
     else if (!m_option_data.m_process_name.empty())
     {
-        ::snprintf (command_string, 
-                    sizeof(command_string), 
-                    "process attach --name '%s'%s", 
-                    m_option_data.m_process_name.c_str(), 
-                    m_option_data.m_wait_for ? " --waitfor" : "");
-        m_debugger.HandleCommand (command_string);
+        commands_stream.Printf ("process attach --name %s", EscapeString(m_option_data.m_process_name).c_str());
+        
+        if (m_option_data.m_wait_for)
+            commands_stream.Printf(" --waitfor");
+
+        commands_stream.Printf("\n");
+
     }
     else if (LLDB_INVALID_PROCESS_ID != m_option_data.m_process_pid)
     {
-        ::snprintf (command_string, 
-                    sizeof(command_string), 
-                    "process attach --pid %" PRIu64, 
-                    m_option_data.m_process_pid);
-        m_debugger.HandleCommand (command_string);
+        commands_stream.Printf ("process attach --pid %" PRIu64 "\n", m_option_data.m_process_pid);
     }
 
-    ExecuteInitialCommands(false);
-
-    // Now that all option parsing is done, we try and parse the .lldbinit
-    // file in the current working directory
-    sb_interpreter.SourceInitFileInCurrentWorkingDirectory (result);
+    WriteCommandsForSourcing(eCommandPlacementAfterFile, commands_stream);
+    
     if (GetDebugMode())
     {
         result.PutError(m_debugger.GetErrorFileHandle());
@@ -964,7 +1086,116 @@ Driver::MainLoop ()
     
     bool handle_events = true;
     bool spawn_thread = false;
-    m_debugger.RunCommandInterpreter(handle_events, spawn_thread);
+
+    if (m_option_data.m_repl)
+    {
+        const char *repl_options = NULL;
+        if (!m_option_data.m_repl_options.empty())
+            repl_options = m_option_data.m_repl_options.c_str();
+        SBError error (m_debugger.RunREPL(m_option_data.m_repl_lang, repl_options));
+        if (error.Fail())
+        {
+            const char *error_cstr = error.GetCString();
+            if (error_cstr && error_cstr[0])
+                fprintf (stderr, "error: %s\n", error_cstr);
+            else
+                fprintf (stderr, "error: %u\n", error.GetError());
+        }
+    }
+    else
+    {
+        // Check if we have any data in the commands stream, and if so, save it to a temp file
+        // so we can then run the command interpreter using the file contents.
+        const char *commands_data = commands_stream.GetData();
+        const size_t commands_size = commands_stream.GetSize();
+
+        // The command file might have requested that we quit, this variable will track that.
+        bool quit_requested = false;
+        bool stopped_for_crash = false;
+        if (commands_data && commands_size)
+        {
+            int initial_commands_fds[2];
+            bool success = true;
+            FILE *commands_file = PrepareCommandsForSourcing (commands_data, commands_size, initial_commands_fds);
+            if (commands_file)
+            {
+                m_debugger.SetInputFileHandle (commands_file, true);
+
+                // Set the debugger into Sync mode when running the command file.  Otherwise command files
+                // that run the target won't run in a sensible way.
+                bool old_async = m_debugger.GetAsync();
+                m_debugger.SetAsync(false);
+                int num_errors;
+                
+                SBCommandInterpreterRunOptions options;
+                options.SetStopOnError (true);
+                if (m_option_data.m_batch)
+                    options.SetStopOnCrash (true);
+
+                m_debugger.RunCommandInterpreter(handle_events,
+                                                 spawn_thread,
+                                                 options,
+                                                 num_errors,
+                                                 quit_requested,
+                                                 stopped_for_crash);
+
+                if (m_option_data.m_batch && stopped_for_crash && !m_option_data.m_after_crash_commands.empty())
+                {
+                    int crash_command_fds[2];
+                    SBStream crash_commands_stream;
+                    WriteCommandsForSourcing (eCommandPlacementAfterCrash, crash_commands_stream);
+                    const char *crash_commands_data = crash_commands_stream.GetData();
+                    const size_t crash_commands_size = crash_commands_stream.GetSize();
+                    commands_file  = PrepareCommandsForSourcing (crash_commands_data, crash_commands_size, crash_command_fds);
+                    if (commands_file)
+                    {
+                        bool local_quit_requested;
+                        bool local_stopped_for_crash;
+                        m_debugger.SetInputFileHandle (commands_file, true);
+
+                        m_debugger.RunCommandInterpreter(handle_events,
+                                                         spawn_thread,
+                                                         options,
+                                                         num_errors,
+                                                         local_quit_requested,
+                                                         local_stopped_for_crash);
+                        if (local_quit_requested)
+                            quit_requested = true;
+
+                    }
+                }
+                m_debugger.SetAsync(old_async);
+            }
+            else
+                success = false;
+
+            // Close any pipes that we still have ownership of
+            CleanupAfterCommandSourcing(initial_commands_fds);
+
+            // Something went wrong with command pipe
+            if (!success)
+            {
+                exit(1);
+            }
+
+        }
+
+        // Now set the input file handle to STDIN and run the command
+        // interpreter again in interactive mode and let the debugger
+        // take ownership of stdin
+
+        bool go_interactive = true;
+        if (quit_requested)
+            go_interactive = false;
+        else if (m_option_data.m_batch && !stopped_for_crash)
+            go_interactive = false;
+
+        if (go_interactive)
+        {
+            m_debugger.SetInputFileHandle (stdin, true);
+            m_debugger.RunCommandInterpreter(handle_events, spawn_thread);
+        }
+    }
     
     reset_stdin_termios();
     fclose (stdin);
@@ -1032,6 +1263,12 @@ sigcont_handler (int signo)
 int
 main (int argc, char const *argv[], const char *envp[])
 {
+#ifdef _MSC_VER
+	// disable buffering on windows
+	setvbuf(stdout, NULL, _IONBF, 0);
+	setvbuf(stdin , NULL, _IONBF, 0);
+#endif
+
     SBDebugger::Initialize();
     
     SBHostOS::ThreadCreated ("<lldb.driver.main-thread>");

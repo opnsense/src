@@ -1,8 +1,9 @@
 #	@(#)Makefile	8.4 (Berkeley) 5/5/95
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
+PACKAGE=runtime
 PROG=	sh
 INSTALLFLAGS= -S
 SHSRCS=	alias.c arith_yacc.c arith_yylex.c cd.c echo.c error.c eval.c \
@@ -18,8 +19,7 @@ SRCS= ${SHSRCS} ${GENSRCS} ${GENHDRS}
 # utilities of the same name are handled with the associated manpage,
 # builtin.1 in share/man/man1/.
 
-DPADD= ${LIBEDIT} ${LIBTERMCAP}
-LDADD= -ledit -ltermcap
+LIBADD=	edit
 
 CFLAGS+=-DSHELL -I. -I${.CURDIR}
 # for debug:
@@ -39,24 +39,27 @@ CLEANFILES+= ${GENSRCS} ${GENHDRS}
 build-tools: mknodes mksyntax
 
 .ORDER: builtins.c builtins.h
+builtins.h: .NOMETA
 builtins.c builtins.h: mkbuiltins builtins.def
 	sh ${.CURDIR}/mkbuiltins ${.CURDIR}
 
 # XXX this is just to stop the default .c rule being used, so that the
 # intermediate object has a fixed name.
 # XXX we have a default .c rule, but no default .o rule.
-.o:
+mknodes.o mksyntax.o: ${BUILD_TOOLS_META}
 	${CC} ${CFLAGS} ${LDFLAGS} ${.IMPSRC} ${LDLIBS} -o ${.TARGET}
-mknodes: mknodes.o
-mksyntax: mksyntax.o
+mknodes: mknodes.o ${BUILD_TOOLS_META}
+mksyntax: mksyntax.o ${BUILD_TOOLS_META}
 
 .ORDER: nodes.c nodes.h
+nodes.h: .NOMETA
 nodes.c nodes.h: mknodes nodetypes nodes.c.pat
-	./mknodes ${.CURDIR}/nodetypes ${.CURDIR}/nodes.c.pat
+	${BTOOLSPATH:U.}/mknodes ${.CURDIR}/nodetypes ${.CURDIR}/nodes.c.pat
 
 .ORDER: syntax.c syntax.h
+syntax.h: .NOMETA
 syntax.c syntax.h: mksyntax
-	./mksyntax
+	${BTOOLSPATH:U.}/mksyntax
 
 token.h: mktokens
 	sh ${.CURDIR}/mktokens

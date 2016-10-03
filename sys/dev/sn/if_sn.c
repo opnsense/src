@@ -84,6 +84,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/errno.h>
 #include <sys/kernel.h>
 #include <sys/sockio.h>
+#include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/socket.h>
 #include <sys/syslog.h>
@@ -97,6 +98,7 @@ __FBSDID("$FreeBSD$");
 
 #include <net/ethernet.h>
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_arp.h>
 #include <net/if_dl.h>
 #include <net/if_types.h>
@@ -281,7 +283,7 @@ sninit_locked(void *xsc)
 	CSR_WRITE_2(sc, TXMIT_CONTROL_REG_W, 0x0000);
 
 	/*
-	 * Set the control register to automatically release succesfully
+	 * Set the control register to automatically release successfully
 	 * transmitted packets (making the best use out of our limited
 	 * memory) and to enable the EPH interrupt on certain TX errors.
 	 */
@@ -408,7 +410,7 @@ startagain:
 	 */
 	if (len + pad > ETHER_MAX_LEN - ETHER_CRC_LEN) {
 		if_printf(ifp, "large packet discarded (A)\n");
-		++ifp->if_oerrors;
+		if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 		IFQ_DRV_DEQUEUE(&ifp->if_snd, m);
 		m_freem(m);
 		goto readcheck;
@@ -555,7 +557,7 @@ startagain:
 
 	BPF_MTAP(ifp, top);
 
-	ifp->if_opackets++;
+	if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
 	m_freem(top);
 
 
@@ -624,7 +626,7 @@ snresume(struct ifnet *ifp)
 	 */
 	if (len + pad > ETHER_MAX_LEN - ETHER_CRC_LEN) {
 		if_printf(ifp, "large packet discarded (B)\n");
-		++ifp->if_oerrors;
+		if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 		IFQ_DRV_DEQUEUE(&ifp->if_snd, m);
 		m_freem(m);
 		return;
@@ -749,7 +751,7 @@ snresume(struct ifnet *ifp)
 
 	BPF_MTAP(ifp, top);
 
-	ifp->if_opackets++;
+	if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
 	m_freem(top);
 
 try_start:
@@ -829,7 +831,7 @@ snintr_locked(struct sn_softc *sc)
 		SMC_SELECT_BANK(sc, 2);
 		CSR_WRITE_1(sc, INTR_ACK_REG_B, IM_RX_OVRN_INT);
 
-		++ifp->if_ierrors;
+		if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 	}
 	/*
 	 * Got a packet.
@@ -895,11 +897,11 @@ snintr_locked(struct sn_softc *sc)
 			device_printf(sc->dev, 
 			    "Successful packet caused interrupt\n");
 		} else {
-			++ifp->if_oerrors;
+			if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 		}
 
 		if (tx_status & EPHSR_LATCOL)
-			++ifp->if_collisions;
+			if_inc_counter(ifp, IFCOUNTER_COLLISIONS, 1);
 
 		/*
 		 * Some of these errors will have disabled transmit.
@@ -950,12 +952,12 @@ snintr_locked(struct sn_softc *sc)
 		/*
 		 * Single collisions
 		 */
-		ifp->if_collisions += card_stats & ECR_COLN_MASK;
+		if_inc_counter(ifp, IFCOUNTER_COLLISIONS, card_stats & ECR_COLN_MASK);
 
 		/*
 		 * Multiple collisions
 		 */
-		ifp->if_collisions += (card_stats & ECR_MCOLN_MASK) >> 4;
+		if_inc_counter(ifp, IFCOUNTER_COLLISIONS, (card_stats & ECR_MCOLN_MASK) >> 4);
 
 		SMC_SELECT_BANK(sc, 2);
 
@@ -1040,7 +1042,7 @@ read_another:
 	 * Account for receive errors and discard.
 	 */
 	if (status & RS_ERRORS) {
-		++ifp->if_ierrors;
+		if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 		goto out;
 	}
 	/*
@@ -1064,16 +1066,11 @@ read_another:
 	m->m_pkthdr.len = m->m_len = packet_length;
 
 	/*
-	 * Attach an mbuf cluster
+	 * Attach an mbuf cluster.
 	 */
-	MCLGET(m, M_NOWAIT);
-
-	/*
-	 * Insist on getting a cluster
-	 */
-	if ((m->m_flags & M_EXT) == 0) {
+	if (!(MCLGET(m, M_NOWAIT))) {
 		m_freem(m);
-		++ifp->if_ierrors;
+		if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 		printf("sn: snread() kernel memory allocation problem\n");
 		goto out;
 	}
@@ -1088,7 +1085,7 @@ read_another:
 		data += packet_length & ~1;
 		*data = CSR_READ_1(sc, DATA_REG_B);
 	}
-	++ifp->if_ipackets;
+	if_inc_counter(ifp, IFCOUNTER_IPACKETS, 1);
 
 	/*
 	 * Remove link layer addresses and whatnot.
@@ -1219,8 +1216,8 @@ sn_activate(device_t dev)
 	struct sn_softc *sc = device_get_softc(dev);
 
 	sc->port_rid = 0;
-	sc->port_res = bus_alloc_resource(dev, SYS_RES_IOPORT, &sc->port_rid,
-	    0, ~0, SMC_IO_EXTENT, RF_ACTIVE);
+	sc->port_res = bus_alloc_resource_anywhere(dev, SYS_RES_IOPORT,
+	    &sc->port_rid, SMC_IO_EXTENT, RF_ACTIVE);
 	if (!sc->port_res) {
 		if (bootverbose)
 			device_printf(dev, "Cannot allocate ioport\n");

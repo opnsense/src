@@ -9,10 +9,10 @@
 
 #include "MCTargetDesc/ARMMCTargetDesc.h"
 #include "ARMMCExpr.h"
+#include "llvm-c/Disassembler.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCRelocationInfo.h"
-#include "llvm-c/Disassembler.h"
 
 using namespace llvm;
 using namespace object;
@@ -23,12 +23,12 @@ public:
   ARMMachORelocationInfo(MCContext &Ctx) : MCRelocationInfo(Ctx) {}
 
   const MCExpr *createExprForCAPIVariantKind(const MCExpr *SubExpr,
-                                             unsigned VariantKind) {
+                                             unsigned VariantKind) override {
     switch(VariantKind) {
     case LLVMDisassembler_VariantKind_ARM_HI16:
-      return ARMMCExpr::CreateUpper16(SubExpr, Ctx);
+      return ARMMCExpr::createUpper16(SubExpr, Ctx);
     case LLVMDisassembler_VariantKind_ARM_LO16:
-      return ARMMCExpr::CreateLower16(SubExpr, Ctx);
+      return ARMMCExpr::createLower16(SubExpr, Ctx);
     default:
       return MCRelocationInfo::createExprForCAPIVariantKind(SubExpr,
                                                             VariantKind);

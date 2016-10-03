@@ -23,6 +23,7 @@
  * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
  * Copyright (c) 2013 Steven Hartland. All rights reserved.
  * Copyright (c) 2014 Spectra Logic Corporation, All rights reserved.
+ * Copyright (c) 2014 Integros [integros.com]
  */
 
 #include <sys/dsl_pool.h>
@@ -47,9 +48,9 @@
 #include <sys/zil_impl.h>
 #include <sys/dsl_userhold.h>
 
-#ifdef __FreeBSD__
-#include <sys/sysctl.h>
+#if defined(__FreeBSD__) && defined(_KERNEL)
 #include <sys/types.h>
+#include <sys/sysctl.h>
 #endif
 
 /*
@@ -131,31 +132,27 @@ int zfs_delay_min_dirty_percent = 60;
 uint64_t zfs_delay_scale = 1000 * 1000 * 1000 / 2000;
 
 
-#ifdef __FreeBSD__
+#if defined(__FreeBSD__) && defined(_KERNEL)
 
 extern int zfs_vdev_async_write_active_max_dirty_percent;
 
 SYSCTL_DECL(_vfs_zfs);
 
-TUNABLE_QUAD("vfs.zfs.dirty_data_max", &zfs_dirty_data_max);
 SYSCTL_UQUAD(_vfs_zfs, OID_AUTO, dirty_data_max, CTLFLAG_RWTUN,
     &zfs_dirty_data_max, 0,
     "The maximum amount of dirty data in bytes after which new writes are "
     "halted until space becomes available");
 
-TUNABLE_QUAD("vfs.zfs.dirty_data_max_max", &zfs_dirty_data_max_max);
 SYSCTL_UQUAD(_vfs_zfs, OID_AUTO, dirty_data_max_max, CTLFLAG_RDTUN,
     &zfs_dirty_data_max_max, 0,
     "The absolute cap on dirty_data_max when auto calculating");
 
-TUNABLE_INT("vfs.zfs.dirty_data_max_percent", &zfs_dirty_data_max_percent);
 static int sysctl_zfs_dirty_data_max_percent(SYSCTL_HANDLER_ARGS);
 SYSCTL_PROC(_vfs_zfs, OID_AUTO, dirty_data_max_percent,
     CTLTYPE_INT | CTLFLAG_MPSAFE | CTLFLAG_RWTUN, 0, sizeof(int),
     sysctl_zfs_dirty_data_max_percent, "I",
     "The percent of physical memory used to auto calculate dirty_data_max");
 
-TUNABLE_QUAD("vfs.zfs.dirty_data_sync", &zfs_dirty_data_sync);
 SYSCTL_UQUAD(_vfs_zfs, OID_AUTO, dirty_data_sync, CTLFLAG_RWTUN,
     &zfs_dirty_data_sync, 0,
     "Force a txg if the number of dirty buffer bytes exceed this value");

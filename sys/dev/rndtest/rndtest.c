@@ -68,7 +68,7 @@ static const struct rndtest_testfunc {
 	{ rndtest_longruns },
 };
 
-#define	RNDTEST_NTESTS	(sizeof(rndtest_funcs)/sizeof(rndtest_funcs[0]))
+#define	RNDTEST_NTESTS	nitems(rndtest_funcs)
 
 static SYSCTL_NODE(_kern, OID_AUTO, rndtest, CTLFLAG_RD, 0,
 	    "RNG test parameters");
@@ -98,7 +98,7 @@ rndtest_attach(device_t dev)
 #if __FreeBSD_version < 500000
 		callout_init(&rsp->rs_to);
 #else
-		callout_init(&rsp->rs_to, CALLOUT_MPSAFE);
+		callout_init(&rsp->rs_to, 1);
 #endif
 	} else
 		device_printf(dev, "rndtest_init: no memory for state block\n");
@@ -145,16 +145,9 @@ rndtest_harvest(struct rndtest_state *rsp, void *buf, u_int len)
 	 */
 	if (rsp->rs_discard)
 		rndstats.rst_discard += len;
-	else {
-#if __FreeBSD_version < 500000
-		/* XXX verify buffer is word aligned */
-		u_int32_t *p = buf;
-		for (len /= sizeof (u_int32_t); len; len--)
-			add_true_randomness(*p++);
-#else
-		random_harvest(buf, len, len*NBBY/2, RANDOM_PURE_RNDTEST);
-#endif
-	}
+	else
+	/* MarkM: FIX!! Check that this does not swamp the harvester! */
+	random_harvest_queue(buf, len, len*NBBY/2, RANDOM_PURE_RNDTEST);
 }
 
 static void

@@ -42,7 +42,6 @@ __FBSDID("$FreeBSD$");
 #include <machine/cpu.h>
 #include <machine/hid.h>
 #include <machine/platformvar.h>
-#include <machine/pmap.h>
 #include <machine/rtas.h>
 #include <machine/smp.h>
 #include <machine/spr.h>
@@ -58,7 +57,7 @@ extern void *ap_pcpu;
 #endif
 
 #ifdef __powerpc64__
-static uint8_t splpar_vpa[640] __aligned(64);
+static uint8_t splpar_vpa[MAXCPU][640] __aligned(128); /* XXX: dpcpu */
 #endif
 
 static vm_offset_t realmaxaddr = VM_MAX_ADDRESS;
@@ -125,6 +124,8 @@ static int
 chrp_attach(platform_t plat)
 {
 #ifdef __powerpc64__
+	int i;
+
 	/* XXX: check for /rtas/ibm,hypertas-functions? */
 	if (!(mfmsr() & PSL_HV)) {
 		struct mem_region *phys, *avail;
@@ -136,14 +137,19 @@ chrp_attach(platform_t plat)
 		cpu_idle_hook = phyp_cpu_idle;
 
 		/* Set up important VPA fields */
-		bzero(splpar_vpa, sizeof(splpar_vpa));
-		splpar_vpa[4] = (uint8_t)((sizeof(splpar_vpa) >> 8) & 0xff);
-		splpar_vpa[5] = (uint8_t)(sizeof(splpar_vpa) & 0xff);
-		splpar_vpa[0xba] = 1;			/* Maintain FPRs */
-		splpar_vpa[0xbb] = 1;			/* Maintain PMCs */
-		splpar_vpa[0xfc] = 0xff;		/* Maintain full SLB */
-		splpar_vpa[0xfd] = 0xff;
-		splpar_vpa[0xff] = 1;			/* Maintain Altivec */
+		for (i = 0; i < MAXCPU; i++) {
+			bzero(splpar_vpa[i], sizeof(splpar_vpa));
+			/* First two: VPA size */
+			splpar_vpa[i][4] =
+			    (uint8_t)((sizeof(splpar_vpa[i]) >> 8) & 0xff);
+			splpar_vpa[i][5] =
+			    (uint8_t)(sizeof(splpar_vpa[i]) & 0xff);
+			splpar_vpa[i][0xba] = 1;	/* Maintain FPRs */
+			splpar_vpa[i][0xbb] = 1;	/* Maintain PMCs */
+			splpar_vpa[i][0xfc] = 0xff;	/* Maintain full SLB */
+			splpar_vpa[i][0xfd] = 0xff;
+			splpar_vpa[i][0xff] = 1;	/* Maintain Altivec */
+		}
 		mb();
 
 		/* Set up hypervisor CPU stuff */
@@ -158,14 +164,14 @@ chrp_attach(platform_t plat)
 }
 
 static int
-parse_drconf_memory(int *msz, int *asz, struct mem_region *ofmem,
-		    struct mem_region *ofavail)
+parse_drconf_memory(struct mem_region *ofmem, int *msz,
+		    struct mem_region *ofavail, int *asz)
 {
 	phandle_t phandle;
 	vm_offset_t base;
 	int i, idx, len, lasz, lmsz, res;
-	uint32_t lmb_size[2];
-	unsigned long *dmem, flags;
+	uint32_t flags, lmb_size[2];
+	uint32_t *dmem;
 
 	lmsz = *msz;
 	lasz = *asz;
@@ -175,7 +181,8 @@ parse_drconf_memory(int *msz, int *asz, struct mem_region *ofmem,
 		/* No drconf node, return. */
 		return (0);
 
-	res = OF_getprop(phandle, "ibm,lmb-size", lmb_size, sizeof(lmb_size));
+	res = OF_getencprop(phandle, "ibm,lmb-size", lmb_size,
+	    sizeof(lmb_size));
 	if (res == -1)
 		return (0);
 	printf("Logical Memory Block size: %d MB\n", lmb_size[1] >> 20);
@@ -200,21 +207,21 @@ parse_drconf_memory(int *msz, int *asz, struct mem_region *ofmem,
 		*/
 		cell_t arr[len/sizeof(cell_t)];
 
-		res = OF_getprop(phandle, "ibm,dynamic-memory", &arr,
-				 sizeof(arr));
+		res = OF_getencprop(phandle, "ibm,dynamic-memory", arr,
+		    sizeof(arr));
 		if (res == -1)
 			return (0);
 
 		/* Number of elements */
 		idx = arr[0];
 
-		/* First address. */
-		dmem = (void*)&arr[1];
+		/* First address, in arr[1], arr[2]*/
+		dmem = &arr[1];
 	
 		for (i = 0; i < idx; i++) {
-			base = *dmem;
-			dmem += 2;
-			flags = *dmem;
+			base = ((uint64_t)dmem[0] << 32) + dmem[1];
+			dmem += 4;
+			flags = dmem[1];
 			/* Use region only if available and not reserved. */
 			if ((flags & 0x8) && !(flags & 0x80)) {
 				ofmem[lmsz].mr_start = base;
@@ -224,7 +231,7 @@ parse_drconf_memory(int *msz, int *asz, struct mem_region *ofmem,
 				lmsz++;
 				lasz++;
 			}
-			dmem++;
+			dmem += 2;
 		}
 	}
 
@@ -242,7 +249,7 @@ chrp_mem_regions(platform_t plat, struct mem_region *phys, int *physsz,
 	int i;
 
 	ofw_mem_regions(phys, physsz, avail, availsz);
-	parse_drconf_memory(physsz, availsz, phys, avail);
+	parse_drconf_memory(phys, physsz, avail, availsz);
 
 	/*
 	 * On some firmwares (SLOF), some memory may be marked available that
@@ -274,7 +281,7 @@ chrp_timebase_freq(platform_t plat, struct cpuref *cpuref)
 
 	phandle = cpuref->cr_hwref;
 
-	OF_getprop(phandle, "timebase-frequency", &ticks, sizeof(ticks));
+	OF_getencprop(phandle, "timebase-frequency", &ticks, sizeof(ticks));
 
 	if (ticks <= 0)
 		panic("Unable to determine timebase frequency!");
@@ -320,10 +327,10 @@ chrp_smp_first_cpu(platform_t plat, struct cpuref *cpuref)
 		return (ENOENT);
 
 	cpuref->cr_hwref = cpu;
-	res = OF_getprop(cpu, "ibm,ppc-interrupt-server#s", &cpuid,
+	res = OF_getencprop(cpu, "ibm,ppc-interrupt-server#s", &cpuid,
 	    sizeof(cpuid));
 	if (res <= 0)
-		res = OF_getprop(cpu, "reg", &cpuid, sizeof(cpuid));
+		res = OF_getencprop(cpu, "reg", &cpuid, sizeof(cpuid));
 	if (res <= 0)
 		cpuid = 0;
 	cpuref->cr_cpuid = cpuid;
@@ -342,7 +349,7 @@ chrp_smp_next_cpu(platform_t plat, struct cpuref *cpuref)
 	res = OF_getproplen(cpuref->cr_hwref, "ibm,ppc-interrupt-server#s");
 	if (res > 0) {
 		cell_t interrupt_servers[res/sizeof(cell_t)];
-		OF_getprop(cpuref->cr_hwref, "ibm,ppc-interrupt-server#s",
+		OF_getencprop(cpuref->cr_hwref, "ibm,ppc-interrupt-server#s",
 		    interrupt_servers, res);
 		for (i = 0; i < res/sizeof(cell_t) - 1; i++) {
 			if (interrupt_servers[i] == cpuref->cr_cpuid) {
@@ -364,10 +371,10 @@ chrp_smp_next_cpu(platform_t plat, struct cpuref *cpuref)
 		return (ENOENT);
 
 	cpuref->cr_hwref = cpu;
-	res = OF_getprop(cpu, "ibm,ppc-interrupt-server#s", &cpuid,
+	res = OF_getencprop(cpu, "ibm,ppc-interrupt-server#s", &cpuid,
 	    sizeof(cpuid));
 	if (res <= 0)
-		res = OF_getprop(cpu, "reg", &cpuid, sizeof(cpuid));
+		res = OF_getencprop(cpu, "reg", &cpuid, sizeof(cpuid));
 	if (res <= 0)
 		cpuid = 0;
 	cpuref->cr_cpuid = cpuid;
@@ -386,7 +393,7 @@ chrp_smp_get_bsp(platform_t plat, struct cpuref *cpuref)
 	if (chosen == 0)
 		return (ENXIO);
 
-	res = OF_getprop(chosen, "cpu", &inst, sizeof(inst));
+	res = OF_getencprop(chosen, "cpu", &inst, sizeof(inst));
 	if (res < 0)
 		return (ENXIO);
 
@@ -394,10 +401,10 @@ chrp_smp_get_bsp(platform_t plat, struct cpuref *cpuref)
 
 	/* Pick the primary thread. Can it be any other? */
 	cpuref->cr_hwref = bsp;
-	res = OF_getprop(bsp, "ibm,ppc-interrupt-server#s", &cpuid,
+	res = OF_getencprop(bsp, "ibm,ppc-interrupt-server#s", &cpuid,
 	    sizeof(cpuid));
 	if (res <= 0)
-		res = OF_getprop(bsp, "reg", &cpuid, sizeof(cpuid));
+		res = OF_getencprop(bsp, "reg", &cpuid, sizeof(cpuid));
 	if (res <= 0)
 		cpuid = 0;
 	cpuref->cr_cpuid = cpuid;
@@ -492,11 +499,12 @@ static void
 chrp_smp_ap_init(platform_t platform)
 {
 	if (!(mfmsr() & PSL_HV)) {
+		/* Register VPA */
+		phyp_hcall(H_REGISTER_VPA, 1UL, PCPU_GET(cpuid),
+		    splpar_vpa[PCPU_GET(cpuid)]);
+
 		/* Set interrupt priority */
 		phyp_hcall(H_CPPR, 0xff);
-
-		/* Register VPA */
-		phyp_hcall(H_REGISTER_VPA, 1UL, PCPU_GET(cpuid), splpar_vpa);
 	}
 }
 #else

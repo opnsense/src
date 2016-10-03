@@ -7,8 +7,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#define DEBUG_TYPE "slotindexes"
-
 #include "llvm/CodeGen/SlotIndexes.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -17,6 +15,8 @@
 #include "llvm/Target/TargetInstrInfo.h"
 
 using namespace llvm;
+
+#define DEBUG_TYPE "slotindexes"
 
 char SlotIndexes::ID = 0;
 INITIALIZE_PASS(SlotIndexes, "slotindexes",
@@ -66,7 +66,7 @@ bool SlotIndexes::runOnMachineFunction(MachineFunction &fn) {
   MBBRanges.resize(mf->getNumBlockIDs());
   idx2MBBMap.reserve(mf->size());
 
-  indexList.push_back(createEntry(0, index));
+  indexList.push_back(createEntry(nullptr, index));
 
   // Iterate over the function.
   for (MachineFunction::iterator mbbItr = mf->begin(), mbbEnd = mf->end();
@@ -91,7 +91,7 @@ bool SlotIndexes::runOnMachineFunction(MachineFunction &fn) {
     }
 
     // We insert one blank instructions between basic blocks.
-    indexList.push_back(createEntry(0, index += SlotIndex::InstrDist));
+    indexList.push_back(createEntry(nullptr, index += SlotIndex::InstrDist));
 
     MBBRanges[mbb->getNumber()].first = blockStartIndex;
     MBBRanges[mbb->getNumber()].second = SlotIndex(&indexList.back(),
@@ -127,9 +127,9 @@ void SlotIndexes::renumberIndexes() {
 void SlotIndexes::renumberIndexes(IndexList::iterator curItr) {
   // Number indexes with half the default spacing so we can catch up quickly.
   const unsigned Space = SlotIndex::InstrDist/2;
-  assert((Space & 3) == 0 && "InstrDist must be a multiple of 2*NUM");
+  static_assert((Space & 3) == 0, "InstrDist must be a multiple of 2*NUM");
 
-  IndexList::iterator startItr = prior(curItr);
+  IndexList::iterator startItr = std::prev(curItr);
   unsigned index = startItr->getIndex();
   do {
     curItr->setIndex(index += Space);
@@ -172,8 +172,8 @@ void SlotIndexes::repairIndexesInRange(MachineBasicBlock *MBB,
   // optionally includes an additional position prior to MBB->begin(), indicated
   // by the includeStart flag. This is done so that we can iterate MIs in a MBB
   // in parallel with SlotIndexes, but there should be a better way to do this.
-  IndexList::iterator ListB = startIdx.listEntry();
-  IndexList::iterator ListI = endIdx.listEntry();
+  IndexList::iterator ListB = startIdx.listEntry()->getIterator();
+  IndexList::iterator ListI = endIdx.listEntry()->getIterator();
   MachineBasicBlock::iterator MBBI = End;
   bool pastStart = false;
   while (ListI != ListB || MBBI != Begin || (includeStart && !pastStart)) {
@@ -182,7 +182,7 @@ void SlotIndexes::repairIndexesInRange(MachineBasicBlock *MBB,
            "Decremented past the beginning of region to repair.");
 
     MachineInstr *SlotMI = ListI->getInstr();
-    MachineInstr *MI = (MBBI != MBB->end() && !pastStart) ? MBBI : 0;
+    MachineInstr *MI = (MBBI != MBB->end() && !pastStart) ? MBBI : nullptr;
     bool MBBIAtBegin = MBBI == Begin && (!includeStart || pastStart);
 
     if (SlotMI == MI && !MBBIAtBegin) {
@@ -219,7 +219,7 @@ void SlotIndexes::dump() const {
        itr != indexList.end(); ++itr) {
     dbgs() << itr->getIndex() << " ";
 
-    if (itr->getInstr() != 0) {
+    if (itr->getInstr()) {
       dbgs() << *itr->getInstr();
     } else {
       dbgs() << "\n";

@@ -10,10 +10,17 @@
 #ifndef liblldb_ModuleSpec_h_
 #define liblldb_ModuleSpec_h_
 
+// C Includes
+// C++ Includes
+#include <vector>
+
+// Other libraries and framework includes
+// Project includes
 #include "lldb/Core/ArchSpec.h"
 #include "lldb/Core/Stream.h"
 #include "lldb/Core/UUID.h"
 #include "lldb/Host/FileSpec.h"
+#include "lldb/Host/Mutex.h"
 #include "lldb/Target/PathMappingList.h"
 
 namespace lldb_private {
@@ -29,6 +36,7 @@ public:
         m_uuid (),
         m_object_name (),
         m_object_offset (0),
+        m_object_size (0),
         m_object_mod_time (),
         m_source_mappings ()
     {
@@ -42,6 +50,7 @@ public:
         m_uuid (),
         m_object_name (),
         m_object_offset (0),
+        m_object_size (file_spec.GetByteSize ()),
         m_object_mod_time (),
         m_source_mappings ()
     {
@@ -55,6 +64,7 @@ public:
         m_uuid (),
         m_object_name (),
         m_object_offset (0),
+        m_object_size (file_spec.GetByteSize ()),
         m_object_mod_time (),
         m_source_mappings ()
     {
@@ -68,6 +78,7 @@ public:
         m_uuid (rhs.m_uuid),
         m_object_name (rhs.m_object_name),
         m_object_offset (rhs.m_object_offset),
+        m_object_size (rhs.m_object_size),
         m_object_mod_time (rhs.m_object_mod_time),
         m_source_mappings (rhs.m_source_mappings)
     {
@@ -85,6 +96,7 @@ public:
             m_uuid = rhs.m_uuid;
             m_object_name = rhs.m_object_name;
             m_object_offset = rhs.m_object_offset;
+            m_object_size = rhs.m_object_size;
             m_object_mod_time = rhs.m_object_mod_time;
             m_source_mappings = rhs.m_source_mappings;
         }
@@ -94,17 +106,13 @@ public:
     FileSpec *
     GetFileSpecPtr ()
     {
-        if (m_file)
-            return &m_file;
-        return NULL;
+        return (m_file ? &m_file : nullptr);
     }
 
     const FileSpec *
     GetFileSpecPtr () const
     {
-        if (m_file)
-            return &m_file;
-        return NULL;
+        return (m_file ? &m_file : nullptr);
     }
     
     FileSpec &
@@ -112,6 +120,7 @@ public:
     {
         return m_file;
     }
+
     const FileSpec &
     GetFileSpec () const
     {
@@ -121,17 +130,13 @@ public:
     FileSpec *
     GetPlatformFileSpecPtr ()
     {
-        if (m_platform_file)
-            return &m_platform_file;
-        return NULL;
+        return (m_platform_file ? &m_platform_file : nullptr);
     }
 
     const FileSpec *
     GetPlatformFileSpecPtr () const
     {
-        if (m_platform_file)
-            return &m_platform_file;
-        return NULL;
+        return (m_platform_file ? &m_platform_file : nullptr);
     }
 
     FileSpec &
@@ -149,17 +154,13 @@ public:
     FileSpec *
     GetSymbolFileSpecPtr ()
     {
-        if (m_symbol_file)
-            return &m_symbol_file;
-        return NULL;
+        return (m_symbol_file ? &m_symbol_file : nullptr);
     }
     
     const FileSpec *
     GetSymbolFileSpecPtr () const
     {
-        if (m_symbol_file)
-            return &m_symbol_file;
-        return NULL;
+        return (m_symbol_file ? &m_symbol_file : nullptr);
     }
     
     FileSpec &
@@ -174,21 +175,16 @@ public:
         return m_symbol_file;
     }
 
-    
     ArchSpec *
     GetArchitecturePtr ()
     {
-        if (m_arch.IsValid())
-            return &m_arch;
-        return NULL;
+        return (m_arch.IsValid() ? &m_arch : nullptr);
     }
     
     const ArchSpec *
     GetArchitecturePtr () const
     {
-        if (m_arch.IsValid())
-            return &m_arch;
-        return NULL;
+        return (m_arch.IsValid() ? &m_arch : nullptr);
     }
     
     ArchSpec &
@@ -206,17 +202,13 @@ public:
     UUID *
     GetUUIDPtr ()
     {
-        if (m_uuid.IsValid())
-            return &m_uuid;
-        return NULL;
+        return (m_uuid.IsValid() ? &m_uuid : nullptr);
     }
     
     const UUID *
     GetUUIDPtr () const
     {
-        if (m_uuid.IsValid())
-            return &m_uuid;
-        return NULL;
+        return (m_uuid.IsValid() ? &m_uuid : nullptr);
     }
     
     UUID &
@@ -254,7 +246,19 @@ public:
     {
         m_object_offset = object_offset;
     }
-    
+
+    uint64_t
+    GetObjectSize () const
+    {
+        return m_object_size;
+    }
+
+    void
+    SetObjectSize (uint64_t object_size)
+    {
+        m_object_size = object_size;
+    }
+
     TimeValue &
     GetObjectModificationTime ()
     {
@@ -283,11 +287,11 @@ public:
         m_uuid.Clear();
         m_object_name.Clear();
         m_object_offset = 0;
+        m_object_size = 0;
         m_source_mappings.Clear(false);
         m_object_mod_time.Clear();
     }
 
-    
     explicit operator bool () const
     {
         if (m_file)
@@ -302,13 +306,15 @@ public:
             return true;
         if (m_object_name)
             return true;
+        if (m_object_size)
+            return true;
         if (m_object_mod_time.IsValid())
             return true;
         return false;
     }
 
     void
-    Dump (Stream &strm)
+    Dump (Stream &strm) const
     {
         bool dumped_something = false;
         if (m_file)
@@ -340,7 +346,8 @@ public:
         {
             if (dumped_something)
                 strm.PutCString(", ");
-            strm.Printf("arch = %s", m_arch.GetTriple().str().c_str());
+            strm.Printf("arch = ");
+            m_arch.DumpTriple(strm);
             dumped_something = true;
         }
         if (m_uuid.IsValid())
@@ -362,7 +369,14 @@ public:
         {
             if (dumped_something)
                 strm.PutCString(", ");
-            strm.Printf("object_offset = 0x%" PRIx64, m_object_offset);
+            strm.Printf("object_offset = %" PRIu64, m_object_offset);
+            dumped_something = true;
+        }
+        if (m_object_size > 0)
+        {
+            if (dumped_something)
+                strm.PutCString(", ");
+            strm.Printf("object size = %" PRIu64, m_object_size);
             dumped_something = true;
         }
         if (m_object_mod_time.IsValid())
@@ -370,7 +384,6 @@ public:
             if (dumped_something)
                 strm.PutCString(", ");
             strm.Printf("object_mod_time = 0x%" PRIx64, m_object_mod_time.GetAsSecondsSinceJan1_1970());
-            dumped_something = true;
         }
     }
 
@@ -387,14 +400,15 @@ public:
             if (!FileSpec::Equal(fspec, GetFileSpec(), fspec.GetDirectory().IsEmpty() == false))
                 return false;
         }
-        if (match_module_spec.GetPlatformFileSpecPtr())
+        if (GetPlatformFileSpec() && match_module_spec.GetPlatformFileSpecPtr())
         {
             const FileSpec &fspec = match_module_spec.GetPlatformFileSpec();
             if (!FileSpec::Equal(fspec, GetPlatformFileSpec(), fspec.GetDirectory().IsEmpty() == false))
                 return false;
             
         }
-        if (match_module_spec.GetSymbolFileSpecPtr())
+        // Only match the symbol file spec if there is one in this ModuleSpec
+        if (GetSymbolFileSpec() && match_module_spec.GetSymbolFileSpecPtr())
         {
             const FileSpec &fspec = match_module_spec.GetSymbolFileSpec();
             if (!FileSpec::Equal(fspec, GetSymbolFileSpec(), fspec.GetDirectory().IsEmpty() == false))
@@ -425,6 +439,7 @@ protected:
     UUID m_uuid;
     ConstString m_object_name;
     uint64_t m_object_offset;
+    uint64_t m_object_size;
     TimeValue m_object_mod_time;
     mutable PathMappingList m_source_mappings;
 };
@@ -447,9 +462,7 @@ public:
         m_specs = rhs.m_specs;
     }
 
-    ~ModuleSpecList ()
-    {
-    }
+    ~ModuleSpecList() = default;
 
     ModuleSpecList &
     operator = (const ModuleSpecList &rhs)
@@ -499,6 +512,7 @@ public:
     {
         return m_specs[i];
     }
+
     bool
     GetModuleSpecAtIndex (size_t i, ModuleSpec &module_spec) const
     {
@@ -511,8 +525,7 @@ public:
         module_spec.Clear();
         return false;
     }
-    
-    
+
     bool
     FindMatchingModuleSpec (const ModuleSpec &module_spec, ModuleSpec &match_module_spec) const
     {
@@ -591,4 +604,4 @@ protected:
 
 } // namespace lldb_private
 
-#endif  // liblldb_ModuleSpec_h_
+#endif // liblldb_ModuleSpec_h_

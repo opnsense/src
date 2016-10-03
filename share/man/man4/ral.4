@@ -14,7 +14,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd May 10, 2012
+.Dd August 4, 2015
 .Dt RAL 4
 .Os
 .Sh NAME
@@ -184,6 +184,7 @@ chipsets, including:
 .It "MSI PC54G2" Ta RT2560 Ta PCI
 .It "OvisLink EVO-W54PCI" Ta RT2560 Ta PCI
 .It "PheeNet HWL-PCIG/RA" Ta RT2560 Ta PCI
+.It "Planex GW-NS300N" Ta RT2860 Ta CardBus
 .It "Pro-Nets CB80211G" Ta RT2560 Ta CardBus
 .It "Pro-Nets PC80211G" Ta RT2560 Ta PCI
 .It "Repotec RP-WB7108" Ta RT2560 Ta CardBus
@@ -248,8 +249,8 @@ The driver will reset the hardware.
 This should not happen.
 .El
 .Sh SEE ALSO
-.Xr intro 4 ,
 .Xr cardbus 4 ,
+.Xr intro 4 ,
 .Xr wlan 4 ,
 .Xr wlan_ccmp 4 ,
 .Xr wlan_tkip 4 ,
@@ -279,7 +280,7 @@ Support for the RT3090 chipset was added in
 The original
 .Nm
 driver was written by
-.An Damien Bergamini Aq damien@openbsd.org .
+.An Damien Bergamini Aq Mt damien@openbsd.org .
 .Sh CAVEATS
 The
 .Nm

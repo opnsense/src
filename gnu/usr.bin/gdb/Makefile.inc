@@ -3,6 +3,8 @@
 VERSION= "6.1.1 [FreeBSD]"
 VENDOR= marcel
 
+PACKAGE=	gdb
+
 BMAKE_GDB= ${.CURDIR}/..
 BMAKE_ROOT= ${BMAKE_GDB}/..
 BMAKE_BU= ${BMAKE_ROOT}/binutils
@@ -15,6 +17,7 @@ CNTRB_RL= ${CNTRB_ROOT}/libreadline
 OBJ_ROOT= ${.OBJDIR}/../..
 OBJ_BU= ${OBJ_ROOT}/binutils
 OBJ_GDB= ${OBJ_ROOT}/gdb
+OBJ_RL= ${OBJ_ROOT}/../lib/libreadline/readline
 
 # These assignments duplicate much of the functionality of
 # MACHINE_CPUARCH, but there's no easy way to export make functions...
@@ -31,8 +34,6 @@ TARGET_SUBDIR= ${BMAKE_GDB}/arch/${TARGET_CPUARCH}
 GDB_CROSS_DEBUGGER=
 .endif
 
-.if !defined(INFO)
-
 .PATH:	${CNTRB_GDB}/gdb ${CNTRB_GDB}/gdb/cli ${CNTRB_GDB}/gdb/mi	\
 	${CNTRB_GDB}/gdb/signals ${CNTRB_GDB}/gdb/tui ${TARGET_SUBDIR}
 
@@ -46,6 +47,7 @@ CFLAGS+= -I${CNTRB_GDB}/gdb/config
 CFLAGS+= -I${CNTRB_BU}/include
 CFLAGS+= -I${CNTRB_GDB}/include
 CFLAGS+= -I${CNTRB_BU}/bfd
+CFLAGS+= -I${OBJ_RL}/..
 
 GENSRCS+= nm.h tm.h
 
@@ -59,11 +61,5 @@ MAN=
 
 SRCS+= ${GENSRCS}
 CLEANFILES+= ${GENSRCS}
-
-.else
-
-.PATH:	${CNTRB_GDB}/gdb ${CNTRB_GDB}/gdb/doc ${CNTRB_RL}/doc
-
-.endif
 
 .include "../Makefile.inc"

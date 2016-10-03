@@ -16,9 +16,11 @@
 
 #include "clang/AST/AttrIterator.h"
 #include "clang/AST/Decl.h"
+#include "clang/AST/Expr.h"
 #include "clang/AST/Type.h"
 #include "clang/Basic/AttrKinds.h"
 #include "clang/Basic/LLVM.h"
+#include "clang/Basic/Sanitizers.h"
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Basic/VersionTuple.h"
 #include "llvm/ADT/SmallVector.h"
@@ -26,8 +28,8 @@
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
+#include <algorithm>
 #include <cassert>
-#include <cstring>
 
 namespace clang {
   class ASTContext;
@@ -48,35 +50,36 @@ protected:
   /// An index into the spelling list of an
   /// attribute defined in Attr.td file.
   unsigned SpellingListIndex : 4;
-
   bool Inherited : 1;
-
   bool IsPackExpansion : 1;
+  bool Implicit : 1;
+  bool IsLateParsed : 1;
+  bool DuplicatesAllowed : 1;
 
-  virtual ~Attr();
-
-  void* operator new(size_t bytes) throw() {
+  void *operator new(size_t bytes) LLVM_NOEXCEPT {
     llvm_unreachable("Attrs cannot be allocated with regular 'new'.");
   }
-  void operator delete(void* data) throw() {
+  void operator delete(void *data) LLVM_NOEXCEPT {
     llvm_unreachable("Attrs cannot be released with regular 'delete'.");
   }
 
 public:
   // Forward so that the regular new and delete do not hide global ones.
-  void* operator new(size_t Bytes, ASTContext &C,
-                     size_t Alignment = 16) throw() {
+  void *operator new(size_t Bytes, ASTContext &C,
+                     size_t Alignment = 8) LLVM_NOEXCEPT {
     return ::operator new(Bytes, C, Alignment);
   }
   void operator delete(void *Ptr, ASTContext &C,
-                       size_t Alignment) throw() {
+                       size_t Alignment) LLVM_NOEXCEPT {
     return ::operator delete(Ptr, C, Alignment);
   }
 
 protected:
-  Attr(attr::Kind AK, SourceRange R, unsigned SpellingListIndex = 0)
+  Attr(attr::Kind AK, SourceRange R, unsigned SpellingListIndex,
+       bool IsLateParsed, bool DuplicatesAllowed)
     : Range(R), AttrKind(AK), SpellingListIndex(SpellingListIndex),
-      Inherited(false), IsPackExpansion(false) {}
+      Inherited(false), IsPackExpansion(false), Implicit(false),
+      IsLateParsed(IsLateParsed), DuplicatesAllowed(DuplicatesAllowed) {}
 
 public:
 
@@ -85,6 +88,7 @@ public:
   }
   
   unsigned getSpellingListIndex() const { return SpellingListIndex; }
+  const char *getSpelling() const;
 
   SourceLocation getLocation() const { return Range.getBegin(); }
   SourceRange getRange() const { return Range; }
@@ -92,24 +96,33 @@ public:
 
   bool isInherited() const { return Inherited; }
 
+  /// \brief Returns true if the attribute has been implicitly created instead
+  /// of explicitly written by the user.
+  bool isImplicit() const { return Implicit; }
+  void setImplicit(bool I) { Implicit = I; }
+
   void setPackExpansion(bool PE) { IsPackExpansion = PE; }
   bool isPackExpansion() const { return IsPackExpansion; }
 
   // Clone this attribute.
-  virtual Attr *clone(ASTContext &C) const = 0;
+  Attr *clone(ASTContext &C) const;
 
-  virtual bool isLateParsed() const { return false; }
+  bool isLateParsed() const { return IsLateParsed; }
 
   // Pretty print this attribute.
-  virtual void printPretty(raw_ostream &OS,
-                           const PrintingPolicy &Policy) const = 0;
+  void printPretty(raw_ostream &OS, const PrintingPolicy &Policy) const;
+
+  /// \brief By default, attributes cannot be duplicated when being merged;
+  /// however, an attribute can override this. Returns true if the attribute
+  /// can be duplicated when merging.
+  bool duplicatesAllowed() const { return DuplicatesAllowed; }
 };
 
 class InheritableAttr : public Attr {
-  virtual void anchor();
 protected:
-  InheritableAttr(attr::Kind AK, SourceRange R, unsigned SpellingListIndex = 0)
-    : Attr(AK, R, SpellingListIndex) {}
+  InheritableAttr(attr::Kind AK, SourceRange R, unsigned SpellingListIndex,
+                  bool IsLateParsed, bool DuplicatesAllowed)
+      : Attr(AK, R, SpellingListIndex, IsLateParsed, DuplicatesAllowed) {}
 
 public:
   void setInherited(bool I) { Inherited = I; }
@@ -121,11 +134,11 @@ public:
 };
 
 class InheritableParamAttr : public InheritableAttr {
-  virtual void anchor();
 protected:
-  InheritableParamAttr(attr::Kind AK, SourceRange R,
-                       unsigned SpellingListIndex = 0)
-    : InheritableAttr(AK, R, SpellingListIndex) {}
+  InheritableParamAttr(attr::Kind AK, SourceRange R, unsigned SpellingListIndex,
+                       bool IsLateParsed, bool DuplicatesAllowed)
+      : InheritableAttr(AK, R, SpellingListIndex, IsLateParsed,
+                        DuplicatesAllowed) {}
 
 public:
   // Implement isa/cast/dyncast/etc.
@@ -136,23 +149,21 @@ public:
   }
 };
 
-class MSInheritanceAttr : public InheritableAttr {
-  virtual void anchor();
-protected:
-  MSInheritanceAttr(attr::Kind AK, SourceRange R, unsigned SpellingListIndex = 0)
-    : InheritableAttr(AK, R, SpellingListIndex) {}
-
-public:
-  // Implement isa/cast/dyncast/etc.
-  static bool classof(const Attr *A) {
-    // Relies on relative order of enum emission with respect to param attrs.
-    return (A->getKind() <= attr::LAST_MS_INHERITANCE &&
-            A->getKind() > attr::LAST_INHERITABLE_PARAM);
-  }
-};
-
 #include "clang/AST/Attrs.inc"
 
+inline const DiagnosticBuilder &operator<<(const DiagnosticBuilder &DB,
+                                           const Attr *At) {
+  DB.AddTaggedVal(reinterpret_cast<intptr_t>(At),
+                  DiagnosticsEngine::ak_attr);
+  return DB;
+}
+
+inline const PartialDiagnostic &operator<<(const PartialDiagnostic &PD,
+                                           const Attr *At) {
+  PD.AddTaggedVal(reinterpret_cast<intptr_t>(At),
+                  DiagnosticsEngine::ak_attr);
+  return PD;
+}
 }  // end namespace clang
 
 #endif

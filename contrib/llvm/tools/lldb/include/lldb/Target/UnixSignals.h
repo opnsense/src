@@ -26,6 +26,9 @@ namespace lldb_private
 class UnixSignals
 {
 public:
+    static lldb::UnixSignalsSP
+    Create(const ArchSpec &arch);
+
     //------------------------------------------------------------------
     // Constructors and Destructors
     //------------------------------------------------------------------
@@ -89,6 +92,15 @@ public:
     int32_t
     GetNextSignalNumber (int32_t current_signal) const;
 
+    int32_t
+    GetNumSignals() const;
+
+    int32_t
+    GetSignalAtIndex(int32_t index) const;
+
+    ConstString
+    GetShortName(ConstString name) const;
+
     // We assume that the elements of this object are constant once it is constructed,
     // since a process should never need to add or remove symbols as it runs.  So don't
     // call these functions anywhere but the constructor of your subclass of UnixSignals or in
@@ -97,11 +109,11 @@ public:
     void
     AddSignal (int signo,
                const char *name,
-               const char *short_name,
                bool default_suppress,
                bool default_stop,
                bool default_notify,
-               const char *description);
+               const char *description,
+               const char *alias = nullptr);
 
     void
     RemoveSignal (int signo);
@@ -114,30 +126,34 @@ protected:
     struct Signal
     {
         ConstString m_name;
-        ConstString m_short_name;
+        ConstString m_alias;
         std::string m_description;
         bool m_suppress:1,
              m_stop:1,
              m_notify:1;
 
         Signal (const char *name,
-                const char *short_name,
                 bool default_suppress,
                 bool default_stop,
                 bool default_notify,
-                const char *description);
+                const char *description,
+                const char *alias);
 
         ~Signal () {}
     };
 
-    void
+    virtual void
     Reset ();
 
     typedef std::map <int32_t, Signal> collection;
 
     collection m_signals;
 
-    DISALLOW_COPY_AND_ASSIGN (UnixSignals);
+    // GDBRemote signals need to be copyable.
+    UnixSignals(const UnixSignals &rhs);
+
+    const UnixSignals &
+    operator=(const UnixSignals &rhs) = delete;
 };
 
 } // Namespace lldb

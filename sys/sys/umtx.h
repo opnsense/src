@@ -31,19 +31,27 @@
 #define	_SYS_UMTX_H_
 
 #include <sys/_umtx.h>
-#include <sys/limits.h>
 
-#define	UMTX_UNOWNED		0x0
-#define	UMTX_CONTESTED		LONG_MIN
-
+/* Common lock flags */
 #define USYNC_PROCESS_SHARED	0x0001	/* Process shared sync objs */
 
-#define	UMUTEX_UNOWNED		0x0
-#define	UMUTEX_CONTESTED	0x80000000U
-
-#define	UMUTEX_ERROR_CHECK	0x0002	/* Error-checking mutex */
+/* umutex flags */
 #define	UMUTEX_PRIO_INHERIT	0x0004	/* Priority inherited mutex */
 #define	UMUTEX_PRIO_PROTECT	0x0008	/* Priority protect mutex */
+#define	UMUTEX_ROBUST		0x0010	/* Robust mutex */
+#define	UMUTEX_NONCONSISTENT	0x0020	/* Robust locked but not consistent */
+
+/*
+ * The umutex.m_lock values and bits.  The m_owner is the word which
+ * serves as the lock.  Its high bit is the contention indicator and
+ * rest of bits records the owner TID.  TIDs values start with PID_MAX
+ * + 2 and end by INT32_MAX.  The low range [1..PID_MAX] is guaranteed
+ * to be useable as the special markers.
+ */
+#define	UMUTEX_UNOWNED		0x0
+#define	UMUTEX_CONTESTED	0x80000000U
+#define	UMUTEX_RB_OWNERDEAD	(UMUTEX_CONTESTED | 0x10)
+#define	UMUTEX_RB_NOTRECOV	(UMUTEX_CONTESTED | 0x11)
 
 /* urwlock flags */
 #define URWLOCK_PREFER_READER	0x0002
@@ -57,9 +65,14 @@
 /* _usem flags */
 #define SEM_NAMED	0x0002
 
+/* _usem2 count field */
+#define	USEM_HAS_WAITERS	0x80000000U
+#define	USEM_MAX_COUNT		0x7fffffffU
+#define	USEM_COUNT(c)		((c) & USEM_MAX_COUNT)
+
 /* op code for _umtx_op */
-#define	UMTX_OP_LOCK		0
-#define	UMTX_OP_UNLOCK		1
+#define	UMTX_OP_RESERVED0	0
+#define	UMTX_OP_RESERVED1	1
 #define	UMTX_OP_WAIT		2
 #define	UMTX_OP_WAKE		3
 #define	UMTX_OP_MUTEX_TRYLOCK	4
@@ -77,11 +90,14 @@
 #define	UMTX_OP_WAKE_PRIVATE	16
 #define	UMTX_OP_MUTEX_WAIT	17
 #define	UMTX_OP_MUTEX_WAKE	18	/* deprecated */
-#define	UMTX_OP_SEM_WAIT	19
-#define	UMTX_OP_SEM_WAKE	20
+#define	UMTX_OP_SEM_WAIT	19	/* deprecated */
+#define	UMTX_OP_SEM_WAKE	20	/* deprecated */
 #define	UMTX_OP_NWAKE_PRIVATE   21
 #define	UMTX_OP_MUTEX_WAKE2	22
-#define	UMTX_OP_MAX		23
+#define	UMTX_OP_SEM2_WAIT	23
+#define	UMTX_OP_SEM2_WAKE	24
+#define	UMTX_OP_SHM		25
+#define	UMTX_OP_ROBUST_LISTS	26
 
 /* Flags for UMTX_OP_CV_WAIT */
 #define	CVWAIT_CHECK_UNPARKING	0x01
@@ -92,85 +108,21 @@
 
 #define	UMTX_CHECK_UNPARKING	CVWAIT_CHECK_UNPARKING
 
+/* Flags for UMTX_OP_SHM */
+#define	UMTX_SHM_CREAT		0x0001
+#define	UMTX_SHM_LOOKUP		0x0002
+#define	UMTX_SHM_DESTROY	0x0004
+#define	UMTX_SHM_ALIVE		0x0008
+
+struct umtx_robust_lists_params {
+	uintptr_t	robust_list_offset;
+	uintptr_t	robust_priv_list_offset;
+	uintptr_t	robust_inact_offset;
+};
+
 #ifndef _KERNEL
 
 int _umtx_op(void *obj, int op, u_long val, void *uaddr, void *uaddr2);
-
-/*
- * Old (deprecated) userland mutex system calls.
- */
-int _umtx_lock(struct umtx *mtx);
-int _umtx_unlock(struct umtx *mtx);
-
-/*
- * Standard api.  Try uncontested acquire/release and asks the
- * kernel to resolve failures.
- */
-static __inline void
-umtx_init(struct umtx *umtx)
-{
-	umtx->u_owner = UMTX_UNOWNED;
-}
-
-static __inline u_long
-umtx_owner(struct umtx *umtx)
-{
-	return (umtx->u_owner & ~LONG_MIN);
-}
-
-static __inline int
-umtx_lock(struct umtx *umtx, u_long id)
-{
-	if (atomic_cmpset_acq_long(&umtx->u_owner, UMTX_UNOWNED, id) == 0)
-		if (_umtx_lock(umtx) == -1)
-			return (errno);
-	return (0);
-}
-
-static __inline int
-umtx_trylock(struct umtx *umtx, u_long id)
-{
-	if (atomic_cmpset_acq_long(&umtx->u_owner, UMTX_UNOWNED, id) == 0)
-		return (EBUSY);
-	return (0);
-}
-
-static __inline int
-umtx_timedlock(struct umtx *umtx, u_long id, const struct timespec *timeout)
-{
-	if (atomic_cmpset_acq_long(&umtx->u_owner, UMTX_UNOWNED, id) == 0)
-		if (_umtx_op(umtx, UMTX_OP_LOCK, id, 0,
-		    __DECONST(void *, timeout)) == -1)
-			return (errno);
-	return (0);
-}
-
-static __inline int
-umtx_unlock(struct umtx *umtx, u_long id)
-{
-	if (atomic_cmpset_rel_long(&umtx->u_owner, id, UMTX_UNOWNED) == 0)
-		if (_umtx_unlock(umtx) == -1)
-			return (errno);
-	return (0);
-}
-
-static __inline int
-umtx_wait(u_long *p, long val, const struct timespec *timeout)
-{
-	if (_umtx_op(p, UMTX_OP_WAIT, val, 0,
-	    __DECONST(void *, timeout)) == -1)
-		return (errno);
-	return (0);
-}
-
-/* Wake threads waiting on a user address. */
-static __inline int
-umtx_wake(u_long *p, int nr_wakeup)
-{
-	if (_umtx_op(p, UMTX_OP_WAKE, nr_wakeup, 0, 0) == -1)
-		return (errno);
-	return (0);
-}
 
 #else
 
@@ -188,7 +140,10 @@ enum {
 	TYPE_PI_UMUTEX,
 	TYPE_PP_UMUTEX,
 	TYPE_RWLOCK,
-	TYPE_FUTEX
+	TYPE_FUTEX,
+	TYPE_SHM,
+	TYPE_PI_ROBUST_UMUTEX,
+	TYPE_PP_ROBUST_UMUTEX,
 };
 
 /* Key to represent a unique userland synchronous object */
@@ -227,7 +182,7 @@ umtx_key_match(const struct umtx_key *k1, const struct umtx_key *k2)
 }
 
 int umtx_copyin_timeout(const void *, struct timespec *);
-int umtx_key_get(void *, int, int, struct umtx_key *);
+int umtx_key_get(const void *, int, int, struct umtx_key *);
 void umtx_key_release(struct umtx_key *);
 struct umtx_q *umtxq_alloc(void);
 void umtxq_free(struct umtx_q *);

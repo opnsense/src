@@ -1,11 +1,11 @@
 #	@(#)Makefile	8.1 (Berkeley) 6/6/93
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 PROG=	apply
-DPADD=	${LIBSBUF}
-LDADD=	-lsbuf
+
+LIBADD=	sbuf
 
 .if ${MK_TESTS} != "no"
 SUBDIR+= tests

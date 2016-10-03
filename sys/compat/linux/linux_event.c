@@ -39,8 +39,10 @@ __FBSDID("$FreeBSD$");
 #include <sys/mutex.h>
 #include <sys/capability.h>
 #include <sys/types.h>
+#include <sys/user.h>
 #include <sys/file.h>
 #include <sys/filedesc.h>
+#include <sys/filio.h>
 #include <sys/errno.h>
 #include <sys/event.h>
 #include <sys/poll.h>
@@ -127,6 +129,7 @@ static fo_poll_t	eventfd_poll;
 static fo_kqfilter_t	eventfd_kqfilter;
 static fo_stat_t	eventfd_stat;
 static fo_close_t	eventfd_close;
+static fo_fill_kinfo_t	eventfd_fill_kinfo;
 
 static struct fileops eventfdops = {
 	.fo_read = eventfd_read,
@@ -140,6 +143,7 @@ static struct fileops eventfdops = {
 	.fo_chmod = invfo_chmod,
 	.fo_chown = invfo_chown,
 	.fo_sendfile = invfo_sendfile,
+	.fo_fill_kinfo = eventfd_fill_kinfo,
 	.fo_flags = DFLAG_PASSABLE
 };
 
@@ -202,7 +206,7 @@ epoll_create_common(struct thread *td, int flags)
 {
 	int error;
 
-	error = kern_kqueue(td, flags);
+	error = kern_kqueue(td, flags, NULL);
 	if (error)
 		return (error);
 
@@ -747,6 +751,8 @@ retry:
 	if (UINT64_MAX - efd->efd_count <= count) {
 		if ((efd->efd_flags & LINUX_O_NONBLOCK) != 0) {
 			mtx_unlock(&efd->efd_lock);
+			/* Do not not return the number of bytes written */
+			uio->uio_resid += sizeof(eventfd_t);
 			return (EAGAIN);
 		}
 		error = mtx_sleep(&efd->efd_count, &efd->efd_lock,
@@ -868,8 +874,24 @@ static int
 eventfd_ioctl(struct file *fp, u_long cmd, void *data,
 	struct ucred *active_cred, struct thread *td)
 {
+	struct eventfd *efd;
 
-	return (ENXIO);
+	efd = fp->f_data;
+	if (fp->f_type != DTYPE_LINUXEFD || efd == NULL)
+		return (EINVAL);
+
+	switch (cmd)
+	{
+	case FIONBIO:
+		if (*(int *)data)
+			efd->efd_flags |= LINUX_O_NONBLOCK;
+		else
+			efd->efd_flags &= ~LINUX_O_NONBLOCK;
+	case FIOASYNC:
+		return (0);
+	default:
+		return (ENXIO);
+	}
 }
 
 /*ARGSUSED*/
@@ -879,4 +901,13 @@ eventfd_stat(struct file *fp, struct stat *st, struct ucred *active_cred,
 {
 
 	return (ENXIO);
+}
+
+/*ARGSUSED*/
+static int
+eventfd_fill_kinfo(struct file *fp, struct kinfo_file *kif, struct filedesc *fdp)
+{
+
+	kif->kf_type = KF_TYPE_UNKNOWN;
+	return (0);
 }

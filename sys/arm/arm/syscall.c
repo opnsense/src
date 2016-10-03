@@ -98,17 +98,6 @@ __FBSDID("$FreeBSD$");
 
 void swi_handler(struct trapframe *);
 
-static __inline void
-call_trapsignal(struct thread *td, int sig, u_long code)
-{
-	ksiginfo_t ksi;
-
-	ksiginfo_init_trap(&ksi);
-	ksi.ksi_signo = sig;
-	ksi.ksi_code = (int)code;
-	trapsignal(td, &ksi);
-}
-
 int
 cpu_fetch_syscall_args(struct thread *td, struct syscall_args *sa)
 {
@@ -171,16 +160,7 @@ swi_handler(struct trapframe *frame)
 	td->td_frame = frame;
 
 	td->td_pticks = 0;
-	/*
-	 * Make sure the program counter is correctly aligned so we
-	 * don't take an alignment fault trying to read the opcode.
-	 * XXX: Fix for Thumb mode
-	 */
-	if (__predict_false(((frame->tf_pc - INSN_SIZE) & 3) != 0)) {
-		call_trapsignal(td, SIGILL, 0);
-		userret(td, frame);
-		return;
-	}
+
 	/*
 	 * Enable interrupts if they were enabled before the exception.
 	 * Since all syscalls *should* come from user mode it will always

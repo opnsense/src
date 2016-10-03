@@ -1,6 +1,6 @@
 #	$FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 WARNS?=		2
 NO_WFORMAT=
@@ -18,9 +18,9 @@ CFLAGS+=	-DUSE_INET6
 CFLAGS+=	-DNOINET6
 .endif
 
-LIBIPF=		${.OBJDIR}/../libipf/libipf.a
-DPADD+=		${LIBIPF} ${LIBKVM}
-LDADD+=		${LIBIPF} -lkvm
+.if ${.CURDIR:M*/libipf} == ""
+LIBADD+=	ipf
+.endif
 
 CLEANFILES+=	y.tab.c y.tab.h
 

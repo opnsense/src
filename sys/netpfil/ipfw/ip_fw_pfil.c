@@ -59,6 +59,7 @@ __FBSDID("$FreeBSD$");
 #ifdef INET6
 #include <netinet/ip6.h>
 #include <netinet6/ip6_var.h>
+#include <netinet6/scope6_var.h>
 #endif
 
 #include <netgraph/ng_ipfw.h>
@@ -82,9 +83,9 @@ int ipfw_chg_hook(SYSCTL_HANDLER_ARGS);
 
 /* Forward declarations. */
 static int ipfw_divert(struct mbuf **, int, struct ipfw_rule_ref *, int);
-static int ipfw_check_packet(void *, struct mbuf **, struct ifnet *, int,
+int ipfw_check_packet(void *, struct mbuf **, struct ifnet *, int,
 	struct inpcb *);
-static int ipfw_check_frame(void *, struct mbuf **, struct ifnet *, int,
+int ipfw_check_frame(void *, struct mbuf **, struct ifnet *, int,
 	struct inpcb *);
 
 #ifdef SYSCTL_NODE
@@ -92,20 +93,21 @@ static int ipfw_check_frame(void *, struct mbuf **, struct ifnet *, int,
 SYSBEGIN(f1)
 
 SYSCTL_DECL(_net_inet_ip_fw);
-SYSCTL_VNET_PROC(_net_inet_ip_fw, OID_AUTO, enable,
-    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_SECURE3, &VNET_NAME(fw_enable), 0,
-    ipfw_chg_hook, "I", "Enable ipfw");
+SYSCTL_PROC(_net_inet_ip_fw, OID_AUTO, enable,
+    CTLFLAG_VNET | CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_SECURE3,
+    &VNET_NAME(fw_enable), 0, ipfw_chg_hook, "I", "Enable ipfw");
 #ifdef INET6
 SYSCTL_DECL(_net_inet6_ip6_fw);
-SYSCTL_VNET_PROC(_net_inet6_ip6_fw, OID_AUTO, enable,
-    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_SECURE3, &VNET_NAME(fw6_enable), 0,
-    ipfw_chg_hook, "I", "Enable ipfw+6");
+SYSCTL_PROC(_net_inet6_ip6_fw, OID_AUTO, enable,
+    CTLFLAG_VNET | CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_SECURE3,
+    &VNET_NAME(fw6_enable), 0, ipfw_chg_hook, "I", "Enable ipfw+6");
 #endif /* INET6 */
 
 SYSCTL_DECL(_net_link_ether);
-SYSCTL_VNET_PROC(_net_link_ether, OID_AUTO, ipfw,
-    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_SECURE3, &VNET_NAME(fwlink_enable), 0,
-    ipfw_chg_hook, "I", "Pass ether pkts through firewall");
+SYSCTL_PROC(_net_link_ether, OID_AUTO, ipfw,
+    CTLFLAG_VNET | CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_SECURE3,
+    &VNET_NAME(fwlink_enable), 0, ipfw_chg_hook, "I",
+    "Pass ether pkts through firewall");
 
 SYSEND
 
@@ -116,7 +118,7 @@ SYSEND
  * dummynet, divert, netgraph or other modules.
  * The packet may be consumed.
  */
-static int
+int
 ipfw_check_packet(void *arg, struct mbuf **m0, struct ifnet *ifp, int dir,
     struct inpcb *inp)
 {
@@ -196,8 +198,20 @@ again:
 		}
 #ifdef INET6
 		if (args.next_hop6 != NULL) {
-			bcopy(args.next_hop6, (fwd_tag+1), len);
-			if (in6_localip(&args.next_hop6->sin6_addr))
+			struct sockaddr_in6 *sa6;
+
+			sa6 = (struct sockaddr_in6 *)(fwd_tag + 1);
+			bcopy(args.next_hop6, sa6, len);
+			/*
+			 * If nh6 address is link-local we should convert
+			 * it to kernel internal form before doing any
+			 * comparisons.
+			 */
+			if (sa6_embedscope(sa6, V_ip6_use_defzone) != 0) {
+				ret = EACCES;
+				break;
+			}
+			if (in6_localip(&sa6->sin6_addr))
 				(*m0)->m_flags |= M_FASTFWD_OURS;
 			(*m0)->m_flags |= M_IP6_NEXTHOP;
 		}
@@ -292,7 +306,7 @@ again:
  * Inteface is NULL from ether_demux, and ifp from
  * ether_output_frame.
  */
-static int
+int
 ipfw_check_frame(void *arg, struct mbuf **m0, struct ifnet *dst, int dir,
     struct inpcb *inp)
 {
@@ -491,7 +505,7 @@ static int
 ipfw_hook(int onoff, int pf)
 {
 	struct pfil_head *pfh;
-	void *hook_func;
+	pfil_func_t hook_func;
 
 	pfh = pfil_head_get(PFIL_TYPE_AF, pf);
 	if (pfh == NULL)

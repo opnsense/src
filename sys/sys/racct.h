@@ -37,9 +37,12 @@
 #define	_RACCT_H_
 
 #include <sys/cdefs.h>
-#include <sys/queue.h>
 #include <sys/types.h>
+#include <sys/queue.h>
+#include <sys/stdint.h>
+#include <sys/sysctl.h>
 
+struct buf;
 struct proc;
 struct rctl_rule_link;
 struct ucred;
@@ -69,7 +72,11 @@ struct ucred;
 #define	RACCT_SHMSIZE		18
 #define	RACCT_WALLCLOCK		19
 #define	RACCT_PCTCPU		20
-#define	RACCT_MAX		RACCT_PCTCPU
+#define	RACCT_READBPS		21
+#define	RACCT_WRITEBPS		22
+#define	RACCT_READIOPS		23
+#define	RACCT_WRITEIOPS		24
+#define	RACCT_MAX		RACCT_WRITEIOPS
 
 /*
  * Resource properties.
@@ -92,11 +99,12 @@ extern int racct_enable;
  * visible to the userland.  It gets fixed up when retrieving resource
  * usage or adding rules.
  */
-#define	RACCT_IS_IN_MILLIONS(X)	(racct_types[X] & RACCT_IN_MILLIONS)
+#define	RACCT_IS_IN_MILLIONS(X)	\
+    ((X) != RACCT_UNDEFINED && (racct_types[(X)] & RACCT_IN_MILLIONS) != 0)
 
 /*
  * Resource usage can drop, as opposed to only grow.  When the process
- * terminates, its resource usage is freed from the respective
+ * terminates, its resource usage is subtracted from the respective
  * per-credential racct containers.
  */
 #define	RACCT_IS_RECLAIMABLE(X)	(racct_types[X] & RACCT_RECLAIMABLE)
@@ -124,8 +132,7 @@ extern int racct_enable;
  * When a process terminates, its resource usage is not automatically
  * subtracted from per-credential racct containers.  Instead, the resource
  * usage of per-credential racct containers decays in time.
- * Resource usage can olso drop for such resource.
- * So far, the only such resource is RACCT_PCTCPU.
+ * Resource usage can also drop for such resource.
  */
 #define RACCT_IS_DECAYING(X)		(racct_types[X] & RACCT_DECAYING)
 
@@ -145,9 +152,20 @@ struct racct {
 	LIST_HEAD(, rctl_rule_link)	r_rule_links;
 };
 
+SYSCTL_DECL(_kern_racct);
+
+#ifdef RACCT
+
+extern struct mtx racct_lock;
+
+#define RACCT_LOCK()		mtx_lock(&racct_lock)
+#define RACCT_UNLOCK()		mtx_unlock(&racct_lock)
+#define RACCT_LOCK_ASSERT()	mtx_assert(&racct_lock, MA_OWNED)
+
 int	racct_add(struct proc *p, int resource, uint64_t amount);
 void	racct_add_cred(struct ucred *cred, int resource, uint64_t amount);
 void	racct_add_force(struct proc *p, int resource, uint64_t amount);
+void	racct_add_buf(struct proc *p, const struct buf *bufp, int is_write);
 int	racct_set(struct proc *p, int resource, uint64_t amount);
 void	racct_set_force(struct proc *p, int resource, uint64_t amount);
 void	racct_sub(struct proc *p, int resource, uint64_t amount);
@@ -165,5 +183,83 @@ void	racct_proc_exit(struct proc *p);
 void	racct_proc_ucred_changed(struct proc *p, struct ucred *oldcred,
 	    struct ucred *newcred);
 void	racct_move(struct racct *dest, struct racct *src);
+void	racct_proc_throttle(struct proc *p, int timeout);
+
+#else
+
+static inline int
+racct_add(struct proc *p, int resource, uint64_t amount)
+{
+
+	return (0);
+}
+
+static inline void
+racct_add_cred(struct ucred *cred, int resource, uint64_t amount)
+{
+}
+
+static inline void
+racct_add_force(struct proc *p, int resource, uint64_t amount)
+{
+}
+
+static inline int
+racct_set(struct proc *p, int resource, uint64_t amount)
+{
+
+	return (0);
+}
+
+static inline void
+racct_set_force(struct proc *p, int resource, uint64_t amount)
+{
+}
+
+static inline void
+racct_sub(struct proc *p, int resource, uint64_t amount)
+{
+}
+
+static inline void
+racct_sub_cred(struct ucred *cred, int resource, uint64_t amount)
+{
+}
+
+static inline uint64_t
+racct_get_limit(struct proc *p, int resource)
+{
+
+	return (UINT64_MAX);
+}
+
+static inline uint64_t
+racct_get_available(struct proc *p, int resource)
+{
+
+	return (UINT64_MAX);
+}
+
+#define	racct_create(x)
+#define	racct_destroy(x)
+
+static inline int
+racct_proc_fork(struct proc *parent, struct proc *child)
+{
+
+	return (0);
+}
+
+static inline void
+racct_proc_fork_done(struct proc *child)
+{
+}
+
+static inline void
+racct_proc_exit(struct proc *p)
+{
+}
+
+#endif
 
 #endif /* !_RACCT_H_ */

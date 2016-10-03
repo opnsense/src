@@ -11,49 +11,31 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef MIPS_MACHINE_FUNCTION_INFO_H
-#define MIPS_MACHINE_FUNCTION_INFO_H
+#ifndef LLVM_LIB_TARGET_MIPS_MIPSMACHINEFUNCTION_H
+#define LLVM_LIB_TARGET_MIPS_MIPSMACHINEFUNCTION_H
 
-#include "MipsSubtarget.h"
-#include "llvm/ADT/StringMap.h"
-#include "llvm/ADT/ValueMap.h"
+#include "Mips16HardFloatInfo.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
 #include "llvm/CodeGen/PseudoSourceValue.h"
-#include "llvm/IR/GlobalValue.h"
+#include "llvm/IR/ValueMap.h"
 #include "llvm/Target/TargetFrameLowering.h"
 #include "llvm/Target/TargetMachine.h"
+#include <map>
+#include <string>
 #include <utility>
 
 namespace llvm {
-
-/// \brief A class derived from PseudoSourceValue that represents a GOT entry
-/// resolved by lazy-binding.
-class MipsCallEntry : public PseudoSourceValue {
-public:
-  explicit MipsCallEntry(const StringRef &N);
-  explicit MipsCallEntry(const GlobalValue *V);
-  virtual bool isConstant(const MachineFrameInfo *) const;
-  virtual bool isAliased(const MachineFrameInfo *) const;
-  virtual bool mayAlias(const MachineFrameInfo *) const;
-
-private:
-  virtual void printCustom(raw_ostream &O) const;
-#ifndef NDEBUG
-  std::string Name;
-  const GlobalValue *Val;
-#endif
-};
 
 /// MipsFunctionInfo - This class is derived from MachineFunction private
 /// Mips target-specific information for each MachineFunction.
 class MipsFunctionInfo : public MachineFunctionInfo {
 public:
-  MipsFunctionInfo(MachineFunction& MF)
-   : MF(MF), SRetReturnReg(0), GlobalBaseReg(0), Mips16SPAliasReg(0),
-     VarArgsFrameIndex(0), CallsEhReturn(false)
-  {}
+  MipsFunctionInfo(MachineFunction &MF)
+      : MF(MF), SRetReturnReg(0), GlobalBaseReg(0), Mips16SPAliasReg(0),
+        VarArgsFrameIndex(0), CallsEhReturn(false), IsISR(false), SaveS2(false),
+        MoveF64ViaSpillFI(-1) {}
 
   ~MipsFunctionInfo();
 
@@ -84,13 +66,29 @@ public:
   int getEhDataRegFI(unsigned Reg) const { return EhDataRegFI[Reg]; }
   bool isEhDataRegFI(int FI) const;
 
-  /// \brief Create a MachinePointerInfo that has a MipsCallEntr object
-  /// representing a GOT entry for an external function.
-  MachinePointerInfo callPtrInfo(const StringRef &Name);
+  /// Create a MachinePointerInfo that has an ExternalSymbolPseudoSourceValue
+  /// object representing a GOT entry for an external function.
+  MachinePointerInfo callPtrInfo(const char *ES);
 
-  /// \brief Create a MachinePointerInfo that has a MipsCallEntr object
+  // Functions with the "interrupt" attribute require special prologues,
+  // epilogues and additional spill slots.
+  bool isISR() const { return IsISR; }
+  void setISR() { IsISR = true; }
+  void createISRRegFI();
+  int getISRRegFI(unsigned Reg) const { return ISRDataRegFI[Reg]; }
+  bool isISRRegFI(int FI) const;
+
+  /// Create a MachinePointerInfo that has a GlobalValuePseudoSourceValue object
   /// representing a GOT entry for a global function.
-  MachinePointerInfo callPtrInfo(const GlobalValue *Val);
+  MachinePointerInfo callPtrInfo(const GlobalValue *GV);
+
+  void setSaveS2() { SaveS2 = true; }
+  bool hasSaveS2() const { return SaveS2; }
+
+  int getMoveF64ViaSpillFI(const TargetRegisterClass *RC);
+
+  std::map<const char *, const llvm::Mips16HardFloatInfo::FuncSignature *>
+  StubsNeeded;
 
 private:
   virtual void anchor();
@@ -126,11 +124,20 @@ private:
   /// Frame objects for spilling eh data registers.
   int EhDataRegFI[4];
 
-  /// MipsCallEntry maps.
-  StringMap<const MipsCallEntry *> ExternalCallEntries;
-  ValueMap<const GlobalValue *, const MipsCallEntry *> GlobalCallEntries;
+  /// ISR - Whether the function is an Interrupt Service Routine.
+  bool IsISR;
+
+  /// Frame objects for spilling C0_STATUS, C0_EPC
+  int ISRDataRegFI[2];
+
+  // saveS2
+  bool SaveS2;
+
+  /// FrameIndex for expanding BuildPairF64 nodes to spill and reload when the
+  /// O32 FPXX ABI is enabled. -1 is used to denote invalid index.
+  int MoveF64ViaSpillFI;
 };
 
 } // end of namespace llvm
 
-#endif // MIPS_MACHINE_FUNCTION_INFO_H
+#endif

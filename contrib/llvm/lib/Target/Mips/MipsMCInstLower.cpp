@@ -18,10 +18,11 @@
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineOperand.h"
+#include "llvm/IR/Mangler.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
-#include "llvm/Target/Mangler.h"
+#include "llvm/MC/MCStreamer.h"
 
 using namespace llvm;
 
@@ -87,6 +88,11 @@ MCOperand MipsMCInstLower::LowerSymbolOperand(const MachineOperand &MO,
     Offset += MO.getOffset();
     break;
 
+  case MachineOperand::MO_MCSymbol:
+    Symbol = MO.getMCSymbol();
+    Offset += MO.getOffset();
+    break;
+
   case MachineOperand::MO_JumpTableIndex:
     Symbol = AsmPrinter.GetJTISymbol(MO.getIndex());
     break;
@@ -100,17 +106,17 @@ MCOperand MipsMCInstLower::LowerSymbolOperand(const MachineOperand &MO,
     llvm_unreachable("<unknown operand type>");
   }
 
-  const MCSymbolRefExpr *MCSym = MCSymbolRefExpr::Create(Symbol, Kind, *Ctx);
+  const MCSymbolRefExpr *MCSym = MCSymbolRefExpr::create(Symbol, Kind, *Ctx);
 
   if (!Offset)
-    return MCOperand::CreateExpr(MCSym);
+    return MCOperand::createExpr(MCSym);
 
   // Assume offset is never negative.
   assert(Offset > 0);
 
-  const MCConstantExpr *OffsetExpr =  MCConstantExpr::Create(Offset, *Ctx);
-  const MCBinaryExpr *Add = MCBinaryExpr::CreateAdd(MCSym, OffsetExpr, *Ctx);
-  return MCOperand::CreateExpr(Add);
+  const MCConstantExpr *OffsetExpr =  MCConstantExpr::create(Offset, *Ctx);
+  const MCBinaryExpr *Add = MCBinaryExpr::createAdd(MCSym, OffsetExpr, *Ctx);
+  return MCOperand::createExpr(Add);
 }
 
 /*
@@ -134,12 +140,13 @@ MCOperand MipsMCInstLower::LowerOperand(const MachineOperand &MO,
   case MachineOperand::MO_Register:
     // Ignore all implicit register operands.
     if (MO.isImplicit()) break;
-    return MCOperand::CreateReg(MO.getReg());
+    return MCOperand::createReg(MO.getReg());
   case MachineOperand::MO_Immediate:
-    return MCOperand::CreateImm(MO.getImm() + offset);
+    return MCOperand::createImm(MO.getImm() + offset);
   case MachineOperand::MO_MachineBasicBlock:
   case MachineOperand::MO_GlobalAddress:
   case MachineOperand::MO_ExternalSymbol:
+  case MachineOperand::MO_MCSymbol:
   case MachineOperand::MO_JumpTableIndex:
   case MachineOperand::MO_ConstantPoolIndex:
   case MachineOperand::MO_BlockAddress:
@@ -151,7 +158,75 @@ MCOperand MipsMCInstLower::LowerOperand(const MachineOperand &MO,
   return MCOperand();
 }
 
+MCOperand MipsMCInstLower::createSub(MachineBasicBlock *BB1,
+                                     MachineBasicBlock *BB2,
+                                     MCSymbolRefExpr::VariantKind Kind) const {
+  const MCSymbolRefExpr *Sym1 = MCSymbolRefExpr::create(BB1->getSymbol(), *Ctx);
+  const MCSymbolRefExpr *Sym2 = MCSymbolRefExpr::create(BB2->getSymbol(), *Ctx);
+  const MCBinaryExpr *Sub = MCBinaryExpr::createSub(Sym1, Sym2, *Ctx);
+
+  return MCOperand::createExpr(MipsMCExpr::create(Kind, Sub, *Ctx));
+}
+
+void MipsMCInstLower::
+lowerLongBranchLUi(const MachineInstr *MI, MCInst &OutMI) const {
+  OutMI.setOpcode(Mips::LUi);
+
+  // Lower register operand.
+  OutMI.addOperand(LowerOperand(MI->getOperand(0)));
+
+  // Create %hi($tgt-$baltgt).
+  OutMI.addOperand(createSub(MI->getOperand(1).getMBB(),
+                             MI->getOperand(2).getMBB(),
+                             MCSymbolRefExpr::VK_Mips_ABS_HI));
+}
+
+void MipsMCInstLower::
+lowerLongBranchADDiu(const MachineInstr *MI, MCInst &OutMI, int Opcode,
+                     MCSymbolRefExpr::VariantKind Kind) const {
+  OutMI.setOpcode(Opcode);
+
+  // Lower two register operands.
+  for (unsigned I = 0, E = 2; I != E; ++I) {
+    const MachineOperand &MO = MI->getOperand(I);
+    OutMI.addOperand(LowerOperand(MO));
+  }
+
+  // Create %lo($tgt-$baltgt) or %hi($tgt-$baltgt).
+  OutMI.addOperand(createSub(MI->getOperand(2).getMBB(),
+                             MI->getOperand(3).getMBB(), Kind));
+}
+
+bool MipsMCInstLower::lowerLongBranch(const MachineInstr *MI,
+                                      MCInst &OutMI) const {
+  switch (MI->getOpcode()) {
+  default:
+    return false;
+  case Mips::LONG_BRANCH_LUi:
+    lowerLongBranchLUi(MI, OutMI);
+    return true;
+  case Mips::LONG_BRANCH_ADDiu:
+    lowerLongBranchADDiu(MI, OutMI, Mips::ADDiu,
+                         MCSymbolRefExpr::VK_Mips_ABS_LO);
+    return true;
+  case Mips::LONG_BRANCH_DADDiu:
+    unsigned TargetFlags = MI->getOperand(2).getTargetFlags();
+    if (TargetFlags == MipsII::MO_ABS_HI)
+      lowerLongBranchADDiu(MI, OutMI, Mips::DADDiu,
+                           MCSymbolRefExpr::VK_Mips_ABS_HI);
+    else if (TargetFlags == MipsII::MO_ABS_LO)
+      lowerLongBranchADDiu(MI, OutMI, Mips::DADDiu,
+                           MCSymbolRefExpr::VK_Mips_ABS_LO);
+    else
+      report_fatal_error("Unexpected flags for LONG_BRANCH_DADDiu");
+    return true;
+  }
+}
+
 void MipsMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
+  if (lowerLongBranch(MI, OutMI))
+    return;
+
   OutMI.setOpcode(MI->getOpcode());
 
   for (unsigned i = 0, e = MI->getNumOperands(); i != e; ++i) {

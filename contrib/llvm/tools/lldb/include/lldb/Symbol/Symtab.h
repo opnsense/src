@@ -46,6 +46,7 @@ public:
             Symbol *    Resize (size_t count);
             uint32_t    AddSymbol(const Symbol& symbol);
             size_t      GetNumSymbols() const;
+            void        SectionFileAddressesChanged ();
             void        Dump(Stream *s, Target *target, SortOrder sort_type);
             void        Dump(Stream *s, Target *target, std::vector<uint32_t>& indexes) const;
             uint32_t    GetIndexForSymbol (const Symbol *symbol) const;
@@ -57,6 +58,14 @@ public:
             Symbol *    SymbolAtIndex (size_t idx);
     const   Symbol *    SymbolAtIndex (size_t idx) const;
             Symbol *    FindSymbolWithType (lldb::SymbolType symbol_type, Debug symbol_debug_type, Visibility symbol_visibility, uint32_t &start_idx);
+            //----------------------------------------------------------------------
+            /// Get the parent symbol for the given symbol.
+            ///
+            /// Many symbols in symbol tables are scoped by other symbols that
+            /// contain one or more symbol. This function will look for such a
+            /// containing symbol and return it if there is one.
+            //----------------------------------------------------------------------
+    const   Symbol *    GetParent (Symbol *symbol) const;
             uint32_t    AppendSymbolIndexesWithType (lldb::SymbolType symbol_type, std::vector<uint32_t>& indexes, uint32_t start_idx = 0, uint32_t end_index = UINT32_MAX) const;
             uint32_t    AppendSymbolIndexesWithTypeAndFlagsValue (lldb::SymbolType symbol_type, uint32_t flags_value, std::vector<uint32_t>& indexes, uint32_t start_idx = 0, uint32_t end_index = UINT32_MAX) const;
             uint32_t    AppendSymbolIndexesWithType (lldb::SymbolType symbol_type, Debug symbol_debug_type, Visibility symbol_visibility, std::vector<uint32_t>& matches, uint32_t start_idx = 0, uint32_t end_index = UINT32_MAX) const;
@@ -72,6 +81,7 @@ public:
             Symbol *    FindFirstSymbolWithNameAndType (const ConstString &name, lldb::SymbolType symbol_type, Debug symbol_debug_type, Visibility symbol_visibility);
             Symbol *    FindSymbolContainingFileAddress (lldb::addr_t file_addr, const uint32_t* indexes, uint32_t num_indexes);
             Symbol *    FindSymbolContainingFileAddress (lldb::addr_t file_addr);
+            void        ForEachSymbolContainingFileAddress(lldb::addr_t file_addr, std::function<bool(Symbol *)> const &callback);
             size_t      FindFunctionSymbols (const ConstString &name, uint32_t name_type_mask, SymbolContextList& sc_list);
             void        CalculateSymbolSizes ();
 

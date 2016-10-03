@@ -1,12 +1,14 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 .if ${MK_FORTH} != "no"
 # Build the add-in FORTH interpreter.
 SUBDIR+=		ficl
 SUBDIR+=		forth
 .endif
+
+SUBDIR+=		common
 
 .include <bsd.arch.inc.mk>
 

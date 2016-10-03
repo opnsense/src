@@ -1732,8 +1732,6 @@ and their results are:
 .Lb libform
 .It Li libgeom
 .Lb libgeom
-.It Li libgpib
-.Lb libgpib
 .It Li libi386
 .Lb libi386
 .It Li libintl
@@ -2099,6 +2097,8 @@ X/Open
 .St -susv2
 .It Li \-susv3
 .St -susv3
+.It Li \-susv4
+.St -susv4
 .It Li \-svid4
 .St -svid4
 .It Li \-xbd5

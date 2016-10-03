@@ -1,5 +1,6 @@
 # $FreeBSD$
 
+PACKAGE=lib${LIB}
 LIB=	ufs
 SHLIBDIR?= /lib
 SHLIB_MAJOR=	6
@@ -21,7 +22,6 @@ MLINKS+= ufs_disk_close.3 ufs_disk_write.3
 
 WARNS?=	2
 
-DEBUG_FLAGS = -g
 CFLAGS+= -D_LIBUFS
 .if defined(LIBUFS_DEBUG)
 CFLAGS+= -D_LIBUFS_DEBUGGING

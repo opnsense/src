@@ -16,6 +16,7 @@
 #include "lldb/Core/Stream.h"
 #include "lldb/Core/StringList.h"
 #include "lldb/Interpreter/Args.h"
+#include "llvm/ADT/STLExtras.h"
 
 using namespace lldb;
 using namespace lldb_private;
@@ -36,7 +37,7 @@ OptionValueBoolean::DumpValue (const ExecutionContext *exe_ctx, Stream &strm, ui
 }
 
 Error
-OptionValueBoolean::SetValueFromCString (const char *value_cstr,
+OptionValueBoolean::SetValueFromString (llvm::StringRef value_str,
                                          VarSetOperationType op)
 {
     Error error;
@@ -44,26 +45,27 @@ OptionValueBoolean::SetValueFromCString (const char *value_cstr,
     {
     case eVarSetOperationClear:
         Clear();
+        NotifyValueChanged();
         break;
 
     case eVarSetOperationReplace:
     case eVarSetOperationAssign:
         {
             bool success = false;
-            bool value = Args::StringToBoolean(value_cstr, false, &success);
+            bool value = Args::StringToBoolean(value_str.str().c_str(), false, &success);
             if (success)
             {
                 m_value_was_set = true;
                 m_current_value = value;
+                NotifyValueChanged();
             }
             else
             {
-                if (value_cstr == NULL)
-                    error.SetErrorString ("invalid boolean string value: NULL");
-                else if (value_cstr[0] == '\0')
+                if (value_str.size() == 0)
                     error.SetErrorString ("invalid boolean string value <empty>");
                 else
-                    error.SetErrorStringWithFormat ("invalid boolean string value: '%s'", value_cstr);
+                    error.SetErrorStringWithFormat ("invalid boolean string value: '%s'",
+                            value_str.str().c_str());
             }
         }
         break;
@@ -73,7 +75,7 @@ OptionValueBoolean::SetValueFromCString (const char *value_cstr,
     case eVarSetOperationRemove:
     case eVarSetOperationAppend:
     case eVarSetOperationInvalid:
-        error = OptionValue::SetValueFromCString (value_cstr, op);
+        error = OptionValue::SetValueFromString (value_str, op);
         break;
     }
     return error;
@@ -110,7 +112,7 @@ OptionValueBoolean::AutoComplete (CommandInterpreter &interpreter,
         { "1"    , 1 },
         { "0"    , 1 },
     };
-    const size_t k_num_autocomplete_entries = sizeof(g_autocomplete_entries)/sizeof(StringEntry);
+    const size_t k_num_autocomplete_entries = llvm::array_lengthof(g_autocomplete_entries);
     
     if (s && s[0])
     {

@@ -16,11 +16,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/IR/LLVMContext.h"
-#include "llvm/Analysis/Verifier.h"
-#include "llvm/Assembly/Parser.h"
+#include "llvm/AsmParser/Parser.h"
 #include "llvm/Bitcode/ReaderWriter.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/Signals.h"
@@ -44,11 +45,20 @@ static cl::opt<bool>
 DisableOutput("disable-output", cl::desc("Disable output"), cl::init(false));
 
 static cl::opt<bool>
+EmitFunctionSummary("function-summary", cl::desc("Emit function summary index"),
+                    cl::init(false));
+
+static cl::opt<bool>
 DumpAsm("d", cl::desc("Print assembly as parsed"), cl::Hidden);
 
 static cl::opt<bool>
 DisableVerify("disable-verify", cl::Hidden,
               cl::desc("Do not run verifier on input LLVM (dangerous!)"));
+
+static cl::opt<bool> PreserveBitcodeUseListOrder(
+    "preserve-bc-uselistorder",
+    cl::desc("Preserve use-list order when writing LLVM bitcode."),
+    cl::init(true), cl::Hidden);
 
 static void WriteOutputFile(const Module *M) {
   // Infer the output filename if needed.
@@ -56,28 +66,23 @@ static void WriteOutputFile(const Module *M) {
     if (InputFilename == "-") {
       OutputFilename = "-";
     } else {
-      std::string IFN = InputFilename;
-      int Len = IFN.length();
-      if (IFN[Len-3] == '.' && IFN[Len-2] == 'l' && IFN[Len-1] == 'l') {
-        // Source ends in .ll
-        OutputFilename = std::string(IFN.begin(), IFN.end()-3);
-      } else {
-        OutputFilename = IFN;   // Append a .bc to it
-      }
+      StringRef IFN = InputFilename;
+      OutputFilename = (IFN.endswith(".ll") ? IFN.drop_back(3) : IFN).str();
       OutputFilename += ".bc";
     }
   }
 
-  std::string ErrorInfo;
-  OwningPtr<tool_output_file> Out(new tool_output_file(
-      OutputFilename.c_str(), ErrorInfo, sys::fs::F_Binary));
-  if (!ErrorInfo.empty()) {
-    errs() << ErrorInfo << '\n';
+  std::error_code EC;
+  std::unique_ptr<tool_output_file> Out(
+      new tool_output_file(OutputFilename, EC, sys::fs::F_None));
+  if (EC) {
+    errs() << EC.message() << '\n';
     exit(1);
   }
 
   if (Force || !CheckBitcodeOutputToConsole(Out->os(), true))
-    WriteBitcodeToFile(M, Out->os());
+    WriteBitcodeToFile(M, Out->os(), PreserveBitcodeUseListOrder,
+                       EmitFunctionSummary);
 
   // Declare success.
   Out->keep();
@@ -93,18 +98,19 @@ int main(int argc, char **argv) {
 
   // Parse the file now...
   SMDiagnostic Err;
-  OwningPtr<Module> M(ParseAssemblyFile(InputFilename, Err, Context));
-  if (M.get() == 0) {
+  std::unique_ptr<Module> M = parseAssemblyFile(InputFilename, Err, Context);
+  if (!M.get()) {
     Err.print(argv[0], errs());
     return 1;
   }
 
   if (!DisableVerify) {
-    std::string Err;
-    if (verifyModule(*M.get(), ReturnStatusAction, &Err)) {
+    std::string ErrorStr;
+    raw_string_ostream OS(ErrorStr);
+    if (verifyModule(*M.get(), &OS)) {
       errs() << argv[0]
              << ": assembly parsed, but does not verify as correct!\n";
-      errs() << Err;
+      errs() << OS.str();
       return 1;
     }
   }

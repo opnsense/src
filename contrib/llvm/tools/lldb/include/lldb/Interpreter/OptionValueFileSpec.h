@@ -22,15 +22,16 @@ namespace lldb_private {
 class OptionValueFileSpec : public OptionValue
 {
 public:
-    OptionValueFileSpec ();
+    OptionValueFileSpec (bool resolve = true);
     
-    OptionValueFileSpec (const FileSpec &value);
+    OptionValueFileSpec (const FileSpec &value,
+                         bool resolve = true);
     
     OptionValueFileSpec (const FileSpec &current_value, 
-                         const FileSpec &default_value);
+                         const FileSpec &default_value,
+                         bool resolve = true);
     
-    virtual 
-    ~OptionValueFileSpec()
+    ~OptionValueFileSpec() override
     {
     }
     
@@ -38,38 +39,39 @@ public:
     // Virtual subclass pure virtual overrides
     //---------------------------------------------------------------------
     
-    virtual OptionValue::Type
-    GetType () const
+    OptionValue::Type
+    GetType() const override
     {
         return eTypeFileSpec;
     }
     
-    virtual void
-    DumpValue (const ExecutionContext *exe_ctx, Stream &strm, uint32_t dump_mask);
+    void
+    DumpValue(const ExecutionContext *exe_ctx, Stream &strm, uint32_t dump_mask) override;
     
-    virtual Error
-    SetValueFromCString (const char *value,
-                         VarSetOperationType op = eVarSetOperationAssign);
+    Error
+    SetValueFromString(llvm::StringRef value,
+		       VarSetOperationType op = eVarSetOperationAssign) override;
     
-    virtual bool
-    Clear ()
+    bool
+    Clear() override
     {
         m_current_value = m_default_value;
         m_value_was_set = false;
         m_data_sp.reset();
+        m_data_mod_time.Clear();
         return true;
     }
     
-    virtual lldb::OptionValueSP
-    DeepCopy () const;
+    lldb::OptionValueSP
+    DeepCopy() const override;
 
-    virtual size_t
-    AutoComplete (CommandInterpreter &interpreter,
-                  const char *s,
-                  int match_start_point,
-                  int max_return_elements,
-                  bool &word_complete,
-                  StringList &matches);
+    size_t
+    AutoComplete(CommandInterpreter &interpreter,
+		 const char *s,
+		 int match_start_point,
+		 int max_return_elements,
+		 bool &word_complete,
+		 StringList &matches) override;
     
     //---------------------------------------------------------------------
     // Subclass specific functions
@@ -121,9 +123,11 @@ protected:
     FileSpec m_current_value;
     FileSpec m_default_value;
     lldb::DataBufferSP m_data_sp;
+    TimeValue m_data_mod_time;
     uint32_t m_completion_mask;
+    bool m_resolve;
 };
 
 } // namespace lldb_private
 
-#endif  // liblldb_OptionValueFileSpec_h_
+#endif // liblldb_OptionValueFileSpec_h_

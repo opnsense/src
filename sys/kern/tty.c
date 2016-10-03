@@ -126,7 +126,7 @@ static int
 tty_drain(struct tty *tp, int leaving)
 {
 	size_t bytesused;
-	int error, revokecnt;
+	int error;
 
 	if (ttyhook_hashook(tp, getc_inject))
 		/* buffer is inaccessible */
@@ -141,18 +141,10 @@ tty_drain(struct tty *tp, int leaving)
 
 		/* Wait for data to be drained. */
 		if (leaving) {
-			revokecnt = tp->t_revokecnt;
 			error = tty_timedwait(tp, &tp->t_outwait, hz);
-			switch (error) {
-			case ERESTART:
-				if (revokecnt != tp->t_revokecnt)
-					error = 0;
-				break;
-			case EWOULDBLOCK:
-				if (ttyoutq_bytesused(&tp->t_outq) < bytesused)
-					error = 0;
-				break;
-			}
+			if (error == EWOULDBLOCK &&
+			    ttyoutq_bytesused(&tp->t_outq) < bytesused)
+				error = 0;
 		} else
 			error = tty_wait(tp, &tp->t_outwait);
 
@@ -209,7 +201,6 @@ ttydev_leave(struct tty *tp)
 		constty_clear();
 
 	/* Drain any output. */
-	MPASS((tp->t_flags & TF_STOPPED) == 0);
 	if (!tty_gone(tp))
 		tty_drain(tp, 1);
 
@@ -356,11 +347,11 @@ ttydev_close(struct cdev *dev, int fflag, int devtype __unused,
 		return (0);
 	}
 
-	/*
-	 * This can only be called once. The callin and the callout
-	 * devices cannot be opened at the same time.
-	 */
-	tp->t_flags &= ~(TF_EXCLUDE|TF_STOPPED);
+	/* If revoking, flush output now to avoid draining it later. */
+	if (fflag & FREVOKE)
+		tty_flush(tp, FWRITE);
+
+	tp->t_flags &= ~TF_EXCLUDE;
 
 	/* Properly wake up threads that are stuck - revoke(). */
 	tp->t_revokecnt++;
@@ -397,7 +388,7 @@ tty_wait_background(struct tty *tp, struct thread *td, int sig)
 		PROC_LOCK(p);
 		/*
 		 * The process should only sleep, when:
-		 * - This terminal is the controling terminal
+		 * - This terminal is the controlling terminal
 		 * - Its process group is not the foreground process
 		 *   group
 		 * - The parent process isn't waiting for the child to
@@ -1215,10 +1206,11 @@ SYSCTL_PROC(_kern, OID_AUTO, ttys, CTLTYPE_OPAQUE|CTLFLAG_RD|CTLFLAG_MPSAFE,
  * the user.
  */
 
-static int
-tty_vmakedevf(struct tty *tp, struct ucred *cred, int flags,
-    const char *fmt, va_list ap)
+int
+tty_makedevf(struct tty *tp, struct ucred *cred, int flags,
+    const char *fmt, ...)
 {
+	va_list ap;
 	struct make_dev_args args;
 	struct cdev *dev, *init, *lock, *cua, *cinit, *clock;
 	const char *prefix = "tty";
@@ -1232,7 +1224,9 @@ tty_vmakedevf(struct tty *tp, struct ucred *cred, int flags,
 	if (tp->t_flags & TF_NOPREFIX)
 		prefix = "";
 
+	va_start(ap, fmt);
 	vsnrprintf(name, sizeof name, 32, fmt, ap);
+	va_end(ap);
 
 	if (cred == NULL) {
 		/* System device. */
@@ -1338,30 +1332,6 @@ fail:
 		destroy_dev(clock);
 
 	return (error);
-}
-
-int
-tty_makedevf(struct tty *tp, struct ucred *cred, int flags,
-    const char *fmt, ...)
-{
-	va_list ap;
-	int error;
-
-	va_start(ap, fmt);
-	error = tty_vmakedevf(tp, cred, flags, fmt, ap);
-	va_end(ap);
-
-	return (error);
-}
-
-void
-tty_makedev(struct tty *tp, struct ucred *cred, const char *fmt, ...)
-{
-	va_list ap;
-
-	va_start(ap, fmt);
-	(void) tty_vmakedevf(tp, cred, 0, fmt, ap);
-	va_end(ap);
 }
 
 /*
@@ -1481,13 +1451,19 @@ tty_flush(struct tty *tp, int flags)
 		tp->t_flags &= ~TF_HIWAT_OUT;
 		ttyoutq_flush(&tp->t_outq);
 		tty_wakeup(tp, FWRITE);
-		ttydevsw_pktnotify(tp, TIOCPKT_FLUSHWRITE);
+		if (!tty_gone(tp)) {
+			ttydevsw_outwakeup(tp);
+			ttydevsw_pktnotify(tp, TIOCPKT_FLUSHWRITE);
+		}
 	}
 	if (flags & FREAD) {
 		tty_hiwat_in_unblock(tp);
 		ttyinq_flush(&tp->t_inq);
-		ttydevsw_inwakeup(tp);
-		ttydevsw_pktnotify(tp, TIOCPKT_FLUSHREAD);
+		tty_wakeup(tp, FREAD);
+		if (!tty_gone(tp)) {
+			ttydevsw_inwakeup(tp);
+			ttydevsw_pktnotify(tp, TIOCPKT_FLUSHREAD);
+		}
 	}
 }
 
@@ -1954,7 +1930,7 @@ ttyhook_register(struct tty **rtp, struct proc *p, int fd, struct ttyhook *th,
 	/* Validate the file descriptor. */
 	fdp = p->p_fd;
 	error = fget_unlocked(fdp, fd, cap_rights_init(&rights, CAP_TTYHOOK),
-	    0, &fp, NULL);
+	    &fp, NULL);
 	if (error != 0)
 		return (error);
 	if (fp->f_ops == &badfileops) {

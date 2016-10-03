@@ -22,25 +22,66 @@
 #include "llvm/Option/Option.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/TargetRegistry.h"
+#include "llvm/Support/TargetParser.h"
+
 using namespace clang::driver;
+using namespace clang::driver::tools;
 using namespace clang;
+using namespace llvm;
 using namespace llvm::opt;
 
+static llvm::opt::Arg *GetRTTIArgument(const ArgList &Args) {
+  return Args.getLastArg(options::OPT_mkernel, options::OPT_fapple_kext,
+                         options::OPT_fno_rtti, options::OPT_frtti);
+}
+
+static ToolChain::RTTIMode CalculateRTTIMode(const ArgList &Args,
+                                             const llvm::Triple &Triple,
+                                             const Arg *CachedRTTIArg) {
+  // Explicit rtti/no-rtti args
+  if (CachedRTTIArg) {
+    if (CachedRTTIArg->getOption().matches(options::OPT_frtti))
+      return ToolChain::RM_EnabledExplicitly;
+    else
+      return ToolChain::RM_DisabledExplicitly;
+  }
+
+  // -frtti is default, except for the PS4 CPU.
+  if (!Triple.isPS4CPU())
+    return ToolChain::RM_EnabledImplicitly;
+
+  // On the PS4, turning on c++ exceptions turns on rtti.
+  // We're assuming that, if we see -fexceptions, rtti gets turned on.
+  Arg *Exceptions = Args.getLastArgNoClaim(
+      options::OPT_fcxx_exceptions, options::OPT_fno_cxx_exceptions,
+      options::OPT_fexceptions, options::OPT_fno_exceptions);
+  if (Exceptions &&
+      (Exceptions->getOption().matches(options::OPT_fexceptions) ||
+       Exceptions->getOption().matches(options::OPT_fcxx_exceptions)))
+    return ToolChain::RM_EnabledImplicitly;
+
+  return ToolChain::RM_DisabledImplicitly;
+}
+
 ToolChain::ToolChain(const Driver &D, const llvm::Triple &T,
-                     const ArgList &A)
-  : D(D), Triple(T), Args(A) {
+                     const ArgList &Args)
+    : D(D), Triple(T), Args(Args), CachedRTTIArg(GetRTTIArgument(Args)),
+      CachedRTTIMode(CalculateRTTIMode(Args, Triple, CachedRTTIArg)) {
+  if (Arg *A = Args.getLastArg(options::OPT_mthread_model))
+    if (!isThreadModelSupported(A->getValue()))
+      D.Diag(diag::err_drv_invalid_thread_model_for_target)
+          << A->getValue() << A->getAsString(Args);
 }
 
 ToolChain::~ToolChain() {
 }
 
-const Driver &ToolChain::getDriver() const {
- return D;
-}
+vfs::FileSystem &ToolChain::getVFS() const { return getDriver().getVFS(); }
 
 bool ToolChain::useIntegratedAs() const {
-  return Args.hasFlag(options::OPT_integrated_as,
-                      options::OPT_no_integrated_as,
+  return Args.hasFlag(options::OPT_fintegrated_as,
+                      options::OPT_fno_integrated_as,
                       IsIntegratedAssemblerDefault());
 }
 
@@ -50,7 +91,100 @@ const SanitizerArgs& ToolChain::getSanitizerArgs() const {
   return *SanitizerArguments.get();
 }
 
-std::string ToolChain::getDefaultUniversalArchName() const {
+namespace {
+struct DriverSuffix {
+  const char *Suffix;
+  const char *ModeFlag;
+};
+
+const DriverSuffix *FindDriverSuffix(StringRef ProgName) {
+  // A list of known driver suffixes. Suffixes are compared against the
+  // program name in order. If there is a match, the frontend type is updated as
+  // necessary by applying the ModeFlag.
+  static const DriverSuffix DriverSuffixes[] = {
+      {"clang", nullptr},
+      {"clang++", "--driver-mode=g++"},
+      {"clang-c++", "--driver-mode=g++"},
+      {"clang-cc", nullptr},
+      {"clang-cpp", "--driver-mode=cpp"},
+      {"clang-g++", "--driver-mode=g++"},
+      {"clang-gcc", nullptr},
+      {"clang-cl", "--driver-mode=cl"},
+      {"cc", nullptr},
+      {"cpp", "--driver-mode=cpp"},
+      {"cl", "--driver-mode=cl"},
+      {"++", "--driver-mode=g++"},
+  };
+
+  for (size_t i = 0; i < llvm::array_lengthof(DriverSuffixes); ++i)
+    if (ProgName.endswith(DriverSuffixes[i].Suffix))
+      return &DriverSuffixes[i];
+  return nullptr;
+}
+
+/// Normalize the program name from argv[0] by stripping the file extension if
+/// present and lower-casing the string on Windows.
+std::string normalizeProgramName(llvm::StringRef Argv0) {
+  std::string ProgName = llvm::sys::path::stem(Argv0);
+#ifdef LLVM_ON_WIN32
+  // Transform to lowercase for case insensitive file systems.
+  std::transform(ProgName.begin(), ProgName.end(), ProgName.begin(), ::tolower);
+#endif
+  return ProgName;
+}
+
+const DriverSuffix *parseDriverSuffix(StringRef ProgName) {
+  // Try to infer frontend type and default target from the program name by
+  // comparing it against DriverSuffixes in order.
+
+  // If there is a match, the function tries to identify a target as prefix.
+  // E.g. "x86_64-linux-clang" as interpreted as suffix "clang" with target
+  // prefix "x86_64-linux". If such a target prefix is found, it may be
+  // added via -target as implicit first argument.
+  const DriverSuffix *DS = FindDriverSuffix(ProgName);
+
+  if (!DS) {
+    // Try again after stripping any trailing version number:
+    // clang++3.5 -> clang++
+    ProgName = ProgName.rtrim("0123456789.");
+    DS = FindDriverSuffix(ProgName);
+  }
+
+  if (!DS) {
+    // Try again after stripping trailing -component.
+    // clang++-tot -> clang++
+    ProgName = ProgName.slice(0, ProgName.rfind('-'));
+    DS = FindDriverSuffix(ProgName);
+  }
+  return DS;
+}
+} // anonymous namespace
+
+std::pair<std::string, std::string>
+ToolChain::getTargetAndModeFromProgramName(StringRef PN) {
+  std::string ProgName = normalizeProgramName(PN);
+  const DriverSuffix *DS = parseDriverSuffix(ProgName);
+  if (!DS)
+    return std::make_pair("", "");
+  std::string ModeFlag = DS->ModeFlag == nullptr ? "" : DS->ModeFlag;
+
+  std::string::size_type LastComponent =
+      ProgName.rfind('-', ProgName.size() - strlen(DS->Suffix));
+  if (LastComponent == std::string::npos)
+    return std::make_pair("", ModeFlag);
+
+  // Infer target from the prefix.
+  StringRef Prefix(ProgName);
+  Prefix = Prefix.slice(0, LastComponent);
+  std::string IgnoredError;
+  std::string Target;
+  if (llvm::TargetRegistry::lookupTarget(Prefix, IgnoredError)) {
+    Target = Prefix;
+  }
+  return std::make_pair(Target, ModeFlag);
+}
+
+StringRef ToolChain::getDefaultUniversalArchName() const {
   // In universal driver terms, the arch name accepted by -arch isn't exactly
   // the same as the ones that appear in the triple. Roughly speaking, this is
   // an inverse of the darwin::getArchTypeForDarwinArchName() function, but the
@@ -113,9 +247,11 @@ Tool *ToolChain::getTool(Action::ActionClass AC) const {
 
   case Action::InputClass:
   case Action::BindArchClass:
+  case Action::CudaDeviceClass:
+  case Action::CudaHostClass:
   case Action::LipoJobClass:
   case Action::DsymutilJobClass:
-  case Action::VerifyJobClass:
+  case Action::VerifyDebugInfoJobClass:
     llvm_unreachable("Invalid tool kind.");
 
   case Action::CompileJobClass:
@@ -123,15 +259,72 @@ Tool *ToolChain::getTool(Action::ActionClass AC) const {
   case Action::PreprocessJobClass:
   case Action::AnalyzeJobClass:
   case Action::MigrateJobClass:
+  case Action::VerifyPCHJobClass:
+  case Action::BackendJobClass:
     return getClang();
   }
 
   llvm_unreachable("Invalid tool kind.");
 }
 
+static StringRef getArchNameForCompilerRTLib(const ToolChain &TC,
+                                             const ArgList &Args) {
+  const llvm::Triple &Triple = TC.getTriple();
+  bool IsWindows = Triple.isOSWindows();
+
+  if (Triple.isWindowsMSVCEnvironment() && TC.getArch() == llvm::Triple::x86)
+    return "i386";
+
+  if (TC.getArch() == llvm::Triple::arm || TC.getArch() == llvm::Triple::armeb)
+    return (arm::getARMFloatABI(TC, Args) == arm::FloatABI::Hard && !IsWindows)
+               ? "armhf"
+               : "arm";
+
+  return TC.getArchName();
+}
+
+std::string ToolChain::getCompilerRT(const ArgList &Args, StringRef Component,
+                                     bool Shared) const {
+  const llvm::Triple &TT = getTriple();
+  const char *Env = TT.isAndroid() ? "-android" : "";
+  bool IsITANMSVCWindows =
+      TT.isWindowsMSVCEnvironment() || TT.isWindowsItaniumEnvironment();
+
+  StringRef Arch = getArchNameForCompilerRTLib(*this, Args);
+  const char *Prefix = IsITANMSVCWindows ? "" : "lib";
+  const char *Suffix = Shared ? (Triple.isOSWindows() ? ".dll" : ".so")
+                              : (IsITANMSVCWindows ? ".lib" : ".a");
+
+  SmallString<128> Path(getDriver().ResourceDir);
+  StringRef OSLibName = Triple.isOSFreeBSD() ? "freebsd" : getOS();
+  llvm::sys::path::append(Path, "lib", OSLibName);
+  llvm::sys::path::append(Path, Prefix + Twine("clang_rt.") + Component + "-" +
+                                    Arch + Env + Suffix);
+  return Path.str();
+}
+
+const char *ToolChain::getCompilerRTArgString(const llvm::opt::ArgList &Args,
+                                              StringRef Component,
+                                              bool Shared) const {
+  return Args.MakeArgString(getCompilerRT(Args, Component, Shared));
+}
+
+bool ToolChain::needsProfileRT(const ArgList &Args) {
+  if (Args.hasFlag(options::OPT_fprofile_arcs, options::OPT_fno_profile_arcs,
+                   false) ||
+      Args.hasArg(options::OPT_fprofile_generate) ||
+      Args.hasArg(options::OPT_fprofile_generate_EQ) ||
+      Args.hasArg(options::OPT_fprofile_instr_generate) ||
+      Args.hasArg(options::OPT_fprofile_instr_generate_EQ) ||
+      Args.hasArg(options::OPT_fcreate_profile) ||
+      Args.hasArg(options::OPT_coverage))
+    return true;
+
+  return false;
+}
+
 Tool *ToolChain::SelectTool(const JobAction &JA) const {
-  if (getDriver().ShouldUseClangCompiler(JA))
-    return getClang();
+  if (getDriver().ShouldUseClangCompiler(JA)) return getClang();
   Action::ActionClass AC = JA.getKind();
   if (AC == Action::AssembleJobClass && useIntegratedAs())
     return getClangAs();
@@ -140,7 +333,6 @@ Tool *ToolChain::SelectTool(const JobAction &JA) const {
 
 std::string ToolChain::GetFilePath(const char *Name) const {
   return D.GetFilePath(Name, *this);
-
 }
 
 std::string ToolChain::GetProgramPath(const char *Name) const {
@@ -167,9 +359,8 @@ std::string ToolChain::GetLinkerPath() const {
     return "";
   }
 
-  return GetProgramPath("ld");
+  return GetProgramPath(DefaultLinker);
 }
-
 
 types::ID ToolChain::LookupTypeForExtension(const char *Ext) const {
   return types::lookupTypeForExtension(Ext);
@@ -179,108 +370,40 @@ bool ToolChain::HasNativeLLVMSupport() const {
   return false;
 }
 
+bool ToolChain::isCrossCompiling() const {
+  llvm::Triple HostTriple(LLVM_HOST_TRIPLE);
+  switch (HostTriple.getArch()) {
+  // The A32/T32/T16 instruction sets are not separate architectures in this
+  // context.
+  case llvm::Triple::arm:
+  case llvm::Triple::armeb:
+  case llvm::Triple::thumb:
+  case llvm::Triple::thumbeb:
+    return getArch() != llvm::Triple::arm && getArch() != llvm::Triple::thumb &&
+           getArch() != llvm::Triple::armeb && getArch() != llvm::Triple::thumbeb;
+  default:
+    return HostTriple.getArch() != getArch();
+  }
+}
+
 ObjCRuntime ToolChain::getDefaultObjCRuntime(bool isNonFragile) const {
   return ObjCRuntime(isNonFragile ? ObjCRuntime::GNUstep : ObjCRuntime::GCC,
                      VersionTuple());
 }
 
-/// getARMTargetCPU - Get the (LLVM) name of the ARM cpu we are targeting.
-//
-// FIXME: tblgen this.
-static const char *getARMTargetCPU(const ArgList &Args,
-                                   const llvm::Triple &Triple) {
-  // For Darwin targets, the -arch option (which is translated to a
-  // corresponding -march option) should determine the architecture
-  // (and the Mach-O slice) regardless of any -mcpu options.
-  if (!Triple.isOSDarwin()) {
-    // FIXME: Warn on inconsistent use of -mcpu and -march.
-    // If we have -mcpu=, use that.
-    if (Arg *A = Args.getLastArg(options::OPT_mcpu_EQ))
-      return A->getValue();
-  }
+bool ToolChain::isThreadModelSupported(const StringRef Model) const {
+  if (Model == "single") {
+    // FIXME: 'single' is only supported on ARM and WebAssembly so far.
+    return Triple.getArch() == llvm::Triple::arm ||
+           Triple.getArch() == llvm::Triple::armeb ||
+           Triple.getArch() == llvm::Triple::thumb ||
+           Triple.getArch() == llvm::Triple::thumbeb ||
+           Triple.getArch() == llvm::Triple::wasm32 ||
+           Triple.getArch() == llvm::Triple::wasm64;
+  } else if (Model == "posix")
+    return true;
 
-  StringRef MArch;
-  if (Arg *A = Args.getLastArg(options::OPT_march_EQ)) {
-    // Otherwise, if we have -march= choose the base CPU for that arch.
-    MArch = A->getValue();
-  } else {
-    // Otherwise, use the Arch from the triple.
-    MArch = Triple.getArchName();
-  }
-
-  if (Triple.getOS() == llvm::Triple::NetBSD ||
-      Triple.getOS() == llvm::Triple::FreeBSD) {
-    if (MArch == "armv6")
-      return "arm1176jzf-s";
-  }
-
-  const char *result = llvm::StringSwitch<const char *>(MArch)
-    .Cases("armv2", "armv2a","arm2")
-    .Case("armv3", "arm6")
-    .Case("armv3m", "arm7m")
-    .Case("armv4", "strongarm")
-    .Case("armv4t", "arm7tdmi")
-    .Cases("armv5", "armv5t", "arm10tdmi")
-    .Cases("armv5e", "armv5te", "arm1026ejs")
-    .Case("armv5tej", "arm926ej-s")
-    .Cases("armv6", "armv6k", "arm1136jf-s")
-    .Case("armv6j", "arm1136j-s")
-    .Cases("armv6z", "armv6zk", "arm1176jzf-s")
-    .Case("armv6t2", "arm1156t2-s")
-    .Cases("armv6m", "armv6-m", "cortex-m0")
-    .Cases("armv7", "armv7a", "armv7-a", "cortex-a8")
-    .Cases("armv7l", "armv7-l", "cortex-a8")
-    .Cases("armv7f", "armv7-f", "cortex-a9-mp")
-    .Cases("armv7s", "armv7-s", "swift")
-    .Cases("armv7r", "armv7-r", "cortex-r4")
-    .Cases("armv7m", "armv7-m", "cortex-m3")
-    .Cases("armv7em", "armv7e-m", "cortex-m4")
-    .Cases("armv8", "armv8a", "armv8-a", "cortex-a53")
-    .Case("ep9312", "ep9312")
-    .Case("iwmmxt", "iwmmxt")
-    .Case("xscale", "xscale")
-    // If all else failed, return the most base CPU with thumb interworking
-    // supported by LLVM.
-    .Default(0);
-
-  if (result)
-    return result;
-
-  return
-    Triple.getEnvironment() == llvm::Triple::GNUEABIHF
-      ? "arm1176jzf-s"
-      : "arm7tdmi";
-}
-
-/// getLLVMArchSuffixForARM - Get the LLVM arch name to use for a particular
-/// CPU.
-//
-// FIXME: This is redundant with -mcpu, why does LLVM use this.
-// FIXME: tblgen this, or kill it!
-static const char *getLLVMArchSuffixForARM(StringRef CPU) {
-  return llvm::StringSwitch<const char *>(CPU)
-    .Case("strongarm", "v4")
-    .Cases("arm7tdmi", "arm7tdmi-s", "arm710t", "v4t")
-    .Cases("arm720t", "arm9", "arm9tdmi", "v4t")
-    .Cases("arm920", "arm920t", "arm922t", "v4t")
-    .Cases("arm940t", "ep9312","v4t")
-    .Cases("arm10tdmi",  "arm1020t", "v5")
-    .Cases("arm9e",  "arm926ej-s",  "arm946e-s", "v5e")
-    .Cases("arm966e-s",  "arm968e-s",  "arm10e", "v5e")
-    .Cases("arm1020e",  "arm1022e",  "xscale", "iwmmxt", "v5e")
-    .Cases("arm1136j-s",  "arm1136jf-s",  "arm1176jz-s", "v6")
-    .Cases("arm1176jzf-s",  "mpcorenovfp",  "mpcore", "v6")
-    .Cases("arm1156t2-s",  "arm1156t2f-s", "v6t2")
-    .Cases("cortex-a5", "cortex-a7", "cortex-a8", "v7")
-    .Cases("cortex-a9", "cortex-a12", "cortex-a15", "v7")
-    .Cases("cortex-r4", "cortex-r5", "v7r")
-    .Case("cortex-m0", "v6m")
-    .Case("cortex-m3", "v7m")
-    .Case("cortex-m4", "v7em")
-    .Case("cortex-a9-mp", "v7f")
-    .Case("swift", "v7s")
-    .Cases("cortex-a53", "cortex-a57", "v8")
-    .Default("");
+  return false;
 }
 
 std::string ToolChain::ComputeLLVMTriple(const ArgList &Args,
@@ -291,7 +414,7 @@ std::string ToolChain::ComputeLLVMTriple(const ArgList &Args,
 
   case llvm::Triple::x86_64: {
     llvm::Triple Triple = getTriple();
-    if (!Triple.isOSDarwin())
+    if (!Triple.isOSBinFormatMachO())
       return getTripleString();
 
     if (Arg *A = Args.getLastArg(options::OPT_march_EQ)) {
@@ -303,24 +426,67 @@ std::string ToolChain::ComputeLLVMTriple(const ArgList &Args,
     }
     return Triple.getTriple();
   }
+  case llvm::Triple::aarch64: {
+    llvm::Triple Triple = getTriple();
+    if (!Triple.isOSBinFormatMachO())
+      return getTripleString();
+
+    // FIXME: older versions of ld64 expect the "arm64" component in the actual
+    // triple string and query it to determine whether an LTO file can be
+    // handled. Remove this when we don't care any more.
+    Triple.setArchName("arm64");
+    return Triple.getTriple();
+  }
   case llvm::Triple::arm:
-  case llvm::Triple::thumb: {
+  case llvm::Triple::armeb:
+  case llvm::Triple::thumb:
+  case llvm::Triple::thumbeb: {
     // FIXME: Factor into subclasses.
     llvm::Triple Triple = getTriple();
+    bool IsBigEndian = getTriple().getArch() == llvm::Triple::armeb ||
+                       getTriple().getArch() == llvm::Triple::thumbeb;
+
+    // Handle pseudo-target flags '-mlittle-endian'/'-EL' and
+    // '-mbig-endian'/'-EB'.
+    if (Arg *A = Args.getLastArg(options::OPT_mlittle_endian,
+                                 options::OPT_mbig_endian)) {
+      IsBigEndian = !A->getOption().matches(options::OPT_mlittle_endian);
+    }
 
     // Thumb2 is the default for V7 on Darwin.
     //
     // FIXME: Thumb should just be another -target-feaure, not in the triple.
+    StringRef MCPU, MArch;
+    if (const Arg *A = Args.getLastArg(options::OPT_mcpu_EQ))
+      MCPU = A->getValue();
+    if (const Arg *A = Args.getLastArg(options::OPT_march_EQ))
+      MArch = A->getValue();
+    std::string CPU =
+        Triple.isOSBinFormatMachO()
+            ? tools::arm::getARMCPUForMArch(MArch, Triple).str()
+            : tools::arm::getARMTargetCPU(MCPU, MArch, Triple);
     StringRef Suffix =
-      getLLVMArchSuffixForARM(getARMTargetCPU(Args, Triple));
-    bool ThumbDefault = Suffix.startswith("v6m") ||
-      (Suffix.startswith("v7") && getTriple().isOSDarwin());
-    std::string ArchName = "arm";
+      tools::arm::getLLVMArchSuffixForARM(CPU, MArch, Triple);
+    bool IsMProfile = ARM::parseArchProfile(Suffix) == ARM::PK_M;
+    bool ThumbDefault = IsMProfile || (ARM::parseArchVersion(Suffix) == 7 && 
+                                       getTriple().isOSBinFormatMachO());
+    // FIXME: this is invalid for WindowsCE
+    if (getTriple().isOSWindows())
+      ThumbDefault = true;
+    std::string ArchName;
+    if (IsBigEndian)
+      ArchName = "armeb";
+    else
+      ArchName = "arm";
 
-    // Assembly files should start in ARM mode.
-    if (InputType != types::TY_PP_Asm &&
-        Args.hasFlag(options::OPT_mthumb, options::OPT_mno_thumb, ThumbDefault))
-      ArchName = "thumb";
+    // Assembly files should start in ARM mode, unless arch is M-profile.
+    if ((InputType != types::TY_PP_Asm && Args.hasFlag(options::OPT_mthumb,
+         options::OPT_mno_thumb, ThumbDefault)) || IsMProfile) {
+      if (IsBigEndian)
+        ArchName = "thumbeb";
+      else
+        ArchName = "thumb";
+    }
     Triple.setArchName(ArchName + Suffix.str());
 
     return Triple.getTriple();
@@ -328,15 +494,8 @@ std::string ToolChain::ComputeLLVMTriple(const ArgList &Args,
   }
 }
 
-std::string ToolChain::ComputeEffectiveClangTriple(const ArgList &Args, 
+std::string ToolChain::ComputeEffectiveClangTriple(const ArgList &Args,
                                                    types::ID InputType) const {
-  // Diagnose use of Darwin OS deployment target arguments on non-Darwin.
-  if (Arg *A = Args.getLastArg(options::OPT_mmacosx_version_min_EQ,
-                               options::OPT_miphoneos_version_min_EQ,
-                               options::OPT_mios_simulator_version_min_EQ))
-    getDriver().Diag(diag::err_drv_clang_unsupported)
-      << A->getAsString(Args);
-
   return ComputeLLVMTriple(Args, InputType);
 }
 
@@ -349,9 +508,18 @@ void ToolChain::addClangTargetOptions(const ArgList &DriverArgs,
                                       ArgStringList &CC1Args) const {
 }
 
+void ToolChain::addClangWarningOptions(ArgStringList &CC1Args) const {}
+
+void ToolChain::addProfileRTLibs(const llvm::opt::ArgList &Args,
+                                 llvm::opt::ArgStringList &CmdArgs) const {
+  if (!needsProfileRT(Args)) return;
+
+  CmdArgs.push_back(getCompilerRTArgString(Args, "profile"));
+  return;
+}
+
 ToolChain::RuntimeLibType ToolChain::GetRuntimeLibType(
-  const ArgList &Args) const
-{
+    const ArgList &Args) const {
   if (Arg *A = Args.getLastArg(options::OPT_rtlib_EQ)) {
     StringRef Value = A->getValue();
     if (Value == "compiler-rt")
@@ -413,10 +581,9 @@ void ToolChain::addExternCSystemIncludeIfExists(const ArgList &DriverArgs,
 /*static*/ void ToolChain::addSystemIncludes(const ArgList &DriverArgs,
                                              ArgStringList &CC1Args,
                                              ArrayRef<StringRef> Paths) {
-  for (ArrayRef<StringRef>::iterator I = Paths.begin(), E = Paths.end();
-       I != E; ++I) {
+  for (StringRef Path : Paths) {
     CC1Args.push_back("-internal-isystem");
-    CC1Args.push_back(DriverArgs.MakeArgString(*I));
+    CC1Args.push_back(DriverArgs.MakeArgString(Path));
   }
 }
 
@@ -449,6 +616,13 @@ void ToolChain::AddCXXStdlibLibArgs(const ArgList &Args,
   }
 }
 
+void ToolChain::AddFilePathLibArgs(const ArgList &Args,
+                                   ArgStringList &CmdArgs) const {
+  for (const auto &LibPath : getFilePaths())
+    if(LibPath.length() > 0)
+      CmdArgs.push_back(Args.MakeArgString(StringRef("-L") + LibPath));
+}
+
 void ToolChain::AddCCKextLibArgs(const ArgList &Args,
                                  ArgStringList &CmdArgs) const {
   CmdArgs.push_back("-lcc_kext");
@@ -477,3 +651,18 @@ bool ToolChain::AddFastMathRuntimeIfAvailable(const ArgList &Args,
   CmdArgs.push_back(Args.MakeArgString(Path));
   return true;
 }
+
+SanitizerMask ToolChain::getSupportedSanitizers() const {
+  // Return sanitizers which don't require runtime support and are not
+  // platform dependent.
+  using namespace SanitizerKind;
+  SanitizerMask Res = (Undefined & ~Vptr & ~Function) | (CFI & ~CFIICall) |
+                      CFICastStrict | UnsignedIntegerOverflow | LocalBounds;
+  if (getTriple().getArch() == llvm::Triple::x86 ||
+      getTriple().getArch() == llvm::Triple::x86_64)
+    Res |= CFIICall;
+  return Res;
+}
+
+void ToolChain::AddCudaIncludeArgs(const ArgList &DriverArgs,
+                                   ArgStringList &CC1Args) const {}

@@ -116,7 +116,7 @@ static void intr_assign_next_cpu(struct intr_vector *iv);
 static void intr_shuffle_irqs(void *arg __unused);
 #endif
 
-static int intr_assign_cpu(void *arg, u_char cpu);
+static int intr_assign_cpu(void *arg, int cpu);
 static void intr_execute_handlers(void *);
 static void intr_stray_level(struct trapframe *);
 static void intr_stray_vector(void *);
@@ -256,7 +256,7 @@ intr_init2()
 }
 
 static int
-intr_assign_cpu(void *arg, u_char cpu)
+intr_assign_cpu(void *arg, int cpu)
 {
 #ifdef SMP
 	struct pcpu *pc;
@@ -367,7 +367,7 @@ inthand_add(const char *name, int vec, driver_filter_t *filt,
 		/*
 		 * Check if we need to upgrade from PIL_ITHREAD to PIL_FILTER.
 		 * Given that apart from the on-board SCCs and UARTs shared
-		 * interrupts are rather uncommon on sparc64 this sould be
+		 * interrupts are rather uncommon on sparc64 this should be
 		 * pretty rare in practice.
 		 */
 		filter = 0;

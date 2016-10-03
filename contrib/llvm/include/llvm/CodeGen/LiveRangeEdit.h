@@ -21,13 +21,14 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/CodeGen/LiveInterval.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/Target/TargetSubtargetInfo.h"
 
 namespace llvm {
 
-class AliasAnalysis;
 class LiveIntervals;
 class MachineBlockFrequencyInfo;
 class MachineLoopInfo;
@@ -99,7 +100,11 @@ private:
 
   /// MachineRegisterInfo callback to notify when new virtual
   /// registers are created.
-  void MRI_NoteNewVirtualRegister(unsigned VReg);
+  void MRI_NoteNewVirtualRegister(unsigned VReg) override;
+
+  /// \brief Check if MachineOperand \p MO is a last use/kill either in the
+  /// main live range of \p LI or in one of the matching subregister ranges.
+  bool useIsKill(const LiveInterval &LI, const MachineOperand &MO) const;
 
 public:
   /// Create a LiveRangeEdit for breaking down parent into smaller pieces.
@@ -111,20 +116,17 @@ public:
   /// @param vrm Map of virtual registers to physical registers for this
   ///            function.  If NULL, no virtual register map updates will
   ///            be done.  This could be the case if called before Regalloc.
-  LiveRangeEdit(LiveInterval *parent,
-                SmallVectorImpl<unsigned> &newRegs,
-                MachineFunction &MF,
-                LiveIntervals &lis,
-                VirtRegMap *vrm,
-                Delegate *delegate = 0)
-    : Parent(parent), NewRegs(newRegs),
-      MRI(MF.getRegInfo()), LIS(lis), VRM(vrm),
-      TII(*MF.getTarget().getInstrInfo()),
-      TheDelegate(delegate),
-      FirstNew(newRegs.size()),
-      ScannedRemattable(false) { MRI.setDelegate(this); }
+  LiveRangeEdit(LiveInterval *parent, SmallVectorImpl<unsigned> &newRegs,
+                MachineFunction &MF, LiveIntervals &lis, VirtRegMap *vrm,
+                Delegate *delegate = nullptr)
+      : Parent(parent), NewRegs(newRegs), MRI(MF.getRegInfo()), LIS(lis),
+        VRM(vrm), TII(*MF.getSubtarget().getInstrInfo()),
+        TheDelegate(delegate), FirstNew(newRegs.size()),
+        ScannedRemattable(false) {
+    MRI.setDelegate(this);
+  }
 
-  ~LiveRangeEdit() { MRI.resetDelegate(this); }
+  ~LiveRangeEdit() override { MRI.resetDelegate(this); }
 
   LiveInterval &getParent() const {
    assert(Parent && "No parent LiveInterval");
@@ -174,7 +176,7 @@ public:
   struct Remat {
     VNInfo *ParentVNI;      // parent_'s value at the remat location.
     MachineInstr *OrigMI;   // Instruction defining ParentVNI.
-    explicit Remat(VNInfo *ParentVNI) : ParentVNI(ParentVNI), OrigMI(0) {}
+    explicit Remat(VNInfo *ParentVNI) : ParentVNI(ParentVNI), OrigMI(nullptr) {}
   };
 
   /// canRematerializeAt - Determine if ParentVNI can be rematerialized at

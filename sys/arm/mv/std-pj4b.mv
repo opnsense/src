@@ -3,7 +3,7 @@
 files		"../mv/files.mv"
 cpu		CPU_MV_PJ4B
 machine 	arm	armv6
-makeoptions	CONF_CFLAGS="-march=armv7a -Wa,-march=armv7a"
+makeoptions	CONF_CFLAGS="-march=armv7a"
 
 # This was originally defined as "(KERNBASE-(1024*1024*1024))" but that
 # (in opt_global.h) clashed with the value emitted by genassym which

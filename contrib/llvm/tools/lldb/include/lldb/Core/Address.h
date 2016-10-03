@@ -13,6 +13,7 @@
 // C Includes
 // C++ Includes
 #include <atomic>
+
 // Other libraries and framework includes
 // Project includes
 #include "lldb/lldb-private.h"
@@ -87,6 +88,9 @@ public:
                                         ///< and file and line), to information about what the pointer points to
                                         ///< if the address is in a section (section of pointers, c strings, etc).
         DumpStyleResolvedDescriptionNoModule,
+        DumpStyleResolvedDescriptionNoFunctionArguments,
+        DumpStyleNoFunctionName,        ///< Elide the function name; display an offset into the current function.
+                                        ///< Used primarily in disassembly symbolication
         DumpStyleDetailedSymbolContext, ///< Detailed symbol context information for an address for all symbol
                                         ///< context members.
         DumpStyleResolvedPointerDescription ///< Dereference a pointer at the current address and then lookup the
@@ -104,7 +108,6 @@ public:
         m_offset (LLDB_INVALID_ADDRESS)
     {
     }
-
 
     //------------------------------------------------------------------
     /// Copy constructor
@@ -173,6 +176,7 @@ public:
     const Address&
     operator= (const Address& rhs);
 #endif
+
     //------------------------------------------------------------------
     /// Clear the object's state.
     ///
@@ -213,7 +217,7 @@ public:
     class ModulePointerAndOffsetLessThanFunctionObject
     {
     public:
-        ModulePointerAndOffsetLessThanFunctionObject () {}
+        ModulePointerAndOffsetLessThanFunctionObject() = default;
 
         bool
         operator() (const Address& a, const Address& b) const
@@ -230,7 +234,7 @@ public:
     /// offset based address, and \a style lets the user choose.
     ///
     /// @param[in] s
-    ///     The stream to which to dump the object descripton.
+    ///     The stream to which to dump the object description.
     ///
     /// @param[in] style
     ///     The display style for the address.
@@ -310,7 +314,7 @@ public:
     ///
     /// This function will first resolve its address to a load address.
     /// Then, if the address turns out to be in code address, return the
-    /// load address for a an opcode. This address object might have 
+    /// load address for an opcode. This address object might have 
     /// extra bits set (bit zero will be set to Thumb functions for an
     /// ARM target) that are required for changing the program counter
     /// and this function will remove any bits that are intended for
@@ -323,7 +327,8 @@ public:
     ///     not loaded.
     //------------------------------------------------------------------
     lldb::addr_t
-    GetOpcodeLoadAddress (Target *target) const;
+    GetOpcodeLoadAddress (Target *target,
+                          lldb::AddressClass addr_class = lldb::eAddressClassInvalid) const;
 
     //------------------------------------------------------------------
     /// Get the section relative offset value.
@@ -351,7 +356,7 @@ public:
     bool
     IsSectionOffset() const
     {
-        return IsValid() && (GetSection().get() != NULL);
+        return IsValid() && (GetSection().get() != nullptr);
     }
 
     //------------------------------------------------------------------
@@ -362,7 +367,7 @@ public:
     /// offset (for absolute addresses that have no section).
     ///
     /// @return
-    ///     Returns \b true if the the offset is valid, \b false
+    ///     Returns \b true if the offset is valid, \b false
     ///     otherwise.
     //------------------------------------------------------------------
     bool
@@ -370,7 +375,6 @@ public:
     {
         return m_offset != LLDB_INVALID_ADDRESS;
     }
-
 
     //------------------------------------------------------------------
     /// Get the memory cost of this object.
@@ -422,7 +426,9 @@ public:
     SetLoadAddress (lldb::addr_t load_addr, Target *target);
     
     bool
-    SetOpcodeLoadAddress (lldb::addr_t load_addr, Target *target);
+    SetOpcodeLoadAddress (lldb::addr_t load_addr,
+                          Target *target,
+                          lldb::AddressClass addr_class = lldb::eAddressClassInvalid);
 
     bool
     SetCallableLoadAddress (lldb::addr_t load_addr, Target *target);
@@ -502,6 +508,7 @@ public:
     {
         m_section_wp.reset();
     }
+
     //------------------------------------------------------------------
     /// Reconstruct a symbol context from an address.
     ///
@@ -561,9 +568,7 @@ protected:
     //------------------------------------------------------------------
     bool
     SectionWasDeletedPrivate() const;
-
 };
-
 
 //----------------------------------------------------------------------
 // NOTE: Be careful using this operator. It can correctly compare two 
@@ -581,12 +586,9 @@ protected:
 //----------------------------------------------------------------------
 bool operator<  (const Address& lhs, const Address& rhs);
 bool operator>  (const Address& lhs, const Address& rhs);
-
-
-
 bool operator== (const Address& lhs, const Address& rhs);
 bool operator!= (const Address& lhs, const Address& rhs);
 
 } // namespace lldb_private
 
-#endif  // liblldb_Address_h_
+#endif // liblldb_Address_h_

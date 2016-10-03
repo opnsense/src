@@ -25,7 +25,6 @@
  * $FreeBSD$
  */
 
-#include <linux/if_ether.h>
 #include <linux/etherdevice.h>
 #include <dev/mlx5/driver.h>
 #include <dev/mlx5/flow_table.h>

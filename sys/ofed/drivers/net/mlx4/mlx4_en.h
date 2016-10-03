@@ -69,6 +69,7 @@
 
 #define MLX4_EN_PAGE_SHIFT	12
 #define MLX4_EN_PAGE_SIZE	(1 << MLX4_EN_PAGE_SHIFT)
+#define	MLX4_NET_IP_ALIGN	2	/* bytes */
 #define DEF_RX_RINGS		16
 #define MAX_RX_RINGS		128
 #define MIN_RX_RINGS		4
@@ -315,9 +316,6 @@ struct mlx4_en_rx_ring {
 	u32 cons;
 	u32 buf_size;
 	u8  fcs_del;
-	u16 rx_alloc_order;
-	u32 rx_alloc_size;
-	u32 rx_buf_size;
 	u32 rx_mb_size;
 	int qpn;
 	u8 *buf;
@@ -556,9 +554,6 @@ struct mlx4_en_priv {
 	u32 tx_ring_num;
 	u32 rx_ring_num;
 	u32 rx_mb_size;
-	u16 rx_alloc_order;
-	u32 rx_alloc_size;
-	u32 rx_buf_size;
 
 	struct mlx4_en_tx_ring **tx_ring;
 	struct mlx4_en_rx_ring *rx_ring[MAX_RX_RINGS];
@@ -572,6 +567,7 @@ struct mlx4_en_priv {
 	struct delayed_work service_task;
 	struct mlx4_en_perf_stats pstats;
 	struct mlx4_en_pkt_stats pkstats;
+	struct mlx4_en_pkt_stats pkstats_last;
 	struct mlx4_en_flow_stats flowstats[MLX4_NUM_PRIORITIES];
 	struct mlx4_en_port_stats port_stats;
 	struct mlx4_en_vport_stats vport_stats;

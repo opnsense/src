@@ -11,47 +11,68 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/Object/COFF.h"
+#include "llvm/Object/MachO.h"
 #include "llvm/Object/ObjectFile.h"
-#include "llvm/ADT/OwningPtr.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/system_error.h"
+#include "llvm/Support/raw_ostream.h"
+#include <system_error>
 
 using namespace llvm;
 using namespace object;
 
 void ObjectFile::anchor() { }
 
-ObjectFile::ObjectFile(unsigned int Type, MemoryBuffer *source)
-  : Binary(Type, source) {
+ObjectFile::ObjectFile(unsigned int Type, MemoryBufferRef Source)
+    : SymbolicFile(Type, Source) {}
+
+bool SectionRef::containsSymbol(SymbolRef S) const {
+  ErrorOr<section_iterator> SymSec = S.getSection();
+  if (!SymSec)
+    return false;
+  return *this == **SymSec;
 }
 
-error_code ObjectFile::getSymbolAlignment(DataRefImpl DRI,
-                                          uint32_t &Result) const {
-  Result = 0;
-  return object_error::success;
+uint64_t ObjectFile::getSymbolValue(DataRefImpl Ref) const {
+  uint32_t Flags = getSymbolFlags(Ref);
+  if (Flags & SymbolRef::SF_Undefined)
+    return 0;
+  if (Flags & SymbolRef::SF_Common)
+    return getCommonSymbolSize(Ref);
+  return getSymbolValueImpl(Ref);
 }
+
+std::error_code ObjectFile::printSymbolName(raw_ostream &OS,
+                                            DataRefImpl Symb) const {
+  ErrorOr<StringRef> Name = getSymbolName(Symb);
+  if (std::error_code EC = Name.getError())
+    return EC;
+  OS << *Name;
+  return std::error_code();
+}
+
+uint32_t ObjectFile::getSymbolAlignment(DataRefImpl DRI) const { return 0; }
 
 section_iterator ObjectFile::getRelocatedSection(DataRefImpl Sec) const {
   return section_iterator(SectionRef(Sec, this));
 }
 
-ObjectFile *ObjectFile::createObjectFile(MemoryBuffer *Object) {
-  if (Object->getBufferSize() < 64) {
-    delete Object;
-    return 0;
-  }
+ErrorOr<std::unique_ptr<ObjectFile>>
+ObjectFile::createObjectFile(MemoryBufferRef Object, sys::fs::file_magic Type) {
+  StringRef Data = Object.getBuffer();
+  if (Type == sys::fs::file_magic::unknown)
+    Type = sys::fs::identify_magic(Data);
 
-  sys::fs::file_magic Type = sys::fs::identify_magic(Object->getBuffer());
   switch (Type) {
   case sys::fs::file_magic::unknown:
   case sys::fs::file_magic::bitcode:
   case sys::fs::file_magic::archive:
   case sys::fs::file_magic::macho_universal_binary:
   case sys::fs::file_magic::windows_resource:
-    delete Object;
-    return 0;
+    return object_error::invalid_file_type;
+  case sys::fs::file_magic::elf:
   case sys::fs::file_magic::elf_relocatable:
   case sys::fs::file_magic::elf_executable:
   case sys::fs::file_magic::elf_shared_object:
@@ -67,6 +88,7 @@ ObjectFile *ObjectFile::createObjectFile(MemoryBuffer *Object) {
   case sys::fs::file_magic::macho_bundle:
   case sys::fs::file_magic::macho_dynamically_linked_shared_lib_stub:
   case sys::fs::file_magic::macho_dsym_companion:
+  case sys::fs::file_magic::macho_kext_bundle:
     return createMachOObjectFile(Object);
   case sys::fs::file_magic::coff_object:
   case sys::fs::file_magic::coff_import_library:
@@ -76,9 +98,19 @@ ObjectFile *ObjectFile::createObjectFile(MemoryBuffer *Object) {
   llvm_unreachable("Unexpected Object File Type");
 }
 
-ObjectFile *ObjectFile::createObjectFile(StringRef ObjectPath) {
-  OwningPtr<MemoryBuffer> File;
-  if (MemoryBuffer::getFile(ObjectPath, File))
-    return NULL;
-  return createObjectFile(File.take());
+ErrorOr<OwningBinary<ObjectFile>>
+ObjectFile::createObjectFile(StringRef ObjectPath) {
+  ErrorOr<std::unique_ptr<MemoryBuffer>> FileOrErr =
+      MemoryBuffer::getFile(ObjectPath);
+  if (std::error_code EC = FileOrErr.getError())
+    return EC;
+  std::unique_ptr<MemoryBuffer> Buffer = std::move(FileOrErr.get());
+
+  ErrorOr<std::unique_ptr<ObjectFile>> ObjOrErr =
+      createObjectFile(Buffer->getMemBufferRef());
+  if (std::error_code EC = ObjOrErr.getError())
+    return EC;
+  std::unique_ptr<ObjectFile> Obj = std::move(ObjOrErr.get());
+
+  return OwningBinary<ObjectFile>(std::move(Obj), std::move(Buffer));
 }

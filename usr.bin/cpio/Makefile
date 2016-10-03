@@ -1,37 +1,29 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
-LIBARCHIVEDIR=	${.CURDIR}/../../contrib/libarchive
-LIBARCHIVECONFDIR=	${.CURDIR}/../../lib/libarchive
+_LIBARCHIVEDIR=	${.CURDIR}/../../contrib/libarchive
+_LIBARCHIVECONFDIR=	${.CURDIR}/../../lib/libarchive
 
 PROG=	bsdcpio
-BSDCPIO_VERSION_STRING=	3.1.2
+BSDCPIO_VERSION_STRING=	3.2.1
 
-.PATH:	${LIBARCHIVEDIR}/cpio
+.PATH:	${_LIBARCHIVEDIR}/cpio
 SRCS=	cpio.c cmdline.c
 
-.PATH:	${LIBARCHIVEDIR}/libarchive_fe
-SRCS+=	err.c line_reader.c
+.PATH:	${_LIBARCHIVEDIR}/libarchive_fe
+SRCS+=	err.c line_reader.c passphrase.c
 
 CFLAGS+= -DBSDCPIO_VERSION_STRING=\"${BSDCPIO_VERSION_STRING}\"
-CFLAGS+= -DPLATFORM_CONFIG_H=\"${LIBARCHIVECONFDIR}/config_freebsd.h\"
-CFLAGS+= -I${LIBARCHIVEDIR}/cpio -I${LIBARCHIVEDIR}/libarchive_fe
+CFLAGS+= -DPLATFORM_CONFIG_H=\"${_LIBARCHIVECONFDIR}/config_freebsd.h\"
+CFLAGS+= -I${_LIBARCHIVEDIR}/cpio -I${_LIBARCHIVEDIR}/libarchive_fe
 
 .ifdef RELEASE_CRUNCH
 # FreeBSD's installer uses cpio in crunched binaries that are
 # statically linked, cannot use -lcrypto, and are size sensitive.
 CFLAGS+= -DSMALLER
 .endif
-DPADD=	${LIBARCHIVE} ${LIBZ} ${LIBBZ2} ${LIBLZMA} ${LIBPTHREAD} ${LIBBSDXML}
-LDADD=	-larchive -lz -lbz2 -llzma -lpthread -lbsdxml
-.if ${MK_OPENSSL} != "no"
-DPADD+=	${LIBCRYPTO}
-LDADD+= -lcrypto
-.else
-DPADD+= ${LIBMD}
-LDADD+= -lmd
-.endif
+LIBADD=	archive
 
 .if ${MK_ICONV} != "no"
 CFLAGS+=	-DHAVE_ICONV=1 -DHAVE_ICONV_H=1 -DICONV_CONST=const

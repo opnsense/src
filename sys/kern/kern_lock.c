@@ -29,7 +29,6 @@
 #include "opt_adaptive_lockmgrs.h"
 #include "opt_ddb.h"
 #include "opt_hwpmc_hooks.h"
-#include "opt_kdtrace.h"
 
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
@@ -70,12 +69,8 @@ CTASSERT(LK_UNLOCKED == (LK_UNLOCKED &
 
 #ifndef INVARIANTS
 #define	_lockmgr_assert(lk, what, file, line)
-#define	TD_LOCKS_INC(td)
-#define	TD_LOCKS_DEC(td)
-#else
-#define	TD_LOCKS_INC(td)	((td)->td_locks++)
-#define	TD_LOCKS_DEC(td)	((td)->td_locks--)
 #endif
+
 #define	TD_SLOCKS_INC(td)	((td)->td_lk_slocks++)
 #define	TD_SLOCKS_DEC(td)	((td)->td_lk_slocks--)
 
@@ -286,7 +281,7 @@ wakeupshlk(struct lock *lk, const char *file, int line)
 		 * exclusive waiters bit anyway.
 		 * Please note that lk_exslpfail count may be lying about
 		 * the real number of waiters with the LK_SLEEPFAIL flag on
-		 * because they may be used in conjuction with interruptible
+		 * because they may be used in conjunction with interruptible
 		 * sleeps so lk_exslpfail might be considered an 'upper limit'
 		 * bound, including the edge cases.
 		 */
@@ -792,8 +787,10 @@ __lockmgr_args(struct lock *lk, u_int flags, struct lock_object *ilk,
 			break;
 		}
 
-		while (!atomic_cmpset_acq_ptr(&lk->lk_lock, LK_UNLOCKED,
-		    tid)) {
+		for (;;) {
+			if (lk->lk_lock == LK_UNLOCKED &&
+			    atomic_cmpset_acq_ptr(&lk->lk_lock, LK_UNLOCKED, tid))
+				break;
 #ifdef HWPMC_HOOKS
 			PMC_SOFT_CALL( , , lock, failed);
 #endif
@@ -1063,7 +1060,7 @@ __lockmgr_args(struct lock *lk, u_int flags, struct lock_object *ilk,
 			 * Please note that lk_exslpfail count may be lying
 			 * about the real number of waiters with the
 			 * LK_SLEEPFAIL flag on because they may be used in
-			 * conjuction with interruptible sleeps so
+			 * conjunction with interruptible sleeps so
 			 * lk_exslpfail might be considered an 'upper limit'
 			 * bound, including the edge cases.
 			 */
@@ -1129,7 +1126,11 @@ __lockmgr_args(struct lock *lk, u_int flags, struct lock_object *ilk,
 			    __func__, iwmesg, file, line);
 		}
 
-		while (!atomic_cmpset_acq_ptr(&lk->lk_lock, LK_UNLOCKED, tid)) {
+		for (;;) {
+			if (lk->lk_lock == LK_UNLOCKED &&
+			    atomic_cmpset_acq_ptr(&lk->lk_lock, LK_UNLOCKED, tid))
+				break;
+
 #ifdef HWPMC_HOOKS
 			PMC_SOFT_CALL( , , lock, failed);
 #endif
@@ -1176,7 +1177,7 @@ __lockmgr_args(struct lock *lk, u_int flags, struct lock_object *ilk,
 				 * Please note that lk_exslpfail count may be
 				 * lying about the real number of waiters with
 				 * the LK_SLEEPFAIL flag on because they may
-				 * be used in conjuction with interruptible
+				 * be used in conjunction with interruptible
 				 * sleeps so lk_exslpfail might be considered
 				 * an 'upper limit' bound, including the edge
 				 * cases.

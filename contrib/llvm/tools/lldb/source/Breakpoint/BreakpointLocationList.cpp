@@ -7,7 +7,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-
 // C Includes
 // C++ Includes
 // Other libraries and framework includes
@@ -22,7 +21,6 @@
 #include "lldb/Target/SectionLoadList.h"
 #include "lldb/Target/Target.h"
 
-
 using namespace lldb;
 using namespace lldb_private;
 
@@ -32,13 +30,11 @@ BreakpointLocationList::BreakpointLocationList(Breakpoint &owner) :
     m_address_to_location (),
     m_mutex (Mutex::eMutexTypeRecursive),
     m_next_id (0),
-    m_new_location_recorder (NULL)
+    m_new_location_recorder (nullptr)
 {
 }
 
-BreakpointLocationList::~BreakpointLocationList()
-{
-}
+BreakpointLocationList::~BreakpointLocationList() = default;
 
 BreakpointLocationSP
 BreakpointLocationList::Create (const Address &addr, bool resolve_indirect_symbols)
@@ -152,7 +148,7 @@ BreakpointLocationList::FindByAddress (const Address &addr) const
 void
 BreakpointLocationList::Dump (Stream *s) const
 {
-    s->Printf("%p: ", this);
+    s->Printf("%p: ", static_cast<const void*>(this));
     //s->Indent();
     Mutex::Locker locker (m_mutex);
     s->Printf("BreakpointLocationList with %" PRIu64 " BreakpointLocations:\n", (uint64_t)m_locations.size());
@@ -162,7 +158,6 @@ BreakpointLocationList::Dump (Stream *s) const
         (*pos).get()->Dump(s);
     s->IndentLess();
 }
-
 
 BreakpointLocationSP
 BreakpointLocationList::GetByIndex (size_t i)
@@ -272,6 +267,19 @@ BreakpointLocationList::AddLocation (const Address &addr, bool resolve_indirect_
     return bp_loc_sp;
 }
 
+void
+BreakpointLocationList::SwapLocation (BreakpointLocationSP to_location_sp, BreakpointLocationSP from_location_sp)
+{
+    if (!from_location_sp || !to_location_sp)
+        return;
+    
+    m_address_to_location.erase(to_location_sp->GetAddress());
+    to_location_sp->SwapLocation(from_location_sp);
+    RemoveLocation(from_location_sp);
+    m_address_to_location[to_location_sp->GetAddress()] = to_location_sp;
+    to_location_sp->ResolveBreakpointSite();
+}
+
 bool
 BreakpointLocationList::RemoveLocation (const lldb::BreakpointLocationSP &bp_loc_sp)
 {
@@ -290,7 +298,7 @@ BreakpointLocationList::RemoveLocation (const lldb::BreakpointLocationSP &bp_loc
                 return true;
             }
         }
-	}
+    }
     return false;
 }
 
@@ -334,7 +342,7 @@ void
 BreakpointLocationList::StartRecordingNewLocations (BreakpointLocationCollection &new_locations)
 {
     Mutex::Locker locker (m_mutex);
-    assert (m_new_location_recorder == NULL);
+    assert(m_new_location_recorder == nullptr);
     m_new_location_recorder = &new_locations;
 }
 
@@ -342,6 +350,19 @@ void
 BreakpointLocationList::StopRecordingNewLocations ()
 {
     Mutex::Locker locker (m_mutex);
-    m_new_location_recorder = NULL;
+    m_new_location_recorder = nullptr;
 }
 
+void
+BreakpointLocationList::Compact()
+{
+    lldb::break_id_t highest_id = 0;
+    
+    for (BreakpointLocationSP loc_sp : m_locations)
+    {
+        lldb::break_id_t cur_id = loc_sp->GetID();
+        if (cur_id > highest_id)
+            highest_id = cur_id;
+    }
+    m_next_id = highest_id;
+}

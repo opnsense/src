@@ -12,13 +12,12 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_AST_CANONICAL_TYPE_H
-#define LLVM_CLANG_AST_CANONICAL_TYPE_H
+#ifndef LLVM_CLANG_AST_CANONICALTYPE_H
+#define LLVM_CLANG_AST_CANONICALTYPE_H
 
 #include "clang/AST/Type.h"
+#include "llvm/ADT/iterator.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/type_traits.h"
-#include <iterator>
 
 namespace clang {
 
@@ -60,9 +59,9 @@ public:
 
   /// \brief Converting constructor that permits implicit upcasting of
   /// canonical type pointers.
-  template<typename U>
-  CanQual(const CanQual<U>& Other,
-          typename llvm::enable_if<llvm::is_base_of<T, U>, int>::type = 0);
+  template <typename U>
+  CanQual(const CanQual<U> &Other,
+          typename std::enable_if<std::is_base_of<T, U>::value, int>::type = 0);
 
   /// \brief Retrieve the underlying type pointer, which refers to a
   /// canonical type.
@@ -81,7 +80,7 @@ public:
   operator QualType() const { return Stored; }
 
   /// \brief Implicit conversion to bool.
-  LLVM_EXPLICIT operator bool() const { return !isNull(); }
+  explicit operator bool() const { return !isNull(); }
   
   bool isNull() const {
     return Stored.isNull();
@@ -382,93 +381,20 @@ namespace clang {
 
 /// \brief Iterator adaptor that turns an iterator over canonical QualTypes
 /// into an iterator over CanQualTypes.
-template<typename InputIterator>
-class CanTypeIterator {
-  InputIterator Iter;
+template <typename InputIterator>
+struct CanTypeIterator
+    : llvm::iterator_adaptor_base<
+          CanTypeIterator<InputIterator>, InputIterator,
+          typename std::iterator_traits<InputIterator>::iterator_category,
+          CanQualType,
+          typename std::iterator_traits<InputIterator>::difference_type,
+          CanProxy<Type>, CanQualType> {
+  CanTypeIterator() {}
+  explicit CanTypeIterator(InputIterator Iter)
+      : CanTypeIterator::iterator_adaptor_base(std::move(Iter)) {}
 
-public:
-  typedef CanQualType    value_type;
-  typedef value_type     reference;
-  typedef CanProxy<Type> pointer;
-  typedef typename std::iterator_traits<InputIterator>::difference_type
-    difference_type;
-  typedef typename std::iterator_traits<InputIterator>::iterator_category
-    iterator_category;
-
-  CanTypeIterator() : Iter() { }
-  explicit CanTypeIterator(InputIterator Iter) : Iter(Iter) { }
-
-  // Input iterator
-  reference operator*() const {
-    return CanQualType::CreateUnsafe(*Iter);
-  }
-
-  pointer operator->() const;
-
-  CanTypeIterator &operator++() {
-    ++Iter;
-    return *this;
-  }
-
-  CanTypeIterator operator++(int) {
-    CanTypeIterator Tmp(*this);
-    ++Iter;
-    return Tmp;
-  }
-
-  friend bool operator==(const CanTypeIterator& X, const CanTypeIterator &Y) {
-    return X.Iter == Y.Iter;
-  }
-  friend bool operator!=(const CanTypeIterator& X, const CanTypeIterator &Y) {
-    return X.Iter != Y.Iter;
-  }
-
-  // Bidirectional iterator
-  CanTypeIterator &operator--() {
-    --Iter;
-    return *this;
-  }
-
-  CanTypeIterator operator--(int) {
-    CanTypeIterator Tmp(*this);
-    --Iter;
-    return Tmp;
-  }
-
-  // Random access iterator
-  reference operator[](difference_type n) const {
-    return CanQualType::CreateUnsafe(Iter[n]);
-  }
-
-  CanTypeIterator &operator+=(difference_type n) {
-    Iter += n;
-    return *this;
-  }
-
-  CanTypeIterator &operator-=(difference_type n) {
-    Iter -= n;
-    return *this;
-  }
-
-  friend CanTypeIterator operator+(CanTypeIterator X, difference_type n) {
-    X += n;
-    return X;
-  }
-
-  friend CanTypeIterator operator+(difference_type n, CanTypeIterator X) {
-    X += n;
-    return X;
-  }
-
-  friend CanTypeIterator operator-(CanTypeIterator X, difference_type n) {
-    X -= n;
-    return X;
-  }
-
-  friend difference_type operator-(const CanTypeIterator &X,
-                                   const CanTypeIterator &Y) {
-    return X - Y;
-  }
+  CanQualType operator*() const { return CanQualType::CreateUnsafe(*this->I); }
+  CanProxy<Type> operator->() const;
 };
 
 template<>
@@ -541,39 +467,39 @@ struct CanProxyAdaptor<ExtVectorType> : public CanProxyBase<ExtVectorType> {
 
 template<>
 struct CanProxyAdaptor<FunctionType> : public CanProxyBase<FunctionType> {
-  LLVM_CLANG_CANPROXY_TYPE_ACCESSOR(getResultType)
+  LLVM_CLANG_CANPROXY_TYPE_ACCESSOR(getReturnType)
   LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(FunctionType::ExtInfo, getExtInfo)
 };
 
 template<>
 struct CanProxyAdaptor<FunctionNoProtoType>
   : public CanProxyBase<FunctionNoProtoType> {
-  LLVM_CLANG_CANPROXY_TYPE_ACCESSOR(getResultType)
+  LLVM_CLANG_CANPROXY_TYPE_ACCESSOR(getReturnType)
   LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(FunctionType::ExtInfo, getExtInfo)
 };
 
 template<>
 struct CanProxyAdaptor<FunctionProtoType>
   : public CanProxyBase<FunctionProtoType> {
-  LLVM_CLANG_CANPROXY_TYPE_ACCESSOR(getResultType)
+  LLVM_CLANG_CANPROXY_TYPE_ACCESSOR(getReturnType)
   LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(FunctionType::ExtInfo, getExtInfo)
-  LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(unsigned, getNumArgs)
-  CanQualType getArgType(unsigned i) const {
-    return CanQualType::CreateUnsafe(this->getTypePtr()->getArgType(i));
+  LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(unsigned, getNumParams)
+  CanQualType getParamType(unsigned i) const {
+    return CanQualType::CreateUnsafe(this->getTypePtr()->getParamType(i));
   }
 
   LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(bool, isVariadic)
   LLVM_CLANG_CANPROXY_SIMPLE_ACCESSOR(unsigned, getTypeQuals)
 
-  typedef CanTypeIterator<FunctionProtoType::arg_type_iterator>
-    arg_type_iterator;
+  typedef CanTypeIterator<FunctionProtoType::param_type_iterator>
+  param_type_iterator;
 
-  arg_type_iterator arg_type_begin() const {
-    return arg_type_iterator(this->getTypePtr()->arg_type_begin());
+  param_type_iterator param_type_begin() const {
+    return param_type_iterator(this->getTypePtr()->param_type_begin());
   }
 
-  arg_type_iterator arg_type_end() const {
-    return arg_type_iterator(this->getTypePtr()->arg_type_end());
+  param_type_iterator param_type_end() const {
+    return param_type_iterator(this->getTypePtr()->param_type_end());
   }
 
   // Note: canonical function types never have exception specifications
@@ -728,13 +654,12 @@ CanProxy<T> CanQual<T>::operator->() const {
   return CanProxy<T>(*this);
 }
 
-template<typename InputIterator>
-typename CanTypeIterator<InputIterator>::pointer
-CanTypeIterator<InputIterator>::operator->() const {
+template <typename InputIterator>
+CanProxy<Type> CanTypeIterator<InputIterator>::operator->() const {
   return CanProxy<Type>(*this);
 }
 
 }
 
 
-#endif // LLVM_CLANG_AST_CANONICAL_TYPE_H
+#endif

@@ -95,15 +95,12 @@ static int ukbd_no_leds = 0;
 static int ukbd_pollrate = 0;
 
 static SYSCTL_NODE(_hw_usb, OID_AUTO, ukbd, CTLFLAG_RW, 0, "USB keyboard");
-SYSCTL_INT(_hw_usb_ukbd, OID_AUTO, debug, CTLFLAG_RW | CTLFLAG_TUN,
+SYSCTL_INT(_hw_usb_ukbd, OID_AUTO, debug, CTLFLAG_RWTUN,
     &ukbd_debug, 0, "Debug level");
-TUNABLE_INT("hw.usb.ukbd.debug", &ukbd_debug);
-SYSCTL_INT(_hw_usb_ukbd, OID_AUTO, no_leds, CTLFLAG_RW | CTLFLAG_TUN,
+SYSCTL_INT(_hw_usb_ukbd, OID_AUTO, no_leds, CTLFLAG_RWTUN,
     &ukbd_no_leds, 0, "Disables setting of keyboard leds");
-TUNABLE_INT("hw.usb.ukbd.no_leds", &ukbd_no_leds);
-SYSCTL_INT(_hw_usb_ukbd, OID_AUTO, pollrate, CTLFLAG_RW | CTLFLAG_TUN,
+SYSCTL_INT(_hw_usb_ukbd, OID_AUTO, pollrate, CTLFLAG_RWTUN,
     &ukbd_pollrate, 0, "Force this polling rate, 1-1000Hz");
-TUNABLE_INT("hw.usb.ukbd.pollrate", &ukbd_pollrate);
 #endif
 
 #define	UKBD_EMULATE_ATSCANCODE	       1
@@ -1913,7 +1910,7 @@ ukbd_ioctl(keyboard_t *kbd, u_long cmd, caddr_t arg)
 	int result;
 
 	/*
-	 * XXX Check of someone is calling us from a critical section:
+	 * XXX Check if someone is calling us from a critical section:
 	 */
 	if (curthread->td_critnest != 0)
 		return (EDEADLK);
@@ -2090,7 +2087,7 @@ ukbd_key2scan(struct ukbd_softc *sc, int code, int shift, int up)
 		0x72,   /* Apple Keyboard JIS (Eisu) */
 	};
 
-	if ((code >= 89) && (code < (int)(89 + (sizeof(scan) / sizeof(scan[0]))))) {
+	if ((code >= 89) && (code < (int)(89 + nitems(scan)))) {
 		code = scan[code - 89];
 	}
 	/* Pause/Break */
@@ -2181,3 +2178,4 @@ static driver_t ukbd_driver = {
 DRIVER_MODULE(ukbd, uhub, ukbd_driver, ukbd_devclass, ukbd_driver_load, 0);
 MODULE_DEPEND(ukbd, usb, 1, 1, 1);
 MODULE_VERSION(ukbd, 1);
+USB_PNP_HOST_INFO(ukbd_devs);

@@ -58,7 +58,7 @@
 static int uep_debug = 0;
 
 static SYSCTL_NODE(_hw_usb, OID_AUTO, uep, CTLFLAG_RW, 0, "USB uep");
-SYSCTL_INT(_hw_usb_uep, OID_AUTO, debug, CTLFLAG_RW,
+SYSCTL_INT(_hw_usb_uep, OID_AUTO, debug, CTLFLAG_RWTUN,
     &uep_debug, 0, "Debug level");
 #endif
 
@@ -441,3 +441,4 @@ static driver_t uep_driver = {
 DRIVER_MODULE(uep, uhub, uep_driver, uep_devclass, NULL, NULL);
 MODULE_DEPEND(uep, usb, 1, 1, 1);
 MODULE_VERSION(uep, 1);
+USB_PNP_HOST_INFO(uep_devs);

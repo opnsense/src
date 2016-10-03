@@ -70,6 +70,8 @@ static struct g_geom *g_flashmap_taste(struct g_class *,
 static void g_flashmap_config(struct gctl_req *, struct g_class *,
     const char *);
 static int g_flashmap_load(device_t, struct g_flashmap_head *);
+static int (*flash_fill_slices)(device_t, struct flash_slice *, int *) =
+    fdt_flash_fill_slices;
 
 MALLOC_DECLARE(M_FLASHMAP);
 MALLOC_DEFINE(M_FLASHMAP, "geom_flashmap", "GEOM flash memory slicer class");
@@ -188,8 +190,12 @@ g_flashmap_taste(struct g_class *mp, struct g_provider *pp, int flags)
 		size = sizeof(device_t);
 		if (g_io_getattr("NAND::device", cp, &size, &dev)) {
 			size = sizeof(device_t);
-			if (g_io_getattr("CFI::device", cp, &size, &dev))
-				break;
+			if (g_io_getattr("CFI::device", cp, &size, &dev)) {
+				size = sizeof(device_t);
+				if (g_io_getattr("SPI::device", cp, &size,
+				    &dev))
+					break;
+			}
 		}
 
 		nslices = g_flashmap_load(dev, &head);
@@ -230,7 +236,8 @@ g_flashmap_load(device_t dev, struct g_flashmap_head *head)
 
 	buf_size = sizeof(struct flash_slice) * FLASH_SLICES_MAX_NUM;
 	slices = malloc(buf_size, M_FLASHMAP, M_WAITOK | M_ZERO);
-	if (flash_fill_slices(dev, slices, &nslices) == 0) {
+	if (flash_fill_slices &&
+	    flash_fill_slices(dev, slices, &nslices) == 0) {
 		for (i = 0; i < nslices; i++) {
 			slice = malloc(sizeof(struct g_flashmap_slice),
 			    M_FLASHMAP, M_WAITOK);
@@ -245,6 +252,12 @@ g_flashmap_load(device_t dev, struct g_flashmap_head *head)
 
 	free(slices, M_FLASHMAP);
 	return (nslices);
+}
+
+void flash_register_slicer(int (*slicer)(device_t, struct flash_slice *, int *))
+{
+
+	flash_fill_slices = slicer;
 }
 
 static struct g_class g_flashmap_class = {

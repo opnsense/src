@@ -2,15 +2,12 @@
 
 ELF_SCR_EXT=	x xbn xc xd xdc xdw xn xr xs xsc xsw xu xw
 .include "../Makefile.inc0"
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 .PATH: ${SRCDIR}/ld
 
-.if ${TARGET_ARCH} == "ia64"
-CFLAGS+= -O1
-.endif
-
-PROG=	ld
+PROG=	ld.bfd
+MAN=	ld.1
 SCRIPTDIR= /usr/libdata/ldscripts
 SRCS+=	ldcref.c \
 	ldctor.c \
@@ -52,7 +49,7 @@ CLEANFILES+=	ldemul-list.h stringify.sed
 
 FILES=		${LDSCRIPTS:S|^|ldscripts/|}
 FILESDIR=	${SCRIPTDIR}
-LINKS=		${BINDIR}/ld ${BINDIR}/ld.bfd
+LINKS=		${BINDIR}/ld.bfd ${BINDIR}/ld
 
 HOST=		${TARGET_TUPLE}
 LIBSEARCHPATH=	\"=/lib\":\"=/usr/lib\"
@@ -72,7 +69,9 @@ ldemul-list.h:
 	echo "${EMXFR}" > ${.TARGET}
 	echo "#define EMULATION_LIST ${EMLST} 0" >> ${.TARGET}
 
-stringify.sed:
-	ln -sf ${SRCDIR}/ld/emultempl/astring.sed ${.TARGET}
+stringify.sed: ${SRCDIR}/ld/emultempl/astring.sed .NOMETA
+	ln -sf ${.ALLSRC} ${.TARGET}
+
+GENDIRDEPS_FILTER.host+= Nusr.bin/yacc
 
 .include <bsd.prog.mk>

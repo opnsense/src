@@ -46,14 +46,7 @@ __FBSDID("$FreeBSD$");
 #include "nscache.h"
 #endif
 
-extern int _ht_getnetbyname(void *, void *, va_list);
-extern int _dns_getnetbyname(void *, void *, va_list);
-extern int _nis_getnetbyname(void *, void *, va_list);
-extern int _ht_getnetbyaddr(void *, void *, va_list);
-extern int _dns_getnetbyaddr(void *, void *, va_list);
-extern int _nis_getnetbyaddr(void *, void *, va_list);
-
-/* Network lookup order if nsswitch.conf is broken or nonexistant */
+/* Network lookup order if nsswitch.conf is broken or nonexistent */
 static const ns_src default_src[] = {
 	{ NSSRC_FILES, NS_SUCCESS },
 	{ NSSRC_DNS, NS_SUCCESS },

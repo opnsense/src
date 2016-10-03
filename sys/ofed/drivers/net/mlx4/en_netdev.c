@@ -264,11 +264,10 @@ static inline struct mlx4_en_filter *
 mlx4_en_filter_find(struct mlx4_en_priv *priv, __be32 src_ip, __be32 dst_ip,
 		    u8 ip_proto, __be16 src_port, __be16 dst_port)
 {
-	struct hlist_node *elem;
 	struct mlx4_en_filter *filter;
 	struct mlx4_en_filter *ret = NULL;
 
-	hlist_for_each_entry(filter, elem,
+	hlist_for_each_entry(filter,
 			     filter_hash_bucket(priv, src_ip, dst_ip,
 						src_port, dst_port),
 			     filter_chain) {
@@ -607,13 +606,13 @@ static void mlx4_en_put_qp(struct mlx4_en_priv *priv)
 		mlx4_unregister_mac(dev, priv->port, mac);
 	} else {
 		struct mlx4_mac_entry *entry;
-		struct hlist_node *n, *tmp;
+		struct hlist_node *tmp;
 		struct hlist_head *bucket;
 		unsigned int i;
 
 		for (i = 0; i < MLX4_EN_MAC_HASH_SIZE; ++i) {
 			bucket = &priv->mac_hash[i];
-			hlist_for_each_entry_safe(entry, n, tmp, bucket, hlist) {
+			hlist_for_each_entry_safe(entry, tmp, bucket, hlist) {
 				mac = mlx4_mac_to_u64(entry->mac);
 				en_dbg(DRV, priv, "Registering MAC: %pM for deleting\n",
 				       entry->mac);
@@ -1244,10 +1243,6 @@ int mlx4_en_start_port(struct net_device *dev)
 	/* Calculate Rx buf size */
 	dev->if_mtu = min(dev->if_mtu, priv->max_mtu);
         mlx4_en_calc_rx_buf(dev);
-	priv->rx_alloc_size = max_t(int, 2 * roundup_pow_of_two(priv->rx_mb_size),
-				    PAGE_SIZE);
-	priv->rx_alloc_order = get_order(priv->rx_alloc_size);
-	priv->rx_buf_size = roundup_pow_of_two(priv->rx_mb_size);
 	en_dbg(DRV, priv, "Rx buf size:%d\n", priv->rx_mb_size);
 
 	/* Configure rx cq's and rings */
@@ -2174,10 +2169,12 @@ int mlx4_en_init_netdev(struct mlx4_en_dev *mdev, int port,
 	if (mdev->LSO_support)
 		dev->if_capabilities |= IFCAP_TSO4 | IFCAP_TSO6 | IFCAP_VLAN_HWTSO;
 
+#if __FreeBSD_version >= 1100000
 	/* set TSO limits so that we don't have to drop TX packets */
 	dev->if_hw_tsomax = MLX4_EN_TX_MAX_PAYLOAD_SIZE - (ETHER_HDR_LEN + ETHER_VLAN_ENCAP_LEN) /* hdr */;
 	dev->if_hw_tsomaxsegcount = MLX4_EN_TX_MAX_MBUF_FRAGS - 1 /* hdr */;
 	dev->if_hw_tsomaxsegsize = MLX4_EN_TX_MAX_MBUF_SIZE;
+#endif
 
 	dev->if_capenable = dev->if_capabilities;
 

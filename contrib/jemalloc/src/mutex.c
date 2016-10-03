@@ -6,7 +6,7 @@
 #endif
 
 #ifndef _CRT_SPINCOUNT
-#define _CRT_SPINCOUNT 4000
+#define	_CRT_SPINCOUNT 4000
 #endif
 
 /******************************************************************************/
@@ -74,19 +74,23 @@ _pthread_mutex_init_calloc_cb(pthread_mutex_t *mutex,
 {
 
 	return (((int (*)(pthread_mutex_t *, void *(*)(size_t, size_t)))
-	    __libc_interposing[INTERPOS__pthread_mutex_init_calloc_cb])(
-	   mutex, calloc_cb));
+	    __libc_interposing[INTERPOS__pthread_mutex_init_calloc_cb])(mutex,
+	    calloc_cb));
 }
 #endif
 
 bool
-malloc_mutex_init(malloc_mutex_t *mutex)
+malloc_mutex_init(malloc_mutex_t *mutex, const char *name, witness_rank_t rank)
 {
 
 #ifdef _WIN32
+#  if _WIN32_WINNT >= 0x0600
+	InitializeSRWLock(&mutex->lock);
+#  else
 	if (!InitializeCriticalSectionAndSpinCount(&mutex->lock,
 	    _CRT_SPINCOUNT))
 		return (true);
+#  endif
 #elif (defined(JEMALLOC_OSSPIN))
 	mutex->lock = 0;
 #elif (defined(JEMALLOC_MUTEX_INIT_CB))
@@ -94,8 +98,8 @@ malloc_mutex_init(malloc_mutex_t *mutex)
 		mutex->postponed_next = postponed_mutexes;
 		postponed_mutexes = mutex;
 	} else {
-		if (_pthread_mutex_init_calloc_cb(&mutex->lock, base_calloc) !=
-		    0)
+		if (_pthread_mutex_init_calloc_cb(&mutex->lock,
+		    bootstrap_calloc) != 0)
 			return (true);
 	}
 #else
@@ -110,31 +114,34 @@ malloc_mutex_init(malloc_mutex_t *mutex)
 	}
 	pthread_mutexattr_destroy(&attr);
 #endif
+	if (config_debug)
+		witness_init(&mutex->witness, name, rank, NULL);
 	return (false);
 }
 
 void
-malloc_mutex_prefork(malloc_mutex_t *mutex)
+malloc_mutex_prefork(tsdn_t *tsdn, malloc_mutex_t *mutex)
 {
 
-	malloc_mutex_lock(mutex);
+	malloc_mutex_lock(tsdn, mutex);
 }
 
 void
-malloc_mutex_postfork_parent(malloc_mutex_t *mutex)
+malloc_mutex_postfork_parent(tsdn_t *tsdn, malloc_mutex_t *mutex)
 {
 
-	malloc_mutex_unlock(mutex);
+	malloc_mutex_unlock(tsdn, mutex);
 }
 
 void
-malloc_mutex_postfork_child(malloc_mutex_t *mutex)
+malloc_mutex_postfork_child(tsdn_t *tsdn, malloc_mutex_t *mutex)
 {
 
 #ifdef JEMALLOC_MUTEX_INIT_CB
-	malloc_mutex_unlock(mutex);
+	malloc_mutex_unlock(tsdn, mutex);
 #else
-	if (malloc_mutex_init(mutex)) {
+	if (malloc_mutex_init(mutex, mutex->witness.name,
+	    mutex->witness.rank)) {
 		malloc_printf("<jemalloc>: Error re-initializing mutex in "
 		    "child\n");
 		if (opt_abort)
@@ -151,7 +158,7 @@ malloc_mutex_first_thread(void)
 	postpone_init = false;
 	while (postponed_mutexes != NULL) {
 		if (_pthread_mutex_init_calloc_cb(&postponed_mutexes->lock,
-		    base_calloc) != 0)
+		    bootstrap_calloc) != 0)
 			return (true);
 		postponed_mutexes = postponed_mutexes->postponed_next;
 	}
@@ -160,7 +167,7 @@ malloc_mutex_first_thread(void)
 }
 
 bool
-mutex_boot(void)
+malloc_mutex_boot(void)
 {
 
 #ifndef JEMALLOC_MUTEX_INIT_CB

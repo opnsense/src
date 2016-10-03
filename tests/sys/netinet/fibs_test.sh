@@ -98,9 +98,12 @@ arpresolve_checks_interface_fib_body()
 }
 arpresolve_checks_interface_fib_cleanup()
 {
-	for PID in `cat "processes_to_kill"`; do
-		kill $PID
-	done
+	if [ -f processes_to_kill ]; then
+		for pid in $(cat processes_to_kill); do
+			kill "${pid}"
+		done
+		rm -f processes_to_kill
+	fi
 	cleanup_tap
 }
 
@@ -366,7 +369,6 @@ udp_dontroute_head()
 
 udp_dontroute_body()
 {
-	atf_expect_fail "kern/187553 Source address selection for UDP packets with SO_DONTROUTE uses the default FIB"
 	# Configure the TAP interface to use an RFC5737 nonrouteable address
 	# and a non-default fib
 	ADDR0="192.0.2.2"
@@ -477,8 +479,10 @@ setup_tap()
 
 cleanup_tap()
 {
-	for TAPD in `cat "tap_devices_to_cleanup"`; do
-		ifconfig ${TAPD} destroy
-	done
-	rm "tap_devices_to_cleanup"
+	if [ -f tap_devices_to_cleanup ]; then
+		for tap_device in $(cat tap_devices_to_cleanup); do
+			ifconfig "${tap_device}" destroy
+		done
+		rm -f tap_devices_to_cleanup
+	fi
 }

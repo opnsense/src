@@ -110,12 +110,10 @@ SYSCTL_PROC(_debug_kdb, OID_AUTO, trap_code,
 SYSCTL_INT(_debug_kdb, OID_AUTO, break_to_debugger,
     CTLFLAG_RWTUN | CTLFLAG_SECURE,
     &kdb_break_to_debugger, 0, "Enable break to debugger");
-TUNABLE_INT("debug.kdb.break_to_debugger", &kdb_break_to_debugger);
 
 SYSCTL_INT(_debug_kdb, OID_AUTO, alt_break_to_debugger,
     CTLFLAG_RWTUN | CTLFLAG_SECURE,
     &kdb_alt_break_to_debugger, 0, "Enable alternative break to debugger");
-TUNABLE_INT("debug.kdb.alt_break_to_debugger", &kdb_alt_break_to_debugger);
 
 /*
  * Flag to indicate to debuggers why the debugger was entered.

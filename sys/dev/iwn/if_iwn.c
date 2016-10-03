@@ -1,11 +1,10 @@
 /*-
- * Copyright (c) 2013 Cedric GROSS <c.gross@kreiz-it.fr>
- * Copyright (c) 2011 Intel Corporation
- * Copyright (c) 2007-2009
- *	Damien Bergamini <damien.bergamini@free.fr>
- * Copyright (c) 2008
- *	Benjamin Close <benjsc@FreeBSD.org>
+ * Copyright (c) 2007-2009 Damien Bergamini <damien.bergamini@free.fr>
+ * Copyright (c) 2008 Benjamin Close <benjsc@FreeBSD.org>
  * Copyright (c) 2008 Sam Leffler, Errno Consulting
+ * Copyright (c) 2011 Intel Corporation
+ * Copyright (c) 2013 Cedric GROSS <c.gross@kreiz-it.fr>
+ * Copyright (c) 2013 Adrian Chadd <adrian@FreeBSD.org>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -40,11 +39,13 @@ __FBSDID("$FreeBSD$");
 #include <sys/systm.h>
 #include <sys/malloc.h>
 #include <sys/bus.h>
+#include <sys/conf.h>
 #include <sys/rman.h>
 #include <sys/endian.h>
 #include <sys/firmware.h>
 #include <sys/limits.h>
 #include <sys/module.h>
+#include <sys/priv.h>
 #include <sys/queue.h>
 #include <sys/taskqueue.h>
 
@@ -55,19 +56,13 @@ __FBSDID("$FreeBSD$");
 #include <dev/pci/pcireg.h>
 #include <dev/pci/pcivar.h>
 
-#include <net/bpf.h>
 #include <net/if.h>
-#include <net/if_arp.h>
-#include <net/ethernet.h>
+#include <net/if_var.h>
 #include <net/if_dl.h>
 #include <net/if_media.h>
-#include <net/if_types.h>
 
 #include <netinet/in.h>
-#include <netinet/in_systm.h>
-#include <netinet/in_var.h>
 #include <netinet/if_ether.h>
-#include <netinet/ip.h>
 
 #include <net80211/ieee80211_var.h>
 #include <net80211/ieee80211_radiotap.h>
@@ -77,6 +72,9 @@ __FBSDID("$FreeBSD$");
 #include <dev/iwn/if_iwnreg.h>
 #include <dev/iwn/if_iwnvar.h>
 #include <dev/iwn/if_iwn_devid.h>
+#include <dev/iwn/if_iwn_chip_cfg.h>
+#include <dev/iwn/if_iwn_debug.h>
+#include <dev/iwn/if_iwn_ioctl.h>
 
 struct iwn_ident {
 	uint16_t	vendor;
@@ -97,12 +95,19 @@ static const struct iwn_ident iwn_ident_table[] = {
 	{ 0x8086, IWN_DID_x030_4, "Intel Centrino Advanced-N 6230"		},
 	{ 0x8086, IWN_DID_6150_1, "Intel Centrino Wireless-N + WiMAX 6150"	},
 	{ 0x8086, IWN_DID_6150_2, "Intel Centrino Wireless-N + WiMAX 6150"	},
+	{ 0x8086, IWN_DID_2x00_1, "Intel(R) Centrino(R) Wireless-N 2200 BGN"	},
+	{ 0x8086, IWN_DID_2x00_2, "Intel(R) Centrino(R) Wireless-N 2200 BGN"	},
+	/* XXX 2200D is IWN_SDID_2x00_4; there's no way to express this here! */
 	{ 0x8086, IWN_DID_2x30_1, "Intel Centrino Wireless-N 2230"		},
 	{ 0x8086, IWN_DID_2x30_2, "Intel Centrino Wireless-N 2230"		},
 	{ 0x8086, IWN_DID_130_1, "Intel Centrino Wireless-N 130"		},
 	{ 0x8086, IWN_DID_130_2, "Intel Centrino Wireless-N 130"		},
 	{ 0x8086, IWN_DID_100_1, "Intel Centrino Wireless-N 100"		},
 	{ 0x8086, IWN_DID_100_2, "Intel Centrino Wireless-N 100"		},
+	{ 0x8086, IWN_DID_105_1, "Intel Centrino Wireless-N 105"		},
+	{ 0x8086, IWN_DID_105_2, "Intel Centrino Wireless-N 105"		},
+	{ 0x8086, IWN_DID_135_1, "Intel Centrino Wireless-N 135"		},
+	{ 0x8086, IWN_DID_135_2, "Intel Centrino Wireless-N 135"		},
 	{ 0x8086, IWN_DID_4965_1, "Intel Wireless WiFi Link 4965"		},
 	{ 0x8086, IWN_DID_6x00_1, "Intel Centrino Ultimate-N 6300"		},
 	{ 0x8086, IWN_DID_6x00_2, "Intel Centrino Advanced-N 6200"		},
@@ -119,6 +124,8 @@ static const struct iwn_ident iwn_ident_table[] = {
 	{ 0x8086, IWN_DID_5x50_2, "Intel WiMAX/WiFi Link 5350"			},
 	{ 0x8086, IWN_DID_5x50_3, "Intel WiMAX/WiFi Link 5150"			},
 	{ 0x8086, IWN_DID_5x50_4, "Intel WiMAX/WiFi Link 5150"			},
+	{ 0x8086, IWN_DID_6035_1, "Intel Centrino Advanced 6235"		},
+	{ 0x8086, IWN_DID_6035_2, "Intel Centrino Advanced 6235"		},
 	{ 0, 0, NULL }
 };
 
@@ -126,6 +133,7 @@ static int	iwn_probe(device_t);
 static int	iwn_attach(device_t);
 static int	iwn4965_attach(struct iwn_softc *, uint16_t);
 static int	iwn5000_attach(struct iwn_softc *, uint16_t);
+static int	iwn_config_specific(struct iwn_softc *, uint16_t);
 static void	iwn_radiotap_attach(struct iwn_softc *);
 static void	iwn_sysctlattach(struct iwn_softc *);
 static struct ieee80211vap *iwn_vap_create(struct ieee80211com *,
@@ -169,11 +177,15 @@ static void	iwn4965_print_power_group(struct iwn_softc *, int);
 #endif
 static void	iwn5000_read_eeprom(struct iwn_softc *);
 static uint32_t	iwn_eeprom_channel_flags(struct iwn_eeprom_chan *);
-static void	iwn_read_eeprom_band(struct iwn_softc *, int);
-static void	iwn_read_eeprom_ht40(struct iwn_softc *, int);
+static void	iwn_read_eeprom_band(struct iwn_softc *, int, int, int *,
+		    struct ieee80211_channel[]);
+static void	iwn_read_eeprom_ht40(struct iwn_softc *, int, int, int *,
+		    struct ieee80211_channel[]);
 static void	iwn_read_eeprom_channels(struct iwn_softc *, int, uint32_t);
 static struct iwn_eeprom_chan *iwn_find_eeprom_channel(struct iwn_softc *,
 		    struct ieee80211_channel *);
+static void	iwn_getradiocaps(struct ieee80211com *, int, int *,
+		    struct ieee80211_channel[]);
 static int	iwn_setregdomain(struct ieee80211com *,
 		    struct ieee80211_regdomain *, int,
 		    struct ieee80211_channel[]);
@@ -200,7 +212,7 @@ static void	iwn5000_tx_done(struct iwn_softc *, struct iwn_rx_desc *,
 		    struct iwn_rx_data *);
 static void	iwn_tx_done(struct iwn_softc *, struct iwn_rx_desc *, int,
 		    uint8_t);
-static void	iwn_ampdu_tx_done(struct iwn_softc *, int, int, int, void *);
+static void	iwn_ampdu_tx_done(struct iwn_softc *, int, int, int, int, void *);
 static void	iwn_cmd_done(struct iwn_softc *, struct iwn_rx_desc *);
 static void	iwn_notif_intr(struct iwn_softc *);
 static void	iwn_wakeup_intr(struct iwn_softc *);
@@ -219,12 +231,14 @@ static int	iwn_tx_data(struct iwn_softc *, struct mbuf *,
 static int	iwn_tx_data_raw(struct iwn_softc *, struct mbuf *,
 		    struct ieee80211_node *,
 		    const struct ieee80211_bpf_params *params);
+static void	iwn_xmit_task(void *arg0, int pending);
 static int	iwn_raw_xmit(struct ieee80211_node *, struct mbuf *,
 		    const struct ieee80211_bpf_params *);
-static void	iwn_start(struct ifnet *);
-static void	iwn_start_locked(struct ifnet *);
+static int	iwn_transmit(struct ieee80211com *, struct mbuf *);
+static void	iwn_scan_timeout(void *);
 static void	iwn_watchdog(void *);
-static int	iwn_ioctl(struct ifnet *, u_long, caddr_t);
+static int	iwn_ioctl(struct ieee80211com *, u_long , void *);
+static void	iwn_parent(struct ieee80211com *);
 static int	iwn_cmd(struct iwn_softc *, int, const void *, int, int);
 static int	iwn4965_add_node(struct iwn_softc *, struct iwn_node_info *,
 		    int);
@@ -234,7 +248,7 @@ static int	iwn_set_link_quality(struct iwn_softc *,
 		    struct ieee80211_node *);
 static int	iwn_add_broadcast_node(struct iwn_softc *, int);
 static int	iwn_updateedca(struct ieee80211com *);
-static void	iwn_update_mcast(struct ifnet *);
+static void	iwn_update_mcast(struct ieee80211com *);
 static void	iwn_set_led(struct iwn_softc *, uint8_t, uint8_t, uint8_t);
 static int	iwn_set_critical_temp(struct iwn_softc *);
 static int	iwn_set_timing(struct iwn_softc *, struct ieee80211_node *);
@@ -257,14 +271,17 @@ static int	iwn4965_set_gains(struct iwn_softc *);
 static int	iwn5000_set_gains(struct iwn_softc *);
 static void	iwn_tune_sensitivity(struct iwn_softc *,
 		    const struct iwn_rx_stats *);
+static void	iwn_save_stats_counters(struct iwn_softc *,
+		    const struct iwn_stats *);
 static int	iwn_send_sensitivity(struct iwn_softc *);
+static void	iwn_check_rx_recovery(struct iwn_softc *, struct iwn_stats *);
 static int	iwn_set_pslevel(struct iwn_softc *, int, int, int);
 static int	iwn_send_btcoex(struct iwn_softc *);
 static int	iwn_send_advanced_btcoex(struct iwn_softc *);
 static int	iwn5000_runtime_calib(struct iwn_softc *);
 static int	iwn_config(struct iwn_softc *);
-static uint8_t	*ieee80211_add_ssid(uint8_t *, const uint8_t *, u_int);
-static int	iwn_scan(struct iwn_softc *);
+static int	iwn_scan(struct iwn_softc *, struct ieee80211vap *,
+		    struct ieee80211_scan_state *, struct ieee80211_channel *);
 static int	iwn_auth(struct iwn_softc *, struct ieee80211vap *vap);
 static int	iwn_run(struct iwn_softc *, struct ieee80211vap *vap);
 static int	iwn_ampdu_rx_start(struct ieee80211_node *,
@@ -292,6 +309,7 @@ static int	iwn5000_send_calibration(struct iwn_softc *);
 static int	iwn5000_send_wimax_coex(struct iwn_softc *);
 static int	iwn5000_crystal_calib(struct iwn_softc *);
 static int	iwn5000_temp_offset_calib(struct iwn_softc *);
+static int	iwn5000_temp_offset_calibv2(struct iwn_softc *);
 static int	iwn4965_post_alive(struct iwn_softc *);
 static int	iwn5000_post_alive(struct iwn_softc *);
 static int	iwn4965_load_bootcode(struct iwn_softc *, const uint8_t *,
@@ -305,6 +323,7 @@ static int	iwn_read_firmware_leg(struct iwn_softc *,
 static int	iwn_read_firmware_tlv(struct iwn_softc *,
 		    struct iwn_fw_info *, uint16_t);
 static int	iwn_read_firmware(struct iwn_softc *);
+static void	iwn_unload_firmware(struct iwn_softc *);
 static int	iwn_clock_wait(struct iwn_softc *);
 static int	iwn_apm_init(struct iwn_softc *);
 static void	iwn_apm_stop_master(struct iwn_softc *);
@@ -316,8 +335,9 @@ static int	iwn_hw_init(struct iwn_softc *);
 static void	iwn_hw_stop(struct iwn_softc *);
 static void	iwn_radio_on(void *, int);
 static void	iwn_radio_off(void *, int);
+static void	iwn_panicked(void *, int);
 static void	iwn_init_locked(struct iwn_softc *);
-static void	iwn_init(void *);
+static void	iwn_init(struct iwn_softc *);
 static void	iwn_stop_locked(struct iwn_softc *);
 static void	iwn_stop(struct iwn_softc *);
 static void	iwn_scan_start(struct ieee80211com *);
@@ -325,84 +345,9 @@ static void	iwn_scan_end(struct ieee80211com *);
 static void	iwn_set_channel(struct ieee80211com *);
 static void	iwn_scan_curchan(struct ieee80211_scan_state *, unsigned long);
 static void	iwn_scan_mindwell(struct ieee80211_scan_state *);
-static void	iwn_hw_reset(void *, int);
 #ifdef	IWN_DEBUG
 static char	*iwn_get_csr_string(int);
 static void	iwn_debug_register(struct iwn_softc *);
-#endif
-
-#ifdef	IWN_DEBUG
-enum {
-	IWN_DEBUG_XMIT		= 0x00000001,	/* basic xmit operation */
-	IWN_DEBUG_RECV		= 0x00000002,	/* basic recv operation */
-	IWN_DEBUG_STATE		= 0x00000004,	/* 802.11 state transitions */
-	IWN_DEBUG_TXPOW		= 0x00000008,	/* tx power processing */
-	IWN_DEBUG_RESET		= 0x00000010,	/* reset processing */
-	IWN_DEBUG_OPS		= 0x00000020,	/* iwn_ops processing */
-	IWN_DEBUG_BEACON 	= 0x00000040,	/* beacon handling */
-	IWN_DEBUG_WATCHDOG 	= 0x00000080,	/* watchdog timeout */
-	IWN_DEBUG_INTR		= 0x00000100,	/* ISR */
-	IWN_DEBUG_CALIBRATE	= 0x00000200,	/* periodic calibration */
-	IWN_DEBUG_NODE		= 0x00000400,	/* node management */
-	IWN_DEBUG_LED		= 0x00000800,	/* led management */
-	IWN_DEBUG_CMD		= 0x00001000,	/* cmd submission */
-	IWN_DEBUG_TXRATE	= 0x00002000,	/* TX rate debugging */
-	IWN_DEBUG_PWRSAVE	= 0x00004000,	/* Power save operations */
-	IWN_DEBUG_REGISTER	= 0x20000000,	/* print chipset register */
-	IWN_DEBUG_TRACE		= 0x40000000,	/* Print begin and start driver function */
-	IWN_DEBUG_FATAL		= 0x80000000,	/* fatal errors */
-	IWN_DEBUG_ANY		= 0xffffffff
-};
-
-#define DPRINTF(sc, m, fmt, ...) do {			\
-	if (sc->sc_debug & (m))				\
-		printf(fmt, __VA_ARGS__);		\
-} while (0)
-
-static const char *
-iwn_intr_str(uint8_t cmd)
-{
-	switch (cmd) {
-	/* Notifications */
-	case IWN_UC_READY:		return "UC_READY";
-	case IWN_ADD_NODE_DONE:		return "ADD_NODE_DONE";
-	case IWN_TX_DONE:		return "TX_DONE";
-	case IWN_START_SCAN:		return "START_SCAN";
-	case IWN_STOP_SCAN:		return "STOP_SCAN";
-	case IWN_RX_STATISTICS:		return "RX_STATS";
-	case IWN_BEACON_STATISTICS:	return "BEACON_STATS";
-	case IWN_STATE_CHANGED:		return "STATE_CHANGED";
-	case IWN_BEACON_MISSED:		return "BEACON_MISSED";
-	case IWN_RX_PHY:		return "RX_PHY";
-	case IWN_MPDU_RX_DONE:		return "MPDU_RX_DONE";
-	case IWN_RX_DONE:		return "RX_DONE";
-
-	/* Command Notifications */
-	case IWN_CMD_RXON:		return "IWN_CMD_RXON";
-	case IWN_CMD_RXON_ASSOC:	return "IWN_CMD_RXON_ASSOC";
-	case IWN_CMD_EDCA_PARAMS:	return "IWN_CMD_EDCA_PARAMS";
-	case IWN_CMD_TIMING:		return "IWN_CMD_TIMING";
-	case IWN_CMD_LINK_QUALITY:	return "IWN_CMD_LINK_QUALITY";
-	case IWN_CMD_SET_LED:		return "IWN_CMD_SET_LED";
-	case IWN5000_CMD_WIMAX_COEX:	return "IWN5000_CMD_WIMAX_COEX";
-	case IWN5000_CMD_CALIB_CONFIG:	return "IWN5000_CMD_CALIB_CONFIG";
-	case IWN5000_CMD_CALIB_RESULT:	return "IWN5000_CMD_CALIB_RESULT";
-	case IWN5000_CMD_CALIB_COMPLETE: return "IWN5000_CMD_CALIB_COMPLETE";
-	case IWN_CMD_SET_POWER_MODE:	return "IWN_CMD_SET_POWER_MODE";
-	case IWN_CMD_SCAN:		return "IWN_CMD_SCAN";
-	case IWN_CMD_SCAN_RESULTS:	return "IWN_CMD_SCAN_RESULTS";
-	case IWN_CMD_TXPOWER:		return "IWN_CMD_TXPOWER";
-	case IWN_CMD_TXPOWER_DBM:	return "IWN_CMD_TXPOWER_DBM";
-	case IWN5000_CMD_TX_ANT_CONFIG:	return "IWN5000_CMD_TX_ANT_CONFIG";
-	case IWN_CMD_BT_COEX:		return "IWN_CMD_BT_COEX";
-	case IWN_CMD_SET_CRITICAL_TEMP:	return "IWN_CMD_SET_CRITICAL_TEMP";
-	case IWN_CMD_SET_SENSITIVITY:	return "IWN_CMD_SET_SENSITIVITY";
-	case IWN_CMD_PHY_CALIB:		return "IWN_CMD_PHY_CALIB";
-	}
-	return "UNKNOWN INTR NOTIF/CMD";
-}
-#else
-#define DPRINTF(sc, m, fmt, ...) do { (void) sc; } while (0)
 #endif
 
 static device_method_t iwn_methods[] = {
@@ -432,6 +377,19 @@ MODULE_DEPEND(iwn, firmware, 1, 1, 1);
 MODULE_DEPEND(iwn, pci, 1, 1, 1);
 MODULE_DEPEND(iwn, wlan, 1, 1, 1);
 
+static d_ioctl_t iwn_cdev_ioctl;
+static d_open_t iwn_cdev_open;
+static d_close_t iwn_cdev_close;
+
+static struct cdevsw iwn_cdevsw = {
+	.d_version = D_VERSION,
+	.d_flags = 0,
+	.d_open = iwn_cdev_open,
+	.d_close = iwn_cdev_close,
+	.d_ioctl = iwn_cdev_ioctl,
+	.d_name = "iwn",
+};
+
 static int
 iwn_probe(device_t dev)
 {
@@ -448,13 +406,20 @@ iwn_probe(device_t dev)
 }
 
 static int
+iwn_is_3stream_device(struct iwn_softc *sc)
+{
+	/* XXX for now only 5300, until the 5350 can be tested */
+	if (sc->hw_type == IWN_HW_REV_TYPE_5300)
+		return (1);
+	return (0);
+}
+
+static int
 iwn_attach(device_t dev)
 {
-	struct iwn_softc *sc = (struct iwn_softc *)device_get_softc(dev);
+	struct iwn_softc *sc = device_get_softc(dev);
 	struct ieee80211com *ic;
-	struct ifnet *ifp;
 	int i, error, rid;
-	uint8_t macaddr[IEEE80211_ADDR_LEN];
 
 	sc->sc_dev = dev;
 
@@ -515,10 +480,25 @@ iwn_attach(device_t dev)
 	sc->hw_type = (IWN_READ(sc, IWN_HW_REV) >> IWN_HW_REV_TYPE_SHIFT)
 	    & IWN_HW_REV_TYPE_MASK;
 	sc->subdevice_id = pci_get_subdevice(dev);
+
+	/*
+	 * 4965 versus 5000 and later have different methods.
+	 * Let's set those up first.
+	 */
 	if (sc->hw_type == IWN_HW_REV_TYPE_4965)
 		error = iwn4965_attach(sc, pci_get_device(dev));
 	else
 		error = iwn5000_attach(sc, pci_get_device(dev));
+	if (error != 0) {
+		device_printf(dev, "could not attach device, error %d\n",
+		    error);
+		goto fail;
+	}
+
+	/*
+	 * Next, let's setup the various parameters of each NIC.
+	 */
+	error = iwn_config_specific(sc, pci_get_device(dev));
 	if (error != 0) {
 		device_printf(dev, "could not attach device, error %d\n",
 		    error);
@@ -580,14 +560,9 @@ iwn_attach(device_t dev)
 	/* Clear pending interrupts. */
 	IWN_WRITE(sc, IWN_INT, 0xffffffff);
 
-	ifp = sc->sc_ifp = if_alloc(IFT_IEEE80211);
-	if (ifp == NULL) {
-		device_printf(dev, "can not allocate ifnet structure\n");
-		goto fail;
-	}
-
-	ic = ifp->if_l2com;
-	ic->ic_ifp = ifp;
+	ic = &sc->sc_ic;
+	ic->ic_softc = sc;
+	ic->ic_name = device_get_nameunit(dev);
 	ic->ic_phytype = IEEE80211_T_OFDM;	/* not only, but not used */
 	ic->ic_opmode = IEEE80211_M_STA;	/* default to BSS mode */
 
@@ -595,7 +570,9 @@ iwn_attach(device_t dev)
 	ic->ic_caps =
 		  IEEE80211_C_STA		/* station mode supported */
 		| IEEE80211_C_MONITOR		/* monitor mode supported */
+#if 0
 		| IEEE80211_C_BGSCAN		/* background scanning */
+#endif
 		| IEEE80211_C_TXPMGT		/* tx power management */
 		| IEEE80211_C_SHSLOT		/* short slot time supported */
 		| IEEE80211_C_WPA
@@ -608,7 +585,7 @@ iwn_attach(device_t dev)
 		;
 
 	/* Read MAC address, channels, etc from EEPROM. */
-	if ((error = iwn_read_eeprom(sc, macaddr)) != 0) {
+	if ((error = iwn_read_eeprom(sc, ic->ic_macaddr)) != 0) {
 		device_printf(dev, "could not read EEPROM, error %d\n",
 		    error);
 		goto fail;
@@ -626,7 +603,7 @@ iwn_attach(device_t dev)
 	if (bootverbose) {
 		device_printf(dev, "MIMO %dT%dR, %.4s, address %6D\n",
 		    sc->ntxchains, sc->nrxchains, sc->eeprom_domain,
-		    macaddr, ":");
+		    ic->ic_macaddr, ":");
 	}
 
 	if (sc->sc_flags & IWN_FLAG_HAS_11N) {
@@ -634,17 +611,16 @@ iwn_attach(device_t dev)
 		ic->ic_txstream = sc->ntxchains;
 
 		/*
-		 * The NICs we currently support cap out at 2x2 support
-		 * separate from the chains being used.
-		 *
-		 * This is a total hack to work around that until some
-		 * per-device method is implemented to return the
-		 * actual stream support.
+		 * Some of the 3 antenna devices (ie, the 4965) only supports
+		 * 2x2 operation.  So correct the number of streams if
+		 * it's not a 3-stream device.
 		 */
-		if (ic->ic_rxstream > 2)
-			ic->ic_rxstream = 2;
-		if (ic->ic_txstream > 2)
-			ic->ic_txstream = 2;
+		if (! iwn_is_3stream_device(sc)) {
+			if (ic->ic_rxstream > 2)
+				ic->ic_rxstream = 2;
+			if (ic->ic_txstream > 2)
+				ic->ic_txstream = 2;
+		}
 
 		ic->ic_htcaps =
 			  IEEE80211_HTCAP_SMPS_OFF	/* SMPS mode disabled */
@@ -668,19 +644,12 @@ iwn_attach(device_t dev)
 			;
 	}
 
-	if_initname(ifp, device_get_name(dev), device_get_unit(dev));
-	ifp->if_softc = sc;
-	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
-	ifp->if_init = iwn_init;
-	ifp->if_ioctl = iwn_ioctl;
-	ifp->if_start = iwn_start;
-	IFQ_SET_MAXLEN(&ifp->if_snd, ifqmaxlen);
-	ifp->if_snd.ifq_drv_maxlen = ifqmaxlen;
-	IFQ_SET_READY(&ifp->if_snd);
-
-	ieee80211_ifattach(ic, macaddr);
+	ieee80211_ifattach(ic);
 	ic->ic_vap_create = iwn_vap_create;
+	ic->ic_ioctl = iwn_ioctl;
+	ic->ic_parent = iwn_parent;
 	ic->ic_vap_delete = iwn_vap_delete;
+	ic->ic_transmit = iwn_transmit;
 	ic->ic_raw_xmit = iwn_raw_xmit;
 	ic->ic_node_alloc = iwn_node_alloc;
 	sc->sc_ampdu_rx_start = ic->ic_ampdu_rx_start;
@@ -701,15 +670,28 @@ iwn_attach(device_t dev)
 	ic->ic_set_channel = iwn_set_channel;
 	ic->ic_scan_curchan = iwn_scan_curchan;
 	ic->ic_scan_mindwell = iwn_scan_mindwell;
+	ic->ic_getradiocaps = iwn_getradiocaps;
 	ic->ic_setregdomain = iwn_setregdomain;
 
 	iwn_radiotap_attach(sc);
 
 	callout_init_mtx(&sc->calib_to, &sc->sc_mtx, 0);
+	callout_init_mtx(&sc->scan_timeout, &sc->sc_mtx, 0);
 	callout_init_mtx(&sc->watchdog_to, &sc->sc_mtx, 0);
-	TASK_INIT(&sc->sc_reinit_task, 0, iwn_hw_reset, sc);
 	TASK_INIT(&sc->sc_radioon_task, 0, iwn_radio_on, sc);
 	TASK_INIT(&sc->sc_radiooff_task, 0, iwn_radio_off, sc);
+	TASK_INIT(&sc->sc_panic_task, 0, iwn_panicked, sc);
+	TASK_INIT(&sc->sc_xmit_task, 0, iwn_xmit_task, sc);
+
+	mbufq_init(&sc->sc_xmit_queue, 1024);
+
+	sc->sc_tq = taskqueue_create("iwn_taskq", M_WAITOK,
+	    taskqueue_thread_enqueue, &sc->sc_tq);
+	error = taskqueue_start_threads(&sc->sc_tq, 1, 0, "iwn_taskq");
+	if (error != 0) {
+		device_printf(dev, "can't start threads, error %d\n", error);
+		goto fail;
+	}
 
 	iwn_sysctlattach(sc);
 
@@ -724,14 +706,512 @@ iwn_attach(device_t dev)
 		goto fail;
 	}
 
+#if 0
+	device_printf(sc->sc_dev, "%s: rx_stats=%d, rx_stats_bt=%d\n",
+	    __func__,
+	    sizeof(struct iwn_stats),
+	    sizeof(struct iwn_stats_bt));
+#endif
+
 	if (bootverbose)
 		ieee80211_announce(ic);
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s: end\n",__func__);
+
+	/* Add debug ioctl right at the end */
+	sc->sc_cdev = make_dev(&iwn_cdevsw, device_get_unit(dev),
+	    UID_ROOT, GID_WHEEL, 0600, "%s", device_get_nameunit(dev));
+	if (sc->sc_cdev == NULL) {
+		device_printf(dev, "failed to create debug character device\n");
+	} else {
+		sc->sc_cdev->si_drv1 = sc;
+	}
 	return 0;
 fail:
 	iwn_detach(dev);
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s: end in error\n",__func__);
 	return error;
+}
+
+/*
+ * Define specific configuration based on device id and subdevice id
+ * pid : PCI device id
+ */
+static int
+iwn_config_specific(struct iwn_softc *sc, uint16_t pid)
+{
+
+	switch (pid) {
+/* 4965 series */
+	case IWN_DID_4965_1:
+	case IWN_DID_4965_2:
+	case IWN_DID_4965_3:
+	case IWN_DID_4965_4:
+		sc->base_params = &iwn4965_base_params;
+		sc->limits = &iwn4965_sensitivity_limits;
+		sc->fwname = "iwn4965fw";
+		/* Override chains masks, ROM is known to be broken. */
+		sc->txchainmask = IWN_ANT_AB;
+		sc->rxchainmask = IWN_ANT_ABC;
+		/* Enable normal btcoex */
+		sc->sc_flags |= IWN_FLAG_BTCOEX;
+		break;
+/* 1000 Series */
+	case IWN_DID_1000_1:
+	case IWN_DID_1000_2:
+		switch(sc->subdevice_id) {
+			case	IWN_SDID_1000_1:
+			case	IWN_SDID_1000_2:
+			case	IWN_SDID_1000_3:
+			case	IWN_SDID_1000_4:
+			case	IWN_SDID_1000_5:
+			case	IWN_SDID_1000_6:
+			case	IWN_SDID_1000_7:
+			case	IWN_SDID_1000_8:
+			case	IWN_SDID_1000_9:
+			case	IWN_SDID_1000_10:
+			case	IWN_SDID_1000_11:
+			case	IWN_SDID_1000_12:
+				sc->limits = &iwn1000_sensitivity_limits;
+				sc->base_params = &iwn1000_base_params;
+				sc->fwname = "iwn1000fw";
+				break;
+			default:
+				device_printf(sc->sc_dev, "adapter type id : 0x%04x sub id :"
+				    "0x%04x rev %d not supported (subdevice)\n", pid,
+				    sc->subdevice_id,sc->hw_type);
+				return ENOTSUP;
+		}
+		break;
+/* 6x00 Series */
+	case IWN_DID_6x00_2:
+	case IWN_DID_6x00_4:
+	case IWN_DID_6x00_1:
+	case IWN_DID_6x00_3:
+		sc->fwname = "iwn6000fw";
+		sc->limits = &iwn6000_sensitivity_limits;
+		switch(sc->subdevice_id) {
+			case IWN_SDID_6x00_1:
+			case IWN_SDID_6x00_2:
+			case IWN_SDID_6x00_8:
+				//iwl6000_3agn_cfg
+				sc->base_params = &iwn_6000_base_params;
+				break;
+			case IWN_SDID_6x00_3:
+			case IWN_SDID_6x00_6:
+			case IWN_SDID_6x00_9:
+				////iwl6000i_2agn
+			case IWN_SDID_6x00_4:
+			case IWN_SDID_6x00_7:
+			case IWN_SDID_6x00_10:
+				//iwl6000i_2abg_cfg
+			case IWN_SDID_6x00_5:
+				//iwl6000i_2bg_cfg
+				sc->base_params = &iwn_6000i_base_params;
+				sc->sc_flags |= IWN_FLAG_INTERNAL_PA;
+				sc->txchainmask = IWN_ANT_BC;
+				sc->rxchainmask = IWN_ANT_BC;
+				break;
+			default:
+				device_printf(sc->sc_dev, "adapter type id : 0x%04x sub id :"
+				    "0x%04x rev %d not supported (subdevice)\n", pid,
+				    sc->subdevice_id,sc->hw_type);
+				return ENOTSUP;
+		}
+		break;
+/* 6x05 Series */
+	case IWN_DID_6x05_1:
+	case IWN_DID_6x05_2:
+		switch(sc->subdevice_id) {
+			case IWN_SDID_6x05_1:
+			case IWN_SDID_6x05_4:
+			case IWN_SDID_6x05_6:
+				//iwl6005_2agn_cfg
+			case IWN_SDID_6x05_2:
+			case IWN_SDID_6x05_5:
+			case IWN_SDID_6x05_7:
+				//iwl6005_2abg_cfg
+			case IWN_SDID_6x05_3:
+				//iwl6005_2bg_cfg
+			case IWN_SDID_6x05_8:
+			case IWN_SDID_6x05_9:
+				//iwl6005_2agn_sff_cfg
+			case IWN_SDID_6x05_10:
+				//iwl6005_2agn_d_cfg
+			case IWN_SDID_6x05_11:
+				//iwl6005_2agn_mow1_cfg
+			case IWN_SDID_6x05_12:
+				//iwl6005_2agn_mow2_cfg
+				sc->fwname = "iwn6000g2afw";
+				sc->limits = &iwn6000_sensitivity_limits;
+				sc->base_params = &iwn_6000g2_base_params;
+				break;
+			default:
+				device_printf(sc->sc_dev, "adapter type id : 0x%04x sub id :"
+				    "0x%04x rev %d not supported (subdevice)\n", pid,
+				    sc->subdevice_id,sc->hw_type);
+				return ENOTSUP;
+		}
+		break;
+/* 6x35 Series */
+	case IWN_DID_6035_1:
+	case IWN_DID_6035_2:
+		switch(sc->subdevice_id) {
+			case IWN_SDID_6035_1:
+			case IWN_SDID_6035_2:
+			case IWN_SDID_6035_3:
+			case IWN_SDID_6035_4:
+				sc->fwname = "iwn6000g2bfw";
+				sc->limits = &iwn6235_sensitivity_limits;
+				sc->base_params = &iwn_6235_base_params;
+				break;
+			default:
+				device_printf(sc->sc_dev, "adapter type id : 0x%04x sub id :"
+				    "0x%04x rev %d not supported (subdevice)\n", pid,
+				    sc->subdevice_id,sc->hw_type);
+				return ENOTSUP;
+		}
+		break;
+/* 6x50 WiFi/WiMax Series */
+	case IWN_DID_6050_1:
+	case IWN_DID_6050_2:
+		switch(sc->subdevice_id) {
+			case IWN_SDID_6050_1:
+			case IWN_SDID_6050_3:
+			case IWN_SDID_6050_5:
+				//iwl6050_2agn_cfg
+			case IWN_SDID_6050_2:
+			case IWN_SDID_6050_4:
+			case IWN_SDID_6050_6:
+				//iwl6050_2abg_cfg
+				sc->fwname = "iwn6050fw";
+				sc->txchainmask = IWN_ANT_AB;
+				sc->rxchainmask = IWN_ANT_AB;
+				sc->limits = &iwn6000_sensitivity_limits;
+				sc->base_params = &iwn_6050_base_params;
+				break;
+			default:
+				device_printf(sc->sc_dev, "adapter type id : 0x%04x sub id :"
+				    "0x%04x rev %d not supported (subdevice)\n", pid,
+				    sc->subdevice_id,sc->hw_type);
+				return ENOTSUP;
+		}
+		break;
+/* 6150 WiFi/WiMax Series */
+	case IWN_DID_6150_1:
+	case IWN_DID_6150_2:
+		switch(sc->subdevice_id) {
+			case IWN_SDID_6150_1:
+			case IWN_SDID_6150_3:
+			case IWN_SDID_6150_5:
+				// iwl6150_bgn_cfg
+			case IWN_SDID_6150_2:
+			case IWN_SDID_6150_4:
+			case IWN_SDID_6150_6:
+				//iwl6150_bg_cfg
+				sc->fwname = "iwn6050fw";
+				sc->limits = &iwn6000_sensitivity_limits;
+				sc->base_params = &iwn_6150_base_params;
+				break;
+			default:
+				device_printf(sc->sc_dev, "adapter type id : 0x%04x sub id :"
+				    "0x%04x rev %d not supported (subdevice)\n", pid,
+				    sc->subdevice_id,sc->hw_type);
+				return ENOTSUP;
+		}
+		break;
+/* 6030 Series and 1030 Series */
+	case IWN_DID_x030_1:
+	case IWN_DID_x030_2:
+	case IWN_DID_x030_3:
+	case IWN_DID_x030_4:
+		switch(sc->subdevice_id) {
+			case IWN_SDID_x030_1:
+			case IWN_SDID_x030_3:
+			case IWN_SDID_x030_5:
+			// iwl1030_bgn_cfg
+			case IWN_SDID_x030_2:
+			case IWN_SDID_x030_4:
+			case IWN_SDID_x030_6:
+			//iwl1030_bg_cfg
+			case IWN_SDID_x030_7:
+			case IWN_SDID_x030_10:
+			case IWN_SDID_x030_14:
+			//iwl6030_2agn_cfg
+			case IWN_SDID_x030_8:
+			case IWN_SDID_x030_11:
+			case IWN_SDID_x030_15:
+			// iwl6030_2bgn_cfg
+			case IWN_SDID_x030_9:
+			case IWN_SDID_x030_12:
+			case IWN_SDID_x030_16:
+			// iwl6030_2abg_cfg
+			case IWN_SDID_x030_13:
+			//iwl6030_2bg_cfg
+				sc->fwname = "iwn6000g2bfw";
+				sc->limits = &iwn6000_sensitivity_limits;
+				sc->base_params = &iwn_6000g2b_base_params;
+				break;
+			default:
+				device_printf(sc->sc_dev, "adapter type id : 0x%04x sub id :"
+				    "0x%04x rev %d not supported (subdevice)\n", pid,
+				    sc->subdevice_id,sc->hw_type);
+				return ENOTSUP;
+		}
+		break;
+/* 130 Series WiFi */
+/* XXX: This series will need adjustment for rate.
+ * see rx_with_siso_diversity in linux kernel
+ */
+	case IWN_DID_130_1:
+	case IWN_DID_130_2:
+		switch(sc->subdevice_id) {
+			case IWN_SDID_130_1:
+			case IWN_SDID_130_3:
+			case IWN_SDID_130_5:
+			//iwl130_bgn_cfg
+			case IWN_SDID_130_2:
+			case IWN_SDID_130_4:
+			case IWN_SDID_130_6:
+			//iwl130_bg_cfg
+				sc->fwname = "iwn6000g2bfw";
+				sc->limits = &iwn6000_sensitivity_limits;
+				sc->base_params = &iwn_6000g2b_base_params;
+				break;
+			default:
+				device_printf(sc->sc_dev, "adapter type id : 0x%04x sub id :"
+				    "0x%04x rev %d not supported (subdevice)\n", pid,
+				    sc->subdevice_id,sc->hw_type);
+				return ENOTSUP;
+		}
+		break;
+/* 100 Series WiFi */
+	case IWN_DID_100_1:
+	case IWN_DID_100_2:
+		switch(sc->subdevice_id) {
+			case IWN_SDID_100_1:
+			case IWN_SDID_100_2:
+			case IWN_SDID_100_3:
+			case IWN_SDID_100_4:
+			case IWN_SDID_100_5:
+			case IWN_SDID_100_6:
+				sc->limits = &iwn1000_sensitivity_limits;
+				sc->base_params = &iwn1000_base_params;
+				sc->fwname = "iwn100fw";
+				break;
+			default:
+				device_printf(sc->sc_dev, "adapter type id : 0x%04x sub id :"
+				    "0x%04x rev %d not supported (subdevice)\n", pid,
+				    sc->subdevice_id,sc->hw_type);
+				return ENOTSUP;
+		}
+		break;
+
+/* 105 Series */
+/* XXX: This series will need adjustment for rate.
+ * see rx_with_siso_diversity in linux kernel
+ */
+	case IWN_DID_105_1:
+	case IWN_DID_105_2:
+		switch(sc->subdevice_id) {
+			case IWN_SDID_105_1:
+			case IWN_SDID_105_2:
+			case IWN_SDID_105_3:
+			//iwl105_bgn_cfg
+			case IWN_SDID_105_4:
+			//iwl105_bgn_d_cfg
+				sc->limits = &iwn2030_sensitivity_limits;
+				sc->base_params = &iwn2000_base_params;
+				sc->fwname = "iwn105fw";
+				break;
+			default:
+				device_printf(sc->sc_dev, "adapter type id : 0x%04x sub id :"
+				    "0x%04x rev %d not supported (subdevice)\n", pid,
+				    sc->subdevice_id,sc->hw_type);
+				return ENOTSUP;
+		}
+		break;
+
+/* 135 Series */
+/* XXX: This series will need adjustment for rate.
+ * see rx_with_siso_diversity in linux kernel
+ */
+	case IWN_DID_135_1:
+	case IWN_DID_135_2:
+		switch(sc->subdevice_id) {
+			case IWN_SDID_135_1:
+			case IWN_SDID_135_2:
+			case IWN_SDID_135_3:
+				sc->limits = &iwn2030_sensitivity_limits;
+				sc->base_params = &iwn2030_base_params;
+				sc->fwname = "iwn135fw";
+				break;
+			default:
+				device_printf(sc->sc_dev, "adapter type id : 0x%04x sub id :"
+				    "0x%04x rev %d not supported (subdevice)\n", pid,
+				    sc->subdevice_id,sc->hw_type);
+				return ENOTSUP;
+		}
+		break;
+
+/* 2x00 Series */
+	case IWN_DID_2x00_1:
+	case IWN_DID_2x00_2:
+		switch(sc->subdevice_id) {
+			case IWN_SDID_2x00_1:
+			case IWN_SDID_2x00_2:
+			case IWN_SDID_2x00_3:
+			//iwl2000_2bgn_cfg
+			case IWN_SDID_2x00_4:
+			//iwl2000_2bgn_d_cfg
+				sc->limits = &iwn2030_sensitivity_limits;
+				sc->base_params = &iwn2000_base_params;
+				sc->fwname = "iwn2000fw";
+				break;
+			default:
+				device_printf(sc->sc_dev, "adapter type id : 0x%04x sub id :"
+				    "0x%04x rev %d not supported (subdevice) \n",
+				    pid, sc->subdevice_id, sc->hw_type);
+				return ENOTSUP;
+		}
+		break;
+/* 2x30 Series */
+	case IWN_DID_2x30_1:
+	case IWN_DID_2x30_2:
+		switch(sc->subdevice_id) {
+			case IWN_SDID_2x30_1:
+			case IWN_SDID_2x30_3:
+			case IWN_SDID_2x30_5:
+			//iwl100_bgn_cfg
+			case IWN_SDID_2x30_2:
+			case IWN_SDID_2x30_4:
+			case IWN_SDID_2x30_6:
+			//iwl100_bg_cfg
+				sc->limits = &iwn2030_sensitivity_limits;
+				sc->base_params = &iwn2030_base_params;
+				sc->fwname = "iwn2030fw";
+				break;
+			default:
+				device_printf(sc->sc_dev, "adapter type id : 0x%04x sub id :"
+				    "0x%04x rev %d not supported (subdevice)\n", pid,
+				    sc->subdevice_id,sc->hw_type);
+				return ENOTSUP;
+		}
+		break;
+/* 5x00 Series */
+	case IWN_DID_5x00_1:
+	case IWN_DID_5x00_2:
+	case IWN_DID_5x00_3:
+	case IWN_DID_5x00_4:
+		sc->limits = &iwn5000_sensitivity_limits;
+		sc->base_params = &iwn5000_base_params;
+		sc->fwname = "iwn5000fw";
+		switch(sc->subdevice_id) {
+			case IWN_SDID_5x00_1:
+			case IWN_SDID_5x00_2:
+			case IWN_SDID_5x00_3:
+			case IWN_SDID_5x00_4:
+			case IWN_SDID_5x00_9:
+			case IWN_SDID_5x00_10:
+			case IWN_SDID_5x00_11:
+			case IWN_SDID_5x00_12:
+			case IWN_SDID_5x00_17:
+			case IWN_SDID_5x00_18:
+			case IWN_SDID_5x00_19:
+			case IWN_SDID_5x00_20:
+			//iwl5100_agn_cfg
+				sc->txchainmask = IWN_ANT_B;
+				sc->rxchainmask = IWN_ANT_AB;
+				break;
+			case IWN_SDID_5x00_5:
+			case IWN_SDID_5x00_6:
+			case IWN_SDID_5x00_13:
+			case IWN_SDID_5x00_14:
+			case IWN_SDID_5x00_21:
+			case IWN_SDID_5x00_22:
+			//iwl5100_bgn_cfg
+				sc->txchainmask = IWN_ANT_B;
+				sc->rxchainmask = IWN_ANT_AB;
+				break;
+			case IWN_SDID_5x00_7:
+			case IWN_SDID_5x00_8:
+			case IWN_SDID_5x00_15:
+			case IWN_SDID_5x00_16:
+			case IWN_SDID_5x00_23:
+			case IWN_SDID_5x00_24:
+			//iwl5100_abg_cfg
+				sc->txchainmask = IWN_ANT_B;
+				sc->rxchainmask = IWN_ANT_AB;
+				break;
+			case IWN_SDID_5x00_25:
+			case IWN_SDID_5x00_26:
+			case IWN_SDID_5x00_27:
+			case IWN_SDID_5x00_28:
+			case IWN_SDID_5x00_29:
+			case IWN_SDID_5x00_30:
+			case IWN_SDID_5x00_31:
+			case IWN_SDID_5x00_32:
+			case IWN_SDID_5x00_33:
+			case IWN_SDID_5x00_34:
+			case IWN_SDID_5x00_35:
+			case IWN_SDID_5x00_36:
+			//iwl5300_agn_cfg
+				sc->txchainmask = IWN_ANT_ABC;
+				sc->rxchainmask = IWN_ANT_ABC;
+				break;
+			default:
+				device_printf(sc->sc_dev, "adapter type id : 0x%04x sub id :"
+				    "0x%04x rev %d not supported (subdevice)\n", pid,
+				    sc->subdevice_id,sc->hw_type);
+				return ENOTSUP;
+		}
+		break;
+/* 5x50 Series */
+	case IWN_DID_5x50_1:
+	case IWN_DID_5x50_2:
+	case IWN_DID_5x50_3:
+	case IWN_DID_5x50_4:
+		sc->limits = &iwn5000_sensitivity_limits;
+		sc->base_params = &iwn5000_base_params;
+		sc->fwname = "iwn5000fw";
+		switch(sc->subdevice_id) {
+			case IWN_SDID_5x50_1:
+			case IWN_SDID_5x50_2:
+			case IWN_SDID_5x50_3:
+			//iwl5350_agn_cfg
+				sc->limits = &iwn5000_sensitivity_limits;
+				sc->base_params = &iwn5000_base_params;
+				sc->fwname = "iwn5000fw";
+				break;
+			case IWN_SDID_5x50_4:
+			case IWN_SDID_5x50_5:
+			case IWN_SDID_5x50_8:
+			case IWN_SDID_5x50_9:
+			case IWN_SDID_5x50_10:
+			case IWN_SDID_5x50_11:
+			//iwl5150_agn_cfg
+			case IWN_SDID_5x50_6:
+			case IWN_SDID_5x50_7:
+			case IWN_SDID_5x50_12:
+			case IWN_SDID_5x50_13:
+			//iwl5150_abg_cfg
+				sc->limits = &iwn5000_sensitivity_limits;
+				sc->fwname = "iwn5150fw";
+				sc->base_params = &iwn_5x50_base_params;
+				break;
+			default:
+				device_printf(sc->sc_dev, "adapter type id : 0x%04x sub id :"
+				    "0x%04x rev %d not supported (subdevice)\n", pid,
+				    sc->subdevice_id,sc->hw_type);
+				return ENOTSUP;
+		}
+		break;
+	default:
+		device_printf(sc->sc_dev, "adapter type id : 0x%04x sub id : 0x%04x"
+		    "rev 0x%08x not supported (device)\n", pid, sc->subdevice_id,
+		     sc->hw_type);
+		return ENOTSUP;
+	}
+	return 0;
 }
 
 static int
@@ -769,6 +1249,8 @@ iwn4965_attach(struct iwn_softc *sc, uint16_t pid)
 	/* Override chains masks, ROM is known to be broken. */
 	sc->txchainmask = IWN_ANT_AB;
 	sc->rxchainmask = IWN_ANT_ABC;
+	/* Enable normal btcoex */
+	sc->sc_flags |= IWN_FLAG_BTCOEX;
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "%s: end\n",__func__);
 
@@ -809,58 +1291,6 @@ iwn5000_attach(struct iwn_softc *sc, uint16_t pid)
 	sc->reset_noise_gain = IWN5000_PHY_CALIB_RESET_NOISE_GAIN;
 	sc->noise_gain = IWN5000_PHY_CALIB_NOISE_GAIN;
 
-	switch (sc->hw_type) {
-	case IWN_HW_REV_TYPE_5100:
-		sc->limits = &iwn5000_sensitivity_limits;
-		sc->fwname = "iwn5000fw";
-		/* Override chains masks, ROM is known to be broken. */
-		sc->txchainmask = IWN_ANT_B;
-		sc->rxchainmask = IWN_ANT_AB;
-		break;
-	case IWN_HW_REV_TYPE_5150:
-		sc->limits = &iwn5150_sensitivity_limits;
-		sc->fwname = "iwn5150fw";
-		break;
-	case IWN_HW_REV_TYPE_5300:
-	case IWN_HW_REV_TYPE_5350:
-		sc->limits = &iwn5000_sensitivity_limits;
-		sc->fwname = "iwn5000fw";
-		break;
-	case IWN_HW_REV_TYPE_1000:
-		sc->limits = &iwn1000_sensitivity_limits;
-		sc->fwname = "iwn1000fw";
-		break;
-	case IWN_HW_REV_TYPE_6000:
-		sc->limits = &iwn6000_sensitivity_limits;
-		sc->fwname = "iwn6000fw";
-		if (pid == 0x422c || pid == 0x4239) {
-			sc->sc_flags |= IWN_FLAG_INTERNAL_PA;
-			/* Override chains masks, ROM is known to be broken. */
-			sc->txchainmask = IWN_ANT_BC;
-			sc->rxchainmask = IWN_ANT_BC;
-		}
-		break;
-	case IWN_HW_REV_TYPE_6050:
-		sc->limits = &iwn6000_sensitivity_limits;
-		sc->fwname = "iwn6050fw";
-		/* Override chains masks, ROM is known to be broken. */
-		sc->txchainmask = IWN_ANT_AB;
-		sc->rxchainmask = IWN_ANT_AB;
-		break;
-	case IWN_HW_REV_TYPE_6005:
-		sc->limits = &iwn6000_sensitivity_limits;
-		if (pid != 0x0082 && pid != 0x0085) {
-			sc->fwname = "iwn6000g2bfw";
-			sc->sc_flags |= IWN_FLAG_ADV_BTCOEX;
-		} else
-			sc->fwname = "iwn6000g2afw";
-		break;
-	default:
-		device_printf(sc->sc_dev, "adapter type %d not supported\n",
-		    sc->hw_type);
-		DPRINTF(sc, IWN_DEBUG_TRACE, "->%s: end in error\n",__func__);
-		return ENOTSUP;
-	}
 	return 0;
 }
 
@@ -870,10 +1300,9 @@ iwn5000_attach(struct iwn_softc *sc, uint16_t pid)
 static void
 iwn_radiotap_attach(struct iwn_softc *sc)
 {
-	struct ifnet *ifp = sc->sc_ifp;
-	struct ieee80211com *ic = ifp->if_l2com;
+
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s begin\n", __func__);
-	ieee80211_radiotap_attach(ic,
+	ieee80211_radiotap_attach(&sc->sc_ic,
 	    &sc->sc_txtap.wt_ihdr, sizeof(sc->sc_txtap),
 		IWN_TX_RADIOTAP_PRESENT,
 	    &sc->sc_rxtap.wr_ihdr, sizeof(sc->sc_rxtap),
@@ -900,24 +1329,17 @@ iwn_vap_create(struct ieee80211com *ic, const char name[IFNAMSIZ], int unit,
     const uint8_t bssid[IEEE80211_ADDR_LEN],
     const uint8_t mac[IEEE80211_ADDR_LEN])
 {
+	struct iwn_softc *sc = ic->ic_softc;
 	struct iwn_vap *ivp;
 	struct ieee80211vap *vap;
-	uint8_t mac1[IEEE80211_ADDR_LEN];
-	struct iwn_softc *sc = ic->ic_ifp->if_softc;
 
 	if (!TAILQ_EMPTY(&ic->ic_vaps))		/* only one at a time */
 		return NULL;
 
-	IEEE80211_ADDR_COPY(mac1, mac);
-
-	ivp = (struct iwn_vap *) malloc(sizeof(struct iwn_vap),
-	    M_80211_VAP, M_NOWAIT | M_ZERO);
-	if (ivp == NULL)
-		return NULL;
+	ivp = malloc(sizeof(struct iwn_vap), M_80211_VAP, M_WAITOK | M_ZERO);
 	vap = &ivp->iv_vap;
-	ieee80211_vap_setup(ic, vap, name, unit, opmode, flags, bssid, mac1);
+	ieee80211_vap_setup(ic, vap, name, unit, opmode, flags, bssid);
 	ivp->ctx = IWN_RXON_BSS_CTX;
-	IEEE80211_ADDR_COPY(ivp->macaddr, mac1);
 	vap->iv_bmissthreshold = 10;		/* override default */
 	/* Override with driver methods. */
 	ivp->iv_newstate = vap->iv_newstate;
@@ -926,7 +1348,8 @@ iwn_vap_create(struct ieee80211com *ic, const char name[IFNAMSIZ], int unit,
 
 	ieee80211_ratectl_init(vap);
 	/* Complete setup. */
-	ieee80211_vap_attach(vap, iwn_media_change, ieee80211_media_status);
+	ieee80211_vap_attach(vap, iwn_media_change, ieee80211_media_status,
+	    mac);
 	ic->ic_opmode = opmode;
 	return vap;
 }
@@ -941,27 +1364,53 @@ iwn_vap_delete(struct ieee80211vap *vap)
 	free(ivp, M_80211_VAP);
 }
 
+static void
+iwn_xmit_queue_drain(struct iwn_softc *sc)
+{
+	struct mbuf *m;
+	struct ieee80211_node *ni;
+
+	IWN_LOCK_ASSERT(sc);
+	while ((m = mbufq_dequeue(&sc->sc_xmit_queue)) != NULL) {
+		ni = (struct ieee80211_node *)m->m_pkthdr.rcvif;
+		ieee80211_free_node(ni);
+		m_freem(m);
+	}
+}
+
+static int
+iwn_xmit_queue_enqueue(struct iwn_softc *sc, struct mbuf *m)
+{
+
+	IWN_LOCK_ASSERT(sc);
+	return (mbufq_enqueue(&sc->sc_xmit_queue, m));
+}
+
 static int
 iwn_detach(device_t dev)
 {
 	struct iwn_softc *sc = device_get_softc(dev);
-	struct ifnet *ifp = sc->sc_ifp;
-	struct ieee80211com *ic;
 	int qid;
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s begin\n", __func__);
 
-	if (ifp != NULL) {
-		ic = ifp->if_l2com;
+	if (sc->sc_ic.ic_softc != NULL) {
+		/* Free the mbuf queue and node references */
+		IWN_LOCK(sc);
+		iwn_xmit_queue_drain(sc);
+		IWN_UNLOCK(sc);
 
-		ieee80211_draintask(ic, &sc->sc_reinit_task);
-		ieee80211_draintask(ic, &sc->sc_radioon_task);
-		ieee80211_draintask(ic, &sc->sc_radiooff_task);
-
+		ieee80211_draintask(&sc->sc_ic, &sc->sc_radioon_task);
+		ieee80211_draintask(&sc->sc_ic, &sc->sc_radiooff_task);
 		iwn_stop(sc);
+
+		taskqueue_drain_all(sc->sc_tq);
+		taskqueue_free(sc->sc_tq);
+
 		callout_drain(&sc->watchdog_to);
+		callout_drain(&sc->scan_timeout);
 		callout_drain(&sc->calib_to);
-		ieee80211_ifdetach(ic);
+		ieee80211_ifdetach(&sc->sc_ic);
 	}
 
 	/* Uninstall interrupt handler. */
@@ -986,8 +1435,10 @@ iwn_detach(device_t dev)
 		bus_release_resource(dev, SYS_RES_MEMORY,
 		    rman_get_rid(sc->mem), sc->mem);
 
-	if (ifp != NULL)
-		if_free(ifp);
+	if (sc->sc_cdev) {
+		destroy_dev(sc->sc_cdev);
+		sc->sc_cdev = NULL;
+	}
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s: end\n", __func__);
 	IWN_LOCK_DESTROY(sc);
@@ -1007,9 +1458,8 @@ static int
 iwn_suspend(device_t dev)
 {
 	struct iwn_softc *sc = device_get_softc(dev);
-	struct ieee80211com *ic = sc->sc_ifp->if_l2com;
 
-	ieee80211_suspend_all(ic);
+	ieee80211_suspend_all(&sc->sc_ic);
 	return 0;
 }
 
@@ -1017,12 +1467,11 @@ static int
 iwn_resume(device_t dev)
 {
 	struct iwn_softc *sc = device_get_softc(dev);
-	struct ieee80211com *ic = sc->sc_ifp->if_l2com;
 
 	/* Clear device-specific "PCI retry timeout" register (41h). */
 	pci_write_config(dev, 0x41, 0, 1);
 
-	ieee80211_resume_all(ic);
+	ieee80211_resume_all(&sc->sc_ic);
 	return 0;
 }
 
@@ -1184,7 +1633,7 @@ iwn_init_otprom(struct iwn_softc *sc)
 	iwn_nic_unlock(sc);
 
 	/* Set auto clock gate disable bit for HW with OTP shadow RAM. */
-	if (sc->hw_type != IWN_HW_REV_TYPE_1000) {
+	if (sc->base_params->shadow_ram_support) {
 		IWN_SETBITS(sc, IWN_DBG_LINK_PWR_MGMT,
 		    IWN_RESET_LINK_PWR_MGMT_DIS);
 	}
@@ -1197,11 +1646,12 @@ iwn_init_otprom(struct iwn_softc *sc)
 	 * Find the block before last block (contains the EEPROM image)
 	 * for HW without OTP shadow RAM.
 	 */
-	if (sc->hw_type == IWN_HW_REV_TYPE_1000) {
+	if (! sc->base_params->shadow_ram_support) {
 		/* Switch to absolute addressing mode. */
 		IWN_CLRBITS(sc, IWN_OTP_GP, IWN_OTP_GP_RELATIVE_ACCESS);
 		base = prev = 0;
-		for (count = 0; count < IWN1000_OTP_NBLOCKS; count++) {
+		for (count = 0; count < sc->base_params->max_ll_items;
+		    count++) {
 			error = iwn_read_prom_data(sc, base, &next, 2);
 			if (error != 0)
 				return error;
@@ -1210,7 +1660,7 @@ iwn_init_otprom(struct iwn_softc *sc)
 			prev = base;
 			base = le16toh(next);
 		}
-		if (count == 0 || count == IWN1000_OTP_NBLOCKS)
+		if (count == 0 || count == sc->base_params->max_ll_items)
 			return EIO;
 		/* Skip "next" word. */
 		sc->prom_base = prev + 1;
@@ -1288,7 +1738,7 @@ iwn_dma_contig_alloc(struct iwn_softc *sc, struct iwn_dma_info *dma,
 
 	error = bus_dma_tag_create(bus_get_dma_tag(sc->sc_dev), alignment,
 	    0, BUS_SPACE_MAXADDR_32BIT, BUS_SPACE_MAXADDR, NULL, NULL, size,
-	    1, size, BUS_DMA_NOWAIT, NULL, NULL, &dma->tag);
+	    1, size, 0, NULL, NULL, &dma->tag);
 	if (error != 0)
 		goto fail;
 
@@ -1316,16 +1766,12 @@ fail:	iwn_dma_contig_free(dma);
 static void
 iwn_dma_contig_free(struct iwn_dma_info *dma)
 {
-	if (dma->map != NULL) {
-		if (dma->vaddr != NULL) {
-			bus_dmamap_sync(dma->tag, dma->map,
-			    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
-			bus_dmamap_unload(dma->tag, dma->map);
-			bus_dmamem_free(dma->tag, dma->vaddr, dma->map);
-			dma->vaddr = NULL;
-		}
-		bus_dmamap_destroy(dma->tag, dma->map);
-		dma->map = NULL;
+	if (dma->vaddr != NULL) {
+		bus_dmamap_sync(dma->tag, dma->map,
+		    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
+		bus_dmamap_unload(dma->tag, dma->map);
+		bus_dmamem_free(dma->tag, dma->vaddr, dma->map);
+		dma->vaddr = NULL;
 	}
 	if (dma->tag != NULL) {
 		bus_dma_tag_destroy(dma->tag);
@@ -1421,8 +1867,7 @@ iwn_alloc_rx_ring(struct iwn_softc *sc, struct iwn_rx_ring *ring)
 	/* Create RX buffer DMA tag. */
 	error = bus_dma_tag_create(bus_get_dma_tag(sc->sc_dev), 1, 0,
 	    BUS_SPACE_MAXADDR_32BIT, BUS_SPACE_MAXADDR, NULL, NULL,
-	    IWN_RBUF_SIZE, 1, IWN_RBUF_SIZE, BUS_DMA_NOWAIT, NULL, NULL,
-	    &ring->data_dmat);
+	    IWN_RBUF_SIZE, 1, IWN_RBUF_SIZE, 0, NULL, NULL, &ring->data_dmat);
 	if (error != 0) {
 		device_printf(sc->sc_dev,
 		    "%s: could not create RX buf DMA tag, error %d\n",
@@ -1459,7 +1904,7 @@ iwn_alloc_rx_ring(struct iwn_softc *sc, struct iwn_rx_ring *ring)
 		    &paddr, BUS_DMA_NOWAIT);
 		if (error != 0 && error != EFBIG) {
 			device_printf(sc->sc_dev,
-			    "%s: can't not map mbuf, error %d\n", __func__,
+			    "%s: can't map mbuf, error %d\n", __func__,
 			    error);
 			goto fail;
 		}
@@ -1568,8 +2013,7 @@ iwn_alloc_tx_ring(struct iwn_softc *sc, struct iwn_tx_ring *ring, int qid)
 
 	error = bus_dma_tag_create(bus_get_dma_tag(sc->sc_dev), 1, 0,
 	    BUS_SPACE_MAXADDR_32BIT, BUS_SPACE_MAXADDR, NULL, NULL, MCLBYTES,
-	    IWN_MAX_SCATTER - 1, MCLBYTES, BUS_DMA_NOWAIT, NULL, NULL,
-	    &ring->data_dmat);
+	    IWN_MAX_SCATTER - 1, MCLBYTES, 0, NULL, NULL, &ring->data_dmat);
 	if (error != 0) {
 		device_printf(sc->sc_dev,
 		    "%s: could not create TX buf DMA tag, error %d\n",
@@ -1619,6 +2063,10 @@ iwn_reset_tx_ring(struct iwn_softc *sc, struct iwn_tx_ring *ring)
 			bus_dmamap_unload(ring->data_dmat, data->map);
 			m_freem(data->m);
 			data->m = NULL;
+		}
+		if (data->ni != NULL) {
+			ieee80211_free_node(data->ni);
+			data->ni = NULL;
 		}
 	}
 	/* Clear TX descriptors. */
@@ -1767,8 +2215,8 @@ iwn4965_read_eeprom(struct iwn_softc *sc)
 	/* Read regulatory domain (4 ASCII characters). */
 	iwn_read_prom_data(sc, IWN4965_EEPROM_DOMAIN, sc->eeprom_domain, 4);
 
-	/* Read the list of authorized channels (20MHz ones only). */
-	for (i = 0; i < 7; i++) {
+	/* Read the list of authorized channels (20MHz & 40MHz). */
+	for (i = 0; i < IWN_NBANDS - 1; i++) {
 		addr = iwn4965_regulatory_bands[i];
 		iwn_read_eeprom_channels(sc, i, addr);
 	}
@@ -1798,7 +2246,7 @@ iwn4965_read_eeprom(struct iwn_softc *sc)
 #ifdef IWN_DEBUG
 	/* Print samples. */
 	if (sc->sc_debug & IWN_DEBUG_ANY) {
-		for (i = 0; i < IWN_NBANDS; i++)
+		for (i = 0; i < IWN_NBANDS - 1; i++)
 			iwn4965_print_power_group(sc, i);
 	}
 #endif
@@ -1858,17 +2306,14 @@ iwn5000_read_eeprom(struct iwn_softc *sc)
 	iwn_read_prom_data(sc, base + IWN5000_EEPROM_DOMAIN,
 	    sc->eeprom_domain, 4);
 
-	/* Read the list of authorized channels (20MHz ones only). */
-	for (i = 0; i < 7; i++) {
-		if (sc->hw_type >= IWN_HW_REV_TYPE_6000)
-			addr = base + iwn6000_regulatory_bands[i];
-		else
-			addr = base + iwn5000_regulatory_bands[i];
+	/* Read the list of authorized channels (20MHz & 40MHz). */
+	for (i = 0; i < IWN_NBANDS - 1; i++) {
+		addr =  base + sc->base_params->regulatory_bands[i];
 		iwn_read_eeprom_channels(sc, i, addr);
 	}
 
 	/* Read enhanced TX power information for 6000 Series. */
-	if (sc->hw_type >= IWN_HW_REV_TYPE_6000)
+	if (sc->base_params->enhanced_TX_power)
 		iwn_read_eeprom_enhinfo(sc);
 
 	iwn_read_prom_data(sc, IWN5000_EEPROM_CAL, &val, 2);
@@ -1878,6 +2323,14 @@ iwn5000_read_eeprom(struct iwn_softc *sc)
 	    "%s: calib version=%u pa type=%u voltage=%u\n", __func__,
 	    hdr.version, hdr.pa_type, le16toh(hdr.volt));
 	sc->calib_ver = hdr.version;
+
+	if (sc->base_params->calib_need & IWN_FLG_NEED_PHY_CALIB_TEMP_OFFSETv2) {
+		sc->eeprom_voltage = le16toh(hdr.volt);
+		iwn_read_prom_data(sc, base + IWN5000_EEPROM_TEMP, &val, 2);
+		sc->eeprom_temp_high=le16toh(val);
+		iwn_read_prom_data(sc, base + IWN5000_EEPROM_VOLT, &val, 2);
+		sc->eeprom_temp = le16toh(val);
+	}
 
 	if (sc->hw_type == IWN_HW_REV_TYPE_5150) {
 		/* Compute temperature offset. */
@@ -1923,17 +2376,28 @@ iwn_eeprom_channel_flags(struct iwn_eeprom_chan *channel)
 }
 
 static void
-iwn_read_eeprom_band(struct iwn_softc *sc, int n)
+iwn_read_eeprom_band(struct iwn_softc *sc, int n, int maxchans, int *nchans,
+    struct ieee80211_channel chans[])
 {
-	struct ifnet *ifp = sc->sc_ifp;
-	struct ieee80211com *ic = ifp->if_l2com;
 	struct iwn_eeprom_chan *channels = sc->eeprom_channels[n];
 	const struct iwn_chan_band *band = &iwn_bands[n];
-	struct ieee80211_channel *c;
+	uint8_t bands[IEEE80211_MODE_BYTES];
 	uint8_t chan;
-	int i, nflags;
+	int i, error, nflags;
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s begin\n", __func__);
+
+	memset(bands, 0, sizeof(bands));
+	if (n == 0) {
+		setbit(bands, IEEE80211_MODE_11B);
+		setbit(bands, IEEE80211_MODE_11G);
+		if (sc->sc_flags & IWN_FLAG_HAS_11N)
+			setbit(bands, IEEE80211_MODE_11NG);
+	} else {
+		setbit(bands, IEEE80211_MODE_11A);
+		if (sc->sc_flags & IWN_FLAG_HAS_11N)
+			setbit(bands, IEEE80211_MODE_11NA);
+	}
 
 	for (i = 0; i < band->nchan; i++) {
 		if (!(channels[i].flags & IWN_EEPROM_CHAN_VALID)) {
@@ -1943,39 +2407,21 @@ iwn_read_eeprom_band(struct iwn_softc *sc, int n)
 			    channels[i].maxpwr);
 			continue;
 		}
+
 		chan = band->chan[i];
 		nflags = iwn_eeprom_channel_flags(&channels[i]);
-
-		c = &ic->ic_channels[ic->ic_nchans++];
-		c->ic_ieee = chan;
-		c->ic_maxregpower = channels[i].maxpwr;
-		c->ic_maxpower = 2*c->ic_maxregpower;
-
-		if (n == 0) {	/* 2GHz band */
-			c->ic_freq = ieee80211_ieee2mhz(chan, IEEE80211_CHAN_G);
-			/* G =>'s B is supported */
-			c->ic_flags = IEEE80211_CHAN_B | nflags;
-			c = &ic->ic_channels[ic->ic_nchans++];
-			c[0] = c[-1];
-			c->ic_flags = IEEE80211_CHAN_G | nflags;
-		} else {	/* 5GHz band */
-			c->ic_freq = ieee80211_ieee2mhz(chan, IEEE80211_CHAN_A);
-			c->ic_flags = IEEE80211_CHAN_A | nflags;
-		}
+		error = ieee80211_add_channel(chans, maxchans, nchans,
+		    chan, 0, channels[i].maxpwr, nflags, bands);
+		if (error != 0)
+			break;
 
 		/* Save maximum allowed TX power for this channel. */
+		/* XXX wrong */
 		sc->maxpwr[chan] = channels[i].maxpwr;
 
 		DPRINTF(sc, IWN_DEBUG_RESET,
 		    "add chan %d flags 0x%x maxpwr %d\n", chan,
 		    channels[i].flags, channels[i].maxpwr);
-
-		if (sc->sc_flags & IWN_FLAG_HAS_11N) {
-			/* add HT20, HT40 added separately */
-			c = &ic->ic_channels[ic->ic_nchans++];
-			c[0] = c[-1];
-			c->ic_flags |= IEEE80211_CHAN_HT20;
-		}
 	}
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s end\n", __func__);
@@ -1983,15 +2429,13 @@ iwn_read_eeprom_band(struct iwn_softc *sc, int n)
 }
 
 static void
-iwn_read_eeprom_ht40(struct iwn_softc *sc, int n)
+iwn_read_eeprom_ht40(struct iwn_softc *sc, int n, int maxchans, int *nchans,
+    struct ieee80211_channel chans[])
 {
-	struct ifnet *ifp = sc->sc_ifp;
-	struct ieee80211com *ic = ifp->if_l2com;
 	struct iwn_eeprom_chan *channels = sc->eeprom_channels[n];
 	const struct iwn_chan_band *band = &iwn_bands[n];
-	struct ieee80211_channel *c, *cent, *extc;
 	uint8_t chan;
-	int i, nflags;
+	int i, error, nflags;
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s start\n", __func__);
 
@@ -2008,43 +2452,34 @@ iwn_read_eeprom_ht40(struct iwn_softc *sc, int n)
 			    channels[i].maxpwr);
 			continue;
 		}
+
 		chan = band->chan[i];
 		nflags = iwn_eeprom_channel_flags(&channels[i]);
-
-		/*
-		 * Each entry defines an HT40 channel pair; find the
-		 * center channel, then the extension channel above.
-		 */
-		cent = ieee80211_find_channel_byieee(ic, chan,
-		    (n == 5 ? IEEE80211_CHAN_G : IEEE80211_CHAN_A));
-		if (cent == NULL) {	/* XXX shouldn't happen */
+		nflags |= (n == 5 ? IEEE80211_CHAN_G : IEEE80211_CHAN_A);
+		error = ieee80211_add_channel_ht40(chans, maxchans, nchans,
+		    chan, channels[i].maxpwr, nflags);
+		switch (error) {
+		case EINVAL:
 			device_printf(sc->sc_dev,
 			    "%s: no entry for channel %d\n", __func__, chan);
 			continue;
-		}
-		extc = ieee80211_find_channel(ic, cent->ic_freq+20,
-		    (n == 5 ? IEEE80211_CHAN_G : IEEE80211_CHAN_A));
-		if (extc == NULL) {
+		case ENOENT:
 			DPRINTF(sc, IWN_DEBUG_RESET,
 			    "%s: skip chan %d, extension channel not found\n",
 			    __func__, chan);
 			continue;
+		case ENOBUFS:
+			device_printf(sc->sc_dev,
+			    "%s: channel table is full!\n", __func__);
+			break;
+		case 0:
+			DPRINTF(sc, IWN_DEBUG_RESET,
+			    "add ht40 chan %d flags 0x%x maxpwr %d\n",
+			    chan, channels[i].flags, channels[i].maxpwr);
+			/* FALLTHROUGH */
+		default:
+			break;
 		}
-
-		DPRINTF(sc, IWN_DEBUG_RESET,
-		    "add ht40 chan %d flags 0x%x maxpwr %d\n",
-		    chan, channels[i].flags, channels[i].maxpwr);
-
-		c = &ic->ic_channels[ic->ic_nchans++];
-		c[0] = cent[0];
-		c->ic_extieee = extc->ic_ieee;
-		c->ic_flags &= ~IEEE80211_CHAN_HT;
-		c->ic_flags |= IEEE80211_CHAN_HT40U | nflags;
-		c = &ic->ic_channels[ic->ic_nchans++];
-		c[0] = extc[0];
-		c->ic_extieee = cent->ic_ieee;
-		c->ic_flags &= ~IEEE80211_CHAN_HT;
-		c->ic_flags |= IEEE80211_CHAN_HT40D | nflags;
 	}
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s end\n", __func__);
@@ -2054,16 +2489,18 @@ iwn_read_eeprom_ht40(struct iwn_softc *sc, int n)
 static void
 iwn_read_eeprom_channels(struct iwn_softc *sc, int n, uint32_t addr)
 {
-	struct ifnet *ifp = sc->sc_ifp;
-	struct ieee80211com *ic = ifp->if_l2com;
+	struct ieee80211com *ic = &sc->sc_ic;
 
 	iwn_read_prom_data(sc, addr, &sc->eeprom_channels[n],
 	    iwn_bands[n].nchan * sizeof (struct iwn_eeprom_chan));
 
-	if (n < 5)
-		iwn_read_eeprom_band(sc, n);
-	else
-		iwn_read_eeprom_ht40(sc, n);
+	if (n < 5) {
+		iwn_read_eeprom_band(sc, n, IEEE80211_CHAN_MAX, &ic->ic_nchans,
+		    ic->ic_channels);
+	} else {
+		iwn_read_eeprom_ht40(sc, n, IEEE80211_CHAN_MAX, &ic->ic_nchans,
+		    ic->ic_channels);
+	}
 	ieee80211_sort_channels(ic->ic_channels, ic->ic_nchans);
 }
 
@@ -2085,12 +2522,27 @@ iwn_find_eeprom_channel(struct iwn_softc *sc, struct ieee80211_channel *c)
 	} else {
 		for (j = 0; j < 5; j++) {
 			for (i = 0; i < iwn_bands[j].nchan; i++) {
-				if (iwn_bands[j].chan[i] == c->ic_ieee)
+				if (iwn_bands[j].chan[i] == c->ic_ieee &&
+				    ((j == 0) ^ IEEE80211_IS_CHAN_A(c)) == 1)
 					return &sc->eeprom_channels[j][i];
 			}
 		}
 	}
 	return NULL;
+}
+
+static void
+iwn_getradiocaps(struct ieee80211com *ic,
+    int maxchans, int *nchans, struct ieee80211_channel chans[])
+{
+	struct iwn_softc *sc = ic->ic_softc;
+	int i;
+
+	/* Parse the list of authorized channels. */
+	for (i = 0; i < 5 && *nchans < maxchans; i++)
+		iwn_read_eeprom_band(sc, i, maxchans, nchans, chans);
+	for (i = 5; i < IWN_NBANDS - 1 && *nchans < maxchans; i++)
+		iwn_read_eeprom_ht40(sc, i, maxchans, nchans, chans);
 }
 
 /*
@@ -2100,7 +2552,7 @@ static int
 iwn_setregdomain(struct ieee80211com *ic, struct ieee80211_regdomain *rd,
     int nchan, struct ieee80211_channel chans[])
 {
-	struct iwn_softc *sc = ic->ic_ifp->if_softc;
+	struct iwn_softc *sc = ic->ic_softc;
 	int i;
 
 	for (i = 0; i < nchan; i++) {
@@ -2109,8 +2561,7 @@ iwn_setregdomain(struct ieee80211com *ic, struct ieee80211_regdomain *rd,
 
 		channel = iwn_find_eeprom_channel(sc, c);
 		if (channel == NULL) {
-			if_printf(ic->ic_ifp,
-			    "%s: invalid channel %u freq %u/0x%x\n",
+			ic_printf(ic, "%s: invalid channel %u freq %u/0x%x\n",
 			    __func__, c->ic_ieee, c->ic_freq, c->ic_flags);
 			return EINVAL;
 		}
@@ -2124,8 +2575,7 @@ static void
 iwn_read_eeprom_enhinfo(struct iwn_softc *sc)
 {
 	struct iwn_eeprom_enhinfo enhinfo[35];
-	struct ifnet *ifp = sc->sc_ifp;
-	struct ieee80211com *ic = ifp->if_l2com;
+	struct ieee80211com *ic = &sc->sc_ic;
 	struct ieee80211_channel *c;
 	uint16_t val, base;
 	int8_t maxpwr;
@@ -2215,6 +2665,52 @@ rate2plcp(int rate)
 	return 0;
 }
 
+static int
+iwn_get_1stream_tx_antmask(struct iwn_softc *sc)
+{
+
+	return IWN_LSB(sc->txchainmask);
+}
+
+static int
+iwn_get_2stream_tx_antmask(struct iwn_softc *sc)
+{
+	int tx;
+
+	/*
+	 * The '2 stream' setup is a bit .. odd.
+	 *
+	 * For NICs that support only 1 antenna, default to IWN_ANT_AB or
+	 * the firmware panics (eg Intel 5100.)
+	 *
+	 * For NICs that support two antennas, we use ANT_AB.
+	 *
+	 * For NICs that support three antennas, we use the two that
+	 * wasn't the default one.
+	 *
+	 * XXX TODO: if bluetooth (full concurrent) is enabled, restrict
+	 * this to only one antenna.
+	 */
+
+	/* Default - transmit on the other antennas */
+	tx = (sc->txchainmask & ~IWN_LSB(sc->txchainmask));
+
+	/* Now, if it's zero, set it to IWN_ANT_AB, so to not panic firmware */
+	if (tx == 0)
+		tx = IWN_ANT_AB;
+
+	/*
+	 * If the NIC is a two-stream TX NIC, configure the TX mask to
+	 * the default chainmask
+	 */
+	else if (sc->ntxchains == 2)
+		tx = sc->txchainmask;
+
+	return (tx);
+}
+
+
+
 /*
  * Calculate the required PLCP value from the given rate,
  * to the given node.
@@ -2226,27 +2722,21 @@ static uint32_t
 iwn_rate_to_plcp(struct iwn_softc *sc, struct ieee80211_node *ni,
     uint8_t rate)
 {
-#define	RV(v)	((v) & IEEE80211_RATE_VAL)
 	struct ieee80211com *ic = ni->ni_ic;
-	uint8_t txant1, txant2;
 	uint32_t plcp = 0;
 	int ridx;
-
-	/* Use the first valid TX antenna. */
-	txant1 = IWN_LSB(sc->txchainmask);
-	txant2 = IWN_LSB(sc->txchainmask & ~txant1);
 
 	/*
 	 * If it's an MCS rate, let's set the plcp correctly
 	 * and set the relevant flags based on the node config.
 	 */
-	if (IEEE80211_IS_CHAN_HT(ni->ni_chan)) {
+	if (rate & IEEE80211_RATE_MCS) {
 		/*
 		 * Set the initial PLCP value to be between 0->31 for
 		 * MCS 0 -> MCS 31, then set the "I'm an MCS rate!"
 		 * flag.
 		 */
-		plcp = RV(rate) | IWN_RFLAG_MCS;
+		plcp = IEEE80211_RV(rate) | IWN_RFLAG_MCS;
 
 		/*
 		 * XXX the following should only occur if both
@@ -2267,15 +2757,15 @@ iwn_rate_to_plcp(struct iwn_softc *sc, struct ieee80211_node *ni,
 		}
 
 		/*
-		 * If it's a two stream rate, enable TX on both
-		 * antennas.
-		 *
-		 * XXX three stream rates?
+		 * Ensure the selected rate matches the link quality
+		 * table entries being used.
 		 */
-		if (rate > 0x87)
-			plcp |= IWN_RFLAG_ANT(txant1 | txant2);
+		if (rate > 0x8f)
+			plcp |= IWN_RFLAG_ANT(sc->txchainmask);
+		else if (rate > 0x87)
+			plcp |= IWN_RFLAG_ANT(iwn_get_2stream_tx_antmask(sc));
 		else
-			plcp |= IWN_RFLAG_ANT(txant1);
+			plcp |= IWN_RFLAG_ANT(iwn_get_1stream_tx_antmask(sc));
 	} else {
 		/*
 		 * Set the initial PLCP - fine for both
@@ -2297,7 +2787,8 @@ iwn_rate_to_plcp(struct iwn_softc *sc, struct ieee80211_node *ni,
 			plcp |= IWN_RFLAG_CCK;
 
 		/* Set antenna configuration */
-		plcp |= IWN_RFLAG_ANT(txant1);
+		/* XXX TODO: is this the right antenna to use for legacy? */
+		plcp |= IWN_RFLAG_ANT(iwn_get_1stream_tx_antmask(sc));
 	}
 
 	DPRINTF(sc, IWN_DEBUG_TXRATE, "%s: rate=0x%02x, plcp=0x%08x\n",
@@ -2306,7 +2797,6 @@ iwn_rate_to_plcp(struct iwn_softc *sc, struct ieee80211_node *ni,
 	    plcp);
 
 	return (htole32(plcp));
-#undef	RV
 }
 
 static void
@@ -2330,7 +2820,7 @@ iwn_newstate(struct ieee80211vap *vap, enum ieee80211_state nstate, int arg)
 {
 	struct iwn_vap *ivp = IWN_VAP(vap);
 	struct ieee80211com *ic = vap->iv_ic;
-	struct iwn_softc *sc = ic->ic_ifp->if_softc;
+	struct iwn_softc *sc = ic->ic_softc;
 	int error = 0;
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s begin\n", __func__);
@@ -2361,6 +2851,10 @@ iwn_newstate(struct ieee80211vap *vap, enum ieee80211_state nstate, int arg)
 		sc->rxon->filter &= ~htole32(IWN_FILTER_BSS);
 		sc->calib.state = IWN_CALIB_STATE_INIT;
 
+		/* Wait until we hear a beacon before we transmit */
+		if (IEEE80211_IS_CHAN_PASSIVE(ic->ic_curchan))
+			sc->sc_beacon_wait = 1;
+
 		if ((error = iwn_auth(sc, vap)) != 0) {
 			device_printf(sc->sc_dev,
 			    "%s: could not move to auth state\n", __func__);
@@ -2376,6 +2870,10 @@ iwn_newstate(struct ieee80211vap *vap, enum ieee80211_state nstate, int arg)
 			break;
 		}
 
+		/* Wait until we hear a beacon before we transmit */
+		if (IEEE80211_IS_CHAN_PASSIVE(ic->ic_curchan))
+			sc->sc_beacon_wait = 1;
+
 		/*
 		 * !RUN -> RUN requires setting the association id
 		 * which is done with a firmware cmd.  We also defer
@@ -2389,6 +2887,12 @@ iwn_newstate(struct ieee80211vap *vap, enum ieee80211_state nstate, int arg)
 
 	case IEEE80211_S_INIT:
 		sc->calib.state = IWN_CALIB_STATE_INIT;
+		/*
+		 * Purge the xmit queue so we don't have old frames
+		 * during a new association attempt.
+		 */
+		sc->sc_beacon_wait = 0;
+		iwn_xmit_queue_drain(sc);
 		break;
 
 	default:
@@ -2454,8 +2958,7 @@ iwn_rx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc,
     struct iwn_rx_data *data)
 {
 	struct iwn_ops *ops = &sc->ops;
-	struct ifnet *ifp = sc->sc_ifp;
-	struct ieee80211com *ic = ifp->if_l2com;
+	struct ieee80211com *ic = &sc->sc_ic;
 	struct iwn_rx_ring *ring = &sc->rxq;
 	struct ieee80211_frame *wh;
 	struct ieee80211_node *ni;
@@ -2502,14 +3005,14 @@ iwn_rx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc,
 	if ((flags & IWN_RX_NOERROR) != IWN_RX_NOERROR) {
 		DPRINTF(sc, IWN_DEBUG_RECV, "%s: RX flags error %x\n",
 		    __func__, flags);
-		ifp->if_ierrors++;
+		counter_u64_add(ic->ic_ierrors, 1);
 		return;
 	}
 	/* Discard frames that are too short. */
-	if (len < sizeof (*wh)) {
+	if (len < sizeof (struct ieee80211_frame_ack)) {
 		DPRINTF(sc, IWN_DEBUG_RECV, "%s: frame too short: %d\n",
 		    __func__, len);
-		ifp->if_ierrors++;
+		counter_u64_add(ic->ic_ierrors, 1);
 		return;
 	}
 
@@ -2517,7 +3020,7 @@ iwn_rx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc,
 	if (m1 == NULL) {
 		DPRINTF(sc, IWN_DEBUG_ANY, "%s: no mbuf to restock ring\n",
 		    __func__);
-		ifp->if_ierrors++;
+		counter_u64_add(ic->ic_ierrors, 1);
 		return;
 	}
 	bus_dmamap_unload(ring->data_dmat, data->map);
@@ -2540,7 +3043,7 @@ iwn_rx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc,
 		ring->desc[ring->cur] = htole32(paddr >> 8);
 		bus_dmamap_sync(ring->data_dmat, ring->desc_dma.map,
 		    BUS_DMASYNC_PREWRITE);
-		ifp->if_ierrors++;
+		counter_u64_add(ic->ic_ierrors, 1);
 		return;
 	}
 
@@ -2552,13 +3055,15 @@ iwn_rx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc,
 	    BUS_DMASYNC_PREWRITE);
 
 	/* Finalize mbuf. */
-	m->m_pkthdr.rcvif = ifp;
 	m->m_data = head;
 	m->m_pkthdr.len = m->m_len = len;
 
 	/* Grab a reference to the source node. */
 	wh = mtod(m, struct ieee80211_frame *);
-	ni = ieee80211_find_rxnode(ic, (struct ieee80211_frame_min *)wh);
+	if (len >= sizeof(struct ieee80211_frame_min))
+		ni = ieee80211_find_rxnode(ic, (struct ieee80211_frame_min *)wh);
+	else
+		ni = NULL;
 	nf = (ni != NULL && ni->ni_vap->iv_state == IEEE80211_S_RUN &&
 	    (ic->ic_flags & IEEE80211_F_SCAN) == 0) ? sc->noise : -95;
 
@@ -2593,6 +3098,32 @@ iwn_rx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc,
 		}
 	}
 
+	/*
+	 * If it's a beacon and we're waiting, then do the
+	 * wakeup.  This should unblock raw_xmit/start.
+	 */
+	if (sc->sc_beacon_wait) {
+		uint8_t type, subtype;
+		/* NB: Re-assign wh */
+		wh = mtod(m, struct ieee80211_frame *);
+		type = wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
+		subtype = wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK;
+		/*
+		 * This assumes at this point we've received our own
+		 * beacon.
+		 */
+		DPRINTF(sc, IWN_DEBUG_TRACE,
+		    "%s: beacon_wait, type=%d, subtype=%d\n",
+		    __func__, type, subtype);
+		if (type == IEEE80211_FC0_TYPE_MGT &&
+		    subtype == IEEE80211_FC0_SUBTYPE_BEACON) {
+			DPRINTF(sc, IWN_DEBUG_TRACE | IWN_DEBUG_XMIT,
+			    "%s: waking things up\n", __func__);
+			/* queue taskqueue to transmit! */
+			taskqueue_enqueue(sc->sc_tq, &sc->sc_xmit_task);
+		}
+	}
+
 	IWN_UNLOCK(sc);
 
 	/* Send the frame to the 802.11 layer. */
@@ -2617,7 +3148,6 @@ iwn_rx_compressed_ba(struct iwn_softc *sc, struct iwn_rx_desc *desc,
     struct iwn_rx_data *data)
 {
 	struct iwn_ops *ops = &sc->ops;
-	struct ifnet *ifp = sc->sc_ifp;
 	struct iwn_node *wn;
 	struct ieee80211_node *ni;
 	struct iwn_compressed_ba *ba = (struct iwn_compressed_ba *)(desc + 1);
@@ -2629,8 +3159,9 @@ iwn_rx_compressed_ba(struct iwn_softc *sc, struct iwn_rx_desc *desc,
 	uint16_t ssn;
 	uint8_t tid;
 	int ackfailcnt = 0, i, lastidx, qid, *res, shift;
+	int tx_ok = 0, tx_err = 0;
 
-	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s begin\n", __func__);
+	DPRINTF(sc, IWN_DEBUG_TRACE | IWN_DEBUG_XMIT, "->%s begin\n", __func__);
 
 	bus_dmamap_sync(sc->rxq.data_dmat, data->map, BUS_DMASYNC_POSTREAD);
 
@@ -2660,6 +3191,7 @@ iwn_rx_compressed_ba(struct iwn_softc *sc, struct iwn_rx_desc *desc,
 		KASSERT(ni != NULL, ("no node"));
 		KASSERT(m != NULL, ("no mbuf"));
 
+		DPRINTF(sc, IWN_DEBUG_XMIT, "%s: freeing m=%p\n", __func__, m);
 		ieee80211_tx_complete(ni, m, 1);
 
 		txq->queued--;
@@ -2685,22 +3217,30 @@ iwn_rx_compressed_ba(struct iwn_softc *sc, struct iwn_rx_desc *desc,
 	if (wn->agg[tid].nframes > (64 - shift))
 		return;
 
+	/*
+	 * Walk the bitmap and calculate how many successful and failed
+	 * attempts are made.
+	 *
+	 * Yes, the rate control code doesn't know these are A-MPDU
+	 * subframes and that it's okay to fail some of these.
+	 */
 	ni = tap->txa_ni;
 	bitmap = (le64toh(ba->bitmap) >> shift) & wn->agg[tid].bitmap;
 	for (i = 0; bitmap; i++) {
 		if ((bitmap & 1) == 0) {
-			ifp->if_oerrors++;
+			tx_err ++;
 			ieee80211_ratectl_tx_complete(ni->ni_vap, ni,
 			    IEEE80211_RATECTL_TX_FAILURE, &ackfailcnt, NULL);
 		} else {
-			ifp->if_opackets++;
+			tx_ok ++;
 			ieee80211_ratectl_tx_complete(ni->ni_vap, ni,
 			    IEEE80211_RATECTL_TX_SUCCESS, &ackfailcnt, NULL);
 		}
 		bitmap >>= 1;
 	}
 
-	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s: end\n",__func__);
+	DPRINTF(sc, IWN_DEBUG_TRACE | IWN_DEBUG_XMIT,
+	    "->%s: end; %d ok; %d err\n",__func__, tx_ok, tx_err);
 
 }
 
@@ -2728,25 +3268,24 @@ iwn5000_rx_calib_results(struct iwn_softc *sc, struct iwn_rx_desc *desc,
 
 	switch (calib->code) {
 	case IWN5000_PHY_CALIB_DC:
-		if ((sc->sc_flags & IWN_FLAG_INTERNAL_PA) == 0 &&
-		    (sc->hw_type == IWN_HW_REV_TYPE_5150 ||
-		     sc->hw_type >= IWN_HW_REV_TYPE_6000) &&
-		     sc->hw_type != IWN_HW_REV_TYPE_6050)
+		if (sc->base_params->calib_need & IWN_FLG_NEED_PHY_CALIB_DC)
 			idx = 0;
 		break;
 	case IWN5000_PHY_CALIB_LO:
-		idx = 1;
+		if (sc->base_params->calib_need & IWN_FLG_NEED_PHY_CALIB_LO)
+			idx = 1;
 		break;
 	case IWN5000_PHY_CALIB_TX_IQ:
-		idx = 2;
+		if (sc->base_params->calib_need & IWN_FLG_NEED_PHY_CALIB_TX_IQ)
+			idx = 2;
 		break;
 	case IWN5000_PHY_CALIB_TX_IQ_PERIODIC:
-		if (sc->hw_type < IWN_HW_REV_TYPE_6000 &&
-		    sc->hw_type != IWN_HW_REV_TYPE_5150)
+		if (sc->base_params->calib_need & IWN_FLG_NEED_PHY_CALIB_TX_IQ_PERIODIC)
 			idx = 3;
 		break;
 	case IWN5000_PHY_CALIB_BASE_BAND:
-		idx = 4;
+		if (sc->base_params->calib_need & IWN_FLG_NEED_PHY_CALIB_BASE_BAND)
+			idx = 4;
 		break;
 	}
 	if (idx == -1)	/* Ignore other results. */
@@ -2763,9 +3302,70 @@ iwn5000_rx_calib_results(struct iwn_softc *sc, struct iwn_rx_desc *desc,
 		return;
 	}
 	DPRINTF(sc, IWN_DEBUG_CALIBRATE,
-	    "saving calibration result code=%d len=%d\n", calib->code, len);
+	    "saving calibration result idx=%d, code=%d len=%d\n", idx, calib->code, len);
 	sc->calibcmd[idx].len = len;
 	memcpy(sc->calibcmd[idx].buf, calib, len);
+}
+
+static void
+iwn_stats_update(struct iwn_softc *sc, struct iwn_calib_state *calib,
+    struct iwn_stats *stats, int len)
+{
+	struct iwn_stats_bt *stats_bt;
+	struct iwn_stats *lstats;
+
+	/*
+	 * First - check whether the length is the bluetooth or normal.
+	 *
+	 * If it's normal - just copy it and bump out.
+	 * Otherwise we have to convert things.
+	 */
+
+	if (len == sizeof(struct iwn_stats) + 4) {
+		memcpy(&sc->last_stat, stats, sizeof(struct iwn_stats));
+		sc->last_stat_valid = 1;
+		return;
+	}
+
+	/*
+	 * If it's not the bluetooth size - log, then just copy.
+	 */
+	if (len != sizeof(struct iwn_stats_bt) + 4) {
+		DPRINTF(sc, IWN_DEBUG_STATS,
+		    "%s: size of rx statistics (%d) not an expected size!\n",
+		    __func__,
+		    len);
+		memcpy(&sc->last_stat, stats, sizeof(struct iwn_stats));
+		sc->last_stat_valid = 1;
+		return;
+	}
+
+	/*
+	 * Ok. Time to copy.
+	 */
+	stats_bt = (struct iwn_stats_bt *) stats;
+	lstats = &sc->last_stat;
+
+	/* flags */
+	lstats->flags = stats_bt->flags;
+	/* rx_bt */
+	memcpy(&lstats->rx.ofdm, &stats_bt->rx_bt.ofdm,
+	    sizeof(struct iwn_rx_phy_stats));
+	memcpy(&lstats->rx.cck, &stats_bt->rx_bt.cck,
+	    sizeof(struct iwn_rx_phy_stats));
+	memcpy(&lstats->rx.general, &stats_bt->rx_bt.general_bt.common,
+	    sizeof(struct iwn_rx_general_stats));
+	memcpy(&lstats->rx.ht, &stats_bt->rx_bt.ht,
+	    sizeof(struct iwn_rx_ht_phy_stats));
+	/* tx */
+	memcpy(&lstats->tx, &stats_bt->tx,
+	    sizeof(struct iwn_tx_stats));
+	/* general */
+	memcpy(&lstats->general, &stats_bt->general,
+	    sizeof(struct iwn_general_stats));
+
+	/* XXX TODO: Squirrel away the extra bluetooth stats somewhere */
+	sc->last_stat_valid = 1;
 }
 
 /*
@@ -2777,11 +3377,11 @@ iwn_rx_statistics(struct iwn_softc *sc, struct iwn_rx_desc *desc,
     struct iwn_rx_data *data)
 {
 	struct iwn_ops *ops = &sc->ops;
-	struct ifnet *ifp = sc->sc_ifp;
-	struct ieee80211com *ic = ifp->if_l2com;
+	struct ieee80211com *ic = &sc->sc_ic;
 	struct ieee80211vap *vap = TAILQ_FIRST(&ic->ic_vaps);
 	struct iwn_calib_state *calib = &sc->calib;
 	struct iwn_stats *stats = (struct iwn_stats *)(desc + 1);
+	struct iwn_stats *lstats;
 	int temp;
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s begin\n", __func__);
@@ -2796,12 +3396,26 @@ iwn_rx_statistics(struct iwn_softc *sc, struct iwn_rx_desc *desc,
 
 	bus_dmamap_sync(sc->rxq.data_dmat, data->map, BUS_DMASYNC_POSTREAD);
 
-	DPRINTF(sc, IWN_DEBUG_CALIBRATE, "%s: received statistics, cmd %d\n",
-	    __func__, desc->type);
+	DPRINTF(sc, IWN_DEBUG_CALIBRATE | IWN_DEBUG_STATS,
+	    "%s: received statistics, cmd %d, len %d\n",
+	    __func__, desc->type, le16toh(desc->len));
 	sc->calib_cnt = 0;	/* Reset TX power calibration timeout. */
 
+	/*
+	 * Collect/track general statistics for reporting.
+	 *
+	 * This takes care of ensuring that the bluetooth sized message
+	 * will be correctly converted to the legacy sized message.
+	 */
+	iwn_stats_update(sc, calib, stats, le16toh(desc->len));
+
+	/*
+	 * And now, let's take a reference of it to use!
+	 */
+	lstats = &sc->last_stat;
+
 	/* Test if temperature has changed. */
-	if (stats->general.temp != sc->rawtemp) {
+	if (lstats->general.temp != sc->rawtemp) {
 		/* Convert "raw" temperature to degC. */
 		sc->rawtemp = stats->general.temp;
 		temp = ops->get_temperature(sc);
@@ -2816,22 +3430,48 @@ iwn_rx_statistics(struct iwn_softc *sc, struct iwn_rx_desc *desc,
 	if (desc->type != IWN_BEACON_STATISTICS)
 		return;	/* Reply to a statistics request. */
 
-	sc->noise = iwn_get_noise(&stats->rx.general);
+	sc->noise = iwn_get_noise(&lstats->rx.general);
 	DPRINTF(sc, IWN_DEBUG_CALIBRATE, "%s: noise %d\n", __func__, sc->noise);
 
 	/* Test that RSSI and noise are present in stats report. */
-	if (le32toh(stats->rx.general.flags) != 1) {
+	if (le32toh(lstats->rx.general.flags) != 1) {
 		DPRINTF(sc, IWN_DEBUG_ANY, "%s\n",
 		    "received statistics without RSSI");
 		return;
 	}
 
 	if (calib->state == IWN_CALIB_STATE_ASSOC)
-		iwn_collect_noise(sc, &stats->rx.general);
-	else if (calib->state == IWN_CALIB_STATE_RUN)
-		iwn_tune_sensitivity(sc, &stats->rx);
+		iwn_collect_noise(sc, &lstats->rx.general);
+	else if (calib->state == IWN_CALIB_STATE_RUN) {
+		iwn_tune_sensitivity(sc, &lstats->rx);
+		/*
+		 * XXX TODO: Only run the RX recovery if we're associated!
+		 */
+		iwn_check_rx_recovery(sc, lstats);
+		iwn_save_stats_counters(sc, lstats);
+	}
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s: end\n",__func__);
+}
+
+/*
+ * Save the relevant statistic counters for the next calibration
+ * pass.
+ */
+static void
+iwn_save_stats_counters(struct iwn_softc *sc, const struct iwn_stats *rs)
+{
+	struct iwn_calib_state *calib = &sc->calib;
+
+	/* Save counters values for next call. */
+	calib->bad_plcp_cck = le32toh(rs->rx.cck.bad_plcp);
+	calib->fa_cck = le32toh(rs->rx.cck.fa);
+	calib->bad_plcp_ht = le32toh(rs->rx.ht.bad_plcp);
+	calib->bad_plcp_ofdm = le32toh(rs->rx.ofdm.bad_plcp);
+	calib->fa_ofdm = le32toh(rs->rx.ofdm.fa);
+
+	/* Last time we received these tick values */
+	sc->last_calib_ticks = ticks;
 }
 
 /*
@@ -2850,15 +3490,18 @@ iwn4965_tx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc,
 	ring = &sc->txq[qid];
 
 	DPRINTF(sc, IWN_DEBUG_XMIT, "%s: "
-	    "qid %d idx %d retries %d nkill %d rate %x duration %d status %x\n",
-	    __func__, desc->qid, desc->idx, stat->ackfailcnt,
-	    stat->btkillcnt, stat->rate, le16toh(stat->duration),
+	    "qid %d idx %d RTS retries %d ACK retries %d nkill %d rate %x duration %d status %x\n",
+	    __func__, desc->qid, desc->idx,
+	    stat->rtsfailcnt,
+	    stat->ackfailcnt,
+	    stat->btkillcnt,
+	    stat->rate, le16toh(stat->duration),
 	    le32toh(stat->status));
 
 	bus_dmamap_sync(ring->data_dmat, data->map, BUS_DMASYNC_POSTREAD);
 	if (qid >= sc->firstaggqueue) {
 		iwn_ampdu_tx_done(sc, qid, desc->idx, stat->nframes,
-		    &stat->status);
+		    stat->ackfailcnt, &stat->status);
 	} else {
 		iwn_tx_done(sc, desc, stat->ackfailcnt,
 		    le32toh(stat->status) & 0xff);
@@ -2877,9 +3520,12 @@ iwn5000_tx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc,
 	ring = &sc->txq[qid];
 
 	DPRINTF(sc, IWN_DEBUG_XMIT, "%s: "
-	    "qid %d idx %d retries %d nkill %d rate %x duration %d status %x\n",
-	    __func__, desc->qid, desc->idx, stat->ackfailcnt,
-	    stat->btkillcnt, stat->rate, le16toh(stat->duration),
+	    "qid %d idx %d RTS retries %d ACK retries %d nkill %d rate %x duration %d status %x\n",
+	    __func__, desc->qid, desc->idx,
+	    stat->rtsfailcnt,
+	    stat->ackfailcnt,
+	    stat->btkillcnt,
+	    stat->rate, le16toh(stat->duration),
 	    le32toh(stat->status));
 
 #ifdef notyet
@@ -2890,7 +3536,7 @@ iwn5000_tx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc,
 	bus_dmamap_sync(ring->data_dmat, data->map, BUS_DMASYNC_POSTREAD);
 	if (qid >= sc->firstaggqueue) {
 		iwn_ampdu_tx_done(sc, qid, desc->idx, stat->nframes,
-		    &stat->status);
+		    stat->ackfailcnt, &stat->status);
 	} else {
 		iwn_tx_done(sc, desc, stat->ackfailcnt,
 		    le16toh(stat->status) & 0xff);
@@ -2904,7 +3550,6 @@ static void
 iwn_tx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc, int ackfailcnt,
     uint8_t status)
 {
-	struct ifnet *ifp = sc->sc_ifp;
 	struct iwn_tx_ring *ring = &sc->txq[desc->qid & 0xf];
 	struct iwn_tx_data *data = &ring->data[desc->idx];
 	struct mbuf *m;
@@ -2925,15 +3570,12 @@ iwn_tx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc, int ackfailcnt,
 	/*
 	 * Update rate control statistics for the node.
 	 */
-	if (status & IWN_TX_FAIL) {
-		ifp->if_oerrors++;
+	if (status & IWN_TX_FAIL)
 		ieee80211_ratectl_tx_complete(vap, ni,
 		    IEEE80211_RATECTL_TX_FAILURE, &ackfailcnt, NULL);
-	} else {
-		ifp->if_opackets++;
+	else
 		ieee80211_ratectl_tx_complete(vap, ni,
 		    IEEE80211_RATECTL_TX_SUCCESS, &ackfailcnt, NULL);
-	}
 
 	/*
 	 * Channels marked for "radar" require traffic to be received
@@ -2957,17 +3599,10 @@ iwn_tx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc, int ackfailcnt,
 		    (status & IWN_TX_FAIL) != 0);
 
 	sc->sc_tx_timer = 0;
-	if (--ring->queued < IWN_TX_RING_LOMARK) {
+	if (--ring->queued < IWN_TX_RING_LOMARK)
 		sc->qfullmsk &= ~(1 << ring->qid);
-		if (sc->qfullmsk == 0 &&
-		    (ifp->if_drv_flags & IFF_DRV_OACTIVE)) {
-			ifp->if_drv_flags &= ~IFF_DRV_OACTIVE;
-			iwn_start_locked(ifp);
-		}
-	}
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s: end\n",__func__);
-
 }
 
 /*
@@ -2977,12 +3612,19 @@ iwn_tx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc, int ackfailcnt,
 static void
 iwn_cmd_done(struct iwn_softc *sc, struct iwn_rx_desc *desc)
 {
-	struct iwn_tx_ring *ring = &sc->txq[4];
+	struct iwn_tx_ring *ring;
 	struct iwn_tx_data *data;
+	int cmd_queue_num;
 
-	if ((desc->qid & 0xf) != 4)
+	if (sc->sc_flags & IWN_FLAG_PAN_SUPPORT)
+		cmd_queue_num = IWN_PAN_CMD_QUEUE;
+	else
+		cmd_queue_num = IWN_CMD_QUEUE_NUM;
+
+	if ((desc->qid & IWN_RX_DESC_QID_MSK) != cmd_queue_num)
 		return;	/* Not a command ack. */
 
+	ring = &sc->txq[cmd_queue_num];
 	data = &ring->data[desc->idx];
 
 	/* If the command was mapped in an mbuf, free it. */
@@ -2998,10 +3640,9 @@ iwn_cmd_done(struct iwn_softc *sc, struct iwn_rx_desc *desc)
 
 static void
 iwn_ampdu_tx_done(struct iwn_softc *sc, int qid, int idx, int nframes,
-    void *stat)
+    int ackfailcnt, void *stat)
 {
 	struct iwn_ops *ops = &sc->ops;
-	struct ifnet *ifp = sc->sc_ifp;
 	struct iwn_tx_ring *ring = &sc->txq[qid];
 	struct iwn_tx_data *data;
 	struct mbuf *m;
@@ -3015,14 +3656,60 @@ iwn_ampdu_tx_done(struct iwn_softc *sc, int qid, int idx, int nframes,
 	uint8_t tid;
 	int bit, i, lastidx, *res, seqno, shift, start;
 
-	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s begin\n", __func__);
+	/* XXX TODO: status is le16 field! Grr */
 
-#ifdef NOT_YET
+	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s begin\n", __func__);
+	DPRINTF(sc, IWN_DEBUG_XMIT, "%s: nframes=%d, status=0x%08x\n",
+	    __func__,
+	    nframes,
+	    *status);
+
+	tap = sc->qid2tap[qid];
+	tid = tap->txa_tid;
+	wn = (void *)tap->txa_ni;
+	ni = tap->txa_ni;
+
+	/*
+	 * XXX TODO: ACK and RTS failures would be nice here!
+	 */
+
+	/*
+	 * A-MPDU single frame status - if we failed to transmit it
+	 * in A-MPDU, then it may be a permanent failure.
+	 *
+	 * XXX TODO: check what the Linux iwlwifi driver does here;
+	 * there's some permanent and temporary failures that may be
+	 * handled differently.
+	 */
 	if (nframes == 1) {
-		if ((*status & 0xff) != 1 && (*status & 0xff) != 2)
+		if ((*status & 0xff) != 1 && (*status & 0xff) != 2) {
+#ifdef	NOT_YET
 			printf("ieee80211_send_bar()\n");
-	}
 #endif
+			/*
+			 * If we completely fail a transmit, make sure a
+			 * notification is pushed up to the rate control
+			 * layer.
+			 */
+			ieee80211_ratectl_tx_complete(ni->ni_vap,
+			    ni,
+			    IEEE80211_RATECTL_TX_FAILURE,
+			    &ackfailcnt,
+			    NULL);
+		} else {
+			/*
+			 * If nframes=1, then we won't be getting a BA for
+			 * this frame.  Ensure that we correctly update the
+			 * rate control code with how many retries were
+			 * needed to send it.
+			 */
+			ieee80211_ratectl_tx_complete(ni->ni_vap,
+			    ni,
+			    IEEE80211_RATECTL_TX_SUCCESS,
+			    &ackfailcnt,
+			    NULL);
+		}
+	}
 
 	bitmap = 0;
 	start = idx;
@@ -3061,6 +3748,7 @@ iwn_ampdu_tx_done(struct iwn_softc *sc, int qid, int idx, int nframes,
 		ssn = tap->txa_start & 0xfff;
 	}
 
+	/* This is going nframes DWORDS into the descriptor? */
 	seqno = le32toh(*(status + nframes)) & 0xfff;
 	for (lastidx = (seqno & 0xff); ring->read != lastidx;) {
 		data = &ring->data[ring->read];
@@ -3074,7 +3762,7 @@ iwn_ampdu_tx_done(struct iwn_softc *sc, int qid, int idx, int nframes,
 
 		KASSERT(ni != NULL, ("no node"));
 		KASSERT(m != NULL, ("no mbuf"));
-
+		DPRINTF(sc, IWN_DEBUG_XMIT, "%s: freeing m=%p\n", __func__, m);
 		ieee80211_tx_complete(ni, m, 1);
 
 		ring->queued--;
@@ -3091,17 +3779,10 @@ iwn_ampdu_tx_done(struct iwn_softc *sc, int qid, int idx, int nframes,
 	}
 
 	sc->sc_tx_timer = 0;
-	if (ring->queued < IWN_TX_RING_LOMARK) {
+	if (ring->queued < IWN_TX_RING_LOMARK)
 		sc->qfullmsk &= ~(1 << ring->qid);
-		if (sc->qfullmsk == 0 &&
-		    (ifp->if_drv_flags & IFF_DRV_OACTIVE)) {
-			ifp->if_drv_flags &= ~IFF_DRV_OACTIVE;
-			iwn_start_locked(ifp);
-		}
-	}
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s: end\n",__func__);
-
 }
 
 /*
@@ -3111,8 +3792,7 @@ static void
 iwn_notif_intr(struct iwn_softc *sc)
 {
 	struct iwn_ops *ops = &sc->ops;
-	struct ifnet *ifp = sc->sc_ifp;
-	struct ieee80211com *ic = ifp->if_l2com;
+	struct ieee80211com *ic = &sc->sc_ic;
 	struct ieee80211vap *vap = TAILQ_FIRST(&ic->ic_vaps);
 	uint16_t hw;
 
@@ -3129,12 +3809,12 @@ iwn_notif_intr(struct iwn_softc *sc)
 		desc = mtod(data->m, struct iwn_rx_desc *);
 
 		DPRINTF(sc, IWN_DEBUG_RECV,
-		    "%s: qid %x idx %d flags %x type %d(%s) len %d\n",
-		    __func__, desc->qid & 0xf, desc->idx, desc->flags,
+		    "%s: cur=%d; qid %x idx %d flags %x type %d(%s) len %d\n",
+		    __func__, sc->rxq.cur, desc->qid & 0xf, desc->idx, desc->flags,
 		    desc->type, iwn_intr_str(desc->type),
 		    le16toh(desc->len));
 
-		if (!(desc->qid & 0x80))	/* Reply to a command. */
+		if (!(desc->qid & IWN_UNSOLICITED_RX_NOTIF))	/* Reply to a command. */
 			iwn_cmd_done(sc, desc);
 
 		switch (desc->type) {
@@ -3229,7 +3909,8 @@ iwn_notif_intr(struct iwn_softc *sc)
 			    BUS_DMASYNC_POSTREAD);
 #ifdef	IWN_DEBUG
 			uint32_t *status = (uint32_t *)(desc + 1);
-			DPRINTF(sc, IWN_DEBUG_INTR, "state changed to %x\n",
+			DPRINTF(sc, IWN_DEBUG_INTR | IWN_DEBUG_STATE,
+			    "state changed to %x\n",
 			    le32toh(*status));
 #endif
 			break;
@@ -3254,11 +3935,12 @@ iwn_notif_intr(struct iwn_softc *sc)
 #ifdef	IWN_DEBUG
 			struct iwn_stop_scan *scan =
 			    (struct iwn_stop_scan *)(desc + 1);
-			DPRINTF(sc, IWN_DEBUG_STATE,
+			DPRINTF(sc, IWN_DEBUG_STATE | IWN_DEBUG_SCAN,
 			    "scan finished nchan=%d status=%d chan=%d\n",
 			    scan->nchan, scan->status, scan->chan);
 #endif
-
+			sc->sc_is_scanning = 0;
+			callout_stop(&sc->scan_timeout);
 			IWN_UNLOCK(sc);
 			ieee80211_scan_next(vap);
 			IWN_LOCK(sc);
@@ -3305,8 +3987,7 @@ iwn_wakeup_intr(struct iwn_softc *sc)
 static void
 iwn_rftoggle_intr(struct iwn_softc *sc)
 {
-	struct ifnet *ifp = sc->sc_ifp;
-	struct ieee80211com *ic = ifp->if_l2com;
+	struct ieee80211com *ic = &sc->sc_ic;
 	uint32_t tmp = IWN_READ(sc, IWN_GP_CNTRL);
 
 	IWN_LOCK_ASSERT(sc);
@@ -3385,7 +4066,6 @@ static void
 iwn_intr(void *arg)
 {
 	struct iwn_softc *sc = arg;
-	struct ifnet *ifp = sc->sc_ifp;
 	uint32_t r1, r2, tmp;
 
 	IWN_LOCK(sc);
@@ -3410,8 +4090,10 @@ iwn_intr(void *arg)
 		r2 = 0;	/* Unused. */
 	} else {
 		r1 = IWN_READ(sc, IWN_INT);
-		if (r1 == 0xffffffff || (r1 & 0xfffffff0) == 0xa5a5a5a0)
+		if (r1 == 0xffffffff || (r1 & 0xfffffff0) == 0xa5a5a5a0) {
+			IWN_UNLOCK(sc);
 			return;	/* Hardware gone! */
+		}
 		r2 = IWN_READ(sc, IWN_FH_INT);
 	}
 
@@ -3442,8 +4124,8 @@ iwn_intr(void *arg)
 #endif
 		/* Dump firmware error log and stop. */
 		iwn_fatal_intr(sc);
-		ifp->if_flags &= ~IFF_UP;
-		iwn_stop_locked(sc);
+
+		taskqueue_enqueue(sc->sc_tq, &sc->sc_panic_task);
 		goto done;
 	}
 	if ((r1 & (IWN_INT_FH_RX | IWN_INT_SW_RX | IWN_INT_RX_PERIODIC)) ||
@@ -3476,7 +4158,7 @@ iwn_intr(void *arg)
 
 done:
 	/* Re-enable interrupts. */
-	if (ifp->if_flags & IFF_UP)
+	if (sc->sc_flags & IWN_FLAG_RUNNING)
 		IWN_WRITE(sc, IWN_INT_MASK, sc->int_mask);
 
 	IWN_UNLOCK(sc);
@@ -3541,6 +4223,115 @@ iwn5000_reset_sched(struct iwn_softc *sc, int qid, int idx)
 }
 #endif
 
+/*
+ * Check whether OFDM 11g protection will be enabled for the given rate.
+ *
+ * The original driver code only enabled protection for OFDM rates.
+ * It didn't check to see whether it was operating in 11a or 11bg mode.
+ */
+static int
+iwn_check_rate_needs_protection(struct iwn_softc *sc,
+    struct ieee80211vap *vap, uint8_t rate)
+{
+	struct ieee80211com *ic = vap->iv_ic;
+
+	/*
+	 * Not in 2GHz mode? Then there's no need to enable OFDM
+	 * 11bg protection.
+	 */
+	if (! IEEE80211_IS_CHAN_2GHZ(ic->ic_curchan)) {
+		return (0);
+	}
+
+	/*
+	 * 11bg protection not enabled? Then don't use it.
+	 */
+	if ((ic->ic_flags & IEEE80211_F_USEPROT) == 0)
+		return (0);
+
+	/*
+	 * If it's an 11n rate - no protection.
+	 * We'll do it via a specific 11n check.
+	 */
+	if (rate & IEEE80211_RATE_MCS) {
+		return (0);
+	}
+
+	/*
+	 * Do a rate table lookup.  If the PHY is CCK,
+	 * don't do protection.
+	 */
+	if (ieee80211_rate2phytype(ic->ic_rt, rate) == IEEE80211_T_CCK)
+		return (0);
+
+	/*
+	 * Yup, enable protection.
+	 */
+	return (1);
+}
+
+/*
+ * return a value between 0 and IWN_MAX_TX_RETRIES-1 as an index into
+ * the link quality table that reflects this particular entry.
+ */
+static int
+iwn_tx_rate_to_linkq_offset(struct iwn_softc *sc, struct ieee80211_node *ni,
+    uint8_t rate)
+{
+	struct ieee80211_rateset *rs;
+	int is_11n;
+	int nr;
+	int i;
+	uint8_t cmp_rate;
+
+	/*
+	 * Figure out if we're using 11n or not here.
+	 */
+	if (IEEE80211_IS_CHAN_HT(ni->ni_chan) && ni->ni_htrates.rs_nrates > 0)
+		is_11n = 1;
+	else
+		is_11n = 0;
+
+	/*
+	 * Use the correct rate table.
+	 */
+	if (is_11n) {
+		rs = (struct ieee80211_rateset *) &ni->ni_htrates;
+		nr = ni->ni_htrates.rs_nrates;
+	} else {
+		rs = &ni->ni_rates;
+		nr = rs->rs_nrates;
+	}
+
+	/*
+	 * Find the relevant link quality entry in the table.
+	 */
+	for (i = 0; i < nr && i < IWN_MAX_TX_RETRIES - 1 ; i++) {
+		/*
+		 * The link quality table index starts at 0 == highest
+		 * rate, so we walk the rate table backwards.
+		 */
+		cmp_rate = rs->rs_rates[(nr - 1) - i];
+		if (rate & IEEE80211_RATE_MCS)
+			cmp_rate |= IEEE80211_RATE_MCS;
+
+#if 0
+		DPRINTF(sc, IWN_DEBUG_XMIT, "%s: idx %d: nr=%d, rate=0x%02x, rateentry=0x%02x\n",
+		    __func__,
+		    i,
+		    nr,
+		    rate,
+		    cmp_rate);
+#endif
+
+		if (cmp_rate == rate)
+			return (i);
+	}
+
+	/* Failed? Start at the end */
+	return (IWN_MAX_TX_RETRIES - 1);
+}
+
 static int
 iwn_tx_data(struct iwn_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 {
@@ -3561,7 +4352,7 @@ iwn_tx_data(struct iwn_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 	uint16_t qos;
 	u_int hdrlen;
 	bus_dma_segment_t *seg, segs[IWN_MAX_SCATTER];
-	uint8_t tid, ridx, txant, type;
+	uint8_t tid, type;
 	int ac, i, totlen, error, pad, nsegs = 0, rate;
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s begin\n", __func__);
@@ -3582,16 +4373,34 @@ iwn_tx_data(struct iwn_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 	}
 	ac = M_WME_GETAC(m);
 	if (m->m_flags & M_AMPDU_MPDU) {
+		uint16_t seqno;
 		struct ieee80211_tx_ampdu *tap = &ni->ni_tx_ampdu[ac];
 
 		if (!IEEE80211_AMPDU_RUNNING(tap)) {
-			m_freem(m);
 			return EINVAL;
 		}
 
+		/*
+		 * Queue this frame to the hardware ring that we've
+		 * negotiated AMPDU TX on.
+		 *
+		 * Note that the sequence number must match the TX slot
+		 * being used!
+		 */
 		ac = *(int *)tap->txa_private;
+		seqno = ni->ni_txseqs[tid];
 		*(uint16_t *)wh->i_seq =
-		    htole16(ni->ni_txseqs[tid] << IEEE80211_SEQ_SEQ_SHIFT);
+		    htole16(seqno << IEEE80211_SEQ_SEQ_SHIFT);
+		ring = &sc->txq[ac];
+		if ((seqno % 256) != ring->cur) {
+			device_printf(sc->sc_dev,
+			    "%s: m=%p: seqno (%d) (%d) != ring index (%d) !\n",
+			    __func__,
+			    m,
+			    seqno,
+			    seqno % 256,
+			    ring->cur);
+		}
 		ni->ni_txseqs[tid]++;
 	}
 	ring = &sc->txq[ac];
@@ -3606,20 +4415,19 @@ iwn_tx_data(struct iwn_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 		rate = tp->mcastrate;
 	else if (tp->ucastrate != IEEE80211_FIXED_RATE_NONE)
 		rate = tp->ucastrate;
+	else if (m->m_flags & M_EAPOL)
+		rate = tp->mgmtrate;
 	else {
 		/* XXX pass pktlen */
 		(void) ieee80211_ratectl_rate(ni, NULL, 0);
 		rate = ni->ni_txrate;
 	}
-	ridx = ieee80211_legacy_rate_lookup(ic->ic_rt,
-	    rate & IEEE80211_RATE_VAL);
 
 	/* Encrypt the frame if need be. */
 	if (wh->i_fc[1] & IEEE80211_FC1_PROTECTED) {
 		/* Retrieve key for TX. */
 		k = ieee80211_crypto_encap(ni, m);
 		if (k == NULL) {
-			m_freem(m);
 			return ENOBUFS;
 		}
 		/* 802.11 header may have moved. */
@@ -3669,13 +4477,18 @@ iwn_tx_data(struct iwn_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 		/* NB: Group frames are sent using CCK in 802.11b/g. */
 		if (totlen + IEEE80211_CRC_LEN > vap->iv_rtsthreshold) {
 			flags |= IWN_TX_NEED_RTS;
-		} else if ((ic->ic_flags & IEEE80211_F_USEPROT) &&
-		    ridx >= IWN_RIDX_OFDM6) {
+		} else if (iwn_check_rate_needs_protection(sc, vap, rate)) {
 			if (ic->ic_protmode == IEEE80211_PROT_CTSONLY)
 				flags |= IWN_TX_NEED_CTS;
 			else if (ic->ic_protmode == IEEE80211_PROT_RTSCTS)
 				flags |= IWN_TX_NEED_RTS;
+		} else if ((rate & IEEE80211_RATE_MCS) &&
+			(ic->ic_htprotmode == IEEE80211_PROT_RTSCTS)) {
+			flags |= IWN_TX_NEED_RTS;
 		}
+
+		/* XXX HT protection? */
+
 		if (flags & (IWN_TX_NEED_RTS | IWN_TX_NEED_CTS)) {
 			if (sc->hw_type != IWN_HW_REV_TYPE_4965) {
 				/* 5000 autoselects RTS/CTS or CTS-to-self. */
@@ -3722,13 +4535,11 @@ iwn_tx_data(struct iwn_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 	if (tx->id == sc->broadcast_id) {
 		/* Group or management frame. */
 		tx->linkq = 0;
-		/* XXX Alternate between antenna A and B? */
-		txant = IWN_LSB(sc->txchainmask);
-		tx->rate |= htole32(IWN_RFLAG_ANT(txant));
 	} else {
-		tx->linkq = ni->ni_rates.rs_nrates - ridx - 1;
+		tx->linkq = iwn_tx_rate_to_linkq_offset(sc, ni, rate);
 		flags |= IWN_TX_LINKQ;	/* enable MRR */
 	}
+
 	/* Set physical address of "scratch area". */
 	tx->loaddr = htole32(IWN_LOADDR(data->scratch_paddr));
 	tx->hiaddr = IWN_HIADDR(data->scratch_paddr);
@@ -3747,15 +4558,13 @@ iwn_tx_data(struct iwn_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 		if (error != EFBIG) {
 			device_printf(sc->sc_dev,
 			    "%s: can't map mbuf (error %d)\n", __func__, error);
-			m_freem(m);
 			return error;
 		}
 		/* Too many DMA segments, linearize mbuf. */
-		m1 = m_collapse(m, M_NOWAIT, IWN_MAX_SCATTER);
+		m1 = m_collapse(m, M_NOWAIT, IWN_MAX_SCATTER - 1);
 		if (m1 == NULL) {
 			device_printf(sc->sc_dev,
 			    "%s: could not defrag mbuf\n", __func__);
-			m_freem(m);
 			return ENOBUFS;
 		}
 		m = m1;
@@ -3765,7 +4574,6 @@ iwn_tx_data(struct iwn_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 		if (error != 0) {
 			device_printf(sc->sc_dev,
 			    "%s: can't map mbuf (error %d)\n", __func__, error);
-			m_freem(m);
 			return error;
 		}
 	}
@@ -3773,8 +4581,16 @@ iwn_tx_data(struct iwn_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 	data->m = m;
 	data->ni = ni;
 
-	DPRINTF(sc, IWN_DEBUG_XMIT, "%s: qid %d idx %d len %d nsegs %d\n",
-	    __func__, ring->qid, ring->cur, m->m_pkthdr.len, nsegs);
+	DPRINTF(sc, IWN_DEBUG_XMIT,
+	    "%s: qid %d idx %d len %d nsegs %d flags 0x%08x rate 0x%04x plcp 0x%08x\n",
+	    __func__,
+	    ring->qid,
+	    ring->cur,
+	    m->m_pkthdr.len,
+	    nsegs,
+	    flags,
+	    rate,
+	    tx->rate);
 
 	/* Fill TX descriptor. */
 	desc->nsegs = 1;
@@ -3821,9 +4637,7 @@ iwn_tx_data_raw(struct iwn_softc *sc, struct mbuf *m,
     struct ieee80211_node *ni, const struct ieee80211_bpf_params *params)
 {
 	struct iwn_ops *ops = &sc->ops;
-	struct ifnet *ifp = sc->sc_ifp;
 	struct ieee80211vap *vap = ni->ni_vap;
-	struct ieee80211com *ic = ifp->if_l2com;
 	struct iwn_tx_cmd *cmd;
 	struct iwn_cmd_data *tx;
 	struct ieee80211_frame *wh;
@@ -3835,7 +4649,7 @@ iwn_tx_data_raw(struct iwn_softc *sc, struct mbuf *m,
 	uint32_t flags;
 	u_int hdrlen;
 	int ac, totlen, error, pad, nsegs = 0, i, rate;
-	uint8_t ridx, type, txant;
+	uint8_t type;
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s begin\n", __func__);
 
@@ -3851,16 +4665,8 @@ iwn_tx_data_raw(struct iwn_softc *sc, struct mbuf *m,
 	desc = &ring->desc[ring->cur];
 	data = &ring->data[ring->cur];
 
-	/* Choose a TX rate index. */
+	/* Choose a TX rate. */
 	rate = params->ibp_rate0;
-	ridx = ieee80211_legacy_rate_lookup(ic->ic_rt,
-	    rate & IEEE80211_RATE_VAL);
-	if (ridx == (uint8_t)-1) {
-		/* XXX fall back to mcast/mgmt rate? */
-		m_freem(m);
-		return EINVAL;
-	}
-
 	totlen = m->m_pkthdr.len;
 
 	/* Prepare TX firmware command. */
@@ -3930,17 +4736,10 @@ iwn_tx_data_raw(struct iwn_softc *sc, struct mbuf *m,
 	tx->rts_ntries = params->ibp_try1;
 	tx->data_ntries = params->ibp_try0;
 	tx->lifetime = htole32(IWN_LIFETIME_INFINITE);
-
-	/* XXX should just use  iwn_rate_to_plcp() */
-	tx->rate = htole32(rate2plcp(rate));
-	if (ridx < IWN_RIDX_OFDM6 &&
-	    IEEE80211_IS_CHAN_2GHZ(ni->ni_chan))
-		tx->rate |= htole32(IWN_RFLAG_CCK);
+	tx->rate = iwn_rate_to_plcp(sc, ni, rate);
 
 	/* Group or management frame. */
 	tx->linkq = 0;
-	txant = IWN_LSB(sc->txchainmask);
-	tx->rate |= htole32(IWN_RFLAG_ANT(txant));
 
 	/* Set physical address of "scratch area". */
 	tx->loaddr = htole32(IWN_LOADDR(data->scratch_paddr));
@@ -3960,15 +4759,13 @@ iwn_tx_data_raw(struct iwn_softc *sc, struct mbuf *m,
 		if (error != EFBIG) {
 			device_printf(sc->sc_dev,
 			    "%s: can't map mbuf (error %d)\n", __func__, error);
-			m_freem(m);
 			return error;
 		}
 		/* Too many DMA segments, linearize mbuf. */
-		m1 = m_collapse(m, M_NOWAIT, IWN_MAX_SCATTER);
+		m1 = m_collapse(m, M_NOWAIT, IWN_MAX_SCATTER - 1);
 		if (m1 == NULL) {
 			device_printf(sc->sc_dev,
 			    "%s: could not defrag mbuf\n", __func__);
-			m_freem(m);
 			return ENOBUFS;
 		}
 		m = m1;
@@ -3978,7 +4775,6 @@ iwn_tx_data_raw(struct iwn_softc *sc, struct mbuf *m,
 		if (error != 0) {
 			device_printf(sc->sc_dev,
 			    "%s: can't map mbuf (error %d)\n", __func__, error);
-			m_freem(m);
 			return error;
 		}
 	}
@@ -4029,24 +4825,84 @@ iwn_tx_data_raw(struct iwn_softc *sc, struct mbuf *m,
 	return 0;
 }
 
+static void
+iwn_xmit_task(void *arg0, int pending)
+{
+	struct iwn_softc *sc = arg0;
+	struct ieee80211_node *ni;
+	struct mbuf *m;
+	int error;
+	struct ieee80211_bpf_params p;
+	int have_p;
+
+	DPRINTF(sc, IWN_DEBUG_XMIT, "%s: called\n", __func__);
+
+	IWN_LOCK(sc);
+	/*
+	 * Dequeue frames, attempt to transmit,
+	 * then disable beaconwait when we're done.
+	 */
+	while ((m = mbufq_dequeue(&sc->sc_xmit_queue)) != NULL) {
+		have_p = 0;
+		ni = (struct ieee80211_node *)m->m_pkthdr.rcvif;
+
+		/* Get xmit params if appropriate */
+		if (ieee80211_get_xmit_params(m, &p) == 0)
+			have_p = 1;
+
+		DPRINTF(sc, IWN_DEBUG_XMIT, "%s: m=%p, have_p=%d\n",
+		    __func__, m, have_p);
+
+		/* If we have xmit params, use them */
+		if (have_p)
+			error = iwn_tx_data_raw(sc, m, ni, &p);
+		else
+			error = iwn_tx_data(sc, m, ni);
+
+		if (error != 0) {
+			if_inc_counter(ni->ni_vap->iv_ifp,
+			    IFCOUNTER_OERRORS, 1);
+			ieee80211_free_node(ni);
+			m_freem(m);
+		}
+	}
+
+	sc->sc_beacon_wait = 0;
+	IWN_UNLOCK(sc);
+}
+
+/*
+ * raw frame xmit - free node/reference if failed.
+ */
 static int
 iwn_raw_xmit(struct ieee80211_node *ni, struct mbuf *m,
     const struct ieee80211_bpf_params *params)
 {
 	struct ieee80211com *ic = ni->ni_ic;
-	struct ifnet *ifp = ic->ic_ifp;
-	struct iwn_softc *sc = ifp->if_softc;
+	struct iwn_softc *sc = ic->ic_softc;
 	int error = 0;
 
-	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s begin\n", __func__);
-
-	if ((ifp->if_drv_flags & IFF_DRV_RUNNING) == 0) {
-		ieee80211_free_node(ni);
-		m_freem(m);
-		return ENETDOWN;
-	}
+	DPRINTF(sc, IWN_DEBUG_XMIT | IWN_DEBUG_TRACE, "->%s begin\n", __func__);
 
 	IWN_LOCK(sc);
+	if ((sc->sc_flags & IWN_FLAG_RUNNING) == 0) {
+		m_freem(m);
+		IWN_UNLOCK(sc);
+		return (ENETDOWN);
+	}
+
+	/* queue frame if we have to */
+	if (sc->sc_beacon_wait) {
+		if (iwn_xmit_queue_enqueue(sc, m) != 0) {
+			m_freem(m);
+			IWN_UNLOCK(sc);
+			return (ENOBUFS);
+		}
+		/* Queued, so just return OK */
+		IWN_UNLOCK(sc);
+		return (0);
+	}
+
 	if (params == NULL) {
 		/*
 		 * Legacy path; interpret frame contents to decide
@@ -4060,78 +4916,74 @@ iwn_raw_xmit(struct ieee80211_node *ni, struct mbuf *m,
 		 */
 		error = iwn_tx_data_raw(sc, m, ni, params);
 	}
-	if (error != 0) {
-		/* NB: m is reclaimed on tx failure */
-		ieee80211_free_node(ni);
-		ifp->if_oerrors++;
-	}
-	sc->sc_tx_timer = 5;
+	if (error == 0)
+		sc->sc_tx_timer = 5;
+	else
+		m_freem(m);
 
 	IWN_UNLOCK(sc);
 
-	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s: end\n",__func__);
+	DPRINTF(sc, IWN_DEBUG_TRACE | IWN_DEBUG_XMIT, "->%s: end\n",__func__);
 
-	return error;
+	return (error);
 }
 
-static void
-iwn_start(struct ifnet *ifp)
+/*
+ * transmit - don't free mbuf if failed; don't free node ref if failed.
+ */
+static int
+iwn_transmit(struct ieee80211com *ic, struct mbuf *m)
 {
-	struct iwn_softc *sc = ifp->if_softc;
+	struct iwn_softc *sc = ic->ic_softc;
+	struct ieee80211_node *ni;
+	int error;
+
+	ni = (struct ieee80211_node *)m->m_pkthdr.rcvif;
 
 	IWN_LOCK(sc);
-	iwn_start_locked(ifp);
+	if ((sc->sc_flags & IWN_FLAG_RUNNING) == 0 || sc->sc_beacon_wait) {
+		IWN_UNLOCK(sc);
+		return (ENXIO);
+	}
+
+	if (sc->qfullmsk) {
+		IWN_UNLOCK(sc);
+		return (ENOBUFS);
+	}
+
+	error = iwn_tx_data(sc, m, ni);
+	if (!error)
+		sc->sc_tx_timer = 5;
 	IWN_UNLOCK(sc);
+	return (error);
 }
 
 static void
-iwn_start_locked(struct ifnet *ifp)
+iwn_scan_timeout(void *arg)
 {
-	struct iwn_softc *sc = ifp->if_softc;
-	struct ieee80211_node *ni;
-	struct mbuf *m;
+	struct iwn_softc *sc = arg;
+	struct ieee80211com *ic = &sc->sc_ic;
 
-	IWN_LOCK_ASSERT(sc);
-
-	if ((ifp->if_drv_flags & IFF_DRV_RUNNING) == 0 ||
-	    (ifp->if_drv_flags & IFF_DRV_OACTIVE))
-		return;
-
-	for (;;) {
-		if (sc->qfullmsk != 0) {
-			ifp->if_drv_flags |= IFF_DRV_OACTIVE;
-			break;
-		}
-		IFQ_DRV_DEQUEUE(&ifp->if_snd, m);
-		if (m == NULL)
-			break;
-		ni = (struct ieee80211_node *)m->m_pkthdr.rcvif;
-		if (iwn_tx_data(sc, m, ni) != 0) {
-			ieee80211_free_node(ni);
-			ifp->if_oerrors++;
-			continue;
-		}
-		sc->sc_tx_timer = 5;
-	}
+	ic_printf(ic, "scan timeout\n");
+	ieee80211_restart_all(ic);
 }
 
 static void
 iwn_watchdog(void *arg)
 {
 	struct iwn_softc *sc = arg;
-	struct ifnet *ifp = sc->sc_ifp;
-	struct ieee80211com *ic = ifp->if_l2com;
+	struct ieee80211com *ic = &sc->sc_ic;
 
 	IWN_LOCK_ASSERT(sc);
 
-	KASSERT(ifp->if_drv_flags & IFF_DRV_RUNNING, ("not running"));
+	KASSERT(sc->sc_flags & IWN_FLAG_RUNNING, ("not running"));
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->Doing %s\n", __func__);
 
 	if (sc->sc_tx_timer > 0) {
 		if (--sc->sc_tx_timer == 0) {
-			if_printf(ifp, "device timeout\n");
-			ieee80211_runtask(ic, &sc->sc_reinit_task);
+			ic_printf(ic, "device timeout\n");
+			ieee80211_restart_all(ic);
 			return;
 		}
 	}
@@ -4139,46 +4991,81 @@ iwn_watchdog(void *arg)
 }
 
 static int
-iwn_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
+iwn_cdev_open(struct cdev *dev, int flags, int type, struct thread *td)
 {
-	struct iwn_softc *sc = ifp->if_softc;
-	struct ieee80211com *ic = ifp->if_l2com;
-	struct ieee80211vap *vap = TAILQ_FIRST(&ic->ic_vaps);
-	struct ifreq *ifr = (struct ifreq *) data;
-	int error = 0, startall = 0, stop = 0;
+
+	return (0);
+}
+
+static int
+iwn_cdev_close(struct cdev *dev, int flags, int type, struct thread *td)
+{
+
+	return (0);
+}
+
+static int
+iwn_cdev_ioctl(struct cdev *dev, unsigned long cmd, caddr_t data, int fflag,
+    struct thread *td)
+{
+	int rc;
+	struct iwn_softc *sc = dev->si_drv1;
+	struct iwn_ioctl_data *d;
+
+	rc = priv_check(td, PRIV_DRIVER);
+	if (rc != 0)
+		return (0);
 
 	switch (cmd) {
-	case SIOCGIFADDR:
-		error = ether_ioctl(ifp, cmd, data);
-		break;
-	case SIOCSIFFLAGS:
+	case SIOCGIWNSTATS:
+		d = (struct iwn_ioctl_data *) data;
 		IWN_LOCK(sc);
-		if (ifp->if_flags & IFF_UP) {
-			if (!(ifp->if_drv_flags & IFF_DRV_RUNNING)) {
-				iwn_init_locked(sc);
-				if (IWN_READ(sc, IWN_GP_CNTRL) & IWN_GP_CNTRL_RFKILL)
-					startall = 1;
-				else
-					stop = 1;
-			}
-		} else {
-			if (ifp->if_drv_flags & IFF_DRV_RUNNING)
-				iwn_stop_locked(sc);
-		}
+		/* XXX validate permissions/memory/etc? */
+		rc = copyout(&sc->last_stat, d->dst_addr, sizeof(struct iwn_stats));
 		IWN_UNLOCK(sc);
-		if (startall)
-			ieee80211_start_all(ic);
-		else if (vap != NULL && stop)
-			ieee80211_stop(vap);
 		break;
-	case SIOCGIFMEDIA:
-		error = ifmedia_ioctl(ifp, ifr, &ic->ic_media, cmd);
+	case SIOCZIWNSTATS:
+		IWN_LOCK(sc);
+		memset(&sc->last_stat, 0, sizeof(struct iwn_stats));
+		IWN_UNLOCK(sc);
 		break;
 	default:
-		error = EINVAL;
+		rc = EINVAL;
 		break;
 	}
-	return error;
+	return (rc);
+}
+
+static int
+iwn_ioctl(struct ieee80211com *ic, u_long cmd, void *data)
+{
+
+	return (ENOTTY);
+}
+
+static void
+iwn_parent(struct ieee80211com *ic)
+{
+	struct iwn_softc *sc = ic->ic_softc;
+	struct ieee80211vap *vap = TAILQ_FIRST(&ic->ic_vaps);
+	int startall = 0, stop = 0;
+ 
+	IWN_LOCK(sc);
+	if (ic->ic_nrunning > 0) {
+		if (!(sc->sc_flags & IWN_FLAG_RUNNING)) {
+			iwn_init_locked(sc);
+			if (IWN_READ(sc, IWN_GP_CNTRL) & IWN_GP_CNTRL_RFKILL)
+				startall = 1;
+			else
+				stop = 1;
+		}
+	} else if (sc->sc_flags & IWN_FLAG_RUNNING)
+		iwn_stop_locked(sc);
+	IWN_UNLOCK(sc);
+	if (startall)
+		ieee80211_start_all(ic);
+	else if (vap != NULL && stop)
+		ieee80211_stop(vap);
 }
 
 /*
@@ -4187,19 +5074,26 @@ iwn_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 static int
 iwn_cmd(struct iwn_softc *sc, int code, const void *buf, int size, int async)
 {
-	struct iwn_tx_ring *ring = &sc->txq[4];
+	struct iwn_tx_ring *ring;
 	struct iwn_tx_desc *desc;
 	struct iwn_tx_data *data;
 	struct iwn_tx_cmd *cmd;
 	struct mbuf *m;
 	bus_addr_t paddr;
 	int totlen, error;
+	int cmd_queue_num;
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s begin\n", __func__);
 
 	if (async == 0)
 		IWN_LOCK_ASSERT(sc);
 
+	if (sc->sc_flags & IWN_FLAG_PAN_SUPPORT)
+		cmd_queue_num = IWN_PAN_CMD_QUEUE;
+	else
+		cmd_queue_num = IWN_CMD_QUEUE_NUM;
+
+	ring = &sc->txq[cmd_queue_num];
 	desc = &ring->desc[ring->cur];
 	data = &ring->data[ring->cur];
 	totlen = 4 + size;
@@ -4291,57 +5185,109 @@ iwn5000_add_node(struct iwn_softc *sc, struct iwn_node_info *node, int async)
 static int
 iwn_set_link_quality(struct iwn_softc *sc, struct ieee80211_node *ni)
 {
-#define	RV(v)	((v) & IEEE80211_RATE_VAL)
 	struct iwn_node *wn = (void *)ni;
-	struct ieee80211_rateset *rs = &ni->ni_rates;
+	struct ieee80211_rateset *rs;
 	struct iwn_cmd_link_quality linkq;
-	uint8_t txant;
 	int i, rate, txrate;
+	int is_11n;
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s begin\n", __func__);
 
-	/* Use the first valid TX antenna. */
-	txant = IWN_LSB(sc->txchainmask);
-
 	memset(&linkq, 0, sizeof linkq);
 	linkq.id = wn->id;
-	linkq.antmsk_1stream = txant;
-	linkq.antmsk_2stream = IWN_ANT_AB;
-	linkq.ampdu_max = 64;
+	linkq.antmsk_1stream = iwn_get_1stream_tx_antmask(sc);
+	linkq.antmsk_2stream = iwn_get_2stream_tx_antmask(sc);
+
+	linkq.ampdu_max = 32;		/* XXX negotiated? */
 	linkq.ampdu_threshold = 3;
 	linkq.ampdu_limit = htole16(4000);	/* 4ms */
 
+	DPRINTF(sc, IWN_DEBUG_XMIT,
+	    "%s: 1stream antenna=0x%02x, 2stream antenna=0x%02x, ntxstreams=%d\n",
+	    __func__,
+	    linkq.antmsk_1stream,
+	    linkq.antmsk_2stream,
+	    sc->ntxchains);
+
+	/*
+	 * Are we using 11n rates? Ensure the channel is
+	 * 11n _and_ we have some 11n rates, or don't
+	 * try.
+	 */
+	if (IEEE80211_IS_CHAN_HT(ni->ni_chan) && ni->ni_htrates.rs_nrates > 0) {
+		rs = (struct ieee80211_rateset *) &ni->ni_htrates;
+		is_11n = 1;
+	} else {
+		rs = &ni->ni_rates;
+		is_11n = 0;
+	}
+
 	/* Start at highest available bit-rate. */
-	if (IEEE80211_IS_CHAN_HT(ni->ni_chan))
+	/*
+	 * XXX this is all very dirty!
+	 */
+	if (is_11n)
 		txrate = ni->ni_htrates.rs_nrates - 1;
 	else
 		txrate = rs->rs_nrates - 1;
 	for (i = 0; i < IWN_MAX_TX_RETRIES; i++) {
 		uint32_t plcp;
 
-		if (IEEE80211_IS_CHAN_HT(ni->ni_chan))
-			rate = IEEE80211_RATE_MCS | txrate;
+		/*
+		 * XXX TODO: ensure the last two slots are the two lowest
+		 * rate entries, just for now.
+		 */
+		if (i == 14 || i == 15)
+			txrate = 0;
+
+		if (is_11n)
+			rate = IEEE80211_RATE_MCS | rs->rs_rates[txrate];
 		else
-			rate = RV(rs->rs_rates[txrate]);
+			rate = IEEE80211_RV(rs->rs_rates[txrate]);
 
 		/* Do rate -> PLCP config mapping */
 		plcp = iwn_rate_to_plcp(sc, ni, rate);
 		linkq.retry[i] = plcp;
+		DPRINTF(sc, IWN_DEBUG_XMIT,
+		    "%s: i=%d, txrate=%d, rate=0x%02x, plcp=0x%08x\n",
+		    __func__,
+		    i,
+		    txrate,
+		    rate,
+		    le32toh(plcp));
 
-		/* Special case for dual-stream rates? */
+		/*
+		 * The mimo field is an index into the table which
+		 * indicates the first index where it and subsequent entries
+		 * will not be using MIMO.
+		 *
+		 * Since we're filling linkq from 0..15 and we're filling
+		 * from the highest MCS rates to the lowest rates, if we
+		 * _are_ doing a dual-stream rate, set mimo to idx+1 (ie,
+		 * the next entry.)  That way if the next entry is a non-MIMO
+		 * entry, we're already pointing at it.
+		 */
 		if ((le32toh(plcp) & IWN_RFLAG_MCS) &&
-		    RV(le32toh(plcp)) > 7)
+		    IEEE80211_RV(le32toh(plcp)) > 7)
 			linkq.mimo = i + 1;
 
 		/* Next retry at immediate lower bit-rate. */
 		if (txrate > 0)
 			txrate--;
 	}
+	/*
+	 * If we reached the end of the list and indeed we hit
+	 * all MIMO rates (eg 5300 doing MCS23-15) then yes,
+	 * set mimo to 15.  Setting it to 16 panics the firmware.
+	 */
+	if (linkq.mimo > 15)
+		linkq.mimo = 15;
+
+	DPRINTF(sc, IWN_DEBUG_XMIT, "%s: mimo = %d\n", __func__, linkq.mimo);
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s: end\n",__func__);
 
 	return iwn_cmd(sc, IWN_CMD_LINK_QUALITY, &linkq, sizeof linkq, 1);
-#undef	RV
 }
 
 /*
@@ -4351,8 +5297,7 @@ static int
 iwn_add_broadcast_node(struct iwn_softc *sc, int async)
 {
 	struct iwn_ops *ops = &sc->ops;
-	struct ifnet *ifp = sc->sc_ifp;
-	struct ieee80211com *ic = ifp->if_l2com;
+	struct ieee80211com *ic = &sc->sc_ic;
 	struct iwn_node_info node;
 	struct iwn_cmd_link_quality linkq;
 	uint8_t txant;
@@ -4363,7 +5308,7 @@ iwn_add_broadcast_node(struct iwn_softc *sc, int async)
 	sc->rxon = &sc->rx_on[IWN_RXON_BSS_CTX];
 
 	memset(&node, 0, sizeof node);
-	IEEE80211_ADDR_COPY(node.macaddr, ifp->if_broadcastaddr);
+	IEEE80211_ADDR_COPY(node.macaddr, ieee80211broadcastaddr);
 	node.id = sc->broadcast_id;
 	DPRINTF(sc, IWN_DEBUG_RESET, "%s: adding broadcast node\n", __func__);
 	if ((error = ops->add_node(sc, &node, async)) != 0)
@@ -4374,13 +5319,14 @@ iwn_add_broadcast_node(struct iwn_softc *sc, int async)
 
 	memset(&linkq, 0, sizeof linkq);
 	linkq.id = sc->broadcast_id;
-	linkq.antmsk_1stream = txant;
-	linkq.antmsk_2stream = IWN_ANT_AB;
+	linkq.antmsk_1stream = iwn_get_1stream_tx_antmask(sc);
+	linkq.antmsk_2stream = iwn_get_2stream_tx_antmask(sc);
 	linkq.ampdu_max = 64;
 	linkq.ampdu_threshold = 3;
 	linkq.ampdu_limit = htole16(4000);	/* 4ms */
 
 	/* Use lowest mandatory bit-rate. */
+	/* XXX rate table lookup? */
 	if (IEEE80211_IS_CHAN_5GHZ(ic->ic_curchan))
 		linkq.retry[0] = htole32(0xd);
 	else
@@ -4400,7 +5346,7 @@ static int
 iwn_updateedca(struct ieee80211com *ic)
 {
 #define IWN_EXP2(x)	((1 << (x)) - 1)	/* CWmin = 2^ECWmin - 1 */
-	struct iwn_softc *sc = ic->ic_ifp->if_softc;
+	struct iwn_softc *sc = ic->ic_softc;
 	struct iwn_edca_params cmd;
 	int aci;
 
@@ -4408,6 +5354,8 @@ iwn_updateedca(struct ieee80211com *ic)
 
 	memset(&cmd, 0, sizeof cmd);
 	cmd.flags = htole32(IWN_EDCA_UPDATE);
+
+	IEEE80211_LOCK(ic);
 	for (aci = 0; aci < WME_NUM_AC; aci++) {
 		const struct wmeParams *ac =
 		    &ic->ic_wme.wme_chanParams.cap_wmeParams[aci];
@@ -4418,10 +5366,10 @@ iwn_updateedca(struct ieee80211com *ic)
 		    htole16(IEEE80211_TXOP_TO_US(ac->wmep_txopLimit));
 	}
 	IEEE80211_UNLOCK(ic);
+
 	IWN_LOCK(sc);
 	(void)iwn_cmd(sc, IWN_CMD_EDCA_PARAMS, &cmd, sizeof cmd, 1);
 	IWN_UNLOCK(sc);
-	IEEE80211_LOCK(ic);
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s: end\n",__func__);
 
@@ -4430,7 +5378,7 @@ iwn_updateedca(struct ieee80211com *ic)
 }
 
 static void
-iwn_update_mcast(struct ifnet *ifp)
+iwn_update_mcast(struct ieee80211com *ic)
 {
 	/* Ignore */
 }
@@ -4441,6 +5389,12 @@ iwn_set_led(struct iwn_softc *sc, uint8_t which, uint8_t off, uint8_t on)
 	struct iwn_cmd_led led;
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->Doing %s\n", __func__);
+
+#if 0
+	/* XXX don't set LEDs during scan? */
+	if (sc->sc_is_scanning)
+		return;
+#endif
 
 	/* Clear microcode LED ownership. */
 	IWN_CLRBITS(sc, IWN_LED, IWN_LED_BSM_CTRL);
@@ -4505,8 +5459,7 @@ iwn_set_timing(struct iwn_softc *sc, struct ieee80211_node *ni)
 static void
 iwn4965_power_calibration(struct iwn_softc *sc, int temp)
 {
-	struct ifnet *ifp = sc->sc_ifp;
-	struct ieee80211com *ic = ifp->if_l2com;
+	struct ieee80211com *ic = &sc->sc_ic;
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->Doing %s\n", __func__);
 
@@ -4681,6 +5634,7 @@ iwn5000_set_txpower(struct iwn_softc *sc, struct ieee80211_channel *ch,
     int async)
 {
 	struct iwn5000_cmd_txpower cmd;
+	int cmdid;
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->Doing %s\n", __func__);
 
@@ -4692,8 +5646,15 @@ iwn5000_set_txpower(struct iwn_softc *sc, struct ieee80211_channel *ch,
 	cmd.global_limit = 2 * IWN5000_TXPOWER_MAX_DBM;	/* 16 dBm */
 	cmd.flags = IWN5000_TXPOWER_NO_CLOSED;
 	cmd.srv_limit = IWN5000_TXPOWER_AUTO;
-	DPRINTF(sc, IWN_DEBUG_CALIBRATE, "%s: setting TX power\n", __func__);
-	return iwn_cmd(sc, IWN_CMD_TXPOWER_DBM, &cmd, sizeof cmd, async);
+	DPRINTF(sc, IWN_DEBUG_CALIBRATE | IWN_DEBUG_XMIT,
+	    "%s: setting TX power; rev=%d\n",
+	    __func__,
+	    IWN_UCODE_API(sc->ucode_rev));
+	if (IWN_UCODE_API(sc->ucode_rev) == 1)
+		cmdid = IWN_CMD_TXPOWER_DBM_V1;
+	else
+		cmdid = IWN_CMD_TXPOWER_DBM;
+	return iwn_cmd(sc, cmdid, &cmd, sizeof cmd, async);
 }
 
 /*
@@ -4868,8 +5829,7 @@ iwn_collect_noise(struct iwn_softc *sc,
 {
 	struct iwn_ops *ops = &sc->ops;
 	struct iwn_calib_state *calib = &sc->calib;
-	struct ifnet *ifp = sc->sc_ifp;
-	struct ieee80211com *ic = ifp->if_l2com;
+	struct ieee80211com *ic = &sc->sc_ic;
 	uint32_t val;
 	int i;
 
@@ -4893,7 +5853,7 @@ iwn_collect_noise(struct iwn_softc *sc,
 	for (i = 0; i < 3; i++)
 		if (val - calib->rssi[i] > 15 * 20)
 			sc->chainmask &= ~(1 << i);
-	DPRINTF(sc, IWN_DEBUG_CALIBRATE,
+	DPRINTF(sc, IWN_DEBUG_CALIBRATE | IWN_DEBUG_XMIT,
 	    "%s: RX chains mask: theoretical=0x%x, actual=0x%x\n",
 	    __func__, sc->rxchainmask, sc->chainmask);
 
@@ -4907,6 +5867,10 @@ iwn_collect_noise(struct iwn_softc *sc,
 #ifdef notyet
 	/* XXX Disable RX chains with no antennas connected. */
 	sc->rxon->rxchain = htole16(IWN_RXCHAIN_SEL(sc->chainmask));
+	if (sc->sc_is_scanning)
+		device_printf(sc->sc_dev,
+		    "%s: is_scanning set, before RXON\n",
+		    __func__);
 	(void)iwn_cmd(sc, IWN_CMD_RXON, sc->rxon, sc->rxonsz, 1);
 #endif
 
@@ -5014,7 +5978,7 @@ iwn5000_set_gains(struct iwn_softc *sc)
 				cmd.gain[i - 1] |= 1 << 2;	/* sign bit */
 		}
 	}
-	DPRINTF(sc, IWN_DEBUG_CALIBRATE,
+	DPRINTF(sc, IWN_DEBUG_CALIBRATE | IWN_DEBUG_XMIT,
 	    "setting differential gains Ant B/C: %x/%x (%x)\n",
 	    cmd.gain[0], cmd.gain[1], sc->chainmask);
 	return iwn_cmd(sc, IWN_CMD_PHY_CALIB, &cmd, sizeof cmd, 1);
@@ -5063,10 +6027,6 @@ iwn_tune_sensitivity(struct iwn_softc *sc, const struct iwn_rx_stats *stats)
 	fa  = le32toh(stats->ofdm.bad_plcp) - calib->bad_plcp_ofdm;
 	fa += le32toh(stats->ofdm.fa) - calib->fa_ofdm;
 	fa *= 200 * IEEE80211_DUR_TU;	/* 200TU */
-
-	/* Save counters values for next call. */
-	calib->bad_plcp_ofdm = le32toh(stats->ofdm.bad_plcp);
-	calib->fa_ofdm = le32toh(stats->ofdm.fa);
 
 	if (fa > 50 * rxena) {
 		/* High false alarm count, decrease sensitivity. */
@@ -5120,10 +6080,6 @@ iwn_tune_sensitivity(struct iwn_softc *sc, const struct iwn_rx_stats *stats)
 	fa  = le32toh(stats->cck.bad_plcp) - calib->bad_plcp_cck;
 	fa += le32toh(stats->cck.fa) - calib->fa_cck;
 	fa *= 200 * IEEE80211_DUR_TU;	/* 200TU */
-
-	/* Save counters values for next call. */
-	calib->bad_plcp_cck = le32toh(stats->cck.bad_plcp);
-	calib->fa_cck = le32toh(stats->cck.fa);
 
 	if (fa > 50 * rxena) {
 		/* High false alarm count, decrease sensitivity. */
@@ -5205,7 +6161,7 @@ iwn_send_sensitivity(struct iwn_softc *sc)
 	cmd.energy_cck         = htole16(calib->energy_cck);
 	/* Barker modulation: use default values. */
 	cmd.corr_barker        = htole16(190);
-	cmd.corr_barker_mrc    = htole16(390);
+	cmd.corr_barker_mrc    = htole16(sc->limits->barker_mrc);
 
 	DPRINTF(sc, IWN_DEBUG_CALIBRATE,
 	    "%s: set sensitivity %d/%d/%d/%d/%d/%d/%d\n", __func__,
@@ -5227,6 +6183,86 @@ iwn_send_sensitivity(struct iwn_softc *sc)
 	cmd.cck_det_icept      = htole16(99);
 send:
 	return iwn_cmd(sc, IWN_CMD_SET_SENSITIVITY, &cmd, len, 1);
+}
+
+/*
+ * Look at the increase of PLCP errors over time; if it exceeds
+ * a programmed threshold then trigger an RF retune.
+ */
+static void
+iwn_check_rx_recovery(struct iwn_softc *sc, struct iwn_stats *rs)
+{
+	int32_t delta_ofdm, delta_ht, delta_cck;
+	struct iwn_calib_state *calib = &sc->calib;
+	int delta_ticks, cur_ticks;
+	int delta_msec;
+	int thresh;
+
+	/*
+	 * Calculate the difference between the current and
+	 * previous statistics.
+	 */
+	delta_cck = le32toh(rs->rx.cck.bad_plcp) - calib->bad_plcp_cck;
+	delta_ofdm = le32toh(rs->rx.ofdm.bad_plcp) - calib->bad_plcp_ofdm;
+	delta_ht = le32toh(rs->rx.ht.bad_plcp) - calib->bad_plcp_ht;
+
+	/*
+	 * Calculate the delta in time between successive statistics
+	 * messages.  Yes, it can roll over; so we make sure that
+	 * this doesn't happen.
+	 *
+	 * XXX go figure out what to do about rollover
+	 * XXX go figure out what to do if ticks rolls over to -ve instead!
+	 * XXX go stab signed integer overflow undefined-ness in the face.
+	 */
+	cur_ticks = ticks;
+	delta_ticks = cur_ticks - sc->last_calib_ticks;
+
+	/*
+	 * If any are negative, then the firmware likely reset; so just
+	 * bail.  We'll pick this up next time.
+	 */
+	if (delta_cck < 0 || delta_ofdm < 0 || delta_ht < 0 || delta_ticks < 0)
+		return;
+
+	/*
+	 * delta_ticks is in ticks; we need to convert it up to milliseconds
+	 * so we can do some useful math with it.
+	 */
+	delta_msec = ticks_to_msecs(delta_ticks);
+
+	/*
+	 * Calculate what our threshold is given the current delta_msec.
+	 */
+	thresh = sc->base_params->plcp_err_threshold * delta_msec;
+
+	DPRINTF(sc, IWN_DEBUG_STATE,
+	    "%s: time delta: %d; cck=%d, ofdm=%d, ht=%d, total=%d, thresh=%d\n",
+	    __func__,
+	    delta_msec,
+	    delta_cck,
+	    delta_ofdm,
+	    delta_ht,
+	    (delta_msec + delta_cck + delta_ofdm + delta_ht),
+	    thresh);
+
+	/*
+	 * If we need a retune, then schedule a single channel scan
+	 * to a channel that isn't the currently active one!
+	 *
+	 * The math from linux iwlwifi:
+	 *
+	 * if ((delta * 100 / msecs) > threshold)
+	 */
+	if (thresh > 0 && (delta_cck + delta_ofdm + delta_ht) * 100 > thresh) {
+		DPRINTF(sc, IWN_DEBUG_ANY,
+		    "%s: PLCP error threshold raw (%d) comparison (%d) "
+		    "over limit (%d); retune!\n",
+		    __func__,
+		    (delta_cck + delta_ofdm + delta_ht),
+		    (delta_cck + delta_ofdm + delta_ht) * 100,
+		    thresh);
+	}
 }
 
 /*
@@ -5263,8 +6299,8 @@ iwn_set_pslevel(struct iwn_softc *sc, int dtim, int level, int async)
 	if (level == 5)
 		cmd.flags |= htole16(IWN_PS_FAST_PD);
 	/* Retrieve PCIe Active State Power Management (ASPM). */
-	reg = pci_read_config(sc->sc_dev, sc->sc_cap_off + 0x10, 1);
-	if (!(reg & 0x1))	/* L0s Entry disabled. */
+	reg = pci_read_config(sc->sc_dev, sc->sc_cap_off + PCIER_LINK_CTL, 4);
+	if (!(reg & PCIEM_LINK_CTL_ASPMC_L0S))	/* L0s Entry disabled. */
 		cmd.flags |= htole16(IWN_PS_PCI_PMGT);
 	cmd.rxtimeout = htole32(pmgt->rxtimeout * 1024);
 	cmd.txtimeout = htole32(pmgt->txtimeout * 1024);
@@ -5280,7 +6316,7 @@ iwn_set_pslevel(struct iwn_softc *sc, int dtim, int level, int async)
 		if (max == (uint32_t)-1)
 			max = dtim * (skip_dtim + 1);
 		else if (max > dtim)
-			max = (max / dtim) * dtim;
+			max = rounddown(max, dtim);
 	} else
 		max = dtim;
 	for (i = 0; i < 5; i++)
@@ -5314,25 +6350,73 @@ iwn_send_advanced_btcoex(struct iwn_softc *sc)
 		0xc0004000, 0x00004000, 0xf0005000, 0xf0005000,
 	};
 	struct iwn6000_btcoex_config btconfig;
+	struct iwn2000_btcoex_config btconfig2k;
 	struct iwn_btcoex_priotable btprio;
 	struct iwn_btcoex_prot btprot;
 	int error, i;
+	uint8_t flags;
 
 	memset(&btconfig, 0, sizeof btconfig);
-	btconfig.flags = 145;
-	btconfig.max_kill = 5;
-	btconfig.bt3_t7_timer = 1;
-	btconfig.kill_ack = htole32(0xffff0000);
-	btconfig.kill_cts = htole32(0xffff0000);
-	btconfig.sample_time = 2;
-	btconfig.bt3_t2_timer = 0xc;
-	for (i = 0; i < 12; i++)
-		btconfig.lookup_table[i] = htole32(btcoex_3wire[i]);
-	btconfig.valid = htole16(0xff);
-	btconfig.prio_boost = 0xf0;
-	DPRINTF(sc, IWN_DEBUG_RESET,
-	    "%s: configuring advanced bluetooth coexistence\n", __func__);
-	error = iwn_cmd(sc, IWN_CMD_BT_COEX, &btconfig, sizeof(btconfig), 1);
+	memset(&btconfig2k, 0, sizeof btconfig2k);
+
+	flags = IWN_BT_FLAG_COEX6000_MODE_3W <<
+	    IWN_BT_FLAG_COEX6000_MODE_SHIFT; // Done as is in linux kernel 3.2
+
+	if (sc->base_params->bt_sco_disable)
+		flags &= ~IWN_BT_FLAG_SYNC_2_BT_DISABLE;
+	else
+		flags |= IWN_BT_FLAG_SYNC_2_BT_DISABLE;
+
+	flags |= IWN_BT_FLAG_COEX6000_CHAN_INHIBITION;
+
+	/* Default flags result is 145 as old value */
+
+	/*
+	 * Flags value has to be review. Values must change if we
+	 * which to disable it
+	 */
+	if (sc->base_params->bt_session_2) {
+		btconfig2k.flags = flags;
+		btconfig2k.max_kill = 5;
+		btconfig2k.bt3_t7_timer = 1;
+		btconfig2k.kill_ack = htole32(0xffff0000);
+		btconfig2k.kill_cts = htole32(0xffff0000);
+		btconfig2k.sample_time = 2;
+		btconfig2k.bt3_t2_timer = 0xc;
+
+		for (i = 0; i < 12; i++)
+			btconfig2k.lookup_table[i] = htole32(btcoex_3wire[i]);
+		btconfig2k.valid = htole16(0xff);
+		btconfig2k.prio_boost = htole32(0xf0);
+		DPRINTF(sc, IWN_DEBUG_RESET,
+		    "%s: configuring advanced bluetooth coexistence"
+		    " session 2, flags : 0x%x\n",
+		    __func__,
+		    flags);
+		error = iwn_cmd(sc, IWN_CMD_BT_COEX, &btconfig2k,
+		    sizeof(btconfig2k), 1);
+	} else {
+		btconfig.flags = flags;
+		btconfig.max_kill = 5;
+		btconfig.bt3_t7_timer = 1;
+		btconfig.kill_ack = htole32(0xffff0000);
+		btconfig.kill_cts = htole32(0xffff0000);
+		btconfig.sample_time = 2;
+		btconfig.bt3_t2_timer = 0xc;
+
+		for (i = 0; i < 12; i++)
+			btconfig.lookup_table[i] = htole32(btcoex_3wire[i]);
+		btconfig.valid = htole16(0xff);
+		btconfig.prio_boost = 0xf0;
+		DPRINTF(sc, IWN_DEBUG_RESET,
+		    "%s: configuring advanced bluetooth coexistence,"
+		    " flags : 0x%x\n",
+		    __func__,
+		    flags);
+		error = iwn_cmd(sc, IWN_CMD_BT_COEX, &btconfig,
+		    sizeof(btconfig), 1);
+	}
+
 	if (error != 0)
 		return error;
 
@@ -5375,25 +6459,72 @@ iwn5000_runtime_calib(struct iwn_softc *sc)
 	return iwn_cmd(sc, IWN5000_CMD_CALIB_CONFIG, &cmd, sizeof(cmd), 0);
 }
 
+static uint32_t
+iwn_get_rxon_ht_flags(struct iwn_softc *sc, struct ieee80211_channel *c)
+{
+	struct ieee80211com *ic = &sc->sc_ic;
+	uint32_t htflags = 0;
+
+	if (! IEEE80211_IS_CHAN_HT(c))
+		return (0);
+
+	htflags |= IWN_RXON_HT_PROTMODE(ic->ic_curhtprotmode);
+
+	if (IEEE80211_IS_CHAN_HT40(c)) {
+		switch (ic->ic_curhtprotmode) {
+		case IEEE80211_HTINFO_OPMODE_HT20PR:
+			htflags |= IWN_RXON_HT_MODEPURE40;
+			break;
+		default:
+			htflags |= IWN_RXON_HT_MODEMIXED;
+			break;
+		}
+	}
+	if (IEEE80211_IS_CHAN_HT40D(c))
+		htflags |= IWN_RXON_HT_HT40MINUS;
+
+	return (htflags);
+}
+
 static int
 iwn_config(struct iwn_softc *sc)
 {
 	struct iwn_ops *ops = &sc->ops;
-	struct ifnet *ifp = sc->sc_ifp;
-	struct ieee80211com *ic = ifp->if_l2com;
+	struct ieee80211com *ic = &sc->sc_ic;
+	struct ieee80211vap *vap = TAILQ_FIRST(&ic->ic_vaps);
+	const uint8_t *macaddr;
 	uint32_t txmask;
 	uint16_t rxchain;
 	int error;
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s begin\n", __func__);
 
-	if (sc->hw_type == IWN_HW_REV_TYPE_6005) {
-		/* Set radio temperature sensor offset. */
+	if ((sc->base_params->calib_need & IWN_FLG_NEED_PHY_CALIB_TEMP_OFFSET)
+	    && (sc->base_params->calib_need & IWN_FLG_NEED_PHY_CALIB_TEMP_OFFSETv2)) {
+		device_printf(sc->sc_dev,"%s: temp_offset and temp_offsetv2 are"
+		    " exclusive each together. Review NIC config file. Conf"
+		    " :  0x%08x Flags :  0x%08x  \n", __func__,
+		    sc->base_params->calib_need,
+		    (IWN_FLG_NEED_PHY_CALIB_TEMP_OFFSET |
+		    IWN_FLG_NEED_PHY_CALIB_TEMP_OFFSETv2));
+		return (EINVAL);
+	}
+
+	/* Compute temperature calib if needed. Will be send by send calib */
+	if (sc->base_params->calib_need & IWN_FLG_NEED_PHY_CALIB_TEMP_OFFSET) {
 		error = iwn5000_temp_offset_calib(sc);
 		if (error != 0) {
 			device_printf(sc->sc_dev,
 			    "%s: could not set temperature offset\n", __func__);
-			return error;
+			return (error);
+		}
+	} else if (sc->base_params->calib_need & IWN_FLG_NEED_PHY_CALIB_TEMP_OFFSETv2) {
+		error = iwn5000_temp_offset_calibv2(sc);
+		if (error != 0) {
+			device_printf(sc->sc_dev,
+			    "%s: could not compute temperature offset v2\n",
+			    __func__);
+			return (error);
 		}
 	}
 
@@ -5409,9 +6540,10 @@ iwn_config(struct iwn_softc *sc)
 	}
 
 	/* Configure valid TX chains for >=5000 Series. */
-	if (sc->hw_type != IWN_HW_REV_TYPE_4965) {
+	if (sc->hw_type != IWN_HW_REV_TYPE_4965 &&
+	    IWN_UCODE_API(sc->ucode_rev) > 1) {
 		txmask = htole32(sc->txchainmask);
-		DPRINTF(sc, IWN_DEBUG_RESET,
+		DPRINTF(sc, IWN_DEBUG_RESET | IWN_DEBUG_XMIT,
 		    "%s: configuring valid TX chains 0x%x\n", __func__, txmask);
 		error = iwn_cmd(sc, IWN5000_CMD_TX_ANT_CONFIG, &txmask,
 		    sizeof txmask, 0);
@@ -5424,10 +6556,14 @@ iwn_config(struct iwn_softc *sc)
 	}
 
 	/* Configure bluetooth coexistence. */
-	if (sc->sc_flags & IWN_FLAG_ADV_BTCOEX)
+	error = 0;
+
+	/* Configure bluetooth coexistence if needed. */
+	if (sc->base_params->bt_mode == IWN_BT_ADVANCED)
 		error = iwn_send_advanced_btcoex(sc);
-	else
+	if (sc->base_params->bt_mode == IWN_BT_SIMPLE)
 		error = iwn_send_btcoex(sc);
+
 	if (error != 0) {
 		device_printf(sc->sc_dev,
 		    "%s: could not configure bluetooth coexistence, error %d\n",
@@ -5438,8 +6574,9 @@ iwn_config(struct iwn_softc *sc)
 	/* Set mode, channel, RX filter and enable RX. */
 	sc->rxon = &sc->rx_on[IWN_RXON_BSS_CTX];
 	memset(sc->rxon, 0, sizeof (struct iwn_rxon));
-	IEEE80211_ADDR_COPY(sc->rxon->myaddr, IF_LLADDR(ifp));
-	IEEE80211_ADDR_COPY(sc->rxon->wlap, IF_LLADDR(ifp));
+	macaddr = vap ? vap->iv_myaddr : ic->ic_macaddr;
+	IEEE80211_ADDR_COPY(sc->rxon->myaddr, macaddr);
+	IEEE80211_ADDR_COPY(sc->rxon->wlap, macaddr);
 	sc->rxon->chan = ieee80211_chan2ieee(ic, ic->ic_curchan);
 	sc->rxon->flags = htole32(IWN_RXON_TSF | IWN_RXON_CTS_TO_SELF);
 	if (IEEE80211_IS_CHAN_2GHZ(ic->ic_curchan))
@@ -5463,12 +6600,34 @@ iwn_config(struct iwn_softc *sc)
 	sc->rxon->ht_single_mask = 0xff;
 	sc->rxon->ht_dual_mask = 0xff;
 	sc->rxon->ht_triple_mask = 0xff;
+	/*
+	 * In active association mode, ensure that
+	 * all the receive chains are enabled.
+	 *
+	 * Since we're not yet doing SMPS, don't allow the
+	 * number of idle RX chains to be less than the active
+	 * number.
+	 */
 	rxchain =
 	    IWN_RXCHAIN_VALID(sc->rxchainmask) |
-	    IWN_RXCHAIN_MIMO_COUNT(2) |
-	    IWN_RXCHAIN_IDLE_COUNT(2);
+	    IWN_RXCHAIN_MIMO_COUNT(sc->nrxchains) |
+	    IWN_RXCHAIN_IDLE_COUNT(sc->nrxchains);
 	sc->rxon->rxchain = htole16(rxchain);
-	DPRINTF(sc, IWN_DEBUG_RESET, "%s: setting configuration\n", __func__);
+	DPRINTF(sc, IWN_DEBUG_RESET | IWN_DEBUG_XMIT,
+	    "%s: rxchainmask=0x%x, nrxchains=%d\n",
+	    __func__,
+	    sc->rxchainmask,
+	    sc->nrxchains);
+
+	sc->rxon->flags |= htole32(iwn_get_rxon_ht_flags(sc, ic->ic_curchan));
+
+	DPRINTF(sc, IWN_DEBUG_RESET,
+	    "%s: setting configuration; flags=0x%08x\n",
+	    __func__, le32toh(sc->rxon->flags));
+	if (sc->sc_is_scanning)
+		device_printf(sc->sc_dev,
+		    "%s: is_scanning set, before RXON\n",
+		    __func__);
 	error = iwn_cmd(sc, IWN_CMD_RXON, sc->rxon, sc->rxonsz, 0);
 	if (error != 0) {
 		device_printf(sc->sc_dev, "%s: RXON command failed\n",
@@ -5507,38 +6666,107 @@ iwn_config(struct iwn_softc *sc)
 	return 0;
 }
 
-/*
- * Add an ssid element to a frame.
- */
-static uint8_t *
-ieee80211_add_ssid(uint8_t *frm, const uint8_t *ssid, u_int len)
+static uint16_t
+iwn_get_active_dwell_time(struct iwn_softc *sc,
+    struct ieee80211_channel *c, uint8_t n_probes)
 {
-	*frm++ = IEEE80211_ELEMID_SSID;
-	*frm++ = len;
-	memcpy(frm, ssid, len);
-	return frm + len;
+	/* No channel? Default to 2GHz settings */
+	if (c == NULL || IEEE80211_IS_CHAN_2GHZ(c)) {
+		return (IWN_ACTIVE_DWELL_TIME_2GHZ +
+		IWN_ACTIVE_DWELL_FACTOR_2GHZ * (n_probes + 1));
+	}
+
+	/* 5GHz dwell time */
+	return (IWN_ACTIVE_DWELL_TIME_5GHZ +
+	    IWN_ACTIVE_DWELL_FACTOR_5GHZ * (n_probes + 1));
+}
+
+/*
+ * Limit the total dwell time to 85% of the beacon interval.
+ *
+ * Returns the dwell time in milliseconds.
+ */
+static uint16_t
+iwn_limit_dwell(struct iwn_softc *sc, uint16_t dwell_time)
+{
+	struct ieee80211com *ic = &sc->sc_ic;
+	struct ieee80211vap *vap = NULL;
+	int bintval = 0;
+
+	/* bintval is in TU (1.024mS) */
+	if (! TAILQ_EMPTY(&ic->ic_vaps)) {
+		vap = TAILQ_FIRST(&ic->ic_vaps);
+		bintval = vap->iv_bss->ni_intval;
+	}
+
+	/*
+	 * If it's non-zero, we should calculate the minimum of
+	 * it and the DWELL_BASE.
+	 *
+	 * XXX Yes, the math should take into account that bintval
+	 * is 1.024mS, not 1mS..
+	 */
+	if (bintval > 0) {
+		DPRINTF(sc, IWN_DEBUG_SCAN,
+		    "%s: bintval=%d\n",
+		    __func__,
+		    bintval);
+		return (MIN(IWN_PASSIVE_DWELL_BASE, ((bintval * 85) / 100)));
+	}
+
+	/* No association context? Default */
+	return (IWN_PASSIVE_DWELL_BASE);
+}
+
+static uint16_t
+iwn_get_passive_dwell_time(struct iwn_softc *sc, struct ieee80211_channel *c)
+{
+	uint16_t passive;
+
+	if (c == NULL || IEEE80211_IS_CHAN_2GHZ(c)) {
+		passive = IWN_PASSIVE_DWELL_BASE + IWN_PASSIVE_DWELL_TIME_2GHZ;
+	} else {
+		passive = IWN_PASSIVE_DWELL_BASE + IWN_PASSIVE_DWELL_TIME_5GHZ;
+	}
+
+	/* Clamp to the beacon interval if we're associated */
+	return (iwn_limit_dwell(sc, passive));
 }
 
 static int
-iwn_scan(struct iwn_softc *sc)
+iwn_scan(struct iwn_softc *sc, struct ieee80211vap *vap,
+    struct ieee80211_scan_state *ss, struct ieee80211_channel *c)
 {
-	struct ifnet *ifp = sc->sc_ifp;
-	struct ieee80211com *ic = ifp->if_l2com;
-	struct ieee80211_scan_state *ss = ic->ic_scan;	/*XXX*/
-	struct ieee80211_node *ni = ss->ss_vap->iv_bss;
+	struct ieee80211com *ic = &sc->sc_ic;
+	struct ieee80211_node *ni = vap->iv_bss;
 	struct iwn_scan_hdr *hdr;
 	struct iwn_cmd_data *tx;
 	struct iwn_scan_essid *essid;
 	struct iwn_scan_chan *chan;
 	struct ieee80211_frame *wh;
 	struct ieee80211_rateset *rs;
-	struct ieee80211_channel *c;
 	uint8_t *buf, *frm;
 	uint16_t rxchain;
 	uint8_t txant;
 	int buflen, error;
+	int is_active;
+	uint16_t dwell_active, dwell_passive;
+	uint32_t extra, scan_service_time;
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s begin\n", __func__);
+
+	/*
+	 * We are absolutely not allowed to send a scan command when another
+	 * scan command is pending.
+	 */
+	if (sc->sc_is_scanning) {
+		device_printf(sc->sc_dev, "%s: called whilst scanning!\n",
+		    __func__);
+		return (EAGAIN);
+	}
+
+	/* Assign the scan channel */
+	c = ic->ic_curchan;
 
 	sc->rxon = &sc->rx_on[IWN_RXON_BSS_CTX];
 	buf = malloc(IWN_SCAN_MAXSZ, M_DEVBUF, M_NOWAIT | M_ZERO);
@@ -5555,13 +6783,29 @@ iwn_scan(struct iwn_softc *sc)
 	 */
 	hdr->quiet_time = htole16(10);		/* timeout in milliseconds */
 	hdr->quiet_threshold = htole16(1);	/* min # of packets */
+	/*
+	 * Max needs to be greater than active and passive and quiet!
+	 * It's also in microseconds!
+	 */
+	hdr->max_svc = htole32(250 * 1024);
+
+	/*
+	 * Reset scan: interval=100
+	 * Normal scan: interval=becaon interval
+	 * suspend_time: 100 (TU)
+	 *
+	 */
+	extra = (100 /* suspend_time */ / 100 /* beacon interval */) << 22;
+	//scan_service_time = extra | ((100 /* susp */ % 100 /* int */) * 1024);
+	scan_service_time = (4 << 22) | (100 * 1024);	/* Hardcode for now! */
+	hdr->pause_svc = htole32(scan_service_time);
 
 	/* Select antennas for scanning. */
 	rxchain =
 	    IWN_RXCHAIN_VALID(sc->rxchainmask) |
 	    IWN_RXCHAIN_FORCE_MIMO_SEL(sc->rxchainmask) |
 	    IWN_RXCHAIN_DRIVER_FORCE;
-	if (IEEE80211_IS_CHAN_A(ic->ic_curchan) &&
+	if (IEEE80211_IS_CHAN_A(c) &&
 	    sc->hw_type == IWN_HW_REV_TYPE_4965) {
 		/* Ant A must be avoided in 5GHz because of an HW bug. */
 		rxchain |= IWN_RXCHAIN_FORCE_SEL(IWN_ANT_B);
@@ -5575,7 +6819,7 @@ iwn_scan(struct iwn_softc *sc)
 	tx->id = sc->broadcast_id;
 	tx->lifetime = htole32(IWN_LIFETIME_INFINITE);
 
-	if (IEEE80211_IS_CHAN_5GHZ(ic->ic_curchan)) {
+	if (IEEE80211_IS_CHAN_5GHZ(c)) {
 		/* Send probe requests at 6Mbps. */
 		tx->rate = htole32(0xd);
 		rs = &ic->ic_sup_rates[IEEE80211_MODE_11A];
@@ -5594,12 +6838,35 @@ iwn_scan(struct iwn_softc *sc)
 	txant = IWN_LSB(sc->txchainmask);
 	tx->rate |= htole32(IWN_RFLAG_ANT(txant));
 
+	/*
+	 * Only do active scanning if we're announcing a probe request
+	 * for a given SSID (or more, if we ever add it to the driver.)
+	 */
+	is_active = 0;
+
+	/*
+	 * If we're scanning for a specific SSID, add it to the command.
+	 *
+	 * XXX maybe look at adding support for scanning multiple SSIDs?
+	 */
 	essid = (struct iwn_scan_essid *)(tx + 1);
-	if (ss->ss_ssid[0].len != 0) {
-		essid[0].id = IEEE80211_ELEMID_SSID;
-		essid[0].len = ss->ss_ssid[0].len;
-		memcpy(essid[0].data, ss->ss_ssid[0].ssid, ss->ss_ssid[0].len);
+	if (ss != NULL) {
+		if (ss->ss_ssid[0].len != 0) {
+			essid[0].id = IEEE80211_ELEMID_SSID;
+			essid[0].len = ss->ss_ssid[0].len;
+			memcpy(essid[0].data, ss->ss_ssid[0].ssid, ss->ss_ssid[0].len);
+		}
+
+		DPRINTF(sc, IWN_DEBUG_SCAN, "%s: ssid_len=%d, ssid=%*s\n",
+		    __func__,
+		    ss->ss_ssid[0].len,
+		    ss->ss_ssid[0].len,
+		    ss->ss_ssid[0].ssid);
+
+		if (ss->ss_nssid > 0)
+			is_active = 1;
 	}
+
 	/*
 	 * Build a probe request frame.  Most of the following code is a
 	 * copy & paste of what is done in net80211.
@@ -5608,9 +6875,9 @@ iwn_scan(struct iwn_softc *sc)
 	wh->i_fc[0] = IEEE80211_FC0_VERSION_0 | IEEE80211_FC0_TYPE_MGT |
 	    IEEE80211_FC0_SUBTYPE_PROBE_REQ;
 	wh->i_fc[1] = IEEE80211_FC1_DIR_NODS;
-	IEEE80211_ADDR_COPY(wh->i_addr1, ifp->if_broadcastaddr);
-	IEEE80211_ADDR_COPY(wh->i_addr2, IF_LLADDR(ifp));
-	IEEE80211_ADDR_COPY(wh->i_addr3, ifp->if_broadcastaddr);
+	IEEE80211_ADDR_COPY(wh->i_addr1, vap->iv_ifp->if_broadcastaddr);
+	IEEE80211_ADDR_COPY(wh->i_addr2, IF_LLADDR(vap->iv_ifp));
+	IEEE80211_ADDR_COPY(wh->i_addr3, vap->iv_ifp->if_broadcastaddr);
 	*(uint16_t *)&wh->i_dur[0] = 0;	/* filled by HW */
 	*(uint16_t *)&wh->i_seq[0] = 0;	/* filled by HW */
 
@@ -5625,57 +6892,102 @@ iwn_scan(struct iwn_softc *sc)
 	/* Set length of probe request. */
 	tx->len = htole16(frm - (uint8_t *)wh);
 
-	c = ic->ic_curchan;
+	/*
+	 * If active scanning is requested but a certain channel is
+	 * marked passive, we can do active scanning if we detect
+	 * transmissions.
+	 *
+	 * There is an issue with some firmware versions that triggers
+	 * a sysassert on a "good CRC threshold" of zero (== disabled),
+	 * on a radar channel even though this means that we should NOT
+	 * send probes.
+	 *
+	 * The "good CRC threshold" is the number of frames that we
+	 * need to receive during our dwell time on a channel before
+	 * sending out probes -- setting this to a huge value will
+	 * mean we never reach it, but at the same time work around
+	 * the aforementioned issue. Thus use IWL_GOOD_CRC_TH_NEVER
+	 * here instead of IWL_GOOD_CRC_TH_DISABLED.
+	 *
+	 * This was fixed in later versions along with some other
+	 * scan changes, and the threshold behaves as a flag in those
+	 * versions.
+	 */
+
+	/*
+	 * If we're doing active scanning, set the crc_threshold
+	 * to a suitable value.  This is different to active veruss
+	 * passive scanning depending upon the channel flags; the
+	 * firmware will obey that particular check for us.
+	 */
+	if (sc->tlv_feature_flags & IWN_UCODE_TLV_FLAGS_NEWSCAN)
+		hdr->crc_threshold = is_active ?
+		    IWN_GOOD_CRC_TH_DEFAULT : IWN_GOOD_CRC_TH_DISABLED;
+	else
+		hdr->crc_threshold = is_active ?
+		    IWN_GOOD_CRC_TH_DEFAULT : IWN_GOOD_CRC_TH_NEVER;
+
 	chan = (struct iwn_scan_chan *)frm;
 	chan->chan = htole16(ieee80211_chan2ieee(ic, c));
 	chan->flags = 0;
 	if (ss->ss_nssid > 0)
 		chan->flags |= htole32(IWN_CHAN_NPBREQS(1));
 	chan->dsp_gain = 0x6e;
-	if (IEEE80211_IS_CHAN_5GHZ(c) &&
-	    !(c->ic_flags & IEEE80211_CHAN_PASSIVE)) {
-		chan->rf_gain = 0x3b;
-		chan->active  = htole16(24);
-		chan->passive = htole16(110);
+
+	/*
+	 * Set the passive/active flag depending upon the channel mode.
+	 * XXX TODO: take the is_active flag into account as well?
+	 */
+	if (c->ic_flags & IEEE80211_CHAN_PASSIVE)
+		chan->flags |= htole32(IWN_CHAN_PASSIVE);
+	else
 		chan->flags |= htole32(IWN_CHAN_ACTIVE);
-	} else if (IEEE80211_IS_CHAN_5GHZ(c)) {
+
+	/*
+	 * Calculate the active/passive dwell times.
+	 */
+
+	dwell_active = iwn_get_active_dwell_time(sc, c, ss->ss_nssid);
+	dwell_passive = iwn_get_passive_dwell_time(sc, c);
+
+	/* Make sure they're valid */
+	if (dwell_passive <= dwell_active)
+		dwell_passive = dwell_active + 1;
+
+	chan->active = htole16(dwell_active);
+	chan->passive = htole16(dwell_passive);
+
+	if (IEEE80211_IS_CHAN_5GHZ(c))
 		chan->rf_gain = 0x3b;
-		chan->active  = htole16(24);
-		if (sc->rxon->associd)
-			chan->passive = htole16(78);
-		else
-			chan->passive = htole16(110);
-		hdr->crc_threshold = 0xffff;
-	} else if (!(c->ic_flags & IEEE80211_CHAN_PASSIVE)) {
+	else
 		chan->rf_gain = 0x28;
-		chan->active  = htole16(36);
-		chan->passive = htole16(120);
-		chan->flags |= htole32(IWN_CHAN_ACTIVE);
-	} else {
-		chan->rf_gain = 0x28;
-		chan->active  = htole16(36);
-		if (sc->rxon->associd)
-			chan->passive = htole16(88);
-		else
-			chan->passive = htole16(120);
-		hdr->crc_threshold = 0xffff;
-	}
 
 	DPRINTF(sc, IWN_DEBUG_STATE,
 	    "%s: chan %u flags 0x%x rf_gain 0x%x "
-	    "dsp_gain 0x%x active 0x%x passive 0x%x\n", __func__,
+	    "dsp_gain 0x%x active %d passive %d scan_svc_time %d crc 0x%x "
+	    "isactive=%d numssid=%d\n", __func__,
 	    chan->chan, chan->flags, chan->rf_gain, chan->dsp_gain,
-	    chan->active, chan->passive);
+	    dwell_active, dwell_passive, scan_service_time,
+	    hdr->crc_threshold, is_active, ss->ss_nssid);
 
 	hdr->nchan++;
 	chan++;
 	buflen = (uint8_t *)chan - buf;
 	hdr->len = htole16(buflen);
 
+	if (sc->sc_is_scanning) {
+		device_printf(sc->sc_dev,
+		    "%s: called with is_scanning set!\n",
+		    __func__);
+	}
+	sc->sc_is_scanning = 1;
+
 	DPRINTF(sc, IWN_DEBUG_STATE, "sending scan command nchan=%d\n",
 	    hdr->nchan);
 	error = iwn_cmd(sc, IWN_CMD_SCAN, buf, buflen, 1);
 	free(buf, M_DEVBUF);
+	if (error == 0)
+		callout_reset(&sc->scan_timeout, 5*hz, iwn_scan_timeout, sc);
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s: end\n",__func__);
 
@@ -5686,8 +6998,7 @@ static int
 iwn_auth(struct iwn_softc *sc, struct ieee80211vap *vap)
 {
 	struct iwn_ops *ops = &sc->ops;
-	struct ifnet *ifp = sc->sc_ifp;
-	struct ieee80211com *ic = ifp->if_l2com;
+	struct ieee80211com *ic = &sc->sc_ic;
 	struct ieee80211_node *ni = vap->iv_bss;
 	int error;
 
@@ -5712,12 +7023,20 @@ iwn_auth(struct iwn_softc *sc, struct ieee80211vap *vap)
 		sc->rxon->ofdm_mask = 0;
 	} else {
 		/* Assume 802.11b/g. */
-		sc->rxon->cck_mask  = 0x0f;
+		sc->rxon->cck_mask  = 0x03;
 		sc->rxon->ofdm_mask = 0x15;
 	}
+
+	/* try HT */
+	sc->rxon->flags |= htole32(iwn_get_rxon_ht_flags(sc, ic->ic_curchan));
+
 	DPRINTF(sc, IWN_DEBUG_STATE, "rxon chan %d flags %x cck %x ofdm %x\n",
 	    sc->rxon->chan, sc->rxon->flags, sc->rxon->cck_mask,
 	    sc->rxon->ofdm_mask);
+	if (sc->sc_is_scanning)
+		device_printf(sc->sc_dev,
+		    "%s: is_scanning set, before RXON\n",
+		    __func__);
 	error = iwn_cmd(sc, IWN_CMD_RXON, sc->rxon, sc->rxonsz, 1);
 	if (error != 0) {
 		device_printf(sc->sc_dev, "%s: RXON command failed, error %d\n",
@@ -5751,11 +7070,9 @@ static int
 iwn_run(struct iwn_softc *sc, struct ieee80211vap *vap)
 {
 	struct iwn_ops *ops = &sc->ops;
-	struct ifnet *ifp = sc->sc_ifp;
-	struct ieee80211com *ic = ifp->if_l2com;
+	struct ieee80211com *ic = &sc->sc_ic;
 	struct ieee80211_node *ni = vap->iv_bss;
 	struct iwn_node_info node;
-	uint32_t htflags = 0;
 	int error;
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s begin\n", __func__);
@@ -5794,25 +7111,15 @@ iwn_run(struct iwn_softc *sc, struct ieee80211vap *vap)
 		sc->rxon->cck_mask  = 0x0f;
 		sc->rxon->ofdm_mask = 0x15;
 	}
-	if (IEEE80211_IS_CHAN_HT(ni->ni_chan)) {
-		htflags |= IWN_RXON_HT_PROTMODE(ic->ic_curhtprotmode);
-		if (IEEE80211_IS_CHAN_HT40(ni->ni_chan)) {
-			switch (ic->ic_curhtprotmode) {
-			case IEEE80211_HTINFO_OPMODE_HT20PR:
-				htflags |= IWN_RXON_HT_MODEPURE40;
-				break;
-			default:
-				htflags |= IWN_RXON_HT_MODEMIXED;
-				break;
-			}
-		}
-		if (IEEE80211_IS_CHAN_HT40D(ni->ni_chan))
-			htflags |= IWN_RXON_HT_HT40MINUS;
-	}
-	sc->rxon->flags |= htole32(htflags);
+	/* try HT */
+	sc->rxon->flags |= htole32(iwn_get_rxon_ht_flags(sc, ni->ni_chan));
 	sc->rxon->filter |= htole32(IWN_FILTER_BSS);
-	DPRINTF(sc, IWN_DEBUG_STATE, "rxon chan %d flags %x\n",
-	    sc->rxon->chan, sc->rxon->flags);
+	DPRINTF(sc, IWN_DEBUG_STATE, "rxon chan %d flags %x, curhtprotmode=%d\n",
+	    sc->rxon->chan, le32toh(sc->rxon->flags), ic->ic_curhtprotmode);
+	if (sc->sc_is_scanning)
+		device_printf(sc->sc_dev,
+		    "%s: is_scanning set, before RXON\n",
+		    __func__);
 	error = iwn_cmd(sc, IWN_CMD_RXON, sc->rxon, sc->rxonsz, 1);
 	if (error != 0) {
 		device_printf(sc->sc_dev,
@@ -5895,7 +7202,7 @@ iwn_ampdu_rx_start(struct ieee80211_node *ni, struct ieee80211_rx_ampdu *rap,
     int baparamset, int batimeout, int baseqctl)
 {
 #define MS(_v, _f)	(((_v) & _f) >> _f##_S)
-	struct iwn_softc *sc = ni->ni_ic->ic_ifp->if_softc;
+	struct iwn_softc *sc = ni->ni_ic->ic_softc;
 	struct iwn_ops *ops = &sc->ops;
 	struct iwn_node *wn = (void *)ni;
 	struct iwn_node_info node;
@@ -5931,7 +7238,7 @@ static void
 iwn_ampdu_rx_stop(struct ieee80211_node *ni, struct ieee80211_rx_ampdu *rap)
 {
 	struct ieee80211com *ic = ni->ni_ic;
-	struct iwn_softc *sc = ic->ic_ifp->if_softc;
+	struct iwn_softc *sc = ic->ic_softc;
 	struct iwn_ops *ops = &sc->ops;
 	struct iwn_node *wn = (void *)ni;
 	struct iwn_node_info node;
@@ -5959,7 +7266,7 @@ static int
 iwn_addba_request(struct ieee80211_node *ni, struct ieee80211_tx_ampdu *tap,
     int dialogtoken, int baparamset, int batimeout)
 {
-	struct iwn_softc *sc = ni->ni_ic->ic_ifp->if_softc;
+	struct iwn_softc *sc = ni->ni_ic->ic_softc;
 	int qid;
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->Doing %s\n", __func__);
@@ -5989,7 +7296,7 @@ static int
 iwn_addba_response(struct ieee80211_node *ni, struct ieee80211_tx_ampdu *tap,
     int code, int baparamset, int batimeout)
 {
-	struct iwn_softc *sc = ni->ni_ic->ic_ifp->if_softc;
+	struct iwn_softc *sc = ni->ni_ic->ic_softc;
 	int qid = *(int *)tap->txa_private;
 	uint8_t tid = tap->txa_tid;
 	int ret;
@@ -6018,7 +7325,7 @@ iwn_ampdu_tx_start(struct ieee80211com *ic, struct ieee80211_node *ni,
     uint8_t tid)
 {
 	struct ieee80211_tx_ampdu *tap = &ni->ni_tx_ampdu[tid];
-	struct iwn_softc *sc = ni->ni_ic->ic_ifp->if_softc;
+	struct iwn_softc *sc = ni->ni_ic->ic_softc;
 	struct iwn_ops *ops = &sc->ops;
 	struct iwn_node *wn = (void *)ni;
 	struct iwn_node_info node;
@@ -6052,7 +7359,7 @@ iwn_ampdu_tx_start(struct ieee80211com *ic, struct ieee80211_node *ni,
 static void
 iwn_ampdu_tx_stop(struct ieee80211_node *ni, struct ieee80211_tx_ampdu *tap)
 {
-	struct iwn_softc *sc = ni->ni_ic->ic_ifp->if_softc;
+	struct iwn_softc *sc = ni->ni_ic->ic_softc;
 	struct iwn_ops *ops = &sc->ops;
 	uint8_t tid = tap->txa_tid;
 	int qid;
@@ -6211,10 +7518,10 @@ iwn5000_query_calibration(struct iwn_softc *sc)
 	int error;
 
 	memset(&cmd, 0, sizeof cmd);
-	cmd.ucode.once.enable = 0xffffffff;
-	cmd.ucode.once.start  = 0xffffffff;
-	cmd.ucode.once.send   = 0xffffffff;
-	cmd.ucode.flags       = 0xffffffff;
+	cmd.ucode.once.enable = htole32(0xffffffff);
+	cmd.ucode.once.start  = htole32(0xffffffff);
+	cmd.ucode.once.send   = htole32(0xffffffff);
+	cmd.ucode.flags       = htole32(0xffffffff);
 	DPRINTF(sc, IWN_DEBUG_CALIBRATE, "%s: sending calibration query\n",
 	    __func__);
 	error = iwn_cmd(sc, IWN5000_CMD_CALIB_CONFIG, &cmd, sizeof cmd, 0);
@@ -6236,9 +7543,20 @@ iwn5000_send_calibration(struct iwn_softc *sc)
 {
 	int idx, error;
 
-	for (idx = 0; idx < 5; idx++) {
-		if (sc->calibcmd[idx].buf == NULL)
-			continue;	/* No results available. */
+	for (idx = 0; idx < IWN5000_PHY_CALIB_MAX_RESULT; idx++) {
+		if (!(sc->base_params->calib_need & (1<<idx))) {
+			DPRINTF(sc, IWN_DEBUG_CALIBRATE,
+			    "No need of calib %d\n",
+			    idx);
+			continue; /* no need for this calib */
+		}
+		if (sc->calibcmd[idx].buf == NULL) {
+			DPRINTF(sc, IWN_DEBUG_CALIBRATE,
+			    "Need calib idx : %d but no available data\n",
+			    idx);
+			continue;
+		}
+
 		DPRINTF(sc, IWN_DEBUG_CALIBRATE,
 		    "send calibration result idx=%d len=%d\n", idx,
 		    sc->calibcmd[idx].len);
@@ -6259,7 +7577,7 @@ iwn5000_send_wimax_coex(struct iwn_softc *sc)
 {
 	struct iwn5000_wimax_coex wimax;
 
-#ifdef notyet
+#if 0
 	if (sc->hw_type == IWN_HW_REV_TYPE_6050) {
 		/* Enable WiMAX coexistence for combo adapters. */
 		wimax.flags =
@@ -6312,6 +7630,33 @@ iwn5000_temp_offset_calib(struct iwn_softc *sc)
 		cmd.offset = htole16(IWN_DEFAULT_TEMP_OFFSET);
 	DPRINTF(sc, IWN_DEBUG_CALIBRATE, "setting radio sensor offset to %d\n",
 	    le16toh(cmd.offset));
+	return iwn_cmd(sc, IWN_CMD_PHY_CALIB, &cmd, sizeof cmd, 0);
+}
+
+static int
+iwn5000_temp_offset_calibv2(struct iwn_softc *sc)
+{
+	struct iwn5000_phy_calib_temp_offsetv2 cmd;
+
+	memset(&cmd, 0, sizeof cmd);
+	cmd.code = IWN5000_PHY_CALIB_TEMP_OFFSET;
+	cmd.ngroups = 1;
+	cmd.isvalid = 1;
+	if (sc->eeprom_temp != 0) {
+		cmd.offset_low = htole16(sc->eeprom_temp);
+		cmd.offset_high = htole16(sc->eeprom_temp_high);
+	} else {
+		cmd.offset_low = htole16(IWN_DEFAULT_TEMP_OFFSET);
+		cmd.offset_high = htole16(IWN_DEFAULT_TEMP_OFFSET);
+	}
+	cmd.burnt_voltage_ref = htole16(sc->eeprom_voltage);
+
+	DPRINTF(sc, IWN_DEBUG_CALIBRATE,
+	    "setting radio sensor low offset to %d, high offset to %d, voltage to %d\n",
+	    le16toh(cmd.offset_low),
+	    le16toh(cmd.offset_high),
+	    le16toh(cmd.burnt_voltage_ref));
+
 	return iwn_cmd(sc, IWN_CMD_PHY_CALIB, &cmd, sizeof cmd, 0);
 }
 
@@ -6400,7 +7745,10 @@ iwn5000_post_alive(struct iwn_softc *sc)
 	IWN_SETBITS(sc, IWN_FH_TX_CHICKEN, IWN_FH_TX_CHICKEN_SCHED_RETRY);
 
 	/* Enable chain mode for all queues, except command queue. */
-	iwn_prph_write(sc, IWN5000_SCHED_QCHAIN_SEL, 0xfffef);
+	if (sc->sc_flags & IWN_FLAG_PAN_SUPPORT)
+		iwn_prph_write(sc, IWN5000_SCHED_QCHAIN_SEL, 0xfffdf);
+	else
+		iwn_prph_write(sc, IWN5000_SCHED_QCHAIN_SEL, 0xfffef);
 	iwn_prph_write(sc, IWN5000_SCHED_AGGR_SEL, 0);
 
 	for (qid = 0; qid < IWN5000_NTXQUEUES; qid++) {
@@ -6421,10 +7769,20 @@ iwn5000_post_alive(struct iwn_softc *sc)
 	iwn_prph_write(sc, IWN5000_SCHED_TXFACT, 0xff);
 
 	/* Mark TX rings (4 EDCA + cmd + 2 HCCA) as active. */
-	for (qid = 0; qid < 7; qid++) {
-		static uint8_t qid2fifo[] = { 3, 2, 1, 0, 7, 5, 6 };
-		iwn_prph_write(sc, IWN5000_SCHED_QUEUE_STATUS(qid),
-		    IWN5000_TXQ_STATUS_ACTIVE | qid2fifo[qid]);
+	if (sc->sc_flags & IWN_FLAG_PAN_SUPPORT) {
+		/* Mark TX rings as active. */
+		for (qid = 0; qid < 11; qid++) {
+			static uint8_t qid2fifo[] = { 3, 2, 1, 0, 0, 4, 2, 5, 4, 7, 5 };
+			iwn_prph_write(sc, IWN5000_SCHED_QUEUE_STATUS(qid),
+			    IWN5000_TXQ_STATUS_ACTIVE | qid2fifo[qid]);
+		}
+	} else {
+		/* Mark TX rings (4 EDCA + cmd + 2 HCCA) as active. */
+		for (qid = 0; qid < 7; qid++) {
+			static uint8_t qid2fifo[] = { 3, 2, 1, 0, 7, 5, 6 };
+			iwn_prph_write(sc, IWN5000_SCHED_QUEUE_STATUS(qid),
+			    IWN5000_TXQ_STATUS_ACTIVE | qid2fifo[qid]);
+		}
 	}
 	iwn_nic_unlock(sc);
 
@@ -6669,6 +8027,8 @@ iwn_read_firmware_leg(struct iwn_softc *sc, struct iwn_fw_info *fw)
 	ptr = (const uint32_t *)fw->data;
 	rev = le32toh(*ptr++);
 
+	sc->ucode_rev = rev;
+
 	/* Check firmware API version. */
 	if (IWN_FW_API(rev) <= 1) {
 		device_printf(sc->sc_dev,
@@ -6734,6 +8094,7 @@ iwn_read_firmware_tlv(struct iwn_softc *sc, struct iwn_fw_info *fw,
 	}
 	DPRINTF(sc, IWN_DEBUG_RESET, "FW: \"%.64s\", build 0x%x\n", hdr->descr,
 	    le32toh(hdr->build));
+	sc->ucode_rev = le32toh(hdr->rev);
 
 	/*
 	 * Select the closest supported alternative that is less than
@@ -6789,7 +8150,7 @@ iwn_read_firmware_tlv(struct iwn_softc *sc, struct iwn_fw_info *fw,
 				sc->sc_flags |= IWN_FLAG_ENH_SENS;
 			break;
 		case IWN_FW_TLV_PHY_CALIB:
-			tmp = htole32(*ptr);
+			tmp = le32toh(*ptr);
 			if (tmp < 253) {
 				sc->reset_noise_gain = tmp;
 				sc->noise_gain = tmp + 1;
@@ -6800,8 +8161,16 @@ iwn_read_firmware_tlv(struct iwn_softc *sc, struct iwn_fw_info *fw,
 			DPRINTF(sc, IWN_DEBUG_RESET,
 			    "PAN Support found: %d\n", 1);
 			break;
-		case IWN_FW_TLV_FLAGS :
-			sc->tlv_feature_flags = htole32(*ptr);
+		case IWN_FW_TLV_FLAGS:
+			if (len < sizeof(uint32_t))
+				break;
+			if (len % sizeof(uint32_t))
+				break;
+			sc->tlv_feature_flags = le32toh(*ptr);
+			DPRINTF(sc, IWN_DEBUG_RESET,
+			    "%s: feature: 0x%08x\n",
+			    __func__,
+			    sc->tlv_feature_flags);
 			break;
 		case IWN_FW_TLV_PBREQ_MAXLEN:
 		case IWN_FW_TLV_RUNT_EVTLOG_PTR:
@@ -6854,9 +8223,8 @@ iwn_read_firmware(struct iwn_softc *sc)
 	if (fw->size < sizeof (uint32_t)) {
 		device_printf(sc->sc_dev, "%s: firmware too short: %zu bytes\n",
 		    __func__, fw->size);
-		firmware_put(sc->fw_fp, FIRMWARE_UNLOAD);
-		sc->fw_fp = NULL;
-		return EINVAL;
+		error = EINVAL;
+		goto fail;
 	}
 
 	/* Retrieve text and data sections. */
@@ -6868,10 +8236,10 @@ iwn_read_firmware(struct iwn_softc *sc)
 		device_printf(sc->sc_dev,
 		    "%s: could not read firmware sections, error %d\n",
 		    __func__, error);
-		firmware_put(sc->fw_fp, FIRMWARE_UNLOAD);
-		sc->fw_fp = NULL;
-		return error;
+		goto fail;
 	}
+
+	device_printf(sc->sc_dev, "%s: ucode rev=0x%08x\n", __func__, sc->ucode_rev);
 
 	/* Make sure text and data sections fit in hardware memory. */
 	if (fw->main.textsz > sc->fw_text_maxsz ||
@@ -6882,13 +8250,22 @@ iwn_read_firmware(struct iwn_softc *sc)
 	    (fw->boot.textsz & 3) != 0) {
 		device_printf(sc->sc_dev, "%s: firmware sections too large\n",
 		    __func__);
-		firmware_put(sc->fw_fp, FIRMWARE_UNLOAD);
-		sc->fw_fp = NULL;
-		return EINVAL;
+		error = EINVAL;
+		goto fail;
 	}
 
 	/* We can proceed with loading the firmware. */
 	return 0;
+
+fail:	iwn_unload_firmware(sc);
+	return error;
+}
+
+static void
+iwn_unload_firmware(struct iwn_softc *sc)
+{
+	firmware_put(sc->fw_fp, FIRMWARE_UNLOAD);
+	sc->fw_fp = NULL;
 }
 
 static int
@@ -6930,16 +8307,15 @@ iwn_apm_init(struct iwn_softc *sc)
 	IWN_SETBITS(sc, IWN_HW_IF_CONFIG, IWN_HW_IF_CONFIG_HAP_WAKE_L1A);
 
 	/* Retrieve PCIe Active State Power Management (ASPM). */
-	reg = pci_read_config(sc->sc_dev, sc->sc_cap_off + 0x10, 1);
+	reg = pci_read_config(sc->sc_dev, sc->sc_cap_off + PCIER_LINK_CTL, 4);
 	/* Workaround for HW instability in PCIe L0->L0s->L1 transition. */
-	if (reg & 0x02)	/* L1 Entry enabled. */
+	if (reg & PCIEM_LINK_CTL_ASPMC_L1)	/* L1 Entry enabled. */
 		IWN_SETBITS(sc, IWN_GIO, IWN_GIO_L0S_ENA);
 	else
 		IWN_CLRBITS(sc, IWN_GIO, IWN_GIO_L0S_ENA);
 
-	if (sc->hw_type != IWN_HW_REV_TYPE_4965 &&
-	    sc->hw_type <= IWN_HW_REV_TYPE_1000)
-		IWN_SETBITS(sc, IWN_ANA_PLL, IWN_ANA_PLL_INIT);
+	if (sc->base_params->pll_cfg_val)
+		IWN_SETBITS(sc, IWN_ANA_PLL, sc->base_params->pll_cfg_val);
 
 	/* Wait for clock stabilization before accessing prph. */
 	if ((error = iwn_clock_wait(sc)) != 0)
@@ -7051,13 +8427,13 @@ iwn5000_nic_config(struct iwn_softc *sc)
 		/* Use internal power amplifier only. */
 		IWN_WRITE(sc, IWN_GP_DRIVER, IWN_GP_DRIVER_RADIO_2X2_IPA);
 	}
-	if ((sc->hw_type == IWN_HW_REV_TYPE_6050 ||
-	     sc->hw_type == IWN_HW_REV_TYPE_6005) && sc->calib_ver >= 6) {
+	if (sc->base_params->additional_nic_config && sc->calib_ver >= 6) {
 		/* Indicate that ROM calibration version is >=6. */
 		IWN_SETBITS(sc, IWN_GP_DRIVER, IWN_GP_DRIVER_CALIB_VER6);
 	}
-	if (sc->hw_type == IWN_HW_REV_TYPE_6005)
-		IWN_SETBITS(sc, IWN_GP_DRIVER, IWN_GP_DRIVER_6050_1X2);
+	if (sc->base_params->additional_gp_drv_bit)
+		IWN_SETBITS(sc, IWN_GP_DRIVER,
+		    sc->base_params->additional_gp_drv_bit);
 	return 0;
 }
 
@@ -7192,7 +8568,7 @@ iwn_hw_init(struct iwn_softc *sc)
 	IWN_WRITE(sc, IWN_UCODE_GP1_CLR, IWN_UCODE_GP1_RFKILL);
 
 	/* Enable shadow registers. */
-	if (sc->hw_type >= IWN_HW_REV_TYPE_6000)
+	if (sc->base_params->shadow_reg_enable)
 		IWN_SETBITS(sc, IWN_SHADOW_REG_CTRL, 0x800fffff);
 
 	if ((error = ops->load_firmware(sc)) != 0) {
@@ -7271,8 +8647,7 @@ static void
 iwn_radio_on(void *arg0, int pending)
 {
 	struct iwn_softc *sc = arg0;
-	struct ifnet *ifp = sc->sc_ifp;
-	struct ieee80211com *ic = ifp->if_l2com;
+	struct ieee80211com *ic = &sc->sc_ic;
 	struct ieee80211vap *vap = TAILQ_FIRST(&ic->ic_vaps);
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->Doing %s\n", __func__);
@@ -7287,8 +8662,7 @@ static void
 iwn_radio_off(void *arg0, int pending)
 {
 	struct iwn_softc *sc = arg0;
-	struct ifnet *ifp = sc->sc_ifp;
-	struct ieee80211com *ic = ifp->if_l2com;
+	struct ieee80211com *ic = &sc->sc_ic;
 	struct ieee80211vap *vap = TAILQ_FIRST(&ic->ic_vaps);
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->Doing %s\n", __func__);
@@ -7305,14 +8679,62 @@ iwn_radio_off(void *arg0, int pending)
 }
 
 static void
+iwn_panicked(void *arg0, int pending)
+{
+	struct iwn_softc *sc = arg0;
+	struct ieee80211com *ic = &sc->sc_ic;
+	struct ieee80211vap *vap = TAILQ_FIRST(&ic->ic_vaps);
+#if 0
+	int error;
+#endif
+
+	if (vap == NULL) {
+		printf("%s: null vap\n", __func__);
+		return;
+	}
+
+	device_printf(sc->sc_dev, "%s: controller panicked, iv_state = %d; "
+	    "restarting\n", __func__, vap->iv_state);
+
+	/*
+	 * This is not enough work. We need to also reinitialise
+	 * the correct transmit state for aggregation enabled queues,
+	 * which has a very specific requirement of
+	 * ring index = 802.11 seqno % 256.  If we don't do this (which
+	 * we definitely don't!) then the firmware will just panic again.
+	 */
+#if 1
+	ieee80211_restart_all(ic);
+#else
+	IWN_LOCK(sc);
+
+	iwn_stop_locked(sc);
+	iwn_init_locked(sc);
+	if (vap->iv_state >= IEEE80211_S_AUTH &&
+	    (error = iwn_auth(sc, vap)) != 0) {
+		device_printf(sc->sc_dev,
+		    "%s: could not move to auth state\n", __func__);
+	}
+	if (vap->iv_state >= IEEE80211_S_RUN &&
+	    (error = iwn_run(sc, vap)) != 0) {
+		device_printf(sc->sc_dev,
+		    "%s: could not move to run state\n", __func__);
+	}
+
+	IWN_UNLOCK(sc);
+#endif
+}
+
+static void
 iwn_init_locked(struct iwn_softc *sc)
 {
-	struct ifnet *ifp = sc->sc_ifp;
 	int error;
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s begin\n", __func__);
 
 	IWN_LOCK_ASSERT(sc);
+
+	sc->sc_flags |= IWN_FLAG_RUNNING;
 
 	if ((error = iwn_hw_prepare(sc)) != 0) {
 		device_printf(sc->sc_dev, "%s: hardware not ready, error %d\n",
@@ -7344,8 +8766,7 @@ iwn_init_locked(struct iwn_softc *sc)
 
 	/* Initialize hardware and upload firmware. */
 	error = iwn_hw_init(sc);
-	firmware_put(sc->fw_fp, FIRMWARE_UNLOAD);
-	sc->fw_fp = NULL;
+	iwn_unload_firmware(sc);
 	if (error != 0) {
 		device_printf(sc->sc_dev,
 		    "%s: could not initialize hardware, error %d\n", __func__,
@@ -7361,45 +8782,41 @@ iwn_init_locked(struct iwn_softc *sc)
 		goto fail;
 	}
 
-	ifp->if_drv_flags &= ~IFF_DRV_OACTIVE;
-	ifp->if_drv_flags |= IFF_DRV_RUNNING;
-
 	callout_reset(&sc->watchdog_to, hz, iwn_watchdog, sc);
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s: end\n",__func__);
 
 	return;
 
-fail:	iwn_stop_locked(sc);
+fail:
+	sc->sc_flags &= ~IWN_FLAG_RUNNING;
+	iwn_stop_locked(sc);
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->%s: end in error\n",__func__);
 }
 
 static void
-iwn_init(void *arg)
+iwn_init(struct iwn_softc *sc)
 {
-	struct iwn_softc *sc = arg;
-	struct ifnet *ifp = sc->sc_ifp;
-	struct ieee80211com *ic = ifp->if_l2com;
 
 	IWN_LOCK(sc);
 	iwn_init_locked(sc);
 	IWN_UNLOCK(sc);
 
-	if (ifp->if_drv_flags & IFF_DRV_RUNNING)
-		ieee80211_start_all(ic);
+	if (sc->sc_flags & IWN_FLAG_RUNNING)
+		ieee80211_start_all(&sc->sc_ic);
 }
 
 static void
 iwn_stop_locked(struct iwn_softc *sc)
 {
-	struct ifnet *ifp = sc->sc_ifp;
 
 	IWN_LOCK_ASSERT(sc);
 
+	sc->sc_is_scanning = 0;
 	sc->sc_tx_timer = 0;
 	callout_stop(&sc->watchdog_to);
 	callout_stop(&sc->calib_to);
-	ifp->if_drv_flags &= ~(IFF_DRV_RUNNING | IFF_DRV_OACTIVE);
+	sc->sc_flags &= ~IWN_FLAG_RUNNING;
 
 	/* Power OFF hardware. */
 	iwn_hw_stop(sc);
@@ -7419,8 +8836,7 @@ iwn_stop(struct iwn_softc *sc)
 static void
 iwn_scan_start(struct ieee80211com *ic)
 {
-	struct ifnet *ifp = ic->ic_ifp;
-	struct iwn_softc *sc = ifp->if_softc;
+	struct iwn_softc *sc = ic->ic_softc;
 
 	IWN_LOCK(sc);
 	/* make the link LED blink while we're scanning */
@@ -7434,8 +8850,7 @@ iwn_scan_start(struct ieee80211com *ic)
 static void
 iwn_scan_end(struct ieee80211com *ic)
 {
-	struct ifnet *ifp = ic->ic_ifp;
-	struct iwn_softc *sc = ifp->if_softc;
+	struct iwn_softc *sc = ic->ic_softc;
 	struct ieee80211vap *vap = TAILQ_FIRST(&ic->ic_vaps);
 
 	IWN_LOCK(sc);
@@ -7453,8 +8868,7 @@ static void
 iwn_set_channel(struct ieee80211com *ic)
 {
 	const struct ieee80211_channel *c = ic->ic_curchan;
-	struct ifnet *ifp = ic->ic_ifp;
-	struct iwn_softc *sc = ifp->if_softc;
+	struct iwn_softc *sc = ic->ic_softc;
 	int error;
 
 	DPRINTF(sc, IWN_DEBUG_TRACE, "->Doing %s\n", __func__);
@@ -7485,11 +8899,12 @@ static void
 iwn_scan_curchan(struct ieee80211_scan_state *ss, unsigned long maxdwell)
 {
 	struct ieee80211vap *vap = ss->ss_vap;
-	struct iwn_softc *sc = vap->iv_ic->ic_ifp->if_softc;
+	struct ieee80211com *ic = vap->iv_ic;
+	struct iwn_softc *sc = ic->ic_softc;
 	int error;
 
 	IWN_LOCK(sc);
-	error = iwn_scan(sc);
+	error = iwn_scan(sc, vap, ss, ic->ic_curchan);
 	IWN_UNLOCK(sc);
 	if (error != 0)
 		ieee80211_cancel_scan(vap);
@@ -7505,23 +8920,8 @@ iwn_scan_mindwell(struct ieee80211_scan_state *ss)
 {
 	/* NB: don't try to abort scan; wait for firmware to finish */
 }
-
-static void
-iwn_hw_reset(void *arg0, int pending)
-{
-	struct iwn_softc *sc = arg0;
-	struct ifnet *ifp = sc->sc_ifp;
-	struct ieee80211com *ic = ifp->if_l2com;
-
-	DPRINTF(sc, IWN_DEBUG_TRACE, "->Doing %s\n", __func__);
-
-	iwn_stop(sc);
-	iwn_init(sc);
-	ieee80211_notify_radio(ic, 1);
-}
 #ifdef	IWN_DEBUG
 #define	IWN_DESC(x) case x:	return #x
-#define	COUNTOF(array) (sizeof(array) / sizeof(array[0]))
 
 /*
  * Translate CSR code to string
@@ -7592,7 +8992,7 @@ iwn_debug_register(struct iwn_softc *sc)
 	DPRINTF(sc, IWN_DEBUG_REGISTER,
 	    "CSR values: (2nd byte of IWN_INT_COALESCING is IWN_INT_PERIODIC)%s",
 	    "\n");
-	for (i = 0; i <  COUNTOF(csr_tbl); i++){
+	for (i = 0; i <  nitems(csr_tbl); i++){
 		DPRINTF(sc, IWN_DEBUG_REGISTER,"  %10s: 0x%08x ",
 			iwn_get_csr_string(csr_tbl[i]), IWN_READ(sc, csr_tbl[i]));
 		if ((i+1) % 3 == 0)
@@ -7601,3 +9001,5 @@ iwn_debug_register(struct iwn_softc *sc)
 	DPRINTF(sc, IWN_DEBUG_REGISTER,"%s","\n");
 }
 #endif
+
+

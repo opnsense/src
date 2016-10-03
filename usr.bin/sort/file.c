@@ -1091,7 +1091,7 @@ file_headers_merge(size_t fnum, struct file_header **fh, FILE *f_out)
 	memset(&lp, 0, sizeof(lp));
 
 	/*
-	 * construct the initial sort structure 
+	 * construct the initial sort structure
 	 */
 	for (i = 0; i < fnum; i++)
 		file_header_list_push(fh[i], fh, i);
@@ -1258,7 +1258,7 @@ sort_list_to_file(struct sort_list *list, const char *outfile)
 			break;
 		default:
 			errx(2, "%s", getstr(10));
-		};
+		}
 	}
 
 	if (sort_opts_vals.sort_method == SORT_DEFAULT)

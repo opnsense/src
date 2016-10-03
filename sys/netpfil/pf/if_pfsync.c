@@ -78,11 +78,14 @@ __FBSDID("$FreeBSD$");
 #include <sys/socket.h>
 #include <sys/sockio.h>
 #include <sys/sysctl.h>
+#include <sys/syslog.h>
 
 #include <net/bpf.h>
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_clone.h>
 #include <net/if_types.h>
+#include <net/vnet.h>
 #include <net/pfvar.h>
 #include <net/if_pfsync.h>
 
@@ -245,7 +248,7 @@ static int	pfsync_init(void);
 static void	pfsync_uninit(void);
 
 SYSCTL_NODE(_net, OID_AUTO, pfsync, CTLFLAG_RW, 0, "PFSYNC");
-SYSCTL_VNET_STRUCT(_net_pfsync, OID_AUTO, stats, CTLFLAG_RW,
+SYSCTL_STRUCT(_net_pfsync, OID_AUTO, stats, CTLFLAG_VNET | CTLFLAG_RW,
     &VNET_NAME(pfsyncstats), pfsyncstats,
     "PFSYNC statistics (struct pfsyncstats, net/if_pfsync.h)");
 SYSCTL_INT(_net_pfsync, OID_AUTO, carp_demotion_factor, CTLFLAG_RW,
@@ -322,7 +325,7 @@ pfsync_clone_create(struct if_clone *ifc, int unit, caddr_t param)
 	ifp->if_mtu = ETHERMTU;
 	mtx_init(&sc->sc_mtx, pfsyncname, NULL, MTX_DEF);
 	mtx_init(&sc->sc_bulk_mtx, "pfsync bulk", NULL, MTX_DEF);
-	callout_init(&sc->sc_tmo, CALLOUT_MPSAFE);
+	callout_init(&sc->sc_tmo, 1);
 	callout_init_mtx(&sc->sc_bulk_tmo, &sc->sc_bulk_mtx, 0);
 	callout_init_mtx(&sc->sc_bulkfail_tmo, &sc->sc_bulk_mtx, 0);
 
@@ -350,7 +353,7 @@ pfsync_clone_destroy(struct ifnet *ifp)
 
 		TAILQ_REMOVE(&sc->sc_deferrals, pd, pd_entry);
 		sc->sc_deferred--;
-		if (callout_stop(&pd->pd_tmo)) {
+		if (callout_stop(&pd->pd_tmo) > 0) {
 			pf_release_state(pd->pd_st);
 			m_freem(pd->pd_m);
 			free(pd, M_PFSYNC);
@@ -568,11 +571,12 @@ cleanup_state:	/* pf_state_insert() frees the state keys. */
 	return (error);
 }
 
-static void
-pfsync_input(struct mbuf *m, __unused int off)
+static int
+pfsync_input(struct mbuf **mp, int *offp __unused, int proto __unused)
 {
 	struct pfsync_softc *sc = V_pfsyncif;
 	struct pfsync_pkt pkt;
+	struct mbuf *m = *mp;
 	struct ip *ip = mtod(m, struct ip *);
 	struct pfsync_header *ph;
 	struct pfsync_subheader subh;
@@ -581,6 +585,7 @@ pfsync_input(struct mbuf *m, __unused int off)
 	int rv;
 	uint16_t count;
 
+	*mp = NULL;
 	V_pfsyncstats.pfsyncs_ipackets++;
 
 	/* Verify that we have a sync interface configured. */
@@ -594,8 +599,8 @@ pfsync_input(struct mbuf *m, __unused int off)
 		goto done;
 	}
 
-	sc->sc_ifp->if_ipackets++;
-	sc->sc_ifp->if_ibytes += m->m_pkthdr.len;
+	if_inc_counter(sc->sc_ifp, IFCOUNTER_IPACKETS, 1);
+	if_inc_counter(sc->sc_ifp, IFCOUNTER_IBYTES, m->m_pkthdr.len);
 	/* verify that the IP TTL is 255. */
 	if (ip->ip_ttl != PFSYNC_DFLTTL) {
 		V_pfsyncstats.pfsyncs_badttl++;
@@ -611,7 +616,7 @@ pfsync_input(struct mbuf *m, __unused int off)
 	if (offset + sizeof(*ph) > m->m_len) {
 		if (m_pullup(m, offset + sizeof(*ph)) == NULL) {
 			V_pfsyncstats.pfsyncs_hdrops++;
-			return;
+			return (IPPROTO_DONE);
 		}
 		ip = mtod(m, struct ip *);
 	}
@@ -658,7 +663,7 @@ pfsync_input(struct mbuf *m, __unused int off)
 		rv = (*pfsync_acts[subh.action])(&pkt, m, offset, count);
 		if (rv == -1) {
 			PF_RULES_RUNLOCK();
-			return;
+			return (IPPROTO_DONE);
 		}
 
 		offset += rv;
@@ -667,6 +672,7 @@ pfsync_input(struct mbuf *m, __unused int off)
 
 done:
 	m_freem(m);
+	return (IPPROTO_DONE);
 }
 
 static int
@@ -1520,7 +1526,7 @@ pfsync_sendout(int schedswi)
 
 	m = m_get2(max_linkhdr + sc->sc_len, M_NOWAIT, MT_DATA, M_PKTHDR);
 	if (m == NULL) {
-		sc->sc_ifp->if_oerrors++;
+		if_inc_counter(sc->sc_ifp, IFCOUNTER_OERRORS, 1);
 		V_pfsyncstats.pfsyncs_onomem++;
 		return;
 	}
@@ -1533,7 +1539,7 @@ pfsync_sendout(int schedswi)
 	offset = sizeof(*ip);
 
 	ip->ip_len = htons(m->m_pkthdr.len);
-	ip->ip_id = htons(ip_randomid());
+	ip_fillid(ip);
 
 	/* build the pfsync header */
 	ph = (struct pfsync_header *)(m->m_data + offset);
@@ -1627,15 +1633,15 @@ pfsync_sendout(int schedswi)
 		return;
 	}
 
-	sc->sc_ifp->if_opackets++;
-	sc->sc_ifp->if_obytes += m->m_pkthdr.len;
+	if_inc_counter(sc->sc_ifp, IFCOUNTER_OPACKETS, 1);
+	if_inc_counter(sc->sc_ifp, IFCOUNTER_OBYTES, m->m_pkthdr.len);
 	sc->sc_len = PFSYNC_MINPKT;
 
 	if (!_IF_QFULL(&sc->sc_ifp->if_snd))
 		_IF_ENQUEUE(&sc->sc_ifp->if_snd, m);
 	else {
 		m_freem(m);
-		sc->sc_ifp->if_snd.ifq_drops++;
+		if_inc_counter(sc->sc_ifp, IFCOUNTER_OQDROPS, 1);
 	}
 	if (schedswi)
 		swi_sched(V_pfsync_swi_cookie, 0);
@@ -1770,7 +1776,7 @@ pfsync_undefer_state(struct pf_state *st, int drop)
 
 	TAILQ_FOREACH(pd, &sc->sc_deferrals, pd_entry) {
 		 if (pd->pd_st == st) {
-			if (callout_stop(&pd->pd_tmo))
+			if (callout_stop(&pd->pd_tmo) > 0)
 				pfsync_undefer(pd, drop);
 			return;
 		}
@@ -2276,7 +2282,7 @@ static struct protosw in_pfsync_protosw = {
 	.pr_protocol =		IPPROTO_PFSYNC,
 	.pr_flags =		PR_ATOMIC|PR_ADDR,
 	.pr_input =		pfsync_input,
-	.pr_output =		(pr_output_t *)rip_output,
+	.pr_output =		rip_output,
 	.pr_ctloutput =		rip_ctloutput,
 	.pr_usrreqs =		&rip_usrreqs
 };
@@ -2310,71 +2316,67 @@ pfsync_pointers_uninit()
 	PF_RULES_WUNLOCK();
 }
 
+static void
+vnet_pfsync_init(const void *unused __unused)
+{
+	int error;
+
+	V_pfsync_cloner = if_clone_simple(pfsyncname,
+	    pfsync_clone_create, pfsync_clone_destroy, 1);
+	error = swi_add(NULL, pfsyncname, pfsyncintr, V_pfsyncif,
+	    SWI_NET, INTR_MPSAFE, &V_pfsync_swi_cookie);
+	if (error) {
+		if_clone_detach(V_pfsync_cloner);
+		log(LOG_INFO, "swi_add() failed in %s\n", __func__);
+	}
+}
+VNET_SYSINIT(vnet_pfsync_init, SI_SUB_PROTO_FIREWALL, SI_ORDER_ANY,
+    vnet_pfsync_init, NULL);
+
+static void
+vnet_pfsync_uninit(const void *unused __unused)
+{
+
+	if_clone_detach(V_pfsync_cloner);
+	swi_remove(V_pfsync_swi_cookie);
+}
+/*
+ * Detach after pf is gone; otherwise we might touch pfsync memory
+ * from within pf after freeing pfsync.
+ */
+VNET_SYSUNINIT(vnet_pfsync_uninit, SI_SUB_INIT_IF, SI_ORDER_SECOND,
+    vnet_pfsync_uninit, NULL);
+
 static int
 pfsync_init()
 {
-	VNET_ITERATOR_DECL(vnet_iter);
-	int error = 0;
-
-	VNET_LIST_RLOCK();
-	VNET_FOREACH(vnet_iter) {
-		CURVNET_SET(vnet_iter);
-		V_pfsync_cloner = if_clone_simple(pfsyncname,
-		    pfsync_clone_create, pfsync_clone_destroy, 1);
-		error = swi_add(NULL, pfsyncname, pfsyncintr, V_pfsyncif,
-		    SWI_NET, INTR_MPSAFE, &V_pfsync_swi_cookie);
-		CURVNET_RESTORE();
-		if (error)
-			goto fail_locked;
-	}
-	VNET_LIST_RUNLOCK();
 #ifdef INET
+	int error;
+
 	error = pf_proto_register(PF_INET, &in_pfsync_protosw);
 	if (error)
-		goto fail;
+		return (error);
 	error = ipproto_register(IPPROTO_PFSYNC);
 	if (error) {
 		pf_proto_unregister(PF_INET, IPPROTO_PFSYNC, SOCK_RAW);
-		goto fail;
+		return (error);
 	}
 #endif
 	pfsync_pointers_init();
 
 	return (0);
-
-fail:
-	VNET_LIST_RLOCK();
-fail_locked:
-	VNET_FOREACH(vnet_iter) {
-		CURVNET_SET(vnet_iter);
-		if (V_pfsync_swi_cookie) {
-			swi_remove(V_pfsync_swi_cookie);
-			if_clone_detach(V_pfsync_cloner);
-		}
-		CURVNET_RESTORE();
-	}
-	VNET_LIST_RUNLOCK();
-
-	return (error);
 }
 
 static void
 pfsync_uninit()
 {
-	VNET_ITERATOR_DECL(vnet_iter);
 
 	pfsync_pointers_uninit();
 
+#ifdef INET
 	ipproto_unregister(IPPROTO_PFSYNC);
 	pf_proto_unregister(PF_INET, IPPROTO_PFSYNC, SOCK_RAW);
-	VNET_LIST_RLOCK();
-	VNET_FOREACH(vnet_iter) {
-		CURVNET_SET(vnet_iter);
-		if_clone_detach(V_pfsync_cloner);
-		swi_remove(V_pfsync_swi_cookie);
-		CURVNET_RESTORE();
-	}
-	VNET_LIST_RUNLOCK();
+#endif
 }
 
 static int
@@ -2411,6 +2413,7 @@ static moduledata_t pfsync_mod = {
 
 #define PFSYNC_MODVER 1
 
-DECLARE_MODULE(pfsync, pfsync_mod, SI_SUB_PROTO_DOMAIN, SI_ORDER_ANY);
+/* Stay on FIREWALL as we depend on pf being initialized and on inetdomain. */
+DECLARE_MODULE(pfsync, pfsync_mod, SI_SUB_PROTO_FIREWALL, SI_ORDER_ANY);
 MODULE_VERSION(pfsync, PFSYNC_MODVER);
 MODULE_DEPEND(pfsync, pf, PF_MODVER, PF_MODVER, PF_MODVER);

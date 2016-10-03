@@ -165,7 +165,6 @@ ATF_TC_BODY(eof, tc)
 	ATF_REQUIRE(linecap > 0);
 	ATF_REQUIRE(errno == 0);
 	printf("feof\n");
-	errno = 0;
 	ATF_REQUIRE(feof(fp));
 	ATF_REQUIRE(!ferror(fp));
 	fclose(fp);

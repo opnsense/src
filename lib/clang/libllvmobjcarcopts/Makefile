@@ -1,20 +1,24 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 LIB=	llvmobjcarcopts
 
 SRCDIR=	lib/Transforms/ObjCARC
-SRCS=	ObjCARC.cpp \
-	ObjCARCOpts.cpp \
-	ObjCARCExpand.cpp \
+SRCS=	DependencyAnalysis.cpp \
 	ObjCARCAPElim.cpp \
-	ObjCARCAliasAnalysis.cpp \
-	ObjCARCUtil.cpp \
 	ObjCARCContract.cpp \
-	DependencyAnalysis.cpp \
-	ProvenanceAnalysis.cpp
+	ObjCARCExpand.cpp \
+	ObjCARCOpts.cpp \
+	ProvenanceAnalysis.cpp \
+	ProvenanceAnalysisEvaluator.cpp \
+	PtrState.cpp
 
-TGHDRS=	Intrinsics
+.if ${MK_CLANG_EXTRAS} != "no"
+SRCS+=	ObjCARC.cpp
+.endif
+
+TGHDRS=	Attributes \
+	Intrinsics
 
 .include "../clang.lib.mk"

@@ -21,7 +21,7 @@ ldnsbld=$(realpath $unbound/../../lib/libldns)
 [ -f $ldnsbld/Makefile ] || error "can't find LDNS build directory"
 
 ldnsobj=$(realpath $(make -C$ldnsbld -V.OBJDIR))
-[ -f $ldnsobj/libldns.a ] || error "can't find LDNS object directory"
+[ -f $ldnsobj/libprivateldns.a ] || error "can't find LDNS object directory"
 export LDFLAGS="-L$ldnsobj"
 
 export CC=$(echo ".include <bsd.lib.mk>" | make -f /dev/stdin -VCC)

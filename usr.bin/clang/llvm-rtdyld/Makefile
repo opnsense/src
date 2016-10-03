@@ -4,60 +4,71 @@ MAN=
 .include <bsd.own.mk>
 
 PROG_CXX=llvm-rtdyld
-DPADD=	${LIBZ}
-LDADD=	-lz
 
 SRCDIR=	tools/llvm-rtdyld
 SRCS=	llvm-rtdyld.cpp
 
-LIBDEPS=llvmdebuginfo \
-	llvmjit \
+LIBDEPS=llvmdebuginfodwarf \
+	llvmmcjit \
 	llvmexecutionengine \
 	llvmruntimedyld \
+	llvmaarch64disassembler \
+	llvmaarch64codegen \
+	llvmaarch64asmparser \
+	llvmaarch64desc \
+	llvmaarch64info \
+	llvmaarch64asmprinter \
+	llvmaarch64utils \
 	llvmarmdisassembler \
 	llvmarmcodegen \
 	llvmarmasmparser \
 	llvmarmdesc \
 	llvmarminfo \
-	llvmarminstprinter \
+	llvmarmasmprinter \
 	llvmmipsdisassembler \
 	llvmmipscodegen \
 	llvmmipsasmparser \
 	llvmmipsdesc \
 	llvmmipsinfo \
-	llvmmipsinstprinter \
+	llvmmipsasmprinter \
+	llvmpowerpcdisassembler \
 	llvmpowerpccodegen \
 	llvmpowerpcasmparser \
 	llvmpowerpcdesc \
 	llvmpowerpcinfo \
-	llvmpowerpcinstprinter \
+	llvmpowerpcasmprinter \
 	llvmsparcdisassembler \
 	llvmsparccodegen \
 	llvmsparcasmparser \
 	llvmsparcdesc \
 	llvmsparcinfo \
-	llvmsparcinstprinter \
+	llvmsparcasmprinter \
 	llvmx86disassembler \
 	llvmx86asmparser \
 	llvmx86codegen \
 	llvmselectiondag \
 	llvmasmprinter \
-	llvmmcparser \
 	llvmcodegen \
-	llvmobjcarcopts \
+	llvmtarget \
 	llvmscalaropts \
 	llvminstcombine \
+	llvminstrumentation \
+	llvmprofiledata \
 	llvmtransformutils \
-	llvmipa \
+	llvmbitwriter \
 	llvmanalysis \
 	llvmx86desc \
-	llvmx86info \
-	llvmtarget \
-	llvmx86instprinter \
-	llvmmc \
 	llvmobject \
+	llvmmcparser \
+	llvmbitreader \
+	llvmmcdisassembler \
+	llvmx86info \
+	llvmx86asmprinter \
+	llvmmc \
 	llvmx86utils \
 	llvmcore \
 	llvmsupport
+
+LIBADD+=	z
 
 .include "../clang.prog.mk"

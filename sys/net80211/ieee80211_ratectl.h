@@ -53,6 +53,7 @@ struct ieee80211_ratectl {
 	    			const struct ieee80211_node *,
 	    			void *, void *, void *);
 	void	(*ir_setinterval)(const struct ieee80211vap *, int);
+	void	(*ir_node_stats)(struct ieee80211_node *ni, struct sbuf *s);
 };
 
 void	ieee80211_ratectl_register(int, const struct ieee80211_ratectl *);
@@ -62,13 +63,13 @@ void	ieee80211_ratectl_set(struct ieee80211vap *, int);
 
 MALLOC_DECLARE(M_80211_RATECTL);
 
-static void __inline
+static __inline void
 ieee80211_ratectl_deinit(struct ieee80211vap *vap)
 {
 	vap->iv_rate->ir_deinit(vap);
 }
 
-static void __inline
+static __inline void
 ieee80211_ratectl_node_init(struct ieee80211_node *ni)
 {
 	const struct ieee80211vap *vap = ni->ni_vap;
@@ -76,7 +77,7 @@ ieee80211_ratectl_node_init(struct ieee80211_node *ni)
 	vap->iv_rate->ir_node_init(ni);
 }
 
-static void __inline
+static __inline void
 ieee80211_ratectl_node_deinit(struct ieee80211_node *ni)
 {
 	const struct ieee80211vap *vap = ni->ni_vap;
@@ -92,14 +93,14 @@ ieee80211_ratectl_rate(struct ieee80211_node *ni, void *arg, uint32_t iarg)
 	return vap->iv_rate->ir_rate(ni, arg, iarg);
 }
 
-static void __inline
+static __inline void
 ieee80211_ratectl_tx_complete(const struct ieee80211vap *vap,
     const struct ieee80211_node *ni, int status, void *arg1, void *arg2)
 {
 	vap->iv_rate->ir_tx_complete(vap, ni, status, arg1, arg2);
 }
 
-static void __inline
+static __inline void
 ieee80211_ratectl_tx_update(const struct ieee80211vap *vap,
     const struct ieee80211_node *ni, void *arg1, void *arg2, void *arg3)
 {
@@ -108,10 +109,20 @@ ieee80211_ratectl_tx_update(const struct ieee80211vap *vap,
 	vap->iv_rate->ir_tx_update(vap, ni, arg1, arg2, arg3);
 }
 
-static void __inline
+static __inline void
 ieee80211_ratectl_setinterval(const struct ieee80211vap *vap, int msecs)
 {
 	if (vap->iv_rate->ir_setinterval == NULL)
 		return;
 	vap->iv_rate->ir_setinterval(vap, msecs);
+}
+
+static __inline void
+ieee80211_ratectl_node_stats(struct ieee80211_node *ni, struct sbuf *s)
+{
+	const struct ieee80211vap *vap = ni->ni_vap;
+
+	if (vap->iv_rate->ir_node_stats == NULL)
+		return;
+	vap->iv_rate->ir_node_stats(ni, s);
 }

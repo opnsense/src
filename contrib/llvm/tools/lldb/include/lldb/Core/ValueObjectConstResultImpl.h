@@ -1,4 +1,4 @@
-//===-- ValueObjectConstResultImpl.h -----------------------------*- C++ -*-===//
+//===-- ValueObjectConstResultImpl.h ----------------------------*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -26,15 +26,12 @@ namespace lldb_private {
 class ValueObjectConstResultImpl
 {
 public:
-    
     ValueObjectConstResultImpl (ValueObject* valobj,
                                 lldb::addr_t live_address = LLDB_INVALID_ADDRESS);
-    
+
     virtual
-    ~ValueObjectConstResultImpl()
-    {
-    }
-    
+    ~ValueObjectConstResultImpl() = default;
+
     lldb::ValueObjectSP
     Dereference (Error &error);
     
@@ -42,23 +39,19 @@ public:
     CreateChildAtIndex (size_t idx, bool synthetic_array_member, int32_t synthetic_index);
     
     lldb::ValueObjectSP
-    GetSyntheticChildAtOffset (uint32_t offset, const ClangASTType& type, bool can_create);
+    GetSyntheticChildAtOffset (uint32_t offset, const CompilerType& type, bool can_create);
     
     lldb::ValueObjectSP
     AddressOf (Error &error);
-    
-    bool
-    NeedsDerefOnTarget()
-    {
-        m_impl_backend->UpdateValueIfNeeded(false);
-        return (m_impl_backend->GetValue().GetValueType() == Value::eValueTypeHostAddress);
-    }
     
     lldb::addr_t
     GetLiveAddress()
     {
         return m_live_address;
     }
+
+    lldb::ValueObjectSP
+    Cast (const CompilerType &compiler_type);
     
     void
     SetLiveAddress(lldb::addr_t addr = LLDB_INVALID_ADDRESS,
@@ -68,20 +61,16 @@ public:
         m_live_address_type = address_type;
     }
     
-    lldb::ValueObjectSP
-    DerefOnTarget();
-    
     virtual lldb::addr_t
-    GetAddressOf (bool scalar_is_load_address = true,
-                  AddressType *address_type = NULL);
+    GetAddressOf(bool scalar_is_load_address = true,
+                 AddressType *address_type = nullptr);
     
     virtual size_t
-    GetPointeeData (DataExtractor& data,
-                    uint32_t item_idx = 0,
-					uint32_t item_count = 1);
+    GetPointeeData(DataExtractor& data,
+                   uint32_t item_idx = 0,
+                   uint32_t item_count = 1);
     
 private:
-    
     ValueObject *m_impl_backend;
     lldb::addr_t m_live_address;
     AddressType m_live_address_type;
@@ -93,4 +82,4 @@ private:
 
 } // namespace lldb_private
 
-#endif  // liblldb_ValueObjectConstResultImpl_h_
+#endif // liblldb_ValueObjectConstResultImpl_h_

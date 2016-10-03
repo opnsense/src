@@ -603,21 +603,21 @@ This would usually be set to
 .It Va weekly_status_security_enable
 .Pq Vt bool
 Weekly counterpart of
-.Va daily_status_securiy_enable .
+.Va daily_status_security_enable .
 .It Va weekly_status_security_inline
 .Pq Vt bool
 Weekly counterpart of
-.Va daily_status_securiy_inline .
+.Va daily_status_security_inline .
 .It Va weekly_status_security_output
 .Pq Vt str
 Weekly counterpart of
-.Va daily_status_securiy_output .
+.Va daily_status_security_output .
 .It Va weekly_status_pkg_enable
 .Pq Vt bool
 Set to
 .Dq Li YES
 if you want to use
-.Xr pkg_version 1
+.Xr pkg-version 8
 to list installed packages which are out of date.
 .It Va pkg_version
 .Pq Vt str
@@ -628,7 +628,7 @@ is set to
 this variable specifies the program that is used to determine the out of
 date packages.
 If unset, the
-.Xr pkg_version 1
+.Xr pkg-version 8
 program is used.
 As an example, this variable might be set to
 .Dq Li portversion
@@ -642,7 +642,7 @@ This variable specifies the
 file from
 .Pa /usr/ports
 that should be used by
-.Xr pkg_version 1 .
+.Xr pkg-version 8 .
 Because the dependency tree may be substantially different between versions of
 .Fx ,
 there may be more than one
@@ -682,15 +682,15 @@ command.
 .It Va monthly_status_security_enable
 .Pq Vt bool
 Monthly counterpart of
-.Va daily_status_securiy_enable .
+.Va daily_status_security_enable .
 .It Va monthly_status_security_inline
 .Pq Vt bool
 Monthly counterpart of
-.Va daily_status_securiy_inline .
+.Va daily_status_security_inline .
 .It Va monthly_status_security_output
 .Pq Vt str
 Monthly counterpart of
-.Va daily_status_securiy_output .
+.Va daily_status_security_output .
 .It Va monthly_local
 .Pq Vt str
 Set to a list of extra scripts that should be run after all other
@@ -722,7 +722,7 @@ they will be always run unless their
 or
 .Va ..._period
 variable is set to
-.Dq No .
+.Dq NO .
 .Bl -tag -offset 4n -width 2n
 .It Va security_status_diff_flags
 .Pq Vt str
@@ -975,7 +975,6 @@ is shared or distributed.
 .Xr msgs 1 ,
 .Xr netstat 1 ,
 .Xr nice 1 ,
-.Xr pkg_version 1 ,
 .Xr login.conf 5 ,
 .Xr rc.conf 5 ,
 .Xr ac 8 ,
@@ -983,6 +982,7 @@ is shared or distributed.
 .Xr dump 8 ,
 .Xr newsyslog 8 ,
 .Xr periodic 8 ,
+.Xr pkg-version 8 ,
 .Xr sendmail 8
 .Sh HISTORY
 The
@@ -990,4 +990,4 @@ The
 file appeared in
 .Fx 4.1 .
 .Sh AUTHORS
-.An Brian Somers Aq brian@Awfulhak.org
+.An Brian Somers Aq Mt brian@Awfulhak.org

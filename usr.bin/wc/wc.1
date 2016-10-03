@@ -31,7 +31,7 @@
 .\"     @(#)wc.1	8.2 (Berkeley) 4/19/94
 .\" $FreeBSD$
 .\"
-.Dd August 24, 2015
+.Dd December 1, 2015
 .Dt WC 1
 .Os
 .Sh NAME
@@ -39,6 +39,7 @@
 .Nd word, line, character, and byte count
 .Sh SYNOPSIS
 .Nm
+.Op Fl -libxo
 .Op Fl Lclmw
 .Op Ar
 .Sh DESCRIPTION
@@ -67,6 +68,13 @@ the last file.
 .Pp
 The following options are available:
 .Bl -tag -width indent
+.It Fl -libxo
+Generate output via
+.Xr libxo 3
+in a selection of different human and machine readable formats.
+See
+.Xr xo_parse_args 3
+for details on command line arguments.
 .It Fl L
 The number of characters in the longest input line
 is written to the standard output.
@@ -174,7 +182,9 @@ option of the GNU
 .Nm
 utility.
 .Sh SEE ALSO
-.Xr iswspace 3
+.Xr iswspace 3 ,
+.Xr libxo 3 ,
+.Xr xo_parse_args 3
 .Sh STANDARDS
 The
 .Nm

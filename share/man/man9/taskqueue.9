@@ -28,7 +28,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd January 24, 2014
+.Dd March 1, 2016
 .Dt TASKQUEUE 9
 .Os
 .Sh NAME
@@ -68,14 +68,17 @@ struct timeout_task;
 .Fn taskqueue_create_fast "const char *name" "int mflags" "taskqueue_enqueue_fn enqueue" "void *context"
 .Ft int
 .Fn taskqueue_start_threads "struct taskqueue **tqp" "int count" "int pri" "const char *name" "..."
+.Ft int
+.Fo taskqueue_start_threads_pinned
+.Fa "struct taskqueue **tqp" "int count" "int pri" "int cpu_id"
+.Fa "const char *name" "..."
+.Fc
 .Ft void
 .Fn taskqueue_set_callback "struct taskqueue *queue" "enum taskqueue_callback_type cb_type" "taskqueue_callback_fn callback" "void *context"
 .Ft void
 .Fn taskqueue_free "struct taskqueue *queue"
 .Ft int
 .Fn taskqueue_enqueue "struct taskqueue *queue" "struct task *task"
-.Ft int
-.Fn taskqueue_enqueue_fast "struct taskqueue *queue" "struct task *task"
 .Ft int
 .Fn taskqueue_enqueue_timeout "struct taskqueue *queue" "struct timeout_task *timeout_task" "int ticks"
 .Ft int
@@ -145,7 +148,14 @@ Any tasks that are on the queue will be executed at this time after
 which the thread servicing the queue will be signaled that it should exit.
 .Pp
 Once a taskqueue has been created, its threads should be started using
-.Fn taskqueue_start_threads .
+.Fn taskqueue_start_threads
+or
+.Fn taskqueue_start_threads_pinned .
+.Fn taskqueue_start_threads_pinned
+takes a
+.Va cpu_id
+argument which will cause the threads which are started for the taskqueue
+to be pinned to run on the given CPU.
 Callbacks may optionally be registered using
 .Fn taskqueue_set_callback .
 Currently, callbacks may be registered for the following purposes:
@@ -178,14 +188,6 @@ it suitable for calling from an interrupt handler.
 This function will return
 .Er EPIPE
 if the queue is being freed.
-.Pp
-The function
-.Fn taskqueue_enqueue_fast
-should be used in place of
-.Fn taskqueue_enqueue
-when the enqueuing must happen from a fast interrupt handler.
-This method uses spin locks to avoid the possibility of sleeping in the fast
-interrupt context.
 .Pp
 When a task is executed,
 first it is removed from the queue,
@@ -273,10 +275,16 @@ The
 .Fn taskqueue_drain_all
 function is used to wait for all pending and running tasks that
 are enqueued on the taskqueue to finish.
-The caller must arrange that the tasks are not re-enqueued.
-Note that
+Tasks posted to the taskqueue after
 .Fn taskqueue_drain_all
-currently does not handle tasks with delayed enqueueing.
+begins processing,
+including pending enqueues scheduled by a previous call to
+.Fn taskqueue_enqueue_timeout ,
+do not extend the wait time of
+.Fn taskqueue_drain_all
+and may complete after
+.Fn taskqueue_drain_all
+returns.
 .Pp
 The
 .Fn taskqueue_block
@@ -449,15 +457,7 @@ To use these queues,
 call
 .Fn taskqueue_enqueue
 with the value of the global taskqueue variable for the queue you wish to
-use
-.Va ( taskqueue_swi ,
-.Va taskqueue_swi_giant ,
-or
-.Va taskqueue_thread ) .
-Use
-.Fn taskqueue_enqueue_fast
-for the global taskqueue variable
-.Va taskqueue_fast .
+use.
 .Pp
 The software interrupt queues can be used,
 for instance, for implementing interrupt handlers which must perform a

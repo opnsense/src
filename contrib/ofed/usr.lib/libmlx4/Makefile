@@ -12,10 +12,11 @@ MLXSRCDIR=	${MLX4DIR}/src
 
 LIB=		mlx4
 SHLIB_MAJOR=	1
-NO_PROFILE=
+MK_PROFILE=	no
 
 SRCS=	buf.c cq.c dbrec.c mlx4.c qp.c srq.c verbs.c
 
+LIBADD=	ibverbs pthread
 CFLAGS+= -DHAVE_CONFIG_H 
 CFLAGS+= -I${.CURDIR} -I${MLXSRCDIR} -I${IBVERBSDIR}/include
 

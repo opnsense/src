@@ -249,14 +249,20 @@ DWARFDebugLine::DumpStatementOpcodes(Log *log, const DWARFDataExtractor& debug_l
                             fileEntry.length    = debug_line_data.GetULEB128(&offset);
                             log->Printf( "0x%8.8x: DW_LNE_define_file('%s', dir=%i, mod_time=0x%8.8x, length=%i )",
                                     op_offset,
-                                    fileEntry.name.c_str(),
+                                    fileEntry.name,
                                     fileEntry.dir_idx,
                                     fileEntry.mod_time,
                                     fileEntry.length);
                             prologue.file_names.push_back(fileEntry);
                         }
                         break;
-
+                            
+                    case DW_LNE_set_discriminator:
+                        {
+                            uint64_t discriminator = debug_line_data.GetULEB128(&offset);
+                            log->Printf( "0x%8.8x: DW_LNE_set_discriminator (0x%" PRIx64 ")", op_offset, discriminator);
+                        }
+                        break;
                     default:
                         log->Printf( "0x%8.8x: DW_LNE_??? (%2.2x) - Skipping unknown upcode", op_offset, opcode);
                         // Length doesn't include the zero opcode byte or the length itself, but
@@ -412,12 +418,16 @@ DWARFDebugLine::ParsePrologue(const DWARFDataExtractor& debug_line_data, lldb::o
     const char * s;
     prologue->total_length      = debug_line_data.GetDWARFInitialLength(offset_ptr);
     prologue->version           = debug_line_data.GetU16(offset_ptr);
-    if (prologue->version != 2)
+    if (prologue->version < 2 || prologue->version > 4)
       return false;
 
     prologue->prologue_length   = debug_line_data.GetDWARFOffset(offset_ptr);
     const lldb::offset_t end_prologue_offset = prologue->prologue_length + *offset_ptr;
     prologue->min_inst_length   = debug_line_data.GetU8(offset_ptr);
+    if (prologue->version >= 4)
+        prologue->maximum_operations_per_instruction = debug_line_data.GetU8(offset_ptr);
+    else
+        prologue->maximum_operations_per_instruction = 1;
     prologue->default_is_stmt   = debug_line_data.GetU8(offset_ptr);
     prologue->line_base         = debug_line_data.GetU8(offset_ptr);
     prologue->line_range        = debug_line_data.GetU8(offset_ptr);
@@ -476,93 +486,25 @@ DWARFDebugLine::ParseSupportFiles (const lldb::ModuleSP &module_sp,
                                    FileSpecList &support_files)
 {
     lldb::offset_t offset = stmt_list;
-    // Skip the total length
-    (void)debug_line_data.GetDWARFInitialLength(&offset);
-    const char * s;
-    uint32_t version = debug_line_data.GetU16(&offset);
-    if (version != 2)
-      return false;
 
-    const dw_offset_t end_prologue_offset = debug_line_data.GetDWARFOffset(&offset) + offset;
-    // Skip instruction length, default is stmt, line base, line range and
-    // opcode base, and all opcode lengths
-    offset += 4;
-    const uint8_t opcode_base = debug_line_data.GetU8(&offset);
-    offset += opcode_base - 1;
-    std::vector<std::string> include_directories;
-    include_directories.push_back("");  // Directory at index zero doesn't exist
-    while (offset < end_prologue_offset)
+    Prologue prologue;
+    if (!ParsePrologue(debug_line_data, &offset, &prologue))
     {
-        s = debug_line_data.GetCStr(&offset);
-        if (s && s[0])
-            include_directories.push_back(s);
-        else
-            break;
-    }
-    std::string fullpath;
-    std::string remapped_fullpath;
-    while (offset < end_prologue_offset)
-    {
-        const char* path = debug_line_data.GetCStr( &offset );
-        if (path && path[0])
-        {
-            uint32_t dir_idx    = debug_line_data.GetULEB128( &offset );
-            debug_line_data.Skip_LEB128(&offset); // Skip mod_time
-            debug_line_data.Skip_LEB128(&offset); // Skip length
-
-            if (path[0] == '/')
-            {
-                // The path starts with a directory delimiter, so we are done.
-                if (module_sp->RemapSourceFile (path, fullpath))
-                    support_files.Append(FileSpec (fullpath.c_str(), false));
-                else
-                    support_files.Append(FileSpec (path, false));
-            }
-            else
-            {
-                if (dir_idx > 0 && dir_idx < include_directories.size())
-                {
-                    if (cu_comp_dir && include_directories[dir_idx][0] != '/')
-                    {
-                        fullpath = cu_comp_dir;
-
-                        if (*fullpath.rbegin() != '/')
-                            fullpath += '/';
-                        fullpath += include_directories[dir_idx];
-
-                    }
-                    else
-                        fullpath = include_directories[dir_idx];
-                }
-                else if (cu_comp_dir && cu_comp_dir[0])
-                {
-                    fullpath = cu_comp_dir;
-                }
-
-                if (!fullpath.empty())
-                {
-                   if (*fullpath.rbegin() != '/')
-                        fullpath += '/';
-                }
-                fullpath += path;
-                if (module_sp->RemapSourceFile (fullpath.c_str(), remapped_fullpath))
-                    support_files.Append(FileSpec (remapped_fullpath.c_str(), false));
-                else
-                    support_files.Append(FileSpec (fullpath.c_str(), false));
-            }
-            
-        }
+        Host::SystemLog (Host::eSystemLogError, "error: parsing line table prologue at 0x%8.8x (parsing ended around 0x%8.8" PRIx64 "\n", stmt_list, offset);
+        return false;
     }
 
-    if (offset != end_prologue_offset)
+    FileSpec file_spec;
+    std::string remapped_file;
+
+    for (uint32_t file_idx = 1; prologue.GetFile(file_idx, cu_comp_dir, file_spec); ++file_idx)
     {
-        Host::SystemLog (Host::eSystemLogError, 
-                         "warning: parsing line table prologue at 0x%8.8x should have ended at 0x%8.8x but it ended at 0x%8.8" PRIx64 "\n",
-                         stmt_list, 
-                         end_prologue_offset, 
-                         offset);
+        if (module_sp->RemapSourceFile(file_spec.GetCString(), remapped_file))
+            file_spec.SetFile(remapped_file, false);
+        support_files.Append(file_spec);
+
     }
-    return end_prologue_offset;
+    return true;
 }
 
 //----------------------------------------------------------------------
@@ -644,7 +586,10 @@ DWARFDebugLine::ParseStatementTable
                 // relocatable address. All of the other statement program opcodes
                 // that affect the address register add a delta to it. This instruction
                 // stores a relocatable value into it instead.
-                state.address = debug_line_data.GetAddress(offset_ptr);
+                if (arg_size == 4)
+                    state.address = debug_line_data.GetU32(offset_ptr);
+                else // arg_size == 8
+                    state.address = debug_line_data.GetU64(offset_ptr);
                 break;
 
             case DW_LNE_define_file:
@@ -666,7 +611,7 @@ DWARFDebugLine::ParseStatementTable
                 // The files are numbered, starting at 1, in the order in which they
                 // appear; the names in the prologue come before names defined by
                 // the DW_LNE_define_file instruction. These numbers are used in the
-                // the file register of the state machine.
+                // file register of the state machine.
                 {
                     FileNameEntry fileEntry;
                     fileEntry.name      = debug_line_data.GetCStr(offset_ptr);
@@ -789,7 +734,7 @@ DWARFDebugLine::ParseStatementTable
                 // as a multiple of LEB128 operands for each opcode.
                 {
                     uint8_t i;
-                    assert (opcode - 1 < prologue->standard_opcode_lengths.size());
+                    assert (static_cast<size_t>(opcode - 1) < prologue->standard_opcode_lengths.size());
                     const uint8_t opcode_length = prologue->standard_opcode_lengths[opcode - 1];
                     for (i=0; i<opcode_length; ++i)
                         debug_line_data.Skip_LEB128(offset_ptr);
@@ -915,7 +860,7 @@ DWARFDebugLine::Prologue::Dump(Log *log)
     {
         for (i=0; i<include_directories.size(); ++i)
         {
-            log->Printf( "include_directories[%3u] = '%s'", i+1, include_directories[i].c_str());
+            log->Printf( "include_directories[%3u] = '%s'", i+1, include_directories[i]);
         }
     }
 
@@ -931,7 +876,7 @@ DWARFDebugLine::Prologue::Dump(Log *log)
                 fileEntry.dir_idx,
                 fileEntry.mod_time,
                 fileEntry.length,
-                fileEntry.name.c_str());
+                fileEntry.name);
         }
     }
 }
@@ -974,17 +919,28 @@ DWARFDebugLine::Prologue::Dump(Log *log)
 //}
 
 
-bool DWARFDebugLine::Prologue::GetFile(uint32_t file_idx, std::string& path, std::string& directory) const
+bool DWARFDebugLine::Prologue::GetFile(uint32_t file_idx, const char *comp_dir, FileSpec &file) const
 {
     uint32_t idx = file_idx - 1;    // File indexes are 1 based...
     if (idx < file_names.size())
     {
-        path = file_names[idx].name;
-        uint32_t dir_idx = file_names[idx].dir_idx - 1;
-        if (dir_idx < include_directories.size())
-            directory = include_directories[dir_idx];
-        else
-            directory.clear();
+        file.SetFile(file_names[idx].name, false);
+        if (file.IsRelative())
+        {
+            if (file_names[idx].dir_idx > 0)
+            {
+                const uint32_t dir_idx = file_names[idx].dir_idx - 1;
+                if (dir_idx < include_directories.size())
+                {
+                    file.PrependPathComponent(include_directories[dir_idx]);
+                    if (!file.IsRelative())
+                        return true;
+                }
+            }
+
+            if (comp_dir && comp_dir[0])
+                file.PrependPathComponent(comp_dir);
+        }
         return true;
     }
     return false;

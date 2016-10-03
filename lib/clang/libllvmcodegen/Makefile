@@ -1,6 +1,6 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 LIB=	llvmcodegen
 
@@ -8,11 +8,14 @@ SRCDIR=	lib/CodeGen
 SRCS=	AggressiveAntiDepBreaker.cpp \
 	AllocationOrder.cpp \
 	Analysis.cpp \
+	AtomicExpandPass.cpp \
 	BasicTargetTransformInfo.cpp \
 	BranchFolding.cpp \
 	CalcSpillWeights.cpp \
 	CallingConvLower.cpp \
 	CodeGen.cpp \
+	CodeGenPrepare.cpp \
+	CoreCLRGC.cpp \
 	CriticalAntiDepBreaker.cpp \
 	DFAPacketizer.cpp \
 	DeadMachineInstructionElim.cpp \
@@ -23,35 +26,42 @@ SRCS=	AggressiveAntiDepBreaker.cpp \
 	ExecutionDepsFix.cpp \
 	ExpandISelPseudos.cpp \
 	ExpandPostRAPseudos.cpp \
+	FaultMaps.cpp \
+	FuncletLayout.cpp \
 	GCMetadata.cpp \
-	GCMetadataPrinter.cpp \
-	GCStrategy.cpp \
+	GCRootLowering.cpp \
+	GlobalMerge.cpp \
 	IfConversion.cpp \
+	ImplicitNullChecks.cpp \
 	InlineSpiller.cpp \
 	InterferenceCache.cpp \
+	InterleavedAccessPass.cpp \
 	IntrinsicLowering.cpp \
-	JITCodeEmitter.cpp \
 	LLVMTargetMachine.cpp \
 	LatencyPriorityQueue.cpp \
 	LexicalScopes.cpp \
+	LiveDebugValues.cpp \
 	LiveDebugVariables.cpp \
 	LiveInterval.cpp \
 	LiveIntervalAnalysis.cpp \
 	LiveIntervalUnion.cpp \
+	LivePhysRegs.cpp \
 	LiveRangeCalc.cpp \
 	LiveRangeEdit.cpp \
 	LiveRegMatrix.cpp \
-	LiveRegUnits.cpp \
 	LiveStackAnalysis.cpp \
 	LiveVariables.cpp \
 	LocalStackSlotAllocation.cpp \
+	MIRPrinter.cpp \
+	MIRPrintingPass.cpp \
 	MachineBasicBlock.cpp \
 	MachineBlockFrequencyInfo.cpp \
 	MachineBlockPlacement.cpp \
 	MachineBranchProbabilityInfo.cpp \
 	MachineCSE.cpp \
-	MachineCodeEmitter.cpp \
+	MachineCombiner.cpp \
 	MachineCopyPropagation.cpp \
+	MachineDominanceFrontier.cpp \
 	MachineDominators.cpp \
 	MachineFunction.cpp \
 	MachineFunctionAnalysis.cpp \
@@ -65,6 +75,7 @@ SRCS=	AggressiveAntiDepBreaker.cpp \
 	MachineModuleInfoImpls.cpp \
 	MachinePassRegistry.cpp \
 	MachinePostDominators.cpp \
+	MachineRegionInfo.cpp \
 	MachineRegisterInfo.cpp \
 	MachineSSAUpdater.cpp \
 	MachineScheduler.cpp \
@@ -75,6 +86,7 @@ SRCS=	AggressiveAntiDepBreaker.cpp \
 	OptimizePHIs.cpp \
 	PHIElimination.cpp \
 	PHIEliminationUtils.cpp \
+	ParallelCG.cpp \
 	Passes.cpp \
 	PeepholeOptimizer.cpp \
 	PostRASchedulerList.cpp \
@@ -95,15 +107,18 @@ SRCS=	AggressiveAntiDepBreaker.cpp \
 	ScheduleDAGPrinter.cpp \
 	ScoreboardHazardRecognizer.cpp \
 	ShadowStackGC.cpp \
+	ShadowStackGCLowering.cpp \
+	ShrinkWrap.cpp \
 	SjLjEHPrepare.cpp \
 	SlotIndexes.cpp \
 	SpillPlacement.cpp \
-	Spiller.cpp \
 	SplitKit.cpp \
 	StackColoring.cpp \
+	StackMapLivenessAnalysis.cpp \
 	StackMaps.cpp \
 	StackProtector.cpp \
 	StackSlotColoring.cpp \
+	StatepointExampleGC.cpp \
 	TailDuplication.cpp \
 	TargetFrameLoweringImpl.cpp \
 	TargetInstrInfo.cpp \
@@ -114,8 +129,15 @@ SRCS=	AggressiveAntiDepBreaker.cpp \
 	TargetSchedule.cpp \
 	TwoAddressInstructionPass.cpp \
 	UnreachableBlockElim.cpp \
-	VirtRegMap.cpp
+	VirtRegMap.cpp \
+	WinEHPrepare.cpp
 
-TGHDRS=	Intrinsics
+.if ${MK_CLANG_EXTRAS} != "no"
+SRCS+=	GCMetadataPrinter.cpp \
+	GCStrategy.cpp
+.endif
+
+TGHDRS=	Attributes \
+	Intrinsics
 
 .include "../clang.lib.mk"

@@ -23,7 +23,7 @@
 .\" SUCH DAMAGE.
 .\"
 .\" $FreeBSD$
-.Dd January 20, 2016
+.Dd January 6, 2016
 .Dt LOADER.CONF 5
 .Os
 .Sh NAME
@@ -112,6 +112,31 @@ The name must be a subdirectory of
 that contains a kernel.
 .It Ar kernel_options
 Flags to be passed to the kernel.
+.It Ar vfs.root.mountfrom
+Specify the root partition to mount.
+For example:
+.Pp
+.Dl vfs.root.mountfrom="ufs:/dev/da0s1a"
+.Pp
+.Xr loader 8
+automatically calculates the value of this tunable from
+.Pa /etc/fstab
+from the partition the kernel was loaded from.
+The calculated value might be calculated incorrectly when
+.Pa /etc/fstab
+is not available during
+.Xr loader 8
+startup (as during diskless booting from NFS), or if a different
+device is desired by the user.
+The preferred value can be set in
+.Pa /loader.conf .
+.Pp
+The value can also be overridden from the
+.Xr loader 8
+command line.
+This is useful for system recovery when
+.Pa /etc/fstab
+is damaged, lost, or read from the wrong partition.
 .It Ar password
 Protect boot menu with a password without interrupting
 .Ic autoboot
@@ -251,6 +276,19 @@ and
 If set to
 .Dq NO ,
 the beastie boot menu will be displayed without ANSI coloring.
+.It Va entropy_cache_load
+.Pq Dq YES
+If set to
+.Dq NO ,
+the very early
+boot-time entropy file
+will not be loaded.
+See the entropy entries in
+.Xr rc.conf 5 .
+.It Va entropy_cache_name
+.Pq Dq /boot/entropy
+The name of the very early
+boot-time entropy cache file.
 .El
 .Sh FILES
 .Bl -tag -width /boot/defaults/loader.conf -compact
@@ -268,6 +306,7 @@ contains the instructions to automatically process
 .Nm .
 .El
 .Sh SEE ALSO
+.Xr rc.conf 5 ,
 .Xr boot 8 ,
 .Xr loader 8 ,
 .Xr loader.4th 8

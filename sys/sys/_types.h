@@ -35,7 +35,7 @@
 /*
  * Standard type definitions.
  */
-typedef	__uint32_t	__blksize_t;	/* file block size */
+typedef	__int32_t	__blksize_t;	/* file block size */
 typedef	__int64_t	__blkcnt_t;	/* file block count */
 typedef	__int32_t	__clockid_t;	/* clock_gettime()... */
 typedef	__uint32_t	__fflags_t;	/* file flags */
@@ -51,6 +51,7 @@ typedef	int		__accmode_t;	/* access permissions */
 typedef	int		__nl_item;
 typedef	__uint16_t	__nlink_t;	/* link count */
 typedef	__int64_t	__off_t;	/* file offset */
+typedef	__int64_t	__off64_t;	/* file offset (alias) */
 typedef	__int32_t	__pid_t;	/* process [group] */
 typedef	__int64_t	__rlim_t;	/* resource limit - intentionally */
 					/* signed, because of legacy code */
@@ -111,5 +112,7 @@ typedef union {
 	char		__mbstate8[128];
 	__int64_t	_mbstateL;	/* for alignment */
 } __mbstate_t;
+
+typedef __uintmax_t     __rman_res_t;
 
 #endif /* !_SYS__TYPES_H_ */

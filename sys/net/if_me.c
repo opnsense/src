@@ -141,14 +141,13 @@ SYSCTL_INT(_net_link_me, OID_AUTO, max_nesting, CTLFLAG_RW | CTLFLAG_VNET,
     &VNET_NAME(max_me_nesting), 0, "Max nested tunnels");
 
 extern struct domain inetdomain;
-static void me_input10(struct mbuf *, int);
 static const struct protosw in_mobile_protosw = {
 	.pr_type =		SOCK_RAW,
 	.pr_domain =		&inetdomain,
 	.pr_protocol =		IPPROTO_MOBILE,
 	.pr_flags =		PR_ATOMIC|PR_ADDR,
-	.pr_input =		me_input10,
-	.pr_output =		(pr_output_t *)rip_output,
+	.pr_input =		me_input,
+	.pr_output =		rip_output,
 	.pr_ctlinput =		rip_ctlinput,
 	.pr_ctloutput =		rip_ctloutput,
 	.pr_usrreqs =		&rip_usrreqs
@@ -413,15 +412,6 @@ me_in_cksum(uint16_t *p, int nwords)
 	sum = (sum >> 16) + (sum & 0xffff);
 	sum += (sum >> 16);
 	return (~sum);
-}
-
-static void
-me_input10(struct mbuf *m, int off)
-{
-	int proto;
-
-	proto = (mtod(m, struct ip *))->ip_p;
-	me_input(&m, &off, proto);
 }
 
 int

@@ -2,8 +2,7 @@
 
 PROG=	stumbler
 BINDIR=	/usr/local/bin
-DPADD=	${LIBPCAP} ${LIBNCURSES}
-LDADD=	-lpcap -lncurses
+LIBADD=	pcap ncursesw
 CFLAGS=-g
 MAN=
 

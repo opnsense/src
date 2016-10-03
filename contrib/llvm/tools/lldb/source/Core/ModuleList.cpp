@@ -10,7 +10,11 @@
 #include "lldb/Core/ModuleList.h"
 
 // C Includes
+#include <stdint.h>
+
 // C++ Includes
+#include <mutex> // std::once
+
 // Other libraries and framework includes
 // Project includes
 #include "lldb/Core/Log.h"
@@ -18,7 +22,6 @@
 #include "lldb/Core/ModuleSpec.h"
 #include "lldb/Host/Host.h"
 #include "lldb/Host/Symbols.h"
-#include "lldb/Symbol/ClangNamespaceDecl.h"
 #include "lldb/Symbol/ObjectFile.h"
 #include "lldb/Symbol/VariableList.h"
 
@@ -40,7 +43,8 @@ ModuleList::ModuleList() :
 //----------------------------------------------------------------------
 ModuleList::ModuleList(const ModuleList& rhs) :
     m_modules(),
-    m_modules_mutex (Mutex::eMutexTypeRecursive)
+    m_modules_mutex (Mutex::eMutexTypeRecursive),
+    m_notifier(NULL)
 {
     Mutex::Locker lhs_locker(m_modules_mutex);
     Mutex::Locker rhs_locker(rhs.m_modules_mutex);
@@ -62,9 +66,28 @@ ModuleList::operator= (const ModuleList& rhs)
 {
     if (this != &rhs)
     {
-        Mutex::Locker lhs_locker(m_modules_mutex);
-        Mutex::Locker rhs_locker(rhs.m_modules_mutex);
-        m_modules = rhs.m_modules;
+        // That's probably me nit-picking, but in theoretical situation:
+        //
+        // * that two threads A B and
+        // * two ModuleList's x y do opposite assignments ie.:
+        //
+        //  in thread A: | in thread B:
+        //    x = y;     |   y = x;
+        //
+        // This establishes correct(same) lock taking order and thus
+        // avoids priority inversion.
+        if (uintptr_t(this) > uintptr_t(&rhs))
+        {
+            Mutex::Locker lhs_locker(m_modules_mutex);
+            Mutex::Locker rhs_locker(rhs.m_modules_mutex);
+            m_modules = rhs.m_modules;
+        }
+        else
+        {
+            Mutex::Locker rhs_locker(rhs.m_modules_mutex);
+            Mutex::Locker lhs_locker(m_modules_mutex);
+            m_modules = rhs.m_modules;
+        }
     }
     return *this;
 }
@@ -348,6 +371,7 @@ ModuleList::FindFunctions (const ConstString &name,
         uint32_t lookup_name_type_mask = 0;
         bool match_name_after_lookup = false;
         Module::PrepareForFunctionNameLookup (name, name_type_mask,
+                                              eLanguageTypeUnknown, // TODO: add support
                                               lookup_name,
                                               lookup_name_type_mask,
                                               match_name_after_lookup);
@@ -412,6 +436,7 @@ ModuleList::FindFunctionSymbols (const ConstString &name,
         uint32_t lookup_name_type_mask = 0;
         bool match_name_after_lookup = false;
         Module::PrepareForFunctionNameLookup (name, name_type_mask,
+                                              eLanguageTypeUnknown, // TODO: add support
                                               lookup_name,
                                               lookup_name_type_mask,
                                               match_name_after_lookup);
@@ -455,6 +480,26 @@ ModuleList::FindFunctionSymbols (const ConstString &name,
         {
             (*pos)->FindFunctionSymbols (name, name_type_mask, sc_list);
         }
+    }
+
+    return sc_list.GetSize() - old_size;
+}
+
+
+size_t
+ModuleList::FindFunctions(const RegularExpression &name,
+                          bool include_symbols,
+                          bool include_inlines,
+                          bool append,
+                          SymbolContextList& sc_list)
+{
+    const size_t old_size = sc_list.GetSize();
+
+    Mutex::Locker locker(m_modules_mutex);
+    collection::const_iterator pos, end = m_modules.end();
+    for (pos = m_modules.begin(); pos != end; ++pos)
+    {
+        (*pos)->FindFunctions (name, include_symbols, include_inlines, append, sc_list);
     }
 
     return sc_list.GetSize() - old_size;
@@ -638,7 +683,7 @@ ModuleList::FindTypes (const SymbolContext& sc, const ConstString &name, bool na
         {
             // Search the module if the module is not equal to the one in the symbol
             // context "sc". If "sc" contains a empty module shared pointer, then
-            // the comparisong will always be true (valid_module_ptr != NULL).
+            // the comparison will always be true (valid_module_ptr != NULL).
             if (sc.module_sp.get() != (*pos).get())
                 total_matches += (*pos)->FindTypes (world_sc, name, name_is_fully_qualified, max_matches, types);
             
@@ -832,13 +877,15 @@ ModuleList::GetIndexForModule (const Module *module) const
 static ModuleList &
 GetSharedModuleList ()
 {
-    // NOTE: Intentionally leak the module list so a program doesn't have to
-    // cleanup all modules and object files as it exits. This just wastes time
-    // doing a bunch of cleanup that isn't required.
     static ModuleList *g_shared_module_list = NULL;
-    if (g_shared_module_list == NULL)
-        g_shared_module_list = new ModuleList(); // <--- Intentional leak!!!
-    
+    static std::once_flag g_once_flag;
+    std::call_once(g_once_flag, [](){
+        // NOTE: Intentionally leak the module list so a program doesn't have to
+        // cleanup all modules and object files as it exits. This just wastes time
+        // doing a bunch of cleanup that isn't required.
+        if (g_shared_module_list == NULL)
+            g_shared_module_list = new ModuleList(); // <--- Intentional leak!!!
+    });
     return *g_shared_module_list;
 }
 
@@ -905,7 +952,7 @@ ModuleList::GetSharedModule
             for (size_t module_idx = 0; module_idx < num_matching_modules; ++module_idx)
             {
                 module_sp = matching_module_list.GetModuleAtIndex(module_idx);
-                
+
                 // Make sure the file for the module hasn't been modified
                 if (module_sp->FileHasChanged())
                 {
@@ -914,7 +961,8 @@ ModuleList::GetSharedModule
 
                     Log *log(lldb_private::GetLogIfAnyCategoriesSet (LIBLLDB_LOG_MODULES));
                     if (log)
-                        log->Printf("module changed: %p, removing from global module list", module_sp.get());
+                        log->Printf("module changed: %p, removing from global module list",
+                                    static_cast<void*>(module_sp.get()));
 
                     shared_module_list.Remove (module_sp);
                     module_sp.reset();
@@ -931,31 +979,87 @@ ModuleList::GetSharedModule
 
     if (module_sp)
         return error;
+
+    module_sp.reset (new Module (module_spec));
+    // Make sure there are a module and an object file since we can specify
+    // a valid file path with an architecture that might not be in that file.
+    // By getting the object file we can guarantee that the architecture matches
+    if (module_sp->GetObjectFile())
+    {
+        // If we get in here we got the correct arch, now we just need
+        // to verify the UUID if one was given
+        if (uuid_ptr && *uuid_ptr != module_sp->GetUUID())
+        {
+            module_sp.reset();
+        }
+        else
+        {
+            if (module_sp->GetObjectFile() && module_sp->GetObjectFile()->GetType() == ObjectFile::eTypeStubLibrary)
+            {
+                module_sp.reset();
+            }
+            else
+            {
+                if (did_create_ptr)
+                {
+                    *did_create_ptr = true;
+                }
+
+                shared_module_list.ReplaceEquivalent(module_sp);
+                return error;
+            }
+        }
+    }
     else
     {
-        module_sp.reset (new Module (module_spec));
-        // Make sure there are a module and an object file since we can specify
-        // a valid file path with an architecture that might not be in that file.
-        // By getting the object file we can guarantee that the architecture matches
-        if (module_sp)
+        module_sp.reset();
+    }
+
+    if (module_search_paths_ptr)
+    {
+        const auto num_directories = module_search_paths_ptr->GetSize();
+        for (size_t idx = 0; idx < num_directories; ++idx)
         {
+            auto search_path_spec = module_search_paths_ptr->GetFileSpecAtIndex(idx);
+            if (!search_path_spec.ResolvePath())
+                continue;
+            if (!search_path_spec.Exists() || !search_path_spec.IsDirectory())
+                continue;
+            search_path_spec.AppendPathComponent(module_spec.GetFileSpec().GetFilename().AsCString());
+            if (!search_path_spec.Exists())
+                continue;
+
+            auto resolved_module_spec(module_spec);
+            resolved_module_spec.GetFileSpec() = search_path_spec;
+            module_sp.reset (new Module (resolved_module_spec));
             if (module_sp->GetObjectFile())
             {
                 // If we get in here we got the correct arch, now we just need
                 // to verify the UUID if one was given
                 if (uuid_ptr && *uuid_ptr != module_sp->GetUUID())
+                {
                     module_sp.reset();
+                }
                 else
                 {
-                    if (did_create_ptr)
-                        *did_create_ptr = true;
-                    
-                    shared_module_list.ReplaceEquivalent(module_sp);
-                    return error;
+                    if (module_sp->GetObjectFile()->GetType() == ObjectFile::eTypeStubLibrary)
+                    {
+                        module_sp.reset();
+                    }
+                    else
+                    {
+                        if (did_create_ptr)
+                            *did_create_ptr = true;
+    
+                        shared_module_list.ReplaceEquivalent(module_sp);
+                        return Error();
+                    }
                 }
             }
             else
+            {
                 module_sp.reset();
+            }
         }
     }
 
@@ -965,18 +1069,19 @@ ModuleList::GetSharedModule
 
     // Fixup the incoming path in case the path points to a valid file, yet
     // the arch or UUID (if one was passed in) don't match.
-    FileSpec file_spec = Symbols::LocateExecutableObjectFile (module_spec);
+    ModuleSpec located_binary_modulespec = Symbols::LocateExecutableObjectFile (module_spec);
 
     // Don't look for the file if it appears to be the same one we already
     // checked for above...
-    if (file_spec != module_file_spec)
+    if (located_binary_modulespec.GetFileSpec() != module_file_spec)
     {
-        if (!file_spec.Exists())
+        if (!located_binary_modulespec.GetFileSpec().Exists())
         {
-            file_spec.GetPath(path, sizeof(path));
+            located_binary_modulespec.GetFileSpec().GetPath(path, sizeof(path));
             if (path[0] == '\0')
                 module_file_spec.GetPath(path, sizeof(path));
-            if (file_spec.Exists())
+            // How can this check ever be true? This branch it is false, and we haven't modified file_spec.
+            if (located_binary_modulespec.GetFileSpec().Exists())
             {
                 std::string uuid_str;
                 if (uuid_ptr && uuid_ptr->IsValid())
@@ -1004,8 +1109,9 @@ ModuleList::GetSharedModule
         // function is actively working on it by doing an extra lock on the
         // global mutex list.
         ModuleSpec platform_module_spec(module_spec);
-        platform_module_spec.GetFileSpec() = file_spec;
-        platform_module_spec.GetPlatformFileSpec() = file_spec;
+        platform_module_spec.GetFileSpec() = located_binary_modulespec.GetFileSpec();
+        platform_module_spec.GetPlatformFileSpec() = located_binary_modulespec.GetFileSpec();
+        platform_module_spec.GetSymbolFileSpec() = located_binary_modulespec.GetSymbolFileSpec();
         ModuleList matching_module_list;
         if (shared_module_list.FindModules (platform_module_spec, matching_module_list) > 0)
         {
@@ -1015,7 +1121,7 @@ ModuleList::GetSharedModule
             // then we should make sure the modification time hasn't changed!
             if (platform_module_spec.GetUUIDPtr() == NULL)
             {
-                TimeValue file_spec_mod_time(file_spec.GetModificationTime());
+                TimeValue file_spec_mod_time(located_binary_modulespec.GetFileSpec().GetModificationTime());
                 if (file_spec_mod_time.IsValid())
                 {
                     if (file_spec_mod_time != module_sp->GetModificationTime())
@@ -1037,16 +1143,23 @@ ModuleList::GetSharedModule
             // By getting the object file we can guarantee that the architecture matches
             if (module_sp && module_sp->GetObjectFile())
             {
-                if (did_create_ptr)
-                    *did_create_ptr = true;
+                if (module_sp->GetObjectFile()->GetType() == ObjectFile::eTypeStubLibrary)
+                {
+                    module_sp.reset();
+                }
+                else
+                {
+                    if (did_create_ptr)
+                        *did_create_ptr = true;
 
-                shared_module_list.ReplaceEquivalent(module_sp);
+                    shared_module_list.ReplaceEquivalent(module_sp);
+                }
             }
             else
             {
-                file_spec.GetPath(path, sizeof(path));
+                located_binary_modulespec.GetFileSpec().GetPath(path, sizeof(path));
 
-                if (file_spec)
+                if (located_binary_modulespec.GetFileSpec())
                 {
                     if (arch.IsValid())
                         error.SetErrorStringWithFormat("unable to open %s architecture in '%s'", arch.GetArchitectureName(), path);
@@ -1105,11 +1218,24 @@ ModuleList::LoadScriptingResourcesInTarget (Target *target,
                                                    module->GetFileSpec().GetFileNameStrippingExtension().GetCString(),
                                                    error.AsCString());
                     errors.push_back(error);
+
+                    if (!continue_on_error)
+                        return false;
                 }
-                if (!continue_on_error)
-                    return false;
             }
         }
     }
     return errors.size() == 0;
+}
+
+void
+ModuleList::ForEach (std::function <bool (const ModuleSP &module_sp)> const &callback) const
+{
+    Mutex::Locker locker(m_modules_mutex);
+    for (const auto &module : m_modules)
+    {
+        // If the callback returns false, then stop iterating and break out
+        if (!callback (module))
+            break;
+    }
 }

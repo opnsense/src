@@ -23,6 +23,13 @@ SBStream::SBStream () :
 {
 }
 
+SBStream::SBStream (SBStream &&rhs) :
+    m_opaque_ap (std::move(rhs.m_opaque_ap)),
+    m_is_file (rhs.m_is_file)
+{
+}
+
+
 SBStream::~SBStream ()
 {
 }
@@ -70,6 +77,9 @@ SBStream::Printf (const char *format, ...)
 void
 SBStream::RedirectToFile (const char *path, bool append)
 {
+    if (path == nullptr)
+        return;
+
     std::string local_data;
     if (m_opaque_ap.get())
     {
@@ -82,6 +92,8 @@ SBStream::RedirectToFile (const char *path, bool append)
     uint32_t open_options = File::eOpenOptionWrite | File::eOpenOptionCanCreate;
     if (append)
         open_options |= File::eOpenOptionAppend;
+    else
+        open_options |= File::eOpenOptionTruncate;
     stream_file->GetFile().Open (path, open_options, lldb::eFilePermissionsFileDefault);
 
     m_opaque_ap.reset (stream_file);
@@ -102,6 +114,9 @@ SBStream::RedirectToFile (const char *path, bool append)
 void
 SBStream::RedirectToFileHandle (FILE *fh, bool transfer_fh_ownership)
 {
+    if (fh == nullptr)
+        return;
+
     std::string local_data;
     if (m_opaque_ap.get())
     {

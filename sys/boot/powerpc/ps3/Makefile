@@ -1,7 +1,8 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 MK_SSP=		no
+MAN=
 
 PROG=		loader.ps3
 NEWVERSWHAT=	"Playstation 3 loader" ${MACHINE_ARCH}
@@ -86,9 +87,6 @@ RELOC?=		0x0
 CFLAGS+=	-DRELOC=${RELOC}
 
 LDFLAGS=	-nostdlib -static -T ${.CURDIR}/ldscript.powerpc
-
-# 64-bit bridge extensions
-CFLAGS+= -Wa,-mppc64bridge
 
 # Pull in common loader code
 #.PATH:		${.CURDIR}/../../ofw/common

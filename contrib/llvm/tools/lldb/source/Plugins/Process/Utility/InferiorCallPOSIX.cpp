@@ -14,6 +14,7 @@
 #include "lldb/Symbol/ClangASTContext.h"
 #include "lldb/Symbol/SymbolContext.h"
 #include "lldb/Target/ExecutionContext.h"
+#include "lldb/Target/Platform.h"
 #include "lldb/Target/Process.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Target/ThreadPlanCallFunction.h"
@@ -27,8 +28,6 @@
 #define PROT_READ 1
 #define PROT_WRITE 2
 #define PROT_EXEC 4
-#define MAP_PRIVATE 2
-#define MAP_ANON 0x1000
 #endif
 
 using namespace lldb;
@@ -73,6 +72,7 @@ lldb_private::InferiorCallMmap (Process *process,
             options.SetTryAllThreads(true);
             options.SetDebug (false);
             options.SetTimeoutUsec(500000);
+            options.SetTrapExceptions(false);
 
             addr_t prot_arg, flags_arg = 0;
             if (prot == eMmapProtNone)
@@ -87,41 +87,34 @@ lldb_private::InferiorCallMmap (Process *process,
                 prot_arg |= PROT_WRITE;
             }
 
-            if (flags & eMmapFlagsPrivate)
-              flags_arg |= MAP_PRIVATE;
-            if (flags & eMmapFlagsAnon)
-              flags_arg |= MAP_ANON;
+            const ArchSpec arch =  process->GetTarget().GetArchitecture();
+            flags_arg = process->GetTarget().GetPlatform()->ConvertMmapFlagsToPlatform(arch,flags);
 
             AddressRange mmap_range;
             if (sc.GetAddressRange(range_scope, 0, use_inline_block_range, mmap_range))
             {
                 ClangASTContext *clang_ast_context = process->GetTarget().GetScratchClangASTContext();
-                ClangASTType clang_void_ptr_type = clang_ast_context->GetBasicType(eBasicTypeVoid).GetPointerType();
+                CompilerType clang_void_ptr_type = clang_ast_context->GetBasicType(eBasicTypeVoid).GetPointerType();
                 lldb::addr_t args[] = { addr, length, prot_arg, flags_arg, fd, offset };
-                ThreadPlanCallFunction *call_function_thread_plan
-                  = new ThreadPlanCallFunction (*thread,
-                                                mmap_range.GetBaseAddress(),
-                                                clang_void_ptr_type,
-                                                args,
-                                                options);
-                lldb::ThreadPlanSP call_plan_sp (call_function_thread_plan);
+                lldb::ThreadPlanSP call_plan_sp (new ThreadPlanCallFunction (*thread,
+                                                                             mmap_range.GetBaseAddress(),
+                                                                             clang_void_ptr_type,
+                                                                             args,
+                                                                             options));
                 if (call_plan_sp)
                 {
                     StreamFile error_strm;
-                    // This plan is a utility plan, so set it to discard itself when done.
-                    call_plan_sp->SetIsMasterPlan (true);
-                    call_plan_sp->SetOkayToDiscard(true);
                     
                     StackFrame *frame = thread->GetStackFrameAtIndex (0).get();
                     if (frame)
                     {
                         ExecutionContext exe_ctx;
                         frame->CalculateExecutionContext (exe_ctx);
-                        ExecutionResults result = process->RunThreadPlan (exe_ctx,
+                        ExpressionResults result = process->RunThreadPlan (exe_ctx,
                                                                           call_plan_sp,
                                                                           options,
                                                                           error_strm);
-                        if (result == eExecutionCompleted)
+                        if (result == eExpressionCompleted)
                         {
                             
                             allocated_addr = call_plan_sp->GetReturnValueObject()->GetValueAsUnsigned(LLDB_INVALID_ADDRESS);
@@ -180,6 +173,7 @@ lldb_private::InferiorCallMunmap (Process *process,
             options.SetTryAllThreads(true);
             options.SetDebug (false);
             options.SetTimeoutUsec(500000);
+            options.SetTrapExceptions(false);
            
             AddressRange munmap_range;
             if (sc.GetAddressRange(range_scope, 0, use_inline_block_range, munmap_range))
@@ -187,26 +181,23 @@ lldb_private::InferiorCallMunmap (Process *process,
                 lldb::addr_t args[] = { addr, length };
                 lldb::ThreadPlanSP call_plan_sp (new ThreadPlanCallFunction (*thread,
                                                                             munmap_range.GetBaseAddress(),
-                                                                            ClangASTType(),
+                                                                            CompilerType(),
                                                                             args,
                                                                             options));
                 if (call_plan_sp)
                 {
                     StreamFile error_strm;
-                    // This plan is a utility plan, so set it to discard itself when done.
-                    call_plan_sp->SetIsMasterPlan (true);
-                    call_plan_sp->SetOkayToDiscard(true);
                    
                     StackFrame *frame = thread->GetStackFrameAtIndex (0).get();
                     if (frame)
                     {
                         ExecutionContext exe_ctx;
                         frame->CalculateExecutionContext (exe_ctx);
-                        ExecutionResults result = process->RunThreadPlan (exe_ctx,
+                        ExpressionResults result = process->RunThreadPlan (exe_ctx,
                                                                           call_plan_sp,
                                                                           options,
                                                                           error_strm);
-                        if (result == eExecutionCompleted)
+                        if (result == eExpressionCompleted)
                         {
                             return true;
                         }
@@ -225,7 +216,8 @@ lldb_private::InferiorCallMunmap (Process *process,
 bool
 lldb_private::InferiorCall (Process *process,
                             const Address *address,
-                            addr_t &returned_func)
+                            addr_t &returned_func,
+                            bool trap_exceptions)
 {
     Thread *thread = process->GetThreadList().GetSelectedThread().get();
     if (thread == NULL || address == NULL)
@@ -238,33 +230,29 @@ lldb_private::InferiorCall (Process *process,
     options.SetTryAllThreads(true);
     options.SetDebug (false);
     options.SetTimeoutUsec(500000);
+    options.SetTrapExceptions(trap_exceptions);
 
     ClangASTContext *clang_ast_context = process->GetTarget().GetScratchClangASTContext();
-    ClangASTType clang_void_ptr_type = clang_ast_context->GetBasicType(eBasicTypeVoid).GetPointerType();
-    ThreadPlanCallFunction *call_function_thread_plan
-        = new ThreadPlanCallFunction (*thread,
-                                      *address,
-                                      clang_void_ptr_type,
-                                      llvm::ArrayRef<addr_t>(),
-                                      options);
-    lldb::ThreadPlanSP call_plan_sp (call_function_thread_plan);
+    CompilerType clang_void_ptr_type = clang_ast_context->GetBasicType(eBasicTypeVoid).GetPointerType();
+    lldb::ThreadPlanSP call_plan_sp (new ThreadPlanCallFunction (*thread,
+                                                                 *address,
+                                                                 clang_void_ptr_type,
+                                                                 llvm::ArrayRef<addr_t>(),
+                                                                 options));
     if (call_plan_sp)
     {
         StreamString error_strm;
-        // This plan is a utility plan, so set it to discard itself when done.
-        call_plan_sp->SetIsMasterPlan (true);
-        call_plan_sp->SetOkayToDiscard(true);
 
         StackFrame *frame = thread->GetStackFrameAtIndex (0).get();
         if (frame)
         {
             ExecutionContext exe_ctx;
             frame->CalculateExecutionContext (exe_ctx);
-            ExecutionResults result = process->RunThreadPlan (exe_ctx,
+            ExpressionResults result = process->RunThreadPlan (exe_ctx,
                                                               call_plan_sp,
                                                               options,
                                                               error_strm);
-            if (result == eExecutionCompleted)
+            if (result == eExpressionCompleted)
             {
                 returned_func = call_plan_sp->GetReturnValueObject()->GetValueAsUnsigned(LLDB_INVALID_ADDRESS);
 

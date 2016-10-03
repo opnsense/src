@@ -25,58 +25,66 @@ namespace lldb_private {
 class ValueObjectVariable : public ValueObject
 {
 public:
+    ~ValueObjectVariable() override;
+
     static lldb::ValueObjectSP
     Create (ExecutionContextScope *exe_scope, const lldb::VariableSP &var_sp);
 
-    virtual
-    ~ValueObjectVariable();
+    uint64_t
+    GetByteSize() override;
 
-    virtual uint64_t
-    GetByteSize();
+    ConstString
+    GetTypeName() override;
 
-    virtual ConstString
-    GetTypeName();
-
-    virtual ConstString
-    GetQualifiedTypeName();
-
-    virtual size_t
-    CalculateNumChildren();
-
-    virtual lldb::ValueType
-    GetValueType() const;
-
-    virtual bool
-    IsInScope ();
-
-    virtual lldb::ModuleSP
-    GetModule();
+    ConstString
+    GetQualifiedTypeName() override;
     
-    virtual SymbolContextScope *
-    GetSymbolContextScope();
+    ConstString
+    GetDisplayTypeName() override;
 
-    virtual bool
-    GetDeclaration (Declaration &decl);
-    
-    virtual const char *
-    GetLocationAsCString ();
-    
-    virtual bool
-    SetValueFromCString (const char *value_str, Error& error);
+    size_t
+    CalculateNumChildren(uint32_t max) override;
 
-    virtual bool
-    SetData (DataExtractor &data, Error &error);
+    lldb::ValueType
+    GetValueType() const override;
+
+    bool
+    IsInScope() override;
+
+    lldb::ModuleSP
+    GetModule() override;
+    
+    SymbolContextScope *
+    GetSymbolContextScope() override;
+
+    bool
+    GetDeclaration(Declaration &decl) override;
+    
+    const char *
+    GetLocationAsCString() override;
+    
+    bool
+    SetValueFromCString(const char *value_str, Error& error) override;
+
+    bool
+    SetData(DataExtractor &data, Error &error) override;
+    
+    virtual lldb::VariableSP
+    GetVariable () override
+    {
+        return m_variable_sp;
+    }
     
 protected:
-    virtual bool
-    UpdateValue ();
+    bool
+    UpdateValue() override;
     
-    virtual ClangASTType
-    GetClangTypeImpl ();
+    CompilerType
+    GetCompilerTypeImpl() override;
 
     lldb::VariableSP  m_variable_sp;  ///< The variable that this value object is based upon
     Value m_resolved_value;           ///< The value that DWARFExpression resolves this variable to before we patch it up
-
+    
 private:
     ValueObjectVariable (ExecutionContextScope *exe_scope, const lldb::VariableSP &var_sp);
     //------------------------------------------------------------------
@@ -87,4 +95,4 @@ private:
 
 } // namespace lldb_private
 
-#endif  // liblldb_ValueObjectVariable_h_
+#endif // liblldb_ValueObjectVariable_h_

@@ -12,6 +12,9 @@
 
 // C Includes
 // C++ Includes
+#include <memory>
+#include <string>
+
 // Other libraries and framework includes
 // Project includes
 #include "lldb/lldb-private.h"
@@ -89,6 +92,9 @@ public:
     //    callback.
     // Asynchronous callbacks get run as part of the "ShouldStop" logic in the thread plan.  The logic there is:
     //   a) If the breakpoint is thread specific and not for this thread, continue w/o running the callback.
+    //      NB. This is actually enforced underneath the breakpoint system, the Process plugin is expected to
+    //      call BreakpointSite::IsValidForThread, and set the thread's StopInfo to "no reason".  That way,
+    //      thread displays won't show stops for breakpoints not for that thread...
     //   b) If the ignore count says we shouldn't stop, then ditto.
     //   c) If the condition says we shouldn't stop, then ditto.
     //   d) Otherwise, the callback will get run, and if it returns true we will stop, and if false we won't.
@@ -111,7 +117,6 @@ public:
     ///    Whether this is a synchronous or asynchronous callback.  See discussion above.
     //------------------------------------------------------------------
     void SetCallback (BreakpointHitCallback callback, const lldb::BatonSP &baton_sp, bool synchronous = false);
-    
     
     //------------------------------------------------------------------
     /// Remove the callback from this option set.
@@ -145,7 +150,8 @@ public:
     /// @return
     ///     The synchronicity of our callback.
     //------------------------------------------------------------------
-    bool IsCallbackSynchronous () {
+    bool IsCallbackSynchronous () const
+    {
         return m_callback_is_synchronous;
     }
     
@@ -180,10 +186,10 @@ public:
     /// Return a pointer to the text of the condition expression.
     ///
     /// @return
-    ///    A pointer to the condition expression text, or NULL if no
+    ///    A pointer to the condition expression text, or nullptr if no
     //     condition has been set.
     //------------------------------------------------------------------
-    const char *GetConditionText (size_t *hash = NULL) const;
+    const char *GetConditionText(size_t *hash = nullptr) const;
     
     //------------------------------------------------------------------
     // Enabled/Ignore Count
@@ -253,10 +259,10 @@ public:
     }
 
     //------------------------------------------------------------------
-    /// Return the current thread spec for this option.  This will return NULL if the no thread
+    /// Return the current thread spec for this option. This will return nullptr if the no thread
     /// specifications have been set for this Option yet.     
     /// @return
-    ///     The thread specification pointer for this option, or NULL if none has
+    ///     The thread specification pointer for this option, or nullptr if none has
     ///     been set yet.
     //------------------------------------------------------------------
     const ThreadSpec *
@@ -280,7 +286,7 @@ public:
     /// Returns true if the breakpoint option has a callback set.
     //------------------------------------------------------------------
     bool
-    HasCallback();
+    HasCallback() const;
 
     //------------------------------------------------------------------
     /// This is the default empty callback.
@@ -294,7 +300,6 @@ public:
                   lldb::user_id_t break_id,
                   lldb::user_id_t break_loc_id);
     
-    
     struct CommandData
     {
         CommandData () :
@@ -304,10 +309,8 @@ public:
         {
         }
 
-        ~CommandData ()
-        {
-        }
-        
+        ~CommandData() = default;
+
         StringList user_source;
         std::string script_source;
         bool stop_on_error;
@@ -321,16 +324,14 @@ public:
         {
         }
 
-        virtual
-        ~CommandBaton ()
+        ~CommandBaton() override
         {
             delete ((CommandData *)m_data);
-            m_data = NULL;
+            m_data = nullptr;
         }
         
-        virtual void
-        GetDescription (Stream *s, lldb::DescriptionLevel level) const;
-
+        void
+        GetDescription (Stream *s, lldb::DescriptionLevel level) const override;
     };
 
 protected:
@@ -355,4 +356,4 @@ private:
 
 } // namespace lldb_private
 
-#endif  // liblldb_BreakpointOptions_h_
+#endif // liblldb_BreakpointOptions_h_

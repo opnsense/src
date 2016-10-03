@@ -7,7 +7,7 @@
  *
  * A list of symbols which need munging is obtained as follows:
  *
- # nm libssh.a | LC_ALL=C awk '
+ # nm libprivatessh.a | LC_ALL=C awk '
      /^[0-9a-z]+ [Tt] [A-Za-z_][0-9A-Za-z_]*$/ && $3 !~ /^Fssh_/ {
          printf("#define %-39s Fssh_%s\n", $3, $3)
      }' | unexpand -a | LC_ALL=C sort -u
@@ -331,7 +331,6 @@
 #define error					Fssh_error
 #define evp_ssh1_3des				Fssh_evp_ssh1_3des
 #define evp_ssh1_bf				Fssh_evp_ssh1_bf
-#define explicit_bzero				Fssh_explicit_bzero
 #define export_dns_rr				Fssh_export_dns_rr
 #define fatal					Fssh_fatal
 #define filter_proposal				Fssh_filter_proposal
@@ -382,6 +381,7 @@
 #define iptos2str				Fssh_iptos2str
 #define ipv64_normalise_mapped			Fssh_ipv64_normalise_mapped
 #define is_key_revoked				Fssh_is_key_revoked
+#define kex_alg_by_name				Fssh_kex_alg_by_name
 #define kex_alg_list				Fssh_kex_alg_list
 #define kex_assemble_names			Fssh_kex_assemble_names
 #define kex_buf2prop				Fssh_kex_buf2prop
@@ -485,7 +485,6 @@
 #define newkeys_to_blob				Fssh_newkeys_to_blob
 #define nh_aux					Fssh_nh_aux
 #define nh_final				Fssh_nh_final
-#define nh_update				Fssh_nh_update
 #define packet_close				Fssh_packet_close
 #define packet_disconnect			Fssh_packet_disconnect
 #define packet_get_char				Fssh_packet_get_char
@@ -537,7 +536,6 @@
 #define read_keyfile_line			Fssh_read_keyfile_line
 #define read_mux				Fssh_read_mux
 #define read_passphrase				Fssh_read_passphrase
-#define reallocarray				Fssh_reallocarray
 #define record_hostkey				Fssh_record_hostkey
 #define reduce_add_sub				Fssh_reduce_add_sub
 #define refresh_progress_meter			Fssh_refresh_progress_meter

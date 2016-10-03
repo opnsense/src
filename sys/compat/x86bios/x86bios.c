@@ -70,12 +70,10 @@ static struct mtx x86bios_lock;
 static SYSCTL_NODE(_debug, OID_AUTO, x86bios, CTLFLAG_RD, NULL,
     "x86bios debugging");
 static int x86bios_trace_call;
-TUNABLE_INT("debug.x86bios.call", &x86bios_trace_call);
-SYSCTL_INT(_debug_x86bios, OID_AUTO, call, CTLFLAG_RW, &x86bios_trace_call, 0,
+SYSCTL_INT(_debug_x86bios, OID_AUTO, call, CTLFLAG_RWTUN, &x86bios_trace_call, 0,
     "Trace far function calls");
 static int x86bios_trace_int;
-TUNABLE_INT("debug.x86bios.int", &x86bios_trace_int);
-SYSCTL_INT(_debug_x86bios, OID_AUTO, int, CTLFLAG_RW, &x86bios_trace_int, 0,
+SYSCTL_INT(_debug_x86bios, OID_AUTO, int, CTLFLAG_RWTUN, &x86bios_trace_int, 0,
     "Trace software interrupt handlers");
 
 #ifdef X86BIOS_NATIVE_VM86
@@ -121,7 +119,7 @@ void *
 x86bios_alloc(uint32_t *offset, size_t size, int flags)
 {
 	void *vaddr;
-	int i;
+	u_int i;
 
 	if (offset == NULL || size == 0)
 		return (NULL);
@@ -588,7 +586,7 @@ x86bios_call(struct x86regs *regs, uint16_t seg, uint16_t off)
 		X86BIOS_TRACE(Calling 0x%06x, (seg << 4) + off, regs);
 
 	mtx_lock(&x86bios_lock);
-	memcpy(&x86bios_emu.x86, regs, sizeof(*regs));
+	memcpy((struct x86regs *)&x86bios_emu.x86, regs, sizeof(*regs));
 	x86bios_fault = 0;
 	spinlock_enter();
 	x86emu_exec_call(&x86bios_emu, seg, off);
@@ -630,7 +628,7 @@ x86bios_intr(struct x86regs *regs, int intno)
 		X86BIOS_TRACE(Calling INT 0x%02x, intno, regs);
 
 	mtx_lock(&x86bios_lock);
-	memcpy(&x86bios_emu.x86, regs, sizeof(*regs));
+	memcpy((struct x86regs *)&x86bios_emu.x86, regs, sizeof(*regs));
 	x86bios_fault = 0;
 	spinlock_enter();
 	x86emu_exec_intr(&x86bios_emu, intno);

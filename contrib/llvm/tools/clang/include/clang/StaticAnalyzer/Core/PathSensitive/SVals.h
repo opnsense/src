@@ -12,8 +12,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_GR_RVALUE_H
-#define LLVM_CLANG_GR_RVALUE_H
+#ifndef LLVM_CLANG_STATICANALYZER_CORE_PATHSENSITIVE_SVALS_H
+#define LLVM_CLANG_STATICANALYZER_CORE_PATHSENSITIVE_SVALS_H
 
 #include "clang/Basic/LLVM.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramState_Fwd.h"
@@ -45,8 +45,8 @@ class SVal {
 public:
   enum BaseKind {
     // The enumerators must be representable using 2 bits.
-    UndefinedKind = 0,  // for subclass UndefinedVal (an uninitialized value)
-    UnknownKind = 1,    // for subclass UnknownVal (a void value)
+    UndefinedValKind = 0,  // for subclass UndefinedVal (an uninitialized value)
+    UnknownValKind = 1,    // for subclass UnknownVal (a void value)
     LocKind = 2,        // for subclass Loc (an L-value)
     NonLocKind = 3      // for subclass NonLoc (an R-value that's not
                         //   an L-value)
@@ -63,11 +63,11 @@ protected:
   explicit SVal(const void *d, bool isLoc, unsigned ValKind)
   : Data(d), Kind((isLoc ? LocKind : NonLocKind) | (ValKind << BaseBits)) {}
 
-  explicit SVal(BaseKind k, const void *D = NULL)
+  explicit SVal(BaseKind k, const void *D = nullptr)
     : Data(D), Kind(k) {}
 
 public:
-  explicit SVal() : Data(0), Kind(0) {}
+  explicit SVal() : Data(nullptr), Kind(0) {}
 
   /// \brief Convert to the specified SVal type, asserting that this SVal is of
   /// the desired type.
@@ -115,19 +115,19 @@ public:
   }
 
   inline bool isUnknown() const {
-    return getRawKind() == UnknownKind;
+    return getRawKind() == UnknownValKind;
   }
 
   inline bool isUndef() const {
-    return getRawKind() == UndefinedKind;
+    return getRawKind() == UndefinedValKind;
   }
 
   inline bool isUnknownOrUndef() const {
-    return getRawKind() <= UnknownKind;
+    return getRawKind() <= UnknownValKind;
   }
 
   inline bool isValid() const {
-    return getRawKind() > UnknownKind;
+    return getRawKind() > UnknownValKind;
   }
 
   bool isConstant() const;
@@ -190,12 +190,12 @@ public:
 
 class UndefinedVal : public SVal {
 public:
-  UndefinedVal() : SVal(UndefinedKind) {}
+  UndefinedVal() : SVal(UndefinedValKind) {}
 
 private:
   friend class SVal;
   static bool isKind(const SVal& V) {
-    return V.getBaseKind() == UndefinedKind;
+    return V.getBaseKind() == UndefinedValKind;
   }
 };
 
@@ -203,15 +203,15 @@ class DefinedOrUnknownSVal : public SVal {
 private:
   // We want calling these methods to be a compiler error since they are
   // tautologically false.
-  bool isUndef() const LLVM_DELETED_FUNCTION;
-  bool isValid() const LLVM_DELETED_FUNCTION;
+  bool isUndef() const = delete;
+  bool isValid() const = delete;
   
 protected:
   DefinedOrUnknownSVal() {}
   explicit DefinedOrUnknownSVal(const void *d, bool isLoc, unsigned ValKind)
     : SVal(d, isLoc, ValKind) {}
   
-  explicit DefinedOrUnknownSVal(BaseKind k, void *D = NULL)
+  explicit DefinedOrUnknownSVal(BaseKind k, void *D = nullptr)
     : SVal(k, D) {}
   
 private:
@@ -223,12 +223,12 @@ private:
   
 class UnknownVal : public DefinedOrUnknownSVal {
 public:
-  explicit UnknownVal() : DefinedOrUnknownSVal(UnknownKind) {}
+  explicit UnknownVal() : DefinedOrUnknownSVal(UnknownValKind) {}
   
 private:
   friend class SVal;
   static bool isKind(const SVal &V) {
-    return V.getBaseKind() == UnknownKind;
+    return V.getBaseKind() == UnknownValKind;
   }
 };
 
@@ -236,9 +236,9 @@ class DefinedSVal : public DefinedOrUnknownSVal {
 private:
   // We want calling these methods to be a compiler error since they are
   // tautologically true/false.
-  bool isUnknown() const LLVM_DELETED_FUNCTION;
-  bool isUnknownOrUndef() const LLVM_DELETED_FUNCTION;
-  bool isValid() const LLVM_DELETED_FUNCTION;
+  bool isUnknown() const = delete;
+  bool isUnknownOrUndef() const = delete;
+  bool isValid() const = delete;
 protected:
   DefinedSVal() {}
   explicit DefinedSVal(const void *d, bool isLoc, unsigned ValKind)
@@ -465,7 +465,7 @@ private:
 
 namespace loc {
 
-enum Kind { GotoLabelKind, MemRegionKind, ConcreteIntKind };
+enum Kind { GotoLabelKind, MemRegionValKind, ConcreteIntKind };
 
 class GotoLabel : public Loc {
 public:
@@ -490,7 +490,7 @@ private:
 
 class MemRegionVal : public Loc {
 public:
-  explicit MemRegionVal(const MemRegion* r) : Loc(MemRegionKind, r) {}
+  explicit MemRegionVal(const MemRegion* r) : Loc(MemRegionValKind, r) {}
 
   /// \brief Get the underlining region.
   const MemRegion* getRegion() const {
@@ -518,11 +518,11 @@ private:
   MemRegionVal() {}
   static bool isKind(const SVal& V) {
     return V.getBaseKind() == LocKind &&
-           V.getSubKind() == MemRegionKind;
+           V.getSubKind() == MemRegionValKind;
   }
 
   static bool isKind(const Loc& V) {
-    return V.getSubKind() == MemRegionKind;
+    return V.getSubKind() == MemRegionValKind;
   }
 };
 

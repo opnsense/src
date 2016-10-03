@@ -1,4 +1,6 @@
 /*-
+ * Copyright 2013 Garrett D'Amore <garrett@damore.org>
+ * Copyright 2010 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2002-2004 Tim J. Robbins. All rights reserved.
  * Copyright (c) 1993
  *	The Regents of the University of California.  All rights reserved.
@@ -172,6 +174,7 @@ _none_wcsnrtombs(char * __restrict dst, const wchar_t ** __restrict src,
 	nchr = 0;
 	while (len-- > 0 && nwc-- > 0) {
 		if (*s < 0 || *s > UCHAR_MAX) {
+			*src = s;
 			errno = EILSEQ;
 			return ((size_t)-1);
 		}
@@ -187,16 +190,6 @@ _none_wcsnrtombs(char * __restrict dst, const wchar_t ** __restrict src,
 
 /* setup defaults */
 
-size_t (*__mbrtowc)(wchar_t * __restrict, const char * __restrict, size_t,
-    mbstate_t * __restrict) = _none_mbrtowc;
-int (*__mbsinit)(const mbstate_t *) = _none_mbsinit;
-size_t (*__mbsnrtowcs)(wchar_t * __restrict, const char ** __restrict,
-    size_t, size_t, mbstate_t * __restrict) = _none_mbsnrtowcs;
-size_t (*__wcrtomb)(char * __restrict, wchar_t, mbstate_t * __restrict) =
-    _none_wcrtomb;
-size_t (*__wcsnrtombs)(char * __restrict, const wchar_t ** __restrict,
-    size_t, size_t, mbstate_t * __restrict) = _none_wcsnrtombs;
-
 struct xlocale_ctype __xlocale_global_ctype = {
 	{{0}, "C"},
 	(_RuneLocale*)&_DefaultRuneLocale,
@@ -209,7 +202,7 @@ struct xlocale_ctype __xlocale_global_ctype = {
 	256 /* __mb_sb_limit */
 };
 
-const struct xlocale_ctype __xlocale_C_ctype = {
+struct xlocale_ctype __xlocale_C_ctype = {
 	{{0}, "C"},
 	(_RuneLocale*)&_DefaultRuneLocale,
 	_none_mbrtowc,

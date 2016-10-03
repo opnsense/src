@@ -25,21 +25,34 @@
 # SUCH DAMAGE.
 #
 
-.include <bsd.own.mk>
+SYSDIR?=${.CURDIR}/../..
+.include "${SYSDIR}/conf/kern.opts.mk"
+
+#
+# Check for common USB debug flags to pass when building the USB
+# modules in this directory:
+#
+.if defined(USB_DEBUG)
+MAKE+=" DEBUG_FLAGS+=-DUSB_DEBUG"
+.endif
+
+.if defined(USB_DEBUG) && defined(USB_REQ_DEBUG)
+MAKE+=" DEBUG_FLAGS+=-DUSB_REQ_DEBUG"
+.endif
 
 # Modules that include binary-only blobs of microcode should be selectable by
 # MK_SOURCELESS_UCODE option (see below).
 
 SUBDIR = usb
 SUBDIR += ${_dwc_otg} ehci ${_musb} ohci uhci xhci ${_uss820dci} ${_at91dci} \
-	  ${_atmegadci} ${_avr32dci} ${_rsu} ${_rsufw}
+	  ${_atmegadci} ${_avr32dci} ${_rsu} ${_rsufw} ${_saf1761otg}
 SUBDIR += ${_rum} ${_run} ${_runfw} ${_uath} upgt usie ural ${_zyd} ${_urtw} 
-SUBDIR += ${_urtwn} ${_urtwnfw}
-SUBDIR += atp uhid ukbd ums udbp ufm uep wsp uled
+SUBDIR += atp uhid ukbd ums udbp ufm uep wsp ugold uled
 SUBDIR += ucom u3g uark ubsa ubser uchcom ucycom ufoma uftdi ugensa uipaq ulpt \
 	  umct umcs umodem umoscom uplcom uslcom uvisor uvscom
+SUBDIR += udl
 SUBDIR += uether aue axe axge cdce cue ${_kue} mos rue smsc udav uhso ipheth
-SUBDIR += urndis
+SUBDIR += ure urndis
 SUBDIR += usfs umass urio
 SUBDIR += quirk template
 SUBDIR += ${_g_audio} ${_g_keyboard} ${_g_modem} ${_g_mouse}
@@ -56,8 +69,6 @@ _rum=		rum
 _uath=		uath
 _zyd=		zyd
 _kue=		kue
-_urtwn=		urtwn
-_urtwnfw=	urtwnfw
 _run=		run
 _runfw=		runfw
 _rsu=		rsu
@@ -82,6 +93,10 @@ _urtw=		urtw
 
 .if ${MACHINE_CPUARCH} == "avr32"
 _avr32dci=	avr32dci
+.endif
+
+.if ${MACHINE_CPUARCH} == "mips"
+_saf1761otg=	saf1761otg
 .endif
 
 .include <bsd.subdir.mk>

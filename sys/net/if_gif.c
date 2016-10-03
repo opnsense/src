@@ -148,7 +148,7 @@ static SYSCTL_NODE(_net_link, IFT_GIF, gif, CTLFLAG_RW, 0,
 #endif
 static VNET_DEFINE(int, max_gif_nesting) = MAX_GIF_NEST;
 #define	V_max_gif_nesting	VNET(max_gif_nesting)
-SYSCTL_VNET_INT(_net_link_gif, OID_AUTO, max_nesting, CTLFLAG_RW,
+SYSCTL_INT(_net_link_gif, OID_AUTO, max_nesting, CTLFLAG_VNET | CTLFLAG_RW,
     &VNET_NAME(max_gif_nesting), 0, "Max nested tunnels");
 
 /*
@@ -162,8 +162,9 @@ static VNET_DEFINE(int, parallel_tunnels) = 1;
 static VNET_DEFINE(int, parallel_tunnels) = 0;
 #endif
 #define	V_parallel_tunnels	VNET(parallel_tunnels)
-SYSCTL_VNET_INT(_net_link_gif, OID_AUTO, parallel_tunnels, CTLFLAG_RW,
-    &VNET_NAME(parallel_tunnels), 0, "Allow parallel tunnels?");
+SYSCTL_INT(_net_link_gif, OID_AUTO, parallel_tunnels,
+    CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(parallel_tunnels), 0,
+    "Allow parallel tunnels?");
 
 /* copy from src/sys/net/if_ethersubr.c */
 static const u_char etherbroadcastaddr[ETHER_ADDR_LEN] =
@@ -281,9 +282,9 @@ int
 gif_encapcheck(const struct mbuf *m, int off, int proto, void *arg)
 {
 	GIF_RLOCK_TRACKER;
+	const struct ip *ip;
 	struct gif_softc *sc;
 	int ret;
-	uint8_t ver;
 
 	sc = (struct gif_softc *)arg;
 	if (sc == NULL || (GIF2IFP(sc)->if_flags & IFF_UP) == 0)
@@ -310,11 +311,12 @@ gif_encapcheck(const struct mbuf *m, int off, int proto, void *arg)
 	}
 
 	/* Bail on short packets */
+	M_ASSERTPKTHDR(m);
 	if (m->m_pkthdr.len < sizeof(struct ip))
 		goto done;
 
-	m_copydata(m, 0, 1, &ver);
-	switch (ver >> 4) {
+	ip = mtod(m, const struct ip *);
+	switch (ip->ip_v) {
 #ifdef INET
 	case 4:
 		if (sc->gif_family != AF_INET)
@@ -475,7 +477,7 @@ gif_check_nesting(struct ifnet *ifp, struct mbuf *m)
 	mtag = NULL;
 	while ((mtag = m_tag_locate(m, MTAG_GIF, 0, mtag)) != NULL) {
 		if (*(struct ifnet **)(mtag + 1) == ifp) {
-			log(LOG_NOTICE, "%s: loop detected\n", ifp->if_xname);
+			log(LOG_NOTICE, "%s: loop detected\n", if_name(ifp));
 			return (EIO);
 		}
 		count++;
@@ -1021,7 +1023,7 @@ gif_set_tunnel(struct ifnet *ifp, struct sockaddr *src, struct sockaddr *dst)
 #endif
 	default:
 		return (EAFNOSUPPORT);
-	};
+	}
 
 	if (sc->gif_family != src->sa_family)
 		gif_detach(sc);

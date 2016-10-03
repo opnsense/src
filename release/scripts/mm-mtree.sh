@@ -5,7 +5,7 @@
 # This script is intended to be used as part of the release building
 # process to generate the /var/db/mergemaster.mtree file relevant to
 # the source tree used to create the release so that users can make
-# use of mergemaster's -U option to update their files after csup'ing
+# use of mergemaster's -U option to update their files after updating
 # to -stable.
 
 # Copyright 2009 Douglas Barton
@@ -30,7 +30,7 @@ display_usage () {
 
 # Set the default path for the temporary root environment
 #
-TEMPROOT='/var/tmp/temproot'
+TEMPROOT=`TMPDIR=/var/tmp mktemp -d -t temproot`
 
 # Assign the location of the mtree database
 #
@@ -147,7 +147,7 @@ find -d ${TEMPROOT} -type d -empty -delete 2>/dev/null
 
 # Build the mtree database in a temporary location.
 MTREENEW=`mktemp -t mergemaster.mtree`
-mtree -ci -p ${TEMPROOT} -k size,md5digest > ${MTREENEW} 2>/dev/null
+mtree -nci -p ${TEMPROOT} -k size,md5digest > ${MTREENEW} 2>/dev/null
 
 if [ -s "${MTREENEW}" ]; then
   echo "*** Saving mtree database for future upgrades"

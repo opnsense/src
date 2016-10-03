@@ -49,7 +49,6 @@ __FBSDID("$FreeBSD$");
 #include <dev/ofw/ofw_bus_subr.h>
 
 #include <machine/bus.h>
-#include <machine/fdt.h>
 #include <machine/cpu.h>
 #include <machine/intr.h>
 
@@ -79,7 +78,7 @@ __FBSDID("$FreeBSD$");
 #define	CCM_CPPDSR	0x88	/* PLL PFD Disable Status Register */
 #define	CCM_CCOWR	0x8C	/* CORE Wakeup Register */
 
-#define	PLL3_PFD4_EN	(1 << 31)
+#define	PLL3_PFD4_EN	(1U << 31)
 #define	PLL3_PFD3_EN	(1 << 30)
 #define	PLL3_PFD2_EN	(1 << 29)
 #define	PLL3_PFD1_EN	(1 << 28)
@@ -380,15 +379,15 @@ set_clock(struct ccm_softc *sc, char *name)
 				reg &= ~(clk->sel_mask << clk->sel_shift);
 				reg |= (clk->sel_val << clk->sel_shift);
 				WRITE4(sc, clk->sel_reg, reg);
-			};
+			}
 
 			reg = READ4(sc, clk->reg);
 			reg |= clk->enable_reg;
 			reg &= ~(clk->div_mask << clk->div_shift);
 			reg |= (clk->div_val << clk->div_shift);
 			WRITE4(sc, clk->reg, reg);
-		};
-	};
+		}
+	}
 
 	return (0);
 }
@@ -426,8 +425,8 @@ ccm_fdt_set(struct ccm_softc *sc)
 				fdt_config += strlen(name) + 1;
 				len -= strlen(name) + 1;
 				set_clock(sc, name);
-			};
-		};
+			}
+		}
 
 		if (OF_peer(child) == 0) {
 			/* No more siblings. */

@@ -5,29 +5,27 @@
 LIB=	lldbDataFormatters
 
 SRCDIR=	tools/lldb/source/DataFormatters
-SRCS=	CF.cpp \
-	Cocoa.cpp \
-	CXXFormatterFunctions.cpp \
+SRCS=	CXXFunctionPointer.cpp \
 	DataVisualization.cpp \
+	DumpValueObjectOptions.cpp \
 	FormatCache.cpp \
 	FormatClasses.cpp \
 	FormatManager.cpp \
-	LibCxx.cpp \
-	LibCxxList.cpp \
-	LibCxxMap.cpp \
-	LibCxxUnorderedMap.cpp \
-	LibStdcpp.cpp \
-	NSArray.cpp \
-	NSDictionary.cpp \
-	NSSet.cpp \
+	FormattersHelpers.cpp \
+	LanguageCategory.cpp \
+	StringPrinter.cpp \
 	TypeCategory.cpp \
 	TypeCategoryMap.cpp \
 	TypeFormat.cpp \
 	TypeSummary.cpp \
 	TypeSynthetic.cpp \
-	ValueObjectPrinter.cpp
+	TypeValidator.cpp \
+	ValueObjectPrinter.cpp \
+	VectorType.cpp
 
-TGHDRS=	DiagnosticCommonKinds \
+TGHDRS=	AttrList \
+	Attrs \
+	DiagnosticCommonKinds \
 	DeclNodes \
 	StmtNodes \
 	CommentCommandList

@@ -1,4 +1,4 @@
-//===-- AArch64Subtarget.cpp - AArch64 Subtarget Information --------------===//
+//===-- AArch64Subtarget.cpp - AArch64 Subtarget Information ----*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,55 +7,147 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file implements the AArch64 specific subclass of TargetSubtargetInfo.
+// This file implements the AArch64 specific subclass of TargetSubtarget.
 //
 //===----------------------------------------------------------------------===//
 
+#include "AArch64InstrInfo.h"
+#include "AArch64PBQPRegAlloc.h"
 #include "AArch64Subtarget.h"
-#include "AArch64RegisterInfo.h"
-#include "MCTargetDesc/AArch64MCTargetDesc.h"
-#include "llvm/IR/GlobalValue.h"
-#include "llvm/Target/TargetSubtargetInfo.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/ADT/SmallVector.h"
-
-#define GET_SUBTARGETINFO_TARGET_DESC
-#define GET_SUBTARGETINFO_CTOR
-#include "AArch64GenSubtargetInfo.inc"
+#include "llvm/CodeGen/MachineScheduler.h"
+#include "llvm/IR/GlobalValue.h"
+#include "llvm/Support/TargetRegistry.h"
 
 using namespace llvm;
 
-// Pin the vtable to this file.
-void AArch64Subtarget::anchor() {}
+#define DEBUG_TYPE "aarch64-subtarget"
 
-AArch64Subtarget::AArch64Subtarget(StringRef TT, StringRef CPU, StringRef FS)
-    : AArch64GenSubtargetInfo(TT, CPU, FS), HasFPARMv8(false), HasNEON(false),
-      HasCrypto(false), TargetTriple(TT), CPUString(CPU) {
+#define GET_SUBTARGETINFO_CTOR
+#define GET_SUBTARGETINFO_TARGET_DESC
+#include "AArch64GenSubtargetInfo.inc"
 
-  initializeSubtargetFeatures(CPU, FS);
-}
+static cl::opt<bool>
+EnableEarlyIfConvert("aarch64-early-ifcvt", cl::desc("Enable the early if "
+                     "converter pass"), cl::init(true), cl::Hidden);
 
-void AArch64Subtarget::initializeSubtargetFeatures(StringRef CPU,
-                                                   StringRef FS) {
-  if (CPU.empty())
+// If OS supports TBI, use this flag to enable it.
+static cl::opt<bool>
+UseAddressTopByteIgnored("aarch64-use-tbi", cl::desc("Assume that top byte of "
+                         "an address is ignored"), cl::init(false), cl::Hidden);
+
+AArch64Subtarget &
+AArch64Subtarget::initializeSubtargetDependencies(StringRef FS) {
+  // Determine default and user-specified characteristics
+
+  if (CPUString.empty())
     CPUString = "generic";
 
-  std::string FullFS = FS;
-  if (CPUString == "generic") {
-    // Enable FP by default.
-    if (FullFS.empty())
-      FullFS = "+fp-armv8";
-    else
-      FullFS = "+fp-armv8," + FullFS;
-  }
-
-  ParseSubtargetFeatures(CPU, FullFS);
+  ParseSubtargetFeatures(CPUString, FS);
+  return *this;
 }
 
-bool AArch64Subtarget::GVIsIndirectSymbol(const GlobalValue *GV,
-                                          Reloc::Model RelocM) const {
-  if (RelocM == Reloc::Static)
+AArch64Subtarget::AArch64Subtarget(const Triple &TT, const std::string &CPU,
+                                   const std::string &FS,
+                                   const TargetMachine &TM, bool LittleEndian)
+    : AArch64GenSubtargetInfo(TT, CPU, FS), ARMProcFamily(Others),
+      HasV8_1aOps(false), HasV8_2aOps(false), HasFPARMv8(false), HasNEON(false),
+      HasCrypto(false), HasCRC(false), HasPerfMon(false), HasFullFP16(false),
+      HasZeroCycleRegMove(false), HasZeroCycleZeroing(false),
+      StrictAlign(false), ReserveX18(TT.isOSDarwin()), IsLittle(LittleEndian),
+      CPUString(CPU), TargetTriple(TT), FrameLowering(),
+      InstrInfo(initializeSubtargetDependencies(FS)), TSInfo(),
+      TLInfo(TM, *this) {}
+
+/// ClassifyGlobalReference - Find the target operand flags that describe
+/// how a global value should be referenced for the current subtarget.
+unsigned char
+AArch64Subtarget::ClassifyGlobalReference(const GlobalValue *GV,
+                                        const TargetMachine &TM) const {
+  bool isDef = GV->isStrongDefinitionForLinker();
+
+  // MachO large model always goes via a GOT, simply to get a single 8-byte
+  // absolute relocation on all global addresses.
+  if (TM.getCodeModel() == CodeModel::Large && isTargetMachO())
+    return AArch64II::MO_GOT;
+
+  // The small code mode's direct accesses use ADRP, which cannot necessarily
+  // produce the value 0 (if the code is above 4GB).
+  if (TM.getCodeModel() == CodeModel::Small && GV->hasExternalWeakLinkage()) {
+    // In PIC mode use the GOT, but in absolute mode use a constant pool load.
+    if (TM.getRelocationModel() == Reloc::Static)
+        return AArch64II::MO_CONSTPOOL;
+    else
+        return AArch64II::MO_GOT;
+  }
+
+  // If symbol visibility is hidden, the extra load is not needed if
+  // the symbol is definitely defined in the current translation unit.
+
+  // The handling of non-hidden symbols in PIC mode is rather target-dependent:
+  //   + On MachO, if the symbol is defined in this module the GOT can be
+  //     skipped.
+  //   + On ELF, the R_AARCH64_COPY relocation means that even symbols actually
+  //     defined could end up in unexpected places. Use a GOT.
+  if (TM.getRelocationModel() != Reloc::Static && GV->hasDefaultVisibility()) {
+    if (isTargetMachO())
+      return isDef ? AArch64II::MO_NO_FLAG : AArch64II::MO_GOT;
+    else
+      // No need to go through the GOT for local symbols on ELF.
+      return GV->hasLocalLinkage() ? AArch64II::MO_NO_FLAG : AArch64II::MO_GOT;
+  }
+
+  return AArch64II::MO_NO_FLAG;
+}
+
+/// This function returns the name of a function which has an interface
+/// like the non-standard bzero function, if such a function exists on
+/// the current subtarget and it is considered prefereable over
+/// memset with zero passed as the second argument. Otherwise it
+/// returns null.
+const char *AArch64Subtarget::getBZeroEntry() const {
+  // Prefer bzero on Darwin only.
+  if(isTargetDarwin())
+    return "bzero";
+
+  return nullptr;
+}
+
+void AArch64Subtarget::overrideSchedPolicy(MachineSchedPolicy &Policy,
+                                         MachineInstr *begin, MachineInstr *end,
+                                         unsigned NumRegionInstrs) const {
+  // LNT run (at least on Cyclone) showed reasonably significant gains for
+  // bi-directional scheduling. 253.perlbmk.
+  Policy.OnlyTopDown = false;
+  Policy.OnlyBottomUp = false;
+  // Enabling or Disabling the latency heuristic is a close call: It seems to
+  // help nearly no benchmark on out-of-order architectures, on the other hand
+  // it regresses register pressure on a few benchmarking.
+  if (isCyclone())
+    Policy.DisableLatencyHeuristic = true;
+}
+
+bool AArch64Subtarget::enableEarlyIfConversion() const {
+  return EnableEarlyIfConvert;
+}
+
+bool AArch64Subtarget::supportsAddressTopByteIgnored() const {
+  if (!UseAddressTopByteIgnored)
     return false;
 
-  return !GV->hasLocalLinkage() && !GV->hasHiddenVisibility();
+  if (TargetTriple.isiOS()) {
+    unsigned Major, Minor, Micro;
+    TargetTriple.getiOSVersion(Major, Minor, Micro);
+    return Major >= 8;
+  }
+
+  return false;
+}
+
+std::unique_ptr<PBQPRAConstraint>
+AArch64Subtarget::getCustomPBQPConstraints() const {
+  if (!isCortexA57())
+    return nullptr;
+
+  return llvm::make_unique<A57ChainingConstraint>();
 }

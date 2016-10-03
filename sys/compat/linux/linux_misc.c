@@ -31,7 +31,6 @@
 __FBSDID("$FreeBSD$");
 
 #include "opt_compat.h"
-#include "opt_kdtrace.h"
 
 #include <sys/param.h>
 #include <sys/blist.h>
@@ -162,7 +161,7 @@ linux_sysinfo(struct thread *td, struct linux_sysinfo_args *args)
 		    LINUX_SYSINFO_LOADS_SCALE / averunnable.fscale;
 
 	sysinfo.totalram = physmem * PAGE_SIZE;
-	sysinfo.freeram = sysinfo.totalram - cnt.v_wire_count * PAGE_SIZE;
+	sysinfo.freeram = sysinfo.totalram - vm_cnt.v_wire_count * PAGE_SIZE;
 
 	sysinfo.sharedram = 0;
 	mtx_lock(&vm_object_list_mtx);
@@ -199,24 +198,27 @@ linux_alarm(struct thread *td, struct linux_alarm_args *args)
 	if (ldebug(alarm))
 		printf(ARGS(alarm, "%u"), args->secs);
 #endif
-	
 	secs = args->secs;
+	/*
+	 * Linux alarm() is always successful. Limit secs to INT32_MAX / 2
+	 * to match kern_setitimer()'s limit to avoid error from it.
+	 *
+	 * XXX. Linux limit secs to INT_MAX on 32 and does not limit on 64-bit
+	 * platforms.
+	 */
+	if (secs > INT32_MAX / 2)
+		secs = INT32_MAX / 2;
 
-	if (secs > INT_MAX)
-		secs = INT_MAX;
-
-	it.it_value.tv_sec = (long) secs;
+	it.it_value.tv_sec = secs;
 	it.it_value.tv_usec = 0;
-	it.it_interval.tv_sec = 0;
-	it.it_interval.tv_usec = 0;
+	timevalclear(&it.it_interval);
 	error = kern_setitimer(td, ITIMER_REAL, &it, &old_it);
-	if (error)
-		return (error);
-	if (timevalisset(&old_it.it_value)) {
-		if (old_it.it_value.tv_usec != 0)
-			old_it.it_value.tv_sec++;
-		td->td_retval[0] = old_it.it_value.tv_sec;
-	}
+	KASSERT(error == 0, ("kern_setitimer returns %d", error));
+
+	if ((old_it.it_value.tv_sec == 0 && old_it.it_value.tv_usec > 0) ||
+	    old_it.it_value.tv_usec >= 500000)
+		old_it.it_value.tv_sec++;
+	td->td_retval[0] = old_it.it_value.tv_sec;
 	return (0);
 }
 
@@ -385,7 +387,7 @@ linux_uselib(struct thread *td, struct linux_uselib_args *args)
 	 */
 	PROC_LOCK(td->td_proc);
 	if (a_out->a_text > maxtsiz ||
-	    a_out->a_data + bss_size > lim_cur(td->td_proc, RLIMIT_DATA) ||
+	    a_out->a_data + bss_size > lim_cur_proc(td->td_proc, RLIMIT_DATA) ||
 	    racct_set(td->td_proc, RACCT_DATA, a_out->a_data +
 	    bss_size) != 0) {
 		PROC_UNLOCK(td->td_proc);
@@ -790,7 +792,8 @@ linux_utime(struct thread *td, struct linux_utime_args *args)
 	} else
 		tvp = NULL;
 
-	error = kern_utimes(td, fname, UIO_SYSSPACE, tvp, UIO_SYSSPACE);
+	error = kern_utimesat(td, AT_FDCWD, fname, UIO_SYSSPACE, tvp,
+	    UIO_SYSSPACE);
 	LFREEPATH(fname);
 	return (error);
 }
@@ -822,7 +825,8 @@ linux_utimes(struct thread *td, struct linux_utimes_args *args)
 		tvp = tv;
 	}
 
-	error = kern_utimes(td, fname, UIO_SYSSPACE, tvp, UIO_SYSSPACE);
+	error = kern_utimesat(td, AT_FDCWD, fname, UIO_SYSSPACE,
+	    tvp, UIO_SYSSPACE);
 	LFREEPATH(fname);
 	return (error);
 }
@@ -892,13 +896,14 @@ linux_utimensat(struct thread *td, struct linux_utimensat_args *args)
 			break;
 		}
 		timesp = times;
-	}
 
-	if (times[0].tv_nsec == UTIME_OMIT && times[1].tv_nsec == UTIME_OMIT)
 		/* This breaks POSIX, but is what the Linux kernel does
 		 * _on purpose_ (documented in the man page for utimensat(2)),
 		 * so we must follow that behaviour. */
-		return (0);
+		if (times[0].tv_nsec == UTIME_OMIT &&
+		    times[1].tv_nsec == UTIME_OMIT)
+			return (0);
+	}
 
 	if (args->pathname != NULL)
 		LCONVPATHEXIST_AT(td, args->pathname, &path, dfd);
@@ -1109,13 +1114,14 @@ linux_mknod(struct thread *td, struct linux_mknod_args *args)
 	switch (args->mode & S_IFMT) {
 	case S_IFIFO:
 	case S_IFSOCK:
-		error = kern_mkfifo(td, path, UIO_SYSSPACE, args->mode);
+		error = kern_mkfifoat(td, AT_FDCWD, path, UIO_SYSSPACE,
+		    args->mode);
 		break;
 
 	case S_IFCHR:
 	case S_IFBLK:
-		error = kern_mknod(td, path, UIO_SYSSPACE, args->mode,
-		    args->dev);
+		error = kern_mknodat(td, AT_FDCWD, path, UIO_SYSSPACE,
+		    args->mode, args->dev);
 		break;
 
 	case S_IFDIR:
@@ -1126,7 +1132,7 @@ linux_mknod(struct thread *td, struct linux_mknod_args *args)
 		args->mode |= S_IFREG;
 		/* FALLTHROUGH */
 	case S_IFREG:
-		error = kern_open(td, path, UIO_SYSSPACE,
+		error = kern_openat(td, AT_FDCWD, path, UIO_SYSSPACE,
 		    O_WRONLY | O_CREAT | O_TRUNC, args->mode);
 		if (error == 0)
 			kern_close(td, td->td_retval[0]);
@@ -1194,15 +1200,23 @@ linux_mknodat(struct thread *td, struct linux_mknodat_args *args)
 int
 linux_personality(struct thread *td, struct linux_personality_args *args)
 {
+	struct linux_pemuldata *pem;
+	struct proc *p = td->td_proc;
+	uint32_t old;
+
 #ifdef DEBUG
 	if (ldebug(personality))
-		printf(ARGS(personality, "%lu"), (unsigned long)args->per);
+		printf(ARGS(personality, "%u"), args->per);
 #endif
-	if (args->per != 0)
-		return (EINVAL);
 
-	/* Yes Jim, it's still a Linux... */
-	td->td_retval[0] = 0;
+	PROC_LOCK(p);
+	pem = pem_find(p);
+	old = pem->persona;
+	if (args->per != 0xffffffff)
+		pem->persona = args->per;
+	PROC_UNLOCK(p);
+
+	td->td_retval[0] = old;
 	return (0);
 }
 
@@ -1334,7 +1348,7 @@ linux_setgroups(struct thread *td, struct linux_setgroups_args *args)
 		newcred->cr_ngroups = 1;
 
 	setsugid(p);
-	p->p_ucred = newcred;
+	proc_set_cred(p, newcred);
 	PROC_UNLOCK(p);
 	crfree(oldcred);
 	error = 0;
@@ -1421,7 +1435,6 @@ int
 linux_old_getrlimit(struct thread *td, struct linux_old_getrlimit_args *args)
 {
 	struct l_rlimit rlim;
-	struct proc *p = td->td_proc;
 	struct rlimit bsd_rlim;
 	u_int which;
 
@@ -1438,9 +1451,7 @@ linux_old_getrlimit(struct thread *td, struct linux_old_getrlimit_args *args)
 	if (which == -1)
 		return (EINVAL);
 
-	PROC_LOCK(p);
-	lim_rlimit(p, which, &bsd_rlim);
-	PROC_UNLOCK(p);
+	lim_rlimit(td, which, &bsd_rlim);
 
 #ifdef COMPAT_LINUX32
 	rlim.rlim_cur = (unsigned int)bsd_rlim.rlim_cur;
@@ -1465,7 +1476,6 @@ int
 linux_getrlimit(struct thread *td, struct linux_getrlimit_args *args)
 {
 	struct l_rlimit rlim;
-	struct proc *p = td->td_proc;
 	struct rlimit bsd_rlim;
 	u_int which;
 
@@ -1482,9 +1492,7 @@ linux_getrlimit(struct thread *td, struct linux_getrlimit_args *args)
 	if (which == -1)
 		return (EINVAL);
 
-	PROC_LOCK(p);
-	lim_rlimit(p, which, &bsd_rlim);
-	PROC_UNLOCK(p);
+	lim_rlimit(td, which, &bsd_rlim);
 
 	rlim.rlim_cur = (l_ulong)bsd_rlim.rlim_cur;
 	rlim.rlim_max = (l_ulong)bsd_rlim.rlim_max;
@@ -1846,7 +1854,7 @@ linux_exit_group(struct thread *td, struct linux_exit_group_args *args)
 	 * SIGNAL_EXIT_GROUP is set. We ignore that (temporarily?)
 	 * as it doesnt occur often.
 	 */
-	exit1(td, W_EXITCODE(args->error_code, 0));
+	exit1(td, args->error_code, 0);
 		/* NOTREACHED */
 }
 
@@ -2205,7 +2213,7 @@ linux_prlimit64(struct thread *td, struct linux_prlimit64_args *args)
 
 	if (args->old != NULL) {
 		PROC_LOCK(p);
-		lim_rlimit(p, which, &rlim);
+		lim_rlimit_proc(p, which, &rlim);
 		PROC_UNLOCK(p);
 		if (rlim.rlim_cur == RLIM_INFINITY)
 			lrlim.rlim_cur = LINUX_RLIM_INFINITY;

@@ -51,7 +51,6 @@
 
 #include <arpa/inet.h>
 
-#include <net/if_var.h>
 #include <netinet/in_var.h>
 #include <netinet6/nd6.h>
 
@@ -1224,7 +1223,7 @@ udiff(uint32_t u, uint32_t v)
 	return (u >= v ? u - v : v - u);
 }
 
-/* return a non-zero value if the received prefix is inconsitent with ours */
+/* return a non-zero value if the received prefix is inconsistent with ours */
 static int
 prefix_check(struct nd_opt_prefix_info *pinfo,
 	struct rainfo *rai, struct sockaddr_in6 *from)

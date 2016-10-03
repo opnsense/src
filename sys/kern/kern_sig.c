@@ -38,16 +38,16 @@
 __FBSDID("$FreeBSD$");
 
 #include "opt_compat.h"
-#include "opt_kdtrace.h"
+#include "opt_gzio.h"
 #include "opt_ktrace.h"
-#include "opt_core.h"
-#include "opt_procdesc.h"
 
 #include <sys/param.h>
+#include <sys/ctype.h>
 #include <sys/systm.h>
 #include <sys/signalvar.h>
 #include <sys/vnode.h>
 #include <sys/acct.h>
+#include <sys/bus.h>
 #include <sys/capsicum.h>
 #include <sys/condvar.h>
 #include <sys/event.h>
@@ -94,11 +94,11 @@ __FBSDID("$FreeBSD$");
 #define	ONSIG	32		/* NSIG for osig* syscalls.  XXX. */
 
 SDT_PROVIDER_DECLARE(proc);
-SDT_PROBE_DEFINE3(proc, kernel, , signal__send, "struct thread *",
-    "struct proc *", "int");
-SDT_PROBE_DEFINE2(proc, kernel, , signal__clear, "int",
-    "ksiginfo_t *");
-SDT_PROBE_DEFINE3(proc, kernel, , signal__discard,
+SDT_PROBE_DEFINE3(proc, , , signal__send,
+    "struct thread *", "struct proc *", "int");
+SDT_PROBE_DEFINE2(proc, , , signal__clear,
+    "int", "ksiginfo_t *");
+SDT_PROBE_DEFINE3(proc, , , signal__discard,
     "struct thread *", "struct proc *", "int");
 
 static int	coredump(struct thread *);
@@ -107,7 +107,7 @@ static int	killpg1(struct thread *td, int sig, int pgid, int all,
 static int	issignal(struct thread *td);
 static int	sigprop(int sig);
 static void	tdsigwakeup(struct thread *, int, sig_t, int);
-static void	sig_suspend_threads(struct thread *, struct proc *, int);
+static int	sig_suspend_threads(struct thread *, struct proc *, int);
 static int	filt_sigattach(struct knote *kn);
 static void	filt_sigdetach(struct knote *kn);
 static int	filt_signal(struct knote *kn, long hint);
@@ -139,8 +139,7 @@ SYSCTL_INT(_kern_sigqueue, OID_AUTO, max_pending_per_proc, CTLFLAG_RW,
     &max_pending_per_proc, 0, "Max pending signals per proc");
 
 static int	preallocate_siginfo = 1024;
-TUNABLE_INT("kern.sigqueue.preallocate", &preallocate_siginfo);
-SYSCTL_INT(_kern_sigqueue, OID_AUTO, preallocate, CTLFLAG_RD,
+SYSCTL_INT(_kern_sigqueue, OID_AUTO, preallocate, CTLFLAG_RDTUN,
     &preallocate_siginfo, 0, "Preallocated signal memory size");
 
 static int	signal_overflow = 0;
@@ -166,13 +165,11 @@ SYSINIT(signal, SI_SUB_P1003_1B, SI_ORDER_FIRST+3, sigqueue_start, NULL);
 	    (cr1)->cr_uid == (cr2)->cr_uid)
 
 static int	sugid_coredump;
-TUNABLE_INT("kern.sugid_coredump", &sugid_coredump);
-SYSCTL_INT(_kern, OID_AUTO, sugid_coredump, CTLFLAG_RW,
+SYSCTL_INT(_kern, OID_AUTO, sugid_coredump, CTLFLAG_RWTUN,
     &sugid_coredump, 0, "Allow setuid and setgid processes to dump core");
 
 static int	capmode_coredump;
-TUNABLE_INT("kern.capmode_coredump", &capmode_coredump);
-SYSCTL_INT(_kern, OID_AUTO, capmode_coredump, CTLFLAG_RW,
+SYSCTL_INT(_kern, OID_AUTO, capmode_coredump, CTLFLAG_RWTUN,
     &capmode_coredump, 0, "Allow processes in capability mode to dump core");
 
 static int	do_coredump = 1;
@@ -182,6 +179,10 @@ SYSCTL_INT(_kern, OID_AUTO, coredump, CTLFLAG_RW,
 static int	set_core_nodump_flag = 0;
 SYSCTL_INT(_kern, OID_AUTO, nodump_coredump, CTLFLAG_RW, &set_core_nodump_flag,
 	0, "Enable setting the NODUMP flag on coredump files");
+
+static int	coredump_devctl = 0;
+SYSCTL_INT(_kern, OID_AUTO, coredump_devctl, CTLFLAG_RW, &coredump_devctl,
+	0, "Generate a devctl notification when processes coredump");
 
 /*
  * Signal properties and actions.
@@ -627,7 +628,7 @@ sig_ffs(sigset_t *set)
 }
 
 static bool
-sigact_flag_test(struct sigaction *act, int flag)
+sigact_flag_test(const struct sigaction *act, int flag)
 {
 
 	/*
@@ -647,11 +648,8 @@ sigact_flag_test(struct sigaction *act, int flag)
  * osigaction
  */
 int
-kern_sigaction(td, sig, act, oact, flags)
-	struct thread *td;
-	register int sig;
-	struct sigaction *act, *oact;
-	int flags;
+kern_sigaction(struct thread *td, int sig, const struct sigaction *act,
+    struct sigaction *oact, int flags)
 {
 	struct sigacts *ps;
 	struct proc *p = td->td_proc;
@@ -954,6 +952,7 @@ sigdflt(struct sigacts *ps, int sig)
 void
 execsigs(struct proc *p)
 {
+	sigset_t osigignore;
 	struct sigacts *ps;
 	int sig;
 	struct thread *td;
@@ -973,6 +972,24 @@ execsigs(struct proc *p)
 		if ((sigprop(sig) & SA_IGNORE) != 0)
 			sigqueue_delete_proc(p, sig);
 	}
+
+	/*
+	 * As CloudABI processes cannot modify signal handlers, fully
+	 * reset all signals to their default behavior. Do ignore
+	 * SIGPIPE, as it would otherwise be impossible to recover from
+	 * writes to broken pipes and sockets.
+	 */
+	if (SV_PROC_ABI(p) == SV_ABI_CLOUDABI) {
+		osigignore = ps->ps_sigignore;
+		while (SIGNOTEMPTY(osigignore)) {
+			sig = sig_ffs(&osigignore);
+			SIGDELSET(osigignore, sig);
+			if (sig != SIGPIPE)
+				sigdflt(ps, sig);
+		}
+		SIGADDSET(ps->ps_sigignore, SIGPIPE);
+	}
+
 	/*
 	 * Reset stack state to the user stack.
 	 * Clear set of signals caught on the signal stack.
@@ -1234,6 +1251,7 @@ kern_sigtimedwait(struct thread *td, sigset_t waitset, ksiginfo_t *ksi,
 		mtx_lock(&ps->ps_mtx);
 		sig = cursig(td);
 		mtx_unlock(&ps->ps_mtx);
+		KASSERT(sig >= 0, ("sig %d", sig));
 		if (sig != 0 && SIGISMEMBER(waitset, sig)) {
 			if (sigqueue_get(&td->td_sigqueue, sig, ksi) != 0 ||
 			    sigqueue_get(&p->p_sigqueue, sig, ksi) != 0) {
@@ -1291,7 +1309,7 @@ kern_sigtimedwait(struct thread *td, sigset_t waitset, ksiginfo_t *ksi,
 		reschedule_signals(p, new_block, 0);
 
 	if (error == 0) {
-		SDT_PROBE2(proc, kernel, , signal__clear, sig, ksi);
+		SDT_PROBE2(proc, , , signal__clear, sig, ksi);
 
 		if (ksi->ksi_code == SI_TIMER)
 			itimer_accept(p, ksi->ksi_timerid, ksi);
@@ -1495,8 +1513,10 @@ kern_sigsuspend(struct thread *td, sigset_t mask)
 			/* void */;
 		thread_suspend_check(0);
 		mtx_lock(&p->p_sigacts->ps_mtx);
-		while ((sig = cursig(td)) != 0)
+		while ((sig = cursig(td)) != 0) {
+			KASSERT(sig >= 0, ("sig %d", sig));
 			has_sig += postsig(sig);
+		}
 		mtx_unlock(&p->p_sigacts->ps_mtx);
 	}
 	PROC_UNLOCK(p);
@@ -1761,7 +1781,6 @@ sys_pdkill(td, uap)
 	struct thread *td;
 	struct pdkill_args *uap;
 {
-#ifdef PROCDESC
 	struct proc *p;
 	cap_rights_t rights;
 	int error;
@@ -1781,9 +1800,6 @@ sys_pdkill(td, uap)
 		kern_psignal(p, uap->signum);
 	PROC_UNLOCK(p);
 	return (error);
-#else
-	return (ENOSYS);
-#endif
 }
 
 #if defined(COMPAT_43)
@@ -2099,7 +2115,7 @@ tdsendsignal(struct proc *p, struct thread *td, int sig, ksiginfo_t *ksi)
 	}
 
 	ps = p->p_sigacts;
-	KNOTE_LOCKED(&p->p_klist, NOTE_SIGNAL | sig);
+	KNOTE_LOCKED(p->p_klist, NOTE_SIGNAL | sig);
 	prop = sigprop(sig);
 
 	if (td == NULL) {
@@ -2108,7 +2124,7 @@ tdsendsignal(struct proc *p, struct thread *td, int sig, ksiginfo_t *ksi)
 	} else
 		sigqueue = &td->td_sigqueue;
 
-	SDT_PROBE3(proc, kernel, , signal__send, td, p, sig);
+	SDT_PROBE3(proc, , , signal__send, td, p, sig);
 
 	/*
 	 * If the signal is being ignored,
@@ -2119,7 +2135,7 @@ tdsendsignal(struct proc *p, struct thread *td, int sig, ksiginfo_t *ksi)
 	 */
 	mtx_lock(&ps->ps_mtx);
 	if (SIGISMEMBER(ps->ps_sigignore, sig)) {
-		SDT_PROBE3(proc, kernel, , signal__discard, td, p, sig);
+		SDT_PROBE3(proc, , , signal__discard, td, p, sig);
 
 		mtx_unlock(&ps->ps_mtx);
 		if (ksi && (ksi->ksi_flags & KSI_INS))
@@ -2233,7 +2249,7 @@ tdsendsignal(struct proc *p, struct thread *td, int sig, ksiginfo_t *ksi)
 			if (p->p_numthreads == p->p_suspcount) {
 				PROC_SUNLOCK(p);
 				p->p_flag |= P_CONTINUED;
-				p->p_xstat = SIGCONT;
+				p->p_xsig = SIGCONT;
 				PROC_LOCK(p->p_pptr);
 				childproc_continued(p);
 				PROC_UNLOCK(p->p_pptr);
@@ -2312,9 +2328,9 @@ tdsendsignal(struct proc *p, struct thread *td, int sig, ksiginfo_t *ksi)
 			if (p->p_flag & (P_PPWAIT|P_WEXIT))
 				goto out;
 			p->p_flag |= P_STOPPED_SIG;
-			p->p_xstat = sig;
+			p->p_xsig = sig;
 			PROC_SLOCK(p);
-			sig_suspend_threads(td, p, 1);
+			wakeup_swapper = sig_suspend_threads(td, p, 1);
 			if (p->p_numthreads == p->p_suspcount) {
 				/*
 				 * only thread sending signal to another
@@ -2325,9 +2341,11 @@ tdsendsignal(struct proc *p, struct thread *td, int sig, ksiginfo_t *ksi)
 				 */
 				thread_stopped(p);
 				PROC_SUNLOCK(p);
-				sigqueue_delete_proc(p, p->p_xstat);
+				sigqueue_delete_proc(p, p->p_xsig);
 			} else
 				PROC_SUNLOCK(p);
+			if (wakeup_swapper)
+				kick_proc0();
 			goto out;
 		}
 	} else {
@@ -2408,7 +2426,8 @@ tdsigwakeup(struct thread *td, int sig, sig_t action, int intrval)
 		 * Don't awaken a sleeping thread for SIGSTOP if the
 		 * STOP signal is deferred.
 		 */
-		if ((prop & SA_STOP) && (td->td_flags & TDF_SBDRY))
+		if ((prop & SA_STOP) != 0 && (td->td_flags & (TDF_SBDRY |
+		    TDF_SERESTART | TDF_SEINTR)) == TDF_SBDRY)
 			goto out;
 
 		/*
@@ -2436,14 +2455,16 @@ out:
 		kick_proc0();
 }
 
-static void
+static int
 sig_suspend_threads(struct thread *td, struct proc *p, int sending)
 {
 	struct thread *td2;
+	int wakeup_swapper;
 
 	PROC_LOCK_ASSERT(p, MA_OWNED);
 	PROC_SLOCK_ASSERT(p, MA_OWNED);
 
+	wakeup_swapper = 0;
 	FOREACH_THREAD_IN_PROC(p, td2) {
 		thread_lock(td2);
 		td2->td_flags |= TDF_ASTPENDING | TDF_NEEDSUSPCHK;
@@ -2452,11 +2473,16 @@ sig_suspend_threads(struct thread *td, struct proc *p, int sending)
 			if (td2->td_flags & TDF_SBDRY) {
 				/*
 				 * Once a thread is asleep with
-				 * TDF_SBDRY set, it should never
+				 * TDF_SBDRY and without TDF_SERESTART
+				 * or TDF_SEINTR set, it should never
 				 * become suspended due to this check.
 				 */
 				KASSERT(!TD_IS_SUSPENDED(td2),
 				    ("thread with deferred stops suspended"));
+				if (TD_SBDRY_INTR(td2) && sending) {
+					wakeup_swapper |= sleepq_abort(td2,
+					    TD_SBDRY_ERRNO(td2));
+				}
 			} else if (!TD_IS_SUSPENDED(td2)) {
 				thread_suspend_one(td2);
 			}
@@ -2470,6 +2496,7 @@ sig_suspend_threads(struct thread *td, struct proc *p, int sending)
 		}
 		thread_unlock(td2);
 	}
+	return (wakeup_swapper);
 }
 
 int
@@ -2488,7 +2515,12 @@ ptracestop(struct thread *td, int sig)
 	    td->td_tid, p->p_pid, td->td_dbgflags, sig);
 	PROC_SLOCK(p);
 	while ((p->p_flag & P_TRACED) && (td->td_dbgflags & TDB_XSIG)) {
-		if (p->p_flag & P_SINGLE_EXIT) {
+		if (p->p_flag & P_SINGLE_EXIT &&
+		    !(td->td_dbgflags & TDB_EXIT)) {
+			/*
+			 * Ignore ptrace stops except for thread exit
+			 * events when the process exits.
+			 */
 			td->td_dbgflags &= ~TDB_XSIG;
 			PROC_SUNLOCK(p);
 			return (sig);
@@ -2497,7 +2529,7 @@ ptracestop(struct thread *td, int sig)
 		 * Just make wait() to work, the last stopped thread
 		 * will win.
 		 */
-		p->p_xstat = sig;
+		p->p_xsig = sig;
 		p->p_xthread = td;
 		p->p_flag |= (P_STOPPED_SIG|P_STOPPED_TRACE);
 		sig_suspend_threads(td, p, 0);
@@ -2578,41 +2610,82 @@ tdsigcleanup(struct thread *td)
 
 }
 
-/*
- * Defer the delivery of SIGSTOP for the current thread.  Returns true
- * if stops were deferred and false if they were already deferred.
- */
-int
-sigdeferstop(void)
+static int
+sigdeferstop_curr_flags(int cflags)
 {
-	struct thread *td;
 
-	td = curthread;
-	if (td->td_flags & TDF_SBDRY)
-		return (0);
-	thread_lock(td);
-	td->td_flags |= TDF_SBDRY;
-	thread_unlock(td);
-	return (1);
+	MPASS((cflags & (TDF_SEINTR | TDF_SERESTART)) == 0 ||
+	    (cflags & TDF_SBDRY) != 0);
+	return (cflags & (TDF_SBDRY | TDF_SEINTR | TDF_SERESTART));
 }
 
 /*
- * Permit the delivery of SIGSTOP for the current thread.  This does
- * not immediately suspend if a stop was posted.  Instead, the thread
- * will suspend either via ast() or a subsequent interruptible sleep.
+ * Defer the delivery of SIGSTOP for the current thread, according to
+ * the requested mode.  Returns previous flags, which must be restored
+ * by sigallowstop().
+ *
+ * TDF_SBDRY, TDF_SEINTR, and TDF_SERESTART flags are only set and
+ * cleared by the current thread, which allow the lock-less read-only
+ * accesses below.
  */
 int
-sigallowstop(void)
+sigdeferstop_impl(int mode)
 {
 	struct thread *td;
-	int prev;
+	int cflags, nflags;
 
 	td = curthread;
+	cflags = sigdeferstop_curr_flags(td->td_flags);
+	switch (mode) {
+	case SIGDEFERSTOP_NOP:
+		nflags = cflags;
+		break;
+	case SIGDEFERSTOP_OFF:
+		nflags = 0;
+		break;
+	case SIGDEFERSTOP_SILENT:
+		nflags = (cflags | TDF_SBDRY) & ~(TDF_SEINTR | TDF_SERESTART);
+		break;
+	case SIGDEFERSTOP_EINTR:
+		nflags = (cflags | TDF_SBDRY | TDF_SEINTR) & ~TDF_SERESTART;
+		break;
+	case SIGDEFERSTOP_ERESTART:
+		nflags = (cflags | TDF_SBDRY | TDF_SERESTART) & ~TDF_SEINTR;
+		break;
+	default:
+		panic("sigdeferstop: invalid mode %x", mode);
+		break;
+	}
+	if (cflags == nflags)
+		return (SIGDEFERSTOP_VAL_NCHG);
 	thread_lock(td);
-	prev = (td->td_flags & TDF_SBDRY) != 0;
-	td->td_flags &= ~TDF_SBDRY;
+	td->td_flags = (td->td_flags & ~cflags) | nflags;
 	thread_unlock(td);
-	return (prev);
+	return (cflags);
+}
+
+/*
+ * Restores the STOP handling mode, typically permitting the delivery
+ * of SIGSTOP for the current thread.  This does not immediately
+ * suspend if a stop was posted.  Instead, the thread will suspend
+ * either via ast() or a subsequent interruptible sleep.
+ */
+void
+sigallowstop_impl(int prev)
+{
+	struct thread *td;
+	int cflags;
+
+	KASSERT(prev != SIGDEFERSTOP_VAL_NCHG, ("failed sigallowstop"));
+	KASSERT((prev & ~(TDF_SBDRY | TDF_SEINTR | TDF_SERESTART)) == 0,
+	    ("sigallowstop: incorrect previous mode %x", prev));
+	td = curthread;
+	cflags = sigdeferstop_curr_flags(td->td_flags);
+	if (cflags != prev) {
+		thread_lock(td);
+		td->td_flags = (td->td_flags & ~cflags) | prev;
+		thread_unlock(td);
+	}
 }
 
 /*
@@ -2647,7 +2720,8 @@ issignal(struct thread *td)
 		SIGSETOR(sigpending, p->p_sigqueue.sq_signals);
 		SIGSETNAND(sigpending, td->td_sigmask);
 
-		if (p->p_flag & P_PPWAIT || td->td_flags & TDF_SBDRY)
+		if ((p->p_flag & P_PPWAIT) != 0 || (td->td_flags &
+		    (TDF_SBDRY | TDF_SERESTART | TDF_SEINTR)) == TDF_SBDRY)
 			SIG_STOPSIGMASK(sigpending);
 		if (SIGISEMPTY(sigpending))	/* no signal to send */
 			return (0);
@@ -2690,7 +2764,7 @@ issignal(struct thread *td)
 
 				/*
 				 * If parent wants us to take the signal,
-				 * then it will leave it in p->p_xstat;
+				 * then it will leave it in p->p_xsig;
 				 * otherwise we just look for signals again.
 				*/
 				if (newsig == 0)
@@ -2763,11 +2837,16 @@ issignal(struct thread *td)
 				    (p->p_pgrp->pg_jobc == 0 &&
 				     prop & SA_TTYSTOP))
 					break;	/* == ignore */
+				if (TD_SBDRY_INTR(td)) {
+					KASSERT((td->td_flags & TDF_SBDRY) != 0,
+					    ("lost TDF_SBDRY"));
+					return (-1);
+				}
 				mtx_unlock(&ps->ps_mtx);
 				WITNESS_WARN(WARN_GIANTOK | WARN_SLEEPOK,
 				    &p->p_mtx.lock_object, "Catching SIGSTOP");
 				p->p_flag |= P_STOPPED_SIG;
-				p->p_xstat = sig;
+				p->p_xsig = sig;
 				PROC_SLOCK(p);
 				sig_suspend_threads(td, p, 0);
 				thread_suspend_switch(td, p);
@@ -2971,7 +3050,7 @@ sigexit(td, sig)
 			    sig & WCOREFLAG ? " (core dumped)" : "");
 	} else
 		PROC_UNLOCK(p);
-	exit1(td, W_EXITCODE(0, sig));
+	exit1(td, 0, sig);
 	/* NOTREACHED */
 }
 
@@ -3026,8 +3105,8 @@ childproc_jobstate(struct proc *p, int reason, int sig)
 void
 childproc_stopped(struct proc *p, int reason)
 {
-	/* p_xstat is a plain signal number, not a full wait() status here. */
-	childproc_jobstate(p, reason, p->p_xstat);
+
+	childproc_jobstate(p, reason, p->p_xsig);
 }
 
 void
@@ -3039,16 +3118,18 @@ childproc_continued(struct proc *p)
 void
 childproc_exited(struct proc *p)
 {
-	int reason;
-	int xstat = p->p_xstat; /* convert to int */
-	int status;
+	int reason, status;
 
-	if (WCOREDUMP(xstat))
-		reason = CLD_DUMPED, status = WTERMSIG(xstat);
-	else if (WIFSIGNALED(xstat))
-		reason = CLD_KILLED, status = WTERMSIG(xstat);
-	else
-		reason = CLD_EXITED, status = WEXITSTATUS(xstat);
+	if (WCOREDUMP(p->p_xsig)) {
+		reason = CLD_DUMPED;
+		status = WTERMSIG(p->p_xsig);
+	} else if (WIFSIGNALED(p->p_xsig)) {
+		reason = CLD_KILLED;
+		status = WTERMSIG(p->p_xsig);
+	} else {
+		reason = CLD_EXITED;
+		status = p->p_xexit;
+	}
 	/*
 	 * XXX avoid calling wakeup(p->p_pptr), the work is
 	 * done in exit1().
@@ -3083,23 +3164,43 @@ sysctl_debug_num_cores_check (SYSCTL_HANDLER_ARGS)
 SYSCTL_PROC(_debug, OID_AUTO, ncores, CTLTYPE_INT|CTLFLAG_RW,
 	    0, sizeof(int), sysctl_debug_num_cores_check, "I", "");
 
-#if defined(COMPRESS_USER_CORES)
-int compress_user_cores = 1;
-SYSCTL_INT(_kern, OID_AUTO, compress_user_cores, CTLFLAG_RW,
+#define	GZ_SUFFIX	".gz"
+
+#ifdef GZIO
+static int compress_user_cores = 1;
+SYSCTL_INT(_kern, OID_AUTO, compress_user_cores, CTLFLAG_RWTUN,
     &compress_user_cores, 0, "Compression of user corefiles");
 
-int compress_user_cores_gzlevel = -1; /* default level */
-SYSCTL_INT(_kern, OID_AUTO, compress_user_cores_gzlevel, CTLFLAG_RW,
-    &compress_user_cores_gzlevel, -1, "Corefile gzip compression level");
-
-#define GZ_SUFFIX	".gz"
-#define GZ_SUFFIX_LEN	3
+int compress_user_cores_gzlevel = 6;
+SYSCTL_INT(_kern, OID_AUTO, compress_user_cores_gzlevel, CTLFLAG_RWTUN,
+    &compress_user_cores_gzlevel, 0, "Corefile gzip compression level");
+#else
+static int compress_user_cores = 0;
 #endif
+
+/*
+ * Protect the access to corefilename[] by allproc_lock.
+ */
+#define	corefilename_lock	allproc_lock
 
 static char corefilename[MAXPATHLEN] = {"%N.core"};
 TUNABLE_STR("kern.corefile", corefilename, sizeof(corefilename));
-SYSCTL_STRING(_kern, OID_AUTO, corefile, CTLFLAG_RW, corefilename,
-    sizeof(corefilename), "Process corefile name format string");
+
+static int
+sysctl_kern_corefile(SYSCTL_HANDLER_ARGS)
+{
+	int error;
+
+	sx_xlock(&corefilename_lock);
+	error = sysctl_handle_string(oidp, corefilename, sizeof(corefilename),
+	    req);
+	sx_xunlock(&corefilename_lock);
+
+	return (error);
+}
+SYSCTL_PROC(_kern, OID_AUTO, corefile, CTLTYPE_STRING | CTLFLAG_RW |
+    CTLFLAG_MPSAFE, 0, 0, sysctl_kern_corefile, "A",
+    "Process corefile name format string");
 
 /*
  * corefile_open(comm, uid, pid, td, compress, vpp, namep)
@@ -3128,6 +3229,7 @@ corefile_open(const char *comm, uid_t uid, pid_t pid, struct thread *td,
 	name = malloc(MAXPATHLEN, M_TEMP, M_WAITOK | M_ZERO);
 	indexpos = -1;
 	(void)sbuf_new(&sb, name, MAXPATHLEN, SBUF_FIXEDLEN);
+	sx_slock(&corefilename_lock);
 	for (i = 0; format[i] != '\0'; i++) {
 		switch (format[i]) {
 		case '%':	/* Format character */
@@ -3170,11 +3272,10 @@ corefile_open(const char *comm, uid_t uid, pid_t pid, struct thread *td,
 			break;
 		}
 	}
+	sx_sunlock(&corefilename_lock);
 	free(hostname, M_TEMP);
-#ifdef COMPRESS_USER_CORES
 	if (compress)
 		sbuf_printf(&sb, GZ_SUFFIX);
-#endif
 	if (sbuf_error(&sb) != 0) {
 		log(LOG_ERR, "pid %ld (%s), uid (%lu): corename is too "
 		    "long\n", (long)pid, comm, (u_long)uid);
@@ -3231,6 +3332,24 @@ out:
 	return (0);
 }
 
+static int
+coredump_sanitise_path(const char *path)
+{
+	size_t i;
+
+	/*
+	 * Only send a subset of ASCII to devd(8) because it
+	 * might pass these strings to sh -c.
+	 */
+	for (i = 0; path[i]; i++)
+		if (!(isalpha(path[i]) || isdigit(path[i])) &&
+		    path[i] != '/' && path[i] != '.' &&
+		    path[i] != '-')
+			return (0);
+
+	return (1);
+}
+
 /*
  * Dump a process' core.  The main routine does some
  * policy checking, and creates the name of the coredump;
@@ -3248,16 +3367,15 @@ coredump(struct thread *td)
 	struct flock lf;
 	struct vattr vattr;
 	int error, error1, locked;
-	struct mount *mp;
 	char *name;			/* name of corefile */
+	void *rl_cookie;
 	off_t limit;
-	int compress;
+	char *data = NULL;
+	char *fullpath, *freepath = NULL;
+	size_t len;
+	static const char comm_name[] = "comm=";
+	static const char core_name[] = "core=";
 
-#ifdef COMPRESS_USER_CORES
-	compress = compress_user_cores;
-#else
-	compress = 0;
-#endif
 	PROC_LOCK_ASSERT(p, MA_OWNED);
 	MPASS((p->p_flag & P_HADTHREADS) == 0 || p->p_singlethread == td);
 	_STOPEVENT(p, S_CORE, 0);
@@ -3276,45 +3394,39 @@ coredump(struct thread *td)
 	 * a corefile is truncated instead of not being created,
 	 * if it is larger than the limit.
 	 */
-	limit = (off_t)lim_cur(p, RLIMIT_CORE);
+	limit = (off_t)lim_cur(td, RLIMIT_CORE);
 	if (limit == 0 || racct_get_available(p, RACCT_CORE) == 0) {
 		PROC_UNLOCK(p);
 		return (EFBIG);
 	}
 	PROC_UNLOCK(p);
 
-restart:
-	error = corefile_open(p->p_comm, cred->cr_uid, p->p_pid, td, compress,
-	    &vp, &name);
+	error = corefile_open(p->p_comm, cred->cr_uid, p->p_pid, td,
+	    compress_user_cores, &vp, &name);
 	if (error != 0)
 		return (error);
 
-	/* Don't dump to non-regular files or files with links. */
+	/*
+	 * Don't dump to non-regular files or files with links.
+	 * Do not dump into system files.
+	 */
 	if (vp->v_type != VREG || VOP_GETATTR(vp, &vattr, cred) != 0 ||
-	    vattr.va_nlink != 1) {
+	    vattr.va_nlink != 1 || (vp->v_vflag & VV_SYSTEM) != 0) {
 		VOP_UNLOCK(vp, 0);
 		error = EFAULT;
-		goto close;
+		goto out;
 	}
 
 	VOP_UNLOCK(vp, 0);
+
+	/* Postpone other writers, including core dumps of other processes. */
+	rl_cookie = vn_rangelock_wlock(vp, 0, OFF_MAX);
+
 	lf.l_whence = SEEK_SET;
 	lf.l_start = 0;
 	lf.l_len = 0;
 	lf.l_type = F_WRLCK;
 	locked = (VOP_ADVLOCK(vp, (caddr_t)p, F_SETLK, &lf, F_FLOCK) == 0);
-
-	if (vn_start_write(vp, &mp, V_NOWAIT) != 0) {
-		lf.l_type = F_UNLCK;
-		if (locked)
-			VOP_ADVLOCK(vp, (caddr_t)p, F_UNLCK, &lf, F_FLOCK);
-		if ((error = vn_close(vp, FWRITE, cred, td)) != 0)
-			goto out;
-		if ((error = vn_start_write(NULL, &mp, V_XSLEEP | PCATCH)) != 0)
-			goto out;
-		free(name, M_TEMP);
-		goto restart;
-	}
 
 	VATTR_NULL(&vattr);
 	vattr.va_size = 0;
@@ -3323,14 +3435,13 @@ restart:
 	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
 	VOP_SETATTR(vp, &vattr, cred);
 	VOP_UNLOCK(vp, 0);
-	vn_finished_write(mp);
 	PROC_LOCK(p);
 	p->p_acflag |= ACORE;
 	PROC_UNLOCK(p);
 
 	if (p->p_sysent->sv_coredump != NULL) {
 		error = p->p_sysent->sv_coredump(td, vp, limit,
-		    compress ? IMGACT_CORE_COMPRESS : 0);
+		    compress_user_cores ? IMGACT_CORE_COMPRESS : 0);
 	} else {
 		error = ENOSYS;
 	}
@@ -3339,14 +3450,40 @@ restart:
 		lf.l_type = F_UNLCK;
 		VOP_ADVLOCK(vp, (caddr_t)p, F_UNLCK, &lf, F_FLOCK);
 	}
-close:
+	vn_rangelock_unlock(vp, rl_cookie);
+
+	/*
+	 * Notify the userland helper that a process triggered a core dump.
+	 * This allows the helper to run an automated debugging session.
+	 */
+	if (error != 0 || coredump_devctl == 0)
+		goto out;
+	len = MAXPATHLEN * 2 + sizeof(comm_name) - 1 +
+	    sizeof(' ') + sizeof(core_name) - 1;
+	data = malloc(len, M_TEMP, M_WAITOK);
+	if (vn_fullpath_global(td, p->p_textvp, &fullpath, &freepath) != 0)
+		goto out;
+	if (!coredump_sanitise_path(fullpath))
+		goto out;
+	snprintf(data, len, "%s%s ", comm_name, fullpath);
+	free(freepath, M_TEMP);
+	freepath = NULL;
+	if (vn_fullpath_global(td, vp, &fullpath, &freepath) != 0)
+		goto out;
+	if (!coredump_sanitise_path(fullpath))
+		goto out;
+	strlcat(data, core_name, len);
+	strlcat(data, fullpath, len);
+	devctl_notify("kernel", "signal", "coredump", data);
+out:
 	error1 = vn_close(vp, FWRITE, cred, td);
 	if (error == 0)
 		error = error1;
-out:
 #ifdef AUDIT
 	audit_proc_coredump(td, name, error);
 #endif
+	free(freepath, M_TEMP);
+	free(data, M_TEMP);
 	free(name, M_TEMP);
 	return (error);
 }
@@ -3426,7 +3563,7 @@ filt_sigattach(struct knote *kn)
 	kn->kn_ptr.p_proc = p;
 	kn->kn_flags |= EV_CLEAR;		/* automatically set */
 
-	knlist_add(&p->p_klist, kn, 0);
+	knlist_add(p->p_klist, kn, 0);
 
 	return (0);
 }
@@ -3436,7 +3573,7 @@ filt_sigdetach(struct knote *kn)
 {
 	struct proc *p = kn->kn_ptr.p_proc;
 
-	knlist_remove(&p->p_klist, kn, 0);
+	knlist_remove(p->p_klist, kn, 0);
 }
 
 /*
@@ -3464,7 +3601,7 @@ sigacts_alloc(void)
 	struct sigacts *ps;
 
 	ps = malloc(sizeof(struct sigacts), M_SUBPROC, M_WAITOK | M_ZERO);
-	ps->ps_refcnt = 1;
+	refcount_init(&ps->ps_refcnt, 1);
 	mtx_init(&ps->ps_mtx, "sigacts", NULL, MTX_DEF);
 	return (ps);
 }

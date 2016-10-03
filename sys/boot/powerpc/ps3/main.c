@@ -145,7 +145,7 @@ main(void)
 	setenv("LINES", "24", 1);
 	setenv("hw.platform", "ps3", 1);
 
-	interact();			/* doesn't return */
+	interact(NULL);			/* doesn't return */
 
 	return (0);
 }
@@ -174,7 +174,7 @@ delay(int usecs)
 	uint64_t tb,ttb;
 	tb = mftb();
 
-	ttb = tb + (usecs * 1000 + ns_per_tick - 1) / ns_per_tick;
+	ttb = tb + howmany(usecs * 1000, ns_per_tick);
 	while (tb < ttb)
 		tb = mftb();
 }

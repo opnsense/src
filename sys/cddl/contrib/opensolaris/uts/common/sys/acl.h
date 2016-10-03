@@ -19,6 +19,8 @@
  * CDDL HEADER END
  */
 /*
+ * Copyright 2014 Garrett D'Amore <garrett@damore.org>
+ *
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
@@ -31,8 +33,8 @@
 
 #if defined(_KERNEL)
 /*
- * When compiling OpenSolaris kernel code, this file is getting
- * included instead of FreeBSD one.  Pull the original sys/acl.h as well.
+ * When compiling OpenSolaris kernel code, this file is included instead of the
+ * FreeBSD one.  Include the original sys/acl.h as well.
  */
 #undef _SYS_ACL_H
 #include_next <sys/acl.h>
@@ -300,13 +302,8 @@ extern int cmp2acls(void *, void *);
 
 #endif	/* !defined(_KERNEL) */
 
-#if defined(__STDC__)
 extern int acl(const char *path, int cmd, int cnt, void *buf);
 extern int facl(int fd, int cmd, int cnt, void *buf);
-#else	/* !__STDC__ */
-extern int acl();
-extern int facl();
-#endif	/* defined(__STDC__) */
 
 #ifdef	__cplusplus
 }

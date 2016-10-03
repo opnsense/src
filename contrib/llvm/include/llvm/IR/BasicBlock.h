@@ -23,36 +23,16 @@
 
 namespace llvm {
 
+class CallInst;
 class LandingPadInst;
 class TerminatorInst;
 class LLVMContext;
 class BlockAddress;
+class Function;
 
-template<> struct ilist_traits<Instruction>
-  : public SymbolTableListTraits<Instruction, BasicBlock> {
-
-  /// \brief Return a node that marks the end of a list.
-  ///
-  /// The sentinel is relative to this instance, so we use a non-static
-  /// method.
-  Instruction *createSentinel() const {
-    // Since i(p)lists always publicly derive from their corresponding traits,
-    // placing a data member in this class will augment the i(p)list.  But since
-    // the NodeTy is expected to be publicly derive from ilist_node<NodeTy>,
-    // there is a legal viable downcast from it to NodeTy. We use this trick to
-    // superimpose an i(p)list with a "ghostly" NodeTy, which becomes the
-    // sentinel. Dereferencing the sentinel is forbidden (save the
-    // ilist_node<NodeTy>), so no one will ever notice the superposition.
-    return static_cast<Instruction*>(&Sentinel);
-  }
-  static void destroySentinel(Instruction*) {}
-
-  Instruction *provideInitialHead() const { return createSentinel(); }
-  Instruction *ensureHead(Instruction*) const { return createSentinel(); }
-  static void noteHead(Instruction*, Instruction*) {}
-private:
-  mutable ilist_half_node<Instruction> Sentinel;
-};
+template <>
+struct SymbolTableListSentinelTraits<BasicBlock>
+    : public ilist_half_embedded_sentinel_traits<BasicBlock> {};
 
 /// \brief LLVM Basic Block Representation
 ///
@@ -70,19 +50,20 @@ private:
 /// modifying a program. However, the verifier will ensure that basic blocks
 /// are "well formed".
 class BasicBlock : public Value, // Basic blocks are data objects also
-                   public ilist_node<BasicBlock> {
+                   public ilist_node_with_parent<BasicBlock, Function> {
   friend class BlockAddress;
 public:
-  typedef iplist<Instruction> InstListType;
+  typedef SymbolTableList<Instruction> InstListType;
+
 private:
   InstListType InstList;
   Function *Parent;
 
   void setParent(Function *parent);
-  friend class SymbolTableListTraits<BasicBlock, Function>;
+  friend class SymbolTableListTraits<BasicBlock>;
 
-  BasicBlock(const BasicBlock &) LLVM_DELETED_FUNCTION;
-  void operator=(const BasicBlock &) LLVM_DELETED_FUNCTION;
+  BasicBlock(const BasicBlock &) = delete;
+  void operator=(const BasicBlock &) = delete;
 
   /// \brief Constructor.
   ///
@@ -90,7 +71,8 @@ private:
   /// inserted at either the end of the function (if InsertBefore is null), or
   /// before the specified basic block.
   explicit BasicBlock(LLVMContext &C, const Twine &Name = "",
-                      Function *Parent = 0, BasicBlock *InsertBefore = 0);
+                      Function *Parent = nullptr,
+                      BasicBlock *InsertBefore = nullptr);
 public:
   /// \brief Get the context in which this basic block lives.
   LLVMContext &getContext() const;
@@ -107,19 +89,35 @@ public:
   /// inserted at either the end of the function (if InsertBefore is 0), or
   /// before the specified basic block.
   static BasicBlock *Create(LLVMContext &Context, const Twine &Name = "",
-                            Function *Parent = 0,BasicBlock *InsertBefore = 0) {
+                            Function *Parent = nullptr,
+                            BasicBlock *InsertBefore = nullptr) {
     return new BasicBlock(Context, Name, Parent, InsertBefore);
   }
-  ~BasicBlock();
+  ~BasicBlock() override;
 
   /// \brief Return the enclosing method, or null if none.
   const Function *getParent() const { return Parent; }
         Function *getParent()       { return Parent; }
 
+  /// \brief Return the module owning the function this basic block belongs to,
+  /// or nullptr it the function does not have a module.
+  ///
+  /// Note: this is undefined behavior if the block does not have a parent.
+  const Module *getModule() const;
+  Module *getModule();
+
   /// \brief Returns the terminator instruction if the block is well formed or
   /// null if the block is not well formed.
   TerminatorInst *getTerminator();
   const TerminatorInst *getTerminator() const;
+
+  /// \brief Returns the call instruction marked 'musttail' prior to the
+  /// terminating return instruction of this basic block, if such a call is
+  /// present.  Otherwise, returns null.
+  CallInst *getTerminatingMustTailCall();
+  const CallInst *getTerminatingMustTailCall() const {
+    return const_cast<BasicBlock *>(this)->getTerminatingMustTailCall();
+  }
 
   /// \brief Returns a pointer to the first instruction in this block that is
   /// not a PHINode instruction.
@@ -159,7 +157,9 @@ public:
   void removeFromParent();
 
   /// \brief Unlink 'this' from the containing function and delete it.
-  void eraseFromParent();
+  ///
+  // \returns an iterator pointing to the element after the erased one.
+  SymbolTableList<BasicBlock>::iterator eraseFromParent();
 
   /// \brief Unlink this basic block from its current function and insert it
   /// into the function that \p MovePos lives in, right before \p MovePos.
@@ -169,15 +169,23 @@ public:
   /// right after \p MovePos in the function \p MovePos lives in.
   void moveAfter(BasicBlock *MovePos);
 
+  /// \brief Insert unlinked basic block into a function.
+  ///
+  /// Inserts an unlinked basic block into \c Parent.  If \c InsertBefore is
+  /// provided, inserts before that basic block, otherwise inserts at the end.
+  ///
+  /// \pre \a getParent() is \c nullptr.
+  void insertInto(Function *Parent, BasicBlock *InsertBefore = nullptr);
 
-  /// \brief Return this block if it has a single predecessor block. Otherwise
-  /// return a null pointer.
+  /// \brief Return the predecessor of this block if it has a single predecessor
+  /// block. Otherwise return a null pointer.
   BasicBlock *getSinglePredecessor();
   const BasicBlock *getSinglePredecessor() const {
     return const_cast<BasicBlock*>(this)->getSinglePredecessor();
   }
 
-  /// \brief Return this block if it has a unique predecessor block. Otherwise return a null pointer.
+  /// \brief Return the predecessor of this block if it has a unique predecessor
+  /// block. Otherwise return a null pointer.
   ///
   /// Note that unique predecessor doesn't mean single edge, there can be
   /// multiple edges from the unique predecessor to this block (for example a
@@ -185,6 +193,24 @@ public:
   BasicBlock *getUniquePredecessor();
   const BasicBlock *getUniquePredecessor() const {
     return const_cast<BasicBlock*>(this)->getUniquePredecessor();
+  }
+
+  /// \brief Return the successor of this block if it has a single successor.
+  /// Otherwise return a null pointer.
+  ///
+  /// This method is analogous to getSinglePredecessor above.
+  BasicBlock *getSingleSuccessor();
+  const BasicBlock *getSingleSuccessor() const {
+    return const_cast<BasicBlock*>(this)->getSingleSuccessor();
+  }
+
+  /// \brief Return the successor of this block if it has a unique successor.
+  /// Otherwise return a null pointer.
+  ///
+  /// This method is analogous to getUniquePredecessor above.
+  BasicBlock *getUniqueSuccessor();
+  const BasicBlock *getUniqueSuccessor() const {
+    return const_cast<BasicBlock*>(this)->getUniqueSuccessor();
   }
 
   //===--------------------------------------------------------------------===//
@@ -215,7 +241,7 @@ public:
         InstListType &getInstList()       { return InstList; }
 
   /// \brief Returns a pointer to a member of the instruction list.
-  static iplist<Instruction> BasicBlock::*getSublistAccess(Instruction*) {
+  static InstListType BasicBlock::*getSublistAccess(Instruction*) {
     return &BasicBlock::InstList;
   }
 
@@ -245,6 +271,8 @@ public:
   /// should be called while the predecessor still refers to this block.
   void removePredecessor(BasicBlock *Pred, bool DontDeleteUselessPHIs = false);
 
+  bool canSplitPredecessors() const;
+
   /// \brief Split the basic block into two basic blocks at the specified
   /// instruction.
   ///
@@ -262,6 +290,9 @@ public:
   /// Also note that this doesn't preserve any passes. To split blocks while
   /// keeping loop information consistent, use the SplitBlock utility function.
   BasicBlock *splitBasicBlock(iterator I, const Twine &BBName = "");
+  BasicBlock *splitBasicBlock(Instruction *I, const Twine &BBName = "") {
+    return splitBasicBlock(I->getIterator(), BBName);
+  }
 
   /// \brief Returns true if there are any uses of this basic block other than
   /// direct branches, switches, etc. to it.
@@ -270,6 +301,9 @@ public:
   /// \brief Update all phi nodes in this basic block's successors to refer to
   /// basic block \p New instead of to it.
   void replaceSuccessorsPhiUsesWith(BasicBlock *New);
+
+  /// \brief Return true if this basic block is an exception handling block.
+  bool isEHPad() const { return getFirstNonPHI()->isEHPad(); }
 
   /// \brief Return true if this basic block is a landing pad.
   ///

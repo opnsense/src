@@ -3,10 +3,15 @@
 
 .include <bsd.own.mk>
 
+PACKAGE=vi
 V=	${.CURDIR}/../../../contrib/nvi
 
+FILESGROUPS+=VICAT
 CAT=	dutch english french german polish ru_RU.KOI8-R spanish swedish \
 	uk_UA.KOI8-U zh_CN.GB2312
+VICAT=		${CAT}
+VICATDIR=	${FILESDIR}
+VICATPACKAGE=	${PACKAGE}
 
 SCAN=	${V}/cl/*.c ${V}/common/*.c ${V}/ex/*.c ${V}/vi/*.c
 
@@ -32,9 +37,9 @@ CAT+=	$c.UTF-8
 
 .for c in ${CAT}
 ${c}:	${c}.base 
-	@echo "... $c";							\
+	echo "... $c";							\
 	rm -f $c;							\
-	sort -u ${.ALLSRC} |						\
+	env LANG=C sort -u ${.ALLSRC} |					\
 	awk '{								\
 		if ($$1 == 1) {						\
 			print "\nMESSAGE NUMBER 1 IS NOT LEGAL";	\
@@ -44,7 +49,7 @@ ${c}:	${c}.base
 			print "DUPLICATE MESSAGE NUMBER " $$1;		\
 			exit 1;						\
 		}							\
-		print $0;						\
+		print $$0;						\
 	}' |								\
 	sed -e '1s/^/$$set 1~$$quote "~/; 1y/~/\n/' |			\
 	gencat $c /dev/stdin;						\
@@ -93,15 +98,15 @@ ${c}.check: ${c}.base
 .endfor
 
 english.base: dump ${SCAN} #Makefile
-	./dump ${SCAN} |\
+	${BTOOLSPATH:U.}/dump ${SCAN} |\
 	sed -e '/|/!d' \
 	    -e 's/|/ "/' \
 	    -e 's/^"//' |\
 	sort -nu > $@
 
 
-dump: dump.c
-	${CC} -o dump ${.ALLSRC}
+dump: dump.c ${BUILD_TOOLS_META}
+	${CC} -o ${.TARGET} ${.ALLSRC}
 
 CLEANFILES+= dump ${CAT} english.base *.check __ck1 __ck2
 

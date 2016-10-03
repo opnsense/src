@@ -34,7 +34,6 @@ public:
   static void *getTag() { static int Tag; return &Tag; }
 
   void checkPostStmt(const CallExpr *CE, CheckerContext &C) const;
-  void checkPostStmt(const DeclRefExpr *DRE, CheckerContext &C) const;
 
   void checkPreStmt(const CallExpr *CE, CheckerContext &C) const;
 
@@ -43,10 +42,10 @@ private:
   /// Denotes the return vale.
   static const unsigned ReturnValueIndex = UINT_MAX - 1;
 
-  mutable OwningPtr<BugType> BT;
+  mutable std::unique_ptr<BugType> BT;
   inline void initBugType() const {
     if (!BT)
-      BT.reset(new BugType("Use of Untrusted Data", "Untrusted Data"));
+      BT.reset(new BugType(this, "Use of Untrusted Data", "Untrusted Data"));
   }
 
   /// \brief Catch taint related bugs. Check if tainted data is passed to a
@@ -101,8 +100,8 @@ private:
   /// Generate a report if the expression is tainted or points to tainted data.
   bool generateReportIfTainted(const Expr *E, const char Msg[],
                                CheckerContext &C) const;
-                               
-  
+
+
   typedef SmallVector<unsigned, 2> ArgVector;
 
   /// \brief A struct used to specify taint propagation rules for a function.
@@ -200,7 +199,7 @@ GenericTaintChecker::TaintPropagationRule::getTaintPropagationRule(
                                                      const FunctionDecl *FDecl,
                                                      StringRef Name,
                                                      CheckerContext &C) {
-  // TODO: Currently, we might loose precision here: we always mark a return
+  // TODO: Currently, we might lose precision here: we always mark a return
   // value as tainted even if it's just a pointer, pointing to tainted data.
 
   // Check for exact name match for functions without builtin substitutes.
@@ -292,7 +291,7 @@ void GenericTaintChecker::checkPostStmt(const CallExpr *CE,
 
 void GenericTaintChecker::addSourcesPre(const CallExpr *CE,
                                         CheckerContext &C) const {
-  ProgramStateRef State = 0;
+  ProgramStateRef State = nullptr;
   const FunctionDecl *FDecl = C.getCalleeDecl(CE);
   if (!FDecl || FDecl->getKind() != Decl::Function)
     return;
@@ -315,7 +314,7 @@ void GenericTaintChecker::addSourcesPre(const CallExpr *CE,
   // Otherwise, check if we have custom pre-processing implemented.
   FnCheck evalFunction = llvm::StringSwitch<FnCheck>(Name)
     .Case("fscanf", &GenericTaintChecker::preFscanf)
-    .Default(0);
+    .Default(nullptr);
   // Check and evaluate the call.
   if (evalFunction)
     State = (this->*evalFunction)(CE, C);
@@ -389,11 +388,11 @@ void GenericTaintChecker::addSourcesPost(const CallExpr *CE,
     .Case("getch", &GenericTaintChecker::postRetTaint)
     .Case("wgetch", &GenericTaintChecker::postRetTaint)
     .Case("socket", &GenericTaintChecker::postSocket)
-    .Default(0);
+    .Default(nullptr);
 
   // If the callee isn't defined, it is not of security concern.
   // Check and evaluate the call.
-  ProgramStateRef State = 0;
+  ProgramStateRef State = nullptr;
   if (evalFunction)
     State = (this->*evalFunction)(CE, C);
   if (!State)
@@ -429,11 +428,11 @@ SymbolRef GenericTaintChecker::getPointedToSymbol(CheckerContext &C,
   ProgramStateRef State = C.getState();
   SVal AddrVal = State->getSVal(Arg->IgnoreParens(), C.getLocationContext());
   if (AddrVal.isUnknownOrUndef())
-    return 0;
+    return nullptr;
 
   Optional<Loc> AddrLoc = AddrVal.getAs<Loc>();
   if (!AddrLoc)
-    return 0;
+    return nullptr;
 
   const PointerType *ArgTy =
     dyn_cast<PointerType>(Arg->getType().getCanonicalType().getTypePtr());
@@ -442,7 +441,7 @@ SymbolRef GenericTaintChecker::getPointedToSymbol(CheckerContext &C,
   return Val.getAsSymbol();
 }
 
-ProgramStateRef 
+ProgramStateRef
 GenericTaintChecker::TaintPropagationRule::process(const CallExpr *CE,
                                                    CheckerContext &C) const {
   ProgramStateRef State = C.getState();
@@ -527,7 +526,7 @@ ProgramStateRef GenericTaintChecker::preFscanf(const CallExpr *CE,
     return State;
   }
 
-  return 0;
+  return nullptr;
 }
 
 
@@ -613,11 +612,7 @@ static bool getPrintfFormatArgumentNum(const CallExpr *CE,
   const FunctionDecl *FDecl = C.getCalleeDecl(CE);
   if (!FDecl)
     return false;
-  for (specific_attr_iterator<FormatAttr>
-         i = FDecl->specific_attr_begin<FormatAttr>(),
-         e = FDecl->specific_attr_end<FormatAttr>(); i != e ; ++i) {
-
-    const FormatAttr *Format = *i;
+  for (const auto *Format : FDecl->specific_attrs<FormatAttr>()) {
     ArgNum = Format->getFormatIdx() - 1;
     if ((Format->getType()->getName() == "printf") &&
          CE->getNumArgs() > ArgNum)
@@ -645,11 +640,11 @@ bool GenericTaintChecker::generateReportIfTainted(const Expr *E,
     return false;
 
   // Generate diagnostic.
-  if (ExplodedNode *N = C.addTransition()) {
+  if (ExplodedNode *N = C.generateNonFatalErrorNode()) {
     initBugType();
-    BugReport *report = new BugReport(*BT, Msg, N);
+    auto report = llvm::make_unique<BugReport>(*BT, Msg, N);
     report->addRange(E->getSourceRange());
-    C.emitReport(report);
+    C.emitReport(std::move(report));
     return true;
   }
   return false;
@@ -663,17 +658,15 @@ bool GenericTaintChecker::checkUncontrolledFormatString(const CallExpr *CE,
     return false;
 
   // If either the format string content or the pointer itself are tainted, warn.
-  if (generateReportIfTainted(CE->getArg(ArgNum),
-                              MsgUncontrolledFormatString, C))
-    return true;
-  return false;
+  return generateReportIfTainted(CE->getArg(ArgNum),
+                                 MsgUncontrolledFormatString, C);
 }
 
 bool GenericTaintChecker::checkSystemCall(const CallExpr *CE,
                                           StringRef Name,
                                           CheckerContext &C) const {
-  // TODO: It might make sense to run this check on demand. In some cases, 
-  // we should check if the environment has been cleansed here. We also might 
+  // TODO: It might make sense to run this check on demand. In some cases,
+  // we should check if the environment has been cleansed here. We also might
   // need to know if the user was reset before these calls(seteuid).
   unsigned ArgNum = llvm::StringSwitch<unsigned>(Name)
     .Case("system", 0)
@@ -691,11 +684,7 @@ bool GenericTaintChecker::checkSystemCall(const CallExpr *CE,
   if (ArgNum == UINT_MAX || CE->getNumArgs() < (ArgNum + 1))
     return false;
 
-  if (generateReportIfTainted(CE->getArg(ArgNum),
-                              MsgSanitizeSystemArgs, C))
-    return true;
-
-  return false;
+  return generateReportIfTainted(CE->getArg(ArgNum), MsgSanitizeSystemArgs, C);
 }
 
 // TODO: Should this check be a part of the CString checker?
@@ -733,11 +722,8 @@ bool GenericTaintChecker::checkTaintedBufferSize(const CallExpr *CE,
       ArgNum = 2;
   }
 
-  if (ArgNum != InvalidArgIndex && CE->getNumArgs() > ArgNum &&
-      generateReportIfTainted(CE->getArg(ArgNum), MsgTaintedBufferSize, C))
-    return true;
-
-  return false;
+  return ArgNum != InvalidArgIndex && CE->getNumArgs() > ArgNum &&
+         generateReportIfTainted(CE->getArg(ArgNum), MsgTaintedBufferSize, C);
 }
 
 void ento::registerGenericTaintChecker(CheckerManager &mgr) {

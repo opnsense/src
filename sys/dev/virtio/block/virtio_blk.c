@@ -41,6 +41,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/mutex.h>
 #include <sys/queue.h>
 
+#include <geom/geom.h>
 #include <geom/geom_disk.h>
 
 #include <machine/bus.h>
@@ -251,6 +252,8 @@ static driver_t vtblk_driver = {
 };
 static devclass_t vtblk_devclass;
 
+DRIVER_MODULE(virtio_blk, virtio_mmio, vtblk_driver, vtblk_devclass,
+    vtblk_modevent, 0);
 DRIVER_MODULE(virtio_blk, virtio_pci, vtblk_driver, vtblk_devclass,
     vtblk_modevent, 0);
 MODULE_VERSION(virtio_blk, 1);
@@ -1144,7 +1147,7 @@ vtblk_ident(struct vtblk_softc *sc)
 	req->vbr_hdr.sector = 0;
 
 	req->vbr_bp = &buf;
-	bzero(&buf, sizeof(struct bio));
+	g_reset_bio(&buf);
 
 	buf.bio_cmd = BIO_READ;
 	buf.bio_data = dp->d_ident;
@@ -1276,7 +1279,7 @@ vtblk_dump_write(struct vtblk_softc *sc, void *virtual, off_t offset,
 	req->vbr_hdr.sector = offset / 512;
 
 	req->vbr_bp = &buf;
-	bzero(&buf, sizeof(struct bio));
+	g_reset_bio(&buf);
 
 	buf.bio_cmd = BIO_WRITE;
 	buf.bio_data = virtual;
@@ -1298,7 +1301,7 @@ vtblk_dump_flush(struct vtblk_softc *sc)
 	req->vbr_hdr.sector = 0;
 
 	req->vbr_bp = &buf;
-	bzero(&buf, sizeof(struct bio));
+	g_reset_bio(&buf);
 
 	buf.bio_cmd = BIO_FLUSH;
 

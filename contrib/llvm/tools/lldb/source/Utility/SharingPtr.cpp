@@ -11,12 +11,14 @@
 
 #if defined (ENABLE_SP_LOGGING)
 
-// If ENABLE_SP_LOGGING is defined, then log all shared pointer assignements
+// If ENABLE_SP_LOGGING is defined, then log all shared pointer assignments
 // and allow them to be queried using a pointer by a call to:
 #include <execinfo.h>
 #include <map>
 #include <assert.h>
 #include "lldb/Host/Mutex.h"
+
+#include "llvm/ADT/STLExtras.h"
 
 #include <vector>
 
@@ -51,7 +53,7 @@ void
 Backtrace::GetFrames ()
 {
     void *frames[1024];
-    const int count = ::backtrace (frames, sizeof(frames)/sizeof(void*));
+    const int count = ::backtrace (frames, llvm::array_lengthof(frames));
     if (count > 2)
         m_frames.assign (frames + 2, frames + (count - 2));
 }

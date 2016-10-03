@@ -53,18 +53,13 @@
 #define	FIRST_MSI_INT	256
 #ifdef XENHVM
 #include <xen/xen-os.h>
+#include <xen/interface/event_channel.h>
 #define	NUM_EVTCHN_INTS	NR_EVENT_CHANNELS
 #define	FIRST_EVTCHN_INT \
     (FIRST_MSI_INT + NUM_MSI_INTS)
 #define	LAST_EVTCHN_INT \
     (FIRST_EVTCHN_INT + NUM_EVTCHN_INTS - 1)
-#elif defined(XEN)
-#include <xen/xen-os.h>
-#define	NUM_EVTCHN_INTS	NR_EVENT_CHANNELS
-#define	FIRST_EVTCHN_INT 0
-#define	LAST_EVTCHN_INT \
-    (FIRST_EVTCHN_INT + NUM_EVTCHN_INTS - 1)
-#else /* !XEN && !XENHVM */
+#else /* !XENHVM */
 #define	NUM_EVTCHN_INTS	0
 #endif
 #define	NUM_IO_INTS	(FIRST_MSI_INT + NUM_MSI_INTS + NUM_EVTCHN_INTS)
@@ -88,7 +83,7 @@
 
 #ifndef LOCORE
 
-typedef void inthand_t(u_int cs, u_int ef, u_int esp, u_int ss);
+typedef void inthand_t(void);
 
 #define	IDTVEC(name)	__CONCAT(X,name)
 
@@ -112,6 +107,7 @@ struct pic {
 	int (*pic_config_intr)(struct intsrc *, enum intr_trigger,
 	    enum intr_polarity);
 	int (*pic_assign_cpu)(struct intsrc *, u_int apic_id);
+	void (*pic_reprogram_pin)(struct intsrc *);
 	TAILQ_ENTRY(pic) pics;
 };
 
@@ -138,8 +134,13 @@ struct intsrc {
 
 struct trapframe;
 
+#ifdef SMP
+extern cpuset_t intr_cpus;
+#endif
 extern struct mtx icu_lock;
 extern int elcr_found;
+
+extern int msix_disable_migration;
 
 #ifndef DEV_ATPIC
 void	atpic_reset(void);
@@ -168,6 +169,7 @@ int	intr_register_source(struct intsrc *isrc);
 int	intr_remove_handler(void *cookie);
 void	intr_resume(bool suspend_cancelled);
 void	intr_suspend(void);
+void	intr_reprogram(void);
 void	intrcnt_add(const char *name, u_long **countp);
 void	nexus_add_irq(u_long irq);
 int	msi_alloc(device_t dev, int count, int maxcount, int *irqs);

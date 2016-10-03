@@ -36,6 +36,7 @@
 #include "llvm/ADT/GraphTraits.h"
 #include "llvm/ADT/PointerIntPair.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/iterator_range.h"
 #include <set>
 #include <vector>
 
@@ -57,7 +58,6 @@ public:
   SetType &Visited;
 };
 
-
 // Generic Depth First Iterator
 template<class GraphT,
 class SetType = llvm::SmallPtrSet<typename GraphTraits<GraphT>::NodeType*, 8>,
@@ -75,21 +75,22 @@ class df_iterator : public std::iterator<std::forward_iterator_tag,
   // VisitStack - Used to maintain the ordering.  Top = current block
   // First element is node pointer, second is the 'next child' to visit
   // if the int in PointerIntTy is 0, the 'next child' to visit is invalid
-  std::vector<std::pair<PointerIntTy, ChildItTy> > VisitStack;
+  std::vector<std::pair<PointerIntTy, ChildItTy>> VisitStack;
+
 private:
   inline df_iterator(NodeType *Node) {
     this->Visited.insert(Node);
-    VisitStack.push_back(std::make_pair(PointerIntTy(Node, 0), 
-                                        GT::child_begin(Node)));
+    VisitStack.push_back(
+        std::make_pair(PointerIntTy(Node, 0), GT::child_begin(Node)));
   }
-  inline df_iterator() { 
-    // End is when stack is empty 
+  inline df_iterator() {
+    // End is when stack is empty
   }
   inline df_iterator(NodeType *Node, SetType &S)
     : df_iterator_storage<SetType, ExtStorage>(S) {
     if (!S.count(Node)) {
-      VisitStack.push_back(std::make_pair(PointerIntTy(Node, 0), 
-                                          GT::child_begin(Node)));
+      VisitStack.push_back(
+          std::make_pair(PointerIntTy(Node, 0), GT::child_begin(Node)));
       this->Visited.insert(Node);
     }
   }
@@ -112,11 +113,10 @@ private:
       while (It != GT::child_end(Node)) {
         NodeType *Next = *It++;
         // Has our next sibling been visited?
-        if (Next && !this->Visited.count(Next)) {  
+        if (Next && this->Visited.insert(Next).second) {
           // No, do it now.
-          this->Visited.insert(Next);
-          VisitStack.push_back(std::make_pair(PointerIntTy(Next, 0), 
-                                              GT::child_begin(Next)));
+          VisitStack.push_back(
+              std::make_pair(PointerIntTy(Next, 0), GT::child_begin(Next)));
           return;
         }
       }
@@ -128,58 +128,59 @@ private:
 
 public:
   typedef typename super::pointer pointer;
-  typedef df_iterator<GraphT, SetType, ExtStorage, GT> _Self;
 
   // Provide static begin and end methods as our public "constructors"
-  static inline _Self begin(const GraphT& G) {
-    return _Self(GT::getEntryNode(G));
+  static df_iterator begin(const GraphT &G) {
+    return df_iterator(GT::getEntryNode(G));
   }
-  static inline _Self end(const GraphT& G) { return _Self(); }
+  static df_iterator end(const GraphT &G) { return df_iterator(); }
 
   // Static begin and end methods as our public ctors for external iterators
-  static inline _Self begin(const GraphT& G, SetType &S) {
-    return _Self(GT::getEntryNode(G), S);
+  static df_iterator begin(const GraphT &G, SetType &S) {
+    return df_iterator(GT::getEntryNode(G), S);
   }
-  static inline _Self end(const GraphT& G, SetType &S) { return _Self(S); }
+  static df_iterator end(const GraphT &G, SetType &S) { return df_iterator(S); }
 
-  inline bool operator==(const _Self& x) const {
+  bool operator==(const df_iterator &x) const {
     return VisitStack == x.VisitStack;
   }
-  inline bool operator!=(const _Self& x) const { return !operator==(x); }
+  bool operator!=(const df_iterator &x) const { return !(*this == x); }
 
-  inline pointer operator*() const {
-    return VisitStack.back().first.getPointer();
-  }
+  pointer operator*() const { return VisitStack.back().first.getPointer(); }
 
   // This is a nonstandard operator-> that dereferences the pointer an extra
   // time... so that you can actually call methods ON the Node, because
   // the contained type is a pointer.  This allows BBIt->getTerminator() f.e.
   //
-  inline NodeType *operator->() const { return operator*(); }
+  NodeType *operator->() const { return **this; }
 
-  inline _Self& operator++() {   // Preincrement
+  df_iterator &operator++() { // Preincrement
     toNext();
     return *this;
   }
 
-  // skips all children of the current node and traverses to next node
-  //
-  inline _Self& skipChildren() {  
+  /// \brief Skips all children of the current node and traverses to next node
+  ///
+  /// Note: This function takes care of incrementing the iterator. If you
+  /// always increment and call this function, you risk walking off the end.
+  df_iterator &skipChildren() {
     VisitStack.pop_back();
     if (!VisitStack.empty())
       toNext();
     return *this;
   }
 
-  inline _Self operator++(int) { // Postincrement
-    _Self tmp = *this; ++*this; return tmp;
+  df_iterator operator++(int) { // Postincrement
+    df_iterator tmp = *this;
+    ++*this;
+    return tmp;
   }
 
   // nodeVisited - return true if this iterator has already visited the
   // specified node.  This is public, and will probably be used to iterate over
   // nodes that a depth first iteration did not find: ie unreachable nodes.
   //
-  inline bool nodeVisited(NodeType *Node) const {
+  bool nodeVisited(NodeType *Node) const {
     return this->Visited.count(Node) != 0;
   }
 
@@ -194,7 +195,6 @@ public:
   }
 };
 
-
 // Provide global constructors that automatically figure out correct types...
 //
 template <class T>
@@ -205,6 +205,12 @@ df_iterator<T> df_begin(const T& G) {
 template <class T>
 df_iterator<T> df_end(const T& G) {
   return df_iterator<T>::end(G);
+}
+
+// Provide an accessor method to use them in range-based patterns.
+template <class T>
+iterator_range<df_iterator<T>> depth_first(const T& G) {
+  return make_range(df_begin(G), df_end(G));
 }
 
 // Provide global definitions of external depth first iterators...
@@ -224,6 +230,11 @@ df_ext_iterator<T, SetTy> df_ext_end(const T& G, SetTy &S) {
   return df_ext_iterator<T, SetTy>::end(G, S);
 }
 
+template <class T, class SetTy>
+iterator_range<df_ext_iterator<T, SetTy>> depth_first_ext(const T& G,
+                                                          SetTy &S) {
+  return make_range(df_ext_begin(G, S), df_ext_end(G, S));
+}
 
 // Provide global definitions of inverse depth first iterators...
 template <class T,
@@ -244,6 +255,12 @@ idf_iterator<T> idf_end(const T& G){
   return idf_iterator<T>::end(Inverse<T>(G));
 }
 
+// Provide an accessor method to use them in range-based patterns.
+template <class T>
+iterator_range<idf_iterator<T>> inverse_depth_first(const T& G) {
+  return make_range(idf_begin(G), idf_end(G));
+}
+
 // Provide global definitions of external inverse depth first iterators...
 template <class T, class SetTy = std::set<typename GraphTraits<T>::NodeType*> >
 struct idf_ext_iterator : public idf_iterator<T, SetTy, true> {
@@ -261,6 +278,12 @@ idf_ext_iterator<T, SetTy> idf_ext_begin(const T& G, SetTy &S) {
 template <class T, class SetTy>
 idf_ext_iterator<T, SetTy> idf_ext_end(const T& G, SetTy &S) {
   return idf_ext_iterator<T, SetTy>::end(Inverse<T>(G), S);
+}
+
+template <class T, class SetTy>
+iterator_range<idf_ext_iterator<T, SetTy>> inverse_depth_first_ext(const T& G,
+                                                                   SetTy &S) {
+  return make_range(idf_ext_begin(G, S), idf_ext_end(G, S));
 }
 
 } // End llvm namespace

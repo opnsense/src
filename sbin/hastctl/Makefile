@@ -1,7 +1,8 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
+PACKAGE=hast
 .PATH:	${.CURDIR}/../hastd
 
 PROG=	hastctl
@@ -32,11 +33,9 @@ CFLAGS+=-DINET6
 CFLAGS+=-DYY_NO_UNPUT
 CFLAGS+=-DYY_NO_INPUT
 
-DPADD=	${LIBUTIL}
-LDADD=	-lutil
+LIBADD=	util
 .if ${MK_OPENSSL} != "no"
-DPADD+=	${LIBCRYPTO}
-LDADD+=	-lcrypto
+LIBADD+=	crypto
 CFLAGS+=-DHAVE_CRYPTO
 .endif
 

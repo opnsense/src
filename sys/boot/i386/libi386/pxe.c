@@ -72,7 +72,7 @@ static void	bangpxe_call(int func);
 
 static int	pxe_init(void);
 static int	pxe_strategy(void *devdata, int flag, daddr_t dblk,
-			     size_t size, char *buf, size_t *rsize);
+			     size_t offset, size_t size, char *buf, size_t *rsize);
 static int	pxe_open(struct open_file *f, ...);
 static int	pxe_close(struct open_file *f);
 static void	pxe_print(int verbose);
@@ -247,7 +247,7 @@ pxe_init(void)
 
 
 static int
-pxe_strategy(void *devdata, int flag, daddr_t dblk, size_t size,
+pxe_strategy(void *devdata, int flag, daddr_t dblk, size_t offset, size_t size,
 		char *buf, size_t *rsize)
 {
 	return (EIO);
@@ -288,8 +288,10 @@ pxe_open(struct open_file *f, ...)
 		bootp(pxe_sock, BOOTP_PXE);
 		if (rootip.s_addr == 0)
 			rootip.s_addr = bootplayer.sip;
+#ifdef LOADER_NFS_SUPPORT
 		if (!rootpath[0])
 			strcpy(rootpath, PXENFSROOTPATH);
+#endif
 
 		for (i = 0; rootpath[i] != '\0' && i < FNAME_SIZE; i++)
 			if (rootpath[i] == ':')
@@ -301,10 +303,6 @@ pxe_open(struct open_file *f, ...)
 			bcopy(&rootpath[i], &temp[0], strlen(&rootpath[i])+1);
 			bcopy(&temp[0], &rootpath[0], strlen(&rootpath[i])+1);
 		}
-		printf("pxe_open: server addr: %s\n", inet_ntoa(rootip));
-		printf("pxe_open: server path: %s\n", rootpath);
-		printf("pxe_open: gateway ip:  %s\n", inet_ntoa(gateip));
-
 		setenv("boot.netif.ip", inet_ntoa(myip), 1);
 		setenv("boot.netif.netmask", intoa(netmask), 1);
 		setenv("boot.netif.gateway", inet_ntoa(gateip), 1);
@@ -312,9 +310,29 @@ pxe_open(struct open_file *f, ...)
 		    sprintf(temp, "%6D", bootplayer.CAddr, ":");
 		    setenv("boot.netif.hwaddr", temp, 1);
 		}
+		if (intf_mtu != 0) {
+			char mtu[16];
+			sprintf(mtu, "%u", intf_mtu);
+			setenv("boot.netif.mtu", mtu, 1);
+		}
+#ifdef LOADER_NFS_SUPPORT
+		printf("pxe_open: server addr: %s\n", inet_ntoa(rootip));
+		printf("pxe_open: server path: %s\n", rootpath);
+		printf("pxe_open: gateway ip:  %s\n", inet_ntoa(gateip));
+
 		setenv("boot.nfsroot.server", inet_ntoa(rootip), 1);
 		setenv("boot.nfsroot.path", rootpath, 1);
+#else
+		setenv("boot.netif.server", inet_ntoa(rootip), 1);
+		setenv("boot.tftproot.path", rootpath, 1);
+#endif
 		setenv("dhcp.host-name", hostname, 1);
+
+		setenv("pxeboot.ip", inet_ntoa(myip), 1);
+		if (bootplayer.Hardware == ETHER_TYPE) {
+		    sprintf(temp, "%6D", bootplayer.CAddr, ":");
+		    setenv("pxeboot.hwaddr", temp, 1);
+		}
 	}
     }
     pxe_opens++;

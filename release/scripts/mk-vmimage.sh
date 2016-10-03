@@ -1,6 +1,6 @@
 #!/bin/sh
 #-
-# Copyright (c) 2014 The FreeBSD Foundation
+# Copyright (c) 2014, 2015 The FreeBSD Foundation
 # All rights reserved.
 #
 # This software was developed by Glen Barber under sponsorship
@@ -92,6 +92,16 @@ main() {
 	if [ ! -z "${VMCONFIG}" ] && [ ! -c "${VMCONFIG}" ]; then
 		. "${VMCONFIG}"
 	fi
+
+	case ${TARGET}:${TARGET_ARCH} in
+		arm64:aarch64)
+			ROOTLABEL="ufs"
+			NOSWAP=1
+			;;
+		*)
+			ROOTLABEL="gpt"
+			;;
+	esac
 
 	vm_create_base
 	vm_install_base

@@ -60,7 +60,7 @@ done
 #
 # if the line has " U " it's a globally undefined symbol, put it into
 # the reference file.
-${NM} -go $* | sed "
+${NM} ${NMFLAGS} -go $* | sed "
 	/ [TDW] / {
 		s/:.* [TDW] / /
 		w $S
@@ -73,6 +73,7 @@ ${NM} -go $* | sed "
 	d
 "
 
+export LC_ALL=C
 # eliminate references that can be resolved by the same library.
 if [ $(expr "$*" : '.*\.a[[:>:]]') -ne 0 ]; then
 	sort -u -o $S $S

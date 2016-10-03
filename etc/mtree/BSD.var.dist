@@ -9,9 +9,9 @@
     ..
     at
 /set uname=daemon
-        jobs
+        jobs            tags=package=at
         ..
-        spool
+        spool           tags=package=at
         ..
 /set uname=root
     ..
@@ -54,6 +54,10 @@
         ..
         portsnap
         ..
+        zfsd
+            cases
+            ..
+        ..
     ..
     empty           mode=0555 flags=schg
     ..
@@ -78,6 +82,8 @@
     rwho            gname=daemon mode=0775
     ..
     spool
+        dma             uname=root gname=mail mode=0770
+        ..
         lock            uname=uucp gname=dialer mode=0775
         ..
 /set gname=daemon
@@ -97,8 +103,8 @@
         vi.recover      mode=01777
         ..
     ..
-    unbound         uname=unbound gname=unbound mode=0755
-        conf.d          uname=unbound gname=unbound mode=0755
+    unbound         uname=unbound gname=unbound mode=0755 tags=package=unbound
+        conf.d          uname=unbound gname=unbound mode=0755 tags=package=unbound
         ..
     ..
     yp

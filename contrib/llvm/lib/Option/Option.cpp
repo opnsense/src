@@ -11,6 +11,7 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/Option/Arg.h"
 #include "llvm/Option/ArgList.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
@@ -35,13 +36,10 @@ Option::Option(const OptTable::Info *info, const OptTable *owner)
   }
 }
 
-Option::~Option() {
-}
-
-void Option::dump() const {
-  llvm::errs() << "<";
+void Option::print(raw_ostream &O) const {
+  O << "<";
   switch (getKind()) {
-#define P(N) case N: llvm::errs() << #N; break
+#define P(N) case N: O << #N; break
     P(GroupClass);
     P(InputClass);
     P(UnknownClass);
@@ -57,32 +55,34 @@ void Option::dump() const {
   }
 
   if (Info->Prefixes) {
-    llvm::errs() << " Prefixes:[";
-    for (const char * const *Pre = Info->Prefixes; *Pre != 0; ++Pre) {
-      llvm::errs() << '"' << *Pre << (*(Pre + 1) == 0 ? "\"" : "\", ");
+    O << " Prefixes:[";
+    for (const char *const *Pre = Info->Prefixes; *Pre != nullptr; ++Pre) {
+      O << '"' << *Pre << (*(Pre + 1) == nullptr ? "\"" : "\", ");
     }
-    llvm::errs() << ']';
+    O << ']';
   }
 
-  llvm::errs() << " Name:\"" << getName() << '"';
+  O << " Name:\"" << getName() << '"';
 
   const Option Group = getGroup();
   if (Group.isValid()) {
-    llvm::errs() << " Group:";
-    Group.dump();
+    O << " Group:";
+    Group.print(O);
   }
 
   const Option Alias = getAlias();
   if (Alias.isValid()) {
-    llvm::errs() << " Alias:";
-    Alias.dump();
+    O << " Alias:";
+    Alias.print(O);
   }
 
   if (getKind() == MultiArgClass)
-    llvm::errs() << " NumArgs:" << getNumArgs();
+    O << " NumArgs:" << getNumArgs();
 
-  llvm::errs() << ">\n";
+  O << ">\n";
 }
+
+void Option::dump() const { print(dbgs()); }
 
 bool Option::matches(OptSpecifier Opt) const {
   // Aliases are never considered in matching, look through them.
@@ -116,7 +116,7 @@ Arg *Option::accept(const ArgList &Args,
   switch (getKind()) {
   case FlagClass: {
     if (ArgSize != strlen(Args.getArgString(Index)))
-      return 0;
+      return nullptr;
 
     Arg *A = new Arg(UnaliasedOption, Spelling, Index++);
     if (getAliasArgs()) {
@@ -128,6 +128,11 @@ Arg *Option::accept(const ArgList &Args,
         Val += strlen(Val) + 1;
       }
     }
+
+    if (UnaliasedOption.getKind() == JoinedClass && !getAliasArgs())
+      // A Flag alias for a Joined option must provide an argument.
+      A->getValues().push_back("");
+
     return A;
   }
   case JoinedClass: {
@@ -166,11 +171,12 @@ Arg *Option::accept(const ArgList &Args,
     // Matches iff this is an exact match.
     // FIXME: Avoid strlen.
     if (ArgSize != strlen(Args.getArgString(Index)))
-      return 0;
+      return nullptr;
 
     Index += 2;
-    if (Index > Args.getNumInputArgStrings())
-      return 0;
+    if (Index > Args.getNumInputArgStrings() ||
+        Args.getArgString(Index - 1) == nullptr)
+      return nullptr;
 
     return new Arg(UnaliasedOption, Spelling,
                    Index - 2, Args.getArgString(Index - 1));
@@ -178,11 +184,11 @@ Arg *Option::accept(const ArgList &Args,
     // Matches iff this is an exact match.
     // FIXME: Avoid strlen.
     if (ArgSize != strlen(Args.getArgString(Index)))
-      return 0;
+      return nullptr;
 
     Index += 1 + getNumArgs();
     if (Index > Args.getNumInputArgStrings())
-      return 0;
+      return nullptr;
 
     Arg *A = new Arg(UnaliasedOption, Spelling, Index - 1 - getNumArgs(),
                       Args.getArgString(Index - getNumArgs()));
@@ -200,8 +206,9 @@ Arg *Option::accept(const ArgList &Args,
 
     // Otherwise it must be separate.
     Index += 2;
-    if (Index > Args.getNumInputArgStrings())
-      return 0;
+    if (Index > Args.getNumInputArgStrings() ||
+        Args.getArgString(Index - 1) == nullptr)
+      return nullptr;
 
     return new Arg(UnaliasedOption, Spelling,
                    Index - 2, Args.getArgString(Index - 1));
@@ -209,8 +216,9 @@ Arg *Option::accept(const ArgList &Args,
   case JoinedAndSeparateClass:
     // Always matches.
     Index += 2;
-    if (Index > Args.getNumInputArgStrings())
-      return 0;
+    if (Index > Args.getNumInputArgStrings() ||
+        Args.getArgString(Index - 1) == nullptr)
+      return nullptr;
 
     return new Arg(UnaliasedOption, Spelling, Index - 2,
                    Args.getArgString(Index - 2) + ArgSize,
@@ -219,9 +227,10 @@ Arg *Option::accept(const ArgList &Args,
     // Matches iff this is an exact match.
     // FIXME: Avoid strlen.
     if (ArgSize != strlen(Args.getArgString(Index)))
-      return 0;
+      return nullptr;
     Arg *A = new Arg(UnaliasedOption, Spelling, Index++);
-    while (Index < Args.getNumInputArgStrings())
+    while (Index < Args.getNumInputArgStrings() &&
+           Args.getArgString(Index) != nullptr)
       A->getValues().push_back(Args.getArgString(Index++));
     return A;
   }

@@ -316,7 +316,7 @@ advasync(void *callback_arg, u_int32_t code, struct cam_path *path, void *arg)
 
 		target_mask = ADV_TID_TO_TARGET_MASK(cgd->ccb_h.target_id);
 
-		num_entries = sizeof(adv_quirk_table)/sizeof(*adv_quirk_table);
+		num_entries = nitems(adv_quirk_table);
 		match = cam_quirkmatch((caddr_t)&cgd->inq_data,
 				       (caddr_t)adv_quirk_table,
 				       num_entries, sizeof(*adv_quirk_table),
@@ -1051,12 +1051,10 @@ adv_isr_chip_halted(struct adv_softc *adv)
 		q_cntl &= ~QC_MSG_OUT;
 		adv_write_lram_8(adv, halt_q_addr + ADV_SCSIQ_B_CNTL, q_cntl);
 	} else if (int_halt_code == ADV_HALT_SS_QUEUE_FULL) {
-		u_int8_t scsi_status;
 		union ccb *ccb;
 		u_int32_t cinfo_index;
 		
-		scsi_status = adv_read_lram_8(adv, halt_q_addr
-					      + ADV_SCSIQ_SCSI_STATUS);
+		adv_read_lram_8(adv, halt_q_addr + ADV_SCSIQ_SCSI_STATUS);
 		cinfo_index =
 		    adv_read_lram_32(adv, halt_q_addr + ADV_SCSIQ_D_CINFO_IDX);
 		ccb = adv->ccb_infos[cinfo_index].ccb;
@@ -1714,13 +1712,9 @@ adv_send_scsi_queue(struct adv_softc *adv, struct adv_scsi_q *scsiq,
 {
 	u_int8_t	free_q_head;
 	u_int8_t	next_qp;
-	u_int8_t	tid_no;
-	u_int8_t	target_ix;
 	int		retval;
 
 	retval = 1;
-	target_ix = scsiq->q2.target_ix;
-	tid_no = ADV_TIX_TO_TID(target_ix);
 	free_q_head = adv_read_lram_16(adv, ADVV_FREE_Q_HEAD_W) & 0xFF;
 	if ((next_qp = adv_alloc_free_queues(adv, free_q_head, n_q_required))
 	    != ADV_QLINK_END) {
@@ -2066,7 +2060,7 @@ adv_reset_bus(struct adv_softc *adv, int initiate_bus_reset)
 				 /*offset*/0, ADV_TRANS_CUR);
 	ADV_OUTW(adv, ADV_REG_PROG_COUNTER, ADV_MCODE_START_ADDR);
 
-	/* Tell the XPT layer that a bus reset occured */
+	/* Tell the XPT layer that a bus reset occurred */
 	if (adv->path != NULL)
 		xpt_async(AC_BUS_RESET, adv->path, NULL);
 

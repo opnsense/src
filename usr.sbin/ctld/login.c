@@ -126,15 +126,16 @@ login_receive(struct connection *conn, bool initial)
 		log_errx(1, "received Login PDU with unsupported "
 		    "Version-min 0x%x", bhslr->bhslr_version_min);
 	}
-	if (ISCSI_SNLT(ntohl(bhslr->bhslr_cmdsn), conn->conn_cmdsn)) {
-		login_send_error(request, 0x02, 0x05);
+	if (initial == false &&
+	    ISCSI_SNLT(ntohl(bhslr->bhslr_cmdsn), conn->conn_cmdsn)) {
+		login_send_error(request, 0x02, 0x00);
 		log_errx(1, "received Login PDU with decreasing CmdSN: "
 		    "was %u, is %u", conn->conn_cmdsn,
 		    ntohl(bhslr->bhslr_cmdsn));
 	}
 	if (initial == false &&
 	    ntohl(bhslr->bhslr_expstatsn) != conn->conn_statsn) {
-		login_send_error(request, 0x02, 0x05);
+		login_send_error(request, 0x02, 0x00);
 		log_errx(1, "received Login PDU with wrong ExpStatSN: "
 		    "is %u, should be %u", ntohl(bhslr->bhslr_expstatsn),
 		    conn->conn_statsn);
@@ -449,7 +450,8 @@ static void
 login_negotiate_key(struct pdu *request, const char *name,
     const char *value, bool skipped_security, struct keys *response_keys)
 {
-	int which, tmp;
+	int which;
+	size_t tmp;
 	struct connection *conn;
 
 	conn = request->pdu_connection;
@@ -548,13 +550,13 @@ login_negotiate_key(struct pdu *request, const char *name,
 			log_errx(1, "received invalid "
 			    "MaxRecvDataSegmentLength");
 		}
-		if (tmp > MAX_DATA_SEGMENT_LENGTH) {
+		if (tmp > conn->conn_data_segment_limit) {
 			log_debugx("capping MaxRecvDataSegmentLength "
-			    "from %d to %d", tmp, MAX_DATA_SEGMENT_LENGTH);
-			tmp = MAX_DATA_SEGMENT_LENGTH;
+			    "from %zd to %zd", tmp, conn->conn_data_segment_limit);
+			tmp = conn->conn_data_segment_limit;
 		}
 		conn->conn_max_data_segment_length = tmp;
-		keys_add_int(response_keys, name, MAX_DATA_SEGMENT_LENGTH);
+		keys_add_int(response_keys, name, conn->conn_data_segment_limit);
 	} else if (strcmp(name, "MaxBurstLength") == 0) {
 		tmp = strtoul(value, NULL, 10);
 		if (tmp <= 0) {
@@ -562,28 +564,24 @@ login_negotiate_key(struct pdu *request, const char *name,
 			log_errx(1, "received invalid MaxBurstLength");
 		}
 		if (tmp > MAX_BURST_LENGTH) {
-			log_debugx("capping MaxBurstLength from %d to %d",
+			log_debugx("capping MaxBurstLength from %zd to %d",
 			    tmp, MAX_BURST_LENGTH);
 			tmp = MAX_BURST_LENGTH;
 		}
 		conn->conn_max_burst_length = tmp;
-		keys_add(response_keys, name, value);
+		keys_add_int(response_keys, name, tmp);
 	} else if (strcmp(name, "FirstBurstLength") == 0) {
 		tmp = strtoul(value, NULL, 10);
 		if (tmp <= 0) {
 			login_send_error(request, 0x02, 0x00);
-			log_errx(1, "received invalid "
-			    "FirstBurstLength");
+			log_errx(1, "received invalid FirstBurstLength");
 		}
-		if (tmp > MAX_DATA_SEGMENT_LENGTH) {
-			log_debugx("capping FirstBurstLength from %d to %d",
-			    tmp, MAX_DATA_SEGMENT_LENGTH);
-			tmp = MAX_DATA_SEGMENT_LENGTH;
+		if (tmp > FIRST_BURST_LENGTH) {
+			log_debugx("capping FirstBurstLength from %zd to %d",
+			    tmp, FIRST_BURST_LENGTH);
+			tmp = FIRST_BURST_LENGTH;
 		}
-		/*
-		 * We don't pass the value to the kernel; it only enforces
-		 * hardcoded limit anyway.
-		 */
+		conn->conn_first_burst_length = tmp;
 		keys_add_int(response_keys, name, tmp);
 	} else if (strcmp(name, "DefaultTime2Wait") == 0) {
 		keys_add(response_keys, name, value);
@@ -681,6 +679,18 @@ login_negotiate(struct connection *conn, struct pdu *request)
 	int i;
 	bool redirected, skipped_security;
 
+	if (conn->conn_session_type == CONN_SESSION_TYPE_NORMAL) {
+		/*
+		 * Query the kernel for MaxDataSegmentLength it can handle.
+		 * In case of offload, it depends on hardware capabilities.
+		 */
+		assert(conn->conn_target != NULL);
+		kernel_limits(conn->conn_portal->p_portal_group->pg_offload,
+		    &conn->conn_data_segment_limit);
+	} else {
+		conn->conn_data_segment_limit = MAX_DATA_SEGMENT_LENGTH;
+	}
+
 	if (request == NULL) {
 		log_debugx("beginning operational parameter negotiation; "
 		    "waiting for Login PDU");
@@ -753,10 +763,10 @@ login_wait_transition(struct connection *conn)
 		login_send_error(request, 0x02, 0x00);
 		log_errx(1, "got no \"T\" flag after answering AuthMethod");
 	}
-	pdu_delete(request);
 
 	log_debugx("got state transition request");
 	response = login_new_response(request);
+	pdu_delete(request);
 	login_set_nsg(response, BHSLR_STAGE_OPERATIONAL_NEGOTIATION);
 	pdu_send(response);
 	pdu_delete(response);

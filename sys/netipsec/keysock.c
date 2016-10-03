@@ -52,8 +52,8 @@
 #include <sys/systm.h>
 
 #include <net/if.h>
-#include <net/raw_cb.h>
 #include <net/vnet.h>
+#include <net/raw_cb.h>
 
 #include <netinet/in.h>
 
@@ -87,12 +87,12 @@ VNET_PCPUSTAT_SYSUNINIT(pfkeystat);
  * key_output()
  */
 int
-key_output(struct mbuf *m, struct socket *so)
+key_output(struct mbuf *m, struct socket *so, ...)
 {
 	struct sadb_msg *msg;
 	int len, error = 0;
 
-	if (m == 0)
+	if (m == NULL)
 		panic("%s: NULL pointer was passed.\n", __func__);
 
 	PFKEYSTAT_INC(out_total);
@@ -106,7 +106,7 @@ key_output(struct mbuf *m, struct socket *so)
 	}
 
 	if (m->m_len < sizeof(struct sadb_msg)) {
-		if ((m = m_pullup(m, sizeof(struct sadb_msg))) == 0) {
+		if ((m = m_pullup(m, sizeof(struct sadb_msg))) == NULL) {
 			PFKEYSTAT_INC(out_nomem);
 			error = ENOBUFS;
 			goto end;
@@ -178,7 +178,7 @@ key_sendup(struct socket *so, struct sadb_msg *msg, u_int len, int target)
 	int tlen;
 
 	/* sanity check */
-	if (so == 0 || msg == 0)
+	if (so == NULL || msg == NULL)
 		panic("%s: NULL pointer was passed.\n", __func__);
 
 	KEYDEBUG(KEYDEBUG_KEY_DUMP,
@@ -221,8 +221,7 @@ key_sendup(struct socket *so, struct sadb_msg *msg, u_int len, int target)
 			n->m_len = MLEN;
 		}
 		if (tlen >= MCLBYTES) {	/*XXX better threshold? */
-			MCLGET(n, M_NOWAIT);
-			if ((n->m_flags & M_EXT) == 0) {
+			if (!(MCLGET(n, M_NOWAIT))) {
 				m_free(n);
 				m_freem(m);
 				PFKEYSTAT_INC(in_nomem);
@@ -389,7 +388,7 @@ key_attach(struct socket *so, int proto, struct thread *td)
 
 	/* XXX */
 	kp = malloc(sizeof *kp, M_PCB, M_WAITOK | M_ZERO); 
-	if (kp == 0)
+	if (kp == NULL)
 		return ENOBUFS;
 
 	so->so_pcb = (caddr_t)kp;
@@ -565,7 +564,7 @@ struct domain keydomain = {
 	.dom_destroy =		key_destroy,
 #endif
 	.dom_protosw =		keysw,
-	.dom_protoswNPROTOSW =	&keysw[sizeof(keysw)/sizeof(keysw[0])]
+	.dom_protoswNPROTOSW =	&keysw[nitems(keysw)]
 };
 
 VNET_DOMAIN_SET(key);

@@ -8,16 +8,20 @@
 //===----------------------------------------------------------------------===//
 
 #include "__config"
+
 #include "ios"
-#include "streambuf"
-#include "istream"
-#include "string"
+
+#include <stdlib.h>
+
 #include "__locale"
 #include "algorithm"
+#include "include/config_elast.h"
+#include "istream"
+#include "limits"
 #include "memory"
 #include "new"
-#include "limits"
-#include <stdlib.h>
+#include "streambuf"
+#include "string"
 
 _LIBCPP_BEGIN_NAMESPACE_STD
 
@@ -148,7 +152,7 @@ ios_base::getloc() const
 }
 
 // xalloc
-#if __has_feature(cxx_atomic) && !defined(_LIBCPP_HAS_NO_THREADS)
+#if defined(_LIBCPP_HAS_C_ATOMIC_IMP) && !defined(_LIBCPP_HAS_NO_THREADS)
 atomic<int> ios_base::__xindex_ = ATOMIC_VAR_INIT(0);
 #else
 int ios_base::__xindex_ = 0;

@@ -13,15 +13,14 @@
 //===----------------------------------------------------------------------===//
 
 #include "BugDriver.h"
-#include "llvm/Analysis/Verifier.h"
-#include "llvm/Assembly/Writer.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/Pass.h"
-#include "llvm/PassManager.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/FileUtilities.h"
@@ -34,6 +33,8 @@
 #include "llvm/Transforms/Utils/CodeExtractor.h"
 #include <set>
 using namespace llvm;
+
+#define DEBUG_TYPE "bugpoint"
 
 namespace llvm {
   bool DisableSimplifyCFG = false;
@@ -50,7 +51,7 @@ namespace {
 
   Function* globalInitUsesExternalBA(GlobalVariable* GV) {
     if (!GV->hasInitializer())
-      return 0;
+      return nullptr;
 
     Constant *I = GV->getInitializer();
 
@@ -77,19 +78,15 @@ namespace {
           Todo.push_back(C);
       }
     }
-    return 0;
+    return nullptr;
   }
 }  // end anonymous namespace
 
-/// deleteInstructionFromProgram - This method clones the current Program and
-/// deletes the specified instruction from the cloned module.  It then runs a
-/// series of cleanup passes (ADCE and SimplifyCFG) to eliminate any code which
-/// depends on the value.  The modified module is then returned.
-///
-Module *BugDriver::deleteInstructionFromProgram(const Instruction *I,
-                                                unsigned Simplification) {
+std::unique_ptr<Module>
+BugDriver::deleteInstructionFromProgram(const Instruction *I,
+                                        unsigned Simplification) {
   // FIXME, use vmap?
-  Module *Clone = CloneModule(Program);
+  Module *Clone = CloneModule(Program).release();
 
   const BasicBlock *PBB = I->getParent();
   const Function *PF = PBB->getParent();
@@ -103,7 +100,7 @@ Module *BugDriver::deleteInstructionFromProgram(const Instruction *I,
 
   BasicBlock::iterator RI = RBI->begin(); // Get iterator to corresponding inst
   std::advance(RI, std::distance(PBB->begin(), BasicBlock::const_iterator(I)));
-  Instruction *TheInst = RI;              // Got the corresponding instruction!
+  Instruction *TheInst = &*RI; // Got the corresponding instruction!
 
   // If this instruction produces a value, replace any users with null values
   if (!TheInst->getType()->isVoidTy())
@@ -122,7 +119,7 @@ Module *BugDriver::deleteInstructionFromProgram(const Instruction *I,
     Passes.push_back("simplifycfg");      // Delete dead control flow
 
   Passes.push_back("verify");
-  Module *New = runPassesOn(Clone, Passes);
+  std::unique_ptr<Module> New = runPassesOn(Clone, Passes);
   delete Clone;
   if (!New) {
     errs() << "Instruction removal failed.  Sorry. :(  Please report a bug!\n";
@@ -131,11 +128,8 @@ Module *BugDriver::deleteInstructionFromProgram(const Instruction *I,
   return New;
 }
 
-/// performFinalCleanups - This method clones the current Program and performs
-/// a series of cleanups intended to get rid of extra cruft on the module
-/// before handing it to the user.
-///
-Module *BugDriver::performFinalCleanups(Module *M, bool MayModifySemantics) {
+std::unique_ptr<Module>
+BugDriver::performFinalCleanups(Module *M, bool MayModifySemantics) {
   // Make all functions external, so GlobalDCE doesn't delete them...
   for (Module::iterator I = M->begin(), E = M->end(); I != E; ++I)
     I->setLinkage(GlobalValue::ExternalLinkage);
@@ -148,29 +142,25 @@ Module *BugDriver::performFinalCleanups(Module *M, bool MayModifySemantics) {
   else
     CleanupPasses.push_back("deadargelim");
 
-  Module *New = runPassesOn(M, CleanupPasses);
-  if (New == 0) {
+  std::unique_ptr<Module> New = runPassesOn(M, CleanupPasses);
+  if (!New) {
     errs() << "Final cleanups failed.  Sorry. :(  Please report a bug!\n";
-    return M;
+    return nullptr;
   }
   delete M;
   return New;
 }
 
-
-/// ExtractLoop - Given a module, extract up to one loop from it into a new
-/// function.  This returns null if there are no extractable loops in the
-/// program or if the loop extractor crashes.
-Module *BugDriver::ExtractLoop(Module *M) {
+std::unique_ptr<Module> BugDriver::extractLoop(Module *M) {
   std::vector<std::string> LoopExtractPasses;
   LoopExtractPasses.push_back("loop-extract-single");
 
-  Module *NewM = runPassesOn(M, LoopExtractPasses);
-  if (NewM == 0) {
+  std::unique_ptr<Module> NewM = runPassesOn(M, LoopExtractPasses);
+  if (!NewM) {
     outs() << "*** Loop extraction failed: ";
     EmitProgressBitcode(M, "loopextraction", true);
     outs() << "*** Sorry. :(  Please report a bug!\n";
-    return 0;
+    return nullptr;
   }
 
   // Check to see if we created any new functions.  If not, no loops were
@@ -178,8 +168,7 @@ Module *BugDriver::ExtractLoop(Module *M) {
   // to avoid taking forever.
   static unsigned NumExtracted = 32;
   if (M->size() == NewM->size() || --NumExtracted == 0) {
-    delete NewM;
-    return 0;
+    return nullptr;
   } else {
     assert(M->size() < NewM->size() && "Loop extract removed functions?");
     Module::iterator MI = NewM->begin();
@@ -190,11 +179,43 @@ Module *BugDriver::ExtractLoop(Module *M) {
   return NewM;
 }
 
+static void eliminateAliases(GlobalValue *GV) {
+  // First, check whether a GlobalAlias references this definition.
+  // GlobalAlias MAY NOT reference declarations.
+  for (;;) {
+    // 1. Find aliases
+    SmallVector<GlobalAlias*,1> aliases;
+    Module *M = GV->getParent();
+    for (Module::alias_iterator I=M->alias_begin(), E=M->alias_end(); I!=E; ++I)
+      if (I->getAliasee()->stripPointerCasts() == GV)
+        aliases.push_back(&*I);
+    if (aliases.empty())
+      break;
+    // 2. Resolve aliases
+    for (unsigned i=0, e=aliases.size(); i<e; ++i) {
+      aliases[i]->replaceAllUsesWith(aliases[i]->getAliasee());
+      aliases[i]->eraseFromParent();
+    }
+    // 3. Repeat until no more aliases found; there might
+    // be an alias to an alias...
+  }
+}
+
+//
+// DeleteGlobalInitializer - "Remove" the global variable by deleting its initializer,
+// making it external.
+//
+void llvm::DeleteGlobalInitializer(GlobalVariable *GV) {
+  eliminateAliases(GV);
+  GV->setInitializer(nullptr);
+}
 
 // DeleteFunctionBody - "Remove" the function by deleting all of its basic
 // blocks, making it external.
 //
 void llvm::DeleteFunctionBody(Function *F) {
+  eliminateAliases(F);
+
   // delete the body of the function...
   F->deleteBody();
   assert(F->isDeclaration() && "This didn't make the function external!");
@@ -206,9 +227,9 @@ static Constant *GetTorInit(std::vector<std::pair<Function*, int> > &TorList) {
   assert(!TorList.empty() && "Don't create empty tor list!");
   std::vector<Constant*> ArrayElts;
   Type *Int32Ty = Type::getInt32Ty(TorList[0].first->getContext());
-  
+
   StructType *STy =
-    StructType::get(Int32Ty, TorList[0].first->getType(), NULL);
+      StructType::get(Int32Ty, TorList[0].first->getType(), nullptr);
   for (unsigned i = 0, e = TorList.size(); i != e; ++i) {
     Constant *Elts[] = {
       ConstantInt::get(Int32Ty, TorList[i].second),
@@ -282,13 +303,8 @@ static void SplitStaticCtorDtor(const char *GlobalName, Module *M1, Module *M2,
   }
 }
 
-
-/// SplitFunctionsOutOfModule - Given a module and a list of functions in the
-/// module, split the functions OUT of the specified module, and place them in
-/// the new module.
-Module *
-llvm::SplitFunctionsOutOfModule(Module *M,
-                                const std::vector<Function*> &F,
+std::unique_ptr<Module>
+llvm::SplitFunctionsOutOfModule(Module *M, const std::vector<Function *> &F,
                                 ValueToValueMapTy &VMap) {
   // Make sure functions & globals are all external so that linkage
   // between the two modules will work.
@@ -302,14 +318,14 @@ llvm::SplitFunctionsOutOfModule(Module *M,
   }
 
   ValueToValueMapTy NewVMap;
-  Module *New = CloneModule(M, NewVMap);
+  std::unique_ptr<Module> New = CloneModule(M, NewVMap);
 
   // Remove the Test functions from the Safe module
   std::set<Function *> TestFunctions;
   for (unsigned i = 0, e = F.size(); i != e; ++i) {
     Function *TNOF = cast<Function>(VMap[F[i]]);
     DEBUG(errs() << "Removing function ");
-    DEBUG(WriteAsOperand(errs(), TNOF, false));
+    DEBUG(TNOF->printAsOperand(errs(), false));
     DEBUG(errs() << "\n");
     TestFunctions.insert(cast<Function>(NewVMap[TNOF]));
     DeleteFunctionBody(TNOF);       // Function is now external in this module!
@@ -317,37 +333,35 @@ llvm::SplitFunctionsOutOfModule(Module *M,
 
   
   // Remove the Safe functions from the Test module
-  for (Module::iterator I = New->begin(), E = New->end(); I != E; ++I)
-    if (!TestFunctions.count(I))
-      DeleteFunctionBody(I);
-  
+  for (Function &I : *New)
+    if (!TestFunctions.count(&I))
+      DeleteFunctionBody(&I);
 
   // Try to split the global initializers evenly
-  for (Module::global_iterator I = M->global_begin(), E = M->global_end();
-       I != E; ++I) {
-    GlobalVariable *GV = cast<GlobalVariable>(NewVMap[I]);
-    if (Function *TestFn = globalInitUsesExternalBA(I)) {
+  for (GlobalVariable &I : M->globals()) {
+    GlobalVariable *GV = cast<GlobalVariable>(NewVMap[&I]);
+    if (Function *TestFn = globalInitUsesExternalBA(&I)) {
       if (Function *SafeFn = globalInitUsesExternalBA(GV)) {
         errs() << "*** Error: when reducing functions, encountered "
                   "the global '";
-        WriteAsOperand(errs(), GV, false);
+        GV->printAsOperand(errs(), false);
         errs() << "' with an initializer that references blockaddresses "
                   "from safe function '" << SafeFn->getName()
                << "' and from test function '" << TestFn->getName() << "'.\n";
         exit(1);
       }
-      I->setInitializer(0);  // Delete the initializer to make it external
+      DeleteGlobalInitializer(&I); // Delete the initializer to make it external
     } else {
       // If we keep it in the safe module, then delete it in the test module
-      GV->setInitializer(0);
+      DeleteGlobalInitializer(GV);
     }
   }
 
   // Make sure that there is a global ctor/dtor array in both halves of the
   // module if they both have static ctor/dtor functions.
-  SplitStaticCtorDtor("llvm.global_ctors", M, New, NewVMap);
-  SplitStaticCtorDtor("llvm.global_dtors", M, New, NewVMap);
-  
+  SplitStaticCtorDtor("llvm.global_ctors", M, New.get(), NewVMap);
+  SplitStaticCtorDtor("llvm.global_dtors", M, New.get(), NewVMap);
+
   return New;
 }
 
@@ -355,23 +369,18 @@ llvm::SplitFunctionsOutOfModule(Module *M,
 // Basic Block Extraction Code
 //===----------------------------------------------------------------------===//
 
-/// ExtractMappedBlocksFromModule - Extract all but the specified basic blocks
-/// into their own functions.  The only detail is that M is actually a module
-/// cloned from the one the BBs are in, so some mapping needs to be performed.
-/// If this operation fails for some reason (ie the implementation is buggy),
-/// this function should return null, otherwise it returns a new Module.
-Module *BugDriver::ExtractMappedBlocksFromModule(const
-                                                 std::vector<BasicBlock*> &BBs,
-                                                 Module *M) {
+std::unique_ptr<Module>
+BugDriver::extractMappedBlocksFromModule(const std::vector<BasicBlock *> &BBs,
+                                         Module *M) {
   SmallString<128> Filename;
   int FD;
-  error_code EC = sys::fs::createUniqueFile(
+  std::error_code EC = sys::fs::createUniqueFile(
       OutputPrefix + "-extractblocks%%%%%%%", FD, Filename);
   if (EC) {
     outs() << "*** Basic Block extraction failed!\n";
     errs() << "Error creating temporary file: " << EC.message() << "\n";
     EmitProgressBitcode(M, "basicblockextractfail", true);
-    return 0;
+    return nullptr;
   }
   sys::RemoveFileOnSignal(Filename);
 
@@ -390,7 +399,7 @@ Module *BugDriver::ExtractMappedBlocksFromModule(const
     errs() << "Error writing list of blocks to not extract\n";
     EmitProgressBitcode(M, "basicblockextractfail", true);
     BlocksToNotExtractFile.os().clear_error();
-    return 0;
+    return nullptr;
   }
   BlocksToNotExtractFile.keep();
 
@@ -400,11 +409,11 @@ Module *BugDriver::ExtractMappedBlocksFromModule(const
 
   std::vector<std::string> PI;
   PI.push_back("extract-blocks");
-  Module *Ret = runPassesOn(M, PI, false, 1, &ExtraArg);
+  std::unique_ptr<Module> Ret = runPassesOn(M, PI, false, 1, &ExtraArg);
 
   sys::fs::remove(Filename.c_str());
 
-  if (Ret == 0) {
+  if (!Ret) {
     outs() << "*** Basic Block extraction failed, please report a bug!\n";
     EmitProgressBitcode(M, "basicblockextractfail", true);
   }

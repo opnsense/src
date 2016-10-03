@@ -19,13 +19,11 @@ SRCS+=	vmm.c		\
 	vmm_host.c	\
 	vmm_instruction_emul.c	\
 	vmm_ioport.c	\
-	vmm_ipi.c	\
 	vmm_lapic.c	\
 	vmm_mem.c	\
 	vmm_stat.c	\
 	vmm_util.c	\
-	x86.c		\
-	vmm_support.S
+	x86.c
 
 .PATH: ${.CURDIR}/../../amd64/vmm/io
 SRCS+=	iommu.c		\
@@ -59,16 +57,10 @@ SRCS+=	vmcb.c		\
 CLEANFILES=	vmx_assym.h vmx_genassym.o svm_assym.h svm_genassym.o
 
 vmx_assym.h:    vmx_genassym.o
-.if exists(@)
-vmx_assym.h:    @/kern/genassym.sh
-.endif
-	sh @/kern/genassym.sh vmx_genassym.o > ${.TARGET}
+	sh ${SYSDIR}/kern/genassym.sh vmx_genassym.o > ${.TARGET}
 
 svm_assym.h:    svm_genassym.o
-.if exists(@)
-svm_assym.h:    @/kern/genassym.sh
-.endif
-	sh @/kern/genassym.sh svm_genassym.o > ${.TARGET}
+	sh ${SYSDIR}/kern/genassym.sh svm_genassym.o > ${.TARGET}
 
 vmx_support.o:
 	${CC} -c -x assembler-with-cpp -DLOCORE ${CFLAGS} \

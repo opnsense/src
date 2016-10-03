@@ -34,106 +34,133 @@ namespace llvm {
 
 class TargetLoweringObjectFileELF : public TargetLoweringObjectFile {
   bool UseInitArray;
+  mutable unsigned NextUniqueID = 0;
 
 public:
-  virtual ~TargetLoweringObjectFileELF() {}
+  TargetLoweringObjectFileELF() : UseInitArray(false) {}
 
-  virtual void emitPersonalityValue(MCStreamer &Streamer,
+  ~TargetLoweringObjectFileELF() override {}
+
+  void emitPersonalityValue(MCStreamer &Streamer, const DataLayout &TM,
+                            const MCSymbol *Sym) const override;
+
+  /// Given a constant with the SectionKind, return a section that it should be
+  /// placed in.
+  MCSection *getSectionForConstant(const DataLayout &DL, SectionKind Kind,
+                                   const Constant *C) const override;
+
+  MCSection *getExplicitSectionGlobal(const GlobalValue *GV, SectionKind Kind,
+                                      Mangler &Mang,
+                                      const TargetMachine &TM) const override;
+
+  MCSection *SelectSectionForGlobal(const GlobalValue *GV, SectionKind Kind,
+                                    Mangler &Mang,
+                                    const TargetMachine &TM) const override;
+
+  MCSection *getSectionForJumpTable(const Function &F, Mangler &Mang,
+                                    const TargetMachine &TM) const override;
+
+  bool shouldPutJumpTableInFunctionSection(bool UsesLabelDifference,
+                                           const Function &F) const override;
+
+  /// Return an MCExpr to use for a reference to the specified type info global
+  /// variable from exception handling information.
+  const MCExpr *
+  getTTypeGlobalReference(const GlobalValue *GV, unsigned Encoding,
+                          Mangler &Mang, const TargetMachine &TM,
+                          MachineModuleInfo *MMI,
+                          MCStreamer &Streamer) const override;
+
+  // The symbol that gets passed to .cfi_personality.
+  MCSymbol *getCFIPersonalitySymbol(const GlobalValue *GV, Mangler &Mang,
                                     const TargetMachine &TM,
-                                    const MCSymbol *Sym) const;
-
-  /// getSectionForConstant - Given a constant with the SectionKind, return a
-  /// section that it should be placed in.
-  virtual const MCSection *getSectionForConstant(SectionKind Kind) const;
-
-
-  virtual const MCSection *
-  getExplicitSectionGlobal(const GlobalValue *GV, SectionKind Kind,
-                           Mangler *Mang, const TargetMachine &TM) const;
-
-  virtual const MCSection *
-  SelectSectionForGlobal(const GlobalValue *GV, SectionKind Kind,
-                         Mangler *Mang, const TargetMachine &TM) const;
-
-  /// getTTypeGlobalReference - Return an MCExpr to use for a reference to the
-  /// specified type info global variable from exception handling information.
-  virtual const MCExpr *
-  getTTypeGlobalReference(const GlobalValue *GV, Mangler *Mang,
-                          MachineModuleInfo *MMI, unsigned Encoding,
-                          MCStreamer &Streamer) const;
-
-  // getCFIPersonalitySymbol - The symbol that gets passed to .cfi_personality.
-  virtual MCSymbol *
-  getCFIPersonalitySymbol(const GlobalValue *GV, Mangler *Mang,
-                          MachineModuleInfo *MMI) const;
+                                    MachineModuleInfo *MMI) const override;
 
   void InitializeELF(bool UseInitArray_);
-  virtual const MCSection *
-  getStaticCtorSection(unsigned Priority = 65535) const;
-  virtual const MCSection *
-  getStaticDtorSection(unsigned Priority = 65535) const;
+  MCSection *getStaticCtorSection(unsigned Priority,
+                                  const MCSymbol *KeySym) const override;
+  MCSection *getStaticDtorSection(unsigned Priority,
+                                  const MCSymbol *KeySym) const override;
 };
 
 
 
 class TargetLoweringObjectFileMachO : public TargetLoweringObjectFile {
 public:
-  virtual ~TargetLoweringObjectFileMachO() {}
+  ~TargetLoweringObjectFileMachO() override {}
+  TargetLoweringObjectFileMachO();
 
-  /// emitModuleFlags - Emit the module flags that specify the garbage
-  /// collection information.
-  virtual void emitModuleFlags(MCStreamer &Streamer,
-                               ArrayRef<Module::ModuleFlagEntry> ModuleFlags,
-                               Mangler *Mang, const TargetMachine &TM) const;
+  /// Emit the module flags that specify the garbage collection information.
+  void emitModuleFlags(MCStreamer &Streamer,
+                       ArrayRef<Module::ModuleFlagEntry> ModuleFlags,
+                       Mangler &Mang, const TargetMachine &TM) const override;
 
-  virtual const MCSection *
-  SelectSectionForGlobal(const GlobalValue *GV, SectionKind Kind,
-                         Mangler *Mang, const TargetMachine &TM) const;
+  MCSection *SelectSectionForGlobal(const GlobalValue *GV, SectionKind Kind,
+                                    Mangler &Mang,
+                                    const TargetMachine &TM) const override;
 
-  virtual const MCSection *
-  getExplicitSectionGlobal(const GlobalValue *GV, SectionKind Kind,
-                           Mangler *Mang, const TargetMachine &TM) const;
+  MCSection *getExplicitSectionGlobal(const GlobalValue *GV, SectionKind Kind,
+                                      Mangler &Mang,
+                                      const TargetMachine &TM) const override;
 
-  virtual const MCSection *getSectionForConstant(SectionKind Kind) const;
+  MCSection *getSectionForConstant(const DataLayout &DL, SectionKind Kind,
+                                   const Constant *C) const override;
 
-  /// shouldEmitUsedDirectiveFor - This hook allows targets to selectively
-  /// decide not to emit the UsedDirective for some symbols in llvm.used.
-  /// FIXME: REMOVE this (rdar://7071300)
-  virtual bool shouldEmitUsedDirectiveFor(const GlobalValue *GV,
-                                          Mangler *) const;
+  /// The mach-o version of this method defaults to returning a stub reference.
+  const MCExpr *
+  getTTypeGlobalReference(const GlobalValue *GV, unsigned Encoding,
+                          Mangler &Mang, const TargetMachine &TM,
+                          MachineModuleInfo *MMI,
+                          MCStreamer &Streamer) const override;
 
-  /// getTTypeGlobalReference - The mach-o version of this method
-  /// defaults to returning a stub reference.
-  virtual const MCExpr *
-  getTTypeGlobalReference(const GlobalValue *GV, Mangler *Mang,
-                          MachineModuleInfo *MMI, unsigned Encoding,
-                          MCStreamer &Streamer) const;
+  // The symbol that gets passed to .cfi_personality.
+  MCSymbol *getCFIPersonalitySymbol(const GlobalValue *GV, Mangler &Mang,
+                                    const TargetMachine &TM,
+                                    MachineModuleInfo *MMI) const override;
 
-  // getCFIPersonalitySymbol - The symbol that gets passed to .cfi_personality.
-  virtual MCSymbol *
-  getCFIPersonalitySymbol(const GlobalValue *GV, Mangler *Mang,
-                          MachineModuleInfo *MMI) const;
+  /// Get MachO PC relative GOT entry relocation
+  const MCExpr *getIndirectSymViaGOTPCRel(const MCSymbol *Sym,
+                                          const MCValue &MV, int64_t Offset,
+                                          MachineModuleInfo *MMI,
+                                          MCStreamer &Streamer) const override;
+
+  void getNameWithPrefix(SmallVectorImpl<char> &OutName, const GlobalValue *GV,
+                         Mangler &Mang, const TargetMachine &TM) const override;
 };
 
 
 
 class TargetLoweringObjectFileCOFF : public TargetLoweringObjectFile {
 public:
-  virtual ~TargetLoweringObjectFileCOFF() {}
+  ~TargetLoweringObjectFileCOFF() override {}
 
-  virtual const MCSection *
-  getExplicitSectionGlobal(const GlobalValue *GV, SectionKind Kind,
-                           Mangler *Mang, const TargetMachine &TM) const;
+  MCSection *getExplicitSectionGlobal(const GlobalValue *GV, SectionKind Kind,
+                                      Mangler &Mang,
+                                      const TargetMachine &TM) const override;
 
-  virtual const MCSection *
-  SelectSectionForGlobal(const GlobalValue *GV, SectionKind Kind,
-                         Mangler *Mang, const TargetMachine &TM) const;
+  MCSection *SelectSectionForGlobal(const GlobalValue *GV, SectionKind Kind,
+                                    Mangler &Mang,
+                                    const TargetMachine &TM) const override;
 
-  /// emitModuleFlags - Emit Obj-C garbage collection and linker options.  Only
-  /// linker option emission is implemented for COFF.
-  virtual void emitModuleFlags(MCStreamer &Streamer,
-                               ArrayRef<Module::ModuleFlagEntry> ModuleFlags,
-                               Mangler *Mang, const TargetMachine &TM) const;
+  void getNameWithPrefix(SmallVectorImpl<char> &OutName, const GlobalValue *GV,
+                         Mangler &Mang, const TargetMachine &TM) const override;
+
+  MCSection *getSectionForJumpTable(const Function &F, Mangler &Mang,
+                                    const TargetMachine &TM) const override;
+
+  /// Emit Obj-C garbage collection and linker options. Only linker option
+  /// emission is implemented for COFF.
+  void emitModuleFlags(MCStreamer &Streamer,
+                       ArrayRef<Module::ModuleFlagEntry> ModuleFlags,
+                       Mangler &Mang, const TargetMachine &TM) const override;
+
+  MCSection *getStaticCtorSection(unsigned Priority,
+                                  const MCSymbol *KeySym) const override;
+  MCSection *getStaticDtorSection(unsigned Priority,
+                                  const MCSymbol *KeySym) const override;
+
+  void emitLinkerFlagsForGlobal(raw_ostream &OS, const GlobalValue *GV,
+                                const Mangler &Mang) const override;
 };
 
 } // end namespace llvm

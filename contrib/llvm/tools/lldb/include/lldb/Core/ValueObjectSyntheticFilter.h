@@ -1,4 +1,4 @@
-//===-- ValueObjectSyntheticFilter.h -------------------------------*- C++ -*-===//
+//===-- ValueObjectSyntheticFilter.h ----------------------------*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -12,10 +12,11 @@
 
 // C Includes
 // C++ Includes
-#include <map>
-#include <vector>
+#include <memory>
+
 // Other libraries and framework includes
 // Project includes
+#include "lldb/Core/ThreadSafeSTLMap.h"
 #include "lldb/Core/ValueObject.h"
 
 namespace lldb_private {
@@ -30,118 +31,142 @@ namespace lldb_private {
 class ValueObjectSynthetic : public ValueObject
 {
 public:
-    virtual
-    ~ValueObjectSynthetic();
+    ~ValueObjectSynthetic() override;
 
-    virtual uint64_t
-    GetByteSize();
+    uint64_t
+    GetByteSize() override;
     
-    virtual ConstString
-    GetTypeName();
+    ConstString
+    GetTypeName() override;
     
-    virtual ConstString
-    GetQualifiedTypeName();
+    ConstString
+    GetQualifiedTypeName() override;
+    
+    ConstString
+    GetDisplayTypeName() override;
 
-    virtual bool
-    MightHaveChildren();
+    bool
+    MightHaveChildren() override;
 
-    virtual size_t
-    CalculateNumChildren();
+    size_t
+    CalculateNumChildren(uint32_t max) override;
 
-    virtual lldb::ValueType
-    GetValueType() const;
+    lldb::ValueType
+    GetValueType() const override;
     
-    virtual lldb::ValueObjectSP
-    GetChildAtIndex (size_t idx, bool can_create);
+    lldb::ValueObjectSP
+    GetChildAtIndex(size_t idx, bool can_create) override;
     
-    virtual lldb::ValueObjectSP
-    GetChildMemberWithName (const ConstString &name, bool can_create);
+    lldb::ValueObjectSP
+    GetChildMemberWithName(const ConstString &name, bool can_create) override;
     
-    virtual size_t
-    GetIndexOfChildWithName (const ConstString &name);
+    size_t
+    GetIndexOfChildWithName(const ConstString &name) override;
 
-    virtual lldb::ValueObjectSP
-    GetDynamicValue (lldb::DynamicValueType valueType);
+    lldb::ValueObjectSP
+    GetDynamicValue(lldb::DynamicValueType valueType) override;
     
-    virtual bool
-    IsInScope ();
+    bool
+    IsInScope() override;
     
-    virtual bool
-    HasSyntheticValue()
+    bool
+    HasSyntheticValue() override
     {
         return false;
     }
     
-    virtual bool
-    IsSynthetic() { return true; }
+    bool
+    IsSynthetic() override
+    {
+        return true;
+    }
     
-    virtual void
-    CalculateSyntheticValue (bool use_synthetic)
+    void
+    CalculateSyntheticValue(bool use_synthetic) override
     {
     }
     
-    virtual bool
-    IsDynamic ()
+    bool
+    IsDynamic() override
     {
-        if (m_parent)
-            return m_parent->IsDynamic();
-        else
-            return false;
+        return ((m_parent != nullptr) ? m_parent->IsDynamic() : false);
     }
     
-    virtual lldb::ValueObjectSP
-    GetStaticValue ()
+    lldb::ValueObjectSP
+    GetStaticValue() override
     {
-        if (m_parent)
-            return m_parent->GetStaticValue();
-        else
-            return GetSP();
+        return ((m_parent != nullptr) ? m_parent->GetStaticValue() : GetSP());
     }
     
     virtual lldb::DynamicValueType
     GetDynamicValueType ()
     {
-        if (m_parent)
-            return m_parent->GetDynamicValueType();
-        else
-            return lldb::eNoDynamicValues;
+        return ((m_parent != nullptr) ? m_parent->GetDynamicValueType() : lldb::eNoDynamicValues);
     }
 
-    virtual ValueObject *
-    GetParent()
+    ValueObject *
+    GetParent() override
     {
-        if (m_parent)
-            return m_parent->GetParent();
-        else
-            return NULL;
+        return ((m_parent != nullptr) ? m_parent->GetParent() : nullptr);
     }
 
-    virtual const ValueObject *
-    GetParent() const
+    const ValueObject *
+    GetParent() const override
     {
-        if (m_parent)
-            return m_parent->GetParent();
-        else
-            return NULL;
+        return ((m_parent != nullptr) ? m_parent->GetParent() : nullptr);
     }
     
-    virtual lldb::ValueObjectSP
-    GetNonSyntheticValue ();
+    lldb::ValueObjectSP
+    GetNonSyntheticValue() override;
     
-    virtual bool
-    ResolveValue (Scalar &scalar)
+    bool
+    CanProvideValue() override;
+    
+    bool
+    DoesProvideSyntheticValue() override
     {
-        if (m_parent)
-            return m_parent->ResolveValue(scalar);
+        return (UpdateValueIfNeeded(), m_provides_value == eLazyBoolYes);
+    }
+    
+    bool
+    GetIsConstant() const override
+    {
         return false;
     }
+
+    bool
+    SetValueFromCString(const char *value_str, Error& error) override;
+    
+    void
+    SetFormat(lldb::Format format) override;
+    
+    lldb::LanguageType
+    GetPreferredDisplayLanguage() override;
+    
+    void
+    SetPreferredDisplayLanguage (lldb::LanguageType);
+    
+    bool
+    GetDeclaration(Declaration &decl) override;
+
+    uint64_t
+    GetLanguageFlags () override;
+    
+    void
+    SetLanguageFlags (uint64_t flags) override;
     
 protected:
-    virtual bool
-    UpdateValue ();
+    bool
+    UpdateValue() override;
     
-    virtual ClangASTType
-    GetClangTypeImpl ();
+    LazyBool
+    CanUpdateWithInvalidExecutionContext() override
+    {
+        return eLazyBoolYes;
+    }
+    
+    CompilerType
+    GetCompilerTypeImpl() override;
     
     virtual void
     CreateSynthFilter ();
@@ -150,8 +175,8 @@ protected:
     lldb::SyntheticChildrenSP m_synth_sp;
     std::unique_ptr<SyntheticChildrenFrontEnd> m_synth_filter_ap;
     
-    typedef std::map<uint32_t, ValueObject*> ByIndexMap;
-    typedef std::map<const char*, uint32_t> NameToIndexMap;
+    typedef ThreadSafeSTLMap<uint32_t, ValueObject*> ByIndexMap;
+    typedef ThreadSafeSTLMap<const char*, uint32_t> NameToIndexMap;
     
     typedef ByIndexMap::iterator ByIndexIterator;
     typedef NameToIndexMap::iterator NameToIndexIterator;
@@ -164,19 +189,18 @@ protected:
 
     LazyBool        m_might_have_children;
     
+    LazyBool        m_provides_value;
+    
 private:
     friend class ValueObject;
     ValueObjectSynthetic (ValueObject &parent, lldb::SyntheticChildrenSP filter);
     
     void
-    CopyParentData ();
+    CopyValueData (ValueObject *source);
     
-    //------------------------------------------------------------------
-    // For ValueObject only
-    //------------------------------------------------------------------
     DISALLOW_COPY_AND_ASSIGN (ValueObjectSynthetic);
 };
 
 } // namespace lldb_private
 
-#endif  // liblldb_ValueObjectSyntheticFilter_h_
+#endif // liblldb_ValueObjectSyntheticFilter_h_

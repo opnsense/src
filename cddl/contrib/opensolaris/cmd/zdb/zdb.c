@@ -22,6 +22,7 @@
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2011, 2015 by Delphix. All rights reserved.
+ * Copyright (c) 2014 Integros [integros.com]
  */
 
 #include <stdio.h>
@@ -90,10 +91,10 @@ uint8_t dump_opt[256];
 typedef void object_viewer_t(objset_t *, uint64_t, void *data, size_t size);
 
 extern void dump_intent_log(zilog_t *);
-uint64_t *zopt_object = NULL;
-int zopt_objects = 0;
-libzfs_handle_t *g_zfs;
-uint64_t max_inflight = 1000;
+static uint64_t *zopt_object = NULL;
+static int zopt_objects = 0;
+static libzfs_handle_t *g_zfs;
+static uint64_t max_inflight = 1000;
 
 static void snprintf_blkptr_compact(char *, size_t, const blkptr_t *);
 
@@ -1566,15 +1567,14 @@ dump_deadlist(dsl_deadlist_t *dl)
 	    dle = AVL_NEXT(&dl->dl_tree, dle)) {
 		if (dump_opt['d'] >= 5) {
 			char buf[128];
-			(void) snprintf(buf, sizeof (buf), "mintxg %llu -> ",
-			    (longlong_t)dle->dle_mintxg,
+			(void) snprintf(buf, sizeof (buf), "mintxg %llu -> "
+			    "obj %llu", (longlong_t)dle->dle_mintxg,
 			    (longlong_t)dle->dle_bpobj.bpo_object);
 			dump_full_bpobj(&dle->dle_bpobj, buf, 0);
 		} else {
 			(void) printf("mintxg %llu -> obj %llu\n",
 			    (longlong_t)dle->dle_mintxg,
 			    (longlong_t)dle->dle_bpobj.bpo_object);
-
 		}
 	}
 }
@@ -2084,13 +2084,13 @@ dump_cachefile(const char *cachefile)
 	nvlist_t *config;
 
 	if ((fd = open64(cachefile, O_RDONLY)) < 0) {
-		(void) printf("cannot open '%s': %s\n", cachefile,
+		(void) fprintf(stderr, "cannot open '%s': %s\n", cachefile,
 		    strerror(errno));
 		exit(1);
 	}
 
 	if (fstat64(fd, &statbuf) != 0) {
-		(void) printf("failed to stat '%s': %s\n", cachefile,
+		(void) fprintf(stderr, "failed to stat '%s': %s\n", cachefile,
 		    strerror(errno));
 		exit(1);
 	}
@@ -2156,10 +2156,11 @@ dump_label(const char *dev)
 	uint64_t psize, ashift;
 	int len = strlen(dev) + 1;
 
-	if (strncmp(dev, "/dev/dsk/", 9) == 0) {
+	if (strncmp(dev, ZFS_DISK_ROOTD, strlen(ZFS_DISK_ROOTD)) == 0) {
 		len++;
 		path = malloc(len);
-		(void) snprintf(path, len, "%s%s", "/dev/rdsk/", dev + 9);
+		(void) snprintf(path, len, "%s%s", ZFS_RDISK_ROOTD,
+		    dev + strlen(ZFS_DISK_ROOTD));
 	} else {
 		path = strdup(dev);
 	}
@@ -3658,7 +3659,8 @@ main(int argc, char **argv)
 
 	kernel_init(FREAD);
 	g_zfs = libzfs_init();
-	ASSERT(g_zfs != NULL);
+	if (g_zfs == NULL)
+		fatal("Fail to initialize zfs");
 
 	if (dump_all)
 		verbose = MAX(verbose, 1);

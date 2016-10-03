@@ -4,11 +4,11 @@
 
 PROG=	bhyvectl
 SRCS=	bhyvectl.c
+PACKAGE=	bhyve
 
 MAN=	bhyvectl.8
 
-DPADD=	${LIBVMMAPI} ${LIBUTIL}
-LDADD=	-lvmmapi -lutil
+LIBADD=	vmmapi util
 
 WARNS?=	3
 

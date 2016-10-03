@@ -7,8 +7,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "lldb/lldb-python.h"
-
 #include "lldb/Interpreter/OptionValueDictionary.h"
 
 // C Includes
@@ -64,6 +62,7 @@ OptionValueDictionary::DumpValue (const ExecutionContext *exe_ctx, Stream &strm,
                     break;
 
                 case eTypeBoolean:
+                case eTypeChar:
                 case eTypeEnum:
                 case eTypeFileSpec:
                 case eTypeFormat:
@@ -91,7 +90,7 @@ OptionValueDictionary::GetArgs (Args &args) const
     {
         StreamString strm;
         strm.Printf("%s=", pos->first.GetCString());
-        pos->second->DumpValue(NULL, strm, eDumpOptionValue|eDumpOptionRaw);
+        pos->second->DumpValue(nullptr, strm, eDumpOptionValue|eDumpOptionRaw);
         args.AppendArgument(strm.GetString().c_str());
     }
     return args.GetArgumentCount();
@@ -118,6 +117,12 @@ OptionValueDictionary::SetArgs (const Args &args, VarSetOperationType op)
                 llvm::StringRef key_and_value(args.GetArgumentAtIndex(i));
                 if (!key_and_value.empty())
                 {
+                    if (key_and_value.find('=') == llvm::StringRef::npos)
+                    {
+                        error.SetErrorString("assign operation takes one or more key=value arguments");
+                        return error;
+                    }
+
                     std::pair<llvm::StringRef, llvm::StringRef> kvp(key_and_value.split('='));
                     llvm::StringRef key = kvp.first;
                     bool key_valid = false;
@@ -125,7 +130,7 @@ OptionValueDictionary::SetArgs (const Args &args, VarSetOperationType op)
                     {
                         if (key.front() == '[')
                         {
-                            // Key name starts with '[', so the the key value must be in single or double quotes like:
+                            // Key name starts with '[', so the key value must be in single or double quotes like:
                             // ['<key>']
                             // ["<key>"]
                             if ((key.size() > 2) && (key.back() == ']'))
@@ -210,17 +215,20 @@ OptionValueDictionary::SetArgs (const Args &args, VarSetOperationType op)
     case eVarSetOperationInsertBefore:
     case eVarSetOperationInsertAfter:
     case eVarSetOperationInvalid:
-        error = OptionValue::SetValueFromCString (NULL, op);
+        error = OptionValue::SetValueFromString (llvm::StringRef(), op);
         break;
     }
     return error;
 }
 
 Error
-OptionValueDictionary::SetValueFromCString (const char *value_cstr, VarSetOperationType op)
+OptionValueDictionary::SetValueFromString (llvm::StringRef value, VarSetOperationType op)
 {
-    Args args(value_cstr);
-    return SetArgs (args, op);
+    Args args(value.str().c_str());
+    Error error = SetArgs (args, op);
+    if (error.Success())
+        NotifyValueChanged();
+    return error;
 }
 
 lldb::OptionValueSP
@@ -230,14 +238,14 @@ OptionValueDictionary::GetSubValue (const ExecutionContext *exe_ctx, const char 
 
     if (name && name[0])
     {
-        const char *sub_name = NULL;
+        const char *sub_name = nullptr;
         ConstString key;
         const char *open_bracket = ::strchr (name, '[');
 
         if (open_bracket)
         {
             const char *key_start = open_bracket + 1;
-            const char *key_end = NULL;
+            const char *key_end = nullptr;
             switch (open_bracket[1])
             {
                 case '\'':
@@ -314,9 +322,9 @@ OptionValueDictionary::GetSubValue (const ExecutionContext *exe_ctx, const char 
                 }
             }
         }
-        if (!value_sp && error.AsCString() == NULL)
+        if (!value_sp && error.AsCString() == nullptr)
         {
-            error.SetErrorStringWithFormat ("invalid value path '%s', %s values only support '[<key>]' subvalues where <key> a string value optionally delimitted by single or double quotes",
+            error.SetErrorStringWithFormat ("invalid value path '%s', %s values only support '[<key>]' subvalues where <key> a string value optionally delimited by single or double quotes",
                                             name,
                                             GetTypeAsCString());
         }
@@ -331,10 +339,10 @@ OptionValueDictionary::SetSubValue (const ExecutionContext *exe_ctx, VarSetOpera
     const bool will_modify = true;
     lldb::OptionValueSP value_sp (GetSubValue (exe_ctx, name, will_modify, error));
     if (value_sp)
-        error = value_sp->SetValueFromCString(value, op);
+        error = value_sp->SetValueFromString(value, op);
     else
     {
-        if (error.AsCString() == NULL)
+        if (error.AsCString() == nullptr)
             error.SetErrorStringWithFormat("invalid value path '%s'", name);
     }
     return error;
@@ -361,7 +369,7 @@ OptionValueDictionary::GetStringValueForKey (const ConstString &key)
         if (string_value)
             return string_value->GetCurrentValue();
     }
-    return NULL;
+    return nullptr;
 }
 
 
@@ -377,7 +385,7 @@ OptionValueDictionary::SetStringValueForKey (const ConstString &key,
             return false;
         if (pos->second->GetType() == OptionValue::eTypeString)
         {
-            pos->second->SetValueFromCString(value);
+            pos->second->SetValueFromString(value);
             return true;
         }
     }

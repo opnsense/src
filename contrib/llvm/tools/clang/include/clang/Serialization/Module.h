@@ -15,20 +15,26 @@
 #ifndef LLVM_CLANG_SERIALIZATION_MODULE_H
 #define LLVM_CLANG_SERIALIZATION_MODULE_H
 
+#include "clang/Basic/FileManager.h"
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Serialization/ASTBitCodes.h"
 #include "clang/Serialization/ContinuousRangeMap.h"
-#include "llvm/ADT/OwningPtr.h"
+#include "clang/Serialization/ModuleFileExtension.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/Bitcode/BitstreamReader.h"
+#include "llvm/Support/Endian.h"
+#include <memory>
 #include <string>
+
+namespace llvm {
+template <typename Info> class OnDiskChainedHashTable;
+template <typename Info> class OnDiskIterableChainedHashTable;
+}
 
 namespace clang {
 
-class FileEntry;
 class DeclContext;
 class Module;
-template<typename Info> class OnDiskChainedHashTable;
 
 namespace serialization {
 
@@ -38,30 +44,21 @@ namespace reader {
 
 /// \brief Specifies the kind of module that has been loaded.
 enum ModuleKind {
-  MK_Module,   ///< File is a module proper.
-  MK_PCH,      ///< File is a PCH file treated as such.
-  MK_Preamble, ///< File is a PCH file treated as the preamble.
-  MK_MainFile  ///< File is a PCH file treated as the actual main file.
-};
-
-/// \brief Information about the contents of a DeclContext.
-struct DeclContextInfo {
-  DeclContextInfo()
-    : NameLookupTableData(), LexicalDecls(), NumLexicalDecls() {}
-
-  OnDiskChainedHashTable<reader::ASTDeclContextNameLookupTrait>
-    *NameLookupTableData; // an ASTDeclContextNameLookupTable.
-  const KindDeclIDPair *LexicalDecls;
-  unsigned NumLexicalDecls;
+  MK_ImplicitModule, ///< File is an implicitly-loaded module.
+  MK_ExplicitModule, ///< File is an explicitly-loaded module.
+  MK_PCH,            ///< File is a PCH file treated as such.
+  MK_Preamble,       ///< File is a PCH file treated as the preamble.
+  MK_MainFile        ///< File is a PCH file treated as the actual main file.
 };
 
 /// \brief The input file that has been loaded from this AST file, along with
 /// bools indicating whether this was an overridden buffer or if it was
-/// out-of-date.
+/// out-of-date or not-found.
 class InputFile {
   enum {
     Overridden = 1,
-    OutOfDate = 2
+    OutOfDate = 2,
+    NotFound = 3
   };
   llvm::PointerIntPair<const FileEntry *, 2, unsigned> Val;
 
@@ -79,10 +76,19 @@ public:
     Val.setPointerAndInt(File, intVal);
   }
 
+  static InputFile getNotFound() {
+    InputFile File;
+    File.Val.setInt(NotFound);
+    return File;
+  }
+
   const FileEntry *getFile() const { return Val.getPointer(); }
   bool isOverridden() const { return Val.getInt() == Overridden; }
   bool isOutOfDate() const { return Val.getInt() == OutOfDate; }
+  bool isNotFound() const { return Val.getInt() == NotFound; }
 };
+
+typedef unsigned ASTFileSignature;
 
 /// \brief Information about a module that has been loaded by the ASTReader.
 ///
@@ -107,6 +113,16 @@ public:
   /// \brief The file name of the module file.
   std::string FileName;
 
+  /// \brief The name of the module.
+  std::string ModuleName;
+
+  /// \brief The base directory of the module.
+  std::string BaseDirectory;
+
+  std::string getTimestampFilename() const {
+    return FileName + ".timestamp";
+  }
+
   /// \brief The original source file name that was used to build the
   /// primary AST file, which may have been modified for
   /// relocatable-pch support.
@@ -124,11 +140,20 @@ public:
   /// allow resolving headers even after headers+PCH was moved to a new path.
   std::string OriginalDir;
 
+  std::string ModuleMapPath;
+
   /// \brief Whether this precompiled header is a relocatable PCH file.
   bool RelocatablePCH;
 
+  /// \brief Whether timestamps are included in this module file.
+  bool HasTimestamps;
+
   /// \brief The file entry for the module file.
   const FileEntry *File;
+
+  /// \brief The signature of the module file, which may be used along with size
+  /// and modification time to identify this particular file.
+  ASTFileSignature Signature;
 
   /// \brief Whether this module has been directly imported by the
   /// user.
@@ -139,7 +164,7 @@ public:
   
   /// \brief The memory buffer that stores the data associated with
   /// this AST file.
-  OwningPtr<llvm::MemoryBuffer> Buffer;
+  std::unique_ptr<llvm::MemoryBuffer> Buffer;
 
   /// \brief The size of this file, in bits.
   uint64_t SizeInBits;
@@ -159,6 +184,9 @@ public:
   /// If module A depends on and imports module B, both modules will have the
   /// same DirectImportLoc, but different ImportLoc (B's ImportLoc will be a
   /// source location inside module A).
+  ///
+  /// WARNING: This is largely useless. It doesn't tell you when a module was
+  /// made visible, just when the first submodule of that module was imported.
   SourceLocation DirectImportLoc;
 
   /// \brief The source location where this module was first imported.
@@ -167,15 +195,25 @@ public:
   /// \brief The first source location in this module.
   SourceLocation FirstLoc;
 
+  /// The list of extension readers that are attached to this module
+  /// file.
+  std::vector<std::unique_ptr<ModuleFileExtensionReader>> ExtensionReaders;
+
   // === Input Files ===
   /// \brief The cursor to the start of the input-files block.
   llvm::BitstreamCursor InputFilesCursor;
 
   /// \brief Offsets for all of the input file entries in the AST file.
-  const uint32_t *InputFileOffsets;
+  const llvm::support::unaligned_uint64_t *InputFileOffsets;
 
   /// \brief The input files that have been loaded from this AST file.
   std::vector<InputFile> InputFilesLoaded;
+
+  /// \brief If non-zero, specifies the time when we last validated input
+  /// files.  Zero means we never validated them.
+  ///
+  /// The time is specified in seconds since the start of the Epoch.
+  uint64_t InputFilesValidationTimestamp;
 
   // === Source Locations ===
 
@@ -228,6 +266,10 @@ public:
   /// \brief A pointer to an on-disk hash table of opaque type
   /// IdentifierHashTable.
   void *IdentifierLookupTable;
+
+  /// \brief Offsets of identifiers that we're going to preload within
+  /// IdentifierTableData.
+  std::vector<unsigned> PreloadIdentifierOffsets;
 
   // === Macros ===
 
@@ -364,28 +406,17 @@ public:
   /// indexed by the C++ base specifier set ID (-1).
   const uint32_t *CXXBaseSpecifiersOffsets;
 
-  typedef llvm::DenseMap<const DeclContext *, DeclContextInfo>
-  DeclContextInfosMap;
+  /// \brief The number of C++ ctor initializer lists in this AST file.
+  unsigned LocalNumCXXCtorInitializers;
 
-  /// \brief Information about the lexical and visible declarations
-  /// for each DeclContext.
-  DeclContextInfosMap DeclContextInfos;
+  /// \brief Offset of each C++ ctor initializer list within the bitstream,
+  /// indexed by the C++ ctor initializer list ID minus 1.
+  const uint32_t *CXXCtorInitializersOffsets;
 
   /// \brief Array of file-level DeclIDs sorted by file.
   const serialization::DeclID *FileSortedDecls;
   unsigned NumFileSortedDecls;
 
-  /// \brief Array of redeclaration chain location information within this 
-  /// module file, sorted by the first declaration ID.
-  const serialization::LocalRedeclarationsInfo *RedeclarationsMap;
-
-  /// \brief The number of redeclaration info entries in RedeclarationsMap.
-  unsigned LocalNumRedeclarationsInMap;
-  
-  /// \brief The redeclaration chains for declarations local to this
-  /// module file.
-  SmallVector<uint64_t, 1> RedeclarationChains;
-  
   /// \brief Array of category list location information within this 
   /// module file, sorted by the definition ID.
   const serialization::ObjCCategoriesInfo *ObjCCategoriesMap;
@@ -427,6 +458,11 @@ public:
   /// \brief Determine whether this module was directly imported at
   /// any point during translation.
   bool isDirectlyImported() const { return DirectlyImported; }
+
+  /// \brief Is this a module file for a module (rather than a PCH or similar).
+  bool isModule() const {
+    return Kind == MK_ImplicitModule || Kind == MK_ExplicitModule;
+  }
 
   /// \brief Dump debugging output for this module.
   void dump();

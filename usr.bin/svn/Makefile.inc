@@ -1,6 +1,6 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 .if ${MK_SVN} == "yes"
 SVNLITE?=
@@ -8,13 +8,14 @@ SVNLITE?=
 SVNLITE?=	lite
 .endif
 
+PACKAGE=	svn
+
 .if !defined(SVNDIR)
 
 SVNDIR=		${.CURDIR}/../../../contrib/subversion/subversion
 APRU=		${.CURDIR}/../../../contrib/apr-util
 APR=		${.CURDIR}/../../../contrib/apr
-SQLITE=		${.CURDIR}/../../../contrib/sqlite3
-WARNS?=		0	# defintely not warns friendly
+WARNS?=		0	# definitely not warns friendly
 
 .if exists(${.CURDIR}/../../Makefile.inc)
 .include "${.CURDIR}/../../Makefile.inc"
@@ -22,7 +23,6 @@ WARNS?=		0	# defintely not warns friendly
 
 LIBAPRDIR=		${.OBJDIR}/../lib/libapr
 LIBAPR_UTILDIR=		${.OBJDIR}/../lib/libapr_util
-LIBSQLITEDIR=		${.OBJDIR}/../lib/libsqlite3
 LIBSERFDIR=		${.OBJDIR}/../lib/libserf
 
 LIBSVN_CLIENTDIR=	${.OBJDIR}/../lib/libsvn_client
@@ -31,6 +31,7 @@ LIBSVN_DIFFDIR=		${.OBJDIR}/../lib/libsvn_diff
 LIBSVN_FSDIR=		${.OBJDIR}/../lib/libsvn_fs
 LIBSVN_FS_FSDIR=	${.OBJDIR}/../lib/libsvn_fs_fs
 LIBSVN_FS_UTILDIR=	${.OBJDIR}/../lib/libsvn_fs_util
+LIBSVN_FS_XDIR=		${.OBJDIR}/../lib/libsvn_fs_x
 LIBSVN_RADIR=		${.OBJDIR}/../lib/libsvn_ra
 LIBSVN_RA_LOCALDIR=	${.OBJDIR}/../lib/libsvn_ra_local
 LIBSVN_RA_SVNDIR=	${.OBJDIR}/../lib/libsvn_ra_svn
@@ -41,7 +42,6 @@ LIBSVN_WCDIR=		${.OBJDIR}/../lib/libsvn_wc
 
 LIBAPR=			${LIBAPRDIR}/libapr.a
 LIBAPR_UTIL=		${LIBAPR_UTILDIR}/libapr-util.a
-LIBSQLITE=		${LIBSQLITEDIR}/libsqlite3.a
 LIBSERF=		${LIBSERFDIR}/libserf.a
 
 LIBSVN_CLIENT=		${LIBSVN_CLIENTDIR}/libsvn_client.a
@@ -50,6 +50,7 @@ LIBSVN_DIFF=		${LIBSVN_DIFFDIR}/libsvn_diff.a
 LIBSVN_FS=		${LIBSVN_FSDIR}/libsvn_fs.a
 LIBSVN_FS_FS=		${LIBSVN_FS_FSDIR}/libsvn_fs_fs.a
 LIBSVN_FS_UTIL=		${LIBSVN_FS_UTILDIR}/libsvn_fs_util.a
+LIBSVN_FS_X=		${LIBSVN_FS_XDIR}/libsvn_fs_x.a
 LIBSVN_RA=		${LIBSVN_RADIR}/libsvn_ra.a
 LIBSVN_RA_LOCAL=	${LIBSVN_RA_LOCALDIR}/libsvn_ra_local.a
 LIBSVN_RA_SVN=		${LIBSVN_RA_SVNDIR}/libsvn_ra_svn.a

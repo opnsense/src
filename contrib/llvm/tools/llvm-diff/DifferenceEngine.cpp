@@ -18,12 +18,12 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/IR/CFG.h"
+#include "llvm/IR/CallSite.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
-#include "llvm/Support/CFG.h"
-#include "llvm/Support/CallSite.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/type_traits.h"
@@ -599,7 +599,7 @@ void FunctionDifferenceEngine::runBlockDiff(BasicBlock::iterator LStart,
   TerminatorInst *RTerm = RStart->getParent()->getTerminator();
   if (isa<BranchInst>(LTerm) && isa<InvokeInst>(RTerm)) {
     if (cast<BranchInst>(LTerm)->isConditional()) return;
-    BasicBlock::iterator I = LTerm;
+    BasicBlock::iterator I = LTerm->getIterator();
     if (I == LStart->getParent()->begin()) return;
     --I;
     if (!isa<CallInst>(*I)) return;
@@ -612,7 +612,7 @@ void FunctionDifferenceEngine::runBlockDiff(BasicBlock::iterator LStart,
     tryUnify(LTerm->getSuccessor(0), RInvoke->getNormalDest());
   } else if (isa<InvokeInst>(LTerm) && isa<BranchInst>(RTerm)) {
     if (cast<BranchInst>(RTerm)->isConditional()) return;
-    BasicBlock::iterator I = RTerm;
+    BasicBlock::iterator I = RTerm->getIterator();
     if (I == RStart->getParent()->begin()) return;
     --I;
     if (!isa<CallInst>(*I)) return;

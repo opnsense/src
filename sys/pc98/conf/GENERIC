@@ -29,6 +29,7 @@ options 	SCHED_4BSD		# 4BSD scheduler
 #options 	PREEMPTION		# Enable kernel thread preemption
 options 	INET			# InterNETworking
 options 	INET6			# IPv6 communications protocols
+options 	IPSEC			# IP (v4/v6) security
 options 	SCTP			# Stream Control Transmission Protocol
 options 	FFS			# Berkeley Fast Filesystem
 options 	SOFTUPDATES		# Enable FFS soft updates support
@@ -37,8 +38,8 @@ options 	UFS_DIRHASH		# Improve performance on big directories
 options 	UFS_GJOURNAL		# Enable gjournal-based UFS journaling
 options 	QUOTA			# Enable disk quotas for UFS
 options 	MD_ROOT			# MD is a potential root device
-options 	NFSCL			# New Network Filesystem Client
-options 	NFSD			# New Network Filesystem Server
+options 	NFSCL			# Network Filesystem Client
+options 	NFSD			# Network Filesystem Server
 options 	NFSLOCKD		# Network Lock Manager
 options 	NFS_ROOT		# NFS usable as /, requires NFSCL
 options 	MSDOSFS			# MSDOS Filesystem
@@ -51,6 +52,8 @@ options 	COMPAT_FREEBSD4		# Compatible with FreeBSD4
 options 	COMPAT_FREEBSD5		# Compatible with FreeBSD5
 options 	COMPAT_FREEBSD6		# Compatible with FreeBSD6
 options 	COMPAT_FREEBSD7		# Compatible with FreeBSD7
+options 	COMPAT_FREEBSD9		# Compatible with FreeBSD9
+options 	COMPAT_FREEBSD10	# Compatible with FreeBSD10
 options 	SCSI_DELAY=5000		# Delay (in ms) before probing SCSI
 options 	EPSON_BOUNCEDMA		# use bounce buffer for 15-16M
 #options 	EPSON_MEMWIN		# EPSON memory window support
@@ -67,7 +70,6 @@ options 	HWPMC_HOOKS		# Necessary kernel hooks for hwpmc(4)
 options 	AUDIT			# Security event auditing
 options 	CAPABILITY_MODE		# Capsicum capability mode
 options 	CAPABILITIES		# Capsicum capabilities
-options 	PROCDESC		# Support for process descriptors
 options 	MAC			# TrustedBSD MAC Framework
 options 	INCLUDE_CONFIG_FILE	# Include this file in kernel
 options 	RACCT			# Resource accounting framework
@@ -91,7 +93,6 @@ device		fdc
 # ATA controllers
 device		ahci			# AHCI-compatible SATA controllers
 device		ata			# Legacy ATA/SATA controllers
-options 	ATA_STATIC_ID		# Static device numbering
 device		mvs			# Marvell 88SX50XX/88SX60XX/88SX70XX/SoC SATA
 device		siis			# SiliconImage SiI3124/SiI3132/SiI3531 SATA
 
@@ -233,7 +234,6 @@ device		vlan			# 802.1Q VLAN support
 device		tun			# Packet tunnel.
 device		md			# Memory "disks"
 device		gif			# IPv6 and IPv4 tunneling
-device		faith			# IPv6-to-IPv4 relaying (translation)
 device		firmware		# firmware assist module
 
 # The `bpf' device enables the Berkeley Packet Filter.
@@ -255,3 +255,6 @@ device		bpf			# Berkeley packet filter
 #device		snd_mss			# Microsoft Sound System
 #device		"snd_sb16"		# Sound Blaster 16
 #device		snd_sbc			# Sound Blaster
+
+# The crypto framework is required by IPSEC
+device		crypto			# Required by IPSEC

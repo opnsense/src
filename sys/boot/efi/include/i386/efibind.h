@@ -85,6 +85,9 @@ Revision History
 // Basic EFI types of various widths
 //
 
+#ifndef ACPI_THREAD_ID		/* ACPI's definitions are fine, use those */
+#define ACPI_USE_SYSTEM_INTTYPES 1	/* Tell ACPI we've defined types */
+
 typedef uint64_t   UINT64;
 typedef int64_t    INT64;
 
@@ -98,6 +101,7 @@ typedef int16_t    INT16;
 typedef uint8_t    UINT8;
 typedef int8_t     INT8;
 
+#endif
 
 #undef VOID
 #define VOID    void
@@ -230,7 +234,7 @@ typedef uint32_t   UINTN;
 #else // EFI_NT_EMULATOR 
 
 //
-// When build similiar to FW, then link everything together as
+// When build similar to FW, then link everything together as
 // one big module.
 //
 

@@ -46,6 +46,7 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm.h>
 #include <vm/pmap.h>
 #include <net/if.h>
+#include <net/if_var.h>
 #include <machine/cpufunc.h>
 #include <machine/cserial.h>
 #include <machine/resource.h>
@@ -184,22 +185,6 @@ static struct cdevsw ct_cdevsw = {
 };
 
 /*
- * Print the mbuf chain, for debug purposes only.
- */
-static void printmbuf (struct mbuf *m)
-{
-	printf ("mbuf:");
-	for (; m; m=m->m_next) {
-		if (m->m_flags & M_PKTHDR)
-			printf (" HDR %d:", m->m_pkthdr.len);
-		if (m->m_flags & M_EXT)
-			printf (" EXT:");
-		printf (" %d", m->m_len);
-	}
-	printf ("\n");
-}
-
-/*
  * Make an mbuf from data.
  */
 static struct mbuf *makembuf (void *buf, u_int len)
@@ -209,8 +194,7 @@ static struct mbuf *makembuf (void *buf, u_int len)
 	MGETHDR (m, M_NOWAIT, MT_DATA);
 	if (! m)
 		return 0;
-	MCLGET (m, M_NOWAIT);
-	if (! (m->m_flags & M_EXT)) {
+	if (!(MCLGET(m, M_NOWAIT))) {
 		m_freem (m);
 		return 0;
 	}
@@ -333,13 +317,12 @@ static	short porttab [] = {
 static	char dmatab [] = { 7, 6, 5, 0 };
 static	char irqtab [] = { 5, 10, 11, 7, 3, 15, 12, 0 };
 
-static int ct_is_free_res (device_t dev, int rid, int type, u_long start,
-	u_long end, u_long count)
+static int ct_is_free_res (device_t dev, int rid, int type, rman_res_t start,
+	rman_res_t end, rman_res_t count)
 {
 	struct resource *res;
 	
-	if (!(res = bus_alloc_resource (dev, type, &rid, start, end, count,
-	    RF_ALLOCATED)))
+	if (!(res = bus_alloc_resource (dev, type, &rid, start, end, count, 0)))
 		return 0;
 		
 	bus_release_resource (dev, type, rid, res);
@@ -349,7 +332,7 @@ static int ct_is_free_res (device_t dev, int rid, int type, u_long start,
 
 static void ct_identify (driver_t *driver, device_t dev)
 {
-	u_long iobase, rescount;
+	rman_res_t iobase, rescount;
 	int devcount;
 	device_t *devices;
 	device_t child;
@@ -457,7 +440,7 @@ static void ct_identify (driver_t *driver, device_t dev)
 static int ct_probe (device_t dev)
 {
 	int unit = device_get_unit (dev);
-	u_long iobase, rescount;
+	rman_res_t iobase, rescount;
 
 	if (!device_get_desc (dev) ||
 	    strcmp (device_get_desc (dev), "Cronyx Tau-ISA"))
@@ -476,7 +459,7 @@ static int ct_probe (device_t dev)
 	}
 		
 	if (!ct_probe_board (iobase, -1, -1)) {
-		printf ("ct%d: probing for Tau-ISA at %lx faild\n", unit, iobase);
+		printf ("ct%d: probing for Tau-ISA at %jx faild\n", unit, iobase);
 		return ENXIO;
 	}
 	
@@ -546,7 +529,7 @@ ct_bus_dma_mem_free (ct_dma_mem_t *dmem)
 static int ct_attach (device_t dev)
 {
 	bdrv_t *bd = device_get_softc (dev);
-	u_long iobase, drq, irq, rescount;
+	rman_res_t iobase, drq, irq, rescount;
 	int unit = device_get_unit (dev);
 	char *ct_ln = CT_LOCK_NAME;
 	ct_board_t *b;
@@ -649,7 +632,7 @@ static int ct_attach (device_t dev)
 	ct_ln[2] = '0' + unit;
 	mtx_init (&bd->ct_mtx, ct_ln, MTX_NETWORK_LOCK, MTX_DEF|MTX_RECURSE);
 	if (! probe_irq (b, irq)) {
-		printf ("ct%d: irq %ld not functional\n", unit, irq);
+		printf ("ct%d: irq %jd not functional\n", unit, irq);
 		bd->board = 0;
 		adapter [unit] = 0;
 		free (b, M_DEVBUF);
@@ -663,12 +646,12 @@ static int ct_attach (device_t dev)
  		return ENXIO;
 	}
 	
-	callout_init (&led_timo[unit], CALLOUT_MPSAFE);
+	callout_init (&led_timo[unit], 1);
 	s = splimp ();
 	if (bus_setup_intr (dev, bd->irq_res,
 			   INTR_TYPE_NET|INTR_MPSAFE,
 			   NULL, ct_intr, bd, &bd->intrhand)) {
-		printf ("ct%d: Can't setup irq %ld\n", unit, irq);
+		printf ("ct%d: Can't setup irq %jd\n", unit, irq);
 		bd->board = 0;
 		adapter [unit] = 0;
 		free (b, M_DEVBUF);
@@ -702,7 +685,7 @@ static int ct_attach (device_t dev)
 		c->sys = d;
 		channel [b->num*NCHAN + c->num] = d;
 		sprintf (d->name, "ct%d.%d", b->num, c->num);
-		callout_init (&d->timeout_handle, CALLOUT_MPSAFE);
+		callout_init (&d->timeout_handle, 1);
 
 #ifdef NETGRAPH
 		if (ng_make_node_common (&typestruct, &d->node) != 0) {
@@ -1097,7 +1080,7 @@ static void ct_transmit (ct_chan_t *c, void *attachment, int len)
 		return;
 	d->timeout = 0;
 #ifndef NETGRAPH
-	++d->ifp->if_opackets;
+	if_inc_counter(d->ifp, IFCOUNTER_OPACKETS, 1);
 	d->ifp->if_drv_flags &= ~IFF_DRV_OACTIVE;
 #endif
 	ct_start (d);
@@ -1121,21 +1104,21 @@ static void ct_receive (ct_chan_t *c, char *data, int len)
 	if (! m) {
 		CT_DEBUG (d, ("no memory for packet\n"));
 #ifndef NETGRAPH
-		++d->ifp->if_iqdrops;
+		if_inc_counter(d->ifp, IFCOUNTER_IQDROPS, 1);
 #endif
 		return;
 	}
 	if (c->debug > 1)
-		printmbuf (m);
+		m_print (m, 0);
 #ifdef NETGRAPH
 	m->m_pkthdr.rcvif = 0;
 	NG_SEND_DATA_ONLY (error, d->hook, m);
 #else
-	++d->ifp->if_ipackets;
+	if_inc_counter(d->ifp, IFCOUNTER_IPACKETS, 1);
 	m->m_pkthdr.rcvif = d->ifp;
 	/* Check if there's a BPF listener on this interface.
 	 * If so, hand off the raw packet to bpf. */
-	BPF_TAP (d->ifp, data, len);
+	BPF_MTAP(d->ifp, m);
 	IF_ENQUEUE (&d->queue, m);
 #endif
 }
@@ -1154,33 +1137,33 @@ static void ct_error (ct_chan_t *c, int data)
 	case CT_FRAME:
 		CT_DEBUG (d, ("frame error\n"));
 #ifndef NETGRAPH
-		++d->ifp->if_ierrors;
+		if_inc_counter(d->ifp, IFCOUNTER_IERRORS, 1);
 #endif
 		break;
 	case CT_CRC:
 		CT_DEBUG (d, ("crc error\n"));
 #ifndef NETGRAPH
-		++d->ifp->if_ierrors;
+		if_inc_counter(d->ifp, IFCOUNTER_IERRORS, 1);
 #endif
 		break;
 	case CT_OVERRUN:
 		CT_DEBUG (d, ("overrun error\n"));
 #ifndef NETGRAPH
-		++d->ifp->if_collisions;
-		++d->ifp->if_ierrors;
+		if_inc_counter(d->ifp, IFCOUNTER_COLLISIONS, 1);
+		if_inc_counter(d->ifp, IFCOUNTER_IERRORS, 1);
 #endif
 		break;
 	case CT_OVERFLOW:
 		CT_DEBUG (d, ("overflow error\n"));
 #ifndef NETGRAPH
-		++d->ifp->if_ierrors;
+		if_inc_counter(d->ifp, IFCOUNTER_IERRORS, 1);
 #endif
 		break;
 	case CT_UNDERRUN:
 		CT_DEBUG (d, ("underrun error\n"));
 		d->timeout = 0;
 #ifndef NETGRAPH
-		++d->ifp->if_oerrors;
+		if_inc_counter(d->ifp, IFCOUNTER_OERRORS, 1);
 		d->ifp->if_drv_flags &= ~IFF_DRV_OACTIVE;
 #endif
 		ct_start (d);
@@ -2098,7 +2081,6 @@ static int ng_ct_rcvdata (hook_p hook, item_p item)
 	CT_LOCK (bd);
 	IF_LOCK (q);
 	if (_IF_QFULL (q)) {
-		_IF_DROP (q);
 		IF_UNLOCK (q);
 		CT_UNLOCK (bd);
 		splx (s);
@@ -2180,7 +2162,7 @@ static int ct_modevent (module_t mod, int type, void *unused)
 			printf ("Failed to register ng_ct\n");
 #endif
 		++load_count;
-		callout_init (&timeout_handle, CALLOUT_MPSAFE);
+		callout_init (&timeout_handle, 1);
 		callout_reset (&timeout_handle, hz*5, ct_timeout, 0);
 		break;
 	case MOD_UNLOAD:

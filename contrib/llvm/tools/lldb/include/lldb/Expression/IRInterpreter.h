@@ -13,7 +13,6 @@
 #include "lldb/lldb-public.h"
 #include "lldb/Core/ConstString.h"
 #include "lldb/Core/Stream.h"
-#include "lldb/Symbol/TaggedASTType.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Pass.h"
 
@@ -44,7 +43,8 @@ public:
     static bool
     CanInterpret (llvm::Module &module,
                   llvm::Function &function,
-                  lldb_private::Error &error);
+                  lldb_private::Error &error,
+                  const bool support_function_calls);
     
     static bool
     Interpret (llvm::Module &module,
@@ -53,7 +53,8 @@ public:
                lldb_private::IRMemoryMap &memory_map,
                lldb_private::Error &error,
                lldb::addr_t stack_frame_bottom,
-               lldb::addr_t stack_frame_top);
+               lldb::addr_t stack_frame_top,
+               lldb_private::ExecutionContext &exe_ctx);
     
 private:   
     static bool

@@ -11,8 +11,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_TARGET_POWERPC_PPCPREDICATES_H
-#define LLVM_TARGET_POWERPC_PPCPREDICATES_H
+#ifndef LLVM_LIB_TARGET_POWERPC_MCTARGETDESC_PPCPREDICATES_H
+#define LLVM_LIB_TARGET_POWERPC_MCTARGETDESC_PPCPREDICATES_H
 
 // GCC #defines PPC on Linux but we use it as our namespace name
 #undef PPC
@@ -48,9 +48,22 @@ namespace PPC {
     PRED_GT_PLUS  = (1 << 5) | 15,
     PRED_NE_PLUS  = (2 << 5) |  7,
     PRED_UN_PLUS  = (3 << 5) | 15,
-    PRED_NU_PLUS  = (3 << 5) |  7
+    PRED_NU_PLUS  = (3 << 5) |  7,
+
+    // When dealing with individual condition-register bits, we have simple set
+    // and unset predicates.
+    PRED_BIT_SET =   1024,
+    PRED_BIT_UNSET = 1025
   };
   
+  // Bit for branch taken (plus) or not-taken (minus) hint
+  enum BranchHintBit {
+    BR_NO_HINT       = 0x0,
+    BR_NONTAKEN_HINT = 0x2,
+    BR_TAKEN_HINT    = 0x3,
+    BR_HINT_MASK     = 0X3
+  };
+
   /// Invert the specified predicate.  != -> ==, < -> >=.
   Predicate InvertPredicate(Predicate Opcode);
 

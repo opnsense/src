@@ -62,6 +62,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/systm.h>
 #include <sys/tty.h>
 #include <sys/ttycom.h>
+#include <sys/user.h>
 
 #include <machine/stdarg.h>
 
@@ -123,7 +124,7 @@ ptsdev_read(struct file *fp, struct uio *uio, struct ucred *active_cred,
 		/*
 		 * Implement packet mode. When packet mode is turned on,
 		 * the first byte contains a bitmask of events that
-		 * occured (start, stop, flush, window size, etc).
+		 * occurred (start, stop, flush, window size, etc).
 		 */
 		if (psc->pts_flags & PTS_PKT && psc->pts_pkt) {
 			pkt = psc->pts_pkt;
@@ -250,14 +251,6 @@ done:	ttydisc_rint_done(tp);
 	 */
 	uio->uio_resid += iblen;
 	return (error);
-}
-
-static int
-ptsdev_truncate(struct file *fp, off_t length, struct ucred *active_cred,
-    struct thread *td)
-{
-
-	return (EINVAL);
 }
 
 static int
@@ -591,10 +584,22 @@ ptsdev_close(struct file *fp, struct thread *td)
 	return (0);
 }
 
+static int
+ptsdev_fill_kinfo(struct file *fp, struct kinfo_file *kif, struct filedesc *fdp)
+{
+	struct tty *tp;
+
+	kif->kf_type = KF_TYPE_PTS;
+	tp = fp->f_data;
+	kif->kf_un.kf_pts.kf_pts_dev = tty_udev(tp);
+	strlcpy(kif->kf_path, tty_devname(tp), sizeof(kif->kf_path));
+	return (0);
+}
+
 static struct fileops ptsdev_ops = {
 	.fo_read	= ptsdev_read,
 	.fo_write	= ptsdev_write,
-	.fo_truncate	= ptsdev_truncate,
+	.fo_truncate	= invfo_truncate,
 	.fo_ioctl	= ptsdev_ioctl,
 	.fo_poll	= ptsdev_poll,
 	.fo_kqfilter	= ptsdev_kqfilter,
@@ -603,6 +608,7 @@ static struct fileops ptsdev_ops = {
 	.fo_chmod	= invfo_chmod,
 	.fo_chown	= invfo_chown,
 	.fo_sendfile	= invfo_sendfile,
+	.fo_fill_kinfo	= ptsdev_fill_kinfo,
 	.fo_flags	= DFLAG_PASSABLE,
 };
 
@@ -735,7 +741,7 @@ pts_alloc(int fflags, struct thread *td, struct file *fp)
 		PROC_UNLOCK(p);
 		return (EAGAIN);
 	}
-	ok = chgptscnt(cred->cr_ruidinfo, 1, lim_cur(p, RLIMIT_NPTS));
+	ok = chgptscnt(cred->cr_ruidinfo, 1, lim_cur(td, RLIMIT_NPTS));
 	if (!ok) {
 		racct_sub(p, RACCT_NPTS, 1);
 		PROC_UNLOCK(p);
@@ -789,7 +795,7 @@ pts_alloc_external(int fflags, struct thread *td, struct file *fp,
 		PROC_UNLOCK(p);
 		return (EAGAIN);
 	}
-	ok = chgptscnt(cred->cr_ruidinfo, 1, lim_cur(p, RLIMIT_NPTS));
+	ok = chgptscnt(cred->cr_ruidinfo, 1, lim_cur(td, RLIMIT_NPTS));
 	if (!ok) {
 		racct_sub(p, RACCT_NPTS, 1);
 		PROC_UNLOCK(p);
@@ -839,7 +845,7 @@ sys_posix_openpt(struct thread *td, struct posix_openpt_args *uap)
 	/* Allocate the actual pseudo-TTY. */
 	error = pts_alloc(FFLAGS(uap->flags & O_ACCMODE), td, fp);
 	if (error != 0) {
-		fdclose(td->td_proc->p_fd, fp, fd, td);
+		fdclose(td, fp, fd);
 		fdrop(fp, td);
 		return (error);
 	}

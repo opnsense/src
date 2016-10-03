@@ -128,7 +128,7 @@
 #define HAVE_FCNTL_H 1
 
 /* Define to 1 if you have the `futimens' function. */
-/* #undef HAVE_FUTIMENS 1 */
+#define HAVE_FUTIMENS 1
 
 /* Define to 1 if you have the `futimes' function. */
 /* #undef HAVE_FUTIMES */

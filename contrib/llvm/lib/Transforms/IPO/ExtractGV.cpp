@@ -27,11 +27,10 @@ using namespace llvm;
 /// the split module remain valid.
 static void makeVisible(GlobalValue &GV, bool Delete) {
   bool Local = GV.hasLocalLinkage();
-  if (Local)
-    GV.setVisibility(GlobalValue::HiddenVisibility);
-
   if (Local || Delete) {
     GV.setLinkage(GlobalValue::ExternalLinkage);
+    if (Local)
+      GV.setVisibility(GlobalValue::HiddenVisibility);
     return;
   }
 
@@ -68,7 +67,7 @@ namespace {
     explicit GVExtractorPass(std::vector<GlobalValue*>& GVs, bool deleteS = true)
       : ModulePass(ID), Named(GVs.begin(), GVs.end()), deleteStuff(deleteS) {}
 
-    bool runOnModule(Module &M) {
+    bool runOnModule(Module &M) override {
       // Visit the global inline asm.
       if (!deleteStuff)
         M.setModuleInlineAsm("");
@@ -84,7 +83,7 @@ namespace {
       for (Module::global_iterator I = M.global_begin(), E = M.global_end();
            I != E; ++I) {
         bool Delete =
-          deleteStuff == (bool)Named.count(I) && !I->isDeclaration();
+            deleteStuff == (bool)Named.count(&*I) && !I->isDeclaration();
         if (!Delete) {
           if (I->hasAvailableExternallyLinkage())
             continue;
@@ -92,25 +91,31 @@ namespace {
             continue;
         }
 
-	makeVisible(*I, Delete);
+        makeVisible(*I, Delete);
 
-        if (Delete)
-          I->setInitializer(0);
+        if (Delete) {
+          // Make this a declaration and drop it's comdat.
+          I->setInitializer(nullptr);
+          I->setComdat(nullptr);
+        }
       }
 
       // Visit the Functions.
       for (Module::iterator I = M.begin(), E = M.end(); I != E; ++I) {
         bool Delete =
-          deleteStuff == (bool)Named.count(I) && !I->isDeclaration();
+            deleteStuff == (bool)Named.count(&*I) && !I->isDeclaration();
         if (!Delete) {
           if (I->hasAvailableExternallyLinkage())
             continue;
         }
 
-	makeVisible(*I, Delete);
+        makeVisible(*I, Delete);
 
-        if (Delete)
+        if (Delete) {
+          // Make this a declaration and drop it's comdat.
           I->deleteBody();
+          I->setComdat(nullptr);
+        }
       }
 
       // Visit the Aliases.
@@ -119,8 +124,8 @@ namespace {
         Module::alias_iterator CurI = I;
         ++I;
 
-	bool Delete = deleteStuff == (bool)Named.count(CurI);
-	makeVisible(*CurI, Delete);
+        bool Delete = deleteStuff == (bool)Named.count(&*CurI);
+        makeVisible(*CurI, Delete);
 
         if (Delete) {
           Type *Ty =  CurI->getType()->getElementType();
@@ -134,11 +139,11 @@ namespace {
           } else {
             Declaration =
               new GlobalVariable(M, Ty, false, GlobalValue::ExternalLinkage,
-                                 0, CurI->getName());
+                                 nullptr, CurI->getName());
 
           }
           CurI->replaceAllUsesWith(Declaration);
-          delete CurI;
+          delete &*CurI;
         }
       }
 
@@ -149,7 +154,7 @@ namespace {
   char GVExtractorPass::ID = 0;
 }
 
-ModulePass *llvm::createGVExtractionPass(std::vector<GlobalValue*>& GVs, 
+ModulePass *llvm::createGVExtractionPass(std::vector<GlobalValue *> &GVs,
                                          bool deleteFn) {
   return new GVExtractorPass(GVs, deleteFn);
 }

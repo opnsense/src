@@ -365,7 +365,7 @@ struct rx_ring {
         u32                     payload;
         struct task             rx_task;
         struct taskqueue        *tq;
-        struct e1000_rx_desc    *rx_base;
+        union e1000_rx_desc_extended	*rx_base;
         struct em_dma_alloc	rxdma;
         u32			next_to_refresh;
         u32			next_to_check;
@@ -389,7 +389,7 @@ struct rx_ring {
 
 /* Our adapter structure */
 struct adapter {
-	struct ifnet	*ifp;
+	if_t 		ifp;
 	struct e1000_hw	hw;
 
 	/* FreeBSD operating-system-specific structures. */
@@ -511,6 +511,7 @@ struct em_rxbuffer {
 	int		next_eop;  /* Index of the desc to watch */
         struct mbuf    *m_head;
         bus_dmamap_t    map;         /* bus_dma map for packet */
+	bus_addr_t	paddr;
 };
 
 

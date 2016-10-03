@@ -80,7 +80,7 @@ __FBSDID("$FreeBSD$");
 static int umcs_debug = 0;
 
 static SYSCTL_NODE(_hw_usb, OID_AUTO, umcs, CTLFLAG_RW, 0, "USB umcs quadport serial adapter");
-SYSCTL_INT(_hw_usb_umcs, OID_AUTO, debug, CTLFLAG_RW, &umcs_debug, 0, "Debug level");
+SYSCTL_INT(_hw_usb_umcs, OID_AUTO, debug, CTLFLAG_RWTUN, &umcs_debug, 0, "Debug level");
 #endif					/* USB_DEBUG */
 
 
@@ -278,6 +278,7 @@ DRIVER_MODULE(umcs7840, uhub, umcs7840_driver, umcs7840_devclass, 0, 0);
 MODULE_DEPEND(umcs7840, ucom, 1, 1, 1);
 MODULE_DEPEND(umcs7840, usb, 1, 1, 1);
 MODULE_VERSION(umcs7840, UMCS7840_MODVER);
+USB_PNP_HOST_INFO(umcs7840_devs);
 
 static int
 umcs7840_probe(device_t dev)
@@ -1071,7 +1072,7 @@ umcs7840_set_baudrate(struct umcs7840_softc *sc, uint8_t portno, uint32_t rate)
 
 /* Maximum speeds for standard frequences, when PLL is not used */
 static const uint32_t umcs7840_baudrate_divisors[] = {0, 115200, 230400, 403200, 460800, 806400, 921600, 1572864, 3145728,};
-static const uint8_t umcs7840_baudrate_divisors_len = sizeof(umcs7840_baudrate_divisors) / sizeof(umcs7840_baudrate_divisors[0]);
+static const uint8_t umcs7840_baudrate_divisors_len = nitems(umcs7840_baudrate_divisors);
 
 static usb_error_t
 umcs7840_calc_baudrate(uint32_t rate, uint16_t *divisor, uint8_t *clk)

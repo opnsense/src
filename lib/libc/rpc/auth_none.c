@@ -65,9 +65,9 @@ static bool_t authnone_validate (AUTH *, struct opaque_auth *);
 static bool_t authnone_refresh (AUTH *, void *);
 static void authnone_destroy (AUTH *);
 
-extern bool_t xdr_opaque_auth();
+extern bool_t xdr_opaque_auth(XDR *, struct opaque_auth *);
 
-static struct auth_ops *authnone_ops();
+static struct auth_ops *authnone_ops(void);
 
 static struct authnone_private {
 	AUTH	no_client;
@@ -76,16 +76,16 @@ static struct authnone_private {
 } *authnone_private;
 
 AUTH *
-authnone_create()
+authnone_create(void)
 {
 	struct authnone_private *ap = authnone_private;
 	XDR xdr_stream;
 	XDR *xdrs;
 
 	mutex_lock(&authnone_lock);
-	if (ap == 0) {
-		ap = (struct authnone_private *)calloc(1, sizeof (*ap));
-		if (ap == 0) {
+	if (ap == NULL) {
+		ap = calloc(1, sizeof (*ap));
+		if (ap == NULL) {
 			mutex_unlock(&authnone_lock);
 			return (0);
 		}
@@ -156,7 +156,7 @@ authnone_destroy(AUTH *client)
 }
 
 static struct auth_ops *
-authnone_ops()
+authnone_ops(void)
 {
 	static struct auth_ops ops;
  

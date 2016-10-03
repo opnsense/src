@@ -79,7 +79,7 @@ __FBSDID("$FreeBSD$");
 static int uhid_debug = 0;
 
 static SYSCTL_NODE(_hw_usb, OID_AUTO, uhid, CTLFLAG_RW, 0, "USB uhid");
-SYSCTL_INT(_hw_usb_uhid, OID_AUTO, debug, CTLFLAG_RW,
+SYSCTL_INT(_hw_usb_uhid, OID_AUTO, debug, CTLFLAG_RWTUN,
     &uhid_debug, 0, "Debug level");
 #endif
 
@@ -878,3 +878,4 @@ static driver_t uhid_driver = {
 DRIVER_MODULE(uhid, uhub, uhid_driver, uhid_devclass, NULL, 0);
 MODULE_DEPEND(uhid, usb, 1, 1, 1);
 MODULE_VERSION(uhid, 1);
+USB_PNP_HOST_INFO(uhid_devs);

@@ -7,12 +7,12 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_READOBJ_STREAMWRITER_H
-#define LLVM_READOBJ_STREAMWRITER_H
+#ifndef LLVM_TOOLS_LLVM_READOBJ_STREAMWRITER_H
+#define LLVM_TOOLS_LLVM_READOBJ_STREAMWRITER_H
 
 #include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/DataTypes.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/raw_ostream.h"
@@ -34,14 +34,17 @@ struct HexNumber {
   // unsigned type. The overloads are here so that every type that is implicitly
   // convertible to an integer (including enums and endian helpers) can be used
   // without requiring type traits or call-site changes.
-  HexNumber(int8_t   Value) : Value(static_cast<uint8_t >(Value)) { }
-  HexNumber(int16_t  Value) : Value(static_cast<uint16_t>(Value)) { }
-  HexNumber(int32_t  Value) : Value(static_cast<uint32_t>(Value)) { }
-  HexNumber(int64_t  Value) : Value(static_cast<uint64_t>(Value)) { }
-  HexNumber(uint8_t  Value) : Value(Value) { }
-  HexNumber(uint16_t Value) : Value(Value) { }
-  HexNumber(uint32_t Value) : Value(Value) { }
-  HexNumber(uint64_t Value) : Value(Value) { }
+  HexNumber(char             Value) : Value(static_cast<unsigned char>(Value)) { }
+  HexNumber(signed char      Value) : Value(static_cast<unsigned char>(Value)) { }
+  HexNumber(signed short     Value) : Value(static_cast<unsigned short>(Value)) { }
+  HexNumber(signed int       Value) : Value(static_cast<unsigned int>(Value)) { }
+  HexNumber(signed long      Value) : Value(static_cast<unsigned long>(Value)) { }
+  HexNumber(signed long long Value) : Value(static_cast<unsigned long long>(Value)) { }
+  HexNumber(unsigned char      Value) : Value(Value) { }
+  HexNumber(unsigned short     Value) : Value(Value) { }
+  HexNumber(unsigned int       Value) : Value(Value) { }
+  HexNumber(unsigned long      Value) : Value(Value) { }
+  HexNumber(unsigned long long Value) : Value(Value) { }
   uint64_t Value;
 };
 
@@ -81,9 +84,9 @@ public:
                  ArrayRef<EnumEntry<TEnum> > EnumValues) {
     StringRef Name;
     bool Found = false;
-    for (size_t i = 0; i < EnumValues.size(); ++i) {
-      if (EnumValues[i].Value == Value) {
-        Name = EnumValues[i].Name;
+    for (const auto &EnumItem : EnumValues) {
+      if (EnumItem.Value == Value) {
+        Name = EnumItem.Name;
         Found = true;
         break;
       }
@@ -96,32 +99,37 @@ public:
     }
   }
 
-  template<typename T, typename TFlag>
-  void printFlags(StringRef Label, T Value, ArrayRef<EnumEntry<TFlag> > Flags,
-                  TFlag EnumMask = TFlag(0)) {
+  template <typename T, typename TFlag>
+  void printFlags(StringRef Label, T Value, ArrayRef<EnumEntry<TFlag>> Flags,
+                  TFlag EnumMask1 = {}, TFlag EnumMask2 = {},
+                  TFlag EnumMask3 = {}) {
     typedef EnumEntry<TFlag> FlagEntry;
     typedef SmallVector<FlagEntry, 10> FlagVector;
     FlagVector SetFlags;
 
-    for (typename ArrayRef<FlagEntry>::const_iterator I = Flags.begin(),
-                                                 E = Flags.end(); I != E; ++I) {
-      if (I->Value == 0)
+    for (const auto &Flag : Flags) {
+      if (Flag.Value == 0)
         continue;
 
-      bool IsEnum = (I->Value & EnumMask) != 0;
-      if ((!IsEnum && (Value & I->Value) == I->Value) ||
-          (IsEnum  && (Value & EnumMask) == I->Value)) {
-        SetFlags.push_back(*I);
+      TFlag EnumMask{};
+      if (Flag.Value & EnumMask1)
+        EnumMask = EnumMask1;
+      else if (Flag.Value & EnumMask2)
+        EnumMask = EnumMask2;
+      else if (Flag.Value & EnumMask3)
+        EnumMask = EnumMask3;
+      bool IsEnum = (Flag.Value & EnumMask) != 0;
+      if ((!IsEnum && (Value & Flag.Value) == Flag.Value) ||
+          (IsEnum  && (Value & EnumMask) == Flag.Value)) {
+        SetFlags.push_back(Flag);
       }
     }
 
     std::sort(SetFlags.begin(), SetFlags.end(), &flagName<TFlag>);
 
     startLine() << Label << " [ (" << hex(Value) << ")\n";
-    for (typename FlagVector::const_iterator I = SetFlags.begin(),
-                                             E = SetFlags.end();
-                                             I != E; ++I) {
-      startLine() << "  " << I->Name << " (" << hex(I->Value) << ")\n";
+    for (const auto &Flag : SetFlags) {
+      startLine() << "  " << Flag.Name << " (" << hex(Flag.Value) << ")\n";
     }
     startLine() << "]\n";
   }
@@ -172,6 +180,36 @@ public:
     startLine() << Label << ": " << int(Value) << "\n";
   }
 
+  void printBoolean(StringRef Label, bool Value) {
+    startLine() << Label << ": " << (Value ? "Yes" : "No") << '\n';
+  }
+
+  template <typename T>
+  void printList(StringRef Label, const T &List) {
+    startLine() << Label << ": [";
+    bool Comma = false;
+    for (const auto &Item : List) {
+      if (Comma)
+        OS << ", ";
+      OS << Item;
+      Comma = true;
+    }
+    OS << "]\n";
+  }
+
+  template <typename T>
+  void printHexList(StringRef Label, const T &List) {
+    startLine() << Label << ": [";
+    bool Comma = false;
+    for (const auto &Item : List) {
+      if (Comma)
+        OS << ", ";
+      OS << hex(Item);
+      Comma = true;
+    }
+    OS << "]\n";
+  }
+
   template<typename T>
   void printHex(StringRef Label, T Value) {
     startLine() << Label << ": " << hex(Value) << "\n";
@@ -200,8 +238,8 @@ public:
   }
 
   void printBinary(StringRef Label, StringRef Str, ArrayRef<char> Value) {
-    ArrayRef<uint8_t> V(reinterpret_cast<const uint8_t*>(Value.data()),
-                        Value.size());
+    auto V = makeArrayRef(reinterpret_cast<const uint8_t*>(Value.data()),
+                          Value.size());
     printBinaryImpl(Label, Str, V, false);
   }
 
@@ -210,20 +248,20 @@ public:
   }
 
   void printBinary(StringRef Label, ArrayRef<char> Value) {
-    ArrayRef<uint8_t> V(reinterpret_cast<const uint8_t*>(Value.data()),
-                        Value.size());
+    auto V = makeArrayRef(reinterpret_cast<const uint8_t*>(Value.data()),
+                          Value.size());
     printBinaryImpl(Label, StringRef(), V, false);
   }
 
   void printBinary(StringRef Label, StringRef Value) {
-    ArrayRef<uint8_t> V(reinterpret_cast<const uint8_t*>(Value.data()),
-                        Value.size());
+    auto V = makeArrayRef(reinterpret_cast<const uint8_t*>(Value.data()),
+                          Value.size());
     printBinaryImpl(Label, StringRef(), V, false);
   }
 
   void printBinaryBlock(StringRef Label, StringRef Value) {
-    ArrayRef<uint8_t> V(reinterpret_cast<const uint8_t*>(Value.data()),
-                        Value.size());
+    auto V = makeArrayRef(reinterpret_cast<const uint8_t*>(Value.data()),
+                          Value.size());
     printBinaryImpl(Label, StringRef(), V, true);
   }
 

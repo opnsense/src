@@ -8,13 +8,13 @@
 //===----------------------------------------------------------------------===//
 //
 /// \file
-/// \brief Forward declares and imports various common LLVM datatypes that
+/// \brief Forward-declares and imports various common LLVM datatypes that
 /// clang wants to use unqualified.
 ///
 //===----------------------------------------------------------------------===//
 
-#ifndef CLANG_BASIC_LLVM_H
-#define CLANG_BASIC_LLVM_H
+#ifndef LLVM_CLANG_BASIC_LLVM_H
+#define LLVM_CLANG_BASIC_LLVM_H
 
 // Do not proliferate #includes here, require clients to #include their
 // dependencies.
@@ -29,7 +29,7 @@ namespace llvm {
   class StringRef;
   class Twine;
   template<typename T> class ArrayRef;
-  template<typename T> class OwningPtr;
+  template<typename T> class MutableArrayRef;
   template<unsigned InternalLen> class SmallString;
   template<typename T, unsigned N> class SmallVector;
   template<typename T> class SmallVectorImpl;
@@ -45,6 +45,7 @@ namespace llvm {
   class RefCountedBaseVPTR;
 
   class raw_ostream;
+  class raw_pwrite_stream;
   // TODO: DenseMap, ...
 }
 
@@ -63,7 +64,7 @@ namespace clang {
   using llvm::StringRef;
   using llvm::Twine;
   using llvm::ArrayRef;
-  using llvm::OwningPtr;
+  using llvm::MutableArrayRef;
   using llvm::SmallString;
   using llvm::SmallVector;
   using llvm::SmallVectorImpl;
@@ -76,6 +77,7 @@ namespace clang {
   using llvm::RefCountedBaseVPTR;
 
   using llvm::raw_ostream;
+  using llvm::raw_pwrite_stream;
 } // end namespace clang.
 
 #endif

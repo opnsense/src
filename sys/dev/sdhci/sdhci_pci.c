@@ -105,6 +105,8 @@ static const struct sdhci_device {
 	{ 0x2381197B, 	0xffff,	"JMicron JMB38X SD",
 	    SDHCI_QUIRK_32BIT_DMA_SIZE |
 	    SDHCI_QUIRK_RESET_AFTER_REQUEST },
+	{ 0x16bc14e4,	0xffff,	"Broadcom BCM577xx SDXC/MMC Card Reader",
+	    SDHCI_QUIRK_BCM577XX_400KHZ_CLKSRC },
 	{ 0,		0xffff,	NULL,
 	    0 }
 };
@@ -122,7 +124,6 @@ struct sdhci_pci_softc {
 };
 
 static int sdhci_enable_msi = 1;
-TUNABLE_INT("hw.sdhci.enable_msi", &sdhci_enable_msi);
 SYSCTL_INT(_hw_sdhci, OID_AUTO, enable_msi, CTLFLAG_RDTUN, &sdhci_enable_msi,
     0, "Enable MSI interrupts");
 
@@ -329,12 +330,14 @@ sdhci_pci_attach(device_t dev)
 
 		/* Allocate memory. */
 		rid = PCIR_BAR(bar + i);
-		sc->mem_res[i] = bus_alloc_resource(dev, SYS_RES_MEMORY,
-		    &rid, 0ul, ~0ul, 0x100, RF_ACTIVE);
+		sc->mem_res[i] = bus_alloc_resource_any(dev, SYS_RES_MEMORY,
+		    &rid, RF_ACTIVE);
 		if (sc->mem_res[i] == NULL) {
 			device_printf(dev, "Can't allocate memory for slot %d\n", i);
 			continue;
 		}
+		
+		slot->quirks = sc->quirks;
 
 		if (sdhci_init_slot(dev, slot, i) != 0)
 			continue;
@@ -409,11 +412,16 @@ static int
 sdhci_pci_resume(device_t dev)
 {
 	struct sdhci_pci_softc *sc = device_get_softc(dev);
-	int i;
+	int i, err;
 
 	for (i = 0; i < sc->num_slots; i++)
 		sdhci_generic_resume(&sc->slots[i]);
-	return (bus_generic_resume(dev));
+	err = bus_generic_resume(dev);
+	if (err)
+		return (err);
+	if (sc->quirks & SDHCI_QUIRK_LOWER_FREQUENCY)
+		sdhci_lower_frequency(dev);
+	return (0);
 }
 
 static void
@@ -471,3 +479,5 @@ static devclass_t sdhci_pci_devclass;
 DRIVER_MODULE(sdhci_pci, pci, sdhci_pci_driver, sdhci_pci_devclass, NULL,
     NULL);
 MODULE_DEPEND(sdhci_pci, sdhci, 1, 1, 1);
+DRIVER_MODULE(mmc, sdhci_pci, mmc_driver, mmc_devclass, NULL, NULL);
+MODULE_DEPEND(sdhci_pci, mmc, 1, 1, 1);

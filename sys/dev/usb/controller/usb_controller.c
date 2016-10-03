@@ -85,25 +85,22 @@ static void	usb_attach_sub(device_t, struct usb_bus *);
 static int usb_ctrl_debug = 0;
 
 static SYSCTL_NODE(_hw_usb, OID_AUTO, ctrl, CTLFLAG_RW, 0, "USB controller");
-SYSCTL_INT(_hw_usb_ctrl, OID_AUTO, debug, CTLFLAG_RW, &usb_ctrl_debug, 0,
+SYSCTL_INT(_hw_usb_ctrl, OID_AUTO, debug, CTLFLAG_RWTUN, &usb_ctrl_debug, 0,
     "Debug level");
 #endif
 
 #if USB_HAVE_ROOT_MOUNT_HOLD
 static int usb_no_boot_wait = 0;
-TUNABLE_INT("hw.usb.no_boot_wait", &usb_no_boot_wait);
-SYSCTL_INT(_hw_usb, OID_AUTO, no_boot_wait, CTLFLAG_RD|CTLFLAG_TUN, &usb_no_boot_wait, 0,
+SYSCTL_INT(_hw_usb, OID_AUTO, no_boot_wait, CTLFLAG_RDTUN, &usb_no_boot_wait, 0,
     "No USB device enumerate waiting at boot.");
 #endif
 
 static int usb_no_suspend_wait = 0;
-TUNABLE_INT("hw.usb.no_suspend_wait", &usb_no_suspend_wait);
-SYSCTL_INT(_hw_usb, OID_AUTO, no_suspend_wait, CTLFLAG_RW|CTLFLAG_TUN,
+SYSCTL_INT(_hw_usb, OID_AUTO, no_suspend_wait, CTLFLAG_RWTUN,
     &usb_no_suspend_wait, 0, "No USB device waiting at system suspend.");
 
 static int usb_no_shutdown_wait = 0;
-TUNABLE_INT("hw.usb.no_shutdown_wait", &usb_no_shutdown_wait);
-SYSCTL_INT(_hw_usb, OID_AUTO, no_shutdown_wait, CTLFLAG_RW|CTLFLAG_TUN,
+SYSCTL_INT(_hw_usb, OID_AUTO, no_shutdown_wait, CTLFLAG_RWTUN,
     &usb_no_shutdown_wait, 0, "No USB device waiting at system shutdown.");
 
 static devclass_t usb_devclass;
@@ -139,6 +136,7 @@ DRIVER_MODULE(usbus, octusb, usb_driver, usb_devclass, 0, 0);
 
 /* Dual Mode Drivers */
 DRIVER_MODULE(usbus, dwcotg, usb_driver, usb_devclass, 0, 0);
+DRIVER_MODULE(usbus, saf1761otg, usb_driver, usb_devclass, 0, 0);
 
 /*------------------------------------------------------------------------*
  *	usb_probe

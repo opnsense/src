@@ -17,12 +17,9 @@
 #define LLVM_CLANG_BASIC_IDENTIFIERTABLE_H
 
 #include "clang/Basic/LLVM.h"
-#include "clang/Basic/OperatorKinds.h"
 #include "clang/Basic/TokenKinds.h"
-#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/PointerLikeTypeTraits.h"
 #include <cassert>
 #include <string>
 
@@ -52,11 +49,12 @@ class IdentifierInfo {
   // Objective-C keyword ('protocol' in '@protocol') or builtin (__builtin_inf).
   // First NUM_OBJC_KEYWORDS values are for Objective-C, the remaining values
   // are for builtins.
-  unsigned ObjCOrBuiltinID    :11;
+  unsigned ObjCOrBuiltinID    :13;
   bool HasMacro               : 1; // True if there is a #define for this.
   bool HadMacro               : 1; // True if there was a #define for this.
   bool IsExtension            : 1; // True if identifier is a lang extension.
-  bool IsCXX11CompatKeyword   : 1; // True if identifier is a keyword in C++11.
+  bool IsFutureCompatKeyword  : 1; // True if identifier is a keyword in a
+                                   // newer Standard or proposed Standard.
   bool IsPoisoned             : 1; // True if identifier is poisoned.
   bool IsCPPOperatorKeyword   : 1; // True if ident is a C++ operator keyword.
   bool NeedsHandleIdentifier  : 1; // See "RecomputeNeedsHandleIdentifier".
@@ -64,20 +62,20 @@ class IdentifierInfo {
                                    // partially) from an AST file.
   bool ChangedAfterLoad       : 1; // True if identifier has changed from the
                                    // definition loaded from an AST file.
-  bool RevertedTokenID        : 1; // True if RevertTokenIDToIdentifier was
+  bool RevertedTokenID        : 1; // True if revertTokenIDToIdentifier was
                                    // called.
   bool OutOfDate              : 1; // True if there may be additional
                                    // information about this identifier
                                    // stored externally.
   bool IsModulesImport        : 1; // True if this is the 'import' contextual
                                    // keyword.
-  // 32-bit word is filled.
+  // 30 bit left in 64-bit word.
 
   void *FETokenInfo;               // Managed by the language front-end.
   llvm::StringMapEntry<IdentifierInfo*> *Entry;
 
-  IdentifierInfo(const IdentifierInfo&) LLVM_DELETED_FUNCTION;
-  void operator=(const IdentifierInfo&) LLVM_DELETED_FUNCTION;
+  IdentifierInfo(const IdentifierInfo&) = delete;
+  void operator=(const IdentifierInfo&) = delete;
 
   friend class IdentifierTable;
   
@@ -127,6 +125,7 @@ public:
   }
 
   /// \brief Return true if this identifier is \#defined to some other value.
+  /// \note The current definition may be in a module and not currently visible.
   bool hasMacroDefinition() const {
     return HasMacro;
   }
@@ -153,7 +152,7 @@ public:
   /// tokens.
   tok::TokenKind getTokenID() const { return (tok::TokenKind)TokenID; }
 
-  /// \brief True if RevertTokenIDToIdentifier() was called.
+  /// \brief True if revertTokenIDToIdentifier() was called.
   bool hasRevertedTokenIDToIdentifier() const { return RevertedTokenID; }
 
   /// \brief Revert TokenID to tok::identifier; used for GNU libstdc++ 4.2
@@ -162,10 +161,15 @@ public:
   /// TokenID is normally read-only but there are 2 instances where we revert it
   /// to tok::identifier for libstdc++ 4.2. Keep track of when this happens
   /// using this method so we can inform serialization about it.
-  void RevertTokenIDToIdentifier() {
+  void revertTokenIDToIdentifier() {
     assert(TokenID != tok::identifier && "Already at tok::identifier");
     TokenID = tok::identifier;
     RevertedTokenID = true;
+  }
+  void revertIdentifierToTokenID(tok::TokenKind TK) {
+    assert(TokenID == tok::identifier && "Should be at tok::identifier");
+    TokenID = TK;
+    RevertedTokenID = false;
   }
 
   /// \brief Return the preprocessor keyword ID for this identifier.
@@ -183,6 +187,18 @@ public:
       return tok::objc_not_keyword;
   }
   void setObjCKeywordID(tok::ObjCKeywordKind ID) { ObjCOrBuiltinID = ID; }
+
+  /// \brief True if setNotBuiltin() was called.
+  bool hasRevertedBuiltin() const {
+    return ObjCOrBuiltinID == tok::NUM_OBJC_KEYWORDS;
+  }
+
+  /// \brief Revert the identifier to a non-builtin identifier. We do this if
+  /// the name of a known builtin library function is used to declare that
+  /// function, but an unexpected type is specified.
+  void revertBuiltin() {
+    setBuiltinID(0);
+  }
 
   /// \brief Return a value indicating whether this is a builtin function.
   ///
@@ -215,13 +231,14 @@ public:
       RecomputeNeedsHandleIdentifier();
   }
 
-  /// is/setIsCXX11CompatKeyword - Initialize information about whether or not
-  /// this language token is a keyword in C++11. This controls compatibility
-  /// warnings, and is only true when not parsing C++11. Once a compatibility
-  /// problem has been diagnosed with this keyword, the flag will be cleared.
-  bool isCXX11CompatKeyword() const { return IsCXX11CompatKeyword; }
-  void setIsCXX11CompatKeyword(bool Val) {
-    IsCXX11CompatKeyword = Val;
+  /// is/setIsFutureCompatKeyword - Initialize information about whether or not
+  /// this language token is a keyword in a newer or proposed Standard. This
+  /// controls compatibility warnings, and is only true when not parsing the
+  /// corresponding Standard. Once a compatibility problem has been diagnosed
+  /// with this keyword, the flag will be cleared.
+  bool isFutureCompatKeyword() const { return IsFutureCompatKeyword; }
+  void setIsFutureCompatKeyword(bool Val) {
+    IsFutureCompatKeyword = Val;
     if (Val)
       NeedsHandleIdentifier = 1;
     else
@@ -251,6 +268,9 @@ public:
       RecomputeNeedsHandleIdentifier();
   }
   bool isCPlusPlusOperatorKeyword() const { return IsCPPOperatorKeyword; }
+
+  /// \brief Return true if this token is a keyword in the specified language.
+  bool isKeyword(const LangOptions &LangOpts);
 
   /// getFETokenInfo/setFETokenInfo - The language front-end is allowed to
   /// associate arbitrary metadata with this token.
@@ -308,7 +328,12 @@ public:
     else
       RecomputeNeedsHandleIdentifier();
   }
-  
+
+  /// \brief Provide less than operator for lexicographical sorting.
+  bool operator<(const IdentifierInfo &RHS) const {
+    return getName() < RHS.getName();
+  }
+
 private:
   /// The Preprocessor::HandleIdentifier does several special (but rare)
   /// things to identifiers of various sorts.  For example, it changes the
@@ -319,7 +344,7 @@ private:
   void RecomputeNeedsHandleIdentifier() {
     NeedsHandleIdentifier =
       (isPoisoned() | hasMacroDefinition() | isCPlusPlusOperatorKeyword() |
-       isExtensionToken() | isCXX11CompatKeyword() || isOutOfDate() ||
+       isExtensionToken() | isFutureCompatKeyword() || isOutOfDate() ||
        isModulesImport());
   }
 };
@@ -356,8 +381,8 @@ public:
 /// actual functionality.
 class IdentifierIterator {
 private:
-  IdentifierIterator(const IdentifierIterator &) LLVM_DELETED_FUNCTION;
-  void operator=(const IdentifierIterator &) LLVM_DELETED_FUNCTION;
+  IdentifierIterator(const IdentifierIterator &) = delete;
+  void operator=(const IdentifierIterator &) = delete;
 
 protected:
   IdentifierIterator() { }
@@ -398,19 +423,6 @@ public:
   virtual IdentifierIterator *getIdentifiers();
 };
 
-/// \brief An abstract class used to resolve numerical identifier
-/// references (meaningful only to some external source) into
-/// IdentifierInfo pointers.
-class ExternalIdentifierLookup {
-public:
-  virtual ~ExternalIdentifierLookup();
-
-  /// \brief Return the identifier associated with the given ID number.
-  ///
-  /// The ID 0 is associated with the NULL identifier.
-  virtual IdentifierInfo *GetIdentifier(unsigned ID) = 0;
-};
-
 /// \brief Implements an efficient mapping from strings to IdentifierInfo nodes.
 ///
 /// This has no other purpose, but this is an extremely performance-critical
@@ -428,7 +440,7 @@ public:
   /// \brief Create the identifier table, populating it with info about the
   /// language keywords for the language specified by \p LangOpts.
   IdentifierTable(const LangOptions &LangOpts,
-                  IdentifierInfoLookup* externalLookup = 0);
+                  IdentifierInfoLookup* externalLookup = nullptr);
 
   /// \brief Set the external identifier lookup mechanism.
   void setExternalIdentifierLookup(IdentifierInfoLookup *IILookup) {
@@ -447,26 +459,21 @@ public:
   /// \brief Return the identifier token info for the specified named
   /// identifier.
   IdentifierInfo &get(StringRef Name) {
-    llvm::StringMapEntry<IdentifierInfo*> &Entry =
-      HashTable.GetOrCreateValue(Name);
+    auto &Entry = *HashTable.insert(std::make_pair(Name, nullptr)).first;
 
-    IdentifierInfo *II = Entry.getValue();
+    IdentifierInfo *&II = Entry.second;
     if (II) return *II;
 
     // No entry; if we have an external lookup, look there first.
     if (ExternalLookup) {
       II = ExternalLookup->get(Name);
-      if (II) {
-        // Cache in the StringMap for subsequent lookups.
-        Entry.setValue(II);
+      if (II)
         return *II;
-      }
     }
 
     // Lookups failed, make a new IdentifierInfo.
     void *Mem = getAllocator().Allocate<IdentifierInfo>();
     II = new (Mem) IdentifierInfo();
-    Entry.setValue(II);
 
     // Make sure getName() knows how to find the IdentifierInfo
     // contents.
@@ -489,25 +496,23 @@ public:
   /// introduce or modify an identifier. If they called get(), they would
   /// likely end up in a recursion.
   IdentifierInfo &getOwn(StringRef Name) {
-    llvm::StringMapEntry<IdentifierInfo*> &Entry =
-      HashTable.GetOrCreateValue(Name);
+    auto &Entry = *HashTable.insert(std::make_pair(Name, nullptr)).first;
 
-    IdentifierInfo *II = Entry.getValue();
-    if (!II) {
+    IdentifierInfo *&II = Entry.second;
+    if (II)
+      return *II;
 
-      // Lookups failed, make a new IdentifierInfo.
-      void *Mem = getAllocator().Allocate<IdentifierInfo>();
-      II = new (Mem) IdentifierInfo();
-      Entry.setValue(II);
+    // Lookups failed, make a new IdentifierInfo.
+    void *Mem = getAllocator().Allocate<IdentifierInfo>();
+    II = new (Mem) IdentifierInfo();
 
-      // Make sure getName() knows how to find the IdentifierInfo
-      // contents.
-      II->Entry = &Entry;
-      
-      // If this is the 'import' contextual keyword, mark it as such.
-      if (Name.equals("import"))
-        II->setModulesImport(true);
-    }
+    // Make sure getName() knows how to find the IdentifierInfo
+    // contents.
+    II->Entry = &Entry;
+
+    // If this is the 'import' contextual keyword, mark it as such.
+    if (Name.equals("import"))
+      II->setModulesImport(true);
 
     return *II;
   }
@@ -566,6 +571,7 @@ enum ObjCMethodFamily {
   OMF_retain,
   OMF_retainCount,
   OMF_self,
+  OMF_initialize,
 
   // performSelector families
   OMF_performSelector
@@ -589,6 +595,12 @@ enum ObjCInstanceTypeFamily {
   OIT_Singleton,
   OIT_Init,
   OIT_ReturnsSelf
+};
+
+enum ObjCStringFormatFamily {
+  SFF_None,
+  SFF_NSString,
+  SFF_CFString
 };
 
 /// \brief Smart pointer class that efficiently represents Objective-C method
@@ -625,7 +637,7 @@ class Selector {
   IdentifierInfo *getAsIdentifierInfo() const {
     if (getIdentifierInfoFlag() < MultiArg)
       return reinterpret_cast<IdentifierInfo *>(InfoPtr & ~ArgFlags);
-    return 0;
+    return nullptr;
   }
   MultiKeywordSelector *getMultiKeywordSelector() const {
     return reinterpret_cast<MultiKeywordSelector *>(InfoPtr & ~ArgFlags);
@@ -636,6 +648,8 @@ class Selector {
   }
 
   static ObjCMethodFamily getMethodFamilyImpl(Selector sel);
+  
+  static ObjCStringFormatFamily getStringFormatFamilyImpl(Selector sel);
 
 public:
   friend class SelectorTable; // only the SelectorTable can create these
@@ -697,14 +711,20 @@ public:
   
   /// \brief Derive the full selector name (e.g. "foo:bar:") and return
   /// it as an std::string.
-  // FIXME: Add a print method that uses a raw_ostream.
   std::string getAsString() const;
+
+  /// \brief Prints the full selector name (e.g. "foo:bar:").
+  void print(llvm::raw_ostream &OS) const;
 
   /// \brief Derive the conventional family of this method.
   ObjCMethodFamily getMethodFamily() const {
     return getMethodFamilyImpl(*this);
   }
-
+  
+  ObjCStringFormatFamily getStringFormatFamily() const {
+    return getStringFormatFamilyImpl(*this);
+  }
+  
   static Selector getEmptyMarker() {
     return Selector(uintptr_t(-1));
   }
@@ -719,8 +739,8 @@ public:
 /// multi-keyword caching.
 class SelectorTable {
   void *Impl;  // Actually a SelectorTableImpl
-  SelectorTable(const SelectorTable &) LLVM_DELETED_FUNCTION;
-  void operator=(const SelectorTable &) LLVM_DELETED_FUNCTION;
+  SelectorTable(const SelectorTable &) = delete;
+  void operator=(const SelectorTable &) = delete;
 public:
   SelectorTable();
   ~SelectorTable();
@@ -811,6 +831,8 @@ struct DenseMapInfo<clang::Selector> {
 
 template <>
 struct isPodLike<clang::Selector> { static const bool value = true; };
+
+template <typename T> class PointerLikeTypeTraits;
 
 template<>
 class PointerLikeTypeTraits<clang::Selector> {

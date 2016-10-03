@@ -26,9 +26,11 @@ SRCS=	DAGCombiner.cpp \
 	SelectionDAGDumper.cpp \
 	SelectionDAGISel.cpp \
 	SelectionDAGPrinter.cpp \
+	StatepointLowering.cpp \
 	TargetLowering.cpp \
 	TargetSelectionDAGInfo.cpp
 
-TGHDRS=	Intrinsics
+TGHDRS=	Attributes \
+	Intrinsics
 
 .include "../clang.lib.mk"

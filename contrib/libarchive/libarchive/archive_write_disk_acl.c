@@ -43,7 +43,7 @@ __FBSDID("$FreeBSD: head/lib/libarchive/archive_write_disk.c 201159 2009-12-29 0
 #include "archive_acl_private.h"
 #include "archive_write_disk_private.h"
 
-#if !defined(HAVE_POSIX_ACL) || !defined(ACL_TYPE_NFS4)
+#ifndef HAVE_POSIX_ACL
 /* Default empty function body to satisfy mainline code. */
 int
 archive_write_disk_set_acls(struct archive *a, int fd, const char *name,
@@ -79,10 +79,12 @@ archive_write_disk_set_acls(struct archive *a, int fd, const char *name,
 		ret = set_acl(a, fd, name, abstract_acl, ACL_TYPE_DEFAULT,
 		    ARCHIVE_ENTRY_ACL_TYPE_DEFAULT, "default");
 		return (ret);
+#ifdef ACL_TYPE_NFS4
 	} else if (archive_acl_count(abstract_acl, ARCHIVE_ENTRY_ACL_TYPE_NFS4) > 0) {
 		ret = set_acl(a, fd, name, abstract_acl, ACL_TYPE_NFS4,
 		    ARCHIVE_ENTRY_ACL_TYPE_NFS4, "nfs4");
 		return (ret);
+#endif
 	} else
 		return ARCHIVE_OK;
 }
@@ -94,6 +96,7 @@ static struct {
 	{ARCHIVE_ENTRY_ACL_EXECUTE, ACL_EXECUTE},
 	{ARCHIVE_ENTRY_ACL_WRITE, ACL_WRITE},
 	{ARCHIVE_ENTRY_ACL_READ, ACL_READ},
+#ifdef ACL_TYPE_NFS4
 	{ARCHIVE_ENTRY_ACL_READ_DATA, ACL_READ_DATA},
 	{ARCHIVE_ENTRY_ACL_LIST_DIRECTORY, ACL_LIST_DIRECTORY},
 	{ARCHIVE_ENTRY_ACL_WRITE_DATA, ACL_WRITE_DATA},
@@ -110,8 +113,10 @@ static struct {
 	{ARCHIVE_ENTRY_ACL_WRITE_ACL, ACL_WRITE_ACL},
 	{ARCHIVE_ENTRY_ACL_WRITE_OWNER, ACL_WRITE_OWNER},
 	{ARCHIVE_ENTRY_ACL_SYNCHRONIZE, ACL_SYNCHRONIZE}
+#endif
 };
 
+#ifdef ACL_TYPE_NFS4
 static struct {
 	int archive_inherit;
 	int platform_inherit;
@@ -121,6 +126,7 @@ static struct {
 	{ARCHIVE_ENTRY_ACL_ENTRY_NO_PROPAGATE_INHERIT, ACL_ENTRY_NO_PROPAGATE_INHERIT},
 	{ARCHIVE_ENTRY_ACL_ENTRY_INHERIT_ONLY, ACL_ENTRY_INHERIT_ONLY}
 };
+#endif
 
 static int
 set_acl(struct archive *a, int fd, const char *name,
@@ -130,7 +136,10 @@ set_acl(struct archive *a, int fd, const char *name,
 	acl_t		 acl;
 	acl_entry_t	 acl_entry;
 	acl_permset_t	 acl_permset;
+#ifdef ACL_TYPE_NFS4
 	acl_flagset_t	 acl_flagset;
+	int		 r;
+#endif
 	int		 ret;
 	int		 ae_type, ae_permset, ae_tag, ae_id;
 	uid_t		 ae_uid;
@@ -171,14 +180,17 @@ set_acl(struct archive *a, int fd, const char *name,
 		case ARCHIVE_ENTRY_ACL_OTHER:
 			acl_set_tag_type(acl_entry, ACL_OTHER);
 			break;
+#ifdef ACL_TYPE_NFS4
 		case ARCHIVE_ENTRY_ACL_EVERYONE:
 			acl_set_tag_type(acl_entry, ACL_EVERYONE);
 			break;
+#endif
 		default:
 			/* XXX */
 			break;
 		}
 
+#ifdef ACL_TYPE_NFS4
 		switch (ae_type) {
 		case ARCHIVE_ENTRY_ACL_TYPE_ALLOW:
 			acl_set_entry_type_np(acl_entry, ACL_ENTRY_TYPE_ALLOW);
@@ -200,6 +212,7 @@ set_acl(struct archive *a, int fd, const char *name,
 			// XXX error handling here.
 			break;
 		}
+#endif
 
 		acl_get_permset(acl_entry, &acl_permset);
 		acl_clear_perms(acl_permset);
@@ -210,13 +223,19 @@ set_acl(struct archive *a, int fd, const char *name,
 					     acl_perm_map[i].platform_perm);
 		}
 
-		acl_get_flagset_np(acl_entry, &acl_flagset);
-		acl_clear_flags_np(acl_flagset);
-		for (i = 0; i < (int)(sizeof(acl_inherit_map) / sizeof(acl_inherit_map[0])); ++i) {
-			if (ae_permset & acl_inherit_map[i].archive_inherit)
-				acl_add_flag_np(acl_flagset,
-						acl_inherit_map[i].platform_inherit);
+#ifdef ACL_TYPE_NFS4
+		// XXX acl_get_flagset_np on FreeBSD returns EINVAL for
+		// non-NFSv4 ACLs
+		r = acl_get_flagset_np(acl_entry, &acl_flagset);
+		if (r == 0) {
+			acl_clear_flags_np(acl_flagset);
+			for (i = 0; i < (int)(sizeof(acl_inherit_map) / sizeof(acl_inherit_map[0])); ++i) {
+				if (ae_permset & acl_inherit_map[i].archive_inherit)
+					acl_add_flag_np(acl_flagset,
+							acl_inherit_map[i].platform_inherit);
+			}
 		}
+#endif
 	}
 
 	/* Try restoring the ACL through 'fd' if we can. */

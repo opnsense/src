@@ -33,7 +33,6 @@
 __FBSDID("$FreeBSD$");
 
 #include "opt_compat.h"
-#include "opt_pax.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -42,10 +41,10 @@ __FBSDID("$FreeBSD$");
 #include <sys/syscallsubr.h>
 #include <sys/sysent.h>
 #include <sys/sysproto.h>
+#include <sys/pioctl.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/vnode.h>
-#include <sys/pax.h>
 #include <sys/ptrace.h>
 #include <sys/rwlock.h>
 #include <sys/sx.h>
@@ -252,8 +251,8 @@ proc_rwmem(struct proc *p, struct uio *uio)
 	 * curthread but we can't assert that.)  This keeps the process
 	 * from exiting out from under us until this operation completes.
 	 */
-	KASSERT(p->p_lock >= 1, ("%s: process %p (pid %d) not held", __func__,
-	    p, p->p_pid));
+	PROC_ASSERT_HELD(p);
+	PROC_LOCK_ASSERT(p, MA_NOTOWNED);
 
 	/*
 	 * The map we want...
@@ -329,6 +328,49 @@ proc_rwmem(struct proc *p, struct uio *uio)
 	return (error);
 }
 
+static ssize_t
+proc_iop(struct thread *td, struct proc *p, vm_offset_t va, void *buf,
+    size_t len, enum uio_rw rw)
+{
+	struct iovec iov;
+	struct uio uio;
+	ssize_t slen;
+	int error;
+
+	MPASS(len < SSIZE_MAX);
+	slen = (ssize_t)len;
+
+	iov.iov_base = (caddr_t)buf;
+	iov.iov_len = len;
+	uio.uio_iov = &iov;
+	uio.uio_iovcnt = 1;
+	uio.uio_offset = va;
+	uio.uio_resid = slen;
+	uio.uio_segflg = UIO_SYSSPACE;
+	uio.uio_rw = rw;
+	uio.uio_td = td;
+	error = proc_rwmem(p, &uio);
+	if (uio.uio_resid == slen)
+		return (-1);
+	return (slen - uio.uio_resid);
+}
+
+ssize_t
+proc_readmem(struct thread *td, struct proc *p, vm_offset_t va, void *buf,
+    size_t len)
+{
+
+	return (proc_iop(td, p, va, buf, len, UIO_READ));
+}
+
+ssize_t
+proc_writemem(struct thread *td, struct proc *p, vm_offset_t va, void *buf,
+    size_t len)
+{
+
+	return (proc_iop(td, p, va, buf, len, UIO_WRITE));
+}
+
 static int
 ptrace_vm_entry(struct thread *td, struct proc *p, struct ptrace_vm_entry *pve)
 {
@@ -391,7 +433,6 @@ ptrace_vm_entry(struct thread *td, struct proc *p, struct ptrace_vm_entry *pve)
 	} while (0);
 
 	vm_map_unlock_read(map);
-	vmspace_free(vm);
 
 	pve->pve_fsid = VNOVAL;
 	pve->pve_fileid = VNOVAL;
@@ -436,6 +477,7 @@ ptrace_vm_entry(struct thread *td, struct proc *p, struct ptrace_vm_entry *pve)
 				free(freepath, M_TEMP);
 		}
 	}
+	vmspace_free(vm);
 	if (error == 0)
 		CTR3(KTR_PTRACE, "PT_VM_ENTRY: pid %d, entry %d, start %p",
 		    p->p_pid, pve->pve_entry, pve->pve_start);
@@ -646,7 +688,7 @@ kern_ptrace(struct thread *td, int req, pid_t pid, void *addr, int data)
 	struct thread *td2 = NULL, *td3;
 	struct ptrace_io_desc *piod = NULL;
 	struct ptrace_lwpinfo *pl;
-	int error, write, tmp, num;
+	int error, num, tmp;
 	int proctree_locked = 0;
 	lwpid_t tid = 0, *buf;
 #ifdef COMPAT_FREEBSD32
@@ -668,6 +710,7 @@ kern_ptrace(struct thread *td, int req, pid_t pid, void *addr, int data)
 	case PT_TO_SCX:
 	case PT_SYSCALL:
 	case PT_FOLLOW_FORK:
+	case PT_LWP_EVENTS:
 	case PT_DETACH:
 		sx_xlock(&proctree_lock);
 		proctree_locked = 1;
@@ -676,7 +719,6 @@ kern_ptrace(struct thread *td, int req, pid_t pid, void *addr, int data)
 		break;
 	}
 
-	write = 0;
 	if (req == PT_TRACE_ME) {
 		p = td->td_proc;
 		PROC_LOCK(p);
@@ -907,6 +949,16 @@ kern_ptrace(struct thread *td, int req, pid_t pid, void *addr, int data)
 			p->p_flag &= ~P_FOLLOWFORK;
 		break;
 
+	case PT_LWP_EVENTS:
+		CTR3(KTR_PTRACE, "PT_LWP_EVENTS: pid %d %s -> %s", p->p_pid,
+		    p->p_flag2 & P2_LWP_EVENTS ? "enabled" : "disabled",
+		    data ? "enabled" : "disabled");
+		if (data)
+			p->p_flag2 |= P2_LWP_EVENTS;
+		else
+			p->p_flag2 &= ~P2_LWP_EVENTS;
+		break;
+
 	case PT_STEP:
 	case PT_CONTINUE:
 	case PT_TO_SCE:
@@ -1004,7 +1056,7 @@ kern_ptrace(struct thread *td, int req, pid_t pid, void *addr, int data)
 			sx_xunlock(&proctree_lock);
 			proctree_locked = 0;
 		}
-		p->p_xstat = data;
+		p->p_xsig = data;
 		p->p_xthread = NULL;
 		if ((p->p_flag & (P_STOPPED_SIG | P_STOPPED_TRACE)) != 0) {
 			/* deliver or queue signal */
@@ -1035,46 +1087,28 @@ kern_ptrace(struct thread *td, int req, pid_t pid, void *addr, int data)
 	case PT_WRITE_I:
 	case PT_WRITE_D:
 		td2->td_dbgflags |= TDB_USERWR;
-		write = 1;
-		/* FALLTHROUGH */
+		PROC_UNLOCK(p);
+		error = 0;
+		if (proc_writemem(td, p, (off_t)(uintptr_t)addr, &data,
+		    sizeof(int)) != sizeof(int))
+			error = ENOMEM;
+		else
+			CTR3(KTR_PTRACE, "PT_WRITE: pid %d: %p <= %#x",
+			    p->p_pid, addr, data);
+		PROC_LOCK(p);
+		break;
+
 	case PT_READ_I:
 	case PT_READ_D:
 		PROC_UNLOCK(p);
-		tmp = 0;
-		/* write = 0 set above */
-		iov.iov_base = write ? (caddr_t)&data : (caddr_t)&tmp;
-		iov.iov_len = sizeof(int);
-		uio.uio_iov = &iov;
-		uio.uio_iovcnt = 1;
-		uio.uio_offset = (off_t)(uintptr_t)addr;
-		uio.uio_resid = sizeof(int);
-		uio.uio_segflg = UIO_SYSSPACE;	/* i.e.: the uap */
-		uio.uio_rw = write ? UIO_WRITE : UIO_READ;
-		uio.uio_td = td;
-		error = proc_rwmem(p, &uio);
-		if (uio.uio_resid != 0) {
-			/*
-			 * XXX proc_rwmem() doesn't currently return ENOSPC,
-			 * so I think write() can bogusly return 0.
-			 * XXX what happens for short writes?  We don't want
-			 * to write partial data.
-			 * XXX proc_rwmem() returns EPERM for other invalid
-			 * addresses.  Convert this to EINVAL.  Does this
-			 * clobber returns of EPERM for other reasons?
-			 */
-			if (error == 0 || error == ENOSPC || error == EPERM)
-				error = EINVAL;	/* EOF */
-		}
-		if (!write)
-			td->td_retval[0] = tmp;
-		if (error == 0) {
-			if (write)
-				CTR3(KTR_PTRACE, "PT_WRITE: pid %d: %p <= %#x",
-				    p->p_pid, addr, data);
-			else
-				CTR3(KTR_PTRACE, "PT_READ: pid %d: %p >= %#x",
-				    p->p_pid, addr, tmp);
-		}
+		error = tmp = 0;
+		if (proc_readmem(td, p, (off_t)(uintptr_t)addr, &tmp,
+		    sizeof(int)) != sizeof(int))
+			error = ENOMEM;
+		else
+			CTR3(KTR_PTRACE, "PT_READ: pid %d: %p >= %#x",
+			    p->p_pid, addr, tmp);
+		td->td_retval[0] = tmp;
 		PROC_LOCK(p);
 		break;
 
@@ -1229,6 +1263,10 @@ kern_ptrace(struct thread *td, int req, pid_t pid, void *addr, int data)
 		}
 		if (td2->td_dbgflags & TDB_CHILD)
 			pl->pl_flags |= PL_FLAG_CHILD;
+		if (td2->td_dbgflags & TDB_BORN)
+			pl->pl_flags |= PL_FLAG_BORN;
+		if (td2->td_dbgflags & TDB_EXIT)
+			pl->pl_flags |= PL_FLAG_EXITED;
 		pl->pl_sigmask = td2->td_sigmask;
 		pl->pl_siglist = td2->td_siglist;
 		strcpy(pl->pl_tdname, td2->td_name);
@@ -1336,7 +1374,8 @@ stopevent(struct proc *p, unsigned int event, unsigned int val)
 	CTR3(KTR_PTRACE, "stopevent: pid %d event %u val %u", p->p_pid, event,
 	    val);
 	do {
-		p->p_xstat = val;
+		if (event != S_EXIT)
+			p->p_xsig = val;
 		p->p_xthread = NULL;
 		p->p_stype = event;	/* Which event caused the stop? */
 		wakeup(&p->p_stype);	/* Wake up any PIOCWAIT'ing procs */

@@ -44,6 +44,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/sysctl.h>
 #include <sys/kernel.h>
 #include <sys/lock.h>
+#include <sys/malloc.h>
 #include <sys/mutex.h>
 #include <sys/errno.h>
 
@@ -54,6 +55,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/socket.h>
  
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_media.h>
 #include <net/if_arp.h>
 #include <net/ethernet.h>		/* XXX for ether_sprintf */
@@ -71,7 +73,7 @@ __FBSDID("$FreeBSD$");
 #include <dev/ath/if_ath_debug.h>
 #include <dev/ath/if_ath_lna_div.h>
 
-/* Linux compability macros */
+/* Linux compatibility macros */
 /*
  * XXX these don't handle rounding, underflow, overflow, wrapping!
  */
@@ -207,6 +209,10 @@ bad:
 	return (error);
 }
 
+/*
+ * XXX need to low_rssi_thresh config from ath9k, to support CUS198
+ * antenna diversity correctly.
+ */
 static HAL_BOOL
 ath_is_alt_ant_ratio_better(int alt_ratio, int maxdelta, int mindelta,
     int main_rssi_avg, int alt_rssi_avg, int pkt_count)
@@ -760,7 +766,7 @@ ath_lna_rx_comb_scan(struct ath_softc *sc, struct ath_rx_status *rs,
 
 	/* Short scan check */
 	if (antcomb->scan && antcomb->alt_good) {
-		if (time_after(ticks, antcomb->scan_start_time +
+		if (ieee80211_time_after(ticks, antcomb->scan_start_time +
 		    msecs_to_jiffies(ATH_ANT_DIV_COMB_SHORT_SCAN_INTR)))
 			short_scan = AH_TRUE;
 		else

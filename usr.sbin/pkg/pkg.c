@@ -71,15 +71,15 @@ struct pubkey {
 };
 
 typedef enum {
-       HASH_UNKNOWN,
-       HASH_SHA256,
+	HASH_UNKNOWN,
+	HASH_SHA256,
 } hash_t;
 
 struct fingerprint {
-       hash_t type;
-       char *name;
-       char hash[BUFSIZ];
-       STAILQ_ENTRY(fingerprint) next;
+	hash_t type;
+	char *name;
+	char hash[BUFSIZ];
+	STAILQ_ENTRY(fingerprint) next;
 };
 
 STAILQ_HEAD(fingerprint_list, fingerprint);
