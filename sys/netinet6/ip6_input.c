@@ -544,7 +544,6 @@ ip6_input(struct mbuf *m)
 		 * Dummynet reinjected this packet.
 		 */
 		m->m_flags &= ~M_SKIP_PFIL;
-		deliverifp = m->m_pkthdr.rcvif;
 		ip6 = mtod(m, struct ip6_hdr *);
 		goto reinjected;
 	}
