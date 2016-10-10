@@ -30,6 +30,7 @@ __FBSDID("$FreeBSD$");
 #include "opt_capsicum.h"
 #include "opt_hwpmc_hooks.h"
 #include "opt_ktrace.h"
+#include "opt_pax.h"
 #include "opt_vm.h"
 
 #include <sys/param.h>
@@ -50,6 +51,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/imgact_elf.h>
 #include <sys/wait.h>
 #include <sys/malloc.h>
+#include <sys/pax.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/pioctl.h>
@@ -150,12 +152,12 @@ sysctl_kern_ps_strings(SYSCTL_HANDLER_ARGS)
 #ifdef SCTL_MASK32
 	if (req->flags & SCTL_MASK32) {
 		unsigned int val;
-		val = (unsigned int)p->p_sysent->sv_psstrings;
+		val = (unsigned int)p->p_psstrings;
 		error = SYSCTL_OUT(req, &val, sizeof(val));
 	} else
 #endif
-		error = SYSCTL_OUT(req, &p->p_sysent->sv_psstrings,
-		   sizeof(p->p_sysent->sv_psstrings));
+		error = SYSCTL_OUT(req, &p->p_psstrings,
+		   sizeof(p->p_psstrings));
 	return error;
 }
 
@@ -169,12 +171,12 @@ sysctl_kern_usrstack(SYSCTL_HANDLER_ARGS)
 #ifdef SCTL_MASK32
 	if (req->flags & SCTL_MASK32) {
 		unsigned int val;
-		val = (unsigned int)p->p_sysent->sv_usrstack;
+		val = (unsigned int)p->p_usrstack;
 		error = SYSCTL_OUT(req, &val, sizeof(val));
 	} else
 #endif
-		error = SYSCTL_OUT(req, &p->p_sysent->sv_usrstack,
-		    sizeof(p->p_sysent->sv_usrstack));
+		error = SYSCTL_OUT(req, &p->p_usrstack,
+		    sizeof(p->p_usrstack));
 	return error;
 }
 
@@ -460,6 +462,12 @@ interpret:
 		imgp->vp = newtextvp;
 	}
 
+#ifdef PAX
+	error = pax_elf(imgp, td, 0);
+	if (error)
+		goto exec_fail_dealloc;
+#endif
+
 	/*
 	 * Check file permissions (also 'opens' file)
 	 */
@@ -666,6 +674,11 @@ interpret:
 		vn_lock(imgp->vp, LK_SHARED | LK_RETRY);
 		goto exec_fail_dealloc;
 	}
+
+	p->p_psstrings = p->p_sysent->sv_psstrings;
+#ifdef PAX_ASLR
+	pax_aslr_stack_with_gap(p, &(p->p_psstrings));
+#endif
 
 	/* ABI enforces the use of Capsicum. Switch into capabilities mode. */
 	if (SV_PROC_FLAG(p, SV_CAPSICUM))
@@ -1071,6 +1084,8 @@ exec_new_vmspace(imgp, sv)
 	vm_offset_t sv_minuser, stack_addr;
 	vm_map_t map;
 	u_long ssiz;
+	vm_prot_t stackprot;
+	vm_prot_t stackmaxprot;
 
 	imgp->vmspace_destroyed = 1;
 	imgp->sysent = sv;
@@ -1101,19 +1116,44 @@ exec_new_vmspace(imgp, sv)
 		map = &vmspace->vm_map;
 	}
 
+#ifdef PAX_ASLR
+	PROC_LOCK(imgp->proc);
+	pax_aslr_init(imgp);
+	PROC_UNLOCK(imgp->proc);
+#endif
+
 	/* Map a shared page */
 	obj = sv->sv_shared_page_obj;
 	if (obj != NULL) {
+		p->p_shared_page_base = sv->sv_shared_page_base;
+#ifdef PAX_ASLR
+		PROC_LOCK(imgp->proc);
+		pax_aslr_vdso(p, &(p->p_shared_page_base));
+		PROC_UNLOCK(imgp->proc);
+#endif
 		vm_object_reference(obj);
 		error = vm_map_fixed(map, obj, 0,
-		    sv->sv_shared_page_base, sv->sv_shared_page_len,
+		    p->p_shared_page_base, sv->sv_shared_page_len,
 		    VM_PROT_READ | VM_PROT_EXECUTE,
 		    VM_PROT_READ | VM_PROT_EXECUTE,
 		    MAP_INHERIT_SHARE | MAP_ACC_NO_CHARGE);
 		if (error) {
 			vm_object_deallocate(obj);
+#ifdef PAX_ASLR
+			pax_log_aslr(p, PAX_LOG_DEFAULT,
+			    "failed to map the shared-page @%p",
+			    (void *)p->p_shared_page_base);
+#endif
 			return (error);
 		}
+
+		p->p_timekeep_base = sv->sv_timekeep_base;
+#ifdef PAX_ASLR
+		PROC_LOCK(imgp->proc);
+		if (p->p_timekeep_base != 0)
+			pax_aslr_vdso(p, &(p->p_timekeep_base));
+		PROC_UNLOCK(imgp->proc);
+#endif
 	}
 
 	/* Allocate a new stack */
@@ -1133,13 +1173,27 @@ exec_new_vmspace(imgp, sv)
 	} else {
 		ssiz = maxssiz;
 	}
-	stack_addr = sv->sv_usrstack - ssiz;
-	error = vm_map_stack(map, stack_addr, (vm_size_t)ssiz,
-	    obj != NULL && imgp->stack_prot != 0 ? imgp->stack_prot :
-		sv->sv_stackprot,
-	    VM_PROT_ALL, MAP_STACK_GROWS_DOWN);
-	if (error)
+
+	stack_addr = sv->sv_usrstack;
+#ifdef PAX_ASLR
+	/* Randomize the stack top. */
+	pax_aslr_stack(p, &stack_addr);
+#endif
+	/* Safe the process specific randomized stack top. */
+	p->p_usrstack = stack_addr;
+	/* Calculate the stack's mapping address */
+	stack_addr -= ssiz;
+	stackprot = obj != NULL && imgp->stack_prot != 0 ? imgp->stack_prot : sv->sv_stackprot;
+	stackmaxprot = VM_PROT_ALL;
+	error = vm_map_stack(map, stack_addr, (vm_size_t)ssiz, stackprot, stackmaxprot, MAP_STACK_GROWS_DOWN);
+	if (error) {
+#ifdef PAX_ASLR
+		pax_log_aslr(p, PAX_LOG_DEFAULT,
+		    "failed to map the main stack @%p",
+		    (void *)p->p_usrstack);
+#endif
 		return (error);
+	}
 
 	/*
 	 * vm_ssize and vm_maxsaddr are somewhat antiquated concepts, but they
@@ -1375,10 +1429,15 @@ exec_copyout_strings(imgp)
 		execpath_len = 0;
 	p = imgp->proc;
 	szsigcode = 0;
-	arginfo = (struct ps_strings *)p->p_sysent->sv_psstrings;
-	if (p->p_sysent->sv_sigcode_base == 0) {
+	p->p_sigcode_base = p->p_sysent->sv_sigcode_base;
+	arginfo = (struct ps_strings *)p->p_psstrings;
+	if (p->p_sigcode_base == 0) {
 		if (p->p_sysent->sv_szsigcode != NULL)
 			szsigcode = *(p->p_sysent->sv_szsigcode);
+#ifdef PAX_ASLR
+	} else {
+		pax_aslr_vdso(p, &(p->p_sigcode_base));
+#endif
 	}
 	destp =	(uintptr_t)arginfo;
 

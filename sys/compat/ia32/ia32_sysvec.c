@@ -29,6 +29,7 @@
 __FBSDID("$FreeBSD$");
 
 #include "opt_compat.h"
+#include "opt_pax.h"
 
 #define __ELF_WORD_SIZE 32
 
@@ -42,6 +43,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/mutex.h>
 #include <sys/mman.h>
 #include <sys/namei.h>
+#include <sys/pax.h>
 #include <sys/pioctl.h>
 #include <sys/proc.h>
 #include <sys/procfs.h>
@@ -135,6 +137,7 @@ struct sysentvec ia32_freebsd_sysvec = {
 	.sv_schedtail	= NULL,
 	.sv_thread_detach = NULL,
 	.sv_trap	= NULL,
+	.sv_pax_aslr_init = pax_aslr_init_vmspace32,
 };
 INIT_SYSENTVEC(elf_ia32_sysvec, &ia32_freebsd_sysvec);
 

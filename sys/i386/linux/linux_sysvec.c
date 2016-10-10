@@ -29,6 +29,8 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#include "opt_pax.h"
+
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/exec.h>
@@ -41,6 +43,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/malloc.h>
 #include <sys/module.h>
 #include <sys/mutex.h>
+#include <sys/pax.h>
 #include <sys/proc.h>
 #include <sys/signalvar.h>
 #include <sys/syscallsubr.h>
@@ -244,14 +247,14 @@ elf_linux_fixup(register_t **stack_base, struct image_params *imgp)
 	    ("unsafe elf_linux_fixup(), should be curproc"));
 
 	p = imgp->proc;
+	arginfo = (struct ps_strings *)p->p_psstrings;
 	issetugid = imgp->proc->p_flag & P_SUGID ? 1 : 0;
-	arginfo = (struct ps_strings *)p->p_sysent->sv_psstrings;
 	uplatform = (Elf32_Addr *)((caddr_t)arginfo - linux_szplatform);
 	args = (Elf32_Auxargs *)imgp->auxargs;
 	pos = *stack_base + (imgp->args->argc + imgp->args->envc + 2);
 
 	AUXARGS_ENTRY(pos, LINUX_AT_SYSINFO_EHDR,
-	    imgp->proc->p_sysent->sv_shared_page_base);
+	    imgp->proc->p_shared_page_base);
 	AUXARGS_ENTRY(pos, LINUX_AT_SYSINFO, linux_vsyscall);
 	AUXARGS_ENTRY(pos, LINUX_AT_HWCAP, cpu_feature);
 
@@ -316,7 +319,7 @@ linux_copyout_strings(struct image_params *imgp)
 		execpath_len = strlen(imgp->execpath) + 1;
 	else
 		execpath_len = 0;
-	arginfo = (struct ps_strings *)p->p_sysent->sv_psstrings;
+	arginfo = (struct ps_strings *)p->p_psstrings;
 	destp = (caddr_t)arginfo - SPARE_USRSPACE - linux_szplatform -
 	    roundup(sizeof(canary), sizeof(char *)) -
 	    roundup(execpath_len, sizeof(char *)) -
@@ -988,6 +991,7 @@ struct sysentvec linux_sysvec = {
 	.sv_schedtail	= linux_schedtail,
 	.sv_thread_detach = linux_thread_detach,
 	.sv_trap	= NULL,
+	.sv_pax_aslr_init = pax_aslr_init_vmspace,
 };
 INIT_SYSENTVEC(aout_sysvec, &linux_sysvec);
 
@@ -1025,6 +1029,7 @@ struct sysentvec elf_linux_sysvec = {
 	.sv_schedtail	= linux_schedtail,
 	.sv_thread_detach = linux_thread_detach,
 	.sv_trap	= NULL,
+	.sv_pax_aslr_init = pax_aslr_init_vmspace,
 };
 
 static void

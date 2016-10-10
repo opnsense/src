@@ -458,11 +458,11 @@ osendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 
 	regs->tf_esp = (int)fp;
 	if (p->p_sysent->sv_sigcode_base != 0) {
-		regs->tf_eip = p->p_sysent->sv_sigcode_base + szsigcode -
+		regs->tf_eip = p->p_sigcode_base + szsigcode -
 		    szosigcode;
 	} else {
 		/* a.out sysentvec does not use shared page */
-		regs->tf_eip = p->p_sysent->sv_psstrings - szosigcode;
+		regs->tf_eip = p->p_psstrings - szosigcode;
 	}
 	regs->tf_eflags &= ~(PSL_T | PSL_D);
 	regs->tf_cs = _ucodesel;
@@ -756,9 +756,9 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	}
 
 	regs->tf_esp = (int)sfp;
-	regs->tf_eip = p->p_sysent->sv_sigcode_base;
+	regs->tf_eip = p->p_sigcode_base;
 	if (regs->tf_eip == 0)
-		regs->tf_eip = p->p_sysent->sv_psstrings - szsigcode;
+		regs->tf_eip = p->p_psstrings - szsigcode;
 	regs->tf_eflags &= ~(PSL_T | PSL_D);
 	regs->tf_cs = _ucodesel;
 	regs->tf_ds = _udatasel;

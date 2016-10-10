@@ -248,6 +248,7 @@ thread_create(struct thread *td, struct rtprio *rtp,
 	p->p_flag |= P_HADTHREADS;
 	thread_link(newtd, p);
 	bcopy(p->p_comm, newtd->td_name, sizeof(newtd->td_name));
+	newtd->td_pax = p->p_pax;
 	thread_lock(td);
 	/* let the scheduler know about these things. */
 	sched_fork_thread(td, newtd);
