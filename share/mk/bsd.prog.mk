@@ -59,6 +59,33 @@ TAG_ARGS=	-T ${TAGS:[*]:S/ /,/g}
 LDFLAGS+= -static
 .endif
 
+.if defined(MK_PIE)
+# Ports will not have MK_PIE defined and the following logic requires
+# it be defined.
+
+.if ${LDFLAGS:M-static}
+NOPIE=yes
+.endif
+
+.if !defined(NOPIE)
+.if ${MK_PIE} != "no"
+CFLAGS+= -fPIE
+CXXFLAGS+= -fPIE
+LDFLAGS+= -pie
+.endif
+.endif
+.endif
+
+.if defined(MK_RELRO)
+.if ${MK_RELRO} != "no"
+LDFLAGS+=	-Wl,-z,relro
+.endif
+
+.if ${MK_BIND_NOW} != "no"
+LDFLAGS+=	-Wl,-z,now
+.endif
+.endif
+
 .if ${MK_DEBUG_FILES} != "no"
 PROG_FULL=${PROG}.full
 # Use ${DEBUGDIR} for base system debug files, else .debug subdirectory
