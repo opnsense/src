@@ -39,6 +39,8 @@ TESTS_SUBDIRS?=
 # List of variables to pass to the tests at run-time via the environment.
 TESTS_ENV?=
 
+NOPIE=		yes
+
 # Force all tests in a separate distribution file.
 #
 # We want this to be the case even when the distribution name is already

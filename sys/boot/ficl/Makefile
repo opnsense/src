@@ -3,6 +3,10 @@
 
 FICLDIR?=	${.CURDIR}
 
+.if ${MACHINE_CPUARCH} == "aarch64"
+NOPIE=		yes
+.endif
+
 .if defined(FICL32)
 .PATH: ${FICLDIR}/${MACHINE_CPUARCH:S/amd64/i386/}
 .elif ${MACHINE_ARCH} == "mips64" || ${MACHINE_ARCH} == "mips64el"

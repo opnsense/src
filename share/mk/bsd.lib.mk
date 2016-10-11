@@ -89,6 +89,29 @@ PICFLAG=-fpic
 .endif
 .endif
 
+.if defined(MK_PIE)
+# Ports will not have MK_PIE defined and the following logic requires
+# it be defined.
+
+.if !defined(NO_PIC)
+.if ${MK_PIE} != "no"
+.if !defined(NOPIE)
+CFLAGS+= ${PICFLAG}
+.endif
+.endif
+.endif
+.endif
+
+.if defined(MK_RELRO)
+.if ${MK_RELRO} != "no"
+LDFLAGS+=	-Wl,-z,relro
+.endif
+
+.if ${MK_BIND_NOW} != "no"
+LDFLAGS+=	-Wl,-z,now
+.endif
+.endif
+
 PO_FLAG=-pg
 
 .c.o:

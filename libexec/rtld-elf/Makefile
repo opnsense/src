@@ -89,6 +89,8 @@ beforeinstall:
 SUBDIR+=	tests
 .endif
 
+NOPIE=		yes
+
 .include <bsd.prog.mk>
 ${PROG_FULL}:	${VERSION_MAP}
 .include <bsd.symver.mk>
