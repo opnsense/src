@@ -4811,24 +4811,6 @@ db_show_prison(struct prison *pr)
 	   pr->pr_hbsd.aslr.disallow_map32bit_status);
 	db_printf("  }\n");
 
-	db_printf("  .noexec = {\n");
-	db_printf("   .pageexec_status           = %d\n",
-	   pr->pr_hbsd.noexec.pageexec_status);
-	db_printf("   .mprotect_status           = %d\n",
-	   pr->pr_hbsd.noexec.mprotect_status);
-	db_printf("  }\n");
-
-	db_printf("  .segvguard = {\n");
-	db_printf("   .status        = %d\n",
-	   pr->pr_hbsd.segvguard.status);
-	db_printf("   .expiry        = %d\n",
-	   pr->pr_hbsd.segvguard.expiry);
-	db_printf("   .suspension    = %d\n",
-	   pr->pr_hbsd.segvguard.suspension);
-	db_printf("   .maxcrashes    = %d\n",
-	   pr->pr_hbsd.segvguard.maxcrashes);
-	db_printf("  }\n");
-
 	db_printf("  .log = {\n");
 	db_printf("   .log           = %d\n",
 	   pr->pr_hbsd.log.log);
