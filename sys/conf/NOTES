@@ -3058,5 +3058,10 @@ options		EM_MULTIQUEUE # Activate multiqueue features/disable MSI-X
 # This enables support for compressed core dumps.
 options 	GZIO
 
+# PAX and HardenedBSD related knobs
+options		PAX		# Enable the PAX framework
+options		PAX_ASLR	# Address Space Layout Randomization
+options		HBSD_DEBUG
+
 # BHND(4) drivers
 options		BHND_LOGLEVEL	# Logging threshold level

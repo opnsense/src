@@ -46,6 +46,7 @@ __FBSDID("$FreeBSD$");
 
 #include "opt_ddb.h"
 #include "opt_init_path.h"
+#include "opt_pax.h"
 #include "opt_verbose_sysinit.h"
 
 #include <sys/param.h>
@@ -61,6 +62,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/mutex.h>
 #include <sys/syscallsubr.h>
 #include <sys/sysctl.h>
+#include <sys/pax.h>
 #include <sys/proc.h>
 #include <sys/racct.h>
 #include <sys/resourcevar.h>
@@ -415,6 +417,7 @@ struct sysentvec null_sysvec = {
 	.sv_schedtail	= NULL,
 	.sv_thread_detach = NULL,
 	.sv_trap	= NULL,
+	.sv_pax_aslr_init	= NULL,
 };
 
 /*
@@ -482,6 +485,11 @@ proc0_init(void *dummy __unused)
 	p->p_flag = P_SYSTEM | P_INMEM | P_KPROC;
 	p->p_flag2 = 0;
 	p->p_state = PRS_NORMAL;
+#ifdef PAX
+	p->p_pax = PAX_NOTE_ALL_DISABLED;
+#endif
+	p->p_usrstack = USRSTACK;
+	p->p_psstrings = PS_STRINGS;
 	p->p_klist = knlist_alloc(&p->p_mtx);
 	STAILQ_INIT(&p->p_ktr);
 	p->p_nice = NZERO;
@@ -499,6 +507,9 @@ proc0_init(void *dummy __unused)
 	td->td_flags = TDF_INMEM;
 	td->td_pflags = TDP_KTHREAD;
 	td->td_cpuset = cpuset_thread0();
+#ifdef PAX
+	td->td_pax = PAX_NOTE_ALL_DISABLED;
+#endif
 	vm_domain_policy_init(&td->td_vm_dom_policy);
 	vm_domain_policy_set(&td->td_vm_dom_policy, VM_POLICY_NONE, -1);
 	vm_domain_policy_init(&p->p_vm_dom_policy);
@@ -726,7 +737,7 @@ start_init(void *dummy)
 	/*
 	 * Need just enough stack to hold the faked-up "execve()" arguments.
 	 */
-	addr = p->p_sysent->sv_usrstack - PAGE_SIZE;
+	addr = p->p_usrstack - PAGE_SIZE;
 	if (vm_map_find(&p->p_vmspace->vm_map, NULL, 0, &addr, PAGE_SIZE, 0,
 	    VMFS_NO_SPACE, VM_PROT_ALL, VM_PROT_ALL, 0) != 0)
 		panic("init: couldn't allocate argument space");
@@ -753,7 +764,7 @@ start_init(void *dummy)
 		 * Move out the boot flag argument.
 		 */
 		options = 0;
-		ucp = (char *)p->p_sysent->sv_usrstack;
+		ucp = (char *)p->p_usrstack;
 		(void)subyte(--ucp, 0);		/* trailing zero */
 		if (boothowto & RB_SINGLE) {
 			(void)subyte(--ucp, 's');

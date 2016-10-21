@@ -25,6 +25,7 @@ CFLAGS+=	-msoft-float -mgeneral-regs-only
 .endif
 .if ${MACHINE_ARCH} == "amd64"
 CFLAGS+= -fPIC -mno-red-zone
+NOPIE=	yes
 .endif
 CFLAGS+= -I${.CURDIR}/../include
 CFLAGS+= -I${.CURDIR}/../include/${MACHINE}

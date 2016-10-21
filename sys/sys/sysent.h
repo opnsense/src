@@ -38,6 +38,7 @@ struct rlimit;
 struct sysent;
 struct thread;
 struct ksiginfo;
+struct proc;
 struct syscall_args;
 
 enum systrace_probe_t {
@@ -130,6 +131,7 @@ struct sysentvec {
 	void		(*sv_schedtail)(struct thread *);
 	void		(*sv_thread_detach)(struct thread *);
 	int		(*sv_trap)(struct thread *);
+	void		(* const sv_pax_aslr_init)(struct proc *p);
 };
 
 #define	SV_ILP32	0x000100	/* 32-bit executable. */

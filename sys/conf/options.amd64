@@ -65,3 +65,9 @@ XENHVM			opt_global.h
 
 # options for the Intel C600 SAS driver (isci)
 ISCI_LOGGING	opt_isci.h
+
+# HardenedBSD ASLR options
+PAX_ASLR_DELTA_MAP32BIT_DEF_LEN	opt_pax.h
+PAX_ASLR_DELTA_MAP32BIT_MIN_LEN	opt_pax.h
+PAX_ASLR_DELTA_MAP32BIT_MAX_LEN	opt_pax.h
+PAX_ASLR_DELTA_MAP32BIT_LSB	opt_pax.h
