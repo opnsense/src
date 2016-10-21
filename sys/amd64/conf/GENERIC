@@ -357,6 +357,3 @@ device		netmap			# netmap(4) support
 
 # The crypto framework is required by IPSEC
 device		crypto			# Required by IPSEC
-
-options		PAX
-options		PAX_ASLR
