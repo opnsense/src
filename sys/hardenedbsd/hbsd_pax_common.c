@@ -253,6 +253,10 @@ pax_elf(struct image_params *imgp, struct thread *td, pax_flag_t mode)
 #endif
 #endif
 
+#ifdef PAX_SEGVGUARD
+	flags |= pax_segvguard_setup_flags(imgp, td, mode);
+#endif
+
 	CTR3(KTR_PAX, "%s : flags = %x mode = %x",
 	    __func__, flags, mode);
 
@@ -326,6 +330,7 @@ pax_init_prison(struct prison *pr)
 	    __func__, pr->pr_name);
 
 	pax_aslr_init_prison(pr);
+	pax_segvguard_init_prison(pr);
 
 #ifdef COMPAT_FREEBSD32
 	pax_aslr_init_prison32(pr);

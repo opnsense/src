@@ -40,6 +40,7 @@ __FBSDID("$FreeBSD$");
 #include "opt_capsicum.h"
 #include "opt_compat.h"
 #include "opt_ktrace.h"
+#include "opt_pax.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -1758,6 +1759,9 @@ restart:
 		    &nd.ni_cnd);
 		if (error != 0)
 			goto out;
+#endif
+#ifdef PAX_SEGVGUARD
+		pax_segvguard_remove(td, vp);
 #endif
 		vfs_notify_upper(vp, VFS_NOTIFY_UPPER_UNLINK);
 		error = VOP_REMOVE(nd.ni_dvp, vp, &nd.ni_cnd);

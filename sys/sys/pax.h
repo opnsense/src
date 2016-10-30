@@ -39,6 +39,12 @@ struct hbsd_features {
 		int	 compat_status;	/* (p) PaX ASLR enabled (compat32) */
 		int	 disallow_map32bit_status; /* (p) MAP_32BIT protection (__LP64__ only) */
 	} aslr;
+	struct hbsd_segvguard {
+		int	 status;       /* (p) PaX segvguard enabled */
+		int	 expiry;       /* (p) num of seconds to expire an entry */
+		int	 suspension;   /* (p) num of seconds to suspend an application */
+		int	 maxcrashes;   /* (p) Maximum number of crashes before suspending application */
+	} segvguard;
 	struct hbsd_log {
 		int	log;		/* (p) Per-jail logging status */
 		int	ulog;		/* (p) Per-jail user visible logging status */
@@ -135,6 +141,8 @@ void pax_log_internal_imgp(struct image_params *imgp, pax_log_settings_t flags, 
 void pax_ulog_internal(const char *fmt, ...) __printflike(1, 2);
 void pax_log_aslr(struct proc *, pax_log_settings_t flags, const char *fmt, ...) __printflike(3, 4);
 void pax_ulog_aslr(const char *fmt, ...) __printflike(1, 2);
+void pax_log_segvguard(struct proc *, pax_log_settings_t flags, const char *fmt, ...) __printflike(3, 4);
+void pax_ulog_segvguard(const char *fmt, ...) __printflike(1, 2);
 
 /*
  * Hardening related functions
@@ -145,6 +153,19 @@ void pax_hardening_init_prison(struct prison *pr);
 #define	pax_hardening_init_prison(pr)	do {} while (0)
 #endif
 int pax_procfs_harden(struct thread *td);
+
+/*
+ * SegvGuard related functions
+ */
+#ifdef PAX_SEGVGUARD
+void pax_segvguard_init_prison(struct prison *pr);
+#else
+#define	pax_segvguard_init_prison(pr)	do {} while (0)
+#endif
+int pax_segvguard_check(struct thread *, struct vnode *, const char *);
+int pax_segvguard_segfault(struct thread *, const char *);
+void pax_segvguard_remove(struct thread *td, struct vnode *vn);
+pax_flag_t pax_segvguard_setup_flags(struct image_params *imgp, struct thread *td, pax_flag_t mode);
 
 #define	PAX_NOTE_PAGEEXEC	0x00000001
 #define	PAX_NOTE_NOPAGEEXEC	0x00000002

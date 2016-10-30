@@ -619,6 +619,12 @@ interpret:
 		goto exec_fail_dealloc;
 	}
 
+#ifdef PAX_SEGVGUARD
+	error = pax_segvguard_check(td, imgp->vp, args->fname);
+	if (error)
+		goto exec_fail_dealloc;
+#endif
+
 	/*
 	 * Special interpreter operation, cleanup and loop up to try to
 	 * activate the interpreter.

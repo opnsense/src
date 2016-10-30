@@ -806,6 +806,16 @@ fork1(struct thread *td, struct fork_req *fr)
 	else
 		MPASS(fr->fr_procp == NULL);
 
+#ifdef PAX_SEGVGUARD
+	if (td->td_proc->p_pid != 0) {
+		error = pax_segvguard_check(curthread,
+		    curthread->td_proc->p_textvp,
+		    td->td_proc->p_comm);
+		if (error)
+			return (error);
+	}
+#endif
+
 	/* Check for the undefined or unimplemented flags. */
 	if ((flags & ~(RFFLAGS | RFTSIGFLAGS(RFTSIGMASK))) != 0)
 		return (EINVAL);
