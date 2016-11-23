@@ -1,4 +1,5 @@
 command Zap %s/[\xA0]/ /g
+set viminfo='20,<1000
 set colorcolumn=80
 syntax on
 set ts=8
