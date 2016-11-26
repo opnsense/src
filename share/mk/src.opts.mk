@@ -266,6 +266,12 @@ __DEFAULT_YES_OPTIONS+=PIE
 __DEFAULT_NO_OPTIONS+=PIE
 .endif
 
+.if ${__T} == "amd64"
+__DEFAULT_YES_OPTIONS+=SAFESTACK
+.else
+__DEFAULT_NO_OPTIONS+=SAFESTACK
+.endif
+
 .include <bsd.mkopt.mk>
 
 #

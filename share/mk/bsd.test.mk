@@ -10,6 +10,9 @@
 
 __<bsd.test.mk>__:
 
+# HBSDTODO: Research why compiling the tests fail with SafeStack.
+NOSAFESTACK=	yes
+
 # Third-party software (kyua, etc) prefix.
 LOCALBASE?=	/usr/local
 
