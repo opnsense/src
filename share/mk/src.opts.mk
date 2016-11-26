@@ -189,6 +189,7 @@ __DEFAULT_NO_OPTIONS = \
     NAND \
     OFED \
     OPENLDAP \
+    SAFESTACK \
     SORT_THREADS \
     SVN \
     SYSTEM_COMPILER

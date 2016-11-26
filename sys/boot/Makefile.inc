@@ -15,3 +15,5 @@ CFLAGS.clang+=	-mno-movt
 .endif
 CFLAGS.clang+=  -mfpu=none
 .endif
+
+NOSAFESTACK=	yes
