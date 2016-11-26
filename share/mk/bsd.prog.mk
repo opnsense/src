@@ -78,6 +78,7 @@ LDFLAGS+= -pie
 .if !defined(NOSAFESTACK)
 .if ${MK_SAFESTACK} != "no"
 CFLAGS+=	-fsanitize=safe-stack
+CXXFLAGS+=	-fsanitize=safe-stack
 LDFLAGS+=	-fsanitize=safe-stack
 .endif # ${MK_SAFESTACK} != "no"
 .endif # !defined(NOSAFESTACK)
