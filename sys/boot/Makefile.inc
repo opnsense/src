@@ -22,3 +22,5 @@ CFLAGS.clang+=  -mfpu=none
 # when this test succeeds rather than require dd to be a bootstrap tool.
 DD_NOSTATUS!=(dd status=none count=0 2> /dev/null && echo status=none) || true
 DD=dd ${DD_NOSTATUS}
+
+NOSAFESTACK=	yes
