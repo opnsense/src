@@ -189,7 +189,6 @@ __DEFAULT_NO_OPTIONS = \
     NAND \
     OFED \
     OPENLDAP \
-    SAFESTACK \
     SORT_THREADS \
     SVN \
     SYSTEM_COMPILER
@@ -265,6 +264,12 @@ BROKEN_OPTIONS+=LIBSOFT
 __DEFAULT_YES_OPTIONS+=PIE
 .else
 __DEFAULT_NO_OPTIONS+=PIE
+.endif
+
+.if ${__T} == "amd64"
+__DEFAULT_YES_OPTIONS+=SAFESTACK
+.else
+__DEFAULT_NO_OPTIONS+=SAFESTACK
 .endif
 
 .include <bsd.mkopt.mk>
