@@ -162,7 +162,7 @@ link_ntoa(const struct sockaddr_dl *sdl)
 			if (rem < 2)
 				break;
 			*out++ = hexlist[i];
-			rem++;
+			rem--;
 		}
 	}
 	*out = 0;
