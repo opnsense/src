@@ -165,7 +165,7 @@ link_ntoa(sdl)
 			if (rem < 2)
 				break;
 			*out++ = hexlist[i];
-			rem++;
+			rem--;
 		}
 	}
 	*out = 0;
