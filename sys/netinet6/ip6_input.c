@@ -735,8 +735,7 @@ ip6_input(struct mbuf *m)
 		goto hbhcheck;
 	}
 reinjected:
-	if ((m->m_flags & M_IP6_NEXTHOP) &&
-	    m_tag_find(m, PACKET_TAG_IPFORWARD, NULL) != NULL) {
+	if (IP6_HAS_NEXTHOP(m)) {
 		/*
 		 * Directly ship the packet on.  This allows forwarding
 		 * packets originally destined to us to some other directly

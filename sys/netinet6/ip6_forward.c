@@ -106,7 +106,6 @@ ip6_forward(struct mbuf *m, int srcrt)
 #ifdef SCTP
 	int sw_csum;
 #endif
-	struct m_tag *fwd_tag;
 	char ip6bufs[INET6_ADDRSTRLEN], ip6bufd[INET6_ADDRSTRLEN];
 
 	/*
@@ -527,13 +526,17 @@ again2:
 		goto out;
 	}
 	/* Or forward to some other address? */
-	if ((m->m_flags & M_IP6_NEXTHOP) &&
-	    (fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL)) != NULL) {
+	if (IP6_HAS_NEXTHOP(m)) {
 		dst = (struct sockaddr_in6 *)&rin6.ro_dst;
-		bcopy((fwd_tag+1), dst, sizeof(struct sockaddr_in6));
+		if (ip6_get_fwdtag(m, dst, NULL) != 0) {
+			if (mcopy) {
+				m_freem(m);
+				goto freecopy;
+			}
+			goto bad;
+		}
 		m->m_flags |= M_SKIP_FIREWALL;
-		m->m_flags &= ~M_IP6_NEXTHOP;
-		m_tag_delete(m, fwd_tag);
+		ip6_flush_fwdtag(m);
 		RTFREE(rt);
 		goto again2;
 	}

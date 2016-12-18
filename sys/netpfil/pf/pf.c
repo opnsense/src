@@ -5393,19 +5393,17 @@ pf_routable(struct pf_addr *addr, sa_family_t af, struct pfi_kif *kif,
 
 #ifdef INET
 static void
-pf_route(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *oifp,
+pf_route(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *ifp,
     struct pf_state *s, struct pf_pdesc *pd)
 {
-	struct mbuf		*m0, *m1;
+	struct mbuf		*m0;
 	struct sockaddr_in	dst;
 	struct ip		*ip;
-	struct ifnet		*ifp = NULL;
 	struct pf_addr		 naddr;
 	struct pf_src_node	*sn = NULL;
 	int			 error = 0;
-	uint16_t		 ip_len, ip_off;
 
-	KASSERT(m && *m && r && oifp, ("%s: invalid parameters", __func__));
+	KASSERT(m && *m && r && ifp, ("%s: invalid parameters", __func__));
 	KASSERT(dir == PF_IN || dir == PF_OUT, ("%s: invalid direction",
 	    __func__));
 
@@ -5478,86 +5476,13 @@ pf_route(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *oifp,
 	if (ifp == NULL)
 		goto bad;
 
-	if (oifp != ifp) {
-		if (pf_test(PF_OUT, ifp, &m0, NULL) != PF_PASS)
-			goto bad;
-		else if (m0 == NULL)
-			goto done;
-		if (m0->m_len < sizeof(struct ip)) {
-			DPFPRINTF(PF_DEBUG_URGENT,
-			    ("%s: m0->m_len < sizeof(struct ip)\n", __func__));
-			goto bad;
-		}
-		ip = mtod(m0, struct ip *);
-	}
-
-	if (ifp->if_flags & IFF_LOOPBACK)
-		m0->m_flags |= M_SKIP_FIREWALL;
-
-	ip_len = ntohs(ip->ip_len);
-	ip_off = ntohs(ip->ip_off);
-
-	/* Copied from FreeBSD 10.0-CURRENT ip_output. */
-	m0->m_pkthdr.csum_flags |= CSUM_IP;
-	if (m0->m_pkthdr.csum_flags & CSUM_DELAY_DATA & ~ifp->if_hwassist) {
-		in_delayed_cksum(m0);
-		m0->m_pkthdr.csum_flags &= ~CSUM_DELAY_DATA;
-	}
-#ifdef SCTP
-	if (m0->m_pkthdr.csum_flags & CSUM_SCTP & ~ifp->if_hwassist) {
-		sctp_delayed_cksum(m, (uint32_t)(ip->ip_hl << 2));
-		m0->m_pkthdr.csum_flags &= ~CSUM_SCTP;
-	}
-#endif
-
-	/*
-	 * If small enough for interface, or the interface will take
-	 * care of the fragmentation for us, we can just send directly.
-	 */
-	if (ip_len <= ifp->if_mtu ||
-	    (m0->m_pkthdr.csum_flags & ifp->if_hwassist & CSUM_TSO) != 0) {
-		ip->ip_sum = 0;
-		if (m0->m_pkthdr.csum_flags & CSUM_IP & ~ifp->if_hwassist) {
-			ip->ip_sum = in_cksum(m0, ip->ip_hl << 2);
-			m0->m_pkthdr.csum_flags &= ~CSUM_IP;
-		}
-		m_clrprotoflags(m0);	/* Avoid confusing lower layers. */
-		error = (*ifp->if_output)(ifp, m0, sintosa(&dst), NULL);
-		goto done;
-	}
-
-	/* Balk when DF bit is set or the interface didn't support TSO. */
-	if ((ip_off & IP_DF) || (m0->m_pkthdr.csum_flags & CSUM_TSO)) {
-		error = EMSGSIZE;
-		KMOD_IPSTAT_INC(ips_cantfrag);
-		if (r->rt != PF_DUPTO) {
-			icmp_error(m0, ICMP_UNREACH, ICMP_UNREACH_NEEDFRAG, 0,
-			    ifp->if_mtu);
-			goto done;
-		} else
-			goto bad;
-	}
-
-	error = ip_fragment(ip, &m0, ifp->if_mtu, ifp->if_hwassist);
-	if (error)
+	if (ip_set_fwdtag(m0, &dst, ifp->if_index))
 		goto bad;
 
-	for (; m0; m0 = m1) {
-		m1 = m0->m_nextpkt;
-		m0->m_nextpkt = NULL;
-		if (error == 0) {
-			m_clrprotoflags(m0);
-			error = (*ifp->if_output)(ifp, m0, sintosa(&dst), NULL);
-		} else
-			m_freem(m0);
-	}
-
-	if (error == 0)
-		KMOD_IPSTAT_INC(ips_fragmented);
 
 done:
-	if (r->rt != PF_DUPTO)
-		*m = NULL;
+	if (r->rt == PF_DUPTO && IP_HAS_NEXTHOP(m0))
+		ip_forward(m0, 1);
 	return;
 
 bad_locked:

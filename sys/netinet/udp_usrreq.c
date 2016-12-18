@@ -401,7 +401,7 @@ udp_input(struct mbuf **mp, int *offp, int proto)
 	struct ip save_ip;
 	struct sockaddr_in udp_in;
 	struct mbuf *m;
-	struct m_tag *fwd_tag;
+	struct sockaddr_in next_hop;
 	int cscov_partial, iphlen;
 
 	m = *mp;
@@ -639,14 +639,9 @@ udp_input(struct mbuf **mp, int *offp, int proto)
 	 */
 
 	/*
-	 * Grab info from PACKET_TAG_IPFORWARD tag prepended to the chain.
+	 * Grab info from IP forward tag prepended to the chain.
 	 */
-	if ((m->m_flags & M_IP_NEXTHOP) &&
-	    (fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL)) != NULL) {
-		struct sockaddr_in *next_hop;
-
-		next_hop = (struct sockaddr_in *)(fwd_tag + 1);
-
+	if (IP_HAS_NEXTHOP(m) && !ip_get_fwdtag(m, &next_hop, NULL)) {
 		/*
 		 * Transparently forwarded. Pretend to be the destination.
 		 * Already got one like this?
@@ -660,14 +655,13 @@ udp_input(struct mbuf **mp, int *offp, int proto)
 			 * any hardware-generated hash is ignored.
 			 */
 			inp = in_pcblookup(pcbinfo, ip->ip_src,
-			    uh->uh_sport, next_hop->sin_addr,
-			    next_hop->sin_port ? htons(next_hop->sin_port) :
+			    uh->uh_sport, next_hop.sin_addr,
+			    next_hop.sin_port ? htons(next_hop.sin_port) :
 			    uh->uh_dport, INPLOOKUP_WILDCARD |
 			    INPLOOKUP_RLOCKPCB, ifp);
 		}
 		/* Remove the tag from the packet. We don't need it anymore. */
-		m_tag_delete(m, fwd_tag);
-		m->m_flags &= ~M_IP_NEXTHOP;
+		ip_flush_fwdtag(m);
 	} else
 		inp = in_pcblookup_mbuf(pcbinfo, ip->ip_src, uh->uh_sport,
 		    ip->ip_dst, uh->uh_dport, INPLOOKUP_WILDCARD |

@@ -105,20 +105,20 @@ extern int in_mcast_loop;
 extern	struct protosw inetsw[];
 
 static inline int
-ip_output_pfil(struct mbuf **mp, struct ifnet *ifp, struct inpcb *inp,
+ip_output_pfil(struct mbuf **mp, struct ifnet **ifp, struct inpcb *inp,
     struct sockaddr_in *dst, int *fibnum, int *error)
 {
-	struct m_tag *fwd_tag = NULL;
 	struct mbuf *m;
 	struct in_addr odst;
 	struct ip *ip;
+	u_short ifidx;
 
 	m = *mp;
 	ip = mtod(m, struct ip *);
 
 	/* Run through list of hooks for output packets. */
 	odst.s_addr = ip->ip_dst.s_addr;
-	*error = pfil_run_hooks(&V_inet_pfil_hook, mp, ifp, PFIL_OUT, inp);
+	*error = pfil_run_hooks(&V_inet_pfil_hook, mp, *ifp, PFIL_OUT, inp);
 	m = *mp;
 	if ((*error) != 0 || m == NULL)
 		return 1; /* Finished */
@@ -182,13 +182,15 @@ ip_output_pfil(struct mbuf **mp, struct ifnet *ifp, struct inpcb *inp,
 		return 1; /* Finished */
 	}
 	/* Or forward to some other address? */
-	if ((m->m_flags & M_IP_NEXTHOP) &&
-	    ((fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL)) != NULL)) {
-		bcopy((fwd_tag+1), dst, sizeof(struct sockaddr_in));
+	if (IP_HAS_NEXTHOP(m) && !ip_get_fwdtag(m, dst, &ifidx)) {
+		if (ifidx != 0) {
+			struct ifnet *nifp = ifnet_byindex(ifidx);
+			if (nifp != NULL) {
+				*ifp = nifp;
+			}
+		}
 		m->m_flags |= M_SKIP_FIREWALL;
-		m->m_flags &= ~M_IP_NEXTHOP;
-		m_tag_delete(m, fwd_tag);
-
+		ip_flush_fwdtag(m);
 		return -1; /* Reloop for CHANGE of dst */
 	}
 
@@ -407,6 +409,7 @@ again:
 			isbroadcast = in_broadcast(gw->sin_addr, ifp);
 	}
 
+haveroute:
 	/*
 	 * Calculate MTU.  If we have a route that is up, use that,
 	 * otherwise use the interface's MTU.
@@ -577,7 +580,8 @@ sendit:
 
 	/* Jump over all PFIL processing if hooks are not active. */
 	if (PFIL_HOOKED(&V_inet_pfil_hook)) {
-		switch (ip_output_pfil(&m, ifp, inp, dst, &fibnum, &error)) {
+		struct ifnet *same = ifp;
+		switch (ip_output_pfil(&m, &ifp, inp, dst, &fibnum, &error)) {
 		case 1: /* Finished */
 			goto done;
 
@@ -594,6 +598,9 @@ sendit:
 			rte = NULL;
 			gw = dst;
 			ip = mtod(m, struct ip *);
+			if (same != ifp) {
+				goto haveroute;
+			}
 			goto again;
 
 		}
@@ -1414,5 +1421,91 @@ ip_mloopback(struct ifnet *ifp, const struct mbuf *m, int hlen)
 		ip->ip_sum = 0;
 		ip->ip_sum = in_cksum(copym, hlen);
 		if_simloop(ifp, copym, AF_INET, 0);
+	}
+}
+
+struct ip_fwdtag {
+	struct sockaddr_in dst;
+	u_short if_index;
+};
+
+int
+ip_set_fwdtag(struct mbuf *m, struct sockaddr_in *dst, u_short ifidx)
+{
+	struct ip_fwdtag *fwd_info;
+	struct m_tag *fwd_tag;
+
+	KASSERT(dst != NULL, ("%s: !dst", __func__));
+	KASSERT(dst->sin_family == AF_INET, ("%s: !AF_INET", __func__));
+
+	fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL);
+	if (fwd_tag != NULL) {
+		KASSERT(((struct ip_fwdtag *)(fwd_tag+1))->dst.sin_family ==
+		    AF_INET, ("%s: !AF_INET", __func__));
+
+		m_tag_unlink(m, fwd_tag);
+	} else {
+		fwd_tag = m_tag_get(PACKET_TAG_IPFORWARD, sizeof(*fwd_info),
+		    M_NOWAIT);
+		if (fwd_tag == NULL) {
+			return (ENOBUFS);
+		}
+	}
+
+	fwd_info = (struct ip_fwdtag *)(fwd_tag+1);
+
+	bcopy(dst, &fwd_info->dst, sizeof(fwd_info->dst));
+	fwd_info->if_index = ifidx;
+	m->m_flags |= M_IP_NEXTHOP;
+
+	if (in_localip(fwd_info->dst.sin_addr))
+		m->m_flags |= M_FASTFWD_OURS;
+	else
+		m->m_flags &= ~M_FASTFWD_OURS;
+
+	m_tag_prepend(m, fwd_tag);
+
+	return (0);
+}
+
+int
+ip_get_fwdtag(struct mbuf *m, struct sockaddr_in *dst, u_short *ifidx)
+{
+	struct ip_fwdtag *fwd_info;
+	struct m_tag *fwd_tag;
+
+	fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL);
+	if (fwd_tag == NULL) {
+		return (ENOENT);
+	}
+
+	fwd_info = (struct ip_fwdtag *)(fwd_tag+1);
+
+	KASSERT(((struct sockaddr *)&fwd_info->dst)->sa_family == AF_INET,
+	    ("%s: !AF_INET", __func__));
+
+	if (dst != NULL) {
+		bcopy(&fwd_info->dst, dst, sizeof(*dst));
+	}
+
+	if (ifidx != NULL) {
+		*ifidx = fwd_info->if_index;
+	}
+
+	return (0);
+}
+
+void
+ip_flush_fwdtag(struct mbuf *m)
+{
+	struct m_tag *fwd_tag;
+
+	fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL);
+	if (fwd_tag != NULL) {
+		KASSERT(((struct sockaddr *)(fwd_tag+1))->sa_family ==
+		    AF_INET, ("%s: !AF_INET", __func__));
+
+		m->m_flags &= ~(M_IP_NEXTHOP | M_FASTFWD_OURS);
+		m_tag_delete(m, fwd_tag);
 	}
 }
