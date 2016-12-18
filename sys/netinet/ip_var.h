@@ -236,6 +236,11 @@ extern int	(*ip_rsvp_vif)(struct socket *, struct sockopt *);
 extern void	(*ip_rsvp_force_done)(struct socket *);
 extern int	(*rsvp_input_p)(struct mbuf **, int *, int);
 
+#define	IP_HAS_NEXTHOP(m)	((m)->m_flags & M_IP_NEXTHOP)
+int	ip_set_fwdtag(struct mbuf *, struct sockaddr_in *, u_short);
+int	ip_get_fwdtag(struct mbuf *, struct sockaddr_in *, u_short *);
+void	ip_flush_fwdtag(struct mbuf *);
+
 VNET_DECLARE(struct pfil_head, inet_pfil_hook);	/* packet filter hooks */
 #define	V_inet_pfil_hook	VNET(inet_pfil_hook)
 
