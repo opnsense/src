@@ -969,6 +969,9 @@ RACCT_DEFAULT_TO_DISABLED	opt_global.h
 # Resource Limits
 RCTL		opt_global.h
 
+# OPNsense additions
+PF_SHARE_FORWARD	opt_pf.h
+
 # Random number generator(s)
 # Which CSPRNG hash we get.
 # If Yarrow is not chosen, Fortuna is selected.

@@ -154,7 +154,6 @@ ip_tryforward(struct mbuf *m)
 	struct in_addr odest, dest;
 	uint16_t ip_len, ip_off;
 	int error = 0;
-	struct m_tag *fwd_tag = NULL;
 
 	/*
 	 * Are we active and forwarding packets?
@@ -317,9 +316,7 @@ passin:
 	/*
 	 * Destination address changed?
 	 */
-	if (m->m_flags & M_IP_NEXTHOP)
-		fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL);
-	if (odest.s_addr != dest.s_addr || fwd_tag != NULL) {
+	if (odest.s_addr != dest.s_addr || IP_HAS_NEXTHOP(m)) {
 		/*
 		 * Is it now for a local address on this host?
 		 */
@@ -334,11 +331,13 @@ forwardlocal:
 		/*
 		 * Redo route lookup with new destination address
 		 */
-		if (fwd_tag) {
-			dest.s_addr = ((struct sockaddr_in *)
-				    (fwd_tag + 1))->sin_addr.s_addr;
-			m_tag_delete(m, fwd_tag);
-			m->m_flags &= ~M_IP_NEXTHOP;
+		if (IP_HAS_NEXTHOP(m)) {
+			struct sockaddr_in tmp;
+			if (ip_get_fwdtag(m, &tmp, NULL)) {
+				return (NULL);
+			}
+			dest.s_addr = tmp.sin_addr.s_addr;
+			ip_flush_fwdtag(m);
 		}
 		if (ip_findroute(&nh, dest, m) != 0)
 			return (NULL);	/* icmp unreach already sent */
