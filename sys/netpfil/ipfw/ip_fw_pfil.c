@@ -48,6 +48,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/sysctl.h>
 
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/route.h>
 #include <net/ethernet.h>
 #include <net/pfil.h>
@@ -126,11 +127,39 @@ ipfw_check_packet(void *arg, struct mbuf **m0, struct ifnet *ifp, int dir,
 {
 	struct ip_fw_args args;
 	struct m_tag *tag;
+	u_short ifidx = 0;
 	int ipfw, ret;
 
 	/* convert dir to IPFW values */
 	dir = (dir == PFIL_IN) ? DIR_IN : DIR_OUT;
 	args.flags = 0;
+
+	/* restore the correct forwarding interface */
+	if (dir == DIR_OUT) switch (mtod(*m0, struct ip *)->ip_v) {
+#ifdef INET6
+	case IPV6_VERSION >> 4:
+		if (IP6_HAS_NEXTHOP(*m0)) {
+			ip6_get_fwdtag(*m0, NULL, &ifidx);
+		}
+		/* FALLTHROUGH */
+#endif
+#ifdef INET
+	case IPVERSION:
+		if (IP_HAS_NEXTHOP(*m0)) {
+			ip_get_fwdtag(*m0, NULL, &ifidx);
+		}
+		/* FALLTHROUGH */
+#endif
+	default:
+		if (ifidx != 0) {
+			struct ifnet *nifp = ifnet_byindex(ifidx);
+			if (nifp != NULL) {
+				ifp = nifp;
+			}
+		}
+		break;
+	}
+
 again:
 	/*
 	 * extract and remove the tag if present. If we are left
@@ -168,8 +197,6 @@ again:
 		ret = EACCES;
 #else
 	    {
-		void *psa;
-		size_t len;
 #ifdef INET
 		if (args.flags & (IPFW_ARGS_NH4 | IPFW_ARGS_NH4PTR)) {
 			MPASS((args.flags & (IPFW_ARGS_NH4 |
@@ -177,12 +204,11 @@ again:
 			    IPFW_ARGS_NH4PTR));
 			MPASS((args.flags & (IPFW_ARGS_NH6 |
 			    IPFW_ARGS_NH6PTR)) == 0);
-			len = sizeof(struct sockaddr_in);
-			psa = (args.flags & IPFW_ARGS_NH4) ?
-			    &args.hopstore : args.next_hop;
-			if (in_localip(satosin(psa)->sin_addr))
-				(*m0)->m_flags |= M_FASTFWD_OURS;
-			(*m0)->m_flags |= M_IP_NEXTHOP;
+			if (ip_set_fwdtag(*m0, (args.flags & IPFW_ARGS_NH4) ?
+			    &args.hopstore : args.next_hop, 0)) {
+				ret = EACCES;
+				break;
+			}
 		}
 #endif /* INET */
 #ifdef INET6
@@ -192,38 +218,9 @@ again:
 			    IPFW_ARGS_NH6PTR));
 			MPASS((args.flags & (IPFW_ARGS_NH4 |
 			    IPFW_ARGS_NH4PTR)) == 0);
-			len = sizeof(struct sockaddr_in6);
-			psa = args.next_hop6;
-			(*m0)->m_flags |= M_IP6_NEXTHOP;
-		}
-#endif /* INET6 */
-		/*
-		 * Incoming packets should not be tagged so we do not
-		 * m_tag_find. Outgoing packets may be tagged, so we
-		 * reuse the tag if present.
-		 */
-		tag = (dir == DIR_IN) ? NULL :
-			m_tag_find(*m0, PACKET_TAG_IPFORWARD, NULL);
-		if (tag != NULL) {
-			m_tag_unlink(*m0, tag);
-		} else {
-			tag = m_tag_get(PACKET_TAG_IPFORWARD, len,
-			    M_NOWAIT);
-			if (tag == NULL) {
-				ret = EACCES;
-				break; /* i.e. drop */
-			}
-		}
-		if ((args.flags & IPFW_ARGS_NH6) == 0)
-			bcopy(psa, tag + 1, len);
-		m_tag_prepend(*m0, tag);
-		ret = 0;
-#ifdef INET6
-		/* IPv6 next hop needs additional handling */
-		if (args.flags & (IPFW_ARGS_NH6 | IPFW_ARGS_NH6PTR)) {
 			struct sockaddr_in6 *sa6;
 
-			sa6 = satosin6(tag + 1);
+			sa6 = satosin6(args.next_hop);
 			if (args.flags & IPFW_ARGS_NH6) {
 				sa6->sin6_family = AF_INET6;
 				sa6->sin6_len = sizeof(*sa6);
@@ -232,17 +229,10 @@ again:
 				sa6->sin6_scope_id =
 				    args.hopstore6.sin6_scope_id;
 			}
-			/*
-			 * If nh6 address is link-local we should convert
-			 * it to kernel internal form before doing any
-			 * comparisons.
-			 */
-			if (sa6_embedscope(sa6, V_ip6_use_defzone) != 0) {
+			if (ip6_set_fwdtag(*m0, sa6, 0)) {
 				ret = EACCES;
 				break;
 			}
-			if (in6_localip(&sa6->sin6_addr))
-				(*m0)->m_flags |= M_FASTFWD_OURS;
 		}
 #endif /* INET6 */
 	    }

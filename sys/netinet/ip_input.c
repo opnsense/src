@@ -627,16 +627,14 @@ tooshort:
 		goto ours;
 	}
 reinjected:
-	if (m->m_flags & M_IP_NEXTHOP) {
-		if (m_tag_find(m, PACKET_TAG_IPFORWARD, NULL) != NULL) {
-			/*
-			 * Directly ship the packet on.  This allows
-			 * forwarding packets originally destined to us
-			 * to some other directly connected host.
-			 */
-			ip_forward(m, 1);
-			return;
-		}
+	if (IP_HAS_NEXTHOP(m)) {
+		/*
+		 * Directly ship the packet on.  This allows
+		 * forwarding packets originally destined to us
+		 * to some other directly connected host.
+		 */
+		ip_forward(m, 1);
+		return;
 	}
 passin:
 
