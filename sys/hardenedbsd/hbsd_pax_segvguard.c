@@ -347,10 +347,12 @@ pax_segvguard_add(struct thread *td, struct vnode *vn, sbintime_t sbt)
 	struct pax_segvguard_entry *v;
 	struct pax_segvguard_key *key;
 	struct prison *pr;
-	struct stat sb;
+	struct vattr vap;
 	int error;
 
-	error = vn_stat(vn, &sb, td->td_ucred, NOCRED, curthread);
+	memset(&vap, 0x00, sizeof(vap));
+
+	error = VOP_GETATTR(vn, &vap, td->td_ucred);
 	if (error != 0) {
 		pax_log_segvguard(td->td_proc, PAX_LOG_DEFAULT,
 		    "%s:%d stat error. Bailing.", __func__, __LINE__);
@@ -364,7 +366,7 @@ pax_segvguard_add(struct thread *td, struct vnode *vn, sbintime_t sbt)
 	if (v == NULL)
 		return (NULL);
 
-	v->se_inode = sb.st_ino;
+	v->se_inode = vap.va_fileid;
 	strncpy(v->se_mntpoint, vn->v_mount->mnt_stat.f_mntonname, MNAMELEN);
 
 	v->se_uid = td->td_ucred->cr_ruid;
@@ -385,10 +387,12 @@ pax_segvguard_lookup(struct thread *td, struct vnode *vn)
 {
 	struct pax_segvguard_entry *v;
 	struct pax_segvguard_key sk;
-	struct stat sb;
+	struct vattr vap;
 	int error;
 
-	error = vn_stat(vn, &sb, td->td_ucred, NOCRED, curthread);
+	memset(&vap, 0x00, sizeof(vap));
+
+	error = VOP_GETATTR(vn, &vap, td->td_ucred);
 	if (error != 0) {
 		pax_log_segvguard(td->td_proc, PAX_LOG_DEFAULT,
 		    "%s:%d stat error. Bailing.", __func__, __LINE__);
@@ -396,13 +400,13 @@ pax_segvguard_lookup(struct thread *td, struct vnode *vn)
 		return (NULL);
 	}
 
-	sk.se_inode = sb.st_ino;
+	sk.se_inode = vap.va_fileid;
 	strncpy(sk.se_mntpoint, vn->v_mount->mnt_stat.f_mntonname, MNAMELEN);
 	sk.se_uid = td->td_ucred->cr_ruid;
 
 	PAX_SEGVGUARD_LOCK(PAX_SEGVGUARD_HASH(sk));
 	LIST_FOREACH(v, PAX_SEGVGUARD_HASH(sk), se_entry) {
-		if (v->se_inode == sb.st_ino &&
+		if (v->se_inode == vap.va_fileid &&
 		    !strncmp(sk.se_mntpoint, v->se_mntpoint, MNAMELEN) &&
 		    td->td_ucred->cr_ruid == v->se_uid) {
 			PAX_SEGVGUARD_UNLOCK(PAX_SEGVGUARD_HASH(sk));
