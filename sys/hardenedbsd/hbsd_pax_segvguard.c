@@ -444,14 +444,14 @@ pax_segvguard_segfault(struct thread *td, const char *name)
 	struct vnode *v;
 	sbintime_t sbt;
 
+	if (pax_segvguard_active(td->td_proc) == false)
+		return (0);
+
 	v = td->td_proc->p_textvp;
 	if (v == NULL)
 		return (EFAULT);
 
 	pr = pax_get_prison_td(td);
-
-	if (pax_segvguard_active(td->td_proc) == false)
-		return (0);
 
 	sbt = sbinuptime();
 
@@ -495,11 +495,11 @@ pax_segvguard_check(struct thread *td, struct vnode *v, const char *name)
 	struct pax_segvguard_entry *se;
 	sbintime_t sbt;
 
-	if (v == NULL)
-		return (EFAULT);
-
 	if (pax_segvguard_active(td->td_proc) == false)
 		return (0);
+
+	if (v == NULL)
+		return (EFAULT);
 
 	sbt = sbinuptime();
 
