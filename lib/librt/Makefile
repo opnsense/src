@@ -1,7 +1,7 @@
 # $FreeBSD$
 
-SHLIBDIR?=/lib
-LIBDIR?=/lib
+SHLIBDIR?=	/lib
+LIBDIR?=	/lib
 
 .include <src.opts.mk>
 
