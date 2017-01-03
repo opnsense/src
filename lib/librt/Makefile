@@ -1,5 +1,8 @@
 # $FreeBSD$
 
+SHLIBDIR?=/lib
+LIBDIR?=/lib
+
 .include <src.opts.mk>
 
 PACKAGE=lib${LIB}
