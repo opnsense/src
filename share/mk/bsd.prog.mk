@@ -69,8 +69,8 @@ NOPIE=yes
 
 .if !defined(NOPIE)
 .if ${MK_PIE} != "no"
-CFLAGS+= -fPIE
-CXXFLAGS+= -fPIE
+CFLAGS+= -fPIC -fPIE
+CXXFLAGS+= -fPIC -fPIE
 LDFLAGS+= -pie
 .endif
 .endif
