@@ -19,6 +19,9 @@ WARNS?=	2
 
 SRCS+= aio.c mq.c sigev_thread.c timer.c
 
+SYMLINKS= \
+	/lib/lib${LIB}.so /usr/lib/lib${LIB}.so
+
 PRECIOUSLIB=
 
 VERSION_DEF=${.CURDIR}/../libc/Versions.def
