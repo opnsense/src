@@ -109,34 +109,30 @@ __FBSDID("$FreeBSD$");
  */
 #define SET_MBUF_DESTRUCTOR(m, fn)	do {		\
 	(m)->m_ext.ext_free = (void *)fn;	\
-	(m)->m_ext.ext_type = EXT_EXTREF;	\
 } while (0)
 
-static void
-netmap_default_mbuf_destructor(struct mbuf *m)
-{
-	/* restore original mbuf */
-	m->m_ext.ext_buf = m->m_data = m->m_ext.ext_arg1;
-	m->m_ext.ext_arg1 = NULL;
-	m->m_ext.ext_type = EXT_PACKET;
-	m->m_ext.ext_free = NULL;
-	if (GET_MBUF_REFCNT(m) == 0)
-		SET_MBUF_REFCNT(m, 1);
-	uma_zfree(zone_pack, m);
-}
+#if __FreeBSD_version < 1100000
+static int void_mbuf_dtor(struct mbuf *m, void *arg1, void *arg2) { return 0; }
+#else
+static void void_mbuf_dtor(struct mbuf *m, void *arg1, void *arg2) { }
+#endif
 
 static inline struct mbuf *
 netmap_get_mbuf(int len)
 {
 	struct mbuf *m;
-	m = m_getcl(M_NOWAIT, MT_DATA, M_PKTHDR);
-	if (m) {
-		m->m_flags |= M_NOFREE;	/* XXXNP: Almost certainly incorrect. */
-		m->m_ext.ext_arg1 = m->m_ext.ext_buf; // XXX save
-		m->m_ext.ext_free = (void *)netmap_default_mbuf_destructor;
-		m->m_ext.ext_type = EXT_EXTREF;
-		ND(5, "create m %p refcnt %d", m, GET_MBUF_REFCNT(m));
+
+	m = m_gethdr(M_NOWAIT, MT_DATA);
+	if (m == NULL) {
+		return m;
 	}
+
+	m_extadd(m, NULL /* buf */, 0 /* size */, void_mbuf_dtor, NULL, NULL, 0, EXT_NET_DRV
+#if __FreeBSD_version < 1100000
+		, M_NOWAIT
+#endif
+	);
+
 	return m;
 }
 
@@ -412,11 +408,6 @@ static void
 generic_mbuf_destructor(struct mbuf *m)
 {
 	netmap_generic_irq(MBUF_IFP(m), MBUF_TXQ(m), NULL);
-#ifdef __FreeBSD__
-	if (netmap_verbose)
-		RD(5, "Tx irq (%p) queue %d index %d" , m, MBUF_TXQ(m), (int)(uintptr_t)m->m_ext.ext_arg1);
-	netmap_default_mbuf_destructor(m);
-#endif /* __FreeBSD__ */
 	IFRATE(rate_ctx.new.txirq++);
 }
 
