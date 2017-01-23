@@ -38,6 +38,10 @@
 #   xargs -n1 | sort | uniq -d;
 # done
 
+# 20170123: librt moves to /lib
+OLD_LIBS+=usr/lib/librt.a
+OLD_LIBS+=usr/lib/librt.so.1
+OLD_LIBS+=usr/lib/librt_p.a
 # 20160703: POSIXify locales with variants
 OLD_FILES+=usr/share/locale/zh_Hant_TW.UTF-8/LC_COLLATE
 OLD_FILES+=usr/share/locale/zh_Hant_TW.UTF-8/LC_CTYPE
