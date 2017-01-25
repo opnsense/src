@@ -48,19 +48,27 @@ __FBSDID("$FreeBSD: src/sys/dev/re/if_re.c,v 1.92 " __DATE__ " " __TIME__ "  wpa
 */
 
 #include <sys/param.h>
+#include <sys/endian.h>
 #include <sys/systm.h>
 #include <sys/sockio.h>
 #include <sys/mbuf.h>
 #include <sys/malloc.h>
+#include <sys/module.h>
 #include <sys/kernel.h>
 #include <sys/socket.h>
+#include <sys/lock.h>
+#include <sys/mutex.h>
+#include <sys/sysctl.h>
 #include <sys/taskqueue.h>
 
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_arp.h>
 #include <net/ethernet.h>
 #include <net/if_dl.h>
 #include <net/if_media.h>
+#include <net/if_types.h>
+#include <net/if_vlan_var.h>
 
 #include <net/bpf.h>
 
@@ -72,27 +80,18 @@ __FBSDID("$FreeBSD: src/sys/dev/re/if_re.c,v 1.92 " __DATE__ " " __TIME__ "  wpa
 #include <machine/resource.h>
 #include <sys/bus.h>
 #include <sys/rman.h>
-#include <sys/endian.h>
 
 #include <dev/mii/mii.h>
-#include <dev/re/if_rereg.h>
+#include <dev/mii/miivar.h>
 
-#if OS_VER < VERSION(5,3)
-#include <pci/pcireg.h>
-#include <pci/pcivar.h>
-#include <machine/bus_pio.h>
-#include <machine/bus_memio.h>
-#else
 #include <dev/pci/pcireg.h>
 #include <dev/pci/pcivar.h>
-#include <sys/module.h>
-#endif
 
-#if OS_VER > VERSION(5,9)
-#include <sys/cdefs.h>
-#include <sys/endian.h>
-#include <net/if_types.h>
-#include <net/if_vlan_var.h>
+#include <dev/re/if_rereg.h>
+
+#if OS_VER >= VERSION(10,0)
+#define taskqueue_enqueue_fast	taskqueue_enqueue
+#define M_DONTWAIT		M_NOWAIT
 #endif
 
 #define EE_SET(x)					\
@@ -5576,7 +5575,11 @@ static void re_txeof(struct re_softc *sc)  	/* Transmit OK/ERR handler */
 
                 sc->re_desc.tx_last_index = (sc->re_desc.tx_last_index+1)%RE_TX_BUF_NUM;
                 txptr=&sc->re_desc.tx_desc[sc->re_desc.tx_last_index];
+#if OS_VER < VERSION(10,0)
                 ifp->if_opackets++;
+#else
+                if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
+#endif
                 ifp->if_drv_flags &= ~IFF_DRV_OACTIVE;
         }
 
@@ -5719,7 +5722,11 @@ struct re_softc		*sc;
                 }
 
                 eh = mtod(m, struct ether_header *);
+#if OS_VER < VERSION(10,0)
                 ifp->if_ipackets++;
+#else
+                if_inc_counter(ifp, IFCOUNTER_IPACKETS, 1);
+#endif
 #ifdef _DEBUG_
                 printf("Rcv Packet, Len=%d \n", m->m_len);
 #endif
