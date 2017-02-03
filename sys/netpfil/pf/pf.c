@@ -5430,6 +5430,13 @@ pf_route(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *ifp,
 		m0 = *m;
 	}
 
+	/* retain old behaviour by avoiding a rewrite */
+	if (IP_HAS_NEXTHOP(m0)) {
+		if (s)
+			PF_STATE_UNLOCK(s);
+		return;
+	}
+
 	ip = mtod(m0, struct ip *);
 
 	bzero(&dst, sizeof(dst));
@@ -5478,7 +5485,6 @@ pf_route(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *ifp,
 
 	if (ip_set_fwdtag(m0, &dst, ifp->if_index))
 		goto bad;
-
 
 done:
 	if (r->rt == PF_DUPTO && IP_HAS_NEXTHOP(m0))
