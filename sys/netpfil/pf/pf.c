@@ -288,6 +288,9 @@ static void		 pf_mtag_free(struct m_tag *);
 static void		 pf_route(struct mbuf **, struct pf_rule *, int,
 			    struct ifnet *, struct pf_state *,
 			    struct pf_pdesc *);
+static void		 pf_route_shared(struct mbuf **, struct pf_rule *, int,
+			    struct ifnet *, struct pf_state *,
+			    struct pf_pdesc *);
 #endif /* INET */
 #ifdef INET6
 static void		 pf_change_a6(struct pf_addr *, u_int16_t *,
@@ -365,6 +368,17 @@ SYSCTL_ULONG(_net_pf, OID_AUTO, states_hashsize, CTLFLAG_RDTUN,
     &pf_hashsize, 0, "Size of pf(4) states hashtable");
 SYSCTL_ULONG(_net_pf, OID_AUTO, source_nodes_hashsize, CTLFLAG_RDTUN,
     &pf_srchashsize, 0, "Size of pf(4) source nodes hashtable");
+
+#ifdef PF_SHARE_FORWARD
+static VNET_DEFINE(int, pf_share_forward) = 1;
+#else
+static VNET_DEFINE(int, pf_share_forward) = 0;
+#endif
+#define	V_pf_share_forward VNET(pf_share_forward)
+
+SYSCTL_INT(_net_pf, OID_AUTO, share_forward,
+	CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(pf_share_forward), 0,
+	"If set pf(4) will share forwarding decisions with ipfw(4).");
 
 VNET_DEFINE(void *, pf_swi_cookie);
 
@@ -5393,7 +5407,183 @@ pf_routable(struct pf_addr *addr, sa_family_t af, struct pfi_kif *kif,
 
 #ifdef INET
 static void
-pf_route(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *ifp,
+pf_route(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *oifp,
+    struct pf_state *s, struct pf_pdesc *pd)
+{
+	struct mbuf		*m0, *m1;
+	struct sockaddr_in	dst;
+	struct ip		*ip;
+	struct ifnet		*ifp = NULL;
+	struct pf_addr		 naddr;
+	struct pf_src_node	*sn = NULL;
+	int			 error = 0;
+	uint16_t		 ip_len, ip_off;
+
+	KASSERT(m && *m && r && oifp, ("%s: invalid parameters", __func__));
+	KASSERT(dir == PF_IN || dir == PF_OUT, ("%s: invalid direction",
+	    __func__));
+
+	if ((pd->pf_mtag == NULL &&
+	    ((pd->pf_mtag = pf_get_mtag(*m)) == NULL)) ||
+	    pd->pf_mtag->routed++ > 3) {
+		m0 = *m;
+		*m = NULL;
+		goto bad_locked;
+	}
+
+	if (r->rt == PF_DUPTO) {
+		if ((m0 = m_dup(*m, M_NOWAIT)) == NULL) {
+			if (s)
+				PF_STATE_UNLOCK(s);
+			return;
+		}
+	} else {
+		if ((r->rt == PF_REPLYTO) == (r->direction == dir)) {
+			if (s)
+				PF_STATE_UNLOCK(s);
+			return;
+		}
+		m0 = *m;
+	}
+
+	ip = mtod(m0, struct ip *);
+
+	bzero(&dst, sizeof(dst));
+	dst.sin_family = AF_INET;
+	dst.sin_len = sizeof(dst);
+	dst.sin_addr = ip->ip_dst;
+
+	if (r->rt == PF_FASTROUTE) {
+		struct nhop4_basic nh4;
+
+		if (s)
+			PF_STATE_UNLOCK(s);
+
+		if (fib4_lookup_nh_basic(M_GETFIB(m0), ip->ip_dst, 0,
+		    m0->m_pkthdr.flowid, &nh4) != 0) {
+			KMOD_IPSTAT_INC(ips_noroute);
+			error = EHOSTUNREACH;
+			goto bad;
+		}
+
+		ifp = nh4.nh_ifp;
+		dst.sin_addr = nh4.nh_addr;
+	} else {
+		if (TAILQ_EMPTY(&r->rpool.list)) {
+			DPFPRINTF(PF_DEBUG_URGENT,
+			    ("%s: TAILQ_EMPTY(&r->rpool.list)\n", __func__));
+			goto bad_locked;
+		}
+		if (s == NULL) {
+			pf_map_addr(AF_INET, r, (struct pf_addr *)&ip->ip_src,
+			    &naddr, NULL, &sn);
+			if (!PF_AZERO(&naddr, AF_INET))
+				dst.sin_addr.s_addr = naddr.v4.s_addr;
+			ifp = r->rpool.cur->kif ?
+			    r->rpool.cur->kif->pfik_ifp : NULL;
+		} else {
+			if (!PF_AZERO(&s->rt_addr, AF_INET))
+				dst.sin_addr.s_addr =
+				    s->rt_addr.v4.s_addr;
+			ifp = s->rt_kif ? s->rt_kif->pfik_ifp : NULL;
+			PF_STATE_UNLOCK(s);
+		}
+	}
+	if (ifp == NULL)
+		goto bad;
+
+	if (oifp != ifp) {
+		if (pf_test(PF_OUT, ifp, &m0, NULL) != PF_PASS)
+			goto bad;
+		else if (m0 == NULL)
+			goto done;
+		if (m0->m_len < sizeof(struct ip)) {
+			DPFPRINTF(PF_DEBUG_URGENT,
+			    ("%s: m0->m_len < sizeof(struct ip)\n", __func__));
+			goto bad;
+		}
+		ip = mtod(m0, struct ip *);
+	}
+
+	if (ifp->if_flags & IFF_LOOPBACK)
+		m0->m_flags |= M_SKIP_FIREWALL;
+
+	ip_len = ntohs(ip->ip_len);
+	ip_off = ntohs(ip->ip_off);
+
+	/* Copied from FreeBSD 10.0-CURRENT ip_output. */
+	m0->m_pkthdr.csum_flags |= CSUM_IP;
+	if (m0->m_pkthdr.csum_flags & CSUM_DELAY_DATA & ~ifp->if_hwassist) {
+		in_delayed_cksum(m0);
+		m0->m_pkthdr.csum_flags &= ~CSUM_DELAY_DATA;
+	}
+#ifdef SCTP
+	if (m0->m_pkthdr.csum_flags & CSUM_SCTP & ~ifp->if_hwassist) {
+		sctp_delayed_cksum(m, (uint32_t)(ip->ip_hl << 2));
+		m0->m_pkthdr.csum_flags &= ~CSUM_SCTP;
+	}
+#endif
+
+	/*
+	 * If small enough for interface, or the interface will take
+	 * care of the fragmentation for us, we can just send directly.
+	 */
+	if (ip_len <= ifp->if_mtu ||
+	    (m0->m_pkthdr.csum_flags & ifp->if_hwassist & CSUM_TSO) != 0) {
+		ip->ip_sum = 0;
+		if (m0->m_pkthdr.csum_flags & CSUM_IP & ~ifp->if_hwassist) {
+			ip->ip_sum = in_cksum(m0, ip->ip_hl << 2);
+			m0->m_pkthdr.csum_flags &= ~CSUM_IP;
+		}
+		m_clrprotoflags(m0);	/* Avoid confusing lower layers. */
+		error = (*ifp->if_output)(ifp, m0, sintosa(&dst), NULL);
+		goto done;
+	}
+
+	/* Balk when DF bit is set or the interface didn't support TSO. */
+	if ((ip_off & IP_DF) || (m0->m_pkthdr.csum_flags & CSUM_TSO)) {
+		error = EMSGSIZE;
+		KMOD_IPSTAT_INC(ips_cantfrag);
+		if (r->rt != PF_DUPTO) {
+			icmp_error(m0, ICMP_UNREACH, ICMP_UNREACH_NEEDFRAG, 0,
+			    ifp->if_mtu);
+			goto done;
+		} else
+			goto bad;
+	}
+
+	error = ip_fragment(ip, &m0, ifp->if_mtu, ifp->if_hwassist);
+	if (error)
+		goto bad;
+
+	for (; m0; m0 = m1) {
+		m1 = m0->m_nextpkt;
+		m0->m_nextpkt = NULL;
+		if (error == 0) {
+			m_clrprotoflags(m0);
+			error = (*ifp->if_output)(ifp, m0, sintosa(&dst), NULL);
+		} else
+			m_freem(m0);
+	}
+
+	if (error == 0)
+		KMOD_IPSTAT_INC(ips_fragmented);
+
+done:
+	if (r->rt != PF_DUPTO)
+		*m = NULL;
+	return;
+
+bad_locked:
+	if (s)
+		PF_STATE_UNLOCK(s);
+bad:
+	m_freem(m0);
+	goto done;
+}
+
+static void
+pf_route_shared(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *ifp,
     struct pf_state *s, struct pf_pdesc *pd)
 {
 	struct mbuf		*m0;
@@ -6145,7 +6335,11 @@ done:
 	default:
 		/* pf_route() returns unlocked. */
 		if (r->rt) {
-			pf_route(m0, r, dir, kif->pfik_ifp, s, &pd);
+			if (!V_pf_share_forward)
+				pf_route(m0, r, dir, kif->pfik_ifp, s, &pd);
+			else
+				pf_route_shared(m0, r, dir, kif->pfik_ifp, s,
+				    &pd);
 			return (action);
 		}
 		break;
