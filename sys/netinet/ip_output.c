@@ -123,6 +123,39 @@ ip_output_pfil(struct mbuf **mp, struct ifnet **ifp, struct inpcb *inp,
 	if ((*error) != 0 || m == NULL)
 		return 1; /* Finished */
 
+	/* See if local, if yes, send it to netisr with IP_FASTFWD_OURS. */
+	if (m->m_flags & M_FASTFWD_OURS) {
+		if (m->m_pkthdr.rcvif == NULL)
+			m->m_pkthdr.rcvif = V_loif;
+		if (m->m_pkthdr.csum_flags & CSUM_DELAY_DATA) {
+			m->m_pkthdr.csum_flags |=
+				CSUM_DATA_VALID | CSUM_PSEUDO_HDR;
+			m->m_pkthdr.csum_data = 0xffff;
+		}
+#ifdef SCTP
+		if (m->m_pkthdr.csum_flags & CSUM_SCTP)
+			m->m_pkthdr.csum_flags |= CSUM_SCTP_VALID;
+#endif
+		m->m_pkthdr.csum_flags |=
+			CSUM_IP_CHECKED | CSUM_IP_VALID;
+
+		*error = netisr_queue(NETISR_IP, m);
+		return 1; /* Finished */
+	}
+	/* Or forward to some other address? */
+	if (IP_HAS_NEXTHOP(m) && !ip_get_fwdtag(m, dst, &ifidx)) {
+		if (ifidx != 0) {
+			struct ifnet *nifp = ifnet_byindex(ifidx);
+			if (nifp != NULL) {
+				*ifp = nifp;
+			}
+		}
+		m->m_flags |= M_SKIP_FIREWALL;
+		ip_flush_fwdtag(m);
+		return -1; /* Reloop for CHANGE of dst */
+	}
+
+
 	ip = mtod(m, struct ip *);
 
 	/* See if destination IP address was changed by packet filter. */
@@ -160,38 +193,6 @@ ip_output_pfil(struct mbuf **mp, struct ifnet **ifp, struct inpcb *inp,
 		m->m_flags |= M_SKIP_FIREWALL;
 		*fibnum = M_GETFIB(m);
 		return -1; /* Reloop for FIB change */
-	}
-
-	/* See if local, if yes, send it to netisr with IP_FASTFWD_OURS. */
-	if (m->m_flags & M_FASTFWD_OURS) {
-		if (m->m_pkthdr.rcvif == NULL)
-			m->m_pkthdr.rcvif = V_loif;
-		if (m->m_pkthdr.csum_flags & CSUM_DELAY_DATA) {
-			m->m_pkthdr.csum_flags |=
-				CSUM_DATA_VALID | CSUM_PSEUDO_HDR;
-			m->m_pkthdr.csum_data = 0xffff;
-		}
-#ifdef SCTP
-		if (m->m_pkthdr.csum_flags & CSUM_SCTP)
-			m->m_pkthdr.csum_flags |= CSUM_SCTP_VALID;
-#endif
-		m->m_pkthdr.csum_flags |=
-			CSUM_IP_CHECKED | CSUM_IP_VALID;
-
-		*error = netisr_queue(NETISR_IP, m);
-		return 1; /* Finished */
-	}
-	/* Or forward to some other address? */
-	if (IP_HAS_NEXTHOP(m) && !ip_get_fwdtag(m, dst, &ifidx)) {
-		if (ifidx != 0) {
-			struct ifnet *nifp = ifnet_byindex(ifidx);
-			if (nifp != NULL) {
-				*ifp = nifp;
-			}
-		}
-		m->m_flags |= M_SKIP_FIREWALL;
-		ip_flush_fwdtag(m);
-		return -1; /* Reloop for CHANGE of dst */
 	}
 
 	return 0;
