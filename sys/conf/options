@@ -982,6 +982,9 @@ PAX_ASLR_COMPAT_DELTA_STACK_DEF_LEN	opt_pax.h
 PAX_ASLR_COMPAT_DELTA_EXEC_DEF_LEN	opt_pax.h
 PAX_ASLR_COMPAT_DELTA_VDSO_DEF_LEN	opt_pax.h
 
+# OPNsense additions
+PF_SHARE_FORWARD	opt_pf.h
+
 # Random number generator(s)
 # Which CSPRNG hash we get.
 # If Yarrow is not chosen, Fortuna is selected.
