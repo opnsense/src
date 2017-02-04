@@ -5974,11 +5974,24 @@ pf_test(int dir, struct ifnet *ifp, struct mbuf **m0, struct inpcb *inp)
 	struct pf_ruleset	*ruleset = NULL;
 	struct pf_pdesc		 pd;
 	int			 off, dirndx, pqid = 0;
+	int			 share_forward = V_pf_share_forward;
+	u_short			 ifidx;
 
 	M_ASSERTPKTHDR(m);
 
 	if (!V_pf_status.running)
 		return (PF_PASS);
+
+	/* restore the correct forwarding interface */
+	if (share_forward && dir == PF_OUT && IP_HAS_NEXTHOP(*m0) &&
+	    !ip_get_fwdtag(*m0, NULL, &ifidx)) {
+		if (ifidx != 0) {
+			struct ifnet *nifp = ifnet_byindex(ifidx);
+			if (nifp != NULL) {
+				ifp = nifp;
+			}
+		}
+	}
 
 	memset(&pd, 0, sizeof(pd));
 
@@ -6335,7 +6348,7 @@ done:
 	default:
 		/* pf_route() returns unlocked. */
 		if (r->rt) {
-			if (!V_pf_share_forward)
+			if (!share_forward)
 				pf_route(m0, r, dir, kif->pfik_ifp, s, &pd);
 			else
 				pf_route_shared(m0, r, dir, kif->pfik_ifp, s,
