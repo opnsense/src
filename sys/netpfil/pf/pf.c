@@ -378,7 +378,7 @@ static VNET_DEFINE(int, pf_share_forward) = 0;
 
 SYSCTL_INT(_net_pf, OID_AUTO, share_forward,
 	CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(pf_share_forward), 0,
-	"If set pf(4) will share forwarding decisions with ipfw(4).");
+	"If set pf(4) will share IPv4 forwarding decisions with ipfw(4).");
 
 VNET_DEFINE(void *, pf_swi_cookie);
 
