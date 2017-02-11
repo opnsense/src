@@ -49,6 +49,9 @@ struct hbsd_features {
 		int	log;		/* (p) Per-jail logging status */
 		int	ulog;		/* (p) Per-jail user visible logging status */
 	} log;
+	struct hbsd_hardening {
+		int	procfs_harden;	/* (p) Harden procfs */
+	} hardening;
 };
 #endif
 
