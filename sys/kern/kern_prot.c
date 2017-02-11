@@ -47,6 +47,7 @@ __FBSDID("$FreeBSD$");
 #include "opt_compat.h"
 #include "opt_inet.h"
 #include "opt_inet6.h"
+#include "opt_pax.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -1613,7 +1614,11 @@ p_cansched(struct thread *td, struct proc *p)
  * XXX: Should modifying and reading this variable require locking?
  * XXX: data declarations should be together near the beginning of the file.
  */
+#ifdef PAX_HARDENING
+static int	unprivileged_proc_debug = 0;
+#else
 static int	unprivileged_proc_debug = 1;
+#endif
 SYSCTL_INT(_security_bsd, OID_AUTO, unprivileged_proc_debug, CTLFLAG_RW,
     &unprivileged_proc_debug, 0,
     "Unprivileged processes may use process debugging facilities");
