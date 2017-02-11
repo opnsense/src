@@ -1,0 +1,10 @@
+include GENERIC
+
+options		PAX
+options		PAX_ASLR
+options		PAX_HARDENING
+options		PAX_SYSCTLS
+options		PAX_SEGVGUARD
+options		HBSD_DEBUG
+
+options		EARLY_AP_STARTUP

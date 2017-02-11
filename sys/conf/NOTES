@@ -3061,6 +3061,7 @@ options 	GZIO
 # PAX and HardenedBSD related knobs
 options		PAX		# Enable the PAX framework
 options		PAX_ASLR	# Address Space Layout Randomization
+options		PAX_HARDENING	# Other hardening features
 options		PAX_SEGVGUARD	# ASLR bruteforce protection
 options		HBSD_DEBUG
 
