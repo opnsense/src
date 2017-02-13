@@ -39,7 +39,6 @@
 # done
 
 # 20170123: librt moves to /lib
-OLD_LIBS+=usr/lib/librt.a
 OLD_LIBS+=usr/lib/librt.so.1
 OLD_LIBS+=usr/lib/librt_p.a
 # 20160703: POSIXify locales with variants
