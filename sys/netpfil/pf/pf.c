@@ -5620,13 +5620,6 @@ pf_route_shared(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *ifp,
 		m0 = *m;
 	}
 
-	/* retain old behaviour by avoiding a rewrite */
-	if (IP_HAS_NEXTHOP(m0)) {
-		if (s)
-			PF_STATE_UNLOCK(s);
-		return;
-	}
-
 	ip = mtod(m0, struct ip *);
 
 	bzero(&dst, sizeof(dst));
@@ -5985,12 +5978,11 @@ pf_test(int dir, struct ifnet *ifp, struct mbuf **m0, struct inpcb *inp)
 	/* restore the correct forwarding interface */
 	if (share_forward && dir == PF_OUT && IP_HAS_NEXTHOP(*m0) &&
 	    !ip_get_fwdtag(*m0, NULL, &ifidx)) {
-		if (ifidx != 0) {
-			struct ifnet *nifp = ifnet_byindex(ifidx);
-			if (nifp != NULL) {
-				ifp = nifp;
-			}
+		if (ifidx != 0 && (ifp = ifnet_byindex(ifidx)) == NULL) {
+			/* force drop when there is no interface */
+			return (PF_DROP);
 		}
+		inp = NULL;
 	}
 
 	memset(&pd, 0, sizeof(pd));

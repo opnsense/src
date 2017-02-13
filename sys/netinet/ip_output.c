@@ -123,39 +123,6 @@ ip_output_pfil(struct mbuf **mp, struct ifnet **ifp, struct inpcb *inp,
 	if ((*error) != 0 || m == NULL)
 		return 1; /* Finished */
 
-	/* See if local, if yes, send it to netisr with IP_FASTFWD_OURS. */
-	if (m->m_flags & M_FASTFWD_OURS) {
-		if (m->m_pkthdr.rcvif == NULL)
-			m->m_pkthdr.rcvif = V_loif;
-		if (m->m_pkthdr.csum_flags & CSUM_DELAY_DATA) {
-			m->m_pkthdr.csum_flags |=
-				CSUM_DATA_VALID | CSUM_PSEUDO_HDR;
-			m->m_pkthdr.csum_data = 0xffff;
-		}
-#ifdef SCTP
-		if (m->m_pkthdr.csum_flags & CSUM_SCTP)
-			m->m_pkthdr.csum_flags |= CSUM_SCTP_VALID;
-#endif
-		m->m_pkthdr.csum_flags |=
-			CSUM_IP_CHECKED | CSUM_IP_VALID;
-
-		*error = netisr_queue(NETISR_IP, m);
-		return 1; /* Finished */
-	}
-	/* Or forward to some other address? */
-	if (IP_HAS_NEXTHOP(m) && !ip_get_fwdtag(m, dst, &ifidx)) {
-		if (ifidx != 0) {
-			struct ifnet *nifp = ifnet_byindex(ifidx);
-			if (nifp != NULL) {
-				*ifp = nifp;
-			}
-		}
-		m->m_flags |= M_SKIP_FIREWALL;
-		ip_flush_fwdtag(m);
-		return -1; /* Reloop for CHANGE of dst */
-	}
-
-
 	ip = mtod(m, struct ip *);
 
 	/* See if destination IP address was changed by packet filter. */
@@ -193,6 +160,39 @@ ip_output_pfil(struct mbuf **mp, struct ifnet **ifp, struct inpcb *inp,
 		m->m_flags |= M_SKIP_FIREWALL;
 		*fibnum = M_GETFIB(m);
 		return -1; /* Reloop for FIB change */
+	}
+
+	/* See if local, if yes, send it to netisr with IP_FASTFWD_OURS. */
+	if (m->m_flags & M_FASTFWD_OURS) {
+		if (m->m_pkthdr.rcvif == NULL)
+			m->m_pkthdr.rcvif = V_loif;
+		if (m->m_pkthdr.csum_flags & CSUM_DELAY_DATA) {
+			m->m_pkthdr.csum_flags |=
+				CSUM_DATA_VALID | CSUM_PSEUDO_HDR;
+			m->m_pkthdr.csum_data = 0xffff;
+		}
+#ifdef SCTP
+		if (m->m_pkthdr.csum_flags & CSUM_SCTP)
+			m->m_pkthdr.csum_flags |= CSUM_SCTP_VALID;
+#endif
+		m->m_pkthdr.csum_flags |=
+			CSUM_IP_CHECKED | CSUM_IP_VALID;
+
+		*error = netisr_queue(NETISR_IP, m);
+		return 1; /* Finished */
+	}
+	/* Or forward to some other address? */
+	if (IP_HAS_NEXTHOP(m) && !ip_get_fwdtag(m, dst, &ifidx)) {
+		int ret = -1; /* Reloop for CHANGE of dst */
+		if (ifidx != 0) {
+			if ((*ifp = ifnet_byindex(ifidx)) == NULL) {
+				return -2; /* Drop */
+			}
+			ret = 0;
+		}
+		m->m_flags |= M_SKIP_FIREWALL;
+		ip_flush_fwdtag(m);
+		return (ret);
 	}
 
 	return 0;
@@ -410,7 +410,6 @@ again:
 			isbroadcast = in_broadcast(gw->sin_addr, ifp);
 	}
 
-haveroute:
 	/*
 	 * Calculate MTU.  If we have a route that is up, use that,
 	 * otherwise use the interface's MTU.
@@ -581,7 +580,6 @@ sendit:
 
 	/* Jump over all PFIL processing if hooks are not active. */
 	if (PFIL_HOOKED(&V_inet_pfil_hook)) {
-		struct ifnet *same = ifp;
 		switch (ip_output_pfil(&m, &ifp, inp, dst, &fibnum, &error)) {
 		case 1: /* Finished */
 			goto done;
@@ -599,10 +597,10 @@ sendit:
 			rte = NULL;
 			gw = dst;
 			ip = mtod(m, struct ip *);
-			if (same != ifp) {
-				goto haveroute;
-			}
 			goto again;
+
+		case -2: /* Dropped */
+			goto bad;
 
 		}
 	}
@@ -1443,6 +1441,18 @@ ip_set_fwdtag(struct mbuf *m, struct sockaddr_in *dst, u_short ifidx)
 	if (fwd_tag != NULL) {
 		KASSERT(((struct ip_fwdtag *)(fwd_tag+1))->dst.sin_family ==
 		    AF_INET, ("%s: !AF_INET", __func__));
+
+		if (((struct ip_fwdtag *)(fwd_tag+1))->if_index == 0 &&
+		    ifidx != 0) {
+			/*
+			 * ipfw(4) does not allow interface selection in
+			 * forwarding.  It is allowed to overwrite forward
+			 * info.  pf(4), on the other hand, may only reset
+			 * decisions it made by itself with a previously
+			 * set interface.
+			 */
+			return (0);
+		}
 
 		m_tag_unlink(m, fwd_tag);
 	} else {
