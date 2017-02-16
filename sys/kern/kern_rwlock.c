@@ -809,9 +809,7 @@ __rw_wlock_hard(volatile uintptr_t *c, uintptr_t tid, const char *file,
 	all_time -= lockstat_nsecs(&rw->lock_object);
 	state = rw->rw_lock;
 #endif
-	for (;;) {
-		if (rw->rw_lock == RW_UNLOCKED && _rw_write_lock(rw, tid))
-			break;
+	while (!_rw_write_lock(rw, tid)) {
 #ifdef KDTRACE_HOOKS
 		lda.spin_cnt++;
 #endif
