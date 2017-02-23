@@ -2031,12 +2031,7 @@ storvsc_io_done(struct hv_storvsc_request *reqp)
 			 * If there are errors, for example, invalid LUN,
 			 * host will inform VM through SRB status.
 			 */
-			if (storvsc_get_storage_type(sc->hs_dev->device) ==
-			    DRIVER_STORVSC) {
-				ccb->ccb_h.status |= CAM_SEL_TIMEOUT;
-			} else {
-				ccb->ccb_h.status |= CAM_DEV_NOT_THERE;
-			}
+			ccb->ccb_h.status |= CAM_SEL_TIMEOUT;
 		} else {
 			ccb->ccb_h.status |= CAM_REQ_CMP;
 		}
