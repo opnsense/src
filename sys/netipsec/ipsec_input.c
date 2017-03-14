@@ -342,38 +342,34 @@ ipsec4_common_input_cb(struct mbuf *m, struct secasvar *sav, int skip,
 		return EINVAL;
 	}
 
-	if (skip != 0) {
-		/*
-		 * Fix IPv4 header
-		 * XXXGL: do we need this entire block?
-		 */
-		if (m->m_len < skip && (m = m_pullup(m, skip)) == NULL) {
-			DPRINTF(("%s: processing failed for SA %s/%08lx\n",
-			    __func__, ipsec_address(&sav->sah->saidx.dst,
-			    buf, sizeof(buf)), (u_long) ntohl(sav->spi)));
-			IPSEC_ISTAT(sproto, hdrops);
-			error = ENOBUFS;
-			goto bad;
-		}
+	/* Fix IPv4 header */
+	if (m->m_len < sizeof(struct ip) &&
+	    (m = m_pullup(m, sizeof(struct ip))) == NULL) {
 
-		ip = mtod(m, struct ip *);
-		ip->ip_len = htons(m->m_pkthdr.len);
-		ip->ip_sum = 0;
-		ip->ip_sum = in_cksum(m, ip->ip_hl << 2);
-	} else {
-		ip = mtod(m, struct ip *);
+		DPRINTF(("%s: processing failed for SA %s/%08lx\n",
+		    __func__, ipsec_address(&sav->sah->saidx.dst, buf,
+		    sizeof(buf)), (u_long) ntohl(sav->spi)));
+
+		IPSEC_ISTAT(sproto, hdrops);
+		error = EACCES;
+		goto bad;
 	}
-	prot = ip->ip_p;
+
+	ip = mtod(m, struct ip *);
+	ip->ip_len = htons(m->m_pkthdr.len);
+	ip->ip_sum = 0;
+	ip->ip_sum = in_cksum(m, ip->ip_hl << 2);
 
 	IPSEC_INIT_CTX(&ctx, &m, sav, AF_INET, IPSEC_ENC_BEFORE);
 	if ((error = ipsec_run_hhooks(&ctx, HHOOK_TYPE_IPSEC_IN)) != 0)
 		goto bad;
+	/* Save protocol */
 	ip = mtod(m, struct ip *);
+	prot = ip->ip_p;
 
 	/* IP-in-IP encapsulation */
 	if (prot == IPPROTO_IPIP &&
 	    saidx->mode != IPSEC_MODE_TRANSPORT) {
-
 		if (m->m_pkthdr.len - skip < sizeof(struct ip)) {
 			IPSEC_ISTAT(sproto, hdrops);
 			error = EINVAL;
@@ -381,7 +377,7 @@ ipsec4_common_input_cb(struct mbuf *m, struct secasvar *sav, int skip,
 		}
 		/* enc0: strip outer IPv4 header */
 		m_striphdr(m, 0, ip->ip_hl << 2);
-
+		skip = 0;
 #ifdef notyet
 		/* XXX PROXY address isn't recorded in SAH */
 		/*
@@ -414,7 +410,6 @@ ipsec4_common_input_cb(struct mbuf *m, struct secasvar *sav, int skip,
 	/* IPv6-in-IP encapsulation. */
 	else if (prot == IPPROTO_IPV6 &&
 	    saidx->mode != IPSEC_MODE_TRANSPORT) {
-
 		if (m->m_pkthdr.len - skip < sizeof(struct ip6_hdr)) {
 			IPSEC_ISTAT(sproto, hdrops);
 			error = EINVAL;
@@ -422,6 +417,7 @@ ipsec4_common_input_cb(struct mbuf *m, struct secasvar *sav, int skip,
 		}
 		/* enc0: strip IPv4 header, keep IPv6 header only */
 		m_striphdr(m, 0, ip->ip_hl << 2);
+		skip = 0;
 #ifdef notyet 
 		/*
 		 * Check that the inner source address is the same as
