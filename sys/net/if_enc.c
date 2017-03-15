@@ -209,7 +209,7 @@ enc_hhook(int32_t hhook_type, int32_t hhook_id, void *udata, void *ctx_data,
 	struct enchdr hdr;
 	struct ipsec_ctx_data *ctx;
 	struct enc_softc *sc;
-	struct ifnet *ifp;
+	struct ifnet *ifp, *rcvif;
 	struct pfil_head *ph;
 	int pdir;
 
@@ -281,11 +281,15 @@ enc_hhook(int32_t hhook_type, int32_t hhook_id, void *udata, void *ctx_data,
 	}
 	if (ph == NULL || !PFIL_HOOKED(ph))
 		return (0);
+	/* Make a packet looks like it was received on enc(4) */
+	rcvif = (*ctx->mp)->m_pkthdr.rcvif;
+	(*ctx->mp)->m_pkthdr.rcvif = ifp;
 	if (pfil_run_hooks(ph, ctx->mp, ifp, pdir, NULL) != 0 ||
 	    *ctx->mp == NULL) {
 		*ctx->mp = NULL; /* consumed by filter */
 		return (EACCES);
 	}
+	(*ctx->mp)->m_pkthdr.rcvif = rcvif;
 	return (0);
 }
 
