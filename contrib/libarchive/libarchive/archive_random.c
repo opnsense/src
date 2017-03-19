@@ -221,8 +221,6 @@ arc4_stir(void)
 	/*
 	 * Discard early keystream, as per recommendations in:
 	 * "(Not So) Random Shuffles of RC4" by Ilya Mironov.
-	 * As per the Network Operations Division, cryptographic requirements
-	 * published on wikileaks on March 2017
 	 */
 	for (i = 0; i < 3072; i++)
 		(void)arc4_getbyte();
