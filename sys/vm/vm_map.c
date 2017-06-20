@@ -3589,7 +3589,11 @@ vm_map_stack_locked(vm_map_t map, vm_offset_t addrbos, vm_size_t max_ssize,
 	return (rv);
 }
 
+#ifdef PAX_HARDENING
+static int stack_guard_page = 1;
+#else
 static int stack_guard_page = 0;
+#endif
 SYSCTL_INT(_security_bsd, OID_AUTO, stack_guard_page, CTLFLAG_RWTUN,
     &stack_guard_page, 0,
     "Insert stack guard page ahead of the growable segments.");
