@@ -3063,6 +3063,7 @@ options		PAX		# Enable the PAX framework
 options		PAX_ASLR	# Address Space Layout Randomization
 options		PAX_HARDENING	# Other hardening features
 options		PAX_SEGVGUARD	# ASLR bruteforce protection
+options		STACK_GUARD_SIZE=(2*1024*1024)	# Stack guard size (divisible by PAGE_SIZE)
 options		HBSD_DEBUG
 
 # BHND(4) drivers

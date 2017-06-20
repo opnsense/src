@@ -148,6 +148,12 @@ static int vm_map_stack_locked(vm_map_t map, vm_offset_t addrbos,
 static void vm_map_wire_entry_failure(vm_map_t map, vm_map_entry_t entry,
     vm_offset_t failed_addr);
 
+#ifndef STACK_GUARD_SIZE
+#define	STACK_GUARD_SIZE	(2 * 1024 * 1024)
+#endif
+
+CTASSERT(STACK_GUARD_SIZE > 0 && (STACK_GUARD_SIZE % PAGE_SIZE) == 0);
+
 #define	ENTRY_CHARGED(e) ((e)->cred != NULL || \
     ((e)->object.vm_object != NULL && (e)->object.vm_object->cred != NULL && \
      !((e)->eflags & MAP_ENTRY_NEEDS_COPY)))
@@ -3598,6 +3604,18 @@ SYSCTL_INT(_security_bsd, OID_AUTO, stack_guard_page, CTLFLAG_RWTUN,
     &stack_guard_page, 0,
     "Insert stack guard page ahead of the growable segments.");
 
+static int stack_guard_size = STACK_GUARD_SIZE;
+
+#ifndef PAX_HARDENING
+/*
+ * Intentinally under !defined(PAX_HARDENING). Don't allow this to be
+ * configured if we're hardened.
+ */
+SYSCTL_INT(_security_bsd, OID_AUTO, stack_guard_size, CTLFLAG_RWTUN,
+    &stack_guard_size, 0,
+    "Stack guard size in bytes (divisible by PAGE_SIZE).");
+#endif
+
 /* Attempts to grow a vm stack entry.  Returns KERN_SUCCESS if the
  * desired address is already mapped, or if we successfully grow
  * the stack.  Also returns KERN_SUCCESS if addr is outside the
@@ -3622,6 +3640,16 @@ vm_map_growstack(struct proc *p, vm_offset_t addr)
 #endif
 #ifdef RACCT
 	int error;
+#endif
+
+#ifndef PAX_HARDENING
+	/*
+	 * Ensure the stack guard size is sane. The only way it can
+	 * become unsane is if the sysctl node is exposed.
+	 */
+	if (stack_guard_page && (stack_guard_size <= 0
+	    || (stack_guard_size % PAGE_SIZE != 0)))
+		stack_guard_size = STACK_GUARD_SIZE;
 #endif
 
 	lmemlim = lim_cur(curthread, RLIMIT_MEMLOCK);
@@ -3700,7 +3728,7 @@ Retry:
 	 * This also effectively destroys any guard page the user might have
 	 * intended by limiting the stack size.
 	 */
-	if (grow_amount + (stack_guard_page ? PAGE_SIZE : 0) > max_grow) {
+	if (grow_amount + (stack_guard_page ? stack_guard_size : 0) > max_grow) {
 		if (vm_map_lock_upgrade(map))
 			goto Retry;
 
@@ -3803,11 +3831,11 @@ Retry:
 		 * If this puts us into the previous entry, cut back our
 		 * growth to the available space. Also, see the note above.
 		 */
-		if (addr < end) {
+		if (addr <= end) {
 			stack_entry->avail_ssize = max_grow;
 			addr = end;
 			if (stack_guard_page)
-				addr += PAGE_SIZE;
+				addr += stack_guard_size;
 		}
 
 		rv = vm_map_insert(map, NULL, 0, addr, stack_entry->start,
@@ -3841,7 +3869,7 @@ Retry:
 			stack_entry->avail_ssize = end - stack_entry->end;
 			addr = end;
 			if (stack_guard_page)
-				addr -= PAGE_SIZE;
+				addr -= stack_guard_size;
 		}
 
 		grow_amount = addr - stack_entry->end;
