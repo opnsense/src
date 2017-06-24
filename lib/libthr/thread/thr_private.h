@@ -101,6 +101,18 @@ TAILQ_HEAD(mutex_queue, pthread_mutex);
 #define THR_ASSERT(cond, msg)
 #endif
 
+#ifndef GUARD_DEFAULT_SIZE
+#define	GUARD_DEFAULT_SIZE	512
+#endif
+
+#ifndef GUARD_MIN_PAGES
+#define	GUARD_MIN_PAGES	256
+#endif
+
+#ifndef GUARD_MAX_PAGES
+#define	GUARD_MAX_PAGES	1024
+#endif
+
 #ifdef PIC
 # define STATIC_LIB_REQUIRE(name)
 #else
