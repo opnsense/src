@@ -439,7 +439,6 @@ init_private(void)
 	size_t len;
 	int mib[2];
 	char *env, *env_bigstack, *env_splitstack;
-	unsigned int npages;
 
 	_thr_umutex_init(&_mutex_static_lock);
 	_thr_umutex_init(&_cond_static_lock);
@@ -478,6 +477,7 @@ init_private(void)
 		sysctlbyname("kern.smp.cpus", &_thr_is_smp, &len, NULL, 0);
 		_thr_is_smp = (_thr_is_smp > 1);
 		_thr_page_size = getpagesize();
+		_thr_guard_default = (2 * 1024 * 1024);
 		_pthread_attr_default.guardsize_attr = _thr_guard_default;
 		_pthread_attr_default.stacksize_attr = _thr_stack_default;
 		env = getenv("LIBPTHREAD_SPINLOOPS");
@@ -490,19 +490,6 @@ init_private(void)
 		if (env)
 			_thr_queuefifo = atoi(env);
 		TAILQ_INIT(&_thr_atfork_list);
-		/*
-		 * Initialize the random-sized stack guard
-		 * conservatively.
-		 */
-		mib[0] = CTL_KERN;
-		mib[1] = KERN_ARND;
-		len = sizeof(npages);
-		npages = 0;
-		sysctl(mib, 2, &npages, &len, NULL, 0);
-		npages %= GUARD_MAX_PAGES;
-		if (npages < GUARD_MIN_PAGES)
-			npages = GUARD_DEFAULT_SIZE;
-		_thr_guard_default = npages * PAGE_SIZE;
 	}
 	init_once = 1;
 }
