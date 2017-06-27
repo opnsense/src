@@ -477,7 +477,7 @@ init_private(void)
 		sysctlbyname("kern.smp.cpus", &_thr_is_smp, &len, NULL, 0);
 		_thr_is_smp = (_thr_is_smp > 1);
 		_thr_page_size = getpagesize();
-		_thr_guard_default = (2 * 1024 * 1024);
+		_thr_guard_default = _thr_page_size;
 		_pthread_attr_default.guardsize_attr = _thr_guard_default;
 		_pthread_attr_default.stacksize_attr = _thr_stack_default;
 		env = getenv("LIBPTHREAD_SPINLOOPS");
