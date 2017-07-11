@@ -183,16 +183,15 @@ ip_output_pfil(struct mbuf **mp, struct ifnet **ifp, struct inpcb *inp,
 	}
 	/* Or forward to some other address? */
 	if (IP_HAS_NEXTHOP(m) && !ip_get_fwdtag(m, dst, &ifidx)) {
-		int ret = -1; /* Reloop for CHANGE of dst */
 		if (ifidx != 0) {
-			if ((*ifp = ifnet_byindex(ifidx)) == NULL) {
-				return -2; /* Drop */
+			struct ifnet *nifp = ifnet_byindex(ifidx);
+			if (nifp != NULL) {
+				*ifp = nifp;
 			}
-			ret = 0;
 		}
 		m->m_flags |= M_SKIP_FIREWALL;
 		ip_flush_fwdtag(m);
-		return (ret);
+		return -1; /* Reloop for CHANGE of dst */
 	}
 
 	return 0;
@@ -410,6 +409,7 @@ again:
 			isbroadcast = in_broadcast(gw->sin_addr, ifp);
 	}
 
+haveroute:
 	/*
 	 * Calculate MTU.  If we have a route that is up, use that,
 	 * otherwise use the interface's MTU.
@@ -580,6 +580,7 @@ sendit:
 
 	/* Jump over all PFIL processing if hooks are not active. */
 	if (PFIL_HOOKED(&V_inet_pfil_hook)) {
+		struct ifnet *same = ifp;
 		switch (ip_output_pfil(&m, &ifp, inp, dst, &fibnum, &error)) {
 		case 1: /* Finished */
 			goto done;
@@ -597,10 +598,10 @@ sendit:
 			rte = NULL;
 			gw = dst;
 			ip = mtod(m, struct ip *);
+			if (same != ifp) {
+				goto haveroute;
+			}
 			goto again;
-
-		case -2: /* Dropped */
-			goto bad;
 
 		}
 	}
@@ -1441,18 +1442,6 @@ ip_set_fwdtag(struct mbuf *m, struct sockaddr_in *dst, u_short ifidx)
 	if (fwd_tag != NULL) {
 		KASSERT(((struct ip_fwdtag *)(fwd_tag+1))->dst.sin_family ==
 		    AF_INET, ("%s: !AF_INET", __func__));
-
-		if (((struct ip_fwdtag *)(fwd_tag+1))->if_index == 0 &&
-		    ifidx != 0) {
-			/*
-			 * ipfw(4) does not allow interface selection in
-			 * forwarding.  It is allowed to overwrite forward
-			 * info.  pf(4), on the other hand, may only reset
-			 * decisions it made by itself with a previously
-			 * set interface.
-			 */
-			return (0);
-		}
 
 		m_tag_unlink(m, fwd_tag);
 	} else {
