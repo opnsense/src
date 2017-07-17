@@ -375,36 +375,20 @@ ipsec4_common_input_cb(struct mbuf *m, struct secasvar *sav, int skip,
 			error = EINVAL;
 			goto bad;
 		}
-		/* enc0: strip outer IPv4 header */
-		m_striphdr(m, 0, ip->ip_hl << 2);
-		skip = 0;
-#ifdef notyet
-		/* XXX PROXY address isn't recorded in SAH */
-		/*
-		 * Check that the inner source address is the same as
-		 * the proxy address, if available.
-		 */
-		if ((saidx->proxy.sa.sa_family == AF_INET &&
-		    saidx->proxy.sin.sin_addr.s_addr !=
-		    INADDR_ANY &&
-		    ipn.ip_src.s_addr !=
-		    saidx->proxy.sin.sin_addr.s_addr) ||
-		    (saidx->proxy.sa.sa_family != AF_INET &&
-			saidx->proxy.sa.sa_family != 0)) {
+		/* ipn will now contain the inner IPv4 header */
+		m_striphdr(m, 0, skip);
+		/* Fix IPv4 header */
+		if (skip && m->m_len < sizeof(struct ip) &&
+		    (m = m_pullup(m, sizeof(struct ip))) == NULL) {
 
-			DPRINTF(("%s: inner source address %s doesn't "
-			    "correspond to expected proxy source %s, "
-			    "SA %s/%08lx\n", __func__,
-			    inet_ntoa4(ipn.ip_src),
-			    ipsp_address(saidx->proxy),
-			    ipsp_address(saidx->dst),
-			    (u_long) ntohl(sav->spi)));
+			DPRINTF(("%s: processing failed for SA %s/%08lx\n",
+			    __func__, ipsec_address(&sav->sah->saidx.dst, buf,
+			    sizeof(buf)), (u_long) ntohl(sav->spi)));
 
-			IPSEC_ISTAT(sproto, pdrops);
+			IPSEC_ISTAT(sproto, hdrops);
 			error = EACCES;
 			goto bad;
 		}
-#endif /* notyet */
 	}
 #ifdef INET6
 	/* IPv6-in-IP encapsulation. */
@@ -415,34 +399,20 @@ ipsec4_common_input_cb(struct mbuf *m, struct secasvar *sav, int skip,
 			error = EINVAL;
 			goto bad;
 		}
-		/* enc0: strip IPv4 header, keep IPv6 header only */
-		m_striphdr(m, 0, ip->ip_hl << 2);
-		skip = 0;
-#ifdef notyet 
-		/*
-		 * Check that the inner source address is the same as
-		 * the proxy address, if available.
-		 */
-		if ((saidx->proxy.sa.sa_family == AF_INET6 &&
-		    !IN6_IS_ADDR_UNSPECIFIED(&saidx->proxy.sin6.sin6_addr) &&
-		    !IN6_ARE_ADDR_EQUAL(&ip6n.ip6_src,
-			&saidx->proxy.sin6.sin6_addr)) ||
-		    (saidx->proxy.sa.sa_family != AF_INET6 &&
-			saidx->proxy.sa.sa_family != 0)) {
+		/* ip6n will now contain the inner IPv6 header. */
+		m_striphdr(m, 0, skip);
+		/* Fix IPv6 header again */
+		if (skip && m->m_len < sizeof(struct ip6_hdr) &&
+		    (m = m_pullup(m, sizeof(struct ip6_hdr))) == NULL) {
 
-			DPRINTF(("%s: inner source address %s doesn't "
-			    "correspond to expected proxy source %s, "
-			    "SA %s/%08lx\n", __func__,
-			    ip6_sprintf(ip6buf, &ip6n.ip6_src),
-			    ipsec_address(&saidx->proxy),
-			    ipsec_address(&saidx->dst),
-			    (u_long) ntohl(sav->spi)));
+			DPRINTF(("%s: processing failed for SA %s/%08lx\n",
+			    __func__, ipsec_address(&sav->sah->saidx.dst, buf,
+			    sizeof(buf)), (u_long) ntohl(sav->spi)));
 
-			IPSEC_ISTAT(sproto, pdrops);
+			IPSEC_ISTAT(sproto, hdrops);
 			error = EACCES;
 			goto bad;
 		}
-#endif /* notyet */
 	}
 #endif /* INET6 */
 	else if (prot != IPPROTO_IPV6 && saidx->mode == IPSEC_MODE_ANY) {
