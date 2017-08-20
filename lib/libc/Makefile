@@ -32,7 +32,7 @@ SHLIB_MAJOR= 7
 SHLIB_LDSCRIPT=libc.ldscript
 SHLIB_LDSCRIPT_LINKS=libxnet.so
 WARNS?=	2
-CFLAGS+=-I${LIBC_SRCTOP}/include -I${LIBC_SRCTOP}/../../include
+CFLAGS+=-I${LIBC_SRCTOP}/include -I${SRCTOP}/include
 CFLAGS+=-I${LIBC_SRCTOP}/${LIBC_ARCH}
 .if ${MK_NLS} != "no"
 CFLAGS+=-DNLS
@@ -109,6 +109,9 @@ NOASM=
 	(${MACHINE_ARCH:Marmv6*} == "" || (defined(CPUTYPE) && ${CPUTYPE:M*soft*}))) || \
      ${LIBC_ARCH} == "mips"
 .include "${LIBC_SRCTOP}/softfloat/Makefile.inc"
+.endif
+.if ${LIBC_ARCH} == "i386" || ${LIBC_ARCH} == "amd64"
+.include "${LIBC_SRCTOP}/x86/sys/Makefile.inc"
 .endif
 .if ${MK_NIS} != "no"
 CFLAGS+= -DYP

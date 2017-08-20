@@ -82,13 +82,13 @@ scandir(const char *dirname, struct dirent ***namelist,
 #endif
 {
 	struct dirent *d, *p, **names = NULL;
-	size_t nitems = 0;
-	long arraysz;
+	size_t arraysz, numitems;
 	DIR *dirp;
 
 	if ((dirp = opendir(dirname)) == NULL)
 		return(-1);
 
+	numitems = 0;
 	arraysz = 32;	/* initial estimate of the array size */
 	names = (struct dirent **)malloc(arraysz * sizeof(struct dirent *));
 	if (names == NULL)
@@ -112,11 +112,11 @@ scandir(const char *dirname, struct dirent ***namelist,
 		 * Check to make sure the array has space left and
 		 * realloc the maximum size.
 		 */
-		if (nitems >= arraysz) {
+		if (numitems >= arraysz) {
 			struct dirent **names2;
 
-			names2 = (struct dirent **)realloc((char *)names,
-				(arraysz * 2) * sizeof(struct dirent *));
+			names2 = reallocarray(names, arraysz,
+			    2 * sizeof(struct dirent *));
 			if (names2 == NULL) {
 				free(p);
 				goto fail;
@@ -124,22 +124,22 @@ scandir(const char *dirname, struct dirent ***namelist,
 			names = names2;
 			arraysz *= 2;
 		}
-		names[nitems++] = p;
+		names[numitems++] = p;
 	}
 	closedir(dirp);
-	if (nitems && dcomp != NULL)
+	if (numitems && dcomp != NULL)
 #ifdef I_AM_SCANDIR_B
-		qsort_b(names, nitems, sizeof(struct dirent *), (void*)dcomp);
+		qsort_b(names, numitems, sizeof(struct dirent *), (void*)dcomp);
 #else
-		qsort_r(names, nitems, sizeof(struct dirent *),
+		qsort_r(names, numitems, sizeof(struct dirent *),
 		    &dcomp, alphasort_thunk);
 #endif
 	*namelist = names;
-	return (nitems);
+	return (numitems);
 
 fail:
-	while (nitems > 0)
-		free(names[--nitems]);
+	while (numitems > 0)
+		free(names[--numitems]);
 	free(names);
 	closedir(dirp);
 	return (-1);

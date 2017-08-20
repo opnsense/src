@@ -62,6 +62,12 @@ enum {
 	PAUSE_AUTONEG = 1 << 2
 };
 
+enum {
+	FEC_RS        = 1 << 0,
+	FEC_BASER_RS  = 1 << 1,
+	FEC_RESERVED  = 1 << 2,
+};
+
 struct port_stats {
 	u64 tx_octets;            /* total # of octets in good frames */
 	u64 tx_frames;            /* all good frames */
@@ -204,7 +210,7 @@ struct tp_rdma_stats {
 };
 
 struct sge_params {
-	int timer_val[SGE_NTIMERS];
+	int timer_val[SGE_NTIMERS];	/* final, scaled values */
 	int counter_val[SGE_NCOUNTERS];
 	int fl_starve_threshold;
 	int fl_starve_threshold2;
@@ -215,6 +221,8 @@ struct sge_params {
 	int pad_boundary;
 	int pack_boundary;
 	int fl_pktshift;
+	u32 sge_control;
+	u32 sge_fl_buffer_size[SGE_FLBUF_SIZES];
 };
 
 struct tp_params {
@@ -225,7 +233,7 @@ struct tp_params {
 
 	uint32_t vlan_pri_map;
 	uint32_t ingress_config;
-	uint32_t rx_pkt_encap;
+	__be16 err_vec_mask;
 
 	int8_t fcoe_shift;
 	int8_t port_shift;
@@ -278,19 +286,62 @@ struct chip_params {
 	u16 mps_tcam_size;
 };
 
+/* VF-only parameters. */
+
+/*
+ * Global Receive Side Scaling (RSS) parameters in host-native format.
+ */
+struct rss_params {
+	unsigned int mode;		/* RSS mode */
+	union {
+	    struct {
+		u_int synmapen:1;	/* SYN Map Enable */
+		u_int syn4tupenipv6:1;	/* enable hashing 4-tuple IPv6 SYNs */
+		u_int syn2tupenipv6:1;	/* enable hashing 2-tuple IPv6 SYNs */
+		u_int syn4tupenipv4:1;	/* enable hashing 4-tuple IPv4 SYNs */
+		u_int syn2tupenipv4:1;	/* enable hashing 2-tuple IPv4 SYNs */
+		u_int ofdmapen:1;	/* Offload Map Enable */
+		u_int tnlmapen:1;	/* Tunnel Map Enable */
+		u_int tnlalllookup:1;	/* Tunnel All Lookup */
+		u_int hashtoeplitz:1;	/* use Toeplitz hash */
+	    } basicvirtual;
+	} u;
+};
+
+/*
+ * Maximum resources provisioned for a PCI VF.
+ */
+struct vf_resources {
+	unsigned int nvi;		/* N virtual interfaces */
+	unsigned int neq;		/* N egress Qs */
+	unsigned int nethctrl;		/* N egress ETH or CTRL Qs */
+	unsigned int niqflint;		/* N ingress Qs/w free list(s) & intr */
+	unsigned int niq;		/* N ingress Qs */
+	unsigned int tc;		/* PCI-E traffic class */
+	unsigned int pmask;		/* port access rights mask */
+	unsigned int nexactf;		/* N exact MPS filters */
+	unsigned int r_caps;		/* read capabilities */
+	unsigned int wx_caps;		/* write/execute capabilities */
+};
+
 struct adapter_params {
 	struct sge_params sge;
-	struct tp_params  tp;
+	struct tp_params  tp;		/* PF-only */
 	struct vpd_params vpd;
 	struct pci_params pci;
-	struct devlog_params devlog;
+	struct devlog_params devlog;	/* PF-only */
+	struct rss_params rss;		/* VF-only */
+	struct vf_resources vfres;	/* VF-only */
 
 	unsigned int sf_size;             /* serial flash size in bytes */
 	unsigned int sf_nsec;             /* # of flash sectors */
 
-	unsigned int fw_vers;
-	unsigned int tp_vers;
-	unsigned int exprom_vers;
+	unsigned int fw_vers;		/* firmware version */
+	unsigned int bs_vers;		/* bootstrap version */
+	unsigned int tp_vers;		/* TP microcode version */
+	unsigned int er_vers;		/* expansion ROM version */
+	unsigned int scfg_vers;		/* Serial Configuration version */
+	unsigned int vpd_vers;		/* VPD version */
 
 	unsigned short mtus[NMTUS];
 	unsigned short a_wnd[NCCTRL_WIN];
@@ -315,6 +366,9 @@ struct adapter_params {
 
 	unsigned int ofldq_wr_cred;
 	unsigned int eo_wr_cred;
+
+	unsigned int max_ordird_qp;
+	unsigned int max_ird_adapter;
 };
 
 #define CHELSIO_T4		0x4
@@ -347,12 +401,16 @@ struct trace_params {
 struct link_config {
 	unsigned short supported;        /* link capabilities */
 	unsigned short advertising;      /* advertised capabilities */
-	unsigned short requested_speed;  /* speed user has requested */
-	unsigned short speed;            /* actual link speed */
+	unsigned short lp_advertising;   /* peer advertised capabilities */
+	unsigned int   requested_speed;  /* speed user has requested */
+	unsigned int   speed;            /* actual link speed */
 	unsigned char  requested_fc;     /* flow control user has requested */
 	unsigned char  fc;               /* actual link flow control */
+	unsigned char  requested_fec;    /* FEC user has requested */
+	unsigned char  fec;              /* actual FEC */
 	unsigned char  autoneg;          /* autonegotiating? */
 	unsigned char  link_ok;          /* link up? */
+	unsigned char  link_down_rc;     /* link down reason */
 };
 
 #include "adapter.h"
@@ -506,9 +564,14 @@ int t4_flash_erase_sectors(struct adapter *adapter, int start, int end);
 int t4_flash_cfg_addr(struct adapter *adapter);
 int t4_load_cfg(struct adapter *adapter, const u8 *cfg_data, unsigned int size);
 int t4_get_fw_version(struct adapter *adapter, u32 *vers);
+int t4_get_bs_version(struct adapter *adapter, u32 *vers);
 int t4_get_tp_version(struct adapter *adapter, u32 *vers);
 int t4_get_exprom_version(struct adapter *adapter, u32 *vers);
+int t4_get_scfg_version(struct adapter *adapter, u32 *vers);
+int t4_get_vpd_version(struct adapter *adapter, u32 *vers);
+int t4_get_version_info(struct adapter *adapter);
 int t4_init_hw(struct adapter *adapter, u32 fw_params);
+const struct chip_params *t4_get_chip_params(int chipid);
 int t4_prep_adapter(struct adapter *adapter, u8 *buf);
 int t4_shutdown_adapter(struct adapter *adapter);
 int t4_init_devlog_params(struct adapter *adapter, int fw_attach);
@@ -528,7 +591,8 @@ int t4_config_rss_range(struct adapter *adapter, int mbox, unsigned int viid,
 int t4_config_glbl_rss(struct adapter *adapter, int mbox, unsigned int mode,
 		       unsigned int flags);
 int t4_config_vi_rss(struct adapter *adapter, int mbox, unsigned int viid,
-		     unsigned int flags, unsigned int defq);
+		     unsigned int flags, unsigned int defq, unsigned int skeyidx,
+		     unsigned int skey);
 int t4_read_rss(struct adapter *adapter, u16 *entries);
 void t4_fw_tp_pio_rw(struct adapter *adap, u32 *vals, unsigned int nregs,
 		  unsigned int start_index, unsigned int rw);
@@ -710,10 +774,45 @@ int t4_sched_params(struct adapter *adapter, int type, int level, int mode,
 		    int rateunit, int ratemode, int channel, int cl,
 		    int minrate, int maxrate, int weight, int pktsize,
 		    int sleep_ok);
+int t4_sched_params_ch_rl(struct adapter *adapter, int channel, int ratemode,
+			  unsigned int maxrate, int sleep_ok);
+int t4_sched_params_cl_wrr(struct adapter *adapter, int channel, int cl,
+			   int weight, int sleep_ok);
+int t4_sched_params_cl_rl_kbps(struct adapter *adapter, int channel, int cl,
+			       int mode, unsigned int maxrate, int pktsize,
+			       int sleep_ok);
 int t4_config_watchdog(struct adapter *adapter, unsigned int mbox,
 		       unsigned int pf, unsigned int vf,
 		       unsigned int timeout, unsigned int action);
 int t4_get_devlog_level(struct adapter *adapter, unsigned int *level);
 int t4_set_devlog_level(struct adapter *adapter, unsigned int level);
 void t4_sge_decode_idma_state(struct adapter *adapter, int state);
+
+static inline int t4vf_query_params(struct adapter *adapter,
+				    unsigned int nparams, const u32 *params,
+				    u32 *vals)
+{
+	return t4_query_params(adapter, 0, 0, 0, nparams, params, vals);
+}
+
+static inline int t4vf_set_params(struct adapter *adapter,
+				  unsigned int nparams, const u32 *params,
+				  const u32 *vals)
+{
+	return t4_set_params(adapter, 0, 0, 0, nparams, params, vals);
+}
+
+static inline int t4vf_wr_mbox(struct adapter *adap, const void *cmd,
+			       int size, void *rpl)
+{
+	return t4_wr_mbox(adap, adap->mbox, cmd, size, rpl);
+}
+
+int t4vf_wait_dev_ready(struct adapter *adapter);
+int t4vf_fw_reset(struct adapter *adapter);
+int t4vf_get_sge_params(struct adapter *adapter);
+int t4vf_get_rss_glb_config(struct adapter *adapter);
+int t4vf_get_vfres(struct adapter *adapter);
+int t4vf_prep_adapter(struct adapter *adapter);
+
 #endif /* __CHELSIO_COMMON_H */

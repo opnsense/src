@@ -20,7 +20,7 @@ namespace __ubsan {
 struct TypeMismatchData {
   SourceLocation Loc;
   const TypeDescriptor &Type;
-  uptr Alignment;
+  unsigned char LogAlignment;
   unsigned char TypeCheckKind;
 };
 
@@ -37,7 +37,7 @@ struct TypeMismatchData {
 /// \brief Handle a runtime type check failure, caused by either a misaligned
 /// pointer, a null pointer, or a pointer to insufficient storage for the
 /// type.
-RECOVERABLE(type_mismatch, TypeMismatchData *Data, ValueHandle Pointer)
+RECOVERABLE(type_mismatch_v1, TypeMismatchData *Data, ValueHandle Pointer)
 
 struct OverflowData {
   SourceLocation Loc;
@@ -148,14 +148,25 @@ struct NonNullArgData {
 /// \brief Handle passing null pointer to function with nonnull attribute.
 RECOVERABLE(nonnull_arg, NonNullArgData *Data)
 
-struct CFIBadIcallData {
+/// \brief Known CFI check kinds.
+/// Keep in sync with the enum of the same name in CodeGenFunction.h
+enum CFITypeCheckKind : unsigned char {
+  CFITCK_VCall,
+  CFITCK_NVCall,
+  CFITCK_DerivedCast,
+  CFITCK_UnrelatedCast,
+  CFITCK_ICall,
+};
+
+struct CFICheckFailData {
+  CFITypeCheckKind CheckKind;
   SourceLocation Loc;
   const TypeDescriptor &Type;
 };
 
-/// \brief Handle control flow integrity failure for indirect function calls.
-RECOVERABLE(cfi_bad_icall, CFIBadIcallData *Data, ValueHandle Function)
-
+/// \brief Handle control flow integrity failures.
+RECOVERABLE(cfi_check_fail, CFICheckFailData *Data, ValueHandle Function,
+            uptr VtableIsValid)
 }
 
 #endif // UBSAN_HANDLERS_H

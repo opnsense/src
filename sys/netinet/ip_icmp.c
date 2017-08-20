@@ -380,10 +380,12 @@ icmp_input(struct mbuf **mp, int *offp, int proto)
 	 */
 #ifdef ICMPPRINTFS
 	if (icmpprintfs) {
-		char buf[4 * sizeof "123"];
-		strcpy(buf, inet_ntoa(ip->ip_src));
+		char srcbuf[INET_ADDRSTRLEN];
+		char dstbuf[INET_ADDRSTRLEN];
+
 		printf("icmp_input from %s to %s, len %d\n",
-		       buf, inet_ntoa(ip->ip_dst), icmplen);
+		    inet_ntoa_r(ip->ip_src, srcbuf),
+		    inet_ntoa_r(ip->ip_dst, dstbuf), icmplen);
 	}
 #endif
 	if (icmplen < ICMP_MINLEN) {
@@ -457,6 +459,8 @@ icmp_input(struct mbuf **mp, int *offp, int proto)
 			 * Treat subcodes 2,3 as immediate RST
 			 */
 			case ICMP_UNREACH_PROTOCOL:
+				code = PRC_UNREACH_PROTOCOL;
+				break;
 			case ICMP_UNREACH_PORT:
 				code = PRC_UNREACH_PORT;
 				break;
@@ -647,11 +651,12 @@ reflect:
 		icmpdst.sin_addr = icp->icmp_gwaddr;
 #ifdef	ICMPPRINTFS
 		if (icmpprintfs) {
-			char buf[4 * sizeof "123"];
-			strcpy(buf, inet_ntoa(icp->icmp_ip.ip_dst));
+			char dstbuf[INET_ADDRSTRLEN];
+			char gwbuf[INET_ADDRSTRLEN];
 
 			printf("redirect dst %s to %s\n",
-			       buf, inet_ntoa(icp->icmp_gwaddr));
+			       inet_ntoa_r(icp->icmp_ip.ip_dst, dstbuf),
+			       inet_ntoa_r(icp->icmp_gwaddr, gwbuf));
 		}
 #endif
 		icmpsrc.sin_addr = icp->icmp_ip.ip_dst;
@@ -899,10 +904,12 @@ icmp_send(struct mbuf *m, struct mbuf *opts)
 	m->m_pkthdr.rcvif = (struct ifnet *)0;
 #ifdef ICMPPRINTFS
 	if (icmpprintfs) {
-		char buf[4 * sizeof "123"];
-		strcpy(buf, inet_ntoa(ip->ip_dst));
+		char dstbuf[INET_ADDRSTRLEN];
+		char srcbuf[INET_ADDRSTRLEN];
+
 		printf("icmp_send dst %s src %s\n",
-		       buf, inet_ntoa(ip->ip_src));
+		    inet_ntoa_r(ip->ip_dst, dstbuf),
+		    inet_ntoa_r(ip->ip_src, srcbuf));
 	}
 #endif
 	(void) ip_output(m, opts, NULL, 0, NULL, NULL);

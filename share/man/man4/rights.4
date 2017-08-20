@@ -32,7 +32,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd August 27, 2015
+.Dd August 17, 2016
 .Dt RIGHTS 4
 .Os
 .Sh NAME
@@ -212,7 +212,7 @@ with the
 .Dv O_EXEC
 flag;
 .Dv CAP_READ
-is also be required.
+is also required.
 .It Dv CAP_FLOCK
 Permit
 .Xr flock 2 ,
@@ -254,6 +254,7 @@ Permit
 .It Dv CAP_FSYNC
 Permit
 .Xr aio_fsync 2 ,
+.Xr fdatasync 2 ,
 .Xr fsync 2
 and
 .Xr openat 2

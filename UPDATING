@@ -6,7 +6,7 @@ COMMON ITEMS: section later in the file.  These instructions assume that you
 basically know what you are doing.  If not, then please consult the FreeBSD
 handbook:
 
-    http://www.freebsd.org/doc/en_US.ISO8859-1/books/handbook/makeworld.html
+    https://www.freebsd.org/doc/en_US.ISO8859-1/books/handbook/updating-src.html
 
 Items affecting the ports and packages system can be found in
 /usr/ports/UPDATING.  Please read that file before running portupgrade.
@@ -16,84 +16,95 @@ from older versions of FreeBSD, try WITHOUT_CLANG and WITH_GCC to bootstrap to
 the tip of head, and then rebuild without this option. The bootstrap process
 from older version of current across the gcc/clang cutover is a bit fragile.
 
-20170810	p12	FreeBSD-SA-17:06.openssh
-			FreeBSD-EN-17:07.vnet
+20170725:
+	11.1-RELEASE.
 
-	Fix OpenSSH Denial of Service vulnerability. [SA-17:06]
+20170518:
+	arm64 builds now use the base system LLD 4.0.0 linker by default,
+	instead of requiring that the aarch64-binutils port or package be
+	installed. To continue using aarch64-binutils, set
+	CROSS_BINUTILS_PREFIX=/usr/local/aarch64-freebsd/bin .
 
-	Fix VNET kernel panic with asynchronous I/O. [EN-17:07]
+20170529:
+	The ctl.ko module no longer implements the iSCSI target frontend:
+	cfiscsi.ko does instead.
 
-20170712	p11	FreeBSD-SA-17:05.heimdal
+	If building cfiscsi.ko as a kernel module, the module can be loaded
+	via one of the following methods:
+	- `cfiscsi_load="YES"` in loader.conf(5).
+	- Add `cfiscsi` to `$kld_list` in rc.conf(5).
+	- ctladm(8)/ctld(8), when compiled with iSCSI support
+	  (`WITH_ISCSI=yes` in src.conf(5))
 
-	Fix heimdal KDC-REP service name validation vulnerability.
+	Please see cfiscsi(4) for more details.
 
-20170427	p10	FreeBSD-SA-17:04.ipfilter
+20170511:
+	The mmcsd.ko module now additionally depends on geom_flashmap.ko.
+	Also, mmc.ko and mmcsd.ko need to be a matching pair built from the
+	same source (previously, the dependency of mmcsd.ko on mmc.ko was
+	missing, but mmcsd.ko now will refuse to load if it is incompatible
+	with mmc.ko).
 
-	Fix ipfilter(4) fragment handling panic. [SA-17:04]
+20170414:
+	Binds and sends to the loopback addresses, IPv6 and IPv4, will now
+	use any explicitly assigned loopback address available in the jail
+	instead of using the first assigned address of the jail.
 
-20170412	p9	FreeBSD-SA-17:03.ntp
-			FreeBSD-EN-17:05.xen
+20170413:
+	As of r316810 for ipfilter, keep frags is no longer assumed when
+	keep state is specified in a rule. r316810 aligns ipfilter with
+	documentation in man pages separating keep frags from keep state.
+	This allows keep state to specified without forcing keep frags
+	and allows keep frags to be specified independently of keep state.
+	To maintain previous behaviour, also specify keep frags with
+	keep state (as documented in ipf.conf.5).
 
-	Fix multiple vulnerabilities of ntp. [SA-17:03]
+20170402:
+	Clang, llvm, lldb, compiler-rt and libc++ have been upgraded to 4.0.0.
+	Please see the 20141231 entry below for information about prerequisites
+	and upgrading, if you are not already using clang 3.5.0 or higher.
 
-	Xen migration enhancements. [EN-17:05]
+20170323:
+	The code that provides support for ZFS .zfs/ directory functionality
+	has been reimplemented.  It's not possible now to create a snapshot
+	by mkdir under .zfs/snapshot/.  That should be the only user visible
+	change.
 
-20170223	p8	FreeBSD-SA-17:02.openssl
-			FreeBSD-EN-17:01.pcie
-			FreeBSD-EN-17:02.yp
-			FreeBSD-EN-17:03.hyperv
-			FreeBSD-EN-17:04.mandoc
+20170319:
+	Many changes in the IPsec code have been merged from the FreeBSD-CURRENT
+	branch. The IPSEC_FILTERTUNNEL kernel option is removed in favour of
+	corresponding sysctl. The IPSEC_NAT_T kernel option is also removed,
+	and now NAT-T is supported by default. Security associations now use  
+	the single namespace for SPI allocation, so if you use several manually
+	configured security associations with the same SPI, this configuration
+	needs modification.
 
-	Fix multiple vulnerabilities of OpenSSL. [SA-17:02]
+20161217:
+	Clang, llvm, lldb, compiler-rt and libc++ have been upgraded to 3.9.1.
+	Please see the 20141231 entry below for information about prerequisites
+	and upgrading, if you are not already using clang 3.5.0 or higher.
 
-	Fix system hang when booting when PCI-express HotPlug is enabled.
-	[EN-17:01]
+20161124:
+	Clang, llvm, lldb, compiler-rt and libc++ have been upgraded to 3.9.0.
+	Please see the 20141231 entry below for information about prerequisites
+	and upgrading, if you are not already using clang 3.5.0 or higher.
 
-	Fix NIS master updates are not pushed to NIS slave. [EN-17:02]
+20161119:
+	The layout of the pmap structure has changed for powerpc to put the pmap
+	statistics at the front for all CPU variations.  libkvm(3) and all tools
+	that link against it need to be recompiled.
 
-	Fix compatibility with Hyper-V/storage after KB3172614 or
-	KB3179574. [EN-17:03]
+20161030:
+	isl(4) and cyapa(4) drivers now require a new driver,
+	chromebook_platform(4), to work properly on Chromebook-class hardware.
+	On other types of hardware the drivers may need to be configured using
+	device hints.  Please see the corresponding manual pages for details.
 
-	Make makewhatis output reproducible. [EN-17:04]
-
-20170111	p7	FreeBSD-SA-17:01.openssh
-
-	Fix multiple vulnerabilities of OpenSSH.
-
-20161222	p6	FreeBSD-SA-16:39.ntp
-
-	Fix multiple vulnerabilities of ntp.
-
-20161208	p5	FreeBSD-SA-16:37.libc [revised]
-
-	Fix regressions introduced by SA-16:37.libc.
-
-20161206	p4	FreeBSD-SA-16:36.telnetd
-			FreeBSD-SA-16:37.libc
-			FreeBSD-SA-16:38.bhyve
-			FreeBSD-EN-16:19.tzcode
-			FreeBSD-EN-16:20.tzdata
-			FreeBSD-EN-16:21.localedef
-
-	Fix possible login(1) argument injection in telnetd(8). [SA-16:36]
-	Fix link_ntoa(3) buffer overflow in libc. [SA-16:37]
-	Fix possible escape from bhyve(8) virtual machine. [SA-16:38]
-	Fix warnings about valid time zone abbreviations. [EN-16:19]
-	Update timezone database information. [EN-16:20]
-	Fix incorrectly defined unicode character(s). [EN-16:21]
-
-20161102	p3	FreeBSD-SA-16:33.openssh
-
-	Fix Fix OpenSSH remote Denial of Service vulnerability.
-
-20161025	p2	FreeBSD-SA-16:15.sysarch [revised]
-			FreeBSD-SA-16:32.bhyve
-
-	Fix incorrect argument validation in sysarch(2). [SA-16:15]
-	Fix access to host memory from guest in bhyve(8). [SA-16:32]
-
-20160928:
-	11.0-RELEASE.
+20161210:
+	Relocatable object files with the extension of .So have been renamed
+	to use an extension of .pico instead.  The purpose of this change is
+	to avoid a name clash with shared libraries on case-insensitive file
+	systems.  On those file systems, foo.So is the same file as foo.so.
 
 20160622:
 	The libc stub for the pipe(2) system call has been replaced with

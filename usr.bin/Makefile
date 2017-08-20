@@ -36,7 +36,6 @@ SUBDIR=	alias \
 	ctlstat \
 	cut \
 	dirname \
-	dpv \
 	du \
 	elf2aout \
 	elfdump \
@@ -52,6 +51,7 @@ SUBDIR=	alias \
 	fsync \
 	gcore \
 	gencat \
+	getaddrinfo \
 	getconf \
 	getent \
 	getopt \
@@ -122,6 +122,7 @@ SUBDIR=	alias \
 	pr \
 	printenv \
 	printf \
+	proccontrol \
 	procstat \
 	protect \
 	rctl \
@@ -199,6 +200,7 @@ SUBDIR.${MK_BLUETOOTH}+=	bluetooth
 SUBDIR.${MK_BSD_CPIO}+=	cpio
 SUBDIR.${MK_CALENDAR}+=	calendar
 SUBDIR.${MK_CLANG}+=	clang
+SUBDIR.${MK_DIALOG}+=	dpv
 SUBDIR.${MK_EE}+=	ee
 SUBDIR.${MK_FILE}+=	file
 SUBDIR.${MK_FINGER}+=	finger
@@ -270,8 +272,9 @@ SUBDIR.${MK_TOOLCHAIN}+=	ctags
 SUBDIR.${MK_TOOLCHAIN}+=	cxxfilt
 SUBDIR.${MK_TOOLCHAIN}+=	elfcopy
 SUBDIR.${MK_TOOLCHAIN}+=	file2c
-.if ${MACHINE_ARCH} != "aarch64" && \ # ARM64TODO gprof does not build
-    ${MACHINE_CPUARCH} != "riscv" # RISCVTODO gprof does not build
+# ARM64TODO gprof does not build
+# RISCVTODO gprof does not build
+.if ${MACHINE_ARCH} != "aarch64" && ${MACHINE_CPUARCH} != "riscv"
 SUBDIR.${MK_TOOLCHAIN}+=	gprof
 .endif
 SUBDIR.${MK_TOOLCHAIN}+=	indent
@@ -299,6 +302,12 @@ SUBDIR.${MK_UTMPX}+=	users
 SUBDIR.${MK_UTMPX}+=	who
 SUBDIR.${MK_SVN}+=	svn
 SUBDIR.${MK_SVNLITE}+=	svn
+
+# These are normally only handled for build-tools.
+.if make(clean*)
+SUBDIR+=	mkcsmapper_static
+SUBDIR+=	mkesdb_static
+.endif
 
 .include <bsd.arch.inc.mk>
 

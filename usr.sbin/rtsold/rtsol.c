@@ -92,7 +92,7 @@ static int ra_opt_rdnss_dispatch(struct ifinfo *, struct rainfo *,
     struct script_msg_head_t *, struct script_msg_head_t *);
 static char *make_rsid(const char *, const char *, struct rainfo *);
 
-#define	_ARGS_OTHER	otherconf_script, ifi->ifname, ntopbuf
+#define	_ARGS_OTHER	otherconf_script, ifi->ifname
 #define	_ARGS_RESADD	resolvconf_script, "-a", rsid
 #define	_ARGS_RESDEL	resolvconf_script, "-d", rsid
 

@@ -1640,7 +1640,7 @@ arm_gicv2m_alloc_msi(device_t dev, device_t child, int count, int maxcount,
 	mtx_lock(&sc->sc_mutex);
 
 	found = false;
-	for (irq = sc->sc_spi_start; irq < sc->sc_spi_end && !found; irq++) {
+	for (irq = sc->sc_spi_start; irq < sc->sc_spi_end; irq++) {
 		/* Start on an aligned interrupt */
 		if ((irq & (maxcount - 1)) != 0)
 			continue;
@@ -1649,7 +1649,7 @@ arm_gicv2m_alloc_msi(device_t dev, device_t child, int count, int maxcount,
 		found = true;
 
 		/* Check this range is valid */
-		for (end_irq = irq; end_irq != irq + count - 1; end_irq++) {
+		for (end_irq = irq; end_irq != irq + count; end_irq++) {
 			/* No free interrupts */
 			if (end_irq == sc->sc_spi_end) {
 				found = false;
@@ -1666,6 +1666,8 @@ arm_gicv2m_alloc_msi(device_t dev, device_t child, int count, int maxcount,
 				break;
 			}
 		}
+		if (found)
+			break;
 	}
 
 	/* Not enough interrupts were found */
@@ -1700,15 +1702,15 @@ arm_gicv2m_release_msi(device_t dev, device_t child, int count,
 
 	mtx_lock(&sc->sc_mutex);
 	for (i = 0; i < count; i++) {
-		gi = (struct gic_irqsrc *)isrc;
+		gi = (struct gic_irqsrc *)isrc[i];
 
 		KASSERT((gi->gi_flags & GI_FLAG_MSI_USED) == GI_FLAG_MSI_USED,
 		    ("%s: Trying to release an unused MSI-X interrupt",
 		    __func__));
 
 		gi->gi_flags &= ~GI_FLAG_MSI_USED;
-		mtx_unlock(&sc->sc_mutex);
 	}
+	mtx_unlock(&sc->sc_mutex);
 
 	return (0);
 }

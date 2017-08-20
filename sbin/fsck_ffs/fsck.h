@@ -282,7 +282,8 @@ struct inoinfo {
 	u_int	i_numblks;		/* size of block array in bytes */
 	ufs2_daddr_t i_blks[1];		/* actually longer */
 } **inphead, **inpsort;
-extern long numdirs, dirhash, listmax, inplast;
+extern long dirhash, inplast;
+extern unsigned long numdirs, listmax;
 extern long countdirs;		/* number of directories we actually found */
 
 #define MIBSIZE	3		/* size of fsck sysctl MIBs */
@@ -305,7 +306,7 @@ extern u_int	real_dev_bsize;		/* actual disk sector size, not overridden */
 extern char	nflag;			/* assume a no response */
 extern char	yflag;			/* assume a yes response */
 extern int	bkgrdflag;		/* use a snapshot to run on an active system */
-extern int	bflag;			/* location of alternate super block */
+extern ufs2_daddr_t bflag;		/* location of alternate super block */
 extern int	debug;			/* output debugging info */
 extern int	Eflag;			/* delete empty data blocks */
 extern int	Zflag;			/* zero empty data blocks */

@@ -35,7 +35,6 @@
 __FBSDID("$FreeBSD$");
 
 #include "opt_compat.h"
-#include "opt_pax.h"
 
 #define	__ELF_WORD_SIZE	64
 
@@ -51,7 +50,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/malloc.h>
 #include <sys/module.h>
 #include <sys/mutex.h>
-#include <sys/pax.h>
 #include <sys/proc.h>
 #include <sys/resourcevar.h>
 #include <sys/signalvar.h>
@@ -276,7 +274,7 @@ elf_linux_fixup(register_t **stack_base, struct image_params *imgp)
 	int issetugid;
 
 	p = imgp->proc;
-	arginfo = (struct ps_strings *)p->p_psstrings;
+	arginfo = (struct ps_strings *)p->p_sysent->sv_psstrings;
 
 	KASSERT(curthread->td_proc == imgp->proc,
 	    ("unsafe elf_linux_fixup(), should be curproc"));
@@ -286,7 +284,7 @@ elf_linux_fixup(register_t **stack_base, struct image_params *imgp)
 
 	issetugid = p->p_flag & P_SUGID ? 1 : 0;
 	AUXARGS_ENTRY(pos, LINUX_AT_SYSINFO_EHDR,
-	    imgp->proc->p_shared_page_base);
+	    imgp->proc->p_sysent->sv_shared_page_base);
 	AUXARGS_ENTRY(pos, LINUX_AT_HWCAP, cpu_feature);
 	AUXARGS_ENTRY(pos, LINUX_AT_CLKTCK, stclohz);
 	AUXARGS_ENTRY(pos, AT_PHDR, args->phdr);
@@ -344,7 +342,7 @@ linux_copyout_strings(struct image_params *imgp)
 		execpath_len = 0;
 
 	p = imgp->proc;
-	arginfo = (struct ps_strings *)p->p_psstrings;
+	arginfo = (struct ps_strings *)p->p_sysent->sv_psstrings;
 	destp =	(caddr_t)arginfo - SPARE_USRSPACE -
 	    roundup(sizeof(canary), sizeof(char *)) -
 	    roundup(execpath_len, sizeof(char *)) -
@@ -720,7 +718,7 @@ exec_linux_imgact_try(struct image_params *imgp)
 {
 	const char *head = (const char *)imgp->image_header;
 	char *rpath;
-	int error = -1, len;
+	int error = -1;
 
 	/*
 	 * The interpreter for shell scripts run from a linux binary needs
@@ -738,17 +736,12 @@ exec_linux_imgact_try(struct image_params *imgp)
 			linux_emul_convpath(FIRST_THREAD_IN_PROC(imgp->proc),
 			    imgp->interpreter_name, UIO_SYSSPACE,
 			    &rpath, 0, AT_FDCWD);
-			if (rpath != NULL) {
-				len = strlen(rpath) + 1;
-
-				if (len <= MAXSHELLCMDLEN)
-					memcpy(imgp->interpreter_name,
-					    rpath, len);
-				free(rpath, M_TEMP);
-			}
+			if (rpath != NULL)
+				imgp->args->fname_buf =
+				    imgp->interpreter_name = rpath;
 		}
 	}
-	return(error);
+	return (error);
 }
 
 #define	LINUX_VSYSCALL_START		(-10UL << 20)
@@ -832,7 +825,6 @@ struct sysentvec elf_linux_sysvec = {
 	.sv_schedtail	= linux_schedtail,
 	.sv_thread_detach = linux_thread_detach,
 	.sv_trap	= linux_vsyscall,
-	.sv_pax_aslr_init = pax_aslr_init_vmspace,
 };
 
 static void

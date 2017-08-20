@@ -112,6 +112,16 @@ typedef struct _qla_tx_ring {
 	uint64_t	count;
 } qla_tx_ring_t;
 
+typedef struct _qla_tx_fp {
+	struct mtx		tx_mtx;
+	char			tx_mtx_name[32];
+	struct buf_ring		*tx_br;
+	struct task		fp_task;
+	struct taskqueue	*fp_taskqueue;
+	void			*ha;
+	uint32_t		txr_idx;
+} qla_tx_fp_t;
+
 /*
  * Adapter structure contains the hardware independent information of the
  * pci function.
@@ -119,11 +129,11 @@ typedef struct _qla_tx_ring {
 struct qla_host {
         volatile struct {
                 volatile uint32_t
+			qla_interface_up        :1,
 			qla_callout_init	:1,
 			qla_watchdog_active	:1,
 			qla_watchdog_exit	:1,
 			qla_watchdog_pause	:1,
-			lro_init		:1,
 			stop_rcv		:1,
 			parent_tag		:1,
 			lock_init		:1;
@@ -178,10 +188,9 @@ struct qla_host {
 	qla_tx_ring_t		tx_ring[NUM_TX_RINGS];
 						
 	bus_dma_tag_t		tx_tag;
-	struct task		tx_task;
-	struct taskqueue	*tx_tq;
 	struct callout		tx_callout;
-	struct mtx		tx_lock;
+
+	qla_tx_fp_t		tx_fp[MAX_SDS_RINGS];
 
 	qla_rx_ring_t		rx_ring[MAX_RDS_RINGS];
 	bus_dma_tag_t		rx_tag;

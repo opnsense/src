@@ -68,11 +68,11 @@ __FBSDID("$FreeBSD$");
 #include "tom/t4_tom_l2t.h"
 #include "tom/t4_tom.h"
 
-static struct protosw ddp_protosw;
-static struct pr_usrreqs ddp_usrreqs;
+static struct protosw toe_protosw;
+static struct pr_usrreqs toe_usrreqs;
 
-static struct protosw ddp6_protosw;
-static struct pr_usrreqs ddp6_usrreqs;
+static struct protosw toe6_protosw;
+static struct pr_usrreqs toe6_usrreqs;
 
 /* Module ops */
 static int t4_tom_mod_load(void);
@@ -167,6 +167,7 @@ alloc_toepcb(struct vi_info *vi, int txqid, int rxqid, int flags)
 	toep->txsd_avail = txsd_total;
 	toep->txsd_pidx = 0;
 	toep->txsd_cidx = 0;
+	aiotx_init_toep(toep);
 	ddp_init_toep(toep);
 
 	return (toep);
@@ -217,12 +218,10 @@ offload_socket(struct socket *so, struct toepcb *toep)
 	sb = &so->so_rcv;
 	SOCKBUF_LOCK(sb);
 	sb->sb_flags |= SB_NOCOALESCE;
-	if (toep->ulp_mode == ULP_MODE_TCPDDP) {
-		if (inp->inp_vflag & INP_IPV6)
-			so->so_proto = &ddp6_protosw;
-		else
-			so->so_proto = &ddp_protosw;
-	}
+	if (inp->inp_vflag & INP_IPV6)
+		so->so_proto = &toe6_protosw;
+	else
+		so->so_proto = &toe_protosw;
 	SOCKBUF_UNLOCK(sb);
 
 	/* Update TCP PCB */
@@ -274,8 +273,6 @@ undo_offload_socket(struct socket *so)
 	mtx_lock(&td->toep_list_lock);
 	TAILQ_REMOVE(&td->toep_list, toep, link);
 	mtx_unlock(&td->toep_list_lock);
-
-	free_toepcb(toep);
 }
 
 static void
@@ -308,7 +305,7 @@ release_offload_resources(struct toepcb *toep)
 		t4_l2t_release(toep->l2te);
 
 	if (tid >= 0) {
-		remove_tid(sc, tid);
+		remove_tid(sc, tid, toep->ce ? 2 : 1);
 		release_tid(sc, tid, toep->ctrlq);
 	}
 
@@ -421,12 +418,12 @@ final_cpl_received(struct toepcb *toep)
 }
 
 void
-insert_tid(struct adapter *sc, int tid, void *ctx)
+insert_tid(struct adapter *sc, int tid, void *ctx, int ntids)
 {
 	struct tid_info *t = &sc->tids;
 
 	t->tid_tab[tid] = ctx;
-	atomic_add_int(&t->tids_in_use, 1);
+	atomic_add_int(&t->tids_in_use, ntids);
 }
 
 void *
@@ -446,12 +443,12 @@ update_tid(struct adapter *sc, int tid, void *ctx)
 }
 
 void
-remove_tid(struct adapter *sc, int tid)
+remove_tid(struct adapter *sc, int tid, int ntids)
 {
 	struct tid_info *t = &sc->tids;
 
 	t->tid_tab[tid] = NULL;
-	atomic_subtract_int(&t->tids_in_use, 1);
+	atomic_subtract_int(&t->tids_in_use, ntids);
 }
 
 void
@@ -539,7 +536,6 @@ select_rcv_wscale(void)
 }
 
 extern int always_keepalive;
-#define VIID_SMACIDX(v)	(((unsigned int)(v) & 0x7f) << 1)
 
 /*
  * socket so could be a listening socket too.
@@ -570,7 +566,7 @@ calc_opt0(struct socket *so, struct vi_info *vi, struct l2t_entry *e,
 		opt0 |= V_L2T_IDX(e->idx);
 
 	if (vi != NULL) {
-		opt0 |= V_SMAC_SEL(VIID_SMACIDX(vi->viid));
+		opt0 |= V_SMAC_SEL(vi->smt_idx);
 		opt0 |= V_TX_CHAN(vi->pi->tx_chan);
 	}
 
@@ -734,12 +730,12 @@ search_lip(struct tom_data *td, struct in6_addr *lip)
 }
 
 struct clip_entry *
-hold_lip(struct tom_data *td, struct in6_addr *lip)
+hold_lip(struct tom_data *td, struct in6_addr *lip, struct clip_entry *ce)
 {
-	struct clip_entry *ce;
 
 	mtx_lock(&td->clip_table_lock);
-	ce = search_lip(td, lip);
+	if (ce == NULL)
+		ce = search_lip(td, lip);
 	if (ce != NULL)
 		ce->refcount++;
 	mtx_unlock(&td->clip_table_lock);
@@ -801,74 +797,96 @@ update_clip_table(struct adapter *sc, struct tom_data *td)
 	struct in6_addr *lip, tlip;
 	struct clip_head stale;
 	struct clip_entry *ce, *ce_temp;
-	int rc, gen = atomic_load_acq_int(&in6_ifaddr_gen);
+	struct vi_info *vi;
+	int rc, gen, i, j;
+	uintptr_t last_vnet;
 
 	ASSERT_SYNCHRONIZED_OP(sc);
 
 	IN6_IFADDR_RLOCK(&in6_ifa_tracker);
 	mtx_lock(&td->clip_table_lock);
 
+	gen = atomic_load_acq_int(&in6_ifaddr_gen);
 	if (gen == td->clip_gen)
 		goto done;
 
 	TAILQ_INIT(&stale);
 	TAILQ_CONCAT(&stale, &td->clip_table, link);
 
-	TAILQ_FOREACH(ia, &V_in6_ifaddrhead, ia_link) {
-		lip = &ia->ia_addr.sin6_addr;
-
-		KASSERT(!IN6_IS_ADDR_MULTICAST(lip),
-		    ("%s: mcast address in in6_ifaddr list", __func__));
-
-		if (IN6_IS_ADDR_LOOPBACK(lip))
+	/*
+	 * last_vnet optimizes the common cases where all if_vnet = NULL (no
+	 * VIMAGE) or all if_vnet = vnet0.
+	 */
+	last_vnet = (uintptr_t)(-1);
+	for_each_port(sc, i)
+	for_each_vi(sc->port[i], j, vi) {
+		if (last_vnet == (uintptr_t)vi->ifp->if_vnet)
 			continue;
-		if (IN6_IS_SCOPE_EMBED(lip)) {
-			/* Remove the embedded scope */
-			tlip = *lip;
-			lip = &tlip;
-			in6_clearscope(lip);
-		}
-		/*
-		 * XXX: how to weed out the link local address for the loopback
-		 * interface?  It's fe80::1 usually (always?).
-		 */
 
-		/*
-		 * If it's in the main list then we already know it's not stale.
-		 */
-		TAILQ_FOREACH(ce, &td->clip_table, link) {
-			if (IN6_ARE_ADDR_EQUAL(&ce->lip, lip))
-				goto next;
-		}
+		/* XXX: races with if_vmove */
+		CURVNET_SET(vi->ifp->if_vnet);
+		TAILQ_FOREACH(ia, &V_in6_ifaddrhead, ia_link) {
+			lip = &ia->ia_addr.sin6_addr;
 
-		/*
-		 * If it's in the stale list we should move it to the main list.
-		 */
-		TAILQ_FOREACH(ce, &stale, link) {
-			if (IN6_ARE_ADDR_EQUAL(&ce->lip, lip)) {
-				TAILQ_REMOVE(&stale, ce, link);
-				TAILQ_INSERT_TAIL(&td->clip_table, ce, link);
-				goto next;
+			KASSERT(!IN6_IS_ADDR_MULTICAST(lip),
+			    ("%s: mcast address in in6_ifaddr list", __func__));
+
+			if (IN6_IS_ADDR_LOOPBACK(lip))
+				continue;
+			if (IN6_IS_SCOPE_EMBED(lip)) {
+				/* Remove the embedded scope */
+				tlip = *lip;
+				lip = &tlip;
+				in6_clearscope(lip);
 			}
-		}
+			/*
+			 * XXX: how to weed out the link local address for the
+			 * loopback interface?  It's fe80::1 usually (always?).
+			 */
 
-		/* A new IP6 address; add it to the CLIP table */
-		ce = malloc(sizeof(*ce), M_CXGBE, M_NOWAIT);
-		memcpy(&ce->lip, lip, sizeof(ce->lip));
-		ce->refcount = 0;
-		rc = add_lip(sc, lip);
-		if (rc == 0)
-			TAILQ_INSERT_TAIL(&td->clip_table, ce, link);
-		else {
-			char ip[INET6_ADDRSTRLEN];
+			/*
+			 * If it's in the main list then we already know it's
+			 * not stale.
+			 */
+			TAILQ_FOREACH(ce, &td->clip_table, link) {
+				if (IN6_ARE_ADDR_EQUAL(&ce->lip, lip))
+					goto next;
+			}
 
-			inet_ntop(AF_INET6, &ce->lip, &ip[0], sizeof(ip));
-			log(LOG_ERR, "%s: could not add %s (%d)\n",
-			    __func__, ip, rc);
-			free(ce, M_CXGBE);
-		}
+			/*
+			 * If it's in the stale list we should move it to the
+			 * main list.
+			 */
+			TAILQ_FOREACH(ce, &stale, link) {
+				if (IN6_ARE_ADDR_EQUAL(&ce->lip, lip)) {
+					TAILQ_REMOVE(&stale, ce, link);
+					TAILQ_INSERT_TAIL(&td->clip_table, ce,
+					    link);
+					goto next;
+				}
+			}
+
+			/* A new IP6 address; add it to the CLIP table */
+			ce = malloc(sizeof(*ce), M_CXGBE, M_NOWAIT);
+			memcpy(&ce->lip, lip, sizeof(ce->lip));
+			ce->refcount = 0;
+			rc = add_lip(sc, lip);
+			if (rc == 0)
+				TAILQ_INSERT_TAIL(&td->clip_table, ce, link);
+			else {
+				char ip[INET6_ADDRSTRLEN];
+
+				inet_ntop(AF_INET6, &ce->lip, &ip[0],
+				    sizeof(ip));
+				log(LOG_ERR, "%s: could not add %s (%d)\n",
+				    __func__, ip, rc);
+				free(ce, M_CXGBE);
+			}
 next:
-		continue;
+			continue;
+		}
+		CURVNET_RESTORE();
+		last_vnet = (uintptr_t)vi->ifp->if_vnet;
 	}
 
 	/*
@@ -931,7 +949,7 @@ free_tom_data(struct adapter *sc, struct tom_data *td)
 	KASSERT(td->lctx_count == 0,
 	    ("%s: lctx hash table is not empty.", __func__));
 
-	t4_uninit_ddp(sc, td);
+	t4_free_ppod_region(&td->pr);
 	destroy_clip_table(sc, td);
 
 	if (td->listen_mask != 0)
@@ -1025,8 +1043,12 @@ t4_tom_activate(struct adapter *sc)
 	if (rc != 0)
 		goto done;
 
-	/* DDP page pods and CPL handlers */
-	t4_init_ddp(sc, td);
+	rc = t4_init_ppod_region(&td->pr, &sc->vres.ddp,
+	    t4_read_reg(sc, A_ULP_RX_TDDP_PSZ), "TDDP page pods");
+	if (rc != 0)
+		goto done;
+	t4_set_reg_field(sc, A_ULP_RX_TDDP_TAGMASK,
+	    V_TDDPTAGMASK(M_TDDPTAGMASK), td->pr.pr_tag_mask);
 
 	/* CLIP table for IPv6 offload */
 	init_clip_table(sc, td);
@@ -1120,6 +1142,22 @@ t4_tom_ifaddr_event(void *arg __unused, struct ifnet *ifp)
 }
 
 static int
+t4_aio_queue_tom(struct socket *so, struct kaiocb *job)
+{
+	struct tcpcb *tp = so_sototcpcb(so);
+	struct toepcb *toep = tp->t_toe;
+	int error;
+
+	if (toep->ulp_mode == ULP_MODE_TCPDDP) {
+		error = t4_aio_queue_ddp(so, job);
+		if (error != EOPNOTSUPP)
+			return (error);
+	}
+
+	return (t4_aio_queue_aiotx(so, job));
+}
+
+static int
 t4_tom_mod_load(void)
 {
 	int rc;
@@ -1137,18 +1175,18 @@ t4_tom_mod_load(void)
 	tcp_protosw = pffindproto(PF_INET, IPPROTO_TCP, SOCK_STREAM);
 	if (tcp_protosw == NULL)
 		return (ENOPROTOOPT);
-	bcopy(tcp_protosw, &ddp_protosw, sizeof(ddp_protosw));
-	bcopy(tcp_protosw->pr_usrreqs, &ddp_usrreqs, sizeof(ddp_usrreqs));
-	ddp_usrreqs.pru_aio_queue = t4_aio_queue_ddp;
-	ddp_protosw.pr_usrreqs = &ddp_usrreqs;
+	bcopy(tcp_protosw, &toe_protosw, sizeof(toe_protosw));
+	bcopy(tcp_protosw->pr_usrreqs, &toe_usrreqs, sizeof(toe_usrreqs));
+	toe_usrreqs.pru_aio_queue = t4_aio_queue_tom;
+	toe_protosw.pr_usrreqs = &toe_usrreqs;
 
 	tcp6_protosw = pffindproto(PF_INET6, IPPROTO_TCP, SOCK_STREAM);
 	if (tcp6_protosw == NULL)
 		return (ENOPROTOOPT);
-	bcopy(tcp6_protosw, &ddp6_protosw, sizeof(ddp6_protosw));
-	bcopy(tcp6_protosw->pr_usrreqs, &ddp6_usrreqs, sizeof(ddp6_usrreqs));
-	ddp6_usrreqs.pru_aio_queue = t4_aio_queue_ddp;
-	ddp6_protosw.pr_usrreqs = &ddp6_usrreqs;
+	bcopy(tcp6_protosw, &toe6_protosw, sizeof(toe6_protosw));
+	bcopy(tcp6_protosw->pr_usrreqs, &toe6_usrreqs, sizeof(toe6_usrreqs));
+	toe6_usrreqs.pru_aio_queue = t4_aio_queue_tom;
+	toe6_protosw.pr_usrreqs = &toe6_usrreqs;
 
 	TIMEOUT_TASK_INIT(taskqueue_thread, &clip_task, 0, t4_clip_task, NULL);
 	ifaddr_evhandler = EVENTHANDLER_REGISTER(ifaddr_event,
@@ -1188,6 +1226,10 @@ t4_tom_mod_unload(void)
 	}
 
 	t4_ddp_mod_unload();
+
+	t4_uninit_connect_cpl_handlers();
+	t4_uninit_listen_cpl_handlers();
+	t4_uninit_cpl_io_handlers();
 
 	return (0);
 }

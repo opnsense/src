@@ -1136,8 +1136,12 @@ int mlx4_init_eq_table(struct mlx4_dev *dev)
 		goto err_out_free;
 	}
 
-	err = mlx4_bitmap_init(&priv->eq_table.bitmap, dev->caps.num_eqs,
-			       dev->caps.num_eqs - 1, dev->caps.reserved_eqs, 0);
+	err = mlx4_bitmap_init(&priv->eq_table.bitmap,
+				roundup_pow_of_two(dev->caps.num_eqs),
+				dev->caps.num_eqs - 1,
+				dev->caps.reserved_eqs,
+				roundup_pow_of_two(dev->caps.num_eqs) -
+					dev->caps.num_eqs);
 	if (err)
 		goto err_out_free;
 
@@ -1165,8 +1169,7 @@ int mlx4_init_eq_table(struct mlx4_dev *dev)
 	}
 
 	for (i = 0; i < dev->caps.num_comp_vectors; ++i) {
-		err = mlx4_create_eq(dev, dev->caps.num_cqs -
-					  dev->caps.reserved_cqs +
+		err = mlx4_create_eq(dev, dev->quotas.cq +
 					  MLX4_NUM_SPARE_EQE,
 				     (dev->flags & MLX4_FLAG_MSI_X) ? i : 0,
 				     &priv->eq_table.eq[i]);
@@ -1186,8 +1189,7 @@ int mlx4_init_eq_table(struct mlx4_dev *dev)
 	for (i = dev->caps.num_comp_vectors + 1;
 	      i < dev->caps.num_comp_vectors + dev->caps.comp_pool + 1; ++i) {
 
-		err = mlx4_create_eq(dev, dev->caps.num_cqs -
-					  dev->caps.reserved_cqs +
+		err = mlx4_create_eq(dev, dev->quotas.cq +
 					  MLX4_NUM_SPARE_EQE,
 				     (dev->flags & MLX4_FLAG_MSI_X) ? i : 0,
 				     &priv->eq_table.eq[i]);

@@ -30,7 +30,6 @@ makeoptions	MODULES_EXTRA="dtb/am335x am335x_dmtpps"
 
 options 	INTRNG
 
-options 	HZ=100
 options 	SCHED_4BSD		# 4BSD scheduler
 options 	PLATFORM
 
@@ -114,7 +113,6 @@ device		bpf
 
 # USB Ethernet support, requires miibus
 device		miibus
-device		axe			# ASIX Electronics USB Ethernet
 
 # Device mode support and USFS template
 device		usb_template    	# Control of the gadget
@@ -133,3 +131,6 @@ device		hdmi
 device		ums
 device		ukbd
 device		kbdmux
+
+# Uncomment to enable evdev support for ti_adc
+# options		EVDEV_SUPPORT

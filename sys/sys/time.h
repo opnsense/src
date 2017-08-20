@@ -372,8 +372,6 @@ void	resettodr(void);
 
 extern volatile time_t	time_second;
 extern volatile time_t	time_uptime;
-extern struct bintime boottimebin;
-extern struct timeval boottime;
 extern struct bintime tc_tick_bt;
 extern sbintime_t tc_tick_sbt;
 extern struct bintime tick_bt;
@@ -384,6 +382,8 @@ extern struct bintime bt_timethreshold;
 extern struct bintime bt_tickthreshold;
 extern sbintime_t sbt_timethreshold;
 extern sbintime_t sbt_tickthreshold;
+
+extern volatile int rtc_generation;
 
 /*
  * Functions for looking at our clock: [get]{bin,nano,micro}[up]time()
@@ -439,6 +439,9 @@ getsbinuptime(void)
 void	getbintime(struct bintime *bt);
 void	getnanotime(struct timespec *tsp);
 void	getmicrotime(struct timeval *tvp);
+
+void	getboottime(struct timeval *boottime);
+void	getboottimebin(struct bintime *boottimebin);
 
 /* Other functions */
 int	itimerdecr(struct itimerval *itp, int usec);

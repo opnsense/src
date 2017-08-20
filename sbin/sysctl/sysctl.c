@@ -114,7 +114,7 @@ static const char *ctl_typename[CTLTYPE+1] = {
 	[CTLTYPE_ULONG] = "unsigned long",
 	[CTLTYPE_U8] = "uint8_t",
 	[CTLTYPE_U16] = "uint16_t",
-	[CTLTYPE_U32] = "uint16_t",
+	[CTLTYPE_U32] = "uint32_t",
 	[CTLTYPE_U64] = "uint64_t",
 	[CTLTYPE_S8] = "int8_t",
 	[CTLTYPE_S16] = "int16_t",
@@ -637,9 +637,6 @@ S_vmtotal(size_t l2, void *p)
 }
 
 #ifdef __amd64__
-#define efi_next_descriptor(ptr, size) \
-	((struct efi_md *)(((uint8_t *) ptr) + size))
-
 static int
 S_efi_map(size_t l2, void *p)
 {

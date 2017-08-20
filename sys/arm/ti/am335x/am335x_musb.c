@@ -237,6 +237,7 @@ static int
 musbotg_attach(device_t dev)
 {
 	struct musbotg_super_softc *sc = device_get_softc(dev);
+	char mode[16];
 	int err;
 	uint32_t reg;
 
@@ -308,10 +309,19 @@ musbotg_attach(device_t dev)
 	}
 
 	sc->sc_otg.sc_platform_data = sc;
-	if (sc->sc_otg.sc_id == 0)
-		sc->sc_otg.sc_mode = MUSB2_DEVICE_MODE;
-	else
-		sc->sc_otg.sc_mode = MUSB2_HOST_MODE;
+	if (OF_getprop(ofw_bus_get_node(dev), "dr_mode", mode,
+	    sizeof(mode)) > 0) {
+		if (strcasecmp(mode, "host") == 0)
+			sc->sc_otg.sc_mode = MUSB2_HOST_MODE;
+		else
+			sc->sc_otg.sc_mode = MUSB2_DEVICE_MODE;
+	} else {
+		/* Beaglebone defaults: USB0 device, USB1 HOST. */
+		if (sc->sc_otg.sc_id == 0)
+			sc->sc_otg.sc_mode = MUSB2_DEVICE_MODE;
+		else
+			sc->sc_otg.sc_mode = MUSB2_HOST_MODE;
+	}
 
 	/*
 	 * software-controlled function
@@ -356,14 +366,10 @@ static int
 musbotg_detach(device_t dev)
 {
 	struct musbotg_super_softc *sc = device_get_softc(dev);
-	device_t bdev;
 	int err;
 
-	if (sc->sc_otg.sc_bus.bdev) {
-		bdev = sc->sc_otg.sc_bus.bdev;
-		device_detach(bdev);
-		device_delete_child(dev, bdev);
-	}
+	/* during module unload there are lots of children leftover */
+	device_delete_children(dev);
 
 	if (sc->sc_otg.sc_irq_res && sc->sc_otg.sc_intr_hdl) {
 		/*
@@ -386,9 +392,6 @@ musbotg_detach(device_t dev)
 	if (sc->sc_otg.sc_irq_res)
 		bus_release_resource(dev, SYS_RES_IRQ, sc->sc_irq_rid,
 		    sc->sc_otg.sc_irq_res);
-
-	/* during module unload there are lots of children leftover */
-	device_delete_children(dev);
 
 	return (0);
 }

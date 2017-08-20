@@ -1398,8 +1398,8 @@ static u_int32_t arcmsr_Read_iop_rqbuffer_data_D(struct AdapterControlBlock *acb
 	struct QBUFFER *prbuffer) {
 
 	u_int8_t *pQbuffer;
-	u_int8_t *buf1 = 0;
-	u_int32_t *iop_data, *buf2 = 0;
+	u_int8_t *buf1 = NULL;
+	u_int32_t *iop_data, *buf2 = NULL;
 	u_int32_t iop_len, data_len;
 
 	iop_data = (u_int32_t *)prbuffer->data;
@@ -1494,8 +1494,8 @@ static void arcmsr_Write_data_2iop_wqbuffer_D(struct AdapterControlBlock *acb)
 {
 	u_int8_t *pQbuffer;
 	struct QBUFFER *pwbuffer;
-	u_int8_t *buf1 = 0;
-	u_int32_t *iop_data, *buf2 = 0;
+	u_int8_t *buf1 = NULL;
+	u_int32_t *iop_data, *buf2 = NULL;
 	u_int32_t allxfer_len = 0, data_len;
 
 	if(acb->acb_flags & ACB_F_MESSAGE_WQBUFFER_READ) {
@@ -2883,12 +2883,6 @@ static void arcmsr_action(struct cam_sim *psim, union ccb *pccb)
 			}
 			break;
 		}
-	case XPT_TARGET_IO: {
-			/* target mode not yet support vendor specific commands. */
-			pccb->ccb_h.status |= CAM_REQ_CMP;
-			xpt_done(pccb);
-			break;
-		}
 	case XPT_PATH_INQ: {
 			struct ccb_pathinq *cpi = &pccb->cpi;
 
@@ -2901,9 +2895,9 @@ static void arcmsr_action(struct cam_sim *psim, union ccb *pccb)
 			cpi->max_lun = ARCMSR_MAX_TARGETLUN;	    /* 0-7 */
 			cpi->initiator_id = ARCMSR_SCSI_INITIATOR_ID; /* 255 */
 			cpi->bus_id = cam_sim_bus(psim);
-			strncpy(cpi->sim_vid, "FreeBSD", SIM_IDLEN);
-			strncpy(cpi->hba_vid, "ARCMSR", HBA_IDLEN);
-			strncpy(cpi->dev_name, cam_sim_name(psim), DEV_IDLEN);
+			strlcpy(cpi->sim_vid, "FreeBSD", SIM_IDLEN);
+			strlcpy(cpi->hba_vid, "ARCMSR", HBA_IDLEN);
+			strlcpy(cpi->dev_name, cam_sim_name(psim), DEV_IDLEN);
 			cpi->unit_number = cam_sim_unit(psim);
 		#ifdef	CAM_NEW_TRAN_CODE
 			if(acb->adapter_bus_speed == ACB_BUS_SPEED_12G)
@@ -2938,7 +2932,6 @@ static void arcmsr_action(struct cam_sim *psim, union ccb *pccb)
 			pabort_ccb = pccb->cab.abort_ccb;
 			switch (pabort_ccb->ccb_h.func_code) {
 			case XPT_ACCEPT_TARGET_IO:
-			case XPT_IMMED_NOTIFY:
 			case XPT_CONT_TARGET_IO:
 				if(arcmsr_seek_cmd2abort(pabort_ccb)==TRUE) {
 					pabort_ccb->ccb_h.status |= CAM_REQ_ABORTED;

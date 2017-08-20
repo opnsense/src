@@ -1,6 +1,6 @@
 # $FreeBSD$
 
-SYSDIR?=${.CURDIR}/..
+SYSDIR?=${SRCTOP}/sys
 .include "${SYSDIR}/conf/kern.opts.mk"
 
 SUBDIR_PARALLEL=
@@ -34,6 +34,7 @@ SUBDIR=	\
 	alc \
 	ale \
 	alq \
+	${_amd_ecc_inject} \
 	${_amdsbwd} \
 	${_amdtemp} \
 	amr \
@@ -50,17 +51,18 @@ SUBDIR=	\
 	${_auxio} \
 	${_bce} \
 	bfe \
-	bhnd \
 	bge \
 	bhnd \
 	${_bxe} \
 	${_bios} \
 	${_bktr} \
 	${_bm} \
+	bnxt \
 	bridgestp \
 	bwi \
 	bwn \
 	bwn_pci \
+	${_bytgpio} \
 	cam \
 	${_canbepm} \
 	${_canbus} \
@@ -73,8 +75,10 @@ SUBDIR=	\
 	cd9660_iconv \
 	${_ce} \
 	${_cfi} \
+	${_chromebook_platform} \
 	${_ciss} \
 	cloudabi \
+	${_cloudabi32} \
 	${_cloudabi64} \
 	${_cm} \
 	${_cmx} \
@@ -102,13 +106,16 @@ SUBDIR=	\
 	${_drm2} \
 	dummynet \
 	${_ed} \
+	${_efirt} \
 	${_elink} \
 	${_em} \
+	${_ena} \
 	en \
 	${_ep} \
 	${_epic} \
 	esp \
 	${_et} \
+	evdev \
 	${_ex} \
 	${_exca} \
 	ext2fs \
@@ -160,6 +167,7 @@ SUBDIR=	\
 	${_igb} \
 	${_iir} \
 	imgact_binmisc \
+	${_intelspi} \
 	${_io} \
 	${_ioat} \
         ${_ipoib} \
@@ -167,10 +175,14 @@ SUBDIR=	\
 	${_ipfilter} \
 	${_ipfw} \
 	ipfw_nat \
+	${_ipfw_nat64} \
+	${_ipfw_nptv6} \
+	${_ipfw_pmod} \
 	${_ipmi} \
 	ip6_mroute_mod \
 	ip_mroute_mod \
 	${_ips} \
+	${_ipsec} \
 	${_ipw} \
 	${_ipwfw} \
 	${_isci} \
@@ -305,6 +317,7 @@ SUBDIR=	\
 	${_qlxge} \
 	${_qlxgb} \
 	${_qlxgbe} \
+	${_qlnx} \
 	ral \
 	${_ralfw} \
 	${_random_fortuna} \
@@ -324,6 +337,7 @@ SUBDIR=	\
 	scd \
 	${_scsi_low} \
 	sdhci \
+	${_sdhci_acpi} \
 	sdhci_pci \
 	sem \
 	send \
@@ -352,10 +366,8 @@ SUBDIR=	\
 	${_sym} \
 	${_syscons} \
 	sysvipc \
+	tcp \
 	${_ti} \
-	${_tcp_fastpath} \
-	tests/framework \
-	tests/callout_test \
 	tl \
 	tmpfs \
 	${_toecore} \
@@ -371,6 +383,7 @@ SUBDIR=	\
 	udf \
 	udf_iconv \
 	ufs \
+	uinput \
 	unionfs \
 	urtwn \
 	${_urtwnfw} \
@@ -423,7 +436,7 @@ SUBDIR+=	opensolaris
 .endif
 
 .if ${MK_CRYPT} != "no" || defined(ALL_MODULES)
-.if exists(${.CURDIR}/../opencrypto)
+.if exists(${SRCTOP}/sys/opencrypto)
 _crypto=	crypto
 _cryptodev=	cryptodev
 _random_fortuna=random_fortuna
@@ -436,10 +449,6 @@ _random_other=	random_other
 SUBDIR+=	cuse
 .endif
 
-.if ${MK_EXTRA_TCP_STACKS} != "no" || defined(ALL_MODULES)
-_tcp_fastpath=	tcp/fastpath
-.endif
-
 .if (${MK_INET_SUPPORT} != "no" || ${MK_INET6_SUPPORT} != "no") || \
 	defined(ALL_MODULES)
 _carp=		carp
@@ -447,6 +456,10 @@ _toecore=	toecore
 _if_enc=	if_enc
 _if_gif=	if_gif
 _if_gre=	if_gre
+_ipfw_pmod=	ipfw_pmod
+.if ${MK_IPSEC_SUPPORT} != "no"
+_ipsec=		ipsec
+.endif
 .endif
 
 .if (${MK_INET_SUPPORT} != "no" && ${MK_INET6_SUPPORT} != "no") || \
@@ -458,6 +471,13 @@ _if_stf=	if_stf
 _if_me=		if_me
 _ipdivert=	ipdivert
 _ipfw=		ipfw
+.if ${MK_INET6_SUPPORT} != "no" || defined(ALL_MODULES)
+_ipfw_nat64=	ipfw_nat64
+.endif
+.endif
+
+.if ${MK_INET6_SUPPORT} != "no" || defined(ALL_MODULES)
+_ipfw_nptv6=	ipfw_nptv6
 .endif
 
 .if ${MK_IPFILTER} != "no" || defined(ALL_MODULES)
@@ -465,6 +485,7 @@ _ipfilter=	ipfilter
 .endif
 
 .if ${MK_ISCSI} != "no" || defined(ALL_MODULES)
+SUBDIR+=	cfiscsi
 SUBDIR+=	iscsi
 SUBDIR+=	iscsi_initiator
 .endif
@@ -508,6 +529,10 @@ _txp=		txp
 _cxgbe=		cxgbe
 .endif
 
+.if ${MK_TESTS} != "no" || defined(ALL_MODULES)
+SUBDIR+=	tests
+.endif
+
 .if ${MK_ZFS} != "no" || defined(ALL_MODULES)
 SUBDIR+=	zfs
 .endif
@@ -538,6 +563,7 @@ _igb=		igb
 _agp=		agp
 _an=		an
 _aout=		aout
+_bios=		bios
 _bktr=		bktr
 _bxe=		bxe
 _cardbus=	cardbus
@@ -550,6 +576,7 @@ _drm=		drm
 _drm2=		drm2
 _ed=		ed
 _em=		em
+_ena=		ena
 _ep=		ep
 _et=		et
 _exca=		exca
@@ -593,11 +620,14 @@ _acpi=		acpi
 .if ${MK_CRYPT} != "no" || defined(ALL_MODULES)
 _aesni=		aesni
 .endif
+_amd_ecc_inject=amd_ecc_inject
 _amdsbwd=	amdsbwd
 _amdtemp=	amdtemp
 _arcmsr=	arcmsr
 _asmc=		asmc
+_bytgpio=	bytgpio
 _ciss=		ciss
+_chromebook_platform=	chromebook_platform
 _cmx=		cmx
 _coretemp=	coretemp
 .if ${MK_SOURCELESS_HOST} != "no"
@@ -613,6 +643,7 @@ _hyperv=	hyperv
 _ichwd=		ichwd
 _ida=		ida
 _iir=		iir
+_intelspi=	intelspi
 _ipmi=		ipmi
 _ips=		ips
 _isci=		isci
@@ -652,6 +683,7 @@ _padlock_rng=	padlock_rng
 _rdrand_rng=	rdrand_rng
 .endif
 _s3=		s3
+_sdhci_acpi=	sdhci_acpi
 _tpm=		tpm
 _twa=		twa
 _vesa=		vesa
@@ -666,6 +698,7 @@ _x86bios=	x86bios
 .endif
 
 .if ${MACHINE_CPUARCH} == "amd64"
+_efirt=		efirt
 _ioat=		ioat
 _ixl=		ixl
 _ixlv=		ixlv
@@ -676,6 +709,7 @@ _pms=		pms
 _qlxge=		qlxge
 _qlxgb=		qlxgb
 _qlxgbe=	qlxgbe
+_qlnx=		qlnx
 _sfxge=		sfxge
 
 .if ${MK_BHYVE} != "no" || defined(ALL_MODULES)
@@ -718,7 +752,6 @@ _wds=		wds
 .if ${MK_EISA} != "no"
 _ahb=		ahb
 .endif
-_bios=		bios
 _cm=		cm
 .if ${MK_SOURCELESS_UCODE} != "no"
 _ctau=		ctau
@@ -766,6 +799,10 @@ _epic=		epic
 _igb=		igb
 .endif
 
+.if (${MACHINE_CPUARCH} == "amd64" || ${MACHINE_ARCH} == "armv6" || \
+     ${MACHINE_CPUARCH} == "i386")
+_cloudabi32=	cloudabi32
+.endif
 .if ${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "amd64"
 _cloudabi64=	cloudabi64
 .endif

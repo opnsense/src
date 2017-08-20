@@ -54,7 +54,6 @@
 
 static void mlx4_en_sysctl_stat(struct mlx4_en_priv *priv);
 static void mlx4_en_sysctl_conf(struct mlx4_en_priv *priv);
-static int mlx4_en_unit;
 
 #ifdef CONFIG_NET_RX_BUSY_POLL
 /* must be called with local_bh_disable()d */
@@ -1639,7 +1638,7 @@ void mlx4_en_free_resources(struct mlx4_en_priv *priv)
 			mlx4_en_destroy_cq(priv, &priv->rx_cq[i]);
 	}
 
-	if (priv->sysctl)
+	if (priv->stat_sysctl != NULL)
 		sysctl_ctx_free(&priv->stat_ctx);
 }
 
@@ -1731,13 +1730,12 @@ void mlx4_en_destroy_netdev(struct net_device *dev)
 		mutex_unlock(&mdev->state_lock);
 	}
 
-	if (priv->allocated)
-		mlx4_free_hwq_res(mdev->dev, &priv->res, MLX4_EN_PAGE_SIZE);
-
 	mutex_lock(&mdev->state_lock);
 	mlx4_en_stop_port(dev);
 	mutex_unlock(&mdev->state_lock);
 
+	if (priv->allocated)
+		mlx4_free_hwq_res(mdev->dev, &priv->res, MLX4_EN_PAGE_SIZE);
 
 	cancel_delayed_work(&priv->stats_task);
 	cancel_delayed_work(&priv->service_task);
@@ -1754,7 +1752,7 @@ void mlx4_en_destroy_netdev(struct net_device *dev)
 	mlx4_en_free_resources(priv);
 
 	/* freeing the sysctl conf cannot be called from within mlx4_en_free_resources */
-	if (priv->sysctl)
+	if (priv->conf_sysctl != NULL)
 		sysctl_ctx_free(&priv->conf_ctx);
 
 	kfree(priv->tx_ring);
@@ -2053,7 +2051,8 @@ int mlx4_en_init_netdev(struct mlx4_en_dev *mdev, int port,
 		return -ENOMEM;
 	}
 	dev->if_softc = priv;
-	if_initname(dev, "mlxen", atomic_fetchadd_int(&mlx4_en_unit, 1));
+	if_initname(dev, "mlxen", (device_get_unit(
+	    mdev->pdev->dev.bsddev) * MLX4_MAX_PORTS) + port - 1);
 	dev->if_mtu = ETHERMTU;
 	dev->if_init = mlx4_en_open;
 	dev->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
@@ -2165,6 +2164,7 @@ int mlx4_en_init_netdev(struct mlx4_en_dev *mdev, int port,
 	dev->if_capabilities |= IFCAP_VLAN_HWCSUM | IFCAP_VLAN_HWFILTER;
 	dev->if_capabilities |= IFCAP_LINKSTATE | IFCAP_JUMBO_MTU;
 	dev->if_capabilities |= IFCAP_LRO;
+	dev->if_capabilities |= IFCAP_HWSTATS;
 
 	if (mdev->LSO_support)
 		dev->if_capabilities |= IFCAP_TSO4 | IFCAP_TSO6 | IFCAP_VLAN_HWTSO;
@@ -2572,9 +2572,9 @@ static void mlx4_en_sysctl_conf(struct mlx4_en_priv *priv)
 	pnameunit = device_get_nameunit(priv->mdev->pdev->dev.bsddev);
 
         sysctl_ctx_init(ctx);
-        priv->sysctl = SYSCTL_ADD_NODE(ctx, SYSCTL_STATIC_CHILDREN(_hw),
+        priv->conf_sysctl = SYSCTL_ADD_NODE(ctx, SYSCTL_STATIC_CHILDREN(_hw),
             OID_AUTO, dev->if_xname, CTLFLAG_RD, 0, "mlx4 10gig ethernet");
-        node = SYSCTL_ADD_NODE(ctx, SYSCTL_CHILDREN(priv->sysctl), OID_AUTO,
+        node = SYSCTL_ADD_NODE(ctx, SYSCTL_CHILDREN(priv->conf_sysctl), OID_AUTO,
             "conf", CTLFLAG_RD, NULL, "Configuration");
         node_list = SYSCTL_CHILDREN(node);
 
@@ -2637,7 +2637,6 @@ static void mlx4_en_sysctl_conf(struct mlx4_en_priv *priv)
 static void mlx4_en_sysctl_stat(struct mlx4_en_priv *priv)
 {
 	struct sysctl_ctx_list *ctx;
-	struct sysctl_oid *node;
 	struct sysctl_oid_list *node_list;
 	struct sysctl_oid *ring_node;
 	struct sysctl_oid_list *ring_list;
@@ -2648,9 +2647,9 @@ static void mlx4_en_sysctl_stat(struct mlx4_en_priv *priv)
 
 	ctx = &priv->stat_ctx;
 	sysctl_ctx_init(ctx);
-	node = SYSCTL_ADD_NODE(ctx, SYSCTL_CHILDREN(priv->sysctl), OID_AUTO,
+	priv->stat_sysctl = SYSCTL_ADD_NODE(ctx, SYSCTL_CHILDREN(priv->conf_sysctl), OID_AUTO,
 	    "stat", CTLFLAG_RD, NULL, "Statistics");
-	node_list = SYSCTL_CHILDREN(node);
+	node_list = SYSCTL_CHILDREN(priv->stat_sysctl);
 
 #ifdef MLX4_EN_PERF_STAT
 	SYSCTL_ADD_UINT(ctx, node_list, OID_AUTO, "tx_poll", CTLFLAG_RD,

@@ -52,10 +52,6 @@ CFLAGS+=	-m32
 CFLAGS+=	-mno-abicalls
 .endif
 
-.if ${MACHINE_CPUARCH} == "aarch64"
-NOPIE=		yes
-.endif
-
 
 .include "usbcore.mk"
 .include "../kshim/kshim.mk"

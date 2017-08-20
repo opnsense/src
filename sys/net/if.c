@@ -744,6 +744,11 @@ if_attach_internal(struct ifnet *ifp, int vmove, struct if_clone *ifc)
 		/* Reliably crash if used uninitialized. */
 		ifp->if_broadcastaddr = NULL;
 
+		if (ifp->if_type == IFT_ETHER) {
+			ifp->if_hw_addr = malloc(ifp->if_addrlen, M_IFADDR,
+			    M_WAITOK | M_ZERO);
+		}
+
 #if defined(INET) || defined(INET6)
 		/* Use defaults for TSO, if nothing is set */
 		if (ifp->if_hw_tsomax == 0 &&
@@ -1059,6 +1064,8 @@ if_detach_internal(struct ifnet *ifp, int vmove, struct if_clone **ifcp)
 		 * Remove link ifaddr pointer and maybe decrement if_index.
 		 * Clean up all addresses.
 		 */
+		free(ifp->if_hw_addr, M_IFADDR);
+		ifp->if_hw_addr = NULL;
 		ifp->if_addr = NULL;
 
 		/* We can now free link ifaddr. */
@@ -2206,7 +2213,7 @@ do_link_state_change(void *arg, int pending)
 	if (log_link_state_change)
 		log(LOG_NOTICE, "%s: link state changed to %s\n", ifp->if_xname,
 		    (link_state == LINK_STATE_UP) ? "UP" : "DOWN" );
-	EVENTHANDLER_INVOKE(ifnet_link_event, ifp, ifp->if_link_state);
+	EVENTHANDLER_INVOKE(ifnet_link_event, ifp, link_state);
 	CURVNET_RESTORE();
 }
 
@@ -2218,6 +2225,7 @@ void
 if_down(struct ifnet *ifp)
 {
 
+	EVENTHANDLER_INVOKE(ifnet_event, ifp, IFNET_EVENT_DOWN);
 	if_unroute(ifp, IFF_UP, AF_UNSPEC);
 }
 
@@ -2230,6 +2238,7 @@ if_up(struct ifnet *ifp)
 {
 
 	if_route(ifp, IFF_UP, AF_UNSPEC);
+	EVENTHANDLER_INVOKE(ifnet_event, ifp, IFNET_EVENT_UP);
 }
 
 /*
@@ -2300,7 +2309,7 @@ static int
 ifhwioctl(u_long cmd, struct ifnet *ifp, caddr_t data, struct thread *td)
 {
 	struct ifreq *ifr;
-	int error = 0;
+	int error = 0, do_ifup = 0;
 	int new_flags, temp_flags;
 	size_t namelen, onamelen;
 	size_t descrlen;
@@ -2427,7 +2436,7 @@ ifhwioctl(u_long cmd, struct ifnet *ifp, caddr_t data, struct thread *td)
 			if_down(ifp);
 		} else if (new_flags & IFF_UP &&
 		    (ifp->if_flags & IFF_UP) == 0) {
-			if_up(ifp);
+			do_ifup = 1;
 		}
 		/* See if permanently promiscuous mode bit is about to flip */
 		if ((ifp->if_flags ^ new_flags) & IFF_PPROMISC) {
@@ -2446,6 +2455,8 @@ ifhwioctl(u_long cmd, struct ifnet *ifp, caddr_t data, struct thread *td)
 		if (ifp->if_ioctl) {
 			(void) (*ifp->if_ioctl)(ifp, cmd, data);
 		}
+		if (do_ifup)
+			if_up(ifp);
 		getmicrotime(&ifp->if_lastchange);
 		break;
 
@@ -2661,6 +2672,10 @@ ifhwioctl(u_long cmd, struct ifnet *ifp, caddr_t data, struct thread *td)
 			return (error);
 		error = if_setlladdr(ifp,
 		    ifr->ifr_addr.sa_data, ifr->ifr_addr.sa_len);
+		break;
+
+	case SIOCGHWADDR:
+		error = if_gethwaddr(ifp, ifr);
 		break;
 
 	case SIOCAIFGROUP:
@@ -3591,6 +3606,29 @@ if_requestencap_default(struct ifnet *ifp, struct if_encap_req *req)
 	req->lladdr_off = 0;
 
 	return (0);
+}
+
+/*
+ * Get the link layer address that was read from the hardware at attach.
+ *
+ * This is only set by Ethernet NICs (IFT_ETHER), but laggX interfaces re-type
+ * their component interfaces as IFT_IEEE8023ADLAG.
+ */
+int
+if_gethwaddr(struct ifnet *ifp, struct ifreq *ifr)
+{
+
+	if (ifp->if_hw_addr == NULL)
+		return (ENODEV);
+
+	switch (ifp->if_type) {
+	case IFT_ETHER:
+	case IFT_IEEE8023ADLAG:
+		bcopy(ifp->if_hw_addr, ifr->ifr_addr.sa_data, ifp->if_addrlen);
+		return (0);
+	default:
+		return (ENODEV);
+	}
 }
 
 /*

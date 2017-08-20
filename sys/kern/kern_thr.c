@@ -36,6 +36,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/posix4.h>
+#include <sys/ptrace.h>
 #include <sys/racct.h>
 #include <sys/resourcevar.h>
 #include <sys/rwlock.h>
@@ -231,6 +232,7 @@ thread_create(struct thread *td, struct rtprio *rtp,
 
 	bzero(&newtd->td_startzero,
 	    __rangeof(struct thread, td_startzero, td_endzero));
+	newtd->td_sleeptimo = 0;
 	bcopy(&td->td_startcopy, &newtd->td_startcopy,
 	    __rangeof(struct thread, td_startcopy, td_endcopy));
 	newtd->td_proc = td->td_proc;
@@ -248,14 +250,13 @@ thread_create(struct thread *td, struct rtprio *rtp,
 	p->p_flag |= P_HADTHREADS;
 	thread_link(newtd, p);
 	bcopy(p->p_comm, newtd->td_name, sizeof(newtd->td_name));
-	newtd->td_pax = p->p_pax;
 	thread_lock(td);
 	/* let the scheduler know about these things. */
 	sched_fork_thread(td, newtd);
 	thread_unlock(td);
 	if (P_SHOULDSTOP(p))
 		newtd->td_flags |= TDF_ASTPENDING | TDF_NEEDSUSPCHK;
-	if (p->p_flag2 & P2_LWP_EVENTS)
+	if (p->p_ptevents & PTRACE_LWP)
 		newtd->td_dbgflags |= TDB_BORN;
 
 	/*
@@ -355,8 +356,8 @@ kern_thr_exit(struct thread *td)
 
 	p->p_pendingexits++;
 	td->td_dbgflags |= TDB_EXIT;
-	if (p->p_flag & P_TRACED && p->p_flag2 & P2_LWP_EVENTS)
-		ptracestop(td, SIGTRAP);
+	if (p->p_ptevents & PTRACE_LWP)
+		ptracestop(td, SIGTRAP, NULL);
 	PROC_UNLOCK(p);
 	tidhash_remove(td);
 	PROC_LOCK(p);
@@ -578,8 +579,11 @@ sys_thr_set_name(struct thread *td, struct thr_set_name_args *uap)
 	error = 0;
 	name[0] = '\0';
 	if (uap->name != NULL) {
-		error = copyinstr(uap->name, name, sizeof(name),
-			NULL);
+		error = copyinstr(uap->name, name, sizeof(name), NULL);
+		if (error == ENAMETOOLONG) {
+			error = copyin(uap->name, name, sizeof(name) - 1);
+			name[sizeof(name) - 1] = '\0';
+		}
 		if (error)
 			return (error);
 	}

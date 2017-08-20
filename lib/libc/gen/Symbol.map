@@ -418,6 +418,10 @@ FBSD_1.4 {
 	stravis;
 };
 
+FBSD_1.5 {
+	sem_clockwait_np;
+};
+
 FBSDprivate_1.0 {
 	/* needed by thread libraries */
 	__thr_jtable;
@@ -485,7 +489,6 @@ FBSDprivate_1.0 {
 	_pthread_sigmask;
 	_pthread_testcancel;
 	_spinlock;
-	_spinlock_debug;
 	_spinunlock;
 	_rtld_addr_phdr;
 	_rtld_atfork_pre;

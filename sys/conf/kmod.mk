@@ -171,11 +171,13 @@ ${_firmw:C/\:.*$/.fwo/:T}:	${_firmw:C/\:.*$//}
 	@${ECHO} ${_firmw:C/\:.*$//} ${.ALLSRC:M*${_firmw:C/\:.*$//}}
 	@if [ -e ${_firmw:C/\:.*$//} ]; then			\
 		${LD} -b binary --no-warn-mismatch ${_LDFLAGS}	\
-		    -r -d -o ${.TARGET}	${_firmw:C/\:.*$//};	\
+		    -m ${LD_EMULATION} -r -d			\
+		    -o ${.TARGET} ${_firmw:C/\:.*$//};		\
 	else							\
 		ln -s ${.ALLSRC:M*${_firmw:C/\:.*$//}} ${_firmw:C/\:.*$//}; \
 		${LD} -b binary --no-warn-mismatch ${_LDFLAGS}	\
-		    -r -d -o ${.TARGET}	${_firmw:C/\:.*$//};	\
+		    -m ${LD_EMULATION} -r -d			\
+		    -o ${.TARGET} ${_firmw:C/\:.*$//};		\
 		rm ${_firmw:C/\:.*$//};				\
 	fi
 
@@ -272,7 +274,7 @@ beforebuild: ${_ILINKS}
 # causes all the modules to be rebuilt when the directory pointed to changes.
 .for _link in ${_ILINKS}
 .if !exists(${.OBJDIR}/${_link})
-${OBJS}: ${_link}
+OBJS_DEPEND_GUESS+=	${_link}
 .endif
 .endfor
 
@@ -449,8 +451,9 @@ acpi_quirks.h: ${SYSDIR}/tools/acpi_quirks2h.awk ${SYSDIR}/dev/acpica/acpi_quirk
 	${AWK} -f ${SYSDIR}/tools/acpi_quirks2h.awk ${SYSDIR}/dev/acpica/acpi_quirks
 .endif
 
-.if !empty(SRCS:Massym.s)
+.if !empty(SRCS:Massym.s) || !empty(DPSRCS:Massym.s)
 CLEANFILES+=	assym.s genassym.o
+DEPENDOBJS+=	genassym.o
 assym.s: genassym.o
 .if defined(KERNBUILDDIR)
 genassym.o: opt_global.h
@@ -459,7 +462,7 @@ assym.s: ${SYSDIR}/kern/genassym.sh
 	sh ${SYSDIR}/kern/genassym.sh genassym.o > ${.TARGET}
 genassym.o: ${SYSDIR}/${MACHINE}/${MACHINE}/genassym.c
 genassym.o: ${SRCS:Mopt_*.h}
-	${CC} -c ${CFLAGS:N-fno-common} \
+	${CC} -c ${CFLAGS:N-flto:N-fno-common} \
 	    ${SYSDIR}/${MACHINE}/${MACHINE}/genassym.c
 .endif
 

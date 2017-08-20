@@ -87,6 +87,7 @@ __FBSDID("$FreeBSD$");
 
 #include <net/if.h>
 #include <net/if_var.h>
+#include <net/if_llatbl.h>
 #include <net/netisr.h>
 #include <net/route.h>
 #include <net/pfil.h>
@@ -106,12 +107,7 @@ __FBSDID("$FreeBSD$");
 #include <netinet6/nd6.h>
 #include <netinet6/in6_rss.h>
 
-#ifdef IPSEC
-#include <netipsec/ipsec.h>
-#include <netipsec/ipsec6.h>
-#include <netipsec/key.h>
-#include <netinet6/ip6_ipsec.h>
-#endif /* IPSEC */
+#include <netipsec/ipsec_support.h>
 #ifdef SCTP
 #include <netinet/sctp.h>
 #include <netinet/sctp_crc32.h>
@@ -150,9 +146,10 @@ static int ip6_insertfraghdr(struct mbuf *, struct mbuf *, int,
 static int ip6_insert_jumboopt(struct ip6_exthdrs *, u_int32_t);
 static int ip6_splithdr(struct mbuf *, struct ip6_exthdrs *);
 static int ip6_getpmtu(struct route_in6 *, int,
-	struct ifnet *, const struct in6_addr *, u_long *, int *, u_int);
+	struct ifnet *, const struct in6_addr *, u_long *, int *, u_int,
+	u_int);
 static int ip6_calcmtu(struct ifnet *, const struct in6_addr *, u_long,
-	u_long *, int *);
+	u_long *, int *, u_int);
 static int ip6_getpmtu_ctl(u_int, const struct in6_addr *, u_long *);
 static int copypktopts(struct ip6_pktopts *, struct ip6_pktopts *, int);
 
@@ -227,6 +224,8 @@ ip6_fragment(struct ifnet *ifp, struct mbuf *m0, int hlen, u_char nextproto,
 	int off;
 	int error;
 	int tlen = m0->m_pkthdr.len;
+
+	KASSERT(( mtu % 8 == 0), ("Fragment length must be a multiple of 8"));
 
 	m = m0;
 	ip6 = mtod(m, struct ip6_hdr *);
@@ -320,11 +319,12 @@ ip6_output(struct mbuf *m0, struct ip6_pktopts *opt,
 	int hdrsplit = 0;
 	int sw_csum, tso;
 	int needfiblookup;
-	int has_fwd_tag = 0;
 	uint32_t fibnum;
+	struct m_tag *fwd_tag = NULL;
 	uint32_t id;
 
 	if (inp != NULL) {
+		INP_LOCK_ASSERT(inp);
 		M_SETFIB(m, inp->inp_inc.inc_fibnum);
 		if ((flags & IP_NODEFAULTFLOWID) == 0) {
 			/* unconditionally set flowid */
@@ -332,6 +332,21 @@ ip6_output(struct mbuf *m0, struct ip6_pktopts *opt,
 			M_HASHTYPE_SET(m, inp->inp_flowtype);
 		}
 	}
+
+#if defined(IPSEC) || defined(IPSEC_SUPPORT)
+	/*
+	 * IPSec checking which handles several cases.
+	 * FAST IPSEC: We re-injected the packet.
+	 * XXX: need scope argument.
+	 */
+	if (IPSEC_ENABLED(ipv6)) {
+		if ((error = IPSEC_OUTPUT(ipv6, m, inp)) != 0) {
+			if (error == EINPROGRESS)
+				error = 0;
+			goto done;
+		}
+	}
+#endif /* IPSEC */
 
 	bzero(&exthdrs, sizeof(exthdrs));
 	if (opt) {
@@ -356,24 +371,6 @@ ip6_output(struct mbuf *m0, struct ip6_pktopts *opt,
 		/* Destination options header(2nd part) */
 		MAKE_EXTHDR(opt->ip6po_dest2, &exthdrs.ip6e_dest2);
 	}
-
-#ifdef IPSEC
-	/*
-	 * IPSec checking which handles several cases.
-	 * FAST IPSEC: We re-injected the packet.
-	 * XXX: need scope argument.
-	 */
-	switch(ip6_ipsec_output(&m, inp, &error))
-	{
-	case 1:                 /* Bad packet */
-		goto freehdrs;
-	case -1:                /* IPSec done */
-		goto done;
-	case 0:                 /* No IPSec */
-	default:
-		break;
-	}
-#endif /* IPSEC */
 
 	/*
 	 * Calculate the total length of the extension header chain.
@@ -499,8 +496,7 @@ ip6_output(struct mbuf *m0, struct ip6_pktopts *opt,
 	if (ro == NULL) {
 		ro = &ip6route;
 		bzero((caddr_t)ro, sizeof(*ro));
-	} else
-		ro->ro_flags |= RT_LLE_CACHE;
+	}
 	ro_pmtu = ro;
 	if (opt && opt->ip6po_rthdr)
 		ro = &opt->ip6po_route;
@@ -545,13 +541,16 @@ again:
 		ro->ro_dst.sin6_family = AF_INET6;
 		RT_VALIDATE((struct route *)ro, &inp->inp_rt_cookie, fibnum);
 	}
-	if (ro->ro_rt && !has_fwd_tag && (ro->ro_rt->rt_flags & RTF_UP) &&
+	if (ro->ro_rt && fwd_tag == NULL && (ro->ro_rt->rt_flags & RTF_UP) &&
 	    ro->ro_dst.sin6_family == AF_INET6 &&
 	    IN6_ARE_ADDR_EQUAL(&ro->ro_dst.sin6_addr, &ip6->ip6_dst)) {
 		rt = ro->ro_rt;
 		ifp = ro->ro_rt->rt_ifp;
 	} else {
-		if (!has_fwd_tag) {
+		if (ro->ro_lle)
+			LLE_FREE(ro->ro_lle);	/* zeros ro_lle */
+		ro->ro_lle = NULL;
+		if (fwd_tag == NULL) {
 			bzero(&dst_sa, sizeof(dst_sa));
 			dst_sa.sin6_family = AF_INET6;
 			dst_sa.sin6_len = sizeof(dst_sa);
@@ -718,7 +717,7 @@ again:
 
 	/* Determine path MTU. */
 	if ((error = ip6_getpmtu(ro_pmtu, ro != ro_pmtu, ifp, &ip6->ip6_dst,
-	    &mtu, &alwaysfrag, fibnum)) != 0)
+		    &mtu, &alwaysfrag, fibnum, *nexthdrp)) != 0)
 		goto bad;
 
 	/*
@@ -820,6 +819,9 @@ again:
 		} else {
 			RO_RTFREE(ro);
 			needfiblookup = 1; /* Redo the routing table lookup. */
+			if (ro->ro_lle)
+				LLE_FREE(ro->ro_lle);	/* zeros ro_lle */
+			ro->ro_lle = NULL;
 		}
 	}
 	/* See if fib was changed by packet filter. */
@@ -828,6 +830,9 @@ again:
 		fibnum = M_GETFIB(m);
 		RO_RTFREE(ro);
 		needfiblookup = 1;
+		if (ro->ro_lle)
+			LLE_FREE(ro->ro_lle);	/* zeros ro_lle */
+		ro->ro_lle = NULL;
 	}
 	if (needfiblookup)
 		goto again;
@@ -849,11 +854,13 @@ again:
 		goto done;
 	}
 	/* Or forward to some other address? */
-	if (IP6_HAS_NEXTHOP(m) && !ip6_get_fwdtag(m, &dst_sa, NULL)) {
+	if ((m->m_flags & M_IP6_NEXTHOP) &&
+	    (fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL)) != NULL) {
 		dst = (struct sockaddr_in6 *)&ro->ro_dst;
+		bcopy((fwd_tag+1), &dst_sa, sizeof(struct sockaddr_in6));
 		m->m_flags |= M_SKIP_FIREWALL;
-		ip6_flush_fwdtag(m);
-		has_fwd_tag = 1;
+		m->m_flags &= ~M_IP6_NEXTHOP;
+		m_tag_delete(m, fwd_tag);
 		goto again;
 	}
 
@@ -1249,7 +1256,7 @@ ip6_getpmtu_ctl(u_int fibnum, const struct in6_addr *dst, u_long *mtup)
 	ifp = nh6.nh_ifp;
 	mtu = nh6.nh_mtu;
 
-	error = ip6_calcmtu(ifp, dst, mtu, mtup, NULL);
+	error = ip6_calcmtu(ifp, dst, mtu, mtup, NULL, 0);
 	fib6_free_nh_ext(fibnum, &nh6);
 
 	return (error);
@@ -1268,7 +1275,7 @@ ip6_getpmtu_ctl(u_int fibnum, const struct in6_addr *dst, u_long *mtup)
 static int
 ip6_getpmtu(struct route_in6 *ro_pmtu, int do_lookup,
     struct ifnet *ifp, const struct in6_addr *dst, u_long *mtup,
-    int *alwaysfragp, u_int fibnum)
+    int *alwaysfragp, u_int fibnum, u_int proto)
 {
 	struct nhop6_basic nh6;
 	struct in6_addr kdst;
@@ -1306,7 +1313,7 @@ ip6_getpmtu(struct route_in6 *ro_pmtu, int do_lookup,
 	if (ro_pmtu->ro_rt)
 		mtu = ro_pmtu->ro_rt->rt_mtu;
 
-	return (ip6_calcmtu(ifp, dst, mtu, mtup, alwaysfragp));
+	return (ip6_calcmtu(ifp, dst, mtu, mtup, alwaysfragp, proto));
 }
 
 /*
@@ -1318,7 +1325,7 @@ ip6_getpmtu(struct route_in6 *ro_pmtu, int do_lookup,
  */
 static int
 ip6_calcmtu(struct ifnet *ifp, const struct in6_addr *dst, u_long rt_mtu,
-    u_long *mtup, int *alwaysfragp)
+    u_long *mtup, int *alwaysfragp, u_int proto)
 {
 	u_long mtu = 0;
 	int alwaysfrag = 0;
@@ -1333,7 +1340,11 @@ ip6_calcmtu(struct ifnet *ifp, const struct in6_addr *dst, u_long rt_mtu,
 		inc.inc6_faddr = *dst;
 
 		ifmtu = IN6_LINKMTU(ifp);
-		mtu = tcp_hc_getmtu(&inc);
+
+		/* TCP is known to react to pmtu changes so skip hc */
+		if (proto != IPPROTO_TCP)
+			mtu = tcp_hc_getmtu(&inc);
+
 		if (mtu)
 			mtu = min(mtu, rt_mtu);
 		else
@@ -1380,6 +1391,15 @@ ip6_ctloutput(struct socket *so, struct sockopt *sopt)
 	uint32_t rss_bucket;
 	int retval;
 #endif
+
+/*
+ * Don't use more than a quarter of mbuf clusters.  N.B.:
+ * nmbclusters is an int, but nmbclusters * MCLBYTES may overflow
+ * on LP64 architectures, so cast to u_long to avoid undefined
+ * behavior.  ILP32 architectures cannot have nmbclusters
+ * large enough to overflow for other reasons.
+ */
+#define IPV6_PKTOPTIONS_MBUF_LIMIT	((u_long)nmbclusters * MCLBYTES / 4)
 
 	level = sopt->sopt_level;
 	op = sopt->sopt_dir;
@@ -1435,6 +1455,12 @@ ip6_ctloutput(struct socket *so, struct sockopt *sopt)
 #endif
 			{
 				struct mbuf *m;
+
+				if (optlen > IPV6_PKTOPTIONS_MBUF_LIMIT) {
+					printf("ip6_ctloutput: mbuf limit hit\n");
+					error = ENOBUFS;
+					break;
+				}
 
 				error = soopt_getm(sopt, &m); /* XXX */
 				if (error != 0)
@@ -1844,23 +1870,13 @@ do { \
 				INP_WUNLOCK(in6p);
 				break;
 
-#ifdef IPSEC
+#if defined(IPSEC) || defined(IPSEC_SUPPORT)
 			case IPV6_IPSEC_POLICY:
-			{
-				caddr_t req;
-				struct mbuf *m;
-
-				if ((error = soopt_getm(sopt, &m)) != 0) /* XXX */
+				if (IPSEC_ENABLED(ipv6)) {
+					error = IPSEC_PCBCTL(ipv6, in6p, sopt);
 					break;
-				if ((error = soopt_mcopyin(sopt, m)) != 0) /* XXX */
-					break;
-				req = mtod(m, caddr_t);
-				error = ipsec_set_policy(in6p, optname, req,
-				    m->m_len, (sopt->sopt_td != NULL) ?
-				    sopt->sopt_td->td_ucred : NULL);
-				m_freem(m);
-				break;
-			}
+				}
+				/* FALLTHROUGH */
 #endif /* IPSEC */
 
 			default:
@@ -2085,37 +2101,14 @@ do { \
 				error = ip6_getmoptions(in6p, sopt);
 				break;
 
-#ifdef IPSEC
+#if defined(IPSEC) || defined(IPSEC_SUPPORT)
 			case IPV6_IPSEC_POLICY:
-			  {
-				caddr_t req = NULL;
-				size_t len = 0;
-				struct mbuf *m = NULL;
-				struct mbuf **mp = &m;
-				size_t ovalsize = sopt->sopt_valsize;
-				caddr_t oval = (caddr_t)sopt->sopt_val;
-
-				error = soopt_getm(sopt, &m); /* XXX */
-				if (error != 0)
+				if (IPSEC_ENABLED(ipv6)) {
+					error = IPSEC_PCBCTL(ipv6, in6p, sopt);
 					break;
-				error = soopt_mcopyin(sopt, m); /* XXX */
-				if (error != 0)
-					break;
-				sopt->sopt_valsize = ovalsize;
-				sopt->sopt_val = oval;
-				if (m) {
-					req = mtod(m, caddr_t);
-					len = m->m_len;
 				}
-				error = ipsec_get_policy(in6p, req, len, mp);
-				if (error == 0)
-					error = soopt_mcopyout(sopt, m); /* XXX */
-				if (error == 0 && m)
-					m_freem(m);
-				break;
-			  }
+				/* FALLTHROUGH */
 #endif /* IPSEC */
-
 			default:
 				error = ENOPROTOOPT;
 				break;
@@ -3068,103 +3061,4 @@ ip6_optlen(struct inpcb *in6p)
 	len += elen(in6p->in6p_outputopts->ip6po_dest2);
 	return len;
 #undef elen
-}
-
-struct ip6_fwdtag {
-	struct sockaddr_in6 dst;
-	u_short if_index;
-};
-
-int
-ip6_set_fwdtag(struct mbuf *m, struct sockaddr_in6 *dst, u_short ifidx)
-{
-	struct ip6_fwdtag *fwd_info;
-	struct m_tag *fwd_tag;
-	int error;
-
-	KASSERT(dst != NULL, ("%s: !dst", __func__));
-	KASSERT(dst->sin6_family == AF_INET6, ("%s: !AF_INET6", __func__));
-
-	fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL);
-	if (fwd_tag != NULL) {
-		KASSERT(((struct ip6_fwdtag *)(fwd_tag+1))->dst.sin6_family ==
-		    AF_INET6, ("%s: !AF_INET6", __func__));
-
-		m_tag_unlink(m, fwd_tag);
-	} else {
-		fwd_tag = m_tag_get(PACKET_TAG_IPFORWARD, sizeof(*dst),
-		    M_NOWAIT);
-		if (fwd_tag == NULL) {
-			return (ENOBUFS);
-		}
-	}
-
-	fwd_info = (struct ip6_fwdtag *)(fwd_tag+1);
-
-	bcopy(dst, &fwd_info->dst, sizeof(fwd_info->dst));
-
-	/*
-	 * If nh6 address is link-local we should convert
-	 * it to kernel internal form before doing any
-	 * comparisons.
-	 */
-	error = sa6_embedscope(&fwd_info->dst, V_ip6_use_defzone);
-	if (error != 0) {
-		m_tag_free(fwd_tag);
-		return (error);
-	}
-
-	if (in6_localip(&fwd_info->dst.sin6_addr))
-		m->m_flags |= M_FASTFWD_OURS;
-	else
-		m->m_flags &= ~M_FASTFWD_OURS;
-
-	fwd_info->if_index = ifidx;
-	m->m_flags |= M_IP6_NEXTHOP;
-
-	m_tag_prepend(m, fwd_tag);
-
-	return (0);
-}
-
-int
-ip6_get_fwdtag(struct mbuf *m, struct sockaddr_in6 *dst, u_short *ifidx)
-{
-	struct ip6_fwdtag *fwd_info;
-	struct m_tag *fwd_tag;
-
-	fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL);
-	if (fwd_tag == NULL) {
-		return (ENOENT);
-	}
-
-	fwd_info = (struct ip6_fwdtag *)(fwd_tag+1);
-
-	KASSERT(((struct sockaddr *)&fwd_info->dst)->sa_family == AF_INET6,
-	    ("%s: !AF_INET6", __func__));
-
-	if (dst != NULL) {
-		bcopy((fwd_tag+1), dst, sizeof(*dst));
-	}
-
-	if (ifidx != NULL) {
-		*ifidx = fwd_info->if_index;
-	}
-
-	return (0);
-}
-
-void
-ip6_flush_fwdtag(struct mbuf *m)
-{
-	struct m_tag *fwd_tag;
-
-	fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL);
-	if (fwd_tag != NULL) {
-		KASSERT(((struct sockaddr *)(fwd_tag+1))->sa_family ==
-		    AF_INET6, ("%s: !AF_INET6", __func__));
-
-		m->m_flags &= ~(M_IP6_NEXTHOP | M_FASTFWD_OURS);
-		m_tag_delete(m, fwd_tag);
-	}
 }

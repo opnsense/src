@@ -23,7 +23,7 @@
 
 namespace __tsan {
 
-#ifndef SANITIZER_GO
+#if !SANITIZER_GO
 void InitializeShadowMemory() {
   // Map memory shadow.
   uptr shadow =
@@ -105,7 +105,7 @@ static void ProtectRange(uptr beg, uptr end) {
   CHECK_LE(beg, end);
   if (beg == end)
     return;
-  if (beg != (uptr)MmapNoAccess(beg, end - beg)) {
+  if (beg != (uptr)MmapFixedNoAccess(beg, end - beg)) {
     Printf("FATAL: ThreadSanitizer can not protect [%zx,%zx]\n", beg, end);
     Printf("FATAL: Make sure you are not using unlimited stack\n");
     Die();

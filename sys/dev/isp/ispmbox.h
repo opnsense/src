@@ -895,6 +895,8 @@ typedef struct {
 	(IS_24XX(isp)? (isp->isp_fwattr & ISP2400_FW_ATTR_MULTIID) : 0)
 #define	ISP_GET_VPIDX(isp, tag) \
 	(ISP_CAP_MULTI_ID(isp) ? tag : 0)
+#define	ISP_CAP_MSIX(isp)	\
+	(IS_24XX(isp)? (isp->isp_fwattr & ISP2400_FW_ATTR_MSIX) : 0)
 #define	ISP_CAP_VP0(isp)	\
 	(IS_24XX(isp)? (isp->isp_fwattr & ISP2400_FW_ATTR_VP0) : 0)
 
@@ -1205,7 +1207,7 @@ typedef struct {
 #define	ICB2400_VPINFO_OFF	0x80	/* offset from start of ICB */
 #define	ICB2400_VPINFO_PORT_OFF(chan)		\
     (ICB2400_VPINFO_OFF + 			\
-     sizeof (isp_icb_2400_vpinfo_t) + (chan * ICB2400_VPOPT_WRITE_SIZE))
+     sizeof (isp_icb_2400_vpinfo_t) + ((chan) * ICB2400_VPOPT_WRITE_SIZE))
 
 #define	ICB2400_VPGOPT_FCA		0x01	/* Assume Clean Address bit in FLOGI ACC set (works only in static configurations) */
 #define	ICB2400_VPGOPT_MID_DISABLE	0x02	/* when set, connection mode2 will work with NPIV-capable switched */
@@ -1419,6 +1421,10 @@ typedef struct {
 /*
  * Port Database Changed Async Event information for 24XX cards
  */
+/* N-Port Handle */
+#define PDB24XX_AE_GLOBAL	0xFFFF
+
+/* Reason Codes */
 #define	PDB24XX_AE_OK		0x00
 #define	PDB24XX_AE_IMPL_LOGO_1	0x01
 #define	PDB24XX_AE_IMPL_LOGO_2	0x02
@@ -1438,7 +1444,7 @@ typedef struct {
 #define	PDB24XX_AE_FLOGI_TIMO	0x10
 #define	PDB24XX_AE_ABX_LOGO	0x11
 #define	PDB24XX_AE_PLOGI_DONE	0x12
-#define	PDB24XX_AE_PRLI_DONJE	0x13
+#define	PDB24XX_AE_PRLI_DONE	0x13
 #define	PDB24XX_AE_OPN_1	0x14
 #define	PDB24XX_AE_OPN_2	0x15
 #define	PDB24XX_AE_TXERR	0x16

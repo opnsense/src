@@ -613,23 +613,12 @@ options 	TCP_OFFLOAD		# TCP offload support.
 # In order to enable IPSEC you MUST also add device crypto to 
 # your kernel configuration
 options 	IPSEC			#IP security (requires device crypto)
+
+# Option IPSEC_SUPPORT does not enable IPsec, but makes it possible to 
+# load it as a kernel module. You still MUST add device crypto to your kernel
+# configuration.
+options		IPSEC_SUPPORT
 #options 	IPSEC_DEBUG		#debug for IP security
-#
-# #DEPRECATED#
-# Set IPSEC_FILTERTUNNEL to change the default of the sysctl to force packets
-# coming through a tunnel to be processed by any configured packet filtering
-# twice. The default is that packets coming out of a tunnel are _not_ processed;
-# they are assumed trusted.
-#
-# IPSEC history is preserved for such packets, and can be filtered
-# using ipfw(8)'s 'ipsec' keyword, when this option is enabled.
-#
-#options 	IPSEC_FILTERTUNNEL	#filter ipsec packets from a tunnel
-#
-# Set IPSEC_NAT_T to enable NAT-Traversal support.  This enables
-# optional UDP encapsulation of ESP packets.
-#
-options		IPSEC_NAT_T		#NAT-T support, UDP encap of ESP
 
 #
 # SMB/CIFS requester
@@ -769,8 +758,7 @@ options 	NETGRAPH_IPFW
 options 	NETGRAPH_KSOCKET
 options 	NETGRAPH_L2TP
 options 	NETGRAPH_LMI
-# MPPC compression requires proprietary files (not included)
-#options 	NETGRAPH_MPPC_COMPRESSION
+options 	NETGRAPH_MPPC_COMPRESSION
 options 	NETGRAPH_MPPC_ENCRYPTION
 options 	NETGRAPH_NETFLOW
 options 	NETGRAPH_NAT
@@ -965,6 +953,13 @@ device		lagg
 # IPFIREWALL_NAT adds support for in kernel nat in ipfw, and it requires
 # LIBALIAS.
 #
+# IPFIREWALL_NAT64 adds support for in kernel NAT64 in ipfw.
+#
+# IPFIREWALL_NPTV6 adds support for in kernel NPTv6 in ipfw.
+#
+# IPFIREWALL_PMOD adds support for protocols modification module. Currently
+# it supports only TCP MSS modification.
+#
 # IPSTEALTH enables code to support stealth forwarding (i.e., forwarding
 # packets without touching the TTL).  This can be useful to hide firewalls
 # from traceroute and similar tools.
@@ -986,6 +981,8 @@ options 	IPFIREWALL_VERBOSE	#enable logging to syslogd(8)
 options 	IPFIREWALL_VERBOSE_LIMIT=100	#limit verbosity
 options 	IPFIREWALL_DEFAULT_TO_ACCEPT	#allow everything by default
 options 	IPFIREWALL_NAT		#ipfw kernel nat support
+options 	IPFIREWALL_NAT64	#ipfw kernel NAT64 support
+options 	IPFIREWALL_NPTV6	#ipfw kernel IPv6 NPT support
 options 	IPDIVERT		#divert sockets
 options 	IPFILTER		#ipfilter support
 options 	IPFILTER_LOG		#ipfilter logging
@@ -1016,7 +1013,8 @@ options 	ACCEPT_FILTER_HTTP
 # carried in TCP option 19. This option is commonly used to protect
 # TCP sessions (e.g. BGP) where IPSEC is not available nor desirable.
 # This is enabled on a per-socket basis using the TCP_MD5SIG socket option.
-# This requires the use of 'device crypto' and 'options IPSEC'.
+# This requires the use of 'device crypto' and either 'options IPSEC' or
+# 'options IPSEC_SUPPORT'.
 options 	TCP_SIGNATURE		#include support for RFC 2385
 
 # DUMMYNET enables the "dummynet" bandwidth limiter.  You need IPFIREWALL
@@ -1900,6 +1898,7 @@ device  	amphy		# AMD AM79c873 / Davicom DM910{1,2}
 device  	atphy		# Attansic/Atheros F1
 device  	axphy		# Asix Semiconductor AX88x9x
 device  	bmtphy		# Broadcom BCM5201/BCM5202 and 3Com 3c905C
+device		bnxt		# Broadcom NetXtreme-C/NetXtreme-E
 device  	brgphy		# Broadcom BCM54xx/57xx 1000baseTX
 device  	ciphy		# Cicada/Vitesse CS/VSC8xxx
 device  	e1000phy	# Marvell 88E1000 1000/100/10-BT
@@ -1940,6 +1939,7 @@ device		xmphy		# XaQti XMAC II
 #	BCM570x family of controllers, including the 3Com 3c996-T,
 #	the Netgear GA302T, the SysKonnect SK-9D21 and SK-9D41, and
 #	the embedded gigE NICs on Dell PowerEdge 2550 servers.
+# bnxt:	Broadcom NetXtreme-C and NetXtreme-E PCIe 10/25/50G Ethernet adapters.
 # bxe:	Broadcom NetXtreme II (BCM5771X/BCM578XX) PCIe 10Gb Ethernet
 #       adapters.
 # bwi:	Broadcom BCM430* and BCM431* family of wireless adapters.
@@ -1948,7 +1948,9 @@ device		xmphy		# XaQti XMAC II
 # cm:	Arcnet SMC COM90c26 / SMC COM90c56
 #	(and SMC COM90c66 in '56 compatibility mode) adapters.
 # cxgb: Chelsio T3 based 1GbE/10GbE PCIe Ethernet adapters.
-# cxgbe:Chelsio T4 and T5 based 1GbE/10GbE/40GbE PCIe Ethernet adapters.
+# cxgbe:Chelsio T4, T5, and T6-based 1/10/25/40/100GbE PCIe Ethernet
+#	adapters.
+# cxgbev: Chelsio T4, T5, and T6-based PCIe Virtual Functions.
 # dc:   Support for PCI fast ethernet adapters based on the DEC/Intel 21143
 #       and various workalikes including:
 #       the ADMtek AL981 Comet and AN985 Centaur, the ASIX Electronics
@@ -2099,9 +2101,6 @@ device		bce		# Broadcom BCM5706/BCM5708 Gigabit Ethernet
 device		bfe		# Broadcom BCM440x 10/100 Ethernet
 device		bge		# Broadcom BCM570xx Gigabit Ethernet
 device		cas		# Sun Cassini/Cassini+ and NS DP83065 Saturn
-device		cxgb		# Chelsio T3 10 Gigabit Ethernet
-device		cxgb_t3fw	# Chelsio T3 10 Gigabit Ethernet firmware
-device		cxgbe		# Chelsio T4 and T5 1GbE/10GbE/40GbE
 device		dc		# DEC/Intel 21143 and various workalikes
 device		et		# Agere ET1310 10/100/Gigabit Ethernet
 device		fxp		# Intel EtherExpress PRO/100B (82557, 82558)
@@ -2132,6 +2131,10 @@ device		wb		# Winbond W89C840F
 device		xl		# 3Com 3c90x (``Boomerang'', ``Cyclone'')
 
 # PCI Ethernet NICs.
+device		cxgb		# Chelsio T3 10 Gigabit Ethernet
+device		cxgb_t3fw	# Chelsio T3 10 Gigabit Ethernet firmware
+device		cxgbe		# Chelsio T4-T6 1/10/25/40/100 Gigabit Ethernet
+device		cxgbev		# Chelsio T4-T6 Virtual Functions
 device		de		# DEC/Intel DC21x4x (``Tulip'')
 device		em		# Intel Pro/1000 Gigabit Ethernet
 device		igb		# Intel Pro/1000 PCIE Gigabit Ethernet
@@ -2532,7 +2535,12 @@ device		ismt
 
 device		smb
 
+# SMBus peripheral devices
 #
+# jedec_ts	Temperature Sensor compliant with JEDEC Standard 21-C
+#
+device		jedec_ts
+
 # I2C Bus
 #
 # Philips i2c bus support is provided by the `iicbus' device.
@@ -3058,13 +3066,12 @@ options		EM_MULTIQUEUE # Activate multiqueue features/disable MSI-X
 # This enables support for compressed core dumps.
 options 	GZIO
 
-# PAX and HardenedBSD related knobs
-options		PAX		# Enable the PAX framework
-options		PAX_ASLR	# Address Space Layout Randomization
-options		PAX_HARDENING	# Other hardening features
-options		PAX_SEGVGUARD	# ASLR bruteforce protection
-options		STACK_GUARD_SIZE=(2*1024*1024)	# Stack guard size (divisible by PAGE_SIZE)
-options		HBSD_DEBUG
-
 # BHND(4) drivers
 options		BHND_LOGLEVEL	# Logging threshold level
+
+# evdev interface 
+device		evdev		# input event device support
+options 	EVDEV_SUPPORT	# evdev support in legacy drivers
+options 	EVDEV_DEBUG	# enable event debug msgs
+device		uinput		# install /dev/uinput cdev
+options 	UINPUT_DEBUG	# enable uinput debug msgs

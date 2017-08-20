@@ -311,7 +311,8 @@ struct ifnet {
 	 * that structure can be enhanced without changing the kernel
 	 * binary interface.
 	 */
-	void	*if_pspare[4];		/* packet pacing / general use */
+	void	*if_pspare[3];		/* packet pacing / general use */
+	void	*if_hw_addr;		/* hardware link-level address */
 	int	if_ispare[4];		/* packet pacing / general use */
 };
 
@@ -359,6 +360,11 @@ EVENTHANDLER_DECLARE(ifnet_departure_event, ifnet_departure_event_handler_t);
 /* Interface link state change event */
 typedef void (*ifnet_link_event_handler_t)(void *, struct ifnet *, int);
 EVENTHANDLER_DECLARE(ifnet_link_event, ifnet_link_event_handler_t);
+/* Interface up/down event */
+#define IFNET_EVENT_UP		0
+#define IFNET_EVENT_DOWN	1
+typedef void (*ifnet_event_fn)(void *, struct ifnet *ifp, int event);
+EVENTHANDLER_DECLARE(ifnet_event, ifnet_event_fn);
 #endif /* _SYS_EVENTHANDLER_H_ */
 
 /*
@@ -603,6 +609,7 @@ int if_gethwassist(if_t ifp);
 int if_setsoftc(if_t ifp, void *softc);
 void *if_getsoftc(if_t ifp);
 int if_setflags(if_t ifp, int flags);
+int if_gethwaddr(if_t ifp, struct ifreq *);
 int if_setmtu(if_t ifp, int mtu);
 int if_getmtu(if_t ifp);
 int if_getmtu_family(if_t ifp, int family);

@@ -1,4 +1,4 @@
-/*	$Id: libmandoc.h,v 1.62 2015/11/07 14:01:16 schwarze Exp $ */
+/*	$Id: libmandoc.h,v 1.64 2016/07/19 13:36:13 schwarze Exp $ */
 /*
  * Copyright (c) 2009, 2010, 2011, 2012 Kristaps Dzonsons <kristaps@bsd.lv>
  * Copyright (c) 2013, 2014, 2015 Ingo Schwarze <schwarze@openbsd.org>
@@ -38,15 +38,12 @@ struct	tbl_span;
 struct	eqn;
 struct	roff;
 struct	roff_man;
-struct	roff_node;
 
 void		 mandoc_msg(enum mandocerr, struct mparse *,
 			int, int, const char *);
-#if __GNUC__ - 0 >= 4
-__attribute__((__format__ (__printf__, 5, 6)))
-#endif
 void		 mandoc_vmsg(enum mandocerr, struct mparse *,
-			int, int, const char *, ...);
+			int, int, const char *, ...)
+			__attribute__((__format__ (printf, 5, 6)));
 char		*mandoc_getarg(struct mparse *, char **, int, int *);
 char		*mandoc_normdate(struct mparse *, char *, int, int);
 int		 mandoc_eos(const char *, size_t);

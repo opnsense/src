@@ -126,7 +126,6 @@ g_disk_access(struct g_provider *pp, int r, int w, int e)
 			if (error != 0)
 				return (error);
 		}
-		pp->mediasize = dp->d_mediasize;
 		pp->sectorsize = dp->d_sectorsize;
 		if (dp->d_maxsize == 0) {
 			printf("WARNING: Disk drive %s%d has no d_maxsize\n",
@@ -143,6 +142,14 @@ g_disk_access(struct g_provider *pp, int r, int w, int e)
 		pp->stripeoffset = dp->d_stripeoffset;
 		pp->stripesize = dp->d_stripesize;
 		dp->d_flags |= DISKFLAG_OPEN;
+		/*
+		 * Do not invoke resize event when initial size was zero.
+		 * Some disks report its size only after first opening.
+		 */
+		if (pp->mediasize == 0)
+			pp->mediasize = dp->d_mediasize;
+		else
+			g_resize_provider(pp, dp->d_mediasize);
 	} else if ((pp->acr + pp->acw + pp->ace) > 0 && (r + w + e) == 0) {
 		if (dp->d_close != NULL) {
 			error = dp->d_close(dp);
@@ -579,12 +586,12 @@ g_disk_dumpconf(struct sbuf *sb, const char *indent, struct g_geom *gp, struct g
 		 * special cases, and there's also a valid range.
 		 */
 		sbuf_printf(sb, "%s<rotationrate>", indent);
-		if (dp->d_rotation_rate == 0)		/* Old drives don't */
-			sbuf_printf(sb, "unknown");	/* report RPM. */
-		else if (dp->d_rotation_rate == 1)	/* Since 0 is used */
-			sbuf_printf(sb, "0");		/* above, SSDs use 1. */
-		else if ((dp->d_rotation_rate >= 0x041) &&
-		    (dp->d_rotation_rate <= 0xfffe))
+		if (dp->d_rotation_rate == DISK_RR_UNKNOWN) /* Old drives */
+			sbuf_printf(sb, "unknown");	/* don't report RPM. */
+		else if (dp->d_rotation_rate == DISK_RR_NON_ROTATING)
+			sbuf_printf(sb, "0");
+		else if ((dp->d_rotation_rate >= DISK_RR_MIN) &&
+		    (dp->d_rotation_rate <= DISK_RR_MAX))
 			sbuf_printf(sb, "%u", dp->d_rotation_rate);
 		else
 			sbuf_printf(sb, "invalid");

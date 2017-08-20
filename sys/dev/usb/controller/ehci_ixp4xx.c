@@ -147,13 +147,13 @@ ehci_ixp_attach(device_t self)
 	isc->iot = rman_get_bustag(sc->sc_io_res);
 	isc->tag.bs_privdata = isc->iot;
 	/* read single */
-	isc->tag.bs_r_1	= ehci_bs_r_1,
-	isc->tag.bs_r_2	= ehci_bs_r_2,
-	isc->tag.bs_r_4	= ehci_bs_r_4,
+	isc->tag.bs_r_1	= ehci_bs_r_1;
+	isc->tag.bs_r_2	= ehci_bs_r_2;
+	isc->tag.bs_r_4	= ehci_bs_r_4;
 	/* write (single) */
-	isc->tag.bs_w_1	= ehci_bs_w_1,
-	isc->tag.bs_w_2	= ehci_bs_w_2,
-	isc->tag.bs_w_4	= ehci_bs_w_4,
+	isc->tag.bs_w_1	= ehci_bs_w_1;
+	isc->tag.bs_w_2	= ehci_bs_w_2;
+	isc->tag.bs_w_4	= ehci_bs_w_4;
 
 	sc->sc_io_tag = &isc->tag;
 	sc->sc_io_hdl = rman_get_bushandle(sc->sc_io_res);
@@ -221,14 +221,8 @@ ehci_ixp_detach(device_t self)
 {
 	struct ixp_ehci_softc *isc = device_get_softc(self);
 	ehci_softc_t *sc = &isc->base;
-	device_t bdev;
 	int err;
 
- 	if (sc->sc_bus.bdev) {
-		bdev = sc->sc_bus.bdev;
-		device_detach(bdev);
-		device_delete_child(self, bdev);
-	}
 	/* during module unload there are lots of children leftover */
 	device_delete_children(self);
 

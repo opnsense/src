@@ -44,6 +44,4 @@ CFLAGS+=       -DHESIOD
 .endif
 CFLAGS+=	-I${.CURDIR}/../../lib/libc/include
 
-NOPIE=		yes
-
 .include <bsd.lib.mk>

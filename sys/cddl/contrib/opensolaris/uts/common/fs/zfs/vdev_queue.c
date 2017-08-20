@@ -34,6 +34,7 @@
 #include <sys/zio.h>
 #include <sys/avl.h>
 #include <sys/dsl_pool.h>
+#include <sys/metaslab_impl.h>
 
 /*
  * ZFS I/O Scheduler
@@ -175,7 +176,25 @@ int zfs_vdev_aggregation_limit = SPA_OLD_MAXBLOCKSIZE;
 int zfs_vdev_read_gap_limit = 32 << 10;
 int zfs_vdev_write_gap_limit = 4 << 10;
 
+/*
+ * Define the queue depth percentage for each top-level. This percentage is
+ * used in conjunction with zfs_vdev_async_max_active to determine how many
+ * allocations a specific top-level vdev should handle. Once the queue depth
+ * reaches zfs_vdev_queue_depth_pct * zfs_vdev_async_write_max_active / 100
+ * then allocator will stop allocating blocks on that top-level device.
+ * The default kernel setting is 1000% which will yield 100 allocations per
+ * device. For userland testing, the default setting is 300% which equates
+ * to 30 allocations per device.
+ */
+#ifdef _KERNEL
+int zfs_vdev_queue_depth_pct = 1000;
+#else
+int zfs_vdev_queue_depth_pct = 300;
+#endif
+
+
 #ifdef __FreeBSD__
+#ifdef _KERNEL
 SYSCTL_DECL(_vfs_zfs_vdev);
 
 static int sysctl_zfs_async_write_active_min_dirty_percent(SYSCTL_HANDLER_ARGS);
@@ -232,6 +251,9 @@ SYSCTL_INT(_vfs_zfs_vdev, OID_AUTO, read_gap_limit, CTLFLAG_RWTUN,
 SYSCTL_INT(_vfs_zfs_vdev, OID_AUTO, write_gap_limit, CTLFLAG_RWTUN,
     &zfs_vdev_write_gap_limit, 0,
     "Acceptable gap between two writes being aggregated");
+SYSCTL_INT(_vfs_zfs_vdev, OID_AUTO, queue_depth_pct, CTLFLAG_RWTUN,
+    &zfs_vdev_queue_depth_pct, 0,
+    "Queue depth percentage for each top-level");
 
 static int
 sysctl_zfs_async_write_active_min_dirty_percent(SYSCTL_HANDLER_ARGS)
@@ -270,6 +292,7 @@ sysctl_zfs_async_write_active_max_dirty_percent(SYSCTL_HANDLER_ARGS)
 
 	return (0);
 }
+#endif
 #endif
 
 int
@@ -388,6 +411,7 @@ vdev_queue_io_add(vdev_queue_t *vq, zio_t *zio)
 {
 	spa_t *spa = zio->io_spa;
 	avl_tree_t *qtt;
+
 	ASSERT(MUTEX_HELD(&vq->vq_lock));
 	ASSERT3U(zio->io_priority, <, ZIO_PRIORITY_NUM_QUEUEABLE);
 	avl_add(vdev_queue_class_tree(vq, zio->io_priority), zio);
@@ -409,6 +433,7 @@ vdev_queue_io_remove(vdev_queue_t *vq, zio_t *zio)
 {
 	spa_t *spa = zio->io_spa;
 	avl_tree_t *qtt;
+
 	ASSERT(MUTEX_HELD(&vq->vq_lock));
 	ASSERT3U(zio->io_priority, <, ZIO_PRIORITY_NUM_QUEUEABLE);
 	avl_remove(vdev_queue_class_tree(vq, zio->io_priority), zio);
@@ -478,7 +503,8 @@ vdev_queue_agg_io_done(zio_t *aio)
 {
 	if (aio->io_type == ZIO_TYPE_READ) {
 		zio_t *pio;
-		while ((pio = zio_walk_parents(aio)) != NULL) {
+		zio_link_t *zl = NULL;
+		while ((pio = zio_walk_parents(aio, &zl)) != NULL) {
 			bcopy((char *)aio->io_data + (pio->io_offset -
 			    aio->io_offset), pio->io_data, pio->io_size);
 		}
@@ -621,6 +647,7 @@ static zio_t *
 vdev_queue_aggregate(vdev_queue_t *vq, zio_t *zio)
 {
 	zio_t *first, *last, *aio, *dio, *mandatory, *nio;
+	void *abuf;
 	uint64_t maxgap = 0;
 	uint64_t size;
 	boolean_t stretch;
@@ -729,8 +756,12 @@ vdev_queue_aggregate(vdev_queue_t *vq, zio_t *zio)
 	size = IO_SPAN(first, last);
 	ASSERT3U(size, <=, zfs_vdev_aggregation_limit);
 
+	abuf = zio_buf_alloc_nowait(size);
+	if (abuf == NULL)
+		return (NULL);
+
 	aio = zio_vdev_delegated_io(first->io_vd, first->io_offset,
-	    zio_buf_alloc(size), size, first->io_type, zio->io_priority,
+	    abuf, size, first->io_type, zio->io_priority,
 	    flags | ZIO_FLAG_DONT_CACHE | ZIO_FLAG_DONT_QUEUE,
 	    vdev_queue_agg_io_done, NULL);
 	aio->io_timestamp = first->io_timestamp;

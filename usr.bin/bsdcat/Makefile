@@ -2,11 +2,11 @@
 
 .include <src.opts.mk>
 
-_LIBARCHIVEDIR=	${.CURDIR}/../../contrib/libarchive
-_LIBARCHIVECONFDIR=	${.CURDIR}/../../lib/libarchive
+_LIBARCHIVEDIR=	${SRCTOP}/contrib/libarchive
+_LIBARCHIVECONFDIR=	${SRCTOP}/lib/libarchive
 
-PROG=	bsdcat	
-BSDCAT_VERSION_STRING=	3.2.1
+PROG=	bsdcat
+BSDCAT_VERSION_STRING=	3.3.1
 
 .PATH:	${_LIBARCHIVEDIR}/cat
 SRCS=	bsdcat.c cmdline.c

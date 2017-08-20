@@ -30,10 +30,6 @@
 #ifndef _SYS_JAIL_H_
 #define _SYS_JAIL_H_
 
-#if defined(_KERNEL) || defined(_WANT_PRISON)
-#include <sys/pax.h>
-#endif
-
 #ifdef _KERNEL
 struct jail_v0 {
 	u_int32_t	version;
@@ -190,7 +186,6 @@ struct prison {
 	char		 pr_domainname[MAXHOSTNAMELEN];	/* (p) jail domainname */
 	char		 pr_hostuuid[HOSTUUIDLEN];	/* (p) jail hostuuid */
 	char		 pr_osrelease[OSRELEASELEN];	/* (c) kern.osrelease value */
-	struct hbsd_features	pr_hbsd;		/* (p) PaX-inspired hardening features */
 };
 
 struct prison_racct {
@@ -394,14 +389,20 @@ int prison_get_ip4(struct ucred *cred, struct in_addr *ia);
 int prison_local_ip4(struct ucred *cred, struct in_addr *ia);
 int prison_remote_ip4(struct ucred *cred, struct in_addr *ia);
 int prison_check_ip4(const struct ucred *, const struct in_addr *);
+int prison_check_ip4_locked(const struct prison *, const struct in_addr *);
 int prison_saddrsel_ip4(struct ucred *, struct in_addr *);
+int prison_restrict_ip4(struct prison *, struct in_addr *);
+int prison_qcmp_v4(const void *, const void *);
 #ifdef INET6
 int prison_equal_ip6(struct prison *, struct prison *);
 int prison_get_ip6(struct ucred *, struct in6_addr *);
 int prison_local_ip6(struct ucred *, struct in6_addr *, int);
 int prison_remote_ip6(struct ucred *, struct in6_addr *);
-int prison_check_ip6(struct ucred *, struct in6_addr *);
+int prison_check_ip6(const struct ucred *, const struct in6_addr *);
+int prison_check_ip6_locked(const struct prison *, const struct in6_addr *);
 int prison_saddrsel_ip6(struct ucred *, struct in6_addr *);
+int prison_restrict_ip6(struct prison *, struct in6_addr *);
+int prison_qcmp_v6(const void *, const void *);
 #endif
 int prison_check_af(struct ucred *cred, int af);
 int prison_if(struct ucred *cred, struct sockaddr *sa);

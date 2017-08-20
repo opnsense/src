@@ -191,11 +191,17 @@ static int
 proc_ctor(void *mem, int size, void *arg, int flags)
 {
 	struct proc *p;
+	struct thread *td;
 
 	p = (struct proc *)mem;
 	SDT_PROBE4(proc, , ctor , entry, p, size, arg, flags);
 	EVENTHANDLER_INVOKE(process_ctor, p);
 	SDT_PROBE4(proc, , ctor , return, p, size, arg, flags);
+	td = FIRST_THREAD_IN_PROC(p);
+	if (td != NULL) {
+		/* Make sure all thread constructors are executed */
+		EVENTHANDLER_INVOKE(thread_ctor, td);
+	}
 	return (0);
 }
 
@@ -220,6 +226,11 @@ proc_dtor(void *mem, int size, void *arg)
 #endif
 		/* Free all OSD associated to this thread. */
 		osd_thread_exit(td);
+		td_softdep_cleanup(td);
+		MPASS(td->td_su == NULL);
+
+		/* Make sure all thread destructors are executed */
+		EVENTHANDLER_INVOKE(thread_dtor, td);
 	}
 	EVENTHANDLER_INVOKE(process_dtor, p);
 	if (p->p_ksi != NULL)
@@ -872,6 +883,7 @@ fill_kinfo_proc_only(struct proc *p, struct kinfo_proc *kp)
 	struct session *sp;
 	struct ucred *cred;
 	struct sigacts *ps;
+	struct timeval boottime;
 
 	/* For proc_realparent. */
 	sx_assert(&proctree_lock, SX_LOCKED);
@@ -953,6 +965,7 @@ fill_kinfo_proc_only(struct proc *p, struct kinfo_proc *kp)
 	kp->ki_nice = p->p_nice;
 	kp->ki_fibnum = p->p_fibnum;
 	kp->ki_start = p->p_stats->p_start;
+	getboottime(&boottime);
 	timevaladd(&kp->ki_start, &boottime);
 	PROC_STATLOCK(p);
 	rufetch(p, &kp->ki_rusage);
@@ -1032,7 +1045,14 @@ fill_kinfo_thread(struct thread *td, struct kinfo_proc *kp, int preferthread)
 		strlcpy(kp->ki_wmesg, td->td_wmesg, sizeof(kp->ki_wmesg));
 	else
 		bzero(kp->ki_wmesg, sizeof(kp->ki_wmesg));
-	strlcpy(kp->ki_tdname, td->td_name, sizeof(kp->ki_tdname));
+	if (strlcpy(kp->ki_tdname, td->td_name, sizeof(kp->ki_tdname)) >=
+	    sizeof(kp->ki_tdname)) {
+		strlcpy(kp->ki_moretdname,
+		    td->td_name + sizeof(kp->ki_tdname) - 1,
+		    sizeof(kp->ki_moretdname));
+	} else {
+		bzero(kp->ki_moretdname, sizeof(kp->ki_moretdname));
+	}
 	if (TD_ON_LOCK(td)) {
 		kp->ki_kiflag |= KI_LOCKBLOCK;
 		strlcpy(kp->ki_lockname, td->td_lockname,
@@ -1277,6 +1297,7 @@ freebsd32_kinfo_proc_out(const struct kinfo_proc *ki, struct kinfo_proc32 *ki32)
 	bcopy(ki->ki_comm, ki32->ki_comm, COMMLEN + 1);
 	bcopy(ki->ki_emul, ki32->ki_emul, KI_EMULNAMELEN + 1);
 	bcopy(ki->ki_loginclass, ki32->ki_loginclass, LOGINCLASSLEN + 1);
+	bcopy(ki->ki_moretdname, ki32->ki_moretdname, MAXCOMLEN - TDNAMLEN + 1);
 	CP(*ki, *ki32, ki_tracer);
 	CP(*ki, *ki32, ki_flag2);
 	CP(*ki, *ki32, ki_fibnum);
@@ -1628,7 +1649,7 @@ get_proc_vector32(struct thread *td, struct proc *p, char ***proc_vectorp,
 	int i, error;
 
 	error = 0;
-	if (proc_readmem(td, p, (vm_offset_t)p->p_psstrings, &pss,
+	if (proc_readmem(td, p, (vm_offset_t)p->p_sysent->sv_psstrings, &pss,
 	    sizeof(pss)) != sizeof(pss))
 		return (ENOMEM);
 	switch (type) {
@@ -1704,7 +1725,7 @@ get_proc_vector(struct thread *td, struct proc *p, char ***proc_vectorp,
 	if (SV_PROC_FLAG(p, SV_ILP32) != 0)
 		return (get_proc_vector32(td, p, proc_vectorp, vsizep, type));
 #endif
-	if (proc_readmem(td, p, (vm_offset_t)p->p_psstrings, &pss,
+	if (proc_readmem(td, p, (vm_offset_t)p->p_sysent->sv_psstrings, &pss,
 	    sizeof(pss)) != sizeof(pss))
 		return (ENOMEM);
 	switch (type) {
@@ -2253,7 +2274,7 @@ kern_proc_vmmap_resident(vm_map_t map, vm_map_entry_t entry,
 		if (m_adv != NULL) {
 			m = m_adv;
 		} else {
-			pi_adv = OFF_TO_IDX(entry->end - addr);
+			pi_adv = atop(entry->end - addr);
 			pindex = pi;
 			for (tobj = obj;; tobj = tobj->backing_object) {
 				m = vm_page_find_least(tobj, pindex);
@@ -2277,7 +2298,7 @@ kern_proc_vmmap_resident(vm_map_t map, vm_map_entry_t entry,
 		    (pmap_mincore(map->pmap, addr, &locked_pa) &
 		    MINCORE_SUPER) != 0) {
 			kve->kve_flags |= KVME_FLAG_SUPER;
-			pi_adv = OFF_TO_IDX(pagesizes[1]);
+			pi_adv = atop(pagesizes[1]);
 		} else {
 			/*
 			 * We do not test the found page on validity.
@@ -2725,13 +2746,13 @@ sysctl_kern_proc_ps_strings(SYSCTL_HANDLER_ARGS)
 		 * process.
 		 */
 		ps_strings32 = SV_PROC_FLAG(p, SV_ILP32) != 0 ?
-		    PTROUT(p->p_psstrings) : 0;
+		    PTROUT(p->p_sysent->sv_psstrings) : 0;
 		PROC_UNLOCK(p);
 		error = SYSCTL_OUT(req, &ps_strings32, sizeof(ps_strings32));
 		return (error);
 	}
 #endif
-	ps_strings = p->p_psstrings;
+	ps_strings = p->p_sysent->sv_psstrings;
 	PROC_UNLOCK(p);
 	error = SYSCTL_OUT(req, &ps_strings, sizeof(ps_strings));
 	return (error);
@@ -2835,13 +2856,13 @@ sysctl_kern_proc_sigtramp(SYSCTL_HANDLER_ARGS)
 		bzero(&kst32, sizeof(kst32));
 		if (SV_PROC_FLAG(p, SV_ILP32)) {
 			if (sv->sv_sigcode_base != 0) {
-				kst32.ksigtramp_start = p->p_sigcode_base;
-				kst32.ksigtramp_end = p->p_sigcode_base +
+				kst32.ksigtramp_start = sv->sv_sigcode_base;
+				kst32.ksigtramp_end = sv->sv_sigcode_base +
 				    *sv->sv_szsigcode;
 			} else {
-				kst32.ksigtramp_start = p->p_psstrings -
+				kst32.ksigtramp_start = sv->sv_psstrings -
 				    *sv->sv_szsigcode;
-				kst32.ksigtramp_end = p->p_psstrings;
+				kst32.ksigtramp_end = sv->sv_psstrings;
 			}
 		}
 		PROC_UNLOCK(p);
@@ -2851,13 +2872,13 @@ sysctl_kern_proc_sigtramp(SYSCTL_HANDLER_ARGS)
 #endif
 	bzero(&kst, sizeof(kst));
 	if (sv->sv_sigcode_base != 0) {
-		kst.ksigtramp_start = (char *)p->p_sigcode_base;
-		kst.ksigtramp_end = (char *)p->p_sigcode_base +
+		kst.ksigtramp_start = (char *)sv->sv_sigcode_base;
+		kst.ksigtramp_end = (char *)sv->sv_sigcode_base +
 		    *sv->sv_szsigcode;
 	} else {
-		kst.ksigtramp_start = (char *)p->p_psstrings -
+		kst.ksigtramp_start = (char *)sv->sv_psstrings -
 		    *sv->sv_szsigcode;
-		kst.ksigtramp_end = (char *)p->p_psstrings;
+		kst.ksigtramp_end = (char *)sv->sv_psstrings;
 	}
 	PROC_UNLOCK(p);
 	error = SYSCTL_OUT(req, &kst, sizeof(kst));

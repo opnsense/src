@@ -24,7 +24,6 @@
  * SUCH DAMAGE.
  */
 
-#define	_ARM32_BUS_DMA_PRIVATE
 #include "opt_platform.h"
 
 #include <sys/cdefs.h>
@@ -61,24 +60,6 @@ __FBSDID("$FreeBSD$");
 #define	 PMC_SCRATCH0_MODE_MASK		(PMC_SCRATCH0_MODE_RECOVERY | \
 					PMC_SCRATCH0_MODE_BOOTLOADER | \
 					PMC_SCRATCH0_MODE_RCM)
-
-struct fdt_fixup_entry fdt_fixup_table[] = {
-	{ NULL, NULL }
-};
-
-struct arm32_dma_range *
-bus_dma_get_range(void)
-{
-
-	return (NULL);
-}
-
-int
-bus_dma_get_range_nb(void)
-{
-
-	return (0);
-}
 
 static vm_offset_t
 tegra124_lastaddr(platform_t plat)
@@ -139,18 +120,18 @@ cpu_reset(void)
 
 /*
  * Early putc routine for EARLY_PRINTF support.  To use, add to kernel config:
- *   option SOCDEV_PA=0x02000000
- *   option SOCDEV_VA=0x02000000
+ *   option SOCDEV_PA=0x70000000
+ *   option SOCDEV_VA=0x70000000
  *   option EARLY_PRINTF
  */
-#if 0
+#ifdef EARLY_PRINTF
 static void
 tegra124_early_putc(int c)
 {
-	volatile uint32_t * UART_STAT_REG = (uint32_t *)0x02020098;
-	volatile uint32_t * UART_TX_REG   = (uint32_t *)0x02020040;
-	const uint32_t      UART_TXRDY    = (1 << 3);
 
+	volatile uint32_t * UART_STAT_REG = (uint32_t *)(0x70006314);
+	volatile uint32_t * UART_TX_REG   = (uint32_t *)(0x70006300);
+	const uint32_t      UART_TXRDY    = (1 << 6);
 	while ((*UART_STAT_REG & UART_TXRDY) == 0)
 		continue;
 	*UART_TX_REG = c;
@@ -170,4 +151,4 @@ static platform_method_t tegra124_methods[] = {
 	PLATFORMMETHOD_END,
 };
 
-FDT_PLATFORM_DEF(tegra124, "Nvidia Jetson-TK1", 0, "nvidia,jetson-tk1", 0);
+FDT_PLATFORM_DEF(tegra124, "Nvidia Jetson-TK1", 0, "nvidia,jetson-tk1", 120);

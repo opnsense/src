@@ -34,7 +34,6 @@
 #include <machine/asmacros.h>
 #include <machine/armreg.h>
 #include <machine/sysreg.h>
-#include <machine/cpuconf.h>
 #include <machine/pte-v6.h>
 
 __FBSDID("$FreeBSD$");
@@ -438,9 +437,6 @@ boot_pt1:
 
 	.text
 	.align	2
-
-.Lcpufuncs:
-	.word	_C_LABEL(cpufuncs)
 
 #if defined(SMP)
 

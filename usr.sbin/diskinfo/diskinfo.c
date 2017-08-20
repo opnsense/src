@@ -40,27 +40,33 @@
 #include <libutil.h>
 #include <paths.h>
 #include <err.h>
+#include <sys/aio.h>
 #include <sys/disk.h>
 #include <sys/param.h>
+#include <sys/stat.h>
 #include <sys/time.h>
+
+#define	NAIO	128
 
 static void
 usage(void)
 {
-	fprintf(stderr, "usage: diskinfo [-ctv] disk ...\n");
+	fprintf(stderr, "usage: diskinfo [-citv] disk ...\n");
 	exit (1);
 }
 
-static int opt_c, opt_t, opt_v;
+static int opt_c, opt_i, opt_t, opt_v;
 
 static void speeddisk(int fd, off_t mediasize, u_int sectorsize);
 static void commandtime(int fd, off_t mediasize, u_int sectorsize);
+static void iopsbench(int fd, off_t mediasize, u_int sectorsize);
 static int zonecheck(int fd, uint32_t *zone_mode, char *zone_str,
 		     size_t zone_str_len);
 
 int
 main(int argc, char **argv)
 {
+	struct stat sb;
 	int i, ch, fd, error, exitval = 0;
 	char buf[BUFSIZ], ident[DISK_IDENT_SIZE], physpath[MAXPATHLEN];
 	char zone_desc[64];
@@ -68,10 +74,14 @@ main(int argc, char **argv)
 	u_int	sectorsize, fwsectors, fwheads, zoned = 0;
 	uint32_t zone_mode;
 
-	while ((ch = getopt(argc, argv, "ctv")) != -1) {
+	while ((ch = getopt(argc, argv, "citv")) != -1) {
 		switch (ch) {
 		case 'c':
 			opt_c = 1;
+			opt_v = 1;
+			break;
+		case 'i':
+			opt_i = 1;
 			opt_v = 1;
 			break;
 		case 't':
@@ -92,43 +102,57 @@ main(int argc, char **argv)
 		usage();
 
 	for (i = 0; i < argc; i++) {
-		fd = open(argv[i], O_RDONLY);
+		fd = open(argv[i], O_RDONLY | O_DIRECT);
 		if (fd < 0 && errno == ENOENT && *argv[i] != '/') {
-			sprintf(buf, "%s%s", _PATH_DEV, argv[i]);
+			snprintf(buf, BUFSIZ, "%s%s", _PATH_DEV, argv[i]);
 			fd = open(buf, O_RDONLY);
 		}
 		if (fd < 0) {
 			warn("%s", argv[i]);
+			exit(1);
+		}
+		error = fstat(fd, &sb);
+		if (error != 0) {
+			warn("cannot stat %s", argv[i]);
 			exitval = 1;
 			goto out;
 		}
-		error = ioctl(fd, DIOCGMEDIASIZE, &mediasize);
-		if (error) {
-			warnx("%s: ioctl(DIOCGMEDIASIZE) failed, probably not a disk.", argv[i]);
-			exitval = 1;
-			goto out;
-		}
-		error = ioctl(fd, DIOCGSECTORSIZE, &sectorsize);
-		if (error) {
-			warnx("%s: ioctl(DIOCGSECTORSIZE) failed, probably not a disk.", argv[i]);
-			exitval = 1;
-			goto out;
-		}
-		error = ioctl(fd, DIOCGFWSECTORS, &fwsectors);
-		if (error)
+		if (S_ISREG(sb.st_mode)) {
+			mediasize = sb.st_size;
+			sectorsize = S_BLKSIZE;
 			fwsectors = 0;
-		error = ioctl(fd, DIOCGFWHEADS, &fwheads);
-		if (error)
 			fwheads = 0;
-		error = ioctl(fd, DIOCGSTRIPESIZE, &stripesize);
-		if (error)
-			stripesize = 0;
-		error = ioctl(fd, DIOCGSTRIPEOFFSET, &stripeoffset);
-		if (error)
+			stripesize = sb.st_blksize;
 			stripeoffset = 0;
-		error = zonecheck(fd, &zone_mode, zone_desc, sizeof(zone_desc));
-		if (error == 0)
-			zoned = 1;
+		} else {
+			error = ioctl(fd, DIOCGMEDIASIZE, &mediasize);
+			if (error) {
+				warnx("%s: ioctl(DIOCGMEDIASIZE) failed, probably not a disk.", argv[i]);
+				exitval = 1;
+				goto out;
+			}
+			error = ioctl(fd, DIOCGSECTORSIZE, &sectorsize);
+			if (error) {
+				warnx("%s: ioctl(DIOCGSECTORSIZE) failed, probably not a disk.", argv[i]);
+				exitval = 1;
+				goto out;
+			}
+			error = ioctl(fd, DIOCGFWSECTORS, &fwsectors);
+			if (error)
+				fwsectors = 0;
+			error = ioctl(fd, DIOCGFWHEADS, &fwheads);
+			if (error)
+				fwheads = 0;
+			error = ioctl(fd, DIOCGSTRIPESIZE, &stripesize);
+			if (error)
+				stripesize = 0;
+			error = ioctl(fd, DIOCGSTRIPEOFFSET, &stripeoffset);
+			if (error)
+				stripeoffset = 0;
+			error = zonecheck(fd, &zone_mode, zone_desc, sizeof(zone_desc));
+			if (error == 0)
+				zoned = 1;
+		}
 		if (!opt_v) {
 			printf("%s", argv[i]);
 			printf("\t%u", sectorsize);
@@ -171,6 +195,8 @@ main(int argc, char **argv)
 			commandtime(fd, mediasize, sectorsize);
 		if (opt_t)
 			speeddisk(fd, mediasize, sectorsize);
+		if (opt_i)
+			iopsbench(fd, mediasize, sectorsize);
 out:
 		close(fd);
 	}
@@ -186,7 +212,8 @@ rdsect(int fd, off_t blockno, u_int sectorsize)
 {
 	int error;
 
-	lseek(fd, (off_t)blockno * sectorsize, SEEK_SET);
+	if (lseek(fd, (off_t)blockno * sectorsize, SEEK_SET) == -1)
+		err(1, "lseek");
 	error = read(fd, sector, sectorsize);
 	if (error == -1)
 		err(1, "read");
@@ -220,14 +247,24 @@ T0(void)
 	gettimeofday(&tv1, NULL);
 }
 
-static void
-TN(int count)
+static double
+delta_t(void)
 {
 	double dt;
 
 	gettimeofday(&tv2, NULL);
 	dt = (tv2.tv_usec - tv1.tv_usec) / 1e6;
 	dt += (tv2.tv_sec - tv1.tv_sec);
+
+	return (dt);
+}
+
+static void
+TN(int count)
+{
+	double dt;
+
+	dt = delta_t();
 	printf("%5d iter in %10.6f sec = %8.3f msec\n",
 		count, dt, dt * 1000.0 / count);
 }
@@ -237,10 +274,18 @@ TR(double count)
 {
 	double dt;
 
-	gettimeofday(&tv2, NULL);
-	dt = (tv2.tv_usec - tv1.tv_usec) / 1e6;
-	dt += (tv2.tv_sec - tv1.tv_sec);
+	dt = delta_t();
 	printf("%8.0f kbytes in %10.6f sec = %8.0f kbytes/sec\n",
+		count, dt, count / dt);
+}
+
+static void
+TI(double count)
+{
+	double dt;
+
+	dt = delta_t();
+	printf("%8.0f ops in  %10.6f sec = %8.0f IOPS\n",
 		count, dt, count / dt);
 }
 
@@ -251,6 +296,9 @@ speeddisk(int fd, off_t mediasize, u_int sectorsize)
 	off_t b0, b1, sectorcount, step;
 
 	sectorcount = mediasize / sectorsize;
+	if (sectorcount <= 0)
+		return;		/* Can't test devices with no sectors */
+
 	step = 1ULL << (flsll(sectorcount / (4 * 200)) - 1);
 	if (step > 16384)
 		step = 16384;
@@ -330,7 +378,7 @@ speeddisk(int fd, off_t mediasize, u_int sectorsize)
 	}
 	TN(2048);
 
-	printf("Transfer rates:\n");
+	printf("\nTransfer rates:\n");
 	printf("\toutside:     ");
 	rdsect(fd, 0, sectorsize);
 	T0();
@@ -373,9 +421,7 @@ commandtime(int fd, off_t mediasize, u_int sectorsize)
 	T0();
 	for (i = 0; i < 10; i++)
 		rdmega(fd);
-	gettimeofday(&tv2, NULL);
-	dtmega = (tv2.tv_usec - tv1.tv_usec) / 1e6;
-	dtmega += (tv2.tv_sec - tv1.tv_sec);
+	dtmega = delta_t();
 
 	printf("\ttime to read 10MB block    %10.6f sec\t= %8.3f msec/sector\n",
 		dtmega, dtmega*100/2048);
@@ -384,9 +430,7 @@ commandtime(int fd, off_t mediasize, u_int sectorsize)
 	T0();
 	for (i = 0; i < 20480; i++)
 		rdsect(fd, 0, sectorsize);
-	gettimeofday(&tv2, NULL);
-	dtsector = (tv2.tv_usec - tv1.tv_usec) / 1e6;
-	dtsector += (tv2.tv_sec - tv1.tv_sec);
+	dtsector = delta_t();
 
 	printf("\ttime to read 20480 sectors %10.6f sec\t= %8.3f msec/sector\n",
 		dtsector, dtsector*100/2048);
@@ -395,6 +439,91 @@ commandtime(int fd, off_t mediasize, u_int sectorsize)
 
 	printf("\n");
 	return;
+}
+
+static void
+iops(int fd, off_t mediasize, u_int sectorsize)
+{
+	struct aiocb aios[NAIO], *aiop;
+	ssize_t ret;
+	off_t sectorcount;
+	int error, i, queued, completed;
+
+	sectorcount = mediasize / sectorsize;
+
+	for (i = 0; i < NAIO; i++) {
+		aiop = &(aios[i]);
+		bzero(aiop, sizeof(*aiop));
+		aiop->aio_buf = malloc(sectorsize);
+		if (aiop->aio_buf == NULL)
+			err(1, "malloc");
+	}
+
+	T0();
+	for (i = 0; i < NAIO; i++) {
+		aiop = &(aios[i]);
+
+		aiop->aio_fildes = fd;
+		aiop->aio_offset = (random() % (sectorcount)) * sectorsize;
+		aiop->aio_nbytes = sectorsize;
+
+		error = aio_read(aiop);
+		if (error != 0)
+			err(1, "aio_read");
+	}
+
+	queued = i;
+	completed = 0;
+
+	for (;;) {
+		ret = aio_waitcomplete(&aiop, NULL);
+		if (ret < 0)
+			err(1, "aio_waitcomplete");
+		if (ret != (ssize_t)sectorsize)
+			errx(1, "short read");
+
+		completed++;
+
+		if (delta_t() < 3.0) {
+			aiop->aio_fildes = fd;
+			aiop->aio_offset = (random() % (sectorcount)) * sectorsize;
+			aiop->aio_nbytes = sectorsize;
+
+			error = aio_read(aiop);
+			if (error != 0)
+				err(1, "aio_read");
+
+			queued++;
+		} else if (completed == queued) {
+			break;
+		}
+	}
+
+	TI(completed);
+
+	return;
+}
+
+static void
+iopsbench(int fd, off_t mediasize, u_int sectorsize)
+{
+	printf("Asynchronous random reads:\n");
+
+	printf("\tsectorsize:  ");
+	iops(fd, mediasize, sectorsize);
+
+	if (sectorsize != 4096) {
+		printf("\t4 kbytes:    ");
+		iops(fd, mediasize, 4096);
+	}
+
+	printf("\t32 kbytes:   ");
+	iops(fd, mediasize, 32 * 1024);
+
+	printf("\t128 kbytes:  ");
+	iops(fd, mediasize, 128 * 1024);
+
+	printf("\n");
 }
 
 static int

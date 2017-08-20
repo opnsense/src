@@ -347,6 +347,7 @@ xhci_start_controller(struct xhci_softc *sc)
 	struct usb_page_search buf_res;
 	struct xhci_hw_root *phwr;
 	struct xhci_dev_ctx_addr *pdctxa;
+	usb_error_t err;
 	uint64_t addr;
 	uint32_t temp;
 	uint16_t i;
@@ -358,22 +359,9 @@ xhci_start_controller(struct xhci_softc *sc)
 	sc->sc_command_ccs = 1;
 	sc->sc_command_idx = 0;
 
-	/* Reset controller */
-	XWRITE4(sc, oper, XHCI_USBCMD, XHCI_CMD_HCRST);
-
-	for (i = 0; i != 100; i++) {
-		usb_pause_mtx(NULL, hz / 100);
-		temp = (XREAD4(sc, oper, XHCI_USBCMD) & XHCI_CMD_HCRST) |
-		    (XREAD4(sc, oper, XHCI_USBSTS) & XHCI_STS_CNR);
-		if (!temp)
-			break;
-	}
-
-	if (temp) {
-		device_printf(sc->sc_bus.parent, "Controller "
-		    "reset timeout.\n");
-		return (USB_ERR_IOERROR);
-	}
+	err = xhci_reset_controller(sc);
+	if (err)
+		return (err);
 
 	/* set up number of device slots */
 	DPRINTF("CONFIG=0x%08x -> 0x%08x\n",
@@ -515,6 +503,33 @@ xhci_halt_controller(struct xhci_softc *sc)
 
 	if (!temp) {
 		device_printf(sc->sc_bus.parent, "Controller halt timeout.\n");
+		return (USB_ERR_IOERROR);
+	}
+	return (0);
+}
+
+usb_error_t
+xhci_reset_controller(struct xhci_softc *sc)
+{
+	uint32_t temp = 0;
+	uint16_t i;
+
+	DPRINTF("\n");
+
+	/* Reset controller */
+	XWRITE4(sc, oper, XHCI_USBCMD, XHCI_CMD_HCRST);
+
+	for (i = 0; i != 100; i++) {
+		usb_pause_mtx(NULL, hz / 100);
+		temp = (XREAD4(sc, oper, XHCI_USBCMD) & XHCI_CMD_HCRST) |
+		    (XREAD4(sc, oper, XHCI_USBSTS) & XHCI_STS_CNR);
+		if (!temp)
+			break;
+	}
+
+	if (temp) {
+		device_printf(sc->sc_bus.parent, "Controller "
+		    "reset timeout.\n");
 		return (USB_ERR_IOERROR);
 	}
 	return (0);
@@ -671,10 +686,12 @@ xhci_set_hw_power_sleep(struct usb_bus *bus, uint32_t state)
 	case USB_HW_POWER_SUSPEND:
 		DPRINTF("Stopping the XHCI\n");
 		xhci_halt_controller(sc);
+		xhci_reset_controller(sc);
 		break;
 	case USB_HW_POWER_SHUTDOWN:
 		DPRINTF("Stopping the XHCI\n");
 		xhci_halt_controller(sc);
+		xhci_reset_controller(sc);
 		break;
 	case USB_HW_POWER_RESUME:
 		DPRINTF("Starting the XHCI\n");
@@ -2221,7 +2238,11 @@ xhci_setup_generic_chain(struct usb_xfer *xfer)
 		 * Send a DATA1 message and invert the current
 		 * endpoint direction.
 		 */
+#ifdef XHCI_STEP_STATUS_STAGE
 		temp.step_td = (xfer->nframes != 0);
+#else
+		temp.step_td = 0;
+#endif
 		temp.direction = UE_GET_DIR(xfer->endpointno) ^ UE_DIR_IN;
 		temp.len = 0;
 		temp.pc = NULL;
@@ -3867,12 +3888,10 @@ xhci_configure_reset_endpoint(struct usb_xfer *xfer)
 
 	xhci_configure_mask(udev, (1U << epno) | 1U, 0);
 
-	err = xhci_cmd_evaluate_ctx(sc, buf_inp.physaddr, index);
-
-	if (err != 0)
-		DPRINTF("Could not configure endpoint %u\n", epno);
-
-	err = xhci_cmd_configure_ep(sc, buf_inp.physaddr, 0, index);
+	if (epno > 1)
+		err = xhci_cmd_configure_ep(sc, buf_inp.physaddr, 0, index);
+	else
+		err = xhci_cmd_evaluate_ctx(sc, buf_inp.physaddr, index);
 
 	if (err != 0)
 		DPRINTF("Could not configure endpoint %u\n", epno);
@@ -4255,6 +4274,10 @@ xhci_device_state_change(struct usb_device *udev)
 
 		sc->sc_hw.devs[index].state = XHCI_ST_ADDRESSED;
 
+		/* set configure mask to slot only */
+		xhci_configure_mask(udev, 1, 0);
+
+		/* deconfigure all endpoints, except EP0 */
 		err = xhci_cmd_configure_ep(sc, 0, 1, index);
 
 		if (err) {

@@ -89,7 +89,7 @@
 				    obreak_args int
 18	AUE_GETFSSTAT	COMPAT4	{ int freebsd32_getfsstat( \
 				    struct statfs32 *buf, long bufsize, \
-				    int flags); }
+				    int mode); }
 19	AUE_LSEEK	COMPAT	{ int freebsd32_lseek(int fd, int offset, \
 				    int whence); }
 20	AUE_GETPID	NOPROTO	{ pid_t getpid(void); }
@@ -462,7 +462,10 @@
 				    struct ffclock_estimate *cest); }
 243	AUE_NULL	NOPROTO	{ int ffclock_getestimate( \
 				    struct ffclock_estimate *cest); }
-244	AUE_NULL	UNIMPL	nosys
+244	AUE_NULL	STD	{ int freebsd32_clock_nanosleep( \
+				    clockid_t clock_id, int flags, \
+				    const struct timespec32 *rqtp, \
+				    struct timespec32 *rmtp); }
 245	AUE_NULL	UNIMPL	nosys
 246	AUE_NULL	UNIMPL	nosys
 247	AUE_NULL	STD	{ int freebsd32_clock_getcpuclockid2(\
@@ -712,7 +715,7 @@
 				    off_t *sbytes, int flags); }
 394	AUE_NULL	UNIMPL	mac_syscall
 395	AUE_GETFSSTAT	NOPROTO	{ int getfsstat(struct statfs *buf, \
-				    long bufsize, int flags); }
+				    long bufsize, int mode); }
 396	AUE_STATFS	NOPROTO	{ int statfs(char *path, \
 				    struct statfs *buf); }
 397	AUE_FSTATFS	NOPROTO	{ int fstatfs(int fd, struct statfs *buf); }
@@ -817,8 +820,8 @@
 455	AUE_NULL	STD	{ int freebsd32_thr_new(	\
 				    struct thr_param32 *param,	\
 				    int param_size); }
-456	AUE_NULL	NOPROTO	{ int sigqueue(pid_t pid, int signum, \
-				    void *value); }
+456	AUE_NULL	STD	{ int freebsd32_sigqueue(pid_t pid, \
+				    int signum, int value); }
 457	AUE_NULL	NOSTD	{ int freebsd32_kmq_open( \
 				    const char *path, int flags, mode_t mode, \
 				    const struct mq_attr32 *attr); }
@@ -975,7 +978,7 @@
 514	AUE_NULL	OBSOL	cap_new
 515	AUE_CAP_RIGHTS_GET	NOPROTO	{ int __cap_rights_get(int version, \
 				    int fd, cap_rights_t *rightsp); }
-516	AUE_CAP_ENTER	STD	{ int freebsd32_cap_enter(void); }
+516	AUE_CAP_ENTER	NOPROTO	{ int cap_enter(void); }
 517	AUE_CAP_GETMODE	NOPROTO	{ int cap_getmode(u_int *modep); }
 518	AUE_PDFORK	NOPROTO	{ int pdfork(int *fdp, int flags); }
 519	AUE_PDKILL	NOPROTO	{ int pdkill(int fd, int signum); }
@@ -1081,3 +1084,4 @@
 549	AUE_NULL	NOPROTO	{ int numa_setaffinity(cpuwhich_t which, \
 				    id_t id, \
 				    const struct vm_domain_policy *policy); }
+550	AUE_FSYNC	NOPROTO	{ int fdatasync(int fd); }

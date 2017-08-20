@@ -42,6 +42,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/socket.h>
+#include <sys/sysctl.h>
 
 #include <net/if.h>
 #include <net/if_var.h>
@@ -55,6 +56,7 @@ __FBSDID("$FreeBSD$");
 #include <netinet/ip_var.h>
 #include <netinet/tcp.h>
 #include <netinet/tcp_lro.h>
+#include <netinet/tcp_var.h>
 
 #include <netinet6/ip6_var.h>
 
@@ -68,6 +70,14 @@ static MALLOC_DEFINE(M_LRO, "LRO", "LRO control structures");
 #endif
 
 static void	tcp_lro_rx_done(struct lro_ctrl *lc);
+
+SYSCTL_NODE(_net_inet_tcp, OID_AUTO, lro,  CTLFLAG_RW | CTLFLAG_MPSAFE, 0,
+    "TCP LRO");
+
+static unsigned	tcp_lro_entries = TCP_LRO_ENTRIES;
+SYSCTL_UINT(_net_inet_tcp_lro, OID_AUTO, entries,
+    CTLFLAG_RDTUN | CTLFLAG_MPSAFE, &tcp_lro_entries, 0,
+    "default number of LRO entries");
 
 static __inline void
 tcp_lro_active_insert(struct lro_ctrl *lc, struct lro_entry *le)
@@ -86,7 +96,7 @@ tcp_lro_active_remove(struct lro_entry *le)
 int
 tcp_lro_init(struct lro_ctrl *lc)
 {
-	return (tcp_lro_init_args(lc, NULL, TCP_LRO_ENTRIES, 0));
+	return (tcp_lro_init_args(lc, NULL, tcp_lro_entries, 0));
 }
 
 int
@@ -100,7 +110,6 @@ tcp_lro_init_args(struct lro_ctrl *lc, struct ifnet *ifp,
 	lc->lro_bad_csum = 0;
 	lc->lro_queued = 0;
 	lc->lro_flushed = 0;
-	lc->lro_cnt = 0;
 	lc->lro_mbuf_count = 0;
 	lc->lro_mbuf_max = lro_mbufs;
 	lc->lro_cnt = lro_entries;
@@ -578,6 +587,7 @@ tcp_lro_rx(struct lro_ctrl *lc, struct mbuf *m, uint32_t csum)
 	tcp_seq seq;
 	int error, ip_len, l;
 	uint16_t eh_type, tcp_data_len;
+	int force_flush = 0;
 
 	/* We expect a contiguous header [eh, ip, tcp]. */
 
@@ -644,8 +654,15 @@ tcp_lro_rx(struct lro_ctrl *lc, struct mbuf *m, uint32_t csum)
 	 * Check TCP header constraints.
 	 */
 	/* Ensure no bits set besides ACK or PSH. */
-	if ((th->th_flags & ~(TH_ACK | TH_PUSH)) != 0)
-		return (TCP_LRO_CANNOT);
+	if ((th->th_flags & ~(TH_ACK | TH_PUSH)) != 0) {
+		if (th->th_flags & TH_SYN)
+			return (TCP_LRO_CANNOT);
+		/*
+		 * Make sure that previously seen segements/ACKs are delivered
+		 * before this segement, e.g. FIN.
+		 */
+		force_flush = 1;
+	}
 
 	/* XXX-BZ We lose a ACK|PUSH flag concatenating multiple segments. */
 	/* XXX-BZ Ideally we'd flush on PUSH? */
@@ -661,8 +678,13 @@ tcp_lro_rx(struct lro_ctrl *lc, struct mbuf *m, uint32_t csum)
 	ts_ptr = (uint32_t *)(th + 1);
 	if (l != 0 && (__predict_false(l != TCPOLEN_TSTAMP_APPA) ||
 	    (*ts_ptr != ntohl(TCPOPT_NOP<<24|TCPOPT_NOP<<16|
-	    TCPOPT_TIMESTAMP<<8|TCPOLEN_TIMESTAMP))))
-		return (TCP_LRO_CANNOT);
+	    TCPOPT_TIMESTAMP<<8|TCPOLEN_TIMESTAMP)))) {
+		/*
+		 * Make sure that previously seen segements/ACKs are delivered
+		 * before this segement.
+		 */
+		force_flush = 1;
+	}
 
 	/* If the driver did not pass in the checksum, set it now. */
 	if (csum == 0x0000)
@@ -694,6 +716,13 @@ tcp_lro_rx(struct lro_ctrl *lc, struct mbuf *m, uint32_t csum)
 				continue;
 			break;
 #endif
+		}
+
+		if (force_flush) {
+			/* Timestamps mismatch; this is a FIN, etc */
+			tcp_lro_active_remove(le);
+			tcp_lro_flush(lc, le);
+			return (TCP_LRO_CANNOT);
 		}
 
 		/* Flush now if appending will result in overflow. */
@@ -770,6 +799,14 @@ tcp_lro_rx(struct lro_ctrl *lc, struct mbuf *m, uint32_t csum)
 			getmicrotime(&le->mtime);
 
 		return (0);
+	}
+
+	if (force_flush) {
+		/*
+		 * Nothing to flush, but this segment can not be further
+		 * aggregated/delayed.
+		 */
+		return (TCP_LRO_CANNOT);
 	}
 
 	/* Try to find an empty slot. */
@@ -851,17 +888,11 @@ tcp_lro_queue_mbuf(struct lro_ctrl *lc, struct mbuf *mb)
 	/* check if packet is not LRO capable */
 	if (__predict_false(mb->m_pkthdr.csum_flags == 0 ||
 	    (lc->ifp->if_capenable & IFCAP_LRO) == 0)) {
-		lc->lro_flushed++;
-		lc->lro_queued++;
 
 		/* input packet to network layer */
 		(*lc->ifp->if_input) (lc->ifp, mb);
 		return;
 	}
-
-	/* check if array is full */
-	if (__predict_false(lc->lro_mbuf_count == lc->lro_mbuf_max))
-		tcp_lro_flush_all(lc);
 
 	/* create sequence number */
 	lc->lro_mbuf_data[lc->lro_mbuf_count].seq =
@@ -870,7 +901,11 @@ tcp_lro_queue_mbuf(struct lro_ctrl *lc, struct mbuf *mb)
 	    ((uint64_t)lc->lro_mbuf_count);
 
 	/* enter mbuf */
-	lc->lro_mbuf_data[lc->lro_mbuf_count++].mb = mb;
+	lc->lro_mbuf_data[lc->lro_mbuf_count].mb = mb;
+
+	/* flush if array is full */
+	if (__predict_false(++lc->lro_mbuf_count == lc->lro_mbuf_max))
+		tcp_lro_flush_all(lc);
 }
 
 /* end */

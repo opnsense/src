@@ -43,7 +43,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/watchdog.h>
 
 #include <machine/bus.h>
-#include <machine/cpufunc.h>
 
 #include <dev/fdt/fdt_common.h>
 #include <dev/ofw/ofw_bus.h>
@@ -291,7 +290,7 @@ EARLY_DRIVER_MODULE(wdt, simplebus, aml8726_wdt_driver, aml8726_wdt_devclass,
     0, 0, BUS_PASS_INTERRUPT + BUS_PASS_ORDER_LATE);
 
 void
-cpu_reset()
+cpu_reset(void)
 {
 
 	/* Watchdog has not yet been initialized */

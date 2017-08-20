@@ -3,9 +3,9 @@
 # Compile netmap as a module, useful if you want a netmap bridge
 # or loadable drivers.
 
-.PATH: ${.CURDIR}/../../dev/netmap
-.PATH.h: ${.CURDIR}/../../net
-CFLAGS += -I${.CURDIR}/../../
+.PATH: ${SRCTOP}/sys/dev/netmap
+.PATH.h: ${SRCTOP}/sys/net
+CFLAGS += -I${SRCTOP}/sys
 KMOD	= netmap
 SRCS	= device_if.h bus_if.h opt_netmap.h
 SRCS	+= netmap.c netmap.h netmap_kern.h
@@ -17,6 +17,5 @@ SRCS	+= netmap_freebsd.c
 SRCS	+= netmap_offloadings.c
 SRCS	+= netmap_pipe.c
 SRCS	+= netmap_monitor.c
-SRCS	+= opt_inet.h opt_inet6.h
 
 .include <bsd.kmod.mk>

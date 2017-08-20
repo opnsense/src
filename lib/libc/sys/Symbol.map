@@ -398,6 +398,11 @@ FBSD_1.4 {
 	recvmmsg;
 };
 
+FBSD_1.5 {
+	clock_nanosleep;
+	fdatasync;
+};
+
 FBSDprivate_1.0 {
 	___acl_aclcheck_fd;
 	__sys___acl_aclcheck_fd;
@@ -507,6 +512,7 @@ FBSDprivate_1.0 {
 	__sys_clock_getres;
 	_clock_gettime;
 	__sys_clock_gettime;
+	__sys_clock_nanosleep;
 	_clock_settime;
 	__sys_clock_settime;
 	_close;
@@ -588,6 +594,8 @@ FBSDprivate_1.0 {
 	__sys_fstatfs;
 	_fsync;
 	__sys_fsync;
+	_fdatasync;
+	__sys_fdatasync;
 	_futimes;
 	__sys_futimes;
 	_getaudit;

@@ -47,7 +47,7 @@
 
 #include "_elftc.h"
 
-ELFTC_VCSID("$Id: readelf.c 3469 2016-05-15 23:16:09Z emaste $");
+ELFTC_VCSID("$Id: readelf.c 3519 2017-04-09 23:15:58Z kaiwang27 $");
 
 /* Backwards compatability for older FreeBSD releases. */
 #ifndef	STB_GNU_UNIQUE
@@ -296,6 +296,7 @@ static void dump_elf(struct readelf *re);
 static void dump_dyn_val(struct readelf *re, GElf_Dyn *dyn, uint32_t stab);
 static void dump_dynamic(struct readelf *re);
 static void dump_liblist(struct readelf *re);
+static void dump_mips_abiflags(struct readelf *re, struct section *s);
 static void dump_mips_attributes(struct readelf *re, uint8_t *p, uint8_t *pe);
 static void dump_mips_odk_reginfo(struct readelf *re, uint8_t *p, size_t sz);
 static void dump_mips_options(struct readelf *re, struct section *s);
@@ -325,6 +326,7 @@ static const char *dwarf_regname(struct readelf *re, unsigned int num);
 static struct dumpop *find_dumpop(struct readelf *re, size_t si,
     const char *sn, int op, int t);
 static int get_ent_count(struct section *s, int *ent_count);
+static int get_mips_register_size(uint8_t flag);
 static char *get_regoff_str(struct readelf *re, Dwarf_Half reg,
     Dwarf_Addr off);
 static const char *get_string(struct readelf *re, int strtab, size_t off);
@@ -343,7 +345,7 @@ static const char *note_type_openbsd(unsigned int nt);
 static const char *note_type_unknown(unsigned int nt);
 static const char *note_type_xen(unsigned int nt);
 static const char *option_kind(uint8_t kind);
-static const char *phdr_type(unsigned int ptype);
+static const char *phdr_type(unsigned int mach, unsigned int ptype);
 static const char *ppc_abi_fp(uint64_t fp);
 static const char *ppc_abi_vector(uint64_t vec);
 static void readelf_usage(int status);
@@ -440,6 +442,7 @@ elf_osabi(unsigned int abi)
 	case ELFOSABI_OPENVMS: return "OpenVMS";
 	case ELFOSABI_NSK: return "NSK";
 	case ELFOSABI_CLOUDABI: return "CloudABI";
+	case ELFOSABI_ARM_AEABI: return "ARM EABI";
 	case ELFOSABI_ARM: return "ARM";
 	case ELFOSABI_STANDALONE: return "StandAlone";
 	default:
@@ -622,9 +625,23 @@ elf_ver(unsigned int ver)
 }
 
 static const char *
-phdr_type(unsigned int ptype)
+phdr_type(unsigned int mach, unsigned int ptype)
 {
 	static char s_ptype[32];
+
+	if (ptype >= PT_LOPROC && ptype <= PT_HIPROC) {
+		switch (mach) {
+		case EM_ARM:
+			switch (ptype) {
+			case PT_ARM_ARCHEXT: return "ARM_ARCHEXT";
+			case PT_ARM_EXIDX: return "ARM_EXIDX";
+			}
+			break;
+		}
+		snprintf(s_ptype, sizeof(s_ptype), "LOPROC+%#x",
+		    ptype - PT_LOPROC);
+		return (s_ptype);
+	}
 
 	switch (ptype) {
 	case PT_NULL: return "NULL";
@@ -639,10 +656,7 @@ phdr_type(unsigned int ptype)
 	case PT_GNU_STACK: return "GNU_STACK";
 	case PT_GNU_RELRO: return "GNU_RELRO";
 	default:
-		if (ptype >= PT_LOPROC && ptype <= PT_HIPROC)
-			snprintf(s_ptype, sizeof(s_ptype), "LOPROC+%#x",
-			    ptype - PT_LOPROC);
-		else if (ptype >= PT_LOOS && ptype <= PT_HIOS)
+		if (ptype >= PT_LOOS && ptype <= PT_HIOS)
 			snprintf(s_ptype, sizeof(s_ptype), "LOOS+%#x",
 			    ptype - PT_LOOS);
 		else
@@ -659,6 +673,15 @@ section_type(unsigned int mach, unsigned int stype)
 
 	if (stype >= SHT_LOPROC && stype <= SHT_HIPROC) {
 		switch (mach) {
+		case EM_ARM:
+			switch (stype) {
+			case SHT_ARM_EXIDX: return "ARM_EXIDX";
+			case SHT_ARM_PREEMPTMAP: return "ARM_PREEMPTMAP";
+			case SHT_ARM_ATTRIBUTES: return "ARM_ATTRIBUTES";
+			case SHT_ARM_DEBUGOVERLAY: return "ARM_DEBUGOVERLAY";
+			case SHT_ARM_OVERLAYSECTION: return "ARM_OVERLAYSECTION";
+			}
+			break;
 		case EM_X86_64:
 			switch (stype) {
 			case SHT_X86_64_UNWIND: return "X86_64_UNWIND";
@@ -697,6 +720,7 @@ section_type(unsigned int mach, unsigned int stype)
 			case SHT_MIPS_EH_REGION: return "MIPS_EH_REGION";
 			case SHT_MIPS_XLATE_OLD: return "MIPS_XLATE_OLD";
 			case SHT_MIPS_PDR_EXCEPTION: return "MIPS_PDR_EXCEPTION";
+			case SHT_MIPS_ABIFLAGS: return "MIPS_ABIFLAGS";
 			default:
 				break;
 			}
@@ -2091,7 +2115,7 @@ dwarf_reg(unsigned int mach, unsigned int reg)
 static void
 dump_ehdr(struct readelf *re)
 {
-	size_t		 shnum, shstrndx;
+	size_t		 phnum, shnum, shstrndx;
 	int		 i;
 
 	printf("ELF Header:\n");
@@ -2153,7 +2177,13 @@ dump_ehdr(struct readelf *re)
 	    re->ehdr.e_phentsize);
 
 	/* e_phnum. */
-	printf("%-37s%u\n", "  Number of program headers:", re->ehdr.e_phnum);
+	printf("%-37s%u", "  Number of program headers:", re->ehdr.e_phnum);
+	if (re->ehdr.e_phnum == PN_XNUM) {
+		/* Extended program header numbering is in use. */
+		if (elf_getphnum(re->elf, &phnum))
+			printf(" (%zu)", phnum);
+	}
+	putchar('\n');
 
 	/* e_shentsize. */
 	printf("%-37s%u (bytes)\n", "  Size of section headers:",
@@ -2273,9 +2303,10 @@ dump_phdr(struct readelf *re)
 
 #define	PH_HDR	"Type", "Offset", "VirtAddr", "PhysAddr", "FileSiz",	\
 		"MemSiz", "Flg", "Align"
-#define	PH_CT	phdr_type(phdr.p_type), (uintmax_t)phdr.p_offset,	\
-		(uintmax_t)phdr.p_vaddr, (uintmax_t)phdr.p_paddr,	\
-		(uintmax_t)phdr.p_filesz, (uintmax_t)phdr.p_memsz,	\
+#define	PH_CT	phdr_type(re->ehdr.e_machine, phdr.p_type),		\
+		(uintmax_t)phdr.p_offset, (uintmax_t)phdr.p_vaddr,	\
+		(uintmax_t)phdr.p_paddr, (uintmax_t)phdr.p_filesz,	\
+		(uintmax_t)phdr.p_memsz,				\
 		phdr.p_flags & PF_R ? 'R' : ' ',			\
 		phdr.p_flags & PF_W ? 'W' : ' ',			\
 		phdr.p_flags & PF_X ? 'E' : ' ',			\
@@ -2766,6 +2797,8 @@ dump_rel(struct readelf *re, struct section *s, Elf_Data *d)
 	const char *symname;
 	uint64_t symval;
 	int i, len;
+	uint32_t type;
+	uint8_t type2, type3;
 
 	if (s->link >= re->shnum)
 		return;
@@ -2775,8 +2808,8 @@ dump_rel(struct readelf *re, struct section *s, Elf_Data *d)
 		elftc_reloc_type_str(re->ehdr.e_machine,	    \
 		ELF32_R_TYPE(r.r_info)), (uintmax_t)symval, symname
 #define	REL_CT64 (uintmax_t)r.r_offset, (uintmax_t)r.r_info,	    \
-		elftc_reloc_type_str(re->ehdr.e_machine,	    \
-		ELF64_R_TYPE(r.r_info)), (uintmax_t)symval, symname
+		elftc_reloc_type_str(re->ehdr.e_machine, type),	    \
+		(uintmax_t)symval, symname
 
 	printf("\nRelocation section (%s):\n", s->name);
 	if (re->ec == ELFCLASS32)
@@ -2802,12 +2835,37 @@ dump_rel(struct readelf *re, struct section *s, Elf_Data *d)
 			    ELF64_R_TYPE(r.r_info));
 			printf("%8.8jx %8.8jx %-19.19s %8.8jx %s\n", REL_CT32);
 		} else {
+			type = ELF64_R_TYPE(r.r_info);
+			if (re->ehdr.e_machine == EM_MIPS) {
+				type2 = (type >> 8) & 0xFF;
+				type3 = (type >> 16) & 0xFF;
+				type = type & 0xFF;
+			} else {
+				type2 = type3 = 0;
+			}
 			if (re->options & RE_WW)
 				printf("%16.16jx %16.16jx %-24.24s"
 				    " %16.16jx %s\n", REL_CT64);
 			else
 				printf("%12.12jx %12.12jx %-19.19s"
 				    " %16.16jx %s\n", REL_CT64);
+			if (re->ehdr.e_machine == EM_MIPS) {
+				if (re->options & RE_WW) {
+					printf("%32s: %s\n", "Type2",
+					    elftc_reloc_type_str(EM_MIPS,
+					    type2));
+					printf("%32s: %s\n", "Type3",
+					    elftc_reloc_type_str(EM_MIPS,
+					    type3));
+				} else {
+					printf("%24s: %s\n", "Type2",
+					    elftc_reloc_type_str(EM_MIPS,
+					    type2));
+					printf("%24s: %s\n", "Type3",
+					    elftc_reloc_type_str(EM_MIPS,
+					    type3));
+				}
+			}
 		}
 	}
 
@@ -2822,6 +2880,8 @@ dump_rela(struct readelf *re, struct section *s, Elf_Data *d)
 	const char *symname;
 	uint64_t symval;
 	int i, len;
+	uint32_t type;
+	uint8_t type2, type3;
 
 	if (s->link >= re->shnum)
 		return;
@@ -2832,8 +2892,8 @@ dump_rela(struct readelf *re, struct section *s, Elf_Data *d)
 		elftc_reloc_type_str(re->ehdr.e_machine,	    \
 		ELF32_R_TYPE(r.r_info)), (uintmax_t)symval, symname
 #define	RELA_CT64 (uintmax_t)r.r_offset, (uintmax_t)r.r_info,	    \
-		elftc_reloc_type_str(re->ehdr.e_machine,	    \
-		ELF64_R_TYPE(r.r_info)), (uintmax_t)symval, symname
+		elftc_reloc_type_str(re->ehdr.e_machine, type),	    \
+		(uintmax_t)symval, symname
 
 	printf("\nRelocation section with addend (%s):\n", s->name);
 	if (re->ec == ELFCLASS32)
@@ -2860,6 +2920,14 @@ dump_rela(struct readelf *re, struct section *s, Elf_Data *d)
 			printf("%8.8jx %8.8jx %-19.19s %8.8jx %s", RELA_CT32);
 			printf(" + %x\n", (uint32_t) r.r_addend);
 		} else {
+			type = ELF64_R_TYPE(r.r_info);
+			if (re->ehdr.e_machine == EM_MIPS) {
+				type2 = (type >> 8) & 0xFF;
+				type3 = (type >> 16) & 0xFF;
+				type = type & 0xFF;
+			} else {
+				type2 = type3 = 0;
+			}
 			if (re->options & RE_WW)
 				printf("%16.16jx %16.16jx %-24.24s"
 				    " %16.16jx %s", RELA_CT64);
@@ -2867,6 +2935,23 @@ dump_rela(struct readelf *re, struct section *s, Elf_Data *d)
 				printf("%12.12jx %12.12jx %-19.19s"
 				    " %16.16jx %s", RELA_CT64);
 			printf(" + %jx\n", (uintmax_t) r.r_addend);
+			if (re->ehdr.e_machine == EM_MIPS) {
+				if (re->options & RE_WW) {
+					printf("%32s: %s\n", "Type2",
+					    elftc_reloc_type_str(EM_MIPS,
+					    type2));
+					printf("%32s: %s\n", "Type3",
+					    elftc_reloc_type_str(EM_MIPS,
+					    type3));
+				} else {
+					printf("%24s: %s\n", "Type2",
+					    elftc_reloc_type_str(EM_MIPS,
+					    type2));
+					printf("%24s: %s\n", "Type3",
+					    elftc_reloc_type_str(EM_MIPS,
+					    type3));
+				}
+			}
 		}
 	}
 
@@ -4017,33 +4102,109 @@ static void
 dump_mips_specific_info(struct readelf *re)
 {
 	struct section *s;
-	int i, options_found;
+	int i;
 
-	options_found = 0;
 	s = NULL;
 	for (i = 0; (size_t) i < re->shnum; i++) {
 		s = &re->sl[i];
 		if (s->name != NULL && (!strcmp(s->name, ".MIPS.options") ||
 		    (s->type == SHT_MIPS_OPTIONS))) {
 			dump_mips_options(re, s);
-			options_found = 1;
 		}
 	}
 
+	if (s->name != NULL && (!strcmp(s->name, ".MIPS.abiflags") ||
+	    (s->type == SHT_MIPS_ABIFLAGS)))
+		dump_mips_abiflags(re, s);
+
 	/*
-	 * According to SGI mips64 spec, .reginfo should be ignored if
-	 * .MIPS.options section is present.
+	 * Dump .reginfo if present (although it will be ignored by an OS if a
+	 * .MIPS.options section is present, according to SGI mips64 spec).
 	 */
-	if (!options_found) {
-		for (i = 0; (size_t) i < re->shnum; i++) {
-			s = &re->sl[i];
-			if (s->name != NULL && (!strcmp(s->name, ".reginfo") ||
-			    (s->type == SHT_MIPS_REGINFO)))
-				dump_mips_reginfo(re, s);
-		}
+	for (i = 0; (size_t) i < re->shnum; i++) {
+		s = &re->sl[i];
+		if (s->name != NULL && (!strcmp(s->name, ".reginfo") ||
+		    (s->type == SHT_MIPS_REGINFO)))
+			dump_mips_reginfo(re, s);
 	}
 }
 
+static void
+dump_mips_abiflags(struct readelf *re, struct section *s)
+{
+	Elf_Data *d;
+	uint8_t *p;
+	int elferr;
+	uint32_t isa_ext, ases, flags1, flags2;
+	uint16_t version;
+	uint8_t isa_level, isa_rev, gpr_size, cpr1_size, cpr2_size, fp_abi;
+
+	if ((d = elf_rawdata(s->scn, NULL)) == NULL) {
+		elferr = elf_errno();
+		if (elferr != 0)
+			warnx("elf_rawdata failed: %s",
+			    elf_errmsg(elferr));
+		return;
+	}
+	if (d->d_size != 24) {
+		warnx("invalid MIPS abiflags section size");
+		return;
+	}
+
+	p = d->d_buf;
+	version = re->dw_decode(&p, 2);
+	printf("MIPS ABI Flags Version: %u", version);
+	if (version != 0) {
+		printf(" (unknown)\n\n");
+		return;
+	}
+	printf("\n\n");
+
+	isa_level = re->dw_decode(&p, 1);
+	isa_rev = re->dw_decode(&p, 1);
+	gpr_size = re->dw_decode(&p, 1);
+	cpr1_size = re->dw_decode(&p, 1);
+	cpr2_size = re->dw_decode(&p, 1);
+	fp_abi = re->dw_decode(&p, 1);
+	isa_ext = re->dw_decode(&p, 4);
+	ases = re->dw_decode(&p, 4);
+	flags1 = re->dw_decode(&p, 4);
+	flags2 = re->dw_decode(&p, 4);
+
+	printf("ISA: ");
+	if (isa_rev <= 1)
+		printf("MIPS%u\n", isa_level);
+	else
+		printf("MIPS%ur%u\n", isa_level, isa_rev);
+	printf("GPR size: %d\n", get_mips_register_size(gpr_size));
+	printf("CPR1 size: %d\n", get_mips_register_size(cpr1_size));
+	printf("CPR2 size: %d\n", get_mips_register_size(cpr2_size));
+	printf("FP ABI: ");
+	switch (fp_abi) {
+	case 3:
+		printf("Soft float");
+		break;
+	default:
+		printf("%u", fp_abi);
+		break;
+	}
+	printf("\nISA Extension: %u\n", isa_ext);
+	printf("ASEs: %u\n", ases);
+	printf("FLAGS 1: %08x\n", flags1);
+	printf("FLAGS 2: %08x\n", flags2);
+}
+
+static int
+get_mips_register_size(uint8_t flag)
+{
+	switch (flag) {
+	case 0: return 0;
+	case 1: return 32;
+	case 2: return 64;
+	case 3: return 128;
+	default: return -1;
+	}
+}
 static void
 dump_mips_reginfo(struct readelf *re, struct section *s)
 {
@@ -6136,9 +6297,7 @@ dump_dwarf_loclist(struct readelf *re)
 	Dwarf_Half tag, version, pointer_size, off_size;
 	Dwarf_Error de;
 	struct loc_at *la;
-	int i, j, ret;
-
-	printf("\nContents of section .debug_loc:\n");
+	int i, j, ret, has_content;
 
 	/* Search .debug_info section. */
 	while ((ret = dwarf_next_cu_header_b(re->dbg, NULL, &version, NULL,
@@ -6155,7 +6314,7 @@ dump_dwarf_loclist(struct readelf *re)
 		lowpc = 0;
 		if (tag == DW_TAG_compile_unit) {
 			if (dwarf_attrval_unsigned(die, DW_AT_low_pc,
-				&lowpc, &de) != DW_DLV_OK)
+			    &lowpc, &de) != DW_DLV_OK)
 				lowpc = 0;
 		}
 
@@ -6201,13 +6360,19 @@ dump_dwarf_loclist(struct readelf *re)
 	if (TAILQ_EMPTY(&lalist))
 		return;
 
-	printf("    Offset   Begin    End      Expression\n");
-
+	has_content = 0;
 	TAILQ_FOREACH(la, &lalist, la_next) {
-		if (dwarf_loclist_n(la->la_at, &llbuf, &lcnt, &de) !=
+		if ((ret = dwarf_loclist_n(la->la_at, &llbuf, &lcnt, &de)) !=
 		    DW_DLV_OK) {
-			warnx("dwarf_loclist_n failed: %s", dwarf_errmsg(de));
+			if (ret != DW_DLV_NO_ENTRY)
+				warnx("dwarf_loclist_n failed: %s",
+				    dwarf_errmsg(de));
 			continue;
+		}
+		if (!has_content) {
+			has_content = 1;
+			printf("\nContents of section .debug_loc:\n");
+			printf("    Offset   Begin    End      Expression\n");
 		}
 		set_cu_context(re, la->la_cu_psize, la->la_cu_osize,
 		    la->la_cu_ver);
@@ -6243,6 +6408,9 @@ dump_dwarf_loclist(struct readelf *re)
 		}
 		dwarf_dealloc(re->dbg, llbuf, DW_DLA_LIST);
 	}
+
+	if (!has_content)
+		printf("\nSection '.debug_loc' has no debugging data.\n");
 }
 
 /*
@@ -6475,13 +6643,14 @@ load_sections(struct readelf *re)
 		}
 		if ((name = elf_strptr(re->elf, shstrndx, sh.sh_name)) == NULL) {
 			(void) elf_errno();
-			name = "ERROR";
+			name = "<no-name>";
 		}
 		if ((ndx = elf_ndxscn(scn)) == SHN_UNDEF) {
-			if ((elferr = elf_errno()) != 0)
+			if ((elferr = elf_errno()) != 0) {
 				warnx("elf_ndxscn failed: %s",
 				    elf_errmsg(elferr));
-			continue;
+				continue;
+			}
 		}
 		if (ndx >= re->shnum) {
 			warnx("section index of '%s' out of range", name);
@@ -6589,8 +6758,9 @@ dump_elf(struct readelf *re)
 static void
 dump_dwarf(struct readelf *re)
 {
-	int error;
+	struct loc_at *la, *_la;
 	Dwarf_Error de;
+	int error;
 
 	if (dwarf_elf_init(re->elf, DW_DLC_READ, NULL, NULL, &re->dbg, &de)) {
 		if ((error = dwarf_errno(de)) != DW_DLE_DEBUG_INFO_NULL)
@@ -6625,6 +6795,11 @@ dump_dwarf(struct readelf *re)
 		dump_dwarf_str(re);
 	if (re->dop & DW_O)
 		dump_dwarf_loclist(re);
+
+	TAILQ_FOREACH_SAFE(la, &lalist, la_next, _la) {
+		TAILQ_REMOVE(&lalist, la, la_next);
+		free(la);
+	}
 
 	dwarf_finish(re->dbg, &de);
 }

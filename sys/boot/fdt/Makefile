@@ -26,7 +26,5 @@ CFLAGS+=	-m32
 
 CFLAGS+=	-Wformat -Wall
 
-NOPIE=		yes
-
 .include <bsd.stand.mk>
 .include <bsd.lib.mk>

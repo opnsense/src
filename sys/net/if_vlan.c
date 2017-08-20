@@ -112,6 +112,7 @@ struct	ifvlan {
 #define	PARENT(ifv)	((ifv)->ifv_trunk->parent)
 	void	*ifv_cookie;
 	int	ifv_pflags;	/* special flags we have set on parent */
+	int	ifv_capenable;
 	struct	ifv_linkmib {
 		int	ifvm_encaplen;	/* encapsulation length */
 		int	ifvm_mtufudge;	/* MTU fudged by this much */
@@ -468,6 +469,7 @@ trunk_destroy(struct ifvlantrunk *trunk)
 	trunk->parent->if_vlantrunk = NULL;
 	TRUNK_UNLOCK(trunk);
 	TRUNK_LOCK_DESTROY(trunk);
+	if_rele(trunk->parent);
 	free(trunk, M_VLAN);
 }
 
@@ -842,16 +844,20 @@ vlan_clone_match_ethervid(const char *name, int *vidp)
 	if ((cp = strchr(ifname, '.')) == NULL)
 		return (NULL);
 	*cp = '\0';
-	if ((ifp = ifunit(ifname)) == NULL)
+	if ((ifp = ifunit_ref(ifname)) == NULL)
 		return (NULL);
 	/* Parse VID. */
-	if (*++cp == '\0')
+	if (*++cp == '\0') {
+		if_rele(ifp);
 		return (NULL);
+	}
 	vid = 0;
 	for(; *cp >= '0' && *cp <= '9'; cp++)
 		vid = (vid * 10) + (*cp - '0');
-	if (*cp != '\0')
+	if (*cp != '\0') {
+		if_rele(ifp);
 		return (NULL);
+	}
 	if (vidp != NULL)
 		*vidp = vid;
 
@@ -884,7 +890,6 @@ vlan_clone_create(struct if_clone *ifc, char *name, size_t len, caddr_t params)
 	int unit;
 	int error;
 	int vid;
-	int ethertag;
 	struct ifvlan *ifv;
 	struct ifnet *ifp;
 	struct ifnet *p;
@@ -909,23 +914,21 @@ vlan_clone_create(struct if_clone *ifc, char *name, size_t len, caddr_t params)
 		error = copyin(params, &vlr, sizeof(vlr));
 		if (error)
 			return error;
-		p = ifunit(vlr.vlr_parent);
+		p = ifunit_ref(vlr.vlr_parent);
 		if (p == NULL)
 			return (ENXIO);
 		error = ifc_name2unit(name, &unit);
-		if (error != 0)
+		if (error != 0) {
+			if_rele(p);
 			return (error);
-
-		ethertag = 1;
+		}
 		vid = vlr.vlr_tag;
 		wildcard = (unit < 0);
 	} else if ((p = vlan_clone_match_ethervid(name, &vid)) != NULL) {
-		ethertag = 1;
 		unit = -1;
 		wildcard = 0;
 	} else {
-		ethertag = 0;
-
+		p = NULL;
 		error = ifc_name2unit(name, &unit);
 		if (error != 0)
 			return (error);
@@ -934,8 +937,11 @@ vlan_clone_create(struct if_clone *ifc, char *name, size_t len, caddr_t params)
 	}
 
 	error = ifc_alloc_unit(ifc, &unit);
-	if (error != 0)
+	if (error != 0) {
+		if (p != NULL)
+			if_rele(p);
 		return (error);
+	}
 
 	/* In the wildcard case, we need to update the name. */
 	if (wildcard) {
@@ -951,6 +957,8 @@ vlan_clone_create(struct if_clone *ifc, char *name, size_t len, caddr_t params)
 	if (ifp == NULL) {
 		ifc_free_unit(ifc, unit);
 		free(ifv, M_VLAN);
+		if (p != NULL)
+			if_rele(p);
 		return (ENOSPC);
 	}
 	SLIST_INIT(&ifv->vlan_mc_listhead);
@@ -981,8 +989,9 @@ vlan_clone_create(struct if_clone *ifc, char *name, size_t len, caddr_t params)
 	sdl = (struct sockaddr_dl *)ifa->ifa_addr;
 	sdl->sdl_type = IFT_L2VLAN;
 
-	if (ethertag) {
+	if (p != NULL) {
 		error = vlan_config(ifv, p, vid);
+		if_rele(p);
 		if (error != 0) {
 			/*
 			 * Since we've partially failed, we need to back
@@ -1269,6 +1278,7 @@ vlan_config(struct ifvlan *ifv, struct ifnet *p, uint16_t vid)
 		TRUNK_LOCK(trunk);
 		p->if_vlantrunk = trunk;
 		trunk->parent = p;
+		if_ref(trunk->parent);
 	} else {
 		VLAN_LOCK();
 exists:
@@ -1286,6 +1296,7 @@ exists:
 	ifv->ifv_encaplen = ETHER_VLAN_ENCAP_LEN;
 	ifv->ifv_mintu = ETHERMIN;
 	ifv->ifv_pflags = 0;
+	ifv->ifv_capenable = -1;
 
 	/*
 	 * If the parent supports the VLAN_MTU capability,
@@ -1537,8 +1548,13 @@ vlan_capabilities(struct ifvlan *ifv)
 	struct ifnet *p = PARENT(ifv);
 	struct ifnet *ifp = ifv->ifv_ifp;
 	struct ifnet_hw_tsomax hw_tsomax;
+	int cap = 0, ena = 0, mena;
+	u_long hwa = 0;
 
 	TRUNK_LOCK_ASSERT(TRUNK(ifv));
+
+	/* Mask parent interface enabled capabilities disabled by user. */
+	mena = p->if_capenable & ifv->ifv_capenable;
 
 	/*
 	 * If the parent interface can do checksum offloading
@@ -1547,17 +1563,18 @@ vlan_capabilities(struct ifvlan *ifv)
 	 * offloading requires hardware VLAN tagging.
 	 */
 	if (p->if_capabilities & IFCAP_VLAN_HWCSUM)
-		ifp->if_capabilities = p->if_capabilities & IFCAP_HWCSUM;
-
+		cap |= p->if_capabilities & (IFCAP_HWCSUM | IFCAP_HWCSUM_IPV6);
 	if (p->if_capenable & IFCAP_VLAN_HWCSUM &&
 	    p->if_capenable & IFCAP_VLAN_HWTAGGING) {
-		ifp->if_capenable = p->if_capenable & IFCAP_HWCSUM;
-		ifp->if_hwassist = p->if_hwassist & (CSUM_IP | CSUM_TCP |
-		    CSUM_UDP | CSUM_SCTP);
-	} else {
-		ifp->if_capenable = 0;
-		ifp->if_hwassist = 0;
+		ena |= mena & (IFCAP_HWCSUM | IFCAP_HWCSUM_IPV6);
+		if (ena & IFCAP_TXCSUM)
+			hwa |= p->if_hwassist & (CSUM_IP | CSUM_TCP |
+			    CSUM_UDP | CSUM_SCTP);
+		if (ena & IFCAP_TXCSUM_IPV6)
+			hwa |= p->if_hwassist & (CSUM_TCP_IPV6 |
+			    CSUM_UDP_IPV6 | CSUM_SCTP_IPV6);
 	}
+
 	/*
 	 * If the parent interface can do TSO on VLANs then
 	 * propagate the hardware-assisted flag. TSO on VLANs
@@ -1567,14 +1584,22 @@ vlan_capabilities(struct ifvlan *ifv)
 	if_hw_tsomax_common(p, &hw_tsomax);
 	if_hw_tsomax_update(ifp, &hw_tsomax);
 	if (p->if_capabilities & IFCAP_VLAN_HWTSO)
-		ifp->if_capabilities |= p->if_capabilities & IFCAP_TSO;
+		cap |= p->if_capabilities & IFCAP_TSO;
 	if (p->if_capenable & IFCAP_VLAN_HWTSO) {
-		ifp->if_capenable |= p->if_capenable & IFCAP_TSO;
-		ifp->if_hwassist |= p->if_hwassist & CSUM_TSO;
-	} else {
-		ifp->if_capenable &= ~(p->if_capenable & IFCAP_TSO);
-		ifp->if_hwassist &= ~(p->if_hwassist & CSUM_TSO);
+		ena |= mena & IFCAP_TSO;
+		if (ena & IFCAP_TSO)
+			hwa |= p->if_hwassist & CSUM_TSO;
 	}
+
+	/*
+	 * If the parent interface can do LRO and checksum offloading on
+	 * VLANs, then guess it may do LRO on VLANs.  False positive here
+	 * cost nothing, while false negative may lead to some confusions.
+	 */
+	if (p->if_capabilities & IFCAP_VLAN_HWCSUM)
+		cap |= p->if_capabilities & IFCAP_LRO;
+	if (p->if_capenable & IFCAP_VLAN_HWCSUM)
+		ena |= p->if_capenable & IFCAP_LRO;
 
 	/*
 	 * If the parent interface can offload TCP connections over VLANs then
@@ -1586,11 +1611,22 @@ vlan_capabilities(struct ifvlan *ifv)
 	 */
 #define	IFCAP_VLAN_TOE IFCAP_TOE
 	if (p->if_capabilities & IFCAP_VLAN_TOE)
-		ifp->if_capabilities |= p->if_capabilities & IFCAP_TOE;
+		cap |= p->if_capabilities & IFCAP_TOE;
 	if (p->if_capenable & IFCAP_VLAN_TOE) {
 		TOEDEV(ifp) = TOEDEV(p);
-		ifp->if_capenable |= p->if_capenable & IFCAP_TOE;
+		ena |= mena & IFCAP_TOE;
 	}
+
+	/*
+	 * If the parent interface supports dynamic link state, so does the
+	 * VLAN interface.
+	 */
+	cap |= (p->if_capabilities & IFCAP_LINKSTATE);
+	ena |= (mena & IFCAP_LINKSTATE);
+
+	ifp->if_capabilities = cap;
+	ifp->if_capenable = ena;
+	ifp->if_hwassist = hwa;
 }
 
 static void
@@ -1649,8 +1685,10 @@ vlan_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		VLAN_LOCK();
 		if (TRUNK(ifv) != NULL) {
 			p = PARENT(ifv);
+			if_ref(p);
 			VLAN_UNLOCK();
 			error = (*p->if_ioctl)(p, SIOCGIFMEDIA, data);
+			if_rele(p);
 			/* Limit the result to the parent's current config. */
 			if (error == 0) {
 				struct ifmediareq *ifmr;
@@ -1712,12 +1750,13 @@ vlan_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			vlan_unconfig(ifp);
 			break;
 		}
-		p = ifunit(vlr.vlr_parent);
+		p = ifunit_ref(vlr.vlr_parent);
 		if (p == NULL) {
 			error = ENOENT;
 			break;
 		}
 		error = vlan_config(ifv, p, vlr.vlr_tag);
+		if_rele(p);
 		if (error)
 			break;
 
@@ -1792,6 +1831,18 @@ vlan_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		}
 		ifv->ifv_pcp = ifr->ifr_vlan_pcp;
 		vlan_tag_recalculate(ifv);
+		break;
+
+	case SIOCSIFCAP:
+		VLAN_LOCK();
+		ifv->ifv_capenable = ifr->ifr_reqcap;
+		trunk = TRUNK(ifv);
+		if (trunk != NULL) {
+			TRUNK_LOCK(trunk);
+			vlan_capabilities(ifv);
+			TRUNK_UNLOCK(trunk);
+		}
+		VLAN_UNLOCK();
 		break;
 
 	default:

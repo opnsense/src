@@ -64,6 +64,57 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_domain.h>
 #include <sys/eventhandler.h>
 
+/*
+ * Asserts below verify the stability of struct thread and struct proc
+ * layout, as exposed by KBI to modules.  On head, the KBI is allowed
+ * to drift, change to the structures must be accompanied by the
+ * assert update.
+ *
+ * On the stable branches after KBI freeze, conditions must not be
+ * violated.  Typically new fields are moved to the end of the
+ * structures.
+ */
+#ifdef __amd64__
+_Static_assert(offsetof(struct thread, td_flags) == 0xe4,
+    "struct thread KBI td_flags");
+_Static_assert(offsetof(struct thread, td_pflags) == 0xec,
+    "struct thread KBI td_pflags");
+_Static_assert(offsetof(struct thread, td_frame) == 0x418,
+    "struct thread KBI td_frame");
+_Static_assert(offsetof(struct thread, td_emuldata) == 0x4c0,
+    "struct thread KBI td_emuldata");
+_Static_assert(offsetof(struct proc, p_flag) == 0xb0,
+    "struct proc KBI p_flag");
+_Static_assert(offsetof(struct proc, p_pid) == 0xbc,
+    "struct proc KBI p_pid");
+_Static_assert(offsetof(struct proc, p_filemon) == 0x3c0,
+    "struct proc KBI p_filemon");
+_Static_assert(offsetof(struct proc, p_comm) == 0x3d0,
+    "struct proc KBI p_comm");
+_Static_assert(offsetof(struct proc, p_emuldata) == 0x4a0,
+    "struct proc KBI p_emuldata");
+#endif
+#ifdef __i386__
+_Static_assert(offsetof(struct thread, td_flags) == 0x8c,
+    "struct thread KBI td_flags");
+_Static_assert(offsetof(struct thread, td_pflags) == 0x94,
+    "struct thread KBI td_pflags");
+_Static_assert(offsetof(struct thread, td_frame) == 0x2c0,
+    "struct thread KBI td_frame");
+_Static_assert(offsetof(struct thread, td_emuldata) == 0x30c,
+    "struct thread KBI td_emuldata");
+_Static_assert(offsetof(struct proc, p_flag) == 0x68,
+    "struct proc KBI p_flag");
+_Static_assert(offsetof(struct proc, p_pid) == 0x74,
+    "struct proc KBI p_pid");
+_Static_assert(offsetof(struct proc, p_filemon) == 0x268,
+    "struct proc KBI p_filemon");
+_Static_assert(offsetof(struct proc, p_comm) == 0x274,
+    "struct proc KBI p_comm");
+_Static_assert(offsetof(struct proc, p_emuldata) == 0x2f4,
+    "struct proc KBI p_emuldata");
+#endif
+
 SDT_PROVIDER_DECLARE(proc);
 SDT_PROBE_DEFINE(proc, , , lwp__exit);
 
@@ -192,6 +243,8 @@ thread_dtor(void *mem, int size, void *arg)
 #endif
 	/* Free all OSD associated to this thread. */
 	osd_thread_exit(td);
+	td_softdep_cleanup(td);
+	MPASS(td->td_su == NULL);
 
 	EVENTHANDLER_INVOKE(thread_dtor, td);
 	tid_free(td->td_tid);
@@ -281,7 +334,7 @@ threadinit(void)
 
 	thread_zone = uma_zcreate("THREAD", sched_sizeof_thread(),
 	    thread_ctor, thread_dtor, thread_init, thread_fini,
-	    16 - 1, UMA_ZONE_NOFREE);
+	    32 - 1, UMA_ZONE_NOFREE);
 	tidhashtbl = hashinit(maxproc / 2, M_TIDHASH, &tidhash);
 	rw_init(&tidhash_lock, "tidhash");
 }
@@ -318,7 +371,7 @@ thread_reap(void)
 
 	/*
 	 * Don't even bother to lock if none at this instant,
-	 * we really don't care about the next instant..
+	 * we really don't care about the next instant.
 	 */
 	if (!TAILQ_EMPTY(&zombie_threads)) {
 		mtx_lock_spin(&zombie_lock);
@@ -383,6 +436,7 @@ thread_free(struct thread *td)
 	if (td->td_kstack != 0)
 		vm_thread_dispose(td);
 	vm_domain_policy_cleanup(&td->td_vm_dom_policy);
+	callout_drain(&td->td_slpcallout);
 	uma_zfree(thread_zone, td);
 }
 
@@ -470,6 +524,7 @@ thread_exit(void)
 	KASSERT(p != NULL, ("thread exiting without a process"));
 	CTR3(KTR_PROC, "thread_exit: thread %p (pid %ld, %s)", td,
 	    (long)p->p_pid, td->td_name);
+	SDT_PROBE0(proc, , , lwp__exit);
 	KASSERT(TAILQ_EMPTY(&td->td_sigqueue.sq_list), ("signal pending"));
 
 #ifdef AUDIT
@@ -580,6 +635,7 @@ thread_wait(struct proc *p)
 	td->td_cpuset = NULL;
 	cpu_thread_clean(td);
 	thread_cow_free(td);
+	callout_drain(&td->td_slpcallout);
 	thread_reap();	/* check for zombie threads etc. */
 }
 

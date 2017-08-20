@@ -35,6 +35,7 @@
 #include <libprocstat.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sysexits.h>
 #include <unistd.h>
 
@@ -48,10 +49,11 @@ static void
 usage(void)
 {
 
-	xo_error("usage: procstat [-CHhn] [-M core] [-N system] "
-	    "[-w interval]\n"
+	xo_error("usage: procstat [--libxo] [-CHhn] [-M core] "
+	    "[-N system] [-w interval]\n"
 	    "                [-b | -c | -e | -f | -i | -j | -k | "
-	    "-l | -r | -s | -S | -t | -v | -x]\n"
+	    "-l | -r | -s | \n"
+	    "                 -S | -t | -v | -x]\n"
 	    "                [-a | pid | core ...]\n");
 	xo_finish();
 	exit(EX_USAGE);
@@ -126,6 +128,21 @@ kinfo_proc_sort(struct kinfo_proc *kipp, int count)
 	qsort(kipp, count, sizeof(*kipp), kinfo_proc_compare);
 }
 
+const char *
+kinfo_proc_thread_name(const struct kinfo_proc *kipp)
+{
+	static char name[MAXCOMLEN+1];
+
+	strlcpy(name, kipp->ki_tdname, sizeof(name));
+	strlcat(name, kipp->ki_moretdname, sizeof(name));
+	if (name[0] == '\0' || strcmp(kipp->ki_comm, name) == 0) {
+		name[0] = '-';
+		name[1] = '\0';
+	}
+
+	return (name);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -145,7 +162,7 @@ main(int argc, char *argv[])
 	argc = xo_parse_args(argc, argv);
 	xocontainer = "basic";
 
-	while ((ch = getopt(argc, argv, "CHN:M:abcefijklhrsStvw:x")) != -1) {
+	while ((ch = getopt(argc, argv, "abCcefHhijklM:N:nrSstvw:x")) != -1) {
 		switch (ch) {
 		case 'C':
 			Cflag++;

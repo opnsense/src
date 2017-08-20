@@ -989,7 +989,7 @@ iflib_netmap_txq_init(if_ctx_t ctx, iflib_txq_t txq)
 	struct netmap_slot *slot;
 
 	slot = netmap_reset(na, NR_TX, txq->ift_id, 0);
-	if (slot == 0)
+	if (slot == NULL)
 		return;
 
 	for (int i = 0; i < ctx->ifc_softc_ctx.isc_ntxd[0]; i++) {
@@ -1014,7 +1014,7 @@ iflib_netmap_rxq_init(if_ctx_t ctx, iflib_rxq_t rxq)
 	int nrxd;
 
 	slot = netmap_reset(na, NR_RX, rxq->ifr_id, 0);
-	if (slot == 0)
+	if (slot == NULL)
 		return;
 	sd = rxq->ifr_fl[0].ifl_sds;
 	nrxd = ctx->ifc_softc_ctx.isc_nrxd[0];
@@ -1216,7 +1216,7 @@ _iflib_irq_alloc(if_ctx_t ctx, if_irq_t irq, int rid,
 					  rid, name ? name : "unknown", rc);
 		return (rc);
 	} else if (name)
-		bus_describe_intr(dev, res, tag, name);
+		bus_describe_intr(dev, res, tag, "%s", name);
 
 	irq->ii_tag = tag;
 	return (0);
@@ -4633,7 +4633,6 @@ iflib_msix_init(if_ctx_t ctx)
 
 	/*
 	 * bar == -1 => "trust me I know what I'm doing"
-	 * https://www.youtube.com/watch?v=nnwWKkNau4I
 	 * Some drivers are for hardware that is so shoddily
 	 * documented that no one knows which bars are which
 	 * so the developer has to map all bars. This hack

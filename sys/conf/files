@@ -102,7 +102,7 @@ cam/ctl/ctl_cmd_table.c		optional ctl
 cam/ctl/ctl_frontend.c		optional ctl
 cam/ctl/ctl_frontend_cam_sim.c	optional ctl
 cam/ctl/ctl_frontend_ioctl.c	optional ctl
-cam/ctl/ctl_frontend_iscsi.c	optional ctl
+cam/ctl/ctl_frontend_iscsi.c	optional ctl cfiscsi
 cam/ctl/ctl_ha.c		optional ctl
 cam/ctl/ctl_scsi_all.c		optional ctl
 cam/ctl/ctl_tpc.c		optional ctl
@@ -127,6 +127,7 @@ cddl/compat/opensolaris/kern/opensolaris.c		optional zfs | dtrace compile-with "
 cddl/compat/opensolaris/kern/opensolaris_cmn_err.c	optional zfs | dtrace compile-with "${CDDL_C}"
 cddl/compat/opensolaris/kern/opensolaris_kmem.c		optional zfs | dtrace compile-with "${CDDL_C}"
 cddl/compat/opensolaris/kern/opensolaris_misc.c		optional zfs | dtrace compile-with "${CDDL_C}"
+cddl/compat/opensolaris/kern/opensolaris_proc.c		optional zfs | dtrace compile-with "${CDDL_C}"
 cddl/compat/opensolaris/kern/opensolaris_sunddi.c	optional zfs | dtrace compile-with "${CDDL_C}"
 cddl/compat/opensolaris/kern/opensolaris_taskq.c	optional zfs | dtrace compile-with "${CDDL_C}"
 # zfs specific
@@ -157,7 +158,6 @@ cddl/contrib/opensolaris/common/zfs/zfs_namecheck.c			optional zfs compile-with 
 cddl/contrib/opensolaris/common/zfs/zfs_prop.c				optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/common/zfs/zpool_prop.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/common/zfs/zprop_common.c			optional zfs compile-with "${ZFS_C}"
-cddl/contrib/opensolaris/uts/common/fs/gfs.c				optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/vnode.c				optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/arc.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/blkptr.c			optional zfs compile-with "${ZFS_C}"
@@ -274,16 +274,24 @@ cddl/dev/fbt/fbt.c			optional dtrace_fbt      | dtraceall compile-with "${FBT_C}
 cddl/dev/systrace/systrace.c		optional dtrace_systrace | dtraceall compile-with "${CDDL_C}"
 cddl/dev/prototype.c			optional dtrace_prototype | dtraceall compile-with "${CDDL_C}"
 fs/nfsclient/nfs_clkdtrace.c		optional dtnfscl nfscl   | dtraceall nfscl compile-with "${CDDL_C}"
-compat/cloudabi/cloudabi_clock.c	optional compat_cloudabi64
-compat/cloudabi/cloudabi_errno.c	optional compat_cloudabi64
-compat/cloudabi/cloudabi_fd.c		optional compat_cloudabi64
-compat/cloudabi/cloudabi_file.c		optional compat_cloudabi64
-compat/cloudabi/cloudabi_futex.c	optional compat_cloudabi64
-compat/cloudabi/cloudabi_mem.c		optional compat_cloudabi64
-compat/cloudabi/cloudabi_proc.c		optional compat_cloudabi64
-compat/cloudabi/cloudabi_random.c	optional compat_cloudabi64
-compat/cloudabi/cloudabi_sock.c		optional compat_cloudabi64
-compat/cloudabi/cloudabi_thread.c	optional compat_cloudabi64
+compat/cloudabi/cloudabi_clock.c	optional compat_cloudabi32 | compat_cloudabi64
+compat/cloudabi/cloudabi_errno.c	optional compat_cloudabi32 | compat_cloudabi64
+compat/cloudabi/cloudabi_fd.c		optional compat_cloudabi32 | compat_cloudabi64
+compat/cloudabi/cloudabi_file.c		optional compat_cloudabi32 | compat_cloudabi64
+compat/cloudabi/cloudabi_futex.c	optional compat_cloudabi32 | compat_cloudabi64
+compat/cloudabi/cloudabi_mem.c		optional compat_cloudabi32 | compat_cloudabi64
+compat/cloudabi/cloudabi_proc.c		optional compat_cloudabi32 | compat_cloudabi64
+compat/cloudabi/cloudabi_random.c	optional compat_cloudabi32 | compat_cloudabi64
+compat/cloudabi/cloudabi_sock.c		optional compat_cloudabi32 | compat_cloudabi64
+compat/cloudabi/cloudabi_thread.c	optional compat_cloudabi32 | compat_cloudabi64
+compat/cloudabi/cloudabi_vdso.c		optional compat_cloudabi32 | compat_cloudabi64
+compat/cloudabi32/cloudabi32_fd.c	optional compat_cloudabi32
+compat/cloudabi32/cloudabi32_module.c	optional compat_cloudabi32
+compat/cloudabi32/cloudabi32_poll.c	optional compat_cloudabi32
+compat/cloudabi32/cloudabi32_sock.c	optional compat_cloudabi32
+compat/cloudabi32/cloudabi32_syscalls.c	optional compat_cloudabi32
+compat/cloudabi32/cloudabi32_sysent.c	optional compat_cloudabi32
+compat/cloudabi32/cloudabi32_thread.c	optional compat_cloudabi32
 compat/cloudabi64/cloudabi64_fd.c	optional compat_cloudabi64
 compat/cloudabi64/cloudabi64_module.c	optional compat_cloudabi64
 compat/cloudabi64/cloudabi64_poll.c	optional compat_cloudabi64
@@ -471,11 +479,12 @@ contrib/dev/acpica/components/utilities/utpredef.c	optional acpi
 contrib/dev/acpica/components/utilities/utresrc.c	optional acpi
 contrib/dev/acpica/components/utilities/utstate.c	optional acpi
 contrib/dev/acpica/components/utilities/utstring.c	optional acpi
+contrib/dev/acpica/components/utilities/utstrtoul64.c	optional acpi
 contrib/dev/acpica/components/utilities/utuuid.c	optional acpi acpi_debug
 contrib/dev/acpica/components/utilities/utxface.c	optional acpi
 contrib/dev/acpica/components/utilities/utxferror.c	optional acpi
 contrib/dev/acpica/components/utilities/utxfinit.c	optional acpi
-#contrib/dev/acpica/components/utilities/utxfmutex.c	optional acpi
+contrib/dev/acpica/os_specific/service_layers/osgendbg.c	optional acpi acpi_debug
 contrib/ipfilter/netinet/fil.c	optional ipfilter inet \
 	compile-with "${NORMAL_C} ${NO_WSELF_ASSIGN} -Wno-unused -I$S/contrib/ipfilter"
 contrib/ipfilter/netinet/ip_auth.c optional ipfilter inet \
@@ -565,22 +574,24 @@ contrib/ngatm/netnatm/sig/sig_unimsgcpy.c optional ngatm_uni \
 	compile-with "${NORMAL_C} -I$S/contrib/ngatm"
 contrib/ngatm/netnatm/sig/sig_verify.c optional ngatm_uni \
 	compile-with "${NORMAL_C} -I$S/contrib/ngatm"
-crypto/blowfish/bf_ecb.c	optional ipsec
-crypto/blowfish/bf_skey.c	optional crypto | ipsec
-crypto/camellia/camellia.c	optional crypto | ipsec
-crypto/camellia/camellia-api.c	optional crypto | ipsec
-crypto/des/des_ecb.c		optional crypto | ipsec | netsmb
-crypto/des/des_setkey.c		optional crypto | ipsec | netsmb
+crypto/blowfish/bf_ecb.c	optional ipsec | ipsec_support
+crypto/blowfish/bf_skey.c	optional crypto | ipsec | ipsec_support
+crypto/camellia/camellia.c	optional crypto | ipsec | ipsec_support
+crypto/camellia/camellia-api.c	optional crypto | ipsec | ipsec_support
+crypto/des/des_ecb.c		optional crypto | ipsec | ipsec_support | netsmb
+crypto/des/des_setkey.c		optional crypto | ipsec | ipsec_support | netsmb
 crypto/rc4/rc4.c		optional netgraph_mppc_encryption | kgssapi
 crypto/rijndael/rijndael-alg-fst.c optional crypto | geom_bde | \
-					 ipsec | random !random_loadable | wlan_ccmp
+	ipsec | ipsec_support | random !random_loadable | wlan_ccmp
 crypto/rijndael/rijndael-api-fst.c optional geom_bde | random !random_loadable
-crypto/rijndael/rijndael-api.c	optional crypto | ipsec | wlan_ccmp
+crypto/rijndael/rijndael-api.c	optional crypto | ipsec | ipsec_support | \
+	wlan_ccmp
 crypto/sha1.c			optional carp | crypto | ipsec | \
-					 netgraph_mppc_encryption | sctp
-crypto/sha2/sha256c.c		optional crypto | geom_bde | ipsec | random !random_loadable | \
-					 sctp | zfs
-crypto/sha2/sha512c.c		optional crypto | geom_bde | ipsec | zfs
+	ipsec_support | netgraph_mppc_encryption | sctp 
+crypto/sha2/sha256c.c		optional crypto | geom_bde | ipsec | \
+	ipsec_support | random !random_loadable | sctp | zfs
+crypto/sha2/sha512c.c		optional crypto | geom_bde | ipsec | \
+	ipsec_support | zfs
 crypto/skein/skein.c		optional crypto | zfs
 crypto/skein/skein_block.c	optional crypto | zfs
 crypto/siphash/siphash.c	optional inet | inet6
@@ -653,6 +664,7 @@ dev/acpica/acpi_perf.c		optional acpi
 dev/acpica/acpi_powerres.c	optional acpi
 dev/acpica/acpi_quirk.c		optional acpi
 dev/acpica/acpi_resource.c	optional acpi
+dev/acpica/acpi_container.c	optional acpi
 dev/acpica/acpi_smbat.c		optional acpi
 dev/acpica/acpi_thermal.c	optional acpi
 dev/acpica/acpi_throttle.c	optional acpi
@@ -1178,6 +1190,10 @@ dev/bktr/bktr_i2c.c		optional bktr pci smbus
 dev/bktr/bktr_os.c		optional bktr pci
 dev/bktr/bktr_tuner.c		optional bktr pci
 dev/bktr/msp34xx.c		optional bktr pci
+dev/bnxt/bnxt_hwrm.c		optional bnxt iflib pci
+dev/bnxt/bnxt_sysctl.c		optional bnxt iflib pci
+dev/bnxt/bnxt_txrx.c		optional bnxt iflib pci
+dev/bnxt/if_bnxt.c		optional bnxt iflib pci
 dev/buslogic/bt.c		optional bt
 dev/buslogic/bt_eisa.c		optional bt eisa
 dev/buslogic/bt_isa.c		optional bt isa
@@ -1188,13 +1204,13 @@ dev/bwi/bwiphy.c		optional bwi
 dev/bwi/bwirf.c			optional bwi
 dev/bwi/if_bwi.c		optional bwi
 dev/bwi/if_bwi_pci.c		optional bwi pci
-# XXX Work around clang warning, until maintainer approves fix.
+# XXX Work around clang warnings, until maintainer approves fix.
 dev/bwn/if_bwn.c		optional bwn siba_bwn \
 	compile-with "${NORMAL_C} ${NO_WSOMETIMES_UNINITIALIZED}"
 dev/bwn/if_bwn_pci.c		optional bwn pci bhnd
 dev/bwn/if_bwn_phy_common.c	optional bwn siba_bwn
 dev/bwn/if_bwn_phy_g.c		optional bwn siba_bwn \
-	compile-with "${NORMAL_C} ${NO_WSOMETIMES_UNINITIALIZED}"
+	compile-with "${NORMAL_C} ${NO_WSOMETIMES_UNINITIALIZED} ${NO_WCONSTANT_CONVERSION}"
 dev/bwn/if_bwn_phy_lp.c		optional bwn siba_bwn \
 	compile-with "${NORMAL_C} ${NO_WSOMETIMES_UNINITIALIZED}"
 dev/bwn/if_bwn_phy_n.c		optional bwn siba_bwn
@@ -1209,6 +1225,7 @@ dev/cfi/cfi_bus_nexus.c		optional cfi
 dev/cfi/cfi_core.c		optional cfi
 dev/cfi/cfi_dev.c		optional cfi
 dev/cfi/cfi_disk.c		optional cfid
+dev/chromebook_platform/chromebook_platform.c	optional chromebook_platform
 dev/ciss/ciss.c			optional ciss
 dev/cm/smc90cx6.c		optional cm
 dev/cmx/cmx.c			optional cmx
@@ -1243,11 +1260,16 @@ dev/cxgb/sys/uipc_mvec.c	optional cxgb pci \
 	compile-with "${NORMAL_C} -I$S/dev/cxgb"
 dev/cxgb/cxgb_t3fw.c		optional cxgb cxgb_t3fw \
 	compile-with "${NORMAL_C} -I$S/dev/cxgb"
+dev/cxgbe/t4_if.m		optional cxgbe pci
+dev/cxgbe/t4_iov.c		optional cxgbe pci \
+	compile-with "${NORMAL_C} -I$S/dev/cxgbe"
 dev/cxgbe/t4_mp_ring.c		optional cxgbe pci \
 	compile-with "${NORMAL_C} -I$S/dev/cxgbe"
 dev/cxgbe/t4_main.c		optional cxgbe pci \
 	compile-with "${NORMAL_C} -I$S/dev/cxgbe"
 dev/cxgbe/t4_netmap.c		optional cxgbe pci \
+	compile-with "${NORMAL_C} -I$S/dev/cxgbe"
+dev/cxgbe/t4_sched.c		optional cxgbe pci \
 	compile-with "${NORMAL_C} -I$S/dev/cxgbe"
 dev/cxgbe/t4_sge.c		optional cxgbe pci \
 	compile-with "${NORMAL_C} -I$S/dev/cxgbe"
@@ -1255,7 +1277,11 @@ dev/cxgbe/t4_l2t.c		optional cxgbe pci \
 	compile-with "${NORMAL_C} -I$S/dev/cxgbe"
 dev/cxgbe/t4_tracer.c		optional cxgbe pci \
 	compile-with "${NORMAL_C} -I$S/dev/cxgbe"
+dev/cxgbe/t4_vf.c		optional cxgbev pci \
+	compile-with "${NORMAL_C} -I$S/dev/cxgbe"
 dev/cxgbe/common/t4_hw.c	optional cxgbe pci \
+	compile-with "${NORMAL_C} -I$S/dev/cxgbe"
+dev/cxgbe/common/t4vf_hw.c	optional cxgbev pci \
 	compile-with "${NORMAL_C} -I$S/dev/cxgbe"
 t4fw_cfg.c		optional cxgbe					\
 	compile-with	"${AWK} -f $S/tools/fw_stub.awk t4fw_cfg.fw:t4fw_cfg t4fw_cfg_uwire.fw:t4fw_cfg_uwire t4fw.fw:t4fw -mt4fw_cfg -c${.TARGET}" \
@@ -1287,7 +1313,7 @@ t4fw.fwo		optional cxgbe					\
 	no-implicit-rule						\
 	clean		"t4fw.fwo"
 t4fw.fw			optional cxgbe					\
-	dependency	"$S/dev/cxgbe/firmware/t4fw-1.15.37.0.bin.uu"	\
+	dependency	"$S/dev/cxgbe/firmware/t4fw-1.16.45.0.bin.uu"	\
 	compile-with	"${NORMAL_FW}"					\
 	no-obj no-implicit-rule						\
 	clean		"t4fw.fw"
@@ -1311,14 +1337,38 @@ t5fw.fwo		optional cxgbe					\
 	no-implicit-rule						\
 	clean		"t5fw.fwo"
 t5fw.fw			optional cxgbe					\
-	dependency	"$S/dev/cxgbe/firmware/t5fw-1.15.37.0.bin.uu"	\
+	dependency	"$S/dev/cxgbe/firmware/t5fw-1.16.45.0.bin.uu"	\
 	compile-with	"${NORMAL_FW}"					\
 	no-obj no-implicit-rule						\
 	clean		"t5fw.fw"
+t6fw_cfg.c		optional cxgbe					\
+	compile-with	"${AWK} -f $S/tools/fw_stub.awk t6fw_cfg.fw:t6fw_cfg t6fw.fw:t6fw -mt6fw_cfg -c${.TARGET}" \
+	no-implicit-rule before-depend local				\
+	clean		"t6fw_cfg.c"
+t6fw_cfg.fwo		optional cxgbe					\
+	dependency	"t6fw_cfg.fw"					\
+	compile-with	"${NORMAL_FWO}"					\
+	no-implicit-rule						\
+	clean		"t6fw_cfg.fwo"
+t6fw_cfg.fw		optional cxgbe					\
+	dependency	"$S/dev/cxgbe/firmware/t6fw_cfg.txt"		\
+	compile-with	"${CP} ${.ALLSRC} ${.TARGET}"			\
+	no-obj no-implicit-rule						\
+	clean		"t6fw_cfg.fw"
+t6fw.fwo		optional cxgbe					\
+	dependency	"t6fw.fw"					\
+	compile-with	"${NORMAL_FWO}"					\
+	no-implicit-rule						\
+	clean		"t6fw.fwo"
+t6fw.fw			optional cxgbe					\
+	dependency	"$S/dev/cxgbe/firmware/t6fw-1.16.45.0.bin.uu"	\
+	compile-with	"${NORMAL_FW}"					\
+	no-obj no-implicit-rule						\
+	clean		"t6fw.fw"
 dev/cy/cy.c			optional cy
 dev/cy/cy_isa.c			optional cy isa
 dev/cy/cy_pci.c			optional cy pci
-dev/cyapa/cyapa.c		optional cyapa smbus
+dev/cyapa/cyapa.c		optional cyapa iicbus
 dev/dc/if_dc.c			optional dc pci
 dev/dc/dcphy.c			optional dc pci
 dev/dc/pnphy.c			optional dc pci
@@ -1404,11 +1454,56 @@ dev/drm/via_map.c		optional viadrm
 dev/drm/via_mm.c		optional viadrm
 dev/drm/via_verifier.c		optional viadrm
 dev/drm/via_video.c		optional viadrm
+dev/drm2/drm_agpsupport.c	optional drm2
+dev/drm2/drm_auth.c		optional drm2
+dev/drm2/drm_bufs.c		optional drm2
+dev/drm2/drm_buffer.c		optional drm2
+dev/drm2/drm_context.c		optional drm2
+dev/drm2/drm_crtc.c		optional drm2
+dev/drm2/drm_crtc_helper.c	optional drm2
+dev/drm2/drm_dma.c		optional drm2
+dev/drm2/drm_dp_helper.c	optional drm2
+dev/drm2/drm_dp_iic_helper.c	optional drm2
+dev/drm2/drm_drv.c		optional drm2
+dev/drm2/drm_edid.c		optional drm2
+dev/drm2/drm_fb_helper.c	optional drm2
+dev/drm2/drm_fops.c		optional drm2
+dev/drm2/drm_gem.c		optional drm2
+dev/drm2/drm_gem_names.c	optional drm2
+dev/drm2/drm_global.c		optional drm2
+dev/drm2/drm_hashtab.c		optional drm2
+dev/drm2/drm_ioctl.c		optional drm2
+dev/drm2/drm_irq.c		optional drm2
+dev/drm2/drm_linux_list_sort.c	optional drm2
+dev/drm2/drm_lock.c		optional drm2
+dev/drm2/drm_memory.c		optional drm2
+dev/drm2/drm_mm.c		optional drm2
+dev/drm2/drm_modes.c		optional drm2
+dev/drm2/drm_pci.c		optional drm2
+dev/drm2/drm_platform.c		optional drm2
+dev/drm2/drm_scatter.c		optional drm2
+dev/drm2/drm_stub.c		optional drm2
+dev/drm2/drm_sysctl.c		optional drm2
+dev/drm2/drm_vm.c		optional drm2
+dev/drm2/drm_os_freebsd.c	optional drm2
+dev/drm2/ttm/ttm_agp_backend.c	optional drm2
+dev/drm2/ttm/ttm_lock.c		optional drm2
+dev/drm2/ttm/ttm_object.c	optional drm2
+dev/drm2/ttm/ttm_tt.c		optional drm2
+dev/drm2/ttm/ttm_bo_util.c	optional drm2
+dev/drm2/ttm/ttm_bo.c		optional drm2
+dev/drm2/ttm/ttm_bo_manager.c	optional drm2
+dev/drm2/ttm/ttm_execbuf_util.c	optional drm2
+dev/drm2/ttm/ttm_memory.c	optional drm2
+dev/drm2/ttm/ttm_page_alloc.c	optional drm2
+dev/drm2/ttm/ttm_bo_vm.c	optional drm2
+dev/drm2/ati_pcigart.c		optional drm2 agp pci
 dev/ed/if_ed.c			optional ed
 dev/ed/if_ed_novell.c		optional ed
 dev/ed/if_ed_rtl80x9.c		optional ed
 dev/ed/if_ed_pccard.c		optional ed pccard
 dev/ed/if_ed_pci.c		optional ed pci
+dev/efidev/efidev.c		optional efirt
 dev/eisa/eisa_if.m		standard
 dev/eisa/eisaconf.c		optional eisa
 dev/e1000/if_em.c		optional em \
@@ -1452,6 +1547,12 @@ dev/e1000/e1000_mbx.c		optional em | igb \
 dev/e1000/e1000_osdep.c		optional em | igb \
 	compile-with "${NORMAL_C} -I$S/dev/e1000"
 dev/et/if_et.c			optional et
+dev/ena/ena.c			optional ena \
+	compile-with "${NORMAL_C} -I$S/contrib"
+dev/ena/ena_sysctl.c 		optional ena \
+	compile-with "${NORMAL_C} -I$S/contrib"
+contrib/ena-com/ena_com.c	optional ena
+contrib/ena-com/ena_eth_com.c	optional ena
 dev/en/if_en_pci.c		optional en pci
 dev/en/midway.c			optional en
 dev/ep/if_ep.c			optional ep
@@ -1481,6 +1582,11 @@ dev/etherswitch/ip17x/ip17x_vlans.c	optional ip17x
 dev/etherswitch/miiproxy.c		optional miiproxy
 dev/etherswitch/rtl8366/rtl8366rb.c	optional rtl8366rb
 dev/etherswitch/ukswitch/ukswitch.c	optional ukswitch
+dev/evdev/cdev.c			optional evdev
+dev/evdev/evdev.c			optional evdev
+dev/evdev/evdev_mt.c			optional evdev
+dev/evdev/evdev_utils.c			optional evdev
+dev/evdev/uinput.c			optional evdev uinput
 dev/ex/if_ex.c			optional ex
 dev/ex/if_ex_isa.c		optional ex isa
 dev/ex/if_ex_pccard.c		optional ex pccard
@@ -1544,7 +1650,8 @@ dev/gpio/gpiobus.c		optional gpio				\
 dev/gpio/gpioc.c		optional gpio				\
 	dependency	"gpio_if.h"
 dev/gpio/gpioiic.c		optional gpioiic
-dev/gpio/gpioled.c		optional gpioled
+dev/gpio/gpioled.c		optional gpioled !fdt
+dev/gpio/gpioled_fdt.c		optional gpioled fdt
 dev/gpio/gpiospi.c		optional gpiospi
 dev/gpio/gpio_if.m		optional gpio
 dev/gpio/gpiobus_if.m		optional gpio
@@ -1563,8 +1670,9 @@ dev/hptiop/hptiop.c		optional hptiop scbus
 dev/hwpmc/hwpmc_logging.c	optional hwpmc
 dev/hwpmc/hwpmc_mod.c		optional hwpmc
 dev/hwpmc/hwpmc_soft.c		optional hwpmc
-dev/ichiic/ig4_iic.c		optional ig4 smbus
-dev/ichiic/ig4_pci.c		optional ig4 pci smbus
+dev/ichiic/ig4_acpi.c		optional ig4 acpi iicbus
+dev/ichiic/ig4_iic.c		optional ig4 iicbus
+dev/ichiic/ig4_pci.c		optional ig4 pci iicbus
 dev/ichsmb/ichsmb.c		optional ichsmb
 dev/ichsmb/ichsmb_pci.c		optional ichsmb pci
 dev/ida/ida.c			optional ida
@@ -1648,10 +1756,10 @@ ipw_monitor.fw			optional ipwmonitorfw | ipwfw		\
 	compile-with	"${NORMAL_FW}"					\
 	no-obj no-implicit-rule						\
 	clean		"ipw_monitor.fw"
-dev/iscsi/icl.c			optional iscsi | ctl
-dev/iscsi/icl_conn_if.m		optional iscsi | ctl
-dev/iscsi/icl_soft.c		optional iscsi | ctl
-dev/iscsi/icl_soft_proxy.c	optional iscsi | ctl
+dev/iscsi/icl.c			optional iscsi
+dev/iscsi/icl_conn_if.m		optional cfiscsi | iscsi
+dev/iscsi/icl_soft.c		optional iscsi
+dev/iscsi/icl_soft_proxy.c	optional iscsi
 dev/iscsi/iscsi.c		optional iscsi scbus
 dev/iscsi_initiator/iscsi.c	optional iscsi_initiator scbus
 dev/iscsi_initiator/iscsi_subr.c	optional iscsi_initiator scbus
@@ -1660,7 +1768,7 @@ dev/iscsi_initiator/isc_soc.c	optional iscsi_initiator scbus
 dev/iscsi_initiator/isc_sm.c	optional iscsi_initiator scbus
 dev/iscsi_initiator/isc_subr.c	optional iscsi_initiator scbus
 dev/ismt/ismt.c			optional ismt
-dev/isl/isl.c			optional isl smbus
+dev/isl/isl.c			optional isl iicbus
 dev/isp/isp.c			optional isp
 dev/isp/isp_freebsd.c		optional isp
 dev/isp/isp_library.c		optional isp
@@ -1996,6 +2104,7 @@ dev/ixgbe/ixgbe_dcb_82598.c	optional ix inet | ixv inet \
 	compile-with "${NORMAL_C} -I$S/dev/ixgbe"
 dev/ixgbe/ixgbe_dcb_82599.c	optional ix inet | ixv inet \
 	compile-with "${NORMAL_C} -I$S/dev/ixgbe"
+dev/jedec_ts/jedec_ts.c		optional jedec_ts smbus
 dev/jme/if_jme.c		optional jme pci
 dev/joy/joy.c			optional joy
 dev/joy/joy_isa.c		optional joy isa
@@ -2042,6 +2151,7 @@ dev/mii/icsphy.c		optional miibus | icsphy
 dev/mii/ip1000phy.c		optional miibus | ip1000phy
 dev/mii/jmphy.c			optional miibus | jmphy
 dev/mii/lxtphy.c		optional miibus | lxtphy
+dev/mii/micphy.c		optional miibus fdt | micphy fdt
 dev/mii/mii.c			optional miibus | mii
 dev/mii/mii_bitbang.c		optional miibus | mii_bitbang
 dev/mii/mii_physubr.c		optional miibus | mii
@@ -2069,6 +2179,7 @@ dev/mlx/mlx.c			optional mlx
 dev/mlx/mlx_disk.c		optional mlx
 dev/mlx/mlx_pci.c		optional mlx pci
 dev/mly/mly.c			optional mly
+dev/mmc/mmc_subr.c		optional mmc | mmcsd
 dev/mmc/mmc.c			optional mmc
 dev/mmc/mmcbr_if.m		standard
 dev/mmc/mmcbus_if.m		standard
@@ -2502,11 +2613,14 @@ dev/scc/scc_dev_z8530.c		optional scc
 dev/scd/scd.c			optional scd isa
 dev/scd/scd_isa.c		optional scd isa
 dev/sdhci/sdhci.c		optional sdhci
+dev/sdhci/sdhci_fdt_gpio.c	optional sdhci fdt gpio
 dev/sdhci/sdhci_if.m		optional sdhci
+dev/sdhci/sdhci_acpi.c		optional sdhci acpi
 dev/sdhci/sdhci_pci.c		optional sdhci pci
 dev/sf/if_sf.c			optional sf pci
 dev/sge/if_sge.c		optional sge pci
-dev/si/si.c			optional si
+dev/si/si.c			optional si \
+	compile-with "${NORMAL_C} ${NO_WCONSTANT_CONVERSION}"
 dev/si/si2_z280.c		optional si
 dev/si/si3_t225.c		optional si
 dev/si/si_eisa.c		optional si eisa
@@ -2713,6 +2827,7 @@ dev/usb/controller/usb_controller.c	optional usb
 #
 # USB storage drivers
 #
+dev/usb/storage/cfumass.c	optional cfumass ctl
 dev/usb/storage/umass.c		optional umass
 dev/usb/storage/urio.c		optional urio
 dev/usb/storage/ustorage_fs.c	optional usfs
@@ -3105,7 +3220,7 @@ geom/geom_disk.c		standard
 geom/geom_dump.c		standard
 geom/geom_event.c		standard
 geom/geom_fox.c			optional geom_fox
-geom/geom_flashmap.c		optional fdt cfi | fdt nand | fdt mx25l
+geom/geom_flashmap.c		optional fdt cfi | fdt nand | fdt mx25l | mmcsd
 geom/geom_io.c			standard
 geom/geom_kern.c		standard
 geom/geom_map.c			optional geom_map
@@ -3217,12 +3332,6 @@ fs/ext2fs/ext2_lookup.c		optional ext2fs
 fs/ext2fs/ext2_subr.c		optional ext2fs
 fs/ext2fs/ext2_vfsops.c		optional ext2fs
 fs/ext2fs/ext2_vnops.c		optional ext2fs
-#
-hardenedbsd/hbsd_pax_common.c		optional pax
-hardenedbsd/hbsd_pax_hardening.c	optional pax pax_hardening
-hardenedbsd/hbsd_pax_log.c		optional pax
-hardenedbsd/hbsd_pax_aslr.c		optional pax pax_aslr
-hardenedbsd/hbsd_pax_segvguard.c	optional pax pax_segvguard
 #
 isa/isa_if.m			standard
 isa/isa_common.c		optional isa
@@ -3541,8 +3650,7 @@ libkern/strtouq.c		standard
 libkern/strvalid.c		standard
 libkern/timingsafe_bcmp.c	standard
 libkern/zlib.c			optional crypto | geom_uzip | ipsec | \
-					 mxge | netgraph_deflate | \
-					 ddb_ctf | gzio
+	ipsec_support | mxge | netgraph_deflate | ddb_ctf | gzio
 net/altq/altq_cbq.c		optional altq
 net/altq/altq_cdnr.c		optional altq
 net/altq/altq_codel.c		optional altq
@@ -3578,6 +3686,7 @@ net/if_fwsubr.c			optional fwip
 net/if_gif.c			optional gif inet | gif inet6 | \
 					 netgraph_gif inet | netgraph_gif inet6
 net/if_gre.c			optional gre inet | gre inet6
+net/if_ipsec.c			optional inet ipsec | inet6 ipsec
 net/if_iso88025subr.c		optional token
 net/if_lagg.c			optional lagg
 net/if_loop.c			optional loop
@@ -3751,6 +3860,7 @@ netinet/in_fib.c		optional inet
 netinet/in_gif.c		optional gif inet | netgraph_gif inet
 netinet/ip_gre.c		optional gre inet
 netinet/ip_id.c			optional inet
+netinet/in_jail.c		optional inet
 netinet/in_mcast.c		optional inet
 netinet/in_pcb.c		optional inet | inet6
 netinet/in_pcbgroup.c		optional inet pcbgroup | inet6 pcbgroup
@@ -3763,7 +3873,6 @@ netinet/ip_encap.c		optional inet | inet6
 netinet/ip_fastfwd.c		optional inet
 netinet/ip_icmp.c		optional inet | inet6
 netinet/ip_input.c		optional inet
-netinet/ip_ipsec.c		optional inet ipsec
 netinet/ip_mroute.c		optional mrouting inet
 netinet/ip_options.c		optional inet
 netinet/ip_output.c		optional inet
@@ -3818,6 +3927,7 @@ netinet6/in6_cksum.c		optional inet6
 netinet6/in6_fib.c		optional inet6
 netinet6/in6_gif.c		optional gif inet6 | netgraph_gif inet6
 netinet6/in6_ifattach.c		optional inet6
+netinet6/in6_jail.c		optional inet6
 netinet6/in6_mcast.c		optional inet6
 netinet6/in6_pcb.c		optional inet6
 netinet6/in6_pcbgroup.c		optional inet6 pcbgroup
@@ -3825,13 +3935,13 @@ netinet6/in6_proto.c		optional inet6
 netinet6/in6_rmx.c		optional inet6
 netinet6/in6_rss.c		optional inet6 rss
 netinet6/in6_src.c		optional inet6
+netinet6/ip6_fastfwd.c		optional inet6
 netinet6/ip6_forward.c		optional inet6
 netinet6/ip6_gre.c		optional gre inet6
 netinet6/ip6_id.c		optional inet6
 netinet6/ip6_input.c		optional inet6
 netinet6/ip6_mroute.c		optional mrouting inet6
 netinet6/ip6_output.c		optional inet6
-netinet6/ip6_ipsec.c		optional inet6 ipsec
 netinet6/mld6.c			optional inet6
 netinet6/nd6.c			optional inet6
 netinet6/nd6_nbr.c		optional inet6
@@ -3844,15 +3954,25 @@ netinet6/udp6_usrreq.c		optional inet6
 netipsec/ipsec.c		optional ipsec inet | ipsec inet6
 netipsec/ipsec_input.c		optional ipsec inet | ipsec inet6
 netipsec/ipsec_mbuf.c		optional ipsec inet | ipsec inet6
+netipsec/ipsec_mod.c		optional ipsec inet | ipsec inet6
 netipsec/ipsec_output.c		optional ipsec inet | ipsec inet6
-netipsec/key.c			optional ipsec inet | ipsec inet6
-netipsec/key_debug.c		optional ipsec inet | ipsec inet6
-netipsec/keysock.c		optional ipsec inet | ipsec inet6
+netipsec/ipsec_pcb.c		optional ipsec inet | ipsec inet6 | \
+	ipsec_support inet | ipsec_support inet6
+netipsec/key.c			optional ipsec inet | ipsec inet6 | \
+	ipsec_support inet | ipsec_support inet6
+netipsec/key_debug.c		optional ipsec inet | ipsec inet6 | \
+	ipsec_support inet | ipsec_support inet6
+netipsec/keysock.c		optional ipsec inet | ipsec inet6 | \
+	ipsec_support inet | ipsec_support inet6
+netipsec/subr_ipsec.c		optional ipsec inet | ipsec inet6 | \
+	ipsec_support inet | ipsec_support inet6
+netipsec/udpencap.c		optional ipsec inet
 netipsec/xform_ah.c		optional ipsec inet | ipsec inet6
 netipsec/xform_esp.c		optional ipsec inet | ipsec inet6
 netipsec/xform_ipcomp.c		optional ipsec inet | ipsec inet6
 netipsec/xform_tcp.c		optional ipsec inet tcp_signature | \
-					 ipsec inet6 tcp_signature
+	 ipsec inet6 tcp_signature | ipsec_support inet tcp_signature | \
+	 ipsec_support inet6 tcp_signature
 netnatm/natm.c			optional natm
 netnatm/natm_pcb.c		optional natm
 netnatm/natm_proto.c		optional natm
@@ -3870,6 +3990,7 @@ netpfil/ipfw/ip_dummynet.c	optional inet dummynet
 netpfil/ipfw/ip_dn_io.c		optional inet dummynet
 netpfil/ipfw/ip_dn_glue.c	optional inet dummynet
 netpfil/ipfw/ip_fw2.c		optional inet ipfirewall
+netpfil/ipfw/ip_fw_bpf.c	optional inet ipfirewall
 netpfil/ipfw/ip_fw_dynamic.c	optional inet ipfirewall
 netpfil/ipfw/ip_fw_eaction.c	optional inet ipfirewall
 netpfil/ipfw/ip_fw_log.c	optional inet ipfirewall
@@ -3880,6 +4001,24 @@ netpfil/ipfw/ip_fw_table_algo.c	optional inet ipfirewall
 netpfil/ipfw/ip_fw_table_value.c	optional inet ipfirewall
 netpfil/ipfw/ip_fw_iface.c	optional inet ipfirewall
 netpfil/ipfw/ip_fw_nat.c	optional inet ipfirewall_nat
+netpfil/ipfw/nat64/ip_fw_nat64.c	optional inet inet6 ipfirewall \
+	ipfirewall_nat64
+netpfil/ipfw/nat64/nat64lsn.c	optional inet inet6 ipfirewall \
+	ipfirewall_nat64
+netpfil/ipfw/nat64/nat64lsn_control.c	optional inet inet6 ipfirewall \
+	ipfirewall_nat64
+netpfil/ipfw/nat64/nat64stl.c	optional inet inet6 ipfirewall \
+	ipfirewall_nat64
+netpfil/ipfw/nat64/nat64stl_control.c	optional inet inet6 ipfirewall \
+	ipfirewall_nat64
+netpfil/ipfw/nat64/nat64_translate.c	optional inet inet6 ipfirewall \
+	ipfirewall_nat64
+netpfil/ipfw/nptv6/ip_fw_nptv6.c	optional inet inet6 ipfirewall \
+	ipfirewall_nptv6
+netpfil/ipfw/nptv6/nptv6.c	optional inet inet6 ipfirewall \
+	ipfirewall_nptv6
+netpfil/ipfw/pmod/ip_fw_pmod.c	optional inet ipfirewall_pmod
+netpfil/ipfw/pmod/tcpmod.c	optional inet ipfirewall_pmod
 netpfil/pf/if_pflog.c		optional pflog pf inet
 netpfil/pf/if_pfsync.c		optional pfsync pf inet
 netpfil/pf/pf.c			optional pf inet
@@ -4226,18 +4365,18 @@ ofed/drivers/infiniband/hw/mthca/mthca_uar.c		optional mthca	\
 	compile-with "${OFED_C}"
 
 # crypto support
-opencrypto/cast.c		optional crypto | ipsec
-opencrypto/criov.c		optional crypto | ipsec
-opencrypto/crypto.c		optional crypto | ipsec
+opencrypto/cast.c		optional crypto | ipsec | ipsec_support
+opencrypto/criov.c		optional crypto | ipsec | ipsec_support
+opencrypto/crypto.c		optional crypto | ipsec | ipsec_support
 opencrypto/cryptodev.c		optional cryptodev
-opencrypto/cryptodev_if.m	optional crypto | ipsec
-opencrypto/cryptosoft.c		optional crypto | ipsec
-opencrypto/cryptodeflate.c	optional crypto | ipsec
-opencrypto/gmac.c		optional crypto | ipsec
-opencrypto/gfmult.c		optional crypto | ipsec
-opencrypto/rmd160.c		optional crypto | ipsec
-opencrypto/skipjack.c		optional crypto | ipsec
-opencrypto/xform.c		optional crypto | ipsec
+opencrypto/cryptodev_if.m	optional crypto | ipsec | ipsec_support
+opencrypto/cryptosoft.c		optional crypto | ipsec | ipsec_support
+opencrypto/cryptodeflate.c	optional crypto | ipsec | ipsec_support
+opencrypto/gmac.c		optional crypto | ipsec | ipsec_support
+opencrypto/gfmult.c		optional crypto | ipsec | ipsec_support
+opencrypto/rmd160.c		optional crypto | ipsec | ipsec_support
+opencrypto/skipjack.c		optional crypto | ipsec | ipsec_support
+opencrypto/xform.c		optional crypto | ipsec | ipsec_support
 rpc/auth_none.c			optional krpc | nfslockd | nfscl | nfsd
 rpc/auth_unix.c			optional krpc | nfslockd | nfscl | nfsd
 rpc/authunix_prot.c		optional krpc | nfslockd | nfscl | nfsd

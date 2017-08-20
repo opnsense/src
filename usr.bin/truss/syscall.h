@@ -44,7 +44,10 @@ enum Argtype { None = 1, Hex, Octal, Int, UInt, LongHex, Name, Ptr, Stat, Ioctl,
 	Fcntlflag, Rusage, BinString, Shutdown, Resource, Rlimit, Timeval2,
 	Pathconf, Rforkflags, ExitStatus, Waitoptions, Idtype, Procctl,
 	LinuxSockArgs, Umtxop, Atfd, Atflags, Timespec2, Accessmode, Long,
-	Sysarch, ExecArgs, ExecEnv, PipeFds, QuadHex, Utrace, IntArray,
+	Sysarch, ExecArgs, ExecEnv, PipeFds, QuadHex, Utrace, IntArray, Pipe2,
+	CapFcntlRights, Fadvice, FileFlags, Flockop, Getfsstatmode, Kldsymcmd,
+	Kldunloadflags, Sizet, Madvice, Socklent, Sockprotocol, Sockoptlevel,
+	Sockoptname, Msgflags,
 
 	CloudABIAdvice, CloudABIClockID, ClouduABIFDSFlags,
 	CloudABIFDStat, CloudABIFileStat, CloudABIFileType,
@@ -72,9 +75,10 @@ struct syscall {
 	struct timespec time; /* Time spent for this call */
 	int ncalls;	/* Number of calls */
 	int nerror;	/* Number of calls that returned with error */
+	bool unknown;	/* Unknown system call */
 };
 
-struct syscall *get_syscall(const char *, int nargs);
+struct syscall *get_syscall(struct threadinfo *, u_int, u_int);
 char *print_arg(struct syscall_args *, unsigned long*, long *, struct trussinfo *);
 
 /*

@@ -677,40 +677,15 @@ devfs_close_f(struct file *fp, struct thread *td)
 }
 
 static int
-devfs_fsync(struct vop_fsync_args *ap)
-{
-	int error;
-	struct bufobj *bo;
-	struct devfs_dirent *de;
-
-	if (!vn_isdisk(ap->a_vp, &error)) {
-		bo = &ap->a_vp->v_bufobj;
-		de = ap->a_vp->v_data;
-		if (error == ENXIO && bo->bo_dirty.bv_cnt > 0) {
-			printf("Device %s went missing before all of the data "
-			    "could be written to it; expect data loss.\n",
-			    de->de_dirent->d_name);
-
-			error = vop_stdfsync(ap);
-			if (bo->bo_dirty.bv_cnt != 0 || error != 0)
-				panic("devfs_fsync: vop_stdfsync failed.");
-		}
-
-		return (0);
-	}
-
-	return (vop_stdfsync(ap));
-}
-
-static int
 devfs_getattr(struct vop_getattr_args *ap)
 {
 	struct vnode *vp = ap->a_vp;
 	struct vattr *vap = ap->a_vap;
-	int error;
 	struct devfs_dirent *de;
 	struct devfs_mount *dmp;
 	struct cdev *dev;
+	struct timeval boottime;
+	int error;
 
 	error = devfs_populate_vp(vp);
 	if (error != 0)
@@ -740,6 +715,7 @@ devfs_getattr(struct vop_getattr_args *ap)
 	vap->va_blocksize = DEV_BSIZE;
 	vap->va_type = vp->v_type;
 
+	getboottime(&boottime);
 #define fix(aa)							\
 	do {							\
 		if ((aa).tv_sec <= 3600) {			\
@@ -1787,9 +1763,11 @@ devfs_mmap_f(struct file *fp, vm_map_t map, vm_offset_t *addr, vm_size_t size,
 	 * compatible.
 	 */
 	mp = vp->v_mount;
-	if (mp != NULL && (mp->mnt_flag & MNT_NOEXEC) != 0)
+	if (mp != NULL && (mp->mnt_flag & MNT_NOEXEC) != 0) {
 		maxprot = VM_PROT_NONE;
-	else
+		if ((prot & VM_PROT_EXECUTE) != 0)
+			return (EACCES);
+	} else
 		maxprot = VM_PROT_EXECUTE;
 	if ((fp->f_flag & FREAD) != 0)
 		maxprot |= VM_PROT_READ;
@@ -1892,7 +1870,7 @@ static struct vop_vector devfs_specops = {
 	.vop_bmap =		VOP_PANIC,
 	.vop_close =		devfs_close,
 	.vop_create =		VOP_PANIC,
-	.vop_fsync =		devfs_fsync,
+	.vop_fsync =		vop_stdfsync,
 	.vop_getattr =		devfs_getattr,
 	.vop_link =		VOP_PANIC,
 	.vop_mkdir =		VOP_PANIC,

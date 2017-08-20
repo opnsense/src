@@ -76,8 +76,8 @@ void	bcache_init(u_int nblks, size_t bsize);
 void	bcache_add_dev(int);
 void	*bcache_allocate(void);
 void	bcache_free(void *);
-int	bcache_strategy(void *devdata, int rw, daddr_t blk, size_t offset,
-			size_t size, char *buf, size_t *rsize);
+int	bcache_strategy(void *devdata, int rw, daddr_t blk, size_t size,
+			char *buf, size_t *rsize);
 
 /*
  * Disk block cache
@@ -85,7 +85,7 @@ int	bcache_strategy(void *devdata, int rw, daddr_t blk, size_t offset,
 struct bcache_devdata
 {
     int         (*dv_strategy)(void *devdata, int rw, daddr_t blk,
-			size_t offset, size_t size, char *buf, size_t *rsize);
+			size_t size, char *buf, size_t *rsize);
     void	*dv_devdata;
     void	*dv_cache;
 };
@@ -229,6 +229,7 @@ void file_discard(struct preloaded_file *fp);
 void file_addmetadata(struct preloaded_file *fp, int type, size_t size, void *p);
 int  file_addmodule(struct preloaded_file *fp, char *modname, int version,
 	struct kernel_module **newmp);
+void file_removemetadata(struct preloaded_file *fp);
 
 /* MI module loaders */
 #ifdef __elfN

@@ -62,8 +62,6 @@ __FBSDID("$FreeBSD$");
 
 struct in_addr servip;
 
-static n_long	nmask, smask;
-
 static time_t	bot;
 
 static	char vm_rfc1048[4] = VM_RFC1048;
@@ -148,7 +146,17 @@ bootp(sock, flag)
 		bp->bp_vend[7] = TAG_CLASSID;
 		bp->bp_vend[8] = 9;
 		bcopy("PXEClient", &bp->bp_vend[9], 9);
-		bp->bp_vend[18] = TAG_END;
+		bp->bp_vend[18] = TAG_PARAM_REQ;
+		bp->bp_vend[19] = 8;
+		bp->bp_vend[20] = TAG_ROOTPATH;
+		bp->bp_vend[21] = TAG_TFTP_SERVER;
+		bp->bp_vend[22] = TAG_HOSTNAME;
+		bp->bp_vend[23] = TAG_SWAPSERVER;
+		bp->bp_vend[24] = TAG_GATEWAY;
+		bp->bp_vend[25] = TAG_SUBNET_MASK;
+		bp->bp_vend[26] = TAG_INTF_MTU;
+		bp->bp_vend[27] = TAG_SERVERID;
+		bp->bp_vend[28] = TAG_END;
 	} else
 		bp->bp_vend[7] = TAG_END;
 #else
@@ -213,30 +221,19 @@ bootp(sock, flag)
 	bcopy(rbuf.rbootp.bp_file, bootfile, sizeof(bootfile));
 	bootfile[sizeof(bootfile) - 1] = '\0';
 
-	if (IN_CLASSA(ntohl(myip.s_addr)))
-		nmask = htonl(IN_CLASSA_NET);
-	else if (IN_CLASSB(ntohl(myip.s_addr)))
-		nmask = htonl(IN_CLASSB_NET);
-	else
-		nmask = htonl(IN_CLASSC_NET);
-#ifdef BOOTP_DEBUG
-	if (debug)
-		printf("'native netmask' is %s\n", intoa(nmask));
-#endif
-
-	/* Check subnet mask against net mask; toss if bogus */
-	if ((nmask & smask) != nmask) {
+	if (!netmask) {
+		if (IN_CLASSA(ntohl(myip.s_addr)))
+			netmask = htonl(IN_CLASSA_NET);
+		else if (IN_CLASSB(ntohl(myip.s_addr)))
+			netmask = htonl(IN_CLASSB_NET);
+		else
+			netmask = htonl(IN_CLASSC_NET);
 #ifdef BOOTP_DEBUG
 		if (debug)
-			printf("subnet mask (%s) bad\n", intoa(smask));
+			printf("'native netmask' is %s\n", intoa(netmask));
 #endif
-		smask = 0;
 	}
 
-	/* Get subnet (or natural net) mask */
-	netmask = nmask;
-	if (smask)
-		netmask = smask;
 #ifdef BOOTP_DEBUG
 	if (debug)
 		printf("mask: %s\n", intoa(netmask));
@@ -375,7 +372,7 @@ vend_rfc1048(cp, len)
 			break;
 
 		if (tag == TAG_SUBNET_MASK) {
-			bcopy(cp, &smask, sizeof(smask));
+			bcopy(cp, &netmask, sizeof(netmask));
 		}
 		if (tag == TAG_GATEWAY) {
 			bcopy(cp, &gateip.s_addr, sizeof(gateip.s_addr));
@@ -411,6 +408,10 @@ vend_rfc1048(cp, len)
 			bcopy(cp, &dhcp_serverip.s_addr,
 			      sizeof(dhcp_serverip.s_addr));
 		}
+		if (tag == TAG_TFTP_SERVER) {
+			bcopy(cp, &tftpip.s_addr,
+			      sizeof(tftpip.s_addr));
+		}
 #endif
 		cp += size;
 	}
@@ -431,7 +432,7 @@ vend_cmu(cp)
 	vp = (struct cmu_vend *)cp;
 
 	if (vp->v_smask.s_addr != 0) {
-		smask = vp->v_smask.s_addr;
+		netmask = vp->v_smask.s_addr;
 	}
 	if (vp->v_dgate.s_addr != 0) {
 		gateip = vp->v_dgate;

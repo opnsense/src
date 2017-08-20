@@ -68,6 +68,8 @@ __FBSDID("$FreeBSD$");
  * Priority comparison code by Harlan Stenn.
  */
 
+/* Maximum number of characters in time of last occurrence */
+#define	MAXDATELEN	16
 #define	MAXLINE		1024		/* maximum line length */
 #define	MAXSVLINE	MAXLINE		/* maximum saved line length */
 #define	DEFUPRI		(LOG_USER|LOG_NOTICE)
@@ -79,15 +81,15 @@ __FBSDID("$FreeBSD$");
 #include <sys/param.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
-#include <sys/stat.h>
-#include <sys/wait.h>
-#include <sys/socket.h>
 #include <sys/queue.h>
+#include <sys/resource.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/syslimits.h>
+#include <sys/time.h>
 #include <sys/uio.h>
 #include <sys/un.h>
-#include <sys/time.h>
-#include <sys/resource.h>
-#include <sys/syslimits.h>
+#include <sys/wait.h>
 #include <sys/types.h>
 
 #include <netinet/in.h>
@@ -95,6 +97,7 @@ __FBSDID("$FreeBSD$");
 #include <arpa/inet.h>
 
 #include <ctype.h>
+#include <dirent.h>
 #include <err.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -118,6 +121,8 @@ __FBSDID("$FreeBSD$");
 const char	*ConfFile = _PATH_LOGCONF;
 const char	*PidFile = _PATH_LOGPID;
 const char	ctty[] = _PATH_CONSOLE;
+static const char	include_str[] = "include";
+static const char	include_ext[] = ".conf";
 
 #define	dprintf		if (Debug) printf
 
@@ -194,7 +199,7 @@ struct filed {
 		} f_pipe;
 	} f_un;
 	char	f_prevline[MAXSVLINE];		/* last message logged */
-	char	f_lasttime[16];			/* time of last occurrence */
+	char	f_lasttime[MAXDATELEN];		/* time of last occurrence */
 	char	f_prevhost[MAXHOSTNAMELEN];	/* host from which recd. */
 	int	f_prevpri;			/* pri of f_prevline */
 	int	f_prevlen;			/* length of f_prevline */
@@ -621,10 +626,7 @@ main(int argc, char *argv[])
 		dprintf("sending on inet and/or inet6 socket\n");
 	}
 
-	if ((fklog = open(_PATH_KLOG, O_RDONLY, 0)) >= 0)
-		if (fcntl(fklog, F_SETFL, O_NONBLOCK) < 0)
-			fklog = -1;
-	if (fklog < 0)
+	if ((fklog = open(_PATH_KLOG, O_RDONLY|O_NONBLOCK, 0)) < 0)
 		dprintf("can't open %s (%d)\n", _PATH_KLOG, errno);
 
 	/* tuck my process id away */
@@ -974,7 +976,7 @@ logmsg(int pri, const char *msg, const char *from, int flags)
 	 * Check to see if msg looks non-standard.
 	 */
 	msglen = strlen(msg);
-	if (msglen < 16 || msg[3] != ' ' || msg[6] != ' ' ||
+	if (msglen < MAXDATELEN || msg[3] != ' ' || msg[6] != ' ' ||
 	    msg[9] != ':' || msg[12] != ':' || msg[15] != ' ')
 		flags |= ADDDATE;
 
@@ -983,8 +985,8 @@ logmsg(int pri, const char *msg, const char *from, int flags)
 		timestamp = ctime(&now) + 4;
 	} else {
 		timestamp = msg;
-		msg += 16;
-		msglen -= 16;
+		msg += MAXDATELEN;
+		msglen -= MAXDATELEN;
 	}
 
 	/* skip leading blanks */
@@ -1604,6 +1606,157 @@ die(int signo)
 	exit(1);
 }
 
+static int
+configfiles(const struct dirent *dp)
+{
+	const char *p;
+	size_t ext_len;
+
+	if (dp->d_name[0] == '.')
+		return (0);
+
+	ext_len = sizeof(include_ext) -1;
+
+	if (dp->d_namlen <= ext_len)
+		return (0);
+
+	p = &dp->d_name[dp->d_namlen - ext_len];
+	if (strcmp(p, include_ext) != 0)
+		return (0);
+
+	return (1);
+}
+
+static void
+readconfigfile(FILE *cf, struct filed **nextp, int allow_includes)
+{
+	FILE *cf2;
+	struct filed *f;
+	struct dirent **ent;
+	char cline[LINE_MAX];
+	char host[MAXHOSTNAMELEN];
+	char prog[LINE_MAX];
+	char file[MAXPATHLEN];
+	char *p, *tmp;
+	int i, nents;
+	size_t include_len;
+
+	/*
+	 *  Foreach line in the conf table, open that file.
+	 */
+	f = NULL;
+	include_len = sizeof(include_str) -1;
+	(void)strlcpy(host, "*", sizeof(host));
+	(void)strlcpy(prog, "*", sizeof(prog));
+	while (fgets(cline, sizeof(cline), cf) != NULL) {
+		/*
+		 * check for end-of-section, comments, strip off trailing
+		 * spaces and newline character. #!prog is treated specially:
+		 * following lines apply only to that program.
+		 */
+		for (p = cline; isspace(*p); ++p)
+			continue;
+		if (*p == 0)
+			continue;
+		if (allow_includes &&
+		    strncmp(p, include_str, include_len) == 0 &&
+		    isspace(p[include_len])) {
+			p += include_len;
+			while (isspace(*p))
+				p++;
+			tmp = p;
+			while (*tmp != '\0' && !isspace(*tmp))
+				tmp++;
+			*tmp = '\0';
+			dprintf("Trying to include files in '%s'\n", p);
+			nents = scandir(p, &ent, configfiles, alphasort);
+			if (nents == -1) {
+				dprintf("Unable to open '%s': %s\n", p,
+				    strerror(errno));
+				continue;
+			}
+			for (i = 0; i < nents; i++) {
+				if (snprintf(file, sizeof(file), "%s/%s", p,
+				    ent[i]->d_name) >= (int)sizeof(file)) {
+					dprintf("ignoring path too long: "
+					    "'%s/%s'\n", p, ent[i]->d_name);
+					free(ent[i]);
+					continue;
+				}
+				free(ent[i]);
+				cf2 = fopen(file, "r");
+				if (cf2 == NULL)
+					continue;
+				dprintf("reading %s\n", file);
+				readconfigfile(cf2, nextp, 0);
+				fclose(cf2);
+			}
+			free(ent);
+			continue;
+		}
+		if (*p == '#') {
+			p++;
+			if (*p != '!' && *p != '+' && *p != '-')
+				continue;
+		}
+		if (*p == '+' || *p == '-') {
+			host[0] = *p++;
+			while (isspace(*p))
+				p++;
+			if ((!*p) || (*p == '*')) {
+				(void)strlcpy(host, "*", sizeof(host));
+				continue;
+			}
+			if (*p == '@')
+				p = LocalHostName;
+			for (i = 1; i < MAXHOSTNAMELEN - 1; i++) {
+				if (!isalnum(*p) && *p != '.' && *p != '-'
+				    && *p != ',' && *p != ':' && *p != '%')
+					break;
+				host[i] = *p++;
+			}
+			host[i] = '\0';
+			continue;
+		}
+		if (*p == '!') {
+			p++;
+			while (isspace(*p)) p++;
+			if ((!*p) || (*p == '*')) {
+				(void)strlcpy(prog, "*", sizeof(prog));
+				continue;
+			}
+			for (i = 0; i < LINE_MAX - 1; i++) {
+				if (!isprint(p[i]) || isspace(p[i]))
+					break;
+				prog[i] = p[i];
+			}
+			prog[i] = 0;
+			continue;
+		}
+		for (p = cline + 1; *p != '\0'; p++) {
+			if (*p != '#')
+				continue;
+			if (*(p - 1) == '\\') {
+				strcpy(p - 1, p);
+				p--;
+				continue;
+			}
+			*p = '\0';
+			break;
+		}
+		for (i = strlen(cline) - 1; i >= 0 && isspace(cline[i]); i--)
+			cline[i] = '\0';
+		f = (struct filed *)calloc(1, sizeof(*f));
+		if (f == NULL) {
+			logerror("calloc");
+			exit(1);
+		}
+		*nextp = f;
+		nextp = &f->f_next;
+		cfline(cline, f, prog, host);
+	}
+}
+
 /*
  *  INIT -- Initialize syslogd from configuration table
  */
@@ -1614,9 +1767,6 @@ init(int signo)
 	FILE *cf;
 	struct filed *f, *next, **nextp;
 	char *p;
-	char cline[LINE_MAX];
- 	char prog[LINE_MAX];
-	char host[MAXHOSTNAMELEN];
 	char oldLocalHostName[MAXHOSTNAMELEN];
 	char hostMsg[2*MAXHOSTNAMELEN+40];
 	char bootfileMsg[LINE_MAX];
@@ -1708,83 +1858,7 @@ init(int signo)
 		return;
 	}
 
-	/*
-	 *  Foreach line in the conf table, open that file.
-	 */
-	f = NULL;
-	(void)strlcpy(host, "*", sizeof(host));
-	(void)strlcpy(prog, "*", sizeof(prog));
-	while (fgets(cline, sizeof(cline), cf) != NULL) {
-		/*
-		 * check for end-of-section, comments, strip off trailing
-		 * spaces and newline character. #!prog is treated specially:
-		 * following lines apply only to that program.
-		 */
-		for (p = cline; isspace(*p); ++p)
-			continue;
-		if (*p == 0)
-			continue;
-		if (*p == '#') {
-			p++;
-			if (*p != '!' && *p != '+' && *p != '-')
-				continue;
-		}
-		if (*p == '+' || *p == '-') {
-			host[0] = *p++;
-			while (isspace(*p))
-				p++;
-			if ((!*p) || (*p == '*')) {
-				(void)strlcpy(host, "*", sizeof(host));
-				continue;
-			}
-			if (*p == '@')
-				p = LocalHostName;
-			for (i = 1; i < MAXHOSTNAMELEN - 1; i++) {
-				if (!isalnum(*p) && *p != '.' && *p != '-'
-				    && *p != ',' && *p != ':' && *p != '%')
-					break;
-				host[i] = *p++;
-			}
-			host[i] = '\0';
-			continue;
-		}
-		if (*p == '!') {
-			p++;
-			while (isspace(*p)) p++;
-			if ((!*p) || (*p == '*')) {
-				(void)strlcpy(prog, "*", sizeof(prog));
-				continue;
-			}
-			for (i = 0; i < LINE_MAX - 1; i++) {
-				if (!isprint(p[i]) || isspace(p[i]))
-					break;
-				prog[i] = p[i];
-			}
-			prog[i] = 0;
-			continue;
-		}
-		for (p = cline + 1; *p != '\0'; p++) {
-			if (*p != '#')
-				continue;
-			if (*(p - 1) == '\\') {
-				strcpy(p - 1, p);
-				p--;
-				continue;
-			}
-			*p = '\0';
-			break;
-		}
-		for (i = strlen(cline) - 1; i >= 0 && isspace(cline[i]); i--)
-			cline[i] = '\0';
-		f = (struct filed *)calloc(1, sizeof(*f));
-		if (f == NULL) {
-			logerror("calloc");
-			exit(1);
-		}
-		*nextp = f;
-		nextp = &f->f_next;
-		cfline(cline, f, prog, host);
-	}
+	readconfigfile(cf, &Files, 1);
 
 	/* close the configuration file */
 	(void)fclose(cf);
@@ -2205,7 +2279,7 @@ markit(void)
 
 /*
  * fork off and become a daemon, but wait for the child to come online
- * before returing to the parent, or we get disk thrashing at boot etc.
+ * before returning to the parent, or we get disk thrashing at boot etc.
  * Set a timer so we don't hang forever if it wedges.
  */
 static int

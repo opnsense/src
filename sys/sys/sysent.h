@@ -38,7 +38,6 @@ struct rlimit;
 struct sysent;
 struct thread;
 struct ksiginfo;
-struct proc;
 struct syscall_args;
 
 enum systrace_probe_t {
@@ -131,7 +130,6 @@ struct sysentvec {
 	void		(*sv_schedtail)(struct thread *);
 	void		(*sv_thread_detach)(struct thread *);
 	int		(*sv_trap)(struct thread *);
-	void		(* const sv_pax_aslr_init)(struct proc *p);
 };
 
 #define	SV_ILP32	0x000100	/* 32-bit executable. */
@@ -140,7 +138,7 @@ struct sysentvec {
 #define	SV_AOUT		0x008000	/* a.out executable. */
 #define	SV_SHP		0x010000	/* Shared page. */
 #define	SV_CAPSICUM	0x020000	/* Force cap_enter() on startup. */
-#define	SV_TIMEKEEP	0x040000
+#define	SV_TIMEKEEP	0x040000	/* Shared page timehands. */
 
 #define	SV_ABI_MASK	0xff
 #define	SV_ABI_ERRNO(p, e)	((p)->p_sysent->sv_errsize <= 0 ? e :	\
@@ -177,13 +175,21 @@ struct syscall_module_data {
 	int	flags;			/* flags for syscall_register */
 };
 
-#define	MAKE_SYSENT(syscallname)				\
-static struct sysent syscallname##_sysent = {			\
-	(sizeof(struct syscallname ## _args )			\
+/* separate initialization vector so it can be used in a substructure */
+#define SYSENT_INIT_VALS(_syscallname) {			\
+	.sy_narg = (sizeof(struct _syscallname ## _args )	\
 	    / sizeof(register_t)),				\
-	(sy_call_t *)& sys_##syscallname,	       		\
-	SYS_AUE_##syscallname					\
-}
+	.sy_call = (sy_call_t *)&sys_##_syscallname,		\
+	.sy_auevent = SYS_AUE_##_syscallname,			\
+	.sy_systrace_args_func = NULL,				\
+	.sy_entry = 0,						\
+	.sy_return = 0,						\
+	.sy_flags = 0,						\
+	.sy_thrcnt = 0						\
+}							
+
+#define	MAKE_SYSENT(syscallname)				\
+static struct sysent syscallname##_sysent = SYSENT_INIT_VALS(syscallname);
 
 #define	MAKE_SYSENT_COMPAT(syscallname)				\
 static struct sysent syscallname##_sysent = {			\

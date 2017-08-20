@@ -148,6 +148,7 @@ static const char *const vm_guest_sysctl_names[] = {
 	"xen",
 	"hv",
 	"vmware",
+	"kvm",
 	NULL
 };
 CTASSERT(nitems(vm_guest_sysctl_names) - 1 == VM_LAST);
@@ -169,6 +170,12 @@ init_param1(void)
 	tick = 1000000 / hz;
 	tick_sbt = SBT_1S / hz;
 	tick_bt = sbttobt(tick_sbt);
+
+	/*
+	 * Arrange for ticks to wrap 10 minutes after boot to help catch
+	 * sign problems sooner.
+	 */
+	ticks = INT_MAX - (hz * 10 * 60);
 
 #ifdef VM_SWZONE_SIZE_MAX
 	maxswzone = VM_SWZONE_SIZE_MAX;

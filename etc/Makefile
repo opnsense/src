@@ -296,8 +296,6 @@ distribution:
 	cd ${.CURDIR}/root; \
 	    ${INSTALL} -o ${BINOWN} -g ${BINGRP} -m 644 \
 		dot.profile ${DESTDIR}/root/.profile; \
-	    ${INSTALL} -o ${BINOWN} -g ${BINGRP} -m 644 \
-		dot.vimrc ${DESTDIR}/root/.vimrc; \
 	    rm -f ${DESTDIR}/.profile; \
 	    ln ${DESTDIR}/root/.profile ${DESTDIR}/.profile
 .if ${MK_TCSH} != "no"
@@ -461,7 +459,7 @@ distrib-dirs: ${MTREES:N/*} distrib-cleanup .PHONY
 .endif
 
 etc-examples-install: ${META_DEPS}
-	cd ${.CURDIR}; ${INSTALL} -o ${BINOWN} -g ${BINGRP} -m 444 \
+	cd ${.CURDIR}; ${INSTALL} ${TAG_ARGS} -o ${BINOWN} -g ${BINGRP} -m 444 \
 	    ${BIN1} ${BIN2} nsmb.conf opieaccess \
 	    ${DESTDIR}${SHAREDIR}/examples/etc
 

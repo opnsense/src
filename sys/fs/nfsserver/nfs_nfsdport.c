@@ -62,6 +62,7 @@ extern struct nfsclienthashhead *nfsclienthash;
 extern struct nfslockhashhead *nfslockhash;
 extern struct nfssessionhash *nfssessionhash;
 extern int nfsrv_sessionhashsize;
+extern struct nfsstatsv1 nfsstatsv1;
 struct vfsoptlist nfsv4root_opt, nfsv4root_newopt;
 NFSDLOCKMUTEX;
 struct nfsrchash_bucket nfsrchash_table[NFSRVCACHE_HASHSIZE];
@@ -349,7 +350,7 @@ nfsvno_namei(struct nfsrv_descript *nd, struct nameidata *ndp,
 
 	*retdirp = NULL;
 	cnp->cn_nameptr = cnp->cn_pnbuf;
-	ndp->ni_strictrelative = 0;
+	ndp->ni_lcf = 0;
 	/*
 	 * Extract and set starting directory.
 	 */
@@ -686,6 +687,8 @@ nfsvno_read(struct vnode *vp, off_t off, int cnt, struct ucred *cred,
 	uiop->uio_td = NULL;
 	nh = nfsrv_sequential_heuristic(uiop, vp);
 	ioflag |= nh->nh_seqcount << IO_SEQSHIFT;
+	/* XXX KDM make this more systematic? */
+	nfsstatsv1.srvbytes[NFSV4OP_READ] += uiop->uio_resid;
 	error = VOP_READ(vp, uiop, IO_NODELOCKED | ioflag, cred);
 	FREE((caddr_t)iv2, M_TEMP);
 	if (error) {
@@ -758,6 +761,8 @@ nfsvno_write(struct vnode *vp, off_t off, int retlen, int cnt, int stable,
 	uiop->uio_offset = off;
 	nh = nfsrv_sequential_heuristic(uiop, vp);
 	ioflags |= nh->nh_seqcount << IO_SEQSHIFT;
+	/* XXX KDM make this more systematic? */
+	nfsstatsv1.srvbytes[NFSV4OP_WRITE] += uiop->uio_resid;
 	error = VOP_WRITE(vp, uiop, ioflags, cred);
 	if (error == 0)
 		nh->nh_nextoff = uiop->uio_offset;
@@ -1431,7 +1436,9 @@ nfsvno_open(struct nfsrv_descript *nd, struct nameidata *ndp,
 						vput(ndp->ni_vp);
 						ndp->ni_vp = NULL;
 						nd->nd_repstat = NFSERR_NOTSUPP;
-					}
+					} else
+						NFSSETBIT_ATTRBIT(attrbitp,
+						    NFSATTRBIT_TIMEACCESS);
 				} else {
 					nfsrv_fixattr(nd, ndp->ni_vp, nvap,
 					    aclp, p, attrbitp, exp);
@@ -2013,25 +2020,17 @@ again:
 	}
 
 	/*
-	 * Check to see if entries in this directory can be safely acquired
-	 * via VFS_VGET() or if a switch to VOP_LOOKUP() is required.
-	 * ZFS snapshot directories need VOP_LOOKUP(), so that any
-	 * automount of the snapshot directory that is required will
-	 * be done.
-	 * This needs to be done here for NFSv4, since NFSv4 never does
-	 * a VFS_VGET() for "." or "..".
+	 * For now ZFS requires VOP_LOOKUP as a workaround.  Until ino_t is changed
+	 * to 64 bit type a ZFS filesystem with over 1 billion files in it
+	 * will suffer from 64bit -> 32bit truncation.
 	 */
-	if (is_zfs == 1) {
-		r = VFS_VGET(mp, at.na_fileid, LK_SHARED, &nvp);
-		if (r == EOPNOTSUPP) {
-			usevget = 0;
-			cn.cn_nameiop = LOOKUP;
-			cn.cn_lkflags = LK_SHARED | LK_RETRY;
-			cn.cn_cred = nd->nd_cred;
-			cn.cn_thread = p;
-		} else if (r == 0)
-			vput(nvp);
-	}
+	if (is_zfs == 1)
+		usevget = 0;
+
+	cn.cn_nameiop = LOOKUP;
+	cn.cn_lkflags = LK_SHARED | LK_RETRY;
+	cn.cn_cred = nd->nd_cred;
+	cn.cn_thread = p;
 
 	/*
 	 * Save this position, in case there is an error before one entry
@@ -2100,16 +2099,7 @@ again:
 					else
 						r = EOPNOTSUPP;
 					if (r == EOPNOTSUPP) {
-						if (usevget) {
-							usevget = 0;
-							cn.cn_nameiop = LOOKUP;
-							cn.cn_lkflags =
-							    LK_SHARED |
-							    LK_RETRY;
-							cn.cn_cred =
-							    nd->nd_cred;
-							cn.cn_thread = p;
-						}
+						usevget = 0;
 						cn.cn_nameptr = dp->d_name;
 						cn.cn_namelen = nlen;
 						cn.cn_flags = ISLASTCN |

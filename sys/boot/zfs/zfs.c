@@ -126,7 +126,7 @@ zfs_close(struct open_file *f)
 {
 	struct file *fp = (struct file *)f->f_fsdata;
 
-	dnode_cache_obj = 0;
+	dnode_cache_obj = NULL;
 	f->f_fsdata = (void *)0;
 	if (fp == (struct file *)0)
 		return (0);
@@ -579,7 +579,7 @@ zfs_dev_close(struct open_file *f)
 }
 
 static int
-zfs_dev_strategy(void *devdata, int rw, daddr_t dblk, size_t offset, size_t size, char *buf, size_t *rsize)
+zfs_dev_strategy(void *devdata, int rw, daddr_t dblk, size_t size, char *buf, size_t *rsize)
 {
 
 	return (ENOSYS);

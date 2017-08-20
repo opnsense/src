@@ -265,7 +265,7 @@ retry:
 #endif
 		VM_OBJECT_WUNLOCK(object);
 	}
-	vref(vp);
+	vrefact(vp);
 	return (object);
 }
 
@@ -466,10 +466,6 @@ vnode_pager_setsize(struct vnode *vp, vm_ooffset_t nsize)
 			 * replacement from working properly.
 			 */
 			vm_page_clear_dirty(m, base, PAGE_SIZE - base);
-		} else if ((nsize & PAGE_MASK) &&
-		    vm_page_is_cached(object, OFF_TO_IDX(nsize))) {
-			vm_page_cache_free(object, OFF_TO_IDX(nsize),
-			    nobjsize);
 		}
 	}
 	object->un_pager.vnp.vnp_size = nsize;
@@ -894,8 +890,7 @@ vnode_pager_generic_getpages(struct vnode *vp, vm_page_t *m, int count,
 		for (tpindex = m[0]->pindex - 1;
 		    tpindex >= startpindex && tpindex < m[0]->pindex;
 		    tpindex--, i++) {
-			p = vm_page_alloc(object, tpindex, VM_ALLOC_NORMAL |
-			    VM_ALLOC_IFNOTCACHED);
+			p = vm_page_alloc(object, tpindex, VM_ALLOC_NORMAL);
 			if (p == NULL) {
 				/* Shift the array. */
 				for (int j = 0; j < i; j++)
@@ -932,8 +927,7 @@ vnode_pager_generic_getpages(struct vnode *vp, vm_page_t *m, int count,
 
 		for (tpindex = m[count - 1]->pindex + 1;
 		    tpindex < endpindex; i++, tpindex++) {
-			p = vm_page_alloc(object, tpindex, VM_ALLOC_NORMAL |
-			    VM_ALLOC_IFNOTCACHED);
+			p = vm_page_alloc(object, tpindex, VM_ALLOC_NORMAL);
 			if (p == NULL)
 				break;
 			bp->b_pages[i] = p;
@@ -1130,8 +1124,7 @@ vnode_pager_putpages(vm_object_t object, vm_page_t *m, int count,
 	 * daemon up.  This should be probably be addressed XXX.
 	 */
 
-	if (vm_cnt.v_free_count + vm_cnt.v_cache_count <
-	    vm_cnt.v_pageout_free_min)
+	if (vm_cnt.v_free_count < vm_cnt.v_pageout_free_min)
 		flags |= VM_PAGER_PUT_SYNC;
 
 	/*
@@ -1159,18 +1152,12 @@ int
 vnode_pager_generic_putpages(struct vnode *vp, vm_page_t *ma, int bytecount,
     int flags, int *rtvals)
 {
-	int i;
 	vm_object_t object;
 	vm_page_t m;
-	int count;
-
-	int maxsize, ncount;
 	vm_ooffset_t poffset;
 	struct uio auio;
 	struct iovec aiov;
-	int error;
-	int ioflags;
-	int ppscheck = 0;
+	int count, error, i, maxsize, ncount, pgoff, ppscheck;
 	static struct timeval lastfail;
 	static int curfail;
 
@@ -1181,10 +1168,11 @@ vnode_pager_generic_putpages(struct vnode *vp, vm_page_t *ma, int bytecount,
 		rtvals[i] = VM_PAGER_ERROR;
 
 	if ((int64_t)ma[0]->pindex < 0) {
-		printf("vnode_pager_putpages: attempt to write meta-data!!! -- 0x%lx(%lx)\n",
-		    (long)ma[0]->pindex, (u_long)ma[0]->dirty);
+		printf("vnode_pager_generic_putpages: "
+		    "attempt to write meta-data 0x%jx(%lx)\n",
+		    (uintmax_t)ma[0]->pindex, (u_long)ma[0]->dirty);
 		rtvals[0] = VM_PAGER_BAD;
-		return VM_PAGER_BAD;
+		return (VM_PAGER_BAD);
 	}
 
 	maxsize = count * PAGE_SIZE;
@@ -1207,8 +1195,6 @@ vnode_pager_generic_putpages(struct vnode *vp, vm_page_t *ma, int bytecount,
 	VM_OBJECT_WLOCK(object);
 	if (maxsize + poffset > object->un_pager.vnp.vnp_size) {
 		if (object->un_pager.vnp.vnp_size > poffset) {
-			int pgoff;
-
 			maxsize = object->un_pager.vnp.vnp_size - poffset;
 			ncount = btoc(maxsize);
 			if ((pgoff = (int)maxsize & PAGE_MASK) != 0) {
@@ -1222,6 +1208,7 @@ vnode_pager_generic_putpages(struct vnode *vp, vm_page_t *ma, int bytecount,
 				vm_page_assert_sbusied(m);
 				KASSERT(!pmap_page_is_write_mapped(m),
 		("vnode_pager_generic_putpages: page %p is not read-only", m));
+				MPASS(m->dirty != 0);
 				vm_page_clear_dirty(m, pgoff, PAGE_SIZE -
 				    pgoff);
 			}
@@ -1229,30 +1216,14 @@ vnode_pager_generic_putpages(struct vnode *vp, vm_page_t *ma, int bytecount,
 			maxsize = 0;
 			ncount = 0;
 		}
-		if (ncount < count) {
-			for (i = ncount; i < count; i++) {
-				rtvals[i] = VM_PAGER_BAD;
-			}
-		}
+		for (i = ncount; i < count; i++)
+			rtvals[i] = VM_PAGER_BAD;
 	}
+	for (i = 0; i < ncount - ((btoc(maxsize) & PAGE_MASK) != 0); i++)
+		MPASS(ma[i]->dirty == VM_PAGE_BITS_ALL);
 	VM_OBJECT_WUNLOCK(object);
 
-	/*
-	 * pageouts are already clustered, use IO_ASYNC to force a bawrite()
-	 * rather then a bdwrite() to prevent paging I/O from saturating 
-	 * the buffer cache.  Dummy-up the sequential heuristic to cause
-	 * large ranges to cluster.  If neither IO_SYNC or IO_ASYNC is set,
-	 * the system decides how to cluster.
-	 */
-	ioflags = IO_VMIO;
-	if (flags & (VM_PAGER_PUT_SYNC | VM_PAGER_PUT_INVAL))
-		ioflags |= IO_SYNC;
-	else if ((flags & VM_PAGER_CLUSTER_OK) == 0)
-		ioflags |= IO_ASYNC;
-	ioflags |= (flags & VM_PAGER_PUT_INVAL) ? IO_INVAL: 0;
-	ioflags |= IO_SEQMAX << IO_SEQSHIFT;
-
-	aiov.iov_base = (caddr_t) 0;
+	aiov.iov_base = NULL;
 	aiov.iov_len = maxsize;
 	auio.uio_iov = &aiov;
 	auio.uio_iovcnt = 1;
@@ -1260,24 +1231,49 @@ vnode_pager_generic_putpages(struct vnode *vp, vm_page_t *ma, int bytecount,
 	auio.uio_segflg = UIO_NOCOPY;
 	auio.uio_rw = UIO_WRITE;
 	auio.uio_resid = maxsize;
-	auio.uio_td = (struct thread *) 0;
-	error = VOP_WRITE(vp, &auio, ioflags, curthread->td_ucred);
+	auio.uio_td = NULL;
+	error = VOP_WRITE(vp, &auio, vnode_pager_putpages_ioflags(flags),
+	    curthread->td_ucred);
 	PCPU_INC(cnt.v_vnodeout);
 	PCPU_ADD(cnt.v_vnodepgsout, ncount);
 
-	if (error) {
-		if ((ppscheck = ppsratecheck(&lastfail, &curfail, 1)))
-			printf("vnode_pager_putpages: I/O error %d\n", error);
-	}
-	if (auio.uio_resid) {
-		if (ppscheck || ppsratecheck(&lastfail, &curfail, 1))
-			printf("vnode_pager_putpages: residual I/O %zd at %lu\n",
-			    auio.uio_resid, (u_long)ma[0]->pindex);
-	}
-	for (i = 0; i < ncount; i++) {
+	ppscheck = 0;
+	if (error != 0 && (ppscheck = ppsratecheck(&lastfail, &curfail, 1))
+	    != 0)
+		printf("vnode_pager_putpages: I/O error %d\n", error);
+	if (auio.uio_resid != 0 && (ppscheck != 0 ||
+	    ppsratecheck(&lastfail, &curfail, 1) != 0))
+		printf("vnode_pager_putpages: residual I/O %zd at %ju\n",
+		    auio.uio_resid, (uintmax_t)ma[0]->pindex);
+	for (i = 0; i < ncount; i++)
 		rtvals[i] = VM_PAGER_OK;
-	}
-	return rtvals[0];
+	return (rtvals[0]);
+}
+
+int
+vnode_pager_putpages_ioflags(int pager_flags)
+{
+	int ioflags;
+
+	/*
+	 * Pageouts are already clustered, use IO_ASYNC to force a
+	 * bawrite() rather then a bdwrite() to prevent paging I/O
+	 * from saturating the buffer cache.  Dummy-up the sequential
+	 * heuristic to cause large ranges to cluster.  If neither
+	 * IO_SYNC or IO_ASYNC is set, the system decides how to
+	 * cluster.
+	 */
+	ioflags = IO_VMIO;
+	if ((pager_flags & (VM_PAGER_PUT_SYNC | VM_PAGER_PUT_INVAL)) != 0)
+		ioflags |= IO_SYNC;
+	else if ((pager_flags & VM_PAGER_CLUSTER_OK) == 0)
+		ioflags |= IO_ASYNC;
+	ioflags |= (pager_flags & VM_PAGER_PUT_INVAL) != 0 ? IO_INVAL: 0;
+#ifdef notyet
+	ioflags |= (pager_flags & VM_PAGER_PUT_NOREUSE) != 0 ? IO_NOREUSE : 0;
+#endif
+	ioflags |= IO_SEQMAX << IO_SEQSHIFT;
+	return (ioflags);
 }
 
 void

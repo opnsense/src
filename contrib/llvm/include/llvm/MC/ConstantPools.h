@@ -25,6 +25,7 @@ class MCExpr;
 class MCSection;
 class MCStreamer;
 class MCSymbol;
+class MCSymbolRefExpr;
 
 struct ConstantPoolEntry {
   ConstantPoolEntry(MCSymbol *L, const MCExpr *Val, unsigned Sz, SMLoc Loc_)
@@ -40,6 +41,7 @@ struct ConstantPoolEntry {
 class ConstantPool {
   typedef SmallVector<ConstantPoolEntry, 4> EntryVecTy;
   EntryVecTy Entries;
+  DenseMap<int64_t, const MCSymbolRefExpr *> CachedEntries;
 
 public:
   // Initialize a new empty constant pool
@@ -58,6 +60,8 @@ public:
 
   // Return true if the constant pool is empty
   bool empty();
+
+  void clearCache();
 };
 
 class AssemblerConstantPools {
@@ -81,6 +85,7 @@ class AssemblerConstantPools {
 public:
   void emitAll(MCStreamer &Streamer);
   void emitForCurrentSection(MCStreamer &Streamer);
+  void clearCacheForCurrentSection(MCStreamer &Streamer);
   const MCExpr *addEntry(MCStreamer &Streamer, const MCExpr *Expr,
                          unsigned Size, SMLoc Loc);
 

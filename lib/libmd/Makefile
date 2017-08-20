@@ -72,17 +72,24 @@ CLEANFILES+=	md[245]hl.c md[245].ref md[245].3 mddriver \
 		skein256.ref skein512.ref skein1024.ref \
 		skeindriver
 
+# Need src tree sys/md5.h for MD5FileChunk prototype on older systems.
+SRCS+=		sys/md5.h
+CLEANDIRS=	sys
+CFLAGS+=	-I.
+sys/md5.h: ${SRCTOP}/sys/${.TARGET} .NOMETA
+	ln -sf ${.ALLSRC} ${.TARGET}
+
 # Define WEAK_REFS to provide weak aliases for libmd symbols
 #
 # Note that the same sources are also used internally by libcrypt,
 # in which case:
 #   * macros are used to rename symbols to libcrypt internal names
 #   * no weak aliases are generated
-CFLAGS+= -I${.CURDIR} -I${.CURDIR}/../../sys/crypto/sha2
-CFLAGS+= -I${.CURDIR}/../../sys/crypto/skein
+CFLAGS+= -I${.CURDIR} -I${SRCTOP}/sys/crypto/sha2
+CFLAGS+= -I${SRCTOP}/sys/crypto/skein
 CFLAGS+= -DWEAK_REFS
-.PATH: ${.CURDIR}/${MACHINE_ARCH} ${.CURDIR}/../../sys/crypto/sha2
-.PATH: ${.CURDIR}/../../sys/crypto/skein ${.CURDIR}/../../sys/crypto/skein/${MACHINE_ARCH}
+.PATH: ${.CURDIR}/${MACHINE_ARCH} ${SRCTOP}/sys/crypto/sha2
+.PATH: ${SRCTOP}/sys/crypto/skein ${SRCTOP}/sys/crypto/skein/${MACHINE_ARCH}
 
 .if exists(${MACHINE_ARCH}/sha.S)
 SRCS+=	sha.S

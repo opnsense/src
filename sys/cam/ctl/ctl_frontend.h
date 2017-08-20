@@ -1,5 +1,6 @@
 /*-
  * Copyright (c) 2003 Silicon Graphics International Corp.
+ * Copyright (c) 2014-2017 Alexander Motin <mav@FreeBSD.org>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -39,6 +40,8 @@
 #ifndef	_CTL_FRONTEND_H_
 #define	_CTL_FRONTEND_H_
 
+#include <cam/ctl/ctl_ioctl.h>
+
 typedef enum {
 	CTL_PORT_STATUS_NONE		= 0x00,
 	CTL_PORT_STATUS_ONLINE		= 0x01,
@@ -46,7 +49,7 @@ typedef enum {
 } ctl_port_status;
 
 typedef int (*fe_init_t)(void);
-typedef void (*fe_shutdown_t)(void);
+typedef int (*fe_shutdown_t)(void);
 typedef void (*port_func_t)(void *onoff_arg);
 typedef int (*port_info_func_t)(void *onoff_arg, struct sbuf *sb);
 typedef	int (*lun_func_t)(void *arg, int lun_id);
@@ -58,12 +61,13 @@ typedef int (*fe_ioctl_t)(struct cdev *dev, u_long cmd, caddr_t addr, int flag,
 	{ \
 		switch (type) { \
 		case MOD_LOAD: \
-			ctl_frontend_register( \
-				(struct ctl_frontend *)data); \
+			return (ctl_frontend_register( \
+				(struct ctl_frontend *)data)); \
 			break; \
 		case MOD_UNLOAD: \
-			printf(#name " module unload - not possible for this module type\n"); \
-			return EINVAL; \
+			return (ctl_frontend_deregister( \
+				(struct ctl_frontend *)data)); \
+			break; \
 		default: \
 			return EOPNOTSUPP; \
 		} \
@@ -225,6 +229,7 @@ struct ctl_port {
 	void		*onoff_arg;		/* passed to CTL */
 	lun_func_t	lun_enable;		/* passed to CTL */
 	lun_func_t	lun_disable;		/* passed to CTL */
+	int		lun_map_size;		/* passed to CTL */
 	uint32_t	*lun_map;		/* passed to CTL */
 	void		*targ_lun_arg;		/* passed to CTL */
 	void		(*fe_datamove)(union ctl_io *io); /* passed to CTL */
@@ -242,6 +247,8 @@ struct ctl_port {
 	struct ctl_devid *port_devid;		/* passed to CTL */
 	struct ctl_devid *target_devid;		/* passed to CTL */
 	struct ctl_devid *init_devid;		/* passed to CTL */
+	struct ctl_io_stats stats;		/* used by CTL */
+	struct mtx	port_lock;		/* used by CTL */
 	STAILQ_ENTRY(ctl_port) fe_links;	/* used by CTL */
 	STAILQ_ENTRY(ctl_port) links;		/* used by CTL */
 };

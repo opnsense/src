@@ -97,13 +97,11 @@ struct netmap_adapter *netmap_getna(if_t ifp);
 #endif
 
 #if __FreeBSD_version >= 1100027
-#define GET_MBUF_REFCNT(m)	((m)->m_ext.ext_count)
+#define MBUF_REFCNT(m)		((m)->m_ext.ext_count)
 #define SET_MBUF_REFCNT(m, x)   (m)->m_ext.ext_count = x
-#define PNT_MBUF_REFCNT(m)      &((m)->m_ext.ext_count)
 #else
-#define GET_MBUF_REFCNT(m)      ((m)->m_ext.ref_cnt ? *((m)->m_ext.ref_cnt) : -1)
+#define MBUF_REFCNT(m)		((m)->m_ext.ref_cnt ? *((m)->m_ext.ref_cnt) : -1)
 #define SET_MBUF_REFCNT(m, x)   *((m)->m_ext.ref_cnt) = x
-#define PNT_MBUF_REFCNT(m)      ((m)->m_ext.ref_cnt)
 #endif
 
 MALLOC_DECLARE(M_NETMAP);
@@ -184,7 +182,6 @@ struct hrtimer {
 	} while (0)
 
 /* rate limited, lps indicates how many per second */
-#define NRD(lps, format, ...)
 #define RD(lps, format, ...)					\
 	do {							\
 		static int t0, __cnt;				\

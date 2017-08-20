@@ -2328,12 +2328,13 @@ bpf_hdrlen(struct bpf_d *d)
 static void
 bpf_bintime2ts(struct bintime *bt, struct bpf_ts *ts, int tstype)
 {
-	struct bintime bt2;
+	struct bintime bt2, boottimebin;
 	struct timeval tsm;
 	struct timespec tsn;
 
 	if ((tstype & BPF_T_MONOTONIC) == 0) {
 		bt2 = *bt;
+		getboottimebin(&boottimebin);
 		bintime_add(&bt2, &boottimebin);
 		bt = &bt2;
 	}
@@ -2676,6 +2677,10 @@ bpf_ifdetach(void *arg __unused, struct ifnet *ifp)
 {
 	struct bpf_if *bp, *bp_temp;
 	int nmatched = 0;
+
+	/* Ignore ifnet renaming. */
+	if (ifp->if_flags & IFF_RENAMING)
+		return;
 
 	BPF_LOCK();
 	/*

@@ -1,4 +1,4 @@
-/*	$Id: term_ascii.c,v 1.52 2015/11/12 21:50:03 schwarze Exp $ */
+/*	$Id: term_ascii.c,v 1.54 2016/07/31 09:29:13 schwarze Exp $ */
 /*
  * Copyright (c) 2010, 2011 Kristaps Dzonsons <kristaps@bsd.lv>
  * Copyright (c) 2014, 2015 Ingo Schwarze <schwarze@openbsd.org>
@@ -98,7 +98,7 @@ ascii_init(enum termenc enc, const struct manoutput *outopts)
 
 		v = TERMENC_LOCALE == enc ?
 		    setlocale(LC_CTYPE, "") :
-		    setlocale(LC_CTYPE, "en_US.UTF-8");
+		    setlocale(LC_CTYPE, UTF8_LOCALE);
 		if (NULL != v && MB_CUR_MAX > 1) {
 			p->enc = enc;
 			p->advance = locale_advance;
@@ -163,18 +163,17 @@ ascii_setwidth(struct termp *p, int iop, int width)
 }
 
 void
-ascii_sepline(void *arg)
+terminal_sepline(void *arg)
 {
 	struct termp	*p;
 	size_t		 i;
 
 	p = (struct termp *)arg;
-	p->line += 3;
-	putchar('\n');
+	(*p->endline)(p);
 	for (i = 0; i < p->defrmargin; i++)
-		putchar('-');
-	putchar('\n');
-	putchar('\n');
+		(*p->letter)(p, '-');
+	(*p->endline)(p);
+	(*p->endline)(p);
 }
 
 static size_t

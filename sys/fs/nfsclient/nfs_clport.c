@@ -82,7 +82,6 @@ extern short nfsv4_cbport;
 extern int nfscl_enablecallb;
 extern int nfs_numnfscbd;
 extern int nfscl_inited;
-struct mtx nfs_clstate_mutex;
 struct mtx ncl_iod_mutex;
 NFSDLOCKMUTEX;
 
@@ -635,7 +634,7 @@ nfscl_filllockowner(void *id, u_int8_t *cp, int flags)
 	struct proc *p;
 
 	if (id == NULL) {
-		printf("NULL id\n");
+		/* Return the single open_owner of all 0 bytes. */
 		bzero(cp, NFSV4CL_LOCKNAMELEN);
 		return;
 	}
@@ -1197,7 +1196,7 @@ nfscl_maperr(struct thread *td, int error, uid_t uid, gid_t gid)
 {
 	struct proc *p;
 
-	if (error < 10000)
+	if (error < 10000 || error >= NFSERR_STALEWRITEVERF)
 		return (error);
 	if (td != NULL)
 		p = td->td_proc;
@@ -1256,7 +1255,14 @@ nfscl_procdoesntexist(u_int8_t *own)
 	} tl;
 	struct proc *p;
 	pid_t pid;
-	int ret = 0;
+	int i, ret = 0;
+
+	/* For the single open_owner of all 0 bytes, just return 0. */
+	for (i = 0; i < NFSV4CL_LOCKNAMELEN; i++)
+		if (own[i] != 0)
+			break;
+	if (i == NFSV4CL_LOCKNAMELEN)
+		return (0);
 
 	tl.cval[0] = *own++;
 	tl.cval[1] = *own++;
@@ -1381,8 +1387,6 @@ nfscl_modevent(module_t mod, int type, void *data)
 		if (loaded)
 			return (0);
 		newnfs_portinit();
-		mtx_init(&nfs_clstate_mutex, "nfs_clstate_mutex", NULL,
-		    MTX_DEF);
 		mtx_init(&ncl_iod_mutex, "ncl_iod_mutex", NULL, MTX_DEF);
 		nfscl_init();
 		NFSD_LOCK();
@@ -1406,7 +1410,6 @@ nfscl_modevent(module_t mod, int type, void *data)
 		ncl_call_invalcaches = NULL;
 		nfsd_call_nfscl = NULL;
 		/* and get rid of the mutexes */
-		mtx_destroy(&nfs_clstate_mutex);
 		mtx_destroy(&ncl_iod_mutex);
 		loaded = 0;
 		break;

@@ -182,8 +182,9 @@ uiomove_object_page(vm_object_t obj, size_t len, struct uio *uio)
 	 * lock to page out tobj's pages because tobj is a OBJT_SWAP
 	 * type object.
 	 */
-	m = vm_page_grab(obj, idx, VM_ALLOC_NORMAL);
+	m = vm_page_grab(obj, idx, VM_ALLOC_NORMAL | VM_ALLOC_NOBUSY);
 	if (m->valid != VM_PAGE_BITS_ALL) {
+		vm_page_xbusy(m);
 		if (vm_pager_has_page(obj, idx, NULL, NULL)) {
 			rv = vm_pager_get_pages(obj, &m, 1, NULL, NULL);
 			if (rv != VM_PAGER_OK) {
@@ -198,8 +199,8 @@ uiomove_object_page(vm_object_t obj, size_t len, struct uio *uio)
 			}
 		} else
 			vm_page_zero_invalid(m, TRUE);
+		vm_page_xunbusy(m);
 	}
-	vm_page_xunbusy(m);
 	vm_page_lock(m);
 	vm_page_hold(m);
 	if (m->queue == PQ_NONE) {
@@ -454,12 +455,9 @@ retry:
 					VM_WAIT;
 					VM_OBJECT_WLOCK(object);
 					goto retry;
-				} else if (m->valid != VM_PAGE_BITS_ALL)
-					rv = vm_pager_get_pages(object, &m, 1,
-					    NULL, NULL);
-				else
-					/* A cached page was reactivated. */
-					rv = VM_PAGER_OK;
+				}
+				rv = vm_pager_get_pages(object, &m, 1, NULL,
+				    NULL);
 				vm_page_lock(m);
 				if (rv == VM_PAGER_OK) {
 					vm_page_deactivate(m);
@@ -885,20 +883,20 @@ shm_mmap(struct file *fp, vm_map_t map, vm_offset_t *addr, vm_size_t objsize,
 		return (EACCES);
 	maxprot &= cap_maxprot;
 
+	/* See comment in vn_mmap(). */
+	if (
+#ifdef _LP64
+	    objsize > OFF_MAX ||
+#endif
+	    foff < 0 || foff > OFF_MAX - objsize)
+		return (EINVAL);
+
 #ifdef MAC
 	error = mac_posixshm_check_mmap(td->td_ucred, shmfd, prot, flags);
 	if (error != 0)
 		return (error);
 #endif
 	
-	/*
-	 * XXXRW: This validation is probably insufficient, and subject to
-	 * sign errors.  It should be fixed.
-	 */
-	if (foff >= shmfd->shm_size ||
-	    foff + objsize > round_page(shmfd->shm_size))
-		return (EINVAL);
-
 	mtx_lock(&shm_timestamp_lock);
 	vfs_timestamp(&shmfd->shm_atime);
 	mtx_unlock(&shm_timestamp_lock);
@@ -908,7 +906,7 @@ shm_mmap(struct file *fp, vm_map_t map, vm_offset_t *addr, vm_size_t objsize,
 	    shmfd->shm_object, foff, FALSE, td);
 	if (error != 0)
 		vm_object_deallocate(shmfd->shm_object);
-	return (0);
+	return (error);
 }
 
 static int

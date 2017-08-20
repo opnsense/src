@@ -1,5 +1,5 @@
 # $FreeBSD$
-.PATH:	${.CURDIR}/../../dev/mlx5/mlx5_en
+.PATH:	${SRCTOP}/sys/dev/mlx5/mlx5_en
 
 KMOD=mlx5en
 SRCS= \
@@ -12,17 +12,16 @@ mlx5_en_txrx.c \
 device_if.h bus_if.h vnode_if.h pci_if.h \
         opt_inet.h opt_inet6.h opt_rss.h
 
-.if defined(HAVE_TURBO_LRO)
-CFLAGS+= -DHAVE_TURBO_LRO
-SRCS+= tcp_tlro.c
-.endif
-
 .if defined(HAVE_PER_CQ_EVENT_PACKET)
 CFLAGS+= -DHAVE_PER_CQ_EVENT_PACKET
 .endif
 
-CFLAGS+= -I${.CURDIR}/../../ofed/include
-CFLAGS+= -I${.CURDIR}/../../compat/linuxkpi/common/include
+.if defined(HAVE_TCP_LRO_RX)
+CFLAGS+= -DHAVE_TCP_LRO_RX
+.endif
+
+CFLAGS+= -I${SRCTOP}/sys/ofed/include
+CFLAGS+= -I${SRCTOP}/sys/compat/linuxkpi/common/include
 
 .include <bsd.kmod.mk>
 

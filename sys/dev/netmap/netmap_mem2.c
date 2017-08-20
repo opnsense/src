@@ -282,7 +282,7 @@ struct netmap_obj_params netmap_params[NETMAP_POOLS_NR] = {
 		.num  = 100,
 	},
 	[NETMAP_RING_POOL] = {
-		.size = 18*PAGE_SIZE,
+		.size = 9*PAGE_SIZE,
 		.num  = 200,
 	},
 	[NETMAP_BUF_POOL] = {
@@ -1421,11 +1421,8 @@ netmap_free_rings(struct netmap_adapter *na)
 			struct netmap_kring *kring = &NMR(na, t)[i];
 			struct netmap_ring *ring = kring->ring;
 
-			if (ring == NULL) {
-				ND("skipping ring %s (ring %p, users %d)",
-						kring->name, ring, kring->users);
+			if (ring == NULL)
 				continue;
-			}
 			netmap_free_bufs(na->nm_mem, ring->slot, kring->nkr_num_slots);
 			netmap_ring_free(na->nm_mem, ring);
 			kring->ring = NULL;
@@ -1456,9 +1453,8 @@ netmap_mem2_rings_create(struct netmap_adapter *na)
 			u_int len, ndesc;
 
 			if (ring) {
-				/* uneeded, or already created by somebody else */
-				ND("skipping ring %s", kring->name);
-				continue;
+				ND("%s already created", kring->name);
+				continue; /* already created by somebody else */
 			}
 			ndesc = kring->nkr_num_slots;
 			len = sizeof(struct netmap_ring) +
@@ -1573,22 +1569,10 @@ netmap_mem2_if_new(struct netmap_adapter *na)
 	 */
 	base = netmap_if_offset(na->nm_mem, nifp);
 	for (i = 0; i < n[NR_TX]; i++) {
-		if (na->tx_rings[i].ring == NULL) {
-			// XXX maybe use the offset of an error ring,
-			// like we do for buffers?
-			*(ssize_t *)(uintptr_t)&nifp->ring_ofs[i] = 0;
-			continue;
-		}
 		*(ssize_t *)(uintptr_t)&nifp->ring_ofs[i] =
 			netmap_ring_offset(na->nm_mem, na->tx_rings[i].ring) - base;
 	}
 	for (i = 0; i < n[NR_RX]; i++) {
-		if (na->rx_rings[i].ring == NULL) {
-			// XXX maybe use the offset of an error ring,
-			// like we do for buffers?
-			*(ssize_t *)(uintptr_t)&nifp->ring_ofs[i+n[NR_TX]] = 0;
-			continue;
-		}
 		*(ssize_t *)(uintptr_t)&nifp->ring_ofs[i+n[NR_TX]] =
 			netmap_ring_offset(na->nm_mem, na->rx_rings[i].ring) - base;
 	}

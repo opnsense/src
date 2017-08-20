@@ -1,4 +1,4 @@
-/*	$Id: demandoc.c,v 1.26 2016/01/08 02:53:13 schwarze Exp $ */
+/*	$Id: demandoc.c,v 1.28 2017/01/10 13:47:00 schwarze Exp $ */
 /*
  * Copyright (c) 2011 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -20,7 +20,6 @@
 
 #include <assert.h>
 #include <ctype.h>
-#include <getopt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -240,7 +239,7 @@ pmdoc(const struct roff_node *p, int *line, int *col, int list)
 {
 
 	for ( ; p; p = p->next) {
-		if (MDOC_LINE & p->flags)
+		if (NODE_LINE & p->flags)
 			pline(p->line, line, col, list);
 		if (ROFFT_TEXT == p->type)
 			pstring(p->string, p->pos, col, list);
@@ -254,7 +253,7 @@ pman(const struct roff_node *p, int *line, int *col, int list)
 {
 
 	for ( ; p; p = p->next) {
-		if (MAN_LINE & p->flags)
+		if (NODE_LINE & p->flags)
 			pline(p->line, line, col, list);
 		if (ROFFT_TEXT == p->type)
 			pstring(p->string, p->pos, col, list);

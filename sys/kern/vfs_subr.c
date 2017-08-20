@@ -51,6 +51,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/buf.h>
 #include <sys/condvar.h>
 #include <sys/conf.h>
+#include <sys/counter.h>
 #include <sys/dirent.h>
 #include <sys/event.h>
 #include <sys/eventhandler.h>
@@ -123,9 +124,9 @@ static unsigned long	numvnodes;
 SYSCTL_ULONG(_vfs, OID_AUTO, numvnodes, CTLFLAG_RD, &numvnodes, 0,
     "Number of vnodes in existence");
 
-static u_long vnodes_created;
-SYSCTL_ULONG(_vfs, OID_AUTO, vnodes_created, CTLFLAG_RD, &vnodes_created,
-    0, "Number of vnodes created by getnewvnode");
+static counter_u64_t vnodes_created;
+SYSCTL_COUNTER_U64(_vfs, OID_AUTO, vnodes_created, CTLFLAG_RD, &vnodes_created,
+    "Number of vnodes created by getnewvnode");
 
 /*
  * Conversion tables for conversion from vnode types to inode formats
@@ -175,8 +176,8 @@ static u_long freevnodes;
 SYSCTL_ULONG(_vfs, OID_AUTO, freevnodes, CTLFLAG_RD,
     &freevnodes, 0, "Number of \"free\" vnodes");
 
-static u_long recycles_count;
-SYSCTL_ULONG(_vfs, OID_AUTO, recycles, CTLFLAG_RD, &recycles_count, 0,
+static counter_u64_t recycles_count;
+SYSCTL_COUNTER_U64(_vfs, OID_AUTO, recycles, CTLFLAG_RD, &recycles_count,
     "Number of vnodes recycled to meet vnode cache targets");
 
 /*
@@ -188,8 +189,8 @@ static int reassignbufcalls;
 SYSCTL_INT(_vfs, OID_AUTO, reassignbufcalls, CTLFLAG_RW, &reassignbufcalls, 0,
     "Number of calls to reassignbuf");
 
-static u_long free_owe_inact;
-SYSCTL_ULONG(_vfs, OID_AUTO, free_owe_inact, CTLFLAG_RD, &free_owe_inact, 0,
+static counter_u64_t free_owe_inact;
+SYSCTL_COUNTER_U64(_vfs, OID_AUTO, free_owe_inact, CTLFLAG_RD, &free_owe_inact,
     "Number of times free vnodes kept on active list due to VFS "
     "owing inactivation");
 
@@ -472,6 +473,11 @@ vntblinit(void *dummy __unused)
 	    NULL, NULL, pctrie_zone_init, NULL, UMA_ALIGN_PTR, 
 	    UMA_ZONE_NOFREE | UMA_ZONE_VM);
 	uma_prealloc(buf_trie_zone, nbuf);
+
+	vnodes_created = counter_u64_alloc(M_WAITOK);
+	recycles_count = counter_u64_alloc(M_WAITOK);
+	free_owe_inact = counter_u64_alloc(M_WAITOK);
+
 	/*
 	 * Initialize the filesystem syncer.
 	 */
@@ -918,7 +924,7 @@ vlrureclaim(struct mount *mp, int reclaim_nc_src, int trigger)
 		}
 		KASSERT((vp->v_iflag & VI_DOOMED) == 0,
 		    ("VI_DOOMED unexpectedly detected in vlrureclaim()"));
-		atomic_add_long(&recycles_count, 1);
+		counter_u64_add(recycles_count, 1);
 		vgonel(vp);
 		VOP_UNLOCK(vp, 0);
 		vdropl(vp);
@@ -1217,7 +1223,7 @@ vtryrecycle(struct vnode *vp)
 		return (EBUSY);
 	}
 	if ((vp->v_iflag & VI_DOOMED) == 0) {
-		atomic_add_long(&recycles_count, 1);
+		counter_u64_add(recycles_count, 1);
 		vgonel(vp);
 	}
 	VOP_UNLOCK(vp, LK_INTERLOCK);
@@ -1376,7 +1382,7 @@ getnewvnode(const char *tag, struct mount *mp, struct vop_vector *vops,
 	atomic_add_long(&numvnodes, 1);
 	mtx_unlock(&vnode_free_list_mtx);
 alloc:
-	atomic_add_long(&vnodes_created, 1);
+	counter_u64_add(vnodes_created, 1);
 	vp = (struct vnode *) uma_zalloc(vnode_zone, M_WAITOK);
 	/*
 	 * Locks are given the generic name "vnode" when created.
@@ -1413,12 +1419,14 @@ alloc:
 	vp->v_op = vops;
 	v_init_counters(vp);
 	vp->v_bufobj.bo_ops = &buf_ops_bio;
+#ifdef DIAGNOSTIC
+	if (mp == NULL && vops != &dead_vnodeops)
+		printf("NULL mp in getnewvnode(9), tag %s\n", tag);
+#endif
 #ifdef MAC
 	mac_vnode_init(vp);
 	if (mp != NULL && (mp->mnt_flag & MNT_MULTILABEL) == 0)
 		mac_vnode_associate_singlelabel(mp, vp);
-	else if (mp == NULL && vops != &dead_vnodeops)
-		printf("NULL mp in getnewvnode()\n");
 #endif
 	if (mp != NULL) {
 		vp->v_bufobj.bo_bsize = mp->mnt_stat.f_iosize;
@@ -1595,13 +1603,15 @@ bufobj_invalbuf(struct bufobj *bo, int flags, int slpflag, int slptimeo)
 	 */
 	do {
 		bufobj_wwait(bo, 0, 0);
-		BO_UNLOCK(bo);
-		if (bo->bo_object != NULL) {
-			VM_OBJECT_WLOCK(bo->bo_object);
-			vm_object_pip_wait(bo->bo_object, "bovlbx");
-			VM_OBJECT_WUNLOCK(bo->bo_object);
+		if ((flags & V_VMIO) == 0) {
+			BO_UNLOCK(bo);
+			if (bo->bo_object != NULL) {
+				VM_OBJECT_WLOCK(bo->bo_object);
+				vm_object_pip_wait(bo->bo_object, "bovlbx");
+				VM_OBJECT_WUNLOCK(bo->bo_object);
+			}
+			BO_LOCK(bo);
 		}
-		BO_LOCK(bo);
 	} while (bo->bo_numoutput > 0);
 	BO_UNLOCK(bo);
 
@@ -1609,7 +1619,7 @@ bufobj_invalbuf(struct bufobj *bo, int flags, int slpflag, int slptimeo)
 	 * Destroy the copy in the VM cache, too.
 	 */
 	if (bo->bo_object != NULL &&
-	    (flags & (V_ALT | V_NORMAL | V_CLEANONLY)) == 0) {
+	    (flags & (V_ALT | V_NORMAL | V_CLEANONLY | V_VMIO)) == 0) {
 		VM_OBJECT_WLOCK(bo->bo_object);
 		vm_object_page_remove(bo->bo_object, 0, 0, (flags & V_SAVE) ?
 		    OBJPR_CLEANONLY : 0);
@@ -1618,7 +1628,7 @@ bufobj_invalbuf(struct bufobj *bo, int flags, int slpflag, int slptimeo)
 
 #ifdef INVARIANTS
 	BO_LOCK(bo);
-	if ((flags & (V_ALT | V_NORMAL | V_CLEANONLY)) == 0 &&
+	if ((flags & (V_ALT | V_NORMAL | V_CLEANONLY | V_VMIO)) == 0 &&
 	    (bo->bo_dirty.bv_cnt > 0 || bo->bo_clean.bv_cnt > 0))
 		panic("vinvalbuf: flush failed");
 	BO_UNLOCK(bo);
@@ -2383,11 +2393,11 @@ vfs_refcount_acquire_if_not_zero(volatile u_int *count)
 {
 	u_int old;
 
+	old = *count;
 	for (;;) {
-		old = *count;
 		if (old == 0)
 			return (0);
-		if (atomic_cmpset_int(count, old, old + 1))
+		if (atomic_fcmpset_int(count, &old, old + 1))
 			return (1);
 	}
 }
@@ -2397,11 +2407,11 @@ vfs_refcount_release_if_not_last(volatile u_int *count)
 {
 	u_int old;
 
+	old = *count;
 	for (;;) {
-		old = *count;
 		if (old == 1)
 			return (0);
-		if (atomic_cmpset_int(count, old, old - 1))
+		if (atomic_fcmpset_int(count, &old, old - 1))
 			return (1);
 	}
 }
@@ -2571,9 +2581,32 @@ void
 vrefl(struct vnode *vp)
 {
 
+	ASSERT_VI_LOCKED(vp, __func__);
 	CTR2(KTR_VFS, "%s: vp %p", __func__, vp);
 	_vhold(vp, true);
 	v_incr_usecount_locked(vp);
+}
+
+void
+vrefact(struct vnode *vp)
+{
+
+	CTR2(KTR_VFS, "%s: vp %p", __func__, vp);
+	if (__predict_false(vp->v_type == VCHR)) {
+		VNASSERT(vp->v_holdcnt > 0 && vp->v_usecount > 0, vp,
+		    ("%s: wrong ref counts", __func__));
+		vref(vp);
+		return;
+	}
+#ifdef INVARIANTS
+	int old = atomic_fetchadd_int(&vp->v_holdcnt, 1);
+	VNASSERT(old > 0, vp, ("%s: wrong hold count", __func__));
+	old = atomic_fetchadd_int(&vp->v_usecount, 1);
+	VNASSERT(old > 0, vp, ("%s: wrong use count", __func__));
+#else
+	refcount_acquire(&vp->v_holdcnt);
+	refcount_acquire(&vp->v_usecount);
+#endif
 }
 
 /*
@@ -2645,7 +2678,7 @@ vputx(struct vnode *vp, int func)
 	error = 0;
 
 	if (vp->v_usecount != 0) {
-		vprint("vputx: usecount not zero", vp);
+		vn_printf(vp, "vputx: usecount not zero for vnode ");
 		panic("vputx: usecount not zero");
 	}
 
@@ -2832,7 +2865,7 @@ _vdrop(struct vnode *vp, bool locked)
 			vp->v_iflag |= VI_FREE;
 			mtx_unlock(&vnode_free_list_mtx);
 		} else {
-			atomic_add_long(&free_owe_inact, 1);
+			counter_u64_add(free_owe_inact, 1);
 		}
 		VI_UNLOCK(vp);
 		return;
@@ -2919,7 +2952,7 @@ vinactive(struct vnode *vp, struct thread *td)
 	obj = vp->v_object;
 	if (obj != NULL && (obj->flags & OBJ_MIGHTBEDIRTY) != 0) {
 		VM_OBJECT_WLOCK(obj);
-		vm_object_page_clean(obj, 0, 0, OBJPC_NOSYNC);
+		vm_object_page_clean(obj, 0, 0, 0);
 		VM_OBJECT_WUNLOCK(obj);
 	}
 	VOP_INACTIVE(vp, td);
@@ -3036,7 +3069,7 @@ loop:
 			busy++;
 #ifdef DIAGNOSTIC
 			if (busyprt)
-				vprint("vflush: busy vnode", vp);
+				vn_printf(vp, "vflush: busy vnode ");
 #endif
 		}
 		VOP_UNLOCK(vp, 0);
@@ -3409,7 +3442,7 @@ DB_SHOW_COMMAND(lockedvnods, lockedvnodes)
 	TAILQ_FOREACH(mp, &mountlist, mnt_list) {
 		TAILQ_FOREACH(vp, &mp->mnt_nvnodelist, v_nmntvnodes) {
 			if (vp->v_type != VMARKER && VOP_ISLOCKED(vp))
-				vprint("", vp);
+				vn_printf(vp, "vnode ");
 		}
 	}
 }
@@ -3655,12 +3688,11 @@ vfsconf2x32(struct sysctl_req *req, struct vfsconf *vfsp)
 {
 	struct xvfsconf32 xvfsp;
 
+	bzero(&xvfsp, sizeof(xvfsp));
 	strcpy(xvfsp.vfc_name, vfsp->vfc_name);
 	xvfsp.vfc_typenum = vfsp->vfc_typenum;
 	xvfsp.vfc_refcount = vfsp->vfc_refcount;
 	xvfsp.vfc_flags = vfsp->vfc_flags;
-	xvfsp.vfc_vfsops = 0;
-	xvfsp.vfc_next = 0;
 	return (SYSCTL_OUT(req, &xvfsp, sizeof(xvfsp)));
 }
 #endif
@@ -4402,6 +4434,10 @@ int vfs_badlock_print = 1;	/* Print lock violations. */
 SYSCTL_INT(_debug, OID_AUTO, vfs_badlock_print, CTLFLAG_RW, &vfs_badlock_print,
     0, "Print lock violations");
 
+int vfs_badlock_vnode = 1;	/* Print vnode details on lock violations. */
+SYSCTL_INT(_debug, OID_AUTO, vfs_badlock_vnode, CTLFLAG_RW, &vfs_badlock_vnode,
+    0, "Print vnode details on lock violations");
+
 #ifdef KDB
 int vfs_badlock_backtrace = 1;	/* Print backtrace at lock violations. */
 SYSCTL_INT(_debug, OID_AUTO, vfs_badlock_backtrace, CTLFLAG_RW,
@@ -4416,6 +4452,8 @@ vfs_badlock(const char *msg, const char *str, struct vnode *vp)
 	if (vfs_badlock_backtrace)
 		kdb_backtrace();
 #endif
+	if (vfs_badlock_vnode)
+		vn_printf(vp, "vnode ");
 	if (vfs_badlock_print)
 		printf("%s: %p %s\n", str, (void *)vp, msg);
 	if (vfs_badlock_ddb)

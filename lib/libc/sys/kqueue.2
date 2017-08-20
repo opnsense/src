@@ -375,7 +375,7 @@ A file descriptor referencing the monitored file, was closed.
 The closed file descriptor did not have write access.
 .It Dv NOTE_CLOSE_WRITE
 A file descriptor referencing the monitored file, was closed.
-The closed file descriptor has write access.
+The closed file descriptor had write access.
 .Pp
 This note, as well as
 .Dv NOTE_CLOSE ,
@@ -523,10 +523,6 @@ On return,
 contains the number of times the timeout has expired since the last call to
 .Fn kevent .
 This filter automatically sets the EV_CLEAR flag internally.
-There is a system wide limit on the number of timers
-which is controlled by the
-.Va kern.kq_calloutmax
-sysctl.
 .Bl -tag -width "Dv NOTE_USECONDS"
 .It Dv NOTE_SECONDS
 .Va data
@@ -544,9 +540,15 @@ is in nanoseconds.
 .Pp
 If
 .Va fflags
-is not set, the default is milliseconds. On return,
+is not set, the default is milliseconds.
+On return,
 .Va fflags
 contains the events which triggered the filter.
+.Pp
+There is a system wide limit on the number of timers
+which is controlled by the
+.Va kern.kq_calloutmax
+sysctl.
 .It Dv EVFILT_USER
 Establishes a user event identified by
 .Va ident

@@ -185,7 +185,7 @@ aw_mmcclk_set_freq(struct clknode *clk, uint64_t fin, uint64_t *fout,
 		ophase = 0;
 		phase = 5;
 		n = 2;
-	} else if (*fout <= 50000000) {
+	} else if (*fout <= 52000000) {
 		parent_idx = CLK_SRC_SEL_PLL6;
 		ophase = 3;
 		phase = 5;
@@ -292,7 +292,7 @@ aw_mmcclk_attach(device_t dev)
 	def.id = 0;
 	def.parent_names = malloc(sizeof(char *) * ncells, M_OFWPROP, M_WAITOK);
 	for (i = 0; i < ncells; i++) {
-		error = clk_get_by_ofw_index(dev, i, &clk_parent);
+		error = clk_get_by_ofw_index(dev, 0, i, &clk_parent);
 		if (error != 0) {
 			device_printf(dev, "cannot get clock %d\n", i);
 			goto fail;

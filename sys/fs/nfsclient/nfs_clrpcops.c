@@ -347,7 +347,7 @@ else printf(" fhl=0\n");
 	     */
 	    if (!error)
 		op->nfso_opencnt++;
-	    nfscl_openrelease(op, error, newone);
+	    nfscl_openrelease(nmp, op, error, newone);
 	    if (error == NFSERR_GRACE || error == NFSERR_STALECLIENTID ||
 		error == NFSERR_STALEDONTRECOVER || error == NFSERR_DELAY ||
 		error == NFSERR_BADSESSION) {
@@ -384,6 +384,7 @@ nfsrpc_openrpc(struct nfsmount *nmp, vnode_t vp, u_int8_t *nfhp, int fhlen,
 	u_int32_t rflags, deleg;
 	nfsattrbit_t attrbits;
 	int error, ret, acesize, limitby;
+	struct nfsclsession *tsep;
 
 	dp = *dpp;
 	*dpp = NULL;
@@ -392,8 +393,9 @@ nfsrpc_openrpc(struct nfsmount *nmp, vnode_t vp, u_int8_t *nfhp, int fhlen,
 	*tl++ = txdr_unsigned(op->nfso_own->nfsow_seqid);
 	*tl++ = txdr_unsigned(mode & NFSV4OPEN_ACCESSBOTH);
 	*tl++ = txdr_unsigned((mode >> NFSLCK_SHIFT) & NFSV4OPEN_DENYBOTH);
-	*tl++ = NFSMNT_MDSSESSION(nmp)->nfsess_clientid.lval[0];
-	*tl = NFSMNT_MDSSESSION(nmp)->nfsess_clientid.lval[1];
+	tsep = nfsmnt_mdssession(nmp);
+	*tl++ = tsep->nfsess_clientid.lval[0];
+	*tl = tsep->nfsess_clientid.lval[1];
 	(void) nfsm_strtom(nd, op->nfso_own->nfsow_owner, NFSV4CL_LOCKNAMELEN);
 	NFSM_BUILD(tl, u_int32_t *, 2 * NFSX_UNSIGNED);
 	*tl++ = txdr_unsigned(NFSV4OPEN_NOCREATE);
@@ -557,7 +559,7 @@ nfsrpc_openrpc(struct nfsmount *nmp, vnode_t vp, u_int8_t *nfhp, int fhlen,
 	}
 	if (nd->nd_repstat != 0 && error == 0)
 		error = nd->nd_repstat;
-	if (error == NFSERR_STALECLIENTID || error == NFSERR_BADSESSION)
+	if (error == NFSERR_STALECLIENTID)
 		nfscl_initiate_recovery(op->nfso_own->nfsow_clp);
 nfsmout:
 	if (!error)
@@ -604,7 +606,7 @@ nfsrpc_opendowngrade(vnode_t vp, u_int32_t mode, struct nfsclopen *op,
 	}
 	if (nd->nd_repstat && error == 0)
 		error = nd->nd_repstat;
-	if (error == NFSERR_STALESTATEID || error == NFSERR_BADSESSION)
+	if (error == NFSERR_STALESTATEID)
 		nfscl_initiate_recovery(op->nfso_own->nfsow_clp);
 nfsmout:
 	mbuf_freem(nd->nd_mrep);
@@ -762,7 +764,7 @@ nfsrpc_closerpc(struct nfsrv_descript *nd, struct nfsmount *nmp,
 	if (nd->nd_repstat == 0)
 		NFSM_DISSECT(tl, u_int32_t *, NFSX_STATEID);
 	error = nd->nd_repstat;
-	if (error == NFSERR_STALESTATEID || error == NFSERR_BADSESSION)
+	if (error == NFSERR_STALESTATEID)
 		nfscl_initiate_recovery(op->nfso_own->nfsow_clp);
 nfsmout:
 	mbuf_freem(nd->nd_mrep);
@@ -803,7 +805,7 @@ nfsrpc_openconfirm(vnode_t vp, u_int8_t *nfhp, int fhlen,
 		op->nfso_stateid.other[2] = *tl;
 	}
 	error = nd->nd_repstat;
-	if (error == NFSERR_STALESTATEID || error == NFSERR_BADSESSION)
+	if (error == NFSERR_STALESTATEID)
 		nfscl_initiate_recovery(op->nfso_own->nfsow_clp);
 nfsmout:
 	mbuf_freem(nd->nd_mrep);
@@ -828,33 +830,53 @@ nfsrpc_setclient(struct nfsmount *nmp, struct nfsclclient *clp, int reclaim,
 	nfsquad_t confirm;
 	u_int32_t lease;
 	static u_int32_t rev = 0;
-	struct nfsclds *dsp, *ndsp, *tdsp;
+	struct nfsclds *dsp;
 	struct in6_addr a6;
+	struct nfsclsession *tsep;
 
 	if (nfsboottime.tv_sec == 0)
 		NFSSETBOOTTIME(nfsboottime);
 	clp->nfsc_rev = rev++;
 	if (NFSHASNFSV4N(nmp)) {
+		/*
+		 * Either there was no previous session or the
+		 * previous session has failed, so...
+		 * do an ExchangeID followed by the CreateSession.
+		 */
 		error = nfsrpc_exchangeid(nmp, clp, &nmp->nm_sockreq,
 		    NFSV4EXCH_USEPNFSMDS | NFSV4EXCH_USENONPNFS, &dsp, cred, p);
 		NFSCL_DEBUG(1, "aft exch=%d\n", error);
-		if (error == 0) {
+		if (error == 0)
 			error = nfsrpc_createsession(nmp, &dsp->nfsclds_sess,
 			    &nmp->nm_sockreq,
 			    dsp->nfsclds_sess.nfsess_sequenceid, 1, cred, p);
-			if (error == 0) {
-				NFSLOCKMNT(nmp);
-				TAILQ_FOREACH_SAFE(tdsp, &nmp->nm_sess,
-				    nfsclds_list, ndsp)
-					nfscl_freenfsclds(tdsp);
-				TAILQ_INIT(&nmp->nm_sess);
-				TAILQ_INSERT_HEAD(&nmp->nm_sess, dsp,
-				    nfsclds_list);
-				NFSUNLOCKMNT(nmp);
-			} else
-				nfscl_freenfsclds(dsp);
-			NFSCL_DEBUG(1, "aft createsess=%d\n", error);
-		}
+		if (error == 0) {
+			NFSLOCKMNT(nmp);
+			/*
+			 * The old sessions cannot be safely free'd
+			 * here, since they may still be used by
+			 * in-progress RPCs.
+			 */
+			tsep = NULL;
+			if (TAILQ_FIRST(&nmp->nm_sess) != NULL)
+				tsep = NFSMNT_MDSSESSION(nmp);
+			TAILQ_INSERT_HEAD(&nmp->nm_sess, dsp,
+			    nfsclds_list);
+			/*
+			 * Wake up RPCs waiting for a slot on the
+			 * old session. These will then fail with
+			 * NFSERR_BADSESSION and be retried with the
+			 * new session by nfsv4_setsequence().
+			 * Also wakeup() processes waiting for the
+			 * new session.
+			 */
+			if (tsep != NULL)
+				wakeup(&tsep->nfsess_slots);
+			wakeup(&nmp->nm_sess);
+			NFSUNLOCKMNT(nmp);
+		} else
+			nfscl_freenfsclds(dsp);
+		NFSCL_DEBUG(1, "aft createsess=%d\n", error);
 		if (error == 0 && reclaim == 0) {
 			error = nfsrpc_reclaimcomplete(nmp, cred, p);
 			NFSCL_DEBUG(1, "aft reclaimcomp=%d\n", error);
@@ -875,6 +897,7 @@ nfsrpc_setclient(struct nfsmount *nmp, struct nfsclclient *clp, int reclaim,
 	mtx_init(&dsp->nfsclds_sess.nfsess_mtx, "nfssession", NULL, MTX_DEF);
 	NFSLOCKMNT(nmp);
 	TAILQ_INSERT_HEAD(&nmp->nm_sess, dsp, nfsclds_list);
+	tsep = NFSMNT_MDSSESSION(nmp);
 	NFSUNLOCKMNT(nmp);
 
 	nfscl_reqstart(nd, NFSPROC_SETCLIENTID, nmp, NULL, 0, NULL, NULL);
@@ -936,8 +959,8 @@ nfsrpc_setclient(struct nfsmount *nmp, struct nfsclclient *clp, int reclaim,
 		return (error);
 	if (nd->nd_repstat == 0) {
 	    NFSM_DISSECT(tl, u_int32_t *, 4 * NFSX_UNSIGNED);
-	    NFSMNT_MDSSESSION(nmp)->nfsess_clientid.lval[0] = *tl++;
-	    NFSMNT_MDSSESSION(nmp)->nfsess_clientid.lval[1] = *tl++;
+	    tsep->nfsess_clientid.lval[0] = *tl++;
+	    tsep->nfsess_clientid.lval[1] = *tl++;
 	    confirm.lval[0] = *tl++;
 	    confirm.lval[1] = *tl;
 	    mbuf_freem(nd->nd_mrep);
@@ -949,8 +972,8 @@ nfsrpc_setclient(struct nfsmount *nmp, struct nfsclclient *clp, int reclaim,
 	    nfscl_reqstart(nd, NFSPROC_SETCLIENTIDCFRM, nmp, NULL, 0, NULL,
 		NULL);
 	    NFSM_BUILD(tl, u_int32_t *, 4 * NFSX_UNSIGNED);
-	    *tl++ = NFSMNT_MDSSESSION(nmp)->nfsess_clientid.lval[0];
-	    *tl++ = NFSMNT_MDSSESSION(nmp)->nfsess_clientid.lval[1];
+	    *tl++ = tsep->nfsess_clientid.lval[0];
+	    *tl++ = tsep->nfsess_clientid.lval[1];
 	    *tl++ = confirm.lval[0];
 	    *tl = confirm.lval[1];
 	    nd->nd_flag |= ND_USEGSSNAME;
@@ -1111,7 +1134,12 @@ nfsrpc_setattr(vnode_t vp, struct vattr *vap, NFSACL_T *aclp,
 		else
 			error = nfsrpc_setaclrpc(vp, cred, p, aclp, &stateid,
 			    stuff);
-		if (error == NFSERR_STALESTATEID || error == NFSERR_BADSESSION)
+		if (error == NFSERR_OPENMODE && mode == NFSV4OPEN_ACCESSREAD) {
+			NFSLOCKMNT(nmp);
+			nmp->nm_state |= NFSSTA_OPENMODE;
+			NFSUNLOCKMNT(nmp);
+		}
+		if (error == NFSERR_STALESTATEID)
 			nfscl_initiate_recovery(nmp->nm_clp);
 		if (lckp != NULL)
 			nfscl_lockderef(lckp);
@@ -1131,7 +1159,9 @@ nfsrpc_setattr(vnode_t vp, struct vattr *vap, NFSACL_T *aclp,
 	    error == NFSERR_BADSESSION ||
 	    (error == NFSERR_OLDSTATEID && retrycnt < 20) ||
 	    ((error == NFSERR_EXPIRED || error == NFSERR_BADSTATEID) &&
-	     expireret == 0 && clidrev != 0 && retrycnt < 4));
+	     expireret == 0 && clidrev != 0 && retrycnt < 4) ||
+	    (error == NFSERR_OPENMODE && mode == NFSV4OPEN_ACCESSREAD &&
+	     retrycnt < 4));
 	if (error && retrycnt >= 4)
 		error = EIO;
 	return (error);
@@ -1167,7 +1197,7 @@ nfsrpc_setattrrpc(vnode_t vp, struct vattr *vap,
 		return (error);
 	if (nd->nd_flag & (ND_NFSV3 | ND_NFSV4))
 		error = nfscl_wcc_data(nd, vp, rnap, attrflagp, NULL, stuff);
-	if ((nd->nd_flag & ND_NFSV4) && !error)
+	if ((nd->nd_flag & (ND_NFSV4 | ND_NOMOREDATA)) == ND_NFSV4 && !error)
 		error = nfsrv_getattrbits(nd, &attrbits, NULL, NULL);
 	if (!(nd->nd_flag & ND_NFSV3) && !nd->nd_repstat && !error)
 		error = nfscl_postop_attr(nd, rnap, attrflagp, stuff);
@@ -1368,7 +1398,12 @@ nfsrpc_read(vnode_t vp, struct uio *uiop, struct ucred *cred,
 			    &lckp);
 		error = nfsrpc_readrpc(vp, uiop, newcred, &stateid, p, nap,
 		    attrflagp, stuff);
-		if (error == NFSERR_STALESTATEID || error == NFSERR_BADSESSION)
+		if (error == NFSERR_OPENMODE) {
+			NFSLOCKMNT(nmp);
+			nmp->nm_state |= NFSSTA_OPENMODE;
+			NFSUNLOCKMNT(nmp);
+		}
+		if (error == NFSERR_STALESTATEID)
 			nfscl_initiate_recovery(nmp->nm_clp);
 		if (lckp != NULL)
 			nfscl_lockderef(lckp);
@@ -1386,7 +1421,8 @@ nfsrpc_read(vnode_t vp, struct uio *uiop, struct ucred *cred,
 	    error == NFSERR_BADSESSION ||
 	    (error == NFSERR_OLDSTATEID && retrycnt < 20) ||
 	    ((error == NFSERR_EXPIRED || error == NFSERR_BADSTATEID) &&
-	     expireret == 0 && clidrev != 0 && retrycnt < 4));
+	     expireret == 0 && clidrev != 0 && retrycnt < 4) ||
+	    (error == NFSERR_OPENMODE && retrycnt < 4));
 	if (error && retrycnt >= 4)
 		error = EIO;
 	if (NFSHASNFSV4(nmp))
@@ -1538,7 +1574,7 @@ nfsrpc_write(vnode_t vp, struct uio *uiop, int *iomode, int *must_commit,
 		else
 			error = nfsrpc_writerpc(vp, uiop, iomode, must_commit,
 			    newcred, &stateid, p, nap, attrflagp, stuff);
-		if (error == NFSERR_STALESTATEID || error == NFSERR_BADSESSION)
+		if (error == NFSERR_STALESTATEID)
 			nfscl_initiate_recovery(nmp->nm_clp);
 		if (lckp != NULL)
 			nfscl_lockderef(lckp);
@@ -1870,7 +1906,7 @@ nfsrpc_create(vnode_t dvp, char *name, int namelen, struct vattr *vap,
 		if (dp != NULL)
 			(void) nfscl_deleg(nmp->nm_mountp, owp->nfsow_clp,
 			    (*nfhpp)->nfh_fh, (*nfhpp)->nfh_len, cred, p, &dp);
-		nfscl_ownerrelease(owp, error, newone, unlocked);
+		nfscl_ownerrelease(nmp, owp, error, newone, unlocked);
 		if (error == NFSERR_GRACE || error == NFSERR_STALECLIENTID ||
 		    error == NFSERR_STALEDONTRECOVER || error == NFSERR_DELAY ||
 		    error == NFSERR_BADSESSION) {
@@ -1964,6 +2000,7 @@ nfsrpc_createv4(vnode_t dvp, char *name, int namelen, struct vattr *vap,
 	nfsv4stateid_t stateid;
 	u_int32_t rflags;
 	struct nfsmount *nmp;
+	struct nfsclsession *tsep;
 
 	nmp = VFSTONFS(dvp->v_mount);
 	np = VTONFS(dvp);
@@ -1983,8 +2020,9 @@ nfsrpc_createv4(vnode_t dvp, char *name, int namelen, struct vattr *vap,
 	*tl++ = txdr_unsigned(NFSV4OPEN_ACCESSWRITE |
 	    NFSV4OPEN_ACCESSREAD);
 	*tl++ = txdr_unsigned(NFSV4OPEN_DENYNONE);
-	*tl++ = NFSMNT_MDSSESSION(nmp)->nfsess_clientid.lval[0];
-	*tl = NFSMNT_MDSSESSION(nmp)->nfsess_clientid.lval[1];
+	tsep = nfsmnt_mdssession(nmp);
+	*tl++ = tsep->nfsess_clientid.lval[0];
+	*tl = tsep->nfsess_clientid.lval[1];
 	(void) nfsm_strtom(nd, owp->nfsow_owner, NFSV4CL_LOCKNAMELEN);
 	NFSM_BUILD(tl, u_int32_t *, 2 * NFSX_UNSIGNED);
 	*tl++ = txdr_unsigned(NFSV4OPEN_CREATE);
@@ -2173,12 +2211,12 @@ nfsrpc_createv4(vnode_t dvp, char *name, int namelen, struct vattr *vap,
 				error = ret;
 		    }
 		}
-		nfscl_openrelease(op, error, newone);
+		nfscl_openrelease(nmp, op, error, newone);
 		*unlockedp = 1;
 	}
 	if (nd->nd_repstat != 0 && error == 0)
 		error = nd->nd_repstat;
-	if (error == NFSERR_STALECLIENTID || error == NFSERR_BADSESSION)
+	if (error == NFSERR_STALECLIENTID)
 		nfscl_initiate_recovery(owp->nfsow_clp);
 nfsmout:
 	if (!error)
@@ -3840,6 +3878,7 @@ nfsrpc_lockt(struct nfsrv_descript *nd, vnode_t vp,
 	uint8_t own[NFSV4CL_LOCKNAMELEN + NFSX_V4FHMAX];
 	struct nfsnode *np;
 	struct nfsmount *nmp;
+	struct nfsclsession *tsep;
 
 	nmp = VFSTONFS(vp->v_mount);
 	NFSCL_REQSTART(nd, NFSPROC_LOCKT, vp);
@@ -3852,8 +3891,9 @@ nfsrpc_lockt(struct nfsrv_descript *nd, vnode_t vp,
 	tl += 2;
 	txdr_hyper(len, tl);
 	tl += 2;
-	*tl++ = NFSMNT_MDSSESSION(nmp)->nfsess_clientid.lval[0];
-	*tl = NFSMNT_MDSSESSION(nmp)->nfsess_clientid.lval[1];
+	tsep = nfsmnt_mdssession(nmp);
+	*tl++ = tsep->nfsess_clientid.lval[0];
+	*tl = tsep->nfsess_clientid.lval[1];
 	nfscl_filllockowner(id, own, flags);
 	np = VTONFS(vp);
 	NFSBCOPY(np->n_fhp->nfh_fh, &own[NFSV4CL_LOCKNAMELEN],
@@ -3893,8 +3933,7 @@ nfsrpc_lockt(struct nfsrv_descript *nd, vnode_t vp,
 			error = EBADRPC;
 		if (!error)
 			error = nfsm_advance(nd, NFSM_RNDUP(size), -1);
-	} else if (nd->nd_repstat == NFSERR_STALECLIENTID ||
-	    nd->nd_repstat == NFSERR_BADSESSION)
+	} else if (nd->nd_repstat == NFSERR_STALECLIENTID)
 		nfscl_initiate_recovery(clp);
 nfsmout:
 	mbuf_freem(nd->nd_mrep);
@@ -3944,8 +3983,7 @@ nfsrpc_locku(struct nfsrv_descript *nd, struct nfsmount *nmp,
 		lp->nfsl_stateid.other[0] = *tl++;
 		lp->nfsl_stateid.other[1] = *tl++;
 		lp->nfsl_stateid.other[2] = *tl;
-	} else if (nd->nd_repstat == NFSERR_STALESTATEID ||
-	    nd->nd_repstat == NFSERR_BADSESSION)
+	} else if (nd->nd_repstat == NFSERR_STALESTATEID)
 		nfscl_initiate_recovery(lp->nfsl_open->nfso_own->nfsow_clp);
 nfsmout:
 	mbuf_freem(nd->nd_mrep);
@@ -3964,6 +4002,7 @@ nfsrpc_lock(struct nfsrv_descript *nd, struct nfsmount *nmp, vnode_t vp,
 	u_int32_t *tl;
 	int error, size;
 	uint8_t own[NFSV4CL_LOCKNAMELEN + NFSX_V4FHMAX];
+	struct nfsclsession *tsep;
 
 	nfscl_reqstart(nd, NFSPROC_LOCK, nmp, nfhp, fhlen, NULL, NULL);
 	NFSM_BUILD(tl, u_int32_t *, 7 * NFSX_UNSIGNED);
@@ -3989,8 +4028,9 @@ nfsrpc_lock(struct nfsrv_descript *nd, struct nfsmount *nmp, vnode_t vp,
 	    *tl++ = lp->nfsl_open->nfso_stateid.other[1];
 	    *tl++ = lp->nfsl_open->nfso_stateid.other[2];
 	    *tl++ = txdr_unsigned(lp->nfsl_seqid);
-	    *tl++ = NFSMNT_MDSSESSION(nmp)->nfsess_clientid.lval[0];
-	    *tl = NFSMNT_MDSSESSION(nmp)->nfsess_clientid.lval[1];
+	    tsep = nfsmnt_mdssession(nmp);
+	    *tl++ = tsep->nfsess_clientid.lval[0];
+	    *tl = tsep->nfsess_clientid.lval[1];
 	    NFSBCOPY(lp->nfsl_owner, own, NFSV4CL_LOCKNAMELEN);
 	    NFSBCOPY(nfhp, &own[NFSV4CL_LOCKNAMELEN], fhlen);
 	    (void)nfsm_strtom(nd, own, NFSV4CL_LOCKNAMELEN + fhlen);
@@ -4031,8 +4071,7 @@ nfsrpc_lock(struct nfsrv_descript *nd, struct nfsmount *nmp, vnode_t vp,
 			error = EBADRPC;
 		if (!error)
 			error = nfsm_advance(nd, NFSM_RNDUP(size), -1);
-	} else if (nd->nd_repstat == NFSERR_STALESTATEID ||
-	    nd->nd_repstat == NFSERR_BADSESSION)
+	} else if (nd->nd_repstat == NFSERR_STALESTATEID)
 		nfscl_initiate_recovery(lp->nfsl_open->nfso_own->nfsow_clp);
 nfsmout:
 	mbuf_freem(nd->nd_mrep);
@@ -4232,25 +4271,36 @@ nfsrpc_renew(struct nfsclclient *clp, struct nfsclds *dsp, struct ucred *cred,
 	struct nfsmount *nmp;
 	int error;
 	struct nfssockreq *nrp;
+	struct nfsclsession *tsep;
 
 	nmp = clp->nfsc_nmp;
 	if (nmp == NULL)
 		return (0);
-	nfscl_reqstart(nd, NFSPROC_RENEW, nmp, NULL, 0, NULL,
-	    &dsp->nfsclds_sess);
+	if (dsp == NULL)
+		nfscl_reqstart(nd, NFSPROC_RENEW, nmp, NULL, 0, NULL, NULL);
+	else
+		nfscl_reqstart(nd, NFSPROC_RENEW, nmp, NULL, 0, NULL,
+		    &dsp->nfsclds_sess);
 	if (!NFSHASNFSV4N(nmp)) {
 		/* NFSv4.1 just uses a Sequence Op and not a Renew. */
 		NFSM_BUILD(tl, u_int32_t *, 2 * NFSX_UNSIGNED);
-		*tl++ = NFSMNT_MDSSESSION(nmp)->nfsess_clientid.lval[0];
-		*tl = NFSMNT_MDSSESSION(nmp)->nfsess_clientid.lval[1];
+		tsep = nfsmnt_mdssession(nmp);
+		*tl++ = tsep->nfsess_clientid.lval[0];
+		*tl = tsep->nfsess_clientid.lval[1];
 	}
-	nrp = dsp->nfsclds_sockp;
+	nrp = NULL;
+	if (dsp != NULL)
+		nrp = dsp->nfsclds_sockp;
 	if (nrp == NULL)
 		/* If NULL, use the MDS socket. */
 		nrp = &nmp->nm_sockreq;
 	nd->nd_flag |= ND_USEGSSNAME;
-	error = newnfs_request(nd, nmp, NULL, nrp, NULL, p, cred,
-	    NFS_PROG, NFS_VER4, NULL, 1, NULL, &dsp->nfsclds_sess);
+	if (dsp == NULL)
+		error = newnfs_request(nd, nmp, NULL, nrp, NULL, p, cred,
+		    NFS_PROG, NFS_VER4, NULL, 1, NULL, NULL);
+	else
+		error = newnfs_request(nd, nmp, NULL, nrp, NULL, p, cred,
+		    NFS_PROG, NFS_VER4, NULL, 1, NULL, &dsp->nfsclds_sess);
 	if (error)
 		return (error);
 	error = nd->nd_repstat;
@@ -4269,6 +4319,7 @@ nfsrpc_rellockown(struct nfsmount *nmp, struct nfscllockowner *lp,
 	u_int32_t *tl;
 	int error;
 	uint8_t own[NFSV4CL_LOCKNAMELEN + NFSX_V4FHMAX];
+	struct nfsclsession *tsep;
 
 	if (NFSHASNFSV4N(nmp)) {
 		/* For NFSv4.1, do a FreeStateID. */
@@ -4279,8 +4330,9 @@ nfsrpc_rellockown(struct nfsmount *nmp, struct nfscllockowner *lp,
 		nfscl_reqstart(nd, NFSPROC_RELEASELCKOWN, nmp, NULL, 0, NULL,
 		    NULL);
 		NFSM_BUILD(tl, u_int32_t *, 2 * NFSX_UNSIGNED);
-		*tl++ = NFSMNT_MDSSESSION(nmp)->nfsess_clientid.lval[0];
-		*tl = NFSMNT_MDSSESSION(nmp)->nfsess_clientid.lval[1];
+		tsep = nfsmnt_mdssession(nmp);
+		*tl++ = tsep->nfsess_clientid.lval[0];
+		*tl = tsep->nfsess_clientid.lval[1];
 		NFSBCOPY(lp->nfsl_owner, own, NFSV4CL_LOCKNAMELEN);
 		NFSBCOPY(fh, &own[NFSV4CL_LOCKNAMELEN], fhlen);
 		(void)nfsm_strtom(nd, own, NFSV4CL_LOCKNAMELEN + fhlen);
@@ -4518,7 +4570,7 @@ nfsrpc_exchangeid(struct nfsmount *nmp, struct nfsclclient *clp,
 			error = NFSERR_BADXDR;
 			goto nfsmout;
 		}
-		dsp = malloc(sizeof(struct nfsclds) + len, M_NFSCLDS,
+		dsp = malloc(sizeof(struct nfsclds) + len + 1, M_NFSCLDS,
 		    M_WAITOK | M_ZERO);
 		dsp->nfsclds_expire = NFSD_MONOSEC + clp->nfsc_renew;
 		dsp->nfsclds_servownlen = len;
@@ -4574,7 +4626,7 @@ nfsrpc_createsession(struct nfsmount *nmp, struct nfsclsession *sep,
 	*tl++ = sep->nfsess_clientid.lval[1];
 	*tl++ = txdr_unsigned(sequenceid);
 	crflags = (NFSMNT_RDONLY(nmp->nm_mountp) ? 0 : NFSV4CRSESS_PERSIST);
-	if (nfscl_enablecallb != 0 && nfs_numnfscbd > 0)
+	if (nfscl_enablecallb != 0 && nfs_numnfscbd > 0 && mds != 0)
 		crflags |= NFSV4CRSESS_CONNBACKCHAN;
 	*tl = txdr_unsigned(crflags);
 
@@ -4661,10 +4713,12 @@ nfsrpc_destroysession(struct nfsmount *nmp, struct nfsclclient *clp,
 	struct nfsrv_descript nfsd;
 	struct nfsrv_descript *nd = &nfsd;
 	int error;
+	struct nfsclsession *tsep;
 
 	nfscl_reqstart(nd, NFSPROC_DESTROYSESSION, nmp, NULL, 0, NULL, NULL);
 	NFSM_BUILD(tl, uint32_t *, NFSX_V4SESSIONID);
-	bcopy(NFSMNT_MDSSESSION(nmp)->nfsess_sessionid, tl, NFSX_V4SESSIONID);
+	tsep = nfsmnt_mdssession(nmp);
+	bcopy(tsep->nfsess_sessionid, tl, NFSX_V4SESSIONID);
 	nd->nd_flag |= ND_USEGSSNAME;
 	error = newnfs_request(nd, nmp, NULL, &nmp->nm_sockreq, NULL, p, cred,
 	    NFS_PROG, NFS_VER4, NULL, 1, NULL, NULL);
@@ -4686,11 +4740,13 @@ nfsrpc_destroyclient(struct nfsmount *nmp, struct nfsclclient *clp,
 	struct nfsrv_descript nfsd;
 	struct nfsrv_descript *nd = &nfsd;
 	int error;
+	struct nfsclsession *tsep;
 
 	nfscl_reqstart(nd, NFSPROC_DESTROYCLIENT, nmp, NULL, 0, NULL, NULL);
 	NFSM_BUILD(tl, uint32_t *, 2 * NFSX_UNSIGNED);
-	*tl++ = NFSMNT_MDSSESSION(nmp)->nfsess_clientid.lval[0];
-	*tl = NFSMNT_MDSSESSION(nmp)->nfsess_clientid.lval[1];
+	tsep = nfsmnt_mdssession(nmp);
+	*tl++ = tsep->nfsess_clientid.lval[0];
+	*tl = tsep->nfsess_clientid.lval[1];
 	nd->nd_flag |= ND_USEGSSNAME;
 	error = newnfs_request(nd, nmp, NULL, &nmp->nm_sockreq, NULL, p, cred,
 	    NFS_PROG, NFS_VER4, NULL, 1, NULL, NULL);
@@ -5158,6 +5214,7 @@ nfsrpc_getlayout(struct nfsmount *nmp, vnode_t vp, struct nfsfh *nfhp,
 	struct nfsclflayouthead flh;
 	int error = 0, islocked, layoutlen, recalled, retonclose;
 	nfsv4stateid_t stateid;
+	struct nfsclsession *tsep;
 
 	*lypp = NULL;
 	/*
@@ -5172,7 +5229,8 @@ nfsrpc_getlayout(struct nfsmount *nmp, vnode_t vp, struct nfsfh *nfhp,
 		if (recalled != 0)
 			return (EIO);
 		LIST_INIT(&flh);
-		layoutlen = NFSMNT_MDSSESSION(nmp)->nfsess_maxcache -
+		tsep = nfsmnt_mdssession(nmp);
+		layoutlen = tsep->nfsess_maxcache -
 		    (NFSX_STATEID + 3 * NFSX_UNSIGNED);
 		if (lyp == NULL) {
 			stateid.seqid = 0;
@@ -5180,7 +5238,7 @@ nfsrpc_getlayout(struct nfsmount *nmp, vnode_t vp, struct nfsfh *nfhp,
 			stateid.other[1] = stateidp->other[1];
 			stateid.other[2] = stateidp->other[2];
 			error = nfsrpc_layoutget(nmp, nfhp->nfh_fh,
-			    nfhp->nfh_len, iomode, (uint64_t)0, INT64_MAX,
+			    nfhp->nfh_len, iomode, (uint64_t)0, UINT64_MAX,
 			    (uint64_t)0, layoutlen, &stateid, &retonclose,
 			    &flh, cred, p, NULL);
 		} else {
@@ -5190,7 +5248,7 @@ nfsrpc_getlayout(struct nfsmount *nmp, vnode_t vp, struct nfsfh *nfhp,
 			stateid.other[1] = lyp->nfsly_stateid.other[1];
 			stateid.other[2] = lyp->nfsly_stateid.other[2];
 			error = nfsrpc_layoutget(nmp, nfhp->nfh_fh,
-			    nfhp->nfh_len, iomode, off, INT64_MAX,
+			    nfhp->nfh_len, iomode, off, UINT64_MAX,
 			    (uint64_t)0, layoutlen, &stateid, &retonclose,
 			    &flh, cred, p, NULL);
 		}
@@ -5269,7 +5327,8 @@ nfsrpc_fillsa(struct nfsmount *nmp, struct sockaddr_storage *ssp,
 			if (msad != NULL && msad->sin_family == AF_INET &&
 			    ssd->sin_addr.s_addr == msad->sin_addr.s_addr &&
 			    ssd->sin_port == msad->sin_port &&
-			    (tdsp->nfsclds_flags & NFSCLDS_DS) != 0) {
+			    (tdsp->nfsclds_flags & NFSCLDS_DS) != 0 &&
+			    tdsp->nfsclds_sess.nfsess_defunct == 0) {
 				*dspp = tdsp;
 				NFSUNLOCKMNT(nmp);
 				NFSCL_DEBUG(4, "fnd same addr\n");
@@ -5309,7 +5368,8 @@ nfsrpc_fillsa(struct nfsmount *nmp, struct sockaddr_storage *ssp,
 			    IN6_ARE_ADDR_EQUAL(&ssd6->sin6_addr,
 			    &msad6->sin6_addr) &&
 			    ssd6->sin6_port == msad6->sin6_port &&
-			    (tdsp->nfsclds_flags & NFSCLDS_DS) != 0) {
+			    (tdsp->nfsclds_flags & NFSCLDS_DS) != 0 &&
+			    tdsp->nfsclds_sess.nfsess_defunct == 0) {
 				*dspp = tdsp;
 				NFSUNLOCKMNT(nmp);
 				return (0);
@@ -5352,10 +5412,13 @@ nfsrpc_fillsa(struct nfsmount *nmp, struct sockaddr_storage *ssp,
 	NFSCL_DEBUG(3, "DS connect=%d\n", error);
 
 	/* Now, do the exchangeid and create session. */
-	if (error == 0)
+	if (error == 0) {
 		error = nfsrpc_exchangeid(nmp, clp, nrp, NFSV4EXCH_USEPNFSDS,
 		    &dsp, nrp->nr_cred, p);
-	NFSCL_DEBUG(3, "DS exchangeid=%d\n", error);
+		NFSCL_DEBUG(3, "DS exchangeid=%d\n", error);
+		if (error != 0)
+			newnfs_disconnect(nrp);
+	}
 	if (error == 0) {
 		dsp->nfsclds_sockp = nrp;
 		NFSLOCKMNT(nmp);
@@ -5398,8 +5461,10 @@ nfsrpc_fillsa(struct nfsmount *nmp, struct sockaddr_storage *ssp,
 		TAILQ_INSERT_TAIL(&nmp->nm_sess, dsp, nfsclds_list);
 		NFSUNLOCKMNT(nmp);
 		*dspp = dsp;
-	} else if (dsp != NULL)
+	} else if (dsp != NULL) {
+		newnfs_disconnect(nrp);
 		nfscl_freenfsclds(dsp);
+	}
 	return (error);
 }
 
@@ -5542,6 +5607,11 @@ nfscl_doiods(vnode_t vp, struct uio *uiop, int *iomode, int *must_commit,
 					if (lastbyte > layp->nfsly_lastbyte)
 						layp->nfsly_lastbyte = lastbyte;
 					NFSUNLOCKCLSTATE();
+				} else if (error == NFSERR_OPENMODE &&
+				    rwaccess == NFSV4OPEN_ACCESSREAD) {
+					NFSLOCKMNT(nmp);
+					nmp->nm_state |= NFSSTA_OPENMODE;
+					NFSUNLOCKMNT(nmp);
 				}
 			} else
 				error = EIO;
@@ -5862,7 +5932,8 @@ nfscl_getsameserver(struct nfsmount *nmp, struct nfsclds *newdsp,
 		if (dsp->nfsclds_servownlen == newdsp->nfsclds_servownlen &&
 		    dsp->nfsclds_servownlen != 0 &&
 		    !NFSBCMP(dsp->nfsclds_serverown, newdsp->nfsclds_serverown,
-		    dsp->nfsclds_servownlen)) {
+		    dsp->nfsclds_servownlen) &&
+		    dsp->nfsclds_sess.nfsess_defunct == 0) {
 			NFSCL_DEBUG(4, "fnd same fdsp=%p dsp=%p flg=0x%x\n",
 			    TAILQ_FIRST(&nmp->nm_sess), dsp,
 			    dsp->nfsclds_flags);

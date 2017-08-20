@@ -38,7 +38,7 @@ void	 syncache_init(void);
 #ifdef VIMAGE
 void	syncache_destroy(void);
 #endif
-void	 syncache_unreach(struct in_conninfo *, struct tcphdr *);
+void	 syncache_unreach(struct in_conninfo *, tcp_seq);
 int	 syncache_expand(struct in_conninfo *, struct tcpopt *,
 	     struct tcphdr *, struct socket **, struct mbuf *);
 int	 syncache_add(struct in_conninfo *, struct tcpopt *,
@@ -99,6 +99,7 @@ struct syncache_head {
 	int		sch_nextc;
 	u_int		sch_length;
 	struct tcp_syncache *sch_sc;
+	time_t		sch_last_overflow;
 };
 
 #define	SYNCOOKIE_SECRET_SIZE	16

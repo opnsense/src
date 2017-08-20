@@ -397,6 +397,8 @@ in_aifaddr_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp, struct thread *td)
 	ifa->ifa_addr = (struct sockaddr *)&ia->ia_addr;
 	ifa->ifa_dstaddr = (struct sockaddr *)&ia->ia_dstaddr;
 	ifa->ifa_netmask = (struct sockaddr *)&ia->ia_sockmask;
+	callout_init_rw(&ia->ia_garp_timer, &ifp->if_addr_lock,
+	    CALLOUT_RETURNUNLOCKED);
 
 	ia->ia_ifp = ifp;
 	ia->ia_addr = *addr;
@@ -634,6 +636,12 @@ in_difaddr_ioctl(caddr_t data, struct ifnet *ifp, struct thread *td)
 		}
 		IN_MULTI_UNLOCK();
 	}
+
+	IF_ADDR_WLOCK(ifp);
+	if (callout_stop(&ia->ia_garp_timer) == 1) {
+		ifa_free(&ia->ia_ifa);
+	}
+	IF_ADDR_WUNLOCK(ifp);
 
 	EVENTHANDLER_INVOKE(ifaddr_event, ifp);
 	ifa_free(&ia->ia_ifa);		/* in_ifaddrhead */
@@ -1200,7 +1208,7 @@ in_lltable_rtcheck(struct ifnet *ifp, u_int flags, const struct sockaddr *l3addr
 	 */
 	if (!(rt_flags & RTF_HOST) && info.rti_ifp != ifp) {
 		const char *sa, *mask, *addr, *lim;
-		int len;
+		const struct sockaddr_in *l3sin;
 
 		mask = (const char *)&rt_mask;
 		/*
@@ -1212,14 +1220,17 @@ in_lltable_rtcheck(struct ifnet *ifp, u_int flags, const struct sockaddr *l3addr
 
 		sa = (const char *)&rt_key;
 		addr = (const char *)l3addr;
-		len = ((const struct sockaddr_in *)l3addr)->sin_len;
-		lim = addr + len;
+		l3sin = (const struct sockaddr_in *)l3addr;
+		lim = addr + l3sin->sin_len;
 
 		for ( ; addr < lim; sa++, mask++, addr++) {
 			if ((*sa ^ *addr) & *mask) {
 #ifdef DIAGNOSTIC
-				log(LOG_INFO, "IPv4 address: \"%s\" is not on the network\n",
-				    inet_ntoa(((const struct sockaddr_in *)l3addr)->sin_addr));
+				char addrbuf[INET_ADDRSTRLEN];
+
+				log(LOG_INFO, "IPv4 address: \"%s\" "
+				    "is not on the network\n",
+				    inet_ntoa_r(l3sin->sin_addr, addrbuf));
 #endif
 				return (EINVAL);
 			}

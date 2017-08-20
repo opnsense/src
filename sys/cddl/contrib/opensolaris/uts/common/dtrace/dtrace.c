@@ -124,6 +124,7 @@
 #include <sys/lock.h>
 #include <sys/mutex.h>
 #include <sys/ptrace.h>
+#include <sys/random.h>
 #include <sys/rwlock.h>
 #include <sys/sx.h>
 #include <sys/sysctl.h>
@@ -135,6 +136,8 @@
 #include "dtrace_cddl.h"
 #include "dtrace_debug.c"
 #endif
+
+#include "dtrace_xoroshiro128_plus.h"
 
 /*
  * DTrace Tunable Variables
@@ -157,6 +160,10 @@
  * /etc/system.
  */
 int		dtrace_destructive_disallow = 0;
+#ifndef illumos
+/* Positive logic version of dtrace_destructive_disallow for loader tunable */
+int		dtrace_allow_destructive = 1;
+#endif
 dtrace_optval_t	dtrace_nonroot_maxsize = (16 * 1024 * 1024);
 size_t		dtrace_difo_maxsize = (256 * 1024);
 dtrace_optval_t	dtrace_dof_maxsize = (8 * 1024 * 1024);
@@ -294,7 +301,6 @@ static kmutex_t		dtrace_meta_lock;	/* meta-provider state lock */
 #define vuprintf	vprintf
 #define ttoproc(_a)	((_a)->td_proc)
 #define crgetzoneid(_a)	0
-#define	NCPU		MAXCPU
 #define SNOCD		0
 #define CPU_ON_INTR(_a)	0
 
@@ -4115,7 +4121,8 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 
 	switch (subr) {
 	case DIF_SUBR_RAND:
-		regs[rd] = (dtrace_gethrtime() * 2416 + 374441) % 1771875;
+		regs[rd] = dtrace_xoroshiro128_plus_next(
+		    state->dts_rstate[curcpu]);
 		break;
 
 #ifdef illumos
@@ -4270,8 +4277,8 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 			break;
 		}
 		l.lx = dtrace_loadptr(tupregs[0].dttk_value);
-		LOCK_CLASS(l.li)->lc_owner(l.li, &lowner);
-		regs[rd] = (lowner == curthread);
+		regs[rd] = LOCK_CLASS(l.li)->lc_owner(l.li, &lowner) &&
+		    lowner != NULL;
 		break;
 
 	case DIF_SUBR_RW_ISWRITER:
@@ -4282,8 +4289,8 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 			break;
 		}
 		l.lx = dtrace_loadptr(tupregs[0].dttk_value);
-		regs[rd] = LOCK_CLASS(l.li)->lc_owner(l.li, &lowner) &&
-		    lowner != NULL;
+		LOCK_CLASS(l.li)->lc_owner(l.li, &lowner);
+		regs[rd] = (lowner == curthread);
 		break;
 #endif /* illumos */
 
@@ -14404,6 +14411,7 @@ dtrace_state_create(struct cdev *dev, struct ucred *cred __unused)
 	dtrace_state_t *state;
 	dtrace_optval_t *opt;
 	int bufsize = NCPU * sizeof (dtrace_buffer_t), i;
+	int cpu_it;
 
 	ASSERT(MUTEX_HELD(&dtrace_lock));
 	ASSERT(MUTEX_HELD(&cpu_lock));
@@ -14458,6 +14466,21 @@ dtrace_state_create(struct cdev *dev, struct ucred *cred __unused)
 	 */
 	state->dts_buffer = kmem_zalloc(bufsize, KM_SLEEP);
 	state->dts_aggbuffer = kmem_zalloc(bufsize, KM_SLEEP);
+
+	/*
+         * Allocate and initialise the per-process per-CPU random state.
+	 * SI_SUB_RANDOM < SI_SUB_DTRACE_ANON therefore entropy device is
+         * assumed to be seeded at this point (if from Fortuna seed file).
+	 */
+	(void) read_random(&state->dts_rstate[0], 2 * sizeof(uint64_t));
+	for (cpu_it = 1; cpu_it < NCPU; cpu_it++) {
+		/*
+		 * Each CPU is assigned a 2^64 period, non-overlapping
+		 * subsequence.
+		 */
+		dtrace_xoroshiro128_plus_jump(state->dts_rstate[cpu_it-1],
+		    state->dts_rstate[cpu_it]); 
+	}
 
 #ifdef illumos
 	state->dts_cleaner = CYCLIC_NONE;

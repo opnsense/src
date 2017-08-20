@@ -313,12 +313,12 @@ ahci_a10_attach(device_t dev)
 		return (ENXIO);
 
 	/* Enable clocks */
-	error = clk_get_by_ofw_index(dev, 0, &clk_pll);
+	error = clk_get_by_ofw_index(dev, 0, 0, &clk_pll);
 	if (error != 0) {
 		device_printf(dev, "Cannot get PLL clock\n");
 		goto fail;
 	}
-	error = clk_get_by_ofw_index(dev, 1, &clk_gate);
+	error = clk_get_by_ofw_index(dev, 0, 1, &clk_gate);
 	if (error != 0) {
 		device_printf(dev, "Cannot get gate clock\n");
 		goto fail;
@@ -373,7 +373,7 @@ ahci_a10_detach(device_t dev)
 	return (ahci_detach(dev));
 }
 
-devclass_t ahci_devclass;
+static devclass_t ahci_devclass;
 
 static device_method_t ahci_ata_methods[] = {
 	DEVMETHOD(device_probe,     ahci_a10_probe),

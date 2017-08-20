@@ -90,48 +90,39 @@ __FBSDID("$FreeBSD$");
 /*
  * FreeBSD mbuf allocator/deallocator in emulation mode:
  *
- * We allocate EXT_PACKET mbuf+clusters, but need to set M_NOFREE
- * so that the destructor, if invoked, will not free the packet.
- *    In principle we should set the destructor only on demand,
- * but since there might be a race we better do it on allocation.
- * As a consequence, we also need to set the destructor or we
- * would leak buffers.
+ * We allocate mbufs with m_gethdr(), since the mbuf header is needed
+ * by the driver. We also attach a customly-provided external storage,
+ * which in this case is a netmap buffer. When calling m_extadd(), however
+ * we pass a NULL address, since the real address (and length) will be
+ * filled in by nm_os_generic_xmit_frame() right before calling
+ * if_transmit().
+ *
+ * The dtor function does nothing, however we need it since mb_free_ext()
+ * has a KASSERT(), checking that the mbuf dtor function is not NULL.
  */
 
-/*
- * mbuf wrappers
- */
-
-/* mbuf destructor, also need to change the type to EXT_EXTREF,
- * add an M_NOFREE flag, and then clear the flag and
- * chain into uma_zfree(zone_pack, mf)
- * (or reinstall the buffer ?)
- */
-#define SET_MBUF_DESTRUCTOR(m, fn)	do {		\
-	(m)->m_ext.ext_free = (void *)fn;	\
-} while (0)
-
-#if __FreeBSD_version < 1100000
-static int void_mbuf_dtor(struct mbuf *m, void *arg1, void *arg2) { return 0; }
-#else
 static void void_mbuf_dtor(struct mbuf *m, void *arg1, void *arg2) { }
-#endif
+
+static inline void
+SET_MBUF_DESTRUCTOR(struct mbuf *m, void *fn)
+{
+	m->m_ext.ext_free = fn ? fn : (void *)void_mbuf_dtor;
+}
 
 static inline struct mbuf *
 netmap_get_mbuf(int len)
 {
 	struct mbuf *m;
 
+	(void)len;
+
 	m = m_gethdr(M_NOWAIT, MT_DATA);
 	if (m == NULL) {
 		return m;
 	}
 
-	m_extadd(m, NULL /* buf */, 0 /* size */, void_mbuf_dtor, NULL, NULL, 0, EXT_NET_DRV
-#if __FreeBSD_version < 1100000
-		, M_NOWAIT
-#endif
-	);
+	m_extadd(m, NULL /* buf */, 0 /* size */, void_mbuf_dtor,
+		 NULL, NULL, 0, EXT_NET_DRV);
 
 	return m;
 }
@@ -438,7 +429,7 @@ generic_netmap_tx_clean(struct netmap_kring *kring)
 				// XXX how do we proceed ? break ?
 				return -ENOMEM;
 			}
-		} else if (GET_MBUF_REFCNT(m) != 1) {
+		} else if (MBUF_REFCNT(m) != 1) {
 			break; /* This mbuf is still busy: its refcnt is 2. */
 		}
 		n++;
@@ -467,62 +458,39 @@ generic_netmap_tx_clean(struct netmap_kring *kring)
 	return n;
 }
 
-
-/*
- * We have pending packets in the driver between nr_hwtail +1 and hwcur.
- * Compute a position in the middle, to be used to generate
- * a notification.
- */
-static inline u_int
-generic_tx_event_middle(struct netmap_kring *kring, u_int hwcur)
-{
-	u_int n = kring->nkr_num_slots;
-	u_int ntc = nm_next(kring->nr_hwtail, n-1);
-	u_int e;
-
-	if (hwcur >= ntc) {
-		e = (hwcur + ntc) / 2;
-	} else { /* wrap around */
-		e = (hwcur + n + ntc) / 2;
-		if (e >= n) {
-			e -= n;
-		}
-	}
-
-	if (unlikely(e >= n)) {
-		D("This cannot happen");
-		e = 0;
-	}
-
-	return e;
-}
-
-/*
- * We have pending packets in the driver between nr_hwtail+1 and hwcur.
- * Schedule a notification approximately in the middle of the two.
- * There is a race but this is only called within txsync which does
- * a double check.
- */
 static void
 generic_set_tx_event(struct netmap_kring *kring, u_int hwcur)
 {
+	u_int lim = kring->nkr_num_slots - 1;
 	struct mbuf *m;
 	u_int e;
+	u_int ntc = nm_next(kring->nr_hwtail, lim); /* next to clean */
 
-	if (nm_next(kring->nr_hwtail, kring->nkr_num_slots -1) == hwcur) {
+	if (ntc == hwcur) {
 		return; /* all buffers are free */
 	}
-	e = generic_tx_event_middle(kring, hwcur);
+
+	/*
+	 * We have pending packets in the driver between hwtail+1
+	 * and hwcur, and we have to chose one of these slot to
+	 * generate a notification.
+	 * There is a race but this is only called within txsync which
+	 * does a double check.
+	 */
+
+	/* Choose the first pending slot, to be safe against driver
+	 * reordering mbuf transmissions. */
+	e = ntc;
 
 	m = kring->tx_pool[e];
-	ND(5, "Request Event at %d mbuf %p refcnt %d", e, m, m ? GET_MBUF_REFCNT(m) : -2 );
+	ND(5, "Request Event at %d mbuf %p refcnt %d", e, m, m ? MBUF_REFCNT(m) : -2 );
 	if (m == NULL) {
 		/* This can happen if there is already an event on the netmap
 		   slot 'e': There is nothing to do. */
 		return;
 	}
 	kring->tx_pool[e] = NULL;
-	SET_MBUF_DESTRUCTOR(m, generic_mbuf_destructor);
+	SET_MBUF_DESTRUCTOR(m, (void *)generic_mbuf_destructor);
 
 	// XXX wmb() ?
 	/* Decrement the refcount an free it if we have the last one. */

@@ -1182,6 +1182,7 @@ sosend_dgram(struct socket *so, struct sockaddr *addr, struct uio *uio,
 	     (resid <= 0)) ?
 		PRUS_EOF :
 		/* If there is more to send set PRUS_MORETOCOME */
+		(flags & MSG_MORETOCOME) ||
 		(resid > 0 && space > 0) ? PRUS_MORETOCOME : 0,
 		top, addr, control, td);
 	if (dontroute) {
@@ -1368,6 +1369,7 @@ restart:
 			     (resid <= 0)) ?
 				PRUS_EOF :
 			/* If there is more to send set PRUS_MORETOCOME. */
+			    (flags & MSG_MORETOCOME) ||
 			    (resid > 0 && space > 0) ? PRUS_MORETOCOME : 0,
 			    top, addr, control, td);
 			if (dontroute) {
@@ -2340,13 +2342,27 @@ int
 soshutdown(struct socket *so, int how)
 {
 	struct protosw *pr = so->so_proto;
-	int error;
+	int error, soerror_enotconn;
 
 	if (!(how == SHUT_RD || how == SHUT_WR || how == SHUT_RDWR))
 		return (EINVAL);
+
+	soerror_enotconn = 0;
 	if ((so->so_state &
-	    (SS_ISCONNECTED | SS_ISCONNECTING | SS_ISDISCONNECTING)) == 0)
-		return (ENOTCONN);
+	    (SS_ISCONNECTED | SS_ISCONNECTING | SS_ISDISCONNECTING)) == 0) {
+		/*
+		 * POSIX mandates us to return ENOTCONN when shutdown(2) is
+		 * invoked on a datagram sockets, however historically we would
+		 * actually tear socket down. This is known to be leveraged by
+		 * some applications to unblock process waiting in recvXXX(2)
+		 * by other process that it shares that socket with. Try to meet
+		 * both backward-compatibility and POSIX requirements by forcing
+		 * ENOTCONN but still asking protocol to perform pru_shutdown().
+		 */
+		if (so->so_type != SOCK_DGRAM)
+			return (ENOTCONN);
+		soerror_enotconn = 1;
+	}
 
 	CURVNET_SET(so->so_vnet);
 	if (pr->pr_usrreqs->pru_flush != NULL)
@@ -2357,11 +2373,12 @@ soshutdown(struct socket *so, int how)
 		error = (*pr->pr_usrreqs->pru_shutdown)(so);
 		wakeup(&so->so_timeo);
 		CURVNET_RESTORE();
-		return (error);
+		return ((error == 0 && soerror_enotconn) ? ENOTCONN : error);
 	}
 	wakeup(&so->so_timeo);
 	CURVNET_RESTORE();
-	return (0);
+
+	return (soerror_enotconn ? ENOTCONN : 0);
 }
 
 void

@@ -526,9 +526,6 @@ lacp_port_create(struct lagg_port *lgp)
 	struct ifmultiaddr *rifma = NULL;
 	int error;
 
-	boolean_t active = TRUE; /* XXX should be configurable */
-	boolean_t fast = FALSE; /* Configurable via ioctl */ 
-
 	link_init_sdl(ifp, (struct sockaddr *)&sdl, IFT_ETHER);
 	sdl.sdl_alen = ETHER_ADDR_LEN;
 
@@ -557,9 +554,7 @@ lacp_port_create(struct lagg_port *lgp)
 
 	lacp_fill_actorinfo(lp, &lp->lp_actor);
 	lacp_fill_markerinfo(lp, &lp->lp_marker);
-	lp->lp_state =
-	    (active ? LACP_STATE_ACTIVITY : 0) |
-	    (fast ? LACP_STATE_TIMEOUT : 0);
+	lp->lp_state = LACP_STATE_ACTIVITY;
 	lp->lp_aggregator = NULL;
 	lacp_sm_rx_set_expired(lp);
 	LACP_UNLOCK(lsc);
@@ -1095,6 +1090,7 @@ lacp_compose_key(struct lacp_port *lp)
 		case IFM_10G_CR1:
 		case IFM_10G_ER:
 		case IFM_10G_SFI:
+		case IFM_10G_AOC:
 			key = IFM_10G_LR;
 			break;
 		case IFM_20G_KR2:
@@ -1119,6 +1115,9 @@ lacp_compose_key(struct lacp_port *lp)
 		case IFM_25G_CR:
 		case IFM_25G_KR:
 		case IFM_25G_SR:
+		case IFM_25G_LR:
+		case IFM_25G_ACC:
+		case IFM_25G_AOC:
 			key = IFM_25G_PCIE;
 			break;
 		case IFM_40G_CR4:

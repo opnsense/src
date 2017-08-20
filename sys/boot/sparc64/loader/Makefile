@@ -6,6 +6,7 @@ MAN=
 
 PROG?=		loader
 NEWVERSWHAT?=	"bootstrap loader" sparc64
+VERSION_FILE=	${.CURDIR}/../loader/version
 INSTALLFLAGS=	-b
 
 # Architecture-specific loader code
@@ -69,12 +70,8 @@ LIBFICL=	${.OBJDIR}/../../ficl/libficl.a
 .include	"${.CURDIR}/../../common/Makefile.inc"
 CFLAGS+=	-I${.CURDIR}/../../common
 CFLAGS+=	-I.
-# Avoid the open-close-dance for every file access as some firmwares perform
-# an auto-negotiation on every open of the network interface and thus causes
-# netbooting to take horribly long.
-CFLAGS+=	-DNETIF_OPEN_CLOSE_ONCE
 
-CLEANFILES+=	vers.c loader.help
+CLEANFILES+=	loader.help
 
 LDFLAGS=	-static
 
@@ -87,10 +84,6 @@ CFLAGS+=	-I${.CURDIR}/../../../../lib/libstand/
 
 DPADD=		${LIBFICL} ${LIBZFSBOOT} ${LIBOFW} ${LIBSTAND}
 LDADD=		${LIBFICL} ${LIBZFSBOOT} ${LIBOFW} -lstand
-
-vers.c:	${.CURDIR}/../../common/newvers.sh ${.CURDIR}/../loader/version
-	sh ${.CURDIR}/../../common/newvers.sh ${.CURDIR}/../loader/version \
-	    ${NEWVERSWHAT}
 
 loader.help: help.common help.sparc64
 	cat ${.ALLSRC} | \

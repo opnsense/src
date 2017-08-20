@@ -220,39 +220,37 @@ struct pread_args {
 };
 #endif
 int
-sys_pread(td, uap)
-	struct thread *td;
-	struct pread_args *uap;
+sys_pread(struct thread *td, struct pread_args *uap)
+{
+
+	return (kern_pread(td, uap->fd, uap->buf, uap->nbyte, uap->offset));
+}
+
+int
+kern_pread(struct thread *td, int fd, void *buf, size_t nbyte, off_t offset)
 {
 	struct uio auio;
 	struct iovec aiov;
 	int error;
 
-	if (uap->nbyte > IOSIZE_MAX)
+	if (nbyte > IOSIZE_MAX)
 		return (EINVAL);
-	aiov.iov_base = uap->buf;
-	aiov.iov_len = uap->nbyte;
+	aiov.iov_base = buf;
+	aiov.iov_len = nbyte;
 	auio.uio_iov = &aiov;
 	auio.uio_iovcnt = 1;
-	auio.uio_resid = uap->nbyte;
+	auio.uio_resid = nbyte;
 	auio.uio_segflg = UIO_USERSPACE;
-	error = kern_preadv(td, uap->fd, &auio, uap->offset);
-	return(error);
+	error = kern_preadv(td, fd, &auio, offset);
+	return (error);
 }
 
 #if defined(COMPAT_FREEBSD6)
 int
-freebsd6_pread(td, uap)
-	struct thread *td;
-	struct freebsd6_pread_args *uap;
+freebsd6_pread(struct thread *td, struct freebsd6_pread_args *uap)
 {
-	struct pread_args oargs;
 
-	oargs.fd = uap->fd;
-	oargs.buf = uap->buf;
-	oargs.nbyte = uap->nbyte;
-	oargs.offset = uap->offset;
-	return (sys_pread(td, &oargs));
+	return (kern_pread(td, uap->fd, uap->buf, uap->nbyte, uap->offset));
 }
 #endif
 
@@ -336,7 +334,8 @@ kern_preadv(td, fd, auio, offset)
 		return (error);
 	if (!(fp->f_ops->fo_flags & DFLAG_SEEKABLE))
 		error = ESPIPE;
-	else if (offset < 0 && fp->f_vnode->v_type != VCHR)
+	else if (offset < 0 &&
+	    (fp->f_vnode == NULL || fp->f_vnode->v_type != VCHR))
 		error = EINVAL;
 	else
 		error = dofileread(td, fd, fp, auio, offset, FOF_OFFSET);
@@ -362,6 +361,8 @@ dofileread(td, fd, fp, auio, offset, flags)
 #ifdef KTRACE
 	struct uio *ktruio = NULL;
 #endif
+
+	AUDIT_ARG_FD(fd);
 
 	/* Finish zero length reads right here */
 	if (auio->uio_resid == 0) {
@@ -433,39 +434,38 @@ struct pwrite_args {
 };
 #endif
 int
-sys_pwrite(td, uap)
-	struct thread *td;
-	struct pwrite_args *uap;
+sys_pwrite(struct thread *td, struct pwrite_args *uap)
+{
+
+	return (kern_pwrite(td, uap->fd, uap->buf, uap->nbyte, uap->offset));
+}
+
+int
+kern_pwrite(struct thread *td, int fd, const void *buf, size_t nbyte,
+    off_t offset)
 {
 	struct uio auio;
 	struct iovec aiov;
 	int error;
 
-	if (uap->nbyte > IOSIZE_MAX)
+	if (nbyte > IOSIZE_MAX)
 		return (EINVAL);
-	aiov.iov_base = (void *)(uintptr_t)uap->buf;
-	aiov.iov_len = uap->nbyte;
+	aiov.iov_base = (void *)(uintptr_t)buf;
+	aiov.iov_len = nbyte;
 	auio.uio_iov = &aiov;
 	auio.uio_iovcnt = 1;
-	auio.uio_resid = uap->nbyte;
+	auio.uio_resid = nbyte;
 	auio.uio_segflg = UIO_USERSPACE;
-	error = kern_pwritev(td, uap->fd, &auio, uap->offset);
+	error = kern_pwritev(td, fd, &auio, offset);
 	return(error);
 }
 
 #if defined(COMPAT_FREEBSD6)
 int
-freebsd6_pwrite(td, uap)
-	struct thread *td;
-	struct freebsd6_pwrite_args *uap;
+freebsd6_pwrite(struct thread *td, struct freebsd6_pwrite_args *uap)
 {
-	struct pwrite_args oargs;
 
-	oargs.fd = uap->fd;
-	oargs.buf = uap->buf;
-	oargs.nbyte = uap->nbyte;
-	oargs.offset = uap->offset;
-	return (sys_pwrite(td, &oargs));
+	return (kern_pwrite(td, uap->fd, uap->buf, uap->nbyte, uap->offset));
 }
 #endif
 
@@ -549,7 +549,8 @@ kern_pwritev(td, fd, auio, offset)
 		return (error);
 	if (!(fp->f_ops->fo_flags & DFLAG_SEEKABLE))
 		error = ESPIPE;
-	else if (offset < 0 && fp->f_vnode->v_type != VCHR)
+	else if (offset < 0 &&
+	    (fp->f_vnode == NULL || fp->f_vnode->v_type != VCHR))
 		error = EINVAL;
 	else
 		error = dofilewrite(td, fd, fp, auio, offset, FOF_OFFSET);
@@ -576,6 +577,7 @@ dofilewrite(td, fd, fp, auio, offset, flags)
 	struct uio *ktruio = NULL;
 #endif
 
+	AUDIT_ARG_FD(fd);
 	auio->uio_rw = UIO_WRITE;
 	auio->uio_td = td;
 	auio->uio_offset = offset;

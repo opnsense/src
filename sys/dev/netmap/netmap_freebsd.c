@@ -218,17 +218,16 @@ generic_xmit_frame(struct ifnet *ifp, struct mbuf *m,
 {
 	int ret;
 
-	/*
-	 * The mbuf should be a cluster from our special pool,
-	 * so we do not need to do an m_copyback but just copy
-	 * (and eventually, just reference the netmap buffer)
-	 */
-
+	/* Link the external storage to the netmap buffer, so that
+	 * no copy is necessary. */
 	m->m_ext.ext_buf = m->m_data = addr;
-	m->m_ext.ext_size = m->m_len = m->m_pkthdr.len = len;
+	m->m_ext.ext_size = len;
 
-	// inc refcount. All ours, we could skip the atomic
-	atomic_fetchadd_int(PNT_MBUF_REFCNT(m), 1);
+	m->m_len = m->m_pkthdr.len = len;
+
+	/* mbuf refcnt is not contended, no need to use atomic
+	 * (a memory barrier is enough). */
+	SET_MBUF_REFCNT(m, 2);
 	M_HASHTYPE_SET(m, M_HASHTYPE_OPAQUE);
 	m->m_pkthdr.flowid = ring_nr;
 	m->m_pkthdr.rcvif = ifp; /* used for tx notification */

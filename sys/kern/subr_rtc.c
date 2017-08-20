@@ -75,7 +75,7 @@ __FBSDID("$FreeBSD$");
 static device_t clock_dev = NULL;
 static long clock_res;
 static struct timespec clock_adj;
-static struct mtx resettodr_lock;
+struct mtx resettodr_lock;
 MTX_SYSINIT(resettodr_init, &resettodr_lock, "tod2rl", MTX_DEF);
 
 /* XXX: should be kern. now, it's no longer machdep.  */
@@ -132,7 +132,9 @@ inittodr(time_t base)
 		goto wrong_time;
 	}
 	/* XXX: We should poll all registered RTCs in case of failure */
+	mtx_lock(&resettodr_lock);
 	error = CLOCK_GETTIME(clock_dev, &ts);
+	mtx_unlock(&resettodr_lock);
 	if (error != 0 && error != EINVAL) {
 		printf("warning: clock_gettime failed (%d), the system time "
 		    "will not be set accurately\n", error);
@@ -172,11 +174,11 @@ resettodr(void)
 	if (disable_rtc_set || clock_dev == NULL)
 		return;
 
-	mtx_lock(&resettodr_lock);
 	getnanotime(&ts);
 	timespecadd(&ts, &clock_adj);
 	ts.tv_sec -= utc_offset();
 	/* XXX: We should really set all registered RTCs */
+	mtx_lock(&resettodr_lock);
 	error = CLOCK_SETTIME(clock_dev, &ts);
 	mtx_unlock(&resettodr_lock);
 	if (error != 0)

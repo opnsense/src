@@ -140,6 +140,7 @@
 #define	UNLINKPREV	0x100000 /* inodedep is pointed at in the unlink list */
 #define	UNLINKONLIST	0x200000 /* inodedep is in the unlinked list on disk */
 #define	UNLINKLINKS	(UNLINKNEXT | UNLINKPREV)
+#define	WRITESUCCEEDED	0x400000 /* the disk write completed successfully */
 
 #define	ALLCOMPLETE	(ATTACHED | COMPLETE | DEPCOMPLETE)
 
@@ -1064,6 +1065,7 @@ struct mount_softdeps {
 #define FLUSH_EXIT	0x0001	/* time to exit */
 #define FLUSH_CLEANUP	0x0002	/* need to clear out softdep structures */
 #define	FLUSH_STARTING	0x0004	/* flush thread not yet started */
+#define	FLUSH_RC_ACTIVE	0x0008	/* a thread is flushing the mount point */
 
 /*
  * Keep the old names from when these were in the ufsmount structure.

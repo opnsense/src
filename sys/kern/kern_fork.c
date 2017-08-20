@@ -39,7 +39,6 @@ __FBSDID("$FreeBSD$");
 
 #include "opt_ktrace.h"
 #include "opt_kstack_pages.h"
-#include "opt_pax.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -54,7 +53,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/mutex.h>
-#include <sys/pax.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/procdesc.h>
@@ -410,12 +408,15 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 
 	bcopy(&p1->p_startcopy, &p2->p_startcopy,
 	    __rangeof(struct proc, p_startcopy, p_endcopy));
+	p2->p_elf_machine = p1->p_elf_machine;
+	p2->p_elf_flags = p1->p_elf_flags;
 	pargs_hold(p2->p_args);
 
 	PROC_UNLOCK(p1);
 
 	bzero(&p2->p_startzero,
 	    __rangeof(struct proc, p_startzero, p_endzero));
+	p2->p_ptevents = 0;
 
 	/* Tell the prison that we exist. */
 	prison_proc_hold(p2->p_ucred->cr_prison);
@@ -473,12 +474,12 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 
 	bzero(&td2->td_startzero,
 	    __rangeof(struct thread, td_startzero, td_endzero));
+	td2->td_sleeptimo = 0;
 
 	bcopy(&td->td_startcopy, &td2->td_startcopy,
 	    __rangeof(struct thread, td_startcopy, td_endcopy));
 
 	bcopy(&p2->p_comm, &td2->td_name, sizeof(td2->td_name));
-	td2->td_pax = p2->p_pax;
 	td2->td_sigstk = td->td_sigstk;
 	td2->td_flags = TDF_INMEM;
 	td2->td_lend_user_pri = PRI_MAX;
@@ -500,7 +501,7 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 	 * Increase reference counts on shared objects.
 	 */
 	p2->p_flag = P_INMEM;
-	p2->p_flag2 = p1->p_flag2 & (P2_NOTRACE | P2_NOTRACE_EXEC);
+	p2->p_flag2 = p1->p_flag2 & (P2_NOTRACE | P2_NOTRACE_EXEC | P2_TRAPCAP);
 	p2->p_swtick = ticks;
 	if (p1->p_flag & P_PROFIL)
 		startprofclock(p2);
@@ -550,7 +551,7 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 
 	/* Bump references to the text vnode (for procfs). */
 	if (p2->p_textvp)
-		vref(p2->p_textvp);
+		vrefact(p2->p_textvp);
 
 	/*
 	 * Set up linkage for kernel based threading.
@@ -723,8 +724,7 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 	 * but before we wait for the debugger.
 	 */
 	_PHOLD(p2);
-	if ((p1->p_flag & (P_TRACED | P_FOLLOWFORK)) == (P_TRACED |
-	    P_FOLLOWFORK)) {
+	if (p1->p_ptevents & PTRACE_FORK) {
 		/*
 		 * Arrange for debugger to receive the fork event.
 		 *
@@ -739,6 +739,7 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 	if (fr->fr_flags & RFPPWAIT) {
 		td->td_pflags |= TDP_RFPPWAIT;
 		td->td_rfppwait_p = p2;
+		td->td_dbgflags |= TDB_VFORK;
 	}
 	PROC_UNLOCK(p2);
 
@@ -805,16 +806,6 @@ fork1(struct thread *td, struct fork_req *fr)
 		MPASS(fr->fr_procp != NULL && fr->fr_pidp == NULL);
 	else
 		MPASS(fr->fr_procp == NULL);
-
-#ifdef PAX_SEGVGUARD
-	if (td->td_proc->p_pid != 0) {
-		error = pax_segvguard_check(curthread,
-		    curthread->td_proc->p_textvp,
-		    td->td_proc->p_comm);
-		if (error)
-			return (error);
-	}
-#endif
 
 	/* Check for the undefined or unimplemented flags. */
 	if ((flags & ~(RFFLAGS | RFTSIGFLAGS(RFTSIGMASK))) != 0)
@@ -1081,22 +1072,20 @@ fork_return(struct thread *td, struct trapframe *frame)
 	if (td->td_dbgflags & TDB_STOPATFORK) {
 		sx_xlock(&proctree_lock);
 		PROC_LOCK(p);
-		if ((p->p_pptr->p_flag & (P_TRACED | P_FOLLOWFORK)) ==
-		    (P_TRACED | P_FOLLOWFORK)) {
+		if (p->p_pptr->p_ptevents & PTRACE_FORK) {
 			/*
 			 * If debugger still wants auto-attach for the
 			 * parent's children, do it now.
 			 */
 			dbg = p->p_pptr->p_pptr;
-			p->p_flag |= P_TRACED;
-			p->p_oppid = p->p_pptr->p_pid;
+			proc_set_traced(p, true);
 			CTR2(KTR_PTRACE,
 		    "fork_return: attaching to new child pid %d: oppid %d",
 			    p->p_pid, p->p_oppid);
 			proc_reparent(p, dbg);
 			sx_xunlock(&proctree_lock);
-			td->td_dbgflags |= TDB_CHILD | TDB_SCX;
-			ptracestop(td, SIGSTOP);
+			td->td_dbgflags |= TDB_CHILD | TDB_SCX | TDB_FSTP;
+			ptracestop(td, SIGSTOP, NULL);
 			td->td_dbgflags &= ~(TDB_CHILD | TDB_SCX);
 		} else {
 			/*
@@ -1115,9 +1104,9 @@ fork_return(struct thread *td, struct trapframe *frame)
 		PROC_LOCK(p);
 		td->td_dbgflags |= TDB_SCX;
 		_STOPEVENT(p, S_SCX, td->td_dbg_sc_code);
-		if ((p->p_stops & S_PT_SCX) != 0 ||
+		if ((p->p_ptevents & PTRACE_SCX) != 0 ||
 		    (td->td_dbgflags & TDB_BORN) != 0)
-			ptracestop(td, SIGTRAP);
+			ptracestop(td, SIGTRAP, NULL);
 		td->td_dbgflags &= ~(TDB_SCX | TDB_BORN);
 		PROC_UNLOCK(p);
 	}

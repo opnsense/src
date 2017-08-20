@@ -23,10 +23,10 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/MC/MCAsmInfo.h"
+#include "llvm/MC/MCParser/MCTargetAsmParser.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCSymbol.h"
-#include "llvm/MC/MCTargetAsmParser.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
@@ -40,19 +40,12 @@ using namespace llvm;
 
 #define DEBUG_TYPE "asm-printer"
 
-namespace {
-  struct SrcMgrDiagInfo {
-    const MDNode *LocInfo;
-    LLVMContext::InlineAsmDiagHandlerTy DiagHandler;
-    void *DiagContext;
-  };
-}
-
 /// srcMgrDiagHandler - This callback is invoked when the SourceMgr for an
 /// inline asm has an error in it.  diagInfo is a pointer to the SrcMgrDiagInfo
 /// struct above.
 static void srcMgrDiagHandler(const SMDiagnostic &Diag, void *diagInfo) {
-  SrcMgrDiagInfo *DiagInfo = static_cast<SrcMgrDiagInfo *>(diagInfo);
+  AsmPrinter::SrcMgrDiagInfo *DiagInfo =
+      static_cast<AsmPrinter::SrcMgrDiagInfo *>(diagInfo);
   assert(DiagInfo && "Diagnostic context not passed down?");
 
   // If the inline asm had metadata associated with it, pull out a location
@@ -99,33 +92,34 @@ void AsmPrinter::EmitInlineAsm(StringRef Str, const MCSubtargetInfo &STI,
     return;
   }
 
-  SourceMgr SrcMgr;
-  SrcMgrDiagInfo DiagInfo;
+  if (!DiagInfo) {
+    DiagInfo = make_unique<SrcMgrDiagInfo>();
 
-  // If the current LLVMContext has an inline asm handler, set it in SourceMgr.
-  LLVMContext &LLVMCtx = MMI->getModule()->getContext();
-  bool HasDiagHandler = false;
-  if (LLVMCtx.getInlineAsmDiagnosticHandler() != nullptr) {
-    // If the source manager has an issue, we arrange for srcMgrDiagHandler
-    // to be invoked, getting DiagInfo passed into it.
-    DiagInfo.LocInfo = LocMDNode;
-    DiagInfo.DiagHandler = LLVMCtx.getInlineAsmDiagnosticHandler();
-    DiagInfo.DiagContext = LLVMCtx.getInlineAsmDiagnosticContext();
-    SrcMgr.setDiagHandler(srcMgrDiagHandler, &DiagInfo);
-    HasDiagHandler = true;
+    MCContext &Context = MMI->getContext();
+    Context.setInlineSourceManager(&DiagInfo->SrcMgr);
+
+    LLVMContext &LLVMCtx = MMI->getModule()->getContext();
+    if (LLVMCtx.getInlineAsmDiagnosticHandler()) {
+      DiagInfo->DiagHandler = LLVMCtx.getInlineAsmDiagnosticHandler();
+      DiagInfo->DiagContext = LLVMCtx.getInlineAsmDiagnosticContext();
+      DiagInfo->SrcMgr.setDiagHandler(srcMgrDiagHandler, DiagInfo.get());
+    }
   }
 
+  SourceMgr &SrcMgr = DiagInfo->SrcMgr;
+  SrcMgr.setIncludeDirs(MCOptions.IASSearchPaths);
+  DiagInfo->LocInfo = LocMDNode;
+
   std::unique_ptr<MemoryBuffer> Buffer;
-  if (isNullTerminated)
-    Buffer = MemoryBuffer::getMemBuffer(Str, "<inline asm>");
-  else
-    Buffer = MemoryBuffer::getMemBufferCopy(Str, "<inline asm>");
+  // The inline asm source manager will outlive Str, so make a copy of the
+  // string for SourceMgr to own.
+  Buffer = MemoryBuffer::getMemBufferCopy(Str, "<inline asm>");
 
   // Tell SrcMgr about this buffer, it takes ownership of the buffer.
-  SrcMgr.AddNewSourceBuffer(std::move(Buffer), SMLoc());
+  unsigned BufNum = SrcMgr.AddNewSourceBuffer(std::move(Buffer), SMLoc());
 
   std::unique_ptr<MCAsmParser> Parser(
-      createMCAsmParser(SrcMgr, OutContext, *OutStreamer, *MAI));
+      createMCAsmParser(SrcMgr, OutContext, *OutStreamer, *MAI, BufNum));
 
   // We create a new MCInstrInfo here since we might be at the module level
   // and not have a MachineFunction to initialize the TargetInstrInfo from and
@@ -149,7 +143,13 @@ void AsmPrinter::EmitInlineAsm(StringRef Str, const MCSubtargetInfo &STI,
   int Res = Parser->Run(/*NoInitialTextSection*/ true,
                         /*NoFinalize*/ true);
   emitInlineAsmEnd(STI, &TAP->getSTI());
-  if (Res && !HasDiagHandler)
+
+  // LocInfo cannot be used for error generation from the backend.
+  // FIXME: associate LocInfo with the SourceBuffer to improve backend
+  // messages.
+  DiagInfo->LocInfo = nullptr;
+
+  if (Res && !DiagInfo->DiagHandler)
     report_fatal_error("Error parsing inline asm\n");
 }
 
@@ -192,6 +192,23 @@ static void EmitMSInlineAsmStr(const char *AsmStr, const MachineInstr *MI,
         break;
       }
       if (Done) break;
+
+      // If we have ${:foo}, then this is not a real operand reference, it is a
+      // "magic" string reference, just like in .td files.  Arrange to call
+      // PrintSpecial.
+      if (LastEmitted[0] == '{' && LastEmitted[1] == ':') {
+        LastEmitted += 2;
+        const char *StrStart = LastEmitted;
+        const char *StrEnd = strchr(StrStart, '}');
+        if (!StrEnd)
+          report_fatal_error("Unterminated ${:foo} operand in inline asm"
+                             " string: '" + Twine(AsmStr) + "'");
+
+        std::string Val(StrStart, StrEnd);
+        AP->PrintSpecial(MI, OS, Val.c_str());
+        LastEmitted = StrEnd+1;
+        break;
+      }
 
       const char *IDStart = LastEmitted;
       const char *IDEnd = IDStart;

@@ -107,7 +107,11 @@ struct pidfh *pidfile;
  */
 #define ASSERT_STATE(state_is, state_shouldbe) {}
 
-#define TIME_MAX 2147483647
+/*
+ * We need to check that the expiry, renewal and rebind times are not beyond
+ * the end of time (~2038 when a 32-bit time_t is being used).
+ */
+#define TIME_MAX        ((((time_t) 1 << (sizeof(time_t) * CHAR_BIT - 2)) - 1) * 2 + 1)
 
 int		log_priority;
 int		no_daemon;
@@ -752,45 +756,60 @@ dhcpack(struct packet *packet)
 	cancel_timeout(send_request, ip);
 
 	/* Figure out the lease time. */
-	if (ip->client->new->options[DHO_DHCP_LEASE_TIME].data)
+        if (ip->client->config->default_actions[DHO_DHCP_LEASE_TIME] ==
+            ACTION_SUPERSEDE)
+		ip->client->new->expiry = getULong(
+		    ip->client->config->defaults[DHO_DHCP_LEASE_TIME].data);
+        else if (ip->client->new->options[DHO_DHCP_LEASE_TIME].data)
 		ip->client->new->expiry = getULong(
 		    ip->client->new->options[DHO_DHCP_LEASE_TIME].data);
 	else
 		ip->client->new->expiry = default_lease_time;
 	/* A number that looks negative here is really just very large,
-	   because the lease expiry offset is unsigned. */
-	if (ip->client->new->expiry < 0)
-		ip->client->new->expiry = TIME_MAX;
+	   because the lease expiry offset is unsigned. Also make sure that
+           the addition of cur_time below does not overflow (a 32 bit) time_t. */
+	if (ip->client->new->expiry < 0 ||
+            ip->client->new->expiry > TIME_MAX - cur_time)
+		ip->client->new->expiry = TIME_MAX - cur_time;
 	/* XXX should be fixed by resetting the client state */
 	if (ip->client->new->expiry < 60)
 		ip->client->new->expiry = 60;
 
-	/* Take the server-provided renewal time if there is one;
-	   otherwise figure it out according to the spec. */
-	if (ip->client->new->options[DHO_DHCP_RENEWAL_TIME].len)
+        /* Unless overridden in the config, take the server-provided renewal
+         * time if there is one. Otherwise figure it out according to the spec.
+         * Also make sure the renewal time does not exceed the expiry time.
+         */
+        if (ip->client->config->default_actions[DHO_DHCP_RENEWAL_TIME] ==
+            ACTION_SUPERSEDE)
+		ip->client->new->renewal = getULong(
+		    ip->client->config->defaults[DHO_DHCP_RENEWAL_TIME].data);
+        else if (ip->client->new->options[DHO_DHCP_RENEWAL_TIME].len)
 		ip->client->new->renewal = getULong(
 		    ip->client->new->options[DHO_DHCP_RENEWAL_TIME].data);
 	else
 		ip->client->new->renewal = ip->client->new->expiry / 2;
+        if (ip->client->new->renewal < 0 ||
+            ip->client->new->renewal > ip->client->new->expiry / 2)
+                ip->client->new->renewal = ip->client->new->expiry / 2;
 
 	/* Same deal with the rebind time. */
-	if (ip->client->new->options[DHO_DHCP_REBINDING_TIME].len)
+        if (ip->client->config->default_actions[DHO_DHCP_REBINDING_TIME] ==
+            ACTION_SUPERSEDE)
+		ip->client->new->rebind = getULong(
+		    ip->client->config->defaults[DHO_DHCP_REBINDING_TIME].data);
+        else if (ip->client->new->options[DHO_DHCP_REBINDING_TIME].len)
 		ip->client->new->rebind = getULong(
 		    ip->client->new->options[DHO_DHCP_REBINDING_TIME].data);
 	else
-		ip->client->new->rebind = ip->client->new->renewal +
-		    ip->client->new->renewal / 2 + ip->client->new->renewal / 4;
+		ip->client->new->rebind = ip->client->new->renewal / 4 * 7;
+	if (ip->client->new->rebind < 0 ||
+            ip->client->new->rebind > ip->client->new->renewal / 4 * 7)
+                ip->client->new->rebind = ip->client->new->renewal / 4 * 7;
 
-	ip->client->new->expiry += cur_time;
-	/* Lease lengths can never be negative. */
-	if (ip->client->new->expiry < cur_time)
-		ip->client->new->expiry = TIME_MAX;
-	ip->client->new->renewal += cur_time;
-	if (ip->client->new->renewal < cur_time)
-		ip->client->new->renewal = TIME_MAX;
-	ip->client->new->rebind += cur_time;
-	if (ip->client->new->rebind < cur_time)
-		ip->client->new->rebind = TIME_MAX;
+        /* Convert the time offsets into seconds-since-the-epoch */
+        ip->client->new->expiry += cur_time;
+        ip->client->new->renewal += cur_time;
+        ip->client->new->rebind += cur_time;
 
 	bind_lease(ip);
 }
@@ -843,8 +862,6 @@ void
 state_bound(void *ipp)
 {
 	struct interface_info *ip = ipp;
-	u_int8_t *dp = NULL;
-	int len;
 
 	ASSERT_STATE(state, S_BOUND);
 
@@ -852,17 +869,10 @@ state_bound(void *ipp)
 	make_request(ip, ip->client->active);
 	ip->client->xid = ip->client->packet.xid;
 
-	if (ip->client->config->default_actions[DHO_DHCP_SERVER_IDENTIFIER] ==
-	    ACTION_SUPERSEDE) {
-		dp = ip->client->config->defaults[DHO_DHCP_SERVER_IDENTIFIER].data;
-		len = ip->client->config->defaults[DHO_DHCP_SERVER_IDENTIFIER].len;
-	} else {
-		dp = ip->client->active->options[DHO_DHCP_SERVER_IDENTIFIER].data;
-		len = ip->client->active->options[DHO_DHCP_SERVER_IDENTIFIER].len;
-	}
-	if (len == 4) {
-		memcpy(ip->client->destination.iabuf, dp, len);
-		ip->client->destination.len = len;
+	if (ip->client->active->options[DHO_DHCP_SERVER_IDENTIFIER].len == 4) {
+		memcpy(ip->client->destination.iabuf, ip->client->active->
+		    options[DHO_DHCP_SERVER_IDENTIFIER].data, 4);
+		ip->client->destination.len = 4;
 	} else
 		ip->client->destination = iaddr_broadcast;
 

@@ -1096,28 +1096,38 @@ linux_complete_common(struct completion *c, int all)
 long
 linux_wait_for_common(struct completion *c, int flags)
 {
+	long error;
+
 	if (SCHEDULER_STOPPED())
 		return (0);
+
+	DROP_GIANT();
 
 	if (flags != 0)
 		flags = SLEEPQ_INTERRUPTIBLE | SLEEPQ_SLEEP;
 	else
 		flags = SLEEPQ_SLEEP;
+	error = 0;
 	for (;;) {
 		sleepq_lock(c);
 		if (c->done)
 			break;
 		sleepq_add(c, NULL, "completion", flags, 0);
 		if (flags & SLEEPQ_INTERRUPTIBLE) {
-			if (sleepq_wait_sig(c, 0) != 0)
-				return (-ERESTARTSYS);
+			if (sleepq_wait_sig(c, 0) != 0) {
+				error = -ERESTARTSYS;
+				goto intr;
+			}
 		} else
 			sleepq_wait(c, 0);
 	}
 	c->done--;
 	sleepq_release(c);
 
-	return (0);
+intr:
+	PICKUP_GIANT();
+
+	return (error);
 }
 
 /*
@@ -1126,18 +1136,22 @@ linux_wait_for_common(struct completion *c, int flags)
 long
 linux_wait_for_timeout_common(struct completion *c, long timeout, int flags)
 {
-	long end = jiffies + timeout;
+	long end = jiffies + timeout, error;
+	int ret;
 
 	if (SCHEDULER_STOPPED())
 		return (0);
+
+	DROP_GIANT();
 
 	if (flags != 0)
 		flags = SLEEPQ_INTERRUPTIBLE | SLEEPQ_SLEEP;
 	else
 		flags = SLEEPQ_SLEEP;
-	for (;;) {
-		int ret;
 
+	error = 0;
+	ret = 0;
+	for (;;) {
 		sleepq_lock(c);
 		if (c->done)
 			break;
@@ -1150,16 +1164,20 @@ linux_wait_for_timeout_common(struct completion *c, long timeout, int flags)
 		if (ret != 0) {
 			/* check for timeout or signal */
 			if (ret == EWOULDBLOCK)
-				return (0);
+				error = 0;
 			else
-				return (-ERESTARTSYS);
+				error = -ERESTARTSYS;
+			goto intr;
 		}
 	}
 	c->done--;
 	sleepq_release(c);
 
+intr:
+	PICKUP_GIANT();
+
 	/* return how many jiffies are left */
-	return (linux_timer_jiffies_until(end));
+	return (ret != 0 ? error : linux_timer_jiffies_until(end));
 }
 
 int
@@ -1416,6 +1434,82 @@ linux_irq_handler(void *ent)
 
 	irqe = ent;
 	irqe->handler(irqe->irq, irqe->arg);
+}
+
+struct linux_cdev *
+linux_find_cdev(const char *name, unsigned major, unsigned minor)
+{
+	int unit = MKDEV(major, minor);
+	struct cdev *cdev;
+
+	dev_lock();
+	LIST_FOREACH(cdev, &linuxcdevsw.d_devs, si_list) {
+		struct linux_cdev *ldev = cdev->si_drv1;
+		if (dev2unit(cdev) == unit &&
+		    strcmp(kobject_name(&ldev->kobj), name) == 0) {
+			break;
+		}
+	}
+	dev_unlock();
+
+	return (cdev != NULL ? cdev->si_drv1 : NULL);
+}
+
+int
+__register_chrdev(unsigned int major, unsigned int baseminor,
+    unsigned int count, const char *name,
+    const struct file_operations *fops)
+{
+	struct linux_cdev *cdev;
+	int ret = 0;
+	int i;
+
+	for (i = baseminor; i < baseminor + count; i++) {
+		cdev = cdev_alloc();
+		cdev_init(cdev, fops);
+		kobject_set_name(&cdev->kobj, name);
+
+		ret = cdev_add(cdev, makedev(major, i), 1);
+		if (ret != 0)
+			break;
+	}
+	return (ret);
+}
+
+int
+__register_chrdev_p(unsigned int major, unsigned int baseminor,
+    unsigned int count, const char *name,
+    const struct file_operations *fops, uid_t uid,
+    gid_t gid, int mode)
+{
+	struct linux_cdev *cdev;
+	int ret = 0;
+	int i;
+
+	for (i = baseminor; i < baseminor + count; i++) {
+		cdev = cdev_alloc();
+		cdev_init(cdev, fops);
+		kobject_set_name(&cdev->kobj, name);
+
+		ret = cdev_add_ext(cdev, makedev(major, i), uid, gid, mode);
+		if (ret != 0)
+			break;
+	}
+	return (ret);
+}
+
+void
+__unregister_chrdev(unsigned int major, unsigned int baseminor,
+    unsigned int count, const char *name)
+{
+	struct linux_cdev *cdevp;
+	int i;
+
+	for (i = baseminor; i < baseminor + count; i++) {
+		cdevp = linux_find_cdev(name, major, i);
+		if (cdevp != NULL)
+			cdev_del(cdevp);
+	}
 }
 
 #if defined(__i386__) || defined(__amd64__)

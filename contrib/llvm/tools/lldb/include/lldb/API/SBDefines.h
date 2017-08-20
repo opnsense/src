@@ -59,6 +59,8 @@ class LLDB_API SBLanguageRuntime;
 class LLDB_API SBLaunchInfo;
 class LLDB_API SBLineEntry;
 class LLDB_API SBListener;
+class LLDB_API SBMemoryRegionInfo;
+class LLDB_API SBMemoryRegionInfoList;
 class LLDB_API SBModule;
 class LLDB_API SBModuleSpec;
 class LLDB_API SBModuleSpecList;
@@ -69,6 +71,7 @@ class LLDB_API SBSection;
 class LLDB_API SBSourceManager;
 class LLDB_API SBStream;
 class LLDB_API SBStringList;
+class LLDB_API SBStructuredData;
 class LLDB_API SBSymbol;
 class LLDB_API SBSymbolContext;
 class LLDB_API SBSymbolContextList;
@@ -93,7 +96,6 @@ class LLDB_API SBValueList;
 class LLDB_API SBVariablesOptions;
 class LLDB_API SBWatchpoint;
 class LLDB_API SBUnixSignals;
-
 }
 
-#endif  // LLDB_SBDefines_h_
+#endif // LLDB_SBDefines_h_

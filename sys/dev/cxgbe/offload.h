@@ -121,6 +121,7 @@ struct t4_virt_res {                      /* virtualized HW resources */
 	struct t4_range pbl;
 	struct t4_range qp;
 	struct t4_range cq;
+	struct t4_range srq;
 	struct t4_range ocq;
 	struct t4_range l2t;
 };
@@ -147,6 +148,7 @@ struct tom_tunables {
 	int ddp;
 	int rx_coalesce;
 	int tx_align;
+	int tx_zcopy;
 };
 
 #ifdef TCP_OFFLOAD

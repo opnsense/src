@@ -4,8 +4,13 @@
 
 TESTSRC=	${SRCTOP}/contrib/netbsd-tests/lib/libm
 
+WARNS?=		0
+
 # All architectures on FreeBSD have fenv.h
 CFLAGS+=	-DHAVE_FENV_H
+
+# For isqemu.h
+CFLAGS+=	-I${TESTSRC:H}/libc/gen
 
 # Not sure why this isn't defined for all architectures, since most
 # have long double.
@@ -20,12 +25,15 @@ NETBSD_ATF_TESTS_C+=	asin_test
 NETBSD_ATF_TESTS_C+=	atan_test
 NETBSD_ATF_TESTS_C+=	cbrt_test
 NETBSD_ATF_TESTS_C+=	ceil_test
+NETBSD_ATF_TESTS_C+=	casinh_test
 NETBSD_ATF_TESTS_C+=	cos_test
 NETBSD_ATF_TESTS_C+=	cosh_test
 NETBSD_ATF_TESTS_C+=	erf_test
 NETBSD_ATF_TESTS_C+=	exp_test
 NETBSD_ATF_TESTS_C+=	fmod_test
+NETBSD_ATF_TESTS_C+=	fe_round_test
 NETBSD_ATF_TESTS_C+=	infinity_test
+NETBSD_ATF_TESTS_C+=	ilogb_test
 NETBSD_ATF_TESTS_C+=	ldexp_test
 NETBSD_ATF_TESTS_C+=	log_test
 NETBSD_ATF_TESTS_C+=	pow_test
@@ -45,21 +53,12 @@ TAP_TESTS_C+=	conj_test
 # https://llvm.org/bugs/show_bug.cgi?id=26081
 TAP_TESTS_C+=	csqrt_test
 .endif
-TAP_TESTS_C+=	ctrig_test
+ATF_TESTS_C+=	ctrig_test
 TAP_TESTS_C+=	exponential_test
 TAP_TESTS_C+=	fenv_test
 TAP_TESTS_C+=	fma_test
-# clang 3.8.0 fails always fails this test. See: bug 208703
-#
-# XXX: depending on this compiler version check doesn't work at
-# buildworld/installworld time, which results in jenkins failures (bug 208963)
-# because the build is run on a 10.x instance, which has an older clang
-# compiler.
-#
-#.if ! (${COMPILER_TYPE} == "clang" && ${COMPILER_VERSION} == 30800)
-#TAP_TESTS_C+=	fmaxmin_test
-#.endif
-TAP_TESTS_C+=	ilogb_test
+TAP_TESTS_C+=	fmaxmin_test
+TAP_TESTS_C+=	ilogb2_test
 TAP_TESTS_C+=	invtrig_test
 TAP_TESTS_C+=	invctrig_test
 TAP_TESTS_C+=	logarithm_test
@@ -82,6 +81,8 @@ CSTD=		c99
 #COPTS+=	-Wfloat-equal
 
 IGNORE_PRAGMA=
+
+SRCS.ilogb2_test=	ilogb_test.c
 
 LIBADD+=	m
 

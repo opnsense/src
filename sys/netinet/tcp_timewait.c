@@ -231,6 +231,10 @@ tcp_twstart(struct tcpcb *tp)
 	INP_INFO_RLOCK_ASSERT(&V_tcbinfo);
 	INP_WLOCK_ASSERT(inp);
 
+	/* A dropped inp should never transition to TIME_WAIT state. */
+	KASSERT((inp->inp_flags & INP_DROPPED) == 0, ("tcp_twstart: "
+	    "(inp->inp_flags & INP_DROPPED) != 0"));
+
 	if (V_nolocaltimewait) {
 		int error = 0;
 #ifdef INET6
@@ -336,6 +340,7 @@ tcp_twstart(struct tcpcb *tp)
 		tcp_twrespond(tw, TH_ACK);
 	inp->inp_ppcb = tw;
 	inp->inp_flags |= INP_TIMEWAIT;
+	TCPSTATES_INC(TCPS_TIME_WAIT);
 	tcp_tw_2msl_reset(tw, 0);
 
 	/*

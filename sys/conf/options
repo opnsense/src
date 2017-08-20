@@ -85,6 +85,7 @@ COMPAT_FREEBSD6	opt_compat.h
 COMPAT_FREEBSD7	opt_compat.h
 COMPAT_FREEBSD9	opt_compat.h
 COMPAT_FREEBSD10	opt_compat.h
+COMPAT_CLOUDABI32	opt_dontuse.h
 COMPAT_CLOUDABI64	opt_dontuse.h
 COMPAT_LINUXKPI	opt_compat.h
 COMPILING_LINT	opt_global.h
@@ -380,6 +381,7 @@ ISP_TARGET_MODE		opt_isp.h
 ISP_FW_CRASH_DUMP	opt_isp.h
 ISP_DEFAULT_ROLES	opt_isp.h
 ISP_INTERNAL_TARGET	opt_isp.h
+ISP_FCTAPE_OFF		opt_isp.h
 
 # Options used only in dev/iscsi
 ISCSI_INITIATOR_DEBUG	opt_iscsi_initiator.h
@@ -417,12 +419,15 @@ IPFILTER_LOOKUP		opt_ipfilter.h
 IPFIREWALL		opt_ipfw.h
 IPFIREWALL_DEFAULT_TO_ACCEPT	opt_ipfw.h
 IPFIREWALL_NAT		opt_ipfw.h
+IPFIREWALL_NAT64	opt_ipfw.h
+IPFIREWALL_NAT64_DIRECT_OUTPUT	opt_ipfw.h
+IPFIREWALL_NPTV6	opt_ipfw.h
 IPFIREWALL_VERBOSE	opt_ipfw.h
 IPFIREWALL_VERBOSE_LIMIT	opt_ipfw.h
+IPFIREWALL_PMOD		opt_ipfw.h
 IPSEC			opt_ipsec.h
 IPSEC_DEBUG		opt_ipsec.h
-IPSEC_FILTERTUNNEL	opt_ipsec.h
-IPSEC_NAT_T		opt_ipsec.h
+IPSEC_SUPPORT		opt_ipsec.h
 IPSTEALTH
 KRPC
 LIBALIAS
@@ -444,7 +449,7 @@ SIFTR
 TCP_OFFLOAD		opt_inet.h # Enable code to dispatch TCP offloading
 TCP_RFC7413		opt_inet.h
 TCP_RFC7413_MAX_KEYS	opt_inet.h
-TCP_SIGNATURE		opt_inet.h
+TCP_SIGNATURE		opt_ipsec.h
 VLAN_ARRAY		opt_vlan.h
 XBONEHACK
 FLOWTABLE		opt_route.h
@@ -508,7 +513,6 @@ NETGRAPH_IPFW		opt_netgraph.h
 NETGRAPH_KSOCKET	opt_netgraph.h
 NETGRAPH_L2TP		opt_netgraph.h
 NETGRAPH_LMI		opt_netgraph.h
-# MPPC compression requires proprietary files (not included)
 NETGRAPH_MPPC_COMPRESSION	opt_netgraph.h
 NETGRAPH_MPPC_ENCRYPTION	opt_netgraph.h
 NETGRAPH_NAT		opt_netgraph.h
@@ -965,30 +969,6 @@ RACCT_DEFAULT_TO_DISABLED	opt_global.h
 # Resource Limits
 RCTL		opt_global.h
 
-# PaX-inspired hardening features
-PAX		opt_pax.h
-PAX_ASLR	opt_pax.h
-PAX_HARDENING	opt_pax.h
-PAX_SEGVGUARD	opt_pax.h
-PAX_SYSCTLS	opt_pax.h
-HBSD_DEBUG	opt_pax.h
-
-# ASLR overwritable defaults
-PAX_ASLR_DELTA_MMAP_DEF_LEN		opt_pax.h
-PAX_ASLR_DELTA_STACK_DEF_LEN		opt_pax.h
-PAX_ASLR_DELTA_VDSO_DEF_LEN		opt_pax.h
-PAX_ASLR_DELTA_EXEC_DEF_LEN		opt_pax.h
-PAX_ASLR_COMPAT_DELTA_MMAP_DEF_LEN	opt_pax.h
-PAX_ASLR_COMPAT_DELTA_STACK_DEF_LEN	opt_pax.h
-PAX_ASLR_COMPAT_DELTA_EXEC_DEF_LEN	opt_pax.h
-PAX_ASLR_COMPAT_DELTA_VDSO_DEF_LEN	opt_pax.h
-
-# Other hardening features
-STACK_GUARD_SIZE	opt_pax.h
-
-# OPNsense additions
-PF_SHARE_FORWARD	opt_pf.h
-
 # Random number generator(s)
 # Which CSPRNG hash we get.
 # If Yarrow is not chosen, Fortuna is selected.
@@ -1009,3 +989,14 @@ BHND_LOGLEVEL	opt_global.h
 
 # GPIO and child devices
 GPIO_SPI_DEBUG	opt_gpio.h
+
+# etherswitch(4) driver
+RTL8366_SOFT_RESET opt_etherswitch.h
+
+# evdev protocol support
+EVDEV_SUPPORT	opt_evdev.h
+EVDEV_DEBUG	opt_evdev.h
+UINPUT_DEBUG	opt_evdev.h
+
+# Hyper-V network driver
+HN_DEBUG	opt_hn.h

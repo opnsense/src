@@ -196,7 +196,7 @@ setup(char *dev)
 			bflag = 0;
 			return(0);
 		}
-		pwarn("USING ALTERNATE SUPERBLOCK AT %d\n", bflag);
+		pwarn("USING ALTERNATE SUPERBLOCK AT %jd\n", bflag);
 		bflag = 0;
 	}
 	if (skipclean && ckclean && sblock.fs_clean) {
@@ -268,8 +268,7 @@ setup(char *dev)
 		    (unsigned)bmapsize);
 		goto badsb;
 	}
-	inostathead = Calloc((unsigned)(sblock.fs_ncg),
-	    sizeof(struct inostatlist));
+	inostathead = Calloc(sblock.fs_ncg, sizeof(struct inostatlist));
 	if (inostathead == NULL) {
 		printf("cannot alloc %u bytes for inostathead\n",
 		    (unsigned)(sizeof(struct inostatlist) * (sblock.fs_ncg)));
@@ -279,10 +278,8 @@ setup(char *dev)
 	dirhash = numdirs;
 	inplast = 0;
 	listmax = numdirs + 10;
-	inpsort = (struct inoinfo **)Calloc((unsigned)listmax,
-	    sizeof(struct inoinfo *));
-	inphead = (struct inoinfo **)Calloc((unsigned)numdirs,
-	    sizeof(struct inoinfo *));
+	inpsort = (struct inoinfo **)Calloc(listmax, sizeof(struct inoinfo *));
+	inphead = (struct inoinfo **)Calloc(numdirs, sizeof(struct inoinfo *));
 	if (inpsort == NULL || inphead == NULL) {
 		printf("cannot alloc %ju bytes for inphead\n",
 		    (uintmax_t)numdirs * sizeof(struct inoinfo *));
@@ -329,7 +326,7 @@ readsb(int listerr)
 		}
 		if (sblock.fs_magic != FS_UFS1_MAGIC &&
 		    sblock.fs_magic != FS_UFS2_MAGIC) {
-			fprintf(stderr, "%d is not a file system superblock\n",
+			fprintf(stderr, "%jd is not a file system superblock\n",
 			    bflag);
 			return (0);
 		}

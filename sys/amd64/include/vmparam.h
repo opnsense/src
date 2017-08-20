@@ -52,7 +52,7 @@
 /*
  * Virtual memory related constants, all in bytes
  */
-#define	MAXTSIZ		(128UL*1024*1024)	/* max text size */
+#define	MAXTSIZ		(32768UL*1024*1024)	/* max text size */
 #ifndef DFLDSIZ
 #define	DFLDSIZ		(32768UL*1024*1024)	/* initial data size limit */
 #endif
@@ -63,7 +63,7 @@
 #define	DFLSSIZ		(8UL*1024*1024)		/* initial stack size limit */
 #endif
 #ifndef	MAXSSIZ
-#define	MAXSSIZ		(1UL*1024*1024*1024)	/* max stack size */
+#define	MAXSSIZ		(512UL*1024*1024)	/* max stack size */
 #endif
 #ifndef SGROWSIZ
 #define	SGROWSIZ	(128UL*1024)		/* amount to grow stack */
@@ -177,8 +177,7 @@
 #define	VM_MAXUSER_ADDRESS	UVADDR(NUPML4E, 0, 0, 0)
 
 #define	SHAREDPAGE		(VM_MAXUSER_ADDRESS - PAGE_SIZE)
-#define	SHAREDPAGE_GUARD	(4 * PAGE_SIZE)
-#define	USRSTACK		(SHAREDPAGE - SHAREDPAGE_GUARD)
+#define	USRSTACK		SHAREDPAGE
 
 #define	VM_MAX_ADDRESS		UPT_MAX_ADDRESS
 #define	VM_MIN_ADDRESS		(0)

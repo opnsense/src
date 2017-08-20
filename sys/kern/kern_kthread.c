@@ -273,6 +273,7 @@ kthread_add(void (*func)(void *), void *arg, struct proc *p,
 
 	bzero(&newtd->td_startzero,
 	    __rangeof(struct thread, td_startzero, td_endzero));
+	newtd->td_sleeptimo = 0;
 	bcopy(&oldtd->td_startcopy, &newtd->td_startcopy,
 	    __rangeof(struct thread, td_startcopy, td_endcopy));
 
@@ -320,11 +321,13 @@ void
 kthread_exit(void)
 {
 	struct proc *p;
+	struct thread *td;
 
-	p = curthread->td_proc;
+	td = curthread;
+	p = td->td_proc;
 
 	/* A module may be waiting for us to exit. */
-	wakeup(curthread);
+	wakeup(td);
 
 	/*
 	 * The last exiting thread in a kernel process must tear down
@@ -337,9 +340,10 @@ kthread_exit(void)
 		rw_wunlock(&tidhash_lock);
 		kproc_exit(0);
 	}
-	LIST_REMOVE(curthread, td_hash);
+	LIST_REMOVE(td, td_hash);
 	rw_wunlock(&tidhash_lock);
-	umtx_thread_exit(curthread);
+	umtx_thread_exit(td);
+	tdsigcleanup(td);
 	PROC_SLOCK(p);
 	thread_exit();
 }

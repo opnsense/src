@@ -110,11 +110,15 @@
         ..
         ciss
         ..
+        evdev
+        ..
         filemon
         ..
         firewire
         ..
         hwpmc
+        ..
+        hyperv
         ..
         ic
         ..
@@ -125,6 +129,8 @@
         lmc
         ..
         mfi
+        ..
+        mmc
         ..
         mpt
             mpilib

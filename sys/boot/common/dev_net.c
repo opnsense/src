@@ -120,11 +120,9 @@ net_open(struct open_file *f, ...)
 	devname = va_arg(args, char*);
 	va_end(args);
 
-#ifdef	NETIF_OPEN_CLOSE_ONCE
 	/* Before opening another interface, close the previous one first. */
 	if (netdev_sock >= 0 && strcmp(devname, netdev_name) != 0)
 		net_cleanup();
-#endif
 
 	/* On first open, do netif open, mount, etc. */
 	if (netdev_opens == 0) {
@@ -167,8 +165,14 @@ net_open(struct open_file *f, ...)
 		setenv("boot.netif.ip", inet_ntoa(myip), 1);
 		setenv("boot.netif.netmask", intoa(netmask), 1);
 		setenv("boot.netif.gateway", inet_ntoa(gateip), 1);
-		setenv("boot.nfsroot.server", inet_ntoa(rootip), 1);
-		setenv("boot.nfsroot.path", rootpath, 1);
+		setenv("boot.netif.server", inet_ntoa(rootip), 1);
+		if (netproto == NET_TFTP) {
+			setenv("boot.tftproot.server", inet_ntoa(rootip), 1);
+			setenv("boot.tftproot.path", rootpath, 1);
+		} else if (netproto == NET_NFS) {
+			setenv("boot.nfsroot.server", inet_ntoa(rootip), 1);
+			setenv("boot.nfsroot.path", rootpath, 1);
+		}
 		if (intf_mtu != 0) {
 			char mtu[16];
 			sprintf(mtu, "%u", intf_mtu);
@@ -192,21 +196,6 @@ net_close(struct open_file *f)
 
 	f->f_devdata = NULL;
 
-#ifndef	NETIF_OPEN_CLOSE_ONCE
-	/* Extra close call? */
-	if (netdev_opens <= 0)
-		return (0);
-	netdev_opens--;
-	/* Not last close? */
-	if (netdev_opens > 0)
-		return (0);
-	/* On last close, do netif close, etc. */
-#ifdef	NETIF_DEBUG
-	if (debug)
-		printf("net_close: calling net_cleanup()\n");
-#endif
-	net_cleanup();
-#endif
 	return (0);
 }
 
@@ -365,6 +354,13 @@ net_parse_rootpath()
 	int i;
 	n_long addr = INADDR_NONE;
 
+	netproto = NET_NFS;
+
+	if (tftpip.s_addr != 0) {
+		netproto = NET_TFTP;
+		addr = tftpip.s_addr;
+	}
+
 	for (i = 0; rootpath[i] != '\0' && i < FNAME_SIZE; i++)
 		if (rootpath[i] == ':')
 			break;
@@ -373,5 +369,6 @@ net_parse_rootpath()
 		addr = inet_addr(&rootpath[0]);
 		bcopy(&rootpath[i], rootpath, strlen(&rootpath[i])+1);
 	}
+
 	return (addr);
 }

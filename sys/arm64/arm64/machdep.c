@@ -109,6 +109,7 @@ int64_t dcache_line_size;	/* The minimum D cache line size */
 int64_t icache_line_size;	/* The minimum I cache line size */
 int64_t idcache_line_size;	/* The minimum cache line size */
 int64_t dczva_line_size;	/* The size of cache line the dc zva zeroes */
+int has_pan;
 
 /* pagezero_* implementations are provided in support.S */
 void pagezero_simple(void *);
@@ -116,6 +117,37 @@ void pagezero_cache(void *);
 
 /* pagezero_simple is default pagezero */
 void (*pagezero)(void *p) = pagezero_simple;
+
+static void
+pan_setup(void)
+{
+	uint64_t id_aa64mfr1;
+
+	id_aa64mfr1 = READ_SPECIALREG(id_aa64mmfr1_el1);
+	if (ID_AA64MMFR1_PAN(id_aa64mfr1) != ID_AA64MMFR1_PAN_NONE)
+		has_pan = 1;
+}
+
+void
+pan_enable(void)
+{
+
+	/*
+	 * The LLVM integrated assembler doesn't understand the PAN
+	 * PSTATE field. Because of this we need to manually create
+	 * the instruction in an asm block. This is equivalent to:
+	 * msr pan, #1
+	 *
+	 * This sets the PAN bit, stopping the kernel from accessing
+	 * memory when userspace can also access it unless the kernel
+	 * uses the userspace load/store instructions.
+	 */
+	if (has_pan) {
+		WRITE_SPECIALREG(sctlr_el1,
+		    READ_SPECIALREG(sctlr_el1) & ~SCTLR_SPAN);
+		__asm __volatile(".inst 0xd500409f | (0x1 << 8)");
+	}
+}
 
 static void
 cpu_startup(void *dummy)
@@ -407,8 +439,17 @@ cpu_flush_dcache(void *ptr, size_t len)
 int
 cpu_est_clockrate(int cpu_id, uint64_t *rate)
 {
+	struct pcpu *pc;
 
-	panic("ARM64TODO: cpu_est_clockrate");
+	pc = pcpu_find(cpu_id);
+	if (pc == NULL || rate == NULL)
+		return (EINVAL);
+
+	if (pc->pc_clock == 0)
+		return (EOPNOTSUPP);
+
+	*rate = pc->pc_clock;
+	return (0);
 }
 
 void
@@ -568,9 +609,9 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	tf->tf_sp = (register_t)fp;
 	sysent = p->p_sysent;
 	if (sysent->sv_sigcode_base != 0)
-		tf->tf_lr = (register_t)p->p_sigcode_base;
+		tf->tf_lr = (register_t)sysent->sv_sigcode_base;
 	else
-		tf->tf_lr = (register_t)(p->p_psstrings -
+		tf->tf_lr = (register_t)(sysent->sv_psstrings -
 		    *(sysent->sv_szsigcode));
 
 	CTR3(KTR_SIG, "sendsig: return td=%p pc=%#x sp=%#x", td, tf->tf_elr,
@@ -681,9 +722,6 @@ add_fdt_mem_regions(struct mem_region *mr, int mrcnt, vm_paddr_t *physmap,
 }
 #endif
 
-#define efi_next_descriptor(ptr, size) \
-	((struct efi_md *)(((uint8_t *) ptr) + size))
-
 static void
 add_efi_map_entries(struct efi_map_header *efihdr, vm_paddr_t *physmap,
     u_int *physmap_idxp)
@@ -707,7 +745,8 @@ add_efi_map_entries(struct efi_map_header *efihdr, vm_paddr_t *physmap,
 		"ACPIMemoryNVS",
 		"MemoryMappedIO",
 		"MemoryMappedIOPortSpace",
-		"PalCode"
+		"PalCode",
+		"PersistentMemory"
 	};
 
 	/*
@@ -728,7 +767,7 @@ add_efi_map_entries(struct efi_map_header *efihdr, vm_paddr_t *physmap,
 	for (i = 0, p = map; i < ndesc; i++,
 	    p = efi_next_descriptor(p, efihdr->descriptor_size)) {
 		if (boothowto & RB_VERBOSE) {
-			if (p->md_type <= EFI_MD_TYPE_PALCODE)
+			if (p->md_type < nitems(types))
 				type = types[p->md_type];
 			else
 				type = "<INVALID>";
@@ -750,6 +789,12 @@ add_efi_map_entries(struct efi_map_header *efihdr, vm_paddr_t *physmap,
 				printf("RP ");
 			if (p->md_attr & EFI_MD_ATTR_XP)
 				printf("XP ");
+			if (p->md_attr & EFI_MD_ATTR_NV)
+				printf("NV ");
+			if (p->md_attr & EFI_MD_ATTR_MORE_RELIABLE)
+				printf("MORE_RELIABLE ");
+			if (p->md_attr & EFI_MD_ATTR_RO)
+				printf("RO ");
 			if (p->md_attr & EFI_MD_ATTR_RT)
 				printf("RUNTIME");
 			printf("\n");
@@ -907,6 +952,7 @@ initarm(struct arm64_bootparams *abp)
 	init_param1();
 
 	cache_setup();
+	pan_setup();
 
 	/* Bootstrap enough of pmap  to enter the kernel proper */
 	pmap_bootstrap(abp->kern_l0pt, abp->kern_l1pt,
@@ -923,19 +969,9 @@ initarm(struct arm64_bootparams *abp)
 
 	dbg_monitor_init();
 	kdb_init();
+	pan_enable();
 
 	early_boot = 0;
-}
-
-uint32_t (*arm_cpu_fill_vdso_timehands)(struct vdso_timehands *,
-    struct timecounter *);
-
-uint32_t
-cpu_fill_vdso_timehands(struct vdso_timehands *vdso_th, struct timecounter *tc)
-{
-
-	return (arm_cpu_fill_vdso_timehands != NULL ?
-	    arm_cpu_fill_vdso_timehands(vdso_th, tc) : 0);
 }
 
 #ifdef DDB
@@ -1022,7 +1058,9 @@ DB_SHOW_COMMAND(vtop, db_show_vtop)
 
 	if (have_addr) {
 		phys = arm64_address_translate_s1e1r(addr);
-		db_printf("Physical address reg: 0x%016lx\n", phys);
+		db_printf("Physical address reg (read):  0x%016lx\n", phys);
+		phys = arm64_address_translate_s1e1w(addr);
+		db_printf("Physical address reg (write): 0x%016lx\n", phys);
 	} else
 		db_printf("show vtop <virt_addr>\n");
 }

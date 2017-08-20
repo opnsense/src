@@ -46,7 +46,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/platformvar.h>
 
 #include <arm/allwinner/aw_mp.h>
-#include <arm/allwinner/allwinner_machdep.h>
+#include <arm/allwinner/aw_machdep.h>
 
 /* Register for all dual-core SoC */
 #define	A20_CPUCFG_BASE		0x01c25c00
@@ -193,7 +193,8 @@ aw_mp_start_ap(platform_t plat)
 		val |= (1 << i);
 	bus_space_write_4(fdtbus_bs_tag, cpucfg, CPUCFG_DBGCTL1, val);
 
-	armv7_sev();
+	dsb();
+	sev();
 	bus_space_unmap(fdtbus_bs_tag, cpucfg, CPUCFG_SIZE);
 	if (soc_family != ALLWINNERSOC_SUN7I)
 		bus_space_unmap(fdtbus_bs_tag, prcm, PRCM_SIZE);
@@ -279,7 +280,8 @@ a83t_mp_start_ap(platform_t plat)
 		panic("Couldn't map the PRCM\n");
 
 	aw_mc_mp_start_ap(cpuscfg, cpuxcfg, prcm);
-	armv7_sev();
+	dsb();
+	sev();
 	bus_space_unmap(fdtbus_bs_tag, cpuxcfg, CPUXCFG_SIZE);
 	bus_space_unmap(fdtbus_bs_tag, cpuscfg, CPUCFG_SIZE);
 	bus_space_unmap(fdtbus_bs_tag, prcm, PRCM_SIZE);

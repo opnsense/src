@@ -37,7 +37,7 @@
 
 #include "fbt.h"
 
-#define FBT_PATCHVAL		0x7c810808
+#define FBT_PATCHVAL		0x7ffff808
 #define FBT_MFLR_R0		0x7c0802a6
 #define FBT_MTLR_R0		0x7c0803a6
 #define FBT_BLR			0x4e800020
@@ -137,9 +137,6 @@ fbt_provide_module_function(linker_file_t lf, int symindx,
 		 */
 		return (0);
 	}
-
-	if (name[0] == '_' && name[1] == '_')
-		return (0);
 
 	instr = (uint32_t *) symval->value;
 	limit = (uint32_t *) (symval->value + symval->size);

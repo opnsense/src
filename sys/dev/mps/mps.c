@@ -505,7 +505,8 @@ mps_iocfacts_allocate(struct mps_softc *sc, uint8_t attaching)
 	 */
 	if (reallocating) {
 		mps_iocfacts_free(sc);
-		mpssas_realloc_targets(sc, saved_facts.MaxTargets);
+		mpssas_realloc_targets(sc, saved_facts.MaxTargets +
+		    saved_facts.MaxVolumes);
 	}
 
 	/*
@@ -1353,6 +1354,7 @@ mps_get_tunables(struct mps_softc *sc)
 	sc->max_io_pages = MPS_MAXIO_PAGES;
 	sc->enable_ssu = MPS_SSU_ENABLE_SSD_DISABLE_HDD;
 	sc->spinup_wait_time = DEFAULT_SPINUP_WAIT;
+	sc->use_phynum = 1;
 
 	/*
 	 * Grab the global variables.
@@ -1364,6 +1366,7 @@ mps_get_tunables(struct mps_softc *sc)
 	TUNABLE_INT_FETCH("hw.mps.max_io_pages", &sc->max_io_pages);
 	TUNABLE_INT_FETCH("hw.mps.enable_ssu", &sc->enable_ssu);
 	TUNABLE_INT_FETCH("hw.mps.spinup_wait_time", &sc->spinup_wait_time);
+	TUNABLE_INT_FETCH("hw.mps.use_phy_num", &sc->use_phynum);
 
 	/* Grab the unit-instance variables */
 	snprintf(tmpstr, sizeof(tmpstr), "dev.mps.%d.debug_level",
@@ -1398,6 +1401,10 @@ mps_get_tunables(struct mps_softc *sc)
 	snprintf(tmpstr, sizeof(tmpstr), "dev.mps.%d.spinup_wait_time",
 	    device_get_unit(sc->mps_dev));
 	TUNABLE_INT_FETCH(tmpstr, &sc->spinup_wait_time);
+
+	snprintf(tmpstr, sizeof(tmpstr), "dev.mps.%d.use_phy_num",
+	    device_get_unit(sc->mps_dev));
+	TUNABLE_INT_FETCH(tmpstr, &sc->use_phynum);
 }
 
 static void
@@ -1495,6 +1502,10 @@ mps_setup_sysctl(struct mps_softc *sc)
 	SYSCTL_ADD_PROC(sysctl_ctx, SYSCTL_CHILDREN(sysctl_tree),
 	    OID_AUTO, "encl_table_dump", CTLTYPE_STRING | CTLFLAG_RD, sc, 0,
 	    mps_mapping_encl_dump, "A", "Enclosure Table Dump");
+
+	SYSCTL_ADD_INT(sysctl_ctx, SYSCTL_CHILDREN(sysctl_tree),
+	    OID_AUTO, "use_phy_num", CTLFLAG_RD, &sc->use_phynum, 0,
+	    "Use the phy number for enumeration");
 }
 
 int
@@ -1508,6 +1519,7 @@ mps_attach(struct mps_softc *sc)
 
 	mtx_init(&sc->mps_mtx, "MPT2SAS lock", NULL, MTX_DEF);
 	callout_init_mtx(&sc->periodic, &sc->mps_mtx, 0);
+	callout_init_mtx(&sc->device_check_callout, &sc->mps_mtx, 0);
 	TAILQ_INIT(&sc->event_list);
 	timevalclear(&sc->lastfail);
 
@@ -1672,6 +1684,7 @@ mps_free(struct mps_softc *sc)
 	mps_unlock(sc);
 	/* Lock must not be held for this */
 	callout_drain(&sc->periodic);
+	callout_drain(&sc->device_check_callout);
 
 	if (((error = mps_detach_log(sc)) != 0) ||
 	    ((error = mps_detach_sas(sc)) != 0))

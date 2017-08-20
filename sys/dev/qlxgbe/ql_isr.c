@@ -68,6 +68,9 @@ qla_rx_intr(qla_host_t *ha, qla_sgl_rcv_t *sgc, uint32_t sds_idx)
 	uint32_t		i, rem_len = 0;
 	uint32_t		r_idx = 0;
 	qla_rx_ring_t		*rx_ring;
+	struct lro_ctrl		*lro;
+
+	lro = &ha->hw.sds[sds_idx].lro;
 
 	if (ha->hw.num_rds_rings > 1)
 		r_idx = sds_idx;
@@ -159,9 +162,29 @@ qla_rx_intr(qla_host_t *ha, qla_sgl_rcv_t *sgc, uint32_t sds_idx)
 	if_inc_counter(ifp, IFCOUNTER_IPACKETS, 1);
 
 	mpf->m_pkthdr.flowid = sgc->rss_hash;
-	M_HASHTYPE_SET(mpf, M_HASHTYPE_OPAQUE_HASH);
 
-	(*ifp->if_input)(ifp, mpf);
+#if __FreeBSD_version >= 1100000
+	M_HASHTYPE_SET(mpf, M_HASHTYPE_OPAQUE_HASH);
+#else
+	M_HASHTYPE_SET(mpf, M_HASHTYPE_NONE);
+#endif /* #if __FreeBSD_version >= 1100000 */
+
+	if (ha->hw.enable_soft_lro) {
+
+#if (__FreeBSD_version >= 1100101)
+
+		tcp_lro_queue_mbuf(lro, mpf);
+
+#else
+		if (tcp_lro_rx(lro, mpf, 0))
+			(*ifp->if_input)(ifp, mpf);
+
+#endif /* #if (__FreeBSD_version >= 1100101) */
+
+
+	} else {
+		(*ifp->if_input)(ifp, mpf);
+	}
 
 	if (sdsp->rx_free > ha->std_replenish)
 		qla_replenish_normal_rx(ha, sdsp, r_idx);
@@ -303,6 +326,9 @@ qla_lro_intr(qla_host_t *ha, qla_sgl_lro_t *sgc, uint32_t sds_idx)
                 ip->ip_len = htons(iplen);
 
 		ha->ipv4_lro++;
+
+		M_HASHTYPE_SET(mpf, M_HASHTYPE_RSS_TCP_IPV4);
+
 	} else if (etype == ETHERTYPE_IPV6) {
 		ip6 = (struct ip6_hdr *)(mpf->m_data + ETHER_HDR_LEN);
 
@@ -311,6 +337,9 @@ qla_lro_intr(qla_host_t *ha, qla_sgl_lro_t *sgc, uint32_t sds_idx)
 		ip6->ip6_plen = htons(iplen);
 
 		ha->ipv6_lro++;
+
+		M_HASHTYPE_SET(mpf, M_HASHTYPE_RSS_TCP_IPV6);
+
 	} else {
 		m_freem(mpf);
 
@@ -324,7 +353,6 @@ qla_lro_intr(qla_host_t *ha, qla_sgl_lro_t *sgc, uint32_t sds_idx)
 	mpf->m_pkthdr.csum_data = 0xFFFF;
 
 	mpf->m_pkthdr.flowid = sgc->rss_hash;
-	M_HASHTYPE_SET(mpf, M_HASHTYPE_OPAQUE_HASH);
 
 	if_inc_counter(ifp, IFCOUNTER_IPACKETS, 1);
 
@@ -444,11 +472,11 @@ qla_rcv_cont_sds(qla_host_t *ha, uint32_t sds_idx, uint32_t comp_idx,
 }
 
 /*
- * Name: qla_rcv_isr
+ * Name: ql_rcv_isr
  * Function: Main Interrupt Service Routine
  */
-static uint32_t
-qla_rcv_isr(qla_host_t *ha, uint32_t sds_idx, uint32_t count)
+uint32_t
+ql_rcv_isr(qla_host_t *ha, uint32_t sds_idx, uint32_t count)
 {
 	device_t dev;
 	qla_hw_t *hw;
@@ -458,6 +486,8 @@ qla_rcv_isr(qla_host_t *ha, uint32_t sds_idx, uint32_t count)
 	qla_sgl_comp_t sgc;
 	uint16_t nhandles;
 	uint32_t sds_replenish_threshold = 0;
+	uint32_t r_idx = 0;
+	qla_sds_t *sdsp;
 
 	dev = ha->pci_dev;
 	hw = &ha->hw;
@@ -695,13 +725,45 @@ qla_rcv_isr(qla_host_t *ha, uint32_t sds_idx, uint32_t count)
 		}
 	}
 
+	if (ha->hw.enable_soft_lro) {
+		struct lro_ctrl		*lro;
+
+		lro = &ha->hw.sds[sds_idx].lro;
+
+#if (__FreeBSD_version >= 1100101)
+
+		tcp_lro_flush_all(lro);
+
+#else
+		struct lro_entry *queued;
+
+		while ((!SLIST_EMPTY(&lro->lro_active))) {
+			queued = SLIST_FIRST(&lro->lro_active);
+			SLIST_REMOVE_HEAD(&lro->lro_active, next);
+			tcp_lro_flush(lro, queued);
+		}
+
+#endif /* #if (__FreeBSD_version >= 1100101) */
+
+	}
+
 	if (ha->flags.stop_rcv)
-		goto qla_rcv_isr_exit;
+		goto ql_rcv_isr_exit;
 
 	if (hw->sds[sds_idx].sdsr_next != comp_idx) {
 		QL_UPDATE_SDS_CONSUMER_INDEX(ha, sds_idx, comp_idx);
+		hw->sds[sds_idx].sdsr_next = comp_idx;
+	} else {
+		hw->sds[sds_idx].spurious_intr_count++;
+
+		if (ha->hw.num_rds_rings > 1)
+			r_idx = sds_idx;
+
+		sdsp = &ha->hw.sds[sds_idx];
+
+		if (sdsp->rx_free > ha->std_replenish)
+			qla_replenish_normal_rx(ha, sdsp, r_idx);
 	}
-	hw->sds[sds_idx].sdsr_next = comp_idx;
 
 	sdesc = (q80_stat_desc_t *)&hw->sds[sds_idx].sds_ring_base[comp_idx];
 	opcode = Q8_STAT_DESC_OPCODE((sdesc->data[1]));
@@ -709,7 +771,7 @@ qla_rcv_isr(qla_host_t *ha, uint32_t sds_idx, uint32_t count)
 	if (opcode)
 		ret = -1;
 
-qla_rcv_isr_exit:
+ql_rcv_isr_exit:
 	hw->sds[sds_idx].rcv_active = 0;
 
 	return (ret);
@@ -821,6 +883,20 @@ ql_mbx_isr(void *arg)
                 device_printf(ha->pci_dev, "%s: sfp removed]\n", __func__);
                 break;
 
+	case 0x8140:
+		{
+			uint32_t ombx[3];
+
+			ombx[0] = READ_REG32(ha, (Q8_FW_MBOX0 + 4));
+			ombx[1] = READ_REG32(ha, (Q8_FW_MBOX0 + 8));
+			ombx[2] = READ_REG32(ha, (Q8_FW_MBOX0 + 12));
+
+			device_printf(ha->pci_dev, "%s: "
+				"0x%08x 0x%08x 0x%08x 0x%08x \n",
+				__func__, data, ombx[0], ombx[1], ombx[2]);
+		}
+		break;
+
 	default:
 		device_printf(ha->pci_dev, "%s: AEN[0x%08x]\n", __func__, data);
 		break;
@@ -867,8 +943,8 @@ qla_replenish_normal_rx(qla_host_t *ha, qla_sds_t *sdsp, uint32_t r_idx)
 				rdesc->rx_next = 0;
 		} else {
 			device_printf(ha->pci_dev,
-				"%s: ql_get_mbuf [0,(%d),(%d)] failed\n",
-				__func__, rdesc->rx_in, rxb->handle);
+				"%s: qla_get_mbuf [(%d),(%d),(%d)] failed\n",
+				__func__, r_idx, rdesc->rx_in, rxb->handle);
 
 			rxb->m_head = NULL;
 			rxb->next = sdsp->rxb_free;
@@ -899,7 +975,7 @@ ql_isr(void *arg)
 	int idx;
 	qla_hw_t *hw;
 	struct ifnet *ifp;
-	uint32_t ret = 0;
+	qla_tx_fp_t *fp;
 
 	ha = ivec->ha;
 	hw = &ha->hw;
@@ -908,17 +984,13 @@ ql_isr(void *arg)
 	if ((idx = ivec->sds_idx) >= ha->hw.num_sds_rings)
 		return;
 
-	if (idx == 0)
-		taskqueue_enqueue(ha->tx_tq, &ha->tx_task);
-	
-	ret = qla_rcv_isr(ha, idx, -1);
 
-	if (idx == 0)
-		taskqueue_enqueue(ha->tx_tq, &ha->tx_task);
+	fp = &ha->tx_fp[idx];
 
-	if (!ha->flags.stop_rcv) {
-		QL_ENABLE_INTERRUPTS(ha, idx);
-	}
+	if ((fp->fp_taskqueue != NULL) &&
+		(ifp->if_drv_flags & IFF_DRV_RUNNING))
+		taskqueue_enqueue(fp->fp_taskqueue, &fp->fp_task);
+
 	return;
 }
 

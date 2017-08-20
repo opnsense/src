@@ -85,7 +85,7 @@
 17	AUE_NULL	STD	{ int obreak(char *nsize); } break \
 				    obreak_args int
 18	AUE_GETFSSTAT	COMPAT4	{ int getfsstat(struct ostatfs *buf, \
-				    long bufsize, int flags); }
+				    long bufsize, int mode); }
 19	AUE_LSEEK	COMPAT	{ long lseek(int fd, long offset, \
 				    int whence); }
 20	AUE_GETPID	STD	{ pid_t getpid(void); }
@@ -461,7 +461,9 @@
 				    struct ffclock_estimate *cest); }
 243	AUE_NULL	STD	{ int ffclock_getestimate( \
 				    struct ffclock_estimate *cest); }
-244	AUE_NULL	UNIMPL	nosys
+244	AUE_NULL	STD	{ int clock_nanosleep(clockid_t clock_id, \
+				    int flags, const struct timespec *rqtp, \
+				    struct timespec *rmtp); }
 245	AUE_NULL	UNIMPL	nosys
 246	AUE_NULL	UNIMPL	nosys
 247	AUE_NULL	STD	{ int clock_getcpuclockid2(id_t id,\
@@ -707,7 +709,7 @@
 394	AUE_NULL	STD	{ int mac_syscall(const char *policy, \
 				    int call, void *arg); }
 395	AUE_GETFSSTAT	STD	{ int getfsstat(struct statfs *buf, \
-				    long bufsize, int flags); }
+				    long bufsize, int mode); }
 396	AUE_STATFS	STD	{ int statfs(char *path, \
 				    struct statfs *buf); }
 397	AUE_FSTATFS	STD	{ int fstatfs(int fd, struct statfs *buf); }
@@ -993,8 +995,9 @@
 				    id_t id, \
 				    struct vm_domain_policy_entry *policy); }
 549	AUE_NULL	STD	{ int numa_setaffinity(cpuwhich_t which, \
-				    id_t id, \
-				    const struct vm_domain_policy_entry *policy); }
+				    id_t id, const struct \
+				    vm_domain_policy_entry *policy); }
+550	AUE_FSYNC	STD	{ int fdatasync(int fd); }
 
 ; Please copy any additions and changes to the following compatability tables:
 ; sys/compat/freebsd32/syscalls.master

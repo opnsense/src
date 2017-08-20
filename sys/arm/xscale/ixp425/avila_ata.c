@@ -53,8 +53,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/endian.h>
 
 #include <machine/bus.h>
-#include <machine/cpu.h>
-#include <machine/cpufunc.h>
 #include <machine/resource.h>
 #include <machine/intr.h>
 #include <arm/xscale/ixp425/ixp425reg.h>
@@ -202,17 +200,17 @@ ata_avila_attach(device_t dev)
 		 */
 		sc->sc_expbus_tag.bs_privdata = sc;	/* NB: backpointer */
 		/* read single */
-		sc->sc_expbus_tag.bs_r_1	= ata_bs_r_1,
-		sc->sc_expbus_tag.bs_r_2	= ata_bs_r_2,
+		sc->sc_expbus_tag.bs_r_1	= ata_bs_r_1;
+		sc->sc_expbus_tag.bs_r_2	= ata_bs_r_2;
 		/* read multiple */
-		sc->sc_expbus_tag.bs_rm_2	= ata_bs_rm_2,
-		sc->sc_expbus_tag.bs_rm_2_s	= ata_bs_rm_2_s,
+		sc->sc_expbus_tag.bs_rm_2	= ata_bs_rm_2;
+		sc->sc_expbus_tag.bs_rm_2_s	= ata_bs_rm_2_s;
 		/* write (single) */
-		sc->sc_expbus_tag.bs_w_1	= ata_bs_w_1,
-		sc->sc_expbus_tag.bs_w_2	= ata_bs_w_2,
+		sc->sc_expbus_tag.bs_w_1	= ata_bs_w_1;
+		sc->sc_expbus_tag.bs_w_2	= ata_bs_w_2;
 		/* write multiple */
-		sc->sc_expbus_tag.bs_wm_2	= ata_bs_wm_2,
-		sc->sc_expbus_tag.bs_wm_2_s	= ata_bs_wm_2_s,
+		sc->sc_expbus_tag.bs_wm_2	= ata_bs_wm_2;
+		sc->sc_expbus_tag.bs_wm_2_s	= ata_bs_wm_2_s;
 
 		rman_set_bustag(&sc->sc_ata, &sc->sc_expbus_tag);
 		rman_set_bustag(&sc->sc_alt_ata, &sc->sc_expbus_tag);

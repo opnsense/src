@@ -165,25 +165,66 @@ again:
 		ret = EACCES;
 #else
 	    {
+		struct m_tag *fwd_tag;
+		size_t len;
+
 		KASSERT(args.next_hop == NULL || args.next_hop6 == NULL,
 		    ("%s: both next_hop=%p and next_hop6=%p not NULL", __func__,
 		     args.next_hop, args.next_hop6));
 #ifdef INET6
+		if (args.next_hop6 != NULL)
+			len = sizeof(struct sockaddr_in6);
+#endif
+#ifdef INET
+		if (args.next_hop != NULL)
+			len = sizeof(struct sockaddr_in);
+#endif
+
+		/* Incoming packets should not be tagged so we do not
+		 * m_tag_find. Outgoing packets may be tagged, so we
+		 * reuse the tag if present.
+		 */
+		fwd_tag = (dir == DIR_IN) ? NULL :
+			m_tag_find(*m0, PACKET_TAG_IPFORWARD, NULL);
+		if (fwd_tag != NULL) {
+			m_tag_unlink(*m0, fwd_tag);
+		} else {
+			fwd_tag = m_tag_get(PACKET_TAG_IPFORWARD, len,
+			    M_NOWAIT);
+			if (fwd_tag == NULL) {
+				ret = EACCES;
+				break; /* i.e. drop */
+			}
+		}
+#ifdef INET6
 		if (args.next_hop6 != NULL) {
-			if (ip6_set_fwdtag(*m0, args.next_hop6, 0)) {
+			struct sockaddr_in6 *sa6;
+
+			sa6 = (struct sockaddr_in6 *)(fwd_tag + 1);
+			bcopy(args.next_hop6, sa6, len);
+			/*
+			 * If nh6 address is link-local we should convert
+			 * it to kernel internal form before doing any
+			 * comparisons.
+			 */
+			if (sa6_embedscope(sa6, V_ip6_use_defzone) != 0) {
 				ret = EACCES;
 				break;
 			}
+			if (in6_localip(&sa6->sin6_addr))
+				(*m0)->m_flags |= M_FASTFWD_OURS;
+			(*m0)->m_flags |= M_IP6_NEXTHOP;
 		}
 #endif
 #ifdef INET
 		if (args.next_hop != NULL) {
-			if (ip_set_fwdtag(*m0, args.next_hop, 0)) {
-				ret = EACCES;
-				break;
-			}
+			bcopy(args.next_hop, (fwd_tag+1), len);
+			if (in_localip(args.next_hop->sin_addr))
+				(*m0)->m_flags |= M_FASTFWD_OURS;
+			(*m0)->m_flags |= M_IP_NEXTHOP;
 		}
 #endif
+		m_tag_prepend(*m0, fwd_tag);
 	    }
 #endif /* INET || INET6 */
 		break;
@@ -262,11 +303,9 @@ again:
 
 /*
  * ipfw processing for ethernet packets (in and out).
- * Inteface is NULL from ether_demux, and ifp from
- * ether_output_frame.
  */
 int
-ipfw_check_frame(void *arg, struct mbuf **m0, struct ifnet *dst, int dir,
+ipfw_check_frame(void *arg, struct mbuf **m0, struct ifnet *ifp, int dir,
     struct inpcb *inp)
 {
 	struct ether_header *eh;
@@ -276,20 +315,15 @@ ipfw_check_frame(void *arg, struct mbuf **m0, struct ifnet *dst, int dir,
 	struct ip_fw_args args;
 	struct m_tag *mtag;
 
-	/* fetch start point from rule, if any */
+	/* fetch start point from rule, if any.  remove the tag if present. */
 	mtag = m_tag_locate(*m0, MTAG_IPFW_RULE, 0, NULL);
 	if (mtag == NULL) {
 		args.rule.slot = 0;
 	} else {
-		/* dummynet packet, already partially processed */
-		struct ipfw_rule_ref *r;
-
-		/* XXX can we free it after use ? */
-		mtag->m_tag_id = PACKET_TAG_NONE;
-		r = (struct ipfw_rule_ref *)(mtag + 1);
-		if (r->info & IPFW_ONEPASS)
+		args.rule = *((struct ipfw_rule_ref *)(mtag+1));
+		m_tag_delete(*m0, mtag);
+		if (args.rule.info & IPFW_ONEPASS)
 			return (0);
-		args.rule = *r;
 	}
 
 	/* I need some amt of data to be contiguous */
@@ -307,7 +341,7 @@ ipfw_check_frame(void *arg, struct mbuf **m0, struct ifnet *dst, int dir,
 	m_adj(m, ETHER_HDR_LEN);	/* strip ethernet header */
 
 	args.m = m;		/* the packet we are looking at		*/
-	args.oif = dir == PFIL_OUT ? dst: NULL;	/* destination, if any	*/
+	args.oif = dir == PFIL_OUT ? ifp: NULL;	/* destination, if any	*/
 	args.next_hop = NULL;	/* we do not support forward yet	*/
 	args.next_hop6 = NULL;	/* we do not support forward yet	*/
 	args.eh = &save_eh;	/* MAC header for bridged/MAC packets	*/
@@ -342,14 +376,13 @@ ipfw_check_frame(void *arg, struct mbuf **m0, struct ifnet *dst, int dir,
 
 	case IP_FW_DUMMYNET:
 		ret = EACCES;
-		int dir;
 
 		if (ip_dn_io_ptr == NULL)
 			break; /* i.e. drop */
 
 		*m0 = NULL;
-		dir = PROTO_LAYER2 | (dst ? DIR_OUT : DIR_IN);
-		ip_dn_io_ptr(&m, dir, &args);
+		dir = (dir == PFIL_IN) ? DIR_IN : DIR_OUT;
+		ip_dn_io_ptr(&m, dir | PROTO_LAYER2, &args);
 		return 0;
 
 	default:

@@ -7,6 +7,7 @@ ARM_MANY_BOARD		opt_global.h
 NKPT2PG			opt_pmap.h
 ARM_WANT_TP_ADDRESS	opt_global.h
 COUNTS_PER_SEC		opt_timer.h
+CPSW_ETHERSWITCH	opt_cpsw.h
 CPU_ARM9		opt_global.h
 CPU_ARM9E		opt_global.h
 CPU_ARM1176		opt_global.h
@@ -41,6 +42,7 @@ SOCDEV_VA		opt_global.h
 PV_STATS		opt_pmap.h
 QEMU_WORKAROUNDS	opt_global.h
 SOC_ALLWINNER_A10	opt_global.h
+SOC_ALLWINNER_A13	opt_global.h
 SOC_ALLWINNER_A20	opt_global.h
 SOC_ALLWINNER_A31	opt_global.h
 SOC_ALLWINNER_A31S	opt_global.h

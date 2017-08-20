@@ -353,9 +353,13 @@ sysctl_vfs_zfs_debug_flags(SYSCTL_HANDLER_ARGS)
 	return (0);
 }
 
-SYSCTL_PROC(_vfs_zfs, OID_AUTO, debug_flags,
+SYSCTL_PROC(_vfs_zfs, OID_AUTO, debugflags,
     CTLTYPE_UINT | CTLFLAG_MPSAFE | CTLFLAG_RWTUN, 0, sizeof(int),
     sysctl_vfs_zfs_debug_flags, "IU", "Debug flags for ZFS testing.");
+SYSCTL_PROC(_vfs_zfs, OID_AUTO, debug_flags,
+    CTLTYPE_UINT | CTLFLAG_MPSAFE | CTLFLAG_RW, 0, sizeof(int),
+    sysctl_vfs_zfs_debug_flags, "IU",
+    "Debug flags for ZFS testing (deprecated, see vfs.zfs.debugflags).");
 
 SYSCTL_UQUAD(_vfs_zfs, OID_AUTO, deadman_synctime_ms, CTLFLAG_RDTUN,
     &zfs_deadman_synctime_ms, 0,
@@ -411,12 +415,20 @@ zfs_deadman_init()
  * it is possible to run the pool completely out of space, causing it to
  * be permanently read-only.
  *
+ * Note that on very small pools, the slop space will be larger than
+ * 3.2%, in an effort to have it be at least spa_min_slop (128MB),
+ * but we never allow it to be more than half the pool size.
+ *
  * See also the comments in zfs_space_check_t.
  */
 int spa_slop_shift = 5;
 SYSCTL_INT(_vfs_zfs, OID_AUTO, spa_slop_shift, CTLFLAG_RWTUN,
     &spa_slop_shift, 0,
     "Shift value of reserved space (1/(2^spa_slop_shift)).");
+uint64_t spa_min_slop = 128 * 1024 * 1024;
+SYSCTL_UQUAD(_vfs_zfs, OID_AUTO, spa_min_slop, CTLFLAG_RWTUN,
+    &spa_min_slop, 0,
+    "Minimal value of reserved space");
 
 /*
  * ==========================================================================
@@ -589,8 +601,8 @@ spa_lookup(const char *name)
  * If the zfs_deadman_enabled flag is set then it inspects all vdev queues
  * looking for potentially hung I/Os.
  */
-void
-spa_deadman(void *arg)
+static void
+spa_deadman(void *arg, int pending)
 {
 	spa_t *spa = arg;
 
@@ -618,6 +630,16 @@ spa_deadman(void *arg)
 #endif
 #endif
 }
+
+#if defined(__FreeBSD__) && defined(_KERNEL)
+static void
+spa_deadman_timeout(void *arg)
+{
+	spa_t *spa = arg;
+
+	taskqueue_enqueue(taskqueue_thread, &spa->spa_deadman_task);
+}
+#endif
 
 /*
  * Create an uninitialized spa_t with the given name.  Requires
@@ -649,6 +671,7 @@ spa_add(const char *name, nvlist_t *config, const char *altroot)
 	mutex_init(&spa->spa_scrub_lock, NULL, MUTEX_DEFAULT, NULL);
 	mutex_init(&spa->spa_suspend_lock, NULL, MUTEX_DEFAULT, NULL);
 	mutex_init(&spa->spa_vdev_top_lock, NULL, MUTEX_DEFAULT, NULL);
+	mutex_init(&spa->spa_alloc_lock, NULL, MUTEX_DEFAULT, NULL);
 
 	cv_init(&spa->spa_async_cv, NULL, CV_DEFAULT, NULL);
 	cv_init(&spa->spa_evicting_os_cv, NULL, CV_DEFAULT, NULL);
@@ -689,7 +712,23 @@ spa_add(const char *name, nvlist_t *config, const char *altroot)
 	mutex_exit(&cpu_lock);
 #else	/* !illumos */
 #ifdef _KERNEL
+	/*
+	 * callout(9) does not provide a way to initialize a callout with
+	 * a function and an argument, so we use callout_reset() to schedule
+	 * the callout in the very distant future.  Even if that event ever
+	 * fires, it should be okayas we won't have any active zio-s.
+	 * But normally spa_sync() will reschedule the callout with a proper
+	 * timeout.
+	 * callout(9) does not allow the callback function to sleep but
+	 * vdev_deadman() needs to acquire vq_lock and illumos mutexes are
+	 * emulated using sx(9).  For this reason spa_deadman_timeout()
+	 * will schedule spa_deadman() as task on a taskqueue that allows
+	 * sleeping.
+	 */
+	TASK_INIT(&spa->spa_deadman_task, 0, spa_deadman, spa);
 	callout_init(&spa->spa_deadman_cycid, 1);
+	callout_reset_sbt(&spa->spa_deadman_cycid, SBT_MAX, 0,
+	    spa_deadman_timeout, spa, 0);
 #endif
 #endif
 	refcount_create(&spa->spa_refcount);
@@ -704,6 +743,9 @@ spa_add(const char *name, nvlist_t *config, const char *altroot)
 		spa->spa_root = spa_strdup(altroot);
 		spa_active_count++;
 	}
+
+	avl_create(&spa->spa_alloc_tree, zio_timestamp_compare,
+	    sizeof (zio_t), offsetof(zio_t, io_alloc_node));
 
 	/*
 	 * Every pool starts with the default cachefile
@@ -783,6 +825,7 @@ spa_remove(spa_t *spa)
 		kmem_free(dp, sizeof (spa_config_dirent_t));
 	}
 
+	avl_destroy(&spa->spa_alloc_tree);
 	list_destroy(&spa->spa_config_list);
 
 	nvlist_free(spa->spa_label_features);
@@ -798,6 +841,7 @@ spa_remove(spa_t *spa)
 #else	/* !illumos */
 #ifdef _KERNEL
 	callout_drain(&spa->spa_deadman_cycid);
+	taskqueue_drain(taskqueue_thread, &spa->spa_deadman_task);
 #endif
 #endif
 
@@ -816,6 +860,7 @@ spa_remove(spa_t *spa)
 	cv_destroy(&spa->spa_scrub_io_cv);
 	cv_destroy(&spa->spa_suspend_cv);
 
+	mutex_destroy(&spa->spa_alloc_lock);
 	mutex_destroy(&spa->spa_async_lock);
 	mutex_destroy(&spa->spa_errlist_lock);
 	mutex_destroy(&spa->spa_errlog_lock);
@@ -1723,14 +1768,16 @@ spa_get_asize(spa_t *spa, uint64_t lsize)
 
 /*
  * Return the amount of slop space in bytes.  It is 1/32 of the pool (3.2%),
- * or at least 32MB.
+ * or at least 128MB, unless that would cause it to be more than half the
+ * pool size.
  *
  * See the comment above spa_slop_shift for details.
  */
 uint64_t
-spa_get_slop_space(spa_t *spa) {
+spa_get_slop_space(spa_t *spa)
+{
 	uint64_t space = spa_get_dspace(spa);
-	return (MAX(space >> spa_slop_shift, SPA_MINDEVSIZE >> 1));
+	return (MAX(space >> spa_slop_shift, MIN(space >> 1, spa_min_slop)));
 }
 
 uint64_t

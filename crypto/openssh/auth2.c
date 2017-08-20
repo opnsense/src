@@ -52,6 +52,7 @@ __RCSID("$FreeBSD$");
 #include "pathnames.h"
 #include "buffer.h"
 #include "canohost.h"
+#include "blacklist_client.h"
 
 #ifdef GSSAPI
 #include "ssh-gss.h"
@@ -387,8 +388,10 @@ userauth_finish(Authctxt *authctxt, int authenticated, const char *method,
 
 		/* Allow initial try of "none" auth without failure penalty */
 		if (!partial && !authctxt->server_caused_failure &&
-		    (authctxt->attempt > 1 || strcmp(method, "none") != 0))
+		    (authctxt->attempt > 1 || strcmp(method, "none") != 0)) {
 			authctxt->failures++;
+			BLACKLIST_NOTIFY(BLACKLIST_AUTH_FAIL, "ssh");
+		}
 		if (authctxt->failures >= options.max_authtries) {
 #ifdef SSH_AUDIT_EVENTS
 			PRIVSEP(audit_event(SSH_LOGIN_EXCEED_MAXTRIES));

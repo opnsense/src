@@ -51,7 +51,6 @@ __FBSDID("$FreeBSD$");
 #include <limits.h>
 #include <stdlib.h>
 #include <regex.h>
-#include <runetype.h>
 #include <wchar.h>
 #include <wctype.h>
 
@@ -67,8 +66,8 @@ __FBSDID("$FreeBSD$");
  * other clumsinesses
  */
 struct parse {
-	char *next;		/* next character in RE */
-	char *end;		/* end of string (-> NUL normally) */
+	const char *next;	/* next character in RE */
+	const char *end;	/* end of string (-> NUL normally) */
 	int error;		/* has an error been seen? */
 	sop *strip;		/* malloced strip */
 	sopno ssize;		/* malloced strip size (allocated) */
@@ -208,7 +207,7 @@ regcomp(regex_t * __restrict preg,
 			return(REG_INVARG);
 		len = preg->re_endp - pattern;
 	} else
-		len = strlen((char *)pattern);
+		len = strlen(pattern);
 
 	/* do the mallocs early so failure handling is easy */
 	g = (struct re_guts *)malloc(sizeof(struct re_guts));
@@ -240,7 +239,7 @@ regcomp(regex_t * __restrict preg,
 
 	/* set things up */
 	p->g = g;
-	p->next = (char *)pattern;	/* convenience; we do not modify it */
+	p->next = pattern;	/* convenience; we do not modify it */
 	p->end = p->next + len;
 	p->error = 0;
 	p->ncsalloc = 0;
@@ -445,6 +444,8 @@ p_ere_exp(struct parse *p)
 		(void)REQUIRE(!MORE() || !isdigit((uch)PEEK()), REG_BADRPT);
 		/* FALLTHROUGH */
 	default:
+		if (p->error != 0)
+			return;
 		p->next--;
 		wc = WGETNEXT();
 		ordinary(p, wc);
@@ -652,6 +653,8 @@ p_simp_re(struct parse *p,
 		(void)REQUIRE(starordinary, REG_BADRPT);
 		/* FALLTHROUGH */
 	default:
+		if (p->error != 0)
+			return(0);	/* Definitely not $... */
 		p->next--;
 		wc = WGETNEXT();
 		ordinary(p, wc);
@@ -817,14 +820,14 @@ p_b_term(struct parse *p, cset *cs)
 		if (start == finish)
 			CHadd(p, cs, start);
 		else {
-			if (table->__collate_load_error) {
-				(void)REQUIRE((uch)start <= (uch)finish, REG_ERANGE);
+			if (table->__collate_load_error || MB_CUR_MAX > 1) {
+				(void)REQUIRE(start <= finish, REG_ERANGE);
 				CHaddrange(p, cs, start, finish);
 			} else {
-				(void)REQUIRE(__wcollate_range_cmp(table, start, finish) <= 0, REG_ERANGE);
+				(void)REQUIRE(__wcollate_range_cmp(start, finish) <= 0, REG_ERANGE);
 				for (i = 0; i <= UCHAR_MAX; i++) {
-					if (   __wcollate_range_cmp(table, start, i) <= 0
-					    && __wcollate_range_cmp(table, i, finish) <= 0
+					if (   __wcollate_range_cmp(start, i) <= 0
+					    && __wcollate_range_cmp(i, finish) <= 0
 					   )
 						CHadd(p, cs, i);
 				}
@@ -841,7 +844,7 @@ p_b_term(struct parse *p, cset *cs)
 static void
 p_b_cclass(struct parse *p, cset *cs)
 {
-	char *sp = p->next;
+	const char *sp = p->next;
 	size_t len;
 	wctype_t wct;
 	char clname[16];
@@ -904,12 +907,11 @@ static wint_t			/* value of collating element */
 p_b_coll_elem(struct parse *p,
 	wint_t endc)		/* name ended by endc,']' */
 {
-	char *sp = p->next;
+	const char *sp = p->next;
 	struct cname *cp;
-	int len;
 	mbstate_t mbs;
 	wchar_t wc;
-	size_t clen;
+	size_t clen, len;
 
 	while (MORE() && !SEETWO(endc, ']'))
 		NEXT();
@@ -956,8 +958,8 @@ othercase(wint_t ch)
 static void
 bothcases(struct parse *p, wint_t ch)
 {
-	char *oldnext = p->next;
-	char *oldend = p->end;
+	const char *oldnext = p->next;
+	const char *oldend = p->end;
 	char bracket[3 + MB_LEN_MAX];
 	size_t n;
 	mbstate_t mbs;
@@ -1010,8 +1012,8 @@ ordinary(struct parse *p, wint_t ch)
 static void
 nonnewline(struct parse *p)
 {
-	char *oldnext = p->next;
-	char *oldend = p->end;
+	const char *oldnext = p->next;
+	const char *oldend = p->end;
 	char bracket[4];
 
 	p->next = bracket;
@@ -1144,7 +1146,7 @@ allocset(struct parse *p)
 {
 	cset *cs, *ncs;
 
-	ncs = realloc(p->g->sets, (p->g->ncsets + 1) * sizeof(*ncs));
+	ncs = reallocarray(p->g->sets, p->g->ncsets + 1, sizeof(*ncs));
 	if (ncs == NULL) {
 		SETERROR(REG_ESPACE);
 		return (NULL);
@@ -1207,7 +1209,7 @@ CHadd(struct parse *p, cset *cs, wint_t ch)
 	if (ch < NC)
 		cs->bmp[ch >> 3] |= 1 << (ch & 7);
 	else {
-		newwides = realloc(cs->wides, (cs->nwides + 1) *
+		newwides = reallocarray(cs->wides, cs->nwides + 1,
 		    sizeof(*cs->wides));
 		if (newwides == NULL) {
 			SETERROR(REG_ESPACE);
@@ -1236,7 +1238,7 @@ CHaddrange(struct parse *p, cset *cs, wint_t min, wint_t max)
 		CHadd(p, cs, min);
 	if (min >= max)
 		return;
-	newranges = realloc(cs->ranges, (cs->nranges + 1) *
+	newranges = reallocarray(cs->ranges, cs->nranges + 1,
 	    sizeof(*cs->ranges));
 	if (newranges == NULL) {
 		SETERROR(REG_ESPACE);
@@ -1260,7 +1262,7 @@ CHaddtype(struct parse *p, cset *cs, wctype_t wct)
 	for (i = 0; i < NC; i++)
 		if (iswctype(i, wct))
 			CHadd(p, cs, i);
-	newtypes = realloc(cs->types, (cs->ntypes + 1) *
+	newtypes = reallocarray(cs->types, cs->ntypes + 1,
 	    sizeof(*cs->types));
 	if (newtypes == NULL) {
 		SETERROR(REG_ESPACE);
@@ -1383,7 +1385,7 @@ enlarge(struct parse *p, sopno size)
 	if (p->ssize >= size)
 		return 1;
 
-	sp = (sop *)realloc(p->strip, size*sizeof(sop));
+	sp = reallocarray(p->strip, size, sizeof(sop));
 	if (sp == NULL) {
 		SETERROR(REG_ESPACE);
 		return 0;
@@ -1401,7 +1403,7 @@ static void
 stripsnug(struct parse *p, struct re_guts *g)
 {
 	g->nstates = p->slen;
-	g->strip = (sop *)realloc((char *)p->strip, p->slen * sizeof(sop));
+	g->strip = reallocarray((char *)p->strip, p->slen, sizeof(sop));
 	if (g->strip == NULL) {
 		SETERROR(REG_ESPACE);
 		g->strip = p->strip;

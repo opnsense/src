@@ -88,7 +88,7 @@ enum filetype {
 #include <bzlib.h>
 
 #define BZ2_SUFFIX	".bz2"
-#define BZIP2_MAGIC	"\102\132\150"
+#define BZIP2_MAGIC	"BZh"
 #endif
 
 #ifndef NO_COMPRESS_SUPPORT
@@ -155,7 +155,7 @@ static suffixes_t suffixes[] = {
 #endif /* SMALL */
 #undef SUFFIX
 };
-#define NUM_SUFFIXES (sizeof suffixes / sizeof suffixes[0])
+#define NUM_SUFFIXES (nitems(suffixes))
 #define SUFFIX_MAXLEN	30
 
 static	const char	gzip_version[] = "FreeBSD gzip 20150413";
@@ -1252,8 +1252,8 @@ file_compress(char *file, char *outfile, size_t outsize)
 	if (cflag == 0) {
 #ifndef SMALL
 		if (isb.st_nlink > 1 && fflag == 0) {
-			maybe_warnx("%s has %d other link%s -- skipping",
-			    file, isb.st_nlink - 1,
+			maybe_warnx("%s has %ju other link%s -- skipping",
+			    file, (uintmax_t)isb.st_nlink - 1,
 			    (isb.st_nlink - 1) == 1 ? "" : "s");
 			close(in);
 			return (-1);
@@ -1448,8 +1448,8 @@ file_uncompress(char *file, char *outfile, size_t outsize)
 			goto lose;
 #ifndef SMALL
 		if (isb.st_nlink > 1 && lflag == 0 && fflag == 0) {
-			maybe_warnx("%s has %d other links -- skipping",
-			    file, isb.st_nlink - 1);
+			maybe_warnx("%s has %ju other links -- skipping",
+			    file, (uintmax_t)isb.st_nlink - 1);
 			goto lose;
 		}
 		if (nflag == 0 && timestamp)

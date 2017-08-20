@@ -45,10 +45,11 @@ static void handleTypeMismatchImpl(TypeMismatchData *Data, ValueHandle Pointer,
                                    ReportOptions Opts) {
   Location Loc = Data->Loc.acquire();
 
+  uptr Alignment = (uptr)1 << Data->LogAlignment;
   ErrorType ET;
   if (!Pointer)
     ET = ErrorType::NullPointerUse;
-  else if (Data->Alignment && (Pointer & (Data->Alignment - 1)))
+  else if (Pointer & (Alignment - 1))
     ET = ErrorType::MisalignedPointerUse;
   else
     ET = ErrorType::InsufficientObjectSize;
@@ -74,8 +75,8 @@ static void handleTypeMismatchImpl(TypeMismatchData *Data, ValueHandle Pointer,
   case ErrorType::MisalignedPointerUse:
     Diag(Loc, DL_Error, "%0 misaligned address %1 for type %3, "
                         "which requires %2 byte alignment")
-        << TypeCheckKinds[Data->TypeCheckKind] << (void *)Pointer
-        << Data->Alignment << Data->Type;
+        << TypeCheckKinds[Data->TypeCheckKind] << (void *)Pointer << Alignment
+        << Data->Type;
     break;
   case ErrorType::InsufficientObjectSize:
     Diag(Loc, DL_Error, "%0 address %1 with insufficient space "
@@ -90,13 +91,13 @@ static void handleTypeMismatchImpl(TypeMismatchData *Data, ValueHandle Pointer,
     Diag(Pointer, DL_Note, "pointer points here");
 }
 
-void __ubsan::__ubsan_handle_type_mismatch(TypeMismatchData *Data,
-                                           ValueHandle Pointer) {
+void __ubsan::__ubsan_handle_type_mismatch_v1(TypeMismatchData *Data,
+                                              ValueHandle Pointer) {
   GET_REPORT_OPTIONS(false);
   handleTypeMismatchImpl(Data, Pointer, Opts);
 }
-void __ubsan::__ubsan_handle_type_mismatch_abort(TypeMismatchData *Data,
-                                                 ValueHandle Pointer) {
+void __ubsan::__ubsan_handle_type_mismatch_v1_abort(TypeMismatchData *Data,
+                                                    ValueHandle Pointer) {
   GET_REPORT_OPTIONS(true);
   handleTypeMismatchImpl(Data, Pointer, Opts);
   Die();
@@ -523,8 +524,11 @@ void __ubsan::__ubsan_handle_nonnull_arg_abort(NonNullArgData *Data) {
   Die();
 }
 
-static void handleCFIBadIcall(CFIBadIcallData *Data, ValueHandle Function,
+static void handleCFIBadIcall(CFICheckFailData *Data, ValueHandle Function,
                               ReportOptions Opts) {
+  if (Data->CheckKind != CFITCK_ICall)
+    Die();
+
   SourceLocation Loc = Data->Loc.acquire();
   ErrorType ET = ErrorType::CFIBadType;
 
@@ -544,16 +548,37 @@ static void handleCFIBadIcall(CFIBadIcallData *Data, ValueHandle Function,
   Diag(FLoc, DL_Note, "%0 defined here") << FName;
 }
 
-void __ubsan::__ubsan_handle_cfi_bad_icall(CFIBadIcallData *Data,
-                                           ValueHandle Function) {
+namespace __ubsan {
+#ifdef UBSAN_CAN_USE_CXXABI
+SANITIZER_WEAK_ATTRIBUTE
+void HandleCFIBadType(CFICheckFailData *Data, ValueHandle Vtable,
+                      bool ValidVtable, ReportOptions Opts);
+#else
+static void HandleCFIBadType(CFICheckFailData *Data, ValueHandle Vtable,
+                             bool ValidVtable, ReportOptions Opts) {
+  Die();
+}
+#endif
+}  // namespace __ubsan
+
+void __ubsan::__ubsan_handle_cfi_check_fail(CFICheckFailData *Data,
+                                            ValueHandle Value,
+                                            uptr ValidVtable) {
   GET_REPORT_OPTIONS(false);
-  handleCFIBadIcall(Data, Function, Opts);
+  if (Data->CheckKind == CFITCK_ICall)
+    handleCFIBadIcall(Data, Value, Opts);
+  else
+    HandleCFIBadType(Data, Value, ValidVtable, Opts);
 }
 
-void __ubsan::__ubsan_handle_cfi_bad_icall_abort(CFIBadIcallData *Data,
-                                                 ValueHandle Function) {
+void __ubsan::__ubsan_handle_cfi_check_fail_abort(CFICheckFailData *Data,
+                                                  ValueHandle Value,
+                                                  uptr ValidVtable) {
   GET_REPORT_OPTIONS(true);
-  handleCFIBadIcall(Data, Function, Opts);
+  if (Data->CheckKind == CFITCK_ICall)
+    handleCFIBadIcall(Data, Value, Opts);
+  else
+    HandleCFIBadType(Data, Value, ValidVtable, Opts);
   Die();
 }
 

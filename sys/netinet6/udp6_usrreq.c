@@ -120,10 +120,7 @@ __FBSDID("$FreeBSD$");
 #include <netinet6/udp6_var.h>
 #include <netinet6/scope6_var.h>
 
-#ifdef IPSEC
-#include <netipsec/ipsec.h>
-#include <netipsec/ipsec6.h>
-#endif /* IPSEC */
+#include <netipsec/ipsec_support.h>
 
 #include <security/mac/mac_framework.h>
 
@@ -157,11 +154,13 @@ udp6_append(struct inpcb *inp, struct mbuf *n, int off,
 		INP_RLOCK(inp);
 		return (in_pcbrele_rlocked(inp));
 	}
-#ifdef IPSEC
+#if defined(IPSEC) || defined(IPSEC_SUPPORT)
 	/* Check AH/ESP integrity. */
-	if (ipsec6_in_reject(n, inp)) {
-		m_freem(n);
-		return (0);
+	if (IPSEC_ENABLED(ipv6)) {
+		if (IPSEC_CHECK_POLICY(ipv6, n, inp) != 0) {
+			m_freem(n);
+			return (0);
+		}
 	}
 #endif /* IPSEC */
 #ifdef MAC
@@ -204,7 +203,7 @@ udp6_input(struct mbuf **mp, int *offp, int proto)
 	int cscov_partial;
 	int plen, ulen;
 	struct sockaddr_in6 fromsa;
-	struct sockaddr_in6 next_hop6;
+	struct m_tag *fwd_tag;
 	uint16_t uh_sum;
 	uint8_t nxt;
 
@@ -412,9 +411,14 @@ udp6_input(struct mbuf **mp, int *offp, int proto)
 	 */
 
 	/*
-	 * Grab info from IP forward tag prepended to the chain.
+	 * Grab info from PACKET_TAG_IPFORWARD tag prepended to the chain.
 	 */
-	if (IP6_HAS_NEXTHOP(m) && !ip6_get_fwdtag(m, &next_hop6, NULL)) {
+	if ((m->m_flags & M_IP6_NEXTHOP) &&
+	    (fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL)) != NULL) {
+		struct sockaddr_in6 *next_hop6;
+
+		next_hop6 = (struct sockaddr_in6 *)(fwd_tag + 1);
+
 		/*
 		 * Transparently forwarded. Pretend to be the destination.
 		 * Already got one like this?
@@ -429,13 +433,14 @@ udp6_input(struct mbuf **mp, int *offp, int proto)
 			 * any hardware-generated hash is ignored.
 			 */
 			inp = in6_pcblookup(pcbinfo, &ip6->ip6_src,
-			    uh->uh_sport, &next_hop6.sin6_addr,
-			    next_hop6.sin6_port ? htons(next_hop6.sin6_port) :
+			    uh->uh_sport, &next_hop6->sin6_addr,
+			    next_hop6->sin6_port ? htons(next_hop6->sin6_port) :
 			    uh->uh_dport, INPLOOKUP_WILDCARD |
 			    INPLOOKUP_RLOCKPCB, m->m_pkthdr.rcvif);
 		}
 		/* Remove the tag from the packet. We don't need it anymore. */
-		ip6_flush_fwdtag(m);
+		m_tag_delete(m, fwd_tag);
+		m->m_flags &= ~M_IP6_NEXTHOP;
 	} else
 		inp = in6_pcblookup_mbuf(pcbinfo, &ip6->ip6_src,
 		    uh->uh_sport, &ip6->ip6_dst, uh->uh_dport,
@@ -892,7 +897,7 @@ udp6_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr6,
 
 		UDP_PROBE(send, NULL, inp, ip6, inp, udp6);
 		UDPSTAT_INC(udps_opackets);
-		error = ip6_output(m, optp, NULL, flags,
+		error = ip6_output(m, optp, &inp->inp_route6, flags,
 		    inp->in6p_moptions, NULL, inp);
 		break;
 	case AF_INET:
@@ -1099,6 +1104,10 @@ udp6_connect(struct socket *so, struct sockaddr *nam, struct thread *td)
 			error = EINVAL;
 			goto out;
 		}
+		if ((inp->inp_vflag & INP_IPV4) == 0) {
+			error = EAFNOSUPPORT;
+			goto out;
+		}
 		if (inp->inp_faddr.s_addr != INADDR_ANY) {
 			error = EISCONN;
 			goto out;
@@ -1116,6 +1125,11 @@ udp6_connect(struct socket *so, struct sockaddr *nam, struct thread *td)
 		if (error == 0)
 			soisconnected(so);
 		goto out;
+	} else {
+		if ((inp->inp_vflag & INP_IPV6) == 0) {
+			error = EAFNOSUPPORT;
+			goto out;
+		}
 	}
 #endif
 	if (!IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_faddr)) {

@@ -17,15 +17,22 @@ MK_SSP=	no
 LIB=thr
 SHLIB_MAJOR= 3
 WARNS?=	3
+NO_WTHREAD_SAFETY=1
 CFLAGS+=-DPTHREAD_KERNEL
-CFLAGS+=-I${.CURDIR}/../libc/include -I${.CURDIR}/thread \
-	-I${.CURDIR}/../../include
+CFLAGS+=-I${SRCTOP}/lib/libc/include -I${.CURDIR}/thread \
+	-I${SRCTOP}/include
 CFLAGS+=-I${.CURDIR}/arch/${MACHINE_CPUARCH}/include
 CFLAGS+=-I${.CURDIR}/sys
-CFLAGS+=-I${.CURDIR}/../../libexec/rtld-elf
-CFLAGS+=-I${.CURDIR}/../../libexec/rtld-elf/${MACHINE_CPUARCH}
-CFLAGS+=-I${.CURDIR}/../libthread_db
+CFLAGS+=-I${SRCTOP}/libexec/rtld-elf
+CFLAGS+=-I${SRCTOP}/libexec/rtld-elf/${MACHINE_CPUARCH}
+CFLAGS+=-I${SRCTOP}/lib/libthread_db
 CFLAGS+=-Winline
+
+CFLAGS.thr_stack.c+=	-Wno-cast-align
+.include <bsd.compiler.mk>
+.if !(${COMPILER_TYPE} == "gcc" && ${COMPILER_VERSION} < 40300)
+CFLAGS.thr_symbols.c+=	-Wno-missing-variable-declarations
+.endif
 
 .ifndef NO_THREAD_UNWIND_STACK
 CFLAGS+=-fexceptions
@@ -34,7 +41,7 @@ CFLAGS+=-D_PTHREAD_FORCED_UNWIND
 
 LDFLAGS+=-Wl,-znodelete
 
-VERSION_DEF=${.CURDIR}/../libc/Versions.def
+VERSION_DEF=${SRCTOP}/lib/libc/Versions.def
 SYMBOL_MAPS=${.CURDIR}/pthread.map
 
 MAN=	libthr.3

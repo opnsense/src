@@ -139,6 +139,38 @@ again:
 		(*drv->init)();
 }
 
+int
+periphdriver_unregister(void *data)
+{
+	struct periph_driver *drv = (struct periph_driver *)data;
+	int error, n;
+
+	/* If driver marked as early or it is late now, deinitialize it. */
+	if (((drv->flags & CAM_PERIPH_DRV_EARLY) != 0 && initialized > 0) ||
+	    initialized > 1) {
+		if (drv->deinit == NULL) {
+			printf("CAM periph driver '%s' doesn't have deinit.\n",
+			    drv->driver_name);
+			return (EOPNOTSUPP);
+		}
+		error = drv->deinit();
+		if (error != 0)
+			return (error);
+	}
+
+	xpt_lock_buses();
+	for (n = 0; n < nperiph_drivers && periph_drivers[n] != drv; n++)
+		;
+	KASSERT(n < nperiph_drivers,
+	    ("Periph driver '%s' was not registered", drv->driver_name));
+	for (; n + 1 < nperiph_drivers; n++)
+		periph_drivers[n] = periph_drivers[n + 1];
+	periph_drivers[n + 1] = NULL;
+	nperiph_drivers--;
+	xpt_unlock_buses();
+	return (0);
+}
+
 void
 periphdriver_init(int level)
 {
@@ -622,6 +654,7 @@ static void
 camperiphfree(struct cam_periph *periph)
 {
 	struct periph_driver **p_drv;
+	struct periph_driver *drv;
 
 	cam_periph_assert(periph, MA_OWNED);
 	KASSERT(periph->periph_allocating == 0, ("%s%d: freed while allocating",
@@ -634,6 +667,15 @@ camperiphfree(struct cam_periph *periph)
 		printf("camperiphfree: attempt to free non-existant periph\n");
 		return;
 	}
+	/*
+	 * Cache a pointer to the periph_driver structure.  If a
+	 * periph_driver is added or removed from the array (see
+	 * periphdriver_register()) while we drop the toplogy lock
+	 * below, p_drv may change.  This doesn't protect against this
+	 * particular periph_driver going away.  That will require full
+	 * reference counting in the periph_driver infrastructure.
+	 */
+	drv = *p_drv;
 
 	/*
 	 * We need to set this flag before dropping the topology lock, to
@@ -669,8 +711,8 @@ camperiphfree(struct cam_periph *periph)
 	 */
 	xpt_lock_buses();
 
-	TAILQ_REMOVE(&(*p_drv)->units, periph, unit_links);
-	(*p_drv)->generation++;
+	TAILQ_REMOVE(&drv->units, periph, unit_links);
+	drv->generation++;
 
 	xpt_remove_periph(periph);
 
@@ -975,16 +1017,6 @@ cam_periph_unmapmem(union ccb *ccb, struct cam_periph_map_info *mapinfo)
 	PRELE(curproc);
 }
 
-void
-cam_periph_ccbwait(union ccb *ccb)
-{
-
-	if ((ccb->ccb_h.pinfo.index != CAM_UNQUEUED_INDEX)
-	 || ((ccb->ccb_h.status & CAM_STATUS_MASK) == CAM_REQ_INPROG))
-		xpt_path_sleep(ccb->ccb_h.path, &ccb->ccb_h.cbfcnp, PRIBIO,
-		    "cbwait", 0);
-}
-
 int
 cam_periph_ioctl(struct cam_periph *periph, u_long cmd, caddr_t addr,
 		 int (*error_routine)(union ccb *ccb, 
@@ -1048,11 +1080,36 @@ cam_periph_ioctl(struct cam_periph *periph, u_long cmd, caddr_t addr,
 }
 
 static void
+cam_periph_done_panic(struct cam_periph *periph, union ccb *done_ccb)
+{
+
+	panic("%s: already done with ccb %p", __func__, done_ccb);
+}
+
+static void
 cam_periph_done(struct cam_periph *periph, union ccb *done_ccb)
 {
 
 	/* Caller will release the CCB */
+	xpt_path_assert(done_ccb->ccb_h.path, MA_OWNED);
+	done_ccb->ccb_h.cbfcnp = cam_periph_done_panic;
 	wakeup(&done_ccb->ccb_h.cbfcnp);
+}
+
+static void
+cam_periph_ccbwait(union ccb *ccb)
+{
+
+	if ((ccb->ccb_h.func_code & XPT_FC_QUEUED) != 0) {
+		while (ccb->ccb_h.cbfcnp != cam_periph_done_panic)
+			xpt_path_sleep(ccb->ccb_h.path, &ccb->ccb_h.cbfcnp,
+			    PRIBIO, "cbwait", 0);
+	}
+	KASSERT(ccb->ccb_h.pinfo.index == CAM_UNQUEUED_INDEX &&
+	    (ccb->ccb_h.status & CAM_STATUS_MASK) != CAM_REQ_INPROG,
+	    ("%s: proceeding with incomplete ccb: ccb=%p, func_code=%#x, "
+	     "status=%#x, index=%d", __func__, ccb, ccb->ccb_h.func_code,
+	     ccb->ccb_h.status, ccb->ccb_h.pinfo.index));
 }
 
 int
@@ -1069,6 +1126,9 @@ cam_periph_runccb(union ccb *ccb,
  
 	starttime = NULL;
 	xpt_path_assert(ccb->ccb_h.path, MA_OWNED);
+	KASSERT((ccb->ccb_h.flags & CAM_UNLOCKED) == 0,
+	    ("%s: ccb=%p, func_code=%#x, flags=%#x", __func__, ccb,
+	     ccb->ccb_h.func_code, ccb->ccb_h.flags));
 
 	/*
 	 * If the user has supplied a stats structure, and if we understand
@@ -1088,9 +1148,10 @@ cam_periph_runccb(union ccb *ccb,
 		cam_periph_ccbwait(ccb);
 		if ((ccb->ccb_h.status & CAM_STATUS_MASK) == CAM_REQ_CMP)
 			error = 0;
-		else if (error_routine != NULL)
+		else if (error_routine != NULL) {
+			ccb->ccb_h.cbfcnp = cam_periph_done;
 			error = (*error_routine)(ccb, camflags, sense_flags);
-		else
+		} else
 			error = 0;
 
 	} while (error == ERESTART);
@@ -1772,7 +1833,7 @@ cam_periph_error(union ccb *ccb, cam_flags camflags,
 			xpt_print(ccb->ccb_h.path, "Retrying command\n");
 	}
 
-	if (devctl_err)
+	if (devctl_err && (error != 0 || (action & SSQ_PRINT_SENSE) != 0))
 		cam_periph_devctl_notify(orig_ccb);
 
 	if ((action & SSQ_LOST) != 0) {
@@ -1906,10 +1967,7 @@ cam_periph_devctl_notify(union ccb *ccb)
 
 	if (ccb->ccb_h.func_code == XPT_SCSI_IO) {
 		sbuf_printf(&sb, "CDB=\"");
-		if ((ccb->ccb_h.flags & CAM_CDB_POINTER) != 0)
-			scsi_cdb_sbuf(ccb->csio.cdb_io.cdb_ptr, &sb);
-		else
-			scsi_cdb_sbuf(ccb->csio.cdb_io.cdb_bytes, &sb);
+		scsi_cdb_sbuf(scsiio_cdb_ptr(&ccb->csio), &sb);
 		sbuf_printf(&sb, "\" ");
 	} else if (ccb->ccb_h.func_code == XPT_ATA_IO) {
 		sbuf_printf(&sb, "ACB=\"");

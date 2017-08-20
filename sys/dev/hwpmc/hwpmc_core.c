@@ -365,7 +365,7 @@ iaf_read_pmc(int cpu, int ri, pmc_value_t *v)
 	if (PMC_IS_SAMPLING_MODE(PMC_TO_MODE(pm)))
 		*v = iaf_perfctr_value_to_reload_count(tmp);
 	else
-		*v = tmp;
+		*v = tmp & ((1ULL << core_iaf_width) - 1);
 
 	PMCDBG4(MDP,REA,1, "iaf-read cpu=%d ri=%d msr=0x%x -> v=%jx", cpu, ri,
 	    IAF_RI_TO_MSR(ri), *v);
@@ -2857,7 +2857,7 @@ pmc_core_initialize(struct pmc_mdep *md, int maxcpu, int version_override)
 	PMCDBG3(MDP,INI,1,"core-init cputype=%d ncpu=%d ipa-version=%d",
 	    core_cputype, maxcpu, ipa_version);
 
-	if (ipa_version < 1 || ipa_version > 3 ||
+	if (ipa_version < 1 || ipa_version > 4 ||
 	    (core_cputype != PMC_CPU_INTEL_CORE && ipa_version == 1)) {
 		/* Unknown PMC architecture. */
 		printf("hwpc_core: unknown PMC architecture: %d\n",

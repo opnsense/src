@@ -59,7 +59,7 @@ META_MODE+=	missing-meta=yes
 .if !defined(NO_SILENT)
 META_MODE+=	silent=yes
 .endif
-.if !exists(/dev/filemon)
+.if !exists(/dev/filemon) || defined(NO_FILEMON)
 META_MODE+= nofilemon
 .endif
 # Require filemon data with bmake
@@ -91,13 +91,17 @@ META_MODE?= normal
 	/usr/share \
 
 .endif
-
+.if !empty(.MAKE.MODE:Mmeta)
+# We do not want everything out-of-date just because
+# some unrelated shared lib updated this.
+.MAKE.META.IGNORE_PATHS+= /usr/local/etc/libmap.d
+.endif
 
 .if ${MK_AUTO_OBJ} == "yes"
 # This needs to be done early - before .PATH is computed
 # Don't do this for 'make showconfig' as it enables all options where meta mode
 # is not expected.
-.if !make(showconfig)
+.if !make(showconfig) && !make(print-dir)
 .sinclude <auto.obj.mk>
 .endif
 .endif

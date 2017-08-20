@@ -59,34 +59,8 @@
 #include <sys/archsystm.h>
 #else
 #include <sys/ptrace.h>
-
-static int
-uread(proc_t *p, void *kaddr, size_t len, uintptr_t uaddr)
-{
-	ssize_t n;
-
-	PHOLD(p);
-	n = proc_readmem(curthread, p, uaddr, kaddr, len);
-	PRELE(p);
-	if (n != len)
-		return (ENOMEM);
-	return (0);
-}
-
-static int
-uwrite(proc_t *p, void *kaddr, size_t len, uintptr_t uaddr)
-{
-	ssize_t n;
-
-	PHOLD(p);
-	n = proc_writemem(curthread, p, uaddr, kaddr, len);
-	PRELE(p);
-	if (n != len)
-		return (ENOMEM);
-	return (0);
-}
-
 #endif /* illumos */
+
 #ifdef __i386__
 #define	r_rax	r_eax
 #define	r_rbx	r_ebx
@@ -1653,7 +1627,7 @@ fasttrap_pid_probe(struct reg *rp)
 		 * a signal we can reset the value of the scratch register.
 		 */
 
-		ASSERT(tp->ftt_size < FASTTRAP_MAX_INSTR_SIZE);
+		ASSERT(tp->ftt_size <= FASTTRAP_MAX_INSTR_SIZE);
 
 		curthread->t_dtrace_scrpc = addr;
 		bcopy(tp->ftt_instr, &scratch[i], tp->ftt_size);

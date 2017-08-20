@@ -285,7 +285,6 @@ int	make_dev_physpath_alias(int _flags, struct cdev **_cdev,
 		const char *_physpath);
 void	dev_lock(void);
 void	dev_unlock(void);
-void	setconf(void);
 
 #ifdef KLD_MODULE
 #define	MAKEDEV_ETERNAL_KLD	0
@@ -316,6 +315,7 @@ void	devfs_free_cdp_inode(ino_t ino);
 #define		GID_GAMES	13
 #define		GID_VIDEO	44
 #define		GID_DIALER	68
+#define		GID_NOGROUP	65533
 #define		GID_NOBODY	65534
 
 typedef void (*dev_clone_fn)(void *arg, struct ucred *cred, char *name,

@@ -40,6 +40,7 @@ __FBSDID("$FreeBSD$");
 #include "opt_compat.h"
 #include "opt_kbd.h"
 #include "opt_ukbd.h"
+#include "opt_evdev.h"
 
 #include <sys/stdint.h>
 #include <sys/stddef.h>
@@ -72,6 +73,11 @@ __FBSDID("$FreeBSD$");
 #include <dev/usb/usb_debug.h>
 
 #include <dev/usb/quirk/usb_quirk.h>
+
+#ifdef EVDEV_SUPPORT
+#include <dev/evdev/input.h>
+#include <dev/evdev/evdev.h>
+#endif
 
 #include <sys/ioccom.h>
 #include <sys/filio.h>
@@ -108,7 +114,7 @@ SYSCTL_INT(_hw_usb_ukbd, OID_AUTO, pollrate, CTLFLAG_RWTUN,
 #define	UKBD_NMOD                     8	/* units */
 #define	UKBD_NKEYCODE                 6	/* units */
 #define	UKBD_IN_BUF_SIZE  (2*(UKBD_NMOD + (2*UKBD_NKEYCODE)))	/* bytes */
-#define	UKBD_IN_BUF_FULL  (UKBD_IN_BUF_SIZE / 2)	/* bytes */
+#define	UKBD_IN_BUF_FULL  ((UKBD_IN_BUF_SIZE / 2) - 1)	/* bytes */
 #define	UKBD_NFKEY        (sizeof(fkey_tab)/sizeof(fkey_tab[0]))	/* units */
 #define	UKBD_BUFFER_SIZE	      64	/* bytes */
 
@@ -129,7 +135,8 @@ struct ukbd_data {
 };
 
 enum {
-	UKBD_INTR_DT,
+	UKBD_INTR_DT_0,
+	UKBD_INTR_DT_1,
 	UKBD_CTRL_LED,
 	UKBD_N_TRANSFER,
 };
@@ -161,6 +168,9 @@ struct ukbd_softc {
 	struct usb_device *sc_udev;
 	struct usb_interface *sc_iface;
 	struct usb_xfer *sc_xfer[UKBD_N_TRANSFER];
+#ifdef EVDEV_SUPPORT
+	struct evdev_dev *sc_evdev;
+#endif
 
 	uint32_t sc_ntime[UKBD_NKEYCODE];
 	uint32_t sc_otime[UKBD_NKEYCODE];
@@ -198,6 +208,7 @@ struct ukbd_softc {
 	int	sc_mode;		/* input mode (K_XLATE,K_RAW,K_CODE) */
 	int	sc_state;		/* shift/lock key state */
 	int	sc_accents;		/* accent key index (> 0) */
+	int	sc_polling;		/* polling recursion count */
 	int	sc_led_size;
 	int	sc_kbd_size;
 
@@ -375,6 +386,12 @@ static device_attach_t ukbd_attach;
 static device_detach_t ukbd_detach;
 static device_resume_t ukbd_resume;
 
+#ifdef EVDEV_SUPPORT
+static const struct evdev_methods ukbd_evdev_methods = {
+	.ev_event = evdev_ev_kbd_event,
+};
+#endif
+
 static uint8_t
 ukbd_any_key_pressed(struct ukbd_softc *sc)
 {
@@ -402,6 +419,14 @@ ukbd_put_key(struct ukbd_softc *sc, uint32_t key)
 
 	DPRINTF("0x%02x (%d) %s\n", key, key,
 	    (key & KEY_RELEASE) ? "released" : "pressed");
+
+#ifdef EVDEV_SUPPORT
+	if (evdev_rcpt_mask & EVDEV_RCPT_HW_KBD && sc->sc_evdev != NULL) {
+		evdev_push_event(sc->sc_evdev, EV_KEY,
+		    evdev_hid2key(KEY_INDEX(key)), !(key & KEY_RELEASE));
+		evdev_sync(sc->sc_evdev);
+	}
+#endif
 
 	if (sc->sc_inputs < UKBD_IN_BUF_SIZE) {
 		sc->sc_input[sc->sc_inputtail] = key;
@@ -477,7 +502,8 @@ ukbd_get_key(struct ukbd_softc *sc, uint8_t wait)
 	if (sc->sc_inputs == 0 &&
 	    (sc->sc_flags & UKBD_FLAG_GONE) == 0) {
 		/* start transfer, if not already started */
-		usbd_transfer_start(sc->sc_xfer[UKBD_INTR_DT]);
+		usbd_transfer_start(sc->sc_xfer[UKBD_INTR_DT_0]);
+		usbd_transfer_start(sc->sc_xfer[UKBD_INTR_DT_1]);
 	}
 
 	if (sc->sc_flags & UKBD_FLAG_POLLING)
@@ -915,6 +941,11 @@ ukbd_set_leds_callback(struct usb_xfer *xfer, usb_error_t error)
 		if (!any)
 			break;
 
+#ifdef EVDEV_SUPPORT
+		if (sc->sc_evdev != NULL)
+			evdev_push_leds(sc->sc_evdev, sc->sc_leds);
+#endif
+
 		/* range check output report length */
 		len = sc->sc_led_size;
 		if (len > (UKBD_BUFFER_SIZE - 1))
@@ -953,7 +984,16 @@ ukbd_set_leds_callback(struct usb_xfer *xfer, usb_error_t error)
 
 static const struct usb_config ukbd_config[UKBD_N_TRANSFER] = {
 
-	[UKBD_INTR_DT] = {
+	[UKBD_INTR_DT_0] = {
+		.type = UE_INTERRUPT,
+		.endpoint = UE_ADDR_ANY,
+		.direction = UE_DIR_IN,
+		.flags = {.pipe_bof = 1,.short_xfer_ok = 1,},
+		.bufsize = 0,	/* use wMaxPacketSize */
+		.callback = &ukbd_intr_callback,
+	},
+
+	[UKBD_INTR_DT_1] = {
 		.type = UE_INTERRUPT,
 		.endpoint = UE_ADDR_ANY,
 		.direction = UE_DIR_IN,
@@ -1181,6 +1221,10 @@ ukbd_attach(device_t dev)
 	usb_error_t err;
 	uint16_t n;
 	uint16_t hid_len;
+#ifdef EVDEV_SUPPORT
+	struct evdev_dev *evdev;
+	int i;
+#endif
 #ifdef USB_DEBUG
 	int rate;
 #endif
@@ -1200,9 +1244,26 @@ ukbd_attach(device_t dev)
 
 	usb_callout_init_mtx(&sc->sc_callout, &Giant, 0);
 
+#ifdef UKBD_NO_POLLING
 	err = usbd_transfer_setup(uaa->device,
 	    &uaa->info.bIfaceIndex, sc->sc_xfer, ukbd_config,
 	    UKBD_N_TRANSFER, sc, &Giant);
+#else
+	/*
+	 * Setup the UKBD USB transfers one by one, so they are memory
+	 * independent which allows for handling panics triggered by
+	 * the keyboard driver itself, typically via CTRL+ALT+ESC
+	 * sequences. Or if the USB keyboard driver was processing a
+	 * key at the moment of panic.
+	 */
+	for (n = 0; n != UKBD_N_TRANSFER; n++) {
+		err = usbd_transfer_setup(uaa->device,
+		    &uaa->info.bIfaceIndex, sc->sc_xfer + n, ukbd_config + n,
+		    1, sc, &Giant);
+		if (err)
+			break;
+	}
+#endif
 
 	if (err) {
 		DPRINTF("error=%s\n", usbd_errstr(err));
@@ -1278,6 +1339,37 @@ ukbd_attach(device_t dev)
 		goto detach;
 	}
 #endif
+
+#ifdef EVDEV_SUPPORT
+	evdev = evdev_alloc();
+	evdev_set_name(evdev, device_get_desc(dev));
+	evdev_set_phys(evdev, device_get_nameunit(dev));
+	evdev_set_id(evdev, BUS_USB, uaa->info.idVendor,
+	   uaa->info.idProduct, 0);
+	evdev_set_serial(evdev, usb_get_serial(uaa->device));
+	evdev_set_methods(evdev, kbd, &ukbd_evdev_methods);
+	evdev_support_event(evdev, EV_SYN);
+	evdev_support_event(evdev, EV_KEY);
+	if (sc->sc_flags & (UKBD_FLAG_NUMLOCK | UKBD_FLAG_CAPSLOCK |
+			    UKBD_FLAG_SCROLLLOCK))
+		evdev_support_event(evdev, EV_LED);
+	evdev_support_event(evdev, EV_REP);
+
+	for (i = 0x00; i <= 0xFF; i++)
+		evdev_support_key(evdev, evdev_hid2key(i));
+	if (sc->sc_flags & UKBD_FLAG_NUMLOCK)
+		evdev_support_led(evdev, LED_NUML);
+	if (sc->sc_flags & UKBD_FLAG_CAPSLOCK)
+		evdev_support_led(evdev, LED_CAPSL);
+	if (sc->sc_flags & UKBD_FLAG_SCROLLLOCK)
+		evdev_support_led(evdev, LED_SCROLLL);
+
+	if (evdev_register(evdev))
+		evdev_free(evdev);
+	else
+		sc->sc_evdev = evdev;
+#endif
+
 	sc->sc_flags |= UKBD_FLAG_ATTACHED;
 
 	if (bootverbose) {
@@ -1294,11 +1386,13 @@ ukbd_attach(device_t dev)
 			rate = 1000 / rate;
 
 		/* set new polling interval in ms */
-		usbd_xfer_set_interval(sc->sc_xfer[UKBD_INTR_DT], rate);
+		usbd_xfer_set_interval(sc->sc_xfer[UKBD_INTR_DT_0], rate);
+		usbd_xfer_set_interval(sc->sc_xfer[UKBD_INTR_DT_1], rate);
 	}
 #endif
 	/* start the keyboard */
-	usbd_transfer_start(sc->sc_xfer[UKBD_INTR_DT]);
+	usbd_transfer_start(sc->sc_xfer[UKBD_INTR_DT_0]);
+	usbd_transfer_start(sc->sc_xfer[UKBD_INTR_DT_1]);
 
 	return (0);			/* success */
 
@@ -1324,7 +1418,8 @@ ukbd_detach(device_t dev)
 	/* kill any stuck keys */
 	if (sc->sc_flags & UKBD_FLAG_ATTACHED) {
 		/* stop receiving events from the USB keyboard */
-		usbd_transfer_stop(sc->sc_xfer[UKBD_INTR_DT]);
+		usbd_transfer_stop(sc->sc_xfer[UKBD_INTR_DT_0]);
+		usbd_transfer_stop(sc->sc_xfer[UKBD_INTR_DT_1]);
 
 		/* release all leftover keys, if any */
 		memset(&sc->sc_ndata, 0, sizeof(sc->sc_ndata));
@@ -1345,6 +1440,11 @@ ukbd_detach(device_t dev)
 		}
 	}
 #endif
+
+#ifdef EVDEV_SUPPORT
+	evdev_free(sc->sc_evdev);
+#endif
+
 	if (KBD_IS_CONFIGURED(&sc->sc_kbd)) {
 		error = kbd_unregister(&sc->sc_kbd);
 		if (error) {
@@ -1876,6 +1976,10 @@ ukbd_ioctl_locked(keyboard_t *kbd, u_long cmd, caddr_t arg)
 		else
 			kbd->kb_delay1 = ((int *)arg)[0];
 		kbd->kb_delay2 = ((int *)arg)[1];
+#ifdef EVDEV_SUPPORT
+		if (sc->sc_evdev != NULL)
+			evdev_push_repeats(sc->sc_evdev, kbd);
+#endif
 		return (0);
 
 #if defined(COMPAT_FREEBSD6) || defined(COMPAT_FREEBSD5) || \
@@ -1983,7 +2087,16 @@ ukbd_poll(keyboard_t *kbd, int on)
 	struct ukbd_softc *sc = kbd->kb_data;
 
 	UKBD_LOCK();
-	if (on) {
+	/*
+	 * Keep a reference count on polling to allow recursive
+	 * cngrab() during a panic for example.
+	 */
+	if (on)
+		sc->sc_polling++;
+	else if (sc->sc_polling > 0)
+		sc->sc_polling--;
+
+	if (sc->sc_polling != 0) {
 		sc->sc_flags |= UKBD_FLAG_POLLING;
 		sc->sc_poll_thread = curthread;
 	} else {
@@ -2015,6 +2128,9 @@ ukbd_set_leds(struct ukbd_softc *sc, uint8_t leds)
 static int
 ukbd_set_typematic(keyboard_t *kbd, int code)
 {
+#ifdef EVDEV_SUPPORT
+	struct ukbd_softc *sc = kbd->kb_data;
+#endif
 	static const int delays[] = {250, 500, 750, 1000};
 	static const int rates[] = {34, 38, 42, 46, 50, 55, 59, 63,
 		68, 76, 84, 92, 100, 110, 118, 126,
@@ -2026,6 +2142,10 @@ ukbd_set_typematic(keyboard_t *kbd, int code)
 	}
 	kbd->kb_delay1 = delays[(code >> 5) & 3];
 	kbd->kb_delay2 = rates[code & 0x1f];
+#ifdef EVDEV_SUPPORT
+	if (sc->sc_evdev != NULL)
+		evdev_push_repeats(sc->sc_evdev, kbd);
+#endif
 	return (0);
 }
 
@@ -2177,5 +2297,8 @@ static driver_t ukbd_driver = {
 
 DRIVER_MODULE(ukbd, uhub, ukbd_driver, ukbd_devclass, ukbd_driver_load, 0);
 MODULE_DEPEND(ukbd, usb, 1, 1, 1);
+#ifdef EVDEV_SUPPORT
+MODULE_DEPEND(ukbd, evdev, 1, 1, 1);
+#endif
 MODULE_VERSION(ukbd, 1);
 USB_PNP_HOST_INFO(ukbd_devs);

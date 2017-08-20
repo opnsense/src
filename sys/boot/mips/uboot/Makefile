@@ -81,8 +81,6 @@ LIBUBOOT_FDT=	${.OBJDIR}/../../uboot/fdt/libuboot_fdt.a
 LIBFDT=		${.OBJDIR}/../../fdt/libfdt.a
 .endif
 
-CFLAGS+=	-DNETIF_OPEN_CLOSE_ONCE
-
 .if ${MK_FORTH} != "no"
 # Enable BootForth
 BOOT_FORTH=	yes
@@ -101,7 +99,7 @@ LIBFICL=	${.OBJDIR}/../../ficl/libficl.a
 CFLAGS+=	-I${.CURDIR}/../../common
 CFLAGS+=	-I.
 
-CLEANFILES+=	vers.c loader.help
+CLEANFILES+=	loader.help
 
 CFLAGS+=	-ffreestanding -msoft-float -g
 
@@ -129,9 +127,6 @@ DPADD=		${LIBFICL} ${LIBUBOOT} ${LIBFDT} ${LIBUBOOT_FDT} ${LIBSTAND}
 LDADD=		${LIBFICL} ${LIBUBOOT} ${LIBFDT} ${LIBUBOOT_FDT} ${LIBSTAND}
 
 OBJS+=  ${SRCS:N*.h:R:S/$/.o/g}
-
-vers.c:	${.CURDIR}/../../common/newvers.sh ${.CURDIR}/version
-	sh ${.CURDIR}/../../common/newvers.sh ${.CURDIR}/version ${NEWVERSWHAT}
 
 loader.help: help.common help.uboot ${.CURDIR}/../../fdt/help.fdt
 	cat ${.ALLSRC} | \

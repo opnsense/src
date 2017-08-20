@@ -29,7 +29,7 @@
 #define CLOUDABI_TYPES_COMMON_H
 
 #if defined(__FreeBSD__) && defined(_KERNEL)
-#include <sys/stdint.h>
+#include <sys/types.h>
 #elif defined(__linux__) && defined(__KERNEL__)
 #include <linux/types.h>
 #else
@@ -46,17 +46,18 @@ typedef uint8_t cloudabi_advice_t;
 #define CLOUDABI_ADVICE_WILLNEED   6
 
 typedef uint32_t cloudabi_auxtype_t;
-#define CLOUDABI_AT_ARGDATA    256
-#define CLOUDABI_AT_ARGDATALEN 257
-#define CLOUDABI_AT_BASE         7
-#define CLOUDABI_AT_CANARY     258
-#define CLOUDABI_AT_CANARYLEN  259
-#define CLOUDABI_AT_NCPUS      260
-#define CLOUDABI_AT_NULL         0
-#define CLOUDABI_AT_PAGESZ       6
-#define CLOUDABI_AT_PHDR         3
-#define CLOUDABI_AT_PHNUM        4
-#define CLOUDABI_AT_TID        261
+#define CLOUDABI_AT_ARGDATA      256
+#define CLOUDABI_AT_ARGDATALEN   257
+#define CLOUDABI_AT_BASE           7
+#define CLOUDABI_AT_CANARY       258
+#define CLOUDABI_AT_CANARYLEN    259
+#define CLOUDABI_AT_NCPUS        260
+#define CLOUDABI_AT_NULL           0
+#define CLOUDABI_AT_PAGESZ         6
+#define CLOUDABI_AT_PHDR           3
+#define CLOUDABI_AT_PHNUM          4
+#define CLOUDABI_AT_SYSINFO_EHDR 262
+#define CLOUDABI_AT_TID          261
 
 typedef uint32_t cloudabi_backlog_t;
 
@@ -371,10 +372,10 @@ typedef uint8_t cloudabi_whence_t;
 #define CLOUDABI_WHENCE_SET 3
 
 typedef struct {
-	_Alignas(8) cloudabi_dircookie_t d_next;
-	_Alignas(8) cloudabi_inode_t d_ino;
-	_Alignas(4) uint32_t d_namlen;
-	_Alignas(1) cloudabi_filetype_t d_type;
+  _Alignas(8) cloudabi_dircookie_t d_next;
+  _Alignas(8) cloudabi_inode_t d_ino;
+  _Alignas(4) uint32_t d_namlen;
+  _Alignas(1) cloudabi_filetype_t d_type;
 } cloudabi_dirent_t;
 _Static_assert(offsetof(cloudabi_dirent_t, d_next) == 0, "Incorrect layout");
 _Static_assert(offsetof(cloudabi_dirent_t, d_ino) == 8, "Incorrect layout");
@@ -384,10 +385,10 @@ _Static_assert(sizeof(cloudabi_dirent_t) == 24, "Incorrect layout");
 _Static_assert(_Alignof(cloudabi_dirent_t) == 8, "Incorrect layout");
 
 typedef struct {
-	_Alignas(1) cloudabi_filetype_t fs_filetype;
-	_Alignas(2) cloudabi_fdflags_t fs_flags;
-	_Alignas(8) cloudabi_rights_t fs_rights_base;
-	_Alignas(8) cloudabi_rights_t fs_rights_inheriting;
+  _Alignas(1) cloudabi_filetype_t fs_filetype;
+  _Alignas(2) cloudabi_fdflags_t fs_flags;
+  _Alignas(8) cloudabi_rights_t fs_rights_base;
+  _Alignas(8) cloudabi_rights_t fs_rights_inheriting;
 } cloudabi_fdstat_t;
 _Static_assert(offsetof(cloudabi_fdstat_t, fs_filetype) == 0, "Incorrect layout");
 _Static_assert(offsetof(cloudabi_fdstat_t, fs_flags) == 2, "Incorrect layout");
@@ -397,14 +398,14 @@ _Static_assert(sizeof(cloudabi_fdstat_t) == 24, "Incorrect layout");
 _Static_assert(_Alignof(cloudabi_fdstat_t) == 8, "Incorrect layout");
 
 typedef struct {
-	_Alignas(8) cloudabi_device_t st_dev;
-	_Alignas(8) cloudabi_inode_t st_ino;
-	_Alignas(1) cloudabi_filetype_t st_filetype;
-	_Alignas(4) cloudabi_linkcount_t st_nlink;
-	_Alignas(8) cloudabi_filesize_t st_size;
-	_Alignas(8) cloudabi_timestamp_t st_atim;
-	_Alignas(8) cloudabi_timestamp_t st_mtim;
-	_Alignas(8) cloudabi_timestamp_t st_ctim;
+  _Alignas(8) cloudabi_device_t st_dev;
+  _Alignas(8) cloudabi_inode_t st_ino;
+  _Alignas(1) cloudabi_filetype_t st_filetype;
+  _Alignas(4) cloudabi_linkcount_t st_nlink;
+  _Alignas(8) cloudabi_filesize_t st_size;
+  _Alignas(8) cloudabi_timestamp_t st_atim;
+  _Alignas(8) cloudabi_timestamp_t st_mtim;
+  _Alignas(8) cloudabi_timestamp_t st_ctim;
 } cloudabi_filestat_t;
 _Static_assert(offsetof(cloudabi_filestat_t, st_dev) == 0, "Incorrect layout");
 _Static_assert(offsetof(cloudabi_filestat_t, st_ino) == 8, "Incorrect layout");
@@ -418,8 +419,8 @@ _Static_assert(sizeof(cloudabi_filestat_t) == 56, "Incorrect layout");
 _Static_assert(_Alignof(cloudabi_filestat_t) == 8, "Incorrect layout");
 
 typedef struct {
-	_Alignas(4) cloudabi_fd_t fd;
-	_Alignas(4) cloudabi_lookupflags_t flags;
+  _Alignas(4) cloudabi_fd_t fd;
+  _Alignas(4) cloudabi_lookupflags_t flags;
 } cloudabi_lookup_t;
 _Static_assert(offsetof(cloudabi_lookup_t, fd) == 0, "Incorrect layout");
 _Static_assert(offsetof(cloudabi_lookup_t, flags) == 4, "Incorrect layout");
@@ -427,17 +428,17 @@ _Static_assert(sizeof(cloudabi_lookup_t) == 8, "Incorrect layout");
 _Static_assert(_Alignof(cloudabi_lookup_t) == 4, "Incorrect layout");
 
 typedef struct {
-	_Alignas(1) cloudabi_sa_family_t sa_family;
-	union {
-		struct {
-			_Alignas(1) uint8_t addr[4];
-			_Alignas(2) uint16_t port;
-		} sa_inet;
-		struct {
-			_Alignas(1) uint8_t addr[16];
-			_Alignas(2) uint16_t port;
-		} sa_inet6;
-	};
+  _Alignas(1) cloudabi_sa_family_t sa_family;
+  union {
+    struct {
+      _Alignas(1) uint8_t addr[4];
+      _Alignas(2) uint16_t port;
+    } sa_inet;
+    struct {
+      _Alignas(1) uint8_t addr[16];
+      _Alignas(2) uint16_t port;
+    } sa_inet6;
+  };
 } cloudabi_sockaddr_t;
 _Static_assert(offsetof(cloudabi_sockaddr_t, sa_family) == 0, "Incorrect layout");
 _Static_assert(offsetof(cloudabi_sockaddr_t, sa_inet.addr) == 2, "Incorrect layout");
@@ -448,10 +449,10 @@ _Static_assert(sizeof(cloudabi_sockaddr_t) == 20, "Incorrect layout");
 _Static_assert(_Alignof(cloudabi_sockaddr_t) == 2, "Incorrect layout");
 
 typedef struct {
-	_Alignas(2) cloudabi_sockaddr_t ss_sockname;
-	_Alignas(2) cloudabi_sockaddr_t ss_peername;
-	_Alignas(2) cloudabi_errno_t ss_error;
-	_Alignas(4) cloudabi_sstate_t ss_state;
+  _Alignas(2) cloudabi_sockaddr_t ss_sockname;
+  _Alignas(2) cloudabi_sockaddr_t ss_peername;
+  _Alignas(2) cloudabi_errno_t ss_error;
+  _Alignas(4) cloudabi_sstate_t ss_state;
 } cloudabi_sockstat_t;
 _Static_assert(offsetof(cloudabi_sockstat_t, ss_sockname) == 0, "Incorrect layout");
 _Static_assert(offsetof(cloudabi_sockstat_t, ss_peername) == 20, "Incorrect layout");

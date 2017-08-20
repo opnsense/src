@@ -207,12 +207,12 @@ xfsize(int i, int n, off_t off, off_t len)
 /*
  * Helper function to get offset within object for i page.
  */
-static inline vm_offset_t
+static inline vm_ooffset_t
 vmoff(int i, off_t off)
 {
 
 	if (i == 0)
-		return ((vm_offset_t)off);
+		return ((vm_ooffset_t)off);
 
 	return (trunc_page(off + i * PAGE_SIZE));
 }
@@ -502,7 +502,7 @@ sendfile_getsock(struct thread *td, int s, struct file **sock_fp,
 	 * The socket must be a stream socket and connected.
 	 */
 	error = getsock_cap(td, s, cap_rights_init(&rights, CAP_SEND),
-	    sock_fp, NULL);
+	    sock_fp, NULL, NULL);
 	if (error != 0)
 		return (error);
 	*so = (*sock_fp)->f_data;
@@ -656,10 +656,18 @@ retry_space:
 		if (hdr_uio != NULL && hdr_uio->uio_resid > 0) {
 			hdr_uio->uio_td = td;
 			hdr_uio->uio_rw = UIO_WRITE;
-			hdr_uio->uio_resid = min(hdr_uio->uio_resid, space);
-			mh = m_uiotombuf(hdr_uio, M_WAITOK, 0, 0, 0);
+			mh = m_uiotombuf(hdr_uio, M_WAITOK, space, 0, 0);
 			hdrlen = m_length(mh, &mhtail);
 			space -= hdrlen;
+			/*
+			 * If header consumed all the socket buffer space,
+			 * don't waste CPU cycles and jump to the end.
+			 */
+			if (space == 0) {
+				sfio = NULL;
+				nios = 0;
+				goto prepend_header;
+			}
 			hdr_uio = NULL;
 		}
 
@@ -673,11 +681,10 @@ retry_space:
 				goto done;
 			}
 			if (va.va_size != obj_size) {
-				if (nbytes == 0)
-					rem += va.va_size - obj_size;
-				else if (offset + nbytes > va.va_size)
-					rem -= (offset + nbytes - va.va_size);
 				obj_size = va.va_size;
+				rem = nbytes ?
+				    omin(nbytes + offset, obj_size) : obj_size;
+				rem -= off;
 			}
 		}
 
@@ -806,6 +813,7 @@ retry_space:
 
 		/* Prepend header, if any. */
 		if (hdrlen) {
+prepend_header:
 			mhtail->m_next = m;
 			m = mh;
 			mh = NULL;

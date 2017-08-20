@@ -36,12 +36,17 @@ MLINKS+=	cam.3 cam_open_device.3 \
 		cam_cdbparse.3 csio_encode_visit.3 \
 		cam_cdbparse.3 buff_encode_visit.3
 
-.PATH:		${.CURDIR}/../../sys/cam/scsi ${.CURDIR}/../../sys/cam/ata \
-		${.CURDIR}/../../sys/cam
+.PATH:		${SRCTOP}/sys/cam/scsi ${SRCTOP}/sys/cam/ata \
+		${SRCTOP}/sys/cam
 
-SDIR=		${.CURDIR}/../../sys
-CFLAGS+=	-I${.CURDIR} -I${SDIR}
+CFLAGS+=	-I${.CURDIR} -I${SRCTOP}/sys
 
 SHLIB_MAJOR=	7
+
+.include <src.opts.mk>
+
+.if ${MK_TESTS} != "no"
+SUBDIR+=	tests
+.endif
 
 .include <bsd.lib.mk>

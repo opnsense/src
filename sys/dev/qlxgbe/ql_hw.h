@@ -210,7 +210,7 @@
 
 #define Q8_NUM_MBOX	512
 
-#define Q8_MAX_NUM_MULTICAST_ADDRS	1023
+#define Q8_MAX_NUM_MULTICAST_ADDRS	1022
 #define Q8_MAC_ADDR_LEN			6
 
 /*
@@ -255,6 +255,7 @@
 #define Q8_MBX_LINK_EVENT_REQ			0x0048
 #define Q8_MBX_CONFIG_MAC_RX_MODE		0x0049
 #define Q8_MBX_CONFIG_FW_LRO			0x004A
+#define Q8_MBX_HW_CONFIG			0x004C
 #define Q8_MBX_INIT_NIC_FUNC			0x0060
 #define Q8_MBX_STOP_NIC_FUNC			0x0061
 #define Q8_MBX_IDC_REQ				0x0062
@@ -510,8 +511,9 @@ typedef struct _q80_config_intr_coalesc_rsp {
 /*
  * Configure MAC Address
  */
+#define Q8_ETHER_ADDR_LEN		6
 typedef struct _q80_mac_addr {
-	uint8_t		addr[6];
+	uint8_t		addr[Q8_ETHER_ADDR_LEN];
 	uint16_t	vlan_tci;
 } __packed q80_mac_addr_t;
 
@@ -622,6 +624,87 @@ typedef struct _q80_config_md_templ_cmd_rsp {
 } __packed q80_config_md_templ_cmd_rsp_t;
 
 /*
+ * Hardware Configuration Commands
+ */
+
+typedef struct _q80_hw_config {
+       uint16_t        opcode;
+       uint16_t        count_version;
+#define Q8_HW_CONFIG_SET_MDIO_REG_COUNT                0x06
+#define Q8_HW_CONFIG_GET_MDIO_REG_COUNT                0x05
+#define Q8_HW_CONFIG_SET_CAM_SEARCH_MODE_COUNT 0x03
+#define Q8_HW_CONFIG_GET_CAM_SEARCH_MODE_COUNT 0x02
+#define Q8_HW_CONFIG_SET_TEMP_THRESHOLD_COUNT  0x03
+#define Q8_HW_CONFIG_GET_TEMP_THRESHOLD_COUNT  0x02
+#define Q8_HW_CONFIG_GET_ECC_COUNTS_COUNT      0x02
+
+       uint32_t        cmd;
+#define Q8_HW_CONFIG_SET_MDIO_REG              0x01
+#define Q8_HW_CONFIG_GET_MDIO_REG              0x02
+#define Q8_HW_CONFIG_SET_CAM_SEARCH_MODE       0x03
+#define Q8_HW_CONFIG_GET_CAM_SEARCH_MODE       0x04
+#define Q8_HW_CONFIG_SET_TEMP_THRESHOLD                0x07
+#define Q8_HW_CONFIG_GET_TEMP_THRESHOLD                0x08
+#define Q8_HW_CONFIG_GET_ECC_COUNTS            0x0A
+
+       union {
+               struct {
+                       uint32_t phys_port_number;
+                       uint32_t phy_dev_addr;
+                       uint32_t reg_addr;
+                       uint32_t data;
+               } set_mdio;
+
+               struct {
+                       uint32_t phys_port_number;
+                       uint32_t phy_dev_addr;
+                       uint32_t reg_addr;
+               } get_mdio;
+
+               struct {
+                       uint32_t mode;
+#define Q8_HW_CONFIG_CAM_SEARCH_MODE_INTERNAL  0x1
+#define Q8_HW_CONFIG_CAM_SEARCH_MODE_AUTO      0x2
+
+               } set_cam_search_mode;
+
+               struct {
+                       uint32_t value;
+               } set_temp_threshold;
+       } u;
+} __packed q80_hw_config_t;
+
+typedef struct _q80_hw_config_rsp {
+        uint16_t       opcode;
+        uint16_t       regcnt_status;
+
+       union {
+               struct {
+                       uint32_t value;
+               } get_mdio;
+
+               struct {
+                       uint32_t mode;
+               } get_cam_search_mode;
+
+               struct {
+                       uint32_t temp_warn;
+                       uint32_t curr_temp;
+                       uint32_t osc_ring_rate;
+                       uint32_t core_voltage;
+               } get_temp_threshold;
+
+               struct {
+                       uint32_t ddr_ecc_error_count;
+                       uint32_t ocm_ecc_error_count;
+                       uint32_t l2_dcache_ecc_error_count;
+                       uint32_t l2_icache_ecc_error_count;
+                       uint32_t eport_ecc_error_count;
+               } get_ecc_counts;
+       } u;
+} __packed q80_hw_config_rsp_t;
+
+/*
  * Link Event Request Command
  */
 typedef struct _q80_link_event {
@@ -665,6 +748,7 @@ typedef struct _q80_rcv_stats {
 	uint64_t	lro_flows_deleted;
 	uint64_t	lro_flows_active;
 	uint64_t	pkts_droped_unknown;
+	uint64_t	pkts_cnt_oversized;
 } __packed q80_rcv_stats_t;
 
 typedef struct _q80_xmt_stats {
@@ -1407,6 +1491,7 @@ typedef struct _qla_sds {
         volatile uint32_t rcv_active;
 	uint32_t	sds_consumer;
 	uint64_t	intr_count;
+	uint64_t	spurious_intr_count;
 } qla_sds_t;
 
 #define Q8_MAX_LRO_CONT_DESC    7
@@ -1459,13 +1544,12 @@ typedef struct _qla_hw_tx_cntxt {
 
 	uint32_t        tx_prod_reg;
 	uint16_t	tx_cntxt_id;
-	uint8_t		frame_hdr[QL_FRAME_HDR_SIZE];
 
 } qla_hw_tx_cntxt_t;
 
 typedef struct _qla_mcast {
 	uint16_t	rsrvd;
-	uint8_t		addr[6];
+	uint8_t		addr[ETHER_ADDR_LEN];
 } __packed qla_mcast_t; 
 
 typedef struct _qla_rdesc {
@@ -1577,6 +1661,7 @@ typedef struct _qla_hw {
 	/* multicast address list */
 	uint32_t	nmcast;
 	qla_mcast_t	mcast[Q8_MAX_NUM_MULTICAST_ADDRS];
+	uint8_t		mac_addr_arr[(Q8_MAX_MAC_ADDRS * ETHER_ADDR_LEN)];
 
 	/* reset sequence */
 #define Q8_MAX_RESET_SEQ_IDX	16
@@ -1590,6 +1675,8 @@ typedef struct _qla_hw {
 	uint32_t	max_tx_segs;
 	uint32_t	min_lro_pkt_size;
 	
+	uint32_t        enable_hw_lro;
+	uint32_t        enable_soft_lro;
 	uint32_t        enable_9kb;
 
 	uint32_t	user_pri_nic;
@@ -1601,9 +1688,14 @@ typedef struct _qla_hw {
 
 	/* Minidump Related */
 	uint32_t	mdump_init;
-	uint32_t	mdump_start;
+	uint32_t	mdump_done;
 	uint32_t	mdump_active;
+	uint32_t	mdump_capture_mask;
 	uint32_t	mdump_start_seq_index;
+	void		*mdump_buffer;
+	uint32_t	mdump_buffer_size;
+	void		*mdump_template;
+	uint32_t	mdump_template_size;
 } qla_hw_t;
 
 #define QL_UPDATE_RDS_PRODUCER_INDEX(ha, prod_reg, val) \

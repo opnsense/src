@@ -47,7 +47,6 @@ __FBSDID("$FreeBSD$");
 #include "opt_compat.h"
 #include "opt_inet.h"
 #include "opt_inet6.h"
-#include "opt_pax.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -1231,9 +1230,7 @@ sys_issetugid(register struct thread *td, struct issetugid_args *uap)
 	 * a user without an exec - programs cannot know *everything*
 	 * that libc *might* have put in their data segment.
 	 */
-	PROC_LOCK(p);
 	td->td_retval[0] = (p->p_flag & P_SUGID) ? 1 : 0;
-	PROC_UNLOCK(p);
 	return (0);
 }
 
@@ -1614,11 +1611,7 @@ p_cansched(struct thread *td, struct proc *p)
  * XXX: Should modifying and reading this variable require locking?
  * XXX: data declarations should be together near the beginning of the file.
  */
-#ifdef PAX_HARDENING
-static int	unprivileged_proc_debug = 0;
-#else
 static int	unprivileged_proc_debug = 1;
-#endif
 SYSCTL_INT(_security_bsd, OID_AUTO, unprivileged_proc_debug, CTLFLAG_RW,
     &unprivileged_proc_debug, 0,
     "Unprivileged processes may use process debugging facilities");

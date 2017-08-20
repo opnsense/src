@@ -19,7 +19,7 @@
         aout
         ..
         clang
-            3.8.0
+            4.0.0
                 include
                     sanitizer
                     ..
@@ -505,8 +505,6 @@
                 UTF
                 ..
             ..
-        ..
-        info
         ..
         keys
             pkg

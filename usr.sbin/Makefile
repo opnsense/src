@@ -6,7 +6,6 @@
 SUBDIR=	adduser \
 	arp \
 	binmiscctl \
-	bsdconfig \
 	camdd \
 	cdcontrol \
 	chkgrp \
@@ -25,6 +24,7 @@ SUBDIR=	adduser \
 	digictl \
 	diskinfo \
 	dumpcis \
+	etcupdate \
 	extattr \
 	extattrctl \
 	fifolog \
@@ -122,6 +122,9 @@ SUBDIR.${MK_BOOTPARAMD}+=	bootparamd
 SUBDIR.${MK_BSDINSTALL}+=	bsdinstall
 SUBDIR.${MK_BSNMP}+=	bsnmpd
 SUBDIR.${MK_CTM}+=	ctm
+SUBDIR.${MK_CXGBETOOL}+=	cxgbetool
+SUBDIR.${MK_DIALOG}+=	bsdconfig
+SUBDIR.${MK_EFI}+=	efivar efidp
 SUBDIR.${MK_FLOPPY}+=	fdcontrol
 SUBDIR.${MK_FLOPPY}+=	fdformat
 SUBDIR.${MK_FLOPPY}+=	fdread
@@ -188,7 +191,6 @@ SUBDIR.${MK_QUOTAS}+=	edquota
 SUBDIR.${MK_QUOTAS}+=	quotaon
 SUBDIR.${MK_QUOTAS}+=	repquota
 SUBDIR.${MK_RCMDS}+=	rwhod
-SUBDIR.${MK_RCS}+=	etcupdate
 SUBDIR.${MK_SENDMAIL}+=	editmap
 SUBDIR.${MK_SENDMAIL}+=	mailstats
 SUBDIR.${MK_SENDMAIL}+=	makemap

@@ -396,6 +396,7 @@ extern int		vttoif_tab[];
 #define	V_ALT		0x0002	/* vinvalbuf: invalidate only alternate bufs */
 #define	V_NORMAL	0x0004	/* vinvalbuf: invalidate only regular bufs */
 #define	V_CLEANONLY	0x0008	/* vinvalbuf: invalidate only clean bufs */
+#define	V_VMIO		0x0010	/* vinvalbuf: called during pageout */
 #define	REVOKEALL	0x0001	/* vop_revoke: revoke all aliases */
 #define	V_WAIT		0x0001	/* vn_start_write: sleep for suspend */
 #define	V_NOWAIT	0x0002	/* vn_start_write: don't sleep for suspend */
@@ -621,7 +622,7 @@ int	cache_lookup(struct vnode *dvp, struct vnode **vpp,
 	    struct componentname *cnp, struct timespec *tsp, int *ticksp);
 void	cache_purge(struct vnode *vp);
 void	cache_purge_negative(struct vnode *vp);
-void	cache_purgevfs(struct mount *mp);
+void	cache_purgevfs(struct mount *mp, bool force);
 int	change_dir(struct vnode *vp, struct thread *td);
 void	cvtstat(struct stat *st, struct ostat *ost);
 void	cvtnstat(struct stat *sb, struct nstat *nsb);
@@ -673,7 +674,6 @@ int	vtruncbuf(struct vnode *vp, struct ucred *cred, off_t length,
 	    int blksize);
 void	vunref(struct vnode *);
 void	vn_printf(struct vnode *vp, const char *fmt, ...) __printflike(2,3);
-#define vprint(label, vp) vn_printf((vp), "%s\n", (label))
 int	vrecycle(struct vnode *vp);
 int	vn_bmap_seekhole(struct vnode *vp, u_long cmd, off_t *off,
 	    struct ucred *cred);
@@ -741,6 +741,7 @@ int	vfs_write_suspend(struct mount *mp, int flags);
 int	vfs_write_suspend_umnt(struct mount *mp);
 void	vnlru_free(int, struct vfsops *);
 int	vop_stdbmap(struct vop_bmap_args *);
+int	vop_stdfdatasync_buf(struct vop_fdatasync_args *);
 int	vop_stdfsync(struct vop_fsync_args *);
 int	vop_stdgetwritemount(struct vop_getwritemount_args *);
 int	vop_stdgetpages(struct vop_getpages_args *);
@@ -841,6 +842,7 @@ void	vput(struct vnode *vp);
 void	vrele(struct vnode *vp);
 void	vref(struct vnode *vp);
 void	vrefl(struct vnode *vp);
+void	vrefact(struct vnode *vp);
 int	vrefcnt(struct vnode *vp);
 void 	v_addpollinfo(struct vnode *vp);
 

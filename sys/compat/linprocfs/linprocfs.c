@@ -144,12 +144,10 @@ linprocfs_domeminfo(PFS_FILL_ARGS)
 	unsigned long memtotal;		/* total memory in bytes */
 	unsigned long memused;		/* used memory in bytes */
 	unsigned long memfree;		/* free memory in bytes */
-	unsigned long memshared;	/* shared memory ??? */
 	unsigned long buffers, cached;	/* buffer / cache memory ??? */
 	unsigned long long swaptotal;	/* total swap space in bytes */
 	unsigned long long swapused;	/* used swap space in bytes */
 	unsigned long long swapfree;	/* free swap space in bytes */
-	vm_object_t object;
 	int i, j;
 
 	memtotal = physmem * PAGE_SIZE;
@@ -169,13 +167,6 @@ linprocfs_domeminfo(PFS_FILL_ARGS)
 	swaptotal = (unsigned long long)i * PAGE_SIZE;
 	swapused = (unsigned long long)j * PAGE_SIZE;
 	swapfree = swaptotal - swapused;
-	memshared = 0;
-	mtx_lock(&vm_object_list_mtx);
-	TAILQ_FOREACH(object, &vm_object_list, object_list)
-		if (object->shadow_count > 1)
-			memshared += object->resident_page_count;
-	mtx_unlock(&vm_object_list_mtx);
-	memshared *= PAGE_SIZE;
 	/*
 	 * We'd love to be able to write:
 	 *
@@ -185,24 +176,17 @@ linprocfs_domeminfo(PFS_FILL_ARGS)
 	 * like unstaticizing it just for linprocfs's sake.
 	 */
 	buffers = 0;
-	cached = vm_cnt.v_cache_count * PAGE_SIZE;
+	cached = vm_cnt.v_inactive_count * PAGE_SIZE;
 
 	sbuf_printf(sb,
-	    "	     total:    used:	free:  shared: buffers:	 cached:\n"
-	    "Mem:  %lu %lu %lu %lu %lu %lu\n"
-	    "Swap: %llu %llu %llu\n"
 	    "MemTotal: %9lu kB\n"
 	    "MemFree:  %9lu kB\n"
-	    "MemShared:%9lu kB\n"
 	    "Buffers:  %9lu kB\n"
 	    "Cached:   %9lu kB\n"
 	    "SwapTotal:%9llu kB\n"
 	    "SwapFree: %9llu kB\n",
-	    memtotal, memused, memfree, memshared, buffers, cached,
-	    swaptotal, swapused, swapfree,
-	    B2K(memtotal), B2K(memfree),
-	    B2K(memshared), B2K(buffers), B2K(cached),
-	    B2K(swaptotal), B2K(swapfree));
+	    B2K(memtotal), B2K(memfree), B2K(buffers),
+	    B2K(cached), B2K(swaptotal), B2K(swapfree));
 
 	return (0);
 }
@@ -218,7 +202,7 @@ linprocfs_docpuinfo(PFS_FILL_ARGS)
 	char model[128];
 	uint64_t freq;
 	size_t size;
-	int class, fqmhz, fqkhz;
+	int fqmhz, fqkhz;
 	int i;
 
 	/*
@@ -234,33 +218,6 @@ linprocfs_docpuinfo(PFS_FILL_ARGS)
 		"xmm",	    "sse2",    "b27",	   "b28",      "b29",
 		"3dnowext", "3dnow"
 	};
-
-	switch (cpu_class) {
-#ifdef __i386__
-	case CPUCLASS_286:
-		class = 2;
-		break;
-	case CPUCLASS_386:
-		class = 3;
-		break;
-	case CPUCLASS_486:
-		class = 4;
-		break;
-	case CPUCLASS_586:
-		class = 5;
-		break;
-	case CPUCLASS_686:
-		class = 6;
-		break;
-	default:
-		class = 0;
-		break;
-#else /* __amd64__ */
-	default:
-		class = 15;
-		break;
-#endif
-	}
 
 	hw_model[0] = CTL_HW;
 	hw_model[1] = HW_MODEL;
@@ -286,7 +243,7 @@ linprocfs_docpuinfo(PFS_FILL_ARGS)
 #ifdef __i386__
 	switch (cpu_vendor_id) {
 	case CPU_VENDOR_AMD:
-		if (class < 6)
+		if (cpu_class < CPUCLASS_686)
 			flags[16] = "fcmov";
 		break;
 	case CPU_VENDOR_CYRIX:
@@ -447,9 +404,11 @@ linprocfs_dostat(PFS_FILL_ARGS)
 	struct pcpu *pcpu;
 	long cp_time[CPUSTATES];
 	long *cp;
+	struct timeval boottime;
 	int i;
 
 	read_cpu_time(cp_time);
+	getboottime(&boottime);
 	sbuf_printf(sb, "cpu %ld %ld %ld %ld\n",
 	    T2J(cp_time[CP_USER]),
 	    T2J(cp_time[CP_NICE]),
@@ -624,10 +583,12 @@ static int
 linprocfs_doprocstat(PFS_FILL_ARGS)
 {
 	struct kinfo_proc kp;
+	struct timeval boottime;
 	char state;
 	static int ratelimit = 0;
 	vm_offset_t startcode, startdata;
 
+	getboottime(&boottime);
 	sx_slock(&proctree_lock);
 	PROC_LOCK(p);
 	fill_kinfo_proc(p, &kp);
@@ -1058,9 +1019,9 @@ linprocfs_doprocmaps(PFS_FILL_ARGS)
 				ino = vat.va_fileid;
 				vput(vp);
 			} else if (SV_PROC_ABI(p) == SV_ABI_LINUX) {
-				if (e_start == p->p_shared_page_base)
+				if (e_start == p->p_sysent->sv_shared_page_base)
 					name = vdso_str;
-				if (e_end == p->p_usrstack)
+				if (e_end == p->p_sysent->sv_usrstack)
 					name = stack_str;
 			}
 		} else {
@@ -1582,6 +1543,8 @@ linprocfs_init(PFS_INIT_ARGS)
 	    NULL, NULL, NULL, PFS_RD);
 	pfs_create_file(dir, "mem", &procfs_doprocmem,
 	    &procfs_attr, &procfs_candebug, NULL, PFS_RDWR|PFS_RAW);
+	pfs_create_file(dir, "mounts", &linprocfs_domtab,
+	    NULL, NULL, NULL, PFS_RD);
 	pfs_create_link(dir, "root", &linprocfs_doprocroot,
 	    NULL, NULL, NULL, 0);
 	pfs_create_file(dir, "stat", &linprocfs_doprocstat,

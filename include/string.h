@@ -134,11 +134,29 @@ typedef	__ssize_t	ssize_t;
 void	 swab(const void * __restrict, void * __restrict, ssize_t);
 #endif /* _SWAB_DECLARED */
 
+int	 timingsafe_bcmp(const void *, const void *, size_t);
+int	 timingsafe_memcmp(const void *, const void *, size_t);
 #endif /* __BSD_VISIBLE */
 
 #if __POSIX_VISIBLE >= 200809 || defined(_XLOCALE_H_)
 #include <xlocale/_string.h>
 #endif
+
+#if __EXT1_VISIBLE
+
+#ifndef _RSIZE_T_DEFINED
+#define _RSIZE_T_DEFINED
+typedef size_t rsize_t;
+#endif
+
+#ifndef _ERRNO_T_DEFINED
+#define _ERRNO_T_DEFINED
+typedef int errno_t;
+#endif
+
+/* ISO/IEC 9899:2011 K.3.7.4.1.1 */
+errno_t memset_s(void *, rsize_t, int, rsize_t);
+#endif /* __EXT1_VISIBLE */
 __END_DECLS
 
 #endif /* _STRING_H_ */

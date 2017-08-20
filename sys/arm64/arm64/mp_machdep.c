@@ -65,7 +65,6 @@ __FBSDID("$FreeBSD$");
 
 #include <dev/psci/psci.h>
 
-#ifdef INTRNG
 #include "pic_if.h"
 
 typedef void intr_ipi_send_t(void *, cpuset_t, u_int);
@@ -86,7 +85,6 @@ static struct intr_ipi ipi_sources[INTR_IPI_COUNT];
 static struct intr_ipi *intr_ipi_lookup(u_int);
 static void intr_pic_ipi_setup(u_int, const char *, intr_ipi_handler_t *,
     void *);
-#endif /* INTRNG */
 
 boolean_t ofw_cpu_reg(phandle_t node, u_int, cell_t *);
 
@@ -114,9 +112,6 @@ static int ipi_handler(void *arg);
 struct mtx ap_boot_mtx;
 struct pcb stoppcbs[MAXCPU];
 
-#ifdef INVARIANTS
-static uint32_t cpu_reg[MAXCPU][2];
-#endif
 static device_t cpu_list[MAXCPU];
 
 /*
@@ -214,18 +209,12 @@ release_aps(void *dummy __unused)
 {
 	int cpu, i;
 
-#ifdef INTRNG
 	intr_pic_ipi_setup(IPI_AST, "ast", ipi_ast, NULL);
 	intr_pic_ipi_setup(IPI_PREEMPT, "preempt", ipi_preempt, NULL);
 	intr_pic_ipi_setup(IPI_RENDEZVOUS, "rendezvous", ipi_rendezvous, NULL);
 	intr_pic_ipi_setup(IPI_STOP, "stop", ipi_stop, NULL);
 	intr_pic_ipi_setup(IPI_STOP_HARD, "stop hard", ipi_stop, NULL);
 	intr_pic_ipi_setup(IPI_HARDCLOCK, "hardclock", ipi_hardclock, NULL);
-#else
-	/* Setup the IPI handler */
-	for (i = 0; i < INTR_IPI_COUNT; i++)
-		arm_setup_ipihandler(ipi_handler, i);
-#endif
 
 	atomic_store_rel_int(&aps_ready, 1);
 	/* Wake up the other CPUs */
@@ -253,9 +242,6 @@ void
 init_secondary(uint64_t cpu)
 {
 	struct pcpu *pcpup;
-#ifndef INTRNG
-	int i;
-#endif
 
 	pcpup = &__pcpu[cpu];
 	/*
@@ -282,15 +268,7 @@ init_secondary(uint64_t cpu)
 	 */
 	identify_cpu();
 
-#ifdef INTRNG
 	intr_pic_init_secondary();
-#else
-	/* Configure the interrupt controller */
-	arm_init_secondary();
-
-	for (i = 0; i < INTR_IPI_COUNT; i++)
-		arm_unmask_ipi(i);
-#endif
 
 	/* Start per-CPU event timers. */
 	cpu_initclocks_ap();
@@ -300,6 +278,7 @@ init_secondary(uint64_t cpu)
 #endif
 
 	dbg_monitor_init();
+	pan_enable();
 
 	/* Enable interrupts */
 	intr_enable();
@@ -322,7 +301,6 @@ init_secondary(uint64_t cpu)
 	/* NOTREACHED */
 }
 
-#ifdef INTRNG
 /*
  *  Send IPI thru interrupt controller.
  */
@@ -378,7 +356,6 @@ intr_ipi_send(cpuset_t cpus, u_int ipi)
 
 	ii->ii_send(ii->ii_send_arg, cpus, ipi);
 }
-#endif
 
 static void
 ipi_ast(void *dummy __unused)
@@ -432,44 +409,6 @@ ipi_stop(void *dummy __unused)
 	CTR0(KTR_SMP, "IPI_STOP (restart)");
 }
 
-#ifndef INTRNG
-static int
-ipi_handler(void *arg)
-{
-	u_int cpu, ipi;
-
-	arg = (void *)((uintptr_t)arg & ~(1 << 16));
-	KASSERT((uintptr_t)arg < INTR_IPI_COUNT,
-	    ("Invalid IPI %ju", (uintptr_t)arg));
-
-	cpu = PCPU_GET(cpuid);
-	ipi = (uintptr_t)arg;
-
-	switch(ipi) {
-	case IPI_AST:
-		ipi_ast(NULL);
-		break;
-	case IPI_PREEMPT:
-		ipi_preempt(NULL);
-		break;
-	case IPI_RENDEZVOUS:
-		ipi_rendezvous(NULL);
-		break;
-	case IPI_STOP:
-	case IPI_STOP_HARD:
-		ipi_stop(NULL);
-		break;
-	case IPI_HARDCLOCK:
-		ipi_hardclock(NULL);
-		break;
-	default:
-		panic("Unknown IPI %#0x on cpu %d", ipi, curcpu);
-	}
-
-	return (FILTER_HANDLED);
-}
-#endif
-
 struct cpu_group *
 cpu_topo(void)
 {
@@ -500,22 +439,22 @@ cpu_init_fdt(u_int id, phandle_t node, u_int addr_size, pcell_t *reg)
 	if (id > mp_maxid)
 		return (0);
 
-	KASSERT(id < MAXCPU, ("Too mant CPUs"));
-
-	KASSERT(addr_size == 1 || addr_size == 2, ("Invalid register size"));
-#ifdef INVARIANTS
-	cpu_reg[id][0] = reg[0];
-	if (addr_size == 2)
-		cpu_reg[id][1] = reg[1];
-#endif
+	KASSERT(id < MAXCPU, ("Too many CPUs"));
 
 	/* We are already running on cpu 0 */
 	if (id == cpu0)
 		return (1);
 
+	/*
+	 * Rotate the CPU IDs to put the boot CPU as CPU 0. We keep the other
+	 * CPUs ordered as the are likely grouped into clusters so it can be
+	 * useful to keep that property, e.g. for the GICv3 driver to send
+	 * an IPI to all CPUs in the cluster.
+	 */
 	cpuid = id;
 	if (cpuid < cpu0)
-		cpuid++;
+		cpuid += mp_maxid + 1;
+	cpuid -= cpu0;
 
 	pcpup = &__pcpu[cpuid];
 	pcpu_init(pcpup, cpuid, sizeof(struct pcpu));
@@ -624,7 +563,6 @@ cpu_mp_setmaxid(void)
 	mp_maxid = 0;
 }
 
-#ifdef INTRNG
 /*
  *  Lookup IPI source.
  */
@@ -768,4 +706,3 @@ ipi_selected(cpuset_t cpus, u_int ipi)
 	CTR2(KTR_SMP, "%s: ipi: %x", __func__, ipi);
 	intr_ipi_send(cpus, ipi);
 }
-#endif /* INTRNG */

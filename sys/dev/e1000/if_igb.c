@@ -2901,7 +2901,7 @@ igb_setup_msix(struct adapter *adapter)
 msi:
        	if (adapter->msix_mem != NULL) {
 		bus_release_resource(dev, SYS_RES_MEMORY,
-		    PCIR_BAR(IGB_MSIX_BAR), adapter->msix_mem);
+		    adapter->memrid, adapter->msix_mem);
 		adapter->msix_mem = NULL;
 	}
        	msgs = 1;
@@ -3182,7 +3182,7 @@ igb_setup_interface(device_t dev, struct adapter *adapter)
 #else
 	ifp->if_start = igb_start;
 	IFQ_SET_MAXLEN(&ifp->if_snd, adapter->num_tx_desc - 1);
-	ifp->if_snd.ifq_drv_maxlen = adapter->num_tx_desc - 1;
+	ifp->if_snd.ifq_drv_maxlen = 0;
 	IFQ_SET_READY(&ifp->if_snd);
 #endif
 

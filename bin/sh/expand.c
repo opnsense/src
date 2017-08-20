@@ -460,7 +460,6 @@ expbackq(union node *cmd, int quoted, int flag, struct worddest *dst)
 	p = grabstackstr(dest);
 	evalbackcmd(cmd, &in);
 	ungrabstackstr(p, dest);
-	argbackq = saveargbackq;
 
 	p = in.buf;
 	nnl = 0;
@@ -513,12 +512,16 @@ expbackq(union node *cmd, int quoted, int flag, struct worddest *dst)
 		close(in.fd);
 	if (in.buf)
 		ckfree(in.buf);
-	if (in.jp)
+	if (in.jp) {
+		p = grabstackstr(dest);
 		exitstatus = waitforjob(in.jp, (int *)NULL);
+		ungrabstackstr(p, dest);
+	}
 	TRACE(("expbackq: size=%td: \"%.*s\"\n",
 		((dest - stackblock()) - startloc),
 		(int)((dest - stackblock()) - startloc),
 		stackblock() + startloc));
+	argbackq = saveargbackq;
 	expdest = dest;
 	INTON;
 }
@@ -765,8 +768,10 @@ again: /* jump here after setting a variable with ${var=text} */
 	case VSTRIMLEFTMAX:
 	case VSTRIMRIGHT:
 	case VSTRIMRIGHTMAX:
-		if (!set)
+		if (!set) {
+			set = 1;
 			break;
+		}
 		/*
 		 * Terminate the string and start recording the pattern
 		 * right after it
@@ -1196,7 +1201,7 @@ expsortcmp(const void *p1, const void *p2)
 	const char *s1 = *(const char * const *)p1;
 	const char *s2 = *(const char * const *)p2;
 
-	return (strcmp(s1, s2));
+	return (strcoll(s1, s2));
 }
 
 

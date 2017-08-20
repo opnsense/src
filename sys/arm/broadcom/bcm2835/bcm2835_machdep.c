@@ -42,7 +42,6 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
-#define _ARM32_BUS_DMA_PRIVATE
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
@@ -78,13 +77,15 @@ bcm2835_late_init(platform_t plat)
 
 	system = OF_finddevice("/system");
 	if (system != 0) {
-		len = OF_getprop(system, "linux,serial", &cells, sizeof(cells));
+		len = OF_getencprop(system, "linux,serial", cells,
+		    sizeof(cells));
 		if (len > 0)
-			board_set_serial(fdt64_to_cpu(*((uint64_t *)cells)));
+			board_set_serial(((uint64_t)cells[0]) << 32 | cells[1]);
 
-		len = OF_getprop(system, "linux,revision", &cells, sizeof(cells));
+		len = OF_getencprop(system, "linux,revision", cells,
+		    sizeof(cells));
 		if (len > 0)
-			board_set_revision(fdt32_to_cpu(*((uint32_t *)cells)));
+			board_set_revision(cells[0]);
 	}
 }
 
@@ -113,19 +114,7 @@ bcm2836_devmap_init(platform_t plat)
 }
 #endif
 
-struct arm32_dma_range *
-bus_dma_get_range(void)
-{
 
-	return (NULL);
-}
-
-int
-bus_dma_get_range_nb(void)
-{
-
-	return (0);
-}
 
 void
 cpu_reset()

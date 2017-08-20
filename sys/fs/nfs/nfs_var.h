@@ -502,8 +502,8 @@ int nfscl_open(vnode_t, u_int8_t *, int, u_int32_t, int,
     int *, int *, int);
 int nfscl_getstateid(vnode_t, u_int8_t *, int, u_int32_t, int, struct ucred *,
     NFSPROC_T *, nfsv4stateid_t *, void **);
-void nfscl_ownerrelease(struct nfsclowner *, int, int, int);
-void nfscl_openrelease(struct nfsclopen *, int, int);
+void nfscl_ownerrelease(struct nfsmount *, struct nfsclowner *, int, int, int);
+void nfscl_openrelease(struct nfsmount *, struct nfsclopen *, int, int);
 int nfscl_getcl(struct mount *, struct ucred *, NFSPROC_T *, int,
     struct nfsclclient **);
 struct nfsclclient *nfscl_findcl(struct nfsmount *);
@@ -592,7 +592,7 @@ int nfscl_maperr(NFSPROC_T *, int, uid_t, gid_t);
 void nfscl_init(void);
 
 /* nfs_clbio.c */
-int ncl_flush(vnode_t, int, struct ucred *, NFSPROC_T *, int, int);
+int ncl_flush(vnode_t, int, NFSPROC_T *, int, int);
 
 /* nfs_clnode.c */
 void ncl_invalcaches(vnode_t);

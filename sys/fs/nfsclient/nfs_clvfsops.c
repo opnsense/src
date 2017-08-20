@@ -78,7 +78,6 @@ FEATURE(nfscl, "NFSv4 client");
 
 extern int nfscl_ticks;
 extern struct timeval nfsboottime;
-extern struct nfsstats	newnfsstats;
 extern int nfsrv_useacl;
 extern int nfscl_debuglevel;
 extern enum nfsiod_state ncl_iodwant[NFS_MAXASYNCDAEMON];
@@ -416,11 +415,6 @@ nfs_mountroot(struct mount *mp)
 		nfs_convert_diskless();
 
 	/*
-	 * XXX splnet, so networks will receive...
-	 */
-	splnet();
-
-	/*
 	 * Do enough of ifconfig(8) so that the critical net interface can
 	 * talk to the server.
 	 */
@@ -559,11 +553,8 @@ static void
 nfs_decode_args(struct mount *mp, struct nfsmount *nmp, struct nfs_args *argp,
     const char *hostname, struct ucred *cred, struct thread *td)
 {
-	int s;
 	int adjsock;
 	char *p;
-
-	s = splnet();
 
 	/*
 	 * Set read-only flag if requested; otherwise, clear it if this is
@@ -601,6 +592,12 @@ nfs_decode_args(struct mount *mp, struct nfsmount *nmp, struct nfs_args *argp,
 		nmp->nm_flag &= ~NFSMNT_RDIRPLUS;
 	}
 
+	/* Clear ONEOPENOWN for NFSv2, 3 and 4.0. */
+	if (nmp->nm_minorvers == 0) {
+		argp->flags &= ~NFSMNT_ONEOPENOWN;
+		nmp->nm_flag &= ~NFSMNT_ONEOPENOWN;
+	}
+
 	/* Re-bind if rsrvd port requested and wasn't on one */
 	adjsock = !(nmp->nm_flag & NFSMNT_RESVPORT)
 		  && (argp->flags & NFSMNT_RESVPORT);
@@ -610,7 +607,6 @@ nfs_decode_args(struct mount *mp, struct nfsmount *nmp, struct nfs_args *argp,
 
 	/* Update flags atomically.  Don't change the lock bits. */
 	nmp->nm_flag = argp->flags | nmp->nm_flag;
-	splx(s);
 
 	if ((argp->flags & NFSMNT_TIMEO) && argp->timeo > 0) {
 		nmp->nm_timeo = (argp->timeo * NFS_HZ + 5) / 10;
@@ -737,7 +733,7 @@ static const char *nfs_opts[] = { "from", "nfs_args",
     "resvport", "readahead", "hostname", "timeo", "timeout", "addr", "fh",
     "nfsv3", "sec", "principal", "nfsv4", "gssname", "allgssname", "dirpath",
     "minorversion", "nametimeo", "negnametimeo", "nocto", "noncontigwr",
-    "pnfs", "wcommitsize",
+    "pnfs", "wcommitsize", "oneopenown",
     NULL };
 
 /*
@@ -750,8 +746,7 @@ static int
 nfs_mount_parse_from(struct vfsoptlist *opts, char **hostnamep,
     struct sockaddr_in **sinp, char *dirpath, size_t dirpathsize, int *dirlenp)
 {
-	char nam[MNAMELEN + 1];
-	char *delimp, *hostp, *spec;
+	char *nam, *delimp, *hostp, *spec;
 	int error, have_bracket = 0, offset, rv, speclen;
 	struct sockaddr_in *sin;
 	size_t len;
@@ -759,6 +754,7 @@ nfs_mount_parse_from(struct vfsoptlist *opts, char **hostnamep,
 	error = vfs_getopt(opts, "from", (void **)&spec, &speclen);
 	if (error != 0)
 		return (error);
+	nam = malloc(MNAMELEN + 1, M_TEMP, M_WAITOK);
 
 	/*
 	 * This part comes from sbin/mount_nfs/mount_nfs.c:getnfsargs().
@@ -777,6 +773,7 @@ nfs_mount_parse_from(struct vfsoptlist *opts, char **hostnamep,
 		hostp = delimp + 1;
 	} else {
 		printf("%s: no <host>:<dirpath> nfs-name\n", __func__);
+		free(nam, M_TEMP);
 		return (EINVAL);
 	}
 	*delimp = '\0';
@@ -792,6 +789,7 @@ nfs_mount_parse_from(struct vfsoptlist *opts, char **hostnamep,
 		spec[speclen - 1] = '\0';
 	if (strlen(hostp) + strlen(spec) + 1 > MNAMELEN) {
 		printf("%s: %s:%s: name too long", __func__, hostp, spec);
+		free(nam, M_TEMP);
 		return (EINVAL);
 	}
 	/* Make both '@' and ':' notations equal */
@@ -817,6 +815,7 @@ nfs_mount_parse_from(struct vfsoptlist *opts, char **hostnamep,
 	if (rv != 1) {
 		printf("%s: cannot parse '%s', inet_pton() returned %d\n",
 		    __func__, hostp, rv);
+		free(nam, M_TEMP);
 		free(sin, M_SONAME);
 		return (EINVAL);
 	}
@@ -833,6 +832,7 @@ nfs_mount_parse_from(struct vfsoptlist *opts, char **hostnamep,
 	strlcpy(dirpath, spec, dirpathsize);
 	*dirlenp = strlen(dirpath);
 
+	free(nam, M_TEMP);
 	return (0);
 }
 
@@ -875,7 +875,7 @@ nfs_mount(struct mount *mp)
 	struct sockaddr *nam = NULL;
 	struct vnode *vp;
 	struct thread *td;
-	char hst[MNAMELEN];
+	char *hst;
 	u_char nfh[NFSX_FHMAX], krbname[100], dirpath[100], srvkrbname[100];
 	char *cp, *opt, *name, *secname;
 	int nametimeo = NFS_DEFAULT_NAMETIMEO;
@@ -887,6 +887,7 @@ nfs_mount(struct mount *mp)
 
 	has_nfs_args_opt = 0;
 	has_nfs_from_opt = 0;
+	hst = malloc(MNAMELEN, M_TEMP, M_WAITOK);
 	if (vfs_filteropt(mp->mnt_optnew, nfs_opts)) {
 		error = EINVAL;
 		goto out;
@@ -967,6 +968,8 @@ nfs_mount(struct mount *mp)
 		args.flags |= NFSMNT_NONCONTIGWR;
 	if (vfs_getopt(mp->mnt_optnew, "pnfs", NULL, NULL) == 0)
 		args.flags |= NFSMNT_PNFS;
+	if (vfs_getopt(mp->mnt_optnew, "oneopenown", NULL, NULL) == 0)
+		args.flags |= NFSMNT_ONEOPENOWN;
 	if (vfs_getopt(mp->mnt_optnew, "readdirsize", (void **)&opt, NULL) == 0) {
 		if (opt == NULL) { 
 			vfs_mount_error(mp, "illegal readdirsize");
@@ -1177,8 +1180,8 @@ nfs_mount(struct mount *mp)
 
 		/*
 		 * When doing an update, we can't change version,
-		 * security, switch lockd strategies or change cookie
-		 * translation
+		 * security, switch lockd strategies, change cookie
+		 * translation or switch oneopenown.
 		 */
 		args.flags = (args.flags &
 		    ~(NFSMNT_NFSV3 |
@@ -1186,6 +1189,7 @@ nfs_mount(struct mount *mp)
 		      NFSMNT_KERB |
 		      NFSMNT_INTEGRITY |
 		      NFSMNT_PRIVACY |
+		      NFSMNT_ONEOPENOWN |
 		      NFSMNT_NOLOCKD /*|NFSMNT_XLATECOOKIE*/)) |
 		    (nmp->nm_flag &
 			(NFSMNT_NFSV3 |
@@ -1193,6 +1197,7 @@ nfs_mount(struct mount *mp)
 			 NFSMNT_KERB |
 			 NFSMNT_INTEGRITY |
 			 NFSMNT_PRIVACY |
+			 NFSMNT_ONEOPENOWN |
 			 NFSMNT_NOLOCKD /*|NFSMNT_XLATECOOKIE*/));
 		nfs_decode_args(mp, nmp, &args, NULL, td->td_ucred, td);
 		goto out;
@@ -1266,8 +1271,13 @@ nfs_mount(struct mount *mp)
 			error = EINVAL;
 			goto out;
 		}
-		bcopy(args.hostname, hst, MNAMELEN);
-		hst[MNAMELEN - 1] = '\0';
+		if (len >= MNAMELEN) {
+			vfs_mount_error(mp, "Hostname too long");
+			error = EINVAL;
+			goto out;
+		}
+		bcopy(args.hostname, hst, len);
+		hst[len] = '\0';
 	}
 
 	if (vfs_getopt(mp->mnt_optnew, "principal", (void **)&name, NULL) == 0)
@@ -1321,8 +1331,11 @@ out:
 		MNT_ILOCK(mp);
 		mp->mnt_kern_flag |= MNTK_LOOKUP_SHARED | MNTK_NO_IOPF |
 		    MNTK_USES_BCACHE;
+		if ((VFSTONFS(mp)->nm_flag & NFSMNT_NFSV4) != 0)
+			mp->mnt_kern_flag |= MNTK_NULL_NOCACHE;
 		MNT_IUNLOCK(mp);
 	}
+	free(hst, M_TEMP);
 	return (error);
 }
 
@@ -1384,6 +1397,7 @@ mountnfs(struct nfs_args *argp, struct mount *mp, struct sockaddr *nam,
 		    krbnamelen + dirlen + srvkrbnamelen + 2,
 		    M_NEWNFSMNT, M_WAITOK | M_ZERO);
 		TAILQ_INIT(&nmp->nm_bufq);
+		TAILQ_INIT(&nmp->nm_sess);
 		if (clval == 0)
 			clval = (u_int64_t)nfsboottime.tv_sec;
 		nmp->nm_clval = clval++;
@@ -1629,8 +1643,12 @@ bad:
 		NFSUNLOCKCLSTATE();
 		free(nmp->nm_clp, M_NFSCLCLIENT);
 	}
-	TAILQ_FOREACH_SAFE(dsp, &nmp->nm_sess, nfsclds_list, tdsp)
+	TAILQ_FOREACH_SAFE(dsp, &nmp->nm_sess, nfsclds_list, tdsp) {
+		if (dsp != TAILQ_FIRST(&nmp->nm_sess) &&
+		    dsp->nfsclds_sockp != NULL)
+			newnfs_disconnect(dsp->nfsclds_sockp);
 		nfscl_freenfsclds(dsp);
+	}
 	FREE(nmp, M_NEWNFSMNT);
 	FREE(nam, M_SONAME);
 	return (error);
@@ -1695,8 +1713,12 @@ nfs_unmount(struct mount *mp, int mntflags)
 		AUTH_DESTROY(nmp->nm_sockreq.nr_auth);
 	mtx_destroy(&nmp->nm_sockreq.nr_mtx);
 	mtx_destroy(&nmp->nm_mtx);
-	TAILQ_FOREACH_SAFE(dsp, &nmp->nm_sess, nfsclds_list, tdsp)
+	TAILQ_FOREACH_SAFE(dsp, &nmp->nm_sess, nfsclds_list, tdsp) {
+		if (dsp != TAILQ_FIRST(&nmp->nm_sess) &&
+		    dsp->nfsclds_sockp != NULL)
+			newnfs_disconnect(dsp->nfsclds_sockp);
 		nfscl_freenfsclds(dsp);
+	}
 	FREE(nmp, M_NEWNFSMNT);
 out:
 	return (error);
@@ -1942,6 +1964,8 @@ void nfscl_retopts(struct nfsmount *nmp, char *buffer, size_t buflen)
 		    &blen);
 		nfscl_printopt(nmp, (nmp->nm_flag & NFSMNT_PNFS) != 0, ",pnfs",
 		    &buf, &blen);
+		nfscl_printopt(nmp, (nmp->nm_flag & NFSMNT_ONEOPENOWN) != 0 &&
+		    nmp->nm_minorvers > 0, ",oneopenown", &buf, &blen);
 	}
 	nfscl_printopt(nmp, (nmp->nm_flag & NFSMNT_NFSV3) != 0, "nfsv3", &buf,
 	    &blen);

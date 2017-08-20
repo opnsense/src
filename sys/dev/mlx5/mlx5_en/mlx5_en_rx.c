@@ -82,9 +82,10 @@ mlx5e_post_rx_wqes(struct mlx5e_rq *rq)
 	while (!mlx5_wq_ll_is_full(&rq->wq)) {
 		struct mlx5e_rx_wqe *wqe = mlx5_wq_ll_get_wqe(&rq->wq, rq->wq.head);
 
-		if (unlikely(mlx5e_alloc_rx_wqe(rq, wqe, rq->wq.head)))
+		if (unlikely(mlx5e_alloc_rx_wqe(rq, wqe, rq->wq.head))) {
+			callout_reset_curcpu(&rq->watchdog, 1, (void *)&mlx5e_post_rx_wqes, rq);
 			break;
-
+		}
 		mlx5_wq_ll_push(&rq->wq, be16_to_cpu(wqe->next.next_wqe_index));
 	}
 
@@ -369,15 +370,9 @@ mlx5e_poll_rx_cq(struct mlx5e_rq *rq, int budget)
 
 		mlx5e_build_rx_mbuf(cqe, rq, mb, byte_cnt);
 		rq->stats.packets++;
-#ifdef HAVE_TURBO_LRO
-		if (mb->m_pkthdr.csum_flags == 0 ||
-		    (rq->ifp->if_capenable & IFCAP_LRO) == 0 ||
-		    rq->lro.mbuf == NULL) {
-			/* normal input */
-			rq->ifp->if_input(rq->ifp, mb);
-		} else {
-			tcp_tlro_rx(&rq->lro, mb);
-		}
+
+#if !defined(HAVE_TCP_LRO_RX)
+		tcp_lro_queue_mbuf(&rq->lro, mb);
 #else
 		if (mb->m_pkthdr.csum_flags == 0 ||
 		    (rq->ifp->if_capenable & IFCAP_LRO) == 0 ||
@@ -395,9 +390,6 @@ wq_ll_pop:
 
 	/* ensure cq space is freed before enabling more cqes */
 	wmb();
-#ifndef HAVE_TURBO_LRO
-	tcp_lro_flush_all(&rq->lro);
-#endif
 	return (i);
 }
 
@@ -437,8 +429,6 @@ mlx5e_rx_cq_comp(struct mlx5_core_cq *mcq)
 	}
 	mlx5e_post_rx_wqes(rq);
 	mlx5e_cq_arm(&rq->cq);
-#ifdef HAVE_TURBO_LRO
-	tcp_tlro_flush(&rq->lro, 1);
-#endif
+	tcp_lro_flush_all(&rq->lro);
 	mtx_unlock(&rq->mtx);
 }

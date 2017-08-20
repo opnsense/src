@@ -2,10 +2,6 @@
 
 MAN=
 
-.if ${MACHINE_CPUARCH} == "aarch64"
-NOPIE=		yes
-.endif
-
 .include <src.opts.mk>
 
 MK_SSP=		no
@@ -88,11 +84,15 @@ EFI_TARGET=	efi-app-ia32
 EFI_TARGET=	binary
 .endif
 
+# Arbitrarily set the PE/COFF header timestamps to 1 Jan 2016 00:00:00
+# for build reproducibility.
+SOURCE_DATE_EPOCH?=1451606400
 boot1.efi: ${PROG}
 	if ${NM} ${.ALLSRC} | grep ' U '; then \
 		echo "Undefined symbols in ${.ALLSRC}"; \
 		exit 1; \
 	fi
+	SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
 	${OBJCOPY} -j .peheader -j .text -j .sdata -j .data \
 		-j .dynamic -j .dynsym -j .rel.dyn \
 		-j .rela.dyn -j .reloc -j .eh_frame \
@@ -107,7 +107,7 @@ boot1.o: ${.CURDIR}/../../common/ufsread.c
 BOOT1_MAXSIZE?=	131072
 
 boot1.efifat: boot1.efi
-	@set -- `ls -l boot1.efi`; \
+	@set -- `ls -l ${.ALLSRC}`; \
 	x=$$(($$5-${BOOT1_MAXSIZE})); \
 	if [ $$x -ge 0 ]; then \
 	    echo "boot1 $$x bytes too large; regenerate FAT templates?" >&2 ;\
@@ -117,8 +117,7 @@ boot1.efifat: boot1.efi
 	uudecode ${.CURDIR}/fat-${MACHINE}.tmpl.bz2.uu
 	mv fat-${MACHINE}.tmpl.bz2 ${.TARGET}.bz2
 	bzip2 -f -d ${.TARGET}.bz2
-	dd if=boot1.efi of=${.TARGET} seek=${BOOT1_OFFSET} conv=notrunc \
-	    status=none
+	${DD} if=${.ALLSRC} of=${.TARGET} seek=${BOOT1_OFFSET} conv=notrunc
 
 CLEANFILES= boot1.efi boot1.efifat
 

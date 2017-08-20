@@ -604,6 +604,8 @@ retry:
 		if (td->td_ru.ru_msgrcv != ru_before)
 			job->msgrcv = 1;
 	} else {
+		if (!TAILQ_EMPTY(&sb->sb_aiojobq))
+			flags |= MSG_MORETOCOME;
 		uio.uio_rw = UIO_WRITE;
 		ru_before = td->td_ru.ru_msgsnd;
 #ifdef MAC
@@ -673,7 +675,6 @@ soaio_process_sb(struct socket *so, struct sockbuf *sb)
 {
 	struct kaiocb *job;
 
-	CURVNET_SET(so->so_vnet);
 	SOCKBUF_LOCK(sb);
 	while (!TAILQ_EMPTY(&sb->sb_aiojobq) && soaio_ready(so, sb)) {
 		job = TAILQ_FIRST(&sb->sb_aiojobq);
@@ -697,7 +698,6 @@ soaio_process_sb(struct socket *so, struct sockbuf *sb)
 	ACCEPT_LOCK();
 	SOCK_LOCK(so);
 	sorele(so);
-	CURVNET_RESTORE();
 }
 
 void

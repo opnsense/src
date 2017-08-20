@@ -697,6 +697,9 @@ static struct
 	{PCIC_CRYPTO,		PCIS_CRYPTO_NETCOMP,	"entertainment crypto"},
 	{PCIC_DASP,		-1,			"dasp"},
 	{PCIC_DASP,		PCIS_DASP_DPIO,		"DPIO module"},
+	{PCIC_DASP,		PCIS_DASP_PERFCNTRS,	"performance counters"},
+	{PCIC_DASP,		PCIS_DASP_COMM_SYNC,	"communication synchronizer"},
+	{PCIC_DASP,		PCIS_DASP_MGMT_CARD,	"signal processing management"},
 	{0, 0,		NULL}
 };
 
@@ -914,11 +917,8 @@ parsesel(const char *str)
 		while (isdigit(*ep) && i < 4) {
 			selarr[i++] = strtoul(ep, &eppos, 10);
 			ep = eppos;
-			if (*ep == ':') {
+			if (*ep == ':')
 				ep++;
-				if (*ep  == '\0')
-					i = 0;
-			}
 		}
 		if (i > 0 && *ep == '\0') {
 			sel.pc_func = (i > 2) ? selarr[--i] : 0;

@@ -184,13 +184,23 @@ __END_DECLS
 #define	ELAST		96		/* Must be equal largest errno */
 #endif /* _POSIX_SOURCE */
 
-#ifdef _KERNEL
+#if defined(_KERNEL) || defined(_WANT_KERNEL_ERRNO)
 /* pseudo-errors returned inside kernel to modify return to process */
 #define	ERESTART	(-1)		/* restart syscall */
 #define	EJUSTRETURN	(-2)		/* don't modify regs, just return */
 #define	ENOIOCTL	(-3)		/* ioctl not handled by this layer */
 #define	EDIRIOCTL	(-4)		/* do direct ioctl in GEOM */
 #define	ERELOOKUP	(-5)		/* retry the directory lookup */
+#endif
+
+#ifndef _KERNEL
+#if __EXT1_VISIBLE
+/* ISO/IEC 9899:2011 K.3.2.2 */
+#ifndef _ERRNO_T_DEFINED
+#define _ERRNO_T_DEFINED
+typedef int errno_t;
+#endif
+#endif /* __EXT1_VISIBLE */
 #endif
 
 #endif

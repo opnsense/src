@@ -43,6 +43,7 @@
 #endif
 #include "monitor_wrap.h"
 #include "buffer.h"
+#include "blacklist_client.h"
 
 /* import */
 extern ServerOptions options;
@@ -337,6 +338,7 @@ do_authloop(Authctxt *authctxt)
 			char *msg;
 			size_t len;
 
+			BLACKLIST_NOTIFY(BLACKLIST_AUTH_FAIL, "ssh");
 			error("Access denied for user %s by PAM account "
 			    "configuration", authctxt->user);
 			len = buffer_len(&loginmsg);
@@ -362,6 +364,7 @@ do_authloop(Authctxt *authctxt)
 		if (authenticated)
 			return;
 
+		BLACKLIST_NOTIFY(BLACKLIST_AUTH_FAIL, "ssh");
 		if (++authctxt->failures >= options.max_authtries) {
 #ifdef SSH_AUDIT_EVENTS
 			PRIVSEP(audit_event(SSH_LOGIN_EXCEED_MAXTRIES));
@@ -404,6 +407,7 @@ do_authentication(Authctxt *authctxt)
 	else {
 		debug("do_authentication: invalid user %s", user);
 		authctxt->pw = fakepw();
+		BLACKLIST_NOTIFY(BLACKLIST_BAD_USER, user);
 	}
 
 	/* Configuration may have changed as a result of Match */

@@ -164,16 +164,16 @@ cloudabi64_thread_setregs(struct thread *td,
 	 * from the top of the stack to store a single element array,
 	 * containing a pointer to the TCB. %fs base will point to this.
 	 */
-	tcbptr = rounddown(attr->stack + attr->stack_size - sizeof(tcbptr),
+	tcbptr = rounddown(attr->stack + attr->stack_len - sizeof(tcbptr),
 	    _Alignof(tcbptr));
 	error = copyout(&tcb, (void *)tcbptr, sizeof(tcb));
 	if (error != 0)
 		return (error);
 
 	/* Perform standard register initialization. */
-	stack.ss_sp = (void *)attr->stack;
+	stack.ss_sp = TO_PTR(attr->stack);
 	stack.ss_size = tcbptr - attr->stack;
-	cpu_set_upcall(td, (void *)attr->entry_point, NULL, &stack);
+	cpu_set_upcall(td, TO_PTR(attr->entry_point), NULL, &stack);
 
 	/*
 	 * Pass in the thread ID of the new thread and the argument
@@ -196,7 +196,6 @@ static struct sysentvec cloudabi64_elf_sysvec = {
 	.sv_pagesize		= PAGE_SIZE,
 	.sv_minuser		= VM_MIN_ADDRESS,
 	.sv_maxuser		= VM_MAXUSER_ADDRESS,
-	.sv_usrstack		= USRSTACK,
 	.sv_stackprot		= VM_PROT_READ | VM_PROT_WRITE,
 	.sv_copyout_strings	= cloudabi64_copyout_strings,
 	.sv_setregs		= cloudabi64_proc_setregs,
@@ -213,6 +212,5 @@ Elf64_Brandinfo cloudabi64_brand = {
 	.brand		= ELFOSABI_CLOUDABI,
 	.machine	= EM_X86_64,
 	.sysvec		= &cloudabi64_elf_sysvec,
-	.flags		= BI_CAN_EXEC_DYN,
-	.compat_3_brand	= "CloudABI",
+	.flags		= BI_CAN_EXEC_DYN | BI_BRAND_ONLY_STATIC,
 };

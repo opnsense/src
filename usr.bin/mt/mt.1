@@ -29,7 +29,7 @@
 .\"	@(#)mt.1	8.1 (Berkeley) 6/6/93
 .\" $FreeBSD$
 .\"
-.Dd May 20, 2016
+.Dd May 11, 2017
 .Dt MT 1
 .Os
 .Sh NAME
@@ -273,17 +273,20 @@ status command, this will be the same XML output via
 .Do
 .Nm
 status
-.Fl x 
+.Fl x
 .Dc
 .El
 .It Cm param
 Display or set parameters.
-One of 
+One of
 .Fl l ,
 .Fl s ,
 or
 .Fl x
 must be specified to indicate which operation to perform.
+See
+.Xr sa 4
+for more detailed information on the parameters.
 .Bl -tag -width 8n
 .It Fl l
 List parameters, values and descriptions.
@@ -293,7 +296,7 @@ To display a specific parameter, specify the parameter with
 .It Fl p Ar name
 Specify the parameter name to list (with
 .Fl l )
-or set (with 
+or set (with
 .Fl s ) .
 .It Fl q
 Enable quiet mode for parameter listing.
@@ -361,11 +364,11 @@ The drive will verify the checksum before writing the block to tape.
 .El
 .It Cm locate
 Set the tape drive's logical position.
-One of 
+One of
 .Fl b ,
 .Fl e ,
 .Fl f ,
-or 
+or
 .Fl s
 must be specified to indicate the type of position.
 If the partition number is specified, the drive will first relocate to the
@@ -518,6 +521,7 @@ Value  Width        Tracks    Density         Code Type Reference   Note
 0x58   12.7  (0.5) 1280      15,142 (384,607)       C   LTO-5
 0x5A   12.7  (0.5) 2176      15,142 (384,607)       C   LTO-6
 0x5C   12.7  (0.5) 3584      19,107 (485,318)       C   LTO-7
+0x5E   12.7  (0.5) 6656      20,669 (524,993)       C   LTO-8
 0x71   12.7  (0.5)  512      11,800 (299,720)       C   3592A1 (encrypted)
 0x72   12.7  (0.5)  896      11,800 (299,720)       C   3592A2 (encrypted)
 0x73   12.7  (0.5) 1152      13,452 (341,681)       C   3592A3 (encrypted)

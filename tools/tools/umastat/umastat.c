@@ -133,7 +133,6 @@ static const struct flaginfo {
 	{ UMA_ZONE_VM, "vm" },
 	{ UMA_ZONE_HASH, "hash" },
 	{ UMA_ZONE_SECONDARY, "secondary" },
-	{ UMA_ZONE_REFCNT, "refcnt" },
 	{ UMA_ZONE_MAXBUCKET, "maxbucket" },
 	{ UMA_ZONE_CACHESPREAD, "cachespread" },
 	{ UMA_ZONE_VTOSLAB, "vtoslab" },
@@ -378,7 +377,6 @@ main(int argc, char *argv[])
 		printf("  uk_rsize = %d\n", kz.uk_rsize);
 		printf("  uk_maxpages = %d\n", kz.uk_maxpages);
 
-		printf("  uk_slabsize = %d\n", kz.uk_slabsize);
 		printf("  uk_pgoff = %d\n", kz.uk_pgoff);
 		printf("  uk_ppera = %d\n", kz.uk_ppera);
 		printf("  uk_ipers = %d\n", kz.uk_ipers);

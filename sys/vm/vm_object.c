@@ -178,9 +178,6 @@ vm_object_zdtor(void *mem, int size, void *arg)
 	    ("object %p has reservations",
 	    object));
 #endif
-	KASSERT(vm_object_cache_is_empty(object),
-	    ("object %p has cached pages",
-	    object));
 	KASSERT(object->paging_in_progress == 0,
 	    ("object %p paging_in_progress = %d",
 	    object, object->paging_in_progress));
@@ -208,12 +205,9 @@ vm_object_zinit(void *mem, int size, int flags)
 	object->type = OBJT_DEAD;
 	object->ref_count = 0;
 	object->rtree.rt_root = 0;
-	object->rtree.rt_flags = 0;
 	object->paging_in_progress = 0;
 	object->resident_page_count = 0;
 	object->shadow_count = 0;
-	object->cache.rt_root = 0;
-	object->cache.rt_flags = 0;
 
 	mtx_lock(&vm_object_list_mtx);
 	TAILQ_INSERT_TAIL(&vm_object_list, object, object_list);
@@ -279,16 +273,16 @@ vm_object_init(void)
 	mtx_init(&vm_object_list_mtx, "vm object_list", NULL, MTX_DEF);
 	
 	rw_init(&kernel_object->lock, "kernel vm object");
-	_vm_object_allocate(OBJT_PHYS, OFF_TO_IDX(VM_MAX_KERNEL_ADDRESS - VM_MIN_KERNEL_ADDRESS),
-	    kernel_object);
+	_vm_object_allocate(OBJT_PHYS, atop(VM_MAX_KERNEL_ADDRESS -
+	    VM_MIN_KERNEL_ADDRESS), kernel_object);
 #if VM_NRESERVLEVEL > 0
 	kernel_object->flags |= OBJ_COLORED;
 	kernel_object->pg_color = (u_short)atop(VM_MIN_KERNEL_ADDRESS);
 #endif
 
 	rw_init(&kmem_object->lock, "kmem vm object");
-	_vm_object_allocate(OBJT_PHYS, OFF_TO_IDX(VM_MAX_KERNEL_ADDRESS - VM_MIN_KERNEL_ADDRESS),
-	    kmem_object);
+	_vm_object_allocate(OBJT_PHYS, atop(VM_MAX_KERNEL_ADDRESS -
+	    VM_MIN_KERNEL_ADDRESS), kmem_object);
 #if VM_NRESERVLEVEL > 0
 	kmem_object->flags |= OBJ_COLORED;
 	kmem_object->pg_color = (u_short)atop(VM_MIN_KERNEL_ADDRESS);
@@ -471,7 +465,7 @@ vm_object_vndeallocate(vm_object_t object)
 	KASSERT(vp != NULL, ("vm_object_vndeallocate: missing vp"));
 #ifdef INVARIANTS
 	if (object->ref_count == 0) {
-		vprint("vm_object_vndeallocate", vp);
+		vn_printf(vp, "vm_object_vndeallocate ");
 		panic("vm_object_vndeallocate: bad object reference count");
 	}
 #endif
@@ -792,8 +786,6 @@ vm_object_terminate(vm_object_t object)
 	if (__predict_false(!LIST_EMPTY(&object->rvq)))
 		vm_reserv_break_all(object);
 #endif
-	if (__predict_false(!vm_object_cache_is_empty(object)))
-		vm_page_cache_free(object, 0, 0);
 
 	KASSERT(object->cred == NULL || object->type == OBJT_DEFAULT ||
 	    object->type == OBJT_SWAP,
@@ -1036,7 +1028,7 @@ vm_object_sync(vm_object_t object, vm_ooffset_t offset, vm_size_t size,
 		(void) vn_start_write(vp, &mp, V_WAIT);
 		vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
 		if (syncio && !invalidate && offset == 0 &&
-		    OFF_TO_IDX(size) == object->size) {
+		    atop(size) == object->size) {
 			/*
 			 * If syncing the whole mapping of the file,
 			 * it is faster to schedule all the writes in
@@ -1135,13 +1127,6 @@ shadowlookup:
 		} else if ((tobject->flags & OBJ_UNMANAGED) != 0)
 			goto unlock_tobject;
 		m = vm_page_lookup(tobject, tpindex);
-		if (m == NULL && advise == MADV_WILLNEED) {
-			/*
-			 * If the page is cached, reactivate it.
-			 */
-			m = vm_page_alloc(tobject, tpindex, VM_ALLOC_IFCACHED |
-			    VM_ALLOC_NOBUSY);
-		}
 		if (m == NULL) {
 			/*
 			 * There may be swap even if there is no backing page
@@ -1186,7 +1171,7 @@ shadowlookup:
 			if (object != tobject)
 				VM_OBJECT_WUNLOCK(object);
 			VM_OBJECT_WUNLOCK(tobject);
-			vm_page_busy_sleep(m, "madvpo");
+			vm_page_busy_sleep(m, "madvpo", false);
 			VM_OBJECT_WLOCK(object);
   			goto relookup;
 		}
@@ -1365,13 +1350,13 @@ retry:
 			VM_OBJECT_WUNLOCK(new_object);
 			vm_page_lock(m);
 			VM_OBJECT_WUNLOCK(orig_object);
-			vm_page_busy_sleep(m, "spltwt");
+			vm_page_busy_sleep(m, "spltwt", false);
 			VM_OBJECT_WLOCK(orig_object);
 			VM_OBJECT_WLOCK(new_object);
 			goto retry;
 		}
 
-		/* vm_page_rename() will handle dirty and cache. */
+		/* vm_page_rename() will dirty the page. */
 		if (vm_page_rename(m, new_object, idx)) {
 			VM_OBJECT_WUNLOCK(new_object);
 			VM_OBJECT_WUNLOCK(orig_object);
@@ -1406,19 +1391,6 @@ retry:
 		swap_pager_copy(orig_object, new_object, offidxstart, 0);
 		TAILQ_FOREACH(m, &new_object->memq, listq)
 			vm_page_xunbusy(m);
-
-		/*
-		 * Transfer any cached pages from orig_object to new_object.
-		 * If swap_pager_copy() found swapped out pages within the
-		 * specified range of orig_object, then it changed
-		 * new_object's type to OBJT_SWAP when it transferred those
-		 * pages to new_object.  Otherwise, new_object's type
-		 * should still be OBJT_DEFAULT and orig_object should not
-		 * contain any cached pages within the specified range.
-		 */
-		if (__predict_false(!vm_object_cache_is_empty(orig_object)))
-			vm_page_cache_transfer(orig_object, offidxstart,
-			    new_object);
 	}
 	VM_OBJECT_WUNLOCK(orig_object);
 	VM_OBJECT_WUNLOCK(new_object);
@@ -1453,7 +1425,7 @@ vm_object_collapse_scan_wait(vm_object_t object, vm_page_t p, vm_page_t next,
 	if (p == NULL)
 		VM_WAIT;
 	else
-		vm_page_busy_sleep(p, "vmocol");
+		vm_page_busy_sleep(p, "vmocol", false);
 	VM_OBJECT_WLOCK(object);
 	VM_OBJECT_WLOCK(backing_object);
 	return (TAILQ_FIRST(&backing_object->memq));
@@ -1464,7 +1436,7 @@ vm_object_scan_all_shadowed(vm_object_t object)
 {
 	vm_object_t backing_object;
 	vm_page_t p, pp;
-	vm_pindex_t backing_offset_index, new_pindex;
+	vm_pindex_t backing_offset_index, new_pindex, pi, ps;
 
 	VM_OBJECT_ASSERT_WLOCKED(object);
 	VM_OBJECT_ASSERT_WLOCKED(object->backing_object);
@@ -1474,26 +1446,37 @@ vm_object_scan_all_shadowed(vm_object_t object)
 	/*
 	 * Initial conditions:
 	 *
-	 * We do not want to have to test for the existence of cache or swap
+	 * We do not want to have to test for the existence of swap
 	 * pages in the backing object.  XXX but with the new swapper this
 	 * would be pretty easy to do.
 	 */
-	if (backing_object->type != OBJT_DEFAULT)
+	if (backing_object->type != OBJT_DEFAULT &&
+	    backing_object->type != OBJT_SWAP)
 		return (false);
 
-	backing_offset_index = OFF_TO_IDX(object->backing_object_offset);
+	pi = backing_offset_index = OFF_TO_IDX(object->backing_object_offset);
+	p = vm_page_find_least(backing_object, pi);
+	ps = swap_pager_find_least(backing_object, pi);
 
-	for (p = TAILQ_FIRST(&backing_object->memq); p != NULL;
-	    p = TAILQ_NEXT(p, listq)) {
-		new_pindex = p->pindex - backing_offset_index;
+	/*
+	 * Only check pages inside the parent object's range and
+	 * inside the parent object's mapping of the backing object.
+	 */
+	for (;; pi++) {
+		if (p != NULL && p->pindex < pi)
+			p = TAILQ_NEXT(p, listq);
+		if (ps < pi)
+			ps = swap_pager_find_least(backing_object, pi);
+		if (p == NULL && ps >= backing_object->size)
+			break;
+		else if (p == NULL)
+			pi = ps;
+		else
+			pi = MIN(p->pindex, ps);
 
-		/*
-		 * Ignore pages outside the parent object's range and outside
-		 * the parent object's mapping of the backing object.
-		 */
-		if (p->pindex < backing_offset_index ||
-		    new_pindex >= object->size)
-			continue;
+		new_pindex = pi - backing_offset_index;
+		if (new_pindex >= object->size)
+			break;
 
 		/*
 		 * See if the parent has the page or if the parent's object
@@ -1618,8 +1601,7 @@ vm_object_collapse_scan(vm_object_t object, int op)
 		 * backing object to the main object.
 		 *
 		 * If the page was mapped to a process, it can remain mapped
-		 * through the rename.  vm_page_rename() will handle dirty and
-		 * cache.
+		 * through the rename.  vm_page_rename() will dirty the page.
 		 */
 		if (vm_page_rename(p, object, new_pindex)) {
 			next = vm_object_collapse_scan_wait(object, NULL, next,
@@ -1754,13 +1736,6 @@ vm_object_collapse(vm_object_t object)
 				    backing_object,
 				    object,
 				    OFF_TO_IDX(object->backing_object_offset), TRUE);
-
-				/*
-				 * Free any cached pages from backing_object.
-				 */
-				if (__predict_false(
-				    !vm_object_cache_is_empty(backing_object)))
-					vm_page_cache_free(backing_object, 0, 0);
 			}
 			/*
 			 * Object now shadows whatever backing_object did.
@@ -1889,7 +1864,7 @@ vm_object_page_remove(vm_object_t object, vm_pindex_t start, vm_pindex_t end,
 	    (options & (OBJPR_CLEANONLY | OBJPR_NOTMAPPED)) == OBJPR_NOTMAPPED,
 	    ("vm_object_page_remove: illegal options for object %p", object));
 	if (object->resident_page_count == 0)
-		goto skipmemq;
+		return;
 	vm_object_pip_add(object, 1);
 again:
 	p = vm_page_find_least(object, start);
@@ -1912,7 +1887,7 @@ again:
 		vm_page_lock(p);
 		if (vm_page_xbusied(p)) {
 			VM_OBJECT_WUNLOCK(object);
-			vm_page_busy_sleep(p, "vmopax");
+			vm_page_busy_sleep(p, "vmopax", true);
 			VM_OBJECT_WLOCK(object);
 			goto again;
 		}
@@ -1927,7 +1902,7 @@ again:
 		}
 		if (vm_page_busied(p)) {
 			VM_OBJECT_WUNLOCK(object);
-			vm_page_busy_sleep(p, "vmopar");
+			vm_page_busy_sleep(p, "vmopar", false);
 			VM_OBJECT_WLOCK(object);
 			goto again;
 		}
@@ -1946,9 +1921,6 @@ next:
 		vm_page_unlock(p);
 	}
 	vm_object_pip_wakeup(object);
-skipmemq:
-	if (__predict_false(!vm_object_cache_is_empty(object)))
-		vm_page_cache_free(object, start, end);
 }
 
 /*
@@ -1973,7 +1945,7 @@ vm_object_page_noreuse(vm_object_t object, vm_pindex_t start, vm_pindex_t end)
 	struct mtx *mtx, *new_mtx;
 	vm_page_t p, next;
 
-	VM_OBJECT_ASSERT_WLOCKED(object);
+	VM_OBJECT_ASSERT_LOCKED(object);
 	KASSERT((object->flags & (OBJ_FICTITIOUS | OBJ_UNMANAGED)) == 0,
 	    ("vm_object_page_noreuse: illegal object %p", object));
 	if (object->resident_page_count == 0)
@@ -2329,9 +2301,9 @@ sysctl_vm_object_list(SYSCTL_HANDLER_ARGS)
 			 * sysctl is only meant to give an
 			 * approximation of the system anyway.
 			 */
-			if (m->queue == PQ_ACTIVE)
+			if (vm_page_active(m))
 				kvo.kvo_active++;
-			else if (m->queue == PQ_INACTIVE)
+			else if (vm_page_inactive(m))
 				kvo.kvo_inactive++;
 		}
 

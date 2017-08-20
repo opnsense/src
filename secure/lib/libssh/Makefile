@@ -37,7 +37,7 @@ SRCS+=	bcrypt_pbkdf.c blowfish.c bsd-misc.c explicit_bzero.c fmt_scaled.c \
 .if ${MK_LDNS} == "no"
 SRCS+=	getrrsetbyname.c
 .else
-LDNSDIR=	${.CURDIR}/../../../contrib/ldns
+LDNSDIR=	${SRCTOP}/contrib/ldns
 CFLAGS+=	-DHAVE_LDNS=1 -I${LDNSDIR}
 SRCS+=	getrrsetbyname-ldns.c
 LIBADD+=	ldns
@@ -46,7 +46,7 @@ LIBADD+=	ldns
 CFLAGS+= -I${SSHDIR} -include ssh_namespace.h
 SRCS+=	 ssh_namespace.h
 
-.if ${MK_KERBEROS_SUPPORT} != "no"
+.if ${MK_GSSAPI} != "no" && ${MK_KERBEROS_SUPPORT} != "no"
 CFLAGS+= -include krb5_config.h
 SRCS+=	 krb5_config.h
 .endif

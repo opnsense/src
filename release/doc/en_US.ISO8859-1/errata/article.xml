@@ -1,27 +1,32 @@
 <?xml version="1.0" encoding="iso-8859-1"?>
 <!DOCTYPE article PUBLIC "-//FreeBSD//DTD DocBook XML V5.0-Based Extension//EN"
-        "http://www.FreeBSD.org/XML/share/xml/freebsd50.dtd" [
+	"http://www.FreeBSD.org/XML/share/xml/freebsd50.dtd" [
 <!ENTITY % release PUBLIC "-//FreeBSD//ENTITIES Release Specification//EN"
-        "http://www.FreeBSD.org/release/XML/release.ent">
+	"http://www.FreeBSD.org/release/XML/release.ent">
 %release;
+<!ENTITY % sponsor PUBLIC "-//FreeBSD//ENTITIES Sponsor Specification//EN" "sponsor.ent">
+%sponsor;
+<!ENTITY % vendor PUBLIC "-//FreeBSD//ENTITIES Vendor Specification//EN" "vendor.ent">
+%vendor;
 <!ENTITY security SYSTEM "../../share/xml/security.xml">
 <!ENTITY errata SYSTEM "../../share/xml/errata.xml">
 ]>
 
 <article xmlns="http://docbook.org/ns/docbook"
-	 xmlns:xlink="http://www.w3.org/1999/xlink"
-	 version="5.0">
+	xmlns:xlink="http://www.w3.org/1999/xlink"
+	version="5.0">
   <info>
-    <title>&os; &release; Errata </title>
+    <title>&os; &release; Errata</title>
 
     <author><orgname>The &os; Project</orgname></author>
 
     <pubdate>$FreeBSD$</pubdate>
 
     <copyright>
-      <year>2015</year>
+      <year>2017</year>
 
-      <holder role="mailto:doc@FreeBSD.org">The &os; Documentation Project</holder>
+      <holder role="mailto:doc@FreeBSD.org">The &os; Documentation
+	Project</holder>
     </copyright>
 
     <legalnotice xml:id="trademarks" role="trademarks">
@@ -33,45 +38,44 @@
 
     <abstract>
       <para>This document lists errata items for &os; &release;,
-	containing significant information discovered after the release
-	or too late in the release cycle to be otherwise included in the
-	release documentation.
-	This information includes security advisories, as well as news
-	relating to the software or documentation that could affect its
-	operation or usability.  An up-to-date version of this document
-	should always be consulted before installing this version of
+	containing significant information discovered after the
+	release or too late in the release cycle to be otherwise
+	included in the release documentation.  This information
+	includes security advisories, as well as news relating to the
+	software or documentation that could affect its operation or
+	usability.  An up-to-date version of this document should
+	always be consulted before installing this version of
 	&os;.</para>
 
-      <para>This errata document for &os; &release;
-	will be maintained until the release of &os; &release.next;.</para>
+      <para>This errata document for &os; &release; will be maintained
+	until the release of &os; &release.next;.</para>
     </abstract>
   </info>
 
   <sect1 xml:id="intro">
     <title>Introduction</title>
 
-    <para>This errata document contains <quote>late-breaking news</quote>
-      about &os; &release;
-      Before installing this version, it is important to consult this
-      document to learn about any post-release discoveries or problems
-      that may already have been found and fixed.</para>
+    <para>This errata document contains <quote>late-breaking
+	news</quote> about &os; &release; Before installing this
+      version, it is important to consult this document to learn about
+      any post-release discoveries or problems that may already have
+      been found and fixed.</para>
 
     <para>Any version of this errata document actually distributed
       with the release (for example, on a CDROM distribution) will be
       out of date by definition, but other copies are kept updated on
       the Internet and should be consulted as the <quote>current
-      errata</quote> for this release.  These other copies of the
-      errata are located at
-      <link xlink:href="https://www.FreeBSD.org/releases/" />,
-      plus any sites
-      which keep up-to-date mirrors of this location.</para>
+	errata</quote> for this release.  These other copies of the
+      errata are located at <link
+	xlink:href="https://www.FreeBSD.org/releases/" />, plus any
+      sites which keep up-to-date mirrors of this location.</para>
 
     <para>Source and binary snapshots of &os; &release.branch; also
       contain up-to-date copies of this document (as of the time of
       the snapshot).</para>
 
-    <para>For a list of all &os; CERT security advisories, see
-      <link xlink:href="https://www.FreeBSD.org/security/"/>.</para>
+    <para>For a list of all &os; CERT security advisories, see <link
+	xlink:href="https://www.FreeBSD.org/security/"/>.</para>
   </sect1>
 
   <sect1 xml:id="security">
@@ -89,7 +93,61 @@
   <sect1 xml:id="open-issues">
     <title>Open Issues</title>
 
-    <para>No open issues.</para>
+    <itemizedlist>
+      <listitem>
+	<para>&os;/&arch.i386; installed on ZFS may crash during boot
+	  when the ZFS pool mount is attempted while booting an
+	  unmodified <literal>GENERIC</literal> kernel.</para>
+
+	<para>A system tunable has been added as of revision
+	  <literal>r286584</literal> to make the
+	  <literal>kern.kstack_pages</literal> tunable configurable
+	  without recompiling the kernel.</para>
+
+	<para>To mitigate system crashes with such configurations,
+	  chose <literal>Escape to loader prompt</literal> in the boot
+	  menu and enter the following lines from &man.loader.8;
+	  prompt, after an <literal>OK</literal>:</para>
+
+	<screen>set kern.kstack_pages=4
+boot</screen>
+
+	<para>Add this line to
+	  <filename>/boot/loader.conf</filename> for the change to
+	  persist across reboots:</para>
+
+	<programlisting>kern.kstack_pages=4</programlisting>
+      </listitem>
+
+      <listitem>
+	<para>The size of the <acronym>GPT</acronym> enabled
+	  <acronym>ZFS</acronym> boot blocks
+	  (<filename>/boot/gptzfsboot</filename>) has increased past
+	  82K.  Systems upgraded from older releases may experience
+	  a problem where the size of the existing
+	  &quot;freebsd-boot&quot; partition is too small to hold the
+	  new <filename>gptzfsboot</filename>.</para>
+
+	<para>Systems where the boot partition is immediately followed
+	  by the swap partition, such as those installed via
+	  &man.bsdinstall.8;, can resize the swap partition slightly
+	  using the &man.gpart.8; <literal>resize</literal> command,
+	  so space can be reclaimed to increase the size of the
+	  freebsd-boot partition.</para>
+      </listitem>
+
+      <listitem>
+	<para>Due to a bug in earlier versions of &man.clang.1; that
+	  is difficult to work around in the upgrade process, to
+	  upgrade the system from sources via buildworld to -CURRENT
+	  or &release;, it is necessary to upgrade machines running
+	  10.x to revision r286033.  Source-based upgrades from
+	  10.3-RELEASE are not affected.  This differs from the
+	  historical situation where one could generally upgrade from
+	  anywhere on earlier stable branches, so caution should be
+	  exercised.</para>
+      </listitem>
+    </itemizedlist>
   </sect1>
 
   <sect1 xml:id="late-news">

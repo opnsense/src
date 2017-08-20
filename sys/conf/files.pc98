@@ -90,11 +90,11 @@ compat/svr4/svr4_syscallnames.c	optional compat_svr4
 compat/svr4/svr4_sysent.c	optional compat_svr4
 compat/svr4/svr4_sysvec.c	optional compat_svr4
 compat/svr4/svr4_termios.c	optional compat_svr4
-bf_enc.o			optional crypto | ipsec	\
+bf_enc.o			optional crypto | ipsec	| ipsec_support \
 	dependency	"$S/crypto/blowfish/arch/i386/bf_enc.S $S/crypto/blowfish/arch/i386/bf_enc_586.S $S/crypto/blowfish/arch/i386/bf_enc_686.S" \
 	compile-with	"${CC} -c -I$S/crypto/blowfish/arch/i386 ${ASM_CFLAGS} ${WERROR} ${.IMPSRC}" \
 	no-implicit-rule
-crypto/des/arch/i386/des_enc.S	optional crypto | ipsec | netsmb
+crypto/des/arch/i386/des_enc.S	optional crypto | ipsec | ipsec_support | netsmb
 dev/agp/agp_ali.c		optional agp
 dev/agp/agp_amd.c		optional agp
 dev/agp/agp_i810.c		optional agp
@@ -157,7 +157,6 @@ i386/i386/db_trace.c		optional ddb
 i386/i386/elf_machdep.c		standard
 i386/i386/exception.s		standard
 i386/i386/gdb_machdep.c		optional gdb
-i386/i386/i686_mem.c		optional mem
 i386/i386/in_cksum.c		optional inet | inet6
 i386/i386/initcpu.c		standard
 i386/i386/io.c			optional io
@@ -268,6 +267,7 @@ x86/x86/io_apic.c		optional apic
 x86/x86/legacy.c		standard
 x86/x86/local_apic.c		optional apic
 x86/x86/mca.c			standard
+x86/x86/x86_mem.c		optional mem
 x86/x86/mptable.c		optional apic
 x86/x86/mptable_pci.c		optional apic pci
 x86/x86/mp_x86.c		optional smp

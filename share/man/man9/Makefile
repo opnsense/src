@@ -744,6 +744,7 @@ MLINKS+=DRIVER_MODULE.9 DRIVER_MODULE_ORDERED.9 \
 	DRIVER_MODULE.9 EARLY_DRIVER_MODULE.9 \
 	DRIVER_MODULE.9 EARLY_DRIVER_MODULE_ORDERED.9
 MLINKS+=EVENTHANDLER.9 EVENTHANDLER_DECLARE.9 \
+	EVENTHANDLER.9 EVENTHANDLER_DEFINE.9 \
 	EVENTHANDLER.9 EVENTHANDLER_DEREGISTER.9 \
 	EVENTHANDLER.9 eventhandler_deregister.9 \
 	EVENTHANDLER.9 eventhandler_find_list.9 \
@@ -1089,7 +1090,6 @@ MLINKS+=\
 	mbuf.9 m_get2.9 \
 	mbuf.9 m_getjcl.9 \
 	mbuf.9 m_getcl.9 \
-	mbuf.9 m_getclr.9 \
 	mbuf.9 MGETHDR.9 \
 	mbuf.9 m_gethdr.9 \
 	mbuf.9 m_getm.9 \
@@ -1303,6 +1303,7 @@ MLINKS+=pci.9 pci_alloc_msi.9 \
 	pci.9 pci_get_vpd_ident.9 \
 	pci.9 pci_get_vpd_readonly.9 \
 	pci.9 pci_iov_attach.9 \
+	pci.9 pci_iov_attach_name.9 \
 	pci.9 pci_iov_detach.9 \
 	pci.9 pci_msi_count.9 \
 	pci.9 pci_msix_count.9 \
@@ -1318,7 +1319,10 @@ MLINKS+=pci.9 pci_alloc_msi.9 \
 	pci.9 pci_set_max_read_req.9 \
 	pci.9 pci_write_config.9 \
 	pci.9 pcie_adjust_config.9 \
+	pci.9 pcie_flr.9 \
+	pci.9 pcie_max_completion_timeout.9 \
 	pci.9 pcie_read_config.9 \
+	pci.9 pcie_wait_for_pending_transactions.9 \
 	pci.9 pcie_write_config.9
 MLINKS+=pci_iov_schema.9 pci_iov_schema_alloc_node.9 \
 	pci_iov_schema.9 pci_iov_schema_add_bool.9 \
@@ -1464,6 +1468,7 @@ MLINKS+=sbuf.9 sbuf_bcat.9 \
 	sbuf.9 sbuf_done.9 \
 	sbuf.9 sbuf_error.9 \
 	sbuf.9 sbuf_finish.9 \
+	sbuf.9 sbuf_hexdump.9 \
 	sbuf.9 sbuf_len.9 \
 	sbuf.9 sbuf_new.9 \
 	sbuf.9 sbuf_new_auto.9 \
@@ -1766,6 +1771,7 @@ MLINKS+=timeout.9 callout.9 \
 	timeout.9 callout_schedule_sbt_curcpu.9 \
 	timeout.9 callout_schedule_sbt_on.9 \
 	timeout.9 callout_stop.9 \
+	timeout.9 callout_when.9 \
 	timeout.9 untimeout.9
 MLINKS+=ucred.9 cred_update_thread.9 \
 	ucred.9 crcopy.9 \
@@ -1921,12 +1927,12 @@ MLINKS+=VOP_RDWR.9 VOP_READ.9 \
 	VOP_RDWR.9 VOP_WRITE.9
 MLINKS+=VOP_REMOVE.9 VOP_RMDIR.9
 MLINKS+=vnet.9 vimage.9
-MLINKS+=vref.9 VREF.9
+MLINKS+=vref.9 VREF.9 \
+	vref.9 vrefl.9
 MLINKS+=vrele.9 vput.9 \
 	vrele.9 vunref.9
 MLINKS+=vslock.9 vsunlock.9
 MLINKS+=zone.9 uma.9 \
-	zone.9 uma_find_refcnt.9 \
 	zone.9 uma_zalloc.9 \
 	zone.9 uma_zalloc_arg.9 \
 	zone.9 uma_zcreate.9 \

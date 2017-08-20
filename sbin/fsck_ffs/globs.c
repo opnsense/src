@@ -56,7 +56,8 @@ struct bufarea sblk;		/* file system superblock */
 struct bufarea *pdirbp;		/* current directory contents */
 struct bufarea *pbp;		/* current inode block */
 ino_t cursnapshot;
-long numdirs, dirhash, listmax, inplast;
+long  dirhash, inplast;
+unsigned long  numdirs, listmax;
 long countdirs;		/* number of directories we actually found */
 int	adjrefcnt[MIBSIZE];	/* MIB command to adjust inode reference cnt */
 int	adjblkcnt[MIBSIZE];	/* MIB command to adjust inode block count */
@@ -77,7 +78,7 @@ u_int	real_dev_bsize;		/* actual disk sector size, not overridden */
 char	nflag;			/* assume a no response */
 char	yflag;			/* assume a yes response */
 int	bkgrdflag;		/* use a snapshot to run on an active system */
-int	bflag;			/* location of alternate super block */
+ufs2_daddr_t bflag;		/* location of alternate super block */
 int	debug;			/* output debugging info */
 int	Eflag;			/* delete empty data blocks */
 int	Zflag;			/* zero empty data blocks */
@@ -123,7 +124,7 @@ fsckinit(void)
 	pdirbp = NULL;
 	pbp = NULL;
 	cursnapshot = 0;
-	numdirs = dirhash = listmax = inplast = 0;
+	listmax = numdirs = dirhash = inplast = 0;
 	countdirs = 0;
 	bzero(adjrefcnt, sizeof(int) * MIBSIZE);
 	bzero(adjblkcnt, sizeof(int) * MIBSIZE);
