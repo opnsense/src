@@ -613,6 +613,9 @@ pppoe_finduniq(node_p node, const struct pppoe_tag *tag)
 		if (NG_HOOK_PRIVATE(hook) == NULL)
 			continue;
 		sp = NG_HOOK_PRIVATE(hook);
+		/* Skip already connected sessions. */
+		if (sp->neg == NULL)
+			continue;
 		if (sp->neg->host_uniq_len == ntohs(tag->tag_len) &&
 		    bcmp(sp->neg->host_uniq.data, (const char *)(tag + 1),
 		     sp->neg->host_uniq_len) == 0)
