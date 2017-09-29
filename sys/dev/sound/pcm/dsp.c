@@ -43,11 +43,6 @@
 
 SND_DECLARE_FILE("$FreeBSD$");
 
-static int dsp_mmap_allow_prot_exec = 0;
-SYSCTL_INT(_hw_snd, OID_AUTO, compat_linux_mmap, CTLFLAG_RWTUN,
-    &dsp_mmap_allow_prot_exec, 0,
-    "linux mmap compatibility (-1=force disable 0=auto 1=force enable)");
-
 static int dsp_basename_clone = 1;
 SYSCTL_INT(_hw_snd, OID_AUTO, basename_clone, CTLFLAG_RWTUN,
     &dsp_basename_clone, 0,
@@ -2215,21 +2210,7 @@ dsp_mmap_single(struct cdev *i_dev, vm_ooffset_t *offset,
 	struct snddev_info *d;
 	struct pcm_channel *wrch, *rdch, *c;
 
-	/*
-	 * Reject PROT_EXEC by default. It just doesn't makes sense.
-	 * Unfortunately, we have to give up this one due to linux_mmap
-	 * changes.
-	 *
-	 * http://lists.freebsd.org/pipermail/freebsd-emulation/2007-June/003698.html
-	 *
-	 */
-#ifdef SV_ABI_LINUX
-	if ((nprot & PROT_EXEC) && (dsp_mmap_allow_prot_exec < 0 ||
-	    (dsp_mmap_allow_prot_exec == 0 &&
-	    SV_CURPROC_ABI() != SV_ABI_LINUX)))
-#else
-	if ((nprot & PROT_EXEC) && dsp_mmap_allow_prot_exec < 1)
-#endif
+	if (nprot & PROT_EXEC)
 		return (EINVAL);
 
 	/*

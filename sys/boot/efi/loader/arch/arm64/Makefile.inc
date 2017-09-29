@@ -23,4 +23,4 @@ loader.help: help.common
 FILES+=	loader.rc
 .endif
 
-NOPIE=	yes
+NOPIE=	1

@@ -72,7 +72,8 @@
 #define	KTR_SCHED	0x20000000		/* Machine parsed sched info. */
 #define	KTR_BUF		0x40000000		/* Buffer cache */
 #define	KTR_PTRACE	0x80000000		/* Process debugging. */
-#define	KTR_ALL		0xffffffff
+#define	KTR_PAX		0x100000000		/* PaX */
+#define	KTR_ALL		0x1ffffffff
 
 /* KTR trace classes to compile in */
 #ifdef KTR

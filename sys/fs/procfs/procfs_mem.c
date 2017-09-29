@@ -36,9 +36,12 @@
  * $FreeBSD$
  */
 
+#include "opt_pax.h"
+
 #include <sys/param.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
+#include <sys/pax.h>
 #include <sys/proc.h>
 #include <sys/ptrace.h>
 #include <sys/systm.h>
@@ -63,6 +66,10 @@ procfs_doprocmem(PFS_FILL_ARGS)
 
 	PROC_LOCK(p);
 	error = p_candebug(td, p);
+#ifdef PAX_HARDENING
+	if (error == 0)
+		error = pax_procfs_harden(td);
+#endif
 	PROC_UNLOCK(p);
 	if (error == 0)
 		error = proc_rwmem(p, uio);

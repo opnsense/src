@@ -3,7 +3,7 @@
 MAN=
 
 .if ${MACHINE_CPUARCH} == "aarch64"
-NOPIE=		yes
+NOPIE=		1
 .endif
 
 .include <src.opts.mk>

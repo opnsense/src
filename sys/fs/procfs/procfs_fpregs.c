@@ -38,11 +38,13 @@
  */
 
 #include "opt_compat.h"
+#include "opt_pax.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
+#include <sys/pax.h>
 #include <sys/proc.h>
 #include <sys/ptrace.h>
 #include <sys/sysent.h>
@@ -120,11 +122,17 @@ procfs_doprocfpregs(PFS_FILL_ARGS)
 		PROC_LOCK(p);
 	}
 	if (error == 0 && uio->uio_rw == UIO_WRITE) {
-		if (!P_SHOULDSTOP(p))
+		if (!P_SHOULDSTOP(p)) {
 			error = EBUSY;
-		else
+		}
+#ifdef PAX_HARDENING
+		else if ((error = pax_procfs_harden(td2)) == 0) {
+#else
+		else {
+#endif
 			/* XXXKSE: */
 			error = PROC(write, fpregs, td2, &r);
+		}
 	}
 	PROC_UNLOCK(p);
 

@@ -51,9 +51,8 @@ CFLAGS+=	-m32
 .if ${MACHINE_CPUARCH} == "mips"
 CFLAGS+=	-mno-abicalls
 .endif
-
 .if ${MACHINE_CPUARCH} == "aarch64"
-NOPIE=		yes
+NOPIE=		1
 .endif
 
 

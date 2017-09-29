@@ -4,7 +4,7 @@
 FICLDIR?=	${.CURDIR}
 
 .if ${MACHINE_CPUARCH} == "aarch64"
-NOPIE=		yes
+NOPIE=		1
 .endif
 
 .if defined(FICL32)

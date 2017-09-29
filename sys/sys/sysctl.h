@@ -982,6 +982,7 @@ SYSCTL_DECL(_compat);
 SYSCTL_DECL(_regression);
 SYSCTL_DECL(_security);
 SYSCTL_DECL(_security_bsd);
+SYSCTL_DECL(_hardening);
 
 extern char	machine[];
 extern char	osrelease[];

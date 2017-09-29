@@ -47,6 +47,7 @@ __FBSDID("$FreeBSD$");
 #include "opt_compat.h"
 #include "opt_inet.h"
 #include "opt_inet6.h"
+#include "opt_pax.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -57,6 +58,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/loginclass.h>
 #include <sys/malloc.h>
 #include <sys/mutex.h>
+#include <sys/pax.h>
 #include <sys/refcount.h>
 #include <sys/sx.h>
 #include <sys/priv.h>
@@ -1327,7 +1329,11 @@ securelevel_ge(struct ucred *cr, int level)
  * using a variety of system MIBs.
  * XXX: data declarations should be together near the beginning of the file.
  */
+#ifdef PAX_HARDENING
+static int	see_other_uids = 0;
+#else
 static int	see_other_uids = 1;
+#endif
 SYSCTL_INT(_security_bsd, OID_AUTO, see_other_uids, CTLFLAG_RW,
     &see_other_uids, 0,
     "Unprivileged processes may see subjects/objects with different real uid");
@@ -1357,7 +1363,11 @@ cr_seeotheruids(struct ucred *u1, struct ucred *u2)
  * using a variety of system MIBs.
  * XXX: data declarations should be together near the beginning of the file.
  */
+#ifdef PAX_HARDENING
+static int	see_other_gids = 0;
+#else
 static int	see_other_gids = 1;
+#endif
 SYSCTL_INT(_security_bsd, OID_AUTO, see_other_gids, CTLFLAG_RW,
     &see_other_gids, 0,
     "Unprivileged processes may see subjects/objects with different real gid");
@@ -1611,7 +1621,11 @@ p_cansched(struct thread *td, struct proc *p)
  * XXX: Should modifying and reading this variable require locking?
  * XXX: data declarations should be together near the beginning of the file.
  */
+#ifdef PAX_HARDENING
+static int	unprivileged_proc_debug = 0;
+#else
 static int	unprivileged_proc_debug = 1;
+#endif
 SYSCTL_INT(_security_bsd, OID_AUTO, unprivileged_proc_debug, CTLFLAG_RW,
     &unprivileged_proc_debug, 0,
     "Unprivileged processes may use process debugging facilities");
