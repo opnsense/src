@@ -95,8 +95,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/pmckern.h>
 #endif
 
-static int check_address_limit(struct thread *, vm_offset_t, bool);
-
 int old_mlock = 0;
 SYSCTL_INT(_vm, OID_AUTO, old_mlock, CTLFLAG_RWTUN, &old_mlock, 0,
     "Do not apply RLIMIT_MEMLOCK on mlockall");
@@ -110,26 +108,6 @@ struct sbrk_args {
 	int incr;
 };
 #endif
-
-static int
-check_address_limit(struct thread *td, vm_offset_t addr, bool needlock)
-{
-	rlim_t stacklim;
-	int error;
-
-	error = 0;
-	stacklim = lim_cur(td, RLIMIT_STACK);
-
-	if (needlock)
-		PROC_LOCK(td->td_proc);
-	if (addr >= td->td_proc->p_usrstack - stacklim)
-		error = EINVAL;
-	if (needlock)
-		PROC_UNLOCK(td->td_proc);
-
-	return (error);
-}
-
 int
 sys_sbrk(struct thread *td, struct sbrk_args *uap)
 {
@@ -312,11 +290,6 @@ kern_mmap(struct thread *td, uintptr_t addr0, size_t size, int prot, int flags,
 			return (EINVAL);
 		if (addr + size < addr)
 			return (EINVAL);
-
-		/* Address range must be below stack limits. */
-		error = check_address_limit(td, addr, true);
-		if (error)
-			return (error);
 #ifdef MAP_32BIT
 		if (flags & MAP_32BIT && addr + size > MAP_32BIT_MAX_ADDR)
 			return (EINVAL);
@@ -354,10 +327,7 @@ kern_mmap(struct thread *td, uintptr_t addr0, size_t size, int prot, int flags,
 		PROC_LOCK(td->td_proc);
 		pax_aslr_mmap(td->td_proc, &addr, addr0, flags);
 		pax_aslr_done = 1;
-		error = check_address_limit(td, addr, false);
 		PROC_UNLOCK(td->td_proc);
-		if (error)
-			return (error);
 #endif
 	}
 	if (size == 0) {

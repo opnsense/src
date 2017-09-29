@@ -151,14 +151,6 @@ static void vm_map_wire_entry_failure(vm_map_t map, vm_map_entry_t entry,
     vm_offset_t failed_addr);
 static int sysctl_stack_guard_page(SYSCTL_HANDLER_ARGS);
 
-#ifndef STACK_GUARD_MAX_PAGES
-/*
- * XXX - Shawn Webb (2017-07-02)
- * Kostik's MAP_GUARD isn't ready for more than a single page.
- */
-#define	STACK_GUARD_MAX_PAGES	1
-#endif
-
 #define	ENTRY_CHARGED(e) ((e)->cred != NULL || \
     ((e)->object.vm_object != NULL && (e)->object.vm_object->cred != NULL && \
      !((e)->eflags & MAP_ENTRY_NEEDS_COPY)))
@@ -3596,25 +3588,23 @@ vmspace_fork(struct vmspace *vm1, vm_ooffset_t *fork_charge)
 	return (vm2);
 }
 
+/*
+ * Create a process's stack for exec_new_vmspace().  This function is never
+ * asked to wire the newly created stack.
+ */
 int
 vm_map_stack(vm_map_t map, vm_offset_t addrbos, vm_size_t max_ssize,
     vm_prot_t prot, vm_prot_t max, int cow)
 {
 	vm_size_t growsize, init_ssize;
-	rlim_t lmemlim, vmemlim;
+	rlim_t vmemlim;
 	int rv;
 
+	MPASS((map->flags & MAP_WIREFUTURE) == 0);
 	growsize = sgrowsiz;
 	init_ssize = (max_ssize < growsize) ? max_ssize : growsize;
 	vm_map_lock(map);
-	lmemlim = lim_cur(curthread, RLIMIT_MEMLOCK);
 	vmemlim = lim_cur(curthread, RLIMIT_VMEM);
-	if (!old_mlock && map->flags & MAP_WIREFUTURE) {
-		if (ptoa(pmap_wired_count(map->pmap)) + init_ssize > lmemlim) {
-			rv = KERN_NO_SPACE;
-			goto out;
-		}
-	}
 	/* If we would blow our VMEM resource limit, no go */
 	if (map->size + init_ssize > vmemlim) {
 		rv = KERN_NO_SPACE;
@@ -3628,11 +3618,18 @@ out:
 }
 
 static int stack_guard_page = 1;
+#ifdef PAX_HARDENING
 SYSCTL_PROC(_security_bsd, OID_AUTO, stack_guard_page, CTLTYPE_INT|
     CTLFLAG_RWTUN|CTLFLAG_SECURE, NULL, 0, sysctl_stack_guard_page,
     "I",
     "Specifies the number of guard pages for a stack that grows");
+#else
+SYSCTL_INT(_security_bsd, OID_AUTO, stack_guard_page, CTLFLAG_RWTUN,
+    &stack_guard_page, 0,
+    "Specifies the number of guard pages for a stack that grows");
+#endif
 
+#ifdef PAX_HARDENING
 static int
 sysctl_stack_guard_page(SYSCTL_HANDLER_ARGS)
 {
@@ -3643,13 +3640,25 @@ sysctl_stack_guard_page(SYSCTL_HANDLER_ARGS)
 	if (err || req->newptr == NULL)
 		return (err);
 
-	if (val < 0 || val > STACK_GUARD_MAX_PAGES)
-		return (EINVAL);
+	switch (val) {
+	case 0:
+		/* FALLTHROUGH */
+	case 1:
+		stack_guard_page = val;
+		err = 0;
+		break;
+	default:
+		/*
+		 * kib@'s MAP_GUARD isn't ready for more
+		 * than a single page.
+		 */
+		err = EINVAL;
+		break;
+	}
 
-	stack_guard_page = val;
-
-	return (0);
+	return (err);
 }
+#endif
 
 static int
 vm_map_stack_locked(vm_map_t map, vm_offset_t addrbos, vm_size_t max_ssize,
@@ -3758,7 +3767,15 @@ vm_map_growstack(vm_map_t map, vm_offset_t addr, vm_map_entry_t gap_entry)
 
 	p = curproc;
 	vm = p->p_vmspace;
-	MPASS(map == &p->p_vmspace->vm_map);
+
+	/*
+	 * Disallow stack growth when the access is performed by a
+	 * debugger or AIO daemon.  The reason is that the wrong
+	 * resource limits are applied.
+	 */
+	if (map != &p->p_vmspace->vm_map || p->p_textvp == NULL)
+		return (KERN_FAILURE);
+
 	MPASS(!map->system_map);
 
 	guard = stack_guard_page * PAGE_SIZE;
