@@ -5696,8 +5696,11 @@ pf_route_shared(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *ifp,
 		goto bad;
 
 done:
-	if (r->rt == PF_DUPTO && IP_HAS_NEXTHOP(m0))
+	if ((r->rt == PF_DUPTO || r->rt == PF_REPLYTO) && IP_HAS_NEXTHOP(m0)) {
 		ip_forward(m0, 1);
+		if (r->rt == PF_REPLYTO)
+			*m = NULL;
+	}
 	return;
 
 bad_locked:
@@ -5933,8 +5936,11 @@ pf_route6_shared(struct mbuf **m, struct pf_rule *r, int dir,
 		goto bad;
 
 done:
-	if (r->rt == PF_DUPTO && IP6_HAS_NEXTHOP(m0))
+	if ((r->rt == PF_DUPTO || r->rt == PF_REPLYTO) && IP6_HAS_NEXTHOP(m0)) {
 		ip6_forward(m0, 1);
+		if (r->rt == PF_REPLYTO)
+			*m = NULL;
+	}
 
 	return;
 
