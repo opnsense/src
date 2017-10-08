@@ -374,13 +374,8 @@ SYSCTL_ULONG(_net_pf, OID_AUTO, states_hashsize, CTLFLAG_RDTUN,
 SYSCTL_ULONG(_net_pf, OID_AUTO, source_nodes_hashsize, CTLFLAG_RDTUN,
     &pf_srchashsize, 0, "Size of pf(4) source nodes hashtable");
 
-#ifdef PF_SHARE_FORWARD
-static VNET_DEFINE(int, pf_share_forward) = 1;
-static VNET_DEFINE(int, pf_share_forward6) = 1;
-#else
 static VNET_DEFINE(int, pf_share_forward) = 0;
 static VNET_DEFINE(int, pf_share_forward6) = 0;
-#endif
 
 #define	V_pf_share_forward	VNET(pf_share_forward)
 #define	V_pf_share_forward6	VNET(pf_share_forward6)
