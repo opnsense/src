@@ -986,9 +986,6 @@ PAX_ASLR_COMPAT_DELTA_VDSO_DEF_LEN	opt_pax.h
 # Other hardening features
 STACK_GUARD_SIZE	opt_pax.h
 
-# OPNsense additions
-PF_SHARE_FORWARD	opt_pf.h
-
 # Random number generator(s)
 # Which CSPRNG hash we get.
 # If Yarrow is not chosen, Fortuna is selected.
