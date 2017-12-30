@@ -1102,7 +1102,7 @@ vlan_transmit(struct ifnet *ifp, struct mbuf *m)
 	 * knows how to find the VLAN tag to use, so we attach a
 	 * packet tag that holds it.
 	 */
-	if (vlan_mtag_pcp && (mtag = m_tag_locate(m, MTAG_8021Q,
+	if ((mtag = m_tag_locate(m, MTAG_8021Q,
 	    MTAG_8021Q_PCP_OUT, NULL)) != NULL)
 		tag = EVL_MAKETAG(ifv->ifv_vid, *(uint8_t *)(mtag + 1), 0);
 	else
