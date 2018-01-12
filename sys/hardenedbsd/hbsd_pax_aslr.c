@@ -200,11 +200,7 @@ static int pax_aslr_exec_len = PAX_ASLR_DELTA_EXEC_DEF_LEN;
 static int pax_aslr_vdso_len = PAX_ASLR_DELTA_VDSO_DEF_LEN;
 #ifdef MAP_32BIT
 static int pax_aslr_map32bit_len = PAX_ASLR_DELTA_MAP32BIT_DEF_LEN;
-#ifdef PAX_HARDENING
-static int pax_disallow_map32bit_status_global = PAX_FEATURE_OPTOUT;
-#else
 static int pax_disallow_map32bit_status_global = PAX_FEATURE_OPTIN;
-#endif
 #endif
 
 #ifdef COMPAT_FREEBSD32
