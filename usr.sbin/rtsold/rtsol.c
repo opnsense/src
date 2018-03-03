@@ -375,8 +375,6 @@ rtsol_input(int s)
 		    "OtherConfigFlag on %s is turned on", ifi->ifname);
 		ifi->otherconfig = 1;
 		CALL_SCRIPT(OTHER, NULL);
-	} else {
-		CALL_SCRIPT(OTHER, NULL);
 	}
 	clock_gettime(CLOCK_MONOTONIC_FAST, &now);
 	newent_rai = 0;
