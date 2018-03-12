@@ -51,6 +51,7 @@ __FBSDID("$FreeBSD$");
 #include "opt_kstack_pages.h"
 #include "opt_maxmem.h"
 #include "opt_mp_watchdog.h"
+#include "opt_pax.h"
 #include "opt_perfmon.h"
 #include "opt_platform.h"
 #ifdef __i386__
@@ -588,7 +589,11 @@ nmi_handle_intr(u_int type, struct trapframe *frame)
 }
 
 int hw_ibrs_active;
+#ifdef PAX
+int hw_ibrs_disable = 0;
+#else
 int hw_ibrs_disable = 1;
+#endif
 
 SYSCTL_INT(_hw, OID_AUTO, ibrs_active, CTLFLAG_RD, &hw_ibrs_active, 0,
     "Indirect Branch Restricted Speculation active");
