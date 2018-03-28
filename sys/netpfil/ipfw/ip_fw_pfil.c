@@ -144,7 +144,6 @@ ipfw_check_packet(void *arg, struct mbuf **m0, struct ifnet *ifp, int dir,
 #endif
 #ifdef INET
 	case IPVERSION:
-		/* restore the correct forwarding interface */
 		if (IP_HAS_NEXTHOP(*m0)) {
 			ip_get_fwdtag(*m0, NULL, &ifidx);
 		}
