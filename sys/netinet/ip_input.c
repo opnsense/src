@@ -1022,9 +1022,21 @@ ip_forward(struct mbuf *m, int srcrt)
 		m_copydata(m, 0, mcopy->m_len, mtod(mcopy, caddr_t));
 	}
 #ifdef IPSTEALTH
-	if (V_ipstealth == 0)
+	if (V_ipstealth == 0) {
 #endif
-		ip->ip_ttl -= IPTTLDEC;
+	/*
+	 * Decrement the TTL and incrementally change the IP header checksum.
+	 * Don't bother doing this with hw checksum offloading, it's faster
+	 * doing it right here.
+	 */
+	ip->ip_ttl -= IPTTLDEC;
+	if (ip->ip_sum >= (u_int16_t) ~htons(IPTTLDEC << 8))
+		ip->ip_sum -= ~htons(IPTTLDEC << 8);
+	else
+		ip->ip_sum += htons(IPTTLDEC << 8);
+#ifdef IPSTEALTH
+        }
+#endif
 #if defined(IPSEC) || defined(IPSEC_SUPPORT)
 	if (IPSEC_ENABLED(ipv4)) {
 		if ((error = IPSEC_FORWARD(ipv4, m)) != 0) {
