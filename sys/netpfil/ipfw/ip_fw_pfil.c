@@ -125,7 +125,7 @@ ipfw_check_packet(void *arg, struct mbuf **m0, struct ifnet *ifp, int dir,
 {
 	struct ip_fw_args args;
 	struct m_tag *tag;
-	u_short ifidx;
+	u_short ifidx = 0;
 	int ipfw;
 	int ret;
 
@@ -134,14 +134,30 @@ ipfw_check_packet(void *arg, struct mbuf **m0, struct ifnet *ifp, int dir,
 	bzero(&args, sizeof(args));
 
 	/* restore the correct forwarding interface */
-	if (dir == DIR_OUT && IP_HAS_NEXTHOP(*m0) &&
-	    !ip_get_fwdtag(*m0, NULL, &ifidx)) {
+	if (dir == DIR_OUT) switch (mtod(*m0, struct ip *)->ip_v) {
+#ifdef INET6
+	case IPV6_VERSION >> 4:
+		if (IP6_HAS_NEXTHOP(*m0)) {
+			ip6_get_fwdtag(*m0, NULL, &ifidx);
+		}
+		/* FALLTHROUGH */
+#endif
+#ifdef INET
+	case IPVERSION:
+		/* restore the correct forwarding interface */
+		if (IP_HAS_NEXTHOP(*m0)) {
+			ip_get_fwdtag(*m0, NULL, &ifidx);
+		}
+		/* FALLTHROUGH */
+#endif
+	default:
 		if (ifidx != 0) {
 			struct ifnet *nifp = ifnet_byindex(ifidx);
 			if (nifp != NULL) {
 				ifp = nifp;
 			}
 		}
+		break;
 	}
 
 again:
