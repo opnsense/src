@@ -437,6 +437,23 @@ script, and expiry times are ignored.
 A typical alias declaration includes an interface declaration, a fixed-address
 declaration for the IP alias address, and a subnet-mask option declaration.
 A medium statement should never be included in an alias declaration.
+.Sh VLAN DECLARATIONS
+In order to be able to send a request using a specific VLAN PCP all of the
+following options are required to emit a properly formed frame.
+.Bl -tag -width indent
+.It Ic vlan-parent Qo Ar interface Qc ;
+The
+.Ic vlan-parent
+allows attaching to the parent interface of the VLAN.
+.It Ic vlan-id Ar identifier ;
+The
+.Ic vlan-id
+sets the desired indentifier of the VLAN.
+.It Ic vlan-pcp Ar priority ;
+The
+.Ic vlan-pcp
+sets the desired priority code point value of the VLAN.
+.El
 .Sh OTHER DECLARATIONS
 .Bl -tag -width indent
 .It Ic reject Ar ip-address ;
