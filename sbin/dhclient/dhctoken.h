@@ -129,6 +129,9 @@
 #define AUTHORITATIVE	333
 #define TOKEN_NOT	334
 #define ALWAYS_REPLY_RFC1048 335
+#define VLAN_ID		336
+#define VLAN_PCP	337
+#define VLAN_PARENT	338
 
 #define is_identifier(x)	((x) >= FIRST_TOKEN &&	\
 				 (x) != STRING &&	\
