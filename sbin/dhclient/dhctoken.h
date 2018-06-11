@@ -132,6 +132,7 @@
 #define VLAN_ID		336
 #define VLAN_PCP	337
 #define VLAN_PARENT	338
+#define RFC3118_AUTH	339
 
 #define is_identifier(x)	((x) >= FIRST_TOKEN &&	\
 				 (x) != STRING &&	\
