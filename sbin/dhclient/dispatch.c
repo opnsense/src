@@ -74,6 +74,7 @@ static int interface_status(struct interface_info *ifinfo);
 void
 discover_interfaces(struct interface_info *iface)
 {
+	char *pname = iface->client->config->vlan_parent;
 	struct ifaddrs *ifap, *ifa;
 	struct ifreq *tif;
 
@@ -143,7 +144,20 @@ discover_interfaces(struct interface_info *iface)
 
 	/* Register the interface... */
 	if_register_receive(iface);
-	if_register_send(iface);
+	if (pname != NULL) {
+		char rname[IFNAMSIZ];
+
+		/* Change interface name for bpf registration */
+		strlcpy(rname, iface->name, IFNAMSIZ);
+		strlcpy(iface->ifp->ifr_name, pname, IFNAMSIZ);
+
+		if_register_send(iface);
+
+		/* Change name back to original */
+		strlcpy(iface->ifp->ifr_name, rname, IFNAMSIZ);
+	} else {
+		if_register_send(iface);
+	}
 	add_protocol(iface->name, iface->rfdesc, got_one, iface);
 	freeifaddrs(ifap);
 }
