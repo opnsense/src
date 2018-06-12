@@ -467,6 +467,8 @@ intern(char *atom, int dfv)
 			return (REBOOT);
 		if (!strcasecmp(atom + 1, "eject"))
 			return (REJECT);
+		if (!strcasecmp(atom + 1, "fc3118-auth"))
+			return (REJECT);		
 		break;
 	case 's':
 		if (!strcasecmp(atom + 1, "earch"))
