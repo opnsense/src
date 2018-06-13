@@ -199,6 +199,24 @@ static em_vendor_info_t em_vendor_info_array[] =
 	{ 0x8086, E1000_DEV_ID_PCH_SPT_I219_LM5,
 						PCI_ANY_ID, PCI_ANY_ID, 0},
 	{ 0x8086, E1000_DEV_ID_PCH_SPT_I219_V5, PCI_ANY_ID, PCI_ANY_ID, 0},
+	{ 0x8086, E1000_DEV_ID_PCH_SPT_I219_LM4,
+						PCI_ANY_ID, PCI_ANY_ID, 0},
+	{ 0x8086, E1000_DEV_ID_PCH_SPT_I219_V4, PCI_ANY_ID, PCI_ANY_ID, 0},
+	{ 0x8086, E1000_DEV_ID_PCH_SPT_I219_LM5,
+						PCI_ANY_ID, PCI_ANY_ID, 0},
+	{ 0x8086, E1000_DEV_ID_PCH_SPT_I219_V5, PCI_ANY_ID, PCI_ANY_ID, 0},
+	{ 0x8086, E1000_DEV_ID_PCH_CNP_I219_LM6,
+						PCI_ANY_ID, PCI_ANY_ID, 0},
+	{ 0x8086, E1000_DEV_ID_PCH_CNP_I219_V6, PCI_ANY_ID, PCI_ANY_ID, 0},
+	{ 0x8086, E1000_DEV_ID_PCH_CNP_I219_LM7,
+						PCI_ANY_ID, PCI_ANY_ID, 0},
+	{ 0x8086, E1000_DEV_ID_PCH_CNP_I219_V7, PCI_ANY_ID, PCI_ANY_ID, 0},
+	{ 0x8086, E1000_DEV_ID_PCH_ICP_I219_LM8,
+						PCI_ANY_ID, PCI_ANY_ID, 0},
+	{ 0x8086, E1000_DEV_ID_PCH_ICP_I219_V8, PCI_ANY_ID, PCI_ANY_ID, 0},
+	{ 0x8086, E1000_DEV_ID_PCH_ICP_I219_LM9,
+						PCI_ANY_ID, PCI_ANY_ID, 0},
+	{ 0x8086, E1000_DEV_ID_PCH_ICP_I219_V9, PCI_ANY_ID, PCI_ANY_ID, 0},
 	/* required last entry */
 	{ 0, 0, 0, 0, 0}
 };
@@ -369,11 +387,6 @@ MODULE_DEPEND(em, netmap, 1, 1, 1);
 
 #define MAX_INTS_PER_SEC	8000
 #define DEFAULT_ITR		(1000000000/(MAX_INTS_PER_SEC * 256))
-
-/* Allow common code without TSO */
-#ifndef CSUM_TSO
-#define CSUM_TSO	0
-#endif
 
 #define TSO_WORKAROUND	4
 
@@ -592,7 +605,7 @@ em_attach(device_t dev)
 	** so use the same tag and an offset handle for the
 	** FLASH read/write macros in the shared code.
 	*/
-	else if (hw->mac.type == e1000_pch_spt) {
+	else if (hw->mac.type >= e1000_pch_spt) {
 		adapter->osdep.flash_bus_space_tag =
 		    adapter->osdep.mem_bus_space_tag;
 		adapter->osdep.flash_bus_space_handle =
@@ -1195,6 +1208,7 @@ em_ioctl(if_t ifp, u_long command, caddr_t data)
 		case e1000_pch2lan:
 		case e1000_pch_lpt:
 		case e1000_pch_spt:
+		case e1000_pch_cnp:
 		case e1000_82574:
 		case e1000_82583:
 		case e1000_80003es2lan:	/* 9K Jumbo Frame size */
@@ -1394,18 +1408,10 @@ em_init_locked(struct adapter *adapter)
 	E1000_WRITE_REG(&adapter->hw, E1000_VET, ETHERTYPE_VLAN);
 
 	/* Set hardware offload abilities */
-	if_clearhwassist(ifp);
 	if (if_getcapenable(ifp) & IFCAP_TXCSUM)
 		if_sethwassistbits(ifp, CSUM_TCP | CSUM_UDP, 0);
-	/* 
-	** There have proven to be problems with TSO when not
-	** at full gigabit speed, so disable the assist automatically
-	** when at lower speeds.  -jfv
-	*/
-	if (if_getcapenable(ifp) & IFCAP_TSO4) {
-		if (adapter->link_speed == SPEED_1000)
-			if_sethwassistbits(ifp, CSUM_TSO, 0);
-	}
+	else
+		if_sethwassistbits(ifp, 0, CSUM_TCP | CSUM_UDP);
 
 	/* Configure for OS presence */
 	em_init_manageability(adapter);
@@ -1920,7 +1926,7 @@ em_xmit(struct tx_ring *txr, struct mbuf **m_headp)
 	bool			do_tso, tso_desc, remap = TRUE;
 
 	m_head = *m_headp;
-	do_tso = (m_head->m_pkthdr.csum_flags & CSUM_TSO);
+	do_tso = m_head->m_pkthdr.csum_flags & CSUM_IP_TSO;
 	tso_desc = FALSE;
 	ip_off = poff = 0;
 
@@ -2107,7 +2113,7 @@ retry:
 	m_head = *m_headp;
 
 	/* Do hardware assists */
-	if (m_head->m_pkthdr.csum_flags & CSUM_TSO) {
+	if (m_head->m_pkthdr.csum_flags & CSUM_IP_TSO) {
 		em_tso_setup(txr, m_head, ip_off, ip, tp,
 		    &txd_upper, &txd_lower);
 		/* we need to make a final sentinel transmit desc */
@@ -2413,6 +2419,19 @@ em_update_link_status(struct adapter *adapter)
 	if (link_check && (adapter->link_active == 0)) {
 		e1000_get_speed_and_duplex(hw, &adapter->link_speed,
 		    &adapter->link_duplex);
+
+		/*
+		** There have proven to be problems with TSO when not at full
+		** gigabit speed, so disable the assist automatically when at
+		** lower speeds.  -jfv
+		*/
+		if (if_getcapenable(ifp) & IFCAP_TSO4) {
+			if (adapter->link_speed == SPEED_1000)
+				if_sethwassistbits(ifp, CSUM_IP_TSO, 0);
+			else
+				if_sethwassistbits(ifp, 0, CSUM_IP_TSO);
+		}
+
 		/* Check if we must disable SPEED_MODE bit on PCI-E */
 		if ((adapter->link_speed != SPEED_1000) &&
 		    ((hw->mac.type == e1000_82571) ||
@@ -2549,7 +2568,7 @@ em_allocate_pci_resources(struct adapter *adapter)
  *  Setup the Legacy or MSI Interrupt handler
  *
  **********************************************************************/
-int
+static int
 em_allocate_legacy(struct adapter *adapter)
 {
 	device_t dev = adapter->dev;
@@ -2606,7 +2625,7 @@ em_allocate_legacy(struct adapter *adapter)
  *   for TX, RX, and Link.
  *
  **********************************************************************/
-int
+static int
 em_allocate_msix(struct adapter *adapter)
 {
 	device_t	dev = adapter->dev;
@@ -3073,6 +3092,7 @@ em_reset(struct adapter *adapter)
 	case e1000_pch2lan:
 	case e1000_pch_lpt:
 	case e1000_pch_spt:
+	case e1000_pch_cnp:
 		pba = E1000_PBA_26K;
 		break;
 	default:
@@ -3132,6 +3152,7 @@ em_reset(struct adapter *adapter)
 	case e1000_pch2lan:
 	case e1000_pch_lpt:
 	case e1000_pch_spt:
+	case e1000_pch_cnp:
 		hw->fc.high_water = 0x5C20;
 		hw->fc.low_water = 0x5048;
 		hw->fc.pause_time = 0x0650;
@@ -3219,12 +3240,9 @@ em_setup_interface(device_t dev, struct adapter *adapter)
 
 	ether_ifattach(ifp, adapter->hw.mac.addr);
 
-	if_setcapabilities(ifp, 0);
-	if_setcapenable(ifp, 0);
+	if_setcapabilities(ifp, IFCAP_HWCSUM | IFCAP_VLAN_HWCSUM);
+	if_setcapenable(ifp, if_getcapabilities(ifp));
 
-
-	if_setcapabilitiesbit(ifp, IFCAP_HWCSUM | IFCAP_VLAN_HWCSUM |
-	    IFCAP_TSO4, 0);
 	/*
 	 * Tell the upper layer(s) we
 	 * support full VLAN capability
@@ -3232,7 +3250,25 @@ em_setup_interface(device_t dev, struct adapter *adapter)
 	if_setifheaderlen(ifp, sizeof(struct ether_vlan_header));
 	if_setcapabilitiesbit(ifp, IFCAP_VLAN_HWTAGGING | IFCAP_VLAN_HWTSO |
 	    IFCAP_VLAN_MTU, 0);
-	if_setcapenable(ifp, if_getcapabilities(ifp));
+	if_setcapenablebit(ifp, IFCAP_VLAN_HWTAGGING | IFCAP_VLAN_MTU, 0);
+
+	/*
+	 * We don't enable IFCAP_{TSO4,VLAN_HWTSO} by default because:
+	 * - Although the silicon bug of TSO only working at gigabit speed is
+	 *   worked around in em_update_link_status() by selectively setting
+	 *   CSUM_IP_TSO, we cannot atomically flush already queued TSO-using
+	 *   descriptors.  Thus, such descriptors may still cause the MAC to
+	 *   hang and, consequently, TSO is only safe to be used in setups
+	 *   where the link isn't expected to switch from gigabit to lower
+	 *   speeds.
+	 * - Similarly, there's currently no way to trigger a reconfiguration
+	 *   of vlan(4) when the state of IFCAP_VLAN_HWTSO support changes at
+	 *   runtime.  Therefore, IFCAP_VLAN_HWTSO also only is safe to use
+	 *   when link speed changes are not to be expected.
+	 * - Despite all the workarounds for TSO-related silicon bugs, at
+	 *   least 82579 still may hang at gigabit speed with IFCAP_TSO4.
+	 */
+	if_setcapabilitiesbit(ifp, IFCAP_TSO4 | IFCAP_VLAN_HWTSO, 0);
 
 	/*
 	** Don't turn this on by default, if vlans are
@@ -3758,13 +3794,16 @@ em_initialize_transmit_unit(struct adapter *adapter)
 	/* This write will effectively turn on the transmit unit. */
 	E1000_WRITE_REG(&adapter->hw, E1000_TCTL, tctl);
 
+	/* SPT and KBL errata workarounds */
 	if (hw->mac.type == e1000_pch_spt) {
 		u32 reg;
 		reg = E1000_READ_REG(hw, E1000_IOSFPC);
 		reg |= E1000_RCTL_RDMTS_HEX;
 		E1000_WRITE_REG(hw, E1000_IOSFPC, reg);
+		/* i218-i219 Specification Update 1.5.4.5 */
 		reg = E1000_READ_REG(hw, E1000_TARC(0));
-		reg |= E1000_TARC0_CB_MULTIQ_3_REQ;
+		reg &= ~E1000_TARC0_CB_MULTIQ_3_REQ;
+		reg |= E1000_TARC0_CB_MULTIQ_2_REQ;
 		E1000_WRITE_REG(hw, E1000_TARC(0), reg);
 	}
 }
@@ -5274,6 +5313,9 @@ em_get_wakeup(device_t dev)
 	case e1000_ich10lan:
 	case e1000_pchlan:
 	case e1000_pch2lan:
+	case e1000_pch_lpt:
+	case e1000_pch_spt:
+	case e1000_pch_cnp:
 		apme_mask = E1000_WUC_APME;
 		adapter->has_amt = TRUE;
 		eeprom_data = E1000_READ_REG(&adapter->hw, E1000_WUC);
@@ -5322,31 +5364,12 @@ em_enable_wakeup(device_t dev)
 {
 	struct adapter	*adapter = device_get_softc(dev);
 	if_t ifp = adapter->ifp;
+	int		error = 0;
 	u32		pmc, ctrl, ctrl_ext, rctl;
 	u16     	status;
 
-	if ((pci_find_cap(dev, PCIY_PMG, &pmc) != 0))
+	if (pci_find_cap(dev, PCIY_PMG, &pmc) != 0)
 		return;
-
-	/* Advertise the wakeup capability */
-	ctrl = E1000_READ_REG(&adapter->hw, E1000_CTRL);
-	ctrl |= (E1000_CTRL_SWDPIN2 | E1000_CTRL_SWDPIN3);
-	E1000_WRITE_REG(&adapter->hw, E1000_CTRL, ctrl);
-	E1000_WRITE_REG(&adapter->hw, E1000_WUC, E1000_WUC_PME_EN);
-
-	if ((adapter->hw.mac.type == e1000_ich8lan) ||
-	    (adapter->hw.mac.type == e1000_pchlan) ||
-	    (adapter->hw.mac.type == e1000_ich9lan) ||
-	    (adapter->hw.mac.type == e1000_ich10lan))
-		e1000_suspend_workarounds_ich8lan(&adapter->hw);
-
-	/* Keep the laser running on Fiber adapters */
-	if (adapter->hw.phy.media_type == e1000_media_type_fiber ||
-	    adapter->hw.phy.media_type == e1000_media_type_internal_serdes) {
-		ctrl_ext = E1000_READ_REG(&adapter->hw, E1000_CTRL_EXT);
-		ctrl_ext |= E1000_CTRL_EXT_SDP3_DATA;
-		E1000_WRITE_REG(&adapter->hw, E1000_CTRL_EXT, ctrl_ext);
-	}
 
 	/*
 	** Determine type of Wakeup: note that wol
@@ -5363,11 +5386,38 @@ em_enable_wakeup(device_t dev)
 		E1000_WRITE_REG(&adapter->hw, E1000_RCTL, rctl);
 	}
 
-	if ((adapter->hw.mac.type == e1000_pchlan) ||
-	    (adapter->hw.mac.type == e1000_pch2lan)) {
-		if (em_enable_phy_wakeup(adapter))
-			return;
+	if (!(adapter->wol & (E1000_WUFC_EX | E1000_WUFC_MAG | E1000_WUFC_MC)))
+		goto pme;
+
+	/* Advertise the wakeup capability */
+	ctrl = E1000_READ_REG(&adapter->hw, E1000_CTRL);
+	ctrl |= (E1000_CTRL_SWDPIN2 | E1000_CTRL_SWDPIN3);
+	E1000_WRITE_REG(&adapter->hw, E1000_CTRL, ctrl);
+
+	/* Keep the laser running on Fiber adapters */
+	if (adapter->hw.phy.media_type == e1000_media_type_fiber ||
+	    adapter->hw.phy.media_type == e1000_media_type_internal_serdes) {
+		ctrl_ext = E1000_READ_REG(&adapter->hw, E1000_CTRL_EXT);
+		ctrl_ext |= E1000_CTRL_EXT_SDP3_DATA;
+		E1000_WRITE_REG(&adapter->hw, E1000_CTRL_EXT, ctrl_ext);
+	}
+
+	if ((adapter->hw.mac.type == e1000_ich8lan) ||
+	    (adapter->hw.mac.type == e1000_pchlan) ||
+	    (adapter->hw.mac.type == e1000_ich9lan) ||
+	    (adapter->hw.mac.type == e1000_ich10lan))
+		e1000_suspend_workarounds_ich8lan(&adapter->hw);
+
+	if ((adapter->hw.mac.type == e1000_pchlan)  ||
+	    (adapter->hw.mac.type == e1000_pch2lan) ||
+	    (adapter->hw.mac.type == e1000_pch_lpt) ||
+	    (adapter->hw.mac.type == e1000_pch_spt) ||
+	    (adapter->hw.mac.type == e1000_pch_cnp)) {
+		error = em_enable_phy_wakeup(adapter);
+		if (error)
+			goto pme;
 	} else {
+		/* Enable wakeup by the MAC */
 		E1000_WRITE_REG(&adapter->hw, E1000_WUC, E1000_WUC_PME_EN);
 		E1000_WRITE_REG(&adapter->hw, E1000_WUFC, adapter->wol);
 	}
@@ -5375,10 +5425,10 @@ em_enable_wakeup(device_t dev)
 	if (adapter->hw.phy.type == e1000_phy_igp_3)
 		e1000_igp3_phy_powerdown_workaround_ich8lan(&adapter->hw);
 
-        /* Request PME */
+pme:
         status = pci_read_config(dev, pmc + PCIR_POWER_STATUS, 2);
 	status &= ~(PCIM_PSTAT_PME | PCIM_PSTAT_PMEENABLE);
-	if (if_getcapenable(ifp) & IFCAP_WOL)
+	if (!error && (if_getcapenable(ifp) & IFCAP_WOL))
 		status |= PCIM_PSTAT_PME | PCIM_PSTAT_PMEENABLE;
         pci_write_config(dev, pmc + PCIR_POWER_STATUS, status, 2);
 
