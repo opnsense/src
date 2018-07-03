@@ -251,6 +251,7 @@ cpu_mwait_usable(void)
 
 void (*cpu_idle_hook)(sbintime_t) = NULL;	/* ACPI idle hook. */
 static int	cpu_ident_amdc1e = 0;	/* AMD C1E supported. */
+static int	cpu_ident_apl31 = 0;	/* Apollo Lake Errata APL31. */
 static int	idle_mwait = 1;		/* Use MONITOR/MWAIT for short idle. */
 SYSCTL_INT(_machdep, OID_AUTO, idle_mwait, CTLFLAG_RWTUN, &idle_mwait,
     0, "Use MONITOR/MWAIT for short idle");
@@ -379,6 +380,13 @@ cpu_probe_amdc1e(void)
 	    (cpu_id & 0x0fff0000) >=  0x00040000) {
 		cpu_ident_amdc1e = 1;
 	}
+
+	/*
+	 * Detect Apollo Lake APL32 errata while at it.
+	 */
+	if (cpu_vendor_id == CPU_VENDOR_INTEL && cpu_id == 0x506c9) {
+		cpu_ident_apl31 = 1;
+	}
 }
 
 #if defined(__i386__) && defined(PC98)
@@ -447,8 +455,10 @@ cpu_idle_wakeup(int cpu)
 	 */
 	if (*state == STATE_SLEEPING)
 		return (0);
-	if (*state == STATE_MWAIT)
+	if (*state == STATE_MWAIT) {
 		*state = STATE_RUNNING;
+		return (cpu_ident_apl31 ? 0 : 1);
+	}
 	return (1);
 }
 
