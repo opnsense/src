@@ -1074,8 +1074,6 @@ stf_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			sc_cur->inaddr &= ((uint32_t)(-1) << args.prefix);
 			sc_cur->inaddr = htonl(sc_cur->inaddr);
 			sc_cur->v4prefixlen = args.prefix;
-			if (sc_cur->v4prefixlen == 0)
-				sc_cur->v4prefixlen = 32;
 		} else if (ifd->ifd_cmd == STF_SDSTV4) {
 			if (ifd->ifd_len != sizeof(args)) {
 				error = EINVAL;
