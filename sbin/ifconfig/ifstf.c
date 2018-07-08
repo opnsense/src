@@ -74,8 +74,8 @@ stf_status(int s)
 	if (do_cmd(s, STF_GV4NET, &param, sizeof(param), 0) < 0)
 		return;
 
-	printf("\tv4net %s/%d -> ", inet_ntoa(param.inaddr), param.prefix ? param.prefix : 32);
-	printf("tv4br %s\n", inet_ntoa(param.dstv4_addr));
+	printf("\tv4net %s/%d -> tv4br %s\n", inet_ntoa(param.inaddr),
+	    param.prefix, inet_ntoa(param.dstv4_addr));
 }
 
 static void
