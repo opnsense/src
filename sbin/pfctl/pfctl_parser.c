@@ -1366,7 +1366,13 @@ ifa_lookup(const char *ifa_name, int flags)
 			continue;
 		if (p->af == AF_INET)
 			got4 = 1;
-		else
+		/*
+		 * Stop after first non-link-local address.
+		 * Otherwise we only end up with a link-local
+		 * one and not the global address that was
+		 * promised by the manual.
+		 */
+		else if (!IN6_IS_ADDR_LINKLOCAL(&n->addr.v.a.addr.v6))
 			got6 = 1;
 		n = calloc(1, sizeof(struct node_host));
 		if (n == NULL)
