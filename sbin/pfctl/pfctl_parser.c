@@ -1372,7 +1372,7 @@ ifa_lookup(const char *ifa_name, int flags)
 		 * one and not the global address that was
 		 * promised by the manual.
 		 */
-		else if (!IN6_IS_ADDR_LINKLOCAL(&n->addr.v.a.addr.v6))
+		else if (!IN6_IS_ADDR_LINKLOCAL(&p->addr.v.a.addr.v6))
 			got6 = 1;
 		n = calloc(1, sizeof(struct node_host));
 		if (n == NULL)
