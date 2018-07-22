@@ -559,8 +559,7 @@ pfi_instance_add(struct ifnet *ifp, int net, int flags)
 		}
 		if (af == AF_INET)
 			got4 = 1;
-		else if (af == AF_INET6 && !IN6_IS_ADDR_LINKLOCAL(
-		    &((struct sockaddr_in6 *)ia->ifa_addr)->sin6_addr))
+		else if (af == AF_INET6)
 			got6 = 1;
 		net2 = net;
 		if (net2 == 128 && (flags & PFI_AFLAG_NETWORK)) {
