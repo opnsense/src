@@ -723,11 +723,6 @@ ixgbe_attach(device_t dev)
 		goto err_out;
 	}
 
-	/* let hardware know driver is loaded */
-	ctrl_ext = IXGBE_READ_REG(hw, IXGBE_CTRL_EXT);
-	ctrl_ext |= IXGBE_CTRL_EXT_DRV_LOAD;
-	IXGBE_WRITE_REG(hw, IXGBE_CTRL_EXT, ctrl_ext);
-
 	/*
 	 * Initialize the shared code
 	 */
@@ -925,6 +920,11 @@ ixgbe_attach(device_t dev)
 
 	if (adapter->feat_en & IXGBE_FEATURE_NETMAP)
 		ixgbe_netmap_attach(adapter);
+
+	/* let hardware know driver is loaded */
+	ctrl_ext = IXGBE_READ_REG(hw, IXGBE_CTRL_EXT);
+	ctrl_ext |= IXGBE_CTRL_EXT_DRV_LOAD;
+	IXGBE_WRITE_REG(hw, IXGBE_CTRL_EXT, ctrl_ext);
 
 	INIT_DEBUGOUT("ixgbe_attach: end");
 
