@@ -75,7 +75,7 @@ stf_status(int s)
 		return;
 
 	/* inet_ntoa() uses a shared buffer */
-	printf("\tv4net %s/%d ", inet_ntoa(param.srcv4_addr), param.prefix);
+	printf("\tv4net %s/%d ", inet_ntoa(param.inaddr), param.prefix);
 	printf("-> tv4br %s\n", inet_ntoa(param.dstv4_addr));
 }
 

@@ -1098,8 +1098,7 @@ stf_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 			break;
 		}
 		bzero(&args, sizeof args);
-		args.inaddr.s_addr = sc_cur->inaddr;
-		args.srcv4_addr.s_addr = sc_cur->srcv4_addr;
+		args.inaddr.s_addr = sc_cur->srcv4_addr;
 		args.dstv4_addr.s_addr = sc_cur->dstv4_addr;
 		args.prefix = sc_cur->v4prefixlen;
 		error = copyout(&args, ifd->ifd_data, ifd->ifd_len);
