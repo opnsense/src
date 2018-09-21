@@ -23,7 +23,7 @@ setenv	BLOCKSIZE	K
 
 if ($?prompt) then
 	# An interactive shell -- set some stuff up
-	set prompt = "%N@%m:%~ %# "
+	set prompt="[%B`cat /usr/local/opnsense/version/opnsense`%b][%B%n%b%{\033[0;1;31m%}@%{\033[0;0;0m%}%B%M%b]%/%{\033[0;1;31m%}:%{\033[0;0;0m%}~ %# "
 	set promptchars = "%#"
 
 	set filec
