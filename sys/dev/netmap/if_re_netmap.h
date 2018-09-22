@@ -32,6 +32,7 @@
  */
 
 
+#include <net/bpf.h>
 #include <net/netmap.h>
 #include <sys/selinfo.h>
 #include <vm/vm.h>
@@ -97,6 +98,10 @@ re_netmap_txsync(struct netmap_kring *kring, int flags)
 			u_int len = slot->len;
 			uint64_t paddr;
 			void *addr = PNMB(na, slot, &paddr);
+
+			if (ifp->if_bpf) {
+				bpf_mtap(ifp->if_bpf, addr);
+			}
 
 			/* device-specific */
 			struct rl_desc *desc = &sc->rl_ldata.rl_tx_list[nic_i];
