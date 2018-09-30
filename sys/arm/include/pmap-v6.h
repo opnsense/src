@@ -166,7 +166,6 @@ extern ttb_entry_t pmap_kern_ttb; 	/* TTB for kernel pmap */
 void pmap_bootstrap(vm_offset_t);
 void pmap_kenter(vm_offset_t, vm_paddr_t);
 void pmap_kremove(vm_offset_t);
-void *pmap_mapdev_attr(vm_paddr_t, vm_size_t, int);
 boolean_t pmap_page_is_mapped(vm_page_t);
 
 void pmap_tlb_flush(pmap_t, vm_offset_t);
@@ -177,7 +176,6 @@ vm_paddr_t pmap_dump_kextract(vm_offset_t, pt2_entry_t *);
 int pmap_fault(pmap_t, vm_offset_t, uint32_t, int, bool);
 
 void pmap_set_tex(void);
-void reinit_mmu(ttb_entry_t ttb, u_int aux_clr, u_int aux_set);
 
 /*
  * Pre-bootstrap epoch functions set.

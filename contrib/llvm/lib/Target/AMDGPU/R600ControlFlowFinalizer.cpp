@@ -1,4 +1,4 @@
-//===-- R600ControlFlowFinalizer.cpp - Finalize Control Flow Inst----------===//
+//===- R600ControlFlowFinalizer.cpp - Finalize Control Flow Inst ----------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -9,20 +9,39 @@
 //
 /// \file
 /// This pass compute turns all control flow pseudo instructions into native one
-/// computing their address on the fly ; it also sets STACK_SIZE info.
+/// computing their address on the fly; it also sets STACK_SIZE info.
+//
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Support/Debug.h"
 #include "AMDGPU.h"
 #include "AMDGPUSubtarget.h"
 #include "R600Defines.h"
 #include "R600InstrInfo.h"
 #include "R600MachineFunctionInfo.h"
 #include "R600RegisterInfo.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/CodeGen/MachineBasicBlock.h"
+#include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
+#include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
-#include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/MachineOperand.h"
+#include "llvm/IR/CallingConv.h"
+#include "llvm/IR/DebugLoc.h"
+#include "llvm/IR/Function.h"
+#include "llvm/Pass.h"
+#include "llvm/Support/Compiler.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
+#include <algorithm>
+#include <cassert>
+#include <cstdint>
+#include <set>
+#include <utility>
+#include <vector>
 
 using namespace llvm;
 
@@ -31,7 +50,6 @@ using namespace llvm;
 namespace {
 
 struct CFStack {
-
   enum StackItem {
     ENTRY = 0,
     SUB_ENTRY = 1,
@@ -43,13 +61,12 @@ struct CFStack {
   std::vector<StackItem> BranchStack;
   std::vector<StackItem> LoopStack;
   unsigned MaxStackSize;
-  unsigned CurrentEntries;
-  unsigned CurrentSubEntries;
+  unsigned CurrentEntries = 0;
+  unsigned CurrentSubEntries = 0;
 
   CFStack(const R600Subtarget *st, CallingConv::ID cc) : ST(st),
       // We need to reserve a stack entry for CALL_FS in vertex shaders.
-      MaxStackSize(cc == CallingConv::AMDGPU_VS ? 1 : 0),
-      CurrentEntries(0), CurrentSubEntries(0) { }
+      MaxStackSize(cc == CallingConv::AMDGPU_VS ? 1 : 0) {}
 
   unsigned getLoopDepth();
   bool branchStackContains(CFStack::StackItem);
@@ -198,9 +215,8 @@ void CFStack::popLoop() {
 }
 
 class R600ControlFlowFinalizer : public MachineFunctionPass {
-
 private:
-  typedef std::pair<MachineInstr *, std::vector<MachineInstr *> > ClauseFile;
+  using ClauseFile = std::pair<MachineInstr *, std::vector<MachineInstr *>>;
 
   enum ControlFlowInstruction {
     CF_TC,
@@ -216,11 +232,10 @@ private:
     CF_END
   };
 
-  static char ID;
-  const R600InstrInfo *TII;
-  const R600RegisterInfo *TRI;
+  const R600InstrInfo *TII = nullptr;
+  const R600RegisterInfo *TRI = nullptr;
   unsigned MaxFetchInst;
-  const R600Subtarget *ST;
+  const R600Subtarget *ST = nullptr;
 
   bool IsTrivialInst(MachineInstr &MI) const {
     switch (MI.getOpcode()) {
@@ -355,7 +370,7 @@ private:
         continue;
       int64_t Imm = Src.second;
       std::vector<MachineOperand *>::iterator It =
-          find_if(Lits, [&](MachineOperand *val) {
+          llvm::find_if(Lits, [&](MachineOperand *val) {
             return val->isImm() && (val->getImm() == Imm);
           });
 
@@ -485,8 +500,9 @@ private:
   }
 
 public:
-  R600ControlFlowFinalizer(TargetMachine &tm)
-      : MachineFunctionPass(ID), TII(nullptr), TRI(nullptr), ST(nullptr) {}
+  static char ID;
+
+  R600ControlFlowFinalizer() : MachineFunctionPass(ID) {}
 
   bool runOnMachineFunction(MachineFunction &MF) override {
     ST = &MF.getSubtarget<R600Subtarget>();
@@ -496,14 +512,14 @@ public:
 
     R600MachineFunctionInfo *MFI = MF.getInfo<R600MachineFunctionInfo>();
 
-    CFStack CFStack(ST, MF.getFunction()->getCallingConv());
+    CFStack CFStack(ST, MF.getFunction().getCallingConv());
     for (MachineFunction::iterator MB = MF.begin(), ME = MF.end(); MB != ME;
         ++MB) {
       MachineBasicBlock &MBB = *MB;
       unsigned CfCount = 0;
-      std::vector<std::pair<unsigned, std::set<MachineInstr *> > > LoopStack;
+      std::vector<std::pair<unsigned, std::set<MachineInstr *>>> LoopStack;
       std::vector<MachineInstr * > IfThenElseStack;
-      if (MF.getFunction()->getCallingConv() == CallingConv::AMDGPU_VS) {
+      if (MF.getFunction().getCallingConv() == CallingConv::AMDGPU_VS) {
         BuildMI(MBB, MBB.begin(), MBB.findDebugLoc(MBB.begin()),
             getHWInstrDesc(CF_CALL_FS));
         CfCount++;
@@ -542,7 +558,7 @@ public:
             CFStack.pushBranch(AMDGPU::CF_PUSH_EG);
           } else
             CFStack.pushBranch(AMDGPU::CF_ALU_PUSH_BEFORE);
-
+          LLVM_FALLTHROUGH;
         case AMDGPU::CF_ALU:
           I = MI;
           AluClauses.push_back(MakeALUClause(MBB, I));
@@ -554,7 +570,7 @@ public:
           MachineInstr *MIb = BuildMI(MBB, MI, MBB.findDebugLoc(MI),
               getHWInstrDesc(CF_WHILE_LOOP))
               .addImm(1);
-          std::pair<unsigned, std::set<MachineInstr *> > Pair(CfCount,
+          std::pair<unsigned, std::set<MachineInstr *>> Pair(CfCount,
               std::set<MachineInstr *>());
           Pair.second.insert(MIb);
           LoopStack.push_back(std::move(Pair));
@@ -564,7 +580,7 @@ public:
         }
         case AMDGPU::ENDLOOP: {
           CFStack.popLoop();
-          std::pair<unsigned, std::set<MachineInstr *> > Pair =
+          std::pair<unsigned, std::set<MachineInstr *>> Pair =
               std::move(LoopStack.back());
           LoopStack.pop_back();
           CounterPropagateAddr(Pair.second, CfCount);
@@ -689,11 +705,17 @@ public:
   }
 };
 
-char R600ControlFlowFinalizer::ID = 0;
-
 } // end anonymous namespace
 
+INITIALIZE_PASS_BEGIN(R600ControlFlowFinalizer, DEBUG_TYPE,
+                     "R600 Control Flow Finalizer", false, false)
+INITIALIZE_PASS_END(R600ControlFlowFinalizer, DEBUG_TYPE,
+                    "R600 Control Flow Finalizer", false, false)
 
-llvm::FunctionPass *llvm::createR600ControlFlowFinalizer(TargetMachine &TM) {
-  return new R600ControlFlowFinalizer(TM);
+char R600ControlFlowFinalizer::ID = 0;
+
+char &llvm::R600ControlFlowFinalizerID = R600ControlFlowFinalizer::ID;
+
+FunctionPass *llvm::createR600ControlFlowFinalizer() {
+  return new R600ControlFlowFinalizer();
 }

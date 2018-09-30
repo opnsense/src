@@ -16,9 +16,8 @@
 
 	.syntax unified
 	.text
-#if defined(USE_THUMB_PROLOGUE)
-	.thumb
-#endif
+
+DEFINE_CODE_STATE
 
 	.p2align 2
 DEFINE_AEABI_FUNCTION_ALIAS(__aeabi_uidiv, __udivsi3)
@@ -26,17 +25,22 @@ DEFINE_AEABI_FUNCTION_ALIAS(__aeabi_uidiv, __udivsi3)
 @ unsigned int __udivsi3(unsigned int divident, unsigned int divisor)
 @   Calculate and return the quotient of the (unsigned) division.
 
-#if defined(USE_THUMB_PROLOGUE)
-DEFINE_COMPILERRT_THUMB_FUNCTION(__udivsi3)
-#else
 DEFINE_COMPILERRT_FUNCTION(__udivsi3)
-#endif
 #if __ARM_ARCH_EXT_IDIV__
 	tst     r1, r1
 	beq     LOCAL_LABEL(divby0)
 	udiv	r0, r0, r1
 	bx  	lr
-#else
+
+LOCAL_LABEL(divby0):
+	mov     r0, #0
+#  ifdef __ARM_EABI__
+	b       __aeabi_idiv0
+#  else
+	JMP(lr)
+#  endif
+
+#else /* ! __ARM_ARCH_EXT_IDIV__ */
 	cmp	r1, #1
 	bcc	LOCAL_LABEL(divby0)
 #if defined(USE_THUMB_1)
@@ -185,9 +189,12 @@ LOCAL_LABEL(skip_1):
 LOCAL_LABEL(divby0):
 	movs	r0, #0
 #      if defined(__ARM_EABI__)
+	push {r7, lr}
 	bl	__aeabi_idiv0 // due to relocation limit, can't use b.
-#      endif
+	pop  {r7, pc}
+#      else
 	JMP(lr)
+#      endif
 
 
 #if defined(USE_THUMB_1)
@@ -250,16 +257,6 @@ LOCAL_LABEL(div0block):
 	mov	r0, r3
 	JMP(lr)
 #endif /* __ARM_ARCH_EXT_IDIV__ */
-
-#if __ARM_ARCH_EXT_IDIV__
-LOCAL_LABEL(divby0):
-        mov     r0, #0
-#  ifdef __ARM_EABI__
-        b       __aeabi_idiv0
-#  else
-        JMP(lr)
-#  endif
-#endif
 
 END_COMPILERRT_FUNCTION(__udivsi3)
 

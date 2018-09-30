@@ -49,6 +49,7 @@
 #include <sys/sx.h>
 #include <sys/syslog.h>
 #include <sys/systm.h>
+#include <sys/vmmeter.h>
 #include <machine/clock.h>
 #include <machine/intr_machdep.h>
 #include <machine/smp.h>
@@ -167,6 +168,8 @@ struct intsrc *
 intr_lookup_source(int vector)
 {
 
+	if (vector < 0 || vector >= nitems(interrupt_sources))
+		return (NULL);
 	return (interrupt_sources[vector]);
 }
 

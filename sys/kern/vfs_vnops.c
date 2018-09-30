@@ -411,8 +411,7 @@ vn_open_vnode(struct vnode *vp, int fmode, struct ucred *cred,
  * Prototype text segments cannot be written.
  */
 int
-vn_writechk(vp)
-	register struct vnode *vp;
+vn_writechk(struct vnode *vp)
 {
 
 	ASSERT_VOP_LOCKED(vp, "vn_writechk");
@@ -529,8 +528,6 @@ vn_rdwr(enum uio_rw rw, struct vnode *vp, void *base, int len, off_t offset,
 	struct vn_io_fault_args args;
 	int error, lock_flags;
 
-	if (offset < 0 && vp->v_type != VCHR)
-		return (EINVAL);
 	auio.uio_iov = &aiov;
 	auio.uio_iovcnt = 1;
 	aiov.iov_base = base;
@@ -957,23 +954,30 @@ static int
 vn_io_fault_doio(struct vn_io_fault_args *args, struct uio *uio,
     struct thread *td)
 {
+	int error, save;
 
+	error = 0;
+	save = vm_fault_disable_pagefaults();
 	switch (args->kind) {
 	case VN_IO_FAULT_FOP:
-		return ((args->args.fop_args.doio)(args->args.fop_args.fp,
-		    uio, args->cred, args->flags, td));
+		error = (args->args.fop_args.doio)(args->args.fop_args.fp,
+		    uio, args->cred, args->flags, td);
+		break;
 	case VN_IO_FAULT_VOP:
 		if (uio->uio_rw == UIO_READ) {
-			return (VOP_READ(args->args.vop_args.vp, uio,
-			    args->flags, args->cred));
+			error = VOP_READ(args->args.vop_args.vp, uio,
+			    args->flags, args->cred);
 		} else if (uio->uio_rw == UIO_WRITE) {
-			return (VOP_WRITE(args->args.vop_args.vp, uio,
-			    args->flags, args->cred));
+			error = VOP_WRITE(args->args.vop_args.vp, uio,
+			    args->flags, args->cred);
 		}
 		break;
+	default:
+		panic("vn_io_fault_doio: unknown kind of io %d %d",
+		    args->kind, uio->uio_rw);
 	}
-	panic("vn_io_fault_doio: unknown kind of io %d %d", args->kind,
-	    uio->uio_rw);
+	vm_fault_enable_pagefaults(save);
+	return (error);
 }
 
 static int
@@ -1048,7 +1052,7 @@ vn_io_fault1(struct vnode *vp, struct uio *uio, struct vn_io_fault_args *args,
 	vm_offset_t addr, end;
 	size_t len, resid;
 	ssize_t adv;
-	int error, cnt, save, saveheld, prev_td_ma_cnt;
+	int error, cnt, saveheld, prev_td_ma_cnt;
 
 	if (vn_io_fault_prefault) {
 		error = vn_io_fault_prefault_user(uio);
@@ -1074,7 +1078,6 @@ vn_io_fault1(struct vnode *vp, struct uio *uio, struct vn_io_fault_args *args,
 	short_uio.uio_rw = uio->uio_rw;
 	short_uio.uio_td = uio->uio_td;
 
-	save = vm_fault_disable_pagefaults();
 	error = vn_io_fault_doio(args, uio, td);
 	if (error != EFAULT)
 		goto out;
@@ -1145,7 +1148,6 @@ vn_io_fault1(struct vnode *vp, struct uio *uio, struct vn_io_fault_args *args,
 	td->td_ma_cnt = prev_td_ma_cnt;
 	curthread_pflags_restore(saveheld);
 out:
-	vm_fault_enable_pagefaults(save);
 	free(uio_clone, M_IOV);
 	return (error);
 }
@@ -1369,15 +1371,11 @@ vn_statfile(fp, sb, active_cred, td)
  * Stat a vnode; implementation for the stat syscall
  */
 int
-vn_stat(vp, sb, active_cred, file_cred, td)
-	struct vnode *vp;
-	register struct stat *sb;
-	struct ucred *active_cred;
-	struct ucred *file_cred;
-	struct thread *td;
+vn_stat(struct vnode *vp, struct stat *sb, struct ucred *active_cred,
+    struct ucred *file_cred, struct thread *td)
 {
 	struct vattr vattr;
-	register struct vattr *vap;
+	struct vattr *vap;
 	int error;
 	u_short mode;
 
@@ -1480,12 +1478,8 @@ vn_stat(vp, sb, active_cred, file_cred, td)
  * File table vnode ioctl routine.
  */
 static int
-vn_ioctl(fp, com, data, active_cred, td)
-	struct file *fp;
-	u_long com;
-	void *data;
-	struct ucred *active_cred;
-	struct thread *td;
+vn_ioctl(struct file *fp, u_long com, void *data, struct ucred *active_cred,
+    struct thread *td)
 {
 	struct vattr vattr;
 	struct vnode *vp;
@@ -1519,11 +1513,8 @@ vn_ioctl(fp, com, data, active_cred, td)
  * File table vnode poll routine.
  */
 static int
-vn_poll(fp, events, active_cred, td)
-	struct file *fp;
-	int events;
-	struct ucred *active_cred;
-	struct thread *td;
+vn_poll(struct file *fp, int events, struct ucred *active_cred,
+    struct thread *td)
 {
 	struct vnode *vp;
 	int error;
@@ -1768,8 +1759,7 @@ vn_start_secondary_write(struct vnode *vp, struct mount **mpp, int flags)
  * now in effect.
  */
 void
-vn_finished_write(mp)
-	struct mount *mp;
+vn_finished_write(struct mount *mp)
 {
 	if (mp == NULL || !vn_suspendable(mp))
 		return;
@@ -1791,8 +1781,7 @@ vn_finished_write(mp)
  * that the suspension is now in effect.
  */
 void
-vn_finished_secondary_write(mp)
-	struct mount *mp;
+vn_finished_secondary_write(struct mount *mp)
 {
 	if (mp == NULL || !vn_suspendable(mp))
 		return;

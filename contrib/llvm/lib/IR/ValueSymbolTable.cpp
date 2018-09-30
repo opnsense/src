@@ -1,4 +1,4 @@
-//===-- ValueSymbolTable.cpp - Implement the ValueSymbolTable class -------===//
+//===- ValueSymbolTable.cpp - Implement the ValueSymbolTable class --------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -13,8 +13,11 @@
 
 #include "llvm/IR/ValueSymbolTable.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/IR/GlobalValue.h"
+#include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
+#include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
@@ -44,8 +47,17 @@ ValueName *ValueSymbolTable::makeUniqueName(Value *V,
     // Trim any suffix off and append the next number.
     UniqueName.resize(BaseSize);
     raw_svector_ostream S(UniqueName);
-    if (isa<GlobalValue>(V))
-      S << ".";
+    if (auto *GV = dyn_cast<GlobalValue>(V)) {
+      // A dot is appended to mark it as clone during ABI demangling so that
+      // for example "_Z1fv" and "_Z1fv.1" both demangle to "f()", the second
+      // one being a clone.
+      // On NVPTX we cannot use a dot because PTX only allows [A-Za-z0-9_$] for
+      // identifiers. This breaks ABI demangling but at least ptxas accepts and
+      // compiles the program.
+      const Module *M = GV->getParent();
+      if (!(M && Triple(M->getTargetTriple()).isNVPTX()))
+        S << ".";
+    }
     S << ++LastUnique;
 
     // Try insert the vmap entry with this suffix.
@@ -99,13 +111,15 @@ ValueName *ValueSymbolTable::createValueName(StringRef Name, Value *V) {
   return makeUniqueName(V, UniqueName);
 }
 
+#if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
 // dump - print out the symbol table
 //
 LLVM_DUMP_METHOD void ValueSymbolTable::dump() const {
-  //DEBUG(dbgs() << "ValueSymbolTable:\n");
+  //dbgs() << "ValueSymbolTable:\n";
   for (const auto &I : *this) {
-    //DEBUG(dbgs() << "  '" << I->getKeyData() << "' = ");
+    //dbgs() << "  '" << I->getKeyData() << "' = ";
     I.getValue()->dump();
-    //DEBUG(dbgs() << "\n");
+    //dbgs() << "\n";
   }
 }
+#endif

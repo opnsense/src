@@ -70,6 +70,10 @@ public:
     return delta32;
   }
 
+  Reference::KindValue lazyImmediateLocationKind() override {
+    return lazyImmediateLocation;
+  }
+
   Reference::KindValue unwindRefToEhFrameKind() override {
     return invalid;
   }
@@ -118,14 +122,7 @@ public:
                                 normalized::Relocations &relocs) override;
 
   bool isDataInCodeTransition(Reference::KindValue refKind) override {
-    switch (refKind) {
-    case modeCode:
-    case modeData:
-      return true;
-    default:
-      return false;
-      break;
-    }
+    return refKind == modeCode || refKind == modeData;
   }
 
   Reference::KindValue dataInCodeTransitionStart(

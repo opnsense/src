@@ -11,35 +11,43 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "MCTargetDesc/X86MCTargetDesc.h"
 #include "MCTargetDesc/X86BaseInfo.h"
 #include "MCTargetDesc/X86FixupKinds.h"
+#include "MCTargetDesc/X86MCTargetDesc.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/MC/MCCodeEmitter.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
+#include "llvm/MC/MCFixup.h"
 #include "llvm/MC/MCInst.h"
+#include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCSymbol.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
+#include <cassert>
+#include <cstdint>
+#include <cstdlib>
 
 using namespace llvm;
 
 #define DEBUG_TYPE "mccodeemitter"
 
 namespace {
+
 class X86MCCodeEmitter : public MCCodeEmitter {
-  X86MCCodeEmitter(const X86MCCodeEmitter &) = delete;
-  void operator=(const X86MCCodeEmitter &) = delete;
   const MCInstrInfo &MCII;
   MCContext &Ctx;
+
 public:
   X86MCCodeEmitter(const MCInstrInfo &mcii, MCContext &ctx)
     : MCII(mcii), Ctx(ctx) {
   }
-
-  ~X86MCCodeEmitter() override {}
+  X86MCCodeEmitter(const X86MCCodeEmitter &) = delete;
+  X86MCCodeEmitter &operator=(const X86MCCodeEmitter &) = delete;
+  ~X86MCCodeEmitter() override = default;
 
   bool is64BitMode(const MCSubtargetInfo &STI) const {
     return STI.getFeatureBits()[X86::Mode64Bit];
@@ -106,8 +114,7 @@ public:
                      SmallVectorImpl<MCFixup> &Fixups,
                      int ImmOffset = 0) const;
 
-  inline static uint8_t ModRMByte(unsigned Mod, unsigned RegOpcode,
-                                  unsigned RM) {
+  static uint8_t ModRMByte(unsigned Mod, unsigned RegOpcode, unsigned RM) {
     assert(Mod < 4 && RegOpcode < 8 && RM < 8 && "ModRM Fields out of range!");
     return RM | (RegOpcode << 3) | (Mod << 6);
   }
@@ -148,12 +155,6 @@ public:
 };
 
 } // end anonymous namespace
-
-MCCodeEmitter *llvm::createX86MCCodeEmitter(const MCInstrInfo &MCII,
-                                            const MCRegisterInfo &MRI,
-                                            MCContext &Ctx) {
-  return new X86MCCodeEmitter(MCII, Ctx);
-}
 
 /// isDisp8 - Return true if this signed displacement fits in a 8-bit
 /// sign-extended field.
@@ -379,7 +380,7 @@ void X86MCCodeEmitter::emitMemModRMByte(const MCInst &MI, unsigned Op,
         return X86::reloc_riprel_4byte_movq_load;
       case X86::CALL64m:
       case X86::JMP64m:
-      case X86::TEST64rm:
+      case X86::TEST64mr:
       case X86::ADC64rm:
       case X86::ADD64rm:
       case X86::AND64rm:
@@ -395,10 +396,14 @@ void X86MCCodeEmitter::emitMemModRMByte(const MCInst &MI, unsigned Op,
 
     // rip-relative addressing is actually relative to the *next* instruction.
     // Since an immediate can follow the mod/rm byte for an instruction, this
-    // means that we need to bias the immediate field of the instruction with
-    // the size of the immediate field.  If we have this case, add it into the
+    // means that we need to bias the displacement field of the instruction with
+    // the size of the immediate field. If we have this case, add it into the
     // expression to emit.
-    int ImmSize = X86II::hasImm(TSFlags) ? X86II::getSizeOfImm(TSFlags) : 0;
+    // Note: rip-relative addressing using immediate displacement values should
+    // not be adjusted, assuming it was the user's intent.
+    int ImmSize = !Disp.isImm() && X86II::hasImm(TSFlags)
+                      ? X86II::getSizeOfImm(TSFlags)
+                      : 0;
 
     EmitImmediate(Disp, MI.getLoc(), 4, MCFixupKind(FixupKind),
                   CurByte, OS, Fixups, -ImmSize);
@@ -1107,7 +1112,7 @@ bool X86MCCodeEmitter::emitOpcodePrefix(uint64_t TSFlags, unsigned &CurByte,
     EmitByte(0x66, CurByte, OS);
 
   // Emit the LOCK opcode prefix.
-  if (TSFlags & X86II::LOCK)
+  if (TSFlags & X86II::LOCK || MI.getFlags() & X86::IP_HAS_LOCK)
     EmitByte(0xF0, CurByte, OS);
 
   switch (TSFlags & X86II::OpPrefixMask) {
@@ -1129,6 +1134,8 @@ bool X86MCCodeEmitter::emitOpcodePrefix(uint64_t TSFlags, unsigned &CurByte,
       EmitByte(0x40 | REX, CurByte, OS);
       Ret = true;
     }
+  } else {
+    assert(!(TSFlags & X86II::REX_W) && "REX.W requires 64bit mode.");
   }
 
   // 0x0F escape code must be emitted just before the opcode.
@@ -1158,6 +1165,7 @@ encodeInstruction(const MCInst &MI, raw_ostream &OS,
   unsigned Opcode = MI.getOpcode();
   const MCInstrDesc &Desc = MCII.get(Opcode);
   uint64_t TSFlags = Desc.TSFlags;
+  unsigned Flags = MI.getFlags();
 
   // Pseudo instructions don't get encoded.
   if ((TSFlags & X86II::FormMask) == X86II::Pseudo)
@@ -1193,8 +1201,10 @@ encodeInstruction(const MCInst &MI, raw_ostream &OS,
                               MI, OS);
 
   // Emit the repeat opcode prefix as needed.
-  if (TSFlags & X86II::REP)
+  if (TSFlags & X86II::REP || Flags & X86::IP_HAS_REPEAT)
     EmitByte(0xF3, CurByte, OS);
+  if (Flags & X86::IP_HAS_REPEAT_NE)
+    EmitByte(0xF2, CurByte, OS);
 
   // Emit the address size opcode prefix as needed.
   bool need_address_override;
@@ -1436,7 +1446,7 @@ encodeInstruction(const MCInst &MI, raw_ostream &OS,
   case X86II::MRM0r: case X86II::MRM1r:
   case X86II::MRM2r: case X86II::MRM3r:
   case X86II::MRM4r: case X86II::MRM5r:
-  case X86II::MRM6r: case X86II::MRM7r: {
+  case X86II::MRM6r: case X86II::MRM7r:
     if (HasVEX_4V) // Skip the register dst (which is encoded in VEX_VVVV).
       ++CurOp;
     if (HasEVEX_K) // Skip writemask
@@ -1446,13 +1456,12 @@ encodeInstruction(const MCInst &MI, raw_ostream &OS,
                      (Form == X86II::MRMXr) ? 0 : Form-X86II::MRM0r,
                      CurByte, OS);
     break;
-  }
 
   case X86II::MRMXm:
   case X86II::MRM0m: case X86II::MRM1m:
   case X86II::MRM2m: case X86II::MRM3m:
   case X86II::MRM4m: case X86II::MRM5m:
-  case X86II::MRM6m: case X86II::MRM7m: {
+  case X86II::MRM6m: case X86II::MRM7m:
     if (HasVEX_4V) // Skip the register dst (which is encoded in VEX_VVVV).
       ++CurOp;
     if (HasEVEX_K) // Skip writemask
@@ -1463,7 +1472,7 @@ encodeInstruction(const MCInst &MI, raw_ostream &OS,
                      Rex, CurByte, OS, Fixups, STI);
     CurOp += X86::AddrNumOperands;
     break;
-  }
+
   case X86II::MRM_C0: case X86II::MRM_C1: case X86II::MRM_C2:
   case X86II::MRM_C3: case X86II::MRM_C4: case X86II::MRM_C5:
   case X86II::MRM_C6: case X86II::MRM_C7: case X86II::MRM_C8:
@@ -1526,4 +1535,10 @@ encodeInstruction(const MCInst &MI, raw_ostream &OS,
     abort();
   }
 #endif
+}
+
+MCCodeEmitter *llvm::createX86MCCodeEmitter(const MCInstrInfo &MCII,
+                                            const MCRegisterInfo &MRI,
+                                            MCContext &Ctx) {
+  return new X86MCCodeEmitter(MCII, Ctx);
 }

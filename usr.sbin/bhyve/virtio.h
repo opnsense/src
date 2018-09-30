@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2013  Chris Torek <torek @ torek net>
  * All rights reserved.
  *
@@ -210,6 +212,7 @@ struct vring_used {
 #define	VIRTIO_DEV_NET		0x1000
 #define	VIRTIO_DEV_BLOCK	0x1001
 #define	VIRTIO_DEV_RANDOM	0x1005
+#define	VIRTIO_DEV_CONSOLE	0x1003
 
 /*
  * PCI config space constants.

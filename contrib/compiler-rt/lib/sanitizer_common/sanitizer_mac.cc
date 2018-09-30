@@ -23,6 +23,7 @@
 #include <stdio.h>
 
 #include "sanitizer_common.h"
+#include "sanitizer_file.h"
 #include "sanitizer_flags.h"
 #include "sanitizer_internal_defs.h"
 #include "sanitizer_libc.h"
@@ -93,20 +94,22 @@ namespace __sanitizer {
 
 #include "sanitizer_syscall_generic.inc"
 
-// Direct syscalls, don't call libmalloc hooks.
+// Direct syscalls, don't call libmalloc hooks (but not available on 10.6).
 extern "C" void *__mmap(void *addr, size_t len, int prot, int flags, int fildes,
-                        off_t off);
-extern "C" int __munmap(void *, size_t);
+                        off_t off) SANITIZER_WEAK_ATTRIBUTE;
+extern "C" int __munmap(void *, size_t) SANITIZER_WEAK_ATTRIBUTE;
 
 // ---------------------- sanitizer_libc.h
 uptr internal_mmap(void *addr, size_t length, int prot, int flags,
                    int fd, u64 offset) {
   if (fd == -1) fd = VM_MAKE_TAG(VM_MEMORY_ANALYSIS_TOOL);
-  return (uptr)__mmap(addr, length, prot, flags, fd, offset);
+  if (&__mmap) return (uptr)__mmap(addr, length, prot, flags, fd, offset);
+  return (uptr)mmap(addr, length, prot, flags, fd, offset);
 }
 
 uptr internal_munmap(void *addr, uptr length) {
-  return __munmap(addr, length);
+  if (&__munmap) return __munmap(addr, length);
+  return munmap(addr, length);
 }
 
 int internal_mprotect(void *addr, uptr length, int prot) {
@@ -182,27 +185,30 @@ uptr internal_getpid() {
 
 int internal_sigaction(int signum, const void *act, void *oldact) {
   return sigaction(signum,
-                   (struct sigaction *)act, (struct sigaction *)oldact);
+                   (const struct sigaction *)act, (struct sigaction *)oldact);
 }
 
 void internal_sigfillset(__sanitizer_sigset_t *set) { sigfillset(set); }
 
 uptr internal_sigprocmask(int how, __sanitizer_sigset_t *set,
                           __sanitizer_sigset_t *oldset) {
-  return sigprocmask(how, set, oldset);
+  // Don't use sigprocmask here, because it affects all threads.
+  return pthread_sigmask(how, set, oldset);
 }
 
-// Doesn't call pthread_atfork() handlers.
-extern "C" pid_t __fork(void);
+// Doesn't call pthread_atfork() handlers (but not available on 10.6).
+extern "C" pid_t __fork(void) SANITIZER_WEAK_ATTRIBUTE;
 
 int internal_fork() {
-  return __fork();
+  if (&__fork)
+    return __fork();
+  return fork();
 }
 
 int internal_forkpty(int *amaster) {
   int master, slave;
   if (openpty(&master, &slave, nullptr, nullptr, nullptr) == -1) return -1;
-  int pid = __fork();
+  int pid = internal_fork();
   if (pid == -1) {
     close(master);
     close(slave);
@@ -248,9 +254,8 @@ bool FileExists(const char *filename) {
   return S_ISREG(st.st_mode);
 }
 
-uptr GetTid() {
-  // FIXME: This can potentially get truncated on 32-bit, where uptr is 4 bytes.
-  uint64_t tid;
+tid_t GetTid() {
+  tid_t tid;
   pthread_threadid_np(nullptr, &tid);
   return tid;
 }
@@ -344,23 +349,23 @@ BlockingMutex::BlockingMutex() {
 void BlockingMutex::Lock() {
   CHECK(sizeof(OSSpinLock) <= sizeof(opaque_storage_));
   CHECK_EQ(OS_SPINLOCK_INIT, 0);
-  CHECK_NE(owner_, (uptr)pthread_self());
+  CHECK_EQ(owner_, 0);
   OSSpinLockLock((OSSpinLock*)&opaque_storage_);
-  CHECK(!owner_);
-  owner_ = (uptr)pthread_self();
 }
 
 void BlockingMutex::Unlock() {
-  CHECK(owner_ == (uptr)pthread_self());
-  owner_ = 0;
   OSSpinLockUnlock((OSSpinLock*)&opaque_storage_);
 }
 
 void BlockingMutex::CheckLocked() {
-  CHECK_EQ((uptr)pthread_self(), owner_);
+  CHECK_NE(*(OSSpinLock*)&opaque_storage_, 0);
 }
 
 u64 NanoTime() {
+  return 0;
+}
+
+u64 MonotonicNanoTime() {
   return 0;
 }
 
@@ -371,6 +376,27 @@ uptr GetTlsSize() {
 void InitTlsSize() {
 }
 
+uptr TlsBaseAddr() {
+  uptr segbase = 0;
+#if defined(__x86_64__)
+  asm("movq %%gs:0,%0" : "=r"(segbase));
+#elif defined(__i386__)
+  asm("movl %%gs:0,%0" : "=r"(segbase));
+#endif
+  return segbase;
+}
+
+// The size of the tls on darwin does not appear to be well documented,
+// however the vm memory map suggests that it is 1024 uptrs in size,
+// with a size of 0x2000 bytes on x86_64 and 0x1000 bytes on i386.
+uptr TlsSize() {
+#if defined(__x86_64__) || defined(__i386__)
+  return 1024 * sizeof(uptr);
+#else
+  return 0;
+#endif
+}
+
 void GetThreadStackAndTls(bool main, uptr *stk_addr, uptr *stk_size,
                           uptr *tls_addr, uptr *tls_size) {
 #if !SANITIZER_GO
@@ -378,8 +404,8 @@ void GetThreadStackAndTls(bool main, uptr *stk_addr, uptr *stk_size,
   GetThreadStackTopAndBottom(main, &stack_top, &stack_bottom);
   *stk_addr = stack_bottom;
   *stk_size = stack_top - stack_bottom;
-  *tls_addr = 0;
-  *tls_size = 0;
+  *tls_addr = TlsBaseAddr();
+  *tls_size = TlsSize();
 #else
   *stk_addr = 0;
   *stk_size = 0;
@@ -389,20 +415,37 @@ void GetThreadStackAndTls(bool main, uptr *stk_addr, uptr *stk_size,
 }
 
 void ListOfModules::init() {
-  clear();
+  clearOrInit();
   MemoryMappingLayout memory_mapping(false);
   memory_mapping.DumpListOfModules(&modules_);
 }
 
-bool IsHandledDeadlySignal(int signum) {
+void ListOfModules::fallbackInit() { clear(); }
+
+static HandleSignalMode GetHandleSignalModeImpl(int signum) {
+  switch (signum) {
+    case SIGABRT:
+      return common_flags()->handle_abort;
+    case SIGILL:
+      return common_flags()->handle_sigill;
+    case SIGFPE:
+      return common_flags()->handle_sigfpe;
+    case SIGSEGV:
+      return common_flags()->handle_segv;
+    case SIGBUS:
+      return common_flags()->handle_sigbus;
+  }
+  return kHandleSignalNo;
+}
+
+HandleSignalMode GetHandleSignalMode(int signum) {
+  // Handling fatal signals on watchOS and tvOS devices is disallowed.
   if ((SANITIZER_WATCHOS || SANITIZER_TVOS) && !(SANITIZER_IOSSIM))
-    // Handling fatal signals on watchOS and tvOS devices is disallowed.
-    return false;
-  if (common_flags()->handle_abort && signum == SIGABRT)
-    return true;
-  if (common_flags()->handle_sigill && signum == SIGILL)
-    return true;
-  return (signum == SIGSEGV || signum == SIGBUS) && common_flags()->handle_segv;
+    return kHandleSignalNo;
+  HandleSignalMode result = GetHandleSignalModeImpl(signum);
+  if (result == kHandleSignalYes && !common_flags()->allow_user_segv_handler)
+    return kHandleSignalExclusive;
+  return result;
 }
 
 MacosVersion cached_macos_version = MACOS_VERSION_UNINITIALIZED;
@@ -537,7 +580,7 @@ void LogFullErrorReport(const char *buffer) {
 #endif
 }
 
-SignalContext::WriteFlag SignalContext::GetWriteFlag(void *context) {
+SignalContext::WriteFlag SignalContext::GetWriteFlag() const {
 #if defined(__x86_64__) || defined(__i386__)
   ucontext_t *ucontext = static_cast<ucontext_t*>(context);
   return ucontext->uc_mcontext->__es.__err & 2 /*T_PF_WRITE*/ ? WRITE : READ;
@@ -546,7 +589,7 @@ SignalContext::WriteFlag SignalContext::GetWriteFlag(void *context) {
 #endif
 }
 
-void GetPcSpBp(void *context, uptr *pc, uptr *sp, uptr *bp) {
+static void GetPcSpBp(void *context, uptr *pc, uptr *sp, uptr *bp) {
   ucontext_t *ucontext = (ucontext_t*)context;
 # if defined(__aarch64__)
   *pc = ucontext->uc_mcontext->__ss.__pc;
@@ -572,6 +615,8 @@ void GetPcSpBp(void *context, uptr *pc, uptr *sp, uptr *bp) {
 # error "Unknown architecture"
 # endif
 }
+
+void SignalContext::InitPcSpBp() { GetPcSpBp(context, &pc, &sp, &bp); }
 
 #if !SANITIZER_GO
 static const char kDyldInsertLibraries[] = "DYLD_INSERT_LIBRARIES";
@@ -700,6 +745,9 @@ void MaybeReexec() {
   if (!lib_is_in_env)
     return;
 
+  if (!common_flags()->strip_env)
+    return;
+
   // DYLD_INSERT_LIBRARIES is set and contains the runtime library. Let's remove
   // the dylib from the environment variable, because interceptors are installed
   // and we don't want our children to inherit the variable.
@@ -764,9 +812,73 @@ char **GetArgv() {
   return *_NSGetArgv();
 }
 
+#if defined(__aarch64__) && SANITIZER_IOS && !SANITIZER_IOSSIM
+// The task_vm_info struct is normally provided by the macOS SDK, but we need
+// fields only available in 10.12+. Declare the struct manually to be able to
+// build against older SDKs.
+struct __sanitizer_task_vm_info {
+  mach_vm_size_t virtual_size;
+  integer_t region_count;
+  integer_t page_size;
+  mach_vm_size_t resident_size;
+  mach_vm_size_t resident_size_peak;
+  mach_vm_size_t device;
+  mach_vm_size_t device_peak;
+  mach_vm_size_t internal;
+  mach_vm_size_t internal_peak;
+  mach_vm_size_t external;
+  mach_vm_size_t external_peak;
+  mach_vm_size_t reusable;
+  mach_vm_size_t reusable_peak;
+  mach_vm_size_t purgeable_volatile_pmap;
+  mach_vm_size_t purgeable_volatile_resident;
+  mach_vm_size_t purgeable_volatile_virtual;
+  mach_vm_size_t compressed;
+  mach_vm_size_t compressed_peak;
+  mach_vm_size_t compressed_lifetime;
+  mach_vm_size_t phys_footprint;
+  mach_vm_address_t min_address;
+  mach_vm_address_t max_address;
+};
+#define __SANITIZER_TASK_VM_INFO_COUNT ((mach_msg_type_number_t) \
+    (sizeof(__sanitizer_task_vm_info) / sizeof(natural_t)))
+
+uptr GetTaskInfoMaxAddress() {
+  __sanitizer_task_vm_info vm_info = {};
+  mach_msg_type_number_t count = __SANITIZER_TASK_VM_INFO_COUNT;
+  int err = task_info(mach_task_self(), TASK_VM_INFO, (int *)&vm_info, &count);
+  if (err == 0) {
+    return vm_info.max_address - 1;
+  } else {
+    // xnu cannot provide vm address limit
+    return 0x200000000 - 1;
+  }
+}
+#endif
+
+uptr GetMaxUserVirtualAddress() {
+#if SANITIZER_WORDSIZE == 64
+# if defined(__aarch64__) && SANITIZER_IOS && !SANITIZER_IOSSIM
+  // Get the maximum VM address
+  static uptr max_vm = GetTaskInfoMaxAddress();
+  CHECK(max_vm);
+  return max_vm;
+# else
+  return (1ULL << 47) - 1;  // 0x00007fffffffffffUL;
+# endif
+#else  // SANITIZER_WORDSIZE == 32
+  return (1ULL << 32) - 1;  // 0xffffffff;
+#endif  // SANITIZER_WORDSIZE
+}
+
+uptr GetMaxVirtualAddress() {
+  return GetMaxUserVirtualAddress();
+}
+
 uptr FindAvailableMemoryRange(uptr shadow_size,
                               uptr alignment,
-                              uptr left_padding) {
+                              uptr left_padding,
+                              uptr *largest_gap_found) {
   typedef vm_region_submap_short_info_data_64_t RegionInfo;
   enum { kRegionInfoSize = VM_REGION_SUBMAP_SHORT_INFO_COUNT_64 };
   // Start searching for available memory region past PAGEZERO, which is
@@ -777,6 +889,7 @@ uptr FindAvailableMemoryRange(uptr shadow_size,
   mach_vm_address_t address = start_address;
   mach_vm_address_t free_begin = start_address;
   kern_return_t kr = KERN_SUCCESS;
+  if (largest_gap_found) *largest_gap_found = 0;
   while (kr == KERN_SUCCESS) {
     mach_vm_size_t vmsize = 0;
     natural_t depth = 0;
@@ -784,12 +897,22 @@ uptr FindAvailableMemoryRange(uptr shadow_size,
     mach_msg_type_number_t count = kRegionInfoSize;
     kr = mach_vm_region_recurse(mach_task_self(), &address, &vmsize, &depth,
                                 (vm_region_info_t)&vminfo, &count);
+    if (kr == KERN_INVALID_ADDRESS) {
+      // No more regions beyond "address", consider the gap at the end of VM.
+      address = GetMaxVirtualAddress() + 1;
+      vmsize = 0;
+    }
     if (free_begin != address) {
       // We found a free region [free_begin..address-1].
-      uptr shadow_address = RoundUpTo((uptr)free_begin + left_padding,
-                                      alignment);
-      if (shadow_address + shadow_size < (uptr)address) {
-        return shadow_address;
+      uptr gap_start = RoundUpTo((uptr)free_begin + left_padding, alignment);
+      uptr gap_end = RoundDownTo((uptr)address, alignment);
+      uptr gap_size = gap_end > gap_start ? gap_end - gap_start : 0;
+      if (shadow_size < gap_size) {
+        return gap_start;
+      }
+
+      if (largest_gap_found && *largest_gap_found < gap_size) {
+        *largest_gap_found = gap_size;
       }
     }
     // Move to the next region.
@@ -882,6 +1005,20 @@ void PrintModuleMap() {
            ModuleArchToString(modules[i].arch()), uuid_str);
   }
   Printf("End of module map.\n");
+}
+
+void CheckNoDeepBind(const char *filename, int flag) {
+  // Do nothing.
+}
+
+// FIXME: implement on this platform.
+bool GetRandom(void *buffer, uptr length, bool blocking) {
+  UNIMPLEMENTED();
+}
+
+// FIXME: implement on this platform.
+u32 GetNumberOfCPUs() {
+  UNIMPLEMENTED();
 }
 
 }  // namespace __sanitizer

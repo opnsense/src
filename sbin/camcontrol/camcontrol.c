@@ -1391,6 +1391,18 @@ atacapprint(struct ata_params *parm)
 			parm->media_rotation_rate);
 	}
 
+	printf("Zoned-Device Commands ");
+	switch (parm->support3 & ATA_SUPPORT_ZONE_MASK) {
+		case ATA_SUPPORT_ZONE_DEV_MANAGED:
+			printf("device managed\n");
+			break;
+		case ATA_SUPPORT_ZONE_HOST_AWARE:
+			printf("host aware\n");
+			break;
+		default:
+			printf("no\n");
+	}
+
 	printf("\nFeature                      "
 		"Support  Enabled   Value           Vendor\n");
 	printf("read ahead                     %s	%s\n",
@@ -6221,15 +6233,15 @@ doreport:
 				if ((scsi_get_sks(sense, ccb->csio.sense_len -
 				     ccb->csio.sense_resid, sks) == 0)
 				 && (quiet == 0)) {
-					int val;
+					uint32_t val;
 					u_int64_t percentage;
 
 					val = scsi_2btoul(&sks[1]);
-					percentage = 10000 * val;
+					percentage = 10000ull * val;
 
 					fprintf(stdout,
 						"\rFormatting:  %ju.%02u %% "
-						"(%d/%d) done",
+						"(%u/%d) done",
 						(uintmax_t)(percentage /
 						(0x10000 * 100)),
 						(unsigned)((percentage /

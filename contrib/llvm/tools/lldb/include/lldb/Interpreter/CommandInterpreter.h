@@ -19,13 +19,13 @@
 #include "lldb/Core/Debugger.h"
 #include "lldb/Core/Event.h"
 #include "lldb/Core/IOHandler.h"
-#include "lldb/Core/Log.h"
-#include "lldb/Core/StringList.h"
 #include "lldb/Interpreter/Args.h"
 #include "lldb/Interpreter/CommandAlias.h"
 #include "lldb/Interpreter/CommandHistory.h"
 #include "lldb/Interpreter/CommandObject.h"
 #include "lldb/Interpreter/ScriptInterpreter.h"
+#include "lldb/Utility/Log.h"
+#include "lldb/Utility/StringList.h"
 #include "lldb/lldb-forward.h"
 #include "lldb/lldb-private.h"
 
@@ -241,6 +241,8 @@ public:
                      ExecutionContext *override_context = nullptr,
                      bool repeat_on_empty_command = true,
                      bool no_context_switching = false);
+
+  bool WasInterrupted() const;
 
   //------------------------------------------------------------------
   /// Execute a list of commands in sequence.
@@ -510,7 +512,7 @@ protected:
                                      StringList *matches = nullptr) const;
 
 private:
-  Error PreprocessCommand(std::string &command);
+  Status PreprocessCommand(std::string &command);
 
   // Completely resolves aliases and abbreviations, returning a pointer to the
   // final command object and updating command_line to the fully substituted
@@ -521,6 +523,25 @@ private:
   void FindCommandsForApropos(llvm::StringRef word, StringList &commands_found,
                               StringList &commands_help,
                               CommandObject::CommandMap &command_map);
+
+  // An interruptible wrapper around the stream output
+  void PrintCommandOutput(Stream &stream, llvm::StringRef str);
+
+  // A very simple state machine which models the command handling transitions
+  enum class CommandHandlingState {
+    eIdle,
+    eInProgress,
+    eInterrupted,
+  };
+
+  std::atomic<CommandHandlingState> m_command_state{
+      CommandHandlingState::eIdle};
+
+  int m_iohandler_nesting_level = 0;
+
+  void StartHandlingCommand();
+  void FinishHandlingCommand();
+  bool InterruptCommand();
 
   Debugger &m_debugger; // The debugger session that this interpreter is
                         // associated with
@@ -539,7 +560,7 @@ private:
   std::string m_repeat_command; // Stores the command that will be executed for
                                 // an empty command string.
   lldb::ScriptInterpreterSP m_script_interpreter_sp;
-  std::mutex m_script_interpreter_mutex;
+  std::recursive_mutex m_script_interpreter_mutex;
   lldb::IOHandlerSP m_command_io_handler_sp;
   char m_comment_char;
   bool m_batch_command_mode;

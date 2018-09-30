@@ -20,22 +20,15 @@
 #endif
 
         .syntax unified
-        .syntax unified
         .text
-#if defined(USE_THUMB_PROLOGUE)
-        .thumb
-#endif
+        DEFINE_CODE_STATE
         .p2align 2
-#if defined(USE_THUMB_PROLOGUE)
-DEFINE_COMPILERRT_THUMB_FUNCTION(__aeabi_idivmod)
-#else
 DEFINE_COMPILERRT_FUNCTION(__aeabi_idivmod)
-#endif
 #if defined(USE_THUMB_1)
         push    {r0, r1, lr}
         bl      SYMBOL_NAME(__divsi3)
         pop     {r1, r2, r3} // now r0 = quot, r1 = num, r2 = denom
-        muls    r2, r2, r0   // r2 = quot * denom
+        muls    r2, r0, r2   // r2 = quot * denom
         subs    r1, r1, r2
         JMP     (r3)
 #else  // defined(USE_THUMB_1)

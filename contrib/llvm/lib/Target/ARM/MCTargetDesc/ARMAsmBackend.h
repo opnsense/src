@@ -19,38 +19,34 @@
 namespace llvm {
 
 class ARMAsmBackend : public MCAsmBackend {
-  const MCSubtargetInfo *STI;
+  const MCSubtargetInfo &STI;
   bool isThumbMode;    // Currently emitting Thumb code.
   bool IsLittleEndian; // Big or little endian.
 public:
-  ARMAsmBackend(const Target &T, const Triple &TT, bool IsLittle)
-      : MCAsmBackend(), STI(ARM_MC::createARMMCSubtargetInfo(TT, "", "")),
-        isThumbMode(TT.getArchName().startswith("thumb")),
+  ARMAsmBackend(const Target &T, const MCSubtargetInfo &STI, bool IsLittle)
+      : MCAsmBackend(), STI(STI),
+        isThumbMode(STI.getTargetTriple().isThumb()),
         IsLittleEndian(IsLittle) {}
-
-  ~ARMAsmBackend() override { delete STI; }
 
   unsigned getNumFixupKinds() const override {
     return ARM::NumTargetFixupKinds;
   }
 
-  bool hasNOP() const { return STI->getFeatureBits()[ARM::HasV6T2Ops]; }
+  bool hasNOP() const { return STI.getFeatureBits()[ARM::HasV6T2Ops]; }
 
   const MCFixupKindInfo &getFixupKindInfo(MCFixupKind Kind) const override;
 
-  /// processFixupValue - Target hook to process the literal value of a fixup
-  /// if necessary.
-  void processFixupValue(const MCAssembler &Asm, const MCAsmLayout &Layout,
-                         const MCFixup &Fixup, const MCFragment *DF,
-                         const MCValue &Target, uint64_t &Value,
-                         bool &IsResolved) override;
+  bool shouldForceRelocation(const MCAssembler &Asm, const MCFixup &Fixup,
+                             const MCValue &Target) override;
 
-  unsigned adjustFixupValue(const MCFixup &Fixup, uint64_t Value, bool IsPCRel,
-                            MCContext *Ctx, bool IsLittleEndian,
-                            bool IsResolved) const;
+  unsigned adjustFixupValue(const MCAssembler &Asm, const MCFixup &Fixup,
+                            const MCValue &Target, uint64_t Value,
+                            bool IsResolved, MCContext &Ctx,
+                            bool IsLittleEndian) const;
 
-  void applyFixup(const MCFixup &Fixup, char *Data, unsigned DataSize,
-                  uint64_t Value, bool IsPCRel) const override;
+  void applyFixup(const MCAssembler &Asm, const MCFixup &Fixup,
+                  const MCValue &Target, MutableArrayRef<char> Data,
+                  uint64_t Value, bool IsResolved) const override;
 
   unsigned getRelaxedOpcode(unsigned Op) const;
 

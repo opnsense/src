@@ -1,4 +1,4 @@
-//===-- LiveInterval.cpp - Live Interval Representation -------------------===//
+//===- LiveInterval.cpp - Live Interval Representation --------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -19,20 +19,34 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/CodeGen/LiveInterval.h"
-
 #include "LiveRangeUtils.h"
 #include "RegisterCoalescer.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SmallSet.h"
-#include "llvm/CodeGen/LiveIntervalAnalysis.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/iterator_range.h"
+#include "llvm/CodeGen/LiveIntervals.h"
+#include "llvm/CodeGen/MachineBasicBlock.h"
+#include "llvm/CodeGen/MachineInstr.h"
+#include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/SlotIndexes.h"
+#include "llvm/CodeGen/TargetRegisterInfo.h"
+#include "llvm/MC/LaneBitmask.h"
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetRegisterInfo.h"
 #include <algorithm>
+#include <cassert>
+#include <cstddef>
+#include <iterator>
+#include <utility>
+
 using namespace llvm;
 
 namespace {
+
 //===----------------------------------------------------------------------===//
 // Implementation of various methods necessary for calculation of live ranges.
 // The implementation of the methods abstracts from the concrete type of the
@@ -56,8 +70,8 @@ protected:
   CalcLiveRangeUtilBase(LiveRange *LR) : LR(LR) {}
 
 public:
-  typedef LiveRange::Segment Segment;
-  typedef IteratorT iterator;
+  using Segment = LiveRange::Segment;
+  using iterator = IteratorT;
 
   /// A counterpart of LiveRange::createDeadDef: Make sure the range has a
   /// value defined at @p Def.
@@ -265,8 +279,9 @@ private:
 //===----------------------------------------------------------------------===//
 
 class CalcLiveRangeUtilVector;
-typedef CalcLiveRangeUtilBase<CalcLiveRangeUtilVector, LiveRange::iterator,
-                              LiveRange::Segments> CalcLiveRangeUtilVectorBase;
+using CalcLiveRangeUtilVectorBase =
+    CalcLiveRangeUtilBase<CalcLiveRangeUtilVector, LiveRange::iterator,
+                          LiveRange::Segments>;
 
 class CalcLiveRangeUtilVector : public CalcLiveRangeUtilVectorBase {
 public:
@@ -292,9 +307,9 @@ private:
 //===----------------------------------------------------------------------===//
 
 class CalcLiveRangeUtilSet;
-typedef CalcLiveRangeUtilBase<CalcLiveRangeUtilSet,
-                              LiveRange::SegmentSet::iterator,
-                              LiveRange::SegmentSet> CalcLiveRangeUtilSetBase;
+using CalcLiveRangeUtilSetBase =
+    CalcLiveRangeUtilBase<CalcLiveRangeUtilSet, LiveRange::SegmentSet::iterator,
+                          LiveRange::SegmentSet>;
 
 class CalcLiveRangeUtilSet : public CalcLiveRangeUtilSetBase {
 public:
@@ -327,7 +342,8 @@ private:
     return I;
   }
 };
-} // namespace
+
+} // end anonymous namespace
 
 //===----------------------------------------------------------------------===//
 //   LiveRange methods
@@ -444,7 +460,7 @@ bool LiveRange::overlaps(const LiveRange &Other, const CoalescerPair &CP,
   if (J == JE)
     return false;
 
-  for (;;) {
+  while (true) {
     // J has just been advanced to satisfy:
     assert(J->end >= I->start);
     // Check for an overlap.
@@ -863,6 +879,36 @@ void LiveInterval::clearSubRanges() {
   SubRanges = nullptr;
 }
 
+void LiveInterval::refineSubRanges(BumpPtrAllocator &Allocator,
+    LaneBitmask LaneMask, std::function<void(LiveInterval::SubRange&)> Apply) {
+  LaneBitmask ToApply = LaneMask;
+  for (SubRange &SR : subranges()) {
+    LaneBitmask SRMask = SR.LaneMask;
+    LaneBitmask Matching = SRMask & LaneMask;
+    if (Matching.none())
+      continue;
+
+    SubRange *MatchingRange;
+    if (SRMask == Matching) {
+      // The subrange fits (it does not cover bits outside \p LaneMask).
+      MatchingRange = &SR;
+    } else {
+      // We have to split the subrange into a matching and non-matching part.
+      // Reduce lanemask of existing lane to non-matching part.
+      SR.LaneMask = SRMask & ~Matching;
+      // Create a new subrange for the matching part
+      MatchingRange = createSubRangeFrom(Allocator, Matching, SR);
+    }
+    Apply(*MatchingRange);
+    ToApply &= ~Matching;
+  }
+  // Create a new subrange if there are uncovered bits left.
+  if (ToApply.any()) {
+    SubRange *NewRange = createSubRange(Allocator, ToApply);
+    Apply(*NewRange);
+  }
+}
+
 unsigned LiveInterval::getSize() const {
   unsigned Sum = 0;
   for (const Segment &S : segments)
@@ -894,8 +940,8 @@ void LiveInterval::computeSubRangeUndefs(SmallVectorImpl<SlotIndex> &Undefs,
   }
 }
 
-raw_ostream& llvm::operator<<(raw_ostream& os, const LiveRange::Segment &S) {
-  return os << '[' << S.start << ',' << S.end << ':' << S.valno->id << ')';
+raw_ostream& llvm::operator<<(raw_ostream& OS, const LiveRange::Segment &S) {
+  return OS << '[' << S.start << ',' << S.end << ':' << S.valno->id << ')';
 }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
@@ -940,7 +986,7 @@ void LiveInterval::SubRange::print(raw_ostream &OS) const {
 }
 
 void LiveInterval::print(raw_ostream &OS) const {
-  OS << PrintReg(reg) << ' ';
+  OS << printReg(reg) << ' ';
   super::print(OS);
   // Print subranges
   for (const SubRange &SR : subranges())
@@ -1002,7 +1048,6 @@ void LiveInterval::verify(const MachineRegisterInfo *MRI) const {
 }
 #endif
 
-
 //===----------------------------------------------------------------------===//
 //                           LiveRangeUpdater class
 //===----------------------------------------------------------------------===//
@@ -1032,6 +1077,7 @@ void LiveInterval::verify(const MachineRegisterInfo *MRI) const {
 // When they exist, Spills.back().start <= LastStart,
 //                 and WriteI[-1].start <= LastStart.
 
+#if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
 void LiveRangeUpdater::print(raw_ostream &OS) const {
   if (!isDirty()) {
     if (LR)
@@ -1058,6 +1104,7 @@ void LiveRangeUpdater::print(raw_ostream &OS) const {
 LLVM_DUMP_METHOD void LiveRangeUpdater::dump() const {
   print(errs());
 }
+#endif
 
 // Determine if A and B should be coalesced.
 static inline bool coalescable(const LiveRange::Segment &A,

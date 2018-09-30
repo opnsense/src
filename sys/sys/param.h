@@ -58,7 +58,7 @@
  *		in the range 5 to 9.
  */
 #undef __FreeBSD_version
-#define __FreeBSD_version 1101001	/* Master, propagated to newvers */
+#define __FreeBSD_version 1102000	/* Master, propagated to newvers */
 
 /*
  * __FreeBSD_kernel__ indicates that this system uses the kernel of FreeBSD,
@@ -84,7 +84,8 @@
 #define	P_OSREL_SHUTDOWN_ENOTCONN	1100077
 #define	P_OSREL_MAP_GUARD		1200035
 #define	P_OSREL_MAP_GUARD_11		1101501
-#define	P_OSREL_MAP_GUARD_11_1		1101001
+#define	P_OSREL_WRFSBASE		1200041
+#define	P_OSREL_WRFSBASE_11		1101503
 
 #define	P_OSREL_MAJOR(x)		((x) / 100000)
 #endif
@@ -247,9 +248,7 @@
  *		Filesystems can of course request smaller chunks.  Actual
  *		backing memory uses a chunk size of a page (PAGE_SIZE).
  *		The default value here can be overridden on a per-architecture
- *		basis by defining it in <machine/param.h>.  This should
- *		probably be done to increase its value, when MAXBCACHEBUF is
- *		defined as a larger value in <machine/param.h>.
+ *		basis by defining it in <machine/param.h>.
  *
  *		If you make BKVASIZE too small you risk seriously fragmenting
  *		the buffer KVM map which may slow things down a bit.  If you

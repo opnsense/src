@@ -221,6 +221,7 @@ lapic_write32(enum LAPIC_REGISTERS reg, uint32_t val)
 
 	if (x2apic_mode) {
 		mfence();
+		lfence();
 		wrmsr(MSR_APIC_000 + reg, val);
 	} else {
 		*(volatile uint32_t *)(lapic_map + reg * LAPIC_MEM_MUL) = val;
@@ -519,6 +520,9 @@ native_lapic_init(vm_paddr_t addr)
 			do_cpuid(0x06, regs);
 			if ((regs[0] & CPUTPM1_ARAT) != 0)
 				arat = 1;
+		} else if (cpu_vendor_id == CPU_VENDOR_AMD &&
+		    CPUID_TO_FAMILY(cpu_id) >= 0x12) {
+			arat = 1;
 		}
 		bzero(&lapic_et, sizeof(lapic_et));
 		lapic_et.et_name = "LAPIC";

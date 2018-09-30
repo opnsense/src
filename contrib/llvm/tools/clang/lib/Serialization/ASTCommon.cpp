@@ -91,6 +91,9 @@ serialization::TypeIdxFromBuiltin(const BuiltinType *BT) {
   case BuiltinType::LongDouble:
     ID = PREDEF_TYPE_LONGDOUBLE_ID;
     break;
+  case BuiltinType::Float16:
+    ID = PREDEF_TYPE_FLOAT16_ID;
+    break;
   case BuiltinType::Float128:
     ID = PREDEF_TYPE_FLOAT128_ID;
     break;
@@ -146,9 +149,6 @@ serialization::TypeIdxFromBuiltin(const BuiltinType *BT) {
     break;
   case BuiltinType::OCLQueue:
     ID = PREDEF_TYPE_QUEUE_ID;
-    break;
-  case BuiltinType::OCLNDRange:
-    ID = PREDEF_TYPE_NDRANGE_ID;
     break;
   case BuiltinType::OCLReserveID:
     ID = PREDEF_TYPE_RESERVE_ID_ID;
@@ -254,6 +254,7 @@ bool serialization::isRedeclarableDeclKind(unsigned Kind) {
   case Decl::VarTemplateSpecialization:
   case Decl::VarTemplatePartialSpecialization:
   case Decl::Function:
+  case Decl::CXXDeductionGuide:
   case Decl::CXXMethod:
   case Decl::CXXConstructor:
   case Decl::CXXDestructor:

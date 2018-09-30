@@ -10,13 +10,13 @@
 #include "AppleObjCDeclVendor.h"
 
 #include "Plugins/ExpressionParser/Clang/ASTDumper.h"
-#include "lldb/Core/Log.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Symbol/ClangExternalASTSourceCommon.h"
 #include "lldb/Symbol/ClangUtil.h"
 #include "lldb/Target/ObjCLanguageRuntime.h"
 #include "lldb/Target/Process.h"
 #include "lldb/Target/Target.h"
+#include "lldb/Utility/Log.h"
 
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclObjC.h"
@@ -324,8 +324,6 @@ public:
 
     clang::ASTContext &ast_ctx(interface_decl->getASTContext());
 
-    clang::QualType return_qual_type;
-
     const bool isInstance = instance;
     const bool isVariadic = false;
     const bool isSynthesized = false;
@@ -355,9 +353,14 @@ public:
       }
     }
 
+    clang::IdentifierInfo **identifier_infos = selector_components.data();
+    if (!identifier_infos) {
+      return NULL;
+    }
+
     clang::Selector sel = ast_ctx.Selectors.getSelector(
         is_zero_argument ? 0 : selector_components.size(),
-        selector_components.data());
+        identifier_infos);
 
     clang::QualType ret_type =
         ClangUtil::GetQualType(type_realizer_sp->RealizeType(
@@ -647,4 +650,12 @@ AppleObjCDeclVendor::FindDecls(const ConstString &name, bool append,
   } while (0);
 
   return ret;
+}
+
+clang::ExternalASTMerger::ImporterSource
+AppleObjCDeclVendor::GetImporterSource() {
+        return {*m_ast_ctx.getASTContext(),
+                *m_ast_ctx.getFileManager(),
+                m_ast_ctx.GetOriginMap()
+        };
 }

@@ -13,7 +13,6 @@
 #include "llvm/Support/ManagedStatic.h"
 #include <system_error>
 
-
 using namespace llvm;
 
 namespace {
@@ -91,6 +90,18 @@ std::error_code errorToErrorCode(Error Err) {
     report_fatal_error(EC.message());
   return EC;
 }
+
+#if LLVM_ENABLE_ABI_BREAKING_CHECKS
+void Error::fatalUncheckedError() const {
+  dbgs() << "Program aborted due to an unhandled Error:\n";
+  if (getPtr())
+    getPtr()->log(dbgs());
+  else
+    dbgs() << "Error value was Success. (Note: Success values must still be "
+              "checked prior to being destroyed).\n";
+  abort();
+}
+#endif
 
 StringError::StringError(const Twine &S, std::error_code EC)
     : Msg(S.str()), EC(EC) {}

@@ -7,11 +7,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
-#include "lldb/Core/ArchSpec.h"
 #include "lldb/Symbol/Function.h"
 #include "lldb/Symbol/ObjectFile.h"
 #include "lldb/Symbol/Symbol.h"
@@ -19,6 +14,7 @@
 #include "lldb/Target/Process.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Target/Thread.h"
+#include "lldb/Utility/ArchSpec.h"
 
 #include "RegisterContextMacOSXFrameBackchain.h"
 
@@ -85,8 +81,6 @@ size_t UnwindMacOSXFrameBackchain::GetStackFrameData_i386(
   if (process == NULL)
     return 0;
 
-  std::pair<lldb::addr_t, lldb::addr_t> fp_pc_pair;
-
   struct Frame_i386 {
     uint32_t fp;
     uint32_t pc;
@@ -105,7 +99,7 @@ size_t UnwindMacOSXFrameBackchain::GetStackFrameData_i386(
   m_cursors.push_back(cursor);
 
   const size_t k_frame_size = sizeof(frame);
-  Error error;
+  Status error;
   while (frame.fp != 0 && frame.pc != 0 && ((frame.fp & 7) == 0)) {
     // Read both the FP and PC (8 bytes)
     if (process->ReadMemory(frame.fp, &frame.fp, k_frame_size, error) !=
@@ -179,8 +173,6 @@ size_t UnwindMacOSXFrameBackchain::GetStackFrameData_x86_64(
 
   StackFrame *first_frame = exe_ctx.GetFramePtr();
 
-  std::pair<lldb::addr_t, lldb::addr_t> fp_pc_pair;
-
   struct Frame_x86_64 {
     uint64_t fp;
     uint64_t pc;
@@ -196,7 +188,7 @@ size_t UnwindMacOSXFrameBackchain::GetStackFrameData_x86_64(
   Frame_x86_64 frame = {cursor.fp, cursor.pc};
 
   m_cursors.push_back(cursor);
-  Error error;
+  Status error;
   const size_t k_frame_size = sizeof(frame);
   while (frame.fp != 0 && frame.pc != 0 && ((frame.fp & 7) == 0)) {
     // Read both the FP and PC (16 bytes)

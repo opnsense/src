@@ -19,6 +19,8 @@ class ScopedInterceptor {
   bool ignoring_;
 };
 
+LibIgnore *libignore();
+
 }  // namespace __tsan
 
 #define SCOPED_INTERCEPTOR_RAW(func, ...) \
@@ -46,5 +48,17 @@ class ScopedInterceptor {
     si.EnableIgnores();
 
 #define TSAN_INTERCEPTOR(ret, func, ...) INTERCEPTOR(ret, func, __VA_ARGS__)
+
+#if SANITIZER_NETBSD
+# define TSAN_INTERCEPTOR_NETBSD_ALIAS(ret, func, ...) \
+  TSAN_INTERCEPTOR(ret, __libc_##func, __VA_ARGS__) \
+  ALIAS(WRAPPER_NAME(pthread_##func));
+# define TSAN_INTERCEPTOR_NETBSD_ALIAS_THR(ret, func, ...) \
+  TSAN_INTERCEPTOR(ret, __libc_thr_##func, __VA_ARGS__) \
+  ALIAS(WRAPPER_NAME(pthread_##func));
+#else
+# define TSAN_INTERCEPTOR_NETBSD_ALIAS(ret, func, ...)
+# define TSAN_INTERCEPTOR_NETBSD_ALIAS_THR(ret, func, ...)
+#endif
 
 #endif  // TSAN_INTERCEPTORS_H

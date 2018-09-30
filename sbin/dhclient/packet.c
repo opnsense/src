@@ -58,7 +58,7 @@ u_int32_t	wrapsum(u_int32_t);
 u_int32_t
 checksum(unsigned char *buf, unsigned nbytes, u_int32_t sum)
 {
-	int i;
+	unsigned i;
 
 	/* Checksum all the pairs of bytes first... */
 	for (i = 0; i < (nbytes & ~1U); i += 2) {
@@ -92,29 +92,19 @@ void
 assemble_hw_header(struct interface_info *interface, unsigned char *buf,
     int *bufix)
 {
-	int vlpcp = interface->client->config->vlan_pcp;
-	int vlid = interface->client->config->vlan_id;
-	int plen = ETHER_HEADER_SIZE;
-	struct ether_vlan_header eh;
+	struct ether_header eh;
 
-	memset(eh.evl_dhost, 0xff, sizeof(eh.evl_dhost));
-	if (interface->hw_address.hlen == sizeof(eh.evl_shost))
-		memcpy(eh.evl_shost, interface->hw_address.haddr,
-		    sizeof(eh.evl_shost));
+	memset(eh.ether_dhost, 0xff, sizeof(eh.ether_dhost));
+	if (interface->hw_address.hlen == sizeof(eh.ether_shost))
+		memcpy(eh.ether_shost, interface->hw_address.haddr,
+		    sizeof(eh.ether_shost));
 	else
-		memset(eh.evl_shost, 0x00, sizeof(eh.evl_shost));
+		memset(eh.ether_shost, 0x00, sizeof(eh.ether_shost));
 
-	eh.evl_encap_proto = htons(ETHERTYPE_IP);
+	eh.ether_type = htons(ETHERTYPE_IP);
 
-	if (vlid != 0) {
-		eh.evl_tag = htons(EVL_MAKETAG(vlid, vlpcp, 0));
-		eh.evl_encap_proto = htons(ETHERTYPE_VLAN);
-		eh.evl_proto = htons(ETHERTYPE_IP);
-		plen += ETHER_VLAN_ENCAP_LEN;
-	}
-
-	memcpy(&buf[*bufix], &eh, plen);
-	*bufix += plen;
+	memcpy(&buf[*bufix], &eh, ETHER_HEADER_SIZE);
+	*bufix += ETHER_HEADER_SIZE;
 }
 
 void

@@ -243,7 +243,9 @@ DRIVER_MODULE(ix, pci, ix_driver, ix_devclass, 0, 0);
 
 MODULE_DEPEND(ix, pci, 1, 1, 1);
 MODULE_DEPEND(ix, ether, 1, 1, 1);
+#ifdef DEV_NETMAP
 MODULE_DEPEND(ix, netmap, 1, 1, 1);
+#endif
 
 /*
  * TUNEABLE PARAMETERS:
@@ -333,7 +335,7 @@ SYSCTL_INT(_hw_ix, OID_AUTO, rxd, CTLFLAG_RDTUN, &ixgbe_rxd, 0,
  * doing so you are on your own :)
  */
 static int allow_unsupported_sfp = FALSE;
-SYSCTL_INT(_hw_ix, OID_AUTO, allow_unsupported_sfp, CTLFLAG_RDTUN,
+SYSCTL_INT(_hw_ix, OID_AUTO, unsupported_sfp, CTLFLAG_RDTUN,
     &allow_unsupported_sfp, 0,
     "Allow unsupported SFP modules...use at your own risk");
 
@@ -728,6 +730,8 @@ ixgbe_attach(device_t dev)
 	ctrl_ext |= IXGBE_CTRL_EXT_DRV_LOAD;
 	IXGBE_WRITE_REG(hw, IXGBE_CTRL_EXT, ctrl_ext);
 
+	hw->allow_unsupported_sfp = allow_unsupported_sfp;
+
 	/*
 	 * Initialize the shared code
 	 */
@@ -740,7 +744,6 @@ ixgbe_attach(device_t dev)
 	if (hw->mbx.ops.init_params)
 		hw->mbx.ops.init_params(hw);
 
-	hw->allow_unsupported_sfp = allow_unsupported_sfp;
 
 	/* Pick up the 82599 settings */
 	if (hw->mac.type != ixgbe_mac_82598EB) {
@@ -4823,7 +4826,7 @@ ixgbe_ioctl(struct ifnet *ifp, u_long command, caddr_t data)
 		int i;
 
 		IOCTL_DEBUGOUT("ioctl: SIOCGI2C (Get I2C Data)");
-		error = copyin(ifr->ifr_data, &i2c, sizeof(i2c));
+		error = copyin(ifr_data_get_ptr(ifr), &i2c, sizeof(i2c));
 		if (error != 0)
 			break;
 		if (i2c.dev_addr != 0xA0 && i2c.dev_addr != 0xA2) {
@@ -4838,7 +4841,7 @@ ixgbe_ioctl(struct ifnet *ifp, u_long command, caddr_t data)
 		for (i = 0; i < i2c.len; i++)
 			hw->phy.ops.read_i2c_byte(hw, i2c.offset + i,
 			    i2c.dev_addr, &i2c.data[i]);
-		error = copyout(&i2c, ifr->ifr_data, sizeof(i2c));
+		error = copyout(&i2c, ifr_data_get_ptr(ifr), sizeof(i2c));
 		break;
 	}
 #endif

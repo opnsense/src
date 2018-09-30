@@ -16,8 +16,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "WebAssembly.h"
 #include "MCTargetDesc/WebAssemblyMCTargetDesc.h"
+#include "WebAssembly.h"
 #include "WebAssemblyMachineFunctionInfo.h"
 #include "WebAssemblySubtarget.h"
 #include "WebAssemblyTargetMachine.h"
@@ -63,12 +63,16 @@ class WebAssemblyFastISel final : public FastISel {
   public:
     // Innocuous defaults for our address.
     Address() : Kind(RegBase), Offset(0), GV(0) { Base.Reg = 0; }
-    void setKind(BaseKind K) { Kind = K; }
+    void setKind(BaseKind K) {
+      assert(!isSet() && "Can't change kind with non-zero base");
+      Kind = K;
+    }
     BaseKind getKind() const { return Kind; }
     bool isRegBase() const { return Kind == RegBase; }
     bool isFIBase() const { return Kind == FrameIndexBase; }
     void setReg(unsigned Reg) {
       assert(isRegBase() && "Invalid base register access!");
+      assert(Base.Reg == 0 && "Overwriting non-zero register");
       Base.Reg = Reg;
     }
     unsigned getReg() const {
@@ -77,6 +81,7 @@ class WebAssemblyFastISel final : public FastISel {
     }
     void setFI(unsigned FI) {
       assert(isFIBase() && "Invalid base frame index access!");
+      assert(Base.FI == 0 && "Overwriting non-zero frame index");
       Base.FI = FI;
     }
     unsigned getFI() const {
@@ -91,6 +96,13 @@ class WebAssemblyFastISel final : public FastISel {
     int64_t getOffset() const { return Offset; }
     void setGlobalValue(const GlobalValue *G) { GV = G; }
     const GlobalValue *getGlobalValue() const { return GV; }
+    bool isSet() const {
+      if (isRegBase()) {
+        return Base.Reg != 0;
+      } else {
+        return Base.FI != 0;
+      }
+    }
   };
 
   /// Keep a pointer to the WebAssemblySubtarget around so that we can make the
@@ -116,6 +128,8 @@ private:
     case MVT::f32:
     case MVT::f64:
       return VT;
+    case MVT::f16:
+      return MVT::f32;
     case MVT::v16i8:
     case MVT::v8i16:
     case MVT::v4i32:
@@ -261,7 +275,10 @@ bool WebAssemblyFastISel::computeAddress(const Value *Obj, Address &Addr) {
           }
           if (S == 1 && Addr.isRegBase() && Addr.getReg() == 0) {
             // An unscaled add of a register. Set it as the new base.
-            Addr.setReg(getRegForValue(Op));
+            unsigned Reg = getRegForValue(Op);
+            if (Reg == 0)
+              return false;
+            Addr.setReg(Reg);
             break;
           }
           if (canFoldAddIntoGEP(U, Op)) {
@@ -295,6 +312,9 @@ bool WebAssemblyFastISel::computeAddress(const Value *Obj, Address &Addr) {
     DenseMap<const AllocaInst *, int>::iterator SI =
         FuncInfo.StaticAllocaMap.find(AI);
     if (SI != FuncInfo.StaticAllocaMap.end()) {
+      if (Addr.isSet()) {
+        return false;
+      }
       Addr.setKind(Address::FrameIndexBase);
       Addr.setFI(SI->second);
       return true;
@@ -339,7 +359,13 @@ bool WebAssemblyFastISel::computeAddress(const Value *Obj, Address &Addr) {
     break;
   }
   }
-  Addr.setReg(getRegForValue(Obj));
+  if (Addr.isSet()) {
+    return false;
+  }
+  unsigned Reg = getRegForValue(Obj);
+  if (Reg == 0)
+    return false;
+  Addr.setReg(Reg);
   return Addr.getReg() != 0;
 }
 
@@ -398,7 +424,10 @@ unsigned WebAssemblyFastISel::getRegForI1Value(const Value *V, bool &Not) {
   }
 
   Not = false;
-  return maskI1Value(getRegForValue(V), V);
+  unsigned Reg = getRegForValue(V);
+  if (Reg == 0)
+    return 0;
+  return maskI1Value(Reg, V);
 }
 
 unsigned WebAssemblyFastISel::zeroExtendToI32(unsigned Reg, const Value *V,
@@ -515,13 +544,19 @@ unsigned WebAssemblyFastISel::signExtend(unsigned Reg, const Value *V,
 unsigned WebAssemblyFastISel::getRegForUnsignedValue(const Value *V) {
   MVT::SimpleValueType From = getSimpleType(V->getType());
   MVT::SimpleValueType To = getLegalType(From);
-  return zeroExtend(getRegForValue(V), V, From, To);
+  unsigned VReg = getRegForValue(V);
+  if (VReg == 0)
+    return 0;
+  return zeroExtend(VReg, V, From, To);
 }
 
 unsigned WebAssemblyFastISel::getRegForSignedValue(const Value *V) {
   MVT::SimpleValueType From = getSimpleType(V->getType());
   MVT::SimpleValueType To = getLegalType(From);
-  return zeroExtend(getRegForValue(V), V, From, To);
+  unsigned VReg = getRegForValue(V);
+  if (VReg == 0)
+    return 0;
+  return signExtend(VReg, V, From, To);
 }
 
 unsigned WebAssemblyFastISel::getRegForPromotedValue(const Value *V,
@@ -594,12 +629,12 @@ bool WebAssemblyFastISel::fastLowerArguments() {
 
   unsigned i = 0;
   for (auto const &Arg : F->args()) {
-    const AttributeSet &Attrs = F->getAttributes();
-    if (Attrs.hasAttribute(i+1, Attribute::ByVal) ||
-        Attrs.hasAttribute(i+1, Attribute::SwiftSelf) ||
-        Attrs.hasAttribute(i+1, Attribute::SwiftError) ||
-        Attrs.hasAttribute(i+1, Attribute::InAlloca) ||
-        Attrs.hasAttribute(i+1, Attribute::Nest))
+    const AttributeList &Attrs = F->getAttributes();
+    if (Attrs.hasParamAttribute(i, Attribute::ByVal) ||
+        Attrs.hasParamAttribute(i, Attribute::SwiftSelf) ||
+        Attrs.hasParamAttribute(i, Attribute::SwiftError) ||
+        Attrs.hasParamAttribute(i, Attribute::InAlloca) ||
+        Attrs.hasParamAttribute(i, Attribute::Nest))
       return false;
 
     Type *ArgTy = Arg.getType();
@@ -680,9 +715,12 @@ bool WebAssemblyFastISel::selectCall(const Instruction *I) {
   if (Func && Func->isIntrinsic())
     return false;
 
+  bool IsDirect = Func != nullptr;
+  if (!IsDirect && isa<ConstantExpr>(Call->getCalledValue()))
+    return false;
+
   FunctionType *FuncTy = Call->getFunctionType();
   unsigned Opc;
-  bool IsDirect = Func != nullptr;
   bool IsVoid = FuncTy->getReturnType()->isVoidTy();
   unsigned ResultReg;
   if (IsVoid) {
@@ -744,19 +782,19 @@ bool WebAssemblyFastISel::selectCall(const Instruction *I) {
     if (ArgTy == MVT::INVALID_SIMPLE_VALUE_TYPE)
       return false;
 
-    const AttributeSet &Attrs = Call->getAttributes();
-    if (Attrs.hasAttribute(i+1, Attribute::ByVal) ||
-        Attrs.hasAttribute(i+1, Attribute::SwiftSelf) ||
-        Attrs.hasAttribute(i+1, Attribute::SwiftError) ||
-        Attrs.hasAttribute(i+1, Attribute::InAlloca) ||
-        Attrs.hasAttribute(i+1, Attribute::Nest))
+    const AttributeList &Attrs = Call->getAttributes();
+    if (Attrs.hasParamAttribute(i, Attribute::ByVal) ||
+        Attrs.hasParamAttribute(i, Attribute::SwiftSelf) ||
+        Attrs.hasParamAttribute(i, Attribute::SwiftError) ||
+        Attrs.hasParamAttribute(i, Attribute::InAlloca) ||
+        Attrs.hasParamAttribute(i, Attribute::Nest))
       return false;
 
     unsigned Reg;
 
-    if (Attrs.hasAttribute(i+1, Attribute::SExt))
+    if (Attrs.hasParamAttribute(i, Attribute::SExt))
       Reg = getRegForSignedValue(V);
-    else if (Attrs.hasAttribute(i+1, Attribute::ZExt))
+    else if (Attrs.hasParamAttribute(i, Attribute::ZExt))
       Reg = getRegForUnsignedValue(V);
     else
       Reg = getRegForValue(V);
@@ -774,8 +812,12 @@ bool WebAssemblyFastISel::selectCall(const Instruction *I) {
 
   if (IsDirect)
     MIB.addGlobalAddress(Func);
-  else
-    MIB.addReg(getRegForValue(Call->getCalledValue()));
+  else {
+    unsigned Reg = getRegForValue(Call->getCalledValue());
+    if (Reg == 0)
+      return false;
+    MIB.addReg(Reg);
+  }
 
   for (unsigned ArgReg : Args)
     MIB.addReg(ArgReg);
@@ -865,7 +907,10 @@ bool WebAssemblyFastISel::selectZExt(const Instruction *I) {
   const Value *Op = ZExt->getOperand(0);
   MVT::SimpleValueType From = getSimpleType(Op->getType());
   MVT::SimpleValueType To = getLegalType(getSimpleType(ZExt->getType()));
-  unsigned Reg = zeroExtend(getRegForValue(Op), Op, From, To);
+  unsigned In = getRegForValue(Op);
+  if (In == 0)
+    return false;
+  unsigned Reg = zeroExtend(In, Op, From, To);
   if (Reg == 0)
     return false;
 
@@ -879,7 +924,10 @@ bool WebAssemblyFastISel::selectSExt(const Instruction *I) {
   const Value *Op = SExt->getOperand(0);
   MVT::SimpleValueType From = getSimpleType(Op->getType());
   MVT::SimpleValueType To = getLegalType(getSimpleType(SExt->getType()));
-  unsigned Reg = signExtend(getRegForValue(Op), Op, From, To);
+  unsigned In = getRegForValue(Op);
+  if (In == 0)
+    return false;
+  unsigned Reg = signExtend(In, Op, From, To);
   if (Reg == 0)
     return false;
 
@@ -1021,15 +1069,18 @@ bool WebAssemblyFastISel::selectBitCast(const Instruction *I) {
   if (!VT.isSimple() || !RetVT.isSimple())
     return false;
 
+  unsigned In = getRegForValue(I->getOperand(0));
+  if (In == 0)
+    return false;
+
   if (VT == RetVT) {
     // No-op bitcast.
-    updateValueMap(I, getRegForValue(I->getOperand(0)));
+    updateValueMap(I, In);
     return true;
   }
 
   unsigned Reg = fastEmit_ISD_BITCAST_r(VT.getSimpleVT(), RetVT.getSimpleVT(),
-                                        getRegForValue(I->getOperand(0)),
-                                        I->getOperand(0)->hasOneUse());
+                                        In, I->getOperand(0)->hasOneUse());
   if (!Reg)
     return false;
   MachineBasicBlock::iterator Iter = FuncInfo.InsertPt;

@@ -152,7 +152,6 @@
 #define _DECLARE_DT_GLOBALS
 
 #include <contrib/dev/acpica/compiler/aslcompiler.h>
-#include <contrib/dev/acpica/compiler/dtcompiler.h>
 
 #define _COMPONENT          DT_COMPILER
         ACPI_MODULE_NAME    ("dtcompile")
@@ -281,7 +280,6 @@ DtDoCompile (
 CleanupAndExit:
 
     AcpiUtDeleteCaches ();
-    DtDeleteCaches ();
     CmCleanupAndExit ();
     return (Status);
 }
@@ -318,6 +316,8 @@ DtInitialize (
     {
         return (Status);
     }
+
+    AcpiUtSetIntegerWidth (2); /* Set width to 64 bits */
 
     Gbl_FieldList = NULL;
     Gbl_RootTable = NULL;
@@ -410,7 +410,7 @@ DtCompileDataTable (
         return (AE_ERROR);
     }
 
-    Gbl_Signature = UtStringCacheCalloc (strlen (Signature) + 1);
+    Gbl_Signature = UtLocalCacheCalloc (strlen (Signature) + 1);
     strcpy (Gbl_Signature, Signature);
 
     /*
@@ -486,18 +486,21 @@ DtCompileDataTable (
     }
     else if (TableData->TableInfo)
     {
-        /* Simple table, just walk the info table */
+        /* Simple table, just walk the info table, unless its empty */
 
-        Subtable = NULL;
-        Status = DtCompileTable (FieldList, TableData->TableInfo,
-            &Subtable, TRUE);
-        if (ACPI_FAILURE (Status))
+        if (FieldList && *FieldList)
         {
-            return (Status);
-        }
+            Subtable = NULL;
+            Status = DtCompileTable (FieldList, TableData->TableInfo,
+                &Subtable, TRUE);
+            if (ACPI_FAILURE (Status))
+            {
+                return (Status);
+            }
 
-        DtInsertSubtable (Gbl_RootTable, Subtable);
-        DtPopSubtable ();
+            DtInsertSubtable (Gbl_RootTable, Subtable);
+            DtPopSubtable ();
+        }
     }
     else
     {
@@ -556,9 +559,17 @@ DtCompileTable (
     ACPI_STATUS             Status = AE_OK;
 
 
-    if (!Field || !*Field)
+    if (!Field)
     {
         return (AE_BAD_PARAMETER);
+    }
+    if (!*Field)
+    {
+        /*
+         * The field list is empty, this means that we are out of fields to
+         * parse. In other words, we are at the end of the table.
+         */
+        return (AE_END_OF_TABLE);
     }
 
     /* Ignore optional subtable if name does not match */
@@ -580,7 +591,7 @@ DtCompileTable (
 
     if (Length > 0)
     {
-        String = UtStringCacheCalloc (Length);
+        String = UtLocalCacheCalloc (Length);
         Subtable->Buffer = ACPI_CAST_PTR (UINT8, String);
     }
 
@@ -823,7 +834,7 @@ DtCompilePadding (
 
     if (Length > 0)
     {
-        String = UtStringCacheCalloc (Length);
+        String = UtLocalCacheCalloc (Length);
         Subtable->Buffer = ACPI_CAST_PTR (UINT8, String);
     }
 

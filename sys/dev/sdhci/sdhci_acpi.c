@@ -58,10 +58,8 @@ static const struct sdhci_acpi_device {
 	u_int		quirks;
 } sdhci_acpi_devices[] = {
 	{ "80860F14",	1, "Intel Bay Trail/Braswell eMMC 4.5/4.5.1 Controller",
-	    SDHCI_QUIRK_ALL_SLOTS_NON_REMOVABLE |
 	    SDHCI_QUIRK_INTEL_POWER_UP_RESET |
 	    SDHCI_QUIRK_WAIT_WHILE_BUSY |
-	    SDHCI_QUIRK_MMC_DDR52 |
 	    SDHCI_QUIRK_CAPS_BIT63_FOR_MMC_HS400 |
 	    SDHCI_QUIRK_PRESET_VALUE_BROKEN },
 	{ "80860F14",	3, "Intel Bay Trail/Braswell SDXC Controller",
@@ -76,7 +74,6 @@ static const struct sdhci_acpi_device {
 	    SDHCI_QUIRK_PRESET_VALUE_BROKEN },
 	{ "80865ACC",	0, "Intel Apollo Lake eMMC 5.0 Controller",
 	    SDHCI_QUIRK_BROKEN_DMA |	/* APL18 erratum */
-	    SDHCI_QUIRK_ALL_SLOTS_NON_REMOVABLE |
 	    SDHCI_QUIRK_INTEL_POWER_UP_RESET |
 	    SDHCI_QUIRK_WAIT_WHILE_BUSY |
 	    SDHCI_QUIRK_MMC_DDR52 |
@@ -263,11 +260,16 @@ sdhci_acpi_attach(device_t dev)
 		return (ENOMEM);
 	}
 
-	/* Intel Braswell eMMC 4.5.1 controller quirk */
+	/*
+	 * Intel Bay Trail and Braswell eMMC controllers share the same IDs,
+	 * but while with these former DDR52 is affected by the VLI54 erratum,
+	 * these latter require the timeout clock to be hardcoded to 1 MHz.
+	 */
 	if (strcmp(acpi_dev->hid, "80860F14") == 0 && acpi_dev->uid == 1 &&
 	    SDHCI_READ_4(dev, &sc->slot, SDHCI_CAPABILITIES) == 0x446cc8b2 &&
 	    SDHCI_READ_4(dev, &sc->slot, SDHCI_CAPABILITIES2) == 0x00000807)
-		sc->quirks |= SDHCI_QUIRK_DATA_TIMEOUT_1MHZ;
+		sc->quirks |= SDHCI_QUIRK_MMC_DDR52 |
+		    SDHCI_QUIRK_DATA_TIMEOUT_1MHZ;
 	sc->quirks &= ~sdhci_quirk_clear;
 	sc->quirks |= sdhci_quirk_set;
 	sc->slot.quirks = sc->quirks;
@@ -371,6 +373,8 @@ static device_method_t sdhci_methods[] = {
 	/* mmcbr_if */
 	DEVMETHOD(mmcbr_update_ios,	sdhci_generic_update_ios),
 	DEVMETHOD(mmcbr_switch_vccq,	sdhci_generic_switch_vccq),
+	DEVMETHOD(mmcbr_tune,		sdhci_generic_tune),
+	DEVMETHOD(mmcbr_retune,		sdhci_generic_retune),
 	DEVMETHOD(mmcbr_request,	sdhci_generic_request),
 	DEVMETHOD(mmcbr_get_ro,		sdhci_generic_get_ro),
 	DEVMETHOD(mmcbr_acquire_host,   sdhci_generic_acquire_host),

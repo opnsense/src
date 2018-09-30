@@ -75,7 +75,7 @@ static HASHINFO openinfo = {
 	256,		/* nelem */
 	2048 * 1024,	/* cachesize */
 	NULL,		/* hash() */
-	BYTE_ORDER	/* lorder */
+	BIG_ENDIAN	/* lorder */
 };
 
 static enum state { FILE_INSECURE, FILE_SECURE, FILE_ORIG } clean;
@@ -164,6 +164,8 @@ main(int argc, char *argv[])
 
 	if (argc != 1 || (username && (*username == '+' || *username == '-')))
 		usage();
+	if (lflag)
+		warnx("legacy (v3) database format support is deprecated");
 
 	/*
 	 * This could be changed to allow the user to interrupt.

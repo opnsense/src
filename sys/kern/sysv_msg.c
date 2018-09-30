@@ -220,7 +220,7 @@ msginit()
 	msgmaps = malloc(sizeof(struct msgmap) * msginfo.msgseg, M_MSG, M_WAITOK);
 	msghdrs = malloc(sizeof(struct msg) * msginfo.msgtql, M_MSG, M_WAITOK);
 	msqids = malloc(sizeof(struct msqid_kernel) * msginfo.msgmni, M_MSG,
-	    M_WAITOK);
+	    M_WAITOK | M_ZERO);
 
 	/*
 	 * msginfo.msgssz should be a power of two for efficiency reasons.
@@ -473,9 +473,7 @@ struct msgctl_args {
 };
 #endif
 int
-sys_msgctl(td, uap)
-	struct thread *td;
-	register struct msgctl_args *uap;
+sys_msgctl(struct thread *td, struct msgctl_args *uap)
 {
 	int msqid = uap->msqid;
 	int cmd = uap->cmd;
@@ -500,7 +498,7 @@ kern_msgctl(td, msqid, cmd, msqbuf)
 	struct msqid_ds *msqbuf;
 {
 	int rval, error, msqix;
-	register struct msqid_kernel *msqkptr;
+	struct msqid_kernel *msqkptr;
 	struct prison *rpr;
 
 	rpr = msg_find_prison(td->td_ucred);
@@ -634,15 +632,13 @@ struct msgget_args {
 #endif
 
 int
-sys_msgget(td, uap)
-	struct thread *td;
-	register struct msgget_args *uap;
+sys_msgget(struct thread *td, struct msgget_args *uap)
 {
 	int msqid, error = 0;
 	int key = uap->key;
 	int msgflg = uap->msgflg;
 	struct ucred *cred = td->td_ucred;
-	register struct msqid_kernel *msqkptr = NULL;
+	struct msqid_kernel *msqkptr = NULL;
 
 	DPRINTF(("msgget(0x%x, 0%o)\n", key, msgflg));
 
@@ -751,23 +747,18 @@ done2:
 #ifndef _SYS_SYSPROTO_H_
 struct msgsnd_args {
 	int	msqid;
-	const void	*msgp;
+	const void	*msgp;	/* XXX msgp is actually mtext. */
 	size_t	msgsz;
 	int	msgflg;
 };
 #endif
 int
-kern_msgsnd(td, msqid, msgp, msgsz, msgflg, mtype)
-	struct thread *td;
-	int msqid;
-	const void *msgp;	/* XXX msgp is actually mtext. */
-	size_t msgsz;
-	int msgflg;
-	long mtype;
+kern_msgsnd(struct thread *td, int msqid, const void *msgp,
+    size_t msgsz, int msgflg, long mtype)
 {
 	int msqix, segs_needed, error = 0;
-	register struct msqid_kernel *msqkptr;
-	register struct msg *msghdr;
+	struct msqid_kernel *msqkptr;
+	struct msg *msghdr;
 	struct prison *rpr;
 	short next;
 #ifdef RACCT
@@ -1102,9 +1093,7 @@ done2:
 }
 
 int
-sys_msgsnd(td, uap)
-	struct thread *td;
-	register struct msgsnd_args *uap;
+sys_msgsnd(struct thread *td, struct msgsnd_args *uap)
 {
 	int error;
 	long mtype;
@@ -1130,19 +1119,14 @@ struct msgrcv_args {
 	int	msgflg;
 };
 #endif
+/* XXX msgp is actually mtext. */
 int
-kern_msgrcv(td, msqid, msgp, msgsz, msgtyp, msgflg, mtype)
-	struct thread *td;
-	int msqid;
-	void *msgp;	/* XXX msgp is actually mtext. */
-	size_t msgsz;
-	long msgtyp;
-	int msgflg;
-	long *mtype;
+kern_msgrcv(struct thread *td, int msqid, void *msgp, size_t msgsz, long msgtyp,
+    int msgflg, long *mtype)
 {
 	size_t len;
-	register struct msqid_kernel *msqkptr;
-	register struct msg *msghdr;
+	struct msqid_kernel *msqkptr;
+	struct msg *msghdr;
 	struct prison *rpr;
 	int msqix, error = 0;
 	short next;
@@ -1394,9 +1378,7 @@ done2:
 }
 
 int
-sys_msgrcv(td, uap)
-	struct thread *td;
-	register struct msgrcv_args *uap;
+sys_msgrcv(struct thread *td, struct msgrcv_args *uap)
 {
 	int error;
 	long mtype;
@@ -1417,7 +1399,12 @@ static int
 sysctl_msqids(SYSCTL_HANDLER_ARGS)
 {
 	struct msqid_kernel tmsqk;
+#ifdef COMPAT_FREEBSD32
+	struct msqid_kernel32 tmsqk32;
+#endif
 	struct prison *pr, *rpr;
+	void *outaddr;
+	size_t outsize;
 	int error, i;
 
 	pr = req->td->td_ucred->cr_prison;
@@ -1434,7 +1421,40 @@ sysctl_msqids(SYSCTL_HANDLER_ARGS)
 				tmsqk.u.msg_perm.key = IPC_PRIVATE;
 		}
 		mtx_unlock(&msq_mtx);
-		error = SYSCTL_OUT(req, &tmsqk, sizeof(tmsqk));
+#ifdef COMPAT_FREEBSD32
+		if (SV_CURPROC_FLAG(SV_ILP32)) {
+			bzero(&tmsqk32, sizeof(tmsqk32));
+			freebsd32_ipcperm_out(&tmsqk.u.msg_perm,
+			    &tmsqk32.u.msg_perm);
+			/* Don't copy u.msg_first or u.msg_last */
+			CP(tmsqk, tmsqk32, u.msg_cbytes);
+			CP(tmsqk, tmsqk32, u.msg_qnum);
+			CP(tmsqk, tmsqk32, u.msg_qbytes);
+			CP(tmsqk, tmsqk32, u.msg_lspid);
+			CP(tmsqk, tmsqk32, u.msg_lrpid);
+			CP(tmsqk, tmsqk32, u.msg_stime);
+			CP(tmsqk, tmsqk32, u.msg_rtime);
+			CP(tmsqk, tmsqk32, u.msg_ctime);
+			/* Don't copy label or cred */
+			outaddr = &tmsqk32;
+			outsize = sizeof(tmsqk32);
+		} else
+#endif
+		{
+			/* Don't leak kernel pointers */
+			tmsqk.u.msg_first = NULL;
+			tmsqk.u.msg_last = NULL;
+			tmsqk.label = NULL;
+			tmsqk.cred = NULL;
+			/*
+			 * XXX: some padding also exists, but we take care to
+			 * allocate our pool of msqid_kernel structs with
+			 * zeroed memory so this should be OK.
+			 */
+			outaddr = &tmsqk;
+			outsize = sizeof(tmsqk);
+		}
+		error = SYSCTL_OUT(req, outaddr, outsize);
 		if (error != 0)
 			break;
 	}
@@ -1455,7 +1475,8 @@ SYSCTL_INT(_kern_ipc, OID_AUTO, msgseg, CTLFLAG_RDTUN, &msginfo.msgseg, 0,
     "Number of message segments");
 SYSCTL_PROC(_kern_ipc, OID_AUTO, msqids,
     CTLTYPE_OPAQUE | CTLFLAG_RD | CTLFLAG_MPSAFE,
-    NULL, 0, sysctl_msqids, "", "Message queue IDs");
+    NULL, 0, sysctl_msqids, "",
+    "Array of struct msqid_kernel for each potential message queue");
 
 static int
 msg_prison_check(void *obj, void *data)
@@ -1794,19 +1815,19 @@ static sy_call_t *msgcalls[] = {
 
 /*
  * Entry point for all MSG calls.
+ *
+ * XXX actually varargs.
+ * struct msgsys_args {
+ *		int	which;
+ *		int	a2;
+ *		int	a3;
+ *		int	a4;
+ *		int	a5;
+ *		int	a6;
+ *	} *uap;
  */
 int
-sys_msgsys(td, uap)
-	struct thread *td;
-	/* XXX actually varargs. */
-	struct msgsys_args /* {
-		int	which;
-		int	a2;
-		int	a3;
-		int	a4;
-		int	a5;
-		int	a6;
-	} */ *uap;
+sys_msgsys(struct thread *td, struct msgsys_args *uap)
 {
 	int error;
 
@@ -1828,9 +1849,7 @@ struct freebsd7_msgctl_args {
 };
 #endif
 int
-freebsd7_msgctl(td, uap)
-	struct thread *td;
-	struct freebsd7_msgctl_args *uap;
+freebsd7_msgctl(struct thread *td, struct freebsd7_msgctl_args *uap)
 {
 	struct msqid_ds_old msqold;
 	struct msqid_ds msqbuf;

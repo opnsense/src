@@ -19,6 +19,7 @@
 #include "lldb/Breakpoint/StoppointCallbackContext.h"
 #include "lldb/Core/IOHandler.h"
 #include "lldb/Core/State.h"
+#include "lldb/Host/OptionParser.h"
 #include "lldb/Interpreter/CommandInterpreter.h"
 #include "lldb/Interpreter/CommandReturnObject.h"
 #include "lldb/Target/Target.h"
@@ -280,9 +281,9 @@ are no syntax errors may indicate that a function was declared but never called.
 
     ~CommandOptions() override = default;
 
-    Error SetOptionValue(uint32_t option_idx, llvm::StringRef option_arg,
-                         ExecutionContext *execution_context) override {
-      Error error;
+    Status SetOptionValue(uint32_t option_idx, llvm::StringRef option_arg,
+                          ExecutionContext *execution_context) override {
+      Status error;
       const int short_option = m_getopt_table[option_idx].val;
 
       switch (short_option) {
@@ -389,7 +390,8 @@ protected:
 
     BreakpointIDList valid_bp_ids;
     CommandObjectMultiwordBreakpoint::VerifyBreakpointOrLocationIDs(
-        command, target, result, &valid_bp_ids);
+        command, target, result, &valid_bp_ids,
+        BreakpointName::Permissions::PermissionKinds::listPerm);
 
     m_bp_options_vec.clear();
 
@@ -510,9 +512,9 @@ public:
 
     ~CommandOptions() override = default;
 
-    Error SetOptionValue(uint32_t option_idx, llvm::StringRef option_arg,
-                         ExecutionContext *execution_context) override {
-      Error error;
+    Status SetOptionValue(uint32_t option_idx, llvm::StringRef option_arg,
+                          ExecutionContext *execution_context) override {
+      Status error;
       const int short_option = m_getopt_table[option_idx].val;
 
       switch (short_option) {
@@ -570,7 +572,8 @@ protected:
 
     BreakpointIDList valid_bp_ids;
     CommandObjectMultiwordBreakpoint::VerifyBreakpointOrLocationIDs(
-        command, target, result, &valid_bp_ids);
+        command, target, result, &valid_bp_ids, 
+        BreakpointName::Permissions::PermissionKinds::listPerm);
 
     if (result.Succeeded()) {
       const size_t count = valid_bp_ids.GetSize();
@@ -661,7 +664,8 @@ protected:
 
     BreakpointIDList valid_bp_ids;
     CommandObjectMultiwordBreakpoint::VerifyBreakpointOrLocationIDs(
-        command, target, result, &valid_bp_ids);
+        command, target, result, &valid_bp_ids, 
+        BreakpointName::Permissions::PermissionKinds::listPerm);
 
     if (result.Succeeded()) {
       const size_t count = valid_bp_ids.GetSize();
@@ -672,48 +676,49 @@ protected:
               target->GetBreakpointByID(cur_bp_id.GetBreakpointID()).get();
 
           if (bp) {
-            const BreakpointOptions *bp_options = nullptr;
+            BreakpointLocationSP bp_loc_sp;
             if (cur_bp_id.GetLocationID() != LLDB_INVALID_BREAK_ID) {
-              BreakpointLocationSP bp_loc_sp(
-                  bp->FindLocationByID(cur_bp_id.GetLocationID()));
-              if (bp_loc_sp)
-                bp_options = bp_loc_sp->GetOptionsNoCreate();
-              else {
+                  bp_loc_sp = bp->FindLocationByID(cur_bp_id.GetLocationID());
+              if (!bp_loc_sp)
+              {
                 result.AppendErrorWithFormat("Invalid breakpoint ID: %u.%u.\n",
                                              cur_bp_id.GetBreakpointID(),
                                              cur_bp_id.GetLocationID());
                 result.SetStatus(eReturnStatusFailed);
                 return false;
               }
-            } else {
-              bp_options = bp->GetOptions();
             }
 
-            if (bp_options) {
-              StreamString id_str;
-              BreakpointID::GetCanonicalReference(&id_str,
-                                                  cur_bp_id.GetBreakpointID(),
-                                                  cur_bp_id.GetLocationID());
-              const Baton *baton = bp_options->GetBaton();
-              if (baton) {
-                result.GetOutputStream().Printf("Breakpoint %s:\n",
-                                                id_str.GetData());
-                result.GetOutputStream().IndentMore();
-                baton->GetDescription(&result.GetOutputStream(),
-                                      eDescriptionLevelFull);
-                result.GetOutputStream().IndentLess();
-              } else {
-                result.AppendMessageWithFormat(
-                    "Breakpoint %s does not have an associated command.\n",
-                    id_str.GetData());
-              }
+            StreamString id_str;
+            BreakpointID::GetCanonicalReference(&id_str,
+                                                cur_bp_id.GetBreakpointID(),
+                                                cur_bp_id.GetLocationID());
+            const Baton *baton = nullptr;
+            if (bp_loc_sp)
+              baton = bp_loc_sp
+               ->GetOptionsSpecifyingKind(BreakpointOptions::eCallback)
+               ->GetBaton();
+            else
+              baton = bp->GetOptions()->GetBaton();
+
+            if (baton) {
+              result.GetOutputStream().Printf("Breakpoint %s:\n",
+                                              id_str.GetData());
+              result.GetOutputStream().IndentMore();
+              baton->GetDescription(&result.GetOutputStream(),
+                                    eDescriptionLevelFull);
+              result.GetOutputStream().IndentLess();
+            } else {
+              result.AppendMessageWithFormat(
+                  "Breakpoint %s does not have an associated command.\n",
+                  id_str.GetData());
             }
-            result.SetStatus(eReturnStatusSuccessFinishResult);
-          } else {
-            result.AppendErrorWithFormat("Invalid breakpoint ID: %u.\n",
-                                         cur_bp_id.GetBreakpointID());
-            result.SetStatus(eReturnStatusFailed);
           }
+          result.SetStatus(eReturnStatusSuccessFinishResult);
+        } else {
+          result.AppendErrorWithFormat("Invalid breakpoint ID: %u.\n",
+                                       cur_bp_id.GetBreakpointID());
+          result.SetStatus(eReturnStatusFailed);
         }
       }
     }

@@ -183,7 +183,8 @@ void
 root_mount_rel(struct root_hold_token *h)
 {
 
-	KASSERT(h != NULL, ("%s: NULL token", __func__));
+	if (h == NULL)
+		return;
 
 	mtx_lock(&root_holds_mtx);
 	LIST_REMOVE(h, list);
@@ -709,7 +710,7 @@ parse_mount(char **conf)
 	char *errmsg;
 	struct mntarg *ma;
 	char *dev, *fs, *opts, *tok;
-	int error;
+	int delay, error, timeout;
 
 	error = parse_token(conf, &tok);
 	if (error)
@@ -750,15 +751,31 @@ parse_mount(char **conf)
 	if (error != 0)
 		goto out;
 
-	ma = NULL;
-	ma = mount_arg(ma, "fstype", fs, -1);
-	ma = mount_arg(ma, "fspath", "/", -1);
-	ma = mount_arg(ma, "from", dev, -1);
-	ma = mount_arg(ma, "errmsg", errmsg, ERRMSGL);
-	ma = mount_arg(ma, "ro", NULL, 0);
-	ma = parse_mountroot_options(ma, opts);
-	error = kernel_mount(ma, MNT_ROOTFS);
+	delay = hz / 10;
+	timeout = root_mount_timeout * hz;
 
+	for (;;) {
+		ma = NULL;
+		ma = mount_arg(ma, "fstype", fs, -1);
+		ma = mount_arg(ma, "fspath", "/", -1);
+		ma = mount_arg(ma, "from", dev, -1);
+		ma = mount_arg(ma, "errmsg", errmsg, ERRMSGL);
+		ma = mount_arg(ma, "ro", NULL, 0);
+		ma = parse_mountroot_options(ma, opts);
+
+		error = kernel_mount(ma, MNT_ROOTFS);
+		if (error == 0 || timeout <= 0)
+			break;
+
+		if (root_mount_timeout * hz == timeout ||
+		    (bootverbose && timeout % hz == 0)) {
+			printf("Mounting from %s:%s failed with error %d; "
+			    "retrying for %d more second%s\n", fs, dev, error,
+			    timeout / hz, (timeout / hz > 1) ? "s" : "");
+		}
+		pause("rmretry", delay);
+		timeout -= delay;
+	}
  out:
 	if (error) {
 		printf("Mounting from %s:%s failed with error %d",

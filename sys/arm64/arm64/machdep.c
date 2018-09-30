@@ -194,7 +194,8 @@ set_regs(struct thread *td, struct reg *regs)
 	frame->tf_sp = regs->sp;
 	frame->tf_lr = regs->lr;
 	frame->tf_elr = regs->elr;
-	frame->tf_spsr = regs->spsr;
+	frame->tf_spsr &= ~PSR_FLAGS;
+	frame->tf_spsr |= regs->spsr & PSR_FLAGS;
 
 	memcpy(frame->tf_x, regs->x, sizeof(frame->tf_x));
 
@@ -213,7 +214,8 @@ fill_fpregs(struct thread *td, struct fpreg *regs)
 		 * If we have just been running VFP instructions we will
 		 * need to save the state to memcpy it below.
 		 */
-		vfp_save_state(td, pcb);
+		if (td == curthread)
+			vfp_save_state(td, pcb);
 
 		memcpy(regs->fp_q, pcb->pcb_vfp, sizeof(regs->fp_q));
 		regs->fp_cr = pcb->pcb_fpcr;
@@ -242,22 +244,24 @@ int
 fill_dbregs(struct thread *td, struct dbreg *regs)
 {
 
-	panic("ARM64TODO: fill_dbregs");
+	printf("ARM64TODO: fill_dbregs");
+	return (EDOOFUS);
 }
 
 int
 set_dbregs(struct thread *td, struct dbreg *regs)
 {
 
-	panic("ARM64TODO: set_dbregs");
+	printf("ARM64TODO: set_dbregs");
+	return (EDOOFUS);
 }
 
 int
 ptrace_set_pc(struct thread *td, u_long addr)
 {
 
-	panic("ARM64TODO: ptrace_set_pc");
-	return (0);
+	printf("ARM64TODO: ptrace_set_pc");
+	return (EDOOFUS);
 }
 
 int
@@ -329,6 +333,12 @@ int
 set_mcontext(struct thread *td, mcontext_t *mcp)
 {
 	struct trapframe *tf = td->td_frame;
+	uint32_t spsr;
+
+	spsr = mcp->mc_gpregs.gp_spsr;
+	if ((spsr & PSR_M_MASK) != PSR_M_EL0t ||
+	    (spsr & (PSR_F | PSR_I | PSR_A | PSR_D)) != 0)
+		return (EINVAL); 
 
 	memcpy(tf->tf_x, mcp->mc_gpregs.gp_x, sizeof(tf->tf_x));
 
@@ -499,19 +509,16 @@ int
 sys_sigreturn(struct thread *td, struct sigreturn_args *uap)
 {
 	ucontext_t uc;
-	uint32_t spsr;
+	int error;
 
 	if (uap == NULL)
 		return (EFAULT);
 	if (copyin(uap->sigcntxp, &uc, sizeof(uc)))
 		return (EFAULT);
 
-	spsr = uc.uc_mcontext.mc_gpregs.gp_spsr;
-	if ((spsr & PSR_M_MASK) != PSR_M_EL0t ||
-	    (spsr & (PSR_F | PSR_I | PSR_A | PSR_D)) != 0)
-		return (EINVAL); 
-
-	set_mcontext(td, &uc.uc_mcontext);
+	error = set_mcontext(td, &uc.uc_mcontext);
+	if (error != 0)
+		return (error);
 	set_fpcontext(td, &uc.uc_mcontext);
 
 	/* Restore signal mask. */
@@ -609,9 +616,9 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	tf->tf_sp = (register_t)fp;
 	sysent = p->p_sysent;
 	if (sysent->sv_sigcode_base != 0)
-		tf->tf_lr = (register_t)p->p_sigcode_base;
+		tf->tf_lr = (register_t)sysent->sv_sigcode_base;
 	else
-		tf->tf_lr = (register_t)(p->p_psstrings -
+		tf->tf_lr = (register_t)(sysent->sv_psstrings -
 		    *(sysent->sv_szsigcode));
 
 	CTR3(KTR_SIG, "sendsig: return td=%p pc=%#x sp=%#x", td, tf->tf_elr,
@@ -967,11 +974,24 @@ initarm(struct arm64_bootparams *abp)
 	mutex_init();
 	init_param2(physmem);
 
-	dbg_monitor_init();
+	dbg_init();
 	kdb_init();
 	pan_enable();
 
 	early_boot = 0;
+}
+
+void
+dbg_init(void)
+{
+
+	/* Clear OS lock */
+	WRITE_SPECIALREG(OSLAR_EL1, 0);
+
+	/* This permits DDB to use debug registers for watchpoints. */
+	dbg_monitor_init();
+
+	/* TODO: Eventually will need to initialize debug registers here. */
 }
 
 #ifdef DDB

@@ -1,4 +1,4 @@
-//===----- HexagonMCDuplexInfo.cpp - Instruction bundle checking ----------===//
+//===- HexagonMCDuplexInfo.cpp - Instruction bundle checking --------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -11,14 +11,22 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "HexagonBaseInfo.h"
+#include "MCTargetDesc/HexagonBaseInfo.h"
 #include "MCTargetDesc/HexagonMCInstrInfo.h"
-
+#include "MCTargetDesc/HexagonMCTargetDesc.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/MC/MCExpr.h"
+#include "llvm/MC/MCInst.h"
+#include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
-
+#include <cassert>
+#include <cstdint>
+#include <iterator>
 #include <map>
+#include <utility>
 
 using namespace llvm;
 using namespace Hexagon;
@@ -262,8 +270,9 @@ unsigned HexagonMCInstrInfo::getDuplexCandidateGroup(MCInst const &MCI) {
   case Hexagon::EH_RETURN_JMPR:
 
   case Hexagon::J2_jumpr:
+  case Hexagon::PS_jmpret:
     // jumpr r31
-    // Actual form JMPR %PC<imp-def>, %R31<imp-use>, %R0<imp-use,internal>.
+    // Actual form JMPR implicit-def %pc, implicit %r31, implicit internal %r0.
     DstReg = MCI.getOperand(0).getReg();
     if (Hexagon::R31 == DstReg)
       return HexagonII::HSIG_L2;
@@ -275,6 +284,12 @@ unsigned HexagonMCInstrInfo::getDuplexCandidateGroup(MCInst const &MCI) {
   case Hexagon::J2_jumprfnew:
   case Hexagon::J2_jumprtnewpt:
   case Hexagon::J2_jumprfnewpt:
+  case Hexagon::PS_jmprett:
+  case Hexagon::PS_jmpretf:
+  case Hexagon::PS_jmprettnew:
+  case Hexagon::PS_jmpretfnew:
+  case Hexagon::PS_jmprettnewpt:
+  case Hexagon::PS_jmpretfnewpt:
     DstReg = MCI.getOperand(1).getReg();
     SrcReg = MCI.getOperand(0).getReg();
     // [if ([!]p0[.new])] jumpr r31
@@ -284,18 +299,13 @@ unsigned HexagonMCInstrInfo::getDuplexCandidateGroup(MCInst const &MCI) {
     }
     break;
   case Hexagon::L4_return_t:
-
   case Hexagon::L4_return_f:
-
   case Hexagon::L4_return_tnew_pnt:
-
   case Hexagon::L4_return_fnew_pnt:
-
   case Hexagon::L4_return_tnew_pt:
-
   case Hexagon::L4_return_fnew_pt:
     // [if ([!]p0[.new])] dealloc_return
-    SrcReg = MCI.getOperand(0).getReg();
+    SrcReg = MCI.getOperand(1).getReg();
     if (Hexagon::P0 == SrcReg) {
       return HexagonII::HSIG_L2;
     }
@@ -378,7 +388,7 @@ unsigned HexagonMCInstrInfo::getDuplexCandidateGroup(MCInst const &MCI) {
     }
     break;
   case Hexagon::S2_allocframe:
-    if (inRange<5, 3>(MCI, 0))
+    if (inRange<5, 3>(MCI, 2))
       return HexagonII::HSIG_S2;
     break;
   //
@@ -461,7 +471,7 @@ unsigned HexagonMCInstrInfo::getDuplexCandidateGroup(MCInst const &MCI) {
   case Hexagon::C2_cmovenewif:
     // if ([!]P0[.new]) Rd = #0
     // Actual form:
-    // %R16<def> = C2_cmovenewit %P0<internal>, 0, %R16<imp-use,undef>;
+    // %r16 = C2_cmovenewit internal %p0, 0, implicit undef %r16;
     DstReg = MCI.getOperand(0).getReg();  // Rd
     PredReg = MCI.getOperand(1).getReg(); // P0
     if (HexagonMCInstrInfo::isIntRegForSubInst(DstReg) &&
@@ -565,7 +575,8 @@ bool HexagonMCInstrInfo::subInstWouldBeExtended(MCInst const &potentialDuplex) {
 bool HexagonMCInstrInfo::isOrderedDuplexPair(MCInstrInfo const &MCII,
                                              MCInst const &MIa, bool ExtendedA,
                                              MCInst const &MIb, bool ExtendedB,
-                                             bool bisReversable) {
+                                             bool bisReversable,
+                                             MCSubtargetInfo const &STI) {
   // Slot 1 cannot be extended in duplexes PRM 10.5
   if (ExtendedA)
     return false;
@@ -625,11 +636,16 @@ bool HexagonMCInstrInfo::isOrderedDuplexPair(MCInstrInfo const &MCII,
       return false;
   }
 
-  // If a store appears, it must be in slot 0 (MIa) 1st, and then slot 1 (MIb);
-  //   therefore, not duplexable if slot 1 is a store, and slot 0 is not.
-  if ((MIbG == HexagonII::HSIG_S1) || (MIbG == HexagonII::HSIG_S2)) {
-    if ((MIaG != HexagonII::HSIG_S1) && (MIaG != HexagonII::HSIG_S2))
-      return false;
+  if (STI.getCPU().equals_lower("hexagonv4") ||
+      STI.getCPU().equals_lower("hexagonv5") ||
+      STI.getCPU().equals_lower("hexagonv55") ||
+      STI.getCPU().equals_lower("hexagonv60")) {
+    // If a store appears, it must be in slot 0 (MIa) 1st, and then slot 1 (MIb);
+    //   therefore, not duplexable if slot 1 is a store, and slot 0 is not.
+    if ((MIbG == HexagonII::HSIG_S1) || (MIbG == HexagonII::HSIG_S2)) {
+      if ((MIaG != HexagonII::HSIG_S1) && (MIaG != HexagonII::HSIG_S2))
+        return false;
+    }
   }
 
   return (isDuplexPairMatch(MIaG, MIbG));
@@ -692,32 +708,32 @@ MCInst HexagonMCInstrInfo::deriveSubInst(MCInst const &Inst) {
     break;
   case Hexagon::A2_addi:
     Absolute = Inst.getOperand(2).getExpr()->evaluateAsAbsolute(Value);
-    assert(Absolute);(void)Absolute;
-    if (Value == 1) {
-      Result.setOpcode(Hexagon::SA1_inc);
-      addOps(Result, Inst, 0);
-      addOps(Result, Inst, 1);
-      break;
-    } //  1,2 SUBInst $Rd = add($Rs, #1)
-    else if (Value == -1) {
-      Result.setOpcode(Hexagon::SA1_dec);
-      addOps(Result, Inst, 0);
-      addOps(Result, Inst, 1);
-      break;
-    } //  1,2 SUBInst $Rd = add($Rs,#-1)
-    else if (Inst.getOperand(1).getReg() == Hexagon::R29) {
-      Result.setOpcode(Hexagon::SA1_addsp);
-      addOps(Result, Inst, 0);
-      addOps(Result, Inst, 2);
-      break;
-    } //  1,3 SUBInst $Rd = add(r29, #$u6_2)
-    else {
-      Result.setOpcode(Hexagon::SA1_addi);
-      addOps(Result, Inst, 0);
-      addOps(Result, Inst, 1);
-      addOps(Result, Inst, 2);
-      break;
-    } //    1,2,3 SUBInst $Rx = add($Rx, #$s7)
+    if (Absolute) {
+      if (Value == 1) {
+        Result.setOpcode(Hexagon::SA1_inc);
+        addOps(Result, Inst, 0);
+        addOps(Result, Inst, 1);
+        break;
+      } //  1,2 SUBInst $Rd = add($Rs, #1)
+      if (Value == -1) {
+        Result.setOpcode(Hexagon::SA1_dec);
+        addOps(Result, Inst, 0);
+        addOps(Result, Inst, 1);
+        addOps(Result, Inst, 2);
+        break;
+      } //  1,2 SUBInst $Rd = add($Rs,#-1)
+      if (Inst.getOperand(1).getReg() == Hexagon::R29) {
+        Result.setOpcode(Hexagon::SA1_addsp);
+        addOps(Result, Inst, 0);
+        addOps(Result, Inst, 2);
+        break;
+      } //  1,3 SUBInst $Rd = add(r29, #$u6_2)
+    }
+    Result.setOpcode(Hexagon::SA1_addi);
+    addOps(Result, Inst, 0);
+    addOps(Result, Inst, 1);
+    addOps(Result, Inst, 2);
+    break; //    1,2,3 SUBInst $Rx = add($Rx, #$s7)
   case Hexagon::A2_add:
     Result.setOpcode(Hexagon::SA1_addrx);
     addOps(Result, Inst, 0);
@@ -726,7 +742,7 @@ MCInst HexagonMCInstrInfo::deriveSubInst(MCInst const &Inst) {
     break; //    1,2,3 SUBInst $Rx = add($_src_, $Rs)
   case Hexagon::S2_allocframe:
     Result.setOpcode(Hexagon::SS2_allocframe);
-    addOps(Result, Inst, 0);
+    addOps(Result, Inst, 2);
     break; //    1 SUBInst allocframe(#$u5_3)
   case Hexagon::A2_andir:
     if (minConstant(Inst, 2) == 255) {
@@ -806,20 +822,27 @@ MCInst HexagonMCInstrInfo::deriveSubInst(MCInst const &Inst) {
     break; //    none  SUBInst deallocframe
   case Hexagon::EH_RETURN_JMPR:
   case Hexagon::J2_jumpr:
+  case Hexagon::PS_jmpret:
     Result.setOpcode(Hexagon::SL2_jumpr31);
     break; //    none  SUBInst jumpr r31
   case Hexagon::J2_jumprf:
+  case Hexagon::PS_jmpretf:
     Result.setOpcode(Hexagon::SL2_jumpr31_f);
     break; //    none  SUBInst if (!p0) jumpr r31
   case Hexagon::J2_jumprfnew:
   case Hexagon::J2_jumprfnewpt:
+  case Hexagon::PS_jmpretfnewpt:
+  case Hexagon::PS_jmpretfnew:
     Result.setOpcode(Hexagon::SL2_jumpr31_fnew);
     break; //    none  SUBInst if (!p0.new) jumpr:nt r31
   case Hexagon::J2_jumprt:
+  case Hexagon::PS_jmprett:
     Result.setOpcode(Hexagon::SL2_jumpr31_t);
     break; //    none  SUBInst if (p0) jumpr r31
   case Hexagon::J2_jumprtnew:
   case Hexagon::J2_jumprtnewpt:
+  case Hexagon::PS_jmprettnewpt:
+  case Hexagon::PS_jmprettnew:
     Result.setOpcode(Hexagon::SL2_jumpr31_tnew);
     break; //    none  SUBInst if (p0.new) jumpr:nt r31
   case Hexagon::L2_loadrb_io:
@@ -966,6 +989,7 @@ MCInst HexagonMCInstrInfo::deriveSubInst(MCInst const &Inst) {
     if (Absolute && Value == -1) {
       Result.setOpcode(Hexagon::SA1_setin1);
       addOps(Result, Inst, 0);
+      addOps(Result, Inst, 1);
       break; //  2 1 SUBInst $Rd = #-1
     } else {
       Result.setOpcode(Hexagon::SA1_seti);
@@ -1005,6 +1029,7 @@ static bool isStoreInst(unsigned opCode) {
 
 SmallVector<DuplexCandidate, 8>
 HexagonMCInstrInfo::getDuplexPossibilties(MCInstrInfo const &MCII,
+                                          MCSubtargetInfo const &STI,
                                           MCInst const &MCB) {
   assert(isBundle(MCB));
   SmallVector<DuplexCandidate, 8> duplexToTry;
@@ -1033,7 +1058,7 @@ HexagonMCInstrInfo::getDuplexPossibilties(MCInstrInfo const &MCII,
               HexagonMCInstrInfo::hasExtenderForIndex(MCB, k - 1),
               *MCB.getOperand(j).getInst(),
               HexagonMCInstrInfo::hasExtenderForIndex(MCB, j - 1),
-              bisReversable)) {
+              bisReversable, STI)) {
         // Get iClass.
         unsigned iClass = iClassOfDuplexPair(
             getDuplexCandidateGroup(*MCB.getOperand(k).getInst()),
@@ -1058,7 +1083,7 @@ HexagonMCInstrInfo::getDuplexPossibilties(MCInstrInfo const &MCII,
                 HexagonMCInstrInfo::hasExtenderForIndex(MCB, j - 1),
                 *MCB.getOperand(k).getInst(),
                 HexagonMCInstrInfo::hasExtenderForIndex(MCB, k - 1),
-                bisReversable)) {
+                bisReversable, STI)) {
           // Get iClass.
           unsigned iClass = iClassOfDuplexPair(
               getDuplexCandidateGroup(*MCB.getOperand(j).getInst()),

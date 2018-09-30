@@ -1,6 +1,5 @@
 #include "llvm/Support/ScopedPrinter.h"
 
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Format.h"
 #include <cctype>
 
@@ -21,7 +20,8 @@ const std::string to_hexString(uint64_t Value, bool UpperCase) {
 }
 
 void ScopedPrinter::printBinaryImpl(StringRef Label, StringRef Str,
-                                    ArrayRef<uint8_t> Data, bool Block) {
+                                    ArrayRef<uint8_t> Data, bool Block,
+                                    uint32_t StartOffset) {
   if (Data.size() > 16)
     Block = true;
 
@@ -31,7 +31,8 @@ void ScopedPrinter::printBinaryImpl(StringRef Label, StringRef Str,
       OS << ": " << Str;
     OS << " (\n";
     if (!Data.empty())
-      OS << format_bytes_with_ascii(Data, 0, 16, 4, (IndentLevel + 1) * 2, true)
+      OS << format_bytes_with_ascii(Data, StartOffset, 16, 4,
+                                    (IndentLevel + 1) * 2, true)
          << "\n";
     startLine() << ")\n";
   } else {

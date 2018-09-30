@@ -129,12 +129,13 @@
 .\" ========================================================================
 .\"
 .IX Title "S_CLIENT 1"
-.TH S_CLIENT 1 "2017-01-26" "1.0.2k" "OpenSSL"
+.TH S_CLIENT 1 "2018-03-27" "1.0.2o" "OpenSSL"
 .\" For nroff, turn off justification.  Always turn off hyphenation; it makes
 .\" way too many mistakes in technical documents.
 .if n .ad l
 .nh
 .SH "NAME"
+openssl\-s_client,
 s_client \- SSL/TLS client program
 .SH "SYNOPSIS"
 .IX Header "SYNOPSIS"
@@ -173,6 +174,8 @@ s_client \- SSL/TLS client program
 [\fB\-no_tls1_2\fR]
 [\fB\-fallback_scsv\fR]
 [\fB\-bugs\fR]
+[\fB\-sigalgs sigalglist\fR]
+[\fB\-curves curvelist\fR]
 [\fB\-cipher cipherlist\fR]
 [\fB\-serverpref\fR]
 [\fB\-starttls protocol\fR]
@@ -297,11 +300,13 @@ Can be used to override the implicit \fB\-ign_eof\fR after \fB\-quiet\fR.
 .IP "\fB\-psk_identity identity\fR" 4
 .IX Item "-psk_identity identity"
 Use the \s-1PSK\s0 identity \fBidentity\fR when using a \s-1PSK\s0 cipher suite.
+The default value is \*(L"Client_identity\*(R" (without the quotes).
 .IP "\fB\-psk key\fR" 4
 .IX Item "-psk key"
 Use the \s-1PSK\s0 key \fBkey\fR when using a \s-1PSK\s0 cipher suite. The key is
 given as a hexadecimal number without leading 0x, for example \-psk
 1a2b3c4d.
+This option must be provided in order to use a \s-1PSK\s0 cipher.
 .IP "\fB\-ssl2\fR, \fB\-ssl3\fR, \fB\-tls1\fR, \fB\-tls1_1\fR, \fB\-tls1_2\fR, \fB\-no_ssl2\fR, \fB\-no_ssl3\fR, \fB\-no_tls1\fR, \fB\-no_tls1_1\fR, \fB\-no_tls1_2\fR" 4
 .IX Item "-ssl2, -ssl3, -tls1, -tls1_1, -tls1_2, -no_ssl2, -no_ssl3, -no_tls1, -no_tls1_1, -no_tls1_2"
 These options require or disable the use of the specified \s-1SSL\s0 or \s-1TLS\s0 protocols.
@@ -314,6 +319,19 @@ Send \s-1TLS_FALLBACK_SCSV\s0 in the ClientHello.
 .IX Item "-bugs"
 there are several known bug in \s-1SSL\s0 and \s-1TLS\s0 implementations. Adding this
 option enables various workarounds.
+.IP "\fB\-sigalgs sigalglist\fR" 4
+.IX Item "-sigalgs sigalglist"
+Specifies the list of signature algorithms that are sent by the client.
+The server selects one entry in the list based on its preferences.
+For example strings, see \fISSL_CTX_set1_sigalgs\fR\|(3)
+.IP "\fB\-curves curvelist\fR" 4
+.IX Item "-curves curvelist"
+Specifies the list of supported curves to be sent by the client. The curve is
+is ultimately selected by the server. For a list of all curves, use:
+.Sp
+.Vb 1
+\&    $ openssl ecparam \-list_curves
+.Ve
 .IP "\fB\-cipher cipherlist\fR" 4
 .IX Item "-cipher cipherlist"
 this allows the cipher list sent by the client to be modified. Although
@@ -327,7 +345,7 @@ use the server's cipher preferences; only used for \s-1SSLV2.\s0
 .IX Item "-starttls protocol"
 send the protocol-specific message(s) to switch to \s-1TLS\s0 for communication.
 \&\fBprotocol\fR is a keyword for the intended protocol.  Currently, the only
-supported keywords are \*(L"smtp\*(R", \*(L"pop3\*(R", \*(L"imap\*(R", and \*(L"ftp\*(R".
+supported keywords are \*(L"smtp\*(R", \*(L"pop3\*(R", \*(L"imap\*(R", \*(L"ftp\*(R" and \*(L"xmpp\*(R".
 .IP "\fB\-tlsextdebug\fR" 4
 .IX Item "-tlsextdebug"
 print out a hex dump of any \s-1TLS\s0 extensions received from the server.

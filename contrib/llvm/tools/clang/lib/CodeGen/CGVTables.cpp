@@ -14,11 +14,12 @@
 #include "CGCXXABI.h"
 #include "CodeGenFunction.h"
 #include "CodeGenModule.h"
-#include "ConstantBuilder.h"
 #include "clang/AST/CXXInheritance.h"
 #include "clang/AST/RecordLayout.h"
 #include "clang/CodeGen/CGFunctionInfo.h"
+#include "clang/CodeGen/ConstantInitBuilder.h"
 #include "clang/Frontend/CodeGenOptions.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include <algorithm>
@@ -50,7 +51,7 @@ llvm::Constant *CodeGenModule::GetAddrOfThunk(GlobalDecl GD,
 
 static void setThunkVisibility(CodeGenModule &CGM, const CXXMethodDecl *MD,
                                const ThunkInfo &Thunk, llvm::Function *Fn) {
-  CGM.setGlobalVisibility(Fn, MD);
+  CGM.setGlobalVisibility(Fn, MD, ForDefinition);
 }
 
 static void setThunkProperties(CodeGenModule &CGM, const ThunkInfo &Thunk,
@@ -122,6 +123,33 @@ static RValue PerformReturnAdjustment(CodeGenFunction &CGF,
   return RValue::get(ReturnValue);
 }
 
+/// This function clones a function's DISubprogram node and enters it into 
+/// a value map with the intent that the map can be utilized by the cloner
+/// to short-circuit Metadata node mapping.
+/// Furthermore, the function resolves any DILocalVariable nodes referenced
+/// by dbg.value intrinsics so they can be properly mapped during cloning.
+static void resolveTopLevelMetadata(llvm::Function *Fn,
+                                    llvm::ValueToValueMapTy &VMap) {
+  // Clone the DISubprogram node and put it into the Value map.
+  auto *DIS = Fn->getSubprogram();
+  if (!DIS)
+    return;
+  auto *NewDIS = DIS->replaceWithDistinct(DIS->clone());
+  VMap.MD()[DIS].reset(NewDIS);
+
+  // Find all llvm.dbg.declare intrinsics and resolve the DILocalVariable nodes
+  // they are referencing.
+  for (auto &BB : Fn->getBasicBlockList()) {
+    for (auto &I : BB) {
+      if (auto *DII = dyn_cast<llvm::DbgInfoIntrinsic>(&I)) {
+        auto *DILocal = DII->getVariable();
+        if (!DILocal->isResolved())
+          DILocal->resolve();
+      }
+    }
+  }
+}
+
 // This function does roughly the same thing as GenerateThunk, but in a
 // very different way, so that va_start and va_end work correctly.
 // FIXME: This function assumes "this" is the first non-sret LLVM argument of
@@ -154,6 +182,10 @@ CodeGenFunction::GenerateVarArgsThunk(llvm::Function *Fn,
 
   // Clone to thunk.
   llvm::ValueToValueMapTy VMap;
+
+  // We are cloning a function while some Metadata nodes are still unresolved.
+  // Ensure that the value mapper does not encounter any of them.
+  resolveTopLevelMetadata(BaseFn, VMap);
   llvm::Function *NewFn = llvm::CloneFunction(BaseFn, VMap);
   Fn->replaceAllUsesWith(NewFn);
   NewFn->takeName(Fn);
@@ -284,6 +316,9 @@ void CodeGenFunction::EmitCallAndReturnForThunk(llvm::Constant *CalleePtr,
   if (isa<CXXDestructorDecl>(MD))
     CGM.getCXXABI().adjustCallArgsForDestructorThunk(*this, CurGD, CallArgs);
 
+#ifndef NDEBUG
+  unsigned PrefixArgs = CallArgs.size() - 1;
+#endif
   // Add the rest of the arguments.
   for (const ParmVarDecl *PD : MD->parameters())
     EmitDelegateCallArg(CallArgs, PD, SourceLocation());
@@ -292,7 +327,7 @@ void CodeGenFunction::EmitCallAndReturnForThunk(llvm::Constant *CalleePtr,
 
 #ifndef NDEBUG
   const CGFunctionInfo &CallFnInfo = CGM.getTypes().arrangeCXXMethodCall(
-      CallArgs, FPT, RequiredArgs::forPrototypePlus(FPT, 1, MD));
+      CallArgs, FPT, RequiredArgs::forPrototypePlus(FPT, 1, MD), PrefixArgs);
   assert(CallFnInfo.getRegParm() == CurFnInfo->getRegParm() &&
          CallFnInfo.isNoReturn() == CurFnInfo->isNoReturn() &&
          CallFnInfo.getCallingConvention() == CurFnInfo->getCallingConvention());
@@ -376,12 +411,9 @@ void CodeGenFunction::EmitMustTailThunk(const CXXMethodDecl *MD,
 
   // Apply the standard set of call attributes.
   unsigned CallingConv;
-  CodeGen::AttributeListType AttributeList;
-  CGM.ConstructAttributeList(CalleePtr->getName(),
-                             *CurFnInfo, MD, AttributeList,
+  llvm::AttributeList Attrs;
+  CGM.ConstructAttributeList(CalleePtr->getName(), *CurFnInfo, MD, Attrs,
                              CallingConv, /*AttrOnCallSite=*/true);
-  llvm::AttributeSet Attrs =
-      llvm::AttributeSet::get(getLLVMContext(), AttributeList);
   Call->setAttributes(Attrs);
   Call->setCallingConv(static_cast<llvm::CallingConv::ID>(CallingConv));
 
@@ -698,7 +730,7 @@ CodeGenVTables::GenerateConstructionVTable(const CXXRecordDecl *RD,
   // Create the variable that will hold the construction vtable.
   llvm::GlobalVariable *VTable =
     CGM.CreateOrReplaceCXXRuntimeVariable(Name, VTType, Linkage);
-  CGM.setGlobalVisibility(VTable, RD);
+  CGM.setGlobalVisibility(VTable, RD, ForDefinition);
 
   // V-tables are always unnamed_addr.
   VTable->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
@@ -744,9 +776,10 @@ CodeGenModule::getVTableLinkage(const CXXRecordDecl *RD) {
     switch (keyFunction->getTemplateSpecializationKind()) {
       case TSK_Undeclared:
       case TSK_ExplicitSpecialization:
-        assert((def || CodeGenOpts.OptimizationLevel > 0) &&
-               "Shouldn't query vtable linkage without key function or "
-               "optimizations");
+        assert((def || CodeGenOpts.OptimizationLevel > 0 ||
+                CodeGenOpts.getDebugInfo() != codegenoptions::NoDebugInfo) &&
+               "Shouldn't query vtable linkage without key function, "
+               "optimizations, or debug info");
         if (!def && CodeGenOpts.OptimizationLevel > 0)
           return llvm::GlobalVariable::AvailableExternallyLinkage;
 
@@ -900,6 +933,8 @@ void CodeGenModule::EmitDeferredVTables() {
   for (const CXXRecordDecl *RD : DeferredVTables)
     if (shouldEmitVTableAtEndOfTranslationUnit(*this, RD))
       VTables.GenerateClassData(RD);
+    else if (shouldOpportunisticallyEmitVTables())
+      OpportunisticVTables.push_back(RD);
 
   assert(savedSize == DeferredVTables.size() &&
          "deferred extra vtables during vtable emission?");
@@ -942,7 +977,7 @@ bool CodeGenModule::HasHiddenLTOVisibility(const CXXRecordDecl *RD) {
 
 void CodeGenModule::EmitVTableTypeMetadata(llvm::GlobalVariable *VTable,
                                            const VTableLayout &VTLayout) {
-  if (!getCodeGenOpts().PrepareForLTO)
+  if (!getCodeGenOpts().LTOUnit)
     return;
 
   CharUnits PointerWidth =

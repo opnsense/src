@@ -22,11 +22,11 @@
 #include <mutex>
 
 // LLDB includes
-#include "lldb/Core/Error.h"
-#include "lldb/Core/Log.h"
-#include "lldb/Core/Stream.h"
 #include "lldb/Target/UnixSignals.h"
 #include "lldb/Utility/LLDBAssert.h"
+#include "lldb/Utility/Log.h"
+#include "lldb/Utility/Status.h"
+#include "lldb/Utility/Stream.h"
 
 using namespace lldb;
 using namespace lldb_private;
@@ -56,11 +56,6 @@ extern "C" kern_return_t catch_mach_exception_raise_state_identity(
 
 extern "C" boolean_t mach_exc_server(mach_msg_header_t *InHeadP,
                                      mach_msg_header_t *OutHeadP);
-
-// Any access to the g_message variable should be done by locking the
-// g_message_mutex first, using the g_message variable, then unlocking
-// the g_message_mutex. See MachException::Message::CatchExceptionRaise()
-// for sample code.
 
 static MachException::Data *g_message = NULL;
 
@@ -131,33 +126,6 @@ catch_mach_exception_raise(mach_port_t exc_port, mach_port_t thread_port,
   return KERN_FAILURE;
 }
 
-#if 0
-void
-MachException::Message::Dump(Stream &stream) const
-{
-    stream.Printf("exc_msg { bits = 0x%8.8x size = 0x%8.8x remote-port = "
-                  "0x%8.8x local-port = 0x%8.8x reserved = 0x%8.8x "
-                  "id = 0x%8.8x }\n",
-        exc_msg.hdr.msgh_bits,
-        exc_msg.hdr.msgh_size,
-        exc_msg.hdr.msgh_remote_port,
-        exc_msg.hdr.msgh_local_port,
-        exc_msg.hdr.msgh_reserved,
-        exc_msg.hdr.msgh_id);
-
-    stream.Printf("reply_msg { bits = 0x%8.8x size = 0x%8.8x remote-port "
-                  "= 0x%8.8x local-port = 0x%8.8x reserved = 0x%8.8x "
-                  "id = 0x%8.8x }",
-                  reply_msg.hdr.msgh_bits,
-                  reply_msg.hdr.msgh_size,
-                  reply_msg.hdr.msgh_remote_port,
-                  reply_msg.hdr.msgh_local_port,
-                  reply_msg.hdr.msgh_reserved,
-                  reply_msg.hdr.msgh_id);
-    stream.Flush();
-}
-#endif
-
 bool MachException::Data::GetStopInfo(struct ThreadStopInfo *stop_info,
                                       const UnixSignals &signals,
                                       Stream &stream) const {
@@ -211,11 +179,11 @@ bool MachException::Data::GetStopInfo(struct ThreadStopInfo *stop_info,
   return true;
 }
 
-Error MachException::Message::Receive(mach_port_t port,
-                                      mach_msg_option_t options,
-                                      mach_msg_timeout_t timeout,
-                                      mach_port_t notify_port) {
-  Error error;
+Status MachException::Message::Receive(mach_port_t port,
+                                       mach_msg_option_t options,
+                                       mach_msg_timeout_t timeout,
+                                       mach_port_t notify_port) {
+  Status error;
   Log *log(GetLogIfAllCategoriesSet(LIBLLDB_LOG_PROCESS | LIBLLDB_LOG_VERBOSE));
 
   mach_msg_timeout_t mach_msg_timeout =
@@ -279,9 +247,6 @@ void MachException::Message::Dump(Stream &stream) const {
 
 bool MachException::Message::CatchExceptionRaise(task_t task) {
   bool success = false;
-  // locker will keep a mutex locked until it goes out of scope
-  //    PThreadMutex::Locker locker(&g_message_mutex);
-  //    DNBLogThreaded("calling  mach_exc_server");
   state.task_port = task;
   g_message = &state;
   // The exc_server function is the MIG generated server handling function
@@ -312,10 +277,10 @@ bool MachException::Message::CatchExceptionRaise(task_t task) {
   return success;
 }
 
-Error MachException::Message::Reply(::pid_t inferior_pid, task_t inferior_task,
-                                    int signal) {
+Status MachException::Message::Reply(::pid_t inferior_pid, task_t inferior_task,
+                                     int signal) {
   // Reply to the exception...
-  Error error;
+  Status error;
 
   Log *log(GetLogIfAllCategoriesSet(LIBLLDB_LOG_PROCESS | LIBLLDB_LOG_VERBOSE));
 
@@ -412,8 +377,8 @@ Error MachException::Message::Reply(::pid_t inferior_pid, task_t inferior_task,
 
 #define LLDB_EXC_MASK (EXC_MASK_ALL & ~EXC_MASK_RESOURCE)
 
-Error MachException::PortInfo::Save(task_t task) {
-  Error error;
+Status MachException::PortInfo::Save(task_t task) {
+  Status error;
   Log *log(GetLogIfAllCategoriesSet(LIBLLDB_LOG_PROCESS | LIBLLDB_LOG_VERBOSE));
 
   if (log)
@@ -471,8 +436,8 @@ Error MachException::PortInfo::Save(task_t task) {
   return error;
 }
 
-Error MachException::PortInfo::Restore(task_t task) {
-  Error error;
+Status MachException::PortInfo::Restore(task_t task) {
+  Status error;
 
   Log *log(GetLogIfAllCategoriesSet(LIBLLDB_LOG_PROCESS | LIBLLDB_LOG_VERBOSE));
 

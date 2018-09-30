@@ -27,9 +27,9 @@ atf_test_case user_add_comments
 user_add_comments_body() {
 	populate_etc_skel
 
-	atf_check -s exit:0 ${PW} useradd test -c "Test User,work,123,456"
-	atf_check -s exit:0 -o match:"^test:.*:Test User,work,123,456:" \
-		grep "^test:.*:Test User,work,123,456:" $HOME/master.passwd
+	atf_check -s exit:0 ${PW} useradd test -c 'Test User,work!,123,user@example.com'
+	atf_check -s exit:0 -o match:'^test:.*:Test User,work!,123,user@example.com:' \
+		grep '^test:.*:Test User,work!,123,user@example.com:' $HOME/master.passwd
 }
 
 # Test add user with comments and option -N
@@ -174,6 +174,43 @@ user_add_name_too_long_body() {
 	populate_etc_skel
 	atf_check -e match:"too long" -s exit:64 \
 		${PW} useradd name_very_vert_very_very_very_long
+}
+
+atf_test_case user_add_name_with_spaces
+user_add_name_with_spaces_body() {
+	populate_etc_skel
+	atf_check -s exit:65 -e match:"invalid character" \
+		  ${PW} useradd 'test user'
+	atf_check -s exit:1 -o empty grep "^test user:.*" $HOME/master.passwd
+	# Try again with -n which uses a slightly different code path.
+	atf_check -s exit:65 -e match:"invalid character" \
+		  ${PW} useradd -n 'test user'
+	atf_check -s exit:1 -o empty grep "^test user:.*" $HOME/master.passwd
+}
+
+atf_test_case user_add_name_with_spaces_and_gid_specified
+user_add_name_with_spaces_and_gid_specified_body() {
+	populate_etc_skel
+	gid=12345
+	user_name="test user"
+	# pw useradd should fail because of the space in the user
+	# name, not because the group doesn't exist.
+	atf_check -s exit:65 -e match:"invalid character" \
+		  ${PW} useradd "${user_name}" -g ${gid}
+	atf_check -s exit:1 -o empty grep "^${user_name}:.*" $HOME/master.passwd
+	# Try again with -n which uses a slightly different code path.
+	atf_check -s exit:65 -e match:"invalid character" \
+		  ${PW} useradd -n "${user_name}" -g ${gid}
+	atf_check -s exit:1 -o empty grep "^${user_name}:.*" $HOME/master.passwd
+	# Make sure the user isn't added even if the group exists
+	atf_check -s exit:0 ${PW} groupadd blafasel -g ${gid}
+	atf_check -s exit:65 -e match:"invalid character" \
+		  ${PW} useradd "${user_name}" -g ${gid}
+	atf_check -s exit:1 -o empty grep "^${user_name}:.*" $HOME/master.passwd
+	# Try again with the -n option.
+	atf_check -s exit:65 -e match:"invalid character" \
+		  ${PW} useradd -n "${user_name}" -g ${gid}
+	atf_check -s exit:1 -o empty grep "^${user_name}:.*" $HOME/master.passwd
 }
 
 atf_test_case user_add_expiration
@@ -415,6 +452,8 @@ atf_init_test_cases() {
 	atf_add_test_case user_add_password_expiration_date_month
 	atf_add_test_case user_add_password_expiration_date_relative
 	atf_add_test_case user_add_name_too_long
+	atf_add_test_case user_add_name_with_spaces
+	atf_add_test_case user_add_name_with_spaces_and_gid_specified
 	atf_add_test_case user_add_expiration
 	atf_add_test_case user_add_invalid_user_entry
 	atf_add_test_case user_add_invalid_group_entry

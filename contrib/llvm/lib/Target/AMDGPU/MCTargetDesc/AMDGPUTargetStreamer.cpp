@@ -11,12 +11,13 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "AMDGPU.h"
 #include "AMDGPUTargetStreamer.h"
+#include "AMDGPU.h"
 #include "SIDefines.h"
 #include "Utils/AMDGPUBaseInfo.h"
 #include "Utils/AMDKernelCodeTUtils.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/BinaryFormat/ELF.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Metadata.h"
@@ -25,9 +26,7 @@
 #include "llvm/MC/MCELFStreamer.h"
 #include "llvm/MC/MCObjectFileInfo.h"
 #include "llvm/MC/MCSectionELF.h"
-#include "llvm/Support/ELF.h"
 #include "llvm/Support/FormattedStream.h"
-#include "AMDGPURuntimeMD.h"
 
 namespace llvm {
 #include "AMDGPUPTNote.h"
@@ -36,8 +35,17 @@ namespace llvm {
 using namespace llvm;
 using namespace llvm::AMDGPU;
 
-AMDGPUTargetStreamer::AMDGPUTargetStreamer(MCStreamer &S)
-    : MCTargetStreamer(S) {}
+//===----------------------------------------------------------------------===//
+// AMDGPUTargetStreamer
+//===----------------------------------------------------------------------===//
+
+bool AMDGPUTargetStreamer::EmitHSAMetadata(StringRef HSAMetadataString) {
+  HSAMD::Metadata HSAMetadata;
+  if (HSAMD::fromString(HSAMetadataString, HSAMetadata))
+    return false;
+
+  return EmitHSAMetadata(HSAMetadata);
+}
 
 //===----------------------------------------------------------------------===//
 // AMDGPUTargetAsmStreamer
@@ -83,26 +91,31 @@ void AMDGPUTargetAsmStreamer::EmitAMDGPUSymbolType(StringRef SymbolName,
   }
 }
 
-void AMDGPUTargetAsmStreamer::EmitAMDGPUHsaModuleScopeGlobal(
-    StringRef GlobalName) {
-  OS << "\t.amdgpu_hsa_module_global " << GlobalName << '\n';
+bool AMDGPUTargetAsmStreamer::EmitISAVersion(StringRef IsaVersionString) {
+  OS << "\t.amd_amdgpu_isa \"" << IsaVersionString << "\"\n";
+  return true;
 }
 
-void AMDGPUTargetAsmStreamer::EmitAMDGPUHsaProgramScopeGlobal(
-    StringRef GlobalName) {
-  OS << "\t.amdgpu_hsa_program_global " << GlobalName << '\n';
+bool AMDGPUTargetAsmStreamer::EmitHSAMetadata(
+    const AMDGPU::HSAMD::Metadata &HSAMetadata) {
+  std::string HSAMetadataString;
+  if (HSAMD::toString(HSAMetadata, HSAMetadataString))
+    return false;
+
+  OS << '\t' << HSAMD::AssemblerDirectiveBegin << '\n';
+  OS << HSAMetadataString << '\n';
+  OS << '\t' << HSAMD::AssemblerDirectiveEnd << '\n';
+  return true;
 }
 
-void AMDGPUTargetAsmStreamer::EmitRuntimeMetadata(Module &M) {
-  OS << "\t.amdgpu_runtime_metadata\n";
-  OS << getRuntimeMDYAMLString(M);
-  OS << "\n\t.end_amdgpu_runtime_metadata\n";
-}
+bool AMDGPUTargetAsmStreamer::EmitPALMetadata(
+    const PALMD::Metadata &PALMetadata) {
+  std::string PALMetadataString;
+  if (PALMD::toString(PALMetadata, PALMetadataString))
+    return false;
 
-void AMDGPUTargetAsmStreamer::EmitRuntimeMetadata(StringRef Metadata) {
-  OS << "\t.amdgpu_runtime_metadata";
-  OS << Metadata;
-  OS << "\t.end_amdgpu_runtime_metadata\n";
+  OS << '\t' << PALMD::AssemblerDirective << PALMetadataString << '\n';
+  return true;
 }
 
 //===----------------------------------------------------------------------===//
@@ -116,22 +129,21 @@ MCELFStreamer &AMDGPUTargetELFStreamer::getStreamer() {
   return static_cast<MCELFStreamer &>(Streamer);
 }
 
-void
-AMDGPUTargetELFStreamer::EmitAMDGPUNote(const MCExpr* DescSZ,
-                                        PT_NOTE::NoteType Type,
-                              std::function<void(MCELFStreamer &)> EmitDesc) {
+void AMDGPUTargetELFStreamer::EmitAMDGPUNote(
+    const MCExpr *DescSZ, unsigned NoteType,
+    function_ref<void(MCELFStreamer &)> EmitDesc) {
   auto &S = getStreamer();
   auto &Context = S.getContext();
 
-  auto NameSZ = sizeof(PT_NOTE::NoteName);
+  auto NameSZ = sizeof(ElfNote::NoteName);
 
   S.PushSection();
   S.SwitchSection(Context.getELFSection(
-    PT_NOTE::SectionName, ELF::SHT_NOTE, ELF::SHF_ALLOC));
+    ElfNote::SectionName, ELF::SHT_NOTE, ELF::SHF_ALLOC));
   S.EmitIntValue(NameSZ, 4);                                  // namesz
   S.EmitValue(DescSZ, 4);                                     // descz
-  S.EmitIntValue(Type, 4); // type
-  S.EmitBytes(StringRef(PT_NOTE::NoteName, NameSZ));          // name
+  S.EmitIntValue(NoteType, 4);                                // type
+  S.EmitBytes(StringRef(ElfNote::NoteName, NameSZ));          // name
   S.EmitValueToAlignment(4, 0, 1, 0);                         // padding 0
   EmitDesc(S);                                                // desc
   S.EmitValueToAlignment(4, 0, 1, 0);                         // padding 0
@@ -144,7 +156,7 @@ AMDGPUTargetELFStreamer::EmitDirectiveHSACodeObjectVersion(uint32_t Major,
 
   EmitAMDGPUNote(
     MCConstantExpr::create(8, getContext()),
-    PT_NOTE::NT_AMDGPU_HSA_CODE_OBJECT_VERSION,
+    ElfNote::NT_AMDGPU_HSA_CODE_OBJECT_VERSION,
     [&](MCELFStreamer &OS){
       OS.EmitIntValue(Major, 4);
       OS.EmitIntValue(Minor, 4);
@@ -160,14 +172,14 @@ AMDGPUTargetELFStreamer::EmitDirectiveHSACodeObjectISA(uint32_t Major,
                                                        StringRef ArchName) {
   uint16_t VendorNameSize = VendorName.size() + 1;
   uint16_t ArchNameSize = ArchName.size() + 1;
-  
+
   unsigned DescSZ = sizeof(VendorNameSize) + sizeof(ArchNameSize) +
     sizeof(Major) + sizeof(Minor) + sizeof(Stepping) +
     VendorNameSize + ArchNameSize;
 
   EmitAMDGPUNote(
     MCConstantExpr::create(DescSZ, getContext()),
-    PT_NOTE::NT_AMDGPU_HSA_ISA,
+    ElfNote::NT_AMDGPU_HSA_ISA,
     [&](MCELFStreamer &OS) {
       OS.EmitIntValue(VendorNameSize, 2);
       OS.EmitIntValue(ArchNameSize, 2);
@@ -198,25 +210,7 @@ void AMDGPUTargetELFStreamer::EmitAMDGPUSymbolType(StringRef SymbolName,
   Symbol->setType(ELF::STT_AMDGPU_HSA_KERNEL);
 }
 
-void AMDGPUTargetELFStreamer::EmitAMDGPUHsaModuleScopeGlobal(
-    StringRef GlobalName) {
-
-  MCSymbolELF *Symbol = cast<MCSymbolELF>(
-      getStreamer().getContext().getOrCreateSymbol(GlobalName));
-  Symbol->setType(ELF::STT_OBJECT);
-  Symbol->setBinding(ELF::STB_LOCAL);
-}
-
-void AMDGPUTargetELFStreamer::EmitAMDGPUHsaProgramScopeGlobal(
-    StringRef GlobalName) {
-
-  MCSymbolELF *Symbol = cast<MCSymbolELF>(
-      getStreamer().getContext().getOrCreateSymbol(GlobalName));
-  Symbol->setType(ELF::STT_OBJECT);
-  Symbol->setBinding(ELF::STB_GLOBAL);
-}
-
-void AMDGPUTargetELFStreamer::EmitRuntimeMetadata(StringRef Metadata) {
+bool AMDGPUTargetELFStreamer::EmitISAVersion(StringRef IsaVersionString) {
   // Create two labels to mark the beginning and end of the desc field
   // and a MCExpr to calculate the size of the desc field.
   auto &Context = getContext();
@@ -228,15 +222,52 @@ void AMDGPUTargetELFStreamer::EmitRuntimeMetadata(StringRef Metadata) {
 
   EmitAMDGPUNote(
     DescSZ,
-    PT_NOTE::NT_AMDGPU_HSA_RUNTIME_METADATA,
+    ELF::NT_AMD_AMDGPU_ISA,
     [&](MCELFStreamer &OS) {
       OS.EmitLabel(DescBegin);
-      OS.EmitBytes(Metadata);
+      OS.EmitBytes(IsaVersionString);
       OS.EmitLabel(DescEnd);
     }
   );
+  return true;
 }
 
-void AMDGPUTargetELFStreamer::EmitRuntimeMetadata(Module &M) {
-  EmitRuntimeMetadata(getRuntimeMDYAMLString(M));
+bool AMDGPUTargetELFStreamer::EmitHSAMetadata(
+    const AMDGPU::HSAMD::Metadata &HSAMetadata) {
+  std::string HSAMetadataString;
+  if (HSAMD::toString(HSAMetadata, HSAMetadataString))
+    return false;
+
+  // Create two labels to mark the beginning and end of the desc field
+  // and a MCExpr to calculate the size of the desc field.
+  auto &Context = getContext();
+  auto *DescBegin = Context.createTempSymbol();
+  auto *DescEnd = Context.createTempSymbol();
+  auto *DescSZ = MCBinaryExpr::createSub(
+    MCSymbolRefExpr::create(DescEnd, Context),
+    MCSymbolRefExpr::create(DescBegin, Context), Context);
+
+  EmitAMDGPUNote(
+    DescSZ,
+    ELF::NT_AMD_AMDGPU_HSA_METADATA,
+    [&](MCELFStreamer &OS) {
+      OS.EmitLabel(DescBegin);
+      OS.EmitBytes(HSAMetadataString);
+      OS.EmitLabel(DescEnd);
+    }
+  );
+  return true;
+}
+
+bool AMDGPUTargetELFStreamer::EmitPALMetadata(
+    const PALMD::Metadata &PALMetadata) {
+  EmitAMDGPUNote(
+    MCConstantExpr::create(PALMetadata.size() * sizeof(uint32_t), getContext()),
+    ELF::NT_AMD_AMDGPU_PAL_METADATA,
+    [&](MCELFStreamer &OS){
+      for (auto I : PALMetadata)
+        OS.EmitIntValue(I, sizeof(uint32_t));
+    }
+  );
+  return true;
 }

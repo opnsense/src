@@ -14,14 +14,25 @@
 #ifndef LLVM_OBJECT_ELF_H
 #define LLVM_OBJECT_ELF_H
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Object/ELFTypes.h"
-#include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Object/Error.h"
+#include "llvm/Support/Endian.h"
+#include "llvm/Support/Error.h"
+#include <cassert>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <utility>
 
 namespace llvm {
 namespace object {
 
 StringRef getELFRelocationTypeName(uint32_t Machine, uint32_t Type);
+StringRef getELFSectionTypeName(uint32_t Machine, uint32_t Type);
 
 // Subclasses of ELFFile may need this for template instantiation
 inline std::pair<unsigned char, unsigned char>
@@ -41,27 +52,27 @@ template <class ELFT>
 class ELFFile {
 public:
   LLVM_ELF_IMPORT_TYPES_ELFT(ELFT)
-  typedef typename ELFT::uint uintX_t;
-  typedef typename ELFT::Ehdr Elf_Ehdr;
-  typedef typename ELFT::Shdr Elf_Shdr;
-  typedef typename ELFT::Sym Elf_Sym;
-  typedef typename ELFT::Dyn Elf_Dyn;
-  typedef typename ELFT::Phdr Elf_Phdr;
-  typedef typename ELFT::Rel Elf_Rel;
-  typedef typename ELFT::Rela Elf_Rela;
-  typedef typename ELFT::Verdef Elf_Verdef;
-  typedef typename ELFT::Verdaux Elf_Verdaux;
-  typedef typename ELFT::Verneed Elf_Verneed;
-  typedef typename ELFT::Vernaux Elf_Vernaux;
-  typedef typename ELFT::Versym Elf_Versym;
-  typedef typename ELFT::Hash Elf_Hash;
-  typedef typename ELFT::GnuHash Elf_GnuHash;
-  typedef typename ELFT::DynRange Elf_Dyn_Range;
-  typedef typename ELFT::ShdrRange Elf_Shdr_Range;
-  typedef typename ELFT::SymRange Elf_Sym_Range;
-  typedef typename ELFT::RelRange Elf_Rel_Range;
-  typedef typename ELFT::RelaRange Elf_Rela_Range;
-  typedef typename ELFT::PhdrRange Elf_Phdr_Range;
+  using uintX_t = typename ELFT::uint;
+  using Elf_Ehdr = typename ELFT::Ehdr;
+  using Elf_Shdr = typename ELFT::Shdr;
+  using Elf_Sym = typename ELFT::Sym;
+  using Elf_Dyn = typename ELFT::Dyn;
+  using Elf_Phdr = typename ELFT::Phdr;
+  using Elf_Rel = typename ELFT::Rel;
+  using Elf_Rela = typename ELFT::Rela;
+  using Elf_Verdef = typename ELFT::Verdef;
+  using Elf_Verdaux = typename ELFT::Verdaux;
+  using Elf_Verneed = typename ELFT::Verneed;
+  using Elf_Vernaux = typename ELFT::Vernaux;
+  using Elf_Versym = typename ELFT::Versym;
+  using Elf_Hash = typename ELFT::Hash;
+  using Elf_GnuHash = typename ELFT::GnuHash;
+  using Elf_Dyn_Range = typename ELFT::DynRange;
+  using Elf_Shdr_Range = typename ELFT::ShdrRange;
+  using Elf_Sym_Range = typename ELFT::SymRange;
+  using Elf_Rel_Range = typename ELFT::RelRange;
+  using Elf_Rela_Range = typename ELFT::RelaRange;
+  using Elf_Phdr_Range = typename ELFT::PhdrRange;
 
   const uint8_t *base() const {
     return reinterpret_cast<const uint8_t *>(Buf.data());
@@ -70,8 +81,9 @@ public:
   size_t getBufSize() const { return Buf.size(); }
 
 private:
-
   StringRef Buf;
+
+  ELFFile(StringRef Object);
 
 public:
   const Elf_Ehdr *getHeader() const {
@@ -92,8 +104,6 @@ public:
   Expected<ArrayRef<Elf_Word>> getSHNDXTable(const Elf_Shdr &Section,
                                              Elf_Shdr_Range Sections) const;
 
-  void VerifyStrTab(const Elf_Shdr *sh) const;
-
   StringRef getRelocationTypeName(uint32_t Type) const;
   void getRelocationTypeName(uint32_t Type,
                              SmallVectorImpl<char> &Result) const;
@@ -102,7 +112,7 @@ public:
   Expected<const Elf_Sym *> getRelocationSymbol(const Elf_Rel *Rel,
                                                 const Elf_Shdr *SymTab) const;
 
-  ELFFile(StringRef Object);
+  static Expected<ELFFile> create(StringRef Object);
 
   bool isMipsELF64() const {
     return getHeader()->e_machine == ELF::EM_MIPS &&
@@ -130,10 +140,16 @@ public:
     return getSectionContentsAsArray<Elf_Rel>(Sec);
   }
 
+  Expected<std::vector<Elf_Rela>> android_relas(const Elf_Shdr *Sec) const;
+
   /// \brief Iterate over program header table.
   Expected<Elf_Phdr_Range> program_headers() const {
     if (getHeader()->e_phnum && getHeader()->e_phentsize != sizeof(Elf_Phdr))
       return createError("invalid e_phentsize");
+    if (getHeader()->e_phoff +
+            (getHeader()->e_phnum * getHeader()->e_phentsize) >
+        getBufSize())
+      return createError("program headers longer than binary");
     auto *Begin =
         reinterpret_cast<const Elf_Phdr *>(base() + getHeader()->e_phoff);
     return makeArrayRef(Begin, Begin + getHeader()->e_phnum);
@@ -161,10 +177,10 @@ public:
   Expected<ArrayRef<uint8_t>> getSectionContents(const Elf_Shdr *Sec) const;
 };
 
-typedef ELFFile<ELFType<support::little, false>> ELF32LEFile;
-typedef ELFFile<ELFType<support::little, true>> ELF64LEFile;
-typedef ELFFile<ELFType<support::big, false>> ELF32BEFile;
-typedef ELFFile<ELFType<support::big, true>> ELF64BEFile;
+using ELF32LEFile = ELFFile<ELFType<support::little, false>>;
+using ELF64LEFile = ELFFile<ELFType<support::little, true>>;
+using ELF32BEFile = ELFFile<ELFType<support::big, false>>;
+using ELF64BEFile = ELFFile<ELFType<support::big, true>>;
 
 template <class ELFT>
 inline Expected<const typename ELFT::Shdr *>
@@ -194,7 +210,7 @@ ELFFile<ELFT>::getSectionIndex(const Elf_Sym *Sym, Elf_Sym_Range Syms,
                                ArrayRef<Elf_Word> ShndxTable) const {
   uint32_t Index = Sym->st_shndx;
   if (Index == ELF::SHN_XINDEX) {
-    auto ErrorOrIndex = object::getExtendedSymbolTableIndex<ELFT>(
+    auto ErrorOrIndex = getExtendedSymbolTableIndex<ELFT>(
         Sym, Syms.begin(), ShndxTable);
     if (!ErrorOrIndex)
       return ErrorOrIndex.takeError();
@@ -225,10 +241,7 @@ ELFFile<ELFT>::getSection(const Elf_Sym *Sym, Elf_Sym_Range Symbols,
   uint32_t Index = *IndexOrErr;
   if (Index == 0)
     return nullptr;
-  auto SectionsOrErr = sections();
-  if (!SectionsOrErr)
-    return SectionsOrErr.takeError();
-  return object::getSection<ELFT>(*SectionsOrErr, Index);
+  return getSection(Index);
 }
 
 template <class ELFT>
@@ -263,6 +276,9 @@ ELFFile<ELFT>::getSectionContentsAsArray(const Elf_Shdr *Sec) const {
   if ((std::numeric_limits<uintX_t>::max() - Offset < Size) ||
       Offset + Size > Buf.size())
     return createError("invalid section offset");
+
+  if (Offset % alignof(T))
+    return createError("unaligned data");
 
   const T *Start = reinterpret_cast<const T *>(base() + Offset);
   return makeArrayRef(Start, Size / sizeof(T));
@@ -334,14 +350,13 @@ ELFFile<ELFT>::getSectionStringTable(Elf_Shdr_Range Sections) const {
   return getStringTable(&Sections[Index]);
 }
 
-template <class ELFT>
-ELFFile<ELFT>::ELFFile(StringRef Object) : Buf(Object) {
-  assert(sizeof(Elf_Ehdr) <= Buf.size() && "Invalid buffer");
-}
+template <class ELFT> ELFFile<ELFT>::ELFFile(StringRef Object) : Buf(Object) {}
 
 template <class ELFT>
-static bool compareAddr(uint64_t VAddr, const Elf_Phdr_Impl<ELFT> *Phdr) {
-  return VAddr < Phdr->p_vaddr;
+Expected<ELFFile<ELFT>> ELFFile<ELFT>::create(StringRef Object) {
+  if (sizeof(Elf_Ehdr) > Object.size())
+    return createError("Invalid buffer");
+  return ELFFile(Object);
 }
 
 template <class ELFT>
@@ -519,7 +534,8 @@ inline unsigned hashSysV(StringRef SymbolName) {
   }
   return h;
 }
+
 } // end namespace object
 } // end namespace llvm
 
-#endif
+#endif // LLVM_OBJECT_ELF_H

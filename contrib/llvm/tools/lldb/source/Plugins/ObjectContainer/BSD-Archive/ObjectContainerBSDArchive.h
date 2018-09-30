@@ -10,18 +10,19 @@
 #ifndef liblldb_ObjectContainerBSDArchive_h_
 #define liblldb_ObjectContainerBSDArchive_h_
 
-// Project includes
-#include "lldb/Core/ArchSpec.h"
-#include "lldb/Core/ConstString.h"
 #include "lldb/Core/UniqueCStringMap.h"
-#include "lldb/Host/FileSpec.h"
 #include "lldb/Symbol/ObjectContainer.h"
+#include "lldb/Utility/ArchSpec.h"
+#include "lldb/Utility/ConstString.h"
+#include "lldb/Utility/FileSpec.h"
 
 // Other libraries and framework includes
 #include "llvm/Support/Chrono.h"
 
 // C Includes
 // C++ Includes
+#include <map>
+#include <memory>
 #include <mutex>
 
 class ObjectContainerBSDArchive : public lldb_private::ObjectContainer {

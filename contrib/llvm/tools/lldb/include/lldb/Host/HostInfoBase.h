@@ -10,8 +10,8 @@
 #ifndef lldb_Host_HostInfoBase_h_
 #define lldb_Host_HostInfoBase_h_
 
-#include "lldb/Core/ArchSpec.h"
-#include "lldb/Host/FileSpec.h"
+#include "lldb/Utility/ArchSpec.h"
+#include "lldb/Utility/FileSpec.h"
 #include "lldb/lldb-enumerations.h"
 
 #include "llvm/ADT/StringRef.h"
@@ -33,39 +33,6 @@ private:
 public:
   static void Initialize();
   static void Terminate();
-
-  //------------------------------------------------------------------
-  /// Returns the number of CPUs on this current host.
-  ///
-  /// @return
-  ///     Number of CPUs on this current host, or zero if the number
-  ///     of CPUs can't be determined on this host.
-  //------------------------------------------------------------------
-  static uint32_t GetNumberCPUS();
-
-  //------------------------------------------------------------------
-  /// Returns the maximum length of a thread name on this platform.
-  ///
-  /// @return
-  ///     Maximum length of a thread name on this platform.
-  //------------------------------------------------------------------
-  static uint32_t GetMaxThreadNameLength();
-
-  //------------------------------------------------------------------
-  /// Gets the host vendor string.
-  ///
-  /// @return
-  ///     A const string object containing the host vendor name.
-  //------------------------------------------------------------------
-  static llvm::StringRef GetVendorString();
-
-  //------------------------------------------------------------------
-  /// Gets the host Operating System (OS) string.
-  ///
-  /// @return
-  ///     A const string object containing the host OS name.
-  //------------------------------------------------------------------
-  static llvm::StringRef GetOSString();
 
   //------------------------------------------------------------------
   /// Gets the host target triple as a const string.
@@ -94,6 +61,8 @@ public:
   static const ArchSpec &
   GetArchitecture(ArchitectureKind arch_kind = eArchKindDefault);
 
+  static llvm::Optional<ArchitectureKind> ParseArchitectureKind(llvm::StringRef kind);
+
   //------------------------------------------------------------------
   /// Find a resource files that are related to LLDB.
   ///
@@ -113,6 +82,13 @@ public:
   ///     \b true if \a resource_path was resolved, \a false otherwise.
   //------------------------------------------------------------------
   static bool GetLLDBPath(lldb::PathType type, FileSpec &file_spec);
+
+  //---------------------------------------------------------------------------
+  /// If the triple does not specify the vendor, os, and environment parts, we
+  /// "augment" these using information from the host and return the resulting
+  /// ArchSpec object.
+  //---------------------------------------------------------------------------
+  static ArchSpec GetAugmentedArchSpec(llvm::StringRef triple);
 
 protected:
   static bool ComputeSharedLibraryDirectory(FileSpec &file_spec);

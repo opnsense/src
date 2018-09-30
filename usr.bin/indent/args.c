@@ -1,4 +1,4 @@
-/*
+/*-
  * Copyright (c) 1985 Sun Microsystems, Inc.
  * Copyright (c) 1980, 1993
  *	The Regents of the University of California.  All rights reserved.
@@ -91,6 +91,7 @@ struct pro {
 }           pro[] = {
 
     {"T", PRO_SPECIAL, 0, KEY, 0},
+    {"P", PRO_SPECIAL, 0, IGN, 0},
     {"bacc", PRO_BOOL, false, ON, &blanklines_around_conditional_compilation},
     {"badp", PRO_BOOL, false, ON, &blanklines_after_declarations_at_proctop},
     {"bad", PRO_BOOL, false, ON, &blanklines_after_declarations},
@@ -223,17 +224,14 @@ scan_profile(FILE *f)
     }
 }
 
-const char	*param_start;
-
-static int
+static const char *
 eqin(const char *s1, const char *s2)
 {
     while (*s1) {
 	if (*s1++ != *s2++)
-	    return (false);
+	    return (NULL);
     }
-    param_start = s2;
-    return (true);
+    return (s2);
 }
 
 /*
@@ -257,11 +255,12 @@ set_defaults(void)
 void
 set_option(char *arg)
 {
-    struct pro *p;
+    struct	pro *p;
+    const char	*param_start;
 
     arg++;			/* ignore leading "-" */
     for (p = pro; p->p_name; p++)
-	if (*p->p_name == *arg && eqin(p->p_name, arg))
+	if (*p->p_name == *arg && (param_start = eqin(p->p_name, arg)) != NULL)
 	    goto found;
     errx(1, "%s: unknown parameter \"%s\"", option_source, arg - 1);
 found:
@@ -280,9 +279,9 @@ found:
 	    break;
 
 	case STDIN:
-	    if (input == 0)
+	    if (input == NULL)
 		input = stdin;
-	    if (output == 0)
+	    if (output == NULL)
 		output = stdout;
 	    break;
 

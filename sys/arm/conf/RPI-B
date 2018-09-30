@@ -28,6 +28,7 @@ options 	INTRNG
 
 options 	SCHED_4BSD		# 4BSD scheduler
 options 	PLATFORM
+options 	MULTIDELAY
 
 # NFS root from boopt/dhcp
 #options 	BOOTP
@@ -45,6 +46,9 @@ device		uart
 device		pty
 device		snp
 device		pl011
+
+# Device mode support
+device		usb_template    	# Control of the gadget
 
 # Comment following lines for boot console on serial port
 device		vt

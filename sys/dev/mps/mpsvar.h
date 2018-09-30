@@ -38,6 +38,7 @@
 #define MPS_DB_MAX_WAIT		2500
 
 #define MPS_REQ_FRAMES		1024
+#define MPS_PRI_REQ_FRAMES	128
 #define MPS_EVT_REPLY_FRAMES	32
 #define MPS_REPLY_FRAMES	MPS_REQ_FRAMES
 #define MPS_CHAIN_FRAMES	2048
@@ -271,9 +272,11 @@ struct mps_softc {
 #define MPS_FLAGS_DIAGRESET	(1 << 4)
 #define	MPS_FLAGS_ATTACH_DONE	(1 << 5)
 #define	MPS_FLAGS_WD_AVAILABLE	(1 << 6)
+#define	MPS_FLAGS_REALLOCATED	(1 << 7)
 	u_int				mps_debug;
 	u_int				disable_msix;
 	u_int				disable_msi;
+	u_int				msi_msgs;
 	int				tm_cmds_active;
 	int				io_cmds_active;
 	int				io_cmds_highwater;
@@ -312,6 +315,7 @@ struct mps_softc {
 
 	MPI2_IOC_FACTS_REPLY		*facts;
 	int				num_reqs;
+	int				num_prireqs;
 	int				num_replies;
 	int				fqdepth;	/* Free queue */
 	int				pqdepth;	/* Post queue */
@@ -671,6 +675,7 @@ mps_unmask_intr(struct mps_softc *sc)
 int mps_pci_setup_interrupts(struct mps_softc *sc);
 int mps_pci_restore(struct mps_softc *sc);
 
+void mps_get_tunables(struct mps_softc *sc);
 int mps_attach(struct mps_softc *sc);
 int mps_free(struct mps_softc *sc);
 void mps_intr(void *);
@@ -695,7 +700,7 @@ void mpssas_record_event(struct mps_softc *sc,
     MPI2_EVENT_NOTIFICATION_REPLY *event_reply);
 
 int mps_map_command(struct mps_softc *sc, struct mps_command *cm);
-int mps_wait_command(struct mps_softc *sc, struct mps_command *cm, int timeout,
+int mps_wait_command(struct mps_softc *sc, struct mps_command **cm, int timeout,
     int sleep_flag);
 
 int mps_config_get_bios_pg3(struct mps_softc *sc, Mpi2ConfigReply_t
@@ -717,7 +722,7 @@ int mps_config_get_volume_wwid(struct mps_softc *sc, u16 volume_handle,
 int mps_config_get_raid_pd_pg0(struct mps_softc *sc,
     Mpi2ConfigReply_t *mpi_reply, Mpi2RaidPhysDiskPage0_t *config_page,
     u32 page_address);
-void mpssas_ir_shutdown(struct mps_softc *sc);
+void mpssas_ir_shutdown(struct mps_softc *sc, int howto);
 
 int mps_reinit(struct mps_softc *sc);
 void mpssas_handle_reinit(struct mps_softc *sc);

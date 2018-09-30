@@ -10,13 +10,9 @@
 #ifndef liblldb_CommandObjectDisassemble_h_
 #define liblldb_CommandObjectDisassemble_h_
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
-#include "lldb/Core/ArchSpec.h"
 #include "lldb/Interpreter/CommandObject.h"
 #include "lldb/Interpreter/Options.h"
+#include "lldb/Utility/ArchSpec.h"
 
 namespace lldb_private {
 
@@ -32,8 +28,8 @@ public:
 
     ~CommandOptions() override;
 
-    Error SetOptionValue(uint32_t option_idx, llvm::StringRef option_arg,
-                         ExecutionContext *execution_context) override;
+    Status SetOptionValue(uint32_t option_idx, llvm::StringRef option_arg,
+                          ExecutionContext *execution_context) override;
 
     void OptionParsingStarting(ExecutionContext *execution_context) override;
 
@@ -49,7 +45,7 @@ public:
       return flavor_string.c_str();
     }
 
-    Error OptionParsingFinished(ExecutionContext *execution_context) override;
+    Status OptionParsingFinished(ExecutionContext *execution_context) override;
 
     bool show_mixed; // Show mixed source/assembly
     bool show_bytes;

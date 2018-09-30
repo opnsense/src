@@ -161,7 +161,7 @@ public:
   directory_iterator &increment(std::error_code &EC) {
     assert(Impl && "attempting to increment past end");
     EC = Impl->increment();
-    if (EC || !Impl->CurrentEntry.isStatusKnown())
+    if (!Impl->CurrentEntry.isStatusKnown())
       Impl.reset(); // Normalize the end iterator to Impl == nullptr.
     return *this;
   }
@@ -319,16 +319,30 @@ public:
   explicit InMemoryFileSystem(bool UseNormalizedPaths = true);
   ~InMemoryFileSystem() override;
 
-  /// Add a buffer to the VFS with a path. The VFS owns the buffer.
-  /// \return true if the file was successfully added, false if the file already
-  /// exists in the file system with different contents.
+  /// Add a file containing a buffer or a directory to the VFS with a
+  /// path. The VFS owns the buffer.  If present, User, Group, Type
+  /// and Perms apply to the newly-created file or directory.
+  /// \return true if the file or directory was successfully added,
+  /// false if the file or directory already exists in the file system with
+  /// different contents.
   bool addFile(const Twine &Path, time_t ModificationTime,
-               std::unique_ptr<llvm::MemoryBuffer> Buffer);
+               std::unique_ptr<llvm::MemoryBuffer> Buffer,
+               Optional<uint32_t> User = None, Optional<uint32_t> Group = None,
+               Optional<llvm::sys::fs::file_type> Type = None,
+               Optional<llvm::sys::fs::perms> Perms = None);
   /// Add a buffer to the VFS with a path. The VFS does not own the buffer.
-  /// \return true if the file was successfully added, false if the file already
-  /// exists in the file system with different contents.
+  /// If present, User, Group, Type and Perms apply to the newly-created file
+  /// or directory.
+  /// \return true if the file or directory was successfully added,
+  /// false if the file or directory already exists in the file system with
+  /// different contents.
   bool addFileNoOwn(const Twine &Path, time_t ModificationTime,
-                    llvm::MemoryBuffer *Buffer);
+                    llvm::MemoryBuffer *Buffer,
+                    Optional<uint32_t> User = None,
+                    Optional<uint32_t> Group = None,
+                    Optional<llvm::sys::fs::file_type> Type = None,
+                    Optional<llvm::sys::fs::perms> Perms = None);
+
   std::string toString() const;
   /// Return true if this file system normalizes . and .. in paths.
   bool useNormalizedPaths() const { return UseNormalizedPaths; }

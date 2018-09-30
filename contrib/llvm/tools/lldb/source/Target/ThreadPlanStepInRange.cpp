@@ -12,10 +12,7 @@
 // Other libraries and framework includes
 // Project includes
 #include "lldb/Target/ThreadPlanStepInRange.h"
-#include "lldb/Core/Log.h"
 #include "lldb/Core/Module.h"
-#include "lldb/Core/RegularExpression.h"
-#include "lldb/Core/Stream.h"
 #include "lldb/Symbol/Function.h"
 #include "lldb/Symbol/Symbol.h"
 #include "lldb/Target/Process.h"
@@ -24,6 +21,9 @@
 #include "lldb/Target/Thread.h"
 #include "lldb/Target/ThreadPlanStepOut.h"
 #include "lldb/Target/ThreadPlanStepThrough.h"
+#include "lldb/Utility/Log.h"
+#include "lldb/Utility/RegularExpression.h"
+#include "lldb/Utility/Stream.h"
 
 using namespace lldb;
 using namespace lldb_private;
@@ -191,8 +191,12 @@ bool ThreadPlanStepInRange::ShouldStop(Event *event_ptr) {
       if (!m_sub_plan_sp) {
         // Otherwise check the ShouldStopHere for step out:
         m_sub_plan_sp = CheckShouldStopHereAndQueueStepOut(frame_order);
-        if (log)
-          log->Printf("ShouldStopHere says we should step out of this frame.");
+        if (log) {
+          if (m_sub_plan_sp)
+            log->Printf("ShouldStopHere found plan to step out of this frame.");
+          else
+            log->Printf("ShouldStopHere no plan to step out of this frame.");
+        }
       } else if (log) {
         log->Printf(
             "Thought I stepped out, but in fact arrived at a trampoline.");

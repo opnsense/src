@@ -21,9 +21,9 @@
 
 // Other libraries and framework includes
 // Project includes
-#include "lldb/Core/ConstString.h"
 #include "lldb/Symbol/CompilerType.h"
 #include "lldb/Symbol/TypeSystem.h"
+#include "lldb/Utility/ConstString.h"
 
 namespace lldb_private {
 
@@ -229,12 +229,6 @@ public:
 
   size_t GetNumTemplateArguments(lldb::opaque_compiler_type_t type) override {
     return 0;
-  }
-
-  CompilerType GetTemplateArgument(lldb::opaque_compiler_type_t type,
-                                   size_t idx,
-                                   lldb::TemplateArgumentKind &kind) override {
-    return CompilerType();
   }
 
   void DumpValue(lldb::opaque_compiler_type_t type, ExecutionContext *exe_ctx,

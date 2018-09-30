@@ -479,6 +479,7 @@ again:
 	} else {
 		if (read_len == sizeof(buf))
 			goto again;
+		/* Only refresh device table on a device add or remove event. */
 		if (buf[0] == '+' || buf[0] == '-')
 			refresh_device_tbl(1);
 	}

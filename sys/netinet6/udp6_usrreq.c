@@ -104,9 +104,7 @@ __FBSDID("$FreeBSD$");
 #include <netinet/in_systm.h>
 #include <netinet/in_var.h>
 #include <netinet/ip.h>
-#include <netinet/ip_icmp.h>
 #include <netinet/ip6.h>
-#include <netinet/icmp_var.h>
 #include <netinet/icmp6.h>
 #include <netinet/ip_var.h>
 #include <netinet/udp.h>
@@ -203,12 +201,11 @@ udp6_input(struct mbuf **mp, int *offp, int proto)
 	int cscov_partial;
 	int plen, ulen;
 	struct sockaddr_in6 fromsa;
-	struct sockaddr_in6 next_hop6;
+	struct m_tag *fwd_tag;
 	uint16_t uh_sum;
 	uint8_t nxt;
 
 	ifp = m->m_pkthdr.rcvif;
-	ip6 = mtod(m, struct ip6_hdr *);
 
 #ifndef PULLDOWN_TEST
 	IP6_EXTHDR_CHECK(m, off, sizeof(struct udphdr), IPPROTO_DONE);
@@ -218,6 +215,7 @@ udp6_input(struct mbuf **mp, int *offp, int proto)
 	IP6_EXTHDR_GET(uh, struct udphdr *, m, off, sizeof(*uh));
 	if (!uh)
 		return (IPPROTO_DONE);
+	ip6 = mtod(m, struct ip6_hdr *);
 #endif
 
 	UDPSTAT_INC(udps_ipackets);
@@ -411,9 +409,14 @@ udp6_input(struct mbuf **mp, int *offp, int proto)
 	 */
 
 	/*
-	 * Grab info from IP forward tag prepended to the chain.
+	 * Grab info from PACKET_TAG_IPFORWARD tag prepended to the chain.
 	 */
-	if (IP6_HAS_NEXTHOP(m) && !ip6_get_fwdtag(m, &next_hop6, NULL)) {
+	if ((m->m_flags & M_IP6_NEXTHOP) &&
+	    (fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL)) != NULL) {
+		struct sockaddr_in6 *next_hop6;
+
+		next_hop6 = (struct sockaddr_in6 *)(fwd_tag + 1);
+
 		/*
 		 * Transparently forwarded. Pretend to be the destination.
 		 * Already got one like this?
@@ -428,13 +431,14 @@ udp6_input(struct mbuf **mp, int *offp, int proto)
 			 * any hardware-generated hash is ignored.
 			 */
 			inp = in6_pcblookup(pcbinfo, &ip6->ip6_src,
-			    uh->uh_sport, &next_hop6.sin6_addr,
-			    next_hop6.sin6_port ? htons(next_hop6.sin6_port) :
+			    uh->uh_sport, &next_hop6->sin6_addr,
+			    next_hop6->sin6_port ? htons(next_hop6->sin6_port) :
 			    uh->uh_dport, INPLOOKUP_WILDCARD |
 			    INPLOOKUP_RLOCKPCB, m->m_pkthdr.rcvif);
 		}
 		/* Remove the tag from the packet. We don't need it anymore. */
-		ip6_flush_fwdtag(m);
+		m_tag_delete(m, fwd_tag);
+		m->m_flags &= ~M_IP6_NEXTHOP;
 	} else
 		inp = in6_pcblookup_mbuf(pcbinfo, &ip6->ip6_src,
 		    uh->uh_sport, &ip6->ip6_dst, uh->uh_dport,
@@ -459,8 +463,6 @@ udp6_input(struct mbuf **mp, int *offp, int proto)
 			goto badunlocked;
 		}
 		if (V_udp_blackhole)
-			goto badunlocked;
-		if (badport_bandlim(BANDLIM_ICMP6_UNREACH) < 0)
 			goto badunlocked;
 		icmp6_error(m, ICMP6_DST_UNREACH, ICMP6_DST_UNREACH_NOPORT, 0);
 		return (IPPROTO_DONE);
@@ -1000,7 +1002,6 @@ udp6_bind(struct socket *so, struct sockaddr *nam, struct thread *td)
 	struct inpcb *inp;
 	struct inpcbinfo *pcbinfo;
 	int error;
-	u_char vflagsav;
 
 	pcbinfo = udp_get_inpcbinfo(so->so_proto->pr_protocol);
 	inp = sotoinpcb(so);
@@ -1008,7 +1009,6 @@ udp6_bind(struct socket *so, struct sockaddr *nam, struct thread *td)
 
 	INP_WLOCK(inp);
 	INP_HASH_WLOCK(pcbinfo);
-	vflagsav = inp->inp_vflag;
 	inp->inp_vflag &= ~INP_IPV4;
 	inp->inp_vflag |= INP_IPV6;
 	if ((inp->inp_flags & IN6P_IPV6_V6ONLY) == 0) {
@@ -1036,8 +1036,6 @@ udp6_bind(struct socket *so, struct sockaddr *nam, struct thread *td)
 #ifdef INET
 out:
 #endif
-	if (error != 0)
-		inp->inp_vflag = vflagsav;
 	INP_HASH_WUNLOCK(pcbinfo);
 	INP_WUNLOCK(inp);
 	return (error);
@@ -1084,7 +1082,6 @@ udp6_connect(struct socket *so, struct sockaddr *nam, struct thread *td)
 	struct inpcbinfo *pcbinfo;
 	struct sockaddr_in6 *sin6;
 	int error;
-	u_char vflagsav;
 
 	pcbinfo = udp_get_inpcbinfo(so->so_proto->pr_protocol);
 	inp = sotoinpcb(so);
@@ -1112,26 +1109,17 @@ udp6_connect(struct socket *so, struct sockaddr *nam, struct thread *td)
 			goto out;
 		}
 		in6_sin6_2_sin(&sin, sin6);
+		inp->inp_vflag |= INP_IPV4;
+		inp->inp_vflag &= ~INP_IPV6;
 		error = prison_remote_ip4(td->td_ucred, &sin.sin_addr);
 		if (error != 0)
 			goto out;
-		vflagsav = inp->inp_vflag;
-		inp->inp_vflag |= INP_IPV4;
-		inp->inp_vflag &= ~INP_IPV6;
 		INP_HASH_WLOCK(pcbinfo);
 		error = in_pcbconnect(inp, (struct sockaddr *)&sin,
 		    td->td_ucred);
 		INP_HASH_WUNLOCK(pcbinfo);
-		/*
-		 * If connect succeeds, mark socket as connected. If
-		 * connect fails and socket is unbound, reset inp_vflag
-		 * field.
-		 */
 		if (error == 0)
 			soisconnected(so);
-		else if (inp->inp_laddr.s_addr == INADDR_ANY &&
-		    inp->inp_lport == 0)
-			inp->inp_vflag = vflagsav;
 		goto out;
 	} else {
 		if ((inp->inp_vflag & INP_IPV6) == 0) {
@@ -1144,25 +1132,16 @@ udp6_connect(struct socket *so, struct sockaddr *nam, struct thread *td)
 		error = EISCONN;
 		goto out;
 	}
+	inp->inp_vflag &= ~INP_IPV4;
+	inp->inp_vflag |= INP_IPV6;
 	error = prison_remote_ip6(td->td_ucred, &sin6->sin6_addr);
 	if (error != 0)
 		goto out;
-	vflagsav = inp->inp_vflag;
-	inp->inp_vflag &= ~INP_IPV4;
-	inp->inp_vflag |= INP_IPV6;
 	INP_HASH_WLOCK(pcbinfo);
 	error = in6_pcbconnect(inp, nam, td->td_ucred);
 	INP_HASH_WUNLOCK(pcbinfo);
-	/*
-	 * If connect succeeds, mark socket as connected. If
-	 * connect fails and socket is unbound, reset inp_vflag
-	 * field.
-	 */
 	if (error == 0)
 		soisconnected(so);
-	else if (IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_laddr) &&
-	    inp->inp_lport == 0)
-		inp->inp_vflag = vflagsav;
 out:
 	INP_WUNLOCK(inp);
 	return (error);

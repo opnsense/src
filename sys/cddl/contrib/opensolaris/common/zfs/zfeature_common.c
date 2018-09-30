@@ -20,7 +20,7 @@
  */
 
 /*
- * Copyright (c) 2011, 2015 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2017 by Delphix. All rights reserved.
  * Copyright (c) 2013 by Saso Kiselkov. All rights reserved.
  * Copyright (c) 2013, Joyent, Inc. All rights reserved.
  * Copyright (c) 2014, Nexenta Systems, Inc. All rights reserved.
@@ -224,6 +224,11 @@ zpool_feature_init(void)
 	    ZFEATURE_FLAG_MOS | ZFEATURE_FLAG_ACTIVATE_ON_ENABLE,
 	    NULL);
 
+	zfeature_register(SPA_FEATURE_POOL_CHECKPOINT,
+	    "com.delphix:zpool_checkpoint", "zpool_checkpoint",
+	    "Pool state can be checkpointed, allowing rewind later.",
+	    ZFEATURE_FLAG_READONLY_COMPAT, NULL);
+
 	static const spa_feature_t large_blocks_deps[] = {
 		SPA_FEATURE_EXTENSIBLE_DATASET,
 		SPA_FEATURE_NONE
@@ -247,4 +252,20 @@ zpool_feature_init(void)
 	    "Edon-R hash algorithm.",
 	    ZFEATURE_FLAG_PER_DATASET, NULL);
 #endif
+
+	zfeature_register(SPA_FEATURE_DEVICE_REMOVAL,
+	    "com.delphix:device_removal", "device_removal",
+	    "Top-level vdevs can be removed, reducing logical pool size.",
+	    ZFEATURE_FLAG_MOS, NULL);
+
+	static const spa_feature_t obsolete_counts_deps[] = {
+		SPA_FEATURE_EXTENSIBLE_DATASET,
+		SPA_FEATURE_DEVICE_REMOVAL,
+		SPA_FEATURE_NONE
+	};
+	zfeature_register(SPA_FEATURE_OBSOLETE_COUNTS,
+	    "com.delphix:obsolete_counts", "obsolete_counts",
+	    "Reduce memory used by removed devices when their blocks are "
+	    "freed or remapped.",
+	    ZFEATURE_FLAG_READONLY_COMPAT, obsolete_counts_deps);
 }

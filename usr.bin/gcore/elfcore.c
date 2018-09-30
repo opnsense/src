@@ -1,4 +1,7 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
+ * Copyright (c) 2017 Dell EMC
  * Copyright (c) 2007 Sandvine Incorporated
  * Copyright (c) 1998 John D. Polstra
  * All rights reserved.
@@ -80,15 +83,20 @@ typedef struct fpreg32 elfcore_fpregset_t;
 typedef struct reg32   elfcore_gregset_t;
 typedef struct prpsinfo32 elfcore_prpsinfo_t;
 typedef struct prstatus32 elfcore_prstatus_t;
+typedef struct ptrace_lwpinfo32 elfcore_lwpinfo_t;
 static void elf_convert_gregset(elfcore_gregset_t *rd, struct reg *rs);
 static void elf_convert_fpregset(elfcore_fpregset_t *rd, struct fpreg *rs);
+static void elf_convert_lwpinfo(struct ptrace_lwpinfo32 *pld,
+    struct ptrace_lwpinfo *pls);
 #else
 typedef fpregset_t elfcore_fpregset_t;
 typedef gregset_t  elfcore_gregset_t;
 typedef prpsinfo_t elfcore_prpsinfo_t;
 typedef prstatus_t elfcore_prstatus_t;
+typedef struct ptrace_lwpinfo elfcore_lwpinfo_t;
 #define elf_convert_gregset(d,s)	*d = *s
 #define elf_convert_fpregset(d,s)	*d = *s
+#define	elf_convert_lwpinfo(d,s)	*d = *s
 #endif
 
 typedef void* (*notefunc_t)(void *, size_t *);
@@ -102,6 +110,10 @@ static void *elf_note_fpregset(void *, size_t *);
 static void *elf_note_prpsinfo(void *, size_t *);
 static void *elf_note_prstatus(void *, size_t *);
 static void *elf_note_thrmisc(void *, size_t *);
+static void *elf_note_ptlwpinfo(void *, size_t *);
+#if defined(__arm__)
+static void *elf_note_arm_vfp(void *, size_t *);
+#endif
 #if defined(__i386__) || defined(__amd64__)
 static void *elf_note_x86_xstate(void *, size_t *);
 #endif
@@ -358,6 +370,10 @@ elf_putnotes(pid_t pid, struct sbuf *sb, size_t *sizep)
 		elf_putnote(NT_PRSTATUS, elf_note_prstatus, tids + i, sb);
 		elf_putnote(NT_FPREGSET, elf_note_fpregset, tids + i, sb);
 		elf_putnote(NT_THRMISC, elf_note_thrmisc, tids + i, sb);
+		elf_putnote(NT_PTLWPINFO, elf_note_ptlwpinfo, tids + i, sb);
+#if defined(__arm__)
+		elf_putnote(NT_ARM_VFP, elf_note_arm_vfp, tids + i, sb);
+#endif
 #if defined(__i386__) || defined(__amd64__)
 		elf_putnote(NT_X86_XSTATE, elf_note_x86_xstate, tids + i, sb);
 #endif
@@ -660,6 +676,52 @@ elf_note_thrmisc(void *arg, size_t *sizep)
 	*sizep = sizeof(*thrmisc);
 	return (thrmisc);
 }
+
+static void *
+elf_note_ptlwpinfo(void *arg, size_t *sizep)
+{
+	lwpid_t tid;
+	elfcore_lwpinfo_t *elf_info;
+	struct ptrace_lwpinfo lwpinfo;
+	void *p;
+
+	tid = *(lwpid_t *)arg;
+	p = calloc(1, sizeof(int) + sizeof(elfcore_lwpinfo_t));
+	if (p == NULL)
+		errx(1, "out of memory");
+	*(int *)p = sizeof(elfcore_lwpinfo_t);
+	elf_info = (void *)((int *)p + 1);
+	ptrace(PT_LWPINFO, tid, (void *)&lwpinfo, sizeof(lwpinfo));
+	elf_convert_lwpinfo(elf_info, &lwpinfo);
+
+	*sizep = sizeof(int) + sizeof(struct ptrace_lwpinfo);
+	return (p);
+}
+
+#if defined(__arm__)
+static void *
+elf_note_arm_vfp(void *arg, size_t *sizep)
+{
+	lwpid_t tid;
+	struct vfpreg *vfp;
+	static bool has_vfp = true;
+	struct vfpreg info;
+
+	tid = *(lwpid_t *)arg;
+	if (has_vfp) {
+		if (ptrace(PT_GETVFPREGS, tid, (void *)&info, 0) != 0)
+			has_vfp = false;
+	}
+	if (!has_vfp) {
+		*sizep = 0;
+		return (NULL);
+	}
+	vfp = calloc(1, sizeof(*vfp));
+	memcpy(vfp, &info, sizeof(*vfp));
+	*sizep = sizeof(*vfp);
+	return (vfp);
+}
+#endif
 
 #if defined(__i386__) || defined(__amd64__)
 static void *

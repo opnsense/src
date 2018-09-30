@@ -434,7 +434,7 @@ ipsec_if_input(struct mbuf *m, struct secasvar *sav, uint32_t af)
 	m->m_pkthdr.rcvif = ifp;
 	IPSEC_SC_RUNLOCK();
 
-	/* m_clrprotoflags(m); */
+	m_clrprotoflags(m);
 	M_SETFIB(m, ifp->if_fib);
 	BPF_MTAP2(ifp, &af, sizeof(af), m);
 	if_inc_counter(ifp, IFCOUNTER_IPACKETS, 1);
@@ -688,12 +688,12 @@ ipsec_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		break;
 	case IPSECGREQID:
 		reqid = sc->reqid;
-		error = copyout(&reqid, ifr->ifr_data, sizeof(reqid));
+		error = copyout(&reqid, ifr_data_get_ptr(ifr), sizeof(reqid));
 		break;
 	case IPSECSREQID:
 		if ((error = priv_check(curthread, PRIV_NET_SETIFCAP)) != 0)
 			break;
-		error = copyin(ifr->ifr_data, &reqid, sizeof(reqid));
+		error = copyin(ifr_data_get_ptr(ifr), &reqid, sizeof(reqid));
 		if (error != 0)
 			break;
 		error = ipsec_set_reqid(ifp, reqid);

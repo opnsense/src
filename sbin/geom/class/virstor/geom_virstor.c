@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2005 Ivan Voras <ivoras@freebsd.org>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -183,6 +185,7 @@ my_g_metadata_store(const char *name, u_char *md, size_t size)
 		goto out;
 	}
 	bcopy(md, sector, size);
+	bzero(sector + size, sectorsize - size);
 	if (pwrite(fd, sector, sectorsize, mediasize - sectorsize) !=
 	    (ssize_t)sectorsize) {
 		error = errno;

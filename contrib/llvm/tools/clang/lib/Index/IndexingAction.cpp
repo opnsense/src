@@ -8,11 +8,13 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/Index/IndexingAction.h"
-#include "clang/Index/IndexDataConsumer.h"
 #include "IndexingContext.h"
+#include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/FrontendAction.h"
 #include "clang/Frontend/MultiplexConsumer.h"
+#include "clang/Index/IndexDataConsumer.h"
 #include "clang/Lex/Preprocessor.h"
+#include "clang/Serialization/ASTReader.h"
 
 using namespace clang;
 using namespace clang::index;
@@ -41,16 +43,18 @@ bool IndexDataConsumer::handleModuleOccurence(const ImportDecl *ImportD,
 namespace {
 
 class IndexASTConsumer : public ASTConsumer {
+  std::shared_ptr<Preprocessor> PP;
   IndexingContext &IndexCtx;
 
 public:
-  IndexASTConsumer(IndexingContext &IndexCtx)
-    : IndexCtx(IndexCtx) {}
+  IndexASTConsumer(std::shared_ptr<Preprocessor> PP, IndexingContext &IndexCtx)
+      : PP(std::move(PP)), IndexCtx(IndexCtx) {}
 
 protected:
   void Initialize(ASTContext &Context) override {
     IndexCtx.setASTContext(Context);
     IndexCtx.getDataConsumer().initialize(Context);
+    IndexCtx.getDataConsumer().setPreprocessor(PP);
   }
 
   bool HandleTopLevelDecl(DeclGroupRef DG) override {
@@ -79,8 +83,10 @@ protected:
     : DataConsumer(std::move(dataConsumer)),
       IndexCtx(Opts, *DataConsumer) {}
 
-  std::unique_ptr<IndexASTConsumer> createIndexASTConsumer() {
-    return llvm::make_unique<IndexASTConsumer>(IndexCtx);
+  std::unique_ptr<IndexASTConsumer>
+  createIndexASTConsumer(CompilerInstance &CI) {
+    return llvm::make_unique<IndexASTConsumer>(CI.getPreprocessorPtr(),
+                                               IndexCtx);
   }
 
   void finish() {
@@ -97,7 +103,7 @@ public:
 protected:
   std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI,
                                                  StringRef InFile) override {
-    return createIndexASTConsumer();
+    return createIndexASTConsumer(CI);
   }
 
   void EndSourceFileAction() override {
@@ -141,7 +147,7 @@ WrappingIndexAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
 
   std::vector<std::unique_ptr<ASTConsumer>> Consumers;
   Consumers.push_back(std::move(OtherConsumer));
-  Consumers.push_back(createIndexASTConsumer());
+  Consumers.push_back(createIndexASTConsumer(CI));
   return llvm::make_unique<MultiplexConsumer>(std::move(Consumers));
 }
 
@@ -172,5 +178,34 @@ void index::indexASTUnit(ASTUnit &Unit,
   IndexingContext IndexCtx(Opts, *DataConsumer);
   IndexCtx.setASTContext(Unit.getASTContext());
   DataConsumer->initialize(Unit.getASTContext());
+  DataConsumer->setPreprocessor(Unit.getPreprocessorPtr());
   indexTranslationUnit(Unit, IndexCtx);
+  DataConsumer->finish();
+}
+
+void index::indexTopLevelDecls(ASTContext &Ctx, ArrayRef<const Decl *> Decls,
+                               std::shared_ptr<IndexDataConsumer> DataConsumer,
+                               IndexingOptions Opts) {
+  IndexingContext IndexCtx(Opts, *DataConsumer);
+  IndexCtx.setASTContext(Ctx);
+
+  DataConsumer->initialize(Ctx);
+  for (const Decl *D : Decls)
+    IndexCtx.indexTopLevelDecl(D);
+  DataConsumer->finish();
+}
+
+void index::indexModuleFile(serialization::ModuleFile &Mod,
+                            ASTReader &Reader,
+                            std::shared_ptr<IndexDataConsumer> DataConsumer,
+                            IndexingOptions Opts) {
+  ASTContext &Ctx = Reader.getContext();
+  IndexingContext IndexCtx(Opts, *DataConsumer);
+  IndexCtx.setASTContext(Ctx);
+  DataConsumer->initialize(Ctx);
+
+  for (const Decl *D : Reader.getModuleFileLevelDecls(Mod)) {
+    IndexCtx.indexTopLevelDecl(D);
+  }
+  DataConsumer->finish();
 }

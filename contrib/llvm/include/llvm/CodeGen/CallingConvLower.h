@@ -1,4 +1,4 @@
-//===-- llvm/CallingConvLower.h - Calling Conventions -----------*- C++ -*-===//
+//===- llvm/CallingConvLower.h - Calling Conventions ------------*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -18,11 +18,12 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/TargetCallingConv.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/MC/MCRegisterInfo.h"
-#include "llvm/Target/TargetCallingConv.h"
 
 namespace llvm {
+
 class CCState;
 class MVT;
 class TargetMachine;
@@ -183,11 +184,6 @@ typedef bool CCCustomFn(unsigned &ValNo, MVT &ValVT,
                         MVT &LocVT, CCValAssign::LocInfo &LocInfo,
                         ISD::ArgFlagsTy &ArgFlags, CCState &State);
 
-/// ParmContext - This enum tracks whether calling convention lowering is in
-/// the context of prologue or call generation. Not all backends make use of
-/// this information.
-typedef enum { Unknown, Prologue, Call } ParmContext;
-
 /// CCState - This class holds information needed while lowering arguments and
 /// return values.  It captures which registers are already assigned and which
 /// stack slots are used.  It provides accessors to allocate these values.
@@ -205,6 +201,7 @@ private:
   unsigned MaxStackArgAlign;
   SmallVector<uint32_t, 16> UsedRegs;
   SmallVector<CCValAssign, 4> PendingLocs;
+  SmallVector<ISD::ArgFlagsTy, 4> PendingArgFlags;
 
   // ByValInfo and SmallVector<ByValInfo, 4> ByValRegs:
   //
@@ -255,9 +252,6 @@ private:
   // InRegsParamsProcessed - shows how many instances of ByValRegs was proceed
   // during argument analysis.
   unsigned InRegsParamsProcessed;
-
-protected:
-  ParmContext CallOrPrologue;
 
 public:
   CCState(CallingConv::ID CC, bool isVarArg, MachineFunction &MF,
@@ -510,11 +504,14 @@ public:
     InRegsParamsProcessed = 0;
   }
 
-  ParmContext getCallOrPrologue() const { return CallOrPrologue; }
-
   // Get list of pending assignments
-  SmallVectorImpl<llvm::CCValAssign> &getPendingLocs() {
+  SmallVectorImpl<CCValAssign> &getPendingLocs() {
     return PendingLocs;
+  }
+
+  // Get a list of argflags for pending assignments.
+  SmallVectorImpl<ISD::ArgFlagsTy> &getPendingArgFlags() {
+    return PendingArgFlags;
   }
 
   /// Compute the remaining unused register parameters that would be used for
@@ -574,8 +571,6 @@ private:
   void MarkAllocated(unsigned Reg);
 };
 
-
-
 } // end namespace llvm
 
-#endif
+#endif // LLVM_CODEGEN_CALLINGCONVLOWER_H

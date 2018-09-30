@@ -291,6 +291,8 @@ CgAmlWriteWalk (
         /* 19 */ Op->Asl.LogicalLineNumber,
         /* 20 */ Op->Asl.EndLogicalLine);
 
+    TrPrintOpFlags (Op->Asl.CompileFlags, ASL_TREE_OUTPUT);
+    DbgPrint (ASL_TREE_OUTPUT, "\n");
     return (AE_OK);
 }
 
@@ -368,7 +370,7 @@ CgWriteAmlOpcode (
      * Before printing the bytecode, generate comment byte codes
      * associated with this node.
      */
-    if (Gbl_CaptureComments)
+    if (AcpiGbl_CaptureComments)
     {
         CgWriteAmlComment(Op);
     }
@@ -438,7 +440,7 @@ CgWriteAmlOpcode (
 
     /* Does this opcode have an associated "PackageLength" field? */
 
-    if (Op->Asl.CompileFlags & NODE_AML_PACKAGE)
+    if (Op->Asl.CompileFlags & OP_AML_PACKAGE)
     {
         if (Op->Asl.AmlPkgLenBytes == 1)
         {
@@ -548,13 +550,13 @@ CgWriteTableHeader (
      * "XXXX" table signature prevents this AML file from running on the AML
      * interpreter.
      */
-    if (Gbl_CaptureComments)
+    if (AcpiGbl_CaptureComments)
     {
-        strncpy(AcpiGbl_TableSig, Child->Asl.Value.String, 4);
+        strncpy(AcpiGbl_TableSig, Child->Asl.Value.String, ACPI_NAME_SIZE);
         Child->Asl.Value.String = ACPI_SIG_XXXX;
     }
 
-    strncpy (TableHeader.Signature, Child->Asl.Value.String, 4);
+    strncpy (TableHeader.Signature, Child->Asl.Value.String, ACPI_NAME_SIZE);
 
     /* Revision */
 
@@ -571,12 +573,12 @@ CgWriteTableHeader (
     /* OEMID */
 
     Child = Child->Asl.Next;
-    strncpy (TableHeader.OemId, Child->Asl.Value.String, 6);
+    strncpy (TableHeader.OemId, Child->Asl.Value.String, ACPI_OEM_ID_SIZE);
 
     /* OEM TableID */
 
     Child = Child->Asl.Next;
-    strncpy (TableHeader.OemTableId, Child->Asl.Value.String, 8);
+    strncpy (TableHeader.OemTableId, Child->Asl.Value.String, ACPI_OEM_TABLE_ID_SIZE);
 
     /* OEM Revision */
 
@@ -598,7 +600,7 @@ CgWriteTableHeader (
 
     /* Calculate the comment lengths for this definition block parseOp */
 
-    if (Gbl_CaptureComments)
+    if (AcpiGbl_CaptureComments)
     {
         CvDbgPrint ("Calculating comment lengths for %s in write header\n",
             Op->Asl.ParseOpName);
@@ -754,7 +756,8 @@ CgWriteNode (
 
 
     /* Write all comments here. */
-    if (Gbl_CaptureComments)
+
+    if (AcpiGbl_CaptureComments)
     {
         CgWriteAmlComment(Op);
     }
@@ -820,7 +823,7 @@ CgWriteNode (
     case PARSEOP_DEFINITION_BLOCK:
 
         CgWriteTableHeader (Op);
-        if (Gbl_CaptureComments)
+        if (AcpiGbl_CaptureComments)
         {
             CgWriteAmlDefBlockComment (Op);
         }

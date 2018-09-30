@@ -17,18 +17,25 @@
 #include "llvm/MC/MCObjectWriter.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/MCValue.h"
+#include "llvm/Support/Casting.h"
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
+#include <cassert>
+#include <cstdint>
+
 using namespace llvm;
 
 #define DEBUG_TYPE "mcexpr"
 
 namespace {
 namespace stats {
+
 STATISTIC(MCExprEvaluate, "Number of MCExpr evaluations");
-}
-}
+
+} // end namespace stats
+} // end anonymous namespace
 
 void MCExpr::print(raw_ostream &OS, const MCAsmInfo *MAI, bool InParens) const {
   switch (getKind()) {
@@ -44,7 +51,7 @@ void MCExpr::print(raw_ostream &OS, const MCAsmInfo *MAI, bool InParens) const {
     // Parenthesize names that start with $ so that they don't look like
     // absolute names.
     bool UseParens =
-        !InParens && Sym.getName().size() && Sym.getName()[0] == '$';
+        !InParens && !Sym.getName().empty() && Sym.getName()[0] == '$';
     if (UseParens) {
       OS << '(';
       Sym.print(OS, MAI);
@@ -129,21 +136,24 @@ void MCExpr::print(raw_ostream &OS, const MCAsmInfo *MAI, bool InParens) const {
   llvm_unreachable("Invalid expression kind!");
 }
 
+#if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
 LLVM_DUMP_METHOD void MCExpr::dump() const {
   dbgs() << *this;
   dbgs() << '\n';
 }
+#endif
 
 /* *** */
 
 const MCBinaryExpr *MCBinaryExpr::create(Opcode Opc, const MCExpr *LHS,
-                                         const MCExpr *RHS, MCContext &Ctx) {
-  return new (Ctx) MCBinaryExpr(Opc, LHS, RHS);
+                                         const MCExpr *RHS, MCContext &Ctx,
+                                         SMLoc Loc) {
+  return new (Ctx) MCBinaryExpr(Opc, LHS, RHS, Loc);
 }
 
 const MCUnaryExpr *MCUnaryExpr::create(Opcode Opc, const MCExpr *Expr,
-                                       MCContext &Ctx) {
-  return new (Ctx) MCUnaryExpr(Opc, Expr);
+                                       MCContext &Ctx, SMLoc Loc) {
+  return new (Ctx) MCUnaryExpr(Opc, Expr, Loc);
 }
 
 const MCConstantExpr *MCConstantExpr::create(int64_t Value, MCContext &Ctx) {
@@ -153,8 +163,8 @@ const MCConstantExpr *MCConstantExpr::create(int64_t Value, MCContext &Ctx) {
 /* *** */
 
 MCSymbolRefExpr::MCSymbolRefExpr(const MCSymbol *Symbol, VariantKind Kind,
-                                 const MCAsmInfo *MAI)
-    : MCExpr(MCExpr::SymbolRef), Kind(Kind),
+                                 const MCAsmInfo *MAI, SMLoc Loc)
+    : MCExpr(MCExpr::SymbolRef, Loc), Kind(Kind),
       UseParensForSymbolVariant(MAI->useParensForSymbolVariant()),
       HasSubsectionsViaSymbols(MAI->hasSubsectionsViaSymbols()),
       Symbol(Symbol) {
@@ -163,8 +173,8 @@ MCSymbolRefExpr::MCSymbolRefExpr(const MCSymbol *Symbol, VariantKind Kind,
 
 const MCSymbolRefExpr *MCSymbolRefExpr::create(const MCSymbol *Sym,
                                                VariantKind Kind,
-                                               MCContext &Ctx) {
-  return new (Ctx) MCSymbolRefExpr(Sym, Kind, Ctx.getAsmInfo());
+                                               MCContext &Ctx, SMLoc Loc) {
+  return new (Ctx) MCSymbolRefExpr(Sym, Kind, Ctx.getAsmInfo(), Loc);
 }
 
 const MCSymbolRefExpr *MCSymbolRefExpr::create(StringRef Name, VariantKind Kind,
@@ -205,6 +215,7 @@ StringRef MCSymbolRefExpr::getVariantKindName(VariantKind Kind) {
   case VK_SECREL: return "SECREL32";
   case VK_SIZE: return "SIZE";
   case VK_WEAKREF: return "WEAKREF";
+  case VK_X86_ABS8: return "ABS8";
   case VK_ARM_NONE: return "none";
   case VK_ARM_GOT_PREL: return "GOT_PREL";
   case VK_ARM_TARGET1: return "target1";
@@ -213,6 +224,13 @@ StringRef MCSymbolRefExpr::getVariantKindName(VariantKind Kind) {
   case VK_ARM_SBREL: return "sbrel";
   case VK_ARM_TLSLDO: return "tlsldo";
   case VK_ARM_TLSDESCSEQ: return "tlsdescseq";
+  case VK_AVR_NONE: return "none";
+  case VK_AVR_LO8: return "lo8";
+  case VK_AVR_HI8: return "hi8";
+  case VK_AVR_HLO8: return "hlo8";
+  case VK_AVR_DIFF8: return "diff8";
+  case VK_AVR_DIFF16: return "diff16";
+  case VK_AVR_DIFF32: return "diff32";
   case VK_PPC_LO: return "l";
   case VK_PPC_HI: return "h";
   case VK_PPC_HA: return "ha";
@@ -275,6 +293,7 @@ StringRef MCSymbolRefExpr::getVariantKindName(VariantKind Kind) {
   case VK_Hexagon_IE: return "IE";
   case VK_Hexagon_IE_GOT: return "IEGOT";
   case VK_WebAssembly_FUNCTION: return "FUNCTION";
+  case VK_WebAssembly_TYPEINDEX: return "TYPEINDEX";
   case VK_AMDGPU_GOTPCREL32_LO: return "gotpcrel32@lo";
   case VK_AMDGPU_GOTPCREL32_HI: return "gotpcrel32@hi";
   case VK_AMDGPU_REL32_LO: return "rel32@lo";
@@ -314,6 +333,7 @@ MCSymbolRefExpr::getVariantKindForName(StringRef Name) {
     .Case("imgrel", VK_COFF_IMGREL32)
     .Case("secrel32", VK_SECREL)
     .Case("size", VK_SIZE)
+    .Case("abs8", VK_X86_ABS8)
     .Case("l", VK_PPC_LO)
     .Case("h", VK_PPC_HI)
     .Case("ha", VK_PPC_HA)
@@ -376,6 +396,9 @@ MCSymbolRefExpr::getVariantKindForName(StringRef Name) {
     .Case("prel31", VK_ARM_PREL31)
     .Case("sbrel", VK_ARM_SBREL)
     .Case("tlsldo", VK_ARM_TLSLDO)
+    .Case("lo8", VK_AVR_LO8)
+    .Case("hi8", VK_AVR_HI8)
+    .Case("hlo8", VK_AVR_HLO8)
     .Case("gotpcrel32@lo", VK_AMDGPU_GOTPCREL32_LO)
     .Case("gotpcrel32@hi", VK_AMDGPU_GOTPCREL32_HI)
     .Case("rel32@lo", VK_AMDGPU_REL32_LO)
@@ -642,7 +665,11 @@ bool MCExpr::evaluateAsRelocatableImpl(MCValue &Res, const MCAssembler *Asm,
         // the OS X assembler will completely drop the 4. We should probably
         // include it in the relocation or produce an error if that is not
         // possible.
+        // Allow constant expressions.
         if (!A && !B)
+          return true;
+        // Allows aliases with zero offset.
+        if (Res.getConstant() == 0 && (!A || !B))
           return true;
       }
     }

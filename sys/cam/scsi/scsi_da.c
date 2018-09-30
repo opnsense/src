@@ -79,6 +79,7 @@ __FBSDID("$FreeBSD$");
  *    ATA -> LOGDIR -> IDDIR -> SUP -> ATA_ZONE
  */
 typedef enum {
+	DA_STATE_PROBE_WP,
 	DA_STATE_PROBE_RC,
 	DA_STATE_PROBE_RC16,
 	DA_STATE_PROBE_LBP,
@@ -155,6 +156,7 @@ typedef enum {
 	DA_CCB_PROBE_ATA_IDDIR	= 0x0F,
 	DA_CCB_PROBE_ATA_SUP	= 0x10,
 	DA_CCB_PROBE_ATA_ZONE	= 0x11,
+	DA_CCB_PROBE_WP		= 0x12,
 	DA_CCB_TYPE_MASK	= 0x1F,
 	DA_CCB_RETRY_UA		= 0x20
 } da_ccb_state;
@@ -680,6 +682,13 @@ static struct da_quirk_entry da_quirk_table[] =
 	},
 	{
 		/*
+		 * Genesys GL3224
+		 */
+		{T_DIRECT, SIP_MEDIA_REMOVABLE, "Generic*", "STORAGE DEVICE*",
+		"120?"}, /*quirks*/ DA_Q_NO_SYNC_CACHE | DA_Q_4K | DA_Q_NO_RC16
+	},
+	{
+		/*
 		 * Genesys 6-in-1 Card Reader
 		 * PR: usb/94647
 		 */
@@ -831,6 +840,11 @@ static struct da_quirk_entry da_quirk_table[] =
 	{
 		/* Hitachi Advanced Format (4k) drives */
 		{ T_DIRECT, SIP_MEDIA_FIXED, "Hitachi", "H??????????E3*", "*" },
+		/*quirks*/DA_Q_4K
+	},
+	{
+		/* Micron Advanced Format (4k) drives */
+		{ T_DIRECT, SIP_MEDIA_FIXED, "ATA", "Micron 5100 MTFDDAK*", "*" },
 		/*quirks*/DA_Q_4K
 	},
 	{
@@ -1156,6 +1170,14 @@ static struct da_quirk_entry da_quirk_table[] =
 	},
 	{
 		/*
+		 * Intel S3610 Series SSDs
+		 * 4k optimised & trim only works in 4k requests + 4k aligned
+		 */
+		{ T_DIRECT, SIP_MEDIA_FIXED, "ATA", "INTEL SSDSC2BX*", "*" },
+		/*quirks*/DA_Q_4K
+	},
+	{
+		/*
 		 * Intel X25-M Series SSDs
 		 * 4k optimised & trim only works in 4k requests + 4k aligned
 		 */
@@ -1236,6 +1258,14 @@ static struct da_quirk_entry da_quirk_table[] =
 	},
 	{
 		/*
+		 * Samsung 750 Series SSDs
+		 * 4k optimised & trim only works in 4k requests + 4k aligned
+		 */
+		{ T_DIRECT, SIP_MEDIA_FIXED, "ATA", "Samsung SSD 750*", "*" },
+		/*quirks*/DA_Q_4K
+	},
+	{
+		/*
 		 * Samsung 830 Series SSDs
 		 * 4k optimised & trim only works in 4k requests + 4k aligned
 		 */
@@ -1248,6 +1278,14 @@ static struct da_quirk_entry da_quirk_table[] =
 		 * 4k optimised & trim only works in 4k requests + 4k aligned
 		 */
 		{ T_DIRECT, SIP_MEDIA_FIXED, "ATA", "Samsung SSD 840*", "*" },
+		/*quirks*/DA_Q_4K
+	},
+	{
+		/*
+		 * Samsung 845 SSDs
+		 * 4k optimised & trim only works in 4k requests + 4k aligned
+		 */
+		{ T_DIRECT, SIP_MEDIA_FIXED, "ATA", "Samsung SSD 845*", "*" },
 		/*quirks*/DA_Q_4K
 	},
 	{
@@ -1267,6 +1305,14 @@ static struct da_quirk_entry da_quirk_table[] =
 		 * 4k optimised
 		 */
 		{ T_DIRECT, SIP_MEDIA_FIXED, "ATA", "SAMSUNG MZ7*", "*" },
+		/*quirks*/DA_Q_4K
+	},
+	{
+		/*
+		 * Same as for SAMSUNG MZ7* but enable the quirks for SSD
+		 * starting with MZ7* too
+		 */
+		{ T_DIRECT, SIP_MEDIA_FIXED, "ATA", "MZ7*", "*" },
 		/*quirks*/DA_Q_4K
 	},
 	{
@@ -1298,7 +1344,7 @@ static struct da_quirk_entry da_quirk_table[] =
 		 * Drive Managed SATA hard drive.  This drive doesn't report
 		 * in firmware that it is a drive managed SMR drive.
 		 */
-		{ T_DIRECT, SIP_MEDIA_FIXED, "ATA", "ST8000AS0002*", "*" },
+		{ T_DIRECT, SIP_MEDIA_FIXED, "ATA", "ST8000AS000[23]*", "*" },
 		/*quirks*/DA_Q_SMR_DM
 	},
 	{
@@ -1911,7 +1957,7 @@ dasysctlinit(void *context, int pending)
 {
 	struct cam_periph *periph;
 	struct da_softc *softc;
-	char tmpstr[80], tmpstr2[80];
+	char tmpstr[32], tmpstr2[16];
 	struct ccb_trans_settings cts;
 
 	periph = (struct cam_periph *)context;
@@ -2394,7 +2440,7 @@ daregister(struct cam_periph *periph, void *arg)
 	}
 	
 	LIST_INIT(&softc->pending_ccbs);
-	softc->state = DA_STATE_PROBE_RC;
+	softc->state = DA_STATE_PROBE_WP;
 	bioq_init(&softc->delete_run_queue);
 	if (SID_IS_REMOVABLE(&cgd->inq_data))
 		softc->flags |= DA_FLAG_PACK_REMOVABLE;
@@ -2498,7 +2544,6 @@ daregister(struct cam_periph *periph, void *arg)
 	if (SID_ANSI_REV(&cgd->inq_data) >= SCSI_REV_SPC3 &&
 	    (softc->quirks & DA_Q_NO_RC16) == 0) {
 		softc->flags |= DA_FLAG_CAN_RC16;
-		softc->state = DA_STATE_PROBE_RC16;
 	}
 
 	/*
@@ -2936,7 +2981,7 @@ more:
 
 		if (cam_iosched_has_work_flags(softc->cam_iosched, DA_WORK_TUR)) {
 			cam_iosched_clr_work_flags(softc->cam_iosched, DA_WORK_TUR);
-			cam_periph_release_locked(periph);	/* XXX is this still valid? I think so but unverified */
+			cam_periph_release_locked(periph);
 		}
 
 		if ((bp->bio_flags & BIO_ORDERED) != 0 ||
@@ -2986,6 +3031,18 @@ more:
 		}
 		case BIO_FLUSH:
 			/*
+			 * If we don't support sync cache, or the disk
+			 * isn't dirty, FLUSH is a no-op.  Use the
+			 * allocated * CCB for the next bio if one is
+			 * available.
+			 */
+			if ((softc->quirks & DA_Q_NO_SYNC_CACHE) != 0 ||
+			    (softc->flags & DA_FLAG_DIRTY) == 0) {
+				biodone(bp);
+				goto skipstate;
+			}
+
+			/*
 			 * BIO_FLUSH doesn't currently communicate
 			 * range data, so we synchronize the cache
 			 * over the whole disk.  We also force
@@ -3000,6 +3057,15 @@ more:
 					       /*lb_count*/0,
 					       SSD_FULL_SIZE,
 					       da_default_timeout*1000);
+			/*
+			 * Clear the dirty flag before sending the command.
+			 * Either this sync cache will be successful, or it
+			 * will fail after a retry.  If it fails, it is
+			 * unlikely to be successful if retried later, so
+			 * we'll save ourselves time by just marking the
+			 * device clean.
+			 */
+			softc->flags &= ~DA_FLAG_DIRTY;
 			break;
 		case BIO_ZONE: {
 			int error, queue_ccb;
@@ -3039,6 +3105,36 @@ out:
 
 		/* May have more work to do, so ensure we stay scheduled */
 		daschedule(periph);
+		break;
+	}
+	case DA_STATE_PROBE_WP:
+	{
+		void  *mode_buf;
+		int    mode_buf_len;
+
+		mode_buf_len = 192;
+		mode_buf = malloc(mode_buf_len, M_SCSIDA, M_NOWAIT);
+		if (mode_buf == NULL) {
+			xpt_print(periph->path, "Unable to send mode sense - "
+			    "malloc failure\n");
+			softc->state = DA_STATE_PROBE_RC;
+			goto skipstate;
+		}
+		scsi_mode_sense_len(&start_ccb->csio,
+				    /*retries*/ da_retry_count,
+				    /*cbfcnp*/ dadone,
+				    /*tag_action*/ MSG_SIMPLE_Q_TAG,
+				    /*dbd*/ FALSE,
+				    /*pc*/ SMS_PAGE_CTRL_CURRENT,
+				    /*page*/ SMS_ALL_PAGES_PAGE,
+				    /*param_buf*/ mode_buf,
+				    /*param_len*/ mode_buf_len,
+				    /*minimum_cmd_size*/ softc->minimum_cmd_size,
+				    /*sense_len*/ SSD_FULL_SIZE,
+				    /*timeout*/ da_default_timeout * 1000);
+		start_ccb->ccb_h.ccb_bp = NULL;
+		start_ccb->ccb_h.ccb_state = DA_CCB_PROBE_WP;
+		xpt_action(start_ccb);
 		break;
 	}
 	case DA_STATE_PROBE_RC:
@@ -4190,6 +4286,52 @@ dadone(struct cam_periph *periph, union ccb *done_ccb)
 			biodone(bp);
 		return;
 	}
+	case DA_CCB_PROBE_WP:
+	{
+		struct scsi_mode_header_6 *mode_hdr6;
+		struct scsi_mode_header_10 *mode_hdr10;
+		uint8_t dev_spec;
+
+		if (softc->minimum_cmd_size > 6) {
+			mode_hdr10 = (struct scsi_mode_header_10 *)csio->data_ptr;
+			dev_spec = mode_hdr10->dev_spec;
+		} else {
+			mode_hdr6 = (struct scsi_mode_header_6 *)csio->data_ptr;
+			dev_spec = mode_hdr6->dev_spec;
+		}
+		if (cam_ccb_status(done_ccb) == CAM_REQ_CMP) {
+			if ((dev_spec & 0x80) != 0)
+				softc->disk->d_flags |= DISKFLAG_WRITE_PROTECT;
+			else
+				softc->disk->d_flags &= ~DISKFLAG_WRITE_PROTECT;
+		} else {
+			int error;
+
+			error = daerror(done_ccb, CAM_RETRY_SELTO,
+					SF_RETRY_UA|SF_NO_PRINT);
+			if (error == ERESTART)
+				return;
+			else if (error != 0) {
+				if ((done_ccb->ccb_h.status & CAM_DEV_QFRZN) != 0) {
+					/* Don't wedge this device's queue */
+					cam_release_devq(done_ccb->ccb_h.path,
+							 /*relsim_flags*/0,
+							 /*reduction*/0,
+							 /*timeout*/0,
+							 /*getcount_only*/0);
+				}
+			}
+		}
+
+		free(csio->data_ptr, M_SCSIDA);
+		xpt_release_ccb(done_ccb);
+		if ((softc->flags & DA_FLAG_CAN_RC16) != 0)
+			softc->state = DA_STATE_PROBE_RC16;
+		else
+			softc->state = DA_STATE_PROBE_RC;
+		xpt_schedule(periph, priority);
+		return;
+	}
 	case DA_CCB_PROBE_RC:
 	case DA_CCB_PROBE_RC16:
 	{
@@ -4326,7 +4468,8 @@ dadone(struct cam_periph *periph, union ccb *done_ccb)
 				    (((csio->ccb_h.status & CAM_STATUS_MASK) ==
 					CAM_REQ_INVALID) ||
 				     ((have_sense) &&
-				      (error_code == SSD_CURRENT_ERROR) &&
+				      (error_code == SSD_CURRENT_ERROR ||
+				       error_code == SSD_DESC_CURRENT_ERROR) &&
 				      (sense_key == SSD_KEY_ILLEGAL_REQUEST)))) {
 					softc->flags &= ~DA_FLAG_CAN_RC16;
 					free(rdcap, M_SCSIDA);
@@ -4343,7 +4486,8 @@ dadone(struct cam_periph *periph, union ccb *done_ccb)
 				 * unit not supported" (0x25) error.
 				 */
 				if ((have_sense) && (asc != 0x25)
-				 && (error_code == SSD_CURRENT_ERROR)) {
+				 && (error_code == SSD_CURRENT_ERROR
+				  || error_code == SSD_DESC_CURRENT_ERROR)) {
 					const char *sense_key_desc;
 					const char *asc_desc;
 
@@ -5257,11 +5401,7 @@ dareprobe(struct cam_periph *periph)
 	KASSERT(status == CAM_REQ_CMP,
 	    ("dareprobe: cam_periph_acquire failed"));
 
-	if (softc->flags & DA_FLAG_CAN_RC16)
-		softc->state = DA_STATE_PROBE_RC16;
-	else
-		softc->state = DA_STATE_PROBE_RC;
-
+	softc->state = DA_STATE_PROBE_WP;
 	xpt_schedule(periph, CAM_PRIORITY_DEV);
 }
 

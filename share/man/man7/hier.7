@@ -28,7 +28,7 @@
 .\"	@(#)hier.7	8.1 (Berkeley) 6/5/93
 .\" $FreeBSD$
 .\"
-.Dd April 6, 2017
+.Dd February 11, 2018
 .Dt HIER 7
 .Os
 .Sh NAME
@@ -63,6 +63,11 @@ at boot time) and kernel modules
 third-party loadable kernel modules;
 see
 .Xr kldstat 8
+.It Pa overlays/
+Compiled flattened device tree (FDT) overlays; see
+.Xr fdt 4
+and
+.Xr dtc 1
 .It Pa zfs/
 .Xr zfs 8
 zpool cache files
@@ -488,8 +493,6 @@ association)
 Frequently Asked Questions
 .It Pa IPv6/
 implementation notes for IPv6
-.It Pa bind/
-documents pertaining to BIND (the Berkeley Internet Name Domain)
 .It Pa es/
 Spanish translations of documents in /usr/share/doc
 .It Pa handbook/
@@ -693,9 +696,11 @@ build directory for files in
 .It Pa share/
 source for files in
 .Pa /usr/share
+.It Pa stand/
+boot loader source code
 .It Pa sys/
 kernel source code
-.Bl -tag -width ".Pa opencrypto/" -compact
+.Bl -tag -width "opencrypto/" -compact
 .It Pa amd64/
 AMD64 architecture support
 .It Pa arm/

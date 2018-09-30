@@ -52,44 +52,6 @@ __FBSDID("$FreeBSD$");
 
 #include "platform_if.h"
 
-static uint32_t gpio1_node;
-
-#ifndef INTRNG
-/*
- * Work around the linux workaround for imx6 erratum 006687, in which some
- * ethernet interrupts don't go to the GPC and thus won't wake the system from
- * Wait mode. We don't use Wait mode (which halts the GIC, leaving only GPC
- * interrupts able to wake the system), so we don't experience the bug at all.
- * The linux workaround is to reconfigure GPIO1_6 as the ENET interrupt by
- * writing magic values to an undocumented IOMUX register, then letting the gpio
- * interrupt driver notify the ethernet driver.  We'll be able to do all that
- * (even though we don't need to) once the INTRNG project is committed and the
- * imx_gpio driver becomes an interrupt driver.  Until then, this crazy little
- * workaround watches for requests to map an interrupt 6 with the interrupt
- * controller node referring to gpio1, and it substitutes the proper ffec
- * interrupt number.
- */
-static int
-imx6_decode_fdt(uint32_t iparent, uint32_t *intr, int *interrupt,
-    int *trig, int *pol)
-{
-
-	if (fdt32_to_cpu(intr[0]) == 6 && 
-	    OF_node_from_xref(iparent) == gpio1_node) {
-		*interrupt = 150;
-		*trig = INTR_TRIGGER_CONFORM;
-		*pol  = INTR_POLARITY_CONFORM;
-		return (0);
-	}
-	return (gic_decode_fdt(iparent, intr, interrupt, trig, pol));
-}
-
-fdt_pic_decode_t fdt_pic_table[] = {
-	&imx6_decode_fdt,
-	NULL
-};
-#endif
-
 /*
  * Fix FDT data related to interrupts.
  *
@@ -109,13 +71,19 @@ fdt_pic_decode_t fdt_pic_table[] = {
  * We validate that we have data that looks like we expect before changing it:
  *  - SOC node exists and has GPC as its interrupt parent.
  *  - GPC node exists and has GIC as its interrupt parent.
- *  - GIC node exists and is its own interrupt parent.
+ *  - GIC node exists and is its own interrupt parent or has no parent.
  *
  * This applies to all models of imx6.  Luckily all of them have the devices
  * involved at the same addresses on the same busses, so we don't need any
  * per-soc logic.  We handle this at platform attach time rather than via the
  * fdt_fixup_table, because the latter requires matching on the FDT "model"
  * property, and this applies to all boards including those not yet invented.
+ *
+ * This just in:  as of the import of dts files from linux 4.15 on 2018-02-10,
+ * they appear to have applied a new style rule to the dts which forbids leading
+ * zeroes in the @address qualifiers on node names.  Since we have to find those
+ * nodes by string matching we now have to search for both flavors of each node
+ * name involved.
  */
 static void
 fix_fdt_interrupt_data(void)
@@ -133,16 +101,28 @@ fix_fdt_interrupt_data(void)
 	if (result <= 0)
 		return;
 
+	/* GIC node may be child of soc node, or appear directly at root. */
 	gicnode = OF_finddevice("/soc/interrupt-controller@00a01000");
 	if (gicnode == -1)
-		return;
+		gicnode = OF_finddevice("/soc/interrupt-controller@a01000");
+	if (gicnode == -1) {
+		gicnode = OF_finddevice("/interrupt-controller@00a01000");
+		if (gicnode == -1)
+			gicnode = OF_finddevice("/interrupt-controller@a01000");
+		if (gicnode == -1)
+			return;
+	}
+	gicxref = OF_xref_from_node(gicnode);
+
+	/* If gic node has no parent, pretend it is its own parent. */
 	result = OF_getencprop(gicnode, "interrupt-parent", &gicipar,
 	    sizeof(gicipar));
 	if (result <= 0)
-		return;
-	gicxref = OF_xref_from_node(gicnode);
+		gicipar = gicxref;
 
 	gpcnode = OF_finddevice("/soc/aips-bus@02000000/gpc@020dc000");
+	if (gpcnode == -1)
+		gpcnode = OF_finddevice("/soc/aips-bus@2000000/gpc@20dc000");
 	if (gpcnode == -1)
 		return;
 	result = OF_getencprop(gpcnode, "interrupt-parent", &gpcipar,
@@ -184,10 +164,6 @@ imx6_late_init(platform_t plat)
 	const uint32_t IMX6_WDOG_SR_PHYS = 0x020bc004;
 
 	imx_wdog_init_last_reset(IMX6_WDOG_SR_PHYS);
-
-	/* Cache the gpio1 node handle for imx6_decode_fdt() workaround code. */
-	gpio1_node = OF_node_from_xref(
-	    OF_finddevice("/soc/aips-bus@02000000/gpio@0209c000"));
 }
 
 /*
@@ -223,8 +199,8 @@ imx6_devmap_init(platform_t plat)
 	return (0);
 }
 
-void
-cpu_reset(void)
+static void
+imx6_cpu_reset(platform_t plat)
 {
 	const uint32_t IMX6_WDOG_CR_PHYS = 0x020bc000;
 
@@ -269,6 +245,7 @@ u_int imx_soc_type()
 #define	HWSOC_MX6DL	0x61
 #define	HWSOC_MX6SOLO	0x62
 #define	HWSOC_MX6Q	0x63
+#define	HWSOC_MX6UL	0x64
 
 	if (soctype != 0)
 		return (soctype);
@@ -306,6 +283,9 @@ u_int imx_soc_type()
 		break;
 	case HWSOC_MX6Q :
 		soctype = IMXSOC_6Q;
+		break;
+	case HWSOC_MX6UL:
+		soctype = IMXSOC_6UL;
 		break;
 	default:
 		printf("imx_soc_type: Don't understand hwsoc 0x%02x, "
@@ -346,6 +326,7 @@ static platform_method_t imx6_methods[] = {
 	PLATFORMMETHOD(platform_lastaddr,	imx6_lastaddr),
 	PLATFORMMETHOD(platform_devmap_init,	imx6_devmap_init),
 	PLATFORMMETHOD(platform_late_init,	imx6_late_init),
+	PLATFORMMETHOD(platform_cpu_reset,	imx6_cpu_reset),
 
 	PLATFORMMETHOD_END,
 };
@@ -353,3 +334,4 @@ static platform_method_t imx6_methods[] = {
 FDT_PLATFORM_DEF2(imx6, imx6s, "i.MX6 Solo", 0, "fsl,imx6s", 0);
 FDT_PLATFORM_DEF2(imx6, imx6d, "i.MX6 Dual", 0, "fsl,imx6dl", 0);
 FDT_PLATFORM_DEF2(imx6, imx6q, "i.MX6 Quad", 0, "fsl,imx6q", 0);
+FDT_PLATFORM_DEF2(imx6, imx6ul, "i.MX6 UltraLite", 0, "fsl,imx6ul", 0);

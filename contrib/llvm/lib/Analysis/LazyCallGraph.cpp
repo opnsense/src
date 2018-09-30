@@ -8,35 +8,74 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/LazyCallGraph.h"
-#include "llvm/ADT/ScopeExit.h"
-#include "llvm/ADT/Sequence.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/Sequence.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/iterator_range.h"
+#include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/IR/CallSite.h"
-#include "llvm/IR/InstVisitor.h"
-#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/GlobalVariable.h"
+#include "llvm/IR/Instruction.h"
+#include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
+#include "llvm/Support/Casting.h"
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/GraphWriter.h"
+#include "llvm/Support/raw_ostream.h"
+#include <algorithm>
+#include <cassert>
+#include <cstddef>
+#include <iterator>
+#include <string>
+#include <tuple>
+#include <utility>
 
 using namespace llvm;
 
 #define DEBUG_TYPE "lcg"
 
-static void addEdge(SmallVectorImpl<LazyCallGraph::Edge> &Edges,
-                    DenseMap<Function *, int> &EdgeIndexMap, Function &F,
-                    LazyCallGraph::Edge::Kind EK) {
-  if (!EdgeIndexMap.insert({&F, Edges.size()}).second)
-    return;
-
-  DEBUG(dbgs() << "    Added callable function: " << F.getName() << "\n");
-  Edges.emplace_back(LazyCallGraph::Edge(F, EK));
+void LazyCallGraph::EdgeSequence::insertEdgeInternal(Node &TargetN,
+                                                     Edge::Kind EK) {
+  EdgeIndexMap.insert({&TargetN, Edges.size()});
+  Edges.emplace_back(TargetN, EK);
 }
 
-LazyCallGraph::Node::Node(LazyCallGraph &G, Function &F)
-    : G(&G), F(F), DFSNumber(0), LowLink(0) {
-  DEBUG(dbgs() << "  Adding functions called by '" << F.getName()
+void LazyCallGraph::EdgeSequence::setEdgeKind(Node &TargetN, Edge::Kind EK) {
+  Edges[EdgeIndexMap.find(&TargetN)->second].setKind(EK);
+}
+
+bool LazyCallGraph::EdgeSequence::removeEdgeInternal(Node &TargetN) {
+  auto IndexMapI = EdgeIndexMap.find(&TargetN);
+  if (IndexMapI == EdgeIndexMap.end())
+    return false;
+
+  Edges[IndexMapI->second] = Edge();
+  EdgeIndexMap.erase(IndexMapI);
+  return true;
+}
+
+static void addEdge(SmallVectorImpl<LazyCallGraph::Edge> &Edges,
+                    DenseMap<LazyCallGraph::Node *, int> &EdgeIndexMap,
+                    LazyCallGraph::Node &N, LazyCallGraph::Edge::Kind EK) {
+  if (!EdgeIndexMap.insert({&N, Edges.size()}).second)
+    return;
+
+  DEBUG(dbgs() << "    Added callable function: " << N.getName() << "\n");
+  Edges.emplace_back(LazyCallGraph::Edge(N, EK));
+}
+
+LazyCallGraph::EdgeSequence &LazyCallGraph::Node::populateSlow() {
+  assert(!Edges && "Must not have already populated the edges for this node!");
+
+  DEBUG(dbgs() << "  Adding functions called by '" << getName()
                << "' to the graph.\n");
+
+  Edges = EdgeSequence();
 
   SmallVector<Constant *, 16> Worklist;
   SmallPtrSet<Function *, 4> Callees;
@@ -58,14 +97,15 @@ LazyCallGraph::Node::Node(LazyCallGraph &G, Function &F)
   // alias. Then a test of the address of the weak function against the new
   // strong definition's address would be an effective way to determine the
   // safety of optimizing a direct call edge.
-  for (BasicBlock &BB : F)
+  for (BasicBlock &BB : *F)
     for (Instruction &I : BB) {
       if (auto CS = CallSite(&I))
         if (Function *Callee = CS.getCalledFunction())
           if (!Callee->isDeclaration())
             if (Callees.insert(Callee).second) {
               Visited.insert(Callee);
-              addEdge(Edges, EdgeIndexMap, *Callee, LazyCallGraph::Edge::Call);
+              addEdge(Edges->Edges, Edges->EdgeIndexMap, G->get(*Callee),
+                      LazyCallGraph::Edge::Call);
             }
 
       for (Value *Op : I.operand_values())
@@ -78,50 +118,59 @@ LazyCallGraph::Node::Node(LazyCallGraph &G, Function &F)
   // function containing) operands to all of the instructions in the function.
   // Process them (recursively) collecting every function found.
   visitReferences(Worklist, Visited, [&](Function &F) {
-    addEdge(Edges, EdgeIndexMap, F, LazyCallGraph::Edge::Ref);
+    addEdge(Edges->Edges, Edges->EdgeIndexMap, G->get(F),
+            LazyCallGraph::Edge::Ref);
   });
+
+  // Add implicit reference edges to any defined libcall functions (if we
+  // haven't found an explicit edge).
+  for (auto *F : G->LibFunctions)
+    if (!Visited.count(F))
+      addEdge(Edges->Edges, Edges->EdgeIndexMap, G->get(*F),
+              LazyCallGraph::Edge::Ref);
+
+  return *Edges;
 }
 
-void LazyCallGraph::Node::insertEdgeInternal(Function &Target, Edge::Kind EK) {
-  if (Node *N = G->lookup(Target))
-    return insertEdgeInternal(*N, EK);
-
-  EdgeIndexMap.insert({&Target, Edges.size()});
-  Edges.emplace_back(Target, EK);
+void LazyCallGraph::Node::replaceFunction(Function &NewF) {
+  assert(F != &NewF && "Must not replace a function with itself!");
+  F = &NewF;
 }
 
-void LazyCallGraph::Node::insertEdgeInternal(Node &TargetN, Edge::Kind EK) {
-  EdgeIndexMap.insert({&TargetN.getFunction(), Edges.size()});
-  Edges.emplace_back(TargetN, EK);
-}
-
-void LazyCallGraph::Node::setEdgeKind(Function &TargetF, Edge::Kind EK) {
-  Edges[EdgeIndexMap.find(&TargetF)->second].setKind(EK);
-}
-
-void LazyCallGraph::Node::removeEdgeInternal(Function &Target) {
-  auto IndexMapI = EdgeIndexMap.find(&Target);
-  assert(IndexMapI != EdgeIndexMap.end() &&
-         "Target not in the edge set for this caller?");
-
-  Edges[IndexMapI->second] = Edge();
-  EdgeIndexMap.erase(IndexMapI);
-}
-
-void LazyCallGraph::Node::dump() const {
+#if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
+LLVM_DUMP_METHOD void LazyCallGraph::Node::dump() const {
   dbgs() << *this << '\n';
 }
+#endif
 
-LazyCallGraph::LazyCallGraph(Module &M) : NextDFSNumber(0) {
+static bool isKnownLibFunction(Function &F, TargetLibraryInfo &TLI) {
+  LibFunc LF;
+
+  // Either this is a normal library function or a "vectorizable" function.
+  return TLI.getLibFunc(F, LF) || TLI.isFunctionVectorizable(F.getName());
+}
+
+LazyCallGraph::LazyCallGraph(Module &M, TargetLibraryInfo &TLI) {
   DEBUG(dbgs() << "Building CG for module: " << M.getModuleIdentifier()
                << "\n");
-  for (Function &F : M)
-    if (!F.isDeclaration() && !F.hasLocalLinkage())
-      if (EntryIndexMap.insert({&F, EntryEdges.size()}).second) {
-        DEBUG(dbgs() << "  Adding '" << F.getName()
-                     << "' to entry set of the graph.\n");
-        EntryEdges.emplace_back(F, Edge::Ref);
-      }
+  for (Function &F : M) {
+    if (F.isDeclaration())
+      continue;
+    // If this function is a known lib function to LLVM then we want to
+    // synthesize reference edges to it to model the fact that LLVM can turn
+    // arbitrary code into a library function call.
+    if (isKnownLibFunction(F, TLI))
+      LibFunctions.insert(&F);
+
+    if (F.hasLocalLinkage())
+      continue;
+
+    // External linkage defined functions have edges to them from other
+    // modules.
+    DEBUG(dbgs() << "  Adding '" << F.getName()
+                 << "' to entry set of the graph.\n");
+    addEdge(EntryEdges.Edges, EntryEdges.EdgeIndexMap, get(F), Edge::Ref);
+  }
 
   // Now add entry nodes for functions reachable via initializers to globals.
   SmallVector<Constant *, 16> Worklist;
@@ -134,21 +183,16 @@ LazyCallGraph::LazyCallGraph(Module &M) : NextDFSNumber(0) {
   DEBUG(dbgs() << "  Adding functions referenced by global initializers to the "
                   "entry set.\n");
   visitReferences(Worklist, Visited, [&](Function &F) {
-    addEdge(EntryEdges, EntryIndexMap, F, LazyCallGraph::Edge::Ref);
+    addEdge(EntryEdges.Edges, EntryEdges.EdgeIndexMap, get(F),
+            LazyCallGraph::Edge::Ref);
   });
-
-  for (const Edge &E : EntryEdges)
-    RefSCCEntryNodes.push_back(&E.getFunction());
 }
 
 LazyCallGraph::LazyCallGraph(LazyCallGraph &&G)
     : BPA(std::move(G.BPA)), NodeMap(std::move(G.NodeMap)),
-      EntryEdges(std::move(G.EntryEdges)),
-      EntryIndexMap(std::move(G.EntryIndexMap)), SCCBPA(std::move(G.SCCBPA)),
-      SCCMap(std::move(G.SCCMap)), LeafRefSCCs(std::move(G.LeafRefSCCs)),
-      DFSStack(std::move(G.DFSStack)),
-      RefSCCEntryNodes(std::move(G.RefSCCEntryNodes)),
-      NextDFSNumber(G.NextDFSNumber) {
+      EntryEdges(std::move(G.EntryEdges)), SCCBPA(std::move(G.SCCBPA)),
+      SCCMap(std::move(G.SCCMap)),
+      LibFunctions(std::move(G.LibFunctions)) {
   updateGraphPtrs();
 }
 
@@ -156,20 +200,18 @@ LazyCallGraph &LazyCallGraph::operator=(LazyCallGraph &&G) {
   BPA = std::move(G.BPA);
   NodeMap = std::move(G.NodeMap);
   EntryEdges = std::move(G.EntryEdges);
-  EntryIndexMap = std::move(G.EntryIndexMap);
   SCCBPA = std::move(G.SCCBPA);
   SCCMap = std::move(G.SCCMap);
-  LeafRefSCCs = std::move(G.LeafRefSCCs);
-  DFSStack = std::move(G.DFSStack);
-  RefSCCEntryNodes = std::move(G.RefSCCEntryNodes);
-  NextDFSNumber = G.NextDFSNumber;
+  LibFunctions = std::move(G.LibFunctions);
   updateGraphPtrs();
   return *this;
 }
 
-void LazyCallGraph::SCC::dump() const {
+#if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
+LLVM_DUMP_METHOD void LazyCallGraph::SCC::dump() const {
   dbgs() << *this << '\n';
 }
+#endif
 
 #ifndef NDEBUG
 void LazyCallGraph::SCC::verify() {
@@ -184,8 +226,8 @@ void LazyCallGraph::SCC::verify() {
            "Must set DFS numbers to -1 when adding a node to an SCC!");
     assert(N->LowLink == -1 &&
            "Must set low link to -1 when adding a node to an SCC!");
-    for (Edge &E : *N)
-      assert(E.getNode() && "Can't have an edge to a raw function!");
+    for (Edge &E : **N)
+      assert(E.getNode().isPopulated() && "Can't have an unpopulated node!");
   }
 }
 #endif
@@ -195,10 +237,9 @@ bool LazyCallGraph::SCC::isParentOf(const SCC &C) const {
     return false;
 
   for (Node &N : *this)
-    for (Edge &E : N.calls())
-      if (Node *CalleeN = E.getNode())
-        if (OuterRefSCC->G->lookupSCC(*CalleeN) == &C)
-          return true;
+    for (Edge &E : N->calls())
+      if (OuterRefSCC->G->lookupSCC(E.getNode()) == &C)
+        return true;
 
   // No edges found.
   return false;
@@ -218,11 +259,8 @@ bool LazyCallGraph::SCC::isAncestorOf(const SCC &TargetC) const {
   do {
     const SCC &C = *Worklist.pop_back_val();
     for (Node &N : C)
-      for (Edge &E : N.calls()) {
-        Node *CalleeN = E.getNode();
-        if (!CalleeN)
-          continue;
-        SCC *CalleeC = G.lookupSCC(*CalleeN);
+      for (Edge &E : N->calls()) {
+        SCC *CalleeC = G.lookupSCC(E.getNode());
         if (!CalleeC)
           continue;
 
@@ -243,9 +281,11 @@ bool LazyCallGraph::SCC::isAncestorOf(const SCC &TargetC) const {
 
 LazyCallGraph::RefSCC::RefSCC(LazyCallGraph &G) : G(&G) {}
 
-void LazyCallGraph::RefSCC::dump() const {
+#if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
+LLVM_DUMP_METHOD void LazyCallGraph::RefSCC::dump() const {
   dbgs() << *this << '\n';
 }
+#endif
 
 #ifndef NDEBUG
 void LazyCallGraph::RefSCC::verify() {
@@ -279,47 +319,58 @@ void LazyCallGraph::RefSCC::verify() {
   for (int i = 0, Size = SCCs.size(); i < Size; ++i) {
     SCC &SourceSCC = *SCCs[i];
     for (Node &N : SourceSCC)
-      for (Edge &E : N) {
+      for (Edge &E : *N) {
         if (!E.isCall())
           continue;
-        SCC &TargetSCC = *G->lookupSCC(*E.getNode());
+        SCC &TargetSCC = *G->lookupSCC(E.getNode());
         if (&TargetSCC.getOuterRefSCC() == this) {
           assert(SCCIndices.find(&TargetSCC)->second <= i &&
                  "Edge between SCCs violates post-order relationship.");
           continue;
         }
-        assert(TargetSCC.getOuterRefSCC().Parents.count(this) &&
-               "Edge to a RefSCC missing us in its parent set.");
       }
-  }
-
-  // Check that our parents are actually parents.
-  for (RefSCC *ParentRC : Parents) {
-    assert(ParentRC != this && "Cannot be our own parent!");
-    auto HasConnectingEdge = [&] {
-      for (SCC &C : *ParentRC)
-        for (Node &N : C)
-          for (Edge &E : N)
-            if (G->lookupRefSCC(*E.getNode()) == this)
-              return true;
-      return false;
-    };
-    assert(HasConnectingEdge() && "No edge connects the parent to us!");
   }
 }
 #endif
 
-bool LazyCallGraph::RefSCC::isDescendantOf(const RefSCC &C) const {
-  // Walk up the parents of this SCC and verify that we eventually find C.
-  SmallVector<const RefSCC *, 4> AncestorWorklist;
-  AncestorWorklist.push_back(this);
+bool LazyCallGraph::RefSCC::isParentOf(const RefSCC &RC) const {
+  if (&RC == this)
+    return false;
+
+  // Search all edges to see if this is a parent.
+  for (SCC &C : *this)
+    for (Node &N : C)
+      for (Edge &E : *N)
+        if (G->lookupRefSCC(E.getNode()) == &RC)
+          return true;
+
+  return false;
+}
+
+bool LazyCallGraph::RefSCC::isAncestorOf(const RefSCC &RC) const {
+  if (&RC == this)
+    return false;
+
+  // For each descendant of this RefSCC, see if one of its children is the
+  // argument. If not, add that descendant to the worklist and continue
+  // searching.
+  SmallVector<const RefSCC *, 4> Worklist;
+  SmallPtrSet<const RefSCC *, 4> Visited;
+  Worklist.push_back(this);
+  Visited.insert(this);
   do {
-    const RefSCC *AncestorC = AncestorWorklist.pop_back_val();
-    if (AncestorC->isChildOf(C))
-      return true;
-    for (const RefSCC *ParentC : AncestorC->Parents)
-      AncestorWorklist.push_back(ParentC);
-  } while (!AncestorWorklist.empty());
+    const RefSCC &DescendantRC = *Worklist.pop_back_val();
+    for (SCC &C : DescendantRC)
+      for (Node &N : C)
+        for (Edge &E : *N) {
+          auto *ChildRC = G->lookupRefSCC(E.getNode());
+          if (ChildRC == &RC)
+            return true;
+          if (!ChildRC || !Visited.insert(ChildRC).second)
+            continue;
+          Worklist.push_back(ChildRC);
+        }
+  } while (!Worklist.empty());
 
   return false;
 }
@@ -459,9 +510,11 @@ updatePostorderSequenceForEdgeInsertion(
   return make_range(SCCs.begin() + SourceIdx, SCCs.begin() + TargetIdx);
 }
 
-SmallVector<LazyCallGraph::SCC *, 1>
-LazyCallGraph::RefSCC::switchInternalEdgeToCall(Node &SourceN, Node &TargetN) {
-  assert(!SourceN[TargetN].isCall() && "Must start with a ref edge!");
+bool
+LazyCallGraph::RefSCC::switchInternalEdgeToCall(
+    Node &SourceN, Node &TargetN,
+    function_ref<void(ArrayRef<SCC *> MergeSCCs)> MergeCB) {
+  assert(!(*SourceN)[TargetN].isCall() && "Must start with a ref edge!");
   SmallVector<SCC *, 1> DeletedSCCs;
 
 #ifndef NDEBUG
@@ -477,8 +530,8 @@ LazyCallGraph::RefSCC::switchInternalEdgeToCall(Node &SourceN, Node &TargetN) {
   // If the two nodes are already part of the same SCC, we're also done as
   // we've just added more connectivity.
   if (&SourceSCC == &TargetSCC) {
-    SourceN.setEdgeKind(TargetN.getFunction(), Edge::Call);
-    return DeletedSCCs;
+    SourceN->setEdgeKind(TargetN, Edge::Call);
+    return false; // No new cycle.
   }
 
   // At this point we leverage the postorder list of SCCs to detect when the
@@ -490,8 +543,8 @@ LazyCallGraph::RefSCC::switchInternalEdgeToCall(Node &SourceN, Node &TargetN) {
   int SourceIdx = SCCIndices[&SourceSCC];
   int TargetIdx = SCCIndices[&TargetSCC];
   if (TargetIdx < SourceIdx) {
-    SourceN.setEdgeKind(TargetN.getFunction(), Edge::Call);
-    return DeletedSCCs;
+    SourceN->setEdgeKind(TargetN, Edge::Call);
+    return false; // No new cycle.
   }
 
   // Compute the SCCs which (transitively) reach the source.
@@ -504,11 +557,9 @@ LazyCallGraph::RefSCC::switchInternalEdgeToCall(Node &SourceN, Node &TargetN) {
     ConnectedSet.insert(&SourceSCC);
     auto IsConnected = [&](SCC &C) {
       for (Node &N : C)
-        for (Edge &E : N.calls()) {
-          assert(E.getNode() && "Must have formed a node within an SCC!");
-          if (ConnectedSet.count(G->lookupSCC(*E.getNode())))
+        for (Edge &E : N->calls())
+          if (ConnectedSet.count(G->lookupSCC(E.getNode())))
             return true;
-        }
 
       return false;
     };
@@ -535,11 +586,10 @@ LazyCallGraph::RefSCC::switchInternalEdgeToCall(Node &SourceN, Node &TargetN) {
     do {
       SCC &C = *Worklist.pop_back_val();
       for (Node &N : C)
-        for (Edge &E : N) {
-          assert(E.getNode() && "Must have formed a node within an SCC!");
+        for (Edge &E : *N) {
           if (!E.isCall())
             continue;
-          SCC &EdgeC = *G->lookupSCC(*E.getNode());
+          SCC &EdgeC = *G->lookupSCC(E.getNode());
           if (&EdgeC.getOuterRefSCC() != this)
             // Not in this RefSCC...
             continue;
@@ -561,12 +611,16 @@ LazyCallGraph::RefSCC::switchInternalEdgeToCall(Node &SourceN, Node &TargetN) {
       SourceSCC, TargetSCC, SCCs, SCCIndices, ComputeSourceConnectedSet,
       ComputeTargetConnectedSet);
 
+  // Run the user's callback on the merged SCCs before we actually merge them.
+  if (MergeCB)
+    MergeCB(makeArrayRef(MergeRange.begin(), MergeRange.end()));
+
   // If the merge range is empty, then adding the edge didn't actually form any
   // new cycles. We're done.
   if (MergeRange.begin() == MergeRange.end()) {
     // Now that the SCC structure is finalized, flip the kind to call.
-    SourceN.setEdgeKind(TargetN.getFunction(), Edge::Call);
-    return DeletedSCCs;
+    SourceN->setEdgeKind(TargetN, Edge::Call);
+    return false; // No new cycle.
   }
 
 #ifndef NDEBUG
@@ -600,15 +654,15 @@ LazyCallGraph::RefSCC::switchInternalEdgeToCall(Node &SourceN, Node &TargetN) {
     SCCIndices[C] -= IndexOffset;
 
   // Now that the SCC structure is finalized, flip the kind to call.
-  SourceN.setEdgeKind(TargetN.getFunction(), Edge::Call);
+  SourceN->setEdgeKind(TargetN, Edge::Call);
 
-  // And we're done!
-  return DeletedSCCs;
+  // And we're done, but we did form a new cycle.
+  return true;
 }
 
 void LazyCallGraph::RefSCC::switchTrivialInternalEdgeToRef(Node &SourceN,
                                                            Node &TargetN) {
-  assert(SourceN[TargetN].isCall() && "Must start with a call edge!");
+  assert((*SourceN)[TargetN].isCall() && "Must start with a call edge!");
 
 #ifndef NDEBUG
   // In a debug build, verify the RefSCC is valid to start with and when this
@@ -625,12 +679,12 @@ void LazyCallGraph::RefSCC::switchTrivialInternalEdgeToRef(Node &SourceN,
          "Source and Target must be in separate SCCs for this to be trivial!");
 
   // Set the edge kind.
-  SourceN.setEdgeKind(TargetN.getFunction(), Edge::Ref);
+  SourceN->setEdgeKind(TargetN, Edge::Ref);
 }
 
 iterator_range<LazyCallGraph::RefSCC::iterator>
 LazyCallGraph::RefSCC::switchInternalEdgeToRef(Node &SourceN, Node &TargetN) {
-  assert(SourceN[TargetN].isCall() && "Must start with a call edge!");
+  assert((*SourceN)[TargetN].isCall() && "Must start with a call edge!");
 
 #ifndef NDEBUG
   // In a debug build, verify the RefSCC is valid to start with and when this
@@ -650,7 +704,7 @@ LazyCallGraph::RefSCC::switchInternalEdgeToRef(Node &SourceN, Node &TargetN) {
                                                 "full CG update.");
 
   // Set the edge kind.
-  SourceN.setEdgeKind(TargetN.getFunction(), Edge::Ref);
+  SourceN->setEdgeKind(TargetN, Edge::Ref);
 
   // Otherwise we are removing a call edge from a single SCC. This may break
   // the cycle. In order to compute the new set of SCCs, we need to do a small
@@ -665,7 +719,7 @@ LazyCallGraph::RefSCC::switchInternalEdgeToRef(Node &SourceN, Node &TargetN) {
   // etc.
 
   SCC &OldSCC = TargetSCC;
-  SmallVector<std::pair<Node *, call_edge_iterator>, 16> DFSStack;
+  SmallVector<std::pair<Node *, EdgeSequence::call_iterator>, 16> DFSStack;
   SmallVector<Node *, 16> PendingSCCStack;
   SmallVector<SCC *, 4> NewSCCs;
 
@@ -706,14 +760,14 @@ LazyCallGraph::RefSCC::switchInternalEdgeToRef(Node &SourceN, Node &TargetN) {
     RootN->DFSNumber = RootN->LowLink = 1;
     int NextDFSNumber = 2;
 
-    DFSStack.push_back({RootN, RootN->call_begin()});
+    DFSStack.push_back({RootN, (*RootN)->call_begin()});
     do {
       Node *N;
-      call_edge_iterator I;
+      EdgeSequence::call_iterator I;
       std::tie(N, I) = DFSStack.pop_back_val();
-      auto E = N->call_end();
+      auto E = (*N)->call_end();
       while (I != E) {
-        Node &ChildN = *I->getNode();
+        Node &ChildN = I->getNode();
         if (ChildN.DFSNumber == 0) {
           // We haven't yet visited this child, so descend, pushing the current
           // node onto the stack.
@@ -723,8 +777,8 @@ LazyCallGraph::RefSCC::switchInternalEdgeToRef(Node &SourceN, Node &TargetN) {
                  "Found a node with 0 DFS number but already in an SCC!");
           ChildN.DFSNumber = ChildN.LowLink = NextDFSNumber++;
           N = &ChildN;
-          I = N->call_begin();
-          E = N->call_end();
+          I = (*N)->call_begin();
+          E = (*N)->call_end();
           continue;
         }
 
@@ -817,17 +871,19 @@ LazyCallGraph::RefSCC::switchInternalEdgeToRef(Node &SourceN, Node &TargetN) {
 
 void LazyCallGraph::RefSCC::switchOutgoingEdgeToCall(Node &SourceN,
                                                      Node &TargetN) {
-  assert(!SourceN[TargetN].isCall() && "Must start with a ref edge!");
+  assert(!(*SourceN)[TargetN].isCall() && "Must start with a ref edge!");
 
   assert(G->lookupRefSCC(SourceN) == this && "Source must be in this RefSCC.");
   assert(G->lookupRefSCC(TargetN) != this &&
          "Target must not be in this RefSCC.");
+#ifdef EXPENSIVE_CHECKS
   assert(G->lookupRefSCC(TargetN)->isDescendantOf(*this) &&
          "Target must be a descendant of the Source.");
+#endif
 
   // Edges between RefSCCs are the same regardless of call or ref, so we can
   // just flip the edge here.
-  SourceN.setEdgeKind(TargetN.getFunction(), Edge::Call);
+  SourceN->setEdgeKind(TargetN, Edge::Call);
 
 #ifndef NDEBUG
   // Check that the RefSCC is still valid.
@@ -837,17 +893,19 @@ void LazyCallGraph::RefSCC::switchOutgoingEdgeToCall(Node &SourceN,
 
 void LazyCallGraph::RefSCC::switchOutgoingEdgeToRef(Node &SourceN,
                                                     Node &TargetN) {
-  assert(SourceN[TargetN].isCall() && "Must start with a call edge!");
+  assert((*SourceN)[TargetN].isCall() && "Must start with a call edge!");
 
   assert(G->lookupRefSCC(SourceN) == this && "Source must be in this RefSCC.");
   assert(G->lookupRefSCC(TargetN) != this &&
          "Target must not be in this RefSCC.");
+#ifdef EXPENSIVE_CHECKS
   assert(G->lookupRefSCC(TargetN)->isDescendantOf(*this) &&
          "Target must be a descendant of the Source.");
+#endif
 
   // Edges between RefSCCs are the same regardless of call or ref, so we can
   // just flip the edge here.
-  SourceN.setEdgeKind(TargetN.getFunction(), Edge::Ref);
+  SourceN->setEdgeKind(TargetN, Edge::Ref);
 
 #ifndef NDEBUG
   // Check that the RefSCC is still valid.
@@ -860,7 +918,7 @@ void LazyCallGraph::RefSCC::insertInternalRefEdge(Node &SourceN,
   assert(G->lookupRefSCC(SourceN) == this && "Source must be in this RefSCC.");
   assert(G->lookupRefSCC(TargetN) == this && "Target must be in this RefSCC.");
 
-  SourceN.insertEdgeInternal(TargetN, Edge::Ref);
+  SourceN->insertEdgeInternal(TargetN, Edge::Ref);
 
 #ifndef NDEBUG
   // Check that the RefSCC is still valid.
@@ -871,18 +929,16 @@ void LazyCallGraph::RefSCC::insertInternalRefEdge(Node &SourceN,
 void LazyCallGraph::RefSCC::insertOutgoingEdge(Node &SourceN, Node &TargetN,
                                                Edge::Kind EK) {
   // First insert it into the caller.
-  SourceN.insertEdgeInternal(TargetN, EK);
+  SourceN->insertEdgeInternal(TargetN, EK);
 
   assert(G->lookupRefSCC(SourceN) == this && "Source must be in this RefSCC.");
 
-  RefSCC &TargetC = *G->lookupRefSCC(TargetN);
-  assert(&TargetC != this && "Target must not be in this RefSCC.");
-  assert(TargetC.isDescendantOf(*this) &&
+  assert(G->lookupRefSCC(TargetN) != this &&
+         "Target must not be in this RefSCC.");
+#ifdef EXPENSIVE_CHECKS
+  assert(G->lookupRefSCC(TargetN)->isDescendantOf(*this) &&
          "Target must be a descendant of the Source.");
-
-  // The only change required is to add this SCC to the parent set of the
-  // callee.
-  TargetC.Parents.insert(this);
+#endif
 
 #ifndef NDEBUG
   // Check that the RefSCC is still valid.
@@ -895,8 +951,10 @@ LazyCallGraph::RefSCC::insertIncomingRefEdge(Node &SourceN, Node &TargetN) {
   assert(G->lookupRefSCC(TargetN) == this && "Target must be in this RefSCC.");
   RefSCC &SourceC = *G->lookupRefSCC(SourceN);
   assert(&SourceC != this && "Source must not be in this RefSCC.");
+#ifdef EXPENSIVE_CHECKS
   assert(SourceC.isDescendantOf(*this) &&
          "Source must be a descendant of the Target.");
+#endif
 
   SmallVector<RefSCC *, 1> DeletedRefSCCs;
 
@@ -921,22 +979,20 @@ LazyCallGraph::RefSCC::insertIncomingRefEdge(Node &SourceN, Node &TargetN) {
   // RefSCCs (and their edges) are visited here.
   auto ComputeSourceConnectedSet = [&](SmallPtrSetImpl<RefSCC *> &Set) {
     Set.insert(&SourceC);
-    SmallVector<RefSCC *, 4> Worklist;
-    Worklist.push_back(&SourceC);
-    do {
-      RefSCC &RC = *Worklist.pop_back_val();
-      for (RefSCC &ParentRC : RC.parents()) {
-        // Skip any RefSCCs outside the range of source to target in the
-        // postorder sequence.
-        int ParentIdx = G->getRefSCCIndex(ParentRC);
-        assert(ParentIdx > SourceIdx && "Parent cannot precede source in postorder!");
-        if (ParentIdx > TargetIdx)
-          continue;
-        if (Set.insert(&ParentRC).second)
-          // First edge connecting to this parent, add it to our worklist.
-          Worklist.push_back(&ParentRC);
-      }
-    } while (!Worklist.empty());
+    auto IsConnected = [&](RefSCC &RC) {
+      for (SCC &C : RC)
+        for (Node &N : C)
+          for (Edge &E : *N)
+            if (Set.count(G->lookupRefSCC(E.getNode())))
+              return true;
+
+      return false;
+    };
+
+    for (RefSCC *C : make_range(G->PostOrderRefSCCs.begin() + SourceIdx + 1,
+                                G->PostOrderRefSCCs.begin() + TargetIdx + 1))
+      if (IsConnected(*C))
+        Set.insert(C);
   };
 
   // Use a normal worklist to find which SCCs the target connects to. We still
@@ -951,9 +1007,8 @@ LazyCallGraph::RefSCC::insertIncomingRefEdge(Node &SourceN, Node &TargetN) {
       RefSCC &RC = *Worklist.pop_back_val();
       for (SCC &C : RC)
         for (Node &N : C)
-          for (Edge &E : N) {
-            assert(E.getNode() && "Must have formed a node!");
-            RefSCC &EdgeRC = *G->lookupRefSCC(*E.getNode());
+          for (Edge &E : *N) {
+            RefSCC &EdgeRC = *G->lookupRefSCC(E.getNode());
             if (G->getRefSCCIndex(EdgeRC) <= SourceIdx)
               // Not in the postorder sequence between source and target.
               continue;
@@ -988,12 +1043,6 @@ LazyCallGraph::RefSCC::insertIncomingRefEdge(Node &SourceN, Node &TargetN) {
     assert(RC != this && "We're merging into the target RefSCC, so it "
                          "shouldn't be in the range.");
 
-    // Merge the parents which aren't part of the merge into the our parents.
-    for (RefSCC *ParentRC : RC->Parents)
-      if (!MergeSet.count(ParentRC))
-        Parents.insert(ParentRC);
-    RC->Parents.clear();
-
     // Walk the inner SCCs to update their up-pointer and walk all the edges to
     // update any parent sets.
     // FIXME: We should try to find a way to avoid this (rather expensive) edge
@@ -1001,18 +1050,8 @@ LazyCallGraph::RefSCC::insertIncomingRefEdge(Node &SourceN, Node &TargetN) {
     for (SCC &InnerC : *RC) {
       InnerC.OuterRefSCC = this;
       SCCIndices[&InnerC] = SCCIndex++;
-      for (Node &N : InnerC) {
+      for (Node &N : InnerC)
         G->SCCMap[&N] = &InnerC;
-        for (Edge &E : N) {
-          assert(E.getNode() &&
-                 "Cannot have a null node within a visited SCC!");
-          RefSCC &ChildRC = *G->lookupRefSCC(*E.getNode());
-          if (MergeSet.count(&ChildRC))
-            continue;
-          ChildRC.Parents.erase(RC);
-          ChildRC.Parents.insert(this);
-        }
-      }
     }
 
     // Now merge in the SCCs. We can actually move here so try to reuse storage
@@ -1042,7 +1081,7 @@ LazyCallGraph::RefSCC::insertIncomingRefEdge(Node &SourceN, Node &TargetN) {
 
   // At this point we have a merged RefSCC with a post-order SCCs list, just
   // connect the nodes to form the new edge.
-  SourceN.insertEdgeInternal(TargetN, Edge::Ref);
+  SourceN->insertEdgeInternal(TargetN, Edge::Ref);
 
   // We return the list of SCCs which were merged so that callers can
   // invalidate any data they have associated with those SCCs. Note that these
@@ -1054,12 +1093,8 @@ LazyCallGraph::RefSCC::insertIncomingRefEdge(Node &SourceN, Node &TargetN) {
 void LazyCallGraph::RefSCC::removeOutgoingEdge(Node &SourceN, Node &TargetN) {
   assert(G->lookupRefSCC(SourceN) == this &&
          "The source must be a member of this RefSCC.");
-
-  RefSCC &TargetRC = *G->lookupRefSCC(TargetN);
-  assert(&TargetRC != this && "The target must not be a member of this RefSCC");
-
-  assert(!is_contained(G->LeafRefSCCs, this) &&
-         "Cannot have a leaf RefSCC source.");
+  assert(G->lookupRefSCC(TargetN) != this &&
+         "The target must not be a member of this RefSCC");
 
 #ifndef NDEBUG
   // In a debug build, verify the RefSCC is valid to start with and when this
@@ -1069,124 +1104,77 @@ void LazyCallGraph::RefSCC::removeOutgoingEdge(Node &SourceN, Node &TargetN) {
 #endif
 
   // First remove it from the node.
-  SourceN.removeEdgeInternal(TargetN.getFunction());
-
-  bool HasOtherEdgeToChildRC = false;
-  bool HasOtherChildRC = false;
-  for (SCC *InnerC : SCCs) {
-    for (Node &N : *InnerC) {
-      for (Edge &E : N) {
-        assert(E.getNode() && "Cannot have a missing node in a visited SCC!");
-        RefSCC &OtherChildRC = *G->lookupRefSCC(*E.getNode());
-        if (&OtherChildRC == &TargetRC) {
-          HasOtherEdgeToChildRC = true;
-          break;
-        }
-        if (&OtherChildRC != this)
-          HasOtherChildRC = true;
-      }
-      if (HasOtherEdgeToChildRC)
-        break;
-    }
-    if (HasOtherEdgeToChildRC)
-      break;
-  }
-  // Because the SCCs form a DAG, deleting such an edge cannot change the set
-  // of SCCs in the graph. However, it may cut an edge of the SCC DAG, making
-  // the source SCC no longer connected to the target SCC. If so, we need to
-  // update the target SCC's map of its parents.
-  if (!HasOtherEdgeToChildRC) {
-    bool Removed = TargetRC.Parents.erase(this);
-    (void)Removed;
-    assert(Removed &&
-           "Did not find the source SCC in the target SCC's parent list!");
-
-    // It may orphan an SCC if it is the last edge reaching it, but that does
-    // not violate any invariants of the graph.
-    if (TargetRC.Parents.empty())
-      DEBUG(dbgs() << "LCG: Update removing " << SourceN.getFunction().getName()
-                   << " -> " << TargetN.getFunction().getName()
-                   << " edge orphaned the callee's SCC!\n");
-
-    // It may make the Source SCC a leaf SCC.
-    if (!HasOtherChildRC)
-      G->LeafRefSCCs.push_back(this);
-  }
+  bool Removed = SourceN->removeEdgeInternal(TargetN);
+  (void)Removed;
+  assert(Removed && "Target not in the edge set for this caller?");
 }
 
 SmallVector<LazyCallGraph::RefSCC *, 1>
-LazyCallGraph::RefSCC::removeInternalRefEdge(Node &SourceN, Node &TargetN) {
-  assert(!SourceN[TargetN].isCall() &&
-         "Cannot remove a call edge, it must first be made a ref edge");
-
-#ifndef NDEBUG
-  // In a debug build, verify the RefSCC is valid to start with and when this
-  // routine finishes.
-  verify();
-  auto VerifyOnExit = make_scope_exit([&]() { verify(); });
-#endif
-
-  // First remove the actual edge.
-  SourceN.removeEdgeInternal(TargetN.getFunction());
-
+LazyCallGraph::RefSCC::removeInternalRefEdge(Node &SourceN,
+                                             ArrayRef<Node *> TargetNs) {
   // We return a list of the resulting *new* RefSCCs in post-order.
   SmallVector<RefSCC *, 1> Result;
 
-  // Direct recursion doesn't impact the SCC graph at all.
-  if (&SourceN == &TargetN)
+#ifndef NDEBUG
+  // In a debug build, verify the RefSCC is valid to start with and that either
+  // we return an empty list of result RefSCCs and this RefSCC remains valid,
+  // or we return new RefSCCs and this RefSCC is dead.
+  verify();
+  auto VerifyOnExit = make_scope_exit([&]() {
+    // If we didn't replace our RefSCC with new ones, check that this one
+    // remains valid.
+    if (G)
+      verify();
+  });
+#endif
+
+  // First remove the actual edges.
+  for (Node *TargetN : TargetNs) {
+    assert(!(*SourceN)[*TargetN].isCall() &&
+           "Cannot remove a call edge, it must first be made a ref edge");
+
+    bool Removed = SourceN->removeEdgeInternal(*TargetN);
+    (void)Removed;
+    assert(Removed && "Target not in the edge set for this caller?");
+  }
+
+  // Direct self references don't impact the ref graph at all.
+  if (llvm::all_of(TargetNs,
+                   [&](Node *TargetN) { return &SourceN == TargetN; }))
     return Result;
 
-  // If this ref edge is within an SCC then there are sufficient other edges to
-  // form a cycle without this edge so removing it is a no-op.
+  // If all targets are in the same SCC as the source, because no call edges
+  // were removed there is no RefSCC structure change.
   SCC &SourceC = *G->lookupSCC(SourceN);
-  SCC &TargetC = *G->lookupSCC(TargetN);
-  if (&SourceC == &TargetC)
+  if (llvm::all_of(TargetNs, [&](Node *TargetN) {
+        return G->lookupSCC(*TargetN) == &SourceC;
+      }))
     return Result;
 
   // We build somewhat synthetic new RefSCCs by providing a postorder mapping
-  // for each inner SCC. We also store these associated with *nodes* rather
-  // than SCCs because this saves a round-trip through the node->SCC map and in
-  // the common case, SCCs are small. We will verify that we always give the
-  // same number to every node in the SCC such that these are equivalent.
-  const int RootPostOrderNumber = 0;
-  int PostOrderNumber = RootPostOrderNumber + 1;
-  SmallDenseMap<Node *, int> PostOrderMapping;
-
-  // Every node in the target SCC can already reach every node in this RefSCC
-  // (by definition). It is the only node we know will stay inside this RefSCC.
-  // Everything which transitively reaches Target will also remain in the
-  // RefSCC. We handle this by pre-marking that the nodes in the target SCC map
-  // back to the root post order number.
-  //
-  // This also enables us to take a very significant short-cut in the standard
-  // Tarjan walk to re-form RefSCCs below: whenever we build an edge that
-  // references the target node, we know that the target node eventually
-  // references all other nodes in our walk. As a consequence, we can detect
-  // and handle participants in that cycle without walking all the edges that
-  // form the connections, and instead by relying on the fundamental guarantee
-  // coming into this operation.
-  for (Node &N : TargetC)
-    PostOrderMapping[&N] = RootPostOrderNumber;
+  // for each inner SCC. We store these inside the low-link field of the nodes
+  // rather than associated with SCCs because this saves a round-trip through
+  // the node->SCC map and in the common case, SCCs are small. We will verify
+  // that we always give the same number to every node in the SCC such that
+  // these are equivalent.
+  int PostOrderNumber = 0;
 
   // Reset all the other nodes to prepare for a DFS over them, and add them to
   // our worklist.
   SmallVector<Node *, 8> Worklist;
   for (SCC *C : SCCs) {
-    if (C == &TargetC)
-      continue;
-
     for (Node &N : *C)
       N.DFSNumber = N.LowLink = 0;
 
     Worklist.append(C->Nodes.begin(), C->Nodes.end());
   }
 
-  auto MarkNodeForSCCNumber = [&PostOrderMapping](Node &N, int Number) {
-    N.DFSNumber = N.LowLink = -1;
-    PostOrderMapping[&N] = Number;
-  };
+  // Track the number of nodes in this RefSCC so that we can quickly recognize
+  // an important special case of the edge removal not breaking the cycle of
+  // this RefSCC.
+  const int NumRefSCCNodes = Worklist.size();
 
-  SmallVector<std::pair<Node *, edge_iterator>, 4> DFSStack;
+  SmallVector<std::pair<Node *, EdgeSequence::iterator>, 4> DFSStack;
   SmallVector<Node *, 4> PendingRefSCCStack;
   do {
     assert(DFSStack.empty() &&
@@ -1205,18 +1193,18 @@ LazyCallGraph::RefSCC::removeInternalRefEdge(Node &SourceN, Node &TargetN) {
     RootN->DFSNumber = RootN->LowLink = 1;
     int NextDFSNumber = 2;
 
-    DFSStack.push_back({RootN, RootN->begin()});
+    DFSStack.push_back({RootN, (*RootN)->begin()});
     do {
       Node *N;
-      edge_iterator I;
+      EdgeSequence::iterator I;
       std::tie(N, I) = DFSStack.pop_back_val();
-      auto E = N->end();
+      auto E = (*N)->end();
 
       assert(N->DFSNumber != 0 && "We should always assign a DFS number "
                                   "before processing a node.");
 
       while (I != E) {
-        Node &ChildN = I->getNode(*G);
+        Node &ChildN = I->getNode();
         if (ChildN.DFSNumber == 0) {
           // Mark that we should start at this child when next this node is the
           // top of the stack. We don't start at the next child to ensure this
@@ -1226,36 +1214,13 @@ LazyCallGraph::RefSCC::removeInternalRefEdge(Node &SourceN, Node &TargetN) {
           // Continue, resetting to the child node.
           ChildN.LowLink = ChildN.DFSNumber = NextDFSNumber++;
           N = &ChildN;
-          I = ChildN.begin();
-          E = ChildN.end();
+          I = ChildN->begin();
+          E = ChildN->end();
           continue;
         }
         if (ChildN.DFSNumber == -1) {
-          // Check if this edge's target node connects to the deleted edge's
-          // target node. If so, we know that every node connected will end up
-          // in this RefSCC, so collapse the entire current stack into the root
-          // slot in our SCC numbering. See above for the motivation of
-          // optimizing the target connected nodes in this way.
-          auto PostOrderI = PostOrderMapping.find(&ChildN);
-          if (PostOrderI != PostOrderMapping.end() &&
-              PostOrderI->second == RootPostOrderNumber) {
-            MarkNodeForSCCNumber(*N, RootPostOrderNumber);
-            while (!PendingRefSCCStack.empty())
-              MarkNodeForSCCNumber(*PendingRefSCCStack.pop_back_val(),
-                                   RootPostOrderNumber);
-            while (!DFSStack.empty())
-              MarkNodeForSCCNumber(*DFSStack.pop_back_val().first,
-                                   RootPostOrderNumber);
-            // Ensure we break all the way out of the enclosing loop.
-            N = nullptr;
-            break;
-          }
-
           // If this child isn't currently in this RefSCC, no need to process
-          // it. However, we do need to remove this RefSCC from its RefSCC's
-          // parent set.
-          RefSCC &ChildRC = *G->lookupRefSCC(ChildN);
-          ChildRC.Parents.erase(this);
+          // it.
           ++I;
           continue;
         }
@@ -1268,9 +1233,6 @@ LazyCallGraph::RefSCC::removeInternalRefEdge(Node &SourceN, Node &TargetN) {
           N->LowLink = ChildN.LowLink;
         ++I;
       }
-      if (!N)
-        // We short-circuited this node.
-        break;
 
       // We've finished processing N and its descendents, put it on our pending
       // stack to eventually get merged into a RefSCC.
@@ -1285,148 +1247,98 @@ LazyCallGraph::RefSCC::removeInternalRefEdge(Node &SourceN, Node &TargetN) {
       }
 
       // Otherwise, form a new RefSCC from the top of the pending node stack.
-      int RootDFSNumber = N->DFSNumber;
-      // Find the range of the node stack by walking down until we pass the
-      // root DFS number.
-      auto RefSCCNodes = make_range(
-          PendingRefSCCStack.rbegin(),
-          find_if(reverse(PendingRefSCCStack), [RootDFSNumber](const Node *N) {
-            return N->DFSNumber < RootDFSNumber;
-          }));
-
-      // Mark the postorder number for these nodes and clear them off the
-      // stack. We'll use the postorder number to pull them into RefSCCs at the
-      // end. FIXME: Fuse with the loop above.
       int RefSCCNumber = PostOrderNumber++;
-      for (Node *N : RefSCCNodes)
-        MarkNodeForSCCNumber(*N, RefSCCNumber);
+      int RootDFSNumber = N->DFSNumber;
 
-      PendingRefSCCStack.erase(RefSCCNodes.end().base(),
-                               PendingRefSCCStack.end());
+      // Find the range of the node stack by walking down until we pass the
+      // root DFS number. Update the DFS numbers and low link numbers in the
+      // process to avoid re-walking this list where possible.
+      auto StackRI = find_if(reverse(PendingRefSCCStack), [&](Node *N) {
+        if (N->DFSNumber < RootDFSNumber)
+          // We've found the bottom.
+          return true;
+
+        // Update this node and keep scanning.
+        N->DFSNumber = -1;
+        // Save the post-order number in the lowlink field so that we can use
+        // it to map SCCs into new RefSCCs after we finish the DFS.
+        N->LowLink = RefSCCNumber;
+        return false;
+      });
+      auto RefSCCNodes = make_range(StackRI.base(), PendingRefSCCStack.end());
+
+      // If we find a cycle containing all nodes originally in this RefSCC then
+      // the removal hasn't changed the structure at all. This is an important
+      // special case and we can directly exit the entire routine more
+      // efficiently as soon as we discover it.
+      if (std::distance(RefSCCNodes.begin(), RefSCCNodes.end()) ==
+          NumRefSCCNodes) {
+        // Clear out the low link field as we won't need it.
+        for (Node *N : RefSCCNodes)
+          N->LowLink = -1;
+        // Return the empty result immediately.
+        return Result;
+      }
+
+      // We've already marked the nodes internally with the RefSCC number so
+      // just clear them off the stack and continue.
+      PendingRefSCCStack.erase(RefSCCNodes.begin(), PendingRefSCCStack.end());
     } while (!DFSStack.empty());
 
     assert(DFSStack.empty() && "Didn't flush the entire DFS stack!");
     assert(PendingRefSCCStack.empty() && "Didn't flush all pending nodes!");
   } while (!Worklist.empty());
 
-  // We now have a post-order numbering for RefSCCs and a mapping from each
-  // node in this RefSCC to its final RefSCC. We create each new RefSCC node
-  // (re-using this RefSCC node for the root) and build a radix-sort style map
-  // from postorder number to the RefSCC. We then append SCCs to each of these
-  // RefSCCs in the order they occured in the original SCCs container.
-  for (int i = 1; i < PostOrderNumber; ++i)
+  assert(PostOrderNumber > 1 &&
+         "Should never finish the DFS when the existing RefSCC remains valid!");
+
+  // Otherwise we create a collection of new RefSCC nodes and build
+  // a radix-sort style map from postorder number to these new RefSCCs. We then
+  // append SCCs to each of these RefSCCs in the order they occured in the
+  // original SCCs container.
+  for (int i = 0; i < PostOrderNumber; ++i)
     Result.push_back(G->createRefSCC(*G));
 
   // Insert the resulting postorder sequence into the global graph postorder
-  // sequence before the current RefSCC in that sequence. The idea being that
-  // this RefSCC is the target of the reference edge removed, and thus has
-  // a direct or indirect edge to every other RefSCC formed and so must be at
-  // the end of any postorder traversal.
+  // sequence before the current RefSCC in that sequence, and then remove the
+  // current one.
   //
   // FIXME: It'd be nice to change the APIs so that we returned an iterator
   // range over the global postorder sequence and generally use that sequence
   // rather than building a separate result vector here.
-  if (!Result.empty()) {
-    int Idx = G->getRefSCCIndex(*this);
-    G->PostOrderRefSCCs.insert(G->PostOrderRefSCCs.begin() + Idx,
-                               Result.begin(), Result.end());
-    for (int i : seq<int>(Idx, G->PostOrderRefSCCs.size()))
-      G->RefSCCIndices[G->PostOrderRefSCCs[i]] = i;
-    assert(G->PostOrderRefSCCs[G->getRefSCCIndex(*this)] == this &&
-           "Failed to update this RefSCC's index after insertion!");
-  }
+  int Idx = G->getRefSCCIndex(*this);
+  G->PostOrderRefSCCs.erase(G->PostOrderRefSCCs.begin() + Idx);
+  G->PostOrderRefSCCs.insert(G->PostOrderRefSCCs.begin() + Idx, Result.begin(),
+                             Result.end());
+  for (int i : seq<int>(Idx, G->PostOrderRefSCCs.size()))
+    G->RefSCCIndices[G->PostOrderRefSCCs[i]] = i;
 
   for (SCC *C : SCCs) {
-    auto PostOrderI = PostOrderMapping.find(&*C->begin());
-    assert(PostOrderI != PostOrderMapping.end() &&
-           "Cannot have missing mappings for nodes!");
-    int SCCNumber = PostOrderI->second;
-#ifndef NDEBUG
-    for (Node &N : *C)
-      assert(PostOrderMapping.find(&N)->second == SCCNumber &&
+    // We store the SCC number in the node's low-link field above.
+    int SCCNumber = C->begin()->LowLink;
+    // Clear out all of the SCC's node's low-link fields now that we're done
+    // using them as side-storage.
+    for (Node &N : *C) {
+      assert(N.LowLink == SCCNumber &&
              "Cannot have different numbers for nodes in the same SCC!");
-#endif
-    if (SCCNumber == 0)
-      // The root node is handled separately by removing the SCCs.
-      continue;
+      N.LowLink = -1;
+    }
 
-    RefSCC &RC = *Result[SCCNumber - 1];
+    RefSCC &RC = *Result[SCCNumber];
     int SCCIndex = RC.SCCs.size();
     RC.SCCs.push_back(C);
     RC.SCCIndices[C] = SCCIndex;
     C->OuterRefSCC = &RC;
   }
 
-  // FIXME: We re-walk the edges in each RefSCC to establish whether it is
-  // a leaf and connect it to the rest of the graph's parents lists. This is
-  // really wasteful. We should instead do this during the DFS to avoid yet
-  // another edge walk.
-  for (RefSCC *RC : Result)
-    G->connectRefSCC(*RC);
-
-  // Now erase all but the root's SCCs.
-  SCCs.erase(remove_if(SCCs,
-                       [&](SCC *C) {
-                         return PostOrderMapping.lookup(&*C->begin()) !=
-                                RootPostOrderNumber;
-                       }),
-             SCCs.end());
+  // Now that we've moved things into the new RefSCCs, clear out our current
+  // one.
+  G = nullptr;
+  SCCs.clear();
   SCCIndices.clear();
-  for (int i = 0, Size = SCCs.size(); i < Size; ++i)
-    SCCIndices[SCCs[i]] = i;
 
 #ifndef NDEBUG
-  // Now we need to reconnect the current (root) SCC to the graph. We do this
-  // manually because we can special case our leaf handling and detect errors.
-  bool IsLeaf = true;
-#endif
-  for (SCC *C : SCCs)
-    for (Node &N : *C) {
-      for (Edge &E : N) {
-        assert(E.getNode() && "Cannot have a missing node in a visited SCC!");
-        RefSCC &ChildRC = *G->lookupRefSCC(*E.getNode());
-        if (&ChildRC == this)
-          continue;
-        ChildRC.Parents.insert(this);
-#ifndef NDEBUG
-        IsLeaf = false;
-#endif
-      }
-    }
-#ifndef NDEBUG
-  if (!Result.empty())
-    assert(!IsLeaf && "This SCC cannot be a leaf as we have split out new "
-                      "SCCs by removing this edge.");
-  if (none_of(G->LeafRefSCCs, [&](RefSCC *C) { return C == this; }))
-    assert(!IsLeaf && "This SCC cannot be a leaf as it already had child "
-                      "SCCs before we removed this edge.");
-#endif
-  // And connect both this RefSCC and all the new ones to the correct parents.
-  // The easiest way to do this is just to re-analyze the old parent set.
-  SmallVector<RefSCC *, 4> OldParents(Parents.begin(), Parents.end());
-  Parents.clear();
-  for (RefSCC *ParentRC : OldParents)
-    for (SCC &ParentC : *ParentRC)
-      for (Node &ParentN : ParentC)
-        for (Edge &E : ParentN) {
-          assert(E.getNode() && "Cannot have a missing node in a visited SCC!");
-          RefSCC &RC = *G->lookupRefSCC(*E.getNode());
-          if (&RC != ParentRC)
-            RC.Parents.insert(ParentRC);
-        }
-
-  // If this SCC stopped being a leaf through this edge removal, remove it from
-  // the leaf SCC list. Note that this DTRT in the case where this was never
-  // a leaf.
-  // FIXME: As LeafRefSCCs could be very large, we might want to not walk the
-  // entire list if this RefSCC wasn't a leaf before the edge removal.
-  if (!Result.empty())
-    G->LeafRefSCCs.erase(
-        std::remove(G->LeafRefSCCs.begin(), G->LeafRefSCCs.end(), this),
-        G->LeafRefSCCs.end());
-
-#ifndef NDEBUG
-  // Verify all of the new RefSCCs.
+  // Verify the new RefSCCs we've built.
   for (RefSCC *RC : Result)
     RC->verify();
 #endif
@@ -1443,16 +1355,13 @@ void LazyCallGraph::RefSCC::handleTrivialEdgeInsertion(Node &SourceN,
   // after this edge insertion.
   assert(G->lookupRefSCC(SourceN) == this && "Source must be in this RefSCC.");
   RefSCC &TargetRC = *G->lookupRefSCC(TargetN);
-  if (&TargetRC == this) {
-
+  if (&TargetRC == this)
     return;
-  }
 
+#ifdef EXPENSIVE_CHECKS
   assert(TargetRC.isDescendantOf(*this) &&
          "Target must be a descendant of the Source.");
-  // The only change required is to add this RefSCC to the parent set of the
-  // target. This is a set and so idempotent if the edge already existed.
-  TargetRC.Parents.insert(this);
+#endif
 }
 
 void LazyCallGraph::RefSCC::insertTrivialCallEdge(Node &SourceN,
@@ -1461,25 +1370,29 @@ void LazyCallGraph::RefSCC::insertTrivialCallEdge(Node &SourceN,
   // Check that the RefSCC is still valid when we finish.
   auto ExitVerifier = make_scope_exit([this] { verify(); });
 
-  // Check that we aren't breaking some invariants of the SCC graph.
+#ifdef EXPENSIVE_CHECKS
+  // Check that we aren't breaking some invariants of the SCC graph. Note that
+  // this is quadratic in the number of edges in the call graph!
   SCC &SourceC = *G->lookupSCC(SourceN);
   SCC &TargetC = *G->lookupSCC(TargetN);
   if (&SourceC != &TargetC)
     assert(SourceC.isAncestorOf(TargetC) &&
            "Call edge is not trivial in the SCC graph!");
-#endif
+#endif // EXPENSIVE_CHECKS
+#endif // NDEBUG
+
   // First insert it into the source or find the existing edge.
-  auto InsertResult = SourceN.EdgeIndexMap.insert(
-      {&TargetN.getFunction(), SourceN.Edges.size()});
+  auto InsertResult =
+      SourceN->EdgeIndexMap.insert({&TargetN, SourceN->Edges.size()});
   if (!InsertResult.second) {
     // Already an edge, just update it.
-    Edge &E = SourceN.Edges[InsertResult.first->second];
+    Edge &E = SourceN->Edges[InsertResult.first->second];
     if (E.isCall())
       return; // Nothing to do!
     E.setKind(Edge::Call);
   } else {
     // Create the new edge.
-    SourceN.Edges.emplace_back(TargetN, Edge::Call);
+    SourceN->Edges.emplace_back(TargetN, Edge::Call);
   }
 
   // Now that we have the edge, handle the graph fallout.
@@ -1491,39 +1404,75 @@ void LazyCallGraph::RefSCC::insertTrivialRefEdge(Node &SourceN, Node &TargetN) {
   // Check that the RefSCC is still valid when we finish.
   auto ExitVerifier = make_scope_exit([this] { verify(); });
 
+#ifdef EXPENSIVE_CHECKS
   // Check that we aren't breaking some invariants of the RefSCC graph.
   RefSCC &SourceRC = *G->lookupRefSCC(SourceN);
   RefSCC &TargetRC = *G->lookupRefSCC(TargetN);
   if (&SourceRC != &TargetRC)
     assert(SourceRC.isAncestorOf(TargetRC) &&
            "Ref edge is not trivial in the RefSCC graph!");
-#endif
+#endif // EXPENSIVE_CHECKS
+#endif // NDEBUG
+
   // First insert it into the source or find the existing edge.
-  auto InsertResult = SourceN.EdgeIndexMap.insert(
-      {&TargetN.getFunction(), SourceN.Edges.size()});
+  auto InsertResult =
+      SourceN->EdgeIndexMap.insert({&TargetN, SourceN->Edges.size()});
   if (!InsertResult.second)
     // Already an edge, we're done.
     return;
 
   // Create the new edge.
-  SourceN.Edges.emplace_back(TargetN, Edge::Ref);
+  SourceN->Edges.emplace_back(TargetN, Edge::Ref);
 
   // Now that we have the edge, handle the graph fallout.
   handleTrivialEdgeInsertion(SourceN, TargetN);
 }
 
-void LazyCallGraph::insertEdge(Node &SourceN, Function &Target, Edge::Kind EK) {
-  assert(SCCMap.empty() && DFSStack.empty() &&
-         "This method cannot be called after SCCs have been formed!");
+void LazyCallGraph::RefSCC::replaceNodeFunction(Node &N, Function &NewF) {
+  Function &OldF = N.getFunction();
 
-  return SourceN.insertEdgeInternal(Target, EK);
+#ifndef NDEBUG
+  // Check that the RefSCC is still valid when we finish.
+  auto ExitVerifier = make_scope_exit([this] { verify(); });
+
+  assert(G->lookupRefSCC(N) == this &&
+         "Cannot replace the function of a node outside this RefSCC.");
+
+  assert(G->NodeMap.find(&NewF) == G->NodeMap.end() &&
+         "Must not have already walked the new function!'");
+
+  // It is important that this replacement not introduce graph changes so we
+  // insist that the caller has already removed every use of the original
+  // function and that all uses of the new function correspond to existing
+  // edges in the graph. The common and expected way to use this is when
+  // replacing the function itself in the IR without changing the call graph
+  // shape and just updating the analysis based on that.
+  assert(&OldF != &NewF && "Cannot replace a function with itself!");
+  assert(OldF.use_empty() &&
+         "Must have moved all uses from the old function to the new!");
+#endif
+
+  N.replaceFunction(NewF);
+
+  // Update various call graph maps.
+  G->NodeMap.erase(&OldF);
+  G->NodeMap[&NewF] = &N;
 }
 
-void LazyCallGraph::removeEdge(Node &SourceN, Function &Target) {
-  assert(SCCMap.empty() && DFSStack.empty() &&
+void LazyCallGraph::insertEdge(Node &SourceN, Node &TargetN, Edge::Kind EK) {
+  assert(SCCMap.empty() &&
          "This method cannot be called after SCCs have been formed!");
 
-  return SourceN.removeEdgeInternal(Target);
+  return SourceN->insertEdgeInternal(TargetN, EK);
+}
+
+void LazyCallGraph::removeEdge(Node &SourceN, Node &TargetN) {
+  assert(SCCMap.empty() &&
+         "This method cannot be called after SCCs have been formed!");
+
+  bool Removed = SourceN->removeEdgeInternal(TargetN);
+  (void)Removed;
+  assert(Removed && "Target not in the edge set for this caller?");
 }
 
 void LazyCallGraph::removeDeadFunction(Function &F) {
@@ -1532,18 +1481,10 @@ void LazyCallGraph::removeDeadFunction(Function &F) {
   assert(F.use_empty() &&
          "This routine should only be called on trivially dead functions!");
 
-  auto EII = EntryIndexMap.find(&F);
-  if (EII != EntryIndexMap.end()) {
-    EntryEdges[EII->second] = Edge();
-    EntryIndexMap.erase(EII);
-  }
-
-  // It's safe to just remove un-visited functions from the RefSCC entry list.
-  // FIXME: This is a linear operation which could become hot and benefit from
-  // an index map.
-  auto RENI = find(RefSCCEntryNodes, &F);
-  if (RENI != RefSCCEntryNodes.end())
-    RefSCCEntryNodes.erase(RENI);
+  // We shouldn't remove library functions as they are never really dead while
+  // the call graph is in use -- every function definition refers to them.
+  assert(!isLibFunction(F) &&
+         "Must not remove lib functions from the call graph!");
 
   auto NI = NodeMap.find(&F);
   if (NI == NodeMap.end())
@@ -1553,21 +1494,15 @@ void LazyCallGraph::removeDeadFunction(Function &F) {
   Node &N = *NI->second;
   NodeMap.erase(NI);
 
-  if (SCCMap.empty() && DFSStack.empty()) {
-    // No SCC walk has begun, so removing this is fine and there is nothing
+  // Remove this from the entry edges if present.
+  EntryEdges.removeEdgeInternal(N);
+
+  if (SCCMap.empty()) {
+    // No SCCs have been formed, so removing this is fine and there is nothing
     // else necessary at this point but clearing out the node.
     N.clear();
     return;
   }
-
-  // Check that we aren't going to break the DFS walk.
-  assert(all_of(DFSStack,
-                [&N](const std::pair<Node *, edge_iterator> &Element) {
-                  return Element.first != &N;
-                }) &&
-         "Tried to remove a function currently in the DFS stack!");
-  assert(find(PendingRefSCCStack, &N) == PendingRefSCCStack.end() &&
-         "Tried to remove a function currently pending to add to a RefSCC!");
 
   // Cannot remove a function which has yet to be visited in the DFS walk, so
   // if we have a node at all then we must have an SCC and RefSCC.
@@ -1583,18 +1518,6 @@ void LazyCallGraph::removeDeadFunction(Function &F) {
   // Validate these properties first.
   assert(C.size() == 1 && "Dead functions must be in a singular SCC");
   assert(RC.size() == 1 && "Dead functions must be in a singular RefSCC");
-  assert(RC.Parents.empty() && "Cannot have parents of a dead RefSCC!");
-
-  // Now remove this RefSCC from any parents sets and the leaf list.
-  for (Edge &E : N)
-    if (Node *TargetN = E.getNode())
-      if (RefSCC *TargetRC = lookupRefSCC(*TargetN))
-        TargetRC->Parents.erase(&RC);
-  // FIXME: This is a linear operation which could become hot and benefit from
-  // an index map.
-  auto LRI = find(LeafRefSCCs, &RC);
-  if (LRI != LeafRefSCCs.end())
-    LeafRefSCCs.erase(LRI);
 
   auto RCIndexI = RefSCCIndices.find(&RC);
   int RCIndex = RCIndexI->second;
@@ -1606,8 +1529,11 @@ void LazyCallGraph::removeDeadFunction(Function &F) {
   // Finally clear out all the data structures from the node down through the
   // components.
   N.clear();
+  N.G = nullptr;
+  N.F = nullptr;
   C.clear();
   RC.clear();
+  RC.G = nullptr;
 
   // Nothing to delete as all the objects are allocated in stable bump pointer
   // allocators.
@@ -1618,63 +1544,27 @@ LazyCallGraph::Node &LazyCallGraph::insertInto(Function &F, Node *&MappedN) {
 }
 
 void LazyCallGraph::updateGraphPtrs() {
-  // Process all nodes updating the graph pointers.
-  {
-    SmallVector<Node *, 16> Worklist;
-    for (Edge &E : EntryEdges)
-      if (Node *EntryN = E.getNode())
-        Worklist.push_back(EntryN);
+  // Walk the node map to update their graph pointers. While this iterates in
+  // an unstable order, the order has no effect so it remains correct.
+  for (auto &FunctionNodePair : NodeMap)
+    FunctionNodePair.second->G = this;
 
-    while (!Worklist.empty()) {
-      Node *N = Worklist.pop_back_val();
-      N->G = this;
-      for (Edge &E : N->Edges)
-        if (Node *TargetN = E.getNode())
-          Worklist.push_back(TargetN);
-    }
-  }
-
-  // Process all SCCs updating the graph pointers.
-  {
-    SmallVector<RefSCC *, 16> Worklist(LeafRefSCCs.begin(), LeafRefSCCs.end());
-
-    while (!Worklist.empty()) {
-      RefSCC &C = *Worklist.pop_back_val();
-      C.G = this;
-      for (RefSCC &ParentC : C.parents())
-        Worklist.push_back(&ParentC);
-    }
-  }
+  for (auto *RC : PostOrderRefSCCs)
+    RC->G = this;
 }
 
-/// Build the internal SCCs for a RefSCC from a sequence of nodes.
-///
-/// Appends the SCCs to the provided vector and updates the map with their
-/// indices. Both the vector and map must be empty when passed into this
-/// routine.
-void LazyCallGraph::buildSCCs(RefSCC &RC, node_stack_range Nodes) {
-  assert(RC.SCCs.empty() && "Already built SCCs!");
-  assert(RC.SCCIndices.empty() && "Already mapped SCC indices!");
+template <typename RootsT, typename GetBeginT, typename GetEndT,
+          typename GetNodeT, typename FormSCCCallbackT>
+void LazyCallGraph::buildGenericSCCs(RootsT &&Roots, GetBeginT &&GetBegin,
+                                     GetEndT &&GetEnd, GetNodeT &&GetNode,
+                                     FormSCCCallbackT &&FormSCC) {
+  using EdgeItT = decltype(GetBegin(std::declval<Node &>()));
 
-  for (Node *N : Nodes) {
-    assert(N->LowLink >= (*Nodes.begin())->LowLink &&
-           "We cannot have a low link in an SCC lower than its root on the "
-           "stack!");
-
-    // This node will go into the next RefSCC, clear out its DFS and low link
-    // as we scan.
-    N->DFSNumber = N->LowLink = 0;
-  }
-
-  // Each RefSCC contains a DAG of the call SCCs. To build these, we do
-  // a direct walk of the call edges using Tarjan's algorithm. We reuse the
-  // internal storage as we won't need it for the outer graph's DFS any longer.
-
-  SmallVector<std::pair<Node *, call_edge_iterator>, 16> DFSStack;
+  SmallVector<std::pair<Node *, EdgeItT>, 16> DFSStack;
   SmallVector<Node *, 16> PendingSCCStack;
 
   // Scan down the stack and DFS across the call edges.
-  for (Node *RootN : Nodes) {
+  for (Node *RootN : Roots) {
     assert(DFSStack.empty() &&
            "Cannot begin a new root with a non-empty DFS stack!");
     assert(PendingSCCStack.empty() &&
@@ -1690,25 +1580,23 @@ void LazyCallGraph::buildSCCs(RefSCC &RC, node_stack_range Nodes) {
     RootN->DFSNumber = RootN->LowLink = 1;
     int NextDFSNumber = 2;
 
-    DFSStack.push_back({RootN, RootN->call_begin()});
+    DFSStack.push_back({RootN, GetBegin(*RootN)});
     do {
       Node *N;
-      call_edge_iterator I;
+      EdgeItT I;
       std::tie(N, I) = DFSStack.pop_back_val();
-      auto E = N->call_end();
+      auto E = GetEnd(*N);
       while (I != E) {
-        Node &ChildN = *I->getNode();
+        Node &ChildN = GetNode(I);
         if (ChildN.DFSNumber == 0) {
           // We haven't yet visited this child, so descend, pushing the current
           // node onto the stack.
           DFSStack.push_back({N, I});
 
-          assert(!lookupSCC(ChildN) &&
-                 "Found a node with 0 DFS number but already in an SCC!");
           ChildN.DFSNumber = ChildN.LowLink = NextDFSNumber++;
           N = &ChildN;
-          I = N->call_begin();
-          E = N->call_end();
+          I = GetBegin(*N);
+          E = GetEnd(*N);
           continue;
         }
 
@@ -1750,142 +1638,90 @@ void LazyCallGraph::buildSCCs(RefSCC &RC, node_stack_range Nodes) {
           }));
       // Form a new SCC out of these nodes and then clear them off our pending
       // stack.
-      RC.SCCs.push_back(createSCC(RC, SCCNodes));
-      for (Node &N : *RC.SCCs.back()) {
-        N.DFSNumber = N.LowLink = -1;
-        SCCMap[&N] = RC.SCCs.back();
-      }
+      FormSCC(SCCNodes);
       PendingSCCStack.erase(SCCNodes.end().base(), PendingSCCStack.end());
     } while (!DFSStack.empty());
   }
+}
+
+/// Build the internal SCCs for a RefSCC from a sequence of nodes.
+///
+/// Appends the SCCs to the provided vector and updates the map with their
+/// indices. Both the vector and map must be empty when passed into this
+/// routine.
+void LazyCallGraph::buildSCCs(RefSCC &RC, node_stack_range Nodes) {
+  assert(RC.SCCs.empty() && "Already built SCCs!");
+  assert(RC.SCCIndices.empty() && "Already mapped SCC indices!");
+
+  for (Node *N : Nodes) {
+    assert(N->LowLink >= (*Nodes.begin())->LowLink &&
+           "We cannot have a low link in an SCC lower than its root on the "
+           "stack!");
+
+    // This node will go into the next RefSCC, clear out its DFS and low link
+    // as we scan.
+    N->DFSNumber = N->LowLink = 0;
+  }
+
+  // Each RefSCC contains a DAG of the call SCCs. To build these, we do
+  // a direct walk of the call edges using Tarjan's algorithm. We reuse the
+  // internal storage as we won't need it for the outer graph's DFS any longer.
+  buildGenericSCCs(
+      Nodes, [](Node &N) { return N->call_begin(); },
+      [](Node &N) { return N->call_end(); },
+      [](EdgeSequence::call_iterator I) -> Node & { return I->getNode(); },
+      [this, &RC](node_stack_range Nodes) {
+        RC.SCCs.push_back(createSCC(RC, Nodes));
+        for (Node &N : *RC.SCCs.back()) {
+          N.DFSNumber = N.LowLink = -1;
+          SCCMap[&N] = RC.SCCs.back();
+        }
+      });
 
   // Wire up the SCC indices.
   for (int i = 0, Size = RC.SCCs.size(); i < Size; ++i)
     RC.SCCIndices[RC.SCCs[i]] = i;
 }
 
-// FIXME: We should move callers of this to embed the parent linking and leaf
-// tracking into their DFS in order to remove a full walk of all edges.
-void LazyCallGraph::connectRefSCC(RefSCC &RC) {
-  // Walk all edges in the RefSCC (this remains linear as we only do this once
-  // when we build the RefSCC) to connect it to the parent sets of its
-  // children.
-  bool IsLeaf = true;
-  for (SCC &C : RC)
-    for (Node &N : C)
-      for (Edge &E : N) {
-        assert(E.getNode() &&
-               "Cannot have a missing node in a visited part of the graph!");
-        RefSCC &ChildRC = *lookupRefSCC(*E.getNode());
-        if (&ChildRC == &RC)
-          continue;
-        ChildRC.Parents.insert(&RC);
-        IsLeaf = false;
-      }
+void LazyCallGraph::buildRefSCCs() {
+  if (EntryEdges.empty() || !PostOrderRefSCCs.empty())
+    // RefSCCs are either non-existent or already built!
+    return;
 
-  // For the SCCs where we find no child SCCs, add them to the leaf list.
-  if (IsLeaf)
-    LeafRefSCCs.push_back(&RC);
-}
+  assert(RefSCCIndices.empty() && "Already mapped RefSCC indices!");
 
-bool LazyCallGraph::buildNextRefSCCInPostOrder() {
-  if (DFSStack.empty()) {
-    Node *N;
-    do {
-      // If we've handled all candidate entry nodes to the SCC forest, we're
-      // done.
-      if (RefSCCEntryNodes.empty())
-        return false;
+  SmallVector<Node *, 16> Roots;
+  for (Edge &E : *this)
+    Roots.push_back(&E.getNode());
 
-      N = &get(*RefSCCEntryNodes.pop_back_val());
-    } while (N->DFSNumber != 0);
+  // The roots will be popped of a stack, so use reverse to get a less
+  // surprising order. This doesn't change any of the semantics anywhere.
+  std::reverse(Roots.begin(), Roots.end());
 
-    // Found a new root, begin the DFS here.
-    N->LowLink = N->DFSNumber = 1;
-    NextDFSNumber = 2;
-    DFSStack.push_back({N, N->begin()});
-  }
+  buildGenericSCCs(
+      Roots,
+      [](Node &N) {
+        // We need to populate each node as we begin to walk its edges.
+        N.populate();
+        return N->begin();
+      },
+      [](Node &N) { return N->end(); },
+      [](EdgeSequence::iterator I) -> Node & { return I->getNode(); },
+      [this](node_stack_range Nodes) {
+        RefSCC *NewRC = createRefSCC(*this);
+        buildSCCs(*NewRC, Nodes);
 
-  for (;;) {
-    Node *N;
-    edge_iterator I;
-    std::tie(N, I) = DFSStack.pop_back_val();
-
-    assert(N->DFSNumber > 0 && "We should always assign a DFS number "
-                               "before placing a node onto the stack.");
-
-    auto E = N->end();
-    while (I != E) {
-      Node &ChildN = I->getNode(*this);
-      if (ChildN.DFSNumber == 0) {
-        // We haven't yet visited this child, so descend, pushing the current
-        // node onto the stack.
-        DFSStack.push_back({N, N->begin()});
-
-        assert(!SCCMap.count(&ChildN) &&
-               "Found a node with 0 DFS number but already in an SCC!");
-        ChildN.LowLink = ChildN.DFSNumber = NextDFSNumber++;
-        N = &ChildN;
-        I = N->begin();
-        E = N->end();
-        continue;
-      }
-
-      // If the child has already been added to some child component, it
-      // couldn't impact the low-link of this parent because it isn't
-      // connected, and thus its low-link isn't relevant so skip it.
-      if (ChildN.DFSNumber == -1) {
-        ++I;
-        continue;
-      }
-
-      // Track the lowest linked child as the lowest link for this node.
-      assert(ChildN.LowLink > 0 && "Must have a positive low-link number!");
-      if (ChildN.LowLink < N->LowLink)
-        N->LowLink = ChildN.LowLink;
-
-      // Move to the next edge.
-      ++I;
-    }
-
-    // We've finished processing N and its descendents, put it on our pending
-    // SCC stack to eventually get merged into an SCC of nodes.
-    PendingRefSCCStack.push_back(N);
-
-    // If this node is linked to some lower entry, continue walking up the
-    // stack.
-    if (N->LowLink != N->DFSNumber) {
-      assert(!DFSStack.empty() &&
-             "We never found a viable root for an SCC to pop off!");
-      continue;
-    }
-
-    // Otherwise, form a new RefSCC from the top of the pending node stack.
-    int RootDFSNumber = N->DFSNumber;
-    // Find the range of the node stack by walking down until we pass the
-    // root DFS number.
-    auto RefSCCNodes = node_stack_range(
-        PendingRefSCCStack.rbegin(),
-        find_if(reverse(PendingRefSCCStack), [RootDFSNumber](const Node *N) {
-          return N->DFSNumber < RootDFSNumber;
-        }));
-    // Form a new RefSCC out of these nodes and then clear them off our pending
-    // stack.
-    RefSCC *NewRC = createRefSCC(*this);
-    buildSCCs(*NewRC, RefSCCNodes);
-    connectRefSCC(*NewRC);
-    PendingRefSCCStack.erase(RefSCCNodes.end().base(),
-                             PendingRefSCCStack.end());
-
-    // Push the new node into the postorder list and return true indicating we
-    // successfully grew the postorder sequence by one.
-    bool Inserted =
-        RefSCCIndices.insert({NewRC, PostOrderRefSCCs.size()}).second;
-    (void)Inserted;
-    assert(Inserted && "Cannot already have this RefSCC in the index map!");
-    PostOrderRefSCCs.push_back(NewRC);
-    return true;
-  }
+        // Push the new node into the postorder list and remember its position
+        // in the index map.
+        bool Inserted =
+            RefSCCIndices.insert({NewRC, PostOrderRefSCCs.size()}).second;
+        (void)Inserted;
+        assert(Inserted && "Cannot already have this RefSCC in the index map!");
+        PostOrderRefSCCs.push_back(NewRC);
+#ifndef NDEBUG
+        NewRC->verify();
+#endif
+      });
 }
 
 AnalysisKey LazyCallGraphAnalysis::Key;
@@ -1894,7 +1730,7 @@ LazyCallGraphPrinterPass::LazyCallGraphPrinterPass(raw_ostream &OS) : OS(OS) {}
 
 static void printNode(raw_ostream &OS, LazyCallGraph::Node &N) {
   OS << "  Edges in function: " << N.getFunction().getName() << "\n";
-  for (const LazyCallGraph::Edge &E : N)
+  for (LazyCallGraph::Edge &E : N.populate())
     OS << "    " << (E.isCall() ? "call" : "ref ") << " -> "
        << E.getFunction().getName() << "\n";
 
@@ -1929,6 +1765,7 @@ PreservedAnalyses LazyCallGraphPrinterPass::run(Module &M,
   for (Function &F : M)
     printNode(OS, G.get(F));
 
+  G.buildRefSCCs();
   for (LazyCallGraph::RefSCC &C : G.postorder_ref_sccs())
     printRefSCC(OS, C);
 
@@ -1941,7 +1778,7 @@ LazyCallGraphDOTPrinterPass::LazyCallGraphDOTPrinterPass(raw_ostream &OS)
 static void printNodeDOT(raw_ostream &OS, LazyCallGraph::Node &N) {
   std::string Name = "\"" + DOT::EscapeString(N.getFunction().getName()) + "\"";
 
-  for (const LazyCallGraph::Edge &E : N) {
+  for (LazyCallGraph::Edge &E : N.populate()) {
     OS << "  " << Name << " -> \""
        << DOT::EscapeString(E.getFunction().getName()) << "\"";
     if (!E.isCall()) // It is a ref edge.

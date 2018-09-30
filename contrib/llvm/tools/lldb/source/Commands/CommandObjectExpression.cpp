@@ -24,7 +24,7 @@
 #include "lldb/Expression/REPL.h"
 #include "lldb/Expression/UserExpression.h"
 #include "lldb/Host/Host.h"
-#include "lldb/Host/StringConvert.h"
+#include "lldb/Host/OptionParser.h"
 #include "lldb/Interpreter/CommandInterpreter.h"
 #include "lldb/Interpreter/CommandReturnObject.h"
 #include "lldb/Symbol/ObjectFile.h"
@@ -69,10 +69,10 @@ static OptionDefinition g_expression_options[] = {
     // clang-format on
 };
 
-Error CommandObjectExpression::CommandOptions::SetOptionValue(
+Status CommandObjectExpression::CommandOptions::SetOptionValue(
     uint32_t option_idx, llvm::StringRef option_arg,
     ExecutionContext *execution_context) {
-  Error error;
+  Status error;
 
   const int short_option = GetDefinitions()[option_idx].short_option;
 
@@ -228,6 +228,16 @@ CommandObjectExpression::CommandObjectExpression(
       m_command_options(), m_expr_line_count(0), m_expr_lines() {
   SetHelpLong(
       R"(
+Single and multi-line expressions:
+
+)"
+      "    The expression provided on the command line must be a complete expression \
+with no newlines.  To evaluate a multi-line expression, \
+hit a return after an empty expression, and lldb will enter the multi-line expression editor. \
+Hit return on an empty line to end the multi-line expression."
+      
+      R"(
+
 Timeouts:
 
 )"
@@ -256,6 +266,7 @@ from the stack with \"thread return -x\" or if you are still interested in the e
 you can issue the \"continue\" command and the expression evaluation will complete and the \
 expression result will be available using the \"thread.completed-expression\" key in the thread \
 format."
+
       R"(
 
 Examples:
@@ -295,15 +306,15 @@ CommandObjectExpression::~CommandObjectExpression() = default;
 
 Options *CommandObjectExpression::GetOptions() { return &m_option_group; }
 
-static lldb_private::Error
+static lldb_private::Status
 CanBeUsedForElementCountPrinting(ValueObject &valobj) {
   CompilerType type(valobj.GetCompilerType());
   CompilerType pointee;
   if (!type.IsPointerType(&pointee))
-    return Error("as it does not refer to a pointer");
+    return Status("as it does not refer to a pointer");
   if (pointee.IsVoidType())
-    return Error("as it refers to a pointer to void");
-  return Error();
+    return Status("as it refers to a pointer to void");
+  return Status();
 }
 
 bool CommandObjectExpression::EvaluateExpression(const char *expr,
@@ -384,7 +395,7 @@ bool CommandObjectExpression::EvaluateExpression(const char *expr,
             result_valobj_sp->SetFormat(format);
 
           if (m_varobj_options.elem_count > 0) {
-            Error error(CanBeUsedForElementCountPrinting(*result_valobj_sp));
+            Status error(CanBeUsedForElementCountPrinting(*result_valobj_sp));
             if (error.Fail()) {
               result->AppendErrorWithFormat(
                   "expression cannot be used with --element-count %s\n",
@@ -533,7 +544,7 @@ bool CommandObjectExpression::DoExecute(const char *command,
       if (!ParseOptions(args, result))
         return false;
 
-      Error error(m_option_group.NotifyOptionParsingFinished(&exe_ctx));
+      Status error(m_option_group.NotifyOptionParsingFinished(&exe_ctx));
       if (error.Fail()) {
         result.AppendError(error.AsCString());
         result.SetStatus(eReturnStatusFailed);
@@ -564,7 +575,7 @@ bool CommandObjectExpression::DoExecute(const char *command,
             // interpreter,
             // so just push one
             bool initialize = false;
-            Error repl_error;
+            Status repl_error;
             REPLSP repl_sp(target->GetREPL(
                 repl_error, m_command_options.language, nullptr, false));
 

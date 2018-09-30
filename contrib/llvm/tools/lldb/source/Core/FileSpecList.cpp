@@ -9,13 +9,12 @@
 
 #include "lldb/Core/FileSpecList.h"
 
-// C Includes
-// C++ Includes
-#include <algorithm>
+#include "lldb/Utility/ConstString.h" // for ConstString
+#include "lldb/Utility/Stream.h"
 
-// Other libraries and framework includes
-// Project includes
-#include "lldb/Core/Stream.h"
+#include <utility> // for find
+
+#include <stdint.h> // for UINT32_MAX
 
 using namespace lldb_private;
 using namespace std;
@@ -50,7 +49,7 @@ void FileSpecList::Append(const FileSpec &file_spec) {
 // contained a copy of "file_spec".
 //------------------------------------------------------------------
 bool FileSpecList::AppendIfUnique(const FileSpec &file_spec) {
-  collection::iterator pos, end = m_files.end();
+  collection::iterator end = m_files.end();
   if (find(m_files.begin(), end, file_spec) == end) {
     m_files.push_back(file_spec);
     return true;
@@ -148,45 +147,5 @@ size_t FileSpecList::GetSize() const { return m_files.size(); }
 size_t FileSpecList::GetFilesMatchingPartialPath(const char *path,
                                                  bool dir_okay,
                                                  FileSpecList &matches) {
-#if 0 // FIXME: Just sketching...
-    matches.Clear();
-    FileSpec path_spec = FileSpec (path);
-    if (path_spec.Exists ())
-    {
-        FileSpec::FileType type = path_spec.GetFileType();
-        if (type == FileSpec::eFileTypeSymbolicLink)
-            // Shouldn't there be a Resolve on a file spec that real-path's it?
-        {
-        }
-
-        if (type == FileSpec::eFileTypeRegular
-            || (type == FileSpec::eFileTypeDirectory && dir_okay))
-        {
-            matches.Append (path_spec);
-            return 1;
-        }
-        else if (type == FileSpec::eFileTypeDirectory)
-        {
-            // Fill the match list with all the files in the directory:
-        }
-        else
-        {
-            return 0;
-        }
-    }
-    else
-    {
-        ConstString dir_name = path_spec.GetDirectory();
-        ConstString file_name = GetFilename();
-        if (dir_name == nullptr)
-        {
-            // Match files in the CWD.
-        }
-        else
-        {
-            // Match files in the given directory:
-        }
-    }
-#endif
   return 0;
 }

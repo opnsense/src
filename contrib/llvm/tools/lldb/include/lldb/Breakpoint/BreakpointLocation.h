@@ -17,9 +17,10 @@
 
 // Other libraries and framework includes
 // Project includes
+#include "lldb/Breakpoint/BreakpointOptions.h"
 #include "lldb/Breakpoint/StoppointLocation.h"
 #include "lldb/Core/Address.h"
-#include "lldb/Core/UserID.h"
+#include "lldb/Utility/UserID.h"
 #include "lldb/lldb-private.h"
 
 namespace lldb_private {
@@ -106,6 +107,19 @@ public:
   bool IsEnabled() const;
 
   //------------------------------------------------------------------
+  /// If \a auto_continue is \b true, set the breakpoint to continue when hit.
+  //------------------------------------------------------------------
+  void SetAutoContinue(bool auto_continue);
+
+  //------------------------------------------------------------------
+  /// Check the AutoContinue state.
+  ///
+  /// @return
+  ///     \b true if the breakpoint is set to auto-continue, \b false if not.
+  //------------------------------------------------------------------
+  bool IsAutoContinue() const;
+
+  //------------------------------------------------------------------
   /// Return the current Ignore Count.
   ///
   /// @return
@@ -161,7 +175,7 @@ public:
   //------------------------------------------------------------------
   const char *GetConditionText(size_t *hash = nullptr) const;
 
-  bool ConditionSaysStop(ExecutionContext &exe_ctx, Error &error);
+  bool ConditionSaysStop(ExecutionContext &exe_ctx, Status &error);
 
   //------------------------------------------------------------------
   /// Set the valid thread to be checked when the breakpoint is hit.
@@ -255,14 +269,17 @@ public:
 
   //------------------------------------------------------------------
   /// Use this to access breakpoint options from this breakpoint location.
-  /// This will point to the owning breakpoint's options unless options have
-  /// been set specifically on this location.
+  /// This will return the options that have a setting for the specified
+  /// BreakpointOptions kind.
   ///
+  /// @param[in] kind
+  ///     The particular option you are looking up.
   /// @return
   ///     A pointer to the containing breakpoint's options if this
   ///     location doesn't have its own copy.
   //------------------------------------------------------------------
-  const BreakpointOptions *GetOptionsNoCreate() const;
+  const BreakpointOptions *GetOptionsSpecifyingKind(
+      BreakpointOptions::OptionKind kind) const;
 
   bool ValidForThisThread(Thread *thread);
 

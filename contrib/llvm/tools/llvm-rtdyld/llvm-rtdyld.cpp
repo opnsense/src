@@ -24,7 +24,6 @@
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSubtargetInfo.h"
-#include "llvm/Object/MachO.h"
 #include "llvm/Object/SymbolSize.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/DynamicLibrary.h"
@@ -37,7 +36,6 @@
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
 #include <list>
-#include <system_error>
 
 using namespace llvm;
 using namespace llvm::object;
@@ -175,14 +173,17 @@ public:
 
   void registerEHFrames(uint8_t *Addr, uint64_t LoadAddr,
                         size_t Size) override {}
-  void deregisterEHFrames(uint8_t *Addr, uint64_t LoadAddr,
-                          size_t Size) override {}
+  void deregisterEHFrames() override {}
 
   void preallocateSlab(uint64_t Size) {
-    std::string Err;
-    sys::MemoryBlock MB = sys::Memory::AllocateRWX(Size, nullptr, &Err);
+    std::error_code EC;
+    sys::MemoryBlock MB =
+      sys::Memory::allocateMappedMemory(Size, nullptr,
+                                        sys::Memory::MF_READ |
+                                        sys::Memory::MF_WRITE,
+                                        EC);
     if (!MB.base())
-      report_fatal_error("Can't allocate enough memory: " + Err);
+      report_fatal_error("Can't allocate enough memory: " + EC.message());
 
     PreallocSlab = MB;
     UsePreallocation = true;
@@ -223,10 +224,14 @@ uint8_t *TrivialMemoryManager::allocateCodeSection(uintptr_t Size,
   if (UsePreallocation)
     return allocateFromSlab(Size, Alignment, true /* isCode */);
 
-  std::string Err;
-  sys::MemoryBlock MB = sys::Memory::AllocateRWX(Size, nullptr, &Err);
+  std::error_code EC;
+  sys::MemoryBlock MB =
+    sys::Memory::allocateMappedMemory(Size, nullptr,
+                                      sys::Memory::MF_READ |
+                                      sys::Memory::MF_WRITE,
+                                      EC);
   if (!MB.base())
-    report_fatal_error("MemoryManager allocation failed: " + Err);
+    report_fatal_error("MemoryManager allocation failed: " + EC.message());
   FunctionMemory.push_back(MB);
   return (uint8_t*)MB.base();
 }
@@ -243,10 +248,14 @@ uint8_t *TrivialMemoryManager::allocateDataSection(uintptr_t Size,
   if (UsePreallocation)
     return allocateFromSlab(Size, Alignment, false /* isCode */);
 
-  std::string Err;
-  sys::MemoryBlock MB = sys::Memory::AllocateRWX(Size, nullptr, &Err);
+  std::error_code EC;
+  sys::MemoryBlock MB =
+    sys::Memory::allocateMappedMemory(Size, nullptr,
+                                      sys::Memory::MF_READ |
+                                      sys::Memory::MF_WRITE,
+                                      EC);
   if (!MB.base())
-    report_fatal_error("MemoryManager allocation failed: " + Err);
+    report_fatal_error("MemoryManager allocation failed: " + EC.message());
   DataMemory.push_back(MB);
   return (uint8_t*)MB.base();
 }
@@ -325,8 +334,8 @@ static int printLineInfoForInput(bool LoadObjects, bool UseDebugObj) {
       }
     }
 
-    std::unique_ptr<DIContext> Context(
-      new DWARFContextInMemory(*SymbolObj,LoadedObjInfo.get()));
+    std::unique_ptr<DIContext> Context =
+        DWARFContext::create(*SymbolObj, LoadedObjInfo.get());
 
     std::vector<std::pair<SymbolRef, uint64_t>> SymAddr =
         object::computeSymbolSizes(*SymbolObj);
@@ -454,9 +463,11 @@ static int executeInput() {
 
     // Make sure the memory is executable.
     // setExecutable will call InvalidateInstructionCache.
-    std::string ErrorStr;
-    if (!sys::Memory::setExecutable(FM, &ErrorStr))
-      ErrorAndExit("unable to mark function executable: '" + ErrorStr + "'");
+    if (auto EC = sys::Memory::protectMappedMemory(FM,
+                                                   sys::Memory::MF_READ |
+                                                   sys::Memory::MF_EXEC))
+      ErrorAndExit("unable to mark function executable: '" + EC.message() +
+                   "'");
   }
 
   // Dispatch to _main().
@@ -486,10 +497,7 @@ static int checkAllExpressions(RuntimeDyldChecker &Checker) {
   return 0;
 }
 
-static std::map<void *, uint64_t>
-applySpecificSectionMappings(RuntimeDyldChecker &Checker) {
-
-  std::map<void*, uint64_t> SpecificMappings;
+void applySpecificSectionMappings(RuntimeDyldChecker &Checker) {
 
   for (StringRef Mapping : SpecificSectionMappings) {
 
@@ -522,10 +530,7 @@ applySpecificSectionMappings(RuntimeDyldChecker &Checker) {
                          "'.");
 
     Checker.getRTDyld().mapSectionAddress(OldAddr, NewAddr);
-    SpecificMappings[OldAddr] = NewAddr;
   }
-
-  return SpecificMappings;
 }
 
 // Scatter sections in all directions!
@@ -554,8 +559,7 @@ static void remapSectionsAndSymbols(const llvm::Triple &TargetTriple,
 
   // Apply any section-specific mappings that were requested on the command
   // line.
-  typedef std::map<void*, uint64_t> AppliedMappingsT;
-  AppliedMappingsT AppliedMappings = applySpecificSectionMappings(Checker);
+  applySpecificSectionMappings(Checker);
 
   // Keep an "already allocated" mapping of section target addresses to sizes.
   // Sections whose address mappings aren't specified on the command line will
@@ -563,15 +567,19 @@ static void remapSectionsAndSymbols(const llvm::Triple &TargetTriple,
   // minimum separation.
   std::map<uint64_t, uint64_t> AlreadyAllocated;
 
-  // Move the previously applied mappings into the already-allocated map.
+  // Move the previously applied mappings (whether explicitly specified on the
+  // command line, or implicitly set by RuntimeDyld) into the already-allocated
+  // map.
   for (WorklistT::iterator I = Worklist.begin(), E = Worklist.end();
        I != E;) {
     WorklistT::iterator Tmp = I;
     ++I;
-    AppliedMappingsT::iterator AI = AppliedMappings.find(Tmp->first);
+    auto LoadAddr = Checker.getSectionLoadAddress(Tmp->first);
 
-    if (AI != AppliedMappings.end()) {
-      AlreadyAllocated[AI->second] = Tmp->second;
+    if (LoadAddr &&
+        *LoadAddr != static_cast<uint64_t>(
+                       reinterpret_cast<uintptr_t>(Tmp->first))) {
+      AlreadyAllocated[*LoadAddr] = Tmp->second;
       Worklist.erase(Tmp);
     }
   }

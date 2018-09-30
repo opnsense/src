@@ -22,12 +22,17 @@ class HexagonMCELFStreamer : public MCELFStreamer {
   std::unique_ptr<MCInstrInfo> MCII;
 
 public:
-  HexagonMCELFStreamer(MCContext &Context, MCAsmBackend &TAB,
-                       raw_pwrite_stream &OS, MCCodeEmitter *Emitter)
-      : MCELFStreamer(Context, TAB, OS, Emitter),
-        MCII(createHexagonMCInstrInfo()) {}
+  HexagonMCELFStreamer(MCContext &Context, std::unique_ptr<MCAsmBackend> TAB,
+                       raw_pwrite_stream &OS,
+                       std::unique_ptr<MCCodeEmitter> Emitter);
 
-  void EmitInstruction(const MCInst &Inst, const MCSubtargetInfo &STI) override;
+  HexagonMCELFStreamer(MCContext &Context, std::unique_ptr<MCAsmBackend> TAB,
+                       raw_pwrite_stream &OS,
+                       std::unique_ptr<MCCodeEmitter> Emitter,
+                       MCAssembler *Assembler);
+
+  void EmitInstruction(const MCInst &Inst, const MCSubtargetInfo &STI,
+                       bool) override;
   void EmitSymbol(const MCInst &Inst);
   void HexagonMCEmitLocalCommonSymbol(MCSymbol *Symbol, uint64_t Size,
                                       unsigned ByteAlignment,
@@ -36,8 +41,10 @@ public:
                                  unsigned ByteAlignment, unsigned AccessSize);
 };
 
-MCStreamer *createHexagonELFStreamer(MCContext &Context, MCAsmBackend &MAB,
-                                     raw_pwrite_stream &OS, MCCodeEmitter *CE);
+MCStreamer *createHexagonELFStreamer(Triple const &TT, MCContext &Context,
+                                     std::unique_ptr<MCAsmBackend> MAB,
+                                     raw_pwrite_stream &OS,
+                                     std::unique_ptr<MCCodeEmitter> CE);
 
 } // end namespace llvm
 

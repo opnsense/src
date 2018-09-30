@@ -477,29 +477,8 @@ vop_stdpathconf(ap)
 		case _PC_ASYNC_IO:
 			*ap->a_retval = _POSIX_ASYNCHRONOUS_IO;
 			return (0);
-		case _PC_NAME_MAX:
-			*ap->a_retval = NAME_MAX;
-			return (0);
 		case _PC_PATH_MAX:
 			*ap->a_retval = PATH_MAX;
-			return (0);
-		case _PC_LINK_MAX:
-			*ap->a_retval = LINK_MAX;
-			return (0);
-		case _PC_MAX_CANON:
-			*ap->a_retval = MAX_CANON;
-			return (0);
-		case _PC_MAX_INPUT:
-			*ap->a_retval = MAX_INPUT;
-			return (0);
-		case _PC_PIPE_BUF:
-			*ap->a_retval = PIPE_BUF;
-			return (0);
-		case _PC_CHOWN_RESTRICTED:
-			*ap->a_retval = 1;
-			return (0);
-		case _PC_VDISABLE:
-			*ap->a_retval = _POSIX_VDISABLE;
 			return (0);
 		default:
 			return (EINVAL);
@@ -650,13 +629,21 @@ vop_stdfsync(ap)
 		struct thread *a_td;
 	} */ *ap;
 {
-	struct vnode *vp = ap->a_vp;
-	struct buf *bp;
+	struct vnode *vp;
+	struct buf *bp, *nbp;
 	struct bufobj *bo;
-	struct buf *nbp;
-	int error = 0;
-	int maxretry = 1000;     /* large, arbitrarily chosen */
+	struct mount *mp;
+	int error, maxretry;
 
+	error = 0;
+	maxretry = 10000;     /* large, arbitrarily chosen */
+	vp = ap->a_vp;
+	mp = NULL;
+	if (vp->v_type == VCHR) {
+		VI_LOCK(vp);
+		mp = vp->v_rdev->si_mountpt;
+		VI_UNLOCK(vp);
+	}
 	bo = &vp->v_bufobj;
 	BO_LOCK(bo);
 loop1:
@@ -699,6 +686,8 @@ loop2:
 			bremfree(bp);
 			bawrite(bp);
 		}
+		if (maxretry < 1000)
+			pause("dirty", hz < 1000 ? 1 : hz / 1000);
 		BO_LOCK(bo);
 		goto loop2;
 	}
@@ -720,14 +709,16 @@ loop2:
 			TAILQ_FOREACH(bp, &bo->bo_dirty.bv_hd, b_bobufs)
 				if ((error = bp->b_error) == 0)
 					continue;
-			if (error == 0 && --maxretry >= 0)
+			if ((mp != NULL && mp->mnt_secondary_writes > 0) ||
+			    (error == 0 && --maxretry >= 0))
 				goto loop1;
-			error = EAGAIN;
+			if (error == 0)
+				error = EAGAIN;
 		}
 	}
 	BO_UNLOCK(bo);
-	if (error == EAGAIN)
-		vn_printf(vp, "fsync: giving up on dirty ");
+	if (error != 0)
+		vn_printf(vp, "fsync: giving up on dirty (error = %d) ", error);
 
 	return (error);
 }

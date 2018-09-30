@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2007-2011 Robert N. M. Watson
  * Copyright (c) 2015 Allan Jude <allanjude@freebsd.org>
  * All rights reserved.
@@ -398,6 +400,11 @@ procstat_files(struct procstat *procstat, struct kinfo_proc *kipp)
 		case PS_FST_TYPE_SEM:
 			str = "e";
 			xo_emit("{eq:fd_type/sem}");
+			break;
+
+		case PS_FST_TYPE_PROCDESC:
+			str = "P";
+			xo_emit("{eq:fd_type/procdesc}");
 			break;
 
 		case PS_FST_TYPE_NONE:

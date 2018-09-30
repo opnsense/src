@@ -10,13 +10,10 @@
 #ifndef liblldb_RegisterContextCorePOSIX_mips64_h_
 #define liblldb_RegisterContextCorePOSIX_mips64_h_
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
 #include "Plugins/Process/Utility/RegisterContextPOSIX_mips64.h"
-#include "lldb/Core/DataBufferHeap.h"
-#include "lldb/Core/DataExtractor.h"
+#include "Plugins/Process/elf-core/RegisterUtilities.h"
+#include "lldb/Utility/DataBufferHeap.h"
+#include "lldb/Utility/DataExtractor.h"
 
 class RegisterContextCorePOSIX_mips64 : public RegisterContextPOSIX_mips64 {
 public:
@@ -24,7 +21,7 @@ public:
       lldb_private::Thread &thread,
       lldb_private::RegisterInfoInterface *register_info,
       const lldb_private::DataExtractor &gpregset,
-      const lldb_private::DataExtractor &fpregset);
+      llvm::ArrayRef<lldb_private::CoreNote> notes);
 
   ~RegisterContextCorePOSIX_mips64() override;
 
@@ -51,7 +48,9 @@ protected:
 
 private:
   lldb::DataBufferSP m_gpr_buffer;
+  lldb::DataBufferSP m_fpr_buffer;
   lldb_private::DataExtractor m_gpr;
+  lldb_private::DataExtractor m_fpr;
 };
 
 #endif // liblldb_RegisterContextCorePOSIX_mips64_h_

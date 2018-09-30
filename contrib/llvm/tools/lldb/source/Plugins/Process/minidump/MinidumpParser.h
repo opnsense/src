@@ -14,10 +14,9 @@
 // Project includes
 #include "MinidumpTypes.h"
 
-// Other libraries and framework includes
-#include "lldb/Core/ArchSpec.h"
-#include "lldb/Core/DataBuffer.h"
-#include "lldb/Core/Error.h"
+#include "lldb/Utility/ArchSpec.h"
+#include "lldb/Utility/DataBuffer.h"
+#include "lldb/Utility/Status.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"

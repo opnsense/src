@@ -31,10 +31,7 @@
 #include "DisassemblerLLVMC.h"
 
 #include "lldb/Core/Address.h"
-#include "lldb/Core/DataExtractor.h"
-#include "lldb/Core/Log.h"
 #include "lldb/Core/Module.h"
-#include "lldb/Core/Stream.h"
 #include "lldb/Symbol/SymbolContext.h"
 #include "lldb/Target/ExecutionContext.h"
 #include "lldb/Target/Process.h"
@@ -42,8 +39,11 @@
 #include "lldb/Target/SectionLoadList.h"
 #include "lldb/Target/StackFrame.h"
 #include "lldb/Target/Target.h"
+#include "lldb/Utility/DataExtractor.h"
+#include "lldb/Utility/Log.h"
+#include "lldb/Utility/Stream.h"
 
-#include "lldb/Core/RegularExpression.h"
+#include "lldb/Utility/RegularExpression.h"
 
 using namespace lldb;
 using namespace lldb_private;
@@ -885,9 +885,9 @@ DisassemblerLLVMC::LLVMCDisassembler::LLVMCDisassembler(
     const char *triple, const char *cpu, const char *features_str,
     unsigned flavor, DisassemblerLLVMC &owner)
     : m_is_valid(true) {
-  std::string Error;
+  std::string Status;
   const llvm::Target *curr_target =
-      llvm::TargetRegistry::lookupTarget(triple, Error);
+      llvm::TargetRegistry::lookupTarget(triple, Status);
   if (!curr_target) {
     m_is_valid = false;
     return;
@@ -1126,6 +1126,11 @@ DisassemblerLLVMC::DisassemblerLLVMC(const ArchSpec &arch,
     if (arch_flags & ArchSpec::eMIPSAse_dspr2)
       features_str += "+dspr2,";
   }
+
+  // If any AArch64 variant, enable the ARMv8.2 ISA
+  // extensions so we can disassemble newer instructions.
+  if (triple.getArch() == llvm::Triple::aarch64)
+    features_str += "+v8.2a";
 
   m_disasm_ap.reset(new LLVMCDisassembler(triple_str, cpu, features_str.c_str(),
                                           flavor, *this));

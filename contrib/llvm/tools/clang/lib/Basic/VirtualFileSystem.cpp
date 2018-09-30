@@ -27,13 +27,6 @@
 #include <memory>
 #include <utility>
 
-// For chdir.
-#ifdef LLVM_ON_WIN32
-#  include <direct.h>
-#else
-#  include <unistd.h>
-#endif
-
 using namespace clang;
 using namespace clang::vfs;
 using namespace llvm;
@@ -66,6 +59,7 @@ Status Status::copyWithNewName(const file_status &In, StringRef NewName) {
 }
 
 bool Status::equivalent(const Status &Other) const {
+  assert(isStatusKnown() && Other.isStatusKnown());
   return getUniqueID() == Other.getUniqueID();
 }
 bool Status::isDirectory() const {
@@ -235,11 +229,7 @@ std::error_code RealFileSystem::setCurrentWorkingDirectory(const Twine &Path) {
   // difference for example on network filesystems, where symlinks might be
   // switched during runtime of the tool. Fixing this depends on having a
   // file system abstraction that allows openat() style interactions.
-  SmallString<256> Storage;
-  StringRef Dir = Path.toNullTerminatedStringRef(Storage);
-  if (int Err = ::chdir(Dir.data()))
-    return std::error_code(Err, std::generic_category());
-  return std::error_code();
+  return llvm::sys::fs::set_current_path(Path);
 }
 
 IntrusiveRefCntPtr<FileSystem> vfs::getRealFileSystem() {
@@ -249,16 +239,13 @@ IntrusiveRefCntPtr<FileSystem> vfs::getRealFileSystem() {
 
 namespace {
 class RealFSDirIter : public clang::vfs::detail::DirIterImpl {
-  std::string Path;
   llvm::sys::fs::directory_iterator Iter;
 public:
-  RealFSDirIter(const Twine &_Path, std::error_code &EC)
-      : Path(_Path.str()), Iter(Path, EC) {
+  RealFSDirIter(const Twine &Path, std::error_code &EC) : Iter(Path, EC) {
     if (!EC && Iter != llvm::sys::fs::directory_iterator()) {
       llvm::sys::fs::file_status S;
-      EC = Iter->status(S);
-      if (!EC)
-        CurrentEntry = Status::copyWithNewName(S, Iter->path());
+      EC = llvm::sys::fs::status(Iter->path(), S, true);
+      CurrentEntry = Status::copyWithNewName(S, Iter->path());
     }
   }
 
@@ -271,7 +258,7 @@ public:
       CurrentEntry = Status();
     } else {
       llvm::sys::fs::file_status S;
-      EC = Iter->status(S);
+      EC = llvm::sys::fs::status(Iter->path(), S, true);
       CurrentEntry = Status::copyWithNewName(S, Iter->path());
     }
     return EC;
@@ -506,7 +493,11 @@ std::string InMemoryFileSystem::toString() const {
 }
 
 bool InMemoryFileSystem::addFile(const Twine &P, time_t ModificationTime,
-                                 std::unique_ptr<llvm::MemoryBuffer> Buffer) {
+                                 std::unique_ptr<llvm::MemoryBuffer> Buffer,
+                                 Optional<uint32_t> User,
+                                 Optional<uint32_t> Group,
+                                 Optional<llvm::sys::fs::file_type> Type,
+                                 Optional<llvm::sys::fs::perms> Perms) {
   SmallString<128> Path;
   P.toVector(Path);
 
@@ -522,32 +513,42 @@ bool InMemoryFileSystem::addFile(const Twine &P, time_t ModificationTime,
     return false;
 
   detail::InMemoryDirectory *Dir = Root.get();
-  auto I = llvm::sys::path::begin(Path), E = llvm::sys::path::end(Path);
+  auto I = llvm::sys::path::begin(Path), E = sys::path::end(Path);
+  const auto ResolvedUser = User.getValueOr(0);
+  const auto ResolvedGroup = Group.getValueOr(0);
+  const auto ResolvedType = Type.getValueOr(sys::fs::file_type::regular_file);
+  const auto ResolvedPerms = Perms.getValueOr(sys::fs::all_all);
+  // Any intermediate directories we create should be accessible by
+  // the owner, even if Perms says otherwise for the final path.
+  const auto NewDirectoryPerms = ResolvedPerms | sys::fs::owner_all;
   while (true) {
     StringRef Name = *I;
     detail::InMemoryNode *Node = Dir->getChild(Name);
     ++I;
     if (!Node) {
       if (I == E) {
-        // End of the path, create a new file.
-        // FIXME: expose the status details in the interface.
+        // End of the path, create a new file or directory.
         Status Stat(P.str(), getNextVirtualUniqueID(),
-                    llvm::sys::toTimePoint(ModificationTime), 0, 0,
-                    Buffer->getBufferSize(),
-                    llvm::sys::fs::file_type::regular_file,
-                    llvm::sys::fs::all_all);
-        Dir->addChild(Name, llvm::make_unique<detail::InMemoryFile>(
-                                std::move(Stat), std::move(Buffer)));
+                    llvm::sys::toTimePoint(ModificationTime), ResolvedUser,
+                    ResolvedGroup, Buffer->getBufferSize(), ResolvedType,
+                    ResolvedPerms);
+        std::unique_ptr<detail::InMemoryNode> Child;
+        if (ResolvedType == sys::fs::file_type::directory_file) {
+          Child.reset(new detail::InMemoryDirectory(std::move(Stat)));
+        } else {
+          Child.reset(new detail::InMemoryFile(std::move(Stat),
+                                               std::move(Buffer)));
+        }
+        Dir->addChild(Name, std::move(Child));
         return true;
       }
 
       // Create a new directory. Use the path up to here.
-      // FIXME: expose the status details in the interface.
       Status Stat(
           StringRef(Path.str().begin(), Name.end() - Path.str().begin()),
-          getNextVirtualUniqueID(), llvm::sys::toTimePoint(ModificationTime), 0,
-          0, Buffer->getBufferSize(), llvm::sys::fs::file_type::directory_file,
-          llvm::sys::fs::all_all);
+          getNextVirtualUniqueID(), llvm::sys::toTimePoint(ModificationTime),
+          ResolvedUser, ResolvedGroup, Buffer->getBufferSize(),
+          sys::fs::file_type::directory_file, NewDirectoryPerms);
       Dir = cast<detail::InMemoryDirectory>(Dir->addChild(
           Name, llvm::make_unique<detail::InMemoryDirectory>(std::move(Stat))));
       continue;
@@ -571,10 +572,16 @@ bool InMemoryFileSystem::addFile(const Twine &P, time_t ModificationTime,
 }
 
 bool InMemoryFileSystem::addFileNoOwn(const Twine &P, time_t ModificationTime,
-                                      llvm::MemoryBuffer *Buffer) {
+                                      llvm::MemoryBuffer *Buffer,
+                                      Optional<uint32_t> User,
+                                      Optional<uint32_t> Group,
+                                      Optional<llvm::sys::fs::file_type> Type,
+                                      Optional<llvm::sys::fs::perms> Perms) {
   return addFile(P, ModificationTime,
                  llvm::MemoryBuffer::getMemBuffer(
-                     Buffer->getBuffer(), Buffer->getBufferIdentifier()));
+                     Buffer->getBuffer(), Buffer->getBufferIdentifier()),
+                 std::move(User), std::move(Group), std::move(Type),
+                 std::move(Perms));
 }
 
 static ErrorOr<detail::InMemoryNode *>
@@ -1869,7 +1876,7 @@ vfs::recursive_directory_iterator::recursive_directory_iterator(FileSystem &FS_,
                                                            std::error_code &EC)
     : FS(&FS_) {
   directory_iterator I = FS->dir_begin(Path, EC);
-  if (!EC && I != directory_iterator()) {
+  if (I != directory_iterator()) {
     State = std::make_shared<IterState>();
     State->push(I);
   }
@@ -1882,8 +1889,6 @@ recursive_directory_iterator::increment(std::error_code &EC) {
   vfs::directory_iterator End;
   if (State->top()->isDirectory()) {
     vfs::directory_iterator I = FS->dir_begin(State->top()->getName(), EC);
-    if (EC)
-      return *this;
     if (I != End) {
       State->push(I);
       return *this;

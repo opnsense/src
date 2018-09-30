@@ -16,8 +16,10 @@
 #include "asan_allocator.h"
 #include "asan_flags.h"
 #include "asan_internal.h"
+#include "asan_mapping.h"
 #include "asan_poisoning.h"
 #include "asan_stack.h"
+#include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_flags.h"
 
 namespace __asan {
@@ -106,13 +108,13 @@ void AsanDeactivate() {
   // Deactivate the runtime.
   SetCanPoisonMemory(false);
   SetMallocContextSize(1);
-  ReInitializeCoverage(false, nullptr);
 
   AllocatorOptions disabled = asan_deactivated_flags.allocator_options;
   disabled.quarantine_size_mb = 0;
   disabled.thread_local_quarantine_size_kb = 0;
-  disabled.min_redzone = 16;  // Redzone must be at least 16 bytes long.
-  disabled.max_redzone = 16;
+  // Redzone must be at least Max(16, granularity) bytes long.
+  disabled.min_redzone = Max(16, (int)SHADOW_GRANULARITY);
+  disabled.max_redzone = disabled.min_redzone;
   disabled.alloc_dealloc_mismatch = false;
   disabled.may_return_null = true;
   ReInitializeAllocator(disabled);
@@ -130,8 +132,6 @@ void AsanActivate() {
 
   SetCanPoisonMemory(asan_deactivated_flags.poison_heap);
   SetMallocContextSize(asan_deactivated_flags.malloc_context_size);
-  ReInitializeCoverage(asan_deactivated_flags.coverage,
-                       asan_deactivated_flags.coverage_dir);
   ReInitializeAllocator(asan_deactivated_flags.allocator_options);
 
   asan_is_deactivated = false;

@@ -12,11 +12,12 @@
 #include <stdlib.h>
 
 #include "lldb/Core/Address.h"
-#include "lldb/Core/ArchSpec.h"
-#include "lldb/Core/ConstString.h"
 #include "lldb/Core/PluginManager.h"
-#include "lldb/Core/Stream.h"
+#include "lldb/Core/RegisterValue.h"
 #include "lldb/Symbol/UnwindPlan.h"
+#include "lldb/Utility/ArchSpec.h"
+#include "lldb/Utility/ConstString.h"
+#include "lldb/Utility/Stream.h"
 
 #include "Plugins/Process/Utility/ARMDefines.h"
 #include "Plugins/Process/Utility/ARMUtils.h"
@@ -74,19 +75,6 @@ static bool LLDBTableGetRegisterInfo(uint32_t reg_num, RegisterInfo &reg_info) {
 static inline bool IsZero(uint64_t x) { return x == 0; }
 
 static inline uint64_t NOT(uint64_t x) { return ~x; }
-
-#if 0
-// LSL_C() 
-// =======
-static inline uint64_t
-LSL_C (uint64_t x, integer shift, bool &carry_out)
-{
-    assert (shift >= 0); 
-    uint64_t result = x << shift;
-    carry_out = ((1ull << (64-1)) >> (shift - 1)) != 0;
-    return result;
-}
-#endif
 
 // LSL()
 // =====
@@ -166,10 +154,7 @@ EmulateInstructionARM64::CreateInstance(const ArchSpec &arch,
   if (EmulateInstructionARM64::SupportsEmulatingInstructionsOfTypeStatic(
           inst_type)) {
     if (arch.GetTriple().getArch() == llvm::Triple::aarch64) {
-      std::auto_ptr<EmulateInstructionARM64> emulate_insn_ap(
-          new EmulateInstructionARM64(arch));
-      if (emulate_insn_ap.get())
-        return emulate_insn_ap.release();
+      return new EmulateInstructionARM64(arch);
     }
   }
 
@@ -845,7 +830,7 @@ bool EmulateInstructionARM64::EmulateLDPSTP(const uint32_t opcode) {
   Context context_t2;
 
   uint8_t buffer[RegisterValue::kMaxRegisterByteSize];
-  Error error;
+  Status error;
 
   switch (memop) {
   case MemOp_STORE: {
@@ -991,7 +976,7 @@ bool EmulateInstructionARM64::EmulateLDRSTRImm(const uint32_t opcode) {
       return false;
   }
 
-  Error error;
+  Status error;
   bool success = false;
   uint64_t address;
   uint8_t buffer[RegisterValue::kMaxRegisterByteSize];

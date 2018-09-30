@@ -2527,9 +2527,13 @@ mmu_booke_clear_modify(mmu_t mmu, vm_page_t m)
  * is necessary that 0 only be returned when there are truly no
  * reference bits set.
  *
- * XXX: The exact number of bits to check and clear is a matter that
- * should be tested and standardized at some point in the future for
- * optimal aging of shared pages.
+ * As an optimization, update the page's dirty field if a modified bit is
+ * found while counting reference bits.  This opportunistic update can be
+ * performed at low cost and can eliminate the need for some future calls
+ * to pmap_is_modified().  However, since this function stops after
+ * finding PMAP_TS_REFERENCED_MAX reference bits, it may not detect some
+ * dirty pages.  Those dirty pages will only be detected by a future call
+ * to pmap_is_modified().
  */
 static int
 mmu_booke_ts_referenced(mmu_t mmu, vm_page_t m)
@@ -2546,6 +2550,8 @@ mmu_booke_ts_referenced(mmu_t mmu, vm_page_t m)
 		PMAP_LOCK(pv->pv_pmap);
 		if ((pte = pte_find(mmu, pv->pv_pmap, pv->pv_va)) != NULL &&
 		    PTE_ISVALID(pte)) {
+			if (PTE_ISMODIFIED(pte))
+				vm_page_dirty(m);
 			if (PTE_ISREFERENCED(pte)) {
 				mtx_lock_spin(&tlbivax_mutex);
 				tlb_miss_lock();
@@ -2556,7 +2562,7 @@ mmu_booke_ts_referenced(mmu_t mmu, vm_page_t m)
 				tlb_miss_unlock();
 				mtx_unlock_spin(&tlbivax_mutex);
 
-				if (++count > 4) {
+				if (++count >= PMAP_TS_REFERENCED_MAX) {
 					PMAP_UNLOCK(pv->pv_pmap);
 					break;
 				}
@@ -3150,9 +3156,13 @@ tlb0_print_tlbentries(void)
 void
 tlb1_read_entry(tlb_entry_t *entry, unsigned int slot)
 {
+	register_t msr;
 	uint32_t mas0;
 
 	KASSERT((entry != NULL), ("%s(): Entry is NULL!", __func__));
+
+	msr = mfmsr();
+	__asm __volatile("wrteei 0");
 
 	mas0 = MAS0_TLBSEL(1) | MAS0_ESEL(slot);
 	mtspr(SPR_MAS0, mas0);
@@ -3172,6 +3182,7 @@ tlb1_read_entry(tlb_entry_t *entry, unsigned int slot)
 		entry->mas7 = 0;
 		break;
 	}
+	mtmsr(msr);
 
 	entry->virt = entry->mas2 & MAS2_EPN_MASK;
 	entry->phys = ((vm_paddr_t)(entry->mas7 & MAS7_RPN) << 32) |
@@ -3187,6 +3198,7 @@ tlb1_read_entry(tlb_entry_t *entry, unsigned int slot)
 static void
 tlb1_write_entry(tlb_entry_t *e, unsigned int idx)
 {
+	register_t msr;
 	uint32_t mas0;
 
 	//debugf("tlb1_write_entry: s\n");
@@ -3194,6 +3206,9 @@ tlb1_write_entry(tlb_entry_t *e, unsigned int idx)
 	/* Select entry */
 	mas0 = MAS0_TLBSEL(1) | MAS0_ESEL(idx);
 	//debugf("tlb1_write_entry: mas0 = 0x%08x\n", mas0);
+
+	msr = mfmsr();
+	__asm __volatile("wrteei 0");
 
 	mtspr(SPR_MAS0, mas0);
 	__asm __volatile("isync");
@@ -3218,6 +3233,7 @@ tlb1_write_entry(tlb_entry_t *e, unsigned int idx)
 	}
 
 	__asm __volatile("tlbwe; isync; msync");
+	mtmsr(msr);
 
 	//debugf("tlb1_write_entry: e\n");
 }

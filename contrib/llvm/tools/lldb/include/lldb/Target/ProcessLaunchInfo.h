@@ -14,12 +14,13 @@
 #include <string>
 
 // LLDB Headers
-#include "lldb/Core/Flags.h"
-#include "lldb/Host/FileSpec.h"
+#include "lldb/Utility/Flags.h"
+
 #include "lldb/Host/Host.h"
+#include "lldb/Host/PseudoTerminal.h"
 #include "lldb/Target/FileAction.h"
 #include "lldb/Target/ProcessInfo.h"
-#include "lldb/Utility/PseudoTerminal.h"
+#include "lldb/Utility/FileSpec.h"
 
 namespace lldb_private {
 
@@ -93,7 +94,7 @@ public:
 
   void Clear();
 
-  bool ConvertArgumentsForLaunchingInShell(Error &error, bool localhost,
+  bool ConvertArgumentsForLaunchingInShell(Status &error, bool localhost,
                                            bool will_debug,
                                            bool first_arg_is_full_shell_command,
                                            int32_t num_resumes);
@@ -116,7 +117,7 @@ public:
 
   bool MonitorProcess() const;
 
-  lldb_utility::PseudoTerminal &GetPTY() { return *m_pty; }
+  PseudoTerminal &GetPTY() { return *m_pty; }
 
   // Get and set the actual listener that will be used for the process events
   lldb::ListenerSP GetListener() const { return m_listener_sp; }
@@ -149,7 +150,7 @@ protected:
   FileSpec m_shell;
   Flags m_flags; // Bitwise OR of bits from lldb::LaunchFlags
   std::vector<FileAction> m_file_actions; // File actions for any other files
-  std::shared_ptr<lldb_utility::PseudoTerminal> m_pty;
+  std::shared_ptr<PseudoTerminal> m_pty;
   uint32_t m_resume_count; // How many times do we resume after launching
   Host::MonitorChildProcessCallback m_monitor_callback;
   void *m_monitor_callback_baton;

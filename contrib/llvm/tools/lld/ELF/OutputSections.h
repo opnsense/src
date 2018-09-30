@@ -11,9 +11,11 @@
 #define LLD_ELF_OUTPUT_SECTIONS_H
 
 #include "Config.h"
+#include "InputSection.h"
+#include "LinkerScript.h"
 #include "Relocations.h"
 
-#include "lld/Core/LLVM.h"
+#include "lld/Common/LLVM.h"
 #include "llvm/MC/StringTableBuilder.h"
 #include "llvm/Object/ELF.h"
 
@@ -21,250 +23,131 @@ namespace lld {
 namespace elf {
 
 struct PhdrEntry;
-class SymbolBody;
+class Symbol;
 struct EhSectionPiece;
-template <class ELFT> class EhInputSection;
-template <class ELFT> class InputSection;
-template <class ELFT> class InputSectionBase;
-template <class ELFT> class MergeInputSection;
-template <class ELFT> class OutputSection;
-template <class ELFT> class ObjectFile;
+class EhInputSection;
+class InputSection;
+class InputSectionBase;
+class MergeInputSection;
+class OutputSection;
+template <class ELFT> class ObjFile;
 template <class ELFT> class SharedFile;
-template <class ELFT> class SharedSymbol;
-template <class ELFT> class DefinedRegular;
+class SharedSymbol;
+class Defined;
 
 // This represents a section in an output file.
-// Different sub classes represent different types of sections. Some contain
-// input sections, others are created by the linker.
+// It is composed of multiple InputSections.
 // The writer creates multiple OutputSections and assign them unique,
 // non-overlapping file offsets and VAs.
-class OutputSectionBase {
+class OutputSection final : public BaseCommand, public SectionBase {
 public:
-  enum Kind {
-    Base,
-    EHFrame,
-    Merge,
-    Regular,
-  };
+  OutputSection(StringRef Name, uint32_t Type, uint64_t Flags);
 
-  OutputSectionBase(StringRef Name, uint32_t Type, uint64_t Flags);
-  void setLMAOffset(uint64_t LMAOff) { LMAOffset = LMAOff; }
-  uint64_t getLMA() const { return Addr + LMAOffset; }
-  template <typename ELFT> void writeHeaderTo(typename ELFT::Shdr *SHdr);
-  StringRef getName() const { return Name; }
-
-  virtual void addSection(InputSectionData *C) {}
-  virtual Kind getKind() const { return Base; }
-  static bool classof(const OutputSectionBase *B) {
-    return B->getKind() == Base;
+  static bool classof(const SectionBase *S) {
+    return S->kind() == SectionBase::Output;
   }
 
+  static bool classof(const BaseCommand *C);
+
+  uint64_t getLMA() const { return PtLoad ? Addr + PtLoad->LMAOffset : Addr; }
+  template <typename ELFT> void writeHeaderTo(typename ELFT::Shdr *SHdr);
+
   unsigned SectionIndex;
+  unsigned SortRank;
 
   uint32_t getPhdrFlags() const;
 
-  void updateAlignment(uint64_t Alignment) {
-    if (Alignment > Addralign)
-      Addralign = Alignment;
-  }
+  // Pointer to the PT_LOAD segment, which this section resides in. This field
+  // is used to correctly compute file offset of a section. When two sections
+  // share the same load segment, difference between their file offsets should
+  // be equal to difference between their virtual addresses. To compute some
+  // section offset we use the following formula: Off = Off_first + VA -
+  // VA_first, where Off_first and VA_first is file offset and VA of first
+  // section in PT_LOAD.
+  PhdrEntry *PtLoad = nullptr;
 
-  // If true, this section will be page aligned on disk.
-  // Typically the first section of each PT_LOAD segment has this flag.
-  bool PageAlign = false;
+  // Pointer to a relocation section for this section. Usually nullptr because
+  // we consume relocations, but if --emit-relocs is specified (which is rare),
+  // it may have a non-null value.
+  OutputSection *RelocationSection = nullptr;
 
-  // Pointer to the first section in PT_LOAD segment, which this section
-  // also resides in. This field is used to correctly compute file offset
-  // of a section. When two sections share the same load segment, difference
-  // between their file offsets should be equal to difference between their
-  // virtual addresses. To compute some section offset we use the following
-  // formula: Off = Off_first + VA - VA_first.
-  OutputSectionBase *FirstInPtLoad = nullptr;
-
-  virtual void finalize() {}
-  virtual void assignOffsets() {}
-  virtual void writeTo(uint8_t *Buf) {}
-  virtual ~OutputSectionBase() = default;
-
-  StringRef Name;
+  // Initially this field is the number of InputSections that have been added to
+  // the OutputSection so far. Later on, after a call to assignAddresses, it
+  // corresponds to the Elf_Shdr member.
+  uint64_t Size = 0;
 
   // The following fields correspond to Elf_Shdr members.
-  uint64_t Size = 0;
-  uint64_t Entsize = 0;
-  uint64_t Addralign = 0;
   uint64_t Offset = 0;
-  uint64_t Flags = 0;
-  uint64_t LMAOffset = 0;
   uint64_t Addr = 0;
   uint32_t ShName = 0;
-  uint32_t Type = 0;
-  uint32_t Info = 0;
-  uint32_t Link = 0;
-};
 
-template <class ELFT> class OutputSection final : public OutputSectionBase {
-
-public:
-  typedef typename ELFT::Shdr Elf_Shdr;
-  typedef typename ELFT::Sym Elf_Sym;
-  typedef typename ELFT::Rel Elf_Rel;
-  typedef typename ELFT::Rela Elf_Rela;
-  typedef typename ELFT::uint uintX_t;
-  OutputSection(StringRef Name, uint32_t Type, uintX_t Flags);
-  void addSection(InputSectionData *C) override;
-  void sort(std::function<int(InputSection<ELFT> *S)> Order);
-  void sortInitFini();
-  void sortCtorsDtors();
-  void writeTo(uint8_t *Buf) override;
-  void finalize() override;
-  void assignOffsets() override;
-  Kind getKind() const override { return Regular; }
-  static bool classof(const OutputSectionBase *B) {
-    return B->getKind() == Regular;
-  }
-  std::vector<InputSection<ELFT> *> Sections;
+  void addSection(InputSection *IS);
 
   // Location in the output buffer.
   uint8_t *Loc = nullptr;
-};
 
-template <class ELFT>
-class MergeOutputSection final : public OutputSectionBase {
-  typedef typename ELFT::uint uintX_t;
+  // The following members are normally only used in linker scripts.
+  MemoryRegion *MemRegion = nullptr;
+  MemoryRegion *LMARegion = nullptr;
+  Expr AddrExpr;
+  Expr AlignExpr;
+  Expr LMAExpr;
+  Expr SubalignExpr;
+  std::vector<BaseCommand *> SectionCommands;
+  std::vector<StringRef> Phdrs;
+  llvm::Optional<uint32_t> Filler;
+  ConstraintKind Constraint = ConstraintKind::NoConstraint;
+  std::string Location;
+  std::string MemoryRegionName;
+  std::string LMARegionName;
+  bool Noload = false;
 
-public:
-  MergeOutputSection(StringRef Name, uint32_t Type, uintX_t Flags,
-                     uintX_t Alignment);
-  void addSection(InputSectionData *S) override;
-  void writeTo(uint8_t *Buf) override;
-  void finalize() override;
-  bool shouldTailMerge() const;
-  Kind getKind() const override { return Merge; }
-  static bool classof(const OutputSectionBase *B) {
-    return B->getKind() == Merge;
-  }
+  template <class ELFT> void finalize();
+  template <class ELFT> void writeTo(uint8_t *Buf);
+  template <class ELFT> void maybeCompress();
 
-private:
-  void finalizeTailMerge();
-  void finalizeNoTailMerge();
-
-  llvm::StringTableBuilder Builder;
-  std::vector<MergeInputSection<ELFT> *> Sections;
-};
-
-struct CieRecord {
-  EhSectionPiece *Piece = nullptr;
-  std::vector<EhSectionPiece *> FdePieces;
-};
-
-// Output section for .eh_frame.
-template <class ELFT> class EhOutputSection final : public OutputSectionBase {
-  typedef typename ELFT::uint uintX_t;
-  typedef typename ELFT::Shdr Elf_Shdr;
-  typedef typename ELFT::Rel Elf_Rel;
-  typedef typename ELFT::Rela Elf_Rela;
-
-public:
-  EhOutputSection();
-  void writeTo(uint8_t *Buf) override;
-  void finalize() override;
-  bool empty() const { return Sections.empty(); }
-
-  void addSection(InputSectionData *S) override;
-  Kind getKind() const override { return EHFrame; }
-  static bool classof(const OutputSectionBase *B) {
-    return B->getKind() == EHFrame;
-  }
-
-  size_t NumFdes = 0;
+  void sort(std::function<int(InputSectionBase *S)> Order);
+  void sortInitFini();
+  void sortCtorsDtors();
 
 private:
-  template <class RelTy>
-  void addSectionAux(EhInputSection<ELFT> *S, llvm::ArrayRef<RelTy> Rels);
+  // Used for implementation of --compress-debug-sections option.
+  std::vector<uint8_t> ZDebugHeader;
+  llvm::SmallVector<char, 1> CompressedData;
 
-  template <class RelTy>
-  CieRecord *addCie(EhSectionPiece &Piece, ArrayRef<RelTy> Rels);
-
-  template <class RelTy>
-  bool isFdeLive(EhSectionPiece &Piece, ArrayRef<RelTy> Rels);
-
-  uintX_t getFdePc(uint8_t *Buf, size_t Off, uint8_t Enc);
-
-  std::vector<EhInputSection<ELFT> *> Sections;
-  std::vector<CieRecord *> Cies;
-
-  // CIE records are uniquified by their contents and personality functions.
-  llvm::DenseMap<std::pair<ArrayRef<uint8_t>, SymbolBody *>, CieRecord> CieMap;
+  uint32_t getFiller();
 };
 
-// All output sections that are hadnled by the linker specially are
+int getPriority(StringRef S);
+
+// All output sections that are handled by the linker specially are
 // globally accessible. Writer initializes them, so don't use them
 // until Writer is initialized.
-template <class ELFT> struct Out {
-  typedef typename ELFT::uint uintX_t;
-  typedef typename ELFT::Phdr Elf_Phdr;
-
+struct Out {
   static uint8_t First;
-  static EhOutputSection<ELFT> *EhFrame;
-  static OutputSection<ELFT> *Bss;
-  static OutputSection<ELFT> *BssRelRo;
-  static OutputSectionBase *Opd;
+  static OutputSection *Opd;
   static uint8_t *OpdBuf;
   static PhdrEntry *TlsPhdr;
-  static OutputSectionBase *DebugInfo;
-  static OutputSectionBase *ElfHeader;
-  static OutputSectionBase *ProgramHeaders;
-  static OutputSectionBase *PreinitArray;
-  static OutputSectionBase *InitArray;
-  static OutputSectionBase *FiniArray;
+  static OutputSection *DebugInfo;
+  static OutputSection *ElfHeader;
+  static OutputSection *ProgramHeaders;
+  static OutputSection *PreinitArray;
+  static OutputSection *InitArray;
+  static OutputSection *FiniArray;
 };
 
-struct SectionKey {
-  StringRef Name;
-  uint64_t Flags;
-  uint64_t Alignment;
-};
-
-// This class knows how to create an output section for a given
-// input section. Output section type is determined by various
-// factors, including input section's sh_flags, sh_type and
-// linker scripts.
-template <class ELFT> class OutputSectionFactory {
-  typedef typename ELFT::Shdr Elf_Shdr;
-  typedef typename ELFT::uint uintX_t;
-
-public:
-  OutputSectionFactory();
-  ~OutputSectionFactory();
-  std::pair<OutputSectionBase *, bool> create(InputSectionBase<ELFT> *C,
-                                              StringRef OutsecName);
-  std::pair<OutputSectionBase *, bool> create(const SectionKey &Key,
-                                              InputSectionBase<ELFT> *C);
-
-private:
-  llvm::SmallDenseMap<SectionKey, OutputSectionBase *> Map;
-};
-
-template <class ELFT> uint64_t getHeaderSize() {
-  if (Config->OFormatBinary)
-    return 0;
-  return Out<ELFT>::ElfHeader->Size + Out<ELFT>::ProgramHeaders->Size;
-}
-
-template <class ELFT> uint8_t Out<ELFT>::First;
-template <class ELFT> EhOutputSection<ELFT> *Out<ELFT>::EhFrame;
-template <class ELFT> OutputSection<ELFT> *Out<ELFT>::Bss;
-template <class ELFT> OutputSection<ELFT> *Out<ELFT>::BssRelRo;
-template <class ELFT> OutputSectionBase *Out<ELFT>::Opd;
-template <class ELFT> uint8_t *Out<ELFT>::OpdBuf;
-template <class ELFT> PhdrEntry *Out<ELFT>::TlsPhdr;
-template <class ELFT> OutputSectionBase *Out<ELFT>::DebugInfo;
-template <class ELFT> OutputSectionBase *Out<ELFT>::ElfHeader;
-template <class ELFT> OutputSectionBase *Out<ELFT>::ProgramHeaders;
-template <class ELFT> OutputSectionBase *Out<ELFT>::PreinitArray;
-template <class ELFT> OutputSectionBase *Out<ELFT>::InitArray;
-template <class ELFT> OutputSectionBase *Out<ELFT>::FiniArray;
 } // namespace elf
 } // namespace lld
 
+namespace lld {
+namespace elf {
+
+uint64_t getHeaderSize();
+void sortByOrder(llvm::MutableArrayRef<InputSection *> In,
+                 std::function<int(InputSectionBase *S)> Order);
+
+extern std::vector<OutputSection *> OutputSections;
+} // namespace elf
+} // namespace lld
 
 #endif

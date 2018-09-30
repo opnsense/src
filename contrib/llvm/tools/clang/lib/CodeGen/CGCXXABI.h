@@ -73,9 +73,10 @@ protected:
     return CGF.CXXStructorImplicitParamValue;
   }
 
-  /// Perform prolog initialization of the parameter variable suitable
-  /// for 'this' emitted by buildThisParam.
-  void EmitThisParam(CodeGenFunction &CGF);
+  /// Loads the incoming C++ this pointer as it was passed by the caller.
+  llvm::Value *loadIncomingCXXThis(CodeGenFunction &CGF);
+
+  void setCXXABIThisValue(CodeGenFunction &CGF, llvm::Value *ThisPtr);
 
   ASTContext &getContext() const { return CGM.getContext(); }
 
@@ -291,11 +292,26 @@ public:
   /// Emit constructor variants required by this ABI.
   virtual void EmitCXXConstructors(const CXXConstructorDecl *D) = 0;
 
+  /// Notes how many arguments were added to the beginning (Prefix) and ending
+  /// (Suffix) of an arg list.
+  ///
+  /// Note that Prefix actually refers to the number of args *after* the first
+  /// one: `this` arguments always come first.
+  struct AddedStructorArgs {
+    unsigned Prefix = 0;
+    unsigned Suffix = 0;
+    AddedStructorArgs() = default;
+    AddedStructorArgs(unsigned P, unsigned S) : Prefix(P), Suffix(S) {}
+    static AddedStructorArgs prefix(unsigned N) { return {N, 0}; }
+    static AddedStructorArgs suffix(unsigned N) { return {0, N}; }
+  };
+
   /// Build the signature of the given constructor or destructor variant by
   /// adding any required parameters.  For convenience, ArgTys has been
   /// initialized with the type of 'this'.
-  virtual void buildStructorSignature(const CXXMethodDecl *MD, StructorType T,
-                                      SmallVectorImpl<CanQualType> &ArgTys) = 0;
+  virtual AddedStructorArgs
+  buildStructorSignature(const CXXMethodDecl *MD, StructorType T,
+                         SmallVectorImpl<CanQualType> &ArgTys) = 0;
 
   /// Returns true if the given destructor type should be emitted as a linkonce
   /// delegating thunk, regardless of whether the dtor is defined in this TU or
@@ -343,21 +359,14 @@ public:
     return CharUnits::Zero();
   }
 
-  /// Perform ABI-specific "this" parameter adjustment in a virtual function
-  /// prologue.
-  virtual llvm::Value *adjustThisParameterInVirtualFunctionPrologue(
-      CodeGenFunction &CGF, GlobalDecl GD, llvm::Value *This) {
-    return This;
-  }
-
   /// Emit the ABI-specific prolog for the function.
   virtual void EmitInstanceFunctionProlog(CodeGenFunction &CGF) = 0;
 
   /// Add any ABI-specific implicit arguments needed to call a constructor.
   ///
-  /// \return The number of args added to the call, which is typically zero or
-  /// one.
-  virtual unsigned
+  /// \return The number of arguments added at the beginning and end of the
+  /// call, which is typically zero or one.
+  virtual AddedStructorArgs
   addImplicitConstructorArgs(CodeGenFunction &CGF, const CXXConstructorDecl *D,
                              CXXCtorType Type, bool ForVirtualBase,
                              bool Delegating, CallArgList &Args) = 0;
@@ -377,7 +386,7 @@ public:
   isVirtualOffsetNeededForVTableField(CodeGenFunction &CGF,
                                       CodeGenFunction::VPtr Vptr) = 0;
 
-  /// Checks if ABI requires to initilize vptrs for given dynamic class.
+  /// Checks if ABI requires to initialize vptrs for given dynamic class.
   virtual bool doStructorsInitializeVPtrs(const CXXRecordDecl *VTableClass) = 0;
 
   /// Get the address point of the vtable for the given base subobject.
@@ -573,6 +582,13 @@ public:
   /// Emit a single constructor/destructor with the given type from a C++
   /// constructor Decl.
   virtual void emitCXXStructor(const CXXMethodDecl *MD, StructorType Type) = 0;
+
+  /// Load a vtable from This, an object of polymorphic type RD, or from one of
+  /// its virtual bases if it does not have its own vtable. Returns the vtable
+  /// and the class from which the vtable was loaded.
+  virtual std::pair<llvm::Value *, const CXXRecordDecl *>
+  LoadVTablePtr(CodeGenFunction &CGF, Address This,
+                const CXXRecordDecl *RD) = 0;
 };
 
 // Create an instance of a C++ ABI class:

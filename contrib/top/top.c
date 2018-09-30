@@ -39,6 +39,7 @@ char *copyright =
 #include <sys/time.h>
 
 #include <ctype.h>
+#include <curses.h>
 #include <errno.h>
 #include <jail.h>
 #include <setjmp.h>
@@ -79,7 +80,7 @@ int pcpu_stats = No;
 sigret_t leave();
 sigret_t tstop();
 #ifdef SIGWINCH
-sigret_t winch();
+sigret_t top_winch(int);
 #endif
 
 volatile sig_atomic_t leaveflag;
@@ -133,6 +134,109 @@ void (*d_process)() = i_process;
 
 void reset_display(void);
 
+static void
+reset_uids()
+{
+    for (size_t i = 0; i < TOP_MAX_UIDS; ++i)
+	ps.uid[i] = -1;
+}
+
+static int
+add_uid(int uid)
+{
+    size_t i = 0;
+
+    /* Add the uid if there's room */
+    for (; i < TOP_MAX_UIDS; ++i)
+    {
+	if (ps.uid[i] == -1 || ps.uid[i] == uid)
+	{
+	    ps.uid[i] = uid;
+	    break;
+	}
+    }
+
+    return (i == TOP_MAX_UIDS);
+}
+
+static void
+rem_uid(int uid)
+{
+    size_t i = 0;
+    size_t where = TOP_MAX_UIDS;
+
+    /* Look for the user to remove - no problem if it's not there */
+    for (; i < TOP_MAX_UIDS; ++i)
+    {
+	if (ps.uid[i] == -1)
+	    break;
+	if (ps.uid[i] == uid)
+	    where = i;
+    }
+
+    /* Make sure we don't leave a hole in the middle */
+    if (where != TOP_MAX_UIDS)
+    {
+	ps.uid[where] = ps.uid[i-1];
+	ps.uid[i-1] = -1;
+    }
+}
+
+static int
+handle_user(char *buf, size_t buflen)
+{
+    int rc = 0;
+    int uid = -1;
+    char *buf2 = buf;
+
+    new_message(MT_standout, "Username to show (+ for all): ");
+    if (readline(buf, buflen, No) <= 0)
+    {
+	clear_message();
+	return rc;
+    }
+
+    if (buf[0] == '+' || buf[0] == '-')
+    {
+	if (buf[1] == '\0')
+	{
+	    reset_uids();
+	    goto end;
+	}
+	else
+	    ++buf2;
+    }
+
+    if ((uid = userid(buf2)) == -1)
+    {
+	new_message(MT_standout, " %s: unknown user", buf2);
+	rc = 1;
+	goto end;
+    }
+
+    if (buf2 == buf)
+    {
+	reset_uids();
+	ps.uid[0] = uid;
+	goto end;
+    }
+
+    if (buf[0] == '+')
+    {
+	if (add_uid(uid))
+	{
+	    new_message(MT_standout, " too many users, reset with '+'");
+	    rc = 1;
+	    goto end;
+	}
+    }
+    else
+	rem_uid(uid);
+
+end:
+    putchar('\r');
+    return rc;
+}
 
 int
 main(argc, argv)
@@ -251,7 +355,7 @@ char *argv[];
     ps.idle    = Yes;
     ps.self    = -1;
     ps.system  = No;
-    ps.uid     = -1;
+    reset_uids();
     ps.thread  = No;
     ps.wcpu    = 1;
     ps.jid     = -1;
@@ -298,7 +402,7 @@ char *argv[];
 		break;
 
 	      case 'U':			/* display only username's processes */
-		if ((ps.uid = userid(optarg)) == -1)
+		if ((ps.uid[0] = userid(optarg)) == -1)
 		{
 		    fprintf(stderr, "%s: unknown user\n", optarg);
 		    exit(1);
@@ -432,7 +536,7 @@ char *argv[];
 	      default:
 		fprintf(stderr,
 "Top version %s\n"
-"Usage: %s [-abCHIijnPqStuvz] [-d count] [-m io | cpu] [-o field] [-s time]\n"
+"Usage: %s [-abCHIijnPqStuvwz] [-d count] [-m io | cpu] [-o field] [-s time]\n"
 "       [-J jail] [-U username] [number]\n",
 			version_string(), myname);
 		exit(1);
@@ -578,7 +682,7 @@ char *argv[];
     (void) signal(SIGQUIT, leave);
     (void) signal(SIGTSTP, tstop);
 #ifdef SIGWINCH
-    (void) signal(SIGWINCH, winch);
+    (void) signal(SIGWINCH, top_winch);
 #endif
 #ifdef SIGRELSE
     sigrelse(SIGINT);
@@ -793,7 +897,7 @@ restart:
 		    max_topn = display_resize();
 
 		    /* reset the signal handler */
-		    (void) signal(SIGWINCH, winch);
+		    (void) signal(SIGWINCH, top_winch);
 
 		    reset_display();
 		    winchflag = 0;
@@ -867,9 +971,9 @@ restart:
 			    case CMD_help1:	/* help */
 			    case CMD_help2:
 				reset_display();
-				clear();
+				top_clear();
 				show_help();
-				standout("Hit any key to continue: ");
+				top_standout("Hit any key to continue: ");
 				fflush(stdout);
 				(void) read(0, &ch, 1);
 				break;
@@ -885,9 +989,9 @@ restart:
 				else
 				{
 				    reset_display();
-				    clear();
+				    top_clear();
 				    show_errors();
-				    standout("Hit any key to continue: ");
+				    top_standout("Hit any key to continue: ");
 				    fflush(stdout);
 				    (void) read(0, &ch, 1);
 				}
@@ -1003,31 +1107,8 @@ restart:
 				break;
 
 			    case CMD_user:
-				new_message(MT_standout,
-				    "Username to show (+ for all): ");
-				if (readline(tempbuf2, sizeof(tempbuf2), No) > 0)
-				{
-				    if (tempbuf2[0] == '+' &&
-					tempbuf2[1] == '\0')
-				    {
-					ps.uid = -1;
-				    }
-				    else if ((i = userid(tempbuf2)) == -1)
-				    {
-					new_message(MT_standout,
-					    " %s: unknown user", tempbuf2);
-					no_command = Yes;
-				    }
-				    else
-				    {
-					ps.uid = i;
-				    }
-				    putchar('\r');
-				}
-				else
-				{
-				    clear_message();
-				}
+				if (handle_user(tempbuf2, sizeof(tempbuf2)))
+				    no_command = Yes;
 				break;
 	    
 			    case CMD_thrtog:
@@ -1219,10 +1300,7 @@ int i;
 }
 
 #ifdef SIGWINCH
-sigret_t winch(i)		/* SIGWINCH handler */
-
-int i;
-
+sigret_t top_winch(int i)		/* SIGWINCH handler */
 {
     winchflag = 1;
 }

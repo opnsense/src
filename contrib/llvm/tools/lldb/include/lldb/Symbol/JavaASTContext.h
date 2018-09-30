@@ -18,8 +18,8 @@
 
 // Other libraries and framework includes
 // Project includes
-#include "lldb/Core/ConstString.h"
 #include "lldb/Symbol/TypeSystem.h"
+#include "lldb/Utility/ConstString.h"
 
 namespace lldb_private {
 
@@ -202,10 +202,6 @@ public:
   unsigned GetTypeQualifiers(lldb::opaque_compiler_type_t type) override;
 
   size_t GetNumTemplateArguments(lldb::opaque_compiler_type_t type) override;
-
-  CompilerType GetTemplateArgument(lldb::opaque_compiler_type_t type,
-                                   size_t idx,
-                                   lldb::TemplateArgumentKind &kind) override;
 
   int GetFunctionArgumentCount(lldb::opaque_compiler_type_t type) override;
 

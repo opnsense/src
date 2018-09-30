@@ -45,7 +45,6 @@
 #include "opt_compat.h"
 #include "opt_ddb.h"
 #include "opt_kstack_pages.h"
-#include "opt_pax.h"
 #include "opt_platform.h"
 #include "opt_sched.h"
 #include "opt_timer.h"
@@ -65,12 +64,13 @@ __FBSDID("$FreeBSD$");
 #include <sys/kernel.h>
 #include <sys/linker.h>
 #include <sys/msgbuf.h>
-#include <sys/pax.h>
+#include <sys/reboot.h>
 #include <sys/rwlock.h>
 #include <sys/sched.h>
 #include <sys/syscallsubr.h>
 #include <sys/sysent.h>
 #include <sys/sysproto.h>
+#include <sys/vmmeter.h>
 
 #include <vm/vm_object.h>
 #include <vm/vm_page.h>
@@ -396,41 +396,67 @@ exec_setregs(struct thread *td, struct image_params *imgp, u_long stack)
 /*
  * Get machine VFP context.
  */
-static void
+void
 get_vfpcontext(struct thread *td, mcontext_vfp_t *vfp)
 {
-	struct pcb *curpcb;
+	struct pcb *pcb;
 
-	curpcb = curthread->td_pcb;
-	critical_enter();
-
-	vfp_store(&curpcb->pcb_vfpstate, false);
-	memcpy(vfp->mcv_reg, curpcb->pcb_vfpstate.reg,
+	pcb = td->td_pcb;
+	if (td == curthread) {
+		critical_enter();
+		vfp_store(&pcb->pcb_vfpstate, false);
+		critical_exit();
+	} else
+		MPASS(TD_IS_SUSPENDED(td));
+	memcpy(vfp->mcv_reg, pcb->pcb_vfpstate.reg,
 	    sizeof(vfp->mcv_reg));
-	vfp->mcv_fpscr = curpcb->pcb_vfpstate.fpscr;
-
-	critical_exit();
+	vfp->mcv_fpscr = pcb->pcb_vfpstate.fpscr;
 }
 
 /*
  * Set machine VFP context.
  */
-static void
+void
 set_vfpcontext(struct thread *td, mcontext_vfp_t *vfp)
 {
-	struct pcb *curpcb;
+	struct pcb *pcb;
 
-	curpcb = curthread->td_pcb;
-	critical_enter();
-
-	vfp_discard(td);
-	memcpy(curpcb->pcb_vfpstate.reg, vfp->mcv_reg,
-	    sizeof(curpcb->pcb_vfpstate.reg));
-	curpcb->pcb_vfpstate.fpscr = vfp->mcv_fpscr;
-
-	critical_exit();
+	pcb = td->td_pcb;
+	if (td == curthread) {
+		critical_enter();
+		vfp_discard(td);
+		critical_exit();
+	} else
+		MPASS(TD_IS_SUSPENDED(td));
+	memcpy(pcb->pcb_vfpstate.reg, vfp->mcv_reg,
+	    sizeof(pcb->pcb_vfpstate.reg));
+	pcb->pcb_vfpstate.fpscr = vfp->mcv_fpscr;
 }
 #endif
+
+int
+arm_get_vfpstate(struct thread *td, void *args)
+{
+	int rv;
+	struct arm_get_vfpstate_args ua;
+	mcontext_vfp_t	mcontext_vfp;
+
+	rv = copyin(args, &ua, sizeof(ua));
+	if (rv != 0)
+		return (rv);
+	if (ua.mc_vfp_size != sizeof(mcontext_vfp_t))
+		return (EINVAL);
+#ifdef VFP
+	get_vfpcontext(td, &mcontext_vfp);
+#else
+	bzero(&mcontext_vfp, sizeof(mcontext_vfp));
+#endif
+
+	rv = copyout(&mcontext_vfp, ua.mc_vfp,  sizeof(mcontext_vfp));
+	if (rv != 0)
+		return (rv);
+	return (0);
+}
 
 /*
  * Get machine context.
@@ -483,6 +509,16 @@ set_mcontext(struct thread *td, mcontext_t *mcp)
 	mcontext_vfp_t mc_vfp, *vfp;
 	struct trapframe *tf = td->td_frame;
 	const __greg_t *gr = mcp->__gregs;
+	int spsr;
+
+	/*
+	 * Make sure the processor mode has not been tampered with and
+	 * interrupts have not been disabled.
+	 */
+	spsr = gr[_REG_CPSR];
+	if ((spsr & PSR_MODE) != PSR_USR32_MODE ||
+	    (spsr & (PSR_I | PSR_F)) != 0)
+		return (EINVAL);
 
 #ifdef WITNESS
 	if (mcp->mc_vfp_size != 0 && mcp->mc_vfp_size != sizeof(mc_vfp)) {
@@ -615,9 +651,9 @@ sendsig(catcher, ksi, mask)
 	tf->tf_usr_sp = (register_t)fp;
 	sysent = p->p_sysent;
 	if (sysent->sv_sigcode_base != 0)
-		tf->tf_usr_lr = (register_t)p->p_sigcode_base;
+		tf->tf_usr_lr = (register_t)sysent->sv_sigcode_base;
 	else
-		tf->tf_usr_lr = (register_t)(p->p_psstrings -
+		tf->tf_usr_lr = (register_t)(sysent->sv_psstrings -
 		    *(sysent->sv_szsigcode));
 	/* Set the mode to enter in the signal handler */
 #if __ARM_ARCH >= 7
@@ -642,22 +678,16 @@ sys_sigreturn(td, uap)
 	} */ *uap;
 {
 	ucontext_t uc;
-	int spsr;
+	int error;
 
 	if (uap == NULL)
 		return (EFAULT);
 	if (copyin(uap->sigcntxp, &uc, sizeof(uc)))
 		return (EFAULT);
-	/*
-	 * Make sure the processor mode has not been tampered with and
-	 * interrupts have not been disabled.
-	 */
-	spsr = uc.uc_mcontext.__gregs[_REG_CPSR];
-	if ((spsr & PSR_MODE) != PSR_USR32_MODE ||
-	    (spsr & (PSR_I | PSR_F)) != 0)
-		return (EINVAL);
 	/* Restore register context. */
-	set_mcontext(td, &uc.uc_mcontext);
+	error = set_mcontext(td, &uc.uc_mcontext);
+	if (error != 0)
+		return (error);
 
 	/* Restore signal mask. */
 	kern_sigprocmask(td, SIG_SETMASK, &uc.uc_sigmask, NULL, 0);
@@ -742,6 +772,16 @@ set_stackptrs(int cpu)
 }
 #endif
 
+static void
+arm_kdb_init(void)
+{
+
+	kdb_init();
+#ifdef KDB
+	if (boothowto & RB_KDB)
+		kdb_enter(KDB_WHY_BOOTFLAGS, "Boot flags requested debugger");
+#endif
+}
 
 #ifdef FDT
 #if __ARM_ARCH < 6
@@ -1010,7 +1050,7 @@ initarm(struct arm_boot_params *abp)
 
 	init_param2(physmem);
 	dbg_monitor_init();
-	kdb_init();
+	arm_kdb_init();
 
 	return ((void *)(kernelstack.pv_va + USPACE_SVC_STACK_TOP -
 	    sizeof(struct pcb)));
@@ -1087,6 +1127,19 @@ initarm(struct arm_boot_params *abp)
 	pmap_bootstrap_prepare(lastaddr);
 
 	/*
+	 * If EARLY_PRINTF support is enabled, we need to re-establish the
+	 * mapping after pmap_bootstrap_prepare() switches to new page tables.
+	 * Note that we can only do the remapping if the VA is outside the
+	 * kernel, now that we have real virtual (not VA=PA) mappings in effect.
+	 * Early printf does not work between the time pmap_set_tex() does
+	 * cp15_prrr_set() and this code remaps the VA.
+	 */
+#if defined(EARLY_PRINTF) && defined(SOCDEV_PA) && defined(SOCDEV_VA) && SOCDEV_VA < KERNBASE
+	pmap_preboot_map_attr(SOCDEV_PA, SOCDEV_VA, 1024 * 1024, 
+	    VM_PROT_READ | VM_PROT_WRITE, VM_MEMATTR_DEVICE);
+#endif
+
+	/*
 	 * Now that proper page tables are installed, call cpu_setup() to enable
 	 * instruction and data caches and other chip-specific features.
 	 */
@@ -1149,6 +1202,14 @@ initarm(struct arm_boot_params *abp)
 	platform_gpio_init();
 	cninit();
 
+	/*
+	 * If we made a mapping for EARLY_PRINTF after pmap_bootstrap_prepare(),
+	 * undo it now that the normal console printf works.
+	 */
+#if defined(EARLY_PRINTF) && defined(SOCDEV_PA) && defined(SOCDEV_VA) && SOCDEV_VA < KERNBASE
+	pmap_kremove(SOCDEV_VA);
+#endif
+
 	debugf("initarm: console initialized\n");
 	debugf(" arg1 kmdp = 0x%08x\n", (uint32_t)kmdp);
 	debugf(" boothowto = 0x%08x\n", boothowto);
@@ -1198,7 +1259,9 @@ initarm(struct arm_boot_params *abp)
 	/* Init message buffer. */
 	msgbufinit(msgbufp, msgbufsize);
 	dbg_monitor_init();
-	kdb_init();
+	arm_kdb_init();
+	/* Apply possible BP hardening. */
+	cpuinfo_init_bp_hardening();
 	return ((void *)STACKALIGN(thread0.td_pcb));
 
 }

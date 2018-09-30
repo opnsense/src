@@ -16,128 +16,74 @@ from older versions of FreeBSD, try WITHOUT_CLANG and WITH_GCC to bootstrap to
 the tip of head, and then rebuild without this option. The bootstrap process
 from older version of current across the gcc/clang cutover is a bit fragile.
 
-20180927	p15	FreeBSD-EN-18:09.ip
-			FreeBSD-EN-18:10.syscall
-			FreeBSD-EN-18:11.listen
-			FreeBSD-EN-18:12.mem
+20180627:
+	11.2-RELEASE.
 
-	Fix regression in IPv6 fragment reassembly. [EN-18:09.ip]
+20180504:
+	The tz database (tzdb) has been updated to 2018e.  This version more
+	correctly models time stamps in time zones with negative DST such as
+	Europe/Dublin (from 1971 on), Europe/Prague (1946/7), and
+	Africa/Windhoek (1994/2017).  This does not affect the UT offsets, only
+	time zone abbreviations and the tm_isdst flag.
 
-	Fix NULL pointer dereference in freebsd4_getfsstat. [EN-18:10.syscall]
+20180409:
+	The use of RSS hash from the network card aka flowid has been
+	disabled by default for lagg(4) as it's currently incompatible with
+	the lacp and loadbalance protocols.
 
-	Fix DoS in listen syscall over IPv6 socket. [EN-18:11.listen]
+	This can be re-enabled by setting the following in loader.conf:
+	net.link.lagg.default_use_flowid="1"
 
-	Fix small kernel memory disclosures. [EN-18:12.mem]
+20180331:
+	Clang, llvm, lld, lldb, compiler-rt and libc++ have been upgraded to
+	6.0.0.  Please see the 20141231 entry below for information about
+	prerequisites and upgrading, if you are not already using clang 3.5.0
+	or higher.
 
-20180912	p14	FreeBSD-SA-18:12.elf
-			FreeBSD-EN-18:08.lazyfpu
+20180211:
+	The LOADER_FIREWIRE_SUPPORT build variable as been renamed to
+	WITH/OUT_LOADER_FIREWIRE. LOADER_{NO_,}GELI_SUPPORT has been renamed
+	to WITH/OUT_LOADER_GELI.
 
-	Fix improper elf header parsing. [SA-18:12.elf]
+20180210:
+	The geli password typed at boot is now hidden.  To restore the previous
+	behavior, see geli(8) for configuration options.
 
-	Fix regression in Lazy FPU remediation. [EN-18:08.lazyfpu]
+	The SW_WATCHDOG option is no longer necessary to enable the
+	hardclock-based software watchdog if no hardware watchdog is
+	configured. As before, SW_WATCHDOG will cause the software
+	watchdog to be enabled even if a hardware watchdog is configured.
 
-20180814	p13	FreeBSD-SA-18:08.tcp [revised]
-			FreeBSD-SA-18:09.l1tf
-			FreeBSD-SA-18:10.ip
-			FreeBSD-SA-18:11.hostapd
+20180108:
+	lint(1) binaries and library are no longer built by default.  To
+	enable building them, define WITH_LINT in src.conf.  If you are using
+	a FreeBSD 12 or later system to build 11-stable, you may need to
+	install a lint(1) binary to use WITH_LINT.
 
-	Revise manual pages. [SA-18:08.tcp]
+20171003:
+	When building multiple kernels using KERNCONF, non-existent KERNCONF
+	files will produce an error and buildkernel will fail. Previously
+	missing KERNCONF files silently failed giving no indication as to
+	why, only to subsequently discover during installkernel that the
+	desired kernel was never built in the first place.
 
-	Fix L1 Terminal Fault (L1TF) kernel information disclosure.
-	[SA-18:09.l1tf]
+20170926:
+	Clang, llvm, lldb, compiler-rt and libc++ have been upgraded to 5.0.0.
+	Please see the 20141231 entry below for information about prerequisites
+	and upgrading, if you are not already using clang 3.5.0 or higher.
 
-	Fix resource exhaustion in IP fragment reassembly. [SA-18:10.ip]
-
-	Fix unauthenticated EAPOL-Key decryption vulnerability.
-	[SA-18:11.hostapd]
-
-20180806	p12	FreeBSD-SA-18:08.tcp
-
-	Fix resource exhaustion in TCP reassembly.
-
-20180621	p11	FreeBSD-SA-18:07.lazyfpu
-			FreeBSD-EN-18:07.pmap
-
-	Fix Lazy FPU information disclosure. [SA-18:07.lazyfpu]
-
-	Fix TLB shootdown for Xen based guests. [EN-18:07.pmap]
-
-20180508	p10	FreeBSD-SA-18:06.debugreg
-			FreeBSD-EN-18:05.mem
-			FreeBSD-EN-18:06.tzdata
-
-	Fix mishandling of x86 debug exceptions. [SA-18:06.debugreg]
-
-	Fix multiple small kernel memory disclosures. [EN-18:05.mem]
-
-	Update timezone database information. [EN-18:06.tzdata]
-
-20180404	p9	FreeBSD-SA-18:04.vt
-			FreeBSD-SA-18:05.ipsec
-			FreeBSD-EN-18:03.tzdata
-			FreeBSD-EN-18:04.mem
-
-	Fix vt console memory disclosure. [SA-18:04.vt]
-
-	Fix ipsec crash or denial of service. [SA-18:05.ipsec]
-
-	Update timezone database information. [EN-18:03.tzdata]
-
-	Fix multiple small kernel memory disclosures. [EN-18:04.mem]
-
-20180314	p8	FreeBSD-SA-18:03.speculative_execution
-
-	Add mitigations for two classes of speculative execution vulnerabilities
-	on amd64.
-
-20180307	p7	FreeBSD-SA-18:01.ipsec
-			FreeBSD-SA-18:02.ntp
-			FreeBSD-EN-18:01.tzdata
-			FreeBSD-EN-18:02.file
-
-	Fix ipsec validation and use-after-free. [SA-18:01.ipsec]
-
-	Fix multiple vulnerabilities in ntp. [SA-18:02.ntp]
-
-	Update timezone database information. [EN-18:01.tzdata]
-
-	Update file(1) to new version with security update. [EN-18:02.file]
-
-20171209	p6	FreeBSD-SA-17:12.openssl
-
-	Fix multiple vulnerabilities of OpenSSL.
-
-20171129	p5	FreeBSD-SA-17:11.openssl
-
-	Fix multiple vulnerabilities of OpenSSL.
-
-20171115	p4	FreeBSD-SA-17:08.ptrace
-			FreeBSD-SA-17:10.kldstat
-
-	Fix ptrace(2) vulnerability. [SA-17:08.ptrace]
-
-	Fix kldstat(2) vulnerability. [SA-17:10.kldstat]
-
-20171102	p3	FreeBSD-EN-17:09.tzdata
-
-	Update timezone database information. [EN-17:09]
-
-20171017	p2	FreeBSD-SA-17:07.wpa
-
-	Fix WPA2 protocol vulnerability. [SA-17:07]
-
-20170810	p1	FreeBSD-SA-17:06.openssh
-			FreeBSD-EN-17:07.vnet
-			FreeBSD-EN-17:08.pf
-
-	Fix OpenSSH Denial of Service vulnerability. [SA-17:06]
-
-	Fix VNET kernel panic with asynchronous I/O. [EN-17:07]
-
-	Fix pf(4) housekeeping thread causes kernel panic. [EN-17:08]
-
-20170725:
-	11.1-RELEASE.
+20170822:
+	Since the switch to GPT disk labels, fsck for UFS/FFS has been
+	unable to automatically find alternate superblocks. As of r322806,
+	the information needed to find alternate superblocks has been
+	moved to the end of the area reserved for the boot block.
+	Filesystems created with a newfs of this vintage or later
+	will create the recovery information. If you have a filesystem
+	created prior to this change and wish to have a recovery block
+	created for your filesystem, you can do so by running fsck in
+	forground mode (i.e., do not use the -p or -y options). As it
+	starts, fsck will ask ``SAVE DATA TO FIND ALTERNATE SUPERBLOCKS''
+	to which you should answer yes.
 
 20170518:
 	arm64 builds now use the base system LLD 4.0.0 linker by default,

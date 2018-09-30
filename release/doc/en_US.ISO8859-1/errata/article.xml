@@ -14,6 +14,7 @@
 
 <article xmlns="http://docbook.org/ns/docbook"
 	xmlns:xlink="http://www.w3.org/1999/xlink"
+	xml:id="top"
 	version="5.0">
   <info>
     <title>&os; &release; Errata</title>
@@ -23,7 +24,7 @@
     <pubdate>$FreeBSD$</pubdate>
 
     <copyright>
-      <year>2017</year>
+      <year>2018</year>
 
       <holder role="mailto:doc@FreeBSD.org">The &os; Documentation
 	Project</holder>
@@ -56,7 +57,7 @@
     <title>Introduction</title>
 
     <para>This errata document contains <quote>late-breaking
-	news</quote> about &os; &release; Before installing this
+	news</quote> about &os; &release;.  Before installing this
       version, it is important to consult this document to learn about
       any post-release discoveries or problems that may already have
       been found and fixed.</para>
@@ -105,8 +106,8 @@
 	  without recompiling the kernel.</para>
 
 	<para>To mitigate system crashes with such configurations,
-	  chose <literal>Escape to loader prompt</literal> in the boot
-	  menu and enter the following lines from &man.loader.8;
+	  choose <literal>Escape to loader prompt</literal> in the
+	  boot menu and enter the following lines from &man.loader.8;
 	  prompt, after an <literal>OK</literal>:</para>
 
 	<screen>set kern.kstack_pages=4
@@ -120,32 +121,57 @@ boot</screen>
       </listitem>
 
       <listitem>
-	<para>The size of the <acronym>GPT</acronym> enabled
-	  <acronym>ZFS</acronym> boot blocks
-	  (<filename>/boot/gptzfsboot</filename>) has increased past
-	  82K.  Systems upgraded from older releases may experience
-	  a problem where the size of the existing
-	  &quot;freebsd-boot&quot; partition is too small to hold the
-	  new <filename>gptzfsboot</filename>.</para>
+	<para>[2017-07-25] &os;/&arch.arm64; currently lacks
+	  <acronym>EFI</acronym> real-time clock
+	  (<acronym>RTC</acronym>) support, which may cause the system
+	  to boot with the wrong time set.</para>
 
-	<para>Systems where the boot partition is immediately followed
-	  by the swap partition, such as those installed via
-	  &man.bsdinstall.8;, can resize the swap partition slightly
-	  using the &man.gpart.8; <literal>resize</literal> command,
-	  so space can be reclaimed to increase the size of the
-	  freebsd-boot partition.</para>
+	<para>As a workaround, either enable &man.ntpdate.8; or
+	  include <literal>ntpd_sync_on_start="YES"</literal> in
+	  &man.rc.conf.5;.</para>
       </listitem>
 
       <listitem>
-	<para>Due to a bug in earlier versions of &man.clang.1; that
-	  is difficult to work around in the upgrade process, to
-	  upgrade the system from sources via buildworld to -CURRENT
-	  or &release;, it is necessary to upgrade machines running
-	  10.x to revision r286033.  Source-based upgrades from
-	  10.3-RELEASE are not affected.  This differs from the
-	  historical situation where one could generally upgrade from
-	  anywhere on earlier stable branches, so caution should be
-	  exercised.</para>
+	<para>[2017-07-25] A late issue was discovered with
+	  &os;/&arch.arm64; and &quot;root on
+	  <acronym>ZFS</acronym>&quot; installations where the root
+	  <acronym>ZFS</acronym> pool would fail to be located.</para>
+
+	<para>There currently is no workaround.</para>
+      </listitem>
+
+      <listitem>
+	<para>[2017-11-06] An issue with &os; virtual machines with
+	  <application>vagrant</application> was discovered that
+	  affects the <application>VirtualBox</application> where the
+	  virtual machine will not start on the initial boot invoked
+	  with <literal>vagrant up</literal>.</para>
+
+	<para>The issue is due to the virtual machine
+	  <acronym>MAC</acronym> being unset, as &os; does not provide
+	  a default <filename>Vagrantfile</filename>.</para>
+
+	<para>It has been observed, however, that a subsequent
+	  invocation of <literal>vagrant up</literal> will allow the
+	  virtual machine to successfully boot, allowing access via
+	  <literal>vagrant ssh</literal>.</para>
+      </listitem>
+
+      <listitem>
+	<para>[2018-06-21] An issue had been discovered late in the
+	  release cycle where removing <acronym>ZFS</acronym> vdevs
+	  from a pool under certain conditions would cause a system
+	  crash when &man.zfsd.8; is enabled in
+	  &man.rc.conf.5;.</para>
+
+	<para>At present, it is believed to be limited to removal of
+	  a <literal>mirror</literal> vdev from a pool consisting of
+	  multiple <literal>mirror</literal> vdevs.</para>
+
+	<para>See <acronym>PR</acronym> <link
+	    xlink:href="https://bugs.freebsd.org/bugzilla/show_bug.cgi?id=228750">228750</link>
+	  for more information and updates as the issue is
+	  investigated.</para>
       </listitem>
     </itemizedlist>
   </sect1>

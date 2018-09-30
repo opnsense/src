@@ -444,20 +444,17 @@ osendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	 * Copy the sigframe out to the user's stack.
 	 */
 	if (copyout(&sf, fp, sizeof(*fp)) != 0) {
-#ifdef DEBUG
-		printf("process %ld has trashed its stack\n", (long)p->p_pid);
-#endif
 		PROC_LOCK(p);
 		sigexit(td, SIGILL);
 	}
 
 	regs->tf_esp = (int)fp;
 	if (p->p_sysent->sv_sigcode_base != 0) {
-		regs->tf_eip = p->p_sigcode_base + szsigcode -
+		regs->tf_eip = p->p_sysent->sv_sigcode_base + szsigcode -
 		    szosigcode;
 	} else {
 		/* a.out sysentvec does not use shared page */
-		regs->tf_eip = p->p_psstrings - szosigcode;
+		regs->tf_eip = p->p_sysent->sv_psstrings - szosigcode;
 	}
 	regs->tf_eflags &= ~(PSL_T | PSL_D);
 	regs->tf_cs = _ucodesel;
@@ -573,15 +570,12 @@ freebsd4_sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	 * Copy the sigframe out to the user's stack.
 	 */
 	if (copyout(&sf, sfp, sizeof(*sfp)) != 0) {
-#ifdef DEBUG
-		printf("process %ld has trashed its stack\n", (long)p->p_pid);
-#endif
 		PROC_LOCK(p);
 		sigexit(td, SIGILL);
 	}
 
 	regs->tf_esp = (int)sfp;
-	regs->tf_eip = p->p_sigcode_base + szsigcode -
+	regs->tf_eip = p->p_sysent->sv_sigcode_base + szsigcode -
 	    szfreebsd4_sigcode;
 	regs->tf_eflags &= ~(PSL_T | PSL_D);
 	regs->tf_cs = _ucodesel;
@@ -739,17 +733,14 @@ sendsig(sig_t catcher, ksiginfo_t *ksi, sigset_t *mask)
 	    (xfpusave != NULL && copyout(xfpusave,
 	    (void *)sf.sf_uc.uc_mcontext.mc_xfpustate, xfpusave_len)
 	    != 0)) {
-#ifdef DEBUG
-		printf("process %ld has trashed its stack\n", (long)p->p_pid);
-#endif
 		PROC_LOCK(p);
 		sigexit(td, SIGILL);
 	}
 
 	regs->tf_esp = (int)sfp;
-	regs->tf_eip = p->p_sigcode_base;
+	regs->tf_eip = p->p_sysent->sv_sigcode_base;
 	if (regs->tf_eip == 0)
-		regs->tf_eip = p->p_psstrings - szsigcode;
+		regs->tf_eip = p->p_sysent->sv_psstrings - szsigcode;
 	regs->tf_eflags &= ~(PSL_T | PSL_D);
 	regs->tf_cs = _ucodesel;
 	regs->tf_ds = _udatasel;
@@ -1146,6 +1137,15 @@ exec_setregs(struct thread *td, struct image_params *imgp, u_long stack)
 	else
 		mtx_unlock_spin(&dt_lock);
   
+	/*
+	 * Reset the fs and gs bases.  The values from the old address
+	 * space do not make sense for the new program.  In particular,
+	 * gsbase might be the TLS base for the old program but the new
+	 * program has no TLS now.
+	 */
+	set_fsbase(td, 0);
+	set_gsbase(td, 0);
+
 	bzero((char *)regs, sizeof(struct trapframe));
 	regs->tf_eip = imgp->entry_addr;
 	regs->tf_esp = stack;
@@ -2441,6 +2441,7 @@ init386(int first)
 	int gsel_tss, metadata_missing, x, pa;
 	struct pcpu *pc;
 	struct xstate_hdr *xhdr;
+	caddr_t kmdp;
 	int late_console;
 
 	thread0.td_kstack = proc0kstack;
@@ -2471,6 +2472,8 @@ init386(int first)
 		init_static_kenv((char *)bootinfo.bi_envp + KERNBASE, 0);
 	else
 		init_static_kenv(NULL, 0);
+
+	identify_hypervisor();
 
 	/* Init basic tunables, hz etc */
 	init_param1();
@@ -2685,6 +2688,9 @@ init386(int first)
 		cninit();
 		i386_kdb_init();
 	}
+
+	kmdp = preload_search_by_type("elf kernel");
+	link_elf_ireloc(kmdp);
 
 	vm86_initialize();
 	getmemsize(first);
@@ -2998,7 +3004,6 @@ int
 set_fpregs(struct thread *td, struct fpreg *fpregs)
 {
 
-	critical_enter();
 	if (cpu_fxsr)
 		npx_set_fpregs_xmm((struct save87 *)fpregs,
 		    &get_pcb_user_save_td(td)->sv_xmm);
@@ -3006,7 +3011,6 @@ set_fpregs(struct thread *td, struct fpreg *fpregs)
 		bcopy(fpregs, &get_pcb_user_save_td(td)->sv_87,
 		    sizeof(*fpregs));
 	npxuserinited(td);
-	critical_exit();
 	return (0);
 }
 
@@ -3138,7 +3142,6 @@ static int
 set_fpcontext(struct thread *td, mcontext_t *mcp, char *xfpustate,
     size_t xfpustate_len)
 {
-	union savefpu *fpstate;
 	int error;
 
 	if (mcp->mc_fpformat == _MC_FPFMT_NODEV)
@@ -3152,10 +3155,8 @@ set_fpcontext(struct thread *td, mcontext_t *mcp, char *xfpustate,
 		error = 0;
 	} else if (mcp->mc_ownedfp == _MC_FPOWNED_FPU ||
 	    mcp->mc_ownedfp == _MC_FPOWNED_PCB) {
-		fpstate = (union savefpu *)&mcp->mc_fpstate;
-		if (cpu_fxsr)
-			fpstate->sv_xmm.sv_env.en_mxcsr &= cpu_mxcsr_mask;
-		error = npxsetregs(td, fpstate, xfpustate, xfpustate_len);
+		error = npxsetregs(td, (union savefpu *)&mcp->mc_fpstate,
+		    xfpustate, xfpustate_len);
 	} else
 		return (EINVAL);
 	return (error);

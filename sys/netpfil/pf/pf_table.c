@@ -175,7 +175,6 @@ static struct pfr_ktable
 			*pfr_lookup_table(struct pfr_table *);
 static void		 pfr_clean_node_mask(struct pfr_ktable *,
 			    struct pfr_kentryworkq *);
-static int		 pfr_table_count(struct pfr_table *, int);
 static int		 pfr_skip_table(struct pfr_table *,
 			    struct pfr_ktable *, int);
 static struct pfr_kentry
@@ -1124,8 +1123,10 @@ pfr_add_tables(struct pfr_table *tbl, int size, int *nadd, int flags)
 			if (p == NULL)
 				senderr(ENOMEM);
 			SLIST_FOREACH(q, &addq, pfrkt_workq) {
-				if (!pfr_ktable_compare(p, q))
+				if (!pfr_ktable_compare(p, q)) {
+					pfr_destroy_ktable(p, 0);
 					goto _skip;
+				}
 			}
 			SLIST_INSERT_HEAD(&addq, p, pfrkt_workq);
 			xadd++;
@@ -1679,7 +1680,7 @@ pfr_fix_anchor(char *anchor)
 	return (0);
 }
 
-static int
+int
 pfr_table_count(struct pfr_table *filter, int flags)
 {
 	struct pf_ruleset *rs;

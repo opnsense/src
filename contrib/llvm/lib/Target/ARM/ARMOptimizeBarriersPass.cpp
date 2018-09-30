@@ -49,7 +49,7 @@ static bool CanMovePastDMB(const MachineInstr *MI) {
 }
 
 bool ARMOptimizeBarriersPass::runOnMachineFunction(MachineFunction &MF) {
-  if (skipFunction(*MF.getFunction()))
+  if (skipFunction(MF.getFunction()))
     return false;
 
   // Vector to store the DMBs we will remove after the first iteration
@@ -88,13 +88,15 @@ bool ARMOptimizeBarriersPass::runOnMachineFunction(MachineFunction &MF) {
       }
     }
   }
+  bool Changed = false;
   // Remove the tagged DMB
   for (auto MI : ToRemove) {
     MI->eraseFromParent();
     ++NumDMBsRemoved;
+    Changed = true;
   }
 
-  return NumDMBsRemoved > 0;
+  return Changed;
 }
 
 /// createARMOptimizeBarriersPass - Returns an instance of the remove double

@@ -74,8 +74,9 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "X86DisassemblerDecoder.h"
+#include "MCTargetDesc/X86BaseInfo.h"
 #include "MCTargetDesc/X86MCTargetDesc.h"
+#include "X86DisassemblerDecoder.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCDisassembler/MCDisassembler.h"
 #include "llvm/MC/MCExpr.h"
@@ -232,7 +233,24 @@ MCDisassembler::DecodeStatus X86GenericDisassembler::getInstruction(
     return Fail;
   } else {
     Size = InternalInstr.length;
-    return (!translateInstruction(Instr, InternalInstr, this)) ? Success : Fail;
+    bool Ret = translateInstruction(Instr, InternalInstr, this);
+    if (!Ret) {
+      unsigned Flags = X86::IP_NO_PREFIX;
+      if (InternalInstr.hasAdSize)
+        Flags |= X86::IP_HAS_AD_SIZE;
+      if (!InternalInstr.mandatoryPrefix) {
+        if (InternalInstr.hasOpSize)
+          Flags |= X86::IP_HAS_OP_SIZE;
+        if (InternalInstr.repeatPrefix == 0xf2)
+          Flags |= X86::IP_HAS_REPEAT_NE;
+        else if (InternalInstr.repeatPrefix == 0xf3 &&
+                 // It should not be 'pause' f3 90
+                 InternalInstr.opcode != 0x90)
+          Flags |= X86::IP_HAS_REPEAT;
+      }
+      Instr.setFlags(Flags);
+    }
+    return (!Ret) ? Success : Fail;
   }
 }
 
@@ -247,13 +265,10 @@ MCDisassembler::DecodeStatus X86GenericDisassembler::getInstruction(
 /// @param reg        - The Reg to append.
 static void translateRegister(MCInst &mcInst, Reg reg) {
 #define ENTRY(x) X86::x,
-  uint8_t llvmRegnums[] = {
-    ALL_REGS
-    0
-  };
+  static constexpr MCPhysReg llvmRegnums[] = {ALL_REGS};
 #undef ENTRY
 
-  uint8_t llvmRegnum = llvmRegnums[reg];
+  MCPhysReg llvmRegnum = llvmRegnums[reg];
   mcInst.addOperand(MCOperand::createReg(llvmRegnum));
 }
 
@@ -315,12 +330,12 @@ static bool translateSrcIndex(MCInst &mcInst, InternalInstruction &insn) {
   unsigned baseRegNo;
 
   if (insn.mode == MODE_64BIT)
-    baseRegNo = insn.prefixPresent[0x67] ? X86::ESI : X86::RSI;
+    baseRegNo = insn.hasAdSize ? X86::ESI : X86::RSI;
   else if (insn.mode == MODE_32BIT)
-    baseRegNo = insn.prefixPresent[0x67] ? X86::SI : X86::ESI;
+    baseRegNo = insn.hasAdSize ? X86::SI : X86::ESI;
   else {
     assert(insn.mode == MODE_16BIT);
-    baseRegNo = insn.prefixPresent[0x67] ? X86::ESI : X86::SI;
+    baseRegNo = insn.hasAdSize ? X86::ESI : X86::SI;
   }
   MCOperand baseReg = MCOperand::createReg(baseRegNo);
   mcInst.addOperand(baseReg);
@@ -340,12 +355,12 @@ static bool translateDstIndex(MCInst &mcInst, InternalInstruction &insn) {
   unsigned baseRegNo;
 
   if (insn.mode == MODE_64BIT)
-    baseRegNo = insn.prefixPresent[0x67] ? X86::EDI : X86::RDI;
+    baseRegNo = insn.hasAdSize ? X86::EDI : X86::RDI;
   else if (insn.mode == MODE_32BIT)
-    baseRegNo = insn.prefixPresent[0x67] ? X86::DI : X86::EDI;
+    baseRegNo = insn.hasAdSize ? X86::DI : X86::EDI;
   else {
     assert(insn.mode == MODE_16BIT);
-    baseRegNo = insn.prefixPresent[0x67] ? X86::EDI : X86::DI;
+    baseRegNo = insn.hasAdSize ? X86::EDI : X86::DI;
   }
   MCOperand baseReg = MCOperand::createReg(baseRegNo);
   mcInst.addOperand(baseReg);
@@ -368,32 +383,49 @@ static void translateImmediate(MCInst &mcInst, uint64_t immediate,
 
   bool isBranch = false;
   uint64_t pcrel = 0;
-  if (type == TYPE_RELv) {
+  if (type == TYPE_REL) {
     isBranch = true;
     pcrel = insn.startLocation +
             insn.immediateOffset + insn.immediateSize;
-    switch (insn.displacementSize) {
+    switch (operand.encoding) {
     default:
       break;
-    case 1:
+    case ENCODING_Iv:
+      switch (insn.displacementSize) {
+      default:
+        break;
+      case 1:
+        if(immediate & 0x80)
+          immediate |= ~(0xffull);
+        break;
+      case 2:
+        if(immediate & 0x8000)
+          immediate |= ~(0xffffull);
+        break;
+      case 4:
+        if(immediate & 0x80000000)
+          immediate |= ~(0xffffffffull);
+        break;
+      case 8:
+        break;
+      }
+      break;
+    case ENCODING_IB:
       if(immediate & 0x80)
         immediate |= ~(0xffull);
       break;
-    case 2:
+    case ENCODING_IW:
       if(immediate & 0x8000)
         immediate |= ~(0xffffull);
       break;
-    case 4:
+    case ENCODING_ID:
       if(immediate & 0x80000000)
         immediate |= ~(0xffffffffull);
-      break;
-    case 8:
       break;
     }
   }
   // By default sign-extend all X86 immediates based on their encoding.
-  else if (type == TYPE_IMM8 || type == TYPE_IMM16 || type == TYPE_IMM32 ||
-           type == TYPE_IMM64 || type == TYPE_IMMv) {
+  else if (type == TYPE_IMM) {
     switch (operand.encoding) {
     default:
       break;
@@ -620,38 +652,17 @@ static void translateImmediate(MCInst &mcInst, uint64_t immediate,
   }
 
   switch (type) {
-  case TYPE_XMM32:
-  case TYPE_XMM64:
-  case TYPE_XMM128:
+  case TYPE_XMM:
     mcInst.addOperand(MCOperand::createReg(X86::XMM0 + (immediate >> 4)));
     return;
-  case TYPE_XMM256:
+  case TYPE_YMM:
     mcInst.addOperand(MCOperand::createReg(X86::YMM0 + (immediate >> 4)));
     return;
-  case TYPE_XMM512:
+  case TYPE_ZMM:
     mcInst.addOperand(MCOperand::createReg(X86::ZMM0 + (immediate >> 4)));
     return;
   case TYPE_BNDR:
     mcInst.addOperand(MCOperand::createReg(X86::BND0 + (immediate >> 4)));
-  case TYPE_REL8:
-    isBranch = true;
-    pcrel = insn.startLocation + insn.immediateOffset + insn.immediateSize;
-    if (immediate & 0x80)
-      immediate |= ~(0xffull);
-    break;
-  case TYPE_REL16:
-    isBranch = true;
-    pcrel = insn.startLocation + insn.immediateOffset + insn.immediateSize;
-    if (immediate & 0x8000)
-      immediate |= ~(0xffffull);
-    break;
-  case TYPE_REL32:
-  case TYPE_REL64:
-    isBranch = true;
-    pcrel = insn.startLocation + insn.immediateOffset + insn.immediateSize;
-    if(immediate & 0x80000000)
-      immediate |= ~(0xffffffffull);
-    break;
   default:
     // operand is 64 bits wide.  Do nothing.
     break;
@@ -662,8 +673,7 @@ static void translateImmediate(MCInst &mcInst, uint64_t immediate,
                                mcInst, Dis))
     mcInst.addOperand(MCOperand::createImm(immediate));
 
-  if (type == TYPE_MOFFS8 || type == TYPE_MOFFS16 ||
-      type == TYPE_MOFFS32 || type == TYPE_MOFFS64) {
+  if (type == TYPE_MOFFS) {
     MCOperand segmentReg;
     segmentReg = MCOperand::createReg(segmentRegnums[insn.segmentOverride]);
     mcInst.addOperand(segmentReg);
@@ -749,46 +759,6 @@ static bool translateRMMemory(MCInst &mcInst, InternalInstruction &insn,
       }
     } else {
       baseReg = MCOperand::createReg(0);
-    }
-
-    // Check whether we are handling VSIB addressing mode for GATHER.
-    // If sibIndex was set to SIB_INDEX_NONE, index offset is 4 and
-    // we should use SIB_INDEX_XMM4|YMM4 for VSIB.
-    // I don't see a way to get the correct IndexReg in readSIB:
-    //   We can tell whether it is VSIB or SIB after instruction ID is decoded,
-    //   but instruction ID may not be decoded yet when calling readSIB.
-    uint32_t Opcode = mcInst.getOpcode();
-    bool IndexIs128 = (Opcode == X86::VGATHERDPDrm ||
-                       Opcode == X86::VGATHERDPDYrm ||
-                       Opcode == X86::VGATHERQPDrm ||
-                       Opcode == X86::VGATHERDPSrm ||
-                       Opcode == X86::VGATHERQPSrm ||
-                       Opcode == X86::VPGATHERDQrm ||
-                       Opcode == X86::VPGATHERDQYrm ||
-                       Opcode == X86::VPGATHERQQrm ||
-                       Opcode == X86::VPGATHERDDrm ||
-                       Opcode == X86::VPGATHERQDrm);
-    bool IndexIs256 = (Opcode == X86::VGATHERQPDYrm ||
-                       Opcode == X86::VGATHERDPSYrm ||
-                       Opcode == X86::VGATHERQPSYrm ||
-                       Opcode == X86::VGATHERDPDZrm ||
-                       Opcode == X86::VPGATHERDQZrm ||
-                       Opcode == X86::VPGATHERQQYrm ||
-                       Opcode == X86::VPGATHERDDYrm ||
-                       Opcode == X86::VPGATHERQDYrm);
-    bool IndexIs512 = (Opcode == X86::VGATHERQPDZrm ||
-                       Opcode == X86::VGATHERDPSZrm ||
-                       Opcode == X86::VGATHERQPSZrm ||
-                       Opcode == X86::VPGATHERQQZrm ||
-                       Opcode == X86::VPGATHERDDZrm ||
-                       Opcode == X86::VPGATHERQDZrm);
-    if (IndexIs128 || IndexIs256 || IndexIs512) {
-      unsigned IndexOffset = insn.sibIndex -
-                         (insn.addressSize == 8 ? SIB_INDEX_RAX:SIB_INDEX_EAX);
-      SIBIndex IndexBase = IndexIs512 ? SIB_INDEX_ZMM0 :
-                           IndexIs256 ? SIB_INDEX_YMM0 : SIB_INDEX_XMM0;
-      insn.sibIndex = (SIBIndex)(IndexBase +
-                           (insn.sibIndex == SIB_INDEX_NONE ? 4 : IndexOffset));
     }
 
     if (insn.sibIndex != SIB_INDEX_NONE) {
@@ -909,38 +879,18 @@ static bool translateRM(MCInst &mcInst, const OperandSpecifier &operand,
   case TYPE_R64:
   case TYPE_Rv:
   case TYPE_MM64:
-  case TYPE_XMM32:
-  case TYPE_XMM64:
-  case TYPE_XMM128:
-  case TYPE_XMM256:
-  case TYPE_XMM512:
-  case TYPE_VK1:
-  case TYPE_VK2:
-  case TYPE_VK4:
-  case TYPE_VK8:
-  case TYPE_VK16:
-  case TYPE_VK32:
-  case TYPE_VK64:
+  case TYPE_XMM:
+  case TYPE_YMM:
+  case TYPE_ZMM:
+  case TYPE_VK:
   case TYPE_DEBUGREG:
   case TYPE_CONTROLREG:
   case TYPE_BNDR:
     return translateRMRegister(mcInst, insn);
   case TYPE_M:
-  case TYPE_M8:
-  case TYPE_M16:
-  case TYPE_M32:
-  case TYPE_M64:
-  case TYPE_M128:
-  case TYPE_M256:
-  case TYPE_M512:
-  case TYPE_Mv:
-  case TYPE_M32FP:
-  case TYPE_M64FP:
-  case TYPE_M80FP:
-  case TYPE_M1616:
-  case TYPE_M1632:
-  case TYPE_M1664:
-  case TYPE_LEA:
+  case TYPE_MVSIBX:
+  case TYPE_MVSIBY:
+  case TYPE_MVSIBZ:
     return translateRMMemory(mcInst, insn, Dis);
   }
 }
@@ -992,6 +942,7 @@ static bool translateOperand(MCInst &mcInst, const OperandSpecifier &operand,
   case ENCODING_WRITEMASK:
     return translateMaskRegister(mcInst, insn.writemask);
   CASE_ENCODING_RM:
+  CASE_ENCODING_VSIB:
     return translateRM(mcInst, operand, insn, Dis);
   case ENCODING_IB:
   case ENCODING_IW:
@@ -1004,6 +955,9 @@ static bool translateOperand(MCInst &mcInst, const OperandSpecifier &operand,
                        operand,
                        insn,
                        Dis);
+    return false;
+  case ENCODING_IRC:
+    mcInst.addOperand(MCOperand::createImm(insn.RC));
     return false;
   case ENCODING_SI:
     return translateSrcIndex(mcInst, insn);

@@ -17,8 +17,8 @@
 #include "RegisterContext_x86.h"
 #include "RegisterInfoInterface.h"
 #include "lldb-x86-register-enums.h"
-#include "lldb/Core/Log.h"
 #include "lldb/Target/RegisterContext.h"
+#include "lldb/Utility/Log.h"
 
 class ProcessMonitor;
 
@@ -149,9 +149,9 @@ protected:
   RegInfo m_reg_info;
   FPRType
       m_fpr_type; // determines the type of data stored by union FPR, if any.
-  FPR m_fpr;      // floating-point registers including extended register sets.
-  IOVEC m_iovec;  // wrapper for xsave.
-  YMM m_ymm_set;  // copy of ymmh and xmm register halves.
+  lldb_private::FPR m_fpr;     // floating-point registers including extended
+                               // register sets.
+  lldb_private::YMM m_ymm_set; // copy of ymmh and xmm register halves.
   std::unique_ptr<lldb_private::RegisterInfoInterface>
       m_register_info_ap; // Register Info Interface (FreeBSD or Linux)
 

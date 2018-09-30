@@ -74,15 +74,6 @@ __FBSDID("$FreeBSD$");
 #include <machine/specialreg.h>
 #include <machine/cpu.h>
 
-#define WARMBOOT_TARGET		0
-#define WARMBOOT_OFF		(KERNBASE + 0x0467)
-#define WARMBOOT_SEG		(KERNBASE + 0x0469)
-
-#define CMOS_REG		(0x70)
-#define CMOS_DATA		(0x71)
-#define BIOS_RESET		(0x0f)
-#define BIOS_WARM		(0x0a)
-
 /* lock region used by kernel profiling */
 int	mcount_lock;
 
@@ -122,6 +113,9 @@ struct cpu_ops cpu_ops;
  */
 
 static volatile cpuset_t ipi_stop_nmi_pending;
+
+volatile cpuset_t resuming_cpus;
+volatile cpuset_t toresume_cpus;
 
 /* used to hold the AP's until we are ready to release them */
 struct mtx ap_boot_mtx;
@@ -911,9 +905,9 @@ init_secondary_tail(void)
 	KASSERT(PCPU_GET(idlethread) != NULL, ("no idle thread"));
 	PCPU_SET(curthread, PCPU_GET(idlethread));
 
-	mca_init();
-
 	mtx_lock_spin(&ap_boot_mtx);
+
+	mca_init();
 
 	/* Init local apic for irq's */
 	lapic_setup(1);
@@ -1325,6 +1319,13 @@ cpususpend_handler(void)
 #endif
 		wbinvd();
 		CPU_SET_ATOMIC(cpu, &suspended_cpus);
+		/*
+		 * Hack for xen, which does not use resumectx() so never
+		 * uses the next clause: set resuming_cpus early so that
+		 * resume_cpus() can wait on the same bitmap for acpi and
+		 * xen.  resuming_cpus now means eventually_resumable_cpus.
+		 */
+		CPU_SET_ATOMIC(cpu, &resuming_cpus);
 	} else {
 #ifdef __amd64__
 		fpuresume(susppcbs[cpu]->sp_fpususpend);
@@ -1336,12 +1337,12 @@ cpususpend_handler(void)
 		PCPU_SET(switchtime, 0);
 		PCPU_SET(switchticks, ticks);
 
-		/* Indicate that we are resumed */
+		/* Indicate that we are resuming */
 		CPU_CLR_ATOMIC(cpu, &suspended_cpus);
 	}
 
-	/* Wait for resume */
-	while (!CPU_ISSET(cpu, &started_cpus))
+	/* Wait for resume directive */
+	while (!CPU_ISSET(cpu, &toresume_cpus))
 		ia32_pause();
 
 	if (cpu_ops.cpu_resume)
@@ -1357,8 +1358,9 @@ cpususpend_handler(void)
 	lapic_setup(0);
 
 	/* Indicate that we are resumed */
+	CPU_CLR_ATOMIC(cpu, &resuming_cpus);
 	CPU_CLR_ATOMIC(cpu, &suspended_cpus);
-	CPU_CLR_ATOMIC(cpu, &started_cpus);
+	CPU_CLR_ATOMIC(cpu, &toresume_cpus);
 }
 
 

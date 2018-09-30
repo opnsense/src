@@ -9,19 +9,19 @@
 
 #include "lldb/Symbol/CompilerType.h"
 
-#include "lldb/Core/ConstString.h"
-#include "lldb/Core/DataBufferHeap.h"
-#include "lldb/Core/DataExtractor.h"
 #include "lldb/Core/Debugger.h"
 #include "lldb/Core/Scalar.h"
-#include "lldb/Core/Stream.h"
 #include "lldb/Core/StreamFile.h"
-#include "lldb/Core/StreamString.h"
 #include "lldb/Symbol/ClangASTContext.h"
 #include "lldb/Symbol/ClangExternalASTSourceCommon.h"
 #include "lldb/Symbol/Type.h"
 #include "lldb/Target/ExecutionContext.h"
 #include "lldb/Target/Process.h"
+#include "lldb/Utility/ConstString.h"
+#include "lldb/Utility/DataBufferHeap.h"
+#include "lldb/Utility/DataExtractor.h"
+#include "lldb/Utility/Stream.h"
+#include "lldb/Utility/StreamString.h"
 
 #include <iterator>
 #include <mutex>
@@ -690,13 +690,24 @@ size_t CompilerType::GetNumTemplateArguments() const {
   return 0;
 }
 
-CompilerType
-CompilerType::GetTemplateArgument(size_t idx,
-                                  lldb::TemplateArgumentKind &kind) const {
+TemplateArgumentKind CompilerType::GetTemplateArgumentKind(size_t idx) const {
+  if (IsValid())
+    return m_type_system->GetTemplateArgumentKind(m_type, idx);
+  return eTemplateArgumentKindNull;
+}
+
+CompilerType CompilerType::GetTypeTemplateArgument(size_t idx) const {
   if (IsValid()) {
-    return m_type_system->GetTemplateArgument(m_type, idx, kind);
+    return m_type_system->GetTypeTemplateArgument(m_type, idx);
   }
   return CompilerType();
+}
+
+llvm::Optional<CompilerType::IntegralTemplateArgument>
+CompilerType::GetIntegralTemplateArgument(size_t idx) const {
+  if (IsValid())
+    return m_type_system->GetIntegralTemplateArgument(m_type, idx);
+  return llvm::None;
 }
 
 CompilerType CompilerType::GetTypeForFormatters() const {
@@ -744,8 +755,7 @@ size_t CompilerType::ConvertStringToFloatValue(const char *s, uint8_t *dst,
 #define DEPTH_INCREMENT 2
 
 void CompilerType::DumpValue(ExecutionContext *exe_ctx, Stream *s,
-                             lldb::Format format,
-                             const lldb_private::DataExtractor &data,
+                             lldb::Format format, const DataExtractor &data,
                              lldb::offset_t data_byte_offset,
                              size_t data_byte_size, uint32_t bitfield_bit_size,
                              uint32_t bitfield_bit_offset, bool show_types,
@@ -759,7 +769,7 @@ void CompilerType::DumpValue(ExecutionContext *exe_ctx, Stream *s,
 }
 
 bool CompilerType::DumpTypeValue(Stream *s, lldb::Format format,
-                                 const lldb_private::DataExtractor &data,
+                                 const DataExtractor &data,
                                  lldb::offset_t byte_offset, size_t byte_size,
                                  uint32_t bitfield_bit_size,
                                  uint32_t bitfield_bit_offset,
@@ -772,7 +782,7 @@ bool CompilerType::DumpTypeValue(Stream *s, lldb::Format format,
 }
 
 void CompilerType::DumpSummary(ExecutionContext *exe_ctx, Stream *s,
-                               const lldb_private::DataExtractor &data,
+                               const DataExtractor &data,
                                lldb::offset_t data_byte_offset,
                                size_t data_byte_size) {
   if (IsValid())
@@ -998,14 +1008,14 @@ bool CompilerType::ReadFromMemory(lldb_private::ExecutionContext *exe_ctx,
       if (addr == 0)
         return false;
       // The address is an address in this process, so just copy it
-      memcpy(dst, (uint8_t *)nullptr + addr, byte_size);
+      memcpy(dst, reinterpret_cast<uint8_t *>(addr), byte_size);
       return true;
     } else {
       Process *process = nullptr;
       if (exe_ctx)
         process = exe_ctx->GetProcessPtr();
       if (process) {
-        Error error;
+        Status error;
         return process->ReadMemory(addr, dst, byte_size, error) == byte_size;
       }
     }
@@ -1040,7 +1050,7 @@ bool CompilerType::WriteToMemory(lldb_private::ExecutionContext *exe_ctx,
       if (exe_ctx)
         process = exe_ctx->GetProcessPtr();
       if (process) {
-        Error error;
+        Status error;
         return process->WriteMemory(addr, new_value.GetData(), byte_size,
                                     error) == byte_size;
       }

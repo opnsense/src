@@ -1237,7 +1237,7 @@ mwl_reset_vap(struct ieee80211vap *vap, int state)
 
 /*
  * Reset the hardware w/o losing operational state.
- * Used to to reset or reload hardware state for a vap.
+ * Used to reset or reload hardware state for a vap.
  */
 static int
 mwl_reset(struct ieee80211vap *vap, u_long cmd)
@@ -4744,8 +4744,8 @@ mwl_ioctl(struct ieee80211com *ic, u_long cmd, void *data)
 		 * statistics.  The alternative is to copy the data
 		 * to a local structure.
 		 */
-		return (copyout(&sc->sc_stats,
-				ifr->ifr_data, sizeof (sc->sc_stats)));
+		return (copyout(&sc->sc_stats, ifr_data_get_ptr(ifr),
+		    sizeof (sc->sc_stats)));
 #ifdef MWL_DIAGAPI
 	case SIOCGMVDIAG:
 		/* XXX check privs */

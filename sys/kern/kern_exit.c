@@ -99,6 +99,8 @@ SDT_PROBE_DEFINE1(proc, , , exit, "int");
 /* Hook for NFS teardown procedure. */
 void (*nlminfo_release_p)(struct proc *p);
 
+EVENTHANDLER_LIST_DECLARE(process_exit);
+
 struct proc *
 proc_realparent(struct proc *child)
 {
@@ -329,7 +331,7 @@ exit1(struct thread *td, int rval, int signo)
 	 * Event handler could change exit status.
 	 * XXX what if one of these generates an error?
 	 */
-	EVENTHANDLER_INVOKE(process_exit, p);
+	EVENTHANDLER_DIRECT_INVOKE(process_exit, p);
 
 	/*
 	 * If parent is waiting for us to exit or exec,
@@ -477,6 +479,12 @@ exit1(struct thread *td, int rval, int signo)
 				PROC_LOCK(q->p_reaper);
 				pksignal(q->p_reaper, SIGCHLD, ksi1);
 				PROC_UNLOCK(q->p_reaper);
+			} else if (q->p_pdeathsig > 0) {
+				/*
+				 * The child asked to received a signal
+				 * when we exit.
+				 */
+				kern_psignal(q, q->p_pdeathsig);
 			}
 		} else {
 			/*
@@ -517,6 +525,13 @@ exit1(struct thread *td, int rval, int signo)
 	 */
 	while ((q = LIST_FIRST(&p->p_orphans)) != NULL) {
 		PROC_LOCK(q);
+		/*
+		 * If we are the real parent of this process
+		 * but it has been reparented to a debugger, then
+		 * check if it asked for a signal when we exit.
+		 */
+		if (q->p_pdeathsig > 0)
+			kern_psignal(q, q->p_pdeathsig);
 		CTR2(KTR_PTRACE, "exit: pid %d, clearing orphan %d", p->p_pid,
 		    q->p_pid);
 		clear_orphan(q);

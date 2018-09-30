@@ -1,4 +1,4 @@
-//===-- MipsAsmPrinter.h - Mips LLVM Assembly Printer ----------*- C++ -*--===//
+//===- MipsAsmPrinter.h - Mips LLVM Assembly Printer -----------*- C++ -*--===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -16,26 +16,59 @@
 
 #include "Mips16HardFloatInfo.h"
 #include "MipsMCInstLower.h"
-#include "MipsMachineFunction.h"
 #include "MipsSubtarget.h"
 #include "llvm/CodeGen/AsmPrinter.h"
+#include "llvm/MC/MCStreamer.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Target/TargetMachine.h"
+#include <algorithm>
+#include <map>
+#include <memory>
 
 namespace llvm {
-class MCStreamer;
-class MachineInstr;
+
+class MCOperand;
+class MCSubtargetInfo;
+class MCSymbol;
 class MachineBasicBlock;
+class MachineConstantPool;
+class MachineFunction;
+class MachineInstr;
+class MachineOperand;
+class MipsFunctionInfo;
 class MipsTargetStreamer;
 class Module;
 class raw_ostream;
+class TargetMachine;
 
 class LLVM_LIBRARY_VISIBILITY MipsAsmPrinter : public AsmPrinter {
   MipsTargetStreamer &getTargetStreamer() const;
 
   void EmitInstrWithMacroNoAT(const MachineInstr *MI);
 
+  //===------------------------------------------------------------------===//
+  // XRay implementation
+  //===------------------------------------------------------------------===//
+
+public:
+  // XRay-specific lowering for Mips.
+  void LowerPATCHABLE_FUNCTION_ENTER(const MachineInstr &MI);
+  void LowerPATCHABLE_FUNCTION_EXIT(const MachineInstr &MI);
+  void LowerPATCHABLE_TAIL_CALL(const MachineInstr &MI);
+
 private:
+  /// MCP - Keep a pointer to constantpool entries of the current
+  /// MachineFunction.
+  const MachineConstantPool *MCP = nullptr;
+
+  /// InConstantPool - Maintain state when emitting a sequence of constant
+  /// pool entries so we can properly mark them as data regions.
+  bool InConstantPool = false;
+
+  std::map<const char *, const Mips16HardFloatInfo::FuncSignature *>
+      StubsNeeded;
+
+  void EmitSled(const MachineInstr &MI, SledKind Kind);
+
   // tblgen'erated function.
   bool emitPseudoExpansionLowering(MCStreamer &OutStreamer,
                                    const MachineInstr *MI);
@@ -48,17 +81,6 @@ private:
 
   // lowerOperand - Convert a MachineOperand into the equivalent MCOperand.
   bool lowerOperand(const MachineOperand &MO, MCOperand &MCOp);
-
-  /// MCP - Keep a pointer to constantpool entries of the current
-  /// MachineFunction.
-  const MachineConstantPool *MCP;
-
-  /// InConstantPool - Maintain state when emitting a sequence of constant
-  /// pool entries so we can properly mark them as data regions.
-  bool InConstantPool;
-
-  std::map<const char *, const llvm::Mips16HardFloatInfo::FuncSignature *>
-  StubsNeeded;
 
   void emitInlineAsmStart() const override;
 
@@ -93,15 +115,13 @@ private:
   bool isLongBranchPseudo(int Opcode) const;
 
 public:
-
   const MipsSubtarget *Subtarget;
   const MipsFunctionInfo *MipsFI;
   MipsMCInstLower MCInstLowering;
 
   explicit MipsAsmPrinter(TargetMachine &TM,
                           std::unique_ptr<MCStreamer> Streamer)
-      : AsmPrinter(TM, std::move(Streamer)), MCP(nullptr),
-        InConstantPool(false), MCInstLowering(*this) {}
+      : AsmPrinter(TM, std::move(Streamer)), MCInstLowering(*this) {}
 
   StringRef getPassName() const override { return "Mips Assembly Printer"; }
 
@@ -140,9 +160,9 @@ public:
   void EmitStartOfAsmFile(Module &M) override;
   void EmitEndOfAsmFile(Module &M) override;
   void PrintDebugValueComment(const MachineInstr *MI, raw_ostream &OS);
-  void EmitDebugValue(const MCExpr *Value, unsigned Size) const override;
+  void EmitDebugThreadLocal(const MCExpr *Value, unsigned Size) const override;
 };
-}
 
-#endif
+} // end namespace llvm
 
+#endif // LLVM_LIB_TARGET_MIPS_MIPSASMPRINTER_H

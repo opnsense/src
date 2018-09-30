@@ -204,7 +204,6 @@ AslCommandLine (
 
     if (argc < 2)
     {
-        printf (ACPI_COMMON_SIGNON (ASL_COMPILER_NAME));
         Usage ();
         exit (1);
     }
@@ -226,7 +225,7 @@ AslCommandLine (
     /* Next parameter must be the input filename */
 
     if (!argv[AcpiGbl_Optind] &&
-        !Gbl_DisasmFlag)
+        !AcpiGbl_DisasmFlag)
     {
         printf ("Missing input filename\n");
         BadCommandLine = TRUE;
@@ -324,7 +323,7 @@ AslDoOptions (
             Gbl_IntegerOptimizationFlag = FALSE;
             Gbl_ReferenceOptimizationFlag = FALSE;
             Gbl_OptimizeTrivialParseNodes = FALSE;
-            Gbl_CaptureComments = TRUE;
+            AcpiGbl_CaptureComments = TRUE;
             AcpiGbl_DoDisassemblerOptimizations = FALSE;
             AcpiGbl_DebugAslConversion = TRUE;
             AcpiGbl_DmEmitExternalOpcodes = TRUE;
@@ -392,7 +391,7 @@ AslDoOptions (
             Gbl_IntegerOptimizationFlag = FALSE;
             Gbl_ReferenceOptimizationFlag = FALSE;
             Gbl_OptimizeTrivialParseNodes = FALSE;
-            Gbl_CaptureComments = TRUE;
+            AcpiGbl_CaptureComments = TRUE;
             AcpiGbl_DoDisassemblerOptimizations = FALSE;
             AcpiGbl_DmEmitExternalOpcodes = TRUE;
             Gbl_DoExternalsInPlace = TRUE;
@@ -417,24 +416,10 @@ AslDoOptions (
         {
         case '^':
 
-            /* Get the required argument */
-
-            if (AcpiGetoptArgument (argc, argv))
-            {
-                return (-1);
-            }
-
             Gbl_DoCompile = FALSE;
             break;
 
         case 'a':
-
-            /* Get the required argument */
-
-            if (AcpiGetoptArgument (argc, argv))
-            {
-                return (-1);
-            }
 
             Gbl_DoCompile = FALSE;
             Gbl_DisassembleAll = TRUE;
@@ -466,7 +451,7 @@ AslDoOptions (
             return (-1);
         }
 
-        Gbl_DisasmFlag = TRUE;
+        AcpiGbl_DisasmFlag = TRUE;
         break;
 
     case 'D':   /* Define a symbol */
@@ -797,8 +782,8 @@ AslDoOptions (
         Gbl_IntegerOptimizationFlag = FALSE;
         Gbl_ReferenceOptimizationFlag = FALSE;
         Gbl_OptimizeTrivialParseNodes = FALSE;
-        Gbl_CaptureComments = TRUE;
         Gbl_DoExternalsInPlace = TRUE;
+        AcpiGbl_CaptureComments = TRUE;
         return (0);
 
     case 'r':   /* Override revision found in table header */
@@ -938,6 +923,22 @@ AslDoOptions (
             }
 
             Status = AslDisableException (AcpiGbl_Optarg);
+            if (ACPI_FAILURE (Status))
+            {
+                return (-1);
+            }
+            break;
+
+        case 'x':
+
+            /* Get the required argument */
+
+            if (AcpiGetoptArgument (argc, argv))
+            {
+                return (-1);
+            }
+
+            Status = AslExpectException (AcpiGbl_Optarg);
             if (ACPI_FAILURE (Status))
             {
                 return (-1);

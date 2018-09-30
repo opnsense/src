@@ -51,8 +51,8 @@ ext2_print_inode(struct inode *in)
 
 	printf("Inode: %5ju", (uintmax_t)in->i_number);
 	printf(	/* "Inode: %5d" */
-	    " Type: %10s Mode: 0x%o Flags: 0x%x  Version: %d\n",
-	    "n/a", in->i_mode, in->i_flags, in->i_gen);
+	    " Type: %10s Mode: 0x%o Flags: 0x%x  Version: %d acl: 0x%llx\n",
+	    "n/a", in->i_mode, in->i_flags, in->i_gen, in->i_facl);
 	printf("User: %5u Group: %5u  Size: %ju\n",
 	    in->i_uid, in->i_gid, (uintmax_t)in->i_size);
 	printf("Links: %3d Blockcount: %ju\n",
@@ -114,15 +114,19 @@ ext2_ei2i(struct ext2fs_dinode *ei, struct inode *ip)
 	ip->i_flag |= (ei->e2di_flags & EXT3_INDEX) ? IN_E3INDEX : 0;
 	ip->i_flag |= (ei->e2di_flags & EXT4_EXTENTS) ? IN_E4EXTENTS : 0;
 	ip->i_blocks = ei->e2di_nblock;
+	ip->i_facl = ei->e2di_facl;
 	if (E2DI_HAS_HUGE_FILE(ip)) {
 		ip->i_blocks |= (uint64_t)ei->e2di_nblock_high << 32;
+		ip->i_facl |= (uint64_t)ei->e2di_facl_high << 32;
 		if (ei->e2di_flags & EXT4_HUGE_FILE)
 			ip->i_blocks = fsbtodb(ip->i_e2fs, ip->i_blocks);
 	}
 	ip->i_gen = ei->e2di_gen;
 	ip->i_uid = ei->e2di_uid;
 	ip->i_gid = ei->e2di_gid;
-	/* XXX use memcpy */
+	ip->i_uid |= (uint32_t)ei->e2di_uid_high << 16;
+	ip->i_gid |= (uint32_t)ei->e2di_gid_high << 16;
+
 	for (i = 0; i < NDADDR; i++)
 		ip->i_db[i] = ei->e2di_blocks[i];
 	for (i = 0; i < NIADDR; i++)
@@ -132,11 +136,13 @@ ext2_ei2i(struct ext2fs_dinode *ei, struct inode *ip)
 /*
  *	inode to raw ext2 inode
  */
-void
+int
 ext2_i2ei(struct inode *ip, struct ext2fs_dinode *ei)
 {
+	struct m_ext2fs *fs;
 	int i;
 
+	fs = ip->i_e2fs;
 	ei->e2di_mode = ip->i_mode;
 	ei->e2di_nlink = ip->i_nlink;
 	/*
@@ -163,14 +169,31 @@ ext2_i2ei(struct inode *ip, struct ext2fs_dinode *ei)
 	ei->e2di_flags |= (ip->i_flags & UF_NODUMP) ? EXT2_NODUMP : 0;
 	ei->e2di_flags |= (ip->i_flag & IN_E3INDEX) ? EXT3_INDEX : 0;
 	ei->e2di_flags |= (ip->i_flag & IN_E4EXTENTS) ? EXT4_EXTENTS : 0;
-	ei->e2di_nblock = ip->i_blocks & 0xffffffff;
-	ei->e2di_nblock_high = ip->i_blocks >> 32 & 0xffff;
+	if (ip->i_blocks > ~0U &&
+	    !EXT2_HAS_RO_COMPAT_FEATURE(fs, EXT2F_ROCOMPAT_HUGE_FILE)) {
+		ext2_fserr(fs, ip->i_uid, "i_blocks value is out of range");
+		return (EIO);
+	}
+	if (ip->i_blocks <= 0xffffffffffffULL) {
+		ei->e2di_nblock = ip->i_blocks & 0xffffffff;
+		ei->e2di_nblock_high = ip->i_blocks >> 32 & 0xffff;
+	} else {
+		ei->e2di_flags |= EXT4_HUGE_FILE;
+		ei->e2di_nblock = dbtofsb(fs, ip->i_blocks);
+		ei->e2di_nblock_high = dbtofsb(fs, ip->i_blocks) >> 32 & 0xffff;
+	}
+	ei->e2di_facl = ip->i_facl & 0xffffffff;
+	ei->e2di_facl_high = ip->i_facl >> 32 & 0xffff;
 	ei->e2di_gen = ip->i_gen;
-	ei->e2di_uid = ip->i_uid;
-	ei->e2di_gid = ip->i_gid;
-	/* XXX use memcpy */
+	ei->e2di_uid = ip->i_uid & 0xffff;
+	ei->e2di_uid_high = ip->i_uid >> 16 & 0xffff;
+	ei->e2di_gid = ip->i_gid & 0xffff;
+	ei->e2di_gid_high = ip->i_gid >> 16 & 0xffff;
+
 	for (i = 0; i < NDADDR; i++)
 		ei->e2di_blocks[i] = ip->i_db[i];
 	for (i = 0; i < NIADDR; i++)
 		ei->e2di_blocks[EXT2_NDIR_BLOCKS + i] = ip->i_ib[i];
+
+	return (0);
 }

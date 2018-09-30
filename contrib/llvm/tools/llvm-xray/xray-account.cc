@@ -18,10 +18,10 @@
 #include <utility>
 
 #include "xray-account.h"
-#include "xray-extract.h"
 #include "xray-registry.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormatVariadic.h"
+#include "llvm/XRay/InstrumentationMap.h"
 #include "llvm/XRay/Trace.h"
 
 using namespace llvm;
@@ -120,16 +120,6 @@ static cl::opt<std::string>
 static cl::alias AccountInstrMap2("m", cl::aliasopt(AccountInstrMap),
                                   cl::desc("Alias for -instr_map"),
                                   cl::sub(Account));
-static cl::opt<InstrumentationMapExtractor::InputFormats> InstrMapFormat(
-    "instr-map-format", cl::desc("format of instrumentation map"),
-    cl::values(clEnumValN(InstrumentationMapExtractor::InputFormats::ELF, "elf",
-                          "instrumentation map in an ELF header"),
-               clEnumValN(InstrumentationMapExtractor::InputFormats::YAML,
-                          "yaml", "instrumentation map in YAML")),
-    cl::sub(Account), cl::init(InstrumentationMapExtractor::InputFormats::ELF));
-static cl::alias InstrMapFormat2("t", cl::aliasopt(InstrMapFormat),
-                                 cl::desc("Alias for -instr-map-format"),
-                                 cl::sub(Account));
 
 namespace {
 
@@ -156,13 +146,16 @@ bool LatencyAccountant::accountRecord(const XRayRecord &Record) {
 
   auto &ThreadStack = PerThreadFunctionStack[Record.TId];
   switch (Record.Type) {
-  case RecordTypes::ENTER: {
-    // Function Enter
+  case RecordTypes::ENTER:
+  case RecordTypes::ENTER_ARG: {
     ThreadStack.emplace_back(Record.FuncId, Record.TSC);
     break;
   }
-  case RecordTypes::EXIT: {
-    // Function Exit
+  case RecordTypes::EXIT:
+  case RecordTypes::TAIL_EXIT: {
+    if (ThreadStack.empty())
+      return false;
+
     if (ThreadStack.back().first == Record.FuncId) {
       const auto &Top = ThreadStack.back();
       recordLatency(Top.first, diff(Top.second, Record.TSC));
@@ -417,68 +410,97 @@ void LatencyAccountant::exportStatsAsCSV(raw_ostream &OS,
 
 using namespace llvm::xray;
 
+namespace llvm {
+template <> struct format_provider<llvm::xray::RecordTypes> {
+  static void format(const llvm::xray::RecordTypes &T, raw_ostream &Stream,
+                     StringRef Style) {
+    switch(T) {
+      case RecordTypes::ENTER:
+        Stream << "enter";
+        break;
+      case RecordTypes::ENTER_ARG:
+        Stream << "enter-arg";
+        break;
+      case RecordTypes::EXIT:
+        Stream << "exit";
+        break;
+      case RecordTypes::TAIL_EXIT:
+        Stream << "tail-exit";
+        break;
+    }
+  }
+};
+} // namespace llvm
+
 static CommandRegistration Unused(&Account, []() -> Error {
-  int Fd;
-  auto EC = sys::fs::openFileForRead(AccountInput, Fd);
-  if (EC)
-    return make_error<StringError>(
-        Twine("Cannot open file '") + AccountInput + "'", EC);
+  InstrumentationMap Map;
+  if (!AccountInstrMap.empty()) {
+    auto InstrumentationMapOrError = loadInstrumentationMap(AccountInstrMap);
+    if (!InstrumentationMapOrError)
+      return joinErrors(make_error<StringError>(
+                            Twine("Cannot open instrumentation map '") +
+                                AccountInstrMap + "'",
+                            std::make_error_code(std::errc::invalid_argument)),
+                        InstrumentationMapOrError.takeError());
+    Map = std::move(*InstrumentationMapOrError);
+  }
 
-  Error Err = Error::success();
-  xray::InstrumentationMapExtractor Extractor(AccountInstrMap, InstrMapFormat,
-                                              Err);
-  if (auto E = handleErrors(
-        std::move(Err), [&](std::unique_ptr<StringError> SE) -> Error {
-          if (SE->convertToErrorCode() == std::errc::no_such_file_or_directory)
-            return Error::success();
-          return Error(std::move(SE));
-        }))
-    return E;
-
+  std::error_code EC;
   raw_fd_ostream OS(AccountOutput, EC, sys::fs::OpenFlags::F_Text);
   if (EC)
     return make_error<StringError>(
         Twine("Cannot open file '") + AccountOutput + "' for writing.", EC);
 
-  const auto &FunctionAddresses = Extractor.getFunctionAddresses();
+  const auto &FunctionAddresses = Map.getFunctionAddresses();
   symbolize::LLVMSymbolizer::Options Opts(
       symbolize::FunctionNameKind::LinkageName, true, true, false, "");
   symbolize::LLVMSymbolizer Symbolizer(Opts);
   llvm::xray::FuncIdConversionHelper FuncIdHelper(AccountInstrMap, Symbolizer,
                                                   FunctionAddresses);
   xray::LatencyAccountant FCA(FuncIdHelper, AccountDeduceSiblingCalls);
-  if (auto TraceOrErr = loadTraceFile(AccountInput)) {
-    auto &T = *TraceOrErr;
-    for (const auto &Record : T) {
-      if (FCA.accountRecord(Record))
-        continue;
-      for (const auto &ThreadStack : FCA.getPerThreadFunctionStack()) {
-        errs() << "Thread ID: " << ThreadStack.first << "\n";
-        auto Level = ThreadStack.second.size();
-        for (const auto &Entry : llvm::reverse(ThreadStack.second))
-          errs() << "#" << Level-- << "\t"
-                 << FuncIdHelper.SymbolOrNumber(Entry.first) << '\n';
-      }
-      if (!AccountKeepGoing)
-        return make_error<StringError>(
-            Twine("Failed accounting function calls in file '") + AccountInput +
-                "'.",
-            std::make_error_code(std::errc::executable_format_error));
-    }
-    switch (AccountOutputFormat) {
-    case AccountOutputFormats::TEXT:
-      FCA.exportStatsAsText(OS, T.getFileHeader());
-      break;
-    case AccountOutputFormats::CSV:
-      FCA.exportStatsAsCSV(OS, T.getFileHeader());
-      break;
-    }
-  } else {
+  auto TraceOrErr = loadTraceFile(AccountInput);
+  if (!TraceOrErr)
     return joinErrors(
         make_error<StringError>(
             Twine("Failed loading input file '") + AccountInput + "'",
             std::make_error_code(std::errc::executable_format_error)),
         TraceOrErr.takeError());
+
+  auto &T = *TraceOrErr;
+  for (const auto &Record : T) {
+    if (FCA.accountRecord(Record))
+      continue;
+    errs()
+        << "Error processing record: "
+        << llvm::formatv(
+               R"({{type: {0}; cpu: {1}; record-type: {2}; function-id: {3}; tsc: {4}; thread-id: {5}}})",
+               Record.RecordType, Record.CPU, Record.Type, Record.FuncId,
+               Record.TId)
+        << '\n';
+    for (const auto &ThreadStack : FCA.getPerThreadFunctionStack()) {
+      errs() << "Thread ID: " << ThreadStack.first << "\n";
+      if (ThreadStack.second.empty()) {
+        errs() << "  (empty stack)\n";
+        continue;
+      }
+      auto Level = ThreadStack.second.size();
+      for (const auto &Entry : llvm::reverse(ThreadStack.second))
+        errs() << "  #" << Level-- << "\t"
+               << FuncIdHelper.SymbolOrNumber(Entry.first) << '\n';
+    }
+    if (!AccountKeepGoing)
+      return make_error<StringError>(
+          Twine("Failed accounting function calls in file '") + AccountInput +
+              "'.",
+          std::make_error_code(std::errc::executable_format_error));
+  }
+  switch (AccountOutputFormat) {
+  case AccountOutputFormats::TEXT:
+    FCA.exportStatsAsText(OS, T.getFileHeader());
+    break;
+  case AccountOutputFormats::CSV:
+    FCA.exportStatsAsCSV(OS, T.getFileHeader());
+    break;
   }
 
   return Error::success();

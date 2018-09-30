@@ -122,6 +122,21 @@ struct InvalidValueData {
 /// \brief Handle a load of an invalid value for the type.
 RECOVERABLE(load_invalid_value, InvalidValueData *Data, ValueHandle Val)
 
+/// Known builtin check kinds.
+/// Keep in sync with the enum of the same name in CodeGenFunction.h
+enum BuiltinCheckKind : unsigned char {
+  BCK_CTZPassedZero,
+  BCK_CLZPassedZero,
+};
+
+struct InvalidBuiltinData {
+  SourceLocation Loc;
+  unsigned char Kind;
+};
+
+/// Handle a builtin called in an invalid way.
+RECOVERABLE(invalid_builtin, InvalidBuiltinData *Data)
+
 struct FunctionTypeMismatchData {
   SourceLocation Loc;
   const TypeDescriptor &Type;
@@ -132,12 +147,13 @@ RECOVERABLE(function_type_mismatch,
             ValueHandle Val)
 
 struct NonNullReturnData {
-  SourceLocation Loc;
   SourceLocation AttrLoc;
 };
 
-/// \brief Handle returning null from function with returns_nonnull attribute.
-RECOVERABLE(nonnull_return, NonNullReturnData *Data)
+/// \brief Handle returning null from function with the returns_nonnull
+/// attribute, or a return type annotated with _Nonnull.
+RECOVERABLE(nonnull_return_v1, NonNullReturnData *Data, SourceLocation *Loc)
+RECOVERABLE(nullability_return_v1, NonNullReturnData *Data, SourceLocation *Loc)
 
 struct NonNullArgData {
   SourceLocation Loc;
@@ -145,8 +161,17 @@ struct NonNullArgData {
   int ArgIndex;
 };
 
-/// \brief Handle passing null pointer to function with nonnull attribute.
+/// \brief Handle passing null pointer to a function parameter with the nonnull
+/// attribute, or a _Nonnull type annotation.
 RECOVERABLE(nonnull_arg, NonNullArgData *Data)
+RECOVERABLE(nullability_arg, NonNullArgData *Data)
+
+struct PointerOverflowData {
+  SourceLocation Loc;
+};
+
+RECOVERABLE(pointer_overflow, PointerOverflowData *Data, ValueHandle Base,
+            ValueHandle Result)
 
 /// \brief Known CFI check kinds.
 /// Keep in sync with the enum of the same name in CodeGenFunction.h
@@ -167,6 +192,13 @@ struct CFICheckFailData {
 /// \brief Handle control flow integrity failures.
 RECOVERABLE(cfi_check_fail, CFICheckFailData *Data, ValueHandle Function,
             uptr VtableIsValid)
+
+struct ReportOptions;
+
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __ubsan_handle_cfi_bad_type(
+    CFICheckFailData *Data, ValueHandle Vtable, bool ValidVtable,
+    ReportOptions Opts);
+
 }
 
 #endif // UBSAN_HANDLERS_H

@@ -13,16 +13,16 @@
 // C++ Includes
 // Other libraries and framework includes
 // Project includes
-#include "lldb/Core/DataBufferHeap.h"
-#include "lldb/Core/Error.h"
-#include "lldb/Core/Stream.h"
 #include "lldb/Core/ValueObject.h"
 #include "lldb/Core/ValueObjectConstResult.h"
 #include "lldb/DataFormatters/StringPrinter.h"
 #include "lldb/DataFormatters/VectorIterator.h"
-#include "lldb/Host/Endian.h"
 #include "lldb/Symbol/ClangASTContext.h"
 #include "lldb/Target/Target.h"
+#include "lldb/Utility/DataBufferHeap.h"
+#include "lldb/Utility/Endian.h"
+#include "lldb/Utility/Status.h"
+#include "lldb/Utility/Stream.h"
 
 using namespace lldb;
 using namespace lldb_private;
@@ -117,11 +117,8 @@ bool LibstdcppMapIteratorSyntheticFrontEnd::Update() {
 
   CompilerType my_type(valobj_sp->GetCompilerType());
   if (my_type.GetNumTemplateArguments() >= 1) {
-    TemplateArgumentKind kind;
-    CompilerType pair_type = my_type.GetTemplateArgument(0, kind);
-    if (kind != eTemplateArgumentKindType &&
-        kind != eTemplateArgumentKindTemplate &&
-        kind != eTemplateArgumentKindTemplateExpansion)
+    CompilerType pair_type = my_type.GetTypeTemplateArgument(0);
+    if (!pair_type)
       return false;
     m_pair_type = pair_type;
   } else
@@ -209,7 +206,7 @@ bool VectorIteratorSyntheticFrontEnd::Update() {
     return false;
   if (item_ptr->GetValueAsUnsigned(0) == 0)
     return false;
-  Error err;
+  Status err;
   m_exe_ctx_ref = valobj_sp->GetExecutionContextRef();
   m_item_sp = CreateValueObjectFromAddress(
       "item", item_ptr->GetValueAsUnsigned(0), m_exe_ctx_ref,
@@ -251,7 +248,7 @@ bool lldb_private::formatters::LibStdcppStringSummaryProvider(
         return false;
 
       StringPrinter::ReadStringAndDumpToStreamOptions options(valobj);
-      Error error;
+      Status error;
       lldb::addr_t addr_of_data =
           process_sp->ReadPointerFromMemory(addr_of_string, error);
       if (error.Fail() || addr_of_data == 0 ||
@@ -308,7 +305,7 @@ bool lldb_private::formatters::LibStdcppWStringSummaryProvider(
           nullptr); // Safe to pass NULL for exe_scope here
 
       StringPrinter::ReadStringAndDumpToStreamOptions options(valobj);
-      Error error;
+      Status error;
       lldb::addr_t addr_of_data =
           process_sp->ReadPointerFromMemory(addr_of_string, error);
       if (error.Fail() || addr_of_data == 0 ||
@@ -414,7 +411,7 @@ bool lldb_private::formatters::LibStdcppSmartPointerSummaryProvider(
     return true;
   }
 
-  Error error;
+  Status error;
   ValueObjectSP pointee_sp = ptr_sp->Dereference(error);
   if (pointee_sp && error.Success()) {
     if (pointee_sp->DumpPrintableRepresentation(

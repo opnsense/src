@@ -175,7 +175,6 @@ static vm_page_t vm_phys_alloc_seg_contig(struct vm_phys_seg *seg,
     vm_paddr_t boundary);
 static void _vm_phys_create_seg(vm_paddr_t start, vm_paddr_t end, int domain);
 static void vm_phys_create_seg(vm_paddr_t start, vm_paddr_t end);
-static int vm_phys_paddr_to_segind(vm_paddr_t pa);
 static void vm_phys_split_pages(vm_page_t m, int oind, struct vm_freelist *fl,
     int order);
 
@@ -731,35 +730,6 @@ vm_phys_split_pages(vm_page_t m, int oind, struct vm_freelist *fl, int order)
 }
 
 /*
- * Initialize a physical page and add it to the free lists.
- */
-void
-vm_phys_add_page(vm_paddr_t pa)
-{
-	vm_page_t m;
-	struct vm_domain *vmd;
-
-	vm_cnt.v_page_count++;
-	m = vm_phys_paddr_to_vm_page(pa);
-	m->busy_lock = VPB_UNBUSIED;
-	m->phys_addr = pa;
-	m->queue = PQ_NONE;
-	m->segind = vm_phys_paddr_to_segind(pa);
-	vmd = vm_phys_domain(m);
-	vmd->vmd_page_count++;
-	vmd->vmd_segs |= 1UL << m->segind;
-	KASSERT(m->order == VM_NFREEORDER,
-	    ("vm_phys_add_page: page %p has unexpected order %d",
-	    m, m->order));
-	m->pool = VM_FREEPOOL_DEFAULT;
-	pmap_page_init(m);
-	mtx_lock(&vm_page_queue_free_mtx);
-	vm_phys_freecnt_adj(m, 1);
-	vm_phys_free_pages(m, 0);
-	mtx_unlock(&vm_page_queue_free_mtx);
-}
-
-/*
  * Allocate a contiguous, power of two-sized set of physical pages
  * from the free lists.
  *
@@ -912,6 +882,7 @@ vm_phys_fictitious_init_range(vm_page_t range, vm_paddr_t start,
 {
 	long i;
 
+	bzero(range, page_count * sizeof(*range));
 	for (i = 0; i < page_count; i++) {
 		vm_page_initfake(&range[i], start + PAGE_SIZE * i, memattr);
 		range[i].oflags &= ~VPO_UNMANAGED;
@@ -986,7 +957,7 @@ vm_phys_fictitious_reg_range(vm_paddr_t start, vm_paddr_t end,
 alloc:
 #endif
 		fp = malloc(page_count * sizeof(struct vm_page), M_FICT_PAGES,
-		    M_WAITOK | M_ZERO);
+		    M_WAITOK);
 #ifdef VM_PHYSSEG_DENSE
 	}
 #endif
@@ -1064,24 +1035,6 @@ vm_phys_fictitious_unreg_range(vm_paddr_t start, vm_paddr_t end)
 	rw_wunlock(&vm_phys_fictitious_reg_lock);
 	free(seg->first_page, M_FICT_PAGES);
 	free(seg, M_FICT_PAGES);
-}
-
-/*
- * Find the segment containing the given physical address.
- */
-static int
-vm_phys_paddr_to_segind(vm_paddr_t pa)
-{
-	struct vm_phys_seg *seg;
-	int segind;
-
-	for (segind = 0; segind < vm_phys_nsegs; segind++) {
-		seg = &vm_phys_segs[segind];
-		if (pa >= seg->start && pa < seg->end)
-			return (segind);
-	}
-	panic("vm_phys_paddr_to_segind: paddr %#jx is not in any segment" ,
-	    (uintmax_t)pa);
 }
 
 /*
@@ -1443,6 +1396,8 @@ vm_phys_alloc_seg_contig(struct vm_phys_seg *seg, u_long npages,
 					 */
 					pa = VM_PAGE_TO_PHYS(m_ret);
 					pa_end = pa + size;
+					if (pa_end < pa)
+						continue;
 					for (;;) {
 						pa += 1 << (PAGE_SHIFT +
 						    VM_NFREEORDER - 1);

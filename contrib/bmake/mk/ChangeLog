@@ -1,3 +1,58 @@
+2018-01-18  Simon J Gerraty  <sjg@beast.crufty.net>
+
+	* install-mk (MK_VERSION): 20180118
+
+	* ldorder.mk: let make compute correct link order
+
+2017-12-12  Simon J Gerraty  <sjg@beast.crufty.net>
+
+	* install-mk (MK_VERSION): 20171212
+
+	* gendirdeps.mk: guard against bogus entries in GENDIRDEPS_FILTER
+
+2017-11-14  Simon J. Gerraty  <sjg@bad.crufty.net>
+
+	* install-mk (MK_VERSION): 20171111
+
+	* lib.mk: ensure META_NOECHO is set
+
+2017-10-25  Simon J. Gerraty  <sjg@bad.crufty.net>
+
+	* Allow for host32 on rare occasions.
+
+2017-10-18  Simon J. Gerraty  <sjg@bad.crufty.net>
+
+	* install-mk (MK_VERSION): 20171018
+
+	* whats.mk: include what_thing in what_uuid to avoid problem
+	  when building multiple apps in the same directory.
+
+2017-08-12  Simon J. Gerraty  <sjg@bad.crufty.net>
+
+	* install-mk (MK_VERSION): 20170812
+
+	* autoconf.mk: Use CONFIGURE_DEPS so Makefile can
+	  add dependencies for config.recheck and config.gen
+
+2017-06-30  Simon J. Gerraty  <sjg@bad.crufty.net>
+
+	* install-mk (MK_VERSION): 20170630
+
+	* meta.stage.mk: avoid triggering stage_* targets with nothing to do.
+
+2017-05-23  Simon J. Gerraty  <sjg@bad.crufty.net>
+
+	* meta2deps.py: take special care of '..'
+
+2017-05-15  Simon J. Gerraty  <sjg@bad.crufty.net>
+
+	* install-mk (MK_VERSION): 20170515
+
+	* dirdeps.mk (DEP_EXPORT_VARS): on rare occasions it is
+	useful/necessary for a Makefile.depend file to export some knobs.
+	This is complicated when we are doing DIRDEPS_CACHE, so we will
+	handle export of any variables listed in DEP_EXPORT_VARS.
+
 2017-05-08  Simon J. Gerraty  <sjg@bad.crufty.net>
 
 	* install-mk (MK_VERSION): 20170505

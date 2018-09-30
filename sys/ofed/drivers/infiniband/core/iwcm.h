@@ -29,7 +29,10 @@
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
+ *
+ * $FreeBSD$
  */
+
 #ifndef IWCM_H
 #define IWCM_H
 
@@ -56,7 +59,7 @@ struct iwcm_id_private {
 	struct list_head work_free_list;
 };
 
-#define IWCM_F_CALLBACK_DESTROY   1
+#define IWCM_F_DROP_EVENTS	  1
 #define IWCM_F_CONNECT_WAIT       2
 
 #endif /* IWCM_H */

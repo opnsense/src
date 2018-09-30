@@ -23,14 +23,25 @@
 #include "llvm/ProfileData/SampleProfReader.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/Debug.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/IR/ProfileSummary.h"
+#include "llvm/ProfileData/ProfileCommon.h"
+#include "llvm/ProfileData/SampleProf.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/LEB128.h"
 #include "llvm/Support/LineIterator.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/raw_ostream.h"
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <memory>
+#include <system_error>
+#include <vector>
 
-using namespace llvm::sampleprof;
 using namespace llvm;
+using namespace sampleprof;
 
 /// \brief Dump the function profile for \p FName.
 ///
@@ -200,7 +211,7 @@ std::error_code SampleProfileReaderText::read() {
           InlineStack.pop_back();
         }
         FunctionSamples &FSamples = InlineStack.back()->functionSamplesAt(
-            LineLocation(LineOffset, Discriminator));
+            LineLocation(LineOffset, Discriminator))[FName];
         FSamples.setName(FName);
         MergeResult(Result, FSamples.addTotalSamples(NumSamples));
         InlineStack.push_back(&FSamples);
@@ -352,8 +363,8 @@ SampleProfileReaderBinary::readProfile(FunctionSamples &FProfile) {
     if (std::error_code EC = FName.getError())
       return EC;
 
-    FunctionSamples &CalleeProfile =
-        FProfile.functionSamplesAt(LineLocation(*LineOffset, *Discriminator));
+    FunctionSamples &CalleeProfile = FProfile.functionSamplesAt(
+        LineLocation(*LineOffset, *Discriminator))[*FName];
     CalleeProfile.setName(*FName);
     if (std::error_code EC = readProfile(CalleeProfile))
       return EC;
@@ -625,7 +636,7 @@ std::error_code SampleProfileReaderGCC::readOneFunctionProfile(
     uint32_t LineOffset = Offset >> 16;
     uint32_t Discriminator = Offset & 0xffff;
     FProfile = &CallerProfile->functionSamplesAt(
-        LineLocation(LineOffset, Discriminator));
+        LineLocation(LineOffset, Discriminator))[Name];
   }
   FProfile->setName(Name);
 
@@ -681,11 +692,9 @@ std::error_code SampleProfileReaderGCC::readOneFunctionProfile(
       if (!GcovBuffer.readInt64(TargetCount))
         return sampleprof_error::truncated;
 
-      if (Update) {
-        FunctionSamples &TargetProfile = Profiles[TargetName];
-        TargetProfile.addCalledTargetSamples(LineOffset, Discriminator,
-                                             TargetName, TargetCount);
-      }
+      if (Update)
+        FProfile->addCalledTargetSamples(LineOffset, Discriminator,
+                                         TargetName, TargetCount);
     }
   }
 
@@ -740,7 +749,7 @@ setupMemoryBuffer(const Twine &Filename) {
   auto Buffer = std::move(BufferOrErr.get());
 
   // Sanity check the file.
-  if (Buffer->getBufferSize() > std::numeric_limits<uint32_t>::max())
+  if (uint64_t(Buffer->getBufferSize()) > std::numeric_limits<uint32_t>::max())
     return sampleprof_error::too_large;
 
   return std::move(Buffer);
@@ -749,8 +758,6 @@ setupMemoryBuffer(const Twine &Filename) {
 /// \brief Create a sample profile reader based on the format of the input file.
 ///
 /// \param Filename The file to open.
-///
-/// \param Reader The reader to instantiate according to \p Filename's format.
 ///
 /// \param C The LLVM context to use to emit diagnostics.
 ///
@@ -766,8 +773,6 @@ SampleProfileReader::create(const Twine &Filename, LLVMContext &C) {
 /// \brief Create a sample profile reader based on the format of the input data.
 ///
 /// \param B The memory buffer to create the reader from (assumes ownership).
-///
-/// \param Reader The reader to instantiate according to \p Filename's format.
 ///
 /// \param C The LLVM context to use to emit diagnostics.
 ///

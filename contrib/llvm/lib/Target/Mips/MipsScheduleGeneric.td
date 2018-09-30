@@ -187,7 +187,11 @@ def GenericIssueCOP0 : ProcResource<1> { let Super = GenericCOP0; }
 def GenericWriteCOP0TLB : SchedWriteRes<[GenericIssueCOP0]> { let Latency = 4; }
 def GenericWriteCOP0 : SchedWriteRes<[GenericIssueCOP0]> { let Latency = 3; }
 def GenericReadCOP0 : SchedWriteRes<[GenericIssueCOP0]> { let Latency = 2; }
-def GnereicReadWritePGPR : SchedWriteRes<[GenericIssueCOP0]>;
+def GenericReadWritePGPR : SchedWriteRes<[GenericIssueCOP0]>;
+def GenericReadWriteCOP0Long : SchedWriteRes<[GenericIssueCOP0]> {
+  let Latency = 5;
+}
+def GenericWriteCOP0Short : SchedWriteRes<[GenericIssueCOP0]>;
 
 def : ItinRW<[GenericWriteCOP0TLB], [II_TLBP, II_TLBR, II_TLBWI, II_TLBWR]>;
 def : ItinRW<[GenericWriteCOP0TLB], [II_TLBINV, II_TLBINVF]>;
@@ -260,6 +264,16 @@ def : ItinRW<[GenericWriteLoad], [II_LBE, II_LBUE, II_LHE, II_LHUE, II_LWE,
                                   II_LLE]>;
 
 def : ItinRW<[GenericWriteLoad], [II_LWLE, II_LWRE]>;
+
+// MIPS MT instructions
+// ====================
+
+def : ItinRW<[GenericWriteMove], [II_DMT, II_DVPE, II_EMT, II_EVPE, II_MFTR,
+                                  II_MTTR]>;
+
+def : ItinRW<[GenericReadWriteCOP0Long], [II_YIELD]>;
+
+def : ItinRW<[GenericWriteCOP0Short], [II_FORK]>;
 
 // MIPS32R6 and MIPS16e
 // ====================
@@ -724,6 +738,7 @@ def : InstRW<[GenericDSPShort], (instregex "^MFHI_DSP_MM$")>;
 def : InstRW<[GenericDSPShort], (instregex "^MFLO_DSP_MM$")>;
 def : InstRW<[GenericDSPShort], (instregex "^MODSUB_MM$")>;
 def : InstRW<[GenericDSPShort], (instregex "^MOVEP_MM$")>;
+def : InstRW<[GenericDSPShort], (instregex "^MOVEP_MMR6$")>;
 def : InstRW<[GenericDSPShort], (instregex "^MOVN_I_MM$")>;
 def : InstRW<[GenericDSPShort], (instregex "^MOVZ_I_MM$")>;
 def : InstRW<[GenericDSPShort], (instregex "^MSUBU_DSP_MM$")>;

@@ -68,6 +68,7 @@ __FBSDID("$FreeBSD$");
 #include <net/radix_mpath.h>
 #include <net/vnet.h>
 
+#include <net/pfil.h>
 #include <net/pfvar.h>
 #include <net/if_pflog.h>
 #include <net/if_pfsync.h>
@@ -290,18 +291,12 @@ static void		 pf_mtag_free(struct m_tag *);
 static void		 pf_route(struct mbuf **, struct pf_rule *, int,
 			    struct ifnet *, struct pf_state *,
 			    struct pf_pdesc *);
-static void		 pf_route_shared(struct mbuf **, struct pf_rule *, int,
-			    struct ifnet *, struct pf_state *,
-			    struct pf_pdesc *);
 #endif /* INET */
 #ifdef INET6
 static void		 pf_change_a6(struct pf_addr *, u_int16_t *,
 			    struct pf_addr *, u_int8_t);
 static void		 pf_route6(struct mbuf **, struct pf_rule *, int,
 			    struct ifnet *, struct pf_state *,
-			    struct pf_pdesc *);
-static void		 pf_route6_shared(struct mbuf **, struct pf_rule *,
-			    int, struct ifnet *, struct pf_state *,
 			    struct pf_pdesc *);
 #endif /* INET6 */
 
@@ -373,20 +368,6 @@ SYSCTL_ULONG(_net_pf, OID_AUTO, states_hashsize, CTLFLAG_RDTUN,
     &pf_hashsize, 0, "Size of pf(4) states hashtable");
 SYSCTL_ULONG(_net_pf, OID_AUTO, source_nodes_hashsize, CTLFLAG_RDTUN,
     &pf_srchashsize, 0, "Size of pf(4) source nodes hashtable");
-
-static VNET_DEFINE(int, pf_share_forward) = 0;
-static VNET_DEFINE(int, pf_share_forward6) = 0;
-
-#define	V_pf_share_forward	VNET(pf_share_forward)
-#define	V_pf_share_forward6	VNET(pf_share_forward6)
-
-SYSCTL_INT(_net_pf, OID_AUTO, share_forward,
-	CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(pf_share_forward), 0,
-	"If set pf(4) will share IPv4 forwarding decisions with ipfw(4).");
-
-SYSCTL_INT(_net_pf, OID_AUTO, share_forward6,
-	CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(pf_share_forward6), 0,
-	"If set pf(4) will share IPv6 forwarding decisions with ipfw(4).");
 
 VNET_DEFINE(void *, pf_swi_cookie);
 
@@ -804,7 +785,7 @@ pf_initialize()
 	if (pf_hashsize == 0 || !powerof2(pf_hashsize))
 		pf_hashsize = PF_HASHSIZ;
 	if (pf_srchashsize == 0 || !powerof2(pf_srchashsize))
-		pf_srchashsize = PF_HASHSIZ / 4;
+		pf_srchashsize = PF_SRCHASHSIZ;
 
 	V_pf_hashseed = arc4random();
 
@@ -818,10 +799,25 @@ pf_initialize()
 	V_pf_state_key_z = uma_zcreate("pf state keys",
 	    sizeof(struct pf_state_key), pf_state_key_ctor, NULL, NULL, NULL,
 	    UMA_ALIGN_PTR, 0);
-	V_pf_keyhash = malloc(pf_hashsize * sizeof(struct pf_keyhash),
-	    M_PFHASH, M_WAITOK | M_ZERO);
-	V_pf_idhash = malloc(pf_hashsize * sizeof(struct pf_idhash),
-	    M_PFHASH, M_WAITOK | M_ZERO);
+
+	V_pf_keyhash = mallocarray(pf_hashsize, sizeof(struct pf_keyhash),
+	    M_PFHASH, M_NOWAIT | M_ZERO);
+	V_pf_idhash = mallocarray(pf_hashsize, sizeof(struct pf_idhash),
+	    M_PFHASH, M_NOWAIT | M_ZERO);
+	if (V_pf_keyhash == NULL || V_pf_idhash == NULL) {
+		printf("pf: Unable to allocate memory for "
+		    "state_hashsize %lu.\n", pf_hashsize);
+
+		free(V_pf_keyhash, M_PFHASH);
+		free(V_pf_idhash, M_PFHASH);
+
+		pf_hashsize = PF_HASHSIZ;
+		V_pf_keyhash = mallocarray(pf_hashsize,
+		    sizeof(struct pf_keyhash), M_PFHASH, M_WAITOK | M_ZERO);
+		V_pf_idhash = mallocarray(pf_hashsize,
+		    sizeof(struct pf_idhash), M_PFHASH, M_WAITOK | M_ZERO);
+	}
+
 	pf_hashmask = pf_hashsize - 1;
 	for (i = 0, kh = V_pf_keyhash, ih = V_pf_idhash; i <= pf_hashmask;
 	    i++, kh++, ih++) {
@@ -836,8 +832,18 @@ pf_initialize()
 	V_pf_limits[PF_LIMIT_SRC_NODES].zone = V_pf_sources_z;
 	uma_zone_set_max(V_pf_sources_z, PFSNODE_HIWAT);
 	uma_zone_set_warning(V_pf_sources_z, "PF source nodes limit reached");
-	V_pf_srchash = malloc(pf_srchashsize * sizeof(struct pf_srchash),
-	  M_PFHASH, M_WAITOK|M_ZERO);
+
+	V_pf_srchash = mallocarray(pf_srchashsize,
+	    sizeof(struct pf_srchash), M_PFHASH, M_NOWAIT | M_ZERO);
+	if (V_pf_srchash == NULL) {
+		printf("pf: Unable to allocate memory for "
+		    "source_hashsize %lu.\n", pf_srchashsize);
+
+		pf_srchashsize = PF_SRCHASHSIZ;
+		V_pf_srchash = mallocarray(pf_srchashsize,
+		    sizeof(struct pf_srchash), M_PFHASH, M_WAITOK | M_ZERO);
+	}
+
 	pf_srchashmask = pf_srchashsize - 1;
 	for (i = 0, sh = V_pf_srchash; i <= pf_srchashmask; i++, sh++)
 		mtx_init(&sh->lock, "pf_srchash", NULL, MTX_DEF);
@@ -5507,7 +5513,7 @@ pf_route(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *oifp,
 		goto bad;
 
 	if (oifp != ifp) {
-		if (pf_test(PF_OUT, ifp, &m0, NULL) != PF_PASS)
+		if (pf_test(PF_OUT, 0, ifp, &m0, NULL) != PF_PASS)
 			goto bad;
 		else if (m0 == NULL)
 			goto done;
@@ -5586,116 +5592,6 @@ pf_route(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *oifp,
 done:
 	if (r->rt != PF_DUPTO)
 		*m = NULL;
-	return;
-
-bad_locked:
-	if (s)
-		PF_STATE_UNLOCK(s);
-bad:
-	m_freem(m0);
-	goto done;
-}
-
-static void
-pf_route_shared(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *ifp,
-    struct pf_state *s, struct pf_pdesc *pd)
-{
-	struct mbuf		*m0;
-	struct sockaddr_in	dst;
-	struct ip		*ip;
-	struct pf_addr		 naddr;
-	struct pf_src_node	*sn = NULL;
-	int			 error = 0;
-
-	KASSERT(m && *m && r && ifp, ("%s: invalid parameters", __func__));
-	KASSERT(dir == PF_IN || dir == PF_OUT, ("%s: invalid direction",
-	    __func__));
-
-	if ((pd->pf_mtag == NULL &&
-	    ((pd->pf_mtag = pf_get_mtag(*m)) == NULL)) ||
-	    pd->pf_mtag->routed++ > 3) {
-		m0 = *m;
-		*m = NULL;
-		goto bad_locked;
-	}
-
-	if (r->rt == PF_DUPTO) {
-		if ((m0 = m_dup(*m, M_NOWAIT)) == NULL) {
-			if (s)
-				PF_STATE_UNLOCK(s);
-			return;
-		}
-	} else {
-		if ((r->rt == PF_REPLYTO) == (r->direction == dir)) {
-			if (s)
-				PF_STATE_UNLOCK(s);
-			return;
-		}
-		m0 = *m;
-	}
-
-	/* retain old behaviour by avoiding a rewrite */
-	if (IP_HAS_NEXTHOP(m0)) {
-		if (s)
-			PF_STATE_UNLOCK(s);
-		return;
-	}
-
-	ip = mtod(m0, struct ip *);
-
-	bzero(&dst, sizeof(dst));
-	dst.sin_family = AF_INET;
-	dst.sin_len = sizeof(dst);
-	dst.sin_addr = ip->ip_dst;
-
-	if (r->rt == PF_FASTROUTE) {
-		struct nhop4_basic nh4;
-
-		if (s)
-			PF_STATE_UNLOCK(s);
-
-		if (fib4_lookup_nh_basic(M_GETFIB(m0), ip->ip_dst, 0,
-		    m0->m_pkthdr.flowid, &nh4) != 0) {
-			KMOD_IPSTAT_INC(ips_noroute);
-			error = EHOSTUNREACH;
-			goto bad;
-		}
-
-		ifp = nh4.nh_ifp;
-		dst.sin_addr = nh4.nh_addr;
-	} else {
-		if (TAILQ_EMPTY(&r->rpool.list)) {
-			DPFPRINTF(PF_DEBUG_URGENT,
-			    ("%s: TAILQ_EMPTY(&r->rpool.list)\n", __func__));
-			goto bad_locked;
-		}
-		if (s == NULL) {
-			pf_map_addr(AF_INET, r, (struct pf_addr *)&ip->ip_src,
-			    &naddr, NULL, &sn);
-			if (!PF_AZERO(&naddr, AF_INET))
-				dst.sin_addr.s_addr = naddr.v4.s_addr;
-			ifp = r->rpool.cur->kif ?
-			    r->rpool.cur->kif->pfik_ifp : NULL;
-		} else {
-			if (!PF_AZERO(&s->rt_addr, AF_INET))
-				dst.sin_addr.s_addr =
-				    s->rt_addr.v4.s_addr;
-			ifp = s->rt_kif ? s->rt_kif->pfik_ifp : NULL;
-			PF_STATE_UNLOCK(s);
-		}
-	}
-	if (ifp == NULL)
-		goto bad;
-
-	if (ip_set_fwdtag(m0, &dst, ifp->if_index))
-		goto bad;
-
-done:
-	if ((r->rt == PF_DUPTO || r->rt == PF_REPLYTO) && IP_HAS_NEXTHOP(m0)) {
-		ip_forward(m0, 1);
-		if (r->rt == PF_REPLYTO)
-			*m = NULL;
-	}
 	return;
 
 bad_locked:
@@ -5789,7 +5685,7 @@ pf_route6(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *oifp,
 		goto bad;
 
 	if (oifp != ifp) {
-		if (pf_test6(PF_FWD, ifp, &m0, NULL) != PF_PASS)
+		if (pf_test6(PF_OUT, PFIL_FWD, ifp, &m0, NULL) != PF_PASS)
 			goto bad;
 		else if (m0 == NULL)
 			goto done;
@@ -5831,112 +5727,6 @@ pf_route6(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *oifp,
 done:
 	if (r->rt != PF_DUPTO)
 		*m = NULL;
-	return;
-
-bad_locked:
-	if (s)
-		PF_STATE_UNLOCK(s);
-bad:
-	m_freem(m0);
-	goto done;
-}
-
-static void
-pf_route6_shared(struct mbuf **m, struct pf_rule *r, int dir,
-    struct ifnet *ifp, struct pf_state *s, struct pf_pdesc *pd)
-{
-	struct mbuf		*m0;
-	struct sockaddr_in6	dst;
-	struct ip6_hdr		*ip6;
-	struct pf_addr		 naddr;
-	struct pf_src_node	*sn = NULL;
-
-	KASSERT(m && *m && r && ifp, ("%s: invalid parameters", __func__));
-	KASSERT(dir == PF_IN || dir == PF_OUT, ("%s: invalid direction",
-	    __func__));
-
-	if ((pd->pf_mtag == NULL &&
-	    ((pd->pf_mtag = pf_get_mtag(*m)) == NULL)) ||
-	    pd->pf_mtag->routed++ > 3) {
-		m0 = *m;
-		*m = NULL;
-		goto bad_locked;
-	}
-
-	if (r->rt == PF_DUPTO) {
-		if ((m0 = m_dup(*m, M_NOWAIT)) == NULL) {
-			if (s)
-				PF_STATE_UNLOCK(s);
-			return;
-		}
-	} else {
-		if ((r->rt == PF_REPLYTO) == (r->direction == dir)) {
-			if (s)
-				PF_STATE_UNLOCK(s);
-			return;
-		}
-		m0 = *m;
-	}
-
-	/* retain old behaviour by avoiding a rewrite */
-	if (IP6_HAS_NEXTHOP(m0)) {
-		if (s)
-			PF_STATE_UNLOCK(s);
-		return;
-	}
-
-	ip6 = mtod(m0, struct ip6_hdr *);
-
-	bzero(&dst, sizeof(dst));
-	dst.sin6_family = AF_INET6;
-	dst.sin6_len = sizeof(dst);
-	dst.sin6_addr = ip6->ip6_dst;
-
-	/* Cheat. XXX why only in the v6 case??? */
-	if (r->rt == PF_FASTROUTE) {
-		if (s)
-			PF_STATE_UNLOCK(s);
-		m0->m_flags |= M_SKIP_FIREWALL;
-		ip6_output(m0, NULL, NULL, 0, NULL, NULL, NULL);
-		*m = NULL;
-		return;
-	}
-
-	if (TAILQ_EMPTY(&r->rpool.list)) {
-		DPFPRINTF(PF_DEBUG_URGENT,
-		    ("%s: TAILQ_EMPTY(&r->rpool.list)\n", __func__));
-		goto bad_locked;
-	}
-	if (s == NULL) {
-		pf_map_addr(AF_INET6, r, (struct pf_addr *)&ip6->ip6_src,
-		    &naddr, NULL, &sn);
-		if (!PF_AZERO(&naddr, AF_INET6))
-			PF_ACPY((struct pf_addr *)&dst.sin6_addr,
-			    &naddr, AF_INET6);
-		ifp = r->rpool.cur->kif ? r->rpool.cur->kif->pfik_ifp : NULL;
-	} else {
-		if (!PF_AZERO(&s->rt_addr, AF_INET6))
-			PF_ACPY((struct pf_addr *)&dst.sin6_addr,
-			    &s->rt_addr, AF_INET6);
-		ifp = s->rt_kif ? s->rt_kif->pfik_ifp : NULL;
-	}
-
-	if (s)
-		PF_STATE_UNLOCK(s);
-
-	if (ifp == NULL)
-		goto bad;
-
-	if (ip6_set_fwdtag(m0, &dst, ifp->if_index))
-		goto bad;
-
-done:
-	if ((r->rt == PF_DUPTO || r->rt == PF_REPLYTO) && IP6_HAS_NEXTHOP(m0)) {
-		ip6_forward(m0, 1);
-		if (r->rt == PF_REPLYTO)
-			*m = NULL;
-	}
-
 	return;
 
 bad_locked:
@@ -6085,7 +5875,7 @@ pf_check_proto_cksum(struct mbuf *m, int off, int len, u_int8_t p, sa_family_t a
 
 #ifdef INET
 int
-pf_test(int dir, struct ifnet *ifp, struct mbuf **m0, struct inpcb *inp)
+pf_test(int dir, int pflags, struct ifnet *ifp, struct mbuf **m0, struct inpcb *inp)
 {
 	struct pfi_kif		*kif;
 	u_short			 action, reason = 0, log = 0;
@@ -6097,24 +5887,11 @@ pf_test(int dir, struct ifnet *ifp, struct mbuf **m0, struct inpcb *inp)
 	struct pf_ruleset	*ruleset = NULL;
 	struct pf_pdesc		 pd;
 	int			 off, dirndx, pqid = 0;
-	int			 share_forward = V_pf_share_forward;
-	u_short			 ifidx;
 
 	M_ASSERTPKTHDR(m);
 
 	if (!V_pf_status.running)
 		return (PF_PASS);
-
-	/* restore the correct forwarding interface */
-	if (share_forward && dir == PF_OUT && IP_HAS_NEXTHOP(m) &&
-	    !ip_get_fwdtag(m, NULL, &ifidx)) {
-		if (ifidx != 0) {
-			struct ifnet *nifp = ifnet_byindex(ifidx);
-			if (nifp != NULL) {
-				ifp = nifp;
-			}
-		}
-	}
 
 	memset(&pd, 0, sizeof(pd));
 
@@ -6177,7 +5954,7 @@ pf_test(int dir, struct ifnet *ifp, struct mbuf **m0, struct inpcb *inp)
 	pd.sidx = (dir == PF_IN) ? 0 : 1;
 	pd.didx = (dir == PF_IN) ? 1 : 0;
 	pd.af = AF_INET;
-	pd.tos = h->ip_tos & ~IPTOS_ECN_MASK;
+	pd.tos = h->ip_tos;
 	pd.tot_len = ntohs(h->ip_len);
 
 	/* handle fragments that didn't get reassembled by normalization */
@@ -6471,11 +6248,7 @@ done:
 	default:
 		/* pf_route() returns unlocked. */
 		if (r->rt) {
-			if (!share_forward)
-				pf_route(m0, r, dir, kif->pfik_ifp, s, &pd);
-			else
-				pf_route_shared(m0, r, dir, kif->pfik_ifp, s,
-				    &pd);
+			pf_route(m0, r, dir, kif->pfik_ifp, s, &pd);
 			return (action);
 		}
 		break;
@@ -6489,7 +6262,7 @@ done:
 
 #ifdef INET6
 int
-pf_test6(int dir, struct ifnet *ifp, struct mbuf **m0, struct inpcb *inp)
+pf_test6(int dir, int pflags, struct ifnet *ifp, struct mbuf **m0, struct inpcb *inp)
 {
 	struct pfi_kif		*kif;
 	u_short			 action, reason = 0, log = 0;
@@ -6501,43 +6274,11 @@ pf_test6(int dir, struct ifnet *ifp, struct mbuf **m0, struct inpcb *inp)
 	struct pf_ruleset	*ruleset = NULL;
 	struct pf_pdesc		 pd;
 	int			 off, terminal = 0, dirndx, rh_cnt = 0, pqid = 0;
-	int			 fwdir = dir;
-	int			 share_forward = V_pf_share_forward6;
-	u_short			 ifidx;
 
 	M_ASSERTPKTHDR(m);
 
-	/* Detect packet forwarding.
-	 * If the input interface is different from the output interface we're
-	 * forwarding.
-	 * We do need to be careful about bridges. If the
-	 * net.link.bridge.pfil_bridge sysctl is set we can be filtering on a
-	 * bridge, so if the input interface is a bridge member and the output
-	 * interface is its bridge or a member of the same bridge we're not
-	 * actually forwarding but bridging.
-	 */
-	if (dir == PF_OUT && m->m_pkthdr.rcvif && ifp != m->m_pkthdr.rcvif &&
-	    (m->m_pkthdr.rcvif->if_bridge == NULL ||
-	    (m->m_pkthdr.rcvif->if_bridge != ifp->if_softc &&
-	    m->m_pkthdr.rcvif->if_bridge != ifp->if_bridge)))
-		fwdir = PF_FWD;
-
-	if (dir == PF_FWD)
-		dir = PF_OUT;
-
 	if (!V_pf_status.running)
 		return (PF_PASS);
-
-	/* restore the correct forwarding interface */
-	if (share_forward && dir == PF_OUT && IP6_HAS_NEXTHOP(m) &&
-	    !ip6_get_fwdtag(m, NULL, &ifidx)) {
-		if (ifidx != 0) {
-			struct ifnet *nifp = ifnet_byindex(ifidx);
-			if (nifp != NULL) {
-				ifp = nifp;
-			}
-		}
-	}
 
 	memset(&pd, 0, sizeof(pd));
 	pd.pf_mtag = pf_find_mtag(m);
@@ -6903,11 +6644,7 @@ done:
 	default:
 		/* pf_route6() returns unlocked. */
 		if (r->rt) {
-			if (!share_forward)
-			        pf_route6(m0, r, dir, kif->pfik_ifp, s, &pd);
-			else
-			        pf_route6_shared(m0, r, dir, kif->pfik_ifp, s,
-				    &pd);
+			pf_route6(m0, r, dir, kif->pfik_ifp, s, &pd);
 			return (action);
 		}
 		break;
@@ -6917,7 +6654,7 @@ done:
 		PF_STATE_UNLOCK(s);
 
 	/* If reassembled packet passed, create new fragments. */
-	if (action == PF_PASS && *m0 && fwdir == PF_FWD &&
+	if (action == PF_PASS && *m0 && (pflags & PFIL_FWD) &&
 	    (mtag = m_tag_find(m, PF_REASSEMBLED, NULL)) != NULL)
 		action = pf_refragment6(ifp, m0, mtag);
 

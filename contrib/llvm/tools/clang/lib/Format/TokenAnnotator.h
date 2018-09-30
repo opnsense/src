@@ -39,10 +39,12 @@ class AnnotatedLine {
 public:
   AnnotatedLine(const UnwrappedLine &Line)
       : First(Line.Tokens.front().Tok), Level(Line.Level),
+        MatchingOpeningBlockLineIndex(Line.MatchingOpeningBlockLineIndex),
         InPPDirective(Line.InPPDirective),
         MustBeDeclaration(Line.MustBeDeclaration), MightBeFunctionDecl(false),
         IsMultiVariableDeclStmt(false), Affected(false),
-        LeadingEmptyLinesAffected(false), ChildrenAffected(false) {
+        LeadingEmptyLinesAffected(false), ChildrenAffected(false),
+        FirstStartColumn(Line.FirstStartColumn) {
     assert(!Line.Tokens.empty());
 
     // Calculate Next and Previous for all tokens. Note that we must overwrite
@@ -109,6 +111,7 @@ public:
 
   LineType Type;
   unsigned Level;
+  size_t MatchingOpeningBlockLineIndex;
   bool InPPDirective;
   bool MustBeDeclaration;
   bool MightBeFunctionDecl;
@@ -122,8 +125,10 @@ public:
   /// input ranges.
   bool LeadingEmptyLinesAffected;
 
-  /// \c True if a one of this line's children intersects with an input range.
+  /// \c True if one of this line's children intersects with an input range.
   bool ChildrenAffected;
+
+  unsigned FirstStartColumn;
 
 private:
   // Disallow copying.

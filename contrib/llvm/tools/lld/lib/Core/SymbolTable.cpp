@@ -8,11 +8,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "lld/Core/SymbolTable.h"
+#include "lld/Common/LLVM.h"
 #include "lld/Core/AbsoluteAtom.h"
 #include "lld/Core/Atom.h"
 #include "lld/Core/DefinedAtom.h"
 #include "lld/Core/File.h"
-#include "lld/Core/LLVM.h"
 #include "lld/Core/LinkingContext.h"
 #include "lld/Core/Resolver.h"
 #include "lld/Core/SharedLibraryAtom.h"
@@ -161,7 +161,7 @@ bool SymbolTable::addByName(const Atom &newAtom) {
       llvm::errs() << "Size mismatch: "
                    << existing->name() << " (" << existingSize << ") "
                    << newAtom.name() << " (" << newSize << ")\n";
-      // fallthrough
+      LLVM_FALLTHROUGH;
     }
     case MCR_Error:
       llvm::errs() << "Duplicate symbols: "

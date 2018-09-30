@@ -10,13 +10,10 @@
 #ifndef liblldb_RegisterContextCorePOSIX_arm64_h_
 #define liblldb_RegisterContextCorePOSIX_arm64_h_
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
 #include "Plugins/Process/Utility/RegisterContextPOSIX_arm64.h"
-#include "lldb/Core/DataBufferHeap.h"
-#include "lldb/Core/DataExtractor.h"
+#include "Plugins/Process/elf-core/RegisterUtilities.h"
+#include "lldb/Utility/DataBufferHeap.h"
+#include "lldb/Utility/DataExtractor.h"
 
 class RegisterContextCorePOSIX_arm64 : public RegisterContextPOSIX_arm64 {
 public:
@@ -24,7 +21,7 @@ public:
       lldb_private::Thread &thread,
       lldb_private::RegisterInfoInterface *register_info,
       const lldb_private::DataExtractor &gpregset,
-      const lldb_private::DataExtractor &fpregset);
+      llvm::ArrayRef<lldb_private::CoreNote> notes);
 
   ~RegisterContextCorePOSIX_arm64() override;
 

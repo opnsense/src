@@ -660,7 +660,7 @@ archive_write_pax_header(struct archive_write *a,
 			 * case getting WCS failed. On POSIX, this is a
 			 * normal operation.
 			 */
-			if (p != NULL && p[0] != '\0' && p[strlen(p) - 1] != '/') {
+			if (p != NULL && p[strlen(p) - 1] != '/') {
 				struct archive_string as;
 
 				archive_string_init(&as);
@@ -1654,7 +1654,7 @@ build_pax_attribute_name(char *dest, const char *src)
  * GNU PAX Format 1.0 requires the special name, which pattern is:
  * <dir>/GNUSparseFile.<pid>/<original file name>
  *
- * Since reproducable archives are more important, use 0 as pid.
+ * Since reproducible archives are more important, use 0 as pid.
  *
  * This function is used for only Sparse file, a file type of which
  * is regular file.

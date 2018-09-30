@@ -42,12 +42,12 @@
 #include "../Commands/CommandObjectWatchpoint.h"
 
 #include "lldb/Core/Debugger.h"
-#include "lldb/Core/Log.h"
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Core/State.h"
-#include "lldb/Core/Stream.h"
 #include "lldb/Core/StreamFile.h"
-#include "lldb/Core/Timer.h"
+#include "lldb/Utility/Log.h"
+#include "lldb/Utility/Stream.h"
+#include "lldb/Utility/Timer.h"
 
 #ifndef LLDB_DISABLE_LIBEDIT
 #include "lldb/Host/Editline.h"
@@ -169,7 +169,8 @@ bool CommandInterpreter::GetSpaceReplPrompts() const {
 }
 
 void CommandInterpreter::Initialize() {
-  Timer scoped_timer(LLVM_PRETTY_FUNCTION, LLVM_PRETTY_FUNCTION);
+  static Timer::Category func_cat(LLVM_PRETTY_FUNCTION);
+  Timer scoped_timer(func_cat, LLVM_PRETTY_FUNCTION);
 
   CommandReturnObject result;
 
@@ -391,7 +392,8 @@ const char *CommandInterpreter::ProcessEmbeddedScriptCommands(const char *arg) {
 }
 
 void CommandInterpreter::LoadCommandDictionary() {
-  Timer scoped_timer(LLVM_PRETTY_FUNCTION, LLVM_PRETTY_FUNCTION);
+  static Timer::Category func_cat(LLVM_PRETTY_FUNCTION);
+  Timer scoped_timer(func_cat, LLVM_PRETTY_FUNCTION);
 
   lldb::ScriptLanguage script_language = m_debugger.GetScriptLanguage();
 
@@ -544,7 +546,7 @@ void CommandInterpreter::LoadCommandDictionary() {
       char buffer[1024];
       int num_printed =
           snprintf(buffer, 1024, "%s %s", break_regexes[i][1], "-o");
-      assert(num_printed < 1024);
+      lldbassert(num_printed < 1024);
       UNUSED_IF_ASSERT_DISABLED(num_printed);
       success =
           tbreak_regex_cmd_ap->AddRegexCommand(break_regexes[i][0], buffer);
@@ -645,8 +647,8 @@ void CommandInterpreter::LoadCommandDictionary() {
           "gdb-remote [<hostname>:]<portnum>", 2, 0, false));
   if (connect_gdb_remote_cmd_ap.get()) {
     if (connect_gdb_remote_cmd_ap->AddRegexCommand(
-            "^([^:]+:[[:digit:]]+)$",
-            "process connect --plugin gdb-remote connect://%1") &&
+            "^([^:]+|\\[[0-9a-fA-F:]+.*\\]):([0-9]+)$",
+            "process connect --plugin gdb-remote connect://%1:%2") &&
         connect_gdb_remote_cmd_ap->AddRegexCommand(
             "^([[:digit:]]+)$",
             "process connect --plugin gdb-remote connect://localhost:%1")) {
@@ -889,8 +891,8 @@ bool CommandInterpreter::AddCommand(llvm::StringRef name,
                                     const lldb::CommandObjectSP &cmd_sp,
                                     bool can_replace) {
   if (cmd_sp.get())
-    assert((this == &cmd_sp->GetCommandInterpreter()) &&
-           "tried to add a CommandObject from a different interpreter");
+    lldbassert((this == &cmd_sp->GetCommandInterpreter()) &&
+               "tried to add a CommandObject from a different interpreter");
 
   if (name.empty())
     return false;
@@ -911,8 +913,8 @@ bool CommandInterpreter::AddUserCommand(llvm::StringRef name,
                                         const lldb::CommandObjectSP &cmd_sp,
                                         bool can_replace) {
   if (cmd_sp.get())
-    assert((this == &cmd_sp->GetCommandInterpreter()) &&
-           "tried to add a CommandObject from a different interpreter");
+    lldbassert((this == &cmd_sp->GetCommandInterpreter()) &&
+               "tried to add a CommandObject from a different interpreter");
 
   if (!name.empty()) {
     // do not allow replacement of internal commands
@@ -1060,8 +1062,8 @@ CommandInterpreter::AddAlias(llvm::StringRef alias_name,
                              lldb::CommandObjectSP &command_obj_sp,
                              llvm::StringRef args_string) {
   if (command_obj_sp.get())
-    assert((this == &command_obj_sp->GetCommandInterpreter()) &&
-           "tried to add a CommandObject from a different interpreter");
+    lldbassert((this == &command_obj_sp->GetCommandInterpreter()) &&
+               "tried to add a CommandObject from a different interpreter");
 
   std::unique_ptr<CommandAlias> command_alias_up(
       new CommandAlias(*this, command_obj_sp, args_string, alias_name));
@@ -1373,7 +1375,7 @@ CommandObject *CommandInterpreter::BuildAliasResult(
   return alias_cmd_obj;
 }
 
-Error CommandInterpreter::PreprocessCommand(std::string &command) {
+Status CommandInterpreter::PreprocessCommand(std::string &command) {
   // The command preprocessor needs to do things to the command
   // line before any parsing of arguments or anything else is done.
   // The only current stuff that gets preprocessed is anything enclosed
@@ -1381,7 +1383,7 @@ Error CommandInterpreter::PreprocessCommand(std::string &command) {
   // the result of the expression must be a scalar that can be substituted
   // into the command. An example would be:
   // (lldb) memory read `$rsp + 20`
-  Error error; // Error for any expressions that might not evaluate
+  Status error; // Status for any expressions that might not evaluate
   size_t start_backtick;
   size_t pos = 0;
   while ((start_backtick = command.find('`', pos)) != std::string::npos) {
@@ -1533,11 +1535,17 @@ bool CommandInterpreter::HandleCommand(const char *command_line,
   if (log)
     log->Printf("Processing command: %s", command_line);
 
-  Timer scoped_timer(LLVM_PRETTY_FUNCTION, "Handling command: %s.",
-                     command_line);
+  static Timer::Category func_cat(LLVM_PRETTY_FUNCTION);
+  Timer scoped_timer(func_cat, "Handling command: %s.", command_line);
 
   if (!no_context_switching)
     UpdateExecutionContext(override_context);
+
+  if (WasInterrupted()) {
+    result.AppendError("interrupted");
+    result.SetStatus(eReturnStatusFailed);
+    return false;
+  }
 
   bool add_to_history;
   if (lazy_add_to_history == eLazyBoolCalculate)
@@ -1601,7 +1609,7 @@ bool CommandInterpreter::HandleCommand(const char *command_line,
     return true;
   }
 
-  Error error(PreprocessCommand(command_string));
+  Status error(PreprocessCommand(command_string));
 
   if (error.Fail()) {
     result.AppendError(error.AsCString());
@@ -1837,7 +1845,7 @@ int CommandInterpreter::HandleCompletion(
   matches.Clear();
 
   // Only max_return_elements == -1 is supported at present:
-  assert(max_return_elements == -1);
+  lldbassert(max_return_elements == -1);
   bool word_complete;
   num_command_matches = HandleCompletionMatches(
       parsed_line, cursor_index, cursor_char_position, match_start_point,
@@ -2018,8 +2026,8 @@ void CommandInterpreter::BuildAliasCommandArgs(CommandObject *alias_cmd_obj,
     }
 
     for (auto entry : llvm::enumerate(cmd_args.entries())) {
-      if (!used[entry.Index] && !wants_raw_input)
-        new_args.AppendArgument(entry.Value.ref);
+      if (!used[entry.index()] && !wants_raw_input)
+        new_args.AppendArgument(entry.value().ref);
     }
 
     cmd_args.Clear();
@@ -2208,7 +2216,7 @@ void CommandInterpreter::HandleCommands(const StringList &commands,
     m_debugger.SetAsyncExecution(false);
   }
 
-  for (size_t idx = 0; idx < num_lines; idx++) {
+  for (size_t idx = 0; idx < num_lines && !WasInterrupted(); idx++) {
     const char *cmd = commands.GetStringAtIndex(idx);
     if (cmd[0] == '\0')
       continue;
@@ -2355,8 +2363,8 @@ void CommandInterpreter::HandleCommandsFromFile(
     StreamFileSP input_file_sp(new StreamFile());
 
     std::string cmd_file_path = cmd_file.GetPath();
-    Error error = input_file_sp->GetFile().Open(cmd_file_path.c_str(),
-                                                File::eOpenOptionRead);
+    Status error = input_file_sp->GetFile().Open(cmd_file_path.c_str(),
+                                                 File::eOpenOptionRead);
 
     if (error.Success()) {
       Debugger &debugger = GetDebugger();
@@ -2473,7 +2481,7 @@ void CommandInterpreter::HandleCommandsFromFile(
 }
 
 ScriptInterpreter *CommandInterpreter::GetScriptInterpreter(bool can_create) {
-  std::lock_guard<std::mutex> locker(m_script_interpreter_mutex);
+  std::lock_guard<std::recursive_mutex> locker(m_script_interpreter_mutex);
   if (!m_script_interpreter_sp) {
     if (!can_create)
       return nullptr;
@@ -2542,14 +2550,6 @@ void CommandInterpreter::OutputFormattedHelpText(Stream &strm,
   OutputFormattedHelpText(strm, prefix_stream.GetString(), help_text);
 }
 
-LLVM_ATTRIBUTE_ALWAYS_INLINE
-static size_t nextWordLength(llvm::StringRef S) {
-  size_t pos = S.find_first_of(' ');
-  if (pos == llvm::StringRef::npos)
-    return S.size();
-  return pos;
-}
-
 void CommandInterpreter::OutputHelpText(Stream &strm, llvm::StringRef word_text,
                                         llvm::StringRef separator,
                                         llvm::StringRef help_text,
@@ -2568,9 +2568,14 @@ void CommandInterpreter::OutputHelpText(Stream &strm, llvm::StringRef word_text,
 
   uint32_t chars_left = max_columns;
 
+  auto nextWordLength = [](llvm::StringRef S) {
+    size_t pos = S.find_first_of(' ');
+    return pos == llvm::StringRef::npos ? S.size() : pos;
+  };
+
   while (!text.empty()) {
     if (text.front() == '\n' ||
-        (text.front() == ' ' && nextWordLength(text.ltrim(' ')) < chars_left)) {
+        (text.front() == ' ' && nextWordLength(text.ltrim(' ')) > chars_left)) {
       strm.EOL();
       strm.Indent();
       chars_left = max_columns - indent_size;
@@ -2656,7 +2661,7 @@ size_t CommandInterpreter::GetProcessOutput() {
   char stdio_buffer[1024];
   size_t len;
   size_t total_bytes = 0;
-  Error error;
+  Status error;
   TargetSP target_sp(m_debugger.GetTargetList().GetSelectedTarget());
   if (target_sp) {
     ProcessSP process_sp(target_sp->GetProcessSP());
@@ -2678,8 +2683,67 @@ size_t CommandInterpreter::GetProcessOutput() {
   return total_bytes;
 }
 
+void CommandInterpreter::StartHandlingCommand() {
+  auto idle_state = CommandHandlingState::eIdle;
+  if (m_command_state.compare_exchange_strong(
+          idle_state, CommandHandlingState::eInProgress))
+    lldbassert(m_iohandler_nesting_level == 0);
+  else
+    lldbassert(m_iohandler_nesting_level > 0);
+  ++m_iohandler_nesting_level;
+}
+
+void CommandInterpreter::FinishHandlingCommand() {
+  lldbassert(m_iohandler_nesting_level > 0);
+  if (--m_iohandler_nesting_level == 0) {
+    auto prev_state = m_command_state.exchange(CommandHandlingState::eIdle);
+    lldbassert(prev_state != CommandHandlingState::eIdle);
+  }
+}
+
+bool CommandInterpreter::InterruptCommand() {
+  auto in_progress = CommandHandlingState::eInProgress;
+  return m_command_state.compare_exchange_strong(
+      in_progress, CommandHandlingState::eInterrupted);
+}
+
+bool CommandInterpreter::WasInterrupted() const {
+  bool was_interrupted =
+      (m_command_state == CommandHandlingState::eInterrupted);
+  lldbassert(!was_interrupted || m_iohandler_nesting_level > 0);
+  return was_interrupted;
+}
+
+void CommandInterpreter::PrintCommandOutput(Stream &stream,
+                                            llvm::StringRef str) {
+  // Split the output into lines and poll for interrupt requests
+  const char *data = str.data();
+  size_t size = str.size();
+  while (size > 0 && !WasInterrupted()) {
+    size_t chunk_size = 0;
+    for (; chunk_size < size; ++chunk_size) {
+      lldbassert(data[chunk_size] != '\0');
+      if (data[chunk_size] == '\n') {
+        ++chunk_size;
+        break;
+      }
+    }
+    chunk_size = stream.Write(data, chunk_size);
+    lldbassert(size >= chunk_size);
+    data += chunk_size;
+    size -= chunk_size;
+  }
+  if (size > 0) {
+    stream.Printf("\n... Interrupted.\n");
+  }
+}
+
 void CommandInterpreter::IOHandlerInputComplete(IOHandler &io_handler,
                                                 std::string &line) {
+    // If we were interrupted, bail out...
+    if (WasInterrupted())
+      return;
+
   const bool is_interactive = io_handler.GetIsInteractive();
   if (is_interactive == false) {
     // When we are not interactive, don't execute blank lines. This will happen
@@ -2701,6 +2765,8 @@ void CommandInterpreter::IOHandlerInputComplete(IOHandler &io_handler,
                                                line.c_str());
   }
 
+  StartHandlingCommand();
+
   lldb_private::CommandReturnObject result;
   HandleCommand(line.c_str(), eLazyBoolCalculate, result);
 
@@ -2711,17 +2777,17 @@ void CommandInterpreter::IOHandlerInputComplete(IOHandler &io_handler,
 
     if (!result.GetImmediateOutputStream()) {
       llvm::StringRef output = result.GetOutputData();
-      if (!output.empty())
-        io_handler.GetOutputStreamFile()->PutCString(output);
+      PrintCommandOutput(*io_handler.GetOutputStreamFile(), output);
     }
 
     // Now emit the command error text from the command we just executed
     if (!result.GetImmediateErrorStream()) {
       llvm::StringRef error = result.GetErrorData();
-      if (!error.empty())
-        io_handler.GetErrorStreamFile()->PutCString(error);
+      PrintCommandOutput(*io_handler.GetErrorStreamFile(), error);
     }
   }
+
+  FinishHandlingCommand();
 
   switch (result.GetStatus()) {
   case eReturnStatusInvalid:
@@ -2777,6 +2843,9 @@ void CommandInterpreter::IOHandlerInputComplete(IOHandler &io_handler,
 bool CommandInterpreter::IOHandlerInterrupt(IOHandler &io_handler) {
   ExecutionContext exe_ctx(GetExecutionContext());
   Process *process = exe_ctx.GetProcessPtr();
+
+  if (InterruptCommand())
+    return true;
 
   if (process) {
     StateType state = process->GetState();
@@ -2999,7 +3068,7 @@ CommandInterpreter::ResolveCommandImpl(std::string &command_line,
         result.AppendRawError(error_msg.GetString());
       } else {
         // We didn't have only one match, otherwise we wouldn't get here.
-        assert(num_matches == 0);
+        lldbassert(num_matches == 0);
         result.AppendErrorWithFormat("'%s' is not a valid command.\n",
                                      next_word.c_str());
       }

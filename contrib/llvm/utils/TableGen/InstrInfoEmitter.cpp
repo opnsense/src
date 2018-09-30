@@ -67,7 +67,7 @@ private:
   void emitOperandTypesEnum(raw_ostream &OS, const CodeGenTarget &Target);
   void initOperandMapData(
             ArrayRef<const CodeGenInstruction *> NumberedInstructions,
-            const std::string &Namespace,
+            StringRef Namespace,
             std::map<std::string, unsigned> &Operands,
             OpNameMapTy &OperandMap);
   void emitOperandNameMappings(raw_ostream &OS, const CodeGenTarget &Target,
@@ -207,7 +207,7 @@ void InstrInfoEmitter::EmitOperandInfo(raw_ostream &OS,
 ///        well as the getNamedOperandIdx() function.
 void InstrInfoEmitter::initOperandMapData(
         ArrayRef<const CodeGenInstruction *> NumberedInstructions,
-        const std::string &Namespace,
+        StringRef Namespace,
         std::map<std::string, unsigned> &Operands,
         OpNameMapTy &OperandMap) {
   unsigned NumOperands = 0;
@@ -224,7 +224,7 @@ void InstrInfoEmitter::initOperandMapData(
       }
       OpList[I->second] = Info.MIOperandNo;
     }
-    OperandMap[OpList].push_back(Namespace + "::" +
+    OperandMap[OpList].push_back(Namespace.str() + "::" +
                                  Inst->TheDef->getName().str());
   }
 }
@@ -243,7 +243,7 @@ void InstrInfoEmitter::initOperandMapData(
 void InstrInfoEmitter::emitOperandNameMappings(raw_ostream &OS,
            const CodeGenTarget &Target,
            ArrayRef<const CodeGenInstruction*> NumberedInstructions) {
-  const std::string &Namespace = Target.getInstNamespace();
+  StringRef Namespace = Target.getInstNamespace();
   std::string OpNameNS = "OpName";
   // Map of operand names to their enumeration value.  This will be used to
   // generate the OpName enum.
@@ -315,7 +315,7 @@ void InstrInfoEmitter::emitOperandNameMappings(raw_ostream &OS,
 void InstrInfoEmitter::emitOperandTypesEnum(raw_ostream &OS,
                                             const CodeGenTarget &Target) {
 
-  const std::string &Namespace = Target.getInstNamespace();
+  StringRef Namespace = Target.getInstNamespace();
   std::vector<Record *> Operands = Records.getAllDerivedDefinitions("Operand");
 
   OS << "#ifdef GET_INSTRINFO_OPERAND_TYPES_ENUM\n";
@@ -576,7 +576,7 @@ void InstrInfoEmitter::emitEnums(raw_ostream &OS) {
   CodeGenTarget Target(Records);
 
   // We must emit the PHI opcode first...
-  std::string Namespace = Target.getInstNamespace();
+  StringRef Namespace = Target.getInstNamespace();
 
   if (Namespace.empty())
     PrintFatalError("No instructions defined!");
@@ -588,6 +588,14 @@ void InstrInfoEmitter::emitEnums(raw_ostream &OS) {
     OS << "    " << Inst->TheDef->getName() << "\t= " << Num++ << ",\n";
   OS << "    INSTRUCTION_LIST_END = " << Num << "\n";
   OS << "  };\n\n";
+  OS << "} // end " << Namespace << " namespace\n";
+  OS << "} // end llvm namespace\n";
+  OS << "#endif // GET_INSTRINFO_ENUM\n\n";
+
+  OS << "#ifdef GET_INSTRINFO_SCHED_ENUM\n";
+  OS << "#undef GET_INSTRINFO_SCHED_ENUM\n";
+  OS << "namespace llvm {\n\n";
+  OS << "namespace " << Namespace << " {\n";
   OS << "namespace Sched {\n";
   OS << "  enum {\n";
   Num = 0;
@@ -599,7 +607,7 @@ void InstrInfoEmitter::emitEnums(raw_ostream &OS) {
   OS << "} // end " << Namespace << " namespace\n";
   OS << "} // end llvm namespace\n";
 
-  OS << "#endif // GET_INSTRINFO_ENUM\n\n";
+  OS << "#endif // GET_INSTRINFO_SCHED_ENUM\n\n";
 }
 
 namespace llvm {

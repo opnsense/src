@@ -44,8 +44,12 @@ PrintFunctionPass::PrintFunctionPass(raw_ostream &OS, const std::string &Banner)
 
 PreservedAnalyses PrintFunctionPass::run(Function &F,
                                          FunctionAnalysisManager &) {
-  if (isFunctionInPrintList(F.getName()))
-    OS << Banner << static_cast<Value &>(F);
+  if (isFunctionInPrintList(F.getName())) {
+    if (forcePrintModuleIR())
+      OS << Banner << " (function: " << F.getName() << ")\n" << *F.getParent();
+    else
+      OS << Banner << static_cast<Value &>(F);
+  }
   return PreservedAnalyses::all();
 }
 
@@ -70,6 +74,8 @@ public:
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.setPreservesAll();
   }
+
+  StringRef getPassName() const override { return "Print Module IR"; }
 };
 
 class PrintFunctionPassWrapper : public FunctionPass {
@@ -91,6 +97,8 @@ public:
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.setPreservesAll();
   }
+
+  StringRef getPassName() const override { return "Print Function IR"; }
 };
 
 class PrintBasicBlockPass : public BasicBlockPass {
@@ -111,6 +119,8 @@ public:
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.setPreservesAll();
   }
+
+  StringRef getPassName() const override { return "Print BasicBlock IR"; }
 };
 
 }

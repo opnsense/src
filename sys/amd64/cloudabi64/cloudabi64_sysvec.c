@@ -83,13 +83,17 @@ cloudabi64_proc_setregs(struct thread *td, struct image_params *imgp,
 	regs = td->td_frame;
 	regs->tf_rdi = stack + sizeof(register_t) +
 	    roundup(sizeof(cloudabi64_tcb_t), sizeof(register_t));
-	(void)cpu_set_user_tls(td, (void *)stack);
+	(void)cpu_set_user_tls(td, TO_PTR(stack));
 }
 
 static int
-cloudabi64_fetch_syscall_args(struct thread *td, struct syscall_args *sa)
+cloudabi64_fetch_syscall_args(struct thread *td)
 {
-	struct trapframe *frame = td->td_frame;
+	struct trapframe *frame;
+	struct syscall_args *sa;
+
+	frame = td->td_frame;
+	sa = &td->td_sa;
 
 	/* Obtain system call number. */
 	sa->code = frame->tf_rax;
@@ -184,7 +188,7 @@ cloudabi64_thread_setregs(struct thread *td,
 	frame->tf_rdi = td->td_tid;
 	frame->tf_rsi = attr->argument;
 
-	return (cpu_set_user_tls(td, (void *)tcbptr));
+	return (cpu_set_user_tls(td, TO_PTR(tcbptr)));
 }
 
 static struct sysentvec cloudabi64_elf_sysvec = {
@@ -195,7 +199,8 @@ static struct sysentvec cloudabi64_elf_sysvec = {
 	.sv_coredump		= elf64_coredump,
 	.sv_pagesize		= PAGE_SIZE,
 	.sv_minuser		= VM_MIN_ADDRESS,
-	.sv_maxuser		= VM_MAXUSER_ADDRESS,
+	/* Keep top page reserved to work around AMD Ryzen stability issues. */
+	.sv_maxuser		= VM_MAXUSER_ADDRESS - PAGE_SIZE,
 	.sv_stackprot		= VM_PROT_READ | VM_PROT_WRITE,
 	.sv_copyout_strings	= cloudabi64_copyout_strings,
 	.sv_setregs		= cloudabi64_proc_setregs,

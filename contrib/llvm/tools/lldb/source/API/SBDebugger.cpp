@@ -26,6 +26,7 @@
 #include "lldb/API/SBSourceManager.h"
 #include "lldb/API/SBStream.h"
 #include "lldb/API/SBStringList.h"
+#include "lldb/API/SBStructuredData.h"
 #include "lldb/API/SBTarget.h"
 #include "lldb/API/SBThread.h"
 #include "lldb/API/SBTypeCategory.h"
@@ -37,8 +38,10 @@
 #include "lldb/API/SystemInitializerFull.h"
 
 #include "lldb/Core/Debugger.h"
+#include "lldb/Core/PluginManager.h"
 #include "lldb/Core/State.h"
 #include "lldb/Core/StreamFile.h"
+#include "lldb/Core/StructuredDataImpl.h"
 #include "lldb/DataFormatters/DataVisualization.h"
 #include "lldb/Initialization/SystemLifetimeManager.h"
 #include "lldb/Interpreter/Args.h"
@@ -57,7 +60,7 @@ using namespace lldb_private;
 
 static llvm::sys::DynamicLibrary LoadPlugin(const lldb::DebuggerSP &debugger_sp,
                                             const FileSpec &spec,
-                                            Error &error) {
+                                            Status &error) {
   llvm::sys::DynamicLibrary dynlib =
       llvm::sys::DynamicLibrary::getPermanentLibrary(spec.GetPath().c_str());
   if (dynlib.isValid()) {
@@ -69,7 +72,7 @@ static llvm::sys::DynamicLibrary LoadPlugin(const lldb::DebuggerSP &debugger_sp,
     // TODO: mangle this differently for your system - on OSX, the first
     // underscore needs to be removed and the second one stays
     LLDBCommandPluginInit init_func =
-        (LLDBCommandPluginInit)dynlib.getAddressOfSymbol(
+        (LLDBCommandPluginInit)(uintptr_t)dynlib.getAddressOfSymbol(
             "_ZN4lldb16PluginInitializeENS_10SBDebuggerE");
     if (init_func) {
       if (init_func(debugger_sb))
@@ -551,7 +554,7 @@ SBDebugger::CreateTargetWithFileAndTargetTriple(const char *filename,
   TargetSP target_sp;
   if (m_opaque_sp) {
     const bool add_dependent_modules = true;
-    Error error(m_opaque_sp->GetTargetList().CreateTarget(
+    Status error(m_opaque_sp->GetTargetList().CreateTarget(
         *m_opaque_sp, filename, target_triple, add_dependent_modules, nullptr,
         target_sp));
     sb_target.SetSP(target_sp);
@@ -574,7 +577,7 @@ SBTarget SBDebugger::CreateTargetWithFileAndArch(const char *filename,
   SBTarget sb_target;
   TargetSP target_sp;
   if (m_opaque_sp) {
-    Error error;
+    Status error;
     const bool add_dependent_modules = true;
 
     error = m_opaque_sp->GetTargetList().CreateTarget(
@@ -600,7 +603,7 @@ SBTarget SBDebugger::CreateTarget(const char *filename) {
   SBTarget sb_target;
   TargetSP target_sp;
   if (m_opaque_sp) {
-    Error error;
+    Status error;
     const bool add_dependent_modules = true;
     error = m_opaque_sp->GetTargetList().CreateTarget(
         *m_opaque_sp, filename, "", add_dependent_modules, nullptr, target_sp);
@@ -616,6 +619,20 @@ SBTarget SBDebugger::CreateTarget(const char *filename) {
         "SBDebugger(%p)::CreateTarget (filename=\"%s\") => SBTarget(%p)",
         static_cast<void *>(m_opaque_sp.get()), filename,
         static_cast<void *>(target_sp.get()));
+  return sb_target;
+}
+
+SBTarget SBDebugger::GetDummyTarget() {
+  SBTarget sb_target;
+  if (m_opaque_sp) {
+      sb_target.SetSP(m_opaque_sp->GetDummyTarget()->shared_from_this());
+  }
+  Log *log(GetLogIfAllCategoriesSet(LIBLLDB_LOG_API));
+  if (log)
+    log->Printf(
+        "SBDebugger(%p)::GetDummyTarget() => SBTarget(%p)",
+        static_cast<void *>(m_opaque_sp.get()),
+        static_cast<void *>(sb_target.GetSP().get()));
   return sb_target;
 }
 
@@ -677,8 +694,8 @@ SBTarget SBDebugger::FindTargetWithFileAndArch(const char *filename,
   SBTarget sb_target;
   if (m_opaque_sp && filename && filename[0]) {
     // No need to lock, the target list is thread safe
-    ArchSpec arch(arch_name,
-                  m_opaque_sp->GetPlatformList().GetSelectedPlatform().get());
+    ArchSpec arch = Platform::GetAugmentedArchSpec(
+        m_opaque_sp->GetPlatformList().GetSelectedPlatform().get(), arch_name);
     TargetSP target_sp(
         m_opaque_sp->GetTargetList().FindTargetWithExecutableAndArchitecture(
             FileSpec(filename, false), arch_name ? &arch : nullptr));
@@ -772,6 +789,67 @@ void SBDebugger::SetSelectedPlatform(SBPlatform &sb_platform) {
                 static_cast<void *>(m_opaque_sp.get()),
                 static_cast<void *>(sb_platform.GetSP().get()),
                 sb_platform.GetName());
+}
+
+uint32_t SBDebugger::GetNumPlatforms() {
+  if (m_opaque_sp) {
+    // No need to lock, the platform list is thread safe
+    return m_opaque_sp->GetPlatformList().GetSize();
+  }
+  return 0;
+}
+
+SBPlatform SBDebugger::GetPlatformAtIndex(uint32_t idx) {
+  SBPlatform sb_platform;
+  if (m_opaque_sp) {
+    // No need to lock, the platform list is thread safe
+    sb_platform.SetSP(m_opaque_sp->GetPlatformList().GetAtIndex(idx));
+  }
+  return sb_platform;
+}
+
+uint32_t SBDebugger::GetNumAvailablePlatforms() {
+  uint32_t idx = 0;
+  while (true) {
+    if (!PluginManager::GetPlatformPluginNameAtIndex(idx)) {
+      break;
+    }
+    ++idx;
+  }
+  // +1 for the host platform, which should always appear first in the list.
+  return idx + 1;
+}
+
+SBStructuredData SBDebugger::GetAvailablePlatformInfoAtIndex(uint32_t idx) {
+  SBStructuredData data;
+  auto platform_dict = llvm::make_unique<StructuredData::Dictionary>();
+  llvm::StringRef name_str("name"), desc_str("description");
+
+  if (idx == 0) {
+    PlatformSP host_platform_sp(Platform::GetHostPlatform());
+    platform_dict->AddStringItem(
+        name_str, host_platform_sp->GetPluginName().GetStringRef());
+    platform_dict->AddStringItem(
+        desc_str, llvm::StringRef(host_platform_sp->GetDescription()));
+  } else if (idx > 0) {
+    const char *plugin_name =
+        PluginManager::GetPlatformPluginNameAtIndex(idx - 1);
+    if (!plugin_name) {
+      return data;
+    }
+    platform_dict->AddStringItem(name_str, llvm::StringRef(plugin_name));
+
+    const char *plugin_desc =
+        PluginManager::GetPlatformPluginDescriptionAtIndex(idx - 1);
+    if (!plugin_desc) {
+      return data;
+    }
+    platform_dict->AddStringItem(desc_str, llvm::StringRef(plugin_desc));
+  }
+
+  data.m_impl_up->SetObjectSP(
+      StructuredData::ObjectSP(platform_dict.release()));
+  return data;
 }
 
 void SBDebugger::DispatchInput(void *baton, const void *data, size_t data_len) {
@@ -873,7 +951,7 @@ SBError SBDebugger::SetInternalVariable(const char *var_name, const char *value,
   SBError sb_error;
   DebuggerSP debugger_sp(Debugger::FindDebuggerWithInstanceName(
       ConstString(debugger_instance_name)));
-  Error error;
+  Status error;
   if (debugger_sp) {
     ExecutionContext exe_ctx(
         debugger_sp->GetCommandInterpreter().GetExecutionContext());
@@ -894,7 +972,7 @@ SBDebugger::GetInternalVariableValue(const char *var_name,
   SBStringList ret_value;
   DebuggerSP debugger_sp(Debugger::FindDebuggerWithInstanceName(
       ConstString(debugger_instance_name)));
-  Error error;
+  Status error;
   if (debugger_sp) {
     ExecutionContext exe_ctx(
         debugger_sp->GetCommandInterpreter().GetExecutionContext());
@@ -1120,13 +1198,23 @@ SBTypeSynthetic SBDebugger::GetSyntheticForType(SBTypeNameSpecifier type_name) {
 }
 #endif // LLDB_DISABLE_PYTHON
 
+static llvm::ArrayRef<const char *> GetCategoryArray(const char **categories) {
+  if (categories == nullptr)
+    return {};
+  size_t len = 0;
+  while (categories[len] != nullptr)
+    ++len;
+  return llvm::makeArrayRef(categories, len);
+}
+
 bool SBDebugger::EnableLog(const char *channel, const char **categories) {
   if (m_opaque_sp) {
     uint32_t log_options =
         LLDB_LOG_OPTION_PREPEND_TIMESTAMP | LLDB_LOG_OPTION_PREPEND_THREAD_NAME;
-    StreamString errors;
-    return m_opaque_sp->EnableLog(channel, categories, nullptr, log_options,
-                                  errors);
+    std::string error;
+    llvm::raw_string_ostream error_stream(error);
+    return m_opaque_sp->EnableLog(channel, GetCategoryArray(categories), "",
+                                  log_options, error_stream);
   } else
     return false;
 }

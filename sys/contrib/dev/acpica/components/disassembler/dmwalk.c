@@ -161,8 +161,6 @@
         ACPI_MODULE_NAME    ("dmwalk")
 
 
-#define DB_FULL_OP_INFO     "[%4.4s] @%5.5X #%4.4X:  "
-
 /* Stub for non-compiler code */
 
 #ifndef ACPI_ASL_COMPILER
@@ -529,7 +527,7 @@ AcpiDmDescendingOp (
 
     /* Determine which file this parse node is contained in. */
 
-    if (Gbl_CaptureComments)
+    if (AcpiGbl_CaptureComments)
     {
         ASL_CV_LABEL_FILENODE (Op);
 
@@ -580,13 +578,6 @@ AcpiDmDescendingOp (
     if (Op->Common.DisasmFlags & ACPI_PARSEOP_IGNORE)
     {
         /* Ignore this op -- it was handled elsewhere */
-
-        return (AE_CTRL_DEPTH);
-    }
-
-    if (AcpiDmIsTempName(Op))
-    {
-        /* Ignore compiler generated temporary names */
 
         return (AE_CTRL_DEPTH);
     }
@@ -642,10 +633,16 @@ AcpiDmDescendingOp (
                 Info->WalkState->ParserState.AmlStart);
             if (AcpiGbl_DmOpt_Verbose)
             {
-                AcpiOsPrintf (DB_FULL_OP_INFO,
-                    (Info->WalkState->MethodNode ?
-                        Info->WalkState->MethodNode->Name.Ascii : "   "),
-                    AmlOffset, (UINT32) Op->Common.AmlOpcode);
+                if (AcpiGbl_CmSingleStep)
+                {
+                    AcpiOsPrintf ("%5.5X/%4.4X: ",
+                        AmlOffset, (UINT32) Op->Common.AmlOpcode);
+                }
+                else
+                {
+                    AcpiOsPrintf ("AML Offset %5.5X, Opcode %4.4X: ",
+                        AmlOffset, (UINT32) Op->Common.AmlOpcode);
+                }
             }
         }
 
@@ -782,7 +779,7 @@ AcpiDmDescendingOp (
                 Name = AcpiPsGetName (Op);
                 if (Op->Named.Path)
                 {
-                    AcpiDmNamestring ((char *) Op->Named.Path);
+                    AcpiDmNamestring (Op->Named.Path);
                 }
                 else
                 {
@@ -1049,7 +1046,7 @@ AcpiDmAscendingOp (
 
     /* Point the Op's filename pointer to the proper file */
 
-    if (Gbl_CaptureComments)
+    if (AcpiGbl_CaptureComments)
     {
         ASL_CV_LABEL_FILENODE (Op);
 
@@ -1077,7 +1074,7 @@ AcpiDmAscendingOp (
 
         /* Print any comments that are at the end of the file here */
 
-        if (Gbl_CaptureComments && AcpiGbl_LastListHead)
+        if (AcpiGbl_CaptureComments && AcpiGbl_LastListHead)
         {
             AcpiOsPrintf ("\n");
             ASL_CV_PRINT_ONE_COMMENT_LIST (AcpiGbl_LastListHead, 0);

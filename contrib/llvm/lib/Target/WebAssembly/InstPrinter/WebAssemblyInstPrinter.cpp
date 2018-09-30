@@ -18,6 +18,7 @@
 #include "WebAssemblyMachineFunctionInfo.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstrInfo.h"
@@ -25,7 +26,6 @@
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormattedStream.h"
-#include "llvm/Target/TargetRegisterInfo.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "asm-printer"
@@ -241,4 +241,18 @@ const char *llvm::WebAssembly::TypeToString(MVT Ty) {
   default:
     llvm_unreachable("unsupported type");
   }
+}
+
+const char *llvm::WebAssembly::TypeToString(wasm::ValType Type) {
+  switch (Type) {
+  case wasm::ValType::I32:
+    return "i32";
+  case wasm::ValType::I64:
+    return "i64";
+  case wasm::ValType::F32:
+    return "f32";
+  case wasm::ValType::F64:
+    return "f64";
+  }
+  llvm_unreachable("unsupported type");
 }

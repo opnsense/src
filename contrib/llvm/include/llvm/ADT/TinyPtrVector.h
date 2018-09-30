@@ -30,9 +30,9 @@ namespace llvm {
 template <typename EltTy>
 class TinyPtrVector {
 public:
-  typedef SmallVector<EltTy, 4> VecTy;
-  typedef typename VecTy::value_type value_type;
-  typedef PointerUnion<EltTy, VecTy *> PtrUnion;
+  using VecTy = SmallVector<EltTy, 4>;
+  using value_type = typename VecTy::value_type;
+  using PtrUnion = PointerUnion<EltTy, VecTy *>;
 
 private:
   PtrUnion Val;
@@ -97,6 +97,7 @@ public:
       if (RHS.Val.template is<EltTy>()) {
         V->clear();
         V->push_back(RHS.front());
+        RHS.Val = (EltTy)nullptr;
         return *this;
       }
       delete V;
@@ -167,10 +168,10 @@ public:
     return Val.template get<VecTy*>()->size();
   }
 
-  typedef EltTy *iterator;
-  typedef const EltTy *const_iterator;
-  typedef std::reverse_iterator<iterator> reverse_iterator;
-  typedef std::reverse_iterator<const_iterator> const_reverse_iterator;
+  using iterator = EltTy *;
+  using const_iterator = const EltTy *;
+  using reverse_iterator = std::reverse_iterator<iterator>;
+  using const_reverse_iterator = std::reverse_iterator<const_iterator>;
 
   iterator begin() {
     if (Val.template is<EltTy>())

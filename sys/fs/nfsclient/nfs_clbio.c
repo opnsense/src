@@ -306,10 +306,6 @@ ncl_putpages(struct vop_putpages_args *ap)
 		printf("ncl_putpages: called on noncache-able vnode\n");
 		mtx_lock(&np->n_mtx);
 	}
-
-	for (i = 0; i < npages; i++)
-		rtvals[i] = VM_PAGER_ERROR;
-
 	/*
 	 * When putting pages, do not extend file past EOF.
 	 */
@@ -319,6 +315,9 @@ ncl_putpages(struct vop_putpages_args *ap)
 			count = 0;
 	}
 	mtx_unlock(&np->n_mtx);
+
+	for (i = 0; i < npages; i++)
+		rtvals[i] = VM_PAGER_ERROR;
 
 	PCPU_INC(cnt.v_vnodeout);
 	PCPU_ADD(cnt.v_vnodepgsout, count);
@@ -337,8 +336,10 @@ ncl_putpages(struct vop_putpages_args *ap)
 	    cred);
 	crfree(cred);
 
-	if (error == 0 || !nfs_keep_dirty_on_error)
-		vnode_pager_undirty_pages(pages, rtvals, count - uio.uio_resid);
+	if (error == 0 || !nfs_keep_dirty_on_error) {
+		vnode_pager_undirty_pages(pages, rtvals, count - uio.uio_resid,
+		    np->n_size - offset, npages * PAGE_SIZE);
+	}
 	return (rtvals[0]);
 }
 
@@ -364,20 +365,13 @@ nfs_bioread_check_cons(struct vnode *vp, struct thread *td, struct ucred *cred)
 	int error = 0;
 	struct vattr vattr;
 	struct nfsnode *np = VTONFS(vp);
-	int old_lock;
+	bool old_lock;
 
 	/*
-	 * Grab the exclusive lock before checking whether the cache is
-	 * consistent.
-	 * XXX - We can make this cheaper later (by acquiring cheaper locks).
-	 * But for now, this suffices.
+	 * Ensure the exclusove access to the node before checking
+	 * whether the cache is consistent.
 	 */
-	old_lock = ncl_upgrade_vnlock(vp);
-	if (vp->v_iflag & VI_DOOMED) {
-		error = EBADF;
-		goto out;
-	}
-
+	old_lock = ncl_excl_start(vp);
 	mtx_lock(&np->n_mtx);
 	if (np->n_flag & NMODIFIED) {
 		mtx_unlock(&np->n_mtx);
@@ -385,9 +379,7 @@ nfs_bioread_check_cons(struct vnode *vp, struct thread *td, struct ucred *cred)
 			if (vp->v_type != VDIR)
 				panic("nfs: bioread, not dir");
 			ncl_invaldir(vp);
-			error = ncl_vinvalbuf(vp, V_SAVE, td, 1);
-			if (error == 0 && (vp->v_iflag & VI_DOOMED) != 0)
-				error = EBADF;
+			error = ncl_vinvalbuf(vp, V_SAVE | V_ALLOWCLEAN, td, 1);
 			if (error != 0)
 				goto out;
 		}
@@ -403,16 +395,14 @@ nfs_bioread_check_cons(struct vnode *vp, struct thread *td, struct ucred *cred)
 		mtx_unlock(&np->n_mtx);
 		error = VOP_GETATTR(vp, &vattr, cred);
 		if (error)
-			return (error);
+			goto out;
 		mtx_lock(&np->n_mtx);
 		if ((np->n_flag & NSIZECHANGED)
 		    || (NFS_TIMESPEC_COMPARE(&np->n_mtime, &vattr.va_mtime))) {
 			mtx_unlock(&np->n_mtx);
 			if (vp->v_type == VDIR)
 				ncl_invaldir(vp);
-			error = ncl_vinvalbuf(vp, V_SAVE, td, 1);
-			if (error == 0 && (vp->v_iflag & VI_DOOMED) != 0)
-				error = EBADF;
+			error = ncl_vinvalbuf(vp, V_SAVE | V_ALLOWCLEAN, td, 1);
 			if (error != 0)
 				goto out;
 			mtx_lock(&np->n_mtx);
@@ -422,7 +412,7 @@ nfs_bioread_check_cons(struct vnode *vp, struct thread *td, struct ucred *cred)
 		mtx_unlock(&np->n_mtx);
 	}
 out:
-	ncl_downgrade_vnlock(vp, old_lock);
+	ncl_excl_finish(vp, old_lock);
 	return (error);
 }
 
@@ -607,8 +597,6 @@ ncl_bioread(struct vnode *vp, struct uio *uio, int ioflag, struct ucred *cred)
 		    while (error == NFSERR_BAD_COOKIE) {
 			ncl_invaldir(vp);
 			error = ncl_vinvalbuf(vp, 0, td, 1);
-			if (error == 0 && (vp->v_iflag & VI_DOOMED) != 0)
-				return (EBADF);
 
 			/*
 			 * Yuck! The directory has been modified on the
@@ -932,8 +920,6 @@ ncl_write(struct vop_write_args *ap)
 			KDTRACE_NFS_ATTRCACHE_FLUSH_DONE(vp);
 			error = ncl_vinvalbuf(vp, V_SAVE | ((ioflag &
 			    IO_VMIO) != 0 ? V_VMIO : 0), td, 1);
-			if (error == 0 && (vp->v_iflag & VI_DOOMED) != 0)
-				error = EBADF;
 			if (error != 0)
 				return (error);
 		} else
@@ -1015,9 +1001,6 @@ ncl_write(struct vop_write_args *ap)
 				KDTRACE_NFS_ATTRCACHE_FLUSH_DONE(vp);
 				error = ncl_vinvalbuf(vp, V_SAVE | ((ioflag &
 				    IO_VMIO) != 0 ? V_VMIO : 0), td, 1);
-				if (error == 0 &&
-				    (vp->v_iflag & VI_DOOMED) != 0)
-					error = EBADF;
 				if (error != 0)
 					return (error);
 				wouldcommit = biosize;
@@ -1335,13 +1318,13 @@ ncl_vinvalbuf(struct vnode *vp, int flags, struct thread *td, int intrflg)
 	struct nfsnode *np = VTONFS(vp);
 	struct nfsmount *nmp = VFSTONFS(vp->v_mount);
 	int error = 0, slpflag, slptimeo;
-	int old_lock = 0;
+	bool old_lock;
 
 	ASSERT_VOP_LOCKED(vp, "ncl_vinvalbuf");
 
 	if ((nmp->nm_flag & NFSMNT_INT) == 0)
 		intrflg = 0;
-	if ((nmp->nm_mountp->mnt_kern_flag & MNTK_UNMOUNTF))
+	if (NFSCL_FORCEDISM(nmp->nm_mountp))
 		intrflg = 1;
 	if (intrflg) {
 		slpflag = PCATCH;
@@ -1351,16 +1334,9 @@ ncl_vinvalbuf(struct vnode *vp, int flags, struct thread *td, int intrflg)
 		slptimeo = 0;
 	}
 
-	old_lock = ncl_upgrade_vnlock(vp);
-	if (vp->v_iflag & VI_DOOMED) {
-		/*
-		 * Since vgonel() uses the generic vinvalbuf() to flush
-		 * dirty buffers and it does not call this function, it
-		 * is safe to just return OK when VI_DOOMED is set.
-		 */
-		ncl_downgrade_vnlock(vp, old_lock);
-		return (0);
-	}
+	old_lock = ncl_excl_start(vp);
+	if (old_lock)
+		flags |= V_ALLOWCLEAN;
 
 	/*
 	 * Now, flush as required.
@@ -1399,7 +1375,7 @@ ncl_vinvalbuf(struct vnode *vp, int flags, struct thread *td, int intrflg)
 		np->n_flag &= ~NMODIFIED;
 	mtx_unlock(&np->n_mtx);
 out:
-	ncl_downgrade_vnlock(vp, old_lock);
+	ncl_excl_finish(vp, old_lock);
 	return error;
 }
 

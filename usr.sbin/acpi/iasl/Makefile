@@ -5,19 +5,20 @@ PROG=	iasl
 # common
 SRCS=	acfileio.c adfile.c adisasm.c adwalk.c ahids.c		\
 	ahpredef.c ahtable.c ahuuids.c cmfsize.c dmextern.c	\
-	dmrestag.c dmtable.c dmtables.c dmtbdump.c dmtbinfo.c	\
-	getopt.c
+	dmrestag.c dmswitch.c dmtable.c dmtables.c dmtbdump.c	\
+	dmtbinfo.c getopt.c
 
 # compiler
-SRCS+=	aslanalyze.c aslascii.c aslbtypes.c aslcodegen.c	\
-	aslcompile.c aslcompiler.y.h aslcompilerlex.c		\
-	aslcompilerparse.c asldebug.c aslerror.c aslexternal.c	\
-	aslfileio.c aslfiles.c aslfold.c aslhelp.c aslhex.c	\
-	asllength.c asllisting.c asllistsup.c aslload.c		\
-	asllookup.c aslmain.c aslmap.c aslmapenter.c		\
-	aslmapoutput.c aslmaputils.c aslmessages.c aslmethod.c	\
-	aslnamesp.c asloffset.c aslopcodes.c asloperands.c	\
-	aslopt.c asloptions.c aslpld.c aslpredef.c aslprepkg.c	\
+SRCS+=	aslallocate.c aslanalyze.c aslascii.c aslbtypes.c	\
+	aslcache.c aslcodegen.c aslcompile.c aslcompiler.y.h	\
+	aslcompilerlex.c aslcompilerparse.c asldebug.c		\
+	aslerror.c aslexternal.c aslfileio.c aslfiles.c		\
+	aslfold.c aslhelp.c aslhex.c asllength.c asllisting.c	\
+	asllistsup.c aslload.c asllookup.c aslmain.c aslmap.c	\
+	aslmapenter.c aslmapoutput.c aslmaputils.c		\
+	aslmessages.c aslmethod.c aslnamesp.c asloffset.c	\
+	aslopcodes.c asloperands.c aslopt.c asloptions.c	\
+	aslparseop.c aslpld.c aslpredef.c aslprepkg.c		\
 	aslprintf.c aslprune.c aslresource.c aslrestype1.c	\
 	aslrestype1i.c aslrestype2.c aslrestype2d.c		\
 	aslrestype2e.c aslrestype2q.c aslrestype2s.c		\
@@ -40,8 +41,8 @@ SRCS+=	dmbuffer.c dmcstyle.c dmdeferred.c dmnames.c dmopcode.c	\
 
 # components/dispatcher
 SRCS+=	dsargs.c dscontrol.c dsfield.c dsobject.c dsopcode.c	\
-	dsutils.c dswexec.c dswload.c dswload2.c dswscope.c	\
-	dswstate.c
+	dspkginit.c dsutils.c dswexec.c dswload.c dswload2.c	\
+	dswscope.c dswstate.c
 
 # components/executer
 SRCS+=	exconcat.c exconvrt.c excreate.c exdump.c exmisc.c	\
@@ -66,8 +67,9 @@ SRCS+=	utaddress.c utalloc.c utascii.c utbuffer.c utcache.c	\
 	utcopy.c utdebug.c utdecode.c utdelete.c uterror.c	\
 	utexcep.c utglobal.c uthex.c utinit.c utlock.c utmath.c	\
 	utmisc.c utmutex.c utnonansi.c utobject.c utownerid.c	\
-	utpredef.c utresrc.c utstate.c utstring.c utstrtoul64.c	\
-	utuuid.c utxface.c utxferror.c
+	utpredef.c utresdecode.c utresrc.c utstate.c utstring.c	\
+	utstrsuppt.c utstrtoul64.c utuuid.c utxface.c		\
+	utxferror.c
 
 # os_specific/service_layers
 SRCS+=	osunixxf.c

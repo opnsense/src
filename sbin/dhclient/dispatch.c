@@ -43,12 +43,17 @@
 __FBSDID("$FreeBSD$");
 
 #include "dhcpd.h"
+#include "privsep.h"
 
 #include <sys/ioctl.h>
 
+#include <assert.h>
 #include <net/if_media.h>
 #include <ifaddrs.h>
 #include <poll.h>
+
+/* Assert that pointer p is aligned to at least align bytes */
+#define assert_aligned(p, align) assert((((uintptr_t)p) & ((align) - 1)) == 0)
 
 struct protocol *protocols;
 struct timeout *timeouts;
@@ -69,9 +74,7 @@ static int interface_status(struct interface_info *ifinfo);
 void
 discover_interfaces(struct interface_info *iface)
 {
-	char *pname = iface->client->config->vlan_parent;
 	struct ifaddrs *ifap, *ifa;
-	struct sockaddr_in foo;
 	struct ifreq *tif;
 
 	if (getifaddrs(&ifap) != 0)
@@ -91,8 +94,22 @@ discover_interfaces(struct interface_info *iface)
 		 * and record it in a linked list.
 		 */
 		if (ifa->ifa_addr->sa_family == AF_LINK) {
-			struct sockaddr_dl *foo =
-			    (struct sockaddr_dl *)ifa->ifa_addr;
+			struct sockaddr_dl *foo;
+
+			/* 
+			 * The implementation of getifaddrs should guarantee
+			 * this alignment
+			 */
+			assert_aligned(ifa->ifa_addr,
+				       _Alignof(struct sockaddr_dl));
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wcast-align"
+#endif
+			foo = (struct sockaddr_dl *)ifa->ifa_addr;
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 
 			iface->index = foo->sdl_index;
 			iface->hw_address.hlen = foo->sdl_alen;
@@ -100,6 +117,7 @@ discover_interfaces(struct interface_info *iface)
 			memcpy(iface->hw_address.haddr,
 			    LLADDR(foo), foo->sdl_alen);
 		} else if (ifa->ifa_addr->sa_family == AF_INET) {
+			struct sockaddr_in foo;
 			struct iaddr addr;
 
 			memcpy(&foo, ifa->ifa_addr, sizeof(foo));
@@ -125,20 +143,7 @@ discover_interfaces(struct interface_info *iface)
 
 	/* Register the interface... */
 	if_register_receive(iface);
-	if (pname != NULL) {
-		char rname[IFNAMSIZ];
-
-		/* Change interface name for bpf registration */
-		strlcpy(rname, iface->name, IFNAMSIZ);
-		strlcpy(iface->ifp->ifr_name, pname, IFNAMSIZ);
-
-		if_register_send(iface);
-
-		/* Change name back to original */
-		strlcpy(iface->ifp->ifr_name, rname, IFNAMSIZ);
-	} else {
-		if_register_send(iface);
-	}
+	if_register_send(iface);
 	add_protocol(iface->name, iface->rfdesc, got_one, iface);
 	freeifaddrs(ifap);
 }
@@ -448,7 +453,7 @@ cancel_timeout(void (*where)(void *), void *what)
 
 /* Add a protocol to the list of protocols... */
 void
-add_protocol(char *name, int fd, void (*handler)(struct protocol *),
+add_protocol(const char *name, int fd, void (*handler)(struct protocol *),
     void *local)
 {
 	struct protocol *p;
@@ -510,4 +515,47 @@ interface_link_status(char *ifname)
 		}
 	}
 	return (1);
+}
+
+void
+interface_set_mtu_unpriv(int privfd, u_int16_t mtu)
+{
+	struct imsg_hdr hdr;
+	struct buf *buf;
+	int errs = 0;
+
+	hdr.code = IMSG_SET_INTERFACE_MTU;
+	hdr.len = sizeof(hdr) +
+		sizeof(u_int16_t);
+
+	if ((buf = buf_open(hdr.len)) == NULL)
+		error("buf_open: %m");
+
+	errs += buf_add(buf, &hdr, sizeof(hdr));
+	errs += buf_add(buf, &mtu, sizeof(mtu));
+	if (errs)
+		error("buf_add: %m");
+	
+	if (buf_close(privfd, buf) == -1)
+		error("buf_close: %m");
+}
+
+void
+interface_set_mtu_priv(char *ifname, u_int16_t mtu)
+{
+	struct ifreq ifr;
+	int sock;
+
+	if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) == -1)
+		error("Can't create socket");
+
+	memset(&ifr, 0, sizeof(ifr));
+
+	strlcpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name));
+	ifr.ifr_mtu = mtu;
+
+	if (ioctl(sock, SIOCSIFMTU, &ifr) == -1)
+		warning("SIOCSIFMTU failed (%d): %s", mtu,
+			strerror(errno));
+	close(sock);
 }

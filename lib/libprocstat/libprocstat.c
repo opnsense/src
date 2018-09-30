@@ -1,4 +1,5 @@
 /*-
+ * Copyright (c) 2017 Dell EMC
  * Copyright (c) 2009 Stanislav Sedov <stas@FreeBSD.org>
  * Copyright (c) 1988, 1993
  *      The Regents of the University of California.  All rights reserved.
@@ -62,6 +63,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/ksem.h>
 #include <sys/mman.h>
 #include <sys/capsicum.h>
+#include <sys/ptrace.h>
 #define	_KERNEL
 #include <sys/mount.h>
 #include <sys/pipe.h>
@@ -577,6 +579,10 @@ procstat_getfiles_kvm(struct procstat *procstat, struct kinfo_proc *kp, int mmap
 			type = PS_FST_TYPE_SHM;
 			data = file.f_data;
 			break;
+		case DTYPE_PROCDESC:
+			type = PS_FST_TYPE_PROCDESC;
+			data = file.f_data;
+			break;
 		default:
 			continue;
 		}
@@ -660,6 +666,7 @@ kinfo_type2fst(int kftype)
 		int	kf_type;
 		int	fst_type;
 	} kftypes2fst[] = {
+		{ KF_TYPE_PROCDESC, PS_FST_TYPE_PROCDESC },
 		{ KF_TYPE_CRYPTO, PS_FST_TYPE_CRYPTO },
 		{ KF_TYPE_FIFO, PS_FST_TYPE_FIFO },
 		{ KF_TYPE_KQUEUE, PS_FST_TYPE_KQUEUE },
@@ -2467,6 +2474,48 @@ procstat_freeauxv(struct procstat *procstat __unused, Elf_Auxinfo *auxv)
 {
 
 	free(auxv);
+}
+
+static struct ptrace_lwpinfo *
+procstat_getptlwpinfo_core(struct procstat_core *core, unsigned int *cntp)
+{
+	void *buf;
+	struct ptrace_lwpinfo *pl;
+	unsigned int cnt;
+	size_t len;
+
+	cnt = procstat_core_note_count(core, PSC_TYPE_PTLWPINFO);
+	if (cnt == 0)
+		return (NULL);
+
+	len = cnt * sizeof(*pl);
+	buf = calloc(1, len);
+	pl = procstat_core_get(core, PSC_TYPE_PTLWPINFO, buf, &len);
+	if (pl == NULL) {
+		free(buf);
+		return (NULL);
+	}
+	*cntp = len / sizeof(*pl);
+	return (pl);
+}
+
+struct ptrace_lwpinfo *
+procstat_getptlwpinfo(struct procstat *procstat, unsigned int *cntp)
+{
+	switch (procstat->type) {
+	case PROCSTAT_CORE:
+	 	return (procstat_getptlwpinfo_core(procstat->core, cntp));
+	default:
+		warnx("unknown access method: %d", procstat->type);
+		return (NULL);
+	}
+}
+
+void
+procstat_freeptlwpinfo(struct procstat *procstat __unused,
+    struct ptrace_lwpinfo *pl)
+{
+	free(pl);
 }
 
 static struct kinfo_kstack *

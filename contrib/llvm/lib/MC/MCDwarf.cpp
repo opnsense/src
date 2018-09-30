@@ -8,10 +8,16 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/MC/MCDwarf.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/Hashing.h"
+#include "llvm/ADT/None.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/Config/config.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
@@ -20,14 +26,22 @@
 #include "llvm/MC/MCObjectStreamer.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSection.h"
+#include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbol.h"
-#include "llvm/Support/Debug.h"
+#include "llvm/Support/Casting.h"
+#include "llvm/Support/Endian.h"
 #include "llvm/Support/EndianStream.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/LEB128.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
+#include <cassert>
+#include <cstdint>
+#include <string>
+#include <utility>
+#include <vector>
 
 using namespace llvm;
 
@@ -154,7 +168,7 @@ EmitDwarfLineTable(MCObjectStreamer *MCOS, MCSection *Section,
     // and the current Label.
     const MCAsmInfo *asmInfo = MCOS->getContext().getAsmInfo();
     MCOS->EmitDwarfAdvanceLineAddr(LineDelta, LastLabel, Label,
-                                   asmInfo->getPointerSize());
+                                   asmInfo->getCodePointerSize());
 
     Discriminator = 0;
     LastLine = LineEntry.getLine();
@@ -174,7 +188,7 @@ EmitDwarfLineTable(MCObjectStreamer *MCOS, MCSection *Section,
 
   const MCAsmInfo *AsmInfo = Ctx.getAsmInfo();
   MCOS->EmitDwarfAdvanceLineAddr(INT64_MAX, LastLabel, SectionEnd,
-                                 AsmInfo->getPointerSize());
+                                 AsmInfo->getCodePointerSize());
 }
 
 //
@@ -243,6 +257,66 @@ static void emitAbsValue(MCStreamer &OS, const MCExpr *Value, unsigned Size) {
   OS.EmitValue(ABS, Size);
 }
 
+static void
+emitV2FileDirTables(MCStreamer *MCOS,
+                    const SmallVectorImpl<std::string> &MCDwarfDirs,
+                    const SmallVectorImpl<MCDwarfFile> &MCDwarfFiles) {
+  // First the directory table.
+  for (auto Dir : MCDwarfDirs) {
+    MCOS->EmitBytes(Dir);                // The DirectoryName, and...
+    MCOS->EmitBytes(StringRef("\0", 1)); // its null terminator.
+  }
+  MCOS->EmitIntValue(0, 1); // Terminate the directory list.
+
+  // Second the file table.
+  for (unsigned i = 1; i < MCDwarfFiles.size(); i++) {
+    assert(!MCDwarfFiles[i].Name.empty());
+    MCOS->EmitBytes(MCDwarfFiles[i].Name); // FileName and...
+    MCOS->EmitBytes(StringRef("\0", 1));   // its null terminator.
+    MCOS->EmitULEB128IntValue(MCDwarfFiles[i].DirIndex); // Directory number.
+    MCOS->EmitIntValue(0, 1); // Last modification timestamp (always 0).
+    MCOS->EmitIntValue(0, 1); // File size (always 0).
+  }
+  MCOS->EmitIntValue(0, 1); // Terminate the file list.
+}
+
+static void
+emitV5FileDirTables(MCStreamer *MCOS,
+                    const SmallVectorImpl<std::string> &MCDwarfDirs,
+                    const SmallVectorImpl<MCDwarfFile> &MCDwarfFiles,
+                    StringRef CompilationDir) {
+  // The directory format, which is just inline null-terminated strings.
+  MCOS->EmitIntValue(1, 1);
+  MCOS->EmitULEB128IntValue(dwarf::DW_LNCT_path);
+  MCOS->EmitULEB128IntValue(dwarf::DW_FORM_string);
+  // Then the list of directory paths.  CompilationDir comes first.
+  MCOS->EmitULEB128IntValue(MCDwarfDirs.size() + 1);
+  MCOS->EmitBytes(CompilationDir);
+  MCOS->EmitBytes(StringRef("\0", 1));
+  for (auto Dir : MCDwarfDirs) {
+    MCOS->EmitBytes(Dir);                // The DirectoryName, and...
+    MCOS->EmitBytes(StringRef("\0", 1)); // its null terminator.
+  }
+
+  // The file format, which is the inline null-terminated filename and a
+  // directory index.  We don't track file size/timestamp so don't emit them
+  // in the v5 table.
+  // FIXME: Arrange to emit MD5 signatures for the source files.
+  MCOS->EmitIntValue(2, 1);
+  MCOS->EmitULEB128IntValue(dwarf::DW_LNCT_path);
+  MCOS->EmitULEB128IntValue(dwarf::DW_FORM_string);
+  MCOS->EmitULEB128IntValue(dwarf::DW_LNCT_directory_index);
+  MCOS->EmitULEB128IntValue(dwarf::DW_FORM_udata);
+  // Then the list of file names. These start at 1 for some reason.
+  MCOS->EmitULEB128IntValue(MCDwarfFiles.size() - 1);
+  for (unsigned i = 1; i < MCDwarfFiles.size(); ++i) {
+    assert(!MCDwarfFiles[i].Name.empty());
+    MCOS->EmitBytes(MCDwarfFiles[i].Name); // FileName and...
+    MCOS->EmitBytes(StringRef("\0", 1));   // its null terminator.
+    MCOS->EmitULEB128IntValue(MCDwarfFiles[i].DirIndex); // Directory number.
+  }
+}
+
 std::pair<MCSymbol *, MCSymbol *>
 MCDwarfLineTableHeader::Emit(MCStreamer *MCOS, MCDwarfLineTableParams Params,
                              ArrayRef<char> StandardOpcodeLengths) const {
@@ -263,22 +337,41 @@ MCDwarfLineTableHeader::Emit(MCStreamer *MCOS, MCDwarfLineTableParams Params,
   emitAbsValue(*MCOS,
                MakeStartMinusEndExpr(*MCOS, *LineStartSym, *LineEndSym, 4), 4);
 
-  // Next 2 bytes is the Version, which is Dwarf 2.
-  MCOS->EmitIntValue(2, 2);
+  // Next 2 bytes is the Version.
+  // FIXME: On Darwin we still default to V2.
+  unsigned LineTableVersion = context.getDwarfVersion();
+  if (context.getObjectFileInfo()->getTargetTriple().isOSDarwin())
+    LineTableVersion = 2;
+  MCOS->EmitIntValue(LineTableVersion, 2);
+
+  // Keep track of the bytes between the very start and where the header length
+  // comes out.
+  unsigned PreHeaderLengthBytes = 4 + 2;
+
+  // In v5, we get address info next.
+  if (LineTableVersion >= 5) {
+    MCOS->EmitIntValue(context.getAsmInfo()->getCodePointerSize(), 1);
+    MCOS->EmitIntValue(0, 1); // Segment selector; same as EmitGenDwarfAranges.
+    PreHeaderLengthBytes += 2;
+  }
 
   // Create a symbol for the end of the prologue (to be set when we get there).
   MCSymbol *ProEndSym = context.createTempSymbol(); // Lprologue_end
 
-  // Length of the prologue, is the next 4 bytes.  Which is the start of the
-  // section to the end of the prologue.  Not including the 4 bytes for the
-  // total length, the 2 bytes for the version, and these 4 bytes for the
-  // length of the prologue.
-  emitAbsValue(
-      *MCOS,
-      MakeStartMinusEndExpr(*MCOS, *LineStartSym, *ProEndSym, (4 + 2 + 4)), 4);
+  // Length of the prologue, is the next 4 bytes.  This is actually the length
+  // from after the length word, to the end of the prologue.
+  emitAbsValue(*MCOS,
+               MakeStartMinusEndExpr(*MCOS, *LineStartSym, *ProEndSym,
+                                     (PreHeaderLengthBytes + 4)),
+               4);
 
   // Parameters of the state machine, are next.
   MCOS->EmitIntValue(context.getAsmInfo()->getMinInstAlignment(), 1);
+  // maximum_operations_per_instruction 
+  // For non-VLIW architectures this field is always 1.
+  // FIXME: VLIW architectures need to update this field accordingly.
+  if (LineTableVersion >= 4)
+    MCOS->EmitIntValue(1, 1);
   MCOS->EmitIntValue(DWARF2_LINE_DEFAULT_IS_STMT, 1);
   MCOS->EmitIntValue(Params.DWARF2LineBase, 1);
   MCOS->EmitIntValue(Params.DWARF2LineRange, 1);
@@ -288,26 +381,12 @@ MCDwarfLineTableHeader::Emit(MCStreamer *MCOS, MCDwarfLineTableParams Params,
   for (char Length : StandardOpcodeLengths)
     MCOS->EmitIntValue(Length, 1);
 
-  // Put out the directory and file tables.
-
-  // First the directory table.
-  for (unsigned i = 0; i < MCDwarfDirs.size(); i++) {
-    MCOS->EmitBytes(MCDwarfDirs[i]); // the DirectoryName
-    MCOS->EmitBytes(StringRef("\0", 1)); // the null term. of the string
-  }
-  MCOS->EmitIntValue(0, 1); // Terminate the directory list
-
-  // Second the file table.
-  for (unsigned i = 1; i < MCDwarfFiles.size(); i++) {
-    assert(!MCDwarfFiles[i].Name.empty());
-    MCOS->EmitBytes(MCDwarfFiles[i].Name); // FileName
-    MCOS->EmitBytes(StringRef("\0", 1)); // the null term. of the string
-    // the Directory num
-    MCOS->EmitULEB128IntValue(MCDwarfFiles[i].DirIndex);
-    MCOS->EmitIntValue(0, 1); // last modification timestamp (always 0)
-    MCOS->EmitIntValue(0, 1); // filesize (always 0)
-  }
-  MCOS->EmitIntValue(0, 1); // Terminate the file list
+  // Put out the directory and file tables.  The formats vary depending on
+  // the version.
+  if (LineTableVersion >= 5)
+    emitV5FileDirTables(MCOS, MCDwarfDirs, MCDwarfFiles, CompilationDir);
+  else
+    emitV2FileDirTables(MCOS, MCDwarfDirs, MCDwarfFiles);
 
   // This is the end of the prologue, so set the value of the symbol at the
   // end of the prologue (that was used in a previous expression).
@@ -356,7 +435,8 @@ unsigned MCDwarfLineTableHeader::getFile(StringRef &Directory,
       return IterBool.first->second;
   }
   // Make space for this FileNumber in the MCDwarfFiles vector if needed.
-  MCDwarfFiles.resize(FileNumber + 1);
+  if (FileNumber >= MCDwarfFiles.size())
+    MCDwarfFiles.resize(FileNumber + 1);
 
   // Get the new MCDwarfFile slot for this FileNumber.
   MCDwarfFile &File = MCDwarfFiles[FileNumber];
@@ -580,7 +660,7 @@ static void EmitGenDwarfAranges(MCStreamer *MCOS,
   // Figure the padding after the header before the table of address and size
   // pairs who's values are PointerSize'ed.
   const MCAsmInfo *asmInfo = context.getAsmInfo();
-  int AddrSize = asmInfo->getPointerSize();
+  int AddrSize = asmInfo->getCodePointerSize();
   int Pad = 2 * AddrSize - (Length & (2 * AddrSize - 1));
   if (Pad == 2 * AddrSize)
     Pad = 0;
@@ -591,7 +671,6 @@ static void EmitGenDwarfAranges(MCStreamer *MCOS,
   Length += 2 * AddrSize * Sections.size();
   // And the pair of terminating zeros.
   Length += 2 * AddrSize;
-
 
   // Emit the header for this section.
   // The 4 byte length not including the 4 byte value for the length.
@@ -661,7 +740,14 @@ static void EmitGenDwarfInfo(MCStreamer *MCOS,
   // The 2 byte DWARF version.
   MCOS->EmitIntValue(context.getDwarfVersion(), 2);
 
+  // The DWARF v5 header has unit type, address size, abbrev offset.
+  // Earlier versions have abbrev offset, address size.
   const MCAsmInfo &AsmInfo = *context.getAsmInfo();
+  int AddrSize = AsmInfo.getCodePointerSize();
+  if (context.getDwarfVersion() >= 5) {
+    MCOS->EmitIntValue(dwarf::DW_UT_compile, 1);
+    MCOS->EmitIntValue(AddrSize, 1);
+  }
   // The 4 byte offset to the debug abbrevs from the start of the .debug_abbrev,
   // it is at the start of that section so this is zero.
   if (AbbrevSectionSymbol == nullptr)
@@ -669,11 +755,8 @@ static void EmitGenDwarfInfo(MCStreamer *MCOS,
   else
     MCOS->EmitSymbolValue(AbbrevSectionSymbol, 4,
                           AsmInfo.needsDwarfSectionOffsetDirective());
-
-  const MCAsmInfo *asmInfo = context.getAsmInfo();
-  int AddrSize = asmInfo->getPointerSize();
-  // The 1 byte size of an address.
-  MCOS->EmitIntValue(AddrSize, 1);
+  if (context.getDwarfVersion() <= 4)
+    MCOS->EmitIntValue(AddrSize, 1);
 
   // Second part: the compile_unit DIE.
 
@@ -806,7 +889,7 @@ static void EmitGenDwarfRanges(MCStreamer *MCOS) {
   auto &Sections = context.getGenDwarfSectionSyms();
 
   const MCAsmInfo *AsmInfo = context.getAsmInfo();
-  int AddrSize = AsmInfo->getPointerSize();
+  int AddrSize = AsmInfo->getCodePointerSize();
 
   MCOS->SwitchSection(context.getObjectFileInfo()->getDwarfRangesSection());
 
@@ -885,7 +968,7 @@ void MCGenDwarfInfo::Emit(MCStreamer *MCOS) {
     }
   }
 
-  assert((RangesSectionSymbol != NULL) || !UseRangesSection);
+  assert((RangesSectionSymbol != nullptr) || !UseRangesSection);
 
   MCOS->SwitchSection(context.getObjectFileInfo()->getDwarfARangesSection());
 
@@ -964,7 +1047,7 @@ static unsigned getSizeForEncoding(MCStreamer &streamer,
   default: llvm_unreachable("Unknown Encoding");
   case dwarf::DW_EH_PE_absptr:
   case dwarf::DW_EH_PE_signed:
-    return context.getAsmInfo()->getPointerSize();
+    return context.getAsmInfo()->getCodePointerSize();
   case dwarf::DW_EH_PE_udata2:
   case dwarf::DW_EH_PE_sdata2:
     return 2;
@@ -1003,6 +1086,7 @@ static void EmitPersonality(MCStreamer &streamer, const MCSymbol &symbol,
 }
 
 namespace {
+
 class FrameEmitterImpl {
   int CFAOffset = 0;
   int InitialCFAOffset = 0;
@@ -1016,10 +1100,7 @@ public:
   /// Emit the unwind information in a compact way.
   void EmitCompactUnwind(const MCDwarfFrameInfo &frame);
 
-  const MCSymbol &EmitCIE(const MCSymbol *personality,
-                          unsigned personalityEncoding, const MCSymbol *lsda,
-                          bool IsSignalFrame, unsigned lsdaEncoding,
-                          bool IsSimple);
+  const MCSymbol &EmitCIE(const MCDwarfFrameInfo &F);
   void EmitFDE(const MCSymbol &cieStart, const MCDwarfFrameInfo &frame,
                bool LastInSection, const MCSymbol &SectionStart);
   void EmitCFIInstructions(ArrayRef<MCCFIInstruction> Instrs,
@@ -1042,18 +1123,18 @@ void FrameEmitterImpl::EmitCFIInstruction(const MCCFIInstruction &Instr) {
     unsigned Reg1 = Instr.getRegister();
     unsigned Reg2 = Instr.getRegister2();
     if (!IsEH) {
-      Reg1 = MRI->getDwarfRegNum(MRI->getLLVMRegNum(Reg1, true), false);
-      Reg2 = MRI->getDwarfRegNum(MRI->getLLVMRegNum(Reg2, true), false);
+      Reg1 = MRI->getDwarfRegNumFromDwarfEHRegNum(Reg1);
+      Reg2 = MRI->getDwarfRegNumFromDwarfEHRegNum(Reg2);
     }
     Streamer.EmitIntValue(dwarf::DW_CFA_register, 1);
     Streamer.EmitULEB128IntValue(Reg1);
     Streamer.EmitULEB128IntValue(Reg2);
     return;
   }
-  case MCCFIInstruction::OpWindowSave: {
+  case MCCFIInstruction::OpWindowSave:
     Streamer.EmitIntValue(dwarf::DW_CFA_GNU_window_save, 1);
     return;
-  }
+
   case MCCFIInstruction::OpUndefined: {
     unsigned Reg = Instr.getRegister();
     Streamer.EmitIntValue(dwarf::DW_CFA_undefined, 1);
@@ -1079,7 +1160,7 @@ void FrameEmitterImpl::EmitCFIInstruction(const MCCFIInstruction &Instr) {
   case MCCFIInstruction::OpDefCfa: {
     unsigned Reg = Instr.getRegister();
     if (!IsEH)
-      Reg = MRI->getDwarfRegNum(MRI->getLLVMRegNum(Reg, true), false);
+      Reg = MRI->getDwarfRegNumFromDwarfEHRegNum(Reg);
     Streamer.EmitIntValue(dwarf::DW_CFA_def_cfa, 1);
     Streamer.EmitULEB128IntValue(Reg);
     CFAOffset = -Instr.getOffset();
@@ -1087,17 +1168,15 @@ void FrameEmitterImpl::EmitCFIInstruction(const MCCFIInstruction &Instr) {
 
     return;
   }
-
   case MCCFIInstruction::OpDefCfaRegister: {
     unsigned Reg = Instr.getRegister();
     if (!IsEH)
-      Reg = MRI->getDwarfRegNum(MRI->getLLVMRegNum(Reg, true), false);
+      Reg = MRI->getDwarfRegNumFromDwarfEHRegNum(Reg);
     Streamer.EmitIntValue(dwarf::DW_CFA_def_cfa_register, 1);
     Streamer.EmitULEB128IntValue(Reg);
 
     return;
   }
-
   case MCCFIInstruction::OpOffset:
   case MCCFIInstruction::OpRelOffset: {
     const bool IsRelative =
@@ -1105,7 +1184,7 @@ void FrameEmitterImpl::EmitCFIInstruction(const MCCFIInstruction &Instr) {
 
     unsigned Reg = Instr.getRegister();
     if (!IsEH)
-      Reg = MRI->getDwarfRegNum(MRI->getLLVMRegNum(Reg, true), false);
+      Reg = MRI->getDwarfRegNumFromDwarfEHRegNum(Reg);
 
     int Offset = Instr.getOffset();
     if (IsRelative)
@@ -1141,15 +1220,15 @@ void FrameEmitterImpl::EmitCFIInstruction(const MCCFIInstruction &Instr) {
   case MCCFIInstruction::OpRestore: {
     unsigned Reg = Instr.getRegister();
     if (!IsEH)
-      Reg = MRI->getDwarfRegNum(MRI->getLLVMRegNum(Reg, true), false);
+      Reg = MRI->getDwarfRegNumFromDwarfEHRegNum(Reg);
     Streamer.EmitIntValue(dwarf::DW_CFA_restore | Reg, 1);
     return;
   }
-  case MCCFIInstruction::OpGnuArgsSize: {
+  case MCCFIInstruction::OpGnuArgsSize:
     Streamer.EmitIntValue(dwarf::DW_CFA_GNU_args_size, 1);
     Streamer.EmitULEB128IntValue(Instr.getOffset());
     return;
-  }
+
   case MCCFIInstruction::OpEscape:
     Streamer.EmitBytes(Instr.getValues());
     return;
@@ -1257,12 +1336,7 @@ static unsigned getCIEVersion(bool IsEH, unsigned DwarfVersion) {
   llvm_unreachable("Unknown version");
 }
 
-const MCSymbol &FrameEmitterImpl::EmitCIE(const MCSymbol *personality,
-                                          unsigned personalityEncoding,
-                                          const MCSymbol *lsda,
-                                          bool IsSignalFrame,
-                                          unsigned lsdaEncoding,
-                                          bool IsSimple) {
+const MCSymbol &FrameEmitterImpl::EmitCIE(const MCDwarfFrameInfo &Frame) {
   MCContext &context = Streamer.getContext();
   const MCRegisterInfo *MRI = context.getRegisterInfo();
   const MCObjectFileInfo *MOFI = context.getObjectFileInfo();
@@ -1289,12 +1363,12 @@ const MCSymbol &FrameEmitterImpl::EmitCIE(const MCSymbol *personality,
   SmallString<8> Augmentation;
   if (IsEH) {
     Augmentation += "z";
-    if (personality)
+    if (Frame.Personality)
       Augmentation += "P";
-    if (lsda)
+    if (Frame.Lsda)
       Augmentation += "L";
     Augmentation += "R";
-    if (IsSignalFrame)
+    if (Frame.IsSignalFrame)
       Augmentation += "S";
     Streamer.EmitBytes(Augmentation);
   }
@@ -1302,7 +1376,7 @@ const MCSymbol &FrameEmitterImpl::EmitCIE(const MCSymbol *personality,
 
   if (CIEVersion >= 4) {
     // Address Size
-    Streamer.EmitIntValue(context.getAsmInfo()->getPointerSize(), 1);
+    Streamer.EmitIntValue(context.getAsmInfo()->getCodePointerSize(), 1);
 
     // Segment Descriptor Size
     Streamer.EmitIntValue(0, 1);
@@ -1315,26 +1389,29 @@ const MCSymbol &FrameEmitterImpl::EmitCIE(const MCSymbol *personality,
   Streamer.EmitSLEB128IntValue(getDataAlignmentFactor(Streamer));
 
   // Return Address Register
+  unsigned RAReg = Frame.RAReg;
+  if (RAReg == static_cast<unsigned>(INT_MAX))
+    RAReg = MRI->getDwarfRegNum(MRI->getRARegister(), IsEH);
+
   if (CIEVersion == 1) {
-    assert(MRI->getRARegister() <= 255 &&
+    assert(RAReg <= 255 &&
            "DWARF 2 encodes return_address_register in one byte");
-    Streamer.EmitIntValue(MRI->getDwarfRegNum(MRI->getRARegister(), IsEH), 1);
+    Streamer.EmitIntValue(RAReg, 1);
   } else {
-    Streamer.EmitULEB128IntValue(
-        MRI->getDwarfRegNum(MRI->getRARegister(), IsEH));
+    Streamer.EmitULEB128IntValue(RAReg);
   }
 
   // Augmentation Data Length (optional)
-
   unsigned augmentationLength = 0;
   if (IsEH) {
-    if (personality) {
+    if (Frame.Personality) {
       // Personality Encoding
       augmentationLength += 1;
       // Personality
-      augmentationLength += getSizeForEncoding(Streamer, personalityEncoding);
+      augmentationLength +=
+          getSizeForEncoding(Streamer, Frame.PersonalityEncoding);
     }
-    if (lsda)
+    if (Frame.Lsda)
       augmentationLength += 1;
     // Encoding of the FDE pointers
     augmentationLength += 1;
@@ -1342,15 +1419,15 @@ const MCSymbol &FrameEmitterImpl::EmitCIE(const MCSymbol *personality,
     Streamer.EmitULEB128IntValue(augmentationLength);
 
     // Augmentation Data (optional)
-    if (personality) {
+    if (Frame.Personality) {
       // Personality Encoding
-      emitEncodingByte(Streamer, personalityEncoding);
+      emitEncodingByte(Streamer, Frame.PersonalityEncoding);
       // Personality
-      EmitPersonality(Streamer, *personality, personalityEncoding);
+      EmitPersonality(Streamer, *Frame.Personality, Frame.PersonalityEncoding);
     }
 
-    if (lsda)
-      emitEncodingByte(Streamer, lsdaEncoding);
+    if (Frame.Lsda)
+      emitEncodingByte(Streamer, Frame.LsdaEncoding);
 
     // Encoding of the FDE pointers
     emitEncodingByte(Streamer, MOFI->getFDEEncoding());
@@ -1359,7 +1436,7 @@ const MCSymbol &FrameEmitterImpl::EmitCIE(const MCSymbol *personality,
   // Initial Instructions
 
   const MCAsmInfo *MAI = context.getAsmInfo();
-  if (!IsSimple) {
+  if (!Frame.IsSimple) {
     const std::vector<MCCFIInstruction> &Instructions =
         MAI->getInitialFrameState();
     EmitCFIInstructions(Instructions, nullptr);
@@ -1368,7 +1445,7 @@ const MCSymbol &FrameEmitterImpl::EmitCIE(const MCSymbol *personality,
   InitialCFAOffset = CFAOffset;
 
   // Padding
-  Streamer.EmitValueToAlignment(IsEH ? 4 : MAI->getPointerSize());
+  Streamer.EmitValueToAlignment(IsEH ? 4 : MAI->getCodePointerSize());
 
   Streamer.EmitLabel(sectionEnd);
   return *sectionStart;
@@ -1437,52 +1514,69 @@ void FrameEmitterImpl::EmitFDE(const MCSymbol &cieStart,
   // The size of a .eh_frame section has to be a multiple of the alignment
   // since a null CIE is interpreted as the end. Old systems overaligned
   // .eh_frame, so we do too and account for it in the last FDE.
-  unsigned Align = LastInSection ? asmInfo->getPointerSize() : PCSize;
+  unsigned Align = LastInSection ? asmInfo->getCodePointerSize() : PCSize;
   Streamer.EmitValueToAlignment(Align);
 
   Streamer.EmitLabel(fdeEnd);
 }
 
 namespace {
+
 struct CIEKey {
   static const CIEKey getEmptyKey() {
-    return CIEKey(nullptr, 0, -1, false, false);
+    return CIEKey(nullptr, 0, -1, false, false, static_cast<unsigned>(INT_MAX));
   }
+
   static const CIEKey getTombstoneKey() {
-    return CIEKey(nullptr, -1, 0, false, false);
+    return CIEKey(nullptr, -1, 0, false, false, static_cast<unsigned>(INT_MAX));
   }
 
   CIEKey(const MCSymbol *Personality, unsigned PersonalityEncoding,
-         unsigned LsdaEncoding, bool IsSignalFrame, bool IsSimple)
+         unsigned LSDAEncoding, bool IsSignalFrame, bool IsSimple,
+         unsigned RAReg)
       : Personality(Personality), PersonalityEncoding(PersonalityEncoding),
-        LsdaEncoding(LsdaEncoding), IsSignalFrame(IsSignalFrame),
-        IsSimple(IsSimple) {}
+        LsdaEncoding(LSDAEncoding), IsSignalFrame(IsSignalFrame),
+        IsSimple(IsSimple), RAReg(RAReg) {}
+
+  explicit CIEKey(const MCDwarfFrameInfo &Frame)
+      : Personality(Frame.Personality),
+        PersonalityEncoding(Frame.PersonalityEncoding),
+        LsdaEncoding(Frame.LsdaEncoding), IsSignalFrame(Frame.IsSignalFrame),
+        IsSimple(Frame.IsSimple), RAReg(Frame.RAReg) {}
+
   const MCSymbol *Personality;
   unsigned PersonalityEncoding;
   unsigned LsdaEncoding;
   bool IsSignalFrame;
   bool IsSimple;
+  unsigned RAReg;
 };
-} // anonymous namespace
+
+} // end anonymous namespace
 
 namespace llvm {
+
 template <> struct DenseMapInfo<CIEKey> {
   static CIEKey getEmptyKey() { return CIEKey::getEmptyKey(); }
   static CIEKey getTombstoneKey() { return CIEKey::getTombstoneKey(); }
+
   static unsigned getHashValue(const CIEKey &Key) {
     return static_cast<unsigned>(
         hash_combine(Key.Personality, Key.PersonalityEncoding, Key.LsdaEncoding,
-                     Key.IsSignalFrame, Key.IsSimple));
+                     Key.IsSignalFrame, Key.IsSimple, Key.RAReg));
   }
+
   static bool isEqual(const CIEKey &LHS, const CIEKey &RHS) {
     return LHS.Personality == RHS.Personality &&
            LHS.PersonalityEncoding == RHS.PersonalityEncoding &&
            LHS.LsdaEncoding == RHS.LsdaEncoding &&
            LHS.IsSignalFrame == RHS.IsSignalFrame &&
-           LHS.IsSimple == RHS.IsSimple;
+           LHS.IsSimple == RHS.IsSimple &&
+           LHS.RAReg == RHS.RAReg;
   }
 };
-} // namespace llvm
+
+} // end namespace llvm
 
 void MCDwarfFrameEmitter::Emit(MCObjectStreamer &Streamer, MCAsmBackend *MAB,
                                bool IsEH) {
@@ -1490,6 +1584,7 @@ void MCDwarfFrameEmitter::Emit(MCObjectStreamer &Streamer, MCAsmBackend *MAB,
 
   MCContext &Context = Streamer.getContext();
   const MCObjectFileInfo *MOFI = Context.getObjectFileInfo();
+  const MCAsmInfo *AsmInfo = Context.getAsmInfo();
   FrameEmitterImpl Emitter(IsEH, Streamer);
   ArrayRef<MCDwarfFrameInfo> FrameArray = Streamer.getDwarfFrameInfos();
 
@@ -1501,7 +1596,7 @@ void MCDwarfFrameEmitter::Emit(MCObjectStreamer &Streamer, MCAsmBackend *MAB,
       if (Frame.CompactUnwindEncoding == 0) continue;
       if (!SectionEmitted) {
         Streamer.SwitchSection(MOFI->getCompactUnwindSection());
-        Streamer.EmitValueToAlignment(Context.getAsmInfo()->getPointerSize());
+        Streamer.EmitValueToAlignment(AsmInfo->getCodePointerSize());
         SectionEmitted = true;
       }
       NeedsEHFrameSection |=
@@ -1534,13 +1629,10 @@ void MCDwarfFrameEmitter::Emit(MCObjectStreamer &Streamer, MCAsmBackend *MAB,
       // of by the compact unwind encoding.
       continue;
 
-    CIEKey Key(Frame.Personality, Frame.PersonalityEncoding,
-               Frame.LsdaEncoding, Frame.IsSignalFrame, Frame.IsSimple);
+    CIEKey Key(Frame);
     const MCSymbol *&CIEStart = IsEH ? CIEStarts[Key] : DummyDebugKey;
     if (!CIEStart)
-      CIEStart = &Emitter.EmitCIE(Frame.Personality, Frame.PersonalityEncoding,
-                                  Frame.Lsda, Frame.IsSignalFrame,
-                                  Frame.LsdaEncoding, Frame.IsSimple);
+      CIEStart = &Emitter.EmitCIE(Frame);
 
     Emitter.EmitFDE(*CIEStart, Frame, I == E, *SectionStart);
   }

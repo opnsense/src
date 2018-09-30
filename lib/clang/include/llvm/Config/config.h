@@ -17,8 +17,12 @@
 /* Define to 1 to enable crash overrides, and to 0 otherwise. */
 #define ENABLE_CRASH_OVERRIDES 1
 
+#if __FreeBSD_version >= 1000052
 /* Define to 1 if you have the `backtrace' function. */
-/* #undef HAVE_BACKTRACE */
+#define HAVE_BACKTRACE TRUE
+
+#define BACKTRACE_HEADER <execinfo.h>
+#endif
 
 /* Define to 1 if you have the <CrashReporterClient.h> header file. */
 /* #undef HAVE_CRASHREPORTERCLIENT_H */
@@ -55,13 +59,11 @@
 /* Define if dlopen() is available on this platform. */
 #define HAVE_DLOPEN 1
 
+/* Define if dladdr() is available on this platform. */
+#define HAVE_DLADDR 1
+
 /* Define to 1 if you have the <errno.h> header file. */
 #define HAVE_ERRNO_H 1
-
-/* Define to 1 if you have the <execinfo.h> header file. */
-#if __FreeBSD_version >= 1000052
-#define HAVE_EXECINFO_H 1
-#endif
 
 /* Define to 1 if you have the <fcntl.h> header file. */
 #define HAVE_FCNTL_H 1
@@ -118,6 +120,12 @@
 
 /* Define to 1 if you have the `pthread' library (-lpthread). */
 #define HAVE_LIBPTHREAD 1
+
+/* Define to 1 if you have the `pthread_getname_np' function. */
+/* #undef HAVE_PTHREAD_GETNAME_NP */
+
+/* Define to 1 if you have the `pthread_setname_np' function. */
+/* #undef HAVE_PTHREAD_SETNAME_NP */
 
 /* Define to 1 if you have the `shell32' library (-lshell32). */
 /* #undef HAVE_LIBSHELL32 */
@@ -190,6 +198,12 @@
 
 /* Define to 1 if you have the `setenv' function. */
 #define HAVE_SETENV 1
+
+/* Define to 1 if you have the `sched_getaffinity' function. */
+/* #undef HAVE_SCHED_GETAFFINITY */
+
+/* Define to 1 if you have the `CPU_COUNT' macro. */
+/* #undef HAVE_CPU_COUNT */
 
 /* Define to 1 if you have the `setrlimit' function. */
 #define HAVE_SETRLIMIT 1
@@ -356,35 +370,14 @@
 /* Host triple LLVM will be executed on */
 /* #undef LLVM_HOST_TRIPLE */
 
-/* LLVM architecture name for the native architecture, if available */
-#define LLVM_NATIVE_ARCH X86
-
-/* LLVM name for the native AsmParser init function, if available */
-#define LLVM_NATIVE_ASMPARSER LLVMInitializeX86AsmParser
-
-/* LLVM name for the native AsmPrinter init function, if available */
-#define LLVM_NATIVE_ASMPRINTER LLVMInitializeX86AsmPrinter
-
-/* LLVM name for the native Disassembler init function, if available */
-#define LLVM_NATIVE_DISASSEMBLER LLVMInitializeX86Disassembler
-
-/* LLVM name for the native Target init function, if available */
-#define LLVM_NATIVE_TARGET LLVMInitializeX86Target
-
-/* LLVM name for the native TargetInfo init function, if available */
-#define LLVM_NATIVE_TARGETINFO LLVMInitializeX86TargetInfo
-
-/* LLVM name for the native target MC init function, if available */
-#define LLVM_NATIVE_TARGETMC LLVMInitializeX86TargetMC
-
 /* Define if this is Unixish platform */
 #define LLVM_ON_UNIX 1
 
 /* Define if this is Win32ish platform */
 /* #undef LLVM_ON_WIN32 */
 
-/* Installation prefix directory */
-#define LLVM_PREFIX "/usr"
+/* Define if overriding target triple is enabled */
+/* #undef LLVM_TARGET_TRIPLE_ENV */
 
 /* Define if we have the Intel JIT API runtime support library */
 #define LLVM_USE_INTEL_JITEVENTS 0
@@ -395,8 +388,11 @@
 /* LLVM version information */
 /* #undef LLVM_VERSION_INFO */
 
+/* Whether tools show host and target info when invoked with --version */
+#define LLVM_VERSION_PRINTER_SHOW_HOST_TARGET_INFO 1
+
 /* Major version of the LLVM API */
-#define LLVM_VERSION_MAJOR 4
+#define LLVM_VERSION_MAJOR 6
 
 /* Minor version of the LLVM API */
 #define LLVM_VERSION_MINOR 0
@@ -405,7 +401,10 @@
 #define LLVM_VERSION_PATCH 0
 
 /* LLVM version string */
-#define LLVM_VERSION_STRING "4.0.0"
+#define LLVM_VERSION_STRING "6.0.0"
+
+/* Define if libxml2 is supported on this platform. */
+/* #undef LLVM_LIBXML2_ENABLED */
 
 /* Define to the extension used for shared libraries, say, ".so". */
 #define LTDL_SHLIB_EXT ".so"
@@ -417,13 +416,13 @@
 #define PACKAGE_NAME "LLVM"
 
 /* Define to the full name and version of this package. */
-#define PACKAGE_STRING "LLVM 4.0.0"
+#define PACKAGE_STRING "LLVM 6.0.0"
 
 /* Define to the one symbol short name of this package. */
 #undef PACKAGE_TARNAME
 
 /* Define to the version of this package. */
-#define PACKAGE_VERSION "4.0.0"
+#define PACKAGE_VERSION "6.0.0"
 
 /* Define to the vendor of this package. */
 /* #undef PACKAGE_VENDOR */
@@ -442,5 +441,11 @@
 
 /* Define to a function implementing strdup */
 /* #undef strdup */
+
+/* Whether GlobalISel rule coverage is being collected */
+#define LLVM_GISEL_COV_ENABLED 0
+
+/* Define to the default GlobalISel coverage file prefix */
+/* #undef LLVM_GISEL_COV_PREFIX */
 
 #endif

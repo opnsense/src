@@ -80,6 +80,7 @@ main(int argc, char *argv[])
 	int ch;
 	struct rlimit rlimit;
 	struct itimerval itimerval;
+	int fsret;
 	int ret = 0;
 
 	sync();
@@ -194,8 +195,9 @@ main(int argc, char *argv[])
 		(void)setrlimit(RLIMIT_DATA, &rlimit);
 	}
 	while (argc > 0) {
-		if (checkfilesys(*argv) == ERESTART)
+		if ((fsret = checkfilesys(*argv)) == ERESTART)
 			continue;
+		ret |= fsret;
 		argc--;
 		argv++;
 	}
@@ -231,6 +233,7 @@ checkfilesys(char *filesys)
 	struct group *grp;
 	struct iovec *iov;
 	char errmsg[255];
+	int ofsmodified;
 	int iovlen;
 	int cylno;
 	intmax_t blks, files;
@@ -425,10 +428,15 @@ checkfilesys(char *filesys)
 		}
 		/*
 		 * Write the superblock so we don't try to recover the
-		 * journal on another pass.
+		 * journal on another pass. If this is the only change
+		 * to the filesystem, we do not want it to be called
+		 * out as modified.
 		 */
 		sblock.fs_mtime = time(NULL);
 		sbdirty();
+		ofsmodified = fsmodified;
+		flush(fswritefd, &sblk);
+		fsmodified = ofsmodified;
 	}
 
 	/*
@@ -577,7 +585,7 @@ checkfilesys(char *filesys)
 		sync();
 		return (4);
 	}
-	return (0);
+	return (rerun ? ERERUN : 0);
 }
 
 static int

@@ -18,8 +18,6 @@
 #include "lldb/Breakpoint/StoppointCallbackContext.h"
 #include "lldb/Breakpoint/Watchpoint.h"
 #include "lldb/Core/Debugger.h"
-#include "lldb/Core/Log.h"
-#include "lldb/Core/StreamString.h"
 #include "lldb/Core/ValueObject.h"
 #include "lldb/Expression/UserExpression.h"
 #include "lldb/Target/Process.h"
@@ -28,6 +26,8 @@
 #include "lldb/Target/Thread.h"
 #include "lldb/Target/ThreadPlan.h"
 #include "lldb/Target/UnixSignals.h"
+#include "lldb/Utility/Log.h"
+#include "lldb/Utility/StreamString.h"
 
 using namespace lldb;
 using namespace lldb_private;
@@ -269,6 +269,7 @@ protected:
     if (!m_should_perform_action)
       return;
     m_should_perform_action = false;
+    bool internal_breakpoint = true;
 
     ThreadSP thread_sp(m_thread_wp.lock());
 
@@ -392,7 +393,10 @@ protected:
 
           for (size_t j = 0; j < num_owners; j++) {
             lldb::BreakpointLocationSP bp_loc_sp = site_locations.GetByIndex(j);
-
+            StreamString loc_desc;
+            if (log) {
+              bp_loc_sp->GetDescription(&loc_desc, eDescriptionLevelBrief);
+            }
             // If another action disabled this breakpoint or its location, then
             // don't run the actions.
             if (!bp_loc_sp->IsEnabled() ||
@@ -404,16 +408,16 @@ protected:
             // this thread.  Skip the ones that aren't:
             if (!bp_loc_sp->ValidForThisThread(thread_sp.get())) {
               if (log) {
-                StreamString s;
-                bp_loc_sp->GetDescription(&s, eDescriptionLevelBrief);
                 log->Printf("Breakpoint %s hit on thread 0x%llx but it was not "
                             "for this thread, continuing.",
-                            s.GetData(), static_cast<unsigned long long>(
+                            loc_desc.GetData(), static_cast<unsigned long long>(
                                              thread_sp->GetID()));
               }
               continue;
             }
 
+            internal_breakpoint = bp_loc_sp->GetBreakpoint().IsInternal();
+            
             // First run the precondition, but since the precondition is per
             // breakpoint, only run it once
             // per breakpoint.
@@ -434,7 +438,7 @@ protected:
             // shouldn't stop that will win.
 
             if (bp_loc_sp->GetConditionText() != nullptr) {
-              Error condition_error;
+              Status condition_error;
               bool condition_says_stop =
                   bp_loc_sp->ConditionSaysStop(exe_ctx, condition_error);
 
@@ -457,11 +461,10 @@ protected:
                 error_sp->Flush();
               } else {
                 if (log) {
-                  StreamString s;
-                  bp_loc_sp->GetDescription(&s, eDescriptionLevelBrief);
                   log->Printf("Condition evaluated for breakpoint %s on thread "
                               "0x%llx conditon_says_stop: %i.",
-                              s.GetData(), static_cast<unsigned long long>(
+                              loc_desc.GetData(), 
+                              static_cast<unsigned long long>(
                                                thread_sp->GetID()),
                               condition_says_stop);
                 }
@@ -476,7 +479,26 @@ protected:
               }
             }
 
-            bool callback_says_stop;
+            // Check the auto-continue bit on the location, do this before the
+            // callback since it may change this, but that would be for the
+            // NEXT hit.  Note, you might think you could check auto-continue
+            // before the condition, and not evaluate the condition if it says
+            // to continue.  But failing the condition means the breakpoint was
+            // effectively NOT HIT.  So these two states are different.
+            bool auto_continue_says_stop = true;
+            if (bp_loc_sp->IsAutoContinue())
+            {
+              if (log)
+                log->Printf("Continuing breakpoint %s as AutoContinue was set.",
+                            loc_desc.GetData());
+              // We want this stop reported, so you will know we auto-continued
+              // but only for external breakpoints:
+              if (!internal_breakpoint)
+                thread_sp->SetShouldReportStop(eVoteYes);
+              auto_continue_says_stop = false;
+            }
+
+            bool callback_says_stop = true;
 
             // FIXME: For now the callbacks have to run in async mode - the
             // first time we restart we need
@@ -492,9 +514,9 @@ protected:
 
             debugger.SetAsyncExecution(old_async);
 
-            if (callback_says_stop)
+            if (callback_says_stop && auto_continue_says_stop)
               m_should_stop = true;
-
+                  
             // If we are going to stop for this breakpoint, then remove the
             // breakpoint.
             if (callback_says_stop && bp_loc_sp &&
@@ -502,7 +524,6 @@ protected:
               thread_sp->GetProcess()->GetTarget().RemoveBreakpointByID(
                   bp_loc_sp->GetBreakpoint().GetID());
             }
-
             // Also make sure that the callback hasn't continued the target.
             // If it did, when we'll set m_should_start to false and get out of
             // here.
@@ -526,6 +547,20 @@ protected:
               "Process::%s could not find breakpoint site id: %" PRId64 "...",
               __FUNCTION__, m_value);
       }
+
+      if ((m_should_stop == false || internal_breakpoint)
+          && thread_sp->CompletedPlanOverridesBreakpoint()) {
+        
+        // Override should_stop decision when we have
+        // completed step plan additionally to the breakpoint
+        m_should_stop = true;
+        
+        // Here we clean the preset stop info so the next
+        // GetStopInfo call will find the appropriate stop info,
+        // which should be the stop info related to the completed plan
+        thread_sp->ResetStopInfo();
+      }
+
       if (log)
         log->Printf("Process::%s returning from action with m_should_stop: %d.",
                     __FUNCTION__, m_should_stop);
@@ -778,7 +813,7 @@ protected:
           expr_options.SetUnwindOnError(true);
           expr_options.SetIgnoreBreakpoints(true);
           ValueObjectSP result_value_sp;
-          Error error;
+          Status error;
           result_code = UserExpression::Evaluate(
               exe_ctx, expr_options, wp_sp->GetConditionText(),
               llvm::StringRef(), result_value_sp, error);
@@ -1053,12 +1088,23 @@ private:
   ExpressionVariableSP m_expression_variable_sp;
 };
 
+//----------------------------------------------------------------------
+// StopInfoExec
+//----------------------------------------------------------------------
+
 class StopInfoExec : public StopInfo {
 public:
   StopInfoExec(Thread &thread)
       : StopInfo(thread, LLDB_INVALID_UID), m_performed_action(false) {}
 
   ~StopInfoExec() override = default;
+
+  bool ShouldStop(Event *event_ptr) override {
+    ThreadSP thread_sp(m_thread_wp.lock());
+    if (thread_sp)
+      return thread_sp->GetProcess()->GetStopOnExec();
+    return false;
+  }
 
   StopReason GetStopReason() const override { return eStopReasonExec; }
 

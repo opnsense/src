@@ -49,10 +49,12 @@ public:
   LanaiAsmBackend(const Target &T, Triple::OSType OST)
       : MCAsmBackend(), OSType(OST) {}
 
-  void applyFixup(const MCFixup &Fixup, char *Data, unsigned DataSize,
-                  uint64_t Value, bool IsPCRel) const override;
+  void applyFixup(const MCAssembler &Asm, const MCFixup &Fixup,
+                  const MCValue &Target, MutableArrayRef<char> Data,
+                  uint64_t Value, bool IsResolved) const override;
 
-  MCObjectWriter *createObjectWriter(raw_pwrite_stream &OS) const override;
+  std::unique_ptr<MCObjectWriter>
+  createObjectWriter(raw_pwrite_stream &OS) const override;
 
   // No instruction requires relaxation
   bool fixupNeedsRelaxation(const MCFixup & /*Fixup*/, uint64_t /*Value*/,
@@ -88,9 +90,10 @@ bool LanaiAsmBackend::writeNopData(uint64_t Count, MCObjectWriter *OW) const {
   return true;
 }
 
-void LanaiAsmBackend::applyFixup(const MCFixup &Fixup, char *Data,
-                                 unsigned /*DataSize*/, uint64_t Value,
-                                 bool /*IsPCRel*/) const {
+void LanaiAsmBackend::applyFixup(const MCAssembler &Asm, const MCFixup &Fixup,
+                                 const MCValue &Target,
+                                 MutableArrayRef<char> Data, uint64_t Value,
+                                 bool /*IsResolved*/) const {
   MCFixupKind Kind = Fixup.getKind();
   Value = adjustFixupValue(static_cast<unsigned>(Kind), Value);
 
@@ -124,7 +127,7 @@ void LanaiAsmBackend::applyFixup(const MCFixup &Fixup, char *Data,
   }
 }
 
-MCObjectWriter *
+std::unique_ptr<MCObjectWriter>
 LanaiAsmBackend::createObjectWriter(raw_pwrite_stream &OS) const {
   return createLanaiELFObjectWriter(OS,
                                     MCELFObjectTargetWriter::getOSABI(OSType));
@@ -162,9 +165,10 @@ LanaiAsmBackend::getFixupKindInfo(MCFixupKind Kind) const {
 } // namespace
 
 MCAsmBackend *llvm::createLanaiAsmBackend(const Target &T,
+                                          const MCSubtargetInfo &STI,
                                           const MCRegisterInfo & /*MRI*/,
-                                          const Triple &TT, StringRef /*CPU*/,
                                           const MCTargetOptions & /*Options*/) {
+  const Triple &TT = STI.getTargetTriple();
   if (!TT.isOSBinFormatELF())
     llvm_unreachable("OS not supported");
 

@@ -1,6 +1,9 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2003 Poul-Henning Kamp
  * Copyright (c) 2015 Spectra Logic Corporation
+ * Copyright (c) 2017 Alexander Motin <mav@FreeBSD.org>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,9 +33,11 @@
  * $FreeBSD$
  */
 
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 #include <strings.h>
 #include <unistd.h>
 #include <errno.h>
@@ -40,6 +45,8 @@
 #include <libutil.h>
 #include <paths.h>
 #include <err.h>
+#include <geom/geom_disk.h>
+#include <sysexits.h>
 #include <sys/aio.h>
 #include <sys/disk.h>
 #include <sys/param.h>
@@ -47,34 +54,43 @@
 #include <sys/time.h>
 
 #define	NAIO	128
+#define	MAXTX	(8*1024*1024)
+#define	MEGATX	(1024*1024)
 
 static void
 usage(void)
 {
-	fprintf(stderr, "usage: diskinfo [-citv] disk ...\n");
+	fprintf(stderr, "usage: diskinfo [-cipsStvw] disk ...\n");
 	exit (1);
 }
 
-static int opt_c, opt_i, opt_t, opt_v;
+static int opt_c, opt_i, opt_p, opt_s, opt_S, opt_t, opt_v, opt_w;
 
+static bool candelete(int fd);
 static void speeddisk(int fd, off_t mediasize, u_int sectorsize);
 static void commandtime(int fd, off_t mediasize, u_int sectorsize);
 static void iopsbench(int fd, off_t mediasize, u_int sectorsize);
+static void rotationrate(int fd, char *buf, size_t buflen);
+static void slogbench(int fd, int isreg, off_t mediasize, u_int sectorsize);
 static int zonecheck(int fd, uint32_t *zone_mode, char *zone_str,
 		     size_t zone_str_len);
+
+static uint8_t *buf;
 
 int
 main(int argc, char **argv)
 {
 	struct stat sb;
 	int i, ch, fd, error, exitval = 0;
-	char buf[BUFSIZ], ident[DISK_IDENT_SIZE], physpath[MAXPATHLEN];
+	char tstr[BUFSIZ], ident[DISK_IDENT_SIZE], physpath[MAXPATHLEN];
 	char zone_desc[64];
+	char rrate[64];
+	struct diocgattr_arg arg;
 	off_t	mediasize, stripesize, stripeoffset;
-	u_int	sectorsize, fwsectors, fwheads, zoned = 0;
+	u_int	sectorsize, fwsectors, fwheads, zoned = 0, isreg;
 	uint32_t zone_mode;
 
-	while ((ch = getopt(argc, argv, "citv")) != -1) {
+	while ((ch = getopt(argc, argv, "cipsStvw")) != -1) {
 		switch (ch) {
 		case 'c':
 			opt_c = 1;
@@ -84,12 +100,25 @@ main(int argc, char **argv)
 			opt_i = 1;
 			opt_v = 1;
 			break;
+		case 'p':
+			opt_p = 1;
+			break;
+		case 's':
+			opt_s = 1;
+			break;
+		case 'S':
+			opt_S = 1;
+			opt_v = 1;
+			break;
 		case 't':
 			opt_t = 1;
 			opt_v = 1;
 			break;
 		case 'v':
 			opt_v = 1;
+			break;
+		case 'w':
+			opt_w = 1;
 			break;
 		default:
 			usage();
@@ -101,11 +130,23 @@ main(int argc, char **argv)
 	if (argc < 1)
 		usage();
 
+	if ((opt_p && opt_s) || ((opt_p || opt_s) && (opt_c || opt_i || opt_t || opt_v))) {
+		warnx("-p or -s cannot be used with other options");
+		usage();
+	}
+
+	if (opt_S && !opt_w) {
+		warnx("-S require also -w");
+		usage();
+	}
+
+	if (posix_memalign((void **)&buf, PAGE_SIZE, MAXTX))
+		errx(1, "Can't allocate memory buffer");
 	for (i = 0; i < argc; i++) {
-		fd = open(argv[i], O_RDONLY | O_DIRECT);
+		fd = open(argv[i], (opt_w ? O_RDWR : O_RDONLY) | O_DIRECT);
 		if (fd < 0 && errno == ENOENT && *argv[i] != '/') {
-			snprintf(buf, BUFSIZ, "%s%s", _PATH_DEV, argv[i]);
-			fd = open(buf, O_RDONLY);
+			snprintf(tstr, sizeof(tstr), "%s%s", _PATH_DEV, argv[i]);
+			fd = open(tstr, O_RDONLY);
 		}
 		if (fd < 0) {
 			warn("%s", argv[i]);
@@ -117,14 +158,35 @@ main(int argc, char **argv)
 			exitval = 1;
 			goto out;
 		}
-		if (S_ISREG(sb.st_mode)) {
+		isreg = S_ISREG(sb.st_mode);
+		if (isreg) {
 			mediasize = sb.st_size;
 			sectorsize = S_BLKSIZE;
 			fwsectors = 0;
 			fwheads = 0;
 			stripesize = sb.st_blksize;
 			stripeoffset = 0;
+			if (opt_p || opt_s) {
+				warnx("-p and -s only operate on physical devices: %s", argv[i]);
+				goto out;
+			}
 		} else {
+			if (opt_p) {
+				if (ioctl(fd, DIOCGPHYSPATH, physpath) == 0) {
+					printf("%s\n", physpath);
+				} else {
+					warnx("Failed to determine physpath for: %s", argv[i]);
+				}
+				goto out;
+			}
+			if (opt_s) {
+				if (ioctl(fd, DIOCGIDENT, ident) == 0) {
+					printf("%s\n", ident);
+				} else {
+					warnx("Failed to determine serial number for: %s", argv[i]);
+				}
+				goto out;
+			}
 			error = ioctl(fd, DIOCGMEDIASIZE, &mediasize);
 			if (error) {
 				warnx("%s: ioctl(DIOCGMEDIASIZE) failed, probably not a disk.", argv[i]);
@@ -167,12 +229,12 @@ main(int argc, char **argv)
 				printf("\t%u", fwsectors);
 			} 
 		} else {
-			humanize_number(buf, 5, (int64_t)mediasize, "",
+			humanize_number(tstr, 5, (int64_t)mediasize, "",
 			    HN_AUTOSCALE, HN_B | HN_NOSPACE | HN_DECIMAL);
 			printf("%s\n", argv[i]);
 			printf("\t%-12u\t# sectorsize\n", sectorsize);
 			printf("\t%-12jd\t# mediasize in bytes (%s)\n",
-			    (intmax_t)mediasize, buf);
+			    (intmax_t)mediasize, tstr);
 			printf("\t%-12jd\t# mediasize in sectors\n",
 			    (intmax_t)mediasize/sectorsize);
 			printf("\t%-12jd\t# stripesize\n", stripesize);
@@ -183,10 +245,18 @@ main(int argc, char **argv)
 				printf("\t%-12u\t# Heads according to firmware.\n", fwheads);
 				printf("\t%-12u\t# Sectors according to firmware.\n", fwsectors);
 			} 
+			strlcpy(arg.name, "GEOM::descr", sizeof(arg.name));
+			arg.len = sizeof(arg.value.str);
+			if (ioctl(fd, DIOCGATTR, &arg) == 0)
+				printf("\t%-12s\t# Disk descr.\n", arg.value.str);
 			if (ioctl(fd, DIOCGIDENT, ident) == 0)
 				printf("\t%-12s\t# Disk ident.\n", ident);
 			if (ioctl(fd, DIOCGPHYSPATH, physpath) == 0)
 				printf("\t%-12s\t# Physical path\n", physpath);
+			printf("\t%-12s\t# TRIM/UNMAP support\n",
+			    candelete(fd) ? "Yes" : "No");
+			rotationrate(fd, rrate, sizeof(rrate));
+			printf("\t%-12s\t# Rotation rate in RPM\n", rrate);
 			if (zoned != 0)
 				printf("\t%-12s\t# Zone Mode\n", zone_desc);
 		}
@@ -197,15 +267,47 @@ main(int argc, char **argv)
 			speeddisk(fd, mediasize, sectorsize);
 		if (opt_i)
 			iopsbench(fd, mediasize, sectorsize);
+		if (opt_S)
+			slogbench(fd, isreg, mediasize, sectorsize);
 out:
 		close(fd);
 	}
+	free(buf);
 	exit (exitval);
 }
 
+static bool
+candelete(int fd)
+{
+	struct diocgattr_arg arg;
 
-static char sector[65536];
-static char mega[1024 * 1024];
+	strlcpy(arg.name, "GEOM::candelete", sizeof(arg.name));
+	arg.len = sizeof(arg.value.i);
+	if (ioctl(fd, DIOCGATTR, &arg) == 0)
+		return (arg.value.i != 0);
+	else
+		return (false);
+}
+
+static void
+rotationrate(int fd, char *rate, size_t buflen)
+{
+	struct diocgattr_arg arg;
+	int ret;
+
+	strlcpy(arg.name, "GEOM::rotation_rate", sizeof(arg.name));
+	arg.len = sizeof(arg.value.u16);
+
+	ret = ioctl(fd, DIOCGATTR, &arg);
+	if (ret < 0 || arg.value.u16 == DISK_RR_UNKNOWN)
+		snprintf(rate, buflen, "Unknown");
+	else if (arg.value.u16 == DISK_RR_NON_ROTATING)
+		snprintf(rate, buflen, "%d", 0);
+	else if (arg.value.u16 >= DISK_RR_MIN && arg.value.u16 <= DISK_RR_MAX)
+		snprintf(rate, buflen, "%d", arg.value.u16);
+	else
+		snprintf(rate, buflen, "Invalid");
+}
 
 static void
 rdsect(int fd, off_t blockno, u_int sectorsize)
@@ -214,7 +316,7 @@ rdsect(int fd, off_t blockno, u_int sectorsize)
 
 	if (lseek(fd, (off_t)blockno * sectorsize, SEEK_SET) == -1)
 		err(1, "lseek");
-	error = read(fd, sector, sectorsize);
+	error = read(fd, buf, sectorsize);
 	if (error == -1)
 		err(1, "read");
 	if (error != (int)sectorsize)
@@ -226,10 +328,10 @@ rdmega(int fd)
 {
 	int error;
 
-	error = read(fd, mega, sizeof(mega));
+	error = read(fd, buf, MEGATX);
 	if (error == -1)
 		err(1, "read");
-	if (error != sizeof(mega))
+	if (error != MEGATX)
 		errx(1, "disk too small for test.");
 }
 
@@ -287,6 +389,16 @@ TI(double count)
 	dt = delta_t();
 	printf("%8.0f ops in  %10.6f sec = %8.0f IOPS\n",
 		count, dt, count / dt);
+}
+
+static void
+TS(u_int size, int count)
+{
+	double dt;
+
+	dt = delta_t();
+	printf("%8.1f usec/IO = %8.1f Mbytes/s\n",
+	    dt * 1000000.0 / count, (double)size * count / dt / (1024 * 1024));
 }
 
 static void
@@ -524,6 +636,75 @@ iopsbench(int fd, off_t mediasize, u_int sectorsize)
 	iops(fd, mediasize, 128 * 1024);
 
 	printf("\n");
+}
+
+#define MAXIO (128*1024)
+#define MAXIOS (MAXTX / MAXIO)
+
+static void
+parwrite(int fd, size_t size, off_t off)
+{
+	struct aiocb aios[MAXIOS];
+	off_t o;
+	int n, error;
+	struct aiocb *aiop;
+
+	// if size > MAXIO, use AIO to write n - 1 pieces in parallel
+	for (n = 0, o = 0; size > MAXIO; n++, size -= MAXIO, o += MAXIO) {
+		aiop = &aios[n];
+		bzero(aiop, sizeof(*aiop));
+		aiop->aio_buf = &buf[o];
+		aiop->aio_fildes = fd;
+		aiop->aio_offset = off + o;
+		aiop->aio_nbytes = MAXIO;
+		error = aio_write(aiop);
+		if (error != 0)
+			err(EX_IOERR, "AIO write submit error");
+	}
+	// Use synchronous writes for the runt of size <= MAXIO
+	error = pwrite(fd, &buf[o], size, off + o);
+	if (error < 0)
+		err(EX_IOERR, "Sync write error");
+	for (; n > 0; n--) {
+		error = aio_waitcomplete(&aiop, NULL);
+		if (error < 0)
+			err(EX_IOERR, "AIO write wait error");
+	}
+}
+
+static void
+slogbench(int fd, int isreg, off_t mediasize, u_int sectorsize)
+{
+	off_t off;
+	u_int size;
+	int error, n, N, nowritecache = 0;
+
+	printf("Synchronous random writes:\n");
+	for (size = sectorsize; size <= MAXTX; size *= 2) {
+		printf("\t%4.4g kbytes: ", (double)size / 1024);
+		N = 0;
+		T0();
+		do {
+			for (n = 0; n < 250; n++) {
+				off = random() % (mediasize / size);
+				parwrite(fd, size, off * size);
+				if (nowritecache)
+					continue;
+				if (isreg)
+					error = fsync(fd);
+				else
+					error = ioctl(fd, DIOCGFLUSH);
+				if (error < 0) {
+					if (errno == ENOTSUP)
+						nowritecache = 1;
+					else
+						err(EX_IOERR, "Flush error");
+				}
+			}
+			N += 250;
+		} while (delta_t() < 1.0);
+		TS(size, N);
+	}
 }
 
 static int

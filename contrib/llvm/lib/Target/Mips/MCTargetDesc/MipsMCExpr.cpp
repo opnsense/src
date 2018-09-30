@@ -8,12 +8,18 @@
 //===----------------------------------------------------------------------===//
 
 #include "MipsMCExpr.h"
+#include "llvm/BinaryFormat/ELF.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCContext.h"
-#include "llvm/MC/MCObjectStreamer.h"
+#include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbolELF.h"
-#include "llvm/Support/ELF.h"
+#include "llvm/MC/MCValue.h"
+#include "llvm/Support/Casting.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MathExtras.h"
+#include "llvm/Support/raw_ostream.h"
+#include <cstdint>
 
 using namespace llvm;
 
@@ -240,8 +246,6 @@ void MipsMCExpr::fixELFSymbolsInTLSFixups(MCAssembler &Asm) const {
     break;
   case MEK_CALL_HI16:
   case MEK_CALL_LO16:
-  case MEK_DTPREL_HI:
-  case MEK_DTPREL_LO:
   case MEK_GOT:
   case MEK_GOT_CALL:
   case MEK_GOT_DISP:
@@ -257,14 +261,16 @@ void MipsMCExpr::fixELFSymbolsInTLSFixups(MCAssembler &Asm) const {
   case MEK_NEG:
   case MEK_PCREL_HI16:
   case MEK_PCREL_LO16:
-  case MEK_TLSLDM:
     // If we do have nested target-specific expressions, they will be in
     // a consecutive chain.
     if (const MipsMCExpr *E = dyn_cast<const MipsMCExpr>(getSubExpr()))
       E->fixELFSymbolsInTLSFixups(Asm);
     break;
-  case MEK_GOTTPREL:
+  case MEK_DTPREL_HI:
+  case MEK_DTPREL_LO:
+  case MEK_TLSLDM:
   case MEK_TLSGD:
+  case MEK_GOTTPREL:
   case MEK_TPREL_HI:
   case MEK_TPREL_LO:
     fixELFSymbolsInTLSFixupsImpl(getSubExpr(), Asm);

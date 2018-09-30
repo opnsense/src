@@ -51,7 +51,7 @@ __FBSDID("$FreeBSD$");
 
 static MALLOC_DEFINE(M_VHPET, "vhpet", "bhyve virtual hpet");
 
-#define	HPET_FREQ	10000000		/* 10.0 Mhz */
+#define	HPET_FREQ	16777216		/* 16.7 (2^24) Mhz */
 #define	FS_PER_S	1000000000000000ul
 
 /* Timer N Configuration and Capabilities Register */
@@ -715,8 +715,10 @@ vhpet_init(struct vm *vm)
 	vhpet->freq_sbt = bttosbt(bt);
 
 	pincount = vioapic_pincount(vm);
-	if (pincount >= 24)
-		allowed_irqs = 0x00f00000;	/* irqs 20, 21, 22 and 23 */
+	if (pincount >= 32)
+		allowed_irqs = 0xff000000;	/* irqs 24-31 */
+	else if (pincount >= 20)
+		allowed_irqs = 0xf << (pincount - 4);	/* 4 upper irqs */
 	else
 		allowed_irqs = 0;
 

@@ -10,13 +10,29 @@
 #ifndef liblldb_PluginManager_h_
 #define liblldb_PluginManager_h_
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
-#include "lldb/Host/FileSpec.h"
-#include "lldb/lldb-private.h"
+#include "lldb/Core/Architecture.h"
+#include "lldb/Utility/FileSpec.h"
+#include "lldb/Utility/Status.h"          // for Status
+#include "lldb/lldb-enumerations.h"       // for ScriptLanguage
+#include "lldb/lldb-forward.h"            // for OptionValuePropertiesSP
+#include "lldb/lldb-private-interfaces.h" // for DebuggerInitializeCallback
+#include "llvm/ADT/StringRef.h"           // for StringRef
 
+#include <stddef.h> // for size_t
+#include <stdint.h> // for uint32_t
+
+namespace lldb_private {
+class CommandInterpreter;
+}
+namespace lldb_private {
+class ConstString;
+}
+namespace lldb_private {
+class Debugger;
+}
+namespace lldb_private {
+class StringList;
+}
 namespace lldb_private {
 
 class PluginManager {
@@ -37,6 +53,21 @@ public:
 
   static ABICreateInstance
   GetABICreateCallbackForPluginName(const ConstString &name);
+
+  //------------------------------------------------------------------
+  // Architecture
+  //------------------------------------------------------------------
+  using ArchitectureCreateInstance =
+      std::unique_ptr<Architecture> (*)(const ArchSpec &);
+
+  static void RegisterPlugin(const ConstString &name,
+                             llvm::StringRef description,
+                             ArchitectureCreateInstance create_callback);
+
+  static void UnregisterPlugin(ArchitectureCreateInstance create_callback);
+
+  static std::unique_ptr<Architecture>
+  CreateArchitectureInstance(const ArchSpec &arch);
 
   //------------------------------------------------------------------
   // Disassembler
@@ -187,8 +218,8 @@ public:
   static ObjectFileCreateMemoryInstance
   GetObjectFileCreateMemoryCallbackForPluginName(const ConstString &name);
 
-  static Error SaveCore(const lldb::ProcessSP &process_sp,
-                        const FileSpec &outfile);
+  static Status SaveCore(const lldb::ProcessSP &process_sp,
+                         const FileSpec &outfile);
 
   //------------------------------------------------------------------
   // ObjectContainer
@@ -208,22 +239,6 @@ public:
 
   static ObjectFileGetModuleSpecifications
   GetObjectContainerGetModuleSpecificationsCallbackAtIndex(uint32_t idx);
-
-  //------------------------------------------------------------------
-  // LogChannel
-  //------------------------------------------------------------------
-  static bool RegisterPlugin(const ConstString &name, const char *description,
-                             LogChannelCreateInstance create_callback);
-
-  static bool UnregisterPlugin(LogChannelCreateInstance create_callback);
-
-  static LogChannelCreateInstance
-  GetLogChannelCreateCallbackAtIndex(uint32_t idx);
-
-  static LogChannelCreateInstance
-  GetLogChannelCreateCallbackForPluginName(const ConstString &name);
-
-  static const char *GetLogChannelCreateNameAtIndex(uint32_t idx);
 
   //------------------------------------------------------------------
   // Platform

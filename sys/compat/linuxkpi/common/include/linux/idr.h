@@ -75,9 +75,8 @@ struct idr {
 	SYSINIT(name##_ida_sysinit, SI_SUB_DRIVERS, SI_ORDER_FIRST,	\
 	    ida_init, &(name))
 
-#define	idr_preload(x) do { } while (0)
-#define	idr_preload_end() do { } while (0)
-
+void	idr_preload(gfp_t gfp_mask);
+void	idr_preload_end(void);
 void	*idr_find(struct idr *idp, int id);
 void	*idr_get_next(struct idr *idp, int *nextid);
 int	idr_pre_get(struct idr *idp, gfp_t gfp_mask);
@@ -97,7 +96,7 @@ int	idr_for_each(struct idr *idp, int (*fn)(int id, void *p, void *data), void *
 
 #define	IDA_CHUNK_SIZE		128	/* 128 bytes per chunk */
 #define	IDA_BITMAP_LONGS	(IDA_CHUNK_SIZE / sizeof(long) - 1)
-#define	IDA_BITMAP_BITS 	(IDA_BITMAP_LONGS * sizeof(long) * 8)
+#define	IDA_BITMAP_BITS		(IDA_BITMAP_LONGS * sizeof(long) * 8)
 
 struct ida_bitmap {
 	long			nr_busy;

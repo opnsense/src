@@ -81,7 +81,6 @@ ASSYM(TD_FLAGS, offsetof(struct thread, td_flags));
 ASSYM(TD_PCB, offsetof(struct thread, td_pcb));
 ASSYM(TD_PFLAGS, offsetof(struct thread, td_pflags));
 ASSYM(TD_PROC, offsetof(struct thread, td_proc));
-ASSYM(TD_TID, offsetof(struct thread, td_tid));
 ASSYM(TD_FRAME, offsetof(struct thread, td_frame));
 
 ASSYM(TDF_ASTPENDING, TDF_ASTPENDING);
@@ -111,12 +110,10 @@ ASSYM(PML4SHIFT, PML4SHIFT);
 ASSYM(val_KPDPI, KPDPI);
 ASSYM(val_KPML4I, KPML4I);
 ASSYM(val_PML4PML4I, PML4PML4I);
-ASSYM(USRSTACK, USRSTACK);
 ASSYM(VM_MAXUSER_ADDRESS, VM_MAXUSER_ADDRESS);
 ASSYM(KERNBASE, KERNBASE);
 ASSYM(DMAP_MIN_ADDRESS, DMAP_MIN_ADDRESS);
 ASSYM(DMAP_MAX_ADDRESS, DMAP_MAX_ADDRESS);
-ASSYM(MCLBYTES, MCLBYTES);
 
 ASSYM(PCB_R15, offsetof(struct pcb, pcb_r15));
 ASSYM(PCB_R14, offsetof(struct pcb, pcb_r14));
@@ -158,7 +155,7 @@ ASSYM(PCB_FULL_IRET, PCB_FULL_IRET);
 ASSYM(PCB_DBREGS, PCB_DBREGS);
 ASSYM(PCB_32BIT, PCB_32BIT);
 
-ASSYM(COMMON_TSS_RSP0, offsetof(struct amd64tss, tss_rsp0));
+ASSYM(TSS_RSP0, offsetof(struct amd64tss, tss_rsp0));
 
 ASSYM(TF_R15, offsetof(struct trapframe, tf_r15));
 ASSYM(TF_R14, offsetof(struct trapframe, tf_r14));

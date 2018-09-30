@@ -120,6 +120,14 @@ static __inline int qla_sec_to_hz(int sec)
 	return (tvtohz(&t));
 }
 
+static __inline uint64_t qla_get_usec_timestamp(void)
+{
+	struct timeval tv;
+
+	microuptime(&tv);
+
+	return ((uint64_t)(((uint64_t)tv.tv_sec) * 1000000 + tv.tv_usec));
+}
 
 #define qla_host_to_le16(x)	htole16(x)
 #define qla_host_to_le32(x)	htole32(x)
@@ -148,8 +156,8 @@ MALLOC_DECLARE(M_QLA83XXBUF);
 /*
  * Locks
  */
-#define QLA_LOCK(ha)		mtx_lock(&ha->hw_lock)
-#define QLA_UNLOCK(ha)		mtx_unlock(&ha->hw_lock)
+#define QLA_LOCK(ha, str, to_ms, no_sleep)	qla_lock(ha, str, to_ms, no_sleep)
+#define QLA_UNLOCK(ha, str)			qla_unlock(ha, str)
  
 /*
  * structure encapsulating a DMA buffer

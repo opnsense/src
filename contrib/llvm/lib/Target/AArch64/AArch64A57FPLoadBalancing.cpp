@@ -161,9 +161,9 @@ namespace {
 /// A Chain is a sequence of instructions that are linked together by
 /// an accumulation operand. For example:
 ///
-///   fmul d0<def>, ?
-///   fmla d1<def>, ?, ?, d0<kill>
-///   fmla d2<def>, ?, ?, d1<kill>
+///   fmul def d0, ?
+///   fmla def d1, ?, ?, killed d0
+///   fmla def d2, ?, ?, killed d1
 ///
 /// There may be other instructions interleaved in the sequence that
 /// do not belong to the chain. These other instructions must not use
@@ -308,7 +308,7 @@ public:
 //===----------------------------------------------------------------------===//
 
 bool AArch64A57FPLoadBalancing::runOnMachineFunction(MachineFunction &F) {
-  if (skipFunction(*F.getFunction()))
+  if (skipFunction(F.getFunction()))
     return false;
 
   if (!F.getSubtarget<AArch64Subtarget>().balanceFPOps())
@@ -493,43 +493,30 @@ bool AArch64A57FPLoadBalancing::colorChainSet(std::vector<Chain*> GV,
 
 int AArch64A57FPLoadBalancing::scavengeRegister(Chain *G, Color C,
                                                 MachineBasicBlock &MBB) {
-  RegScavenger RS;
-  RS.enterBasicBlock(MBB);
-  RS.forward(MachineBasicBlock::iterator(G->getStart()));
-
   // Can we find an appropriate register that is available throughout the life
-  // of the chain?
-  unsigned RegClassID = G->getStart()->getDesc().OpInfo[0].RegClass;
-  BitVector AvailableRegs = RS.getRegsAvailable(TRI->getRegClass(RegClassID));
-  for (MachineBasicBlock::iterator I = G->begin(), E = G->end(); I != E; ++I) {
-    RS.forward(I);
-    AvailableRegs &= RS.getRegsAvailable(TRI->getRegClass(RegClassID));
-
-    // Remove any registers clobbered by a regmask or any def register that is
-    // immediately dead.
-    for (auto J : I->operands()) {
-      if (J.isRegMask())
-        AvailableRegs.clearBitsNotInMask(J.getRegMask());
-
-      if (J.isReg() && J.isDef()) {
-        MCRegAliasIterator AI(J.getReg(), TRI, /*IncludeSelf=*/true);
-        if (J.isDead())
-          for (; AI.isValid(); ++AI)
-            AvailableRegs.reset(*AI);
-#ifndef NDEBUG
-        else
-          for (; AI.isValid(); ++AI)
-            assert(!AvailableRegs[*AI] &&
-                   "Non-dead def should have been removed by now!");
-#endif
-      }
-    }
+  // of the chain? Simulate liveness backwards until the end of the chain.
+  LiveRegUnits Units(*TRI);
+  Units.addLiveOuts(MBB);
+  MachineBasicBlock::iterator I = MBB.end();
+  MachineBasicBlock::iterator ChainEnd = G->end();
+  while (I != ChainEnd) {
+    --I;
+    Units.stepBackward(*I);
   }
 
+  // Check which register units are alive throughout the chain.
+  MachineBasicBlock::iterator ChainBegin = G->begin();
+  assert(ChainBegin != ChainEnd && "Chain should contain instructions");
+  do {
+    --I;
+    Units.accumulate(*I);
+  } while (I != ChainBegin);
+
   // Make sure we allocate in-order, to get the cheapest registers first.
+  unsigned RegClassID = ChainBegin->getDesc().OpInfo[0].RegClass;
   auto Ord = RCI.getOrder(TRI->getRegClass(RegClassID));
   for (auto Reg : Ord) {
-    if (!AvailableRegs[Reg])
+    if (!Units.available(Reg))
       continue;
     if (C == getColor(Reg))
       return Reg;
@@ -551,7 +538,7 @@ bool AArch64A57FPLoadBalancing::colorChain(Chain *G, Color C,
     DEBUG(dbgs() << "Scavenging (thus coloring) failed!\n");
     return false;
   }
-  DEBUG(dbgs() << " - Scavenged register: " << TRI->getName(Reg) << "\n");
+  DEBUG(dbgs() << " - Scavenged register: " << printReg(Reg, TRI) << "\n");
 
   std::map<unsigned, unsigned> Substs;
   for (MachineInstr &I : *G) {
@@ -624,8 +611,8 @@ void AArch64A57FPLoadBalancing::scanInstruction(
     // unit.
     unsigned DestReg = MI->getOperand(0).getReg();
 
-    DEBUG(dbgs() << "New chain started for register "
-          << TRI->getName(DestReg) << " at " << *MI);
+    DEBUG(dbgs() << "New chain started for register " << printReg(DestReg, TRI)
+                 << " at " << *MI);
 
     auto G = llvm::make_unique<Chain>(MI, Idx, getColor(DestReg));
     ActiveChains[DestReg] = G.get();
@@ -645,7 +632,7 @@ void AArch64A57FPLoadBalancing::scanInstruction(
 
     if (ActiveChains.find(AccumReg) != ActiveChains.end()) {
       DEBUG(dbgs() << "Chain found for accumulator register "
-            << TRI->getName(AccumReg) << " in MI " << *MI);
+                   << printReg(AccumReg, TRI) << " in MI " << *MI);
 
       // For simplicity we only chain together sequences of MULs/MLAs where the
       // accumulator register is killed on each instruction. This means we don't
@@ -670,7 +657,7 @@ void AArch64A57FPLoadBalancing::scanInstruction(
     }
 
     DEBUG(dbgs() << "Creating new chain for dest register "
-          << TRI->getName(DestReg) << "\n");
+                 << printReg(DestReg, TRI) << "\n");
     auto G = llvm::make_unique<Chain>(MI, Idx, getColor(DestReg));
     ActiveChains[DestReg] = G.get();
     AllChains.push_back(std::move(G));
@@ -698,8 +685,8 @@ maybeKillChain(MachineOperand &MO, unsigned Idx,
 
     // If this is a KILL of a current chain, record it.
     if (MO.isKill() && ActiveChains.find(MO.getReg()) != ActiveChains.end()) {
-      DEBUG(dbgs() << "Kill seen for chain " << TRI->getName(MO.getReg())
-            << "\n");
+      DEBUG(dbgs() << "Kill seen for chain " << printReg(MO.getReg(), TRI)
+                   << "\n");
       ActiveChains[MO.getReg()]->setKill(MI, Idx, /*Immutable=*/MO.isTied());
     }
     ActiveChains.erase(MO.getReg());
@@ -710,7 +697,7 @@ maybeKillChain(MachineOperand &MO, unsigned Idx,
          I != E;) {
       if (MO.clobbersPhysReg(I->first)) {
         DEBUG(dbgs() << "Kill (regmask) seen for chain "
-              << TRI->getName(I->first) << "\n");
+                     << printReg(I->first, TRI) << "\n");
         I->second->setKill(MI, Idx, /*Immutable=*/true);
         ActiveChains.erase(I++);
       } else

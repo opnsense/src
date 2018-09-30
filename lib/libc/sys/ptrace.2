@@ -2,7 +2,7 @@
 .\"	$NetBSD: ptrace.2,v 1.2 1995/02/27 12:35:37 cgd Exp $
 .\"
 .\" This file is in the public domain.
-.Dd August 29, 2016
+.Dd May 22, 2018
 .Dt PTRACE 2
 .Os
 .Sh NAME
@@ -166,7 +166,7 @@ new child processes will execute without tracing enabled.
 This event flag controls tracing of LWP
 .Pq kernel thread
 creation and destruction.
-When this event is enabled, 
+When this event is enabled,
 new LWPs will stop and report an event with
 .Dv PL_FLAG_BORN
 set before executing their first instruction,
@@ -215,7 +215,7 @@ or
 includes only
 .Dv PTRACE_EXEC
 events.
-All other event flags are disabled. 
+All other event flags are disabled.
 .Pp
 The
 .Fa request
@@ -606,6 +606,7 @@ The return value from
 is the count of array entries filled in.
 .It Dv PT_SETSTEP
 This request will turn on single stepping of the specified process.
+Stepping is automatically disabled when a single step trap is caught.
 .It Dv PT_CLEARSTEP
 This request will turn off single stepping of the specified process.
 .It Dv PT_SUSPEND
@@ -643,6 +644,26 @@ and
 .Fa data
 arguments are used the same as for
 .Dv PT_CONTINUE.
+.It Dv PT_GET_SC_ARGS
+For the thread which is stopped in either
+.Dv PL_FLAG_SCE
+or
+.Dv PL_FLAG_SCX
+state, that is, on entry or exit to a syscall,
+this request fetches the syscall arguments.
+.Pp
+The arguments are copied out into the buffer pointed to by the
+.Fa addr
+pointer, sequentially.
+Each syscall argument is stored as the machine word.
+Kernel copies out as many arguments as the syscall accepts,
+see the
+.Va pl_syscall_narg
+member of the
+.Vt struct ptrace_lwpinfo ,
+but not more than the
+.Fa data
+bytes in total are copied.
 .It Dv PT_FOLLOW_FORK
 This request controls tracing for new child processes of a traced process.
 If
@@ -742,6 +763,28 @@ The
 .Fa data
 argument is ignored.
 .El
+.Sh ARM MACHINE-SPECIFIC REQUESTS
+.Bl -tag -width "Dv PT_SETVFPREGS"
+.It Dv PT_GETVFPREGS
+Return the thread's
+.Dv VFP
+machine state in the buffer pointed to by
+.Fa addr .
+.Pp
+The
+.Fa data
+argument is ignored.
+.It Dv PT_SETVFPREGS
+Set the thread's
+.Dv VFP
+machine state from the buffer pointed to by
+.Fa addr .
+.Pp
+The
+.Fa data
+argument is ignored.
+.El
+.Pp
 .Sh x86 MACHINE-SPECIFIC REQUESTS
 .Bl -tag -width "Dv PT_GETXSTATE_INFO"
 .It Dv PT_GETXMMREGS
@@ -1063,4 +1106,4 @@ holds the minimum buffer size required on return.
 The
 .Fn ptrace
 function appeared in
-.At v7 .
+.At v6 .

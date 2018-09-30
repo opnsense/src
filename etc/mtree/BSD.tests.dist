@@ -8,15 +8,23 @@
     bin
         cat
         ..
-        chown
+        chflags
+        ..
+        chmod
         ..
         date
         ..
         dd
         ..
+        echo
+        ..
         expr
         ..
+        ln
+        ..
         ls
+        ..
+        mkdir
         ..
         mv
         ..
@@ -25,6 +33,10 @@
         pkill
         ..
         pwait
+        ..
+        rcp
+        ..
+        rmdir
         ..
         sh
             builtins
@@ -53,6 +65,8 @@
         sbin
         ..
         usr.bin
+            ctfconvert
+            ..
         ..
         usr.sbin
             dtrace
@@ -312,6 +326,18 @@
         ..
         libcam
         ..
+        libcasper
+            services
+                cap_dns
+                ..
+                cap_grp
+                ..
+                cap_pwd
+                ..
+                cap_sysctl
+                ..
+            ..
+        ..
         libcrypt
         ..
         libdevdctl
@@ -327,6 +353,8 @@
         libproc
         ..
         librt
+        ..
+        libsbuf
         ..
         libthr
             dlopen
@@ -347,6 +375,8 @@
             ..
         ..
         rtld-elf
+        ..
+        tftpd
         ..
     ..
     sbin
@@ -378,13 +408,19 @@
                 ..
                 plain
                 ..
+                tap
+                ..
             ..
+        ..
+        zoneinfo
         ..
     ..
     sys
         acl
         ..
         aio
+        ..
+        capsicum
         ..
         fifo
         ..
@@ -407,6 +443,8 @@
                 mirror
                 ..
                 nop
+                ..
+                part
                 ..
                 raid3
                 ..
@@ -439,6 +477,8 @@
             ..
         ..
         mqueue
+        ..
+        net
         ..
         netinet
         ..
@@ -606,7 +646,11 @@
         ..
         dirname
         ..
+        du
+        ..
         file2c
+        ..
+        fold
         ..
         getconf
         ..
@@ -614,7 +658,13 @@
         ..
         gzip
         ..
+        head
+        ..
+        hexdump
+        ..
         ident
+        ..
+        indent
         ..
         join
         ..
@@ -636,6 +686,10 @@
         ..
         printf
         ..
+        procstat
+        ..
+        rs
+        ..
         sdiff
         ..
         sed
@@ -643,6 +697,8 @@
             ..
         ..
         soelim
+        ..
+        stat
         ..
         tail
         ..
@@ -674,6 +730,8 @@
         ..
     ..
     usr.sbin
+        chown
+        ..
         etcupdate
         ..
         extattr

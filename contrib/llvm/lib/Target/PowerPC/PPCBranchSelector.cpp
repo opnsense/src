@@ -15,17 +15,17 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "PPC.h"
 #include "MCTargetDesc/PPCPredicates.h"
+#include "PPC.h"
 #include "PPCInstrBuilder.h"
 #include "PPCInstrInfo.h"
 #include "PPCSubtarget.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Target/TargetMachine.h"
-#include "llvm/Target/TargetSubtargetInfo.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "ppc-branch-select"
@@ -78,7 +78,7 @@ bool PPCBSel::runOnMachineFunction(MachineFunction &Fn) {
   BlockSizes.resize(Fn.getNumBlockIDs());
 
   auto GetAlignmentAdjustment =
-    [TII](MachineBasicBlock &MBB, unsigned Offset) -> unsigned {
+    [](MachineBasicBlock &MBB, unsigned Offset) -> unsigned {
     unsigned Align = MBB.getAlignment();
     if (!Align)
       return 0;

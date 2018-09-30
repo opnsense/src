@@ -54,6 +54,7 @@ __FBSDID("$FreeBSD$");
 #include <ufs/ufs/ufsmount.h>
 #endif
 #include <err.h>
+#include <getopt.h>
 #include <libutil.h>
 #include <locale.h>
 #ifdef MOUNT_CHAR_DEVS
@@ -107,6 +108,12 @@ static int	thousands;
 static struct	ufs_args mdev;
 #endif
 
+static const struct option long_options[] =
+{
+	{ "si", no_argument, NULL, 'H' },
+	{ NULL, no_argument, NULL, 0 },
+};
+
 int
 main(int argc, char *argv[])
 {
@@ -142,7 +149,8 @@ main(int argc, char *argv[])
 	if (argc < 0)
 		exit(1);
 
-	while ((ch = getopt(argc, argv, "abcgHhiklmnPt:T,")) != -1)
+	while ((ch = getopt_long(argc, argv, "+abcgHhiklmnPt:T,", long_options,
+	    NULL)) != -1)
 		switch (ch) {
 		case 'a':
 			aflag = 1;
@@ -183,6 +191,9 @@ main(int argc, char *argv[])
 			hflag = 0;
 			break;
 		case 'l':
+			/* Ignore duplicate -l */
+			if (lflag)
+				break;
 			if (vfslist != NULL)
 				xo_errx(1, "-l and -t are mutually exclusive.");
 			vfslist = makevfslist(makenetvfslist());
@@ -241,9 +252,11 @@ main(int argc, char *argv[])
 				rv = 1;
 				continue;
 			}
-#ifdef MOUNT_CHAR_DEVS
 		} else if (S_ISCHR(stbuf.st_mode)) {
 			if ((mntpt = getmntpt(*argv)) == NULL) {
+#ifdef MOUNT_CHAR_DEVS
+				xo_warnx(
+				    "df on unmounted devices is deprecated");
 				mdev.fspec = *argv;
 				mntpath = strdup("/tmp/df.XXXXXX");
 				if (mntpath == NULL) {
@@ -292,8 +305,12 @@ main(int argc, char *argv[])
 				(void)rmdir(mntpt);
 				free(mntpath);
 				continue;
-			}
+#else
+				xo_warnx("%s: not mounted", *argv);
+				rv = 1;
+				continue;
 #endif
+			}
 		} else
 			mntpt = *argv;
 

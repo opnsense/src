@@ -22,8 +22,8 @@
 
 // Other libraries and framework includes
 // Project includes
-#include "lldb/Core/DataExtractor.h"
-#include "lldb/Core/Stream.h"
+#include "lldb/Utility/DataExtractor.h"
+#include "lldb/Utility/Stream.h"
 
 class MappedHash {
 public:
@@ -326,7 +326,7 @@ public:
           1u, // Bucket hash data collision, but key didn't match
       eResultEndOfHashData = 2u, // The chain of items for this hash data in
                                  // this bucket is terminated, search no more
-      eResultError = 3u          // Error parsing the hash data, abort
+      eResultError = 3u          // Status parsing the hash data, abort
     };
 
     struct Pair {
@@ -353,25 +353,28 @@ public:
     bool IsValid() const {
       return m_header.version == 1 &&
              m_header.hash_function == eHashFunctionDJB &&
-             m_header.bucket_count > 0 && m_header.hashes_count > 0;
+             m_header.bucket_count > 0;
     }
 
     uint32_t GetHashIndex(uint32_t bucket_idx) const {
+      uint32_t result = UINT32_MAX;
       if (m_hash_indexes && bucket_idx < m_header.bucket_count)
-        return m_hash_indexes[bucket_idx];
-      return UINT32_MAX;
+        memcpy(&result, m_hash_indexes + bucket_idx, sizeof(uint32_t));
+      return result;
     }
 
     uint32_t GetHashValue(uint32_t hash_idx) const {
+      uint32_t result = UINT32_MAX;
       if (m_hash_values && hash_idx < m_header.hashes_count)
-        return m_hash_values[hash_idx];
-      return UINT32_MAX;
+        memcpy(&result, m_hash_values + hash_idx, sizeof(uint32_t));
+      return result;
     }
 
     uint32_t GetHashDataOffset(uint32_t hash_idx) const {
+      uint32_t result = UINT32_MAX;
       if (m_hash_offsets && hash_idx < m_header.hashes_count)
-        return m_hash_offsets[hash_idx];
-      return UINT32_MAX;
+        memcpy(&result, m_hash_offsets + hash_idx, sizeof(uint32_t));
+      return result;
     }
 
     bool Find(const char *name, Pair &pair) const {
@@ -409,7 +412,7 @@ public:
                   // searching
                   return false;
                 case eResultError:
-                  // Error parsing the hash data, abort
+                  // Status parsing the hash data, abort
                   return false;
                 }
               }

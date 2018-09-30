@@ -193,8 +193,7 @@ IDTVEC(xen_intr_upcall)
 	SUPERALIGN_TEXT
 invltlb_ret:
 	call	as_lapic_eoi
-	POP_FRAME
-	iret
+	jmp	doreti
 
 	SUPERALIGN_TEXT
 IDTVEC(invltlb)
@@ -278,9 +277,7 @@ IDTVEC(cpustop)
 
 	call	as_lapic_eoi
 	call	cpustop_handler
-
-	POP_FRAME
-	iret
+	jmp	doreti
 
 /*
  * Executed by a CPU when it receives an IPI_SUSPEND from another CPU.
@@ -294,9 +291,7 @@ IDTVEC(cpususpend)
 
 	call	as_lapic_eoi
 	call	cpususpend_handler
-
-	POP_FRAME
-	jmp	doreti_iret
+	jmp	doreti
 
 /*
  * Executed by a CPU when it receives a RENDEZVOUS IPI from another CPU.
@@ -318,7 +313,6 @@ IDTVEC(rendezvous)
 	call	smp_rendezvous_action
 
 	call	as_lapic_eoi
-	POP_FRAME
-	iret
+	jmp	doreti
 	
 #endif /* SMP */

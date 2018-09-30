@@ -155,11 +155,11 @@ recycle_pageset(struct toepcb *toep, struct pageset *ps)
 {
 
 	DDP_ASSERT_LOCKED(toep);
-	if (!(toep->ddp_flags & DDP_DEAD) && ps->flags & PS_WIRED) {
-		KASSERT(toep->ddp_cached_count + toep->ddp_active_count <
-		    nitems(toep->db), ("too many wired pagesets"));
-		TAILQ_INSERT_HEAD(&toep->ddp_cached_pagesets, ps, link);
-		toep->ddp_cached_count++;
+	if (!(toep->ddp.flags & DDP_DEAD) && ps->flags & PS_WIRED) {
+		KASSERT(toep->ddp.cached_count + toep->ddp.active_count <
+		    nitems(toep->ddp.db), ("too many wired pagesets"));
+		TAILQ_INSERT_HEAD(&toep->ddp.cached_pagesets, ps, link);
+		toep->ddp.cached_count++;
 	} else
 		free_pageset(toep->td, ps);
 }
@@ -204,17 +204,18 @@ void
 ddp_init_toep(struct toepcb *toep)
 {
 
-	TAILQ_INIT(&toep->ddp_aiojobq);
-	TASK_INIT(&toep->ddp_requeue_task, 0, aio_ddp_requeue_task, toep);
-	toep->ddp_active_id = -1;
-	mtx_init(&toep->ddp_lock, "t4 ddp", NULL, MTX_DEF);
+	TAILQ_INIT(&toep->ddp.aiojobq);
+	TASK_INIT(&toep->ddp.requeue_task, 0, aio_ddp_requeue_task, toep);
+	toep->ddp.flags = DDP_OK;
+	toep->ddp.active_id = -1;
+	mtx_init(&toep->ddp.lock, "t4 ddp", NULL, MTX_DEF);
 }
 
 void
 ddp_uninit_toep(struct toepcb *toep)
 {
 
-	mtx_destroy(&toep->ddp_lock);
+	mtx_destroy(&toep->ddp.lock);
 }
 
 void
@@ -225,11 +226,11 @@ release_ddp_resources(struct toepcb *toep)
 
 	DDP_LOCK(toep);
 	toep->flags |= DDP_DEAD;
-	for (i = 0; i < nitems(toep->db); i++) {
-		free_ddp_buffer(toep->td, &toep->db[i]);
+	for (i = 0; i < nitems(toep->ddp.db); i++) {
+		free_ddp_buffer(toep->td, &toep->ddp.db[i]);
 	}
-	while ((ps = TAILQ_FIRST(&toep->ddp_cached_pagesets)) != NULL) {
-		TAILQ_REMOVE(&toep->ddp_cached_pagesets, ps, link);
+	while ((ps = TAILQ_FIRST(&toep->ddp.cached_pagesets)) != NULL) {
+		TAILQ_REMOVE(&toep->ddp.cached_pagesets, ps, link);
 		free_pageset(toep->td, ps);
 	}
 	ddp_complete_all(toep, 0);
@@ -242,13 +243,13 @@ ddp_assert_empty(struct toepcb *toep)
 {
 	int i;
 
-	MPASS(!(toep->ddp_flags & DDP_TASK_ACTIVE));
-	for (i = 0; i < nitems(toep->db); i++) {
-		MPASS(toep->db[i].job == NULL);
-		MPASS(toep->db[i].ps == NULL);
+	MPASS(!(toep->ddp.flags & DDP_TASK_ACTIVE));
+	for (i = 0; i < nitems(toep->ddp.db); i++) {
+		MPASS(toep->ddp.db[i].job == NULL);
+		MPASS(toep->ddp.db[i].ps == NULL);
 	}
-	MPASS(TAILQ_EMPTY(&toep->ddp_cached_pagesets));
-	MPASS(TAILQ_EMPTY(&toep->ddp_aiojobq));
+	MPASS(TAILQ_EMPTY(&toep->ddp.cached_pagesets));
+	MPASS(TAILQ_EMPTY(&toep->ddp.aiojobq));
 }
 #endif
 
@@ -258,21 +259,21 @@ complete_ddp_buffer(struct toepcb *toep, struct ddp_buffer *db,
 {
 	unsigned int db_flag;
 
-	toep->ddp_active_count--;
-	if (toep->ddp_active_id == db_idx) {
-		if (toep->ddp_active_count == 0) {
-			KASSERT(toep->db[db_idx ^ 1].job == NULL,
+	toep->ddp.active_count--;
+	if (toep->ddp.active_id == db_idx) {
+		if (toep->ddp.active_count == 0) {
+			KASSERT(toep->ddp.db[db_idx ^ 1].job == NULL,
 			    ("%s: active_count mismatch", __func__));
-			toep->ddp_active_id = -1;
+			toep->ddp.active_id = -1;
 		} else
-			toep->ddp_active_id ^= 1;
+			toep->ddp.active_id ^= 1;
 #ifdef VERBOSE_TRACES
 		CTR2(KTR_CXGBE, "%s: ddp_active_id = %d", __func__,
-		    toep->ddp_active_id);
+		    toep->ddp.active_id);
 #endif
 	} else {
-		KASSERT(toep->ddp_active_count != 0 &&
-		    toep->ddp_active_id != -1,
+		KASSERT(toep->ddp.active_count != 0 &&
+		    toep->ddp.active_id != -1,
 		    ("%s: active count mismatch", __func__));
 	}
 
@@ -282,10 +283,10 @@ complete_ddp_buffer(struct toepcb *toep, struct ddp_buffer *db,
 	db->ps = NULL;
 
 	db_flag = db_idx == 1 ? DDP_BUF1_ACTIVE : DDP_BUF0_ACTIVE;
-	KASSERT(toep->ddp_flags & db_flag,
+	KASSERT(toep->ddp.flags & db_flag,
 	    ("%s: DDP buffer not active. toep %p, ddp_flags 0x%x",
-	    __func__, toep, toep->ddp_flags));
-	toep->ddp_flags &= ~db_flag;
+	    __func__, toep, toep->ddp.flags));
+	toep->ddp.flags &= ~db_flag;
 }
 
 /* XXX: handle_ddp_data code duplication */
@@ -313,12 +314,12 @@ insert_ddp_data(struct toepcb *toep, uint32_t n)
 #endif
 	CTR2(KTR_CXGBE, "%s: placed %u bytes before falling out of DDP",
 	    __func__, n);
-	while (toep->ddp_active_count > 0) {
-		MPASS(toep->ddp_active_id != -1);
-		db_idx = toep->ddp_active_id;
+	while (toep->ddp.active_count > 0) {
+		MPASS(toep->ddp.active_id != -1);
+		db_idx = toep->ddp.active_id;
 		db_flag = db_idx == 1 ? DDP_BUF1_ACTIVE : DDP_BUF0_ACTIVE;
-		MPASS((toep->ddp_flags & db_flag) != 0);
-		db = &toep->db[db_idx];
+		MPASS((toep->ddp.flags & db_flag) != 0);
+		db = &toep->ddp.db[db_idx];
 		job = db->job;
 		copied = job->aio_received;
 		placed = n;
@@ -340,8 +341,8 @@ insert_ddp_data(struct toepcb *toep, uint32_t n)
 			/* XXX: This always completes if there is some data. */
 			aio_complete(job, copied + placed, 0);
 		} else if (aio_set_cancel_function(job, t4_aio_cancel_queued)) {
-			TAILQ_INSERT_HEAD(&toep->ddp_aiojobq, job, list);
-			toep->ddp_waiting_count++;
+			TAILQ_INSERT_HEAD(&toep->ddp.aiojobq, job, list);
+			toep->ddp.waiting_count++;
 		} else
 			aio_cancel(job);
 		n -= placed;
@@ -501,10 +502,10 @@ handle_ddp_data(struct toepcb *toep, __be32 ddp_report, __be32 rcv_nxt, int len)
 	sb = &so->so_rcv;
 	DDP_LOCK(toep);
 
-	KASSERT(toep->ddp_active_id == db_idx,
+	KASSERT(toep->ddp.active_id == db_idx,
 	    ("completed DDP buffer (%d) != active_id (%d) for tid %d", db_idx,
-	    toep->ddp_active_id, toep->tid));
-	db = &toep->db[db_idx];
+	    toep->ddp.active_id, toep->tid));
+	db = &toep->ddp.db[db_idx];
 	job = db->job;
 
 	if (__predict_false(inp->inp_flags & (INP_DROPPED | INP_TIMEWAIT))) {
@@ -595,7 +596,7 @@ handle_ddp_data(struct toepcb *toep, __be32 ddp_report, __be32 rcv_nxt, int len)
 
 completed:
 	complete_ddp_buffer(toep, db, db_idx);
-	if (toep->ddp_waiting_count > 0)
+	if (toep->ddp.waiting_count > 0)
 		ddp_queue_toep(toep);
 out:
 	DDP_UNLOCK(toep);
@@ -609,9 +610,9 @@ handle_ddp_indicate(struct toepcb *toep)
 {
 
 	DDP_ASSERT_LOCKED(toep);
-	MPASS(toep->ddp_active_count == 0);
-	MPASS((toep->ddp_flags & (DDP_BUF0_ACTIVE | DDP_BUF1_ACTIVE)) == 0);
-	if (toep->ddp_waiting_count == 0) {
+	MPASS(toep->ddp.active_count == 0);
+	MPASS((toep->ddp.flags & (DDP_BUF0_ACTIVE | DDP_BUF1_ACTIVE)) == 0);
+	if (toep->ddp.waiting_count == 0) {
 		/*
 		 * The pending requests that triggered the request for an
 		 * an indicate were cancelled.  Those cancels should have
@@ -621,7 +622,7 @@ handle_ddp_indicate(struct toepcb *toep)
 		return;
 	}
 	CTR3(KTR_CXGBE, "%s: tid %d indicated (%d waiting)", __func__,
-	    toep->tid, toep->ddp_waiting_count);
+	    toep->tid, toep->ddp.waiting_count);
 	ddp_queue_toep(toep);
 }
 
@@ -651,7 +652,7 @@ handle_ddp_tcb_rpl(struct toepcb *toep, const struct cpl_set_tcb_rpl *cpl)
 		db_idx = G_COOKIE(cpl->cookie) - DDP_BUF0_INVALIDATED;
 		INP_WLOCK(inp);
 		DDP_LOCK(toep);
-		db = &toep->db[db_idx];
+		db = &toep->ddp.db[db_idx];
 
 		/*
 		 * handle_ddp_data() should leave the job around until
@@ -684,7 +685,7 @@ handle_ddp_tcb_rpl(struct toepcb *toep, const struct cpl_set_tcb_rpl *cpl)
 		}
 
 		complete_ddp_buffer(toep, db, db_idx);
-		if (toep->ddp_waiting_count > 0)
+		if (toep->ddp.waiting_count > 0)
 			ddp_queue_toep(toep);
 		DDP_UNLOCK(toep);
 		INP_WUNLOCK(inp);
@@ -713,12 +714,12 @@ handle_ddp_close(struct toepcb *toep, struct tcpcb *tp, __be32 rcv_nxt)
 	toep->rx_credits += len;
 #endif
 
-	while (toep->ddp_active_count > 0) {
-		MPASS(toep->ddp_active_id != -1);
-		db_idx = toep->ddp_active_id;
+	while (toep->ddp.active_count > 0) {
+		MPASS(toep->ddp.active_id != -1);
+		db_idx = toep->ddp.active_id;
 		db_flag = db_idx == 1 ? DDP_BUF1_ACTIVE : DDP_BUF0_ACTIVE;
-		MPASS((toep->ddp_flags & db_flag) != 0);
-		db = &toep->db[db_idx];
+		MPASS((toep->ddp.flags & db_flag) != 0);
+		db = &toep->ddp.db[db_idx];
 		job = db->job;
 		copied = job->aio_received;
 		placed = len;
@@ -806,15 +807,15 @@ static void
 enable_ddp(struct adapter *sc, struct toepcb *toep)
 {
 
-	KASSERT((toep->ddp_flags & (DDP_ON | DDP_OK | DDP_SC_REQ)) == DDP_OK,
+	KASSERT((toep->ddp.flags & (DDP_ON | DDP_OK | DDP_SC_REQ)) == DDP_OK,
 	    ("%s: toep %p has bad ddp_flags 0x%x",
-	    __func__, toep, toep->ddp_flags));
+	    __func__, toep, toep->ddp.flags));
 
 	CTR3(KTR_CXGBE, "%s: tid %u (time %u)",
 	    __func__, toep->tid, time_uptime);
 
 	DDP_ASSERT_LOCKED(toep);
-	toep->ddp_flags |= DDP_SC_REQ;
+	toep->ddp.flags |= DDP_SC_REQ;
 	t4_set_tcb_field(sc, toep->ctrlq, toep->tid, W_TCB_RX_DDP_FLAGS,
 	    V_TF_DDP_OFF(1) | V_TF_DDP_INDICATE_OUT(1) |
 	    V_TF_DDP_BUF0_INDICATE(1) | V_TF_DDP_BUF1_INDICATE(1) |
@@ -1277,7 +1278,8 @@ pscmp(struct pageset *ps, struct vmspace *vm, vm_offset_t start, int npages,
     int pgoff, int len)
 {
 
-	if (ps->npages != npages || ps->offset != pgoff || ps->len != len)
+	if (ps->start != start || ps->npages != npages ||
+	    ps->offset != pgoff || ps->len != len)
 		return (1);
 
 	return (ps->vm != vm || ps->vm_timestamp != vm->vm_map.timestamp);
@@ -1330,11 +1332,11 @@ hold_aio(struct toepcb *toep, struct kaiocb *job, struct pageset **pps)
 	/*
 	 * Try to reuse a cached pageset.
 	 */
-	TAILQ_FOREACH(ps, &toep->ddp_cached_pagesets, link) {
+	TAILQ_FOREACH(ps, &toep->ddp.cached_pagesets, link) {
 		if (pscmp(ps, vm, start, n, pgoff,
 		    job->uaiocb.aio_nbytes) == 0) {
-			TAILQ_REMOVE(&toep->ddp_cached_pagesets, ps, link);
-			toep->ddp_cached_count--;
+			TAILQ_REMOVE(&toep->ddp.cached_pagesets, ps, link);
+			toep->ddp.cached_count--;
 			*pps = ps;
 			return (0);
 		}
@@ -1344,15 +1346,15 @@ hold_aio(struct toepcb *toep, struct kaiocb *job, struct pageset **pps)
 	 * If there are too many cached pagesets to create a new one,
 	 * free a pageset before creating a new one.
 	 */
-	KASSERT(toep->ddp_active_count + toep->ddp_cached_count <=
-	    nitems(toep->db), ("%s: too many wired pagesets", __func__));
-	if (toep->ddp_active_count + toep->ddp_cached_count ==
-	    nitems(toep->db)) {
-		KASSERT(toep->ddp_cached_count > 0,
+	KASSERT(toep->ddp.active_count + toep->ddp.cached_count <=
+	    nitems(toep->ddp.db), ("%s: too many wired pagesets", __func__));
+	if (toep->ddp.active_count + toep->ddp.cached_count ==
+	    nitems(toep->ddp.db)) {
+		KASSERT(toep->ddp.cached_count > 0,
 		    ("no cached pageset to free"));
-		ps = TAILQ_LAST(&toep->ddp_cached_pagesets, pagesetq);
-		TAILQ_REMOVE(&toep->ddp_cached_pagesets, ps, link);
-		toep->ddp_cached_count--;
+		ps = TAILQ_LAST(&toep->ddp.cached_pagesets, pagesetq);
+		TAILQ_REMOVE(&toep->ddp.cached_pagesets, ps, link);
+		toep->ddp.cached_count--;
 		free_pageset(toep->td, ps);
 	}
 	DDP_UNLOCK(toep);
@@ -1378,6 +1380,7 @@ hold_aio(struct toepcb *toep, struct kaiocb *job, struct pageset **pps)
 	ps->len = job->uaiocb.aio_nbytes;
 	atomic_add_int(&vm->vm_refcnt, 1);
 	ps->vm = vm;
+	ps->start = start;
 
 	CTR5(KTR_CXGBE, "%s: tid %d, new pageset %p for job %p, npages %d",
 	    __func__, toep->tid, ps, job, ps->npages);
@@ -1391,10 +1394,10 @@ ddp_complete_all(struct toepcb *toep, int error)
 	struct kaiocb *job;
 
 	DDP_ASSERT_LOCKED(toep);
-	while (!TAILQ_EMPTY(&toep->ddp_aiojobq)) {
-		job = TAILQ_FIRST(&toep->ddp_aiojobq);
-		TAILQ_REMOVE(&toep->ddp_aiojobq, job, list);
-		toep->ddp_waiting_count--;
+	while (!TAILQ_EMPTY(&toep->ddp.aiojobq)) {
+		job = TAILQ_FIRST(&toep->ddp.aiojobq);
+		TAILQ_REMOVE(&toep->ddp.aiojobq, job, list);
+		toep->ddp.waiting_count--;
 		if (aio_clear_cancel_function(job))
 			ddp_complete_one(job, error);
 	}
@@ -1427,10 +1430,10 @@ aio_ddp_requeue_one(struct toepcb *toep, struct kaiocb *job)
 {
 
 	DDP_ASSERT_LOCKED(toep);
-	if (!(toep->ddp_flags & DDP_DEAD) &&
+	if (!(toep->ddp.flags & DDP_DEAD) &&
 	    aio_set_cancel_function(job, t4_aio_cancel_queued)) {
-		TAILQ_INSERT_HEAD(&toep->ddp_aiojobq, job, list);
-		toep->ddp_waiting_count++;
+		TAILQ_INSERT_HEAD(&toep->ddp.aiojobq, job, list);
+		toep->ddp.waiting_count++;
 	} else
 		aio_ddp_cancel_one(job);
 }
@@ -1454,18 +1457,18 @@ aio_ddp_requeue(struct toepcb *toep)
 	DDP_ASSERT_LOCKED(toep);
 
 restart:
-	if (toep->ddp_flags & DDP_DEAD) {
-		MPASS(toep->ddp_waiting_count == 0);
-		MPASS(toep->ddp_active_count == 0);
+	if (toep->ddp.flags & DDP_DEAD) {
+		MPASS(toep->ddp.waiting_count == 0);
+		MPASS(toep->ddp.active_count == 0);
 		return;
 	}
 
-	if (toep->ddp_waiting_count == 0 ||
-	    toep->ddp_active_count == nitems(toep->db)) {
+	if (toep->ddp.waiting_count == 0 ||
+	    toep->ddp.active_count == nitems(toep->ddp.db)) {
 		return;
 	}
 
-	job = TAILQ_FIRST(&toep->ddp_aiojobq);
+	job = TAILQ_FIRST(&toep->ddp.aiojobq);
 	so = job->fd_file->f_data;
 	sb = &so->so_rcv;
 	SOCKBUF_LOCK(sb);
@@ -1477,14 +1480,14 @@ restart:
 		return;
 	}
 
-	KASSERT(toep->ddp_active_count == 0 || sbavail(sb) == 0,
+	KASSERT(toep->ddp.active_count == 0 || sbavail(sb) == 0,
 	    ("%s: pending sockbuf data and DDP is active", __func__));
 
 	/* Abort if socket has reported problems. */
 	/* XXX: Wait for any queued DDP's to finish and/or flush them? */
 	if (so->so_error && sbavail(sb) == 0) {
-		toep->ddp_waiting_count--;
-		TAILQ_REMOVE(&toep->ddp_aiojobq, job, list);
+		toep->ddp.waiting_count--;
+		TAILQ_REMOVE(&toep->ddp.aiojobq, job, list);
 		if (!aio_clear_cancel_function(job)) {
 			SOCKBUF_UNLOCK(sb);
 			goto restart;
@@ -1515,7 +1518,7 @@ restart:
 	 */
 	if (sb->sb_state & SBS_CANTRCVMORE && sbavail(sb) == 0) {
 		SOCKBUF_UNLOCK(sb);
-		if (toep->ddp_active_count != 0)
+		if (toep->ddp.active_count != 0)
 			return;
 		ddp_complete_all(toep, 0);
 		return;
@@ -1525,7 +1528,7 @@ restart:
 	 * If DDP is not enabled and there is no pending socket buffer
 	 * data, try to enable DDP.
 	 */
-	if (sbavail(sb) == 0 && (toep->ddp_flags & DDP_ON) == 0) {
+	if (sbavail(sb) == 0 && (toep->ddp.flags & DDP_ON) == 0) {
 		SOCKBUF_UNLOCK(sb);
 
 		/*
@@ -1539,7 +1542,7 @@ restart:
 		 * XXX: Might want to limit the indicate size to the size
 		 * of the first queued request.
 		 */
-		if ((toep->ddp_flags & DDP_SC_REQ) == 0)
+		if ((toep->ddp.flags & DDP_SC_REQ) == 0)
 			enable_ddp(sc, toep);
 		return;
 	}
@@ -1549,21 +1552,21 @@ restart:
 	 * If another thread is queueing a buffer for DDP, let it
 	 * drain any work and return.
 	 */
-	if (toep->ddp_queueing != NULL)
+	if (toep->ddp.queueing != NULL)
 		return;
 
 	/* Take the next job to prep it for DDP. */
-	toep->ddp_waiting_count--;
-	TAILQ_REMOVE(&toep->ddp_aiojobq, job, list);
+	toep->ddp.waiting_count--;
+	TAILQ_REMOVE(&toep->ddp.aiojobq, job, list);
 	if (!aio_clear_cancel_function(job))
 		goto restart;
-	toep->ddp_queueing = job;
+	toep->ddp.queueing = job;
 
 	/* NB: This drops DDP_LOCK while it holds the backing VM pages. */
 	error = hold_aio(toep, job, &ps);
 	if (error != 0) {
 		ddp_complete_one(job, error);
-		toep->ddp_queueing = NULL;
+		toep->ddp.queueing = NULL;
 		goto restart;
 	}
 
@@ -1574,7 +1577,7 @@ restart:
 			SOCKBUF_UNLOCK(sb);
 			recycle_pageset(toep, ps);
 			aio_complete(job, copied, 0);
-			toep->ddp_queueing = NULL;
+			toep->ddp.queueing = NULL;
 			goto restart;
 		}
 
@@ -1583,26 +1586,26 @@ restart:
 		SOCKBUF_UNLOCK(sb);
 		recycle_pageset(toep, ps);
 		aio_complete(job, -1, error);
-		toep->ddp_queueing = NULL;
+		toep->ddp.queueing = NULL;
 		goto restart;
 	}
 
 	if (sb->sb_state & SBS_CANTRCVMORE && sbavail(sb) == 0) {
 		SOCKBUF_UNLOCK(sb);
 		recycle_pageset(toep, ps);
-		if (toep->ddp_active_count != 0) {
+		if (toep->ddp.active_count != 0) {
 			/*
 			 * The door is closed, but there are still pending
 			 * DDP buffers.  Requeue.  These jobs will all be
 			 * completed once those buffers drain.
 			 */
 			aio_ddp_requeue_one(toep, job);
-			toep->ddp_queueing = NULL;
+			toep->ddp.queueing = NULL;
 			return;
 		}
 		ddp_complete_one(job, 0);
 		ddp_complete_all(toep, 0);
-		toep->ddp_queueing = NULL;
+		toep->ddp.queueing = NULL;
 		return;
 	}
 
@@ -1611,7 +1614,7 @@ sbcopy:
 	 * If the toep is dead, there shouldn't be any data in the socket
 	 * buffer, so the above case should have handled this.
 	 */
-	MPASS(!(toep->ddp_flags & DDP_DEAD));
+	MPASS(!(toep->ddp.flags & DDP_DEAD));
 
 	/*
 	 * If there is pending data in the socket buffer (either
@@ -1623,7 +1626,7 @@ sbcopy:
 	MPASS(job->aio_received <= job->uaiocb.aio_nbytes);
 	resid = job->uaiocb.aio_nbytes - job->aio_received;
 	m = sb->sb_mb;
-	KASSERT(m == NULL || toep->ddp_active_count == 0,
+	KASSERT(m == NULL || toep->ddp.active_count == 0,
 	    ("%s: sockbuf data with active DDP", __func__));
 	while (m != NULL && resid > 0) {
 		struct iovec iov[1];
@@ -1674,7 +1677,7 @@ sbcopy:
 		}
 		t4_rcvd_locked(&toep->td->tod, intotcpcb(inp));
 		INP_WUNLOCK(inp);
-		if (resid == 0 || toep->ddp_flags & DDP_DEAD) {
+		if (resid == 0 || toep->ddp.flags & DDP_DEAD) {
 			/*
 			 * We filled the entire buffer with socket
 			 * data, DDP is not being used, or the socket
@@ -1684,7 +1687,7 @@ sbcopy:
 			SOCKBUF_UNLOCK(sb);
 			recycle_pageset(toep, ps);
 			aio_complete(job, copied, 0);
-			toep->ddp_queueing = NULL;
+			toep->ddp.queueing = NULL;
 			goto restart;
 		}
 
@@ -1693,11 +1696,11 @@ sbcopy:
 		 * This will either enable DDP or wait for more data to
 		 * arrive on the socket buffer.
 		 */
-		if ((toep->ddp_flags & (DDP_ON | DDP_SC_REQ)) != DDP_ON) {
+		if ((toep->ddp.flags & (DDP_ON | DDP_SC_REQ)) != DDP_ON) {
 			SOCKBUF_UNLOCK(sb);
 			recycle_pageset(toep, ps);
 			aio_ddp_requeue_one(toep, job);
-			toep->ddp_queueing = NULL;
+			toep->ddp.queueing = NULL;
 			goto restart;
 		}
 
@@ -1714,7 +1717,7 @@ sbcopy:
 	if (prep_pageset(sc, toep, ps) == 0) {
 		recycle_pageset(toep, ps);
 		aio_ddp_requeue_one(toep, job);
-		toep->ddp_queueing = NULL;
+		toep->ddp.queueing = NULL;
 
 		/*
 		 * XXX: Need to retry this later.  Mostly need a trigger
@@ -1725,10 +1728,10 @@ sbcopy:
 	}
 
 	/* Determine which DDP buffer to use. */
-	if (toep->db[0].job == NULL) {
+	if (toep->ddp.db[0].job == NULL) {
 		db_idx = 0;
 	} else {
-		MPASS(toep->db[1].job == NULL);
+		MPASS(toep->ddp.db[1].job == NULL);
 		db_idx = 1;
 	}
 
@@ -1751,11 +1754,11 @@ sbcopy:
 		    V_TF_DDP_BUF1_FLUSH(1) | V_TF_DDP_BUF1_VALID(1);
 		buf_flag = DDP_BUF1_ACTIVE;
 	}
-	MPASS((toep->ddp_flags & buf_flag) == 0);
-	if ((toep->ddp_flags & (DDP_BUF0_ACTIVE | DDP_BUF1_ACTIVE)) == 0) {
+	MPASS((toep->ddp.flags & buf_flag) == 0);
+	if ((toep->ddp.flags & (DDP_BUF0_ACTIVE | DDP_BUF1_ACTIVE)) == 0) {
 		MPASS(db_idx == 0);
-		MPASS(toep->ddp_active_id == -1);
-		MPASS(toep->ddp_active_count == 0);
+		MPASS(toep->ddp.active_id == -1);
+		MPASS(toep->ddp.active_count == 0);
 		ddp_flags_mask |= V_TF_DDP_ACTIVE_BUF(1);
 	}
 
@@ -1772,7 +1775,7 @@ sbcopy:
 	if (wr == NULL) {
 		recycle_pageset(toep, ps);
 		aio_ddp_requeue_one(toep, job);
-		toep->ddp_queueing = NULL;
+		toep->ddp.queueing = NULL;
 
 		/*
 		 * XXX: Need a way to kick a retry here.
@@ -1790,7 +1793,7 @@ sbcopy:
 		free_wrqe(wr);
 		recycle_pageset(toep, ps);
 		aio_ddp_cancel_one(job);
-		toep->ddp_queueing = NULL;
+		toep->ddp.queueing = NULL;
 		goto restart;
 	}
 
@@ -1800,18 +1803,18 @@ sbcopy:
 #endif
 	/* Give the chip the go-ahead. */
 	t4_wrq_tx(sc, wr);
-	db = &toep->db[db_idx];
+	db = &toep->ddp.db[db_idx];
 	db->cancel_pending = 0;
 	db->job = job;
 	db->ps = ps;
-	toep->ddp_queueing = NULL;
-	toep->ddp_flags |= buf_flag;
-	toep->ddp_active_count++;
-	if (toep->ddp_active_count == 1) {
-		MPASS(toep->ddp_active_id == -1);
-		toep->ddp_active_id = db_idx;
+	toep->ddp.queueing = NULL;
+	toep->ddp.flags |= buf_flag;
+	toep->ddp.active_count++;
+	if (toep->ddp.active_count == 1) {
+		MPASS(toep->ddp.active_id == -1);
+		toep->ddp.active_id = db_idx;
 		CTR2(KTR_CXGBE, "%s: ddp_active_id = %d", __func__,
-		    toep->ddp_active_id);
+		    toep->ddp.active_id);
 	}
 	goto restart;
 }
@@ -1821,11 +1824,11 @@ ddp_queue_toep(struct toepcb *toep)
 {
 
 	DDP_ASSERT_LOCKED(toep);
-	if (toep->ddp_flags & DDP_TASK_ACTIVE)
+	if (toep->ddp.flags & DDP_TASK_ACTIVE)
 		return;
-	toep->ddp_flags |= DDP_TASK_ACTIVE;
+	toep->ddp.flags |= DDP_TASK_ACTIVE;
 	hold_toepcb(toep);
-	soaio_enqueue(&toep->ddp_requeue_task);
+	soaio_enqueue(&toep->ddp.requeue_task);
 }
 
 static void
@@ -1835,7 +1838,7 @@ aio_ddp_requeue_task(void *context, int pending)
 
 	DDP_LOCK(toep);
 	aio_ddp_requeue(toep);
-	toep->ddp_flags &= ~DDP_TASK_ACTIVE;
+	toep->ddp.flags &= ~DDP_TASK_ACTIVE;
 	DDP_UNLOCK(toep);
 
 	free_toepcb(toep);
@@ -1858,10 +1861,10 @@ t4_aio_cancel_active(struct kaiocb *job)
 		return;
 	}
 
-	for (i = 0; i < nitems(toep->db); i++) {
-		if (toep->db[i].job == job) {
+	for (i = 0; i < nitems(toep->ddp.db); i++) {
+		if (toep->ddp.db[i].job == job) {
 			/* Should only ever get one cancel request for a job. */
-			MPASS(toep->db[i].cancel_pending == 0);
+			MPASS(toep->ddp.db[i].cancel_pending == 0);
 
 			/*
 			 * Invalidate this buffer.  It will be
@@ -1874,7 +1877,7 @@ t4_aio_cancel_active(struct kaiocb *job)
 			    W_TCB_RX_DDP_FLAGS, valid_flag, 0, 1,
 			    i + DDP_BUF0_INVALIDATED,
 			    toep->ofld_rxq->iq.abs_id);
-			toep->db[i].cancel_pending = 1;
+			toep->ddp.db[i].cancel_pending = 1;
 			CTR2(KTR_CXGBE, "%s: request %p marked pending",
 			    __func__, job);
 			break;
@@ -1892,9 +1895,9 @@ t4_aio_cancel_queued(struct kaiocb *job)
 
 	DDP_LOCK(toep);
 	if (!aio_cancel_cleared(job)) {
-		TAILQ_REMOVE(&toep->ddp_aiojobq, job, list);
-		toep->ddp_waiting_count--;
-		if (toep->ddp_waiting_count == 0)
+		TAILQ_REMOVE(&toep->ddp.aiojobq, job, list);
+		toep->ddp.waiting_count--;
+		if (toep->ddp.waiting_count == 0)
 			ddp_queue_toep(toep);
 	}
 	CTR2(KTR_CXGBE, "%s: request %p cancelled", __func__, job);
@@ -1927,9 +1930,9 @@ t4_aio_queue_ddp(struct socket *so, struct kaiocb *job)
 #endif
 	if (!aio_set_cancel_function(job, t4_aio_cancel_queued))
 		panic("new job was cancelled");
-	TAILQ_INSERT_TAIL(&toep->ddp_aiojobq, job, list);
-	toep->ddp_waiting_count++;
-	toep->ddp_flags |= DDP_OK;
+	TAILQ_INSERT_TAIL(&toep->ddp.aiojobq, job, list);
+	toep->ddp.waiting_count++;
+	toep->ddp.flags |= DDP_OK;
 
 	/*
 	 * Try to handle this request synchronously.  If this has

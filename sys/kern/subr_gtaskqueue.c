@@ -48,10 +48,11 @@ __FBSDID("$FreeBSD$");
 #include <sys/unistd.h>
 #include <machine/stdarg.h>
 
-static MALLOC_DEFINE(M_GTASKQUEUE, "taskqueue", "Task Queues");
+static MALLOC_DEFINE(M_GTASKQUEUE, "gtaskqueue", "Group Task Queues");
 static void	gtaskqueue_thread_enqueue(void *);
 static void	gtaskqueue_thread_loop(void *arg);
 
+TASKQGROUP_DEFINE(softirq, mp_ncpus, 1);
 
 struct gtaskqueue_busy {
 	struct gtask	*tb_running;
@@ -100,6 +101,15 @@ struct gtaskqueue {
 	} while (0)
 #define	TQ_ASSERT_UNLOCKED(tq)	mtx_assert(&(tq)->tq_mutex, MA_NOTOWNED)
 
+#ifdef INVARIANTS
+static void
+gtask_dump(struct gtask *gtask)
+{
+	printf("gtask: %p ta_flags=%x ta_priority=%d ta_func=%p ta_context=%p\n",
+	       gtask, gtask->ta_flags, gtask->ta_priority, gtask->ta_func, gtask->ta_context);
+}
+#endif
+
 static __inline int
 TQ_SLEEP(struct gtaskqueue *tq, void *p, struct mtx *m, int pri, const char *wm,
     int t)
@@ -124,8 +134,10 @@ _gtaskqueue_create(const char *name, int mflags,
 	snprintf(tq_name, TASKQUEUE_NAMELEN, "%s", (name) ? name : "taskqueue");
 
 	queue = malloc(sizeof(struct gtaskqueue), M_GTASKQUEUE, mflags | M_ZERO);
-	if (!queue)
+	if (!queue) {
+		free(tq_name, M_GTASKQUEUE);
 		return (NULL);
+	}
 
 	STAILQ_INIT(&queue->tq_queue);
 	TAILQ_INIT(&queue->tq_active);
@@ -173,6 +185,12 @@ gtaskqueue_free(struct gtaskqueue *queue)
 int
 grouptaskqueue_enqueue(struct gtaskqueue *queue, struct gtask *gtask)
 {
+#ifdef INVARIANTS
+	if (queue == NULL) {
+		gtask_dump(gtask);
+		panic("queue == NULL");
+	}
+#endif
 	TQ_LOCK(queue);
 	if (gtask->ta_flags & TASK_ENQUEUED) {
 		TQ_UNLOCK(queue);
@@ -554,7 +572,7 @@ struct taskq_bind_task {
 };
 
 static void
-taskqgroup_cpu_create(struct taskqgroup *qgroup, int idx)
+taskqgroup_cpu_create(struct taskqgroup *qgroup, int idx, int cpu)
 {
 	struct taskqgroup_cpu *qcpu;
 
@@ -564,7 +582,7 @@ taskqgroup_cpu_create(struct taskqgroup *qgroup, int idx)
 	    taskqueue_thread_enqueue, &qcpu->tgc_taskq);
 	gtaskqueue_start_threads(&qcpu->tgc_taskq, 1, PI_SOFT,
 	    "%s_%d", qgroup->tqg_name, idx);
-	qcpu->tgc_cpu = idx * qgroup->tqg_stride;
+	qcpu->tgc_cpu = cpu;
 }
 
 static void
@@ -617,15 +635,40 @@ taskqgroup_find(struct taskqgroup *qgroup, void *uniq)
 	return (idx);
 }
 
+/*
+ * smp_started is unusable since it is not set for UP kernels or even for
+ * SMP kernels when there is 1 CPU.  This is usually handled by adding a
+ * (mp_ncpus == 1) test, but that would be broken here since we need to
+ * to synchronize with the SI_SUB_SMP ordering.  Even in the pure SMP case
+ * smp_started only gives a fuzzy ordering relative to SI_SUB_SMP.
+ *
+ * So maintain our own flag.  It must be set after all CPUs are started
+ * and before SI_SUB_SMP:SI_ORDER_ANY so that the SYSINIT for delayed
+ * adjustment is properly delayed.  SI_ORDER_FOURTH is clearly before
+ * SI_ORDER_ANY and unclearly after the CPUs are started.  It would be
+ * simpler for adjustment to pass a flag indicating if it is delayed.
+ */ 
+
+static int tqg_smp_started;
+
+static void
+tqg_record_smp_started(void *arg)
+{
+	tqg_smp_started = 1;
+}
+
+SYSINIT(tqg_record_smp_started, SI_SUB_SMP, SI_ORDER_FOURTH,
+	tqg_record_smp_started, NULL);
+
 void
 taskqgroup_attach(struct taskqgroup *qgroup, struct grouptask *gtask,
     void *uniq, int irq, char *name)
 {
 	cpuset_t mask;
-	int qid;
+	int qid, error;
 
 	gtask->gt_uniq = uniq;
-	gtask->gt_name = name;
+	snprintf(gtask->gt_name, GROUPTASK_NAMELEN, "%s", name ? name : "grouptask");
 	gtask->gt_irq = irq;
 	gtask->gt_cpu = -1;
 	mtx_lock(&qgroup->tqg_lock);
@@ -633,13 +676,45 @@ taskqgroup_attach(struct taskqgroup *qgroup, struct grouptask *gtask,
 	qgroup->tqg_queue[qid].tgc_cnt++;
 	LIST_INSERT_HEAD(&qgroup->tqg_queue[qid].tgc_tasks, gtask, gt_list);
 	gtask->gt_taskqueue = qgroup->tqg_queue[qid].tgc_taskq;
-	if (irq != -1 && smp_started) {
+	if (irq != -1 && tqg_smp_started) {
+		gtask->gt_cpu = qgroup->tqg_queue[qid].tgc_cpu;
 		CPU_ZERO(&mask);
 		CPU_SET(qgroup->tqg_queue[qid].tgc_cpu, &mask);
 		mtx_unlock(&qgroup->tqg_lock);
-		intr_setaffinity(irq, &mask);
+		error = intr_setaffinity(irq, CPU_WHICH_IRQ, &mask);
+		if (error)
+			printf("%s: setaffinity failed for %s: %d\n", __func__, gtask->gt_name, error);
 	} else
 		mtx_unlock(&qgroup->tqg_lock);
+}
+
+static void
+taskqgroup_attach_deferred(struct taskqgroup *qgroup, struct grouptask *gtask)
+{
+	cpuset_t mask;
+	int qid, cpu, error;
+
+	mtx_lock(&qgroup->tqg_lock);
+	qid = taskqgroup_find(qgroup, gtask->gt_uniq);
+	cpu = qgroup->tqg_queue[qid].tgc_cpu;
+	if (gtask->gt_irq != -1) {
+		mtx_unlock(&qgroup->tqg_lock);
+
+		CPU_ZERO(&mask);
+		CPU_SET(cpu, &mask);
+		error = intr_setaffinity(gtask->gt_irq, CPU_WHICH_IRQ, &mask);
+		mtx_lock(&qgroup->tqg_lock);
+		if (error)
+			printf("%s: %s setaffinity failed: %d\n", __func__, gtask->gt_name, error);
+
+	}
+	qgroup->tqg_queue[qid].tgc_cnt++;
+
+	LIST_INSERT_HEAD(&qgroup->tqg_queue[qid].tgc_tasks, gtask,
+			 gt_list);
+	MPASS(qgroup->tqg_queue[qid].tgc_taskq != NULL);
+	gtask->gt_taskqueue = qgroup->tqg_queue[qid].tgc_taskq;
+	mtx_unlock(&qgroup->tqg_lock);
 }
 
 int
@@ -647,15 +722,15 @@ taskqgroup_attach_cpu(struct taskqgroup *qgroup, struct grouptask *gtask,
 	void *uniq, int cpu, int irq, char *name)
 {
 	cpuset_t mask;
-	int i, qid;
+	int i, qid, error;
 
 	qid = -1;
 	gtask->gt_uniq = uniq;
-	gtask->gt_name = name;
+	snprintf(gtask->gt_name, GROUPTASK_NAMELEN, "%s", name ? name : "grouptask");
 	gtask->gt_irq = irq;
 	gtask->gt_cpu = cpu;
 	mtx_lock(&qgroup->tqg_lock);
-	if (smp_started) {
+	if (tqg_smp_started) {
 		for (i = 0; i < qgroup->tqg_cnt; i++)
 			if (qgroup->tqg_queue[i].tgc_cpu == cpu) {
 				qid = i;
@@ -663,6 +738,7 @@ taskqgroup_attach_cpu(struct taskqgroup *qgroup, struct grouptask *gtask,
 			}
 		if (qid == -1) {
 			mtx_unlock(&qgroup->tqg_lock);
+			printf("%s: qid not found for %s cpu=%d\n", __func__, gtask->gt_name, cpu);
 			return (EINVAL);
 		}
 	} else
@@ -670,13 +746,54 @@ taskqgroup_attach_cpu(struct taskqgroup *qgroup, struct grouptask *gtask,
 	qgroup->tqg_queue[qid].tgc_cnt++;
 	LIST_INSERT_HEAD(&qgroup->tqg_queue[qid].tgc_tasks, gtask, gt_list);
 	gtask->gt_taskqueue = qgroup->tqg_queue[qid].tgc_taskq;
-	if (irq != -1 && smp_started) {
-		CPU_ZERO(&mask);
-		CPU_SET(qgroup->tqg_queue[qid].tgc_cpu, &mask);
+	cpu = qgroup->tqg_queue[qid].tgc_cpu;
+	mtx_unlock(&qgroup->tqg_lock);
+
+	CPU_ZERO(&mask);
+	CPU_SET(cpu, &mask);
+	if (irq != -1 && tqg_smp_started) {
+		error = intr_setaffinity(irq, CPU_WHICH_IRQ, &mask);
+		if (error)
+			printf("%s: setaffinity failed: %d\n", __func__, error);
+	}
+	return (0);
+}
+
+static int
+taskqgroup_attach_cpu_deferred(struct taskqgroup *qgroup, struct grouptask *gtask)
+{
+	cpuset_t mask;
+	int i, qid, irq, cpu, error;
+
+	qid = -1;
+	irq = gtask->gt_irq;
+	cpu = gtask->gt_cpu;
+	MPASS(tqg_smp_started);
+	mtx_lock(&qgroup->tqg_lock);
+	for (i = 0; i < qgroup->tqg_cnt; i++)
+		if (qgroup->tqg_queue[i].tgc_cpu == cpu) {
+			qid = i;
+			break;
+		}
+	if (qid == -1) {
 		mtx_unlock(&qgroup->tqg_lock);
-		intr_setaffinity(irq, &mask);
-	} else
-		mtx_unlock(&qgroup->tqg_lock);
+		printf("%s: qid not found for %s cpu=%d\n", __func__, gtask->gt_name, cpu);
+		return (EINVAL);
+	}
+	qgroup->tqg_queue[qid].tgc_cnt++;
+	LIST_INSERT_HEAD(&qgroup->tqg_queue[qid].tgc_tasks, gtask, gt_list);
+	MPASS(qgroup->tqg_queue[qid].tgc_taskq != NULL);
+	gtask->gt_taskqueue = qgroup->tqg_queue[qid].tgc_taskq;
+	mtx_unlock(&qgroup->tqg_lock);
+
+	CPU_ZERO(&mask);
+	CPU_SET(cpu, &mask);
+
+	if (irq != -1) {
+		error = intr_setaffinity(irq, CPU_WHICH_IRQ, &mask);
+		if (error)
+			printf("%s: setaffinity failed: %d\n", __func__, error);
+	}
 	return (0);
 }
 
@@ -690,7 +807,7 @@ taskqgroup_detach(struct taskqgroup *qgroup, struct grouptask *gtask)
 		if (qgroup->tqg_queue[i].tgc_taskq == gtask->gt_taskqueue)
 			break;
 	if (i == qgroup->tqg_cnt)
-		panic("taskqgroup_detach: task not in group\n");
+		panic("taskqgroup_detach: task %s not in group\n", gtask->gt_name);
 	qgroup->tqg_queue[i].tgc_cnt--;
 	LIST_REMOVE(gtask, gt_list);
 	mtx_unlock(&qgroup->tqg_lock);
@@ -712,7 +829,7 @@ taskqgroup_binder(void *ctx)
 	thread_unlock(curthread);
 
 	if (error)
-		printf("taskqgroup_binder: setaffinity failed: %d\n",
+		printf("%s: setaffinity failed: %d\n", __func__,
 		    error);
 	free(gtask, M_DEVBUF);
 }
@@ -727,8 +844,11 @@ taskqgroup_bind(struct taskqgroup *qgroup)
 	 * Bind taskqueue threads to specific CPUs, if they have been assigned
 	 * one.
 	 */
+	if (qgroup->tqg_cnt == 1)
+		return;
+
 	for (i = 0; i < qgroup->tqg_cnt; i++) {
-		gtask = malloc(sizeof (*gtask), M_DEVBUF, M_NOWAIT);
+		gtask = malloc(sizeof (*gtask), M_DEVBUF, M_WAITOK);
 		GTASK_INIT(&gtask->bt_task, 0, 0, taskqgroup_binder, gtask);
 		gtask->bt_cpuid = qgroup->tqg_queue[i].tgc_cpu;
 		grouptaskqueue_enqueue(qgroup->tqg_queue[i].tgc_taskq,
@@ -740,23 +860,26 @@ static int
 _taskqgroup_adjust(struct taskqgroup *qgroup, int cnt, int stride)
 {
 	LIST_HEAD(, grouptask) gtask_head = LIST_HEAD_INITIALIZER(NULL);
-	cpuset_t mask;
 	struct grouptask *gtask;
-	int i, k, old_cnt, qid, cpu;
+	int i, k, old_cnt, old_cpu, cpu;
 
 	mtx_assert(&qgroup->tqg_lock, MA_OWNED);
 
-	if (cnt < 1 || cnt * stride > mp_ncpus || !smp_started) {
-		printf("taskqgroup_adjust failed cnt: %d stride: %d mp_ncpus: %d smp_started: %d\n",
-			   cnt, stride, mp_ncpus, smp_started);
+	if (cnt < 1 || cnt * stride > mp_ncpus || !tqg_smp_started) {
+		printf("%s: failed cnt: %d stride: %d "
+		    "mp_ncpus: %d tqg_smp_started: %d\n",
+		    __func__, cnt, stride, mp_ncpus, tqg_smp_started);
 		return (EINVAL);
 	}
 	if (qgroup->tqg_adjusting) {
-		printf("taskqgroup_adjust failed: adjusting\n");
+		printf("%s failed: adjusting\n", __func__);
 		return (EBUSY);
 	}
 	qgroup->tqg_adjusting = 1;
 	old_cnt = qgroup->tqg_cnt;
+	old_cpu = 0;
+	if (old_cnt < cnt)
+		old_cpu = qgroup->tqg_queue[old_cnt].tgc_cpu;
 	mtx_unlock(&qgroup->tqg_lock);
 	/*
 	 * Set up queue for tasks added before boot.
@@ -770,8 +893,13 @@ _taskqgroup_adjust(struct taskqgroup *qgroup, int cnt, int stride)
 	/*
 	 * If new taskq threads have been added.
 	 */
-	for (i = old_cnt; i < cnt; i++)
-		taskqgroup_cpu_create(qgroup, i);
+	cpu = old_cpu;
+	for (i = old_cnt; i < cnt; i++) {
+		taskqgroup_cpu_create(qgroup, i, cpu);
+
+		for (k = 0; k < stride; k++)
+			cpu = CPU_NEXT(cpu);
+	}
 	mtx_lock(&qgroup->tqg_lock);
 	qgroup->tqg_cnt = cnt;
 	qgroup->tqg_stride = stride;
@@ -786,62 +914,46 @@ _taskqgroup_adjust(struct taskqgroup *qgroup, int cnt, int stride)
 			LIST_INSERT_HEAD(&gtask_head, gtask, gt_list);
 		}
 	}
+	mtx_unlock(&qgroup->tqg_lock);
 
 	while ((gtask = LIST_FIRST(&gtask_head))) {
 		LIST_REMOVE(gtask, gt_list);
 		if (gtask->gt_cpu == -1)
-			qid = taskqgroup_find(qgroup, gtask->gt_uniq);
-		else {
-			for (i = 0; i < qgroup->tqg_cnt; i++)
-				if (qgroup->tqg_queue[i].tgc_cpu == gtask->gt_cpu) {
-					qid = i;
-					break;
-				}
-		}
-		qgroup->tqg_queue[qid].tgc_cnt++;
-		LIST_INSERT_HEAD(&qgroup->tqg_queue[qid].tgc_tasks, gtask,
-		    gt_list);
-		gtask->gt_taskqueue = qgroup->tqg_queue[qid].tgc_taskq;
+			taskqgroup_attach_deferred(qgroup, gtask);
+		else if (taskqgroup_attach_cpu_deferred(qgroup, gtask))
+			taskqgroup_attach_deferred(qgroup, gtask);
 	}
-	/*
-	 * Set new CPU and IRQ affinity
-	 */
-	cpu = CPU_FIRST();
-	for (i = 0; i < cnt; i++) {
-		qgroup->tqg_queue[i].tgc_cpu = cpu;
-		for (k = 0; k < qgroup->tqg_stride; k++)
-			cpu = CPU_NEXT(cpu);
-		CPU_ZERO(&mask);
-		CPU_SET(qgroup->tqg_queue[i].tgc_cpu, &mask);
-		LIST_FOREACH(gtask, &qgroup->tqg_queue[i].tgc_tasks, gt_list) {
-			if (gtask->gt_irq == -1)
-				continue;
-			intr_setaffinity(gtask->gt_irq, &mask);
-		}
+
+#ifdef INVARIANTS
+	mtx_lock(&qgroup->tqg_lock);
+	for (i = 0; i < qgroup->tqg_cnt; i++) {
+		MPASS(qgroup->tqg_queue[i].tgc_taskq != NULL);
+		LIST_FOREACH(gtask, &qgroup->tqg_queue[i].tgc_tasks, gt_list)
+			MPASS(gtask->gt_taskqueue != NULL);
 	}
 	mtx_unlock(&qgroup->tqg_lock);
-
+#endif
 	/*
 	 * If taskq thread count has been reduced.
 	 */
 	for (i = cnt; i < old_cnt; i++)
 		taskqgroup_cpu_remove(qgroup, i);
 
+	taskqgroup_bind(qgroup);
+
 	mtx_lock(&qgroup->tqg_lock);
 	qgroup->tqg_adjusting = 0;
-
-	taskqgroup_bind(qgroup);
 
 	return (0);
 }
 
 int
-taskqgroup_adjust(struct taskqgroup *qgroup, int cpu, int stride)
+taskqgroup_adjust(struct taskqgroup *qgroup, int cnt, int stride)
 {
 	int error;
 
 	mtx_lock(&qgroup->tqg_lock);
-	error = _taskqgroup_adjust(qgroup, cpu, stride);
+	error = _taskqgroup_adjust(qgroup, cnt, stride);
 	mtx_unlock(&qgroup->tqg_lock);
 
 	return (error);

@@ -18,6 +18,7 @@
 #include "lldb/API/SBTarget.h"
 #include "lldb/API/SBThread.h"
 #include "lldb/API/SBUnixSignals.h"
+#include "llvm/Support/Compiler.h"
 #ifdef _WIN32
 #include <io.h> // For the ::_access()
 #else
@@ -39,6 +40,8 @@
 #include "MIDriver.h"
 #include "MIUtilDebug.h"
 #include "Platform.h" // for PATH_MAX
+
+#include <algorithm>
 
 //++
 //------------------------------------------------------------------------------------
@@ -258,6 +261,10 @@ bool CMICmnLLDBDebuggerHandleEvents::HandleEventSBBreakPoint(
     break;
   case lldb::eBreakpointEventTypeIgnoreChanged:
     pEventType = "eBreakpointEventTypeIgnoreChanged";
+    bOk = HandleEventSBBreakpointCmn(vEvent);
+    break;
+  case lldb::eBreakpointEventTypeAutoContinueChanged:
+    pEventType = "eBreakpointEventTypeAutoContinueChanged";
     bOk = HandleEventSBBreakpointCmn(vEvent);
     break;
   }
@@ -893,6 +900,7 @@ bool CMICmnLLDBDebuggerHandleEvents::HandleProcessEventBroadcastBitStateChanged(
     bOk = HandleProcessEventStateStopped(vEvent, bShouldBrk);
     if (bShouldBrk)
       break;
+    LLVM_FALLTHROUGH;
   case lldb::eStateCrashed:
   case lldb::eStateSuspended:
     pEventType = "eStateSuspended";

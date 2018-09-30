@@ -7,34 +7,38 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "MCTargetDesc/SystemZMCTargetDesc.h"
 #include "MCTargetDesc/SystemZMCFixups.h"
+#include "MCTargetDesc/SystemZMCTargetDesc.h"
+#include "llvm/BinaryFormat/ELF.h"
 #include "llvm/MC/MCELFObjectWriter.h"
 #include "llvm/MC/MCExpr.h"
+#include "llvm/MC/MCFixup.h"
+#include "llvm/MC/MCObjectWriter.h"
 #include "llvm/MC/MCValue.h"
+#include "llvm/Support/ErrorHandling.h"
+#include <cassert>
+#include <cstdint>
 
 using namespace llvm;
 
 namespace {
+
 class SystemZObjectWriter : public MCELFObjectTargetWriter {
 public:
   SystemZObjectWriter(uint8_t OSABI);
-
-  ~SystemZObjectWriter() override;
+  ~SystemZObjectWriter() override = default;
 
 protected:
   // Override MCELFObjectTargetWriter.
   unsigned getRelocType(MCContext &Ctx, const MCValue &Target,
                         const MCFixup &Fixup, bool IsPCRel) const override;
 };
+
 } // end anonymous namespace
 
 SystemZObjectWriter::SystemZObjectWriter(uint8_t OSABI)
   : MCELFObjectTargetWriter(/*Is64Bit=*/true, OSABI, ELF::EM_S390,
                             /*HasRelocationAddend=*/ true) {}
-
-SystemZObjectWriter::~SystemZObjectWriter() {
-}
 
 // Return the relocation type for an absolute value of MCFixupKind Kind.
 static unsigned getAbsoluteReloc(unsigned Kind) {
@@ -157,8 +161,8 @@ unsigned SystemZObjectWriter::getRelocType(MCContext &Ctx,
   }
 }
 
-MCObjectWriter *llvm::createSystemZObjectWriter(raw_pwrite_stream &OS,
-                                                uint8_t OSABI) {
-  MCELFObjectTargetWriter *MOTW = new SystemZObjectWriter(OSABI);
-  return createELFObjectWriter(MOTW, OS, /*IsLittleEndian=*/false);
+std::unique_ptr<MCObjectWriter>
+llvm::createSystemZObjectWriter(raw_pwrite_stream &OS, uint8_t OSABI) {
+  return createELFObjectWriter(llvm::make_unique<SystemZObjectWriter>(OSABI),
+                               OS, /*IsLittleEndian=*/false);
 }

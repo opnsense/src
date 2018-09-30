@@ -12,18 +12,18 @@
 // Other libraries and framework includes
 // Project includes
 #include "lldb/Target/RegisterContext.h"
-#include "lldb/Core/DataExtractor.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/RegisterValue.h"
 #include "lldb/Core/Scalar.h"
 #include "lldb/Core/Value.h"
 #include "lldb/Expression/DWARFExpression.h"
-#include "lldb/Host/Endian.h"
 #include "lldb/Target/ExecutionContext.h"
 #include "lldb/Target/Process.h"
 #include "lldb/Target/StackFrame.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Target/Thread.h"
+#include "lldb/Utility/DataExtractor.h"
+#include "lldb/Utility/Endian.h"
 
 using namespace lldb;
 using namespace lldb_private;
@@ -91,12 +91,11 @@ RegisterContext::UpdateDynamicRegisterSize(const lldb_private::ArchSpec &arch,
   DWARFExpression dwarf_expr(opcode_ctx, dwarf_data, nullptr, 0,
                              dwarf_opcode_len);
   Value result;
-  Error error;
+  Status error;
   const lldb::offset_t offset = 0;
-  if (dwarf_expr.Evaluate(&exe_ctx, nullptr, nullptr, this, opcode_ctx,
-                          dwarf_data, nullptr, offset, dwarf_opcode_len,
-                          eRegisterKindDWARF, nullptr, nullptr, result,
-                          &error)) {
+  if (dwarf_expr.Evaluate(&exe_ctx, this, opcode_ctx, dwarf_data, nullptr,
+                          offset, dwarf_opcode_len, eRegisterKindDWARF, nullptr,
+                          nullptr, result, &error)) {
     expr_result = result.GetScalar().SInt(-1);
     switch (expr_result) {
     case 0:
@@ -299,11 +298,10 @@ bool RegisterContext::ClearHardwareWatchpoint(uint32_t hw_index) {
 
 bool RegisterContext::HardwareSingleStep(bool enable) { return false; }
 
-Error RegisterContext::ReadRegisterValueFromMemory(const RegisterInfo *reg_info,
-                                                   lldb::addr_t src_addr,
-                                                   uint32_t src_len,
-                                                   RegisterValue &reg_value) {
-  Error error;
+Status RegisterContext::ReadRegisterValueFromMemory(
+    const RegisterInfo *reg_info, lldb::addr_t src_addr, uint32_t src_len,
+    RegisterValue &reg_value) {
+  Status error;
   if (reg_info == nullptr) {
     error.SetErrorString("invalid register info argument.");
     return error;
@@ -318,7 +316,7 @@ Error RegisterContext::ReadRegisterValueFromMemory(const RegisterInfo *reg_info,
   //
   // Case 2: src_len > dst_len
   //
-  //   Error!  (The register should always be big enough to hold the data)
+  //   Status!  (The register should always be big enough to hold the data)
   //
   // Case 3: src_len < dst_len
   //
@@ -371,12 +369,12 @@ Error RegisterContext::ReadRegisterValueFromMemory(const RegisterInfo *reg_info,
   return error;
 }
 
-Error RegisterContext::WriteRegisterValueToMemory(
+Status RegisterContext::WriteRegisterValueToMemory(
     const RegisterInfo *reg_info, lldb::addr_t dst_addr, uint32_t dst_len,
     const RegisterValue &reg_value) {
   uint8_t dst[RegisterValue::kMaxRegisterByteSize];
 
-  Error error;
+  Status error;
 
   ProcessSP process_sp(m_thread.GetProcess());
   if (process_sp) {
@@ -458,132 +456,3 @@ bool RegisterContext::ConvertBetweenRegisterKinds(lldb::RegisterKind source_rk,
   }
   return false;
 }
-
-// bool
-// RegisterContext::ReadRegisterValue (uint32_t reg, Scalar &value)
-//{
-//    DataExtractor data;
-//    if (!ReadRegisterBytes (reg, data))
-//        return false;
-//
-//    const RegisterInfo *reg_info = GetRegisterInfoAtIndex (reg);
-//    uint32_t offset = 0;
-//    switch (reg_info->encoding)
-//    {
-//    case eEncodingInvalid:
-//    case eEncodingVector:
-//        break;
-//
-//    case eEncodingUint:
-//        switch (reg_info->byte_size)
-//        {
-//        case 1:
-//            {
-//                value = data.GetU8 (&offset);
-//                return true;
-//            }
-//        case 2:
-//            {
-//                value = data.GetU16 (&offset);
-//                return true;
-//            }
-//        case 4:
-//            {
-//                value = data.GetU32 (&offset);
-//                return true;
-//            }
-//        case 8:
-//            {
-//                value = data.GetU64 (&offset);
-//                return true;
-//            }
-//        }
-//        break;
-//    case eEncodingSint:
-//        switch (reg_info->byte_size)
-//        {
-//        case 1:
-//            {
-//                int8_t v;
-//                if (data.ExtractBytes (0, sizeof (int8_t),
-//                endian::InlHostByteOrder(), &v) != sizeof (int8_t))
-//                    return false;
-//                value = v;
-//                return true;
-//            }
-//        case 2:
-//            {
-//                int16_t v;
-//                if (data.ExtractBytes (0, sizeof (int16_t),
-//                endian::InlHostByteOrder(), &v) != sizeof (int16_t))
-//                    return false;
-//                value = v;
-//                return true;
-//            }
-//        case 4:
-//            {
-//                int32_t v;
-//                if (data.ExtractBytes (0, sizeof (int32_t),
-//                endian::InlHostByteOrder(), &v) != sizeof (int32_t))
-//                    return false;
-//                value = v;
-//                return true;
-//            }
-//        case 8:
-//            {
-//                int64_t v;
-//                if (data.ExtractBytes (0, sizeof (int64_t),
-//                endian::InlHostByteOrder(), &v) != sizeof (int64_t))
-//                    return false;
-//                value = v;
-//                return true;
-//            }
-//        }
-//        break;
-//    case eEncodingIEEE754:
-//        switch (reg_info->byte_size)
-//        {
-//        case sizeof (float):
-//            {
-//                float v;
-//                if (data.ExtractBytes (0, sizeof (float),
-//                endian::InlHostByteOrder(), &v) != sizeof (float))
-//                    return false;
-//                value = v;
-//                return true;
-//            }
-//        case sizeof (double):
-//            {
-//                double v;
-//                if (data.ExtractBytes (0, sizeof (double),
-//                endian::InlHostByteOrder(), &v) != sizeof (double))
-//                    return false;
-//                value = v;
-//                return true;
-//            }
-//        case sizeof (long double):
-//            {
-//                double v;
-//                if (data.ExtractBytes (0, sizeof (long double),
-//                endian::InlHostByteOrder(), &v) != sizeof (long double))
-//                    return false;
-//                value = v;
-//                return true;
-//            }
-//        }
-//        break;
-//    }
-//    return false;
-//}
-//
-// bool
-// RegisterContext::WriteRegisterValue (uint32_t reg, const Scalar &value)
-//{
-//    DataExtractor data;
-//    if (!value.IsValid())
-//        return false;
-//    if (!value.GetData (data))
-//        return false;
-//
-//    return WriteRegisterBytes (reg, data);
-//}

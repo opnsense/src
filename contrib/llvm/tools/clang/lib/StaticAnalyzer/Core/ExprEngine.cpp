@@ -17,6 +17,7 @@
 #include "PrettyStackTraceLocationContext.h"
 #include "clang/AST/CharUnits.h"
 #include "clang/AST/ParentMap.h"
+#include "clang/Analysis/CFGStmtMap.h"
 #include "clang/AST/StmtCXX.h"
 #include "clang/AST/StmtObjC.h"
 #include "clang/Basic/Builtins.h"
@@ -27,6 +28,7 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/AnalysisManager.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CallEvent.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/LoopWidening.h"
+#include "clang/StaticAnalyzer/Core/PathSensitive/LoopUnrolling.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Support/SaveAndRestore.h"
 #include "llvm/Support/raw_ostream.h"
@@ -182,19 +184,25 @@ ProgramStateRef ExprEngine::getInitialState(const LocationContext *InitLoc) {
 ProgramStateRef
 ExprEngine::createTemporaryRegionIfNeeded(ProgramStateRef State,
                                           const LocationContext *LC,
-                                          const Expr *Ex,
+                                          const Expr *InitWithAdjustments,
                                           const Expr *Result) {
-  SVal V = State->getSVal(Ex, LC);
+  // FIXME: This function is a hack that works around the quirky AST
+  // we're often having with respect to C++ temporaries. If only we modelled
+  // the actual execution order of statements properly in the CFG,
+  // all the hassle with adjustments would not be necessary,
+  // and perhaps the whole function would be removed.
+  SVal InitValWithAdjustments = State->getSVal(InitWithAdjustments, LC);
   if (!Result) {
     // If we don't have an explicit result expression, we're in "if needed"
     // mode. Only create a region if the current value is a NonLoc.
-    if (!V.getAs<NonLoc>())
+    if (!InitValWithAdjustments.getAs<NonLoc>())
       return State;
-    Result = Ex;
+    Result = InitWithAdjustments;
   } else {
     // We need to create a region no matter what. For sanity, make sure we don't
     // try to stuff a Loc into a non-pointer temporary region.
-    assert(!V.getAs<Loc>() || Loc::isLocType(Result->getType()) ||
+    assert(!InitValWithAdjustments.getAs<Loc>() ||
+           Loc::isLocType(Result->getType()) ||
            Result->getType()->isMemberPointerType());
   }
 
@@ -226,7 +234,8 @@ ExprEngine::createTemporaryRegionIfNeeded(ProgramStateRef State,
   SmallVector<const Expr *, 2> CommaLHSs;
   SmallVector<SubobjectAdjustment, 2> Adjustments;
 
-  const Expr *Init = Ex->skipRValueSubobjectAdjustments(CommaLHSs, Adjustments);
+  const Expr *Init = InitWithAdjustments->skipRValueSubobjectAdjustments(
+      CommaLHSs, Adjustments);
 
   const TypedValueRegion *TR = nullptr;
   if (const MaterializeTemporaryExpr *MT =
@@ -241,6 +250,7 @@ ExprEngine::createTemporaryRegionIfNeeded(ProgramStateRef State,
     TR = MRMgr.getCXXTempObjectRegion(Init, LC);
 
   SVal Reg = loc::MemRegionVal(TR);
+  SVal BaseReg = Reg;
 
   // Make the necessary adjustments to obtain the sub-object.
   for (auto I = Adjustments.rbegin(), E = Adjustments.rend(); I != E; ++I) {
@@ -254,19 +264,47 @@ ExprEngine::createTemporaryRegionIfNeeded(ProgramStateRef State,
       break;
     case SubobjectAdjustment::MemberPointerAdjustment:
       // FIXME: Unimplemented.
-      State->bindDefault(Reg, UnknownVal());
+      State = State->bindDefault(Reg, UnknownVal(), LC);
       return State;
     }
   }
 
-  // Try to recover some path sensitivity in case we couldn't compute the value.
-  if (V.isUnknown())
-    V = getSValBuilder().conjureSymbolVal(Result, LC, TR->getValueType(),
-                                          currBldrCtx->blockCount());
-  // Bind the value of the expression to the sub-object region, and then bind
-  // the sub-object region to our expression.
-  State = State->bindLoc(Reg, V);
+  // What remains is to copy the value of the object to the new region.
+  // FIXME: In other words, what we should always do is copy value of the
+  // Init expression (which corresponds to the bigger object) to the whole
+  // temporary region TR. However, this value is often no longer present
+  // in the Environment. If it has disappeared, we instead invalidate TR.
+  // Still, what we can do is assign the value of expression Ex (which
+  // corresponds to the sub-object) to the TR's sub-region Reg. At least,
+  // values inside Reg would be correct.
+  SVal InitVal = State->getSVal(Init, LC);
+  if (InitVal.isUnknown()) {
+    InitVal = getSValBuilder().conjureSymbolVal(Result, LC, Init->getType(),
+                                                currBldrCtx->blockCount());
+    State = State->bindLoc(BaseReg.castAs<Loc>(), InitVal, LC, false);
+
+    // Then we'd need to take the value that certainly exists and bind it over.
+    if (InitValWithAdjustments.isUnknown()) {
+      // Try to recover some path sensitivity in case we couldn't
+      // compute the value.
+      InitValWithAdjustments = getSValBuilder().conjureSymbolVal(
+          Result, LC, InitWithAdjustments->getType(),
+          currBldrCtx->blockCount());
+    }
+    State =
+        State->bindLoc(Reg.castAs<Loc>(), InitValWithAdjustments, LC, false);
+  } else {
+    State = State->bindLoc(BaseReg.castAs<Loc>(), InitVal, LC, false);
+  }
+
+  // The result expression would now point to the correct sub-region of the
+  // newly created temporary region. Do this last in order to getSVal of Init
+  // correctly in case (Result == Init).
   State = State->BindExpr(Result, LC, Reg);
+
+  // Notify checkers once for two bindLoc()s.
+  State = processRegionChange(State, TR, LC);
+
   return State;
 }
 
@@ -286,9 +324,11 @@ ExprEngine::processRegionChanges(ProgramStateRef state,
                                  const InvalidatedSymbols *invalidated,
                                  ArrayRef<const MemRegion *> Explicits,
                                  ArrayRef<const MemRegion *> Regions,
+                                 const LocationContext *LCtx,
                                  const CallEvent *Call) {
   return getCheckerManager().runCheckersForRegionChanges(state, invalidated,
-                                                      Explicits, Regions, Call);
+                                                         Explicits, Regions,
+                                                         LCtx, Call);
 }
 
 void ExprEngine::printState(raw_ostream &Out, ProgramStateRef State,
@@ -323,6 +363,11 @@ void ExprEngine::processCFGElement(const CFGElement E, ExplodedNode *Pred,
     case CFGElement::MemberDtor:
     case CFGElement::TemporaryDtor:
       ProcessImplicitDtor(E.castAs<CFGImplicitDtor>(), Pred);
+      return;
+    case CFGElement::LoopExit:
+      ProcessLoopExit(E.castAs<CFGLoopExit>().getLoopStmt(), Pred);
+      return;
+    case CFGElement::LifetimeEnds:
       return;
   }
 }
@@ -463,6 +508,24 @@ void ExprEngine::ProcessStmt(const CFGStmt S,
     Dst.insert(DstI);
   }
 
+  // Enqueue the new nodes onto the work list.
+  Engine.enqueue(Dst, currBldrCtx->getBlock(), currStmtIdx);
+}
+
+void ExprEngine::ProcessLoopExit(const Stmt* S, ExplodedNode *Pred) {
+  PrettyStackTraceLoc CrashInfo(getContext().getSourceManager(),
+                                S->getLocStart(),
+                                "Error evaluating end of the loop");
+  ExplodedNodeSet Dst;
+  Dst.Add(Pred);
+  NodeBuilder Bldr(Pred, Dst, *currBldrCtx);
+  ProgramStateRef NewState = Pred->getState();
+
+  if(AMgr.options.shouldUnrollLoops())
+    NewState = processLoopEnd(S, NewState);
+
+  LoopExit PP(S, Pred->getLocationContext());
+  Bldr.generateNode(PP, NewState, Pred);
   // Enqueue the new nodes onto the work list.
   Engine.enqueue(Dst, currBldrCtx->getBlock(), currStmtIdx);
 }
@@ -613,7 +676,15 @@ void ExprEngine::ProcessAutomaticObjDtor(const CFGAutomaticObjDtor Dtor,
   const MemRegion *Region = dest.castAs<loc::MemRegionVal>().getRegion();
 
   if (varType->isReferenceType()) {
-    Region = state->getSVal(Region).getAsRegion()->getBaseRegion();
+    const MemRegion *ValueRegion = state->getSVal(Region).getAsRegion();
+    if (!ValueRegion) {
+      // FIXME: This should not happen. The language guarantees a presence
+      // of a valid initializer here, so the reference shall not be undefined.
+      // It seems that we're calling destructors over variables that
+      // were not initialized yet.
+      return;
+    }
+    Region = ValueRegion->getBaseRegion();
     varType = cast<TypedValueRegion>(Region)->getValueType();
   }
 
@@ -756,6 +827,21 @@ void ExprEngine::VisitCXXBindTemporaryExpr(const CXXBindTemporaryExpr *BTE,
   }
 }
 
+namespace {
+class CollectReachableSymbolsCallback final : public SymbolVisitor {
+  InvalidatedSymbols Symbols;
+
+public:
+  explicit CollectReachableSymbolsCallback(ProgramStateRef State) {}
+  const InvalidatedSymbols &getSymbols() const { return Symbols; }
+
+  bool VisitSymbol(SymbolRef Sym) override {
+    Symbols.insert(Sym);
+    return true;
+  }
+};
+} // end anonymous namespace
+
 void ExprEngine::Visit(const Stmt *S, ExplodedNode *Pred,
                        ExplodedNodeSet &DstTop) {
   PrettyStackTraceLoc CrashInfo(getContext().getSourceManager(),
@@ -767,7 +853,7 @@ void ExprEngine::Visit(const Stmt *S, ExplodedNode *Pred,
   assert(!isa<Expr>(S) || S == cast<Expr>(S)->IgnoreParens());
 
   switch (S->getStmtClass()) {
-    // C++ and ARC stuff we don't support yet.
+    // C++, OpenMP and ARC stuff we don't support yet.
     case Expr::ObjCIndirectCopyRestoreExprClass:
     case Stmt::CXXDependentScopeMemberExprClass:
     case Stmt::CXXInheritedCtorInitExprClass:
@@ -790,41 +876,13 @@ void ExprEngine::Visit(const Stmt *S, ExplodedNode *Pred,
     case Stmt::FunctionParmPackExprClass:
     case Stmt::CoroutineBodyStmtClass:
     case Stmt::CoawaitExprClass:
+    case Stmt::DependentCoawaitExprClass:
     case Stmt::CoreturnStmtClass:
     case Stmt::CoyieldExprClass:
     case Stmt::SEHTryStmtClass:
     case Stmt::SEHExceptStmtClass:
     case Stmt::SEHLeaveStmtClass:
-    case Stmt::SEHFinallyStmtClass: {
-      const ExplodedNode *node = Bldr.generateSink(S, Pred, Pred->getState());
-      Engine.addAbortedBlock(node, currBldrCtx->getBlock());
-      break;
-    }
-
-    case Stmt::ParenExprClass:
-      llvm_unreachable("ParenExprs already handled.");
-    case Stmt::GenericSelectionExprClass:
-      llvm_unreachable("GenericSelectionExprs already handled.");
-    // Cases that should never be evaluated simply because they shouldn't
-    // appear in the CFG.
-    case Stmt::BreakStmtClass:
-    case Stmt::CaseStmtClass:
-    case Stmt::CompoundStmtClass:
-    case Stmt::ContinueStmtClass:
-    case Stmt::CXXForRangeStmtClass:
-    case Stmt::DefaultStmtClass:
-    case Stmt::DoStmtClass:
-    case Stmt::ForStmtClass:
-    case Stmt::GotoStmtClass:
-    case Stmt::IfStmtClass:
-    case Stmt::IndirectGotoStmtClass:
-    case Stmt::LabelStmtClass:
-    case Stmt::NoStmtClass:
-    case Stmt::NullStmtClass:
-    case Stmt::SwitchStmtClass:
-    case Stmt::WhileStmtClass:
-    case Expr::MSDependentExistsStmtClass:
-    case Stmt::CapturedStmtClass:
+    case Stmt::SEHFinallyStmtClass:
     case Stmt::OMPParallelDirectiveClass:
     case Stmt::OMPSimdDirectiveClass:
     case Stmt::OMPForDirectiveClass:
@@ -872,6 +930,36 @@ void ExprEngine::Visit(const Stmt *S, ExplodedNode *Pred,
     case Stmt::OMPTargetTeamsDistributeParallelForDirectiveClass:
     case Stmt::OMPTargetTeamsDistributeParallelForSimdDirectiveClass:
     case Stmt::OMPTargetTeamsDistributeSimdDirectiveClass:
+    case Stmt::CapturedStmtClass:
+    {
+      const ExplodedNode *node = Bldr.generateSink(S, Pred, Pred->getState());
+      Engine.addAbortedBlock(node, currBldrCtx->getBlock());
+      break;
+    }
+
+    case Stmt::ParenExprClass:
+      llvm_unreachable("ParenExprs already handled.");
+    case Stmt::GenericSelectionExprClass:
+      llvm_unreachable("GenericSelectionExprs already handled.");
+    // Cases that should never be evaluated simply because they shouldn't
+    // appear in the CFG.
+    case Stmt::BreakStmtClass:
+    case Stmt::CaseStmtClass:
+    case Stmt::CompoundStmtClass:
+    case Stmt::ContinueStmtClass:
+    case Stmt::CXXForRangeStmtClass:
+    case Stmt::DefaultStmtClass:
+    case Stmt::DoStmtClass:
+    case Stmt::ForStmtClass:
+    case Stmt::GotoStmtClass:
+    case Stmt::IfStmtClass:
+    case Stmt::IndirectGotoStmtClass:
+    case Stmt::LabelStmtClass:
+    case Stmt::NoStmtClass:
+    case Stmt::NullStmtClass:
+    case Stmt::SwitchStmtClass:
+    case Stmt::WhileStmtClass:
+    case Expr::MSDependentExistsStmtClass:
       llvm_unreachable("Stmt should not be in analyzer evaluation loop");
 
     case Stmt::ObjCSubscriptRefExprClass:
@@ -1030,8 +1118,29 @@ void ExprEngine::Visit(const Stmt *S, ExplodedNode *Pred,
         SVal result = svalBuilder.conjureSymbolVal(nullptr, Ex, LCtx,
                                                    resultType,
                                                    currBldrCtx->blockCount());
-        ProgramStateRef state = N->getState()->BindExpr(Ex, LCtx, result);
-        Bldr2.generateNode(S, N, state);
+        ProgramStateRef State = N->getState()->BindExpr(Ex, LCtx, result);
+
+        // Escape pointers passed into the list, unless it's an ObjC boxed
+        // expression which is not a boxable C structure.
+        if (!(isa<ObjCBoxedExpr>(Ex) &&
+              !cast<ObjCBoxedExpr>(Ex)->getSubExpr()
+                                      ->getType()->isRecordType()))
+          for (auto Child : Ex->children()) {
+            assert(Child);
+
+            SVal Val = State->getSVal(Child, LCtx);
+
+            CollectReachableSymbolsCallback Scanner =
+                State->scanReachableSymbols<CollectReachableSymbolsCallback>(
+                    Val);
+            const InvalidatedSymbols &EscapedSymbols = Scanner.getSymbols();
+
+            State = getCheckerManager().runCheckersForPointerEscape(
+                State, EscapedSymbols,
+                /*CallEvent*/ nullptr, PSK_EscapeOther, nullptr);
+          }
+
+        Bldr2.generateNode(S, N, State);
       }
 
       getCheckerManager().runCheckersForPostStmt(Dst, Tmp, S, *this);
@@ -1041,7 +1150,7 @@ void ExprEngine::Visit(const Stmt *S, ExplodedNode *Pred,
 
     case Stmt::ArraySubscriptExprClass:
       Bldr.takeNodes(Pred);
-      VisitLvalArraySubscriptExpr(cast<ArraySubscriptExpr>(S), Pred, Dst);
+      VisitArraySubscriptExpr(cast<ArraySubscriptExpr>(S), Pred, Dst);
       Bldr.addNodes(Dst);
       break;
 
@@ -1128,6 +1237,7 @@ void ExprEngine::Visit(const Stmt *S, ExplodedNode *Pred,
         }
       }
       // FALLTHROUGH
+      LLVM_FALLTHROUGH;
     }
     case Stmt::CallExprClass:
     case Stmt::CXXMemberCallExprClass:
@@ -1446,6 +1556,25 @@ void ExprEngine::processCFGBlockEntrance(const BlockEdge &L,
                                          NodeBuilderWithSinks &nodeBuilder,
                                          ExplodedNode *Pred) {
   PrettyStackTraceLocationContext CrashInfo(Pred->getLocationContext());
+  // If we reach a loop which has a known bound (and meets
+  // other constraints) then consider completely unrolling it.
+  if(AMgr.options.shouldUnrollLoops()) {
+    unsigned maxBlockVisitOnPath = AMgr.options.maxBlockVisitOnPath;
+    const Stmt *Term = nodeBuilder.getContext().getBlock()->getTerminator();
+    if (Term) {
+      ProgramStateRef NewState = updateLoopStack(Term, AMgr.getASTContext(),
+                                                 Pred, maxBlockVisitOnPath);
+      if (NewState != Pred->getState()) {
+        ExplodedNode *UpdatedNode = nodeBuilder.generateNode(NewState, Pred);
+        if (!UpdatedNode)
+          return;
+        Pred = UpdatedNode;
+      }
+    }
+    // Is we are inside an unrolled loop then no need the check the counters.
+    if(isUnrolledState(Pred->getState()))
+      return;
+  }
 
   // If this block is terminated by a loop and it has already been visited the
   // maximum number of times, widen the loop.
@@ -1856,8 +1985,8 @@ void ExprEngine::processSwitch(SwitchNodeBuilder& builder) {
 
     // Evaluate the LHS of the case value.
     llvm::APSInt V1 = Case->getLHS()->EvaluateKnownConstInt(getContext());
-    assert(V1.getBitWidth() == getContext().getTypeSize(CondE->getType()));
-
+    assert(V1.getBitWidth() == getContext().getIntWidth(CondE->getType()));
+    
     // Get the RHS of the case, if it exists.
     llvm::APSInt V2;
     if (const Expr *E = Case->getRHS())
@@ -1979,10 +2108,12 @@ void ExprEngine::VisitCommonDeclRefExpr(const Expr *Ex, const NamedDecl *D,
                       ProgramPoint::PostLValueKind);
     return;
   }
-  if (isa<FieldDecl>(D)) {
+  if (isa<FieldDecl>(D) || isa<IndirectFieldDecl>(D)) {
     // FIXME: Compute lvalue of field pointers-to-member.
     // Right now we just use a non-null void pointer, so that it gives proper
     // results in boolean contexts.
+    // FIXME: Maybe delegate this to the surrounding operator&.
+    // Note how this expression is lvalue, however pointer-to-member is NonLoc.
     SVal V = svalBuilder.conjureSymbolVal(Ex, LCtx, getContext().VoidPtrTy,
                                           currBldrCtx->blockCount());
     state = state->assume(V.castAs<DefinedOrUnknownSVal>(), true);
@@ -1995,10 +2126,9 @@ void ExprEngine::VisitCommonDeclRefExpr(const Expr *Ex, const NamedDecl *D,
 }
 
 /// VisitArraySubscriptExpr - Transfer function for array accesses
-void ExprEngine::VisitLvalArraySubscriptExpr(const ArraySubscriptExpr *A,
+void ExprEngine::VisitArraySubscriptExpr(const ArraySubscriptExpr *A,
                                              ExplodedNode *Pred,
                                              ExplodedNodeSet &Dst){
-
   const Expr *Base = A->getBase()->IgnoreParens();
   const Expr *Idx  = A->getIdx()->IgnoreParens();
 
@@ -2007,18 +2137,32 @@ void ExprEngine::VisitLvalArraySubscriptExpr(const ArraySubscriptExpr *A,
 
   ExplodedNodeSet EvalSet;
   StmtNodeBuilder Bldr(CheckerPreStmt, EvalSet, *currBldrCtx);
-  assert(A->isGLValue() ||
-          (!AMgr.getLangOpts().CPlusPlus &&
-           A->getType().isCForbiddenLValueType()));
+
+  bool IsVectorType = A->getBase()->getType()->isVectorType();
+
+  // The "like" case is for situations where C standard prohibits the type to
+  // be an lvalue, e.g. taking the address of a subscript of an expression of
+  // type "void *".
+  bool IsGLValueLike = A->isGLValue() ||
+    (A->getType().isCForbiddenLValueType() && !AMgr.getLangOpts().CPlusPlus);
 
   for (auto *Node : CheckerPreStmt) {
     const LocationContext *LCtx = Node->getLocationContext();
     ProgramStateRef state = Node->getState();
-    SVal V = state->getLValue(A->getType(),
-                              state->getSVal(Idx, LCtx),
-                              state->getSVal(Base, LCtx));
-    Bldr.generateNode(A, Node, state->BindExpr(A, LCtx, V), nullptr,
-                      ProgramPoint::PostLValueKind);
+
+    if (IsGLValueLike) {
+      SVal V = state->getLValue(A->getType(),
+          state->getSVal(Idx, LCtx),
+          state->getSVal(Base, LCtx));
+      Bldr.generateNode(A, Node, state->BindExpr(A, LCtx, V), nullptr,
+          ProgramPoint::PostLValueKind);
+    } else if (IsVectorType) {
+      // FIXME: non-glvalue vector reads are not modelled.
+      Bldr.generateNode(A, Node, state, nullptr);
+    } else {
+      llvm_unreachable("Array subscript should be an lValue when not \
+a vector and not a forbidden lvalue type");
+    }
   }
 
   getCheckerManager().runCheckersForPostStmt(Dst, EvalSet, A, *this);
@@ -2144,28 +2288,15 @@ void ExprEngine::VisitAtomicExpr(const AtomicExpr *AE, ExplodedNode *Pred,
   getCheckerManager().runCheckersForPostStmt(Dst, AfterInvalidateSet, AE, *this);
 }
 
-namespace {
-class CollectReachableSymbolsCallback final : public SymbolVisitor {
-  InvalidatedSymbols Symbols;
-
-public:
-  CollectReachableSymbolsCallback(ProgramStateRef State) {}
-  const InvalidatedSymbols &getSymbols() const { return Symbols; }
-
-  bool VisitSymbol(SymbolRef Sym) override {
-    Symbols.insert(Sym);
-    return true;
-  }
-};
-} // end anonymous namespace
-
 // A value escapes in three possible cases:
 // (1) We are binding to something that is not a memory region.
 // (2) We are binding to a MemrRegion that does not have stack storage.
 // (3) We are binding to a MemRegion with stack storage that the store
 //     does not understand.
 ProgramStateRef ExprEngine::processPointerEscapedOnBind(ProgramStateRef State,
-                                                        SVal Loc, SVal Val) {
+                                                        SVal Loc,
+                                                        SVal Val,
+                                                        const LocationContext *LCtx) {
   // Are we storing to something that causes the value to "escape"?
   bool escapes = true;
 
@@ -2181,7 +2312,7 @@ ProgramStateRef ExprEngine::processPointerEscapedOnBind(ProgramStateRef State,
       // same state.
       SVal StoredVal = State->getSVal(regionLoc->getRegion());
       if (StoredVal != Val)
-        escapes = (State == (State->bindLoc(*regionLoc, Val)));
+        escapes = (State == (State->bindLoc(*regionLoc, Val, LCtx)));
     }
   }
 
@@ -2278,7 +2409,7 @@ void ExprEngine::evalBind(ExplodedNodeSet &Dst, const Stmt *StoreE,
     const ProgramPoint L = PostStore(StoreE, LC, /*Loc*/nullptr,
                                      /*tag*/nullptr);
     ProgramStateRef state = Pred->getState();
-    state = processPointerEscapedOnBind(state, location, Val);
+    state = processPointerEscapedOnBind(state, location, Val, LC);
     Bldr.generateNode(L, state, Pred);
     return;
   }
@@ -2288,13 +2419,13 @@ void ExprEngine::evalBind(ExplodedNodeSet &Dst, const Stmt *StoreE,
     ExplodedNode *PredI = *I;
     ProgramStateRef state = PredI->getState();
 
-    state = processPointerEscapedOnBind(state, location, Val);
+    state = processPointerEscapedOnBind(state, location, Val, LC);
 
     // When binding the value, pass on the hint that this is a initialization.
     // For initializations, we do not need to inform clients of region
     // changes.
     state = state->bindLoc(location.castAs<Loc>(),
-                           Val, /* notifyChanges = */ !atDeclInit);
+                           Val, LC, /* notifyChanges = */ !atDeclInit);
 
     const MemRegion *LocReg = nullptr;
     if (Optional<loc::MemRegionVal> LocRegVal =
@@ -2520,7 +2651,7 @@ void ExprEngine::VisitGCCAsmStmt(const GCCAsmStmt *A, ExplodedNode *Pred,
     assert (!X.getAs<NonLoc>());  // Should be an Lval, or unknown, undef.
 
     if (Optional<Loc> LV = X.getAs<Loc>())
-      state = state->bindLoc(*LV, UnknownVal());
+      state = state->bindLoc(*LV, UnknownVal(), Pred->getLocationContext());
   }
 
   Bldr.generateNode(A, Pred, state);
@@ -2612,6 +2743,12 @@ struct DOTGraphTraits<ExplodedNode*> :
       case ProgramPoint::EpsilonKind:
         Out << "Epsilon Point";
         break;
+
+      case ProgramPoint::LoopExitKind: {
+        LoopExit LE = Loc.castAs<LoopExit>();
+        Out << "LoopExit: " << LE.getLoopStmt()->getStmtClassName();
+        break;
+      }
 
       case ProgramPoint::PreImplicitCallKind: {
         ImplicitCallPoint PC = Loc.castAs<ImplicitCallPoint>();

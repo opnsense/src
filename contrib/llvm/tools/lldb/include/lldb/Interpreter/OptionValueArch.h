@@ -10,12 +10,8 @@
 #ifndef liblldb_OptionValueArch_h_
 #define liblldb_OptionValueArch_h_
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
-#include "lldb/Core/ArchSpec.h"
 #include "lldb/Interpreter/OptionValue.h"
+#include "lldb/Utility/ArchSpec.h"
 
 namespace lldb_private {
 
@@ -46,10 +42,10 @@ public:
   void DumpValue(const ExecutionContext *exe_ctx, Stream &strm,
                  uint32_t dump_mask) override;
 
-  Error
+  Status
   SetValueFromString(llvm::StringRef value,
                      VarSetOperationType op = eVarSetOperationAssign) override;
-  Error
+  Status
   SetValueFromString(const char *,
                      VarSetOperationType = eVarSetOperationAssign) = delete;
 

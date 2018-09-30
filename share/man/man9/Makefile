@@ -121,6 +121,7 @@ MAN=	accept_filter.9 \
 	eventtimers.9 \
 	extattr.9 \
 	fail.9 \
+	fdt_pinctrl.9 \
 	fetch.9 \
 	firmware.9 \
 	fpu_kern.9 \
@@ -630,7 +631,8 @@ MLINKS+=condvar.9 cv_broadcast.9 \
 	condvar.9 cv_wait_unlock.9 \
 	condvar.9 cv_wmesg.9
 MLINKS+=config_intrhook.9 config_intrhook_disestablish.9 \
-	config_intrhook.9 config_intrhook_establish.9
+	config_intrhook.9 config_intrhook_establish.9 \
+	config_intrhook.9 config_intrhook_oneshot.9
 MLINKS+=contigmalloc.9 contigfree.9
 MLINKS+=casuword.9 casueword.9 \
 	casuword.9 casueword32.9 \
@@ -720,7 +722,8 @@ MLINKS+=devstat.9 devicestat.9 \
 	devstat.9 devstat_end_transaction.9 \
 	devstat.9 devstat_remove_entry.9 \
 	devstat.9 devstat_start_transaction.9
-MLINKS+=disk.9 disk_alloc.9 \
+MLINKS+=disk.9 disk_add_alias.9 \
+	disk.9 disk_alloc.9 \
 	disk.9 disk_create.9 \
 	disk.9 disk_destroy.9 \
 	disk.9 disk_gone.9 \
@@ -767,6 +770,10 @@ MLINKS+=fail.9 KFAIL_POINT_CODE.9 \
 	fail.9 KFAIL_POINT_GOTO.9 \
 	fail.9 KFAIL_POINT_RETURN.9 \
 	fail.9 KFAIL_POINT_RETURN_VOID.9
+MLINKS+=fdt_pinctrl.9 fdt_pinctrl_configure.9 \
+	fdt_pinctrl.9 fdt_pinctrl_configure_by_name.9 \
+	fdt_pinctrl.9 fdt_pinctrl_configure_tree.9 \
+	fdt_pinctrl.9 fdt_pinctrl_register.9
 MLINKS+=fetch.9 fubyte.9 \
 	fetch.9 fuswintr.9 \
 	fetch.9 fuword.9 \
@@ -1206,13 +1213,18 @@ MLINKS+=nv.9 libnv.9 \
 	nv.9 nvlist.9 \
 	nv.9 nvlist_add_binary.9 \
 	nv.9 nvlist_add_bool.9 \
+	nv.9 nvlist_add_bool_array.9 \
 	nv.9 nvlist_add_descriptor.9 \
+	nv.9 nvlist_add_descriptor_array.9 \
 	nv.9 nvlist_add_null.9 \
 	nv.9 nvlist_add_number.9 \
+	nv.9 nvlist_add_number_array.9 \
 	nv.9 nvlist_add_nvlist.9 \
+	nv.9 nvlist_add_nvlist_array.9 \
 	nv.9 nvlist_add_string.9 \
 	nv.9 nvlist_add_stringf.9 \
 	nv.9 nvlist_add_stringv.9 \
+	nv.9 nvlist_add_string_array.9 \
 	nv.9 nvlist_clone.9 \
 	nv.9 nvlist_create.9 \
 	nv.9 nvlist_destroy.9 \
@@ -1222,10 +1234,14 @@ MLINKS+=nv.9 libnv.9 \
 	nv.9 nvlist_exists.9 \
 	nv.9 nvlist_exists_binary.9 \
 	nv.9 nvlist_exists_bool.9 \
+	nv.9 nvlist_exists_bool_array.9 \
 	nv.9 nvlist_exists_descriptor.9 \
+	nv.9 nvlist_exists_descriptor_array.9 \
 	nv.9 nvlist_exists_null.9 \
 	nv.9 nvlist_exists_number.9 \
+	nv.9 nvlist_exists_number_array.9 \
 	nv.9 nvlist_exists_nvlist.9 \
+	nv.9 nvlist_exists_nvlist_array.9 \
 	nv.9 nvlist_exists_string.9 \
 	nv.9 nvlist_exists_type.9 \
 	nv.9 nvlist_fdump.9 \
@@ -1233,23 +1249,36 @@ MLINKS+=nv.9 libnv.9 \
 	nv.9 nvlist_free.9 \
 	nv.9 nvlist_free_binary.9 \
 	nv.9 nvlist_free_bool.9 \
+	nv.9 nvlist_free_bool_array.9 \
 	nv.9 nvlist_free_descriptor.9 \
+	nv.9 nvlist_free_descriptor_array.9 \
 	nv.9 nvlist_free_null.9 \
 	nv.9 nvlist_free_number.9 \
+	nv.9 nvlist_free_number_array.9 \
 	nv.9 nvlist_free_nvlist.9 \
+	nv.9 nvlist_free_nvlist_array.9 \
 	nv.9 nvlist_free_string.9 \
+	nv.9 nvlist_free_string_array.9 \
 	nv.9 nvlist_free_type.9 \
 	nv.9 nvlist_get_binary.9 \
 	nv.9 nvlist_get_bool.9 \
+	nv.9 nvlist_get_bool_array.9 \
 	nv.9 nvlist_get_descriptor.9 \
+	nv.9 nvlist_get_descriptor_array.9 \
 	nv.9 nvlist_get_number.9 \
+	nv.9 nvlist_get_number_array.9 \
 	nv.9 nvlist_get_nvlist.9 \
+	nv.9 nvlist_get_nvlist_array.9 \
 	nv.9 nvlist_get_parent.9 \
 	nv.9 nvlist_get_string.9 \
+	nv.9 nvlist_get_string_array.9 \
 	nv.9 nvlist_move_binary.9 \
 	nv.9 nvlist_move_descriptor.9 \
+	nv.9 nvlist_move_descriptor_array.9 \
 	nv.9 nvlist_move_nvlist.9 \
+	nv.9 nvlist_move_nvlist_array.9 \
 	nv.9 nvlist_move_string.9 \
+	nv.9 nvlist_move_string_array.9 \
 	nv.9 nvlist_next.9 \
 	nv.9 nvlist_pack.9 \
 	nv.9 nvlist_recv.9 \
@@ -1258,10 +1287,15 @@ MLINKS+=nv.9 libnv.9 \
 	nv.9 nvlist_size.9 \
 	nv.9 nvlist_take_binary.9 \
 	nv.9 nvlist_take_bool.9 \
+	nv.9 nvlist_take_bool_array.9 \
 	nv.9 nvlist_take_descriptor.9 \
+	nv.9 nvlist_take_descriptor_array.9 \
 	nv.9 nvlist_take_number.9 \
+	nv.9 nvlist_take_number_array.9 \
 	nv.9 nvlist_take_nvlist.9 \
+	nv.9 nvlist_take_nvlist_array.9 \
 	nv.9 nvlist_take_string.9 \
+	nv.9 nvlist_take_string_array.9 \
 	nv.9 nvlist_unpack.9 \
 	nv.9 nvlist_xfer.9
 MLINKS+=osd.9 osd_call.9 \
@@ -1418,6 +1452,7 @@ MLINKS+=rmlock.9 rm_assert.9 \
 	rmlock.9 rm_runlock.9 \
 	rmlock.9 rm_sleep.9 \
 	rmlock.9 RM_SYSINIT.9 \
+	rmlock.9 RM_SYSINIT_FLAGS.9 \
 	rmlock.9 rm_try_rlock.9 \
 	rmlock.9 rm_wlock.9 \
 	rmlock.9 rm_wowned.9 \
@@ -1450,6 +1485,7 @@ MLINKS+=rwlock.9 rw_assert.9 \
 	rwlock.9 rw_unlock.9 \
 	rwlock.9 rw_sleep.9 \
 	rwlock.9 RW_SYSINIT.9 \
+	rwlock.9 RW_SYSINIT_FLAGS.9 \
 	rwlock.9 rw_try_rlock.9 \
 	rwlock.9 rw_try_upgrade.9 \
 	rwlock.9 rw_try_wlock.9 \
@@ -1461,6 +1497,7 @@ MLINKS+=sbuf.9 sbuf_bcat.9 \
 	sbuf.9 sbuf_bcpy.9 \
 	sbuf.9 sbuf_cat.9 \
 	sbuf.9 sbuf_clear.9 \
+	sbuf.9 sbuf_clear_flags.9 \
 	sbuf.9 sbuf_copyin.9 \
 	sbuf.9 sbuf_cpy.9 \
 	sbuf.9 sbuf_data.9 \
@@ -1468,6 +1505,7 @@ MLINKS+=sbuf.9 sbuf_bcat.9 \
 	sbuf.9 sbuf_done.9 \
 	sbuf.9 sbuf_error.9 \
 	sbuf.9 sbuf_finish.9 \
+	sbuf.9 sbuf_get_flags.9 \
 	sbuf.9 sbuf_hexdump.9 \
 	sbuf.9 sbuf_len.9 \
 	sbuf.9 sbuf_new.9 \
@@ -1476,6 +1514,7 @@ MLINKS+=sbuf.9 sbuf_bcat.9 \
 	sbuf.9 sbuf_printf.9 \
 	sbuf.9 sbuf_putc.9 \
 	sbuf.9 sbuf_set_drain.9 \
+	sbuf.9 sbuf_set_flags.9 \
 	sbuf.9 sbuf_setpos.9 \
 	sbuf.9 sbuf_start_section.9 \
 	sbuf.9 sbuf_end_section.9  \
@@ -1564,6 +1603,7 @@ MLINKS+=sleep.9 msleep.9 \
 	sleep.9 msleep_spin.9 \
 	sleep.9 msleep_spin_sbt.9 \
 	sleep.9 pause.9 \
+	sleep.9 pause_sig.9 \
 	sleep.9 pause_sbt.9 \
 	sleep.9 tsleep.9 \
 	sleep.9 tsleep_sbt.9 \
@@ -1654,6 +1694,7 @@ MLINKS+=sx.9 sx_assert.9 \
 	sx.9 sx_slock_sig.9 \
 	sx.9 sx_sunlock.9 \
 	sx.9 SX_SYSINIT.9 \
+	sx.9 SX_SYSINIT_FLAGS.9 \
 	sx.9 sx_try_slock.9 \
 	sx.9 sx_try_upgrade.9 \
 	sx.9 sx_try_xlock.9 \
@@ -1788,6 +1829,7 @@ MLINKS+=uidinfo.9 uifind.9 \
 	uidinfo.9 uihashinit.9 \
 	uidinfo.9 uihold.9
 MLINKS+=uio.9 uiomove.9 \
+	uio.9 uiomove_frombuf.9 \
 	uio.9 uiomove_nofault.9
 
 .if ${MK_USB} != "no"

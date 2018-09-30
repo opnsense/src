@@ -12,14 +12,13 @@
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetInstrInfo.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "slotindexes"
 
 char SlotIndexes::ID = 0;
-INITIALIZE_PASS(SlotIndexes, "slotindexes",
+INITIALIZE_PASS(SlotIndexes, DEBUG_TYPE,
                 "Slot index numbering", false, false)
 
 STATISTIC(NumLocalRenum,  "Number of local renumberings");
@@ -101,6 +100,48 @@ bool SlotIndexes::runOnMachineFunction(MachineFunction &fn) {
 
   // And we're done!
   return false;
+}
+
+void SlotIndexes::removeMachineInstrFromMaps(MachineInstr &MI) {
+  assert(!MI.isBundledWithPred() &&
+         "Use removeSingleMachineInstrFromMaps() instread");
+  Mi2IndexMap::iterator mi2iItr = mi2iMap.find(&MI);
+  if (mi2iItr == mi2iMap.end())
+    return;
+
+  SlotIndex MIIndex = mi2iItr->second;
+  IndexListEntry &MIEntry = *MIIndex.listEntry();
+  assert(MIEntry.getInstr() == &MI && "Instruction indexes broken.");
+  mi2iMap.erase(mi2iItr);
+  // FIXME: Eventually we want to actually delete these indexes.
+  MIEntry.setInstr(nullptr);
+}
+
+void SlotIndexes::removeSingleMachineInstrFromMaps(MachineInstr &MI) {
+  Mi2IndexMap::iterator mi2iItr = mi2iMap.find(&MI);
+  if (mi2iItr == mi2iMap.end())
+    return;
+
+  SlotIndex MIIndex = mi2iItr->second;
+  IndexListEntry &MIEntry = *MIIndex.listEntry();
+  assert(MIEntry.getInstr() == &MI && "Instruction indexes broken.");
+  mi2iMap.erase(mi2iItr);
+
+  // When removing the first instruction of a bundle update mapping to next
+  // instruction.
+  if (MI.isBundledWithSucc()) {
+    // Only the first instruction of a bundle should have an index assigned.
+    assert(!MI.isBundledWithPred() && "Should have first bundle isntruction");
+
+    MachineBasicBlock::instr_iterator Next = std::next(MI.getIterator());
+    MachineInstr &NextMI = *Next;
+    MIEntry.setInstr(&NextMI);
+    mi2iMap.insert(std::make_pair(&NextMI, MIIndex));
+    return;
+  } else {
+    // FIXME: Eventually we want to actually delete these indexes.
+    MIEntry.setInstr(nullptr);
+  }
 }
 
 void SlotIndexes::renumberIndexes() {
@@ -222,7 +263,7 @@ LLVM_DUMP_METHOD void SlotIndexes::dump() const {
   }
 
   for (unsigned i = 0, e = MBBRanges.size(); i != e; ++i)
-    dbgs() << "BB#" << i << "\t[" << MBBRanges[i].first << ';'
+    dbgs() << "%bb." << i << "\t[" << MBBRanges[i].first << ';'
            << MBBRanges[i].second << ")\n";
 }
 #endif

@@ -209,6 +209,7 @@ static void eliminateAliases(GlobalValue *GV) {
 void llvm::DeleteGlobalInitializer(GlobalVariable *GV) {
   eliminateAliases(GV);
   GV->setInitializer(nullptr);
+  GV->setComdat(nullptr);
 }
 
 // DeleteFunctionBody - "Remove" the function by deleting all of its basic
@@ -231,8 +232,7 @@ static Constant *GetTorInit(std::vector<std::pair<Function *, int>> &TorList) {
   std::vector<Constant *> ArrayElts;
   Type *Int32Ty = Type::getInt32Ty(TorList[0].first->getContext());
 
-  StructType *STy =
-      StructType::get(Int32Ty, TorList[0].first->getType(), nullptr);
+  StructType *STy = StructType::get(Int32Ty, TorList[0].first->getType());
   for (unsigned i = 0, e = TorList.size(); i != e; ++i) {
     Constant *Elts[] = {ConstantInt::get(Int32Ty, TorList[i].second),
                         TorList[i].first};
@@ -373,19 +373,17 @@ llvm::SplitFunctionsOutOfModule(Module *M, const std::vector<Function *> &F,
 std::unique_ptr<Module>
 BugDriver::extractMappedBlocksFromModule(const std::vector<BasicBlock *> &BBs,
                                          Module *M) {
-  SmallString<128> Filename;
-  int FD;
-  std::error_code EC = sys::fs::createUniqueFile(
-      OutputPrefix + "-extractblocks%%%%%%%", FD, Filename);
-  if (EC) {
+  auto Temp = sys::fs::TempFile::create(OutputPrefix + "-extractblocks%%%%%%%");
+  if (!Temp) {
     outs() << "*** Basic Block extraction failed!\n";
-    errs() << "Error creating temporary file: " << EC.message() << "\n";
+    errs() << "Error creating temporary file: " << toString(Temp.takeError())
+           << "\n";
     EmitProgressBitcode(M, "basicblockextractfail", true);
     return nullptr;
   }
-  sys::RemoveFileOnSignal(Filename);
+  DiscardTemp Discard{*Temp};
 
-  tool_output_file BlocksToNotExtractFile(Filename.c_str(), FD);
+  raw_fd_ostream OS(Temp->FD, /*shouldClose*/ false);
   for (std::vector<BasicBlock *>::const_iterator I = BBs.begin(), E = BBs.end();
        I != E; ++I) {
     BasicBlock *BB = *I;
@@ -393,27 +391,23 @@ BugDriver::extractMappedBlocksFromModule(const std::vector<BasicBlock *> &BBs,
     // off of.
     if (!BB->hasName())
       BB->setName("tmpbb");
-    BlocksToNotExtractFile.os() << BB->getParent()->getName() << " "
-                                << BB->getName() << "\n";
+    OS << BB->getParent()->getName() << " " << BB->getName() << "\n";
   }
-  BlocksToNotExtractFile.os().close();
-  if (BlocksToNotExtractFile.os().has_error()) {
+  OS.flush();
+  if (OS.has_error()) {
     errs() << "Error writing list of blocks to not extract\n";
     EmitProgressBitcode(M, "basicblockextractfail", true);
-    BlocksToNotExtractFile.os().clear_error();
+    OS.clear_error();
     return nullptr;
   }
-  BlocksToNotExtractFile.keep();
 
   std::string uniqueFN = "--extract-blocks-file=";
-  uniqueFN += Filename.str();
+  uniqueFN += Temp->TmpName;
   const char *ExtraArg = uniqueFN.c_str();
 
   std::vector<std::string> PI;
   PI.push_back("extract-blocks");
   std::unique_ptr<Module> Ret = runPassesOn(M, PI, 1, &ExtraArg);
-
-  sys::fs::remove(Filename.c_str());
 
   if (!Ret) {
     outs() << "*** Basic Block extraction failed, please report a bug!\n";

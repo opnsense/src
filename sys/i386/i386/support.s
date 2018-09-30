@@ -50,7 +50,6 @@ ENTRY(bzero)
 	movl	12(%esp),%ecx
 	xorl	%eax,%eax
 	shrl	$2,%ecx
-	cld
 	rep
 	stosl
 	movl	12(%esp),%ecx
@@ -83,7 +82,6 @@ ENTRY(i686_pagezero)
 
 	movl	12(%esp),%edi
 	movl	$1024,%ecx
-	cld
 
 	ALIGN_TEXT
 1:
@@ -134,7 +132,6 @@ ENTRY(fillw)
 	movl	8(%esp),%eax
 	movl	12(%esp),%edi
 	movl	16(%esp),%ecx
-	cld
 	rep
 	stosw
 	popl	%edi
@@ -151,7 +148,6 @@ ENTRY(bcopyb)
 	subl	%esi,%eax
 	cmpl	%ecx,%eax			/* overlapping && src < dst? */
 	jb	1f
-	cld					/* nope, copy forwards */
 	rep
 	movsb
 	popl	%edi
@@ -192,7 +188,6 @@ ENTRY(bcopy)
 	jb	1f
 
 	shrl	$2,%ecx				/* copy by 32-bit words */
-	cld					/* nope, copy forwards */
 	rep
 	movsl
 	movl	16(%ebp),%ecx
@@ -238,7 +233,6 @@ ENTRY(memcpy)
 	movl	20(%esp),%ecx
 	movl	%edi,%eax
 	shrl	$2,%ecx				/* copy by 32-bit words */
-	cld					/* nope, copy forwards */
 	rep
 	movsl
 	movl	20(%esp),%ecx
@@ -284,12 +278,11 @@ ENTRY(copyout)
 	jz	done_copyout
 
 	/*
-	 * Check explicitly for non-user addresses.  If 486 write protection
-	 * is being used, this check is essential because we are in kernel
-	 * mode so the h/w does not provide any protection against writing
-	 * kernel addresses.
+	 * Check explicitly for non-user addresses.  This check is essential
+	 * because it prevents usermode from writing into the kernel.  We do
+	 * not verify anywhere else that the user did not specify a rogue
+	 * address.
 	 */
-
 	/*
 	 * First, prevent address wrapping.
 	 */
@@ -309,7 +302,6 @@ ENTRY(copyout)
 	movl	%ebx,%ecx
 
 	shrl	$2,%ecx
-	cld
 	rep
 	movsl
 	movb	%bl,%cl
@@ -360,7 +352,6 @@ ENTRY(copyin)
 
 	movb	%cl,%al
 	shrl	$2,%ecx				/* copy longword-wise */
-	cld
 	rep
 	movsl
 	movb	%al,%cl
@@ -549,7 +540,7 @@ END(subyte)
 /*
  * copyinstr(from, to, maxlen, int *lencopied) - MP SAFE
  *
- *	copy a string from from to to, stop when a 0 character is reached.
+ *	copy a string from 'from' to 'to', stop when a 0 character is reached.
  *	return ENAMETOOLONG if string is longer than maxlen, and
  *	EFAULT on protection violations. If lencopied is non-zero,
  *	return the actual length in *lencopied.
@@ -577,7 +568,6 @@ ENTRY(copyinstr)
 	movl	%eax,20(%esp)
 1:
 	incl	%edx
-	cld
 
 2:
 	decl	%edx
@@ -630,7 +620,6 @@ ENTRY(copystr)
 	movl	16(%esp),%edi			/* %edi = to */
 	movl	20(%esp),%edx			/* %edx = maxlen */
 	incl	%edx
-	cld
 1:
 	decl	%edx
 	jz	4f
@@ -670,7 +659,6 @@ ENTRY(bcmp)
 
 	movl	%edx,%ecx
 	shrl	$2,%ecx
-	cld					/* compare forwards */
 	repe
 	cmpsl
 	jne	1f

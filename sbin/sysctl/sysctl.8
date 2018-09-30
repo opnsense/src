@@ -28,7 +28,7 @@
 .\"	From: @(#)sysctl.8	8.1 (Berkeley) 6/6/93
 .\" $FreeBSD$
 .\"
-.Dd December 10, 2015
+.Dd March 9, 2018
 .Dt SYSCTL 8
 .Os
 .Sh NAME
@@ -39,7 +39,7 @@
 .Op Fl bdehiNnoRTtqx
 .Op Fl B Ar bufsize
 .Op Fl f Ar filename
-.Ar name Ns Op = Ns Ar value
+.Ar name Ns Op = Ns Ar value Ns Op , Ns Ar value
 .Ar ...
 .Nm
 .Op Fl bdehNnoRTtqx
@@ -214,7 +214,7 @@ String and integer values can be set using
 .It "kern.filedelay	integer	yes"
 .It "kern.dirdelay	integer	yes"
 .It "kern.metadelay	integer	yes"
-.It "kern.osreldate	string	no"
+.It "kern.osreldate	integer	no"
 .It "kern.bootfile	string	yes"
 .It "kern.corefile	string	yes"
 .It "kern.logsigexit	integer	yes"

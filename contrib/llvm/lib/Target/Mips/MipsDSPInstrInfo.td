@@ -19,6 +19,7 @@ def immZExt4 : ImmLeaf<i32, [{return isUInt<4>(Imm);}]>;
 def immZExt8 : ImmLeaf<i32, [{return isUInt<8>(Imm);}]>;
 def immZExt10 : ImmLeaf<i32, [{return isUInt<10>(Imm);}]>;
 def immSExt6 : ImmLeaf<i32, [{return isInt<6>(Imm);}]>;
+def immSExt10 : ImmLeaf<i32, [{return isInt<10>(Imm);}]>;
 
 // Mips-specific dsp nodes
 def SDT_MipsExtr : SDTypeProfile<1, 2, [SDTCisVT<0, i32>, SDTCisSameAs<0, 1>,
@@ -851,8 +852,8 @@ class PACKRL_PH_DESC : CMP_EQ_QB_R3_DESC_BASE<"packrl.ph", int_mips_packrl_ph,
 class REPL_QB_DESC : REPL_DESC_BASE<"repl.qb", int_mips_repl_qb, uimm8,
                                     immZExt8, NoItinerary, DSPROpnd>;
 
-class REPL_PH_DESC : REPL_DESC_BASE<"repl.ph", int_mips_repl_ph, uimm10,
-                                    immZExt10, NoItinerary, DSPROpnd>;
+class REPL_PH_DESC : REPL_DESC_BASE<"repl.ph", int_mips_repl_ph, simm10,
+                                    immSExt10, NoItinerary, DSPROpnd>;
 
 class REPLV_QB_DESC : ABSQ_S_PH_R2_DESC_BASE<"replv.qb", int_mips_repl_qb,
                                              NoItinerary, DSPROpnd, GPR32Opnd>;
@@ -1283,6 +1284,12 @@ let isPseudo = 1, isCodeGenOnly = 1, hasNoSchedulingInfo = 1 in {
   def STORE_CCOND_DSP : Store<"store_ccond_dsp", DSPCC>;
 }
 
+let DecoderNamespace = "MipsDSP", Arch = "dsp",
+    AdditionalPredicates = [HasDSP] in {
+  def LWDSP : Load<"lw", DSPROpnd, null_frag, II_LW>, DspMMRel, LW_FM<0x23>;
+  def SWDSP : Store<"sw", DSPROpnd, null_frag, II_SW>, DspMMRel, LW_FM<0x2b>;
+}
+
 // Pseudo CMP and PICK instructions.
 class PseudoCMP<Instruction RealInst> :
   PseudoDSP<(outs DSPCC:$cmp), (ins DSPROpnd:$rs, DSPROpnd:$rt), []>,
@@ -1318,6 +1325,10 @@ def : BitconvertPat<i32, v2i16, GPR32, DSPR>;
 def : BitconvertPat<i32, v4i8, GPR32, DSPR>;
 def : BitconvertPat<v2i16, i32, DSPR, GPR32>;
 def : BitconvertPat<v4i8, i32, DSPR, GPR32>;
+def : BitconvertPat<f32, v2i16, FGR32, DSPR>;
+def : BitconvertPat<f32, v4i8, FGR32, DSPR>;
+def : BitconvertPat<v2i16, f32, DSPR, FGR32>;
+def : BitconvertPat<v4i8, f32, DSPR, FGR32>;
 
 def : DSPPat<(v2i16 (load addr:$a)),
              (v2i16 (COPY_TO_REGCLASS (LW addr:$a), DSPR))>;

@@ -159,7 +159,7 @@ static const char *configfile = CF;
 static void devdlog(int priority, const char* message, ...)
 	__printflike(2, 3);
 static void event_loop(void);
-static void usage(void);
+static void usage(void) __dead2;
 
 template <class T> void
 delete_and_clear(vector<T *> &v)
@@ -1085,6 +1085,7 @@ event_loop(void)
 		if (FD_ISSET(seqpacket_fd, &fds))
 			new_client(seqpacket_fd, SOCK_SEQPACKET);
 	}
+	cfg.remove_pidfile();
 	close(seqpacket_fd);
 	close(stream_fd);
 	close(fd);

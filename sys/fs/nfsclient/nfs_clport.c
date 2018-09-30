@@ -230,6 +230,8 @@ nfscl_nget(struct mount *mntp, struct vnode *dvp, struct nfsfh *nfhp,
 	 * happened to return an error no special casing is needed).
 	 */
 	mtx_init(&np->n_mtx, "NEWNFSnode lock", NULL, MTX_DEF | MTX_DUPOK);
+	lockinit(&np->n_excl, PVFS, "nfsupg", VLKTIMEOUT, LK_NOSHARE |
+	    LK_CANRECURSE);
 
 	/* 
 	 * Are we getting the root? If so, make sure the vnode flags
@@ -271,6 +273,7 @@ nfscl_nget(struct mount *mntp, struct vnode *dvp, struct nfsfh *nfhp,
 	if (error != 0) {
 		*npp = NULL;
 		mtx_destroy(&np->n_mtx);
+		lockdestroy(&np->n_excl);
 		FREE((caddr_t)nfhp, M_NFSFH);
 		if (np->n_v4 != NULL)
 			FREE((caddr_t)np->n_v4, M_NFSV4NODE);
@@ -313,7 +316,7 @@ nfscl_ngetreopen(struct mount *mntp, u_int8_t *fhp, int fhsize,
 
 	*npp = NULL;
 	/* For forced dismounts, just return error. */
-	if ((mntp->mnt_kern_flag & MNTK_UNMOUNTF))
+	if (NFSCL_FORCEDISM(mntp))
 		return (EINTR);
 	MALLOC(nfhp, struct nfsfh *, sizeof (struct nfsfh) + fhsize,
 	    M_NFSFH, M_WAITOK);
@@ -336,7 +339,7 @@ nfscl_ngetreopen(struct mount *mntp, u_int8_t *fhp, int fhsize,
 		 * stopped and the MNTK_UNMOUNTF flag is set before doing
 		 * a vflush() with FORCECLOSE, we should be ok here.
 		 */
-		if ((mntp->mnt_kern_flag & MNTK_UNMOUNTF))
+		if (NFSCL_FORCEDISM(mntp))
 			error = EINTR;
 		else {
 			vfs_hash_ref(mntp, hash, td, &nvp, newnfs_vncmpf, nfhp);
@@ -743,6 +746,8 @@ nfscl_wcc_data(struct nfsrv_descript *nd, struct vnode *vp,
 			}
 		}
 		error = nfscl_postop_attr(nd, nap, flagp, stuff);
+		if (wccflagp != NULL && *flagp == 0)
+			*wccflagp = 0;
 	} else if ((nd->nd_flag & (ND_NOMOREDATA | ND_NFSV4 | ND_V4WCCATTR))
 	    == (ND_NFSV4 | ND_V4WCCATTR)) {
 		error = nfsv4_loadattr(nd, NULL, &nfsva, NULL,
@@ -1311,6 +1316,8 @@ nfssvc_nfscl(struct thread *td, struct nfssvc_args *uap)
 	cap_rights_t rights;
 	char *buf;
 	int error;
+	struct mount *mp;
+	struct nfsmount *nmp;
 
 	if (uap->flag & NFSSVC_CBADDSOCK) {
 		error = copyin(uap->argp, (caddr_t)&nfscbdarg, sizeof(nfscbdarg));
@@ -1365,6 +1372,56 @@ nfssvc_nfscl(struct thread *td, struct nfssvc_args *uap)
 			    dumpmntopts.ndmnt_blen);
 			free(buf, M_TEMP);
 		}
+	} else if (uap->flag & NFSSVC_FORCEDISM) {
+		buf = malloc(MNAMELEN + 1, M_TEMP, M_WAITOK);
+		error = copyinstr(uap->argp, buf, MNAMELEN + 1, NULL);
+		if (error == 0) {
+			nmp = NULL;
+			mtx_lock(&mountlist_mtx);
+			TAILQ_FOREACH(mp, &mountlist, mnt_list) {
+				if (strcmp(mp->mnt_stat.f_mntonname, buf) ==
+				    0 && strcmp(mp->mnt_stat.f_fstypename,
+				    "nfs") == 0 && mp->mnt_data != NULL) {
+					nmp = VFSTONFS(mp);
+					mtx_lock(&nmp->nm_mtx);
+					if ((nmp->nm_privflag &
+					    NFSMNTP_FORCEDISM) == 0) {
+						nmp->nm_privflag |= 
+						   (NFSMNTP_FORCEDISM |
+						    NFSMNTP_CANCELRPCS);
+						mtx_unlock(&nmp->nm_mtx);
+					} else {
+						mtx_unlock(&nmp->nm_mtx);
+						nmp = NULL;
+					}
+					break;
+				}
+			}
+			mtx_unlock(&mountlist_mtx);
+
+			if (nmp != NULL) {
+				/*
+				 * Call newnfs_nmcancelreqs() to cause
+				 * any RPCs in progress on the mount point to
+				 * fail.
+				 * This will cause any process waiting for an
+				 * RPC to complete while holding a vnode lock
+				 * on the mounted-on vnode (such as "df" or
+				 * a non-forced "umount") to fail.
+				 * This will unlock the mounted-on vnode so
+				 * a forced dismount can succeed.
+				 * Then clear NFSMNTP_CANCELRPCS and wakeup(),
+				 * so that nfs_unmount() can complete.
+				 */
+				newnfs_nmcancelreqs(nmp);
+				mtx_lock(&nmp->nm_mtx);
+				nmp->nm_privflag &= ~NFSMNTP_CANCELRPCS;
+				wakeup(nmp);
+				mtx_unlock(&nmp->nm_mtx);
+			} else
+				error = EINVAL;
+		}
+		free(buf, M_TEMP);
 	} else {
 		error = EINVAL;
 	}

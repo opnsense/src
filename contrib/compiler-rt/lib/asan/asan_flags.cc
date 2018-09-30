@@ -61,7 +61,7 @@ void InitializeFlags() {
   {
     CommonFlags cf;
     cf.CopyFrom(*common_flags());
-    cf.detect_leaks = CAN_SANITIZE_LEAKS;
+    cf.detect_leaks = cf.detect_leaks && CAN_SANITIZE_LEAKS;
     cf.external_symbolizer_path = GetEnv("ASAN_SYMBOLIZER_PATH");
     cf.malloc_context_size = kDefaultMallocContextSize;
     cf.intercept_tls_get_addr = true;
@@ -95,6 +95,18 @@ void InitializeFlags() {
   RegisterCommonFlags(&ubsan_parser);
 #endif
 
+  if (SANITIZER_MAC) {
+    // Support macOS MallocScribble and MallocPreScribble:
+    // <https://developer.apple.com/library/content/documentation/Performance/
+    // Conceptual/ManagingMemory/Articles/MallocDebug.html>
+    if (GetEnv("MallocScribble")) {
+      f->max_free_fill_size = 0x1000;
+    }
+    if (GetEnv("MallocPreScribble")) {
+      f->malloc_fill_byte = 0xaa;
+    }
+  }
+
   // Override from ASan compile definition.
   const char *asan_compile_def = MaybeUseAsanDefaultOptionsCompileDefinition();
   asan_parser.ParseString(asan_compile_def);
@@ -105,6 +117,10 @@ void InitializeFlags() {
 #if CAN_SANITIZE_UB
   const char *ubsan_default_options = __ubsan::MaybeCallUbsanDefaultOptions();
   ubsan_parser.ParseString(ubsan_default_options);
+#endif
+#if CAN_SANITIZE_LEAKS
+  const char *lsan_default_options = __lsan::MaybeCallLsanDefaultOptions();
+  lsan_parser.ParseString(lsan_default_options);
 #endif
 
   // Override from command line.
@@ -132,6 +148,9 @@ void InitializeFlags() {
            SanitizerToolName);
     Die();
   }
+  // Ensure that redzone is at least SHADOW_GRANULARITY.
+  if (f->redzone < (int)SHADOW_GRANULARITY)
+    f->redzone = SHADOW_GRANULARITY;
   // Make "strict_init_order" imply "check_initialization_order".
   // TODO(samsonov): Use a single runtime flag for an init-order checker.
   if (f->strict_init_order) {
@@ -182,13 +201,14 @@ void InitializeFlags() {
     Report("WARNING: strchr* interceptors are enabled even though "
            "replace_str=0. Use intercept_strchr=0 to disable them.");
   }
+  if (!f->replace_str && common_flags()->intercept_strndup) {
+    Report("WARNING: strndup* interceptors are enabled even though "
+           "replace_str=0. Use intercept_strndup=0 to disable them.");
+  }
 }
 
 }  // namespace __asan
 
-#if !SANITIZER_SUPPORTS_WEAK_HOOKS
-extern "C" {
-SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE
-const char* __asan_default_options() { return ""; }
-}  // extern "C"
-#endif
+SANITIZER_INTERFACE_WEAK_DEF(const char*, __asan_default_options, void) {
+  return "";
+}

@@ -48,11 +48,23 @@ CLANG_NO_IAS34= -no-integrated-as
 .if ${COMPILER_VERSION} >= 40800
 # Catch-all for all the things that are in our tree, but for which we're
 # not yet ready for this compiler.
-CWARNEXTRA?=	-Wno-error=inline -Wno-error=enum-compare -Wno-error=unused-but-set-variable \
-		-Wno-error=aggressive-loop-optimizations -Wno-error=maybe-uninitialized \
-		-Wno-error=array-bounds -Wno-error=address \
-		-Wno-error=cast-qual -Wno-error=sequence-point -Wno-error=attributes \
-		-Wno-error=strict-overflow -Wno-error=overflow
+CWARNEXTRA?=	-Wno-error=address				\
+		-Wno-error=aggressive-loop-optimizations	\
+		-Wno-error=array-bounds				\
+		-Wno-error=attributes				\
+		-Wno-error=cast-qual				\
+		-Wno-error=enum-compare				\
+		-Wno-error=inline				\
+		-Wno-error=maybe-uninitialized			\
+		-Wno-error=overflow				\
+		-Wno-error=sequence-point			\
+		-Wno-error=unused-but-set-variable
+.if ${COMPILER_VERSION} >= 60100
+CWARNEXTRA+=	-Wno-error=misleading-indentation		\
+		-Wno-error=nonnull-compare			\
+		-Wno-error=shift-overflow			\
+		-Wno-error=tautological-compare
+.endif
 .else
 # For gcc 4.2, eliminate the too-often-wrong warnings about uninitialized vars.
 CWARNEXTRA?=	-Wno-uninitialized
@@ -180,7 +192,7 @@ CFLAGS+=	-ffreestanding
 # gcc and clang opimizers take advantage of this.  The kernel makes
 # use of signed integer wraparound mechanics so we need the compiler
 # to treat it as a wraparound and not take shortcuts.
-# 
+#
 CFLAGS+=	-fwrapv
 
 #
@@ -189,6 +201,14 @@ CFLAGS+=	-fwrapv
 .if ${MK_SSP} != "no" && \
     ${MACHINE_CPUARCH} != "arm" && ${MACHINE_CPUARCH} != "mips"
 CFLAGS+=	-fstack-protector
+.endif
+
+#
+# Retpoline speculative execution vulnerability mitigation (CVE-2017-5715)
+#
+.if defined(COMPILER_FEATURES) && ${COMPILER_FEATURES:Mretpoline} != "" && \
+    ${MK_KERNEL_RETPOLINE} != "no"
+CFLAGS+=	-mretpoline
 .endif
 
 #
@@ -202,7 +222,7 @@ CFLAGS+=	-fstack-protector
 CFLAGS+=	-gdwarf-2
 .endif
 
-CFLAGS+= ${CWARNFLAGS} ${CWARNFLAGS.${.IMPSRC:T}}
+CFLAGS+= ${CWARNFLAGS:M*} ${CWARNFLAGS.${.IMPSRC:T}}
 CFLAGS+= ${CFLAGS.${COMPILER_TYPE}} ${CFLAGS.${.IMPSRC:T}}
 
 # Tell bmake not to mistake standard targets for things to be searched for

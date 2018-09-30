@@ -11,20 +11,16 @@
 #define liblldb_DWARFExpression_h_
 
 #include "lldb/Core/Address.h"
-#include "lldb/Core/DataExtractor.h"
 #include "lldb/Core/Disassembler.h"
-#include "lldb/Core/Error.h"
 #include "lldb/Core/Scalar.h"
+#include "lldb/Utility/DataExtractor.h"
+#include "lldb/Utility/Status.h"
 #include "lldb/lldb-private.h"
 #include <functional>
 
 class DWARFCompileUnit;
 
 namespace lldb_private {
-
-class ClangExpressionDeclMap;
-class ClangExpressionVariable;
-class ClangExpressionVariableList;
 
 //----------------------------------------------------------------------
 /// @class DWARFExpression DWARFExpression.h "lldb/Expression/DWARFExpression.h"
@@ -262,22 +258,18 @@ public:
   /// member variables to populate many operands
   //------------------------------------------------------------------
   bool Evaluate(ExecutionContextScope *exe_scope,
-                ClangExpressionVariableList *expr_locals,
-                ClangExpressionDeclMap *decl_map,
                 lldb::addr_t loclist_base_load_addr,
                 const Value *initial_value_ptr, const Value *object_address_ptr,
-                Value &result, Error *error_ptr) const;
+                Value &result, Status *error_ptr) const;
 
   //------------------------------------------------------------------
   /// Wrapper for the static evaluate function that uses member
   /// variables to populate many operands
   //------------------------------------------------------------------
-  bool Evaluate(ExecutionContext *exe_ctx,
-                ClangExpressionVariableList *expr_locals,
-                ClangExpressionDeclMap *decl_map, RegisterContext *reg_ctx,
+  bool Evaluate(ExecutionContext *exe_ctx, RegisterContext *reg_ctx,
                 lldb::addr_t loclist_base_load_addr,
                 const Value *initial_value_ptr, const Value *object_address_ptr,
-                Value &result, Error *error_ptr) const;
+                Value &result, Status *error_ptr) const;
 
   //------------------------------------------------------------------
   /// Evaluate a DWARF location expression in a particular context
@@ -338,32 +330,14 @@ public:
   ///     True on success; false otherwise.  If error_ptr is non-NULL,
   ///     details of the failure are provided through it.
   //------------------------------------------------------------------
-  static bool
-  Evaluate(ExecutionContext *exe_ctx, ClangExpressionVariableList *expr_locals,
-           ClangExpressionDeclMap *decl_map, RegisterContext *reg_ctx,
-           lldb::ModuleSP opcode_ctx, const DataExtractor &opcodes,
-           DWARFCompileUnit *dwarf_cu, const lldb::offset_t offset,
-           const lldb::offset_t length, const lldb::RegisterKind reg_set,
-           const Value *initial_value_ptr, const Value *object_address_ptr,
-           Value &result, Error *error_ptr);
-
-  //------------------------------------------------------------------
-  /// Loads a ClangExpressionVariableList into the object
-  ///
-  /// @param[in] locals
-  ///     If non-NULL, the list of locals used by this expression.
-  ///     See Evaluate().
-  //------------------------------------------------------------------
-  void SetExpressionLocalVariableList(ClangExpressionVariableList *locals);
-
-  //------------------------------------------------------------------
-  /// Loads a ClangExpressionDeclMap into the object
-  ///
-  /// @param[in] locals
-  ///     If non-NULL, the list of external variables used by this
-  ///     expression.  See Evaluate().
-  //------------------------------------------------------------------
-  void SetExpressionDeclMap(ClangExpressionDeclMap *decl_map);
+  static bool Evaluate(ExecutionContext *exe_ctx, RegisterContext *reg_ctx,
+                       lldb::ModuleSP opcode_ctx, const DataExtractor &opcodes,
+                       DWARFCompileUnit *dwarf_cu, const lldb::offset_t offset,
+                       const lldb::offset_t length,
+                       const lldb::RegisterKind reg_set,
+                       const Value *initial_value_ptr,
+                       const Value *object_address_ptr, Value &result,
+                       Status *error_ptr);
 
   bool GetExpressionData(DataExtractor &data) const {
     data = m_data;

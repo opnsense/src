@@ -8,15 +8,15 @@
 //===----------------------------------------------------------------------===//
 
 #include "RegisterContextPOSIXCore_x86_64.h"
-#include "lldb/Core/DataExtractor.h"
 #include "lldb/Core/RegisterValue.h"
 #include "lldb/Target/Thread.h"
+#include "lldb/Utility/DataExtractor.h"
 
 using namespace lldb_private;
 
 RegisterContextCorePOSIX_x86_64::RegisterContextCorePOSIX_x86_64(
     Thread &thread, RegisterInfoInterface *register_info,
-    const DataExtractor &gpregset, const DataExtractor &fpregset)
+    const DataExtractor &gpregset, llvm::ArrayRef<CoreNote> notes)
     : RegisterContextPOSIX_x86(thread, 0, register_info) {
   size_t size, len;
 
@@ -27,6 +27,8 @@ RegisterContextCorePOSIX_x86_64::RegisterContextCorePOSIX_x86_64(
   if (len != size)
     m_gpregset.reset();
 
+  DataExtractor fpregset = getRegset(
+      notes, register_info->GetTargetArchitecture().GetTriple(), FPR_Desc);
   size = sizeof(FXSAVE);
   m_fpregset.reset(new uint8_t[size]);
   len =
@@ -71,7 +73,7 @@ bool RegisterContextCorePOSIX_x86_64::ReadRegister(const RegisterInfo *reg_info,
     return false;
   }
 
-  Error error;
+  Status error;
   value.SetFromMemoryData(reg_info, src + offset, reg_info->byte_size,
                           lldb::eByteOrderLittle, error);
 

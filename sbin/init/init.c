@@ -154,6 +154,8 @@ typedef struct init_session {
 	int	se_flags;		/* status of session */
 #define	SE_SHUTDOWN	0x1		/* session won't be restarted */
 #define	SE_PRESENT	0x2		/* session is in /etc/ttys */
+#define	SE_IFEXISTS	0x4		/* session defined as "onifexists" */
+#define	SE_IFCONSOLE	0x8		/* session defined as "onifconsole" */
 	int	se_nspace;		/* spacing count */
 	char	*se_device;		/* filename of port */
 	char	*se_getty;		/* what to run on that port */
@@ -1260,7 +1262,6 @@ static session_t *
 new_session(session_t *sprev, struct ttyent *typ)
 {
 	session_t *sp;
-	int fd;
 
 	if ((typ->ty_status & TTY_ON) == 0 ||
 	    typ->ty_name == 0 ||
@@ -1271,20 +1272,14 @@ new_session(session_t *sprev, struct ttyent *typ)
 
 	sp->se_flags |= SE_PRESENT;
 
-	sp->se_device = malloc(sizeof(_PATH_DEV) + strlen(typ->ty_name));
-	sprintf(sp->se_device, "%s%s", _PATH_DEV, typ->ty_name);
+	if ((typ->ty_status & TTY_IFEXISTS) != 0)
+		sp->se_flags |= SE_IFEXISTS;
 
-	/*
-	 * Attempt to open the device, if we get "device not configured"
-	 * then don't add the device to the session list.
-	 */
-	if ((fd = open(sp->se_device, O_RDONLY | O_NONBLOCK, 0)) < 0) {
-		if (errno == ENXIO) {
-			free_session(sp);
-			return (0);
-		}
-	} else
-		close(fd);
+	if ((typ->ty_status & TTY_IFCONSOLE) != 0)
+		sp->se_flags |= SE_IFCONSOLE;
+
+	if (asprintf(&sp->se_device, "%s%s", _PATH_DEV, typ->ty_name) < 0)
+		err(1, "asprintf");
 
 	if (setupargv(sp, typ) == 0) {
 		free_session(sp);
@@ -1315,8 +1310,8 @@ setupargv(session_t *sp, struct ttyent *typ)
 		free(sp->se_getty_argv_space);
 		free(sp->se_getty_argv);
 	}
-	sp->se_getty = malloc(strlen(typ->ty_getty) + strlen(typ->ty_name) + 2);
-	sprintf(sp->se_getty, "%s %s", typ->ty_getty, typ->ty_name);
+	if (asprintf(&sp->se_getty, "%s %s", typ->ty_getty, typ->ty_name) < 0)
+		err(1, "asprintf");
 	sp->se_getty_argv_space = strdup(sp->se_getty);
 	sp->se_getty_argv = construct_argv(sp->se_getty_argv_space);
 	if (sp->se_getty_argv == NULL) {
@@ -1429,7 +1424,7 @@ start_window_system(session_t *sp)
 	if (sp->se_type) {
 		/* Don't use malloc after fork */
 		strcpy(term, "TERM=");
-		strncat(term, sp->se_type, sizeof(term) - 6);
+		strlcat(term, sp->se_type, sizeof(term));
 		env[0] = term;
 		env[1] = 0;
 	}
@@ -1493,7 +1488,7 @@ start_getty(session_t *sp)
 	if (sp->se_type) {
 		/* Don't use malloc after fork */
 		strcpy(term, "TERM=");
-		strncat(term, sp->se_type, sizeof(term) - 6);
+		strlcat(term, sp->se_type, sizeof(term));
 		env[0] = term;
 		env[1] = 0;
 	} else
@@ -1502,6 +1497,30 @@ start_getty(session_t *sp)
 	stall("can't exec getty '%s' for port %s: %m",
 		sp->se_getty_argv[0], sp->se_device);
 	_exit(1);
+}
+
+/*
+ * Return 1 if the session is defined as "onifexists"
+ * or "onifconsole" and the device node does not exist.
+ */
+static int
+session_has_no_tty(session_t *sp)
+{
+	int fd;
+
+	if ((sp->se_flags & SE_IFEXISTS) == 0 &&
+	    (sp->se_flags & SE_IFCONSOLE) == 0)
+		return (0);
+
+	fd = open(sp->se_device, O_RDONLY | O_NONBLOCK, 0);
+	if (fd < 0) {
+		if (errno == ENOENT)
+			return (1);
+		return (0);
+	}
+
+	close(fd);
+	return (0);
 }
 
 /*
@@ -1522,7 +1541,8 @@ collect_child(pid_t pid)
 	del_session(sp);
 	sp->se_process = 0;
 
-	if (sp->se_flags & SE_SHUTDOWN) {
+	if (sp->se_flags & SE_SHUTDOWN ||
+	    session_has_no_tty(sp)) {
 		if ((sprev = sp->se_prev) != NULL)
 			sprev->se_next = sp->se_next;
 		else
@@ -1607,6 +1627,8 @@ multi_user(void)
 
 	for (sp = sessions; sp; sp = sp->se_next) {
 		if (sp->se_process)
+			continue;
+		if (session_has_no_tty(sp))
 			continue;
 		if ((pid = start_getty(sp)) == -1) {
 			/* serious trouble */

@@ -141,6 +141,9 @@ ncl_nget(struct mount *mntp, u_int8_t *fhp, int fhsize, struct nfsnode **npp,
 	 * happened to return an error no special casing is needed).
 	 */
 	mtx_init(&np->n_mtx, "NEWNFSnode lock", NULL, MTX_DEF | MTX_DUPOK);
+	lockinit(&np->n_excl, PVFS, "nfsupg", VLKTIMEOUT, LK_NOSHARE |
+	    LK_CANRECURSE);
+
 	/*
 	 * NFS supports recursive and shared locking.
 	 */
@@ -167,6 +170,7 @@ ncl_nget(struct mount *mntp, u_int8_t *fhp, int fhsize, struct nfsnode **npp,
 		*npp = NULL;
 		FREE((caddr_t)np->n_fhp, M_NFSFH);
 		mtx_destroy(&np->n_mtx);
+		lockdestroy(&np->n_excl);
 		uma_zfree(newnfsnode_zone, np);
 		return (error);
 	}
@@ -259,10 +263,12 @@ ncl_inactive(struct vop_inactive_args *ap)
 
 	/*
 	 * NMODIFIED means that there might be dirty/stale buffers
-	 * associated with the NFS vnode.  None of the other flags are
-	 * meaningful after the vnode is unused.
+	 * associated with the NFS vnode.
+	 * NDSCOMMIT means that the file is on a pNFS server and commits
+	 * should be done to the DS.
+	 * None of the other flags are meaningful after the vnode is unused.
 	 */
-	np->n_flag &= NMODIFIED;
+	np->n_flag &= (NMODIFIED | NDSCOMMIT);
 	mtx_unlock(&np->n_mtx);
 	return (0);
 }
@@ -330,6 +336,7 @@ ncl_reclaim(struct vop_reclaim_args *ap)
 	if (np->n_v4 != NULL)
 		FREE((caddr_t)np->n_v4, M_NFSV4NODE);
 	mtx_destroy(&np->n_mtx);
+	lockdestroy(&np->n_excl);
 	uma_zfree(newnfsnode_zone, vp->v_data);
 	vp->v_data = NULL;
 	return (0);

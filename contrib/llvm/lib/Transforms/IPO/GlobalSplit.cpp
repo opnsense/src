@@ -14,23 +14,31 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/IPO/GlobalSplit.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/IR/Constant.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/DataLayout.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Operator.h"
+#include "llvm/IR/Type.h"
+#include "llvm/IR/User.h"
 #include "llvm/Pass.h"
-
-#include <set>
+#include "llvm/Support/Casting.h"
+#include "llvm/Transforms/IPO.h"
+#include <cstdint>
+#include <vector>
 
 using namespace llvm;
 
-namespace {
-
-bool splitGlobal(GlobalVariable &GV) {
+static bool splitGlobal(GlobalVariable &GV) {
   // If the address of the global is taken outside of the module, we cannot
   // apply this transformation.
   if (!GV.hasLocalLinkage())
@@ -85,7 +93,16 @@ bool splitGlobal(GlobalVariable &GV) {
       uint64_t ByteOffset = cast<ConstantInt>(
               cast<ConstantAsMetadata>(Type->getOperand(0))->getValue())
               ->getZExtValue();
-      if (ByteOffset < SplitBegin || ByteOffset >= SplitEnd)
+      // Type metadata may be attached one byte after the end of the vtable, for
+      // classes without virtual methods in Itanium ABI. AFAIK, it is never
+      // attached to the first byte of a vtable. Subtract one to get the right
+      // slice.
+      // This is making an assumption that vtable groups are the only kinds of
+      // global variables that !type metadata can be attached to, and that they
+      // are either Itanium ABI vtable groups or contain a single vtable (i.e.
+      // Microsoft ABI vtables).
+      uint64_t AttachedTo = (ByteOffset == 0) ? ByteOffset : ByteOffset - 1;
+      if (AttachedTo < SplitBegin || AttachedTo >= SplitEnd)
         continue;
       SplitGV->addMetadata(
           LLVMContext::MD_type,
@@ -121,7 +138,7 @@ bool splitGlobal(GlobalVariable &GV) {
   return true;
 }
 
-bool splitGlobals(Module &M) {
+static bool splitGlobals(Module &M) {
   // First, see if the module uses either of the llvm.type.test or
   // llvm.type.checked.load intrinsics, which indicates that splitting globals
   // may be beneficial.
@@ -142,12 +159,16 @@ bool splitGlobals(Module &M) {
   return Changed;
 }
 
+namespace {
+
 struct GlobalSplit : public ModulePass {
   static char ID;
+
   GlobalSplit() : ModulePass(ID) {
     initializeGlobalSplitPass(*PassRegistry::getPassRegistry());
   }
-  bool runOnModule(Module &M) {
+
+  bool runOnModule(Module &M) override {
     if (skipModule(M))
       return false;
 
@@ -155,10 +176,11 @@ struct GlobalSplit : public ModulePass {
   }
 };
 
-}
+} // end anonymous namespace
+
+char GlobalSplit::ID = 0;
 
 INITIALIZE_PASS(GlobalSplit, "globalsplit", "Global splitter", false, false)
-char GlobalSplit::ID = 0;
 
 ModulePass *llvm::createGlobalSplitPass() {
   return new GlobalSplit;

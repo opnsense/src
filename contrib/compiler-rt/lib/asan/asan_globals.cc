@@ -332,6 +332,26 @@ void __asan_unregister_image_globals(uptr *flag) {
   *flag = 0;
 }
 
+void __asan_register_elf_globals(uptr *flag, void *start, void *stop) {
+  if (*flag) return;
+  if (!start) return;
+  CHECK_EQ(0, ((uptr)stop - (uptr)start) % sizeof(__asan_global));
+  __asan_global *globals_start = (__asan_global*)start;
+  __asan_global *globals_stop = (__asan_global*)stop;
+  __asan_register_globals(globals_start, globals_stop - globals_start);
+  *flag = 1;
+}
+
+void __asan_unregister_elf_globals(uptr *flag, void *start, void *stop) {
+  if (!*flag) return;
+  if (!start) return;
+  CHECK_EQ(0, ((uptr)stop - (uptr)start) % sizeof(__asan_global));
+  __asan_global *globals_start = (__asan_global*)start;
+  __asan_global *globals_stop = (__asan_global*)stop;
+  __asan_unregister_globals(globals_start, globals_stop - globals_start);
+  *flag = 0;
+}
+
 // Register an array of globals.
 void __asan_register_globals(__asan_global *globals, uptr n) {
   if (!flags()->report_globals) return;
@@ -364,6 +384,10 @@ void __asan_register_globals(__asan_global *globals, uptr n) {
     }
     RegisterGlobal(&globals[i]);
   }
+
+  // Poison the metadata. It should not be accessible to user code.
+  PoisonShadow(reinterpret_cast<uptr>(globals), n * sizeof(__asan_global),
+               kAsanGlobalRedzoneMagic);
 }
 
 // Unregister an array of globals.
@@ -379,6 +403,9 @@ void __asan_unregister_globals(__asan_global *globals, uptr n) {
     }
     UnregisterGlobal(&globals[i]);
   }
+
+  // Unpoison the metadata.
+  PoisonShadow(reinterpret_cast<uptr>(globals), n * sizeof(__asan_global), 0);
 }
 
 // This method runs immediately prior to dynamic initialization in each TU,

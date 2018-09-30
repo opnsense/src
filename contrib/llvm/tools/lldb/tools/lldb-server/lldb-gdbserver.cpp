@@ -21,14 +21,11 @@
 
 // C++ Includes
 
-// Other libraries and framework includes
-#include "llvm/ADT/StringRef.h"
 
 #include "Acceptor.h"
 #include "LLDBServerUtilities.h"
 #include "Plugins/Process/gdb-remote/GDBRemoteCommunicationServerLLGS.h"
 #include "Plugins/Process/gdb-remote/ProcessGDBRemoteLog.h"
-#include "lldb/Core/Error.h"
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Host/ConnectionFileDescriptor.h"
 #include "lldb/Host/HostGetOpt.h"
@@ -36,6 +33,16 @@
 #include "lldb/Host/Pipe.h"
 #include "lldb/Host/Socket.h"
 #include "lldb/Host/StringConvert.h"
+#include "lldb/Host/common/NativeProcessProtocol.h"
+#include "lldb/Utility/Status.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Errno.h"
+
+#if defined(__linux__)
+#include "Plugins/Process/Linux/NativeProcessLinux.h"
+#elif defined(__NetBSD__)
+#include "Plugins/Process/NetBSD/NativeProcessNetBSD.h"
+#endif
 
 #ifndef LLGS_PROGRAM_NAME
 #define LLGS_PROGRAM_NAME "lldb-server"
@@ -50,6 +57,30 @@ using namespace lldb;
 using namespace lldb_private;
 using namespace lldb_private::lldb_server;
 using namespace lldb_private::process_gdb_remote;
+
+namespace {
+#if defined(__linux__)
+typedef process_linux::NativeProcessLinux::Factory NativeProcessFactory;
+#elif defined(__NetBSD__)
+typedef process_netbsd::NativeProcessNetBSD::Factory NativeProcessFactory;
+#else
+// Dummy implementation to make sure the code compiles
+class NativeProcessFactory : public NativeProcessProtocol::Factory {
+public:
+  llvm::Expected<std::unique_ptr<NativeProcessProtocol>>
+  Launch(ProcessLaunchInfo &launch_info,
+         NativeProcessProtocol::NativeDelegate &delegate,
+         MainLoop &mainloop) const override {
+    llvm_unreachable("Not implemented");
+  }
+  llvm::Expected<std::unique_ptr<NativeProcessProtocol>>
+  Attach(lldb::pid_t pid, NativeProcessProtocol::NativeDelegate &delegate,
+         MainLoop &mainloop) const override {
+    llvm_unreachable("Not implemented");
+  }
+};
+#endif
+}
 
 //----------------------------------------------------------------------
 // option descriptors for getopt_long_only()
@@ -75,6 +106,7 @@ static struct option g_long_options[] = {
            // than llgs listening for a connection from address on port.
     {"setsid", no_argument, NULL,
      'S'}, // Call setsid() to make llgs run in its own session.
+    {"fd", required_argument, NULL, 'F'},
     {NULL, 0, NULL, 0}};
 
 //----------------------------------------------------------------------
@@ -101,18 +133,18 @@ static void display_usage(const char *progname, const char *subcommand) {
                   "[--log-file log-file-name] "
                   "[--log-channels log-channel-list] "
                   "[--setsid] "
+                  "[--fd file-descriptor]"
                   "[--named-pipe named-pipe-path] "
                   "[--native-regs] "
                   "[--attach pid] "
                   "[[HOST]:PORT] "
                   "[-- PROGRAM ARG1 ARG2 ...]\n",
           progname, subcommand);
-  exit(0);
 }
 
 void handle_attach_to_pid(GDBRemoteCommunicationServerLLGS &gdb_server,
                           lldb::pid_t pid) {
-  Error error = gdb_server.AttachToProcess(pid);
+  Status error = gdb_server.AttachToProcess(pid);
   if (error.Fail()) {
     fprintf(stderr, "error: failed to attach to pid %" PRIu64 ": %s\n", pid,
             error.AsCString());
@@ -145,40 +177,41 @@ void handle_attach(GDBRemoteCommunicationServerLLGS &gdb_server,
 
 void handle_launch(GDBRemoteCommunicationServerLLGS &gdb_server, int argc,
                    const char *const argv[]) {
-  Error error;
-  error = gdb_server.SetLaunchArguments(argv, argc);
-  if (error.Fail()) {
-    fprintf(stderr, "error: failed to set launch args for '%s': %s\n", argv[0],
-            error.AsCString());
+  ProcessLaunchInfo info;
+  info.GetFlags().Set(eLaunchFlagStopAtEntry | eLaunchFlagDebug |
+                      eLaunchFlagDisableASLR);
+  info.SetArguments(const_cast<const char **>(argv), true);
+
+  llvm::SmallString<64> cwd;
+  if (std::error_code ec = llvm::sys::fs::current_path(cwd)) {
+    llvm::errs() << "Error getting current directory: " << ec.message() << "\n";
     exit(1);
   }
+  info.SetWorkingDirectory(FileSpec(cwd, true));
 
-  unsigned int launch_flags = eLaunchFlagStopAtEntry | eLaunchFlagDebug;
+  StringList env;
+  Host::GetEnvironment(env);
+  info.GetEnvironmentEntries() = Args(env);
 
-  error = gdb_server.SetLaunchFlags(launch_flags);
+  gdb_server.SetLaunchInfo(info);
+
+  Status error = gdb_server.LaunchProcess();
   if (error.Fail()) {
-    fprintf(stderr, "error: failed to set launch flags for '%s': %s\n", argv[0],
-            error.AsCString());
-    exit(1);
-  }
-
-  error = gdb_server.LaunchProcess();
-  if (error.Fail()) {
-    fprintf(stderr, "error: failed to launch '%s': %s\n", argv[0],
-            error.AsCString());
+    llvm::errs() << llvm::formatv("error: failed to launch '{0}': {1}\n",
+                                  argv[0], error);
     exit(1);
   }
 }
 
-Error writeSocketIdToPipe(Pipe &port_pipe, const std::string &socket_id) {
+Status writeSocketIdToPipe(Pipe &port_pipe, const std::string &socket_id) {
   size_t bytes_written = 0;
   // Write the port number as a C string with the NULL terminator.
   return port_pipe.Write(socket_id.c_str(), socket_id.size() + 1,
                          bytes_written);
 }
 
-Error writeSocketIdToPipe(const char *const named_pipe_path,
-                          const std::string &socket_id) {
+Status writeSocketIdToPipe(const char *const named_pipe_path,
+                           const std::string &socket_id) {
   Pipe port_name_pipe;
   // Wait for 10 seconds for pipe to be opened.
   auto error = port_name_pipe.OpenAsWriterWithTimeout(named_pipe_path, false,
@@ -188,9 +221,9 @@ Error writeSocketIdToPipe(const char *const named_pipe_path,
   return writeSocketIdToPipe(port_name_pipe, socket_id);
 }
 
-Error writeSocketIdToPipe(int unnamed_pipe_fd, const std::string &socket_id) {
+Status writeSocketIdToPipe(int unnamed_pipe_fd, const std::string &socket_id) {
 #if defined(_WIN32)
-  return Error("Unnamed pipes are not supported on Windows.");
+  return Status("Unnamed pipes are not supported on Windows.");
 #else
   Pipe port_pipe{Pipe::kInvalidDescriptor, unnamed_pipe_fd};
   return writeSocketIdToPipe(port_pipe, socket_id);
@@ -201,10 +234,34 @@ void ConnectToRemote(MainLoop &mainloop,
                      GDBRemoteCommunicationServerLLGS &gdb_server,
                      bool reverse_connect, const char *const host_and_port,
                      const char *const progname, const char *const subcommand,
-                     const char *const named_pipe_path, int unnamed_pipe_fd) {
-  Error error;
+                     const char *const named_pipe_path, int unnamed_pipe_fd,
+                     int connection_fd) {
+  Status error;
 
-  if (host_and_port && host_and_port[0]) {
+  std::unique_ptr<Connection> connection_up;
+  if (connection_fd != -1) {
+    // Build the connection string.
+    char connection_url[512];
+    snprintf(connection_url, sizeof(connection_url), "fd://%d", connection_fd);
+
+    // Create the connection.
+#if !defined LLDB_DISABLE_POSIX && !defined _WIN32
+    ::fcntl(connection_fd, F_SETFD, FD_CLOEXEC);
+#endif
+    connection_up.reset(new ConnectionFileDescriptor);
+    auto connection_result = connection_up->Connect(connection_url, &error);
+    if (connection_result != eConnectionStatusSuccess) {
+      fprintf(stderr, "error: failed to connect to client at '%s' "
+                      "(connection status: %d)\n",
+              connection_url, static_cast<int>(connection_result));
+      exit(-1);
+    }
+    if (error.Fail()) {
+      fprintf(stderr, "error: failed to connect to client at '%s': %s\n",
+              connection_url, error.AsCString());
+      exit(-1);
+    }
+  } else if (host_and_port && host_and_port[0]) {
     // Parse out host and port.
     std::string final_host_and_port;
     std::string connection_host;
@@ -224,7 +281,6 @@ void ConnectToRemote(MainLoop &mainloop,
       connection_portno = StringConvert::ToUInt32(connection_port.c_str(), 0);
     }
 
-    std::unique_ptr<Connection> connection_up;
 
     if (reverse_connect) {
       // llgs will connect to the gdb-remote client.
@@ -232,7 +288,7 @@ void ConnectToRemote(MainLoop &mainloop,
       // Ensure we have a port number for the connection.
       if (connection_portno == 0) {
         fprintf(stderr, "error: port number must be specified on when using "
-                        "reverse connect");
+                        "reverse connect\n");
         exit(1);
       }
 
@@ -246,12 +302,12 @@ void ConnectToRemote(MainLoop &mainloop,
       auto connection_result = connection_up->Connect(connection_url, &error);
       if (connection_result != eConnectionStatusSuccess) {
         fprintf(stderr, "error: failed to connect to client at '%s' "
-                        "(connection status: %d)",
+                        "(connection status: %d)\n",
                 connection_url, static_cast<int>(connection_result));
         exit(-1);
       }
       if (error.Fail()) {
-        fprintf(stderr, "error: failed to connect to client at '%s': %s",
+        fprintf(stderr, "error: failed to connect to client at '%s': %s\n",
                 connection_url, error.AsCString());
         exit(-1);
       }
@@ -259,7 +315,7 @@ void ConnectToRemote(MainLoop &mainloop,
       std::unique_ptr<Acceptor> acceptor_up(
           Acceptor::Create(final_host_and_port, false, error));
       if (error.Fail()) {
-        fprintf(stderr, "failed to create acceptor: %s", error.AsCString());
+        fprintf(stderr, "failed to create acceptor: %s\n", error.AsCString());
         exit(1);
       }
       error = acceptor_up->Listen(1);
@@ -273,7 +329,7 @@ void ConnectToRemote(MainLoop &mainloop,
         if (named_pipe_path && named_pipe_path[0]) {
           error = writeSocketIdToPipe(named_pipe_path, socket_id);
           if (error.Fail())
-            fprintf(stderr, "failed to write to the named pipe \'%s\': %s",
+            fprintf(stderr, "failed to write to the named pipe \'%s\': %s\n",
                     named_pipe_path, error.AsCString());
         }
         // If we have an unnamed pipe to write the socket id back to, do that
@@ -281,7 +337,7 @@ void ConnectToRemote(MainLoop &mainloop,
         else if (unnamed_pipe_fd >= 0) {
           error = writeSocketIdToPipe(unnamed_pipe_fd, socket_id);
           if (error.Fail())
-            fprintf(stderr, "failed to write to the unnamed pipe: %s",
+            fprintf(stderr, "failed to write to the unnamed pipe: %s\n",
                     error.AsCString());
         }
       } else {
@@ -297,21 +353,21 @@ void ConnectToRemote(MainLoop &mainloop,
       }
       connection_up.reset(conn);
     }
-    error = gdb_server.InitializeConnection(std::move(connection_up));
-    if (error.Fail()) {
-      fprintf(stderr, "Failed to initialize connection: %s\n",
-              error.AsCString());
-      exit(-1);
-    }
-    printf("Connection established.\n");
   }
+  error = gdb_server.InitializeConnection(std::move(connection_up));
+  if (error.Fail()) {
+    fprintf(stderr, "Failed to initialize connection: %s\n",
+            error.AsCString());
+    exit(-1);
+  }
+  printf("Connection established.\n");
 }
 
 //----------------------------------------------------------------------
 // main
 //----------------------------------------------------------------------
 int main_gdbserver(int argc, char *argv[]) {
-  Error error;
+  Status error;
   MainLoop mainloop;
 #ifndef _WIN32
   // Setup signal handlers first thing.
@@ -333,6 +389,7 @@ int main_gdbserver(int argc, char *argv[]) {
       log_channels; // e.g. "lldb process threads:gdb-remote default:linux all"
   int unnamed_pipe_fd = -1;
   bool reverse_connect = false;
+  int connection_fd = -1;
 
   // ProcessLaunchInfo launch_info;
   ProcessAttachInfo attach_info;
@@ -382,6 +439,10 @@ int main_gdbserver(int argc, char *argv[]) {
       reverse_connect = true;
       break;
 
+    case 'F':
+      connection_fd = StringConvert::ToUInt32(optarg, -1);
+      break;
+
 #ifndef _WIN32
     case 'S':
       // Put llgs into a new session. Terminals group processes
@@ -398,10 +459,9 @@ int main_gdbserver(int argc, char *argv[]) {
       {
         const ::pid_t new_sid = setsid();
         if (new_sid == -1) {
-          const char *errno_str = strerror(errno);
-          fprintf(stderr, "failed to set new session id for %s (%s)\n",
-                  LLGS_PROGRAM_NAME,
-                  errno_str ? errno_str : "<no error string>");
+          llvm::errs() << llvm::formatv(
+              "failed to set new session id for {0} ({1})\n", LLGS_PROGRAM_NAME,
+              llvm::sys::StrError());
         }
       }
       break;
@@ -424,11 +484,13 @@ int main_gdbserver(int argc, char *argv[]) {
     exit(option_error);
   }
 
-  if (!LLDBServerUtilities::SetupLogging(log_file, log_channels,
-                                         LLDB_LOG_OPTION_PREPEND_TIMESTAMP))
+  if (!LLDBServerUtilities::SetupLogging(
+          log_file, log_channels,
+          LLDB_LOG_OPTION_PREPEND_TIMESTAMP |
+              LLDB_LOG_OPTION_PREPEND_FILE_FUNCTION))
     return -1;
 
-  Log *log(lldb_private::GetLogIfAnyCategoriesSet(GDBR_LOG_VERBOSE));
+  Log *log(lldb_private::GetLogIfAnyCategoriesSet(GDBR_LOG_PROCESS));
   if (log) {
     log->Printf("lldb-server launch");
     for (int i = 0; i < argc; i++) {
@@ -440,12 +502,14 @@ int main_gdbserver(int argc, char *argv[]) {
   argc -= optind;
   argv += optind;
 
-  if (argc == 0) {
+  if (argc == 0 && connection_fd == -1) {
+    fputs("No arguments\n", stderr);
     display_usage(progname, subcommand);
     exit(255);
   }
 
-  GDBRemoteCommunicationServerLLGS gdb_server(mainloop);
+  NativeProcessFactory factory;
+  GDBRemoteCommunicationServerLLGS gdb_server(mainloop, factory);
 
   const char *const host_and_port = argv[0];
   argc -= 1;
@@ -468,7 +532,7 @@ int main_gdbserver(int argc, char *argv[]) {
 
   ConnectToRemote(mainloop, gdb_server, reverse_connect, host_and_port,
                   progname, subcommand, named_pipe_path.c_str(),
-                  unnamed_pipe_fd);
+                  unnamed_pipe_fd, connection_fd);
 
   if (!gdb_server.IsConnected()) {
     fprintf(stderr, "no connection information provided, unable to run\n");

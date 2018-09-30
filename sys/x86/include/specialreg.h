@@ -74,6 +74,7 @@
 #define	CR4_PCIDE 0x00020000	/* Enable Context ID */
 #define	CR4_XSAVE 0x00040000	/* XSETBV/XGETBV */
 #define	CR4_SMEP 0x00100000	/* Supervisor-Mode Execution Prevention */
+#define	CR4_SMAP 0x00200000	/* Supervisor-Mode Access Prevention */
 
 /*
  * Bits in AMD64 special registers.  EFER is 64 bits wide.
@@ -322,6 +323,13 @@
 #define	AMDPM_CPB		0x00000200
 
 /*
+ * AMD extended function 8000_0008h ebx info (amd_extended_feature_extensions)
+ */
+#define	AMDFEID_CLZERO		0x00000001
+#define	AMDFEID_IRPERF		0x00000002
+#define	AMDFEID_XSAVEERPTR	0x00000004
+
+/*
  * AMD extended function 8000_0008h ecx info
  */
 #define	AMDID_CMP_CORES		0x000000ff
@@ -362,6 +370,7 @@
 #define	CPUID_STDEXT_AVX512CD	0x10000000
 #define	CPUID_STDEXT_SHA	0x20000000
 #define	CPUID_STDEXT_AVX512BW	0x40000000
+#define	CPUID_STDEXT_AVX512VL	0x80000000
 
 /*
  * CPUID instruction 7 Structured Extended Features, leaf 0 ecx info
@@ -378,12 +387,13 @@
  */
 #define	CPUID_STDEXT3_IBPB	0x04000000
 #define	CPUID_STDEXT3_STIBP	0x08000000
-#define	CPUID_STDEXT3_L1D_FLUSH	0x10000000
 #define	CPUID_STDEXT3_ARCH_CAP	0x20000000
+#define	CPUID_STDEXT3_SSBD	0x80000000
 
 /* MSR IA32_ARCH_CAP(ABILITIES) bits */
 #define	IA32_ARCH_CAP_RDCL_NO	0x00000001
 #define	IA32_ARCH_CAP_IBRS_ALL	0x00000002
+#define	IA32_ARCH_CAP_SSBD_NO	0x00000004
 
 /*
  * CPUID manufacturers identifiers
@@ -428,7 +438,6 @@
 #define	MSR_IA32_EXT_CONFIG	0x0ee	/* Undocumented. Core Solo/Duo only */
 #define	MSR_MTRRcap		0x0fe
 #define	MSR_IA32_ARCH_CAP	0x10a
-#define	MSR_IA32_FLUSH_CMD	0x10b
 #define	MSR_BBL_CR_ADDR		0x116
 #define	MSR_BBL_CR_DECC		0x118
 #define	MSR_BBL_CR_CTL		0x119
@@ -578,12 +587,10 @@
 /* MSR IA32_SPEC_CTRL */
 #define	IA32_SPEC_CTRL_IBRS	0x00000001
 #define	IA32_SPEC_CTRL_STIBP	0x00000002
+#define	IA32_SPEC_CTRL_SSBD	0x00000004
 
 /* MSR IA32_PRED_CMD */
 #define	IA32_PRED_CMD_IBPB_BARRIER	0x0000000000000001ULL
-
-/* MSR IA32_FLUSH_CMD */
-#define	IA32_FLUSH_CMD_L1D	0x00000001
 
 /*
  * PAT modes.

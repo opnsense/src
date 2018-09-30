@@ -48,8 +48,8 @@ static void qla_replenish_normal_rx(qla_host_t *ha, qla_sds_t *sdsp,
 static void
 qla_rcv_error(qla_host_t *ha)
 {
-	ha->flags.stop_rcv = 1;
-	ha->qla_initiate_recovery = 1;
+	ha->stop_rcv = 1;
+	QL_INITIATE_RECOVERY(ha);
 }
 
 
@@ -166,7 +166,11 @@ qla_rx_intr(qla_host_t *ha, qla_sgl_rcv_t *sgc, uint32_t sds_idx)
 #if __FreeBSD_version >= 1100000
 	M_HASHTYPE_SET(mpf, M_HASHTYPE_OPAQUE_HASH);
 #else
-	M_HASHTYPE_SET(mpf, M_HASHTYPE_NONE);
+#if (__FreeBSD_version >= 903511 && __FreeBSD_version < 1100000) 
+        M_HASHTYPE_SET(mpf, M_HASHTYPE_OPAQUE);
+#else
+        M_HASHTYPE_SET(mpf, M_HASHTYPE_NONE);
+#endif
 #endif /* #if __FreeBSD_version >= 1100000 */
 
 	if (ha->hw.enable_soft_lro) {
@@ -222,7 +226,7 @@ qla_lro_intr(qla_host_t *ha, qla_sgl_lro_t *sgc, uint32_t sds_idx)
 
 	rx_ring = &ha->rx_ring[r_idx];
 	
-	ha->lro_pkt_count++;
+	ha->hw.rds[r_idx].lro_pkt_count++;
 
 	sdsp = &ha->hw.sds[sds_idx];
 	
@@ -233,7 +237,7 @@ qla_lro_intr(qla_host_t *ha, qla_sgl_lro_t *sgc, uint32_t sds_idx)
 	} else {
 		pkt_length += QLA_TCP_HDR_SIZE;
 	}
-	ha->lro_bytes += pkt_length;
+	ha->hw.rds[r_idx].lro_bytes += pkt_length;
 
 	for (i = 0; i < sgc->num_handles; i++) {
 		rxb = &rx_ring->rx_buf[sgc->handle[i] & 0x7FFF];
@@ -383,7 +387,7 @@ qla_rcv_cont_sds(qla_host_t *ha, uint32_t sds_idx, uint32_t comp_idx,
 
 		opcode = Q8_STAT_DESC_OPCODE((sdesc->data[1]));
 
-		if (!opcode) {
+		if (!opcode || QL_ERR_INJECT(ha, INJCT_INV_CONT_OPCODE)) {
 			device_printf(ha->pci_dev, "%s: opcode=0 %p %p\n",
 				__func__, (void *)sdesc->data[0],
 				(void *)sdesc->data[1]);
@@ -493,7 +497,7 @@ ql_rcv_isr(qla_host_t *ha, uint32_t sds_idx, uint32_t count)
 	hw = &ha->hw;
 
 	hw->sds[sds_idx].rcv_active = 1;
-	if (ha->flags.stop_rcv) {
+	if (ha->stop_rcv) {
 		hw->sds[sds_idx].rcv_active = 0;
 		return 0;
 	}
@@ -505,7 +509,7 @@ ql_rcv_isr(qla_host_t *ha, uint32_t sds_idx, uint32_t count)
 	 */
 	comp_idx = hw->sds[sds_idx].sdsr_next;
 
-	while (count-- && !ha->flags.stop_rcv) {
+	while (count-- && !ha->stop_rcv) {
 
 		sdesc = (q80_stat_desc_t *)
 				&hw->sds[sds_idx].sds_ring_base[comp_idx];
@@ -515,7 +519,6 @@ ql_rcv_isr(qla_host_t *ha, uint32_t sds_idx, uint32_t count)
 		if (!opcode)
 			break;
 
-		hw->sds[sds_idx].intr_count++;
 		switch (opcode) {
 
 		case Q8_STAT_DESC_OPCODE_RCV_PKT:
@@ -553,8 +556,9 @@ ql_rcv_isr(qla_host_t *ha, uint32_t sds_idx, uint32_t count)
 				sdesc0 = (q80_stat_desc_t *)
 					&hw->sds[sds_idx].sds_ring_base[c_idx];
 
-				if (Q8_STAT_DESC_OPCODE((sdesc0->data[1])) !=
-						Q8_STAT_DESC_OPCODE_CONT) {
+				if ((Q8_STAT_DESC_OPCODE((sdesc0->data[1])) !=
+						Q8_STAT_DESC_OPCODE_CONT) ||
+				QL_ERR_INJECT(ha, INJCT_SGL_RCV_INV_DESC_COUNT)) {
 					desc_count = 0;
 					break;
 				}
@@ -615,8 +619,9 @@ ql_rcv_isr(qla_host_t *ha, uint32_t sds_idx, uint32_t count)
 				sdesc0 = (q80_stat_desc_t *)
 					&hw->sds[sds_idx].sds_ring_base[c_idx];
 
-				if (Q8_STAT_DESC_OPCODE((sdesc0->data[1])) !=
-						Q8_STAT_DESC_OPCODE_CONT) {
+				if ((Q8_STAT_DESC_OPCODE((sdesc0->data[1])) !=
+						Q8_STAT_DESC_OPCODE_CONT) ||
+				QL_ERR_INJECT(ha, INJCT_SGL_LRO_INV_DESC_COUNT)) {
 					desc_count = 0;
 					break;
 				}
@@ -696,6 +701,7 @@ ql_rcv_isr(qla_host_t *ha, uint32_t sds_idx, uint32_t count)
 			break;
 
 		default:
+			desc_count = 0;
 			device_printf(dev, "%s: default 0x%llx!\n", __func__,
 					(long long unsigned int)sdesc->data[0]);
 			break;
@@ -747,15 +753,13 @@ ql_rcv_isr(qla_host_t *ha, uint32_t sds_idx, uint32_t count)
 
 	}
 
-	if (ha->flags.stop_rcv)
+	if (ha->stop_rcv)
 		goto ql_rcv_isr_exit;
 
 	if (hw->sds[sds_idx].sdsr_next != comp_idx) {
 		QL_UPDATE_SDS_CONSUMER_INDEX(ha, sds_idx, comp_idx);
 		hw->sds[sds_idx].sdsr_next = comp_idx;
 	} else {
-		hw->sds[sds_idx].spurious_intr_count++;
-
 		if (ha->hw.num_rds_rings > 1)
 			r_idx = sds_idx;
 
@@ -819,7 +823,13 @@ ql_mbx_isr(void *arg)
 		data = READ_REG32(ha, (Q8_FW_MBOX0 + 12));
 
 		prev_link_state =  ha->hw.link_up;
-		ha->hw.link_up = (((data & 0xFF) == 0) ? 0 : 1);
+
+		data = (((data & 0xFF) == 0) ? 0 : 1);
+		atomic_store_rel_8(&ha->hw.link_up, (uint8_t)data);
+
+		device_printf(ha->pci_dev,
+			"%s: AEN[0x8001] data = 0x%08x, prev_link_state = 0x%08x\n",
+			__func__, data, prev_link_state);
 
 		if (prev_link_state !=  ha->hw.link_up) {
 			if (ha->hw.link_up)
@@ -830,17 +840,18 @@ ql_mbx_isr(void *arg)
 
 
 		ha->hw.module_type = ((data >> 8) & 0xFF);
-		ha->hw.flags.fduplex = (((data & 0xFF0000) == 0) ? 0 : 1);
-		ha->hw.flags.autoneg = (((data & 0xFF000000) == 0) ? 0 : 1);
+		ha->hw.fduplex = (((data & 0xFF0000) == 0) ? 0 : 1);
+		ha->hw.autoneg = (((data & 0xFF000000) == 0) ? 0 : 1);
 		
 		data = READ_REG32(ha, (Q8_FW_MBOX0 + 16));
-		ha->hw.flags.loopback_mode = data & 0x03;
+		ha->hw.loopback_mode = data & 0x03;
 
 		ha->hw.link_faults = (data >> 3) & 0xFF;
 
 		break;
 
         case 0x8100:
+		device_printf(ha->pci_dev, "%s: AEN[0x%08x]\n", __func__, data);
 		ha->hw.imd_compl=1;
 		break;
 
@@ -851,6 +862,9 @@ ql_mbx_isr(void *arg)
                 ha->hw.aen_mb2 = READ_REG32(ha, (Q8_FW_MBOX0 + 8));
                 ha->hw.aen_mb3 = READ_REG32(ha, (Q8_FW_MBOX0 + 12));
                 ha->hw.aen_mb4 = READ_REG32(ha, (Q8_FW_MBOX0 + 16));
+		device_printf(ha->pci_dev, "%s: AEN[0x%08x 0x%08x 0x%08x 0%08x 0x%08x]\n",
+			__func__, data, ha->hw.aen_mb1, ha->hw.aen_mb2,
+			ha->hw.aen_mb3, ha->hw.aen_mb4);
                 break;
 
         case 0x8110:
@@ -984,8 +998,8 @@ ql_isr(void *arg)
 	if ((idx = ivec->sds_idx) >= ha->hw.num_sds_rings)
 		return;
 
-
 	fp = &ha->tx_fp[idx];
+	hw->sds[idx].intr_count++;
 
 	if ((fp->fp_taskqueue != NULL) &&
 		(ifp->if_drv_flags & IFF_DRV_RUNNING))

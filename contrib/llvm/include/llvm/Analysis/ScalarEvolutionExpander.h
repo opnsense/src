@@ -27,8 +27,15 @@ namespace llvm {
   class TargetTransformInfo;
 
   /// Return true if the given expression is safe to expand in the sense that
-  /// all materialized values are safe to speculate.
+  /// all materialized values are safe to speculate anywhere their operands are
+  /// defined.
   bool isSafeToExpand(const SCEV *S, ScalarEvolution &SE);
+
+  /// Return true if the given expression is safe to expand in the sense that
+  /// all materialized values are defined and safe to speculate at the specified
+  /// location and their operands are defined at this location.
+  bool isSafeToExpandAt(const SCEV *S, const Instruction *InsertionPoint,
+                        ScalarEvolution &SE);
 
   /// This class uses information about analyze scalars to rewrite expressions
   /// in canonical form.
@@ -40,7 +47,7 @@ namespace llvm {
     ScalarEvolution &SE;
     const DataLayout &DL;
 
-    // New instructions receive a name to identifies them with the current pass.
+    // New instructions receive a name to identify them with the current pass.
     const char* IVName;
 
     // InsertedExpressions caches Values for reuse, so must track RAUW.
@@ -189,7 +196,7 @@ namespace llvm {
     /// replace congruent phis with their most canonical representative. Return
     /// the number of phis eliminated.
     unsigned replaceCongruentIVs(Loop *L, const DominatorTree *DT,
-                                 SmallVectorImpl<WeakVH> &DeadInsts,
+                                 SmallVectorImpl<WeakTrackingVH> &DeadInsts,
                                  const TargetTransformInfo *TTI = nullptr);
 
     /// Insert code to directly compute the specified SCEV expression into the

@@ -7,21 +7,20 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include <sstream>
-
-#include "lldb/Core/ArchSpec.h"
-#include "lldb/Core/DataExtractor.h"
+#include "lldb/Symbol/JavaASTContext.h"
+#include "lldb/Core/DumpDataExtractor.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
-#include "lldb/Core/Stream.h"
 #include "lldb/Core/StreamFile.h"
 #include "lldb/Core/ValueObject.h"
 #include "lldb/Expression/DWARFExpression.h"
 #include "lldb/Symbol/CompilerType.h"
-#include "lldb/Symbol/JavaASTContext.h"
 #include "lldb/Symbol/SymbolFile.h"
 #include "lldb/Symbol/Type.h"
 #include "lldb/Target/Target.h"
+#include "lldb/Utility/ArchSpec.h"
+#include "lldb/Utility/Stream.h"
+#include <sstream>
 
 #include "Plugins/SymbolFile/DWARF/DWARFASTParserJava.h"
 
@@ -134,10 +133,10 @@ public:
     obj_load_address.SetValueType(Value::eValueTypeLoadAddress);
 
     Value result;
-    if (m_dynamic_type_id.Evaluate(exe_ctx->GetBestExecutionContextScope(),
-                                   nullptr, nullptr, 0, &obj_load_address,
-                                   nullptr, result, nullptr)) {
-      Error error;
+    if (m_dynamic_type_id.Evaluate(exe_ctx->GetBestExecutionContextScope(), 0,
+                                   &obj_load_address, nullptr, result,
+                                   nullptr)) {
+      Status error;
 
       lldb::addr_t type_id_addr = result.GetScalar().UInt();
       lldb::ProcessSP process_sp = exe_ctx->GetProcessSP();
@@ -303,7 +302,7 @@ public:
     if (!m_length_expression.IsValid())
       return UINT32_MAX;
 
-    Error error;
+    Status error;
     ValueObjectSP address_obj = value_obj->AddressOf(error);
     if (error.Fail())
       return UINT32_MAX;
@@ -315,9 +314,8 @@ public:
     ExecutionContextScope *exec_ctx_scope = value_obj->GetExecutionContextRef()
                                                 .Lock(true)
                                                 .GetBestExecutionContextScope();
-    if (m_length_expression.Evaluate(exec_ctx_scope, nullptr, nullptr, 0,
-                                     nullptr, &obj_load_address, result,
-                                     nullptr))
+    if (m_length_expression.Evaluate(exec_ctx_scope, 0, nullptr,
+                                     &obj_load_address, result, nullptr))
       return result.GetScalar().UInt();
 
     return UINT32_MAX;
@@ -885,13 +883,6 @@ JavaASTContext::GetNumTemplateArguments(lldb::opaque_compiler_type_t type) {
   return 0;
 }
 
-CompilerType
-JavaASTContext::GetTemplateArgument(lldb::opaque_compiler_type_t type,
-                                    size_t idx,
-                                    lldb::TemplateArgumentKind &kind) {
-  return CompilerType();
-}
-
 uint32_t JavaASTContext::GetNumFields(lldb::opaque_compiler_type_t type) {
   if (JavaObjectType *obj =
           llvm::dyn_cast<JavaObjectType>(static_cast<JavaType *>(type))) {
@@ -1004,10 +995,10 @@ bool JavaASTContext::DumpTypeValue(
     size_t data_byte_size, uint32_t bitfield_bit_size,
     uint32_t bitfield_bit_offset, ExecutionContextScope *exe_scope) {
   if (IsScalarType(type)) {
-    return data.Dump(s, data_offset, format, data_byte_size,
-                     1, // count
-                     UINT32_MAX, LLDB_INVALID_ADDRESS, bitfield_bit_size,
-                     bitfield_bit_offset, exe_scope);
+    return DumpDataExtractor(data, s, data_offset, format, data_byte_size,
+                             1, // count
+                             UINT32_MAX, LLDB_INVALID_ADDRESS,
+                             bitfield_bit_size, bitfield_bit_offset, exe_scope);
   }
   return false;
 }

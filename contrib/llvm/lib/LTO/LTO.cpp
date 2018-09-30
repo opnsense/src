@@ -20,9 +20,12 @@
 #include "llvm/IR/AutoUpgrade.h"
 #include "llvm/IR/DiagnosticPrinter.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/IR/Mangler.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/LTO/LTOBackend.h"
 #include "llvm/Linker/IRMover.h"
-#include "llvm/Object/ModuleSummaryIndexObjectFile.h"
+#include "llvm/Object/IRObjectFile.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
@@ -31,6 +34,7 @@
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/ThreadPool.h"
 #include "llvm/Support/Threading.h"
+#include "llvm/Support/VCSRevision.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
@@ -46,6 +50,12 @@ using namespace object;
 
 #define DEBUG_TYPE "lto"
 
+// The values are (type identifier, summary) pairs.
+typedef DenseMap<
+    GlobalValue::GUID,
+    TinyPtrVector<const std::pair<const std::string, TypeIdSummary> *>>
+    TypeIdSummariesByGuidTy;
+
 // Returns a unique hash for the Module considering the current list of
 // export/import and other global analysis results.
 // The hash is produced in \p Key.
@@ -54,7 +64,10 @@ static void computeCacheKey(
     StringRef ModuleID, const FunctionImporter::ImportMapTy &ImportList,
     const FunctionImporter::ExportSetTy &ExportList,
     const std::map<GlobalValue::GUID, GlobalValue::LinkageTypes> &ResolvedODR,
-    const GVSummaryMapTy &DefinedGlobals) {
+    const GVSummaryMapTy &DefinedGlobals,
+    const TypeIdSummariesByGuidTy &TypeIdSummariesByGuid,
+    const std::set<GlobalValue::GUID> &CfiFunctionDefs,
+    const std::set<GlobalValue::GUID> &CfiFunctionDecls) {
   // Compute the unique hash for this entry.
   // This is based on the current compiler version, the module itself, the
   // export list, the hash for every single module in the import list, the
@@ -63,7 +76,7 @@ static void computeCacheKey(
 
   // Start with the compiler revision
   Hasher.update(LLVM_VERSION_STRING);
-#ifdef HAVE_LLVM_REVISION
+#ifdef LLVM_REVISION
   Hasher.update(LLVM_REVISION);
 #endif
 
@@ -80,6 +93,18 @@ static void computeCacheKey(
     Data[3] = I >> 24;
     Hasher.update(ArrayRef<uint8_t>{Data, 4});
   };
+  auto AddUint64 = [&](uint64_t I) {
+    uint8_t Data[8];
+    Data[0] = I;
+    Data[1] = I >> 8;
+    Data[2] = I >> 16;
+    Data[3] = I >> 24;
+    Data[4] = I >> 32;
+    Data[5] = I >> 40;
+    Data[6] = I >> 48;
+    Data[7] = I >> 56;
+    Hasher.update(ArrayRef<uint8_t>{Data, 8});
+  };
   AddString(Conf.CPU);
   // FIXME: Hash more of Options. For now all clients initialize Options from
   // command-line flags (which is unsupported in production), but may set
@@ -91,10 +116,18 @@ static void computeCacheKey(
   AddUnsigned((unsigned)Conf.Options.DebuggerTuning);
   for (auto &A : Conf.MAttrs)
     AddString(A);
-  AddUnsigned(Conf.RelocModel);
-  AddUnsigned(Conf.CodeModel);
+  if (Conf.RelocModel)
+    AddUnsigned(*Conf.RelocModel);
+  else
+    AddUnsigned(-1);
+  if (Conf.CodeModel)
+    AddUnsigned(*Conf.CodeModel);
+  else
+    AddUnsigned(-1);
   AddUnsigned(Conf.CGOptLevel);
+  AddUnsigned(Conf.CGFileType);
   AddUnsigned(Conf.OptLevel);
+  AddUnsigned(Conf.UseNewPM);
   AddString(Conf.OptPipeline);
   AddString(Conf.AAPipeline);
   AddString(Conf.OverrideTriple);
@@ -107,10 +140,16 @@ static void computeCacheKey(
     // The export list can impact the internalization, be conservative here
     Hasher.update(ArrayRef<uint8_t>((uint8_t *)&F, sizeof(F)));
 
-  // Include the hash for every module we import functions from
+  // Include the hash for every module we import functions from. The set of
+  // imported symbols for each module may affect code generation and is
+  // sensitive to link order, so include that as well.
   for (auto &Entry : ImportList) {
     auto ModHash = Index.getModuleHash(Entry.first());
     Hasher.update(ArrayRef<uint8_t>((uint8_t *)&ModHash[0], sizeof(ModHash)));
+
+    AddUint64(Entry.second.size());
+    for (auto &Fn : Entry.second)
+      AddUint64(Fn.first);
   }
 
   // Include the hash for the resolved ODR.
@@ -121,13 +160,102 @@ static void computeCacheKey(
                                     sizeof(GlobalValue::LinkageTypes)));
   }
 
+  // Members of CfiFunctionDefs and CfiFunctionDecls that are referenced or
+  // defined in this module.
+  std::set<GlobalValue::GUID> UsedCfiDefs;
+  std::set<GlobalValue::GUID> UsedCfiDecls;
+
+  // Typeids used in this module.
+  std::set<GlobalValue::GUID> UsedTypeIds;
+
+  auto AddUsedCfiGlobal = [&](GlobalValue::GUID ValueGUID) {
+    if (CfiFunctionDefs.count(ValueGUID))
+      UsedCfiDefs.insert(ValueGUID);
+    if (CfiFunctionDecls.count(ValueGUID))
+      UsedCfiDecls.insert(ValueGUID);
+  };
+
+  auto AddUsedThings = [&](GlobalValueSummary *GS) {
+    if (!GS) return;
+    for (const ValueInfo &VI : GS->refs())
+      AddUsedCfiGlobal(VI.getGUID());
+    if (auto *FS = dyn_cast<FunctionSummary>(GS)) {
+      for (auto &TT : FS->type_tests())
+        UsedTypeIds.insert(TT);
+      for (auto &TT : FS->type_test_assume_vcalls())
+        UsedTypeIds.insert(TT.GUID);
+      for (auto &TT : FS->type_checked_load_vcalls())
+        UsedTypeIds.insert(TT.GUID);
+      for (auto &TT : FS->type_test_assume_const_vcalls())
+        UsedTypeIds.insert(TT.VFunc.GUID);
+      for (auto &TT : FS->type_checked_load_const_vcalls())
+        UsedTypeIds.insert(TT.VFunc.GUID);
+      for (auto &ET : FS->calls())
+        AddUsedCfiGlobal(ET.first.getGUID());
+    }
+  };
+
   // Include the hash for the linkage type to reflect internalization and weak
-  // resolution.
+  // resolution, and collect any used type identifier resolutions.
   for (auto &GS : DefinedGlobals) {
     GlobalValue::LinkageTypes Linkage = GS.second->linkage();
     Hasher.update(
         ArrayRef<uint8_t>((const uint8_t *)&Linkage, sizeof(Linkage)));
+    AddUsedCfiGlobal(GS.first);
+    AddUsedThings(GS.second);
   }
+
+  // Imported functions may introduce new uses of type identifier resolutions,
+  // so we need to collect their used resolutions as well.
+  for (auto &ImpM : ImportList)
+    for (auto &ImpF : ImpM.second)
+      AddUsedThings(Index.findSummaryInModule(ImpF.first, ImpM.first()));
+
+  auto AddTypeIdSummary = [&](StringRef TId, const TypeIdSummary &S) {
+    AddString(TId);
+
+    AddUnsigned(S.TTRes.TheKind);
+    AddUnsigned(S.TTRes.SizeM1BitWidth);
+
+    AddUint64(S.TTRes.AlignLog2);
+    AddUint64(S.TTRes.SizeM1);
+    AddUint64(S.TTRes.BitMask);
+    AddUint64(S.TTRes.InlineBits);
+
+    AddUint64(S.WPDRes.size());
+    for (auto &WPD : S.WPDRes) {
+      AddUnsigned(WPD.first);
+      AddUnsigned(WPD.second.TheKind);
+      AddString(WPD.second.SingleImplName);
+
+      AddUint64(WPD.second.ResByArg.size());
+      for (auto &ByArg : WPD.second.ResByArg) {
+        AddUint64(ByArg.first.size());
+        for (uint64_t Arg : ByArg.first)
+          AddUint64(Arg);
+        AddUnsigned(ByArg.second.TheKind);
+        AddUint64(ByArg.second.Info);
+        AddUnsigned(ByArg.second.Byte);
+        AddUnsigned(ByArg.second.Bit);
+      }
+    }
+  };
+
+  // Include the hash for all type identifiers used by this module.
+  for (GlobalValue::GUID TId : UsedTypeIds) {
+    auto SummariesI = TypeIdSummariesByGuid.find(TId);
+    if (SummariesI != TypeIdSummariesByGuid.end())
+      for (auto *Summary : SummariesI->second)
+        AddTypeIdSummary(Summary->first, Summary->second);
+  }
+
+  AddUnsigned(UsedCfiDefs.size());
+  for (auto &V : UsedCfiDefs)
+    AddUint64(V);
+
+  AddUnsigned(UsedCfiDecls.size());
+  for (auto &V : UsedCfiDecls)
+    AddUint64(V);
 
   if (!Conf.SampleProfile.empty()) {
     auto FileOrErr = MemoryBuffer::getFile(Conf.SampleProfile);
@@ -164,9 +292,7 @@ static void thinLTOResolveWeakForLinkerGUID(
     }
     // Alias and aliasee can't be turned into available_externally.
     else if (!isa<AliasSummary>(S.get()) &&
-             !GlobalInvolvedWithAlias.count(S.get()) &&
-             (GlobalValue::isLinkOnceODRLinkage(OriginalLinkage) ||
-              GlobalValue::isWeakODRLinkage(OriginalLinkage)))
+             !GlobalInvolvedWithAlias.count(S.get()))
       S->setLinkage(GlobalValue::AvailableExternallyLinkage);
     if (S->linkage() != OriginalLinkage)
       recordNewLinkage(S->modulePath(), GUID, S->linkage());
@@ -190,13 +316,14 @@ void llvm::thinLTOResolveWeakForLinkerInIndex(
   // when needed.
   DenseSet<GlobalValueSummary *> GlobalInvolvedWithAlias;
   for (auto &I : Index)
-    for (auto &S : I.second)
+    for (auto &S : I.second.SummaryList)
       if (auto AS = dyn_cast<AliasSummary>(S.get()))
         GlobalInvolvedWithAlias.insert(&AS->getAliasee());
 
   for (auto &I : Index)
-    thinLTOResolveWeakForLinkerGUID(I.second, I.first, GlobalInvolvedWithAlias,
-                                    isPrevailing, recordNewLinkage);
+    thinLTOResolveWeakForLinkerGUID(I.second.SummaryList, I.first,
+                                    GlobalInvolvedWithAlias, isPrevailing,
+                                    recordNewLinkage);
 }
 
 static void thinLTOInternalizeAndPromoteGUID(
@@ -217,16 +344,8 @@ void llvm::thinLTOInternalizeAndPromoteInIndex(
     ModuleSummaryIndex &Index,
     function_ref<bool(StringRef, GlobalValue::GUID)> isExported) {
   for (auto &I : Index)
-    thinLTOInternalizeAndPromoteGUID(I.second, I.first, isExported);
+    thinLTOInternalizeAndPromoteGUID(I.second.SummaryList, I.first, isExported);
 }
-
-struct InputFile::InputModule {
-  BitcodeModule BM;
-  std::unique_ptr<Module> Mod;
-
-  // The range of ModuleSymbolTable entries for this input module.
-  size_t SymBegin, SymEnd;
-};
 
 // Requires a destructor for std::vector<InputModule>.
 InputFile::~InputFile() = default;
@@ -234,81 +353,40 @@ InputFile::~InputFile() = default;
 Expected<std::unique_ptr<InputFile>> InputFile::create(MemoryBufferRef Object) {
   std::unique_ptr<InputFile> File(new InputFile);
 
-  ErrorOr<MemoryBufferRef> BCOrErr =
-      IRObjectFile::findBitcodeInMemBuffer(Object);
-  if (!BCOrErr)
-    return errorCodeToError(BCOrErr.getError());
+  Expected<IRSymtabFile> FOrErr = readIRSymtab(Object);
+  if (!FOrErr)
+    return FOrErr.takeError();
 
-  Expected<std::vector<BitcodeModule>> BMsOrErr =
-      getBitcodeModuleList(*BCOrErr);
-  if (!BMsOrErr)
-    return BMsOrErr.takeError();
+  File->TargetTriple = FOrErr->TheReader.getTargetTriple();
+  File->SourceFileName = FOrErr->TheReader.getSourceFileName();
+  File->COFFLinkerOpts = FOrErr->TheReader.getCOFFLinkerOpts();
+  File->ComdatTable = FOrErr->TheReader.getComdatTable();
 
-  if (BMsOrErr->empty())
-    return make_error<StringError>("Bitcode file does not contain any modules",
-                                   inconvertibleErrorCode());
-
-  // Create an InputModule for each module in the InputFile, and add it to the
-  // ModuleSymbolTable.
-  for (auto BM : *BMsOrErr) {
-    Expected<std::unique_ptr<Module>> MOrErr =
-        BM.getLazyModule(File->Ctx, /*ShouldLazyLoadMetadata*/ true,
-                         /*IsImporting*/ false);
-    if (!MOrErr)
-      return MOrErr.takeError();
-
-    size_t SymBegin = File->SymTab.symbols().size();
-    File->SymTab.addModule(MOrErr->get());
-    size_t SymEnd = File->SymTab.symbols().size();
-
-    for (const auto &C : (*MOrErr)->getComdatSymbolTable()) {
-      auto P = File->ComdatMap.insert(
-          std::make_pair(&C.second, File->Comdats.size()));
-      assert(P.second);
-      (void)P;
-      File->Comdats.push_back(C.first());
-    }
-
-    File->Mods.push_back({BM, std::move(*MOrErr), SymBegin, SymEnd});
+  for (unsigned I = 0; I != FOrErr->Mods.size(); ++I) {
+    size_t Begin = File->Symbols.size();
+    for (const irsymtab::Reader::SymbolRef &Sym :
+         FOrErr->TheReader.module_symbols(I))
+      // Skip symbols that are irrelevant to LTO. Note that this condition needs
+      // to match the one in Skip() in LTO::addRegularLTO().
+      if (Sym.isGlobal() && !Sym.isFormatSpecific())
+        File->Symbols.push_back(Sym);
+    File->ModuleSymIndices.push_back({Begin, File->Symbols.size()});
   }
 
+  File->Mods = FOrErr->Mods;
+  File->Strtab = std::move(FOrErr->Strtab);
   return std::move(File);
 }
 
-Expected<int> InputFile::Symbol::getComdatIndex() const {
-  if (!isGV())
-    return -1;
-  const GlobalObject *GO = getGV()->getBaseObject();
-  if (!GO)
-    return make_error<StringError>("Unable to determine comdat of alias!",
-                                   inconvertibleErrorCode());
-  if (const Comdat *C = GO->getComdat()) {
-    auto I = File->ComdatMap.find(C);
-    assert(I != File->ComdatMap.end());
-    return I->second;
-  }
-  return -1;
-}
-
 StringRef InputFile::getName() const {
-  return Mods[0].BM.getModuleIdentifier();
-}
-
-StringRef InputFile::getSourceFileName() const {
-  return Mods[0].Mod->getSourceFileName();
-}
-
-iterator_range<InputFile::symbol_iterator>
-InputFile::module_symbols(InputModule &IM) {
-  return llvm::make_range(
-      symbol_iterator(SymTab.symbols().data() + IM.SymBegin, SymTab, this),
-      symbol_iterator(SymTab.symbols().data() + IM.SymEnd, SymTab, this));
+  return Mods[0].getModuleIdentifier();
 }
 
 LTO::RegularLTOState::RegularLTOState(unsigned ParallelCodeGenParallelismLevel,
                                       Config &Conf)
     : ParallelCodeGenParallelismLevel(ParallelCodeGenParallelismLevel),
-      Ctx(Conf) {}
+      Ctx(Conf), CombinedModule(llvm::make_unique<Module>("ld-temp.o", Ctx)),
+      Mover(llvm::make_unique<IRMover>(*CombinedModule)) {}
 
 LTO::ThinLTOState::ThinLTOState(ThinBackend Backend) : Backend(Backend) {
   if (!Backend)
@@ -325,33 +403,43 @@ LTO::LTO(Config Conf, ThinBackend Backend,
 // Requires a destructor for MapVector<BitcodeModule>.
 LTO::~LTO() = default;
 
-// Add the given symbol to the GlobalResolutions map, and resolve its partition.
-void LTO::addSymbolToGlobalRes(SmallPtrSet<GlobalValue *, 8> &Used,
-                               const InputFile::Symbol &Sym,
-                               SymbolResolution Res, unsigned Partition) {
-  GlobalValue *GV = Sym.isGV() ? Sym.getGV() : nullptr;
+// Add the symbols in the given module to the GlobalResolutions map, and resolve
+// their partitions.
+void LTO::addModuleToGlobalRes(ArrayRef<InputFile::Symbol> Syms,
+                               ArrayRef<SymbolResolution> Res,
+                               unsigned Partition, bool InSummary) {
+  auto *ResI = Res.begin();
+  auto *ResE = Res.end();
+  (void)ResE;
+  for (const InputFile::Symbol &Sym : Syms) {
+    assert(ResI != ResE);
+    SymbolResolution Res = *ResI++;
 
-  auto &GlobalRes = GlobalResolutions[Sym.getName()];
-  if (GV) {
-    GlobalRes.UnnamedAddr &= GV->hasGlobalUnnamedAddr();
-    if (Res.Prevailing)
-      GlobalRes.IRName = GV->getName();
+    auto &GlobalRes = GlobalResolutions[Sym.getName()];
+    GlobalRes.UnnamedAddr &= Sym.isUnnamedAddr();
+    if (Res.Prevailing) {
+      assert(GlobalRes.IRName.empty() &&
+             "Multiple prevailing defs are not allowed");
+      GlobalRes.IRName = Sym.getIRName();
+    }
+
+    // Set the partition to external if we know it is re-defined by the linker
+    // with -defsym or -wrap options, used elsewhere, e.g. it is visible to a
+    // regular object, is referenced from llvm.compiler_used, or was already
+    // recorded as being referenced from a different partition.
+    if (Res.LinkerRedefined || Res.VisibleToRegularObj || Sym.isUsed() ||
+        (GlobalRes.Partition != GlobalResolution::Unknown &&
+         GlobalRes.Partition != Partition)) {
+      GlobalRes.Partition = GlobalResolution::External;
+    } else
+      // First recorded reference, save the current partition.
+      GlobalRes.Partition = Partition;
+
+    // Flag as visible outside of summary if visible from a regular object or
+    // from a module that does not have a summary.
+    GlobalRes.VisibleOutsideSummary |=
+        (Res.VisibleToRegularObj || Sym.isUsed() || !InSummary);
   }
-  // Set the partition to external if we know it is used elsewhere, e.g.
-  // it is visible to a regular object, is referenced from llvm.compiler_used,
-  // or was already recorded as being referenced from a different partition.
-  if (Res.VisibleToRegularObj || (GV && Used.count(GV)) ||
-      (GlobalRes.Partition != GlobalResolution::Unknown &&
-       GlobalRes.Partition != Partition)) {
-    GlobalRes.Partition = GlobalResolution::External;
-  } else
-    // First recorded reference, save the current partition.
-    GlobalRes.Partition = Partition;
-
-  // Flag as visible outside of ThinLTO if visible from a regular object or
-  // if this is a reference in the regular LTO partition.
-  GlobalRes.VisibleOutsideThinLTO |=
-      (Res.VisibleToRegularObj || (Partition == GlobalResolution::RegularLTO));
 }
 
 static void writeToResolutionFile(raw_ostream &OS, InputFile *Input,
@@ -370,8 +458,11 @@ static void writeToResolutionFile(raw_ostream &OS, InputFile *Input,
       OS << 'l';
     if (Res.VisibleToRegularObj)
       OS << 'x';
+    if (Res.LinkerRedefined)
+      OS << 'r';
     OS << '\n';
   }
+  OS.flush();
   assert(ResI == Res.end());
 }
 
@@ -382,141 +473,259 @@ Error LTO::add(std::unique_ptr<InputFile> Input,
   if (Conf.ResolutionFile)
     writeToResolutionFile(*Conf.ResolutionFile, Input.get(), Res);
 
+  if (RegularLTO.CombinedModule->getTargetTriple().empty())
+    RegularLTO.CombinedModule->setTargetTriple(Input->getTargetTriple());
+
   const SymbolResolution *ResI = Res.begin();
-  for (InputFile::InputModule &IM : Input->Mods)
-    if (Error Err = addModule(*Input, IM, ResI, Res.end()))
+  for (unsigned I = 0; I != Input->Mods.size(); ++I)
+    if (Error Err = addModule(*Input, I, ResI, Res.end()))
       return Err;
 
   assert(ResI == Res.end());
   return Error::success();
 }
 
-Error LTO::addModule(InputFile &Input, InputFile::InputModule &IM,
+Error LTO::addModule(InputFile &Input, unsigned ModI,
                      const SymbolResolution *&ResI,
                      const SymbolResolution *ResE) {
-  // FIXME: move to backend
-  Module &M = *IM.Mod;
+  Expected<BitcodeLTOInfo> LTOInfo = Input.Mods[ModI].getLTOInfo();
+  if (!LTOInfo)
+    return LTOInfo.takeError();
 
-  if (M.getDataLayoutStr().empty())
-    return make_error<StringError>("input module has no datalayout",
-                                    inconvertibleErrorCode());
+  BitcodeModule BM = Input.Mods[ModI];
+  auto ModSyms = Input.module_symbols(ModI);
+  addModuleToGlobalRes(ModSyms, {ResI, ResE},
+                       LTOInfo->IsThinLTO ? ThinLTO.ModuleMap.size() + 1 : 0,
+                       LTOInfo->HasSummary);
 
-  if (!Conf.OverrideTriple.empty())
-    M.setTargetTriple(Conf.OverrideTriple);
-  else if (M.getTargetTriple().empty())
-    M.setTargetTriple(Conf.DefaultTriple);
+  if (LTOInfo->IsThinLTO)
+    return addThinLTO(BM, ModSyms, ResI, ResE);
 
-  Expected<bool> HasThinLTOSummary = IM.BM.hasSummary();
-  if (!HasThinLTOSummary)
-    return HasThinLTOSummary.takeError();
+  Expected<RegularLTOState::AddedModule> ModOrErr =
+      addRegularLTO(BM, ModSyms, ResI, ResE);
+  if (!ModOrErr)
+    return ModOrErr.takeError();
 
-  if (*HasThinLTOSummary)
-    return addThinLTO(IM.BM, M, Input.module_symbols(IM), ResI, ResE);
-  else
-    return addRegularLTO(IM.BM, ResI, ResE);
+  if (!LTOInfo->HasSummary)
+    return linkRegularLTO(std::move(*ModOrErr), /*LivenessFromIndex=*/false);
+
+  // Regular LTO module summaries are added to a dummy module that represents
+  // the combined regular LTO module.
+  if (Error Err = BM.readSummary(ThinLTO.CombinedIndex, "", -1ull))
+    return Err;
+  RegularLTO.ModsWithSummaries.push_back(std::move(*ModOrErr));
+  return Error::success();
+}
+
+// Checks whether the given global value is in a non-prevailing comdat
+// (comdat containing values the linker indicated were not prevailing,
+// which we then dropped to available_externally), and if so, removes
+// it from the comdat. This is called for all global values to ensure the
+// comdat is empty rather than leaving an incomplete comdat. It is needed for
+// regular LTO modules, in case we are in a mixed-LTO mode (both regular
+// and thin LTO modules) compilation. Since the regular LTO module will be
+// linked first in the final native link, we want to make sure the linker
+// doesn't select any of these incomplete comdats that would be left
+// in the regular LTO module without this cleanup.
+static void
+handleNonPrevailingComdat(GlobalValue &GV,
+                          std::set<const Comdat *> &NonPrevailingComdats) {
+  Comdat *C = GV.getComdat();
+  if (!C)
+    return;
+
+  if (!NonPrevailingComdats.count(C))
+    return;
+
+  // Additionally need to drop externally visible global values from the comdat
+  // to available_externally, so that there aren't multiply defined linker
+  // errors.
+  if (!GV.hasLocalLinkage())
+    GV.setLinkage(GlobalValue::AvailableExternallyLinkage);
+
+  if (auto GO = dyn_cast<GlobalObject>(&GV))
+    GO->setComdat(nullptr);
 }
 
 // Add a regular LTO object to the link.
-Error LTO::addRegularLTO(BitcodeModule BM, const SymbolResolution *&ResI,
-                         const SymbolResolution *ResE) {
-  if (!RegularLTO.CombinedModule) {
-    RegularLTO.CombinedModule =
-        llvm::make_unique<Module>("ld-temp.o", RegularLTO.Ctx);
-    RegularLTO.Mover = llvm::make_unique<IRMover>(*RegularLTO.CombinedModule);
-  }
+// The resulting module needs to be linked into the combined LTO module with
+// linkRegularLTO.
+Expected<LTO::RegularLTOState::AddedModule>
+LTO::addRegularLTO(BitcodeModule BM, ArrayRef<InputFile::Symbol> Syms,
+                   const SymbolResolution *&ResI,
+                   const SymbolResolution *ResE) {
+  RegularLTOState::AddedModule Mod;
   Expected<std::unique_ptr<Module>> MOrErr =
       BM.getLazyModule(RegularLTO.Ctx, /*ShouldLazyLoadMetadata*/ true,
                        /*IsImporting*/ false);
   if (!MOrErr)
     return MOrErr.takeError();
-
   Module &M = **MOrErr;
+  Mod.M = std::move(*MOrErr);
+
   if (Error Err = M.materializeMetadata())
-    return Err;
+    return std::move(Err);
   UpgradeDebugInfo(M);
 
   ModuleSymbolTable SymTab;
   SymTab.addModule(&M);
 
-  SmallPtrSet<GlobalValue *, 8> Used;
-  collectUsedGlobalVariables(M, Used, /*CompilerUsed*/ false);
-
-  std::vector<GlobalValue *> Keep;
-
   for (GlobalVariable &GV : M.globals())
     if (GV.hasAppendingLinkage())
-      Keep.push_back(&GV);
+      Mod.Keep.push_back(&GV);
 
-  for (const InputFile::Symbol &Sym :
-       make_range(InputFile::symbol_iterator(SymTab.symbols().begin(), SymTab,
-                                             nullptr),
-                  InputFile::symbol_iterator(SymTab.symbols().end(), SymTab,
-                                             nullptr))) {
+  DenseSet<GlobalObject *> AliasedGlobals;
+  for (auto &GA : M.aliases())
+    if (GlobalObject *GO = GA.getBaseObject())
+      AliasedGlobals.insert(GO);
+
+  // In this function we need IR GlobalValues matching the symbols in Syms
+  // (which is not backed by a module), so we need to enumerate them in the same
+  // order. The symbol enumeration order of a ModuleSymbolTable intentionally
+  // matches the order of an irsymtab, but when we read the irsymtab in
+  // InputFile::create we omit some symbols that are irrelevant to LTO. The
+  // Skip() function skips the same symbols from the module as InputFile does
+  // from the symbol table.
+  auto MsymI = SymTab.symbols().begin(), MsymE = SymTab.symbols().end();
+  auto Skip = [&]() {
+    while (MsymI != MsymE) {
+      auto Flags = SymTab.getSymbolFlags(*MsymI);
+      if ((Flags & object::BasicSymbolRef::SF_Global) &&
+          !(Flags & object::BasicSymbolRef::SF_FormatSpecific))
+        return;
+      ++MsymI;
+    }
+  };
+  Skip();
+
+  std::set<const Comdat *> NonPrevailingComdats;
+  for (const InputFile::Symbol &Sym : Syms) {
     assert(ResI != ResE);
     SymbolResolution Res = *ResI++;
-    addSymbolToGlobalRes(Used, Sym, Res, 0);
 
-    if (Sym.getFlags() & object::BasicSymbolRef::SF_Undefined)
-      continue;
-    if (Res.Prevailing && Sym.isGV()) {
-      GlobalValue *GV = Sym.getGV();
-      Keep.push_back(GV);
-      switch (GV->getLinkage()) {
-      default:
-        break;
-      case GlobalValue::LinkOnceAnyLinkage:
-        GV->setLinkage(GlobalValue::WeakAnyLinkage);
-        break;
-      case GlobalValue::LinkOnceODRLinkage:
-        GV->setLinkage(GlobalValue::WeakODRLinkage);
-        break;
+    assert(MsymI != MsymE);
+    ModuleSymbolTable::Symbol Msym = *MsymI++;
+    Skip();
+
+    if (GlobalValue *GV = Msym.dyn_cast<GlobalValue *>()) {
+      if (Res.Prevailing) {
+        if (Sym.isUndefined())
+          continue;
+        Mod.Keep.push_back(GV);
+        // For symbols re-defined with linker -wrap and -defsym options,
+        // set the linkage to weak to inhibit IPO. The linkage will be
+        // restored by the linker.
+        if (Res.LinkerRedefined)
+          GV->setLinkage(GlobalValue::WeakAnyLinkage);
+
+        GlobalValue::LinkageTypes OriginalLinkage = GV->getLinkage();
+        if (GlobalValue::isLinkOnceLinkage(OriginalLinkage))
+          GV->setLinkage(GlobalValue::getWeakLinkage(
+              GlobalValue::isLinkOnceODRLinkage(OriginalLinkage)));
+      } else if (isa<GlobalObject>(GV) &&
+                 (GV->hasLinkOnceODRLinkage() || GV->hasWeakODRLinkage() ||
+                  GV->hasAvailableExternallyLinkage()) &&
+                 !AliasedGlobals.count(cast<GlobalObject>(GV))) {
+        // Any of the above three types of linkage indicates that the
+        // chosen prevailing symbol will have the same semantics as this copy of
+        // the symbol, so we may be able to link it with available_externally
+        // linkage. We will decide later whether to do that when we link this
+        // module (in linkRegularLTO), based on whether it is undefined.
+        Mod.Keep.push_back(GV);
+        GV->setLinkage(GlobalValue::AvailableExternallyLinkage);
+        if (GV->hasComdat())
+          NonPrevailingComdats.insert(GV->getComdat());
+        cast<GlobalObject>(GV)->setComdat(nullptr);
       }
+
+      // Set the 'local' flag based on the linker resolution for this symbol.
+      GV->setDSOLocal(Res.FinalDefinitionInLinkageUnit);
     }
     // Common resolution: collect the maximum size/alignment over all commons.
     // We also record if we see an instance of a common as prevailing, so that
     // if none is prevailing we can ignore it later.
-    if (Sym.getFlags() & object::BasicSymbolRef::SF_Common) {
+    if (Sym.isCommon()) {
       // FIXME: We should figure out what to do about commons defined by asm.
       // For now they aren't reported correctly by ModuleSymbolTable.
-      auto &CommonRes = RegularLTO.Commons[Sym.getGV()->getName()];
+      auto &CommonRes = RegularLTO.Commons[Sym.getIRName()];
       CommonRes.Size = std::max(CommonRes.Size, Sym.getCommonSize());
       CommonRes.Align = std::max(CommonRes.Align, Sym.getCommonAlignment());
       CommonRes.Prevailing |= Res.Prevailing;
     }
 
-    // FIXME: use proposed local attribute for FinalDefinitionInLinkageUnit.
+  }
+  if (!M.getComdatSymbolTable().empty())
+    for (GlobalValue &GV : M.global_values())
+      handleNonPrevailingComdat(GV, NonPrevailingComdats);
+  assert(MsymI == MsymE);
+  return std::move(Mod);
+}
+
+Error LTO::linkRegularLTO(RegularLTOState::AddedModule Mod,
+                          bool LivenessFromIndex) {
+  std::vector<GlobalValue *> Keep;
+  for (GlobalValue *GV : Mod.Keep) {
+    if (LivenessFromIndex && !ThinLTO.CombinedIndex.isGUIDLive(GV->getGUID()))
+      continue;
+
+    if (!GV->hasAvailableExternallyLinkage()) {
+      Keep.push_back(GV);
+      continue;
+    }
+
+    // Only link available_externally definitions if we don't already have a
+    // definition.
+    GlobalValue *CombinedGV =
+        RegularLTO.CombinedModule->getNamedValue(GV->getName());
+    if (CombinedGV && !CombinedGV->isDeclaration())
+      continue;
+
+    Keep.push_back(GV);
   }
 
-  return RegularLTO.Mover->move(std::move(*MOrErr), Keep,
+  return RegularLTO.Mover->move(std::move(Mod.M), Keep,
                                 [](GlobalValue &, IRMover::ValueAdder) {},
-                                /* LinkModuleInlineAsm */ true,
                                 /* IsPerformingImport */ false);
 }
 
-// Add a ThinLTO object to the link.
-// FIXME: This function should not need to take as many parameters once we have
-// a bitcode symbol table.
-Error LTO::addThinLTO(BitcodeModule BM, Module &M,
-                      iterator_range<InputFile::symbol_iterator> Syms,
+// Add a ThinLTO module to the link.
+Error LTO::addThinLTO(BitcodeModule BM, ArrayRef<InputFile::Symbol> Syms,
                       const SymbolResolution *&ResI,
                       const SymbolResolution *ResE) {
-  SmallPtrSet<GlobalValue *, 8> Used;
-  collectUsedGlobalVariables(M, Used, /*CompilerUsed*/ false);
-
-  Expected<std::unique_ptr<ModuleSummaryIndex>> SummaryOrErr = BM.getSummary();
-  if (!SummaryOrErr)
-    return SummaryOrErr.takeError();
-  ThinLTO.CombinedIndex.mergeFrom(std::move(*SummaryOrErr),
-                                  ThinLTO.ModuleMap.size());
+  if (Error Err =
+          BM.readSummary(ThinLTO.CombinedIndex, BM.getModuleIdentifier(),
+                         ThinLTO.ModuleMap.size()))
+    return Err;
 
   for (const InputFile::Symbol &Sym : Syms) {
     assert(ResI != ResE);
     SymbolResolution Res = *ResI++;
-    addSymbolToGlobalRes(Used, Sym, Res, ThinLTO.ModuleMap.size() + 1);
 
-    if (Res.Prevailing && Sym.isGV())
-      ThinLTO.PrevailingModuleForGUID[Sym.getGV()->getGUID()] =
-          BM.getModuleIdentifier();
+    if (!Sym.getIRName().empty()) {
+      auto GUID = GlobalValue::getGUID(GlobalValue::getGlobalIdentifier(
+          Sym.getIRName(), GlobalValue::ExternalLinkage, ""));
+      if (Res.Prevailing) {
+        ThinLTO.PrevailingModuleForGUID[GUID] = BM.getModuleIdentifier();
+
+        // For linker redefined symbols (via --wrap or --defsym) we want to
+        // switch the linkage to `weak` to prevent IPOs from happening.
+        // Find the summary in the module for this very GV and record the new
+        // linkage so that we can switch it when we import the GV.
+        if (Res.LinkerRedefined)
+          if (auto S = ThinLTO.CombinedIndex.findSummaryInModule(
+                  GUID, BM.getModuleIdentifier()))
+            S->setLinkage(GlobalValue::WeakAnyLinkage);
+      }
+
+      // If the linker resolved the symbol to a local definition then mark it
+      // as local in the summary for the module we are adding.
+      if (Res.FinalDefinitionInLinkageUnit) {
+        if (auto S = ThinLTO.CombinedIndex.findSummaryInModule(
+                GUID, BM.getModuleIdentifier())) {
+          S->setDSOLocal(true);
+        }
+      }
+    }
   }
 
   if (!ThinLTO.ModuleMap.insert({BM.getModuleIdentifier(), BM}).second)
@@ -533,18 +742,30 @@ unsigned LTO::getMaxTasks() const {
 }
 
 Error LTO::run(AddStreamFn AddStream, NativeObjectCache Cache) {
-  // Save the status of having a regularLTO combined module, as
-  // this is needed for generating the ThinLTO Task ID, and
-  // the CombinedModule will be moved at the end of runRegularLTO.
-  bool HasRegularLTO = RegularLTO.CombinedModule != nullptr;
-  // Invoke regular LTO if there was a regular LTO module to start with.
-  if (HasRegularLTO)
-    if (auto E = runRegularLTO(AddStream))
-      return E;
-  return runThinLTO(AddStream, Cache, HasRegularLTO);
+  // Compute "dead" symbols, we don't want to import/export these!
+  DenseSet<GlobalValue::GUID> GUIDPreservedSymbols;
+  for (auto &Res : GlobalResolutions) {
+    if (Res.second.VisibleOutsideSummary &&
+        // IRName will be defined if we have seen the prevailing copy of
+        // this value. If not, no need to preserve any ThinLTO copies.
+        !Res.second.IRName.empty())
+      GUIDPreservedSymbols.insert(GlobalValue::getGUID(
+          GlobalValue::dropLLVMManglingEscape(Res.second.IRName)));
+  }
+
+  computeDeadSymbols(ThinLTO.CombinedIndex, GUIDPreservedSymbols);
+
+  if (auto E = runRegularLTO(AddStream))
+    return E;
+  return runThinLTO(AddStream, Cache);
 }
 
 Error LTO::runRegularLTO(AddStreamFn AddStream) {
+  for (auto &M : RegularLTO.ModsWithSummaries)
+    if (Error Err = linkRegularLTO(std::move(M),
+                                   /*LivenessFromIndex=*/true))
+      return Err;
+
   // Make sure commons have the right size/alignment: we kept the largest from
   // all the prevailing when adding the inputs, and we apply it here.
   const DataLayout &DL = RegularLTO.CombinedModule->getDataLayout();
@@ -602,7 +823,7 @@ Error LTO::runRegularLTO(AddStreamFn AddStream) {
       return Error::success();
   }
   return backend(Conf, AddStream, RegularLTO.ParallelCodeGenParallelismLevel,
-                 std::move(RegularLTO.CombinedModule));
+                 std::move(RegularLTO.CombinedModule), ThinLTO.CombinedIndex);
 }
 
 /// This class defines the interface to the ThinLTO backend.
@@ -633,6 +854,9 @@ class InProcessThinBackend : public ThinBackendProc {
   ThreadPool BackendThreadPool;
   AddStreamFn AddStream;
   NativeObjectCache Cache;
+  TypeIdSummariesByGuidTy TypeIdSummariesByGuid;
+  std::set<GlobalValue::GUID> CfiFunctionDefs;
+  std::set<GlobalValue::GUID> CfiFunctionDecls;
 
   Optional<Error> Err;
   std::mutex ErrMu;
@@ -645,7 +869,20 @@ public:
       AddStreamFn AddStream, NativeObjectCache Cache)
       : ThinBackendProc(Conf, CombinedIndex, ModuleToDefinedGVSummaries),
         BackendThreadPool(ThinLTOParallelismLevel),
-        AddStream(std::move(AddStream)), Cache(std::move(Cache)) {}
+        AddStream(std::move(AddStream)), Cache(std::move(Cache)) {
+    // Create a mapping from type identifier GUIDs to type identifier summaries.
+    // This allows backends to use the type identifier GUIDs stored in the
+    // function summaries to determine which type identifier summaries affect
+    // each function without needing to compute GUIDs in each backend.
+    for (auto &TId : CombinedIndex.typeIds())
+      TypeIdSummariesByGuid[GlobalValue::getGUID(TId.first)].push_back(&TId);
+    for (auto &Name : CombinedIndex.cfiFunctionDefs())
+      CfiFunctionDefs.insert(
+          GlobalValue::getGUID(GlobalValue::dropLLVMManglingEscape(Name)));
+    for (auto &Name : CombinedIndex.cfiFunctionDecls())
+      CfiFunctionDecls.insert(
+          GlobalValue::getGUID(GlobalValue::dropLLVMManglingEscape(Name)));
+  }
 
   Error runThinLTOBackendThread(
       AddStreamFn AddStream, NativeObjectCache Cache, unsigned Task,
@@ -654,7 +891,8 @@ public:
       const FunctionImporter::ExportSetTy &ExportList,
       const std::map<GlobalValue::GUID, GlobalValue::LinkageTypes> &ResolvedODR,
       const GVSummaryMapTy &DefinedGlobals,
-      MapVector<StringRef, BitcodeModule> &ModuleMap) {
+      MapVector<StringRef, BitcodeModule> &ModuleMap,
+      const TypeIdSummariesByGuidTy &TypeIdSummariesByGuid) {
     auto RunThinBackend = [&](AddStreamFn AddStream) {
       LTOLLVMContext BackendContext(Conf);
       Expected<std::unique_ptr<Module>> MOrErr = BM.parseModule(BackendContext);
@@ -677,7 +915,8 @@ public:
     SmallString<40> Key;
     // The module may be cached, this helps handling it.
     computeCacheKey(Key, Conf, CombinedIndex, ModuleID, ImportList, ExportList,
-                    ResolvedODR, DefinedGlobals);
+                    ResolvedODR, DefinedGlobals, TypeIdSummariesByGuid,
+                    CfiFunctionDefs, CfiFunctionDecls);
     if (AddStreamFn CacheAddStream = Cache(Task, Key))
       return RunThinBackend(CacheAddStream);
 
@@ -701,10 +940,11 @@ public:
             const std::map<GlobalValue::GUID, GlobalValue::LinkageTypes>
                 &ResolvedODR,
             const GVSummaryMapTy &DefinedGlobals,
-            MapVector<StringRef, BitcodeModule> &ModuleMap) {
+            MapVector<StringRef, BitcodeModule> &ModuleMap,
+            const TypeIdSummariesByGuidTy &TypeIdSummariesByGuid) {
           Error E = runThinLTOBackendThread(
-              AddStream, Cache, Task, BM, CombinedIndex, ImportList,
-              ExportList, ResolvedODR, DefinedGlobals, ModuleMap);
+              AddStream, Cache, Task, BM, CombinedIndex, ImportList, ExportList,
+              ResolvedODR, DefinedGlobals, ModuleMap, TypeIdSummariesByGuid);
           if (E) {
             std::unique_lock<std::mutex> L(ErrMu);
             if (Err)
@@ -713,9 +953,9 @@ public:
               Err = std::move(E);
           }
         },
-        BM, std::ref(CombinedIndex), std::ref(ImportList),
-        std::ref(ExportList), std::ref(ResolvedODR), std::ref(DefinedGlobals),
-        std::ref(ModuleMap));
+        BM, std::ref(CombinedIndex), std::ref(ImportList), std::ref(ExportList),
+        std::ref(ResolvedODR), std::ref(DefinedGlobals), std::ref(ModuleMap),
+        std::ref(TypeIdSummariesByGuid));
     return Error::success();
   }
 
@@ -832,8 +1072,7 @@ ThinBackend lto::createWriteIndexesThinBackend(std::string OldPrefix,
   };
 }
 
-Error LTO::runThinLTO(AddStreamFn AddStream, NativeObjectCache Cache,
-                      bool HasRegularLTO) {
+Error LTO::runThinLTO(AddStreamFn AddStream, NativeObjectCache Cache) {
   if (ThinLTO.ModuleMap.empty())
     return Error::success();
 
@@ -842,7 +1081,7 @@ Error LTO::runThinLTO(AddStreamFn AddStream, NativeObjectCache Cache,
 
   // Collect for each module the list of function it defines (GUID ->
   // Summary).
-  StringMap<std::map<GlobalValue::GUID, GlobalValueSummary *>>
+  StringMap<GVSummaryMapTy>
       ModuleToDefinedGVSummaries(ThinLTO.ModuleMap.size());
   ThinLTO.CombinedIndex.collectDefinedGVSummariesPerModule(
       ModuleToDefinedGVSummaries);
@@ -857,76 +1096,70 @@ Error LTO::runThinLTO(AddStreamFn AddStream, NativeObjectCache Cache,
     if (!ModuleToDefinedGVSummaries.count(Mod.first))
       ModuleToDefinedGVSummaries.try_emplace(Mod.first);
 
-  // Compute "dead" symbols, we don't want to import/export these!
-  DenseSet<GlobalValue::GUID> GUIDPreservedSymbols;
-  for (auto &Res : GlobalResolutions) {
-    if (Res.second.VisibleOutsideThinLTO &&
-        // IRName will be defined if we have seen the prevailing copy of
-        // this value. If not, no need to preserve any ThinLTO copies.
-        !Res.second.IRName.empty())
-      GUIDPreservedSymbols.insert(GlobalValue::getGUID(Res.second.IRName));
-  }
-
-  auto DeadSymbols =
-      computeDeadSymbols(ThinLTO.CombinedIndex, GUIDPreservedSymbols);
-
   StringMap<FunctionImporter::ImportMapTy> ImportLists(
       ThinLTO.ModuleMap.size());
   StringMap<FunctionImporter::ExportSetTy> ExportLists(
       ThinLTO.ModuleMap.size());
   StringMap<std::map<GlobalValue::GUID, GlobalValue::LinkageTypes>> ResolvedODR;
 
-  if (Conf.OptLevel > 0) {
+  if (Conf.OptLevel > 0)
     ComputeCrossModuleImport(ThinLTO.CombinedIndex, ModuleToDefinedGVSummaries,
-                             ImportLists, ExportLists, &DeadSymbols);
+                             ImportLists, ExportLists);
 
-    std::set<GlobalValue::GUID> ExportedGUIDs;
-    for (auto &Res : GlobalResolutions) {
-      // First check if the symbol was flagged as having external references.
-      if (Res.second.Partition != GlobalResolution::External)
-        continue;
-      // IRName will be defined if we have seen the prevailing copy of
-      // this value. If not, no need to mark as exported from a ThinLTO
-      // partition (and we can't get the GUID).
-      if (Res.second.IRName.empty())
-        continue;
-      auto GUID = GlobalValue::getGUID(Res.second.IRName);
-      // Mark exported unless index-based analysis determined it to be dead.
-      if (!DeadSymbols.count(GUID))
-        ExportedGUIDs.insert(GlobalValue::getGUID(Res.second.IRName));
-    }
-
-    auto isPrevailing = [&](GlobalValue::GUID GUID,
-                            const GlobalValueSummary *S) {
-      return ThinLTO.PrevailingModuleForGUID[GUID] == S->modulePath();
-    };
-    auto isExported = [&](StringRef ModuleIdentifier, GlobalValue::GUID GUID) {
-      const auto &ExportList = ExportLists.find(ModuleIdentifier);
-      return (ExportList != ExportLists.end() &&
-              ExportList->second.count(GUID)) ||
-             ExportedGUIDs.count(GUID);
-    };
-    thinLTOInternalizeAndPromoteInIndex(ThinLTO.CombinedIndex, isExported);
-
-    auto recordNewLinkage = [&](StringRef ModuleIdentifier,
-                                GlobalValue::GUID GUID,
-                                GlobalValue::LinkageTypes NewLinkage) {
-      ResolvedODR[ModuleIdentifier][GUID] = NewLinkage;
-    };
-
-    thinLTOResolveWeakForLinkerInIndex(ThinLTO.CombinedIndex, isPrevailing,
-                                       recordNewLinkage);
+  // Figure out which symbols need to be internalized. This also needs to happen
+  // at -O0 because summary-based DCE is implemented using internalization, and
+  // we must apply DCE consistently with the full LTO module in order to avoid
+  // undefined references during the final link.
+  std::set<GlobalValue::GUID> ExportedGUIDs;
+  for (auto &Res : GlobalResolutions) {
+    // First check if the symbol was flagged as having external references.
+    if (Res.second.Partition != GlobalResolution::External)
+      continue;
+    // IRName will be defined if we have seen the prevailing copy of
+    // this value. If not, no need to mark as exported from a ThinLTO
+    // partition (and we can't get the GUID).
+    if (Res.second.IRName.empty())
+      continue;
+    auto GUID = GlobalValue::getGUID(
+        GlobalValue::dropLLVMManglingEscape(Res.second.IRName));
+    // Mark exported unless index-based analysis determined it to be dead.
+    if (ThinLTO.CombinedIndex.isGUIDLive(GUID))
+      ExportedGUIDs.insert(GUID);
   }
+
+  // Any functions referenced by the jump table in the regular LTO object must
+  // be exported.
+  for (auto &Def : ThinLTO.CombinedIndex.cfiFunctionDefs())
+    ExportedGUIDs.insert(
+        GlobalValue::getGUID(GlobalValue::dropLLVMManglingEscape(Def)));
+
+  auto isExported = [&](StringRef ModuleIdentifier, GlobalValue::GUID GUID) {
+    const auto &ExportList = ExportLists.find(ModuleIdentifier);
+    return (ExportList != ExportLists.end() &&
+            ExportList->second.count(GUID)) ||
+           ExportedGUIDs.count(GUID);
+  };
+  thinLTOInternalizeAndPromoteInIndex(ThinLTO.CombinedIndex, isExported);
+
+  auto isPrevailing = [&](GlobalValue::GUID GUID,
+                          const GlobalValueSummary *S) {
+    return ThinLTO.PrevailingModuleForGUID[GUID] == S->modulePath();
+  };
+  auto recordNewLinkage = [&](StringRef ModuleIdentifier,
+                              GlobalValue::GUID GUID,
+                              GlobalValue::LinkageTypes NewLinkage) {
+    ResolvedODR[ModuleIdentifier][GUID] = NewLinkage;
+  };
+  thinLTOResolveWeakForLinkerInIndex(ThinLTO.CombinedIndex, isPrevailing,
+                                     recordNewLinkage);
 
   std::unique_ptr<ThinBackendProc> BackendProc =
       ThinLTO.Backend(Conf, ThinLTO.CombinedIndex, ModuleToDefinedGVSummaries,
                       AddStream, Cache);
 
-  // Task numbers start at ParallelCodeGenParallelismLevel if an LTO
-  // module is present, as tasks 0 through ParallelCodeGenParallelismLevel-1
-  // are reserved for parallel code generation partitions.
-  unsigned Task =
-      HasRegularLTO ? RegularLTO.ParallelCodeGenParallelismLevel : 0;
+  // Tasks 0 through ParallelCodeGenParallelismLevel-1 are reserved for combined
+  // module and parallel code generation partitions.
+  unsigned Task = RegularLTO.ParallelCodeGenParallelismLevel;
   for (auto &Mod : ThinLTO.ModuleMap) {
     if (Error E = BackendProc->start(Task, Mod.second, ImportLists[Mod.first],
                                      ExportLists[Mod.first],
@@ -936,4 +1169,28 @@ Error LTO::runThinLTO(AddStreamFn AddStream, NativeObjectCache Cache,
   }
 
   return BackendProc->wait();
+}
+
+Expected<std::unique_ptr<ToolOutputFile>>
+lto::setupOptimizationRemarks(LLVMContext &Context,
+                              StringRef LTORemarksFilename,
+                              bool LTOPassRemarksWithHotness, int Count) {
+  if (LTORemarksFilename.empty())
+    return nullptr;
+
+  std::string Filename = LTORemarksFilename;
+  if (Count != -1)
+    Filename += ".thin." + llvm::utostr(Count) + ".yaml";
+
+  std::error_code EC;
+  auto DiagnosticFile =
+      llvm::make_unique<ToolOutputFile>(Filename, EC, sys::fs::F_None);
+  if (EC)
+    return errorCodeToError(EC);
+  Context.setDiagnosticsOutputFile(
+      llvm::make_unique<yaml::Output>(DiagnosticFile->os()));
+  if (LTOPassRemarksWithHotness)
+    Context.setDiagnosticsHotnessRequested(true);
+  DiagnosticFile->keep();
+  return std::move(DiagnosticFile);
 }

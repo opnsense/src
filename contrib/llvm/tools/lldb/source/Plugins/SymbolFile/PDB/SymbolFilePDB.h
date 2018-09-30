@@ -10,8 +10,8 @@
 #ifndef lldb_Plugins_SymbolFile_PDB_SymbolFilePDB_h_
 #define lldb_Plugins_SymbolFile_PDB_SymbolFilePDB_h_
 
-#include "lldb/Core/UserID.h"
 #include "lldb/Symbol/SymbolFile.h"
+#include "lldb/Utility/UserID.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/DebugInfo/PDB/IPDBSession.h"
@@ -140,6 +140,10 @@ public:
   size_t FindTypes(const std::vector<lldb_private::CompilerContext> &context,
                    bool append, lldb_private::TypeMap &types) override;
 
+  void FindTypesByRegex(const lldb_private::RegularExpression &regex,
+                        uint32_t max_matches,
+                        lldb_private::TypeMap &types);
+
   lldb_private::TypeList *GetTypeList() override;
 
   size_t GetTypes(lldb_private::SymbolContextScope *sc_scope,
@@ -171,9 +175,6 @@ private:
   void BuildSupportFileIdToSupportFileIndexMap(
       const llvm::pdb::PDBSymbolCompiland &cu,
       llvm::DenseMap<uint32_t, uint32_t> &index_map) const;
-
-  void FindTypesByRegex(const std::string &regex, uint32_t max_matches,
-                        lldb_private::TypeMap &types);
 
   void FindTypesByName(const std::string &name, uint32_t max_matches,
                        lldb_private::TypeMap &types);

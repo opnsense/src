@@ -190,7 +190,7 @@ SYSCTL_INT(_kern_ipc, OID_AUTO, shm_allow_removed, CTLFLAG_RWTUN,
     "Enable/Disable attachment to attached segments marked for removal");
 SYSCTL_PROC(_kern_ipc, OID_AUTO, shmsegs, CTLTYPE_OPAQUE | CTLFLAG_RD |
     CTLFLAG_MPSAFE, NULL, 0, sysctl_shmsegs, "",
-    "Current number of shared memory segments allocated");
+    "Array of struct shmid_kernel for each potential shared memory segment");
 
 static struct sx sysvshmsx;
 #define	SYSVSHM_LOCK()		sx_xlock(&sysvshmsx)
@@ -844,7 +844,8 @@ shmrealloc(void)
 	if (shmalloced >= shminfo.shmmni)
 		return;
 
-	newsegs = malloc(shminfo.shmmni * sizeof(*newsegs), M_SHM, M_WAITOK);
+	newsegs = malloc(shminfo.shmmni * sizeof(*newsegs), M_SHM,
+	    M_WAITOK | M_ZERO);
 	for (i = 0; i < shmalloced; i++)
 		bcopy(&shmsegs[i], &newsegs[i], sizeof(newsegs[0]));
 	for (; i < shminfo.shmmni; i++) {
@@ -922,7 +923,8 @@ shminit(void)
 		}
 	}
 	shmalloced = shminfo.shmmni;
-	shmsegs = malloc(shmalloced * sizeof(shmsegs[0]), M_SHM, M_WAITOK);
+	shmsegs = malloc(shmalloced * sizeof(shmsegs[0]), M_SHM,
+	    M_WAITOK|M_ZERO);
 	for (i = 0; i < shmalloced; i++) {
 		shmsegs[i].u.shm_perm.mode = SHMSEG_FREE;
 		shmsegs[i].u.shm_perm.seq = 0;
@@ -1009,7 +1011,12 @@ static int
 sysctl_shmsegs(SYSCTL_HANDLER_ARGS)
 {
 	struct shmid_kernel tshmseg;
+#ifdef COMPAT_FREEBSD32
+	struct shmid_kernel32 tshmseg32;
+#endif
 	struct prison *pr, *rpr;
+	void *outaddr;
+	size_t outsize;
 	int error, i;
 
 	SYSVSHM_LOCK();
@@ -1026,7 +1033,31 @@ sysctl_shmsegs(SYSCTL_HANDLER_ARGS)
 			if (tshmseg.cred->cr_prison != pr)
 				tshmseg.u.shm_perm.key = IPC_PRIVATE;
 		}
-		error = SYSCTL_OUT(req, &tshmseg, sizeof(tshmseg));
+#ifdef COMPAT_FREEBSD32
+		if (SV_CURPROC_FLAG(SV_ILP32)) {
+			bzero(&tshmseg32, sizeof(tshmseg32));
+			freebsd32_ipcperm_out(&tshmseg.u.shm_perm,
+			    &tshmseg32.u.shm_perm);
+			CP(tshmseg, tshmseg32, u.shm_segsz);
+			CP(tshmseg, tshmseg32, u.shm_lpid);
+			CP(tshmseg, tshmseg32, u.shm_cpid);
+			CP(tshmseg, tshmseg32, u.shm_nattch);
+			CP(tshmseg, tshmseg32, u.shm_atime);
+			CP(tshmseg, tshmseg32, u.shm_dtime);
+			CP(tshmseg, tshmseg32, u.shm_ctime);
+			/* Don't copy object, label, or cred */
+			outaddr = &tshmseg32;
+			outsize = sizeof(tshmseg32);
+		} else
+#endif
+		{
+			tshmseg.object = NULL;
+			tshmseg.label = NULL;
+			tshmseg.cred = NULL;
+			outaddr = &tshmseg;
+			outsize = sizeof(tshmseg);
+		}
+		error = SYSCTL_OUT(req, outaddr, outsize);
 		if (error != 0)
 			break;
 	}
@@ -1416,6 +1447,7 @@ freebsd7_freebsd32_shmctl(struct thread *td,
 		break;
 	case SHM_STAT:
 	case IPC_STAT:
+		memset(&u32.shmid_ds32, 0, sizeof(u32.shmid_ds32));
 		freebsd32_ipcperm_old_out(&u.shmid_ds.shm_perm,
 		    &u32.shmid_ds32.shm_perm);
 		if (u.shmid_ds.shm_segsz > INT32_MAX)
@@ -1579,6 +1611,7 @@ freebsd7_shmctl(struct thread *td, struct freebsd7_shmctl_args *uap)
 	/* Cases in which we need to copyout */
 	switch (uap->cmd) {
 	case IPC_STAT:
+		memset(&old, 0, sizeof(old));
 		ipcperm_new2old(&buf.shm_perm, &old.shm_perm);
 		if (buf.shm_segsz > INT_MAX)
 			old.shm_segsz = INT_MAX;

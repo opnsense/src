@@ -14,10 +14,13 @@
 #include "clang/Basic/LLVM.h"
 #include "clang/Driver/Action.h"
 #include "clang/Driver/Phases.h"
+#include "clang/Driver/ToolChain.h"
 #include "clang/Driver/Types.h"
 #include "clang/Driver/Util.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Option/ArgList.h"
+#include "llvm/Support/StringSaver.h"
 
 #include <list>
 #include <map>
@@ -25,14 +28,6 @@
 
 namespace llvm {
 class Triple;
-
-namespace opt {
-  class Arg;
-  class ArgList;
-  class DerivedArgList;
-  class InputArgList;
-  class OptTable;
-}
 }
 
 namespace clang {
@@ -62,7 +57,7 @@ enum LTOKind {
 /// Driver - Encapsulate logic for constructing compilation processes
 /// from a set of gcc-driver-like command line arguments.
 class Driver {
-  llvm::opt::OptTable *Opts;
+  std::unique_ptr<llvm::opt::OptTable> Opts;
 
   DiagnosticsEngine &Diags;
 
@@ -128,11 +123,20 @@ public:
   /// The original path to the clang executable.
   std::string ClangExecutable;
 
+  /// Target and driver mode components extracted from clang executable name.
+  ParsedClangName ClangNameParts;
+
   /// The path to the installed clang directory, if any.
   std::string InstalledDir;
 
   /// The path to the compiler resource directory.
   std::string ResourceDir;
+
+  /// System directory for config files.
+  std::string SystemConfigDir;
+
+  /// User directory for config files.
+  std::string UserConfigDir;
 
   /// A prefix directory used to emulate a limited subset of GCC's '-Bprefix'
   /// functionality.
@@ -146,9 +150,6 @@ public:
 
   /// Dynamic loader prefix, if present
   std::string DyldPrefix;
-
-  /// If the standard library is used
-  bool UseStdLib;
 
   /// Driver title to use with help.
   std::string DriverTitle;
@@ -207,6 +208,21 @@ private:
   /// Name to use when invoking gcc/g++.
   std::string CCCGenericGCCName;
 
+  /// Name of configuration file if used.
+  std::string ConfigFile;
+
+  /// Allocator for string saver.
+  llvm::BumpPtrAllocator Alloc;
+
+  /// Object that stores strings read from configuration file.
+  llvm::StringSaver Saver;
+
+  /// Arguments originated from configuration file.
+  std::unique_ptr<llvm::opt::InputArgList> CfgOptions;
+
+  /// Arguments originated from command line.
+  std::unique_ptr<llvm::opt::InputArgList> CLOptions;
+
   /// Whether to check that input files exist when constructing compilation
   /// jobs.
   unsigned CheckInputsExist : 1;
@@ -214,6 +230,11 @@ private:
 public:
   /// Use lazy precompiled headers for PCH support.
   unsigned CCCUsePCH : 1;
+
+  /// Force clang to emit reproducer for driver invocation. This is enabled
+  /// indirectly by setting FORCE_CLANG_DIAGNOSTICS_CRASH environment variable
+  /// or when using the -gen-reproducer driver flag.
+  unsigned GenReproducer : 1;
 
 private:
   /// Certain options suppress the 'no input files' warning.
@@ -227,7 +248,7 @@ private:
   /// This maps from the string representation of a triple to a ToolChain
   /// created targeting that triple. The driver owns all the ToolChain objects
   /// stored in it, and will clean them up when torn down.
-  mutable llvm::StringMap<ToolChain *> ToolChains;
+  mutable llvm::StringMap<std::unique_ptr<ToolChain>> ToolChains;
 
 private:
   /// TranslateInputArgs - Create a new derived argument list from the input
@@ -264,13 +285,14 @@ public:
   Driver(StringRef ClangExecutable, StringRef DefaultTargetTriple,
          DiagnosticsEngine &Diags,
          IntrusiveRefCntPtr<vfs::FileSystem> VFS = nullptr);
-  ~Driver();
 
   /// @name Accessors
   /// @{
 
   /// Name to use when invoking gcc/g++.
   const std::string &getCCCGenericGCCName() const { return CCCGenericGCCName; }
+
+  const std::string &getConfigFile() const { return ConfigFile; }
 
   const llvm::opt::OptTable &getOpts() const { return *Opts; }
 
@@ -281,6 +303,8 @@ public:
   bool getCheckInputsExist() const { return CheckInputsExist; }
 
   void setCheckInputsExist(bool Value) { CheckInputsExist = Value; }
+
+  void setTargetAndMode(const ParsedClangName &TM) { ClangNameParts = TM; }
 
   const std::string &getTitle() { return DriverTitle; }
   void setTitle(std::string Value) { DriverTitle = std::move(Value); }
@@ -304,13 +328,8 @@ public:
   bool isSaveTempsObj() const { return SaveTemps == SaveTempsObj; }
 
   bool embedBitcodeEnabled() const { return BitcodeEmbed != EmbedNone; }
-  bool embedBitcodeInObject() const {
-    // LTO has no object file output so ignore embed bitcode option in LTO.
-    return (BitcodeEmbed == EmbedBitcode) && !isUsingLTO();
-  }
-  bool embedBitcodeMarkerOnly() const {
-    return (BitcodeEmbed == EmbedMarker) && !isUsingLTO();
-  }
+  bool embedBitcodeInObject() const { return (BitcodeEmbed == EmbedBitcode); }
+  bool embedBitcodeMarkerOnly() const { return (BitcodeEmbed == EmbedMarker); }
 
   /// Compute the desired OpenMP runtime from the flags provided.
   OpenMPRuntimeKind getOpenMPRuntime(const llvm::opt::ArgList &Args) const;
@@ -341,7 +360,8 @@ public:
 
   /// ParseArgStrings - Parse the given list of strings into an
   /// ArgList.
-  llvm::opt::InputArgList ParseArgStrings(ArrayRef<const char *> Args);
+  llvm::opt::InputArgList ParseArgStrings(ArrayRef<const char *> Args,
+                                          bool &ContainsError);
 
   /// BuildInputs - Construct the list of inputs and their types from 
   /// the given arguments.
@@ -422,6 +442,10 @@ public:
   // FIXME: This should be in CompilationInfo.
   std::string GetProgramPath(StringRef Name, const ToolChain &TC) const;
 
+  /// handleAutocompletions - Handle --autocomplete by searching and printing
+  /// possible flags, descriptions, and its arguments.
+  void handleAutocompletions(StringRef PassedFlags) const;
+
   /// HandleImmediateArgs - Handle any arguments which should be
   /// treated before building actions or binding tools.
   ///
@@ -486,6 +510,18 @@ public:
   LTOKind getLTOMode() const { return LTOMode; }
 
 private:
+
+  /// Tries to load options from configuration file.
+  ///
+  /// \returns true if error occurred.
+  bool loadConfigFile();
+
+  /// Read options from the specified file.
+  ///
+  /// \param [in] FileName File to read.
+  /// \returns true, if error occurred while reading.
+  bool readConfigFile(StringRef FileName);
+
   /// Set the driver mode (cl, gcc, etc) from an option string of the form
   /// --driver-mode=<mode>.
   void setDriverModeFromOption(StringRef Opt);

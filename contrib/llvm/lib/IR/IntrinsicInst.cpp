@@ -14,14 +14,15 @@
 // are all subclasses of the CallInst class.  Note that none of these classes
 // has state or virtual methods, which is an important part of this gross/neat
 // hack working.
-// 
+//
 // In some cases, arguments to intrinsics need to be generic and are defined as
 // type pointer to empty struct { }*.  To access the real item of interest the
-// cast instruction needs to be stripped away. 
+// cast instruction needs to be stripped away.
 //
 //===----------------------------------------------------------------------===//
 
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Metadata.h"
@@ -93,3 +94,66 @@ Value *InstrProfIncrementInst::getStep() const {
   LLVMContext &Context = M->getContext();
   return ConstantInt::get(Type::getInt64Ty(Context), 1);
 }
+
+ConstrainedFPIntrinsic::RoundingMode
+ConstrainedFPIntrinsic::getRoundingMode() const {
+  unsigned NumOperands = getNumArgOperands();
+  Metadata *MD =
+      dyn_cast<MetadataAsValue>(getArgOperand(NumOperands - 2))->getMetadata();
+  if (!MD || !isa<MDString>(MD))
+    return rmInvalid;
+  StringRef RoundingArg = cast<MDString>(MD)->getString();
+
+  // For dynamic rounding mode, we use round to nearest but we will set the
+  // 'exact' SDNodeFlag so that the value will not be rounded.
+  return StringSwitch<RoundingMode>(RoundingArg)
+    .Case("round.dynamic",    rmDynamic)
+    .Case("round.tonearest",  rmToNearest)
+    .Case("round.downward",   rmDownward)
+    .Case("round.upward",     rmUpward)
+    .Case("round.towardzero", rmTowardZero)
+    .Default(rmInvalid);
+}
+
+ConstrainedFPIntrinsic::ExceptionBehavior
+ConstrainedFPIntrinsic::getExceptionBehavior() const {
+  unsigned NumOperands = getNumArgOperands();
+  Metadata *MD =
+      dyn_cast<MetadataAsValue>(getArgOperand(NumOperands - 1))->getMetadata();
+  if (!MD || !isa<MDString>(MD))
+    return ebInvalid;
+  StringRef ExceptionArg = cast<MDString>(MD)->getString();
+  return StringSwitch<ExceptionBehavior>(ExceptionArg)
+    .Case("fpexcept.ignore",  ebIgnore)
+    .Case("fpexcept.maytrap", ebMayTrap)
+    .Case("fpexcept.strict",  ebStrict)
+    .Default(ebInvalid);
+}
+
+bool ConstrainedFPIntrinsic::isUnaryOp() const {
+  switch (getIntrinsicID()) {
+    default:
+      return false;
+    case Intrinsic::experimental_constrained_sqrt:
+    case Intrinsic::experimental_constrained_sin:
+    case Intrinsic::experimental_constrained_cos:
+    case Intrinsic::experimental_constrained_exp:
+    case Intrinsic::experimental_constrained_exp2:
+    case Intrinsic::experimental_constrained_log:
+    case Intrinsic::experimental_constrained_log10:
+    case Intrinsic::experimental_constrained_log2:
+    case Intrinsic::experimental_constrained_rint:
+    case Intrinsic::experimental_constrained_nearbyint:
+      return true;
+  }
+}
+
+bool ConstrainedFPIntrinsic::isTernaryOp() const {
+  switch (getIntrinsicID()) {
+    default:
+      return false;
+    case Intrinsic::experimental_constrained_fma:
+      return true;
+  }
+}
+

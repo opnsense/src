@@ -39,7 +39,6 @@ __FBSDID("$FreeBSD$");
 #include "namespace.h"
 #include <unistd.h>
 #include <stdio.h>
-#include <sys/cdefs.h>
 #include "un-namespace.h"
 #include "libc_private.h"
 #include "local.h"
@@ -50,27 +49,30 @@ char *
 gets(char *buf)
 {
 	int c;
-	char *s;
+	char *s, *ret;
 	static int warned;
 	static const char w[] =
 	    "warning: this program uses gets(), which is unsafe.\n";
 
-	FLOCKFILE(stdin);
+	FLOCKFILE_CANCELSAFE(stdin);
 	ORIENT(stdin, -1);
 	if (!warned) {
 		(void) _write(STDERR_FILENO, w, sizeof(w) - 1);
 		warned = 1;
 	}
-	for (s = buf; (c = __sgetc(stdin)) != '\n';)
+	for (s = buf; (c = __sgetc(stdin)) != '\n'; ) {
 		if (c == EOF)
 			if (s == buf) {
-				FUNLOCKFILE(stdin);
-				return (NULL);
+				ret = NULL;
+				goto end;
 			} else
 				break;
 		else
 			*s++ = c;
+	}
 	*s = 0;
-	FUNLOCKFILE(stdin);
-	return (buf);
+	ret = buf;
+end:
+	FUNLOCKFILE_CANCELSAFE();
+	return (ret);
 }

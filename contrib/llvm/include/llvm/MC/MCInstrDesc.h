@@ -173,7 +173,7 @@ public:
   const MCPhysReg *ImplicitDefs; // Registers implicitly defined by this instr
   const MCOperandInfo *OpInfo;   // 'NumOperands' entries about operands
   // Subtarget feature that this is deprecated on, if any
-  // -1 implies this is not deprecated by any single feature. It may still be 
+  // -1 implies this is not deprecated by any single feature. It may still be
   // deprecated due to a "complex" reason, below.
   int64_t DeprecatedFeature;
 
@@ -208,6 +208,15 @@ public:
   /// that the machine instruction may include implicit register def/uses as
   /// well.
   unsigned getNumOperands() const { return NumOperands; }
+
+  using const_opInfo_iterator = const MCOperandInfo *;
+
+  const_opInfo_iterator opInfo_begin() const { return OpInfo; }
+  const_opInfo_iterator opInfo_end() const { return OpInfo + NumOperands; }
+
+  iterator_range<const_opInfo_iterator> operands() const {
+    return make_range(opInfo_begin(), opInfo_end());
+  }
 
   /// \brief Return the number of MachineOperands that are register
   /// definitions.  Register definitions always occur at the start of the
@@ -570,8 +579,6 @@ public:
     }
     return -1;
   }
-
-private:
 
   /// \brief Return true if this instruction defines the specified physical
   /// register, either explicitly or implicitly.

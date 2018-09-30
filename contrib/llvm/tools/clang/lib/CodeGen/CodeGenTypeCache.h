@@ -15,6 +15,7 @@
 #define LLVM_CLANG_LIB_CODEGEN_CODEGENTYPECACHE_H
 
 #include "clang/AST/CharUnits.h"
+#include "clang/Basic/AddressSpaces.h"
 #include "llvm/IR/CallingConv.h"
 
 namespace llvm {
@@ -36,7 +37,7 @@ struct CodeGenTypeCache {
   /// i8, i16, i32, and i64
   llvm::IntegerType *Int8Ty, *Int16Ty, *Int32Ty, *Int64Ty;
   /// float, double
-  llvm::Type *FloatTy, *DoubleTy;
+  llvm::Type *HalfTy, *FloatTy, *DoubleTy;
 
   /// int
   llvm::IntegerType *IntTy;
@@ -58,6 +59,12 @@ struct CodeGenTypeCache {
   union {
     llvm::PointerType *VoidPtrPtrTy;
     llvm::PointerType *Int8PtrPtrTy;
+  };
+
+  /// void* in alloca address space
+  union {
+    llvm::PointerType *AllocaVoidPtrTy;
+    llvm::PointerType *AllocaInt8PtrTy;
   };
 
   /// The size and alignment of the builtin C type 'int'.  This comes
@@ -88,6 +95,8 @@ struct CodeGenTypeCache {
     unsigned char SizeAlignInBytes;
   };
 
+  LangAS ASTAllocaAddressSpace;
+
   CharUnits getSizeSize() const {
     return CharUnits::fromQuantity(SizeSizeInBytes);
   }
@@ -105,6 +114,8 @@ struct CodeGenTypeCache {
   llvm::CallingConv::ID getRuntimeCC() const { return RuntimeCC; }
   llvm::CallingConv::ID BuiltinCC;
   llvm::CallingConv::ID getBuiltinCC() const { return BuiltinCC; }
+
+  LangAS getASTAllocaAddressSpace() const { return ASTAllocaAddressSpace; }
 };
 
 }  // end namespace CodeGen

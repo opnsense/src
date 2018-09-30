@@ -652,7 +652,7 @@ static int
 mpr_user_command(struct mpr_softc *sc, struct mpr_usr_command *cmd)
 {
 	MPI2_REQUEST_HEADER *hdr;	
-	MPI2_DEFAULT_REPLY *rpl;
+	MPI2_DEFAULT_REPLY *rpl = NULL;
 	void *buf = NULL;
 	struct mpr_command *cm = NULL;
 	int err = 0;
@@ -664,7 +664,7 @@ mpr_user_command(struct mpr_softc *sc, struct mpr_usr_command *cmd)
 	if (cm == NULL) {
 		mpr_printf(sc, "%s: no mpr requests\n", __func__);
 		err = ENOMEM;
-		goto Ret;
+		goto RetFree;
 	}
 	mpr_unlock(sc);
 
@@ -706,15 +706,16 @@ mpr_user_command(struct mpr_softc *sc, struct mpr_usr_command *cmd)
 		goto RetFreeUnlocked;
 
 	mpr_lock(sc);
-	err = mpr_wait_command(sc, cm, 30, CAN_SLEEP);
+	err = mpr_wait_command(sc, &cm, 30, CAN_SLEEP);
 
-	if (err) {
+	if (err || (cm == NULL)) {
 		mpr_printf(sc, "%s: invalid request: error %d\n",
 		    __func__, err);
-		goto Ret;
+		goto RetFree;
 	}
 
-	rpl = (MPI2_DEFAULT_REPLY *)cm->cm_reply;
+	if (cm != NULL)
+		rpl = (MPI2_DEFAULT_REPLY *)cm->cm_reply;
 	if (rpl != NULL)
 		sz = rpl->MsgLength * 4;
 	else
@@ -734,9 +735,9 @@ mpr_user_command(struct mpr_softc *sc, struct mpr_usr_command *cmd)
 
 RetFreeUnlocked:
 	mpr_lock(sc);
+RetFree:
 	if (cm != NULL)
 		mpr_free_command(sc, cm);
-Ret:
 	mpr_unlock(sc);
 	if (buf != NULL)
 		free(buf, M_MPRUSER);
@@ -850,7 +851,7 @@ mpr_user_pass_thru(struct mpr_softc *sc, mpr_pass_thru_t *data)
 			err = 1;
 		} else {
 			mprsas_prepare_for_tm(sc, cm, targ, CAM_LUN_WILDCARD);
-			err = mpr_wait_command(sc, cm, 30, CAN_SLEEP);
+			err = mpr_wait_command(sc, &cm, 30, CAN_SLEEP);
 		}
 
 		if (err != 0) {
@@ -861,7 +862,7 @@ mpr_user_pass_thru(struct mpr_softc *sc, mpr_pass_thru_t *data)
 		/*
 		 * Copy the reply data and sense data to user space.
 		 */
-		if (cm->cm_reply != NULL) {
+		if ((cm != NULL) && (cm->cm_reply != NULL)) {
 			rpl = (MPI2_DEFAULT_REPLY *)cm->cm_reply;
 			sz = rpl->MsgLength * 4;
 	
@@ -1054,13 +1055,12 @@ mpr_user_pass_thru(struct mpr_softc *sc, mpr_pass_thru_t *data)
 
 	mpr_lock(sc);
 
-	err = mpr_wait_command(sc, cm, 30, CAN_SLEEP);
+	err = mpr_wait_command(sc, &cm, 30, CAN_SLEEP);
 
-	if (err) {
+	if (err || (cm == NULL)) {
 		mpr_printf(sc, "%s: invalid request: error %d\n", __func__,
 		    err);
-		mpr_unlock(sc);
-		goto RetFreeUnlocked;
+		goto RetFree;
 	}
 
 	/*
@@ -1153,6 +1153,7 @@ mpr_user_pass_thru(struct mpr_softc *sc, mpr_pass_thru_t *data)
 RetFreeUnlocked:
 	mpr_lock(sc);
 
+RetFree:
 	if (cm != NULL) {
 		if (cm->cm_data)
 			free(cm->cm_data, M_MPRUSER);
@@ -1188,7 +1189,10 @@ mpr_user_get_adapter_data(struct mpr_softc *sc, mpr_adapter_data_t *data)
 	/*
 	 * General device info.
 	 */
-	data->AdapterType = MPRIOCTL_ADAPTER_TYPE_SAS3;
+	if (sc->mpr_flags & MPR_FLAGS_GEN35_IOC)
+		data->AdapterType = MPRIOCTL_ADAPTER_TYPE_SAS35;
+	else
+		data->AdapterType = MPRIOCTL_ADAPTER_TYPE_SAS3;
 	data->PCIDeviceHwId = pci_get_device(sc->mpr_dev);
 	data->PCIDeviceHwRev = pci_read_config(sc->mpr_dev, PCIR_REVID, 1);
 	data->SubSystemId = pci_get_subdevice(sc->mpr_dev);
@@ -1301,8 +1305,8 @@ mpr_post_fw_diag_buffer(struct mpr_softc *sc,
 	/*
 	 * Send command synchronously.
 	 */
-	status = mpr_wait_command(sc, cm, 30, CAN_SLEEP);
-	if (status) {
+	status = mpr_wait_command(sc, &cm, 30, CAN_SLEEP);
+	if (status || (cm == NULL)) {
 		mpr_printf(sc, "%s: invalid request: error %d\n", __func__,
 		    status);
 		status = MPR_DIAG_FAILURE;
@@ -1333,7 +1337,8 @@ mpr_post_fw_diag_buffer(struct mpr_softc *sc,
 	status = MPR_DIAG_SUCCESS;
 
 done:
-	mpr_free_command(sc, cm);
+	if (cm != NULL)
+		mpr_free_command(sc, cm);
 	return (status);
 }
 
@@ -1387,8 +1392,8 @@ mpr_release_fw_diag_buffer(struct mpr_softc *sc,
 	/*
 	 * Send command synchronously.
 	 */
-	status = mpr_wait_command(sc, cm, 30, CAN_SLEEP);
-	if (status) {
+	status = mpr_wait_command(sc, &cm, 30, CAN_SLEEP);
+	if (status || (cm == NULL)) {
 		mpr_printf(sc, "%s: invalid request: error %d\n", __func__,
 		    status);
 		status = MPR_DIAG_FAILURE;
@@ -1423,6 +1428,9 @@ mpr_release_fw_diag_buffer(struct mpr_softc *sc,
 	}
 
 done:
+	if (cm != NULL)
+		mpr_free_command(sc, cm);
+
 	return (status);
 }
 

@@ -25,7 +25,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd June 20, 2017
+.Dd October 3, 2017
 .Dt PROCSTAT 1
 .Os
 .Sh NAME
@@ -38,7 +38,7 @@
 .Op Fl M Ar core
 .Op Fl N Ar system
 .Op Fl w Ar interval
-.Op Fl b | c | e | f | i | j | k | l | r | s | S | t | v | x
+.Op Fl b | c | e | f | i | j | k | l | L | r | s | S | t | v | x
 .Op Fl a | Ar pid | Ar core ...
 .Sh DESCRIPTION
 The
@@ -81,6 +81,8 @@ If the flag is repeated, function offsets as well as function names are
 printed.
 .It Fl l
 Display resource limits for the process.
+.It Fl L
+Display LWP info for the process pertaining to it's signal driven exit.
 .It Fl r
 Display resource usage information for the process.
 .It Fl s
@@ -210,6 +212,8 @@ shared memory
 kqueue
 .It m
 message queue
+.It P
+process descriptor
 .It p
 pipe
 .It s
@@ -286,7 +290,7 @@ see
 .Dv IPPROTO_DIVERT ;
 see
 .Xr divert 4 .
-.It IP\?
+.It IP?
 unknown protocol.
 .It RAW
 .Dv IPPROTO_RAW ;
@@ -317,12 +321,12 @@ see
 .Dv IPPROTO_TCP ;
 see
 .Xr tcp 4 .
-.It UD\?
+.It UD?
 unknown protocol.
 .El
 .Pp
 .Bl -tag -width indent -compact
-.It \?
+.It ?
 unknown address family.
 .El
 .Ss Signal Disposition Information

@@ -133,7 +133,7 @@ static int nfscl_localconflict(struct nfsclclient *, u_int8_t *, int,
     struct nfscllock *, u_int8_t *, struct nfscldeleg *, struct nfscllock **);
 static void nfscl_newopen(struct nfsclclient *, struct nfscldeleg *,
     struct nfsclowner **, struct nfsclowner **, struct nfsclopen **,
-    struct nfsclopen **, u_int8_t *, u_int8_t *, int, int *);
+    struct nfsclopen **, u_int8_t *, u_int8_t *, int, struct ucred *, int *);
 static int nfscl_moveopen(vnode_t , struct nfsclclient *,
     struct nfsmount *, struct nfsclopen *, struct nfsclowner *,
     struct nfscldeleg *, struct ucred *, NFSPROC_T *);
@@ -287,7 +287,7 @@ nfscl_open(vnode_t vp, u_int8_t *nfhp, int fhlen, u_int32_t amode, int usedeleg,
 	 * Create a new open, as required.
 	 */
 	nfscl_newopen(clp, dp, &owp, &nowp, &op, &nop, own, nfhp, fhlen,
-	    newonep);
+	    cred, newonep);
 
 	/*
 	 * Now, check the mode on the open and return the appropriate
@@ -346,7 +346,7 @@ static void
 nfscl_newopen(struct nfsclclient *clp, struct nfscldeleg *dp,
     struct nfsclowner **owpp, struct nfsclowner **nowpp, struct nfsclopen **opp,
     struct nfsclopen **nopp, u_int8_t *own, u_int8_t *fhp, int fhlen,
-    int *newonep)
+    struct ucred *cred, int *newonep)
 {
 	struct nfsclowner *owp = *owpp, *nowp;
 	struct nfsclopen *op, *nop;
@@ -399,6 +399,8 @@ nfscl_newopen(struct nfsclclient *clp, struct nfscldeleg *dp,
 			nop->nfso_stateid.other[0] = 0;
 			nop->nfso_stateid.other[1] = 0;
 			nop->nfso_stateid.other[2] = 0;
+			KASSERT(cred != NULL, ("%s: cred NULL\n", __func__));
+			newnfs_copyincred(cred, &nop->nfso_cred);
 			if (dp != NULL) {
 				TAILQ_REMOVE(&clp->nfsc_deleg, dp, nfsdl_list);
 				TAILQ_INSERT_HEAD(&clp->nfsc_deleg, dp,
@@ -801,7 +803,7 @@ nfscl_getcl(struct mount *mp, struct ucred *cred, NFSPROC_T *p,
 	 * allocate a new clientid and get out now. For the case where
 	 * clp != NULL, this is a harmless optimization.
 	 */
-	if ((mp->mnt_kern_flag & MNTK_UNMOUNTF) != 0) {
+	if (NFSCL_FORCEDISM(mp)) {
 		NFSUNLOCKCLSTATE();
 		if (newclp != NULL)
 			free(newclp, M_NFSCLCLIENT);
@@ -841,7 +843,7 @@ nfscl_getcl(struct mount *mp, struct ucred *cred, NFSPROC_T *p,
 	}
 	NFSLOCKCLSTATE();
 	while ((clp->nfsc_flags & NFSCLFLAGS_HASCLIENTID) == 0 && !igotlock &&
-	    (mp->mnt_kern_flag & MNTK_UNMOUNTF) == 0)
+	    !NFSCL_FORCEDISM(mp))
 		igotlock = nfsv4_lock(&clp->nfsc_lock, 1, NULL,
 		    NFSCLSTATEMUTEXPTR, mp);
 	if (igotlock == 0) {
@@ -856,10 +858,10 @@ nfscl_getcl(struct mount *mp, struct ucred *cred, NFSPROC_T *p,
 		nfsv4_lock(&clp->nfsc_lock, 0, NULL, NFSCLSTATEMUTEXPTR, mp);
 		nfsv4_getref(&clp->nfsc_lock, NULL, NFSCLSTATEMUTEXPTR, mp);
 	}
-	if (igotlock == 0 && (mp->mnt_kern_flag & MNTK_UNMOUNTF) != 0) {
+	if (igotlock == 0 && NFSCL_FORCEDISM(mp)) {
 		/*
 		 * Both nfsv4_lock() and nfsv4_getref() know to check
-		 * for MNTK_UNMOUNTF and return without sleeping to
+		 * for NFSCL_FORCEDISM() and return without sleeping to
 		 * wait for the exclusive lock to be released, since it
 		 * might be held by nfscl_umount() and we need to get out
 		 * now for that case and not wait until nfscl_umount()
@@ -1625,6 +1627,14 @@ nfscl_cleanclient(struct nfsclclient *clp)
 {
 	struct nfsclowner *owp, *nowp;
 	struct nfsclopen *op, *nop;
+	struct nfscllayout *lyp, *nlyp;
+	struct nfscldevinfo *dip, *ndip;
+
+	TAILQ_FOREACH_SAFE(lyp, &clp->nfsc_layout, nfsly_list, nlyp)
+		nfscl_freelayout(lyp);
+
+	LIST_FOREACH_SAFE(dip, &clp->nfsc_devinfo, nfsdi_list, ndip)
+		nfscl_freedevinfo(dip);
 
 	/* Now, all the OpenOwners, etc. */
 	LIST_FOREACH_SAFE(owp, &clp->nfsc_owner, nfsow_list, nowp) {
@@ -3970,7 +3980,7 @@ nfscl_recalldeleg(struct nfsclclient *clp, struct nfsmount *nmp,
 				    M_WAITOK);
 				nfscl_newopen(clp, NULL, &owp, &nowp, &op, 
 				    NULL, lowp->nfsow_owner, dp->nfsdl_fh,
-				    dp->nfsdl_fhlen, NULL);
+				    dp->nfsdl_fhlen, NULL, NULL);
 				newnfs_copycred(&dp->nfsdl_cred, cred);
 				ret = nfscl_moveopen(vp, clp, nmp, lop,
 				    owp, dp, cred, p);
@@ -4052,7 +4062,7 @@ nfscl_moveopen(vnode_t vp, struct nfsclclient *clp, struct nfsmount *nmp,
 	    lop->nfso_fhlen - 1, M_NFSCLOPEN, M_WAITOK);
 	newone = 0;
 	nfscl_newopen(clp, NULL, &owp, NULL, &op, &nop, owp->nfsow_owner,
-	    lop->nfso_fh, lop->nfso_fhlen, &newone);
+	    lop->nfso_fh, lop->nfso_fhlen, cred, &newone);
 	ndp = dp;
 	error = nfscl_tryopen(nmp, vp, np->n_v4->n4_data, np->n_v4->n4_fhlen,
 	    lop->nfso_fh, lop->nfso_fhlen, lop->nfso_mode, op,
@@ -4061,8 +4071,6 @@ nfscl_moveopen(vnode_t vp, struct nfsclclient *clp, struct nfsmount *nmp,
 		if (newone)
 			nfscl_freeopen(op, 0);
 	} else {
-		if (newone)
-			newnfs_copyincred(cred, &op->nfso_cred);
 		op->nfso_mode |= lop->nfso_mode;
 		op->nfso_opencnt += lop->nfso_opencnt;
 		nfscl_freeopen(lop, 1);
@@ -4844,7 +4852,7 @@ nfscl_layout(struct nfsmount *nmp, vnode_t vp, u_int8_t *fhp, int fhlen,
 			lyp->nfsly_timestamp = NFSD_MONOSEC + 120;
 		}
 		nfsv4_getref(&lyp->nfsly_lock, NULL, NFSCLSTATEMUTEXPTR, mp);
-		if ((mp->mnt_kern_flag & MNTK_UNMOUNTF) != 0) {
+		if (NFSCL_FORCEDISM(mp)) {
 			NFSUNLOCKCLSTATE();
 			if (tlyp != NULL)
 				free(tlyp, M_NFSLAYOUT);
@@ -4903,11 +4911,10 @@ nfscl_getlayout(struct nfsclclient *clp, uint8_t *fhp, int fhlen,
 				do {
 					igotlock = nfsv4_lock(&lyp->nfsly_lock,
 					    1, NULL, NFSCLSTATEMUTEXPTR, mp);
-				} while (igotlock == 0 &&
-				    (mp->mnt_kern_flag & MNTK_UNMOUNTF) == 0);
+				} while (igotlock == 0 && !NFSCL_FORCEDISM(mp));
 				*retflpp = NULL;
 			}
-			if ((mp->mnt_kern_flag & MNTK_UNMOUNTF) != 0) {
+			if (NFSCL_FORCEDISM(mp)) {
 				lyp = NULL;
 				*recalledp = 1;
 			}
@@ -5298,7 +5305,7 @@ nfscl_layoutcommit(vnode_t vp, NFSPROC_T *p)
 		return (EPERM);
 	}
 	nfsv4_getref(&lyp->nfsly_lock, NULL, NFSCLSTATEMUTEXPTR, mp);
-	if ((mp->mnt_kern_flag & MNTK_UNMOUNTF) != 0) {
+	if (NFSCL_FORCEDISM(mp)) {
 		NFSUNLOCKCLSTATE();
 		return (EPERM);
 	}

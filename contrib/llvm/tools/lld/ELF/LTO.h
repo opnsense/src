@@ -21,7 +21,8 @@
 #ifndef LLD_ELF_LTO_H
 #define LLD_ELF_LTO_H
 
-#include "lld/Core/LLVM.h"
+#include "lld/Common/LLVM.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallString.h"
 #include <memory>
 #include <vector>
@@ -30,7 +31,7 @@ namespace llvm {
 namespace lto {
 class LTO;
 }
-}
+} // namespace llvm
 
 namespace lld {
 namespace elf {
@@ -43,14 +44,16 @@ public:
   BitcodeCompiler();
   ~BitcodeCompiler();
 
-  template <class ELFT> void add(BitcodeFile &F);
+  void add(BitcodeFile &F);
   std::vector<InputFile *> compile();
 
 private:
   std::unique_ptr<llvm::lto::LTO> LTOObj;
   std::vector<SmallString<0>> Buff;
+  std::vector<std::unique_ptr<MemoryBuffer>> Files;
+  llvm::DenseSet<StringRef> UsedStartStop;
 };
-}
-}
+} // namespace elf
+} // namespace lld
 
 #endif

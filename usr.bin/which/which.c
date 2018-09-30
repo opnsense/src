@@ -1,4 +1,6 @@
-/**
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2000 Dan Papasian.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -28,9 +30,8 @@
 
 __FBSDID("$FreeBSD$");
 
-#include <sys/stat.h>
 #include <sys/param.h>
-
+#include <sys/stat.h>
 #include <err.h>
 #include <stdio.h>
 #include <stdlib.h>

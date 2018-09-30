@@ -369,11 +369,17 @@ void Preprocessor::RegisterBuiltinMacros() {
   Ident__has_extension    = RegisterBuiltinMacro(*this, "__has_extension");
   Ident__has_builtin      = RegisterBuiltinMacro(*this, "__has_builtin");
   Ident__has_attribute    = RegisterBuiltinMacro(*this, "__has_attribute");
+  Ident__has_c_attribute  = RegisterBuiltinMacro(*this, "__has_c_attribute");
   Ident__has_declspec = RegisterBuiltinMacro(*this, "__has_declspec_attribute");
   Ident__has_include      = RegisterBuiltinMacro(*this, "__has_include");
   Ident__has_include_next = RegisterBuiltinMacro(*this, "__has_include_next");
   Ident__has_warning      = RegisterBuiltinMacro(*this, "__has_warning");
   Ident__is_identifier    = RegisterBuiltinMacro(*this, "__is_identifier");
+  Ident__is_target_arch   = RegisterBuiltinMacro(*this, "__is_target_arch");
+  Ident__is_target_vendor = RegisterBuiltinMacro(*this, "__is_target_vendor");
+  Ident__is_target_os     = RegisterBuiltinMacro(*this, "__is_target_os");
+  Ident__is_target_environment =
+      RegisterBuiltinMacro(*this, "__is_target_environment");
 
   // Modules.
   Ident__building_module  = RegisterBuiltinMacro(*this, "__building_module");
@@ -412,7 +418,7 @@ static bool isTrivialSingleTokenExpansion(const MacroInfo *MI,
 
   // If this is a function-like macro invocation, it's safe to trivially expand
   // as long as the identifier is not a macro argument.
-  return std::find(MI->arg_begin(), MI->arg_end(), II) == MI->arg_end();
+  return std::find(MI->param_begin(), MI->param_end(), II) == MI->param_end();
 }
 
 /// isNextPPTokenLParen - Determine whether the next preprocessor token to be
@@ -492,7 +498,7 @@ bool Preprocessor::HandleMacroExpandedIdentifier(Token &Identifier,
     // Preprocessor directives used inside macro arguments are not portable, and
     // this enables the warning.
     InMacroArgs = true;
-    Args = ReadFunctionLikeMacroArgs(Identifier, MI, ExpansionEnd);
+    Args = ReadMacroCallArgumentList(Identifier, MI, ExpansionEnd);
 
     // Finished parsing args.
     InMacroArgs = false;
@@ -745,11 +751,11 @@ static bool GenerateNewArgTokens(Preprocessor &PP,
 /// token is the '(' of the macro, this method is invoked to read all of the
 /// actual arguments specified for the macro invocation.  This returns null on
 /// error.
-MacroArgs *Preprocessor::ReadFunctionLikeMacroArgs(Token &MacroName,
+MacroArgs *Preprocessor::ReadMacroCallArgumentList(Token &MacroName,
                                                    MacroInfo *MI,
                                                    SourceLocation &MacroEnd) {
   // The number of fixed arguments to parse.
-  unsigned NumFixedArgsLeft = MI->getNumArgs();
+  unsigned NumFixedArgsLeft = MI->getNumParams();
   bool isVariadic = MI->isVariadic();
 
   // Outer loop, while there are more arguments, keep reading them.
@@ -889,7 +895,7 @@ MacroArgs *Preprocessor::ReadFunctionLikeMacroArgs(Token &MacroName,
 
   // Okay, we either found the r_paren.  Check to see if we parsed too few
   // arguments.
-  unsigned MinArgsExpected = MI->getNumArgs();
+  unsigned MinArgsExpected = MI->getNumParams();
 
   // If this is not a variadic macro, and too many args were specified, emit
   // an error.
@@ -1023,7 +1029,7 @@ Token *Preprocessor::cacheMacroExpandedTokens(TokenLexer *tokLexer,
 
   size_t newIndex = MacroExpandedTokens.size();
   bool cacheNeedsToGrow = tokens.size() >
-                      MacroExpandedTokens.capacity()-MacroExpandedTokens.size(); 
+                      MacroExpandedTokens.capacity()-MacroExpandedTokens.size();
   MacroExpandedTokens.append(tokens.begin(), tokens.end());
 
   if (cacheNeedsToGrow) {
@@ -1098,6 +1104,8 @@ static bool HasFeature(const Preprocessor &PP, StringRef Feature) {
       .Case("address_sanitizer",
             LangOpts.Sanitize.hasOneOf(SanitizerKind::Address |
                                        SanitizerKind::KernelAddress))
+      .Case("hwaddress_sanitizer",
+            LangOpts.Sanitize.hasOneOf(SanitizerKind::HWAddress))
       .Case("assume_nonnull", true)
       .Case("attribute_analyzer_noreturn", true)
       .Case("attribute_availability", true)
@@ -1125,6 +1133,7 @@ static bool HasFeature(const Preprocessor &PP, StringRef Feature) {
       .Case("attribute_overloadable", true)
       .Case("attribute_unavailable_with_message", true)
       .Case("attribute_unused_on_fields", true)
+      .Case("attribute_diagnose_if_objc", true)
       .Case("blocks", LangOpts.Blocks)
       .Case("c_thread_safety_attributes", true)
       .Case("cxx_exceptions", LangOpts.CXXExceptions)
@@ -1134,9 +1143,11 @@ static bool HasFeature(const Preprocessor &PP, StringRef Feature) {
       .Case("nullability_on_arrays", true)
       .Case("memory_sanitizer", LangOpts.Sanitize.has(SanitizerKind::Memory))
       .Case("thread_sanitizer", LangOpts.Sanitize.has(SanitizerKind::Thread))
-      .Case("dataflow_sanitizer", LangOpts.Sanitize.has(SanitizerKind::DataFlow))
+      .Case("dataflow_sanitizer",
+            LangOpts.Sanitize.has(SanitizerKind::DataFlow))
       .Case("efficiency_sanitizer",
             LangOpts.Sanitize.hasOneOf(SanitizerKind::Efficiency))
+      .Case("scudo", LangOpts.Sanitize.hasOneOf(SanitizerKind::Scudo))
       // Objective-C features
       .Case("objc_arr", LangOpts.ObjCAutoRefCount) // FIXME: REMOVE?
       .Case("objc_arc", LangOpts.ObjCAutoRefCount)
@@ -1314,6 +1325,8 @@ static bool HasExtension(const Preprocessor &PP, StringRef Extension) {
            .Case("cxx_binary_literals", true)
            .Case("cxx_init_captures", LangOpts.CPlusPlus11)
            .Case("cxx_variable_templates", LangOpts.CPlusPlus)
+           // Miscellaneous language extensions
+           .Case("overloadable_unmarked", true)
            .Default(false);
 }
 
@@ -1422,7 +1435,7 @@ static bool EvaluateHasIncludeCommon(Token &Tok,
   const DirectoryLookup *CurDir;
   const FileEntry *File =
       PP.LookupFile(FilenameLoc, Filename, isAngled, LookupFrom, LookupFromFile,
-                    CurDir, nullptr, nullptr, nullptr);
+                    CurDir, nullptr, nullptr, nullptr, nullptr);
 
   // Get the result value.  A result of true means the file exists.
   return File != nullptr;
@@ -1453,7 +1466,7 @@ static bool EvaluateHasIncludeNext(Token &Tok,
   } else if (PP.isInPrimaryFile()) {
     Lookup = nullptr;
     PP.Diag(Tok, diag::pp_include_next_in_primary);
-  } else if (PP.getCurrentSubmodule()) {
+  } else if (PP.getCurrentLexerSubmodule()) {
     // Start looking up in the directory *after* the one in which the current
     // file would be found, if any.
     assert(PP.getCurrentLexer() && "#include_next directive in macro?");
@@ -1583,6 +1596,56 @@ static IdentifierInfo *ExpectFeatureIdentifierInfo(Token &Tok,
 
   PP.Diag(Tok.getLocation(), DiagID);
   return nullptr;
+}
+
+/// Implements the __is_target_arch builtin macro.
+static bool isTargetArch(const TargetInfo &TI, const IdentifierInfo *II) {
+  std::string ArchName = II->getName().lower() + "--";
+  llvm::Triple Arch(ArchName);
+  const llvm::Triple &TT = TI.getTriple();
+  if (TT.isThumb()) {
+    // arm matches thumb or thumbv7. armv7 matches thumbv7.
+    if ((Arch.getSubArch() == llvm::Triple::NoSubArch ||
+         Arch.getSubArch() == TT.getSubArch()) &&
+        ((TT.getArch() == llvm::Triple::thumb &&
+          Arch.getArch() == llvm::Triple::arm) ||
+         (TT.getArch() == llvm::Triple::thumbeb &&
+          Arch.getArch() == llvm::Triple::armeb)))
+      return true;
+  }
+  // Check the parsed arch when it has no sub arch to allow Clang to
+  // match thumb to thumbv7 but to prohibit matching thumbv6 to thumbv7.
+  return (Arch.getSubArch() == llvm::Triple::NoSubArch ||
+          Arch.getSubArch() == TT.getSubArch()) &&
+         Arch.getArch() == TT.getArch();
+}
+
+/// Implements the __is_target_vendor builtin macro.
+static bool isTargetVendor(const TargetInfo &TI, const IdentifierInfo *II) {
+  StringRef VendorName = TI.getTriple().getVendorName();
+  if (VendorName.empty())
+    VendorName = "unknown";
+  return VendorName.equals_lower(II->getName());
+}
+
+/// Implements the __is_target_os builtin macro.
+static bool isTargetOS(const TargetInfo &TI, const IdentifierInfo *II) {
+  std::string OSName =
+      (llvm::Twine("unknown-unknown-") + II->getName().lower()).str();
+  llvm::Triple OS(OSName);
+  if (OS.getOS() == llvm::Triple::Darwin) {
+    // Darwin matches macos, ios, etc.
+    return TI.getTriple().isOSDarwin();
+  }
+  return TI.getTriple().getOS() == OS.getOS();
+}
+
+/// Implements the __is_target_environment builtin macro.
+static bool isTargetEnvironment(const TargetInfo &TI,
+                                const IdentifierInfo *II) {
+  std::string EnvName = (llvm::Twine("---") + II->getName().lower()).str();
+  llvm::Triple Env(EnvName);
+  return TI.getTriple().getEnvironment() == Env.getEnvironment();
 }
 
 /// ExpandBuiltinMacro - If an identifier token is read that is to be expanded
@@ -1746,6 +1809,11 @@ void Preprocessor::ExpandBuiltinMacro(Token &Tok) {
           return llvm::StringSwitch<bool>(II->getName())
                       .Case("__make_integer_seq", LangOpts.CPlusPlus)
                       .Case("__type_pack_element", LangOpts.CPlusPlus)
+                      .Case("__builtin_available", true)
+                      .Case("__is_target_arch", true)
+                      .Case("__is_target_vendor", true)
+                      .Case("__is_target_os", true)
+                      .Case("__is_target_environment", true)
                       .Default(false);
         }
       });
@@ -1770,30 +1838,34 @@ void Preprocessor::ExpandBuiltinMacro(Token &Tok) {
         return II ? hasAttribute(AttrSyntax::Declspec, nullptr, II,
                                  getTargetInfo(), getLangOpts()) : 0;
       });
-  } else if (II == Ident__has_cpp_attribute) {
-    EvaluateFeatureLikeBuiltinMacro(OS, Tok, II, *this,
-      [this](Token &Tok, bool &HasLexedNextToken) -> int {
-        IdentifierInfo *ScopeII = nullptr;
-        IdentifierInfo *II = ExpectFeatureIdentifierInfo(Tok, *this,
-                                           diag::err_feature_check_malformed);
-        if (!II)
-          return false;
+  } else if (II == Ident__has_cpp_attribute ||
+             II == Ident__has_c_attribute) {
+    bool IsCXX = II == Ident__has_cpp_attribute;
+    EvaluateFeatureLikeBuiltinMacro(
+        OS, Tok, II, *this, [&](Token &Tok, bool &HasLexedNextToken) -> int {
+          IdentifierInfo *ScopeII = nullptr;
+          IdentifierInfo *II = ExpectFeatureIdentifierInfo(
+              Tok, *this, diag::err_feature_check_malformed);
+          if (!II)
+            return false;
 
-        // It is possible to receive a scope token.  Read the "::", if it is
-        // available, and the subsequent identifier.
-        LexUnexpandedToken(Tok);
-        if (Tok.isNot(tok::coloncolon))
-          HasLexedNextToken = true;
-        else {
-          ScopeII = II;
+          // It is possible to receive a scope token.  Read the "::", if it is
+          // available, and the subsequent identifier.
           LexUnexpandedToken(Tok);
-          II = ExpectFeatureIdentifierInfo(Tok, *this,
-                                           diag::err_feature_check_malformed);
-        }
+          if (Tok.isNot(tok::coloncolon))
+            HasLexedNextToken = true;
+          else {
+            ScopeII = II;
+            LexUnexpandedToken(Tok);
+            II = ExpectFeatureIdentifierInfo(Tok, *this,
+                                             diag::err_feature_check_malformed);
+          }
 
-        return II ? hasAttribute(AttrSyntax::CXX, ScopeII, II,
-                                 getTargetInfo(), getLangOpts()) : 0;
-      });
+          AttrSyntax Syntax = IsCXX ? AttrSyntax::CXX : AttrSyntax::C;
+          return II ? hasAttribute(Syntax, ScopeII, II, getTargetInfo(),
+                                   getLangOpts())
+                    : 0;
+        });
   } else if (II == Ident__has_include ||
              II == Ident__has_include_next) {
     // The argument to these two builtins should be a parenthesized
@@ -1893,6 +1965,34 @@ void Preprocessor::ExpandBuiltinMacro(Token &Tok) {
       Diag(LParenLoc, diag::note_matching) << tok::l_paren;
     }
     return;
+  } else if (II == Ident__is_target_arch) {
+    EvaluateFeatureLikeBuiltinMacro(
+        OS, Tok, II, *this, [this](Token &Tok, bool &HasLexedNextToken) -> int {
+          IdentifierInfo *II = ExpectFeatureIdentifierInfo(
+              Tok, *this, diag::err_feature_check_malformed);
+          return II && isTargetArch(getTargetInfo(), II);
+        });
+  } else if (II == Ident__is_target_vendor) {
+    EvaluateFeatureLikeBuiltinMacro(
+        OS, Tok, II, *this, [this](Token &Tok, bool &HasLexedNextToken) -> int {
+          IdentifierInfo *II = ExpectFeatureIdentifierInfo(
+              Tok, *this, diag::err_feature_check_malformed);
+          return II && isTargetVendor(getTargetInfo(), II);
+        });
+  } else if (II == Ident__is_target_os) {
+    EvaluateFeatureLikeBuiltinMacro(
+        OS, Tok, II, *this, [this](Token &Tok, bool &HasLexedNextToken) -> int {
+          IdentifierInfo *II = ExpectFeatureIdentifierInfo(
+              Tok, *this, diag::err_feature_check_malformed);
+          return II && isTargetOS(getTargetInfo(), II);
+        });
+  } else if (II == Ident__is_target_environment) {
+    EvaluateFeatureLikeBuiltinMacro(
+        OS, Tok, II, *this, [this](Token &Tok, bool &HasLexedNextToken) -> int {
+          IdentifierInfo *II = ExpectFeatureIdentifierInfo(
+              Tok, *this, diag::err_feature_check_malformed);
+          return II && isTargetEnvironment(getTargetInfo(), II);
+        });
   } else {
     llvm_unreachable("Unknown identifier!");
   }

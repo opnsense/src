@@ -86,8 +86,8 @@ cam/cam_xpt.c			optional scbus
 cam/ata/ata_all.c		optional scbus
 cam/ata/ata_xpt.c		optional scbus
 cam/ata/ata_pmp.c		optional scbus
-cam/nvme/nvme_all.c		optional scbus nvme 
-cam/nvme/nvme_da.c		optional scbus nvme da !nvd
+cam/nvme/nvme_all.c		optional scbus nvme
+cam/nvme/nvme_da.c		optional scbus nvme da
 cam/nvme/nvme_xpt.c		optional scbus nvme
 cam/scsi/scsi_xpt.c		optional scbus
 cam/scsi/scsi_all.c		optional scbus
@@ -159,12 +159,15 @@ cddl/contrib/opensolaris/common/zfs/zfs_prop.c				optional zfs compile-with "${Z
 cddl/contrib/opensolaris/common/zfs/zpool_prop.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/common/zfs/zprop_common.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/vnode.c				optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/abd.c			optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/aggsum.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/arc.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/blkptr.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/bplist.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/bpobj.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/bptree.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/bqueue.c			optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/cityhash.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/dbuf.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/ddt.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/ddt_zap.c			optional zfs compile-with "${ZFS_C}"
@@ -202,6 +205,7 @@ cddl/contrib/opensolaris/uts/common/fs/zfs/sa.c				optional zfs compile-with "${
 cddl/contrib/opensolaris/uts/common/fs/zfs/sha256.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/skein_zfs.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/spa.c			optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/spa_checkpoint.c		optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/spa_config.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/spa_errlog.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/spa_history.c		optional zfs compile-with "${ZFS_C}"
@@ -215,16 +219,25 @@ cddl/contrib/opensolaris/uts/common/fs/zfs/unique.c			optional zfs compile-with 
 cddl/contrib/opensolaris/uts/common/fs/zfs/vdev.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/vdev_cache.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/vdev_file.c			optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/vdev_indirect.c		optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/vdev_indirect_births.c	optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/vdev_indirect_mapping.c	optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/vdev_geom.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/vdev_label.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/vdev_mirror.c		optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/vdev_missing.c		optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/vdev_queue.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/vdev_raidz.c			optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/vdev_removal.c		optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/vdev_root.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/zap.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/zap_leaf.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/zap_micro.c			optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/zcp.c			optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/zcp_get.c			optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/zcp_global.c			optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/zcp_iter.c			optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/zcp_synctask.c		optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/zfeature.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/zfs_acl.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/zfs_byteswap.c		optional zfs compile-with "${ZFS_C}"
@@ -249,6 +262,7 @@ cddl/contrib/opensolaris/uts/common/fs/zfs/zio_compress.c		optional zfs compile-
 cddl/contrib/opensolaris/uts/common/fs/zfs/zio_inject.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/zle.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/zrlock.c			optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/zthr.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/fs/zfs/zvol.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/os/callb.c				optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/os/fm.c				optional zfs compile-with "${ZFS_C}"
@@ -264,6 +278,34 @@ cddl/contrib/opensolaris/uts/common/zmod/trees.c			optional zfs compile-with "${
 cddl/contrib/opensolaris/uts/common/zmod/zmod.c				optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/zmod/zmod_subr.c			optional zfs compile-with "${ZFS_C}"
 cddl/contrib/opensolaris/uts/common/zmod/zutil.c			optional zfs compile-with "${ZFS_C}"
+# zfs lua support
+cddl/contrib/opensolaris/uts/common/fs/zfs/lua/lapi.c			optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/lua/lauxlib.c		optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/lua/lbaselib.c		optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/lua/lbitlib.c		optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/lua/lcode.c			optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/lua/lcompat.c		optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/lua/lcorolib.c		optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/lua/lctype.c			optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/lua/ldebug.c			optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/lua/ldo.c			optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/lua/ldump.c			optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/lua/lfunc.c			optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/lua/lgc.c			optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/lua/llex.c			optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/lua/lmem.c			optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/lua/lobject.c		optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/lua/lopcodes.c		optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/lua/lparser.c		optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/lua/lstate.c			optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/lua/lstring.c		optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/lua/lstrlib.c		optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/lua/ltable.c			optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/lua/ltablib.c		optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/lua/ltm.c			optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/lua/lundump.c		optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/lua/lvm.c			optional zfs compile-with "${ZFS_C}"
+cddl/contrib/opensolaris/uts/common/fs/zfs/lua/lzio.c			optional zfs compile-with "${ZFS_C}"
 # dtrace specific
 cddl/contrib/opensolaris/uts/common/dtrace/dtrace.c	optional dtrace compile-with "${DTRACE_C}" \
 							warning "kernel contains CDDL licensed DTRACE"
@@ -304,6 +346,17 @@ compat/freebsd32/freebsd32_ioctl.c	optional compat_freebsd32
 compat/freebsd32/freebsd32_misc.c	optional compat_freebsd32
 compat/freebsd32/freebsd32_syscalls.c	optional compat_freebsd32
 compat/freebsd32/freebsd32_sysent.c	optional compat_freebsd32
+contrib/ck/src/ck_array.c				standard compile-with "${NORMAL_C} -I$S/contrib/ck/include"
+contrib/ck/src/ck_barrier_centralized.c			standard compile-with "${NORMAL_C} -I$S/contrib/ck/include"
+contrib/ck/src/ck_barrier_combining.c			standard compile-with "${NORMAL_C} -I$S/contrib/ck/include"
+contrib/ck/src/ck_barrier_dissemination.c		standard compile-with "${NORMAL_C} -I$S/contrib/ck/include"
+contrib/ck/src/ck_barrier_mcs.c				standard compile-with "${NORMAL_C} -I$S/contrib/ck/include"
+contrib/ck/src/ck_barrier_tournament.c			standard compile-with "${NORMAL_C} -I$S/contrib/ck/include"
+contrib/ck/src/ck_epoch.c				standard compile-with "${NORMAL_C} -I$S/contrib/ck/include"
+contrib/ck/src/ck_hp.c					standard compile-with "${NORMAL_C} -I$S/contrib/ck/include"
+contrib/ck/src/ck_hs.c					standard compile-with "${NORMAL_C} -I$S/contrib/ck/include"
+contrib/ck/src/ck_ht.c					standard compile-with "${NORMAL_C} -I$S/contrib/ck/include"
+contrib/ck/src/ck_rhs.c					standard compile-with "${NORMAL_C} -I$S/contrib/ck/include"
 contrib/dev/acpica/common/ahids.c			optional acpi acpi_debug
 contrib/dev/acpica/common/ahuuids.c			optional acpi acpi_debug
 contrib/dev/acpica/components/debugger/dbcmds.c		optional acpi acpi_debug
@@ -339,6 +392,7 @@ contrib/dev/acpica/components/dispatcher/dsmethod.c	optional acpi
 contrib/dev/acpica/components/dispatcher/dsmthdat.c	optional acpi
 contrib/dev/acpica/components/dispatcher/dsobject.c	optional acpi
 contrib/dev/acpica/components/dispatcher/dsopcode.c	optional acpi
+contrib/dev/acpica/components/dispatcher/dspkginit.c	optional acpi
 contrib/dev/acpica/components/dispatcher/dsutils.c	optional acpi
 contrib/dev/acpica/components/dispatcher/dswexec.c	optional acpi
 contrib/dev/acpica/components/dispatcher/dswload.c	optional acpi
@@ -476,9 +530,11 @@ contrib/dev/acpica/components/utilities/utobject.c	optional acpi
 contrib/dev/acpica/components/utilities/utosi.c		optional acpi
 contrib/dev/acpica/components/utilities/utownerid.c	optional acpi
 contrib/dev/acpica/components/utilities/utpredef.c	optional acpi
+contrib/dev/acpica/components/utilities/utresdecode.c	optional acpi acpi_debug
 contrib/dev/acpica/components/utilities/utresrc.c	optional acpi
 contrib/dev/acpica/components/utilities/utstate.c	optional acpi
 contrib/dev/acpica/components/utilities/utstring.c	optional acpi
+contrib/dev/acpica/components/utilities/utstrsuppt.c	optional acpi
 contrib/dev/acpica/components/utilities/utstrtoul64.c	optional acpi
 contrib/dev/acpica/components/utilities/utuuid.c	optional acpi acpi_debug
 contrib/dev/acpica/components/utilities/utxface.c	optional acpi
@@ -1283,6 +1339,18 @@ dev/cxgbe/common/t4_hw.c	optional cxgbe pci \
 	compile-with "${NORMAL_C} -I$S/dev/cxgbe"
 dev/cxgbe/common/t4vf_hw.c	optional cxgbev pci \
 	compile-with "${NORMAL_C} -I$S/dev/cxgbe"
+dev/cxgbe/cudbg/cudbg_common.c	optional cxgbe \
+	compile-with "${NORMAL_C} -I$S/dev/cxgbe"
+dev/cxgbe/cudbg/cudbg_flash_utils.c	optional cxgbe \
+	compile-with "${NORMAL_C} -I$S/dev/cxgbe"
+dev/cxgbe/cudbg/cudbg_lib.c	optional cxgbe \
+	compile-with "${NORMAL_C} -I$S/dev/cxgbe"
+dev/cxgbe/cudbg/cudbg_wtp.c	optional cxgbe \
+	compile-with "${NORMAL_C} -I$S/dev/cxgbe"
+dev/cxgbe/cudbg/fastlz.c	optional cxgbe \
+	compile-with "${NORMAL_C} -I$S/dev/cxgbe"
+dev/cxgbe/cudbg/fastlz_api.c	optional cxgbe \
+	compile-with "${NORMAL_C} -I$S/dev/cxgbe"
 t4fw_cfg.c		optional cxgbe					\
 	compile-with	"${AWK} -f $S/tools/fw_stub.awk t4fw_cfg.fw:t4fw_cfg t4fw_cfg_uwire.fw:t4fw_cfg_uwire t4fw.fw:t4fw -mt4fw_cfg -c${.TARGET}" \
 	no-implicit-rule before-depend local				\
@@ -1313,12 +1381,12 @@ t4fw.fwo		optional cxgbe					\
 	no-implicit-rule						\
 	clean		"t4fw.fwo"
 t4fw.fw			optional cxgbe					\
-	dependency	"$S/dev/cxgbe/firmware/t4fw-1.16.45.0.bin.uu"	\
+	dependency	"$S/dev/cxgbe/firmware/t4fw-1.19.1.0.bin.uu"	\
 	compile-with	"${NORMAL_FW}"					\
 	no-obj no-implicit-rule						\
 	clean		"t4fw.fw"
 t5fw_cfg.c		optional cxgbe					\
-	compile-with	"${AWK} -f $S/tools/fw_stub.awk t5fw_cfg.fw:t5fw_cfg t5fw.fw:t5fw -mt5fw_cfg -c${.TARGET}" \
+	compile-with	"${AWK} -f $S/tools/fw_stub.awk t5fw_cfg.fw:t5fw_cfg t5fw_cfg_uwire.fw:t5fw_cfg_uwire t5fw.fw:t5fw -mt5fw_cfg -c${.TARGET}" \
 	no-implicit-rule before-depend local				\
 	clean		"t5fw_cfg.c"
 t5fw_cfg.fwo		optional cxgbe					\
@@ -1331,18 +1399,28 @@ t5fw_cfg.fw		optional cxgbe					\
 	compile-with	"${CP} ${.ALLSRC} ${.TARGET}"			\
 	no-obj no-implicit-rule						\
 	clean		"t5fw_cfg.fw"
+t5fw_cfg_uwire.fwo	optional cxgbe					\
+	dependency	"t5fw_cfg_uwire.fw"				\
+	compile-with	"${NORMAL_FWO}"					\
+	no-implicit-rule						\
+	clean		"t5fw_cfg_uwire.fwo"
+t5fw_cfg_uwire.fw	optional cxgbe					\
+	dependency	"$S/dev/cxgbe/firmware/t5fw_cfg_uwire.txt"	\
+	compile-with	"${CP} ${.ALLSRC} ${.TARGET}"			\
+	no-obj no-implicit-rule						\
+	clean		"t5fw_cfg_uwire.fw"
 t5fw.fwo		optional cxgbe					\
 	dependency	"t5fw.fw"					\
 	compile-with	"${NORMAL_FWO}"					\
 	no-implicit-rule						\
 	clean		"t5fw.fwo"
 t5fw.fw			optional cxgbe					\
-	dependency	"$S/dev/cxgbe/firmware/t5fw-1.16.45.0.bin.uu"	\
+	dependency	"$S/dev/cxgbe/firmware/t5fw-1.19.1.0.bin.uu"	\
 	compile-with	"${NORMAL_FW}"					\
 	no-obj no-implicit-rule						\
 	clean		"t5fw.fw"
 t6fw_cfg.c		optional cxgbe					\
-	compile-with	"${AWK} -f $S/tools/fw_stub.awk t6fw_cfg.fw:t6fw_cfg t6fw.fw:t6fw -mt6fw_cfg -c${.TARGET}" \
+	compile-with	"${AWK} -f $S/tools/fw_stub.awk t6fw_cfg.fw:t6fw_cfg t6fw_cfg_uwire.fw:t6fw_cfg_uwire t6fw.fw:t6fw -mt6fw_cfg -c${.TARGET}" \
 	no-implicit-rule before-depend local				\
 	clean		"t6fw_cfg.c"
 t6fw_cfg.fwo		optional cxgbe					\
@@ -1355,13 +1433,23 @@ t6fw_cfg.fw		optional cxgbe					\
 	compile-with	"${CP} ${.ALLSRC} ${.TARGET}"			\
 	no-obj no-implicit-rule						\
 	clean		"t6fw_cfg.fw"
+t6fw_cfg_uwire.fwo	optional cxgbe					\
+	dependency	"t6fw_cfg_uwire.fw"				\
+	compile-with	"${NORMAL_FWO}"					\
+	no-implicit-rule						\
+	clean		"t6fw_cfg_uwire.fwo"
+t6fw_cfg_uwire.fw	optional cxgbe					\
+	dependency	"$S/dev/cxgbe/firmware/t6fw_cfg_uwire.txt"	\
+	compile-with	"${CP} ${.ALLSRC} ${.TARGET}"			\
+	no-obj no-implicit-rule						\
+	clean		"t6fw_cfg_uwire.fw"
 t6fw.fwo		optional cxgbe					\
 	dependency	"t6fw.fw"					\
 	compile-with	"${NORMAL_FWO}"					\
 	no-implicit-rule						\
 	clean		"t6fw.fwo"
 t6fw.fw			optional cxgbe					\
-	dependency	"$S/dev/cxgbe/firmware/t6fw-1.16.45.0.bin.uu"	\
+	dependency	"$S/dev/cxgbe/firmware/t6fw-1.19.1.0.bin.uu"	\
 	compile-with	"${NORMAL_FW}"					\
 	no-obj no-implicit-rule						\
 	clean		"t6fw.fw"
@@ -1504,6 +1592,8 @@ dev/ed/if_ed_rtl80x9.c		optional ed
 dev/ed/if_ed_pccard.c		optional ed pccard
 dev/ed/if_ed_pci.c		optional ed pci
 dev/efidev/efidev.c		optional efirt
+dev/efidev/efirt.c		optional efirt
+dev/efidev/efirtc.c		optional efirt
 dev/eisa/eisa_if.m		standard
 dev/eisa/eisaconf.c		optional eisa
 dev/e1000/if_em.c		optional em \
@@ -1600,7 +1690,8 @@ dev/extres/clk/clk_fixed.c	optional ext_resources clk
 dev/extres/clk/clk_gate.c	optional ext_resources clk
 dev/extres/clk/clk_mux.c	optional ext_resources clk
 dev/extres/phy/phy.c		optional ext_resources phy
-dev/extres/phy/phy_if.m		optional ext_resources phy
+dev/extres/phy/phydev_if.m	optional ext_resources phy
+dev/extres/phy/phynode_if.m	optional ext_resources phy
 dev/extres/hwreset/hwreset.c	optional ext_resources hwreset
 dev/extres/hwreset/hwreset_if.m	optional ext_resources hwreset
 dev/extres/regulator/regdev_if.m	optional ext_resources regulator
@@ -1683,13 +1774,14 @@ dev/ie/if_ie.c			optional ie isa nowerror
 dev/ie/if_ie_isa.c		optional ie isa
 dev/iicbus/ad7418.c		optional ad7418
 dev/iicbus/ds1307.c		optional ds1307
-dev/iicbus/ds133x.c		optional ds133x
-dev/iicbus/ds1374.c		optional ds1374
+dev/iicbus/ds13rtc.c		optional ds13rtc | ds133x | ds1374
 dev/iicbus/ds1672.c		optional ds1672
 dev/iicbus/ds3231.c		optional ds3231
+dev/iicbus/rtc8583.c		optional rtc8583
 dev/iicbus/icee.c		optional icee
 dev/iicbus/if_ic.c		optional ic
 dev/iicbus/iic.c		optional iic
+dev/iicbus/iic_recover_bus.c	optional iicbus
 dev/iicbus/iicbb.c		optional iicbb
 dev/iicbus/iicbb_if.m		optional iicbb
 dev/iicbus/iicbus.c		optional iicbus
@@ -1698,9 +1790,10 @@ dev/iicbus/iiconf.c		optional iicbus
 dev/iicbus/iicsmb.c		optional iicsmb				\
 	dependency	"iicbus_if.h"
 dev/iicbus/iicoc.c		optional iicoc
+dev/iicbus/isl12xx.c		optional isl12xx
 dev/iicbus/lm75.c		optional lm75
+dev/iicbus/nxprtc.c		optional nxprtc | pcf8563
 dev/iicbus/ofw_iicbus.c		optional fdt iicbus
-dev/iicbus/pcf8563.c		optional pcf8563
 dev/iicbus/s35390a.c		optional s35390a
 dev/iir/iir.c			optional iir
 dev/iir/iir_ctrl.c		optional iir
@@ -1820,14 +1913,19 @@ iwi_monitor.fw			optional iwimonitorfw | iwifw		\
 	no-obj no-implicit-rule						\
 	clean		"iwi_monitor.fw"
 dev/iwm/if_iwm.c		optional iwm
+dev/iwm/if_iwm_7000.c		optional iwm
+dev/iwm/if_iwm_8000.c		optional iwm
 dev/iwm/if_iwm_binding.c	optional iwm
+dev/iwm/if_iwm_fw.c		optional iwm
 dev/iwm/if_iwm_led.c		optional iwm
 dev/iwm/if_iwm_mac_ctxt.c	optional iwm
+dev/iwm/if_iwm_notif_wait.c	optional iwm
 dev/iwm/if_iwm_pcie_trans.c	optional iwm
 dev/iwm/if_iwm_phy_ctxt.c	optional iwm
 dev/iwm/if_iwm_phy_db.c		optional iwm
 dev/iwm/if_iwm_power.c		optional iwm
 dev/iwm/if_iwm_scan.c		optional iwm
+dev/iwm/if_iwm_sta.c		optional iwm
 dev/iwm/if_iwm_time_event.c	optional iwm
 dev/iwm/if_iwm_util.c		optional iwm
 iwm3160fw.c			optional iwm3160fw | iwmfw		\
@@ -1840,7 +1938,7 @@ iwm3160fw.fwo			optional iwm3160fw | iwmfw		\
 	no-implicit-rule						\
 	clean		"iwm3160fw.fwo"
 iwm3160.fw			optional iwm3160fw | iwmfw		\
-	dependency	"$S/contrib/dev/iwm/iwm-3160-16.fw.uu" \
+	dependency	"$S/contrib/dev/iwm/iwm-3160-17.fw.uu" \
 	compile-with	"${NORMAL_FW}"					\
 	no-obj no-implicit-rule						\
 	clean		"iwm3160.fw"
@@ -1854,7 +1952,7 @@ iwm7260fw.fwo			optional iwm7260fw | iwmfw		\
 	no-implicit-rule						\
 	clean		"iwm7260fw.fwo"
 iwm7260.fw			optional iwm7260fw | iwmfw		\
-	dependency	"$S/contrib/dev/iwm/iwm-7260-16.fw.uu" \
+	dependency	"$S/contrib/dev/iwm/iwm-7260-17.fw.uu" \
 	compile-with	"${NORMAL_FW}"					\
 	no-obj no-implicit-rule						\
 	clean		"iwm7260.fw"
@@ -1868,10 +1966,24 @@ iwm7265fw.fwo			optional iwm7265fw | iwmfw		\
 	no-implicit-rule						\
 	clean		"iwm7265fw.fwo"
 iwm7265.fw			optional iwm7265fw | iwmfw		\
-	dependency	"$S/contrib/dev/iwm/iwm-7265-16.fw.uu" \
+	dependency	"$S/contrib/dev/iwm/iwm-7265-17.fw.uu" \
 	compile-with	"${NORMAL_FW}"					\
 	no-obj no-implicit-rule						\
 	clean		"iwm7265.fw"
+iwm7265Dfw.c			optional iwm7265Dfw | iwmfw		\
+	compile-with	"${AWK} -f $S/tools/fw_stub.awk iwm7265D.fw:iwm7265Dfw -miwm7265Dfw -c${.TARGET}" \
+	no-implicit-rule before-depend local				\
+	clean		"iwm7265Dfw.c"
+iwm7265Dfw.fwo			optional iwm7265Dfw | iwmfw		\
+	dependency	"iwm7265D.fw"					\
+	compile-with	"${NORMAL_FWO}"					\
+	no-implicit-rule						\
+	clean		"iwm7265Dfw.fwo"
+iwm7265D.fw			optional iwm7265Dfw | iwmfw		\
+	dependency	"$S/contrib/dev/iwm/iwm-7265D-17.fw.uu"		\
+	compile-with	"${NORMAL_FW}"					\
+	no-obj no-implicit-rule						\
+	clean		"iwm7265D.fw"
 iwm8000Cfw.c			optional iwm8000Cfw | iwmfw		\
 	compile-with	"${AWK} -f $S/tools/fw_stub.awk iwm8000C.fw:iwm8000Cfw -miwm8000Cfw -c${.TARGET}" \
 	no-implicit-rule before-depend local				\
@@ -1882,10 +1994,24 @@ iwm8000Cfw.fwo			optional iwm8000Cfw | iwmfw		\
 	no-implicit-rule						\
 	clean		"iwm8000Cfw.fwo"
 iwm8000C.fw			optional iwm8000Cfw | iwmfw		\
-	dependency	"$S/contrib/dev/iwm/iwm-8000C-16.fw.uu" \
+	dependency	"$S/contrib/dev/iwm/iwm-8000C-17.fw.uu" \
 	compile-with	"${NORMAL_FW}"					\
 	no-obj no-implicit-rule						\
 	clean		"iwm8000C.fw"
+iwm8265.fw			optional iwm8265fw | iwmfw		\
+	dependency	"$S/contrib/dev/iwm/iwm-8265-22.fw.uu" \
+	compile-with	"${NORMAL_FW}"					\
+	no-obj no-implicit-rule						\
+	clean		"iwm8265.fw"
+iwm8265fw.c			optional iwm8265fw | iwmfw		\
+	compile-with	"${AWK} -f $S/tools/fw_stub.awk iwm8265.fw:iwm8265fw -miwm8265fw -c${.TARGET}" \
+	no-implicit-rule before-depend local				\
+	clean		"iwm8265fw.c"
+iwm8265fw.fwo			optional iwm8265fw | iwmfw		\
+	dependency	"iwm8265.fw"					\
+	compile-with	"${NORMAL_FWO}"					\
+	no-implicit-rule						\
+	clean		"iwm8265fw.fwo"
 dev/iwn/if_iwn.c		optional iwn
 iwn1000fw.c			optional iwn1000fw | iwnfw		\
 	compile-with	"${AWK} -f $S/tools/fw_stub.awk iwn1000.fw:iwn1000fw -miwn1000fw -c${.TARGET}" \
@@ -2112,6 +2238,7 @@ dev/ixgbe/ixgbe_dcb_82598.c	optional ix inet | ixv inet \
 	compile-with "${NORMAL_C} -I$S/dev/ixgbe"
 dev/ixgbe/ixgbe_dcb_82599.c	optional ix inet | ixv inet \
 	compile-with "${NORMAL_C} -I$S/dev/ixgbe"
+dev/jedec_dimm/jedec_dimm.c	optional jedec_dimm smbus
 dev/jedec_ts/jedec_ts.c		optional jedec_ts smbus
 dev/jme/if_jme.c		optional jme pci
 dev/joy/joy.c			optional joy
@@ -2125,6 +2252,62 @@ dev/le/if_le_pci.c		optional le pci
 dev/le/lance.c			optional le
 dev/led/led.c			standard
 dev/lge/if_lge.c		optional lge
+dev/liquidio/base/cn23xx_pf_device.c		optional lio	\
+	compile-with "${NORMAL_C}				\
+	-I$S/dev/liquidio -I$S/dev/liquidio/base -DSMP"
+dev/liquidio/base/lio_console.c			optional lio	\
+	compile-with "${NORMAL_C}				\
+	-I$S/dev/liquidio -I$S/dev/liquidio/base -DSMP"
+dev/liquidio/base/lio_ctrl.c			optional lio	\
+	compile-with "${NORMAL_C} 				\
+	-I$S/dev/liquidio -I$S/dev/liquidio/base -DSMP"
+dev/liquidio/base/lio_device.c			optional lio	\
+	compile-with "${NORMAL_C} 				\
+	-I$S/dev/liquidio -I$S/dev/liquidio/base -DSMP"
+dev/liquidio/base/lio_droq.c			optional lio	\
+	compile-with "${NORMAL_C} 				\
+	-I$S/dev/liquidio -I$S/dev/liquidio/base -DSMP"
+dev/liquidio/base/lio_mem_ops.c			optional lio	\
+	compile-with "${NORMAL_C} 				\
+	-I$S/dev/liquidio -I$S/dev/liquidio/base -DSMP"
+dev/liquidio/base/lio_request_manager.c		optional lio	\
+	compile-with "${NORMAL_C} 				\
+	-I$S/dev/liquidio -I$S/dev/liquidio/base -DSMP"
+dev/liquidio/base/lio_response_manager.c	optional lio	\
+	compile-with "${NORMAL_C} 				\
+	-I$S/dev/liquidio -I$S/dev/liquidio/base -DSMP"
+dev/liquidio/lio_core.c				optional lio	\
+	compile-with "${NORMAL_C} 				\
+	-I$S/dev/liquidio -I$S/dev/liquidio/base -DSMP"
+dev/liquidio/lio_ioctl.c			optional lio	\
+	compile-with "${NORMAL_C} 				\
+	-I$S/dev/liquidio -I$S/dev/liquidio/base -DSMP"
+dev/liquidio/lio_main.c				optional lio	\
+	compile-with "${NORMAL_C} 				\
+	-I$S/dev/liquidio -I$S/dev/liquidio/base -DSMP"
+dev/liquidio/lio_rss.c				optional lio	\
+	compile-with "${NORMAL_C} 				\
+	-I$S/dev/liquidio -I$S/dev/liquidio/base -DSMP"
+dev/liquidio/lio_rxtx.c				optional lio	\
+	compile-with "${NORMAL_C} 				\
+	-I$S/dev/liquidio -I$S/dev/liquidio/base -DSMP"
+dev/liquidio/lio_sysctl.c			optional lio	\
+	compile-with "${NORMAL_C} 				\
+	-I$S/dev/liquidio -I$S/dev/liquidio/base -DSMP"
+lio.c	optional lio						\
+	compile-with	"${AWK} -f $S/tools/fw_stub.awk lio_23xx_nic.bin.fw:lio_23xx_nic.bin -mlio_23xx_nic.bin -c${.TARGET}" \
+	no-implicit-rule before-depend local			\
+	clean		"lio.c"
+lio_23xx_nic.bin.fw.fwo optional lio				\
+	dependency	"lio_23xx_nic.bin.fw"			\
+	compile-with	"${NORMAL_FWO}"				\
+	no-implicit-rule					\
+	clean		"lio_23xx_nic.bin.fw.fwo"
+lio_23xx_nic.bin.fw	optional lio					\
+	dependency	"$S/contrib/dev/liquidio/lio_23xx_nic.bin.uu"	\
+	compile-with	"${NORMAL_FW}"					\
+	no-obj no-implicit-rule						\
+	clean		"lio_23xx_nic.bin.fw"
 dev/lmc/if_lmc.c		optional lmc
 dev/malo/if_malo.c		optional malo
 dev/malo/if_malohal.c		optional malo
@@ -2163,6 +2346,7 @@ dev/mii/micphy.c		optional miibus fdt | micphy fdt
 dev/mii/mii.c			optional miibus | mii
 dev/mii/mii_bitbang.c		optional miibus | mii_bitbang
 dev/mii/mii_physubr.c		optional miibus | mii
+dev/mii/mii_fdt.c		optional miibus fdt | mii fdt
 dev/mii/miibus_if.m		optional miibus | mii
 dev/mii/mlphy.c			optional miibus | mlphy
 dev/mii/nsgphy.c		optional miibus | nsgphy
@@ -2181,6 +2365,7 @@ dev/mii/tlphy.c			optional miibus | tlphy
 dev/mii/truephy.c		optional miibus | truephy
 dev/mii/ukphy.c			optional miibus | mii
 dev/mii/ukphy_subr.c		optional miibus | mii
+dev/mii/vscphy.c		optional miibus | vscphy
 dev/mii/xmphy.c			optional miibus | xmphy
 dev/mk48txx/mk48txx.c		optional mk48txx
 dev/mlx/mlx.c			optional mlx
@@ -2321,6 +2506,27 @@ dev/oce/oce_mbox.c		optional oce pci
 dev/oce/oce_queue.c		optional oce pci
 dev/oce/oce_sysctl.c		optional oce pci
 dev/oce/oce_util.c		optional oce pci
+dev/ocs_fc/ocs_pci.c		optional ocs_fc pci
+dev/ocs_fc/ocs_ioctl.c		optional ocs_fc pci
+dev/ocs_fc/ocs_os.c		optional ocs_fc pci
+dev/ocs_fc/ocs_utils.c		optional ocs_fc pci
+dev/ocs_fc/ocs_hw.c		optional ocs_fc pci
+dev/ocs_fc/ocs_hw_queues.c	optional ocs_fc pci
+dev/ocs_fc/sli4.c		optional ocs_fc pci
+dev/ocs_fc/ocs_sm.c		optional ocs_fc pci
+dev/ocs_fc/ocs_device.c		optional ocs_fc pci
+dev/ocs_fc/ocs_xport.c		optional ocs_fc pci
+dev/ocs_fc/ocs_domain.c		optional ocs_fc pci
+dev/ocs_fc/ocs_sport.c		optional ocs_fc pci
+dev/ocs_fc/ocs_els.c		optional ocs_fc pci
+dev/ocs_fc/ocs_fabric.c		optional ocs_fc pci
+dev/ocs_fc/ocs_io.c		optional ocs_fc pci
+dev/ocs_fc/ocs_node.c		optional ocs_fc pci
+dev/ocs_fc/ocs_scsi.c		optional ocs_fc pci
+dev/ocs_fc/ocs_unsol.c		optional ocs_fc pci
+dev/ocs_fc/ocs_ddump.c		optional ocs_fc pci
+dev/ocs_fc/ocs_mgmt.c		optional ocs_fc pci
+dev/ocs_fc/ocs_cam.c		optional ocs_fc pci
 dev/ofw/ofw_bus_if.m		optional fdt
 dev/ofw/ofw_bus_subr.c		optional fdt
 dev/ofw/ofw_fdt.c		optional fdt
@@ -2966,6 +3172,7 @@ dev/usb/input/uep.c		optional uep
 dev/usb/input/uhid.c		optional uhid
 dev/usb/input/ukbd.c		optional ukbd
 dev/usb/input/ums.c		optional ums
+dev/usb/input/wmt.c		optional wmt
 dev/usb/input/wsp.c		optional wsp
 #
 # USB quirks
@@ -3328,9 +3535,12 @@ geom/virstor/binstream.c	optional geom_virstor
 geom/virstor/g_virstor.c	optional geom_virstor
 geom/virstor/g_virstor_md.c	optional geom_virstor
 geom/zero/g_zero.c		optional geom_zero
+fs/ext2fs/ext2_acl.c		optional ext2fs
 fs/ext2fs/ext2_alloc.c		optional ext2fs
 fs/ext2fs/ext2_balloc.c		optional ext2fs
 fs/ext2fs/ext2_bmap.c		optional ext2fs
+fs/ext2fs/ext2_csum.c		optional ext2fs
+fs/ext2fs/ext2_extattr.c	optional ext2fs
 fs/ext2fs/ext2_extents.c	optional ext2fs
 fs/ext2fs/ext2_inode.c		optional ext2fs
 fs/ext2fs/ext2_inode_cnv.c	optional ext2fs
@@ -3340,12 +3550,6 @@ fs/ext2fs/ext2_lookup.c		optional ext2fs
 fs/ext2fs/ext2_subr.c		optional ext2fs
 fs/ext2fs/ext2_vfsops.c		optional ext2fs
 fs/ext2fs/ext2_vnops.c		optional ext2fs
-#
-hardenedbsd/hbsd_pax_common.c		optional pax
-hardenedbsd/hbsd_pax_log.c		optional pax
-hardenedbsd/hbsd_pax_aslr.c		optional pax pax_aslr
-hardenedbsd/hbsd_pax_hardening.c	optional pax pax_hardening
-hardenedbsd/hbsd_pax_segvguard.c	optional pax pax_segvguard
 #
 isa/isa_if.m			standard
 isa/isa_common.c		optional isa
@@ -3898,7 +4102,7 @@ netinet/sctp_asconf.c		optional inet sctp | inet6 sctp
 netinet/sctp_auth.c		optional inet sctp | inet6 sctp
 netinet/sctp_bsd_addr.c		optional inet sctp | inet6 sctp
 netinet/sctp_cc_functions.c	optional inet sctp | inet6 sctp
-netinet/sctp_crc32.c		optional inet sctp | inet6 sctp
+netinet/sctp_crc32.c		optional inet | inet6
 netinet/sctp_indata.c		optional inet sctp | inet6 sctp
 netinet/sctp_input.c		optional inet sctp | inet6 sctp
 netinet/sctp_output.c		optional inet sctp | inet6 sctp
@@ -4005,7 +4209,8 @@ netpfil/ipfw/ip_dn_io.c		optional inet dummynet
 netpfil/ipfw/ip_dn_glue.c	optional inet dummynet
 netpfil/ipfw/ip_fw2.c		optional inet ipfirewall
 netpfil/ipfw/ip_fw_bpf.c	optional inet ipfirewall
-netpfil/ipfw/ip_fw_dynamic.c	optional inet ipfirewall
+netpfil/ipfw/ip_fw_dynamic.c	optional inet ipfirewall \
+	compile-with "${NORMAL_C} -I$S/contrib/ck/include"
 netpfil/ipfw/ip_fw_eaction.c	optional inet ipfirewall
 netpfil/ipfw/ip_fw_log.c	optional inet ipfirewall
 netpfil/ipfw/ip_fw_pfil.c	optional inet ipfirewall
@@ -4072,68 +4277,92 @@ compat/linuxkpi/common/src/linux_kmod.c		optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"
 compat/linuxkpi/common/src/linux_compat.c	optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"
+compat/linuxkpi/common/src/linux_current.c	optional compat_linuxkpi \
+	compile-with "${LINUXKPI_C}"
+compat/linuxkpi/common/src/linux_hrtimer.c	optional compat_linuxkpi \
+	compile-with "${LINUXKPI_C}"
+compat/linuxkpi/common/src/linux_kthread.c	optional compat_linuxkpi \
+	compile-with "${LINUXKPI_C}"
+compat/linuxkpi/common/src/linux_lock.c		optional compat_linuxkpi \
+	compile-with "${LINUXKPI_C}"
+compat/linuxkpi/common/src/linux_page.c		optional compat_linuxkpi \
+	compile-with "${LINUXKPI_C}"
 compat/linuxkpi/common/src/linux_pci.c		optional compat_linuxkpi pci \
+	compile-with "${LINUXKPI_C}"
+compat/linuxkpi/common/src/linux_tasklet.c	optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"
 compat/linuxkpi/common/src/linux_idr.c		optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"
 compat/linuxkpi/common/src/linux_radix.c	optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"
+compat/linuxkpi/common/src/linux_rcu.c		optional compat_linuxkpi \
+	compile-with "${LINUXKPI_C} -I$S/contrib/ck/include"
+compat/linuxkpi/common/src/linux_schedule.c	optional compat_linuxkpi \
+	compile-with "${LINUXKPI_C}"
+compat/linuxkpi/common/src/linux_slab.c		optional compat_linuxkpi \
+	compile-with "${LINUXKPI_C}"
 compat/linuxkpi/common/src/linux_usb.c		optional compat_linuxkpi usb \
+	compile-with "${LINUXKPI_C}"
+compat/linuxkpi/common/src/linux_work.c		optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"
 
 # OpenFabrics Enterprise Distribution (Infiniband)
-ofed/drivers/infiniband/core/addr.c		optional ofed		\
-	compile-with "${OFED_C} -I$S/ofed/drivers/infiniband/core/"
-ofed/drivers/infiniband/core/agent.c		optional ofed		\
-	compile-with "${OFED_C} -I$S/ofed/drivers/infiniband/core/"
-ofed/drivers/infiniband/core/cache.c		optional ofed		\
-	compile-with "${OFED_C} -I$S/ofed/drivers/infiniband/core/"
-# XXX Mad.c must be ordered before cm.c for sysinit sets to occur in
-# the correct order.
-ofed/drivers/infiniband/core/mad.c		optional ofed		\
-	compile-with "${OFED_C} -I$S/ofed/drivers/infiniband/core/"
-ofed/drivers/infiniband/core/cm.c		optional ofed		\
-	compile-with "${OFED_C} -I$S/ofed/drivers/infiniband/core/ -Wno-unused-function"
-ofed/drivers/infiniband/core/cma.c		optional ofed		\
-	compile-with "${OFED_C} -I$S/ofed/drivers/infiniband/core/"
-ofed/drivers/infiniband/core/device.c		optional ofed		\
-	compile-with "${OFED_C} -I$S/ofed/drivers/infiniband/core/"
-ofed/drivers/infiniband/core/fmr_pool.c		optional ofed		\
-	compile-with "${OFED_C} -I$S/ofed/drivers/infiniband/core/"
-ofed/drivers/infiniband/core/iwcm.c		optional ofed		\
-	compile-with "${OFED_C} -I$S/ofed/drivers/infiniband/core/"
-ofed/drivers/infiniband/core/mad_rmpp.c		optional ofed		\
-	compile-with "${OFED_C} -I$S/ofed/drivers/infiniband/core/"
-ofed/drivers/infiniband/core/multicast.c	optional ofed		\
-	compile-with "${OFED_C} -I$S/ofed/drivers/infiniband/core/"
-ofed/drivers/infiniband/core/packer.c		optional ofed		\
-	compile-with "${OFED_C} -I$S/ofed/drivers/infiniband/core/"
-ofed/drivers/infiniband/core/peer_mem.c		optional ofed		\
-	compile-with "${OFED_C} -I$S/ofed/drivers/infiniband/core/"
-ofed/drivers/infiniband/core/sa_query.c		optional ofed		\
-	compile-with "${OFED_C} -I$S/ofed/drivers/infiniband/core/"
-ofed/drivers/infiniband/core/smi.c		optional ofed		\
-	compile-with "${OFED_C} -I$S/ofed/drivers/infiniband/core/"
-ofed/drivers/infiniband/core/sysfs.c		optional ofed		\
-	compile-with "${OFED_C} -I$S/ofed/drivers/infiniband/core/"
-ofed/drivers/infiniband/core/ucm.c		optional ofed		\
-	compile-with "${OFED_C} -I$S/ofed/drivers/infiniband/core/"
-ofed/drivers/infiniband/core/ucma.c		optional ofed		\
-	compile-with "${OFED_C} -I$S/ofed/drivers/infiniband/core/"
-ofed/drivers/infiniband/core/ud_header.c	optional ofed		\
-	compile-with "${OFED_C} -I$S/ofed/drivers/infiniband/core/"
-ofed/drivers/infiniband/core/umem.c		optional ofed		\
-	compile-with "${OFED_C} -I$S/ofed/drivers/infiniband/core/"
-ofed/drivers/infiniband/core/user_mad.c		optional ofed		\
-	compile-with "${OFED_C} -I$S/ofed/drivers/infiniband/core/"
-ofed/drivers/infiniband/core/uverbs_cmd.c	optional ofed		\
-	compile-with "${OFED_C} -I$S/ofed/drivers/infiniband/core/"
-ofed/drivers/infiniband/core/uverbs_main.c	optional ofed		\
-	compile-with "${OFED_C} -I$S/ofed/drivers/infiniband/core/"
-ofed/drivers/infiniband/core/uverbs_marshall.c	optional ofed		\
-	compile-with "${OFED_C} -I$S/ofed/drivers/infiniband/core/"
-ofed/drivers/infiniband/core/verbs.c		optional ofed		\
-	compile-with "${OFED_C} -I$S/ofed/drivers/infiniband/core/"
+ofed/drivers/infiniband/core/ib_addr.c			optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_agent.c			optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_cache.c			optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_cm.c			optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_cma.c			optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_cq.c			optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_device.c		optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_fmr_pool.c		optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_iwcm.c			optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_iwpm_msg.c		optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_iwpm_util.c		optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_mad.c			optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_mad_rmpp.c		optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_multicast.c		optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_packer.c		optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_roce_gid_mgmt.c		optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_sa_query.c		optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_smi.c			optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_sysfs.c			optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_ucm.c			optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_ucma.c			optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_ud_header.c		optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_umem.c			optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_user_mad.c		optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_uverbs_cmd.c		optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_uverbs_main.c		optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_uverbs_marshall.c	optional ofed	\
+	compile-with "${OFED_C}"
+ofed/drivers/infiniband/core/ib_verbs.c			optional ofed	\
+	compile-with "${OFED_C}"
 
 ofed/drivers/infiniband/ulp/ipoib/ipoib_cm.c	optional ipoib		\
 	compile-with "${OFED_C} -I$S/ofed/drivers/infiniband/ulp/ipoib/"
@@ -4161,131 +4390,150 @@ ofed/drivers/infiniband/ulp/sdp/sdp_cma.c	optional sdp inet 	\
 ofed/drivers/infiniband/ulp/sdp/sdp_tx.c	optional sdp inet 	\
 	compile-with "${OFED_C} -I$S/ofed/drivers/infiniband/ulp/sdp/"
 
-ofed/drivers/infiniband/hw/mlx4/alias_GUID.c    optional mlx4ib         \
-        no-depend obj-prefix "mlx4ib_"                                  \
-        compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/infiniband/hw/mlx4/"
-ofed/drivers/infiniband/hw/mlx4/mcg.c           optional mlx4ib         \
-        no-depend obj-prefix "mlx4ib_"                                  \
-        compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/infiniband/hw/mlx4/"
-ofed/drivers/infiniband/hw/mlx4/sysfs.c         optional mlx4ib         \
-        no-depend obj-prefix "mlx4ib_"                                  \
-        compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/infiniband/hw/mlx4/"
-ofed/drivers/infiniband/hw/mlx4/cm.c            optional mlx4ib         \
-        no-depend obj-prefix "mlx4ib_"                                  \
-        compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/infiniband/hw/mlx4/"
-ofed/drivers/infiniband/hw/mlx4/ah.c		optional mlx4ib		\
-	no-depend obj-prefix "mlx4ib_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/infiniband/hw/mlx4/"
-ofed/drivers/infiniband/hw/mlx4/cq.c		optional mlx4ib		\
-	no-depend obj-prefix "mlx4ib_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/infiniband/hw/mlx4/"
-ofed/drivers/infiniband/hw/mlx4/doorbell.c	optional mlx4ib		\
-	no-depend obj-prefix "mlx4ib_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/infiniband/hw/mlx4/"
-ofed/drivers/infiniband/hw/mlx4/mad.c		optional mlx4ib		\
-	no-depend obj-prefix "mlx4ib_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/infiniband/hw/mlx4/"
-ofed/drivers/infiniband/hw/mlx4/main.c		optional mlx4ib		\
-	no-depend obj-prefix "mlx4ib_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/infiniband/hw/mlx4/"
-ofed/drivers/infiniband/hw/mlx4/mlx4_exp.c	optional mlx4ib		\
-	no-depend obj-prefix "mlx4ib_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/infiniband/hw/mlx4/"
-ofed/drivers/infiniband/hw/mlx4/mr.c		optional mlx4ib		\
-	no-depend obj-prefix "mlx4ib_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/infiniband/hw/mlx4/"
-ofed/drivers/infiniband/hw/mlx4/qp.c		optional mlx4ib		\
-	no-depend obj-prefix "mlx4ib_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/infiniband/hw/mlx4/"
-ofed/drivers/infiniband/hw/mlx4/srq.c		optional mlx4ib		\
-	no-depend obj-prefix "mlx4ib_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/infiniband/hw/mlx4/"
-ofed/drivers/infiniband/hw/mlx4/wc.c		optional mlx4ib		\
-	no-depend obj-prefix "mlx4ib_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/infiniband/hw/mlx4/"
+dev/mthca/mthca_allocator.c		optional mthca pci ofed \
+	compile-with "${OFED_C}"
+dev/mthca/mthca_av.c			optional mthca pci ofed \
+	compile-with "${OFED_C}"
+dev/mthca/mthca_catas.c			optional mthca pci ofed \
+	compile-with "${OFED_C}"
+dev/mthca/mthca_cmd.c			optional mthca pci ofed \
+	compile-with "${OFED_C}"
+dev/mthca/mthca_cq.c			optional mthca pci ofed \
+	compile-with "${OFED_C}"
+dev/mthca/mthca_eq.c			optional mthca pci ofed \
+	compile-with "${OFED_C}"
+dev/mthca/mthca_mad.c			optional mthca pci ofed \
+	compile-with "${OFED_C}"
+dev/mthca/mthca_main.c			optional mthca pci ofed \
+	compile-with "${OFED_C}"
+dev/mthca/mthca_mcg.c			optional mthca pci ofed \
+	compile-with "${OFED_C}"
+dev/mthca/mthca_memfree.c		optional mthca pci ofed \
+	compile-with "${OFED_C}"
+dev/mthca/mthca_mr.c			optional mthca pci ofed \
+	compile-with "${OFED_C}"
+dev/mthca/mthca_pd.c			optional mthca pci ofed \
+	compile-with "${OFED_C}"
+dev/mthca/mthca_profile.c		optional mthca pci ofed \
+	compile-with "${OFED_C}"
+dev/mthca/mthca_provider.c		optional mthca pci ofed \
+	compile-with "${OFED_C}"
+dev/mthca/mthca_qp.c			optional mthca pci ofed \
+	compile-with "${OFED_C}"
+dev/mthca/mthca_reset.c			optional mthca pci ofed \
+	compile-with "${OFED_C}"
+dev/mthca/mthca_srq.c			optional mthca pci ofed \
+	compile-with "${OFED_C}"
+dev/mthca/mthca_uar.c			optional mthca pci ofed \
+	compile-with "${OFED_C}"
 
-ofed/drivers/net/mlx4/alloc.c			optional mlx4ib | mlxen	\
-	no-depend obj-prefix "mlx4_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/net/mlx4/"
-ofed/drivers/net/mlx4/catas.c			optional mlx4ib | mlxen	\
-	no-depend obj-prefix "mlx4_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/net/mlx4/"
-ofed/drivers/net/mlx4/cmd.c			optional mlx4ib | mlxen	\
-	no-depend obj-prefix "mlx4_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/net/mlx4/"
-ofed/drivers/net/mlx4/cq.c			optional mlx4ib | mlxen	\
-	no-depend obj-prefix "mlx4_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/net/mlx4/"
-ofed/drivers/net/mlx4/eq.c			optional mlx4ib | mlxen	\
-	no-depend obj-prefix "mlx4_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/net/mlx4/"
-ofed/drivers/net/mlx4/fw.c			optional mlx4ib | mlxen	\
-	no-depend obj-prefix "mlx4_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/net/mlx4/"
-ofed/drivers/net/mlx4/icm.c			optional mlx4ib | mlxen	\
-	no-depend obj-prefix "mlx4_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/net/mlx4/"
-ofed/drivers/net/mlx4/intf.c			optional mlx4ib | mlxen	\
-	no-depend obj-prefix "mlx4_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/net/mlx4/"
-ofed/drivers/net/mlx4/main.c			optional mlx4ib | mlxen	\
-	no-depend obj-prefix "mlx4_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/net/mlx4/"
-ofed/drivers/net/mlx4/mcg.c			optional mlx4ib | mlxen	\
-	no-depend obj-prefix "mlx4_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/net/mlx4/ -Wno-unused"
-ofed/drivers/net/mlx4/mr.c			optional mlx4ib | mlxen	\
-	no-depend obj-prefix "mlx4_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/net/mlx4/"
-ofed/drivers/net/mlx4/pd.c			optional mlx4ib | mlxen	\
-	no-depend obj-prefix "mlx4_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/net/mlx4/"
-ofed/drivers/net/mlx4/port.c			optional mlx4ib | mlxen	\
-	no-depend obj-prefix "mlx4_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/net/mlx4/"
-ofed/drivers/net/mlx4/profile.c			optional mlx4ib | mlxen	\
-	no-depend obj-prefix "mlx4_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/net/mlx4/"
-ofed/drivers/net/mlx4/qp.c			optional mlx4ib | mlxen	\
-	no-depend obj-prefix "mlx4_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/net/mlx4/"
-ofed/drivers/net/mlx4/reset.c			optional mlx4ib | mlxen	\
-	no-depend obj-prefix "mlx4_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/net/mlx4/"
-ofed/drivers/net/mlx4/sense.c			optional mlx4ib | mlxen	\
-	no-depend obj-prefix "mlx4_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/net/mlx4/"
-ofed/drivers/net/mlx4/srq.c			optional mlx4ib | mlxen	\
-	no-depend obj-prefix "mlx4_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/net/mlx4/"
-ofed/drivers/net/mlx4/resource_tracker.c        optional mlx4ib | mlxen	\
-	no-depend obj-prefix "mlx4_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/net/mlx4/"
-ofed/drivers/net/mlx4/sys_tune.c		optional mlx4ib | mlxen	\
-	no-depend obj-prefix "mlx4_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/net/mlx4/"
+dev/mlx4/mlx4_ib/mlx4_ib_alias_GUID.c		optional mlx4ib pci ofed \
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_ib/mlx4_ib_mcg.c			optional mlx4ib pci ofed \
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_ib/mlx4_ib_sysfs.c		optional mlx4ib pci ofed \
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_ib/mlx4_ib_cm.c			optional mlx4ib pci ofed \
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_ib/mlx4_ib_ah.c			optional mlx4ib pci ofed \
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_ib/mlx4_ib_cq.c			optional mlx4ib pci ofed \
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_ib/mlx4_ib_doorbell.c		optional mlx4ib pci ofed \
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_ib/mlx4_ib_mad.c			optional mlx4ib pci ofed \
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_ib/mlx4_ib_main.c			optional mlx4ib pci ofed \
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_ib/mlx4_ib_mr.c			optional mlx4ib pci ofed \
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_ib/mlx4_ib_qp.c			optional mlx4ib pci ofed \
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_ib/mlx4_ib_srq.c			optional mlx4ib pci ofed \
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_ib/mlx4_ib_wc.c			optional mlx4ib pci ofed \
+	compile-with "${OFED_C}"
 
-ofed/drivers/net/mlx4/en_cq.c			optional mlxen		\
-	no-depend obj-prefix "mlx4_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/net/mlx4/"
-ofed/drivers/net/mlx4/en_main.c			optional mlxen		\
-	no-depend obj-prefix "mlx4_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/net/mlx4/"
-ofed/drivers/net/mlx4/en_netdev.c		optional mlxen		\
-	no-depend obj-prefix "mlx4_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/net/mlx4/"
-ofed/drivers/net/mlx4/en_port.c			optional mlxen		\
-	no-depend obj-prefix "mlx4_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/net/mlx4/"
-ofed/drivers/net/mlx4/en_resources.c		optional mlxen		\
-	no-depend obj-prefix "mlx4_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/net/mlx4/"
-ofed/drivers/net/mlx4/en_rx.c			optional mlxen		\
-	no-depend obj-prefix "mlx4_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/net/mlx4/"
-ofed/drivers/net/mlx4/en_tx.c			optional mlxen		\
-	no-depend obj-prefix "mlx4_"					\
-	compile-with "${OFED_C_NOIMP} -I$S/ofed/drivers/net/mlx4/"
+dev/mlx4/mlx4_core/mlx4_alloc.c			optional mlx4 pci \
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_core/mlx4_catas.c			optional mlx4 pci \
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_core/mlx4_cmd.c			optional mlx4 pci \
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_core/mlx4_cq.c			optional mlx4 pci \
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_core/mlx4_eq.c			optional mlx4 pci \
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_core/mlx4_fw.c			optional mlx4 pci \
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_core/mlx4_fw_qos.c		optional mlx4 pci \
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_core/mlx4_icm.c			optional mlx4 pci \
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_core/mlx4_intf.c			optional mlx4 pci \
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_core/mlx4_main.c			optional mlx4 pci \
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_core/mlx4_mcg.c			optional mlx4 pci \
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_core/mlx4_mr.c			optional mlx4 pci \
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_core/mlx4_pd.c			optional mlx4 pci \
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_core/mlx4_port.c			optional mlx4 pci \
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_core/mlx4_profile.c		optional mlx4 pci \
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_core/mlx4_qp.c			optional mlx4 pci \
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_core/mlx4_reset.c			optional mlx4 pci \
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_core/mlx4_sense.c			optional mlx4 pci \
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_core/mlx4_srq.c			optional mlx4 pci \
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_core/mlx4_resource_tracker.c	optional mlx4 pci \
+	compile-with "${OFED_C}"
+
+dev/mlx4/mlx4_en/mlx4_en_cq.c			optional mlx4en pci inet inet6	\
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_en/mlx4_en_main.c			optional mlx4en pci inet inet6	\
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_en/mlx4_en_netdev.c		optional mlx4en pci inet inet6	\
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_en/mlx4_en_port.c			optional mlx4en pci inet inet6	\
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_en/mlx4_en_resources.c		optional mlx4en pci inet inet6	\
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_en/mlx4_en_rx.c			optional mlx4en pci inet inet6	\
+	compile-with "${OFED_C}"
+dev/mlx4/mlx4_en/mlx4_en_tx.c			optional mlx4en pci inet inet6	\
+	compile-with "${OFED_C}"
+
+dev/mlx5/mlx5_ib/mlx5_ib_ah.c			optional mlx5ib pci ofed \
+	compile-with "${OFED_C}"
+dev/mlx5/mlx5_ib/mlx5_ib_cong.c			optional mlx5ib pci ofed \
+	compile-with "${OFED_C}"
+dev/mlx5/mlx5_ib/mlx5_ib_cq.c			optional mlx5ib pci ofed \
+	compile-with "${OFED_C}"
+dev/mlx5/mlx5_ib/mlx5_ib_doorbell.c		optional mlx5ib pci ofed \
+	compile-with "${OFED_C}"
+dev/mlx5/mlx5_ib/mlx5_ib_gsi.c			optional mlx5ib pci ofed \
+	compile-with "${OFED_C}"
+dev/mlx5/mlx5_ib/mlx5_ib_mad.c			optional mlx5ib pci ofed \
+	compile-with "${OFED_C}"
+dev/mlx5/mlx5_ib/mlx5_ib_main.c			optional mlx5ib pci ofed \
+	compile-with "${OFED_C}"
+dev/mlx5/mlx5_ib/mlx5_ib_mem.c			optional mlx5ib pci ofed \
+	compile-with "${OFED_C}"
+dev/mlx5/mlx5_ib/mlx5_ib_mr.c			optional mlx5ib pci ofed \
+	compile-with "${OFED_C}"
+dev/mlx5/mlx5_ib/mlx5_ib_qp.c			optional mlx5ib pci ofed \
+	compile-with "${OFED_C}"
+dev/mlx5/mlx5_ib/mlx5_ib_srq.c			optional mlx5ib pci ofed \
+	compile-with "${OFED_C}"
+dev/mlx5/mlx5_ib/mlx5_ib_virt.c			optional mlx5ib pci ofed \
+	compile-with "${OFED_C}"
 
 dev/mlx5/mlx5_core/mlx5_alloc.c			optional mlx5 pci	\
 	compile-with "${OFED_C}"
@@ -4293,11 +4541,21 @@ dev/mlx5/mlx5_core/mlx5_cmd.c			optional mlx5 pci	\
 	compile-with "${OFED_C}"
 dev/mlx5/mlx5_core/mlx5_cq.c			optional mlx5 pci	\
 	compile-with "${OFED_C}"
+dev/mlx5/mlx5_core/mlx5_crspace.c		optional mlx5 pci	\
+	compile-with "${OFED_C}"
+dev/mlx5/mlx5_core/mlx5_diagnostics.c		optional mlx5 pci	\
+	compile-with "${OFED_C}"
 dev/mlx5/mlx5_core/mlx5_eq.c			optional mlx5 pci	\
 	compile-with "${OFED_C}"
-dev/mlx5/mlx5_core/mlx5_flow_table.c		optional mlx5 pci	\
+dev/mlx5/mlx5_core/mlx5_fs_cmd.c		optional mlx5 pci	\
+	compile-with "${OFED_C}"
+dev/mlx5/mlx5_core/mlx5_fs_tree.c		optional mlx5 pci	\
 	compile-with "${OFED_C}"
 dev/mlx5/mlx5_core/mlx5_fw.c			optional mlx5 pci	\
+	compile-with "${OFED_C}"
+dev/mlx5/mlx5_core/mlx5_fwdump.c		optional mlx5 pci	\
+	compile-with "${OFED_C}"
+dev/mlx5/mlx5_core/mlx5_fwdump_regmaps.c	optional mlx5 pci	\
 	compile-with "${OFED_C}"
 dev/mlx5/mlx5_core/mlx5_health.c		optional mlx5 pci	\
 	compile-with "${OFED_C}"
@@ -4325,6 +4583,8 @@ dev/mlx5/mlx5_core/mlx5_uar.c			optional mlx5 pci	\
 	compile-with "${OFED_C}"
 dev/mlx5/mlx5_core/mlx5_vport.c			optional mlx5 pci	\
 	compile-with "${OFED_C}"
+dev/mlx5/mlx5_core/mlx5_vsc.c			optional mlx5 pci	\
+	compile-with "${OFED_C}"
 dev/mlx5/mlx5_core/mlx5_wq.c			optional mlx5 pci	\
 	compile-with "${OFED_C}"
 
@@ -4339,43 +4599,6 @@ dev/mlx5/mlx5_en/mlx5_en_flow_table.c		optional mlx5en pci inet inet6	\
 dev/mlx5/mlx5_en/mlx5_en_rx.c			optional mlx5en pci inet inet6	\
 	compile-with "${OFED_C}"
 dev/mlx5/mlx5_en/mlx5_en_txrx.c			optional mlx5en pci inet inet6	\
-	compile-with "${OFED_C}"
-
-ofed/drivers/infiniband/hw/mthca/mthca_allocator.c	optional mthca	\
-	compile-with "${OFED_C}"
-ofed/drivers/infiniband/hw/mthca/mthca_av.c		optional mthca	\
-	compile-with "${OFED_C}"
-ofed/drivers/infiniband/hw/mthca/mthca_catas.c		optional mthca	\
-	compile-with "${OFED_C}"
-ofed/drivers/infiniband/hw/mthca/mthca_cmd.c		optional mthca	\
-	compile-with "${OFED_C}"
-ofed/drivers/infiniband/hw/mthca/mthca_cq.c		optional mthca	\
-	compile-with "${OFED_C}"
-ofed/drivers/infiniband/hw/mthca/mthca_eq.c		optional mthca	\
-	compile-with "${OFED_C}"
-ofed/drivers/infiniband/hw/mthca/mthca_mad.c		optional mthca	\
-	compile-with "${OFED_C}"
-ofed/drivers/infiniband/hw/mthca/mthca_main.c		optional mthca	\
-	compile-with "${OFED_C}"
-ofed/drivers/infiniband/hw/mthca/mthca_mcg.c		optional mthca	\
-	compile-with "${OFED_C}"
-ofed/drivers/infiniband/hw/mthca/mthca_memfree.c	optional mthca	\
-	compile-with "${OFED_C}"
-ofed/drivers/infiniband/hw/mthca/mthca_mr.c		optional mthca	\
-	compile-with "${OFED_C}"
-ofed/drivers/infiniband/hw/mthca/mthca_pd.c		optional mthca	\
-	compile-with "${OFED_C}"
-ofed/drivers/infiniband/hw/mthca/mthca_profile.c	optional mthca	\
-	compile-with "${OFED_C}"
-ofed/drivers/infiniband/hw/mthca/mthca_provider.c	optional mthca	\
-	compile-with "${OFED_C}"
-ofed/drivers/infiniband/hw/mthca/mthca_qp.c		optional mthca	\
-	compile-with "${OFED_C}"
-ofed/drivers/infiniband/hw/mthca/mthca_reset.c		optional mthca	\
-	compile-with "${OFED_C}"
-ofed/drivers/infiniband/hw/mthca/mthca_srq.c		optional mthca	\
-	compile-with "${OFED_C}"
-ofed/drivers/infiniband/hw/mthca/mthca_uar.c		optional mthca	\
 	compile-with "${OFED_C}"
 
 # crypto support
@@ -4492,6 +4715,7 @@ vm/swap_pager.c			standard
 vm/uma_core.c			standard
 vm/uma_dbg.c			standard
 vm/memguard.c			optional DEBUG_MEMGUARD
+vm/vm_domain.c			standard
 vm/vm_fault.c			standard
 vm/vm_glue.c			standard
 vm/vm_init.c			standard
@@ -4506,7 +4730,8 @@ vm/vm_pager.c			standard
 vm/vm_phys.c			standard
 vm/vm_radix.c			standard
 vm/vm_reserv.c			standard
-vm/vm_domain.c			standard
+vm/vm_swapout.c			optional !NO_SWAPPING
+vm/vm_swapout_dummy.c		optional NO_SWAPPING
 vm/vm_unix.c			standard
 vm/vm_zeroidle.c		standard
 vm/vnode_pager.c		standard

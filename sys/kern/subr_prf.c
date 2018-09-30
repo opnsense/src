@@ -39,7 +39,6 @@ __FBSDID("$FreeBSD$");
 
 #ifdef _KERNEL
 #include "opt_ddb.h"
-#include "opt_pax.h"
 #include "opt_printf.h"
 #endif  /* _KERNEL */
 
@@ -53,7 +52,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/kernel.h>
 #include <sys/msgbuf.h>
 #include <sys/malloc.h>
-#include <sys/pax.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/stddef.h>
@@ -74,7 +72,19 @@ __FBSDID("$FreeBSD$");
  * Note that stdarg.h and the ANSI style va_start macro is used for both
  * ANSI and traditional C compilers.
  */
+#ifdef _KERNEL
 #include <machine/stdarg.h>
+#else
+#include <stdarg.h>
+#endif
+
+/*
+ * This is needed for sbuf_putbuf() when compiled into userland.  Due to the
+ * shared nature of this file, it's the only place to put it.
+ */
+#ifndef _KERNEL
+#include <stdio.h>
+#endif
 
 #ifdef _KERNEL
 
@@ -164,49 +174,6 @@ uprintf(const char *fmt, ...)
 	pca.tty = p->p_session->s_ttyp;
 	SESS_UNLOCK(p->p_session);
 	PROC_UNLOCK(p);
-	if (pca.tty == NULL) {
-		sx_sunlock(&proctree_lock);
-		return (0);
-	}
-	pca.flags = TOTTY;
-	pca.p_bufr = NULL;
-	va_start(ap, fmt);
-	tty_lock(pca.tty);
-	sx_sunlock(&proctree_lock);
-	retval = kvprintf(fmt, putchar, &pca, 10, ap);
-	tty_unlock(pca.tty);
-	va_end(ap);
-	return (retval);
-}
-
-int
-hbsd_uprintf(const char *fmt, ...)
-{
-	va_list ap;
-	struct putchar_arg pca;
-	struct proc *p;
-	struct thread *td;
-	int p_locked, retval;
-
-	td = curthread;
-	if (TD_IS_IDLETHREAD(td))
-		return (0);
-
-	sx_slock(&proctree_lock);
-	p = td->td_proc;
-	if ((p_locked = PROC_LOCKED(p)))
-		PROC_LOCK(p);
-	if ((p->p_flag & P_CONTROLT) == 0) {
-		if (p_locked)
-			PROC_UNLOCK(p);
-		sx_sunlock(&proctree_lock);
-		return (0);
-	}
-	SESS_LOCK(p->p_session);
-	pca.tty = p->p_session->s_ttyp;
-	SESS_UNLOCK(p->p_session);
-	if (p_locked)
-		PROC_UNLOCK(p);
 	if (pca.tty == NULL) {
 		sx_sunlock(&proctree_lock);
 		return (0);
@@ -451,6 +418,23 @@ vprintf(const char *fmt, va_list ap)
 }
 
 static void
+prf_putbuf(char *bufr, int flags, int pri)
+{
+
+	if (flags & TOLOG)
+		msglogstr(bufr, pri, /*filter_cr*/1);
+
+	if (flags & TOCONS) {
+		if ((panicstr == NULL) && (constty != NULL))
+			msgbuf_addstr(&consmsgbuf, -1,
+			    bufr, /*filter_cr*/ 0);
+
+		if ((constty == NULL) ||(always_console_output))
+			cnputs(bufr);
+	}
+}
+
+static void
 putbuf(int c, struct putchar_arg *ap)
 {
 	/* Check if no console output buffer was provided. */
@@ -471,18 +455,7 @@ putbuf(int c, struct putchar_arg *ap)
 
 		/* Check if the buffer needs to be flushed. */
 		if (ap->remain == 2 || c == '\n') {
-
-			if (ap->flags & TOLOG)
-				msglogstr(ap->p_bufr, ap->pri, /*filter_cr*/1);
-
-			if (ap->flags & TOCONS) {
-				if ((panicstr == NULL) && (constty != NULL))
-					msgbuf_addstr(&consmsgbuf, -1,
-					    ap->p_bufr, /*filter_cr*/ 0);
-
-				if ((constty == NULL) ||(always_console_output))
-					cnputs(ap->p_bufr);
-			}
+			prf_putbuf(ap->p_bufr, ap->flags, ap->pri);
 
 			ap->p_next = ap->p_bufr;
 			ap->remain = ap->n_bufr;
@@ -1048,11 +1021,7 @@ msgbufinit(void *ptr, int size)
 	oldp = msgbufp;
 }
 
-#ifdef PAX_HARDENING
-int unprivileged_read_msgbuf = 0;
-#else
-int unprivileged_read_msgbuf = 1;
-#endif
+static int unprivileged_read_msgbuf = 1;
 SYSCTL_INT(_security_bsd, OID_AUTO, unprivileged_read_msgbuf,
     CTLFLAG_RW, &unprivileged_read_msgbuf, 0,
     "Unprivileged processes may read the kernel message buffer");
@@ -1263,5 +1232,21 @@ counted_warning(unsigned *counter, const char *msg)
 			break;
 		}
 	}
+}
+#endif
+
+#ifdef _KERNEL
+void
+sbuf_putbuf(struct sbuf *sb)
+{
+
+	prf_putbuf(sbuf_data(sb), TOLOG | TOCONS, -1);
+}
+#else
+void
+sbuf_putbuf(struct sbuf *sb)
+{
+
+	printf("%s", sbuf_data(sb));
 }
 #endif

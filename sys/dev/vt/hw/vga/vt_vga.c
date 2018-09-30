@@ -30,6 +30,8 @@
  * SUCH DAMAGE.
  */
 
+#include "opt_acpi.h"
+
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
@@ -45,6 +47,10 @@ __FBSDID("$FreeBSD$");
 #include <dev/pci/pcivar.h>
 
 #include <machine/bus.h>
+
+#if ((defined(__amd64__) || defined(__i386__)) && defined(DEV_ACPI))
+#include <contrib/dev/acpica/include/acpi.h>
+#endif
 
 struct vga_softc {
 	bus_space_tag_t		 vga_fb_tag;
@@ -231,6 +237,7 @@ static const struct unicp437 cp437table[] = {
 	{ 0x03c0, 0xe3, 0x00 }, { 0x03c3, 0xe5, 0x00 },
 	{ 0x03c4, 0xe7, 0x00 }, { 0x03c6, 0xed, 0x00 },
 	{ 0x03d5, 0xed, 0x00 }, { 0x2010, 0x2d, 0x00 },
+	{ 0x2013, 0x2d, 0x00 },
 	{ 0x2014, 0x2d, 0x00 }, { 0x2018, 0x60, 0x00 },
 	{ 0x2019, 0x27, 0x00 }, { 0x201c, 0x22, 0x00 },
 	{ 0x201d, 0x22, 0x00 }, { 0x2022, 0x07, 0x00 },
@@ -279,7 +286,8 @@ static const struct unicp437 cp437table[] = {
 	{ 0x2640, 0x0c, 0x00 }, { 0x2642, 0x0b, 0x00 },
 	{ 0x2660, 0x06, 0x00 }, { 0x2663, 0x05, 0x00 },
 	{ 0x2665, 0x03, 0x01 }, { 0x266a, 0x0d, 0x00 },
-	{ 0x266c, 0x0e, 0x00 },
+	{ 0x266c, 0x0e, 0x00 }, { 0x27e8, 0x3c, 0x00 },
+	{ 0x27e9, 0x3e, 0x00 },
 };
 
 static uint8_t
@@ -288,7 +296,7 @@ vga_get_cp437(term_char_t c)
 	int min, mid, max;
 
 	min = 0;
-	max = (sizeof(cp437table) / sizeof(struct unicp437)) - 1;
+	max = nitems(cp437table) - 1;
 
 	if (c < cp437table[0].unicode_base ||
 	    c > cp437table[max].unicode_base + cp437table[max].length)
@@ -1196,11 +1204,39 @@ vga_initialize(struct vt_device *vd, int textmode)
 	return (0);
 }
 
+static bool
+vga_acpi_disabled(void)
+{
+#if ((defined(__amd64__) || defined(__i386__)) && defined(DEV_ACPI))
+	ACPI_TABLE_FADT *fadt;
+	vm_paddr_t physaddr;
+	uint16_t flags;
+
+	physaddr = acpi_find_table(ACPI_SIG_FADT);
+	if (physaddr == 0)
+		return (false);
+
+	fadt = acpi_map_table(physaddr, ACPI_SIG_FADT);
+	if (fadt == NULL) {
+		printf("vt_vga: unable to map FADT ACPI table\n");
+		return (false);
+	}
+
+	flags = fadt->BootFlags;
+	acpi_unmap_table(fadt);
+
+	if (flags & ACPI_FADT_NO_VGA)
+		return (true);
+#endif
+
+	return (false);
+}
+
 static int
 vga_probe(struct vt_device *vd)
 {
 
-	return (CN_INTERNAL);
+	return (vga_acpi_disabled() ? CN_DEAD : CN_INTERNAL);
 }
 
 static int

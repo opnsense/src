@@ -1,6 +1,8 @@
 /*	$NetBSD: fsdb.c,v 1.2 1995/10/08 23:18:10 thorpej Exp $	*/
 
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  *  Copyright (c) 1995 John T. Kohl
  *  All rights reserved.
  * 
@@ -898,7 +900,7 @@ CMDFUNCSTART(newtype)
 	return 1;
     type = DIP(curinode, di_mode) & IFMT;
     for (tp = typenamemap;
-	 tp < &typenamemap[sizeof(typenamemap)/sizeof(*typenamemap)];
+	 tp < &typenamemap[nitems(typenamemap)];
 	 tp++) {
 	if (!strcmp(argv[1], tp->typename)) {
 	    printf("setting type to %s\n", tp->typename);
@@ -906,7 +908,7 @@ CMDFUNCSTART(newtype)
 	    break;
 	}
     }
-    if (tp == &typenamemap[sizeof(typenamemap)/sizeof(*typenamemap)]) {
+    if (tp == &typenamemap[nitems(typenamemap)]) {
 	warnx("type `%s' not known", argv[1]);
 	warnx("try one of `file', `dir', `socket', `fifo'");
 	return 1;

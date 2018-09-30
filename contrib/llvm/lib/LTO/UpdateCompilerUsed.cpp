@@ -13,11 +13,10 @@
 
 #include "llvm/LTO/legacy/UpdateCompilerUsed.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/CodeGen/TargetLowering.h"
+#include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Mangler.h"
-#include "llvm/Target/TargetLowering.h"
-#include "llvm/Target/TargetSubtargetInfo.h"
-#include "llvm/Transforms/IPO/Internalize.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
 using namespace llvm;
@@ -65,7 +64,7 @@ private:
     // target.
     for (unsigned I = 0, E = static_cast<unsigned>(LibFunc::NumLibFuncs);
          I != E; ++I) {
-      LibFunc::Func F = static_cast<LibFunc::Func>(I);
+      LibFunc F = static_cast<LibFunc>(I);
       if (TLI.has(F))
         Libcalls.insert(TLI.getName(F));
     }

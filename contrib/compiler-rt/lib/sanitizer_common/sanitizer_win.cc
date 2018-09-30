@@ -24,12 +24,13 @@
 
 #include "sanitizer_common.h"
 #include "sanitizer_dbghelp.h"
+#include "sanitizer_file.h"
 #include "sanitizer_libc.h"
 #include "sanitizer_mutex.h"
 #include "sanitizer_placement_new.h"
-#include "sanitizer_procmaps.h"
 #include "sanitizer_stacktrace.h"
 #include "sanitizer_symbolizer.h"
+#include "sanitizer_win_defs.h"
 
 // A macro to tell the compiler that this part of the code cannot be reached,
 // if the compiler supports this feature. Since we're using this in
@@ -63,10 +64,14 @@ uptr GetMmapGranularity() {
   return si.dwAllocationGranularity;
 }
 
-uptr GetMaxVirtualAddress() {
+uptr GetMaxUserVirtualAddress() {
   SYSTEM_INFO si;
   GetSystemInfo(&si);
   return (uptr)si.lpMaximumApplicationAddress;
+}
+
+uptr GetMaxVirtualAddress() {
+  return GetMaxUserVirtualAddress();
 }
 
 bool FileExists(const char *filename) {
@@ -79,7 +84,7 @@ uptr internal_getpid() {
 
 // In contrast to POSIX, on Windows GetCurrentThreadId()
 // returns a system-unique identifier.
-uptr GetTid() {
+tid_t GetTid() {
   return GetCurrentThreadId();
 }
 
@@ -130,8 +135,24 @@ void UnmapOrDie(void *addr, uptr size) {
   }
 }
 
+static void *ReturnNullptrOnOOMOrDie(uptr size, const char *mem_type,
+                                     const char *mmap_type) {
+  error_t last_error = GetLastError();
+  if (last_error == ERROR_NOT_ENOUGH_MEMORY)
+    return nullptr;
+  ReportMmapFailureAndDie(size, mem_type, mmap_type, last_error);
+}
+
+void *MmapOrDieOnFatalError(uptr size, const char *mem_type) {
+  void *rv = VirtualAlloc(0, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+  if (rv == 0)
+    return ReturnNullptrOnOOMOrDie(size, mem_type, "allocate");
+  return rv;
+}
+
 // We want to map a chunk of address space aligned to 'alignment'.
-void *MmapAlignedOrDie(uptr size, uptr alignment, const char *mem_type) {
+void *MmapAlignedOrDieOnFatalError(uptr size, uptr alignment,
+                                   const char *mem_type) {
   CHECK(IsPowerOfTwo(size));
   CHECK(IsPowerOfTwo(alignment));
 
@@ -141,7 +162,7 @@ void *MmapAlignedOrDie(uptr size, uptr alignment, const char *mem_type) {
   uptr mapped_addr =
       (uptr)VirtualAlloc(0, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
   if (!mapped_addr)
-    ReportMmapFailureAndDie(size, mem_type, "allocate aligned", GetLastError());
+    return ReturnNullptrOnOOMOrDie(size, mem_type, "allocate aligned");
 
   // If we got it right on the first try, return. Otherwise, unmap it and go to
   // the slow path.
@@ -161,8 +182,7 @@ void *MmapAlignedOrDie(uptr size, uptr alignment, const char *mem_type) {
     mapped_addr =
         (uptr)VirtualAlloc(0, size + alignment, MEM_RESERVE, PAGE_NOACCESS);
     if (!mapped_addr)
-      ReportMmapFailureAndDie(size, mem_type, "allocate aligned",
-                              GetLastError());
+      return ReturnNullptrOnOOMOrDie(size, mem_type, "allocate aligned");
 
     // Find the aligned address.
     uptr aligned_addr = RoundUpTo(mapped_addr, alignment);
@@ -180,7 +200,7 @@ void *MmapAlignedOrDie(uptr size, uptr alignment, const char *mem_type) {
 
   // Fail if we can't make this work quickly.
   if (retries == kMaxRetries && mapped_addr == 0)
-    ReportMmapFailureAndDie(size, mem_type, "allocate aligned", GetLastError());
+    return ReturnNullptrOnOOMOrDie(size, mem_type, "allocate aligned");
 
   return (void *)mapped_addr;
 }
@@ -219,10 +239,57 @@ void *MmapFixedOrDie(uptr fixed_addr, uptr size) {
   return p;
 }
 
+// Uses fixed_addr for now.
+// Will use offset instead once we've implemented this function for real.
+uptr ReservedAddressRange::Map(uptr fixed_addr, uptr size) {
+  return reinterpret_cast<uptr>(MmapFixedOrDieOnFatalError(fixed_addr, size));
+}
+
+uptr ReservedAddressRange::MapOrDie(uptr fixed_addr, uptr size) {
+  return reinterpret_cast<uptr>(MmapFixedOrDie(fixed_addr, size));
+}
+
+void ReservedAddressRange::Unmap(uptr addr, uptr size) {
+  void* addr_as_void = reinterpret_cast<void*>(addr);
+  uptr base_as_uptr = reinterpret_cast<uptr>(base_);
+  // Only unmap if it covers the entire range.
+  CHECK((addr == base_as_uptr) && (size == size_));
+  UnmapOrDie(addr_as_void, size);
+  if (addr_as_void == base_) {
+    base_ = reinterpret_cast<void*>(addr + size);
+  }
+  size_ = size_ - size;
+}
+
+void *MmapFixedOrDieOnFatalError(uptr fixed_addr, uptr size) {
+  void *p = VirtualAlloc((LPVOID)fixed_addr, size,
+      MEM_COMMIT, PAGE_READWRITE);
+  if (p == 0) {
+    char mem_type[30];
+    internal_snprintf(mem_type, sizeof(mem_type), "memory at address 0x%zx",
+                      fixed_addr);
+    return ReturnNullptrOnOOMOrDie(size, mem_type, "allocate");
+  }
+  return p;
+}
+
 void *MmapNoReserveOrDie(uptr size, const char *mem_type) {
   // FIXME: make this really NoReserve?
   return MmapOrDie(size, mem_type);
 }
+
+uptr ReservedAddressRange::Init(uptr size, const char *name, uptr fixed_addr) {
+  if (fixed_addr) {
+    base_ = MmapFixedNoAccess(fixed_addr, size, name);
+  } else {
+    base_ = MmapNoAccess(size);
+  }
+  size_ = size;
+  name_ = name;
+  (void)os_handle_;  // unsupported
+  return reinterpret_cast<uptr>(base_);
+}
+
 
 void *MmapFixedNoAccess(uptr fixed_addr, uptr size, const char *name) {
   (void)name; // unsupported
@@ -263,7 +330,8 @@ void DontDumpShadowMemory(uptr addr, uptr length) {
   // FIXME: add madvise-analog when we move to 64-bits.
 }
 
-uptr FindAvailableMemoryRange(uptr size, uptr alignment, uptr left_padding) {
+uptr FindAvailableMemoryRange(uptr size, uptr alignment, uptr left_padding,
+                              uptr *largest_gap_found) {
   uptr address = 0;
   while (true) {
     MEMORY_BASIC_INFORMATION info;
@@ -350,7 +418,7 @@ struct ModuleInfo {
 
 #if !SANITIZER_GO
 int CompareModulesBase(const void *pl, const void *pr) {
-  const ModuleInfo *l = (ModuleInfo *)pl, *r = (ModuleInfo *)pr;
+  const ModuleInfo *l = (const ModuleInfo *)pl, *r = (const ModuleInfo *)pr;
   if (l->base_address < r->base_address)
     return -1;
   return l->base_address > r->base_address;
@@ -399,9 +467,6 @@ void ReExec() {
 }
 
 void PrepareForSandboxing(__sanitizer_sandbox_arguments *args) {
-#if !SANITIZER_GO
-  CovPrepareForSandboxing(args);
-#endif
 }
 
 bool StackSizeIsUnlimited() {
@@ -437,6 +502,10 @@ void SleepForMillis(int millis) {
 }
 
 u64 NanoTime() {
+  return 0;
+}
+
+u64 MonotonicNanoTime() {
   return 0;
 }
 
@@ -498,7 +567,7 @@ static uptr GetPreferredBase(const char *modname) {
 }
 
 void ListOfModules::init() {
-  clear();
+  clearOrInit();
   HANDLE cur_process = GetCurrentProcess();
 
   // Query the list of modules.  Start by assuming there are no more than 256
@@ -552,11 +621,14 @@ void ListOfModules::init() {
     LoadedModule cur_module;
     cur_module.set(module_name, adjusted_base);
     // We add the whole module as one single address range.
-    cur_module.addAddressRange(base_address, end_address, /*executable*/ true);
+    cur_module.addAddressRange(base_address, end_address, /*executable*/ true,
+                               /*writable*/ true);
     modules_.push_back(cur_module);
   }
   UnmapOrDie(hmodules, modules_buffer_size);
-};
+}
+
+void ListOfModules::fallbackInit() { clear(); }
 
 // We can't use atexit() directly at __asan_init time as the CRT is not fully
 // initialized at this point.  Place the functions into a vector and use
@@ -765,7 +837,7 @@ void BufferedStackTrace::SlowUnwindStack(uptr pc, u32 max_depth) {
   // FIXME: Compare with StackWalk64.
   // FIXME: Look at LLVMUnhandledExceptionFilter in Signals.inc
   size = CaptureStackBackTrace(1, Min(max_depth, kStackTraceMax),
-                               (void**)trace, 0);
+                               (void **)&trace_buffer[0], 0);
   if (size == 0)
     return;
 
@@ -830,8 +902,35 @@ void InstallDeadlySignalHandlers(SignalHandlerType handler) {
   // FIXME: Decide what to do on Windows.
 }
 
-bool IsHandledDeadlySignal(int signum) {
+HandleSignalMode GetHandleSignalMode(int signum) {
   // FIXME: Decide what to do on Windows.
+  return kHandleSignalNo;
+}
+
+// Check based on flags if we should handle this exception.
+bool IsHandledDeadlyException(DWORD exceptionCode) {
+  switch (exceptionCode) {
+    case EXCEPTION_ACCESS_VIOLATION:
+    case EXCEPTION_ARRAY_BOUNDS_EXCEEDED:
+    case EXCEPTION_STACK_OVERFLOW:
+    case EXCEPTION_DATATYPE_MISALIGNMENT:
+    case EXCEPTION_IN_PAGE_ERROR:
+      return common_flags()->handle_segv;
+    case EXCEPTION_ILLEGAL_INSTRUCTION:
+    case EXCEPTION_PRIV_INSTRUCTION:
+    case EXCEPTION_BREAKPOINT:
+      return common_flags()->handle_sigill;
+    case EXCEPTION_FLT_DENORMAL_OPERAND:
+    case EXCEPTION_FLT_DIVIDE_BY_ZERO:
+    case EXCEPTION_FLT_INEXACT_RESULT:
+    case EXCEPTION_FLT_INVALID_OPERATION:
+    case EXCEPTION_FLT_OVERFLOW:
+    case EXCEPTION_FLT_STACK_CHECK:
+    case EXCEPTION_FLT_UNDERFLOW:
+    case EXCEPTION_INT_DIVIDE_BY_ZERO:
+    case EXCEPTION_INT_OVERFLOW:
+      return common_flags()->handle_sigfpe;
+  }
   return false;
 }
 
@@ -860,37 +959,99 @@ bool IsAccessibleMemoryRange(uptr beg, uptr size) {
   return true;
 }
 
-SignalContext SignalContext::Create(void *siginfo, void *context) {
+bool SignalContext::IsStackOverflow() const {
+  return (DWORD)GetType() == EXCEPTION_STACK_OVERFLOW;
+}
+
+void SignalContext::InitPcSpBp() {
   EXCEPTION_RECORD *exception_record = (EXCEPTION_RECORD *)siginfo;
   CONTEXT *context_record = (CONTEXT *)context;
 
-  uptr pc = (uptr)exception_record->ExceptionAddress;
+  pc = (uptr)exception_record->ExceptionAddress;
 #ifdef _WIN64
-  uptr bp = (uptr)context_record->Rbp;
-  uptr sp = (uptr)context_record->Rsp;
+  bp = (uptr)context_record->Rbp;
+  sp = (uptr)context_record->Rsp;
 #else
-  uptr bp = (uptr)context_record->Ebp;
-  uptr sp = (uptr)context_record->Esp;
+  bp = (uptr)context_record->Ebp;
+  sp = (uptr)context_record->Esp;
 #endif
-  uptr access_addr = exception_record->ExceptionInformation[1];
+}
 
+uptr SignalContext::GetAddress() const {
+  EXCEPTION_RECORD *exception_record = (EXCEPTION_RECORD *)siginfo;
+  return exception_record->ExceptionInformation[1];
+}
+
+bool SignalContext::IsMemoryAccess() const {
+  return GetWriteFlag() != SignalContext::UNKNOWN;
+}
+
+SignalContext::WriteFlag SignalContext::GetWriteFlag() const {
+  EXCEPTION_RECORD *exception_record = (EXCEPTION_RECORD *)siginfo;
   // The contents of this array are documented at
   // https://msdn.microsoft.com/en-us/library/windows/desktop/aa363082(v=vs.85).aspx
   // The first element indicates read as 0, write as 1, or execute as 8.  The
   // second element is the faulting address.
-  WriteFlag write_flag = SignalContext::UNKNOWN;
   switch (exception_record->ExceptionInformation[0]) {
-  case 0: write_flag = SignalContext::READ; break;
-  case 1: write_flag = SignalContext::WRITE; break;
-  case 8: write_flag = SignalContext::UNKNOWN; break;
+    case 0:
+      return SignalContext::READ;
+    case 1:
+      return SignalContext::WRITE;
+    case 8:
+      return SignalContext::UNKNOWN;
   }
-  bool is_memory_access = write_flag != SignalContext::UNKNOWN;
-  return SignalContext(context, access_addr, pc, sp, bp, is_memory_access,
-                       write_flag);
+  return SignalContext::UNKNOWN;
 }
 
 void SignalContext::DumpAllRegisters(void *context) {
   // FIXME: Implement this.
+}
+
+int SignalContext::GetType() const {
+  return static_cast<const EXCEPTION_RECORD *>(siginfo)->ExceptionCode;
+}
+
+const char *SignalContext::Describe() const {
+  unsigned code = GetType();
+  // Get the string description of the exception if this is a known deadly
+  // exception.
+  switch (code) {
+    case EXCEPTION_ACCESS_VIOLATION:
+      return "access-violation";
+    case EXCEPTION_ARRAY_BOUNDS_EXCEEDED:
+      return "array-bounds-exceeded";
+    case EXCEPTION_STACK_OVERFLOW:
+      return "stack-overflow";
+    case EXCEPTION_DATATYPE_MISALIGNMENT:
+      return "datatype-misalignment";
+    case EXCEPTION_IN_PAGE_ERROR:
+      return "in-page-error";
+    case EXCEPTION_ILLEGAL_INSTRUCTION:
+      return "illegal-instruction";
+    case EXCEPTION_PRIV_INSTRUCTION:
+      return "priv-instruction";
+    case EXCEPTION_BREAKPOINT:
+      return "breakpoint";
+    case EXCEPTION_FLT_DENORMAL_OPERAND:
+      return "flt-denormal-operand";
+    case EXCEPTION_FLT_DIVIDE_BY_ZERO:
+      return "flt-divide-by-zero";
+    case EXCEPTION_FLT_INEXACT_RESULT:
+      return "flt-inexact-result";
+    case EXCEPTION_FLT_INVALID_OPERATION:
+      return "flt-invalid-operation";
+    case EXCEPTION_FLT_OVERFLOW:
+      return "flt-overflow";
+    case EXCEPTION_FLT_STACK_CHECK:
+      return "flt-stack-check";
+    case EXCEPTION_FLT_UNDERFLOW:
+      return "flt-underflow";
+    case EXCEPTION_INT_DIVIDE_BY_ZERO:
+      return "int-divide-by-zero";
+    case EXCEPTION_INT_OVERFLOW:
+      return "int-overflow";
+  }
+  return "unknown exception";
 }
 
 uptr ReadBinaryName(/*out*/char *buf, uptr buf_len) {
@@ -936,21 +1097,20 @@ int WaitForProcess(pid_t pid) { return -1; }
 // FIXME implement on this platform.
 void GetMemoryProfile(fill_profile_f cb, uptr *stats, uptr stats_size) { }
 
+void CheckNoDeepBind(const char *filename, int flag) {
+  // Do nothing.
+}
+
+// FIXME: implement on this platform.
+bool GetRandom(void *buffer, uptr length, bool blocking) {
+  UNIMPLEMENTED();
+}
+
+// FIXME: implement on this platform.
+u32 GetNumberOfCPUs() {
+  UNIMPLEMENTED();
+}
 
 }  // namespace __sanitizer
-
-#if !SANITIZER_GO
-// Workaround to implement weak hooks on Windows. COFF doesn't directly support
-// weak symbols, but it does support /alternatename, which is similar. If the
-// user does not override the hook, we will use this default definition instead
-// of null.
-extern "C" void __sanitizer_print_memory_profile(int top_percent) {}
-
-#ifdef _WIN64
-#pragma comment(linker, "/alternatename:__sanitizer_print_memory_profile=__sanitizer_default_print_memory_profile") // NOLINT
-#else
-#pragma comment(linker, "/alternatename:___sanitizer_print_memory_profile=___sanitizer_default_print_memory_profile") // NOLINT
-#endif
-#endif
 
 #endif  // _WIN32

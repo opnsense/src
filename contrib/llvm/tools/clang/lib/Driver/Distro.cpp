@@ -47,6 +47,8 @@ static Distro::DistroType DetectDistro(vfs::FileSystem &VFS) {
                       .Case("xenial", Distro::UbuntuXenial)
                       .Case("yakkety", Distro::UbuntuYakkety)
                       .Case("zesty", Distro::UbuntuZesty)
+                      .Case("artful", Distro::UbuntuArtful)
+                      .Case("bionic", Distro::UbuntuBionic)
                       .Default(Distro::UnknownDistro);
     if (Version != Distro::UnknownDistro)
       return Version;
@@ -87,6 +89,8 @@ static Distro::DistroType DetectDistro(vfs::FileSystem &VFS) {
         return Distro::DebianJessie;
       case 9:
         return Distro::DebianStretch;
+      case 10:
+        return Distro::DebianBuster;
       default:
         return Distro::UnknownDistro;
       }
@@ -124,6 +128,9 @@ static Distro::DistroType DetectDistro(vfs::FileSystem &VFS) {
 
   if (VFS.exists("/etc/exherbo-release"))
     return Distro::Exherbo;
+
+  if (VFS.exists("/etc/alpine-release"))
+    return Distro::AlpineLinux;
 
   if (VFS.exists("/etc/arch-release"))
     return Distro::ArchLinux;

@@ -51,25 +51,32 @@ enum class SymbolKind : uint8_t {
   Constructor,
   Destructor,
   ConversionFunction,
+
+  Parameter,
+  Using,
 };
 
-enum class SymbolLanguage {
+enum class SymbolLanguage : uint8_t {
   C,
   ObjC,
   CXX,
+  Swift,
 };
 
 /// Language specific sub-kinds.
-enum class SymbolSubKind {
+enum class SymbolSubKind : uint8_t {
   None,
   CXXCopyConstructor,
   CXXMoveConstructor,
   AccessorGetter,
   AccessorSetter,
+  UsingTypename,
+  UsingValue,
 };
 
+typedef uint8_t SymbolPropertySet;
 /// Set of properties that provide additional info about a symbol.
-enum class SymbolProperty : uint8_t {
+enum class SymbolProperty : SymbolPropertySet {
   Generic                       = 1 << 0,
   TemplatePartialSpecialization = 1 << 1,
   TemplateSpecialization        = 1 << 2,
@@ -77,9 +84,9 @@ enum class SymbolProperty : uint8_t {
   IBAnnotated                   = 1 << 4,
   IBOutletCollection            = 1 << 5,
   GKInspectable                 = 1 << 6,
+  Local                         = 1 << 7,
 };
-static const unsigned SymbolPropertyBitNum = 7;
-typedef unsigned SymbolPropertySet;
+static const unsigned SymbolPropertyBitNum = 8;
 
 /// Set of roles that are attributed to symbol occurrences.
 enum class SymbolRole : uint32_t {
@@ -103,8 +110,9 @@ enum class SymbolRole : uint32_t {
   RelationAccessorOf  = 1 << 15,
   RelationContainedBy = 1 << 16,
   RelationIBTypeOf    = 1 << 17,
+  RelationSpecializationOf = 1 << 18,
 };
-static const unsigned SymbolRoleBitNum = 18;
+static const unsigned SymbolRoleBitNum = 19;
 typedef unsigned SymbolRoleSet;
 
 /// Represents a relation to another symbol for a symbol occurrence.
@@ -119,14 +127,18 @@ struct SymbolRelation {
 struct SymbolInfo {
   SymbolKind Kind;
   SymbolSubKind SubKind;
-  SymbolPropertySet Properties;
   SymbolLanguage Lang;
+  SymbolPropertySet Properties;
 };
 
 SymbolInfo getSymbolInfo(const Decl *D);
 
+bool isFunctionLocalSymbol(const Decl *D);
+
 void applyForEachSymbolRole(SymbolRoleSet Roles,
                             llvm::function_ref<void(SymbolRole)> Fn);
+bool applyForEachSymbolRoleInterruptible(SymbolRoleSet Roles,
+                            llvm::function_ref<bool(SymbolRole)> Fn);
 void printSymbolRoles(SymbolRoleSet Roles, raw_ostream &OS);
 
 /// \returns true if no name was printed, false otherwise.

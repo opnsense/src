@@ -1040,6 +1040,7 @@ write_metadata(struct g_consumer *cp, struct g_virstor_metadata *md)
 	pp = cp->provider;
 
 	buf = malloc(pp->sectorsize, M_GVIRSTOR, M_WAITOK);
+	bzero(buf, pp->sectorsize);
 	virstor_metadata_encode(md, buf);
 	g_topology_unlock();
 	error = g_write_data(cp, pp->mediasize - pp->sectorsize, buf,
@@ -1888,3 +1889,4 @@ invalid_call(void)
 }
 
 DECLARE_GEOM_CLASS(g_virstor_class, g_virstor); /* Let there be light */
+MODULE_VERSION(geom_virstor, 0);

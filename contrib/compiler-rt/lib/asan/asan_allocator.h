@@ -58,6 +58,7 @@ class AsanChunkView {
   uptr Beg() const;            // First byte of user memory.
   uptr End() const;            // Last byte of user memory.
   uptr UsedSize() const;       // Size requested by the user.
+  u32 UserRequestedAlignment() const;  // Originally requested alignment.
   uptr AllocTid() const;
   uptr FreeTid() const;
   bool Eq(const AsanChunkView &c) const { return chunk_ == c.chunk_; }
@@ -119,7 +120,11 @@ struct AsanMapUnmapCallback {
 };
 
 #if SANITIZER_CAN_USE_ALLOCATOR64
-# if defined(__powerpc64__)
+# if SANITIZER_FUCHSIA
+const uptr kAllocatorSpace = ~(uptr)0;
+const uptr kAllocatorSize  =  0x40000000000ULL;  // 4T.
+typedef DefaultSizeClassMap SizeClassMap;
+# elif defined(__powerpc64__)
 const uptr kAllocatorSpace =  0xa0000000000ULL;
 const uptr kAllocatorSize  =  0x20000000000ULL;  // 2T.
 typedef DefaultSizeClassMap SizeClassMap;
@@ -161,10 +166,17 @@ typedef FlatByteMap<kNumRegions> ByteMap;
 typedef TwoLevelByteMap<(kNumRegions >> 12), 1 << 12> ByteMap;
 # endif
 typedef CompactSizeClassMap SizeClassMap;
-typedef SizeClassAllocator32<0, SANITIZER_MMAP_RANGE_SIZE, 16,
-  SizeClassMap, kRegionSizeLog,
-  ByteMap,
-  AsanMapUnmapCallback> PrimaryAllocator;
+struct AP32 {
+  static const uptr kSpaceBeg = 0;
+  static const u64 kSpaceSize = SANITIZER_MMAP_RANGE_SIZE;
+  static const uptr kMetadataSize = 16;
+  typedef __asan::SizeClassMap SizeClassMap;
+  static const uptr kRegionSizeLog = __asan::kRegionSizeLog;
+  typedef __asan::ByteMap ByteMap;
+  typedef AsanMapUnmapCallback MapUnmapCallback;
+  static const uptr kFlags = 0;
+};
+typedef SizeClassAllocator32<AP32> PrimaryAllocator;
 #endif  // SANITIZER_CAN_USE_ALLOCATOR64
 
 static const uptr kNumberOfSizeClasses = SizeClassMap::kNumClasses;
@@ -186,8 +198,8 @@ struct AsanThreadLocalMallocStorage {
 void *asan_memalign(uptr alignment, uptr size, BufferedStackTrace *stack,
                     AllocType alloc_type);
 void asan_free(void *ptr, BufferedStackTrace *stack, AllocType alloc_type);
-void asan_sized_free(void *ptr, uptr size, BufferedStackTrace *stack,
-                     AllocType alloc_type);
+void asan_delete(void *ptr, uptr size, uptr alignment,
+                 BufferedStackTrace *stack, AllocType alloc_type);
 
 void *asan_malloc(uptr size, BufferedStackTrace *stack);
 void *asan_calloc(uptr nmemb, uptr size, BufferedStackTrace *stack);

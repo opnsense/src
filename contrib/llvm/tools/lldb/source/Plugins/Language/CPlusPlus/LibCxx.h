@@ -11,10 +11,10 @@
 #ifndef liblldb_LibCxx_h_
 #define liblldb_LibCxx_h_
 
-#include "lldb/Core/Stream.h"
 #include "lldb/Core/ValueObject.h"
 #include "lldb/DataFormatters/TypeSummary.h"
 #include "lldb/DataFormatters/TypeSynthetic.h"
+#include "lldb/Utility/Stream.h"
 
 namespace lldb_private {
 namespace formatters {
@@ -31,30 +31,6 @@ bool LibcxxSmartPointerSummaryProvider(
     ValueObject &valobj, Stream &stream,
     const TypeSummaryOptions
         &options); // libc++ std::shared_ptr<> and std::weak_ptr<>
-
-class LibcxxVectorBoolSyntheticFrontEnd : public SyntheticChildrenFrontEnd {
-public:
-  LibcxxVectorBoolSyntheticFrontEnd(lldb::ValueObjectSP valobj_sp);
-
-  size_t CalculateNumChildren() override;
-
-  lldb::ValueObjectSP GetChildAtIndex(size_t idx) override;
-
-  bool Update() override;
-
-  bool MightHaveChildren() override;
-
-  size_t GetIndexOfChildWithName(const ConstString &name) override;
-
-  ~LibcxxVectorBoolSyntheticFrontEnd() override;
-
-private:
-  CompilerType m_bool_type;
-  ExecutionContextRef m_exe_ctx_ref;
-  uint64_t m_count;
-  lldb::addr_t m_base_data_address;
-  std::map<size_t, lldb::ValueObjectSP> m_children;
-};
 
 SyntheticChildrenFrontEnd *
 LibcxxVectorBoolSyntheticFrontEndCreator(CXXSyntheticChildren *,
@@ -117,6 +93,10 @@ private:
 };
 
 SyntheticChildrenFrontEnd *
+LibcxxBitsetSyntheticFrontEndCreator(CXXSyntheticChildren *,
+                                     lldb::ValueObjectSP);
+
+SyntheticChildrenFrontEnd *
 LibcxxSharedPtrSyntheticFrontEndCreator(CXXSyntheticChildren *,
                                         lldb::ValueObjectSP);
 
@@ -127,6 +107,10 @@ LibcxxStdVectorSyntheticFrontEndCreator(CXXSyntheticChildren *,
 SyntheticChildrenFrontEnd *
 LibcxxStdListSyntheticFrontEndCreator(CXXSyntheticChildren *,
                                       lldb::ValueObjectSP);
+
+SyntheticChildrenFrontEnd *
+LibcxxStdForwardListSyntheticFrontEndCreator(CXXSyntheticChildren *,
+                                             lldb::ValueObjectSP);
 
 SyntheticChildrenFrontEnd *
 LibcxxStdMapSyntheticFrontEndCreator(CXXSyntheticChildren *,
@@ -142,6 +126,12 @@ LibcxxInitializerListSyntheticFrontEndCreator(CXXSyntheticChildren *,
 
 SyntheticChildrenFrontEnd *LibcxxFunctionFrontEndCreator(CXXSyntheticChildren *,
                                                          lldb::ValueObjectSP);
+
+SyntheticChildrenFrontEnd *LibcxxQueueFrontEndCreator(CXXSyntheticChildren *,
+                                                      lldb::ValueObjectSP);
+
+SyntheticChildrenFrontEnd *LibcxxTupleFrontEndCreator(CXXSyntheticChildren *,
+                                                      lldb::ValueObjectSP);
 
 } // namespace formatters
 } // namespace lldb_private

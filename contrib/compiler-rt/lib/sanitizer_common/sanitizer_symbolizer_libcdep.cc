@@ -17,6 +17,18 @@
 
 namespace __sanitizer {
 
+Symbolizer *Symbolizer::GetOrInit() {
+  SpinMutexLock l(&init_mu_);
+  if (symbolizer_)
+    return symbolizer_;
+  symbolizer_ = PlatformInit();
+  CHECK(symbolizer_);
+  return symbolizer_;
+}
+
+// See sanitizer_symbolizer_fuchsia.cc.
+#if !SANITIZER_FUCHSIA
+
 const char *ExtractToken(const char *str, const char *delims, char **result) {
   uptr prefix_len = internal_strcspn(str, delims);
   *result = (char*)InternalAlloc(prefix_len + 1);
@@ -151,37 +163,47 @@ bool Symbolizer::FindModuleNameAndOffsetForAddress(uptr address,
   return true;
 }
 
+void Symbolizer::RefreshModules() {
+  modules_.init();
+  fallback_modules_.fallbackInit();
+  RAW_CHECK(modules_.size() > 0);
+  modules_fresh_ = true;
+}
+
+static const LoadedModule *SearchForModule(const ListOfModules &modules,
+                                           uptr address) {
+  for (uptr i = 0; i < modules.size(); i++) {
+    if (modules[i].containsAddress(address)) {
+      return &modules[i];
+    }
+  }
+  return nullptr;
+}
+
 const LoadedModule *Symbolizer::FindModuleForAddress(uptr address) {
   bool modules_were_reloaded = false;
   if (!modules_fresh_) {
-    modules_.init();
-    RAW_CHECK(modules_.size() > 0);
-    modules_fresh_ = true;
+    RefreshModules();
     modules_were_reloaded = true;
   }
-  for (uptr i = 0; i < modules_.size(); i++) {
-    if (modules_[i].containsAddress(address)) {
-      return &modules_[i];
-    }
-  }
-  // Reload the modules and look up again, if we haven't tried it yet.
-  if (!modules_were_reloaded) {
-    // FIXME: set modules_fresh_ from dlopen()/dlclose() interceptors.
-    // It's too aggressive to reload the list of modules each time we fail
-    // to find a module for a given address.
-    modules_fresh_ = false;
-    return FindModuleForAddress(address);
-  }
-  return 0;
-}
+  const LoadedModule *module = SearchForModule(modules_, address);
+  if (module) return module;
 
-Symbolizer *Symbolizer::GetOrInit() {
-  SpinMutexLock l(&init_mu_);
-  if (symbolizer_)
-    return symbolizer_;
-  symbolizer_ = PlatformInit();
-  CHECK(symbolizer_);
-  return symbolizer_;
+  // dlopen/dlclose interceptors invalidate the module list, but when
+  // interception is disabled, we need to retry if the lookup fails in
+  // case the module list changed.
+#if !SANITIZER_INTERCEPT_DLOPEN_DLCLOSE
+  if (!modules_were_reloaded) {
+    RefreshModules();
+    module = SearchForModule(modules_, address);
+    if (module) return module;
+  }
+#endif
+
+  if (fallback_modules_.size()) {
+    module = SearchForModule(fallback_modules_, address);
+  }
+  return module;
 }
 
 // For now we assume the following protocol:
@@ -356,11 +378,19 @@ const char *LLVMSymbolizer::FormatAndSendCommand(bool is_data,
   CHECK(module_name);
   const char *is_data_str = is_data ? "DATA " : "";
   if (arch == kModuleArchUnknown) {
-    internal_snprintf(buffer_, kBufferSize, "%s\"%s\" 0x%zx\n", is_data_str,
-                      module_name, module_offset);
+    if (internal_snprintf(buffer_, kBufferSize, "%s\"%s\" 0x%zx\n", is_data_str,
+                          module_name,
+                          module_offset) >= static_cast<int>(kBufferSize)) {
+      Report("WARNING: Command buffer too small");
+      return nullptr;
+    }
   } else {
-    internal_snprintf(buffer_, kBufferSize, "%s\"%s:%s\" 0x%zx\n", is_data_str,
-                      module_name, ModuleArchToString(arch), module_offset);
+    if (internal_snprintf(buffer_, kBufferSize, "%s\"%s:%s\" 0x%zx\n",
+                          is_data_str, module_name, ModuleArchToString(arch),
+                          module_offset) >= static_cast<int>(kBufferSize)) {
+      Report("WARNING: Command buffer too small");
+      return nullptr;
+    }
   }
   return symbolizer_process_->SendCommand(buffer_);
 }
@@ -377,7 +407,23 @@ SymbolizerProcess::SymbolizerProcess(const char *path, bool use_forkpty)
   CHECK_NE(path_[0], '\0');
 }
 
+static bool IsSameModule(const char* path) {
+  if (const char* ProcessName = GetProcessName()) {
+    if (const char* SymbolizerName = StripModuleName(path)) {
+      return !internal_strcmp(ProcessName, SymbolizerName);
+    }
+  }
+  return false;
+}
+
 const char *SymbolizerProcess::SendCommand(const char *command) {
+  if (failed_to_start_)
+    return nullptr;
+  if (IsSameModule(path_)) {
+    Report("WARNING: Symbolizer was blocked from starting itself!\n");
+    failed_to_start_ = true;
+    return nullptr;
+  }
   for (; times_restarted_ < kMaxTimesRestarted; times_restarted_++) {
     // Start or restart symbolizer if we failed to send command to it.
     if (const char *res = SendCommandImpl(command))
@@ -426,6 +472,11 @@ bool SymbolizerProcess::ReadFromSymbolizer(char *buffer, uptr max_length) {
     read_len += just_read;
     if (ReachedEndOfOutput(buffer, read_len))
       break;
+    if (read_len + 1 == max_length) {
+      Report("WARNING: Symbolizer buffer too small\n");
+      read_len = 0;
+      break;
+    }
   }
   buffer[read_len] = '\0';
   return true;
@@ -442,5 +493,7 @@ bool SymbolizerProcess::WriteToSymbolizer(const char *buffer, uptr length) {
   }
   return true;
 }
+
+#endif  // !SANITIZER_FUCHSIA
 
 }  // namespace __sanitizer

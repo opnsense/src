@@ -129,6 +129,7 @@ static Cl::Kinds ClassifyInternal(ASTContext &Ctx, const Expr *E) {
   case Expr::UnresolvedLookupExprClass:
   case Expr::UnresolvedMemberExprClass:
   case Expr::TypoExprClass:
+  case Expr::DependentCoawaitExprClass:
   case Expr::CXXDependentScopeMemberExprClass:
   case Expr::DependentScopeDeclRefExprClass:
     // ObjC instance variables are lvalues
@@ -189,7 +190,6 @@ static Cl::Kinds ClassifyInternal(ASTContext &Ctx, const Expr *E) {
   case Expr::ArrayInitIndexExprClass:
   case Expr::NoInitExprClass:
   case Expr::DesignatedInitUpdateExprClass:
-  case Expr::CoyieldExprClass:
     return Cl::CL_PRValue;
 
     // Next come the complicated cases.
@@ -413,7 +413,8 @@ static Cl::Kinds ClassifyInternal(ASTContext &Ctx, const Expr *E) {
     return ClassifyInternal(Ctx, cast<InitListExpr>(E)->getInit(0));
 
   case Expr::CoawaitExprClass:
-    return ClassifyInternal(Ctx, cast<CoawaitExpr>(E)->getResumeExpr());
+  case Expr::CoyieldExprClass:
+    return ClassifyInternal(Ctx, cast<CoroutineSuspendExpr>(E)->getResumeExpr());
   }
 
   llvm_unreachable("unhandled expression kind in classification");
@@ -626,7 +627,8 @@ static Cl::ModifiableType IsModifiable(ASTContext &Ctx, const Expr *E,
   // Const stuff is obviously not modifiable.
   if (CT.isConstQualified())
     return Cl::CM_ConstQualified;
-  if (CT.getQualifiers().getAddressSpace() == LangAS::opencl_constant)
+  if (Ctx.getLangOpts().OpenCL &&
+      CT.getQualifiers().getAddressSpace() == LangAS::opencl_constant)
     return Cl::CM_ConstAddrSpace;
 
   // Arrays are not modifiable, only their elements are.
@@ -639,7 +641,7 @@ static Cl::ModifiableType IsModifiable(ASTContext &Ctx, const Expr *E,
   // Records with any const fields (recursively) are not modifiable.
   if (const RecordType *R = CT->getAs<RecordType>())
     if (R->hasConstFields())
-      return Cl::CM_ConstQualified;
+      return Cl::CM_ConstQualifiedField;
 
   return Cl::CM_Modifiable;
 }
@@ -693,6 +695,7 @@ Expr::isModifiableLvalue(ASTContext &Ctx, SourceLocation *Loc) const {
     llvm_unreachable("CM_LValueCast and CL_LValue don't match");
   case Cl::CM_NoSetterProperty: return MLV_NoSetterProperty;
   case Cl::CM_ConstQualified: return MLV_ConstQualified;
+  case Cl::CM_ConstQualifiedField: return MLV_ConstQualifiedField;
   case Cl::CM_ConstAddrSpace: return MLV_ConstAddrSpace;
   case Cl::CM_ArrayType: return MLV_ArrayType;
   case Cl::CM_IncompleteType: return MLV_IncompleteType;

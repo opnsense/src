@@ -204,7 +204,6 @@ DIRDEPS+= \
 	usr.bin/cpio \
 	usr.bin/cpuset \
 	usr.bin/csplit \
-	usr.bin/csup \
 	usr.bin/ctags \
 	usr.bin/ctlstat \
 	usr.bin/cut \
@@ -912,29 +911,12 @@ DIRDEPS+= \
 DIRDEPS+= usr.sbin/cxgbetool
 .endif
 
-.if ${MK_GPL_DTC} != "yes"
-DIRDEPS+= usr.bin/dtc
+.if ${MK_MLX5TOOL} != "no"
+DIRDEPS+= usr.sbin/mlx5tool
 .endif
 
-.if ${MK_OFED} != "no"
-DIRDEPS+= \
-	  contrib/ofed/usr.bin/ibaddr \
-	  contrib/ofed/usr.bin/ibnetdiscover \
-	  contrib/ofed/usr.bin/ibping \
-	  contrib/ofed/usr.bin/ibportstate \
-	  contrib/ofed/usr.bin/ibroute \
-	  contrib/ofed/usr.bin/ibsendtrap \
-	  contrib/ofed/usr.bin/ibstat \
-	  contrib/ofed/usr.bin/ibsysstat \
-	  contrib/ofed/usr.bin/ibtracert \
-	  contrib/ofed/usr.bin/opensm \
-	  contrib/ofed/usr.bin/osmtest \
-	  contrib/ofed/usr.bin/perfquery \
-	  contrib/ofed/usr.bin/saquery \
-	  contrib/ofed/usr.bin/sminfo \
-	  contrib/ofed/usr.bin/smpdump \
-	  contrib/ofed/usr.bin/smpquery \
-	  contrib/ofed/usr.bin/vendstat
+.if ${MK_GPL_DTC} != "yes"
+DIRDEPS+= usr.bin/dtc
 .endif
 
 DIRDEPS+= ${DIRDEPS.${MACHINE}:U}

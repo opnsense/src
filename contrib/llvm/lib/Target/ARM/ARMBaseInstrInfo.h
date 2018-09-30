@@ -17,16 +17,21 @@
 #include "MCTargetDesc/ARMBaseInfo.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallSet.h"
+#include "llvm/CodeGen/MachineBasicBlock.h"
+#include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
-#include "llvm/Support/CodeGen.h"
-#include "llvm/Target/TargetInstrInfo.h"
+#include "llvm/CodeGen/MachineOperand.h"
+#include "llvm/CodeGen/TargetInstrInfo.h"
+#include <array>
+#include <cstdint>
 
 #define GET_INSTRINFO_HEADER
 #include "ARMGenInstrInfo.inc"
 
 namespace llvm {
-  class ARMSubtarget;
-  class ARMBaseRegisterInfo;
+
+class ARMBaseRegisterInfo;
+class ARMSubtarget;
 
 class ARMBaseInstrInfo : public ARMGenInstrInfo {
   const ARMSubtarget &Subtarget;
@@ -42,10 +47,10 @@ protected:
   /// and \p DefIdx.
   /// \p [out] InputRegs of the equivalent REG_SEQUENCE. Each element of
   /// the list is modeled as <Reg:SubReg, SubIdx>.
-  /// E.g., REG_SEQUENCE vreg1:sub1, sub0, vreg2, sub1 would produce
+  /// E.g., REG_SEQUENCE %1:sub1, sub0, %2, sub1 would produce
   /// two elements:
-  /// - vreg1:sub1, sub0
-  /// - vreg2<:0>, sub1
+  /// - %1:sub1, sub0
+  /// - %2<:0>, sub1
   ///
   /// \returns true if it is possible to build such an input sequence
   /// with the pair \p MI, \p DefIdx. False otherwise.
@@ -58,8 +63,8 @@ protected:
   /// Build the equivalent inputs of a EXTRACT_SUBREG for the given \p MI
   /// and \p DefIdx.
   /// \p [out] InputReg of the equivalent EXTRACT_SUBREG.
-  /// E.g., EXTRACT_SUBREG vreg1:sub1, sub0, sub1 would produce:
-  /// - vreg1:sub1, sub0
+  /// E.g., EXTRACT_SUBREG %1:sub1, sub0, sub1 would produce:
+  /// - %1:sub1, sub0
   ///
   /// \returns true if it is possible to build such an input sequence
   /// with the pair \p MI, \p DefIdx. False otherwise.
@@ -72,9 +77,9 @@ protected:
   /// and \p DefIdx.
   /// \p [out] BaseReg and \p [out] InsertedReg contain
   /// the equivalent inputs of INSERT_SUBREG.
-  /// E.g., INSERT_SUBREG vreg0:sub0, vreg1:sub1, sub3 would produce:
-  /// - BaseReg: vreg0:sub0
-  /// - InsertedReg: vreg1:sub1, sub3
+  /// E.g., INSERT_SUBREG %0:sub0, %1:sub1, sub3 would produce:
+  /// - BaseReg: %0:sub0
+  /// - InsertedReg: %1:sub1, sub3
   ///
   /// \returns true if it is possible to build such an input sequence
   /// with the pair \p MI, \p DefIdx. False otherwise.
@@ -100,13 +105,9 @@ public:
   // Return whether the target has an explicit NOP encoding.
   bool hasNOP() const;
 
-  virtual void getNoopForElfTarget(MCInst &NopInst) const {
-    getNoopForMachoTarget(NopInst);
-  }
-
   // Return the non-pre/post incrementing version of 'Opc'. Return 0
   // if there is not such an opcode.
-  virtual unsigned getUnindexedOpcode(unsigned Opc) const =0;
+  virtual unsigned getUnindexedOpcode(unsigned Opc) const = 0;
 
   MachineInstr *convertToThreeAddress(MachineFunction::iterator &MFI,
                                       MachineInstr &MI,
@@ -156,7 +157,25 @@ public:
   bool DefinesPredicate(MachineInstr &MI,
                         std::vector<MachineOperand> &Pred) const override;
 
-  bool isPredicable(MachineInstr &MI) const override;
+  bool isPredicable(const MachineInstr &MI) const override;
+
+  // CPSR defined in instruction
+  static bool isCPSRDefined(const MachineInstr &MI);
+  bool isAddrMode3OpImm(const MachineInstr &MI, unsigned Op) const;
+  bool isAddrMode3OpMinusReg(const MachineInstr &MI, unsigned Op) const;
+
+  // Load, scaled register offset
+  bool isLdstScaledReg(const MachineInstr &MI, unsigned Op) const;
+  // Load, scaled register offset, not plus LSL2
+  bool isLdstScaledRegNotPlusLsl2(const MachineInstr &MI, unsigned Op) const;
+  // Minus reg for ldstso addr mode
+  bool isLdstSoMinusReg(const MachineInstr &MI, unsigned Op) const;
+  // Scaled register offset in address mode 2
+  bool isAm2ScaledReg(const MachineInstr &MI, unsigned Op) const;
+  // Load multiple, base reg in list
+  bool isLDMBaseRegInList(const MachineInstr &MI) const;
+  // get LDM variable defs size
+  unsigned getLDMVariableDefsSize(const MachineInstr &MI) const;
 
   /// GetInstSize - Returns the size of the specified MachineInstr.
   ///
@@ -201,8 +220,9 @@ public:
                      const MachineInstr &Orig,
                      const TargetRegisterInfo &TRI) const override;
 
-  MachineInstr *duplicate(MachineInstr &Orig,
-                          MachineFunction &MF) const override;
+  MachineInstr &
+  duplicate(MachineBasicBlock &MBB, MachineBasicBlock::iterator InsertBefore,
+            const MachineInstr &Orig) const override;
 
   const MachineInstrBuilder &AddDReg(MachineInstrBuilder &MIB, unsigned Reg,
                                      unsigned SubIdx, unsigned State,
@@ -399,27 +419,43 @@ public:
   /// Returns true if the instruction has a shift by immediate that can be
   /// executed in one cycle less.
   bool isSwiftFastImmShift(const MachineInstr *MI) const;
+
+  /// Returns predicate register associated with the given frame instruction.
+  unsigned getFramePred(const MachineInstr &MI) const {
+    assert(isFrameInstr(MI));
+    // Operands of ADJCALLSTACKDOWN/ADJCALLSTACKUP:
+    // - argument declared in the pattern:
+    // 0 - frame size
+    // 1 - arg of CALLSEQ_START/CALLSEQ_END
+    // 2 - predicate code (like ARMCC::AL)
+    // - added by predOps:
+    // 3 - predicate reg
+    return MI.getOperand(3).getReg();
+  }
 };
 
-static inline
-const MachineInstrBuilder &AddDefaultPred(const MachineInstrBuilder &MIB) {
-  return MIB.addImm((int64_t)ARMCC::AL).addReg(0);
+/// Get the operands corresponding to the given \p Pred value. By default, the
+/// predicate register is assumed to be 0 (no register), but you can pass in a
+/// \p PredReg if that is not the case.
+static inline std::array<MachineOperand, 2> predOps(ARMCC::CondCodes Pred,
+                                                    unsigned PredReg = 0) {
+  return {{MachineOperand::CreateImm(static_cast<int64_t>(Pred)),
+           MachineOperand::CreateReg(PredReg, false)}};
 }
 
-static inline
-const MachineInstrBuilder &AddDefaultCC(const MachineInstrBuilder &MIB) {
-  return MIB.addReg(0);
+/// Get the operand corresponding to the conditional code result. By default,
+/// this is 0 (no register).
+static inline MachineOperand condCodeOp(unsigned CCReg = 0) {
+  return MachineOperand::CreateReg(CCReg, false);
 }
 
-static inline
-const MachineInstrBuilder &AddDefaultT1CC(const MachineInstrBuilder &MIB,
-                                          bool isDead = false) {
-  return MIB.addReg(ARM::CPSR, getDefRegState(true) | getDeadRegState(isDead));
-}
-
-static inline
-const MachineInstrBuilder &AddNoT1CC(const MachineInstrBuilder &MIB) {
-  return MIB.addReg(0);
+/// Get the operand corresponding to the conditional code result for Thumb1.
+/// This operand will always refer to CPSR and it will have the Define flag set.
+/// You can optionally set the Dead flag by means of \p isDead.
+static inline MachineOperand t1CondCodeOp(bool isDead = false) {
+  return MachineOperand::CreateReg(ARM::CPSR,
+                                   /*Define*/ true, /*Implicit*/ false,
+                                   /*Kill*/ false, isDead);
 }
 
 static inline
@@ -432,10 +468,10 @@ bool isCondBranchOpcode(int Opc) {
   return Opc == ARM::Bcc || Opc == ARM::tBcc || Opc == ARM::t2Bcc;
 }
 
-static inline
-bool isJumpTableBranchOpcode(int Opc) {
-  return Opc == ARM::BR_JTr || Opc == ARM::BR_JTm || Opc == ARM::BR_JTadd ||
-    Opc == ARM::tBR_JTr || Opc == ARM::t2BR_JT;
+static inline bool isJumpTableBranchOpcode(int Opc) {
+  return Opc == ARM::BR_JTr || Opc == ARM::BR_JTm_i12 ||
+         Opc == ARM::BR_JTm_rs || Opc == ARM::BR_JTadd || Opc == ARM::tBR_JTr ||
+         Opc == ARM::t2BR_JT;
 }
 
 static inline
@@ -517,6 +553,6 @@ bool rewriteT2FrameIndex(MachineInstr &MI, unsigned FrameRegIdx,
                          unsigned FrameReg, int &Offset,
                          const ARMBaseInstrInfo &TII);
 
-} // End llvm namespace
+} // end namespace llvm
 
-#endif
+#endif // LLVM_LIB_TARGET_ARM_ARMBASEINSTRINFO_H

@@ -95,21 +95,20 @@ ti_am335x_devmap_init(platform_t plat)
 }
 #endif
 
-void
-cpu_reset()
+static void
+ti_plat_cpu_reset(platform_t plat)
 {
 	if (ti_cpu_reset)
 		(*ti_cpu_reset)();
 	else
 		printf("no cpu_reset implementation\n");
-	printf("Reset failed!\n");
-	while (1);
 }
 
 #if defined(SOC_OMAP4)
 static platform_method_t omap4_methods[] = {
 	PLATFORMMETHOD(platform_devmap_init,	ti_omap4_devmap_init),
 	PLATFORMMETHOD(platform_lastaddr,	ti_lastaddr),
+	PLATFORMMETHOD(platform_cpu_reset,	ti_plat_cpu_reset),
 
 	PLATFORMMETHOD_END,
 };
@@ -120,9 +119,10 @@ FDT_PLATFORM_DEF(omap4, "omap4", 0, "ti,omap4430", 0);
 static platform_method_t am335x_methods[] = {
 	PLATFORMMETHOD(platform_devmap_init,	ti_am335x_devmap_init),
 	PLATFORMMETHOD(platform_lastaddr,	ti_lastaddr),
+	PLATFORMMETHOD(platform_cpu_reset,	ti_plat_cpu_reset),
 
 	PLATFORMMETHOD_END,
 };
 
-FDT_PLATFORM_DEF(am335x, "am335x", 0, "ti,am335x", 0);
+FDT_PLATFORM_DEF(am335x, "am335x", 0, "ti,am33xx", 200);
 #endif

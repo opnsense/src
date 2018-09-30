@@ -78,6 +78,9 @@ device		da			# Direct Access (disks)
 device		cd			# CD
 device		pass			# Passthrough device (direct ATA/SCSI access)
 
+# ATA controllers
+device 		ahci			# AHCI-compatible SATA controllers
+
 # USB support
 device		ehci			# OHCI USB interface
 device		usb			# USB Bus (required)
@@ -114,7 +117,7 @@ device		hdmi
 
 # Flattened Device Tree
 options 	FDT			# Configure using FDT/DTB data
-makeoptions	MODULES_EXTRA=dtb/imx6
+makeoptions	MODULES_EXTRA="dtb/imx6 imx"
 
 # SoC-specific devices
 device		ffec			# Freescale Fast Ethernet Controller

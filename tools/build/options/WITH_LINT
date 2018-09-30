@@ -1,0 +1,2 @@
+.\" $FreeBSD$
+Set to build the lint binaries and library.

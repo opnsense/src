@@ -287,6 +287,15 @@ void JumpScopeChecker::BuildScopeInformation(Stmt *S,
     IndirectJumpTargets.push_back(cast<AddrLabelExpr>(S)->getLabel());
     break;
 
+  case Stmt::ObjCForCollectionStmtClass: {
+    auto *CS = cast<ObjCForCollectionStmt>(S);
+    unsigned Diag = diag::note_protected_by_objc_fast_enumeration;
+    unsigned NewParentScope = Scopes.size();
+    Scopes.push_back(GotoScope(ParentScope, Diag, 0, S->getLocStart()));
+    BuildScopeInformation(CS->getBody(), NewParentScope);
+    return;
+  }
+
   case Stmt::IndirectGotoStmtClass:
     // "goto *&&lbl;" is a special case which we treat as equivalent
     // to a normal goto.  In addition, we don't calculate scope in the
@@ -314,7 +323,7 @@ void JumpScopeChecker::BuildScopeInformation(Stmt *S,
       BuildScopeInformation(Var, ParentScope);
       ++StmtsToSkip;
     }
-    // Fall through
+    LLVM_FALLTHROUGH;
 
   case Stmt::GotoStmtClass:
     // Remember both what scope a goto is in as well as the fact that we have

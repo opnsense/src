@@ -21,14 +21,14 @@ add_lld_library(lldMachO
 
   LINK_COMPONENTS
     DebugInfoDWARF
+    Demangle
     Object
     Support
-    Demangle
 
   LINK_LIBS
     lldCore
     lldYAML
-    ${PTHREAD_LIB}
+    ${LLVM_PTHREAD_LIB}
   )
 
 include_directories(.)

@@ -15,7 +15,7 @@
 #ifndef LLVM_LIB_TARGET_AMDGPU_AMDGPUFRAMELOWERING_H
 #define LLVM_LIB_TARGET_AMDGPU_AMDGPUFRAMELOWERING_H
 
-#include "llvm/Target/TargetFrameLowering.h"
+#include "llvm/CodeGen/TargetFrameLowering.h"
 
 namespace llvm {
 
@@ -33,13 +33,6 @@ public:
   /// \returns The number of 32-bit sub-registers that are used when storing
   /// values to the stack.
   unsigned getStackWidth(const MachineFunction &MF) const;
-
-  int getFrameIndexReference(const MachineFunction &MF, int FI,
-                             unsigned &FrameReg) const override;
-
-  bool hasFP(const MachineFunction &MF) const override {
-    return false;
-  }
 };
 
 } // end namespace llvm

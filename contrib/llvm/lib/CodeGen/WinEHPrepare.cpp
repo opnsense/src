@@ -16,13 +16,13 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/CodeGen/Passes.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/EHPersonalities.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
+#include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/WinEHFuncInfo.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/MC/MCSymbol.h"
@@ -54,7 +54,7 @@ namespace {
 class WinEHPrepare : public FunctionPass {
 public:
   static char ID; // Pass identification, replacement for typeid.
-  WinEHPrepare(const TargetMachine *TM = nullptr) : FunctionPass(ID) {}
+  WinEHPrepare() : FunctionPass(ID) {}
 
   bool runOnFunction(Function &Fn) override;
 
@@ -86,6 +86,7 @@ private:
   // All fields are reset by runOnFunction.
   EHPersonality Personality = EHPersonality::Unknown;
 
+  const DataLayout *DL = nullptr;
   DenseMap<BasicBlock *, ColorVector> BlockColors;
   MapVector<BasicBlock *, std::vector<BasicBlock *>> FuncletBlocks;
 };
@@ -93,12 +94,10 @@ private:
 } // end anonymous namespace
 
 char WinEHPrepare::ID = 0;
-INITIALIZE_TM_PASS(WinEHPrepare, "winehprepare", "Prepare Windows exceptions",
-                   false, false)
+INITIALIZE_PASS(WinEHPrepare, DEBUG_TYPE, "Prepare Windows exceptions",
+                false, false)
 
-FunctionPass *llvm::createWinEHPass(const TargetMachine *TM) {
-  return new WinEHPrepare(TM);
-}
+FunctionPass *llvm::createWinEHPass() { return new WinEHPrepare(); }
 
 bool WinEHPrepare::runOnFunction(Function &Fn) {
   if (!Fn.hasPersonalityFn())
@@ -111,6 +110,7 @@ bool WinEHPrepare::runOnFunction(Function &Fn) {
   if (!isFuncletEHPersonality(Personality))
     return false;
 
+  DL = &Fn.getParent()->getDataLayout();
   return prepareExplicitEH(Fn);
 }
 
@@ -838,17 +838,11 @@ void WinEHPrepare::cloneCommonBlocks(Function &F) {
     for (auto &BBMapping : Orig2Clone) {
       BasicBlock *OldBlock = BBMapping.first;
       BasicBlock *NewBlock = BBMapping.second;
-      for (Instruction &OldI : *OldBlock) {
-        auto *OldPN = dyn_cast<PHINode>(&OldI);
-        if (!OldPN)
-          break;
-        UpdatePHIOnClonedBlock(OldPN, /*IsForOldBlock=*/true);
+      for (PHINode &OldPN : OldBlock->phis()) {
+        UpdatePHIOnClonedBlock(&OldPN, /*IsForOldBlock=*/true);
       }
-      for (Instruction &NewI : *NewBlock) {
-        auto *NewPN = dyn_cast<PHINode>(&NewI);
-        if (!NewPN)
-          break;
-        UpdatePHIOnClonedBlock(NewPN, /*IsForOldBlock=*/false);
+      for (PHINode &NewPN : NewBlock->phis()) {
+        UpdatePHIOnClonedBlock(&NewPN, /*IsForOldBlock=*/false);
       }
     }
 
@@ -858,17 +852,13 @@ void WinEHPrepare::cloneCommonBlocks(Function &F) {
       BasicBlock *OldBlock = BBMapping.first;
       BasicBlock *NewBlock = BBMapping.second;
       for (BasicBlock *SuccBB : successors(NewBlock)) {
-        for (Instruction &SuccI : *SuccBB) {
-          auto *SuccPN = dyn_cast<PHINode>(&SuccI);
-          if (!SuccPN)
-            break;
-
+        for (PHINode &SuccPN : SuccBB->phis()) {
           // Ok, we have a PHI node.  Figure out what the incoming value was for
           // the OldBlock.
-          int OldBlockIdx = SuccPN->getBasicBlockIndex(OldBlock);
+          int OldBlockIdx = SuccPN.getBasicBlockIndex(OldBlock);
           if (OldBlockIdx == -1)
             break;
-          Value *IV = SuccPN->getIncomingValue(OldBlockIdx);
+          Value *IV = SuccPN.getIncomingValue(OldBlockIdx);
 
           // Remap the value if necessary.
           if (auto *Inst = dyn_cast<Instruction>(IV)) {
@@ -877,7 +867,7 @@ void WinEHPrepare::cloneCommonBlocks(Function &F) {
               IV = I->second;
           }
 
-          SuccPN->addIncoming(IV, NewBlock);
+          SuccPN.addIncoming(IV, NewBlock);
         }
       }
     }
@@ -1014,6 +1004,7 @@ void WinEHPrepare::cleanupPreparedFunclets(Function &F) {
   removeUnreachableBlocks(F);
 }
 
+#ifndef NDEBUG
 void WinEHPrepare::verifyPreparedFunclets(Function &F) {
   for (BasicBlock &BB : F) {
     size_t NumColors = BlockColors[&BB].size();
@@ -1026,6 +1017,7 @@ void WinEHPrepare::verifyPreparedFunclets(Function &F) {
            "EH Pad still has a PHI!");
   }
 }
+#endif
 
 bool WinEHPrepare::prepareExplicitEH(Function &F) {
   // Remove unreachable blocks.  It is not valuable to assign them a color and
@@ -1070,7 +1062,7 @@ AllocaInst *WinEHPrepare::insertPHILoads(PHINode *PN, Function &F) {
   if (!isa<TerminatorInst>(EHPad)) {
     // If the EHPad isn't a terminator, then we can insert a load in this block
     // that will dominate all uses.
-    SpillSlot = new AllocaInst(PN->getType(), nullptr,
+    SpillSlot = new AllocaInst(PN->getType(), DL->getAllocaAddrSpace(), nullptr,
                                Twine(PN->getName(), ".wineh.spillslot"),
                                &F.getEntryBlock().front());
     Value *V = new LoadInst(SpillSlot, Twine(PN->getName(), ".wineh.reload"),
@@ -1157,7 +1149,7 @@ void WinEHPrepare::replaceUseWithLoad(Value *V, Use &U, AllocaInst *&SpillSlot,
                                       Function &F) {
   // Lazilly create the spill slot.
   if (!SpillSlot)
-    SpillSlot = new AllocaInst(V->getType(), nullptr,
+    SpillSlot = new AllocaInst(V->getType(), DL->getAllocaAddrSpace(), nullptr,
                                Twine(V->getName(), ".wineh.spillslot"),
                                &F.getEntryBlock().front());
 

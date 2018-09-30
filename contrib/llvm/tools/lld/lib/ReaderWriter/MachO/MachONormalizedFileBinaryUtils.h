@@ -11,15 +11,15 @@
 #define LLD_READER_WRITER_MACHO_NORMALIZED_FILE_BINARY_UTILS_H
 
 #include "MachONormalizedFile.h"
+#include "lld/Common/LLVM.h"
 #include "lld/Core/Error.h"
-#include "lld/Core/LLVM.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/BinaryFormat/MachO.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Host.h"
 #include "llvm/Support/LEB128.h"
-#include "llvm/Support/MachO.h"
 #include <system_error>
 
 namespace lld {

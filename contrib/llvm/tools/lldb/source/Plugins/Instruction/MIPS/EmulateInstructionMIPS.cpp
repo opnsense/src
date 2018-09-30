@@ -1,5 +1,4 @@
-//===-- EmulateInstructionMIPS.cpp -------------------------------*- C++
-//-*-===//
+//===-- EmulateInstructionMIPS.cpp -------------------------------*- C++-*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -13,14 +12,15 @@
 #include <stdlib.h>
 
 #include "lldb/Core/Address.h"
-#include "lldb/Core/ArchSpec.h"
-#include "lldb/Core/ConstString.h"
-#include "lldb/Core/DataExtractor.h"
 #include "lldb/Core/Opcode.h"
 #include "lldb/Core/PluginManager.h"
-#include "lldb/Core/Stream.h"
+#include "lldb/Core/RegisterValue.h"
 #include "lldb/Symbol/UnwindPlan.h"
 #include "lldb/Target/Target.h"
+#include "lldb/Utility/ArchSpec.h"
+#include "lldb/Utility/ConstString.h"
+#include "lldb/Utility/DataExtractor.h"
+#include "lldb/Utility/Stream.h"
 #include "llvm-c/Disassembler.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
@@ -63,10 +63,10 @@ EmulateInstructionMIPS::EmulateInstructionMIPS(
     const lldb_private::ArchSpec &arch)
     : EmulateInstruction(arch) {
   /* Create instance of llvm::MCDisassembler */
-  std::string Error;
+  std::string Status;
   llvm::Triple triple = arch.GetTriple();
   const llvm::Target *target =
-      llvm::TargetRegistry::lookupTarget(triple.getTriple(), Error);
+      llvm::TargetRegistry::lookupTarget(triple.getTriple(), Status);
 
 /*
  * If we fail to get the target then we haven't registered it. The
@@ -83,7 +83,7 @@ EmulateInstructionMIPS::EmulateInstructionMIPS(
     LLVMInitializeMipsAsmPrinter();
     LLVMInitializeMipsTargetMC();
     LLVMInitializeMipsDisassembler();
-    target = llvm::TargetRegistry::lookupTarget(triple.getTriple(), Error);
+    target = llvm::TargetRegistry::lookupTarget(triple.getTriple(), Status);
   }
 #endif
 
@@ -212,10 +212,7 @@ EmulateInstructionMIPS::CreateInstance(const ArchSpec &arch,
           inst_type)) {
     if (arch.GetTriple().getArch() == llvm::Triple::mips ||
         arch.GetTriple().getArch() == llvm::Triple::mipsel) {
-      std::auto_ptr<EmulateInstructionMIPS> emulate_insn_ap(
-          new EmulateInstructionMIPS(arch));
-      if (emulate_insn_ap.get())
-        return emulate_insn_ap.release();
+      return new EmulateInstructionMIPS(arch);
     }
   }
 
@@ -1019,7 +1016,7 @@ bool EmulateInstructionMIPS::SetInstruction(const Opcode &insn_opcode,
 
   if (EmulateInstruction::SetInstruction(insn_opcode, inst_addr, target)) {
     if (inst_addr.GetAddressClass() == eAddressClassCodeAlternateISA) {
-      Error error;
+      Status error;
       lldb::addr_t load_addr = LLDB_INVALID_ADDRESS;
 
       /*
@@ -1297,7 +1294,7 @@ bool EmulateInstructionMIPS::Emulate_SW(llvm::MCInst &insn) {
     context.SetRegisterToRegisterPlusOffset(reg_info_src, reg_info_base, 0);
 
     uint8_t buffer[RegisterValue::kMaxRegisterByteSize];
-    Error error;
+    Status error;
 
     if (!ReadRegister(&reg_info_base, data_src))
       return false;
@@ -1563,7 +1560,7 @@ bool EmulateInstructionMIPS::Emulate_SWSP(llvm::MCInst &insn) {
     context.SetRegisterToRegisterPlusOffset(reg_info_src, reg_info_base, 0);
 
     uint8_t buffer[RegisterValue::kMaxRegisterByteSize];
-    Error error;
+    Status error;
 
     if (!ReadRegister(&reg_info_base, data_src))
       return false;
@@ -1646,7 +1643,7 @@ bool EmulateInstructionMIPS::Emulate_SWM16_32(llvm::MCInst &insn) {
     context.SetRegisterToRegisterPlusOffset(reg_info_src, reg_info_base, 0);
 
     uint8_t buffer[RegisterValue::kMaxRegisterByteSize];
-    Error error;
+    Status error;
 
     if (!ReadRegister(&reg_info_base, data_src))
       return false;

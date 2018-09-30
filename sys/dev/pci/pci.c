@@ -178,8 +178,11 @@ static device_method_t pci_methods[] = {
 	DEVMETHOD(pci_set_powerstate,	pci_set_powerstate_method),
 	DEVMETHOD(pci_assign_interrupt,	pci_assign_interrupt_method),
 	DEVMETHOD(pci_find_cap,		pci_find_cap_method),
+	DEVMETHOD(pci_find_next_cap,	pci_find_next_cap_method),
 	DEVMETHOD(pci_find_extcap,	pci_find_extcap_method),
+	DEVMETHOD(pci_find_next_extcap,	pci_find_next_extcap_method),
 	DEVMETHOD(pci_find_htcap,	pci_find_htcap_method),
+	DEVMETHOD(pci_find_next_htcap,	pci_find_next_htcap_method),
 	DEVMETHOD(pci_alloc_msi,	pci_alloc_msi_method),
 	DEVMETHOD(pci_alloc_msix,	pci_alloc_msix_method),
 	DEVMETHOD(pci_enable_msi,	pci_enable_msi_method),
@@ -321,9 +324,9 @@ SYSCTL_NODE(_hw, OID_AUTO, pci, CTLFLAG_RD, 0, "PCI bus tuning parameters");
 static int pci_enable_io_modes = 1;
 SYSCTL_INT(_hw_pci, OID_AUTO, enable_io_modes, CTLFLAG_RWTUN,
     &pci_enable_io_modes, 1,
-    "Enable I/O and memory bits in the config register.  Some BIOSes do not\n\
-enable these bits correctly.  We'd like to do this all the time, but there\n\
-are some peripherals that this causes problems with.");
+    "Enable I/O and memory bits in the config register.  Some BIOSes do not"
+    " enable these bits correctly.  We'd like to do this all the time, but"
+    " there are some peripherals that this causes problems with.");
 
 static int pci_do_realloc_bars = 0;
 SYSCTL_INT(_hw_pci, OID_AUTO, realloc_bars, CTLFLAG_RWTUN,
@@ -334,10 +337,10 @@ SYSCTL_INT(_hw_pci, OID_AUTO, realloc_bars, CTLFLAG_RWTUN,
 static int pci_do_power_nodriver = 0;
 SYSCTL_INT(_hw_pci, OID_AUTO, do_power_nodriver, CTLFLAG_RWTUN,
     &pci_do_power_nodriver, 0,
-  "Place a function into D3 state when no driver attaches to it.  0 means\n\
-disable.  1 means conservatively place devices into D3 state.  2 means\n\
-aggressively place devices into D3 state.  3 means put absolutely everything\n\
-in D3 state.");
+    "Place a function into D3 state when no driver attaches to it.  0 means"
+    " disable.  1 means conservatively place devices into D3 state.  2 means"
+    " aggressively place devices into D3 state.  3 means put absolutely"
+    " everything in D3 state.");
 
 int pci_do_power_resume = 1;
 SYSCTL_INT(_hw_pci, OID_AUTO, do_power_resume, CTLFLAG_RWTUN,
@@ -372,9 +375,10 @@ static int pci_usb_takeover = 1;
 static int pci_usb_takeover = 0;
 #endif
 SYSCTL_INT(_hw_pci, OID_AUTO, usb_early_takeover, CTLFLAG_RDTUN,
-    &pci_usb_takeover, 1, "Enable early takeover of USB controllers.\n\
-Disable this if you depend on BIOS emulation of USB devices, that is\n\
-you use USB devices (like keyboard or mouse) but do not load USB drivers");
+    &pci_usb_takeover, 1,
+    "Enable early takeover of USB controllers. Disable this if you depend on"
+    " BIOS emulation of USB devices, that is you use USB devices (like"
+    " keyboard or mouse) but do not load USB drivers");
 
 static int pci_clear_bars;
 SYSCTL_INT(_hw_pci, OID_AUTO, clear_bars, CTLFLAG_RDTUN, &pci_clear_bars, 0,
@@ -1371,7 +1375,7 @@ pci_find_htcap_method(device_t dev, device_t child, int capability, int *capreg)
 	 * Traverse the capabilities list checking each HT capability
 	 * to see if it matches the requested HT capability.
 	 */
-	while (ptr != 0) {
+	for (;;) {
 		val = pci_read_config(child, ptr + PCIR_HT_COMMAND, 2);
 		if (capability == PCIM_HTCAP_SLAVE ||
 		    capability == PCIM_HTCAP_HOST)
@@ -1385,13 +1389,51 @@ pci_find_htcap_method(device_t dev, device_t child, int capability, int *capreg)
 		}
 
 		/* Skip to the next HT capability. */
-		while (ptr != 0) {
-			ptr = pci_read_config(child, ptr + PCICAP_NEXTPTR, 1);
-			if (pci_read_config(child, ptr + PCICAP_ID, 1) ==
-			    PCIY_HT)
-				break;
+		if (pci_find_next_cap(child, PCIY_HT, ptr, &ptr) != 0)
+			break;
+	}
+
+	return (ENOENT);
+}
+
+/*
+ * Find the next requested HyperTransport capability after start and return
+ * the offset in configuration space via the pointer provided.  The function
+ * returns 0 on success and an error code otherwise.
+ */
+int
+pci_find_next_htcap_method(device_t dev, device_t child, int capability,
+    int start, int *capreg)
+{
+	int ptr;
+	uint16_t val;
+
+	KASSERT(pci_read_config(child, start + PCICAP_ID, 1) == PCIY_HT,
+	    ("start capability is not HyperTransport capability"));
+	ptr = start;
+
+	/*
+	 * Traverse the capabilities list checking each HT capability
+	 * to see if it matches the requested HT capability.
+	 */
+	for (;;) {
+		/* Skip to the next HT capability. */
+		if (pci_find_next_cap(child, PCIY_HT, ptr, &ptr) != 0)
+			break;
+
+		val = pci_read_config(child, ptr + PCIR_HT_COMMAND, 2);
+		if (capability == PCIM_HTCAP_SLAVE ||
+		    capability == PCIM_HTCAP_HOST)
+			val &= 0xe000;
+		else
+			val &= PCIM_HTCMD_CAP_MASK;
+		if (val == capability) {
+			if (capreg != NULL)
+				*capreg = ptr;
+			return (0);
 		}
 	}
+
 	return (ENOENT);
 }
 
@@ -1406,8 +1448,8 @@ pci_find_cap_method(device_t dev, device_t child, int capability,
 {
 	struct pci_devinfo *dinfo = device_get_ivars(child);
 	pcicfgregs *cfg = &dinfo->cfg;
-	u_int32_t status;
-	u_int8_t ptr;
+	uint32_t status;
+	uint8_t ptr;
 
 	/*
 	 * Check the CAP_LIST bit of the PCI status register first.
@@ -1436,6 +1478,33 @@ pci_find_cap_method(device_t dev, device_t child, int capability,
 	/*
 	 * Traverse the capabilities list.
 	 */
+	while (ptr != 0) {
+		if (pci_read_config(child, ptr + PCICAP_ID, 1) == capability) {
+			if (capreg != NULL)
+				*capreg = ptr;
+			return (0);
+		}
+		ptr = pci_read_config(child, ptr + PCICAP_NEXTPTR, 1);
+	}
+
+	return (ENOENT);
+}
+
+/*
+ * Find the next requested capability after start and return the offset in
+ * configuration space via the pointer provided.  The function returns
+ * 0 on success and an error code otherwise.
+ */
+int
+pci_find_next_cap_method(device_t dev, device_t child, int capability,
+    int start, int *capreg)
+{
+	uint8_t ptr;
+
+	KASSERT(pci_read_config(child, start + PCICAP_ID, 1) == capability,
+	    ("start capability is not expected capability"));
+
+	ptr = pci_read_config(child, start + PCICAP_NEXTPTR, 1);
 	while (ptr != 0) {
 		if (pci_read_config(child, ptr + PCICAP_ID, 1) == capability) {
 			if (capreg != NULL)
@@ -1480,6 +1549,41 @@ pci_find_extcap_method(device_t dev, device_t child, int capability,
 		if (ptr == 0)
 			break;
 		ecap = pci_read_config(child, ptr, 4);
+	}
+
+	return (ENOENT);
+}
+
+/*
+ * Find the next requested extended capability after start and return the
+ * offset in configuration space via the pointer provided.  The function
+ * returns 0 on success and an error code otherwise.
+ */
+int
+pci_find_next_extcap_method(device_t dev, device_t child, int capability,
+    int start, int *capreg)
+{
+	struct pci_devinfo *dinfo = device_get_ivars(child);
+	pcicfgregs *cfg = &dinfo->cfg;
+	uint32_t ecap;
+	uint16_t ptr;
+
+	/* Only supported for PCI-express devices. */
+	if (cfg->pcie.pcie_location == 0)
+		return (ENXIO);
+
+	ecap = pci_read_config(child, start, 4);
+	KASSERT(PCI_EXTCAP_ID(ecap) == capability,
+	    ("start extended capability is not expected capability"));
+	ptr = PCI_EXTCAP_NEXTPTR(ecap);
+	while (ptr != 0) {
+		ecap = pci_read_config(child, ptr, 4);
+		if (PCI_EXTCAP_ID(ecap) == capability) {
+			if (capreg != NULL)
+				*capreg = ptr;
+			return (0);
+		}
+		ptr = PCI_EXTCAP_NEXTPTR(ecap);
 	}
 
 	return (ENOENT);

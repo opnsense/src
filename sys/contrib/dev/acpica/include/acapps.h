@@ -188,6 +188,9 @@
     Prefix, ACPICA_COPYRIGHT, \
     Prefix
 
+#define ACPI_COMMON_BUILD_TIME \
+    "Build date/time: %s %s\n", __DATE__, __TIME__
+
 /* Macros for usage messages */
 
 #define ACPI_USAGE_HEADER(Usage) \
@@ -225,6 +228,10 @@ AcGetAllTablesFromFile (
     char                    *Filename,
     UINT8                   GetOnlyAmlTables,
     ACPI_NEW_TABLE_DESC     **ReturnListHead);
+
+void
+AcDeleteTableList (
+    ACPI_NEW_TABLE_DESC     *ListHead);
 
 BOOLEAN
 AcIsFileBinary (
@@ -294,7 +301,7 @@ AcpiDmFinishNamespaceLoad (
     ACPI_OWNER_ID           OwnerId);
 
 void
-AcpiDmConvertResourceIndexes (
+AcpiDmConvertParseObjects (
     ACPI_PARSE_OBJECT       *ParseTreeRoot,
     ACPI_NAMESPACE_NODE     *NamespaceRoot);
 

@@ -637,9 +637,7 @@ struct ip6_mtuinfo {
 #define	IPV6CTL_INTRQMAXLEN	51	/* max length of IPv6 netisr queue */
 #define	IPV6CTL_INTRDQMAXLEN	52	/* max length of direct IPv6 netisr
 					 * queue */
-#define	IPV6CTL_MAXFRAGSPERPACKET	53 /* Max fragments per packet */
-#define	IPV6CTL_MAXFRAGBUCKETSIZE	54 /* Max reassembly queues per bucket */
-#define	IPV6CTL_MAXID		55
+#define	IPV6CTL_MAXID		53
 #endif /* __BSD_VISIBLE */
 
 /*
@@ -655,7 +653,7 @@ struct ip6_mtuinfo {
 #define	M_LOOP			M_PROTO6
 #define	M_AUTHIPDGM		M_PROTO7
 #define	M_RTALERT_MLD		M_PROTO8
-#define	M_SKIP_PFIL		M_PROTO12	/* skip pfil processing */
+#define	M_FRAGMENTED		M_PROTO9	/* contained fragment header */
 
 #ifdef _KERNEL
 struct cmsghdr;

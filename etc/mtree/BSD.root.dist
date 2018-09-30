@@ -11,6 +11,8 @@
         defaults
         ..
         dtb
+            overlays              tags=package=runtime
+            ..
         ..
         firmware
         ..

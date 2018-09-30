@@ -52,7 +52,7 @@
 #define	LIO_WAIT		0x1
 
 /*
- * Maximum number of allowed LIO operations
+ * Maximum number of operations in a single lio_listio call
  */
 #define	AIO_LISTIO_MAX		16
 
@@ -252,7 +252,7 @@ int	aio_suspend(const struct aiocb * const[], int, const struct timespec *);
  */
 int	aio_mlock(struct aiocb *);
 
-#ifdef __BSD_VISIBLE
+#if __BSD_VISIBLE
 ssize_t	aio_waitcomplete(struct aiocb **, struct timespec *);
 #endif
 

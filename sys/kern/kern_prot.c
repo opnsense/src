@@ -47,7 +47,6 @@ __FBSDID("$FreeBSD$");
 #include "opt_compat.h"
 #include "opt_inet.h"
 #include "opt_inet6.h"
-#include "opt_pax.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -58,7 +57,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/loginclass.h>
 #include <sys/malloc.h>
 #include <sys/mutex.h>
-#include <sys/pax.h>
 #include <sys/refcount.h>
 #include <sys/sx.h>
 #include <sys/priv.h>
@@ -302,7 +300,7 @@ struct getgroups_args {
 };
 #endif
 int
-sys_getgroups(struct thread *td, register struct getgroups_args *uap)
+sys_getgroups(struct thread *td, struct getgroups_args *uap)
 {
 	struct ucred *cred;
 	u_int ngrp;
@@ -331,7 +329,7 @@ struct setsid_args {
 #endif
 /* ARGSUSED */
 int
-sys_setsid(register struct thread *td, struct setsid_args *uap)
+sys_setsid(struct thread *td, struct setsid_args *uap)
 {
 	struct pgrp *pgrp;
 	int error;
@@ -389,11 +387,11 @@ struct setpgid_args {
 #endif
 /* ARGSUSED */
 int
-sys_setpgid(struct thread *td, register struct setpgid_args *uap)
+sys_setpgid(struct thread *td, struct setpgid_args *uap)
 {
 	struct proc *curp = td->td_proc;
-	register struct proc *targp;	/* target process */
-	register struct pgrp *pgrp;	/* target pgrp */
+	struct proc *targp;	/* target process */
+	struct pgrp *pgrp;	/* target pgrp */
 	int error;
 	struct pgrp *newpgrp;
 
@@ -884,7 +882,7 @@ struct setreuid_args {
 #endif
 /* ARGSUSED */
 int
-sys_setreuid(register struct thread *td, struct setreuid_args *uap)
+sys_setreuid(struct thread *td, struct setreuid_args *uap)
 {
 	struct proc *p = td->td_proc;
 	struct ucred *newcred, *oldcred;
@@ -954,7 +952,7 @@ struct setregid_args {
 #endif
 /* ARGSUSED */
 int
-sys_setregid(register struct thread *td, struct setregid_args *uap)
+sys_setregid(struct thread *td, struct setregid_args *uap)
 {
 	struct proc *p = td->td_proc;
 	struct ucred *newcred, *oldcred;
@@ -1019,7 +1017,7 @@ struct setresuid_args {
 #endif
 /* ARGSUSED */
 int
-sys_setresuid(register struct thread *td, struct setresuid_args *uap)
+sys_setresuid(struct thread *td, struct setresuid_args *uap)
 {
 	struct proc *p = td->td_proc;
 	struct ucred *newcred, *oldcred;
@@ -1101,7 +1099,7 @@ struct setresgid_args {
 #endif
 /* ARGSUSED */
 int
-sys_setresgid(register struct thread *td, struct setresgid_args *uap)
+sys_setresgid(struct thread *td, struct setresgid_args *uap)
 {
 	struct proc *p = td->td_proc;
 	struct ucred *newcred, *oldcred;
@@ -1168,7 +1166,7 @@ struct getresuid_args {
 #endif
 /* ARGSUSED */
 int
-sys_getresuid(register struct thread *td, struct getresuid_args *uap)
+sys_getresuid(struct thread *td, struct getresuid_args *uap)
 {
 	struct ucred *cred;
 	int error1 = 0, error2 = 0, error3 = 0;
@@ -1195,7 +1193,7 @@ struct getresgid_args {
 #endif
 /* ARGSUSED */
 int
-sys_getresgid(register struct thread *td, struct getresgid_args *uap)
+sys_getresgid(struct thread *td, struct getresgid_args *uap)
 {
 	struct ucred *cred;
 	int error1 = 0, error2 = 0, error3 = 0;
@@ -1220,7 +1218,7 @@ struct issetugid_args {
 #endif
 /* ARGSUSED */
 int
-sys_issetugid(register struct thread *td, struct issetugid_args *uap)
+sys_issetugid(struct thread *td, struct issetugid_args *uap)
 {
 	struct proc *p = td->td_proc;
 
@@ -1329,11 +1327,7 @@ securelevel_ge(struct ucred *cr, int level)
  * using a variety of system MIBs.
  * XXX: data declarations should be together near the beginning of the file.
  */
-#ifdef PAX_HARDENING
-static int	see_other_uids = 0;
-#else
 static int	see_other_uids = 1;
-#endif
 SYSCTL_INT(_security_bsd, OID_AUTO, see_other_uids, CTLFLAG_RW,
     &see_other_uids, 0,
     "Unprivileged processes may see subjects/objects with different real uid");
@@ -1363,11 +1357,7 @@ cr_seeotheruids(struct ucred *u1, struct ucred *u2)
  * using a variety of system MIBs.
  * XXX: data declarations should be together near the beginning of the file.
  */
-#ifdef PAX_HARDENING
-static int	see_other_gids = 0;
-#else
 static int	see_other_gids = 1;
-#endif
 SYSCTL_INT(_security_bsd, OID_AUTO, see_other_gids, CTLFLAG_RW,
     &see_other_gids, 0,
     "Unprivileged processes may see subjects/objects with different real gid");
@@ -1621,11 +1611,7 @@ p_cansched(struct thread *td, struct proc *p)
  * XXX: Should modifying and reading this variable require locking?
  * XXX: data declarations should be together near the beginning of the file.
  */
-#ifdef PAX_HARDENING
-static int	unprivileged_proc_debug = 0;
-#else
 static int	unprivileged_proc_debug = 1;
-#endif
 SYSCTL_INT(_security_bsd, OID_AUTO, unprivileged_proc_debug, CTLFLAG_RW,
     &unprivileged_proc_debug, 0,
     "Unprivileged processes may use process debugging facilities");
@@ -1825,7 +1811,7 @@ p_canwait(struct thread *td, struct proc *p)
 struct ucred *
 crget(void)
 {
-	register struct ucred *cr;
+	struct ucred *cr;
 
 	cr = malloc(sizeof(*cr), M_CRED, M_WAITOK | M_ZERO);
 	refcount_init(&cr->cr_ref, 1);

@@ -81,14 +81,18 @@ cloudabi32_proc_setregs(struct thread *td, struct image_params *imgp,
 {
 
 	exec_setregs(td, imgp, stack);
-	(void)cpu_set_user_tls(td, (void *)stack);
+	(void)cpu_set_user_tls(td, TO_PTR(stack));
 }
 
 static int
-cloudabi32_fetch_syscall_args(struct thread *td, struct syscall_args *sa)
+cloudabi32_fetch_syscall_args(struct thread *td)
 {
-	struct trapframe *frame = td->td_frame;
+	struct trapframe *frame;
+	struct syscall_args *sa;
 	int error;
+
+	frame = td->td_frame;
+	sa = &td->td_sa;
 
 	/* Obtain system call number. */
 	sa->code = frame->tf_eax;

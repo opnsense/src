@@ -24,12 +24,12 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "WebAssembly.h"
 #include "MCTargetDesc/WebAssemblyMCTargetDesc.h"
+#include "WebAssembly.h"
 #include "WebAssemblyMachineFunctionInfo.h"
 #include "WebAssemblySubtarget.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
-#include "llvm/CodeGen/LiveIntervalAnalysis.h"
+#include "llvm/CodeGen/LiveIntervals.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
@@ -154,7 +154,7 @@ static bool optimizeCall(MachineBasicBlock &MBB, MachineInstr &MI,
   if (!callReturnsInput)
     return false;
 
-  LibFunc::Func Func;
+  LibFunc Func;
   if (!LibInfo.getLibFunc(Name, Func))
     return false;
 

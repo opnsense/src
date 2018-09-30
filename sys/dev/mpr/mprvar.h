@@ -33,11 +33,12 @@
 #ifndef _MPRVAR_H
 #define _MPRVAR_H
 
-#define MPR_DRIVER_VERSION	"15.03.00.00-fbsd"
+#define MPR_DRIVER_VERSION	"18.03.00.00-fbsd"
 
 #define MPR_DB_MAX_WAIT		2500
 
 #define MPR_REQ_FRAMES		1024
+#define MPR_PRI_REQ_FRAMES	128
 #define MPR_EVT_REPLY_FRAMES	32
 #define MPR_REPLY_FRAMES	MPR_REQ_FRAMES
 #define MPR_CHAIN_FRAMES	2048
@@ -275,9 +276,11 @@ struct mpr_softc {
 #define MPR_FLAGS_DIAGRESET	(1 << 4)
 #define	MPR_FLAGS_ATTACH_DONE	(1 << 5)
 #define	MPR_FLAGS_GEN35_IOC	(1 << 6)
+#define	MPR_FLAGS_REALLOCATED	(1 << 7)
 	u_int				mpr_debug;
 	u_int				disable_msix;
 	u_int				disable_msi;
+	int				msi_msgs;
 	u_int				atomic_desc_capable;
 	int				tm_cmds_active;
 	int				io_cmds_active;
@@ -326,6 +329,7 @@ struct mpr_softc {
 
 	MPI2_IOC_FACTS_REPLY		*facts;
 	int				num_reqs;
+	int				num_prireqs;
 	int				num_replies;
 	int				fqdepth;	/* Free queue */
 	int				pqdepth;	/* Post queue */
@@ -702,6 +706,7 @@ mpr_unmask_intr(struct mpr_softc *sc)
 int mpr_pci_setup_interrupts(struct mpr_softc *sc);
 int mpr_pci_restore(struct mpr_softc *sc);
 
+void mpr_get_tunables(struct mpr_softc *sc);
 int mpr_attach(struct mpr_softc *sc);
 int mpr_free(struct mpr_softc *sc);
 void mpr_intr(void *);
@@ -730,9 +735,9 @@ void mprsas_record_event(struct mpr_softc *sc,
     MPI2_EVENT_NOTIFICATION_REPLY *event_reply);
 
 int mpr_map_command(struct mpr_softc *sc, struct mpr_command *cm);
-int mpr_wait_command(struct mpr_softc *sc, struct mpr_command *cm, int timeout,
+int mpr_wait_command(struct mpr_softc *sc, struct mpr_command **cm, int timeout,
     int sleep_flag);
-int mpr_request_polled(struct mpr_softc *sc, struct mpr_command *cm);
+int mpr_request_polled(struct mpr_softc *sc, struct mpr_command **cm);
 
 int mpr_config_get_bios_pg3(struct mpr_softc *sc, Mpi2ConfigReply_t
     *mpi_reply, Mpi2BiosPage3_t *config_page);

@@ -19,6 +19,7 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/CodeGen/SelectionDAGISel.h"
+#include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -27,7 +28,6 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetLowering.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "msp430-isel"
@@ -61,7 +61,8 @@ namespace {
       return GV != nullptr || CP != nullptr || ES != nullptr || JT != -1;
     }
 
-    void dump() {
+#if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
+    LLVM_DUMP_METHOD void dump() {
       errs() << "MSP430ISelAddressMode " << this << '\n';
       if (BaseType == RegBase && Base.Reg.getNode() != nullptr) {
         errs() << "Base.Reg ";
@@ -83,6 +84,7 @@ namespace {
       } else if (JT != -1)
         errs() << " JT" << JT << " Align" << Align << '\n';
     }
+#endif
   };
 }
 
@@ -401,12 +403,12 @@ void MSP430DAGToDAGISel::Select(SDNode *Node) {
     int FI = cast<FrameIndexSDNode>(Node)->getIndex();
     SDValue TFI = CurDAG->getTargetFrameIndex(FI, MVT::i16);
     if (Node->hasOneUse()) {
-      CurDAG->SelectNodeTo(Node, MSP430::ADD16ri, MVT::i16, TFI,
+      CurDAG->SelectNodeTo(Node, MSP430::ADDframe, MVT::i16, TFI,
                            CurDAG->getTargetConstant(0, dl, MVT::i16));
       return;
     }
     ReplaceNode(Node, CurDAG->getMachineNode(
-                          MSP430::ADD16ri, dl, MVT::i16, TFI,
+                          MSP430::ADDframe, dl, MVT::i16, TFI,
                           CurDAG->getTargetConstant(0, dl, MVT::i16)));
     return;
   }

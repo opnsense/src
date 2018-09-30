@@ -162,27 +162,29 @@
 
 /* Op flags for the ACPI_PARSE_OBJECT */
 
-#define NODE_VISITED                0x00000001
-#define NODE_AML_PACKAGE            0x00000002
-#define NODE_IS_TARGET              0x00000004
-#define NODE_IS_RESOURCE_DESC       0x00000008
-#define NODE_IS_RESOURCE_FIELD      0x00000010
-#define NODE_HAS_NO_EXIT            0x00000020
-#define NODE_IF_HAS_NO_EXIT         0x00000040
-#define NODE_NAME_INTERNALIZED      0x00000080
-#define NODE_METHOD_NO_RETVAL       0x00000100
-#define NODE_METHOD_SOME_NO_RETVAL  0x00000200
-#define NODE_RESULT_NOT_USED        0x00000400
-#define NODE_METHOD_TYPED           0x00000800
-#define NODE_COULD_NOT_REDUCE       0x00001000
-#define NODE_COMPILE_TIME_CONST     0x00002000
-#define NODE_IS_TERM_ARG            0x00004000
-#define NODE_WAS_ONES_OP            0x00008000
-#define NODE_IS_NAME_DECLARATION    0x00010000
-#define NODE_COMPILER_EMITTED       0x00020000
-#define NODE_IS_DUPLICATE           0x00040000
-#define NODE_IS_RESOURCE_DATA       0x00080000
-#define NODE_IS_NULL_RETURN         0x00100000
+#define OP_VISITED                  0x00000001
+#define OP_AML_PACKAGE              0x00000002
+#define OP_IS_TARGET                0x00000004
+#define OP_IS_RESOURCE_DESC         0x00000008
+#define OP_IS_RESOURCE_FIELD        0x00000010
+#define OP_HAS_NO_EXIT              0x00000020
+#define OP_IF_HAS_NO_EXIT           0x00000040
+#define OP_NAME_INTERNALIZED        0x00000080
+#define OP_METHOD_NO_RETVAL         0x00000100
+#define OP_METHOD_SOME_NO_RETVAL    0x00000200
+#define OP_RESULT_NOT_USED          0x00000400
+#define OP_METHOD_TYPED             0x00000800
+#define OP_COULD_NOT_REDUCE         0x00001000
+#define OP_COMPILE_TIME_CONST       0x00002000
+#define OP_IS_TERM_ARG              0x00004000
+#define OP_WAS_ONES_OP              0x00008000
+#define OP_IS_NAME_DECLARATION      0x00010000
+#define OP_COMPILER_EMITTED         0x00020000
+#define OP_IS_DUPLICATE             0x00040000
+#define OP_IS_RESOURCE_DATA         0x00080000
+#define OP_IS_NULL_RETURN           0x00100000
+
+#define ACPI_NUM_OP_FLAGS           0x21
 
 /* Keeps information about individual control methods */
 
@@ -200,6 +202,7 @@ typedef struct asl_method_info
     UINT8                   ArgInitialized[ACPI_METHOD_NUM_ARGS];
     UINT8                   HasBeenTyped;
     UINT8                   ShouldBeSerialized;
+    UINT8                   CreatesNamedObjects;
 
 } ASL_METHOD_INFO;
 
@@ -335,8 +338,11 @@ typedef struct asl_include_dir
 } ASL_INCLUDE_DIR;
 
 
-/* An entry in the exception list, one for each error/warning */
-
+/*
+ * An entry in the exception list, one for each error/warning
+ * Note: SubError nodes would be treated with the same messageId and Level
+ * as the parent error node.
+ */
 typedef struct asl_error_msg
 {
     UINT32                      LineNumber;
@@ -345,6 +351,7 @@ typedef struct asl_error_msg
     UINT32                      Column;
     char                        *Message;
     struct asl_error_msg        *Next;
+    struct asl_error_msg        *SubError;
     char                        *Filename;
     char                        *SourceLine;
     UINT32                      FilenameLength;
@@ -352,6 +359,15 @@ typedef struct asl_error_msg
     UINT8                       Level;
 
 } ASL_ERROR_MSG;
+
+/* An entry in the expected messages array */
+typedef struct asl_expected_message
+{
+    UINT32                       MessageId;
+    char                         *MessageIdStr;
+    BOOLEAN                      MessageReceived;
+
+} ASL_EXPECTED_MESSAGE;
 
 
 /* An entry in the listing file stack (for include files) */

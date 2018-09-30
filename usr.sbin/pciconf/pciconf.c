@@ -700,6 +700,9 @@ static struct
 	{PCIC_DASP,		PCIS_DASP_PERFCNTRS,	"performance counters"},
 	{PCIC_DASP,		PCIS_DASP_COMM_SYNC,	"communication synchronizer"},
 	{PCIC_DASP,		PCIS_DASP_MGMT_CARD,	"signal processing management"},
+	{PCIC_ACCEL,		-1,			"processing accelerators"},
+	{PCIC_ACCEL,		PCIS_ACCEL_PROCESSING,	"processing accelerators"},
+	{PCIC_INSTRUMENT,	-1,			"non-essential instrumentation"},
 	{0, 0,		NULL}
 };
 
@@ -1001,6 +1004,7 @@ writeit(const char *name, const char *reg, const char *data, int width)
 
 	if (ioctl(fd, PCIOCWRITE, &pi) < 0)
 		err(1, "ioctl(PCIOCWRITE)");
+	close(fd);
 }
 
 static void
@@ -1020,4 +1024,5 @@ chkattached(const char *name)
 
 	exitstatus = pi.pi_data ? 0 : 2; /* exit(2), if NOT attached */
 	printf("%s: %s%s\n", name, pi.pi_data == 0 ? "not " : "", "attached");
+	close(fd);
 }

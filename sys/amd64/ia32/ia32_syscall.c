@@ -106,16 +106,47 @@ ia32_set_syscall_retval(struct thread *td, int error)
 }
 
 int
-ia32_fetch_syscall_args(struct thread *td, struct syscall_args *sa)
+ia32_fetch_syscall_args(struct thread *td)
 {
 	struct proc *p;
 	struct trapframe *frame;
+	struct syscall_args *sa;
 	caddr_t params;
 	u_int32_t args[8], tmp;
 	int error, i;
+#ifdef COMPAT_43
+	u_int32_t eip;
+	int cs;
+#endif
 
 	p = td->td_proc;
 	frame = td->td_frame;
+	sa = &td->td_sa;
+
+#ifdef COMPAT_43
+	if (__predict_false(frame->tf_cs == 7 && frame->tf_rip == 2)) {
+		/*
+		 * In lcall $7,$0 after int $0x80.  Convert the user
+		 * frame to what it would be for a direct int 0x80 instead
+		 * of lcall $7,$0, by popping the lcall return address.
+		 */
+		error = fueword32((void *)frame->tf_rsp, &eip);
+		if (error == -1)
+			return (EFAULT);
+		cs = fuword16((void *)(frame->tf_rsp + sizeof(u_int32_t)));
+		if (cs == -1)
+			return (EFAULT);
+
+		/*
+		 * Unwind in-kernel frame after all stack frame pieces
+		 * were successfully read.
+		 */
+		frame->tf_rip = eip;
+		frame->tf_cs = cs;
+		frame->tf_rsp += 2 * sizeof(u_int32_t);
+		frame->tf_err = 7;		/* size of lcall $7,$0 */
+	}
+#endif
 
 	params = (caddr_t)frame->tf_rsp + sizeof(u_int32_t);
 	sa->code = frame->tf_rax;
@@ -176,7 +207,6 @@ void
 ia32_syscall(struct trapframe *frame)
 {
 	struct thread *td;
-	struct syscall_args sa;
 	register_t orig_tf_rflags;
 	int error;
 	ksiginfo_t ksi;
@@ -185,7 +215,7 @@ ia32_syscall(struct trapframe *frame)
 	td = curthread;
 	td->td_frame = frame;
 
-	error = syscallenter(td, &sa);
+	error = syscallenter(td);
 
 	/*
 	 * Traced syscall.
@@ -199,7 +229,7 @@ ia32_syscall(struct trapframe *frame)
 		trapsignal(td, &ksi);
 	}
 
-	syscallret(td, error, &sa);
+	syscallret(td, error);
 }
 
 static void
@@ -233,7 +263,7 @@ setup_lcall_gate(void)
 	bzero(&uap, sizeof(uap));
 	uap.start = 0;
 	uap.num = 1;
-	lcall_addr = curproc->p_psstrings - sz_lcall_tramp;
+	lcall_addr = curproc->p_sysent->sv_psstrings - sz_lcall_tramp;
 	bzero(&desc, sizeof(desc));
 	desc.sd_type = SDT_MEMERA;
 	desc.sd_dpl = SEL_UPL;

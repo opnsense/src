@@ -14,15 +14,12 @@
 #include <stdint.h>
 
 // C++ Includes
-#include <functional>
 #include <vector>
 
-// Other libraries and framework includes
-// Project includes
-#include "lldb/Core/ArchSpec.h"
-#include "lldb/Core/UUID.h"
-#include "lldb/Host/FileSpec.h"
 #include "lldb/Symbol/ObjectFile.h"
+#include "lldb/Utility/ArchSpec.h"
+#include "lldb/Utility/FileSpec.h"
+#include "lldb/Utility/UUID.h"
 #include "lldb/lldb-private.h"
 
 #include "ELFHeader.h"
@@ -143,6 +140,13 @@ public:
 
   ObjectFile::Strata CalculateStrata() override;
 
+  size_t ReadSectionData(lldb_private::Section *section,
+                         lldb::offset_t section_offset, void *dst,
+                         size_t dst_len) override;
+
+  size_t ReadSectionData(lldb_private::Section *section,
+                         lldb_private::DataExtractor &section_data) override;
+
   // Returns number of program headers found in the ELF file.
   size_t GetProgramHeaderCount();
 
@@ -152,8 +156,10 @@ public:
   // Returns segment data for the given index.
   lldb_private::DataExtractor GetSegmentDataByIndex(lldb::user_id_t id);
 
-  std::string
+  llvm::StringRef
   StripLinkerSymbolAnnotations(llvm::StringRef symbol_name) const override;
+
+  void RelocateSection(lldb_private::Section *section) override;
 
 private:
   ObjectFileELF(const lldb::ModuleSP &module_sp, lldb::DataBufferSP &data_sp,
@@ -182,9 +188,6 @@ private:
 
   typedef std::map<lldb::addr_t, lldb::AddressClass>
       FileAddressToAddressClassMap;
-  typedef std::function<lldb::offset_t(lldb_private::DataExtractor &,
-                                       lldb::offset_t, lldb::offset_t)>
-      SetDataFunction;
 
   /// Version of this reader common to all plugins based on this class.
   static const uint32_t m_plugin_version = 1;
@@ -230,7 +233,7 @@ private:
 
   // Parses the ELF program headers.
   static size_t GetProgramHeaderInfo(ProgramHeaderColl &program_headers,
-                                     const SetDataFunction &set_data,
+                                     lldb_private::DataExtractor &object_data,
                                      const elf::ELFHeader &header);
 
   // Finds PT_NOTE segments and calculates their crc sum.
@@ -255,7 +258,7 @@ private:
   /// Parses the elf section headers and returns the uuid, debug link name, crc,
   /// archspec.
   static size_t GetSectionHeaderInfo(SectionHeaderColl &section_headers,
-                                     const SetDataFunction &set_data,
+                                     lldb_private::DataExtractor &object_data,
                                      const elf::ELFHeader &header,
                                      lldb_private::UUID &uuid,
                                      std::string &gnu_debuglink_file,
@@ -300,17 +303,18 @@ private:
 
   /// Relocates debug sections
   unsigned RelocateDebugSections(const elf::ELFSectionHeader *rel_hdr,
-                                 lldb::user_id_t rel_id);
+                                 lldb::user_id_t rel_id,
+                                 lldb_private::Symtab *thetab);
 
-  unsigned RelocateSection(lldb_private::Symtab *symtab,
-                           const elf::ELFHeader *hdr,
-                           const elf::ELFSectionHeader *rel_hdr,
-                           const elf::ELFSectionHeader *symtab_hdr,
-                           const elf::ELFSectionHeader *debug_hdr,
-                           lldb_private::DataExtractor &rel_data,
-                           lldb_private::DataExtractor &symtab_data,
-                           lldb_private::DataExtractor &debug_data,
-                           lldb_private::Section *rel_section);
+  unsigned ApplyRelocations(lldb_private::Symtab *symtab,
+                            const elf::ELFHeader *hdr,
+                            const elf::ELFSectionHeader *rel_hdr,
+                            const elf::ELFSectionHeader *symtab_hdr,
+                            const elf::ELFSectionHeader *debug_hdr,
+                            lldb_private::DataExtractor &rel_data,
+                            lldb_private::DataExtractor &symtab_data,
+                            lldb_private::DataExtractor &debug_data,
+                            lldb_private::Section *rel_section);
 
   /// Loads the section name string table into m_shstr_data.  Returns the
   /// number of bytes constituting the table.
@@ -375,18 +379,10 @@ private:
 
   unsigned PLTRelocationType();
 
-  static lldb_private::Error
+  static lldb_private::Status
   RefineModuleDetailsFromNote(lldb_private::DataExtractor &data,
                               lldb_private::ArchSpec &arch_spec,
                               lldb_private::UUID &uuid);
-
-  static lldb::offset_t SetData(const lldb_private::DataExtractor &src,
-                                lldb_private::DataExtractor &dst,
-                                lldb::offset_t offset, lldb::offset_t length);
-
-  lldb::offset_t SetDataWithReadMemoryFallback(lldb_private::DataExtractor &dst,
-                                               lldb::offset_t offset,
-                                               lldb::offset_t length);
 };
 
 #endif // liblldb_ObjectFileELF_h_

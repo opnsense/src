@@ -165,6 +165,7 @@ MAC_STUB	opt_dontuse.h
 MAC_TEST	opt_dontuse.h
 MD_ROOT		opt_md.h
 MD_ROOT_FSTYPE	opt_md.h
+MD_ROOT_READONLY	opt_md.h
 MD_ROOT_SIZE	opt_md.h
 MFI_DEBUG	opt_mfi.h
 MFI_DECODE_LOG	opt_mfi.h
@@ -175,6 +176,7 @@ NO_ADAPTIVE_MUTEXES	opt_adaptive_mutexes.h
 NO_ADAPTIVE_RWLOCKS
 NO_ADAPTIVE_SX
 NO_EVENTTIMERS		opt_timer.h
+NO_OBSOLETE_CODE	opt_global.h
 NO_SYSCTL_DESCR	opt_global.h
 NSWBUF_MIN	opt_swap.h
 MBUF_PACKET_ZONE_DISABLE	opt_global.h
@@ -460,7 +462,6 @@ FLOWTABLE_HASH_ALL	opt_route.h
 #
 SCTP			opt_sctp.h
 SCTP_DEBUG		opt_sctp.h # Enable debug printfs
-SCTP_WITH_NO_CSUM	opt_sctp.h # Use this at your peril
 SCTP_LOCK_LOGGING	opt_sctp.h # Log to KTR lock activity
 SCTP_MBUF_LOGGING	opt_sctp.h # Log to KTR general mbuf aloc/free
 SCTP_MBCNT_LOGGING	opt_sctp.h # Log to KTR mbcnt activity
@@ -969,26 +970,6 @@ RACCT_DEFAULT_TO_DISABLED	opt_global.h
 # Resource Limits
 RCTL		opt_global.h
 
-# PaX-inspired hardening features
-PAX		opt_pax.h
-PAX_ASLR	opt_pax.h
-PAX_SYSCTLS	opt_pax.h
-PAX_SEGVGUARD	opt_pax.h
-PAX_HARDENING	opt_pax.h
-PAX_INSECURE_MODE	opt_pax.h
-HBSD_DEBUG	opt_pax.h
-STACK_GUARD_MAX_PAGES	opt_pax.h
-
-# ASLR overwritable defaults
-PAX_ASLR_DELTA_MMAP_DEF_LEN			opt_pax.h
-PAX_ASLR_DELTA_STACK_DEF_LEN			opt_pax.h
-PAX_ASLR_DELTA_VDSO_DEF_LEN			opt_pax.h
-PAX_ASLR_DELTA_EXEC_DEF_LEN			opt_pax.h
-PAX_ASLR_COMPAT_DELTA_MMAP_DEF_LEN		opt_pax.h
-PAX_ASLR_COMPAT_DELTA_STACK_DEF_LEN		opt_pax.h
-PAX_ASLR_COMPAT_DELTA_VDSO_DEF_LEN		opt_pax.h
-PAX_ASLR_COMPAT_DELTA_EXEC_DEF_LEN		opt_pax.h
-
 # Random number generator(s)
 # Which CSPRNG hash we get.
 # If Yarrow is not chosen, Fortuna is selected.
@@ -1020,3 +1001,6 @@ UINPUT_DEBUG	opt_evdev.h
 
 # Hyper-V network driver
 HN_DEBUG	opt_hn.h
+
+# NVME options
+NVME_USE_NVD	opt_nvme.h

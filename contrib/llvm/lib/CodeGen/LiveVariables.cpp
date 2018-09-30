@@ -37,7 +37,6 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetInstrInfo.h"
 #include <algorithm>
 using namespace llvm;
 
@@ -64,8 +63,8 @@ LiveVariables::VarInfo::findKill(const MachineBasicBlock *MBB) const {
   return nullptr;
 }
 
-LLVM_DUMP_METHOD void LiveVariables::VarInfo::dump() const {
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
+LLVM_DUMP_METHOD void LiveVariables::VarInfo::dump() const {
   dbgs() << "  Alive in blocks: ";
   for (SparseBitVector<>::iterator I = AliveBlocks.begin(),
            E = AliveBlocks.end(); I != E; ++I)
@@ -78,8 +77,8 @@ LLVM_DUMP_METHOD void LiveVariables::VarInfo::dump() const {
       dbgs() << "\n    #" << i << ": " << *Kills[i];
     dbgs() << "\n";
   }
-#endif
 }
+#endif
 
 /// getVarInfo - Get (possibly creating) a VarInfo object for the given vreg.
 LiveVariables::VarInfo &LiveVariables::getVarInfo(unsigned RegIdx) {
@@ -235,7 +234,7 @@ void LiveVariables::HandlePhysRegUse(unsigned Reg, MachineInstr &MI) {
     // Otherwise, the last sub-register def implicitly defines this register.
     // e.g.
     // AH =
-    // AL = ... <imp-def EAX>, <imp-kill AH>
+    // AL = ... implicit-def EAX, implicit killed AH
     //    = AH
     // ...
     //    = EAX
@@ -321,17 +320,17 @@ bool LiveVariables::HandlePhysRegKill(unsigned Reg, MachineInstr *MI) {
   // AH =
   //
   //    = AX
-  //    = AL, AX<imp-use, kill>
+  //    = AL, implicit killed AX
   // AX =
   //
   // Or whole register is defined, but not used at all.
-  // AX<dead> =
+  // dead AX =
   // ...
   // AX =
   //
   // Or whole register is defined, but only partly used.
-  // AX<dead> = AL<imp-def>
-  //    = AL<kill>
+  // dead AX = implicit-def AL
+  //    = killed AL
   // AX =
   MachineInstr *LastPartDef = nullptr;
   unsigned LastPartDefDist = 0;
@@ -364,7 +363,7 @@ bool LiveVariables::HandlePhysRegKill(unsigned Reg, MachineInstr *MI) {
   if (!PhysRegUse[Reg]) {
     // Partial uses. Mark register def dead and add implicit def of
     // sub-registers which are used.
-    // EAX<dead>  = op  AL<imp-def>
+    // dead EAX  = op  implicit-def AL
     // That is, EAX def is dead but AL def extends pass it.
     PhysRegDef[Reg]->addRegisterDead(Reg, TRI, true);
     for (MCSubRegIterator SubRegs(Reg, TRI); SubRegs.isValid(); ++SubRegs) {
@@ -767,7 +766,7 @@ void LiveVariables::addNewBlock(MachineBasicBlock *BB,
                                 MachineBasicBlock *SuccBB) {
   const unsigned NumNew = BB->getNumber();
 
-  SmallSet<unsigned, 16> Defs, Kills;
+  DenseSet<unsigned> Defs, Kills;
 
   MachineBasicBlock::iterator BBI = SuccBB->begin(), BBE = SuccBB->end();
   for (; BBI != BBE && BBI->isPHI(); ++BBI) {

@@ -46,6 +46,7 @@ MAN=	aac.4 \
 	amdpm.4 \
 	${_amdsbwd.4} \
 	${_amdsmb.4} \
+	${_amdsmn.4} \
 	${_amdtemp.4} \
 	${_bxe.4} \
 	amr.4 \
@@ -53,7 +54,6 @@ MAN=	aac.4 \
 	${_aout.4} \
 	${_apic.4} \
 	arcmsr.4 \
-	aslr.4 \
 	${_asmc.4} \
 	ata.4 \
 	ath.4 \
@@ -87,6 +87,7 @@ MAN=	aac.4 \
 	bwi.4 \
 	bwn.4 \
 	${_bytgpio.4} \
+	${_chvgpio.4} \
 	capsicum.4 \
 	cardbus.4 \
 	carp.4 \
@@ -160,6 +161,7 @@ MAN=	aac.4 \
 	fd.4 \
 	fdc.4 \
 	fdt.4 \
+	fdt_pinctrl.4 \
 	fdtbus.4 \
 	ffclock.4 \
 	filemon.4 \
@@ -215,6 +217,7 @@ MAN=	aac.4 \
 	iicbus.4 \
 	iicsmb.4 \
 	iir.4 \
+	${_imcsmb.4} \
 	inet.4 \
 	inet6.4 \
 	intpm.4 \
@@ -245,6 +248,7 @@ MAN=	aac.4 \
 	ixgbe.4 \
 	ixl.4 \
 	ixlv.4 \
+	jedec_dimm.4 \
 	jedec_ts.4 \
 	jme.4 \
 	joy.4 \
@@ -259,6 +263,7 @@ MAN=	aac.4 \
 	led.4 \
 	lge.4 \
 	${_linux.4} \
+	${_liquidio.4} \
 	lm75.4 \
 	lmc.4 \
 	lo.4 \
@@ -384,7 +389,9 @@ MAN=	aac.4 \
 	ng_vlan.4 \
 	nmdm.4 \
 	nsp.4 \
-	${_ntb_hw.4} \
+	${_ntb.4} \
+	${_ntb_hw_intel.4} \
+	${_ntb_hw_plx.4} \
 	${_ntb_transport.4} \
 	${_if_ntb.4} \
 	null.4 \
@@ -395,6 +402,7 @@ MAN=	aac.4 \
 	${_nvram2env.4} \
 	${_nxge.4} \
 	oce.4 \
+	ocs_fc.4\
 	ohci.4 \
 	orm.4 \
 	ow.4 \
@@ -475,6 +483,7 @@ MAN=	aac.4 \
 	sio.4 \
 	sis.4 \
 	sk.4 \
+	${_smartpqi.4} \
 	smb.4 \
 	smbus.4 \
 	smp.4 \
@@ -579,6 +588,7 @@ MAN=	aac.4 \
 	wlan_tkip.4 \
 	wlan_wep.4 \
 	wlan_xauth.4 \
+	wmt.4 \
 	${_wpi.4} \
 	wsp.4 \
 	xe.4 \
@@ -615,7 +625,8 @@ MLINKS+=${_bxe.4} ${_if_bxe.4}
 MLINKS+=cas.4 if_cas.4
 MLINKS+=cdce.4 if_cdce.4
 MLINKS+=cfi.4 cfid.4
-MLINKS+=cloudabi.4 cloudabi64.4
+MLINKS+=cloudabi.4 cloudabi32.4 \
+	cloudabi.4 cloudabi64.4
 MLINKS+=crypto.4 cryptodev.4
 MLINKS+=cue.4 if_cue.4
 MLINKS+=cxgb.4 if_cxgb.4
@@ -708,7 +719,6 @@ MLINKS+=netintro.4 net.4 \
 	netintro.4 networking.4
 MLINKS+=${_nfe.4} ${_if_nfe.4}
 MLINKS+=nge.4 if_nge.4
-MLINKS+=${_ntb_hw.4} ${_ntb.4}
 MLINKS+=${_nxge.4} ${_if_nxge.4}
 MLINKS+=ow.4 onewire.4
 MLINKS+=patm.4 if_patm.4
@@ -789,10 +799,12 @@ _attimer.4=	attimer.4
 _aibs.4=	aibs.4
 _amdsbwd.4=	amdsbwd.4
 _amdsmb.4=	amdsmb.4
+_amdsmn.4=	amdsmn.4
 _amdtemp.4=	amdtemp.4
 _asmc.4=	asmc.4
 _bxe.4=		bxe.4
 _bytgpio.4=	bytgpio.4
+_chvgpio.4=	chvgpio.4
 _coretemp.4=	coretemp.4
 _cpuctl.4=	cpuctl.4
 _dpms.4=	dpms.4
@@ -817,9 +829,11 @@ _if_vmx.4=	if_vmx.4
 _if_vtnet.4=	if_vtnet.4
 _if_vxge.4=	if_vxge.4
 _if_wpi.4=	if_wpi.4
+_imcsmb.4=	imcsmb.4
 _ipmi.4=	ipmi.4
 _io.4=		io.4
 _linux.4=	linux.4
+_liquidio.4=	liquidio.4
 _ndis.4=	ndis.4
 _nfe.4=		nfe.4
 _nfsmb.4=	nfsmb.4
@@ -854,13 +868,15 @@ _xnb.4=		xnb.4
 _if_ntb.4=	if_ntb.4
 _ioat.4=	ioat.4
 _ntb.4=		ntb.4
-_ntb_hw.4=	ntb_hw.4
+_ntb_hw_intel.4=	ntb_hw_intel.4
+_ntb_hw_plx.4=	ntb_hw_plx.4
 _ntb_transport.4=ntb_transport.4
 _qlxge.4=	qlxge.4
 _qlxgb.4=	qlxgb.4
 _qlxgbe.4=	qlxgbe.4
 _qlnxe.4=	qlnxe.4
 _sfxge.4=	sfxge.4
+_smartpqi.4=	smartpqi.4
 
 MLINKS+=qlxge.4 if_qlxge.4
 MLINKS+=qlxgb.4 if_qlxgb.4
@@ -907,6 +923,11 @@ MAN+=		iser.4
 
 .if ${MK_OFED} != "no"
 MAN+=		mlx4ib.4
+MAN+=		mlx5ib.4
+.endif
+
+.if ${MK_MLX5TOOL} != "no"
+MAN+=		mlx5io.4
 .endif
 
 .if ${MK_TESTS} != "no"

@@ -7,29 +7,39 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "lldb/Core/DataExtractor.h"
-#include "lldb/Core/Log.h"
 #include "lldb/Target/RegisterContext.h"
 #include "lldb/Target/StopInfo.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Target/Unwind.h"
+#include "lldb/Utility/DataExtractor.h"
+#include "lldb/Utility/Log.h"
 
-#include "Plugins/Process/Utility/RegisterContextFreeBSD_arm.h"
 #include "Plugins/Process/Utility/RegisterContextFreeBSD_i386.h"
 #include "Plugins/Process/Utility/RegisterContextFreeBSD_mips64.h"
 #include "Plugins/Process/Utility/RegisterContextFreeBSD_powerpc.h"
 #include "Plugins/Process/Utility/RegisterContextFreeBSD_x86_64.h"
-#include "Plugins/Process/Utility/RegisterContextLinux_arm.h"
 #include "Plugins/Process/Utility/RegisterContextLinux_i386.h"
-//#include "Plugins/Process/Utility/RegisterContextLinux_s390x.h"
+#include "Plugins/Process/Utility/RegisterContextLinux_mips.h"
+#include "Plugins/Process/Utility/RegisterContextLinux_mips64.h"
+#ifdef LLDB_ENABLE_ALL
+#include "Plugins/Process/Utility/RegisterContextLinux_s390x.h"
+#endif // LLDB_ENABLE_ALL
 #include "Plugins/Process/Utility/RegisterContextLinux_x86_64.h"
+#include "Plugins/Process/Utility/RegisterContextNetBSD_x86_64.h"
+#include "Plugins/Process/Utility/RegisterContextOpenBSD_i386.h"
+#include "Plugins/Process/Utility/RegisterContextOpenBSD_x86_64.h"
+#include "Plugins/Process/Utility/RegisterInfoPOSIX_arm.h"
 #include "Plugins/Process/Utility/RegisterInfoPOSIX_arm64.h"
+#include "Plugins/Process/Utility/RegisterInfoPOSIX_ppc64le.h"
 #include "ProcessElfCore.h"
 #include "RegisterContextPOSIXCore_arm.h"
 #include "RegisterContextPOSIXCore_arm64.h"
 #include "RegisterContextPOSIXCore_mips64.h"
 #include "RegisterContextPOSIXCore_powerpc.h"
-//#include "RegisterContextPOSIXCore_s390x.h"
+#include "RegisterContextPOSIXCore_ppc64le.h"
+#ifdef LLDB_ENABLE_ALL
+#include "RegisterContextPOSIXCore_s390x.h"
+#endif // LLDB_ENABLE_ALL
 #include "RegisterContextPOSIXCore_x86_64.h"
 #include "ThreadElfCore.h"
 
@@ -41,8 +51,7 @@ using namespace lldb_private;
 //----------------------------------------------------------------------
 ThreadElfCore::ThreadElfCore(Process &process, const ThreadData &td)
     : Thread(process, td.tid), m_thread_name(td.name), m_thread_reg_ctx_sp(),
-      m_signo(td.signo), m_gpregset_data(td.gpregset),
-      m_fpregset_data(td.fpregset), m_vregset_data(td.vregset) {}
+      m_signo(td.signo), m_gpregset_data(td.gpregset), m_notes(td.notes) {}
 
 ThreadElfCore::~ThreadElfCore() { DestroyThread(); }
 
@@ -88,7 +97,7 @@ ThreadElfCore::CreateRegisterContextForFrame(StackFrame *frame) {
         reg_interface = new RegisterInfoPOSIX_arm64(arch);
         break;
       case llvm::Triple::arm:
-        reg_interface = new RegisterContextFreeBSD_arm(arch);
+        reg_interface = new RegisterInfoPOSIX_arm(arch);
         break;
       case llvm::Triple::ppc:
         reg_interface = new RegisterContextFreeBSD_powerpc32(arch);
@@ -111,22 +120,66 @@ ThreadElfCore::CreateRegisterContextForFrame(StackFrame *frame) {
       break;
     }
 
+    case llvm::Triple::NetBSD: {
+      switch (arch.GetMachine()) {
+      case llvm::Triple::x86_64:
+        reg_interface = new RegisterContextNetBSD_x86_64(arch);
+        break;
+      default:
+        break;
+      }
+      break;
+    }
+
     case llvm::Triple::Linux: {
       switch (arch.GetMachine()) {
       case llvm::Triple::arm:
-        reg_interface = new RegisterContextLinux_arm(arch);
+        reg_interface = new RegisterInfoPOSIX_arm(arch);
         break;
       case llvm::Triple::aarch64:
         reg_interface = new RegisterInfoPOSIX_arm64(arch);
         break;
-//    case llvm::Triple::systemz:
-//      reg_interface = new RegisterContextLinux_s390x(arch);
-//      break;
+      case llvm::Triple::mipsel:
+      case llvm::Triple::mips:
+        reg_interface = new RegisterContextLinux_mips(arch);
+        break;
+      case llvm::Triple::mips64el:
+      case llvm::Triple::mips64:
+        reg_interface = new RegisterContextLinux_mips64(arch);
+        break;
+      case llvm::Triple::ppc64le:
+        reg_interface = new RegisterInfoPOSIX_ppc64le(arch);
+        break;
+#ifdef LLDB_ENABLE_ALL
+      case llvm::Triple::systemz:
+        reg_interface = new RegisterContextLinux_s390x(arch);
+        break;
+#endif // LLDB_ENABLE_ALL
       case llvm::Triple::x86:
         reg_interface = new RegisterContextLinux_i386(arch);
         break;
       case llvm::Triple::x86_64:
         reg_interface = new RegisterContextLinux_x86_64(arch);
+        break;
+      default:
+        break;
+      }
+      break;
+    }
+
+    case llvm::Triple::OpenBSD: {
+      switch (arch.GetMachine()) {
+      case llvm::Triple::aarch64:
+        reg_interface = new RegisterInfoPOSIX_arm64(arch);
+        break;
+      case llvm::Triple::arm:
+        reg_interface = new RegisterInfoPOSIX_arm(arch);
+        break;
+      case llvm::Triple::x86:
+        reg_interface = new RegisterContextOpenBSD_i386(arch);
+        break;
+      case llvm::Triple::x86_64:
+        reg_interface = new RegisterContextOpenBSD_x86_64(arch);
         break;
       default:
         break;
@@ -148,30 +201,41 @@ ThreadElfCore::CreateRegisterContextForFrame(StackFrame *frame) {
     switch (arch.GetMachine()) {
     case llvm::Triple::aarch64:
       m_thread_reg_ctx_sp.reset(new RegisterContextCorePOSIX_arm64(
-          *this, reg_interface, m_gpregset_data, m_fpregset_data));
+          *this, reg_interface, m_gpregset_data, m_notes));
       break;
     case llvm::Triple::arm:
       m_thread_reg_ctx_sp.reset(new RegisterContextCorePOSIX_arm(
-          *this, reg_interface, m_gpregset_data, m_fpregset_data));
+          *this, reg_interface, m_gpregset_data, m_notes));
+      break;
+    case llvm::Triple::mipsel:
+    case llvm::Triple::mips:
+      m_thread_reg_ctx_sp.reset(new RegisterContextCorePOSIX_mips64(
+          *this, reg_interface, m_gpregset_data, m_notes));
       break;
     case llvm::Triple::mips64:
+    case llvm::Triple::mips64el:
       m_thread_reg_ctx_sp.reset(new RegisterContextCorePOSIX_mips64(
-          *this, reg_interface, m_gpregset_data, m_fpregset_data));
+          *this, reg_interface, m_gpregset_data, m_notes));
       break;
     case llvm::Triple::ppc:
     case llvm::Triple::ppc64:
       m_thread_reg_ctx_sp.reset(new RegisterContextCorePOSIX_powerpc(
-          *this, reg_interface, m_gpregset_data, m_fpregset_data,
-          m_vregset_data));
+          *this, reg_interface, m_gpregset_data, m_notes));
       break;
-//  case llvm::Triple::systemz:
-//    m_thread_reg_ctx_sp.reset(new RegisterContextCorePOSIX_s390x(
-//        *this, reg_interface, m_gpregset_data, m_fpregset_data));
-//    break;
+    case llvm::Triple::ppc64le:
+      m_thread_reg_ctx_sp.reset(new RegisterContextCorePOSIX_ppc64le(
+          *this, reg_interface, m_gpregset_data, m_notes));
+      break;
+#ifdef LLDB_ENABLE_ALL
+    case llvm::Triple::systemz:
+      m_thread_reg_ctx_sp.reset(new RegisterContextCorePOSIX_s390x(
+          *this, reg_interface, m_gpregset_data, m_notes));
+      break;
+#endif // LLDB_ENABLE_ALL
     case llvm::Triple::x86:
     case llvm::Triple::x86_64:
       m_thread_reg_ctx_sp.reset(new RegisterContextCorePOSIX_x86_64(
-          *this, reg_interface, m_gpregset_data, m_fpregset_data));
+          *this, reg_interface, m_gpregset_data, m_notes));
       break;
     default:
       break;
@@ -200,8 +264,35 @@ ELFLinuxPrStatus::ELFLinuxPrStatus() {
   memset(this, 0, sizeof(ELFLinuxPrStatus));
 }
 
-Error ELFLinuxPrStatus::Parse(DataExtractor &data, ArchSpec &arch) {
-  Error error;
+size_t ELFLinuxPrStatus::GetSize(const lldb_private::ArchSpec &arch) {
+  constexpr size_t mips_linux_pr_status_size_o32 = 96;
+  constexpr size_t mips_linux_pr_status_size_n32 = 72;
+  if (arch.IsMIPS()) {
+    std::string abi = arch.GetTargetABI();
+    assert(!abi.empty() && "ABI is not set");
+    if (!abi.compare("n64"))
+      return sizeof(ELFLinuxPrStatus);
+    else if (!abi.compare("o32"))
+      return mips_linux_pr_status_size_o32;
+    // N32 ABI
+    return mips_linux_pr_status_size_n32;
+  }
+  switch (arch.GetCore()) {
+  case lldb_private::ArchSpec::eCore_s390x_generic:
+  case lldb_private::ArchSpec::eCore_x86_64_x86_64:
+  case lldb_private::ArchSpec::eCore_ppc64le_generic:
+    return sizeof(ELFLinuxPrStatus);
+  case lldb_private::ArchSpec::eCore_x86_32_i386:
+  case lldb_private::ArchSpec::eCore_x86_32_i486:
+    return 72;
+  default:
+    return 0;
+  }
+}
+
+Status ELFLinuxPrStatus::Parse(const DataExtractor &data,
+                               const ArchSpec &arch) {
+  Status error;
   if (GetSize(arch) > data.GetByteSize()) {
     error.SetErrorStringWithFormat(
         "NT_PRSTATUS size should be %zu, but the remaining bytes are: %" PRIu64,
@@ -239,7 +330,6 @@ Error ELFLinuxPrStatus::Parse(DataExtractor &data, ArchSpec &arch) {
   pr_cstime.tv_sec = data.GetPointer(&offset);
   pr_cstime.tv_usec = data.GetPointer(&offset);
 
-
   return error;
 }
 
@@ -250,8 +340,30 @@ ELFLinuxPrPsInfo::ELFLinuxPrPsInfo() {
   memset(this, 0, sizeof(ELFLinuxPrPsInfo));
 }
 
-Error ELFLinuxPrPsInfo::Parse(DataExtractor &data, ArchSpec &arch) {
-  Error error;
+size_t ELFLinuxPrPsInfo::GetSize(const lldb_private::ArchSpec &arch) {
+  constexpr size_t mips_linux_pr_psinfo_size_o32_n32 = 128;
+  if (arch.IsMIPS()) {
+    uint8_t address_byte_size = arch.GetAddressByteSize();
+    if (address_byte_size == 8)
+      return sizeof(ELFLinuxPrPsInfo);
+    return mips_linux_pr_psinfo_size_o32_n32;
+  }
+  
+  switch (arch.GetCore()) {
+  case lldb_private::ArchSpec::eCore_s390x_generic:
+  case lldb_private::ArchSpec::eCore_x86_64_x86_64:
+    return sizeof(ELFLinuxPrPsInfo);
+  case lldb_private::ArchSpec::eCore_x86_32_i386:
+  case lldb_private::ArchSpec::eCore_x86_32_i486:
+    return 124;
+  default:
+    return 0;
+  }
+}
+
+Status ELFLinuxPrPsInfo::Parse(const DataExtractor &data,
+                               const ArchSpec &arch) {
+  Status error;
   ByteOrder byteorder = data.GetByteOrder();
   if (GetSize(arch) > data.GetByteSize()) {
     error.SetErrorStringWithFormat(
@@ -273,9 +385,15 @@ Error ELFLinuxPrPsInfo::Parse(DataExtractor &data, ArchSpec &arch) {
 
   pr_flag = data.GetPointer(&offset);
 
+  if (arch.IsMIPS()) {
+    // The pr_uid and pr_gid is always 32 bit irrespective of platforms
+    pr_uid = data.GetU32(&offset);
+    pr_gid = data.GetU32(&offset);
+  } else {
   // 16 bit on 32 bit platforms, 32 bit on 64 bit platforms
   pr_uid = data.GetMaxU64(&offset, data.GetAddressByteSize() >> 1);
   pr_gid = data.GetMaxU64(&offset, data.GetAddressByteSize() >> 1);
+  }
 
   pr_pid = data.GetU32(&offset);
   pr_ppid = data.GetU32(&offset);
@@ -296,12 +414,25 @@ Error ELFLinuxPrPsInfo::Parse(DataExtractor &data, ArchSpec &arch) {
 //----------------------------------------------------------------
 // Parse SIGINFO from NOTE entry
 //----------------------------------------------------------------
-ELFLinuxSigInfo::ELFLinuxSigInfo() {
-  memset(this, 0, sizeof(ELFLinuxSigInfo));
+ELFLinuxSigInfo::ELFLinuxSigInfo() { memset(this, 0, sizeof(ELFLinuxSigInfo)); }
+
+size_t ELFLinuxSigInfo::GetSize(const lldb_private::ArchSpec &arch) {
+  if (arch.IsMIPS())
+    return sizeof(ELFLinuxSigInfo);
+  switch (arch.GetCore()) {
+  case lldb_private::ArchSpec::eCore_x86_64_x86_64:
+    return sizeof(ELFLinuxSigInfo);
+  case lldb_private::ArchSpec::eCore_s390x_generic:
+  case lldb_private::ArchSpec::eCore_x86_32_i386:
+  case lldb_private::ArchSpec::eCore_x86_32_i486:
+    return 12;
+  default:
+    return 0;
+  }
 }
 
-Error ELFLinuxSigInfo::Parse(DataExtractor &data, const ArchSpec &arch) {
-  Error error;
+Status ELFLinuxSigInfo::Parse(const DataExtractor &data, const ArchSpec &arch) {
+  Status error;
   if (GetSize(arch) > data.GetByteSize()) {
     error.SetErrorStringWithFormat(
         "NT_SIGINFO size should be %zu, but the remaining bytes are: %" PRIu64,

@@ -138,6 +138,8 @@ unsigned clang::getOpenMPSimpleClauseType(OpenMPClauseKind Kind,
   case OMPC_lastprivate:
   case OMPC_shared:
   case OMPC_reduction:
+  case OMPC_task_reduction:
+  case OMPC_in_reduction:
   case OMPC_aligned:
   case OMPC_copyin:
   case OMPC_copyprivate:
@@ -277,6 +279,8 @@ const char *clang::getOpenMPSimpleClauseTypeName(OpenMPClauseKind Kind,
   case OMPC_lastprivate:
   case OMPC_shared:
   case OMPC_reduction:
+  case OMPC_task_reduction:
+  case OMPC_in_reduction:
   case OMPC_aligned:
   case OMPC_copyin:
   case OMPC_copyprivate:
@@ -710,6 +714,16 @@ bool clang::isAllowedClauseForDirective(OpenMPDirectiveKind DKind,
       break;
     }
     break;
+  case OMPD_taskgroup:
+    switch (CKind) {
+#define OPENMP_TASKGROUP_CLAUSE(Name)                                          \
+  case OMPC_##Name:                                                            \
+    return true;
+#include "clang/Basic/OpenMPKinds.def"
+    default:
+      break;
+    }
+    break;
   case OMPD_declare_target:
   case OMPD_end_declare_target:
   case OMPD_unknown:
@@ -719,7 +733,6 @@ bool clang::isAllowedClauseForDirective(OpenMPDirectiveKind DKind,
   case OMPD_taskyield:
   case OMPD_barrier:
   case OMPD_taskwait:
-  case OMPD_taskgroup:
   case OMPD_cancellation_point:
   case OMPD_declare_reduction:
     break;
@@ -780,7 +793,7 @@ bool clang::isOpenMPParallelDirective(OpenMPDirectiveKind DKind) {
 
 bool clang::isOpenMPTargetExecutionDirective(OpenMPDirectiveKind DKind) {
   return DKind == OMPD_target || DKind == OMPD_target_parallel ||
-         DKind == OMPD_target_parallel_for || 
+         DKind == OMPD_target_parallel_for ||
          DKind == OMPD_target_parallel_for_simd || DKind == OMPD_target_simd ||
          DKind == OMPD_target_teams || DKind == OMPD_target_teams_distribute ||
          DKind == OMPD_target_teams_distribute_parallel_for ||
@@ -816,7 +829,8 @@ bool clang::isOpenMPSimdDirective(OpenMPDirectiveKind DKind) {
          DKind == OMPD_teams_distribute_simd ||
          DKind == OMPD_teams_distribute_parallel_for_simd ||
          DKind == OMPD_target_teams_distribute_parallel_for_simd ||
-         DKind == OMPD_target_teams_distribute_simd;
+         DKind == OMPD_target_teams_distribute_simd ||
+         DKind == OMPD_target_parallel_for_simd;
 }
 
 bool clang::isOpenMPNestingDistributeDirective(OpenMPDirectiveKind Kind) {
@@ -840,7 +854,8 @@ bool clang::isOpenMPDistributeDirective(OpenMPDirectiveKind Kind) {
 bool clang::isOpenMPPrivate(OpenMPClauseKind Kind) {
   return Kind == OMPC_private || Kind == OMPC_firstprivate ||
          Kind == OMPC_lastprivate || Kind == OMPC_linear ||
-         Kind == OMPC_reduction; // TODO add next clauses like 'reduction'.
+         Kind == OMPC_reduction || Kind == OMPC_task_reduction ||
+         Kind == OMPC_in_reduction; // TODO add next clauses like 'reduction'.
 }
 
 bool clang::isOpenMPThreadPrivate(OpenMPClauseKind Kind) {
@@ -854,12 +869,92 @@ bool clang::isOpenMPTaskingDirective(OpenMPDirectiveKind Kind) {
 bool clang::isOpenMPLoopBoundSharingDirective(OpenMPDirectiveKind Kind) {
   return Kind == OMPD_distribute_parallel_for ||
          Kind == OMPD_distribute_parallel_for_simd ||
-         Kind == OMPD_distribute_simd || Kind == OMPD_teams_distribute ||
-         Kind == OMPD_teams_distribute_simd ||
          Kind == OMPD_teams_distribute_parallel_for_simd ||
          Kind == OMPD_teams_distribute_parallel_for ||
-         Kind == OMPD_target_teams_distribute ||
          Kind == OMPD_target_teams_distribute_parallel_for ||
-         Kind == OMPD_target_teams_distribute_parallel_for_simd ||
-         Kind == OMPD_target_teams_distribute_simd;
+         Kind == OMPD_target_teams_distribute_parallel_for_simd;
+}
+
+void clang::getOpenMPCaptureRegions(
+    SmallVectorImpl<OpenMPDirectiveKind> &CaptureRegions,
+    OpenMPDirectiveKind DKind) {
+  assert(DKind <= OMPD_unknown);
+  switch (DKind) {
+  case OMPD_parallel:
+  case OMPD_parallel_for:
+  case OMPD_parallel_for_simd:
+  case OMPD_parallel_sections:
+  case OMPD_distribute_parallel_for:
+  case OMPD_distribute_parallel_for_simd:
+    CaptureRegions.push_back(OMPD_parallel);
+    break;
+  case OMPD_target_teams:
+  case OMPD_target_teams_distribute:
+  case OMPD_target_teams_distribute_simd:
+    CaptureRegions.push_back(OMPD_target);
+    CaptureRegions.push_back(OMPD_teams);
+    break;
+  case OMPD_teams:
+  case OMPD_teams_distribute:
+  case OMPD_teams_distribute_simd:
+    CaptureRegions.push_back(OMPD_teams);
+    break;
+  case OMPD_target:
+  case OMPD_target_simd:
+    CaptureRegions.push_back(OMPD_target);
+    break;
+  case OMPD_teams_distribute_parallel_for:
+  case OMPD_teams_distribute_parallel_for_simd:
+    CaptureRegions.push_back(OMPD_teams);
+    CaptureRegions.push_back(OMPD_parallel);
+    break;
+  case OMPD_target_parallel:
+  case OMPD_target_parallel_for:
+  case OMPD_target_parallel_for_simd:
+    CaptureRegions.push_back(OMPD_target);
+    CaptureRegions.push_back(OMPD_parallel);
+    break;
+  case OMPD_task:
+  case OMPD_target_enter_data:
+  case OMPD_target_exit_data:
+  case OMPD_target_update:
+    CaptureRegions.push_back(OMPD_task);
+    break;
+  case OMPD_taskloop:
+  case OMPD_taskloop_simd:
+    CaptureRegions.push_back(OMPD_taskloop);
+    break;
+  case OMPD_simd:
+  case OMPD_for:
+  case OMPD_for_simd:
+  case OMPD_sections:
+  case OMPD_section:
+  case OMPD_single:
+  case OMPD_master:
+  case OMPD_critical:
+  case OMPD_taskgroup:
+  case OMPD_distribute:
+  case OMPD_ordered:
+  case OMPD_atomic:
+  case OMPD_target_data:
+  case OMPD_distribute_simd:
+  case OMPD_target_teams_distribute_parallel_for:
+  case OMPD_target_teams_distribute_parallel_for_simd:
+    CaptureRegions.push_back(OMPD_unknown);
+    break;
+  case OMPD_threadprivate:
+  case OMPD_taskyield:
+  case OMPD_barrier:
+  case OMPD_taskwait:
+  case OMPD_cancellation_point:
+  case OMPD_cancel:
+  case OMPD_flush:
+  case OMPD_declare_reduction:
+  case OMPD_declare_simd:
+  case OMPD_declare_target:
+  case OMPD_end_declare_target:
+    llvm_unreachable("OpenMP Directive is not allowed");
+  case OMPD_unknown:
+    llvm_unreachable("Unknown OpenMP directive");
+  }
 }

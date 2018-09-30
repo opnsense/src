@@ -310,7 +310,7 @@ SYSINIT(vm_radix_reserve_kva, SI_SUB_KMEM, SI_ORDER_THIRD,
  * Initialize the UMA slab zone.
  */
 void
-vm_radix_init(void)
+vm_radix_zinit(void)
 {
 
 	vm_radix_node_zone = uma_zcreate("RADIX NODE",
@@ -773,6 +773,12 @@ vm_radix_replace(struct vm_radix *rtree, vm_page_t newpage)
 		rnode = rnode->rn_child[slot];
 	}
 	panic("%s: original replacing page not found", __func__);
+}
+
+void
+vm_radix_wait(void)
+{
+	uma_zwait(vm_radix_node_zone);
 }
 
 #ifdef DDB

@@ -108,7 +108,6 @@ VNET_PCPUSTAT_SYSINIT(ipsec4stat);
 VNET_PCPUSTAT_SYSUNINIT(ipsec4stat);
 #endif /* VIMAGE */
 
-VNET_DEFINE(int, ip4_ah_offsetmask) = 0;	/* maybe IP_DF? */
 /* DF bit on encap. 0: clear 1: set 2: copy */
 VNET_DEFINE(int, ip4_ipsec_dfbit) = 0;
 VNET_DEFINE(int, ip4_esp_trans_deflev) = IPSEC_LEVEL_USE;
@@ -117,7 +116,6 @@ VNET_DEFINE(int, ip4_ah_trans_deflev) = IPSEC_LEVEL_USE;
 VNET_DEFINE(int, ip4_ah_net_deflev) = IPSEC_LEVEL_USE;
 /* ECN ignore(-1)/forbidden(0)/allowed(1) */
 VNET_DEFINE(int, ip4_ipsec_ecn) = 0;
-VNET_DEFINE(int, ip4_esp_randpad) = -1;
 
 static VNET_DEFINE(int, ip4_filtertunnel) = 0;
 #define	V_ip4_filtertunnel VNET(ip4_filtertunnel)
@@ -183,9 +181,6 @@ SYSCTL_INT(_net_inet_ipsec, IPSECCTL_DEF_AH_NETLEV, ah_net_deflev,
 SYSCTL_INT(_net_inet_ipsec, IPSECCTL_AH_CLEARTOS, ah_cleartos,
 	CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(ah_cleartos), 0,
 	"If set, clear type-of-service field when doing AH computation.");
-SYSCTL_INT(_net_inet_ipsec, IPSECCTL_AH_OFFSETMASK, ah_offsetmask,
-	CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(ip4_ah_offsetmask), 0,
-	"If not set, clear offset field mask when doing AH computation.");
 SYSCTL_INT(_net_inet_ipsec, IPSECCTL_DFBIT, dfbit,
 	CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(ip4_ipsec_dfbit), 0,
 	"Do not fragment bit on encap.");
@@ -563,7 +558,8 @@ ipsec4_setspidx_ipaddr(const struct mbuf *m, struct secpolicyindex *spidx)
 }
 
 static struct secpolicy *
-ipsec4_getpolicy(const struct mbuf *m, struct inpcb *inp, u_int dir)
+ipsec4_getpolicy(const struct mbuf *m, struct inpcb *inp, u_int dir,
+    int needport)
 {
 	struct secpolicyindex spidx;
 	struct secpolicy *sp;
@@ -572,8 +568,7 @@ ipsec4_getpolicy(const struct mbuf *m, struct inpcb *inp, u_int dir)
 	if (sp == NULL && key_havesp(dir)) {
 		/* Make an index to look for a policy. */
 		ipsec4_setspidx_ipaddr(m, &spidx);
-		/* Fill ports in spidx if we have inpcb. */
-		ipsec4_get_ulp(m, &spidx, inp != NULL);
+		ipsec4_get_ulp(m, &spidx, needport);
 		spidx.dir = dir;
 		sp = key_allocsp(&spidx, dir);
 	}
@@ -586,12 +581,13 @@ ipsec4_getpolicy(const struct mbuf *m, struct inpcb *inp, u_int dir)
  * Check security policy for *OUTBOUND* IPv4 packet.
  */
 struct secpolicy *
-ipsec4_checkpolicy(const struct mbuf *m, struct inpcb *inp, int *error)
+ipsec4_checkpolicy(const struct mbuf *m, struct inpcb *inp, int *error,
+    int needport)
 {
 	struct secpolicy *sp;
 
 	*error = 0;
-	sp = ipsec4_getpolicy(m, inp, IPSEC_DIR_OUTBOUND);
+	sp = ipsec4_getpolicy(m, inp, IPSEC_DIR_OUTBOUND, needport);
 	if (sp != NULL)
 		sp = ipsec_checkpolicy(sp, inp, error);
 	if (sp == NULL) {
@@ -623,7 +619,7 @@ ipsec4_in_reject(const struct mbuf *m, struct inpcb *inp)
 	struct secpolicy *sp;
 	int result;
 
-	sp = ipsec4_getpolicy(m, inp, IPSEC_DIR_INBOUND);
+	sp = ipsec4_getpolicy(m, inp, IPSEC_DIR_INBOUND, 0);
 	result = ipsec_in_reject(sp, inp, m);
 	key_freesp(&sp);
 	if (result != 0)
@@ -731,7 +727,8 @@ ipsec6_setspidx_ipaddr(const struct mbuf *m, struct secpolicyindex *spidx)
 }
 
 static struct secpolicy *
-ipsec6_getpolicy(const struct mbuf *m, struct inpcb *inp, u_int dir)
+ipsec6_getpolicy(const struct mbuf *m, struct inpcb *inp, u_int dir,
+    int needport)
 {
 	struct secpolicyindex spidx;
 	struct secpolicy *sp;
@@ -740,8 +737,7 @@ ipsec6_getpolicy(const struct mbuf *m, struct inpcb *inp, u_int dir)
 	if (sp == NULL && key_havesp(dir)) {
 		/* Make an index to look for a policy. */
 		ipsec6_setspidx_ipaddr(m, &spidx);
-		/* Fill ports in spidx if we have inpcb. */
-		ipsec6_get_ulp(m, &spidx, inp != NULL);
+		ipsec6_get_ulp(m, &spidx, needport);
 		spidx.dir = dir;
 		sp = key_allocsp(&spidx, dir);
 	}
@@ -754,12 +750,13 @@ ipsec6_getpolicy(const struct mbuf *m, struct inpcb *inp, u_int dir)
  * Check security policy for *OUTBOUND* IPv6 packet.
  */
 struct secpolicy *
-ipsec6_checkpolicy(const struct mbuf *m, struct inpcb *inp, int *error)
+ipsec6_checkpolicy(const struct mbuf *m, struct inpcb *inp, int *error,
+    int needport)
 {
 	struct secpolicy *sp;
 
 	*error = 0;
-	sp = ipsec6_getpolicy(m, inp, IPSEC_DIR_OUTBOUND);
+	sp = ipsec6_getpolicy(m, inp, IPSEC_DIR_OUTBOUND, needport);
 	if (sp != NULL)
 		sp = ipsec_checkpolicy(sp, inp, error);
 	if (sp == NULL) {
@@ -791,7 +788,7 @@ ipsec6_in_reject(const struct mbuf *m, struct inpcb *inp)
 	struct secpolicy *sp;
 	int result;
 
-	sp = ipsec6_getpolicy(m, inp, IPSEC_DIR_INBOUND);
+	sp = ipsec6_getpolicy(m, inp, IPSEC_DIR_INBOUND, 0);
 	result = ipsec_in_reject(sp, inp, m);
 	key_freesp(&sp);
 	if (result)

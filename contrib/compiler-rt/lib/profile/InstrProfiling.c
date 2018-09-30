@@ -7,19 +7,19 @@
 |*
 \*===----------------------------------------------------------------------===*/
 
-#include "InstrProfiling.h"
-#include "InstrProfilingInternal.h"
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "InstrProfiling.h"
+#include "InstrProfilingInternal.h"
+
 #define INSTR_PROF_VALUE_PROF_DATA
 #include "InstrProfData.inc"
 
 
 COMPILER_RT_WEAK uint64_t INSTR_PROF_RAW_VERSION_VAR = INSTR_PROF_RAW_VERSION;
-
-COMPILER_RT_WEAK char INSTR_PROF_PROFILE_NAME_VAR[1] = {0};
 
 COMPILER_RT_VISIBILITY uint64_t __llvm_profile_get_magic(void) {
   return sizeof(void *) == sizeof(uint64_t) ? (INSTR_PROF_RAW_MAGIC_64)

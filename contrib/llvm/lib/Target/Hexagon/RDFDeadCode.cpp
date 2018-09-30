@@ -9,9 +9,9 @@
 //
 // RDF-based generic dead code elimination.
 
+#include "RDFDeadCode.h"
 #include "RDFGraph.h"
 #include "RDFLiveness.h"
-#include "RDFDeadCode.h"
 
 #include "llvm/ADT/SetVector.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
@@ -58,13 +58,24 @@ private:
 bool DeadCodeElimination::isLiveInstr(const MachineInstr *MI) const {
   if (MI->mayStore() || MI->isBranch() || MI->isCall() || MI->isReturn())
     return true;
-  if (MI->hasOrderedMemoryRef() || MI->hasUnmodeledSideEffects())
+  if (MI->hasOrderedMemoryRef() || MI->hasUnmodeledSideEffects() ||
+      MI->isPosition())
     return true;
   if (MI->isPHI())
     return false;
-  for (auto &Op : MI->operands())
+  for (auto &Op : MI->operands()) {
     if (Op.isReg() && MRI.isReserved(Op.getReg()))
       return true;
+    if (Op.isRegMask()) {
+      const uint32_t *BM = Op.getRegMask();
+      for (unsigned R = 0, RN = DFG.getTRI().getNumRegs(); R != RN; ++R) {
+        if (BM[R/32] & (1u << (R%32)))
+          continue;
+        if (MRI.isReserved(R))
+          return true;
+      }
+    }
+  }
   return false;
 }
 

@@ -26,8 +26,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "WebAssembly.h"
 #include "MCTargetDesc/WebAssemblyMCTargetDesc.h"
+#include "WebAssembly.h"
 #include "WebAssemblyMachineFunctionInfo.h"
 #include "WebAssemblySubtarget.h"
 #include "llvm/ADT/PriorityQueue.h"
@@ -205,8 +205,7 @@ bool WebAssemblyFixIrreducibleControlFlow::VisitLoop(MachineFunction &MF,
       continue;
 
     unsigned Index = MIB.getInstr()->getNumExplicitOperands() - 1;
-    DEBUG(dbgs() << "MBB#" << MBB->getNumber() << " has index " << Index
-                 << "\n");
+    DEBUG(dbgs() << printMBBReference(*MBB) << " has index " << Index << "\n");
 
     Pair.first->second = Index;
     for (auto Pred : MBB->predecessors())

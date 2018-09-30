@@ -33,6 +33,7 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include "namespace.h"
+#include <sys/capsicum.h>
 #include <sys/elf.h>
 #include <sys/fcntl.h>
 #include <sys/mman.h>
@@ -51,49 +52,100 @@ __FBSDID("$FreeBSD$");
 #endif
 #include "libc_private.h"
 
+static enum LMB {
+	LMB_UNKNOWN,
+	LMB_NONE,
+	LMB_MFENCE,
+	LMB_LFENCE
+} lfence_works = LMB_UNKNOWN;
+
 static void
-lfence_mb(void)
+cpuidp(u_int leaf, u_int p[4])
+{
+
+	__asm __volatile(
+#if defined(__i386__)
+	    "	pushl	%%ebx\n"
+#endif
+	    "	cpuid\n"
+#if defined(__i386__)
+	    "	movl	%%ebx,%1\n"
+	    "	popl	%%ebx"
+#endif
+	    : "=a" (p[0]),
+#if defined(__i386__)
+	    "=r" (p[1]),
+#elif defined(__amd64__)
+	    "=b" (p[1]),
+#else
+#error "Arch"
+#endif
+	    "=c" (p[2]), "=d" (p[3])
+	    :  "0" (leaf));
+}
+
+static enum LMB
+select_lmb(void)
+{
+	u_int p[4];
+	static const char intel_id[] = "GenuntelineI";
+
+	cpuidp(0, p);
+	return (memcmp(p + 1, intel_id, sizeof(intel_id) - 1) == 0 ?
+	    LMB_LFENCE : LMB_MFENCE);
+}
+
+static void
+init_fence(void)
 {
 #if defined(__i386__)
-	static int lfence_works = -1;
 	u_int cpuid_supported, p[4];
 
-	if (lfence_works == -1) {
-		__asm __volatile(
-		    "	pushfl\n"
-		    "	popl	%%eax\n"
-		    "	movl    %%eax,%%ecx\n"
-		    "	xorl    $0x200000,%%eax\n"
-		    "	pushl	%%eax\n"
-		    "	popfl\n"
-		    "	pushfl\n"
-		    "	popl    %%eax\n"
-		    "	xorl    %%eax,%%ecx\n"
-		    "	je	1f\n"
-		    "	movl	$1,%0\n"
-		    "	jmp	2f\n"
-		    "1:	movl	$0,%0\n"
-		    "2:\n"
-		    : "=r" (cpuid_supported) : : "eax", "ecx", "cc");
-		if (cpuid_supported) {
-			__asm __volatile(
-			    "	pushl	%%ebx\n"
-			    "	cpuid\n"
-			    "	movl	%%ebx,%1\n"
-			    "	popl	%%ebx\n"
-			    : "=a" (p[0]), "=r" (p[1]), "=c" (p[2]), "=d" (p[3])
-			    :  "0" (0x1));
-			lfence_works = (p[3] & CPUID_SSE2) != 0;
-		} else
-			lfence_works = 0;
+	lfence_works = LMB_NONE;
+	__asm __volatile(
+	    "	pushfl\n"
+	    "	popl	%%eax\n"
+	    "	movl    %%eax,%%ecx\n"
+	    "	xorl    $0x200000,%%eax\n"
+	    "	pushl	%%eax\n"
+	    "	popfl\n"
+	    "	pushfl\n"
+	    "	popl    %%eax\n"
+	    "	xorl    %%eax,%%ecx\n"
+	    "	je	1f\n"
+	    "	movl	$1,%0\n"
+	    "	jmp	2f\n"
+	    "1:	movl	$0,%0\n"
+	    "2:\n"
+	    : "=r" (cpuid_supported) : : "eax", "ecx", "cc");
+	if (cpuid_supported) {
+		cpuidp(0x1, p);
+		if ((p[3] & CPUID_SSE2) != 0)
+			lfence_works = select_lmb();
 	}
-	if (lfence_works == 1)
-		lfence();
 #elif defined(__amd64__)
-	lfence();
+	lfence_works = select_lmb();
 #else
-#error "arch"
+#error "Arch"
 #endif
+}
+
+static void
+rdtsc_mb(void)
+{
+
+again:
+	if (__predict_true(lfence_works == LMB_LFENCE)) {
+		lfence();
+		return;
+	} else if (lfence_works == LMB_MFENCE) {
+		mfence();
+		return;
+	} else if (lfence_works == LMB_NONE) {
+		return;
+	}
+	init_fence();
+	goto again;
 }
 
 static u_int
@@ -101,7 +153,7 @@ __vdso_gettc_rdtsc_low(const struct vdso_timehands *th)
 {
 	u_int rv;
 
-	lfence_mb();
+	rdtsc_mb();
 	__asm __volatile("rdtsc; shrd %%cl, %%edx, %0"
 	    : "=a" (rv) : "c" (th->th_x86_shift) : "edx");
 	return (rv);
@@ -111,7 +163,7 @@ static u_int
 __vdso_rdtsc32(void)
 {
 
-	lfence_mb();
+	rdtsc_mb();
 	return (rdtsc32());
 }
 
@@ -124,6 +176,7 @@ __vdso_init_hpet(uint32_t u)
 	static const char devprefix[] = "/dev/hpet";
 	char devname[64], *c, *c1, t;
 	volatile char *new_map, *old_map;
+	unsigned int mode;
 	uint32_t u1;
 	int fd;
 
@@ -144,12 +197,18 @@ __vdso_init_hpet(uint32_t u)
 	if (old_map != NULL)
 		return;
 
-	fd = _open(devname, O_RDONLY);
-	if (fd == -1) {
+	/*
+	 * Explicitely check for the capability mode to avoid
+	 * triggering trap_enocap on the device open by absolute path.
+	 */
+	if ((cap_getmode(&mode) == 0 && mode != 0) ||
+	    (fd = _open(devname, O_RDONLY)) == -1) {
+		/* Prevent the caller from re-entering. */
 		atomic_cmpset_rel_ptr((volatile uintptr_t *)&hpet_dev_map[u],
 		    (uintptr_t)old_map, (uintptr_t)MAP_FAILED);
 		return;
 	}
+
 	new_map = mmap(NULL, PAGE_SIZE, PROT_READ, MAP_SHARED, fd, 0);
 	_close(fd);
 	if (atomic_cmpset_rel_ptr((volatile uintptr_t *)&hpet_dev_map[u],
@@ -174,16 +233,22 @@ static void
 __vdso_init_hyperv_tsc(void)
 {
 	int fd;
+	unsigned int mode;
+
+	if (cap_getmode(&mode) == 0 && mode != 0)
+		goto fail;
 
 	fd = _open(HYPERV_REFTSC_DEVPATH, O_RDONLY);
-	if (fd < 0) {
-		/* Prevent the caller from re-entering. */
-		hyperv_ref_tsc = MAP_FAILED;
-		return;
-	}
+	if (fd < 0)
+		goto fail;
 	hyperv_ref_tsc = mmap(NULL, sizeof(*hyperv_ref_tsc), PROT_READ,
 	    MAP_SHARED, fd, 0);
 	_close(fd);
+
+	return;
+fail:
+	/* Prevent the caller from re-entering. */
+	hyperv_ref_tsc = MAP_FAILED;
 }
 
 static int
@@ -197,7 +262,7 @@ __vdso_hyperv_tsc(struct hyperv_reftsc *tsc_ref, u_int *tc)
 		scale = tsc_ref->tsc_scale;
 		ofs = tsc_ref->tsc_ofs;
 
-		lfence_mb();
+		rdtsc_mb();
 		tsc = rdtsc();
 
 		/* ret = ((tsc * scale) >> 64) + ofs */

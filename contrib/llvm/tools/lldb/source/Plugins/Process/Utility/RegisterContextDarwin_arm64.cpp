@@ -19,14 +19,14 @@
 
 // C++ Includes
 // Other libraries and framework includes
-#include "lldb/Core/DataBufferHeap.h"
-#include "lldb/Core/DataExtractor.h"
-#include "lldb/Core/Log.h"
 #include "lldb/Core/RegisterValue.h"
 #include "lldb/Core/Scalar.h"
-#include "lldb/Host/Endian.h"
 #include "lldb/Target/Process.h"
 #include "lldb/Target/Thread.h"
+#include "lldb/Utility/DataBufferHeap.h"
+#include "lldb/Utility/DataExtractor.h"
+#include "lldb/Utility/Endian.h"
+#include "lldb/Utility/Log.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Compiler.h"
 
@@ -426,7 +426,7 @@ bool RegisterContextDarwin_arm64::ReadRegister(const RegisterInfo *reg_info,
   case fpu_v29:
   case fpu_v30:
   case fpu_v31:
-    value.SetBytes(fpu.v[reg].bytes, reg_info->byte_size,
+    value.SetBytes(fpu.v[reg].bytes.buffer, reg_info->byte_size,
                    endian::InlHostByteOrder());
     break;
 
@@ -618,7 +618,7 @@ bool RegisterContextDarwin_arm64::WriteRegister(const RegisterInfo *reg_info,
   case fpu_v29:
   case fpu_v30:
   case fpu_v31:
-    ::memcpy(fpu.v[reg].bytes, value.GetBytes(), value.GetByteSize());
+    ::memcpy(fpu.v[reg].bytes.buffer, value.GetBytes(), value.GetByteSize());
     break;
 
   case fpu_fpsr:

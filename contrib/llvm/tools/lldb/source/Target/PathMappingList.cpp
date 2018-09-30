@@ -14,11 +14,11 @@
 
 // Other libraries and framework includes
 // Project includes
-#include "lldb/Core/Error.h"
-#include "lldb/Core/Stream.h"
-#include "lldb/Host/FileSpec.h"
 #include "lldb/Host/PosixApi.h"
 #include "lldb/Target/PathMappingList.h"
+#include "lldb/Utility/FileSpec.h"
+#include "lldb/Utility/Status.h"
+#include "lldb/Utility/Stream.h"
 
 using namespace lldb;
 using namespace lldb_private;
@@ -85,7 +85,6 @@ void PathMappingList::Insert(const ConstString &path,
 bool PathMappingList::Replace(const ConstString &path,
                               const ConstString &replacement, uint32_t index,
                               bool notify) {
-  iterator insert_iter;
   if (index >= m_pairs.size())
     return false;
   ++m_mod_id;

@@ -12,17 +12,25 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ObjectYAML/COFFYAML.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Support/YAMLTraits.h"
+#include <cstdint>
+#include <cstring>
 
 #define ECase(X) IO.enumCase(Value, #X, COFF::X);
+
 namespace llvm {
 
 namespace COFFYAML {
+
 Section::Section() { memset(&Header, 0, sizeof(COFF::section)); }
 Symbol::Symbol() { memset(&Header, 0, sizeof(COFF::symbol)); }
 Object::Object() { memset(&Header, 0, sizeof(COFF::header)); }
-}
+
+} // end namespace COFFYAML
 
 namespace yaml {
+
 void ScalarEnumerationTraits<COFFYAML::COMDATType>::enumeration(
     IO &IO, COFFYAML::COMDATType &Value) {
   IO.enumCase(Value, "0", 0);
@@ -170,22 +178,62 @@ void ScalarEnumerationTraits<COFF::RelocationTypeAMD64>::enumeration(
   ECase(IMAGE_REL_AMD64_SSPAN32);
 }
 
+void ScalarEnumerationTraits<COFF::RelocationTypesARM>::enumeration(
+    IO &IO, COFF::RelocationTypesARM &Value) {
+  ECase(IMAGE_REL_ARM_ABSOLUTE);
+  ECase(IMAGE_REL_ARM_ADDR32);
+  ECase(IMAGE_REL_ARM_ADDR32NB);
+  ECase(IMAGE_REL_ARM_BRANCH24);
+  ECase(IMAGE_REL_ARM_BRANCH11);
+  ECase(IMAGE_REL_ARM_TOKEN);
+  ECase(IMAGE_REL_ARM_BLX24);
+  ECase(IMAGE_REL_ARM_BLX11);
+  ECase(IMAGE_REL_ARM_SECTION);
+  ECase(IMAGE_REL_ARM_SECREL);
+  ECase(IMAGE_REL_ARM_MOV32A);
+  ECase(IMAGE_REL_ARM_MOV32T);
+  ECase(IMAGE_REL_ARM_BRANCH20T);
+  ECase(IMAGE_REL_ARM_BRANCH24T);
+  ECase(IMAGE_REL_ARM_BLX23T);
+}
+
+void ScalarEnumerationTraits<COFF::RelocationTypesARM64>::enumeration(
+    IO &IO, COFF::RelocationTypesARM64 &Value) {
+  ECase(IMAGE_REL_ARM64_ABSOLUTE);
+  ECase(IMAGE_REL_ARM64_ADDR32);
+  ECase(IMAGE_REL_ARM64_ADDR32NB);
+  ECase(IMAGE_REL_ARM64_BRANCH26);
+  ECase(IMAGE_REL_ARM64_PAGEBASE_REL21);
+  ECase(IMAGE_REL_ARM64_REL21);
+  ECase(IMAGE_REL_ARM64_PAGEOFFSET_12A);
+  ECase(IMAGE_REL_ARM64_PAGEOFFSET_12L);
+  ECase(IMAGE_REL_ARM64_SECREL);
+  ECase(IMAGE_REL_ARM64_SECREL_LOW12A);
+  ECase(IMAGE_REL_ARM64_SECREL_HIGH12A);
+  ECase(IMAGE_REL_ARM64_SECREL_LOW12L);
+  ECase(IMAGE_REL_ARM64_TOKEN);
+  ECase(IMAGE_REL_ARM64_SECTION);
+  ECase(IMAGE_REL_ARM64_ADDR64);
+  ECase(IMAGE_REL_ARM64_BRANCH19);
+  ECase(IMAGE_REL_ARM64_BRANCH14);
+}
+
 void ScalarEnumerationTraits<COFF::WindowsSubsystem>::enumeration(
     IO &IO, COFF::WindowsSubsystem &Value) {
-    ECase(IMAGE_SUBSYSTEM_UNKNOWN);
-    ECase(IMAGE_SUBSYSTEM_NATIVE);
-    ECase(IMAGE_SUBSYSTEM_WINDOWS_GUI);
-    ECase(IMAGE_SUBSYSTEM_WINDOWS_CUI);
-    ECase(IMAGE_SUBSYSTEM_OS2_CUI);
-    ECase(IMAGE_SUBSYSTEM_POSIX_CUI);
-    ECase(IMAGE_SUBSYSTEM_NATIVE_WINDOWS);
-    ECase(IMAGE_SUBSYSTEM_WINDOWS_CE_GUI);
-    ECase(IMAGE_SUBSYSTEM_EFI_APPLICATION);
-    ECase(IMAGE_SUBSYSTEM_EFI_BOOT_SERVICE_DRIVER);
-    ECase(IMAGE_SUBSYSTEM_EFI_RUNTIME_DRIVER);
-    ECase(IMAGE_SUBSYSTEM_EFI_ROM);
-    ECase(IMAGE_SUBSYSTEM_XBOX);
-    ECase(IMAGE_SUBSYSTEM_WINDOWS_BOOT_APPLICATION);
+  ECase(IMAGE_SUBSYSTEM_UNKNOWN);
+  ECase(IMAGE_SUBSYSTEM_NATIVE);
+  ECase(IMAGE_SUBSYSTEM_WINDOWS_GUI);
+  ECase(IMAGE_SUBSYSTEM_WINDOWS_CUI);
+  ECase(IMAGE_SUBSYSTEM_OS2_CUI);
+  ECase(IMAGE_SUBSYSTEM_POSIX_CUI);
+  ECase(IMAGE_SUBSYSTEM_NATIVE_WINDOWS);
+  ECase(IMAGE_SUBSYSTEM_WINDOWS_CE_GUI);
+  ECase(IMAGE_SUBSYSTEM_EFI_APPLICATION);
+  ECase(IMAGE_SUBSYSTEM_EFI_BOOT_SERVICE_DRIVER);
+  ECase(IMAGE_SUBSYSTEM_EFI_RUNTIME_DRIVER);
+  ECase(IMAGE_SUBSYSTEM_EFI_ROM);
+  ECase(IMAGE_SUBSYSTEM_XBOX);
+  ECase(IMAGE_SUBSYSTEM_WINDOWS_BOOT_APPLICATION);
 }
 #undef ECase
 
@@ -252,12 +300,15 @@ void ScalarBitSetTraits<COFF::DLLCharacteristics>::bitset(
 #undef BCase
 
 namespace {
+
 struct NSectionSelectionType {
   NSectionSelectionType(IO &)
       : SelectionType(COFFYAML::COMDATType(0)) {}
   NSectionSelectionType(IO &, uint8_t C)
       : SelectionType(COFFYAML::COMDATType(C)) {}
+
   uint8_t denormalize(IO &) { return SelectionType; }
+
   COFFYAML::COMDATType SelectionType;
 };
 
@@ -266,7 +317,9 @@ struct NWeakExternalCharacteristics {
       : Characteristics(COFFYAML::WeakExternalCharacteristics(0)) {}
   NWeakExternalCharacteristics(IO &, uint32_t C)
       : Characteristics(COFFYAML::WeakExternalCharacteristics(C)) {}
+
   uint32_t denormalize(IO &) { return Characteristics; }
+
   COFFYAML::WeakExternalCharacteristics Characteristics;
 };
 
@@ -275,7 +328,9 @@ struct NSectionCharacteristics {
       : Characteristics(COFF::SectionCharacteristics(0)) {}
   NSectionCharacteristics(IO &, uint32_t C)
       : Characteristics(COFF::SectionCharacteristics(C)) {}
+
   uint32_t denormalize(IO &) { return Characteristics; }
+
   COFF::SectionCharacteristics Characteristics;
 };
 
@@ -284,13 +339,16 @@ struct NAuxTokenType {
       : AuxType(COFFYAML::AuxSymbolType(0)) {}
   NAuxTokenType(IO &, uint8_t C)
       : AuxType(COFFYAML::AuxSymbolType(C)) {}
+
   uint32_t denormalize(IO &) { return AuxType; }
+
   COFFYAML::AuxSymbolType AuxType;
 };
 
 struct NStorageClass {
   NStorageClass(IO &) : StorageClass(COFF::SymbolStorageClass(0)) {}
   NStorageClass(IO &, uint8_t S) : StorageClass(COFF::SymbolStorageClass(S)) {}
+
   uint8_t denormalize(IO &) { return StorageClass; }
 
   COFF::SymbolStorageClass StorageClass;
@@ -299,7 +357,9 @@ struct NStorageClass {
 struct NMachine {
   NMachine(IO &) : Machine(COFF::MachineTypes(0)) {}
   NMachine(IO &, uint16_t M) : Machine(COFF::MachineTypes(M)) {}
+
   uint16_t denormalize(IO &) { return Machine; }
+
   COFF::MachineTypes Machine;
 };
 
@@ -307,6 +367,7 @@ struct NHeaderCharacteristics {
   NHeaderCharacteristics(IO &) : Characteristics(COFF::Characteristics(0)) {}
   NHeaderCharacteristics(IO &, uint16_t C)
       : Characteristics(COFF::Characteristics(C)) {}
+
   uint16_t denormalize(IO &) { return Characteristics; }
 
   COFF::Characteristics Characteristics;
@@ -316,13 +377,16 @@ template <typename RelocType>
 struct NType {
   NType(IO &) : Type(RelocType(0)) {}
   NType(IO &, uint16_t T) : Type(RelocType(T)) {}
+
   uint16_t denormalize(IO &) { return Type; }
+
   RelocType Type;
 };
 
 struct NWindowsSubsystem {
   NWindowsSubsystem(IO &) : Subsystem(COFF::WindowsSubsystem(0)) {}
   NWindowsSubsystem(IO &, uint16_t C) : Subsystem(COFF::WindowsSubsystem(C)) {}
+
   uint16_t denormalize(IO &) { return Subsystem; }
 
   COFF::WindowsSubsystem Subsystem;
@@ -332,12 +396,13 @@ struct NDLLCharacteristics {
   NDLLCharacteristics(IO &) : Characteristics(COFF::DLLCharacteristics(0)) {}
   NDLLCharacteristics(IO &, uint16_t C)
       : Characteristics(COFF::DLLCharacteristics(C)) {}
+
   uint16_t denormalize(IO &) { return Characteristics; }
 
   COFF::DLLCharacteristics Characteristics;
 };
 
-}
+} // end anonymous namespace
 
 void MappingTraits<COFFYAML::Relocation>::mapping(IO &IO,
                                                   COFFYAML::Relocation &Rel) {
@@ -351,6 +416,14 @@ void MappingTraits<COFFYAML::Relocation>::mapping(IO &IO,
     IO.mapRequired("Type", NT->Type);
   } else if (H.Machine == COFF::IMAGE_FILE_MACHINE_AMD64) {
     MappingNormalization<NType<COFF::RelocationTypeAMD64>, uint16_t> NT(
+        IO, Rel.Type);
+    IO.mapRequired("Type", NT->Type);
+  } else if (H.Machine == COFF::IMAGE_FILE_MACHINE_ARMNT) {
+    MappingNormalization<NType<COFF::RelocationTypesARM>, uint16_t> NT(
+        IO, Rel.Type);
+    IO.mapRequired("Type", NT->Type);
+  } else if (H.Machine == COFF::IMAGE_FILE_MACHINE_ARM64) {
+    MappingNormalization<NType<COFF::RelocationTypesARM64>, uint16_t> NT(
         IO, Rel.Type);
     IO.mapRequired("Type", NT->Type);
   } else {
@@ -488,7 +561,18 @@ void MappingTraits<COFFYAML::Section>::mapping(IO &IO, COFFYAML::Section &Sec) {
   IO.mapOptional("VirtualAddress", Sec.Header.VirtualAddress, 0U);
   IO.mapOptional("VirtualSize", Sec.Header.VirtualSize, 0U);
   IO.mapOptional("Alignment", Sec.Alignment, 0U);
-  IO.mapRequired("SectionData", Sec.SectionData);
+
+  // If this is a .debug$S .debug$T, or .debug$H section parse the semantic
+  // representation of the symbols/types.  If it is any other kind of section,
+  // just deal in raw bytes.
+  IO.mapOptional("SectionData", Sec.SectionData);
+  if (Sec.Name == ".debug$S")
+    IO.mapOptional("Subsections", Sec.DebugS);
+  else if (Sec.Name == ".debug$T")
+    IO.mapOptional("Types", Sec.DebugT);
+  else if (Sec.Name == ".debug$H")
+    IO.mapOptional("GlobalHashes", Sec.DebugH);
+
   IO.mapOptional("Relocations", Sec.Relocations);
 }
 
@@ -500,5 +584,6 @@ void MappingTraits<COFFYAML::Object>::mapping(IO &IO, COFFYAML::Object &Obj) {
   IO.mapRequired("symbols", Obj.Symbols);
 }
 
-}
-}
+} // end namespace yaml
+
+} // end namespace llvm

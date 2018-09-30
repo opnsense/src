@@ -1,4 +1,4 @@
-/*	$NetBSD: make.h,v 1.102 2016/12/07 15:00:46 christos Exp $	*/
+/*	$NetBSD: make.h,v 1.104 2018/02/12 21:38:09 sjg Exp $	*/
 
 /*
  * Copyright (c) 1988, 1989, 1990, 1993
@@ -346,6 +346,7 @@ typedef struct GNode {
  * once the makefile has been parsed. PARSE_WARNING means it can. Passed
  * as the first argument to Parse_Error.
  */
+#define PARSE_INFO	3
 #define PARSE_WARNING	2
 #define PARSE_FATAL	1
 
@@ -541,6 +542,12 @@ int cached_stat(const char *, void *);
 #endif
 #ifndef PATH_MAX
 #define PATH_MAX	MAXPATHLEN
+#endif
+
+#if defined(SYSV)
+#define KILLPG(pid, sig)	kill(-(pid), (sig))
+#else
+#define KILLPG(pid, sig)	killpg((pid), (sig))
 #endif
 
 #endif /* _MAKE_H_ */

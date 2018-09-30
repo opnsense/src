@@ -10,8 +10,8 @@
 #ifndef LLVM_LIB_TARGET_X86_X86TARGETOBJECTFILE_H
 #define LLVM_LIB_TARGET_X86_X86TARGETOBJECTFILE_H
 
+#include "llvm/CodeGen/TargetLoweringObjectFile.h"
 #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
-#include "llvm/Target/TargetLoweringObjectFile.h"
 
 namespace llvm {
 
@@ -63,6 +63,11 @@ namespace llvm {
   /// X86LinuxNaClTargetObjectFile - This implementation is used for linux and
   /// Native Client on x86 and x86-64.
   class X86LinuxNaClTargetObjectFile : public X86ELFTargetObjectFile {
+    void Initialize(MCContext &Ctx, const TargetMachine &TM) override;
+  };
+
+  /// \brief This implementation is used for Solaris on x86/x86-64.
+  class X86SolarisTargetObjectFile : public X86ELFTargetObjectFile {
     void Initialize(MCContext &Ctx, const TargetMachine &TM) override;
   };
 

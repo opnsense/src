@@ -1,4 +1,4 @@
-//===-- ARMConstantPoolValue.cpp - ARM constantpool value -----------------===//
+//===- ARMConstantPoolValue.cpp - ARM constantpool value ------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -18,8 +18,11 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/Type.h"
+#include "llvm/Support/Casting.h"
+#include "llvm/Support/Compiler.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
-#include <cstdlib>
+
 using namespace llvm;
 
 //===----------------------------------------------------------------------===//
@@ -44,7 +47,7 @@ ARMConstantPoolValue::ARMConstantPoolValue(LLVMContext &C, unsigned id,
     LabelId(id), Kind(kind), PCAdjust(PCAdj), Modifier(modifier),
     AddCurrentAddress(addCurrentAddress) {}
 
-ARMConstantPoolValue::~ARMConstantPoolValue() {}
+ARMConstantPoolValue::~ARMConstantPoolValue() = default;
 
 StringRef ARMConstantPoolValue::getModifierText() const {
   switch (Modifier) {
@@ -94,9 +97,11 @@ ARMConstantPoolValue::hasSameValue(ARMConstantPoolValue *ACPV) {
   return false;
 }
 
+#if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
 LLVM_DUMP_METHOD void ARMConstantPoolValue::dump() const {
   errs() << "  " << *this;
 }
+#endif
 
 void ARMConstantPoolValue::print(raw_ostream &O) const {
   if (Modifier) O << "(" << getModifierText() << ")";
@@ -134,8 +139,9 @@ ARMConstantPoolConstant::ARMConstantPoolConstant(const Constant *C,
 ARMConstantPoolConstant::ARMConstantPoolConstant(const GlobalVariable *GV,
                                                  const Constant *C)
     : ARMConstantPoolValue((Type *)C->getType(), 0, ARMCP::CPPromotedGlobal, 0,
-                           ARMCP::no_modifier, false),
-      CVal(C), GVar(GV) {}
+                           ARMCP::no_modifier, false), CVal(C) {
+  GVars.insert(GV);
+}
 
 ARMConstantPoolConstant *
 ARMConstantPoolConstant::Create(const Constant *C, unsigned ID) {
@@ -183,7 +189,15 @@ const BlockAddress *ARMConstantPoolConstant::getBlockAddress() const {
 
 int ARMConstantPoolConstant::getExistingMachineCPValue(MachineConstantPool *CP,
                                                        unsigned Alignment) {
-  return getExistingMachineCPValueImpl<ARMConstantPoolConstant>(CP, Alignment);
+  int index =
+    getExistingMachineCPValueImpl<ARMConstantPoolConstant>(CP, Alignment);
+  if (index != -1) {
+    auto *CPV = static_cast<ARMConstantPoolValue*>(
+        CP->getConstants()[index].Val.MachineCPVal);
+    auto *Constant = cast<ARMConstantPoolConstant>(CPV);
+    Constant->GVars.insert(GVars.begin(), GVars.end());
+  }
+  return index;
 }
 
 bool ARMConstantPoolConstant::hasSameValue(ARMConstantPoolValue *ACPV) {
@@ -193,6 +207,8 @@ bool ARMConstantPoolConstant::hasSameValue(ARMConstantPoolValue *ACPV) {
 
 void ARMConstantPoolConstant::addSelectionDAGCSEId(FoldingSetNodeID &ID) {
   ID.AddPointer(CVal);
+  for (const auto *GV : GVars)
+    ID.AddPointer(GV);
   ARMConstantPoolValue::addSelectionDAGCSEId(ID);
 }
 
@@ -276,6 +292,6 @@ void ARMConstantPoolMBB::addSelectionDAGCSEId(FoldingSetNodeID &ID) {
 }
 
 void ARMConstantPoolMBB::print(raw_ostream &O) const {
-  O << "BB#" << MBB->getNumber();
+  O << printMBBReference(*MBB);
   ARMConstantPoolValue::print(O);
 }

@@ -2,7 +2,9 @@
 
 /* Tokens for config file lexer and parser. */
 
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1995, 1996, 1997, 1998, 1999
  * The Internet Software Consortium.  All rights reserved.
  *
@@ -38,6 +40,8 @@
  * Enterprises.  To learn more about the Internet Software Consortium,
  * see ``http://www.vix.com/isc''.  To learn more about Vixie
  * Enterprises, see ``http://www.vix.com''.
+ *
+ * $FreeBSD$
  */
 
 #define SEMI ';'
@@ -129,9 +133,6 @@
 #define AUTHORITATIVE	333
 #define TOKEN_NOT	334
 #define ALWAYS_REPLY_RFC1048 335
-#define VLAN_ID		336
-#define VLAN_PCP	337
-#define VLAN_PARENT	338
 
 #define is_identifier(x)	((x) >= FIRST_TOKEN &&	\
 				 (x) != STRING &&	\

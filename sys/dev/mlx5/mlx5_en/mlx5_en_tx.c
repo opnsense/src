@@ -81,11 +81,15 @@ static struct mlx5e_sq *
 mlx5e_select_queue(struct ifnet *ifp, struct mbuf *mb)
 {
 	struct mlx5e_priv *priv = ifp->if_softc;
+	struct mlx5e_channel * volatile *ppch;
+	struct mlx5e_channel *pch;
 	u32 ch;
 	u32 tc;
 
+	ppch = priv->channel;
+
 	/* check if channels are successfully opened */
-	if (unlikely(priv->channel == NULL))
+	if (unlikely(ppch == NULL))
 		return (NULL);
 
 	/* obtain VLAN information if present */
@@ -123,11 +127,11 @@ mlx5e_select_queue(struct ifnet *ifp, struct mbuf *mb)
 #endif
 	}
 
-	/* check if channel is allocated */
-	if (unlikely(priv->channel[ch] == NULL))
-		return (NULL);
-
-	return (&priv->channel[ch]->sq[tc]);
+	/* check if channel is allocated and not stopped */
+	pch = ppch[ch];
+	if (likely(pch != NULL && pch->sq[tc].stopped == 0))
+		return (&pch->sq[tc]);
+	return (NULL);
 }
 
 static inline u16
@@ -307,22 +311,9 @@ mlx5e_sq_xmit(struct mlx5e_sq *sq, struct mbuf **mbp)
 	}
 	dseg = ((struct mlx5_wqe_data_seg *)&wqe->ctrl) + ds_cnt;
 
-	/* Trim off empty mbufs */
-	while (mb->m_len == 0) {
-		mb = m_free(mb);
-		/* Check if all data has been inlined */
-		if (mb == NULL)
-			goto skip_dma;
-	}
-
 	err = bus_dmamap_load_mbuf_sg(sq->dma_tag, sq->mbuf[pi].dma_map,
 	    mb, segs, &nsegs, BUS_DMA_NOWAIT);
 	if (err == EFBIG) {
-		/*
-		 * Update *mbp before defrag in case it was trimmed in the
-		 * loop above
-		 */
-		*mbp = mb;
 		/* Update statistics */
 		sq->stats.defragged++;
 		/* Too many mbuf fragments */
@@ -339,6 +330,17 @@ mlx5e_sq_xmit(struct mlx5e_sq *sq, struct mbuf **mbp)
 	if (err != 0)
 		goto tx_drop;
 
+	/* Make sure all mbuf data, if any, is written to RAM */
+	if (nsegs != 0) {
+		bus_dmamap_sync(sq->dma_tag, sq->mbuf[pi].dma_map,
+		    BUS_DMASYNC_PREWRITE);
+	} else {
+		/* All data was inlined, free the mbuf. */
+		bus_dmamap_unload(sq->dma_tag, sq->mbuf[pi].dma_map);
+		m_freem(mb);
+		mb = NULL;
+	}
+
 	for (x = 0; x != nsegs; x++) {
 		if (segs[x].ds_len == 0)
 			continue;
@@ -347,7 +349,7 @@ mlx5e_sq_xmit(struct mlx5e_sq *sq, struct mbuf **mbp)
 		dseg->byte_count = cpu_to_be32((uint32_t)segs[x].ds_len);
 		dseg++;
 	}
-skip_dma:
+
 	ds_cnt = (dseg - ((struct mlx5_wqe_data_seg *)&wqe->ctrl));
 
 	wqe->ctrl.opmod_idx_opcode = cpu_to_be32((sq->pc << 8) | opcode);
@@ -364,10 +366,6 @@ skip_dma:
 	sq->mbuf[pi].mbuf = mb;
 	sq->mbuf[pi].num_wqebbs = DIV_ROUND_UP(ds_cnt, MLX5_SEND_WQEBB_NUM_DS);
 	sq->pc += sq->mbuf[pi].num_wqebbs;
-
-	/* Make sure all mbuf data is written to RAM */
-	if (mb != NULL)
-		bus_dmamap_sync(sq->dma_tag, sq->mbuf[pi].dma_map, BUS_DMASYNC_PREWRITE);
 
 	sq->stats.packets++;
 	*mbp = NULL;	/* safety clear */
@@ -431,11 +429,12 @@ mlx5e_poll_tx_cq(struct mlx5e_sq *sq, int budget)
 	mlx5_cqwq_update_db_record(&sq->cq.wq);
 
 	/* Ensure cq space is freed before enabling more cqes */
-	wmb();
+	atomic_thread_fence_rel();
 
 	sq->cc = sqcc;
 
-	if (atomic_cmpset_int(&sq->queue_state, MLX5E_SQ_FULL, MLX5E_SQ_READY))
+	if (sq->sq_tq != NULL &&
+	    atomic_cmpset_int(&sq->queue_state, MLX5E_SQ_FULL, MLX5E_SQ_READY))
 		taskqueue_enqueue(sq->sq_tq, &sq->sq_task);
 }
 
@@ -445,18 +444,21 @@ mlx5e_xmit_locked(struct ifnet *ifp, struct mlx5e_sq *sq, struct mbuf *mb)
 	struct mbuf *next;
 	int err = 0;
 
-	if ((ifp->if_drv_flags & IFF_DRV_RUNNING) == 0) {
-		if (mb)
-			err = drbr_enqueue(ifp, sq->br, mb);
-		return (err);
-	}
-
-	if (mb != NULL)
+	if (likely(mb != NULL)) {
 		/*
 		 * If we can't insert mbuf into drbr, try to xmit anyway.
 		 * We keep the error we got so we could return that after xmit.
 		 */
 		err = drbr_enqueue(ifp, sq->br, mb);
+	}
+
+	/*
+	 * Check if the network interface is closed or if the SQ is
+	 * being stopped:
+	 */
+	if (unlikely((ifp->if_drv_flags & IFF_DRV_RUNNING) == 0 ||
+	    sq->stopped != 0))
+		return (err);
 
 	/* Process the queue */
 	while ((next = drbr_peek(ifp, sq->br)) != NULL) {
@@ -470,14 +472,51 @@ mlx5e_xmit_locked(struct ifnet *ifp, struct mlx5e_sq *sq, struct mbuf *mb)
 			break;
 		}
 		drbr_advance(ifp, sq->br);
-		if ((ifp->if_drv_flags & IFF_DRV_RUNNING) == 0)
-			break;
 	}
 	/* Check if we need to write the doorbell */
 	if (likely(sq->doorbell.d64 != 0)) {
 		mlx5e_tx_notify_hw(sq, sq->doorbell.d32, 0);
 		sq->doorbell.d64 = 0;
 	}
+	/*
+	 * Check if we need to start the event timer which flushes the
+	 * transmit ring on timeout:
+	 */
+	if (unlikely(sq->cev_next_state == MLX5E_CEV_STATE_INITIAL &&
+	    sq->cev_factor != 1)) {
+		/* start the timer */
+		mlx5e_sq_cev_timeout(sq);
+	} else {
+		/* don't send NOPs yet */
+		sq->cev_next_state = MLX5E_CEV_STATE_HOLD_NOPS;
+	}
+	return (err);
+}
+
+static int
+mlx5e_xmit_locked_no_br(struct ifnet *ifp, struct mlx5e_sq *sq, struct mbuf *mb)
+{
+	int err = 0;
+
+	if (unlikely((ifp->if_drv_flags & IFF_DRV_RUNNING) == 0 ||
+	    sq->stopped != 0)) {
+		m_freem(mb);
+		return (ENETDOWN);
+	}
+
+	/* Do transmit */
+	if (mlx5e_sq_xmit(sq, &mb) != 0) {
+		/* NOTE: m_freem() is NULL safe */
+		m_freem(mb);
+		err = ENOBUFS;
+	}
+
+	/* Check if we need to write the doorbell */
+	if (likely(sq->doorbell.d64 != 0)) {
+		mlx5e_tx_notify_hw(sq, sq->doorbell.d32, 0);
+		sq->doorbell.d64 = 0;
+	}
+
 	/*
 	 * Check if we need to start the event timer which flushes the
 	 * transmit ring on timeout:
@@ -505,7 +544,13 @@ mlx5e_xmit(struct ifnet *ifp, struct mbuf *mb)
 		m_freem(mb);
 		return (ENXIO);
 	}
-	if (mtx_trylock(&sq->lock)) {
+
+	if (unlikely(sq->br == NULL)) {
+		/* rate limited traffic */
+		mtx_lock(&sq->lock);
+		ret = mlx5e_xmit_locked_no_br(ifp, sq, mb);
+		mtx_unlock(&sq->lock);
+	} else if (mtx_trylock(&sq->lock)) {
 		ret = mlx5e_xmit_locked(ifp, sq, mb);
 		mtx_unlock(&sq->lock);
 	} else {
@@ -523,7 +568,7 @@ mlx5e_tx_cq_comp(struct mlx5_core_cq *mcq)
 
 	mtx_lock(&sq->comp_lock);
 	mlx5e_poll_tx_cq(sq, MLX5E_BUDGET_MAX);
-	mlx5e_cq_arm(&sq->cq);
+	mlx5e_cq_arm(&sq->cq, MLX5_GET_DOORBELL_LOCK(&sq->priv->doorbell_lock));
 	mtx_unlock(&sq->comp_lock);
 }
 

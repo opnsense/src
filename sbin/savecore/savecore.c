@@ -68,12 +68,14 @@ __FBSDID("$FreeBSD$");
 #include <sys/kerneldump.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <fstab.h>
 #include <paths.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -99,30 +101,39 @@ static sig_atomic_t got_siginfo;
 static void infohandler(int);
 
 static void
-printheader(xo_handle_t *xo, const struct kerneldumpheader *h, const char *device,
-    int bounds, const int status)
+printheader(xo_handle_t *xo, const struct kerneldumpheader *h,
+    const char *device, int bounds, const int status)
 {
 	uint64_t dumplen;
 	time_t t;
 	const char *stat_str;
 
 	xo_flush_h(xo);
-	xo_emit_h(xo, "{Lwc:Dump header from device}{:dump_device/%s}\n", device);
-	xo_emit_h(xo, "{P:  }{Lwc:Architecture}{:architecture/%s}\n", h->architecture);
-	xo_emit_h(xo, "{P:  }{Lwc:Architecture Version}{:architecture_version/%u}\n", dtoh32(h->architectureversion));
+	xo_emit_h(xo, "{Lwc:Dump header from device}{:dump_device/%s}\n",
+	    device);
+	xo_emit_h(xo, "{P:  }{Lwc:Architecture}{:architecture/%s}\n",
+	    h->architecture);
+	xo_emit_h(xo,
+	    "{P:  }{Lwc:Architecture Version}{:architecture_version/%u}\n",
+	    dtoh32(h->architectureversion));
 	dumplen = dtoh64(h->dumplength);
-	xo_emit_h(xo, "{P:  }{Lwc:Dump Length}{:dump_length_bytes/%lld}\n", (long long)dumplen);
-	xo_emit_h(xo, "{P:  }{Lwc:Blocksize}{:blocksize/%d}\n", dtoh32(h->blocksize));
+	xo_emit_h(xo, "{P:  }{Lwc:Dump Length}{:dump_length_bytes/%lld}\n",
+	    (long long)dumplen);
+	xo_emit_h(xo, "{P:  }{Lwc:Blocksize}{:blocksize/%d}\n",
+	    dtoh32(h->blocksize));
+
 	t = dtoh64(h->dumptime);
 	xo_emit_h(xo, "{P:  }{Lwc:Dumptime}{:dumptime/%s}", ctime(&t));
 	xo_emit_h(xo, "{P:  }{Lwc:Hostname}{:hostname/%s}\n", h->hostname);
 	xo_emit_h(xo, "{P:  }{Lwc:Magic}{:magic/%s}\n", h->magic);
-	xo_emit_h(xo, "{P:  }{Lwc:Version String}{:version_string/%s}", h->versionstring);
-	xo_emit_h(xo, "{P:  }{Lwc:Panic String}{:panic_string/%s}\n", h->panicstring);
+	xo_emit_h(xo, "{P:  }{Lwc:Version String}{:version_string/%s}",
+	    h->versionstring);
+	xo_emit_h(xo, "{P:  }{Lwc:Panic String}{:panic_string/%s}\n",
+	    h->panicstring);
 	xo_emit_h(xo, "{P:  }{Lwc:Dump Parity}{:dump_parity/%u}\n", h->parity);
 	xo_emit_h(xo, "{P:  }{Lwc:Bounds}{:bounds/%d}\n", bounds);
 
-	switch(status) {
+	switch (status) {
 	case STATUS_BAD:
 		stat_str = "bad";
 		break;
@@ -131,16 +142,25 @@ printheader(xo_handle_t *xo, const struct kerneldumpheader *h, const char *devic
 		break;
 	default:
 		stat_str = "unknown";
+		break;
 	}
 	xo_emit_h(xo, "{P:  }{Lwc:Dump Status}{:dump_status/%s}\n", stat_str);
 	xo_flush_h(xo);
 }
 
 static int
-getbounds(void) {
+getbounds(void)
+{
 	FILE *fp;
 	char buf[6];
 	int ret;
+
+	/*
+	 * If we are just checking, then we haven't done a chdir to the dump
+	 * directory and we should not try to read a bounds file.
+	 */
+	if (checkfor)
+		return (0);
 
 	ret = 0;
 
@@ -168,7 +188,8 @@ getbounds(void) {
 }
 
 static void
-writebounds(int bounds) {
+writebounds(int bounds)
+{
 	FILE *fp;
 
 	if ((fp = fopen("bounds", "w")) == NULL) {
@@ -252,7 +273,7 @@ static int
 check_space(const char *savedir, off_t dumpsize, int bounds)
 {
 	FILE *fp;
-	off_t minfree, spacefree, totfree, needed;
+	off_t available, minfree, spacefree, totfree, needed;
 	struct statfs fsbuf;
 	char buf[100];
 
@@ -268,25 +289,50 @@ check_space(const char *savedir, off_t dumpsize, int bounds)
 	else {
 		if (fgets(buf, sizeof(buf), fp) == NULL)
 			minfree = 0;
-		else
-			minfree = atoi(buf);
+		else {
+			char *endp;
+
+			errno = 0;
+			minfree = strtoll(buf, &endp, 10);
+			if (minfree == 0 && errno != 0)
+				minfree = -1;
+			else {
+				while (*endp != '\0' && isspace(*endp))
+					endp++;
+				if (*endp != '\0' || minfree < 0)
+					minfree = -1;
+			}
+			if (minfree < 0)
+				syslog(LOG_WARNING,
+				    "`minfree` didn't contain a valid size "
+				    "(`%s`). Defaulting to 0", buf);
+		}
 		(void)fclose(fp);
 	}
 
+	available = minfree > 0 ? spacefree - minfree : totfree;
 	needed = dumpsize / 1024 + 2;	/* 2 for info file */
 	needed -= saved_dump_size(bounds);
-	if ((minfree > 0 ? spacefree : totfree) - needed < minfree) {
+	if (available < needed) {
 		syslog(LOG_WARNING,
-		    "no dump: not enough free space on device (%lldkB "
-		    "available; need at least %lldkB)",
-		    (long long)(minfree > 0 ? spacefree : totfree),
-		    (long long)needed);
+		    "no dump: not enough free space on device (need at least "
+		    "%jdkB for dump; %jdkB available; %jdkB reserved)",
+		    (intmax_t)needed,
+		    (intmax_t)available + minfree,
+		    (intmax_t)minfree);
 		return (0);
 	}
 	if (spacefree - needed < 0)
 		syslog(LOG_WARNING,
 		    "dump performed, but free space threshold crossed");
 	return (1);
+}
+
+static bool
+compare_magic(const struct kerneldumpheader *kdh, const char *magic)
+{
+
+	return (strncmp(kdh->magic, magic, sizeof(kdh->magic)) == 0);
 }
 
 #define BLOCKSIZE (1<<12)
@@ -345,8 +391,8 @@ DoRegularFile(int fd, off_t dumpsize, char *buf, const char *device,
 				/*
 				 * At this point, we have a partial ordering:
 				 *     nw <= hs <= he <= nr
-				 * If hs > nw, buf[nw..hs] contains non-zero data.
-				 * If he > hs, buf[hs..he] is all zeroes.
+				 * If hs > nw, buf[nw..hs] contains non-zero
+				 * data. If he > hs, buf[hs..he] is all zeroes.
 				 */
 				if (hs > nw)
 					if (fwrite(buf + nw, hs - nw, 1, fp)
@@ -515,7 +561,7 @@ DoFile(const char *savedir, const char *device)
 	}
 	memcpy(&kdhl, temp, sizeof(kdhl));
 	istextdump = 0;
-	if (strncmp(kdhl.magic, TEXTDUMPMAGIC, sizeof kdhl) == 0) {
+	if (compare_magic(&kdhl, TEXTDUMPMAGIC)) {
 		if (verbose)
 			printf("textdump magic on last dump header on %s\n",
 			    device);
@@ -529,8 +575,7 @@ DoFile(const char *savedir, const char *device)
 			if (force == 0)
 				goto closefd;
 		}
-	} else if (memcmp(kdhl.magic, KERNELDUMPMAGIC, sizeof kdhl.magic) ==
-	    0) {
+	} else if (compare_magic(&kdhl, KERNELDUMPMAGIC)) {
 		if (dtoh32(kdhl.version) != KERNELDUMPVERSION) {
 			syslog(LOG_ERR,
 			    "unknown version (%d) in last dump header on %s",
@@ -549,8 +594,7 @@ DoFile(const char *savedir, const char *device)
 		if (force == 0)
 			goto closefd;
 
-		if (memcmp(kdhl.magic, KERNELDUMPMAGIC_CLEARED,
-			    sizeof kdhl.magic) == 0) {
+		if (compare_magic(&kdhl, KERNELDUMPMAGIC_CLEARED)) {
 			if (verbose)
 				printf("forcing magic on %s\n", device);
 			memcpy(kdhl.magic, KERNELDUMPMAGIC,
@@ -650,7 +694,7 @@ DoFile(const char *savedir, const char *device)
 		goto closefd;
 	}
 
-	oumask = umask(S_IRWXG|S_IRWXO); /* Restrict access to the core file.*/
+	oumask = umask(S_IRWXG|S_IRWXO); /* Restrict access to the core file. */
 	if (compress) {
 		snprintf(corename, sizeof(corename), "%s.%d.gz",
 		    istextdump ? "textdump.tar" : "vmcore", bounds);
@@ -864,7 +908,8 @@ main(int argc, char **argv)
 	} else if (nsaved == 0) {
 		if (nerr != 0) {
 			if (verbose)
-				syslog(LOG_WARNING, "unsaved dumps found but not saved");
+				syslog(LOG_WARNING,
+				    "unsaved dumps found but not saved");
 			exit(1);
 		} else if (verbose)
 			syslog(LOG_WARNING, "no unsaved dumps found");

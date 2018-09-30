@@ -1,4 +1,4 @@
-/*      $NetBSD: meta.c,v 1.67 2016/08/17 15:52:42 sjg Exp $ */
+/*      $NetBSD: meta.c,v 1.70 2018/02/13 19:37:30 sjg Exp $ */
 
 /*
  * Implement 'meta' mode.
@@ -250,6 +250,8 @@ meta_name(char *mname, size_t mnamelen,
     char *rp;
     char *cp;
     char *tp;
+    char *dtp;
+    size_t ldname;
 
     /*
      * Weed out relative paths from the target file name.
@@ -286,10 +288,15 @@ meta_name(char *mname, size_t mnamelen,
     }
     /* on some systems dirname may modify its arg */
     tp = bmake_strdup(tname);
-    if (strcmp(dname, dirname(tp)) == 0)
+    dtp = dirname(tp);
+    if (strcmp(dname, dtp) == 0)
 	snprintf(mname, mnamelen, "%s.meta", tname);
     else {
-	snprintf(mname, mnamelen, "%s/%s.meta", dname, tname);
+	ldname = strlen(dname);
+	if (strncmp(dname, dtp, ldname) == 0 && dtp[ldname] == '/')
+	    snprintf(mname, mnamelen, "%s/%s.meta", dname, &tname[ldname+1]);
+	else
+	    snprintf(mname, mnamelen, "%s/%s.meta", dname, tname);
 
 	/*
 	 * Replace path separators in the file name after the
@@ -727,7 +734,7 @@ meta_job_error(Job *job, GNode *gn, int flags, int status)
 	pbm = &Mybm;
     }
     if (pbm->mfp != NULL) {
-	fprintf(pbm->mfp, "*** Error code %d%s\n",
+	fprintf(pbm->mfp, "\n*** Error code %d%s\n",
 		status,
 		(flags & JOB_IGNERR) ?
 		"(ignored)" : "");
@@ -782,13 +789,15 @@ int
 meta_cmd_finish(void *pbmp)
 {
     int error = 0;
-#ifdef USE_FILEMON
     BuildMon *pbm = pbmp;
+#ifdef USE_FILEMON
     int x;
+#endif
 
     if (!pbm)
 	pbm = &Mybm;
 
+#ifdef USE_FILEMON
     if (pbm->filemon_fd >= 0) {
 	if (close(pbm->filemon_fd) < 0)
 	    error = errno;
@@ -796,8 +805,9 @@ meta_cmd_finish(void *pbmp)
 	if (error == 0 && x != 0)
 	    error = x;
 	pbm->filemon_fd = pbm->mon_fd = -1;
-    }
+    } else
 #endif
+	fprintf(pbm->mfp, "\n");	/* ensure end with newline */
     return error;
 }
 
@@ -861,6 +871,8 @@ fgetLine(char **bufp, size_t *szp, int o, FILE *fp)
 	    newsz = ROUNDUP((fs.st_size / 2), BUFSIZ);
 	    if (newsz <= bufsz)
 		newsz = ROUNDUP(fs.st_size, BUFSIZ);
+	    if (newsz <= bufsz)
+		return x;		/* truncated */
 	    if (DEBUG(META)) 
 		fprintf(debug_file, "growing buffer %u -> %u\n",
 			(unsigned)bufsz, (unsigned)newsz);
@@ -948,10 +960,10 @@ meta_ignore(GNode *gn, const char *p)
     if (metaIgnorePatterns) {
 	char *pm;
 
-	snprintf(fname, sizeof(fname),
-		 "${%s:@m@${%s:L:M$m}@}",
-		 MAKE_META_IGNORE_PATTERNS, p);
-	pm = Var_Subst(NULL, fname, gn, VARF_WANTRES);
+	Var_Set(".p.", p, gn, 0);
+	pm = Var_Subst(NULL,
+		       "${" MAKE_META_IGNORE_PATTERNS ":@m@${.p.:M$m}@}",
+		       gn, VARF_WANTRES);
 	if (*pm) {
 #ifdef DEBUG_META_MODE
 	    if (DEBUG(META))

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1999 Mitsuru IWASAKI <iwasaki@FreeBSD.org>
  * All rights reserved.
  *
@@ -203,8 +205,8 @@ usage(const char* prog)
 int
 main(int argc, char *argv[])
 {
-	char	c, *prog;
-	int	sleep_type;
+	char	*prog;
+	int	c, sleep_type;
 
 	prog = argv[0];
 	if (argc < 2)

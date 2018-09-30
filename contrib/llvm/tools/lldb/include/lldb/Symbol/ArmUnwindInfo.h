@@ -12,9 +12,9 @@
 
 #include <vector>
 
-#include "lldb/Core/DataExtractor.h"
 #include "lldb/Core/RangeMap.h"
 #include "lldb/Symbol/ObjectFile.h"
+#include "lldb/Utility/DataExtractor.h"
 #include "lldb/lldb-private.h"
 
 /*
@@ -31,7 +31,7 @@ namespace lldb_private {
 
 class ArmUnwindInfo {
 public:
-  ArmUnwindInfo(const ObjectFile &objfile, lldb::SectionSP &arm_exidx,
+  ArmUnwindInfo(ObjectFile &objfile, lldb::SectionSP &arm_exidx,
                 lldb::SectionSP &arm_extab);
 
   ~ArmUnwindInfo();

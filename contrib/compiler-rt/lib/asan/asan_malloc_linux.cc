@@ -15,7 +15,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "sanitizer_common/sanitizer_platform.h"
-#if SANITIZER_FREEBSD || SANITIZER_LINUX
+#if SANITIZER_FREEBSD || SANITIZER_FUCHSIA || SANITIZER_LINUX || \
+    SANITIZER_NETBSD || SANITIZER_SOLARIS
 
 #include "sanitizer_common/sanitizer_tls_get_addr.h"
 #include "asan_allocator.h"
@@ -30,9 +31,9 @@ static uptr allocated_for_dlsym;
 static const uptr kDlsymAllocPoolSize = 1024;
 static uptr alloc_memory_for_dlsym[kDlsymAllocPoolSize];
 
-static bool IsInDlsymAllocPool(const void *ptr) {
+static INLINE bool IsInDlsymAllocPool(const void *ptr) {
   uptr off = (uptr)ptr - (uptr)alloc_memory_for_dlsym;
-  return off < sizeof(alloc_memory_for_dlsym);
+  return off < allocated_for_dlsym * sizeof(alloc_memory_for_dlsym[0]);
 }
 
 static void *AllocateFromLocalPool(uptr size_in_bytes) {
@@ -41,6 +42,26 @@ static void *AllocateFromLocalPool(uptr size_in_bytes) {
   allocated_for_dlsym += size_in_words;
   CHECK_LT(allocated_for_dlsym, kDlsymAllocPoolSize);
   return mem;
+}
+
+static INLINE bool MaybeInDlsym() {
+  // Fuchsia doesn't use dlsym-based interceptors.
+  return !SANITIZER_FUCHSIA && asan_init_is_running;
+}
+
+static void *ReallocFromLocalPool(void *ptr, uptr size) {
+  const uptr offset = (uptr)ptr - (uptr)alloc_memory_for_dlsym;
+  const uptr copy_size = Min(size, kDlsymAllocPoolSize - offset);
+  void *new_ptr;
+  if (UNLIKELY(MaybeInDlsym())) {
+    new_ptr = AllocateFromLocalPool(size);
+  } else {
+    ENSURE_ASAN_INITED();
+    GET_STACK_TRACE_MALLOC;
+    new_ptr = asan_malloc(size, &stack);
+  }
+  internal_memcpy(new_ptr, ptr, copy_size);
+  return new_ptr;
 }
 
 INTERCEPTOR(void, free, void *ptr) {
@@ -60,36 +81,30 @@ INTERCEPTOR(void, cfree, void *ptr) {
 #endif // SANITIZER_INTERCEPT_CFREE
 
 INTERCEPTOR(void*, malloc, uptr size) {
-  if (UNLIKELY(!asan_inited))
+  if (UNLIKELY(MaybeInDlsym()))
     // Hack: dlsym calls malloc before REAL(malloc) is retrieved from dlsym.
     return AllocateFromLocalPool(size);
+  ENSURE_ASAN_INITED();
   GET_STACK_TRACE_MALLOC;
   return asan_malloc(size, &stack);
 }
 
 INTERCEPTOR(void*, calloc, uptr nmemb, uptr size) {
-  if (UNLIKELY(!asan_inited))
+  if (UNLIKELY(MaybeInDlsym()))
     // Hack: dlsym calls calloc before REAL(calloc) is retrieved from dlsym.
     return AllocateFromLocalPool(nmemb * size);
+  ENSURE_ASAN_INITED();
   GET_STACK_TRACE_MALLOC;
   return asan_calloc(nmemb, size, &stack);
 }
 
 INTERCEPTOR(void*, realloc, void *ptr, uptr size) {
+  if (UNLIKELY(IsInDlsymAllocPool(ptr)))
+    return ReallocFromLocalPool(ptr, size);
+  if (UNLIKELY(MaybeInDlsym()))
+    return AllocateFromLocalPool(size);
+  ENSURE_ASAN_INITED();
   GET_STACK_TRACE_MALLOC;
-  if (UNLIKELY(IsInDlsymAllocPool(ptr))) {
-    uptr offset = (uptr)ptr - (uptr)alloc_memory_for_dlsym;
-    uptr copy_size = Min(size, kDlsymAllocPoolSize - offset);
-    void *new_ptr;
-    if (UNLIKELY(!asan_inited)) {
-      new_ptr = AllocateFromLocalPool(size);
-    } else {
-      copy_size = size;
-      new_ptr = asan_malloc(copy_size, &stack);
-    }
-    internal_memcpy(new_ptr, ptr, copy_size);
-    return new_ptr;
-  }
   return asan_realloc(ptr, size, &stack);
 }
 
@@ -220,4 +235,5 @@ void ReplaceSystemMalloc() {
 }  // namespace __asan
 #endif  // SANITIZER_ANDROID
 
-#endif  // SANITIZER_FREEBSD || SANITIZER_LINUX
+#endif  // SANITIZER_FREEBSD || SANITIZER_FUCHSIA || SANITIZER_LINUX ||
+        // SANITIZER_NETBSD || SANITIZER_SOLARIS

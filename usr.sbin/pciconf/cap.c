@@ -159,7 +159,7 @@ cap_pcix(int fd, struct pci_conf *p, uint8_t ptr)
 		printf("supports");
 	comma = 0;
 	if (status & PCIXM_STATUS_133CAP) {
-		printf("%s 133MHz", comma ? "," : "");
+		printf(" 133MHz");
 		comma = 1;
 	}
 	if (status & PCIXM_STATUS_266CAP) {
@@ -349,10 +349,8 @@ cap_vendor(int fd, struct pci_conf *p, uint8_t ptr)
 				printf("%s SATA RAID-0/1/10", comma ? "," : "");
 				comma = 1;
 			}
-			if (fvec & (1 << 3)) {
-				printf("%s SATA AHCI", comma ? "," : "");
-				comma = 1;
-			}
+			if (fvec & (1 << 3))
+				printf(", SATA AHCI");
 		}
 	}
 }

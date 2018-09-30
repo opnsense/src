@@ -27,7 +27,7 @@
 #include "llvm/CodeGen/RegisterUsageInfo.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetFrameLowering.h"
+#include "llvm/CodeGen/TargetFrameLowering.h"
 
 using namespace llvm;
 
@@ -95,7 +95,7 @@ bool RegUsageInfoCollector::runOnMachineFunction(MachineFunction &MF) {
   unsigned RegMaskSize = (TRI->getNumRegs() + 31) / 32;
   RegMask.resize(RegMaskSize, 0xFFFFFFFF);
 
-  const Function *F = MF.getFunction();
+  const Function &F = MF.getFunction();
 
   PhysicalRegisterUsageInfo *PRUI = &getAnalysis<PhysicalRegisterUsageInfo>();
 
@@ -103,16 +103,36 @@ bool RegUsageInfoCollector::runOnMachineFunction(MachineFunction &MF) {
 
   DEBUG(dbgs() << "Clobbered Registers: ");
 
-  for (unsigned PReg = 1, PRegE = TRI->getNumRegs(); PReg < PRegE; ++PReg)
-    if (MRI->isPhysRegModified(PReg, true))
-      RegMask[PReg / 32] &= ~(1u << PReg % 32);
+  const BitVector &UsedPhysRegsMask = MRI->getUsedPhysRegsMask();
+  auto SetRegAsDefined = [&RegMask] (unsigned Reg) {
+    RegMask[Reg / 32] &= ~(1u << Reg % 32);
+  };
+  // Scan all the physical registers. When a register is defined in the current
+  // function set it and all the aliasing registers as defined in the regmask.
+  for (unsigned PReg = 1, PRegE = TRI->getNumRegs(); PReg < PRegE; ++PReg) {
+    // If a register is in the UsedPhysRegsMask set then mark it as defined.
+    // All it's aliases will also be in the set, so we can skip setting
+    // as defined all the aliases here.
+    if (UsedPhysRegsMask.test(PReg)) {
+      SetRegAsDefined(PReg);
+      continue;
+    }
+    // If a register is defined by an instruction mark it as defined together
+    // with all it's aliases.
+    if (!MRI->def_empty(PReg)) {
+      for (MCRegAliasIterator AI(PReg, TRI, true); AI.isValid(); ++AI)
+        SetRegAsDefined(*AI);
+    }
+  }
 
   if (!TargetFrameLowering::isSafeForNoCSROpt(F)) {
     const uint32_t *CallPreservedMask =
-        TRI->getCallPreservedMask(MF, F->getCallingConv());
-    // Set callee saved register as preserved.
-    for (unsigned i = 0; i < RegMaskSize; ++i)
-      RegMask[i] = RegMask[i] | CallPreservedMask[i];
+        TRI->getCallPreservedMask(MF, F.getCallingConv());
+    if (CallPreservedMask) {
+      // Set callee saved register as preserved.
+      for (unsigned i = 0; i < RegMaskSize; ++i)
+        RegMask[i] = RegMask[i] | CallPreservedMask[i];
+    }
   } else {
     ++NumCSROpt;
     DEBUG(dbgs() << MF.getName()
@@ -121,11 +141,11 @@ bool RegUsageInfoCollector::runOnMachineFunction(MachineFunction &MF) {
 
   for (unsigned PReg = 1, PRegE = TRI->getNumRegs(); PReg < PRegE; ++PReg)
     if (MachineOperand::clobbersPhysReg(&(RegMask[0]), PReg))
-      DEBUG(dbgs() << TRI->getName(PReg) << " ");
+      DEBUG(dbgs() << printReg(PReg, TRI) << " ");
 
   DEBUG(dbgs() << " \n----------------------------------------\n");
 
-  PRUI->storeUpdateRegUsageInfo(F, std::move(RegMask));
+  PRUI->storeUpdateRegUsageInfo(&F, std::move(RegMask));
 
   return false;
 }

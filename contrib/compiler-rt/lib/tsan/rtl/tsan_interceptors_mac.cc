@@ -21,7 +21,10 @@
 #include "tsan_interface_ann.h"
 
 #include <libkern/OSAtomic.h>
+
+#if defined(__has_include) && __has_include(<xpc/xpc.h>)
 #include <xpc/xpc.h>
+#endif  // #if defined(__has_include) && __has_include(<xpc/xpc.h>)
 
 typedef long long_t;  // NOLINT
 
@@ -97,7 +100,7 @@ OSATOMIC_INTERCEPTORS_BITWISE(OSAtomicXor, fetch_xor,
   TSAN_INTERCEPTOR(bool, f, t old_value, t new_value, t volatile *ptr) {    \
     SCOPED_TSAN_INTERCEPTOR(f, old_value, new_value, ptr);                  \
     return tsan_atomic_f##_compare_exchange_strong(                         \
-        (tsan_t *)ptr, (tsan_t *)&old_value, (tsan_t)new_value,             \
+        (volatile tsan_t *)ptr, (tsan_t *)&old_value, (tsan_t)new_value,    \
         kMacOrderNonBarrier, kMacOrderNonBarrier);                          \
   }                                                                         \
                                                                             \
@@ -105,7 +108,7 @@ OSATOMIC_INTERCEPTORS_BITWISE(OSAtomicXor, fetch_xor,
                    t volatile *ptr) {                                       \
     SCOPED_TSAN_INTERCEPTOR(f##Barrier, old_value, new_value, ptr);         \
     return tsan_atomic_f##_compare_exchange_strong(                         \
-        (tsan_t *)ptr, (tsan_t *)&old_value, (tsan_t)new_value,             \
+        (volatile tsan_t *)ptr, (tsan_t *)&old_value, (tsan_t)new_value,    \
         kMacOrderBarrier, kMacOrderNonBarrier);                             \
   }
 
@@ -119,14 +122,14 @@ OSATOMIC_INTERCEPTORS_CAS(OSAtomicCompareAndSwap32, __tsan_atomic32, a32,
 OSATOMIC_INTERCEPTORS_CAS(OSAtomicCompareAndSwap64, __tsan_atomic64, a64,
                           int64_t)
 
-#define OSATOMIC_INTERCEPTOR_BITOP(f, op, clear, mo)          \
-  TSAN_INTERCEPTOR(bool, f, uint32_t n, volatile void *ptr) { \
-    SCOPED_TSAN_INTERCEPTOR(f, n, ptr);                       \
-    char *byte_ptr = ((char *)ptr) + (n >> 3);                \
-    char bit = 0x80u >> (n & 7);                              \
-    char mask = clear ? ~bit : bit;                           \
-    char orig_byte = op((a8 *)byte_ptr, mask, mo);            \
-    return orig_byte & bit;                                   \
+#define OSATOMIC_INTERCEPTOR_BITOP(f, op, clear, mo)             \
+  TSAN_INTERCEPTOR(bool, f, uint32_t n, volatile void *ptr) {    \
+    SCOPED_TSAN_INTERCEPTOR(f, n, ptr);                          \
+    volatile char *byte_ptr = ((volatile char *)ptr) + (n >> 3); \
+    char bit = 0x80u >> (n & 7);                                 \
+    char mask = clear ? ~bit : bit;                              \
+    char orig_byte = op((volatile a8 *)byte_ptr, mask, mo);      \
+    return orig_byte & bit;                                      \
   }
 
 #define OSATOMIC_INTERCEPTORS_BITOP(f, op, clear)               \
@@ -235,6 +238,8 @@ TSAN_INTERCEPTOR(void, os_lock_unlock, void *lock) {
   REAL(os_lock_unlock)(lock);
 }
 
+#if defined(__has_include) && __has_include(<xpc/xpc.h>)
+
 TSAN_INTERCEPTOR(void, xpc_connection_set_event_handler,
                  xpc_connection_t connection, xpc_handler_t handler) {
   SCOPED_TSAN_INTERCEPTOR(xpc_connection_set_event_handler, connection,
@@ -280,6 +285,14 @@ TSAN_INTERCEPTOR(void, xpc_connection_send_message_with_reply,
   REAL(xpc_connection_send_message_with_reply)
   (connection, message, replyq, new_handler);
 }
+
+TSAN_INTERCEPTOR(void, xpc_connection_cancel, xpc_connection_t connection) {
+  SCOPED_TSAN_INTERCEPTOR(xpc_connection_cancel, connection);
+  Release(thr, pc, (uptr)connection);
+  REAL(xpc_connection_cancel)(connection);
+}
+
+#endif  // #if defined(__has_include) && __has_include(<xpc/xpc.h>)
 
 // On macOS, libc++ is always linked dynamically, so intercepting works the
 // usual way.

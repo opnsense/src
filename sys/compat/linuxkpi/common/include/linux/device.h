@@ -46,17 +46,45 @@
 
 #include <sys/bus.h>
 
-enum irqreturn	{ IRQ_NONE = 0, IRQ_HANDLED, IRQ_WAKE_THREAD, };
-typedef enum irqreturn	irqreturn_t;
+struct device;
+struct fwnode_handle;
 
 struct class {
 	const char	*name;
 	struct module	*owner;
 	struct kobject	kobj;
 	devclass_t	bsdclass;
+	const struct dev_pm_ops *pm;
 	void		(*class_release)(struct class *class);
 	void		(*dev_release)(struct device *dev);
 	char *		(*devnode)(struct device *dev, umode_t *mode);
+};
+
+struct dev_pm_ops {
+	int (*suspend)(struct device *dev);
+	int (*suspend_late)(struct device *dev);
+	int (*resume)(struct device *dev);
+	int (*resume_early)(struct device *dev);
+	int (*freeze)(struct device *dev);
+	int (*freeze_late)(struct device *dev);
+	int (*thaw)(struct device *dev);
+	int (*thaw_early)(struct device *dev);
+	int (*poweroff)(struct device *dev);
+	int (*poweroff_late)(struct device *dev);
+	int (*restore)(struct device *dev);
+	int (*restore_early)(struct device *dev);
+	int (*runtime_suspend)(struct device *dev);
+	int (*runtime_resume)(struct device *dev);
+	int (*runtime_idle)(struct device *dev);
+};
+
+struct device_driver {
+	const char	*name;
+	const struct dev_pm_ops *pm;
+};
+
+struct device_type {
+	const char	*name;
 };
 
 struct device {
@@ -71,6 +99,8 @@ struct device {
 	 * done somewhere else.
 	 */
 	bool		bsddev_attached_here;
+	struct device_driver *driver;
+	struct device_type *type;
 	dev_t		devt;
 	struct class	*class;
 	void		(*release)(struct device *dev);
@@ -82,6 +112,10 @@ struct device {
 	unsigned int	msix;
 	unsigned int	msix_max;
 	const struct attribute_group **groups;
+	struct fwnode_handle *fwnode;
+
+	spinlock_t	devres_lock;
+	struct list_head devres_head;
 };
 
 extern struct device linux_root_device;
@@ -90,10 +124,10 @@ extern const struct kobj_type linux_dev_ktype;
 extern const struct kobj_type linux_class_ktype;
 
 struct class_attribute {
-        struct attribute attr;
-        ssize_t (*show)(struct class *, struct class_attribute *, char *);
-        ssize_t (*store)(struct class *, struct class_attribute *, const char *, size_t);
-        const void *(*namespace)(struct class *, const struct class_attribute *);
+	struct attribute attr;
+	ssize_t (*show)(struct class *, struct class_attribute *, char *);
+	ssize_t (*store)(struct class *, struct class_attribute *, const char *, size_t);
+	const void *(*namespace)(struct class *, const struct class_attribute *);
 };
 
 #define	CLASS_ATTR(_name, _mode, _show, _store)				\
@@ -111,7 +145,13 @@ struct device_attribute {
 
 #define	DEVICE_ATTR(_name, _mode, _show, _store)			\
 	struct device_attribute dev_attr_##_name =			\
-	    { { #_name, NULL, _mode }, _show, _store }
+	    __ATTR(_name, _mode, _show, _store)
+#define	DEVICE_ATTR_RO(_name)						\
+	struct device_attribute dev_attr_##_name = __ATTR_RO(_name)
+#define	DEVICE_ATTR_WO(_name)						\
+	struct device_attribute dev_attr_##_name = __ATTR_WO(_name)
+#define	DEVICE_ATTR_RW(_name)						\
+	struct device_attribute dev_attr_##_name = __ATTR_RW(_name)
 
 /* Simple class attribute that is just a static string */
 struct class_attribute_string {
@@ -139,8 +179,21 @@ show_class_attr_string(struct class *class,
 #define	dev_warn(dev, fmt, ...)	device_printf((dev)->bsddev, fmt, ##__VA_ARGS__)
 #define	dev_info(dev, fmt, ...)	device_printf((dev)->bsddev, fmt, ##__VA_ARGS__)
 #define	dev_notice(dev, fmt, ...)	device_printf((dev)->bsddev, fmt, ##__VA_ARGS__)
+#define	dev_dbg(dev, fmt, ...)	do { } while (0)
 #define	dev_printk(lvl, dev, fmt, ...)					\
 	    device_printf((dev)->bsddev, fmt, ##__VA_ARGS__)
+
+#define	dev_err_ratelimited(dev, ...) do {	\
+	static linux_ratelimit_t __ratelimited;	\
+	if (linux_ratelimited(&__ratelimited))	\
+		dev_err(dev, __VA_ARGS__);	\
+} while (0)
+
+#define	dev_warn_ratelimited(dev, ...) do {	\
+	static linux_ratelimit_t __ratelimited;	\
+	if (linux_ratelimited(&__ratelimited))	\
+		dev_warn(dev, __VA_ARGS__);	\
+} while (0)
 
 static inline void *
 dev_get_drvdata(const struct device *dev)
@@ -170,7 +223,7 @@ static inline char *
 dev_name(const struct device *dev)
 {
 
- 	return kobject_name(&dev->kobj);
+	return kobject_name(&dev->kobj);
 }
 
 #define	dev_set_name(_dev, _fmt, ...)					\
@@ -241,6 +294,9 @@ device_initialize(struct device *dev)
 	dev->bsddev = bsddev;
 	MPASS(dev->bsddev != NULL);
 	kobject_init(&dev->kobj, &linux_dev_ktype);
+
+	spin_lock_init(&dev->devres_lock);
+	INIT_LIST_HEAD(&dev->devres_head);
 }
 
 static inline int
@@ -316,13 +372,20 @@ device_create_with_groups(struct class *class,
 	return dev;
 }
 
+static inline bool
+device_is_registered(struct device *dev)
+{
+
+	return (dev->bsddev != NULL);
+}
+
 static inline int
 device_register(struct device *dev)
 {
 	device_t bsddev = NULL;
 	int unit = -1;
 
-	if (dev->bsddev != NULL)
+	if (device_is_registered(dev))
 		goto done;
 
 	if (dev->devt) {
@@ -413,7 +476,7 @@ class_create(struct module *owner, const char *name)
 
 	class = kzalloc(sizeof(*class), M_WAITOK);
 	class->owner = owner;
-	class->name= name;
+	class->name = name;
 	class->class_release = linux_class_kfree;
 	error = class_register(class);
 	if (error) {
@@ -470,7 +533,7 @@ class_remove_file(struct class *class, const struct class_attribute *attr)
 static inline int
 dev_to_node(struct device *dev)
 {
-                return -1;
+	return -1;
 }
 
 char *kvasprintf(gfp_t, const char *, va_list);

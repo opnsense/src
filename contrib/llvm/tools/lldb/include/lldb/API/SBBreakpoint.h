@@ -18,9 +18,6 @@ namespace lldb {
 
 class LLDB_API SBBreakpoint {
 public:
-  typedef bool (*BreakpointHitCallback)(void *baton, SBProcess &process,
-                                        SBThread &thread,
-                                        lldb::SBBreakpointLocation &location);
 
   SBBreakpoint();
 
@@ -70,6 +67,10 @@ public:
 
   const char *GetCondition();
 
+  void SetAutoContinue(bool auto_continue);
+
+  bool GetAutoContinue();
+
   void SetThreadID(lldb::tid_t sb_thread_id);
 
   lldb::tid_t GetThreadID();
@@ -86,7 +87,7 @@ public:
 
   const char *GetQueueName() const;
 
-  void SetCallback(BreakpointHitCallback callback, void *baton);
+  void SetCallback(SBBreakpointHitCallback callback, void *baton);
 
   void SetScriptCallbackFunction(const char *callback_function_name);
 
@@ -129,23 +130,14 @@ public:
 private:
   friend class SBBreakpointList;
   friend class SBBreakpointLocation;
+  friend class SBBreakpointName;
   friend class SBTarget;
 
   SBBreakpoint(const lldb::BreakpointSP &bp_sp);
 
-  lldb_private::Breakpoint *operator->() const;
+  lldb::BreakpointSP GetSP() const;
 
-  lldb_private::Breakpoint *get() const;
-
-  lldb::BreakpointSP &operator*();
-
-  const lldb::BreakpointSP &operator*() const;
-
-  static bool PrivateBreakpointHitCallback(
-      void *baton, lldb_private::StoppointCallbackContext *context,
-      lldb::user_id_t break_id, lldb::user_id_t break_loc_id);
-
-  lldb::BreakpointSP m_opaque_sp;
+  lldb::BreakpointWP m_opaque_wp;
 };
 
 class LLDB_API SBBreakpointList {
@@ -160,9 +152,9 @@ public:
 
   SBBreakpoint FindBreakpointByID(lldb::break_id_t);
 
-  void Append(const SBBreakpoint &sb_file);
+  void Append(const SBBreakpoint &sb_bkpt);
 
-  bool AppendIfUnique(const SBBreakpoint &sb_file);
+  bool AppendIfUnique(const SBBreakpoint &sb_bkpt);
 
   void AppendByID(lldb::break_id_t id);
 

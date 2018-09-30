@@ -17,10 +17,9 @@
 
 #include "lldb/Breakpoint/StoppointCallbackContext.h"
 #include "lldb/Core/Debugger.h"
-#include "lldb/Core/Log.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
-#include "lldb/Core/RegularExpression.h"
+#include "lldb/Host/OptionParser.h"
 #include "lldb/Interpreter/CommandInterpreter.h"
 #include "lldb/Interpreter/CommandObjectMultiword.h"
 #include "lldb/Interpreter/CommandReturnObject.h"
@@ -30,6 +29,8 @@
 #include "lldb/Target/Process.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Target/ThreadPlanCallOnFunctionExit.h"
+#include "lldb/Utility/Log.h"
+#include "lldb/Utility/RegularExpression.h"
 
 #define DARWIN_LOG_TYPE_VALUE "DarwinLog"
 
@@ -208,7 +209,7 @@ public:
 
   using OperationCreationFunc =
       std::function<FilterRuleSP(bool accept, size_t attribute_index,
-                                 const std::string &op_arg, Error &error)>;
+                                 const std::string &op_arg, Status &error)>;
 
   static void RegisterOperation(const ConstString &operation,
                                 const OperationCreationFunc &creation_func) {
@@ -217,7 +218,7 @@ public:
 
   static FilterRuleSP CreateRule(bool match_accepts, size_t attribute,
                                  const ConstString &operation,
-                                 const std::string &op_arg, Error &error) {
+                                 const std::string &op_arg, Status &error) {
     // Find the creation func for this type of filter rule.
     auto map = GetCreationFuncMap();
     auto find_it = map.find(operation);
@@ -303,7 +304,8 @@ protected:
 
 private:
   static FilterRuleSP CreateOperation(bool accept, size_t attribute_index,
-                                      const std::string &op_arg, Error &error) {
+                                      const std::string &op_arg,
+                                      Status &error) {
     // We treat the op_arg as a regex.  Validate it.
     if (op_arg.empty()) {
       error.SetErrorString("regex filter type requires a regex "
@@ -357,7 +359,8 @@ protected:
 
 private:
   static FilterRuleSP CreateOperation(bool accept, size_t attribute_index,
-                                      const std::string &op_arg, Error &error) {
+                                      const std::string &op_arg,
+                                      Status &error) {
     if (op_arg.empty()) {
       error.SetErrorString("exact match filter type requires an "
                            "argument containing the text that must "
@@ -523,9 +526,9 @@ public:
     m_filter_rules.clear();
   }
 
-  Error SetOptionValue(uint32_t option_idx, llvm::StringRef option_arg,
-                       ExecutionContext *execution_context) override {
-    Error error;
+  Status SetOptionValue(uint32_t option_idx, llvm::StringRef option_arg,
+                        ExecutionContext *execution_context) override {
+    Status error;
 
     const int short_option = m_getopt_table[option_idx].val;
     switch (short_option) {
@@ -663,8 +666,8 @@ public:
   bool GetBroadcastEvents() const { return m_broadcast_events; }
 
 private:
-  Error ParseFilterRule(llvm::StringRef rule_text) {
-    Error error;
+  Status ParseFilterRule(llvm::StringRef rule_text) {
+    Status error;
 
     if (rule_text.empty()) {
       error.SetErrorString("invalid rule_text");
@@ -746,8 +749,8 @@ private:
 
   int MatchAttributeIndex(llvm::StringRef attribute_name) const {
     for (const auto &Item : llvm::enumerate(s_filter_attributes)) {
-      if (attribute_name == Item.Value)
-        return Item.Index;
+      if (attribute_name == Item.value())
+        return Item.index();
     }
 
     // We didn't match anything.
@@ -854,36 +857,6 @@ protected:
         *static_cast<StructuredDataDarwinLog *>(plugin_sp.get());
 
     if (m_enable) {
-// To do this next part right, we need to track whether we
-// added the proper environment variable at launch time.
-// It is incorrect to assume that we're enabling after launch,
-// and that therefore if we needed the env var set to properly
-// handle the options, that it is set incorrectly.  The env var
-// could have been added if this is a re-enable using different
-// arguments.  This is a bit tricky as the point where we
-// have to set the env var, we don't yet have a process or the
-// associated darwin-log plugin instance, and thus don't have a
-// great place to stick this knowledge.
-#if 0
-                // Check if we're attempting to disable debug-level or
-                // info-level content but we haven't launched with the magic
-                // env var that suppresses the "always add" of those.  In
-                // that scenario, the user is asking *not* to see debug or
-                // info level messages, but will see them anyway.  Warn and
-                // show how to correct it.
-                if (!m_options_sp->GetIncludeDebugLevel() &&
-                    !GetGlobalProperties()->GetUseStrictSources())
-                {
-                    AppendStrictSourcesWarning(result, "debug-level");
-                }
-
-                if (!m_options_sp->GetIncludeInfoLevel() &&
-                    !GetGlobalProperties()->GetUseStrictSources())
-                {
-                    AppendStrictSourcesWarning(result, "info-level");
-                }
-#endif
-
       // Hook up the breakpoint for the process that detects when
       // libtrace has been sufficiently initialized to really start
       // the os_log stream.  This is insurance to assure us that
@@ -898,7 +871,7 @@ protected:
     // Send configuration to the feature by way of the process.
     // Construct the options we will use.
     auto config_sp = m_options_sp->BuildConfigurationData(m_enable);
-    const Error error =
+    const Status error =
         process_sp->ConfigureStructuredData(GetDarwinLogTypeName(), config_sp);
 
     // Report results.
@@ -1039,7 +1012,7 @@ public:
   }
 };
 
-EnableOptionsSP ParseAutoEnableOptions(Error &error, Debugger &debugger) {
+EnableOptionsSP ParseAutoEnableOptions(Status &error, Debugger &debugger) {
   // We are abusing the options data model here so that we can parse
   // options without requiring the Debugger instance.
 
@@ -1211,7 +1184,7 @@ void StructuredDataDarwinLog::HandleArrivalOfStructuredData(
   // to inspect, including showing backtraces.
 }
 
-static void SetErrorWithJSON(Error &error, const char *message,
+static void SetErrorWithJSON(Status &error, const char *message,
                              StructuredData::Object &object) {
   if (!message) {
     error.SetErrorString("Internal error: message not set.");
@@ -1225,9 +1198,9 @@ static void SetErrorWithJSON(Error &error, const char *message,
   error.SetErrorStringWithFormat("%s: %s", message, object_stream.GetData());
 }
 
-Error StructuredDataDarwinLog::GetDescription(
+Status StructuredDataDarwinLog::GetDescription(
     const StructuredData::ObjectSP &object_sp, lldb_private::Stream &stream) {
-  Error error;
+  Status error;
 
   if (!object_sp) {
     error.SetErrorString("No structured data.");
@@ -1482,9 +1455,9 @@ void StructuredDataDarwinLog::DebuggerInitialize(Debugger &debugger) {
   }
 }
 
-Error StructuredDataDarwinLog::FilterLaunchInfo(ProcessLaunchInfo &launch_info,
-                                                Target *target) {
-  Error error;
+Status StructuredDataDarwinLog::FilterLaunchInfo(ProcessLaunchInfo &launch_info,
+                                                 Target *target) {
+  Status error;
 
   // If we're not debugging this launched process, there's nothing for us
   // to do here.
@@ -1814,46 +1787,22 @@ StructuredDataDarwinLog::DumpHeader(Stream &output_stream,
   }
 
   if (options_sp->GetDisplayActivityChain()) {
-    std::string activity_chain;
+    llvm::StringRef activity_chain;
     if (event.GetValueForKeyAsString("activity-chain", activity_chain) &&
         !activity_chain.empty()) {
       if (header_count > 0)
         stream.PutChar(',');
 
-// Switch over to the #if 0 branch once we figure out
-// how we want to present settings for the tri-state of
-// no-activity, activity (most derived only), or activity-chain.
-#if 1
       // Display the activity chain, from parent-most to child-most
       // activity, separated by a colon (:).
       stream.PutCString("activity-chain=");
       stream.PutCString(activity_chain);
-#else
-      if (GetGlobalProperties()->GetDisplayActivityChain()) {
-        // Display the activity chain, from parent-most to child-most
-        // activity, separated by a colon (:).
-        stream.PutCString("activity-chain=");
-        stream.PutCString(activity_chain.c_str());
-      } else {
-        // We're only displaying the child-most activity.
-        stream.PutCString("activity=");
-        auto pos = activity_chain.find_last_of(':');
-        if (pos == std::string::npos) {
-          // The activity chain only has one level, use the whole
-          // thing.
-          stream.PutCString(activity_chain.c_str());
-        } else {
-          // Display everything after the final ':'.
-          stream.PutCString(activity_chain.substr(pos + 1).c_str());
-        }
-      }
-#endif
       ++header_count;
     }
   }
 
   if (options_sp->GetDisplaySubsystem()) {
-    std::string subsystem;
+    llvm::StringRef subsystem;
     if (event.GetValueForKeyAsString("subsystem", subsystem) &&
         !subsystem.empty()) {
       if (header_count > 0)
@@ -1865,7 +1814,7 @@ StructuredDataDarwinLog::DumpHeader(Stream &output_stream,
   }
 
   if (options_sp->GetDisplayCategory()) {
-    std::string category;
+    llvm::StringRef category;
     if (event.GetValueForKeyAsString("category", category) &&
         !category.empty()) {
       if (header_count > 0)
@@ -1898,16 +1847,16 @@ size_t StructuredDataDarwinLog::HandleDisplayOfEvent(
   size_t total_bytes = 0;
 
   // Grab the message content.
-  std::string message;
+  llvm::StringRef message;
   if (!event.GetValueForKeyAsString("message", message))
     return true;
 
   // Display the log entry.
-  const auto len = message.length();
+  const auto len = message.size();
 
   total_bytes += DumpHeader(stream, event);
 
-  stream.Write(message.c_str(), len);
+  stream.Write(message.data(), len);
   total_bytes += len;
 
   // Add an end of line.
@@ -1990,7 +1939,7 @@ void StructuredDataDarwinLog::EnableNow() {
 
   // We can run it directly.
   // Send configuration to the feature by way of the process.
-  const Error error =
+  const Status error =
       process_sp->ConfigureStructuredData(GetDarwinLogTypeName(), config_sp);
 
   // Report results.

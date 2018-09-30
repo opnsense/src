@@ -154,7 +154,6 @@
 #ifndef _DTCOMPILER
 #define _DTCOMPILER
 
-#include <stdio.h>
 #include <contrib/dev/acpica/include/acdisasm.h>
 
 
@@ -481,6 +480,10 @@ DtFatal (
     DT_FIELD                *FieldObject,
     char                    *ExtraMessage);
 
+UINT64
+DtDoConstant (
+    char                    *String);
+
 char*
 DtGetFieldValue (
     DT_FIELD                *Field);
@@ -504,18 +507,6 @@ DtSetTableChecksum (
 
 void
 DtSetTableLength(
-    void);
-
-DT_SUBTABLE *
-UtSubtableCacheCalloc (
-    void);
-
-DT_FIELD *
-UtFieldCacheCalloc (
-    void);
-
-void
-DtDeleteCaches (
     void);
 
 
@@ -578,6 +569,10 @@ DtCompileHest (
     void                    **PFieldList);
 
 ACPI_STATUS
+DtCompileHmat (
+    void                    **PFieldList);
+
+ACPI_STATUS
 DtCompileIort (
     void                    **PFieldList);
 
@@ -614,11 +609,19 @@ DtCompileNfit (
     void                    **PFieldList);
 
 ACPI_STATUS
+DtCompilePcct (
+    void                    **PFieldList);
+
+ACPI_STATUS
+DtCompilePdtt (
+    void                    **PFieldList);
+
+ACPI_STATUS
 DtCompilePmtt (
     void                    **PFieldList);
 
 ACPI_STATUS
-DtCompilePcct (
+DtCompilePptt (
     void                    **PFieldList);
 
 ACPI_STATUS
@@ -628,6 +631,10 @@ DtCompileRsdt (
 ACPI_STATUS
 DtCompileS3pt (
     DT_FIELD                **PFieldList);
+
+ACPI_STATUS
+DtCompileSdev (
+    void                    **PFieldList);
 
 ACPI_STATUS
 DtCompileSlic (
@@ -647,6 +654,10 @@ DtCompileStao (
 
 ACPI_STATUS
 DtCompileTcpa (
+    void                    **PFieldList);
+
+ACPI_STATUS
+DtCompileTpm2 (
     void                    **PFieldList);
 
 ACPI_STATUS
@@ -698,6 +709,7 @@ extern const unsigned char  TemplateFadt[];
 extern const unsigned char  TemplateFpdt[];
 extern const unsigned char  TemplateGtdt[];
 extern const unsigned char  TemplateHest[];
+extern const unsigned char  TemplateHmat[];
 extern const unsigned char  TemplateHpet[];
 extern const unsigned char  TemplateIort[];
 extern const unsigned char  TemplateIvrs[];
@@ -711,11 +723,15 @@ extern const unsigned char  TemplateMsdm[];
 extern const unsigned char  TemplateMtmr[];
 extern const unsigned char  TemplateNfit[];
 extern const unsigned char  TemplatePcct[];
+extern const unsigned char  TemplatePdtt[];
 extern const unsigned char  TemplatePmtt[];
+extern const unsigned char  TemplatePptt[];
 extern const unsigned char  TemplateRasf[];
 extern const unsigned char  TemplateRsdt[];
 extern const unsigned char  TemplateS3pt[];
 extern const unsigned char  TemplateSbst[];
+extern const unsigned char  TemplateSdei[];
+extern const unsigned char  TemplateSdev[];
 extern const unsigned char  TemplateSlic[];
 extern const unsigned char  TemplateSlit[];
 extern const unsigned char  TemplateSpcr[];
@@ -731,6 +747,7 @@ extern const unsigned char  TemplateWdat[];
 extern const unsigned char  TemplateWddt[];
 extern const unsigned char  TemplateWdrt[];
 extern const unsigned char  TemplateWpbt[];
+extern const unsigned char  TemplateWsmt[];
 extern const unsigned char  TemplateXenv[];
 extern const unsigned char  TemplateXsdt[];
 

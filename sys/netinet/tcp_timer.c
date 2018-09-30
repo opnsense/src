@@ -116,9 +116,10 @@ SYSCTL_PROC(_net_inet_tcp, OID_AUTO, rexmit_slop, CTLTYPE_INT|CTLFLAG_RW,
     &tcp_rexmit_slop, 0, sysctl_msec_to_ticks, "I",
     "Retransmission Timer Slop");
 
-static int	always_keepalive = 1;
+int	tcp_always_keepalive = 1;
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, always_keepalive, CTLFLAG_RW,
-    &always_keepalive , 0, "Assume SO_KEEPALIVE on all TCP connections");
+    &tcp_always_keepalive , 0, "Assume SO_KEEPALIVE on all TCP connections");
+__strong_reference(tcp_always_keepalive, always_keepalive);
 
 int    tcp_fast_finwait2_recycle = 0;
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, fast_finwait2_recycle, CTLFLAG_RW, 
@@ -428,7 +429,8 @@ tcp_timer_keep(void *xtp)
 	TCPSTAT_INC(tcps_keeptimeo);
 	if (tp->t_state < TCPS_ESTABLISHED)
 		goto dropit;
-	if ((always_keepalive || inp->inp_socket->so_options & SO_KEEPALIVE) &&
+	if ((tcp_always_keepalive ||
+	    inp->inp_socket->so_options & SO_KEEPALIVE) &&
 	    tp->t_state <= TCPS_CLOSING) {
 		if (ticks - tp->t_rcvtime >= TP_KEEPIDLE(tp) + TP_MAXIDLE(tp))
 			goto dropit;
@@ -685,18 +687,20 @@ tcp_timer_rexmt(void * xtp)
 		 */
 		if (((tp->t_flags2 & (TF2_PLPMTU_PMTUD|TF2_PLPMTU_MAXSEGSNT)) ==
 		    (TF2_PLPMTU_PMTUD|TF2_PLPMTU_MAXSEGSNT)) &&
-		    (tp->t_rxtshift >= 2 && tp->t_rxtshift % 2 == 0)) {
+		    (tp->t_rxtshift >= 2 && tp->t_rxtshift < 6 &&
+		    tp->t_rxtshift % 2 == 0)) {
 			/*
 			 * Enter Path MTU Black-hole Detection mechanism:
 			 * - Disable Path MTU Discovery (IP "DF" bit).
 			 * - Reduce MTU to lower value than what we
 			 *   negotiated with peer.
 			 */
-			/* Record that we may have found a black hole. */
-			tp->t_flags2 |= TF2_PLPMTU_BLACKHOLE;
-
-			/* Keep track of previous MSS. */
-			tp->t_pmtud_saved_maxseg = tp->t_maxseg;
+			if ((tp->t_flags2 & TF2_PLPMTU_BLACKHOLE) == 0) {
+				/* Record that we may have found a black hole. */
+				tp->t_flags2 |= TF2_PLPMTU_BLACKHOLE;
+				/* Keep track of previous MSS. */
+				tp->t_pmtud_saved_maxseg = tp->t_maxseg;
+			}
 
 			/* 
 			 * Reduce the MSS to blackhole value or to the default
@@ -755,7 +759,7 @@ tcp_timer_rexmt(void * xtp)
 			 * stage (1448, 1188, 524) 2 chances to recover.
 			 */
 			if ((tp->t_flags2 & TF2_PLPMTU_BLACKHOLE) &&
-			    (tp->t_rxtshift > 6)) {
+			    (tp->t_rxtshift >= 6)) {
 				tp->t_flags2 |= TF2_PLPMTU_PMTUD;
 				tp->t_flags2 &= ~TF2_PLPMTU_BLACKHOLE;
 				tp->t_maxseg = tp->t_pmtud_saved_maxseg;

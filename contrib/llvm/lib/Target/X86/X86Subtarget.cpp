@@ -11,19 +11,28 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "X86.h"
+
+#include "X86CallLowering.h"
+#include "X86LegalizerInfo.h"
+#include "X86RegisterBankInfo.h"
 #include "X86Subtarget.h"
-#include "X86InstrInfo.h"
+#include "MCTargetDesc/X86BaseInfo.h"
 #include "X86TargetMachine.h"
+#include "llvm/ADT/Triple.h"
+#include "llvm/CodeGen/GlobalISel/CallLowering.h"
+#include "llvm/CodeGen/GlobalISel/InstructionSelect.h"
 #include "llvm/IR/Attributes.h"
+#include "llvm/IR/ConstantRange.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalValue.h"
+#include "llvm/Support/Casting.h"
+#include "llvm/Support/CodeGen.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/Host.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
-#include "llvm/Target/TargetOptions.h"
 
 #if defined(_MSC_VER)
 #include <intrin.h>
@@ -93,8 +102,17 @@ unsigned char X86Subtarget::classifyGlobalReference(const GlobalValue *GV,
     return X86II::MO_NO_FLAG;
 
   // Absolute symbols can be referenced directly.
-  if (GV && GV->isAbsoluteSymbolRef())
-    return X86II::MO_NO_FLAG;
+  if (GV) {
+    if (Optional<ConstantRange> CR = GV->getAbsoluteSymbolRange()) {
+      // See if we can use the 8-bit immediate form. Note that some instructions
+      // will sign extend the immediate operand, so to be conservative we only
+      // accept the range [0,128).
+      if (CR->getUnsignedMax().ult(128))
+        return X86II::MO_ABS8;
+      else
+        return X86II::MO_NO_FLAG;
+    }
+  }
 
   if (TM.shouldAssumeDSOLocal(M, GV))
     return classifyLocalReference(GV);
@@ -125,13 +143,26 @@ X86Subtarget::classifyGlobalFunctionReference(const GlobalValue *GV,
   if (TM.shouldAssumeDSOLocal(M, GV))
     return X86II::MO_NO_FLAG;
 
-  assert(!isTargetCOFF());
+  if (isTargetCOFF()) {
+    assert(GV->hasDLLImportStorageClass() &&
+           "shouldAssumeDSOLocal gave inconsistent answer");
+    return X86II::MO_DLLIMPORT;
+  }
 
-  if (isTargetELF())
+  const Function *F = dyn_cast_or_null<Function>(GV);
+
+  if (isTargetELF()) {
+    if (is64Bit() && F && (CallingConv::X86_RegCall == F->getCallingConv()))
+      // According to psABI, PLT stub clobbers XMM8-XMM15.
+      // In Regcall calling convention those registers are used for passing
+      // parameters. Thus we need to prevent lazy binding in Regcall.
+      return X86II::MO_GOTPCREL;
+    if (F && F->hasFnAttribute(Attribute::NonLazyBind) && is64Bit())
+      return X86II::MO_GOTPCREL;
     return X86II::MO_PLT;
+  }
 
   if (is64Bit()) {
-    auto *F = dyn_cast_or_null<Function>(GV);
     if (F && F->hasFnAttribute(Attribute::NonLazyBind))
       // If the function is marked as non-lazy, generate an indirect call
       // which loads from the GOT directly. This avoids runtime overhead
@@ -141,25 +172,6 @@ X86Subtarget::classifyGlobalFunctionReference(const GlobalValue *GV,
   }
 
   return X86II::MO_NO_FLAG;
-}
-
-/// This function returns the name of a function which has an interface like
-/// the non-standard bzero function, if such a function exists on the
-/// current subtarget and it is considered preferable over memset with zero
-/// passed as the second argument. Otherwise it returns null.
-const char *X86Subtarget::getBZeroEntry() const {
-  // Darwin 10 has a __bzero entry point for this purpose.
-  if (getTargetTriple().isMacOSX() &&
-      !getTargetTriple().isMacOSXVersionLT(10, 6))
-    return "__bzero";
-
-  return nullptr;
-}
-
-bool X86Subtarget::hasSinCos() const {
-  return getTargetTriple().isMacOSX() &&
-    !getTargetTriple().isMacOSXVersionLT(10, 9) &&
-    is64Bit();
 }
 
 /// Return true if the subtarget allows calls to immediate address.
@@ -194,7 +206,6 @@ void X86Subtarget::initSubtargetFeatures(StringRef CPU, StringRef FS) {
     else
       FullFS = "+sahf";
   }
-
 
   // Parse features string and set the CPU.
   ParseSubtargetFeatures(CPUName, FullFS);
@@ -232,6 +243,17 @@ void X86Subtarget::initSubtargetFeatures(StringRef CPU, StringRef FS) {
   else if (isTargetDarwin() || isTargetLinux() || isTargetSolaris() ||
            isTargetKFreeBSD() || In64BitMode)
     stackAlignment = 16;
+
+  // Some CPUs have more overhead for gather. The specified overhead is relative
+  // to the Load operation. "2" is the number provided by Intel architects. This
+  // parameter is used for cost estimation of Gather Op and comparison with
+  // other alternatives.
+  // TODO: Remove the explicit hasAVX512()?, That would mean we would only
+  // enable gather with a -march.
+  if (hasAVX512() || (hasAVX2() && hasFastGather()))
+    GatherOverhead = 2;
+  if (hasAVX512())
+    ScatterOverhead = 2;
 }
 
 void X86Subtarget::initializeEnvironment() {
@@ -243,16 +265,20 @@ void X86Subtarget::initializeEnvironment() {
   HasPOPCNT = false;
   HasSSE4A = false;
   HasAES = false;
+  HasVAES = false;
   HasFXSR = false;
   HasXSAVE = false;
   HasXSAVEOPT = false;
   HasXSAVEC = false;
   HasXSAVES = false;
   HasPCLMUL = false;
+  HasVPCLMULQDQ = false;
+  HasGFNI = false;
   HasFMA = false;
   HasFMA4 = false;
   HasXOP = false;
   HasTBM = false;
+  HasLWP = false;
   HasMOVBE = false;
   HasRDRAND = false;
   HasF16C = false;
@@ -261,24 +287,35 @@ void X86Subtarget::initializeEnvironment() {
   HasBMI = false;
   HasBMI2 = false;
   HasVBMI = false;
+  HasVBMI2 = false;
   HasIFMA = false;
   HasRTM = false;
-  HasHLE = false;
   HasERI = false;
   HasCDI = false;
   HasPFI = false;
   HasDQI = false;
+  HasVPOPCNTDQ = false;
   HasBWI = false;
   HasVLX = false;
   HasADX = false;
   HasPKU = false;
+  HasVNNI = false;
+  HasBITALG = false;
   HasSHA = false;
+  HasPREFETCHWT1 = false;
   HasPRFCHW = false;
   HasRDSEED = false;
   HasLAHFSAHF = false;
   HasMWAITX = false;
+  HasCLZERO = false;
   HasMPX = false;
-  IsBTMemSlow = false;
+  HasSHSTK = false;
+  HasIBT = false;
+  HasSGX = false;
+  HasCLFLUSHOPT = false;
+  HasCLWB = false;
+  UseRetpoline = false;
+  UseRetpolineExternalThunk = false;
   IsPMULLDSlow = false;
   IsSHLDSlow = false;
   IsUAMem16Slow = false;
@@ -286,21 +323,30 @@ void X86Subtarget::initializeEnvironment() {
   HasSSEUnalignedMem = false;
   HasCmpxchg16b = false;
   UseLeaForSP = false;
-  HasFastPartialYMMWrite = false;
+  HasFastVariableShuffle = false;
+  HasFastPartialYMMorZMMWrite = false;
+  HasFastGather = false;
   HasFastScalarFSQRT = false;
   HasFastVectorFSQRT = false;
   HasFastLZCNT = false;
+  HasFastSHLDRotate = false;
+  HasMacroFusion = false;
+  HasERMSB = false;
   HasSlowDivide32 = false;
   HasSlowDivide64 = false;
   PadShortFunctions = false;
-  CallRegIndirect = false;
+  SlowTwoMemOps = false;
   LEAUsesAG = false;
   SlowLEA = false;
+  Slow3OpsLEA = false;
   SlowIncDec = false;
   stackAlignment = 4;
   // FIXME: this is a known good value for Yonah. How about others?
   MaxInlineSizeThreshold = 128;
   UseSoftFloat = false;
+  X86ProcFamily = Others;
+  GatherOverhead = 1024;
+  ScatterOverhead = 1024;
 }
 
 X86Subtarget &X86Subtarget::initializeSubtargetDependencies(StringRef CPU,
@@ -321,8 +367,8 @@ X86Subtarget::X86Subtarget(const Triple &TT, StringRef CPU, StringRef FS,
                   TargetTriple.getEnvironment() != Triple::CODE16),
       In16BitMode(TargetTriple.getArch() == Triple::x86 &&
                   TargetTriple.getEnvironment() == Triple::CODE16),
-      TSInfo(), InstrInfo(initializeSubtargetDependencies(CPU, FS)),
-      TLInfo(TM, *this), FrameLowering(*this, getStackAlignment()) {
+      InstrInfo(initializeSubtargetDependencies(CPU, FS)), TLInfo(TM, *this),
+      FrameLowering(*this, getStackAlignment()) {
   // Determine the PICStyle based on the target selected.
   if (!isPositionIndependent())
     setPICStyle(PICStyles::None);
@@ -334,29 +380,31 @@ X86Subtarget::X86Subtarget(const Triple &TT, StringRef CPU, StringRef FS,
     setPICStyle(PICStyles::StubPIC);
   else if (isTargetELF())
     setPICStyle(PICStyles::GOT);
+
+  CallLoweringInfo.reset(new X86CallLowering(*getTargetLowering()));
+  Legalizer.reset(new X86LegalizerInfo(*this, TM));
+
+  auto *RBI = new X86RegisterBankInfo(*getRegisterInfo());
+  RegBankInfo.reset(RBI);
+  InstSelector.reset(createX86InstructionSelector(TM, *this, *RBI));
 }
 
 const CallLowering *X86Subtarget::getCallLowering() const {
-  assert(GISel && "Access to GlobalISel APIs not set");
-  return GISel->getCallLowering();
+  return CallLoweringInfo.get();
 }
 
 const InstructionSelector *X86Subtarget::getInstructionSelector() const {
-  assert(GISel && "Access to GlobalISel APIs not set");
-  return GISel->getInstructionSelector();
+  return InstSelector.get();
 }
 
 const LegalizerInfo *X86Subtarget::getLegalizerInfo() const {
-  assert(GISel && "Access to GlobalISel APIs not set");
-  return GISel->getLegalizerInfo();
+  return Legalizer.get();
 }
 
 const RegisterBankInfo *X86Subtarget::getRegBankInfo() const {
-  assert(GISel && "Access to GlobalISel APIs not set");
-  return GISel->getRegBankInfo();
+  return RegBankInfo.get();
 }
 
 bool X86Subtarget::enableEarlyIfConversion() const {
   return hasCMov() && X86EarlyIfConv;
 }
-

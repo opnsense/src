@@ -14,8 +14,7 @@
 #ifndef LLVM_AVR_SUBTARGET_H
 #define LLVM_AVR_SUBTARGET_H
 
-#include "llvm/Target/TargetSubtargetInfo.h"
-#include "llvm/IR/DataLayout.h"
+#include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/Target/TargetMachine.h"
 

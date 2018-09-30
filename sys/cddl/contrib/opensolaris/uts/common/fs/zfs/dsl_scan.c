@@ -20,8 +20,11 @@
  */
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2011, 2015 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2017 by Delphix. All rights reserved.
  * Copyright 2016 Gary Mills
+ * Copyright (c) 2011, 2017 by Delphix. All rights reserved.
+ * Copyright 2017 Joyent, Inc.
+ * Copyright (c) 2017 Datto Inc.
  */
 
 #include <sys/dsl_scan.h>
@@ -47,6 +50,7 @@
 #include <sys/sa.h>
 #include <sys/sa_impl.h>
 #include <sys/zfeature.h>
+#include <sys/abd.h>
 #ifdef _KERNEL
 #include <sys/zfs_vfsops.h>
 #endif
@@ -66,6 +70,7 @@ unsigned int zfs_scan_idle = 50;	/* idle window in clock ticks */
 
 unsigned int zfs_scan_min_time_ms = 1000; /* min millisecs to scrub per txg */
 unsigned int zfs_free_min_time_ms = 1000; /* min millisecs to free per txg */
+unsigned int zfs_obsolete_min_time_ms = 500; /* min millisecs to obsolete per txg */
 unsigned int zfs_resilver_min_time_ms = 3000; /* min millisecs to resilver
 						 per txg */
 boolean_t zfs_no_scrub_io = B_FALSE; /* set to disable scrub i/o */
@@ -93,9 +98,9 @@ SYSCTL_INT(_vfs_zfs, OID_AUTO, no_scrub_prefetch, CTLFLAG_RWTUN,
 
 enum ddt_class zfs_scrub_ddt_class_max = DDT_CLASS_DUPLICATE;
 /* max number of blocks to free in a single TXG */
-uint64_t zfs_free_max_blocks = UINT64_MAX;
+uint64_t zfs_async_block_max_blocks = UINT64_MAX;
 SYSCTL_UQUAD(_vfs_zfs, OID_AUTO, free_max_blocks, CTLFLAG_RWTUN,
-    &zfs_free_max_blocks, 0, "Maximum number of blocks to free in one TXG");
+    &zfs_async_block_max_blocks, 0, "Maximum number of blocks to free in one TXG");
 
 
 #define	DSL_SCAN_IS_SCRUB_RESILVER(scn) \
@@ -240,9 +245,10 @@ dsl_scan_setup_sync(void *arg, dmu_tx_t *tx)
 
 		if (vdev_resilver_needed(spa->spa_root_vdev,
 		    &scn->scn_phys.scn_min_txg, &scn->scn_phys.scn_max_txg)) {
-			spa_event_notify(spa, NULL, ESC_ZFS_RESILVER_START);
+			spa_event_notify(spa, NULL, NULL,
+			    ESC_ZFS_RESILVER_START);
 		} else {
-			spa_event_notify(spa, NULL, ESC_ZFS_SCRUB_START);
+			spa_event_notify(spa, NULL, NULL, ESC_ZFS_SCRUB_START);
 		}
 
 		spa->spa_scrub_started = B_TRUE;
@@ -309,6 +315,8 @@ dsl_scan_done(dsl_scan_t *scn, boolean_t complete, dmu_tx_t *tx)
 		scn->scn_phys.scn_queue_obj = 0;
 	}
 
+	scn->scn_phys.scn_flags &= ~DSF_SCRUB_PAUSED;
+
 	/*
 	 * If we were "restarted" from a stopped state, don't bother
 	 * with anything else.
@@ -345,12 +353,23 @@ dsl_scan_done(dsl_scan_t *scn, boolean_t complete, dmu_tx_t *tx)
 		 * If the scrub/resilver completed, update all DTLs to
 		 * reflect this.  Whether it succeeded or not, vacate
 		 * all temporary scrub DTLs.
+		 *
+		 * As the scrub does not currently support traversing
+		 * data that have been freed but are part of a checkpoint,
+		 * we don't mark the scrub as done in the DTLs as faults
+		 * may still exist in those vdevs.
 		 */
-		vdev_dtl_reassess(spa->spa_root_vdev, tx->tx_txg,
-		    complete ? scn->scn_phys.scn_max_txg : 0, B_TRUE);
-		if (complete) {
-			spa_event_notify(spa, NULL, scn->scn_phys.scn_min_txg ?
+		if (complete &&
+		    !spa_feature_is_active(spa, SPA_FEATURE_POOL_CHECKPOINT)) {
+			vdev_dtl_reassess(spa->spa_root_vdev, tx->tx_txg,
+			    scn->scn_phys.scn_max_txg, B_TRUE);
+
+			spa_event_notify(spa, NULL, NULL,
+			    scn->scn_phys.scn_min_txg ?
 			    ESC_ZFS_RESILVER_FINISH : ESC_ZFS_SCRUB_FINISH);
+		} else {
+			vdev_dtl_reassess(spa->spa_root_vdev, tx->tx_txg,
+			    0, B_TRUE);
 		}
 		spa_errlog_rotate(spa);
 
@@ -383,6 +402,7 @@ dsl_scan_cancel_sync(void *arg, dmu_tx_t *tx)
 
 	dsl_scan_done(scn, B_FALSE, tx);
 	dsl_scan_sync_state(scn, tx);
+	spa_event_notify(scn->scn_dp->dp_spa, NULL, NULL, ESC_ZFS_SCRUB_ABORT);
 }
 
 int
@@ -390,6 +410,92 @@ dsl_scan_cancel(dsl_pool_t *dp)
 {
 	return (dsl_sync_task(spa_name(dp->dp_spa), dsl_scan_cancel_check,
 	    dsl_scan_cancel_sync, NULL, 3, ZFS_SPACE_CHECK_RESERVED));
+}
+
+boolean_t
+dsl_scan_is_paused_scrub(const dsl_scan_t *scn)
+{
+	if (dsl_scan_scrubbing(scn->scn_dp) &&
+	    scn->scn_phys.scn_flags & DSF_SCRUB_PAUSED)
+		return (B_TRUE);
+
+	return (B_FALSE);
+}
+
+static int
+dsl_scrub_pause_resume_check(void *arg, dmu_tx_t *tx)
+{
+	pool_scrub_cmd_t *cmd = arg;
+	dsl_pool_t *dp = dmu_tx_pool(tx);
+	dsl_scan_t *scn = dp->dp_scan;
+
+	if (*cmd == POOL_SCRUB_PAUSE) {
+		/* can't pause a scrub when there is no in-progress scrub */
+		if (!dsl_scan_scrubbing(dp))
+			return (SET_ERROR(ENOENT));
+
+		/* can't pause a paused scrub */
+		if (dsl_scan_is_paused_scrub(scn))
+			return (SET_ERROR(EBUSY));
+	} else if (*cmd != POOL_SCRUB_NORMAL) {
+		return (SET_ERROR(ENOTSUP));
+	}
+
+	return (0);
+}
+
+static void
+dsl_scrub_pause_resume_sync(void *arg, dmu_tx_t *tx)
+{
+	pool_scrub_cmd_t *cmd = arg;
+	dsl_pool_t *dp = dmu_tx_pool(tx);
+	spa_t *spa = dp->dp_spa;
+	dsl_scan_t *scn = dp->dp_scan;
+
+	if (*cmd == POOL_SCRUB_PAUSE) {
+		/* can't pause a scrub when there is no in-progress scrub */
+		spa->spa_scan_pass_scrub_pause = gethrestime_sec();
+		scn->scn_phys.scn_flags |= DSF_SCRUB_PAUSED;
+		dsl_scan_sync_state(scn, tx);
+		spa_event_notify(spa, NULL, NULL, ESC_ZFS_SCRUB_PAUSED);
+	} else {
+		ASSERT3U(*cmd, ==, POOL_SCRUB_NORMAL);
+		if (dsl_scan_is_paused_scrub(scn)) {
+			/*
+			 * We need to keep track of how much time we spend
+			 * paused per pass so that we can adjust the scrub rate
+			 * shown in the output of 'zpool status'
+			 */
+			spa->spa_scan_pass_scrub_spent_paused +=
+			    gethrestime_sec() - spa->spa_scan_pass_scrub_pause;
+			spa->spa_scan_pass_scrub_pause = 0;
+			scn->scn_phys.scn_flags &= ~DSF_SCRUB_PAUSED;
+			dsl_scan_sync_state(scn, tx);
+		}
+	}
+}
+
+/*
+ * Set scrub pause/resume state if it makes sense to do so
+ */
+int
+dsl_scrub_set_pause_resume(const dsl_pool_t *dp, pool_scrub_cmd_t cmd)
+{
+	return (dsl_sync_task(spa_name(dp->dp_spa),
+	    dsl_scrub_pause_resume_check, dsl_scrub_pause_resume_sync, &cmd, 3,
+	    ZFS_SPACE_CHECK_RESERVED));
+}
+
+boolean_t
+dsl_scan_scrubbing(const dsl_pool_t *dp)
+{
+	dsl_scan_t *scn = dp->dp_scan;
+
+	if (scn->scn_phys.scn_state == DSS_SCANNING &&
+	    scn->scn_phys.scn_func == POOL_SCAN_SCRUB)
+		return (B_TRUE);
+
+	return (B_FALSE);
 }
 
 static void dsl_scan_visitbp(blkptr_t *bp, const zbookmark_phys_t *zb,
@@ -434,14 +540,14 @@ dsl_scan_sync_state(dsl_scan_t *scn, dmu_tx_t *tx)
 extern int zfs_vdev_async_write_active_min_dirty_percent;
 
 static boolean_t
-dsl_scan_check_pause(dsl_scan_t *scn, const zbookmark_phys_t *zb)
+dsl_scan_check_suspend(dsl_scan_t *scn, const zbookmark_phys_t *zb)
 {
 	/* we never skip user/group accounting objects */
 	if (zb && (int64_t)zb->zb_object < 0)
 		return (B_FALSE);
 
-	if (scn->scn_pausing)
-		return (B_TRUE); /* we're already pausing */
+	if (scn->scn_suspending)
+		return (B_TRUE); /* we're already suspending */
 
 	if (!ZB_IS_ZERO(&scn->scn_phys.scn_bookmark))
 		return (B_FALSE); /* we're resuming */
@@ -451,7 +557,7 @@ dsl_scan_check_pause(dsl_scan_t *scn, const zbookmark_phys_t *zb)
 		return (B_FALSE);
 
 	/*
-	 * We pause if:
+	 * We suspend if:
 	 *  - we have scanned for the maximum time: an entire txg
 	 *    timeout (default 5 sec)
 	 *  or
@@ -474,19 +580,19 @@ dsl_scan_check_pause(dsl_scan_t *scn, const zbookmark_phys_t *zb)
 	    dirty_pct >= zfs_vdev_async_write_active_min_dirty_percent)) ||
 	    spa_shutting_down(scn->scn_dp->dp_spa)) {
 		if (zb) {
-			dprintf("pausing at bookmark %llx/%llx/%llx/%llx\n",
+			dprintf("suspending at bookmark %llx/%llx/%llx/%llx\n",
 			    (longlong_t)zb->zb_objset,
 			    (longlong_t)zb->zb_object,
 			    (longlong_t)zb->zb_level,
 			    (longlong_t)zb->zb_blkid);
 			scn->scn_phys.scn_bookmark = *zb;
 		}
-		dprintf("pausing at DDT bookmark %llx/%llx/%llx/%llx\n",
+		dprintf("suspending at DDT bookmark %llx/%llx/%llx/%llx\n",
 		    (longlong_t)scn->scn_phys.scn_ddt_bookmark.ddb_class,
 		    (longlong_t)scn->scn_phys.scn_ddt_bookmark.ddb_type,
 		    (longlong_t)scn->scn_phys.scn_ddt_bookmark.ddb_checksum,
 		    (longlong_t)scn->scn_phys.scn_ddt_bookmark.ddb_cursor);
-		scn->scn_pausing = B_TRUE;
+		scn->scn_suspending = B_TRUE;
 		return (B_TRUE);
 	}
 	return (B_FALSE);
@@ -516,7 +622,7 @@ dsl_scan_zil_block(zilog_t *zilog, blkptr_t *bp, void *arg, uint64_t claim_txg)
 	 * (on-disk) even if it hasn't been claimed (even though for
 	 * scrub there's nothing to do to it).
 	 */
-	if (claim_txg == 0 && bp->blk_birth >= spa_first_txg(dp->dp_spa))
+	if (claim_txg == 0 && bp->blk_birth >= spa_min_claim_txg(dp->dp_spa))
 		return (0);
 
 	SET_BOOKMARK(&zb, zh->zh_log.blk_cksum.zc_word[ZIL_ZC_OBJSET],
@@ -567,11 +673,13 @@ dsl_scan_zil(dsl_pool_t *dp, zil_header_t *zh)
 	zil_scan_arg_t zsa = { dp, zh };
 	zilog_t *zilog;
 
+	ASSERT(spa_writeable(dp->dp_spa));
+
 	/*
-	 * We only want to visit blocks that have been claimed but not yet
-	 * replayed (or, in read-only mode, blocks that *would* be claimed).
+	 * We only want to visit blocks that have been claimed
+	 * but not yet replayed.
 	 */
-	if (claim_txg == 0 && spa_writeable(dp->dp_spa))
+	if (claim_txg == 0)
 		return;
 
 	zilog = zil_alloc(dp->dp_meta_objset, zh);
@@ -624,7 +732,7 @@ dsl_scan_check_resume(dsl_scan_t *scn, const dnode_phys_t *dnp,
 		/*
 		 * If we found the block we're trying to resume from, or
 		 * we went past it to a different object, zero it out to
-		 * indicate that it's OK to start checking for pausing
+		 * indicate that it's OK to start checking for suspending
 		 * again.
 		 */
 		if (bcmp(zb, &scn->scn_phys.scn_bookmark, sizeof (*zb)) == 0 ||
@@ -727,7 +835,7 @@ dsl_scan_recurse(dsl_scan_t *scn, dsl_dataset_t *ds, dmu_objset_type_t ostype,
 			/*
 			 * We also always visit user/group accounting
 			 * objects, and never skip them, even if we are
-			 * pausing.  This is necessary so that the space
+			 * suspending.  This is necessary so that the space
 			 * deltas from this txg get integrated.
 			 */
 			dsl_scan_visitdnode(scn, ds, osp->os_type,
@@ -783,7 +891,7 @@ dsl_scan_visitbp(blkptr_t *bp, const zbookmark_phys_t *zb,
 
 	/* ASSERT(pbuf == NULL || arc_released(pbuf)); */
 
-	if (dsl_scan_check_pause(scn, zb))
+	if (dsl_scan_check_suspend(scn, zb))
 		return;
 
 	if (dsl_scan_check_resume(scn, dnp, zb))
@@ -807,7 +915,7 @@ dsl_scan_visitbp(blkptr_t *bp, const zbookmark_phys_t *zb,
 		return;
 
 	/*
-	 * If dsl_scan_ddt() has aready visited this block, it will have
+	 * If dsl_scan_ddt() has already visited this block, it will have
 	 * already done any translations or scrubbing, so don't call the
 	 * callback again.
 	 */
@@ -1052,7 +1160,6 @@ dsl_scan_visitds(dsl_scan_t *scn, uint64_t dsobj, dmu_tx_t *tx)
 {
 	dsl_pool_t *dp = scn->scn_dp;
 	dsl_dataset_t *ds;
-	objset_t *os;
 
 	VERIFY3U(0, ==, dsl_dataset_hold_obj(dp, dsobj, FTAG, &ds));
 
@@ -1096,18 +1203,23 @@ dsl_scan_visitds(dsl_scan_t *scn, uint64_t dsobj, dmu_tx_t *tx)
 		goto out;
 	}
 
-	if (dmu_objset_from_ds(ds, &os))
-		goto out;
-
 	/*
-	 * Only the ZIL in the head (non-snapshot) is valid.  Even though
+	 * Only the ZIL in the head (non-snapshot) is valid. Even though
 	 * snapshots can have ZIL block pointers (which may be the same
-	 * BP as in the head), they must be ignored.  So we traverse the
-	 * ZIL here, rather than in scan_recurse(), because the regular
-	 * snapshot block-sharing rules don't apply to it.
+	 * BP as in the head), they must be ignored. In addition, $ORIGIN
+	 * doesn't have a objset (i.e. its ds_bp is a hole) so we don't
+	 * need to look for a ZIL in it either. So we traverse the ZIL here,
+	 * rather than in scan_recurse(), because the regular snapshot
+	 * block-sharing rules don't apply to it.
 	 */
-	if (DSL_SCAN_IS_SCRUB_RESILVER(scn) && !ds->ds_is_snapshot)
+	if (DSL_SCAN_IS_SCRUB_RESILVER(scn) && !dsl_dataset_is_snapshot(ds) &&
+	    ds->ds_dir != dp->dp_origin_snap->ds_dir) {
+		objset_t *os;
+		if (dmu_objset_from_ds(ds, &os) != 0) {
+			goto out;
+		}
 		dsl_scan_zil(dp, &os->os_zil_header);
+	}
 
 	/*
 	 * Iterate over the bps in this ds.
@@ -1120,14 +1232,14 @@ dsl_scan_visitds(dsl_scan_t *scn, uint64_t dsobj, dmu_tx_t *tx)
 	char *dsname = kmem_alloc(ZFS_MAX_DATASET_NAME_LEN, KM_SLEEP);
 	dsl_dataset_name(ds, dsname);
 	zfs_dbgmsg("scanned dataset %llu (%s) with min=%llu max=%llu; "
-	    "pausing=%u",
+	    "suspending=%u",
 	    (longlong_t)dsobj, dsname,
 	    (longlong_t)scn->scn_phys.scn_cur_min_txg,
 	    (longlong_t)scn->scn_phys.scn_cur_max_txg,
-	    (int)scn->scn_pausing);
+	    (int)scn->scn_suspending);
 	kmem_free(dsname, ZFS_MAX_DATASET_NAME_LEN);
 
-	if (scn->scn_pausing)
+	if (scn->scn_suspending)
 		goto out;
 
 	/*
@@ -1291,13 +1403,13 @@ dsl_scan_ddt(dsl_scan_t *scn, dmu_tx_t *tx)
 		dsl_scan_ddt_entry(scn, ddb->ddb_checksum, &dde, tx);
 		n++;
 
-		if (dsl_scan_check_pause(scn, NULL))
+		if (dsl_scan_check_suspend(scn, NULL))
 			break;
 	}
 
-	zfs_dbgmsg("scanned %llu ddt entries with class_max = %u; pausing=%u",
-	    (longlong_t)n, (int)scn->scn_phys.scn_ddt_class_max,
-	    (int)scn->scn_pausing);
+	zfs_dbgmsg("scanned %llu ddt entries with class_max = %u; "
+	    "suspending=%u", (longlong_t)n,
+	    (int)scn->scn_phys.scn_ddt_class_max, (int)scn->scn_suspending);
 
 	ASSERT(error == 0 || error == ENOENT);
 	ASSERT(error != ENOENT ||
@@ -1340,7 +1452,7 @@ dsl_scan_visit(dsl_scan_t *scn, dmu_tx_t *tx)
 		scn->scn_phys.scn_cur_min_txg = scn->scn_phys.scn_min_txg;
 		scn->scn_phys.scn_cur_max_txg = scn->scn_phys.scn_max_txg;
 		dsl_scan_ddt(scn, tx);
-		if (scn->scn_pausing)
+		if (scn->scn_suspending)
 			return;
 	}
 
@@ -1352,7 +1464,7 @@ dsl_scan_visit(dsl_scan_t *scn, dmu_tx_t *tx)
 		dsl_scan_visit_rootbp(scn, NULL,
 		    &dp->dp_meta_rootbp, tx);
 		spa_set_rootblkptr(dp->dp_spa, &dp->dp_meta_rootbp);
-		if (scn->scn_pausing)
+		if (scn->scn_suspending)
 			return;
 
 		if (spa_version(dp->dp_spa) < SPA_VERSION_DSL_SCRUB) {
@@ -1362,22 +1474,22 @@ dsl_scan_visit(dsl_scan_t *scn, dmu_tx_t *tx)
 			dsl_scan_visitds(scn,
 			    dp->dp_origin_snap->ds_object, tx);
 		}
-		ASSERT(!scn->scn_pausing);
+		ASSERT(!scn->scn_suspending);
 	} else if (scn->scn_phys.scn_bookmark.zb_objset !=
 	    ZB_DESTROYED_OBJSET) {
 		/*
-		 * If we were paused, continue from here.  Note if the
-		 * ds we were paused on was deleted, the zb_objset may
+		 * If we were suspended, continue from here.  Note if the
+		 * ds we were suspended on was deleted, the zb_objset may
 		 * be -1, so we will skip this and find a new objset
 		 * below.
 		 */
 		dsl_scan_visitds(scn, scn->scn_phys.scn_bookmark.zb_objset, tx);
-		if (scn->scn_pausing)
+		if (scn->scn_suspending)
 			return;
 	}
 
 	/*
-	 * In case we were paused right at the end of the ds, zero the
+	 * In case we were suspended right at the end of the ds, zero the
 	 * bookmark so we don't think that we're still trying to resume.
 	 */
 	bzero(&scn->scn_phys.scn_bookmark, sizeof (zbookmark_phys_t));
@@ -1389,7 +1501,7 @@ dsl_scan_visit(dsl_scan_t *scn, dmu_tx_t *tx)
 		dsl_dataset_t *ds;
 		uint64_t dsobj;
 
-		dsobj = strtonum(za.za_name, NULL);
+		dsobj = zfs_strtonum(za.za_name, NULL);
 		VERIFY3U(0, ==, zap_remove_int(dp->dp_meta_objset,
 		    scn->scn_phys.scn_queue_obj, dsobj, tx));
 
@@ -1409,26 +1521,26 @@ dsl_scan_visit(dsl_scan_t *scn, dmu_tx_t *tx)
 
 		dsl_scan_visitds(scn, dsobj, tx);
 		zap_cursor_fini(&zc);
-		if (scn->scn_pausing)
+		if (scn->scn_suspending)
 			return;
 	}
 	zap_cursor_fini(&zc);
 }
 
 static boolean_t
-dsl_scan_free_should_pause(dsl_scan_t *scn)
+dsl_scan_async_block_should_pause(dsl_scan_t *scn)
 {
 	uint64_t elapsed_nanosecs;
 
 	if (zfs_recover)
 		return (B_FALSE);
 
-	if (scn->scn_visited_this_txg >= zfs_free_max_blocks)
+	if (scn->scn_visited_this_txg >= zfs_async_block_max_blocks)
 		return (B_TRUE);
 
 	elapsed_nanosecs = gethrtime() - scn->scn_sync_start_time;
 	return (elapsed_nanosecs / NANOSEC > zfs_txg_timeout ||
-	    (NSEC2MSEC(elapsed_nanosecs) > zfs_free_min_time_ms &&
+	    (NSEC2MSEC(elapsed_nanosecs) > scn->scn_async_block_min_time_ms &&
 	    txg_sync_waiting(scn->scn_dp)) ||
 	    spa_shutting_down(scn->scn_dp->dp_spa));
 }
@@ -1440,7 +1552,7 @@ dsl_scan_free_block_cb(void *arg, const blkptr_t *bp, dmu_tx_t *tx)
 
 	if (!scn->scn_is_bptree ||
 	    (BP_GET_LEVEL(bp) == 0 && BP_GET_TYPE(bp) != DMU_OT_OBJSET)) {
-		if (dsl_scan_free_should_pause(scn))
+		if (dsl_scan_async_block_should_pause(scn))
 			return (SET_ERROR(ERESTART));
 	}
 
@@ -1449,6 +1561,22 @@ dsl_scan_free_block_cb(void *arg, const blkptr_t *bp, dmu_tx_t *tx)
 	dsl_dir_diduse_space(tx->tx_pool->dp_free_dir, DD_USED_HEAD,
 	    -bp_get_dsize_sync(scn->scn_dp->dp_spa, bp),
 	    -BP_GET_PSIZE(bp), -BP_GET_UCSIZE(bp), tx);
+	scn->scn_visited_this_txg++;
+	return (0);
+}
+
+static int
+dsl_scan_obsolete_block_cb(void *arg, const blkptr_t *bp, dmu_tx_t *tx)
+{
+	dsl_scan_t *scn = arg;
+	const dva_t *dva = &bp->blk_dva[0];
+
+	if (dsl_scan_async_block_should_pause(scn))
+		return (SET_ERROR(ERESTART));
+
+	spa_vdev_indirect_mark_obsolete(scn->scn_dp->dp_spa,
+	    DVA_GET_VDEV(dva), DVA_GET_OFFSET(dva),
+	    DVA_GET_ASIZE(dva), tx);
 	scn->scn_visited_this_txg++;
 	return (0);
 }
@@ -1463,7 +1591,8 @@ dsl_scan_active(dsl_scan_t *scn)
 		return (B_FALSE);
 	if (spa_shutting_down(spa))
 		return (B_FALSE);
-	if (scn->scn_phys.scn_state == DSS_SCANNING ||
+	if ((scn->scn_phys.scn_state == DSS_SCANNING &&
+	    !dsl_scan_is_paused_scrub(scn)) ||
 	    (scn->scn_async_destroying && !scn->scn_async_stalled))
 		return (B_TRUE);
 
@@ -1474,63 +1603,20 @@ dsl_scan_active(dsl_scan_t *scn)
 	return (used != 0);
 }
 
-void
-dsl_scan_sync(dsl_pool_t *dp, dmu_tx_t *tx)
+static int
+dsl_process_async_destroys(dsl_pool_t *dp, dmu_tx_t *tx)
 {
 	dsl_scan_t *scn = dp->dp_scan;
 	spa_t *spa = dp->dp_spa;
 	int err = 0;
 
-	/*
-	 * Check for scn_restart_txg before checking spa_load_state, so
-	 * that we can restart an old-style scan while the pool is being
-	 * imported (see dsl_scan_init).
-	 */
-	if (dsl_scan_restarting(scn, tx)) {
-		pool_scan_func_t func = POOL_SCAN_SCRUB;
-		dsl_scan_done(scn, B_FALSE, tx);
-		if (vdev_resilver_needed(spa->spa_root_vdev, NULL, NULL))
-			func = POOL_SCAN_RESILVER;
-		zfs_dbgmsg("restarting scan func=%u txg=%llu",
-		    func, tx->tx_txg);
-		dsl_scan_setup_sync(&func, tx);
-	}
+	if (spa_suspend_async_destroy(spa))
+		return (0);
 
-	/*
-	 * Only process scans in sync pass 1.
-	 */
-	if (spa_sync_pass(dp->dp_spa) > 1)
-		return;
-
-	/*
-	 * If the spa is shutting down, then stop scanning. This will
-	 * ensure that the scan does not dirty any new data during the
-	 * shutdown phase.
-	 */
-	if (spa_shutting_down(spa))
-		return;
-
-	/*
-	 * If the scan is inactive due to a stalled async destroy, try again.
-	 */
-	if (!scn->scn_async_stalled && !dsl_scan_active(scn))
-		return;
-
-	scn->scn_visited_this_txg = 0;
-	scn->scn_pausing = B_FALSE;
-	scn->scn_sync_start_time = gethrtime();
-	spa->spa_scrub_active = B_TRUE;
-
-	/*
-	 * First process the async destroys.  If we pause, don't do
-	 * any scrubbing or resilvering.  This ensures that there are no
-	 * async destroys while we are scanning, so the scan code doesn't
-	 * have to worry about traversing it.  It is also faster to free the
-	 * blocks than to scrub them.
-	 */
 	if (zfs_free_bpobj_enabled &&
 	    spa_version(dp->dp_spa) >= SPA_VERSION_DEADLISTS) {
 		scn->scn_is_bptree = B_FALSE;
+		scn->scn_async_block_min_time_ms = zfs_free_min_time_ms;
 		scn->scn_zio_root = zio_root(dp->dp_spa, NULL,
 		    NULL, ZIO_FLAG_MUSTSUCCEED);
 		err = bpobj_iterate(&dp->dp_free_bpobj,
@@ -1600,7 +1686,7 @@ dsl_scan_sync(dsl_pool_t *dp, dmu_tx_t *tx)
 		ddt_sync(spa, tx->tx_txg);
 	}
 	if (err != 0)
-		return;
+		return (err);
 	if (dp->dp_free_dir != NULL && !scn->scn_async_destroying &&
 	    zfs_free_leak_on_eio &&
 	    (dsl_dir_phys(dp->dp_free_dir)->dd_used_bytes != 0 ||
@@ -1628,6 +1714,7 @@ dsl_scan_sync(dsl_pool_t *dp, dmu_tx_t *tx)
 		    -dsl_dir_phys(dp->dp_free_dir)->dd_compressed_bytes,
 		    -dsl_dir_phys(dp->dp_free_dir)->dd_uncompressed_bytes, tx);
 	}
+
 	if (dp->dp_free_dir != NULL && !scn->scn_async_destroying) {
 		/* finished; verify that space accounting went to zero */
 		ASSERT0(dsl_dir_phys(dp->dp_free_dir)->dd_used_bytes);
@@ -1635,11 +1722,90 @@ dsl_scan_sync(dsl_pool_t *dp, dmu_tx_t *tx)
 		ASSERT0(dsl_dir_phys(dp->dp_free_dir)->dd_uncompressed_bytes);
 	}
 
+	EQUIV(bpobj_is_open(&dp->dp_obsolete_bpobj),
+	    0 == zap_contains(dp->dp_meta_objset, DMU_POOL_DIRECTORY_OBJECT,
+	    DMU_POOL_OBSOLETE_BPOBJ));
+	if (err == 0 && bpobj_is_open(&dp->dp_obsolete_bpobj)) {
+		ASSERT(spa_feature_is_active(dp->dp_spa,
+		    SPA_FEATURE_OBSOLETE_COUNTS));
+
+		scn->scn_is_bptree = B_FALSE;
+		scn->scn_async_block_min_time_ms = zfs_obsolete_min_time_ms;
+		err = bpobj_iterate(&dp->dp_obsolete_bpobj,
+		    dsl_scan_obsolete_block_cb, scn, tx);
+		if (err != 0 && err != ERESTART)
+			zfs_panic_recover("error %u from bpobj_iterate()", err);
+
+		if (bpobj_is_empty(&dp->dp_obsolete_bpobj))
+			dsl_pool_destroy_obsolete_bpobj(dp, tx);
+	}
+
+	return (0);
+}
+
+void
+dsl_scan_sync(dsl_pool_t *dp, dmu_tx_t *tx)
+{
+	dsl_scan_t *scn = dp->dp_scan;
+	spa_t *spa = dp->dp_spa;
+	int err = 0;
+
+	/*
+	 * Check for scn_restart_txg before checking spa_load_state, so
+	 * that we can restart an old-style scan while the pool is being
+	 * imported (see dsl_scan_init).
+	 */
+	if (dsl_scan_restarting(scn, tx)) {
+		pool_scan_func_t func = POOL_SCAN_SCRUB;
+		dsl_scan_done(scn, B_FALSE, tx);
+		if (vdev_resilver_needed(spa->spa_root_vdev, NULL, NULL))
+			func = POOL_SCAN_RESILVER;
+		zfs_dbgmsg("restarting scan func=%u txg=%llu",
+		    func, tx->tx_txg);
+		dsl_scan_setup_sync(&func, tx);
+	}
+
+	/*
+	 * Only process scans in sync pass 1.
+	 */
+	if (spa_sync_pass(dp->dp_spa) > 1)
+		return;
+
+	/*
+	 * If the spa is shutting down, then stop scanning. This will
+	 * ensure that the scan does not dirty any new data during the
+	 * shutdown phase.
+	 */
+	if (spa_shutting_down(spa))
+		return;
+
+	/*
+	 * If the scan is inactive due to a stalled async destroy, try again.
+	 */
+	if (!scn->scn_async_stalled && !dsl_scan_active(scn))
+		return;
+
+	scn->scn_visited_this_txg = 0;
+	scn->scn_suspending = B_FALSE;
+	scn->scn_sync_start_time = gethrtime();
+	spa->spa_scrub_active = B_TRUE;
+
+	/*
+	 * First process the async destroys.  If we pause, don't do
+	 * any scrubbing or resilvering.  This ensures that there are no
+	 * async destroys while we are scanning, so the scan code doesn't
+	 * have to worry about traversing it.  It is also faster to free the
+	 * blocks than to scrub them.
+	 */
+	err = dsl_process_async_destroys(dp, tx);
+	if (err != 0)
+		return;
+
 	if (scn->scn_phys.scn_state != DSS_SCANNING)
 		return;
 
 	if (scn->scn_done_txg == tx->tx_txg) {
-		ASSERT(!scn->scn_pausing);
+		ASSERT(!scn->scn_suspending);
 		/* finished with scan. */
 		zfs_dbgmsg("txg %llu scan complete", tx->tx_txg);
 		dsl_scan_done(scn, B_TRUE, tx);
@@ -1647,6 +1813,9 @@ dsl_scan_sync(dsl_pool_t *dp, dmu_tx_t *tx)
 		dsl_scan_sync_state(scn, tx);
 		return;
 	}
+
+	if (dsl_scan_is_paused_scrub(scn))
+		return;
 
 	if (scn->scn_phys.scn_ddt_bookmark.ddb_class <=
 	    scn->scn_phys.scn_ddt_class_max) {
@@ -1682,7 +1851,7 @@ dsl_scan_sync(dsl_pool_t *dp, dmu_tx_t *tx)
 	    (longlong_t)scn->scn_visited_this_txg,
 	    (longlong_t)NSEC2MSEC(gethrtime() - scn->scn_sync_start_time));
 
-	if (!scn->scn_pausing) {
+	if (!scn->scn_suspending) {
 		scn->scn_done_txg = tx->tx_txg + 1;
 		zfs_dbgmsg("txg %llu traversal complete, waiting till txg %llu",
 		    tx->tx_txg, scn->scn_done_txg);
@@ -1784,7 +1953,7 @@ dsl_scan_scrub_done(zio_t *zio)
 {
 	spa_t *spa = zio->io_spa;
 
-	zio_data_buf_free(zio->io_data, zio->io_size);
+	abd_free(zio->io_abd);
 
 	mutex_enter(&spa->spa_scrub_lock);
 	spa->spa_scrub_inflight--;
@@ -1868,7 +2037,6 @@ dsl_scan_scrub_cb(dsl_pool_t *dp,
 		vdev_t *rvd = spa->spa_root_vdev;
 		uint64_t maxinflight = rvd->vdev_children *
 		    MAX(zfs_top_maxinflight, 1);
-		void *data = zio_data_buf_alloc(size);
 
 		mutex_enter(&spa->spa_scrub_lock);
 		while (spa->spa_scrub_inflight >= maxinflight)
@@ -1883,19 +2051,24 @@ dsl_scan_scrub_cb(dsl_pool_t *dp,
 		if (ddi_get_lbolt64() - spa->spa_last_io <= zfs_scan_idle)
 			delay(MAX((int)scan_delay, 0));
 
-		zio_nowait(zio_read(NULL, spa, bp, data, size,
-		    dsl_scan_scrub_done, NULL, ZIO_PRIORITY_SCRUB,
-		    zio_flags, zb));
+		zio_nowait(zio_read(NULL, spa, bp,
+		    abd_alloc_for_io(size, B_FALSE), size, dsl_scan_scrub_done,
+		    NULL, ZIO_PRIORITY_SCRUB, zio_flags, zb));
 	}
 
 	/* do not relocate this block */
 	return (0);
 }
 
+/*
+ * Called by the ZFS_IOC_POOL_SCAN ioctl to start a scrub or resilver.
+ * Can also be called to resume a paused scrub.
+ */
 int
 dsl_scan(dsl_pool_t *dp, pool_scan_func_t func)
 {
 	spa_t *spa = dp->dp_spa;
+	dsl_scan_t *scn = dp->dp_scan;
 
 	/*
 	 * Purge all vdev caches and probe all devices.  We do this here
@@ -1910,8 +2083,20 @@ dsl_scan(dsl_pool_t *dp, pool_scan_func_t func)
 	spa->spa_scrub_reopen = B_FALSE;
 	(void) spa_vdev_state_exit(spa, NULL, 0);
 
+	if (func == POOL_SCAN_SCRUB && dsl_scan_is_paused_scrub(scn)) {
+		/* got scrub start cmd, resume paused scrub */
+		int err = dsl_scrub_set_pause_resume(scn->scn_dp,
+		    POOL_SCRUB_NORMAL);
+		if (err == 0) {
+			spa_event_notify(spa, NULL, NULL, ESC_ZFS_SCRUB_RESUME);
+			return (ECANCELED);
+		}
+
+		return (SET_ERROR(err));
+	}
+
 	return (dsl_sync_task(spa_name(spa), dsl_scan_setup_check,
-	    dsl_scan_setup_sync, &func, 0, ZFS_SPACE_CHECK_NONE));
+	    dsl_scan_setup_sync, &func, 0, ZFS_SPACE_CHECK_EXTRA_RESERVED));
 }
 
 static boolean_t

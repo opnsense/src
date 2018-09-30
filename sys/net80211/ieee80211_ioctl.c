@@ -1964,9 +1964,10 @@ setcurchan(struct ieee80211vap *vap, struct ieee80211_channel *c)
 			/* XXX need state machine for other vap's to follow */
 			ieee80211_setcurchan(ic, vap->iv_des_chan);
 			vap->iv_bss->ni_chan = ic->ic_curchan;
-		} else
+		} else {
 			ic->ic_curchan = vap->iv_des_chan;
 			ic->ic_rt = ieee80211_get_ratetable(ic->ic_curchan);
+		}
 	} else {
 		/*
 		 * Need to go through the state machine in case we
@@ -3423,7 +3424,8 @@ ieee80211_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		break;
 	case SIOCG80211STATS:
 		ifr = (struct ifreq *)data;
-		copyout(&vap->iv_stats, ifr->ifr_data, sizeof (vap->iv_stats));
+		copyout(&vap->iv_stats, ifr_data_get_ptr(ifr),
+		    sizeof (vap->iv_stats));
 		break;
 	case SIOCSIFMTU:
 		ifr = (struct ifreq *)data;

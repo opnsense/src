@@ -11,10 +11,10 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "NVPTXTargetMachine.h"
 #include "NVPTX.h"
 #include "NVPTXAllocaHoisting.h"
 #include "NVPTXLowerAggrCopies.h"
-#include "NVPTXTargetMachine.h"
 #include "NVPTXTargetObjectFile.h"
 #include "NVPTXTargetTransformInfo.h"
 #include "llvm/ADT/STLExtras.h"
@@ -28,6 +28,7 @@
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
+#include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/GVN.h"
 #include "llvm/Transforms/Vectorize.h"
@@ -50,7 +51,6 @@ void initializeNVVMReflectPass(PassRegistry&);
 void initializeGenericToNVVMPass(PassRegistry&);
 void initializeNVPTXAllocaHoistingPass(PassRegistry &);
 void initializeNVPTXAssignValidGlobalNamesPass(PassRegistry&);
-void initializeNVPTXInferAddressSpacesPass(PassRegistry &);
 void initializeNVPTXLowerAggrCopiesPass(PassRegistry &);
 void initializeNVPTXLowerArgsPass(PassRegistry &);
 void initializeNVPTXLowerAllocaPass(PassRegistry &);
@@ -70,7 +70,6 @@ extern "C" void LLVMInitializeNVPTXTarget() {
   initializeGenericToNVVMPass(PR);
   initializeNVPTXAllocaHoistingPass(PR);
   initializeNVPTXAssignValidGlobalNamesPass(PR);
-  initializeNVPTXInferAddressSpacesPass(PR);
   initializeNVPTXLowerArgsPass(PR);
   initializeNVPTXLowerAllocaPass(PR);
   initializeNVPTXLowerAggrCopiesPass(PR);
@@ -82,23 +81,28 @@ static std::string computeDataLayout(bool is64Bit) {
   if (!is64Bit)
     Ret += "-p:32:32";
 
-  Ret += "-i64:64-v16:16-v32:32-n16:32:64";
+  Ret += "-i64:64-i128:128-v16:16-v32:32-n16:32:64";
 
   return Ret;
+}
+
+static CodeModel::Model getEffectiveCodeModel(Optional<CodeModel::Model> CM) {
+  if (CM)
+    return *CM;
+  return CodeModel::Small;
 }
 
 NVPTXTargetMachine::NVPTXTargetMachine(const Target &T, const Triple &TT,
                                        StringRef CPU, StringRef FS,
                                        const TargetOptions &Options,
                                        Optional<Reloc::Model> RM,
-                                       CodeModel::Model CM,
+                                       Optional<CodeModel::Model> CM,
                                        CodeGenOpt::Level OL, bool is64bit)
     // The pic relocation model is used regardless of what the client has
     // specified, as it is the only relocation model currently supported.
     : LLVMTargetMachine(T, computeDataLayout(is64bit), TT, CPU, FS, Options,
-                        Reloc::PIC_, CM, OL),
-      is64bit(is64bit),
-      TLOF(llvm::make_unique<NVPTXTargetObjectFile>()),
+                        Reloc::PIC_, getEffectiveCodeModel(CM), OL),
+      is64bit(is64bit), TLOF(llvm::make_unique<NVPTXTargetObjectFile>()),
       Subtarget(TT, CPU, FS, *this) {
   if (TT.getOS() == Triple::NVCL)
     drvInterface = NVPTX::NVCL;
@@ -115,8 +119,8 @@ NVPTXTargetMachine32::NVPTXTargetMachine32(const Target &T, const Triple &TT,
                                            StringRef CPU, StringRef FS,
                                            const TargetOptions &Options,
                                            Optional<Reloc::Model> RM,
-                                           CodeModel::Model CM,
-                                           CodeGenOpt::Level OL)
+                                           Optional<CodeModel::Model> CM,
+                                           CodeGenOpt::Level OL, bool JIT)
     : NVPTXTargetMachine(T, TT, CPU, FS, Options, RM, CM, OL, false) {}
 
 void NVPTXTargetMachine64::anchor() {}
@@ -125,15 +129,15 @@ NVPTXTargetMachine64::NVPTXTargetMachine64(const Target &T, const Triple &TT,
                                            StringRef CPU, StringRef FS,
                                            const TargetOptions &Options,
                                            Optional<Reloc::Model> RM,
-                                           CodeModel::Model CM,
-                                           CodeGenOpt::Level OL)
+                                           Optional<CodeModel::Model> CM,
+                                           CodeGenOpt::Level OL, bool JIT)
     : NVPTXTargetMachine(T, TT, CPU, FS, Options, RM, CM, OL, true) {}
 
 namespace {
 
 class NVPTXPassConfig : public TargetPassConfig {
 public:
-  NVPTXPassConfig(NVPTXTargetMachine *TM, PassManagerBase &PM)
+  NVPTXPassConfig(NVPTXTargetMachine &TM, PassManagerBase &PM)
       : TargetPassConfig(TM, PM) {}
 
   NVPTXTargetMachine &getNVPTXTargetMachine() const {
@@ -164,18 +168,21 @@ private:
 } // end anonymous namespace
 
 TargetPassConfig *NVPTXTargetMachine::createPassConfig(PassManagerBase &PM) {
-  return new NVPTXPassConfig(this, PM);
+  return new NVPTXPassConfig(*this, PM);
 }
 
-void NVPTXTargetMachine::addEarlyAsPossiblePasses(PassManagerBase &PM) {
-  PM.add(createNVVMReflectPass());
-  PM.add(createNVVMIntrRangePass(Subtarget.getSmVersion()));
+void NVPTXTargetMachine::adjustPassManager(PassManagerBuilder &Builder) {
+  Builder.addExtension(
+    PassManagerBuilder::EP_EarlyAsPossible,
+    [&](const PassManagerBuilder &, legacy::PassManagerBase &PM) {
+      PM.add(createNVVMReflectPass());
+      PM.add(createNVVMIntrRangePass(Subtarget.getSmVersion()));
+    });
 }
 
-TargetIRAnalysis NVPTXTargetMachine::getTargetIRAnalysis() {
-  return TargetIRAnalysis([this](const Function &F) {
-    return TargetTransformInfo(NVPTXTTIImpl(this, F));
-  });
+TargetTransformInfo
+NVPTXTargetMachine::getTargetTransformInfo(const Function &F) {
+  return TargetTransformInfo(NVPTXTTIImpl(this, F));
 }
 
 void NVPTXPassConfig::addEarlyCSEOrGVNPass() {
@@ -190,7 +197,7 @@ void NVPTXPassConfig::addAddressSpaceInferencePasses() {
   // be eliminated by SROA.
   addPass(createSROAPass());
   addPass(createNVPTXLowerAllocaPass());
-  addPass(createNVPTXInferAddressSpacesPass());
+  addPass(createInferAddressSpacesPass());
 }
 
 void NVPTXPassConfig::addStraightLineScalarOptimizationPasses() {

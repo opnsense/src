@@ -3,6 +3,8 @@
 /*	$OpenBSD: grep.c,v 1.42 2010/07/02 22:18:03 tedu Exp $	*/
 
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1999 James Howard and Dag-Erling Coïdan Smørgrav
  * Copyright (C) 2008-2009 Gabor Kovesdan <gabor@FreeBSD.org>
  * All rights reserved.
@@ -50,7 +52,9 @@ __FBSDID("$FreeBSD$");
 #include <string.h>
 #include <unistd.h>
 
+#ifndef WITHOUT_FASTMATCH
 #include "fastmatch.h"
+#endif
 #include "grep.h"
 
 #ifndef WITHOUT_NLS
@@ -67,19 +71,26 @@ const char	*errstr[] = {
 /* 1*/	"(standard input)",
 /* 2*/	"cannot read bzip2 compressed file",
 /* 3*/	"unknown %s option",
-/* 4*/	"usage: %s [-abcDEFGHhIiJLlmnOoPqRSsUVvwxZ] [-A num] [-B num] [-C[num]]\n",
+/* 4*/	"usage: %s [-abcDEFGHhIiJLlmnOoPqRSsUVvwxZz] [-A num] [-B num] [-C[num]]\n",
 /* 5*/	"\t[-e pattern] [-f file] [--binary-files=value] [--color=when]\n",
 /* 6*/	"\t[--context[=num]] [--directories=action] [--label] [--line-buffered]\n",
 /* 7*/	"\t[--null] [pattern] [file ...]\n",
 /* 8*/	"Binary file %s matches\n",
 /* 9*/	"%s (BSD grep) %s\n",
+/* 10*/	"%s (BSD grep, GNU compatible) %s\n",
 };
 
 /* Flags passed to regcomp() and regexec() */
-int		 cflags = REG_NOSUB;
+int		 cflags = REG_NOSUB | REG_NEWLINE;
 int		 eflags = REG_STARTEND;
 
-/* Shortcut for matching all cases like empty regex */
+/* XXX TODO: Get rid of this flag.
+ * matchall is a gross hack that means that an empty pattern was passed to us.
+ * It is a necessary evil at the moment because our regex(3) implementation
+ * does not allow for empty patterns, as supported by POSIX's definition of
+ * grammar for BREs/EREs. When libregex becomes available, it would be wise
+ * to remove this and let regex(3) handle the dirty details of empty patterns.
+ */
 bool		 matchall;
 
 /* Searching patterns */
@@ -87,7 +98,9 @@ unsigned int	 patterns;
 static unsigned int pattern_sz;
 struct pat	*pattern;
 regex_t		*r_pattern;
+#ifndef WITHOUT_FASTMATCH
 fastmatch_t	*fg_pattern;
+#endif
 
 /* Filename exclusion/inclusion patterns */
 unsigned int	fpatterns, dpatterns;
@@ -98,8 +111,8 @@ struct epat	*dpattern, *fpattern;
 char	 re_error[RE_ERROR_BUF + 1];
 
 /* Command-line flags */
-unsigned long long Aflag;	/* -A x: print x lines trailing each match */
-unsigned long long Bflag;	/* -B x: print x lines leading each match */
+long long Aflag;	/* -A x: print x lines trailing each match */
+long long Bflag;	/* -B x: print x lines leading each match */
 bool	 Hflag;		/* -H: always print file name */
 bool	 Lflag;		/* -L: only show names of files with no matches */
 bool	 bflag;		/* -b: show block numbers for each match */
@@ -110,6 +123,7 @@ bool	 lflag;		/* -l: only show names of files with matches */
 bool	 mflag;		/* -m x: stop reading the files after x matches */
 long long mcount;	/* count for -m */
 long long mlimit;	/* requested value for -m */
+char	 fileeol;	/* indicator for eol */
 bool	 nflag;		/* -n: show line numbers in front of matching lines */
 bool	 oflag;		/* -o: print only matching part */
 bool	 qflag;		/* -q: quiet mode (don't output anything) */
@@ -148,9 +162,6 @@ enum {
 static inline const char	*init_color(const char *);
 
 /* Housekeeping */
-bool	 first = true;	/* flag whether we are processing the first match */
-bool	 prev;		/* flag whether or not the previous line matched */
-int	 tail;		/* lines left to print */
 bool	 file_err;	/* file reading error */
 
 /*
@@ -166,7 +177,7 @@ usage(void)
 	exit(2);
 }
 
-static const char	*optstr = "0123456789A:B:C:D:EFGHIJMLOPSRUVZabcd:e:f:hilm:nopqrsuvwxXy";
+static const char	*optstr = "0123456789A:B:C:D:EFGHIJMLOPSRUVZabcd:e:f:hilm:nopqrsuvwxXyz";
 
 static const struct option long_options[] =
 {
@@ -216,6 +227,7 @@ static const struct option long_options[] =
 	{"word-regexp",		no_argument,		NULL, 'w'},
 	{"line-regexp",		no_argument,		NULL, 'x'},
 	{"xz",			no_argument,		NULL, 'X'},
+	{"null-data",		no_argument,		NULL, 'z'},
 	{"decompress",          no_argument,            NULL, 'Z'},
 	{NULL,			no_argument,		NULL, 0}
 };
@@ -315,8 +327,12 @@ read_patterns(const char *fn)
 	}
 	len = 0;
 	line = NULL;
-	while ((rlen = getline(&line, &len, f)) != -1)
+	while ((rlen = getline(&line, &len, f)) != -1) {
+		if (line[0] == '\0')
+			continue;
 		add_pattern(line, line[0] == '\n' ? 0 : (size_t)rlen);
+	}
+
 	free(line);
 	if (ferror(f))
 		err(2, "%s", fn);
@@ -338,7 +354,7 @@ main(int argc, char *argv[])
 	char **aargv, **eargv, *eopts;
 	char *ep;
 	const char *pn;
-	unsigned long long l;
+	long long l;
 	unsigned int aargc, eargc, i;
 	int c, lastc, needpattern, newarg, prevoptind;
 
@@ -361,6 +377,9 @@ main(int argc, char *argv[])
 	} else if (pn[0] == 'l' && pn[1] == 'z') {
 		filebehave = FILE_LZMA;
 		pn += 2;
+	} else if (pn[0] == 'r') {
+		dirbehave = DIR_RECURSE;
+		Hflag = true;
 	} else if (pn[0] == 'z') {
 		filebehave = FILE_GZIP;
 		pn += 1;
@@ -378,6 +397,7 @@ main(int argc, char *argv[])
 	newarg = 1;
 	prevoptind = 1;
 	needpattern = 1;
+	fileeol = '\n';
 
 	eopts = getenv("GREP_OPTIONS");
 
@@ -421,10 +441,11 @@ main(int argc, char *argv[])
 		case '5': case '6': case '7': case '8': case '9':
 			if (newarg || !isdigit(lastc))
 				Aflag = 0;
-			else if (Aflag > LLONG_MAX / 10) {
+			else if (Aflag > LLONG_MAX / 10 - 1) {
 				errno = ERANGE;
 				err(2, NULL);
 			}
+
 			Aflag = Bflag = (Aflag * 10) + (c - '0');
 			break;
 		case 'C':
@@ -437,14 +458,17 @@ main(int argc, char *argv[])
 			/* FALLTHROUGH */
 		case 'B':
 			errno = 0;
-			l = strtoull(optarg, &ep, 10);
-			if (((errno == ERANGE) && (l == ULLONG_MAX)) ||
-			    ((errno == EINVAL) && (l == 0)))
+			l = strtoll(optarg, &ep, 10);
+			if (errno == ERANGE || errno == EINVAL)
 				err(2, NULL);
 			else if (ep[0] != '\0') {
 				errno = EINVAL;
 				err(2, NULL);
+			} else if (l < 0) {
+				errno = EINVAL;
+				err(2, "context argument must be non-negative");
 			}
+
 			if (c == 'A')
 				Aflag = l;
 			else if (c == 'B')
@@ -583,7 +607,11 @@ main(int argc, char *argv[])
 			filebehave = FILE_MMAP;
 			break;
 		case 'V':
+#ifdef WITH_GNU
+			printf(getstr(10), getprogname(), VERSION);
+#else
 			printf(getstr(9), getprogname(), VERSION);
+#endif
 			exit(0);
 		case 'v':
 			vflag = true;
@@ -598,6 +626,9 @@ main(int argc, char *argv[])
 			break;
 		case 'X':
 			filebehave = FILE_XZ;
+			break;
+		case 'z':
+			fileeol = '\0';
 			break;
 		case 'Z':
 			filebehave = FILE_GZIP;
@@ -692,8 +723,20 @@ main(int argc, char *argv[])
 	case GREP_BASIC:
 		break;
 	case GREP_FIXED:
-		/* XXX: header mess, REG_LITERAL not defined in gnu/regex.h */
-		cflags |= 0020;
+		/*
+		 * regex(3) implementations that support fixed-string searches generally
+		 * define either REG_NOSPEC or REG_LITERAL. Set the appropriate flag
+		 * here. If neither are defined, GREP_FIXED later implies that the
+		 * internal literal matcher should be used. Other cflags that have
+		 * the same interpretation as REG_NOSPEC and REG_LITERAL should be
+		 * similarly added here, and grep.h should be amended to take this into
+		 * consideration when defining WITH_INTERNAL_NOSPEC.
+		 */
+#if defined(REG_NOSPEC)
+		cflags |= REG_NOSPEC;
+#elif defined(REG_LITERAL)
+		cflags |= REG_LITERAL;
+#endif
 		break;
 	case GREP_EXTENDED:
 		cflags |= REG_EXTENDED;
@@ -703,14 +746,28 @@ main(int argc, char *argv[])
 		usage();
 	}
 
+#ifndef WITHOUT_FASTMATCH
 	fg_pattern = grep_calloc(patterns, sizeof(*fg_pattern));
+#endif
 	r_pattern = grep_calloc(patterns, sizeof(*r_pattern));
 
-	/* Check if cheating is allowed (always is for fgrep). */
-	for (i = 0; i < patterns; ++i) {
-		if (fastncomp(&fg_pattern[i], pattern[i].pat,
-		    pattern[i].len, cflags) != 0) {
-			/* Fall back to full regex library */
+	/* Don't process any patterns if we have a blank one */
+#ifdef WITH_INTERNAL_NOSPEC
+	if (!matchall && grepbehave != GREP_FIXED) {
+#else
+	if (!matchall) {
+#endif
+		/* Check if cheating is allowed (always is for fgrep). */
+		for (i = 0; i < patterns; ++i) {
+#ifndef WITHOUT_FASTMATCH
+			/*
+			 * Attempt compilation with fastmatch regex and
+			 * fallback to regex(3) if it fails.
+			 */
+			if (fastncomp(&fg_pattern[i], pattern[i].pat,
+			    pattern[i].len, cflags) == 0)
+				continue;
+#endif
 			c = regcomp(&r_pattern[i], pattern[i].pat, cflags);
 			if (c != 0) {
 				regerror(c, &r_pattern[i], re_error,
@@ -726,7 +783,7 @@ main(int argc, char *argv[])
 	if ((aargc == 0 || aargc == 1) && !Hflag)
 		hflag = true;
 
-	if (aargc == 0)
+	if (aargc == 0 && dirbehave != DIR_RECURSE)
 		exit(!procfile("-"));
 
 	if (dirbehave == DIR_RECURSE)

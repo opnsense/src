@@ -10,12 +10,9 @@
 #ifndef liblldb_RegisterContextCorePOSIX_s390x_h_
 #define liblldb_RegisterContextCorePOSIX_s390x_h_
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
 #include "Plugins/Process/Utility/RegisterContextPOSIX_s390x.h"
-#include "lldb/Core/DataExtractor.h"
+#include "Plugins/Process/elf-core/RegisterUtilities.h"
+#include "lldb/Utility/DataExtractor.h"
 
 class RegisterContextCorePOSIX_s390x : public RegisterContextPOSIX_s390x {
 public:
@@ -23,7 +20,7 @@ public:
       lldb_private::Thread &thread,
       lldb_private::RegisterInfoInterface *register_info,
       const lldb_private::DataExtractor &gpregset,
-      const lldb_private::DataExtractor &fpregset);
+      llvm::ArrayRef<lldb_private::CoreNote> notes);
 
   ~RegisterContextCorePOSIX_s390x() override;
 

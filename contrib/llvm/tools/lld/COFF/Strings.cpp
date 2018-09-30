@@ -8,6 +8,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "Strings.h"
+#include <mutex>
 
 #if defined(_MSC_VER)
 #include <Windows.h>
@@ -19,8 +20,12 @@ using namespace lld;
 using namespace lld::coff;
 using namespace llvm;
 
-Optional<std::string> coff::demangle(StringRef S) {
+Optional<std::string> coff::demangleMSVC(StringRef S) {
 #if defined(_MSC_VER)
+  // UnDecorateSymbolName is not thread-safe, so we need a mutex.
+  static std::mutex Mu;
+  std::lock_guard<std::mutex> Lock(Mu);
+
   char Buf[4096];
   if (S.startswith("?"))
     if (size_t Len = UnDecorateSymbolName(S.str().c_str(), Buf, sizeof(Buf), 0))

@@ -334,7 +334,7 @@ public:
 // Path "pieces" for path-sensitive diagnostics.
 //===----------------------------------------------------------------------===//
 
-class PathDiagnosticPiece {
+class PathDiagnosticPiece: public llvm::FoldingSetNode {
 public:
   enum Kind { ControlFlow, Event, Macro, Call, Note };
   enum DisplayHint { Above, Below };
@@ -550,19 +550,25 @@ public:
 class PathDiagnosticCallPiece : public PathDiagnosticPiece {
   PathDiagnosticCallPiece(const Decl *callerD,
                           const PathDiagnosticLocation &callReturnPos)
-    : PathDiagnosticPiece(Call), Caller(callerD), Callee(nullptr),
-      NoExit(false), callReturn(callReturnPos) {}
+      : PathDiagnosticPiece(Call), Caller(callerD), Callee(nullptr),
+        NoExit(false), IsCalleeAnAutosynthesizedPropertyAccessor(false),
+        callReturn(callReturnPos) {}
 
   PathDiagnosticCallPiece(PathPieces &oldPath, const Decl *caller)
-    : PathDiagnosticPiece(Call), Caller(caller), Callee(nullptr),
-      NoExit(true), path(oldPath) {}
-  
+      : PathDiagnosticPiece(Call), Caller(caller), Callee(nullptr),
+        NoExit(true), IsCalleeAnAutosynthesizedPropertyAccessor(false),
+        path(oldPath) {}
+
   const Decl *Caller;
   const Decl *Callee;
 
   // Flag signifying that this diagnostic has only call enter and no matching
   // call exit.
   bool NoExit;
+
+  // Flag signifying that the callee function is an Objective-C autosynthesized
+  // property getter or setter.
+  bool IsCalleeAnAutosynthesizedPropertyAccessor;
 
   // The custom string, which should appear after the call Return Diagnostic.
   // TODO: Should we allow multiple diagnostics?

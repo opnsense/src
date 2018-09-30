@@ -1,4 +1,4 @@
-//===-- llvm/CodeGen/TargetLoweringObjectFileImpl.cpp - Object File Info --===//
+//===- llvm/CodeGen/TargetLoweringObjectFileImpl.cpp - Object File Info ---===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -14,49 +14,110 @@
 
 #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Triple.h"
+#include "llvm/BinaryFormat/COFF.h"
+#include "llvm/BinaryFormat/Dwarf.h"
+#include "llvm/BinaryFormat/ELF.h"
+#include "llvm/BinaryFormat/MachO.h"
+#include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineModuleInfoImpls.h"
+#include "llvm/IR/Comdat.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/GlobalAlias.h"
+#include "llvm/IR/GlobalObject.h"
+#include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Mangler.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Type.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCSectionCOFF.h"
 #include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCSectionMachO.h"
+#include "llvm/MC/MCSectionWasm.h"
 #include "llvm/MC/MCStreamer.h"
+#include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/MCSymbolELF.h"
 #include "llvm/MC/MCValue.h"
+#include "llvm/MC/SectionKind.h"
 #include "llvm/ProfileData/InstrProf.h"
-#include "llvm/Support/COFF.h"
-#include "llvm/Support/Dwarf.h"
-#include "llvm/Support/ELF.h"
+#include "llvm/Support/Casting.h"
+#include "llvm/Support/CodeGen.h"
+#include "llvm/Support/Format.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetLowering.h"
 #include "llvm/Target/TargetMachine.h"
-#include "llvm/Target/TargetSubtargetInfo.h"
+#include <cassert>
+#include <string>
+
 using namespace llvm;
 using namespace dwarf;
+
+static void GetObjCImageInfo(Module &M, unsigned &Version, unsigned &Flags,
+                             StringRef &Section) {
+  SmallVector<Module::ModuleFlagEntry, 8> ModuleFlags;
+  M.getModuleFlagsMetadata(ModuleFlags);
+
+  for (const auto &MFE: ModuleFlags) {
+    // Ignore flags with 'Require' behaviour.
+    if (MFE.Behavior == Module::Require)
+      continue;
+
+    StringRef Key = MFE.Key->getString();
+    if (Key == "Objective-C Image Info Version") {
+      Version = mdconst::extract<ConstantInt>(MFE.Val)->getZExtValue();
+    } else if (Key == "Objective-C Garbage Collection" ||
+               Key == "Objective-C GC Only" ||
+               Key == "Objective-C Is Simulated" ||
+               Key == "Objective-C Class Properties" ||
+               Key == "Objective-C Image Swift Version") {
+      Flags |= mdconst::extract<ConstantInt>(MFE.Val)->getZExtValue();
+    } else if (Key == "Objective-C Image Info Section") {
+      Section = cast<MDString>(MFE.Val)->getString();
+    }
+  }
+}
 
 //===----------------------------------------------------------------------===//
 //                                  ELF
 //===----------------------------------------------------------------------===//
 
+void TargetLoweringObjectFileELF::emitModuleMetadata(
+    MCStreamer &Streamer, Module &M, const TargetMachine &TM) const {
+  unsigned Version = 0;
+  unsigned Flags = 0;
+  StringRef Section;
+
+  GetObjCImageInfo(M, Version, Flags, Section);
+  if (Section.empty())
+    return;
+
+  auto &C = getContext();
+  auto *S = C.getELFSection(Section, ELF::SHT_PROGBITS, ELF::SHF_ALLOC);
+  Streamer.SwitchSection(S);
+  Streamer.EmitLabel(C.getOrCreateSymbol(StringRef("OBJC_IMAGE_INFO")));
+  Streamer.EmitIntValue(Version, 4);
+  Streamer.EmitIntValue(Flags, 4);
+  Streamer.AddBlankLine();
+}
+
 MCSymbol *TargetLoweringObjectFileELF::getCFIPersonalitySymbol(
     const GlobalValue *GV, const TargetMachine &TM,
     MachineModuleInfo *MMI) const {
   unsigned Encoding = getPersonalityEncoding();
-  if ((Encoding & 0x80) == dwarf::DW_EH_PE_indirect)
+  if ((Encoding & 0x80) == DW_EH_PE_indirect)
     return getContext().getOrCreateSymbol(StringRef("DW.ref.") +
                                           TM.getSymbol(GV)->getName());
-  if ((Encoding & 0x70) == dwarf::DW_EH_PE_absptr)
+  if ((Encoding & 0x70) == DW_EH_PE_absptr)
     return TM.getSymbol(GV);
   report_fatal_error("We do not support this DWARF encoding yet!");
 }
@@ -74,7 +135,7 @@ void TargetLoweringObjectFileELF::emitPersonalityValue(
                                                    ELF::SHT_PROGBITS, Flags, 0);
   unsigned Size = DL.getPointerSize();
   Streamer.SwitchSection(Sec);
-  Streamer.EmitValueToAlignment(DL.getPointerABIAlignment());
+  Streamer.EmitValueToAlignment(DL.getPointerABIAlignment(0));
   Streamer.EmitSymbolAttribute(Label, MCSA_ELF_TypeObject);
   const MCExpr *E = MCConstantExpr::create(Size, getContext());
   Streamer.emitELFSize(Label, E);
@@ -86,8 +147,7 @@ void TargetLoweringObjectFileELF::emitPersonalityValue(
 const MCExpr *TargetLoweringObjectFileELF::getTTypeGlobalReference(
     const GlobalValue *GV, unsigned Encoding, const TargetMachine &TM,
     MachineModuleInfo *MMI, MCStreamer &Streamer) const {
-
-  if (Encoding & dwarf::DW_EH_PE_indirect) {
+  if (Encoding & DW_EH_PE_indirect) {
     MachineModuleInfoELF &ELFMMI = MMI->getObjFileInfo<MachineModuleInfoELF>();
 
     MCSymbol *SSym = getSymbolWithGlobalValueBase(GV, ".DW.stub", TM);
@@ -102,23 +162,23 @@ const MCExpr *TargetLoweringObjectFileELF::getTTypeGlobalReference(
 
     return TargetLoweringObjectFile::
       getTTypeReference(MCSymbolRefExpr::create(SSym, getContext()),
-                        Encoding & ~dwarf::DW_EH_PE_indirect, Streamer);
+                        Encoding & ~DW_EH_PE_indirect, Streamer);
   }
 
   return TargetLoweringObjectFile::getTTypeGlobalReference(GV, Encoding, TM,
                                                            MMI, Streamer);
 }
 
-static SectionKind
-getELFKindForNamedSection(StringRef Name, SectionKind K) {
+static SectionKind getELFKindForNamedSection(StringRef Name, SectionKind K) {
   // N.B.: The defaults used in here are no the same ones used in MC.
   // We follow gcc, MC follows gas. For example, given ".section .eh_frame",
   // both gas and MC will produce a section with no flags. Given
   // section(".eh_frame") gcc will produce:
   //
   //   .section   .eh_frame,"a",@progbits
-  
-  if (Name == getInstrProfCoverageSectionName(false))
+
+  if (Name == getInstrProfSectionName(IPSK_covmap, Triple::ELF,
+                                      /*AddSegmentInfo=*/false))
     return SectionKind::getMetadata();
 
   if (Name.empty() || Name[0] != '.') return K;
@@ -148,7 +208,6 @@ getELFKindForNamedSection(StringRef Name, SectionKind K) {
 
   return K;
 }
-
 
 static unsigned getELFSectionType(StringRef Name, SectionKind K) {
   // Use SHT_NOTE for section whose name starts with ".note" to allow
@@ -211,9 +270,46 @@ static const Comdat *getELFComdat(const GlobalValue *GV) {
   return C;
 }
 
+static const MCSymbolELF *getAssociatedSymbol(const GlobalObject *GO,
+                                              const TargetMachine &TM) {
+  MDNode *MD = GO->getMetadata(LLVMContext::MD_associated);
+  if (!MD)
+    return nullptr;
+
+  const MDOperand &Op = MD->getOperand(0);
+  if (!Op.get())
+    return nullptr;
+
+  auto *VM = dyn_cast<ValueAsMetadata>(Op);
+  if (!VM)
+    report_fatal_error("MD_associated operand is not ValueAsMetadata");
+
+  GlobalObject *OtherGO = dyn_cast<GlobalObject>(VM->getValue());
+  return OtherGO ? dyn_cast<MCSymbolELF>(TM.getSymbol(OtherGO)) : nullptr;
+}
+
 MCSection *TargetLoweringObjectFileELF::getExplicitSectionGlobal(
     const GlobalObject *GO, SectionKind Kind, const TargetMachine &TM) const {
   StringRef SectionName = GO->getSection();
+
+  // Check if '#pragma clang section' name is applicable.
+  // Note that pragma directive overrides -ffunction-section, -fdata-section
+  // and so section name is exactly as user specified and not uniqued.
+  const GlobalVariable *GV = dyn_cast<GlobalVariable>(GO);
+  if (GV && GV->hasImplicitSection()) {
+    auto Attrs = GV->getAttributes();
+    if (Attrs.hasAttribute("bss-section") && Kind.isBSS()) {
+      SectionName = Attrs.getAttribute("bss-section").getValueAsString();
+    } else if (Attrs.hasAttribute("rodata-section") && Kind.isReadOnly()) {
+      SectionName = Attrs.getAttribute("rodata-section").getValueAsString();
+    } else if (Attrs.hasAttribute("data-section") && Kind.isData()) {
+      SectionName = Attrs.getAttribute("data-section").getValueAsString();
+    }
+  }
+  const Function *F = dyn_cast<Function>(GO);
+  if (F && F->hasFnAttribute("implicit-section-name")) {
+    SectionName = F->getFnAttribute("implicit-section-name").getValueAsString();
+  }
 
   // Infer section flags from the section name if we can.
   Kind = getELFKindForNamedSection(SectionName, Kind);
@@ -224,9 +320,23 @@ MCSection *TargetLoweringObjectFileELF::getExplicitSectionGlobal(
     Group = C->getName();
     Flags |= ELF::SHF_GROUP;
   }
-  return getContext().getELFSection(SectionName,
-                                    getELFSectionType(SectionName, Kind), Flags,
-                                    /*EntrySize=*/0, Group);
+
+  // A section can have at most one associated section. Put each global with
+  // MD_associated in a unique section.
+  unsigned UniqueID = MCContext::GenericSectionID;
+  const MCSymbolELF *AssociatedSymbol = getAssociatedSymbol(GO, TM);
+  if (AssociatedSymbol) {
+    UniqueID = NextUniqueID++;
+    Flags |= ELF::SHF_LINK_ORDER;
+  }
+
+  MCSectionELF *Section = getContext().getELFSection(
+      SectionName, getELFSectionType(SectionName, Kind), Flags,
+      /*EntrySize=*/0, Group, UniqueID, AssociatedSymbol);
+  // Make sure that we did not get some other section with incompatible sh_link.
+  // This should not be possible due to UniqueID code above.
+  assert(Section->getAssociatedSymbol() == AssociatedSymbol);
+  return Section;
 }
 
 /// Return the section prefix name used by options FunctionsSections and
@@ -248,11 +358,10 @@ static StringRef getSectionPrefixForGlobal(SectionKind Kind) {
   return ".data.rel.ro";
 }
 
-static MCSectionELF *
-selectELFSectionForGlobal(MCContext &Ctx, const GlobalObject *GO,
-                          SectionKind Kind, Mangler &Mang,
-                          const TargetMachine &TM, bool EmitUniqueSection,
-                          unsigned Flags, unsigned *NextUniqueID) {
+static MCSectionELF *selectELFSectionForGlobal(
+    MCContext &Ctx, const GlobalObject *GO, SectionKind Kind, Mangler &Mang,
+    const TargetMachine &TM, bool EmitUniqueSection, unsigned Flags,
+    unsigned *NextUniqueID, const MCSymbolELF *AssociatedSymbol) {
   unsigned EntrySize = 0;
   if (Kind.isMergeableCString()) {
     if (Kind.isMergeable2ByteCString()) {
@@ -319,7 +428,7 @@ selectELFSectionForGlobal(MCContext &Ctx, const GlobalObject *GO,
   if (Kind.isExecuteOnly())
     UniqueID = 0;
   return Ctx.getELFSection(Name, getELFSectionType(Name, Kind), Flags,
-                           EntrySize, Group, UniqueID);
+                           EntrySize, Group, UniqueID, AssociatedSymbol);
 }
 
 MCSection *TargetLoweringObjectFileELF::SelectSectionForGlobal(
@@ -337,8 +446,17 @@ MCSection *TargetLoweringObjectFileELF::SelectSectionForGlobal(
   }
   EmitUniqueSection |= GO->hasComdat();
 
-  return selectELFSectionForGlobal(getContext(), GO, Kind, getMangler(), TM,
-                                   EmitUniqueSection, Flags, &NextUniqueID);
+  const MCSymbolELF *AssociatedSymbol = getAssociatedSymbol(GO, TM);
+  if (AssociatedSymbol) {
+    EmitUniqueSection = true;
+    Flags |= ELF::SHF_LINK_ORDER;
+  }
+
+  MCSectionELF *Section = selectELFSectionForGlobal(
+      getContext(), GO, Kind, getMangler(), TM, EmitUniqueSection, Flags,
+      &NextUniqueID, AssociatedSymbol);
+  assert(Section->getAssociatedSymbol() == AssociatedSymbol);
+  return Section;
 }
 
 MCSection *TargetLoweringObjectFileELF::getSectionForJumpTable(
@@ -351,8 +469,9 @@ MCSection *TargetLoweringObjectFileELF::getSectionForJumpTable(
     return ReadOnlySection;
 
   return selectELFSectionForGlobal(getContext(), &F, SectionKind::getReadOnly(),
-                                   getMangler(), TM, EmitUniqueSection, ELF::SHF_ALLOC,
-                                   &NextUniqueID);
+                                   getMangler(), TM, EmitUniqueSection,
+                                   ELF::SHF_ALLOC, &NextUniqueID,
+                                   /* AssociatedSymbol */ nullptr);
 }
 
 bool TargetLoweringObjectFileELF::shouldPutJumpTableInFunctionSection(
@@ -412,10 +531,8 @@ static MCSectionELF *getStaticStructorSection(MCContext &Ctx, bool UseInitArray,
       Name = ".ctors";
     else
       Name = ".dtors";
-    if (Priority != 65535) {
-      Name += '.';
-      Name += utostr(65535 - Priority);
-    }
+    if (Priority != 65535)
+      raw_string_ostream(Name) << format(".%05u", 65535 - Priority);
     Type = ELF::SHT_PROGBITS;
   }
 
@@ -500,40 +617,10 @@ void TargetLoweringObjectFileMachO::Initialize(MCContext &Ctx,
   }
 }
 
-/// emitModuleFlags - Perform code emission for module flags.
-void TargetLoweringObjectFileMachO::emitModuleFlags(
-    MCStreamer &Streamer, ArrayRef<Module::ModuleFlagEntry> ModuleFlags,
-    const TargetMachine &TM) const {
-  unsigned VersionVal = 0;
-  unsigned ImageInfoFlags = 0;
-  MDNode *LinkerOptions = nullptr;
-  StringRef SectionVal;
-
-  for (const auto &MFE : ModuleFlags) {
-    // Ignore flags with 'Require' behavior.
-    if (MFE.Behavior == Module::Require)
-      continue;
-
-    StringRef Key = MFE.Key->getString();
-    Metadata *Val = MFE.Val;
-
-    if (Key == "Objective-C Image Info Version") {
-      VersionVal = mdconst::extract<ConstantInt>(Val)->getZExtValue();
-    } else if (Key == "Objective-C Garbage Collection" ||
-               Key == "Objective-C GC Only" ||
-               Key == "Objective-C Is Simulated" ||
-               Key == "Objective-C Class Properties" ||
-               Key == "Objective-C Image Swift Version") {
-      ImageInfoFlags |= mdconst::extract<ConstantInt>(Val)->getZExtValue();
-    } else if (Key == "Objective-C Image Info Section") {
-      SectionVal = cast<MDString>(Val)->getString();
-    } else if (Key == "Linker Options") {
-      LinkerOptions = cast<MDNode>(Val);
-    }
-  }
-
+void TargetLoweringObjectFileMachO::emitModuleMetadata(
+    MCStreamer &Streamer, Module &M, const TargetMachine &TM) const {
   // Emit the linker options if present.
-  if (LinkerOptions) {
+  if (auto *LinkerOptions = M.getNamedMetadata("llvm.linker.options")) {
     for (const auto &Option : LinkerOptions->operands()) {
       SmallVector<std::string, 4> StrOptions;
       for (const auto &Piece : cast<MDNode>(Option)->operands())
@@ -542,8 +629,15 @@ void TargetLoweringObjectFileMachO::emitModuleFlags(
     }
   }
 
+  unsigned VersionVal = 0;
+  unsigned ImageInfoFlags = 0;
+  StringRef SectionVal;
+
+  GetObjCImageInfo(M, VersionVal, ImageInfoFlags, SectionVal);
+
   // The section is mandatory. If we don't have it, then we don't have GC info.
-  if (SectionVal.empty()) return;
+  if (SectionVal.empty())
+    return;
 
   StringRef Segment, Section;
   unsigned TAA = 0, StubSize = 0;
@@ -723,7 +817,7 @@ const MCExpr *TargetLoweringObjectFileMachO::getTTypeGlobalReference(
 
     return TargetLoweringObjectFile::
       getTTypeReference(MCSymbolRefExpr::create(SSym, getContext()),
-                        Encoding & ~dwarf::DW_EH_PE_indirect, Streamer);
+                        Encoding & ~DW_EH_PE_indirect, Streamer);
   }
 
   return TargetLoweringObjectFile::getTTypeGlobalReference(GV, Encoding, TM,
@@ -1055,18 +1149,9 @@ MCSection *TargetLoweringObjectFileCOFF::getSectionForJumpTable(
                                      COFF::IMAGE_COMDAT_SELECT_ASSOCIATIVE, UniqueID);
 }
 
-void TargetLoweringObjectFileCOFF::emitModuleFlags(
-    MCStreamer &Streamer, ArrayRef<Module::ModuleFlagEntry> ModuleFlags,
-    const TargetMachine &TM) const {
-  MDNode *LinkerOptions = nullptr;
-
-  for (const auto &MFE : ModuleFlags) {
-    StringRef Key = MFE.Key->getString();
-    if (Key == "Linker Options")
-      LinkerOptions = cast<MDNode>(MFE.Val);
-  }
-
-  if (LinkerOptions) {
+void TargetLoweringObjectFileCOFF::emitModuleMetadata(
+    MCStreamer &Streamer, Module &M, const TargetMachine &TM) const {
+  if (NamedMDNode *LinkerOptions = M.getNamedMetadata("llvm.linker.options")) {
     // Emit the linker options to the linker .drectve section.  According to the
     // spec, this section is a space-separated string containing flags for
     // linker.
@@ -1081,6 +1166,24 @@ void TargetLoweringObjectFileCOFF::emitModuleFlags(
       }
     }
   }
+
+  unsigned Version = 0;
+  unsigned Flags = 0;
+  StringRef Section;
+
+  GetObjCImageInfo(M, Version, Flags, Section);
+  if (Section.empty())
+    return;
+
+  auto &C = getContext();
+  auto *S = C.getCOFFSection(
+      Section, COFF::IMAGE_SCN_CNT_INITIALIZED_DATA | COFF::IMAGE_SCN_MEM_READ,
+      SectionKind::getReadOnly());
+  Streamer.SwitchSection(S);
+  Streamer.EmitLabel(C.getOrCreateSymbol(StringRef("OBJC_IMAGE_INFO")));
+  Streamer.EmitIntValue(Version, 4);
+  Streamer.EmitIntValue(Flags, 4);
+  Streamer.AddBlankLine();
 }
 
 void TargetLoweringObjectFileCOFF::Initialize(MCContext &Ctx,
@@ -1108,47 +1211,166 @@ void TargetLoweringObjectFileCOFF::Initialize(MCContext &Ctx,
   }
 }
 
+static MCSectionCOFF *getCOFFStaticStructorSection(MCContext &Ctx,
+                                                   const Triple &T, bool IsCtor,
+                                                   unsigned Priority,
+                                                   const MCSymbol *KeySym,
+                                                   MCSectionCOFF *Default) {
+  if (T.isKnownWindowsMSVCEnvironment() || T.isWindowsItaniumEnvironment())
+    return Ctx.getAssociativeCOFFSection(Default, KeySym, 0);
+
+  std::string Name = IsCtor ? ".ctors" : ".dtors";
+  if (Priority != 65535)
+    raw_string_ostream(Name) << format(".%05u", 65535 - Priority);
+
+  return Ctx.getAssociativeCOFFSection(
+      Ctx.getCOFFSection(Name, COFF::IMAGE_SCN_CNT_INITIALIZED_DATA |
+                                   COFF::IMAGE_SCN_MEM_READ |
+                                   COFF::IMAGE_SCN_MEM_WRITE,
+                         SectionKind::getData()),
+      KeySym, 0);
+}
+
 MCSection *TargetLoweringObjectFileCOFF::getStaticCtorSection(
     unsigned Priority, const MCSymbol *KeySym) const {
-  return getContext().getAssociativeCOFFSection(
-      cast<MCSectionCOFF>(StaticCtorSection), KeySym, 0);
+  return getCOFFStaticStructorSection(getContext(), getTargetTriple(), true,
+                                      Priority, KeySym,
+                                      cast<MCSectionCOFF>(StaticCtorSection));
 }
 
 MCSection *TargetLoweringObjectFileCOFF::getStaticDtorSection(
     unsigned Priority, const MCSymbol *KeySym) const {
-  return getContext().getAssociativeCOFFSection(
-      cast<MCSectionCOFF>(StaticDtorSection), KeySym, 0);
+  return getCOFFStaticStructorSection(getContext(), getTargetTriple(), false,
+                                      Priority, KeySym,
+                                      cast<MCSectionCOFF>(StaticDtorSection));
 }
 
 void TargetLoweringObjectFileCOFF::emitLinkerFlagsForGlobal(
     raw_ostream &OS, const GlobalValue *GV) const {
-  if (!GV->hasDLLExportStorageClass() || GV->isDeclaration())
+  emitLinkerFlagsForGlobalCOFF(OS, GV, getTargetTriple(), getMangler());
+}
+
+//===----------------------------------------------------------------------===//
+//                                  Wasm
+//===----------------------------------------------------------------------===//
+
+static void checkWasmComdat(const GlobalValue *GV) {
+  const Comdat *C = GV->getComdat();
+  if (!C)
     return;
 
-  const Triple &TT = getTargetTriple();
+  // TODO(sbc): At some point we may need COMDAT support but currently
+  // they are not supported.
+  report_fatal_error("WebAssembly doesn't support COMDATs, '" + C->getName() +
+                     "' cannot be lowered.");
+}
 
-  if (TT.isKnownWindowsMSVCEnvironment())
-    OS << " /EXPORT:";
+static SectionKind getWasmKindForNamedSection(StringRef Name, SectionKind K) {
+  // If we're told we have function data, then use that.
+  if (K.isText())
+    return SectionKind::getText();
+
+  // Otherwise, ignore whatever section type the generic impl detected and use
+  // a plain data section.
+  return SectionKind::getData();
+}
+
+MCSection *TargetLoweringObjectFileWasm::getExplicitSectionGlobal(
+    const GlobalObject *GO, SectionKind Kind, const TargetMachine &TM) const {
+  StringRef Name = GO->getSection();
+  checkWasmComdat(GO);
+  Kind = getWasmKindForNamedSection(Name, Kind);
+  return getContext().getWasmSection(Name, Kind);
+}
+
+static MCSectionWasm *selectWasmSectionForGlobal(
+    MCContext &Ctx, const GlobalObject *GO, SectionKind Kind, Mangler &Mang,
+    const TargetMachine &TM, bool EmitUniqueSection, unsigned *NextUniqueID) {
+  StringRef Group = "";
+  checkWasmComdat(GO);
+
+  bool UniqueSectionNames = TM.getUniqueSectionNames();
+  SmallString<128> Name = getSectionPrefixForGlobal(Kind);
+
+  if (const auto *F = dyn_cast<Function>(GO)) {
+    const auto &OptionalPrefix = F->getSectionPrefix();
+    if (OptionalPrefix)
+      Name += *OptionalPrefix;
+  }
+
+  if (EmitUniqueSection && UniqueSectionNames) {
+    Name.push_back('.');
+    TM.getNameWithPrefix(Name, GO, Mang, true);
+  }
+  unsigned UniqueID = MCContext::GenericSectionID;
+  if (EmitUniqueSection && !UniqueSectionNames) {
+    UniqueID = *NextUniqueID;
+    (*NextUniqueID)++;
+  }
+  return Ctx.getWasmSection(Name, Kind, Group, UniqueID);
+}
+
+MCSection *TargetLoweringObjectFileWasm::SelectSectionForGlobal(
+    const GlobalObject *GO, SectionKind Kind, const TargetMachine &TM) const {
+
+  if (Kind.isCommon())
+    report_fatal_error("mergable sections not supported yet on wasm");
+
+  // If we have -ffunction-section or -fdata-section then we should emit the
+  // global value to a uniqued section specifically for it.
+  bool EmitUniqueSection = false;
+  if (Kind.isText())
+    EmitUniqueSection = TM.getFunctionSections();
   else
-    OS << " -export:";
+    EmitUniqueSection = TM.getDataSections();
+  EmitUniqueSection |= GO->hasComdat();
 
-  if (TT.isWindowsGNUEnvironment() || TT.isWindowsCygwinEnvironment()) {
-    std::string Flag;
-    raw_string_ostream FlagOS(Flag);
-    getMangler().getNameWithPrefix(FlagOS, GV, false);
-    FlagOS.flush();
-    if (Flag[0] == GV->getParent()->getDataLayout().getGlobalPrefix())
-      OS << Flag.substr(1);
-    else
-      OS << Flag;
-  } else {
-    getMangler().getNameWithPrefix(OS, GV, false);
-  }
+  return selectWasmSectionForGlobal(getContext(), GO, Kind, getMangler(), TM,
+                                    EmitUniqueSection, &NextUniqueID);
+}
 
-  if (!GV->getValueType()->isFunctionTy()) {
-    if (TT.isKnownWindowsMSVCEnvironment())
-      OS << ",DATA";
-    else
-      OS << ",data";
-  }
+bool TargetLoweringObjectFileWasm::shouldPutJumpTableInFunctionSection(
+    bool UsesLabelDifference, const Function &F) const {
+  // We can always create relative relocations, so use another section
+  // that can be marked non-executable.
+  return false;
+}
+
+const MCExpr *TargetLoweringObjectFileWasm::lowerRelativeReference(
+    const GlobalValue *LHS, const GlobalValue *RHS,
+    const TargetMachine &TM) const {
+  // We may only use a PLT-relative relocation to refer to unnamed_addr
+  // functions.
+  if (!LHS->hasGlobalUnnamedAddr() || !LHS->getValueType()->isFunctionTy())
+    return nullptr;
+
+  // Basic sanity checks.
+  if (LHS->getType()->getPointerAddressSpace() != 0 ||
+      RHS->getType()->getPointerAddressSpace() != 0 || LHS->isThreadLocal() ||
+      RHS->isThreadLocal())
+    return nullptr;
+
+  return MCBinaryExpr::createSub(
+      MCSymbolRefExpr::create(TM.getSymbol(LHS), MCSymbolRefExpr::VK_None,
+                              getContext()),
+      MCSymbolRefExpr::create(TM.getSymbol(RHS), getContext()), getContext());
+}
+
+void TargetLoweringObjectFileWasm::InitializeWasm() {
+  StaticCtorSection =
+      getContext().getWasmSection(".init_array", SectionKind::getData());
+}
+
+MCSection *TargetLoweringObjectFileWasm::getStaticCtorSection(
+    unsigned Priority, const MCSymbol *KeySym) const {
+  return Priority == UINT16_MAX ?
+         StaticCtorSection :
+         getContext().getWasmSection(".init_array." + utostr(Priority),
+                                     SectionKind::getData());
+}
+
+MCSection *TargetLoweringObjectFileWasm::getStaticDtorSection(
+    unsigned Priority, const MCSymbol *KeySym) const {
+  llvm_unreachable("@llvm.global_dtors should have been lowered already");
+  return nullptr;
 }

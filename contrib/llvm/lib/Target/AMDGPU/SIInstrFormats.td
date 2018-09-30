@@ -11,9 +11,18 @@
 //
 //===----------------------------------------------------------------------===//
 
+def isGCN : Predicate<"Subtarget->getGeneration() "
+                      ">= SISubtarget::SOUTHERN_ISLANDS">,
+            AssemblerPredicate<"FeatureGCN">;
+def isSI : Predicate<"Subtarget->getGeneration() "
+                      "== SISubtarget::SOUTHERN_ISLANDS">,
+           AssemblerPredicate<"FeatureSouthernIslands">;
+
+
 class InstSI <dag outs, dag ins, string asm = "",
               list<dag> pattern = []> :
   AMDGPUInst<outs, ins, asm, pattern>, PredicateControl {
+  let SubtargetPredicate = isGCN;
 
   // Low bits - basic encoding information.
   field bit SALU = 0;
@@ -31,6 +40,7 @@ class InstSI <dag outs, dag ins, string asm = "",
   field bit VOP2 = 0;
   field bit VOPC = 0;
   field bit VOP3 = 0;
+  field bit VOP3P = 0;
   field bit VINTRP = 0;
   field bit SDWA = 0;
   field bit DPP = 0;
@@ -44,7 +54,7 @@ class InstSI <dag outs, dag ins, string asm = "",
   field bit FLAT = 0;
   field bit DS = 0;
 
-   // Pseudo instruction formats.
+  // Pseudo instruction formats.
   field bit VGPRSpill = 0;
   field bit SGPRSpill = 0;
 
@@ -78,6 +88,36 @@ class InstSI <dag outs, dag ins, string asm = "",
   // is unable to infer the encoding from the operands.
   field bit VOPAsmPrefer32Bit = 0;
 
+  // This bit indicates that this is a VOP3 opcode which supports op_sel
+  // modifier (gfx9 only).
+  field bit VOP3_OPSEL = 0;
+
+  // Is it possible for this instruction to be atomic?
+  field bit maybeAtomic = 0;
+
+  // This bit indicates that this is a VI instruction which is renamed
+  // in GFX9. Required for correct mapping from pseudo to MC.
+  field bit renamedInGFX9 = 0;
+
+  // This bit indicates that this has a floating point result type, so
+  // the clamp modifier has floating point semantics.
+  field bit FPClamp = 0;
+
+  // This bit indicates that instruction may support integer clamping
+  // which depends on GPU features.
+  field bit IntClamp = 0;
+
+  // This field indicates that the clamp applies to the low component
+  // of a packed output register.
+  field bit ClampLo = 0;
+
+  // This field indicates that the clamp applies to the high component
+  // of a packed output register.
+  field bit ClampHi = 0;
+
+  // This bit indicates that this is a packed VOP3P instruction
+  field bit IsPacked = 0;
+
   // These need to be kept in sync with the enum in SIInstrFlags.
   let TSFlags{0} = SALU;
   let TSFlags{1} = VALU;
@@ -92,6 +132,7 @@ class InstSI <dag outs, dag ins, string asm = "",
   let TSFlags{8} = VOP2;
   let TSFlags{9} = VOPC;
   let TSFlags{10} = VOP3;
+  let TSFlags{12} = VOP3P;
 
   let TSFlags{13} = VINTRP;
   let TSFlags{14} = SDWA;
@@ -120,6 +161,17 @@ class InstSI <dag outs, dag ins, string asm = "",
   let TSFlags{39} = ScalarStore;
   let TSFlags{40} = FixedSize;
   let TSFlags{41} = VOPAsmPrefer32Bit;
+  let TSFlags{42} = VOP3_OPSEL;
+
+  let TSFlags{43} = maybeAtomic;
+  let TSFlags{44} = renamedInGFX9;
+
+  let TSFlags{45} = FPClamp;
+  let TSFlags{46} = IntClamp;
+  let TSFlags{47} = ClampLo;
+  let TSFlags{48} = ClampHi;
+
+  let TSFlags{49} = IsPacked;
 
   let SchedRW = [Write32Bit];
 
@@ -131,19 +183,19 @@ class InstSI <dag outs, dag ins, string asm = "",
   let AsmVariantName = AMDGPUAsmVariants.Default;
 }
 
-class PseudoInstSI<dag outs, dag ins, list<dag> pattern = []>
-  : InstSI<outs, ins, "", pattern> {
+class PseudoInstSI<dag outs, dag ins, list<dag> pattern = [], string asm = "">
+  : InstSI<outs, ins, asm, pattern> {
   let isPseudo = 1;
   let isCodeGenOnly = 1;
 }
 
-class SPseudoInstSI<dag outs, dag ins, list<dag> pattern = []>
-  : PseudoInstSI<outs, ins, pattern> {
+class SPseudoInstSI<dag outs, dag ins, list<dag> pattern = [], string asm = "">
+  : PseudoInstSI<outs, ins, pattern, asm> {
   let SALU = 1;
 }
 
-class VPseudoInstSI<dag outs, dag ins, list<dag> pattern = []>
-  : PseudoInstSI<outs, ins, pattern> {
+class VPseudoInstSI<dag outs, dag ins, list<dag> pattern = [], string asm = "">
+  : PseudoInstSI<outs, ins, pattern, asm> {
   let VALU = 1;
   let Uses = [EXEC];
 }
@@ -221,10 +273,10 @@ class EXPe : Enc64 {
   bits<1> compr;
   bits<1> done;
   bits<1> vm;
-  bits<8> vsrc0;
-  bits<8> vsrc1;
-  bits<8> vsrc2;
-  bits<8> vsrc3;
+  bits<8> src0;
+  bits<8> src1;
+  bits<8> src2;
+  bits<8> src3;
 
   let Inst{3-0} = en;
   let Inst{9-4} = tgt;
@@ -232,10 +284,10 @@ class EXPe : Enc64 {
   let Inst{11} = done;
   let Inst{12} = vm;
   let Inst{31-26} = 0x3e;
-  let Inst{39-32} = vsrc0;
-  let Inst{47-40} = vsrc1;
-  let Inst{55-48} = vsrc2;
-  let Inst{63-56} = vsrc3;
+  let Inst{39-32} = src0;
+  let Inst{47-40} = src1;
+  let Inst{55-48} = src2;
+  let Inst{63-56} = src3;
 }
 
 let Uses = [EXEC] in {

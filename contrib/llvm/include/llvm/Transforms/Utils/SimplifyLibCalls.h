@@ -28,6 +28,7 @@ class Instruction;
 class TargetLibraryInfo;
 class BasicBlock;
 class Function;
+class OptimizationRemarkEmitter;
 
 /// \brief This class implements simplifications for calls to fortified library
 /// functions (__st*cpy_chk, __memcpy_chk, __memmove_chk, __memset_chk), to,
@@ -56,8 +57,8 @@ private:
   Value *optimizeMemSetChk(CallInst *CI, IRBuilder<> &B);
 
   // Str/Stp cpy are similar enough to be handled in the same functions.
-  Value *optimizeStrpCpyChk(CallInst *CI, IRBuilder<> &B, LibFunc::Func Func);
-  Value *optimizeStrpNCpyChk(CallInst *CI, IRBuilder<> &B, LibFunc::Func Func);
+  Value *optimizeStrpCpyChk(CallInst *CI, IRBuilder<> &B, LibFunc Func);
+  Value *optimizeStrpNCpyChk(CallInst *CI, IRBuilder<> &B, LibFunc Func);
 
   /// \brief Checks whether the call \p CI to a fortified libcall is foldable
   /// to the non-fortified version.
@@ -73,6 +74,7 @@ private:
   FortifiedLibCallSimplifier FortifiedSimplifier;
   const DataLayout &DL;
   const TargetLibraryInfo *TLI;
+  OptimizationRemarkEmitter &ORE;
   bool UnsafeFPShrink;
   function_ref<void(Instruction *, Value *)> Replacer;
 
@@ -87,6 +89,7 @@ private:
 
 public:
   LibCallSimplifier(const DataLayout &DL, const TargetLibraryInfo *TLI,
+                    OptimizationRemarkEmitter &ORE,
                     function_ref<void(Instruction *, Value *)> Replacer =
                         &replaceAllUsesWithDefault);
 
@@ -121,19 +124,24 @@ private:
   Value *optimizeMemCpy(CallInst *CI, IRBuilder<> &B);
   Value *optimizeMemMove(CallInst *CI, IRBuilder<> &B);
   Value *optimizeMemSet(CallInst *CI, IRBuilder<> &B);
+  Value *optimizeWcslen(CallInst *CI, IRBuilder<> &B);
   // Wrapper for all String/Memory Library Call Optimizations
   Value *optimizeStringMemoryLibCall(CallInst *CI, IRBuilder<> &B);
 
   // Math Library Optimizations
+  Value *optimizeCAbs(CallInst *CI, IRBuilder<> &B);
   Value *optimizeCos(CallInst *CI, IRBuilder<> &B);
   Value *optimizePow(CallInst *CI, IRBuilder<> &B);
+  Value *replacePowWithSqrt(CallInst *Pow, IRBuilder<> &B);
   Value *optimizeExp2(CallInst *CI, IRBuilder<> &B);
-  Value *optimizeFabs(CallInst *CI, IRBuilder<> &B);
   Value *optimizeFMinFMax(CallInst *CI, IRBuilder<> &B);
   Value *optimizeLog(CallInst *CI, IRBuilder<> &B);
   Value *optimizeSqrt(CallInst *CI, IRBuilder<> &B);
   Value *optimizeSinCosPi(CallInst *CI, IRBuilder<> &B);
   Value *optimizeTan(CallInst *CI, IRBuilder<> &B);
+  // Wrapper for all floating point library call optimizations
+  Value *optimizeFloatingPointLibCall(CallInst *CI, LibFunc Func,
+                                      IRBuilder<> &B);
 
   // Integer Library Call Optimizations
   Value *optimizeFFS(CallInst *CI, IRBuilder<> &B);
@@ -166,6 +174,9 @@ private:
   /// hasFloatVersion - Checks if there is a float version of the specified
   /// function by checking for an existing function with name FuncName + f
   bool hasFloatVersion(StringRef FuncName);
+
+  /// Shared code to optimize strlen+wcslen.
+  Value *optimizeStringLength(CallInst *CI, IRBuilder<> &B, unsigned CharSize);
 };
 } // End llvm namespace
 

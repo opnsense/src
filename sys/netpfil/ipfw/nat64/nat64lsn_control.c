@@ -190,7 +190,6 @@ nat64lsn_create(struct ip_fw_chain *ch, ip_fw3_opheader *op3,
 	cfg->st_icmp_ttl = uc->st_icmp_ttl;
 
 	cfg->nomatch_verdict = IP_FW_DENY;
-	cfg->nomatch_final = 1;	/* Exit outer loop by default */
 
 	IPFW_UH_WLOCK(ch);
 
@@ -208,10 +207,7 @@ nat64lsn_create(struct ip_fw_chain *ch, ip_fw3_opheader *op3,
 	ipfw_objhash_add(CHAIN_TO_SRV(ch), &cfg->no);
 
 	/* Okay, let's link data */
-	IPFW_WLOCK(ch);
 	SRV_OBJECT(ch, cfg->no.kidx) = cfg;
-	IPFW_WUNLOCK(ch);
-
 	nat64lsn_start_instance(cfg);
 
 	IPFW_UH_WUNLOCK(ch);
@@ -259,10 +255,7 @@ nat64lsn_destroy(struct ip_fw_chain *ch, ip_fw3_opheader *op3,
 		return (EBUSY);
 	}
 
-	IPFW_WLOCK(ch);
 	SRV_OBJECT(ch, cfg->no.kidx) = NULL;
-	IPFW_WUNLOCK(ch);
-
 	nat64lsn_detach_config(ch, cfg);
 	IPFW_UH_WUNLOCK(ch);
 

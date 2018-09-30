@@ -24,7 +24,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd March 22, 2017
+.Dd May 11, 2017
 .Dt BUILD 7
 .Os
 .Sh NAME
@@ -441,6 +441,15 @@ If set, this variable supplies a list of additional directories relative to
 the root of the source tree to build as part of the
 .Cm everything
 target.
+The directories are built in parallel with each other,
+and with the base system directories.
+Insert a
+.Va .WAIT
+directive at the beginning of the
+.Va LOCAL_DIRS
+list to ensure all base system directories are built first.
+.Va .WAIT
+may also be used as needed elsewhere within the list.
 .It Va LOCAL_ITOOLS
 If set, this variable supplies a list of additional tools that are used by the
 .Cm installworld
@@ -452,6 +461,15 @@ If set, this variable supplies a list of additional directories relative to
 the root of the source tree to build as part of the
 .Cm libraries
 target.
+The directories are built in parallel with each other,
+and with the base system libraries.
+Insert a
+.Va .WAIT
+directive at the beginning of the
+.Va LOCAL_DIRS
+list to ensure all base system libraries are built first.
+.Va .WAIT
+may also be used as needed elsewhere within the list.
 .It Va LOCAL_MTREE
 If set, this variable supplies a list of additional mtrees relative to the
 root of the source tree to use as part of the
@@ -518,7 +536,10 @@ and
 .Va TARGET Ns = Ns Li pc98 .
 If not set,
 .Va TARGET
-defaults to the current hardware platform.
+defaults to the current hardware platform, unless
+.Va TARGET_ARCH
+is also set, in which case it defaults to the appropriate
+value for that architecture.
 .It Va TARGET_ARCH
 The target machine processor architecture.
 This is analogous to the
@@ -663,11 +684,11 @@ section in
 .Pa src/UPDATING .
 .Pp
 The following sequence of commands can be used to cross-build the
-system for the sparc64 architecture on an i386 host:
+system for the armv6 architecture on an amd64 host:
 .Bd -literal -offset indent
 cd /usr/src
-make TARGET=sparc64 buildworld
-make TARGET=sparc64 DESTDIR=/clients/sparc64 installworld
+make TARGET_ARCH=armv6 buildworld buildkernel
+make TARGET_ARCH=armv6 DESTDIR=/clients/arm64 installworld installkernel
 .Ed
 .Sh SEE ALSO
 .Xr cc 1 ,
@@ -676,6 +697,7 @@ make TARGET=sparc64 DESTDIR=/clients/sparc64 installworld
 .Xr svn 1 ,
 .Xr make.conf 5 ,
 .Xr src.conf 5 ,
+.Xr arch 7 ,
 .Xr ports 7 ,
 .Xr release 7 ,
 .Xr tests 7 ,

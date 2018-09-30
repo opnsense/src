@@ -184,7 +184,8 @@ fnmatch1(const char *pattern, const char *string, const char *stringstart,
 			if (!(flags & FNM_NOESCAPE)) {
 				pclen = mbrtowc(&pc, pattern, MB_LEN_MAX,
 				    &patmbs);
-				if (pclen == (size_t)-1 || pclen == (size_t)-2)
+				if (pclen == 0 || pclen == (size_t)-1 ||
+				    pclen == (size_t)-2)
 					return (FNM_NOMATCH);
 				pattern += pclen;
 			}
@@ -248,7 +249,7 @@ rangematch(const char *pattern, wchar_t test, int flags, char **newp,
 	 * consistency with the regular expression syntax.
 	 * J.T. Conklin (conklin@ngai.kaleida.com)
 	 */
-	if ( (negate = (*pattern == '!' || *pattern == '^')) )
+	if ((negate = (*pattern == '!' || *pattern == '^')))
 		++pattern;
 
 	if (flags & FNM_CASEFOLD)

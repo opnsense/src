@@ -19,16 +19,23 @@
 
 #include "llvm/Transforms/IPO/ConstantMerge.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/PointerIntPair.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/GlobalValue.h"
+#include "llvm/IR/GlobalVariable.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
-#include "llvm/IR/Operator.h"
 #include "llvm/Pass.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Transforms/IPO.h"
+#include <algorithm>
+#include <cassert>
+#include <utility>
+
 using namespace llvm;
 
 #define DEBUG_TYPE "constmerge"
@@ -60,6 +67,23 @@ static bool IsBetterCanonical(const GlobalVariable &A,
   return A.hasGlobalUnnamedAddr();
 }
 
+static bool hasMetadataOtherThanDebugLoc(const GlobalVariable *GV) {
+  SmallVector<std::pair<unsigned, MDNode *>, 4> MDs;
+  GV->getAllMetadata(MDs);
+  for (const auto &V : MDs)
+    if (V.first != LLVMContext::MD_dbg)
+      return true;
+  return false;
+}
+
+static void copyDebugLocMetadata(const GlobalVariable *From,
+                                 GlobalVariable *To) {
+  SmallVector<DIGlobalVariableExpression *, 1> MDs;
+  From->getDebugInfo(MDs);
+  for (auto MD : MDs)
+    To->addDebugInfo(MD);
+}
+
 static unsigned getAlignment(GlobalVariable *GV) {
   unsigned Align = GV->getAlignment();
   if (Align)
@@ -85,8 +109,7 @@ static bool mergeConstants(Module &M) {
   // constants together may allow us to merge other constants together if the
   // second level constants have initializers which point to the globals that
   // were just merged.
-  while (1) {
-
+  while (true) {
     // First: Find the canonical constants others will be merged with.
     for (Module::global_iterator GVI = M.global_begin(), E = M.global_end();
          GVI != E; ) {
@@ -111,6 +134,10 @@ static bool mergeConstants(Module &M) {
       // anyway; it's likely to pessimize code generation, and some tools
       // (like the Darwin linker in cases involving CFString) don't expect it.
       if (GV->isWeakForLinker())
+        continue;
+
+      // Don't touch globals with metadata other then !dbg.
+      if (hasMetadataOtherThanDebugLoc(GV))
         continue;
 
       Constant *Init = GV->getInitializer();
@@ -155,6 +182,9 @@ static bool mergeConstants(Module &M) {
       if (!Slot->hasGlobalUnnamedAddr() && !GV->hasGlobalUnnamedAddr())
         continue;
 
+      if (hasMetadataOtherThanDebugLoc(GV))
+        continue;
+
       if (!GV->hasGlobalUnnamedAddr())
         Slot->setUnnamedAddr(GlobalValue::UnnamedAddr::None);
 
@@ -178,6 +208,8 @@ static bool mergeConstants(Module &M) {
                      getAlignment(Replacements[i].second)));
       }
 
+      copyDebugLocMetadata(Replacements[i].first, Replacements[i].second);
+
       // Eliminate any uses of the dead global.
       Replacements[i].first->replaceAllUsesWith(Replacements[i].second);
 
@@ -199,23 +231,27 @@ PreservedAnalyses ConstantMergePass::run(Module &M, ModuleAnalysisManager &) {
 }
 
 namespace {
+
 struct ConstantMergeLegacyPass : public ModulePass {
   static char ID; // Pass identification, replacement for typeid
+
   ConstantMergeLegacyPass() : ModulePass(ID) {
     initializeConstantMergeLegacyPassPass(*PassRegistry::getPassRegistry());
   }
 
   // For this pass, process all of the globals in the module, eliminating
   // duplicate constants.
-  bool runOnModule(Module &M) {
+  bool runOnModule(Module &M) override {
     if (skipModule(M))
       return false;
     return mergeConstants(M);
   }
 };
-}
+
+} // end anonymous namespace
 
 char ConstantMergeLegacyPass::ID = 0;
+
 INITIALIZE_PASS(ConstantMergeLegacyPass, "constmerge",
                 "Merge Duplicate Global Constants", false, false)
 

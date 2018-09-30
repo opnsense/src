@@ -129,7 +129,7 @@ linux_mmap_common(struct thread *td, uintptr_t addr, size_t len, int prot,
 		error = fget(td, fd, cap_rights_init(&rights, CAP_MMAP), &fp);
 		if (error != 0)
 			return (error);
-		if (fp->f_type != DTYPE_VNODE) {
+		if (fp->f_type != DTYPE_VNODE && fp->f_type != DTYPE_DEV) {
 			fdrop(fp, td);
 			return (EINVAL);
 		}
@@ -184,7 +184,7 @@ linux_mmap_common(struct thread *td, uintptr_t addr, size_t len, int prot,
 			 * mmap's return value.
 			 */
 			PROC_LOCK(p);
-			vms->vm_maxsaddr = (char *)p->p_usrstack -
+			vms->vm_maxsaddr = (char *)p->p_sysent->sv_usrstack -
 			    lim_cur_proc(p, RLIMIT_STACK);
 			PROC_UNLOCK(p);
 		}

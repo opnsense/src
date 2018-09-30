@@ -1217,7 +1217,7 @@ typedef struct _q80_tx_cmd {
 #define MAX_SDS_RINGS           32 /* Max# of Status Descriptor Rings */
 #define NUM_TX_RINGS		(MAX_SDS_RINGS * 2)
 #else
-#define MAX_SDS_RINGS           4 /* Max# of Status Descriptor Rings */
+#define MAX_SDS_RINGS           32 /* Max# of Status Descriptor Rings */
 #define NUM_TX_RINGS		MAX_SDS_RINGS
 #endif /* #ifdef QL_ENABLE_ISCSI_TLV */
 #define MAX_RDS_RINGS           MAX_SDS_RINGS /* Max# of Rcv Descriptor Rings */
@@ -1557,7 +1557,9 @@ typedef struct _qla_rdesc {
         volatile uint32_t prod_jumbo;
         volatile uint32_t rx_next; /* next standard rcv ring to arm fw */
         volatile int32_t  rx_in; /* next standard rcv ring to add mbufs */
-	volatile uint64_t count;
+	uint64_t count;
+	uint64_t lro_pkt_count;
+	uint64_t lro_bytes;
 } qla_rdesc_t;
 
 typedef struct _qla_flash_desc_table {
@@ -1598,26 +1600,26 @@ typedef struct _qla_hw {
 		uint32_t
 			unicast_mac	:1,
 			bcast_mac	:1,
-			loopback_mode	:2,
 			init_tx_cnxt	:1,
 			init_rx_cnxt	:1,
 			init_intr_cnxt	:1,
-			fduplex		:1,
-			autoneg		:1,
 			fdt_valid	:1;
 	} flags;
 
 
-	uint16_t	link_speed;
-	uint16_t	cable_length;
-	uint32_t	cable_oui;
-	uint8_t		link_up;
-	uint8_t		module_type;
-	uint8_t		link_faults;
+	volatile uint16_t	link_speed;
+	volatile uint16_t	cable_length;
+	volatile uint32_t	cable_oui;
+	volatile uint8_t	link_up;
+	volatile uint8_t	module_type;
+	volatile uint8_t	link_faults;
+	volatile uint8_t	loopback_mode;
+	volatile uint8_t	fduplex;
+	volatile uint8_t	autoneg;
 
-	uint8_t		mac_rcv_mode;
+	volatile uint8_t	mac_rcv_mode;
 
-	uint32_t	max_mtu;
+	volatile uint32_t	max_mtu;
 
 	uint8_t		mac_addr[ETHER_ADDR_LEN];
 
@@ -1671,6 +1673,7 @@ typedef struct _qla_hw {
 	/* heart beat register value */
 	uint32_t	hbeat_value;
 	uint32_t	health_count;
+	uint32_t	hbeat_failure;
 
 	uint32_t	max_tx_segs;
 	uint32_t	min_lro_pkt_size;
@@ -1681,10 +1684,14 @@ typedef struct _qla_hw {
 
 	uint32_t	user_pri_nic;
 	uint32_t	user_pri_iscsi;
-	uint64_t	iscsi_pkt_count;
 
 	/* Flash Descriptor Table */
 	qla_flash_desc_table_t fdt;
+
+	/* stats */
+	q80_mac_stats_t mac;
+	q80_rcv_stats_t rcv;
+	q80_xmt_stats_t xmt[NUM_TX_RINGS];
 
 	/* Minidump Related */
 	uint32_t	mdump_init;
@@ -1696,6 +1703,25 @@ typedef struct _qla_hw {
 	uint32_t	mdump_buffer_size;
 	void		*mdump_template;
 	uint32_t	mdump_template_size;
+	uint64_t	mdump_usec_ts;
+
+#define Q8_MBX_COMP_MSECS	(19)
+	uint64_t	mbx_comp_msecs[Q8_MBX_COMP_MSECS];
+	/* driver state related */
+	void		*drvr_state;
+
+	/* slow path trace */
+	uint32_t	sp_log_stop_events;
+#define Q8_SP_LOG_STOP_HBEAT_FAILURE		0x001
+#define Q8_SP_LOG_STOP_TEMP_FAILURE		0x002
+#define Q8_SP_LOG_STOP_HW_INIT_FAILURE		0x004
+#define Q8_SP_LOG_STOP_IF_START_FAILURE		0x008
+#define Q8_SP_LOG_STOP_ERR_RECOVERY_FAILURE	0x010
+
+	uint32_t	sp_log_stop;
+	uint32_t	sp_log_index;
+	uint32_t	sp_log_num_entries;
+	void		*sp_log;
 } qla_hw_t;
 
 #define QL_UPDATE_RDS_PRODUCER_INDEX(ha, prod_reg, val) \

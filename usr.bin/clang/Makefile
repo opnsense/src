@@ -7,8 +7,6 @@ SUBDIR+=	clang-tblgen
 SUBDIR+=	llvm-tblgen
 
 .if !defined(TOOLS_PREFIX)
-SUBDIR+=	llvm-objdump
-
 .if ${MK_CLANG_EXTRAS} != "no"
 SUBDIR+=	bugpoint
 SUBDIR+=	clang-format
@@ -30,7 +28,9 @@ SUBDIR+=	llvm-lto2
 SUBDIR+=	llvm-mc
 SUBDIR+=	llvm-modextract
 SUBDIR+=	llvm-nm
-SUBDIR+=	llvm-pdbdump
+SUBDIR+=	llvm-objcopy
+SUBDIR+=	llvm-objdump
+SUBDIR+=	llvm-pdbutil
 SUBDIR+=	llvm-profdata
 SUBDIR+=	llvm-rtdyld
 SUBDIR+=	llvm-symbolizer

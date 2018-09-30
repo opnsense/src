@@ -381,7 +381,7 @@ mpr_iocfacts_allocate(struct mpr_softc *sc, uint8_t attaching)
 		}
 	}
 
-	mpr_print_iocfacts(sc, sc->facts);
+	MPR_DPRINT_PAGE(sc, MPR_XINFO, iocfacts, sc->facts);
 
 	snprintf(sc->fw_version, sizeof(sc->fw_version), 
 	    "%02d.%02d.%02d.%02d", 
@@ -436,6 +436,8 @@ mpr_iocfacts_allocate(struct mpr_softc *sc, uint8_t attaching)
 
 	/* Only deallocate and reallocate if relevant IOC Facts have changed */
 	reallocating = FALSE;
+	sc->mpr_flags &= ~MPR_FLAGS_REALLOCATED;
+
 	if ((!attaching) &&
 	    ((saved_facts.MsgVersion != sc->facts->MsgVersion) ||
 	    (saved_facts.HeaderVersion != sc->facts->HeaderVersion) ||
@@ -458,6 +460,9 @@ mpr_iocfacts_allocate(struct mpr_softc *sc, uint8_t attaching)
 	    (saved_facts.MaxPersistentEntries !=
 	    sc->facts->MaxPersistentEntries))) {
 		reallocating = TRUE;
+
+		/* Record that we reallocated everything */
+		sc->mpr_flags |= MPR_FLAGS_REALLOCATED;
 	}
 
 	/*
@@ -498,7 +503,10 @@ mpr_iocfacts_allocate(struct mpr_softc *sc, uint8_t attaching)
 		 * Size the queues. Since the reply queues always need one free
 		 * entry, we'll just deduct one reply message here.
 		 */
-		sc->num_reqs = MIN(MPR_REQ_FRAMES, sc->facts->RequestCredit);
+		sc->num_prireqs = MIN(MPR_PRI_REQ_FRAMES,
+		    sc->facts->HighPriorityCredit);
+		sc->num_reqs = MIN(MPR_REQ_FRAMES, sc->facts->RequestCredit) +
+		    sc->num_prireqs;
 		sc->num_replies = MIN(MPR_REPLY_FRAMES + MPR_EVT_REPLY_FRAMES,
 		    sc->facts->MaxReplyDescriptorPostQueueDepth) - 1;
 
@@ -1357,7 +1365,7 @@ mpr_alloc_requests(struct mpr_softc *sc)
 		/* XXX Is a failure here a critical problem? */
 		if (bus_dmamap_create(sc->buffer_dmat, 0, &cm->cm_dmamap)
 		    == 0) {
-			if (i <= sc->facts->HighPriorityCredit)
+			if (i <= sc->num_prireqs)
 				mpr_free_high_priority_command(sc, cm);
 			else
 				mpr_free_command(sc, cm);
@@ -1482,7 +1490,7 @@ mpr_init_queues(struct mpr_softc *sc)
  * Next are the global settings, if they exist.  Highest are the per-unit
  * settings, if they exist.
  */
-static void
+void
 mpr_get_tunables(struct mpr_softc *sc)
 {
 	char tmpstr[80];
@@ -1658,8 +1666,6 @@ mpr_attach(struct mpr_softc *sc)
 {
 	int error;
 
-	mpr_get_tunables(sc);
-
 	MPR_FUNCTRACE(sc);
 
 	mtx_init(&sc->mpr_mtx, "MPR lock", NULL, MTX_DEF);
@@ -1774,7 +1780,7 @@ mpr_log_evt_handler(struct mpr_softc *sc, uintptr_t data,
 {
 	MPI2_EVENT_DATA_LOG_ENTRY_ADDED *entry;
 
-	mpr_print_event(sc, event);
+	MPR_DPRINT_EVENT(sc, generic, event);
 
 	switch (event->Event) {
 	case MPI2_EVENT_LOG_DATA:
@@ -2189,7 +2195,7 @@ mpr_reregister_events_complete(struct mpr_softc *sc, struct mpr_command *cm)
 	mpr_dprint(sc, MPR_TRACE, "%s\n", __func__);
 
 	if (cm->cm_reply)
-		mpr_print_event(sc,
+		MPR_DPRINT_EVENT(sc, generic,
 			(MPI2_EVENT_NOTIFICATION_REPLY *)cm->cm_reply);
 
 	mpr_free_command(sc, cm);
@@ -2231,8 +2237,8 @@ mpr_update_events(struct mpr_softc *sc, struct mpr_event_handle *handle,
     uint8_t *mask)
 {
 	MPI2_EVENT_NOTIFICATION_REQUEST *evtreq;
-	MPI2_EVENT_NOTIFICATION_REPLY *reply;
-	struct mpr_command *cm;
+	MPI2_EVENT_NOTIFICATION_REPLY *reply = NULL;
+	struct mpr_command *cm = NULL;
 	struct mpr_event_handle *eh;
 	int error, i;
 
@@ -2265,18 +2271,20 @@ mpr_update_events(struct mpr_softc *sc, struct mpr_event_handle *handle,
 	cm->cm_desc.Default.RequestFlags = MPI2_REQ_DESCRIPT_FLAGS_DEFAULT_TYPE;
 	cm->cm_data = NULL;
 
-	error = mpr_request_polled(sc, cm);
-	reply = (MPI2_EVENT_NOTIFICATION_REPLY *)cm->cm_reply;
+	error = mpr_request_polled(sc, &cm);
+	if (cm != NULL)
+		reply = (MPI2_EVENT_NOTIFICATION_REPLY *)cm->cm_reply;
 	if ((reply == NULL) ||
 	    (reply->IOCStatus & MPI2_IOCSTATUS_MASK) != MPI2_IOCSTATUS_SUCCESS)
 		error = ENXIO;
 	
 	if (reply)
-		mpr_print_event(sc, reply);
+		MPR_DPRINT_EVENT(sc, generic, reply);
 
 	mpr_dprint(sc, MPR_TRACE, "%s finished error %d\n", __func__, error);
 
-	mpr_free_command(sc, cm);
+	if (cm != NULL)
+		mpr_free_command(sc, cm);
 	return (error);
 }
 
@@ -3262,11 +3270,12 @@ mpr_map_command(struct mpr_softc *sc, struct mpr_command *cm)
  * be executed and enqueued automatically.  Other errors come from msleep().
  */
 int
-mpr_wait_command(struct mpr_softc *sc, struct mpr_command *cm, int timeout,
+mpr_wait_command(struct mpr_softc *sc, struct mpr_command **cmp, int timeout,
     int sleep_flag)
 {
 	int error, rc;
 	struct timeval cur_time, start_time;
+	struct mpr_command *cm = *cmp;
 
 	if (sc->mpr_flags & MPR_FLAGS_DIAGRESET) 
 		return  EBUSY;
@@ -3286,9 +3295,17 @@ mpr_wait_command(struct mpr_softc *sc, struct mpr_command *cm, int timeout,
 	if (curthread->td_pflags & TDP_NOSLEEPING)
 #endif //__FreeBSD_version >= 1000029
 		sleep_flag = NO_SLEEP;
-	getmicrotime(&start_time);
+	getmicrouptime(&start_time);
 	if (mtx_owned(&sc->mpr_mtx) && sleep_flag == CAN_SLEEP) {
 		error = msleep(cm, &sc->mpr_mtx, 0, "mprwait", timeout*hz);
+		if (error == EWOULDBLOCK) {
+			/*
+			 * Record the actual elapsed time in the case of a
+			 * timeout for the message below.
+			 */
+			getmicrouptime(&cur_time);
+			timevalsub(&cur_time, &start_time);
+		}
 	} else {
 		while ((cm->cm_flags & MPR_CM_FLAGS_COMPLETE) == 0) {
 			mpr_intr_locked(sc);
@@ -3297,8 +3314,9 @@ mpr_wait_command(struct mpr_softc *sc, struct mpr_command *cm, int timeout,
 			else
 				DELAY(50000);
 		
-			getmicrotime(&cur_time);
-			if ((cur_time.tv_sec - start_time.tv_sec) > timeout) {
+			getmicrouptime(&cur_time);
+			timevalsub(&cur_time, &start_time);
+			if (cur_time.tv_sec > timeout) {
 				error = EWOULDBLOCK;
 				break;
 			}
@@ -3306,10 +3324,19 @@ mpr_wait_command(struct mpr_softc *sc, struct mpr_command *cm, int timeout,
 	}
 
 	if (error == EWOULDBLOCK) {
-		mpr_dprint(sc, MPR_FAULT, "Calling Reinit from %s\n", __func__);
+		mpr_dprint(sc, MPR_FAULT, "Calling Reinit from %s, timeout=%d,"
+		    " elapsed=%jd\n", __func__, timeout,
+		    (intmax_t)cur_time.tv_sec);
 		rc = mpr_reinit(sc);
 		mpr_dprint(sc, MPR_FAULT, "Reinit %s\n", (rc == 0) ? "success" :
 		    "failed");
+		if (sc->mpr_flags & MPR_FLAGS_REALLOCATED) {
+			/*
+			 * Tell the caller that we freed the command in a
+			 * reinit.
+			 */
+			*cmp = NULL;
+		}
 		error = ETIMEDOUT;
 	}
 	return (error);
@@ -3320,10 +3347,11 @@ mpr_wait_command(struct mpr_softc *sc, struct mpr_command *cm, int timeout,
  * completion.  Its use should be rare.
  */
 int
-mpr_request_polled(struct mpr_softc *sc, struct mpr_command *cm)
+mpr_request_polled(struct mpr_softc *sc, struct mpr_command **cmp)
 {
-	int error, timeout = 0, rc;
+	int error, rc;
 	struct timeval cur_time, start_time;
+	struct mpr_command *cm = *cmp;
 
 	error = 0;
 
@@ -3331,7 +3359,7 @@ mpr_request_polled(struct mpr_softc *sc, struct mpr_command *cm)
 	cm->cm_complete = NULL;
 	mpr_map_command(sc, cm);
 
-	getmicrotime(&start_time);
+	getmicrouptime(&start_time);
 	while ((cm->cm_flags & MPR_CM_FLAGS_COMPLETE) == 0) {
 		mpr_intr_locked(sc);
 
@@ -3344,9 +3372,9 @@ mpr_request_polled(struct mpr_softc *sc, struct mpr_command *cm)
 		/*
 		 * Check for real-time timeout and fail if more than 60 seconds.
 		 */
-		getmicrotime(&cur_time);
-		timeout = cur_time.tv_sec - start_time.tv_sec;
-		if (timeout > 60) {
+		getmicrouptime(&cur_time);
+		timevalsub(&cur_time, &start_time);
+		if (cur_time.tv_sec > 60) {
 			mpr_dprint(sc, MPR_FAULT, "polling failed\n");
 			error = ETIMEDOUT;
 			break;
@@ -3358,6 +3386,14 @@ mpr_request_polled(struct mpr_softc *sc, struct mpr_command *cm)
 		rc = mpr_reinit(sc);
 		mpr_dprint(sc, MPR_FAULT, "Reinit %s\n", (rc == 0) ? "success" :
 		    "failed");
+
+		if (sc->mpr_flags & MPR_FLAGS_REALLOCATED) {
+			/*
+			 * Tell the caller that we freed the command in a
+			 * reinit.
+			 */
+			*cmp = NULL;
+		}
 	}
 	return (error);
 }
@@ -3423,11 +3459,12 @@ mpr_read_config_page(struct mpr_softc *sc, struct mpr_config_params *params)
 		cm->cm_complete = mpr_config_complete;
 		return (mpr_map_command(sc, cm));
 	} else {
-		error = mpr_wait_command(sc, cm, 0, CAN_SLEEP);
+		error = mpr_wait_command(sc, &cm, 0, CAN_SLEEP);
 		if (error) {
 			mpr_dprint(sc, MPR_FAULT,
 			    "Error %d reading config page\n", error);
-			mpr_free_command(sc, cm);
+			if (cm != NULL)
+				mpr_free_command(sc, cm);
 			return (error);
 		}
 		mpr_config_complete(sc, cm);

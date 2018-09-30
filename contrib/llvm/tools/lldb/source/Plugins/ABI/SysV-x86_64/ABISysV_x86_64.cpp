@@ -13,13 +13,10 @@
 // C++ Includes
 // Other libraries and framework includes
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/Triple.h"
 
 // Project includes
-#include "lldb/Core/ConstString.h"
-#include "lldb/Core/DataExtractor.h"
-#include "lldb/Core/Error.h"
-#include "lldb/Core/Log.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Core/RegisterValue.h"
@@ -33,6 +30,10 @@
 #include "lldb/Target/StackFrame.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Target/Thread.h"
+#include "lldb/Utility/ConstString.h"
+#include "lldb/Utility/DataExtractor.h"
+#include "lldb/Utility/Log.h"
+#include "lldb/Utility/Status.h"
 
 using namespace lldb;
 using namespace lldb_private;
@@ -1093,11 +1094,11 @@ size_t ABISysV_x86_64::GetRedZoneSize() const { return 128; }
 //------------------------------------------------------------------
 
 ABISP
-ABISysV_x86_64::CreateInstance(const ArchSpec &arch) {
+ABISysV_x86_64::CreateInstance(lldb::ProcessSP process_sp, const ArchSpec &arch) {
   static ABISP g_abi_sp;
   if (arch.GetTriple().getArch() == llvm::Triple::x86_64) {
     if (!g_abi_sp)
-      g_abi_sp.reset(new ABISysV_x86_64);
+      g_abi_sp.reset(new ABISysV_x86_64(process_sp));
     return g_abi_sp;
   }
   return ABISP();
@@ -1152,7 +1153,7 @@ bool ABISysV_x86_64::PrepareTrivialCall(Thread &thread, addr_t sp,
 
   sp -= 8;
 
-  Error error;
+  Status error;
   const RegisterInfo *pc_reg_info =
       reg_ctx->GetRegisterInfo(eRegisterKindGeneric, LLDB_REGNUM_GENERIC_PC);
   const RegisterInfo *sp_reg_info =
@@ -1160,48 +1161,6 @@ bool ABISysV_x86_64::PrepareTrivialCall(Thread &thread, addr_t sp,
   ProcessSP process_sp(thread.GetProcess());
 
   RegisterValue reg_value;
-
-#if 0
-    // This code adds an extra frame so that we don't lose the function that we came from
-    // by pushing the PC and the FP and then writing the current FP to point to the FP value
-    // we just pushed. It is disabled for now until the stack backtracing code can be debugged.
-
-    // Save current PC
-    const RegisterInfo *fp_reg_info = reg_ctx->GetRegisterInfo (eRegisterKindGeneric, LLDB_REGNUM_GENERIC_FP);
-    if (reg_ctx->ReadRegister(pc_reg_info, reg_value))
-    {
-        if (log)
-            log->Printf("Pushing the current PC onto the stack: 0x%" PRIx64 ": 0x%" PRIx64, (uint64_t)sp, reg_value.GetAsUInt64());
-        
-        if (!process_sp->WritePointerToMemory(sp, reg_value.GetAsUInt64(), error))
-            return false;
-
-        sp -= 8;
-        
-        // Save current FP
-        if (reg_ctx->ReadRegister(fp_reg_info, reg_value))
-        {
-            if (log)
-                log->Printf("Pushing the current FP onto the stack: 0x%" PRIx64 ": 0x%" PRIx64, (uint64_t)sp, reg_value.GetAsUInt64());
-            
-            if (!process_sp->WritePointerToMemory(sp, reg_value.GetAsUInt64(), error))
-                return false;
-        }
-        // Setup FP backchain
-        reg_value.SetUInt64 (sp);
-        
-        if (log)
-            log->Printf("Writing FP:  0x%" PRIx64 " (for FP backchain)", reg_value.GetAsUInt64());
-
-        if (!reg_ctx->WriteRegister(fp_reg_info, reg_value))
-        {
-            return false;
-        }
-        
-        sp -= 8;
-    }
-#endif
-
   if (log)
     log->Printf("Pushing the return address onto the stack: 0x%" PRIx64
                 ": 0x%" PRIx64,
@@ -1246,7 +1205,7 @@ static bool ReadIntegerArgument(Scalar &scalar, unsigned int bit_width,
       scalar.SignExtend(bit_width);
   } else {
     uint32_t byte_size = (bit_width + (8 - 1)) / 8;
-    Error error;
+    Status error;
     if (thread.GetProcess()->ReadScalarIntegerFromMemory(
             current_stack_argument, byte_size, is_signed, scalar, error)) {
       current_stack_argument += byte_size;
@@ -1329,9 +1288,9 @@ bool ABISysV_x86_64::GetArgumentValues(Thread &thread,
   return true;
 }
 
-Error ABISysV_x86_64::SetReturnValueObject(lldb::StackFrameSP &frame_sp,
-                                           lldb::ValueObjectSP &new_value_sp) {
-  Error error;
+Status ABISysV_x86_64::SetReturnValueObject(lldb::StackFrameSP &frame_sp,
+                                            lldb::ValueObjectSP &new_value_sp) {
+  Status error;
   if (!new_value_sp) {
     error.SetErrorString("Empty value object for return value.");
     return error;
@@ -1357,7 +1316,7 @@ Error ABISysV_x86_64::SetReturnValueObject(lldb::StackFrameSP &frame_sp,
     const RegisterInfo *reg_info = reg_ctx->GetRegisterInfoByName("rax", 0);
 
     DataExtractor data;
-    Error data_error;
+    Status data_error;
     size_t num_bytes = new_value_sp->GetData(data, data_error);
     if (data_error.Fail()) {
       error.SetErrorStringWithFormat(
@@ -1386,7 +1345,7 @@ Error ABISysV_x86_64::SetReturnValueObject(lldb::StackFrameSP &frame_sp,
             reg_ctx->GetRegisterInfoByName("xmm0", 0);
         RegisterValue xmm0_value;
         DataExtractor data;
-        Error data_error;
+        Status data_error;
         size_t num_bytes = new_value_sp->GetData(data, data_error);
         if (data_error.Fail()) {
           error.SetErrorStringWithFormat(
@@ -1542,7 +1501,7 @@ ValueObjectSP ABISysV_x86_64::GetReturnValueObjectSimple(
             const ByteOrder byte_order = process_sp->GetByteOrder();
             RegisterValue reg_value;
             if (reg_ctx->ReadRegister(altivec_reg, reg_value)) {
-              Error error;
+              Status error;
               if (reg_value.GetAsMemoryData(
                       altivec_reg, heap_data_ap->GetBytes(),
                       heap_data_ap->GetByteSize(), byte_order, error)) {
@@ -1569,7 +1528,7 @@ ValueObjectSP ABISysV_x86_64::GetReturnValueObjectSimple(
               if (reg_ctx->ReadRegister(altivec_reg, reg_value) &&
                   reg_ctx->ReadRegister(altivec_reg2, reg_value2)) {
 
-                Error error;
+                Status error;
                 if (reg_value.GetAsMemoryData(
                         altivec_reg, heap_data_ap->GetBytes(),
                         altivec_reg->byte_size, byte_order, error) &&
@@ -1908,52 +1867,16 @@ bool ABISysV_x86_64::RegisterIsVolatile(const RegisterInfo *reg_info) {
 // It's being revised & updated at https://github.com/hjl-tools/x86-psABI/
 
 bool ABISysV_x86_64::RegisterIsCalleeSaved(const RegisterInfo *reg_info) {
-  if (reg_info) {
-    // Preserved registers are :
-    //    rbx, rsp, rbp, r12, r13, r14, r15
-    //    mxcsr (partially preserved)
-    //    x87 control word
-
-    const char *name = reg_info->name;
-    if (name[0] == 'r') {
-      switch (name[1]) {
-      case '1': // r12, r13, r14, r15
-        if (name[2] >= '2' && name[2] <= '5')
-          return name[3] == '\0';
-        break;
-
-      default:
-        break;
-      }
-    }
-
-    // Accept shorter-variant versions, rbx/ebx, rip/ eip, etc.
-    if (name[0] == 'r' || name[0] == 'e') {
-      switch (name[1]) {
-      case 'b': // rbp, rbx
-        if (name[2] == 'p' || name[2] == 'x')
-          return name[3] == '\0';
-        break;
-
-      case 'i': // rip
-        if (name[2] == 'p')
-          return name[3] == '\0';
-        break;
-
-      case 's': // rsp
-        if (name[2] == 'p')
-          return name[3] == '\0';
-        break;
-      }
-    }
-    if (name[0] == 's' && name[1] == 'p' && name[2] == '\0') // sp
-      return true;
-    if (name[0] == 'f' && name[1] == 'p' && name[2] == '\0') // fp
-      return true;
-    if (name[0] == 'p' && name[1] == 'c' && name[2] == '\0') // pc
-      return true;
-  }
-  return false;
+  if (!reg_info)
+    return false;
+  assert(reg_info->name != nullptr && "unnamed register?");
+  std::string Name = std::string(reg_info->name);
+  bool IsCalleeSaved =
+      llvm::StringSwitch<bool>(Name)
+          .Cases("r12", "r13", "r14", "r15", "rbp", "ebp", "rbx", "ebx", true)
+          .Cases("rip", "eip", "rsp", "esp", "sp", "fp", "pc", true)
+          .Default(false);
+  return IsCalleeSaved;
 }
 
 void ABISysV_x86_64::Initialize() {

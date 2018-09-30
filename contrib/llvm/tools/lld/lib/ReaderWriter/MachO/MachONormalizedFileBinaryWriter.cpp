@@ -23,13 +23,14 @@
 
 #include "MachONormalizedFile.h"
 #include "MachONormalizedFileBinaryUtils.h"
+#include "lld/Common/LLVM.h"
 #include "lld/Core/Error.h"
-#include "lld/Core/LLVM.h"
-#include "llvm/ADT/ilist.h"
-#include "llvm/ADT/ilist_node.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/ilist.h"
+#include "llvm/ADT/ilist_node.h"
+#include "llvm/BinaryFormat/MachO.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Errc.h"
@@ -37,7 +38,6 @@
 #include "llvm/Support/FileOutputBuffer.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/Host.h"
-#include "llvm/Support/MachO.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 #include <functional>
@@ -1523,10 +1523,10 @@ llvm::Error MachOFileLayout::writeBinary(StringRef path) {
   unsigned flags = 0;
   if (_file.fileType != llvm::MachO::MH_OBJECT)
     flags = llvm::FileOutputBuffer::F_executable;
-  ErrorOr<std::unique_ptr<llvm::FileOutputBuffer>> fobOrErr =
+  Expected<std::unique_ptr<llvm::FileOutputBuffer>> fobOrErr =
       llvm::FileOutputBuffer::create(path, size(), flags);
-  if (std::error_code ec = fobOrErr.getError())
-    return llvm::errorCodeToError(ec);
+  if (Error E = fobOrErr.takeError())
+    return E;
   std::unique_ptr<llvm::FileOutputBuffer> &fob = *fobOrErr;
   // Write content.
   _buffer = fob->getBufferStart();
@@ -1535,7 +1535,8 @@ llvm::Error MachOFileLayout::writeBinary(StringRef path) {
     return ec;
   writeSectionContent();
   writeLinkEditContent();
-  fob->commit();
+  if (Error E = fob->commit())
+    return E;
 
   return llvm::Error::success();
 }

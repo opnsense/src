@@ -16,6 +16,7 @@
 #define LLVM_XRAY_XRAY_RECORD_H
 
 #include <cstdint>
+#include <vector>
 
 namespace llvm {
 namespace xray {
@@ -42,20 +43,25 @@ struct XRayFileHeader {
   /// counter (TSC) values. Useful for estimating the amount of time that
   /// elapsed between two TSCs on some platforms.
   uint64_t CycleFrequency = 0;
+
+  // This is different depending on the type of xray record. The naive format
+  // stores a Wallclock timespec. FDR logging stores the size of a thread
+  // buffer.
+  char FreeFormData[16];
 };
 
 /// Determines the supported types of records that could be seen in XRay traces.
 /// This may or may not correspond to actual record types in the raw trace (as
 /// the loader implementation may synthesize this information in the process of
 /// of loading).
-enum class RecordTypes { ENTER, EXIT };
+enum class RecordTypes { ENTER, EXIT, TAIL_EXIT, ENTER_ARG };
 
 struct XRayRecord {
   /// The type of record.
   uint16_t RecordType;
 
-  /// The CPU where the thread is running. We assume number of CPUs <= 256.
-  uint8_t CPU;
+  /// The CPU where the thread is running. We assume number of CPUs <= 65536.
+  uint16_t CPU;
 
   /// Identifies the type of record.
   RecordTypes Type;
@@ -68,6 +74,9 @@ struct XRayRecord {
 
   /// The thread ID for the currently running thread.
   uint32_t TId;
+
+  /// The function call arguments.
+  std::vector<uint64_t> CallArgs;
 };
 
 } // namespace xray

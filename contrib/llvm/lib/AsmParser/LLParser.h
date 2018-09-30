@@ -139,11 +139,16 @@ namespace llvm {
     std::map<Value*, std::vector<unsigned> > ForwardRefAttrGroups;
     std::map<unsigned, AttrBuilder> NumberedAttrBuilders;
 
+    /// Only the llvm-as tool may set this to false to bypass
+    /// UpgradeDebuginfo so it can generate broken bitcode.
+    bool UpgradeDebugInfo;
+
   public:
     LLParser(StringRef F, SourceMgr &SM, SMDiagnostic &Err, Module *M,
-             SlotMapping *Slots = nullptr)
+             SlotMapping *Slots = nullptr, bool UpgradeDebugInfo = true)
         : Context(M->getContext()), Lex(F, SM, Err, M->getContext()), M(M),
-          Slots(Slots), BlockAddressPFS(nullptr) {}
+          Slots(Slots), BlockAddressPFS(nullptr),
+          UpgradeDebugInfo(UpgradeDebugInfo) {}
     bool Run();
 
     bool parseStandaloneConstantValue(Constant *&C, const SlotMapping *Slots);
@@ -188,11 +193,17 @@ namespace llvm {
       FastMathFlags FMF;
       while (true)
         switch (Lex.getKind()) {
-        case lltok::kw_fast: FMF.setUnsafeAlgebra();   Lex.Lex(); continue;
+        case lltok::kw_fast: FMF.setFast();            Lex.Lex(); continue;
         case lltok::kw_nnan: FMF.setNoNaNs();          Lex.Lex(); continue;
         case lltok::kw_ninf: FMF.setNoInfs();          Lex.Lex(); continue;
         case lltok::kw_nsz:  FMF.setNoSignedZeros();   Lex.Lex(); continue;
         case lltok::kw_arcp: FMF.setAllowReciprocal(); Lex.Lex(); continue;
+        case lltok::kw_contract:
+          FMF.setAllowContract(true);
+          Lex.Lex();
+          continue;
+        case lltok::kw_reassoc: FMF.setAllowReassoc(); Lex.Lex(); continue;
+        case lltok::kw_afn:     FMF.setApproxFunc();   Lex.Lex(); continue;
         default: return FMF;
         }
       return FMF;
@@ -231,17 +242,22 @@ namespace llvm {
     bool ParseOptionalParamAttrs(AttrBuilder &B);
     bool ParseOptionalReturnAttrs(AttrBuilder &B);
     bool ParseOptionalLinkage(unsigned &Linkage, bool &HasLinkage,
-                              unsigned &Visibility, unsigned &DLLStorageClass);
+                              unsigned &Visibility, unsigned &DLLStorageClass,
+                              bool &DSOLocal);
+    void ParseOptionalDSOLocal(bool &DSOLocal);
     void ParseOptionalVisibility(unsigned &Visibility);
     void ParseOptionalDLLStorageClass(unsigned &DLLStorageClass);
     bool ParseOptionalCallingConv(unsigned &CC);
     bool ParseOptionalAlignment(unsigned &Alignment);
     bool ParseOptionalDerefAttrBytes(lltok::Kind AttrKind, uint64_t &Bytes);
-    bool ParseScopeAndOrdering(bool isAtomic, SynchronizationScope &Scope,
+    bool ParseScopeAndOrdering(bool isAtomic, SyncScope::ID &SSID,
                                AtomicOrdering &Ordering);
+    bool ParseScope(SyncScope::ID &SSID);
     bool ParseOrdering(AtomicOrdering &Ordering);
     bool ParseOptionalStackAlignment(unsigned &Alignment);
     bool ParseOptionalCommaAlign(unsigned &Alignment, bool &AteExtraComma);
+    bool ParseOptionalCommaAddrSpace(unsigned &AddrSpace, LocTy &Loc,
+                                     bool &AteExtraComma);
     bool ParseOptionalCommaInAlloca(bool &IsInAlloca);
     bool parseAllocSizeArguments(unsigned &ElemSizeArg,
                                  Optional<unsigned> &HowManyArg);
@@ -272,12 +288,12 @@ namespace llvm {
     bool ParseNamedGlobal();
     bool ParseGlobal(const std::string &Name, LocTy Loc, unsigned Linkage,
                      bool HasLinkage, unsigned Visibility,
-                     unsigned DLLStorageClass,
+                     unsigned DLLStorageClass, bool DSOLocal,
                      GlobalVariable::ThreadLocalMode TLM,
                      GlobalVariable::UnnamedAddr UnnamedAddr);
     bool parseIndirectSymbol(const std::string &Name, LocTy Loc,
                              unsigned Linkage, unsigned Visibility,
-                             unsigned DLLStorageClass,
+                             unsigned DLLStorageClass, bool DSOLocal,
                              GlobalVariable::ThreadLocalMode TLM,
                              GlobalVariable::UnnamedAddr UnnamedAddr);
     bool parseComdat();
@@ -393,7 +409,7 @@ namespace llvm {
       Value *V;
       AttributeSet Attrs;
       ParamInfo(LocTy loc, Value *v, AttributeSet attrs)
-        : Loc(loc), V(v), Attrs(attrs) {}
+          : Loc(loc), V(v), Attrs(attrs) {}
     };
     bool ParseParameterList(SmallVectorImpl<ParamInfo> &ArgList,
                             PerFunctionState &PFS,
@@ -447,7 +463,7 @@ namespace llvm {
       AttributeSet Attrs;
       std::string Name;
       ArgInfo(LocTy L, Type *ty, AttributeSet Attr, const std::string &N)
-        : Loc(L), Ty(ty), Attrs(Attr), Name(N) {}
+          : Loc(L), Ty(ty), Attrs(Attr), Name(N) {}
     };
     bool ParseArgumentList(SmallVectorImpl<ArgInfo> &ArgList, bool &isVarArg);
     bool ParseFunctionHeader(Function *&Fn, bool isDefine);

@@ -7,13 +7,15 @@
 |*
 \*===----------------------------------------------------------------------===*/
 
-#include "InstrProfiling.h"
-#include "InstrProfilingInternal.h"
-#include "InstrProfilingUtil.h" /* For PS4 getenv shim. */
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "InstrProfiling.h"
+#include "InstrProfilingInternal.h"
+#include "InstrProfilingUtil.h"
+
 #define INSTR_PROF_VALUE_PROF_DATA
 #define INSTR_PROF_COMMON_API_IMPL
 #include "InstrProfData.inc"
@@ -22,7 +24,7 @@ static int hasStaticCounters = 1;
 static int OutOfNodesWarnings = 0;
 static int hasNonDefaultValsPerSite = 0;
 #define INSTR_PROF_MAX_VP_WARNS 10
-#define INSTR_PROF_DEFAULT_NUM_VAL_PER_SITE 8
+#define INSTR_PROF_DEFAULT_NUM_VAL_PER_SITE 16
 #define INSTR_PROF_VNODE_POOL_SIZE 1024
 
 #ifndef _MSC_VER
@@ -217,6 +219,35 @@ __llvm_profile_instrument_target(uint64_t TargetValue, void *Data,
     free(CurVNode);
     return;
   }
+}
+
+/*
+ * The target values are partitioned into multiple regions/ranges. There is one
+ * contiguous region which is precise -- every value in the range is tracked
+ * individually. A value outside the precise region will be collapsed into one
+ * value depending on the region it falls in.
+ *
+ * There are three regions:
+ * 1. (-inf, PreciseRangeStart) and (PreciseRangeLast, LargeRangeValue) belong
+ * to one region -- all values here should be mapped to one value of
+ * "PreciseRangeLast + 1".
+ * 2. [PreciseRangeStart, PreciseRangeLast]
+ * 3. Large values: [LargeValue, +inf) maps to one value of LargeValue.
+ *
+ * The range for large values is optional. The default value of INT64_MIN
+ * indicates it is not specified.
+ */
+COMPILER_RT_VISIBILITY void __llvm_profile_instrument_range(
+    uint64_t TargetValue, void *Data, uint32_t CounterIndex,
+    int64_t PreciseRangeStart, int64_t PreciseRangeLast, int64_t LargeValue) {
+
+  if (LargeValue != INT64_MIN && (int64_t)TargetValue >= LargeValue)
+    TargetValue = LargeValue;
+  else if ((int64_t)TargetValue < PreciseRangeStart ||
+           (int64_t)TargetValue > PreciseRangeLast)
+    TargetValue = PreciseRangeLast + 1;
+
+  __llvm_profile_instrument_target(TargetValue, Data, CounterIndex);
 }
 
 /*

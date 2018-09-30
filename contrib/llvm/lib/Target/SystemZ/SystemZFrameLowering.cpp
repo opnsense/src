@@ -71,7 +71,7 @@ void SystemZFrameLowering::determineCalleeSaves(MachineFunction &MF,
   const TargetRegisterInfo *TRI = MF.getSubtarget().getRegisterInfo();
   bool HasFP = hasFP(MF);
   SystemZMachineFunctionInfo *MFI = MF.getInfo<SystemZMachineFunctionInfo>();
-  bool IsVarArg = MF.getFunction()->isVarArg();
+  bool IsVarArg = MF.getFunction().isVarArg();
 
   // va_start stores incoming FPR varargs in the normal way, but delegates
   // the saving of incoming GPR varargs to spillCalleeSavedRegisters().
@@ -139,7 +139,7 @@ spillCalleeSavedRegisters(MachineBasicBlock &MBB,
   MachineFunction &MF = *MBB.getParent();
   const TargetInstrInfo *TII = MF.getSubtarget().getInstrInfo();
   SystemZMachineFunctionInfo *ZFI = MF.getInfo<SystemZMachineFunctionInfo>();
-  bool IsVarArg = MF.getFunction()->isVarArg();
+  bool IsVarArg = MF.getFunction().isVarArg();
   DebugLoc DL;
 
   // Scan the call-saved GPRs and find the bounds of the register spill area.
@@ -220,7 +220,7 @@ spillCalleeSavedRegisters(MachineBasicBlock &MBB,
 bool SystemZFrameLowering::
 restoreCalleeSavedRegisters(MachineBasicBlock &MBB,
                             MachineBasicBlock::iterator MBBI,
-                            const std::vector<CalleeSavedInfo> &CSI,
+                            std::vector<CalleeSavedInfo> &CSI,
                             const TargetRegisterInfo *TRI) const {
   if (CSI.empty())
     return false;
@@ -277,8 +277,21 @@ void SystemZFrameLowering::
 processFunctionBeforeFrameFinalized(MachineFunction &MF,
                                     RegScavenger *RS) const {
   MachineFrameInfo &MFFrame = MF.getFrameInfo();
-  uint64_t MaxReach = (MFFrame.estimateStackSize(MF) +
-                       SystemZMC::CallFrameSize * 2);
+  // Get the size of our stack frame to be allocated ...
+  uint64_t StackSize = (MFFrame.estimateStackSize(MF) +
+                        SystemZMC::CallFrameSize);
+  // ... and the maximum offset we may need to reach into the
+  // caller's frame to access the save area or stack arguments.
+  int64_t MaxArgOffset = SystemZMC::CallFrameSize;
+  for (int I = MFFrame.getObjectIndexBegin(); I != 0; ++I)
+    if (MFFrame.getObjectOffset(I) >= 0) {
+      int64_t ArgOffset = SystemZMC::CallFrameSize +
+                          MFFrame.getObjectOffset(I) +
+                          MFFrame.getObjectSize(I);
+      MaxArgOffset = std::max(MaxArgOffset, ArgOffset);
+    }
+
+  uint64_t MaxReach = StackSize + MaxArgOffset;
   if (!isUInt<12>(MaxReach)) {
     // We may need register scavenging slots if some parts of the frame
     // are outside the reach of an unsigned 12-bit displacement.
@@ -361,7 +374,7 @@ void SystemZFrameLowering::emitPrologue(MachineFunction &MF,
   uint64_t StackSize = getAllocatedStackSize(MF);
   if (StackSize) {
     // Determine if we want to store a backchain.
-    bool StoreBackchain = MF.getFunction()->hasFnAttribute("backchain");
+    bool StoreBackchain = MF.getFunction().hasFnAttribute("backchain");
 
     // If we need backchain, save current stack pointer.  R1 is free at this
     // point.

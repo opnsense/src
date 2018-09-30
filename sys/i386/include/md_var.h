@@ -59,7 +59,6 @@ void	doreti_popl_es(void) __asm(__STRING(doreti_popl_es));
 void	doreti_popl_es_fault(void) __asm(__STRING(doreti_popl_es_fault));
 void	doreti_popl_fs(void) __asm(__STRING(doreti_popl_fs));
 void	doreti_popl_fs_fault(void) __asm(__STRING(doreti_popl_fs_fault));
-void	finishidentcpu(void);
 void	fill_based_sd(struct segment_descriptor *sdp, uint32_t base);
 void	i686_pagezero(void *addr);
 void	sse2_pagezero(void *addr);
@@ -67,9 +66,10 @@ void	init_AMD_Elan_sc520(void);
 vm_paddr_t kvtop(void *addr);
 void	panicifcpuunsupported(void);
 void	ppro_reenable_apic(void);
+void	set_fsbase(struct thread *td, uint32_t base);
+void	set_gsbase(struct thread *td, uint32_t base);
 void	setidt(int idx, alias_for_inthand_t *func, int typ, int dpl, int selec);
 union savefpu *get_pcb_user_save_td(struct thread *td);
 union savefpu *get_pcb_user_save_pcb(struct pcb *pcb);
-struct pcb *get_pcb_td(struct thread *td);
 
 #endif /* !_MACHINE_MD_VAR_H_ */

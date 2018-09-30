@@ -39,6 +39,8 @@ public:
   void printUnwindInfo() override;
   void printStackMap() const override;
 
+  void printNeededLibraries() override;
+
   // MachO-specific.
   void printMachODataInCode() override;
   void printMachOVersionMin() override;
@@ -675,6 +677,34 @@ void MachODumper::printStackMap() const {
                          StackMapV2Parser<support::big>(StackMapContentsArray));
 }
 
+void MachODumper::printNeededLibraries() {
+  ListScope D(W, "NeededLibraries");
+
+  using LibsTy = std::vector<StringRef>;
+  LibsTy Libs;
+
+  for (const auto &Command : Obj->load_commands()) {
+    if (Command.C.cmd == MachO::LC_LOAD_DYLIB ||
+        Command.C.cmd == MachO::LC_ID_DYLIB ||
+        Command.C.cmd == MachO::LC_LOAD_WEAK_DYLIB ||
+        Command.C.cmd == MachO::LC_REEXPORT_DYLIB ||
+        Command.C.cmd == MachO::LC_LAZY_LOAD_DYLIB ||
+        Command.C.cmd == MachO::LC_LOAD_UPWARD_DYLIB) {
+      MachO::dylib_command Dl = Obj->getDylibIDLoadCommand(Command);
+      if (Dl.dylib.name < Dl.cmdsize) {
+        auto *P = static_cast<const char*>(Command.Ptr) + Dl.dylib.name;
+        Libs.push_back(P);
+      }
+    }
+  }
+
+  std::stable_sort(Libs.begin(), Libs.end());
+
+  for (const auto &L : Libs) {
+    outs() << "  " << L << "\n";
+  }
+}
+
 void MachODumper::printMachODataInCode() {
   for (const auto &Load : Obj->load_commands()) {
     if (Load.C.cmd  == MachO::LC_DATA_IN_CODE) {
@@ -713,12 +743,30 @@ void MachODumper::printMachOVersionMin() {
     case MachO::LC_VERSION_MIN_WATCHOS:
       Cmd = "LC_VERSION_MIN_WATCHOS";
       break;
+    case MachO::LC_BUILD_VERSION:
+      Cmd = "LC_BUILD_VERSION";
+      break;
     default:
       continue;
     }
 
-    MachO::version_min_command VMC = Obj->getVersionMinLoadCommand(Load);
     DictScope Group(W, "MinVersion");
+    // Handle LC_BUILD_VERSION.
+    if (Load.C.cmd == MachO::LC_BUILD_VERSION) {
+      MachO::build_version_command BVC = Obj->getBuildVersionLoadCommand(Load);
+      W.printString("Cmd", Cmd);
+      W.printNumber("Size", BVC.cmdsize);
+      W.printString("Platform",
+                    MachOObjectFile::getBuildPlatform(BVC.platform));
+      W.printString("Version", MachOObjectFile::getVersionString(BVC.minos));
+      if (BVC.sdk)
+        W.printString("SDK", MachOObjectFile::getVersionString(BVC.sdk));
+      else
+        W.printString("SDK", StringRef("n/a"));
+      continue;
+    }
+
+    MachO::version_min_command VMC = Obj->getVersionMinLoadCommand(Load);
     W.printString("Cmd", Cmd);
     W.printNumber("Size", VMC.cmdsize);
     SmallString<32> Version;

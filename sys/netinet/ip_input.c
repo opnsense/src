@@ -466,16 +466,6 @@ ip_input(struct mbuf *m)
 		goto ours;
 	}
 
-	if (m->m_flags & M_SKIP_PFIL) {
-		m->m_flags &= ~M_SKIP_PFIL;
-		/* Set up some basics that will be used later. */
-		ip = mtod(m, struct ip *);
-		hlen = ip->ip_hl << 2;
-		ip_len = ntohs(ip->ip_len);
-		ifp = m->m_pkthdr.rcvif;
-		goto reinjected;
-	}
-
 	IPSTAT_INC(ips_total);
 
 	if (m->m_pkthdr.len < sizeof(struct ip))
@@ -608,7 +598,7 @@ tooshort:
 		goto passin;
 
 	odst = ip->ip_dst;
-	if (pfil_run_hooks(&V_inet_pfil_hook, &m, ifp, PFIL_IN, NULL) != 0)
+	if (pfil_run_hooks(&V_inet_pfil_hook, &m, ifp, PFIL_IN, 0, NULL) != 0)
 		return;
 	if (m == NULL)			/* consumed by filter */
 		return;
@@ -621,15 +611,16 @@ tooshort:
 		m->m_flags &= ~M_FASTFWD_OURS;
 		goto ours;
 	}
-reinjected:
-	if (IP_HAS_NEXTHOP(m)) {
-		/*
-		 * Directly ship the packet on.  This allows
-		 * forwarding packets originally destined to us
-		 * to some other directly connected host.
-		 */
-		ip_forward(m, 1);
-		return;
+	if (m->m_flags & M_IP_NEXTHOP) {
+		if (m_tag_find(m, PACKET_TAG_IPFORWARD, NULL) != NULL) {
+			/*
+			 * Directly ship the packet on.  This allows
+			 * forwarding packets originally destined to us
+			 * to some other directly connected host.
+			 */
+			ip_forward(m, 1);
+			return;
+		}
 	}
 passin:
 

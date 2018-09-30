@@ -158,8 +158,8 @@ rip6_input(struct mbuf **mp, int *offp, int proto)
 {
 	struct ifnet *ifp;
 	struct mbuf *m = *mp;
-	register struct ip6_hdr *ip6 = mtod(m, struct ip6_hdr *);
-	register struct inpcb *in6p;
+	struct ip6_hdr *ip6 = mtod(m, struct ip6_hdr *);
+	struct inpcb *in6p;
 	struct inpcb *last = NULL;
 	struct mbuf *opts = NULL;
 	struct sockaddr_in6 fromsa;
@@ -323,12 +323,10 @@ rip6_input(struct mbuf **mp, int *offp, int proto)
 			RIP6STAT_INC(rip6s_nosockmcast);
 		if (proto == IPPROTO_NONE)
 			m_freem(m);
-		else {
-			char *prvnxtp = ip6_get_prevhdr(m, *offp); /* XXX */
+		else
 			icmp6_error(m, ICMP6_PARAM_PROB,
 			    ICMP6_PARAMPROB_NEXTHEADER,
-			    prvnxtp - mtod(m, char *));
-		}
+			    ip6_get_prevhdr(m, *offp));
 		IP6STAT_DEC(ip6s_delivered);
 	}
 	return (IPPROTO_DONE);

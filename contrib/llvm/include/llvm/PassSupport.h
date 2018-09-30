@@ -21,17 +21,15 @@
 #ifndef LLVM_PASSSUPPORT_H
 #define LLVM_PASSSUPPORT_H
 
-#include "Pass.h"
-#include "llvm/InitializePasses.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/PassInfo.h"
 #include "llvm/PassRegistry.h"
-#include "llvm/Support/Atomic.h"
 #include "llvm/Support/Threading.h"
 #include <functional>
 
 namespace llvm {
 
-class TargetMachine;
+class Pass;
 
 #define INITIALIZE_PASS(passName, arg, name, cfg, analysis)                    \
   static void *initialize##passName##PassOnce(PassRegistry &Registry) {        \
@@ -41,7 +39,7 @@ class TargetMachine;
     Registry.registerPass(*PI, true);                                          \
     return PI;                                                                 \
   }                                                                            \
-  LLVM_DEFINE_ONCE_FLAG(Initialize##passName##PassFlag);                       \
+  static llvm::once_flag Initialize##passName##PassFlag;                       \
   void llvm::initialize##passName##Pass(PassRegistry &Registry) {              \
     llvm::call_once(Initialize##passName##PassFlag,                            \
                     initialize##passName##PassOnce, std::ref(Registry));       \
@@ -61,7 +59,7 @@ class TargetMachine;
   Registry.registerPass(*PI, true);                                            \
   return PI;                                                                   \
   }                                                                            \
-  LLVM_DEFINE_ONCE_FLAG(Initialize##passName##PassFlag);                       \
+  static llvm::once_flag Initialize##passName##PassFlag;                       \
   void llvm::initialize##passName##Pass(PassRegistry &Registry) {              \
     llvm::call_once(Initialize##passName##PassFlag,                            \
                     initialize##passName##PassOnce, std::ref(Registry));       \
@@ -78,10 +76,6 @@ class TargetMachine;
 
 template <typename PassName> Pass *callDefaultCtor() { return new PassName(); }
 
-template <typename PassName> Pass *callTargetMachineCtor(TargetMachine *TM) {
-  return new PassName(TM);
-}
-
 //===---------------------------------------------------------------------------
 /// RegisterPass<t> template - This template class is used to notify the system
 /// that a Pass is available for use, and registers it into the internal
@@ -93,12 +87,7 @@ template <typename PassName> Pass *callTargetMachineCtor(TargetMachine *TM) {
 /// static RegisterPass<YourPassClassName> tmp("passopt", "My Pass Name");
 ///
 /// This statement will cause your pass to be created by calling the default
-/// constructor exposed by the pass.  If you have a different constructor that
-/// must be called, create a global constructor function (which takes the
-/// arguments you need and returns a Pass*) and register your pass like this:
-///
-/// static RegisterPass<PassClassName> tmp("passopt", "My Name");
-///
+/// constructor exposed by the pass.
 template <typename passName> struct RegisterPass : public PassInfo {
   // Register Pass using default constructor...
   RegisterPass(StringRef PassArg, StringRef Name, bool CFGOnly = false,
@@ -128,7 +117,6 @@ template <typename passName> struct RegisterPass : public PassInfo {
 /// The actual interface may also be registered as well (by not specifying the
 /// second template argument).  The interface should be registered to associate
 /// a nice name with the interface.
-///
 class RegisterAGBase : public PassInfo {
 public:
   RegisterAGBase(StringRef Name, const void *InterfaceID,
@@ -152,7 +140,7 @@ struct RegisterAnalysisGroup : public RegisterAGBase {
     Registry.registerAnalysisGroup(&agName::ID, 0, *AI, false, true);          \
     return AI;                                                                 \
   }                                                                            \
-  LLVM_DEFINE_ONCE_FLAG(Initialize##agName##AnalysisGroupFlag);                \
+  static llvm::once_flag Initialize##agName##AnalysisGroupFlag;                \
   void llvm::initialize##agName##AnalysisGroup(PassRegistry &Registry) {       \
     llvm::call_once(Initialize##agName##AnalysisGroupFlag,                     \
                     initialize##agName##AnalysisGroupOnce,                     \
@@ -173,7 +161,7 @@ struct RegisterAnalysisGroup : public RegisterAGBase {
                                    true);                                      \
     return AI;                                                                 \
   }                                                                            \
-  LLVM_DEFINE_ONCE_FLAG(Initialize##passName##PassFlag);                       \
+  static llvm::once_flag Initialize##passName##PassFlag;                       \
   void llvm::initialize##passName##Pass(PassRegistry &Registry) {              \
     llvm::call_once(Initialize##passName##PassFlag,                            \
                     initialize##passName##PassOnce, std::ref(Registry));       \
@@ -194,7 +182,7 @@ struct RegisterAnalysisGroup : public RegisterAGBase {
   Registry.registerAnalysisGroup(&agName::ID, &passName::ID, *AI, def, true);  \
   return AI;                                                                   \
   }                                                                            \
-  LLVM_DEFINE_ONCE_FLAG(Initialize##passName##PassFlag);                       \
+  static llvm::once_flag Initialize##passName##PassFlag;                       \
   void llvm::initialize##passName##Pass(PassRegistry &Registry) {              \
     llvm::call_once(Initialize##passName##PassFlag,                            \
                     initialize##passName##PassOnce, std::ref(Registry));       \
@@ -206,27 +194,23 @@ struct RegisterAnalysisGroup : public RegisterAGBase {
 /// at runtime (which can be because of the RegisterPass constructors being run
 /// as the program starts up, or may be because a shared object just got
 /// loaded).
-///
 struct PassRegistrationListener {
-  PassRegistrationListener() {}
-  virtual ~PassRegistrationListener() {}
+  PassRegistrationListener() = default;
+  virtual ~PassRegistrationListener() = default;
 
   /// Callback functions - These functions are invoked whenever a pass is loaded
   /// or removed from the current executable.
-  ///
   virtual void passRegistered(const PassInfo *) {}
 
   /// enumeratePasses - Iterate over the registered passes, calling the
   /// passEnumerate callback on each PassInfo object.
-  ///
   void enumeratePasses();
 
   /// passEnumerate - Callback function invoked when someone calls
   /// enumeratePasses on this PassRegistrationListener object.
-  ///
   virtual void passEnumerate(const PassInfo *) {}
 };
 
-} // End llvm namespace
+} // end namespace llvm
 
-#endif
+#endif // LLVM_PASSSUPPORT_H

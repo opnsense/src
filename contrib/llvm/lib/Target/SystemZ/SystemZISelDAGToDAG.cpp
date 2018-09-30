@@ -15,6 +15,7 @@
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/CodeGen/SelectionDAGISel.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/KnownBits.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
@@ -711,9 +712,9 @@ bool SystemZDAGToDAGISel::detectOrAndInsertion(SDValue &Op,
   // The inner check covers all cases but is more expensive.
   uint64_t Used = allOnes(Op.getValueSizeInBits());
   if (Used != (AndMask | InsertMask)) {
-    APInt KnownZero, KnownOne;
-    CurDAG->computeKnownBits(Op.getOperand(0), KnownZero, KnownOne);
-    if (Used != (AndMask | InsertMask | KnownZero.getZExtValue()))
+    KnownBits Known;
+    CurDAG->computeKnownBits(Op.getOperand(0), Known);
+    if (Used != (AndMask | InsertMask | Known.Zero.getZExtValue()))
       return false;
   }
 
@@ -770,9 +771,9 @@ bool SystemZDAGToDAGISel::expandRxSBG(RxSBGOperands &RxSBG) const {
       // If some bits of Input are already known zeros, those bits will have
       // been removed from the mask.  See if adding them back in makes the
       // mask suitable.
-      APInt KnownZero, KnownOne;
-      CurDAG->computeKnownBits(Input, KnownZero, KnownOne);
-      Mask |= KnownZero.getZExtValue();
+      KnownBits Known;
+      CurDAG->computeKnownBits(Input, Known);
+      Mask |= Known.Zero.getZExtValue();
       if (!refineRxSBGMask(RxSBG, Mask))
         return false;
     }
@@ -794,9 +795,9 @@ bool SystemZDAGToDAGISel::expandRxSBG(RxSBGOperands &RxSBG) const {
       // If some bits of Input are already known ones, those bits will have
       // been removed from the mask.  See if adding them back in makes the
       // mask suitable.
-      APInt KnownZero, KnownOne;
-      CurDAG->computeKnownBits(Input, KnownZero, KnownOne);
-      Mask &= ~KnownOne.getZExtValue();
+      KnownBits Known;
+      CurDAG->computeKnownBits(Input, Known);
+      Mask &= ~Known.One.getZExtValue();
       if (!refineRxSBGMask(RxSBG, Mask))
         return false;
     }
@@ -837,9 +838,16 @@ bool SystemZDAGToDAGISel::expandRxSBG(RxSBGOperands &RxSBG) const {
   case ISD::SIGN_EXTEND: {
     // Check that the extension bits are don't-care (i.e. are masked out
     // by the final mask).
+    unsigned BitSize = N.getValueSizeInBits();
     unsigned InnerBitSize = N.getOperand(0).getValueSizeInBits();
-    if (maskMatters(RxSBG, allOnes(RxSBG.BitSize) - allOnes(InnerBitSize)))
-      return false;
+    if (maskMatters(RxSBG, allOnes(BitSize) - allOnes(InnerBitSize))) {
+      // In the case where only the sign bit is active, increase Rotate with
+      // the extension width.
+      if (RxSBG.Mask == 1 && RxSBG.Rotate == 1)
+        RxSBG.Rotate += (BitSize - InnerBitSize);
+      else
+        return false;
+    }
 
     RxSBG.Input = N.getOperand(0);
     return true;
@@ -991,7 +999,15 @@ bool SystemZDAGToDAGISel::tryRISBGZero(SDNode *N) {
   if (Subtarget->hasMiscellaneousExtensions())
     Opcode = SystemZ::RISBGN;
   EVT OpcodeVT = MVT::i64;
-  if (VT == MVT::i32 && Subtarget->hasHighWord()) {
+  if (VT == MVT::i32 && Subtarget->hasHighWord() &&
+      // We can only use the 32-bit instructions if all source bits are
+      // in the low 32 bits without wrapping, both after rotation (because
+      // of the smaller range for Start and End) and before rotation
+      // (because the input value is truncated).
+      RISBG.Start >= 32 && RISBG.End >= RISBG.Start &&
+      ((RISBG.Start + RISBG.Rotate) & 63) >= 32 &&
+      ((RISBG.End + RISBG.Rotate) & 63) >=
+      ((RISBG.Start + RISBG.Rotate) & 63)) {
     Opcode = SystemZ::RISBMux;
     OpcodeVT = MVT::i32;
     RISBG.Start &= 31;
@@ -1254,8 +1270,10 @@ void SystemZDAGToDAGISel::Select(SDNode *Node) {
     // Fall through.
   or_xor:
     // If this is a 64-bit operation in which both 32-bit halves are nonzero,
-    // split the operation into two.
-    if (Node->getValueType(0) == MVT::i64)
+    // split the operation into two.  If both operands here happen to be
+    // constant, leave this to common code to optimize.
+    if (Node->getValueType(0) == MVT::i64 &&
+        Node->getOperand(0).getOpcode() != ISD::Constant)
       if (auto *Op1 = dyn_cast<ConstantSDNode>(Node->getOperand(1))) {
         uint64_t Val = Op1->getZExtValue();
         if (!SystemZ::isImmLF(Val) && !SystemZ::isImmHF(Val)) {
@@ -1378,8 +1396,11 @@ SelectInlineAsmMemoryOperand(const SDValue &Op,
     break;
   case InlineAsm::Constraint_T:
   case InlineAsm::Constraint_m:
+  case InlineAsm::Constraint_o:
     // Accept an address with a long displacement and an index.
     // m works the same as T, as this is the most general case.
+    // We don't really have any special handling of "offsettable"
+    // memory addresses, so just treat o the same as m.
     Form = SystemZAddressingMode::FormBDXNormal;
     DispRange = SystemZAddressingMode::Disp20Only;
     break;

@@ -38,7 +38,6 @@
 __FBSDID("$FreeBSD$");
 
 #include "opt_compat.h"
-#include "opt_pax.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -48,7 +47,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/mutex.h>
-#include <sys/pax.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/refcount.h>
@@ -92,7 +90,7 @@ struct getpriority_args {
 };
 #endif
 int
-sys_getpriority(struct thread *td, register struct getpriority_args *uap)
+sys_getpriority(struct thread *td, struct getpriority_args *uap)
 {
 	struct proc *p;
 	struct pgrp *pg;
@@ -369,7 +367,7 @@ struct rtprio_args {
 };
 #endif
 int
-sys_rtprio(struct thread *td, register struct rtprio_args *uap)
+sys_rtprio(struct thread *td, struct rtprio_args *uap)
 {
 	struct proc *p;
 	struct thread *tdp;
@@ -535,7 +533,7 @@ struct osetrlimit_args {
 };
 #endif
 int
-osetrlimit(struct thread *td, register struct osetrlimit_args *uap)
+osetrlimit(struct thread *td, struct osetrlimit_args *uap)
 {
 	struct orlimit olim;
 	struct rlimit lim;
@@ -556,7 +554,7 @@ struct ogetrlimit_args {
 };
 #endif
 int
-ogetrlimit(struct thread *td, register struct ogetrlimit_args *uap)
+ogetrlimit(struct thread *td, struct ogetrlimit_args *uap)
 {
 	struct orlimit olim;
 	struct rlimit rl;
@@ -589,7 +587,7 @@ struct __setrlimit_args {
 };
 #endif
 int
-sys_setrlimit(struct thread *td, register struct __setrlimit_args *uap)
+sys_setrlimit(struct thread *td, struct __setrlimit_args *uap)
 {
 	struct rlimit alim;
 	int error;
@@ -647,7 +645,7 @@ kern_proc_setrlimit(struct thread *td, struct proc *p, u_int which,
     struct rlimit *limp)
 {
 	struct plimit *newlim, *oldlim;
-	register struct rlimit *alimp;
+	struct rlimit *alimp;
 	struct rlimit oldssiz;
 	int error;
 
@@ -751,12 +749,12 @@ kern_proc_setrlimit(struct thread *td, struct proc *p, u_int which,
 			if (limp->rlim_cur > oldssiz.rlim_cur) {
 				prot = p->p_sysent->sv_stackprot;
 				size = limp->rlim_cur - oldssiz.rlim_cur;
-				addr = p->p_usrstack -
+				addr = p->p_sysent->sv_usrstack -
 				    limp->rlim_cur;
 			} else {
 				prot = VM_PROT_NONE;
 				size = oldssiz.rlim_cur - limp->rlim_cur;
-				addr = p->p_usrstack -
+				addr = p->p_sysent->sv_usrstack -
 				    oldssiz.rlim_cur;
 			}
 			addr = trunc_page(addr);
@@ -777,7 +775,7 @@ struct __getrlimit_args {
 #endif
 /* ARGSUSED */
 int
-sys_getrlimit(struct thread *td, register struct __getrlimit_args *uap)
+sys_getrlimit(struct thread *td, struct __getrlimit_args *uap)
 {
 	struct rlimit rlim;
 	int error;
@@ -947,7 +945,7 @@ struct getrusage_args {
 };
 #endif
 int
-sys_getrusage(register struct thread *td, register struct getrusage_args *uap)
+sys_getrusage(struct thread *td, struct getrusage_args *uap)
 {
 	struct rusage ru;
 	int error;

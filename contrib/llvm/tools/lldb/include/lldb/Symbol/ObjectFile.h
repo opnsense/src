@@ -10,14 +10,15 @@
 #ifndef liblldb_ObjectFile_h_
 #define liblldb_ObjectFile_h_
 
-#include "lldb/Core/DataExtractor.h"
 #include "lldb/Core/FileSpecList.h"
 #include "lldb/Core/ModuleChild.h"
 #include "lldb/Core/PluginInterface.h"
-#include "lldb/Host/Endian.h"
-#include "lldb/Host/FileSpec.h"
 #include "lldb/Symbol/Symtab.h"
 #include "lldb/Symbol/UnwindTable.h"
+#include "lldb/Utility/DataExtractor.h"
+#include "lldb/Utility/Endian.h"
+#include "lldb/Utility/FileSpec.h"
+#include "lldb/Utility/UUID.h"
 #include "lldb/lldb-private.h"
 
 namespace lldb_private {
@@ -351,6 +352,12 @@ public:
   virtual Symtab *GetSymtab() = 0;
 
   //------------------------------------------------------------------
+  /// Perform relocations on the section if necessary.
+  ///
+  //------------------------------------------------------------------
+  virtual void RelocateSection(lldb_private::Section *section);
+
+  //------------------------------------------------------------------
   /// Appends a Symbol for the specified so_addr to the symbol table.
   ///
   /// If verify_unique is false, the symbol table is not searched
@@ -563,6 +570,45 @@ public:
 
   virtual uint32_t GetNumThreadContexts() { return 0; }
 
+  //------------------------------------------------------------------
+  /// Some object files may have an identifier string embedded in them,
+  /// e.g. in a Mach-O core file using the LC_IDENT load command (which 
+  /// is obsolete, but can still be found in some old files)
+  ///
+  /// @return
+  ///     Returns the identifier string if one exists, else an empty
+  ///     string.
+  //------------------------------------------------------------------
+  virtual std::string GetIdentifierString () { 
+      return std::string(); 
+  }
+
+  //------------------------------------------------------------------
+  /// When the ObjectFile is a core file, lldb needs to locate the
+  /// "binary" in the core file.  lldb can iterate over the pages looking
+  /// for a valid binary, but some core files may have metadata 
+  /// describing where the main binary is exactly which removes ambiguity
+  /// when there are multiple binaries present in the captured memory pages.
+  ///
+  /// @param[out] address
+  ///   If the address of the binary is specified, this will be set.
+  ///   This is an address is the virtual address space of the core file
+  ///   memory segments; it is not an offset into the object file.
+  ///   If no address is available, will be set to LLDB_INVALID_ADDRESS.
+  ///
+  /// @param[out] uuid
+  ///   If the uuid of the binary is specified, this will be set.
+  ///   If no UUID is available, will be cleared.
+  ///
+  /// @return
+  ///   Returns true if either address or uuid has been set.
+  //------------------------------------------------------------------
+  virtual bool GetCorefileMainBinaryInfo (lldb::addr_t &address, UUID &uuid) {
+      address = LLDB_INVALID_ADDRESS;
+      uuid.Clear();
+      return false;
+  }
+
   virtual lldb::RegisterContextSP
   GetThreadContextAtIndex(uint32_t idx, lldb_private::Thread &thread) {
     return lldb::RegisterContextSP();
@@ -747,32 +793,52 @@ public:
   static lldb::DataBufferSP ReadMemory(const lldb::ProcessSP &process_sp,
                                        lldb::addr_t addr, size_t byte_size);
 
+  // This function returns raw file contents. Do not use it if you want
+  // transparent decompression of section contents.
   size_t GetData(lldb::offset_t offset, size_t length,
                  DataExtractor &data) const;
 
+  // This function returns raw file contents. Do not use it if you want
+  // transparent decompression of section contents.
   size_t CopyData(lldb::offset_t offset, size_t length, void *dst) const;
 
-  virtual size_t ReadSectionData(const Section *section,
+  // This function will transparently decompress section data if the section if
+  // compressed.
+  virtual size_t ReadSectionData(Section *section,
                                  lldb::offset_t section_offset, void *dst,
-                                 size_t dst_len) const;
+                                 size_t dst_len);
 
-  virtual size_t ReadSectionData(const Section *section,
-                                 DataExtractor &section_data) const;
-
-  size_t MemoryMapSectionData(const Section *section,
-                              DataExtractor &section_data) const;
+  // This function will transparently decompress section data if the section if
+  // compressed. Note that for compressed section the resulting data size may be
+  // larger than what Section::GetFileSize reports.
+  virtual size_t ReadSectionData(Section *section,
+                                 DataExtractor &section_data);
 
   bool IsInMemory() const { return m_memory_addr != LLDB_INVALID_ADDRESS; }
 
   // Strip linker annotations (such as @@VERSION) from symbol names.
-  virtual std::string
+  virtual llvm::StringRef
   StripLinkerSymbolAnnotations(llvm::StringRef symbol_name) const {
-    return symbol_name.str();
+    return symbol_name;
   }
 
   static lldb::SymbolType GetSymbolTypeFromName(
       llvm::StringRef name,
       lldb::SymbolType symbol_type_hint = lldb::eSymbolTypeUndefined);
+
+  //------------------------------------------------------------------
+  /// Loads this objfile to memory.
+  ///
+  /// Loads the bits needed to create an executable image to the memory.
+  /// It is useful with bare-metal targets where target does not have the
+  /// ability to start a process itself.
+  ///
+  /// @param[in] target
+  ///     Target where to load.
+  ///
+  /// @return
+  //------------------------------------------------------------------
+  virtual Status LoadInMemory(Target &target, bool set_pc);
 
 protected:
   //------------------------------------------------------------------
@@ -812,6 +878,9 @@ protected:
   bool SetModulesArchitecture(const ArchSpec &new_arch);
 
   ConstString GetNextSyntheticSymbolName();
+
+  static lldb::DataBufferSP MapFileData(const FileSpec &file, uint64_t Size,
+                                        uint64_t Offset);
 
 private:
   DISALLOW_COPY_AND_ASSIGN(ObjectFile);

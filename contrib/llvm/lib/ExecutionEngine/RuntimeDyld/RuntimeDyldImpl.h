@@ -28,8 +28,8 @@
 #include "llvm/Support/Mutex.h"
 #include "llvm/Support/SwapByteOrder.h"
 #include <map>
-#include <unordered_map>
 #include <system_error>
+#include <unordered_map>
 
 using namespace llvm;
 using namespace llvm::object;
@@ -149,8 +149,8 @@ public:
   /// The size of this relocation (MachO specific).
   unsigned Size;
 
-  // COFF specific.
-  bool IsTargetThumbFunc;
+  // ARM (MachO and COFF) specific.
+  bool IsTargetThumbFunc = false;
 
   RelocationEntry(unsigned id, uint64_t offset, uint32_t type, int64_t addend)
       : SectionID(id), Offset(offset), RelType(type), Addend(addend),
@@ -195,12 +195,14 @@ public:
   uint64_t Offset;
   int64_t Addend;
   const char *SymbolName;
+  bool IsStubThumb = false;
   RelocationValueRef() : SectionID(0), Offset(0), Addend(0),
                          SymbolName(nullptr) {}
 
   inline bool operator==(const RelocationValueRef &Other) const {
     return SectionID == Other.SectionID && Offset == Other.Offset &&
-           Addend == Other.Addend && SymbolName == Other.SymbolName;
+           Addend == Other.Addend && SymbolName == Other.SymbolName &&
+           IsStubThumb == Other.IsStubThumb;
   }
   inline bool operator<(const RelocationValueRef &Other) const {
     if (SectionID != Other.SectionID)
@@ -209,28 +211,30 @@ public:
       return Offset < Other.Offset;
     if (Addend != Other.Addend)
       return Addend < Other.Addend;
+    if (IsStubThumb != Other.IsStubThumb)
+      return IsStubThumb < Other.IsStubThumb;
     return SymbolName < Other.SymbolName;
   }
 };
 
-/// @brief Symbol info for RuntimeDyld. 
+/// @brief Symbol info for RuntimeDyld.
 class SymbolTableEntry {
 public:
-  SymbolTableEntry()
-      : Offset(0), SectionID(0) {}
+  SymbolTableEntry() = default;
 
   SymbolTableEntry(unsigned SectionID, uint64_t Offset, JITSymbolFlags Flags)
       : Offset(Offset), SectionID(SectionID), Flags(Flags) {}
 
   unsigned getSectionID() const { return SectionID; }
   uint64_t getOffset() const { return Offset; }
+  void setOffset(uint64_t NewOffset) { Offset = NewOffset; }
 
   JITSymbolFlags getFlags() const { return Flags; }
 
 private:
-  uint64_t Offset;
-  unsigned SectionID;
-  JITSymbolFlags Flags;
+  uint64_t Offset = 0;
+  unsigned SectionID = 0;
+  JITSymbolFlags Flags = JITSymbolFlags::None;
 };
 
 typedef StringMap<SymbolTableEntry> RTDyldSymbolTable;
@@ -365,6 +369,18 @@ protected:
   /// Dst.
   void writeBytesUnaligned(uint64_t Value, uint8_t *Dst, unsigned Size) const;
 
+  /// Generate JITSymbolFlags from a libObject symbol.
+  virtual JITSymbolFlags getJITSymbolFlags(const BasicSymbolRef &Sym);
+
+  /// Modify the given target address based on the given symbol flags.
+  /// This can be used by subclasses to tweak addresses based on symbol flags,
+  /// For example: the MachO/ARM target uses it to set the low bit if the target
+  /// is a thumb symbol.
+  virtual uint64_t modifyAddressBasedOnFlags(uint64_t Addr,
+                                             JITSymbolFlags Flags) const {
+    return Addr;
+  }
+
   /// \brief Given the common symbols discovered in the object file, emit a
   /// new section for them and update the symbol mappings in the object and
   /// symbol table.
@@ -417,7 +433,7 @@ protected:
                        StubMap &Stubs) = 0;
 
   /// \brief Resolve relocations to external symbols.
-  void resolveExternalSymbols();
+  Error resolveExternalSymbols();
 
   // \brief Compute an upper bound of the memory that is required to load all
   // sections
@@ -426,12 +442,23 @@ protected:
                               uint64_t &RODataSize, uint32_t &RODataAlign,
                               uint64_t &RWDataSize, uint32_t &RWDataAlign);
 
+  // \brief Compute GOT size
+  unsigned computeGOTSize(const ObjectFile &Obj);
+
   // \brief Compute the stub buffer size required for a section
   unsigned computeSectionStubBufSize(const ObjectFile &Obj,
                                      const SectionRef &Section);
 
   // \brief Implementation of the generic part of the loadObject algorithm.
   Expected<ObjSectionToIDMap> loadObjectImpl(const object::ObjectFile &Obj);
+
+  // \brief Return size of Global Offset Table (GOT) entry
+  virtual size_t getGOTEntrySize() { return 0; }
+
+  // \brief Return true if the relocation R may require allocating a GOT entry.
+  virtual bool relocationNeedsGot(const RelocationRef &R) const {
+    return false;
+  }
 
   // \brief Return true if the relocation R may require allocating a stub.
   virtual bool relocationNeedsStub(const RelocationRef &R) const {
@@ -482,6 +509,12 @@ public:
     if (SymEntry.getSectionID() != AbsoluteSymbolSection)
       SectionAddr = getSectionLoadAddress(SymEntry.getSectionID());
     uint64_t TargetAddr = SectionAddr + SymEntry.getOffset();
+
+    // FIXME: Have getSymbol should return the actual address and the client
+    //        modify it based on the flags. This will require clients to be
+    //        aware of the target architecture, which we should build
+    //        infrastructure for.
+    TargetAddr = modifyAddressBasedOnFlags(TargetAddr, SymEntry.getFlags());
     return JITEvaluatedSymbol(TargetAddr, SymEntry.getFlags());
   }
 
@@ -504,7 +537,7 @@ public:
 
   virtual void registerEHFrames();
 
-  virtual void deregisterEHFrames();
+  void deregisterEHFrames();
 
   virtual Error finalizeLoad(const ObjectFile &ObjImg,
                              ObjSectionToIDMap &SectionMap) {

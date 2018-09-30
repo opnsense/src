@@ -14,17 +14,17 @@
 #include "lldb/API/SBInstruction.h"
 #include "lldb/API/SBStream.h"
 #include "lldb/API/SBTarget.h"
-
-#include "lldb/Core/ArchSpec.h"
-#include "lldb/Core/DataBufferHeap.h"
-#include "lldb/Core/DataExtractor.h"
 #include "lldb/Core/Disassembler.h"
 #include "lldb/Core/EmulateInstruction.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/StreamFile.h"
+#include "lldb/Host/HostInfo.h"
 #include "lldb/Target/ExecutionContext.h"
 #include "lldb/Target/StackFrame.h"
 #include "lldb/Target/Target.h"
+#include "lldb/Utility/ArchSpec.h"
+#include "lldb/Utility/DataBufferHeap.h"
+#include "lldb/Utility/DataExtractor.h"
 
 //----------------------------------------------------------------------
 // We recently fixed a leak in one of the Instruction subclasses where
@@ -176,6 +176,13 @@ bool SBInstruction::HasDelaySlot() {
   return false;
 }
 
+bool SBInstruction::CanSetBreakpoint () {
+  lldb::InstructionSP inst_sp(GetOpaque());
+  if (inst_sp)
+    return inst_sp->CanSetBreakpoint();
+  return false;
+}
+
 lldb::InstructionSP SBInstruction::GetOpaque() {
   if (m_opaque_sp)
     return m_opaque_sp->GetSP();
@@ -252,8 +259,7 @@ bool SBInstruction::EmulateWithFrame(lldb::SBFrame &frame,
 bool SBInstruction::DumpEmulation(const char *triple) {
   lldb::InstructionSP inst_sp(GetOpaque());
   if (inst_sp && triple) {
-    lldb_private::ArchSpec arch(triple, NULL);
-    return inst_sp->DumpEmulation(arch);
+    return inst_sp->DumpEmulation(HostInfo::GetAugmentedArchSpec(triple));
   }
   return false;
 }

@@ -165,6 +165,8 @@ ipfw_log(struct ip_fw_chain *chain, struct ip_fw *f, u_int hlen,
 		case O_REJECT:
 			if (cmd->arg1==ICMP_REJECT_RST)
 				action = "Reset";
+			else if (cmd->arg1==ICMP_REJECT_ABORT)
+				action = "Abort";
 			else if (cmd->arg1==ICMP_UNREACH_HOST)
 				action = "Reject";
 			else
@@ -175,6 +177,8 @@ ipfw_log(struct ip_fw_chain *chain, struct ip_fw *f, u_int hlen,
 		case O_UNREACH6:
 			if (cmd->arg1==ICMP6_UNREACH_RST)
 				action = "Reset";
+			else if (cmd->arg1==ICMP6_UNREACH_ABORT)
+				action = "Abort";
 			else
 				snprintf(SNPARGS(action2, 0), "Unreach %d",
 					cmd->arg1);
@@ -332,7 +336,10 @@ ipfw_log(struct ip_fw_chain *chain, struct ip_fw *f, u_int hlen,
 			break;
 
 		case IPPROTO_UDP:
-			len = snprintf(SNPARGS(proto, 0), "UDP %s", src);
+		case IPPROTO_UDPLITE:
+			len = snprintf(SNPARGS(proto, 0), "UDP%s%s",
+			    args->f_id.proto == IPPROTO_UDP ? " ": "Lite ",
+			    src);
 			if (offset == 0)
 				snprintf(SNPARGS(proto, len), ":%d %s:%d",
 				    ntohs(udp->uh_sport),

@@ -30,7 +30,6 @@ __FBSDID("$FreeBSD$");
 #include "opt_capsicum.h"
 #include "opt_hwpmc_hooks.h"
 #include "opt_ktrace.h"
-#include "opt_pax.h"
 #include "opt_vm.h"
 
 #include <sys/param.h>
@@ -51,7 +50,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/imgact_elf.h>
 #include <sys/wait.h>
 #include <sys/malloc.h>
-#include <sys/pax.h>
+#include <sys/mman.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/pioctl.h>
@@ -65,6 +64,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/syscallsubr.h>
 #include <sys/sysent.h>
 #include <sys/shm.h>
+#include <sys/smp.h>
 #include <sys/sysctl.h>
 #include <sys/vnode.h>
 #include <sys/stat.h>
@@ -143,6 +143,8 @@ static int map_at_zero = 0;
 SYSCTL_INT(_security_bsd, OID_AUTO, map_at_zero, CTLFLAG_RWTUN, &map_at_zero, 0,
     "Permit processes to map an object at virtual address 0.");
 
+EVENTHANDLER_LIST_DECLARE(process_exec);
+
 static int
 sysctl_kern_ps_strings(SYSCTL_HANDLER_ARGS)
 {
@@ -153,12 +155,12 @@ sysctl_kern_ps_strings(SYSCTL_HANDLER_ARGS)
 #ifdef SCTL_MASK32
 	if (req->flags & SCTL_MASK32) {
 		unsigned int val;
-		val = (unsigned int)p->p_psstrings;
+		val = (unsigned int)p->p_sysent->sv_psstrings;
 		error = SYSCTL_OUT(req, &val, sizeof(val));
 	} else
 #endif
-		error = SYSCTL_OUT(req, &p->p_psstrings,
-		   sizeof(p->p_psstrings));
+		error = SYSCTL_OUT(req, &p->p_sysent->sv_psstrings,
+		   sizeof(p->p_sysent->sv_psstrings));
 	return error;
 }
 
@@ -172,12 +174,12 @@ sysctl_kern_usrstack(SYSCTL_HANDLER_ARGS)
 #ifdef SCTL_MASK32
 	if (req->flags & SCTL_MASK32) {
 		unsigned int val;
-		val = (unsigned int)p->p_usrstack;
+		val = (unsigned int)p->p_sysent->sv_usrstack;
 		error = SYSCTL_OUT(req, &val, sizeof(val));
 	} else
 #endif
-		error = SYSCTL_OUT(req, &p->p_usrstack,
-		    sizeof(p->p_usrstack));
+		error = SYSCTL_OUT(req, &p->p_sysent->sv_usrstack,
+		    sizeof(p->p_sysent->sv_usrstack));
 	return error;
 }
 
@@ -352,10 +354,7 @@ kern_execve(struct thread *td, struct image_args *args, struct mac *mac_p)
  * userspace pointers from the passed thread.
  */
 static int
-do_execve(td, args, mac_p)
-	struct thread *td;
-	struct image_args *args;
-	struct mac *mac_p;
+do_execve(struct thread *td, struct image_args *args, struct mac *mac_p)
 {
 	struct proc *p = td->td_proc;
 	struct nameidata nd;
@@ -463,12 +462,6 @@ interpret:
 		imgp->vp = newtextvp;
 	}
 
-#ifdef PAX
-	error = pax_elf(imgp, td, 0);
-	if (error)
-		goto exec_fail_dealloc;
-#endif
-
 	/*
 	 * Check file permissions (also 'opens' file)
 	 */
@@ -526,6 +519,10 @@ interpret:
 	    interpvplabel, imgp);
 	credential_changing |= will_transition;
 #endif
+
+	/* Don't inherit PROC_PDEATHSIG_CTL value if setuid/setgid. */
+	if (credential_changing)
+		imgp->proc->p_pdeathsig = 0;
 
 	if (credential_changing &&
 #ifdef CAPABILITY_MODE
@@ -620,12 +617,6 @@ interpret:
 		goto exec_fail_dealloc;
 	}
 
-#ifdef PAX_SEGVGUARD
-	error = pax_segvguard_check(td, imgp->vp, args->fname);
-	if (error)
-		goto exec_fail_dealloc;
-#endif
-
 	/*
 	 * Special interpreter operation, cleanup and loop up to try to
 	 * activate the interpreter.
@@ -681,11 +672,6 @@ interpret:
 		vn_lock(imgp->vp, LK_SHARED | LK_RETRY);
 		goto exec_fail_dealloc;
 	}
-
-	p->p_psstrings = p->p_sysent->sv_psstrings;
-#ifdef PAX_ASLR
-	pax_aslr_stack_with_gap(p, &(p->p_psstrings));
-#endif
 
 	/* ABI enforces the use of Capsicum. Switch into capabilities mode. */
 	if (SV_PROC_FLAG(p, SV_CAPSICUM))
@@ -1021,7 +1007,7 @@ exec_map_first_page(imgp)
 			if ((ma[i] = vm_page_next(ma[i - 1])) != NULL) {
 				if (ma[i]->valid)
 					break;
-				if (vm_page_tryxbusy(ma[i]))
+				if (!vm_page_tryxbusy(ma[i]))
 					break;
 			} else {
 				ma[i] = vm_page_alloc(object, i,
@@ -1058,8 +1044,7 @@ exec_map_first_page(imgp)
 }
 
 void
-exec_unmap_first_page(imgp)
-	struct image_params *imgp;
+exec_unmap_first_page(struct image_params *imgp)
 {
 	vm_page_t m;
 
@@ -1079,9 +1064,7 @@ exec_unmap_first_page(imgp)
  *	automatically on a page fault.
  */
 int
-exec_new_vmspace(imgp, sv)
-	struct image_params *imgp;
-	struct sysentvec *sv;
+exec_new_vmspace(struct image_params *imgp, struct sysentvec *sv)
 {
 	int error;
 	struct proc *p = imgp->proc;
@@ -1091,14 +1074,12 @@ exec_new_vmspace(imgp, sv)
 	vm_offset_t sv_minuser, stack_addr;
 	vm_map_t map;
 	u_long ssiz;
-	vm_prot_t stackprot;
-	vm_prot_t stackmaxprot;
 
 	imgp->vmspace_destroyed = 1;
 	imgp->sysent = sv;
 
 	/* May be called with Giant held */
-	EVENTHANDLER_INVOKE(process_exec, p, imgp);
+	EVENTHANDLER_DIRECT_INVOKE(process_exec, p, imgp);
 
 	/*
 	 * Blow away entire process VM, if address space not shared,
@@ -1127,24 +1108,12 @@ exec_new_vmspace(imgp, sv)
 		map = &vmspace->vm_map;
 	}
 
-#ifdef PAX_ASLR
-	PROC_LOCK(imgp->proc);
-	pax_aslr_init(imgp);
-	PROC_UNLOCK(imgp->proc);
-#endif
-
 	/* Map a shared page */
 	obj = sv->sv_shared_page_obj;
 	if (obj != NULL) {
-		p->p_shared_page_base = sv->sv_shared_page_base;
-#ifdef PAX_ASLR
-		PROC_LOCK(imgp->proc);
-		pax_aslr_vdso(p, &(p->p_shared_page_base));
-		PROC_UNLOCK(imgp->proc);
-#endif
 		vm_object_reference(obj);
 		error = vm_map_fixed(map, obj, 0,
-		    p->p_shared_page_base, sv->sv_shared_page_len,
+		    sv->sv_shared_page_base, sv->sv_shared_page_len,
 		    VM_PROT_READ | VM_PROT_EXECUTE,
 		    VM_PROT_READ | VM_PROT_EXECUTE,
 		    MAP_INHERIT_SHARE | MAP_ACC_NO_CHARGE);
@@ -1152,14 +1121,6 @@ exec_new_vmspace(imgp, sv)
 			vm_object_deallocate(obj);
 			return (vm_mmap_to_errno(error));
 		}
-
-		p->p_timekeep_base = sv->sv_timekeep_base;
-#ifdef PAX_ASLR
-		PROC_LOCK(imgp->proc);
-		if (p->p_timekeep_base != 0)
-			pax_aslr_vdso(p, &(p->p_timekeep_base));
-		PROC_UNLOCK(imgp->proc);
-#endif
 	}
 
 	/* Allocate a new stack */
@@ -1179,19 +1140,10 @@ exec_new_vmspace(imgp, sv)
 	} else {
 		ssiz = maxssiz;
 	}
-	stack_addr = sv->sv_usrstack;
-#ifdef PAX_ASLR
-	/* Randomize the stack top. */
-	pax_aslr_stack(p, &stack_addr);
-#endif
-	/* Save the process specific randomized stack top. */
-	p->p_usrstack = stack_addr;
-	/* Calculate the stack's mapping address.  */
-	stack_addr -= ssiz;
-	stackprot = obj != NULL && imgp->stack_prot != 0 ? imgp->stack_prot : sv->sv_stackprot;
-	stackmaxprot = VM_PROT_ALL;
+	stack_addr = sv->sv_usrstack - ssiz;
 	error = vm_map_stack(map, stack_addr, (vm_size_t)ssiz,
-	    stackprot, stackmaxprot, MAP_STACK_GROWS_DOWN);
+	    obj != NULL && imgp->stack_prot != 0 ? imgp->stack_prot :
+	    sv->sv_stackprot, VM_PROT_ALL, MAP_STACK_GROWS_DOWN);
 	if (error != KERN_SUCCESS)
 		return (vm_mmap_to_errno(error));
 
@@ -1368,17 +1320,124 @@ err_exit:
 	return (error);
 }
 
+struct exec_args_kva {
+	vm_offset_t addr;
+	u_int gen;
+	SLIST_ENTRY(exec_args_kva) next;
+};
+
+static DPCPU_DEFINE(struct exec_args_kva *, exec_args_kva);
+
+static SLIST_HEAD(, exec_args_kva) exec_args_kva_freelist;
+static struct mtx exec_args_kva_mtx;
+static u_int exec_args_gen;
+
+static void
+exec_prealloc_args_kva(void *arg __unused)
+{
+	struct exec_args_kva *argkva;
+	u_int i;
+
+	SLIST_INIT(&exec_args_kva_freelist);
+	mtx_init(&exec_args_kva_mtx, "exec args kva", NULL, MTX_DEF);
+	for (i = 0; i < exec_map_entries; i++) {
+		argkva = malloc(sizeof(*argkva), M_PARGS, M_WAITOK);
+		argkva->addr = kmap_alloc_wait(exec_map, exec_map_entry_size);
+		argkva->gen = exec_args_gen;
+		SLIST_INSERT_HEAD(&exec_args_kva_freelist, argkva, next);
+	}
+}
+SYSINIT(exec_args_kva, SI_SUB_EXEC, SI_ORDER_ANY, exec_prealloc_args_kva, NULL);
+
+static vm_offset_t
+exec_alloc_args_kva(void **cookie)
+{
+	struct exec_args_kva *argkva;
+
+	argkva = (void *)atomic_readandclear_ptr(
+	    (uintptr_t *)DPCPU_PTR(exec_args_kva));
+	if (argkva == NULL) {
+		mtx_lock(&exec_args_kva_mtx);
+		while ((argkva = SLIST_FIRST(&exec_args_kva_freelist)) == NULL)
+			(void)mtx_sleep(&exec_args_kva_freelist,
+			    &exec_args_kva_mtx, 0, "execkva", 0);
+		SLIST_REMOVE_HEAD(&exec_args_kva_freelist, next);
+		mtx_unlock(&exec_args_kva_mtx);
+	}
+	*(struct exec_args_kva **)cookie = argkva;
+	return (argkva->addr);
+}
+
+static void
+exec_release_args_kva(struct exec_args_kva *argkva, u_int gen)
+{
+	vm_offset_t base;
+
+	base = argkva->addr;
+	if (argkva->gen != gen) {
+		vm_map_madvise(exec_map, base, base + exec_map_entry_size,
+		    MADV_FREE);
+		argkva->gen = gen;
+	}
+	if (!atomic_cmpset_ptr((uintptr_t *)DPCPU_PTR(exec_args_kva),
+	    (uintptr_t)NULL, (uintptr_t)argkva)) {
+		mtx_lock(&exec_args_kva_mtx);
+		SLIST_INSERT_HEAD(&exec_args_kva_freelist, argkva, next);
+		wakeup_one(&exec_args_kva_freelist);
+		mtx_unlock(&exec_args_kva_mtx);
+	}
+}
+
+static void
+exec_free_args_kva(void *cookie)
+{
+
+	exec_release_args_kva(cookie, exec_args_gen);
+}
+
+static void
+exec_args_kva_lowmem(void *arg __unused)
+{
+	SLIST_HEAD(, exec_args_kva) head;
+	struct exec_args_kva *argkva;
+	u_int gen;
+	int i;
+
+	gen = atomic_fetchadd_int(&exec_args_gen, 1) + 1;
+
+	/*
+	 * Force an madvise of each KVA range. Any currently allocated ranges
+	 * will have MADV_FREE applied once they are freed.
+	 */
+	SLIST_INIT(&head);
+	mtx_lock(&exec_args_kva_mtx);
+	SLIST_SWAP(&head, &exec_args_kva_freelist, exec_args_kva);
+	mtx_unlock(&exec_args_kva_mtx);
+	while ((argkva = SLIST_FIRST(&head)) != NULL) {
+		SLIST_REMOVE_HEAD(&head, next);
+		exec_release_args_kva(argkva, gen);
+	}
+
+	CPU_FOREACH(i) {
+		argkva = (void *)atomic_readandclear_ptr(
+		    (uintptr_t *)DPCPU_ID_PTR(i, exec_args_kva));
+		if (argkva != NULL)
+			exec_release_args_kva(argkva, gen);
+	}
+}
+EVENTHANDLER_DEFINE(vm_lowmem, exec_args_kva_lowmem, NULL,
+    EVENTHANDLER_PRI_ANY);
+
 /*
  * Allocate temporary demand-paged, zero-filled memory for the file name,
- * argument, and environment strings.  Returns zero if the allocation succeeds
- * and ENOMEM otherwise.
+ * argument, and environment strings.
  */
 int
 exec_alloc_args(struct image_args *args)
 {
 
-	args->buf = (char *)kmap_alloc_wait(exec_map, PATH_MAX + ARG_MAX);
-	return (args->buf != NULL ? 0 : ENOMEM);
+	args->buf = (char *)exec_alloc_args_kva(&args->bufkva);
+	return (0);
 }
 
 void
@@ -1386,8 +1445,7 @@ exec_free_args(struct image_args *args)
 {
 
 	if (args->buf != NULL) {
-		kmap_free_wakeup(exec_map, (vm_offset_t)args->buf,
-		    PATH_MAX + ARG_MAX);
+		exec_free_args_kva(args->bufkva);
 		args->buf = NULL;
 	}
 	if (args->fname_buf != NULL) {
@@ -1404,8 +1462,7 @@ exec_free_args(struct image_args *args)
  * as the initial stack pointer.
  */
 register_t *
-exec_copyout_strings(imgp)
-	struct image_params *imgp;
+exec_copyout_strings(struct image_params *imgp)
 {
 	int argc, envc;
 	char **vectp;
@@ -1429,16 +1486,10 @@ exec_copyout_strings(imgp)
 		execpath_len = 0;
 	p = imgp->proc;
 	szsigcode = 0;
-	p->p_sigcode_base = p->p_sysent->sv_sigcode_base;
-	arginfo = (struct ps_strings *)p->p_psstrings;
-	if (p->p_sigcode_base == 0) {
+	arginfo = (struct ps_strings *)p->p_sysent->sv_psstrings;
+	if (p->p_sysent->sv_sigcode_base == 0) {
 		if (p->p_sysent->sv_szsigcode != NULL)
 			szsigcode = *(p->p_sysent->sv_szsigcode);
-#ifdef PAX_ASLR
-	} else {
-		// XXXOP
-		pax_aslr_vdso(p, &(p->p_sigcode_base));
-#endif
 	}
 	destp =	(uintptr_t)arginfo;
 
@@ -1567,8 +1618,7 @@ exec_copyout_strings(imgp)
  *	Return 0 for success or error code on failure.
  */
 int
-exec_check_permissions(imgp)
-	struct image_params *imgp;
+exec_check_permissions(struct image_params *imgp)
 {
 	struct vnode *vp = imgp->vp;
 	struct vattr *attr = imgp->attr;
@@ -1638,8 +1688,7 @@ exec_check_permissions(imgp)
  * Exec handler registration
  */
 int
-exec_register(execsw_arg)
-	const struct execsw *execsw_arg;
+exec_register(const struct execsw *execsw_arg)
 {
 	const struct execsw **es, **xs, **newexecsw;
 	int count = 2;	/* New slot and trailing NULL */
@@ -1661,8 +1710,7 @@ exec_register(execsw_arg)
 }
 
 int
-exec_unregister(execsw_arg)
-	const struct execsw *execsw_arg;
+exec_unregister(const struct execsw *execsw_arg)
 {
 	const struct execsw **es, **xs, **newexecsw;
 	int count = 1;

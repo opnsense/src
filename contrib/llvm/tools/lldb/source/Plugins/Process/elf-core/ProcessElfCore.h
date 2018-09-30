@@ -24,11 +24,12 @@
 
 // Other libraries and framework includes
 // Project includes
-#include "lldb/Core/ConstString.h"
-#include "lldb/Core/Error.h"
 #include "lldb/Target/Process.h"
+#include "lldb/Utility/ConstString.h"
+#include "lldb/Utility/Status.h"
 
 #include "Plugins/ObjectFile/ELF/ELFHeader.h"
+#include "Plugins/Process/elf-core/RegisterUtilities.h"
 
 struct ThreadData;
 
@@ -66,7 +67,7 @@ public:
   //------------------------------------------------------------------
   // Creating a new process, or attaching to an existing one
   //------------------------------------------------------------------
-  lldb_private::Error DoLoadCore() override;
+  lldb_private::Status DoLoadCore() override;
 
   lldb_private::DynamicLoader *GetDynamicLoader() override;
 
@@ -80,25 +81,35 @@ public:
   //------------------------------------------------------------------
   // Process Control
   //------------------------------------------------------------------
-  lldb_private::Error DoDestroy() override;
+  lldb_private::Status DoDestroy() override;
 
   void RefreshStateAfterStop() override;
+
+  lldb_private::Status WillResume() override {
+    lldb_private::Status error;
+    error.SetErrorStringWithFormat(
+        "error: %s does not support resuming processes",
+        GetPluginName().GetCString());
+    return error;
+  }
 
   //------------------------------------------------------------------
   // Process Queries
   //------------------------------------------------------------------
   bool IsAlive() override;
 
+  bool WarnBeforeDetach() const override { return false; }
+
   //------------------------------------------------------------------
   // Process Memory
   //------------------------------------------------------------------
   size_t ReadMemory(lldb::addr_t addr, void *buf, size_t size,
-                    lldb_private::Error &error) override;
+                    lldb_private::Status &error) override;
 
   size_t DoReadMemory(lldb::addr_t addr, void *buf, size_t size,
-                      lldb_private::Error &error) override;
+                      lldb_private::Status &error) override;
 
-  lldb_private::Error
+  lldb_private::Status
   GetMemoryRegionInfo(lldb::addr_t load_addr,
                       lldb_private::MemoryRegionInfo &region_info) override;
 
@@ -139,10 +150,8 @@ private:
   std::string m_dyld_plugin_name;
   DISALLOW_COPY_AND_ASSIGN(ProcessElfCore);
 
-  llvm::Triple::OSType m_os;
-
   // True if m_thread_contexts contains valid entries
-  bool m_thread_data_valid;
+  bool m_thread_data_valid = false;
 
   // Contain thread data read from NOTE segments
   std::vector<ThreadData> m_thread_data;
@@ -160,7 +169,7 @@ private:
   std::vector<NT_FILE_Entry> m_nt_file_entries;
 
   // Parse thread(s) data structures(prstatus, prpsinfo) from given NOTE segment
-  lldb_private::Error ParseThreadContextsFromNoteSegment(
+  llvm::Error ParseThreadContextsFromNoteSegment(
       const elf::ELFProgramHeader *segment_header,
       lldb_private::DataExtractor segment_data);
 
@@ -170,6 +179,13 @@ private:
   // Parse a contiguous address range of the process from LOAD segment
   lldb::addr_t
   AddAddressRangeFromLoadSegment(const elf::ELFProgramHeader *header);
+
+  llvm::Expected<std::vector<lldb_private::CoreNote>>
+  parseSegment(const lldb_private::DataExtractor &segment);
+  llvm::Error parseFreeBSDNotes(llvm::ArrayRef<lldb_private::CoreNote> notes);
+  llvm::Error parseNetBSDNotes(llvm::ArrayRef<lldb_private::CoreNote> notes);
+  llvm::Error parseOpenBSDNotes(llvm::ArrayRef<lldb_private::CoreNote> notes);
+  llvm::Error parseLinuxNotes(llvm::ArrayRef<lldb_private::CoreNote> notes);
 };
 
 #endif // liblldb_ProcessElfCore_h_

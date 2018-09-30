@@ -1,4 +1,4 @@
-//===- RegisterUsageInfo.cpp - Register Usage Informartion Storage --------===//
+//===- RegisterUsageInfo.cpp - Register Usage Information Storage ---------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -13,10 +13,21 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/CodeGen/RegisterUsageInfo.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/MachineOperand.h"
+#include "llvm/CodeGen/TargetRegisterInfo.h"
+#include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
-#include "llvm/Support/Debug.h"
+#include "llvm/Pass.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/TargetMachine.h"
+#include <algorithm>
+#include <cassert>
+#include <cstdint>
+#include <utility>
+#include <vector>
 
 using namespace llvm;
 
@@ -27,7 +38,7 @@ static cl::opt<bool> DumpRegUsage(
     cl::desc("print register usage details collected for analysis."));
 
 INITIALIZE_PASS(PhysicalRegisterUsageInfo, "reg-usage-info",
-                "Register Usage Informartion Stroage", false, true)
+                "Register Usage Information Storage", false, true)
 
 char PhysicalRegisterUsageInfo::ID = 0;
 
@@ -63,7 +74,7 @@ PhysicalRegisterUsageInfo::getRegUsageInfo(const Function *FP) {
 void PhysicalRegisterUsageInfo::print(raw_ostream &OS, const Module *M) const {
   const TargetRegisterInfo *TRI;
 
-  typedef std::pair<const Function *, std::vector<uint32_t>> FuncPtrRegMaskPair;
+  using FuncPtrRegMaskPair = std::pair<const Function *, std::vector<uint32_t>>;
 
   SmallVector<const FuncPtrRegMaskPair *, 64> FPRMPairVector;
 
@@ -86,7 +97,7 @@ void PhysicalRegisterUsageInfo::print(raw_ostream &OS, const Module *M) const {
 
     for (unsigned PReg = 1, PRegE = TRI->getNumRegs(); PReg < PRegE; ++PReg) {
       if (MachineOperand::clobbersPhysReg(&(FPRMPair->second[0]), PReg))
-        OS << TRI->getName(PReg) << " ";
+        OS << printReg(PReg, TRI) << " ";
     }
     OS << "\n";
   }

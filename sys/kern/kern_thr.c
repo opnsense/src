@@ -233,8 +233,11 @@ thread_create(struct thread *td, struct rtprio *rtp,
 	bzero(&newtd->td_startzero,
 	    __rangeof(struct thread, td_startzero, td_endzero));
 	newtd->td_sleeptimo = 0;
+	newtd->td_vslock_sz = 0;
+	bzero(&newtd->td_si, sizeof(newtd->td_si));
 	bcopy(&td->td_startcopy, &newtd->td_startcopy,
 	    __rangeof(struct thread, td_startcopy, td_endcopy));
+	newtd->td_sa = td->td_sa;
 	newtd->td_proc = td->td_proc;
 	newtd->td_rb_list = newtd->td_rbp_list = newtd->td_rb_inact = 0;
 	thread_cow_get(newtd, td);
@@ -250,7 +253,6 @@ thread_create(struct thread *td, struct rtprio *rtp,
 	p->p_flag |= P_HADTHREADS;
 	thread_link(newtd, p);
 	bcopy(p->p_comm, newtd->td_name, sizeof(newtd->td_name));
-	newtd->td_pax = p->p_pax;
 	thread_lock(td);
 	/* let the scheduler know about these things. */
 	sched_fork_thread(td, newtd);

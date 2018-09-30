@@ -19,8 +19,6 @@ using namespace clang;
 ///\brief Constructs a new multiplexing external sema source and appends the
 /// given element to it.
 ///
-///\param[in] source - An ExternalSemaSource.
-///
 MultiplexExternalSemaSource::MultiplexExternalSemaSource(ExternalSemaSource &s1,
                                                         ExternalSemaSource &s2){
   Sources.push_back(&s1);
@@ -92,6 +90,15 @@ MultiplexExternalSemaSource::GetExternalCXXCtorInitializers(uint64_t Offset) {
     if (auto *R = S->GetExternalCXXCtorInitializers(Offset))
       return R;
   return nullptr;
+}
+
+ExternalASTSource::ExtKind
+MultiplexExternalSemaSource::hasExternalDefinitions(const Decl *D) {
+  for (const auto &S : Sources)
+    if (auto EK = S->hasExternalDefinitions(D))
+      if (EK != EK_ReplyHazy)
+        return EK;
+  return EK_ReplyHazy;
 }
 
 bool MultiplexExternalSemaSource::

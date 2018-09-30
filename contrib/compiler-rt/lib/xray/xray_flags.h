@@ -16,6 +16,7 @@
 #define XRAY_FLAGS_H
 
 #include "sanitizer_common/sanitizer_flag_parser.h"
+#include "sanitizer_common/sanitizer_internal_defs.h"
 
 namespace __xray {
 
@@ -24,13 +25,13 @@ struct Flags {
 #include "xray_flags.inc"
 #undef XRAY_FLAG
 
-  void SetDefaults();
+  void setDefaults();
 };
 
 extern Flags xray_flags_dont_use_directly;
 inline Flags *flags() { return &xray_flags_dont_use_directly; }
 
-void InitializeFlags();
+void initializeFlags();
 
 } // namespace __xray
 

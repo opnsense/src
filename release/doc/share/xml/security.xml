@@ -20,83 +20,106 @@
     <tbody>
       <row>
 	<entry><link
-	    xlink:href="&security.url;/FreeBSD-SA-16:32.bhyve.asc">FreeBSD-SA-16:32.bhyve</link></entry>
-	<entry>25&nbsp;October&nbsp;2016</entry>
-	<entry><para>Privilege escalation vulnerability</para></entry>
+	    xlink:href="&security.url;/FreeBSD-SA-17:06.openssh.asc">FreeBSD-SA-17:06.openssh</link></entry>
+	<entry>10&nbsp;August&nbsp;2017</entry>
+	<entry><para>Denial of Service vulnerability</para></entry>
       </row>
 
       <row>
 	<entry><link
-	    xlink:href="&security.url;/FreeBSD-SA-16:33.openssh.asc">FreeBSD-SA-16:33.openssh</link></entry>
-	<entry>2&nbsp;November&nbsp;2016</entry>
-	<entry><para>Remote Denial of Service
-	    vulnerability</para></entry>
+	    xlink:href="&security.url;/FreeBSD-SA-17:07.wpa.asc">FreeBSD-SA-17:07.wpa</link></entry>
+	<entry>16&nbsp;October&nbsp;2017</entry>
+	<entry><para>WPA2 protocol vulnerability</para></entry>
       </row>
 
       <row>
 	<entry><link
-	    xlink:href="&security.url;/FreeBSD-SA-16:36.telnetd.asc">FreeBSD-SA-16:36.telnetd</link></entry>
-	<entry>6&nbsp;December&nbsp;2016</entry>
-	<entry><para>Possible &man.login.1; argument
-	    injection</para></entry>
+	    xlink:href="&security.url;/FreeBSD-SA-17:08.ptrace.asc">FreeBSD-SA-17:08.ptrace</link></entry>
+	<entry>15&nbsp;November&nbsp;2017</entry>
+	<entry><para>Kernel data leak via
+	    <function>ptrace(PT_LWPINFO)</function></para></entry>
       </row>
 
       <row>
 	<entry><link
-	    xlink:href="&security.url;/FreeBSD-SA-16:37.libc.asc">FreeBSD-SA-16:37.libc</link></entry>
-	<entry>6&nbsp;December&nbsp;2016</entry>
-	<entry><para>&man.link.ntoa.3; buffer overflow</para></entry>
+	    xlink:href="&security.url;/FreeBSD-SA-17:10.kldstat.asc">FreeBSD-SA-17:10.kldstat</link></entry>
+	<entry>15&nbsp;November&nbsp;2017</entry>
+	<entry><para>Information leak</para></entry>
       </row>
 
       <row>
 	<entry><link
-	    xlink:href="&security.url;/FreeBSD-SA-16:38.bhyve.asc">FreeBSD-SA-16:38.bhyve</link></entry>
-	<entry>6&nbsp;December&nbsp;2016</entry>
-	<entry><para>Possible escape from &man.bhyve.8; virtual
-	  machine</para></entry>
-      </row>
-
-      <row>
-	<entry><link
-	    xlink:href="&security.url;/FreeBSD-SA-16:39.ntp.asc">FreeBSD-SA-16:39.ntp</link></entry>
-	<entry>22&nbsp;December&nbsp;2016</entry>
+	    xlink:href="&security.url;/FreeBSD-SA-17:11.openssl.asc">FreeBSD-SA-17:11.openssl</link></entry>
+	<entry>29&nbsp;November&nbsp;2017</entry>
 	<entry><para>Multiple vulnerabilities</para></entry>
       </row>
 
       <row>
 	<entry><link
-	    xlink:href="&security.url;/FreeBSD-SA-17:01.openssh.asc">FreeBSD-SA-17:01.openssh</link></entry>
-	<entry>10&nbsp;January&nbsp;2017</entry>
+	    xlink:href="&security.url;/FreeBSD-SA-17:12.openssl.asc">FreeBSD-SA-17:12.openssl</link></entry>
+	<entry>09&nbsp;December&nbsp;2017</entry>
 	<entry><para>Multiple vulnerabilities</para></entry>
       </row>
 
       <row>
 	<entry><link
-	    xlink:href="&security.url;/FreeBSD-SA-17:02.openssl.asc">FreeBSD-SA-17:02.openssl</link></entry>
-	<entry>23&nbsp;February&nbsp;2017</entry>
+	    xlink:href="&security.url;/FreeBSD-SA-18:01.ipsec.asc">FreeBSD-SA-18:01.ipsec</link></entry>
+	<entry>07&nbsp;March&nbsp;2018</entry>
+	<entry><para>Fix <acronym>IPSEC</acronym> validation and
+	  use-after-free</para></entry>
+      </row>
+
+      <row>
+	<entry><link
+	    xlink:href="&security.url;/FreeBSD-SA-18:02.ntp.asc">FreeBSD-SA-18:02.ntp</link></entry>
+	<entry>07&nbsp;March&nbsp;2018</entry>
 	<entry><para>Multiple vulnerabilities</para></entry>
       </row>
 
       <row>
 	<entry><link
-	    xlink:href="&security.url;/FreeBSD-SA-17:03.ntp.asc">FreeBSD-SA-17:03.ntp</link></entry>
-	<entry>12&nbsp;April&nbsp;2017</entry>
-	<entry><para>Multiple vulnerabilities</para></entry>
+	    xlink:href="&security.url;/FreeBSD-SA-18:03.speculative_execution.asc">FreeBSD-SA-18:03.speculative_execution</link></entry>
+	<entry>14&nbsp;March&nbsp;2018</entry>
+	<entry>
+	  <para>Speculative Execution Vulnerabilities</para>
+	  <note>
+	    <para>This advisory addresses the most significant issues
+	      for &os;&nbsp;11.x on &arch.amd64; CPUs.  We expect to
+	      update this advisory to include &arch.i386; and other
+	      CPUs.</para>
+	  </note>
+	</entry>
       </row>
 
       <row>
 	<entry><link
-	    xlink:href="&security.url;/FreeBSD-SA-17:04.ipfilter.asc">FreeBSD-SA-17:04.ipfilter</link></entry>
-	<entry>27&nbsp;April&nbsp;2017</entry>
-	<entry><para>Fix fragment handling panic</para></entry>
+	    xlink:href="&security.url;/FreeBSD-SA-18:04.vt.asc">FreeBSD-SA-18:04.vt</link></entry>
+	<entry>04&nbsp;April&nbsp;2018</entry>
+	<entry><para>Fix &man.vt.4; console memory
+	    disclosure</para></entry>
       </row>
 
       <row>
 	<entry><link
-	    xlink:href="&security.url;/FreeBSD-SA-17:05.heimdal.asc">FreeBSD-SA-17:05.heimdal</link></entry>
-	<entry>12&nbsp;July&nbsp;2017</entry>
-	<entry><para>Fix KDC-REP service name validation
-	    vulnerability</para></entry>
+	    xlink:href="&security.url;/FreeBSD-SA-18:05.ipsec.asc">FreeBSD-SA-18:05.ipsec</link></entry>
+	<entry>04&nbsp;April&nbsp;2018</entry>
+	<entry><para>Fix denial of service</para></entry>
+      </row>
+
+      <row>
+	<entry><link
+	    xlink:href="&security.url;/FreeBSD-SA-18:06.debugreg.asc">FreeBSD-SA-18:06.debugreg</link></entry>
+	<entry>08&nbsp;May&nbsp;2018</entry>
+	<entry><para>Mishandling of x86 debug
+	    exceptions</para></entry>
+      </row>
+
+      <row>
+	<entry><link
+	    xlink:href="&security.url;/FreeBSD-SA-18:07.lazyfpu.asc">FreeBSD-SA-18:07.lazyfpu</link></entry>
+	<entry>21&nbsp;June&nbsp;2018</entry>
+	<entry><para>Fix Lazy <acronym>FPU</acronym> information
+	    disclosure</para></entry>
       </row>
     </tbody>
   </tgroup>

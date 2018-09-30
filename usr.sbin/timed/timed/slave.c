@@ -54,7 +54,7 @@ static void schgdate(struct tsp *, char *);
 static void setmaster(struct tsp *);
 static void answerdelay(void);
 
-int
+void
 slave(void)
 {
 	int tries;

@@ -67,7 +67,7 @@ typedef	uint64_t	u_daddr_t;	/* unsigned disk address */
 #define SWAPBLK_NONE	((daddr_t)((u_daddr_t)SWAPBLK_MASK + 1))/* flag */
 
 /*
- * blmeta and bl_bitmap_t MUST be a power of 2 in size.
+ * Both blmeta and bmu_bitmap MUST be a power of 2 in size.
  */
 
 typedef struct blmeta {
@@ -80,11 +80,9 @@ typedef struct blmeta {
 
 typedef struct blist {
 	daddr_t		bl_blocks;	/* area of coverage		*/
-	daddr_t		bl_radix;	/* coverage radix		*/
-	daddr_t		bl_skip;	/* starting skip		*/
-	daddr_t		bl_free;	/* number of free blocks	*/
+	u_daddr_t	bl_radix;	/* coverage radix		*/
+	daddr_t		bl_cursor;	/* next-fit search starts at	*/
 	blmeta_t	*bl_root;	/* root of radix tree		*/
-	daddr_t		bl_rootblks;	/* daddr_t blks allocated for tree */
 } *blist_t;
 
 #define BLIST_META_RADIX	16
@@ -92,13 +90,17 @@ typedef struct blist {
 
 #define BLIST_MAX_ALLOC		BLIST_BMAP_RADIX
 
-extern blist_t blist_create(daddr_t blocks, int flags);
-extern void blist_destroy(blist_t blist);
-extern daddr_t blist_alloc(blist_t blist, daddr_t count);
-extern void blist_free(blist_t blist, daddr_t blkno, daddr_t count);
-extern int blist_fill(blist_t bl, daddr_t blkno, daddr_t count);
-extern void blist_print(blist_t blist);
-extern void blist_resize(blist_t *pblist, daddr_t count, int freenew, int flags);
+struct sbuf;
+
+daddr_t	blist_alloc(blist_t blist, daddr_t count);
+daddr_t	blist_avail(blist_t blist);
+blist_t	blist_create(daddr_t blocks, int flags);
+void	blist_destroy(blist_t blist);
+daddr_t	blist_fill(blist_t bl, daddr_t blkno, daddr_t count);
+void	blist_free(blist_t blist, daddr_t blkno, daddr_t count);
+void	blist_print(blist_t blist);
+void	blist_resize(blist_t *pblist, daddr_t count, int freenew, int flags);
+void	blist_stats(blist_t blist, struct sbuf *s);
 
 #endif	/* _SYS_BLIST_H_ */
 

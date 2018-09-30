@@ -22,9 +22,12 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
+
+/* Tests functions in lib/libcam/camlib.c */
+
+#include <sys/cdefs.h>
+__FBSDID("$FreeBSD$");
 
 #include <errno.h>
 #include <fcntl.h>
@@ -55,6 +58,102 @@ cam_has_error(void)
 {
 
 	return (strlen(cam_errbuf) != 0);
+}
+
+ATF_TC_WITHOUT_HEAD(cam_get_device_negative_test_NULL_path);
+ATF_TC_BODY(cam_get_device_negative_test_NULL_path, tc)
+{
+	char parsed_dev_name[DEV_IDLEN + 1];
+	int parsed_unit;
+
+	ATF_REQUIRE_MSG(cam_get_device(NULL, parsed_dev_name,
+	    nitems(parsed_dev_name), &parsed_unit) == -1,
+	    "cam_get_device succeeded unexpectedly");
+}
+
+ATF_TC_WITHOUT_HEAD(cam_get_device_negative_test_bad_path);
+ATF_TC_BODY(cam_get_device_negative_test_bad_path, tc)
+{
+	char parsed_dev_name[DEV_IDLEN + 1];
+	int parsed_unit;
+
+	ATF_REQUIRE_MSG(cam_get_device("1ada", parsed_dev_name,
+	    nitems(parsed_dev_name), &parsed_unit) == -1,
+	    "cam_get_device succeeded unexpectedly");
+}
+
+ATF_TC_WITHOUT_HEAD(cam_get_device_negative_test_nul_path);
+ATF_TC_BODY(cam_get_device_negative_test_nul_path, tc)
+{
+	char parsed_dev_name[DEV_IDLEN + 1];
+	int parsed_unit;
+
+	ATF_REQUIRE_MSG(cam_get_device("", parsed_dev_name,
+	    nitems(parsed_dev_name), &parsed_unit) == -1,
+	    "cam_get_device succeeded unexpectedly");
+}
+
+ATF_TC_WITHOUT_HEAD(cam_get_device_negative_test_root);
+ATF_TC_BODY(cam_get_device_negative_test_root, tc)
+{
+	char parsed_dev_name[DEV_IDLEN + 1];
+	int parsed_unit;
+
+	ATF_REQUIRE_MSG(cam_get_device("/", parsed_dev_name,
+	    nitems(parsed_dev_name), &parsed_unit) == -1,
+	    "cam_get_device succeeded unexpectedly");
+}
+
+ATF_TC_WITHOUT_HEAD(cam_get_device_positive_test);
+ATF_TC_BODY(cam_get_device_positive_test, tc)
+{
+	char expected_dev_name[] = "foo";
+	char parsed_dev_name[DEV_IDLEN + 1];
+	int expected_unit, parsed_unit;
+
+	expected_unit = 1;
+
+	ATF_REQUIRE_MSG(cam_get_device("/dev/foo1", parsed_dev_name,
+	    nitems(parsed_dev_name), &parsed_unit) == 0,
+	    "cam_get_device failed");
+	ATF_REQUIRE_STREQ(parsed_dev_name, expected_dev_name);
+	ATF_REQUIRE(parsed_unit == expected_unit);
+
+	strcpy(parsed_dev_name, "");
+	parsed_unit = -1;
+
+	ATF_REQUIRE_MSG(cam_get_device("foo1", parsed_dev_name,
+	    nitems(parsed_dev_name), &parsed_unit) == 0,
+	    "cam_get_device failed");
+	ATF_REQUIRE_STREQ(parsed_dev_name, expected_dev_name);
+	ATF_REQUIRE(parsed_unit == expected_unit);
+}
+
+/* 
+ * sa(4) uniquely creates nsa and esa device nodes for non-rewind operations
+ * and eject-on-close operations.  cam_get_device must special case these nodes
+ * to always return the base device.
+ */
+ATF_TC_WITHOUT_HEAD(cam_get_device_sa_test);
+ATF_TC_BODY(cam_get_device_sa_test, tc)
+{
+	char parsed_dev_name[DEV_IDLEN + 1];
+	int parsed_unit;
+
+	ATF_REQUIRE_MSG(cam_get_device("nsa99", parsed_dev_name,
+	    nitems(parsed_dev_name), &parsed_unit) == 0,
+	    "cam_get_device failed");
+	ATF_REQUIRE_STREQ(parsed_dev_name, "sa");
+	ATF_REQUIRE(parsed_unit == 99);
+
+	strcpy(parsed_dev_name, "");
+	parsed_unit = -1;
+
+	ATF_REQUIRE_MSG(cam_get_device("esa99", parsed_dev_name,
+	    nitems(parsed_dev_name), &parsed_unit) == 0,
+	    "cam_get_device failed");
+	ATF_REQUIRE_STREQ(parsed_dev_name, "sa");
+	ATF_REQUIRE(parsed_unit == 99);
 }
 
 ATF_TC(cam_open_device_negative_test_O_RDONLY);
@@ -205,6 +304,12 @@ ATF_TC_BODY(cam_freeccb_negative_test_NULL, tc)
 ATF_TP_ADD_TCS(tp)
 {
 
+	ATF_TP_ADD_TC(tp, cam_get_device_negative_test_NULL_path);
+	ATF_TP_ADD_TC(tp, cam_get_device_negative_test_bad_path);
+	ATF_TP_ADD_TC(tp, cam_get_device_negative_test_nul_path);
+	ATF_TP_ADD_TC(tp, cam_get_device_negative_test_root);
+	ATF_TP_ADD_TC(tp, cam_get_device_positive_test);
+	ATF_TP_ADD_TC(tp, cam_get_device_sa_test);
 	ATF_TP_ADD_TC(tp, cam_open_device_negative_test_O_RDONLY);
 	ATF_TP_ADD_TC(tp, cam_open_device_negative_test_nonexistent);
 	ATF_TP_ADD_TC(tp, cam_open_device_negative_test_unprivileged);

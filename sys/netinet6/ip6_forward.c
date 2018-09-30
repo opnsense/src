@@ -98,6 +98,7 @@ ip6_forward(struct mbuf *m, int srcrt)
 #ifdef SCTP
 	int sw_csum;
 #endif
+	struct m_tag *fwd_tag;
 	char ip6bufs[INET6_ADDRSTRLEN], ip6bufd[INET6_ADDRSTRLEN];
 
 	/*
@@ -323,8 +324,9 @@ again2:
 		goto pass;
 
 	odst = ip6->ip6_dst;
-	/* Run through list of hooks for output packets. */
-	error = pfil_run_hooks(&V_inet6_pfil_hook, &m, rt->rt_ifp, PFIL_OUT, NULL);
+	/* Run through list of hooks for forwarded packets. */
+	error = pfil_run_hooks(&V_inet6_pfil_hook, &m, rt->rt_ifp, PFIL_OUT,
+	    PFIL_FWD, NULL);
 	if (error != 0 || m == NULL)
 		goto freecopy;		/* consumed by filter */
 	ip6 = mtod(m, struct ip6_hdr *);
@@ -358,17 +360,13 @@ again2:
 		goto out;
 	}
 	/* Or forward to some other address? */
-	if (IP6_HAS_NEXTHOP(m)) {
+	if ((m->m_flags & M_IP6_NEXTHOP) &&
+	    (fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL)) != NULL) {
 		dst = (struct sockaddr_in6 *)&rin6.ro_dst;
-		if (ip6_get_fwdtag(m, dst, NULL) != 0) {
-			if (mcopy) {
-				m_freem(m);
-				goto freecopy;
-			}
-			goto bad;
-		}
+		bcopy((fwd_tag+1), dst, sizeof(struct sockaddr_in6));
 		m->m_flags |= M_SKIP_FIREWALL;
-		ip6_flush_fwdtag(m);
+		m->m_flags &= ~M_IP6_NEXTHOP;
+		m_tag_delete(m, fwd_tag);
 		RTFREE(rt);
 		goto again2;
 	}

@@ -9,21 +9,23 @@
 
 #include "RegisterContextPOSIXCore_s390x.h"
 
-#include "lldb/Core/DataBufferHeap.h"
 #include "lldb/Core/RegisterValue.h"
 #include "lldb/Target/Thread.h"
+#include "lldb/Utility/DataBufferHeap.h"
 
 using namespace lldb_private;
 
 RegisterContextCorePOSIX_s390x::RegisterContextCorePOSIX_s390x(
     Thread &thread, RegisterInfoInterface *register_info,
-    const DataExtractor &gpregset, const DataExtractor &fpregset)
+    const DataExtractor &gpregset, llvm::ArrayRef<CoreNote> notes)
     : RegisterContextPOSIX_s390x(thread, 0, register_info) {
   m_gpr_buffer.reset(
       new DataBufferHeap(gpregset.GetDataStart(), gpregset.GetByteSize()));
   m_gpr.SetData(m_gpr_buffer);
   m_gpr.SetByteOrder(gpregset.GetByteOrder());
 
+  DataExtractor fpregset = getRegset(
+      notes, register_info->GetTargetArchitecture().GetTriple(), FPR_Desc);
   m_fpr_buffer.reset(
       new DataBufferHeap(fpregset.GetDataStart(), fpregset.GetByteSize()));
   m_fpr.SetData(m_fpr_buffer);

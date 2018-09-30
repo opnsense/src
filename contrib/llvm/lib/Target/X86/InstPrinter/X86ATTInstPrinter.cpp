@@ -14,17 +14,20 @@
 
 #include "X86ATTInstPrinter.h"
 #include "MCTargetDesc/X86BaseInfo.h"
-#include "MCTargetDesc/X86MCTargetDesc.h"
 #include "X86InstComments.h"
-#include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
+#include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCInstrInfo.h"
-#include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Format.h"
-#include "llvm/Support/FormattedStream.h"
+#include "llvm/Support/raw_ostream.h"
+#include <cassert>
+#include <cinttypes>
+#include <cstdint>
+
 using namespace llvm;
 
 #define DEBUG_TYPE "asm-printer"
@@ -47,8 +50,16 @@ void X86ATTInstPrinter::printInst(const MCInst *MI, raw_ostream &OS,
     HasCustomInstComment =
         EmitAnyX86InstComments(MI, *CommentStream, getRegisterName);
 
+  unsigned Flags = MI->getFlags();
   if (TSFlags & X86II::LOCK)
     OS << "\tlock\t";
+  if (!(TSFlags & X86II::LOCK) && Flags & X86::IP_HAS_LOCK)
+    OS << "\tlock\t";
+
+  if (Flags & X86::IP_HAS_REPEAT_NE)
+    OS << "\trepne\t";
+  else if (Flags & X86::IP_HAS_REPEAT)
+    OS << "\trep\t";
 
   // Output CALLpcrel32 as "callq" in 64-bit mode.
   // In Intel annotation it's always emitted as "call".
@@ -60,6 +71,17 @@ void X86ATTInstPrinter::printInst(const MCInst *MI, raw_ostream &OS,
       (STI.getFeatureBits()[X86::Mode64Bit])) {
     OS << "\tcallq\t";
     printPCRelImm(MI, 0, OS);
+  }
+  // data16 and data32 both have the same encoding of 0x66. While data32 is
+  // valid only in 16 bit systems, data16 is valid in the rest.
+  // There seems to be some lack of support of the Requires clause that causes
+  // 0x66 to be interpreted as "data16" by the asm printer.
+  // Thus we add an adjustment here in order to print the "right" instruction.
+  else if (MI->getOpcode() == X86::DATA16_PREFIX &&
+    (STI.getFeatureBits()[X86::Mode16Bit])) {
+    MCInst Data32MI(*MI);
+    Data32MI.setOpcode(X86::DATA32_PREFIX);
+    printInstruction(&Data32MI, OS);
   }
   // Try to print any aliases first.
   else if (!printAliasInstr(MI, OS))
@@ -135,6 +157,7 @@ void X86ATTInstPrinter::printRoundingControl(const MCInst *MI, unsigned Op,
   case 3: O << "{rz-sae}"; break;
   }
 }
+
 /// printPCRelImm - This is used to print an immediate value that ends up
 /// being encoded as a pc-relative value (e.g. for jumps and calls).  These
 /// print slightly differently than normal immediates.  For example, a $ is not

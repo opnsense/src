@@ -40,6 +40,8 @@ public:
   virtual void emitDirectiveSetNoMacro();
   virtual void emitDirectiveSetMsa();
   virtual void emitDirectiveSetNoMsa();
+  virtual void emitDirectiveSetMt();
+  virtual void emitDirectiveSetNoMt();
   virtual void emitDirectiveSetAt();
   virtual void emitDirectiveSetAtWithArg(unsigned RegNo);
   virtual void emitDirectiveSetNoAt();
@@ -75,6 +77,7 @@ public:
   virtual void emitDirectiveSetMips64R5();
   virtual void emitDirectiveSetMips64R6();
   virtual void emitDirectiveSetDsp();
+  virtual void emitDirectiveSetDspr2();
   virtual void emitDirectiveSetNoDsp();
   virtual void emitDirectiveSetPop();
   virtual void emitDirectiveSetPush();
@@ -96,6 +99,7 @@ public:
   virtual void emitDirectiveModuleOddSPReg();
   virtual void emitDirectiveModuleSoftFloat();
   virtual void emitDirectiveModuleHardFloat();
+  virtual void emitDirectiveModuleMT();
   virtual void emitDirectiveSetFp(MipsABIFlagsSection::FpABIKind Value);
   virtual void emitDirectiveSetOddSPReg();
   virtual void emitDirectiveSetNoOddSPReg();
@@ -116,6 +120,9 @@ public:
                SMLoc IDLoc, const MCSubtargetInfo *STI);
   void emitRRI(unsigned Opcode, unsigned Reg0, unsigned Reg1, int16_t Imm,
                SMLoc IDLoc, const MCSubtargetInfo *STI);
+  void emitRRIII(unsigned Opcode, unsigned Reg0, unsigned Reg1, int16_t Imm0,
+                 int16_t Imm1, int16_t Imm2, SMLoc IDLoc,
+                 const MCSubtargetInfo *STI);
   void emitAddu(unsigned DstReg, unsigned SrcReg, unsigned TrgReg, bool Is64Bit,
                 const MCSubtargetInfo *STI);
   void emitDSLL(unsigned DstReg, unsigned SrcReg, int16_t ShiftAmount,
@@ -204,6 +211,8 @@ public:
   void emitDirectiveSetNoMacro() override;
   void emitDirectiveSetMsa() override;
   void emitDirectiveSetNoMsa() override;
+  void emitDirectiveSetMt() override;
+  void emitDirectiveSetNoMt() override;
   void emitDirectiveSetAt() override;
   void emitDirectiveSetAtWithArg(unsigned RegNo) override;
   void emitDirectiveSetNoAt() override;
@@ -239,6 +248,7 @@ public:
   void emitDirectiveSetMips64R5() override;
   void emitDirectiveSetMips64R6() override;
   void emitDirectiveSetDsp() override;
+  void emitDirectiveSetDspr2() override;
   void emitDirectiveSetNoDsp() override;
   void emitDirectiveSetPop() override;
   void emitDirectiveSetPush() override;
@@ -267,6 +277,7 @@ public:
   void emitDirectiveModuleOddSPReg() override;
   void emitDirectiveModuleSoftFloat() override;
   void emitDirectiveModuleHardFloat() override;
+  void emitDirectiveModuleMT() override;
   void emitDirectiveSetFp(MipsABIFlagsSection::FpABIKind Value) override;
   void emitDirectiveSetOddSPReg() override;
   void emitDirectiveSetNoOddSPReg() override;

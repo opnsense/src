@@ -49,6 +49,7 @@
 #define CPU_ARCH_CORTEX_A57		0xD07
 #define CPU_ARCH_CORTEX_A72		0xD08
 #define CPU_ARCH_CORTEX_A73		0xD09
+#define CPU_ARCH_CORTEX_A75		0xD0A
 
 
 /* QCOM */
@@ -121,5 +122,8 @@ struct cpuinfo {
 extern struct cpuinfo cpuinfo;
 
 void cpuinfo_init(void);
-void cpuinfo_get_actlr_modifier(uint32_t *actlr_mask, uint32_t *actlr_set);
+#if __ARM_ARCH >= 6
+void cpuinfo_init_bp_hardening(void);
+void cpuinfo_reinit_mmu(uint32_t ttb);
+#endif
 #endif	/* _MACHINE_CPUINFO_H_ */

@@ -14,22 +14,30 @@
 
 #include "Hexagon.h"
 #include "HexagonAsmPrinter.h"
-#include "HexagonMachineFunctionInfo.h"
+#include "MCTargetDesc/HexagonMCExpr.h"
 #include "MCTargetDesc/HexagonMCInstrInfo.h"
-
+#include "MCTargetDesc/HexagonMCTargetDesc.h"
+#include "llvm/ADT/APFloat.h"
+#include "llvm/ADT/APInt.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
+#include "llvm/CodeGen/MachineInstr.h"
+#include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/IR/Constants.h"
-#include "llvm/IR/Mangler.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/raw_ostream.h"
+#include <cassert>
 
 using namespace llvm;
 
 namespace llvm {
-  void HexagonLowerToMC(const MCInstrInfo &MCII, const MachineInstr *MI,
-                        MCInst &MCB, HexagonAsmPrinter &AP);
-}
+
+void HexagonLowerToMC(const MCInstrInfo &MCII, const MachineInstr *MI,
+                      MCInst &MCB, HexagonAsmPrinter &AP);
+
+} // end namespace llvm
 
 static MCOperand GetSymbolRef(const MachineOperand &MO, const MCSymbol *Symbol,
                               HexagonAsmPrinter &Printer, bool MustExtend) {
@@ -39,7 +47,7 @@ static MCOperand GetSymbolRef(const MachineOperand &MO, const MCSymbol *Symbol,
   // Populate the relocation type based on Hexagon target flags
   // set on an operand
   MCSymbolRefExpr::VariantKind RelocationType;
-  switch (MO.getTargetFlags()) {
+  switch (MO.getTargetFlags() & ~HexagonII::HMOTF_ConstExtended) {
   default:
     RelocationType = MCSymbolRefExpr::VK_None;
     break;
@@ -109,11 +117,14 @@ void llvm::HexagonLowerToMC(const MCInstrInfo &MCII, const MachineInstr *MI,
 
     switch (MO.getType()) {
     default:
-      MI->dump();
+      MI->print(errs());
       llvm_unreachable("unknown operand type");
+    case MachineOperand::MO_RegisterMask:
+      continue;
     case MachineOperand::MO_Register:
       // Ignore all implicit register operands.
-      if (MO.isImplicit()) continue;
+      if (MO.isImplicit())
+        continue;
       MCO = MCOperand::createReg(MO.getReg());
       break;
     case MachineOperand::MO_FPImmediate: {

@@ -15,11 +15,14 @@ CFLAGS+= -I${SRCTOP}/libexec/rtld-elf
 MAN=	sysdecode.3 \
 	sysdecode_abi_to_freebsd_errno.3 \
 	sysdecode_cap_rights.3 \
+	sysdecode_cmsg_type.3 \
 	sysdecode_enum.3 \
 	sysdecode_fcntl_arg.3 \
+	sysdecode_kevent.3 \
 	sysdecode_ioctlname.3 \
 	sysdecode_mask.3 \
 	sysdecode_quotactl_cmd.3 \
+	sysdecode_sctp_sinfo_flags.3 \
 	sysdecode_sigcode.3 \
 	sysdecode_sockopt_name.3 \
 	sysdecode_socket_protocol.3 \
@@ -32,6 +35,7 @@ MLINKS+=sysdecode_enum.3 sysdecode_acltype.3 \
 	sysdecode_enum.3 sysdecode_fadvice.3 \
 	sysdecode_enum.3 sysdecode_fcntl_cmd.3 \
 	sysdecode_enum.3 sysdecode_getfsstat_mode.3 \
+	sysdecode_enum.3 sysdecode_getrusage_who.3 \
 	sysdecode_enum.3 sysdecode_idtype.3 \
 	sysdecode_enum.3 sysdecode_ipproto.3 \
 	sysdecode_enum.3 sysdecode_kldsym_cmd.3 \
@@ -41,12 +45,14 @@ MLINKS+=sysdecode_enum.3 sysdecode_acltype.3 \
 	sysdecode_enum.3 sysdecode_minherit_flags.3 \
 	sysdecode_enum.3 sysdecode_msgctl_cmd.3 \
 	sysdecode_enum.3 sysdecode_nfssvc_flags.3 \
+	sysdecode_enum.3 sysdecode_pathconf_name.3 \
 	sysdecode_enum.3 sysdecode_prio_which.3 \
 	sysdecode_enum.3 sysdecode_procctl_cmd.3 \
 	sysdecode_enum.3 sysdecode_ptrace_request.3 \
 	sysdecode_enum.3 sysdecode_rlimit.3 \
 	sysdecode_enum.3 sysdecode_rtprio_function.3 \
 	sysdecode_enum.3 sysdecode_scheduler_policy.3 \
+	sysdecode_enum.3 sysdecode_sctp_pr_policy.3 \
 	sysdecode_enum.3 sysdecode_semctl_cmd.3 \
 	sysdecode_enum.3 sysdecode_shmctl_cmd.3 \
 	sysdecode_enum.3 sysdecode_shutdown_how.3 \
@@ -62,11 +68,16 @@ MLINKS+=sysdecode_enum.3 sysdecode_acltype.3 \
 	sysdecode_enum.3 sysdecode_socketdomain.3 \
 	sysdecode_enum.3 sysdecode_sockettype.3 \
 	sysdecode_enum.3 sysdecode_sockopt_level.3 \
+	sysdecode_enum.3 sysdecode_sysarch_number.3 \
 	sysdecode_enum.3 sysdecode_umtx_op.3 \
 	sysdecode_enum.3 sysdecode_vmresult.3 \
 	sysdecode_enum.3 sysdecode_whence.3
 MLINKS+=sysdecode_fcntl_arg.3 sysdecode_fcntl_arg_p.3
+MLINKS+=sysdecode_kevent.3 sysdecode_kevent_fflags.3 \
+	sysdecode_kevent.3 sysdecode_kevent_filter.3 \
+	sysdecode_kevent.3 sysdecode_kevent_flags.3
 MLINKS+=sysdecode_mask.3 sysdecode_accessmode.3 \
+	sysdecode_mask.3 sysdecode_atflags.3 \
 	sysdecode_mask.3 sysdecode_capfcntlrights.3 \
 	sysdecode_mask.3 sysdecode_fcntl_fileflags.3 \
 	sysdecode_mask.3 sysdecode_fileflags.3 \
@@ -85,6 +96,9 @@ MLINKS+=sysdecode_mask.3 sysdecode_accessmode.3 \
 	sysdecode_mask.3 sysdecode_semget_flags.3 \
 	sysdecode_mask.3 sysdecode_sendfile_flags.3 \
 	sysdecode_mask.3 sysdecode_shmat_flags.3 \
+	sysdecode_mask.3 sysdecode_sctp_nxt_flags.3 \
+	sysdecode_mask.3 sysdecode_sctp_rcv_flags.3 \
+	sysdecode_mask.3 sysdecode_sctp_snd_flags.3 \
 	sysdecode_mask.3 sysdecode_socket_type.3 \
 	sysdecode_mask.3 sysdecode_thr_create_flags.3 \
 	sysdecode_mask.3 sysdecode_umtx_cvwait_flags.3 \
@@ -121,7 +135,7 @@ tables.h: mktables
 ioctl.c: .PHONY
 .endif
 ioctl.c: mkioctls .META
-	env MACHINE=${MACHINE} CPP="${CPP}" \
+	env MACHINE=${MACHINE} CPP="${CPP}" MK_PF="${MK_PF}" \
 		/bin/sh ${.CURDIR}/mkioctls ${DESTDIR}${INCLUDEDIR} > ${.TARGET}
 
 beforedepend: ioctl.c tables.h

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2013 EMC Corp.
  * All rights reserved.
  *
@@ -114,7 +116,7 @@ update_firmware(int fd, uint8_t *payload, int32_t payload_size)
 	off = 0;
 	resid = payload_size;
 
-	if ((chunk = malloc(NVME_MAX_XFER_SIZE)) == NULL)
+	if ((chunk = aligned_alloc(PAGE_SIZE, NVME_MAX_XFER_SIZE)) == NULL)
 		errx(1, "unable to malloc %d bytes", NVME_MAX_XFER_SIZE);
 
 	while (resid > 0) {

@@ -448,24 +448,6 @@ private:
   uint64_t GetParserID() { return (uint64_t) this; }
 
   //------------------------------------------------------------------
-  /// Given a target, find a data symbol that has the given name.
-  ///
-  /// @param[in] target
-  ///     The target to use as the basis for the search.
-  ///
-  /// @param[in] name
-  ///     The name as a plain C string.
-  ///
-  /// @param[in] module
-  ///     The module to limit the search to. This can be NULL
-  ///
-  /// @return
-  ///     The LLDB Symbol found, or NULL if none was found.
-  //------------------------------------------------------------------
-  const Symbol *FindGlobalDataSymbol(Target &target, const ConstString &name,
-                                     Module *module = NULL);
-
-  //------------------------------------------------------------------
   /// Given a target, find a variable that matches the given name and
   /// type.
   ///
@@ -630,6 +612,23 @@ private:
   //------------------------------------------------------------------
   void AddThisType(NameSearchContext &context, TypeFromUser &type,
                    unsigned int current_id);
+
+  //------------------------------------------------------------------
+  /// Move a type out of the current ASTContext into another, but make sure to
+  /// export all components of the type also.
+  ///
+  /// @param[in] target
+  ///     The ClangASTContext to move to.
+  /// @param[in] source
+  ///     The ClangASTContext to move from.  This is assumed to be going away.
+  /// @param[in] parser_type
+  ///     The type as it appears in the source context.
+  ///
+  /// @return
+  ///     Returns the moved type, or an empty type if there was a problem.
+  //------------------------------------------------------------------
+  TypeFromUser DeportType(ClangASTContext &target, ClangASTContext &source,
+                          TypeFromParser parser_type);
 
   ClangASTContext *GetClangASTContext();
 };

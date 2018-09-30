@@ -14,12 +14,12 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
+#include "llvm/CodeGen/Passes.h"
+#include "llvm/CodeGen/TargetLowering.h"
+#include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Target/TargetLowering.h"
-#include "llvm/Target/TargetSubtargetInfo.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "expand-isel-pseudos"
@@ -41,7 +41,7 @@ namespace {
 
 char ExpandISelPseudos::ID = 0;
 char &llvm::ExpandISelPseudosID = ExpandISelPseudos::ID;
-INITIALIZE_PASS(ExpandISelPseudos, "expand-isel-pseudos",
+INITIALIZE_PASS(ExpandISelPseudos, DEBUG_TYPE,
                 "Expand ISel Pseudo-instructions", false, false)
 
 bool ExpandISelPseudos::runOnMachineFunction(MachineFunction &MF) {

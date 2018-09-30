@@ -103,6 +103,11 @@ bool MangleContext::shouldMangleDeclName(const NamedDecl *D) {
   if (CC != CCM_Other)
     return true;
 
+  // If the declaration has an owning module for linkage purposes that needs to
+  // be mangled, we must mangle its name.
+  if (!D->hasExternalFormalLinkage() && D->getOwningModuleForLinkage())
+    return true;
+
   // In C, functions with no attributes never need to be mangled. Fastpath them.
   if (!getASTContext().getLangOpts().CPlusPlus && !D->hasAttrs())
     return false;
@@ -262,9 +267,13 @@ void MangleContext::mangleObjCMethodNameWithoutSize(const ObjCMethodDecl *MD,
   const ObjCContainerDecl *CD =
   dyn_cast<ObjCContainerDecl>(MD->getDeclContext());
   assert (CD && "Missing container decl in GetNameForMethod");
-  OS << (MD->isInstanceMethod() ? '-' : '+') << '[' << CD->getName();
-  if (const ObjCCategoryImplDecl *CID = dyn_cast<ObjCCategoryImplDecl>(CD))
+  OS << (MD->isInstanceMethod() ? '-' : '+') << '[';
+  if (const ObjCCategoryImplDecl *CID = dyn_cast<ObjCCategoryImplDecl>(CD)) {
+    OS << CID->getClassInterface()->getName();
     OS << '(' << *CID << ')';
+  } else {
+    OS << CD->getName();
+  }
   OS << ' ';
   MD->getSelector().print(OS);
   OS << ']';
