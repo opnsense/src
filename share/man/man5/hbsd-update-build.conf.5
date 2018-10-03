@@ -1,0 +1,132 @@
+.\"-
+.\" Copyright 2015 Shawn Webb <shawn.webb@hardenedbsd.org>
+.\" All rights reserved
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted providing that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+.\" IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+.\" WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
+.\" DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+.\" STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
+.\" IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+.\" POSSIBILITY OF SUCH DAMAGE.
+.\"
+.\" $FreeBSD$
+.\"
+.Dd December 30, 2015
+.Dt HBSD-UPDATE-BUILD.CONF 5
+.Os FreeBSD
+.Sh NAME
+.Nm hbsd-update-build.conf
+.Nd configuration file for
+.Xr hbsd-update-build 8
+.Sh DESCRIPTION
+The
+.Nm
+file controls the behavior of the
+.Xr hbsd-update-build 8
+tool. The file is parsed by
+.Xr sh 1
+and follows its syntax for declaring variables.
+.Pp
+The possible options and their meanings are as follows:
+.Bl -tag -width ".Cm OUTPUTDIR"
+.It Cm BRANCH
+The git branch or tag to use after doing the initial code checkout.
+(Default: 
+.Dq hardened/current/master )
+.It Cm CHROOTDIR
+The directory to use in building a chroot environment for building
+release artifacts.
+(Default:
+.Dq /builds/updater/chroot )
+.It Cm DEBUGBUILD
+Include .debug files in release artifacts.
+Empty means yes.
+(Default:
+.Dq )
+.It Cm DEVMODE
+Use -DNO_CLEAN and -DNO_KERNELCLEAN when building world and kernel.
+Set to
+.Dq yes
+to enable.
+(Default:
+.Dq )
+.It Cm FULLCLEAN
+Preserve the chroot directory.
+(Default:
+.Dq no )
+.It Cm KERNELS
+Space-separated list of kernels to build and include in the update
+archive.
+(Default:
+.Dq HARDENEDBSD )
+.It Cm LOGDIR
+Directory to place build logs.
+(Default:
+.Dq /builds/updater/logs )
+.It Cm OUTPUTDIR
+Directory to place deployable update archives.
+(Default:
+.Dq /builds/updater/output )
+.It Cm PRIVKEY
+Private RSA key for use in signing the build artifacts within the
+update archive.
+(Default:
+.Dq /usr/share/keys/updater/private/updater.key )
+.It Cm PUBKEY
+Public X.509 certificate that corresponds to the
+.Pa PRIVKEY .
+This file gets included in the update archive and verified by the
+.Xr hbsd-update 8
+tool prior to applying a downloaded update.
+(Default:
+.Dq /usr/share/keys/updater/certs/updater.crt )
+.It Cm REPO
+URL of the git repository to clone and use when building the release
+artifacts.
+(Default
+.Dq git://github.com/HardenedBSD/hardenedBSD.git )
+.It Cm SIGNBIN
+Path to the OpenSSL binary. This option included in case the user
+performing the build wishes to switch to LibreSSL.
+(Default:
+.Dq /usr/bin/openssl )
+.It Cm SRCCONFPATH
+Path to a custom
+.Xr src.conf 5
+to use when building the release artifacts.
+(Default:
+.Dq )
+.It Cm SRCDIR
+Path to the src directory to use when preparing the chroot jail.
+(Default:
+.Dq /usr/src )
+.It Cm STAGEDIR
+Path to the staging directory where release artifacts are placed.
+(Default:
+.Dq /builds/updater/stage )
+.El
+.Sh FILES
+.Bl -tag -width "/etc/hbsd-update.conf"
+.It Pa /etc/hbsd-update.conf
+Default location of the
+.Cm hbsd-update
+configuration file.
+.El
+.Sh SEE ALSO
+.Xr hbsd-update 8
+.Sh AUTHORS
+.An Shawn Webb Aq Mt shawn.webb@hardenedbsd.org

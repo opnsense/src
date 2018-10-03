@@ -30,4 +30,6 @@ LIBADD.tls_dynamic_test+=	pthread
 LIBADD.tls_dlopen_test+=	pthread
 LDFLAGS.tls_dlopen_test+=	-Wl,-rpath,${TESTSDIR} -Wl,-export-dynamic
 
+NOPIE=	yes
+
 .include <bsd.test.mk>

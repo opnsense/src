@@ -40,6 +40,7 @@ __FBSDID("$FreeBSD$");
 #include "opt_compat.h"
 #include "opt_gzio.h"
 #include "opt_ktrace.h"
+#include "opt_pax.h"
 
 #include <sys/param.h>
 #include <sys/ctype.h>
@@ -61,6 +62,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/mutex.h>
 #include <sys/refcount.h>
 #include <sys/namei.h>
+#include <sys/pax.h>
 #include <sys/proc.h>
 #include <sys/procdesc.h>
 #include <sys/posix4.h>
@@ -3134,6 +3136,9 @@ sigexit(struct thread *td, int sig)
 			    td->td_ucred ? td->td_ucred->cr_uid : -1,
 			    sig &~ WCOREFLAG,
 			    sig & WCOREFLAG ? " (core dumped)" : "");
+#ifdef PAX_SEGVGUARD
+		pax_segvguard_segfault(curthread, p->p_comm);
+#endif
 	} else
 		PROC_UNLOCK(p);
 	exit1(td, 0, sig);
@@ -3418,6 +3423,7 @@ out:
 	return (0);
 }
 
+#ifdef PAX_INSECURE_MODE
 static int
 coredump_sanitise_path(const char *path)
 {
@@ -3435,6 +3441,7 @@ coredump_sanitise_path(const char *path)
 
 	return (1);
 }
+#endif /* PAX_INSECURE_MODE */
 
 /*
  * Dump a process' core.  The main routine does some
@@ -3456,11 +3463,13 @@ coredump(struct thread *td)
 	char *name;			/* name of corefile */
 	void *rl_cookie;
 	off_t limit;
+#ifdef PAX_INSECURE_MODE
 	char *data = NULL;
 	char *fullpath, *freepath = NULL;
 	size_t len;
 	static const char comm_name[] = "comm=";
 	static const char core_name[] = "core=";
+#endif /* PAX_INSECURE_MODE */
 
 	PROC_LOCK_ASSERT(p, MA_OWNED);
 	MPASS((p->p_flag & P_HADTHREADS) == 0 || p->p_singlethread == td);
@@ -3538,6 +3547,7 @@ coredump(struct thread *td)
 	}
 	vn_rangelock_unlock(vp, rl_cookie);
 
+#ifdef PAX_INSECURE_MODE
 	/*
 	 * Notify the userland helper that a process triggered a core dump.
 	 * This allows the helper to run an automated debugging session.
@@ -3561,6 +3571,7 @@ coredump(struct thread *td)
 	strlcat(data, core_name, len);
 	strlcat(data, fullpath, len);
 	devctl_notify("kernel", "signal", "coredump", data);
+#endif /* PAX_INSECURE_MODE */
 out:
 	error1 = vn_close(vp, FWRITE, cred, td);
 	if (error == 0)
@@ -3568,8 +3579,10 @@ out:
 #ifdef AUDIT
 	audit_proc_coredump(td, name, error);
 #endif
+#ifdef PAX_INSECURE_MODE
 	free(freepath, M_TEMP);
 	free(data, M_TEMP);
+#endif /* PAX_INSECURE_MODE */
 	free(name, M_TEMP);
 	return (error);
 }

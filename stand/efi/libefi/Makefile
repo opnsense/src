@@ -38,6 +38,7 @@ CWARNFLAGS.env.c+=	-Wno-format
 
 .if ${MACHINE_CPUARCH} == "aarch64"
 CFLAGS+=	-mgeneral-regs-only
+NOPIE=		1
 .endif
 .if ${MACHINE_ARCH} == "amd64"
 CFLAGS+= -fPIC -mno-red-zone

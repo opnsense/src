@@ -498,6 +498,7 @@
 #define	MSR_PP0_ENERGY_STATUS	0x639
 #define	MSR_PP1_ENERGY_STATUS	0x641
 #define	MSR_TSC_DEADLINE	0x6e0	/* Writes are not serializing */
+#define	MSR_IA32_DEBUG_INTERFACE 0xc80	/* Intel Silicon Debug interface */
 
 /*
  * VMX MSRs
@@ -603,6 +604,13 @@
 #define	PAT_UNCACHED		0x07
 #define	PAT_VALUE(i, m)		((long long)(m) << (8 * (i)))
 #define	PAT_MASK(i)		PAT_VALUE(i, 0xff)
+
+/*
+ * Silicon Debug Interface modes.
+ */
+#define	IA32_DEBUG_INTERFACE_EN		0x0000000000000001	/* enable SDBG */
+#define	IA32_DEBUG_INTERFACE_LOCK	0x0000000040000000	/* lock bit */
+#define	IA32_DEBUG_INTERFACE_MASK	0x0000000080000000
 
 /*
  * Constants related to MTRRs

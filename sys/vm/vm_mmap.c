@@ -45,6 +45,7 @@ __FBSDID("$FreeBSD$");
 
 #include "opt_compat.h"
 #include "opt_hwpmc_hooks.h"
+#include "opt_pax.h"
 #include "opt_vm.h"
 
 #include <sys/param.h>
@@ -55,6 +56,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/mutex.h>
 #include <sys/sysproto.h>
 #include <sys/filedesc.h>
+#include <sys/pax.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/procctl.h>
@@ -188,11 +190,18 @@ kern_mmap(struct thread *td, uintptr_t addr0, size_t size, int prot, int flags,
 	vm_prot_t cap_maxprot;
 	int align, error;
 	cap_rights_t rights;
+#ifdef PAX_ASLR
+	int pax_aslr_done;
+#endif
 
 	vms = td->td_proc->p_vmspace;
 	fp = NULL;
 	AUDIT_ARG_FD(fd);
 	addr = addr0;
+
+#ifdef PAX_ASLR
+	pax_aslr_done = 0;
+#endif
 
 	/*
 	 * Ignore old flags that used to be defined but did not do anything.
@@ -208,14 +217,9 @@ kern_mmap(struct thread *td, uintptr_t addr0, size_t size, int prot, int flags,
 	 * ld.so sometimes issues anonymous map requests with non-zero
 	 * pos.
 	 */
-	if (!SV_CURPROC_FLAG(SV_AOUT)) {
-		if ((size == 0 && curproc->p_osrel >= P_OSREL_MAP_ANON) ||
-		    ((flags & MAP_ANON) != 0 && (fd != -1 || pos != 0)))
-			return (EINVAL);
-	} else {
-		if ((flags & MAP_ANON) != 0)
-			pos = 0;
-	}
+	if ((size == 0 && curproc->p_osrel >= P_OSREL_MAP_ANON) ||
+		((flags & MAP_ANON) != 0 && (fd != -1 || pos != 0)))
+		return (EINVAL);
 
 	if (flags & MAP_STACK) {
 		if ((fd != -1) ||
@@ -262,6 +266,11 @@ kern_mmap(struct thread *td, uintptr_t addr0, size_t size, int prot, int flags,
 	    align >> MAP_ALIGNMENT_SHIFT < PAGE_SHIFT))
 		return (EINVAL);
 
+#if defined(MAP_32BIT) && defined(PAX_HARDENING)
+	if (pax_disallow_map32bit_active(td, flags))
+		return (EPERM);
+#endif
+
 	/*
 	 * Check for illegal addresses.  Watch out for address wrap... Note
 	 * that VM_*_ADDRESS are not constants due to casts (argh).
@@ -293,7 +302,13 @@ kern_mmap(struct thread *td, uintptr_t addr0, size_t size, int prot, int flags,
 		 */
 		if (addr + size > MAP_32BIT_MAX_ADDR)
 			addr = 0;
-#endif
+#ifdef PAX_ASLR
+		PROC_LOCK(td->td_proc);
+		pax_aslr_mmap_map_32bit(td->td_proc, &addr, addr0, flags);
+		pax_aslr_done = 1;
+		PROC_UNLOCK(td->td_proc);
+#endif /* PAX_ASLR */
+#endif /* MAP_32BIT */
 	} else {
 		/*
 		 * XXX for non-fixed mappings where no hint is provided or
@@ -309,6 +324,12 @@ kern_mmap(struct thread *td, uintptr_t addr0, size_t size, int prot, int flags,
 		    lim_max(td, RLIMIT_DATA))))
 			addr = round_page((vm_offset_t)vms->vm_daddr +
 			    lim_max(td, RLIMIT_DATA));
+#ifdef PAX_ASLR
+		PROC_LOCK(td->td_proc);
+		pax_aslr_mmap(td->td_proc, &addr, addr0, flags);
+		pax_aslr_done = 1;
+		PROC_UNLOCK(td->td_proc);
+#endif
 	}
 	if (size == 0) {
 		/*
@@ -327,8 +348,18 @@ kern_mmap(struct thread *td, uintptr_t addr0, size_t size, int prot, int flags,
 		 *
 		 * This relies on VM_PROT_* matching PROT_*.
 		 */
+#ifdef PAX_NOEXEC
+		cap_maxprot = VM_PROT_ALL;
+
+		pax_pageexec(td->td_proc, (vm_prot_t *)&prot, &cap_maxprot);
+		pax_mprotect(td->td_proc, (vm_prot_t *)&prot, &cap_maxprot);
+
+		error = vm_mmap_object(&vms->vm_map, &addr, size, prot,
+		    cap_maxprot, flags, NULL, pos, FALSE, td);
+#else
 		error = vm_mmap_object(&vms->vm_map, &addr, size, prot,
 		    VM_PROT_ALL, flags, NULL, pos, FALSE, td);
+#endif
 	} else {
 		/*
 		 * Mapping file, get fp for validation and don't let the
@@ -354,6 +385,14 @@ kern_mmap(struct thread *td, uintptr_t addr0, size_t size, int prot, int flags,
 			goto done;
 		}
 
+#ifdef PAX_NOEXEC
+		pax_pageexec(td->td_proc, (vm_prot_t *)&prot, &cap_maxprot);
+		pax_mprotect(td->td_proc, (vm_prot_t *)&prot, &cap_maxprot);
+#endif
+#ifdef PAX_ASLR
+		KASSERT((flags & MAP_FIXED) == MAP_FIXED || pax_aslr_done == 1,
+		    ("%s: ASLR reqiured ...", __func__));
+#endif
 		/* This relies on VM_PROT_* matching PROT_*. */
 		error = fo_mmap(fp, &vms->vm_map, &addr, size, prot,
 		    cap_maxprot, flags, pos, td);
@@ -410,13 +449,6 @@ ommap(struct thread *td, struct ommap_args *uap)
 #define	OMAP_FIXED	0x0100
 
 	prot = cvtbsdprot[uap->prot & 0x7];
-#ifdef COMPAT_FREEBSD32
-#if defined(__amd64__)
-	if (i386_read_exec && SV_PROC_FLAG(td->td_proc, SV_ILP32) &&
-	    prot != 0)
-		prot |= PROT_EXEC;
-#endif
-#endif
 	flags = 0;
 	if (uap->flags & OMAP_ANON)
 		flags |= MAP_ANON;

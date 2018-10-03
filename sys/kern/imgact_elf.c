@@ -34,6 +34,7 @@ __FBSDID("$FreeBSD$");
 
 #include "opt_capsicum.h"
 #include "opt_compat.h"
+#include "opt_pax.h"
 #include "opt_gzio.h"
 
 #include <sys/param.h>
@@ -50,6 +51,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/mount.h>
 #include <sys/mman.h>
 #include <sys/namei.h>
+#include <sys/pax.h>
 #include <sys/pioctl.h>
 #include <sys/proc.h>
 #include <sys/procfs.h>
@@ -128,14 +130,6 @@ int __elfN(nxstack) =
 SYSCTL_INT(__CONCAT(_kern_elf, __ELF_WORD_SIZE), OID_AUTO,
     nxstack, CTLFLAG_RW, &__elfN(nxstack), 0,
     __XSTRING(__CONCAT(ELF, __ELF_WORD_SIZE)) ": enable non-executable stack");
-
-#if __ELF_WORD_SIZE == 32
-#if defined(__amd64__)
-int i386_read_exec = 0;
-SYSCTL_INT(_kern_elf32, OID_AUTO, read_exec, CTLFLAG_RW, &i386_read_exec, 0,
-    "enable execution from readable segments");
-#endif
-#endif
 
 static Elf_Brandinfo *elf_brand_list[MAX_BRANDS];
 
@@ -420,7 +414,7 @@ __elfN(check_header)(const Elf_Ehdr *hdr)
 
 static int
 __elfN(map_partial)(vm_map_t map, vm_object_t object, vm_ooffset_t offset,
-    vm_offset_t start, vm_offset_t end, vm_prot_t prot)
+    vm_offset_t start, vm_offset_t end, vm_prot_t prot, vm_prot_t maxprot)
 {
 	struct sf_buf *sf;
 	int error;
@@ -453,7 +447,7 @@ __elfN(map_partial)(vm_map_t map, vm_object_t object, vm_ooffset_t offset,
 static int
 __elfN(map_insert)(struct image_params *imgp, vm_map_t map, vm_object_t object,
     vm_ooffset_t offset, vm_offset_t start, vm_offset_t end, vm_prot_t prot,
-    int cow)
+    vm_prot_t maxprot, int cow)
 {
 	struct sf_buf *sf;
 	vm_offset_t off;
@@ -462,7 +456,7 @@ __elfN(map_insert)(struct image_params *imgp, vm_map_t map, vm_object_t object,
 
 	if (start != trunc_page(start)) {
 		rv = __elfN(map_partial)(map, object, offset, start,
-		    round_page(start), prot);
+		    round_page(start), prot, maxprot);
 		if (rv != KERN_SUCCESS)
 			return (rv);
 		offset += round_page(start) - start;
@@ -470,7 +464,8 @@ __elfN(map_insert)(struct image_params *imgp, vm_map_t map, vm_object_t object,
 	}
 	if (end != round_page(end)) {
 		rv = __elfN(map_partial)(map, object, offset +
-		    trunc_page(end) - start, trunc_page(end), end, prot);
+		    trunc_page(end) - start, trunc_page(end), end, prot,
+		    maxprot);
 		if (rv != KERN_SUCCESS)
 			return (rv);
 		end = trunc_page(end);
@@ -483,7 +478,7 @@ __elfN(map_insert)(struct image_params *imgp, vm_map_t map, vm_object_t object,
 		 * to copy the data.
 		 */
 		rv = vm_map_fixed(map, NULL, 0, start, end - start,
-		    prot | VM_PROT_WRITE, VM_PROT_ALL, MAP_CHECK_EXCL);
+		    prot | VM_PROT_WRITE, maxprot, MAP_CHECK_EXCL);
 		if (rv != KERN_SUCCESS)
 			return (rv);
 		if (object == NULL)
@@ -506,7 +501,7 @@ __elfN(map_insert)(struct image_params *imgp, vm_map_t map, vm_object_t object,
 	} else {
 		vm_object_reference(object);
 		rv = vm_map_fixed(map, object, offset, start, end - start,
-		    prot, VM_PROT_ALL, cow | MAP_CHECK_EXCL);
+		    prot, maxprot, cow | MAP_CHECK_EXCL);
 		if (rv != KERN_SUCCESS) {
 			locked = VOP_ISLOCKED(imgp->vp);
 			VOP_UNLOCK(imgp->vp, 0);
@@ -576,6 +571,7 @@ __elfN(load_section)(struct image_params *imgp, vm_ooffset_t offset,
 				      map_addr,		/* virtual start */
 				      map_addr + map_len,/* virtual end */
 				      prot,
+				      prot,
 				      cow);
 		if (rv != KERN_SUCCESS)
 			return (EINVAL);
@@ -601,7 +597,7 @@ __elfN(load_section)(struct image_params *imgp, vm_ooffset_t offset,
 	/* This had damn well better be true! */
 	if (map_len != 0) {
 		rv = __elfN(map_insert)(imgp, map, NULL, 0, map_addr,
-		    map_addr + map_len, prot, 0);
+		    map_addr + map_len, prot, VM_PROT_ALL, 0);
 		if (rv != KERN_SUCCESS)
 			return (EINVAL);
 	}
@@ -625,9 +621,15 @@ __elfN(load_section)(struct image_params *imgp, vm_ooffset_t offset,
 	 * Remove write access to the page if it was only granted by map_insert
 	 * to allow copyout.
 	 */
+#ifdef PAX_NOEXEC
+	if ((prot & VM_PROT_WRITE) == 0)
+		vm_map_protect(map, trunc_page(map_addr), round_page(map_addr +
+		    map_len), prot, TRUE);
+#else
 	if ((prot & VM_PROT_WRITE) == 0)
 		vm_map_protect(map, trunc_page(map_addr), round_page(map_addr +
 		    map_len), prot, FALSE);
+#endif
 
 	return (0);
 }
@@ -894,16 +896,7 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 			error = ENOEXEC;
 			goto ret;
 		}
-		/*
-		 * Honour the base load address from the dso if it is
-		 * non-zero for some reason.
-		 */
-		if (baddr == 0)
-			et_dyn_addr = ET_DYN_LOAD_ADDR;
-		else
-			et_dyn_addr = 0;
-	} else
-		et_dyn_addr = 0;
+	}
 	sv = brand_info->sysvec;
 	if (interp != NULL && brand_info->interp_newpath != NULL)
 		newinterp = brand_info->interp_newpath;
@@ -923,6 +916,20 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 
 	error = exec_new_vmspace(imgp, sv);
 	imgp->proc->p_sysent = sv;
+
+	et_dyn_addr = 0;
+	if (hdr->e_type == ET_DYN) {
+		/*
+		 * Honour the base load address from the dso if it is
+		 * non-zero for some reason.
+		 */
+		if (baddr == 0) {
+			et_dyn_addr = ET_DYN_LOAD_ADDR;
+#ifdef PAX_ASLR
+			pax_aslr_execbase(imgp->proc, &et_dyn_addr);
+#endif
+		}
+	}
 
 	vn_lock(imgp->vp, LK_EXCLUSIVE | LK_RETRY);
 	if (error != 0)
@@ -1029,6 +1036,9 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 	 */
 	addr = round_page((vm_offset_t)vmspace->vm_daddr + lim_max(td,
 	    RLIMIT_DATA));
+#ifdef PAX_ASLR
+	pax_aslr_rtld(imgp->proc, &addr);
+#endif
 	PROC_UNLOCK(imgp->proc);
 
 	imgp->entry_addr = entry;
@@ -1081,6 +1091,7 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 	elf_auxargs->flags = 0;
 	elf_auxargs->entry = entry;
 	elf_auxargs->hdr_eflags = hdr->e_flags;
+	elf_auxargs->pax_flags = imgp->proc->p_pax;
 
 	imgp->auxargs = elf_auxargs;
 	imgp->interpreted = 0;
@@ -1115,6 +1126,7 @@ __elfN(freebsd_fixup)(register_t **stack_base, struct image_params *imgp)
 	AUXARGS_ENTRY(pos, AT_FLAGS, args->flags);
 	AUXARGS_ENTRY(pos, AT_ENTRY, args->entry);
 	AUXARGS_ENTRY(pos, AT_BASE, args->base);
+	AUXARGS_ENTRY(pos, AT_PAXFLAGS, args->pax_flags);
 	AUXARGS_ENTRY(pos, AT_EHDRFLAGS, args->hdr_eflags);
 	if (imgp->execpathp != 0)
 		AUXARGS_ENTRY(pos, AT_EXECPATH, imgp->execpathp);
@@ -1131,7 +1143,7 @@ __elfN(freebsd_fixup)(register_t **stack_base, struct image_params *imgp)
 	}
 	if (imgp->sysent->sv_timekeep_base != 0) {
 		AUXARGS_ENTRY(pos, AT_TIMEKEEP,
-		    imgp->sysent->sv_timekeep_base);
+		    imgp->proc->p_timekeep_base);
 	}
 	AUXARGS_ENTRY(pos, AT_STACKPROT, imgp->sysent->sv_shared_page_obj
 	    != NULL && imgp->stack_prot != 0 ? imgp->stack_prot :
@@ -2279,9 +2291,9 @@ __elfN(note_procstat_psstrings)(void *arg, struct sbuf *sb, size_t *sizep)
 		KASSERT(*sizep == size, ("invalid size"));
 		structsize = sizeof(ps_strings);
 #if defined(COMPAT_FREEBSD32) && __ELF_WORD_SIZE == 32
-		ps_strings = PTROUT(p->p_sysent->sv_psstrings);
+		ps_strings = PTROUT(p->p_psstrings);
 #else
-		ps_strings = p->p_sysent->sv_psstrings;
+		ps_strings = p->p_psstrings;
 #endif
 		sbuf_bcat(sb, &structsize, sizeof(structsize));
 		sbuf_bcat(sb, &ps_strings, sizeof(ps_strings));
@@ -2437,12 +2449,6 @@ __elfN(trans_prot)(Elf_Word flags)
 		prot |= VM_PROT_WRITE;
 	if (flags & PF_R)
 		prot |= VM_PROT_READ;
-#if __ELF_WORD_SIZE == 32
-#if defined(__amd64__)
-	if (i386_read_exec && (flags & PF_R))
-		prot |= VM_PROT_EXECUTE;
-#endif
-#endif
 	return (prot);
 }
 

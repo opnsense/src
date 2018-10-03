@@ -28,8 +28,6 @@ MAN=	aic.4 \
 	sbni.4 \
 	smapi.4 \
 	snc.4 \
-	streams.4 \
-	svr4.4 \
 	vpd.4 \
 	vx.4 \
 	wl.4

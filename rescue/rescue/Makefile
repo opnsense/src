@@ -242,5 +242,7 @@ CRUNCH_PROGS_usr.bin+=	iscsictl
 CRUNCH_PROGS_usr.sbin+=	iscsid
 .endif
 
+NOPIE=	yes
+
 .include <bsd.crunchgen.mk>
 .include <bsd.prog.mk>

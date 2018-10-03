@@ -1,0 +1,255 @@
+.\"-
+.\" Copyright (c) 2014,2015 Shawn Webb <shawn.webb@hardenedbsd.org>
+.\" Copyright (c) 2016 Oliver Pinter <oliver.pinter@hardenedbsd.org>
+.\" All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.\" $FreeBSD$
+.\"
+.Dd February 16, 2016
+.Dt ASLR 4
+.Os
+.Sh NAME
+.Nm aslr
+.Nd Address Space Layout Randomization
+.Sh SYNOPSIS
+.In sys/types.h
+.In sys/pax.h
+.Pp
+In the kernel configuration file:
+.Cd "options PAX"
+.Cd "options PAX_ASLR"
+.Sh DESCRIPTION
+.Ss Introduction
+Security in
+.Fx
+is based primarily in policy-based technologies.
+Existing tools such as
+.Xr jail 4 ,
+.Xr capsicum 4 ,
+.Xr VNET 9 , and the
+.Xr mac 4
+framework can make
+.Fx Ns -based systems quite resilient against
+attacks.
+FreeBSD lacks basic low-level exploit mitigation, such as Address
+Space Layout Randomization (ASLR).
+ASLR Randomizes the address space layout of an application, making
+exploitation difficult for an attacker.
+This manual page and the associated implementation aim to
+provide a secure, robust, extensible, and easily-managed form of ASLR
+fit for production use in
+.Fx Ns .
+.Ss General Overview
+When compiled with the 
+.Cd option PAX_ASLR
+, systems will have ASLR enabled.
+For systems with that kernel option enabled, if a user wants
+to disable ASLR for a given application, the user must force that
+application to opt-out.
+HardenedBSD has a special application called secadm for opting
+applications in to or out of exploit mitigation features such as ASLR.
+.Pp
+Another kernel option,
+.Cd PAX_SYSCTLS ,
+exposes additional
+.Xr sysctl 8
+tunables, allowing ASLR behavior control without requiring a reboot.
+By default, the tunable hardening.pax.aslr.status can only be changed
+at boot time via /boot/loader.conf.
+Enabling the PAX_SYSCTLS kernel option allows a root user to modify
+hardening.pax.aslr.status at run time.
+See Appendix A for a list of all the tunables.
+.Pp
+ASLR tunables are per-jail and each jail inherits its parent jail's
+settings.
+Having per-jail tunables allows more flexibility in shared-hosting
+environments.
+This structure also allows a user to selectively disable ASLR for
+applications that misbehave.
+ASLR-disabled applications will still have policy-based security
+applied to it by virtue of being jailed.
+.Ss Implementation Details
+A new sysinit subroutine ID, SI_SUB_PAX, initializes ASLR system
+variables.
+Upon system boot, tunables from /boot/loader.conf are checked for
+validity.
+Any invalid values generate a warning message to the console and the
+tunable is set to a sensible default.
+.Pp
+For the sake of performance, the ASLR system relies on per-process
+deltas rather than calling
+.Xr arc4random 3
+for each mapping.
+When a process calls
+.Xr execve 2
+.Ns , the ASLR deltas are initialized.
+Deltas are randomly generated for the execution base,
+.Xr mmap 2
+.Ns , and stack addresses.
+Only the execution base of applications compiled as Position
+Independent Executables (PIEs) is randomized.
+The execution base of non-PIE applications is not modified.
+The mappings of shared objects are randomized for both PIE and non-PIE
+applications.
+.Pp
+The deltas are used as a hint to the Virtual Memory (VM) system.
+The VM system may modify the hint to make a better fit for superpages
+and other alignment constraints.
+.Pp
+The delta applied to the PIE execbase is different than the delta
+applied to the base address of shared objects.
+In the Executable and Linkable File (ELF) image handler, the
+execution base of PIE applications is randomized by adding the delta
+controlled by the hardening.pax.aslr.exec_len tunable to et_dyn_addr,
+which is initialized to be ET_DYN_LOAD_ADDR (an architecture-
+dependent macro).
+The base address of shared objects loaded by the dynamic linker are
+randomized by applying the delta controlled by the
+hardening.pax.aslr.mmap_len tunable in
+.Fn sys_mmap
+.Ns .
+Stack randomization is implemented using a small stack gap
+and a bigger random, which applies to the stack's mapping.
+On executable image activation, the stack delta is computed and
+subtracted from the top of the stack.
+.Pp
+Shared object load order in the
+.Xr rtld 1
+is randomized with respect to the Depenency Acyclical Graph (DAG).
+Randomizing the DAG helps prevent successful ROP gadget creation by
+further removing deterministic loading of shared objects.
+Often, when ROP gadgets are generated, the generation requires shared
+objects providing gadgets to be in the same spot in memory relative to
+the ASLR deltas.
+.Ss APPENDIX A
+NOTE: All tunables can only be changed during boot-time via
+.Fa /boot/loader.conf
+unless the kernel has been compiled with
+.Cd PAX_SYSCTLS
+.Ns .
+.Bl -bullet
+.It
+hardening.pax.aslr.status
+.Bl -dash -compact
+.It
+Type: integer
+.It
+Description: Toggle system-wide ASLR protection.
+.It
+Values:
+.br
+0 - ASLR disabled system-wide. Individual applications may
+.Em NOT
+opt in.
+.br
+1 - ASLR disabled but applications may opt in.
+.br
+2 - ASLR enabled and applications may opt out.
+.br
+3 - ASLR enabled for all applications. Applications may not opt out.
+.It
+Default: 2
+.El
+.El
+.Pp
+When
+.Cd COMPAT_FREEBSD32
+is enabled in the kernel:
+.Bl -bullet
+.It
+hardening.pax.aslr.compat.status
+.Bl -dash -compact
+.It
+Type: integer
+.It
+Description: Toggle system-wide ASLR protection compatible with 32-bit
+applications.
+.It
+Values:
+.br
+0 - 32-bit compatible ASLR disabled system-wide. Individual
+applications may
+.Em NOT
+opt in.
+.br
+1 - 32-bit compatible ASLR disabled but applications may opt in.
+.br
+2 - 32-bit compatible ASLR enabled and applications may opt out.
+.br
+3 - 32-bit compatible ASLR enabled for all applications. Applications
+may not opt out.
+.It
+Default: 2
+.El
+.El
+.Sh SEE ALSO
+.Xr rtld 1 ,
+.Xr mmap 2 ,
+.Xr elf 3 ,
+.Xr mac 4
+.Rs
+.%T "PaX ASLR"
+.%U http://pax.grsecurity.net/docs/aslr.txt
+.Re
+.Rs
+.%T "HardenedBSD"
+.%U http://hardenedbsd.org/
+.Re
+.Rs
+.%T "secadm"
+.%U https://github.com/HardenedBSD/secadm
+.Re
+.Sh AUTHORS
+This manual page was written by
+.An -nosplit
+.An Shawn Webb .
+The ASLR implementation was written by
+.An Oliver Pinter and
+.An Shawn Webb .
+.Sh BUGS
+The original PaX implementation, from which the HardenedBSD
+implementation also drew inspiration, uses a special ELF process
+header which requires modification of executable files.
+The authors of the HardenedBSD implementation have deliberately chosen
+to go a different route based on the
+.Xr mac 4
+framework.
+Support for filesystem extended attributes will be added at a later
+time.
+.Pp
+The shared object load order randomization can lend itself to
+interesting behavior.
+If multiple libraries contain symbols of the same name, randomizing
+the order in which shared libraries get loaded can cause symbol
+lookups to resolve to the wrong symbol.
+Though incorrect resolution is rare, it is known to happen.
+Privoxy is one such example.
+Privoxy's list of dependencies are small, but two of them implement
+symbols of the same name.
+If Privoxy's dependencies are loaded in the wrong order, Privoxy will
+reference the wrong symbol and will crash.
+Shared library load order randomization can be disabled on a
+per-application basis with secadm for such cases.
+Work is underway to make shared object load order randomization more
+robust and prevent symbol resolution conflicts.

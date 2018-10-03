@@ -48,6 +48,7 @@ BRANCH="RELEASE"
 if [ -n "${BRANCH_OVERRIDE}" ]; then
 	BRANCH=${BRANCH_OVERRIDE}
 fi
+BRANCH="${BRANCH}-HBSD"
 RELEASE="${REVISION}-${BRANCH}"
 VERSION="${TYPE} ${RELEASE}"
 
@@ -289,11 +290,17 @@ while getopts rR opt; do
 done
 shift $((OPTIND - 1))
 
+if [ -n "${HBSD_EXTRA}" ] ; then
+	hbsdv=" [${HBSD_EXTRA}]"
+else
+	hbsdv=" "
+fi
+
 if [ -z "${include_metadata}" ]; then
-	VERINFO="${VERSION} ${svn}${git}${hg}${p4version}"
+	VERINFO="${VERSION}${hbsdv}${svn}${git}${hg}${p4version}"
 	VERSTR="${VERINFO}\\n"
 else
-	VERINFO="${VERSION} #${v}${svn}${git}${hg}${p4version}: ${t}"
+	VERINFO="${VERSION} #${v}${hbsdv}${svn}${git}${hg}${p4version}: ${t}"
 	VERSTR="${VERINFO}\\n    ${u}@${h}:${d}\\n"
 fi
 

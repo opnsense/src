@@ -31,6 +31,8 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#include "opt_pax.h"
+
 #include <sys/param.h>
 #include <sys/jail.h>
 #include <sys/kernel.h>
@@ -136,6 +138,17 @@ priv_check_cred(struct ucred *cred, int priv, int flags)
 			break;
 		}
 	}
+
+#if !defined(PAX_HARDENING)
+	/*
+	 * Inspecting kernel module information should be root-only
+	 * when PAX_HARDENING is set.
+	 */
+	if (priv == PRIV_KLD_STAT) {
+		error = 0;
+		goto out;
+	}
+#endif
 
 	/*
 	 * Writes to kernel/physical memory are a typical root-only operation,

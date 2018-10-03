@@ -16,6 +16,7 @@ BTXLDR=		${BTXDIR}/btxldr/btxldr
 BTXKERN=	${BTXDIR}/btx/btx
 BTXCRT=		${BTXDIR}/lib/crt0.o
 
+NOPIE=	yes
 BTXSRC=		${BOOTSRC}/i386/btx
 BTXLIB=		${BTXSRC}/lib
 

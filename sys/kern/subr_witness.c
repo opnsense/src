@@ -115,6 +115,8 @@ __FBSDID("$FreeBSD$");
 
 #include <machine/stdarg.h>
 
+extern int unprivileged_read_msgbuf;
+
 #if !defined(DDB) && !defined(STACK)
 #error "DDB or STACK options are required for WITNESS"
 #endif
@@ -2548,6 +2550,12 @@ sysctl_debug_witness_badstacks(SYSCTL_HANDLER_ARGS)
 	u_int w_rmatrix1, w_rmatrix2;
 	int error, generation, i, j;
 
+	if (!unprivileged_read_msgbuf) {
+		error = priv_check(req->td, PRIV_MSGBUF);
+		if (error)
+			return (error);
+	}
+
 	tmp_data1 = NULL;
 	tmp_data2 = NULL;
 	tmp_w1 = NULL;
@@ -2733,6 +2741,12 @@ sysctl_debug_witness_fullgraph(SYSCTL_HANDLER_ARGS)
 	struct witness *w;
 	struct sbuf *sb;
 	int error;
+
+	if (!unprivileged_read_msgbuf) {
+		error = priv_check(req->td, PRIV_MSGBUF);
+		if (error)
+			return (error);
+	}
 
 	if (witness_watch < 1) {
 		error = SYSCTL_OUT(req, w_notrunning, sizeof(w_notrunning));

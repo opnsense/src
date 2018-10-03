@@ -862,9 +862,9 @@ int	vfs_filteropt(struct vfsoptlist *, const char **legal);
 void	vfs_opterror(struct vfsoptlist *opts, const char *fmt, ...);
 int	vfs_scanopt(struct vfsoptlist *opts, const char *name, const char *fmt, ...);
 int	vfs_setopt(struct vfsoptlist *opts, const char *name, void *value,
-	    int len);
+	    size_t len);
 int	vfs_setopt_part(struct vfsoptlist *opts, const char *name, void *value,
-	    int len);
+	    size_t len);
 int	vfs_setopts(struct vfsoptlist *opts, const char *name,
 	    const char *value);
 int	vfs_setpublicfs			    /* set publicly exported fs */

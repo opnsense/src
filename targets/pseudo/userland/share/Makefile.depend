@@ -127,6 +127,7 @@ DIRDEPS = \
 	share/i18n/esdb/TCVN \
 	share/i18n/esdb/UTF \
 	share/info \
+	share/keys/hbsd-update/trusted \
 	share/keys/pkg/trusted \
 	share/locale-links \
 	share/man/man1 \

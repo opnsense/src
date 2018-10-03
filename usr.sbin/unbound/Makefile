@@ -1,6 +1,6 @@
 # $FreeBSD$
 
-SUBDIR=	daemon anchor checkconf control
+SUBDIR=	daemon anchor checkconf control host
 SUBDIR+= local-setup
 SUBDIR_PARALLEL=
 

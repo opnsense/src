@@ -1,0 +1,31 @@
+# $FreeBSD$
+
+.include <bsd.own.mk>
+
+# OpenSSL version used for manual page generation
+OPENSSL_VER=	2.6.4
+OPENSSL_DATE=	2017-12-19
+
+LIBRESSL_SRC=	${SRCTOP}/crypto/libressl
+LCRYPTO_SRC=	${LIBRESSL_SRC}/crypto
+LCRYPTO_DOC=	${LCRYPTO_SRC}/doc
+LSSL_SRC=	${LIBRESSL_SRC}/ssl
+
+CFLAGS+=	-DTERMIOS -DANSI_SOURCE
+CFLAGS+=	-I${LCRYPTO_SRC} -I${LSSL_SRC} -I${.OBJDIR}
+CFLAGS+=	-I${LIBRESSL_SRC}/include -I${LIBRESSL_SRC}/include/compat
+CFLAGS+=	-DDSO_DLFCN -DHAVE_DLFCN_H
+CFLAGS+=	-DLIBRESSL_INTERNAL -D__BEGIN_HIDDEN_DECLS= \
+		-D__END_HIDDEN_DECLS=
+
+MANDIR=	${SHAREDIR}/openssl/man/man
+
+.if defined(LIB)
+_docs=	${LIB}
+_skip=	SSLeay_version des_modes
+_sec=	3
+.else
+_docs=	apps
+_skip=	config
+_sec=	1
+.endif

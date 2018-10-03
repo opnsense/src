@@ -20,7 +20,15 @@ stop_cmd=":"
 do_dmesg()
 {
 	rm -f ${dmesg_file}
-	( umask 022 ; /sbin/dmesg $rc_flags > ${dmesg_file} )
+
+	case `/sbin/sysctl -n security.bsd.unprivileged_read_msgbuf` in
+	1)
+		( umask 022 ; /sbin/dmesg $rc_flags > ${dmesg_file} )
+		;;
+	*)
+		( umask 077 ; /sbin/dmesg $rc_flags > ${dmesg_file} )
+		;;
+	esac
 }
 
 load_rc_config $name

@@ -286,6 +286,11 @@ x86_emulate_cpuid(struct vm *vm, int vcpu_id,
 			regs[2] &= ~CPUID2_TSCDLT;
 
 			/*
+			 * Hide the Silicon Debug functionality.
+			 */
+			regs[2] &= ~(CPUID2_SDBG);
+
+			/*
 			 * Hide thermal monitoring
 			 */
 			regs[3] &= ~(CPUID_ACPI | CPUID_TM);

@@ -1,0 +1,208 @@
+.\"-
+.\" Copyright (c) 2016 Shawn Webb <shawn.webb@hardenedbsd.org>
+.\" All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.\" $FreeBSD$
+.\"
+.Dd April 30, 2016
+.Dt HARDENING 4
+.Os
+.Sh NAME
+.Nm hardening
+.Nd HardenedBSD Hardening
+.Sh SYNOPSIS
+.In sys/types.h
+.In sys/pax.h
+.Pp
+In the kernel configuration file:
+.Cd "options PAX"
+.Cd "options PAX_HARDENING"
+.Sh DESCRIPTION
+Various system hardening features have been implemented in
+HardenedBSD.
+Many of them deal with restricting what non-root users are able to do.
+When the kernel is compiled with
+.Cd options PAX_HARDENING ,
+certain
+.Xr sysctl 8
+options are modified from their defaults.
+See Appendix A for a list of all the
+.Xr sysctl 8
+option modifications.
+.Pp
+.Xr procfs 5
+and
+.Xr linprocfs 5
+are modified to prevent arbitrary writes to a process's registers.
+This behavior is controlled by the
+.Fa hardening.procfs_harden
+sysctl option.
+.Pp
+.Xr kld 4
+related system calls are restricted to non-jailed, root-only.
+Attempting to list using
+.Xr modfind 2 ,
+.Xr kldfind 2 ,
+and the other KLD-related system calls will result in permission
+denied if used by a non-root or jailed user.
+.Ss APPENDIX A
+.Bl -bullet
+.It
+security.bsd.unprivileged_read_msgbuf
+.Bl -dash -compact
+.It
+Type: integer
+.It
+Description: Unprivileged processes may read the kernel message
+buffer.
+.It
+Default: 1
+.It
+Hardened: 0
+.El
+.It
+kern.randompid
+.Bl -dash -compact
+.It
+Type: integer
+.It
+Description: Random PID modulus.
+.It
+Default: 0, read+write
+.It
+Hardened: randomly set at boot and made read-only
+.El
+.It
+security.bsd.see_other_uids
+.Bl -dash -compact
+.It
+Type: integer
+.It
+Description: Unprivileged processes may see subjects/objects with
+different real uid.
+.It
+Default: 1
+.It
+Hardened: 0
+.El
+.It
+security.bsd.see_other_gids
+.Bl -dash -compact
+.It
+Type: integer
+.It
+Description: Unprivileged processes may see subjects/objects with
+different real gid.
+.It
+Default: 1
+.It
+Hardened: 0
+.El
+.It
+security.bsd.unprivileged_proc_debug
+.Bl -dash -compact
+.It
+Type: integer
+.It
+Description: Unprivileged processes may use process debugging
+facilities.
+.It
+Default: 1
+.It
+Hardened: 0
+.El
+.It
+security.bsd.hardlink_check_uid
+.Bl -dash -compact
+.It
+Type: integer
+.It
+Description: Unprivileged processes cannot create hard links to files
+owned by other users.
+.It
+Default: 0
+.It
+Hardened: 1
+.El
+.It
+security.bsd.hardlink_check_gid
+.Bl -dash -compact
+.It
+Type: integer
+.It
+Description: Unprivileged processes cannot create hard links to files
+owned by other groups.
+.It
+Default: 0
+.It
+Hardened: 1
+.El
+.It
+kern.msgbuf_show_timestamp
+.Bl -dash -compact
+.It
+Type: integer
+.It
+Description: Show timestamp in msgbuf.
+.It
+Default: 0
+.It
+Hardened: 1
+.El
+.It
+net.inet.ip.random_id
+.Bl -dash -compact
+.It
+Type: integer
+.It
+Description: Assign random IP ID values.
+.It
+Default: 0
+.It
+Hardened: 1
+.El
+.It
+security.bsd.stack_guard_page
+.Bl -dash -compact
+.It
+Type: integer
+.It
+Description: Insert stack guard page ahead of the growable segments.
+.It
+Default: 0
+.It
+Hardened: 1
+.El
+.El
+.Sh SEE ALSO
+.Xr kldfind 2 ,
+.Xr modfind 2 ,
+.Xr sysctl 8
+.Sh AUTHORS
+This manual page was written by
+.An -nosplit
+.An Shawn Webb .
+The hardening implementation was written by
+.An Shawn Webb and
+.An Oliver Pinter .

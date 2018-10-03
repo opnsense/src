@@ -185,7 +185,7 @@ static DH *get_dh2048(void)
 	if (!dh || !p || !g)
 		goto err;
 
-#if OPENSSL_VERSION_NUMBER < 0x10100000 || defined(HAVE_LIBRESSL)
+#if OPENSSL_VERSION_NUMBER < 0x10100000 || defined(LIBRESSL_VERSION_NUMBER)
 	dh->p = p;
 	dh->g = g;
 #else

@@ -35,6 +35,7 @@ __FBSDID("$FreeBSD$");
 #include "opt_bootp.h"
 #include "opt_ipstealth.h"
 #include "opt_ipsec.h"
+#include "opt_pax.h"
 #include "opt_route.h"
 #include "opt_rss.h"
 
@@ -126,7 +127,12 @@ SYSCTL_INT(_net_inet_ip, IPCTL_SENDREDIRECTS, redirect, CTLFLAG_VNET | CTLFLAG_R
  * to the loopback interface instead of the interface where the
  * packets for those addresses are received.
  */
+#ifdef PAX_HARDENING
+static VNET_DEFINE(int, ip_checkinterface) = 1;
+#else
 static VNET_DEFINE(int, ip_checkinterface);
+#endif
+
 #define	V_ip_checkinterface	VNET(ip_checkinterface)
 SYSCTL_INT(_net_inet_ip, OID_AUTO, check_interface, CTLFLAG_VNET | CTLFLAG_RW,
     &VNET_NAME(ip_checkinterface), 0,

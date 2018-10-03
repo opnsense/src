@@ -33,6 +33,7 @@ __FBSDID("$FreeBSD$");
 #include "opt_ddb.h"
 #include "opt_inet.h"
 #include "opt_inet6.h"
+#include "opt_pax.h"
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -42,6 +43,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/sysproto.h>
 #include <sys/malloc.h>
 #include <sys/osd.h>
+#include <sys/pax.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/taskqueue.h>
@@ -242,6 +244,10 @@ prison0_init(void)
 	prison0.pr_cpuset = cpuset_ref(thread0.td_cpuset);
 	prison0.pr_osreldate = osreldate;
 	strlcpy(prison0.pr_osrelease, osrelease, sizeof(prison0.pr_osrelease));
+
+#ifdef PAX
+	(void)pax_init_prison(&prison0, NULL);
+#endif
 }
 
 /*
@@ -1292,6 +1298,14 @@ kern_jail_set(struct thread *td, struct uio *optuio, int flags)
 			goto done_releroot;
 		}
 
+#ifdef PAX
+		if (!pax_init_prison(pr, opts)) {
+			error = EINVAL;
+			prison_deref(pr, PD_LIST_XLOCKED);
+			goto done_releroot;
+		}
+#endif
+
 		mtx_lock(&pr->pr_mtx);
 		/*
 		 * New prisons do not yet have a reference, because we do not
@@ -2275,6 +2289,12 @@ prison_remove_one(struct prison *pr)
 {
 	struct proc *p;
 	int deuref;
+
+#ifdef MAC
+#ifdef PAX_CONTROL_ACL
+	mac_prison_destroy(pr);
+#endif
+#endif
 
 	/* If the prison was persistent, it is not anymore. */
 	deuref = 0;
@@ -4061,6 +4081,45 @@ db_show_prison(struct prison *pr)
 		db_printf(" %s %s\n",
 		    ii == 0 ? "ip6.addr        =" : "                 ",
 		    ip6_sprintf(ip6buf, &pr->pr_ip6[ii]));
+#endif
+#ifdef PAX
+	db_printf(" pr_hbsd = {\n");
+
+	db_printf("  .aslr = {\n");
+	db_printf("   .status             = %d\n",
+	    pr->pr_hbsd.aslr.status);
+	db_printf("   .compat_status      = %d\n",
+	    pr->pr_hbsd.aslr.compat_status);
+	db_printf("   .disallow_map32bit_status    = %d\n",
+	   pr->pr_hbsd.aslr.disallow_map32bit_status);
+	db_printf("  }\n");
+
+	db_printf("  .noexec = {\n");
+	db_printf("   .pageexec_status           = %d\n",
+	   pr->pr_hbsd.noexec.pageexec_status);
+	db_printf("   .mprotect_status           = %d\n",
+	   pr->pr_hbsd.noexec.mprotect_status);
+	db_printf("  }\n");
+
+	db_printf("  .segvguard = {\n");
+	db_printf("   .status        = %d\n",
+	   pr->pr_hbsd.segvguard.status);
+	db_printf("   .expiry        = %d\n",
+	   pr->pr_hbsd.segvguard.expiry);
+	db_printf("   .suspension    = %d\n",
+	   pr->pr_hbsd.segvguard.suspension);
+	db_printf("   .maxcrashes    = %d\n",
+	   pr->pr_hbsd.segvguard.maxcrashes);
+	db_printf("  }\n");
+
+	db_printf("  .log = {\n");
+	db_printf("   .log           = %d\n",
+	   pr->pr_hbsd.log.log);
+	db_printf("   .ulog          = %d\n",
+	   pr->pr_hbsd.log.ulog);
+	db_printf("  }\n");
+
+	db_printf(" }\n");
 #endif
 }
 

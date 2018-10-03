@@ -66,6 +66,7 @@ seed_something(void)
 	krb5_context context;
 	const char *p;
 
+#ifndef OPENSSL_NO_EGD
 	/* Try using egd */
 	if (!krb5_init_context(&context)) {
 	    p = krb5_config_get_string(context, NULL, "libdefaults",
@@ -74,6 +75,7 @@ seed_something(void)
 		RAND_egd_bytes(p, ENTROPY_NEEDED);
 	    krb5_free_context(context);
 	}
+#endif
 #else
 	/* TODO: Once a Windows CryptoAPI RAND method is defined, we
 	   can use that and failover to another method. */

@@ -87,6 +87,10 @@ struct image_params {
 	u_long stack_sz;
 	struct ucred *newcred;		/* new credentials if changing */
 	bool credential_setid;		/* true if becoming setid */
+	struct _pax {
+		uint32_t req_acl_flags; /* Requested PaX settings from ACL */
+		uint32_t req_extattr_flags; /* Req. PaX setting from extattr */
+	} pax;
 };
 
 #ifdef _KERNEL

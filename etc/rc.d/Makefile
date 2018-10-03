@@ -13,7 +13,6 @@ FILES=	DAEMON \
 	abi \
 	addswap \
 	adjkerntz \
-	archdep \
 	auditd \
 	auditdistd \
 	bgfsck \

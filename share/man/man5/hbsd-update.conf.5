@@ -1,0 +1,79 @@
+.\"-
+.\" Copyright 2015 Shawn Webb <shawn.webb@hardenedbsd.org>
+.\" All rights reserved
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted providing that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+.\" IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+.\" WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
+.\" DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+.\" STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
+.\" IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+.\" POSSIBILITY OF SUCH DAMAGE.
+.\"
+.\" $FreeBSD$
+.\"
+.Dd July 29, 2016
+.Dt HBSD-UPDATE.CONF 5
+.Os FreeBSD
+.Sh NAME
+.Nm hbsd-update.conf
+.Nd configuration file for
+.Xr hbsd-update 8
+.Sh DESCRIPTION
+The
+.Nm
+file controls the behavior of the
+.Xr hbsd-update 8
+tool. The file is parsed by
+.Xr sh 1
+and follows its syntax for declaring variables.
+.Pp
+The possible options and their meanings are as follows:
+.Bl -tag -width ".Cm baseurl"
+.It Cm baseurl
+The base of the URL from which to derive the update download
+location.
+.It Cm capath
+The path (file or directory) of the CA cert(s) to use for verification
+of signed binary updates.
+.It Cm dnsrec
+The DNS TXT record to use to look up version information.
+If DNS is not desired and the update publisher supports version info
+via an update-latest.txt file placed in the root of the 
+.Pa baseurl
+this option can be omitted.
+.It Cm kernel
+Update packages can contain multiple kernels.
+This option specifies which kernel to install.
+.It Cm dnssec
+By default, the DNS TXT record is validated with DNSSEC.
+Setting this variable to
+.Dq no
+instead of the default
+.Dq yes
+disables DNSSEC validation.
+.El
+.Sh FILES
+.Bl -tag -width "/etc/hbsd-update.conf"
+.It Pa /etc/hbsd-update.conf
+Default location of the
+.Cm hbsd-update
+configuration file.
+.El
+.Sh SEE ALSO
+.Xr hbsd-update 8
+.Sh AUTHORS
+.An Shawn Webb Aq Mt shawn.webb@hardenedbsd.org

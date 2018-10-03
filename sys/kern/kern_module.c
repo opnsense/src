@@ -36,6 +36,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/malloc.h>
 #include <sys/sysproto.h>
 #include <sys/sysent.h>
+#include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
@@ -309,7 +310,11 @@ int
 sys_modnext(struct thread *td, struct modnext_args *uap)
 {
 	module_t mod;
-	int error = 0;
+	int error;
+
+	error = priv_check(td, PRIV_KLD_STAT);
+	if (error)
+		return (error);
 
 	td->td_retval[0] = -1;
 
@@ -342,6 +347,10 @@ sys_modfnext(struct thread *td, struct modfnext_args *uap)
 	module_t mod;
 	int error;
 
+	error = priv_check(td, PRIV_KLD_STAT);
+	if (error)
+		return (error);
+
 	td->td_retval[0] = -1;
 
 	MOD_SLOCK;
@@ -371,10 +380,14 @@ sys_modstat(struct thread *td, struct modstat_args *uap)
 {
 	module_t mod;
 	modspecific_t data;
-	int error = 0;
+	int error;
 	int id, namelen, refs, version;
 	struct module_stat *stat;
 	char *name;
+
+	error = priv_check(td, PRIV_KLD_STAT);
+	if (error)
+		return (error);
 
 	MOD_SLOCK;
 	mod = module_lookupbyid(uap->modid);
@@ -422,9 +435,13 @@ sys_modstat(struct thread *td, struct modstat_args *uap)
 int
 sys_modfind(struct thread *td, struct modfind_args *uap)
 {
-	int error = 0;
+	int error;
 	char name[MAXMODNAME];
 	module_t mod;
+
+	error = priv_check(td, PRIV_KLD_STAT);
+	if (error)
+		return (error);
 
 	if ((error = copyinstr(uap->name, name, sizeof name, 0)) != 0)
 		return (error);
@@ -472,6 +489,10 @@ freebsd32_modstat(struct thread *td, struct freebsd32_modstat_args *uap)
 	int id, namelen, refs, version;
 	struct module_stat32 *stat32;
 	char *name;
+
+	error = priv_check(td, PRIV_KLD_STAT);
+	if (error)
+		return (error);
 
 	MOD_SLOCK;
 	mod = module_lookupbyid(uap->modid);

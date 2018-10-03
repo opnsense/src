@@ -1716,13 +1716,25 @@ xmdctlioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flags, struct thread
 			    strlen(sc->file) + 1);
 		return (error);
 	case MDIOCLIST:
+		/*
+		 * Write the number of md devices to mdio->md_pad[0].
+		 * Write the unit number of the first (MDNPAD - 2) units
+		 * to mdio->md_pad[1::(MDNPAD - 2)] and terminate the
+		 * list with -1.
+		 *
+		 * XXX: There is currently no mechanism to retrieve unit
+		 * numbers for more than (MDNPAD - 2) units.
+		 *
+		 * XXX: Due to the use of LIST_INSERT_HEAD in mdnew(), the
+		 * list of visible unit numbers not stable.
+		 */
 		i = 1;
 		LIST_FOREACH(sc, &md_softc_list, list) {
-			if (i == MDNPAD - 1)
-				mdio->md_pad[i] = -1;
-			else
-				mdio->md_pad[i++] = sc->unit;
+			if (i < MDNPAD - 1)
+				mdio->md_pad[i] = sc->unit;
+			i++;
 		}
+		mdio->md_pad[MIN(i, MDNPAD - 1)] = -1;
 		mdio->md_pad[0] = i - 1;
 		return (0);
 	default:

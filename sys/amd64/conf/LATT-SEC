@@ -1,0 +1,15 @@
+include HARDENEDBSD
+
+options PAX_SEGVGUARD
+
+# For building bootable sparc64 media
+options GEOM_PART_VTOC8
+
+# Only the daring run -CURRENT with experimental patches, but without
+# debugging support
+nooptions WITNESS
+nooptions WITNESS_SKIPSPIN
+nooptions MALLOC_DEBUG_MAXZONES
+
+# Virtual networking for jails
+options VIMAGE

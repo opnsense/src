@@ -39,6 +39,7 @@ __FBSDID("$FreeBSD$");
 
 #ifdef _KERNEL
 #include "opt_ddb.h"
+#include "opt_pax.h"
 #include "opt_printf.h"
 #endif  /* _KERNEL */
 
@@ -52,6 +53,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/kernel.h>
 #include <sys/msgbuf.h>
 #include <sys/malloc.h>
+#include <sys/pax.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/stddef.h>
@@ -174,6 +176,49 @@ uprintf(const char *fmt, ...)
 	pca.tty = p->p_session->s_ttyp;
 	SESS_UNLOCK(p->p_session);
 	PROC_UNLOCK(p);
+	if (pca.tty == NULL) {
+		sx_sunlock(&proctree_lock);
+		return (0);
+	}
+	pca.flags = TOTTY;
+	pca.p_bufr = NULL;
+	va_start(ap, fmt);
+	tty_lock(pca.tty);
+	sx_sunlock(&proctree_lock);
+	retval = kvprintf(fmt, putchar, &pca, 10, ap);
+	tty_unlock(pca.tty);
+	va_end(ap);
+	return (retval);
+}
+
+int
+hbsd_uprintf(const char *fmt, ...)
+{
+	va_list ap;
+	struct putchar_arg pca;
+	struct proc *p;
+	struct thread *td;
+	int p_locked, retval;
+
+	td = curthread;
+	if (TD_IS_IDLETHREAD(td))
+		return (0);
+
+	sx_slock(&proctree_lock);
+	p = td->td_proc;
+	if ((p_locked = PROC_LOCKED(p)))
+		PROC_LOCK(p);
+	if ((p->p_flag & P_CONTROLT) == 0) {
+		if (p_locked)
+			PROC_UNLOCK(p);
+		sx_sunlock(&proctree_lock);
+		return (0);
+	}
+	SESS_LOCK(p->p_session);
+	pca.tty = p->p_session->s_ttyp;
+	SESS_UNLOCK(p->p_session);
+	if (p_locked)
+		PROC_UNLOCK(p);
 	if (pca.tty == NULL) {
 		sx_sunlock(&proctree_lock);
 		return (0);
@@ -1021,7 +1066,11 @@ msgbufinit(void *ptr, int size)
 	oldp = msgbufp;
 }
 
-static int unprivileged_read_msgbuf = 1;
+#ifdef PAX_HARDENING
+int unprivileged_read_msgbuf = 0;
+#else
+int unprivileged_read_msgbuf = 1;
+#endif
 SYSCTL_INT(_security_bsd, OID_AUTO, unprivileged_read_msgbuf,
     CTLFLAG_RW, &unprivileged_read_msgbuf, 0,
     "Unprivileged processes may read the kernel message buffer");

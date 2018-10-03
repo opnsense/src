@@ -31,8 +31,28 @@
 echo -n > $BSDINSTALL_TMPETC/rc.conf.hardening
 echo -n > $BSDINSTALL_TMPETC/sysctl.conf.hardening
 
+if [ `sysctl -n security.bsd.see_other_uids` -eq 0 ]; then
+	hide_uids=on
+fi
+
+if [ `sysctl -n security.bsd.see_other_gids` -eq 0 ]; then
+	hide_gids=on
+fi
+
+if [ `sysctl -n security.bsd.unprivileged_read_msgbuf` -eq 0 ]; then
+	read_msgbuf=on
+fi
+
+if [ `sysctl -n security.bsd.unprivileged_proc_debug` -eq 0 ]; then
+	proc_debug=on
+fi
+
+if [ `sysctl -n security.bsd.stack_guard_page` -gt 0 ]; then
+	stack_guard=on
+fi
+
 exec 3>&1
-FEATURES=$( dialog --backtitle "FreeBSD Installer" \
+FEATURES=$( dialog --backtitle "HardenedBSD Installer" \
     --title "System Hardening" --nocancel --notags --separate-output \
     --checklist "Choose system security hardening options:" \
     0 0 0 \
@@ -40,7 +60,6 @@ FEATURES=$( dialog --backtitle "FreeBSD Installer" \
 	"hide_gids" "Hide processes running as other groups" ${hide_gids:-off} \
 	"read_msgbuf" "Disable reading kernel message buffer for unprivileged users" ${read_msgbuf:-off} \
 	"proc_debug" "Disable process debugging facilities for unprivileged users" ${proc_debug:-off} \
-	"random_pid" "Randomize the PID of newly created processes" ${random_pid:-off} \
 	"stack_guard" "Insert stack guard page ahead of the growable segments" ${stack_guard:-off} \
 	"clear_tmp" "Clean the /tmp filesystem on system startup" ${clear_tmp:-off} \
 	"disable_syslogd" "Disable opening Syslogd network socket (disables remote logging)" ${disable_syslogd:-off} \
@@ -60,9 +79,6 @@ for feature in $FEATURES; do
 	fi
 	if [ "$feature" = "proc_debug" ]; then
 		echo security.bsd.unprivileged_proc_debug=0 >> $BSDINSTALL_TMPETC/sysctl.conf.hardening
-	fi
-	if [ "$feature" = "random_pid" ]; then
-		echo kern.randompid=1 >> $BSDINSTALL_TMPETC/sysctl.conf.hardening
 	fi
 	if [ "$feature" = "stack_guard" ]; then
 		echo security.bsd.stack_guard_page=1 >> $BSDINSTALL_TMPETC/sysctl.conf.hardening

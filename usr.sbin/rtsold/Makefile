@@ -21,4 +21,5 @@ SRCS=	rtsold.c rtsol.c if.c probe.c dump.c rtsock.c
 
 WARNS?=	3
 
+
 .include <bsd.prog.mk>

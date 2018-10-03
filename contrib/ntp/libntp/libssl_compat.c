@@ -26,7 +26,8 @@
 /* ----------------------------------------------------------------- */
 
 /* ----------------------------------------------------------------- */
-#if defined(OPENSSL) && OPENSSL_VERSION_NUMBER < 0x10100000L
+#if (defined(OPENSSL) && OPENSSL_VERSION_NUMBER < 0x10100000L) \
+    || defined(LIBRESSL_VERSION_NUMBER)
 /* ----------------------------------------------------------------- */
 
 #include "libssl_compat.h"

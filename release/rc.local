@@ -37,7 +37,7 @@ if [ $? -eq 0 ]; then
 else
 	# Serial or other console
 	echo
-	echo "Welcome to FreeBSD!"
+	echo "Welcome to HardenedBSD!"
 	echo
 	echo "Please choose the appropriate terminal type for your system."
 	echo "Common console types are:"
@@ -54,15 +54,15 @@ export TERM
 
 if [ -f /etc/installerconfig ]; then
 	if bsdinstall script /etc/installerconfig; then
-		dialog --backtitle "FreeBSD Installer" --title "Complete" --no-cancel --ok-label "Reboot" --pause "Installation of FreeBSD complete! Rebooting in 10 seconds" 10 30 10
+		dialog --backtitle "HardenedBSD Installer" --title "Complete" --no-cancel --ok-label "Reboot" --pause "Installation of HardenedBSD complete! Rebooting in 10 seconds" 10 30 10
 		reboot
 	else
-		dialog --backtitle "FreeBSD Installer" --title "Error" --textbox /tmp/bsdinstall_log 0 0
+		dialog --backtitle "HardenedBSD Installer" --title "Error" --textbox /tmp/bsdinstall_log 0 0
 	fi
 	exit 
 fi
 
-dialog --backtitle "FreeBSD Installer" --title "Welcome" --extra-button --extra-label "Shell" --ok-label "Install" --cancel-label "Live CD" --yesno "Welcome to FreeBSD! Would you like to begin an installation or use the live CD?" 0 0
+dialog --backtitle "HardenedBSD Installer" --title "Welcome" --extra-button --extra-label "Shell" --ok-label "Install" --cancel-label "Live CD" --yesno "Welcome to HardenedBSD! Would you like to begin an installation or use the live CD?" 0 0
 
 case $? in
 $DIALOG_OK)	# Install
@@ -75,7 +75,7 @@ $DIALOG_OK)	# Install
 	trap true SIGINT	# Ignore cntrl-C here
 	bsdinstall
 	if [ $? -eq 0 ]; then
-		dialog --backtitle "FreeBSD Installer" --title "Complete" --yes-label "Reboot" --no-label "Live CD" --yesno "Installation of FreeBSD complete! Would you like to reboot into the installed system now?" 0 0 && reboot
+		dialog --backtitle "HardenedBSD Installer" --title "Complete" --yes-label "Reboot" --no-label "Live CD" --yesno "Installation of HardenedBSD complete! Would you like to reboot into the installed system now?" 0 0 && reboot
 	else
 		. /etc/rc.local
 	fi

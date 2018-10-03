@@ -131,14 +131,18 @@ META_MODE?= normal
 .SUFFIXES:	.out .a .ln .o .c .cc .cpp .cxx .C .m .F .f .e .r .y .l .S .asm .s .cl .p .h .sh
 .endif
 
+_TEST_AR=	/usr/bin/ar
 AR		?=	ar
 .if defined(%POSIX)
 ARFLAGS		?=	-rv
+.elif ${_TEST_AR:tA} == "/usr/bin/llvm-ar"
+ARFLAGS		?=	crD
 .else
 ARFLAGS		?=	-crD
 .endif
+_TEST_RANLIB=	/usr/bin/ranlib
 RANLIB		?=	ranlib
-.if !defined(%POSIX)
+.if !defined(%POSIX) && ${_TEST_RANLIB:tA} != "/usr/bin/llvm-ar"
 RANLIBFLAGS	?=	-D
 .endif
 
@@ -478,3 +482,5 @@ __MAKE_SHELL?=/bin/sh
 .endif
 
 .endif # ! Posix
+
+.include <bsd.hardenedbsd.mk>

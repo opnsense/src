@@ -193,7 +193,6 @@ SCHED_STATS	opt_sched.h
 SCHED_ULE	opt_sched.h
 SLEEPQUEUE_PROFILING
 SLHCI_DEBUG	opt_slhci.h
-SPX_HACK
 STACK		opt_stack.h
 SUIDDIR
 MSGMNB		opt_sysvipc.h
@@ -793,6 +792,9 @@ VT_TWOBUTTON_MOUSE	opt_syscons.h
 DEV_SC			opt_syscons.h
 DEV_VT			opt_syscons.h
 
+# kbdmux options
+KBDMUX_DFLT_KEYMAP	opt_kbdmux.h
+
 # teken terminal emulator options
 TEKEN_CONS25		opt_teken.h
 TEKEN_UTF8		opt_teken.h
@@ -809,8 +811,6 @@ KBD_MAXRETRY		opt_kbd.h
 KBD_MAXWAIT		opt_kbd.h
 KBD_RESETDELAY		opt_kbd.h
 KBDIO_DEBUG		opt_kbd.h
-
-KBDMUX_DFLT_KEYMAP	opt_kbdmux.h
 
 # options for the Atheros driver
 ATH_DEBUG		opt_ath.h
@@ -969,6 +969,30 @@ RACCT_DEFAULT_TO_DISABLED	opt_global.h
 
 # Resource Limits
 RCTL		opt_global.h
+
+# PaX-inspired hardening features
+PAX		opt_pax.h
+PAX_ASLR	opt_pax.h
+PAX_SYSCTLS	opt_pax.h
+PAX_SEGVGUARD	opt_pax.h
+PAX_HARDENING	opt_pax.h
+PAX_NOEXEC	opt_pax.h
+PAX_INSECURE_MODE	opt_pax.h
+PAX_CONTROL_ACL		opt_pax.h
+PAX_CONTROL_ACL_OVERRIDE_SUPPORT	opt_pax.h
+PAX_CONTROL_EXTATTR	opt_pax.h
+PAX_JAIL_SUPPORT	opt_pax.h
+HBSD_DEBUG	opt_pax.h
+
+# ASLR overwritable defaults
+PAX_ASLR_DELTA_MMAP_DEF_LEN		opt_pax.h
+PAX_ASLR_DELTA_STACK_DEF_LEN		opt_pax.h
+PAX_ASLR_DELTA_VDSO_DEF_LEN		opt_pax.h
+PAX_ASLR_DELTA_EXEC_DEF_LEN		opt_pax.h
+PAX_ASLR_COMPAT_DELTA_MMAP_DEF_LEN	opt_pax.h
+PAX_ASLR_COMPAT_DELTA_STACK_DEF_LEN	opt_pax.h
+PAX_ASLR_COMPAT_DELTA_EXEC_DEF_LEN	opt_pax.h
+PAX_ASLR_COMPAT_DELTA_VDSO_DEF_LEN	opt_pax.h
 
 # Random number generator(s)
 # Which CSPRNG hash we get.

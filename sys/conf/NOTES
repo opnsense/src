@@ -3058,6 +3058,20 @@ options		EM_MULTIQUEUE # Activate multiqueue features/disable MSI-X
 # This enables support for compressed core dumps.
 options 	GZIO
 
+# PAX and HardenedBSD related knobs
+options 	PAX		# Enable the PAX framework
+options 	PAX_CONTROL_ACL	# PaX MAC framework, required for secadm
+options 	PAX_CONTROL_ACL_OVERRIDE_SUPPORT # Allow to override hbsdcontrol settings with ACLs
+options 	PAX_CONTROL_EXTATTR # extattr based control framework for hbsdcontrol
+options 	PAX_ASLR	# Address Space Layout Randomization
+options 	PAX_HARDENING	# Other hardening features
+options 	PAX_NOEXEC	# Remove WX pages from user-space and enforce W^X
+options 	PAX_SEGVGUARD	# Track and ban failing process
+options 	PAX_SYSCTLS	# Run-time settings for PAX and Hardening
+options 	PAX_JAIL_SUPPORT	# Allow to override PAX settings per jail
+options 	PAX_INSECURE_MODE	# Allow to override INVARIANTS enforcements
+options 	HBSD_DEBUG
+
 # BHND(4) drivers
 options		BHND_LOGLEVEL	# Logging threshold level
 

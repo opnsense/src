@@ -54,6 +54,7 @@ __DEFAULT_YES_OPTIONS = \
     AUTHPF \
     AUTOFS \
     BHYVE \
+    BIND_NOW \
     BINUTILS \
     BINUTILS_BOOTSTRAP \
     BLACKLIST \
@@ -94,7 +95,6 @@ __DEFAULT_YES_OPTIONS = \
     FMTREE \
     FORTH \
     FP_LIBC \
-    FREEBSD_UPDATE \
     FTP \
     GAMES \
     GCOV \
@@ -107,6 +107,7 @@ __DEFAULT_YES_OPTIONS = \
     GPL_DTC \
     GROFF \
     HAST \
+    HBSD_UPDATE \
     HTML \
     HYPERV \
     ICONV \
@@ -122,7 +123,6 @@ __DEFAULT_YES_OPTIONS = \
     LDNS \
     LDNS_UTILS \
     LEGACY_CONSOLE \
-    LIB32 \
     LIBPTHREAD \
     LIBTHR \
     LOADER_GELI \
@@ -149,18 +149,20 @@ __DEFAULT_YES_OPTIONS = \
     PF \
     PKGBOOTSTRAP \
     PMC \
-    PORTSNAP \
     PPP \
     QUOTAS \
     RADIUS_SUPPORT \
     RCMDS \
     RBOOTD \
     RCS \
+    RELRO \
     RESCUE \
     ROUTED \
     SENDMAIL \
     SETUID_LOGIN \
     SHAREDOCS \
+    SHARED_TOOLCHAIN \
+    SHLIBRANDOM \
     SOURCELESS \
     SOURCELESS_HOST \
     SOURCELESS_UCODE \
@@ -190,7 +192,10 @@ __DEFAULT_NO_OPTIONS = \
     CLANG_EXTRAS \
     DTRACE_TESTS \
     EISA \
+    FREEBSD_UPDATE \
     HESIOD \
+    LIB32 \
+    LIBRESSL \
     LIBSOFT \
     LINT \
     LOADER_FIREWIRE \
@@ -198,6 +203,7 @@ __DEFAULT_NO_OPTIONS = \
     NAND \
     OFED \
     OPENLDAP \
+    PORTSNAP \
     REPRODUCIBLE_BUILD \
     RPCBIND_WARMSTART_SUPPORT \
     SHARED_TOOLCHAIN \
@@ -300,6 +306,7 @@ BROKEN_OPTIONS+=LOADER_UBOOT
 # profiling won't work on MIPS64 because there is only assembly for o32
 BROKEN_OPTIONS+=PROFILE
 .endif
+
 .if ${__T} == "aarch64" || ${__T} == "amd64" || ${__T} == "i386" || \
     ${__T} == "powerpc64" || ${__T} == "sparc64"
 __DEFAULT_YES_OPTIONS+=CXGBETOOL
@@ -309,6 +316,18 @@ __DEFAULT_NO_OPTIONS+=CXGBETOOL
 __DEFAULT_NO_OPTIONS+=MLX5TOOL
 .endif
 
+# HardenedBSD options
+.if ${__T} == "amd64" || ${__T} == "i386" || ${__T} == "aarch64"
+__DEFAULT_YES_OPTIONS+=PIE
+.else
+__DEFAULT_NO_OPTIONS+=PIE
+.endif
+
+.if ${__T} == "amd64"
+__DEFAULT_YES_OPTIONS+=SAFESTACK
+.else
+__DEFAULT_NO_OPTIONS+=SAFESTACK
+.endif
 .include <bsd.mkopt.mk>
 
 #

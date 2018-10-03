@@ -65,12 +65,15 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#include "opt_pax.h"
+
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/ktr.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
+#include <sys/pax.h>
 #include <sys/proc.h>
 #include <sys/vmmeter.h>
 #include <sys/mman.h>
@@ -146,6 +149,7 @@ static int vm_map_stack_locked(vm_map_t map, vm_offset_t addrbos,
     int cow);
 static void vm_map_wire_entry_failure(vm_map_t map, vm_map_entry_t entry,
     vm_offset_t failed_addr);
+static int sysctl_stack_guard_page(SYSCTL_HANDLER_ARGS);
 
 #define	ENTRY_CHARGED(e) ((e)->cred != NULL || \
     ((e)->object.vm_object != NULL && (e)->object.vm_object->cred != NULL && \
@@ -299,6 +303,16 @@ vmspace_alloc(vm_offset_t min, vm_offset_t max, pmap_pinit_t pinit)
 	vm->vm_taddr = 0;
 	vm->vm_daddr = 0;
 	vm->vm_maxsaddr = 0;
+#ifdef PAX_ASLR
+	vm->vm_aslr_delta_mmap = 0;
+	vm->vm_aslr_delta_stack = 0;
+	vm->vm_aslr_delta_exec = 0;
+	vm->vm_aslr_delta_vdso = 0;
+#ifdef __LP64__
+	vm->vm_aslr_delta_map32bit = 0;
+#endif
+#endif
+
 	return (vm);
 }
 
@@ -2002,6 +2016,9 @@ vm_map_protect(vm_map_t map, vm_offset_t start, vm_offset_t end,
 	vm_object_t obj;
 	struct ucred *cred;
 	vm_prot_t old_prot;
+#ifdef PAX_NOEXEC
+	int ret;
+#endif
 
 	if (start == end)
 		return (KERN_SUCCESS);
@@ -2104,7 +2121,12 @@ vm_map_protect(vm_map_t map, vm_offset_t start, vm_offset_t end,
 			continue;
 
 		old_prot = current->protection;
-
+#ifdef PAX_NOEXEC
+		ret = pax_mprotect_enforce(curthread->td_proc, map, old_prot, new_prot);
+		if (ret != 0) {
+			return (ret);
+		}
+#endif
 		if (set_max)
 			current->protection =
 			    (current->max_protection = new_prot) &
@@ -3367,6 +3389,15 @@ vmspace_fork(struct vmspace *vm1, vm_ooffset_t *fork_charge)
 	vm2->vm_taddr = vm1->vm_taddr;
 	vm2->vm_daddr = vm1->vm_daddr;
 	vm2->vm_maxsaddr = vm1->vm_maxsaddr;
+#ifdef PAX_ASLR
+	vm2->vm_aslr_delta_exec = vm1->vm_aslr_delta_exec;
+	vm2->vm_aslr_delta_mmap = vm1->vm_aslr_delta_mmap;
+	vm2->vm_aslr_delta_stack = vm1->vm_aslr_delta_stack;
+	vm2->vm_aslr_delta_vdso = vm1->vm_aslr_delta_vdso;
+#ifdef __LP64__
+	vm2->vm_aslr_delta_map32bit = vm1->vm_aslr_delta_map32bit;
+#endif
+#endif
 	vm_map_lock(old_map);
 	if (old_map->busy)
 		vm_map_wait_busy(old_map);
@@ -3579,9 +3610,47 @@ out:
 }
 
 static int stack_guard_page = 1;
+#ifdef PAX_HARDENING
+SYSCTL_PROC(_security_bsd, OID_AUTO, stack_guard_page, CTLTYPE_INT|
+    CTLFLAG_RWTUN|CTLFLAG_SECURE, NULL, 0, sysctl_stack_guard_page,
+    "I",
+    "Specifies the number of guard pages for a stack that grows");
+#else
 SYSCTL_INT(_security_bsd, OID_AUTO, stack_guard_page, CTLFLAG_RWTUN,
     &stack_guard_page, 0,
     "Specifies the number of guard pages for a stack that grows");
+#endif
+
+#ifdef PAX_HARDENING
+static int
+sysctl_stack_guard_page(SYSCTL_HANDLER_ARGS)
+{
+	int err, val;
+
+	val = stack_guard_page;
+	err = sysctl_handle_int(oidp, &val, sizeof(int), req);
+	if (err || req->newptr == NULL)
+		return (err);
+
+	switch (val) {
+	case 0:
+		/* FALLTHROUGH */
+	case 1:
+		stack_guard_page = val;
+		err = 0;
+		break;
+	default:
+		/*
+		 * kib@'s MAP_GUARD isn't ready for more
+		 * than a single page.
+		 */
+		err = EINVAL;
+		break;
+	}
+
+	return (err);
+}
+#endif
 
 static int
 vm_map_stack_locked(vm_map_t map, vm_offset_t addrbos, vm_size_t max_ssize,
@@ -3740,7 +3809,7 @@ retry:
 	 * limit.
 	 */
 	is_procstack = addr >= (vm_offset_t)vm->vm_maxsaddr &&
-	    addr < (vm_offset_t)p->p_sysent->sv_usrstack;
+	    addr < (vm_offset_t)p->p_usrstack;
 	if (is_procstack && (ctob(vm->vm_ssize) + grow_amount > stacklim))
 		return (KERN_NO_SPACE);
 

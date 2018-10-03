@@ -59,6 +59,49 @@ TAG_ARGS=	-T ${TAGS:[*]:S/ /,/g}
 LDFLAGS+= -static
 .endif
 
+.if defined(MK_PIE)
+# Ports will not have MK_PIE defined and the following logic requires
+# it be defined.
+
+.if ${LDFLAGS:M-static}
+NOPIE=yes
+.endif
+
+.if !defined(NOPIE)
+.if ${MK_PIE} != "no"
+
+CFLAGS+= -fPIC -fPIE
+CXXFLAGS+= -fPIC -fPIE
+LDFLAGS+= -pie
+
+# Only toggle SafeStack for PIE binaries. SafeStack requires ASLR in
+# order to be effective.
+.if !defined(NOSAFESTACK)
+.if ${MK_SAFESTACK} != "no"
+CFLAGS+=	-fsanitize=safe-stack
+CXXFLAGS+=	-fsanitize=safe-stack
+LDFLAGS+=	-fsanitize=safe-stack
+.endif # ${MK_SAFESTACK} != "no"
+.endif # !defined(NOSAFESTACK)
+
+.endif # ${MK_PIE} != no
+.endif # !defined(NOPIE)
+.endif # defined(MK_PIE)
+
+.if defined(MK_RELRO)
+.if ${MK_RELRO} != "no"
+LDFLAGS+=	-Wl,-z,relro
+.endif
+
+.if ${MK_BIND_NOW} != "no"
+LDFLAGS+=	-Wl,-z,now
+.endif
+.endif
+
+.if defined(MK_LIBRESSL) && ${MK_LIBRESSL} != "no"
+CFLAGS+=	-DHAVE_LIBRESSL
+.endif
+
 .if ${MK_DEBUG_FILES} != "no"
 PROG_FULL=${PROG}.full
 # Use ${DEBUGDIR} for base system debug files, else .debug subdirectory

@@ -28,6 +28,7 @@
 
 #include "opt_witness.h"
 #include "opt_hwpmc_hooks.h"
+#include "opt_pax.h"
 
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
@@ -65,6 +66,14 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_domain.h>
 #include <sys/eventhandler.h>
 
+/*
+ * In HardenedBSD enabled builds disable these checks, since we
+ * already changed the layouts of the struct proc and struct thread.
+ * From other part, we are already incompatible with FreeBSD's
+ * prebuilt binary kernel modules, so we don't want to keep
+ * these restrictions.
+ */
+#ifndef PAX
 /*
  * Asserts below verify the stability of struct thread and struct proc
  * layout, as exposed by KBI to modules.  On head, the KBI is allowed
@@ -115,6 +124,7 @@ _Static_assert(offsetof(struct proc, p_comm) == 0x274,
 _Static_assert(offsetof(struct proc, p_emuldata) == 0x2f4,
     "struct proc KBI p_emuldata");
 #endif
+#endif /* PAX */
 
 SDT_PROVIDER_DECLARE(proc);
 SDT_PROBE_DEFINE(proc, , , lwp__exit);

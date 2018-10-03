@@ -33,6 +33,7 @@ __FBSDID("$FreeBSD$");
 #include "opt_cpu.h"
 #include "opt_isa.h"
 #include "opt_kstack_pages.h"
+#include "opt_pax.h"
 #include "opt_pmap.h"
 #include "opt_sched.h"
 #include "opt_smp.h"
@@ -137,7 +138,11 @@ volatile u_int cpu_ipi_pending[MAXCPU];
 static void	release_aps(void *dummy);
 static void	cpustop_handler_post(u_int cpu);
 
+#ifdef PAX_HARDENING
+static int	hyperthreading_allowed;
+#else
 static int	hyperthreading_allowed = 1;
+#endif
 SYSCTL_INT(_machdep, OID_AUTO, hyperthreading_allowed, CTLFLAG_RDTUN,
 	&hyperthreading_allowed, 0, "Use Intel HTT logical CPUs");
 

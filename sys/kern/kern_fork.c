@@ -39,6 +39,7 @@ __FBSDID("$FreeBSD$");
 
 #include "opt_ktrace.h"
 #include "opt_kstack_pages.h"
+#include "opt_pax.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -53,6 +54,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/mutex.h>
+#include <sys/pax.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/procdesc.h>
@@ -196,8 +198,12 @@ SYSCTL_INT(_kern, OID_AUTO, lastpid, CTLFLAG_RD, &lastpid, 0,
  * modulus that is too big causes a LOT more process table scans and slows
  * down fork processing as the pidchecked caching is defeated.
  */
-static int randompid = 0;
+int randompid = 0;
 
+#ifdef PAX_HARDENING
+SYSCTL_INT(_kern, OID_AUTO, randompid, CTLFLAG_RD, &randompid, 0,
+    "Random PID modulus");
+#else
 static int
 sysctl_kern_randompid(SYSCTL_HANDLER_ARGS)
 {
@@ -230,6 +236,7 @@ sysctl_kern_randompid(SYSCTL_HANDLER_ARGS)
 
 SYSCTL_PROC(_kern, OID_AUTO, randompid, CTLTYPE_INT|CTLFLAG_RW,
     0, 0, sysctl_kern_randompid, "I", "Random PID modulus. Special values: 0: disable, 1: choose random value");
+#endif
 
 static int
 fork_findpid(int flags)
@@ -492,6 +499,7 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 	td2->td_sa = td->td_sa;
 
 	bcopy(&p2->p_comm, &td2->td_name, sizeof(td2->td_name));
+	td2->td_pax = p2->p_pax;
 	td2->td_sigstk = td->td_sigstk;
 	td2->td_flags = TDF_INMEM;
 	td2->td_lend_user_pri = PRI_MAX;
@@ -818,6 +826,15 @@ fork1(struct thread *td, struct fork_req *fr)
 		MPASS(fr->fr_procp != NULL && fr->fr_pidp == NULL);
 	else
 		MPASS(fr->fr_procp == NULL);
+
+#ifdef PAX_SEGVGUARD
+	if (td->td_proc->p_pid != 0) {
+		error = pax_segvguard_check(curthread, curthread->td_proc->p_textvp,
+				td->td_proc->p_comm);
+		if (error)
+			return (error);
+	}
+#endif
 
 	/* Check for the undefined or unimplemented flags. */
 	if ((flags & ~(RFFLAGS | RFTSIGFLAGS(RFTSIGMASK))) != 0)

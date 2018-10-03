@@ -31,6 +31,7 @@ desc_src="${src}"
 desc_tests="${tests}"
 
 default_doc=off
+default_lib32=off
 default_src=off
 default_tests=off
 default_base_dbg=off

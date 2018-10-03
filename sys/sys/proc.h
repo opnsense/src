@@ -298,6 +298,7 @@ struct thread {
 	u_char		td_pri_class;	/* (t) Scheduling class. */
 	u_char		td_user_pri;	/* (t) User pri from estcpu and nice. */
 	u_char		td_base_user_pri; /* (t) Base user pri */
+	uint32_t	td_pax;		/* (b) Cached PaX settings from process. */
 	u_int		td_padding4;
 	u_int		td_padding5;
 	uintptr_t	td_rb_list;	/* (k) Robust list head. */
@@ -633,9 +634,16 @@ struct proc {
 	rlim_t		p_cpulimit;	/* (c) Current CPU limit in seconds. */
 	signed char	p_nice;		/* (c) Process "nice" value. */
 	int		p_fibnum;	/* in this routing domain XXX MRT */
+	uint32_t	p_pax;		/* (b) PaX is enabled to this process */
 	pid_t		p_reapsubtree;	/* (e) Pid of the direct child of the
 					       reaper which spawned
 					       our subtree. */
+	vm_offset_t	p_usrstack;	/* (b) Process stack top. */
+	vm_offset_t	p_psstrings;	/* (b) Process psstrings address. */
+	vm_offset_t	p_timekeep_base;	/* (c) Address of timekeep structure. */
+	vm_offset_t	p_shared_page_base;	/* (c) Address of shared page. */
+	vm_offset_t	p_sigcode_base;	/* (c) Address of sigcode. */
+
 /* End area that is copied on creation. */
 #define	p_endcopy	p_xexit
 

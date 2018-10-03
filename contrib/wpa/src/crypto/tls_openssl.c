@@ -125,7 +125,7 @@ struct tls_connection {
 	X509 *peer_issuer;
 	X509 *peer_issuer_issuer;
 
-#if OPENSSL_VERSION_NUMBER >= 0x10100000L
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L && !defined(LIBRESSL_VERSION_NUMBER)
 	unsigned char client_random[SSL3_RANDOM_SIZE];
 	unsigned char server_random[SSL3_RANDOM_SIZE];
 #endif
@@ -2229,7 +2229,7 @@ static int tls_parse_pkcs12(struct tls_data *data, SSL *ssl, PKCS12 *p12,
 	}
 
 	if (certs) {
-#if OPENSSL_VERSION_NUMBER >= 0x10002000L
+#if OPENSSL_VERSION_NUMBER >= 0x10002000L && !defined(LIBRESSL_VERSION_NUMBER)
 		SSL_clear_chain_certs(ssl);
 		while ((cert = sk_X509_pop(certs)) != NULL) {
 			X509_NAME_oneline(X509_get_subject_name(cert), buf,
@@ -2812,7 +2812,7 @@ int tls_connection_get_random(void *ssl_ctx, struct tls_connection *conn,
 	if (conn == NULL || keys == NULL)
 		return -1;
 	ssl = conn->ssl;
-#if OPENSSL_VERSION_NUMBER < 0x10100000L
+#if OPENSSL_VERSION_NUMBER < 0x10100000L || defined(LIBRESSL_VERSION_NUMBER)
 	if (ssl == NULL || ssl->s3 == NULL || ssl->session == NULL)
 		return -1;
 
@@ -2841,7 +2841,7 @@ int tls_connection_get_random(void *ssl_ctx, struct tls_connection *conn,
 #ifndef CONFIG_FIPS
 static int openssl_get_keyblock_size(SSL *ssl)
 {
-#if OPENSSL_VERSION_NUMBER < 0x10100000L
+#if OPENSSL_VERSION_NUMBER < 0x10100000L || defined(LIBRESSL_VERSION_NUMBER)
 	const EVP_CIPHER *c;
 	const EVP_MD *h;
 	int md_size;
@@ -2911,7 +2911,7 @@ static int openssl_tls_prf(struct tls_connection *conn,
 		   "mode");
 	return -1;
 #else /* CONFIG_FIPS */
-#if OPENSSL_VERSION_NUMBER < 0x10100000L
+#if OPENSSL_VERSION_NUMBER < 0x10100000L || defined(LIBRESSL_VERSION_NUMBER)
 	SSL *ssl;
 	u8 *rnd;
 	int ret = -1;

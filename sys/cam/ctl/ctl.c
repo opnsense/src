@@ -2456,9 +2456,7 @@ ctl_copyin_alloc(void *user_addr, unsigned int len, char *error_str,
 	kptr = malloc(len, M_CTL, M_WAITOK | M_ZERO);
 
 	if (copyin(user_addr, kptr, len) != 0) {
-		snprintf(error_str, error_str_len, "Error copying %d bytes "
-			 "from user address %p to kernel address %p", len,
-			 user_addr, kptr);
+		snprintf(error_str, error_str_len, "Error copying %d bytes", len);
 		free(kptr, M_CTL);
 		return (NULL);
 	}

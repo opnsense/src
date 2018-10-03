@@ -35,7 +35,7 @@
 : ${DIALOG_ESC=255}
 
 exec 3>&1
-HOSTNAME=`dialog --backtitle 'FreeBSD Installer' --title 'Set Hostname' --nocancel --inputbox \
+HOSTNAME=`dialog --backtitle 'HardenedBSD Installer' --title 'Set Hostname' --nocancel --inputbox \
 	'Please choose a hostname for this machine.
 
 If you are running on a managed network, please ask your network administrator for an appropriate name.' \

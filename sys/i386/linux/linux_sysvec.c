@@ -29,18 +29,20 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#include "opt_pax.h"
+
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/exec.h>
 #include <sys/fcntl.h>
 #include <sys/imgact.h>
-#include <sys/imgact_aout.h>
 #include <sys/imgact_elf.h>
 #include <sys/kernel.h>
 #include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/module.h>
 #include <sys/mutex.h>
+#include <sys/pax.h>
 #include <sys/proc.h>
 #include <sys/signalvar.h>
 #include <sys/syscallsubr.h>
@@ -244,14 +246,14 @@ elf_linux_fixup(register_t **stack_base, struct image_params *imgp)
 	    ("unsafe elf_linux_fixup(), should be curproc"));
 
 	p = imgp->proc;
+	arginfo = (struct ps_strings *)p->p_psstrings;
 	issetugid = imgp->proc->p_flag & P_SUGID ? 1 : 0;
-	arginfo = (struct ps_strings *)p->p_sysent->sv_psstrings;
 	uplatform = (Elf32_Addr *)((caddr_t)arginfo - linux_szplatform);
 	args = (Elf32_Auxargs *)imgp->auxargs;
 	pos = *stack_base + (imgp->args->argc + imgp->args->envc + 2);
 
 	AUXARGS_ENTRY(pos, LINUX_AT_SYSINFO_EHDR,
-	    imgp->proc->p_sysent->sv_shared_page_base);
+	    imgp->proc->p_shared_page_base);
 	AUXARGS_ENTRY(pos, LINUX_AT_SYSINFO, linux_vsyscall);
 	AUXARGS_ENTRY(pos, LINUX_AT_HWCAP, cpu_feature);
 
@@ -316,7 +318,7 @@ linux_copyout_strings(struct image_params *imgp)
 		execpath_len = strlen(imgp->execpath) + 1;
 	else
 		execpath_len = 0;
-	arginfo = (struct ps_strings *)p->p_sysent->sv_psstrings;
+	arginfo = (struct ps_strings *)p->p_psstrings;
 	destp = (caddr_t)arginfo - SPARE_USRSPACE - linux_szplatform -
 	    roundup(sizeof(canary), sizeof(char *)) -
 	    roundup(execpath_len, sizeof(char *)) -
@@ -956,43 +958,6 @@ linux_get_machine(const char **dst)
 	}
 }
 
-struct sysentvec linux_sysvec = {
-	.sv_size	= LINUX_SYS_MAXSYSCALL,
-	.sv_table	= linux_sysent,
-	.sv_mask	= 0,
-	.sv_errsize	= ELAST + 1,
-	.sv_errtbl	= bsd_to_linux_errno,
-	.sv_transtrap	= translate_traps,
-	.sv_fixup	= linux_fixup,
-	.sv_sendsig	= linux_sendsig,
-	.sv_sigcode	= &_binary_linux_locore_o_start,
-	.sv_szsigcode	= &linux_szsigcode,
-	.sv_name	= "Linux a.out",
-	.sv_coredump	= NULL,
-	.sv_imgact_try	= exec_linux_imgact_try,
-	.sv_minsigstksz	= LINUX_MINSIGSTKSZ,
-	.sv_pagesize	= PAGE_SIZE,
-	.sv_minuser	= VM_MIN_ADDRESS,
-	.sv_maxuser	= VM_MAXUSER_ADDRESS,
-	.sv_usrstack	= LINUX_USRSTACK,
-	.sv_psstrings	= PS_STRINGS,
-	.sv_stackprot	= VM_PROT_ALL,
-	.sv_copyout_strings = exec_copyout_strings,
-	.sv_setregs	= exec_linux_setregs,
-	.sv_fixlimit	= NULL,
-	.sv_maxssiz	= NULL,
-	.sv_flags	= SV_ABI_LINUX | SV_AOUT | SV_IA32 | SV_ILP32,
-	.sv_set_syscall_retval = cpu_set_syscall_retval,
-	.sv_fetch_syscall_args = linux_fetch_syscall_args,
-	.sv_syscallnames = NULL,
-	.sv_shared_page_base = LINUX_SHAREDPAGE,
-	.sv_shared_page_len = PAGE_SIZE,
-	.sv_schedtail	= linux_schedtail,
-	.sv_thread_detach = linux_thread_detach,
-	.sv_trap	= NULL,
-};
-INIT_SYSENTVEC(aout_sysvec, &linux_sysvec);
-
 struct sysentvec elf_linux_sysvec = {
 	.sv_size	= LINUX_SYS_MAXSYSCALL,
 	.sv_table	= linux_sysent,
@@ -1027,6 +992,7 @@ struct sysentvec elf_linux_sysvec = {
 	.sv_schedtail	= linux_schedtail,
 	.sv_thread_detach = linux_thread_detach,
 	.sv_trap	= NULL,
+	.sv_pax_aslr_init = pax_aslr_init_vmspace,
 };
 
 static void

@@ -1,6 +1,7 @@
 # $FreeBSD$
 
 HAVE_FDT=yes
+NOPIE=yes
 
 SRCS+=	exec.c \
 	start.S

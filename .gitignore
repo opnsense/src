@@ -1,3 +1,5 @@
+.clang_complete
+.snap
 _.tinderbox.*
 _.amd64.*
 _.arm.*
@@ -14,5 +16,6 @@ GPATH
 GRTAGS
 GTAGS
 ID
+.tags
 cscope.out
 ?cscope.out

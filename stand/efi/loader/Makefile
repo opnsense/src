@@ -11,6 +11,7 @@ LOADER_EXT2FS_SUPPORT?=	no
 PROG=		loader.sym
 INTERNALPROG=
 WARNS?=		3
+NOPIE=		yes
 
 # architecture-specific loader code
 SRCS=	autoload.c \

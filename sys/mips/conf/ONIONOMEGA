@@ -53,3 +53,16 @@ device          geom_map
 
 # Boot off of the rootfs, as defined in the geom_map setup.
 options 	ROOTDEVNAME=\"ufs:map/rootfs.uzip\"
+
+options		PAX
+options		PAX_ASLR
+options		PAX_HARDENING
+options		PAX_SEGVGUARD
+options		PAX_NOEXEC
+options		PAX_SYSCTLS
+options		HBSD_DEBUG
+
+options		INVARIANTS
+options		INVARIANT_SUPPORT
+
+options		BOOTVERBOSE=1
