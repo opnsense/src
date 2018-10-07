@@ -138,4 +138,3 @@ gdb_end_write(void *arg)
 
 	load_cr0((u_long)arg);
 }
-

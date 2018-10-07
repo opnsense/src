@@ -66,7 +66,7 @@ ATF_TC_BODY(kern_copyin, tc)
 	/*
 	 * On HardenedBSD, the last page not always mapped in contrast
 	 * to FreeBSD, where the last page always mapped as shared page.
-	 * 
+	 *
 	 * To fix this test, which expects the existence of the last page
 	 * just map them in at the test start, and unmap them at the end.
 	 */

@@ -198,7 +198,6 @@ CFLAGS+= -I${DESTDIR}/usr/include/openssl
 CFLAGS+= -DHAVE_LIBCRYPTO -DHAVE_OPENSSL_EVP_H
 .endif
 
-
 .if ${MK_PF} != "no"
 SRCS+=	print-pflog.c \
 	print-pfsync.c

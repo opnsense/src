@@ -14,5 +14,4 @@ HardenedBSD ?.?.?  (UNKNOWN)
 +------------------------------------------------------------------------------+
 |     keyword: sysctl, secadm, git, github.com/hardenedbsd hardenedbsd.org     |
 +------------------------------------------------------------------------------+
-                Edit /etc/motd to change this login announcement.               
-
+                Edit /etc/motd to change this login announcement.

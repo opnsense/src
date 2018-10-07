@@ -11,7 +11,6 @@ MAN=		iscsid.8
 
 LIBADD=		md util
 
-
 WARNS=		6
 
 .include <bsd.prog.mk>

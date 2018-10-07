@@ -305,7 +305,6 @@ BROKEN_OPTIONS+=LOADER_UBOOT
 # profiling won't work on MIPS64 because there is only assembly for o32
 BROKEN_OPTIONS+=PROFILE
 .endif
-
 .if ${__T} == "aarch64" || ${__T} == "amd64" || ${__T} == "i386" || \
     ${__T} == "powerpc64" || ${__T} == "sparc64"
 __DEFAULT_YES_OPTIONS+=CXGBETOOL

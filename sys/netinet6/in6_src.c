@@ -66,7 +66,6 @@ __FBSDID("$FreeBSD$");
 #include "opt_inet.h"
 #include "opt_inet6.h"
 #include "opt_mpath.h"
-#include "opt_pax.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -129,11 +128,7 @@ static struct sx addrsel_sxlock;
 static VNET_DEFINE(struct in6_addrpolicy, defaultaddrpolicy);
 #define	V_defaultaddrpolicy		VNET(defaultaddrpolicy)
 
-#ifdef PAX_HARDENING
-VNET_DEFINE(int, ip6_prefer_tempaddr) = 1;
-#else
 VNET_DEFINE(int, ip6_prefer_tempaddr) = 0;
-#endif
 
 static int selectroute(struct sockaddr_in6 *, struct ip6_pktopts *,
 	struct ip6_moptions *, struct route_in6 *, struct ifnet **,

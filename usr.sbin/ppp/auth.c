@@ -129,7 +129,7 @@ auth_CheckPasswd(const char *name, const char *data, const char *key)
     struct passwd *pw;
     int result = 0;
     char *cryptpw;
-    
+
     pw = getpwnam(name);
 
     if (pw) {

@@ -29,5 +29,4 @@ CFLAGS+= -DIPSEC
 LIBADD+=	ipsec
 .endif
 
-
 .include <bsd.prog.mk>

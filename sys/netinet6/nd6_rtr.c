@@ -34,7 +34,6 @@ __FBSDID("$FreeBSD$");
 
 #include "opt_inet.h"
 #include "opt_inet6.h"
-#include "opt_pax.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -97,11 +96,7 @@ static VNET_DEFINE(struct ifnet *, nd6_defifp);
 VNET_DEFINE(int, nd6_defifindex);
 #define	V_nd6_defifp			VNET(nd6_defifp)
 
-#ifdef PAX_HARDENING
-VNET_DEFINE(int, ip6_use_tempaddr) = 1;
-#else
 VNET_DEFINE(int, ip6_use_tempaddr) = 0;
-#endif
 
 VNET_DEFINE(int, ip6_desync_factor);
 VNET_DEFINE(u_int32_t, ip6_temp_preferred_lifetime) = DEF_TEMP_PREFERRED_LIFETIME;

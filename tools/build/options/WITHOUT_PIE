@@ -1,1 +1,2 @@
+.\" $FreeBSD$
 Disable building of Position-Independent Executables (PIEs).

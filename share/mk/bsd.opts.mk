@@ -76,6 +76,7 @@ __DEFAULT_DEPENDENT_OPTIONS = \
     STAGING_MAN/STAGING \
     STAGING_PROG/STAGING \
 
+
 .include <bsd.mkopt.mk>
 
 #
