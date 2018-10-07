@@ -41,6 +41,7 @@ SUBDIR=	\
 	amr \
 	${_an} \
 	${_aout} \
+	${_apuled} \
 	${_arcmsr} \
 	${_allwinner} \
 	${_armv8crypto} \
@@ -628,6 +629,7 @@ _sdhci_fdt=	sdhci_fdt
 _agp=		agp
 _an=		an
 _aout=		aout
+_apuled=	apuled
 _bios=		bios
 .if ${MK_SOURCELESS_UCODE} != "no"
 _bxe=		bxe
