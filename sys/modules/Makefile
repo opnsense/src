@@ -41,6 +41,7 @@ SUBDIR=	\
 	amr \
 	${_an} \
 	${_apm} \
+	${_apuled} \
 	${_arcmsr} \
 	${_arcnet} \
 	${_asmc} \
@@ -565,6 +566,7 @@ _igb=		igb
 .if ${MACHINE_CPUARCH} == "i386" || ${MACHINE_CPUARCH} == "amd64"
 _agp=		agp
 _an=		an
+_apuled=	apuled
 _bios=		bios
 _bktr=		bktr
 .if ${MK_SOURCELESS_UCODE} != "no"
