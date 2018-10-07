@@ -38,6 +38,7 @@ SUBDIR=	\
 	${_amdsmn} \
 	${_amdtemp} \
 	${_aout} \
+	${_apuled} \
 	${_arcmsr} \
 	${_allwinner} \
 	${_armv8crypto} \
@@ -711,6 +712,7 @@ _agp=		agp
 .if ${MACHINE_CPUARCH} == "i386" || !empty(COMPAT_FREEBSD32_ENABLED)
 _aout=		aout
 .endif
+_apuled=	apuled
 _bios=		bios
 .if ${MK_SOURCELESS_UCODE} != "no"
 _bxe=		bxe
