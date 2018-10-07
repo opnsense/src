@@ -41,6 +41,7 @@ SUBDIR=	\
 	amr \
 	${_an} \
 	${_aout} \
+	${_apuled} \
 	${_arcmsr} \
 	${_allwinner} \
 	${_armv8crypto} \
@@ -687,6 +688,7 @@ _an=		an
 .if ${MACHINE_CPUARCH} == "i386" || !empty(COMPAT_FREEBSD32_ENABLED)
 _aout=		aout
 .endif
+_apuled=	apuled
 _bios=		bios
 .if ${MK_SOURCELESS_UCODE} != "no"
 _bxe=		bxe
