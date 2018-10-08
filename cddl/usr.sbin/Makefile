@@ -27,7 +27,7 @@ _zfsd=	zfsd
 
 .if ${MACHINE_ARCH} == "amd64" || ${MACHINE_ARCH} == "i386"
 _dtrace=	dtrace
-#_dwatch=	dwatch
+_dwatch=	dwatch
 _lockstat=	lockstat
 _plockstat=	plockstat
 .endif
@@ -35,18 +35,18 @@ _plockstat=	plockstat
 .if ${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "arm" || \
     ${MACHINE_CPUARCH} == "riscv"
 _dtrace=	dtrace
-#_dwatch=	dwatch
+_dwatch=	dwatch
 _lockstat=	lockstat
 .endif
 
 .if ${MACHINE_CPUARCH} == "mips"
 _dtrace=	dtrace
-#_dwatch=	dwatch
+_dwatch=	dwatch
 .endif
 
 .if ${MACHINE_CPUARCH} == "powerpc"
 _dtrace=	dtrace
-#_dwatch=	dwatch
+_dwatch=	dwatch
 _lockstat=	lockstat
 .endif
 
