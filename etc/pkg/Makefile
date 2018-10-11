@@ -2,7 +2,7 @@
 
 NO_OBJ=
 
-FILES=	FreeBSD.conf HardenedBSD.conf
+FILES=	FreeBSD.conf
 
 FILESDIR=	/etc/pkg
 FILESMODE=	644
