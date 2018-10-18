@@ -1474,9 +1474,11 @@ pf_purge_thread(void *unused __unused)
 	VNET_ITERATOR_DECL(vnet_iter);
 	u_int idx = 0;
 
+	PF_RULES_RLOCK_TRACKER;
+
 	for (;;) {
 		PF_RULES_RLOCK();
-		rw_sleep(pf_purge_thread, &pf_rules_lock, 0, "pftm", hz / 10);
+		rm_sleep(pf_purge_thread, &pf_rules_lock, 0, "pftm", hz / 10);
 		PF_RULES_RUNLOCK();
 
 		VNET_LIST_RLOCK();
@@ -6126,6 +6128,8 @@ pf_test(int dir, int pflags, struct ifnet *ifp, struct mbuf **m0, struct inpcb *
 	int			 share_forward = V_pf_share_forward;
 	u_short			 ifidx;
 
+	PF_RULES_RLOCK_TRACKER;
+
 	M_ASSERTPKTHDR(m);
 
 	if (!V_pf_status.running)
@@ -6530,6 +6534,7 @@ pf_test6(int dir, int pflags, struct ifnet *ifp, struct mbuf **m0, struct inpcb 
 	int			 share_forward = V_pf_share_forward6;
 	u_short			 ifidx;
 
+	PF_RULES_RLOCK_TRACKER;
 	M_ASSERTPKTHDR(m);
 
 	if (!V_pf_status.running)
