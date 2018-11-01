@@ -571,7 +571,11 @@ __elfN(load_section)(struct image_params *imgp, vm_ooffset_t offset,
 				      map_addr,		/* virtual start */
 				      map_addr + map_len,/* virtual end */
 				      prot,
+#if defined(PAX_INSECURE_MODE) && defined(__i386__)
+				      VM_PROT_ALL,
+#else
 				      prot,
+#endif
 				      cow);
 		if (rv != KERN_SUCCESS)
 			return (EINVAL);
