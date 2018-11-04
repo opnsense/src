@@ -62,7 +62,7 @@ __FBSDID("$FreeBSD$");
 FEATURE(hbsd_segvguard, "Segmentation fault protection.");
 
 #ifdef PAX_HARDENING
-static int pax_segvguard_status = PAX_FEATURE_OPTIN; /* XXXOP */
+static int pax_segvguard_status = PAX_FEATURE_OPTOUT; /* XXXOP */
 #else
 static int pax_segvguard_status = PAX_FEATURE_OPTIN;
 #endif
