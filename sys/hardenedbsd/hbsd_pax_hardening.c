@@ -133,6 +133,7 @@ pax_hardening_init_prison(struct prison *pr, struct vfsoptlist *opts)
 		/* prison0 has no parent, use globals */
 		pr->pr_hbsd.hardening.procfs_harden =
 		    pax_procfs_harden_global;
+		pr->pr_allow &= ~(PR_ALLOW_UNPRIV_DEBUG);
 	} else {
 		KASSERT(pr->pr_parent != NULL,
 		   ("%s: pr->pr_parent == NULL", __func__));
