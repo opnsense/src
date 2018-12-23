@@ -29,8 +29,6 @@
  * Generic message buffer support routines.
  */
 
-#include "opt_pax.h"
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/lock.h>
@@ -54,11 +52,7 @@ static u_int msgbuf_cksum(struct msgbuf *mbp);
  * Timestamps in msgbuf are useful when trying to diagnose when core dumps
  * or other actions occurred.
  */
-#ifdef PAX_HARDENING
-static int msgbuf_show_timestamp = 1;
-#else
 static int msgbuf_show_timestamp = 0;
-#endif
 SYSCTL_INT(_kern, OID_AUTO, msgbuf_show_timestamp, CTLFLAG_RWTUN,
     &msgbuf_show_timestamp, 0, "Show timestamp in msgbuf");
 
