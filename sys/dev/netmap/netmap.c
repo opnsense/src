@@ -453,7 +453,6 @@ ports attached to the switch)
 #include <machine/bus.h>	/* bus_dmamap_* */
 #include <sys/endian.h>
 #include <sys/refcount.h>
-#include <net/ethernet.h>      /* ETHER_BPF_MTAP */
 
 
 /* reduce conditional code */
@@ -2909,10 +2908,6 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 			len, NETMAP_BUF_SIZE(na));
 		goto done;
 	}
-
-#ifdef __FreeBSD__
-        ETHER_BPF_MTAP(ifp, m);
-#endif /* __FreeBSD__ */
 
 	/* protect against rxsync_from_host(), netmap_sw_to_nic()
 	 * and maybe other instances of netmap_transmit (the latter
