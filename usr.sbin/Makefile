@@ -168,7 +168,8 @@ SUBDIR.${MK_NAND}+=	nandtool
 SUBDIR.${MK_NETGRAPH}+=	flowctl
 SUBDIR.${MK_NETGRAPH}+=	lmcconfig
 SUBDIR.${MK_NETGRAPH}+=	ngctl
-SUBDIR.${MK_NETGRAPH}+=	nghook
+# XXX does not compile on armv6
+#SUBDIR.${MK_NETGRAPH}+=	nghook
 SUBDIR.${MK_NIS}+=	rpc.yppasswdd
 SUBDIR.${MK_NIS}+=	rpc.ypupdated
 SUBDIR.${MK_NIS}+=	rpc.ypxfrd
