@@ -168,8 +168,9 @@ SUBDIR.${MK_NAND}+=	nandtool
 SUBDIR.${MK_NETGRAPH}+=	flowctl
 SUBDIR.${MK_NETGRAPH}+=	lmcconfig
 SUBDIR.${MK_NETGRAPH}+=	ngctl
-# XXX does not compile on armv6
-#SUBDIR.${MK_NETGRAPH}+=	nghook
+.if ${MACHINE_ARCH} != "armv6"
+SUBDIR.${MK_NETGRAPH}+=	nghook
+.endif
 SUBDIR.${MK_NIS}+=	rpc.yppasswdd
 SUBDIR.${MK_NIS}+=	rpc.ypupdated
 SUBDIR.${MK_NIS}+=	rpc.ypxfrd
@@ -205,7 +206,9 @@ SUBDIR.${MK_TIMED}+=	timed
 SUBDIR.${MK_TOOLCHAIN}+=	config
 SUBDIR.${MK_TOOLCHAIN}+=	crunch
 SUBDIR.${MK_UNBOUND}+=	unbound
+.if ${MACHINE_ARCH} != "armv6"
 SUBDIR.${MK_USB}+=	uathload
+.endif
 SUBDIR.${MK_USB}+=	uhsoctl
 SUBDIR.${MK_USB}+=	usbconfig
 SUBDIR.${MK_USB}+=	usbdump
