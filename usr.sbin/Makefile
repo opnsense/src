@@ -188,7 +188,9 @@ SUBDIR.${MK_PF}+=	ftp-proxy
 SUBDIR.${MK_PKGBOOTSTRAP}+=	pkg
 SUBDIR.${MK_PMC}+=	pmcannotate
 SUBDIR.${MK_PMC}+=	pmccontrol
+.if ${MACHINE_ARCH} != "armv6"
 SUBDIR.${MK_PMC}+=	pmcstat
+.endif
 SUBDIR.${MK_PMC}+=	pmcstudy
 SUBDIR.${MK_PORTSNAP}+=	portsnap
 SUBDIR.${MK_PPP}+=	ppp
