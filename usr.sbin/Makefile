@@ -168,9 +168,7 @@ SUBDIR.${MK_NAND}+=	nandtool
 SUBDIR.${MK_NETGRAPH}+=	flowctl
 SUBDIR.${MK_NETGRAPH}+=	lmcconfig
 SUBDIR.${MK_NETGRAPH}+=	ngctl
-.if ${MACHINE_ARCH} != "armv6"
 SUBDIR.${MK_NETGRAPH}+=	nghook
-.endif
 SUBDIR.${MK_NIS}+=	rpc.yppasswdd
 SUBDIR.${MK_NIS}+=	rpc.ypupdated
 SUBDIR.${MK_NIS}+=	rpc.ypxfrd
@@ -188,9 +186,7 @@ SUBDIR.${MK_PF}+=	ftp-proxy
 SUBDIR.${MK_PKGBOOTSTRAP}+=	pkg
 SUBDIR.${MK_PMC}+=	pmcannotate
 SUBDIR.${MK_PMC}+=	pmccontrol
-.if ${MACHINE_ARCH} != "armv6"
 SUBDIR.${MK_PMC}+=	pmcstat
-.endif
 SUBDIR.${MK_PMC}+=	pmcstudy
 SUBDIR.${MK_PORTSNAP}+=	portsnap
 SUBDIR.${MK_PPP}+=	ppp
@@ -208,9 +204,7 @@ SUBDIR.${MK_TIMED}+=	timed
 SUBDIR.${MK_TOOLCHAIN}+=	config
 SUBDIR.${MK_TOOLCHAIN}+=	crunch
 SUBDIR.${MK_UNBOUND}+=	unbound
-.if ${MACHINE_ARCH} != "armv6"
 SUBDIR.${MK_USB}+=	uathload
-.endif
 SUBDIR.${MK_USB}+=	uhsoctl
 SUBDIR.${MK_USB}+=	usbconfig
 SUBDIR.${MK_USB}+=	usbdump
