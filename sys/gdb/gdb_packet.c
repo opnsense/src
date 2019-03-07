@@ -145,7 +145,6 @@ gdb_rx_mem(unsigned char *addr, size_t size)
 {
 	unsigned char *p;
 	void *prev;
-	void *wctx;
 	jmp_buf jb;
 	size_t cnt;
 	int ret;
@@ -154,7 +153,6 @@ gdb_rx_mem(unsigned char *addr, size_t size)
 	if (size * 2 != gdb_rxsz)
 		return (-1);
 
-	wctx = gdb_begin_write();
 	prev = kdb_jmpbuf(jb);
 	ret = setjmp(jb);
 	if (ret == 0) {
@@ -170,7 +168,6 @@ gdb_rx_mem(unsigned char *addr, size_t size)
 		kdb_cpu_sync_icache(addr, size);
 	}
 	(void)kdb_jmpbuf(prev);
-	gdb_end_write(wctx);
 	return ((ret == 0) ? 1 : 0);
 }
 

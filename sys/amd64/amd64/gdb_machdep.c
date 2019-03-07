@@ -34,13 +34,11 @@ __FBSDID("$FreeBSD$");
 #include <sys/proc.h>
 #include <sys/signal.h>
 
-#include <machine/cpufunc.h>
 #include <machine/frame.h>
 #include <machine/gdb_machdep.h>
 #include <machine/pcb.h>
 #include <machine/psl.h>
 #include <machine/reg.h>
-#include <machine/specialreg.h>
 #include <machine/trap.h>
 #include <machine/frame.h>
 #include <machine/endian.h>
@@ -120,21 +118,4 @@ gdb_cpu_signal(int type, int code)
 	case 16: return (SIGEMT);	/* Coprocessor error. */
 	}
 	return (SIGEMT);
-}
-
-void *
-gdb_begin_write(void)
-{
-	u_long cr0save;
-
-	cr0save = rcr0();
-	load_cr0(cr0save & ~CR0_WP);
-	return ((void *)cr0save);
-}
-
-void
-gdb_end_write(void *arg)
-{
-
-	load_cr0((u_long)arg);
 }
