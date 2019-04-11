@@ -2117,31 +2117,27 @@ mmc_go_discovery(struct mmc_softc *sc)
 static int
 mmc_calculate_clock(struct mmc_softc *sc)
 {
-	device_t *kids;
+	device_t dev;
 	struct mmc_ivars *ivar;
-	int host_caps, i, nkid;
+	int i;
 	uint32_t dtr, max_dtr;
+	uint16_t rca;
 	enum mmc_bus_timing max_timing, timing;
-	bool changed;
+	bool changed, hs400;
 
-	max_dtr = mmcbr_get_f_max(sc->dev);
-	host_caps = mmcbr_get_caps(sc->dev);
-	if ((host_caps & MMC_CAP_MMC_DDR52) != 0)
-		max_timing = bus_timing_mmc_ddr52;
-	else if ((host_caps & MMC_CAP_HSPEED) != 0)
-		max_timing = bus_timing_hs;
-	else
-		max_timing = bus_timing_normal;
-	if (device_get_children(sc->dev, &kids, &nkid) != 0)
-		panic("can't get children");
+	dev = sc->dev;
+	max_dtr = mmcbr_get_f_max(dev);
+	max_timing = bus_timing_max;
 	do {
 		changed = false;
-		for (i = 0; i < nkid; i++) {
-			ivar = device_get_ivars(kids[i]);
-			if (isclr(&ivar->timings, max_timing)) {
-				for (timing = max_timing; timing >=
+		for (i = 0; i < sc->child_count; i++) {
+			ivar = device_get_ivars(sc->child_list[i]);
+			if (isclr(&ivar->timings, max_timing) ||
+			    !mmc_host_timing(dev, max_timing)) {
+				for (timing = max_timing - 1; timing >=
 				    bus_timing_normal; timing--) {
-					if (isset(&ivar->timings, timing)) {
+					if (isset(&ivar->timings, timing) &&
+					    mmc_host_timing(dev, timing)) {
 						max_timing = timing;
 						break;
 					}
@@ -2155,25 +2151,118 @@ mmc_calculate_clock(struct mmc_softc *sc)
 			}
 		}
 	} while (changed == true);
+
 	if (bootverbose || mmc_debug) {
-		device_printf(sc->dev,
+		device_printf(dev,
 		    "setting transfer rate to %d.%03dMHz (%s timing)\n",
 		    max_dtr / 1000000, (max_dtr / 1000) % 1000,
 		    mmc_timing_to_string(max_timing));
 	}
-	for (i = 0; i < nkid; i++) {
-		ivar = device_get_ivars(kids[i]);
+
+	/*
+	 * HS400 must be tuned in HS200 mode, so in case of HS400 we begin
+	 * with HS200 following the sequence as described in "6.6.2.2 HS200
+	 * timing mode selection" of the eMMC specification v5.1, too, and
+	 * switch to max_timing later.  HS400ES requires no tuning and, thus,
+	 * can be switch to directly, but requires the same detour via high
+	 * speed mode as does HS400 (see mmc_switch_to_hs400()).
+	 */
+	hs400 = max_timing == bus_timing_mmc_hs400;
+	timing = hs400 == true ? bus_timing_mmc_hs200 : max_timing;
+	for (i = 0; i < sc->child_count; i++) {
+		ivar = device_get_ivars(sc->child_list[i]);
 		if ((ivar->timings & ~(1 << bus_timing_normal)) == 0)
 			continue;
-		if (mmc_select_card(sc, ivar->rca) != MMC_ERR_NONE ||
-		    mmc_set_timing(sc, ivar, max_timing) != MMC_ERR_NONE)
-			device_printf(sc->dev, "Card at relative address %d "
-			    "failed to set timing.\n", ivar->rca);
+
+		rca = ivar->rca;
+		if (mmc_select_card(sc, rca) != MMC_ERR_NONE) {
+			device_printf(dev, "Card at relative address %d "
+			    "failed to select\n", rca);
+			continue;
+		}
+
+		if (timing == bus_timing_mmc_hs200 ||	/* includes HS400 */
+		    timing == bus_timing_mmc_hs400es) {
+			if (mmc_set_vccq(sc, ivar, timing) != MMC_ERR_NONE) {
+				device_printf(dev, "Failed to set VCCQ for "
+				    "card at relative address %d\n", rca);
+				continue;
+			}
+		}
+
+		if (timing == bus_timing_mmc_hs200) {	/* includes HS400 */
+			/* Set bus width (required for initial tuning). */
+			if (mmc_set_card_bus_width(sc, ivar, timing) !=
+			    MMC_ERR_NONE) {
+				device_printf(dev, "Card at relative address "
+				    "%d failed to set bus width\n", rca);
+				continue;
+			}
+			mmcbr_set_bus_width(dev, ivar->bus_width);
+			mmcbr_update_ios(dev);
+		} else if (timing == bus_timing_mmc_hs400es) {
+			if (mmc_switch_to_hs400(sc, ivar, max_dtr, timing) !=
+			    MMC_ERR_NONE) {
+				device_printf(dev, "Card at relative address "
+				    "%d failed to set %s timing\n", rca,
+				    mmc_timing_to_string(timing));
+				continue;
+			}
+			goto power_class;
+		}
+
+		if (mmc_set_timing(sc, ivar, timing) != MMC_ERR_NONE) {
+			device_printf(dev, "Card at relative address %d "
+			    "failed to set %s timing\n", rca,
+			    mmc_timing_to_string(timing));
+			continue;
+		}
+
+		if (timing == bus_timing_mmc_ddr52) {
+			/*
+			 * Set EXT_CSD_BUS_WIDTH_n_DDR in EXT_CSD_BUS_WIDTH
+			 * (must be done after switching to EXT_CSD_HS_TIMING).
+			 */
+			if (mmc_set_card_bus_width(sc, ivar, timing) !=
+			    MMC_ERR_NONE) {
+				device_printf(dev, "Card at relative address "
+				    "%d failed to set bus width\n", rca);
+				continue;
+			}
+			mmcbr_set_bus_width(dev, ivar->bus_width);
+			mmcbr_update_ios(dev);
+			if (mmc_set_vccq(sc, ivar, timing) != MMC_ERR_NONE) {
+				device_printf(dev, "Failed to set VCCQ for "
+				    "card at relative address %d\n", rca);
+				continue;
+			}
+		}
+
+		/* Set clock (must be done before initial tuning). */
+		mmcbr_set_clock(dev, max_dtr);
+		mmcbr_update_ios(dev);
+
+		if (mmcbr_tune(dev, hs400) != 0) {
+			device_printf(dev, "Card at relative address %d "
+			    "failed to execute initial tuning\n", rca);
+			continue;
+		}
+
+		if (hs400 == true && mmc_switch_to_hs400(sc, ivar, max_dtr,
+		    max_timing) != MMC_ERR_NONE) {
+			device_printf(dev, "Card at relative address %d "
+			    "failed to set %s timing\n", rca,
+			    mmc_timing_to_string(max_timing));
+			continue;
+		}
+
+power_class:
+		if (mmc_set_power_class(sc, ivar) != MMC_ERR_NONE) {
+			device_printf(dev, "Card at relative address %d "
+			    "failed to set power class\n", rca);
+		}
 	}
-	mmc_select_card(sc, 0);
-	free(kids, M_TEMP);
-	mmcbr_set_clock(sc->dev, max_dtr);
-	mmcbr_update_ios(sc->dev);
+	(void)mmc_select_card(sc, 0);
 	return (max_dtr);
 }
 
