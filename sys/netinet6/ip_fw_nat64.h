@@ -1,8 +1,9 @@
 /*-
- * Copyright (c) 2015 Yandex LLC
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
+ * Copyright (c) 2015-2019 Yandex LLC
  * Copyright (c) 2015 Alexander V. Chernikov <melifaro@FreeBSD.org>
- * Copyright (c) 2016 Andrey V. Elsukov <ae@FreeBSD.org>
- * All rights reserved.
+ * Copyright (c) 2015-2019 Andrey V. Elsukov <ae@FreeBSD.org>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -40,7 +41,20 @@ struct ipfw_nat64stl_stats {
 	uint64_t	noroute4;
 	uint64_t	noroute6;
 	uint64_t	noproto;	/* Protocol not supported */
-	uint64_t	nomem;		/* mbuf allocation filed */
+	uint64_t	nomem;		/* mbuf allocation failed */
+	uint64_t	dropped;	/* dropped due to some errors */
+};
+
+struct ipfw_nat64clat_stats {
+	uint64_t	opcnt64;	/* 6to4 of packets translated */
+	uint64_t	opcnt46;	/* 4to6 of packets translated */
+	uint64_t	ofrags;		/* number of fragments generated */
+	uint64_t	ifrags;		/* number of fragments received */
+	uint64_t	oerrors;	/* number of output errors */
+	uint64_t	noroute4;
+	uint64_t	noroute6;
+	uint64_t	noproto;	/* Protocol not supported */
+	uint64_t	nomem;		/* mbuf allocation failed */
 	uint64_t	dropped;	/* dropped due to some errors */
 };
 
@@ -53,7 +67,7 @@ struct ipfw_nat64lsn_stats {
 	uint64_t	noroute4;
 	uint64_t	noroute6;
 	uint64_t	noproto;	/* Protocol not supported */
-	uint64_t	nomem;		/* mbuf allocation filed */
+	uint64_t	nomem;		/* mbuf allocation failed */
 	uint64_t	dropped;	/* dropped due to some errors */
 
 	uint64_t	nomatch4;	/* No addr/port match */
@@ -79,8 +93,10 @@ struct ipfw_nat64lsn_stats {
 	uint64_t	_reserved[4];
 };
 
-#define	NAT64_LOG	0x0001		/* Enable logging via BPF */
-
+#define	NAT64_LOG		0x0001	/* Enable logging via BPF */
+#define	NAT64_ALLOW_PRIVATE	0x0002	/* Allow private IPv4 address
+					 * translation
+					 */
 typedef struct _ipfw_nat64stl_cfg {
 	char		name[64];	/* NAT name			*/
 	ipfw_obj_ntlv	ntlv6;		/* object name tlv		*/
@@ -92,10 +108,21 @@ typedef struct _ipfw_nat64stl_cfg {
 	uint32_t	flags;
 } ipfw_nat64stl_cfg;
 
+typedef struct _ipfw_nat64clat_cfg {
+	char		name[64];	/* NAT name			*/
+	struct in6_addr	plat_prefix;	/* NAT64 (PLAT) prefix */
+	struct in6_addr	clat_prefix;	/* Client (CLAT) prefix */
+	uint8_t		plat_plen;	/* PLAT Prefix length */
+	uint8_t		clat_plen;	/* CLAT Prefix length */
+	uint8_t		set;		/* Named instance set [0..31] */
+	uint8_t		spare;
+	uint32_t	flags;
+} ipfw_nat64clat_cfg;
+
 /*
  * NAT64LSN default configuration values
  */
-#define	NAT64LSN_MAX_PORTS	2048	/* Max number of ports per host */
+#define	NAT64LSN_MAX_PORTS	2048	/* Unused */
 #define	NAT64LSN_JMAXLEN	2048	/* Max outstanding requests. */
 #define	NAT64LSN_TCP_SYN_AGE	10	/* State's TTL after SYN received. */
 #define	NAT64LSN_TCP_EST_AGE	(2 * 3600) /* TTL for established connection */
@@ -108,16 +135,20 @@ typedef struct _ipfw_nat64stl_cfg {
 typedef struct _ipfw_nat64lsn_cfg {
 	char		name[64];	/* NAT name			*/
 	uint32_t	flags;
-	uint32_t	max_ports;	/* Max ports per client */
-	uint32_t	agg_prefix_len;	/* Prefix length to count */
-	uint32_t	agg_prefix_max;	/* Max hosts per agg prefix */
+
+	uint32_t	max_ports;      /* Unused */
+	uint32_t	agg_prefix_len; /* Unused */
+	uint32_t	agg_prefix_max; /* Unused */
+
 	struct in_addr	prefix4;
 	uint16_t	plen4;		/* Prefix length */
 	uint16_t	plen6;		/* Prefix length */
 	struct in6_addr	prefix6;	/* NAT64 prefix */
 	uint32_t	jmaxlen;	/* Max jobqueue length */
-	uint16_t	min_port;	/* Min port group # to use */
-	uint16_t	max_port;	/* Max port group # to use */
+
+	uint16_t	min_port;	/* Unused */
+	uint16_t	max_port;	/* Unused */
+
 	uint16_t	nh_delete_delay;/* Stale host delete delay */
 	uint16_t	pg_delete_delay;/* Stale portgroup delete delay */
 	uint16_t	st_syn_ttl;	/* TCP syn expire */
@@ -126,7 +157,7 @@ typedef struct _ipfw_nat64lsn_cfg {
 	uint16_t	st_udp_ttl;	/* UDP expire */
 	uint16_t	st_icmp_ttl;	/* ICMP expire */
 	uint8_t		set;		/* Named instance set [0..31] */
-	uint8_t		spare;
+	uint8_t		states_chunks;	/* Number of states chunks per PG */
 } ipfw_nat64lsn_cfg;
 
 typedef struct _ipfw_nat64lsn_state {
@@ -150,5 +181,30 @@ typedef struct _ipfw_nat64lsn_stg {
 	uint32_t	spare2;
 } ipfw_nat64lsn_stg;
 
-#endif /* _NETINET6_IP_FW_NAT64_H_ */
+typedef struct _ipfw_nat64lsn_state_v1 {
+	struct in6_addr	host6;		/* Bound IPv6 host */
+	struct in_addr	daddr;		/* Remote IPv4 address */
+	uint16_t	dport;		/* Remote destination port */
+	uint16_t	aport;		/* Local alias port */
+	uint16_t	sport;		/* Source port */
+	uint16_t	spare;
+	uint16_t	idle;		/* Last used time */
+	uint8_t		flags;		/* State flags */
+	uint8_t		proto;		/* protocol */
+} ipfw_nat64lsn_state_v1;
 
+typedef struct _ipfw_nat64lsn_stg_v1 {
+	union nat64lsn_pgidx {
+		uint64_t	index;
+		struct {
+			uint8_t		chunk;	/* states chunk */
+			uint8_t		proto;	/* protocol */
+			uint16_t	port;	/* base port */
+			in_addr_t	addr;	/* alias address */
+		};
+	} next;				/* next state index */
+	struct in_addr	alias4;		/* IPv4 alias address */
+	uint32_t	count;		/* Number of states */
+} ipfw_nat64lsn_stg_v1;
+
+#endif /* _NETINET6_IP_FW_NAT64_H_ */

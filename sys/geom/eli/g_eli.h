@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2005-2011 Pawel Jakub Dawidek <pawel@dawidek.net>
  * All rights reserved.
  *
@@ -177,7 +179,7 @@ struct g_eli_worker {
 	struct g_eli_softc	*w_softc;
 	struct proc		*w_proc;
 	u_int			 w_number;
-	uint64_t		 w_sid;
+	crypto_session_t	 w_sid;
 	boolean_t		 w_active;
 	LIST_ENTRY(g_eli_worker) w_next;
 };
@@ -686,6 +688,8 @@ void g_eli_crypto_ivgen(struct g_eli_softc *sc, off_t offset, u_char *iv,
 
 void g_eli_mkey_hmac(unsigned char *mkey, const unsigned char *key);
 int g_eli_mkey_decrypt(const struct g_eli_metadata *md,
+    const unsigned char *key, unsigned char *mkey, unsigned keyp);
+int g_eli_mkey_decrypt_any(const struct g_eli_metadata *md,
     const unsigned char *key, unsigned char *mkey, unsigned *nkeyp);
 int g_eli_mkey_encrypt(unsigned algo, const unsigned char *key, unsigned keylen,
     unsigned char *mkey);

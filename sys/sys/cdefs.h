@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1991, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -13,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -205,18 +207,6 @@
  * for a given compiler, let the compile fail if it is told to use
  * a feature that we cannot live without.
  */
-#ifdef lint
-#define	__dead2
-#define	__pure2
-#define	__unused
-#define	__packed
-#define	__aligned(x)
-#define	__alloc_align(x)
-#define	__alloc_size(x)
-#define	__alloc_size2(n, x)
-#define	__section(x)
-#define	__weak_symbol
-#else
 #define	__weak_symbol	__attribute__((__weak__))
 #if !__GNUC_PREREQ__(2, 5) && !defined(__INTEL_COMPILER)
 #define	__dead2
@@ -250,7 +240,6 @@
 #else
 #define	__alloc_align(x)
 #endif
-#endif /* lint */
 
 #if !__GNUC_PREREQ__(2, 95)
 #define	__alignof(x)	__offsetof(struct { char __a; x __b; }, __b)
@@ -260,7 +249,7 @@
  * Keywords added in C11.
  */
 
-#if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 201112L || defined(lint)
+#if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 201112L
 
 #if !__has_extension(c_alignas)
 #if (defined(__cplusplus) && __cplusplus >= 201103L) || \
@@ -279,7 +268,7 @@
 #endif
 
 #if !defined(__cplusplus) && !__has_extension(c_atomic) && \
-    !__has_extension(cxx_atomic)
+	!__has_extension(cxx_atomic) && !__GNUC_PREREQ__(4, 7)
 /*
  * No native support for _Atomic(). Place object in structure to prevent
  * most forms of direct non-atomic access.
@@ -426,7 +415,7 @@
  * software that is unaware of C99 keywords.
  */
 #if !(__GNUC__ == 2 && __GNUC_MINOR__ == 95)
-#if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 199901 || defined(lint)
+#if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 199901
 #define	__restrict
 #else
 #define	__restrict	restrict
@@ -564,7 +553,7 @@
 #define	__sym_compat(sym,impl,verid)	\
 	__asm__(".symver " #impl ", " #sym "@" #verid)
 #define	__sym_default(sym,impl,verid)	\
-	__asm__(".symver " #impl ", " #sym "@@" #verid)
+	__asm__(".symver " #impl ", " #sym "@@@" #verid)
 #else
 #define	__weak_reference(sym,alias)	\
 	__asm__(".weak alias");		\
@@ -576,7 +565,7 @@
 #define	__sym_compat(sym,impl,verid)	\
 	__asm__(".symver impl, sym@verid")
 #define	__sym_default(impl,sym,verid)	\
-	__asm__(".symver impl, sym@@verid")
+	__asm__(".symver impl, sym@@@verid")
 #endif	/* __STDC__ */
 #endif	/* __GNUC__ || __INTEL_COMPILER */
 
@@ -602,7 +591,7 @@
  *	__FBSDID("$FreeBSD$");
  */
 #ifndef	__FBSDID
-#if !defined(lint) && !defined(STRIP_FBSDID)
+#if !defined(STRIP_FBSDID)
 #define	__FBSDID(s)	__IDSTRING(__CONCAT(__rcsid_,__LINE__),s)
 #else
 #define	__FBSDID(s)	struct __hack
@@ -785,7 +774,7 @@
 #endif
 #endif /* __STDC_WANT_LIB_EXT1__ */
 
-#if defined(__mips) || defined(__powerpc64__) || defined(__riscv__)
+#if defined(__mips) || defined(__powerpc64__) || defined(__riscv)
 #define	__NO_TLS 1
 #endif
 
@@ -820,7 +809,7 @@
  */
 
 #if __has_attribute(__argument_with_type_tag__) && \
-    __has_attribute(__type_tag_for_datatype__) && !defined(lint)
+    __has_attribute(__type_tag_for_datatype__)
 #define	__arg_type_tag(arg_kind, arg_idx, type_tag_idx) \
 	    __attribute__((__argument_with_type_tag__(arg_kind, arg_idx, type_tag_idx)))
 #define	__datatype_type_tag(kind, type) \

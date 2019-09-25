@@ -1,6 +1,5 @@
 /*-
- * Copyright (c) 2016 Netflix, Inc
- * All rights reserved.
+ * Copyright (c) 2016 Netflix, Inc.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -33,6 +32,7 @@ __FBSDID("$FreeBSD$");
 #include <ctype.h>
 #include <err.h>
 #include <fcntl.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -44,34 +44,50 @@ __FBSDID("$FreeBSD$");
 _Static_assert(sizeof(struct nvme_power_state) == 256 / NBBY,
 	       "nvme_power_state size wrong");
 
-static void
-power_usage(void)
-{
-	fprintf(stderr, "usage:\n");
-	fprintf(stderr, POWER_USAGE);
-	exit(1);
-}
+#define POWER_NONE 0xffffffffu
+
+static struct options {
+	bool		list;
+	uint32_t	power;
+	uint32_t	workload;
+	const char	*dev;
+} opt = {
+	.list = false,
+	.power = POWER_NONE,
+	.workload = 0,
+	.dev = NULL,
+};
 
 static void
 power_list_one(int i, struct nvme_power_state *nps)
 {
 	int mpower, apower, ipower;
+	uint8_t mps, nops, aps, apw;
+
+	mps = (nps->mps_nops >> NVME_PWR_ST_MPS_SHIFT) &
+		NVME_PWR_ST_MPS_MASK;
+	nops = (nps->mps_nops >> NVME_PWR_ST_NOPS_SHIFT) &
+		NVME_PWR_ST_NOPS_MASK;
+	apw = (nps->apw_aps >> NVME_PWR_ST_APW_SHIFT) &
+		NVME_PWR_ST_APW_MASK;
+	aps = (nps->apw_aps >> NVME_PWR_ST_APS_SHIFT) &
+		NVME_PWR_ST_APS_MASK;
 
 	mpower = nps->mp;
-	if (nps->mps == 0)
+	if (mps == 0)
 		mpower *= 100;
 	ipower = nps->idlp;
 	if (nps->ips == 1)
 		ipower *= 100;
 	apower = nps->actp;
-	if (nps->aps == 1)
+	if (aps == 1)
 		apower *= 100;
 	printf("%2d: %2d.%04dW%c %3d.%03dms %3d.%03dms %2d %2d %2d %2d %2d.%04dW %2d.%04dW %d\n",
 	       i, mpower / 10000, mpower % 10000,
-	       nps->nops ? '*' : ' ', nps->enlat / 1000, nps->enlat % 1000,
+	       nops ? '*' : ' ', nps->enlat / 1000, nps->enlat % 1000,
 	       nps->exlat / 1000, nps->exlat % 1000, nps->rrt, nps->rrl,
 	       nps->rwt, nps->rwl, ipower / 10000, ipower % 10000,
-	       apower / 10000, apower % 10000, nps->apw);
+	       apower / 10000, apower % 10000, apw);
 }
 
 static void
@@ -95,8 +111,8 @@ power_set(int fd, int power_val, int workload, int perm)
 	p = perm ? (1u << 31) : 0;
 	memset(&pt, 0, sizeof(pt));
 	pt.cmd.opc = NVME_OPC_SET_FEATURES;
-	pt.cmd.cdw10 = NVME_FEAT_POWER_MANAGEMENT | p;
-	pt.cmd.cdw11 = power_val | (workload << 5);
+	pt.cmd.cdw10 = htole32(NVME_FEAT_POWER_MANAGEMENT | p);
+	pt.cmd.cdw11 = htole32(power_val | (workload << 5));
 
 	if (ioctl(fd, NVME_PASSTHROUGH_CMD, &pt) < 0)
 		err(1, "set feature power mgmt request failed");
@@ -112,7 +128,7 @@ power_show(int fd)
 
 	memset(&pt, 0, sizeof(pt));
 	pt.cmd.opc = NVME_OPC_GET_FEATURES;
-	pt.cmd.cdw10 = NVME_FEAT_POWER_MANAGEMENT;
+	pt.cmd.cdw10 = htole32(NVME_FEAT_POWER_MANAGEMENT);
 
 	if (ioctl(fd, NVME_PASSTHROUGH_CMD, &pt) < 0)
 		err(1, "set feature power mgmt request failed");
@@ -123,58 +139,29 @@ power_show(int fd)
 	printf("Current Power Mode is %d\n", pt.cpl.cdw0);
 }
 
-void
-power(int argc, char *argv[])
+static void
+power(const struct cmd *f, int argc, char *argv[])
 {
 	struct nvme_controller_data	cdata;
-	int				ch, listflag = 0, powerflag = 0, power_val = 0, fd;
-	int				workload = 0;
-	char				*end;
+	int				fd;
 
-	while ((ch = getopt(argc, argv, "lp:w:")) != -1) {
-		switch ((char)ch) {
-		case 'l':
-			listflag = 1;
-			break;
-		case 'p':
-			powerflag = 1;
-			power_val = strtol(optarg, &end, 0);
-			if (*end != '\0') {
-				fprintf(stderr, "Invalid power state number: %s\n", optarg);
-				power_usage();
-			}
-			break;
-		case 'w':
-			workload = strtol(optarg, &end, 0);
-			if (*end != '\0') {
-				fprintf(stderr, "Invalid workload hint: %s\n", optarg);
-				power_usage();
-			}
-			break;
-		default:
-			power_usage();
-		}
-	}
+	arg_parse(argc, argv, f);
 
-	/* Check that a controller was specified. */
-	if (optind >= argc)
-		power_usage();
-
-	if (listflag && powerflag) {
+	if (opt.list && opt.power != POWER_NONE) {
 		fprintf(stderr, "Can't set power and list power states\n");
-		power_usage();
+		arg_help(argc, argv, f);
 	}
 
-	open_dev(argv[optind], &fd, 1, 1);
-	read_controller_data(fd, &cdata);
+	open_dev(opt.dev, &fd, 1, 1);
 
-	if (listflag) {
+	if (opt.list) {
+		read_controller_data(fd, &cdata);
 		power_list(&cdata);
 		goto out;
 	}
 
-	if (powerflag) {
-		power_set(fd, power_val, workload, 0);
+	if (opt.power != POWER_NONE) {
+		power_set(fd, opt.power, opt.workload, 0);
 		goto out;
 	}
 	power_show(fd);
@@ -183,3 +170,31 @@ out:
 	close(fd);
 	exit(0);
 }
+
+static const struct opts power_opts[] = {
+#define OPT(l, s, t, opt, addr, desc) { l, s, t, &opt.addr, desc }
+	OPT("list", 'l', arg_none, opt, list,
+	    "List the valid power states"),
+	OPT("power", 'p', arg_uint32, opt, power,
+	    "Set the power state"),
+	OPT("workload", 'w', arg_uint32, opt, workload,
+	    "Set the workload"),
+	{ NULL, 0, arg_none, NULL, NULL }
+};
+#undef OPT
+
+static const struct args power_args[] = {
+	{ arg_string, &opt.dev, "controller-id" },
+	{ arg_none, NULL, NULL },
+};
+
+static struct cmd power_cmd = {
+	.name = "power",
+	.fn = power,
+	.descr = "Manage power states for the drive",
+	.ctx_size = sizeof(opt),
+	.opts = power_opts,
+	.args = power_args,
+};
+
+CMD_COMMAND(power_cmd);

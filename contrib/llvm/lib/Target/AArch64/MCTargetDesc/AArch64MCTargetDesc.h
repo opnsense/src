@@ -26,7 +26,7 @@ class MCContext;
 class MCInstrInfo;
 class MCInstPrinter;
 class MCRegisterInfo;
-class MCObjectWriter;
+class MCObjectTargetWriter;
 class MCStreamer;
 class MCSubtargetInfo;
 class MCTargetOptions;
@@ -53,16 +53,13 @@ MCAsmBackend *createAArch64beAsmBackend(const Target &T,
                                         const MCRegisterInfo &MRI,
                                         const MCTargetOptions &Options);
 
-std::unique_ptr<MCObjectWriter>
-createAArch64ELFObjectWriter(raw_pwrite_stream &OS, uint8_t OSABI,
-                             bool IsLittleEndian, bool IsILP32);
+std::unique_ptr<MCObjectTargetWriter>
+createAArch64ELFObjectWriter(uint8_t OSABI, bool IsILP32);
 
-std::unique_ptr<MCObjectWriter>
-createAArch64MachObjectWriter(raw_pwrite_stream &OS, uint32_t CPUType,
-                              uint32_t CPUSubtype);
+std::unique_ptr<MCObjectTargetWriter>
+createAArch64MachObjectWriter(uint32_t CPUType, uint32_t CPUSubtype);
 
-std::unique_ptr<MCObjectWriter>
-createAArch64WinCOFFObjectWriter(raw_pwrite_stream &OS);
+std::unique_ptr<MCObjectTargetWriter> createAArch64WinCOFFObjectWriter();
 
 MCTargetStreamer *createAArch64AsmTargetStreamer(MCStreamer &S,
                                                  formatted_raw_ostream &OS,
@@ -87,6 +84,7 @@ void initLLVMToCVRegMapping(MCRegisterInfo *MRI);
 // Defines symbolic names for the AArch64 instructions.
 //
 #define GET_INSTRINFO_ENUM
+#define GET_INSTRINFO_MC_HELPER_DECLS
 #include "AArch64GenInstrInfo.inc"
 
 #define GET_SUBTARGETINFO_ENUM

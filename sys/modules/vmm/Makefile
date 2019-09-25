@@ -2,9 +2,9 @@
 
 KMOD=	vmm
 
-SRCS=	opt_acpi.h opt_ddb.h device_if.h bus_if.h pci_if.h
-SRCS+=	vmx_assym.h svm_assym.h
-DPSRCS=	vmx_genassym.c svm_genassym.c
+SRCS=	opt_acpi.h opt_ddb.h device_if.h bus_if.h pci_if.h pcib_if.h acpi_if.h
+DPSRCS+=	vmx_assym.h svm_assym.h
+DPSRCS+=	vmx_genassym.c svm_genassym.c offset.inc
 
 CFLAGS+= -DVMM_KEEP_STATS -DSMP
 CFLAGS+= -I${SRCTOP}/sys/amd64/vmm
@@ -51,10 +51,14 @@ SRCS+=	vmcb.c		\
 	svm.c		\
 	svm_support.S	\
 	npt.c		\
-	amdv.c		\
+	ivrs_drv.c	\
+	amdvi_hw.c	\
 	svm_msr.c
 
 CLEANFILES=	vmx_assym.h vmx_genassym.o svm_assym.h svm_genassym.o
+
+OBJS_DEPEND_GUESS.vmx_support.o+= vmx_assym.h
+OBJS_DEPEND_GUESS.svm_support.o+= svm_assym.h
 
 vmx_assym.h:    vmx_genassym.o
 	sh ${SYSDIR}/kern/genassym.sh vmx_genassym.o > ${.TARGET}
@@ -70,10 +74,10 @@ svm_support.o:
 	${CC} -c -x assembler-with-cpp -DLOCORE ${CFLAGS} \
 	    ${.IMPSRC} -o ${.TARGET}
 
-vmx_genassym.o:
+vmx_genassym.o: offset.inc
 	${CC} -c ${CFLAGS:N-flto:N-fno-common} ${.IMPSRC}
 
-svm_genassym.o:
+svm_genassym.o: offset.inc
 	${CC} -c ${CFLAGS:N-flto:N-fno-common} ${.IMPSRC}
 
 .include <bsd.kmod.mk>

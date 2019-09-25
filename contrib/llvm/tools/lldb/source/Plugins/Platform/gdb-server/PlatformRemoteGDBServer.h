@@ -11,13 +11,9 @@
 #ifndef liblldb_PlatformRemoteGDBServer_h_
 #define liblldb_PlatformRemoteGDBServer_h_
 
-// C Includes
-// C++ Includes
 #include <string>
 
-// Other libraries and framework includes
-// Project includes
-#include "../../Process/gdb-remote/GDBRemoteCommunicationClient.h"
+#include "Plugins/Process/gdb-remote/GDBRemoteCommunicationClient.h"
 #include "Plugins/Process/Utility/GDBRemoteSignals.h"
 #include "lldb/Target/Platform.h"
 
@@ -155,8 +151,7 @@ public:
                        // process to exit
       std::string
           *command_output, // Pass NULL if you don't want the command output
-      uint32_t timeout_sec)
-      override; // Timeout in seconds to wait for shell program to finish
+      const lldb_private::Timeout<std::micro> &timeout) override;
 
   void CalculateTrapHandlerSymbolNames() override;
 

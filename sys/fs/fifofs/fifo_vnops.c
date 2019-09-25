@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1990, 1993, 1995
  *	The Regents of the University of California.
  * Copyright (c) 2005 Robert N. M. Watson
@@ -13,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -172,7 +174,7 @@ fifo_open(ap)
 			if (fip->fi_writers > 0)
 				wakeup(&fip->fi_writers);
 		}
-		fp->f_seqcount = fpipe->pipe_wgen - fip->fi_writers;
+		fp->f_pipegen = fpipe->pipe_wgen - fip->fi_writers;
 	}
 	if (ap->a_mode & FWRITE) {
 		if ((ap->a_mode & O_NONBLOCK) && fip->fi_readers == 0) {

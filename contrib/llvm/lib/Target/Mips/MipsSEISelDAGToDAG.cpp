@@ -238,6 +238,18 @@ void MipsSEDAGToDAGISel::processFunctionAfterISel(MachineFunction &MF) {
       case Mips::WRDSP:
         addDSPCtrlRegOperands(true, MI, MF);
         break;
+      case Mips::BuildPairF64_64:
+      case Mips::ExtractElementF64_64:
+        if (!Subtarget->useOddSPReg()) {
+          MI.addOperand(MachineOperand::CreateReg(Mips::SP, false, true));
+          break;
+        }
+        LLVM_FALLTHROUGH;
+      case Mips::BuildPairF64:
+      case Mips::ExtractElementF64:
+        if (Subtarget->isABI_FPXX() && !Subtarget->hasMTHC1())
+          MI.addOperand(MachineOperand::CreateReg(Mips::SP, false, true));
+        break;
       default:
         replaceUsesWithZeroReg(MRI, MI);
       }
@@ -288,7 +300,7 @@ void MipsSEDAGToDAGISel::selectAddE(SDNode *Node, const SDLoc &DL) const {
                     SDValue(Carry, 0)};
   SDNode *DSPCFWithCarry = CurDAG->getMachineNode(Mips::INS, DL, MVT::i32, Ops);
 
-  // My reading of the the MIPS DSP 3.01 specification isn't as clear as I
+  // My reading of the MIPS DSP 3.01 specification isn't as clear as I
   // would like about whether bit 20 always gets overwritten by addwc.
   // Hence take an extremely conservative view and presume it's sticky. We
   // therefore need to clear it.
@@ -783,6 +795,24 @@ bool MipsSEDAGToDAGISel::trySelect(SDNode *Node) {
   switch(Opcode) {
   default: break;
 
+  case Mips::PseudoD_SELECT_I:
+  case Mips::PseudoD_SELECT_I64: {
+    MVT VT = Subtarget->isGP64bit() ? MVT::i64 : MVT::i32;
+    SDValue cond = Node->getOperand(0);
+    SDValue Hi1 = Node->getOperand(1);
+    SDValue Lo1 = Node->getOperand(2);
+    SDValue Hi2 = Node->getOperand(3);
+    SDValue Lo2 = Node->getOperand(4);
+
+    SDValue ops[] = {cond, Hi1, Lo1, Hi2, Lo2};
+    EVT NodeTys[] = {VT, VT};
+    ReplaceNode(Node, CurDAG->getMachineNode(Subtarget->isGP64bit()
+                                                 ? Mips::PseudoD_SELECT_I64
+                                                 : Mips::PseudoD_SELECT_I,
+                                             DL, NodeTys, ops));
+    return true;
+  }
+
   case ISD::ADDE: {
     selectAddE(Node, DL);
     return true;
@@ -976,9 +1006,9 @@ bool MipsSEDAGToDAGISel::trySelect(SDNode *Node) {
     }
 
     SDNode *Rdhwr =
-      CurDAG->getMachineNode(RdhwrOpc, DL,
-                             Node->getValueType(0),
-                             CurDAG->getRegister(Mips::HWR29, MVT::i32));
+        CurDAG->getMachineNode(RdhwrOpc, DL, Node->getValueType(0),
+                               CurDAG->getRegister(Mips::HWR29, MVT::i32),
+                               CurDAG->getTargetConstant(0, DL, MVT::i32));
     SDValue Chain = CurDAG->getCopyToReg(CurDAG->getEntryNode(), DL, DestReg,
                                          SDValue(Rdhwr, 0));
     SDValue ResNode = CurDAG->getCopyFromReg(Chain, DL, DestReg, PtrVT);

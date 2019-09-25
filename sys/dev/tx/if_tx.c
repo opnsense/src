@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1997 Semen Ustimenko (semenu@FreeBSD.org)
  * All rights reserved.
  *
@@ -425,6 +427,8 @@ epic_attach(device_t dev)
 		ether_ifdetach(ifp);
 		goto fail;
 	}
+
+	gone_by_fcp101_dev(dev);
 
 	return (0);
 fail:
@@ -1397,7 +1401,7 @@ epic_set_mc_table(epic_softc_t *sc)
 	filter[3] = 0;
 
 	if_maddr_rlock(ifp);
-	TAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
+	CK_STAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
 		if (ifma->ifma_addr->sa_family != AF_LINK)
 			continue;
 		h = ether_crc32_be(LLADDR((struct sockaddr_dl *)

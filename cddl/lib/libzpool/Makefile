@@ -30,7 +30,7 @@ ATOMIC_SRCS=	opensolaris_atomic.c
 
 LIB=		zpool
 
-ZFS_COMMON_SRCS= ${ZFS_COMMON_OBJS:C/.o$/.c/} vdev_file.c trim_map.c
+ZFS_COMMON_SRCS= ${ZFS_COMMON_OBJS:C/.o$/.c/} trim_map.c
 ZFS_SHARED_SRCS= ${ZFS_SHARED_OBJS:C/.o$/.c/}
 LUA_SRCS=	${LUA_OBJS:C/.o$/.c/}
 KERNEL_SRCS=	kernel.c taskq.c util.c
@@ -47,7 +47,6 @@ CFLAGS+=	-I${SRCTOP}/sys/cddl/compat/opensolaris
 CFLAGS+=	-I${SRCTOP}/cddl/compat/opensolaris/include
 CFLAGS+=	-I${SRCTOP}/cddl/compat/opensolaris/lib/libumem
 CFLAGS+=	-I${SRCTOP}/cddl/contrib/opensolaris/lib/libzpool/common
-CFLAGS+=	-I${SRCTOP}/sys/cddl/contrib/opensolaris/uts/common/sys
 CFLAGS+=	-I${SRCTOP}/sys/cddl/contrib/opensolaris/uts/common/fs/zfs
 CFLAGS+=	-I${SRCTOP}/sys/cddl/contrib/opensolaris/uts/common/fs/zfs/lua
 CFLAGS+=	-I${SRCTOP}/sys/cddl/contrib/opensolaris/common/zfs
@@ -62,6 +61,7 @@ CFLAGS+=	-DWANTS_MUTEX_OWNED
 CFLAGS+=	-I${SRCTOP}/lib/libpthread/thread
 CFLAGS+=	-I${SRCTOP}/lib/libpthread/sys
 CFLAGS+=	-I${SRCTOP}/lib/libthr/arch/${MACHINE_CPUARCH}/include
+CFLAGS.gcc+=	-fms-extensions
 
 LIBADD=		md pthread z nvpair avl umem
 

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright 1996-1998 John D. Polstra.
  * All rights reserved.
  *
@@ -26,15 +28,12 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
-#include "opt_pax.h"
-
 #include <sys/param.h>
 #include <sys/kernel.h>
 #include <sys/systm.h>
 #include <sys/exec.h>
 #include <sys/imgact.h>
 #include <sys/linker.h>
-#include <sys/pax.h>
 #include <sys/proc.h>
 #include <sys/sysent.h>
 #include <sys/imgact_elf.h>
@@ -65,17 +64,17 @@ struct sysentvec elf64_freebsd_sysvec = {
 	.sv_coredump	= __elfN(coredump),
 	.sv_imgact_try	= NULL,
 	.sv_minsigstksz	= MINSIGSTKSZ,
-	.sv_pagesize	= PAGE_SIZE,
 	.sv_minuser	= VM_MIN_ADDRESS,
 	.sv_maxuser	= VM_MAXUSER_ADDRESS,
 	.sv_usrstack	= USRSTACK,
 	.sv_psstrings	= PS_STRINGS,
-	.sv_stackprot	= VM_PROT_READ | VM_PROT_WRITE,
+	.sv_stackprot	= VM_PROT_ALL,
 	.sv_copyout_strings	= exec_copyout_strings,
 	.sv_setregs	= exec_setregs,
 	.sv_fixlimit	= NULL,
 	.sv_maxssiz	= NULL,
-	.sv_flags	= SV_ABI_FREEBSD | SV_LP64 | SV_SHP | SV_TIMEKEEP,
+	.sv_flags	= SV_ABI_FREEBSD | SV_ASLR | SV_LP64 | SV_SHP |
+			    SV_TIMEKEEP,
 	.sv_set_syscall_retval = cpu_set_syscall_retval,
 	.sv_fetch_syscall_args = cpu_fetch_syscall_args,
 	.sv_syscallnames = syscallnames,
@@ -84,7 +83,7 @@ struct sysentvec elf64_freebsd_sysvec = {
 	.sv_schedtail	= NULL,
 	.sv_thread_detach = NULL,
 	.sv_trap	= NULL,
-	.sv_pax_aslr_init = pax_aslr_init_vmspace,
+	.sv_stackgap	= elf64_stackgap,
 };
 INIT_SYSENTVEC(elf64_sysvec, &elf64_freebsd_sysvec);
 
@@ -177,13 +176,17 @@ elf64_dump_thread(struct thread *td, void *dst, size_t *off)
 	*off = len;
 }
 
-#define	ERI_LOCAL	0x0001
-#define	ERI_ONLYIFUNC	0x0002
+bool
+elf_is_ifunc_reloc(Elf_Size r_info)
+{
+
+	return (ELF_R_TYPE(r_info) == R_X86_64_IRELATIVE);
+}
 
 /* Process one elf relocation with addend. */
 static int
 elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
-    int type, elf_lookup_fn lookup, int flags)
+    int type, elf_lookup_fn lookup)
 {
 	Elf64_Addr *where, val;
 	Elf32_Addr *where32, val32;
@@ -204,6 +207,7 @@ elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
 		switch (rtype) {
 		case R_X86_64_PC32:
 		case R_X86_64_32S:
+		case R_X86_64_PLT32:
 			addend = *(Elf32_Addr *)where;
 			break;
 		default:
@@ -222,9 +226,6 @@ elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
 		panic("unknown reloc type %d\n", type);
 	}
 
-	if (((flags & ERI_ONLYIFUNC) == 0) ^ (rtype != R_X86_64_IRELATIVE))
-		return (0);
-
 	switch (rtype) {
 		case R_X86_64_NONE:	/* none */
 			break;
@@ -239,6 +240,8 @@ elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
 			break;
 
 		case R_X86_64_PC32:	/* S + A - P */
+		case R_X86_64_PLT32:	/* L + A - P, L is PLT location for
+					   the symbol, which we treat as S */
 			error = lookup(lf, symidx, 1, &addr);
 			where32 = (Elf32_Addr *)where;
 			val32 = (Elf32_Addr)(addr + addend - (Elf_Addr)where);
@@ -299,20 +302,11 @@ elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
 }
 
 int
-elf_reloc_ifunc(linker_file_t lf, Elf_Addr relocbase, const void *data,
-    int type, elf_lookup_fn lookup)
-{
-
-	return (elf_reloc_internal(lf, relocbase, data, type, lookup,
-	    ERI_ONLYIFUNC));
-}
-
-int
 elf_reloc(linker_file_t lf, Elf_Addr relocbase, const void *data, int type,
     elf_lookup_fn lookup)
 {
 
-	return (elf_reloc_internal(lf, relocbase, data, type, lookup, 0));
+	return (elf_reloc_internal(lf, relocbase, data, type, lookup));
 }
 
 int
@@ -320,8 +314,7 @@ elf_reloc_local(linker_file_t lf, Elf_Addr relocbase, const void *data,
     int type, elf_lookup_fn lookup)
 {
 
-	return (elf_reloc_internal(lf, relocbase, data, type, lookup,
-	    ERI_LOCAL));
+	return (elf_reloc_internal(lf, relocbase, data, type, lookup));
 }
 
 int

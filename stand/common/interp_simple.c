@@ -35,6 +35,8 @@ __FBSDID("$FreeBSD$");
 #include <string.h>
 #include "bootstrap.h"
 
+INTERP_DEFINE("simp");
+
 void
 interp_init(void)
 {
@@ -93,6 +95,14 @@ interp_include(const char *filename)
 		    "can't open '%s': %s", filename, strerror(errno));
 		return(CMD_ERROR);
 	}
+
+#ifdef LOADER_VERIEXEC
+	if (verify_file(fd, filename, 0, VE_GUESS) < 0) {
+		close(fd);
+		sprintf(command_errbuf,"can't verify '%s'", filename);
+		return(CMD_ERROR);
+	}
+#endif
 
 	/*
 	 * Read the script into memory.

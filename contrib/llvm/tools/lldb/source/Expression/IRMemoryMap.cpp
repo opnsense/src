@@ -8,7 +8,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "lldb/Expression/IRMemoryMap.h"
-#include "lldb/Core/Scalar.h"
 #include "lldb/Target/MemoryRegionInfo.h"
 #include "lldb/Target/Process.h"
 #include "lldb/Target/Target.h"
@@ -16,6 +15,7 @@
 #include "lldb/Utility/DataExtractor.h"
 #include "lldb/Utility/LLDBAssert.h"
 #include "lldb/Utility/Log.h"
+#include "lldb/Utility/Scalar.h"
 #include "lldb/Utility/Status.h"
 
 using namespace lldb_private;
@@ -49,8 +49,8 @@ lldb::addr_t IRMemoryMap::FindSpace(size_t size) {
   //
   // The memory returned by this function will never be written to.  The only
   // point is that it should not shadow process memory if possible, so that
-  // expressions processing real values from the process do not use the
-  // wrong data.
+  // expressions processing real values from the process do not use the wrong
+  // data.
   //
   // If the process can in fact allocate memory (CanJIT() lets us know this)
   // then this can be accomplished just be allocating memory in the inferior.
@@ -93,8 +93,8 @@ lldb::addr_t IRMemoryMap::FindSpace(size_t size) {
   }
 
   // Now, if it's possible to use the GetMemoryRegionInfo API to detect mapped
-  // regions, walk forward through memory until a region is found that
-  // has adequate space for our allocation.
+  // regions, walk forward through memory until a region is found that has
+  // adequate space for our allocation.
   if (process_is_alive) {
     const uint64_t end_of_memory = process_sp->GetAddressByteSize() == 8
                                        ? 0xffffffffffffffffull
@@ -188,16 +188,12 @@ bool IRMemoryMap::IntersectsAllocation(lldb::addr_t addr, size_t size) const {
   AllocationMap::const_iterator iter = m_allocations.lower_bound(addr);
 
   // Since we only know that the returned interval begins at a location greater
-  // than or
-  // equal to where the given interval begins, it's possible that the given
-  // interval
-  // intersects either the returned interval or the previous interval.  Thus, we
-  // need to
-  // check both. Note that we only need to check these two intervals.  Since all
-  // intervals
-  // are disjoint it is not possible that an adjacent interval does not
-  // intersect, but a
-  // non-adjacent interval does intersect.
+  // than or equal to where the given interval begins, it's possible that the
+  // given interval intersects either the returned interval or the previous
+  // interval.  Thus, we need to check both. Note that we only need to check
+  // these two intervals.  Since all intervals are disjoint it is not possible
+  // that an adjacent interval does not intersect, but a non-adjacent interval
+  // does intersect.
   if (iter != m_allocations.end()) {
     if (AllocationsIntersect(addr, size, iter->second.m_process_start,
                              iter->second.m_size))
@@ -217,16 +213,15 @@ bool IRMemoryMap::IntersectsAllocation(lldb::addr_t addr, size_t size) const {
 bool IRMemoryMap::AllocationsIntersect(lldb::addr_t addr1, size_t size1,
                                        lldb::addr_t addr2, size_t size2) {
   // Given two half open intervals [A, B) and [X, Y), the only 6 permutations
-  // that satisfy
-  // A<B and X<Y are the following:
+  // that satisfy A<B and X<Y are the following:
   // A B X Y
   // A X B Y  (intersects)
   // A X Y B  (intersects)
   // X A B Y  (intersects)
   // X A Y B  (intersects)
   // X Y A B
-  // The first is B <= X, and the last is Y <= A.
-  // So the condition is !(B <= X || Y <= A)), or (X < B && A < Y)
+  // The first is B <= X, and the last is Y <= A. So the condition is !(B <= X
+  // || Y <= A)), or (X < B && A < Y)
   return (addr2 < (addr1 + size1)) && (addr1 < (addr2 + size2));
 }
 
@@ -277,20 +272,16 @@ IRMemoryMap::Allocation::Allocation(lldb::addr_t process_alloc,
                                     uint32_t permissions, uint8_t alignment,
                                     AllocationPolicy policy)
     : m_process_alloc(process_alloc), m_process_start(process_start),
-      m_size(size), m_permissions(permissions), m_alignment(alignment),
-      m_policy(policy), m_leak(false) {
+      m_size(size), m_policy(policy), m_leak(false), m_permissions(permissions),
+      m_alignment(alignment) {
   switch (policy) {
   default:
     assert(0 && "We cannot reach this!");
   case eAllocationPolicyHostOnly:
-    m_data.SetByteSize(size);
-    memset(m_data.GetBytes(), 0, size);
-    break;
-  case eAllocationPolicyProcessOnly:
-    break;
   case eAllocationPolicyMirror:
     m_data.SetByteSize(size);
-    memset(m_data.GetBytes(), 0, size);
+    break;
+  case eAllocationPolicyProcessOnly:
     break;
   }
 }
@@ -306,15 +297,21 @@ lldb::addr_t IRMemoryMap::Malloc(size_t size, uint8_t alignment,
   lldb::addr_t allocation_address = LLDB_INVALID_ADDRESS;
   lldb::addr_t aligned_address = LLDB_INVALID_ADDRESS;
 
-  size_t alignment_mask = alignment - 1;
   size_t allocation_size;
 
-  if (size == 0)
+  if (size == 0) {
+    // FIXME: Malloc(0) should either return an invalid address or assert, in
+    // order to cut down on unnecessary allocations.
     allocation_size = alignment;
-  else
-    allocation_size = (size & alignment_mask)
-                          ? ((size + alignment) & (~alignment_mask))
-                          : size;
+  } else {
+    // Round up the requested size to an aligned value.
+    allocation_size = llvm::alignTo(size, alignment);
+
+    // The process page cache does not see the requested alignment. We can't
+    // assume its result will be any more than 1-byte aligned. To work around
+    // this, request `alignment - 1` additional bytes.
+    allocation_size += alignment - 1;
+  }
 
   switch (policy) {
   default:
@@ -392,9 +389,10 @@ lldb::addr_t IRMemoryMap::Malloc(size_t size, uint8_t alignment,
   lldb::addr_t mask = alignment - 1;
   aligned_address = (allocation_address + mask) & (~mask);
 
-  m_allocations[aligned_address] =
-      Allocation(allocation_address, aligned_address, allocation_size,
-                 permissions, alignment, policy);
+  m_allocations.emplace(
+      std::piecewise_construct, std::forward_as_tuple(aligned_address),
+      std::forward_as_tuple(allocation_address, aligned_address,
+                            allocation_size, permissions, alignment, policy));
 
   if (zero_memory) {
     Status write_error;

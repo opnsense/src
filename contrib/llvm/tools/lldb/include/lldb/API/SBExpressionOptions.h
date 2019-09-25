@@ -51,10 +51,8 @@ public:
   uint32_t GetOneThreadTimeoutInMicroSeconds() const;
 
   // Set the timeout for running on one thread, 0 means use the default
-  // behavior.
-  // If you set this higher than the overall timeout, you'll get an error when
-  // you
-  // try to run the expression.
+  // behavior. If you set this higher than the overall timeout, you'll get an
+  // error when you try to run the expression.
   void SetOneThreadTimeoutInMicroSeconds(uint32_t timeout = 0);
 
   bool GetTryAllThreads() const;
@@ -92,6 +90,12 @@ public:
   bool GetTopLevel();
 
   void SetTopLevel(bool b = true);
+  
+  // Gets whether we will JIT an expression if it cannot be interpreted
+  bool GetAllowJIT();
+  
+  // Sets whether we will JIT an expression if it cannot be interpreted
+  void SetAllowJIT(bool allow);
 
 protected:
   SBExpressionOptions(

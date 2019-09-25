@@ -12,7 +12,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "ClangSACheckers.h"
+#include "clang/StaticAnalyzer/Checkers/BuiltinCheckerRegistration.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
 #include "clang/StaticAnalyzer/Core/Checker.h"
 #include "clang/StaticAnalyzer/Core/CheckerManager.h"
@@ -56,7 +56,6 @@ public:
 private:
   const MemRegion *getVAListAsRegion(SVal SV, const Expr *VAExpr,
                                      bool &IsSymbolic, CheckerContext &C) const;
-  StringRef getVariableNameFromRegion(const MemRegion *Reg) const;
   const ExplodedNode *getStartCallSite(const ExplodedNode *N,
                                        const MemRegion *Reg) const;
 
@@ -70,7 +69,7 @@ private:
                             bool IsCopy) const;
   void checkVAListEndCall(const CallEvent &Call, CheckerContext &C) const;
 
-  class ValistBugVisitor : public BugReporterVisitorImpl<ValistBugVisitor> {
+  class ValistBugVisitor : public BugReporterVisitor {
   public:
     ValistBugVisitor(const MemRegion *Reg, bool IsLeak = false)
         : Reg(Reg), IsLeak(IsLeak) {}
@@ -79,7 +78,7 @@ private:
       ID.AddPointer(&X);
       ID.AddPointer(Reg);
     }
-    std::unique_ptr<PathDiagnosticPiece>
+    std::shared_ptr<PathDiagnosticPiece>
     getEndPath(BugReporterContext &BRC, const ExplodedNode *EndPathNode,
                BugReport &BR) override {
       if (!IsLeak)
@@ -88,11 +87,9 @@ private:
       PathDiagnosticLocation L = PathDiagnosticLocation::createEndOfPath(
           EndPathNode, BRC.getSourceManager());
       // Do not add the statement itself as a range in case of leak.
-      return llvm::make_unique<PathDiagnosticEventPiece>(L, BR.getDescription(),
-                                                         false);
+      return std::make_shared<PathDiagnosticEventPiece>(L, BR.getDescription(), false);
     }
     std::shared_ptr<PathDiagnosticPiece> VisitNode(const ExplodedNode *N,
-                                                   const ExplodedNode *PrevN,
                                                    BugReporterContext &BRC,
                                                    BugReport &BR) override;
 
@@ -189,7 +186,7 @@ void ValistChecker::checkPreStmt(const VAArgExpr *VAA,
                                  CheckerContext &C) const {
   ProgramStateRef State = C.getState();
   const Expr *VASubExpr = VAA->getSubExpr();
-  SVal VAListSVal = State->getSVal(VASubExpr, C.getLocationContext());
+  SVal VAListSVal = C.getSVal(VASubExpr);
   bool Symbolic;
   const MemRegion *VAList =
       getVAListAsRegion(VAListSVal, VASubExpr, Symbolic, C);
@@ -378,10 +375,10 @@ void ValistChecker::checkVAListEndCall(const CallEvent &Call,
 }
 
 std::shared_ptr<PathDiagnosticPiece> ValistChecker::ValistBugVisitor::VisitNode(
-    const ExplodedNode *N, const ExplodedNode *PrevN, BugReporterContext &BRC,
+    const ExplodedNode *N, BugReporterContext &BRC,
     BugReport &) {
   ProgramStateRef State = N->getState();
-  ProgramStateRef StatePrev = PrevN->getState();
+  ProgramStateRef StatePrev = N->getFirstPred()->getState();
 
   const Stmt *S = PathDiagnosticLocation::getStmt(N);
   if (!S)

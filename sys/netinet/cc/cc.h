@@ -52,7 +52,7 @@
 #define _NETINET_CC_CC_H_
 
 #if !defined(_KERNEL)
-#error "no user-servicable parts inside"
+#error "no user-serviceable parts inside"
 #endif
 
 /* Global CC vars. */
@@ -63,6 +63,12 @@ extern struct cc_algo newreno_cc_algo;
 /* Per-netstack bits. */
 VNET_DECLARE(struct cc_algo *, default_cc_ptr);
 #define	V_default_cc_ptr VNET(default_cc_ptr)
+
+VNET_DECLARE(int, cc_do_abe);
+#define	V_cc_do_abe			VNET(cc_do_abe)
+
+VNET_DECLARE(int, cc_abe_frlossreduce);
+#define	V_cc_abe_frlossreduce		VNET(cc_abe_frlossreduce)
 
 /* Define the new net.inet.tcp.cc sysctl tree. */
 SYSCTL_DECL(_net_inet_tcp_cc);
@@ -86,6 +92,7 @@ struct cc_var {
 		struct tcpcb		*tcp;
 		struct sctp_nets	*sctp;
 	} ccvc;
+	uint16_t	nsegs; /* # segments coalesced into current chain. */
 };
 
 /* cc_var flags. */
@@ -174,5 +181,7 @@ extern struct rwlock cc_list_lock;
 #define	CC_LIST_WLOCK()		rw_wlock(&cc_list_lock)
 #define	CC_LIST_WUNLOCK()	rw_wunlock(&cc_list_lock)
 #define	CC_LIST_LOCK_ASSERT()	rw_assert(&cc_list_lock, RA_LOCKED)
+
+#define CC_ALGOOPT_LIMIT	2048
 
 #endif /* _NETINET_CC_CC_H_ */

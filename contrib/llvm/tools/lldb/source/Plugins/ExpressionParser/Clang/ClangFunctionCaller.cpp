@@ -12,9 +12,6 @@
 #include "ASTStructExtractor.h"
 #include "ClangExpressionParser.h"
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/RecordLayout.h"
 #include "clang/CodeGen/CodeGenAction.h"
@@ -25,9 +22,7 @@
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
 #include "llvm/IR/Module.h"
 
-// Project includes
 #include "lldb/Core/Module.h"
-#include "lldb/Core/State.h"
 #include "lldb/Core/ValueObject.h"
 #include "lldb/Core/ValueObjectList.h"
 #include "lldb/Expression/IRExecutionUnit.h"
@@ -44,6 +39,7 @@
 #include "lldb/Target/ThreadPlanCallFunction.h"
 #include "lldb/Utility/DataExtractor.h"
 #include "lldb/Utility/Log.h"
+#include "lldb/Utility/State.h"
 
 using namespace lldb_private;
 
@@ -101,14 +97,12 @@ ClangFunctionCaller::CompileFunction(lldb::ThreadSP thread_to_use_sp,
   m_wrapper_function_text.append(" (*fn_ptr) (");
 
   // Get the number of arguments.  If we have a function type and it is
-  // prototyped,
-  // trust that, otherwise use the values we were given.
+  // prototyped, trust that, otherwise use the values we were given.
 
   // FIXME: This will need to be extended to handle Variadic functions.  We'll
   // need
   // to pull the defined arguments out of the function, then add the types from
-  // the
-  // arguments list for the variable arguments.
+  // the arguments list for the variable arguments.
 
   uint32_t num_args = UINT32_MAX;
   bool trust_function = false;

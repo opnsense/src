@@ -1,6 +1,8 @@
 /*	$NetBSD: tmpfs.h,v 1.26 2007/02/22 06:37:00 thorpej Exp $	*/
 
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ *
  * Copyright (c) 2005, 2006 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
@@ -35,22 +37,13 @@
 #ifndef _FS_TMPFS_TMPFS_H_
 #define _FS_TMPFS_TMPFS_H_
 
-#include <sys/dirent.h>
-#include <sys/mount.h>
 #include <sys/queue.h>
-#include <sys/vnode.h>
-#include <sys/file.h>
-#include <sys/lock.h>
-#include <sys/mutex.h>
-
-#include <sys/malloc.h>
-#include <sys/systm.h>
 #include <sys/tree.h>
-#include <sys/vmmeter.h>
-#include <vm/swap_pager.h>
 
+#ifdef	_SYS_MALLOC_H_
 MALLOC_DECLARE(M_TMPFSMNT);
 MALLOC_DECLARE(M_TMPFSNAME);
+#endif
 
 /*
  * Internal representation of a tmpfs directory entry.
@@ -195,8 +188,8 @@ struct tmpfs_node {
 	uid_t			tn_uid;		/* (v) */
 	gid_t			tn_gid;		/* (v) */
 	mode_t			tn_mode;	/* (v) */
+	int			tn_links;	/* (v) */
 	u_long			tn_flags;	/* (v) */
-	nlink_t			tn_links;	/* (v) */
 	struct timespec		tn_atime;	/* (vi) */
 	struct timespec		tn_mtime;	/* (vi) */
 	struct timespec		tn_ctime;	/* (vi) */
@@ -304,6 +297,8 @@ LIST_HEAD(tmpfs_node_list, tmpfs_node);
 #define tn_reg tn_spec.tn_reg
 #define tn_fifo tn_spec.tn_fifo
 
+#define	TMPFS_LINK_MAX INT_MAX
+
 #define TMPFS_NODE_LOCK(node) mtx_lock(&(node)->tn_interlock)
 #define TMPFS_NODE_UNLOCK(node) mtx_unlock(&(node)->tn_interlock)
 #define TMPFS_NODE_MTX(node) (&(node)->tn_interlock)
@@ -329,6 +324,11 @@ LIST_HEAD(tmpfs_node_list, tmpfs_node);
  * Internal representation of a tmpfs mount point.
  */
 struct tmpfs_mount {
+	/*
+	 * Original value of the "size" parameter, for reference purposes,
+	 * mostly.
+	 */
+	off_t			tm_size_max;
 	/*
 	 * Maximum number of memory pages available for use by the file
 	 * system, set during mount time.  This variable must never be
@@ -358,7 +358,7 @@ struct tmpfs_mount {
 	ino_t			tm_nodes_max;
 
 	/* unrhdr used to allocate inode numbers */
-	struct unrhdr *		tm_ino_unr;
+	struct unrhdr64		tm_ino_unr;
 
 	/* Number of nodes currently that are in use. */
 	ino_t			tm_nodes_inuse;
@@ -437,8 +437,8 @@ void	tmpfs_dir_destroy(struct tmpfs_mount *, struct tmpfs_node *);
 struct tmpfs_dirent *	tmpfs_dir_lookup(struct tmpfs_node *node,
 			    struct tmpfs_node *f,
 			    struct componentname *cnp);
-int	tmpfs_dir_getdents(struct tmpfs_node *, struct uio *, int,
-	    u_long *, int *);
+int	tmpfs_dir_getdents(struct tmpfs_mount *, struct tmpfs_node *,
+	    struct uio *, int, u_long *, int *);
 int	tmpfs_dir_whiteout_add(struct vnode *, struct componentname *);
 void	tmpfs_dir_whiteout_remove(struct vnode *, struct componentname *);
 int	tmpfs_reg_resize(struct vnode *, off_t, boolean_t);
@@ -452,7 +452,8 @@ int	tmpfs_chtimes(struct vnode *, struct vattr *, struct ucred *cred,
 void	tmpfs_itimes(struct vnode *, const struct timespec *,
 	    const struct timespec *);
 
-void	tmpfs_set_status(struct tmpfs_node *node, int status);
+void	tmpfs_set_status(struct tmpfs_mount *tm, struct tmpfs_node *node,
+	    int status);
 void	tmpfs_update(struct vnode *);
 int	tmpfs_truncate(struct vnode *, off_t);
 struct tmpfs_dirent *tmpfs_dir_first(struct tmpfs_node *dnode,

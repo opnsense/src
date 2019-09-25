@@ -41,7 +41,7 @@
 #include <sys/mman.h>
 #endif
 
-ELFTC_VCSID("$Id: elf_update.c 3190 2015-05-04 15:23:08Z jkoshy $");
+ELFTC_VCSID("$Id: elf_update.c 3632 2018-10-10 21:12:43Z jkoshy $");
 
 /*
  * Layout strategy:
@@ -452,7 +452,7 @@ _libelf_resync_sections(Elf *e, off_t rc, struct _Elf_Extent_List *extents)
 	 * Make a pass through sections, computing the extent of each
 	 * section.
 	 */
-	STAILQ_FOREACH(s, &e->e_u.e_elf.e_scn, s_next) {
+	RB_FOREACH(s, scntree, &e->e_u.e_elf.e_scn) {
 		if (ec == ELFCLASS32)
 			sh_type = s->s_shdr.s_shdr32.sh_type;
 		else
@@ -712,8 +712,8 @@ _libelf_resync_elf(Elf *e, struct _Elf_Extent_List *extents)
 static off_t
 _libelf_write_scn(Elf *e, unsigned char *nf, struct _Elf_Extent *ex)
 {
-	int ec;
 	off_t rc;
+	int ec, em;
 	Elf_Scn *s;
 	int elftype;
 	Elf_Data *d, dst;
@@ -746,6 +746,11 @@ _libelf_write_scn(Elf *e, unsigned char *nf, struct _Elf_Extent *ex)
 
 	sh_off = s->s_offset;
 	assert(sh_off % _libelf_falign(elftype, ec) == 0);
+
+	em = _libelf_elfmachine(e);
+#if 0
+	assert(em >= EM_NONE && em < EM__LAST__);
+#endif
 
 	/*
 	 * If the section has a `rawdata' descriptor, and the section
@@ -818,8 +823,8 @@ _libelf_write_scn(Elf *e, unsigned char *nf, struct _Elf_Extent *ex)
 		dst.d_buf    = nf + rc;
 		dst.d_size   = fsz;
 
-		if (_libelf_xlate(&dst, d, e->e_byteorder, ec, ELF_TOFILE) ==
-		    NULL)
+		if (_libelf_xlate(&dst, d, e->e_byteorder, ec, em, ELF_TOFILE)
+		    == NULL)
 			return ((off_t) -1);
 
 		rc += (off_t) fsz;
@@ -835,7 +840,7 @@ _libelf_write_scn(Elf *e, unsigned char *nf, struct _Elf_Extent *ex)
 static off_t
 _libelf_write_ehdr(Elf *e, unsigned char *nf, struct _Elf_Extent *ex)
 {
-	int ec;
+	int ec, em;
 	void *ehdr;
 	size_t fsz, msz;
 	Elf_Data dst, src;
@@ -851,6 +856,8 @@ _libelf_write_ehdr(Elf *e, unsigned char *nf, struct _Elf_Extent *ex)
 	fsz = _libelf_fsize(ELF_T_EHDR, ec, e->e_version, (size_t) 1);
 	msz = _libelf_msize(ELF_T_EHDR, ec, e->e_version);
 
+	em = _libelf_elfmachine(e);
+
 	(void) memset(&dst, 0, sizeof(dst));
 	(void) memset(&src, 0, sizeof(src));
 
@@ -862,7 +869,7 @@ _libelf_write_ehdr(Elf *e, unsigned char *nf, struct _Elf_Extent *ex)
 	dst.d_buf     = nf;
 	dst.d_size    = fsz;
 
-	if (_libelf_xlate(&dst, &src, e->e_byteorder, ec, ELF_TOFILE) ==
+	if (_libelf_xlate(&dst, &src, e->e_byteorder, ec, em, ELF_TOFILE) ==
 	    NULL)
 		return ((off_t) -1);
 
@@ -876,7 +883,7 @@ _libelf_write_ehdr(Elf *e, unsigned char *nf, struct _Elf_Extent *ex)
 static off_t
 _libelf_write_phdr(Elf *e, unsigned char *nf, struct _Elf_Extent *ex)
 {
-	int ec;
+	int ec, em;
 	void *ehdr;
 	Elf32_Ehdr *eh32;
 	Elf64_Ehdr *eh64;
@@ -900,6 +907,8 @@ _libelf_write_phdr(Elf *e, unsigned char *nf, struct _Elf_Extent *ex)
 		phoff = eh64->e_phoff;
 	}
 
+	em = _libelf_elfmachine(e);
+
 	assert(phoff > 0);
 	assert(ex->ex_start == phoff);
 	assert(phoff % _libelf_falign(ELF_T_PHDR, ec) == 0);
@@ -919,7 +928,7 @@ _libelf_write_phdr(Elf *e, unsigned char *nf, struct _Elf_Extent *ex)
 	dst.d_size = fsz;
 	dst.d_buf = nf + ex->ex_start;
 
-	if (_libelf_xlate(&dst, &src, e->e_byteorder, ec, ELF_TOFILE) ==
+	if (_libelf_xlate(&dst, &src, e->e_byteorder, ec, em, ELF_TOFILE) ==
 	    NULL)
 		return ((off_t) -1);
 
@@ -933,7 +942,7 @@ _libelf_write_phdr(Elf *e, unsigned char *nf, struct _Elf_Extent *ex)
 static off_t
 _libelf_write_shdr(Elf *e, unsigned char *nf, struct _Elf_Extent *ex)
 {
-	int ec;
+	int ec, em;
 	void *ehdr;
 	Elf_Scn *scn;
 	uint64_t shoff;
@@ -956,6 +965,8 @@ _libelf_write_shdr(Elf *e, unsigned char *nf, struct _Elf_Extent *ex)
 		shoff = eh64->e_shoff;
 	}
 
+	em = _libelf_elfmachine(e);
+
 	assert(nscn > 0);
 	assert(shoff % _libelf_falign(ELF_T_SHDR, ec) == 0);
 	assert(ex->ex_start == shoff);
@@ -969,7 +980,7 @@ _libelf_write_shdr(Elf *e, unsigned char *nf, struct _Elf_Extent *ex)
 
 	fsz = _libelf_fsize(ELF_T_SHDR, ec, e->e_version, (size_t) 1);
 
-	STAILQ_FOREACH(scn, &e->e_u.e_elf.e_scn, s_next) {
+	RB_FOREACH(scn, scntree, &e->e_u.e_elf.e_scn) {
 		if (ec == ELFCLASS32)
 			src.d_buf = &scn->s_shdr.s_shdr32;
 		else
@@ -978,8 +989,8 @@ _libelf_write_shdr(Elf *e, unsigned char *nf, struct _Elf_Extent *ex)
 		dst.d_size = fsz;
 		dst.d_buf = nf + ex->ex_start + scn->s_ndx * fsz;
 
-		if (_libelf_xlate(&dst, &src, e->e_byteorder, ec,
-		    ELF_TOFILE) == NULL)
+		if (_libelf_xlate(&dst, &src, e->e_byteorder, ec, em,
+			ELF_TOFILE) == NULL)
 			return ((off_t) -1);
 	}
 
@@ -1131,7 +1142,7 @@ _libelf_write_elf(Elf *e, off_t newsize, struct _Elf_Extent_List *extents)
 
 	e->e_flags &= ~ELF_F_DIRTY;
 
-	STAILQ_FOREACH_SAFE(scn, &e->e_u.e_elf.e_scn, s_next, tscn)
+	RB_FOREACH_SAFE(scn, scntree, &e->e_u.e_elf.e_scn, tscn)
 		_libelf_release_scn(scn);
 
 	if (e->e_class == ELFCLASS32) {
@@ -1212,5 +1223,6 @@ elf_update(Elf *e, Elf_Cmd c)
 
 done:
 	_libelf_release_extents(&extents);
+	e->e_flags &= ~LIBELF_F_SHDRS_LOADED;
 	return (rc);
 }

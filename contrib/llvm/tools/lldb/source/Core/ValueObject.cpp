@@ -9,9 +9,8 @@
 
 #include "lldb/Core/ValueObject.h"
 
-#include "lldb/Core/Address.h" // for Address
+#include "lldb/Core/Address.h"
 #include "lldb/Core/Module.h"
-#include "lldb/Core/Scalar.h" // for Scalar
 #include "lldb/Core/ValueObjectCast.h"
 #include "lldb/Core/ValueObjectChild.h"
 #include "lldb/Core/ValueObjectConstResult.h"
@@ -19,50 +18,52 @@
 #include "lldb/Core/ValueObjectMemory.h"
 #include "lldb/Core/ValueObjectSyntheticFilter.h"
 #include "lldb/DataFormatters/DataVisualization.h"
-#include "lldb/DataFormatters/FormatManager.h" // for FormatManager
+#include "lldb/DataFormatters/DumpValueObjectOptions.h"
+#include "lldb/DataFormatters/FormatManager.h"
 #include "lldb/DataFormatters/StringPrinter.h"
-#include "lldb/DataFormatters/TypeFormat.h"    // for TypeFormatImpl_F...
-#include "lldb/DataFormatters/TypeSummary.h"   // for TypeSummaryOptions
-#include "lldb/DataFormatters/TypeValidator.h" // for TypeValidatorImp...
+#include "lldb/DataFormatters/TypeFormat.h"
+#include "lldb/DataFormatters/TypeSummary.h"
+#include "lldb/DataFormatters/TypeValidator.h"
 #include "lldb/DataFormatters/ValueObjectPrinter.h"
-#include "lldb/Expression/ExpressionVariable.h" // for ExpressionVariable
+#include "lldb/Expression/ExpressionVariable.h"
 #include "lldb/Symbol/ClangASTContext.h"
 #include "lldb/Symbol/CompileUnit.h"
 #include "lldb/Symbol/CompilerType.h"
-#include "lldb/Symbol/Declaration.h"   // for Declaration
-#include "lldb/Symbol/SymbolContext.h" // for SymbolContext
+#include "lldb/Symbol/Declaration.h"
+#include "lldb/Symbol/SymbolContext.h"
 #include "lldb/Symbol/Type.h"
 #include "lldb/Target/ExecutionContext.h"
 #include "lldb/Target/Language.h"
 #include "lldb/Target/LanguageRuntime.h"
 #include "lldb/Target/ObjCLanguageRuntime.h"
 #include "lldb/Target/Process.h"
-#include "lldb/Target/StackFrame.h" // for StackFrame
+#include "lldb/Target/StackFrame.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Target/Thread.h"
-#include "lldb/Target/ThreadList.h"  // for ThreadList
-#include "lldb/Utility/DataBuffer.h" // for DataBuffer
+#include "lldb/Target/ThreadList.h"
+#include "lldb/Utility/DataBuffer.h"
 #include "lldb/Utility/DataBufferHeap.h"
-#include "lldb/Utility/Flags.h" // for Flags
+#include "lldb/Utility/Flags.h"
 #include "lldb/Utility/Log.h"
-#include "lldb/Utility/Logging.h"    // for GetLogIfAllCateg...
-#include "lldb/Utility/SharingPtr.h" // for SharingPtr
-#include "lldb/Utility/Stream.h"     // for Stream
+#include "lldb/Utility/Logging.h"
+#include "lldb/Utility/Scalar.h"
+#include "lldb/Utility/SharingPtr.h"
+#include "lldb/Utility/Stream.h"
 #include "lldb/Utility/StreamString.h"
-#include "lldb/lldb-private-types.h" // for RegisterInfo
+#include "lldb/lldb-private-types.h"
 
-#include "llvm/Support/Compiler.h" // for LLVM_FALLTHROUGH
+#include "llvm/Support/Compiler.h"
 
-#include <algorithm> // for min
-#include <cstdint>   // for uint32_t, uint64_t
-#include <cstdlib>   // for size_t, NULL
-#include <memory>    // for shared_ptr, oper...
-#include <tuple>     // for tie, tuple
+#include <algorithm>
+#include <cstdint>
+#include <cstdlib>
+#include <memory>
+#include <tuple>
 
-#include <assert.h>   // for assert
-#include <inttypes.h> // for PRIu64, PRIx64
-#include <stdio.h>    // for snprintf
-#include <string.h>   // for memcpy, memcmp
+#include <assert.h>
+#include <inttypes.h>
+#include <stdio.h>
+#include <string.h>
 
 namespace lldb_private {
 class ExecutionContextScope;
@@ -146,16 +147,15 @@ bool ValueObject::UpdateValueIfNeeded(bool update_format) {
   if (update_format)
     did_change_formats = UpdateFormatsIfNeeded();
 
-  // If this is a constant value, then our success is predicated on whether
-  // we have an error or not
+  // If this is a constant value, then our success is predicated on whether we
+  // have an error or not
   if (GetIsConstant()) {
     // if you are constant, things might still have changed behind your back
     // (e.g. you are a frozen object and things have changed deeper than you
-    // cared to freeze-dry yourself)
-    // in this case, your value has not changed, but "computed" entries might
-    // have, so you might now have
-    // a different summary, or a different object description. clear these so we
-    // will recompute them
+    // cared to freeze-dry yourself) in this case, your value has not changed,
+    // but "computed" entries might have, so you might now have a different
+    // summary, or a different object description. clear these so we will
+    // recompute them
     if (update_format && !did_change_formats)
       ClearUserVisibleData(eClearUserVisibleDataItemsSummary |
                            eClearUserVisibleDataItemsDescription);
@@ -167,8 +167,8 @@ bool ValueObject::UpdateValueIfNeeded(bool update_format) {
   if (NeedsUpdating()) {
     m_update_point.SetUpdated();
 
-    // Save the old value using swap to avoid a string copy which
-    // also will clear our m_value_str
+    // Save the old value using swap to avoid a string copy which also will
+    // clear our m_value_str
     if (m_value_str.empty()) {
       m_old_value_valid = false;
     } else {
@@ -214,9 +214,9 @@ bool ValueObject::UpdateValueIfNeeded(bool update_format) {
 
       if (first_update)
         SetValueDidChange(false);
-      else if (!m_value_did_change && success == false) {
-        // The value wasn't gotten successfully, so we mark this
-        // as changed if the value used to be valid and now isn't
+      else if (!m_value_did_change && !success) {
+        // The value wasn't gotten successfully, so we mark this as changed if
+        // the value used to be valid and now isn't
         SetValueDidChange(value_was_valid);
       } else if (need_compare_checksums) {
         SetValueDidChange(memcmp(&old_checksum[0], &m_value_checksum[0],
@@ -261,8 +261,7 @@ bool ValueObject::UpdateFormatsIfNeeded() {
 void ValueObject::SetNeedsUpdate() {
   m_update_point.SetNeedsUpdate();
   // We have to clear the value string here so ConstResult children will notice
-  // if their values are
-  // changed by hand (i.e. with SetValueAsCString).
+  // if their values are changed by hand (i.e. with SetValueAsCString).
   ClearUserVisibleData(eClearUserVisibleDataItemsValue);
 }
 
@@ -443,10 +442,7 @@ bool ValueObject::IsLogicalTrue(Status &error) {
   }
 
   bool ret;
-  if (scalar_value.ULongLong(1) == 0)
-    ret = false;
-  else
-    ret = true;
+  ret = scalar_value.ULongLong(1) != 0;
   error.Clear();
   return ret;
 }
@@ -556,9 +552,9 @@ size_t ValueObject::GetIndexOfChildWithName(const ConstString &name) {
 
 ValueObjectSP ValueObject::GetChildMemberWithName(const ConstString &name,
                                                   bool can_create) {
-  // when getting a child by name, it could be buried inside some base
-  // classes (which really aren't part of the expression path), so we
-  // need a vector of indexes that can get us down to the correct child
+  // when getting a child by name, it could be buried inside some base classes
+  // (which really aren't part of the expression path), so we need a vector of
+  // indexes that can get us down to the correct child
   ValueObjectSP child_sp;
 
   // We may need to update our value if we are dynamic
@@ -640,7 +636,7 @@ ValueObject *ValueObject::CreateChildAtIndex(size_t idx,
   bool child_is_deref_of_parent = false;
   uint64_t language_flags = 0;
 
-  const bool transparent_pointers = synthetic_array_member == false;
+  const bool transparent_pointers = !synthetic_array_member;
   CompilerType child_compiler_type;
 
   ExecutionContext exe_ctx(GetExecutionContextRef());
@@ -663,8 +659,6 @@ ValueObject *ValueObject::CreateChildAtIndex(size_t idx,
         child_byte_offset, child_bitfield_bit_size, child_bitfield_bit_offset,
         child_is_base_class, child_is_deref_of_parent, eAddressTypeInvalid,
         language_flags);
-    // if (valobj)
-    //    valobj->SetAddressTypeOfChildren(eAddressTypeInvalid);
   }
 
   return valobj;
@@ -682,8 +676,8 @@ bool ValueObject::GetSummaryAsCString(TypeSummaryImpl *summary_ptr,
                                       const TypeSummaryOptions &options) {
   destination.clear();
 
-  // ideally we would like to bail out if passing NULL, but if we do so
-  // we end up not providing the summary for function pointers anymore
+  // ideally we would like to bail out if passing NULL, but if we do so we end
+  // up not providing the summary for function pointers anymore
   if (/*summary_ptr == NULL ||*/ m_is_getting_summary)
     return false;
 
@@ -695,9 +689,8 @@ bool ValueObject::GetSummaryAsCString(TypeSummaryImpl *summary_ptr,
     actual_options.SetLanguage(GetPreferredDisplayLanguage());
 
   // this is a hot path in code and we prefer to avoid setting this string all
-  // too often also clearing out other
-  // information that we might care to see in a crash log. might be useful in
-  // very specific situations though.
+  // too often also clearing out other information that we might care to see in
+  // a crash log. might be useful in very specific situations though.
   /*Host::SetCrashDescriptionWithFormat("Trying to fetch a summary for %s %s.
    Summary provider's description is %s",
    GetTypeName().GetCString(),
@@ -763,10 +756,13 @@ size_t ValueObject::GetPointeeData(DataExtractor &data, uint32_t item_idx,
 
   ExecutionContext exe_ctx(GetExecutionContextRef());
 
-  const uint64_t item_type_size = pointee_or_element_compiler_type.GetByteSize(
-      exe_ctx.GetBestExecutionContextScope());
-  const uint64_t bytes = item_count * item_type_size;
-  const uint64_t offset = item_idx * item_type_size;
+  llvm::Optional<uint64_t> item_type_size =
+      pointee_or_element_compiler_type.GetByteSize(
+          exe_ctx.GetBestExecutionContextScope());
+  if (!item_type_size)
+    return 0;
+  const uint64_t bytes = item_count * *item_type_size;
+  const uint64_t offset = item_idx * *item_type_size;
 
   if (item_idx == 0 && item_count == 1) // simply a deref
   {
@@ -829,10 +825,10 @@ size_t ValueObject::GetPointeeData(DataExtractor &data, uint32_t item_idx,
       }
     } break;
     case eAddressTypeHost: {
-      const uint64_t max_bytes =
+      auto max_bytes =
           GetCompilerType().GetByteSize(exe_ctx.GetBestExecutionContextScope());
-      if (max_bytes > offset) {
-        size_t bytes_read = std::min<uint64_t>(max_bytes - offset, bytes);
+      if (max_bytes && *max_bytes > offset) {
+        size_t bytes_read = std::min<uint64_t>(*max_bytes - offset, bytes);
         addr = m_value.GetScalar().ULongLong(LLDB_INVALID_ADDRESS);
         if (addr == 0 || addr == LLDB_INVALID_ADDRESS)
           break;
@@ -925,7 +921,8 @@ bool ValueObject::SetData(DataExtractor &data, Status &error) {
     break;
   }
 
-  // If we have reached this point, then we have successfully changed the value.
+  // If we have reached this point, then we have successfully changed the
+  // value.
   SetNeedsUpdate();
   return true;
 }
@@ -1010,9 +1007,9 @@ ValueObject::ReadPointedString(lldb::DataBufferSP &buffer_sp, Status &error,
     DataExtractor data;
     if (cstr_len > 0 && honor_array) {
       // I am using GetPointeeData() here to abstract the fact that some
-      // ValueObjects are actually frozen pointers in the host
-      // but the pointed-to data lives in the debuggee, and GetPointeeData()
-      // automatically takes care of this
+      // ValueObjects are actually frozen pointers in the host but the pointed-
+      // to data lives in the debuggee, and GetPointeeData() automatically
+      // takes care of this
       GetPointeeData(data, 0, cstr_len);
 
       if ((bytes_read = data.GetByteSize()) > 0) {
@@ -1031,9 +1028,9 @@ ValueObject::ReadPointedString(lldb::DataBufferSP &buffer_sp, Status &error,
       int cstr_len_displayed = -1;
       bool capped_cstr = false;
       // I am using GetPointeeData() here to abstract the fact that some
-      // ValueObjects are actually frozen pointers in the host
-      // but the pointed-to data lives in the debuggee, and GetPointeeData()
-      // automatically takes care of this
+      // ValueObjects are actually frozen pointers in the host but the pointed-
+      // to data lives in the debuggee, and GetPointeeData() automatically
+      // takes care of this
       while ((bytes_read = GetPointeeData(data, offset, k_max_buf_size)) > 0) {
         total_bytes_read += bytes_read;
         const char *cstr = data.PeekCStr(0);
@@ -1175,8 +1172,8 @@ const char *ValueObject::GetValueAsCString() {
         format_sp.reset(new TypeFormatImpl_Format(my_format));
       if (GetValueAsCString(*format_sp.get(), m_value_str)) {
         if (!m_value_did_change && m_old_value_valid) {
-          // The value was gotten successfully, so we consider the
-          // value as changed if the value string differs
+          // The value was gotten successfully, so we consider the value as
+          // changed if the value string differs
           SetValueDidChange(m_old_value_str != m_value_str);
         }
       }
@@ -1187,8 +1184,8 @@ const char *ValueObject::GetValueAsCString() {
   return m_value_str.c_str();
 }
 
-// if > 8bytes, 0 is returned. this method should mostly be used
-// to read address values out of pointers
+// if > 8bytes, 0 is returned. this method should mostly be used to read
+// address values out of pointers
 uint64_t ValueObject::GetValueAsUnsigned(uint64_t fail_value, bool *success) {
   // If our byte size is zero this is an aggregate type that has children
   if (CanProvideValue()) {
@@ -1224,10 +1221,9 @@ int64_t ValueObject::GetValueAsSigned(int64_t fail_value, bool *success) {
 }
 
 // if any more "special cases" are added to
-// ValueObject::DumpPrintableRepresentation() please keep
-// this call up to date by returning true for your new special cases. We will
-// eventually move
-// to checking this call result before trying to display special cases
+// ValueObject::DumpPrintableRepresentation() please keep this call up to date
+// by returning true for your new special cases. We will eventually move to
+// checking this call result before trying to display special cases
 bool ValueObject::HasSpecialPrintableRepresentation(
     ValueObjectRepresentationStyle val_obj_display, Format custom_format) {
   Flags flags(GetTypeInfo());
@@ -1276,8 +1272,7 @@ bool ValueObject::DumpPrintableRepresentation(
     if (flags.AnySet(eTypeIsArray | eTypeIsPointer) &&
         val_obj_display == ValueObject::eValueObjectRepresentationStyleValue) {
       // when being asked to get a printable display an array or pointer type
-      // directly,
-      // try to "do the right thing"
+      // directly, try to "do the right thing"
 
       if (IsCStringContainer(true) &&
           (custom_format == eFormatCString ||
@@ -1309,8 +1304,8 @@ bool ValueObject::DumpPrintableRepresentation(
       if (custom_format == eFormatEnum)
         return false;
 
-      // this only works for arrays, because I have no way to know when
-      // the pointed memory ends, and no special \0 end of data marker
+      // this only works for arrays, because I have no way to know when the
+      // pointed memory ends, and no special \0 end of data marker
       if (flags.Test(eTypeIsArray)) {
         if ((custom_format == eFormatBytes) ||
             (custom_format == eFormatBytesWithASCII)) {
@@ -1406,8 +1401,8 @@ bool ValueObject::DumpPrintableRepresentation(
     llvm::StringRef str;
 
     // this is a local stream that we are using to ensure that the data pointed
-    // to by cstr survives long enough for us to copy it to its destination - it
-    // is necessary to have this temporary storage area for cases where our
+    // to by cstr survives long enough for us to copy it to its destination -
+    // it is necessary to have this temporary storage area for cases where our
     // desired output is not backed by some other longer-term storage
     StreamString strm;
 
@@ -1485,9 +1480,9 @@ bool ValueObject::DumpPrintableRepresentation(
         s.PutCString("<no printable representation>");
     }
 
-    // we should only return false here if we could not do *anything*
-    // even if we have an error message as output, that's a success
-    // from our callers' perspective, so return true
+    // we should only return false here if we could not do *anything* even if
+    // we have an error message as output, that's a success from our callers'
+    // perspective, so return true
     var_success = true;
 
     if (custom_format != eFormatInvalid)
@@ -1590,9 +1585,8 @@ bool ValueObject::SetValueFromCString(const char *value_str, Status &error) {
       switch (value_type) {
       case Value::eValueTypeLoadAddress: {
         // If it is a load address, then the scalar value is the storage
-        // location
-        // of the data, and we have to shove this value down to that load
-        // location.
+        // location of the data, and we have to shove this value down to that
+        // load location.
         ExecutionContext exe_ctx(GetExecutionContextRef());
         Process *process = exe_ctx.GetProcessPtr();
         if (process) {
@@ -1639,7 +1633,8 @@ bool ValueObject::SetValueFromCString(const char *value_str, Status &error) {
     return false;
   }
 
-  // If we have reached this point, then we have successfully changed the value.
+  // If we have reached this point, then we have successfully changed the
+  // value.
   SetNeedsUpdate();
   return true;
 }
@@ -1734,16 +1729,14 @@ bool ValueObject::IsUninitializedReference() {
   return false;
 }
 
-// This allows you to create an array member using and index
-// that doesn't not fall in the normal bounds of the array.
-// Many times structure can be defined as:
-// struct Collection
-// {
+// This allows you to create an array member using and index that doesn't not
+// fall in the normal bounds of the array. Many times structure can be defined
+// as: struct Collection {
 //     uint32_t item_count;
 //     Item item_array[0];
 // };
-// The size of the "item_array" is 1, but many times in practice
-// there are more items in "item_array".
+// The size of the "item_array" is 1, but many times in practice there are more
+// items in "item_array".
 
 ValueObjectSP ValueObject::GetSyntheticArrayMember(size_t index,
                                                    bool can_create) {
@@ -1752,13 +1745,13 @@ ValueObjectSP ValueObject::GetSyntheticArrayMember(size_t index,
     char index_str[64];
     snprintf(index_str, sizeof(index_str), "[%" PRIu64 "]", (uint64_t)index);
     ConstString index_const_str(index_str);
-    // Check if we have already created a synthetic array member in this
-    // valid object. If we have we will re-use it.
+    // Check if we have already created a synthetic array member in this valid
+    // object. If we have we will re-use it.
     synthetic_child_sp = GetSyntheticChild(index_const_str);
     if (!synthetic_child_sp) {
       ValueObject *synthetic_child;
-      // We haven't made a synthetic array member for INDEX yet, so
-      // lets make one and cache it for any future reference.
+      // We haven't made a synthetic array member for INDEX yet, so lets make
+      // one and cache it for any future reference.
       synthetic_child = CreateChildAtIndex(0, true, index);
 
       // Cache the value if we got one back...
@@ -1780,8 +1773,8 @@ ValueObjectSP ValueObject::GetSyntheticBitFieldChild(uint32_t from, uint32_t to,
     char index_str[64];
     snprintf(index_str, sizeof(index_str), "[%i-%i]", from, to);
     ConstString index_const_str(index_str);
-    // Check if we have already created a synthetic array member in this
-    // valid object. If we have we will re-use it.
+    // Check if we have already created a synthetic array member in this valid
+    // object. If we have we will re-use it.
     synthetic_child_sp = GetSyntheticChild(index_const_str);
     if (!synthetic_child_sp) {
       uint32_t bit_field_size = to - from + 1;
@@ -1789,8 +1782,8 @@ ValueObjectSP ValueObject::GetSyntheticBitFieldChild(uint32_t from, uint32_t to,
       if (GetDataExtractor().GetByteOrder() == eByteOrderBig)
         bit_field_offset =
             GetByteSize() * 8 - bit_field_size - bit_field_offset;
-      // We haven't made a synthetic array member for INDEX yet, so
-      // lets make one and cache it for any future reference.
+      // We haven't made a synthetic array member for INDEX yet, so lets make
+      // one and cache it for any future reference.
       ValueObjectChild *synthetic_child = new ValueObjectChild(
           *this, GetCompilerType(), index_const_str, GetByteSize(), 0,
           bit_field_size, bit_field_offset, false, false, eAddressTypeInvalid,
@@ -1820,22 +1813,24 @@ ValueObjectSP ValueObject::GetSyntheticChildAtOffset(
     name_const_str.SetCString(name_str);
   }
 
-  // Check if we have already created a synthetic array member in this
-  // valid object. If we have we will re-use it.
+  // Check if we have already created a synthetic array member in this valid
+  // object. If we have we will re-use it.
   synthetic_child_sp = GetSyntheticChild(name_const_str);
 
   if (synthetic_child_sp.get())
     return synthetic_child_sp;
 
   if (!can_create)
-    return ValueObjectSP();
+    return {};
 
   ExecutionContext exe_ctx(GetExecutionContextRef());
-
-  ValueObjectChild *synthetic_child = new ValueObjectChild(
-      *this, type, name_const_str,
-      type.GetByteSize(exe_ctx.GetBestExecutionContextScope()), offset, 0, 0,
-      false, false, eAddressTypeInvalid, 0);
+  llvm::Optional<uint64_t> size =
+      type.GetByteSize(exe_ctx.GetBestExecutionContextScope());
+  if (!size)
+    return {};
+  ValueObjectChild *synthetic_child =
+      new ValueObjectChild(*this, type, name_const_str, *size, offset, 0, 0,
+                           false, false, eAddressTypeInvalid, 0);
   if (synthetic_child) {
     AddSyntheticChild(name_const_str, synthetic_child);
     synthetic_child_sp = synthetic_child->GetSP();
@@ -1858,24 +1853,26 @@ ValueObjectSP ValueObject::GetSyntheticBase(uint32_t offset,
     name_const_str.SetCString(name_str);
   }
 
-  // Check if we have already created a synthetic array member in this
-  // valid object. If we have we will re-use it.
+  // Check if we have already created a synthetic array member in this valid
+  // object. If we have we will re-use it.
   synthetic_child_sp = GetSyntheticChild(name_const_str);
 
   if (synthetic_child_sp.get())
     return synthetic_child_sp;
 
   if (!can_create)
-    return ValueObjectSP();
+    return {};
 
   const bool is_base_class = true;
 
   ExecutionContext exe_ctx(GetExecutionContextRef());
-
-  ValueObjectChild *synthetic_child = new ValueObjectChild(
-      *this, type, name_const_str,
-      type.GetByteSize(exe_ctx.GetBestExecutionContextScope()), offset, 0, 0,
-      is_base_class, false, eAddressTypeInvalid, 0);
+  llvm::Optional<uint64_t> size =
+      type.GetByteSize(exe_ctx.GetBestExecutionContextScope());
+  if (!size)
+    return {};
+  ValueObjectChild *synthetic_child =
+      new ValueObjectChild(*this, type, name_const_str, *size, offset, 0, 0,
+                           is_base_class, false, eAddressTypeInvalid, 0);
   if (synthetic_child) {
     AddSyntheticChild(name_const_str, synthetic_child);
     synthetic_child_sp = synthetic_child->GetSP();
@@ -1884,11 +1881,10 @@ ValueObjectSP ValueObject::GetSyntheticBase(uint32_t offset,
   return synthetic_child_sp;
 }
 
-// your expression path needs to have a leading . or ->
-// (unless it somehow "looks like" an array, in which case it has
-// a leading [ symbol). while the [ is meaningful and should be shown
-// to the user, . and -> are just parser design, but by no means
-// added information for the user.. strip them off
+// your expression path needs to have a leading . or -> (unless it somehow
+// "looks like" an array, in which case it has a leading [ symbol). while the [
+// is meaningful and should be shown to the user, . and -> are just parser
+// design, but by no means added information for the user.. strip them off
 static const char *SkipLeadingExpressionPathSeparators(const char *expression) {
   if (!expression || !expression[0])
     return expression;
@@ -1904,12 +1900,12 @@ ValueObject::GetSyntheticExpressionPathChild(const char *expression,
                                              bool can_create) {
   ValueObjectSP synthetic_child_sp;
   ConstString name_const_string(expression);
-  // Check if we have already created a synthetic array member in this
-  // valid object. If we have we will re-use it.
+  // Check if we have already created a synthetic array member in this valid
+  // object. If we have we will re-use it.
   synthetic_child_sp = GetSyntheticChild(name_const_string);
   if (!synthetic_child_sp) {
-    // We haven't made a synthetic array member for expression yet, so
-    // lets make one and cache it for any future reference.
+    // We haven't made a synthetic array member for expression yet, so lets
+    // make one and cache it for any future reference.
     synthetic_child_sp = GetValueForExpressionPath(
         expression, NULL, NULL,
         GetValueForExpressionPathOptions().SetSyntheticChildrenTraversal(
@@ -1929,11 +1925,11 @@ ValueObject::GetSyntheticExpressionPathChild(const char *expression,
 }
 
 void ValueObject::CalculateSyntheticValue(bool use_synthetic) {
-  if (use_synthetic == false)
+  if (!use_synthetic)
     return;
 
   TargetSP target_sp(GetTargetSP());
-  if (target_sp && target_sp->GetEnableSyntheticValue() == false) {
+  if (target_sp && !target_sp->GetEnableSyntheticValue()) {
     m_synthetic_value = NULL;
     return;
   }
@@ -1984,7 +1980,7 @@ ValueObjectSP ValueObject::GetStaticValue() { return GetSP(); }
 lldb::ValueObjectSP ValueObject::GetNonSyntheticValue() { return GetSP(); }
 
 ValueObjectSP ValueObject::GetSyntheticValue(bool use_synthetic) {
-  if (use_synthetic == false)
+  if (!use_synthetic)
     return ValueObjectSP();
 
   CalculateSyntheticValue(use_synthetic);
@@ -2003,10 +1999,7 @@ bool ValueObject::HasSyntheticValue() {
 
   CalculateSyntheticValue(true);
 
-  if (m_synthetic_value)
-    return true;
-  else
-    return false;
+  return m_synthetic_value != nullptr;
 }
 
 bool ValueObject::GetBaseClassPath(Stream &s) {
@@ -2055,10 +2048,9 @@ bool ValueObject::IsBaseClass(uint32_t &depth) {
 void ValueObject::GetExpressionPath(Stream &s, bool qualify_cxx_base_classes,
                                     GetExpressionPathFormat epformat) {
   // synthetic children do not actually "exist" as part of the hierarchy, and
-  // sometimes they are consed up in ways
-  // that don't make sense from an underlying language/API standpoint. So, use a
-  // special code path here to return
-  // something that can hopefully be used in expression
+  // sometimes they are consed up in ways that don't make sense from an
+  // underlying language/API standpoint. So, use a special code path here to
+  // return something that can hopefully be used in expression
   if (m_is_synthetic_children_generated) {
     UpdateValueIfNeeded();
 
@@ -2092,11 +2084,10 @@ void ValueObject::GetExpressionPath(Stream &s, bool qualify_cxx_base_classes,
   if (is_deref_of_parent &&
       epformat == eGetExpressionPathFormatDereferencePointers) {
     // this is the original format of GetExpressionPath() producing code like
-    // *(a_ptr).memberName, which is entirely
-    // fine, until you put this into
+    // *(a_ptr).memberName, which is entirely fine, until you put this into
     // StackFrame::GetValueForVariableExpressionPath() which prefers to see
-    // a_ptr->memberName.
-    // the eHonorPointers mode is meant to produce strings in this latter format
+    // a_ptr->memberName. the eHonorPointers mode is meant to produce strings
+    // in this latter format
     s.PutCString("*(");
   }
 
@@ -2105,9 +2096,9 @@ void ValueObject::GetExpressionPath(Stream &s, bool qualify_cxx_base_classes,
   if (parent)
     parent->GetExpressionPath(s, qualify_cxx_base_classes, epformat);
 
-  // if we are a deref_of_parent just because we are synthetic array
-  // members made up to allow ptr[%d] syntax to work in variable
-  // printing, then add our name ([%d]) to the expression path
+  // if we are a deref_of_parent just because we are synthetic array members
+  // made up to allow ptr[%d] syntax to work in variable printing, then add our
+  // name ([%d]) to the expression path
   if (m_is_array_item_for_pointer &&
       epformat == eGetExpressionPathFormatHonorPointers)
     s.PutCString(m_name.AsCString());
@@ -2355,8 +2346,8 @@ ValueObjectSP ValueObject::GetValueForExpressionPath_Impl(
         }
 
         // if we are here and options.m_no_synthetic_children is true,
-        // child_valobj_sp is going to be a NULL SP,
-        // so we hit the "else" branch, and return an error
+        // child_valobj_sp is going to be a NULL SP, so we hit the "else"
+        // branch, and return an error
         if (child_valobj_sp.get()) // if it worked, just return
         {
           *reason_to_stop =
@@ -2424,8 +2415,8 @@ ValueObjectSP ValueObject::GetValueForExpressionPath_Impl(
         }
 
         // if we are here and options.m_no_synthetic_children is true,
-        // child_valobj_sp is going to be a NULL SP,
-        // so we hit the "else" branch, and return an error
+        // child_valobj_sp is going to be a NULL SP, so we hit the "else"
+        // branch, and return an error
         if (child_valobj_sp.get()) // if it worked, move on
         {
           root = child_valobj_sp;
@@ -2506,8 +2497,8 @@ ValueObjectSP ValueObject::GetValueForExpressionPath_Impl(
       assert(!bracket_expr.empty());
 
       if (!bracket_expr.contains('-')) {
-        // if no separator, this is of the form [N].  Note that this cannot
-        // be an unbounded range of the form [], because that case was handled
+        // if no separator, this is of the form [N].  Note that this cannot be
+        // an unbounded range of the form [], because that case was handled
         // above with an unconditional return.
         unsigned long index = 0;
         if (bracket_expr.getAsInteger(0, index)) {
@@ -2631,8 +2622,8 @@ ValueObjectSP ValueObject::GetValueForExpressionPath_Impl(
             *final_result = ValueObject::eExpressionPathEndResultTypeInvalid;
             return nullptr;
           }
-          // if we are here, then root itself is a synthetic VO.. should be good
-          // to go
+          // if we are here, then root itself is a synthetic VO.. should be
+          // good to go
 
           if (!root) {
             *reason_to_stop =
@@ -2812,31 +2803,6 @@ ValueObjectSP ValueObject::GetQualifiedRepresentationIfAvailable(
   }
 
   return result_sp;
-}
-
-lldb::addr_t ValueObject::GetCPPVTableAddress(AddressType &address_type) {
-  CompilerType pointee_type;
-  CompilerType this_type(GetCompilerType());
-  uint32_t type_info = this_type.GetTypeInfo(&pointee_type);
-  if (type_info) {
-    bool ptr_or_ref = false;
-    if (type_info & (eTypeIsPointer | eTypeIsReference)) {
-      ptr_or_ref = true;
-      type_info = pointee_type.GetTypeInfo();
-    }
-
-    const uint32_t cpp_class = eTypeIsClass | eTypeIsCPlusPlus;
-    if ((type_info & cpp_class) == cpp_class) {
-      if (ptr_or_ref) {
-        address_type = GetAddressTypeOfChildren();
-        return GetValueAsUnsigned(LLDB_INVALID_ADDRESS);
-      } else
-        return GetAddressOf(false, &address_type);
-    }
-  }
-
-  address_type = eAddressTypeInvalid;
-  return LLDB_INVALID_ADDRESS;
 }
 
 ValueObjectSP ValueObject::Dereference(Status &error) {
@@ -3031,20 +2997,17 @@ ValueObject::EvaluationPoint::EvaluationPoint(
 ValueObject::EvaluationPoint::~EvaluationPoint() {}
 
 // This function checks the EvaluationPoint against the current process state.
-// If the current
-// state matches the evaluation point, or the evaluation point is already
-// invalid, then we return
-// false, meaning "no change".  If the current state is different, we update our
-// state, and return
-// true meaning "yes, change".  If we did see a change, we also set
-// m_needs_update to true, so
-// future calls to NeedsUpdate will return true.
-// exe_scope will be set to the current execution context scope.
+// If the current state matches the evaluation point, or the evaluation point
+// is already invalid, then we return false, meaning "no change".  If the
+// current state is different, we update our state, and return true meaning
+// "yes, change".  If we did see a change, we also set m_needs_update to true,
+// so future calls to NeedsUpdate will return true. exe_scope will be set to
+// the current execution context scope.
 
 bool ValueObject::EvaluationPoint::SyncWithProcessState(
     bool accept_invalid_exe_ctx) {
-  // Start with the target, if it is NULL, then we're obviously not going to get
-  // any further:
+  // Start with the target, if it is NULL, then we're obviously not going to
+  // get any further:
   const bool thread_and_frame_only_if_stopped = true;
   ExecutionContext exe_ctx(
       m_exe_ctx_ref.Lock(thread_and_frame_only_if_stopped));
@@ -3061,8 +3024,8 @@ bool ValueObject::EvaluationPoint::SyncWithProcessState(
   ProcessModID current_mod_id = process->GetModID();
 
   // If the current stop id is 0, either we haven't run yet, or the process
-  // state has been cleared.
-  // In either case, we aren't going to be able to sync with the process state.
+  // state has been cleared. In either case, we aren't going to be able to sync
+  // with the process state.
   if (current_mod_id.GetStopID() == 0)
     return false;
 
@@ -3070,8 +3033,8 @@ bool ValueObject::EvaluationPoint::SyncWithProcessState(
   const bool was_valid = m_mod_id.IsValid();
   if (was_valid) {
     if (m_mod_id == current_mod_id) {
-      // Everything is already up to date in this object, no need to
-      // update the execution context scope.
+      // Everything is already up to date in this object, no need to update the
+      // execution context scope.
       changed = false;
     } else {
       m_mod_id = current_mod_id;
@@ -3081,10 +3044,9 @@ bool ValueObject::EvaluationPoint::SyncWithProcessState(
   }
 
   // Now re-look up the thread and frame in case the underlying objects have
-  // gone away & been recreated.
-  // That way we'll be sure to return a valid exe_scope.
-  // If we used to have a thread or a frame but can't find it anymore, then mark
-  // ourselves as invalid.
+  // gone away & been recreated. That way we'll be sure to return a valid
+  // exe_scope. If we used to have a thread or a frame but can't find it
+  // anymore, then mark ourselves as invalid.
 
   if (!accept_invalid_exe_ctx) {
     if (m_exe_ctx_ref.HasThreadRef()) {
@@ -3234,7 +3196,7 @@ ValueObject *
 ValueObject::FollowParentChain(std::function<bool(ValueObject *)> f) {
   ValueObject *vo = this;
   while (vo) {
-    if (f(vo) == false)
+    if (!f(vo))
       break;
     vo = vo->m_parent;
   }
@@ -3299,14 +3261,11 @@ void ValueObject::SetPreferredDisplayLanguageIfNeeded(lldb::LanguageType lt) {
 }
 
 bool ValueObject::CanProvideValue() {
-  // we need to support invalid types as providers of values because some
-  // bare-board
-  // debugging scenarios have no notion of types, but still manage to have raw
-  // numeric
-  // values for things like registers. sigh.
+  // we need to support invalid types as providers of values because some bare-
+  // board debugging scenarios have no notion of types, but still manage to
+  // have raw numeric values for things like registers. sigh.
   const CompilerType &type(GetCompilerType());
-  return (false == type.IsValid()) ||
-         (0 != (type.GetTypeInfo() & eTypeHasValue));
+  return (!type.IsValid()) || (0 != (type.GetTypeInfo() & eTypeHasValue));
 }
 
 bool ValueObject::IsChecksumEmpty() { return m_value_checksum.empty(); }
@@ -3326,7 +3285,9 @@ ValueObjectSP ValueObject::Persist() {
   if (!persistent_state)
     return nullptr;
 
-  ConstString name(persistent_state->GetNextPersistentVariableName());
+  auto prefix = persistent_state->GetPersistentVariablePrefix();
+  ConstString name =
+      persistent_state->GetNextPersistentVariableName(*target_sp, prefix);
 
   ValueObjectSP const_result_sp =
       ValueObjectConstResult::Create(target_sp.get(), GetValue(), name);

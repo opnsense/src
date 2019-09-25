@@ -1,6 +1,7 @@
 /*-
  * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
  *
+ * Copyright (c) 1994-1996 Søren Schmidt
  * Copyright (c) 2006 Roman Divacky
  * Copyright (c) 2013 Dmitry Chagin
  * All rights reserved.
@@ -32,6 +33,7 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/fcntl.h>
 #include <sys/imgact.h>
 #include <sys/kernel.h>
 #include <sys/ktr.h>
@@ -48,6 +50,11 @@ __FBSDID("$FreeBSD$");
 #include <compat/linux/linux_persona.h>
 #include <compat/linux/linux_util.h>
 
+#if BYTE_ORDER == LITTLE_ENDIAN
+#define SHELLMAGIC	0x2123 /* #! */
+#else
+#define SHELLMAGIC	0x2321
+#endif
 
 /*
  * This returns reference to the thread emuldata entry (if found)
@@ -120,7 +127,6 @@ linux_proc_init(struct thread *td, struct thread *newtd, int flags)
 
 		em->em_tid = p->p_pid;
 		em->flags = 0;
-		em->pdeath_signal = 0;
 		em->robust_futexes = NULL;
 		em->child_clear_tid = NULL;
 		em->child_set_tid = NULL;
@@ -138,7 +144,7 @@ linux_proc_init(struct thread *td, struct thread *newtd, int flags)
 
 }
 
-void 
+void
 linux_proc_exit(void *arg __unused, struct proc *p)
 {
 	struct linux_pemuldata *pem;
@@ -153,7 +159,7 @@ linux_proc_exit(void *arg __unused, struct proc *p)
 
 	pem = pem_find(p);
 	if (pem == NULL)
-		return;	
+		return;
 	(p->p_sysent->sv_thread_detach)(td);
 
 	p->p_emuldata = NULL;
@@ -168,7 +174,43 @@ linux_proc_exit(void *arg __unused, struct proc *p)
 	free(pem, M_LINUX);
 }
 
-int 
+/*
+ * If a Linux binary is exec'ing something, try this image activator
+ * first.  We override standard shell script execution in order to
+ * be able to modify the interpreter path.  We only do this if a Linux
+ * binary is doing the exec, so we do not create an EXEC module for it.
+ */
+int
+linux_exec_imgact_try(struct image_params *imgp)
+{
+	const char *head = (const char *)imgp->image_header;
+	char *rpath;
+	int error = -1;
+
+	/*
+	 * The interpreter for shell scripts run from a Linux binary needs
+	 * to be located in /compat/linux if possible in order to recursively
+	 * maintain Linux path emulation.
+	 */
+	if (((const short *)head)[0] == SHELLMAGIC) {
+		/*
+		 * Run our normal shell image activator.  If it succeeds attempt
+		 * to use the alternate path for the interpreter.  If an
+		 * alternate path is found, use our stringspace to store it.
+		 */
+		if ((error = exec_shell_imgact(imgp)) == 0) {
+			linux_emul_convpath(FIRST_THREAD_IN_PROC(imgp->proc),
+			    imgp->interpreter_name, UIO_SYSSPACE, &rpath, 0,
+			    AT_FDCWD);
+			if (rpath != NULL)
+				imgp->args->fname_buf =
+				    imgp->interpreter_name = rpath;
+		}
+	}
+	return (error);
+}
+
+int
 linux_common_execve(struct thread *td, struct image_args *eargs)
 {
 	struct linux_pemuldata *pem;
@@ -186,12 +228,12 @@ linux_common_execve(struct thread *td, struct image_args *eargs)
 
 	error = kern_execve(td, eargs, NULL);
 	post_execve(td, error, oldvmspace);
-	if (error != 0)
+	if (error != EJUSTRETURN)
 		return (error);
 
 	/*
 	 * In a case of transition from Linux binary execing to
-	 * FreeBSD binary we destroy linux emuldata thread & proc entries.
+	 * FreeBSD binary we destroy Linux emuldata thread & proc entries.
 	 */
 	if (SV_CURPROC_ABI() != SV_ABI_LINUX) {
 		PROC_LOCK(p);
@@ -213,10 +255,10 @@ linux_common_execve(struct thread *td, struct image_args *eargs)
 		free(em, M_TEMP);
 		free(pem, M_LINUX);
 	}
-	return (0);
+	return (EJUSTRETURN);
 }
 
-void 
+void
 linux_proc_exec(void *arg __unused, struct proc *p, struct image_params *imgp)
 {
 	struct thread *td = curthread;
@@ -226,7 +268,7 @@ linux_proc_exec(void *arg __unused, struct proc *p, struct image_params *imgp)
 #endif
 
 	/*
-	 * In a case of execing from linux binary properly detach
+	 * In a case of execing from Linux binary properly detach
 	 * other threads from the user space.
 	 */
 	if (__predict_false(SV_PROC_ABI(p) == SV_ABI_LINUX)) {
@@ -237,7 +279,7 @@ linux_proc_exec(void *arg __unused, struct proc *p, struct image_params *imgp)
 	}
 
 	/*
-	 * In a case of execing to linux binary we create linux
+	 * In a case of execing to Linux binary we create Linux
 	 * emuldata thread entry.
 	 */
 	if (__predict_false((imgp->sysent->sv_flags & SV_ABI_MASK) ==

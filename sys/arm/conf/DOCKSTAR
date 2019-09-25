@@ -3,11 +3,11 @@
 #
 # $FreeBSD$
 #
-#    http://www.FreeBSD.org/doc/en_US.ISO8859-1/books/handbook/kernelconfig-config.html
+#    https://www.FreeBSD.org/doc/en_US.ISO8859-1/books/handbook/kernelconfig-config.html
 #
 # The handbook is also available locally in /usr/share/doc/handbook
 # if you've installed the doc distribution, otherwise always see the
-# FreeBSD World Wide Web server (http://www.FreeBSD.org/) for the
+# FreeBSD World Wide Web server (https://www.FreeBSD.org/) for the
 # latest information.
 #
 # An exhaustive list of options and more detailed explanations of the
@@ -29,6 +29,7 @@ options 	SOC_MV_KIRKWOOD
 options 	SCHED_4BSD		# 4BSD scheduler
 options 	INET			# InterNETworking
 options 	INET6			# IPv6 communications protocols
+options 	TCP_HHOOK		# hhook(9) framework for TCP
 options 	FFS			# Berkeley Fast Filesystem
 options 	SOFTUPDATES		# Enable FFS soft updates support
 options 	NFSCL			# Network Filesystem Client
@@ -118,7 +119,6 @@ device		cryptodev
 # IPSec
 device		enc
 options 	IPSEC
-options 	IPSEC_NAT_T
 options 	TCP_SIGNATURE		# include support for RFC 2385
 
 # IPFW

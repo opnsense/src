@@ -1,5 +1,7 @@
-/*
+/*-
  * sdp.h
+ *
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
  *
  * Copyright (c) 2001-2003 Maksim Yevmenkin <m_evmenkin@yahoo.com>
  * All rights reserved.
@@ -530,6 +532,7 @@ void *             sdp_open       (bdaddr_t const *l, bdaddr_t const *r);
 void *             sdp_open_local (char const *control);
 int32_t            sdp_close      (void *xs);
 int32_t            sdp_error      (void *xs);
+int32_t            sdp_get_lcaddr (void *xs, bdaddr_t *l);
 
 int32_t            sdp_search     (void *xs,
                                    uint32_t plen, uint16_t const *pp,
@@ -582,6 +585,24 @@ void               sdp_print      (uint32_t level, uint8_t const *start,
 #define SDP_PDU_SERVICE_REGISTER_REQUEST	0x81
 #define SDP_PDU_SERVICE_UNREGISTER_REQUEST	0x82
 #define SDP_PDU_SERVICE_CHANGE_REQUEST		0x83
+
+struct sdp_audio_sink_profile
+{
+	uint16_t psm;
+	uint16_t protover;
+	uint16_t features;
+};
+typedef struct sdp_audio_sink_profile	sdp_audio_sink_profile_t;
+typedef struct sdp_audio_sink_profile	*sdp_audio_sink_profile_p;
+
+struct sdp_audio_source_profile
+{
+	uint16_t psm;
+	uint16_t protover;
+	uint16_t features;
+};
+typedef struct sdp_audio_source_profile	sdp_audio_source_profile_t;
+typedef struct sdp_audio_source_profile *sdp_audio_source_profile_p;
 
 struct sdp_dun_profile
 {

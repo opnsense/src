@@ -2,7 +2,7 @@
 #$FreeBSD$
 
 cpu		CPU_CORTEXA
-machine 	arm armv6
+machine 	arm armv7
 makeoptions	CONF_CFLAGS="-march=armv7a"
 
 files		"../allwinner/files.allwinner_up"

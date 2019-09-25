@@ -9,7 +9,7 @@
  *
  * 1. Copyright Notice
  *
- * Some or all of this work - Copyright (c) 1999 - 2017, Intel Corp.
+ * Some or all of this work - Copyright (c) 1999 - 2018, Intel Corp.
  * All rights reserved.
  *
  * 2. License
@@ -155,8 +155,8 @@
 
 /* Buffer to pass strings to the parser */
 
-#define STRING_SETUP    strcpy (StringBuffer, PrParsertext);\
-    PrParserlval.str = StringBuffer
+#define STRING_SETUP    strcpy (AslGbl_StringBuffer, PrParsertext);\
+    PrParserlval.str = AslGbl_StringBuffer
 
 #define _COMPONENT          ACPI_COMPILER
         ACPI_MODULE_NAME    ("prscanner")

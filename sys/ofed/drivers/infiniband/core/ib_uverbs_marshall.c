@@ -30,9 +30,10 @@
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
- *
- * $FreeBSD$
  */
+
+#include <sys/cdefs.h>
+__FBSDID("$FreeBSD$");
 
 #include <rdma/ib_marshall.h>
 
@@ -145,7 +146,7 @@ void ib_copy_path_rec_from_user(struct ib_sa_path_rec *dst,
 	dst->packet_life_time_selector = src->packet_life_time_selector;
 
 	memset(dst->dmac, 0, sizeof(dst->dmac));
-	dst->net = NULL;
+	dst->net = TD_TO_VNET(curthread);
 	dst->ifindex = 0;
 	dst->gid_type = IB_GID_TYPE_IB;
 }

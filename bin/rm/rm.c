@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1990, 1993, 1994
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -99,13 +101,12 @@ main(int argc, char *argv[])
 	else
 		++p;
 	if (strcmp(p, "unlink") == 0) {
-		while (getopt(argc, argv, "") != -1)
+		if (argc == 2)
+			rm_file(&argv[1]);
+		else if (argc == 3 && strcmp(argv[1], "--") == 0)
+			rm_file(&argv[2]);
+		else
 			usage();
-		argc -= optind;
-		argv += optind;
-		if (argc != 1)
-			usage();
-		rm_file(&argv[0]);
 		exit(eval);
 	}
 
@@ -632,7 +633,7 @@ usage(void)
 
 	(void)fprintf(stderr, "%s\n%s\n",
 	    "usage: rm [-f | -i] [-dIPRrvWx] file ...",
-	    "       unlink file");
+	    "       unlink [--] file");
 	exit(EX_USAGE);
 }
 

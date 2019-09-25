@@ -10,12 +10,12 @@
 #include "lldb/Utility/VASPrintf.h"
 
 #include "llvm/ADT/SmallString.h"
-#include "llvm/ADT/SmallVector.h" // for SmallVectorImpl
-#include "llvm/ADT/StringRef.h"   // for StringRef
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
 
-#include <assert.h> // for assert
-#include <stdarg.h> // for va_end, va_list, va_copy
-#include <stdio.h>  // for vsnprintf, size_t
+#include <assert.h>
+#include <stdarg.h>
+#include <stdio.h>
 
 bool lldb_private::VASprintf(llvm::SmallVectorImpl<char> &buf, const char *fmt,
                              va_list args) {
@@ -36,8 +36,8 @@ bool lldb_private::VASprintf(llvm::SmallVectorImpl<char> &buf, const char *fmt,
   }
 
   if (size_t(length) >= buf.size()) {
-    // The error formatted string didn't fit into our buffer, resize it
-    // to the exact needed size, and retry
+    // The error formatted string didn't fit into our buffer, resize it to the
+    // exact needed size, and retry
     buf.resize(length + 1);
     length = ::vsnprintf(buf.data(), buf.size(), fmt, copy_args);
     if (length < 0) {

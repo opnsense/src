@@ -27,7 +27,7 @@
 .\"
 .Dd June 14, 2017
 .Dt FREEBSD-UPDATE 8
-.Os FreeBSD
+.Os
 .Sh NAME
 .Nm freebsd-update
 .Nd fetch and install binary updates to FreeBSD
@@ -47,22 +47,25 @@
 The
 .Nm
 tool is used to fetch, install, and rollback binary
-updates to the FreeBSD base system.
+updates to the
+.Fx
+base system.
 Note that updates are only available if they are being built for the
-FreeBSD release and architecture being used; in particular, the
+.Fx
+release and architecture being used; in particular, the
 .Fx
 Security Team only builds updates for releases shipped in binary form
 by the
 .Fx
 Release Engineering Team, e.g.,
 .Fx
-10.3-RELEASE and
+11.2-RELEASE and
 .Fx
-11.0-RELEASE, but not
+12.0-RELEASE, but not
 .Fx
-10.3-STABLE or
+11.2-STABLE or
 .Fx
-12-CURRENT.
+13.0-CURRENT.
 .Sh OPTIONS
 The following options are supported:
 .Bl -tag -width "-r newrelease"
@@ -86,13 +89,13 @@ Read configuration options from
 .It Fl F
 Force
 .Nm Cm fetch
-to proceed where it normally would not, such as an unfinished upgrade
+to proceed in the case of an unfinished upgrade.
 .It Fl k Ar KEY
 Trust an RSA key with SHA256 of
 .Ar KEY .
 (default: read value from configuration file.)
 .It Fl r Ar newrelease
-Specify the new release to which
+Specify the new release (e.g. 11.2-RELEASE) to which
 .Nm
 should upgrade (upgrade command only).
 .It Fl s Ar server

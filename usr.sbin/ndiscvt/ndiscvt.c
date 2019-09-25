@@ -1,4 +1,6 @@
 /*
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 2003
  *	Bill Paul <wpaul@windriver.com>.  All rights reserved.
  *
@@ -211,6 +213,7 @@ bincvt(char *sysfile, char *outfile, void *img, int fsize)
 	    tname, sysfile, tname, tname, sysfile, outfile, outfile);
 	printf("%s", sysbuf);
 	system(sysbuf);
+	free(outfile);
 
 	return;
 }
@@ -369,7 +372,8 @@ main(int argc, char *argv[])
 			err(1, "opening .INF file '%s' failed", inffile);
 
 
-		inf_parse(fp, outfp);
+		if (inf_parse(fp, outfp) != 0)
+			errx(1, "creating .INF file - no entries created, are you using the correct files?");
 		fclose(fp);
 	}
 

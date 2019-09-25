@@ -11,13 +11,33 @@
         private
             bsdstat
             ..
+            event
+            ..
+            gmock
+                internal
+                    custom
+                    ..
+                ..
+            ..
+            gtest
+                internal
+                    custom
+                    ..
+                ..
+            ..
+            sqlite3
+            ..
             ucl
+            ..
+            zstd
             ..
         ..
     ..
     lib
+        aout
+        ..
         clang
-            6.0.0
+            8.0.1
                 include
                     sanitizer
                     ..
@@ -26,6 +46,10 @@
                     freebsd
                     ..
                 ..
+            ..
+        ..
+        compat
+            aout
             ..
         ..
         dtrace
@@ -43,8 +67,6 @@
         gcc
         ..
         ldscripts
-        ..
-        lint
         ..
         pkgconfig
         ..
@@ -179,8 +201,6 @@
             ..
             atf
             ..
-            atm
-            ..
             legal
             ..
             llvm
@@ -205,103 +225,7 @@
                 scripts
                 ..
             ..
-            papers
-            ..
             pjdfstest
-            ..
-            psd
-                01.cacm
-                ..
-                02.implement
-                ..
-                03.iosys
-                ..
-                04.uprog
-                ..
-                05.sysman
-                ..
-                06.Clang
-                ..
-                12.make
-                ..
-                13.rcs
-                ..
-                15.yacc
-                ..
-                16.lex
-                ..
-                17.m4
-                ..
-                18.gprof
-                ..
-                20.ipctut
-                ..
-                21.ipc
-                ..
-                22.rpcgen
-                ..
-                23.rpc
-                ..
-                24.xdr
-                ..
-                25.xdrrfc
-                ..
-                26.rpcrfc
-                ..
-                27.nfsrfc
-                ..
-            ..
-            smm
-                01.setup
-                ..
-                02.config
-                ..
-                03.fsck
-                ..
-                04.quotas
-                ..
-                05.fastfs
-                ..
-                06.nfs
-                ..
-                07.lpd
-                ..
-                08.sendmailop
-                ..
-                11.timedop
-                ..
-                12.timed
-                ..
-                18.net
-                ..
-            ..
-            usd
-                04.csh
-                ..
-                05.dc
-                ..
-                06.bc
-                ..
-                07.mail
-                ..
-                10.exref
-                ..
-                11.edit
-                ..
-                12.vi
-                ..
-                13.viref
-                ..
-                18.msdiffs
-                ..
-                19.memacros
-                ..
-                20.meref
-                ..
-                21.troff
-                ..
-                22.trofftut
-                ..
             ..
         ..
         dtrace
@@ -335,11 +259,11 @@
             ..
             find_interface
             ..
-            hardenedbsd
-            ..
             hast
             ..
             hostapd
+            ..
+            ibcs2
             ..
             indent
             ..
@@ -505,12 +429,6 @@
             ..
         ..
         keys
-            hbsd-update
-                revoked
-                ..
-                trusted
-                ..
-            ..
             pkg
                 revoked
                 ..
@@ -903,158 +821,6 @@
             ..
         ..
         man
-/set uname=man
-            cat1
-            ..
-            cat2
-            ..
-            cat3
-            ..
-            cat4
-                amd64
-                ..
-                arm
-                ..
-                i386
-                ..
-                powerpc
-                ..
-                sparc64
-                ..
-            ..
-            cat5
-            ..
-            cat6
-            ..
-            cat7
-            ..
-            cat8
-                amd64
-                ..
-                i386
-                ..
-                powerpc
-                ..
-                sparc64
-                ..
-            ..
-            cat9
-            ..
-            en.ISO8859-1    uname=root
-                cat1
-                ..
-                cat2
-                ..
-                cat3
-                ..
-                cat4
-                    amd64
-                    ..
-                    arm
-                    ..
-                    i386
-                    ..
-                    powerpc
-                    ..
-                    sparc64
-                    ..
-                ..
-                cat5
-                ..
-                cat6
-                ..
-                cat7
-                ..
-                cat8
-                    amd64
-                    ..
-                    i386
-                    ..
-                    powerpc
-                    ..
-                    sparc64
-                    ..
-                ..
-                cat9
-                ..
-            ..
-            en.UTF-8        uname=root
-                cat1
-                ..
-                cat2
-                ..
-                cat3
-                ..
-                cat4
-                    amd64
-                    ..
-                    arm
-                    ..
-                    i386
-                    ..
-                    powerpc
-                    ..
-                    sparc64
-                    ..
-                ..
-                cat5
-                ..
-                cat6
-                ..
-                cat7
-                ..
-                cat8
-                    amd64
-                    ..
-                    i386
-                    ..
-                    powerpc
-                    ..
-                    sparc64
-                    ..
-                ..
-                cat9
-                ..
-            ..
-            ja              uname=root
-                cat1
-                ..
-                cat2
-                ..
-                cat3
-                ..
-                cat4
-                ..
-                cat5
-                ..
-                cat6
-                ..
-                cat7
-                ..
-                cat8
-                ..
-                cat9
-                ..
-/set uname=root
-                man1
-                ..
-                man2
-                ..
-                man3
-                ..
-                man4
-                ..
-                man5
-                ..
-                man6
-                ..
-                man7
-                ..
-                man8
-                ..
-                man9
-                ..
-            ..
             man1
             ..
             man2
@@ -1062,6 +828,8 @@
             man3
             ..
             man4
+                aarch64
+                ..
                 amd64
                 ..
                 arm
@@ -1387,36 +1155,16 @@
             ..
             zh_CN.eucCN
             ..
-            zh_HK.Big5HKSCS
-            ..
             zh_HK.UTF-8
-            ..
-            zh_TW.Big5
             ..
             zh_TW.UTF-8
             ..
         ..
         openssl
             man
-/set uname=man
-                cat1
-                ..
-                cat3
-                ..
-                en.ISO8859-1    uname=root
-                    cat1
-                    ..
-                    cat3
-                    ..
-                ..
-/set uname=root
                 man1
                 ..
                 man3
-                ..
-                man5
-                ..
-                man8
                 ..
             ..
         ..

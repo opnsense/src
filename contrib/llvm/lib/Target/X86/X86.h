@@ -50,6 +50,15 @@ FunctionPass *createX86FloatingPointStackifierPass();
 /// transition penalty between functions encoded with AVX and SSE.
 FunctionPass *createX86IssueVZeroUpperPass();
 
+/// This pass instruments the function prolog to save the return address to a
+/// 'shadow call stack' and the function epilog to check that the return address
+/// did not change during function execution.
+FunctionPass *createShadowCallStackPass();
+
+/// This pass inserts ENDBR instructions before indirect jump/call
+/// destinations as part of CET IBT mechanism.
+FunctionPass *createX86IndirectBranchTrackingPass();
+
 /// Return a pass that pads short functions with NOOPs.
 /// This will prevent a stall when returning on the Atom.
 FunctionPass *createX86PadShortFunctions();
@@ -65,6 +74,12 @@ FunctionPass *createX86OptimizeLEAs();
 
 /// Return a pass that transforms setcc + movzx pairs into xor + setcc.
 FunctionPass *createX86FixupSetCC();
+
+/// Return a pass that folds conditional branch jumps.
+FunctionPass *createX86CondBrFolding();
+
+/// Return a pass that avoids creating store forward block issues in the hardware.
+FunctionPass *createX86AvoidStoreForwardingBlocks();
 
 /// Return a pass that lowers EFLAGS copy pseudo instructions.
 FunctionPass *createX86FlagsCopyLoweringPass();
@@ -100,8 +115,6 @@ FunctionPass *createX86FixupBWInsts();
 /// to another, when profitable.
 FunctionPass *createX86DomainReassignmentPass();
 
-void initializeFixupBWInstPassPass(PassRegistry &);
-
 /// This pass replaces EVEX encoded of AVX-512 instructiosn by VEX
 /// encoding when possible in order to reduce code size.
 FunctionPass *createX86EvexToVexInsts();
@@ -109,11 +122,32 @@ FunctionPass *createX86EvexToVexInsts();
 /// This pass creates the thunks for the retpoline feature.
 FunctionPass *createX86RetpolineThunksPass();
 
+/// This pass ensures instructions featuring a memory operand
+/// have distinctive <LineNumber, Discriminator> (with respect to eachother)
+FunctionPass *createX86DiscriminateMemOpsPass();
+
+/// This pass applies profiling information to insert cache prefetches.
+FunctionPass *createX86InsertPrefetchPass();
+
 InstructionSelector *createX86InstructionSelector(const X86TargetMachine &TM,
                                                   X86Subtarget &,
                                                   X86RegisterBankInfo &);
 
+FunctionPass *createX86SpeculativeLoadHardeningPass();
+
 void initializeEvexToVexInstPassPass(PassRegistry &);
+void initializeFixupBWInstPassPass(PassRegistry &);
+void initializeFixupLEAPassPass(PassRegistry &);
+void initializeShadowCallStackPass(PassRegistry &);
+void initializeWinEHStatePassPass(PassRegistry &);
+void initializeX86AvoidSFBPassPass(PassRegistry &);
+void initializeX86CallFrameOptimizationPass(PassRegistry &);
+void initializeX86CmovConverterPassPass(PassRegistry &);
+void initializeX86CondBrFoldingPassPass(PassRegistry &);
+void initializeX86DomainReassignmentPass(PassRegistry &);
+void initializeX86ExecutionDomainFixPass(PassRegistry &);
+void initializeX86FlagsCopyLoweringPassPass(PassRegistry &);
+void initializeX86SpeculativeLoadHardeningPassPass(PassRegistry &);
 
 } // End llvm namespace
 

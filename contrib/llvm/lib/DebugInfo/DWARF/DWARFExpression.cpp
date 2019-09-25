@@ -94,6 +94,7 @@ static DescVector getDescriptions() {
       Desc(Op::Dwarf3, Op::SizeLEB, Op::SizeBlock);
   Descriptions[DW_OP_stack_value] = Desc(Op::Dwarf3);
   Descriptions[DW_OP_GNU_push_tls_address] = Desc(Op::Dwarf3);
+  Descriptions[DW_OP_addrx] = Desc(Op::Dwarf4, Op::SizeLEB);
   Descriptions[DW_OP_GNU_addr_index] = Desc(Op::Dwarf4, Op::SizeLEB);
   Descriptions[DW_OP_GNU_const_index] = Desc(Op::Dwarf4, Op::SizeLEB);
   return Descriptions;
@@ -258,9 +259,10 @@ bool DWARFExpression::Operation::print(raw_ostream &OS,
   return true;
 }
 
-void DWARFExpression::print(raw_ostream &OS, const MCRegisterInfo *RegInfo) {
+void DWARFExpression::print(raw_ostream &OS, const MCRegisterInfo *RegInfo,
+                            bool IsEH) const {
   for (auto &Op : *this) {
-    if (!Op.print(OS, this, RegInfo, /* isEH */ false)) {
+    if (!Op.print(OS, this, RegInfo, IsEH)) {
       uint32_t FailOffset = Op.getEndOffset();
       while (FailOffset < Data.getData().size())
         OS << format(" %02x", Data.getU8(&FailOffset));

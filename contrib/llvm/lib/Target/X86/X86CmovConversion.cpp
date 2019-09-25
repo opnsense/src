@@ -81,12 +81,6 @@ STATISTIC(NumOfCmovGroupCandidate, "Number of CMOV-group candidates");
 STATISTIC(NumOfLoopCandidate, "Number of CMOV-conversion profitable loops");
 STATISTIC(NumOfOptimizedCmovGroups, "Number of optimized CMOV-groups");
 
-namespace llvm {
-
-void initializeX86CmovConverterPassPass(PassRegistry &);
-
-} // end namespace llvm
-
 // This internal switch can be used to turn off the cmov/branch optimization.
 static cl::opt<bool>
     EnableCmovConverter("x86-cmov-converter",
@@ -169,8 +163,8 @@ bool X86CmovConverterPass::runOnMachineFunction(MachineFunction &MF) {
   if (!EnableCmovConverter)
     return false;
 
-  DEBUG(dbgs() << "********** " << getPassName() << " : " << MF.getName()
-               << "**********\n");
+  LLVM_DEBUG(dbgs() << "********** " << getPassName() << " : " << MF.getName()
+                    << "**********\n");
 
   bool Changed = false;
   MachineLoopInfo &MLI = getAnalysis<MachineLoopInfo>();
@@ -178,7 +172,7 @@ bool X86CmovConverterPass::runOnMachineFunction(MachineFunction &MF) {
   MRI = &MF.getRegInfo();
   TII = STI.getInstrInfo();
   TRI = STI.getRegisterInfo();
-  TSchedModel.init(STI.getSchedModel(), &STI, TII);
+  TSchedModel.init(&STI);
 
   // Before we handle the more subtle cases of register-register CMOVs inside
   // of potentially hot loops, we want to quickly remove all CMOVs with
@@ -295,7 +289,7 @@ bool X86CmovConverterPass::collectCmovCandidates(
 
     for (auto &I : *MBB) {
       // Skip debug instructions.
-      if (I.isDebugValue())
+      if (I.isDebugInstr())
         continue;
       X86::CondCode CC = X86::getCondFromCMovOpc(I.getOpcode());
       // Check if we found a X86::CMOVrr instruction.
@@ -435,7 +429,7 @@ bool X86CmovConverterPass::checkForProfitableCmovCandidates(
       RegDefMaps[PhyRegType].clear();
       for (MachineInstr &MI : *MBB) {
         // Skip debug instructions.
-        if (MI.isDebugValue())
+        if (MI.isDebugInstr())
           continue;
         unsigned MIDepth = 0;
         unsigned MIDepthOpt = 0;
@@ -605,7 +599,7 @@ static void packCmovGroup(MachineInstr *First, MachineInstr *Last) {
 
   SmallVector<MachineInstr *, 2> DBGInstructions;
   for (auto I = First->getIterator(), E = Last->getIterator(); I != E; I++) {
-    if (I->isDebugValue())
+    if (I->isDebugInstr())
       DBGInstructions.push_back(&*I);
   }
 
@@ -622,7 +616,7 @@ void X86CmovConverterPass::convertCmovInstsToBranches(
 
   // If the CMOV group is not packed, e.g., there are debug instructions between
   // first CMOV and last CMOV, then pack the group and make the CMOV instruction
-  // consecutive by moving the debug instructions to after the last CMOV. 
+  // consecutive by moving the debug instructions to after the last CMOV.
   packCmovGroup(Group.front(), Group.back());
 
   // To convert a CMOVcc instruction, we actually have to insert the diamond
@@ -776,7 +770,7 @@ void X86CmovConverterPass::convertCmovInstsToBranches(
     auto *NewCMOV = NewMIs.pop_back_val();
     assert(X86::getCondFromCMovOpc(NewCMOV->getOpcode()) == OppCC &&
            "Last new instruction isn't the expected CMOV!");
-    DEBUG(dbgs() << "\tRewritten cmov: "; NewCMOV->dump());
+    LLVM_DEBUG(dbgs() << "\tRewritten cmov: "; NewCMOV->dump());
     MBB->insert(MachineBasicBlock::iterator(MI), NewCMOV);
     if (&*MIItBegin == &MI)
       MIItBegin = MachineBasicBlock::iterator(NewCMOV);
@@ -784,7 +778,7 @@ void X86CmovConverterPass::convertCmovInstsToBranches(
     // Sink whatever instructions were needed to produce the unfolded operand
     // into the false block.
     for (auto *NewMI : NewMIs) {
-      DEBUG(dbgs() << "\tRewritten load instr: "; NewMI->dump());
+      LLVM_DEBUG(dbgs() << "\tRewritten load instr: "; NewMI->dump());
       FalseMBB->insert(FalseInsertionPoint, NewMI);
       // Re-map any operands that are from other cmovs to the inputs for this block.
       for (auto &MOp : NewMI->uses()) {
@@ -846,8 +840,8 @@ void X86CmovConverterPass::convertCmovInstsToBranches(
               .addReg(Op2Reg)
               .addMBB(MBB);
     (void)MIB;
-    DEBUG(dbgs() << "\tFrom: "; MIIt->dump());
-    DEBUG(dbgs() << "\tTo: "; MIB->dump());
+    LLVM_DEBUG(dbgs() << "\tFrom: "; MIIt->dump());
+    LLVM_DEBUG(dbgs() << "\tTo: "; MIB->dump());
 
     // Add this PHI to the rewrite table.
     RegRewriteTable[DestReg] = std::make_pair(Op1Reg, Op2Reg);

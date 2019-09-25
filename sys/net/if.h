@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1982, 1986, 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -160,6 +162,9 @@ struct if_data {
 #define	IFF_STATICARP	0x80000		/* (n) static ARP */
 #define	IFF_DYING	0x200000	/* (n) interface is winding down */
 #define	IFF_RENAMING	0x400000	/* (n) interface is being renamed */
+#define	IFF_NOGROUP	0x800000	/* (n) interface is not part of any groups */
+
+
 /*
  * Old names for driver flags so that user space tools can continue to use
  * the old (portable) names.
@@ -232,13 +237,15 @@ struct if_data {
 #define	IFCAP_TOE4		0x04000	/* interface can offload TCP */
 #define	IFCAP_TOE6		0x08000	/* interface can offload TCP6 */
 #define	IFCAP_VLAN_HWFILTER	0x10000 /* interface hw can filter vlan tag */
-#define	IFCAP_POLLING_NOCOUNT	0x20000 /* polling ticks cannot be fragmented */
+/* 	available		0x20000 */
 #define	IFCAP_VLAN_HWTSO	0x40000 /* can do IFCAP_TSO on VLANs */
 #define	IFCAP_LINKSTATE		0x80000 /* the runtime link state is dynamic */
 #define	IFCAP_NETMAP		0x100000 /* netmap mode supported/enabled */
 #define	IFCAP_RXCSUM_IPV6	0x200000  /* can offload checksum on IPv6 RX */
 #define	IFCAP_TXCSUM_IPV6	0x400000  /* can offload checksum on IPv6 TX */
 #define	IFCAP_HWSTATS		0x800000 /* manages counters internally */
+#define	IFCAP_TXRTLMT		0x1000000 /* hardware supports TX rate limiting */
+#define	IFCAP_HWRXTSTMP		0x2000000 /* hardware rx timestamping */
 
 #define IFCAP_HWCSUM_IPV6	(IFCAP_RXCSUM_IPV6 | IFCAP_TXCSUM_IPV6)
 
@@ -264,6 +271,7 @@ struct if_msghdr {
 	int	ifm_addrs;	/* like rtm_addrs */
 	int	ifm_flags;	/* value of if_flags */
 	u_short	ifm_index;	/* index for associated ifp */
+	u_short	_ifm_spare1;
 	struct	if_data ifm_data;/* statistics and other data about if */
 };
 
@@ -289,6 +297,7 @@ struct if_msghdrl {
 	u_short _ifm_spare1;	/* spare space to grow if_index, see if_var.h */
 	u_short	ifm_len;	/* length of if_msghdrl incl. if_data */
 	u_short	ifm_data_off;	/* offset of if_data from beginning */
+	int	_ifm_spare2;
 	struct	if_data ifm_data;/* statistics and other data about if */
 };
 
@@ -304,6 +313,7 @@ struct ifa_msghdr {
 	int	ifam_addrs;	/* like rtm_addrs */
 	int	ifam_flags;	/* value of ifa_flags */
 	u_short	ifam_index;	/* index for associated ifp */
+	u_short	_ifam_spare1;
 	int	ifam_metric;	/* value of ifa_ifp->if_metric */
 };
 
@@ -345,6 +355,7 @@ struct ifma_msghdr {
 	int	ifmam_addrs;	/* like rtm_addrs */
 	int	ifmam_flags;	/* value of ifa_flags */
 	u_short	ifmam_index;	/* index for associated ifp */
+	u_short	_ifmam_spare1;
 };
 
 /*

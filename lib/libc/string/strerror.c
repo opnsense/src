@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1988, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -44,22 +46,19 @@ __FBSDID("$FreeBSD$");
 
 #include "errlst.h"
 
-#define	UPREFIX		"Unknown error"
-
 /*
- * Define a buffer size big enough to describe a 64-bit signed integer
- * converted to ASCII decimal (19 bytes), with an optional leading sign
- * (1 byte); finally, we get the prefix, delimiter (": ") and a trailing
- * NUL from UPREFIX.
+ * Define buffer big enough to contain delimiter (": ", 2 bytes),
+ * 64-bit signed integer converted to ASCII decimal (19 bytes) with
+ * optional leading sign (1 byte), and a trailing NUL.
  */
-#define	EBUFSIZE	(20 + 2 + sizeof(UPREFIX))
+#define	EBUFSIZE	(2 + 19 + 1 + 1)
 
 /*
  * Doing this by hand instead of linking with stdio(3) avoids bloat for
  * statically linked binaries.
  */
 static void
-errstr(int num, char *uprefix, char *buf, size_t len)
+errstr(int num, const char *uprefix, char *buf, size_t len)
 {
 	char *t;
 	unsigned int uerr;
@@ -92,9 +91,9 @@ strerror_r(int errnum, char *strerrbuf, size_t buflen)
 	if (errnum < 0 || errnum >= __hidden_sys_nerr) {
 		errstr(errnum,
 #if defined(NLS)
-			catgets(catd, 1, 0xffff, UPREFIX),
+			catgets(catd, 1, 0xffff, __uprefix),
 #else
-			UPREFIX,
+		        __uprefix,
 #endif
 			strerrbuf, buflen);
 		retval = EINVAL;

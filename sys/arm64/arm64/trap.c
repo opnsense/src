@@ -52,6 +52,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/frame.h>
 #include <machine/pcb.h>
 #include <machine/pcpu.h>
+#include <machine/undefined.h>
 
 #ifdef KDTRACE_HOOKS
 #include <sys/dtrace_bsd.h>
@@ -75,6 +76,9 @@ extern register_t fsu_intr_fault;
 void do_el1h_sync(struct thread *, struct trapframe *);
 void do_el0_sync(struct thread *, struct trapframe *);
 void do_el0_error(struct trapframe *);
+void do_serror(struct trapframe *);
+void unhandled_exception(struct trapframe *);
+
 static void print_registers(struct trapframe *frame);
 
 int (*dtrace_invop_jump_addr)(struct trapframe *);
@@ -147,7 +151,7 @@ svc_handler(struct thread *td, struct trapframe *frame)
 
 static void
 data_abort(struct thread *td, struct trapframe *frame, uint64_t esr,
-    uint64_t far, int lower)
+    uint64_t far, int lower, int exec)
 {
 	struct vm_map *map;
 	struct proc *p;
@@ -155,6 +159,9 @@ data_abort(struct thread *td, struct trapframe *frame, uint64_t esr,
 	vm_prot_t ftype;
 	vm_offset_t va;
 	int error, sig, ucode;
+#ifdef KDB
+	bool handled;
+#endif
 
 	/*
 	 * According to the ARMv8-A rev. A.g, B2.10.5 "Load-Exclusive
@@ -171,28 +178,29 @@ data_abort(struct thread *td, struct trapframe *frame, uint64_t esr,
 #endif
 
 	pcb = td->td_pcb;
-
-	/*
-	 * Special case for fuswintr and suswintr. These can't sleep so
-	 * handle them early on in the trap handler.
-	 */
-	if (__predict_false(pcb->pcb_onfault == (vm_offset_t)&fsu_intr_fault)) {
-		frame->tf_elr = pcb->pcb_onfault;
-		return;
-	}
-
 	p = td->td_proc;
 	if (lower)
 		map = &p->p_vmspace->vm_map;
 	else {
 		/* The top bit tells us which range to use */
-		if ((far >> 63) == 1)
+		if (far >= VM_MAXUSER_ADDRESS) {
 			map = kernel_map;
-		else
+		} else {
 			map = &p->p_vmspace->vm_map;
+			if (map == NULL)
+				map = kernel_map;
+		}
 	}
 
-	if (pmap_fault(map->pmap, esr, far) == KERN_SUCCESS)
+	/*
+	 * Try to handle translation, access flag, and permission faults.
+	 * Translation faults may occur as a result of the required
+	 * break-before-make sequence used when promoting or demoting
+	 * superpages.  Such faults must not occur while holding the pmap lock,
+	 * or pmap_fault() will recurse on that lock.
+	 */
+	if ((lower || map == kernel_map || pcb->pcb_onfault != 0) &&
+	    pmap_fault(map->pmap, esr, far) == KERN_SUCCESS)
 		return;
 
 	KASSERT(td->td_md.md_spinlock_count == 0,
@@ -206,7 +214,11 @@ data_abort(struct thread *td, struct trapframe *frame, uint64_t esr,
 	}
 
 	va = trunc_page(far);
-	ftype = ((esr >> 6) & 1) ? VM_PROT_READ | VM_PROT_WRITE : VM_PROT_READ;
+	if (exec)
+		ftype = VM_PROT_EXECUTE;
+	else
+		ftype = (esr & ISS_DATA_WnR) == 0 ? VM_PROT_READ :
+		    VM_PROT_READ | VM_PROT_WRITE;
 
 	/* Fault in the page. */
 	error = vm_fault(map, va, ftype, VM_FAULT_NORMAL);
@@ -232,9 +244,14 @@ data_abort(struct thread *td, struct trapframe *frame, uint64_t esr,
 			printf(" esr:         %.8lx\n", esr);
 
 #ifdef KDB
-			if (debugger_on_panic || kdb_active)
-				if (kdb_trap(ESR_ELx_EXCEPTION(esr), 0, frame))
+			if (debugger_on_trap) {
+				kdb_why = KDB_WHY_TRAP;
+				handled = kdb_trap(ESR_ELx_EXCEPTION(esr), 0,
+				    frame);
+				kdb_why = KDB_WHY_UNSET;
+				if (handled)
 					return;
+			}
 #endif
 			panic("vm_fault failed: %lx", frame->tf_elr);
 		}
@@ -249,7 +266,7 @@ print_registers(struct trapframe *frame)
 {
 	u_int reg;
 
-	for (reg = 0; reg < 31; reg++) {
+	for (reg = 0; reg < nitems(frame->tf_x); reg++) {
 		printf(" %sx%d: %16lx\n", (reg < 10) ? " " : "", reg,
 		    frame->tf_x[reg]);
 	}
@@ -262,6 +279,7 @@ print_registers(struct trapframe *frame)
 void
 do_el1h_sync(struct thread *td, struct trapframe *frame)
 {
+	struct trapframe *oframe;
 	uint32_t exception;
 	uint64_t esr, far;
 
@@ -278,17 +296,38 @@ do_el1h_sync(struct thread *td, struct trapframe *frame)
 	    "do_el1_sync: curthread: %p, esr %lx, elr: %lx, frame: %p", td,
 	    esr, frame->tf_elr, frame);
 
+	oframe = td->td_frame;
+
+	switch (exception) {
+	case EXCP_BRK:
+	case EXCP_WATCHPT_EL1:
+	case EXCP_SOFTSTP_EL1:
+		break;
+	default:
+		td->td_frame = frame;
+		break;
+	}
+
 	switch(exception) {
 	case EXCP_FP_SIMD:
 	case EXCP_TRAP_FP:
-		print_registers(frame);
-		printf(" esr:         %.8lx\n", esr);
-		panic("VFP exception in the kernel");
+#ifdef VFP
+		if ((td->td_pcb->pcb_fpflags & PCB_FP_KERN) != 0) {
+			vfp_restore_state();
+		} else
+#endif
+		{
+			print_registers(frame);
+			printf(" esr:         %.8lx\n", esr);
+			panic("VFP exception in the kernel");
+		}
+		break;
 	case EXCP_INSN_ABORT:
 	case EXCP_DATA_ABORT:
 		far = READ_SPECIALREG(far_el1);
 		intr_enable();
-		data_abort(td, frame, esr, far, 0);
+		data_abort(td, frame, esr, far, 0,
+		    exception == EXCP_INSN_ABORT);
 		break;
 	case EXCP_BRK:
 #ifdef KDTRACE_HOOKS
@@ -298,39 +337,40 @@ do_el1h_sync(struct thread *td, struct trapframe *frame)
 			break;
 		}
 #endif
-		/* FALLTHROUGH */
+#ifdef KDB
+		kdb_trap(exception, 0,
+		    (td->td_frame != NULL) ? td->td_frame : frame);
+#else
+		panic("No debugger in kernel.\n");
+#endif
+		frame->tf_elr += 4;
+		break;
 	case EXCP_WATCHPT_EL1:
 	case EXCP_SOFTSTP_EL1:
 #ifdef KDB
-		kdb_trap(exception, 0, frame);
+		kdb_trap(exception, 0,
+		    (td->td_frame != NULL) ? td->td_frame : frame);
 #else
 		panic("No debugger in kernel.\n");
 #endif
 		break;
+	case EXCP_UNKNOWN:
+		if (undef_insn(1, frame))
+			break;
+		/* FALLTHROUGH */
 	default:
 		print_registers(frame);
 		panic("Unknown kernel exception %x esr_el1 %lx\n", exception,
 		    esr);
 	}
-}
 
-/*
- * The attempted execution of an instruction bit pattern that has no allocated
- * instruction results in an exception with an unknown reason.
- */
-static void
-el0_excp_unknown(struct trapframe *frame, uint64_t far)
-{
-	struct thread *td;
-
-	td = curthread;
-	call_trapsignal(td, SIGILL, ILL_ILLTRP, (void *)far);
-	userret(td, frame);
+	td->td_frame = oframe;
 }
 
 void
 do_el0_sync(struct thread *td, struct trapframe *frame)
 {
+	pcpu_bp_harden bp_harden;
 	uint32_t exception;
 	uint64_t esr, far;
 
@@ -342,11 +382,25 @@ do_el0_sync(struct thread *td, struct trapframe *frame)
 	esr = frame->tf_esr;
 	exception = ESR_ELx_EXCEPTION(esr);
 	switch (exception) {
-	case EXCP_UNKNOWN:
 	case EXCP_INSN_ABORT_L:
+		far = READ_SPECIALREG(far_el1);
+
+		/*
+		 * Userspace may be trying to train the branch predictor to
+		 * attack the kernel. If we are on a CPU affected by this
+		 * call the handler to clear the branch predictor state.
+		 */
+		if (far > VM_MAXUSER_ADDRESS) {
+			bp_harden = PCPU_GET(bp_harden);
+			if (bp_harden != NULL)
+				bp_harden();
+		}
+		break;
+	case EXCP_UNKNOWN:
 	case EXCP_DATA_ABORT_L:
 	case EXCP_DATA_ABORT:
 		far = READ_SPECIALREG(far_el1);
+		break;
 	}
 	intr_enable();
 
@@ -363,16 +417,20 @@ do_el0_sync(struct thread *td, struct trapframe *frame)
 		panic("VFP exception in userland");
 #endif
 		break;
-	case EXCP_SVC:
+	case EXCP_SVC32:
+	case EXCP_SVC64:
 		svc_handler(td, frame);
 		break;
 	case EXCP_INSN_ABORT_L:
 	case EXCP_DATA_ABORT_L:
 	case EXCP_DATA_ABORT:
-		data_abort(td, frame, esr, far, 1);
+		data_abort(td, frame, esr, far, 1,
+		    exception == EXCP_INSN_ABORT_L);
 		break;
 	case EXCP_UNKNOWN:
-		el0_excp_unknown(frame, far);
+		if (!undef_insn(0, frame))
+			call_trapsignal(td, SIGILL, ILL_ILLTRP, (void *)far);
+		userret(td, frame);
 		break;
 	case EXCP_SP_ALIGN:
 		call_trapsignal(td, SIGBUS, BUS_ADRALN, (void *)frame->tf_sp);
@@ -404,12 +462,41 @@ do_el0_sync(struct thread *td, struct trapframe *frame)
 		userret(td, frame);
 		break;
 	}
+
+	KASSERT((td->td_pcb->pcb_fpflags & ~PCB_FP_USERMASK) == 0,
+	    ("Kernel VFP flags set while entering userspace"));
+	KASSERT(
+	    td->td_pcb->pcb_fpusaved == &td->td_pcb->pcb_fpustate,
+	    ("Kernel VFP state in use when entering userspace"));
+}
+
+/*
+ * TODO: We will need to handle these later when we support ARMv8.2 RAS.
+ */
+void
+do_serror(struct trapframe *frame)
+{
+	uint64_t esr, far;
+
+	far = READ_SPECIALREG(far_el1);
+	esr = frame->tf_esr;
+
+	print_registers(frame);
+	printf(" far: %16lx\n", far);
+	printf(" esr:         %.8lx\n", esr);
+	panic("Unhandled System Error");
 }
 
 void
-do_el0_error(struct trapframe *frame)
+unhandled_exception(struct trapframe *frame)
 {
+	uint64_t esr, far;
 
-	panic("ARM64TODO: do_el0_error");
+	far = READ_SPECIALREG(far_el1);
+	esr = frame->tf_esr;
+
+	print_registers(frame);
+	printf(" far: %16lx\n", far);
+	printf(" esr:         %.8lx\n", esr);
+	panic("Unhandled exception");
 }
-

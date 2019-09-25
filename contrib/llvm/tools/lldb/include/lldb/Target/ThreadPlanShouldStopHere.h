@@ -10,29 +10,21 @@
 #ifndef liblldb_ThreadPlanShouldStopHere_h_
 #define liblldb_ThreadPlanShouldStopHere_h_
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
 #include "lldb/Target/ThreadPlan.h"
 
 namespace lldb_private {
 
 // This is an interface that ThreadPlans can adopt to allow flexible
-// modifications of the behavior
-// when a thread plan comes to a place where it would ordinarily stop.  If such
-// modification makes
-// sense for your plan, inherit from this class, and when you would be about to
-// stop (in your ShouldStop
-// method), call InvokeShouldStopHereCallback, passing in the frame comparison
-// between where the step operation
-// started and where you arrived.  If it returns true, then QueueStepOutFromHere
-// will queue the plan
-// to execute instead of stopping.
+// modifications of the behavior when a thread plan comes to a place where it
+// would ordinarily stop.  If such modification makes sense for your plan,
+// inherit from this class, and when you would be about to stop (in your
+// ShouldStop method), call InvokeShouldStopHereCallback, passing in the frame
+// comparison between where the step operation started and where you arrived.
+// If it returns true, then QueueStepOutFromHere will queue the plan to execute
+// instead of stopping.
 //
 // The classic example of the use of this is ThreadPlanStepInRange not stopping
-// in frames that have
-// no debug information.
+// in frames that have no debug information.
 //
 // This class also defines a set of flags to control general aspects of this
 // "ShouldStop" behavior.
@@ -82,11 +74,9 @@ public:
   virtual ~ThreadPlanShouldStopHere();
 
   // Set the ShouldStopHere callbacks.  Pass in null to clear them and have no
-  // special behavior (though you
-  // can also call ClearShouldStopHereCallbacks for that purpose.  If you pass
-  // in a valid pointer, it will
-  // adopt the non-null fields, and any null fields will be set to the default
-  // values.
+  // special behavior (though you can also call ClearShouldStopHereCallbacks
+  // for that purpose.  If you pass in a valid pointer, it will adopt the non-
+  // null fields, and any null fields will be set to the default values.
 
   void
   SetShouldStopHereCallbacks(const ThreadPlanShouldStopHereCallbacks *callbacks,
@@ -107,10 +97,12 @@ public:
 
   void ClearShouldStopHereCallbacks() { m_callbacks.Clear(); }
 
-  bool InvokeShouldStopHereCallback(lldb::FrameComparison operation);
+  bool InvokeShouldStopHereCallback(lldb::FrameComparison operation,
+                                    Status &status);
 
   lldb::ThreadPlanSP
-  CheckShouldStopHereAndQueueStepOut(lldb::FrameComparison operation);
+  CheckShouldStopHereAndQueueStepOut(lldb::FrameComparison operation,
+                                     Status &status);
 
   lldb_private::Flags &GetFlags() { return m_flags; }
 
@@ -120,14 +112,16 @@ protected:
   static bool DefaultShouldStopHereCallback(ThreadPlan *current_plan,
                                             Flags &flags,
                                             lldb::FrameComparison operation,
-                                            void *baton);
+                                            Status &status, void *baton);
 
   static lldb::ThreadPlanSP
   DefaultStepFromHereCallback(ThreadPlan *current_plan, Flags &flags,
-                              lldb::FrameComparison operation, void *baton);
+                              lldb::FrameComparison operation, Status &status,
+                              void *baton);
 
   virtual lldb::ThreadPlanSP
-  QueueStepOutFromHerePlan(Flags &flags, lldb::FrameComparison operation);
+  QueueStepOutFromHerePlan(Flags &flags, lldb::FrameComparison operation,
+                           Status &status);
 
   // Implement this, and call it in the plan's constructor to set the default
   // flags.

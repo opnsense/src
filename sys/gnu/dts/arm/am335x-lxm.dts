@@ -19,13 +19,13 @@
 		};
 	};
 
-	memory {
+	memory@80000000 {
 		device_type = "memory";
 		reg = <0x80000000 0x20000000>; /* 512 MB */
 	};
 
 	/* Power supply provides a fixed 5V @2A */
-	vbat: fixedregulator@0 {
+	vbat: fixedregulator0 {
 		compatible = "regulator-fixed";
 		regulator-name = "vbat";
 		regulator-min-microvolt = <5000000>;
@@ -34,7 +34,7 @@
 	};
 
 	/* Power supply provides a fixed 3.3V @3A */
-	vmmcsd_fixed: fixedregulator@1 {
+	vmmcsd_fixed: fixedregulator1 {
 		compatible = "regulator-fixed";
 		regulator-name = "vmmcsd_fixed";
 		regulator-min-microvolt = <3300000>;
@@ -317,19 +317,15 @@
 };
 
 &cpsw_emac0 {
-	phy_id = <&davinci_mdio>, <5>;
+	phy-handle = <&ethphy0>;
 	phy-mode = "rmii";
 	dual_emac_res_vlan = <2>;
 };
 
 &cpsw_emac1 {
-	phy_id = <&davinci_mdio>, <4>;
+	phy-handle = <&ethphy1>;
 	phy-mode = "rmii";
 	dual_emac_res_vlan = <3>;
-};
-
-&phy_sel {
-	rmii-clock-ext;
 };
 
 &mac {
@@ -345,6 +341,14 @@
 	pinctrl-0 = <&davinci_mdio_default>;
 	pinctrl-1 = <&davinci_mdio_sleep>;
 	status = "okay";
+
+	ethphy0: ethernet-phy@5 {
+		reg = <5>;
+	};
+
+	ethphy1: ethernet-phy@4 {
+		reg = <4>;
+	};
 };
 
 &mmc1 {

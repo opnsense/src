@@ -13,6 +13,7 @@ SUBDIR=	${_atf} \
 	${_makewhatis.local} \
 	${_mknetid} \
 	${_pppoed} \
+	rc \
 	revnetgroup \
 	${_rlogind} \
 	rpc.rquotad \
@@ -77,11 +78,6 @@ _rtld-elf=	rtld-elf
 
 .if ${MK_RBOOTD} != "no"
 SUBDIR+=	rbootd
-.endif
-
-.if ${MK_RCMDS} != "no"
-_rlogind=	rlogind
-_rshd=		rshd
 .endif
 
 .if ${MK_SENDMAIL} != "no"

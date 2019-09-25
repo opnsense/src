@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1999, 2000 John D. Polstra.
  * All rights reserved.
  *
@@ -40,6 +42,7 @@ struct Struct_Obj_Entry;
 Elf_Addr reloc_jmpslot(Elf_Addr *where, Elf_Addr target,
     const struct Struct_Obj_Entry *defobj, const struct Struct_Obj_Entry *obj,
     const Elf_Rel *rel);
+void reloc_non_plt_self(Elf_Dyn *dynp, Elf_Addr relocbase);
 
 #define make_function_pointer(def, defobj) \
 	((defobj)->relocbase + (def)->st_value)
@@ -72,10 +75,11 @@ void _rtld_powerpc_pltcall(void);
 #define round(size, align) \
     (((size) + (align) - 1) & ~((align) - 1))
 #define calculate_first_tls_offset(size, align) \
-    round(8, align)
+    TLS_TCB_SIZE
 #define calculate_tls_offset(prev_offset, prev_size, size, align) \
     round(prev_offset + prev_size, align)
 #define calculate_tls_end(off, size)    ((off) + (size))
+#define calculate_tls_post_size(align)  0
  
 typedef struct {
 	unsigned long ti_module;

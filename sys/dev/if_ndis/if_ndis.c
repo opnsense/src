@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 2003
  *	Bill Paul <wpaul@windriver.com>.  All rights reserved.
  *
@@ -311,7 +313,7 @@ ndis_setmulti(sc)
 		return;
 	}
 
-	if (TAILQ_EMPTY(&ifp->if_multiaddrs))
+	if (CK_STAILQ_EMPTY(&ifp->if_multiaddrs))
 		return;
 
 	len = sizeof(mclistsz);
@@ -328,7 +330,7 @@ ndis_setmulti(sc)
 
 	len = 0;
 	if_maddr_rlock(ifp);
-	TAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
+	CK_STAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
 		if (ifma->ifma_addr->sa_family != AF_LINK)
 			continue;
 		bcopy(LLADDR((struct sockaddr_dl *)ifma->ifma_addr),
@@ -565,15 +567,6 @@ ndis_attach(device_t dev)
 	InitializeListHead(&sc->ndisusb_xferdonelist);
 	callout_init(&sc->ndis_stat_callout, 1);
 	mbufq_init(&sc->ndis_rxqueue, INT_MAX);	/* XXXGL: sane maximum */
-
-	if (sc->ndis_iftype == PCMCIABus) {
-		error = ndis_alloc_amem(sc);
-		if (error) {
-			device_printf(dev, "failed to allocate "
-			    "attribute memory\n");
-			goto fail;
-		}
-	}
 
 	/* Create sysctl registry nodes */
 	ndis_create_sysctls(sc);
@@ -1096,9 +1089,6 @@ ndis_detach(device_t dev)
 	if (ifp != NULL)
 		if_free(ifp);
 
-	if (sc->ndis_iftype == PCMCIABus)
-		ndis_free_amem(sc);
-
 	if (sc->ndis_sc)
 		ndis_destroy_dma(sc);
 
@@ -1418,7 +1408,7 @@ ndis_rxeof(adapter, packets, pktcnt)
 			p = packets[i];
 			if (p->np_oob.npo_status == NDIS_STATUS_SUCCESS) {
 				p->np_refcnt++;
-				(void)ndis_return_packet(NULL ,p, block);
+				ndis_return_packet(p);
 			}
 		}
 		return;
@@ -1431,7 +1421,7 @@ ndis_rxeof(adapter, packets, pktcnt)
 		if (ndis_ptom(&m0, p)) {
 			device_printf(sc->ndis_dev, "ptom failed\n");
 			if (p->np_oob.npo_status == NDIS_STATUS_SUCCESS)
-				(void)ndis_return_packet(NULL, p, block);
+				ndis_return_packet(p);
 		} else {
 #ifdef notdef
 			if (p->np_oob.npo_status == NDIS_STATUS_RESOURCES) {

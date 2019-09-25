@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2002 Poul-Henning Kamp
  * Copyright (c) 2002 Networks Associates Technology, Inc.
  * All rights reserved.
@@ -62,7 +64,10 @@ struct g_dev_softc {
 	struct cdev	*sc_dev;
 	struct cdev	*sc_alias;
 	int		 sc_open;
-	int		 sc_active;
+	u_int		 sc_active;
+#define	SC_A_DESTROY	(1 << 31)
+#define	SC_A_OPEN	(1 << 30)
+#define	SC_A_ACTIVE	(SC_A_OPEN - 1)
 };
 
 static d_open_t		g_dev_open;
@@ -128,35 +133,45 @@ g_dev_fini(struct g_class *mp)
 }
 
 static int
-g_dev_setdumpdev(struct cdev *dev, struct thread *td)
+g_dev_setdumpdev(struct cdev *dev, struct diocskerneldump_arg *kda,
+    struct thread *td)
 {
 	struct g_kerneldump kd;
 	struct g_consumer *cp;
 	int error, len;
 
-	if (dev == NULL)
-		return (set_dumper(NULL, NULL, td));
+	if (dev == NULL || kda == NULL)
+		return (clear_dumper(td));
 
 	cp = dev->si_drv2;
 	len = sizeof(kd);
+	memset(&kd, 0, len);
 	kd.offset = 0;
 	kd.length = OFF_MAX;
 	error = g_io_getattr("GEOM::kerneldump", cp, &len, &kd);
-	if (error == 0) {
-		error = set_dumper(&kd.di, devtoname(dev), td);
-		if (error == 0)
-			dev->si_flags |= SI_DUMPDEV;
-	}
+	if (error != 0)
+		return (error);
+
+	error = set_dumper(&kd.di, devtoname(dev), td, kda->kda_compression,
+	    kda->kda_encryption, kda->kda_key, kda->kda_encryptedkeysize,
+	    kda->kda_encryptedkey);
+	if (error == 0)
+		dev->si_flags |= SI_DUMPDEV;
+
 	return (error);
 }
 
 static int
 init_dumpdev(struct cdev *dev)
 {
+	struct diocskerneldump_arg kda;
 	struct g_consumer *cp;
 	const char *devprefix = "/dev/", *devname;
 	int error;
 	size_t len;
+
+	bzero(&kda, sizeof(kda));
+	kda.kda_enable = 1;
 
 	if (dumpdev == NULL)
 		return (0);
@@ -173,7 +188,7 @@ init_dumpdev(struct cdev *dev)
 	if (error != 0)
 		return (error);
 
-	error = g_dev_setdumpdev(dev, curthread);
+	error = g_dev_setdumpdev(dev, &kda, curthread);
 	if (error == 0) {
 		freeenv(dumpdev);
 		dumpdev = NULL;
@@ -305,10 +320,11 @@ static struct g_geom *
 g_dev_taste(struct g_class *mp, struct g_provider *pp, int insist __unused)
 {
 	struct g_geom *gp;
+	struct g_geom_alias *gap;
 	struct g_consumer *cp;
 	struct g_dev_softc *sc;
 	int error;
-	struct cdev *dev;
+	struct cdev *dev, *adev;
 	char buf[SPECNAMELEN + 6];
 
 	g_trace(G_T_TOPOLOGY, "dev_taste(%s,%s)", mp->name, pp->name);
@@ -347,6 +363,20 @@ g_dev_taste(struct g_class *mp, struct g_provider *pp, int insist __unused)
 	g_dev_attrchanged(cp, "GEOM::physpath");
 	snprintf(buf, sizeof(buf), "cdev=%s", gp->name);
 	devctl_notify_f("GEOM", "DEV", "CREATE", buf, M_WAITOK);
+	/*
+	 * Now add all the aliases for this drive
+	 */
+	LIST_FOREACH(gap, &pp->geom->aliases, ga_next) {
+		error = make_dev_alias_p(MAKEDEV_CHECKNAME | MAKEDEV_WAITOK, &adev, dev,
+		    "%s", gap->ga_alias);
+		if (error) {
+			printf("%s: make_dev_alias_p() failed (name=%s, error=%d)\n",
+			    __func__, gap->ga_alias, error);
+			continue;
+		}
+		snprintf(buf, sizeof(buf), "cdev=%s", gap->ga_alias);
+		devctl_notify_f("GEOM", "DEV", "CREATE", buf, M_WAITOK);
+	}
 
 	return (gp);
 }
@@ -393,9 +423,13 @@ g_dev_open(struct cdev *dev, int flags, int fmt, struct thread *td)
 	if (error == 0) {
 		sc = cp->private;
 		mtx_lock(&sc->sc_mtx);
-		if (sc->sc_open == 0 && sc->sc_active != 0)
+		if (sc->sc_open == 0 && (sc->sc_active & SC_A_ACTIVE) != 0)
 			wakeup(&sc->sc_active);
 		sc->sc_open += r + w + e;
+		if (sc->sc_open == 0)
+			atomic_clear_int(&sc->sc_active, SC_A_OPEN);
+		else
+			atomic_set_int(&sc->sc_active, SC_A_OPEN);
 		mtx_unlock(&sc->sc_mtx);
 	}
 	return (error);
@@ -438,8 +472,12 @@ g_dev_close(struct cdev *dev, int flags, int fmt, struct thread *td)
 	sc = cp->private;
 	mtx_lock(&sc->sc_mtx);
 	sc->sc_open += r + w + e;
-	while (sc->sc_open == 0 && sc->sc_active != 0)
-		msleep(&sc->sc_active, &sc->sc_mtx, 0, "PRIBIO", 0);
+	if (sc->sc_open == 0)
+		atomic_clear_int(&sc->sc_active, SC_A_OPEN);
+	else
+		atomic_set_int(&sc->sc_active, SC_A_OPEN);
+	while (sc->sc_open == 0 && (sc->sc_active & SC_A_ACTIVE) != 0)
+		msleep(&sc->sc_active, &sc->sc_mtx, 0, "g_dev_close", hz / 10);
 	mtx_unlock(&sc->sc_mtx);
 	g_topology_lock();
 	error = g_access(cp, r, w, e);
@@ -493,12 +531,56 @@ g_dev_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread
 	case DIOCGFRONTSTUFF:
 		error = g_io_getattr("GEOM::frontstuff", cp, &i, data);
 		break;
-	case DIOCSKERNELDUMP:
-		if (*(u_int *)data == 0)
-			error = g_dev_setdumpdev(NULL, td);
+#ifdef COMPAT_FREEBSD11
+	case DIOCSKERNELDUMP_FREEBSD11:
+	    {
+		struct diocskerneldump_arg kda;
+
+		bzero(&kda, sizeof(kda));
+		kda.kda_encryption = KERNELDUMP_ENC_NONE;
+		kda.kda_enable = (uint8_t)*(u_int *)data;
+		if (kda.kda_enable == 0)
+			error = g_dev_setdumpdev(NULL, NULL, td);
 		else
-			error = g_dev_setdumpdev(dev, td);
+			error = g_dev_setdumpdev(dev, &kda, td);
 		break;
+	    }
+#endif
+	case DIOCSKERNELDUMP:
+	    {
+		struct diocskerneldump_arg *kda;
+		uint8_t *encryptedkey;
+
+		kda = (struct diocskerneldump_arg *)data;
+		if (kda->kda_enable == 0) {
+			error = g_dev_setdumpdev(NULL, NULL, td);
+			break;
+		}
+
+		if (kda->kda_encryption != KERNELDUMP_ENC_NONE) {
+			if (kda->kda_encryptedkeysize <= 0 ||
+			    kda->kda_encryptedkeysize >
+			    KERNELDUMP_ENCKEY_MAX_SIZE) {
+				return (EINVAL);
+			}
+			encryptedkey = malloc(kda->kda_encryptedkeysize, M_TEMP,
+			    M_WAITOK);
+			error = copyin(kda->kda_encryptedkey, encryptedkey,
+			    kda->kda_encryptedkeysize);
+		} else {
+			encryptedkey = NULL;
+		}
+		if (error == 0) {
+			kda->kda_encryptedkey = encryptedkey;
+			error = g_dev_setdumpdev(dev, kda, td);
+		}
+		if (encryptedkey != NULL) {
+			explicit_bzero(encryptedkey, kda->kda_encryptedkeysize);
+			free(encryptedkey, M_TEMP);
+		}
+		explicit_bzero(kda, sizeof(*kda));
+		break;
+	    }
 	case DIOCGFLUSH:
 		error = g_io_flush(cp);
 		break;
@@ -581,8 +663,10 @@ g_dev_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread
 		alloc_size = 0;
 
 		if (zone_args->zone_cmd == DISK_ZONE_REPORT_ZONES) {
-
 			rep = &zone_args->zone_params.report;
+#define	MAXENTRIES	(MAXPHYS / sizeof(struct disk_zone_rep_entry))
+			if (rep->entries_allocated > MAXENTRIES)
+				rep->entries_allocated = MAXENTRIES;
 			alloc_size = rep->entries_allocated *
 			    sizeof(struct disk_zone_rep_entry);
 			if (alloc_size != 0)
@@ -592,15 +676,11 @@ g_dev_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread
 			rep->entries = new_entries;
 		}
 		error = g_io_zonecmd(zone_args, cp);
-		if ((zone_args->zone_cmd == DISK_ZONE_REPORT_ZONES)
-		 && (alloc_size != 0)
-		 && (error == 0)) {
+		if (zone_args->zone_cmd == DISK_ZONE_REPORT_ZONES &&
+		    alloc_size != 0 && error == 0)
 			error = copyout(new_entries, old_entries, alloc_size);
-		}
-		if ((old_entries != NULL)
-		 && (rep != NULL))
+		if (old_entries != NULL && rep != NULL)
 			rep->entries = old_entries;
-
 		if (new_entries != NULL)
 			g_free(new_entries);
 		break;
@@ -622,7 +702,7 @@ g_dev_done(struct bio *bp2)
 	struct g_consumer *cp;
 	struct g_dev_softc *sc;
 	struct bio *bp;
-	int destroy;
+	int active;
 
 	cp = bp2->bio_from;
 	sc = cp->private;
@@ -642,17 +722,13 @@ g_dev_done(struct bio *bp2)
 		    bp2, bp, bp2->bio_resid, (intmax_t)bp2->bio_completed);
 	}
 	g_destroy_bio(bp2);
-	destroy = 0;
-	mtx_lock(&sc->sc_mtx);
-	if ((--sc->sc_active) == 0) {
-		if (sc->sc_open == 0)
+	active = atomic_fetchadd_int(&sc->sc_active, -1) - 1;
+	if ((active & SC_A_ACTIVE) == 0) {
+		if ((active & SC_A_OPEN) == 0)
 			wakeup(&sc->sc_active);
-		if (sc->sc_dev == NULL)
-			destroy = 1;
+		if (active & SC_A_DESTROY)
+			g_post_event(g_dev_destroy, cp, M_NOWAIT, NULL);
 	}
-	mtx_unlock(&sc->sc_mtx);
-	if (destroy)
-		g_post_event(g_dev_destroy, cp, M_NOWAIT, NULL);
 	biodone(bp);
 }
 
@@ -675,6 +751,7 @@ g_dev_strategy(struct bio *bp)
 	sc = cp->private;
 	KASSERT(cp->acr || cp->acw,
 	    ("Consumer with zero access count in g_dev_strategy"));
+	biotrack(bp, __func__);
 #ifdef INVARIANTS
 	if ((bp->bio_offset % cp->provider->sectorsize) != 0 ||
 	    (bp->bio_bcount % cp->provider->sectorsize) != 0) {
@@ -683,10 +760,8 @@ g_dev_strategy(struct bio *bp)
 		return;
 	}
 #endif
-	mtx_lock(&sc->sc_mtx);
 	KASSERT(sc->sc_open > 0, ("Closed device in g_dev_strategy"));
-	sc->sc_active++;
-	mtx_unlock(&sc->sc_mtx);
+	atomic_add_int(&sc->sc_active, 1);
 
 	for (;;) {
 		/*
@@ -724,18 +799,16 @@ g_dev_callback(void *arg)
 {
 	struct g_consumer *cp;
 	struct g_dev_softc *sc;
-	int destroy;
+	int active;
 
 	cp = arg;
 	sc = cp->private;
 	g_trace(G_T_TOPOLOGY, "g_dev_callback(%p(%s))", cp, cp->geom->name);
 
-	mtx_lock(&sc->sc_mtx);
 	sc->sc_dev = NULL;
 	sc->sc_alias = NULL;
-	destroy = (sc->sc_active == 0);
-	mtx_unlock(&sc->sc_mtx);
-	if (destroy)
+	active = atomic_fetchadd_int(&sc->sc_active, SC_A_DESTROY);
+	if ((active & SC_A_ACTIVE) == 0)
 		g_post_event(g_dev_destroy, cp, M_WAITOK, NULL);
 }
 
@@ -762,9 +835,10 @@ g_dev_orphan(struct g_consumer *cp)
 
 	/* Reset any dump-area set on this device */
 	if (dev->si_flags & SI_DUMPDEV)
-		(void)set_dumper(NULL, NULL, curthread);
+		(void)clear_dumper(curthread);
 
 	/* Destroy the struct cdev *so we get no more requests */
+	delist_dev(dev);
 	destroy_dev_sched_cb(dev, g_dev_callback, cp);
 }
 

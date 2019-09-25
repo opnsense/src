@@ -50,7 +50,9 @@
 #include <linux/types.h>
 #include <linux/jiffies.h>
 #include <linux/log2.h>
+
 #include <asm/byteorder.h>
+#include <asm/uaccess.h>
 
 #include <machine/stdarg.h>
 
@@ -128,12 +130,23 @@
 #define	ALIGN(x, y)		roundup2((x), (y))
 #undef PTR_ALIGN
 #define	PTR_ALIGN(p, a)		((__typeof(p))ALIGN((uintptr_t)(p), (a)))
+#if defined(LINUXKPI_VERSION) && LINUXKPI_VERSION >= 50000
+/* Moved from linuxkpi_gplv2 */
+#define	IS_ALIGNED(x, a)	(((x) & ((__typeof(x))(a) - 1)) == 0)
+#endif
 #define	DIV_ROUND_UP(x, n)	howmany(x, n)
+#define	__KERNEL_DIV_ROUND_UP(x, n)	howmany(x, n)
 #define	DIV_ROUND_UP_ULL(x, n)	DIV_ROUND_UP((unsigned long long)(x), (n))
+#define	DIV_ROUND_DOWN_ULL(x, n) (((unsigned long long)(x) / (n)) * (n))
 #define	FIELD_SIZEOF(t, f)	sizeof(((t *)0)->f)
 
 #define	printk(...)		printf(__VA_ARGS__)
 #define	vprintk(f, a)		vprintf(f, a)
+
+#define	asm			__asm
+
+extern void linux_dump_stack(void);
+#define	dump_stack()		linux_dump_stack()
 
 struct va_format {
 	const char *fmt;
@@ -169,8 +182,12 @@ scnprintf(char *buf, size_t size, const char *fmt, ...)
  * unless DEBUG is defined:
  */
 #ifdef DEBUG
-#define pr_debug(fmt, ...) \
-	log(LOG_DEBUG, fmt, ##__VA_ARGS__)
+extern int linuxkpi_debug;
+#define pr_debug(fmt, ...)					\
+	do {							\
+		if (linuxkpi_debug)				\
+			log(LOG_DEBUG, fmt, ##__VA_ARGS__);	\
+	} while (0)
 #define pr_devel(fmt, ...) \
 	log(LOG_DEBUG, pr_fmt(fmt), ##__VA_ARGS__)
 #else
@@ -370,6 +387,46 @@ kstrtou32(const char *cp, unsigned int base, u32 *res)
 	if (temp != (u32)temp)
 		return (-ERANGE);
 	return (0);
+}
+
+static inline int
+kstrtobool(const char *s, bool *res)
+{
+	int len;
+
+	if (s == NULL || (len = strlen(s)) == 0 || res == NULL)
+		return (-EINVAL);
+
+	/* skip newline character, if any */
+	if (s[len - 1] == '\n')
+		len--;
+
+	if (len == 1 && strchr("yY1", s[0]) != NULL)
+		*res = true;
+	else if (len == 1 && strchr("nN0", s[0]) != NULL)
+		*res = false;
+	else if (strncasecmp("on", s, len) == 0)
+		*res = true;
+	else if (strncasecmp("off", s, len) == 0)
+		*res = false;
+	else
+		return (-EINVAL);
+
+	return (0);
+}
+
+static inline int
+kstrtobool_from_user(const char __user *s, size_t count, bool *res)
+{
+	char buf[8] = {};
+
+	if (count > (sizeof(buf) - 1))
+		count = (sizeof(buf) - 1);
+
+	if (copy_from_user(buf, s, count))
+		return (-EFAULT);
+
+	return (kstrtobool(buf, res));
 }
 
 #define min(x, y)	((x) < (y) ? (x) : (y))

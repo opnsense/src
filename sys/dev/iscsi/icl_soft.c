@@ -1447,10 +1447,13 @@ icl_soft_conn_transfer_done(struct icl_conn *ic, void *prv)
 }
 
 static int
-icl_soft_limits(size_t *limitp)
+icl_soft_limits(struct icl_drv_limits *idl)
 {
 
-	*limitp = 128 * 1024;
+	idl->idl_max_recv_data_segment_length = 128 * 1024;
+	idl->idl_max_send_data_segment_length = 128 * 1024;
+	idl->idl_max_burst_length = 262144;
+	idl->idl_first_burst_length = 65536;
 
 	return (0);
 }

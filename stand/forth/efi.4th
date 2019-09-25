@@ -1,5 +1,5 @@
-\ Copyright (c) 2016 Netflix, Inc
-\ All rights reserved.
+\
+\ Copyright (c) 2016 Netflix, Inc.
 \
 \ Redistribution and use in source and binary forms, with or without
 \ modification, are permitted provided that the following conditions
@@ -26,5 +26,14 @@
 
 only forth definitions
 
-\ Place holder for more functions
-.( EFI boot environment) cr
+: efiboot? ( -- flag )
+	s" efi-version" getenv -1 <> dup if
+		swap drop ( c-addr flag -- flag )
+	then
+;
+
+: maybe-efi-resizecons
+	efiboot? if
+		s" efi-autoresizecons" evaluate
+	then
+;

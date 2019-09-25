@@ -8,17 +8,16 @@
 # Modified by John Marino to suit DragonFly needs
 #
 
-.if !defined(CLDRDIR)
-CLDRDIR!=	grep ^cldr etc/unicode.conf | cut -f 2 -d " "
+.OBJDIR:	.
+
+.if !defined(UNIDIR)
+.error UNIDIR is not set
 .endif
-.if !defined(UNIDATADIR)
-UNIDATADIR!=	grep ^unidata etc/unicode.conf | cut -f 2 -d " "
-.endif
-PASSON=		CLDRDIR="${CLDRDIR}" UNIDATADIR="${UNIDATADIR}"
+PASSON=		UNIDIR="${UNIDIR}"
 
 ETCDIR=		${.CURDIR}/etc
 
-KNOWN=		monetdef numericdef msgdef timedef colldef ctypedef
+KNOWN=		monetdef numericdef msgdef colldef ctypedef # timedef
 TYPES?=		${KNOWN}
 LOCALE_DESTDIR?=	/tmp/generated-locales/
 
@@ -31,20 +30,23 @@ COLLATION_SPECIAL?= \
 	nb_NO ISO8859-1 \
 	nb_NO ISO8859-15 \
 	sk_SK ISO8859-2 \
+	sr_Latn_RS ISO8859-2 \
+	sr_Cyrl_RS ISO8859-5 \
 	zh_Hans_CN GB2312 \
 	zh_Hans_CN eucCN \
+	zh_Hant_TW Big5 \
+	zh_Hans_CN GB18030 \
+	zh_Hans_CN GBK \
+	ja_JP eucJP \
+	nn_NO ISO8859-15 \
+	nn_NO ISO8859-1
 
 .for area enc in ${COLLATION_SPECIAL}
 COLLATIONS_SPECIAL_ENV+=	${area}.${enc}
 .endfor
 PASSON+=	COLLATIONS_SPECIAL="${COLLATIONS_SPECIAL_ENV}"
 
-.if defined(LC)
-LC:=	--lc=${LC}
-.endif
-
 all:
-	cp ${ETCDIR}/common.UTF-8.src ${CLDRDIR}/posix/xx_Comm_US.UTF-8.src
 .for t in ${TYPES}
 .  if ${KNOWN:M${t}}
 	test -d ${t} || mkdir ${t}
@@ -54,12 +56,14 @@ all:
 	@echo ""
 	@find . -name *failed
 
-install:
 .for t in ${TYPES}
+install: install-${t}
+install-${t}:
 .  if ${KNOWN:M${t}}
 	rm -rf ${.CURDIR}/${t}.draft
-	rm -rf ${.CURDIR}/../../../share/${t}
-	mv ${.CURDIR}/${t} ${.CURDIR}/../../../share/${t}
+	rm -f ${.CURDIR}/../../../share/${t}/Makefile
+	rm -f ${.CURDIR}/../../../share/${t}/*.src
+	mv ${.CURDIR}/${t}/* ${.CURDIR}/../../../share/${t}/
 .  endif
 .endfor
 
@@ -75,31 +79,26 @@ post-install:
 gen-${t}:
 	mkdir -p ${t} ${t}.draft
 	perl -I tools tools/cldr2def.pl \
-		--cldr=$$(realpath ${CLDRDIR}) \
-		--unidata=$$(realpath ${UNIDATADIR}) \
+		--unidir=$$(realpath ${UNIDIR}) \
 		--etc=$$(realpath ${ETCDIR}) \
-		--type=${t} ${LC}
+		--type=${t}
 
 build-${t}: gen-${t}
 	env ${PASSON} tools/finalize ${t}
 .endfor
 
-gen-ctypedef:	transfer-rollup
+gen-ctypedef:	ctype-rollup
 static-colldef: gen-colldef
 build-colldef:	static-colldef
 
 static-colldef:
 .for area enc in ${COLLATION_SPECIAL}
-	awk -f tools/extract-colldef.awk ${CLDRDIR}/posix/${area}.${enc}.src > colldef/${area}.${enc}.src
+	awk -f tools/extract-colldef.awk ${UNIDIR}/posix/${area}.${enc}.src > \
+	    colldef.draft/${area}.${enc}.src
 .endfor
 
-transfer-rollup:
-	cp ${ETCDIR}/common.UTF-8.src ${CLDRDIR}/posix/xx_Comm_US.UTF-8.src
-
-rollup:
-	perl -I tools tools/utf8-rollup.pl \
-		--cldr=$$(realpath ${CLDRDIR}) \
-		--etc=$$(realpath ${ETCDIR})
+ctype-rollup:
+	perl -I tools tools/utf8-rollup.pl --unidir=$$(realpath ${UNIDIR})
 
 clean:
 .for t in ${TYPES}
@@ -117,7 +116,7 @@ BASE_LOCALES_OF_INTEREST?= \
 	nb_NO nl_BE nl_NL nn_NO pl_PL pt_BR pt_PT ro_RO \
 	ru_RU se_FI se_NO sk_SK sl_SI sv_FI sv_SE tr_TR \
 	uk_UA \
-	kk_Cyrl_KZ mn_Cyrl_MN sr_Cyrl_RS sr_Latn_RS \
+	kk_KZ mn_MN sr_Cyrl_RS sr_Latn_RS \
 	zh_Hans_CN zh_Hant_HK zh_Hant_TW \
 	bn_IN gu_IN or_IN ta_IN te_IN kn_IN ml_IN si_LK \
 	th_TH lo_LA bo_IN my_MM pa_Guru_IN ka_GE chr_US \
@@ -148,33 +147,33 @@ ENCODINGS=	Big5 \
 
 
 POSIX:
-.if exists (${CLDRDIR}/tools/java/cldr.jar)
-	mkdir -p ${CLDRDIR}/posix
+.if exists (${UNIDIR}/tools/java/cldr.jar)
+	mkdir -p ${UNIDIR}/posix
 .  for area in ${BASE_LOCALES_OF_INTEREST}
-.    if !exists(${CLDRDIR}/posix/${area}.UTF-8.src)
-	java -DCLDR_DIR=${CLDRDIR:Q} -jar ${CLDRDIR}/tools/java/cldr.jar \
+.    if !exists(${UNIDIR}/posix/${area}.UTF-8.src)
+	java -DCLDR_DIR=${UNIDIR:Q} -jar ${UNIDIR}/tools/java/cldr.jar \
 		org.unicode.cldr.posix.GeneratePOSIX \
-		-d ${CLDRDIR}/posix -m ${area} -c UTF-8
+		-d ${UNIDIR}/posix -m ${area} -c UTF-8
 .    endif
 .  endfor
 .  for area encoding in ${COLLATION_SPECIAL}
-.    if !exists(${CLDRDIR}/posix/${area}.${encoding}.src)
-	java -DCLDR_DIR=${CLDRDIR:Q} -jar ${CLDRDIR}/tools/java/cldr.jar \
+.    if !exists(${UNIDIR}/posix/${area}.${encoding}.src)
+	java -DCLDR_DIR=${UNIDIR:Q} -jar ${UNIDIR}/tools/java/cldr.jar \
 		org.unicode.cldr.posix.GeneratePOSIX \
-		-d ${CLDRDIR}/posix -m ${area} -c ${encoding}
+		-d ${UNIDIR}/posix -m ${area} -c ${encoding}
 .    endif
 .  endfor
 .  for enc in ${ENCODINGS}
-.  if !exists(${CLDRDIR}/posix/${enc}.cm)
-	java -DCLDR_DIR=${CLDRDIR:Q} -jar ${CLDRDIR}/tools/java/cldr.jar \
+.  if !exists(${UNIDIR}/posix/${enc}.cm)
+	java -DCLDR_DIR=${UNIDIR:Q} -jar ${UNIDIR}/tools/java/cldr.jar \
 		org.unicode.cldr.posix.GenerateCharmap \
-		-d ${CLDRDIR}/posix -c ${enc}
+		-d ${UNIDIR}/posix -c ${enc}
 .  endif
 .  endfor
 .else
 	@echo "Please install CLDR toolset for the desired release"
-	@echo "It should go at ${CLDRDIR}/tools"
+	@echo "It should go at ${UNIDIR}/tools"
 .endif
 
 clean-POSIX:
-	rm -f {CLDRDIR}/posix/*
+	rm -f ${UNIDIR}/posix/*

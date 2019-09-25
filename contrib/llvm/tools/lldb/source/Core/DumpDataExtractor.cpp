@@ -9,12 +9,12 @@
 
 #include "lldb/Core/DumpDataExtractor.h"
 
-#include "lldb/lldb-defines.h" // for LLDB_INVALID_ADDRESS
-#include "lldb/lldb-forward.h" // for TargetSP, DisassemblerSP
+#include "lldb/lldb-defines.h"
+#include "lldb/lldb-forward.h"
 
-#include "lldb/Core/Address.h" // for Address
+#include "lldb/Core/Address.h"
 #include "lldb/Core/Disassembler.h"
-#include "lldb/Core/ModuleList.h" // for ModuleList
+#include "lldb/Core/ModuleList.h"
 #include "lldb/Symbol/ClangASTContext.h"
 #include "lldb/Target/ExecutionContext.h"
 #include "lldb/Target/ExecutionContextScope.h"
@@ -23,22 +23,22 @@
 #include "lldb/Utility/DataExtractor.h"
 #include "lldb/Utility/Stream.h"
 
-#include "clang/AST/ASTContext.h"    // for ASTContext
-#include "clang/AST/CanonicalType.h" // for CanQualType
+#include "clang/AST/ASTContext.h"
+#include "clang/AST/CanonicalType.h"
 
-#include "llvm/ADT/APFloat.h"     // for APFloat, APFloatBase:...
-#include "llvm/ADT/APInt.h"       // for APInt
-#include "llvm/ADT/ArrayRef.h"    // for ArrayRef
-#include "llvm/ADT/SmallVector.h" // for SmallVector
+#include "llvm/ADT/APFloat.h"
+#include "llvm/ADT/APInt.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 
-#include <limits> // for numeric_limits, numer...
-#include <memory> // for shared_ptr
-#include <string> // for string, basic_string
+#include <limits>
+#include <memory>
+#include <string>
 
-#include <assert.h>   // for assert
-#include <ctype.h>    // for isprint
-#include <inttypes.h> // for PRIu64, PRIx64, PRIX64
-#include <math.h>     // for ldexpf
+#include <assert.h>
+#include <ctype.h>
+#include <inttypes.h>
+#include <math.h>
 
 #include <bitset>
 #include <sstream>
@@ -239,8 +239,8 @@ lldb::offset_t lldb_private::DumpDataExtractor(
       if (item_byte_size <= 8) {
         uint64_t uval64 = DE.GetMaxU64Bitfield(&offset, item_byte_size,
                                                item_bit_size, item_bit_offset);
-        // Avoid std::bitset<64>::to_string() since it is missing in
-        // earlier C++ libraries
+        // Avoid std::bitset<64>::to_string() since it is missing in earlier
+        // C++ libraries
         std::string binary_value(64, '0');
         std::bitset<64> bits(uval64);
         for (uint32_t i = 0; i < 64; ++i)
@@ -263,8 +263,8 @@ lldb::offset_t lldb_private::DumpDataExtractor(
         s->Printf("%2.2x", DE.GetU8(&offset));
       }
 
-      // Put an extra space between the groups of bytes if more than one
-      // is being dumped in a group (item_byte_size is more than 1).
+      // Put an extra space between the groups of bytes if more than one is
+      // being dumped in a group (item_byte_size is more than 1).
       if (item_byte_size > 1)
         s->PutChar(' ');
       break;
@@ -279,8 +279,7 @@ lldb::offset_t lldb_private::DumpDataExtractor(
         return offset;
       }
 
-      // If we are only printing one character surround it with single
-      // quotes
+      // If we are only printing one character surround it with single quotes
       if (item_count == 1 && item_format == eFormatChar)
         s->PutChar('\'');
 
@@ -583,8 +582,10 @@ lldb::offset_t lldb_private::DumpDataExtractor(
             } else if (item_bit_size == ast->getTypeSize(ast->LongDoubleTy)) {
               const auto &semantics =
                   ast->getFloatTypeSemantics(ast->LongDoubleTy);
-              const auto byte_size =
-                  (llvm::APFloat::getSizeInBits(semantics) + 7) / 8;
+
+              offset_t byte_size = item_byte_size;
+              if (&semantics == &llvm::APFloatBase::x87DoubleExtended())
+                byte_size = (llvm::APFloat::getSizeInBits(semantics) + 7) / 8;
 
               llvm::APInt apint;
               if (GetAPInt(DE, &offset, byte_size, apint)) {
@@ -691,10 +692,9 @@ lldb::offset_t lldb_private::DumpDataExtractor(
       break;
 
     // please keep the single-item formats below in sync with
-    // FormatManager::GetSingleItemFormat
-    // if you fail to do so, users will start getting different outputs
-    // depending on internal
-    // implementation details they should not care about ||
+    // FormatManager::GetSingleItemFormat if you fail to do so, users will
+    // start getting different outputs depending on internal implementation
+    // details they should not care about ||
     case eFormatVectorOfChar: //   ||
       s->PutChar('{');        //   \/
       offset =

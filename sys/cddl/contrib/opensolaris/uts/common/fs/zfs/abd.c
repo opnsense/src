@@ -153,6 +153,8 @@ size_t zfs_abd_chunk_size = 4096;
 #if defined(__FreeBSD__) && defined(_KERNEL)
 SYSCTL_DECL(_vfs_zfs);
 
+SYSCTL_INT(_vfs_zfs, OID_AUTO, abd_scatter_enabled, CTLFLAG_RWTUN,
+    &zfs_abd_scatter_enabled, 0, "Enable scattered ARC data buffers");
 SYSCTL_ULONG(_vfs_zfs, OID_AUTO, abd_chunk_size, CTLFLAG_RDTUN,
     &zfs_abd_chunk_size, 0, "The size of the chunks ABD allocates");
 #endif
@@ -288,7 +290,7 @@ abd_free_struct(abd_t *abd)
 abd_t *
 abd_alloc(size_t size, boolean_t is_metadata)
 {
-	if (!zfs_abd_scatter_enabled)
+	if (!zfs_abd_scatter_enabled || size <= zfs_abd_chunk_size)
 		return (abd_alloc_linear(size, is_metadata));
 
 	VERIFY3U(size, <=, SPA_MAXBLOCKSIZE);

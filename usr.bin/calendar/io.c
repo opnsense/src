@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1989, 1993, 1994
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -52,7 +54,6 @@ __FBSDID("$FreeBSD$");
 #include <locale.h>
 #include <pwd.h>
 #include <stdbool.h>
-#define _WITH_GETLINE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -293,6 +294,9 @@ cal_parse(FILE *in, FILE *out)
 		if (strncmp(buf, "LANG=", 5) == 0) {
 			(void)setlocale(LC_ALL, buf + 5);
 			d_first = (*nl_langinfo(D_MD_ORDER) == 'd');
+#ifdef WITH_ICONV
+			set_new_encoding();
+#endif
 			setnnames();
 			continue;
 		}

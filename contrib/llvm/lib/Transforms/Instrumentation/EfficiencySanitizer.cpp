@@ -23,6 +23,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/Transforms/Utils/Local.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicInst.h"
@@ -33,7 +34,6 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Instrumentation.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
-#include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
 using namespace llvm;
@@ -142,21 +142,6 @@ OverrideOptionsFromCL(EfficiencySanitizerOptions Options) {
     Options.ToolType = EfficiencySanitizerOptions::ESAN_CacheFrag;
 
   return Options;
-}
-
-// Create a constant for Str so that we can pass it to the run-time lib.
-static GlobalVariable *createPrivateGlobalForString(Module &M, StringRef Str,
-                                                    bool AllowMerging) {
-  Constant *StrConst = ConstantDataArray::getString(M.getContext(), Str);
-  // We use private linkage for module-local strings. If they can be merged
-  // with another one, we set the unnamed_addr attribute.
-  GlobalVariable *GV =
-    new GlobalVariable(M, StrConst->getType(), true,
-                       GlobalValue::PrivateLinkage, StrConst, "");
-  if (AllowMerging)
-    GV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
-  GV->setAlignment(1);  // Strings may not be merged w/o setting align 1.
-  return GV;
 }
 
 /// EfficiencySanitizer: instrument each module to find performance issues.
@@ -537,7 +522,7 @@ void EfficiencySanitizer::createDestructor(Module &M, Constant *ToolInfoArg) {
 bool EfficiencySanitizer::initOnModule(Module &M) {
 
   Triple TargetTriple(M.getTargetTriple());
-  if (TargetTriple.getArch() == Triple::mips64 || TargetTriple.getArch() == Triple::mips64el)
+  if (TargetTriple.isMIPS64())
     ShadowParams = ShadowParams40;
   else
     ShadowParams = ShadowParams47;
@@ -902,7 +887,7 @@ bool EfficiencySanitizer::instrumentFastpathWorkingSet(
   Value *OldValue = IRB.CreateLoad(IRB.CreateIntToPtr(ShadowPtr, ShadowPtrTy));
   // The AND and CMP will be turned into a TEST instruction by the compiler.
   Value *Cmp = IRB.CreateICmpNE(IRB.CreateAnd(OldValue, ValueMask), ValueMask);
-  TerminatorInst *CmpTerm = SplitBlockAndInsertIfThen(Cmp, I, false);
+  Instruction *CmpTerm = SplitBlockAndInsertIfThen(Cmp, I, false);
   // FIXME: do I need to call SetCurrentDebugLocation?
   IRB.SetInsertPoint(CmpTerm);
   // We use OR to set the shadow bits to avoid corrupting the middle 6 bits,

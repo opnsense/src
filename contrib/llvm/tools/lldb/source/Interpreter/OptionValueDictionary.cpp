@@ -9,15 +9,11 @@
 
 #include "lldb/Interpreter/OptionValueDictionary.h"
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
 #include "llvm/ADT/StringRef.h"
-// Project includes
-#include "lldb/Core/State.h"
 #include "lldb/DataFormatters/FormatManager.h"
-#include "lldb/Interpreter/Args.h"
 #include "lldb/Interpreter/OptionValueString.h"
+#include "lldb/Utility/Args.h"
+#include "lldb/Utility/State.h"
 
 using namespace lldb;
 using namespace lldb_private;
@@ -33,16 +29,23 @@ void OptionValueDictionary::DumpValue(const ExecutionContext *exe_ctx,
       strm.Printf("(%s)", GetTypeAsCString());
   }
   if (dump_mask & eDumpOptionValue) {
+    const bool one_line = dump_mask & eDumpOptionCommand;
     if (dump_mask & eDumpOptionType)
       strm.PutCString(" =");
 
     collection::iterator pos, end = m_values.end();
 
-    strm.IndentMore();
+    if (!one_line)
+      strm.IndentMore();
 
     for (pos = m_values.begin(); pos != end; ++pos) {
       OptionValue *option_value = pos->second.get();
-      strm.EOL();
+
+      if (one_line)
+        strm << ' ';
+      else
+        strm.EOL();
+
       strm.Indent(pos->first.GetCString());
 
       const uint32_t extra_dump_options = m_raw_value_dump ? eDumpOptionRaw : 0;
@@ -74,7 +77,8 @@ void OptionValueDictionary::DumpValue(const ExecutionContext *exe_ctx,
         break;
       }
     }
-    strm.IndentLess();
+    if (!one_line)
+      strm.IndentLess();
   }
 }
 
@@ -128,9 +132,7 @@ Status OptionValueDictionary::SetArgs(const Args &args,
 
       if (key.front() == '[') {
         // Key name starts with '[', so the key value must be in single or
-        // double quotes like:
-        // ['<key>']
-        // ["<key>"]
+        // double quotes like: ['<key>'] ["<key>"]
         if ((key.size() > 2) && (key.back() == ']')) {
           // Strip leading '[' and trailing ']'
           key = key.substr(1, key.size() - 2);
@@ -286,8 +288,8 @@ OptionValueDictionary::GetValueForKey(const ConstString &key) const {
 bool OptionValueDictionary::SetValueForKey(const ConstString &key,
                                            const lldb::OptionValueSP &value_sp,
                                            bool can_replace) {
-  // Make sure the value_sp object is allowed to contain
-  // values of the type passed in...
+  // Make sure the value_sp object is allowed to contain values of the type
+  // passed in...
   if (value_sp && (m_type_mask & value_sp->GetTypeAsMask())) {
     if (!can_replace) {
       collection::const_iterator pos = m_values.find(key);

@@ -40,6 +40,7 @@ TESTS_SRCS=	\
 	test_help.c				\
 	test_leading_slash.c			\
 	test_missing_file.c			\
+	test_option_C_mtree.c			\
 	test_option_C_upper.c			\
 	test_option_H_upper.c			\
 	test_option_L_upper.c			\
@@ -52,6 +53,7 @@ TESTS_SRCS=	\
 	test_option_b.c				\
 	test_option_b64encode.c			\
 	test_option_exclude.c			\
+	test_option_exclude_vcs.c		\
 	test_option_fflags.c			\
 	test_option_gid_gname.c			\
 	test_option_grzip.c			\

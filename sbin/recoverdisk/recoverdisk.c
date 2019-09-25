@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: Beerware
+ *
  * ----------------------------------------------------------------------------
  * "THE BEER-WARE LICENSE" (Revision 42):
  * <phk@FreeBSD.ORG> wrote this file.  As long as you retain this notice you
@@ -123,6 +125,7 @@ read_worklist(off_t t)
 		new_lump(s, l, state);
 		d -= l;
 	}
+	fclose(file);
 	(void)fprintf(stderr, " done.\n");
 	/*
 	 * Return the number of bytes already read

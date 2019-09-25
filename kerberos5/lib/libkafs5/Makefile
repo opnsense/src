@@ -26,7 +26,7 @@ SRCS=	afssys.c afskrb5.c common.c
 
 CFLAGS+=	-I${KRB5DIR}/lib/kafs \
 		-I${KRB5DIR}/lib/krb5 \
-		-I${.OBJDIR:H}/libkrb5/ \
+		-I${.OBJDIR:H}/libkrb5 \
 		-I${KRB5DIR}/lib/roken
 
 CLEANFILES= kafs5.3

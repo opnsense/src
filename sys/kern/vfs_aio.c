@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1997 John S. Dyson.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -20,8 +22,6 @@
 
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
-
-#include "opt_compat.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -212,7 +212,7 @@ typedef struct oaiocb {
 /*
  * If the routine that services an AIO request blocks while running in an
  * AIO kernel process it can starve other I/O requests.  BIO requests
- * queued via aio_qphysio() complete in GEOM and do not use AIO kernel
+ * queued via aio_qbio() complete asynchronously and do not use AIO kernel
  * processes at all.  Socket I/O requests use a separate pool of
  * kprocs and also force non-blocking I/O.  Other file I/O requests
  * use the generic fo_read/fo_write operations which can block.  The
@@ -268,7 +268,7 @@ struct kaioinfo {
 	int	kaio_flags;		/* (a) per process kaio flags */
 	int	kaio_active_count;	/* (c) number of currently used AIOs */
 	int	kaio_count;		/* (a) size of AIO queue */
-	int	kaio_buffer_count;	/* (a) number of physio buffers */
+	int	kaio_buffer_count;	/* (a) number of bio buffers */
 	TAILQ_HEAD(,kaiocb) kaio_all;	/* (a) all AIOs in a process */
 	TAILQ_HEAD(,kaiocb) kaio_done;	/* (a) done queue for process */
 	TAILQ_HEAD(,aioliojob) kaio_liojoblist; /* (a) list of lio jobs */
@@ -318,11 +318,11 @@ static int	aio_newproc(int *);
 int		aio_aqueue(struct thread *td, struct aiocb *ujob,
 		    struct aioliojob *lio, int type, struct aiocb_ops *ops);
 static int	aio_queue_file(struct file *fp, struct kaiocb *job);
-static void	aio_physwakeup(struct bio *bp);
+static void	aio_biowakeup(struct bio *bp);
 static void	aio_proc_rundown(void *arg, struct proc *p);
 static void	aio_proc_rundown_exec(void *arg, struct proc *p,
 		    struct image_params *imgp);
-static int	aio_qphysio(struct proc *p, struct kaiocb *job);
+static int	aio_qbio(struct proc *p, struct kaiocb *job);
 static void	aio_daemon(void *param);
 static void	aio_bio_done_notify(struct proc *userp, struct kaiocb *job);
 static bool	aio_clear_cancel_function_locked(struct kaiocb *job);
@@ -741,9 +741,9 @@ drop:
 
 /*
  * The AIO processing activity for LIO_READ/LIO_WRITE.  This is the code that
- * does the I/O request for the non-physio version of the operations.  The
- * normal vn operations are used, and this code should work in all instances
- * for every type of file, including pipes, sockets, fifos, and regular files.
+ * does the I/O request for the non-bio version of the operations.  The normal
+ * vn operations are used, and this code should work in all instances for every
+ * type of file, including pipes, sockets, fifos, and regular files.
  *
  * XXX I don't think it works well for socket, pipe, and fifo.
  */
@@ -960,7 +960,6 @@ aio_schedule_fsync(void *context, int pending)
 bool
 aio_cancel_cleared(struct kaiocb *job)
 {
-	struct kaioinfo *ki;
 
 	/*
 	 * The caller should hold the same queue lock held when
@@ -968,7 +967,6 @@ aio_cancel_cleared(struct kaiocb *job)
 	 * ensuring this check sees an up-to-date value.  However,
 	 * there is no way to assert that.
 	 */
-	ki = job->userproc->p_aioinfo;
 	return ((job->jobflags & KAIOCB_CLEARED) != 0);
 }
 
@@ -1197,7 +1195,7 @@ aio_newproc(int *start)
 }
 
 /*
- * Try the high-performance, low-overhead physio method for eligible
+ * Try the high-performance, low-overhead bio method for eligible
  * VCHR devices.  This method doesn't use an aio helper thread, and
  * thus has very low overhead.
  *
@@ -1206,7 +1204,7 @@ aio_newproc(int *start)
  * duration of this call.
  */
 static int
-aio_qphysio(struct proc *p, struct kaiocb *job)
+aio_qbio(struct proc *p, struct kaiocb *job)
 {
 	struct aiocb *cb;
 	struct file *fp;
@@ -1279,7 +1277,7 @@ aio_qphysio(struct proc *p, struct kaiocb *job)
 
 	bp->bio_length = cb->aio_nbytes;
 	bp->bio_bcount = cb->aio_nbytes;
-	bp->bio_done = aio_physwakeup;
+	bp->bio_done = aio_biowakeup;
 	bp->bio_data = (void *)(uintptr_t)cb->aio_buf;
 	bp->bio_offset = cb->aio_offset;
 	bp->bio_cmd = cb->aio_lio_opcode == LIO_WRITE ? BIO_WRITE : BIO_READ;
@@ -1444,7 +1442,7 @@ static struct aiocb_ops aiocb_ops_osigevent = {
 #endif
 
 /*
- * Queue a new AIO request.  Choosing either the threaded or direct physio VCHR
+ * Queue a new AIO request.  Choosing either the threaded or direct bio VCHR
  * technique is done in this code.
  */
 int
@@ -1452,7 +1450,6 @@ aio_aqueue(struct thread *td, struct aiocb *ujob, struct aioliojob *lj,
     int type, struct aiocb_ops *ops)
 {
 	struct proc *p = td->td_proc;
-	cap_rights_t rights;
 	struct file *fp;
 	struct kaiocb *job;
 	struct kaioinfo *ki;
@@ -1530,21 +1527,19 @@ aio_aqueue(struct thread *td, struct aiocb *ujob, struct aioliojob *lj,
 	fd = job->uaiocb.aio_fildes;
 	switch (opcode) {
 	case LIO_WRITE:
-		error = fget_write(td, fd,
-		    cap_rights_init(&rights, CAP_PWRITE), &fp);
+		error = fget_write(td, fd, &cap_pwrite_rights, &fp);
 		break;
 	case LIO_READ:
-		error = fget_read(td, fd,
-		    cap_rights_init(&rights, CAP_PREAD), &fp);
+		error = fget_read(td, fd, &cap_pread_rights, &fp);
 		break;
 	case LIO_SYNC:
-		error = fget(td, fd, cap_rights_init(&rights, CAP_FSYNC), &fp);
+		error = fget(td, fd, &cap_fsync_rights, &fp);
 		break;
 	case LIO_MLOCK:
 		fp = NULL;
 		break;
 	case LIO_NOP:
-		error = fget(td, fd, cap_rights_init(&rights), &fp);
+		error = fget(td, fd, &cap_no_rights, &fp);
 		break;
 	default:
 		error = EINVAL;
@@ -1594,12 +1589,13 @@ aio_aqueue(struct thread *td, struct aiocb *ujob, struct aioliojob *lj,
 		goto aqueue_fail;
 	}
 	kqfd = job->uaiocb.aio_sigevent.sigev_notify_kqueue;
+	memset(&kev, 0, sizeof(kev));
 	kev.ident = (uintptr_t)job->ujob;
 	kev.filter = EVFILT_AIO;
 	kev.flags = EV_ADD | EV_ENABLE | EV_FLAG1 | evflags;
 	kev.data = (intptr_t)job;
 	kev.udata = job->uaiocb.aio_sigevent.sigev_value.sival_ptr;
-	error = kqfd_register(kqfd, &kev, td, 1);
+	error = kqfd_register(kqfd, &kev, td, M_WAITOK);
 	if (error)
 		goto aqueue_fail;
 
@@ -1693,7 +1689,6 @@ aio_cancel_sync(struct kaiocb *job)
 int
 aio_queue_file(struct file *fp, struct kaiocb *job)
 {
-	struct aioliojob *lj;
 	struct kaioinfo *ki;
 	struct kaiocb *job2;
 	struct vnode *vp;
@@ -1701,9 +1696,8 @@ aio_queue_file(struct file *fp, struct kaiocb *job)
 	int error;
 	bool safe;
 
-	lj = job->lio;
 	ki = job->userproc->p_aioinfo;
-	error = aio_qphysio(job->userproc, job);
+	error = aio_qbio(job->userproc, job);
 	if (error >= 0)
 		return (error);
 	safe = false;
@@ -1953,8 +1947,7 @@ sys_aio_suspend(struct thread *td, struct aio_suspend_args *uap)
 }
 
 /*
- * aio_cancel cancels any non-physio aio operations not currently in
- * progress.
+ * aio_cancel cancels any non-bio aio operations not currently in progress.
  */
 int
 sys_aio_cancel(struct thread *td, struct aio_cancel_args *uap)
@@ -1963,14 +1956,13 @@ sys_aio_cancel(struct thread *td, struct aio_cancel_args *uap)
 	struct kaioinfo *ki;
 	struct kaiocb *job, *jobn;
 	struct file *fp;
-	cap_rights_t rights;
 	int error;
 	int cancelled = 0;
 	int notcancelled = 0;
 	struct vnode *vp;
 
 	/* Lookup file object. */
-	error = fget(td, uap->fd, cap_rights_init(&rights), &fp);
+	error = fget(td, uap->fd, &cap_no_rights, &fp);
 	if (error)
 		return (error);
 
@@ -2135,7 +2127,7 @@ kern_lio_listio(struct thread *td, int mode, struct aiocb * const *uacb_list,
 	struct aioliojob *lj;
 	struct kevent kev;
 	int error;
-	int nerror;
+	int nagain, nerror;
 	int i;
 
 	if ((mode != LIO_NOWAIT) && (mode != LIO_WAIT))
@@ -2163,6 +2155,7 @@ kern_lio_listio(struct thread *td, int mode, struct aiocb * const *uacb_list,
 		bcopy(sig, &lj->lioj_signal, sizeof(lj->lioj_signal));
 		if (lj->lioj_signal.sigev_notify == SIGEV_KEVENT) {
 			/* Assume only new style KEVENT */
+			memset(&kev, 0, sizeof(kev));
 			kev.filter = EVFILT_LIO;
 			kev.flags = EV_ADD | EV_ENABLE | EV_FLAG1;
 			kev.ident = (uintptr_t)uacb_list; /* something unique */
@@ -2170,7 +2163,8 @@ kern_lio_listio(struct thread *td, int mode, struct aiocb * const *uacb_list,
 			/* pass user defined sigval data */
 			kev.udata = lj->lioj_signal.sigev_value.sival_ptr;
 			error = kqfd_register(
-			    lj->lioj_signal.sigev_notify_kqueue, &kev, td, 1);
+			    lj->lioj_signal.sigev_notify_kqueue, &kev, td,
+			    M_WAITOK);
 			if (error) {
 				uma_zfree(aiolio_zone, lj);
 				return (error);
@@ -2204,12 +2198,15 @@ kern_lio_listio(struct thread *td, int mode, struct aiocb * const *uacb_list,
 	/*
 	 * Get pointers to the list of I/O requests.
 	 */
+	nagain = 0;
 	nerror = 0;
 	for (i = 0; i < nent; i++) {
 		job = acb_list[i];
 		if (job != NULL) {
 			error = aio_aqueue(td, job, lj, LIO_NOP, ops);
-			if (error != 0)
+			if (error == EAGAIN)
+				nagain++;
+			else if (error != 0)
 				nerror++;
 		}
 	}
@@ -2256,7 +2253,10 @@ kern_lio_listio(struct thread *td, int mode, struct aiocb * const *uacb_list,
 
 	if (nerror)
 		return (EIO);
-	return (error);
+	else if (nagain)
+		return (EAGAIN);
+	else
+		return (error);
 }
 
 /* syscall - list directed I/O (REALTIME) */
@@ -2331,7 +2331,7 @@ sys_lio_listio(struct thread *td, struct lio_listio_args *uap)
 }
 
 static void
-aio_physwakeup(struct bio *bp)
+aio_biowakeup(struct bio *bp)
 {
 	struct kaiocb *job = (struct kaiocb *)bp->bio_caller1;
 	struct proc *userp;
@@ -2484,7 +2484,9 @@ sys_aio_fsync(struct thread *td, struct aio_fsync_args *uap)
 static int
 filt_aioattach(struct knote *kn)
 {
-	struct kaiocb *job = (struct kaiocb *)kn->kn_sdata;
+	struct kaiocb *job;
+
+	job = (struct kaiocb *)(uintptr_t)kn->kn_sdata;
 
 	/*
 	 * The job pointer must be validated before using it, so
@@ -2532,7 +2534,9 @@ filt_aio(struct knote *kn, long hint)
 static int
 filt_lioattach(struct knote *kn)
 {
-	struct aioliojob * lj = (struct aioliojob *)kn->kn_sdata;
+	struct aioliojob *lj;
+
+	lj = (struct aioliojob *)(uintptr_t)kn->kn_sdata;
 
 	/*
 	 * The aioliojob pointer must be validated before using it, so

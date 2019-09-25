@@ -225,10 +225,10 @@ bool lldb_private::formatters::NSStringSummaryProvider(
     options.SetStream(&stream);
     options.SetQuote('"');
     options.SetSourceSize(explicit_length);
-    options.SetNeedsZeroTermination(has_explicit_length == false);
+    options.SetNeedsZeroTermination(!has_explicit_length);
     options.SetIgnoreMaxLength(summary_options.GetCapping() ==
                                TypeSummaryCapping::eTypeSummaryUncapped);
-    options.SetBinaryZeroIsTerminator(has_explicit_length == false);
+    options.SetBinaryZeroIsTerminator(!has_explicit_length);
     options.SetLanguage(summary_options.GetLanguage());
     return StringPrinter::ReadStringAndDumpToStream<
         StringPrinter::StringElementType::UTF16>(options);
@@ -245,10 +245,10 @@ bool lldb_private::formatters::NSStringSummaryProvider(
     options.SetStream(&stream);
     options.SetQuote('"');
     options.SetSourceSize(explicit_length);
-    options.SetNeedsZeroTermination(has_explicit_length == false);
+    options.SetNeedsZeroTermination(!has_explicit_length);
     options.SetIgnoreMaxLength(summary_options.GetCapping() ==
                                TypeSummaryCapping::eTypeSummaryUncapped);
-    options.SetBinaryZeroIsTerminator(has_explicit_length == false);
+    options.SetBinaryZeroIsTerminator(!has_explicit_length);
     options.SetLanguage(summary_options.GetLanguage());
     return StringPrinter::ReadStringAndDumpToStream<
         StringPrinter::StringElementType::UTF16>(options);
@@ -256,15 +256,11 @@ bool lldb_private::formatters::NSStringSummaryProvider(
     uint64_t location = valobj_addr + 2 * ptr_size;
     if (!has_explicit_length) {
       // in this kind of string, the byte before the string content is a length
-      // byte
-      // so let's try and use it to handle the embedded NUL case
+      // byte so let's try and use it to handle the embedded NUL case
       Status error;
       explicit_length =
           process_sp->ReadUnsignedIntegerFromMemory(location, 1, 0, error);
-      if (error.Fail() || explicit_length == 0)
-        has_explicit_length = false;
-      else
-        has_explicit_length = true;
+      has_explicit_length = !(error.Fail() || explicit_length == 0);
       location++;
     }
     options.SetLocation(location);
@@ -368,9 +364,7 @@ bool lldb_private::formatters::NSTaggedString_SummaryProvider(
   }
 
   // this is a fairly ugly trick - pretend that the numeric value is actually a
-  // char*
-  // this works under a few assumptions:
-  // little endian architecture
+  // char* this works under a few assumptions: little endian architecture
   // sizeof(uint64_t) > g_MaxNonBitmaskedLen
   if (len_bits <= g_MaxNonBitmaskedLen) {
     stream.Printf("%s", prefix.c_str());

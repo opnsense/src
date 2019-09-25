@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
  * All rights reserved.
  *
@@ -87,10 +89,10 @@ struct ip6qbucket {
 	int		count;
 };
 
-static VNET_DEFINE(volatile u_int, frag6_nfragpackets);
+VNET_DEFINE_STATIC(volatile u_int, frag6_nfragpackets);
 volatile u_int frag6_nfrags = 0;
-static VNET_DEFINE(struct ip6qbucket, ip6q[IP6REASS_NHASH]);
-static VNET_DEFINE(uint32_t, ip6q_hashseed);
+VNET_DEFINE_STATIC(struct ip6qbucket, ip6q[IP6REASS_NHASH]);
+VNET_DEFINE_STATIC(uint32_t, ip6q_hashseed);
 
 #define	V_frag6_nfragpackets		VNET(frag6_nfragpackets)
 #define	V_ip6q				VNET(ip6q)
@@ -315,7 +317,7 @@ frag6_input(struct mbuf **mp, int *offp, int proto)
 	 */
 	if (ip6_maxfrags < 0)
 		;
-	else if (frag6_nfrags >= (u_int)ip6_maxfrags)
+	else if (atomic_load_int(&frag6_nfrags) >= (u_int)ip6_maxfrags)
 		goto dropfrag;
 
 	for (q6 = head->ip6q_next; q6 != head; q6 = q6->ip6q_next)
@@ -344,7 +346,8 @@ frag6_input(struct mbuf **mp, int *offp, int proto)
 		if (V_ip6_maxfragpackets < 0)
 			;
 		else if (V_ip6q[hash].count >= V_ip6_maxfragbucketsize ||
-		    V_frag6_nfragpackets >= (u_int)V_ip6_maxfragpackets)
+		    atomic_load_int(&V_frag6_nfragpackets) >=
+		    (u_int)V_ip6_maxfragpackets)
 			goto dropfrag;
 		atomic_add_int(&V_frag6_nfragpackets, 1);
 		q6 = (struct ip6q *)malloc(sizeof(struct ip6q), M_FTABLE,
@@ -888,7 +891,8 @@ frag6_slowtimo(void)
 		 */
 		i = 0;
 		while (V_ip6_maxfragpackets >= 0 &&
-		    V_frag6_nfragpackets > (u_int)V_ip6_maxfragpackets) {
+		    atomic_load_int(&V_frag6_nfragpackets) >
+		    (u_int)V_ip6_maxfragpackets) {
 			IP6Q_LOCK(i);
 			head = IP6Q_HEAD(i);
 			if (head->ip6q_prev != head) {

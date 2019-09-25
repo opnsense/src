@@ -207,17 +207,28 @@ public:
   bool isFast() const          { return all(); }
 
   /// Flag setters
-  void setAllowReassoc()    { Flags |= AllowReassoc; }
-  void setNoNaNs()          { Flags |= NoNaNs; }
-  void setNoInfs()          { Flags |= NoInfs; }
-  void setNoSignedZeros()   { Flags |= NoSignedZeros; }
-  void setAllowReciprocal() { Flags |= AllowReciprocal; }
-  // TODO: Change the other set* functions to take a parameter?
-  void setAllowContract(bool B) {
+  void setAllowReassoc(bool B = true) {
+    Flags = (Flags & ~AllowReassoc) | B * AllowReassoc;
+  }
+  void setNoNaNs(bool B = true) {
+    Flags = (Flags & ~NoNaNs) | B * NoNaNs;
+  }
+  void setNoInfs(bool B = true) {
+    Flags = (Flags & ~NoInfs) | B * NoInfs;
+  }
+  void setNoSignedZeros(bool B = true) {
+    Flags = (Flags & ~NoSignedZeros) | B * NoSignedZeros;
+  }
+  void setAllowReciprocal(bool B = true) {
+    Flags = (Flags & ~AllowReciprocal) | B * AllowReciprocal;
+  }
+  void setAllowContract(bool B = true) {
     Flags = (Flags & ~AllowContract) | B * AllowContract;
   }
-  void setApproxFunc()      { Flags |= ApproxFunc; }
-  void setFast()            { set(); }
+  void setApproxFunc(bool B = true) {
+    Flags = (Flags & ~ApproxFunc) | B * ApproxFunc;
+  }
+  void setFast(bool B = true) { B ? set() : clear(); }
 
   void operator&=(const FastMathFlags &OtherFlags) {
     Flags &= OtherFlags.Flags;
@@ -353,19 +364,26 @@ public:
   /// precision.
   float getFPAccuracy() const;
 
-  static bool classof(const Instruction *I) {
-    return I->getType()->isFPOrFPVectorTy() ||
-      I->getOpcode() == Instruction::FCmp;
-  }
-
-  static bool classof(const ConstantExpr *CE) {
-    return CE->getType()->isFPOrFPVectorTy() ||
-           CE->getOpcode() == Instruction::FCmp;
-  }
-
   static bool classof(const Value *V) {
-    return (isa<Instruction>(V) && classof(cast<Instruction>(V))) ||
-           (isa<ConstantExpr>(V) && classof(cast<ConstantExpr>(V)));
+    unsigned Opcode;
+    if (auto *I = dyn_cast<Instruction>(V))
+      Opcode = I->getOpcode();
+    else if (auto *CE = dyn_cast<ConstantExpr>(V))
+      Opcode = CE->getOpcode();
+    else
+      return false;
+
+    switch (Opcode) {
+    case Instruction::FCmp:
+      return true;
+    // non math FP Operators (no FMF)
+    case Instruction::ExtractElement:
+    case Instruction::ShuffleVector:
+    case Instruction::InsertElement:
+      return false;
+    default:
+      return V->getType()->isFPOrFPVectorTy();
+    }
   }
 };
 
@@ -507,7 +525,7 @@ public:
       });
   }
 
-  /// \brief Accumulate the constant address offset of this GEP if possible.
+  /// Accumulate the constant address offset of this GEP if possible.
   ///
   /// This routine accepts an APInt into which it will accumulate the constant
   /// offset of this GEP if the GEP is in fact constant. If the GEP is not

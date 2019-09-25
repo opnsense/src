@@ -76,7 +76,7 @@ FileSpec GetModuleDirectory(const FileSpec &root_dir_spec, const UUID &uuid) {
 }
 
 FileSpec GetSymbolFileSpec(const FileSpec &module_file_spec) {
-  return FileSpec(module_file_spec.GetPath() + kSymFileExtension, false);
+  return FileSpec(module_file_spec.GetPath() + kSymFileExtension);
 }
 
 void DeleteExistingModule(const FileSpec &root_dir_spec,
@@ -133,7 +133,7 @@ Status CreateHostSysRootModuleLink(const FileSpec &root_dir_spec,
   const auto sysroot_module_path_spec =
       JoinPath(JoinPath(root_dir_spec, hostname),
                platform_module_spec.GetPath().c_str());
-  if (sysroot_module_path_spec.Exists()) {
+  if (FileSystem::Instance().Exists(sysroot_module_path_spec)) {
     if (!delete_existing)
       return Status();
 
@@ -141,7 +141,7 @@ Status CreateHostSysRootModuleLink(const FileSpec &root_dir_spec,
   }
 
   const auto error = MakeDirectory(
-      FileSpec(sysroot_module_path_spec.GetDirectory().AsCString(), false));
+      FileSpec(sysroot_module_path_spec.GetDirectory().AsCString()));
   if (error.Fail())
     return error;
 
@@ -159,9 +159,10 @@ ModuleLock::ModuleLock(const FileSpec &root_dir_spec, const UUID &uuid,
     return;
 
   m_file_spec = JoinPath(lock_dir_spec, uuid.GetAsString().c_str());
-  m_file.Open(m_file_spec.GetCString(), File::eOpenOptionWrite |
-                                            File::eOpenOptionCanCreate |
-                                            File::eOpenOptionCloseOnExec);
+  FileSystem::Instance().Open(m_file, m_file_spec,
+                              File::eOpenOptionWrite |
+                                  File::eOpenOptionCanCreate |
+                                  File::eOpenOptionCloseOnExec);
   if (!m_file) {
     error.SetErrorToErrno();
     return;
@@ -225,9 +226,10 @@ Status ModuleCache::Get(const FileSpec &root_dir_spec, const char *hostname,
   const auto module_file_path = JoinPath(
       module_spec_dir, module_spec.GetFileSpec().GetFilename().AsCString());
 
-  if (!module_file_path.Exists())
+  if (!FileSystem::Instance().Exists(module_file_path))
     return Status("Module %s not found", module_file_path.GetPath().c_str());
-  if (module_file_path.GetByteSize() != module_spec.GetObjectSize())
+  if (FileSystem::Instance().GetByteSize(module_file_path) !=
+      module_spec.GetObjectSize())
     return Status("Module %s has invalid file size",
                   module_file_path.GetPath().c_str());
 
@@ -252,7 +254,7 @@ Status ModuleCache::Get(const FileSpec &root_dir_spec, const char *hostname,
     return error;
 
   FileSpec symfile_spec = GetSymbolFileSpec(cached_module_sp->GetFileSpec());
-  if (symfile_spec.Exists())
+  if (FileSystem::Instance().Exists(symfile_spec))
     cached_module_sp->SetSymbolFileFileSpec(symfile_spec);
 
   m_loaded_modules.insert(
@@ -312,9 +314,8 @@ Status ModuleCache::GetAndPut(const FileSpec &root_dir_spec,
   llvm::FileRemover tmp_symfile_remover(tmp_download_sym_file_spec.GetPath());
   if (error.Fail())
     // Failed to download a symfile but fetching the module was successful. The
-    // module might
-    // contain the necessary symbols and the debugging is also possible without
-    // a symfile.
+    // module might contain the necessary symbols and the debugging is also
+    // possible without a symfile.
     return Status();
 
   error = Put(root_dir_spec, escaped_hostname.c_str(), module_spec,

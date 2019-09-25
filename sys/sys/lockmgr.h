@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2008 Attilio Rao <attilio@FreeBSD.org>
  * All rights reserved.
  *
@@ -131,8 +133,6 @@ _lockmgr_args_rw(struct lock *lk, u_int flags, struct rwlock *ilk,
 #define	lockmgr_rw(lk, flags, ilk)					\
 	_lockmgr_args_rw((lk), (flags), (ilk), LK_WMESG_DEFAULT,	\
 	    LK_PRIO_DEFAULT, LK_TIMO_DEFAULT, LOCK_FILE, LOCK_LINE)
-#define	lockmgr_waiters(lk)						\
-	((lk)->lk_lock & LK_ALL_WAITERS)
 #ifdef INVARIANTS
 #define	lockmgr_assert(lk, what)					\
 	_lockmgr_assert((lk), (what), LOCK_FILE, LOCK_LINE)

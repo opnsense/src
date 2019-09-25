@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2000 Doug Rabson
  * All rights reserved.
  *
@@ -37,8 +39,8 @@
  * field of struct task and the second argument is a count of how many
  * times the task was enqueued before the call to taskqueue_run().
  *
- * List of locks	 
- * (c)	const after init	 
+ * List of locks
+ * (c)	const after init
  * (q)	taskqueue lock
  */
 typedef void task_fn_t(void *context, int pending);

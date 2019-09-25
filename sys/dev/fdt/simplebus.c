@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2013 Nathan Whitehorn
  * All rights reserved.
  *
@@ -60,13 +62,6 @@ static const struct ofw_bus_devinfo *simplebus_get_devinfo(device_t bus,
     device_t child);
 
 /*
- * local methods
- */
-
-static int simplebus_fill_ranges(phandle_t node,
-    struct simplebus_softc *sc);
-
-/*
  * Driver methods.
  */
 static device_method_t	simplebus_methods[] = {
@@ -125,7 +120,7 @@ simplebus_probe(device_t dev)
 
 	/*
 	 * FDT data puts a "simple-bus" compatible string on many things that
-	 * have children but aren't really busses in our world.  Without a
+	 * have children but aren't really buses in our world.  Without a
 	 * ranges property we will fail to attach, so just fail to probe too.
 	 */
 	if (!(ofw_bus_is_compatible(dev, "simple-bus") &&
@@ -182,7 +177,7 @@ simplebus_init(device_t dev, phandle_t node)
 	OF_getencprop(node, "#size-cells", &sc->scells, sizeof(sc->scells));
 }
 
-static int
+int
 simplebus_fill_ranges(phandle_t node, struct simplebus_softc *sc)
 {
 	int host_address_cells;

@@ -1,5 +1,7 @@
 /*	$NetBSD: if_de.c,v 1.86 1999/06/01 19:17:59 thorpej Exp $	*/
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ *
  * Copyright (c) 1994-1997 Matt Thomas (matt@3am-software.com)
  * All rights reserved.
  *
@@ -3051,7 +3053,7 @@ tulip_addr_filter(tulip_softc_t * const sc)
     else
 	bcopy(sc->tulip_enaddr, eaddr, ETHER_ADDR_LEN);
 
-    TAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
+    CK_STAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
 
 	    if (ifma->ifma_addr->sa_family == AF_LINK)
 		multicnt++;
@@ -3078,7 +3080,7 @@ tulip_addr_filter(tulip_softc_t * const sc)
 	 */
 	bzero(sc->tulip_setupdata, sizeof(sc->tulip_setupdata));
 
-	TAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
+	CK_STAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
 
 		if (ifma->ifma_addr->sa_family != AF_LINK)
 			continue;
@@ -3110,7 +3112,7 @@ tulip_addr_filter(tulip_softc_t * const sc)
 	    /*
 	     * Else can get perfect filtering for 16 addresses.
 	     */
-	    TAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
+	    CK_STAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
 		    if (ifma->ifma_addr->sa_family != AF_LINK)
 			    continue;
 		    addrp = LLADDR((struct sockaddr_dl *)ifma->ifma_addr);
@@ -4430,6 +4432,8 @@ tulip_attach(tulip_softc_t * const sc)
     TULIP_LOCK(sc);
     sc->tulip_flags &= ~TULIP_DEVICEPROBE;
     TULIP_UNLOCK(sc);
+
+    gone_by_fcp101_dev(sc->tulip_dev);
 }
 
 /* Release memory for a single descriptor ring. */

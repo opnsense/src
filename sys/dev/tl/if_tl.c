@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 1997, 1998
  *	Bill Paul <wpaul@ctr.columbia.edu>.  All rights reserved.
  *
@@ -878,7 +880,8 @@ tl_setmulti(sc)
 	} else {
 		i = 1;
 		if_maddr_rlock(ifp);
-		TAILQ_FOREACH_REVERSE(ifma, &ifp->if_multiaddrs, ifmultihead, ifma_link) {
+		/* XXX want to maintain reverse semantics - pop list and re-add? */
+		CK_STAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
 			if (ifma->ifma_addr->sa_family != AF_LINK)
 				continue;
 			/*
@@ -1238,6 +1241,8 @@ tl_attach(dev)
 		ether_ifdetach(ifp);
 		goto fail;
 	}
+
+	gone_by_fcp101_dev(dev);
 
 fail:
 	if (error)

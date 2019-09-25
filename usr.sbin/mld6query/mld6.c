@@ -1,6 +1,8 @@
 /*	$KAME: mld6.c,v 1.15 2003/04/02 11:29:54 suz Exp $	*/
 
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (C) 1998 WIDE Project.
  * All rights reserved.
  * 
@@ -83,7 +85,7 @@ int s;
 
 #define QUERY_RESPONSE_INTERVAL 10000
 
-void make_msg(int index, struct in6_addr *addr, u_int type);
+void make_msg(int index, struct in6_addr *addr, u_int type, struct in6_addr *qaddr);
 void usage(void);
 void dump(int);
 void quit(int);
@@ -98,14 +100,26 @@ main(int argc, char *argv[])
 	struct itimerval itimer;
 	u_int type;
 	int ch;
+	struct in6_addr *qaddr = &maddr;
 
 	type = MLD_LISTENER_QUERY;
-	while ((ch = getopt(argc, argv, "dr")) != -1) {
+	while ((ch = getopt(argc, argv, "dgr")) != -1) {
 		switch (ch) {
 		case 'd':
+			if (type != MLD_LISTENER_QUERY) {
+				printf("Can not specifiy -d with -r\n");
+				return 1;
+			}
 			type = MLD_LISTENER_DONE;
 			break;
+		case 'g':
+			qaddr = &any;
+			break;
 		case 'r':
+			if (type != MLD_LISTENER_QUERY) {
+				printf("Can not specifiy -r with -d\n");
+				return 1;
+			}
 			type = MLD_LISTENER_REPORT;
 			break;
 		default:
@@ -125,6 +139,10 @@ main(int argc, char *argv[])
 		usage();
 	if (argc == 2 && inet_pton(AF_INET6, argv[1], &maddr) != 1)
 		usage();
+	if (type != MLD_LISTENER_QUERY && qaddr != &maddr) {
+		printf("Can not specifiy -g with -d or -r\n");
+		return 1;
+	}
 
 	if ((s = socket(AF_INET6, SOCK_RAW, IPPROTO_ICMPV6)) < 0)
 		err(1, "socket");
@@ -133,7 +151,12 @@ main(int argc, char *argv[])
 		       sizeof(hlim)) == -1)
 		err(1, "setsockopt(IPV6_MULTICAST_HOPS)");
 
-	mreq.ipv6mr_multiaddr = any;
+	if (IN6_IS_ADDR_UNSPECIFIED(&maddr)) {
+		if (inet_pton(AF_INET6, "ff02::1", &maddr) != 1)
+			errx(1, "inet_pton failed");
+	}
+
+	mreq.ipv6mr_multiaddr = maddr;
 	mreq.ipv6mr_interface = ifindex;
 	if (setsockopt(s, IPPROTO_IPV6, IPV6_JOIN_GROUP, &mreq,
 		       sizeof(mreq)) == -1)
@@ -147,7 +170,7 @@ main(int argc, char *argv[])
 			sizeof(filt)) < 0)
 		err(1, "setsockopt(ICMP6_FILTER)");
 
-	make_msg(ifindex, &maddr, type);
+	make_msg(ifindex, &maddr, type, qaddr);
 
 	if (sendmsg(s, &m, 0) < 0)
 		err(1, "sendmsg");
@@ -175,17 +198,13 @@ main(int argc, char *argv[])
 }
 
 void
-make_msg(int index, struct in6_addr *addr, u_int type)
+make_msg(int index, struct in6_addr *addr, u_int type, struct in6_addr *qaddr)
 {
 	static struct iovec iov[2];
 	static u_char *cmsgbuf;
 	int cmsglen, hbhlen = 0;
-#ifdef USE_RFC2292BIS
 	void *hbhbuf = NULL, *optp = NULL;
 	int currentlen;
-#else
-	u_int8_t raopt[IP6OPT_RTALERT_LEN];
-#endif 
 	struct in6_pktinfo *pi;
 	struct cmsghdr *cmsgp;
 	u_short rtalert_code = htons(IP6OPT_RTALERT_MLD);
@@ -194,12 +213,7 @@ make_msg(int index, struct in6_addr *addr, u_int type)
 
 	dst.sin6_len = sizeof(dst);
 	dst.sin6_family = AF_INET6;
-	if (IN6_IS_ADDR_UNSPECIFIED(addr)) {
-		if (inet_pton(AF_INET6, "ff02::1", &dst.sin6_addr) != 1)
-			errx(1, "inet_pton failed");
-	}
-	else
-		dst.sin6_addr = *addr;
+	dst.sin6_addr = *addr;
 	m.msg_name = (caddr_t)&dst;
 	m.msg_namelen = dst.sin6_len;
 	iov[0].iov_base = (caddr_t)&mldh;
@@ -210,7 +224,7 @@ make_msg(int index, struct in6_addr *addr, u_int type)
 	bzero(&mldh, sizeof(mldh));
 	mldh.mld_type = type & 0xff;
 	mldh.mld_maxdelay = htons(QUERY_RESPONSE_INTERVAL);
-	mldh.mld_addr = *addr;
+	mldh.mld_addr = *qaddr;
 
 	/* MLD packet should be advertised from linklocal address */
 	getifaddrs(&ifa);
@@ -235,7 +249,6 @@ make_msg(int index, struct in6_addr *addr, u_int type)
 	src.s6_addr[2] = src.s6_addr[3] = 0;
 #endif
 
-#ifdef USE_RFC2292BIS
 	if ((hbhlen = inet6_opt_init(NULL, 0)) == -1)
 		errx(1, "inet6_opt_init(0) failed");
 	if ((hbhlen = inet6_opt_append(NULL, 0, hbhlen, IP6OPT_ROUTER_ALERT, 2,
@@ -244,11 +257,6 @@ make_msg(int index, struct in6_addr *addr, u_int type)
 	if ((hbhlen = inet6_opt_finish(NULL, 0, hbhlen)) == -1)
 		errx(1, "inet6_opt_finish(0) failed");
 	cmsglen = CMSG_SPACE(sizeof(struct in6_pktinfo)) + CMSG_SPACE(hbhlen);
-#else
-	hbhlen = sizeof(raopt); 
-	cmsglen = CMSG_SPACE(sizeof(struct in6_pktinfo)) +
-	    inet6_option_space(hbhlen);
-#endif 
 
 	if ((cmsgbuf = malloc(cmsglen)) == NULL)
 		errx(1, "can't allocate enough memory for cmsg");
@@ -264,7 +272,6 @@ make_msg(int index, struct in6_addr *addr, u_int type)
 	memcpy(&pi->ipi6_addr, &src, sizeof(pi->ipi6_addr));
 	/* specifiy to insert router alert option in a hop-by-hop opt hdr. */
 	cmsgp = CMSG_NXTHDR(&m, cmsgp);
-#ifdef USE_RFC2292BIS
 	cmsgp->cmsg_len = CMSG_LEN(hbhlen);
 	cmsgp->cmsg_level = IPPROTO_IPV6;
 	cmsgp->cmsg_type = IPV6_HOPOPTS;
@@ -279,15 +286,6 @@ make_msg(int index, struct in6_addr *addr, u_int type)
 	(void)inet6_opt_set_val(optp, 0, &rtalert_code, sizeof(rtalert_code));
 	if ((currentlen = inet6_opt_finish(hbhbuf, hbhlen, currentlen)) == -1)
 		errx(1, "inet6_opt_finish(buf) failed");
-#else  /* old advanced API */
-	if (inet6_option_init((void *)cmsgp, &cmsgp, IPV6_HOPOPTS))
-		errx(1, "inet6_option_init failed\n");
-	raopt[0] = IP6OPT_ROUTER_ALERT;
-	raopt[1] = IP6OPT_RTALERT_LEN - 2;
-	memcpy(&raopt[2], (caddr_t)&rtalert_code, sizeof(u_short));
-	if (inet6_option_append(cmsgp, raopt, 4, 0))
-		errx(1, "inet6_option_append failed\n");
-#endif 
 }
 
 void
@@ -335,7 +333,7 @@ dump(int s)
 void
 quit(int signum __unused)
 {
-	mreq.ipv6mr_multiaddr = any;
+	mreq.ipv6mr_multiaddr = maddr;
 	mreq.ipv6mr_interface = ifindex;
 	if (setsockopt(s, IPPROTO_IPV6, IPV6_LEAVE_GROUP, &mreq,
 		       sizeof(mreq)) == -1)
@@ -347,6 +345,6 @@ quit(int signum __unused)
 void
 usage(void)
 {
-	(void)fprintf(stderr, "usage: mld6query ifname [addr]\n");
+	(void)fprintf(stderr, "usage: mld6query [-dgr] ifname [addr]\n");
 	exit(1);
 }

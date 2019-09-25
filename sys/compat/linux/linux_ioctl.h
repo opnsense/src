@@ -250,7 +250,7 @@
 #define	LINUX_IOCTL_SOCKET_MAX	LINUX_SIOCGIFCOUNT
 
 /*
- * Device private ioctl calls 
+ * Device private ioctl calls
  */
 #define LINUX_SIOCDEVPRIVATE	0x89F0  /* to 89FF */
 #define LINUX_IOCTL_PRIVATE_MIN	LINUX_SIOCDEVPRIVATE
@@ -428,7 +428,7 @@
 /* In addition to the termio values */
 #define	LINUX_VSTART		8
 #define	LINUX_VSTOP		9
-#define	LINUX_VSUSP 		10
+#define	LINUX_VSUSP		10
 #define	LINUX_VEOL		11
 #define	LINUX_VREPRINT		12
 #define	LINUX_VDISCARD		13
@@ -770,7 +770,18 @@ struct linux_ioctl_handler {
 	int	low, high;
 };
 
+struct linux_ioctl_handler_element
+{
+	TAILQ_ENTRY(linux_ioctl_handler_element) list;
+	int	(*func)(struct thread *, struct linux_ioctl_args *);
+	int	low, high, span;
+};
+
 int	linux_ioctl_register_handler(struct linux_ioctl_handler *h);
 int	linux_ioctl_unregister_handler(struct linux_ioctl_handler *h);
+#ifdef COMPAT_LINUX32
+int	linux32_ioctl_register_handler(struct linux_ioctl_handler *h);
+int	linux32_ioctl_unregister_handler(struct linux_ioctl_handler *h);
+#endif
 
 #endif /* !_LINUX_IOCTL_H_ */

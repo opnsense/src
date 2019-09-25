@@ -382,6 +382,7 @@ lldb::SBError CMIDriver::DoParseArgs(const int argc, const char *argv[],
 //          that are only handled by *this driver:
 //              --executable <file>
 //              --source <file> or -s <file>
+//              --synchronous
 //          The application's options --interpreter and --executable in code act
 //          very similar.
 //          The --executable is necessary to differentiate whether the MI Driver
@@ -397,6 +398,7 @@ lldb::SBError CMIDriver::DoParseArgs(const int argc, const char *argv[],
 //          argument for a debug session. Using --interpreter on the command
 //          line does not
 //          issue additional commands to initialise a debug session.
+//          Option --synchronous disables an asynchronous mode in the lldb-mi driver.
 // Type:    Overridden.
 // Args:    argc        - (R)   An integer that contains the count of arguments
 // that follow in
@@ -441,8 +443,7 @@ lldb::SBError CMIDriver::ParseArgs(const int argc, const char *argv[],
           CMICmdArgValString(true, false, true).IsStringArg(strArg)) {
         // Is this the command file for the '-s' or '--source' options?
         const CMIUtilString strPrevArg(argv[i - 1]);
-        if (strPrevArg.compare("-s") == 0 ||
-            strPrevArg.compare("--source") == 0) {
+        if (strPrevArg == "-s" || strPrevArg == "--source") {
           m_strCmdLineArgCommandFileNamePath = strArg;
           m_bHaveCommandFileNamePathOnCmdLine = true;
           i--; // skip '-s' on the next loop
@@ -455,7 +456,7 @@ lldb::SBError CMIDriver::ParseArgs(const int argc, const char *argv[],
       }
       // Report error if no command file was specified for the '-s' or
       // '--source' options
-      else if (strArg.compare("-s") == 0 || strArg.compare("--source") == 0) {
+      else if (strArg == "-s" || strArg == "--source") {
         vwbExiting = true;
         const CMIUtilString errMsg = CMIUtilString::Format(
             MIRSRC(IDS_CMD_ARGS_ERR_VALIDATION_MISSING_INF), strArg.c_str());
@@ -463,12 +464,14 @@ lldb::SBError CMIDriver::ParseArgs(const int argc, const char *argv[],
         break;
       }
       // This argument is also checked for in CMIDriverMgr::ParseArgs()
-      else if (strArg.compare("--executable") == 0) // Used to specify that
-                                                    // there is executable
-                                                    // argument also on the
-                                                    // command line
-      {                                             // See fn description.
+      else if (strArg == "--executable") // Used to specify that
+                                         // there is executable
+                                         // argument also on the
+                                         // command line
+      {                                  // See fn description.
         bHaveExecutableLongOption = true;
+      } else if (strArg == "--synchronous") {
+        CMICmnLLDBDebugSessionInfo::Instance().GetDebugger().SetAsync(false);
       }
     }
   }

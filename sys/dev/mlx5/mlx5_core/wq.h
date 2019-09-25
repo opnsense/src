@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2013-2015, Mellanox Technologies, Ltd.  All rights reserved.
+ * Copyright (c) 2013-2017, Mellanox Technologies, Ltd.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -42,11 +42,22 @@ struct mlx5_wq_ctrl {
 	struct mlx5_db		db;
 };
 
+struct mlx5_frag_wq_ctrl {
+	struct mlx5_core_dev	*mdev;
+	struct mlx5_frag_buf	frag_buf;
+	struct mlx5_db		db;
+};
+
 struct mlx5_wq_cyc {
 	void			*buf;
 	__be32			*db;
 	u16			sz_m1;
 	u8			log_stride;
+};
+
+struct mlx5_wq_qp {
+	struct mlx5_wq_cyc	rq;
+	struct mlx5_wq_cyc	sq;
 };
 
 struct mlx5_cqwq {

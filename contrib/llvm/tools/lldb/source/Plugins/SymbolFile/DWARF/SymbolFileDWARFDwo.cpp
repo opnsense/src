@@ -14,14 +14,14 @@
 #include "lldb/Symbol/ObjectFile.h"
 #include "lldb/Utility/LLDBAssert.h"
 
-#include "DWARFCompileUnit.h"
+#include "DWARFUnit.h"
 #include "DWARFDebugInfo.h"
 
 using namespace lldb;
 using namespace lldb_private;
 
 SymbolFileDWARFDwo::SymbolFileDWARFDwo(ObjectFileSP objfile,
-                                       DWARFCompileUnit *dwarf_cu)
+                                       DWARFUnit *dwarf_cu)
     : SymbolFileDWARF(objfile.get()), m_obj_file_sp(objfile),
       m_base_dwarf_cu(dwarf_cu) {
   SetID(((lldb::user_id_t)dwarf_cu->GetOffset()) << 32);
@@ -52,7 +52,7 @@ void SymbolFileDWARFDwo::LoadSectionData(lldb::SectionType sect_type,
 }
 
 lldb::CompUnitSP
-SymbolFileDWARFDwo::ParseCompileUnit(DWARFCompileUnit *dwarf_cu,
+SymbolFileDWARFDwo::ParseCompileUnit(DWARFUnit *dwarf_cu,
                                      uint32_t cu_idx) {
   assert(GetCompileUnit() == dwarf_cu && "SymbolFileDWARFDwo::ParseCompileUnit "
                                          "called with incompatible compile "
@@ -60,15 +60,7 @@ SymbolFileDWARFDwo::ParseCompileUnit(DWARFCompileUnit *dwarf_cu,
   return GetBaseSymbolFile()->ParseCompileUnit(m_base_dwarf_cu, UINT32_MAX);
 }
 
-DWARFCompileUnit *SymbolFileDWARFDwo::GetCompileUnit() {
-  // A clang module is found via a skeleton CU, but is not a proper DWO.
-  // Clang modules have a .debug_info section instead of the *_dwo variant.
-  if (auto *section_list = m_obj_file->GetSectionList(false))
-    if (auto section_sp =
-            section_list->FindSectionByType(eSectionTypeDWARFDebugInfo, true))
-      if (!section_sp->GetName().GetStringRef().endswith("dwo"))
-        return nullptr;
-
+DWARFUnit *SymbolFileDWARFDwo::GetCompileUnit() {
   // Only dwo files with 1 compile unit is supported
   if (GetNumCompileUnits() == 1)
     return DebugInfo()->GetCompileUnitAtIndex(0);
@@ -76,7 +68,7 @@ DWARFCompileUnit *SymbolFileDWARFDwo::GetCompileUnit() {
     return nullptr;
 }
 
-DWARFCompileUnit *
+DWARFUnit *
 SymbolFileDWARFDwo::GetDWARFCompileUnit(lldb_private::CompileUnit *comp_unit) {
   return GetCompileUnit();
 }
@@ -122,8 +114,39 @@ lldb::TypeSP SymbolFileDWARFDwo::FindCompleteObjCDefinitionTypeForDIE(
       die, type_name, must_be_implementation);
 }
 
-DWARFCompileUnit *SymbolFileDWARFDwo::GetBaseCompileUnit() {
+DWARFUnit *SymbolFileDWARFDwo::GetBaseCompileUnit() {
   return m_base_dwarf_cu;
+}
+
+const DWARFDataExtractor &SymbolFileDWARFDwo::get_debug_abbrev_data() {
+  return GetCachedSectionData(eSectionTypeDWARFDebugAbbrevDwo,
+                              m_data_debug_abbrev);
+}
+
+const DWARFDataExtractor &SymbolFileDWARFDwo::get_debug_addr_data() {
+  // For single file split dwarf case (when we have .dwo sections in a .o),
+  // we do not want to use the .debug_addr section from .o file,
+  // but want to get one from the final executable.
+  // For regular split debug case, .dwo file does not contain the
+  // .debug_addr, so we would always fall back to such lookup anyways.
+  llvm::call_once(m_data_debug_addr.m_flag, [this] {
+    SymbolFileDWARF::LoadSectionData(eSectionTypeDWARFDebugAddr,
+                                     std::ref(m_data_debug_addr.m_data));
+  });
+  return m_data_debug_addr.m_data;
+}
+
+const DWARFDataExtractor &SymbolFileDWARFDwo::get_debug_info_data() {
+  return GetCachedSectionData(eSectionTypeDWARFDebugInfoDwo, m_data_debug_info);
+}
+
+const DWARFDataExtractor &SymbolFileDWARFDwo::get_debug_str_data() {
+  return GetCachedSectionData(eSectionTypeDWARFDebugStrDwo, m_data_debug_str);
+}
+
+const DWARFDataExtractor &SymbolFileDWARFDwo::get_debug_str_offsets_data() {
+  return GetCachedSectionData(eSectionTypeDWARFDebugStrOffsetsDwo,
+                              m_data_debug_str_offsets);
 }
 
 SymbolFileDWARF *SymbolFileDWARFDwo::GetBaseSymbolFile() {

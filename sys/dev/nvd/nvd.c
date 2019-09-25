@@ -1,6 +1,9 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (C) 2012-2016 Intel Corporation
  * All rights reserved.
+ * Copyright (C) 2018 Alexander Motin <mav@FreeBSD.org>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -32,9 +35,11 @@ __FBSDID("$FreeBSD$");
 #include <sys/kernel.h>
 #include <sys/malloc.h>
 #include <sys/module.h>
+#include <sys/queue.h>
 #include <sys/sysctl.h>
 #include <sys/systm.h>
 #include <sys/taskqueue.h>
+#include <machine/atomic.h>
 
 #include <geom/geom.h>
 #include <geom/geom_disk.h>
@@ -44,15 +49,17 @@ __FBSDID("$FreeBSD$");
 #define NVD_STR		"nvd"
 
 struct nvd_disk;
+struct nvd_controller;
 
 static disk_ioctl_t nvd_ioctl;
 static disk_strategy_t nvd_strategy;
 static dumper_t nvd_dump;
+static disk_getattr_t nvd_getattr;
 
 static void nvd_done(void *arg, const struct nvme_completion *cpl);
+static void nvd_gone(struct nvd_disk *ndisk);
 
 static void *nvd_new_disk(struct nvme_namespace *ns, void *ctrlr);
-static void destroy_geom_disk(struct nvd_disk *ndisk);
 
 static void *nvd_new_controller(struct nvme_controller *ctrlr);
 static void nvd_controller_fail(void *ctrlr);
@@ -65,6 +72,7 @@ MALLOC_DEFINE(M_NVD, "nvd", "nvd(4) allocations");
 struct nvme_consumer *consumer_handle;
 
 struct nvd_disk {
+	struct nvd_controller	*ctrlr;
 
 	struct bio_queue_head	bioq;
 	struct task		bioqtask;
@@ -75,7 +83,9 @@ struct nvd_disk {
 	struct nvme_namespace	*ns;
 
 	uint32_t		cur_depth;
+#define	NVD_ODEPTH	(1 << 30)
 	uint32_t		ordered_in_flight;
+	u_int			unit;
 
 	TAILQ_ENTRY(nvd_disk)	global_tailq;
 	TAILQ_ENTRY(nvd_disk)	ctrlr_tailq;
@@ -87,6 +97,7 @@ struct nvd_controller {
 	TAILQ_HEAD(, nvd_disk)		disk_head;
 };
 
+static struct mtx			nvd_lock;
 static TAILQ_HEAD(, nvd_controller)	ctrlr_head;
 static TAILQ_HEAD(disk_list, nvd_disk)	disk_head;
 
@@ -137,6 +148,7 @@ nvd_load()
 	if (!nvme_use_nvd)
 		return 0;
 
+	mtx_init(&nvd_lock, "nvd_lock", NULL, MTX_DEF);
 	TAILQ_INIT(&ctrlr_head);
 	TAILQ_INIT(&disk_head);
 
@@ -150,60 +162,71 @@ static void
 nvd_unload()
 {
 	struct nvd_controller	*ctrlr;
-	struct nvd_disk		*disk;
+	struct nvd_disk		*ndisk;
 
 	if (!nvme_use_nvd)
 		return;
 
-	while (!TAILQ_EMPTY(&ctrlr_head)) {
-		ctrlr = TAILQ_FIRST(&ctrlr_head);
+	mtx_lock(&nvd_lock);
+	while ((ctrlr = TAILQ_FIRST(&ctrlr_head)) != NULL) {
 		TAILQ_REMOVE(&ctrlr_head, ctrlr, tailq);
+		TAILQ_FOREACH(ndisk, &ctrlr->disk_head, ctrlr_tailq)
+			nvd_gone(ndisk);
+		while (!TAILQ_EMPTY(&ctrlr->disk_head))
+			msleep(&ctrlr->disk_head, &nvd_lock, 0, "nvd_unload",0);
 		free(ctrlr, M_NVD);
 	}
-
-	while (!TAILQ_EMPTY(&disk_head)) {
-		disk = TAILQ_FIRST(&disk_head);
-		TAILQ_REMOVE(&disk_head, disk, global_tailq);
-		destroy_geom_disk(disk);
-		free(disk, M_NVD);
-	}
+	mtx_unlock(&nvd_lock);
 
 	nvme_unregister_consumer(consumer_handle);
+
+	mtx_destroy(&nvd_lock);
 }
 
-static int
+static void
 nvd_bio_submit(struct nvd_disk *ndisk, struct bio *bp)
 {
 	int err;
 
 	bp->bio_driver1 = NULL;
-	atomic_add_int(&ndisk->cur_depth, 1);
+	if (__predict_false(bp->bio_flags & BIO_ORDERED))
+		atomic_add_int(&ndisk->cur_depth, NVD_ODEPTH);
+	else
+		atomic_add_int(&ndisk->cur_depth, 1);
 	err = nvme_ns_bio_process(ndisk->ns, bp, nvd_done);
 	if (err) {
-		atomic_add_int(&ndisk->cur_depth, -1);
-		if (__predict_false(bp->bio_flags & BIO_ORDERED))
+		if (__predict_false(bp->bio_flags & BIO_ORDERED)) {
+			atomic_add_int(&ndisk->cur_depth, -NVD_ODEPTH);
 			atomic_add_int(&ndisk->ordered_in_flight, -1);
+			wakeup(&ndisk->cur_depth);
+		} else {
+			if (atomic_fetchadd_int(&ndisk->cur_depth, -1) == 1 &&
+			    __predict_false(ndisk->ordered_in_flight != 0))
+				wakeup(&ndisk->cur_depth);
+		}
 		bp->bio_error = err;
 		bp->bio_flags |= BIO_ERROR;
 		bp->bio_resid = bp->bio_bcount;
 		biodone(bp);
-		return (-1);
 	}
-
-	return (0);
 }
 
 static void
 nvd_strategy(struct bio *bp)
 {
-	struct nvd_disk *ndisk;
+	struct nvd_disk *ndisk = (struct nvd_disk *)bp->bio_disk->d_drv1;
 
-	ndisk = (struct nvd_disk *)bp->bio_disk->d_drv1;
-
-	if (__predict_false(bp->bio_flags & BIO_ORDERED))
-		atomic_add_int(&ndisk->ordered_in_flight, 1);
-
-	if (__predict_true(ndisk->ordered_in_flight == 0)) {
+	/*
+	 * bio with BIO_ORDERED flag must be executed after all previous
+	 * bios in the queue, and before any successive bios.
+	 */
+	if (__predict_false(bp->bio_flags & BIO_ORDERED)) {
+		if (atomic_fetchadd_int(&ndisk->ordered_in_flight, 1) == 0 &&
+		    ndisk->cur_depth == 0 && bioq_first(&ndisk->bioq) == NULL) {
+			nvd_bio_submit(ndisk, bp);
+			return;
+		}
+	} else if (__predict_true(ndisk->ordered_in_flight == 0)) {
 		nvd_bio_submit(ndisk, bp);
 		return;
 	}
@@ -218,45 +241,120 @@ nvd_strategy(struct bio *bp)
 	taskqueue_enqueue(ndisk->tq, &ndisk->bioqtask);
 }
 
+static void
+nvd_gone(struct nvd_disk *ndisk)
+{
+	struct bio	*bp;
+
+	printf(NVD_STR"%u: detached\n", ndisk->unit);
+	mtx_lock(&ndisk->bioqlock);
+	disk_gone(ndisk->disk);
+	while ((bp = bioq_takefirst(&ndisk->bioq)) != NULL) {
+		if (__predict_false(bp->bio_flags & BIO_ORDERED))
+			atomic_add_int(&ndisk->ordered_in_flight, -1);
+		bp->bio_error = ENXIO;
+		bp->bio_flags |= BIO_ERROR;
+		bp->bio_resid = bp->bio_bcount;
+		biodone(bp);
+	}
+	mtx_unlock(&ndisk->bioqlock);
+}
+
+static void
+nvd_gonecb(struct disk *dp)
+{
+	struct nvd_disk *ndisk = (struct nvd_disk *)dp->d_drv1;
+
+	disk_destroy(ndisk->disk);
+	mtx_lock(&nvd_lock);
+	TAILQ_REMOVE(&disk_head, ndisk, global_tailq);
+	TAILQ_REMOVE(&ndisk->ctrlr->disk_head, ndisk, ctrlr_tailq);
+	if (TAILQ_EMPTY(&ndisk->ctrlr->disk_head))
+		wakeup(&ndisk->ctrlr->disk_head);
+	mtx_unlock(&nvd_lock);
+	taskqueue_free(ndisk->tq);
+	mtx_destroy(&ndisk->bioqlock);
+	free(ndisk, M_NVD);
+}
+
 static int
-nvd_ioctl(struct disk *ndisk, u_long cmd, void *data, int fflag,
+nvd_ioctl(struct disk *dp, u_long cmd, void *data, int fflag,
     struct thread *td)
 {
-	int ret = 0;
+	struct nvd_disk		*ndisk = dp->d_drv1;
 
-	switch (cmd) {
-	default:
-		ret = EIO;
-	}
-
-	return (ret);
+	return (nvme_ns_ioctl_process(ndisk->ns, cmd, data, fflag, td));
 }
 
 static int
 nvd_dump(void *arg, void *virt, vm_offset_t phys, off_t offset, size_t len)
 {
-	struct nvd_disk *ndisk;
-	struct disk *dp;
-
-	dp = arg;
-	ndisk = dp->d_drv1;
+	struct disk *dp = arg;
+	struct nvd_disk *ndisk = dp->d_drv1;
 
 	return (nvme_ns_dump(ndisk->ns, virt, offset, len));
+}
+
+static int
+nvd_getattr(struct bio *bp)
+{
+	struct nvd_disk *ndisk = (struct nvd_disk *)bp->bio_disk->d_drv1;
+	const struct nvme_namespace_data *nsdata;
+	u_int i;
+
+	if (!strcmp("GEOM::lunid", bp->bio_attribute)) {
+		nsdata = nvme_ns_get_data(ndisk->ns);
+
+		/* Try to return NGUID as lunid. */
+		for (i = 0; i < sizeof(nsdata->nguid); i++) {
+			if (nsdata->nguid[i] != 0)
+				break;
+		}
+		if (i < sizeof(nsdata->nguid)) {
+			if (bp->bio_length < sizeof(nsdata->nguid) * 2 + 1)
+				return (EFAULT);
+			for (i = 0; i < sizeof(nsdata->nguid); i++) {
+				sprintf(&bp->bio_data[i * 2], "%02x",
+				    nsdata->nguid[i]);
+			}
+			bp->bio_completed = bp->bio_length;
+			return (0);
+		}
+
+		/* Try to return EUI64 as lunid. */
+		for (i = 0; i < sizeof(nsdata->eui64); i++) {
+			if (nsdata->eui64[i] != 0)
+				break;
+		}
+		if (i < sizeof(nsdata->eui64)) {
+			if (bp->bio_length < sizeof(nsdata->eui64) * 2 + 1)
+				return (EFAULT);
+			for (i = 0; i < sizeof(nsdata->eui64); i++) {
+				sprintf(&bp->bio_data[i * 2], "%02x",
+				    nsdata->eui64[i]);
+			}
+			bp->bio_completed = bp->bio_length;
+			return (0);
+		}
+	}
+	return (-1);
 }
 
 static void
 nvd_done(void *arg, const struct nvme_completion *cpl)
 {
-	struct bio *bp;
-	struct nvd_disk *ndisk;
+	struct bio *bp = (struct bio *)arg;
+	struct nvd_disk *ndisk = bp->bio_disk->d_drv1;
 
-	bp = (struct bio *)arg;
-
-	ndisk = bp->bio_disk->d_drv1;
-
-	atomic_add_int(&ndisk->cur_depth, -1);
-	if (__predict_false(bp->bio_flags & BIO_ORDERED))
+	if (__predict_false(bp->bio_flags & BIO_ORDERED)) {
+		atomic_add_int(&ndisk->cur_depth, -NVD_ODEPTH);
 		atomic_add_int(&ndisk->ordered_in_flight, -1);
+		wakeup(&ndisk->cur_depth);
+	} else {
+		if (atomic_fetchadd_int(&ndisk->cur_depth, -1) == 1 &&
+		    __predict_false(ndisk->ordered_in_flight != 0))
+			wakeup(&ndisk->cur_depth);
+	}
 
 	biodone(bp);
 }
@@ -274,22 +372,23 @@ nvd_bioq_process(void *arg, int pending)
 		if (bp == NULL)
 			break;
 
-		if (nvd_bio_submit(ndisk, bp) != 0) {
-			continue;
+		if (__predict_false(bp->bio_flags & BIO_ORDERED)) {
+			/*
+			 * bio with BIO_ORDERED flag set must be executed
+			 * after all previous bios.
+			 */
+			while (ndisk->cur_depth > 0)
+				tsleep(&ndisk->cur_depth, 0, "nvdorb", 1);
+		} else {
+			/*
+			 * bio with BIO_ORDERED flag set must be completed
+			 * before proceeding with additional bios.
+			 */
+			while (ndisk->cur_depth >= NVD_ODEPTH)
+				tsleep(&ndisk->cur_depth, 0, "nvdora", 1);
 		}
 
-#ifdef BIO_ORDERED
-		/*
-		 * BIO_ORDERED flag dictates that the bio with BIO_ORDERED
-		 *  flag set must be completed before proceeding with
-		 *  additional bios.
-		 */
-		if (bp->bio_flags & BIO_ORDERED) {
-			while (ndisk->cur_depth > 0) {
-				pause("nvd flush", 1);
-			}
-		}
-#endif
+		nvd_bio_submit(ndisk, bp);
 	}
 }
 
@@ -302,7 +401,9 @@ nvd_new_controller(struct nvme_controller *ctrlr)
 	    M_ZERO | M_WAITOK);
 
 	TAILQ_INIT(&nvd_ctrlr->disk_head);
+	mtx_lock(&nvd_lock);
 	TAILQ_INSERT_TAIL(&ctrlr_head, nvd_ctrlr, tailq);
+	mtx_unlock(&nvd_lock);
 
 	return (nvd_ctrlr);
 }
@@ -311,45 +412,61 @@ static void *
 nvd_new_disk(struct nvme_namespace *ns, void *ctrlr_arg)
 {
 	uint8_t			descr[NVME_MODEL_NUMBER_LENGTH+1];
-	struct nvd_disk		*ndisk;
+	struct nvd_disk		*ndisk, *tnd;
 	struct disk		*disk;
 	struct nvd_controller	*ctrlr = ctrlr_arg;
+	int unit;
 
 	ndisk = malloc(sizeof(struct nvd_disk), M_NVD, M_ZERO | M_WAITOK);
+	ndisk->ctrlr = ctrlr;
+	ndisk->ns = ns;
+	ndisk->cur_depth = 0;
+	ndisk->ordered_in_flight = 0;
+	mtx_init(&ndisk->bioqlock, "nvd bioq lock", NULL, MTX_DEF);
+	bioq_init(&ndisk->bioq);
+	TASK_INIT(&ndisk->bioqtask, 0, nvd_bioq_process, ndisk);
 
-	disk = disk_alloc();
+	mtx_lock(&nvd_lock);
+	unit = 0;
+	TAILQ_FOREACH(tnd, &disk_head, global_tailq) {
+		if (tnd->unit > unit)
+			break;
+		unit = tnd->unit + 1;
+	}
+	ndisk->unit = unit;
+	if (tnd != NULL)
+		TAILQ_INSERT_BEFORE(tnd, ndisk, global_tailq);
+	else
+		TAILQ_INSERT_TAIL(&disk_head, ndisk, global_tailq);
+	TAILQ_INSERT_TAIL(&ctrlr->disk_head, ndisk, ctrlr_tailq);
+	mtx_unlock(&nvd_lock);
+
+	ndisk->tq = taskqueue_create("nvd_taskq", M_WAITOK,
+	    taskqueue_thread_enqueue, &ndisk->tq);
+	taskqueue_start_threads(&ndisk->tq, 1, PI_DISK, "nvd taskq");
+
+	disk = ndisk->disk = disk_alloc();
 	disk->d_strategy = nvd_strategy;
 	disk->d_ioctl = nvd_ioctl;
 	disk->d_dump = nvd_dump;
+	disk->d_getattr = nvd_getattr;
+	disk->d_gone = nvd_gonecb;
 	disk->d_name = NVD_STR;
+	disk->d_unit = ndisk->unit;
 	disk->d_drv1 = ndisk;
 
-	disk->d_maxsize = nvme_ns_get_max_io_xfer_size(ns);
 	disk->d_sectorsize = nvme_ns_get_sector_size(ns);
 	disk->d_mediasize = (off_t)nvme_ns_get_size(ns);
+	disk->d_maxsize = nvme_ns_get_max_io_xfer_size(ns);
 	disk->d_delmaxsize = (off_t)nvme_ns_get_size(ns);
 	if (disk->d_delmaxsize > nvd_delete_max)
 		disk->d_delmaxsize = nvd_delete_max;
 	disk->d_stripesize = nvme_ns_get_stripesize(ns);
-
-	if (TAILQ_EMPTY(&disk_head))
-		disk->d_unit = 0;
-	else
-		disk->d_unit =
-		    TAILQ_LAST(&disk_head, disk_list)->disk->d_unit + 1;
-
-	disk->d_flags = DISKFLAG_DIRECT_COMPLETION;
-
+	disk->d_flags = DISKFLAG_UNMAPPED_BIO | DISKFLAG_DIRECT_COMPLETION;
 	if (nvme_ns_get_flags(ns) & NVME_NS_DEALLOCATE_SUPPORTED)
 		disk->d_flags |= DISKFLAG_CANDELETE;
-
 	if (nvme_ns_get_flags(ns) & NVME_NS_FLUSH_SUPPORTED)
 		disk->d_flags |= DISKFLAG_CANFLUSHCACHE;
-
-/* ifdef used here to ease porting to stable branches at a later point. */
-#ifdef DISKFLAG_UNMAPPED_BIO
-	disk->d_flags |= DISKFLAG_UNMAPPED_BIO;
-#endif
 
 	/*
 	 * d_ident and d_descr are both far bigger than the length of either
@@ -363,22 +480,6 @@ nvd_new_disk(struct nvme_namespace *ns, void *ctrlr_arg)
 
 	disk->d_rotation_rate = DISK_RR_NON_ROTATING;
 
-	ndisk->ns = ns;
-	ndisk->disk = disk;
-	ndisk->cur_depth = 0;
-	ndisk->ordered_in_flight = 0;
-
-	mtx_init(&ndisk->bioqlock, "NVD bioq lock", NULL, MTX_DEF);
-	bioq_init(&ndisk->bioq);
-
-	TASK_INIT(&ndisk->bioqtask, 0, nvd_bioq_process, ndisk);
-	ndisk->tq = taskqueue_create("nvd_taskq", M_WAITOK,
-	    taskqueue_thread_enqueue, &ndisk->tq);
-	taskqueue_start_threads(&ndisk->tq, 1, PI_DISK, "nvd taskq");
-
-	TAILQ_INSERT_TAIL(&disk_head, ndisk, global_tailq);
-	TAILQ_INSERT_TAIL(&ctrlr->disk_head, ndisk, ctrlr_tailq);
-
 	disk_create(disk, DISK_VERSION);
 
 	printf(NVD_STR"%u: <%s> NVMe namespace\n", disk->d_unit, descr);
@@ -387,58 +488,22 @@ nvd_new_disk(struct nvme_namespace *ns, void *ctrlr_arg)
 		(uintmax_t)disk->d_mediasize / disk->d_sectorsize,
 		disk->d_sectorsize);
 
-	return (NULL);
-}
-
-static void
-destroy_geom_disk(struct nvd_disk *ndisk)
-{
-	struct bio	*bp;
-	struct disk	*disk;
-	uint32_t	unit;
-	int		cnt = 0;
-
-	disk = ndisk->disk;
-	unit = disk->d_unit;
-	taskqueue_free(ndisk->tq);
-
-	disk_destroy(ndisk->disk);
-
-	mtx_lock(&ndisk->bioqlock);
-	for (;;) {
-		bp = bioq_takefirst(&ndisk->bioq);
-		if (bp == NULL)
-			break;
-		bp->bio_error = EIO;
-		bp->bio_flags |= BIO_ERROR;
-		bp->bio_resid = bp->bio_bcount;
-		cnt++;
-		biodone(bp);
-	}
-
-	printf(NVD_STR"%u: lost device - %d outstanding\n", unit, cnt);
-	printf(NVD_STR"%u: removing device entry\n", unit);
-
-	mtx_unlock(&ndisk->bioqlock);
-
-	mtx_destroy(&ndisk->bioqlock);
+	return (ndisk);
 }
 
 static void
 nvd_controller_fail(void *ctrlr_arg)
 {
 	struct nvd_controller	*ctrlr = ctrlr_arg;
-	struct nvd_disk		*disk;
+	struct nvd_disk		*ndisk;
 
-	while (!TAILQ_EMPTY(&ctrlr->disk_head)) {
-		disk = TAILQ_FIRST(&ctrlr->disk_head);
-		TAILQ_REMOVE(&disk_head, disk, global_tailq);
-		TAILQ_REMOVE(&ctrlr->disk_head, disk, ctrlr_tailq);
-		destroy_geom_disk(disk);
-		free(disk, M_NVD);
-	}
-
+	mtx_lock(&nvd_lock);
 	TAILQ_REMOVE(&ctrlr_head, ctrlr, tailq);
+	TAILQ_FOREACH(ndisk, &ctrlr->disk_head, ctrlr_tailq)
+		nvd_gone(ndisk);
+	while (!TAILQ_EMPTY(&ctrlr->disk_head))
+		msleep(&ctrlr->disk_head, &nvd_lock, 0, "nvd_fail", 0);
+	mtx_unlock(&nvd_lock);
 	free(ctrlr, M_NVD);
 }
 

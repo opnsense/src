@@ -42,7 +42,7 @@ check()
 
 	atf_check -s exit:0 -e file:${err_file} -o file:${out_file} \
 	    env LC_ALL=en_US.UTF-8 \
-		TZ="EST" "${SRCDIR}/${tc}" \
+	        TZ="EST" "${SRCDIR}/${tc}" \
 		"${XO} --libxo:W${xo_fmt}"
 }
 

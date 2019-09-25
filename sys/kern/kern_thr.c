@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2003, Jeffrey Roberson <jeff@freebsd.org>
  * All rights reserved.
  *
@@ -27,8 +29,8 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
-#include "opt_compat.h"
 #include "opt_posix.h"
+#include "opt_hwpmc_hooks.h"
 #include <sys/param.h>
 #include <sys/kernel.h>
 #include <sys/lock.h>
@@ -54,8 +56,9 @@ __FBSDID("$FreeBSD$");
 #include <sys/rtprio.h>
 #include <sys/umtx.h>
 #include <sys/limits.h>
-
-#include <vm/vm_domain.h>
+#ifdef	HWPMC_HOOKS
+#include <sys/pmckern.h>
+#endif
 
 #include <machine/frame.h>
 
@@ -232,12 +235,8 @@ thread_create(struct thread *td, struct rtprio *rtp,
 
 	bzero(&newtd->td_startzero,
 	    __rangeof(struct thread, td_startzero, td_endzero));
-	newtd->td_sleeptimo = 0;
-	newtd->td_vslock_sz = 0;
-	bzero(&newtd->td_si, sizeof(newtd->td_si));
 	bcopy(&td->td_startcopy, &newtd->td_startcopy,
 	    __rangeof(struct thread, td_startcopy, td_endcopy));
-	newtd->td_sa = td->td_sa;
 	newtd->td_proc = td->td_proc;
 	newtd->td_rb_list = newtd->td_rbp_list = newtd->td_rb_inact = 0;
 	thread_cow_get(newtd, td);
@@ -253,7 +252,6 @@ thread_create(struct thread *td, struct rtprio *rtp,
 	p->p_flag |= P_HADTHREADS;
 	thread_link(newtd, p);
 	bcopy(p->p_comm, newtd->td_name, sizeof(newtd->td_name));
-	newtd->td_pax = p->p_pax;
 	thread_lock(td);
 	/* let the scheduler know about these things. */
 	sched_fork_thread(td, newtd);
@@ -263,13 +261,13 @@ thread_create(struct thread *td, struct rtprio *rtp,
 	if (p->p_ptevents & PTRACE_LWP)
 		newtd->td_dbgflags |= TDB_BORN;
 
-	/*
-	 * Copy the existing thread VM policy into the new thread.
-	 */
-	vm_domain_policy_localcopy(&newtd->td_vm_dom_policy,
-	    &td->td_vm_dom_policy);
-
 	PROC_UNLOCK(p);
+#ifdef	HWPMC_HOOKS
+	if (PMC_PROC_IS_USING_PMCS(p))
+		PMC_CALL_HOOK(newtd, PMC_FN_THR_CREATE, NULL);
+	else if (PMC_SYSTEM_SAMPLING_ACTIVE())
+		PMC_CALL_HOOK_UNLOCKED(newtd, PMC_FN_THR_CREATE_LOG, NULL);
+#endif
 
 	tidhash_add(newtd);
 
@@ -376,6 +374,11 @@ kern_thr_exit(struct thread *td)
 	KASSERT(p->p_numthreads > 1, ("too few threads"));
 	racct_sub(p, RACCT_NTHR, 1);
 	tdsigcleanup(td);
+
+#ifdef AUDIT
+	AUDIT_SYSCALL_EXIT(0, td);
+#endif
+
 	PROC_SLOCK(p);
 	thread_stopped(p);
 	thread_exit();
@@ -596,6 +599,10 @@ sys_thr_set_name(struct thread *td, struct thr_set_name_args *uap)
 	if (ttd == NULL)
 		return (ESRCH);
 	strcpy(ttd->td_name, name);
+#ifdef HWPMC_HOOKS
+	if (PMC_PROC_IS_USING_PMCS(p) || PMC_SYSTEM_SAMPLING_ACTIVE())
+		PMC_CALL_HOOK_UNLOCKED(ttd, PMC_FN_THR_CREATE_LOG, NULL);
+#endif
 #ifdef KTR
 	sched_clear_tdname(ttd);
 #endif

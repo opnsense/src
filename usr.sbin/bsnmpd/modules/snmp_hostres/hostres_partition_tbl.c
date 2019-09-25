@@ -50,11 +50,7 @@
 #include "hostres_oid.h"
 #include "hostres_tree.h"
 
-#ifdef PC98
-#define	HR_FREEBSD_PART_TYPE	0xc494
-#else
 #define	HR_FREEBSD_PART_TYPE	165
-#endif
 
 /* Maximum length for label and id including \0 */
 #define	PART_STR_MLEN	(128 + 1)
@@ -316,7 +312,7 @@ handle_chunk(int32_t ds_index, const char *chunk_name, off_t chunk_size)
 
 	assert(chunk_name != NULL);
 	assert(chunk_name[0] != '\0');
-	if (chunk_name == NULL || chunk_name == '\0')
+	if (chunk_name == NULL || chunk_name[0] == '\0')
 		return;
 
 	HRDBG("ANALYZE chunk %s", chunk_name);

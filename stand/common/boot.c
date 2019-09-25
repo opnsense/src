@@ -32,10 +32,13 @@ __FBSDID("$FreeBSD$");
  */
 
 #include <stand.h>
+#include <sys/reboot.h>
+#include <sys/boot.h>
 #include <string.h>
 
 #include "bootstrap.h"
 
+static int	autoboot(int timeout, char *prompt);
 static char	*getbootfile(int try);
 static int	loadakernel(int try, int argc, char* argv[]);
 
@@ -103,6 +106,13 @@ command_boot(int argc, char *argv[])
 	if (archsw.arch_autoload() != 0)
 		return(CMD_ERROR);
 
+#ifdef LOADER_VERIEXEC
+	verify_pcr_export();		/* for measured boot */
+#ifdef LOADER_VERIEXEC_PASS_MANIFEST
+	pass_manifest_export_envs();
+#endif
+#endif
+
 	/* Call the exec handler from the loader matching the kernel */
 	file_formats[fp->f_loader]->l_exec(fp);
 	return(CMD_ERROR);
@@ -157,7 +167,7 @@ autoboot_maybe()
 		autoboot(-1, NULL);		/* try to boot automatically */
 }
 
-int
+static int
 autoboot(int timeout, char *prompt)
 {
 	time_t	when, otime, ntime;

@@ -42,12 +42,12 @@
 .Nm sem_clockwait_np
 .Nd "lock a semaphore"
 .Sh LIBRARY
-.Lb libpthread
+.Lb libc
 .Sh SYNOPSIS
 .In semaphore.h
 .In time.h
 .Ft int
-.Fn sem_timedwait "sem_t *sem" "const struct timespec *abs_timeout"
+.Fn sem_timedwait "sem_t * restrict sem" "const struct timespec * restrict abs_timeout"
 .Ft int
 .Fn sem_clockwait_np "sem_t * restrict sem" "clockid_t clock_id" "int flags" "const struct timespec * rqtp" "struct timespec * rmtp"
 .Sh DESCRIPTION

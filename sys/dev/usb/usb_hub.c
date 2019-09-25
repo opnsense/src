@@ -1,5 +1,7 @@
 /* $FreeBSD$ */
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ *
  * Copyright (c) 1998 The NetBSD Foundation, Inc. All rights reserved.
  * Copyright (c) 1998 Lennart Augustsson. All rights reserved.
  * Copyright (c) 2008-2010 Hans Petter Selasky. All rights reserved.
@@ -127,6 +129,8 @@ struct uhub_softc {
 	int sc_disable_enumeration;
 	int sc_disable_port_power;
 #endif
+	uint8_t sc_usb_port_errors;	/* error counter */
+#define	UHUB_USB_PORT_ERRORS_MAX 4
 	uint8_t	sc_flags;
 #define	UHUB_FLAG_DID_EXPLORE 0x01
 };
@@ -272,11 +276,11 @@ uhub_reset_tt_proc(struct usb_proc_msg *_pm)
 
 	/* Change lock */
 	USB_BUS_UNLOCK(udev->bus);
-	mtx_lock(&sc->sc_mtx);
+	USB_MTX_LOCK(&sc->sc_mtx);
 	/* Start transfer */
 	usbd_transfer_start(sc->sc_xfer[UHUB_RESET_TT_TRANSFER]);
 	/* Change lock */
-	mtx_unlock(&sc->sc_mtx);
+	USB_MTX_UNLOCK(&sc->sc_mtx);
 	USB_BUS_LOCK(udev->bus);
 }
 #endif
@@ -585,13 +589,25 @@ uhub_read_port_status(struct uhub_softc *sc, uint8_t portno)
 	struct usb_port_status ps;
 	usb_error_t err;
 
+	if (sc->sc_usb_port_errors >= UHUB_USB_PORT_ERRORS_MAX) {
+		DPRINTFN(4, "port %d, HUB looks dead, too many errors\n", portno);
+		sc->sc_st.port_status = 0;
+		sc->sc_st.port_change = 0;
+		return (USB_ERR_TIMEOUT);
+	}
+
 	err = usbd_req_get_port_status(
 	    sc->sc_udev, NULL, &ps, portno);
 
-	/* update status regardless of error */
-
-	sc->sc_st.port_status = UGETW(ps.wPortStatus);
-	sc->sc_st.port_change = UGETW(ps.wPortChange);
+	if (err == 0) {
+		sc->sc_st.port_status = UGETW(ps.wPortStatus);
+		sc->sc_st.port_change = UGETW(ps.wPortChange);
+		sc->sc_usb_port_errors = 0;
+	} else {
+		sc->sc_st.port_status = 0;
+		sc->sc_st.port_change = 0;
+		sc->sc_usb_port_errors++;
+	}
 
 	/* debugging print */
 
@@ -1521,9 +1537,9 @@ uhub_attach(device_t dev)
 
 	/* Start the interrupt endpoint, if any */
 
-	mtx_lock(&sc->sc_mtx);
+	USB_MTX_LOCK(&sc->sc_mtx);
 	usbd_transfer_start(sc->sc_xfer[UHUB_INTR_TRANSFER]);
-	mtx_unlock(&sc->sc_mtx);
+	USB_MTX_UNLOCK(&sc->sc_mtx);
 
 	/* Enable automatic power save on all USB HUBs */
 
@@ -2299,7 +2315,7 @@ usb_needs_explore(struct usb_bus *bus, uint8_t do_probe)
  *	usb_needs_explore_all
  *
  * This function is called whenever a new driver is loaded and will
- * cause that all USB busses are re-explored.
+ * cause that all USB buses are re-explored.
  *------------------------------------------------------------------------*/
 void
 usb_needs_explore_all(void)
@@ -2317,7 +2333,7 @@ usb_needs_explore_all(void)
 		return;
 	}
 	/*
-	 * Explore all USB busses in parallel.
+	 * Explore all USB buses in parallel.
 	 */
 	max = devclass_get_maxunit(dc);
 	while (max >= 0) {

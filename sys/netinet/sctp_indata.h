@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2001-2007, by Cisco Systems, Inc. All rights reserved.
  * Copyright (c) 2008-2012, by Randall Stewart. All rights reserved.
  * Copyright (c) 2008-2012, by Michael Tuexen. All rights reserved.
@@ -59,7 +61,6 @@ sctp_build_readq_entry(struct sctp_tcb *stcb,
 		(_ctl)->sinfo_ppid = ppid; \
 		(_ctl)->sinfo_context = context; \
 		(_ctl)->fsn_included = 0xffffffff; \
-		(_ctl)->top_fsn = 0xffffffff; \
 		(_ctl)->sinfo_tsn = tsn; \
 		(_ctl)->sinfo_cumtsn = tsn; \
 		(_ctl)->sinfo_assoc_id = sctp_get_associd((in_it)); \
@@ -97,8 +98,7 @@ void
 sctp_handle_forward_tsn(struct sctp_tcb *,
     struct sctp_forward_tsn_chunk *, int *, struct mbuf *, int);
 
-struct sctp_tmit_chunk *
-                sctp_try_advance_peer_ack_point(struct sctp_tcb *, struct sctp_association *);
+struct sctp_tmit_chunk *sctp_try_advance_peer_ack_point(struct sctp_tcb *, struct sctp_association *);
 
 void sctp_service_queues(struct sctp_tcb *, struct sctp_association *);
 

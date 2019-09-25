@@ -33,7 +33,7 @@ int convertForTestingMain(int argc, const char *argv[]) {
   if (!ObjErr) {
     std::string Buf;
     raw_string_ostream OS(Buf);
-    logAllUnhandledErrors(ObjErr.takeError(), OS, "");
+    logAllUnhandledErrors(ObjErr.takeError(), OS);
     OS.flush();
     errs() << "error: " << Buf;
     return 1;
@@ -75,8 +75,7 @@ int convertForTestingMain(int argc, const char *argv[]) {
     return 1;
 
   int FD;
-  if (auto Err =
-          sys::fs::openFileForWrite(OutputFilename, FD, sys::fs::F_None)) {
+  if (auto Err = sys::fs::openFileForWrite(OutputFilename, FD)) {
     errs() << "error: " << Err.message() << "\n";
     return 1;
   }

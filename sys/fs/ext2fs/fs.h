@@ -5,6 +5,8 @@
  *  University of Utah, Department of Computer Science
  */
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1982, 1986, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -16,7 +18,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -106,7 +108,7 @@
 
 /* get block containing inode from its number x */
 #define	ino_to_fsba(fs, x)                                              \
-        ((fs)->e2fs_gd[ino_to_cg((fs), (x))].ext2bgd_i_tables +         \
+        (e2fs_gd_get_i_tables(&(fs)->e2fs_gd[ino_to_cg((fs), (x))]) +   \
         (((x) - 1) % (fs)->e2fs->e2fs_ipg) / (fs)->e2fs_ipb)
 
 /* get offset for inode in block */
@@ -158,5 +160,10 @@
  * NINDIR is the number of indirects in a file system block.
  */
 #define	NINDIR(fs)	(EXT2_ADDR_PER_BLOCK(fs))
+
+/*
+ * Use if additional debug logging is required.
+ */
+/* #define EXT2FS_PRINT_EXTENTS */
 
 #endif	/* !_FS_EXT2FS_FS_H_ */

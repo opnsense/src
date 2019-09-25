@@ -43,7 +43,6 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/MemoryLocation.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
-#include "llvm/IR/CallSite.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
@@ -76,7 +75,7 @@ class Value;
 ///
 /// See docs/AliasAnalysis.html for more information on the specific meanings
 /// of these values.
-enum AliasResult {
+enum AliasResult : uint8_t {
   /// The two locations do not alias at all.
   ///
   /// This value is arranged to convert to false, while all other values
@@ -91,13 +90,16 @@ enum AliasResult {
   MustAlias,
 };
 
+/// << operator for AliasResult.
+raw_ostream &operator<<(raw_ostream &OS, AliasResult AR);
+
 /// Flags indicating whether a memory access modifies or references memory.
 ///
 /// This is no access at all, a modification, a reference, or both
 /// a modification and a reference. These are specifically structured such that
 /// they form a three bit matrix and bit-tests for 'mod' or 'ref' or 'must'
 /// work with any of the possible values.
-enum class ModRefInfo {
+enum class ModRefInfo : uint8_t {
   /// Must is provided for completeness, but no routines will return only
   /// Must today. See definition of Must below.
   Must = 0,
@@ -325,15 +327,14 @@ public:
   AliasResult alias(const MemoryLocation &LocA, const MemoryLocation &LocB);
 
   /// A convenience wrapper around the primary \c alias interface.
-  AliasResult alias(const Value *V1, uint64_t V1Size, const Value *V2,
-                    uint64_t V2Size) {
+  AliasResult alias(const Value *V1, LocationSize V1Size, const Value *V2,
+                    LocationSize V2Size) {
     return alias(MemoryLocation(V1, V1Size), MemoryLocation(V2, V2Size));
   }
 
   /// A convenience wrapper around the primary \c alias interface.
   AliasResult alias(const Value *V1, const Value *V2) {
-    return alias(V1, MemoryLocation::UnknownSize, V2,
-                 MemoryLocation::UnknownSize);
+    return alias(V1, LocationSize::unknown(), V2, LocationSize::unknown());
   }
 
   /// A trivial helper function to check to see if the specified pointers are
@@ -343,8 +344,8 @@ public:
   }
 
   /// A convenience wrapper around the \c isNoAlias helper interface.
-  bool isNoAlias(const Value *V1, uint64_t V1Size, const Value *V2,
-                 uint64_t V2Size) {
+  bool isNoAlias(const Value *V1, LocationSize V1Size, const Value *V2,
+                 LocationSize V2Size) {
     return isNoAlias(MemoryLocation(V1, V1Size), MemoryLocation(V2, V2Size));
   }
 
@@ -361,7 +362,8 @@ public:
 
   /// A convenience wrapper around the \c isMustAlias helper interface.
   bool isMustAlias(const Value *V1, const Value *V2) {
-    return alias(V1, 1, V2, 1) == MustAlias;
+    return alias(V1, LocationSize::precise(1), V2, LocationSize::precise(1)) ==
+           MustAlias;
   }
 
   /// Checks whether the given location points to constant memory, or if
@@ -379,15 +381,15 @@ public:
   /// \name Simple mod/ref information
   /// @{
 
-  /// Get the ModRef info associated with a pointer argument of a callsite. The
+  /// Get the ModRef info associated with a pointer argument of a call. The
   /// result's bits are set to indicate the allowed aliasing ModRef kinds. Note
   /// that these bits do not necessarily account for the overall behavior of
   /// the function, but rather only provide additional per-argument
   /// information. This never sets ModRefInfo::Must.
-  ModRefInfo getArgModRefInfo(ImmutableCallSite CS, unsigned ArgIdx);
+  ModRefInfo getArgModRefInfo(const CallBase *Call, unsigned ArgIdx);
 
   /// Return the behavior of the given call site.
-  FunctionModRefBehavior getModRefBehavior(ImmutableCallSite CS);
+  FunctionModRefBehavior getModRefBehavior(const CallBase *Call);
 
   /// Return the behavior when calling the given function.
   FunctionModRefBehavior getModRefBehavior(const Function *F);
@@ -403,8 +405,8 @@ public:
   /// property (e.g. calls to 'sin' and 'cos').
   ///
   /// This property corresponds to the GCC 'const' attribute.
-  bool doesNotAccessMemory(ImmutableCallSite CS) {
-    return getModRefBehavior(CS) == FMRB_DoesNotAccessMemory;
+  bool doesNotAccessMemory(const CallBase *Call) {
+    return getModRefBehavior(Call) == FMRB_DoesNotAccessMemory;
   }
 
   /// Checks if the specified function is known to never read or write memory.
@@ -431,8 +433,8 @@ public:
   /// absence of interfering store instructions, such as CSE of strlen calls.
   ///
   /// This property corresponds to the GCC 'pure' attribute.
-  bool onlyReadsMemory(ImmutableCallSite CS) {
-    return onlyReadsMemory(getModRefBehavior(CS));
+  bool onlyReadsMemory(const CallBase *Call) {
+    return onlyReadsMemory(getModRefBehavior(Call));
   }
 
   /// Checks if the specified function is known to only read from non-volatile
@@ -497,34 +499,12 @@ public:
 
   /// getModRefInfo (for call sites) - Return information about whether
   /// a particular call site modifies or reads the specified memory location.
-  ModRefInfo getModRefInfo(ImmutableCallSite CS, const MemoryLocation &Loc);
+  ModRefInfo getModRefInfo(const CallBase *Call, const MemoryLocation &Loc);
 
   /// getModRefInfo (for call sites) - A convenience wrapper.
-  ModRefInfo getModRefInfo(ImmutableCallSite CS, const Value *P,
-                           uint64_t Size) {
-    return getModRefInfo(CS, MemoryLocation(P, Size));
-  }
-
-  /// getModRefInfo (for calls) - Return information about whether
-  /// a particular call modifies or reads the specified memory location.
-  ModRefInfo getModRefInfo(const CallInst *C, const MemoryLocation &Loc) {
-    return getModRefInfo(ImmutableCallSite(C), Loc);
-  }
-
-  /// getModRefInfo (for calls) - A convenience wrapper.
-  ModRefInfo getModRefInfo(const CallInst *C, const Value *P, uint64_t Size) {
-    return getModRefInfo(C, MemoryLocation(P, Size));
-  }
-
-  /// getModRefInfo (for invokes) - Return information about whether
-  /// a particular invoke modifies or reads the specified memory location.
-  ModRefInfo getModRefInfo(const InvokeInst *I, const MemoryLocation &Loc) {
-    return getModRefInfo(ImmutableCallSite(I), Loc);
-  }
-
-  /// getModRefInfo (for invokes) - A convenience wrapper.
-  ModRefInfo getModRefInfo(const InvokeInst *I, const Value *P, uint64_t Size) {
-    return getModRefInfo(I, MemoryLocation(P, Size));
+  ModRefInfo getModRefInfo(const CallBase *Call, const Value *P,
+                           LocationSize Size) {
+    return getModRefInfo(Call, MemoryLocation(P, Size));
   }
 
   /// getModRefInfo (for loads) - Return information about whether
@@ -532,7 +512,8 @@ public:
   ModRefInfo getModRefInfo(const LoadInst *L, const MemoryLocation &Loc);
 
   /// getModRefInfo (for loads) - A convenience wrapper.
-  ModRefInfo getModRefInfo(const LoadInst *L, const Value *P, uint64_t Size) {
+  ModRefInfo getModRefInfo(const LoadInst *L, const Value *P,
+                           LocationSize Size) {
     return getModRefInfo(L, MemoryLocation(P, Size));
   }
 
@@ -541,7 +522,8 @@ public:
   ModRefInfo getModRefInfo(const StoreInst *S, const MemoryLocation &Loc);
 
   /// getModRefInfo (for stores) - A convenience wrapper.
-  ModRefInfo getModRefInfo(const StoreInst *S, const Value *P, uint64_t Size) {
+  ModRefInfo getModRefInfo(const StoreInst *S, const Value *P,
+                           LocationSize Size) {
     return getModRefInfo(S, MemoryLocation(P, Size));
   }
 
@@ -550,7 +532,8 @@ public:
   ModRefInfo getModRefInfo(const FenceInst *S, const MemoryLocation &Loc);
 
   /// getModRefInfo (for fences) - A convenience wrapper.
-  ModRefInfo getModRefInfo(const FenceInst *S, const Value *P, uint64_t Size) {
+  ModRefInfo getModRefInfo(const FenceInst *S, const Value *P,
+                           LocationSize Size) {
     return getModRefInfo(S, MemoryLocation(P, Size));
   }
 
@@ -561,7 +544,7 @@ public:
 
   /// getModRefInfo (for cmpxchges) - A convenience wrapper.
   ModRefInfo getModRefInfo(const AtomicCmpXchgInst *CX, const Value *P,
-                           unsigned Size) {
+                           LocationSize Size) {
     return getModRefInfo(CX, MemoryLocation(P, Size));
   }
 
@@ -571,7 +554,7 @@ public:
 
   /// getModRefInfo (for atomicrmws) - A convenience wrapper.
   ModRefInfo getModRefInfo(const AtomicRMWInst *RMW, const Value *P,
-                           unsigned Size) {
+                           LocationSize Size) {
     return getModRefInfo(RMW, MemoryLocation(P, Size));
   }
 
@@ -580,7 +563,8 @@ public:
   ModRefInfo getModRefInfo(const VAArgInst *I, const MemoryLocation &Loc);
 
   /// getModRefInfo (for va_args) - A convenience wrapper.
-  ModRefInfo getModRefInfo(const VAArgInst *I, const Value *P, uint64_t Size) {
+  ModRefInfo getModRefInfo(const VAArgInst *I, const Value *P,
+                           LocationSize Size) {
     return getModRefInfo(I, MemoryLocation(P, Size));
   }
 
@@ -590,7 +574,7 @@ public:
 
   /// getModRefInfo (for catchpads) - A convenience wrapper.
   ModRefInfo getModRefInfo(const CatchPadInst *I, const Value *P,
-                           uint64_t Size) {
+                           LocationSize Size) {
     return getModRefInfo(I, MemoryLocation(P, Size));
   }
 
@@ -600,7 +584,7 @@ public:
 
   /// getModRefInfo (for catchrets) - A convenience wrapper.
   ModRefInfo getModRefInfo(const CatchReturnInst *I, const Value *P,
-                           uint64_t Size) {
+                           LocationSize Size) {
     return getModRefInfo(I, MemoryLocation(P, Size));
   }
 
@@ -617,8 +601,8 @@ public:
   ModRefInfo getModRefInfo(const Instruction *I,
                            const Optional<MemoryLocation> &OptLoc) {
     if (OptLoc == None) {
-      if (auto CS = ImmutableCallSite(I)) {
-        return createModRefInfo(getModRefBehavior(CS));
+      if (const auto *Call = dyn_cast<CallBase>(I)) {
+        return createModRefInfo(getModRefBehavior(Call));
       }
     }
 
@@ -646,20 +630,20 @@ public:
 
   /// A convenience wrapper for constructing the memory location.
   ModRefInfo getModRefInfo(const Instruction *I, const Value *P,
-                           uint64_t Size) {
+                           LocationSize Size) {
     return getModRefInfo(I, MemoryLocation(P, Size));
   }
 
   /// Return information about whether a call and an instruction may refer to
   /// the same memory locations.
-  ModRefInfo getModRefInfo(Instruction *I, ImmutableCallSite Call);
+  ModRefInfo getModRefInfo(Instruction *I, const CallBase *Call);
 
   /// Return information about whether two call sites may refer to the same set
   /// of memory locations. See the AA documentation for details:
   ///   http://llvm.org/docs/AliasAnalysis.html#ModRefInfo
-  ModRefInfo getModRefInfo(ImmutableCallSite CS1, ImmutableCallSite CS2);
+  ModRefInfo getModRefInfo(const CallBase *Call1, const CallBase *Call2);
 
-  /// \brief Return information about whether a particular call site modifies
+  /// Return information about whether a particular call site modifies
   /// or reads the specified memory location \p MemLoc before instruction \p I
   /// in a BasicBlock. An ordered basic block \p OBB can be used to speed up
   /// instruction ordering queries inside the BasicBlock containing \p I.
@@ -669,9 +653,9 @@ public:
                                 const MemoryLocation &MemLoc, DominatorTree *DT,
                                 OrderedBasicBlock *OBB = nullptr);
 
-  /// \brief A convenience wrapper to synthesize a memory location.
+  /// A convenience wrapper to synthesize a memory location.
   ModRefInfo callCapturesBefore(const Instruction *I, const Value *P,
-                                uint64_t Size, DominatorTree *DT,
+                                LocationSize Size, DominatorTree *DT,
                                 OrderedBasicBlock *OBB = nullptr) {
     return callCapturesBefore(I, MemoryLocation(P, Size), DT, OBB);
   }
@@ -687,7 +671,7 @@ public:
 
   /// A convenience wrapper synthesizing a memory location.
   bool canBasicBlockModify(const BasicBlock &BB, const Value *P,
-                           uint64_t Size) {
+                           LocationSize Size) {
     return canBasicBlockModify(BB, MemoryLocation(P, Size));
   }
 
@@ -702,7 +686,7 @@ public:
 
   /// A convenience wrapper synthesizing a memory location.
   bool canInstructionRangeModRef(const Instruction &I1, const Instruction &I2,
-                                 const Value *Ptr, uint64_t Size,
+                                 const Value *Ptr, LocationSize Size,
                                  const ModRefInfo Mode) {
     return canInstructionRangeModRef(I1, I2, MemoryLocation(Ptr, Size), Mode);
   }
@@ -768,25 +752,25 @@ public:
   /// that these bits do not necessarily account for the overall behavior of
   /// the function, but rather only provide additional per-argument
   /// information.
-  virtual ModRefInfo getArgModRefInfo(ImmutableCallSite CS,
+  virtual ModRefInfo getArgModRefInfo(const CallBase *Call,
                                       unsigned ArgIdx) = 0;
 
   /// Return the behavior of the given call site.
-  virtual FunctionModRefBehavior getModRefBehavior(ImmutableCallSite CS) = 0;
+  virtual FunctionModRefBehavior getModRefBehavior(const CallBase *Call) = 0;
 
   /// Return the behavior when calling the given function.
   virtual FunctionModRefBehavior getModRefBehavior(const Function *F) = 0;
 
   /// getModRefInfo (for call sites) - Return information about whether
   /// a particular call site modifies or reads the specified memory location.
-  virtual ModRefInfo getModRefInfo(ImmutableCallSite CS,
+  virtual ModRefInfo getModRefInfo(const CallBase *Call,
                                    const MemoryLocation &Loc) = 0;
 
   /// Return information about whether two call sites may refer to the same set
   /// of memory locations. See the AA documentation for details:
   ///   http://llvm.org/docs/AliasAnalysis.html#ModRefInfo
-  virtual ModRefInfo getModRefInfo(ImmutableCallSite CS1,
-                                   ImmutableCallSite CS2) = 0;
+  virtual ModRefInfo getModRefInfo(const CallBase *Call1,
+                                   const CallBase *Call2) = 0;
 
   /// @}
 };
@@ -818,26 +802,26 @@ public:
     return Result.pointsToConstantMemory(Loc, OrLocal);
   }
 
-  ModRefInfo getArgModRefInfo(ImmutableCallSite CS, unsigned ArgIdx) override {
-    return Result.getArgModRefInfo(CS, ArgIdx);
+  ModRefInfo getArgModRefInfo(const CallBase *Call, unsigned ArgIdx) override {
+    return Result.getArgModRefInfo(Call, ArgIdx);
   }
 
-  FunctionModRefBehavior getModRefBehavior(ImmutableCallSite CS) override {
-    return Result.getModRefBehavior(CS);
+  FunctionModRefBehavior getModRefBehavior(const CallBase *Call) override {
+    return Result.getModRefBehavior(Call);
   }
 
   FunctionModRefBehavior getModRefBehavior(const Function *F) override {
     return Result.getModRefBehavior(F);
   }
 
-  ModRefInfo getModRefInfo(ImmutableCallSite CS,
+  ModRefInfo getModRefInfo(const CallBase *Call,
                            const MemoryLocation &Loc) override {
-    return Result.getModRefInfo(CS, Loc);
+    return Result.getModRefInfo(Call, Loc);
   }
 
-  ModRefInfo getModRefInfo(ImmutableCallSite CS1,
-                           ImmutableCallSite CS2) override {
-    return Result.getModRefInfo(CS1, CS2);
+  ModRefInfo getModRefInfo(const CallBase *Call1,
+                           const CallBase *Call2) override {
+    return Result.getModRefInfo(Call1, Call2);
   }
 };
 
@@ -892,25 +876,28 @@ protected:
                  : CurrentResult.pointsToConstantMemory(Loc, OrLocal);
     }
 
-    ModRefInfo getArgModRefInfo(ImmutableCallSite CS, unsigned ArgIdx) {
-      return AAR ? AAR->getArgModRefInfo(CS, ArgIdx) : CurrentResult.getArgModRefInfo(CS, ArgIdx);
+    ModRefInfo getArgModRefInfo(const CallBase *Call, unsigned ArgIdx) {
+      return AAR ? AAR->getArgModRefInfo(Call, ArgIdx)
+                 : CurrentResult.getArgModRefInfo(Call, ArgIdx);
     }
 
-    FunctionModRefBehavior getModRefBehavior(ImmutableCallSite CS) {
-      return AAR ? AAR->getModRefBehavior(CS) : CurrentResult.getModRefBehavior(CS);
+    FunctionModRefBehavior getModRefBehavior(const CallBase *Call) {
+      return AAR ? AAR->getModRefBehavior(Call)
+                 : CurrentResult.getModRefBehavior(Call);
     }
 
     FunctionModRefBehavior getModRefBehavior(const Function *F) {
       return AAR ? AAR->getModRefBehavior(F) : CurrentResult.getModRefBehavior(F);
     }
 
-    ModRefInfo getModRefInfo(ImmutableCallSite CS, const MemoryLocation &Loc) {
-      return AAR ? AAR->getModRefInfo(CS, Loc)
-                 : CurrentResult.getModRefInfo(CS, Loc);
+    ModRefInfo getModRefInfo(const CallBase *Call, const MemoryLocation &Loc) {
+      return AAR ? AAR->getModRefInfo(Call, Loc)
+                 : CurrentResult.getModRefInfo(Call, Loc);
     }
 
-    ModRefInfo getModRefInfo(ImmutableCallSite CS1, ImmutableCallSite CS2) {
-      return AAR ? AAR->getModRefInfo(CS1, CS2) : CurrentResult.getModRefInfo(CS1, CS2);
+    ModRefInfo getModRefInfo(const CallBase *Call1, const CallBase *Call2) {
+      return AAR ? AAR->getModRefInfo(Call1, Call2)
+                 : CurrentResult.getModRefInfo(Call1, Call2);
     }
   };
 
@@ -942,11 +929,11 @@ public:
     return false;
   }
 
-  ModRefInfo getArgModRefInfo(ImmutableCallSite CS, unsigned ArgIdx) {
+  ModRefInfo getArgModRefInfo(const CallBase *Call, unsigned ArgIdx) {
     return ModRefInfo::ModRef;
   }
 
-  FunctionModRefBehavior getModRefBehavior(ImmutableCallSite CS) {
+  FunctionModRefBehavior getModRefBehavior(const CallBase *Call) {
     return FMRB_UnknownModRefBehavior;
   }
 
@@ -954,11 +941,11 @@ public:
     return FMRB_UnknownModRefBehavior;
   }
 
-  ModRefInfo getModRefInfo(ImmutableCallSite CS, const MemoryLocation &Loc) {
+  ModRefInfo getModRefInfo(const CallBase *Call, const MemoryLocation &Loc) {
     return ModRefInfo::ModRef;
   }
 
-  ModRefInfo getModRefInfo(ImmutableCallSite CS1, ImmutableCallSite CS2) {
+  ModRefInfo getModRefInfo(const CallBase *Call1, const CallBase *Call2) {
     return ModRefInfo::ModRef;
   }
 };
@@ -1064,6 +1051,29 @@ public:
   bool runOnFunction(Function &F) override;
 
   void getAnalysisUsage(AnalysisUsage &AU) const override;
+};
+
+/// A wrapper pass for external alias analyses. This just squirrels away the
+/// callback used to run any analyses and register their results.
+struct ExternalAAWrapperPass : ImmutablePass {
+  using CallbackT = std::function<void(Pass &, Function &, AAResults &)>;
+
+  CallbackT CB;
+
+  static char ID;
+
+  ExternalAAWrapperPass() : ImmutablePass(ID) {
+    initializeExternalAAWrapperPassPass(*PassRegistry::getPassRegistry());
+  }
+
+  explicit ExternalAAWrapperPass(CallbackT CB)
+      : ImmutablePass(ID), CB(std::move(CB)) {
+    initializeExternalAAWrapperPassPass(*PassRegistry::getPassRegistry());
+  }
+
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.setPreservesAll();
+  }
 };
 
 FunctionPass *createAAResultsWrapperPass();

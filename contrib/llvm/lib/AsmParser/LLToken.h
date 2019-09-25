@@ -36,6 +36,7 @@ enum Kind {
   rparen,  // (  )
   exclaim, // !
   bar,     // |
+  colon,   // :
 
   kw_x,
   kw_true,
@@ -138,6 +139,7 @@ enum Kind {
   kw_arm_apcscc,
   kw_arm_aapcscc,
   kw_arm_aapcs_vfpcc,
+  kw_aarch64_vector_pcs,
   kw_msp430_intrcc,
   kw_avr_intrcc,
   kw_avr_signalcc,
@@ -199,7 +201,9 @@ enum Kind {
   kw_nonnull,
   kw_noredzone,
   kw_noreturn,
+  kw_nocf_check,
   kw_nounwind,
+  kw_optforfuzzing,
   kw_optnone,
   kw_optsize,
   kw_readnone,
@@ -212,9 +216,11 @@ enum Kind {
   kw_sspreq,
   kw_sspstrong,
   kw_safestack,
+  kw_shadowcallstack,
   kw_sret,
   kw_sanitize_thread,
   kw_sanitize_memory,
+  kw_speculative_load_hardening,
   kw_strictfp,
   kw_swifterror,
   kw_swiftself,
@@ -264,6 +270,7 @@ enum Kind {
   kw_umin,
 
   // Instruction Opcodes (Opcode in UIntVal).
+  kw_fneg,
   kw_add,
   kw_fadd,
   kw_sub,
@@ -344,10 +351,80 @@ enum Kind {
   kw_uselistorder,
   kw_uselistorder_bb,
 
+  // Summary index keywords
+  kw_path,
+  kw_hash,
+  kw_gv,
+  kw_guid,
+  kw_name,
+  kw_summaries,
+  kw_flags,
+  kw_linkage,
+  kw_notEligibleToImport,
+  kw_live,
+  kw_dsoLocal,
+  kw_function,
+  kw_insts,
+  kw_funcFlags,
+  kw_readNone,
+  kw_readOnly,
+  kw_noRecurse,
+  kw_returnDoesNotAlias,
+  kw_noInline,
+  kw_calls,
+  kw_callee,
+  kw_hotness,
+  kw_unknown,
+  kw_hot,
+  kw_critical,
+  kw_relbf,
+  kw_variable,
+  kw_aliasee,
+  kw_refs,
+  kw_typeIdInfo,
+  kw_typeTests,
+  kw_typeTestAssumeVCalls,
+  kw_typeCheckedLoadVCalls,
+  kw_typeTestAssumeConstVCalls,
+  kw_typeCheckedLoadConstVCalls,
+  kw_vFuncId,
+  kw_offset,
+  kw_args,
+  kw_typeid,
+  kw_summary,
+  kw_typeTestRes,
+  kw_kind,
+  kw_unsat,
+  kw_byteArray,
+  kw_inline,
+  kw_single,
+  kw_allOnes,
+  kw_sizeM1BitWidth,
+  kw_alignLog2,
+  kw_sizeM1,
+  kw_bitMask,
+  kw_inlineBits,
+  kw_wpdResolutions,
+  kw_wpdRes,
+  kw_indir,
+  kw_singleImpl,
+  kw_branchFunnel,
+  kw_singleImplName,
+  kw_resByArg,
+  kw_byArg,
+  kw_uniformRetVal,
+  kw_uniqueRetVal,
+  kw_virtualConstProp,
+  kw_info,
+  kw_byte,
+  kw_bit,
+  kw_varFlags,
+
   // Unsigned Valued tokens (UIntVal).
   GlobalID,   // @42
   LocalVarID, // %42
   AttrGrpID,  // #42
+  SummaryID,  // ^42
 
   // String valued tokens (StrVal).
   LabelStr,         // foo:
@@ -362,8 +439,10 @@ enum Kind {
   DwarfLang,        // DW_LANG_foo
   DwarfCC,          // DW_CC_foo
   EmissionKind,     // lineTablesOnly
+  NameTableKind,    // GNU
   DwarfOp,          // DW_OP_foo
   DIFlag,           // DIFlagFoo
+  DISPFlag,         // DISPFlagFoo
   DwarfMacinfo,     // DW_MACINFO_foo
   ChecksumKind,     // CSK_foo
 

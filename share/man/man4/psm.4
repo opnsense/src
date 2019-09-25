@@ -354,8 +354,8 @@ Tap and drag gestures can be disabled by setting
 to
 .Em 0
 at boot-time.
-Currently, this is only supported on Synaptics touchpads with Extended
-support disabled.
+Currently, this is supported on Synaptics touchpads regardless of Extended
+support state and on Elantech touchpads with Extended support enabled.
 The behaviour may be changed after boot by setting
 the sysctl with the same name and by restarting
 .Xr moused 8
@@ -591,12 +591,6 @@ You may also put zero in
 and
 .Dv rate ,
 and the default value for the fields will be selected.
-.\" .Pp
-.\" .It Dv MOUSE_GETVARS Ar mousevar_t *vars
-.\" .It Dv MOUSE_SETVARS Ar mousevar_t *vars
-.\" These commands are not supported by the
-.\" .Nm
-.\" driver.
 .Pp
 .It Dv MOUSE_READDATA Ar mousedata_t *data
 .\" The command reads the raw data from the device.
@@ -868,11 +862,6 @@ unless the X server is accessing the mouse via
 .Xr moused 8 .
 Clicking any button without moving the mouse may also work.
 .Sh BUGS
-The ioctl command
-.Dv MOUSEIOCREAD
-has been removed.
-It was never functional anyway.
-.Pp
 Enabling the extended support for Synaptics touchpads has been reported to
 cause problems with responsivity on some (newer) models of Synaptics
 hardware, particularly those with guest devices.

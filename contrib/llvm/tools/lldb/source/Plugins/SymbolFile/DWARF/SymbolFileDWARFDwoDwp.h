@@ -10,17 +10,13 @@
 #ifndef SymbolFileDWARFDwoDwp_SymbolFileDWARFDwoDwp_h_
 #define SymbolFileDWARFDwoDwp_SymbolFileDWARFDwoDwp_h_
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
 #include "SymbolFileDWARFDwo.h"
 #include "SymbolFileDWARFDwp.h"
 
 class SymbolFileDWARFDwoDwp : public SymbolFileDWARFDwo {
 public:
   SymbolFileDWARFDwoDwp(SymbolFileDWARFDwp *dwp_symfile,
-                        lldb::ObjectFileSP objfile, DWARFCompileUnit *dwarf_cu,
+                        lldb::ObjectFileSP objfile, DWARFUnit *dwarf_cu,
                         uint64_t dwo_id);
 
 protected:

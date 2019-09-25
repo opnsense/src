@@ -8,7 +8,7 @@
  *
  * 1. Copyright Notice
  *
- * Some or all of this work - Copyright (c) 1999 - 2017, Intel Corp.
+ * Some or all of this work - Copyright (c) 1999 - 2018, Intel Corp.
  * All rights reserved.
  *
  * 2. License
@@ -546,7 +546,7 @@ DtCreateOneTemplate (
 
         AcpiOsPrintf (" (static data table)\n");
 
-        if (Gbl_VerboseTemplates)
+        if (AslGbl_VerboseTemplates)
         {
             AcpiOsPrintf (" * Format: [HexOffset DecimalOffset ByteLength]"
                 "  FieldName : HexFieldValue\n */\n\n");

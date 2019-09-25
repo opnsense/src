@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2009-2016 Solarflare Communications Inc.
  * All rights reserved.
  *
@@ -931,7 +933,7 @@ efx_vpd_hunk_set(
 		}
 
 		/* Modify tag length (large resource type) */
-		taglen += (dest - source);
+		taglen += (uint16_t)(dest - source);
 		EFX_POPULATE_WORD_1(word, EFX_WORD_0, taglen);
 		data[offset - 2] = EFX_WORD_FIELD(word, EFX_BYTE_0);
 		data[offset - 1] = EFX_WORD_FIELD(word, EFX_BYTE_1);

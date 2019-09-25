@@ -79,8 +79,13 @@ again:	if ((t = tq->tq_freelist) != NULL && tq->tq_nalloc >= tq->tq_minalloc) {
 			 * immediately retry the allocation.
 			 */
 			tq->tq_maxalloc_wait++;
+#ifdef __FreeBSD__
+			rv = cv_timedwait(&tq->tq_maxalloc_cv,
+			    &tq->tq_lock, hz);
+#else
 			rv = cv_timedwait(&tq->tq_maxalloc_cv,
 			    &tq->tq_lock, ddi_get_lbolt() + hz);
+#endif
 			tq->tq_maxalloc_wait--;
 			if (rv > 0)
 				goto again;		/* signaled */
@@ -185,6 +190,12 @@ taskq_wait(taskq_t *tq)
 	while (tq->tq_task.tqent_next != &tq->tq_task || tq->tq_active != 0)
 		cv_wait(&tq->tq_wait_cv, &tq->tq_lock);
 	mutex_exit(&tq->tq_lock);
+}
+
+void
+taskq_wait_id(taskq_t *tq, taskqid_t id)
+{
+        taskq_wait(tq);
 }
 
 static void *

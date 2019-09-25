@@ -58,15 +58,13 @@ const char *DW_INL_value_to_name(uint32_t val);
 
 const char *DW_ORD_value_to_name(uint32_t val);
 
-const char *DW_DSC_value_to_name(uint32_t val);
-
 const char *DW_LNS_value_to_name(uint32_t val);
 
 const char *DW_LNE_value_to_name(uint32_t val);
 
 const char *DW_MACINFO_value_to_name(uint32_t val);
 
-const char *DW_CFA_value_to_name(uint32_t val);
+const char *DW_CFA_value_to_name(uint32_t val, llvm::Triple::ArchType Arch);
 
 const char *DW_GNU_EH_PE_value_to_name(uint32_t val);
 

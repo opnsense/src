@@ -26,6 +26,7 @@
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/PredIteratorCache.h"
+#include "llvm/IR/ValueHandle.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <cassert>
@@ -36,13 +37,13 @@
 namespace llvm {
 
 class AssumptionCache;
-class CallSite;
 class DominatorTree;
 class Function;
 class Instruction;
 class LoadInst;
 class PHITransAddr;
 class TargetLibraryInfo;
+class PhiValues;
 class Value;
 
 /// A memory dependence query can return one of three different answers.
@@ -302,7 +303,7 @@ private:
     /// The maximum size of the dereferences of the pointer.
     ///
     /// May be UnknownSize if the sizes are unknown.
-    uint64_t Size = MemoryLocation::UnknownSize;
+    LocationSize Size = LocationSize::unknown();
     /// The AA tags associated with dereferences of the pointer.
     ///
     /// The members may be null if there are no tags or conflicting tags.
@@ -314,7 +315,10 @@ private:
   /// Cache storing single nonlocal def for the instruction.
   /// It is set when nonlocal def would be found in function returning only
   /// local dependencies.
-  DenseMap<Instruction *, NonLocalDepResult> NonLocalDefsCache;
+  DenseMap<AssertingVH<const Value>, NonLocalDepResult> NonLocalDefsCache;
+  using ReverseNonLocalDefsCacheTy =
+    DenseMap<Instruction *, SmallPtrSet<const Value*, 4>>;
+  ReverseNonLocalDefsCacheTy ReverseNonLocalDefsCache;
 
   /// This map stores the cached results of doing a pointer lookup at the
   /// bottom of a block.
@@ -356,13 +360,14 @@ private:
   AssumptionCache &AC;
   const TargetLibraryInfo &TLI;
   DominatorTree &DT;
+  PhiValues &PV;
   PredIteratorCache PredCache;
 
 public:
   MemoryDependenceResults(AliasAnalysis &AA, AssumptionCache &AC,
                           const TargetLibraryInfo &TLI,
-                          DominatorTree &DT)
-      : AA(AA), AC(AC), TLI(TLI), DT(DT) {}
+                          DominatorTree &DT, PhiValues &PV)
+      : AA(AA), AC(AC), TLI(TLI), DT(DT), PV(PV) {}
 
   /// Handle invalidation in the new PM.
   bool invalidate(Function &F, const PreservedAnalyses &PA,
@@ -392,7 +397,7 @@ public:
   /// invalidated on the next non-local query or when an instruction is
   /// removed.  Clients must copy this data if they want it around longer than
   /// that.
-  const NonLocalDepInfo &getNonLocalCallDependency(CallSite QueryCS);
+  const NonLocalDepInfo &getNonLocalCallDependency(CallBase *QueryCall);
 
   /// Perform a full dependency query for an access to the QueryInst's
   /// specified memory location, returning the set of instructions that either
@@ -476,9 +481,9 @@ public:
   void releaseMemory();
 
 private:
-  MemDepResult getCallSiteDependencyFrom(CallSite C, bool isReadOnlyCall,
-                                         BasicBlock::iterator ScanIt,
-                                         BasicBlock *BB);
+  MemDepResult getCallDependencyFrom(CallBase *Call, bool isReadOnlyCall,
+                                     BasicBlock::iterator ScanIt,
+                                     BasicBlock *BB);
   bool getNonLocalPointerDepFromBB(Instruction *QueryInst,
                                    const PHITransAddr &Pointer,
                                    const MemoryLocation &Loc, bool isLoad,

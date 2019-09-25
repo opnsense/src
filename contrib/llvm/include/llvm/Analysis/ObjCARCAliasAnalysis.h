@@ -29,7 +29,7 @@
 namespace llvm {
 namespace objcarc {
 
-/// \brief This is a simple alias analysis implementation that uses knowledge
+/// This is a simple alias analysis implementation that uses knowledge
 /// of ARC constructs to answer queries.
 ///
 /// TODO: This class could be generalized to know about other ObjC-specific
@@ -60,7 +60,7 @@ public:
   FunctionModRefBehavior getModRefBehavior(const Function *F);
 
   using AAResultBase::getModRefInfo;
-  ModRefInfo getModRefInfo(ImmutableCallSite CS, const MemoryLocation &Loc);
+  ModRefInfo getModRefInfo(const CallBase *Call, const MemoryLocation &Loc);
 };
 
 /// Analysis pass providing a never-invalidated alias analysis result.

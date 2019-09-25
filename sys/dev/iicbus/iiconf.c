@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1998 Nicolas Souchu
  * All rights reserved.
  *
@@ -126,6 +128,18 @@ iicbus_request_bus(device_t bus, device_t dev, int how)
 		++sc->owncount;
 		if (sc->owner == NULL) {
 			sc->owner = dev;
+			/*
+			 * Mark the device busy while it owns the bus, to
+			 * prevent detaching the device, bus, or hardware
+			 * controller, until ownership is relinquished.  If the
+			 * device is doing IO from its probe method before
+			 * attaching, it cannot be busied; mark the bus busy.
+			 */
+			if (device_get_state(dev) < DS_ATTACHING)
+				sc->busydev = bus;
+			else
+				sc->busydev = dev;
+			device_busy(sc->busydev);
 			/* 
 			 * Drop the lock around the call to the bus driver, it
 			 * should be allowed to sleep in the IIC_WAIT case.
@@ -142,6 +156,7 @@ iicbus_request_bus(device_t bus, device_t dev, int how)
 				sc->owner = NULL;
 				sc->owncount = 0;
 				wakeup_one(sc);
+				device_unbusy(sc->busydev);
 			}
 		}
 	}
@@ -175,6 +190,7 @@ iicbus_release_bus(device_t bus, device_t dev)
 		IICBUS_LOCK(sc);
 		sc->owner = NULL;
 		wakeup_one(sc);
+		device_unbusy(sc->busydev);
 	}
 	IICBUS_UNLOCK(sc);
 	return (0);
@@ -418,7 +434,7 @@ iicbus_transfer_gen(device_t dev, struct iic_msg *msgs, uint32_t nmsgs)
 {
 	int i, error, lenread, lenwrote, nkid, rpstart, addr;
 	device_t *children, bus;
-	bool nostop, started;
+	bool started;
 
 	if ((error = device_get_children(dev, &children, &nkid)) != 0)
 		return (IIC_ERESOURCE);
@@ -429,7 +445,6 @@ iicbus_transfer_gen(device_t dev, struct iic_msg *msgs, uint32_t nmsgs)
 	bus = children[0];
 	rpstart = 0;
 	free(children, M_TEMP);
-	nostop = iicbus_get_nostop(dev);
 	started = false;
 	for (i = 0, error = 0; i < nmsgs && error == 0; i++) {
 		addr = msgs[i].slave;
@@ -457,12 +472,11 @@ iicbus_transfer_gen(device_t dev, struct iic_msg *msgs, uint32_t nmsgs)
 		if (error != 0)
 			break;
 
-		if ((msgs[i].flags & IIC_M_NOSTOP) != 0 ||
-		    (nostop && i + 1 < nmsgs)) {
-			rpstart = 1;	/* Next message gets repeated start */
-		} else {
+		if (!(msgs[i].flags & IIC_M_NOSTOP)) {
 			rpstart = 0;
 			iicbus_stop(bus);
+		} else {
+			rpstart = 1;	/* Next message gets repeated start */
 		}
 	}
 	if (error != 0 && started)

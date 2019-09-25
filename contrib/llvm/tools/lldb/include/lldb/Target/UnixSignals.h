@@ -10,14 +10,10 @@
 #ifndef lldb_UnixSignals_h_
 #define lldb_UnixSignals_h_
 
-// C Includes
-// C++ Includes
 #include <map>
 #include <string>
 #include <vector>
 
-// Other libraries and framework includes
-// Project includes
 #include "lldb/Utility/ConstString.h"
 #include "lldb/lldb-private.h"
 #include "llvm/ADT/Optional.h"
@@ -63,8 +59,7 @@ public:
 
   // These provide an iterator through the signals available on this system.
   // Call GetFirstSignalNumber to get the first entry, then iterate on
-  // GetNextSignalNumber
-  // till you get back LLDB_INVALID_SIGNAL_NUMBER.
+  // GetNextSignalNumber till you get back LLDB_INVALID_SIGNAL_NUMBER.
   int32_t GetFirstSignalNumber() const;
 
   int32_t GetNextSignalNumber(int32_t current_signal) const;
@@ -76,13 +71,10 @@ public:
   ConstString GetShortName(ConstString name) const;
 
   // We assume that the elements of this object are constant once it is
-  // constructed,
-  // since a process should never need to add or remove symbols as it runs.  So
-  // don't
-  // call these functions anywhere but the constructor of your subclass of
-  // UnixSignals or in
-  // your Process Plugin's GetUnixSignals method before you return the
-  // UnixSignal object.
+  // constructed, since a process should never need to add or remove symbols as
+  // it runs.  So don't call these functions anywhere but the constructor of
+  // your subclass of UnixSignals or in your Process Plugin's GetUnixSignals
+  // method before you return the UnixSignal object.
 
   void AddSignal(int signo, const char *name, bool default_suppress,
                  bool default_stop, bool default_notify,
@@ -90,15 +82,14 @@ public:
 
   void RemoveSignal(int signo);
 
-  // Returns a current version of the data stored in this class.
-  // Version gets incremented each time Set... method is called.
+  // Returns a current version of the data stored in this class. Version gets
+  // incremented each time Set... method is called.
   uint64_t GetVersion() const;
 
-  // Returns a vector of signals that meet criteria provided in arguments.
-  // Each should_[suppress|stop|notify] flag can be
-  // None  - no filtering by this flag
-  // true  - only signals that have it set to true are returned
-  // false - only signals that have it set to true are returned
+  // Returns a vector of signals that meet criteria provided in arguments. Each
+  // should_[suppress|stop|notify] flag can be None  - no filtering by this
+  // flag true  - only signals that have it set to true are returned false -
+  // only signals that have it set to true are returned
   std::vector<int32_t> GetFilteredSignals(llvm::Optional<bool> should_suppress,
                                           llvm::Optional<bool> should_stop,
                                           llvm::Optional<bool> should_notify);
@@ -126,10 +117,10 @@ protected:
 
   collection m_signals;
 
-  // This version gets incremented every time something is changing in
-  // this class, including when we call AddSignal from the constructor.
-  // So after the object is constructed m_version is going to be > 0
-  // if it has at least one signal registered in it.
+  // This version gets incremented every time something is changing in this
+  // class, including when we call AddSignal from the constructor. So after the
+  // object is constructed m_version is going to be > 0 if it has at least one
+  // signal registered in it.
   uint64_t m_version = 0;
 
   // GDBRemote signals need to be copyable.

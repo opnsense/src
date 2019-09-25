@@ -14,8 +14,10 @@
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCDisassembler/MCDisassembler.h"
 #include "llvm/MC/MCInst.h"
+#include "llvm/Support/MSVCErrorWorkarounds.h"
 #include "llvm/Support/Path.h"
 #include <cctype>
+#include <future>
 #include <memory>
 #include <utility>
 
@@ -688,12 +690,13 @@ RuntimeDyldCheckerImpl::RuntimeDyldCheckerImpl(RuntimeDyld &RTDyld,
 
 bool RuntimeDyldCheckerImpl::check(StringRef CheckExpr) const {
   CheckExpr = CheckExpr.trim();
-  DEBUG(dbgs() << "RuntimeDyldChecker: Checking '" << CheckExpr << "'...\n");
+  LLVM_DEBUG(dbgs() << "RuntimeDyldChecker: Checking '" << CheckExpr
+                    << "'...\n");
   RuntimeDyldCheckerExprEval P(*this, ErrStream);
   bool Result = P.evaluate(CheckExpr);
   (void)Result;
-  DEBUG(dbgs() << "RuntimeDyldChecker: '" << CheckExpr << "' "
-               << (Result ? "passed" : "FAILED") << ".\n");
+  LLVM_DEBUG(dbgs() << "RuntimeDyldChecker: '" << CheckExpr << "' "
+                    << (Result ? "passed" : "FAILED") << ".\n");
   return Result;
 }
 
@@ -728,10 +731,37 @@ bool RuntimeDyldCheckerImpl::checkAllRulesInBuffer(StringRef RulePrefix,
   return DidAllTestsPass && (NumRules != 0);
 }
 
+Expected<JITSymbolResolver::LookupResult> RuntimeDyldCheckerImpl::lookup(
+    const JITSymbolResolver::LookupSet &Symbols) const {
+
+#ifdef _MSC_VER
+  using ExpectedLookupResult = MSVCPExpected<JITSymbolResolver::LookupResult>;
+#else
+  using ExpectedLookupResult = Expected<JITSymbolResolver::LookupResult>;
+#endif
+
+  auto ResultP = std::make_shared<std::promise<ExpectedLookupResult>>();
+  auto ResultF = ResultP->get_future();
+
+  getRTDyld().Resolver.lookup(
+      Symbols, [=](Expected<JITSymbolResolver::LookupResult> Result) {
+        ResultP->set_value(std::move(Result));
+      });
+  return ResultF.get();
+}
+
 bool RuntimeDyldCheckerImpl::isSymbolValid(StringRef Symbol) const {
   if (getRTDyld().getSymbol(Symbol))
     return true;
-  return !!getRTDyld().Resolver.findSymbol(Symbol);
+  auto Result = lookup({Symbol});
+
+  if (!Result) {
+    logAllUnhandledErrors(Result.takeError(), errs(), "RTDyldChecker: ");
+    return false;
+  }
+
+  assert(Result->count(Symbol) && "Missing symbol result");
+  return true;
 }
 
 uint64_t RuntimeDyldCheckerImpl::getSymbolLocalAddr(StringRef Symbol) const {
@@ -742,7 +772,15 @@ uint64_t RuntimeDyldCheckerImpl::getSymbolLocalAddr(StringRef Symbol) const {
 uint64_t RuntimeDyldCheckerImpl::getSymbolRemoteAddr(StringRef Symbol) const {
   if (auto InternalSymbol = getRTDyld().getSymbol(Symbol))
     return InternalSymbol.getAddress();
-  return cantFail(getRTDyld().Resolver.findSymbol(Symbol).getAddress());
+
+  auto Result = lookup({Symbol});
+  if (!Result) {
+    logAllUnhandledErrors(Result.takeError(), errs(), "RTDyldChecker: ");
+    return 0;
+  }
+  auto I = Result->find(Symbol);
+  assert(I != Result->end() && "Missing symbol result");
+  return I->second.getAddress();
 }
 
 uint64_t RuntimeDyldCheckerImpl::readMemoryAtAddr(uint64_t SrcAddr,

@@ -9,15 +9,15 @@
 
 #include "lldb/Utility/JSON.h"
 
-#include "lldb/Utility/Stream.h" // for Stream
+#include "lldb/Utility/Stream.h"
 #include "lldb/Utility/StreamString.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/ErrorHandling.h"
 
-#include <inttypes.h> // for PRIu64, PRId64
+#include <inttypes.h>
 #include <limits.h>
-#include <stddef.h> // for size_t
-#include <utility>  // for pair
+#include <stddef.h>
+#include <utility>
 
 using namespace lldb_private;
 
@@ -449,8 +449,7 @@ int JSONParser::GetEscapedChar(bool &was_escaped) {
 
 JSONValue::SP JSONParser::ParseJSONObject() {
   // The "JSONParser::Token::ObjectStart" token should have already been
-  // consumed
-  // by the time this function is called
+  // consumed by the time this function is called
   std::unique_ptr<JSONObject> dict_up(new JSONObject());
 
   std::string value;
@@ -481,8 +480,7 @@ JSONValue::SP JSONParser::ParseJSONObject() {
 
 JSONValue::SP JSONParser::ParseJSONArray() {
   // The "JSONParser::Token::ObjectStart" token should have already been
-  // consumed
-  // by the time this function is called
+  // consumed by the time this function is called
   std::unique_ptr<JSONArray> array_up(new JSONArray());
 
   std::string value;

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2004 Marcel Moolenaar
  * All rights reserved.
  *
@@ -60,7 +62,7 @@ struct kdb_dbbe {
 	DATA_SET(kdb_dbbe_set, name##_dbbe)
 
 extern u_char kdb_active;		/* Non-zero while in debugger. */
-extern int debugger_on_panic;		/* enter the debugger on panic. */
+extern int debugger_on_trap;		/* enter the debugger on trap. */
 extern struct kdb_dbbe *kdb_dbbe;	/* Default debugger backend or NULL. */
 extern struct trapframe *kdb_frame;	/* Frame to kdb_trap(). */
 extern struct pcb *kdb_thrctx;		/* Current context. */
@@ -78,6 +80,7 @@ void *	kdb_jmpbuf(jmp_buf);
 void	kdb_panic(const char *);
 void	kdb_reboot(void);
 void	kdb_reenter(void);
+void	kdb_reenter_silent(void);
 struct pcb *kdb_thr_ctx(struct thread *);
 struct thread *kdb_thr_first(void);
 struct thread *kdb_thr_from_pid(pid_t);

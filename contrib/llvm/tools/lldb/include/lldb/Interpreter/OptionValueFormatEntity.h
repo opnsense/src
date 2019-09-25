@@ -10,10 +10,6 @@
 #ifndef liblldb_OptionValueFormatEntity_h_
 #define liblldb_OptionValueFormatEntity_h_
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
 #include "lldb/Core/FormatEntity.h"
 #include "lldb/Interpreter/OptionValue.h"
 
@@ -45,9 +41,8 @@ public:
 
   lldb::OptionValueSP DeepCopy() const override;
 
-  size_t AutoComplete(CommandInterpreter &interpreter, llvm::StringRef s,
-                      int match_start_point, int max_return_elements,
-                      bool &word_complete, StringList &matches) override;
+  size_t AutoComplete(CommandInterpreter &interpreter,
+                      CompletionRequest &request) override;
 
   //---------------------------------------------------------------------
   // Subclass specific functions

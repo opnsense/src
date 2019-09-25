@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2005 Marius Strobl <marius@FreeBSD.org>
  * All rights reserved.
  *
@@ -63,9 +65,11 @@ struct intr_map_data_fdt {
 };
 #endif
 
-#define SIMPLEBUS_PNP_DESCR "Z:compat;P:private;"
-#define SIMPLEBUS_PNP_INFO(t) \
-	MODULE_PNP_INFO(SIMPLEBUS_PNP_DESCR, simplebus, t, t, sizeof(t[0]), sizeof(t) / sizeof(t[0]));
+#define FDTCOMPAT_PNP_DESCR "Z:compat;P:#;"
+#define FDTCOMPAT_PNP_INFO(t, busname) \
+	MODULE_PNP_INFO(FDTCOMPAT_PNP_DESCR, busname, t, t, sizeof(t) / sizeof(t[0]));
+
+#define SIMPLEBUS_PNP_INFO(t) FDTCOMPAT_PNP_INFO(t, simplebus)
 
 /* Generic implementation of ofw_bus_if.m methods and helper routines */
 int	ofw_bus_gen_setup_devinfo(struct ofw_bus_devinfo *, phandle_t);
@@ -93,6 +97,8 @@ int ofw_bus_msimap(phandle_t, uint16_t, phandle_t *, uint32_t *);
 /* Routines for parsing device-tree data into resource lists. */
 int ofw_bus_reg_to_rl(device_t, phandle_t, pcell_t, pcell_t,
     struct resource_list *);
+int ofw_bus_assigned_addresses_to_rl(device_t, phandle_t, pcell_t, pcell_t,
+    struct resource_list *);
 int ofw_bus_intr_to_rl(device_t, phandle_t, struct resource_list *, int *);
 int ofw_bus_intr_by_rid(device_t, phandle_t, int, phandle_t *, int *,
     pcell_t **);
@@ -100,6 +106,7 @@ int ofw_bus_intr_by_rid(device_t, phandle_t, int, phandle_t *, int *,
 /* Helper to get device status property */
 const char *ofw_bus_get_status(device_t dev);
 int ofw_bus_status_okay(device_t dev);
+int ofw_bus_node_status_okay(phandle_t node);
 
 /* Helper to get node's interrupt parent */
 phandle_t ofw_bus_find_iparent(phandle_t);

@@ -38,6 +38,7 @@
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/Config/llvm-config.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -242,11 +243,11 @@ void SchedulePostRATDList::enterRegion(MachineBasicBlock *bb,
 
 /// Print the schedule before exiting the region.
 void SchedulePostRATDList::exitRegion() {
-  DEBUG({
-      dbgs() << "*** Final schedule ***\n";
-      dumpSchedule();
-      dbgs() << '\n';
-    });
+  LLVM_DEBUG({
+    dbgs() << "*** Final schedule ***\n";
+    dumpSchedule();
+    dbgs() << '\n';
+  });
   ScheduleDAGInstrs::exitRegion();
 }
 
@@ -255,7 +256,7 @@ void SchedulePostRATDList::exitRegion() {
 LLVM_DUMP_METHOD void SchedulePostRATDList::dumpSchedule() const {
   for (unsigned i = 0, e = Sequence.size(); i != e; i++) {
     if (SUnit *SU = Sequence[i])
-      SU->dump(this);
+      dumpNode(*SU);
     else
       dbgs() << "**** NOOP ****\n";
   }
@@ -308,7 +309,7 @@ bool PostRAScheduler::runOnMachineFunction(MachineFunction &Fn) {
          : TargetSubtargetInfo::ANTIDEP_NONE);
   }
 
-  DEBUG(dbgs() << "PostRAScheduler\n");
+  LLVM_DEBUG(dbgs() << "PostRAScheduler\n");
 
   SchedulePostRATDList Scheduler(Fn, MLI, AA, RegClassInfo, AntiDepMode,
                                  CriticalPathRCs);
@@ -412,13 +413,8 @@ void SchedulePostRATDList::schedule() {
 
   postprocessDAG();
 
-  DEBUG(dbgs() << "********** List Scheduling **********\n");
-  DEBUG(
-    for (const SUnit &SU : SUnits) {
-      SU.dumpAll(this);
-      dbgs() << '\n';
-    }
-  );
+  LLVM_DEBUG(dbgs() << "********** List Scheduling **********\n");
+  LLVM_DEBUG(dump());
 
   AvailableQueue.initNodes(SUnits);
   ListScheduleTopDown();
@@ -465,7 +461,7 @@ void SchedulePostRATDList::ReleaseSucc(SUnit *SU, SDep *SuccEdge) {
 #ifndef NDEBUG
   if (SuccSU->NumPredsLeft == 0) {
     dbgs() << "*** Scheduling failed! ***\n";
-    SuccSU->dump(this);
+    dumpNode(*SuccSU);
     dbgs() << " has been released too many times!\n";
     llvm_unreachable(nullptr);
   }
@@ -501,8 +497,8 @@ void SchedulePostRATDList::ReleaseSuccessors(SUnit *SU) {
 /// count of its successors. If a successor pending count is zero, add it to
 /// the Available queue.
 void SchedulePostRATDList::ScheduleNodeTopDown(SUnit *SU, unsigned CurCycle) {
-  DEBUG(dbgs() << "*** Scheduling [" << CurCycle << "]: ");
-  DEBUG(SU->dump(this));
+  LLVM_DEBUG(dbgs() << "*** Scheduling [" << CurCycle << "]: ");
+  LLVM_DEBUG(dumpNode(*SU));
 
   Sequence.push_back(SU);
   assert(CurCycle >= SU->getDepth() &&
@@ -516,7 +512,7 @@ void SchedulePostRATDList::ScheduleNodeTopDown(SUnit *SU, unsigned CurCycle) {
 
 /// emitNoop - Add a noop to the current instruction sequence.
 void SchedulePostRATDList::emitNoop(unsigned CurCycle) {
-  DEBUG(dbgs() << "*** Emitting noop in cycle " << CurCycle << '\n');
+  LLVM_DEBUG(dbgs() << "*** Emitting noop in cycle " << CurCycle << '\n');
   HazardRec->EmitNoop();
   Sequence.push_back(nullptr);   // NULL here means noop
   ++NumNoops;
@@ -568,7 +564,8 @@ void SchedulePostRATDList::ListScheduleTopDown() {
         MinDepth = PendingQueue[i]->getDepth();
     }
 
-    DEBUG(dbgs() << "\n*** Examining Available\n"; AvailableQueue.dump(this));
+    LLVM_DEBUG(dbgs() << "\n*** Examining Available\n";
+               AvailableQueue.dump(this));
 
     SUnit *FoundSUnit = nullptr, *NotPreferredSUnit = nullptr;
     bool HasNoopHazards = false;
@@ -604,7 +601,8 @@ void SchedulePostRATDList::ListScheduleTopDown() {
     // non-preferred node.
     if (NotPreferredSUnit) {
       if (!FoundSUnit) {
-        DEBUG(dbgs() << "*** Will schedule a non-preferred instruction...\n");
+        LLVM_DEBUG(
+            dbgs() << "*** Will schedule a non-preferred instruction...\n");
         FoundSUnit = NotPreferredSUnit;
       } else {
         AvailableQueue.push(NotPreferredSUnit);
@@ -631,19 +629,20 @@ void SchedulePostRATDList::ListScheduleTopDown() {
       HazardRec->EmitInstruction(FoundSUnit);
       CycleHasInsts = true;
       if (HazardRec->atIssueLimit()) {
-        DEBUG(dbgs() << "*** Max instructions per cycle " << CurCycle << '\n');
+        LLVM_DEBUG(dbgs() << "*** Max instructions per cycle " << CurCycle
+                          << '\n');
         HazardRec->AdvanceCycle();
         ++CurCycle;
         CycleHasInsts = false;
       }
     } else {
       if (CycleHasInsts) {
-        DEBUG(dbgs() << "*** Finished cycle " << CurCycle << '\n');
+        LLVM_DEBUG(dbgs() << "*** Finished cycle " << CurCycle << '\n');
         HazardRec->AdvanceCycle();
       } else if (!HasNoopHazards) {
         // Otherwise, we have a pipeline stall, but no other problem,
         // just advance the current cycle and try again.
-        DEBUG(dbgs() << "*** Stall in cycle " << CurCycle << '\n');
+        LLVM_DEBUG(dbgs() << "*** Stall in cycle " << CurCycle << '\n');
         HazardRec->AdvanceCycle();
         ++NumStalls;
       } else {

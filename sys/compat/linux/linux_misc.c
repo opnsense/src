@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2002 Doug Rabson
  * Copyright (c) 1994-1995 Søren Schmidt
  * All rights reserved.
@@ -49,6 +51,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/namei.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
+#include <sys/procctl.h>
 #include <sys/reboot.h>
 #include <sys/racct.h>
 #include <sys/random.h>
@@ -114,7 +117,7 @@ int stclohz;				/* Statistics clock frequency */
 static unsigned int linux_to_bsd_resource[LINUX_RLIM_NLIMITS] = {
 	RLIMIT_CPU, RLIMIT_FSIZE, RLIMIT_DATA, RLIMIT_STACK,
 	RLIMIT_CORE, RLIMIT_RSS, RLIMIT_NPROC, RLIMIT_NOFILE,
-	RLIMIT_MEMLOCK, RLIMIT_AS 
+	RLIMIT_MEMLOCK, RLIMIT_AS
 };
 
 struct l_sysinfo {
@@ -163,7 +166,7 @@ linux_sysinfo(struct thread *td, struct linux_sysinfo_args *args)
 		    LINUX_SYSINFO_LOADS_SCALE / averunnable.fscale;
 
 	sysinfo.totalram = physmem * PAGE_SIZE;
-	sysinfo.freeram = sysinfo.totalram - vm_cnt.v_wire_count * PAGE_SIZE;
+	sysinfo.freeram = sysinfo.totalram - vm_wire_count() * PAGE_SIZE;
 
 	sysinfo.sharedram = 0;
 	mtx_lock(&vm_object_list_mtx);
@@ -189,6 +192,7 @@ linux_sysinfo(struct thread *td, struct linux_sysinfo_args *args)
 	return (copyout(&sysinfo, args->info, sizeof(sysinfo)));
 }
 
+#ifdef LINUX_LEGACY_SYSCALLS
 int
 linux_alarm(struct thread *td, struct linux_alarm_args *args)
 {
@@ -223,27 +227,24 @@ linux_alarm(struct thread *td, struct linux_alarm_args *args)
 	td->td_retval[0] = old_it.it_value.tv_sec;
 	return (0);
 }
+#endif
 
 int
 linux_brk(struct thread *td, struct linux_brk_args *args)
 {
 	struct vmspace *vm = td->td_proc->p_vmspace;
-	vm_offset_t new, old;
-	struct obreak_args /* {
-		char * nsize;
-	} */ tmp;
+	uintptr_t new, old;
 
 #ifdef DEBUG
 	if (ldebug(brk))
 		printf(ARGS(brk, "%p"), (void *)(uintptr_t)args->dsend);
 #endif
-	old = (vm_offset_t)vm->vm_daddr + ctob(vm->vm_dsize);
-	new = (vm_offset_t)args->dsend;
-	tmp.nsize = (char *)new;
-	if (((caddr_t)new > vm->vm_daddr) && !sys_obreak(td, &tmp))
-		td->td_retval[0] = (long)new;
+	old = (uintptr_t)vm->vm_daddr + ctob(vm->vm_dsize);
+	new = (uintptr_t)args->dsend;
+	if ((caddr_t)new > vm->vm_daddr && !kern_break(td, &new))
+		td->td_retval[0] = (register_t)new;
 	else
-		td->td_retval[0] = (long)old;
+		td->td_retval[0] = (register_t)old;
 
 	return (0);
 }
@@ -257,13 +258,16 @@ linux_uselib(struct thread *td, struct linux_uselib_args *args)
 	struct nameidata ni;
 	struct vnode *vp;
 	struct exec *a_out;
+	vm_map_t map;
+	vm_map_entry_t entry;
 	struct vattr attr;
 	vm_offset_t vmaddr;
 	unsigned long file_offset;
 	unsigned long bss_size;
 	char *library;
 	ssize_t aresid;
-	int error, locked, writecount;
+	int error;
+	bool locked, opened, textset;
 
 	LCONVPATHEXIST(td, args->library, &library);
 
@@ -273,8 +277,10 @@ linux_uselib(struct thread *td, struct linux_uselib_args *args)
 #endif
 
 	a_out = NULL;
-	locked = 0;
 	vp = NULL;
+	locked = false;
+	textset = false;
+	opened = false;
 
 	NDINIT(&ni, LOOKUP, ISOPEN | FOLLOW | LOCKLEAF | AUDITVNODE1,
 	    UIO_SYSSPACE, library, td);
@@ -290,16 +296,7 @@ linux_uselib(struct thread *td, struct linux_uselib_args *args)
 	 * From here on down, we have a locked vnode that must be unlocked.
 	 * XXX: The code below largely duplicates exec_check_permissions().
 	 */
-	locked = 1;
-
-	/* Writable? */
-	error = VOP_GET_WRITECOUNT(vp, &writecount);
-	if (error != 0)
-		goto cleanup;
-	if (writecount != 0) {
-		error = ETXTBSY;
-		goto cleanup;
-	}
+	locked = true;
 
 	/* Executable? */
 	error = VOP_GETATTR(vp, &attr, td->td_ucred);
@@ -338,6 +335,7 @@ linux_uselib(struct thread *td, struct linux_uselib_args *args)
 	error = VOP_OPEN(vp, FREAD, td->td_ucred, td, NULL);
 	if (error)
 		goto cleanup;
+	opened = true;
 
 	/* Pull in executable header into exec_map */
 	error = vm_mmap(exec_map, (vm_offset_t *)&a_out, PAGE_SIZE,
@@ -400,15 +398,16 @@ linux_uselib(struct thread *td, struct linux_uselib_args *args)
 
 	/*
 	 * Prevent more writers.
-	 * XXX: Note that if any of the VM operations fail below we don't
-	 * clear this flag.
 	 */
-	VOP_SET_TEXT(vp);
+	error = VOP_SET_TEXT(vp);
+	if (error != 0)
+		goto cleanup;
+	textset = true;
 
 	/*
 	 * Lock no longer needed
 	 */
-	locked = 0;
+	locked = false;
 	VOP_UNLOCK(vp, 0);
 
 	/*
@@ -455,11 +454,21 @@ linux_uselib(struct thread *td, struct linux_uselib_args *args)
 		 * Map it all into the process's space as a single
 		 * copy-on-write "data" segment.
 		 */
-		error = vm_mmap(&td->td_proc->p_vmspace->vm_map, &vmaddr,
+		map = &td->td_proc->p_vmspace->vm_map;
+		error = vm_mmap(map, &vmaddr,
 		    a_out->a_text + a_out->a_data, VM_PROT_ALL, VM_PROT_ALL,
 		    MAP_PRIVATE | MAP_FIXED, OBJT_VNODE, vp, file_offset);
 		if (error)
 			goto cleanup;
+		vm_map_lock(map);
+		if (!vm_map_lookup_entry(map, vmaddr, &entry)) {
+			vm_map_unlock(map);
+			error = EDOOFUS;
+			goto cleanup;
+		}
+		entry->eflags |= MAP_ENTRY_VN_EXEC;
+		vm_map_unlock(map);
+		textset = false;
 	}
 #ifdef DEBUG
 	printf("mem=%08lx = %08lx %08lx\n", (long)vmaddr, ((long *)vmaddr)[0],
@@ -479,7 +488,19 @@ linux_uselib(struct thread *td, struct linux_uselib_args *args)
 	}
 
 cleanup:
-	/* Unlock vnode if needed */
+	if (opened) {
+		if (locked)
+			VOP_UNLOCK(vp, 0);
+		locked = false;
+		VOP_CLOSE(vp, FREAD, td->td_ucred, td);
+	}
+	if (textset) {
+		if (!locked) {
+			locked = true;
+			VOP_LOCK(vp, LK_SHARED | LK_RETRY);
+		}
+		VOP_UNSET_TEXT_CHECKED(vp);
+	}
 	if (locked)
 		VOP_UNLOCK(vp, 0);
 
@@ -492,6 +513,7 @@ cleanup:
 
 #endif	/* __i386__ */
 
+#ifdef LINUX_LEGACY_SYSCALLS
 int
 linux_select(struct thread *td, struct linux_select_args *args)
 {
@@ -583,6 +605,7 @@ select_out:
 #endif
 	return (error);
 }
+#endif
 
 int
 linux_mremap(struct thread *td, struct linux_mremap_args *args)
@@ -644,6 +667,7 @@ linux_msync(struct thread *td, struct linux_msync_args *args)
 	    args->fl & ~LINUX_MS_SYNC));
 }
 
+#ifdef LINUX_LEGACY_SYSCALLS
 int
 linux_time(struct thread *td, struct linux_time_args *args)
 {
@@ -663,6 +687,7 @@ linux_time(struct thread *td, struct linux_time_args *args)
 	td->td_retval[0] = tm;
 	return (0);
 }
+#endif
 
 struct l_times_argv {
 	l_clock_t	tms_utime;
@@ -759,6 +784,7 @@ struct l_utimbuf {
 	l_time_t l_modtime;
 };
 
+#ifdef LINUX_LEGACY_SYSCALLS
 int
 linux_utime(struct thread *td, struct linux_utime_args *args)
 {
@@ -792,7 +818,9 @@ linux_utime(struct thread *td, struct linux_utime_args *args)
 	LFREEPATH(fname);
 	return (error);
 }
+#endif
 
+#ifdef LINUX_LEGACY_SYSCALLS
 int
 linux_utimes(struct thread *td, struct linux_utimes_args *args)
 {
@@ -825,6 +853,7 @@ linux_utimes(struct thread *td, struct linux_utimes_args *args)
 	LFREEPATH(fname);
 	return (error);
 }
+#endif
 
 static int
 linux_utimensat_nsec_valid(l_long nsec)
@@ -837,7 +866,7 @@ linux_utimensat_nsec_valid(l_long nsec)
 	return (1);
 }
 
-int 
+int
 linux_utimensat(struct thread *td, struct linux_utimensat_args *args)
 {
 	struct l_timespec l_times[2];
@@ -912,13 +941,14 @@ linux_utimensat(struct thread *td, struct linux_utimensat_args *args)
 		error = kern_futimens(td, dfd, timesp, UIO_SYSSPACE);
 	else {
 		error = kern_utimensat(td, dfd, path, UIO_SYSSPACE, timesp,
-	    		UIO_SYSSPACE, flags);
+			UIO_SYSSPACE, flags);
 		LFREEPATH(path);
 	}
 
 	return (error);
 }
 
+#ifdef LINUX_LEGACY_SYSCALLS
 int
 linux_futimesat(struct thread *td, struct linux_futimesat_args *args)
 {
@@ -951,6 +981,7 @@ linux_futimesat(struct thread *td, struct linux_futimesat_args *args)
 	LFREEPATH(fname);
 	return (error);
 }
+#endif
 
 int
 linux_common_wait(struct thread *td, int pid, int *status,
@@ -1079,9 +1110,8 @@ linux_waitid(struct thread *td, struct linux_waitid_args *args)
 	}
 	if (args->info != NULL) {
 		p = td->td_proc;
-		if (td->td_retval[0] == 0)
-			bzero(&lsi, sizeof(lsi));
-		else {
+		bzero(&lsi, sizeof(lsi));
+		if (td->td_retval[0] != 0) {
 			sig = bsd_to_linux_signal(siginfo.si_signo);
 			siginfo_to_lsiginfo(&siginfo, &lsi, sig);
 		}
@@ -1092,6 +1122,7 @@ linux_waitid(struct thread *td, struct linux_waitid_args *args)
 	return (error);
 }
 
+#ifdef LINUX_LEGACY_SYSCALLS
 int
 linux_mknod(struct thread *td, struct linux_mknod_args *args)
 {
@@ -1140,6 +1171,7 @@ linux_mknod(struct thread *td, struct linux_mknod_args *args)
 	LFREEPATH(path);
 	return (error);
 }
+#endif
 
 int
 linux_mknodat(struct thread *td, struct linux_mknodat_args *args)
@@ -1220,7 +1252,7 @@ struct l_itimerval {
 	l_timeval it_value;
 };
 
-#define	B2L_ITIMERVAL(bip, lip) 					\
+#define	B2L_ITIMERVAL(bip, lip)						\
 	(bip)->it_interval.tv_sec = (lip)->it_interval.tv_sec;		\
 	(bip)->it_interval.tv_usec = (lip)->it_interval.tv_usec;	\
 	(bip)->it_value.tv_sec = (lip)->it_value.tv_sec;		\
@@ -1676,17 +1708,6 @@ linux_reboot(struct thread *td, struct linux_reboot_args *args)
 }
 
 
-/*
- * The FreeBSD native getpid(2), getgid(2) and getuid(2) also modify
- * td->td_retval[1] when COMPAT_43 is defined. This clobbers registers that
- * are assumed to be preserved. The following lightweight syscalls fixes
- * this. See also linux_getgid16() and linux_getuid16() in linux_uid16.c
- *
- * linux_getpid() - MP SAFE
- * linux_getgid() - MP SAFE
- * linux_getuid() - MP SAFE
- */
-
 int
 linux_getpid(struct thread *td, struct linux_getpid_args *args)
 {
@@ -1851,7 +1872,9 @@ linux_exit_group(struct thread *td, struct linux_exit_group_args *args)
 		/* NOTREACHED */
 }
 
-#define _LINUX_CAPABILITY_VERSION  0x19980330
+#define _LINUX_CAPABILITY_VERSION_1  0x19980330
+#define _LINUX_CAPABILITY_VERSION_2  0x20071026
+#define _LINUX_CAPABILITY_VERSION_3  0x20080522
 
 struct l_user_cap_header {
 	l_int	version;
@@ -1865,22 +1888,35 @@ struct l_user_cap_data {
 };
 
 int
-linux_capget(struct thread *td, struct linux_capget_args *args)
+linux_capget(struct thread *td, struct linux_capget_args *uap)
 {
 	struct l_user_cap_header luch;
-	struct l_user_cap_data lucd;
-	int error;
+	struct l_user_cap_data lucd[2];
+	int error, u32s;
 
-	if (args->hdrp == NULL)
+	if (uap->hdrp == NULL)
 		return (EFAULT);
 
-	error = copyin(args->hdrp, &luch, sizeof(luch));
+	error = copyin(uap->hdrp, &luch, sizeof(luch));
 	if (error != 0)
 		return (error);
 
-	if (luch.version != _LINUX_CAPABILITY_VERSION) {
-		luch.version = _LINUX_CAPABILITY_VERSION;
-		error = copyout(&luch, args->hdrp, sizeof(luch));
+	switch (luch.version) {
+	case _LINUX_CAPABILITY_VERSION_1:
+		u32s = 1;
+		break;
+	case _LINUX_CAPABILITY_VERSION_2:
+	case _LINUX_CAPABILITY_VERSION_3:
+		u32s = 2;
+		break;
+	default:
+#ifdef DEBUG
+		if (ldebug(capget))
+			printf(LMSG("invalid capget capability version 0x%x"),
+			    luch.version);
+#endif
+		luch.version = _LINUX_CAPABILITY_VERSION_1;
+		error = copyout(&luch, uap->hdrp, sizeof(luch));
 		if (error)
 			return (error);
 		return (EINVAL);
@@ -1889,37 +1925,50 @@ linux_capget(struct thread *td, struct linux_capget_args *args)
 	if (luch.pid)
 		return (EPERM);
 
-	if (args->datap) {
+	if (uap->datap) {
 		/*
 		 * The current implementation doesn't support setting
 		 * a capability (it's essentially a stub) so indicate
 		 * that no capabilities are currently set or available
 		 * to request.
 		 */
-		bzero (&lucd, sizeof(lucd));
-		error = copyout(&lucd, args->datap, sizeof(lucd));
+		memset(&lucd, 0, u32s * sizeof(lucd[0]));
+		error = copyout(&lucd, uap->datap, u32s * sizeof(lucd[0]));
 	}
 
 	return (error);
 }
 
 int
-linux_capset(struct thread *td, struct linux_capset_args *args)
+linux_capset(struct thread *td, struct linux_capset_args *uap)
 {
 	struct l_user_cap_header luch;
-	struct l_user_cap_data lucd;
-	int error;
+	struct l_user_cap_data lucd[2];
+	int error, i, u32s;
 
-	if (args->hdrp == NULL || args->datap == NULL)
+	if (uap->hdrp == NULL || uap->datap == NULL)
 		return (EFAULT);
 
-	error = copyin(args->hdrp, &luch, sizeof(luch));
+	error = copyin(uap->hdrp, &luch, sizeof(luch));
 	if (error != 0)
 		return (error);
 
-	if (luch.version != _LINUX_CAPABILITY_VERSION) {
-		luch.version = _LINUX_CAPABILITY_VERSION;
-		error = copyout(&luch, args->hdrp, sizeof(luch));
+	switch (luch.version) {
+	case _LINUX_CAPABILITY_VERSION_1:
+		u32s = 1;
+		break;
+	case _LINUX_CAPABILITY_VERSION_2:
+	case _LINUX_CAPABILITY_VERSION_3:
+		u32s = 2;
+		break;
+	default:
+#ifdef DEBUG
+		if (ldebug(capset))
+			printf(LMSG("invalid capset capability version 0x%x"),
+			    luch.version);
+#endif
+		luch.version = _LINUX_CAPABILITY_VERSION_1;
+		error = copyout(&luch, uap->hdrp, sizeof(luch));
 		if (error)
 			return (error);
 		return (EINVAL);
@@ -1928,18 +1977,21 @@ linux_capset(struct thread *td, struct linux_capset_args *args)
 	if (luch.pid)
 		return (EPERM);
 
-	error = copyin(args->datap, &lucd, sizeof(lucd));
+	error = copyin(uap->datap, &lucd, u32s * sizeof(lucd[0]));
 	if (error != 0)
 		return (error);
 
 	/* We currently don't support setting any capabilities. */
-	if (lucd.effective || lucd.permitted || lucd.inheritable) {
-		linux_msg(td,
-			  "capset effective=0x%x, permitted=0x%x, "
-			  "inheritable=0x%x is not implemented",
-			  (int)lucd.effective, (int)lucd.permitted,
-			  (int)lucd.inheritable);
-		return (EPERM);
+	for (i = 0; i < u32s; i++) {
+		if (lucd[i].effective || lucd[i].permitted ||
+		    lucd[i].inheritable) {
+			linux_msg(td,
+			    "capset[%d] effective=0x%x, permitted=0x%x, "
+			    "inheritable=0x%x is not implemented", i,
+			    (int)lucd[i].effective, (int)lucd[i].permitted,
+			    (int)lucd[i].inheritable);
+			return (EPERM);
+		}
 	}
 
 	return (0);
@@ -1951,7 +2003,6 @@ linux_prctl(struct thread *td, struct linux_prctl_args *args)
 	int error = 0, max_size;
 	struct proc *p = td->td_proc;
 	char comm[LINUX_MAX_COMM_LEN];
-	struct linux_emuldata *em;
 	int pdeath_signal;
 
 #ifdef DEBUG
@@ -1965,17 +2016,18 @@ linux_prctl(struct thread *td, struct linux_prctl_args *args)
 	case LINUX_PR_SET_PDEATHSIG:
 		if (!LINUX_SIG_VALID(args->arg2))
 			return (EINVAL);
-		em = em_find(td);
-		KASSERT(em != NULL, ("prctl: emuldata not found.\n"));
-		em->pdeath_signal = args->arg2;
-		break;
+		pdeath_signal = linux_to_bsd_signal(args->arg2);
+		return (kern_procctl(td, P_PID, 0, PROC_PDEATHSIG_CTL,
+		    &pdeath_signal));
 	case LINUX_PR_GET_PDEATHSIG:
-		em = em_find(td);
-		KASSERT(em != NULL, ("prctl: emuldata not found.\n"));
-		pdeath_signal = em->pdeath_signal;
-		error = copyout(&pdeath_signal,
+		error = kern_procctl(td, P_PID, 0, PROC_PDEATHSIG_STATUS,
+		    &pdeath_signal);
+		if (error != 0)
+			return (error);
+		pdeath_signal = bsd_to_linux_signal(pdeath_signal);
+		return (copyout(&pdeath_signal,
 		    (void *)(register_t)args->arg2,
-		    sizeof(pdeath_signal));
+		    sizeof(pdeath_signal)));
 		break;
 	case LINUX_PR_GET_KEEPCAPS:
 		/*
@@ -1995,7 +2047,7 @@ linux_prctl(struct thread *td, struct linux_prctl_args *args)
 	case LINUX_PR_SET_NAME:
 		/*
 		 * To be on the safe side we need to make sure to not
-		 * overflow the size a linux program expects. We already
+		 * overflow the size a Linux program expects. We already
 		 * do this here in the copyin, so that we don't need to
 		 * check on copyout.
 		 */
@@ -2339,8 +2391,8 @@ linux_ppoll(struct thread *td, struct linux_ppoll_args *args)
 	if (error == 0 && args->tsp != NULL) {
 		if (td->td_retval[0]) {
 			nanotime(&ts1);
-			timespecsub(&ts1, &ts0);
-			timespecsub(&uts, &ts1);
+			timespecsub(&ts1, &ts0, &ts1);
+			timespecsub(&uts, &ts1, &uts);
 			if (uts.tv_sec < 0)
 				timespecclear(&uts);
 		} else

@@ -38,7 +38,7 @@ __FBSDID("$FreeBSD$");
 #include "libuserboot.h"
 
 #if defined(USERBOOT_ZFS_SUPPORT)
-#include "../zfs/libzfs.h"
+#include "libzfs.h"
 
 static void userboot_zfs_probe(void);
 static int userboot_zfs_found;
@@ -47,17 +47,20 @@ static int userboot_zfs_found;
 /* Minimum version required */
 #define	USERBOOT_VERSION	USERBOOT_VERSION_3
 
+#define	LOADER_PATH		"/boot/loader"
+#define	INTERP_MARKER		"$Interpreter:"
+
 #define	MALLOCSZ		(64*1024*1024)
 
 struct loader_callbacks *callbacks;
 void *callbacks_arg;
 
-extern char bootprog_info[];
 static jmp_buf jb;
 
 struct arch_switch archsw;	/* MI/MD interface boundary */
 
 static void	extract_currdev(void);
+static void	check_interpreter(void);
 
 void
 delay(int usec)
@@ -72,6 +75,62 @@ exit(int v)
 
 	CALLBACK(exit, v);
 	longjmp(jb, 1);
+}
+
+static void
+check_interpreter(void)
+{
+	struct stat st;
+	size_t marklen, rdsize;
+	const char *guest_interp, *my_interp;
+	char *buf;
+	int fd;
+
+	/*
+	 * If we can't stat(2) or open(2) LOADER_PATH, then we'll fail by
+	 * simply letting us roll on with whatever interpreter we were compiled
+	 * with.  This is likely not going to be an issue in reality.
+	 */
+	buf =  NULL;
+	if (stat(LOADER_PATH, &st) != 0)
+		return;
+	if ((fd = open(LOADER_PATH, O_RDONLY)) < 0)
+		return;
+
+	rdsize = st.st_size;
+	buf = malloc(rdsize);
+	if (buf == NULL)
+		goto out;
+	if (read(fd, buf, rdsize) < rdsize)
+		goto out;
+
+	marklen = strlen(INTERP_MARKER);
+	my_interp = bootprog_interp + marklen;
+
+	/*
+	 * Here we make the assumption that a loader binary without the
+	 * interpreter marker is a 4th one.  All loader binaries going forward
+	 * should have this properly specified, so our assumption should always
+	 * be a good one.
+	 */
+	if ((guest_interp = memmem(buf, rdsize, INTERP_MARKER,
+	    marklen)) != NULL)
+		guest_interp += marklen;
+	else
+		guest_interp = "4th";
+
+	/*
+	 * The guest interpreter may not have a version of loader that
+	 * specifies the interpreter installed.  If that's the case, we'll
+	 * assume it's legacy (4th) and request a swap to that if we're
+	 * a Lua-userboot.
+	 */
+	if (strcmp(my_interp, guest_interp) != 0)
+		CALLBACK(swap_interpreter, guest_interp);
+out:
+	free(buf);
+	close(fd);
+	return;
 }
 
 void
@@ -139,6 +198,14 @@ loader_main(struct loader_callbacks *cb, void *arg, int version, int ndisks)
 
 	extract_currdev();
 
+	/*
+	 * Checking the interpreter isn't worth the overhead unless we
+	 * actually have the swap_interpreter callback, so we actually version
+	 * check here rather than later on.
+	 */
+	if (version >= USERBOOT_VERSION_5)
+		check_interpreter();
+
 	if (setjmp(jb))
 		return;
 
@@ -155,20 +222,18 @@ static void
 extract_currdev(void)
 {
 	struct disk_devdesc dev;
-
-	//bzero(&dev, sizeof(dev));
-
+	struct devdesc *dd;
 #if defined(USERBOOT_ZFS_SUPPORT)
-	CTASSERT(sizeof(struct disk_devdesc) >= sizeof(struct zfs_devdesc));
+	struct zfs_devdesc zdev;
+
 	if (userboot_zfs_found) {
-		struct zfs_devdesc zdev;
 	
 		/* Leave the pool/root guid's unassigned */
 		bzero(&zdev, sizeof(zdev));
 		zdev.dd.d_dev = &zfs_dev;
 		
-		dev = *(struct disk_devdesc *)&zdev;
-		init_zfs_bootenv(zfs_fmtdev(&dev));
+		init_zfs_bootenv(zfs_fmtdev(&zdev));
+		dd = &zdev.dd;
 	} else
 #endif
 
@@ -185,14 +250,16 @@ extract_currdev(void)
 			dev.d_slice = -1;
 			dev.d_partition = -1;
 		}
+		dd = &dev.dd;
 	} else {
 		dev.dd.d_dev = &host_dev;
 		dev.dd.d_unit = 0;
+		dd = &dev.dd;
 	}
 
-	env_setenv("currdev", EV_VOLATILE, userboot_fmtdev(&dev),
+	env_setenv("currdev", EV_VOLATILE, userboot_fmtdev(dd),
 	    userboot_setcurrdev, env_nounset);
-	env_setenv("loaddev", EV_VOLATILE, userboot_fmtdev(&dev),
+	env_setenv("loaddev", EV_VOLATILE, userboot_fmtdev(dd),
 	    env_noset, env_nounset);
 }
 

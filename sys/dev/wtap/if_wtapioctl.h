@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2010-2011 Monthadar Al Jaberi, TerraNet AB
  * All rights reserved.
  *
@@ -157,7 +159,7 @@ struct wtap_rx_radiotap_header {
 	u_int8_t	wr_chan_ieee;
 	int8_t		wr_chan_maxpow;
 #endif
-} __packed;
+} __packed __aligned(8);
 
 #define WTAP_TX_RADIOTAP_PRESENT (		\
 	0)
@@ -165,7 +167,6 @@ struct wtap_rx_radiotap_header {
 struct wtap_tx_radiotap_header {
 	struct ieee80211_radiotap_header wt_ihdr;
 #if 0
-	u_int64_t	wt_tsf;
 	u_int8_t	wt_flags;
 	u_int8_t	wt_rate;
 	u_int8_t	wt_txpower;

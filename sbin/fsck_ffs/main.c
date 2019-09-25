@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1980, 1986, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -41,6 +43,7 @@ static char sccsid[] = "@(#)main.c	8.6 (Berkeley) 5/14/95";
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#define	IN_RTLD			/* So we pickup the P_OSREL defines */
 #include <sys/param.h>
 #include <sys/file.h>
 #include <sys/mount.h>
@@ -442,7 +445,46 @@ checkfilesys(char *filesys)
 		flush(fswritefd, &sblk);
 		fsmodified = ofsmodified;
 	}
-
+	/*
+	 * If the filesystem was run on an old kernel that did not
+	 * support check hashes, clear the check-hash flags so that
+	 * we do not try to verify them.
+	 */
+	if ((sblock.fs_flags & FS_METACKHASH) == 0)
+		sblock.fs_metackhash = 0;
+	/*
+	 * If we are running on a kernel that can provide check hashes
+	 * that are not yet enabled for the filesystem and we are
+	 * running manually without the -y flag, offer to add any
+	 * supported check hashes that are not already enabled.
+	 */
+	ckhashadd = 0;
+	if (preen == 0 && yflag == 0 && sblock.fs_magic != FS_UFS1_MAGIC &&
+	    fswritefd != -1 && getosreldate() >= P_OSREL_CK_CYLGRP) {
+		if ((sblock.fs_metackhash & CK_CYLGRP) == 0 &&
+		    reply("ADD CYLINDER GROUP CHECK-HASH PROTECTION") != 0)
+			ckhashadd |= CK_CYLGRP;
+#ifdef notyet
+		if ((sblock.fs_metackhash & CK_SUPERBLOCK) == 0 &&
+		    getosreldate() >= P_OSREL_CK_SUPERBLOCK &&
+		    reply("ADD SUPERBLOCK CHECK-HASH PROTECTION") != 0)
+			ckhashadd |= CK_SUPERBLOCK;
+		if ((sblock.fs_metackhash & CK_INODE) == 0 &&
+		    getosreldate() >= P_OSREL_CK_INODE &&
+		    reply("ADD INODE CHECK-HASH PROTECTION") != 0)
+			ckhashadd |= CK_INODE;
+		if ((sblock.fs_metackhash & CK_INDIR) == 0 &&
+		    getosreldate() >= P_OSREL_CK_INDIR &&
+		    reply("ADD INDIRECT BLOCK CHECK-HASH PROTECTION") != 0)
+			ckhashadd |= CK_INDIR;
+		if ((sblock.fs_metackhash & CK_DIR) == 0 &&
+		    getosreldate() >= P_OSREL_CK_DIR &&
+		    reply("ADD DIRECTORY CHECK-HASH PROTECTION") != 0)
+			ckhashadd |= CK_DIR;
+#endif /* notyet */
+		if (ckhashadd != 0)
+			sblock.fs_flags |= FS_METACKHASH;
+	}
 	/*
 	 * Cleared if any questions answered no. Used to decide if
 	 * the superblock should be marked clean.
@@ -512,7 +554,7 @@ checkfilesys(char *filesys)
 	 */
 	n_ffree = sblock.fs_cstotal.cs_nffree;
 	n_bfree = sblock.fs_cstotal.cs_nbfree;
-	files = maxino - ROOTINO - sblock.fs_cstotal.cs_nifree - n_files;
+	files = maxino - UFS_ROOTINO - sblock.fs_cstotal.cs_nifree - n_files;
 	blks = n_blks +
 	    sblock.fs_ncg * (cgdmin(&sblock, 0) - cgsblock(&sblock, 0));
 	blks += cgsblock(&sblock, 0) - cgbase(&sblock, 0);

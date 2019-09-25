@@ -56,10 +56,6 @@ static cl::opt<bool>
                cl::desc("Avoid optimizing x86 call frames for size"),
                cl::init(false), cl::Hidden);
 
-namespace llvm {
-void initializeX86CallFrameOptimizationPass(PassRegistry &);
-}
-
 namespace {
 
 class X86CallFrameOptimization : public MachineFunctionPass {
@@ -141,11 +137,6 @@ INITIALIZE_PASS(X86CallFrameOptimization, DEBUG_TYPE,
 // we don't even want to try.
 bool X86CallFrameOptimization::isLegal(MachineFunction &MF) {
   if (NoX86CFOpt.getValue())
-    return false;
-
-  // Work around LLVM PR30879 (bad interaction between CFO and libunwind)
-  if (STI->isTargetFreeBSD() && STI->is32Bit() &&
-      STI->getTargetTriple().getOSMajorVersion() >= 12)
     return false;
 
   // We can't encode multiple DW_CFA_GNU_args_size or DW_CFA_def_cfa_offset
@@ -380,7 +371,7 @@ void X86CallFrameOptimization::collectCallInfo(MachineFunction &MF,
   // Skip over DEBUG_VALUE.
   // For globals in PIC mode, we can have some LEAs here. Skip them as well.
   // TODO: Extend this to something that covers more cases.
-  while (I->getOpcode() == X86::LEA32r || I->isDebugValue())
+  while (I->getOpcode() == X86::LEA32r || I->isDebugInstr())
     ++I;
 
   unsigned StackPtr = RegInfo.getStackRegister();

@@ -1,5 +1,7 @@
 /*-
- * Copyright (c) 2017 Dell EMC
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
+ * Copyright (c) 2017, 2018 Dell EMC
  * Copyright (c) 2000, 2001, 2008, 2011, David E. O'Brien
  * Copyright (c) 1998 John D. Polstra.
  * All rights reserved.
@@ -49,6 +51,7 @@ typedef struct {
 	u_int32_t	n_descsz;	/* Length of descriptor. */
 	u_int32_t	n_type;		/* Type of this note. */
 } Elf_Note;
+typedef Elf_Note Elf_Nhdr;
 
 /*
  * Option kinds.
@@ -331,8 +334,10 @@ typedef struct {
 #define	EF_ARM_ALIGN8		0x00000040
 #define	EF_ARM_NEW_ABI		0x00000080
 #define	EF_ARM_OLD_ABI		0x00000100
-#define	EF_ARM_SOFT_FLOAT	0x00000200
-#define	EF_ARM_VFP_FLOAT	0x00000400
+#define	EF_ARM_ABI_FLOAT_SOFT	0x00000200
+#define	EF_ARM_SOFT_FLOAT	EF_ARM_ABI_FLOAT_SOFT /* Pre-V5 ABI name */
+#define	EF_ARM_ABI_FLOAT_HARD	0x00000400
+#define	EF_ARM_VFP_FLOAT	EF_ARM_ABI_FLOAT_HARD /* Pre-V5 ABI name */
 #define	EF_ARM_MAVERICK_FLOAT	0x00000800
 
 #define	EF_MIPS_NOREORDER	0x00000001
@@ -341,14 +346,37 @@ typedef struct {
 #define	EF_MIPS_UCODE		0x00000010
 #define	EF_MIPS_ABI2		0x00000020	/* N32 */
 #define	EF_MIPS_OPTIONS_FIRST	0x00000080
+#define	EF_MIPS_ABI		0x0000F000
+#define	EF_MIPS_ABI_O32		0x00001000
+#define	EF_MIPS_ABI_O64		0x00002000
+#define	EF_MIPS_ABI_EABI32	0x00003000
+#define	EF_MIPS_ABI_EABI64	0x00004000
 #define	EF_MIPS_ARCH_ASE	0x0F000000	/* Architectural extensions */
 #define	EF_MIPS_ARCH_ASE_MDMX	0x08000000	/* MDMX multimedia extension */
 #define	EF_MIPS_ARCH_ASE_M16	0x04000000	/* MIPS-16 ISA extensions */
 #define	EF_MIPS_ARCH		0xF0000000	/* Architecture field */
+#define	EF_MIPS_ARCH_1		0x00000000	/* -mips1 code */
+#define	EF_MIPS_ARCH_2		0x10000000	/* -mips2 code */
+#define	EF_MIPS_ARCH_3		0x20000000	/* -mips3 code */
+#define	EF_MIPS_ARCH_4		0x30000000	/* -mips4 code */
+#define	EF_MIPS_ARCH_5		0x40000000	/* -mips5 code */
+#define	EF_MIPS_ARCH_32		0x50000000	/* -mips32 code */
+#define	EF_MIPS_ARCH_64		0x60000000	/* -mips64 code */
+#define	EF_MIPS_ARCH_32R2	0x70000000	/* -mips32r2 code */
+#define	EF_MIPS_ARCH_64R2	0x80000000	/* -mips64r2 code */
 
 #define	EF_PPC_EMB		0x80000000
 #define	EF_PPC_RELOCATABLE	0x00010000
 #define	EF_PPC_RELOCATABLE_LIB	0x00008000
+
+#define	EF_RISCV_RVC		0x00000001
+#define	EF_RISCV_FLOAT_ABI_MASK	0x00000006
+#define	EF_RISCV_FLOAT_ABI_SOFT	0x00000000
+#define	EF_RISCV_FLOAT_ABI_SINGLE 0x000002
+#define	EF_RISCV_FLOAT_ABI_DOUBLE 0x000004
+#define	EF_RISCV_FLOAT_ABI_QUAD	0x00000006
+#define	EF_RISCV_RVE		0x00000008
+#define	EF_RISCV_TSO		0x00000010
 
 #define	EF_SPARC_EXT_MASK	0x00ffff00
 #define	EF_SPARC_32PLUS		0x00000100
@@ -581,6 +609,7 @@ typedef struct {
 #define	DT_SUNW_RTLDINF		0x6000000e	/* ld.so.1 info (private) */
 #define	DT_SUNW_FILTER		0x6000000f	/* symbol filter name */
 #define	DT_SUNW_CAP		0x60000010	/* hardware/software */
+#define	DT_SUNW_ASLR		0x60000023	/* ASLR control */
 #define	DT_HIOS		0x6ffff000	/* Last OS-specific */
 
 /*
@@ -739,6 +768,10 @@ typedef struct {
 #define	NT_FREEBSD_ABI_TAG	1
 #define	NT_FREEBSD_NOINIT_TAG	2
 #define	NT_FREEBSD_ARCH_TAG	3
+#define	NT_FREEBSD_FEATURE_CTL	4
+
+/* NT_FREEBSD_FEATURE_CTL desc[0] bits */
+#define	NT_FREEBSD_FCTL_ASLR_DISABLE	0x00000001
 
 /* Values for n_type.  Used in core files. */
 #define	NT_PRSTATUS	1	/* Process status. */
@@ -756,8 +789,24 @@ typedef struct {
 #define	NT_PROCSTAT_AUXV	16	/* Procstat auxv data. */
 #define	NT_PTLWPINFO		17	/* Thread ptrace miscellaneous info. */
 #define	NT_PPC_VMX	0x100	/* PowerPC Altivec/VMX registers */
+#define	NT_PPC_VSX	0x102	/* PowerPC VSX registers */
 #define	NT_X86_XSTATE	0x202	/* x86 XSAVE extended state. */
 #define	NT_ARM_VFP	0x400	/* ARM VFP registers */
+
+/* GNU note types. */
+#define	NT_GNU_ABI_TAG		1
+#define	NT_GNU_HWCAP		2
+#define	NT_GNU_BUILD_ID		3
+#define	NT_GNU_GOLD_VERSION	4
+#define	NT_GNU_PROPERTY_TYPE_0	5
+
+#define	GNU_PROPERTY_LOPROC			0xc0000000
+#define	GNU_PROPERTY_HIPROC			0xdfffffff
+
+#define	GNU_PROPERTY_X86_FEATURE_1_AND		0xc0000002
+
+#define	GNU_PROPERTY_X86_FEATURE_1_IBT		0x00000001
+#define	GNU_PROPERTY_X86_FEATURE_1_SHSTK	0x00000002
 
 /* Symbol Binding - ELFNN_ST_BIND - st_info */
 #define	STB_LOCAL	0	/* Local symbol */
@@ -1060,6 +1109,8 @@ typedef struct {
 #define	R_MIPS_CALLLO16 31	/* lower 16 bit GOT entry for function */
 #define	R_MIPS_JALR	37
 #define	R_MIPS_TLS_GD	42
+#define	R_MIPS_COPY	126
+#define	R_MIPS_JUMP_SLOT	127
 
 #define	R_PPC_NONE		0	/* No relocation. */
 #define	R_PPC_ADDR32		1
@@ -1219,6 +1270,17 @@ typedef struct {
 #define	R_RISCV_ALIGN		43
 #define	R_RISCV_RVC_BRANCH	44
 #define	R_RISCV_RVC_JUMP	45
+#define	R_RISCV_RVC_LUI		46
+#define	R_RISCV_GPREL_I		47
+#define	R_RISCV_GPREL_S		48
+#define	R_RISCV_TPREL_I		49
+#define	R_RISCV_TPREL_S		50
+#define	R_RISCV_RELAX		51
+#define	R_RISCV_SUB6		52
+#define	R_RISCV_SET6		53
+#define	R_RISCV_SET8		54
+#define	R_RISCV_SET16		55
+#define	R_RISCV_SET32		56
 
 #define	R_SPARC_NONE		0
 #define	R_SPARC_8		1

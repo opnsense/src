@@ -81,7 +81,6 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
-#include "opt_compat.h"
 #include "opt_ddb.h"
 #include "opt_hwpmc_hooks.h"
 #include "opt_kstack_pages.h"
@@ -142,10 +141,6 @@ __FBSDID("$FreeBSD$");
 #include <dev/fdt/fdt_common.h>
 #include <dev/ofw/openfirm.h>
 
-#if defined(MPC85XX) || defined(QORIQ_DPAA)
-#include <powerpc/mpc85xx/mpc85xx.h>
-#endif
-
 #ifdef DDB
 #include <ddb/ddb.h>
 #endif
@@ -163,6 +158,7 @@ extern unsigned char __sbss_start[];
 extern unsigned char __sbss_end[];
 extern unsigned char _end[];
 extern vm_offset_t __endkernel;
+extern vm_paddr_t kernload;
 
 /*
  * Bootinfo is passed to us by legacy loaders. Save the address of the
@@ -191,8 +187,13 @@ extern void *int_watchdog;
 extern void *int_data_tlb_error;
 extern void *int_inst_tlb_error;
 extern void *int_debug;
+extern void *int_debug_ed;
 extern void *int_vec;
 extern void *int_vecast;
+#ifdef __SPE__
+extern void *int_spe_fpdata;
+extern void *int_spe_fpround;
+#endif
 #ifdef HWPMC_HOOKS
 extern void *int_performance_counter;
 #endif
@@ -203,7 +204,8 @@ extern void *int_performance_counter;
 	    ("Handler " #handler " too far from interrupt vector base")); \
 	mtspr(ivor, (uintptr_t)(&handler) & 0xffffUL);
 
-uintptr_t powerpc_init(vm_offset_t fdt, vm_offset_t, vm_offset_t, void *mdp);
+uintptr_t powerpc_init(vm_offset_t fdt, vm_offset_t, vm_offset_t, void *mdp,
+    uint32_t mdp_cookie);
 void booke_cpu_init(void);
 
 void
@@ -212,6 +214,16 @@ booke_cpu_init(void)
 
 	cpu_features |= PPC_FEATURE_BOOKE;
 
+	psl_kernset = PSL_CE | PSL_ME | PSL_EE;
+#ifdef __powerpc64__
+	psl_kernset |= PSL_CM;
+#endif
+	psl_userset = psl_kernset | PSL_PR;
+#ifdef __powerpc64__
+	psl_userset32 = psl_userset & ~PSL_CM;
+#endif
+	psl_userstatic = ~(PSL_VEC | PSL_FP | PSL_FE0 | PSL_FE1);
+
 	pmap_mmu_install(MMU_TYPE_BOOKE, BUS_PROBE_GENERIC);
 }
 
@@ -219,7 +231,7 @@ void
 ivor_setup(void)
 {
 
-	mtspr(SPR_IVPR, ((uintptr_t)&interrupt_vector_base) & 0xffff0000);
+	mtspr(SPR_IVPR, ((uintptr_t)&interrupt_vector_base) & ~0xffffUL);
 
 	SET_TRAP(SPR_IVOR0, int_critical_input);
 	SET_TRAP(SPR_IVOR1, int_machine_check);
@@ -246,13 +258,29 @@ ivor_setup(void)
 	case FSL_E500mc:
 	case FSL_E5500:
 		SET_TRAP(SPR_IVOR7, int_fpu);
+		SET_TRAP(SPR_IVOR15, int_debug_ed);
+		break;
+	case FSL_E500v1:
+	case FSL_E500v2:
+		SET_TRAP(SPR_IVOR32, int_vec);
+#ifdef __SPE__
+		SET_TRAP(SPR_IVOR33, int_spe_fpdata);
+		SET_TRAP(SPR_IVOR34, int_spe_fpround);
+#endif
+		break;
 	}
+
+#ifdef __powerpc64__
+	/* Set 64-bit interrupt mode. */
+	mtspr(SPR_EPCR, mfspr(SPR_EPCR) | EPCR_ICM);
+#endif
 }
 
 static int
 booke_check_for_fdt(uint32_t arg1, vm_offset_t *dtbp)
 {
 	void *ptr;
+	int fdt_size;
 
 	if (arg1 % 8 != 0)
 		return (-1);
@@ -261,6 +289,19 @@ booke_check_for_fdt(uint32_t arg1, vm_offset_t *dtbp)
 	if (fdt_check_header(ptr) != 0)
 		return (-1);
 
+	/*
+	 * Read FDT total size from the header of FDT.
+	 * This for sure hits within first page which is
+	 * already mapped.
+	 */
+	fdt_size = fdt_totalsize((void *)ptr);
+
+	/* 
+	 * Ok, arg1 points to FDT, so we need to map it in.
+	 * First, unmap this page and then map FDT again with full size
+	 */
+	pmap_early_io_unmap((vm_offset_t)ptr, PAGE_SIZE);
+	ptr = (void *)pmap_early_io_map(arg1, fdt_size); 
 	*dtbp = (vm_offset_t)ptr;
 
 	return (0);
@@ -310,7 +351,7 @@ booke_init(u_long arg1, u_long arg2)
 		end += fdt_totalsize((void *)dtbp);
 		__endkernel = end;
 		mdp = NULL;
-	} else if (arg1 > (uintptr_t)btext)	/* FreeBSD loader */
+	} else if (arg1 > (uintptr_t)kernload)	/* FreeBSD loader */
 		mdp = (void *)arg1;
 	else					/* U-Boot */
 		mdp = NULL;
@@ -324,7 +365,11 @@ booke_init(u_long arg1, u_long arg2)
 		break;
 	}
 
-	ret = powerpc_init(dtbp, 0, 0, mdp);
+	/*
+	 * Last element is a magic cookie that indicates that the metadata
+	 * pointer is meaningful.
+	 */
+	ret = powerpc_init(dtbp, 0, 0, mdp, (mdp == NULL) ? 0 : 0xfb5d104d);
 
 	/* Enable caches */
 	booke_enable_l1_cache();
@@ -335,22 +380,22 @@ booke_init(u_long arg1, u_long arg2)
 	return (ret);
 }
 
-#define RES_GRANULE 32
-extern uint32_t tlb0_miss_locks[];
+#define RES_GRANULE cacheline_size
+extern uintptr_t tlb0_miss_locks[];
 
 /* Initialise a struct pcpu. */
 void
 cpu_pcpu_init(struct pcpu *pcpu, int cpuid, size_t sz)
 {
 
-	pcpu->pc_tid_next = TID_MIN;
+	pcpu->pc_booke.tid_next = TID_MIN;
 
 #ifdef SMP
-	uint32_t *ptr;
-	int words_per_gran = RES_GRANULE / sizeof(uint32_t);
+	uintptr_t *ptr;
+	int words_per_gran = RES_GRANULE / sizeof(uintptr_t);
 
 	ptr = &tlb0_miss_locks[cpuid * words_per_gran];
-	pcpu->pc_booke_tlb_lock = ptr;
+	pcpu->pc_booke.tlb_lock = ptr;
 	*ptr = TLB_UNLOCKED;
 	*(ptr + 1) = 0;		/* recurse counter */
 #endif

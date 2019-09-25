@@ -9,7 +9,7 @@
 .\" 2. Redistributions in binary form must reproduce the above copyright
 .\"    notice, this list of conditions and the following disclaimer in the
 .\"    documentation and/or other materials provided with the distribution.
-.\" 4. Neither the name of the University nor the names of its contributors
+.\" 3. Neither the name of the University nor the names of its contributors
 .\"    may be used to endorse or promote products derived from this software
 .\"    without specific prior written permission.
 .\"
@@ -28,7 +28,7 @@
 .\"     @(#)wait.2	8.2 (Berkeley) 4/19/94
 .\" $FreeBSD$
 .\"
-.Dd June 1, 2016
+.Dd August 11, 2019
 .Dt WAIT 2
 .Os
 .Sh NAME
@@ -58,7 +58,13 @@
 .Ft pid_t
 .Fn wait4 "pid_t wpid" "int *status" "int options" "struct rusage *rusage"
 .Ft pid_t
-.Fn wait6 "idtype_t idtype" "id_t id" "int *status" "int options" "struct __wrusage *wrusage" "siginfo_t *infop"
+.Fo wait6
+.Fa "idtype_t idtype" "id_t id"
+.Fa "int *status"
+.Fa "int options"
+.Fa "struct __wrusage *wrusage"
+.Fa "siginfo_t *infop"
+.Fc
 .Sh DESCRIPTION
 The
 .Fn wait
@@ -505,8 +511,12 @@ A status of 0 indicates normal termination.
 .Pp
 If a parent process terminates without
 waiting for all of its child processes to terminate,
-the remaining child processes are assigned the parent
-process 1 ID (the init process ID).
+the remaining child processes are re-assigned to the reaper
+of the exiting process as the parent, see
+.Xr procctl 2
+.Dv PROC_REAP_ACQUIRE .
+If no specific reaper was assigned, the process with ID 1, the init process,
+becomes the parent of the orphaned children by default.
 .Pp
 If a signal is caught while any of the
 .Fn wait
@@ -597,13 +607,11 @@ fields of
 .Fa infop
 must be checked against zero to determine if a process reported status.
 .Pp
+The
 .Fn wait
-called with -1 to wait for any child process will ignore a child that is
-referenced by a process descriptor (see
-.Xr pdfork 2 ) .
-Specific processes can still be waited on by specifying the process ID
-or descriptor (see
-.Xr pdwait 4 ) .
+family of functions will not return a child process created with
+.Xr pdfork 2
+unless specifically directed to do so by specifying its process ID.
 .Sh ERRORS
 The
 .Fn wait
@@ -644,6 +652,7 @@ do not specify a valid set of processes.
 .El
 .Sh SEE ALSO
 .Xr _exit 2 ,
+.Xr procctl 2 ,
 .Xr ptrace 2 ,
 .Xr sigaction 2 ,
 .Xr exit 3 ,
@@ -677,4 +686,4 @@ only permits this flag with
 The
 .Fn wait
 function appeared in
-.At v6 .
+.At v1 .

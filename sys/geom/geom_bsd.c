@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2002 Poul-Henning Kamp
  * Copyright (c) 2002 Networks Associates Technology, Inc.
  * All rights reserved.
@@ -439,16 +441,6 @@ g_bsd_taste(struct g_class *mp, struct g_provider *pp, int flags)
 			if (i != 165 && flags == G_TF_NORMAL)
 				break;
 			error = g_getattr("MBR::offset", cp, &ms->mbroffset);
-			if (error)
-				break;
-		}
-
-		/* Same thing if we are inside a PC98 */
-		error = g_getattr("PC98::type", cp, &i);
-		if (!error) {
-			if (i != 0xc494 && flags == G_TF_NORMAL)
-				break;
-			error = g_getattr("PC98::offset", cp, &ms->mbroffset);
 			if (error)
 				break;
 		}

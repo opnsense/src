@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: MIT-CMU
+ *
  * Mach Operating System
  * Copyright (c) 1991,1990 Carnegie Mellon University
  * All Rights Reserved.
@@ -38,6 +40,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/param.h>
 #include <sys/kdb.h>
 #include <sys/proc.h>
+#include <sys/systm.h>
 
 #include <machine/kdb.h>
 #include <machine/pcb.h>
@@ -172,7 +175,6 @@ db_stop_at_pc(int type, int code, bool *is_breakpoint, bool *is_watchpoint)
 		if (db_sstep_print) {
 		    db_printf("\t\t");
 		    db_print_loc_and_inst(pc);
-		    db_printf("\n");
 		}
 		return (false);	/* continue */
 	    }
@@ -192,7 +194,6 @@ db_stop_at_pc(int type, int code, bool *is_breakpoint, bool *is_watchpoint)
 			for (i = db_call_depth; --i > 0; )
 			    db_printf("  ");
 			db_print_loc_and_inst(pc);
-			db_printf("\n");
 		    }
 		}
 		if (inst_call(ins))

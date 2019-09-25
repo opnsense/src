@@ -9,11 +9,11 @@
 
 #include "lldb/Core/ValueObjectList.h"
 
-#include "lldb/Core/ValueObject.h"    // for ValueObject
-#include "lldb/Utility/ConstString.h" // for ConstString
-#include "lldb/Utility/SharingPtr.h"  // for SharingPtr
+#include "lldb/Core/ValueObject.h"
+#include "lldb/Utility/ConstString.h"
+#include "lldb/Utility/SharingPtr.h"
 
-#include <utility> // for back_insert_iterator, back_ins...
+#include <utility>
 
 using namespace lldb;
 using namespace lldb_private;
@@ -87,8 +87,8 @@ ValueObjectSP ValueObjectList::FindValueObjectByUID(lldb::user_id_t uid) {
   collection::iterator pos, end = m_value_objects.end();
 
   for (pos = m_value_objects.begin(); pos != end; ++pos) {
-    // Watch out for NULL objects in our list as the list
-    // might get resized to a specific size and lazily filled in
+    // Watch out for NULL objects in our list as the list might get resized to
+    // a specific size and lazily filled in
     ValueObject *valobj = (*pos).get();
     if (valobj && valobj->GetID() == uid) {
       valobj_sp = *pos;

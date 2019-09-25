@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2010-2016 Solarflare Communications Inc.
  * All rights reserved.
  *
@@ -85,18 +87,6 @@ extern "C" {
 #endif
 #ifndef B_TRUE
 #define	B_TRUE	TRUE
-#endif
-
-#ifndef IS_P2ALIGNED
-#define	IS_P2ALIGNED(v, a)	((((uintptr_t)(v)) & ((uintptr_t)(a) - 1)) == 0)
-#endif
-
-#ifndef P2ROUNDUP
-#define	P2ROUNDUP(x, align)	(-(-(x) & -(align)))
-#endif
-
-#ifndef P2ALIGN
-#define	P2ALIGN(_x, _a)		((_x) & -(_a))
 #endif
 
 #ifndef IS2P
@@ -400,7 +390,8 @@ typedef struct efsys_mem_s {
 		uint32_t *addr;						\
 									\
 		_NOTE(CONSTANTCONDITION)				\
-		KASSERT(IS_P2ALIGNED(_offset, sizeof (efx_dword_t)),	\
+		KASSERT(EFX_IS_P2ALIGNED(size_t, _offset,		\
+		    sizeof (efx_dword_t)),				\
 		    ("not power of 2 aligned"));			\
 									\
 		addr = (void *)((_esmp)->esm_base + (_offset));		\
@@ -419,7 +410,8 @@ typedef struct efsys_mem_s {
 		uint64_t *addr;						\
 									\
 		_NOTE(CONSTANTCONDITION)				\
-		KASSERT(IS_P2ALIGNED(_offset, sizeof (efx_qword_t)),	\
+		KASSERT(EFX_IS_P2ALIGNED(size_t, _offset,		\
+		    sizeof (efx_qword_t)),				\
 		    ("not power of 2 aligned"));			\
 									\
 		addr = (void *)((_esmp)->esm_base + (_offset));		\
@@ -438,7 +430,8 @@ typedef struct efsys_mem_s {
 		uint32_t *addr;						\
 									\
 		_NOTE(CONSTANTCONDITION)				\
-		KASSERT(IS_P2ALIGNED(_offset, sizeof (efx_qword_t)),	\
+		KASSERT(EFX_IS_P2ALIGNED(size_t, _offset,		\
+		    sizeof (efx_qword_t)),				\
 		    ("not power of 2 aligned"));			\
 									\
 		addr = (void *)((_esmp)->esm_base + (_offset));		\
@@ -460,7 +453,8 @@ typedef struct efsys_mem_s {
 		uint64_t *addr;						\
 									\
 		_NOTE(CONSTANTCONDITION)				\
-		KASSERT(IS_P2ALIGNED(_offset, sizeof (efx_oword_t)),	\
+		KASSERT(EFX_IS_P2ALIGNED(size_t, _offset,		\
+		    sizeof (efx_oword_t)),				\
 		    ("not power of 2 aligned"));			\
 									\
 		addr = (void *)((_esmp)->esm_base + (_offset));		\
@@ -482,7 +476,8 @@ typedef struct efsys_mem_s {
 		uint32_t *addr;						\
 									\
 		_NOTE(CONSTANTCONDITION)				\
-		KASSERT(IS_P2ALIGNED(_offset, sizeof (efx_oword_t)),	\
+		KASSERT(EFX_IS_P2ALIGNED(size_t, _offset,		\
+		    sizeof (efx_oword_t)),				\
 		    ("not power of 2 aligned"));			\
 									\
 		addr = (void *)((_esmp)->esm_base + (_offset));		\
@@ -507,7 +502,8 @@ typedef struct efsys_mem_s {
 		uint32_t *addr;						\
 									\
 		_NOTE(CONSTANTCONDITION)				\
-		KASSERT(IS_P2ALIGNED(_offset, sizeof (efx_dword_t)),	\
+		KASSERT(EFX_IS_P2ALIGNED(size_t, _offset,		\
+		    sizeof (efx_dword_t)),				\
 		    ("not power of 2 aligned"));			\
 									\
 		EFSYS_PROBE2(mem_writed, unsigned int, (_offset),	\
@@ -526,7 +522,8 @@ typedef struct efsys_mem_s {
 		uint64_t *addr;						\
 									\
 		_NOTE(CONSTANTCONDITION)				\
-		KASSERT(IS_P2ALIGNED(_offset, sizeof (efx_qword_t)),	\
+		KASSERT(EFX_IS_P2ALIGNED(size_t, _offset,		\
+		    sizeof (efx_qword_t)),				\
 		    ("not power of 2 aligned"));			\
 									\
 		EFSYS_PROBE3(mem_writeq, unsigned int, (_offset),	\
@@ -546,7 +543,8 @@ typedef struct efsys_mem_s {
 		uint32_t *addr;						\
 									\
 		_NOTE(CONSTANTCONDITION)				\
-		KASSERT(IS_P2ALIGNED(_offset, sizeof (efx_qword_t)),	\
+		KASSERT(EFX_IS_P2ALIGNED(size_t, _offset,		\
+		    sizeof (efx_qword_t)),				\
 		    ("not power of 2 aligned"));			\
 									\
 		EFSYS_PROBE3(mem_writeq, unsigned int, (_offset),	\
@@ -568,7 +566,8 @@ typedef struct efsys_mem_s {
 		uint64_t *addr;						\
 									\
 		_NOTE(CONSTANTCONDITION)				\
-		KASSERT(IS_P2ALIGNED(_offset, sizeof (efx_oword_t)),	\
+		KASSERT(EFX_IS_P2ALIGNED(size_t, _offset,		\
+		    sizeof (efx_oword_t)),				\
 		    ("not power of 2 aligned"));			\
 									\
 		EFSYS_PROBE5(mem_writeo, unsigned int, (_offset),	\
@@ -590,7 +589,8 @@ typedef struct efsys_mem_s {
 		uint32_t *addr;						\
 									\
 		_NOTE(CONSTANTCONDITION)				\
-		KASSERT(IS_P2ALIGNED(_offset, sizeof (efx_oword_t)),	\
+		KASSERT(EFX_IS_P2ALIGNED(size_t, _offset,		\
+		    sizeof (efx_oword_t)),				\
 		    ("not power of 2 aligned"));			\
 									\
 		EFSYS_PROBE5(mem_writeo, unsigned int, (_offset),	\
@@ -648,7 +648,8 @@ typedef struct efsys_bar_s {
 #define	EFSYS_BAR_READD(_esbp, _offset, _edp, _lock)			\
 	do {								\
 		_NOTE(CONSTANTCONDITION)				\
-		KASSERT(IS_P2ALIGNED(_offset, sizeof (efx_dword_t)),	\
+		KASSERT(EFX_IS_P2ALIGNED(size_t, _offset,		\
+		    sizeof (efx_dword_t)),				\
 		    ("not power of 2 aligned"));			\
 									\
 		_NOTE(CONSTANTCONDITION)				\
@@ -672,7 +673,8 @@ typedef struct efsys_bar_s {
 #define	EFSYS_BAR_READQ(_esbp, _offset, _eqp)				\
 	do {								\
 		_NOTE(CONSTANTCONDITION)				\
-		KASSERT(IS_P2ALIGNED(_offset, sizeof (efx_qword_t)),	\
+		KASSERT(EFX_IS_P2ALIGNED(size_t, _offset,		\
+		    sizeof (efx_qword_t)),				\
 		    ("not power of 2 aligned"));			\
 									\
 		SFXGE_BAR_LOCK(_esbp);					\
@@ -692,7 +694,8 @@ typedef struct efsys_bar_s {
 #define	EFSYS_BAR_READO(_esbp, _offset, _eop, _lock)			\
 	do {								\
 		_NOTE(CONSTANTCONDITION)				\
-		KASSERT(IS_P2ALIGNED(_offset, sizeof (efx_oword_t)),	\
+		KASSERT(EFX_IS_P2ALIGNED(size_t, _offset,		\
+		    sizeof (efx_oword_t)),				\
 		    ("not power of 2 aligned"));			\
 									\
 		_NOTE(CONSTANTCONDITION)				\
@@ -722,7 +725,8 @@ typedef struct efsys_bar_s {
 #define	EFSYS_BAR_READQ(_esbp, _offset, _eqp)				\
 	do {								\
 		_NOTE(CONSTANTCONDITION)				\
-		KASSERT(IS_P2ALIGNED(_offset, sizeof (efx_qword_t)),	\
+		KASSERT(EFX_IS_P2ALIGNED(size_t, _offset,		\
+		    sizeof (efx_qword_t)),				\
 		    ("not power of 2 aligned"));			\
 									\
 		SFXGE_BAR_LOCK(_esbp);					\
@@ -745,7 +749,8 @@ typedef struct efsys_bar_s {
 #define	EFSYS_BAR_READO(_esbp, _offset, _eop, _lock)			\
 	do {								\
 		_NOTE(CONSTANTCONDITION)				\
-		KASSERT(IS_P2ALIGNED(_offset, sizeof (efx_oword_t)),	\
+		KASSERT(EFX_IS_P2ALIGNED(size_t, _offset,		\
+		    sizeof (efx_oword_t)),				\
 		    ("not power of 2 aligned"));			\
 									\
 		_NOTE(CONSTANTCONDITION)				\
@@ -781,7 +786,8 @@ typedef struct efsys_bar_s {
 #define	EFSYS_BAR_WRITED(_esbp, _offset, _edp, _lock)			\
 	do {								\
 		_NOTE(CONSTANTCONDITION)				\
-		KASSERT(IS_P2ALIGNED(_offset, sizeof (efx_dword_t)),	\
+		KASSERT(EFX_IS_P2ALIGNED(size_t, _offset,		\
+		    sizeof (efx_dword_t)),				\
 		    ("not power of 2 aligned"));			\
 									\
 		_NOTE(CONSTANTCONDITION)				\
@@ -813,7 +819,8 @@ typedef struct efsys_bar_s {
 #define	EFSYS_BAR_WRITEQ(_esbp, _offset, _eqp)				\
 	do {								\
 		_NOTE(CONSTANTCONDITION)				\
-		KASSERT(IS_P2ALIGNED(_offset, sizeof (efx_qword_t)),	\
+		KASSERT(EFX_IS_P2ALIGNED(size_t, _offset,		\
+		    sizeof (efx_qword_t)),				\
 		    ("not power of 2 aligned"));			\
 									\
 		SFXGE_BAR_LOCK(_esbp);					\
@@ -841,7 +848,8 @@ typedef struct efsys_bar_s {
 #define	EFSYS_BAR_WRITEQ(_esbp, _offset, _eqp)				\
 	do {								\
 		_NOTE(CONSTANTCONDITION)				\
-		KASSERT(IS_P2ALIGNED(_offset, sizeof (efx_qword_t)),	\
+		KASSERT(EFX_IS_P2ALIGNED(size_t, _offset,		\
+		    sizeof (efx_qword_t)),				\
 		    ("not power of 2 aligned"));			\
 									\
 		SFXGE_BAR_LOCK(_esbp);					\
@@ -885,7 +893,8 @@ typedef struct efsys_bar_s {
 #define	EFSYS_BAR_WC_WRITEQ(_esbp, _offset, _eqp)			\
 	do {								\
 		_NOTE(CONSTANTCONDITION)				\
-		KASSERT(IS_P2ALIGNED(_offset, sizeof (efx_qword_t)),	\
+		KASSERT(EFX_IS_P2ALIGNED(size_t, _offset,		\
+		    sizeof (efx_qword_t)),				\
 		    ("not power of 2 aligned"));			\
 									\
 		(void) (_esbp);						\
@@ -900,7 +909,8 @@ typedef struct efsys_bar_s {
 #define	EFSYS_BAR_WRITEO(_esbp, _offset, _eop, _lock)			\
 	do {								\
 		_NOTE(CONSTANTCONDITION)				\
-		KASSERT(IS_P2ALIGNED(_offset, sizeof (efx_oword_t)),	\
+		KASSERT(EFX_IS_P2ALIGNED(size_t, _offset,		\
+		    sizeof (efx_oword_t)),				\
 		    ("not power of 2 aligned"));			\
 									\
 		_NOTE(CONSTANTCONDITION)				\
@@ -946,7 +956,8 @@ typedef struct efsys_bar_s {
 #define	EFSYS_BAR_WRITEO(_esbp, _offset, _eop, _lock)			\
 	do {								\
 		_NOTE(CONSTANTCONDITION)				\
-		KASSERT(IS_P2ALIGNED(_offset, sizeof (efx_oword_t)),	\
+		KASSERT(EFX_IS_P2ALIGNED(size_t, _offset,		\
+		    sizeof (efx_oword_t)),				\
 		    ("not power of 2 aligned"));			\
 									\
 		_NOTE(CONSTANTCONDITION)				\

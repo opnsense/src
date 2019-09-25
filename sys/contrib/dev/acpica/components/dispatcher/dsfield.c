@@ -8,7 +8,7 @@
  *
  * 1. Copyright Notice
  *
- * Some or all of this work - Copyright (c) 1999 - 2017, Intel Corp.
+ * Some or all of this work - Copyright (c) 1999 - 2018, Intel Corp.
  * All rights reserved.
  *
  * 2. License
@@ -156,6 +156,10 @@
 #include <contrib/dev/acpica/include/acinterp.h>
 #include <contrib/dev/acpica/include/acnamesp.h>
 #include <contrib/dev/acpica/include/acparser.h>
+
+#if !defined(ACPI_DB_APP) && defined(ACPI_EXEC_APP)
+#include "aecommon.h"
+#endif
 
 
 #define _COMPONENT          ACPI_DISPATCHER
@@ -430,6 +434,13 @@ AcpiDsGetFieldNames (
     UINT64                  Position;
     ACPI_PARSE_OBJECT       *Child;
 
+#if !defined(ACPI_DB_APP) && defined(ACPI_EXEC_APP)
+    UINT64                  Value = 0;
+    ACPI_OPERAND_OBJECT     *ResultDesc;
+    ACPI_OPERAND_OBJECT     *ObjDesc;
+    char                    *NamePath;
+#endif
+
 
     ACPI_FUNCTION_TRACE_PTR (DsGetFieldNames, Info);
 
@@ -564,6 +575,18 @@ AcpiDsGetFieldNames (
                     {
                         return_ACPI_STATUS (Status);
                     }
+#if !defined(ACPI_DB_APP) && defined(ACPI_EXEC_APP)
+                    NamePath = AcpiNsGetExternalPathname (Info->FieldNode);
+                    ObjDesc = AcpiUtCreateIntegerObject (Value);
+                    if (ACPI_SUCCESS (AeLookupInitFileEntry (NamePath, &Value)))
+                    {
+                        AcpiExWriteDataToField (ObjDesc,
+                            AcpiNsGetAttachedObject (Info->FieldNode),
+                            &ResultDesc);
+                    }
+                    AcpiUtRemoveReference (ObjDesc);
+                    ACPI_FREE (NamePath);
+#endif
                 }
             }
 
@@ -756,6 +779,9 @@ AcpiDsInitFieldObjects (
         Flags |= ACPI_NS_TEMPORARY;
     }
 
+#ifdef ACPI_EXEC_APP
+        Flags |= ACPI_NS_OVERRIDE_IF_FOUND;
+#endif
     /*
      * Walk the list of entries in the FieldList
      * Note: FieldList can be of zero length. In this case, Arg will be NULL.

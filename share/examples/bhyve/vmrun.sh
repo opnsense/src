@@ -1,5 +1,7 @@
 #!/bin/sh
 #
+# SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+#
 # Copyright (c) 2013 NetApp, Inc.
 # All rights reserved.
 #
@@ -73,7 +75,7 @@ usage() {
 	echo "       -E: Use UEFI mode"
 	echo "       -f: Use a specific UEFI firmware"
 	echo "       -F: Use a custom UEFI GOP framebuffer size" \
-	    "(default: ${DEFAULT_VNCSIZE}"
+	    "(default: ${DEFAULT_VNCSIZE})"
 	echo "       -g: listen for connection from kgdb at <gdbport>"
 	echo "       -H: host filesystem to export to the loader"
 	echo "       -i: force boot of the Installation CDROM image"
@@ -132,7 +134,7 @@ vncport=${DEFAULT_VNCPORT}
 vncsize=${DEFAULT_VNCSIZE}
 tablet=""
 
-while getopts aAc:C:d:e:Ef:F:g:hH:iI:l:m:n:p:P:t:Tuvw c ; do
+while getopts aAc:C:d:e:Ef:F:g:hH:iI:l:L:m:n:p:P:t:Tuvw c ; do
 	case $c in
 	a)
 		bhyverun_opt="${bhyverun_opt} -a"

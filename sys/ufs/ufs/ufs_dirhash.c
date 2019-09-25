@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2001, 2002 Ian Dowse.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -347,7 +349,8 @@ ufsdirhash_build(struct inode *ip)
 	struct direct *ep;
 	struct vnode *vp;
 	doff_t bmask, pos;
-	int dirblocks, i, j, memreqd, nblocks, narrays, nslots, slot;
+	u_int dirblocks, i, narrays, nblocks, nslots;
+	int j, memreqd, slot;
 
 	/* Take care of a decreased sysctl value. */
 	while (ufs_dirhashmem > ufs_dirhashmaxmem) {

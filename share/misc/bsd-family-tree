@@ -367,9 +367,16 @@ FreeBSD 5.2           |      |                 |                       |
  |     |              |     |      |           |                       |
  |     |              |     |  NetBSD 7.1.2    |                       |
  |     |              |     |      |           |                       |
- |     |              |     |      v           |                       |
- |     v              |     |                  |                       |
- |                    |     |                  |                       |
+ |     |              |     |      |      OpenBSD 6.3                  |
+ |     |              |     |      |           |               DragonFly 5.2.0
+ |     |              |     |      |           |                       |
+ |     |              |     |      |           |               DragonFly 5.2.1
+ |     |              |     |      |           |                       |
+ |     |              |     |      |           |               DragonFly 5.2.2
+ |  FreeBSD           |     |  NetBSD 8.0      |                       |
+ |   11.2             |     |      |           |                       |
+ |     v              |     |      |           |                       |
+ |                    |     |      v           |                       |
 FreeBSD 12 -current   | NetBSD -current   OpenBSD -current    DragonFly -current
  |                    |     |                  |                       |
  v                    v     v                  v                       v
@@ -383,7 +390,7 @@ was the announcement in Usenet or if it was available as tape.
 [44B] McKusick, Marshall Kirk, Keith Bostic, Michael J Karels,
 	and John Quarterman. The Design and Implementation of
 	the 4.4BSD Operating System.
-[APL] Apple website [http://www.apple.com/macosx/]
+[APL] Apple website [https://www.apple.com/macosx/]
 [BSDI] Berkeley Software Design, Inc.
 [DFB] DragonFlyBSD Project, The.
 [DOC] README, COPYRIGHT on tape.
@@ -739,6 +746,12 @@ DragonFly 5.0.1		2017-11-06 [DFB]
 DragonFly 5.0.2		2017-12-04 [DFB]
 NetBSD 7.1.1		2017-12-22 [NBD]
 NetBSD 7.1.2		2018-03-15 [NBD]
+OpenBSD 6.3		2018-04-02 [OBD]
+DragonFly 5.2.0		2018-04-10 [DFB]
+DragonFly 5.2.1		2018-05-20 [DFB]
+DragonFly 5.2.2		2018-06-18 [DFB]
+FreeBSD 11.2		2018-06-27 [FBD]
+NetBSD 8.0		2018-07-17 [NBD]
 
 Bibliography
 ------------------------
@@ -775,10 +788,10 @@ Andreas Klemm, Lars Köller. If you're going to San Francisco ...
 Die freien BSD-Varianten von Unix. c't April 1997, page 368ff.
 
 BSD Release Announcements collection.
-URL: http://www.FreeBSD.org/releases/
+URL: https://www.FreeBSD.org/releases/
 
 BSD Hypertext Man Pages
-URL: http://www.FreeBSD.org/cgi/man.cgi
+URL: https://www.FreeBSD.org/cgi/man.cgi
 
 UNIX history graphing project
 URL: http://minnie.tuhs.org/Unix_History/index.html
@@ -801,6 +814,6 @@ Steven M. Schultz for providing 2.8BSD, 2.10BSD, 2.11BSD manual pages.
 
 --
 Copyright (c) 1997-2012 Wolfram Schneider <wosch@FreeBSD.ORG>
-URL: http://svnweb.freebsd.org/base/head/share/misc/bsd-family-tree
+URL: https://svnweb.freebsd.org/base/head/share/misc/bsd-family-tree
 
 $FreeBSD$

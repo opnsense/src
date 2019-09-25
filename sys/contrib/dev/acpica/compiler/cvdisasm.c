@@ -8,7 +8,7 @@
  *
  * 1. Copyright Notice
  *
- * Some or all of this work - Copyright (c) 1999 - 2017, Intel Corp.
+ * Some or all of this work - Copyright (c) 1999 - 2018, Intel Corp.
  * All rights reserved.
  *
  * 2. License
@@ -522,10 +522,10 @@ CvSwitchFiles(
          * if it does not exist, then abort.
          */
         FlDeleteFile (ASL_FILE_AML_OUTPUT);
-        sprintf (MsgBuffer, "\"Cannot find %s\" - %s",
+        sprintf (AslGbl_MsgBuffer, "\"Cannot find %s\" - %s",
             Filename, strerror (errno));
         AslCommonError (ASL_ERROR, ASL_MSG_OPEN, 0, 0, 0, 0,
-            NULL, MsgBuffer);
+            NULL, AslGbl_MsgBuffer);
         AslAbort ();
     }
 

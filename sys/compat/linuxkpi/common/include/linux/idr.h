@@ -79,11 +79,12 @@ void	idr_preload(gfp_t gfp_mask);
 void	idr_preload_end(void);
 void	*idr_find(struct idr *idp, int id);
 void	*idr_get_next(struct idr *idp, int *nextid);
+bool	idr_is_empty(struct idr *idp);
 int	idr_pre_get(struct idr *idp, gfp_t gfp_mask);
 int	idr_get_new(struct idr *idp, void *ptr, int *id);
 int	idr_get_new_above(struct idr *idp, void *ptr, int starting_id, int *id);
 void	*idr_replace(struct idr *idp, void *ptr, int id);
-void	idr_remove(struct idr *idp, int id);
+void	*idr_remove(struct idr *idp, int id);
 void	idr_remove_all(struct idr *idp);
 void	idr_destroy(struct idr *idp);
 void	idr_init(struct idr *idp);
@@ -118,10 +119,32 @@ int	ida_simple_get(struct ida *ida, unsigned int start, unsigned int end,
     gfp_t gfp_mask);
 void	ida_simple_remove(struct ida *ida, unsigned int id);
 
+static inline void
+ida_free(struct ida *ida, int id)
+{
+
+	ida_remove(ida, id);
+}
+
 static inline int
 ida_get_new(struct ida *ida, int *p_id)
 {
+
 	return (ida_get_new_above(ida, 0, p_id));
+}
+
+static inline int
+ida_alloc_max(struct ida *ida, unsigned int max, gfp_t gfp)
+{
+
+	return (ida_simple_get(ida, 0, max, gfp));
+}
+
+static inline bool
+ida_is_empty(struct ida *ida)
+{
+
+	return (idr_is_empty(&ida->idr));
 }
 
 #endif	/* _LINUX_IDR_H_ */

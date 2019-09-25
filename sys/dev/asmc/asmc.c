@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2007, 2008 Rui Paulo <rpaulo@FreeBSD.org>
  * All rights reserved.
  *
@@ -55,8 +57,6 @@ __FBSDID("$FreeBSD$");
 #include <dev/acpica/acpivar.h>
 #include <dev/asmc/asmcvar.h>
 
-#include "opt_intr_filter.h"
-
 /*
  * Device interface.
  */
@@ -83,9 +83,6 @@ static int 	asmc_temp_getvalue(device_t dev, const char *key);
 static int 	asmc_sms_read(device_t, const char *key, int16_t *val);
 static void 	asmc_sms_calibrate(device_t dev);
 static int 	asmc_sms_intrfast(void *arg);
-#ifdef INTR_FILTER
-static void 	asmc_sms_handler(void *arg);
-#endif
 static void 	asmc_sms_printintr(device_t dev, uint8_t);
 static void 	asmc_sms_task(void *arg, int pending);
 #ifdef DEBUG
@@ -153,6 +150,8 @@ static struct asmc_model *asmc_match(device_t dev);
 #define ASMC_LIGHT_FUNCS asmc_mbp_sysctl_light_left, \
 			 asmc_mbp_sysctl_light_right, \
 			 asmc_mbp_sysctl_light_control
+
+#define ASMC_LIGHT_FUNCS_DISABLED NULL, NULL, NULL
 
 struct asmc_model asmc_models[] = {
 	{
@@ -222,9 +221,21 @@ struct asmc_model asmc_models[] = {
 	},
 
 	{
+	  "MacBookPro8,1", "Apple SMC MacBook Pro (early 2011, 13-inch)",
+	  ASMC_SMS_FUNCS_DISABLED, ASMC_FAN_FUNCS2, ASMC_LIGHT_FUNCS,
+	  ASMC_MBP81_TEMPS, ASMC_MBP81_TEMPNAMES, ASMC_MBP81_TEMPDESCS
+	},
+
+	{
 	  "MacBookPro8,2", "Apple SMC MacBook Pro (early 2011)",
 	  ASMC_SMS_FUNCS, ASMC_FAN_FUNCS, ASMC_LIGHT_FUNCS,
-	  ASMC_MBP8_TEMPS, ASMC_MBP8_TEMPNAMES, ASMC_MBP8_TEMPDESCS
+	  ASMC_MBP82_TEMPS, ASMC_MBP82_TEMPNAMES, ASMC_MBP82_TEMPDESCS
+	},
+
+	{
+	 "MacBookPro9,2", "Apple SMC MacBook Pro (mid 2012)",
+	  ASMC_SMS_FUNCS_DISABLED, ASMC_FAN_FUNCS, ASMC_LIGHT_FUNCS,
+	  ASMC_MBP9_TEMPS, ASMC_MBP9_TEMPNAMES, ASMC_MBP9_TEMPDESCS
 	},
 
 	{
@@ -248,6 +259,15 @@ struct asmc_model asmc_models[] = {
 	  ASMC_MM_TEMPS, ASMC_MM_TEMPNAMES, ASMC_MM_TEMPDESCS
 	},
 
+        /* The Mac Mini 2,1 has no SMS */
+        {
+          "Macmini2,1", "Apple SMC Mac Mini 2,1",
+          ASMC_SMS_FUNCS_DISABLED,
+          ASMC_FAN_FUNCS,
+          ASMC_LIGHT_FUNCS_DISABLED,
+          ASMC_MM21_TEMPS, ASMC_MM21_TEMPNAMES, ASMC_MM21_TEMPDESCS
+        },
+
 	/* The Mac Mini 3,1 has no SMS */
 	{
 	  "Macmini3,1", "Apple SMC Mac Mini 3,1",
@@ -257,13 +277,40 @@ struct asmc_model asmc_models[] = {
 	  ASMC_MM31_TEMPS, ASMC_MM31_TEMPNAMES, ASMC_MM31_TEMPDESCS
 	},
 
-	/* Idem for the MacPro */
+	/* The Mac Mini 4,1 (Mid-2010) has no SMS */
+	{ 
+	  "Macmini4,1", "Apple SMC Mac mini 4,1 (Mid-2010)",
+	  ASMC_SMS_FUNCS_DISABLED,
+	  ASMC_FAN_FUNCS,
+	  ASMC_LIGHT_FUNCS_DISABLED,
+	  ASMC_MM41_TEMPS, ASMC_MM41_TEMPNAMES, ASMC_MM41_TEMPDESCS
+	},
+
+	/* The Mac Mini 5,2 has no SMS */
+	{ 
+	  "Macmini5,2", "Apple SMC Mac Mini 5,2",
+	  NULL, NULL, NULL,
+	  ASMC_FAN_FUNCS2,
+	  NULL, NULL, NULL,
+	  ASMC_MM52_TEMPS, ASMC_MM52_TEMPNAMES, ASMC_MM52_TEMPDESCS
+	},
+
+	/* Idem for the Mac Pro "Quad Core" (original) */
+	{
+	  "MacPro1,1", "Apple SMC Mac Pro (Quad Core)",
+	  NULL, NULL, NULL,
+	  ASMC_FAN_FUNCS,
+	  NULL, NULL, NULL,
+	  ASMC_MP1_TEMPS, ASMC_MP1_TEMPNAMES, ASMC_MP1_TEMPDESCS
+	},
+
+	/* Idem for the Mac Pro (8-core) */
 	{
 	  "MacPro2", "Apple SMC Mac Pro (8-core)",
 	  NULL, NULL, NULL,
 	  ASMC_FAN_FUNCS,
 	  NULL, NULL, NULL,
-	  ASMC_MP_TEMPS, ASMC_MP_TEMPNAMES, ASMC_MP_TEMPDESCS
+	  ASMC_MP2_TEMPS, ASMC_MP2_TEMPNAMES, ASMC_MP2_TEMPDESCS
 	},
 
 	/* Idem for the MacPro  2010*/
@@ -303,6 +350,21 @@ struct asmc_model asmc_models[] = {
 	  ASMC_MBA5_TEMPS, ASMC_MBA5_TEMPNAMES, ASMC_MBA5_TEMPDESCS
 	},
 
+	{
+	  "MacBookAir7,1", "Apple SMC MacBook Air 11-inch (Early 2015)",
+	  ASMC_SMS_FUNCS_DISABLED,
+	  ASMC_FAN_FUNCS2,
+	  ASMC_LIGHT_FUNCS,
+	  ASMC_MBA7_TEMPS, ASMC_MBA7_TEMPNAMES, ASMC_MBA7_TEMPDESCS
+	},
+
+	{
+	  "MacBookAir7,2", "Apple SMC MacBook Air 13-inch (Early 2015)",
+	  ASMC_SMS_FUNCS_DISABLED,
+	  ASMC_FAN_FUNCS2,
+	  ASMC_LIGHT_FUNCS,
+	  ASMC_MBA7_TEMPS, ASMC_MBA7_TEMPNAMES, ASMC_MBA7_TEMPDESCS
+	},
 
 	{ NULL, NULL }
 };
@@ -561,13 +623,11 @@ asmc_attach(device_t dev)
 	 * We only need to do this for the non INTR_FILTER case.
 	 */
 	sc->sc_sms_tq = NULL;
-#ifndef INTR_FILTER
 	TASK_INIT(&sc->sc_sms_task, 0, asmc_sms_task, sc);
 	sc->sc_sms_tq = taskqueue_create_fast("asmc_taskq", M_WAITOK,
 	    taskqueue_thread_enqueue, &sc->sc_sms_tq);
 	taskqueue_start_threads(&sc->sc_sms_tq, 1, PI_REALTIME, "%s sms taskq",
 	    device_get_nameunit(dev));
-#endif
 	/*
 	 * Allocate an IRQ for the SMS.
 	 */
@@ -582,11 +642,7 @@ asmc_attach(device_t dev)
 
 	ret = bus_setup_intr(dev, sc->sc_irq,
 	          INTR_TYPE_MISC | INTR_MPSAFE,
-#ifdef INTR_FILTER
-	    asmc_sms_intrfast, asmc_sms_handler,
-#else
 	    asmc_sms_intrfast, NULL,
-#endif
 	    dev, &sc->sc_cookie);
 
 	if (ret) {
@@ -1239,23 +1295,10 @@ asmc_sms_intrfast(void *arg)
 	sc->sc_sms_intrtype = type;
 	asmc_sms_printintr(dev, type);
 
-#ifdef INTR_FILTER
-	return (FILTER_SCHEDULE_THREAD | FILTER_HANDLED);
-#else
 	taskqueue_enqueue(sc->sc_sms_tq, &sc->sc_sms_task);
-#endif
 	return (FILTER_HANDLED);
 }
 
-#ifdef INTR_FILTER
-static void
-asmc_sms_handler(void *arg)
-{
-	struct asmc_softc *sc = device_get_softc(arg);
-
-	asmc_sms_task(sc, 0);
-}
-#endif
 
 
 static void

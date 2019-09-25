@@ -37,6 +37,7 @@
 #include <sys/protosw.h>
 #include <sys/queue.h>
 #include <sys/socket.h>
+#define	_WANT_SOCKET
 #include <sys/socketvar.h>
 
 #include <net/if.h>

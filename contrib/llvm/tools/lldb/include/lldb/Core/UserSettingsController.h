@@ -10,16 +10,16 @@
 #ifndef liblldb_UserSettingsController_h_
 #define liblldb_UserSettingsController_h_
 
-#include "lldb/Utility/Status.h"            // for Status
-#include "lldb/lldb-forward.h"              // for OptionValuePropertiesSP
-#include "lldb/lldb-private-enumerations.h" // for VarSetOperationType
+#include "lldb/Utility/Status.h"
+#include "lldb/lldb-forward.h"
+#include "lldb/lldb-private-enumerations.h"
 
-#include "llvm/ADT/StringRef.h" // for StringRef
+#include "llvm/ADT/StringRef.h"
 
 #include <vector>
 
-#include <stddef.h> // for size_t
-#include <stdint.h> // for uint32_t
+#include <stddef.h>
+#include <stdint.h>
 
 namespace lldb_private {
 class CommandInterpreter;
@@ -49,8 +49,8 @@ public:
   virtual ~Properties() {}
 
   virtual lldb::OptionValuePropertiesSP GetValueProperties() const {
-    // This function is virtual in case subclasses want to lazily
-    // implement creating the properties.
+    // This function is virtual in case subclasses want to lazily implement
+    // creating the properties.
     return m_collection_sp;
   }
 
@@ -82,16 +82,11 @@ public:
 
   // We sometimes need to introduce a setting to enable experimental features,
   // but then we don't want the setting for these to cause errors when the
-  // setting
-  // goes away.  Add a sub-topic of the settings using this experimental name,
-  // and
-  // two things will happen.  One is that settings that don't find the name will
-  // not
-  // be treated as errors.  Also, if you decide to keep the settings just move
-  // them into
-  // the containing properties, and we will auto-forward the experimental
-  // settings to the
-  // real one.
+  // setting goes away.  Add a sub-topic of the settings using this
+  // experimental name, and two things will happen.  One is that settings that
+  // don't find the name will not be treated as errors.  Also, if you decide to
+  // keep the settings just move them into the containing properties, and we
+  // will auto-forward the experimental settings to the real one.
   static const char *GetExperimentalSettingsName();
 
   static bool IsSettingExperimental(llvm::StringRef setting);

@@ -24,7 +24,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd June 2, 2017
+.Dd December 11, 2018
 .Dt BHYVE 8
 .Os
 .Sh NAME
@@ -33,12 +33,22 @@
 .Sh SYNOPSIS
 .Nm
 .Op Fl abehuwxACHPSWY
-.Op Fl c Ar numcpus
+.Oo
+.Fl c\~ Ns
+.Oo
+.Op Ar cpus= Ns
+.Ar numcpus Ns
+.Oc Ns
+.Op Ar ,sockets=n Ns
+.Op Ar ,cores=n Ns
+.Op Ar ,threads=n
+.Oc
 .Op Fl g Ar gdbport
-.Op Fl l Ar lpcdev Ns Op , Ns Ar conf
+.Op Fl l Ar help|lpcdev Ns Op , Ns Ar conf
 .Op Fl m Ar memsize Ns Op Ar K|k|M|m|G|g|T|t
 .Op Fl p Ar vcpu:hostcpu
-.Op Fl s Ar slot,emulation Ns Op , Ns Ar conf
+.Op Fl s Ar help|slot,emulation Ns Op , Ns Ar conf
+.Op Fl G Ar port
 .Op Fl U Ar uuid
 .Ar vmname
 .Sh DESCRIPTION
@@ -77,9 +87,30 @@ Enable a low-level console device supported by
 kernels compiled with
 .Cd "device bvmconsole" .
 This option will be deprecated in a future version.
-.It Fl c Ar numcpus
-Number of guest virtual CPUs.
-The default is 1 and the maximum is 16.
+.It Fl c Op Ar setting ...
+Number of guest virtual CPUs
+and/or the CPU topology.
+The default value for each of
+.Ar numcpus ,
+.Ar sockets ,
+.Ar cores ,
+and
+.Ar threads
+is 1.
+The current maximum number of guest virtual CPUs is 16.
+If
+.Ar numcpus
+is not specified then it will be calculated from the other arguments.
+The topology must be consistent in that the
+.Ar numcpus
+must equal the product of
+.Ar sockets ,
+.Ar cores ,
+and
+.Ar threads .
+If a
+.Ar setting
+is specified more than once the last one has precedence.
 .It Fl C
 Include guest memory in core file.
 .It Fl e
@@ -95,12 +126,25 @@ kernels compiled with
 allow a remote kernel kgdb to be relayed to the guest kernel gdb stub
 via a local IPv4 address and this port.
 This option will be deprecated in a future version.
+.It Fl G Ar port
+Start a debug server that uses the GDB protocol to export guest state to a
+debugger.
+An IPv4 TCP socket will be bound to the supplied
+.Ar port
+to listen for debugger connections.
+Only a single debugger may be attached to the debug server at a time.
+If
+.Ar port
+begins with
+.Sq w ,
+.Nm
+will pause execution at the first instruction waiting for a debugger to attach.
 .It Fl h
 Print help message and exit.
 .It Fl H
 Yield the virtual CPU thread when a HLT instruction is detected.
 If this option is not specified, virtual CPUs will use 100% of a host CPU.
-.It Fl l Ar lpcdev Ns Op , Ns Ar conf
+.It Fl l Op Ar help|lpcdev Ns Op , Ns Ar conf
 Allow devices behind the LPC PCI-ISA bridge to be configured.
 The only supported devices are the TTY-class devices
 .Ar com1
@@ -108,6 +152,9 @@ and
 .Ar com2
 and the boot ROM device
 .Ar bootrom .
+.Pp
+.Ar help
+print a list of supported LPC devices.
 .It Fl m Ar memsize Ns Op Ar K|k|M|m|G|g|T|t
 Guest physical memory size in bytes.
 This must be the same size that was given to
@@ -127,7 +174,7 @@ to
 .Em hostcpu .
 .It Fl P
 Force the guest virtual CPU to exit when a PAUSE instruction is detected.
-.It Fl s Ar slot,emulation Ns Op , Ns Ar conf
+.It Fl s Op Ar help|slot,emulation Ns Op , Ns Ar conf
 Configure a virtual PCI slot and function.
 .Pp
 .Nm
@@ -136,6 +183,8 @@ slots on the bus.
 There are 32 available slots, with the option of providing up to 8 functions
 per slot.
 .Bl -tag -width 10n
+.It Ar help
+print a list of supported PCI devices.
 .It Ar slot
 .Ar pcislot[:function]
 .Ar bus:pcislot:function
@@ -172,6 +221,8 @@ PCI pass-through device.
 Virtio network interface.
 .It Li virtio-blk
 Virtio block storage interface.
+.It Li virtio-scsi
+Virtio SCSI interface.
 .It Li virtio-rnd
 Virtio RNG interface.
 .It Li virtio-console
@@ -195,6 +246,8 @@ The LPC bridge emulation can only be configured on bus 0.
 Raw framebuffer device attached to VNC server.
 .It Li xhci
 eXtensible Host Controller Interface (xHCI) USB controller.
+.It Li nvme
+NVM Express (NVMe) controller.
 .El
 .It Op Ar conf
 This optional parameter describes the backend for device emulations.
@@ -243,6 +296,20 @@ The physical sector size is optional and is equal to the logical sector size
 if not explicitly specified.
 .El
 .Pp
+SCSI devices:
+.Bl -tag -width 10n
+.It Pa /dev/cam/ctl Ns Oo Ar pp . Ns Ar vp Oc Ns Oo , Ns Ar scsi-device-options Oc
+.El
+.Pp
+The
+.Ar scsi-device-options
+are:
+.Bl -tag -width 10n
+.It Li iid= Ns Ar IID
+Initiator ID to use when sending requests to specified CTL port.
+The default value is 0.
+.El
+.Pp
 TTY devices:
 .Bl -tag -width 10n
 .It Li stdio
@@ -278,7 +345,7 @@ Guest memory must be wired using the
 option when a pass-through device is configured.
 .Pp
 The host device must have been reserved at boot-time using the
-.Va pptdev
+.Va pptdevs
 loader variable as described in
 .Xr vmm 4 .
 .Pp
@@ -309,16 +376,21 @@ Emergency write is advertised, but no-op at present.
 .Pp
 Framebuffer devices:
 .Bl -tag -width 10n
-.It Oo rfb= Ns Oo Ar IP: Oc Ns Ar port Oc Ns Oo ,w= Ns Ar width Oc Ns Oo ,h= Ns Ar height Oc Ns Oo ,vga= Ns Ar vgaconf Oc Ns Oo Ns ,wait Oc Ns Oo ,password= Ns Ar password Oc
+.It Xo
+.Oo rfb= Ns Oo Ar IP\&: Oc Ns Ar port Oc Ns Oo ,w= Ns Ar width Oc Ns Oo ,h= Ns
+.Ar height Oc Ns Oo ,vga= Ns Ar vgaconf Oc Ns Oo Ns ,wait Oc Ns Oo ,password= Ns
+.Ar password Oc
+.Xc
 .Bl -tag -width 8n
-.It Ar IP:port
+.It Ar IPv4:port No or Ar [IPv6%zone]:port
 An
 .Ar IP
 address and a
 .Ar port
 VNC should listen on.
 The default is to listen on localhost IPv4 address and default VNC port 5900.
-Listening on an IPv6 address is not supported.
+An IPv6 address must be enclosed in square brackets and may contain an
+optional zone identifier.
 .It Ar width No and Ar height
 A display resolution, width and height, respectively.
 If not specified, a default resolution of 1024x768 pixels will be used.
@@ -339,8 +411,8 @@ and memory space
 .Pq 64KB at Ad 0xA0000 .
 The default
 .Dq io
-option should be used for guests that attempt to issue BIOS
-calls which result in I/O port queries, and fail to boot if I/O decode is disabled.
+option should be used for guests that attempt to issue BIOS calls which result
+in I/O port queries, and fail to boot if I/O decode is disabled.
 .Pp
 The
 .Dq on
@@ -365,8 +437,8 @@ for configuration notes of particular guests.
 .It wait
 Instruct
 .Nm
-to only boot upon the initiation of a VNC connection, simplifying the installation
-of operating systems that require immediate keyboard input.
+to only boot upon the initiation of a VNC connection, simplifying the
+installation of operating systems that require immediate keyboard input.
 This can be removed for post-installation use.
 .It password
 This type of authentication is known to be cryptographically weak and is not
@@ -381,6 +453,27 @@ xHCI USB devices:
 .It Li tablet
 A USB tablet device which provides precise cursor synchronization
 when using VNC.
+.El
+.Pp
+NVMe devices:
+.Bl -tag -width 10n
+.It Li devpath
+Accepted device paths are:
+.Ar /dev/blockdev
+or
+.Ar /path/to/image
+or
+.Ar ram=size_in_MiB .
+.It Li maxq
+Max number of queues.
+.It Li qsz
+Max elements in each queue.
+.It Li ioslots
+Max number of concurrent I/O requests.
+.It Li sectsz
+Sector size (defaults to blockif sector size).
+.It Li ser
+Serial number with maximum 20 characters.
 .El
 .El
 .It Fl S
@@ -408,6 +501,25 @@ Alphanumeric name of the guest.
 This should be the same as that created by
 .Xr bhyveload 8 .
 .El
+.Sh DEBUG SERVER
+The current debug server provides limited support for debuggers.
+.Ss Registers
+Each virtual CPU is exposed to the debugger as a thread.
+.Pp
+General purpose registers can be queried for each virtual CPU, but other
+registers such as floating-point and system registers cannot be queried.
+.Ss Memory
+Memory (including memory mapped I/O regions) can be read by the debugger,
+but not written.
+Memory operations use virtual addresses that are resolved to physical addresses
+via the current virtual CPU's active address translation.
+.Ss Control
+The running guest can be interrupted by the debugger at any time
+.Pq for example, by pressing Ctrl-C in the debugger .
+.Pp
+Single stepping is only supported on Intel CPUs supporting the MTRAP VM exit.
+.Pp
+Breakpoints are not supported.
 .Sh SIGNAL HANDLING
 .Nm
 deals with the following signals:
@@ -428,6 +540,8 @@ powered off
 halted
 .It 3
 triple fault
+.It 4
+exited due to an error
 .El
 .Sh EXAMPLES
 If not using a boot ROM, the guest operating system must have been loaded with
@@ -488,6 +602,20 @@ bhyve -c 2 -m 4G -w -H \\
   -l bootrom,/usr/local/share/uefi-firmware/BHYVE_UEFI.fd \\
    uefivm
 .Ed
+.Pp
+Run a UEFI virtual machine with a VNC display that is bound to all IPv6
+addresses on port 5900.
+.Bd -literal -offset indent
+bhyve -c 2 -m 4G -w -H \\
+  -s 0,hostbridge \\
+  -s 4,ahci-hd,disk.img \\
+  -s 5,virtio-net,tap0 \\
+  -s 29,fbuf,tcp=[::]:5900,w=800,h=600 \\
+  -s 30,xhci,tablet \\
+  -s 31,lpc -l com1,stdio \\
+  -l bootrom,/usr/local/share/uefi-firmware/BHYVE_UEFI.fd \\
+   uefivm
+.Ed
 .Sh SEE ALSO
 .Xr bhyve 4 ,
 .Xr nmdm 4 ,
@@ -495,6 +623,12 @@ bhyve -c 2 -m 4G -w -H \\
 .Xr ethers 5 ,
 .Xr bhyvectl 8 ,
 .Xr bhyveload 8
+.Pp
+.Rs
+.%A Intel
+.%B 64 and IA-32 Architectures Software Developer’s Manual
+.%V Volume 3
+.Re
 .Sh HISTORY
 .Nm
 first appeared in

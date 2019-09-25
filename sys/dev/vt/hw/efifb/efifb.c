@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2014 The FreeBSD Foundation
  * All rights reserved.
  *
@@ -56,11 +58,14 @@ static struct vt_driver vt_efifb_driver = {
 	.vd_init = vt_efifb_init,
 	.vd_blank = vt_fb_blank,
 	.vd_bitblt_text = vt_fb_bitblt_text,
+	.vd_invalidate_text = vt_fb_invalidate_text,
 	.vd_bitblt_bmp = vt_fb_bitblt_bitmap,
 	.vd_drawrect = vt_fb_drawrect,
 	.vd_setpixel = vt_fb_setpixel,
 	.vd_fb_ioctl = vt_fb_ioctl,
 	.vd_fb_mmap = vt_fb_mmap,
+	.vd_suspend = vt_suspend,
+	.vd_resume = vt_resume,
 	/* Better than VGA, but still generic driver. */
 	.vd_priority = VD_PRIORITY_GENERIC + 1,
 };

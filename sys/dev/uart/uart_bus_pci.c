@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2006 Marcel Moolenaar
  * Copyright (c) 2001 M. Warner Losh
  * All rights reserved.
@@ -45,12 +47,14 @@ __FBSDID("$FreeBSD$");
 #define	DEFAULT_RCLK	1843200
 
 static int uart_pci_probe(device_t dev);
+static int uart_pci_attach(device_t dev);
+static int uart_pci_detach(device_t dev);
 
 static device_method_t uart_pci_methods[] = {
 	/* Device interface */
 	DEVMETHOD(device_probe,		uart_pci_probe),
-	DEVMETHOD(device_attach,	uart_bus_attach),
-	DEVMETHOD(device_detach,	uart_bus_detach),
+	DEVMETHOD(device_attach,	uart_pci_attach),
+	DEVMETHOD(device_detach,	uart_pci_detach),
 	DEVMETHOD(device_resume,	uart_bus_resume),
 	DEVMETHOD_END
 };
@@ -121,6 +125,7 @@ static const struct pci_id pci_ns8250_ids[] = {
 	128 * DEFAULT_RCLK, 2},
 { 0x14e4, 0x4344, 0xffff, 0, "Sony Ericsson GC89 PC Card", 0x10},
 { 0x151f, 0x0000, 0xffff, 0, "TOPIC Semiconductor TP560 56k modem", 0x10 },
+{ 0x1d0f, 0x8250, 0x1d0f, 0, "Amazon PCI serial device", 0x10 },
 { 0x1fd4, 0x1999, 0x1fd4, 0x0001, "Sunix SER5xxxx Serial Port", 0x10,
 	8 * DEFAULT_RCLK },
 { 0x8086, 0x0f0a, 0xffff, 0, "Intel ValleyView LPIO1 HSUART#1", 0x10,
@@ -202,7 +207,7 @@ uart_pci_probe(device_t dev)
 	return (ENXIO);
 
  match:
-	result = uart_bus_probe(dev, id->regshft, id->rclk, id->rid, 0);
+	result = uart_bus_probe(dev, id->regshft, 0, id->rclk, id->rid, 0, 0);
 	/* Bail out on error. */
 	if (result > 0)
 		return (result);
@@ -210,6 +215,42 @@ uart_pci_probe(device_t dev)
 	if (id->desc)
 		device_set_desc(dev, id->desc);
 	return (result);
+}
+
+static int
+uart_pci_attach(device_t dev)
+{
+	struct uart_softc *sc;
+	int count;
+
+	sc = device_get_softc(dev);
+
+	/*
+	 * Use MSI in preference to legacy IRQ if available.
+	 * Whilst some PCIe UARTs support >1 MSI vector, use only the first.
+	 */
+	if (pci_msi_count(dev) > 0) {
+		count = 1;
+		if (pci_alloc_msi(dev, &count) == 0) {
+			sc->sc_irid = 1;
+			device_printf(dev, "Using %d MSI message\n", count);
+		}
+	}
+
+	return (uart_bus_attach(dev));
+}
+
+static int
+uart_pci_detach(device_t dev)
+{
+	struct uart_softc *sc;
+
+	sc = device_get_softc(dev);
+
+	if (sc->sc_irid != 0)
+		pci_release_msi(dev);
+
+	return (uart_bus_detach(dev));
 }
 
 DRIVER_MODULE(uart, pci, uart_pci_driver, uart_devclass, NULL, NULL);

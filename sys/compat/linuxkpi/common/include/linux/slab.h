@@ -42,7 +42,9 @@
 
 MALLOC_DECLARE(M_KMALLOC);
 
-#define	kvmalloc(size)			kmalloc(size, 0)
+#define	kvmalloc(size, flags)		kmalloc(size, flags)
+#define	kvzalloc(size, flags)		kmalloc(size, (flags) | __GFP_ZERO)
+#define	kvcalloc(n, size, flags)	kvmalloc_array(n, size, (flags) | __GFP_ZERO)
 #define	kzalloc(size, flags)		kmalloc(size, (flags) | __GFP_ZERO)
 #define	kzalloc_node(size, flags, node)	kmalloc(size, (flags) | __GFP_ZERO)
 #define	kfree_const(ptr)		kfree(ptr)
@@ -84,6 +86,9 @@ struct linux_kmem_cache {
 
 #define	SLAB_DESTROY_BY_RCU \
 	SLAB_TYPESAFE_BY_RCU
+
+#define	ARCH_KMALLOC_MINALIGN \
+	__alignof(unsigned long long)
 
 static inline gfp_t
 linux_check_m_flags(gfp_t flags)
@@ -127,6 +132,12 @@ vmalloc_32(size_t size)
 
 static inline void *
 kmalloc_array(size_t n, size_t size, gfp_t flags)
+{
+	return (mallocarray(n, size, M_KMALLOC, linux_check_m_flags(flags)));
+}
+
+static inline void *
+kvmalloc_array(size_t n, size_t size, gfp_t flags)
 {
 	return (mallocarray(n, size, M_KMALLOC, linux_check_m_flags(flags)));
 }

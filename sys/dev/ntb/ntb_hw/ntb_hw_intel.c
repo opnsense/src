@@ -495,8 +495,6 @@ static struct ntb_hw_info pci_ids[] = {
 	{ 0x6F0D8086, "BDX Xeon E5 V4 Non-Transparent Bridge B2B", NTB_XEON,
 		NTB_SDOORBELL_LOCKUP | NTB_B2BDOORBELL_BIT14 |
 		    NTB_SB01BASE_LOCKUP },
-
-	{ 0x00000000, NULL, NTB_ATOM, 0 }
 };
 
 static const struct ntb_reg atom_reg = {
@@ -1390,12 +1388,11 @@ intel_ntb_get_msix_info(struct ntb_softc *ntb)
 static struct ntb_hw_info *
 intel_ntb_get_device_info(uint32_t device_id)
 {
-	struct ntb_hw_info *ep = pci_ids;
+	struct ntb_hw_info *ep;
 
-	while (ep->device_id) {
+	for (ep = pci_ids; ep < &pci_ids[nitems(pci_ids)]; ep++) {
 		if (ep->device_id == device_id)
 			return (ep);
-		++ep;
 	}
 	return (NULL);
 }
@@ -1977,6 +1974,44 @@ atom_perform_link_restart(struct ntb_softc *ntb)
 	status = intel_ntb_reg_read(4, ATOM_LTSSMSTATEJMP_OFFSET);
 	status &= ~ATOM_LTSSMSTATEJMP_FORCEDETECT;
 	intel_ntb_reg_write(4, ATOM_LTSSMSTATEJMP_OFFSET, status);
+}
+
+static int
+intel_ntb_port_number(device_t dev)
+{
+	struct ntb_softc *ntb = device_get_softc(dev);
+
+	return (ntb->dev_type == NTB_DEV_USD ? 0 : 1);
+}
+
+static int
+intel_ntb_peer_port_count(device_t dev)
+{
+
+	return (1);
+}
+
+static int
+intel_ntb_peer_port_number(device_t dev, int pidx)
+{
+	struct ntb_softc *ntb = device_get_softc(dev);
+
+	if (pidx != 0)
+		return (-EINVAL);
+
+	return (ntb->dev_type == NTB_DEV_USD ? 1 : 0);
+}
+
+static int
+intel_ntb_peer_port_idx(device_t dev, int port)
+{
+	int peer_port;
+
+	peer_port = intel_ntb_peer_port_number(dev, 0);
+	if (peer_port == -EINVAL || port != peer_port)
+		return (-EINVAL);
+
+	return (0);
 }
 
 static int
@@ -3089,6 +3124,10 @@ static device_method_t ntb_intel_methods[] = {
 	DEVMETHOD(bus_child_location_str, ntb_child_location_str),
 	DEVMETHOD(bus_print_child,	ntb_print_child),
 	/* NTB interface */
+	DEVMETHOD(ntb_port_number,	intel_ntb_port_number),
+	DEVMETHOD(ntb_peer_port_count,	intel_ntb_peer_port_count),
+	DEVMETHOD(ntb_peer_port_number,	intel_ntb_peer_port_number),
+	DEVMETHOD(ntb_peer_port_idx, 	intel_ntb_peer_port_idx),
 	DEVMETHOD(ntb_link_is_up,	intel_ntb_link_is_up),
 	DEVMETHOD(ntb_link_enable,	intel_ntb_link_enable),
 	DEVMETHOD(ntb_link_disable,	intel_ntb_link_disable),
@@ -3122,3 +3161,5 @@ static DEFINE_CLASS_0(ntb_hw, ntb_intel_driver, ntb_intel_methods,
 DRIVER_MODULE(ntb_hw_intel, pci, ntb_intel_driver, ntb_hw_devclass, NULL, NULL);
 MODULE_DEPEND(ntb_hw_intel, ntb, 1, 1, 1);
 MODULE_VERSION(ntb_hw_intel, 1);
+MODULE_PNP_INFO("W32:vendor/device;D:#", pci, ntb_hw_intel, pci_ids,
+    nitems(pci_ids));

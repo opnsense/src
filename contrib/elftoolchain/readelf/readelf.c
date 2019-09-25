@@ -47,7 +47,7 @@
 
 #include "_elftc.h"
 
-ELFTC_VCSID("$Id: readelf.c 3519 2017-04-09 23:15:58Z kaiwang27 $");
+ELFTC_VCSID("$Id: readelf.c 3649 2018-11-24 03:26:23Z emaste $");
 
 /* Backwards compatability for older FreeBSD releases. */
 #ifndef	STB_GNU_UNIQUE
@@ -220,6 +220,11 @@ struct mips_option {
 	const char *desc;
 };
 
+struct flag_desc {
+	uint64_t flag;
+	const char *desc;
+};
+
 static void add_dumpop(struct readelf *re, size_t si, const char *sn, int op,
     int t);
 static const char *aeabi_adv_simd_arch(uint64_t simd);
@@ -293,6 +298,7 @@ static void dump_dwarf_ranges_foreach(struct readelf *re, Dwarf_Die die,
 static void dump_dwarf_str(struct readelf *re);
 static void dump_eflags(struct readelf *re, uint64_t e_flags);
 static void dump_elf(struct readelf *re);
+static void dump_flags(struct flag_desc *fd, uint64_t flags);
 static void dump_dyn_val(struct readelf *re, GElf_Dyn *dyn, uint32_t stab);
 static void dump_dynamic(struct readelf *re);
 static void dump_liblist(struct readelf *re);
@@ -307,6 +313,8 @@ static void dump_mips_specific_info(struct readelf *re);
 static void dump_notes(struct readelf *re);
 static void dump_notes_content(struct readelf *re, const char *buf, size_t sz,
     off_t off);
+static void dump_notes_data(const char *name, uint32_t type, const char *buf,
+    size_t sz);
 static void dump_svr4_hash(struct section *s);
 static void dump_svr4_hash64(struct readelf *re, struct section *s);
 static void dump_gnu_hash(struct readelf *re, struct section *s);
@@ -409,6 +417,13 @@ static struct eflags_desc powerpc_eflags_desc[] = {
 	{EF_PPC_EMB, "emb"},
 	{EF_PPC_RELOCATABLE, "relocatable"},
 	{EF_PPC_RELOCATABLE_LIB, "relocatable-lib"},
+	{0, NULL}
+};
+
+static struct eflags_desc riscv_eflags_desc[] = {
+	{EF_RISCV_RVC, "RVC"},
+	{EF_RISCV_RVE, "RVE"},
+	{EF_RISCV_TSO, "TSO"},
 	{0, NULL}
 };
 
@@ -822,6 +837,7 @@ dt_type(unsigned int mach, unsigned int dtype)
 	case DT_SUNW_RTLDINF: return "SUNW_RTLDINF";
 	case DT_SUNW_FILTER: return "SUNW_FILTER";
 	case DT_SUNW_CAP: return "SUNW_CAP";
+	case DT_SUNW_ASLR: return "SUNW_ASLR";
 	case DT_CHECKSUM: return "CHECKSUM";
 	case DT_PLTPADSZ: return "PLTPADSZ";
 	case DT_MOVEENT: return "MOVEENT";
@@ -1120,6 +1136,7 @@ note_type_freebsd(unsigned int nt)
 	case 1: return "NT_FREEBSD_ABI_TAG";
 	case 2: return "NT_FREEBSD_NOINIT_TAG";
 	case 3: return "NT_FREEBSD_ARCH_TAG";
+	case 4: return "NT_FREEBSD_FEATURE_CTL";
 	default: return (note_type_unknown(nt));
 	}
 }
@@ -1188,6 +1205,7 @@ note_type_gnu(unsigned int nt)
 	case 2: return "NT_GNU_HWCAP (Hardware capabilities)";
 	case 3: return "NT_GNU_BUILD_ID (Build id set by ld(1))";
 	case 4: return "NT_GNU_GOLD_VERSION (GNU gold version)";
+	case 5: return "NT_GNU_PROPERTY_TYPE_0";
 	default: return (note_type_unknown(nt));
 	}
 }
@@ -2048,6 +2066,74 @@ dwarf_reg(unsigned int mach, unsigned int reg)
 		case 49: return "ldtr";
 		default: return (NULL);
 		}
+	case EM_RISCV:
+		switch (reg) {
+		case 0: return "zero";
+		case 1: return "ra";
+		case 2: return "sp";
+		case 3: return "gp";
+		case 4: return "tp";
+		case 5: return "t0";
+		case 6: return "t1";
+		case 7: return "t2";
+		case 8: return "s0";
+		case 9: return "s1";
+		case 10: return "a0";
+		case 11: return "a1";
+		case 12: return "a2";
+		case 13: return "a3";
+		case 14: return "a4";
+		case 15: return "a5";
+		case 16: return "a6";
+		case 17: return "a7";
+		case 18: return "s2";
+		case 19: return "s3";
+		case 20: return "s4";
+		case 21: return "s5";
+		case 22: return "s6";
+		case 23: return "s7";
+		case 24: return "s8";
+		case 25: return "s9";
+		case 26: return "s10";
+		case 27: return "s11";
+		case 28: return "t3";
+		case 29: return "t4";
+		case 30: return "t5";
+		case 31: return "t6";
+		case 32: return "ft0";
+		case 33: return "ft1";
+		case 34: return "ft2";
+		case 35: return "ft3";
+		case 36: return "ft4";
+		case 37: return "ft5";
+		case 38: return "ft6";
+		case 39: return "ft7";
+		case 40: return "fs0";
+		case 41: return "fs1";
+		case 42: return "fa0";
+		case 43: return "fa1";
+		case 44: return "fa2";
+		case 45: return "fa3";
+		case 46: return "fa4";
+		case 47: return "fa5";
+		case 48: return "fa6";
+		case 49: return "fa7";
+		case 50: return "fs2";
+		case 51: return "fs3";
+		case 52: return "fs4";
+		case 53: return "fs5";
+		case 54: return "fs6";
+		case 55: return "fs7";
+		case 56: return "fs8";
+		case 57: return "fs9";
+		case 58: return "fs10";
+		case 59: return "fs11";
+		case 60: return "ft8";
+		case 61: return "ft9";
+		case 62: return "ft10";
+		case 63: return "ft11";
+		default: return (NULL);
+		}
 	case EM_X86_64:
 		switch (reg) {
 		case 0: return "rax";
@@ -2268,6 +2354,23 @@ dump_eflags(struct readelf *re, uint64_t e_flags)
 	case EM_PPC:
 	case EM_PPC64:
 		edesc = powerpc_eflags_desc;
+		break;
+	case EM_RISCV:
+		switch (e_flags & EF_RISCV_FLOAT_ABI_MASK) {
+		case EF_RISCV_FLOAT_ABI_SOFT:
+			printf(", soft-float ABI");
+			break;
+		case EF_RISCV_FLOAT_ABI_SINGLE:
+			printf(", single-float ABI");
+			break;
+		case EF_RISCV_FLOAT_ABI_DOUBLE:
+			printf(", double-float ABI");
+			break;
+		case EF_RISCV_FLOAT_ABI_QUAD:
+			printf(", quad-float ABI");
+			break;
+		}
+		edesc = riscv_eflags_desc;
 		break;
 	case EM_SPARC:
 	case EM_SPARC32PLUS:
@@ -2706,6 +2809,9 @@ dump_arch_dyn_val(struct readelf *re, GElf_Dyn *dyn)
 		case DT_MIPS_TIME_STAMP:
 			printf(" %s\n", timestamp(dyn->d_un.d_val));
 			break;
+		default:
+			printf("\n");
+			break;
 		}
 		break;
 	default:
@@ -2713,6 +2819,58 @@ dump_arch_dyn_val(struct readelf *re, GElf_Dyn *dyn)
 		break;
 	}
 }
+
+static void
+dump_flags(struct flag_desc *desc, uint64_t val)
+{
+	struct flag_desc *fd;
+
+	for (fd = desc; fd->flag != 0; fd++) {
+		if (val & fd->flag) {
+			val &= ~fd->flag;
+			printf(" %s", fd->desc);
+		}
+	}
+	if (val != 0)
+		printf(" unknown (0x%jx)", (uintmax_t)val);
+}
+
+static struct flag_desc dt_flags[] = {
+	{ DF_ORIGIN,		"ORIGIN" },
+	{ DF_SYMBOLIC,		"SYMBOLIC" },
+	{ DF_TEXTREL,		"TEXTREL" },
+	{ DF_BIND_NOW,		"BIND_NOW" },
+	{ DF_STATIC_TLS,	"STATIC_TLS" },
+	{ 0, NULL }
+};
+
+static struct flag_desc dt_flags_1[] = {
+	{ DF_1_BIND_NOW,	"NOW" },
+	{ DF_1_GLOBAL,		"GLOBAL" },
+	{ 0x4,			"GROUP" },
+	{ DF_1_NODELETE,	"NODELETE" },
+	{ DF_1_LOADFLTR,	"LOADFLTR" },
+	{ 0x20,			"INITFIRST" },
+	{ DF_1_NOOPEN,		"NOOPEN" },
+	{ DF_1_ORIGIN,		"ORIGIN" },
+	{ 0x100,		"DIRECT" },
+	{ DF_1_INTERPOSE,	"INTERPOSE" },
+	{ DF_1_NODEFLIB,	"NODEFLIB" },
+	{ 0x1000,		"NODUMP" },
+	{ 0x2000,		"CONFALT" },
+	{ 0x4000,		"ENDFILTEE" },
+	{ 0x8000,		"DISPRELDNE" },
+	{ 0x10000,		"DISPRELPND" },
+	{ 0x20000,		"NODIRECT" },
+	{ 0x40000,		"IGNMULDEF" },
+	{ 0x80000,		"NOKSYMS" },
+	{ 0x100000,		"NOHDR" },
+	{ 0x200000,		"EDITED" },
+	{ 0x400000,		"NORELOC" },
+	{ 0x800000,		"SYMINTPOSE" },
+	{ 0x1000000,		"GLOBAUDIT" },
+	{ 0, NULL }
+};
 
 static void
 dump_dyn_val(struct readelf *re, GElf_Dyn *dyn, uint32_t stab)
@@ -2761,6 +2919,7 @@ dump_dyn_val(struct readelf *re, GElf_Dyn *dyn, uint32_t stab)
 	case DT_SYMENT:
 	case DT_RELSZ:
 	case DT_RELENT:
+	case DT_PREINIT_ARRAYSZ:
 	case DT_INIT_ARRAYSZ:
 	case DT_FINI_ARRAYSZ:
 	case DT_GNU_CONFLICTSZ:
@@ -2796,6 +2955,12 @@ dump_dyn_val(struct readelf *re, GElf_Dyn *dyn, uint32_t stab)
 		break;
 	case DT_GNU_PRELINKED:
 		printf(" %s\n", timestamp(dyn->d_un.d_val));
+		break;
+	case DT_FLAGS:
+		dump_flags(dt_flags, dyn->d_un.d_val);
+		break;
+	case DT_FLAGS_1:
+		dump_flags(dt_flags_1, dyn->d_un.d_val);
 		break;
 	default:
 		printf("\n");
@@ -3415,6 +3580,53 @@ dump_notes(struct readelf *re)
 	}
 }
 
+static struct flag_desc note_feature_ctl_flags[] = {
+	{ NT_FREEBSD_FCTL_ASLR_DISABLE,		"ASLR_DISABLE" },
+	{ 0, NULL }
+};
+
+static void
+dump_notes_data(const char *name, uint32_t type, const char *buf, size_t sz)
+{
+	size_t i;
+	const uint32_t *ubuf;
+
+	/* Note data is at least 4-byte aligned. */
+	if (((uintptr_t)buf & 3) != 0) {
+		warnx("bad note data alignment");
+		goto unknown;
+	}
+	ubuf = (const uint32_t *)(const void *)buf;
+
+	if (strcmp(name, "FreeBSD") == 0) {
+		switch (type) {
+		case NT_FREEBSD_ABI_TAG:
+			if (sz != 4)
+				goto unknown;
+			printf("   ABI tag: %u\n", ubuf[0]);
+			return;
+		/* NT_FREEBSD_NOINIT_TAG carries no data, treat as unknown. */
+		case NT_FREEBSD_ARCH_TAG:
+			if (sz != 4)
+				goto unknown;
+			printf("   Arch tag: %x\n", ubuf[0]);
+			return;
+		case NT_FREEBSD_FEATURE_CTL:
+			if (sz != 4)
+				goto unknown;
+			printf("   Features:");
+			dump_flags(note_feature_ctl_flags, ubuf[0]);
+			printf("\n");
+			return;
+		}
+	}
+unknown:
+	printf("   description data:");
+	for (i = 0; i < sz; i++)
+		printf(" %02x", (unsigned char)buf[i]);
+	printf("\n");
+}
+
 static void
 dump_notes_content(struct readelf *re, const char *buf, size_t sz, off_t off)
 {
@@ -3431,7 +3643,9 @@ dump_notes_content(struct readelf *re, const char *buf, size_t sz, off_t off)
 			return;
 		}
 		note = (Elf_Note *)(uintptr_t) buf;
-		name = (char *)(uintptr_t)(note + 1);
+		buf += sizeof(Elf_Note);
+		name = buf;
+		buf += roundup2(note->n_namesz, 4);
 		/*
 		 * The name field is required to be nul-terminated, and
 		 * n_namesz includes the terminating nul in observed
@@ -3449,8 +3663,8 @@ dump_notes_content(struct readelf *re, const char *buf, size_t sz, off_t off)
 		printf("  %-13s %#010jx", name, (uintmax_t) note->n_descsz);
 		printf("      %s\n", note_type(name, re->ehdr.e_type,
 		    note->n_type));
-		buf += sizeof(Elf_Note) + roundup2(note->n_namesz, 4) +
-		    roundup2(note->n_descsz, 4);
+		dump_notes_data(name, note->n_type, buf, note->n_descsz);
+		buf += roundup2(note->n_descsz, 4);
 	}
 }
 
@@ -4713,7 +4927,7 @@ dump_dwarf_line_decoded(struct readelf *re)
 		    DW_DLV_OK)
 			dir = NULL;
 		printf("CU: ");
-		if (dir && file)
+		if (dir && file && file[0] != '/')
 			printf("%s/", dir);
 		if (file)
 			printf("%s", file);
@@ -6910,13 +7124,13 @@ dump_object(struct readelf *re)
 
 	if ((re->elf = elf_begin(fd, ELF_C_READ, NULL)) == NULL) {
 		warnx("elf_begin() failed: %s", elf_errmsg(-1));
-		return;
+		goto done;
 	}
 
 	switch (elf_kind(re->elf)) {
 	case ELF_K_NONE:
 		warnx("Not an ELF file.");
-		return;
+		goto done;
 	case ELF_K_ELF:
 		dump_elf(re);
 		break;
@@ -6925,10 +7139,13 @@ dump_object(struct readelf *re)
 		break;
 	default:
 		warnx("Internal: libelf returned unknown elf kind.");
-		return;
+		goto done;
 	}
 
 	elf_end(re->elf);
+
+done:
+	close(fd);
 }
 
 static void
@@ -7349,7 +7566,7 @@ main(int argc, char **argv)
 			re->options |= RE_S;
 			break;
 		case 't':
-			re->options |= RE_T;
+			re->options |= RE_SS | RE_T;
 			break;
 		case 'u':
 			re->options |= RE_U;

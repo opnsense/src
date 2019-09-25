@@ -77,7 +77,6 @@ The Regents of the University of California.  All rights reserved.\n";
  */
 #ifdef HAVE_CAPSICUM
 #include <sys/capsicum.h>
-#include <sys/sysctl.h>
 #include <sys/nv.h>
 #include <sys/ioccom.h>
 #include <net/bpf.h>
@@ -113,6 +112,10 @@ The Regents of the University of California.  All rights reserved.\n";
 #undef HAVE_LIBCAP_NG
 #endif /* HAVE_CAP_NG_H */
 #endif /* HAVE_LIBCAP_NG */
+
+#ifdef __FreeBSD__
+#include <sys/sysctl.h>
+#endif /* __FreeBSD__ */
 
 #include "netdissect.h"
 #include "interface.h"
@@ -738,7 +741,7 @@ capdns_setup(void)
 	if (capdnsloc == NULL)
 		error("unable to open system.dns service");
 	/* Limit system.dns to reverse DNS lookups. */
-	types[0] = "ADDR";
+	types[0] = "ADDR2NAME";
 	if (cap_dns_type_limit(capdnsloc, types, 1) < 0)
 		error("unable to limit access to system.dns service");
 	families[0] = AF_INET;
@@ -1095,6 +1098,10 @@ open_interface(const char *device, netdissect_options *ndo, char *ebuf)
 			sysctlbyname(sysctl, parent, &s, NULL, 0);
 			strlcpy(newdev, device, sizeof(newdev));
 			/* Suggest a new wlan device. */
+			/* FIXME: incrementing the index this way is not going to work well
+			 * when the index is 9 or greater but the only consequence in this
+			 * specific case would be an error message that looks a bit odd.
+			 */
 			newdev[strlen(newdev)-1]++;
 			error("%s is not a monitor mode VAP\n"
 			    "To create a new monitor mode VAP use:\n"
@@ -1908,7 +1915,7 @@ main(int argc, char **argv)
 	if (pcap_setfilter(pd, &fcode) < 0)
 		error("%s", pcap_geterr(pd));
 #ifdef HAVE_CAPSICUM
-	if (RFileName == NULL && VFileName == NULL) {
+	if (RFileName == NULL && VFileName == NULL && pcap_fileno(pd) != -1) {
 		static const unsigned long cmds[] = { BIOCGSTATS, BIOCROTZBUF };
 
 		/*
@@ -2056,12 +2063,16 @@ main(int argc, char **argv)
 	}
 
 #ifdef HAVE_CAPSICUM
-	cansandbox = (VFileName == NULL && zflag == NULL);
+	cansandbox = (VFileName == NULL && zflag == NULL &&
+	    ndo->ndo_espsecret == NULL);
 #ifdef HAVE_CASPER
 	cansandbox = (cansandbox && (ndo->ndo_nflag || capdns != NULL));
 #else
 	cansandbox = (cansandbox && ndo->ndo_nflag);
 #endif	/* HAVE_CASPER */
+	cansandbox = (cansandbox && (pcap_fileno(pd) != -1 ||
+	    RFileName != NULL));
+
 	if (cansandbox && cap_enter() < 0 && errno != ENOSYS)
 		error("unable to enter the capability mode");
 #endif	/* HAVE_CAPSICUM */

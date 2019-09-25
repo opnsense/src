@@ -662,6 +662,7 @@ man_setup_width() {
 # Setup necessary locale variables.
 man_setup_locale() {
 	local lang_cc
+	local locstr
 
 	locpaths='.'
 	man_charset='US-ASCII'
@@ -670,18 +671,25 @@ man_setup_locale() {
 	if [ -n "$oflag" ]; then
 		decho 'Using non-localized manpages'
 	else
-		# Use the locale tool to give us the proper LC_CTYPE
+		# Use the locale tool to give us proper locale information
 		eval $( $LOCALE )
 
-		case "$LC_CTYPE" in
+		if [ -n "$LANG" ]; then
+			locstr=$LANG
+		else
+			locstr=$LC_CTYPE
+		fi
+
+		case "$locstr" in
 		C)		;;
+		C.UTF-8)	;;
 		POSIX)		;;
 		[a-z][a-z]_[A-Z][A-Z]\.*)
-				lang_cc="${LC_CTYPE%.*}"
-				man_lang="${LC_CTYPE%_*}"
+				lang_cc="${locstr%.*}"
+				man_lang="${locstr%_*}"
 				man_country="${lang_cc#*_}"
-				man_charset="${LC_CTYPE#*.}"
-				locpaths="$LC_CTYPE"
+				man_charset="${locstr#*.}"
+				locpaths="$locstr"
 				locpaths="$locpaths:$man_lang.$man_charset"
 				if [ "$man_lang" != "en" ]; then
 					locpaths="$locpaths:en.$man_charset"
@@ -783,26 +791,19 @@ search_path() {
 
 	IFS=:
 	for path in $PATH; do
-		# Do a little special casing since the base manpages
-		# are in /usr/share/man instead of /usr/man or /man.
-		case "$path" in
-		/bin|/usr/bin)	add_to_manpath "/usr/share/man" ;;
-		*)	if add_to_manpath "$path/man"; then
-				:
-			elif add_to_manpath "$path/MAN"; then
-				:
-			else
-				case "$path" in
-				*/bin)	p="${path%/bin}/man"
-					add_to_manpath "$p"
-					p="${path%/bin}/share/man"
-					add_to_manpath "$p"
-					;;
-				*)	;;
-				esac
-			fi
-			;;
-		esac
+		if add_to_manpath "$path/man"; then
+			:
+		elif add_to_manpath "$path/MAN"; then
+			:
+		else
+			case "$path" in
+			*/bin)	p="${path%/bin}/share/man"
+				add_to_manpath "$p"
+				p="${path%/bin}/man"
+				add_to_manpath "$p"
+				;;
+			esac
+		fi
 	done
 	unset IFS
 
@@ -908,7 +909,7 @@ setup_pager() {
 			if [ -n "$PAGER" ]; then
 				MANPAGER="$PAGER"
 			else
-				MANPAGER="more -s"
+				MANPAGER="less -s"
 			fi
 		fi
 	fi
@@ -1012,7 +1013,7 @@ SYSCTL=/sbin/sysctl
 
 debug=0
 man_default_sections='1:8:2:3:n:4:5:6:7:9:l'
-man_default_path='/usr/share/man:/usr/share/openssl/man:/usr/local/man'
+man_default_path='/usr/share/man:/usr/share/openssl/man:/usr/local/share/man:/usr/local/man'
 cattool='/usr/bin/zcat -f'
 
 config_global='/etc/man.conf'

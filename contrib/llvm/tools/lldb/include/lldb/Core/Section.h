@@ -14,16 +14,16 @@
 #include "lldb/Utility/ConstString.h"
 #include "lldb/Utility/Flags.h"
 #include "lldb/Utility/UserID.h"
-#include "lldb/lldb-defines.h"      // for DISALLOW_COPY_AND_ASSIGN
-#include "lldb/lldb-enumerations.h" // for SectionType
-#include "lldb/lldb-forward.h"      // for SectionSP, ModuleSP, SectionWP
-#include "lldb/lldb-types.h"        // for addr_t, offset_t, user_id_t
+#include "lldb/lldb-defines.h"
+#include "lldb/lldb-enumerations.h"
+#include "lldb/lldb-forward.h"
+#include "lldb/lldb-types.h"
 
-#include <memory> // for enable_shared_from_this
-#include <vector> // for vector
+#include <memory>
+#include <vector>
 
-#include <stddef.h> // for size_t
-#include <stdint.h> // for uint32_t, UINT32_MAX
+#include <stddef.h>
+#include <stdint.h>
 
 namespace lldb_private {
 class Address;
@@ -182,6 +182,8 @@ public:
 
   lldb::SectionType GetType() const { return m_type; }
 
+  const char *GetTypeAsCString() const;
+
   lldb::SectionSP GetParent() const { return m_parent_wp.lock(); }
 
   bool IsThreadSpecific() const { return m_thread_specific; }
@@ -270,10 +272,9 @@ protected:
   SectionList m_children; // Child sections
   bool m_fake : 1, // If true, then this section only can contain the address if
                    // one of its
-      // children contains an address. This allows for gaps between the children
-      // that are contained in the address range for this section, but do not
-      // produce
-      // hits unless the children contain the address.
+      // children contains an address. This allows for gaps between the
+      // children that are contained in the address range for this section, but
+      // do not produce hits unless the children contain the address.
       m_encrypted : 1,         // Set to true if the contents are encrypted
       m_thread_specific : 1,   // This section is thread specific
       m_readable : 1,          // If this section has read permissions

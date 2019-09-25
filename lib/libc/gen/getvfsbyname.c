@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1995
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -27,18 +29,32 @@
  * SUCH DAMAGE.
  */
 
-#if defined(LIBC_SCCS) && !defined(lint)
-static char sccsid[] = "@(#)kvm_getvfsbyname.c	8.1 (Berkeley) 4/3/95";
-#endif /* LIBC_SCCS and not lint */
 #include <sys/cdefs.h>
+__SCCSID("@(#)kvm_getvfsbyname.c	8.1 (Berkeley) 4/3/95");
 __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/mount.h>
 #include <sys/sysctl.h>
 #include <errno.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+
+/*
+ * fusefs(5) file systems may have a "subtype" which gets appended to
+ * statfs(2)'s f_fstypename field on a per-mount basis.  Allow getvfsbyname to
+ * match either the full "fusefs.foobar" or the more general "fusefs".
+ */
+static bool
+are_fusefs(const char *fsname, const char *vfc_name)
+{
+	const static char fusefs[] = "fusefs";
+	const static char fusefs_dot[] = "fusefs.";
+
+	return (strncmp(fsname, fusefs_dot, sizeof(fusefs_dot) - 1) == 0 &&
+	    strcmp(fusefs, vfc_name) == 0);
+}
 
 /*
  * Given a filesystem name, determine if it is resident in the kernel,
@@ -62,7 +78,8 @@ getvfsbyname(const char *fsname, struct xvfsconf *vfcp)
 	}
 	cnt = buflen / sizeof(struct xvfsconf);
 	for (i = 0; i < cnt; i++) {
-		if (strcmp(fsname, xvfsp[i].vfc_name) == 0) {
+		if (strcmp(fsname, xvfsp[i].vfc_name) == 0 ||
+		    are_fusefs(fsname, xvfsp[i].vfc_name)) {
 			memcpy(vfcp, xvfsp + i, sizeof(struct xvfsconf));
 			free(xvfsp);
 			return (0);

@@ -39,6 +39,17 @@ struct TypeMismatchData {
 /// type.
 RECOVERABLE(type_mismatch_v1, TypeMismatchData *Data, ValueHandle Pointer)
 
+struct AlignmentAssumptionData {
+  SourceLocation Loc;
+  SourceLocation AssumptionLoc;
+  const TypeDescriptor &Type;
+};
+
+/// \brief Handle a runtime alignment assumption check failure,
+/// caused by a misaligned pointer.
+RECOVERABLE(alignment_assumption, AlignmentAssumptionData *Data,
+            ValueHandle Pointer, ValueHandle Alignment, ValueHandle Offset)
+
 struct OverflowData {
   SourceLocation Loc;
   const TypeDescriptor &Type;
@@ -122,6 +133,27 @@ struct InvalidValueData {
 /// \brief Handle a load of an invalid value for the type.
 RECOVERABLE(load_invalid_value, InvalidValueData *Data, ValueHandle Val)
 
+/// Known implicit conversion check kinds.
+/// Keep in sync with the enum of the same name in CGExprScalar.cpp
+enum ImplicitConversionCheckKind : unsigned char {
+  ICCK_IntegerTruncation = 0, // Legacy, was only used by clang 7.
+  ICCK_UnsignedIntegerTruncation = 1,
+  ICCK_SignedIntegerTruncation = 2,
+  ICCK_IntegerSignChange = 3,
+  ICCK_SignedIntegerTruncationOrSignChange = 4,
+};
+
+struct ImplicitConversionData {
+  SourceLocation Loc;
+  const TypeDescriptor &FromType;
+  const TypeDescriptor &ToType;
+  /* ImplicitConversionCheckKind */ unsigned char Kind;
+};
+
+/// \brief Implict conversion that changed the value.
+RECOVERABLE(implicit_conversion, ImplicitConversionData *Data, ValueHandle Src,
+            ValueHandle Dst)
+
 /// Known builtin check kinds.
 /// Keep in sync with the enum of the same name in CodeGenFunction.h
 enum BuiltinCheckKind : unsigned char {
@@ -181,6 +213,8 @@ enum CFITypeCheckKind : unsigned char {
   CFITCK_DerivedCast,
   CFITCK_UnrelatedCast,
   CFITCK_ICall,
+  CFITCK_NVMFCall,
+  CFITCK_VMFCall,
 };
 
 struct CFICheckFailData {

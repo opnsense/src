@@ -5,7 +5,8 @@
 PACKAGE=lib${LIB}
 LIB=	proc
 
-SRCS=	proc_bkpt.c		\
+SRCS=	crc32.c			\
+	proc_bkpt.c		\
 	proc_create.c		\
 	proc_regs.c		\
 	proc_sym.c		\
@@ -24,7 +25,7 @@ LIBADD+=		cxxrt
 LIBADD+=	supcplusplus
 .endif
 
-LIBADD+=	elf rtld_db util
+LIBADD+=	elf procstat rtld_db util
 
 .if ${MK_CDDL} != "no"
 LIBADD+=	ctf
@@ -36,12 +37,11 @@ CFLAGS+=	-I${SRCTOP}/cddl/contrib/opensolaris/lib/libctf/common \
 CFLAGS+=	-DNO_CTF
 .endif
 
-SHLIB_MAJOR=	3
+SHLIB_MAJOR=	5
 
 MAN=
 
-.if ${MK_TESTS} != "no"
-SUBDIR+=	tests
-.endif
+HAS_TESTS=
+SUBDIR.${MK_TESTS}+= tests
 
 .include <bsd.lib.mk>

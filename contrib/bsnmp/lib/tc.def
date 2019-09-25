@@ -38,3 +38,19 @@ typedef RowStatus ENUM (
 	6 destroy
 )
 
+typedef StorageType ENUM (
+	1 other
+	2 volatile
+	3 nonVolatile
+	4 permanent
+	5 readOnly
+)
+
+typedef InetAddressType ENUM (
+	0 unknown
+	1 ipv4
+	2 ipv6
+	3 ipv4z
+	4 ipv6z
+	16 dns
+)

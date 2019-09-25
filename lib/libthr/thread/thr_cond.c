@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2005 David Xu <davidxu@freebsd.org>
  * Copyright (c) 2015 The FreeBSD Foundation
  * All rights reserved.
@@ -47,7 +49,6 @@ _Static_assert(sizeof(struct pthread_cond) <= PAGE_SIZE,
 /*
  * Prototypes
  */
-int	__pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex);
 int	__pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex,
 		       const struct timespec * abstime);
 static int cond_init(pthread_cond_t *cond, const pthread_condattr_t *attr);
@@ -61,13 +62,18 @@ static int cond_broadcast_common(pthread_cond_t *cond);
  * versions are not and are provided for libc internal usage (which
  * shouldn't introduce cancellation points).
  */
-__weak_reference(__pthread_cond_wait, pthread_cond_wait);
+__weak_reference(__thr_cond_wait, pthread_cond_wait);
+__weak_reference(__thr_cond_wait, __pthread_cond_wait);
+__weak_reference(_thr_cond_wait, _pthread_cond_wait);
 __weak_reference(__pthread_cond_timedwait, pthread_cond_timedwait);
-
-__weak_reference(_pthread_cond_init, pthread_cond_init);
-__weak_reference(_pthread_cond_destroy, pthread_cond_destroy);
-__weak_reference(_pthread_cond_signal, pthread_cond_signal);
-__weak_reference(_pthread_cond_broadcast, pthread_cond_broadcast);
+__weak_reference(_thr_cond_init, pthread_cond_init);
+__weak_reference(_thr_cond_init, _pthread_cond_init);
+__weak_reference(_thr_cond_destroy, pthread_cond_destroy);
+__weak_reference(_thr_cond_destroy, _pthread_cond_destroy);
+__weak_reference(_thr_cond_signal, pthread_cond_signal);
+__weak_reference(_thr_cond_signal, _pthread_cond_signal);
+__weak_reference(_thr_cond_broadcast, pthread_cond_broadcast);
+__weak_reference(_thr_cond_broadcast, _pthread_cond_broadcast);
 
 #define CV_PSHARED(cvp)	(((cvp)->kcond.c_flags & USYNC_PROCESS_SHARED) != 0)
 
@@ -147,7 +153,8 @@ init_static(struct pthread *thread, pthread_cond_t *cond)
 	}
 
 int
-_pthread_cond_init(pthread_cond_t *cond, const pthread_condattr_t *cond_attr)
+_thr_cond_init(pthread_cond_t * __restrict cond,
+    const pthread_condattr_t * __restrict cond_attr)
 {
 
 	*cond = NULL;
@@ -155,7 +162,7 @@ _pthread_cond_init(pthread_cond_t *cond, const pthread_condattr_t *cond_attr)
 }
 
 int
-_pthread_cond_destroy(pthread_cond_t *cond)
+_thr_cond_destroy(pthread_cond_t *cond)
 {
 	struct pthread_cond *cvp;
 	int error;
@@ -163,17 +170,26 @@ _pthread_cond_destroy(pthread_cond_t *cond)
 	error = 0;
 	if (*cond == THR_PSHARED_PTR) {
 		cvp = __thr_pshared_offpage(cond, 0);
-		if (cvp != NULL)
-			__thr_pshared_destroy(cond);
-		*cond = THR_COND_DESTROYED;
+		if (cvp != NULL) {
+			if (cvp->kcond.c_has_waiters)
+				error = EBUSY;
+			else
+				__thr_pshared_destroy(cond);
+		}
+		if (error == 0)
+			*cond = THR_COND_DESTROYED;
 	} else if ((cvp = *cond) == THR_COND_INITIALIZER) {
 		/* nothing */
 	} else if (cvp == THR_COND_DESTROYED) {
 		error = EINVAL;
 	} else {
 		cvp = *cond;
-		*cond = THR_COND_DESTROYED;
-		free(cvp);
+		if (cvp->__has_user_waiters || cvp->kcond.c_has_waiters)
+			error = EBUSY;
+		else {
+			*cond = THR_COND_DESTROYED;
+			free(cvp);
+		}
 	}
 	return (error);
 }
@@ -365,22 +381,24 @@ cond_wait_common(pthread_cond_t *cond, pthread_mutex_t *mutex,
 }
 
 int
-_pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex)
+_thr_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex)
 {
 
 	return (cond_wait_common(cond, mutex, NULL, 0));
 }
 
 int
-__pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex)
+__thr_cond_wait(pthread_cond_t * __restrict cond,
+    pthread_mutex_t * __restrict mutex)
 {
 
 	return (cond_wait_common(cond, mutex, NULL, 1));
 }
 
 int
-_pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex,
-		       const struct timespec * abstime)
+_thr_cond_timedwait(pthread_cond_t * __restrict cond,
+    pthread_mutex_t * __restrict mutex,
+    const struct timespec * __restrict abstime)
 {
 
 	if (abstime == NULL || abstime->tv_sec < 0 || abstime->tv_nsec < 0 ||
@@ -527,14 +545,14 @@ cond_broadcast_common(pthread_cond_t *cond)
 }
 
 int
-_pthread_cond_signal(pthread_cond_t * cond)
+_thr_cond_signal(pthread_cond_t * cond)
 {
 
 	return (cond_signal_common(cond));
 }
 
 int
-_pthread_cond_broadcast(pthread_cond_t * cond)
+_thr_cond_broadcast(pthread_cond_t * cond)
 {
 
 	return (cond_broadcast_common(cond));

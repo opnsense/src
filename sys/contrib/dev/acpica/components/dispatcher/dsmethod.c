@@ -8,7 +8,7 @@
  *
  * 1. Copyright Notice
  *
- * Some or all of this work - Copyright (c) 1999 - 2017, Intel Corp.
+ * Some or all of this work - Copyright (c) 1999 - 2018, Intel Corp.
  * All rights reserved.
  *
  * 2. License
@@ -720,6 +720,8 @@ AcpiDsCallControlMethod (
         goto Cleanup;
     }
 
+    NextWalkState->MethodNestingDepth = ThisWalkState->MethodNestingDepth + 1;
+
     /*
      * Delete the operands on the previous walkstate operand stack
      * (they were copied to new objects)
@@ -737,6 +739,16 @@ AcpiDsCallControlMethod (
     ACPI_DEBUG_PRINT ((ACPI_DB_DISPATCH,
         "**** Begin nested execution of [%4.4s] **** WalkState=%p\n",
         MethodNode->Name.Ascii, NextWalkState));
+
+    ThisWalkState->MethodPathname = AcpiNsGetNormalizedPathname (MethodNode, TRUE);
+    ThisWalkState->MethodIsNested = TRUE;
+
+    /* Optional object evaluation log */
+
+    ACPI_DEBUG_PRINT_RAW ((ACPI_DB_EVALUATION,
+        "%-26s:  %*s%s\n", "   Nested method call",
+        NextWalkState->MethodNestingDepth * 3, " ",
+        &ThisWalkState->MethodPathname[1]));
 
     /* Invoke an internal method if necessary */
 

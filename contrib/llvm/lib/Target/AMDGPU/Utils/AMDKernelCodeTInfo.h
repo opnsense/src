@@ -46,6 +46,7 @@
    int64_t Value = 0; \
    if (!expectAbsExpression(MCParser, Value, Err)) \
      return false; \
+   C.compute_pgm_resource_registers &= ~(SetMacro(0xFFFFFFFFFFFFFFFFULL) << Shift); \
    C.compute_pgm_resource_registers |= SetMacro(Value) << Shift; \
    return true; \
 }
@@ -73,7 +74,6 @@ FIELD2(amd_machine_version_stepping,  machine_version_stepping,   amd_machine_ve
 
 FIELD(kernel_code_entry_byte_offset),
 FIELD(kernel_code_prefetch_byte_size),
-FIELD(max_scratch_backing_memory_byte_size),
 
 COMPPGM1(granulated_workitem_vgpr_count,  compute_pgm_rsrc1_vgprs,          VGPRS),
 COMPPGM1(granulated_wavefront_sgpr_count, compute_pgm_rsrc1_sgprs,          SGPRS),

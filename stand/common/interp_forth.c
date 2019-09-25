@@ -34,6 +34,7 @@ __FBSDID("$FreeBSD$");
 #include "ficl.h"
 
 extern unsigned bootprog_rev;
+INTERP_DEFINE("4th");
 
 /* #define BFORTH_DEBUG */
 
@@ -143,7 +144,7 @@ bf_command(FICL_VM *vm)
 		printf("%s\n", command_errmsg);
 		break;
 	case CMD_FATAL:
-		panic("%s\n", command_errmsg);
+		panic("%s", command_errmsg);
 	}
 
 	free(line);
@@ -281,6 +282,12 @@ bf_init(void)
 
 	/* try to load and run init file if present */
 	if ((fd = open("/boot/boot.4th", O_RDONLY)) != -1) {
+#ifdef LOADER_VERIEXEC
+		if (verify_file(fd, "/boot/boot.4th", 0, VE_GUESS) < 0) {
+			close(fd);
+			return;
+		}
+#endif
 		(void)ficlExecFD(bf_vm, fd);
 		close(fd);
 	}
@@ -377,6 +384,13 @@ interp_include(const char *filename)
 		return(CMD_ERROR);
 	}
 
+#ifdef LOADER_VERIEXEC
+	if (verify_file(fd, filename, 0, VE_GUESS) < 0) {
+		close(fd);
+		sprintf(command_errbuf,"can't verify '%s'", filename);
+		return(CMD_ERROR);
+	}
+#endif
 	/*
 	 * Read the script into memory.
 	 */

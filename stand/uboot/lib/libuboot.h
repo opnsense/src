@@ -27,19 +27,14 @@
  * $FreeBSD$
  */
 
-/* Note: Must match the 'struct devdesc' in stand.h */
-struct uboot_devdesc {
-	struct devdesc		dd;
-	union {
-		struct {
-			int	slice;
-			int	partition;
-			off_t	offset;
-		} disk;
-	} d_kind;
-};
+#include <disk.h>
 
-#define d_disk d_kind.disk
+struct uboot_devdesc {
+	union {
+		struct devdesc      dd;
+		struct disk_devdesc d_disk;
+	};
+};
 
 /*
  * Default network packet alignment in memory.  On arm arches packets must be

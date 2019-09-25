@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2007-2016 Solarflare Communications Inc.
  * All rights reserved.
  *
@@ -226,14 +228,14 @@ efx_ev_qcreate(
 	__deref_out	efx_evq_t **eepp)
 {
 	const efx_ev_ops_t *eevop = enp->en_eevop;
-	efx_nic_cfg_t *encp = &(enp->en_nic_cfg);
 	efx_evq_t *eep;
 	efx_rc_t rc;
 
 	EFSYS_ASSERT3U(enp->en_magic, ==, EFX_NIC_MAGIC);
 	EFSYS_ASSERT3U(enp->en_mod_flags, &, EFX_MOD_EV);
 
-	EFSYS_ASSERT3U(enp->en_ev_qcount + 1, <, encp->enc_evq_limit);
+	EFSYS_ASSERT3U(enp->en_ev_qcount + 1, <,
+	    enp->en_nic_cfg.enc_evq_limit);
 
 	switch (flags & EFX_EVQ_FLAGS_NOTIFY_MASK) {
 	case EFX_EVQ_FLAGS_NOTIFY_INTERRUPT:
@@ -501,6 +503,14 @@ efx_ev_qpoll(
 			if (should_abort) {
 				/* Ignore subsequent events */
 				total = index + 1;
+
+				/*
+				 * Poison batch to ensure the outer
+				 * loop is broken out of.
+				 */
+				EFSYS_ASSERT(batch <= EFX_EV_BATCH);
+				batch += (EFX_EV_BATCH << 1);
+				EFSYS_ASSERT(total != batch);
 				break;
 			}
 		}
@@ -1419,6 +1429,8 @@ efx_ev_qstat_name(
 	__in	efx_nic_t *enp,
 	__in	unsigned int id)
 {
+	_NOTE(ARGUNUSED(enp))
+
 	EFSYS_ASSERT3U(enp->en_magic, ==, EFX_NIC_MAGIC);
 	EFSYS_ASSERT3U(id, <, EV_NQSTATS);
 

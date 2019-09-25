@@ -40,7 +40,6 @@
 #include <linux/types.h>
 #include <linux/module.h>
 #include <linux/workqueue.h>
-#include <linux/sysfs.h>
 #include <linux/kdev_t.h>
 #include <asm/atomic.h>
 
@@ -61,6 +60,9 @@ struct class {
 };
 
 struct dev_pm_ops {
+#if defined(LINUXKPI_VERSION) && LINUXKPI_VERSION >= 50000
+	int (*prepare)(struct device *dev);
+#endif
 	int (*suspend)(struct device *dev);
 	int (*suspend_late)(struct device *dev);
 	int (*resume)(struct device *dev);
@@ -109,8 +111,8 @@ struct device {
 	void		*driver_data;
 	unsigned int	irq;
 #define	LINUX_IRQ_INVALID	65535
-	unsigned int	msix;
-	unsigned int	msix_max;
+	unsigned int	irq_start;
+	unsigned int	irq_end;
 	const struct attribute_group **groups;
 	struct fwnode_handle *fwnode;
 
@@ -182,6 +184,14 @@ show_class_attr_string(struct class *class,
 #define	dev_dbg(dev, fmt, ...)	do { } while (0)
 #define	dev_printk(lvl, dev, fmt, ...)					\
 	    device_printf((dev)->bsddev, fmt, ##__VA_ARGS__)
+
+#define	dev_err_once(dev, ...) do {		\
+	static bool __dev_err_once;		\
+	if (!__dev_err_once) {			\
+		__dev_err_once = 1;		\
+		dev_err(dev, __VA_ARGS__);	\
+	}					\
+} while (0)
 
 #define	dev_err_ratelimited(dev, ...) do {	\
 	static linux_ratelimit_t __ratelimited;	\
@@ -307,6 +317,10 @@ device_add(struct device *dev)
 			dev->devt = makedev(0, device_get_unit(dev->bsddev));
 	}
 	kobject_add(&dev->kobj, &dev->class->kobj, dev_name(dev));
+
+	if (dev->groups)
+		return (sysfs_create_groups(&dev->kobj, dev->groups));
+
 	return (0);
 }
 
@@ -460,6 +474,9 @@ device_destroy(struct class *class, dev_t devt)
 	if (bsddev != NULL)
 		device_unregister(device_get_softc(bsddev));
 }
+
+#define	dev_pm_set_driver_flags(dev, flags) do { \
+} while (0)
 
 static inline void
 linux_class_kfree(struct class *class)

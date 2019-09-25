@@ -44,8 +44,6 @@ __FBSDID("$FreeBSD$");
 #include <machine/cpu.h>
 #include <machine/intr.h>
 
-#include <dev/fdt/fdt_common.h>
-
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
 
@@ -128,7 +126,9 @@ static struct ofw_compat_data compat_data[] = {
 	{ "broadcom,bcm2835-vc",	1 },
 	{ "broadcom,bcm2708-vc",	1 },
 	{ "brcm,bcm2709",	1 },
+	{ "brcm,bcm2835",	1 },
 	{ "brcm,bcm2836",	1 },
+	{ "brcm,bcm2837",	1 },
 	{ NULL, 0 }
 };
 
@@ -1262,7 +1262,7 @@ bcm2835_cpufreq_identify(driver_t *driver, device_t parent)
 
 	root = OF_finddevice("/");
 	for (compat = compat_data; compat->ocd_str != NULL; compat++)
-		if (fdt_is_compatible(root, compat->ocd_str))
+		if (ofw_bus_node_is_compatible(root, compat->ocd_str))
 			break;
 
 	if (compat->ocd_data == 0)
@@ -1388,9 +1388,6 @@ bcm2835_cpufreq_attach(device_t dev)
 static int
 bcm2835_cpufreq_detach(device_t dev)
 {
-	struct bcm2835_cpufreq_softc *sc;
-
-	sc = device_get_softc(dev);
 
 	sema_destroy(&vc_sema);
 
@@ -1402,7 +1399,10 @@ bcm2835_cpufreq_set(device_t dev, const struct cf_setting *cf)
 {
 	struct bcm2835_cpufreq_softc *sc;
 	uint32_t rate_hz, rem;
-	int cur_freq, resp_freq, arm_freq, min_freq, core_freq;
+	int resp_freq, arm_freq, min_freq, core_freq;
+#ifdef DEBUG
+	int cur_freq;
+#endif
 
 	if (cf == NULL || cf->freq < 0)
 		return (EINVAL);
@@ -1427,8 +1427,10 @@ bcm2835_cpufreq_set(device_t dev, const struct cf_setting *cf)
 
 	/* set new value and verify it */
 	VC_LOCK(sc);
+#ifdef DEBUG
 	cur_freq = bcm2835_cpufreq_get_clock_rate(sc,
 	    BCM2835_MBOX_CLOCK_ID_ARM);
+#endif
 	resp_freq = bcm2835_cpufreq_set_clock_rate(sc,
 	    BCM2835_MBOX_CLOCK_ID_ARM, rate_hz);
 	DELAY(TRANSITION_LATENCY);

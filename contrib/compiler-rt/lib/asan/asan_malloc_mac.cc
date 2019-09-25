@@ -38,6 +38,9 @@ using namespace __asan;
 #define COMMON_MALLOC_CALLOC(count, size) \
   GET_STACK_TRACE_MALLOC; \
   void *p = asan_calloc(count, size, &stack);
+#define COMMON_MALLOC_POSIX_MEMALIGN(memptr, alignment, size) \
+  GET_STACK_TRACE_MALLOC; \
+  int res = asan_posix_memalign(memptr, alignment, size, &stack);
 #define COMMON_MALLOC_VALLOC(size) \
   GET_STACK_TRACE_MALLOC; \
   void *p = asan_memalign(GetPageSizeCached(), size, &stack, FROM_MALLOC);
@@ -57,5 +60,26 @@ using namespace __asan;
 #define COMMON_MALLOC_NAMESPACE __asan
 
 #include "sanitizer_common/sanitizer_malloc_mac.inc"
+
+namespace COMMON_MALLOC_NAMESPACE {
+bool HandleDlopenInit() {
+  static_assert(SANITIZER_SUPPORTS_INIT_FOR_DLOPEN,
+                "Expected SANITIZER_SUPPORTS_INIT_FOR_DLOPEN to be true");
+  // We have no reliable way of knowing how we are being loaded
+  // so make it a requirement on Apple platforms to set this environment
+  // variable to indicate that we want to perform initialization via
+  // dlopen().
+  auto init_str = GetEnv("APPLE_ASAN_INIT_FOR_DLOPEN");
+  if (!init_str)
+    return false;
+  if (internal_strncmp(init_str, "1", 1) != 0)
+    return false;
+  // When we are loaded via `dlopen()` path we still initialize the malloc zone
+  // so Symbolication clients (e.g. `leaks`) that load the ASan allocator can
+  // find an initialized malloc zone.
+  InitMallocZoneFields();
+  return true;
+}
+}  // namespace COMMON_MALLOC_NAMESPACE
 
 #endif

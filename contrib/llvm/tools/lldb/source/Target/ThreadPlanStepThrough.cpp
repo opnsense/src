@@ -7,12 +7,9 @@
 //
 //===----------------------------------------------------------------------===//
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
 #include "lldb/Target/ThreadPlanStepThrough.h"
 #include "lldb/Breakpoint/Breakpoint.h"
+#include "lldb/Target/CPPLanguageRuntime.h"
 #include "lldb/Target/DynamicLoader.h"
 #include "lldb/Target/ObjCLanguageRuntime.h"
 #include "lldb/Target/Process.h"
@@ -26,9 +23,8 @@ using namespace lldb_private;
 
 //----------------------------------------------------------------------
 // ThreadPlanStepThrough: If the current instruction is a trampoline, step
-// through it
-// If it is the beginning of the prologue of a function, step through that as
-// well.
+// through it If it is the beginning of the prologue of a function, step
+// through that as well.
 // FIXME: At present only handles DYLD trampolines.
 //----------------------------------------------------------------------
 
@@ -49,9 +45,8 @@ ThreadPlanStepThrough::ThreadPlanStepThrough(Thread &thread,
     m_start_address = GetThread().GetRegisterContext()->GetPC(0);
 
     // We are going to return back to the concrete frame 1, we might pass by
-    // some inlined code that we're in
-    // the middle of by doing this, but it's easier than trying to figure out
-    // where the inlined code might return to.
+    // some inlined code that we're in the middle of by doing this, but it's
+    // easier than trying to figure out where the inlined code might return to.
 
     StackFrameSP return_frame_sp = m_thread.GetFrameWithStackID(m_stack_id);
 
@@ -63,7 +58,10 @@ ThreadPlanStepThrough::ThreadPlanStepThrough(Thread &thread,
               ->GetTarget()
               .CreateBreakpoint(m_backstop_addr, true, false)
               .get();
+
       if (return_bp != nullptr) {
+        if (return_bp->IsHardware() && !return_bp->HasResolvedLocations())
+          m_could_not_resolve_hw_bp = true;
         return_bp->SetThreadID(m_thread.GetID());
         m_backstop_bkpt_id = return_bp->GetID();
         return_bp->SetBreakpointKind("step-through-backstop");
@@ -97,6 +95,15 @@ void ThreadPlanStepThrough::LookForPlanToStepThroughFromCurrentPC() {
     if (objc_runtime)
       m_sub_plan_sp =
           objc_runtime->GetStepThroughTrampolinePlan(m_thread, m_stop_others);
+
+    CPPLanguageRuntime *cpp_runtime =
+        m_thread.GetProcess()->GetCPPLanguageRuntime();
+
+    // If the ObjC runtime did not provide us with a step though plan then if we
+    // have it check the C++ runtime for a step though plan.
+    if (!m_sub_plan_sp.get() && cpp_runtime)
+      m_sub_plan_sp =
+          cpp_runtime->GetStepThroughTrampolinePlan(m_thread, m_stop_others);
   }
 
   Log *log(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_STEP));
@@ -131,15 +138,32 @@ void ThreadPlanStepThrough::GetDescription(Stream *s,
 }
 
 bool ThreadPlanStepThrough::ValidatePlan(Stream *error) {
-  return m_sub_plan_sp.get() != nullptr;
+  if (m_could_not_resolve_hw_bp) {
+    if (error)
+      error->PutCString(
+          "Could not create hardware breakpoint for thread plan.");
+    return false;
+  }
+
+  if (m_backstop_bkpt_id == LLDB_INVALID_BREAK_ID) {
+    if (error)
+      error->PutCString("Could not create backstop breakpoint.");
+    return false;
+  }
+
+  if (!m_sub_plan_sp.get()) {
+    if (error)
+      error->PutCString("Does not have a subplan.");
+    return false;
+  }
+
+  return true;
 }
 
 bool ThreadPlanStepThrough::DoPlanExplainsStop(Event *event_ptr) {
   // If we have a sub-plan, it will have been asked first if we explain the
-  // stop, and
-  // we won't get asked.  The only time we would be the one directly asked this
-  // question
-  // is if we hit our backstop breakpoint.
+  // stop, and we won't get asked.  The only time we would be the one directly
+  // asked this question is if we hit our backstop breakpoint.
 
   return HitOurBackstopBreakpoint();
 }
@@ -156,8 +180,7 @@ bool ThreadPlanStepThrough::ShouldStop(Event *event_ptr) {
   }
 
   // If we don't have a sub-plan, then we're also done (can't see how we would
-  // ever get here
-  // without a plan, but just in case.
+  // ever get here without a plan, but just in case.
 
   if (!m_sub_plan_sp) {
     SetPlanComplete();
@@ -165,15 +188,13 @@ bool ThreadPlanStepThrough::ShouldStop(Event *event_ptr) {
   }
 
   // If the current sub plan is not done, we don't want to stop.  Actually, we
-  // probably won't
-  // ever get here in this state, since we generally won't get asked any
-  // questions if out
-  // current sub-plan is not done...
+  // probably won't ever get here in this state, since we generally won't get
+  // asked any questions if out current sub-plan is not done...
   if (!m_sub_plan_sp->IsPlanComplete())
     return false;
 
-  // If our current sub plan failed, then let's just run to our backstop.  If we
-  // can't do that then just stop.
+  // If our current sub plan failed, then let's just run to our backstop.  If
+  // we can't do that then just stop.
   if (!m_sub_plan_sp->PlanSucceeded()) {
     if (m_backstop_bkpt_id != LLDB_INVALID_BREAK_ID) {
       m_sub_plan_sp.reset();
@@ -185,8 +206,7 @@ bool ThreadPlanStepThrough::ShouldStop(Event *event_ptr) {
   }
 
   // Next see if there is a specific step through plan at our current pc (these
-  // might
-  // chain, for instance stepping through a dylib trampoline to the objc
+  // might chain, for instance stepping through a dylib trampoline to the objc
   // dispatch function...)
   LookForPlanToStepThroughFromCurrentPC();
   if (m_sub_plan_sp) {
@@ -213,6 +233,7 @@ void ThreadPlanStepThrough::ClearBackstopBreakpoint() {
   if (m_backstop_bkpt_id != LLDB_INVALID_BREAK_ID) {
     m_thread.GetProcess()->GetTarget().RemoveBreakpointByID(m_backstop_bkpt_id);
     m_backstop_bkpt_id = LLDB_INVALID_BREAK_ID;
+    m_could_not_resolve_hw_bp = false;
   }
 }
 

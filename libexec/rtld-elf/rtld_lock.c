@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright 1999, 2000 John D. Polstra.
  * All rights reserved.
  *
@@ -182,7 +184,7 @@ thread_mask_clear(int mask)
 }
 
 #define	RTLD_LOCK_CNT	3
-struct rtld_lock {
+static struct rtld_lock {
 	void	*handle;
 	int	 mask;
 } rtld_locks[RTLD_LOCK_CNT];

@@ -63,22 +63,22 @@ __FBSDID("$FreeBSD$");
 #include <linux/preempt.h>
 #include <linux/fs.h>
 
-#if defined(__amd64__) || defined(__aarch64__) || defined(__riscv)
-#define	LINUXKPI_HAVE_DMAP
-#else
-#undef	LINUXKPI_HAVE_DMAP
-#endif
+void
+si_meminfo(struct sysinfo *si)
+{
+	si->totalram = physmem;
+	si->totalhigh = 0;
+	si->mem_unit = PAGE_SIZE;
+}
 
 void *
 linux_page_address(struct page *page)
 {
 
 	if (page->object != kmem_object && page->object != kernel_object) {
-#ifdef LINUXKPI_HAVE_DMAP
-		return ((void *)PHYS_TO_DMAP(VM_PAGE_TO_PHYS(page)));
-#else
-		return (NULL);
-#endif
+		return (PMAP_HAS_DMAP ?
+		    ((void *)(uintptr_t)PHYS_TO_DMAP(VM_PAGE_TO_PHYS(page))) :
+		    NULL);
 	}
 	return ((void *)(uintptr_t)(VM_MIN_KERNEL_ADDRESS +
 	    IDX_TO_OFF(page->pindex)));
@@ -87,82 +87,85 @@ linux_page_address(struct page *page)
 vm_page_t
 linux_alloc_pages(gfp_t flags, unsigned int order)
 {
-#ifdef LINUXKPI_HAVE_DMAP
-	unsigned long npages = 1UL << order;
-	int req = (flags & M_ZERO) ? (VM_ALLOC_ZERO | VM_ALLOC_NOOBJ |
-	    VM_ALLOC_NORMAL) : (VM_ALLOC_NOOBJ | VM_ALLOC_NORMAL);
 	vm_page_t page;
 
-	if (order == 0 && (flags & GFP_DMA32) == 0) {
-		page = vm_page_alloc(NULL, 0, req);
-		if (page == NULL)
-			return (NULL);
-	} else {
-		vm_paddr_t pmax = (flags & GFP_DMA32) ?
-		    BUS_SPACE_MAXADDR_32BIT : BUS_SPACE_MAXADDR;
-retry:
-		page = vm_page_alloc_contig(NULL, 0, req,
-		    npages, 0, pmax, PAGE_SIZE, 0, VM_MEMATTR_DEFAULT);
+	if (PMAP_HAS_DMAP) {
+		unsigned long npages = 1UL << order;
+		int req = VM_ALLOC_NOOBJ | VM_ALLOC_WIRED | VM_ALLOC_NORMAL;
 
-		if (page == NULL) {
-			if (flags & M_WAITOK) {
-				if (!vm_page_reclaim_contig(req,
-				    npages, 0, pmax, PAGE_SIZE, 0)) {
-					VM_WAIT;
+		if ((flags & M_ZERO) != 0)
+			req |= VM_ALLOC_ZERO;
+		if (order == 0 && (flags & GFP_DMA32) == 0) {
+			page = vm_page_alloc(NULL, 0, req);
+			if (page == NULL)
+				return (NULL);
+		} else {
+			vm_paddr_t pmax = (flags & GFP_DMA32) ?
+			    BUS_SPACE_MAXADDR_32BIT : BUS_SPACE_MAXADDR;
+		retry:
+			page = vm_page_alloc_contig(NULL, 0, req,
+			    npages, 0, pmax, PAGE_SIZE, 0, VM_MEMATTR_DEFAULT);
+
+			if (page == NULL) {
+				if (flags & M_WAITOK) {
+					if (!vm_page_reclaim_contig(req,
+					    npages, 0, pmax, PAGE_SIZE, 0)) {
+						vm_wait(NULL);
+					}
+					flags &= ~M_WAITOK;
+					goto retry;
 				}
-				flags &= ~M_WAITOK;
-				goto retry;
+				return (NULL);
 			}
+		}
+		if (flags & M_ZERO) {
+			unsigned long x;
+
+			for (x = 0; x != npages; x++) {
+				vm_page_t pgo = page + x;
+
+				if ((pgo->flags & PG_ZERO) == 0)
+					pmap_zero_page(pgo);
+			}
+		}
+	} else {
+		vm_offset_t vaddr;
+
+		vaddr = linux_alloc_kmem(flags, order);
+		if (vaddr == 0)
 			return (NULL);
-		}
+
+		page = PHYS_TO_VM_PAGE(vtophys((void *)vaddr));
+
+		KASSERT(vaddr == (vm_offset_t)page_address(page),
+		    ("Page address mismatch"));
 	}
-	if (flags & M_ZERO) {
-		unsigned long x;
 
-		for (x = 0; x != npages; x++) {
-			vm_page_t pgo = page + x;
-
-			if ((pgo->flags & PG_ZERO) == 0)
-				pmap_zero_page(pgo);
-		}
-	}
-#else
-	vm_offset_t vaddr;
-	vm_page_t page;
-
-	vaddr = linux_alloc_kmem(flags, order);
-	if (vaddr == 0)
-		return (NULL);
-
-	page = PHYS_TO_VM_PAGE(vtophys((void *)vaddr));
-
-	KASSERT(vaddr == (vm_offset_t)page_address(page),
-	    ("Page address mismatch"));
-#endif
 	return (page);
 }
 
 void
 linux_free_pages(vm_page_t page, unsigned int order)
 {
-#ifdef LINUXKPI_HAVE_DMAP
-	unsigned long npages = 1UL << order;
-	unsigned long x;
+	if (PMAP_HAS_DMAP) {
+		unsigned long npages = 1UL << order;
+		unsigned long x;
 
-	for (x = 0; x != npages; x++) {
-		vm_page_t pgo = page + x;
+		for (x = 0; x != npages; x++) {
+			vm_page_t pgo = page + x;
 
-		vm_page_lock(pgo);
-		vm_page_free(pgo);
-		vm_page_unlock(pgo);
+			vm_page_lock(pgo);
+			if (vm_page_unwire_noq(pgo))
+				vm_page_free(pgo);
+			vm_page_unlock(pgo);
+		}
+	} else {
+		vm_offset_t vaddr;
+
+		vaddr = (vm_offset_t)page_address(page);
+
+		linux_free_kmem(vaddr, order);
 	}
-#else
-	vm_offset_t vaddr;
-
-	vaddr = (vm_offset_t)page_address(page);
-
-	linux_free_kmem(vaddr, order);
-#endif
 }
 
 vm_offset_t
@@ -172,11 +175,10 @@ linux_alloc_kmem(gfp_t flags, unsigned int order)
 	vm_offset_t addr;
 
 	if ((flags & GFP_DMA32) == 0) {
-		addr = kmem_malloc(kmem_arena, size, flags & GFP_NATIVE_MASK);
+		addr = kmem_malloc(size, flags & GFP_NATIVE_MASK);
 	} else {
-		addr = kmem_alloc_contig(kmem_arena, size,
-		    flags & GFP_NATIVE_MASK, 0, BUS_SPACE_MAXADDR_32BIT,
-		    PAGE_SIZE, 0, VM_MEMATTR_DEFAULT);
+		addr = kmem_alloc_contig(size, flags & GFP_NATIVE_MASK, 0,
+		    BUS_SPACE_MAXADDR_32BIT, PAGE_SIZE, 0, VM_MEMATTR_DEFAULT);
 	}
 	return (addr);
 }
@@ -186,7 +188,7 @@ linux_free_kmem(vm_offset_t addr, unsigned int order)
 {
 	size_t size = ((size_t)PAGE_SIZE) << order;
 
-	kmem_free(kmem_arena, addr, size);
+	kmem_free(addr, size);
 }
 
 static int
@@ -311,7 +313,7 @@ linux_shmem_read_mapping_page_gfp(vm_object_t obj, int pindex, gfp_t gfp)
 			rv = vm_pager_get_pages(obj, &page, 1, NULL, NULL);
 			if (rv != VM_PAGER_OK) {
 				vm_page_lock(page);
-				vm_page_unwire(page, PQ_NONE);
+				vm_page_unwire_noq(page);
 				vm_page_free(page);
 				vm_page_unlock(page);
 				VM_OBJECT_WUNLOCK(obj);

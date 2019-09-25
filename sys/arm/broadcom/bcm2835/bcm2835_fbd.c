@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2012 Oleksandr Tymoshenko <gonzo@freebsd.org>
  * Copyright (c) 2012, 2013 The FreeBSD Foundation
  * All rights reserved.
@@ -43,7 +45,6 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm.h>
 #include <vm/pmap.h>
 
-#include <dev/fdt/fdt_common.h>
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
 
@@ -222,7 +223,7 @@ bcm_fb_attach(device_t dev)
 	/* Newer firmware versions needs an inverted color palette. */
 	sc->fbswap = 0;
 	chosen = OF_finddevice("/chosen");
-	if (chosen != 0 &&
+	if (chosen != -1 &&
 	    OF_getprop(chosen, "bootargs", &bootargs, sizeof(bootargs)) > 0) {
 		p = bootargs;
 		while ((v = strsep(&p, " ")) != NULL) {

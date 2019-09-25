@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2007-2016 Solarflare Communications Inc.
  * All rights reserved.
  *
@@ -144,6 +146,7 @@ static const efx_tx_ops_t	__efx_tx_siena_ops = {
 	NULL,					/* etxo_qdesc_tso_create */
 	NULL,					/* etxo_qdesc_tso2_create */
 	NULL,					/* etxo_qdesc_vlantci_create */
+	NULL,					/* etxo_qdesc_checksum_create */
 #if EFSYS_OPT_QSTATS
 	siena_tx_qstats_update,			/* etxo_qstats_update */
 #endif
@@ -170,6 +173,7 @@ static const efx_tx_ops_t	__efx_tx_hunt_ops = {
 	ef10_tx_qdesc_tso_create,		/* etxo_qdesc_tso_create */
 	ef10_tx_qdesc_tso2_create,		/* etxo_qdesc_tso2_create */
 	ef10_tx_qdesc_vlantci_create,		/* etxo_qdesc_vlantci_create */
+	ef10_tx_qdesc_checksum_create,		/* etxo_qdesc_checksum_create */
 #if EFSYS_OPT_QSTATS
 	ef10_tx_qstats_update,			/* etxo_qstats_update */
 #endif
@@ -196,6 +200,7 @@ static const efx_tx_ops_t	__efx_tx_medford_ops = {
 	NULL,					/* etxo_qdesc_tso_create */
 	ef10_tx_qdesc_tso2_create,		/* etxo_qdesc_tso2_create */
 	ef10_tx_qdesc_vlantci_create,		/* etxo_qdesc_vlantci_create */
+	ef10_tx_qdesc_checksum_create,		/* etxo_qdesc_checksum_create */
 #if EFSYS_OPT_QSTATS
 	ef10_tx_qstats_update,			/* etxo_qstats_update */
 #endif
@@ -301,14 +306,14 @@ efx_tx_qcreate(
 	__out		unsigned int *addedp)
 {
 	const efx_tx_ops_t *etxop = enp->en_etxop;
-	efx_nic_cfg_t *encp = &(enp->en_nic_cfg);
 	efx_txq_t *etp;
 	efx_rc_t rc;
 
 	EFSYS_ASSERT3U(enp->en_magic, ==, EFX_NIC_MAGIC);
 	EFSYS_ASSERT3U(enp->en_mod_flags, &, EFX_MOD_TX);
 
-	EFSYS_ASSERT3U(enp->en_tx_qcount + 1, <, encp->enc_txq_limit);
+	EFSYS_ASSERT3U(enp->en_tx_qcount + 1, <,
+	    enp->en_nic_cfg.enc_txq_limit);
 
 	/* Allocate an TXQ object */
 	EFSYS_KMEM_ALLOC(enp->en_esip, sizeof (efx_txq_t), etp);
@@ -645,6 +650,21 @@ efx_tx_qdesc_vlantci_create(
 	etxop->etxo_qdesc_vlantci_create(etp, tci, edp);
 }
 
+	void
+efx_tx_qdesc_checksum_create(
+	__in	efx_txq_t *etp,
+	__in	uint16_t flags,
+	__out	efx_desc_t *edp)
+{
+	efx_nic_t *enp = etp->et_enp;
+	const efx_tx_ops_t *etxop = enp->en_etxop;
+
+	EFSYS_ASSERT3U(etp->et_magic, ==, EFX_TXQ_MAGIC);
+	EFSYS_ASSERT(etxop->etxo_qdesc_checksum_create != NULL);
+
+	etxop->etxo_qdesc_checksum_create(etp, flags, edp);
+}
+
 
 #if EFSYS_OPT_QSTATS
 			void
@@ -752,7 +772,7 @@ siena_tx_qpost(
 		 * Fragments must not span 4k boundaries.
 		 * Here it is a stricter requirement than the maximum length.
 		 */
-		EFSYS_ASSERT(P2ROUNDUP(start + 1,
+		EFSYS_ASSERT(EFX_P2ROUNDUP(efsys_dma_addr_t, start + 1,
 		    etp->et_enp->en_nic_cfg.enc_tx_dma_desc_boundary) >= end);
 
 		EFX_TX_DESC(etp, start, size, ebp->eb_eop, added);
@@ -903,6 +923,7 @@ siena_tx_qcreate(
 	efx_nic_cfg_t *encp = &(enp->en_nic_cfg);
 	efx_oword_t oword;
 	uint32_t size;
+	uint16_t inner_csum;
 	efx_rc_t rc;
 
 	_NOTE(ARGUNUSED(esmp))
@@ -911,7 +932,7 @@ siena_tx_qcreate(
 	    (1 << FRF_AZ_TX_DESCQ_LABEL_WIDTH));
 	EFSYS_ASSERT3U(label, <, EFX_EV_TX_NLABELS);
 
-	EFSYS_ASSERT(ISP2(EFX_TXQ_MAXNDESCS(encp)));
+	EFSYS_ASSERT(ISP2(encp->enc_txq_max_ndescs));
 	EFX_STATIC_ASSERT(ISP2(EFX_TXQ_MINNDESCS));
 
 	if (!ISP2(n) || (n < EFX_TXQ_MINNDESCS) || (n > EFX_EVQ_MAXNEVS)) {
@@ -923,13 +944,19 @@ siena_tx_qcreate(
 		goto fail2;
 	}
 	for (size = 0;
-	    (1 << size) <= (EFX_TXQ_MAXNDESCS(encp) / EFX_TXQ_MINNDESCS);
+	    (1 << size) <= (int)(encp->enc_txq_max_ndescs / EFX_TXQ_MINNDESCS);
 	    size++)
 		if ((1 << size) == (int)(n / EFX_TXQ_MINNDESCS))
 			break;
 	if (id + (1 << size) >= encp->enc_buftbl_limit) {
 		rc = EINVAL;
 		goto fail3;
+	}
+
+	inner_csum = EFX_TXQ_CKSUM_INNER_IPV4 | EFX_TXQ_CKSUM_INNER_TCPUDP;
+	if ((flags & inner_csum) != 0) {
+		rc = EINVAL;
+		goto fail4;
 	}
 
 	/* Set up the new descriptor queue */
@@ -954,6 +981,8 @@ siena_tx_qcreate(
 
 	return (0);
 
+fail4:
+	EFSYS_PROBE(fail4);
 fail3:
 	EFSYS_PROBE(fail3);
 fail2:
@@ -1017,7 +1046,7 @@ siena_tx_qdesc_dma_create(
 	 * Fragments must not span 4k boundaries.
 	 * Here it is a stricter requirement than the maximum length.
 	 */
-	EFSYS_ASSERT(P2ROUNDUP(addr + 1,
+	EFSYS_ASSERT(EFX_P2ROUNDUP(efsys_dma_addr_t, addr + 1,
 	    etp->et_enp->en_nic_cfg.enc_tx_dma_desc_boundary) >= addr + size);
 
 	EFSYS_PROBE4(tx_desc_dma_create, unsigned int, etp->et_index,

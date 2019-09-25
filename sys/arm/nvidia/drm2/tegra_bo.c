@@ -67,7 +67,7 @@ tegra_bo_destruct(struct tegra_bo *bo)
 		cdev_pager_free_page(bo->cdev_pager, m);
 		vm_page_lock(m);
 		m->flags &= ~PG_FICTITIOUS;
-		vm_page_unwire(m, PQ_NONE);
+		vm_page_unwire_noq(m);
 		vm_page_free(m);
 		vm_page_unlock(m);
 	}
@@ -114,7 +114,7 @@ retry:
 		if (tries < 3) {
 			if (!vm_page_reclaim_contig(pflags, npages, low, high,
 			    alignment, boundary))
-				VM_WAIT;
+				vm_wait(NULL);
 			tries++;
 			goto retry;
 		}

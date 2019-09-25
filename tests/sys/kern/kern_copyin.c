@@ -1,5 +1,4 @@
 /*-
- * Copyright (c) 2016 Oliver Pinter <op@hardenedbsd.org>
  * Copyright (c) 2015 The FreeBSD Foundation
  * All rights reserved.
  *
@@ -32,9 +31,6 @@
 __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
-#ifdef HARDENEDBSD
-#include <sys/mman.h>
-#endif
 #include <errno.h>
 #include <limits.h>
 #include <stdio.h>
@@ -62,20 +58,15 @@ ATF_TC_WITHOUT_HEAD(kern_copyin);
 ATF_TC_BODY(kern_copyin, tc)
 {
 	char template[] = "copyin.XXXXXX";
-#ifdef HARDENEDBSD
-	/*
-	 * On HardenedBSD, the last page not always mapped in contrast
-	 * to FreeBSD, where the last page always mapped as shared page.
-	 *
-	 * To fix this test, which expects the existence of the last page
-	 * just map them in at the test start, and unmap them at the end.
-	 */
-	void *last_page = (void *)(VM_MAXUSER_ADDRESS - PAGE_SIZE);
-	void *p;
 
-	p = mmap(last_page, PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_ANON | MAP_EXCL | MAP_FIXED, -1, 0);
-	ATF_REQUIRE(last_page != MAP_FAILED);
-	ATF_REQUIRE(p == last_page);
+#ifdef __mips__
+	/*
+	 * MIPS has different VM layout: the UVA map on mips ends the
+	 * highest mapped entry at the VM_MAXUSER_ADDRESS - PAGE_SIZE,
+	 * while all other arches map either stack or shared page up
+	 * to the VM_MAXUSER_ADDRESS.
+	 */
+	atf_tc_skip("Platform is not supported.");
 #endif
 
 	scratch_file = mkstemp(template);
@@ -95,10 +86,6 @@ ATF_TC_BODY(kern_copyin, tc)
 	ATF_CHECK(copyin_checker(FMAX - 10, 9) == EFAULT);
 	ATF_CHECK(copyin_checker(FMAX - 10, 10) == EFAULT);
 	ATF_CHECK(copyin_checker(FMAX - 10, 11) == EFAULT);
-
-#ifdef HARDENEDBSD
-	munmap(p, PAGE_SIZE);
-#endif
 }
 
 ATF_TP_ADD_TCS(tp)

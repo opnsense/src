@@ -39,7 +39,9 @@
  *  The tables are placed in the guest's ROM area just below 1MB physical,
  * above the MPTable.
  *
- *  Layout
+ *  Layout (No longer correct at FADT and beyond due to properly
+ *  calculating the size of the MADT to allow for changes to
+ *  VM_MAXCPU above 21 which overflows this layout.)
  *  ------
  *   RSDP  ->   0xf2400    (36 bytes fixed)
  *     RSDT  ->   0xf2440    (36 bytes + 4*7 table addrs, 4 used)
@@ -74,18 +76,31 @@ __FBSDID("$FreeBSD$");
 #include "pci_emul.h"
 
 /*
- * Define the base address of the ACPI tables, and the offsets to
- * the individual tables
+ * Define the base address of the ACPI tables, the sizes of some tables, 
+ * and the offsets to the individual tables,
  */
 #define BHYVE_ACPI_BASE		0xf2400
 #define RSDT_OFFSET		0x040
 #define XSDT_OFFSET		0x080
 #define MADT_OFFSET		0x100
-#define FADT_OFFSET		0x200
-#define	HPET_OFFSET		0x340
-#define	MCFG_OFFSET		0x380
-#define FACS_OFFSET		0x3C0
-#define DSDT_OFFSET		0x400
+/*
+ * The MADT consists of:
+ *	44		Fixed Header
+ *	8 * maxcpu	Processor Local APIC entries
+ *	12		I/O APIC entry
+ *	2 * 10		Interrupt Source Override entires
+ *	6		Local APIC NMI entry
+ */
+#define	MADT_SIZE		(44 + VM_MAXCPU*8 + 12 + 2*10 + 6)
+#define	FADT_OFFSET		(MADT_OFFSET + MADT_SIZE)
+#define	FADT_SIZE		0x140
+#define	HPET_OFFSET		(FADT_OFFSET + FADT_SIZE)
+#define	HPET_SIZE		0x40
+#define	MCFG_OFFSET		(HPET_OFFSET + HPET_SIZE)
+#define	MCFG_SIZE		0x40
+#define	FACS_OFFSET		(MCFG_OFFSET + MCFG_SIZE)
+#define	FACS_SIZE		0x40
+#define	DSDT_OFFSET		(FACS_OFFSET + FACS_SIZE)
 
 #define	BHYVE_ASL_TEMPLATE	"bhyve.XXXXXXX"
 #define BHYVE_ASL_SUFFIX	".aml"
@@ -118,18 +133,14 @@ struct basl_fio {
 };
 
 #define EFPRINTF(...) \
-	err = fprintf(__VA_ARGS__); if (err < 0) goto err_exit;
+	if (fprintf(__VA_ARGS__) < 0) goto err_exit;
 
 #define EFFLUSH(x) \
-	err = fflush(x); if (err != 0) goto err_exit;
+	if (fflush(x) != 0) goto err_exit;
 
 static int
 basl_fwrite_rsdp(FILE *fp)
 {
-	int err;
-
-	err = 0;
-
 	EFPRINTF(fp, "/*\n");
 	EFPRINTF(fp, " * bhyve RSDP template\n");
 	EFPRINTF(fp, " */\n");
@@ -156,10 +167,6 @@ err_exit:
 static int
 basl_fwrite_rsdt(FILE *fp)
 {
-	int err;
-
-	err = 0;
-
 	EFPRINTF(fp, "/*\n");
 	EFPRINTF(fp, " * bhyve RSDT template\n");
 	EFPRINTF(fp, " */\n");
@@ -196,10 +203,6 @@ err_exit:
 static int
 basl_fwrite_xsdt(FILE *fp)
 {
-	int err;
-
-	err = 0;
-
 	EFPRINTF(fp, "/*\n");
 	EFPRINTF(fp, " * bhyve XSDT template\n");
 	EFPRINTF(fp, " */\n");
@@ -236,10 +239,7 @@ err_exit:
 static int
 basl_fwrite_madt(FILE *fp)
 {
-	int err;
 	int i;
-
-	err = 0;
 
 	EFPRINTF(fp, "/*\n");
 	EFPRINTF(fp, " * bhyve MADT template\n");
@@ -326,10 +326,6 @@ err_exit:
 static int
 basl_fwrite_fadt(FILE *fp)
 {
-	int err;
-
-	err = 0;
-
 	EFPRINTF(fp, "/*\n");
 	EFPRINTF(fp, " * bhyve FADT template\n");
 	EFPRINTF(fp, " */\n");
@@ -547,10 +543,6 @@ err_exit:
 static int
 basl_fwrite_hpet(FILE *fp)
 {
-	int err;
-
-	err = 0;
-
 	EFPRINTF(fp, "/*\n");
 	EFPRINTF(fp, " * bhyve HPET template\n");
 	EFPRINTF(fp, " */\n");
@@ -596,8 +588,6 @@ err_exit:
 static int
 basl_fwrite_mcfg(FILE *fp)
 {
-	int err = 0;
-
 	EFPRINTF(fp, "/*\n");
 	EFPRINTF(fp, " * bhyve MCFG template\n");
 	EFPRINTF(fp, " */\n");
@@ -629,10 +619,6 @@ err_exit:
 static int
 basl_fwrite_facs(FILE *fp)
 {
-	int err;
-
-	err = 0;
-
 	EFPRINTF(fp, "/*\n");
 	EFPRINTF(fp, " * bhyve FACS template\n");
 	EFPRINTF(fp, " */\n");
@@ -666,7 +652,6 @@ void
 dsdt_line(const char *fmt, ...)
 {
 	va_list ap;
-	int err;
 
 	if (dsdt_error != 0)
 		return;
@@ -675,8 +660,10 @@ dsdt_line(const char *fmt, ...)
 		if (dsdt_indent_level != 0)
 			EFPRINTF(dsdt_fp, "%*c", dsdt_indent_level * 2, ' ');
 		va_start(ap, fmt);
-		if (vfprintf(dsdt_fp, fmt, ap) < 0)
+		if (vfprintf(dsdt_fp, fmt, ap) < 0) {
+			va_end(ap);
 			goto err_exit;
+		}
 		va_end(ap);
 	}
 	EFPRINTF(dsdt_fp, "\n");
@@ -735,9 +722,6 @@ dsdt_fixed_mem32(uint32_t base, uint32_t length)
 static int
 basl_fwrite_dsdt(FILE *fp)
 {
-	int err;
-
-	err = 0;
 	dsdt_fp = fp;
 	dsdt_error = 0;
 	dsdt_indent_level = 0;
@@ -916,7 +900,7 @@ basl_make_templates(void)
 	int len;
 
 	err = 0;
-	
+
 	/*
 	 * 
 	 */

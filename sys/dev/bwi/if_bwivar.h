@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2007 The DragonFly Project.  All rights reserved.
  * 
  * This code is derived from software contributed to The DragonFly Project
@@ -511,7 +513,7 @@ struct bwi_tx_radiotap_hdr {
 	uint8_t		wt_rate;
 	uint16_t	wt_chan_freq;
 	uint16_t	wt_chan_flags;
-};
+} __packed;
 
 #define BWI_RX_RADIOTAP_PRESENT				\
 	((1 << IEEE80211_RADIOTAP_TSFT) |		\
@@ -531,7 +533,7 @@ struct bwi_rx_radiotap_hdr {
 	int8_t		wr_antsignal;
 	int8_t		wr_antnoise;
 	/* TODO: sq */
-};
+} __packed __aligned(8);
 
 struct bwi_vap {
 	struct ieee80211vap	bv_vap;

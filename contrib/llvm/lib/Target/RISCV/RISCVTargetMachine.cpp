@@ -13,6 +13,7 @@
 
 #include "RISCV.h"
 #include "RISCVTargetMachine.h"
+#include "RISCVTargetObjectFile.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
@@ -26,6 +27,8 @@ using namespace llvm;
 extern "C" void LLVMInitializeRISCVTarget() {
   RegisterTargetMachine<RISCVTargetMachine> X(getTheRISCV32Target());
   RegisterTargetMachine<RISCVTargetMachine> Y(getTheRISCV64Target());
+  auto PR = PassRegistry::getPassRegistry();
+  initializeRISCVExpandPseudoPass(*PR);
 }
 
 static std::string computeDataLayout(const Triple &TT) {
@@ -44,12 +47,6 @@ static Reloc::Model getEffectiveRelocModel(const Triple &TT,
   return *RM;
 }
 
-static CodeModel::Model getEffectiveCodeModel(Optional<CodeModel::Model> CM) {
-  if (CM)
-    return *CM;
-  return CodeModel::Small;
-}
-
 RISCVTargetMachine::RISCVTargetMachine(const Target &T, const Triple &TT,
                                        StringRef CPU, StringRef FS,
                                        const TargetOptions &Options,
@@ -58,8 +55,8 @@ RISCVTargetMachine::RISCVTargetMachine(const Target &T, const Triple &TT,
                                        CodeGenOpt::Level OL, bool JIT)
     : LLVMTargetMachine(T, computeDataLayout(TT), TT, CPU, FS, Options,
                         getEffectiveRelocModel(TT, RM),
-                        getEffectiveCodeModel(CM), OL),
-      TLOF(make_unique<TargetLoweringObjectFileELF>()),
+                        getEffectiveCodeModel(CM, CodeModel::Small), OL),
+      TLOF(make_unique<RISCVELFTargetObjectFile>()),
       Subtarget(TT, CPU, FS, *this) {
   initAsmInfo();
 }
@@ -74,7 +71,11 @@ public:
     return getTM<RISCVTargetMachine>();
   }
 
+  void addIRPasses() override;
   bool addInstSelector() override;
+  void addPreEmitPass() override;
+  void addPreEmitPass2() override;
+  void addPreRegAlloc() override;
 };
 }
 
@@ -82,8 +83,26 @@ TargetPassConfig *RISCVTargetMachine::createPassConfig(PassManagerBase &PM) {
   return new RISCVPassConfig(*this, PM);
 }
 
+void RISCVPassConfig::addIRPasses() {
+  addPass(createAtomicExpandPass());
+  TargetPassConfig::addIRPasses();
+}
+
 bool RISCVPassConfig::addInstSelector() {
   addPass(createRISCVISelDag(getRISCVTargetMachine()));
 
   return false;
+}
+
+void RISCVPassConfig::addPreEmitPass() { addPass(&BranchRelaxationPassID); }
+
+void RISCVPassConfig::addPreEmitPass2() {
+  // Schedule the expansion of AMOs at the last possible moment, avoiding the
+  // possibility for other passes to break the requirements for forward
+  // progress in the LR/SC block.
+  addPass(createRISCVExpandPseudoPass());
+}
+
+void RISCVPassConfig::addPreRegAlloc() {
+  addPass(createRISCVMergeBaseOffsetOptPass());
 }

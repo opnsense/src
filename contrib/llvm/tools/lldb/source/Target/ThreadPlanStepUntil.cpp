@@ -7,10 +7,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
 #include "lldb/Target/ThreadPlanStepUntil.h"
 
 #include "lldb/Breakpoint/Breakpoint.h"
@@ -57,7 +53,10 @@ ThreadPlanStepUntil::ThreadPlanStepUntil(Thread &thread,
       m_return_addr = return_frame_sp->GetStackID().GetPC();
       Breakpoint *return_bp =
           target_sp->CreateBreakpoint(m_return_addr, true, false).get();
+
       if (return_bp != nullptr) {
+        if (return_bp->IsHardware() && !return_bp->HasResolvedLocations())
+          m_could_not_resolve_hw_bp = true;
         return_bp->SetThreadID(thread_id);
         m_return_bp_id = return_bp->GetID();
         return_bp->SetBreakpointKind("until-return-backstop");
@@ -97,6 +96,7 @@ void ThreadPlanStepUntil::Clear() {
     }
   }
   m_until_points.clear();
+  m_could_not_resolve_hw_bp = false;
 }
 
 void ThreadPlanStepUntil::GetDescription(Stream *s,
@@ -127,9 +127,16 @@ void ThreadPlanStepUntil::GetDescription(Stream *s,
 }
 
 bool ThreadPlanStepUntil::ValidatePlan(Stream *error) {
-  if (m_return_bp_id == LLDB_INVALID_BREAK_ID)
+  if (m_could_not_resolve_hw_bp) {
+    if (error)
+      error->PutCString(
+          "Could not create hardware breakpoint for thread plan.");
     return false;
-  else {
+  } else if (m_return_bp_id == LLDB_INVALID_BREAK_ID) {
+    if (error)
+      error->PutCString("Could not create return breakpoint.");
+    return false;
+  } else {
     until_collection::iterator pos, end = m_until_points.end();
     for (pos = m_until_points.begin(); pos != end; pos++) {
       if (!LLDB_BREAK_ID_IS_VALID((*pos).second))
@@ -151,8 +158,8 @@ void ThreadPlanStepUntil::AnalyzeStop() {
     StopReason reason = stop_info_sp->GetStopReason();
 
     if (reason == eStopReasonBreakpoint) {
-      // If this is OUR breakpoint, we're fine, otherwise we don't know why this
-      // happened...
+      // If this is OUR breakpoint, we're fine, otherwise we don't know why
+      // this happened...
       BreakpointSiteSP this_site =
           m_thread.GetProcess()->GetBreakpointSiteList().FindByID(
               stop_info_sp->GetValue());
@@ -163,18 +170,13 @@ void ThreadPlanStepUntil::AnalyzeStop() {
 
       if (this_site->IsBreakpointAtThisSite(m_return_bp_id)) {
         // If we are at our "step out" breakpoint, and the stack depth has
-        // shrunk, then
-        // this is indeed our stop.
-        // If the stack depth has grown, then we've hit our step out breakpoint
-        // recursively.
-        // If we are the only breakpoint at that location, then we do explain
-        // the stop, and
-        // we'll just continue.
-        // If there was another breakpoint here, then we don't explain the stop,
-        // but we won't
-        // mark ourselves Completed, because maybe that breakpoint will
-        // continue, and then
-        // we'll finish the "until".
+        // shrunk, then this is indeed our stop. If the stack depth has grown,
+        // then we've hit our step out breakpoint recursively. If we are the
+        // only breakpoint at that location, then we do explain the stop, and
+        // we'll just continue. If there was another breakpoint here, then we
+        // don't explain the stop, but we won't mark ourselves Completed,
+        // because maybe that breakpoint will continue, and then we'll finish
+        // the "until".
         bool done;
         StackID cur_frame_zero_id;
 
@@ -209,8 +211,8 @@ void ThreadPlanStepUntil::AnalyzeStop() {
             else {
               StackFrameSP older_frame_sp = m_thread.GetStackFrameAtIndex(1);
 
-              // But if we can't even unwind one frame we should just get out of
-              // here & stop...
+              // But if we can't even unwind one frame we should just get out
+              // of here & stop...
               if (older_frame_sp) {
                 const SymbolContext &older_context =
                     older_frame_sp->GetSymbolContext(eSymbolContextEverything);
@@ -230,8 +232,8 @@ void ThreadPlanStepUntil::AnalyzeStop() {
 
             // Otherwise we've hit this breakpoint recursively.  If we're the
             // only breakpoint here, then we do explain the stop, and we'll
-            // continue.
-            // If not then we should let higher plans handle this stop.
+            // continue. If not then we should let higher plans handle this
+            // stop.
             if (this_site->GetNumberOfOwners() == 1)
               m_explains_stop = true;
             else {
@@ -242,8 +244,8 @@ void ThreadPlanStepUntil::AnalyzeStop() {
           }
         }
       }
-      // If we get here we haven't hit any of our breakpoints, so let the higher
-      // plans take care of the stop.
+      // If we get here we haven't hit any of our breakpoints, so let the
+      // higher plans take care of the stop.
       m_explains_stop = false;
       return;
     } else if (IsUsuallyUnexplainedStopReason(reason)) {
@@ -256,16 +258,15 @@ void ThreadPlanStepUntil::AnalyzeStop() {
 
 bool ThreadPlanStepUntil::DoPlanExplainsStop(Event *event_ptr) {
   // We don't explain signals or breakpoints (breakpoints that handle stepping
-  // in or
-  // out will be handled by a child plan.
+  // in or out will be handled by a child plan.
   AnalyzeStop();
   return m_explains_stop;
 }
 
 bool ThreadPlanStepUntil::ShouldStop(Event *event_ptr) {
-  // If we've told our self in ExplainsStop that we plan to continue, then
-  // do so here.  Otherwise, as long as this thread has stopped for a reason,
-  // we will stop.
+  // If we've told our self in ExplainsStop that we plan to continue, then do
+  // so here.  Otherwise, as long as this thread has stopped for a reason, we
+  // will stop.
 
   StopInfoSP stop_info_sp = GetPrivateStopInfo();
   if (!stop_info_sp || stop_info_sp->GetStopReason() == eStopReasonNone)

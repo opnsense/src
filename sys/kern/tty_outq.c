@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2008 Ed Schouten <ed@FreeBSD.org>
  * All rights reserved.
  *
@@ -322,7 +324,7 @@ ttyoutq_write(struct ttyoutq *to, const void *buf, size_t nbytes)
 int
 ttyoutq_write_nofrag(struct ttyoutq *to, const void *buf, size_t nbytes)
 {
-	size_t ret;
+	size_t ret __unused;
 
 	if (ttyoutq_bytesleft(to) < nbytes)
 		return (-1);

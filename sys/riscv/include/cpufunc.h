@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2015 Ruslan Bukin <br@bsdpad.com>
+ * Copyright (c) 2015-2016 Ruslan Bukin <br@bsdpad.com>
  * All rights reserved.
  *
  * Portions of this software were developed by SRI International and the
@@ -37,10 +37,6 @@
 #ifndef _MACHINE_CPUFUNC_H_
 #define	_MACHINE_CPUFUNC_H_
 
-#ifdef _KERNEL
-
-#include <machine/riscvreg.h>
-
 static __inline void
 breakpoint(void)
 {
@@ -48,17 +44,21 @@ breakpoint(void)
 	__asm("ebreak");
 }
 
+#ifdef _KERNEL
+
+#include <machine/riscvreg.h>
+
 static __inline register_t
 intr_disable(void)
 {
 	uint64_t ret;
 
 	__asm __volatile(
-		"csrrci %0, sstatus, 1"
-		: "=&r" (ret)
+		"csrrci %0, sstatus, %1"
+		: "=&r" (ret) : "i" (SSTATUS_SIE)
 	);
 
-	return (ret & SSTATUS_IE);
+	return (ret & (SSTATUS_SIE));
 }
 
 static __inline void
@@ -76,48 +76,60 @@ intr_enable(void)
 {
 
 	__asm __volatile(
-		"csrsi sstatus, 1"
+		"csrsi sstatus, %0"
+		:: "i" (SSTATUS_SIE)
 	);
 }
 
-static __inline register_t
-machine_command(uint64_t cmd, uint64_t arg)
+/* NB: fence() is defined as a macro in <machine/atomic.h>. */
+
+static __inline void
+fence_i(void)
 {
-	uint64_t res;
 
-	__asm __volatile(
-		"mv	t5, %2\n"
-		"mv	t6, %1\n"
-		"ecall\n"
-		"mv	%0, t6" : "=&r"(res) : "r"(arg), "r"(cmd)
-	);
-
-	return (res);
+	__asm __volatile("fence.i" ::: "memory");
 }
 
-#define	cpu_nullop()			riscv_nullop()
+static __inline void
+sfence_vma(void)
+{
+
+	__asm __volatile("sfence.vma" ::: "memory");
+}
+
+static __inline void
+sfence_vma_page(uintptr_t addr)
+{
+
+	__asm __volatile("sfence.vma %0" :: "r" (addr) : "memory");
+}
+
+#define	rdcycle()			csr_read64(cycle)
+#define	rdtime()			csr_read64(time)
+#define	rdinstret()			csr_read64(instret)
+#define	rdhpmcounter(n)			csr_read64(hpmcounter##n)
+
+extern int64_t dcache_line_size;
+extern int64_t icache_line_size;
+
+#define	cpu_dcache_wbinv_range(a, s)
+#define	cpu_dcache_inv_range(a, s)
+#define	cpu_dcache_wb_range(a, s)
+
+#define	cpu_idcache_wbinv_range(a, s)
+#define	cpu_icache_sync_range(a, s)
+#define	cpu_icache_sync_range_checked(a, s)
+
+static __inline void
+load_satp(uint64_t val)
+{
+
+	__asm __volatile("csrw satp, %0" :: "r"(val));
+}
+
 #define	cpufunc_nullop()		riscv_nullop()
-#define	cpu_setttb(a)			riscv_setttb(a)
-
-#define	cpu_tlb_flushID()		riscv_tlb_flushID()
-#define	cpu_tlb_flushID_SE(e)		riscv_tlb_flushID_SE(e)
-
-#define	cpu_dcache_wbinv_range(a, s)	riscv_dcache_wbinv_range((a), (s))
-#define	cpu_dcache_inv_range(a, s)	riscv_dcache_inv_range((a), (s))
-#define	cpu_dcache_wb_range(a, s)	riscv_dcache_wb_range((a), (s))
-
-#define	cpu_idcache_wbinv_range(a, s)	riscv_idcache_wbinv_range((a), (s))
-#define	cpu_icache_sync_range(a, s)	riscv_icache_sync_range((a), (s))
 
 void riscv_nullop(void);
-void riscv_setttb(vm_offset_t);
-void riscv_tlb_flushID(void);
-void riscv_tlb_flushID_SE(vm_offset_t);
-void riscv_icache_sync_range(vm_offset_t, vm_size_t);
-void riscv_idcache_wbinv_range(vm_offset_t, vm_size_t);
-void riscv_dcache_wbinv_range(vm_offset_t, vm_size_t);
-void riscv_dcache_inv_range(vm_offset_t, vm_size_t);
-void riscv_dcache_wb_range(vm_offset_t, vm_size_t);
 
 #endif	/* _KERNEL */
 #endif	/* _MACHINE_CPUFUNC_H_ */

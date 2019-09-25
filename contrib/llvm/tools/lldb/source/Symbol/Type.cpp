@@ -7,16 +7,12 @@
 //
 //===----------------------------------------------------------------------===//
 
-// C Includes
 #include <stdio.h>
 
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
 #include "lldb/Core/Module.h"
-#include "lldb/Core/Scalar.h"
 #include "lldb/Utility/DataBufferHeap.h"
 #include "lldb/Utility/DataExtractor.h"
+#include "lldb/Utility/Scalar.h"
 #include "lldb/Utility/StreamString.h"
 
 #include "lldb/Symbol/CompilerType.h"
@@ -325,15 +321,16 @@ uint64_t Type::GetByteSize() {
       if (encoding_type)
         m_byte_size = encoding_type->GetByteSize();
       if (m_byte_size == 0)
-        m_byte_size = GetLayoutCompilerType().GetByteSize(nullptr);
+        if (llvm::Optional<uint64_t> size =
+                GetLayoutCompilerType().GetByteSize(nullptr))
+          m_byte_size = *size;
     } break;
 
     // If we are a pointer or reference, then this is just a pointer size;
     case eEncodingIsPointerUID:
     case eEncodingIsLValueReferenceUID:
     case eEncodingIsRValueReferenceUID: {
-      ArchSpec arch;
-      if (m_symbol_file->GetObjectFile()->GetArchitecture(arch))
+      if (ArchSpec arch = m_symbol_file->GetObjectFile()->GetArchitecture())
         m_byte_size = arch.GetAddressByteSize();
     } break;
     }
@@ -342,7 +339,7 @@ uint64_t Type::GetByteSize() {
 }
 
 uint32_t Type::GetNumChildren(bool omit_empty_base_classes) {
-  return GetForwardCompilerType().GetNumChildren(omit_empty_base_classes);
+  return GetForwardCompilerType().GetNumChildren(omit_empty_base_classes, nullptr);
 }
 
 bool Type::IsAggregateType() {
@@ -387,8 +384,8 @@ bool Type::DumpValueInMemory(ExecutionContext *exe_ctx, Stream *s,
 bool Type::ReadFromMemory(ExecutionContext *exe_ctx, lldb::addr_t addr,
                           AddressType address_type, DataExtractor &data) {
   if (address_type == eAddressTypeFile) {
-    // Can't convert a file address to anything valid without more
-    // context (which Module it came from)
+    // Can't convert a file address to anything valid without more context
+    // (which Module it came from)
     return false;
   }
 
@@ -533,10 +530,8 @@ bool Type::ResolveClangType(ResolveState compiler_type_resolve_state) {
     }
 
     // When we have a EncodingUID, our "m_flags.compiler_type_resolve_state" is
-    // set to eResolveStateUnresolved
-    // so we need to update it to say that we now have a forward declaration
-    // since that is what we created
-    // above.
+    // set to eResolveStateUnresolved so we need to update it to say that we
+    // now have a forward declaration since that is what we created above.
     if (m_compiler_type.IsValid())
       m_flags.compiler_type_resolve_state = eResolveStateForward;
   }
@@ -556,8 +551,8 @@ bool Type::ResolveClangType(ResolveState compiler_type_resolve_state) {
     }
   }
 
-  // If we have an encoding type, then we need to make sure it is
-  // resolved appropriately.
+  // If we have an encoding type, then we need to make sure it is resolved
+  // appropriately.
   if (m_encoding_uid != LLDB_INVALID_UID) {
     if (encoding_type == nullptr)
       encoding_type = GetEncodingType();
@@ -716,11 +711,7 @@ bool TypeAndOrName::operator==(const TypeAndOrName &other) const {
 }
 
 bool TypeAndOrName::operator!=(const TypeAndOrName &other) const {
-  if (m_type_pair != other.m_type_pair)
-    return true;
-  if (m_type_name != other.m_type_name)
-    return true;
-  return false;
+  return !(*this == other);
 }
 
 ConstString TypeAndOrName::GetName() const {
@@ -752,10 +743,7 @@ void TypeAndOrName::SetCompilerType(CompilerType compiler_type) {
 }
 
 bool TypeAndOrName::IsEmpty() const {
-  if ((bool)m_type_name || (bool)m_type_pair)
-    return false;
-  else
-    return true;
+  return !((bool)m_type_name || (bool)m_type_pair);
 }
 
 void TypeAndOrName::Clear() {
@@ -847,35 +835,26 @@ TypeImpl &TypeImpl::operator=(const TypeImpl &rhs) {
 }
 
 bool TypeImpl::CheckModule(lldb::ModuleSP &module_sp) const {
-  // Check if we have a module for this type. If we do and the shared pointer is
-  // can be successfully initialized with m_module_wp, return true. Else return
-  // false
-  // if we didn't have a module, or if we had a module and it has been deleted.
-  // Any
-  // functions doing anything with a TypeSP in this TypeImpl class should call
-  // this
-  // function and only do anything with the ivars if this function returns true.
-  // If
-  // we have a module, the "module_sp" will be filled in with a strong reference
-  // to the
-  // module so that the module will at least stay around long enough for the
-  // type
-  // query to succeed.
+  // Check if we have a module for this type. If we do and the shared pointer
+  // is can be successfully initialized with m_module_wp, return true. Else
+  // return false if we didn't have a module, or if we had a module and it has
+  // been deleted. Any functions doing anything with a TypeSP in this TypeImpl
+  // class should call this function and only do anything with the ivars if
+  // this function returns true. If we have a module, the "module_sp" will be
+  // filled in with a strong reference to the module so that the module will at
+  // least stay around long enough for the type query to succeed.
   module_sp = m_module_wp.lock();
   if (!module_sp) {
     lldb::ModuleWP empty_module_wp;
     // If either call to "std::weak_ptr::owner_before(...) value returns true,
-    // this
-    // indicates that m_module_wp once contained (possibly still does) a
-    // reference
-    // to a valid shared pointer. This helps us know if we had a valid reference
-    // to
-    // a section which is now invalid because the module it was in was deleted
+    // this indicates that m_module_wp once contained (possibly still does) a
+    // reference to a valid shared pointer. This helps us know if we had a
+    // valid reference to a section which is now invalid because the module it
+    // was in was deleted
     if (empty_module_wp.owner_before(m_module_wp) ||
         m_module_wp.owner_before(empty_module_wp)) {
       // m_module_wp had a valid reference to a module, but all strong
-      // references
-      // have been released and the module has been deleted
+      // references have been released and the module has been deleted
       return false;
     }
   }
@@ -889,8 +868,7 @@ bool TypeImpl::operator==(const TypeImpl &rhs) const {
 }
 
 bool TypeImpl::operator!=(const TypeImpl &rhs) const {
-  return m_static_type != rhs.m_static_type ||
-         m_dynamic_type != rhs.m_dynamic_type;
+  return !(*this == rhs);
 }
 
 bool TypeImpl::IsValid() const {

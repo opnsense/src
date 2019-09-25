@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2001 Daniel Eischen <deischen@FreeBSD.org>.
  * All rights reserved.
  *
@@ -113,6 +115,7 @@
 #undef		pthread_detach
 #undef		pthread_equal
 #undef		pthread_exit
+#undef		pthread_get_name_np
 #undef		pthread_getaffinity_np
 #undef		pthread_getconcurrency
 #undef		pthread_getcpuclockid

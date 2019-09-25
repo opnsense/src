@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2002-2009 Luigi Rizzo, Universita` di Pisa
  *
  * Redistribution and use in source and binary forms, with or without
@@ -105,7 +107,7 @@ ipfw_log(struct ip_fw_chain *chain, struct ip_fw *f, u_int hlen,
 	char action2[92], proto[128], fragment[32];
 
 	if (V_fw_verbose == 0) {
-		if (args->eh) /* layer2, use orig hdr */
+		if (args->flags & IPFW_ARGS_ETHER) /* layer2, use orig hdr */
 			ipfw_bpf_mtap2(args->eh, ETHER_HDR_LEN, m);
 		else {
 			/* Add fake header. Later we will store

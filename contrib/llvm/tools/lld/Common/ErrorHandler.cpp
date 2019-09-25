@@ -12,7 +12,8 @@
 #include "lld/Common/Threads.h"
 
 #include "llvm/ADT/Twine.h"
-#include "llvm/Support/Error.h"
+#include "llvm/IR/DiagnosticInfo.h"
+#include "llvm/IR/DiagnosticPrinter.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/raw_ostream.h"
 #include <mutex>
@@ -46,8 +47,9 @@ ErrorHandler &lld::errorHandler() {
 }
 
 void lld::exitLld(int Val) {
-  // Delete the output buffer so that any tempory file is deleted.
-  errorHandler().OutputBuffer.reset();
+  // Delete any temporary file, while keeping the memory mapping open.
+  if (errorHandler().OutputBuffer)
+    errorHandler().OutputBuffer->discard();
 
   // Dealloc/destroy ManagedStatic variables before calling
   // _exit(). In a non-LTO build, this is a nop. In an LTO
@@ -57,6 +59,30 @@ void lld::exitLld(int Val) {
   outs().flush();
   errs().flush();
   _exit(Val);
+}
+
+void lld::diagnosticHandler(const DiagnosticInfo &DI) {
+  SmallString<128> S;
+  raw_svector_ostream OS(S);
+  DiagnosticPrinterRawOStream DP(OS);
+  DI.print(DP);
+  switch (DI.getSeverity()) {
+  case DS_Error:
+    error(S);
+    break;
+  case DS_Warning:
+    warn(S);
+    break;
+  case DS_Remark:
+  case DS_Note:
+    message(S);
+    break;
+  }
+}
+
+void lld::checkError(Error E) {
+  handleAllErrors(std::move(E),
+                  [&](ErrorInfoBase &EIB) { error(EIB.message()); });
 }
 
 void ErrorHandler::print(StringRef S, raw_ostream::Colors C) {

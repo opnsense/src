@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2013 Ian Lepore <ian@freebsd.org>
  * All rights reserved.
  *
@@ -799,7 +801,8 @@ ffec_alloc_mbufcl(struct ffec_softc *sc)
 	struct mbuf *m;
 
 	m = m_getcl(M_NOWAIT, MT_DATA, M_PKTHDR);
-	m->m_pkthdr.len = m->m_len = m->m_ext.ext_size;
+	if (m != NULL)
+		m->m_pkthdr.len = m->m_len = m->m_ext.ext_size;
 
 	return (m);
 }
@@ -992,7 +995,7 @@ ffec_setup_rxfilter(struct ffec_softc *sc)
 	else {
 		ghash = 0;
 		if_maddr_rlock(ifp);
-		TAILQ_FOREACH(ifma, &sc->ifp->if_multiaddrs, ifma_link) {
+		CK_STAILQ_FOREACH(ifma, &sc->ifp->if_multiaddrs, ifma_link) {
 			if (ifma->ifma_addr->sa_family != AF_LINK)
 				continue;
 			/* 6 bits from MSB in LE CRC32 are used for hash. */

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright 2007 Scott Long
  * All rights reserved.
  *
@@ -39,7 +41,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/conf.h>
 #include <sys/eventhandler.h>
 #include <sys/rman.h>
-#include <sys/bus_dma.h>
 #include <sys/bio.h>
 #include <sys/ioccom.h>
 #include <sys/uio.h>

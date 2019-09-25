@@ -35,7 +35,7 @@
  * Note that the hardware is capable of running as both a master and a slave.
  * This driver currently implements only master-mode operations.
  *
- * This driver supports multi-master i2c busses, by detecting bus arbitration
+ * This driver supports multi-master i2c buses, by detecting bus arbitration
  * loss and returning IIC_EBUSBSY status.  Notably, it does not do any kind of
  * retries if some other master jumps onto the bus and interrupts one of our
  * transfer cycles resulting in arbitration loss in mid-transfer.  The caller
@@ -66,7 +66,6 @@ __FBSDID("$FreeBSD$");
 #include <dev/iicbus/iic_recover_bus.h>
 #include "iicbus_if.h"
 
-#include <dev/fdt/fdt_common.h>
 #include <dev/ofw/openfirm.h>
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
@@ -195,6 +194,7 @@ DRIVER_MODULE(imx_i2c, simplebus, i2c_driver, i2c_devclass, 0, 0);
 DRIVER_MODULE(ofw_iicbus, imx_i2c, ofw_iicbus_driver, ofw_iicbus_devclass, 0, 0);
 MODULE_DEPEND(imx_i2c, iicbus, 1, 1, 1);
 MODULE_DEPEND(imx_i2c, ofw_iicbus, 1, 1, 1);
+SIMPLEBUS_PNP_INFO(compat_data);
 
 static phandle_t
 i2c_get_node(device_t bus, device_t dev)
@@ -468,6 +468,10 @@ i2c_detach(device_t dev)
 
 	if (sc->iicbus != NULL)
 		device_delete_child(dev, sc->iicbus);
+
+	/* Release bus-recover pins; gpio_pin_release() handles NULL args. */
+	gpio_pin_release(sc->rb_sclpin);
+	gpio_pin_release(sc->rb_sdapin);
 
 	if (sc->res != NULL)
 		bus_release_resource(dev, SYS_RES_MEMORY, 0, sc->res);

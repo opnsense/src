@@ -18,7 +18,7 @@
 
 	apb@80000000 {
 		apbh@80000000 {
-			ssp0: ssp@80010000 {
+			ssp0: spi@80010000 {
 				compatible = "fsl,imx28-mmc";
 				pinctrl-names = "default";
 				pinctrl-0 = <&mmc0_4bit_pins_a
@@ -27,7 +27,7 @@
 				status = "okay";
 			};
 
-			ssp2: ssp@80014000 {
+			ssp2: spi@80014000 {
 				compatible = "fsl,imx28-spi";
 				pinctrl-names = "default";
 				pinctrl-0 = <&spi2_pins_a>;
@@ -140,7 +140,7 @@
 			auart0: serial@8006a000 {
 				pinctrl-names = "default";
 				pinctrl-0 = <&auart0_pins_a>;
-				fsl,uart-has-rtscts;
+				uart-has-rtscts;
 				status = "okay";
 			};
 
@@ -225,7 +225,7 @@
 			label = "User button";
 			gpios = <&gpio0 17 GPIO_ACTIVE_LOW>;
 			linux,code = <0x100>;
-			gpio-key,wakeup;
+			wakeup-source;
 		};
 	};
 };

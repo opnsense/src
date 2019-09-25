@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1993 Jan-Simon Pendry
  * Copyright (c) 1993 Sean Eric Fagan
  * Copyright (c) 1993
@@ -15,7 +17,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -36,12 +38,9 @@
  * $FreeBSD$
  */
 
-#include "opt_pax.h"
-
 #include <sys/param.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
-#include <sys/pax.h>
 #include <sys/proc.h>
 #include <sys/ptrace.h>
 #include <sys/systm.h>
@@ -66,10 +65,6 @@ procfs_doprocmem(PFS_FILL_ARGS)
 
 	PROC_LOCK(p);
 	error = p_candebug(td, p);
-#ifdef PAX_HARDENING
-	if (error == 0)
-		error = pax_procfs_harden(td);
-#endif
 	PROC_UNLOCK(p);
 	if (error == 0)
 		error = proc_rwmem(p, uio);

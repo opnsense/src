@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2009-2017 Alexander Motin <mav@FreeBSD.org>
  * Copyright (c) 1997-2009 by Matthew Jacob
  * All rights reserved.
@@ -3740,6 +3742,10 @@ isp_async(ispsoftc_t *isp, ispasync_t cmd, ...)
 		break;
 	case ISPASYNC_DEV_CHANGED:
 	case ISPASYNC_DEV_STAYED:		
+	{
+		int crn_reset_done;
+
+		crn_reset_done = 0;
 		va_start(ap, cmd);
 		bus = va_arg(ap, int);
 		lp = va_arg(ap, fcportdb_t *);
@@ -3757,13 +3763,17 @@ isp_async(ispsoftc_t *isp, ispasync_t cmd, ...)
 		     (lp->new_prli_word3 & PRLI_WD3_TARGET_FUNCTION))) {
 			lp->is_target = !lp->is_target;
 			if (lp->is_target) {
-				if (cmd == ISPASYNC_DEV_CHANGED)
+				if (cmd == ISPASYNC_DEV_CHANGED) {
 					isp_fcp_reset_crn(isp, bus, tgt, /*tgt_set*/ 1);
+					crn_reset_done = 1;
+				}
 				isp_make_here(isp, lp, bus, tgt);
 			} else {
 				isp_make_gone(isp, lp, bus, tgt);
-				if (cmd == ISPASYNC_DEV_CHANGED)
+				if (cmd == ISPASYNC_DEV_CHANGED) {
 					isp_fcp_reset_crn(isp, bus, tgt, /*tgt_set*/ 1);
+					crn_reset_done = 1;
+				}
 			}
 		}
 		if (lp->is_initiator !=
@@ -3778,7 +3788,13 @@ isp_async(ispsoftc_t *isp, ispasync_t cmd, ...)
 			adc->arrived = lp->is_initiator;
 			xpt_async(AC_CONTRACT, fc->path, &ac);
 		}
+
+		if ((cmd == ISPASYNC_DEV_CHANGED) &&
+		    (crn_reset_done == 0))
+			isp_fcp_reset_crn(isp, bus, tgt, /*tgt_set*/ 1);
+
 		break;
+	}
 	case ISPASYNC_DEV_GONE:
 		va_start(ap, cmd);
 		bus = va_arg(ap, int);
@@ -4081,8 +4097,9 @@ uint64_t
 isp_nanotime_sub(struct timespec *b, struct timespec *a)
 {
 	uint64_t elapsed;
-	struct timespec x = *b;
-	timespecsub(&x, a);
+	struct timespec x;
+
+	timespecsub(b, a, &x);
 	elapsed = GET_NANOSEC(&x);
 	if (elapsed == 0)
 		elapsed++;

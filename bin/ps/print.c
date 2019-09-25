@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1990, 1993, 1994
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -660,7 +662,7 @@ getpmem(KINFO *k)
 		return (0.0);
 	/* XXX want pmap ptpages, segtab, etc. (per architecture) */
 	/* XXX don't have info about shared */
-	fracmem = ((float)k->ki_p->ki_rssize) / mempages;
+	fracmem = ((double)k->ki_p->ki_rssize) / mempages;
 	return (100.0 * fracmem);
 }
 
@@ -769,8 +771,6 @@ printval(void *bp, VAR *v)
 	case PGTOK:
 		(void)asprintf(&str, ofmt, ps_pgtok(*(u_long *)bp));
 		break;
-	default:
-		xo_errx(1, "unknown type %d", v->type);
 	}
 
 	return (str);

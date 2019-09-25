@@ -9,10 +9,6 @@
 
 #include "lldb/DataFormatters/ValueObjectPrinter.h"
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
 #include "lldb/Core/ValueObject.h"
 #include "lldb/DataFormatters/DataVisualization.h"
 #include "lldb/Interpreter/CommandInterpreter.h"
@@ -133,13 +129,13 @@ bool ValueObjectPrinter::GetMostSpecializedValue() {
     }
 
     if (m_valobj->IsSynthetic()) {
-      if (m_options.m_use_synthetic == false) {
+      if (!m_options.m_use_synthetic) {
         ValueObject *non_synthetic = m_valobj->GetNonSyntheticValue().get();
         if (non_synthetic)
           m_valobj = non_synthetic;
       }
     } else {
-      if (m_options.m_use_synthetic == true) {
+      if (m_options.m_use_synthetic) {
         ValueObject *synthetic = m_valobj->GetSyntheticValue().get();
         if (synthetic)
           m_valobj = synthetic;
@@ -170,7 +166,7 @@ const char *ValueObjectPrinter::GetRootNameForDisplay(const char *if_fail) {
 bool ValueObjectPrinter::ShouldPrintValueObject() {
   if (m_should_print == eLazyBoolCalculate)
     m_should_print =
-        (m_options.m_flat_output == false || m_type_flags.Test(eTypeHasValue))
+        (!m_options.m_flat_output || m_type_flags.Test(eTypeHasValue))
             ? eLazyBoolYes
             : eLazyBoolNo;
   return m_should_print == eLazyBoolYes;
@@ -244,8 +240,8 @@ void ValueObjectPrinter::PrintDecl() {
 
   // always show the type at the root level if it is invalid
   if (show_type) {
-    // Some ValueObjects don't have types (like registers sets). Only print
-    // the type if there is one to print
+    // Some ValueObjects don't have types (like registers sets). Only print the
+    // type if there is one to print
     ConstString type_name;
     if (m_compiler_type.IsValid()) {
       if (m_options.m_use_type_display_name)
@@ -330,7 +326,7 @@ bool ValueObjectPrinter::CheckScopeIfNeeded() {
 }
 
 TypeSummaryImpl *ValueObjectPrinter::GetSummaryFormatter(bool null_if_omitted) {
-  if (m_summary_formatter.second == false) {
+  if (!m_summary_formatter.second) {
     TypeSummaryImpl *entry = m_options.m_summary_sp
                                  ? m_options.m_summary_sp.get()
                                  : m_valobj->GetSummaryFormat().get();
@@ -402,12 +398,10 @@ bool ValueObjectPrinter::PrintValueAndSummaryIfNeeded(bool &value_printed,
     }
     if (m_error.size()) {
       // we need to support scenarios in which it is actually fine for a value
-      // to have no type
-      // but - on the other hand - if we get an error *AND* have no type, we try
-      // to get out
-      // gracefully, since most often that combination means "could not resolve
-      // a type"
-      // and the default failure mode is quite ugly
+      // to have no type but - on the other hand - if we get an error *AND*
+      // have no type, we try to get out gracefully, since most often that
+      // combination means "could not resolve a type" and the default failure
+      // mode is quite ugly
       if (!m_compiler_type.IsValid()) {
         m_stream->Printf(" <could not resolve type>");
         return false;
@@ -416,10 +410,10 @@ bool ValueObjectPrinter::PrintValueAndSummaryIfNeeded(bool &value_printed,
       error_printed = true;
       m_stream->Printf(" <%s>\n", m_error.c_str());
     } else {
-      // Make sure we have a value and make sure the summary didn't
-      // specify that the value should not be printed - and do not print
-      // the value if this thing is nil
-      // (but show the value if the user passes a format explicitly)
+      // Make sure we have a value and make sure the summary didn't specify
+      // that the value should not be printed - and do not print the value if
+      // this thing is nil (but show the value if the user passes a format
+      // explicitly)
       TypeSummaryImpl *entry = GetSummaryFormatter();
       if (!IsNil() && !IsUninitialized() && !m_value.empty() &&
           (entry == NULL || (entry->DoesPrintValue(m_valobj) ||
@@ -464,7 +458,7 @@ bool ValueObjectPrinter::PrintObjectDescriptionIfNeeded(bool value_printed,
         else
             m_stream->Printf("%s\n", object_desc);        
         return true;
-      } else if (value_printed == false && summary_printed == false)
+      } else if (!value_printed && !summary_printed)
         return true;
       else
         return false;
@@ -494,8 +488,8 @@ bool ValueObjectPrinter::ShouldPrintChildren(
   if (is_uninit)
     return false;
 
-  // if the user has specified an element count, always print children
-  // as it is explicit user demand being honored
+  // if the user has specified an element count, always print children as it is
+  // explicit user demand being honored
   if (m_options.m_pointer_as_array)
     return true;
 
@@ -505,17 +499,16 @@ bool ValueObjectPrinter::ShouldPrintChildren(
     return false;
 
   if (is_failed_description || m_curr_depth < m_options.m_max_depth) {
-    // We will show children for all concrete types. We won't show
-    // pointer contents unless a pointer depth has been specified.
-    // We won't reference contents unless the reference is the
-    // root object (depth of zero).
+    // We will show children for all concrete types. We won't show pointer
+    // contents unless a pointer depth has been specified. We won't reference
+    // contents unless the reference is the root object (depth of zero).
 
-    // Use a new temporary pointer depth in case we override the
-    // current pointer depth below...
+    // Use a new temporary pointer depth in case we override the current
+    // pointer depth below...
 
     if (is_ptr || is_ref) {
-      // We have a pointer or reference whose value is an address.
-      // Make sure that address is not NULL
+      // We have a pointer or reference whose value is an address. Make sure
+      // that address is not NULL
       AddressType ptr_address_type;
       if (m_valobj->GetPointerValue(&ptr_address_type) == 0)
         return false;
@@ -523,10 +516,10 @@ bool ValueObjectPrinter::ShouldPrintChildren(
       const bool is_root_level = m_curr_depth == 0;
 
       if (is_ref && is_root_level) {
-        // If this is the root object (depth is zero) that we are showing
-        // and it is a reference, and no pointer depth has been supplied
-        // print out what it references. Don't do this at deeper depths
-        // otherwise we can end up with infinite recursion...
+        // If this is the root object (depth is zero) that we are showing and
+        // it is a reference, and no pointer depth has been supplied print out
+        // what it references. Don't do this at deeper depths otherwise we can
+        // end up with infinite recursion...
         return true;
       }
 
@@ -632,7 +625,7 @@ bool ValueObjectPrinter::ShouldPrintEmptyBrackets(bool value_printed,
   if (!IsAggregate())
     return false;
 
-  if (m_options.m_reveal_empty_aggregates == false) {
+  if (!m_options.m_reveal_empty_aggregates) {
     if (value_printed || summary_printed)
       return false;
   }
@@ -759,8 +752,7 @@ bool ValueObjectPrinter::PrintChildrenOneLiner(bool hide_names) {
 void ValueObjectPrinter::PrintChildrenIfNeeded(bool value_printed,
                                                bool summary_printed) {
   // this flag controls whether we tried to display a description for this
-  // object and failed
-  // if that happens, we want to display the children, if any
+  // object and failed if that happens, we want to display the children, if any
   bool is_failed_description =
       !PrintObjectDescriptionIfNeeded(value_printed, summary_printed);
 

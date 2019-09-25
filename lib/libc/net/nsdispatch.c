@@ -1,6 +1,8 @@
 /*	$NetBSD: nsdispatch.c,v 1.9 1999/01/25 00:16:17 lukem Exp $	*/
 
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ *
  * Copyright (c) 1997, 1998, 1999 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
@@ -484,9 +486,19 @@ nss_load_module(const char *source, nss_module_register_fn reg_fn)
 		 */
 		mod.handle = nss_builtin_handle;
 		fn = reg_fn;
-	} else if (!is_dynamic())
+	} else if (!is_dynamic()) {
 		goto fin;
-	else {
+	} else if (strcmp(source, NSSRC_CACHE) == 0 ||
+	    strcmp(source, NSSRC_COMPAT) == 0 ||
+	    strcmp(source, NSSRC_DB) == 0 ||
+	    strcmp(source, NSSRC_DNS) == 0 ||
+	    strcmp(source, NSSRC_FILES) == 0 ||
+	    strcmp(source, NSSRC_NIS) == 0) {
+		/*
+		 * Avoid calling dlopen(3) for built-in modules.
+		 */
+		goto fin;
+	} else {
 		if (snprintf(buf, sizeof(buf), "nss_%s.so.%d", mod.name,
 		    NSS_MODULE_INTERFACE_VERSION) >= (int)sizeof(buf))
 			goto fin;

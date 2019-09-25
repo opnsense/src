@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1994, Garrett Wollman
  *
  * Redistribution and use in source and binary forms, with or without
@@ -56,7 +58,7 @@ _getnetbynis(const char *name, char *map, int af, struct netent *ne,
 	char *cp, **q;
 	char *result;
 	int resultlen, len;
-	char ypbuf[YPMAXRECORD + 2];
+	char *ypbuf;
 
 	switch(af) {
 	case AF_INET:
@@ -75,10 +77,11 @@ _getnetbynis(const char *name, char *map, int af, struct netent *ne,
 	    &resultlen))
 		return (-1);
 
-	bcopy((char *)result, (char *)&ypbuf, resultlen);
+	ypbuf = alloca(resultlen + 2);
+	bcopy(result, ypbuf, resultlen);
 	ypbuf[resultlen] = '\0';
 	free(result);
-	result = (char *)&ypbuf;
+	result = ypbuf;
 
 	if ((cp = strchr(result, '\n')))
 		*cp = '\0';

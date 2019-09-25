@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2008-2010 Lawrence Stewart <lstewart@freebsd.org>
  * Copyright (c) 2010 The FreeBSD Foundation
  * All rights reserved.
@@ -193,9 +195,7 @@ cubic_ack_received(struct cc_var *ccv, uint16_t type)
 static void
 cubic_cb_destroy(struct cc_var *ccv)
 {
-
-	if (ccv->cc_data != NULL)
-		free(ccv->cc_data, M_CUBIC);
+	free(ccv->cc_data, M_CUBIC);
 }
 
 static int
@@ -324,7 +324,12 @@ cubic_post_recovery(struct cc_var *ccv)
 			pipe = CCV(ccv, snd_max) - ccv->curack;
 
 		if (pipe < CCV(ccv, snd_ssthresh))
-			CCV(ccv, snd_cwnd) = pipe + CCV(ccv, t_maxseg);
+			/*
+			 * Ensure that cwnd does not collapse to 1 MSS under
+			 * adverse conditions. Implements RFC6582
+			 */
+			CCV(ccv, snd_cwnd) = max(pipe, CCV(ccv, t_maxseg)) +
+			    CCV(ccv, t_maxseg);
 		else
 			/* Update cwnd based on beta and adjusted max_cwnd. */
 			CCV(ccv, snd_cwnd) = max(1, ((CUBIC_BETA *
@@ -404,8 +409,8 @@ cubic_ssthresh_update(struct cc_var *ccv)
 	if (cubic_data->num_cong_events == 0)
 		CCV(ccv, snd_ssthresh) = CCV(ccv, snd_cwnd) >> 1;
 	else
-		CCV(ccv, snd_ssthresh) = (CCV(ccv, snd_cwnd) * CUBIC_BETA)
-		    >> CUBIC_SHIFT;
+		CCV(ccv, snd_ssthresh) = ((u_long)CCV(ccv, snd_cwnd) *
+		    CUBIC_BETA) >> CUBIC_SHIFT;
 }
 
 

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
  * All rights reserved.
  *
@@ -41,7 +43,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -122,8 +124,8 @@ VNET_PCPUSTAT_SYSUNINIT(icmp6stat);
 VNET_DECLARE(struct inpcbinfo, ripcbinfo);
 VNET_DECLARE(struct inpcbhead, ripcb);
 VNET_DECLARE(int, icmp6errppslim);
-static VNET_DEFINE(int, icmp6errpps_count) = 0;
-static VNET_DEFINE(struct timeval, icmp6errppslim_last);
+VNET_DEFINE_STATIC(int, icmp6errpps_count) = 0;
+VNET_DEFINE_STATIC(struct timeval, icmp6errppslim_last);
 VNET_DECLARE(int, icmp6_nodeinfo);
 
 #define	V_ripcbinfo			VNET(ripcbinfo)
@@ -545,7 +547,7 @@ icmp6_input(struct mbuf **mp, int *offp, int proto)
 		icmp6_ifstat_inc(ifp, ifs6_in_echo);
 		if (code != 0)
 			goto badcode;
-		if ((n = m_copy(m, 0, M_COPYALL)) == NULL) {
+		if ((n = m_copym(m, 0, M_COPYALL, M_NOWAIT)) == NULL) {
 			/* Give up remote */
 			break;
 		}
@@ -641,7 +643,7 @@ icmp6_input(struct mbuf **mp, int *offp, int proto)
 			IP6_EXTHDR_CHECK(m, off, sizeof(struct icmp6_nodeinfo),
 			    IPPROTO_DONE);
 #endif
-			n = m_copy(m, 0, M_COPYALL);
+			n = m_copym(m, 0, M_COPYALL, M_NOWAIT);
 			if (n)
 				n = ni6_input(n, off);
 			/* XXX meaningless if n == NULL */
@@ -1675,10 +1677,10 @@ ni6_addrs(struct icmp6_nodeinfo *ni6, struct mbuf *m, struct ifnet **ifpp,
 	}
 
 	IFNET_RLOCK_NOSLEEP();
-	TAILQ_FOREACH(ifp, &V_ifnet, if_link) {
+	CK_STAILQ_FOREACH(ifp, &V_ifnet, if_link) {
 		addrsofif = 0;
 		IF_ADDR_RLOCK(ifp);
-		TAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) {
+		CK_STAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) {
 			if (ifa->ifa_addr->sa_family != AF_INET6)
 				continue;
 			ifa6 = (struct in6_ifaddr *)ifa;
@@ -1759,12 +1761,12 @@ ni6_store_addrs(struct icmp6_nodeinfo *ni6, struct icmp6_nodeinfo *nni6,
 		return (0);	/* needless to copy */
 
 	IFNET_RLOCK_NOSLEEP();
-	ifp = ifp0 ? ifp0 : TAILQ_FIRST(&V_ifnet);
+	ifp = ifp0 ? ifp0 : CK_STAILQ_FIRST(&V_ifnet);
   again:
 
-	for (; ifp; ifp = TAILQ_NEXT(ifp, if_link)) {
+	for (; ifp; ifp = CK_STAILQ_NEXT(ifp, if_link)) {
 		IF_ADDR_RLOCK(ifp);
-		TAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) {
+		CK_STAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) {
 			if (ifa->ifa_addr->sa_family != AF_INET6)
 				continue;
 			ifa6 = (struct in6_ifaddr *)ifa;
@@ -1894,6 +1896,7 @@ icmp6_rip6_input(struct mbuf **mp, int off)
 	struct inpcb *last = NULL;
 	struct sockaddr_in6 fromsa;
 	struct icmp6_hdr *icmp6;
+	struct epoch_tracker et;
 	struct mbuf *opts = NULL;
 
 #ifndef PULLDOWN_TEST
@@ -1920,8 +1923,8 @@ icmp6_rip6_input(struct mbuf **mp, int off)
 		return (IPPROTO_DONE);
 	}
 
-	INP_INFO_RLOCK(&V_ripcbinfo);
-	LIST_FOREACH(in6p, &V_ripcb, inp_list) {
+	INP_INFO_RLOCK_ET(&V_ripcbinfo, et);
+	CK_LIST_FOREACH(in6p, &V_ripcb, inp_list) {
 		if ((in6p->inp_vflag & INP_IPV6) == 0)
 			continue;
 		if (in6p->inp_ip_p != IPPROTO_ICMPV6)
@@ -1933,6 +1936,10 @@ icmp6_rip6_input(struct mbuf **mp, int off)
 		   !IN6_ARE_ADDR_EQUAL(&in6p->in6p_faddr, &ip6->ip6_src))
 			continue;
 		INP_RLOCK(in6p);
+		if (__predict_false(in6p->inp_flags2 & INP_FREED)) {
+			INP_RUNLOCK(in6p);
+			continue;
+		}
 		if (ICMP6_FILTER_WILLBLOCK(icmp6->icmp6_type,
 		    in6p->in6p_icmp6filt)) {
 			INP_RUNLOCK(in6p);
@@ -1973,7 +1980,7 @@ icmp6_rip6_input(struct mbuf **mp, int off)
 				}
 			}
 			if (n != NULL ||
-			    (n = m_copy(m, 0, (int)M_COPYALL)) != NULL) {
+			    (n = m_copym(m, 0, M_COPYALL, M_NOWAIT)) != NULL) {
 				if (last->inp_flags & INP_CONTROLOPTS)
 					ip6_savecontrol(last, n, &opts);
 				/* strip intermediate headers */
@@ -1998,7 +2005,7 @@ icmp6_rip6_input(struct mbuf **mp, int off)
 		}
 		last = in6p;
 	}
-	INP_INFO_RUNLOCK(&V_ripcbinfo);
+	INP_INFO_RUNLOCK_ET(&V_ripcbinfo, et);
 	if (last != NULL) {
 		if (last->inp_flags & INP_CONTROLOPTS)
 			ip6_savecontrol(last, m, &opts);

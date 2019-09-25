@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1998 - 2008 Søren Schmidt <sos@FreeBSD.org>
  * All rights reserved.
  *
@@ -314,13 +316,13 @@ ata_suspend(device_t dev)
     if (!dev || !(ch = device_get_softc(dev)))
 	return ENXIO;
 
-	if (ch->flags & ATA_PERIODIC_POLL)
-		callout_drain(&ch->poll_callout);
-	mtx_lock(&ch->state_mtx);
-	xpt_freeze_simq(ch->sim, 1);
-	while (ch->state != ATA_IDLE)
-		msleep(ch, &ch->state_mtx, PRIBIO, "atasusp", hz/100);
-	mtx_unlock(&ch->state_mtx);
+    if (ch->flags & ATA_PERIODIC_POLL)
+	callout_drain(&ch->poll_callout);
+    mtx_lock(&ch->state_mtx);
+    xpt_freeze_simq(ch->sim, 1);
+    while (ch->state != ATA_IDLE)
+	msleep(ch, &ch->state_mtx, PRIBIO, "atasusp", hz/100);
+    mtx_unlock(&ch->state_mtx);
     return(0);
 }
 

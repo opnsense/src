@@ -42,7 +42,6 @@
 __FBSDID("$FreeBSD$");
 
 #include "opt_cpu.h"
-#include "opt_pax.h"
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -92,6 +91,7 @@ u_int	cpu_feature;		/* Feature flags */
 u_int	cpu_feature2;		/* Feature flags */
 u_int	amd_feature;		/* AMD feature flags */
 u_int	amd_feature2;		/* AMD feature flags */
+u_int	amd_rascap;		/* AMD RAS capabilities */
 u_int	amd_pminfo;		/* AMD advanced power management info */
 u_int	amd_extended_feature_extensions;
 u_int	via_feature_rng;	/* VIA RNG features */
@@ -978,7 +978,12 @@ printcpuinfo(void)
 				       "\003UMIP"
 				       "\004PKU"
 				       "\005OSPKE"
+				       "\006WAITPKG"
+				       "\011GFNI"
 				       "\027RDPID"
+				       "\032CLDEMOTE"
+				       "\034MOVDIRI"
+				       "\035MOVDIRI64B"
 				       "\037SGXLC"
 				       );
 			}
@@ -987,9 +992,13 @@ printcpuinfo(void)
 				printf("\n  Structured Extended Features3=0x%b",
 				    cpu_stdext_feature3,
 				       "\020"
+				       "\013MD_CLEAR"
+				       "\016TSXFA"
 				       "\033IBPB"
 				       "\034STIBP"
+				       "\035L1DFL"
 				       "\036ARCH_CAP"
+				       "\037CORE_CAP"
 				       "\040SSBD"
 				       );
 			}
@@ -1013,6 +1022,9 @@ printcpuinfo(void)
 				       "\020"
 				       "\001RDCL_NO"
 				       "\002IBRS_ALL"
+				       "\003RSBA"
+				       "\004SKIP_L1DFL_VME"
+				       "\005SSB_NO"
 				       );
 			}
 
@@ -1466,6 +1478,19 @@ identify_cpu2(void)
 	}
 }
 
+void
+identify_cpu_fixup_bsp(void)
+{
+	u_int regs[4];
+
+	cpu_vendor_id = find_cpu_vendor_id();
+
+	if (fix_cpuid()) {
+		do_cpuid(0, regs);
+		cpu_high = regs[0];
+	}
+}
+
 /*
  * Final stage of CPU identification.
  */
@@ -1477,12 +1502,7 @@ finishidentcpu(void)
 	u_char ccr3;
 #endif
 
-	cpu_vendor_id = find_cpu_vendor_id();
-
-	if (fix_cpuid()) {
-		do_cpuid(0, regs);
-		cpu_high = regs[0];
-	}
+	identify_cpu_fixup_bsp();
 
 	if (cpu_high >= 5 && (cpu_feature2 & CPUID2_MON) != 0) {
 		do_cpuid(5, regs);
@@ -1519,6 +1539,7 @@ finishidentcpu(void)
 	}
 	if (cpu_exthigh >= 0x80000007) {
 		do_cpuid(0x80000007, regs);
+		amd_rascap = regs[1];
 		amd_pminfo = regs[3];
 	}
 	if (cpu_exthigh >= 0x80000008) {
@@ -1625,15 +1646,11 @@ int
 pti_get_default(void)
 {
 
-#ifdef PAX
-	return (1);
-#else
 	if (strcmp(cpu_vendor, AMD_VENDOR_ID) == 0)
 		return (0);
 	if ((cpu_ia32_arch_caps & IA32_ARCH_CAP_RDCL_NO) != 0)
 		return (0);
 	return (1);
-#endif
 }
 
 static u_int
@@ -2224,9 +2241,27 @@ print_svm_info(void)
 	       "\011<b8>"
 	       "\012<b9>"
 	       "\013PauseFilter"	/* PAUSE intercept filter */    
-	       "\014<b11>"
+	       "\014EncryptedMcodePatch"
 	       "\015PauseFilterThreshold" /* PAUSE filter threshold */
 	       "\016AVIC"		/* virtual interrupt controller */
+	       "\017<b14>"
+	       "\020V_VMSAVE_VMLOAD"
+	       "\021vGIF"
+	       "\022<b17>"
+	       "\023<b18>"
+	       "\024<b19>"
+	       "\025<b20>"
+	       "\026<b21>"
+	       "\027<b22>"
+	       "\030<b23>"
+	       "\031<b24>"
+	       "\032<b25>"
+	       "\033<b26>"
+	       "\034<b27>"
+	       "\035<b28>"
+	       "\036<b29>"
+	       "\037<b30>"
+	       "\040<b31>"
                 );
 	printf("\nRevision=%d, ASIDs=%d", regs[0] & 0xff, regs[1]);
 }

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2010-2016 Solarflare Communications Inc.
  * All rights reserved.
  *
@@ -137,6 +139,10 @@ enum sfxge_txq_type {
 	SFXGE_TXQ_NTYPES
 };
 
+#define	SFXGE_EVQ0_N_TXQ(_sc)						\
+	((_sc)->txq_dynamic_cksum_toggle_supported ?			\
+	1 : SFXGE_TXQ_NTYPES)
+
 #define	SFXGE_TXQ_UNBLOCK_LEVEL(_entries)	(EFX_TXQ_LIMIT(_entries) / 4)
 
 #define	SFXGE_TX_BATCH	64
@@ -172,7 +178,6 @@ struct sfxge_txq {
 	enum sfxge_flush_state		flush_state;
 	unsigned int			tso_fw_assisted;
 	enum sfxge_txq_type		type;
-	unsigned int			txq_index;
 	unsigned int			evq_index;
 	efsys_mem_t			mem;
 	unsigned int			buf_base_id;
@@ -202,6 +207,9 @@ struct sfxge_txq {
 	unsigned int			n_pend_desc;
 	unsigned int			added;
 	unsigned int			reaped;
+
+	/* The last (or constant) set of HW offloads requested on the queue */
+	uint16_t			hw_cksum_flags;
 
 	/* The last VLAN TCI seen on the queue if FW-assisted tagging is
 	   used */

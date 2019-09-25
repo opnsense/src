@@ -9,7 +9,7 @@
  *
  * 1. Copyright Notice
  *
- * Some or all of this work - Copyright (c) 1999 - 2017, Intel Corp.
+ * Some or all of this work - Copyright (c) 1999 - 2018, Intel Corp.
  * All rights reserved.
  *
  * 2. License
@@ -383,7 +383,7 @@ AcpiUtImplicitStrtoul64 (
      * implicit conversions, and the "0x" prefix is "not allowed".
      * However, allow a "0x" prefix as an ACPI extension.
      */
-    AcpiUtDetectHexPrefix (&String);
+    AcpiUtRemoveHexPrefix (&String);
 
     if (!AcpiUtRemoveLeadingZeros (&String))
     {

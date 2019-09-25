@@ -31,10 +31,10 @@ makeoptions	TRAMPLOADADDR=0x807963c0
 hints		"SENTRY5.hints"
 include		"../broadcom/std.broadcom"
 
-# sentry5 normally ships with cfe firmware; use the console for now
+# sentry5 normally ships with cfe firmware
 options 	CFE
-options 	CFE_CONSOLE
 options 	ALT_BREAK_TO_DEBUGGER
+device		cfe
 
 makeoptions	DEBUG=-g		#Build kernel with gdb(1) debug symbols
 makeoptions	MODULES_OVERRIDE=""
@@ -44,6 +44,7 @@ options 	KDB
 
 options 	SCHED_4BSD		#4BSD scheduler
 options 	INET			#InterNETworking
+options 	TCP_HHOOK		# hhook(9) framework for TCP
 options 	NFSCL			#Network Filesystem Client
 options 	NFS_ROOT		#NFS usable as /, requires NFSCL
 options 	PSEUDOFS		#Pseudo-filesystem framework
@@ -56,6 +57,7 @@ options 	INVARIANT_SUPPORT
 
 #options 	BUS_DEBUG
 #makeoptions	BUS_DEBUG
+options 	EARLY_PRINTF
 
 device		bhnd
 device		siba
@@ -81,6 +83,7 @@ device		ehci			# EHCI PCI->USB interface (USB 2.0)
 device		cfi			# parallel flash
 device		cfid
 
+device		gpio
 device		uart
 
 device		loop

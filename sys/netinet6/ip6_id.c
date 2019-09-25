@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: (BSD-3-Clause AND BSD-2-Clause)
+ *
  * Copyright (C) 2003 WIDE Project.
  * All rights reserved.
  *
@@ -46,11 +48,6 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *      This product includes software developed by Niels Provos.
- * 4. The name of the author may not be used to endorse or promote products
- *    derived from this software without specific prior written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
  * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
@@ -63,7 +60,7 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
- * $OpenBSD: ip6_id.c,v 1.2 2003/12/10 07:21:01 itojun Exp $
+ * $OpenBSD: ip6_id.c,v 1.3 2003/12/12 06:57:12 itojun Exp $
  */
 
 #include <sys/cdefs.h>
@@ -84,7 +81,7 @@ __FBSDID("$FreeBSD$");
  * The transaction id is determined by:
  * id[n] = seed xor (g^X[n] mod n)
  *
- * Effectivly the id is restricted to the lower (bits - 1) bits, thus
+ * Effectively the id is restricted to the lower (bits - 1) bits, thus
  * yielding two different cycles by toggling the msb on and off.
  * This avoids reuse issues caused by reseeding.
  */
@@ -175,7 +172,7 @@ pmod(u_int32_t gen, u_int32_t expo, u_int32_t mod)
 }
 
 /*
- * Initalizes the seed and chooses a suitable generator. Also toggles
+ * Initializes the seed and chooses a suitable generator. Also toggles
  * the msb flag. The msb flag is used to generate two distinct
  * cycles of random numbers and thus avoiding reuse of ids.
  *

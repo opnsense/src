@@ -270,7 +270,7 @@ bwscsbdup(const unsigned char *str, size_t len)
 			const char *s;
 			size_t charlen, chars, cptr;
 
-			charlen = chars = 0;
+			chars = 0;
 			cptr = 0;
 			s = (const char *) str;
 
@@ -583,7 +583,6 @@ bwsncmp(const struct bwstring *bws1, const struct bwstring *bws2,
 	size_t cmp_len, len1, len2;
 	int res = 0;
 
-	cmp_len = 0;
 	len1 = bws1->len;
 	len2 = bws2->len;
 

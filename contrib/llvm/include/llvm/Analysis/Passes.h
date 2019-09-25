@@ -61,10 +61,10 @@ namespace llvm {
 
   //===--------------------------------------------------------------------===//
   //
-  // createDivergenceAnalysisPass - This pass determines which branches in a GPU
+  // createLegacyDivergenceAnalysisPass - This pass determines which branches in a GPU
   // program are divergent.
   //
-  FunctionPass *createDivergenceAnalysisPass();
+  FunctionPass *createLegacyDivergenceAnalysisPass();
 
   //===--------------------------------------------------------------------===//
   //
@@ -95,6 +95,14 @@ namespace llvm {
   // information and prints it with -analyze.
   //
   FunctionPass *createMemDerefPrinter();
+
+  //===--------------------------------------------------------------------===//
+  //
+  // createMustExecutePrinter - This pass collects information about which
+  // instructions within a loop are guaranteed to execute if the loop header is
+  // entered and prints it with -analyze.
+  //
+  FunctionPass *createMustExecutePrinter();
 
 }
 

@@ -17,7 +17,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd January 5, 2016
+.Dd April 19, 2019
 .Dt CRONTAB 5
 .Os
 .Sh NAME
@@ -116,6 +116,9 @@ If
 .Ev MAILTO
 is defined (and non-empty), mail is
 sent to the user so named.
+If
+.Ev MAILFROM
+is defined (and non-empty), its value will be used as the from address.
 .Ev MAILTO
 may also be used to direct mail to multiple recipients
 by separating recipient users with a comma.
@@ -220,7 +223,10 @@ would cause a command to be run at 4:30 am on the 1st and 15th of each
 month, plus every Friday.
 .Pp
 Instead of the first five fields,
-one of eight special strings may appear:
+a line may start with
+.Sq @
+symbol followed either by one of eight special strings or by a numeric value.
+The recognized special strings are:
 .Bd -literal -offset indent
 string		meaning
 ------		-------
@@ -235,6 +241,18 @@ string		meaning
 @every_minute	Run once a minute, "*/1 * * * *".
 @every_second	Run once a second.
 .Ed
+.Pp
+The
+.Sq @
+symbol followed by a numeric value has a special notion of running
+a job that many seconds after completion of the previous invocation of
+the job.
+Unlike regular syntax, it guarantees not to overlap two or more
+invocations of the same job during normal cron execution.
+Note, however, that overlap may occur if the job is running when the file
+containing the job is modified and subsequently reloaded.
+The first run is scheduled for the specified number of seconds after cron
+is started or the crontab entry is reloaded.
 .Sh EXAMPLE CRON FILE
 .Bd -literal
 
@@ -251,6 +269,8 @@ MAILTO=paul
 0 22 * * 1-5	mail -s "It's 10pm" joe%Joe,%%Where are your kids?%
 23 0-23/2 * * * echo "run 23 minutes after midn, 2am, 4am ..., everyday"
 5 4 * * sun     echo "run at 5 after 4 every sunday"
+# run at 5 minutes intervals, no matter how long it takes
+@300		svnlite up /usr/src
 .Ed
 .Sh SEE ALSO
 .Xr crontab 1 ,
@@ -292,7 +312,7 @@ either).
 .Pp
 All of the
 .Sq @
-commands that can appear in place of the first five fields
+directives that can appear in place of the first five fields
 are extensions.
 .Sh AUTHORS
 .An Paul Vixie Aq Mt paul@vix.com

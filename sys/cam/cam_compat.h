@@ -1,6 +1,8 @@
 /*-
  * CAM ioctl compatibility shims
  *
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2013 Scott Long
  * All rights reserved.
  *
@@ -31,7 +33,7 @@
 #ifndef _CAM_CAM_COMPAT_H
 #define _CAM_CAM_COMPAT_H
 
-/* No user-servicable parts in here. */
+/* No user-serviceable parts in here. */
 #ifdef _KERNEL
 
 int cam_compat_ioctl(struct cdev *dev, u_long cmd, caddr_t addr, int flag,

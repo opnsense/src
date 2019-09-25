@@ -25,6 +25,8 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include <mutex>
+#include <unordered_map>
 #include <vector>
 
 namespace lldb_private {
@@ -35,8 +37,6 @@ class ResumeActionList;
 // NativeProcessProtocol
 //------------------------------------------------------------------
 class NativeProcessProtocol {
-  friend class SoftwareBreakpoint;
-
 public:
   virtual ~NativeProcessProtocol() {}
 
@@ -69,8 +69,8 @@ public:
   virtual Status Kill() = 0;
 
   //------------------------------------------------------------------
-  // Tells a process not to stop the inferior on given signals
-  // and just reinject them back.
+  // Tells a process not to stop the inferior on given signals and just
+  // reinject them back.
   //------------------------------------------------------------------
   virtual Status IgnoreSignals(llvm::ArrayRef<int> signals);
 
@@ -84,8 +84,8 @@ public:
   virtual Status ReadMemory(lldb::addr_t addr, void *buf, size_t size,
                             size_t &bytes_read) = 0;
 
-  virtual Status ReadMemoryWithoutTrap(lldb::addr_t addr, void *buf,
-                                       size_t size, size_t &bytes_read) = 0;
+  Status ReadMemoryWithoutTrap(lldb::addr_t addr, void *buf, size_t size,
+                               size_t &bytes_read);
 
   virtual Status WriteMemory(lldb::addr_t addr, const void *buf, size_t size,
                              size_t &bytes_written) = 0;
@@ -110,10 +110,6 @@ public:
                                bool hardware) = 0;
 
   virtual Status RemoveBreakpoint(lldb::addr_t addr, bool hardware = false);
-
-  virtual Status EnableBreakpoint(lldb::addr_t addr);
-
-  virtual Status DisableBreakpoint(lldb::addr_t addr);
 
   //----------------------------------------------------------------------
   // Hardware Breakpoint functions
@@ -402,6 +398,13 @@ public:
   }
 
 protected:
+  struct SoftwareBreakpoint {
+    uint32_t ref_count;
+    llvm::SmallVector<uint8_t, 4> saved_opcodes;
+    llvm::ArrayRef<uint8_t> breakpoint_opcodes;
+  };
+
+  std::unordered_map<lldb::addr_t, SoftwareBreakpoint> m_software_breakpoints;
   lldb::pid_t m_pid;
 
   std::vector<std::unique_ptr<NativeThreadProtocol>> m_threads;
@@ -415,46 +418,53 @@ protected:
 
   std::recursive_mutex m_delegates_mutex;
   std::vector<NativeDelegate *> m_delegates;
-  NativeBreakpointList m_breakpoint_list;
   NativeWatchpointList m_watchpoint_list;
   HardwareBreakpointMap m_hw_breakpoints_map;
   int m_terminal_fd;
   uint32_t m_stop_id = 0;
 
-  // Set of signal numbers that LLDB directly injects back to inferior
-  // without stopping it.
+  // Set of signal numbers that LLDB directly injects back to inferior without
+  // stopping it.
   llvm::DenseSet<int> m_signals_to_ignore;
 
   // lldb_private::Host calls should be used to launch a process for debugging,
-  // and
-  // then the process should be attached to. When attaching to a process
-  // lldb_private::Host calls should be used to locate the process to attach to,
-  // and then this function should be called.
+  // and then the process should be attached to. When attaching to a process
+  // lldb_private::Host calls should be used to locate the process to attach
+  // to, and then this function should be called.
   NativeProcessProtocol(lldb::pid_t pid, int terminal_fd,
                         NativeDelegate &delegate);
 
-  // -----------------------------------------------------------
-  // Internal interface for state handling
+  // ----------------------------------------------------------- Internal
+  // interface for state handling
   // -----------------------------------------------------------
   void SetState(lldb::StateType state, bool notify_delegates = true);
 
-  // Derived classes need not implement this.  It can be used as a
-  // hook to clear internal caches that should be invalidated when
-  // stop ids change.
+  // Derived classes need not implement this.  It can be used as a hook to
+  // clear internal caches that should be invalidated when stop ids change.
   //
-  // Note this function is called with the state mutex obtained
-  // by the caller.
+  // Note this function is called with the state mutex obtained by the caller.
   virtual void DoStopIDBumped(uint32_t newBumpId);
 
+  // ----------------------------------------------------------- Internal
+  // interface for software breakpoints
   // -----------------------------------------------------------
-  // Internal interface for software breakpoints
-  // -----------------------------------------------------------
-  Status SetSoftwareBreakpoint(lldb::addr_t addr, uint32_t size_hint);
 
-  virtual Status
-  GetSoftwareBreakpointTrapOpcode(size_t trap_opcode_size_hint,
-                                  size_t &actual_opcode_size,
-                                  const uint8_t *&trap_opcode_bytes) = 0;
+  Status SetSoftwareBreakpoint(lldb::addr_t addr, uint32_t size_hint);
+  Status RemoveSoftwareBreakpoint(lldb::addr_t addr);
+
+  virtual llvm::Expected<llvm::ArrayRef<uint8_t>>
+  GetSoftwareBreakpointTrapOpcode(size_t size_hint);
+
+  /// Return the offset of the PC relative to the software breakpoint that was hit. If an
+  /// architecture (e.g. arm) reports breakpoint hits before incrementing the PC, this offset
+  /// will be 0. If an architecture (e.g. intel) reports breakpoints hits after incrementing the
+  /// PC, this offset will be the size of the breakpoint opcode.
+  virtual size_t GetSoftwareBreakpointPCOffset();
+
+  // Adjust the thread's PC after hitting a software breakpoint. On
+  // architectures where the PC points after the breakpoint instruction, this
+  // resets it to point to the breakpoint itself.
+  void FixupBreakpointPCAsNeeded(NativeThreadProtocol &thread);
 
   // -----------------------------------------------------------
   /// Notify the delegate that an exec occurred.
@@ -466,13 +476,10 @@ protected:
 
   NativeThreadProtocol *GetThreadByIDUnlocked(lldb::tid_t tid);
 
-  // -----------------------------------------------------------
-  // Static helper methods for derived classes.
-  // -----------------------------------------------------------
-  static Status ResolveProcessArchitecture(lldb::pid_t pid, ArchSpec &arch);
-
 private:
   void SynchronouslyNotifyProcessStateChanged(lldb::StateType state);
+  llvm::Expected<SoftwareBreakpoint>
+  EnableSoftwareBreakpoint(lldb::addr_t addr, uint32_t size_hint);
 };
 } // namespace lldb_private
 

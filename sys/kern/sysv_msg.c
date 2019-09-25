@@ -17,13 +17,21 @@
  * This software is provided ``AS IS'' without any warranties of any kind.
  */
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2003-2005 McAfee, Inc.
+ * Copyright (c) 2016-2017 Robert N. M. Watson
  * All rights reserved.
  *
  * This software was developed for the FreeBSD Project in part by McAfee
  * Research, the Security Research Division of McAfee, Inc under DARPA/SPAWAR
  * contract N66001-01-C-8035 ("CBOSS"), as part of the DARPA CHATS research
  * program.
+ *
+ * Portions of this software were developed by BAE Systems, the University of
+ * Cambridge Computer Laboratory, and Memorial University under DARPA/AFRL
+ * contract FA8650-15-C-7558 ("CADETS"), as part of the DARPA Transparent
+ * Computing (TC) research program.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -50,7 +58,6 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
-#include "opt_compat.h"
 #include "opt_sysvipc.h"
 
 #include <sys/param.h>
@@ -73,6 +80,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/malloc.h>
 #include <sys/jail.h>
 
+#include <security/audit/audit.h>
 #include <security/mac/mac_framework.h>
 
 FEATURE(sysv_msg, "System V message queues support");
@@ -378,8 +386,7 @@ DECLARE_MODULE(sysvmsg, sysvmsg_mod, SI_SUB_SYSV_MSG, SI_ORDER_FIRST);
 MODULE_VERSION(sysvmsg, 1);
 
 static void
-msg_freehdr(msghdr)
-	struct msg *msghdr;
+msg_freehdr(struct msg *msghdr)
 {
 	while (msghdr->msg_ts > 0) {
 		short next;
@@ -416,7 +423,7 @@ msq_remove(struct msqid_kernel *msqkptr)
 	msqkptr->cred = NULL;
 
 	/* Free the message headers */
-	msghdr = msqkptr->u.msg_first;
+	msghdr = msqkptr->u.__msg_first;
 	while (msghdr != NULL) {
 		struct msg *msghdr_tmp;
 
@@ -491,11 +498,7 @@ sys_msgctl(struct thread *td, struct msgctl_args *uap)
 }
 
 int
-kern_msgctl(td, msqid, cmd, msqbuf)
-	struct thread *td;
-	int msqid;
-	int cmd;
-	struct msqid_ds *msqbuf;
+kern_msgctl(struct thread *td, int msqid, int cmd, struct msqid_ds *msqbuf)
 {
 	int rval, error, msqix;
 	struct msqid_kernel *msqkptr;
@@ -505,6 +508,8 @@ kern_msgctl(td, msqid, cmd, msqbuf)
 	if (rpr == NULL)
 		return (ENOSYS);
 
+	AUDIT_ARG_SVIPC_CMD(cmd);
+	AUDIT_ARG_SVIPC_ID(msqid);
 	msqix = IPCID_TO_IX(msqid);
 
 	if (msqix < 0 || msqix >= msginfo.msgmni) {
@@ -562,7 +567,7 @@ kern_msgctl(td, msqid, cmd, msqbuf)
 		 * thread cannot free a certain msghdr.  The msq will get
 		 * into an inconsistent state.
 		 */
-		for (msghdr = msqkptr->u.msg_first; msghdr != NULL;
+		for (msghdr = msqkptr->u.__msg_first; msghdr != NULL;
 		    msghdr = msghdr->msg_next) {
 			error = mac_sysvmsq_check_msgrmid(td->td_ucred, msghdr);
 			if (error != 0)
@@ -576,6 +581,7 @@ kern_msgctl(td, msqid, cmd, msqbuf)
 		break;
 
 	case IPC_SET:
+		AUDIT_ARG_SVIPC_PERM(&msqbuf->msg_perm);
 		if ((error = ipcperm(td, &msqkptr->u.msg_perm, IPC_M)))
 			goto done2;
 		if (msqbuf->msg_qbytes > msqkptr->u.msg_qbytes) {
@@ -662,6 +668,8 @@ sys_msgget(struct thread *td, struct msgget_args *uap)
 				error = EEXIST;
 				goto done2;
 			}
+			AUDIT_ARG_SVIPC_ID(IXSEQ_TO_IPCID(msqid,
+			    msqkptr->u.msg_perm));
 			if ((error = ipcperm(td, &msqkptr->u.msg_perm,
 			    msgflg & 0700))) {
 				DPRINTF(("requester doesn't have 0%o access\n",
@@ -717,8 +725,8 @@ sys_msgget(struct thread *td, struct msgget_args *uap)
 		msqkptr->cred = crhold(cred);
 		/* Make sure that the returned msqid is unique */
 		msqkptr->u.msg_perm.seq = (msqkptr->u.msg_perm.seq + 1) & 0x7fff;
-		msqkptr->u.msg_first = NULL;
-		msqkptr->u.msg_last = NULL;
+		msqkptr->u.__msg_first = NULL;
+		msqkptr->u.__msg_last = NULL;
 		msqkptr->u.msg_cbytes = 0;
 		msqkptr->u.msg_qnum = 0;
 		msqkptr->u.msg_qbytes = msginfo.msgmnb;
@@ -730,6 +738,7 @@ sys_msgget(struct thread *td, struct msgget_args *uap)
 #ifdef MAC
 		mac_sysvmsq_create(cred, msqkptr);
 #endif
+		AUDIT_ARG_SVIPC_PERM(&msqkptr->u.msg_perm);
 	} else {
 		DPRINTF(("didn't find it and wasn't asked to create it\n"));
 		error = ENOENT;
@@ -762,7 +771,7 @@ kern_msgsnd(struct thread *td, int msqid, const void *msgp,
 	struct prison *rpr;
 	short next;
 #ifdef RACCT
-	size_t saved_msgsz;
+	size_t saved_msgsz = 0;
 #endif
 
 	rpr = msg_find_prison(td->td_ucred);
@@ -770,6 +779,7 @@ kern_msgsnd(struct thread *td, int msqid, const void *msgp,
 		return (ENOSYS);
 
 	mtx_lock(&msq_mtx);
+	AUDIT_ARG_SVIPC_ID(msqid);
 	msqix = IPCID_TO_IX(msqid);
 
 	if (msqix < 0 || msqix >= msginfo.msgmni) {
@@ -780,6 +790,7 @@ kern_msgsnd(struct thread *td, int msqid, const void *msgp,
 	}
 
 	msqkptr = &msqids[msqix];
+	AUDIT_ARG_SVIPC_PERM(&msqkptr->u.msg_perm);
 	if (msqkptr->u.msg_qbytes == 0) {
 		DPRINTF(("no such message queue id\n"));
 		error = EINVAL;
@@ -1062,14 +1073,14 @@ kern_msgsnd(struct thread *td, int msqid, const void *msgp,
 	/*
 	 * Put the message into the queue
 	 */
-	if (msqkptr->u.msg_first == NULL) {
-		msqkptr->u.msg_first = msghdr;
-		msqkptr->u.msg_last = msghdr;
+	if (msqkptr->u.__msg_first == NULL) {
+		msqkptr->u.__msg_first = msghdr;
+		msqkptr->u.__msg_last = msghdr;
 	} else {
-		msqkptr->u.msg_last->msg_next = msghdr;
-		msqkptr->u.msg_last = msghdr;
+		msqkptr->u.__msg_last->msg_next = msghdr;
+		msqkptr->u.__msg_last = msghdr;
 	}
-	msqkptr->u.msg_last->msg_next = NULL;
+	msqkptr->u.__msg_last->msg_next = NULL;
 
 	msqkptr->u.msg_cbytes += msghdr->msg_ts;
 	msqkptr->u.msg_qnum++;
@@ -1135,6 +1146,7 @@ kern_msgrcv(struct thread *td, int msqid, void *msgp, size_t msgsz, long msgtyp,
 	if (rpr == NULL)
 		return (ENOSYS);
 
+	AUDIT_ARG_SVIPC_ID(msqid);
 	msqix = IPCID_TO_IX(msqid);
 
 	if (msqix < 0 || msqix >= msginfo.msgmni) {
@@ -1145,6 +1157,7 @@ kern_msgrcv(struct thread *td, int msqid, void *msgp, size_t msgsz, long msgtyp,
 
 	msqkptr = &msqids[msqix];
 	mtx_lock(&msq_mtx);
+	AUDIT_ARG_SVIPC_PERM(&msqkptr->u.msg_perm);
 	if (msqkptr->u.msg_qbytes == 0) {
 		DPRINTF(("no such message queue id\n"));
 		error = EINVAL;
@@ -1175,7 +1188,7 @@ kern_msgrcv(struct thread *td, int msqid, void *msgp, size_t msgsz, long msgtyp,
 	msghdr = NULL;
 	while (msghdr == NULL) {
 		if (msgtyp == 0) {
-			msghdr = msqkptr->u.msg_first;
+			msghdr = msqkptr->u.__msg_first;
 			if (msghdr != NULL) {
 				if (msgsz < msghdr->msg_ts &&
 				    (msgflg & MSG_NOERROR) == 0) {
@@ -1191,12 +1204,13 @@ kern_msgrcv(struct thread *td, int msqid, void *msgp, size_t msgsz, long msgtyp,
 				if (error != 0)
 					goto done2;
 #endif
-				if (msqkptr->u.msg_first == msqkptr->u.msg_last) {
-					msqkptr->u.msg_first = NULL;
-					msqkptr->u.msg_last = NULL;
+				if (msqkptr->u.__msg_first ==
+				    msqkptr->u.__msg_last) {
+					msqkptr->u.__msg_first = NULL;
+					msqkptr->u.__msg_last = NULL;
 				} else {
-					msqkptr->u.msg_first = msghdr->msg_next;
-					if (msqkptr->u.msg_first == NULL)
+					msqkptr->u.__msg_first = msghdr->msg_next;
+					if (msqkptr->u.__msg_first == NULL)
 						panic("msg_first/last screwed up #1");
 				}
 			}
@@ -1205,7 +1219,7 @@ kern_msgrcv(struct thread *td, int msqid, void *msgp, size_t msgsz, long msgtyp,
 			struct msg **prev;
 
 			previous = NULL;
-			prev = &(msqkptr->u.msg_first);
+			prev = &(msqkptr->u.__msg_first);
 			while ((msghdr = *prev) != NULL) {
 				/*
 				 * Is this message's type an exact match or is
@@ -1237,20 +1251,20 @@ kern_msgrcv(struct thread *td, int msqid, void *msgp, size_t msgsz, long msgtyp,
 						goto done2;
 #endif
 					*prev = msghdr->msg_next;
-					if (msghdr == msqkptr->u.msg_last) {
+					if (msghdr == msqkptr->u.__msg_last) {
 						if (previous == NULL) {
 							if (prev !=
-							    &msqkptr->u.msg_first)
-								panic("msg_first/last screwed up #2");
-							msqkptr->u.msg_first =
+							    &msqkptr->u.__msg_first)
+								panic("__msg_first/last screwed up #2");
+							msqkptr->u.__msg_first =
 							    NULL;
-							msqkptr->u.msg_last =
+							msqkptr->u.__msg_last =
 							    NULL;
 						} else {
 							if (prev ==
-							    &msqkptr->u.msg_first)
-								panic("msg_first/last screwed up #3");
-							msqkptr->u.msg_last =
+							    &msqkptr->u.__msg_first)
+								panic("__msg_first/last screwed up #3");
+							msqkptr->u.__msg_last =
 							    previous;
 						}
 					}
@@ -1442,8 +1456,8 @@ sysctl_msqids(SYSCTL_HANDLER_ARGS)
 #endif
 		{
 			/* Don't leak kernel pointers */
-			tmsqk.u.msg_first = NULL;
-			tmsqk.u.msg_last = NULL;
+			tmsqk.u.__msg_first = NULL;
+			tmsqk.u.__msg_last = NULL;
 			tmsqk.label = NULL;
 			tmsqk.cred = NULL;
 			/*
@@ -1660,6 +1674,7 @@ freebsd32_msgsys(struct thread *td, struct freebsd32_msgsys_args *uap)
 
 #if defined(COMPAT_FREEBSD4) || defined(COMPAT_FREEBSD5) || \
     defined(COMPAT_FREEBSD6) || defined(COMPAT_FREEBSD7)
+	AUDIT_ARG_SVIPC_WHICH(uap->which);
 	switch (uap->which) {
 	case 0:
 		return (freebsd7_freebsd32_msgctl(td,
@@ -1693,8 +1708,8 @@ freebsd7_freebsd32_msgctl(struct thread *td,
 		if (error)
 			return (error);
 		freebsd32_ipcperm_old_in(&msqbuf32.msg_perm, &msqbuf.msg_perm);
-		PTRIN_CP(msqbuf32, msqbuf, msg_first);
-		PTRIN_CP(msqbuf32, msqbuf, msg_last);
+		PTRIN_CP(msqbuf32, msqbuf, __msg_first);
+		PTRIN_CP(msqbuf32, msqbuf, __msg_last);
 		CP(msqbuf32, msqbuf, msg_cbytes);
 		CP(msqbuf32, msqbuf, msg_qnum);
 		CP(msqbuf32, msqbuf, msg_qbytes);
@@ -1710,8 +1725,8 @@ freebsd7_freebsd32_msgctl(struct thread *td,
 	if (uap->cmd == IPC_STAT) {
 		bzero(&msqbuf32, sizeof(msqbuf32));
 		freebsd32_ipcperm_old_out(&msqbuf.msg_perm, &msqbuf32.msg_perm);
-		PTROUT_CP(msqbuf, msqbuf32, msg_first);
-		PTROUT_CP(msqbuf, msqbuf32, msg_last);
+		PTROUT_CP(msqbuf, msqbuf32, __msg_first);
+		PTROUT_CP(msqbuf, msqbuf32, __msg_last);
 		CP(msqbuf, msqbuf32, msg_cbytes);
 		CP(msqbuf, msqbuf32, msg_qnum);
 		CP(msqbuf, msqbuf32, msg_qbytes);
@@ -1738,8 +1753,8 @@ freebsd32_msgctl(struct thread *td, struct freebsd32_msgctl_args *uap)
 		if (error)
 			return (error);
 		freebsd32_ipcperm_in(&msqbuf32.msg_perm, &msqbuf.msg_perm);
-		PTRIN_CP(msqbuf32, msqbuf, msg_first);
-		PTRIN_CP(msqbuf32, msqbuf, msg_last);
+		PTRIN_CP(msqbuf32, msqbuf, __msg_first);
+		PTRIN_CP(msqbuf32, msqbuf, __msg_last);
 		CP(msqbuf32, msqbuf, msg_cbytes);
 		CP(msqbuf32, msqbuf, msg_qnum);
 		CP(msqbuf32, msqbuf, msg_qbytes);
@@ -1754,8 +1769,8 @@ freebsd32_msgctl(struct thread *td, struct freebsd32_msgctl_args *uap)
 		return (error);
 	if (uap->cmd == IPC_STAT) {
 		freebsd32_ipcperm_out(&msqbuf.msg_perm, &msqbuf32.msg_perm);
-		PTROUT_CP(msqbuf, msqbuf32, msg_first);
-		PTROUT_CP(msqbuf, msqbuf32, msg_last);
+		PTROUT_CP(msqbuf, msqbuf32, __msg_first);
+		PTROUT_CP(msqbuf, msqbuf32, __msg_last);
 		CP(msqbuf, msqbuf32, msg_cbytes);
 		CP(msqbuf, msqbuf32, msg_qnum);
 		CP(msqbuf, msqbuf32, msg_qbytes);
@@ -1831,6 +1846,7 @@ sys_msgsys(struct thread *td, struct msgsys_args *uap)
 {
 	int error;
 
+	AUDIT_ARG_SVIPC_WHICH(uap->which);
 	if (uap->which < 0 || uap->which >= nitems(msgcalls))
 		return (EINVAL);
 	error = (*msgcalls[uap->which])(td, &uap->a2);
@@ -1862,8 +1878,8 @@ freebsd7_msgctl(struct thread *td, struct freebsd7_msgctl_args *uap)
 		if (error)
 			return (error);
 		ipcperm_old2new(&msqold.msg_perm, &msqbuf.msg_perm);
-		CP(msqold, msqbuf, msg_first);
-		CP(msqold, msqbuf, msg_last);
+		CP(msqold, msqbuf, __msg_first);
+		CP(msqold, msqbuf, __msg_last);
 		CP(msqold, msqbuf, msg_cbytes);
 		CP(msqold, msqbuf, msg_qnum);
 		CP(msqold, msqbuf, msg_qbytes);
@@ -1879,8 +1895,8 @@ freebsd7_msgctl(struct thread *td, struct freebsd7_msgctl_args *uap)
 	if (uap->cmd == IPC_STAT) {
 		bzero(&msqold, sizeof(msqold));
 		ipcperm_new2old(&msqbuf.msg_perm, &msqold.msg_perm);
-		CP(msqbuf, msqold, msg_first);
-		CP(msqbuf, msqold, msg_last);
+		CP(msqbuf, msqold, __msg_first);
+		CP(msqbuf, msqold, __msg_last);
 		CP(msqbuf, msqold, msg_cbytes);
 		CP(msqbuf, msqold, msg_qnum);
 		CP(msqbuf, msqold, msg_qbytes);

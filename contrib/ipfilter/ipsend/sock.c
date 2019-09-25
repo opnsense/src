@@ -29,7 +29,6 @@ typedef int     boolean_t;
 #else
 # include <sys/dir.h>
 #endif
-#if !defined(__osf__)
 # ifdef __NetBSD__
 #  include <machine/lock.h>
 # endif
@@ -50,7 +49,6 @@ typedef int     boolean_t;
 #  undef  _KERNEL
 #  undef  KERNEL
 # endif
-#endif
 #include <nlist.h>
 #include <sys/user.h>
 #include <sys/socket.h>
@@ -74,12 +72,12 @@ typedef int     boolean_t;
 #include <netinet/ip.h>
 #include <netinet/tcp.h>
 #include <net/if.h>
-#ifndef __osf__
 # include <net/route.h>
-#endif
 #include <netinet/ip_var.h>
+#define	_WANT_INPCB
 #include <netinet/in_pcb.h>
 #include <netinet/tcp_timer.h>
+#define	_WANT_TCPCB
 #include <netinet/tcp_var.h>
 #include <stdio.h>
 #include <unistd.h>

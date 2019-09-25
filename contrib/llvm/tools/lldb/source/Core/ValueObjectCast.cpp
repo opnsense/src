@@ -9,12 +9,12 @@
 
 #include "lldb/Core/ValueObjectCast.h"
 
-#include "lldb/Core/Scalar.h" // for operator!=, Scalar
 #include "lldb/Core/Value.h"
 #include "lldb/Core/ValueObject.h"
 #include "lldb/Symbol/CompilerType.h"
 #include "lldb/Target/ExecutionContext.h"
-#include "lldb/Utility/Status.h" // for Status
+#include "lldb/Utility/Scalar.h"
+#include "lldb/Utility/Status.h"
 
 namespace lldb_private {
 class ConstString;
@@ -44,7 +44,9 @@ ValueObjectCast::~ValueObjectCast() {}
 CompilerType ValueObjectCast::GetCompilerTypeImpl() { return m_cast_type; }
 
 size_t ValueObjectCast::CalculateNumChildren(uint32_t max) {
-  auto children_count = GetCompilerType().GetNumChildren(true);
+  ExecutionContext exe_ctx(GetExecutionContextRef());
+  auto children_count = GetCompilerType().GetNumChildren(
+      true, &exe_ctx);
   return children_count <= max ? children_count : max;
 }
 
@@ -71,9 +73,9 @@ bool ValueObjectCast::UpdateValue() {
     m_value.SetCompilerType(compiler_type);
     SetAddressTypeOfChildren(m_parent->GetAddressTypeOfChildren());
     if (!CanProvideValue()) {
-      // this value object represents an aggregate type whose
-      // children have values, but this object does not. So we
-      // say we are changed if our location has changed.
+      // this value object represents an aggregate type whose children have
+      // values, but this object does not. So we say we are changed if our
+      // location has changed.
       SetValueDidChange(m_value.GetValueType() != old_value.GetValueType() ||
                         m_value.GetScalar() != old_value.GetScalar());
     }

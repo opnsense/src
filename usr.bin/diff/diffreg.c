@@ -1,6 +1,8 @@
 /*	$OpenBSD: diffreg.c,v 1.91 2016/03/01 20:57:35 natano Exp $	*/
 
-/*
+/*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (C) Caldera International Inc.  2001-2002.
  * All rights reserved.
  *
@@ -68,11 +70,7 @@
 __FBSDID("$FreeBSD$");
 
 #include <sys/capsicum.h>
-#include <sys/procdesc.h>
 #include <sys/stat.h>
-#include <sys/types.h>
-#include <sys/event.h>
-#include <sys/wait.h>
 
 #include <capsicum_helpers.h>
 #include <ctype.h>
@@ -81,19 +79,16 @@ __FBSDID("$FreeBSD$");
 #include <fcntl.h>
 #include <paths.h>
 #include <regex.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <limits.h>
-#include <signal.h>
 
+#include "pr.h"
 #include "diff.h"
 #include "xmalloc.h"
-
-#define _PATH_PR "/usr/bin/pr"
 
 /*
  * diff - compare two files.
@@ -201,7 +196,8 @@ static void	 unsort(struct line *, int, int *);
 static void	 change(char *, FILE *, char *, FILE *, int, int, int, int, int *);
 static void	 sort(struct line *, int);
 static void	 print_header(const char *, const char *);
-static int	 ignoreline(char *);
+static bool	 ignoreline_pattern(char *);
+static bool	 ignoreline(char *, bool);
 static int	 asciifile(FILE *);
 static int	 fetch(long *, int, int, FILE *, int, int, int);
 static int	 newcand(int, int, int);
@@ -258,13 +254,9 @@ diffreg(char *file1, char *file2, int flags, int capsicum)
 {
 	FILE *f1, *f2;
 	int i, rval;
-	int	ostdout = -1;
-	int pr_pd, kq;
-	struct kevent *e;
+	struct pr *pr = NULL;
 	cap_rights_t rights_ro;
 
-	e = NULL;
-	kq = -1;
 	f1 = f2 = NULL;
 	rval = D_SAME;
 	anychange = 0;
@@ -322,52 +314,8 @@ diffreg(char *file1, char *file2, int flags, int capsicum)
 		goto closem;
 	}
 
-	if (lflag) {
-		/* redirect stdout to pr */
-		int	 pfd[2];
-		pid_t	pid;
-		char	*header;
-
-		xasprintf(&header, "%s %s %s", diffargs, file1, file2);
-		signal(SIGPIPE, SIG_IGN);
-		fflush(stdout);
-		rewind(stdout);
-		pipe(pfd);
-		switch ((pid = pdfork(&pr_pd, PD_CLOEXEC))) {
-		case -1:
-			status |= 2;
-			free(header);
-			err(2, "No more processes");
-		case 0:
-			/* child */
-			if (pfd[0] != STDIN_FILENO) {
-				dup2(pfd[0], STDIN_FILENO);
-				close(pfd[0]);
-			}
-			close(pfd[1]);
-			execl(_PATH_PR, _PATH_PR, "-h", header, (char *)0);
-			_exit(127);
-		default:
-
-			/* parent */
-			if (pfd[1] != STDOUT_FILENO) {
-				ostdout = dup(STDOUT_FILENO);
-				dup2(pfd[1], STDOUT_FILENO);
-				close(pfd[1]);
-			}
-			close(pfd[0]);
-			rewind(stdout);
-			free(header);
-			kq = kqueue();
-			if (kq == -1)
-				err(2, "kqueue");
-			e = xmalloc(sizeof(struct kevent));
-			EV_SET(e, pr_pd, EVFILT_PROCDESC, EV_ADD, NOTE_EXIT, 0,
-			    NULL);
-			if (kevent(kq, e, 1, NULL, 0, NULL) == -1)
-				err(2, "kevent");
-		}
-	}
+	if (lflag)
+		pr = start_pr(file1, file2);
 
 	if (capsicum) {
 		cap_rights_init(&rights_ro, CAP_READ, CAP_FSTAT, CAP_SEEK);
@@ -388,7 +336,7 @@ diffreg(char *file1, char *file2, int flags, int capsicum)
 
 		caph_cache_catpages();
 		caph_cache_tzdata();
-		if (cap_enter() < 0 && errno != ENOSYS)
+		if (caph_enter() < 0)
 			err(2, "unable to enter capability mode");
 	}
 
@@ -441,26 +389,8 @@ diffreg(char *file1, char *file2, int flags, int capsicum)
 	ixnew = xreallocarray(ixnew, len[1] + 2, sizeof(*ixnew));
 	check(f1, f2, flags);
 	output(file1, f1, file2, f2, flags);
-	if (ostdout != -1 && e != NULL) {
-		/* close the pipe to pr and restore stdout */
-		int wstatus;
-
-		fflush(stdout);
-		if (ostdout != STDOUT_FILENO) {
-			close(STDOUT_FILENO);
-			dup2(ostdout, STDOUT_FILENO);
-			close(ostdout);
-		}
-		if (kevent(kq, NULL, 0, e, 1, NULL) == -1)
-			err(2, "kevent");
-		wstatus = e[0].data;
-		close(kq);
-		if (WIFEXITED(wstatus) && WEXITSTATUS(wstatus) != 0)
-			errx(2, "pr exited abnormally");
-		else if (WIFSIGNALED(wstatus))
-			errx(2, "pr killed by signal %d",
-			    WTERMSIG(wstatus));
-	}
+	if (pr != NULL)
+		stop_pr(pr);
 
 closem:
 	if (anychange) {
@@ -792,19 +722,22 @@ check(FILE *f1, FILE *f2, int flags)
 				}
 				ctold++;
 				ctnew++;
-				if (flags & D_STRIPCR) {
+				if (flags & D_STRIPCR && (c == '\r' || d == '\r')) {
 					if (c == '\r') {
 						if ((c = getc(f1)) == '\n') {
-							ctnew++;
-							break;
+							ctold++;
+						} else {
+							ungetc(c, f1);
 						}
 					}
 					if (d == '\r') {
 						if ((d = getc(f2)) == '\n') {
-							ctold++;
-							break;
+							ctnew++;
+						} else {
+							ungetc(d, f2);
 						}
 					}
+					break;
 				}
 				if ((flags & D_FOLDBLANKS) && isspace(c) &&
 				    isspace(d)) {
@@ -1014,14 +947,28 @@ preadline(int fd, size_t rlen, off_t off)
 	return (line);
 }
 
-static int
-ignoreline(char *line)
+static bool
+ignoreline_pattern(char *line)
 {
 	int ret;
 
 	ret = regexec(&ignore_re, line, 0, NULL, 0);
 	free(line);
 	return (ret == 0);	/* if it matched, it should be ignored. */
+}
+
+static bool
+ignoreline(char *line, bool skip_blanks)
+{
+
+	if (ignore_pats != NULL && skip_blanks)
+		return (ignoreline_pattern(line) || *line == '\0');
+	if (ignore_pats != NULL)
+		return (ignoreline_pattern(line));
+	if (skip_blanks)
+		return (*line == '\0');
+	/* No ignore criteria specified */
+	return (false);
 }
 
 /*
@@ -1039,12 +986,14 @@ change(char *file1, FILE *f1, char *file2, FILE *f2, int a, int b, int c, int d,
 	long curpos;
 	int i, nc, f;
 	const char *walk;
+	bool skip_blanks;
 
+	skip_blanks = (*pflags & D_SKIPBLANKLINES);
 restart:
 	if ((diff_format != D_IFDEF || diff_format == D_GFORMAT) &&
 	    a > b && c > d)
 		return;
-	if (ignore_pats != NULL) {
+	if (ignore_pats != NULL || skip_blanks) {
 		char *line;
 		/*
 		 * All lines in the change, insert, or delete must
@@ -1055,7 +1004,7 @@ restart:
 			for (i = a; i <= b; i++) {
 				line = preadline(fileno(f1),
 				    ixold[i] - ixold[i - 1], ixold[i - 1]);
-				if (!ignoreline(line))
+				if (!ignoreline(line, skip_blanks))
 					goto proceed;
 			}
 		}
@@ -1063,7 +1012,7 @@ restart:
 			for (i = c; i <= d; i++) {
 				line = preadline(fileno(f2),
 				    ixnew[i] - ixnew[i - 1], ixnew[i - 1]);
-				if (!ignoreline(line))
+				if (!ignoreline(line, skip_blanks))
 					goto proceed;
 			}
 		}

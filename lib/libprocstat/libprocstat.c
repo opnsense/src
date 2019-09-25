@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 2017 Dell EMC
  * Copyright (c) 2009 Stanislav Sedov <stas@FreeBSD.org>
  * Copyright (c) 1988, 1993
@@ -48,10 +50,12 @@ __FBSDID("$FreeBSD$");
 #include <sys/stat.h>
 #include <sys/vnode.h>
 #include <sys/socket.h>
+#define	_WANT_SOCKET
 #include <sys/socketvar.h>
 #include <sys/domain.h>
 #include <sys/protosw.h>
 #include <sys/un.h>
+#define	_WANT_UNPCB
 #include <sys/unpcb.h>
 #include <sys/sysctl.h>
 #include <sys/tty.h>
@@ -84,6 +88,7 @@ __FBSDID("$FreeBSD$");
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
+#define	_WANT_INPCB
 #include <netinet/in_pcb.h>
 
 #include <assert.h>
@@ -583,6 +588,10 @@ procstat_getfiles_kvm(struct procstat *procstat, struct kinfo_proc *kp, int mmap
 			type = PS_FST_TYPE_PROCDESC;
 			data = file.f_data;
 			break;
+		case DTYPE_DEV:
+			type = PS_FST_TYPE_DEV;
+			data = file.f_data;
+			break;
 		default:
 			continue;
 		}
@@ -668,6 +677,7 @@ kinfo_type2fst(int kftype)
 	} kftypes2fst[] = {
 		{ KF_TYPE_PROCDESC, PS_FST_TYPE_PROCDESC },
 		{ KF_TYPE_CRYPTO, PS_FST_TYPE_CRYPTO },
+		{ KF_TYPE_DEV, PS_FST_TYPE_DEV },
 		{ KF_TYPE_FIFO, PS_FST_TYPE_FIFO },
 		{ KF_TYPE_KQUEUE, PS_FST_TYPE_KQUEUE },
 		{ KF_TYPE_MQUEUE, PS_FST_TYPE_MQUEUE },
@@ -1341,12 +1351,12 @@ procstat_get_vnode_info_sysctl(struct filestat *fst, struct vnstat *vn,
 	struct statfs stbuf;
 	struct kinfo_file *kif;
 	struct kinfo_vmentry *kve;
+	char *name, *path;
 	uint64_t fileid;
 	uint64_t size;
-	char *name, *path;
-	uint32_t fsid;
+	uint64_t fsid;
+	uint64_t rdev;
 	uint16_t mode;
-	uint32_t rdev;
 	int vntype;
 	int status;
 
@@ -1501,6 +1511,8 @@ procstat_get_socket_info_kvm(kvm_t *kd, struct filestat *fst,
 				} else
 					sock->inp_ppcb =
 					    (uintptr_t)inpcb.inp_ppcb;
+				sock->sendq = s.so_snd.sb_ccc;
+				sock->recvq = s.so_rcv.sb_ccc;
 			}
 		}
 		break;
@@ -1514,6 +1526,8 @@ procstat_get_socket_info_kvm(kvm_t *kd, struct filestat *fst,
 				sock->so_rcv_sb_state = s.so_rcv.sb_state;
 				sock->so_snd_sb_state = s.so_snd.sb_state;
 				sock->unp_conn = (uintptr_t)unpcb.unp_conn;
+				sock->sendq = s.so_snd.sb_ccc;
+				sock->recvq = s.so_rcv.sb_ccc;
 			}
 		}
 		break;
@@ -1549,8 +1563,10 @@ procstat_get_socket_info_sysctl(struct filestat *fst, struct sockstat *sock,
 	sock->dom_family = kif->kf_sock_domain;
 	sock->so_pcb = kif->kf_un.kf_sock.kf_sock_pcb;
 	strlcpy(sock->dname, kif->kf_path, sizeof(sock->dname));
-	bcopy(&kif->kf_sa_local, &sock->sa_local, kif->kf_sa_local.ss_len);
-	bcopy(&kif->kf_sa_peer, &sock->sa_peer, kif->kf_sa_peer.ss_len);
+	bcopy(&kif->kf_un.kf_sock.kf_sa_local, &sock->sa_local,
+	    kif->kf_un.kf_sock.kf_sa_local.ss_len);
+	bcopy(&kif->kf_un.kf_sock.kf_sa_peer, &sock->sa_peer,
+	    kif->kf_un.kf_sock.kf_sa_peer.ss_len);
 
 	/*
 	 * Protocol specific data.
@@ -1558,17 +1574,22 @@ procstat_get_socket_info_sysctl(struct filestat *fst, struct sockstat *sock,
 	switch(sock->dom_family) {
 	case AF_INET:
 	case AF_INET6:
-		if (sock->proto == IPPROTO_TCP)
+		if (sock->proto == IPPROTO_TCP) {
 			sock->inp_ppcb = kif->kf_un.kf_sock.kf_sock_inpcb;
+			sock->sendq = kif->kf_un.kf_sock.kf_sock_sendq;
+			sock->recvq = kif->kf_un.kf_sock.kf_sock_recvq;
+		}
 		break;
 	case AF_UNIX:
 		if (kif->kf_un.kf_sock.kf_sock_unpconn != 0) {
-				sock->so_rcv_sb_state =
-				    kif->kf_un.kf_sock.kf_sock_rcv_sb_state;
-				sock->so_snd_sb_state =
-				    kif->kf_un.kf_sock.kf_sock_snd_sb_state;
-				sock->unp_conn =
-				    kif->kf_un.kf_sock.kf_sock_unpconn;
+			sock->so_rcv_sb_state =
+			    kif->kf_un.kf_sock.kf_sock_rcv_sb_state;
+			sock->so_snd_sb_state =
+			    kif->kf_un.kf_sock.kf_sock_snd_sb_state;
+			sock->unp_conn =
+			    kif->kf_un.kf_sock.kf_sock_unpconn;
+			sock->sendq = kif->kf_un.kf_sock.kf_sock_sendq;
+			sock->recvq = kif->kf_un.kf_sock.kf_sock_recvq;
 		}
 		break;
 	default:
@@ -2176,6 +2197,7 @@ procstat_getrlimit_core(struct procstat_core *core, int which,
 		return (-1);
 	}
 	*rlimit = rlimits[which];
+	free(rlimits);
 	return (0);
 }
 
@@ -2503,6 +2525,12 @@ struct ptrace_lwpinfo *
 procstat_getptlwpinfo(struct procstat *procstat, unsigned int *cntp)
 {
 	switch (procstat->type) {
+	case PROCSTAT_KVM:
+		warnx("kvm method is not supported");
+		return (NULL);
+	case PROCSTAT_SYSCTL:
+		warnx("sysctl method is not supported");
+		return (NULL);
 	case PROCSTAT_CORE:
 	 	return (procstat_getptlwpinfo_core(procstat->core, cntp));
 	default:

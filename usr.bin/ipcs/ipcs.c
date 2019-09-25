@@ -32,11 +32,12 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/proc.h>
-#define _KERNEL
-#include <sys/sem.h>
-#include <sys/shm.h>
+#define	_WANT_SYSVMSG_INTERNALS
 #include <sys/msg.h>
-#undef _KERNEL
+#define	_WANT_SYSVSEM_INTERNALS
+#include <sys/sem.h>
+#define	_WANT_SYSVSHM_INTERNALS
+#include <sys/shm.h>
 
 #include <err.h>
 #include <fcntl.h>
@@ -198,7 +199,7 @@ main(int argc, char *argv[])
 	}
 
 	kget(X_MSGINFO, &msginfo, sizeof(msginfo));
-	if ((display & (MSGINFO | MSGTOTAL))) {
+	if (display & (MSGINFO | MSGTOTAL)) {
 		if (display & MSGTOTAL)
 			print_kmsqtotal(msginfo);
 
@@ -226,15 +227,10 @@ main(int argc, char *argv[])
 
 			printf("\n");
 		}
-	} else
-		if (display & (MSGINFO | MSGTOTAL)) {
-			fprintf(stderr,
-			    "SVID messages facility "
-			    "not configured in the system\n");
-		}
+	}
 
 	kget(X_SHMINFO, &shminfo, sizeof(shminfo));
-	if ((display & (SHMINFO | SHMTOTAL))) {
+	if (display & (SHMINFO | SHMTOTAL)) {
 
 		if (display & SHMTOTAL)
 			print_kshmtotal(shminfo);
@@ -261,15 +257,10 @@ main(int argc, char *argv[])
 			}
 			printf("\n");
 		}
-	} else
-		if (display & (SHMINFO | SHMTOTAL)) {
-			fprintf(stderr,
-			    "SVID shared memory facility "
-			    "not configured in the system\n");
-		}
+	}
 
 	kget(X_SEMINFO, &seminfo, sizeof(seminfo));
-	if ((display & (SEMINFO | SEMTOTAL))) {
+	if (display & (SEMINFO | SEMTOTAL)) {
 		struct semid_kernel *kxsema;
 		size_t kxsema_len;
 
@@ -298,12 +289,7 @@ main(int argc, char *argv[])
 
 			printf("\n");
 		}
-	} else
-		if (display & (SEMINFO | SEMTOTAL)) {
-			fprintf(stderr,
-			    "SVID semaphores facility "
-			    "not configured in the system\n");
-		}
+	}
 
 	if (!use_sysctl)
 		kvm_close(kd);

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2009 Silicon Graphics International Corp.
  * All rights reserved.
  *
@@ -147,11 +149,6 @@ cfcs_init(void)
 	port->onoff_arg = softc;
 	port->fe_datamove = cfcs_datamove;
 	port->fe_done = cfcs_done;
-
-	/* XXX KDM what should we report here? */
-	/* XXX These should probably be fetched from CTL. */
-	port->max_targets = 1;
-	port->max_target_id = 15;
 	port->targ_port = -1;
 
 	retval = ctl_port_register(port);
@@ -357,7 +354,7 @@ cfcs_datamove(union ctl_io *io)
 	case CAM_DATA_VADDR:
 		cam_sglist = &cam_sg_entry;
 		cam_sglist[0].ds_len = ccb->csio.dxfer_len;
-		cam_sglist[0].ds_addr = (bus_addr_t)ccb->csio.data_ptr;
+		cam_sglist[0].ds_addr = (bus_addr_t)(uintptr_t)ccb->csio.data_ptr;
 		cam_sg_count = 1;
 		cam_sg_start = 0;
 		cam_sg_offset = io->scsiio.kern_rel_offset;
@@ -385,7 +382,7 @@ cfcs_datamove(union ctl_io *io)
 		len_to_copy = MIN(cam_sglist[i].ds_len - cam_watermark,
 				  ctl_sglist[j].len - ctl_watermark);
 
-		cam_ptr = (uint8_t *)cam_sglist[i].ds_addr;
+		cam_ptr = (uint8_t *)(uintptr_t)cam_sglist[i].ds_addr;
 		cam_ptr = cam_ptr + cam_watermark;
 		if (io->io_hdr.flags & CTL_FLAG_BUS_ADDR) {
 			/*

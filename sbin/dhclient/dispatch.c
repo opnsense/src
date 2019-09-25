@@ -1,6 +1,8 @@
 /*	$OpenBSD: dispatch.c,v 1.31 2004/09/21 04:07:03 david Exp $	*/
 
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright 2004 Henning Brauer <henning@openbsd.org>
  * Copyright (c) 1995, 1996, 1997, 1998, 1999
  * The Internet Software Consortium.   All rights reserved.
@@ -55,8 +57,8 @@ __FBSDID("$FreeBSD$");
 /* Assert that pointer p is aligned to at least align bytes */
 #define assert_aligned(p, align) assert((((uintptr_t)p) & ((align) - 1)) == 0)
 
-struct protocol *protocols;
-struct timeout *timeouts;
+static struct protocol *protocols;
+static struct timeout *timeouts;
 static struct timeout *free_timeouts;
 static int interfaces_invalidated;
 void (*bootp_packet_handler)(struct interface_info *,
@@ -74,7 +76,6 @@ static int interface_status(struct interface_info *ifinfo);
 void
 discover_interfaces(struct interface_info *iface)
 {
-	char *pname = iface->client->config->vlan_parent;
 	struct ifaddrs *ifap, *ifa;
 	struct ifreq *tif;
 
@@ -144,20 +145,7 @@ discover_interfaces(struct interface_info *iface)
 
 	/* Register the interface... */
 	if_register_receive(iface);
-	if (pname != NULL) {
-		char rname[IFNAMSIZ];
-
-		/* Change interface name for bpf registration */
-		strlcpy(rname, iface->name, IFNAMSIZ);
-		strlcpy(iface->ifp->ifr_name, pname, IFNAMSIZ);
-
-		if_register_send(iface);
-
-		/* Change name back to original */
-		strlcpy(iface->ifp->ifr_name, rname, IFNAMSIZ);
-	} else {
-		if_register_send(iface);
-	}
+	if_register_send(iface);
 	add_protocol(iface->name, iface->rfdesc, got_one, iface);
 	freeifaddrs(ifap);
 }
@@ -330,7 +318,8 @@ interface_status(struct interface_info *ifinfo)
 	memset(&ifr, 0, sizeof(ifr));
 	strlcpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name));
 	if (ioctl(ifsock, SIOCGIFFLAGS, &ifr) < 0) {
-		syslog(LOG_ERR, "ioctl(SIOCGIFFLAGS) on %s: %m", ifname);
+		cap_syslog(capsyslog, LOG_ERR, "ioctl(SIOCGIFFLAGS) on %s: %m",
+		    ifname);
 		goto inactive;
 	}
 
@@ -348,9 +337,8 @@ interface_status(struct interface_info *ifinfo)
 	strlcpy(ifmr.ifm_name, ifname, sizeof(ifmr.ifm_name));
 	if (ioctl(ifsock, SIOCGIFMEDIA, (caddr_t)&ifmr) < 0) {
 		if (errno != EINVAL) {
-			syslog(LOG_DEBUG, "ioctl(SIOCGIFMEDIA) on %s: %m",
-			    ifname);
-
+			cap_syslog(capsyslog, LOG_DEBUG,
+			    "ioctl(SIOCGIFMEDIA) on %s: %m", ifname);
 			ifinfo->noifmedia = 1;
 			goto active;
 		}
@@ -511,8 +499,8 @@ interface_link_status(char *ifname)
 	if (ioctl(sock, SIOCGIFMEDIA, (caddr_t)&ifmr) == -1) {
 		/* EINVAL -> link state unknown. treat as active */
 		if (errno != EINVAL)
-			syslog(LOG_DEBUG, "ioctl(SIOCGIFMEDIA) on %s: %m",
-			    ifname);
+			cap_syslog(capsyslog, LOG_DEBUG,
+			    "ioctl(SIOCGIFMEDIA) on %s: %m", ifname);
 		close(sock);
 		return (1);
 	}

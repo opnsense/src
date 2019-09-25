@@ -259,12 +259,11 @@ cbq_pfattach(struct pf_altq *a)
 }
 
 int
-cbq_add_altq(struct pf_altq *a)
+cbq_add_altq(struct ifnet *ifp, struct pf_altq *a)
 {
 	cbq_state_t	*cbqp;
-	struct ifnet	*ifp;
 
-	if ((ifp = ifunit(a->ifname)) == NULL)
+	if (ifp == NULL)
 		return (EINVAL);
 	if (!ALTQ_IS_READY(&ifp->if_snd))
 		return (ENODEV);
@@ -452,7 +451,7 @@ cbq_remove_queue(struct pf_altq *a)
 }
 
 int
-cbq_getqstats(struct pf_altq *a, void *ubuf, int *nbytes)
+cbq_getqstats(struct pf_altq *a, void *ubuf, int *nbytes, int version)
 {
 	cbq_state_t	*cbqp;
 	struct rm_class	*cl;

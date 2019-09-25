@@ -407,7 +407,8 @@ struct NDLLCharacteristics {
 void MappingTraits<COFFYAML::Relocation>::mapping(IO &IO,
                                                   COFFYAML::Relocation &Rel) {
   IO.mapRequired("VirtualAddress", Rel.VirtualAddress);
-  IO.mapRequired("SymbolName", Rel.SymbolName);
+  IO.mapOptional("SymbolName", Rel.SymbolName, StringRef());
+  IO.mapOptional("SymbolTableIndex", Rel.SymbolTableIndex);
 
   COFF::header &H = *static_cast<COFF::header *>(IO.getContext());
   if (H.Machine == COFF::IMAGE_FILE_MACHINE_I386) {
@@ -562,14 +563,16 @@ void MappingTraits<COFFYAML::Section>::mapping(IO &IO, COFFYAML::Section &Sec) {
   IO.mapOptional("VirtualSize", Sec.Header.VirtualSize, 0U);
   IO.mapOptional("Alignment", Sec.Alignment, 0U);
 
-  // If this is a .debug$S .debug$T, or .debug$H section parse the semantic
-  // representation of the symbols/types.  If it is any other kind of section,
-  // just deal in raw bytes.
+  // If this is a .debug$S .debug$T .debug$P, or .debug$H section parse the
+  // semantic representation of the symbols/types.  If it is any other kind
+  // of section, just deal in raw bytes.
   IO.mapOptional("SectionData", Sec.SectionData);
   if (Sec.Name == ".debug$S")
     IO.mapOptional("Subsections", Sec.DebugS);
   else if (Sec.Name == ".debug$T")
     IO.mapOptional("Types", Sec.DebugT);
+  else if (Sec.Name == ".debug$P")
+    IO.mapOptional("PrecompTypes", Sec.DebugP);
   else if (Sec.Name == ".debug$H")
     IO.mapOptional("GlobalHashes", Sec.DebugH);
 

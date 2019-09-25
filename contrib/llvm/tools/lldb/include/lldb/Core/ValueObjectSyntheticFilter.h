@@ -13,17 +13,17 @@
 #include "lldb/Core/ThreadSafeSTLMap.h"
 #include "lldb/Core/ThreadSafeSTLVector.h"
 #include "lldb/Core/ValueObject.h"
-#include "lldb/Symbol/CompilerType.h"       // for CompilerType
-#include "lldb/Utility/ConstString.h"       // for ConstString
-#include "lldb/lldb-defines.h"              // for ThreadSafeSTLMap::operator=
-#include "lldb/lldb-enumerations.h"         // for DynamicValueType, Langua...
-#include "lldb/lldb-forward.h"              // for ValueObjectSP, Synthetic...
-#include "lldb/lldb-private-enumerations.h" // for LazyBool, LazyBool::eLaz...
+#include "lldb/Symbol/CompilerType.h"
+#include "lldb/Utility/ConstString.h"
+#include "lldb/lldb-defines.h"
+#include "lldb/lldb-enumerations.h"
+#include "lldb/lldb-forward.h"
+#include "lldb/lldb-private-enumerations.h"
 
-#include <cstdint> // for uint32_t, uint64_t
+#include <cstdint>
 #include <memory>
 
-#include <stddef.h> // for size_t
+#include <stddef.h>
 
 namespace lldb_private {
 class Declaration;
@@ -39,9 +39,9 @@ namespace lldb_private {
 //----------------------------------------------------------------------
 // A ValueObject that obtains its children from some source other than
 // real information
-// This is currently used to implement Python-based children and filters
-// but you can bind it to any source of synthetic information and have
-// it behave accordingly
+// This is currently used to implement Python-based children and filters but
+// you can bind it to any source of synthetic information and have it behave
+// accordingly
 //----------------------------------------------------------------------
 class ValueObjectSynthetic : public ValueObject {
 public:

@@ -4,7 +4,6 @@
 class="eli"
 base=$(atf_get ident)
 MAX_SECSIZE=8192
-TEST_MDS_FILE=md.devs
 
 attach_md()
 {
@@ -38,15 +37,10 @@ for_each_geli_config() {
 
 	for cipher in aes-xts:128 aes-xts:256 \
 	    aes-cbc:128 aes-cbc:192 aes-cbc:256 \
-	    3des-cbc:192 \
-	    blowfish-cbc:128 blowfish-cbc:160 blowfish-cbc:192 \
-	    blowfish-cbc:224 blowfish-cbc:256 blowfish-cbc:288 \
-	    blowfish-cbc:320 blowfish-cbc:352 blowfish-cbc:384 \
-	    blowfish-cbc:416 blowfish-cbc:448 \
 	    camellia-cbc:128 camellia-cbc:192 camellia-cbc:256; do
 		ealgo=${cipher%%:*}
 		keylen=${cipher##*:}
-		for aalgo in hmac/md5 hmac/sha1 hmac/ripemd160 hmac/sha256 \
+		for aalgo in hmac/sha1 hmac/ripemd160 hmac/sha256 \
 		    hmac/sha384 hmac/sha512; do
 			for secsize in 512 1024 2048 4096 $MAX_SECSIZE; do
 				${func} $cipher $aalgo $secsize
@@ -67,11 +61,6 @@ for_each_geli_config_nointegrity() {
 	md=$(attach_md -t malloc -s $bytes)
 	for cipher in aes-xts:128 aes-xts:256 \
 	    aes-cbc:128 aes-cbc:192 aes-cbc:256 \
-	    3des-cbc:192 \
-	    blowfish-cbc:128 blowfish-cbc:160 blowfish-cbc:192 \
-	    blowfish-cbc:224 blowfish-cbc:256 blowfish-cbc:288 \
-	    blowfish-cbc:320 blowfish-cbc:352 blowfish-cbc:384 \
-	    blowfish-cbc:416 blowfish-cbc:448 \
 	    camellia-cbc:128 camellia-cbc:192 camellia-cbc:256; do
 		ealgo=${cipher%%:*}
 		keylen=${cipher##*:}
@@ -81,7 +70,6 @@ for_each_geli_config_nointegrity() {
 		done
 	done
 }
-
 
 geli_test_cleanup()
 {
@@ -95,4 +83,10 @@ geli_test_cleanup()
 	true
 }
 
+geli_test_setup()
+{
+	geom_atf_test_setup
+}
+
+ATF_TEST=true
 . `dirname $0`/../geom_subr.sh

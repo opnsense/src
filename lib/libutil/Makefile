@@ -6,6 +6,8 @@ SHLIBDIR?= /lib
 
 .include <src.opts.mk>
 
+.PATH: ${SRCTOP}/lib/libc/gen # for pw_scan.c
+
 LIB=	util
 SHLIB_MAJOR= 9
 
@@ -15,11 +17,11 @@ SRCS=	_secure_path.c auth.c expand_number.c flopen.c fparseln.c gr_util.c \
 	kinfo_getvmobject.c kld.c \
 	login_auth.c login_cap.c \
 	login_class.c login_crypt.c login_ok.c login_times.c login_tty.c \
-	pidfile.c property.c pty.c pw_util.c quotafile.c realhostname.c \
-	stub.c trimdomain.c uucplock.c
+	pidfile.c property.c pty.c pw_scan.c pw_util.c quotafile.c \
+	realhostname.c stub.c trimdomain.c uucplock.c
 INCS=	libutil.h login_cap.h
 
-CFLAGS+= -DLIBC_SCCS
+CFLAGS+= -DNO__SCCSID
 
 .if ${MK_INET6_SUPPORT} != "no"
 CFLAGS+= -DINET6
@@ -35,6 +37,7 @@ MAN+=	expand_number.3 flopen.3 fparseln.3 hexdump.3 \
 	property.3 pty.3 quotafile.3 realhostname.3 realhostname_sa.3 \
 	_secure_path.3 trimdomain.3 uucplock.3 pw_util.3
 MAN+=	login.conf.5
+MLINKS+=flopen.3 flopenat.3
 MLINKS+=kld.3 kld_isloaded.3 kld.3 kld_load.3
 MLINKS+=login_auth.3 auth_cat.3 login_auth.3 auth_checknologin.3
 MLINKS+=login_cap.3 login_close.3 login_cap.3 login_getcapbool.3 \
@@ -84,8 +87,7 @@ MLINKS+=pw_util.3 pw_copy.3 \
 	pw_util.3 pw_tempname.3 \
 	pw_util.3 pw_tmp.3
 
-.if ${MK_TESTS} != "no"
-SUBDIR+=	tests
-.endif
+HAS_TESTS=
+SUBDIR.${MK_TESTS}+= tests
 
 .include <bsd.lib.mk>

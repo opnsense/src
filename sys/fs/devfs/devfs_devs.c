@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2000,2004
  *	Poul-Henning Kamp.  All rights reserved.
  *
@@ -80,10 +82,20 @@ sysctl_devname(SYSCTL_HANDLER_ARGS)
 {
 	int error;
 	dev_t ud;
+#ifdef COMPAT_FREEBSD11
+	uint32_t ud_compat;
+#endif
 	struct cdev_priv *cdp;
 	struct cdev *dev;
 
-	error = SYSCTL_IN(req, &ud, sizeof (ud));
+#ifdef COMPAT_FREEBSD11
+	if (req->newlen == sizeof(ud_compat)) {
+		error = SYSCTL_IN(req, &ud_compat, sizeof(ud_compat));
+		if (error == 0)
+			ud = ud_compat == (uint32_t)NODEV ? NODEV : ud_compat;
+	} else
+#endif
+		error = SYSCTL_IN(req, &ud, sizeof (ud));
 	if (error)
 		return (error);
 	if (ud == NODEV)
@@ -214,7 +226,7 @@ devfs_newdirent(char *name, int namelen)
 	de->de_dirent->d_namlen = namelen;
 	de->de_dirent->d_reclen = GENERIC_DIRSIZ(&d);
 	bcopy(name, de->de_dirent->d_name, namelen);
-	de->de_dirent->d_name[namelen] = '\0';
+	dirent_terminate(de->de_dirent);
 	vfs_timestamp(&de->de_ctime);
 	de->de_mtime = de->de_atime = de->de_ctime;
 	de->de_links = 1;

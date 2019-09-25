@@ -1,7 +1,5 @@
 # $FreeBSD$
 
-HAVE_GELI=	yes
-
 .include <bsd.init.mk>
 
 .PATH:		${BOOTSRC}/i386/boot2 ${BOOTSRC}/i386/gptboot \
@@ -10,8 +8,6 @@ HAVE_GELI=	yes
 
 FILES=		gptzfsboot
 MAN=		gptzfsboot.8
-
-NM?=		nm
 
 BOOT_COMCONSOLE_PORT?= 0x3f8
 BOOT_COMCONSOLE_SPEED?= 9600
@@ -32,22 +28,17 @@ CFLAGS+=-DBOOTPROG=\"gptzfsboot\" \
 	-I${ZFSSRC} \
 	-I${SYSDIR}/crypto/skein \
 	-I${SYSDIR}/cddl/boot/zfs \
+	-I${SYSDIR}/cddl/contrib/opensolaris/uts/common \
 	-I${BOOTSRC}/i386/btx/lib \
 	-I${BOOTSRC}/i386/boot2 \
 	-Wall -Waggregate-return -Wbad-function-cast \
 	-Wmissing-declarations -Wmissing-prototypes -Wnested-externs \
 	-Wpointer-arith -Wshadow -Wstrict-prototypes -Wwrite-strings \
-	-Winline -Wno-pointer-sign
+	-Wno-pointer-sign
 
 CFLAGS.clang+=	-Wno-tentative-definition-incomplete-type
 
 NO_WCAST_ALIGN=
-
-.if ${MACHINE} == "amd64"
-LIBZFSBOOT=${BOOTOBJ}/zfs32/libzfsboot.a
-.else
-LIBZFSBOOT=${BOOTOBJ}/zfs/libzfsboot.a
-.endif
 
 CFLAGS.gcc+=	--param max-inline-insns-single=100
 
@@ -75,7 +66,7 @@ gptzfsboot.bin: gptzfsboot.out
 
 gptzfsboot.out: ${BTXCRT} zfsboot.o sio.o gpt.o drv.o cons.o \
 	${OPENCRYPTO_XTS}
-	${LD} ${LD_FLAGS} -Ttext ${ORG2} -o ${.TARGET} ${.ALLSRC} ${LIBGELIBOOT} ${LIBZFSBOOT} ${LIBSA32}
+	${LD} ${LD_FLAGS} -Ttext ${ORG2} -o ${.TARGET} ${.ALLSRC} ${LIBSA32}
 
 zfsboot.o: ${ZFSSRC}/zfsimpl.c
 

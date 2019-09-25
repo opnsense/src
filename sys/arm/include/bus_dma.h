@@ -1,6 +1,8 @@
 /*	$NetBSD: bus.h,v 1.11 2003/07/28 17:35:54 thorpej Exp $	*/
 
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ *
  * Copyright (c) 1996, 1997, 1998, 2001 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
@@ -67,6 +69,7 @@
 #define _ARM_BUS_DMA_H
 
 #include <sys/bus_dma.h>
+#include <sys/bus_dma_internal.h>
 
 /* Bus Space DMA macros */
 

@@ -61,7 +61,7 @@ public:
 
   /// \name Vector TTI Implementations
   /// @{
-
+  bool useColdCCForColdCall(Function &F);
   bool enableAggressiveInterleaving(bool LoopHasReductions);
   const TTI::MemCmpExpansionOptions *enableMemCmpExpansion(
       bool IsZeroCmp) const;
@@ -90,7 +90,9 @@ public:
                                  unsigned Factor,
                                  ArrayRef<unsigned> Indices,
                                  unsigned Alignment,
-                                 unsigned AddressSpace);
+                                 unsigned AddressSpace,
+                                 bool UseMaskForCond = false,
+                                 bool UseMaskForGaps = false);
 
   /// @}
 };

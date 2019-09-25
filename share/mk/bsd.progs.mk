@@ -22,8 +22,8 @@ PROGS += ${PROGS_CXX}
 
 .if defined(PROG)
 # just one of many
-PROG_OVERRIDE_VARS +=	BINDIR BINGRP BINOWN BINMODE DPSRCS MAN NO_WERROR \
-			PROGNAME SRCS STRIP WARNS
+PROG_OVERRIDE_VARS +=	BINDIR BINGRP BINOWN BINMODE CSTD CXXSTD DPSRCS MAN \
+			NO_SHARED NO_WERROR PROGNAME SRCS STRIP WARNS
 PROG_VARS +=	CFLAGS CXXFLAGS DEBUG_FLAGS DPADD INTERNALPROG LDADD LIBADD \
 		LINKS LDFLAGS MLINKS ${PROG_OVERRIDE_VARS}
 .for v in ${PROG_VARS:O:u}
@@ -34,6 +34,11 @@ $v += ${${v}.${PROG}}
 $v += ${${v}_${PROG}}
 .endif
 .else
+.if defined(${v}.${PROG})
+$v = ${${v}.${PROG}}
+.elif defined(${v}_${PROG})
+$v = ${${v}_${PROG}}
+.endif
 $v ?=
 .endif
 .endfor
@@ -77,7 +82,7 @@ stage_as.prog.${_prog}: ${_prog}
 .ifdef _RECURSING_PROGS
 MK_STAGING= no
 
-_PROGS_GLOBAL_VARS= CLEANFILES CLEANDIRS CONFGROUPS FILESGROUPS INCSGROUPS \
+_PROGS_GLOBAL_VARS= CLEANFILES CLEANDIRS CONFGROUPS DIRS FILESGROUPS INCSGROUPS \
 		    SCRIPTS
 .for v in ${_PROGS_GLOBAL_VARS}
 $v =
@@ -104,7 +109,7 @@ _PROGS_ALL_SRCS+=	${s}
 .if !empty(_PROGS_COMMON_SRCS)
 _PROGS_COMMON_OBJS=	${_PROGS_COMMON_SRCS:M*.[dhly]}
 .if !empty(_PROGS_COMMON_SRCS:N*.[dhly])
-_PROGS_COMMON_OBJS+=	${_PROGS_COMMON_SRCS:N*.[dhly]:R:S/$/.o/g}
+_PROGS_COMMON_OBJS+=	${_PROGS_COMMON_SRCS:N*.[dhly]:${OBJS_SRCS_FILTER:ts:}:S/$/.o/g}
 .endif
 .endif
 
@@ -116,7 +121,16 @@ ${_PROGS_COMMON_OBJS}: .NOMETA
 
 .if !empty(PROGS) && !defined(_RECURSING_PROGS) && !defined(PROG)
 # tell progs.mk we might want to install things
-PROGS_TARGETS+= checkdpadd clean cleandepend cleandir depend install
+PROGS_TARGETS+= checkdpadd clean depend install
+# Only handle removing depend files from the main process.
+_PROG_MK.cleandir=	CLEANDEPENDFILES= CLEANDEPENDDIRS=
+_PROG_MK.cleanobj=	CLEANDEPENDFILES= CLEANDEPENDDIRS=
+# Only recurse on these if there is no objdir, meaning a normal
+# 'clean' gets ran via the target defined in bsd.obj.mk.
+# Same check from cleanobj: in bsd.obj.mk
+.if ${CANONICALOBJDIR} == ${.CURDIR} || !exists(${CANONICALOBJDIR}/)
+PROGS_TARGETS+=	cleandir cleanobj
+.endif
 
 # Ensure common objects are built before recursing.
 .if !empty(_PROGS_COMMON_OBJS)
@@ -142,7 +156,7 @@ $p.$t: .PHONY .MAKE
 	(cd ${.CURDIR} && \
 	    DEPENDFILE=.depend.$p \
 	    NO_SUBDIR=1 ${MAKE} -f ${MAKEFILE} _RECURSING_PROGS=t \
-	    PROG=$p ${x.$p} ${@:E})
+	    ${_PROG_MK.${t}} PROG=$p ${x.$p} ${@:E})
 .endfor
 .endfor
 

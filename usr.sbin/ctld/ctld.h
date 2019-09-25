@@ -50,8 +50,6 @@
 #define	MAX_LUNS			1024
 #define	MAX_NAME_LEN			223
 #define	MAX_DATA_SEGMENT_LENGTH		(128 * 1024)
-#define	MAX_BURST_LENGTH		16776192
-#define	FIRST_BURST_LENGTH		(128 * 1024)
 #define	SOCKBUF_SIZE			1048576
 
 struct auth {
@@ -154,6 +152,9 @@ struct port {
 	struct pport			*p_pport;
 	struct target			*p_target;
 
+	int				p_ioctl_port;
+	int				p_ioctl_pp;
+	int				p_ioctl_vp;
 	uint32_t			p_ctl_port;
 };
 
@@ -243,10 +244,14 @@ struct connection {
 	struct sockaddr_storage	conn_initiator_sa;
 	uint32_t		conn_cmdsn;
 	uint32_t		conn_statsn;
-	size_t			conn_data_segment_limit;
-	size_t			conn_max_data_segment_length;
-	size_t			conn_max_burst_length;
-	size_t			conn_first_burst_length;
+	int			conn_max_recv_data_segment_limit;
+	int			conn_max_send_data_segment_limit;
+	int			conn_max_burst_limit;
+	int			conn_first_burst_limit;
+	int			conn_max_recv_data_segment_length;
+	int			conn_max_send_data_segment_length;
+	int			conn_max_burst_length;
+	int			conn_first_burst_length;
 	int			conn_immediate_data;
 	int			conn_header_digest;
 	int			conn_data_digest;
@@ -366,6 +371,8 @@ void			pport_delete(struct pport *pport);
 
 struct port		*port_new(struct conf *conf, struct target *target,
 			    struct portal_group *pg);
+struct port		*port_new_ioctl(struct conf *conf, struct target *target,
+			    int pp, int vp);
 struct port		*port_new_pp(struct conf *conf, struct target *target,
 			    struct pport *pp);
 struct port		*port_find(const struct conf *conf, const char *name);
@@ -406,7 +413,10 @@ int			kernel_lun_modify(struct lun *lun);
 int			kernel_lun_remove(struct lun *lun);
 void			kernel_handoff(struct connection *conn);
 void			kernel_limits(const char *offload,
-			    size_t *max_data_segment_length);
+			    int *max_recv_data_segment_length,
+			    int *max_send_data_segment_length,
+			    int *max_burst_length,
+			    int *first_burst_length);
 int			kernel_port_add(struct port *port);
 int			kernel_port_update(struct port *port, struct port *old);
 int			kernel_port_remove(struct port *port);

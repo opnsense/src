@@ -2,7 +2,9 @@
 
 /* Packet assembly code, originally contributed by Archie Cobbs. */
 
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1995, 1996, 1999 The Internet Software Consortium.
  * All rights reserved.
  *
@@ -92,29 +94,19 @@ void
 assemble_hw_header(struct interface_info *interface, unsigned char *buf,
     int *bufix)
 {
-	int vlpcp = interface->client->config->vlan_pcp;
-	int vlid = interface->client->config->vlan_id;
-	int plen = ETHER_HEADER_SIZE;
-	struct ether_vlan_header eh;
+	struct ether_header eh;
 
-	memset(eh.evl_dhost, 0xff, sizeof(eh.evl_dhost));
-	if (interface->hw_address.hlen == sizeof(eh.evl_shost))
-		memcpy(eh.evl_shost, interface->hw_address.haddr,
-		    sizeof(eh.evl_shost));
+	memset(eh.ether_dhost, 0xff, sizeof(eh.ether_dhost));
+	if (interface->hw_address.hlen == sizeof(eh.ether_shost))
+		memcpy(eh.ether_shost, interface->hw_address.haddr,
+		    sizeof(eh.ether_shost));
 	else
-		memset(eh.evl_shost, 0x00, sizeof(eh.evl_shost));
+		memset(eh.ether_shost, 0x00, sizeof(eh.ether_shost));
 
-	eh.evl_encap_proto = htons(ETHERTYPE_IP);
+	eh.ether_type = htons(ETHERTYPE_IP);
 
-	if (vlid != 0) {
-		eh.evl_tag = htons(EVL_MAKETAG(vlid, vlpcp, 0));
-		eh.evl_encap_proto = htons(ETHERTYPE_VLAN);
-		eh.evl_proto = htons(ETHERTYPE_IP);
-		plen += ETHER_VLAN_ENCAP_LEN;
-	}
-
-	memcpy(&buf[*bufix], &eh, plen);
-	*bufix += plen;
+	memcpy(&buf[*bufix], &eh, ETHER_HEADER_SIZE);
+	*bufix += ETHER_HEADER_SIZE;
 }
 
 void
@@ -191,7 +183,7 @@ decode_udp_ip_header(unsigned char *buf, int bufix, struct sockaddr_in *from,
 	ip_packets_seen++;
 	if (wrapsum(checksum(buf + bufix, ip_len, 0)) != 0) {
 		ip_packets_bad_checksum++;
-		if (ip_packets_seen > 4 &&
+		if (ip_packets_seen > 4 && ip_packets_bad_checksum != 0 &&
 		    (ip_packets_seen / ip_packets_bad_checksum) < 2) {
 			note("%d bad IP checksums seen in %d packets",
 			    ip_packets_bad_checksum, ip_packets_seen);
@@ -243,7 +235,7 @@ decode_udp_ip_header(unsigned char *buf, int bufix, struct sockaddr_in *from,
 	udp_packets_seen++;
 	if (usum && usum != sum) {
 		udp_packets_bad_checksum++;
-		if (udp_packets_seen > 4 &&
+		if (udp_packets_seen > 4 && udp_packets_bad_checksum != 0 &&
 		    (udp_packets_seen / udp_packets_bad_checksum) < 2) {
 			note("%d bad udp checksums in %d packets",
 			    udp_packets_bad_checksum, udp_packets_seen);

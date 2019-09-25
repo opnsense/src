@@ -131,6 +131,8 @@ public:
                                              CallingConv::ID) const;
 
   BitVector getReservedRegs(const MachineFunction &MF) const override;
+  bool isAsmClobberable(const MachineFunction &MF,
+                       unsigned PhysReg) const override;
 
   const TargetRegisterClass *
   getPointerRegClass(const MachineFunction &MF,
@@ -200,7 +202,7 @@ public:
                            int SPAdj, unsigned FIOperandNum,
                            RegScavenger *RS = nullptr) const override;
 
-  /// \brief SrcRC and DstRC will be morphed into NewRC if this returns true
+  /// SrcRC and DstRC will be morphed into NewRC if this returns true
   bool shouldCoalesce(MachineInstr *MI,
                       const TargetRegisterClass *SrcRC,
                       unsigned SubReg,

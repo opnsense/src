@@ -53,7 +53,7 @@ public:
                                   std::vector<CalleeSavedInfo> &CSI,
                                   const TargetRegisterInfo *TRI) const override;
 
-  /// \brief Can this function use the red zone for local allocations.
+  /// Can this function use the red zone for local allocations.
   bool canUseRedZone(const MachineFunction &MF) const;
 
   bool hasFP(const MachineFunction &MF) const override;
@@ -68,6 +68,17 @@ public:
   }
 
   bool enableStackSlotScavenging(const MachineFunction &MF) const override;
+
+  void processFunctionBeforeFrameFinalized(MachineFunction &MF,
+                                             RegScavenger *RS) const override;
+
+  unsigned getWinEHParentFrameOffset(const MachineFunction &MF) const override;
+
+  unsigned getWinEHFuncletFrameSize(const MachineFunction &MF) const;
+
+  int getFrameIndexReferencePreferSP(const MachineFunction &MF, int FI,
+                                     unsigned &FrameReg,
+                                     bool IgnoreSPUpdates) const override;
 
 private:
   bool shouldCombineCSRLocalStackBump(MachineFunction &MF,

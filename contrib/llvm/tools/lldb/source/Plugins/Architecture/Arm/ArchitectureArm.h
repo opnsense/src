@@ -23,7 +23,13 @@ public:
   ConstString GetPluginName() override;
   uint32_t GetPluginVersion() override;
 
-  void OverrideStopInfo(Thread &thread) override;
+  void OverrideStopInfo(Thread &thread) const override;
+
+  lldb::addr_t GetCallableLoadAddress(lldb::addr_t load_addr,
+                                      AddressClass addr_class) const override;
+
+  lldb::addr_t GetOpcodeLoadAddress(lldb::addr_t load_addr,
+                                    AddressClass addr_class) const override;
 
 private:
   static std::unique_ptr<Architecture> Create(const ArchSpec &arch);

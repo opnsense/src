@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2011 NetApp, Inc.
  * All rights reserved.
  *
@@ -150,6 +152,7 @@ struct vm {
 	struct vpmtmr	*vpmtmr;		/* (i) virtual ACPI PM timer */
 	struct vrtc	*vrtc;			/* (o) virtual RTC */
 	volatile cpuset_t active_cpus;		/* (i) active vcpus */
+	volatile cpuset_t debug_cpus;		/* (i) vcpus stopped for debug */
 	int		suspend;		/* (i) stop VM execution */
 	volatile cpuset_t suspended_cpus; 	/* (i) suspended vcpus */
 	volatile cpuset_t halted_cpus;		/* (x) cpus in a hard halt */
@@ -163,6 +166,11 @@ struct vm {
 	struct vmspace	*vmspace;		/* (o) guest's address space */
 	char		name[VM_MAX_NAMELEN];	/* (o) virtual machine name */
 	struct vcpu	vcpu[VM_MAXCPU];	/* (i) guest vcpus */
+	/* The following describe the vm cpu topology */
+	uint16_t	sockets;		/* (o) num of sockets */
+	uint16_t	cores;			/* (o) num of cores/socket */
+	uint16_t	threads;		/* (o) num of threads/core */
+	uint16_t	maxcpus;		/* (o) max pluggable cpus */
 };
 
 static int vmm_initialized;
@@ -199,6 +207,8 @@ static struct vmm_ops *ops;
 
 #define	fpu_start_emulating()	load_cr0(rcr0() | CR0_TS)
 #define	fpu_stop_emulating()	clts()
+
+SDT_PROVIDER_DEFINE(vmm);
 
 static MALLOC_DEFINE(M_VM, "vm", "vm");
 
@@ -266,7 +276,7 @@ vcpu_init(struct vm *vm, int vcpu_id, bool create)
 {
 	struct vcpu *vcpu;
 
-	KASSERT(vcpu_id >= 0 && vcpu_id < VM_MAXCPU,
+	KASSERT(vcpu_id >= 0 && vcpu_id < vm->maxcpus,
 	    ("vcpu_init: invalid vcpu %d", vcpu_id));
 	  
 	vcpu = &vm->vcpu[vcpu_id];
@@ -305,7 +315,7 @@ vm_exitinfo(struct vm *vm, int cpuid)
 {
 	struct vcpu *vcpu;
 
-	if (cpuid < 0 || cpuid >= VM_MAXCPU)
+	if (cpuid < 0 || cpuid >= vm->maxcpus)
 		panic("vm_exitinfo: invalid cpuid %d", cpuid);
 
 	vcpu = &vm->vcpu[cpuid];
@@ -413,13 +423,20 @@ vm_init(struct vm *vm, bool create)
 		vm->vrtc = vrtc_init(vm);
 
 	CPU_ZERO(&vm->active_cpus);
+	CPU_ZERO(&vm->debug_cpus);
 
 	vm->suspend = 0;
 	CPU_ZERO(&vm->suspended_cpus);
 
-	for (i = 0; i < VM_MAXCPU; i++)
+	for (i = 0; i < vm->maxcpus; i++)
 		vcpu_init(vm, i, create);
 }
+
+/*
+ * The default CPU topology is a single thread per package.
+ */
+u_int cores_per_package = 1;
+u_int threads_per_core = 1;
 
 int
 vm_create(const char *name, struct vm **retvm)
@@ -446,10 +463,47 @@ vm_create(const char *name, struct vm **retvm)
 	vm->vmspace = vmspace;
 	mtx_init(&vm->rendezvous_mtx, "vm rendezvous lock", 0, MTX_DEF);
 
+	vm->sockets = 1;
+	vm->cores = cores_per_package;	/* XXX backwards compatibility */
+	vm->threads = threads_per_core;	/* XXX backwards compatibility */
+	vm->maxcpus = VM_MAXCPU;	/* XXX temp to keep code working */
+
 	vm_init(vm, true);
 
 	*retvm = vm;
 	return (0);
+}
+
+void
+vm_get_topology(struct vm *vm, uint16_t *sockets, uint16_t *cores,
+    uint16_t *threads, uint16_t *maxcpus)
+{
+	*sockets = vm->sockets;
+	*cores = vm->cores;
+	*threads = vm->threads;
+	*maxcpus = vm->maxcpus;
+}
+
+uint16_t
+vm_get_maxcpus(struct vm *vm)
+{
+	return (vm->maxcpus);
+}
+
+int
+vm_set_topology(struct vm *vm, uint16_t sockets, uint16_t cores,
+    uint16_t threads, uint16_t maxcpus)
+{
+	if (maxcpus != 0)
+		return (EINVAL);	/* XXX remove when supported */
+	if ((sockets * cores * threads) > vm->maxcpus)
+		return (EINVAL);
+	/* XXX need to check sockets * cores * threads == vCPU, how? */
+	vm->sockets = sockets;
+	vm->cores = cores;
+	vm->threads = threads;
+	vm->maxcpus = VM_MAXCPU;	/* XXX temp to keep code working */
+	return(0);
 }
 
 static void
@@ -473,7 +527,7 @@ vm_cleanup(struct vm *vm, bool destroy)
 	vatpic_cleanup(vm->vatpic);
 	vioapic_cleanup(vm->vioapic);
 
-	for (i = 0; i < VM_MAXCPU; i++)
+	for (i = 0; i < vm->maxcpus; i++)
 		vcpu_cleanup(vm, i, destroy);
 
 	VMCLEANUP(vm->cookie);
@@ -773,8 +827,8 @@ sysmem_mapping(struct vm *vm, struct mem_map *mm)
 		return (false);
 }
 
-static vm_paddr_t
-sysmem_maxaddr(struct vm *vm)
+vm_paddr_t
+vmm_sysmem_maxaddr(struct vm *vm)
 {
 	struct mem_map *mm;
 	vm_paddr_t maxaddr;
@@ -792,7 +846,7 @@ sysmem_maxaddr(struct vm *vm)
 }
 
 static void
-vm_iommu_modify(struct vm *vm, boolean_t map)
+vm_iommu_modify(struct vm *vm, bool map)
 {
 	int i, sz;
 	vm_paddr_t gpa, hpa;
@@ -855,8 +909,8 @@ vm_iommu_modify(struct vm *vm, boolean_t map)
 		iommu_invalidate_tlb(vm->iommu);
 }
 
-#define	vm_iommu_unmap(vm)	vm_iommu_modify((vm), FALSE)
-#define	vm_iommu_map(vm)	vm_iommu_modify((vm), TRUE)
+#define	vm_iommu_unmap(vm)	vm_iommu_modify((vm), false)
+#define	vm_iommu_map(vm)	vm_iommu_modify((vm), true)
 
 int
 vm_unassign_pptdev(struct vm *vm, int bus, int slot, int func)
@@ -883,7 +937,7 @@ vm_assign_pptdev(struct vm *vm, int bus, int slot, int func)
 	if (ppt_assigned_devices(vm) == 0) {
 		KASSERT(vm->iommu == NULL,
 		    ("vm_assign_pptdev: iommu must be NULL"));
-		maxaddr = sysmem_maxaddr(vm);
+		maxaddr = vmm_sysmem_maxaddr(vm);
 		vm->iommu = iommu_create_domain(maxaddr);
 		if (vm->iommu == NULL)
 			return (ENXIO);
@@ -908,9 +962,9 @@ vm_gpa_hold(struct vm *vm, int vcpuid, vm_paddr_t gpa, size_t len, int reqprot,
 	 * guaranteed if at least one vcpu is in the VCPU_FROZEN state.
 	 */
 	int state;
-	KASSERT(vcpuid >= -1 && vcpuid < VM_MAXCPU, ("%s: invalid vcpuid %d",
+	KASSERT(vcpuid >= -1 && vcpuid < vm->maxcpus, ("%s: invalid vcpuid %d",
 	    __func__, vcpuid));
-	for (i = 0; i < VM_MAXCPU; i++) {
+	for (i = 0; i < vm->maxcpus; i++) {
 		if (vcpuid != -1 && vcpuid != i)
 			continue;
 		state = vcpu_get_state(vm, i, NULL);
@@ -956,7 +1010,7 @@ int
 vm_get_register(struct vm *vm, int vcpu, int reg, uint64_t *retval)
 {
 
-	if (vcpu < 0 || vcpu >= VM_MAXCPU)
+	if (vcpu < 0 || vcpu >= vm->maxcpus)
 		return (EINVAL);
 
 	if (reg >= VM_REG_LAST)
@@ -971,7 +1025,7 @@ vm_set_register(struct vm *vm, int vcpuid, int reg, uint64_t val)
 	struct vcpu *vcpu;
 	int error;
 
-	if (vcpuid < 0 || vcpuid >= VM_MAXCPU)
+	if (vcpuid < 0 || vcpuid >= vm->maxcpus)
 		return (EINVAL);
 
 	if (reg >= VM_REG_LAST)
@@ -988,20 +1042,20 @@ vm_set_register(struct vm *vm, int vcpuid, int reg, uint64_t val)
 	return (0);
 }
 
-static boolean_t
+static bool
 is_descriptor_table(int reg)
 {
 
 	switch (reg) {
 	case VM_REG_GUEST_IDTR:
 	case VM_REG_GUEST_GDTR:
-		return (TRUE);
+		return (true);
 	default:
-		return (FALSE);
+		return (false);
 	}
 }
 
-static boolean_t
+static bool
 is_segment_register(int reg)
 {
 	
@@ -1014,9 +1068,9 @@ is_segment_register(int reg)
 	case VM_REG_GUEST_GS:
 	case VM_REG_GUEST_TR:
 	case VM_REG_GUEST_LDTR:
-		return (TRUE);
+		return (true);
 	default:
-		return (FALSE);
+		return (false);
 	}
 }
 
@@ -1025,7 +1079,7 @@ vm_get_seg_desc(struct vm *vm, int vcpu, int reg,
 		struct seg_desc *desc)
 {
 
-	if (vcpu < 0 || vcpu >= VM_MAXCPU)
+	if (vcpu < 0 || vcpu >= vm->maxcpus)
 		return (EINVAL);
 
 	if (!is_segment_register(reg) && !is_descriptor_table(reg))
@@ -1038,7 +1092,7 @@ int
 vm_set_seg_desc(struct vm *vm, int vcpu, int reg,
 		struct seg_desc *desc)
 {
-	if (vcpu < 0 || vcpu >= VM_MAXCPU)
+	if (vcpu < 0 || vcpu >= vm->maxcpus)
 		return (EINVAL);
 
 	if (!is_segment_register(reg) && !is_descriptor_table(reg))
@@ -1210,7 +1264,7 @@ static void
 vm_handle_rendezvous(struct vm *vm, int vcpuid)
 {
 
-	KASSERT(vcpuid == -1 || (vcpuid >= 0 && vcpuid < VM_MAXCPU),
+	KASSERT(vcpuid == -1 || (vcpuid >= 0 && vcpuid < vm->maxcpus),
 	    ("vm_handle_rendezvous: invalid vcpuid %d", vcpuid));
 
 	mtx_lock(&vm->rendezvous_mtx);
@@ -1279,6 +1333,9 @@ vm_handle_hlt(struct vm *vm, int vcpuid, bool intr_disabled, bool *retu)
 
 		/* Don't go to sleep if the vcpu thread needs to yield */
 		if (vcpu_should_yield(vm, vcpuid))
+			break;
+
+		if (vcpu_debugged(vm, vcpuid))
 			break;
 
 		/*
@@ -1486,7 +1543,7 @@ vm_handle_suspend(struct vm *vm, int vcpuid, bool *retu)
 	/*
 	 * Wakeup the other sleeping vcpus and return to userspace.
 	 */
-	for (i = 0; i < VM_MAXCPU; i++) {
+	for (i = 0; i < vm->maxcpus; i++) {
 		if (CPU_ISSET(i, &vm->suspended_cpus)) {
 			vcpu_notify_event(vm, i, false);
 		}
@@ -1528,7 +1585,7 @@ vm_suspend(struct vm *vm, enum vm_suspend_how how)
 	/*
 	 * Notify all active vcpus that they are now suspended.
 	 */
-	for (i = 0; i < VM_MAXCPU; i++) {
+	for (i = 0; i < vm->maxcpus; i++) {
 		if (CPU_ISSET(i, &vm->active_cpus))
 			vcpu_notify_event(vm, i, false);
 	}
@@ -1549,6 +1606,17 @@ vm_exit_suspended(struct vm *vm, int vcpuid, uint64_t rip)
 	vmexit->inst_length = 0;
 	vmexit->exitcode = VM_EXITCODE_SUSPENDED;
 	vmexit->u.suspended.how = vm->suspend;
+}
+
+void
+vm_exit_debug(struct vm *vm, int vcpuid, uint64_t rip)
+{
+	struct vm_exit *vmexit;
+
+	vmexit = vm_exitinfo(vm, vcpuid);
+	vmexit->rip = rip;
+	vmexit->inst_length = 0;
+	vmexit->exitcode = VM_EXITCODE_DEBUG;
 }
 
 void
@@ -1603,7 +1671,7 @@ vm_run(struct vm *vm, struct vm_run *vmrun)
 
 	vcpuid = vmrun->cpuid;
 
-	if (vcpuid < 0 || vcpuid >= VM_MAXCPU)
+	if (vcpuid < 0 || vcpuid >= vm->maxcpus)
 		return (EINVAL);
 
 	if (!CPU_ISSET(vcpuid, &vm->active_cpus))
@@ -1675,6 +1743,7 @@ restart:
 			break;
 		case VM_EXITCODE_MONITOR:
 		case VM_EXITCODE_MWAIT:
+		case VM_EXITCODE_VMINSN:
 			vm_inject_ud(vm, vcpuid);
 			break;
 		default:
@@ -1703,7 +1772,7 @@ vm_restart_instruction(void *arg, int vcpuid)
 	int error;
 
 	vm = arg;
-	if (vcpuid < 0 || vcpuid >= VM_MAXCPU)
+	if (vcpuid < 0 || vcpuid >= vm->maxcpus)
 		return (EINVAL);
 
 	vcpu = &vm->vcpu[vcpuid];
@@ -1742,7 +1811,7 @@ vm_exit_intinfo(struct vm *vm, int vcpuid, uint64_t info)
 	struct vcpu *vcpu;
 	int type, vector;
 
-	if (vcpuid < 0 || vcpuid >= VM_MAXCPU)
+	if (vcpuid < 0 || vcpuid >= vm->maxcpus)
 		return (EINVAL);
 
 	vcpu = &vm->vcpu[vcpuid];
@@ -1883,7 +1952,8 @@ vm_entry_intinfo(struct vm *vm, int vcpuid, uint64_t *retinfo)
 	uint64_t info1, info2;
 	int valid;
 
-	KASSERT(vcpuid >= 0 && vcpuid < VM_MAXCPU, ("invalid vcpu %d", vcpuid));
+	KASSERT(vcpuid >= 0 &&
+	    vcpuid < vm->maxcpus, ("invalid vcpu %d", vcpuid));
 
 	vcpu = &vm->vcpu[vcpuid];
 
@@ -1923,7 +1993,7 @@ vm_get_intinfo(struct vm *vm, int vcpuid, uint64_t *info1, uint64_t *info2)
 {
 	struct vcpu *vcpu;
 
-	if (vcpuid < 0 || vcpuid >= VM_MAXCPU)
+	if (vcpuid < 0 || vcpuid >= vm->maxcpus)
 		return (EINVAL);
 
 	vcpu = &vm->vcpu[vcpuid];
@@ -1940,7 +2010,7 @@ vm_inject_exception(struct vm *vm, int vcpuid, int vector, int errcode_valid,
 	uint64_t regval;
 	int error;
 
-	if (vcpuid < 0 || vcpuid >= VM_MAXCPU)
+	if (vcpuid < 0 || vcpuid >= vm->maxcpus)
 		return (EINVAL);
 
 	if (vector < 0 || vector >= 32)
@@ -2031,7 +2101,7 @@ vm_inject_nmi(struct vm *vm, int vcpuid)
 {
 	struct vcpu *vcpu;
 
-	if (vcpuid < 0 || vcpuid >= VM_MAXCPU)
+	if (vcpuid < 0 || vcpuid >= vm->maxcpus)
 		return (EINVAL);
 
 	vcpu = &vm->vcpu[vcpuid];
@@ -2046,7 +2116,7 @@ vm_nmi_pending(struct vm *vm, int vcpuid)
 {
 	struct vcpu *vcpu;
 
-	if (vcpuid < 0 || vcpuid >= VM_MAXCPU)
+	if (vcpuid < 0 || vcpuid >= vm->maxcpus)
 		panic("vm_nmi_pending: invalid vcpuid %d", vcpuid);
 
 	vcpu = &vm->vcpu[vcpuid];
@@ -2059,7 +2129,7 @@ vm_nmi_clear(struct vm *vm, int vcpuid)
 {
 	struct vcpu *vcpu;
 
-	if (vcpuid < 0 || vcpuid >= VM_MAXCPU)
+	if (vcpuid < 0 || vcpuid >= vm->maxcpus)
 		panic("vm_nmi_pending: invalid vcpuid %d", vcpuid);
 
 	vcpu = &vm->vcpu[vcpuid];
@@ -2078,7 +2148,7 @@ vm_inject_extint(struct vm *vm, int vcpuid)
 {
 	struct vcpu *vcpu;
 
-	if (vcpuid < 0 || vcpuid >= VM_MAXCPU)
+	if (vcpuid < 0 || vcpuid >= vm->maxcpus)
 		return (EINVAL);
 
 	vcpu = &vm->vcpu[vcpuid];
@@ -2093,7 +2163,7 @@ vm_extint_pending(struct vm *vm, int vcpuid)
 {
 	struct vcpu *vcpu;
 
-	if (vcpuid < 0 || vcpuid >= VM_MAXCPU)
+	if (vcpuid < 0 || vcpuid >= vm->maxcpus)
 		panic("vm_extint_pending: invalid vcpuid %d", vcpuid);
 
 	vcpu = &vm->vcpu[vcpuid];
@@ -2106,7 +2176,7 @@ vm_extint_clear(struct vm *vm, int vcpuid)
 {
 	struct vcpu *vcpu;
 
-	if (vcpuid < 0 || vcpuid >= VM_MAXCPU)
+	if (vcpuid < 0 || vcpuid >= vm->maxcpus)
 		panic("vm_extint_pending: invalid vcpuid %d", vcpuid);
 
 	vcpu = &vm->vcpu[vcpuid];
@@ -2121,7 +2191,7 @@ vm_extint_clear(struct vm *vm, int vcpuid)
 int
 vm_get_capability(struct vm *vm, int vcpu, int type, int *retval)
 {
-	if (vcpu < 0 || vcpu >= VM_MAXCPU)
+	if (vcpu < 0 || vcpu >= vm->maxcpus)
 		return (EINVAL);
 
 	if (type < 0 || type >= VM_CAP_MAX)
@@ -2133,7 +2203,7 @@ vm_get_capability(struct vm *vm, int vcpu, int type, int *retval)
 int
 vm_set_capability(struct vm *vm, int vcpu, int type, int val)
 {
-	if (vcpu < 0 || vcpu >= VM_MAXCPU)
+	if (vcpu < 0 || vcpu >= vm->maxcpus)
 		return (EINVAL);
 
 	if (type < 0 || type >= VM_CAP_MAX)
@@ -2162,12 +2232,12 @@ vm_hpet(struct vm *vm)
 	return (vm->vhpet);
 }
 
-boolean_t
+bool
 vmm_is_pptdev(int bus, int slot, int func)
 {
-	int found, i, n;
-	int b, s, f;
+	int b, f, i, n, s;
 	char *val, *cp, *cp2;
+	bool found;
 
 	/*
 	 * XXX
@@ -2181,7 +2251,7 @@ vmm_is_pptdev(int bus, int slot, int func)
 	const char *names[] = { "pptdevs", "pptdevs2", "pptdevs3", NULL };
 
 	/* set pptdevs="1/2/3 4/5/6 7/8/9 10/11/12" */
-	found = 0;
+	found = false;
 	for (i = 0; names[i] != NULL && !found; i++) {
 		cp = val = kern_getenv(names[i]);
 		while (cp != NULL && *cp != '\0') {
@@ -2190,7 +2260,7 @@ vmm_is_pptdev(int bus, int slot, int func)
 
 			n = sscanf(cp, "%d/%d/%d", &b, &s, &f);
 			if (n == 3 && bus == b && slot == s && func == f) {
-				found = 1;
+				found = true;
 				break;
 			}
 		
@@ -2218,7 +2288,7 @@ vcpu_set_state(struct vm *vm, int vcpuid, enum vcpu_state newstate,
 	int error;
 	struct vcpu *vcpu;
 
-	if (vcpuid < 0 || vcpuid >= VM_MAXCPU)
+	if (vcpuid < 0 || vcpuid >= vm->maxcpus)
 		panic("vm_set_run_state: invalid vcpuid %d", vcpuid);
 
 	vcpu = &vm->vcpu[vcpuid];
@@ -2236,7 +2306,7 @@ vcpu_get_state(struct vm *vm, int vcpuid, int *hostcpu)
 	struct vcpu *vcpu;
 	enum vcpu_state state;
 
-	if (vcpuid < 0 || vcpuid >= VM_MAXCPU)
+	if (vcpuid < 0 || vcpuid >= vm->maxcpus)
 		panic("vm_get_run_state: invalid vcpuid %d", vcpuid);
 
 	vcpu = &vm->vcpu[vcpuid];
@@ -2254,7 +2324,7 @@ int
 vm_activate_cpu(struct vm *vm, int vcpuid)
 {
 
-	if (vcpuid < 0 || vcpuid >= VM_MAXCPU)
+	if (vcpuid < 0 || vcpuid >= vm->maxcpus)
 		return (EINVAL);
 
 	if (CPU_ISSET(vcpuid, &vm->active_cpus))
@@ -2265,11 +2335,67 @@ vm_activate_cpu(struct vm *vm, int vcpuid)
 	return (0);
 }
 
+int
+vm_suspend_cpu(struct vm *vm, int vcpuid)
+{
+	int i;
+
+	if (vcpuid < -1 || vcpuid >= vm->maxcpus)
+		return (EINVAL);
+
+	if (vcpuid == -1) {
+		vm->debug_cpus = vm->active_cpus;
+		for (i = 0; i < vm->maxcpus; i++) {
+			if (CPU_ISSET(i, &vm->active_cpus))
+				vcpu_notify_event(vm, i, false);
+		}
+	} else {
+		if (!CPU_ISSET(vcpuid, &vm->active_cpus))
+			return (EINVAL);
+
+		CPU_SET_ATOMIC(vcpuid, &vm->debug_cpus);
+		vcpu_notify_event(vm, vcpuid, false);
+	}
+	return (0);
+}
+
+int
+vm_resume_cpu(struct vm *vm, int vcpuid)
+{
+
+	if (vcpuid < -1 || vcpuid >= vm->maxcpus)
+		return (EINVAL);
+
+	if (vcpuid == -1) {
+		CPU_ZERO(&vm->debug_cpus);
+	} else {
+		if (!CPU_ISSET(vcpuid, &vm->debug_cpus))
+			return (EINVAL);
+
+		CPU_CLR_ATOMIC(vcpuid, &vm->debug_cpus);
+	}
+	return (0);
+}
+
+int
+vcpu_debugged(struct vm *vm, int vcpuid)
+{
+
+	return (CPU_ISSET(vcpuid, &vm->debug_cpus));
+}
+
 cpuset_t
 vm_active_cpus(struct vm *vm)
 {
 
 	return (vm->active_cpus);
+}
+
+cpuset_t
+vm_debug_cpus(struct vm *vm)
+{
+
+	return (vm->debug_cpus);
 }
 
 cpuset_t
@@ -2289,7 +2415,7 @@ vcpu_stats(struct vm *vm, int vcpuid)
 int
 vm_get_x2apic_state(struct vm *vm, int vcpuid, enum x2apic_state *state)
 {
-	if (vcpuid < 0 || vcpuid >= VM_MAXCPU)
+	if (vcpuid < 0 || vcpuid >= vm->maxcpus)
 		return (EINVAL);
 
 	*state = vm->vcpu[vcpuid].x2apic_state;
@@ -2300,7 +2426,7 @@ vm_get_x2apic_state(struct vm *vm, int vcpuid, enum x2apic_state *state)
 int
 vm_set_x2apic_state(struct vm *vm, int vcpuid, enum x2apic_state state)
 {
-	if (vcpuid < 0 || vcpuid >= VM_MAXCPU)
+	if (vcpuid < 0 || vcpuid >= vm->maxcpus)
 		return (EINVAL);
 
 	if (state >= X2APIC_STATE_LAST)
@@ -2387,7 +2513,7 @@ vm_smp_rendezvous(struct vm *vm, int vcpuid, cpuset_t dest,
 	 * Enforce that this function is called without any locks
 	 */
 	WITNESS_WARN(WARN_PANIC, NULL, "vm_smp_rendezvous");
-	KASSERT(vcpuid == -1 || (vcpuid >= 0 && vcpuid < VM_MAXCPU),
+	KASSERT(vcpuid == -1 || (vcpuid >= 0 && vcpuid < vm->maxcpus),
 	    ("vm_smp_rendezvous: invalid vcpuid %d", vcpuid));
 
 restart:
@@ -2417,7 +2543,7 @@ restart:
 	 * Wake up any sleeping vcpus and trigger a VM-exit in any running
 	 * vcpus so they handle the rendezvous as soon as possible.
 	 */
-	for (i = 0; i < VM_MAXCPU; i++) {
+	for (i = 0; i < vm->maxcpus; i++) {
 		if (CPU_ISSET(i, &dest))
 			vcpu_notify_event(vm, i, false);
 	}

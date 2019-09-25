@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2015 Ruslan Bukin <br@bsdpad.com>
+ * Copyright (c) 2015-2018 Ruslan Bukin <br@bsdpad.com>
  * All rights reserved.
  *
  * Portions of this software were developed by SRI International and the
@@ -38,14 +38,16 @@
 #define	_MACHINE_CPU_H_
 
 #include <machine/atomic.h>
+#include <machine/cpufunc.h>
 #include <machine/frame.h>
 
 #define	TRAPF_PC(tfp)		((tfp)->tf_ra)
-#define	TRAPF_USERMODE(tfp)	(((tfp)->tf_sepc & (1ul << 63)) == 0)
+#define	TRAPF_USERMODE(tfp)	(((tfp)->tf_sstatus & SSTATUS_SPP) == 0)
 
 #define	cpu_getstack(td)	((td)->td_frame->tf_sp)
 #define	cpu_setstack(td, sp)	((td)->td_frame->tf_sp = (sp))
 #define	cpu_spinwait()		/* nothing */
+#define	cpu_lock_delay()	DELAY(1)
 
 #ifdef _KERNEL
 
@@ -67,11 +69,10 @@
 
 #define	CPU_PART_SHIFT		62
 #define	CPU_PART_MASK		(0x3ul << CPU_PART_SHIFT)
-#define	CPU_PART(mcpuid)	((mcpuid & CPU_PART_MASK) >> CPU_PART_SHIFT)
-#define	CPU_PART_RV32I		0x0
-#define	CPU_PART_RV32E		0x1
-#define	CPU_PART_RV64I		0x2
-#define	CPU_PART_RV128I		0x3
+#define	CPU_PART(misa)		((misa & CPU_PART_MASK) >> CPU_PART_SHIFT)
+#define	CPU_PART_RV32		0x1
+#define	CPU_PART_RV64		0x2
+#define	CPU_PART_RV128		0x3
 
 extern char btext[];
 extern char etext[];
@@ -86,8 +87,7 @@ static __inline uint64_t
 get_cyclecount(void)
 {
 
-	/* TODO: This is bogus */
-	return (1);
+	return (rdcycle());
 }
 
 #endif

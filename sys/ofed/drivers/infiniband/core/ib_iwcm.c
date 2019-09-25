@@ -35,9 +35,10 @@
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
- *
- * $FreeBSD$
  */
+
+#include <sys/cdefs.h>
+__FBSDID("$FreeBSD$");
 
 #include <linux/dma-mapping.h>
 #include <linux/err.h>
@@ -307,9 +308,9 @@ int iw_cm_disconnect(struct iw_cm_id *cm_id, int abrupt)
 
 	if (qp) {
 		if (abrupt)
-			ret = iwcm_modify_qp_err(qp);
+			(void) iwcm_modify_qp_err(qp);
 		else
-			ret = iwcm_modify_qp_sqd(qp);
+			(void) iwcm_modify_qp_sqd(qp);
 
 		/*
 		 * If both sides are disconnecting the QP could

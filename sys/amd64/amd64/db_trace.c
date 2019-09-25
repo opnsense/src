@@ -27,8 +27,6 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
-#include "opt_compat.h"
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kdb.h>
@@ -579,7 +577,7 @@ watchtype_str(type)
 
 
 void
-db_md_list_watchpoints()
+db_md_list_watchpoints(void)
 {
 	struct dbreg d;
 	int i, len, type;
@@ -599,7 +597,7 @@ db_md_list_watchpoints()
 				len++;
 			db_printf("  %-5d  %-8s  %10s  %3d  ",
 			    i, "enabled", watchtype_str(type), len);
-			db_printsym((db_addr_t)DBREG_DRX((&d), i), DB_STGY_ANY);
+			db_printsym((db_addr_t)DBREG_DRX(&d, i), DB_STGY_ANY);
 			db_printf("\n");
 		} else {
 			db_printf("  %-5d  disabled\n", i);
@@ -607,9 +605,9 @@ db_md_list_watchpoints()
 	}
 
 	db_printf("\ndebug register values:\n");
-	for (i = 0; i < 8; i++) {
-		db_printf("  dr%d 0x%016lx\n", i, DBREG_DRX((&d), i));
-	}
+	for (i = 0; i < 8; i++)
+		if (i != 4 && i != 5)
+			db_printf("  dr%d 0x%016lx\n", i, DBREG_DRX(&d, i));
 	db_printf("\n");
 }
 

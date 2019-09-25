@@ -9,12 +9,8 @@
 
 #include "CommandObjectSettings.h"
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
 #include "llvm/ADT/StringRef.h"
 
-// Project includes
 #include "lldb/Host/OptionParser.h"
 #include "lldb/Interpreter/CommandCompletions.h"
 #include "lldb/Interpreter/CommandInterpreter.h"
@@ -28,9 +24,10 @@ using namespace lldb_private;
 // CommandObjectSettingsSet
 //-------------------------------------------------------------------------
 
-static OptionDefinition g_settings_set_options[] = {
+static constexpr OptionDefinition g_settings_set_options[] = {
     // clang-format off
-  { LLDB_OPT_SET_2, false, "global", 'g', OptionParser::eNoArgument, nullptr, nullptr, 0, eArgTypeNone, "Apply the new value to the global default value." }
+  { LLDB_OPT_SET_2, false, "global", 'g', OptionParser::eNoArgument, nullptr, {}, 0, eArgTypeNone, "Apply the new value to the global default value." },
+  { LLDB_OPT_SET_2, false, "force",  'f', OptionParser::eNoArgument, nullptr, {}, 0, eArgTypeNone, "Force an empty value to be accepted as the default." }
     // clang-format on
 };
 
@@ -108,6 +105,9 @@ insert-before or insert-after.");
       const int short_option = m_getopt_table[option_idx].val;
 
       switch (short_option) {
+      case 'f':
+        m_force = true;
+        break;
       case 'g':
         m_global = true;
         break;
@@ -122,6 +122,7 @@ insert-before or insert-after.");
 
     void OptionParsingStarting(ExecutionContext *execution_context) override {
       m_global = false;
+      m_force = false;
     }
 
     llvm::ArrayRef<OptionDefinition> GetDefinitions() override {
@@ -129,36 +130,31 @@ insert-before or insert-after.");
     }
 
     // Instance variables to hold the values for command options.
-
     bool m_global;
+    bool m_force;
   };
 
-  int HandleArgumentCompletion(Args &input, int &cursor_index,
-                               int &cursor_char_position,
-                               OptionElementVector &opt_element_vector,
-                               int match_start_point, int max_return_elements,
-                               bool &word_complete,
-                               StringList &matches) override {
-    std::string completion_str(input.GetArgumentAtIndex(cursor_index),
-                               cursor_char_position);
+  int HandleArgumentCompletion(
+      CompletionRequest &request,
+      OptionElementVector &opt_element_vector) override {
 
-    const size_t argc = input.GetArgumentCount();
+    const size_t argc = request.GetParsedLine().GetArgumentCount();
     const char *arg = nullptr;
     int setting_var_idx;
-    for (setting_var_idx = 1; setting_var_idx < static_cast<int>(argc);
+    for (setting_var_idx = 0; setting_var_idx < static_cast<int>(argc);
          ++setting_var_idx) {
-      arg = input.GetArgumentAtIndex(setting_var_idx);
+      arg = request.GetParsedLine().GetArgumentAtIndex(setting_var_idx);
       if (arg && arg[0] != '-')
         break; // We found our setting variable name index
     }
-    if (cursor_index == setting_var_idx) {
+    if (request.GetCursorIndex() == setting_var_idx) {
       // Attempting to complete setting variable name
       CommandCompletions::InvokeCommonCompletionCallbacks(
           GetCommandInterpreter(), CommandCompletions::eSettingsNameCompletion,
-          completion_str.c_str(), match_start_point, max_return_elements,
-          nullptr, word_complete, matches);
+          request, nullptr);
     } else {
-      arg = input.GetArgumentAtIndex(cursor_index);
+      arg =
+          request.GetParsedLine().GetArgumentAtIndex(request.GetCursorIndex());
 
       if (arg) {
         if (arg[0] == '-') {
@@ -166,32 +162,33 @@ insert-before or insert-after.");
         } else {
           // Complete setting value
           const char *setting_var_name =
-              input.GetArgumentAtIndex(setting_var_idx);
+              request.GetParsedLine().GetArgumentAtIndex(setting_var_idx);
           Status error;
           lldb::OptionValueSP value_sp(
               m_interpreter.GetDebugger().GetPropertyValue(
                   &m_exe_ctx, setting_var_name, false, error));
           if (value_sp) {
-            value_sp->AutoComplete(m_interpreter, completion_str.c_str(),
-                                   match_start_point, max_return_elements,
-                                   word_complete, matches);
+            value_sp->AutoComplete(m_interpreter, request);
           }
         }
       }
     }
-    return matches.GetSize();
+    return request.GetNumberOfMatches();
   }
 
 protected:
-  bool DoExecute(const char *command, CommandReturnObject &result) override {
+  bool DoExecute(llvm::StringRef command,
+                 CommandReturnObject &result) override {
     Args cmd_args(command);
 
     // Process possible options.
     if (!ParseOptions(cmd_args, result))
       return false;
 
+    const size_t min_argc = m_options.m_force ? 1 : 2;
     const size_t argc = cmd_args.GetArgumentCount();
-    if ((argc < 2) && (!m_options.m_global)) {
+
+    if ((argc < min_argc) && (!m_options.m_global)) {
       result.AppendError("'settings set' takes more arguments");
       result.SetStatus(eReturnStatusFailed);
       return false;
@@ -203,6 +200,19 @@ protected:
           "'settings set' command requires a valid variable name");
       result.SetStatus(eReturnStatusFailed);
       return false;
+    }
+
+    // A missing value corresponds to clearing the setting when "force" is
+    // specified.
+    if (argc == 1 && m_options.m_force) {
+      Status error(m_interpreter.GetDebugger().SetPropertyValue(
+          &m_exe_ctx, eVarSetOperationClear, var_name, llvm::StringRef()));
+      if (error.Fail()) {
+        result.AppendError(error.AsCString());
+        result.SetStatus(eReturnStatusFailed);
+        return false;
+      }
+      return result.Succeeded();
     }
 
     // Split the raw command into var_name and value pair.
@@ -220,10 +230,8 @@ protected:
     if (error.Success()) {
       // FIXME this is the same issue as the one in commands script import
       // we could be setting target.load-script-from-symbol-file which would
-      // cause
-      // Python scripts to be loaded, which could run LLDB commands
-      // (e.g. settings set target.process.python-os-plugin-path) and cause a
-      // crash
+      // cause Python scripts to be loaded, which could run LLDB commands (e.g.
+      // settings set target.process.python-os-plugin-path) and cause a crash
       // if we did not clear the command's exe_ctx first
       ExecutionContext exe_ctx(m_exe_ctx);
       m_exe_ctx.Clear();
@@ -274,20 +282,13 @@ public:
 
   ~CommandObjectSettingsShow() override = default;
 
-  int HandleArgumentCompletion(Args &input, int &cursor_index,
-                               int &cursor_char_position,
-                               OptionElementVector &opt_element_vector,
-                               int match_start_point, int max_return_elements,
-                               bool &word_complete,
-                               StringList &matches) override {
-    std::string completion_str(input.GetArgumentAtIndex(cursor_index),
-                               cursor_char_position);
-
+  int HandleArgumentCompletion(
+      CompletionRequest &request,
+      OptionElementVector &opt_element_vector) override {
     CommandCompletions::InvokeCommonCompletionCallbacks(
         GetCommandInterpreter(), CommandCompletions::eSettingsNameCompletion,
-        completion_str.c_str(), match_start_point, max_return_elements, nullptr,
-        word_complete, matches);
-    return matches.GetSize();
+        request, nullptr);
+    return request.GetNumberOfMatches();
   }
 
 protected:
@@ -313,6 +314,210 @@ protected:
 
     return result.Succeeded();
   }
+};
+
+//-------------------------------------------------------------------------
+// CommandObjectSettingsWrite -- Write settings to file
+//-------------------------------------------------------------------------
+
+static constexpr OptionDefinition g_settings_write_options[] = {
+    // clang-format off
+  { LLDB_OPT_SET_ALL, true,  "file",  'f', OptionParser::eRequiredArgument, nullptr, {}, CommandCompletions::eDiskFileCompletion, eArgTypeFilename,    "The file into which to write the settings." },
+  { LLDB_OPT_SET_ALL, false, "append",'a', OptionParser::eNoArgument,       nullptr, {}, 0,                                       eArgTypeNone,        "Append to saved settings file if it exists."},
+    // clang-format on
+};
+
+class CommandObjectSettingsWrite : public CommandObjectParsed {
+public:
+  CommandObjectSettingsWrite(CommandInterpreter &interpreter)
+      : CommandObjectParsed(
+            interpreter, "settings export",
+            "Write matching debugger settings and their "
+            "current values to a file that can be read in with "
+            "\"settings read\". Defaults to writing all settings.",
+            nullptr),
+        m_options() {
+    CommandArgumentEntry arg1;
+    CommandArgumentData var_name_arg;
+
+    // Define the first (and only) variant of this arg.
+    var_name_arg.arg_type = eArgTypeSettingVariableName;
+    var_name_arg.arg_repetition = eArgRepeatOptional;
+
+    // There is only one variant this argument could be; put it into the
+    // argument entry.
+    arg1.push_back(var_name_arg);
+
+    // Push the data for the first argument into the m_arguments vector.
+    m_arguments.push_back(arg1);
+  }
+
+  ~CommandObjectSettingsWrite() override = default;
+
+  Options *GetOptions() override { return &m_options; }
+
+  class CommandOptions : public Options {
+  public:
+    CommandOptions() : Options() {}
+
+    ~CommandOptions() override = default;
+
+    Status SetOptionValue(uint32_t option_idx, llvm::StringRef option_arg,
+                          ExecutionContext *execution_context) override {
+      Status error;
+      const int short_option = m_getopt_table[option_idx].val;
+
+      switch (short_option) {
+      case 'f':
+        m_filename.assign(option_arg);
+        break;
+      case 'a':
+        m_append = true;
+        break;
+      default:
+        error.SetErrorStringWithFormat("unrecognized option '%c'",
+                                       short_option);
+        break;
+      }
+
+      return error;
+    }
+
+    void OptionParsingStarting(ExecutionContext *execution_context) override {
+      m_filename.clear();
+      m_append = false;
+    }
+
+    llvm::ArrayRef<OptionDefinition> GetDefinitions() override {
+      return llvm::makeArrayRef(g_settings_write_options);
+    }
+
+    // Instance variables to hold the values for command options.
+    std::string m_filename;
+    bool m_append = false;
+  };
+
+protected:
+  bool DoExecute(Args &args, CommandReturnObject &result) override {
+    FileSpec file_spec(m_options.m_filename);
+    FileSystem::Instance().Resolve(file_spec);
+    std::string path(file_spec.GetPath());
+    uint32_t options = File::OpenOptions::eOpenOptionWrite |
+                       File::OpenOptions::eOpenOptionCanCreate;
+    if (m_options.m_append)
+      options |= File::OpenOptions::eOpenOptionAppend;
+    else
+      options |= File::OpenOptions::eOpenOptionTruncate;
+
+    StreamFile out_file(path.c_str(), options,
+                        lldb::eFilePermissionsFileDefault);
+
+    if (!out_file.GetFile().IsValid()) {
+      result.AppendErrorWithFormat("%s: unable to write to file", path.c_str());
+      result.SetStatus(eReturnStatusFailed);
+      return false;
+    }
+
+    // Exporting should not be context sensitive.
+    ExecutionContext clean_ctx;
+
+    if (args.empty()) {
+      m_interpreter.GetDebugger().DumpAllPropertyValues(
+          &clean_ctx, out_file, OptionValue::eDumpGroupExport);
+      return result.Succeeded();
+    }
+
+    for (const auto &arg : args) {
+      Status error(m_interpreter.GetDebugger().DumpPropertyValue(
+          &clean_ctx, out_file, arg.ref, OptionValue::eDumpGroupExport));
+      if (!error.Success()) {
+        result.AppendError(error.AsCString());
+        result.SetStatus(eReturnStatusFailed);
+      }
+    }
+
+    return result.Succeeded();
+  }
+
+private:
+  CommandOptions m_options;
+};
+
+//-------------------------------------------------------------------------
+// CommandObjectSettingsRead -- Read settings from file
+//-------------------------------------------------------------------------
+
+static constexpr OptionDefinition g_settings_read_options[] = {
+    // clang-format off
+  {LLDB_OPT_SET_ALL, true, "file",'f', OptionParser::eRequiredArgument, nullptr, {}, CommandCompletions::eDiskFileCompletion, eArgTypeFilename,       "The file from which to read the breakpoints." },
+    // clang-format on
+};
+
+class CommandObjectSettingsRead : public CommandObjectParsed {
+public:
+  CommandObjectSettingsRead(CommandInterpreter &interpreter)
+      : CommandObjectParsed(
+            interpreter, "settings read",
+            "Read settings previously saved to a file with \"settings write\".",
+            nullptr),
+        m_options() {}
+
+  ~CommandObjectSettingsRead() override = default;
+
+  Options *GetOptions() override { return &m_options; }
+
+  class CommandOptions : public Options {
+  public:
+    CommandOptions() : Options() {}
+
+    ~CommandOptions() override = default;
+
+    Status SetOptionValue(uint32_t option_idx, llvm::StringRef option_arg,
+                          ExecutionContext *execution_context) override {
+      Status error;
+      const int short_option = m_getopt_table[option_idx].val;
+
+      switch (short_option) {
+      case 'f':
+        m_filename.assign(option_arg);
+        break;
+      default:
+        error.SetErrorStringWithFormat("unrecognized option '%c'",
+                                       short_option);
+        break;
+      }
+
+      return error;
+    }
+
+    void OptionParsingStarting(ExecutionContext *execution_context) override {
+      m_filename.clear();
+    }
+
+    llvm::ArrayRef<OptionDefinition> GetDefinitions() override {
+      return llvm::makeArrayRef(g_settings_read_options);
+    }
+
+    // Instance variables to hold the values for command options.
+    std::string m_filename;
+  };
+
+protected:
+  bool DoExecute(Args &command, CommandReturnObject &result) override {
+    FileSpec file(m_options.m_filename);
+    FileSystem::Instance().Resolve(file);
+    ExecutionContext clean_ctx;
+    CommandInterpreterRunOptions options;
+    options.SetAddToHistory(false);
+    options.SetEchoCommands(false);
+    options.SetPrintResults(true);
+    options.SetStopOnError(false);
+    m_interpreter.HandleCommandsFromFile(file, &clean_ctx, options, result);
+    return result.Succeeded();
+  }
+
+private:
+  CommandOptions m_options;
 };
 
 //-------------------------------------------------------------------------
@@ -347,20 +552,13 @@ public:
 
   ~CommandObjectSettingsList() override = default;
 
-  int HandleArgumentCompletion(Args &input, int &cursor_index,
-                               int &cursor_char_position,
-                               OptionElementVector &opt_element_vector,
-                               int match_start_point, int max_return_elements,
-                               bool &word_complete,
-                               StringList &matches) override {
-    std::string completion_str(input.GetArgumentAtIndex(cursor_index),
-                               cursor_char_position);
-
+  int HandleArgumentCompletion(
+      CompletionRequest &request,
+      OptionElementVector &opt_element_vector) override {
     CommandCompletions::InvokeCommonCompletionCallbacks(
         GetCommandInterpreter(), CommandCompletions::eSettingsNameCompletion,
-        completion_str.c_str(), match_start_point, max_return_elements, nullptr,
-        word_complete, matches);
-    return matches.GetSize();
+        request, nullptr);
+    return request.GetNumberOfMatches();
   }
 
 protected:
@@ -442,26 +640,19 @@ public:
 
   ~CommandObjectSettingsRemove() override = default;
 
-  int HandleArgumentCompletion(Args &input, int &cursor_index,
-                               int &cursor_char_position,
-                               OptionElementVector &opt_element_vector,
-                               int match_start_point, int max_return_elements,
-                               bool &word_complete,
-                               StringList &matches) override {
-    std::string completion_str(input.GetArgumentAtIndex(cursor_index),
-                               cursor_char_position);
-
-    // Attempting to complete variable name
-    if (cursor_index < 2)
+  int HandleArgumentCompletion(
+      CompletionRequest &request,
+      OptionElementVector &opt_element_vector) override {
+    if (request.GetCursorIndex() < 2)
       CommandCompletions::InvokeCommonCompletionCallbacks(
           GetCommandInterpreter(), CommandCompletions::eSettingsNameCompletion,
-          completion_str.c_str(), match_start_point, max_return_elements,
-          nullptr, word_complete, matches);
-    return matches.GetSize();
+          request, nullptr);
+    return request.GetNumberOfMatches();
   }
 
 protected:
-  bool DoExecute(const char *command, CommandReturnObject &result) override {
+  bool DoExecute(llvm::StringRef command,
+                 CommandReturnObject &result) override {
     result.SetStatus(eReturnStatusSuccessFinishNoResult);
 
     Args cmd_args(command);
@@ -564,27 +755,21 @@ public:
   // !WantsRawCommandString.
   bool WantsCompletion() override { return true; }
 
-  int HandleArgumentCompletion(Args &input, int &cursor_index,
-                               int &cursor_char_position,
-                               OptionElementVector &opt_element_vector,
-                               int match_start_point, int max_return_elements,
-                               bool &word_complete,
-                               StringList &matches) override {
-    std::string completion_str(input.GetArgumentAtIndex(cursor_index),
-                               cursor_char_position);
-
+  int HandleArgumentCompletion(
+      CompletionRequest &request,
+      OptionElementVector &opt_element_vector) override {
     // Attempting to complete variable name
-    if (cursor_index < 2)
+    if (request.GetCursorIndex() < 2)
       CommandCompletions::InvokeCommonCompletionCallbacks(
           GetCommandInterpreter(), CommandCompletions::eSettingsNameCompletion,
-          completion_str.c_str(), match_start_point, max_return_elements,
-          nullptr, word_complete, matches);
+          request, nullptr);
 
-    return matches.GetSize();
+    return request.GetNumberOfMatches();
   }
 
 protected:
-  bool DoExecute(const char *command, CommandReturnObject &result) override {
+  bool DoExecute(llvm::StringRef command,
+                 CommandReturnObject &result) override {
     result.SetStatus(eReturnStatusSuccessFinishNoResult);
 
     Args cmd_args(command);
@@ -670,27 +855,21 @@ public:
   // !WantsRawCommandString.
   bool WantsCompletion() override { return true; }
 
-  int HandleArgumentCompletion(Args &input, int &cursor_index,
-                               int &cursor_char_position,
-                               OptionElementVector &opt_element_vector,
-                               int match_start_point, int max_return_elements,
-                               bool &word_complete,
-                               StringList &matches) override {
-    std::string completion_str(input.GetArgumentAtIndex(cursor_index),
-                               cursor_char_position);
-
+  int HandleArgumentCompletion(
+      CompletionRequest &request,
+      OptionElementVector &opt_element_vector) override {
     // Attempting to complete variable name
-    if (cursor_index < 2)
+    if (request.GetCursorIndex() < 2)
       CommandCompletions::InvokeCommonCompletionCallbacks(
           GetCommandInterpreter(), CommandCompletions::eSettingsNameCompletion,
-          completion_str.c_str(), match_start_point, max_return_elements,
-          nullptr, word_complete, matches);
+          request, nullptr);
 
-    return matches.GetSize();
+    return request.GetNumberOfMatches();
   }
 
 protected:
-  bool DoExecute(const char *command, CommandReturnObject &result) override {
+  bool DoExecute(llvm::StringRef command,
+                 CommandReturnObject &result) override {
     result.SetStatus(eReturnStatusSuccessFinishNoResult);
 
     Args cmd_args(command);
@@ -781,27 +960,21 @@ public:
   // !WantsRawCommandString.
   bool WantsCompletion() override { return true; }
 
-  int HandleArgumentCompletion(Args &input, int &cursor_index,
-                               int &cursor_char_position,
-                               OptionElementVector &opt_element_vector,
-                               int match_start_point, int max_return_elements,
-                               bool &word_complete,
-                               StringList &matches) override {
-    std::string completion_str(input.GetArgumentAtIndex(cursor_index),
-                               cursor_char_position);
-
+  int HandleArgumentCompletion(
+      CompletionRequest &request,
+      OptionElementVector &opt_element_vector) override {
     // Attempting to complete variable name
-    if (cursor_index < 2)
+    if (request.GetCursorIndex() < 2)
       CommandCompletions::InvokeCommonCompletionCallbacks(
           GetCommandInterpreter(), CommandCompletions::eSettingsNameCompletion,
-          completion_str.c_str(), match_start_point, max_return_elements,
-          nullptr, word_complete, matches);
+          request, nullptr);
 
-    return matches.GetSize();
+    return request.GetNumberOfMatches();
   }
 
 protected:
-  bool DoExecute(const char *command, CommandReturnObject &result) override {
+  bool DoExecute(llvm::StringRef command,
+                 CommandReturnObject &result) override {
     result.SetStatus(eReturnStatusSuccessFinishNoResult);
 
     Args cmd_args(command);
@@ -881,27 +1054,21 @@ public:
   // !WantsRawCommandString.
   bool WantsCompletion() override { return true; }
 
-  int HandleArgumentCompletion(Args &input, int &cursor_index,
-                               int &cursor_char_position,
-                               OptionElementVector &opt_element_vector,
-                               int match_start_point, int max_return_elements,
-                               bool &word_complete,
-                               StringList &matches) override {
-    std::string completion_str(input.GetArgumentAtIndex(cursor_index),
-                               cursor_char_position);
-
+  int HandleArgumentCompletion(
+      CompletionRequest &request,
+      OptionElementVector &opt_element_vector) override {
     // Attempting to complete variable name
-    if (cursor_index < 2)
+    if (request.GetCursorIndex() < 2)
       CommandCompletions::InvokeCommonCompletionCallbacks(
           GetCommandInterpreter(), CommandCompletions::eSettingsNameCompletion,
-          completion_str.c_str(), match_start_point, max_return_elements,
-          nullptr, word_complete, matches);
+          request, nullptr);
 
-    return matches.GetSize();
+    return request.GetNumberOfMatches();
   }
 
 protected:
-  bool DoExecute(const char *command, CommandReturnObject &result) override {
+  bool DoExecute(llvm::StringRef command,
+                 CommandReturnObject &result) override {
     result.SetStatus(eReturnStatusSuccessFinishNoResult);
     Args cmd_args(command);
     const size_t argc = cmd_args.GetArgumentCount();
@@ -920,8 +1087,8 @@ protected:
       return false;
     }
 
-    // Do not perform cmd_args.Shift() since StringRef is manipulating the
-    // raw character string later on.
+    // Do not perform cmd_args.Shift() since StringRef is manipulating the raw
+    // character string later on.
 
     // Split the raw command into var_name and value pair.
     llvm::StringRef raw_str(command);
@@ -968,23 +1135,16 @@ public:
 
   ~CommandObjectSettingsClear() override = default;
 
-  int HandleArgumentCompletion(Args &input, int &cursor_index,
-                               int &cursor_char_position,
-                               OptionElementVector &opt_element_vector,
-                               int match_start_point, int max_return_elements,
-                               bool &word_complete,
-                               StringList &matches) override {
-    std::string completion_str(input.GetArgumentAtIndex(cursor_index),
-                               cursor_char_position);
-
+  int HandleArgumentCompletion(
+      CompletionRequest &request,
+      OptionElementVector &opt_element_vector) override {
     // Attempting to complete variable name
-    if (cursor_index < 2)
+    if (request.GetCursorIndex() < 2)
       CommandCompletions::InvokeCommonCompletionCallbacks(
           GetCommandInterpreter(), CommandCompletions::eSettingsNameCompletion,
-          completion_str.c_str(), match_start_point, max_return_elements,
-          nullptr, word_complete, matches);
+          request, nullptr);
 
-    return matches.GetSize();
+    return request.GetNumberOfMatches();
   }
 
 protected:
@@ -1047,6 +1207,10 @@ CommandObjectMultiwordSettings::CommandObjectMultiwordSettings(
                  CommandObjectSP(new CommandObjectSettingsAppend(interpreter)));
   LoadSubCommand("clear",
                  CommandObjectSP(new CommandObjectSettingsClear(interpreter)));
+  LoadSubCommand("write",
+                 CommandObjectSP(new CommandObjectSettingsWrite(interpreter)));
+  LoadSubCommand("read",
+                 CommandObjectSP(new CommandObjectSettingsRead(interpreter)));
 }
 
 CommandObjectMultiwordSettings::~CommandObjectMultiwordSettings() = default;

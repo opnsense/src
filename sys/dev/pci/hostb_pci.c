@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1997, Stefan Esser <se@freebsd.org>
  * All rights reserved.
  *
@@ -37,7 +39,7 @@ __FBSDID("$FreeBSD$");
 
 /*
  * Provide a device to "eat" the host->pci bridge devices that show up
- * on PCI busses and stop them showing up twice on the probes.  This also
+ * on PCI buses and stop them showing up twice on the probes.  This also
  * stops them showing up as 'none' in pciconf -l.  If the host bridge
  * provides an AGP capability then we create a child agp device for the
  * agp GART driver to attach to.

@@ -105,7 +105,7 @@ class VirtRegMap;
     /// Calculate the spill weight to assign to a single instruction.
     static float getSpillWeight(bool isDef, bool isUse,
                                 const MachineBlockFrequencyInfo *MBFI,
-                                const MachineInstr &Instr);
+                                const MachineInstr &MI);
 
     /// Calculate the spill weight to assign to a single instruction.
     static float getSpillWeight(bool isDef, bool isUse,
@@ -198,10 +198,10 @@ class VirtRegMap;
     void pruneValue(LiveRange &LR, SlotIndex Kill,
                     SmallVectorImpl<SlotIndex> *EndPoints);
 
-    /// This function should not be used. Its intend is to tell you that
-    /// you are doing something wrong if you call pruveValue directly on a
+    /// This function should not be used. Its intent is to tell you that you are
+    /// doing something wrong if you call pruneValue directly on a
     /// LiveInterval. Indeed, you are supposed to call pruneValue on the main
-    /// LiveRange and all the LiveRange of the subranges if any.
+    /// LiveRange and all the LiveRanges of the subranges if any.
     LLVM_ATTRIBUTE_UNUSED void pruneValue(LiveInterval &, SlotIndex,
                                           SmallVectorImpl<SlotIndex> *) {
       llvm_unreachable(
@@ -462,6 +462,10 @@ class VirtRegMap;
     void computeRegUnitRange(LiveRange&, unsigned Unit);
     void computeVirtRegInterval(LiveInterval&);
 
+    using ShrinkToUsesWorkList = SmallVector<std::pair<SlotIndex, VNInfo*>, 16>;
+    void extendSegmentsToUses(LiveRange &Segments,
+                              ShrinkToUsesWorkList &WorkList, unsigned Reg,
+                              LaneBitmask LaneMask);
 
     /// Helper function for repairIntervalsInRange(), walks backwards and
     /// creates/modifies live segments in \p LR to match the operands found.

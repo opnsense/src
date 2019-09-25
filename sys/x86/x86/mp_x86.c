@@ -31,7 +31,6 @@ __FBSDID("$FreeBSD$");
 #include "opt_apic.h"
 #endif
 #include "opt_cpu.h"
-#include "opt_isa.h"
 #include "opt_kstack_pages.h"
 #include "opt_pmap.h"
 #include "opt_sched.h"
@@ -45,6 +44,7 @@ __FBSDID("$FreeBSD$");
 #ifdef GPROF 
 #include <sys/gmon.h>
 #endif
+#include <sys/kdb.h>
 #include <sys/kernel.h>
 #include <sys/ktr.h>
 #include <sys/lock.h>
@@ -62,9 +62,11 @@ __FBSDID("$FreeBSD$");
 #include <vm/pmap.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_extern.h>
+#include <vm/vm_map.h>
 
 #include <x86/apicreg.h>
 #include <machine/clock.h>
+#include <machine/cpu.h>
 #include <machine/cputypes.h>
 #include <x86/mca.h>
 #include <machine/md_var.h>
@@ -72,15 +74,15 @@ __FBSDID("$FreeBSD$");
 #include <machine/psl.h>
 #include <machine/smp.h>
 #include <machine/specialreg.h>
-#include <machine/cpu.h>
+#include <x86/ucode.h>
+
+static MALLOC_DEFINE(M_CPUS, "cpus", "CPU items");
 
 /* lock region used by kernel profiling */
 int	mcount_lock;
 
 int	mp_naps;		/* # of Applications processors */
 int	boot_cpu_id = -1;	/* designated BSP */
-
-extern	struct pcpu __pcpu[];
 
 /* AP uses this during bootstrap.  Do not staticize.  */
 char *bootSTK;
@@ -127,9 +129,13 @@ volatile int aps_ready = 0;
  * Store data from cpu_add() until later in the boot when we actually setup
  * the APs.
  */
-struct cpu_info cpu_info[MAX_APIC_ID + 1];
-int apic_cpuids[MAX_APIC_ID + 1];
+struct cpu_info *cpu_info;
+int *apic_cpuids;
 int cpu_apic_ids[MAXCPU];
+_Static_assert(MAXCPU <= MAX_APIC_ID,
+    "MAXCPU cannot be larger that MAX_APIC_ID");
+_Static_assert(xAPIC_MAX_APIC_ID <= MAX_APIC_ID,
+    "xAPIC_MAX_APIC_ID cannot be larger that MAX_APIC_ID");
 
 /* Holds pending bitmap based IPIs per CPU */
 volatile u_int cpu_ipi_pending[MAXCPU];
@@ -144,6 +150,7 @@ SYSCTL_INT(_machdep, OID_AUTO, hyperthreading_allowed, CTLFLAG_RDTUN,
 static struct topo_node topo_root;
 
 static int pkg_id_shift;
+static int node_id_shift;
 static int core_id_shift;
 static int disabled_cpus;
 
@@ -151,6 +158,10 @@ struct cache_info {
 	int	id_shift;
 	int	present;
 } static caches[MAX_CACHE_LEVELS];
+
+unsigned int boot_address;
+
+#define MiB(v)	(v ## ULL << 20)
 
 void
 mem_range_AP_init(void)
@@ -202,14 +213,14 @@ add_deterministic_cache(int type, int level, int share_count)
 
 	if (caches[level - 1].id_shift > pkg_id_shift) {
 		printf("WARNING: L%u data cache covers more "
-		    "APIC IDs than a package\n", level);
-		printf("%u > %u\n", caches[level - 1].id_shift, pkg_id_shift);
+		    "APIC IDs than a package (%u > %u)\n", level,
+		    caches[level - 1].id_shift, pkg_id_shift);
 		caches[level - 1].id_shift = pkg_id_shift;
 	}
 	if (caches[level - 1].id_shift < core_id_shift) {
-		printf("WARNING: L%u data cache covers less "
-		    "APIC IDs than a core\n", level);
-		printf("%u < %u\n", caches[level - 1].id_shift, core_id_shift);
+		printf("WARNING: L%u data cache covers fewer "
+		    "APIC IDs than a core (%u < %u)\n", level,
+		    caches[level - 1].id_shift, core_id_shift);
 		caches[level - 1].id_shift = core_id_shift;
 	}
 
@@ -224,6 +235,7 @@ add_deterministic_cache(int type, int level, int share_count)
  *  - BKDG For AMD Family 10h Processors (Publication # 31116)
  *  - BKDG For AMD Family 15h Models 00h-0Fh Processors (Publication # 42301)
  *  - BKDG For AMD Family 16h Models 00h-0Fh Processors (Publication # 48751)
+ *  - PPR For AMD Family 17h Models 00h-0Fh Processors (Publication # 54945)
  */
 static void
 topo_probe_amd(void)
@@ -263,6 +275,15 @@ topo_probe_amd(void)
 		cpuid_count(0x8000001e, 0, p);
 		share_count = ((p[1] >> 8) & 0xff) + 1;
 		core_id_shift = mask_width(share_count);
+
+		/*
+		 * For Zen (17h), gather Nodes per Processor.  Each node is a
+		 * Zeppelin die; TR and EPYC CPUs will have multiple dies per
+		 * package.  Communication latency between dies is higher than
+		 * within them.
+		 */
+		nodes_per_socket = ((p[2] >> 8) & 0x7) + 1;
+		node_id_shift = pkg_id_shift - mask_width(nodes_per_socket);
 	}
 
 	if ((amd_feature2 & AMDID2_TOPOLOGY) != 0) {
@@ -472,7 +493,7 @@ topo_probe(void)
 		int type;
 		int subtype;
 		int id_shift;
-	} topo_layers[MAX_CACHE_LEVELS + 3];
+	} topo_layers[MAX_CACHE_LEVELS + 4];
 	struct topo_node *parent;
 	struct topo_node *node;
 	int layer;
@@ -504,6 +525,15 @@ topo_probe(void)
 		printf("Package ID shift: %u\n", topo_layers[nlayers].id_shift);
 	nlayers++;
 
+	if (pkg_id_shift > node_id_shift && node_id_shift != 0) {
+		topo_layers[nlayers].type = TOPO_TYPE_GROUP;
+		topo_layers[nlayers].id_shift = node_id_shift;
+		if (bootverbose)
+			printf("Node ID shift: %u\n",
+			    topo_layers[nlayers].id_shift);
+		nlayers++;
+	}
+
 	/*
 	 * Consider all caches to be within a package/chip
 	 * and "in front" of all sub-components like
@@ -511,6 +541,9 @@ topo_probe(void)
 	 */
 	for (i = MAX_CACHE_LEVELS - 1; i >= 0; --i) {
 		if (caches[i].present) {
+			if (node_id_shift != 0)
+				KASSERT(caches[i].id_shift <= node_id_shift,
+					("bug in APIC topology discovery"));
 			KASSERT(caches[i].id_shift <= pkg_id_shift,
 				("bug in APIC topology discovery"));
 			KASSERT(caches[i].id_shift >= core_id_shift,
@@ -541,7 +574,7 @@ topo_probe(void)
 	nlayers++;
 
 	topo_init_root(&topo_root);
-	for (i = 0; i <= MAX_APIC_ID; ++i) {
+	for (i = 0; i <= max_apic_id; ++i) {
 		if (!cpu_info[i].cpu_present)
 			continue;
 
@@ -629,18 +662,23 @@ cpu_mp_announce(void)
 {
 	struct topo_node *node;
 	const char *hyperthread;
-	int pkg_count;
-	int cores_per_pkg;
-	int thrs_per_core;
+	struct topo_analysis topology;
 
 	printf("FreeBSD/SMP: ");
-	if (topo_analyze(&topo_root, 1, &pkg_count,
-	    &cores_per_pkg, &thrs_per_core)) {
-		printf("%d package(s)", pkg_count);
-		if (cores_per_pkg > 0)
-			printf(" x %d core(s)", cores_per_pkg);
-		if (thrs_per_core > 1)
-		    printf(" x %d hardware threads", thrs_per_core);
+	if (topo_analyze(&topo_root, 1, &topology)) {
+		printf("%d package(s)", topology.entities[TOPO_LEVEL_PKG]);
+		if (topology.entities[TOPO_LEVEL_GROUP] > 1)
+			printf(" x %d groups",
+			    topology.entities[TOPO_LEVEL_GROUP]);
+		if (topology.entities[TOPO_LEVEL_CACHEGROUP] > 1)
+			printf(" x %d cache groups",
+			    topology.entities[TOPO_LEVEL_CACHEGROUP]);
+		if (topology.entities[TOPO_LEVEL_CORE] > 0)
+			printf(" x %d core(s)",
+			    topology.entities[TOPO_LEVEL_CORE]);
+		if (topology.entities[TOPO_LEVEL_THREAD] > 1)
+			printf(" x %d hardware threads",
+			    topology.entities[TOPO_LEVEL_THREAD]);
 	} else {
 		printf("Non-uniform topology");
 	}
@@ -648,13 +686,21 @@ cpu_mp_announce(void)
 
 	if (disabled_cpus) {
 		printf("FreeBSD/SMP Online: ");
-		if (topo_analyze(&topo_root, 0, &pkg_count,
-		    &cores_per_pkg, &thrs_per_core)) {
-			printf("%d package(s)", pkg_count);
-			if (cores_per_pkg > 0)
-				printf(" x %d core(s)", cores_per_pkg);
-			if (thrs_per_core > 1)
-			    printf(" x %d hardware threads", thrs_per_core);
+		if (topo_analyze(&topo_root, 0, &topology)) {
+			printf("%d package(s)",
+			    topology.entities[TOPO_LEVEL_PKG]);
+			if (topology.entities[TOPO_LEVEL_GROUP] > 1)
+				printf(" x %d groups",
+				    topology.entities[TOPO_LEVEL_GROUP]);
+			if (topology.entities[TOPO_LEVEL_CACHEGROUP] > 1)
+				printf(" x %d cache groups",
+				    topology.entities[TOPO_LEVEL_CACHEGROUP]);
+			if (topology.entities[TOPO_LEVEL_CORE] > 0)
+				printf(" x %d core(s)",
+				    topology.entities[TOPO_LEVEL_CORE]);
+			if (topology.entities[TOPO_LEVEL_THREAD] > 1)
+				printf(" x %d hardware threads",
+				    topology.entities[TOPO_LEVEL_THREAD]);
 		} else {
 			printf("Non-uniform topology");
 		}
@@ -667,12 +713,10 @@ cpu_mp_announce(void)
 	TOPO_FOREACH(node, &topo_root) {
 		switch (node->type) {
 		case TOPO_TYPE_PKG:
-			printf("Package HW ID = %u (%#x)\n",
-			    node->hwid, node->hwid);
+			printf("Package HW ID = %u\n", node->hwid);
 			break;
 		case TOPO_TYPE_CORE:
-			printf("\tCore HW ID = %u (%#x)\n",
-			    node->hwid, node->hwid);
+			printf("\tCore HW ID = %u\n", node->hwid);
 			break;
 		case TOPO_TYPE_PU:
 			if (cpu_info[node->hwid].cpu_hyperthread)
@@ -681,16 +725,14 @@ cpu_mp_announce(void)
 				hyperthread = "";
 
 			if (node->subtype == 0)
-				printf("\t\tCPU (AP%s): APIC ID: %u (%#x)"
-				    "(disabled)\n", hyperthread, node->hwid,
-				    node->hwid);
+				printf("\t\tCPU (AP%s): APIC ID: %u"
+				    "(disabled)\n", hyperthread, node->hwid);
 			else if (node->id == 0)
-				printf("\t\tCPU0 (BSP): APIC ID: %u (%#x)\n",
-				    node->hwid, node->hwid);
-			else
-				printf("\t\tCPU%u (AP%s): APIC ID: %u (%#x)\n",
-				    node->id, hyperthread, node->hwid,
+				printf("\t\tCPU0 (BSP): APIC ID: %u\n",
 				    node->hwid);
+			else
+				printf("\t\tCPU%u (AP%s): APIC ID: %u\n",
+				    node->id, hyperthread, node->hwid);
 			break;
 		default:
 			/* ignored */
@@ -713,7 +755,8 @@ x86topo_add_sched_group(struct topo_node *root, struct cpu_group *cg_root)
 	int ncores;
 	int i;
 
-	KASSERT(root->type == TOPO_TYPE_SYSTEM || root->type == TOPO_TYPE_CACHE,
+	KASSERT(root->type == TOPO_TYPE_SYSTEM || root->type == TOPO_TYPE_CACHE ||
+	    root->type == TOPO_TYPE_GROUP,
 	    ("x86topo_add_sched_group: bad type: %u", root->type));
 	CPU_COPY(&root->cpuset, &cg_root->cg_mask);
 	cg_root->cg_count = root->cpu_count;
@@ -753,7 +796,8 @@ x86topo_add_sched_group(struct topo_node *root, struct cpu_group *cg_root)
 	nchildren = 0;
 	node = root;
 	while (node != NULL) {
-		if (node->type != TOPO_TYPE_CACHE ||
+		if ((node->type != TOPO_TYPE_GROUP &&
+		    node->type != TOPO_TYPE_CACHE) ||
 		    (root->type != TOPO_TYPE_SYSTEM &&
 		    CPU_CMP(&node->cpuset, &root->cpuset) == 0)) {
 			node = topo_next_node(root, node);
@@ -773,7 +817,8 @@ x86topo_add_sched_group(struct topo_node *root, struct cpu_group *cg_root)
 	node = root;
 	i = 0;
 	while (node != NULL) {
-		if (node->type != TOPO_TYPE_CACHE ||
+		if ((node->type != TOPO_TYPE_GROUP &&
+		    node->type != TOPO_TYPE_CACHE) ||
 		    (root->type != TOPO_TYPE_SYSTEM &&
 		    CPU_CMP(&node->cpuset, &root->cpuset) == 0)) {
 			node = topo_next_node(root, node);
@@ -802,6 +847,19 @@ cpu_topo(void)
 	return (cg_root);
 }
 
+static void
+cpu_alloc(void *dummy __unused)
+{
+	/*
+	 * Dynamically allocate the arrays that depend on the
+	 * maximum APIC ID.
+	 */
+	cpu_info = malloc(sizeof(*cpu_info) * (max_apic_id + 1), M_CPUS,
+	    M_WAITOK | M_ZERO);
+	apic_cpuids = malloc(sizeof(*apic_cpuids) * (max_apic_id + 1), M_CPUS,
+	    M_WAITOK | M_ZERO);
+}
+SYSINIT(cpu_alloc, SI_SUB_CPU, SI_ORDER_FIRST, cpu_alloc, NULL);
 
 /*
  * Add a logical CPU to the topology.
@@ -810,26 +868,22 @@ void
 cpu_add(u_int apic_id, char boot_cpu)
 {
 
-	if (apic_id > MAX_APIC_ID) {
+	if (apic_id > max_apic_id) {
 		panic("SMP: APIC ID %d too high", apic_id);
 		return;
 	}
-	KASSERT(cpu_info[apic_id].cpu_present == 0, ("CPU %d added twice",
+	KASSERT(cpu_info[apic_id].cpu_present == 0, ("CPU %u added twice",
 	    apic_id));
 	cpu_info[apic_id].cpu_present = 1;
 	if (boot_cpu) {
 		KASSERT(boot_cpu_id == -1,
-		    ("CPU %d claims to be BSP, but CPU %d already is", apic_id,
+		    ("CPU %u claims to be BSP, but CPU %u already is", apic_id,
 		    boot_cpu_id));
 		boot_cpu_id = apic_id;
 		cpu_info[apic_id].cpu_bsp = 1;
 	}
-	if (mp_ncpus < MAXCPU) {
-		mp_ncpus++;
-		mp_maxid = mp_ncpus - 1;
-	}
 	if (bootverbose)
-		printf("SMP: Added CPU %d (%s)\n", apic_id, boot_cpu ? "BSP" :
+		printf("SMP: Added CPU %u (%s)\n", apic_id, boot_cpu ? "BSP" :
 		    "AP");
 }
 
@@ -857,6 +911,56 @@ cpu_mp_probe(void)
 	return (mp_ncpus > 1);
 }
 
+/* Allocate memory for the AP trampoline. */
+void
+alloc_ap_trampoline(vm_paddr_t *physmap, unsigned int *physmap_idx)
+{
+	unsigned int i;
+	bool allocated;
+
+	allocated = false;
+	for (i = *physmap_idx; i <= *physmap_idx; i -= 2) {
+		/*
+		 * Find a memory region big enough and below the 1MB boundary
+		 * for the trampoline code.
+		 * NB: needs to be page aligned.
+		 */
+		if (physmap[i] >= MiB(1) ||
+		    (trunc_page(physmap[i + 1]) - round_page(physmap[i])) <
+		    round_page(bootMP_size))
+			continue;
+
+		allocated = true;
+		/*
+		 * Try to steal from the end of the region to mimic previous
+		 * behaviour, else fallback to steal from the start.
+		 */
+		if (physmap[i + 1] < MiB(1)) {
+			boot_address = trunc_page(physmap[i + 1]);
+			if ((physmap[i + 1] - boot_address) < bootMP_size)
+				boot_address -= round_page(bootMP_size);
+			physmap[i + 1] = boot_address;
+		} else {
+			boot_address = round_page(physmap[i]);
+			physmap[i] = boot_address + round_page(bootMP_size);
+		}
+		if (physmap[i] == physmap[i + 1] && *physmap_idx != 0) {
+			memmove(&physmap[i], &physmap[i + 2],
+			    sizeof(*physmap) * (*physmap_idx - i + 2));
+			*physmap_idx -= 2;
+		}
+		break;
+	}
+
+	if (!allocated) {
+		boot_address = basemem * 1024 - bootMP_size;
+		if (bootverbose)
+			printf(
+"Cannot find enough space for the boot trampoline, placing it at %#x",
+			    boot_address);
+	}
+}
+
 /*
  * AP CPU's call this to initialize themselves.
  */
@@ -864,6 +968,8 @@ void
 init_secondary_tail(void)
 {
 	u_int cpuid;
+
+	pmap_activate_boot(vmspace_pmap(proc0.p_vmspace));
 
 	/*
 	 * On real hardware, switch to x2apic mode if possible.  Do it
@@ -918,7 +1024,11 @@ init_secondary_tail(void)
 	smp_cpus++;
 
 	CTR1(KTR_SMP, "SMP: AP CPU #%d Launched", cpuid);
-	printf("SMP: AP CPU #%d Launched!\n", cpuid);
+	if (bootverbose)
+		printf("SMP: AP CPU #%d Launched!\n", cpuid);
+	else
+		printf("%s%d%s", smp_cpus == 2 ? "Launching APs: " : "",
+		    cpuid, smp_cpus == mp_ncpus ? "\n" : " ");
 
 	/* Determine if we are a logical CPU. */
 	if (cpu_info[PCPU_GET(apic_id)].cpu_hyperthread)
@@ -962,9 +1072,23 @@ init_secondary_tail(void)
 	/* NOTREACHED */
 }
 
-/*******************************************************************
- * local functions and data
- */
+static void
+smp_after_idle_runnable(void *arg __unused)
+{
+	struct thread *idle_td;
+	int cpu;
+
+	for (cpu = 1; cpu < mp_ncpus; cpu++) {
+		idle_td = pcpu_find(cpu)->pc_idlethread;
+		while (idle_td->td_lastcpu == NOCPU &&
+		    idle_td->td_oncpu == NOCPU)
+			cpu_spinwait();
+		kmem_free((vm_offset_t)bootstacks[cpu], kstack_pages *
+		    PAGE_SIZE);
+	}
+}
+SYSINIT(smp_after_idle_runnable, SI_SUB_SMP, SI_ORDER_ANY,
+    smp_after_idle_runnable, NULL);
 
 /*
  * We tell the I/O APIC code about all the CPUs we want to receive
@@ -1233,7 +1357,6 @@ ipi_nmi_handler(void)
 	return (0);
 }
 
-#ifdef DEV_ISA
 int nmi_kdb_lock;
 
 void
@@ -1257,7 +1380,6 @@ nmi_call_kdb_smp(u_int type, struct trapframe *frame)
 	if (call_post)
 		cpustop_handler_post(cpu);
 }
-#endif
 
 /*
  * Handle an IPI_STOP by saving our current context and spinning until we
@@ -1289,6 +1411,12 @@ cpustop_handler_post(u_int cpu)
 	CPU_CLR_ATOMIC(cpu, &started_cpus);
 	CPU_CLR_ATOMIC(cpu, &stopped_cpus);
 
+	/*
+	 * We don't broadcast TLB invalidations to other CPUs when they are
+	 * stopped. Hence, we clear the TLB before resuming.
+	 */
+	invltlb_glob();
+
 #if defined(__amd64__) && defined(DDB)
 	amd64_db_resume_dbreg();
 #endif
@@ -1317,15 +1445,33 @@ cpususpend_handler(void)
 #else
 		npxsuspend(susppcbs[cpu]->sp_fpususpend);
 #endif
-		wbinvd();
-		CPU_SET_ATOMIC(cpu, &suspended_cpus);
 		/*
-		 * Hack for xen, which does not use resumectx() so never
-		 * uses the next clause: set resuming_cpus early so that
-		 * resume_cpus() can wait on the same bitmap for acpi and
-		 * xen.  resuming_cpus now means eventually_resumable_cpus.
+		 * suspended_cpus is cleared shortly after each AP is restarted
+		 * by a Startup IPI, so that the BSP can proceed to restarting
+		 * the next AP.
+		 *
+		 * resuming_cpus gets cleared when the AP completes
+		 * initialization after having been released by the BSP.
+		 * resuming_cpus is probably not the best name for the
+		 * variable, because it is actually a set of processors that
+		 * haven't resumed yet and haven't necessarily started resuming.
+		 *
+		 * Note that suspended_cpus is meaningful only for ACPI suspend
+		 * as it's not really used for Xen suspend since the APs are
+		 * automatically restored to the running state and the correct
+		 * context.  For the same reason resumectx is never called in
+		 * that case.
 		 */
+		CPU_SET_ATOMIC(cpu, &suspended_cpus);
 		CPU_SET_ATOMIC(cpu, &resuming_cpus);
+
+		/*
+		 * Invalidate the cache after setting the global status bits.
+		 * The last AP to set its bit may end up being an Owner of the
+		 * corresponding cache line in MOESI protocol.  The AP may be
+		 * stopped before the cache line is written to the main memory.
+		 */
+		wbinvd();
 	} else {
 #ifdef __amd64__
 		fpuresume(susppcbs[cpu]->sp_fpususpend);
@@ -1337,13 +1483,21 @@ cpususpend_handler(void)
 		PCPU_SET(switchtime, 0);
 		PCPU_SET(switchticks, ticks);
 
-		/* Indicate that we are resuming */
+		/* Indicate that we have restarted and restored the context. */
 		CPU_CLR_ATOMIC(cpu, &suspended_cpus);
 	}
 
 	/* Wait for resume directive */
 	while (!CPU_ISSET(cpu, &toresume_cpus))
 		ia32_pause();
+
+	/* Re-apply microcode updates. */
+	ucode_reload();
+
+#ifdef __i386__
+	/* Finish removing the identity mapping of low memory for this AP. */
+	invltlb_glob();
+#endif
 
 	if (cpu_ops.cpu_resume)
 		cpu_ops.cpu_resume();
@@ -1454,6 +1608,10 @@ smp_targeted_tlb_shootdown(cpuset_t mask, u_int vector, pmap_t pmap,
 	volatile uint32_t *p_cpudone;
 	uint32_t generation;
 	int cpu;
+
+	/* It is not necessary to signal other CPUs while in the debugger. */
+	if (kdb_active || panicstr != NULL)
+		return;
 
 	/*
 	 * Check for other cpus.  Return if none.
@@ -1569,8 +1727,10 @@ invltlb_handler(void)
 	generation = smp_tlb_generation;
 	if (smp_tlb_pmap == kernel_pmap)
 		invltlb_glob();
+#ifdef __amd64__
 	else
 		invltlb();
+#endif
 	PCPU_SET(smp_tlb_done, generation);
 }
 
@@ -1587,7 +1747,10 @@ invlpg_handler(void)
 #endif /* COUNT_IPIS */
 
 	generation = smp_tlb_generation;	/* Overlap with serialization */
-	invlpg(smp_tlb_addr1);
+#ifdef __i386__
+	if (smp_tlb_pmap == kernel_pmap)
+#endif
+		invlpg(smp_tlb_addr1);
 	PCPU_SET(smp_tlb_done, generation);
 }
 
@@ -1607,10 +1770,13 @@ invlrng_handler(void)
 	addr = smp_tlb_addr1;
 	addr2 = smp_tlb_addr2;
 	generation = smp_tlb_generation;	/* Overlap with serialization */
-	do {
-		invlpg(addr);
-		addr += PAGE_SIZE;
-	} while (addr < addr2);
+#ifdef __i386__
+	if (smp_tlb_pmap == kernel_pmap)
+#endif
+		do {
+			invlpg(addr);
+			addr += PAGE_SIZE;
+		} while (addr < addr2);
 
 	PCPU_SET(smp_tlb_done, generation);
 }

@@ -8,19 +8,19 @@
 //===----------------------------------------------------------------------===//
 
 #include "lldb/Core/ValueObjectMemory.h"
-#include "lldb/Core/Scalar.h" // for Scalar, operator!=
 #include "lldb/Core/Value.h"
 #include "lldb/Core/ValueObject.h"
 #include "lldb/Symbol/Type.h"
 #include "lldb/Target/ExecutionContext.h"
 #include "lldb/Target/Target.h"
-#include "lldb/Utility/DataExtractor.h" // for DataExtractor
-#include "lldb/Utility/Status.h"        // for Status
-#include "lldb/lldb-types.h"            // for addr_t
-#include "llvm/Support/ErrorHandling.h" // for llvm_unreachable
+#include "lldb/Utility/DataExtractor.h"
+#include "lldb/Utility/Scalar.h"
+#include "lldb/Utility/Status.h"
+#include "lldb/lldb-types.h"
+#include "llvm/Support/ErrorHandling.h"
 
-#include <assert.h> // for assert
-#include <memory>   // for shared_ptr
+#include <assert.h>
+#include <memory>
 
 namespace lldb_private {
 class ExecutionContextScope;
@@ -128,15 +128,19 @@ size_t ValueObjectMemory::CalculateNumChildren(uint32_t max) {
     return child_count <= max ? child_count : max;
   }
 
+  ExecutionContext exe_ctx(GetExecutionContextRef());
   const bool omit_empty_base_classes = true;
-  auto child_count = m_compiler_type.GetNumChildren(omit_empty_base_classes);
+  auto child_count =
+      m_compiler_type.GetNumChildren(omit_empty_base_classes, &exe_ctx);
   return child_count <= max ? child_count : max;
 }
 
 uint64_t ValueObjectMemory::GetByteSize() {
   if (m_type_sp)
     return m_type_sp->GetByteSize();
-  return m_compiler_type.GetByteSize(nullptr);
+  if (llvm::Optional<uint64_t> size = m_compiler_type.GetByteSize(nullptr))
+    return *size;
+  return 0;
 }
 
 lldb::ValueType ValueObjectMemory::GetValueType() const {
@@ -165,21 +169,20 @@ bool ValueObjectMemory::UpdateValue() {
       llvm_unreachable("Unhandled expression result value kind...");
 
     case Value::eValueTypeScalar:
-      // The variable value is in the Scalar value inside the m_value.
-      // We can point our m_data right to it.
+      // The variable value is in the Scalar value inside the m_value. We can
+      // point our m_data right to it.
       m_error = m_value.GetValueAsData(&exe_ctx, m_data, 0, GetModule().get());
       break;
 
     case Value::eValueTypeFileAddress:
     case Value::eValueTypeLoadAddress:
     case Value::eValueTypeHostAddress:
-      // The DWARF expression result was an address in the inferior
-      // process. If this variable is an aggregate type, we just need
-      // the address as the main value as all child variable objects
-      // will rely upon this location and add an offset and then read
-      // their own values as needed. If this variable is a simple
-      // type, we read all data for it into m_data.
-      // Make sure this type has a value before we try and read it
+      // The DWARF expression result was an address in the inferior process. If
+      // this variable is an aggregate type, we just need the address as the
+      // main value as all child variable objects will rely upon this location
+      // and add an offset and then read their own values as needed. If this
+      // variable is a simple type, we read all data for it into m_data. Make
+      // sure this type has a value before we try and read it
 
       // If we have a file address, convert it to a load address if we can.
       if (value_type == Value::eValueTypeFileAddress &&
@@ -192,14 +195,14 @@ bool ValueObjectMemory::UpdateValue() {
       }
 
       if (!CanProvideValue()) {
-        // this value object represents an aggregate type whose
-        // children have values, but this object does not. So we
-        // say we are changed if our location has changed.
+        // this value object represents an aggregate type whose children have
+        // values, but this object does not. So we say we are changed if our
+        // location has changed.
         SetValueDidChange(value_type != old_value.GetValueType() ||
                           m_value.GetScalar() != old_value.GetScalar());
       } else {
-        // Copy the Value and set the context to use our Variable
-        // so it can extract read its value into m_data appropriately
+        // Copy the Value and set the context to use our Variable so it can
+        // extract read its value into m_data appropriately
         Value value(m_value);
         if (m_type_sp)
           value.SetContext(Value::eContextTypeLLDBType, m_type_sp.get());

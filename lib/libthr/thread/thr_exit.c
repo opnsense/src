@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1995-1998 John Birrell <jb@cimlogic.com.au>
  * All rights reserved.
  *
@@ -48,7 +50,8 @@ __FBSDID("$FreeBSD$");
 
 static void	exit_thread(void) __dead2;
 
-__weak_reference(_pthread_exit, pthread_exit);
+__weak_reference(_Tthr_exit, pthread_exit);
+__weak_reference(_Tthr_exit, _pthread_exit);
 
 #ifdef _PTHREAD_FORCED_UNWIND
 static int message_printed;
@@ -201,7 +204,7 @@ _thread_exit(const char *fname, int lineno, const char *msg)
 }
 
 void
-_pthread_exit(void *status)
+_Tthr_exit(void *status)
 {
 	_pthread_exit_mask(status, NULL);
 }
@@ -239,9 +242,6 @@ _pthread_exit_mask(void *status, sigset_t *mask)
 
 #ifdef PIC
 	thread_uw_init();
-#endif /* PIC */
-
-#ifdef PIC
 	if (uwl_forcedunwind != NULL) {
 #else
 	if (_Unwind_ForcedUnwind != NULL) {
@@ -280,6 +280,9 @@ static void
 exit_thread(void)
 {
 	struct pthread *curthread = _get_curthread();
+
+	free(curthread->name);
+	curthread->name = NULL;
 
 	/* Check if there is thread specific data: */
 	if (curthread->specific != NULL) {

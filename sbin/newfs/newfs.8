@@ -9,7 +9,7 @@
 .\" 2. Redistributions in binary form must reproduce the above copyright
 .\"    notice, this list of conditions and the following disclaimer in the
 .\"    documentation and/or other materials provided with the distribution.
-.\" 4. Neither the name of the University nor the names of its contributors
+.\" 3. Neither the name of the University nor the names of its contributors
 .\"    may be used to endorse or promote products derived from this software
 .\"    without specific prior written permission.
 .\"
@@ -28,7 +28,7 @@
 .\"     @(#)newfs.8	8.6 (Berkeley) 5/3/95
 .\" $FreeBSD$
 .\"
-.Dd July 15, 2015
+.Dd January 29, 2019
 .Dt NEWFS 8
 .Os
 .Sh NAME
@@ -79,11 +79,9 @@ The following options define the general layout policies:
 .It Fl E
 Erase the content of the disk before making the filesystem.
 The reserved area in front of the superblock (for bootcode) will not be erased.
-.Pp
-This option is only relevant for flash based storage devices that use
-wear-leveling algorithms.
-.Pp
-Erasing may take a long time as it writes to every sector on the disk.
+Erasing is only relevant to flash-memory or thinly provisioned devices.
+Erasing may take a long time.
+If the device does not support BIO_DELETE, the command will fail.
 .It Fl J
 Enable journaling on the new file system via gjournal.
 See
@@ -91,6 +89,7 @@ See
 for details.
 .It Fl L Ar volname
 Add a volume label to the new file system.
+Legal characters are alphanumerics, dashes, and underscores.
 .It Fl N
 Cause the file system parameters to be printed out
 without really creating the file system.
@@ -112,6 +111,9 @@ for more details on how to set this option.
 .It Fl b Ar block-size
 The block size of the file system, in bytes.
 It must be a power of 2.
+.\" If changing the default block size and it causes the default
+.\" fragment size to change, be sure to update the location of
+.\" the first backup superblock on the fsck_ffs.8 manual page.
 The
 default size is 32768 bytes, and the smallest allowable size is 4096 bytes.
 The optimal block:fragment ratio is 8:1.
@@ -144,6 +146,9 @@ ranging in value between
 .Ar blocksize Ns /8
 and
 .Ar blocksize .
+.\" If changing the default fragment size or it changes because of a
+.\" change to the default block size, be sure to update the location
+.\" of the first backup superblock on the fsck_ffs.8 manual page.
 The default is 4096 bytes.
 .It Fl g Ar avgfilesize
 The expected average file size for the file system.
@@ -264,9 +269,11 @@ Turn on the TRIM enable flag.
 If enabled, and if the underlying device supports the BIO_DELETE
 command, the file system will send a delete request to the underlying
 device for each freed block.
-The trim enable flag is typically set when the underlying device
-uses flash-memory as the device can use the delete command to
-pre-zero or at least avoid copying blocks that have been deleted.
+The trim enable flag is typically set for flash-memory devices to
+reduce write amplification which reduces wear on write-limited
+flash-memory and often improves long-term performance.
+Thinly provisioned storage also benefits by returning unused blocks to
+the global pool.
 .El
 .Pp
 The following options override the standard sizes for the disk geometry.

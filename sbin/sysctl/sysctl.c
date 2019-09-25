@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -47,6 +49,7 @@ static const char rcsid[] =
 #include <sys/stat.h>
 #include <sys/sysctl.h>
 #include <sys/vmmeter.h>
+#include <dev/evdev/input.h>
 
 #ifdef __amd64__
 #include <sys/efi.h>
@@ -648,33 +651,49 @@ S_timeval(size_t l2, void *p)
 static int
 S_vmtotal(size_t l2, void *p)
 {
-	struct vmtotal *v = (struct vmtotal *)p;
-	int pageKilo = getpagesize() / 1024;
+	struct vmtotal *v;
+	int pageKilo;
 
 	if (l2 != sizeof(*v)) {
 		warnx("S_vmtotal %zu != %zu", l2, sizeof(*v));
 		return (1);
 	}
 
-	printf(
-	    "\nSystem wide totals computed every five seconds:"
+	v = p;
+	pageKilo = getpagesize() / 1024;
+
+#define	pg2k(a)	((uintmax_t)(a) * pageKilo)
+	printf("\nSystem wide totals computed every five seconds:"
 	    " (values in kilobytes)\n");
 	printf("===============================================\n");
-	printf(
-	    "Processes:\t\t(RUNQ: %hd Disk Wait: %hd Page Wait: "
-	    "%hd Sleep: %hd)\n",
+	printf("Processes:\t\t(RUNQ: %d Disk Wait: %d Page Wait: "
+	    "%d Sleep: %d)\n",
 	    v->t_rq, v->t_dw, v->t_pw, v->t_sl);
-	printf(
-	    "Virtual Memory:\t\t(Total: %jdK Active: %jdK)\n",
-	    (intmax_t)v->t_vm * pageKilo, (intmax_t)v->t_avm * pageKilo);
-	printf("Real Memory:\t\t(Total: %jdK Active: %jdK)\n",
-	    (intmax_t)v->t_rm * pageKilo, (intmax_t)v->t_arm * pageKilo);
-	printf("Shared Virtual Memory:\t(Total: %jdK Active: %jdK)\n",
-	    (intmax_t)v->t_vmshr * pageKilo, (intmax_t)v->t_avmshr * pageKilo);
-	printf("Shared Real Memory:\t(Total: %jdK Active: %jdK)\n",
-	    (intmax_t)v->t_rmshr * pageKilo, (intmax_t)v->t_armshr * pageKilo);
-	printf("Free Memory:\t%jdK", (intmax_t)v->t_free * pageKilo);
+	printf("Virtual Memory:\t\t(Total: %juK Active: %juK)\n",
+	    pg2k(v->t_vm), pg2k(v->t_avm));
+	printf("Real Memory:\t\t(Total: %juK Active: %juK)\n",
+	    pg2k(v->t_rm), pg2k(v->t_arm));
+	printf("Shared Virtual Memory:\t(Total: %juK Active: %juK)\n",
+	    pg2k(v->t_vmshr), pg2k(v->t_avmshr));
+	printf("Shared Real Memory:\t(Total: %juK Active: %juK)\n",
+	    pg2k(v->t_rmshr), pg2k(v->t_armshr));
+	printf("Free Memory:\t%juK", pg2k(v->t_free));
+	return (0);
+}
 
+static int
+S_input_id(size_t l2, void *p)
+{
+	struct input_id *id = p;
+
+	if (l2 != sizeof(*id)) {
+		warnx("S_input_id %zu != %zu", l2, sizeof(*id));
+		return (1);
+	}
+
+	printf("{ bustype = 0x%04x, vendor = 0x%04x, "
+	    "product = 0x%04x, version = 0x%04x }",
+	    id->bustype, id->vendor, id->product, id->version);
 	return (0);
 }
 
@@ -688,21 +707,22 @@ S_efi_map(size_t l2, void *p)
 	size_t efisz;
 	int ndesc, i;
 
-	static const char *types[] = {
-		"Reserved",
-		"LoaderCode",
-		"LoaderData",
-		"BootServicesCode",
-		"BootServicesData",
-		"RuntimeServicesCode",
-		"RuntimeServicesData",
-		"ConventionalMemory",
-		"UnusableMemory",
-		"ACPIReclaimMemory",
-		"ACPIMemoryNVS",
-		"MemoryMappedIO",
-		"MemoryMappedIOPortSpace",
-		"PalCode"
+	static const char * const types[] = {
+		[EFI_MD_TYPE_NULL] =	"Reserved",
+		[EFI_MD_TYPE_CODE] =	"LoaderCode",
+		[EFI_MD_TYPE_DATA] =	"LoaderData",
+		[EFI_MD_TYPE_BS_CODE] =	"BootServicesCode",
+		[EFI_MD_TYPE_BS_DATA] =	"BootServicesData",
+		[EFI_MD_TYPE_RT_CODE] =	"RuntimeServicesCode",
+		[EFI_MD_TYPE_RT_DATA] =	"RuntimeServicesData",
+		[EFI_MD_TYPE_FREE] =	"ConventionalMemory",
+		[EFI_MD_TYPE_BAD] =	"UnusableMemory",
+		[EFI_MD_TYPE_RECLAIM] =	"ACPIReclaimMemory",
+		[EFI_MD_TYPE_FIRMWARE] = "ACPIMemoryNVS",
+		[EFI_MD_TYPE_IOMEM] =	"MemoryMappedIO",
+		[EFI_MD_TYPE_IOPORT] =	"MemoryMappedIOPortSpace",
+		[EFI_MD_TYPE_PALCODE] =	"PalCode",
+		[EFI_MD_TYPE_PERSISTENT] = "PersistentMemory",
 	};
 
 	/*
@@ -715,7 +735,7 @@ S_efi_map(size_t l2, void *p)
 	}
 	efihdr = p;
 	efisz = (sizeof(struct efi_map_header) + 0xf) & ~0xf;
-	map = (struct efi_md *)((uint8_t *)efihdr + efisz); 
+	map = (struct efi_md *)((uint8_t *)efihdr + efisz);
 
 	if (efihdr->descriptor_size == 0)
 		return (0);
@@ -723,7 +743,7 @@ S_efi_map(size_t l2, void *p)
 		warnx("S_efi_map length mismatch %zu vs %zu", l2, efisz +
 		    efihdr->memory_size);
 		return (1);
-	}		
+	}
 	ndesc = efihdr->memory_size / efihdr->descriptor_size;
 
 	printf("\n%23s %12s %12s %8s %4s",
@@ -731,12 +751,14 @@ S_efi_map(size_t l2, void *p)
 
 	for (i = 0; i < ndesc; i++,
 	    map = efi_next_descriptor(map, efihdr->descriptor_size)) {
-		if (map->md_type <= EFI_MD_TYPE_PALCODE)
+		type = NULL;
+		if (map->md_type < nitems(types))
 			type = types[map->md_type];
-		else
+		if (type == NULL)
 			type = "<INVALID>";
-		printf("\n%23s %012lx %12p %08lx ", type, map->md_phys,
-		    map->md_virt, map->md_pages);
+		printf("\n%23s %012jx %12p %08jx ", type,
+		    (uintmax_t)map->md_phys, map->md_virt,
+		    (uintmax_t)map->md_pages);
 		if (map->md_attr & EFI_MD_ATTR_UC)
 			printf("UC ");
 		if (map->md_attr & EFI_MD_ATTR_WC)
@@ -967,6 +989,34 @@ show_var(int *oid, int nlen)
 		printf("%s", buf);
 		return (0);
 	}
+
+	/* don't fetch opaques that we don't know how to print */
+	if (ctltype == CTLTYPE_OPAQUE) {
+		if (strcmp(fmt, "S,clockinfo") == 0)
+			func = S_clockinfo;
+		else if (strcmp(fmt, "S,timeval") == 0)
+			func = S_timeval;
+		else if (strcmp(fmt, "S,loadavg") == 0)
+			func = S_loadavg;
+		else if (strcmp(fmt, "S,vmtotal") == 0)
+			func = S_vmtotal;
+		else if (strcmp(fmt, "S,input_id") == 0)
+			func = S_input_id;
+#ifdef __amd64__
+		else if (strcmp(fmt, "S,efi_map_header") == 0)
+			func = S_efi_map;
+#endif
+#if defined(__amd64__) || defined(__i386__)
+		else if (strcmp(fmt, "S,bios_smap_xattr") == 0)
+			func = S_bios_smap_xattr;
+#endif
+		else {
+			func = NULL;
+			if (!bflag && !oflag && !xflag)
+				return (1);
+		}
+	}
+
 	/* find an estimate of how much we need for this var */
 	if (Bflag)
 		j = Bflag;
@@ -1087,24 +1137,6 @@ show_var(int *oid, int nlen)
 
 	case CTLTYPE_OPAQUE:
 		i = 0;
-		if (strcmp(fmt, "S,clockinfo") == 0)
-			func = S_clockinfo;
-		else if (strcmp(fmt, "S,timeval") == 0)
-			func = S_timeval;
-		else if (strcmp(fmt, "S,loadavg") == 0)
-			func = S_loadavg;
-		else if (strcmp(fmt, "S,vmtotal") == 0)
-			func = S_vmtotal;
-#ifdef __amd64__
-		else if (strcmp(fmt, "S,efi_map_header") == 0)
-			func = S_efi_map;
-#endif
-#if defined(__amd64__) || defined(__i386__)
-		else if (strcmp(fmt, "S,bios_smap_xattr") == 0)
-			func = S_bios_smap_xattr;
-#endif
-		else
-			func = NULL;
 		if (func) {
 			if (!nflag)
 				printf("%s%s", name, sep);

@@ -8,13 +8,8 @@ SUBDIR+=libcrypto libssl
 .if ${MK_OPENSSH} != "no"
 SUBDIR+=libssh
 .endif
-.if ${MK_LIBRESSL} != "no"
-SUBDIR+=libtls
-.endif
 .endif
 
-.if ${MK_TESTS} != "no"
-SUBDIR+=tests
-.endif
+SUBDIR.${MK_TESTS}+= tests
 
 .include <bsd.subdir.mk>

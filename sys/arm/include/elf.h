@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2001 David E. O'Brien
  * Copyright (c) 1996-1997 John D. Polstra.
  * All rights reserved.
@@ -114,7 +116,7 @@ __ElfType(Auxinfo);
  */
 #define	MAGIC_TRAMP_NUMBER	0x5c000003
 
-#define	ET_DYN_LOAD_ADDR	0x12000
+#define	ET_DYN_LOAD_ADDR	0x500000
 
 /* Flags passed in AT_HWCAP. */
 #define	HWCAP_SWP		0x00000001	/* Unsupported, never set.    */

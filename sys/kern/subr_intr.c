@@ -106,8 +106,10 @@ struct intr_pic {
 	SLIST_ENTRY(intr_pic)	pic_next;
 	intptr_t		pic_xref;	/* hardware identification */
 	device_t		pic_dev;
+/* Only one of FLAG_PIC or FLAG_MSI may be set */
 #define	FLAG_PIC	(1 << 0)
 #define	FLAG_MSI	(1 << 1)
+#define	FLAG_TYPE_MASK	(FLAG_PIC | FLAG_MSI)
 	u_int			pic_flags;
 	struct mtx		pic_child_lock;
 	SLIST_HEAD(, intr_pic_child) pic_children;
@@ -116,7 +118,7 @@ struct intr_pic {
 static struct mtx pic_list_lock;
 static SLIST_HEAD(, intr_pic) pic_list;
 
-static struct intr_pic *pic_lookup(device_t dev, intptr_t xref);
+static struct intr_pic *pic_lookup(device_t dev, intptr_t xref, int flags);
 
 /* Interrupt source definition. */
 static struct mtx isrc_table_lock;
@@ -290,7 +292,7 @@ intr_irq_handler(struct trapframe *tf)
 
 	KASSERT(irq_root_filter != NULL, ("%s: no filter", __func__));
 
-	PCPU_INC(cnt.v_intr);
+	VM_CNT_INC(v_intr);
 	critical_enter();
 	td = curthread;
 	oldframe = td->td_intr_frame;
@@ -689,7 +691,7 @@ isrc_add_handler(struct intr_irqsrc *isrc, const char *name,
  *  Lookup interrupt controller locked.
  */
 static inline struct intr_pic *
-pic_lookup_locked(device_t dev, intptr_t xref)
+pic_lookup_locked(device_t dev, intptr_t xref, int flags)
 {
 	struct intr_pic *pic;
 
@@ -700,6 +702,10 @@ pic_lookup_locked(device_t dev, intptr_t xref)
 
 	/* Note that pic->pic_dev is never NULL on registered PIC. */
 	SLIST_FOREACH(pic, &pic_list, pic_next) {
+		if ((pic->pic_flags & FLAG_TYPE_MASK) !=
+		    (flags & FLAG_TYPE_MASK))
+			continue;
+
 		if (dev == NULL) {
 			if (xref == pic->pic_xref)
 				return (pic);
@@ -716,12 +722,12 @@ pic_lookup_locked(device_t dev, intptr_t xref)
  *  Lookup interrupt controller.
  */
 static struct intr_pic *
-pic_lookup(device_t dev, intptr_t xref)
+pic_lookup(device_t dev, intptr_t xref, int flags)
 {
 	struct intr_pic *pic;
 
 	mtx_lock(&pic_list_lock);
-	pic = pic_lookup_locked(dev, xref);
+	pic = pic_lookup_locked(dev, xref, flags);
 	mtx_unlock(&pic_list_lock);
 	return (pic);
 }
@@ -730,12 +736,12 @@ pic_lookup(device_t dev, intptr_t xref)
  *  Create interrupt controller.
  */
 static struct intr_pic *
-pic_create(device_t dev, intptr_t xref)
+pic_create(device_t dev, intptr_t xref, int flags)
 {
 	struct intr_pic *pic;
 
 	mtx_lock(&pic_list_lock);
-	pic = pic_lookup_locked(dev, xref);
+	pic = pic_lookup_locked(dev, xref, flags);
 	if (pic != NULL) {
 		mtx_unlock(&pic_list_lock);
 		return (pic);
@@ -747,6 +753,7 @@ pic_create(device_t dev, intptr_t xref)
 	}
 	pic->pic_xref = xref;
 	pic->pic_dev = dev;
+	pic->pic_flags = flags;
 	mtx_init(&pic->pic_child_lock, "pic child lock", NULL, MTX_SPIN);
 	SLIST_INSERT_HEAD(&pic_list, pic, pic_next);
 	mtx_unlock(&pic_list_lock);
@@ -758,12 +765,12 @@ pic_create(device_t dev, intptr_t xref)
  *  Destroy interrupt controller.
  */
 static void
-pic_destroy(device_t dev, intptr_t xref)
+pic_destroy(device_t dev, intptr_t xref, int flags)
 {
 	struct intr_pic *pic;
 
 	mtx_lock(&pic_list_lock);
-	pic = pic_lookup_locked(dev, xref);
+	pic = pic_lookup_locked(dev, xref, flags);
 	if (pic == NULL) {
 		mtx_unlock(&pic_list_lock);
 		return;
@@ -784,11 +791,9 @@ intr_pic_register(device_t dev, intptr_t xref)
 
 	if (dev == NULL)
 		return (NULL);
-	pic = pic_create(dev, xref);
+	pic = pic_create(dev, xref, FLAG_PIC);
 	if (pic == NULL)
 		return (NULL);
-
-	pic->pic_flags |= FLAG_PIC;
 
 	debugf("PIC %p registered for %s <dev %p, xref %x>\n", pic,
 	    device_get_nameunit(dev), dev, xref);
@@ -823,13 +828,13 @@ intr_pic_claim_root(device_t dev, intptr_t xref, intr_irq_filter_t *filter,
 {
 	struct intr_pic *pic;
 
-	pic = pic_lookup(dev, xref);
+	pic = pic_lookup(dev, xref, FLAG_PIC);
 	if (pic == NULL) {
 		device_printf(dev, "not registered\n");
 		return (EINVAL);
 	}
 
-	KASSERT((pic->pic_flags & FLAG_PIC) != 0,
+	KASSERT((pic->pic_flags & FLAG_TYPE_MASK) == FLAG_PIC,
 	    ("%s: Found a non-PIC controller: %s", __func__,
 	     device_get_name(pic->pic_dev)));
 
@@ -871,7 +876,8 @@ intr_pic_add_handler(device_t parent, struct intr_pic *pic,
 	struct intr_pic_child *child;
 #endif
 
-	parent_pic = pic_lookup(parent, 0);
+	/* Find the parent PIC */
+	parent_pic = pic_lookup(parent, 0, FLAG_PIC);
 	if (parent_pic == NULL)
 		return (NULL);
 
@@ -905,13 +911,14 @@ intr_resolve_irq(device_t dev, intptr_t xref, struct intr_map_data *data,
 	if (data == NULL)
 		return (EINVAL);
 
-	pic = pic_lookup(dev, xref);
+	pic = pic_lookup(dev, xref,
+	    (data->type == INTR_MAP_DATA_MSI) ? FLAG_MSI : FLAG_PIC);
 	if (pic == NULL)
 		return (ESRCH);
 
 	switch (data->type) {
 	case INTR_MAP_DATA_MSI:
-		KASSERT((pic->pic_flags & FLAG_MSI) != 0,
+		KASSERT((pic->pic_flags & FLAG_TYPE_MASK) == FLAG_MSI,
 		    ("%s: Found a non-MSI controller: %s", __func__,
 		     device_get_name(pic->pic_dev)));
 		msi = (struct intr_map_data_msi *)data;
@@ -919,7 +926,7 @@ intr_resolve_irq(device_t dev, intptr_t xref, struct intr_map_data *data,
 		return (0);
 
 	default:
-		KASSERT((pic->pic_flags & FLAG_PIC) != 0,
+		KASSERT((pic->pic_flags & FLAG_TYPE_MASK) == FLAG_PIC,
 		    ("%s: Found a non-PIC controller: %s", __func__,
 		     device_get_name(pic->pic_dev)));
 		return (PIC_MAP_INTR(pic->pic_dev, data, isrc));
@@ -1162,9 +1169,17 @@ intr_bind_irq(device_t dev, struct resource *res, int cpu)
 u_int
 intr_irq_next_cpu(u_int last_cpu, cpuset_t *cpumask)
 {
+	u_int cpu;
 
-	if (!irq_assign_cpu || mp_ncpus == 1)
-		return (PCPU_GET(cpuid));
+	KASSERT(!CPU_EMPTY(cpumask), ("%s: Empty CPU mask", __func__));
+	if (!irq_assign_cpu || mp_ncpus == 1) {
+		cpu = PCPU_GET(cpuid);
+
+		if (CPU_ISSET(cpu, cpumask))
+			return (curcpu);
+
+		return (CPU_FFS(cpumask) - 1);
+	}
 
 	do {
 		last_cpu++;
@@ -1256,11 +1271,9 @@ intr_msi_register(device_t dev, intptr_t xref)
 
 	if (dev == NULL)
 		return (EINVAL);
-	pic = pic_create(dev, xref);
+	pic = pic_create(dev, xref, FLAG_MSI);
 	if (pic == NULL)
 		return (ENOMEM);
-
-	pic->pic_flags |= FLAG_MSI;
 
 	debugf("PIC %p registered for %s <dev %p, xref %jx>\n", pic,
 	    device_get_nameunit(dev), dev, (uintmax_t)xref);
@@ -1277,11 +1290,11 @@ intr_alloc_msi(device_t pci, device_t child, intptr_t xref, int count,
 	struct intr_map_data_msi *msi;
 	int err, i;
 
-	pic = pic_lookup(NULL, xref);
+	pic = pic_lookup(NULL, xref, FLAG_MSI);
 	if (pic == NULL)
 		return (ESRCH);
 
-	KASSERT((pic->pic_flags & FLAG_MSI) != 0,
+	KASSERT((pic->pic_flags & FLAG_TYPE_MASK) == FLAG_MSI,
 	    ("%s: Found a non-MSI controller: %s", __func__,
 	     device_get_name(pic->pic_dev)));
 
@@ -1314,11 +1327,11 @@ intr_release_msi(device_t pci, device_t child, intptr_t xref, int count,
 	struct intr_map_data_msi *msi;
 	int i, err;
 
-	pic = pic_lookup(NULL, xref);
+	pic = pic_lookup(NULL, xref, FLAG_MSI);
 	if (pic == NULL)
 		return (ESRCH);
 
-	KASSERT((pic->pic_flags & FLAG_MSI) != 0,
+	KASSERT((pic->pic_flags & FLAG_TYPE_MASK) == FLAG_MSI,
 	    ("%s: Found a non-MSI controller: %s", __func__,
 	     device_get_name(pic->pic_dev)));
 
@@ -1353,11 +1366,11 @@ intr_alloc_msix(device_t pci, device_t child, intptr_t xref, int *irq)
 	struct intr_map_data_msi *msi;
 	int err;
 
-	pic = pic_lookup(NULL, xref);
+	pic = pic_lookup(NULL, xref, FLAG_MSI);
 	if (pic == NULL)
 		return (ESRCH);
 
-	KASSERT((pic->pic_flags & FLAG_MSI) != 0,
+	KASSERT((pic->pic_flags & FLAG_TYPE_MASK) == FLAG_MSI,
 	    ("%s: Found a non-MSI controller: %s", __func__,
 	     device_get_name(pic->pic_dev)));
 
@@ -1381,11 +1394,11 @@ intr_release_msix(device_t pci, device_t child, intptr_t xref, int irq)
 	struct intr_map_data_msi *msi;
 	int err;
 
-	pic = pic_lookup(NULL, xref);
+	pic = pic_lookup(NULL, xref, FLAG_MSI);
 	if (pic == NULL)
 		return (ESRCH);
 
-	KASSERT((pic->pic_flags & FLAG_MSI) != 0,
+	KASSERT((pic->pic_flags & FLAG_TYPE_MASK) == FLAG_MSI,
 	    ("%s: Found a non-MSI controller: %s", __func__,
 	     device_get_name(pic->pic_dev)));
 
@@ -1414,11 +1427,11 @@ intr_map_msi(device_t pci, device_t child, intptr_t xref, int irq,
 	struct intr_pic *pic;
 	int err;
 
-	pic = pic_lookup(NULL, xref);
+	pic = pic_lookup(NULL, xref, FLAG_MSI);
 	if (pic == NULL)
 		return (ESRCH);
 
-	KASSERT((pic->pic_flags & FLAG_MSI) != 0,
+	KASSERT((pic->pic_flags & FLAG_TYPE_MASK) == FLAG_MSI,
 	    ("%s: Found a non-MSI controller: %s", __func__,
 	     device_get_name(pic->pic_dev)));
 

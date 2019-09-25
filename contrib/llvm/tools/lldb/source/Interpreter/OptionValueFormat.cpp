@@ -9,12 +9,8 @@
 
 #include "lldb/Interpreter/OptionValueFormat.h"
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
 #include "lldb/DataFormatters/FormatManager.h"
-#include "lldb/Interpreter/Args.h"
+#include "lldb/Interpreter/OptionArgParser.h"
 #include "lldb/Utility/Stream.h"
 
 using namespace lldb;
@@ -43,7 +39,7 @@ Status OptionValueFormat::SetValueFromString(llvm::StringRef value,
   case eVarSetOperationReplace:
   case eVarSetOperationAssign: {
     Format new_format;
-    error = Args::StringToFormat(value.str().c_str(), new_format, nullptr);
+    error = OptionArgParser::ToFormat(value.str().c_str(), new_format, nullptr);
     if (error.Success()) {
       m_value_was_set = true;
       m_current_value = new_format;

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1998-2000 Doug Rabson
  * All rights reserved.
  *
@@ -186,11 +188,13 @@ static struct linker_class link_elf_class = {
 	link_elf_methods, sizeof(struct elf_file)
 };
 
+typedef int (*elf_reloc_fn)(linker_file_t lf, Elf_Addr relocbase,
+    const void *data, int type, elf_lookup_fn lookup);
+
 static int	parse_dynamic(elf_file_t);
 static int	relocate_file(elf_file_t);
-static int	relocate_file1(elf_file_t ef, int (*elf_reloc_func)(
-		    linker_file_t lf, Elf_Addr relocbase, const void *data,
-		    int type, elf_lookup_fn lookup));
+static int	relocate_file1(elf_file_t ef, elf_lookup_fn lookup,
+		    elf_reloc_fn reloc, bool ifuncs);
 static int	link_elf_preload_parse_symbols(elf_file_t);
 
 static struct elf_set_head set_pcpu_list;
@@ -384,7 +388,7 @@ link_elf_link_common_finish(linker_file_t lf)
 	return (0);
 }
 
-extern vm_offset_t __startkernel;
+extern vm_offset_t __startkernel, __endkernel;
 
 static void
 link_elf_init(void* arg)
@@ -425,8 +429,13 @@ link_elf_init(void* arg)
 
 	if (dp != NULL)
 		parse_dynamic(ef);
+#ifdef __powerpc__
+	linker_kernel_file->address = (caddr_t)__startkernel;
+	linker_kernel_file->size = (intptr_t)(__endkernel - __startkernel);
+#else
 	linker_kernel_file->address += KERNBASE;
 	linker_kernel_file->size = -(intptr_t)linker_kernel_file->address;
+#endif
 
 	if (modptr != NULL) {
 		ef->modptr = modptr;
@@ -462,7 +471,7 @@ link_elf_init(void* arg)
 #endif
 }
 
-SYSINIT(link_elf, SI_SUB_KLD, SI_ORDER_THIRD, link_elf_init, 0);
+SYSINIT(link_elf, SI_SUB_KLD, SI_ORDER_THIRD, link_elf_init, NULL);
 
 static int
 link_elf_preload_parse_symbols(elf_file_t ef)
@@ -609,27 +618,33 @@ parse_dynamic(elf_file_t ef)
 static int
 parse_dpcpu(elf_file_t ef)
 {
-	int count;
-	int error;
+	int error, size;
 
 	ef->pcpu_start = 0;
 	ef->pcpu_stop = 0;
 	error = link_elf_lookup_set(&ef->lf, "pcpu", (void ***)&ef->pcpu_start,
-	    (void ***)&ef->pcpu_stop, &count);
+	    (void ***)&ef->pcpu_stop, NULL);
 	/* Error just means there is no pcpu set to relocate. */
 	if (error != 0)
 		return (0);
-	count *= sizeof(void *);
+	size = (uintptr_t)ef->pcpu_stop - (uintptr_t)ef->pcpu_start;
+	/* Empty set? */
+	if (size < 1)
+		return (0);
 	/*
 	 * Allocate space in the primary pcpu area.  Copy in our
 	 * initialization from the data section and then initialize
 	 * all per-cpu storage from that.
 	 */
-	ef->pcpu_base = (Elf_Addr)(uintptr_t)dpcpu_alloc(count);
-	if (ef->pcpu_base == 0)
+	ef->pcpu_base = (Elf_Addr)(uintptr_t)dpcpu_alloc(size);
+	if (ef->pcpu_base == 0) {
+		printf("%s: pcpu module space is out of space; "
+		    "cannot allocate %d for %s\n",
+		    __func__, size, ef->lf.pathname);
 		return (ENOSPC);
-	memcpy((void *)ef->pcpu_base, (void *)ef->pcpu_start, count);
-	dpcpu_copy((void *)ef->pcpu_base, count);
+	}
+	memcpy((void *)ef->pcpu_base, (void *)ef->pcpu_start, size);
+	dpcpu_copy((void *)ef->pcpu_base, size);
 	elf_set_add(&set_pcpu_list, ef->pcpu_start, ef->pcpu_stop,
 	    ef->pcpu_base);
 
@@ -640,27 +655,33 @@ parse_dpcpu(elf_file_t ef)
 static int
 parse_vnet(elf_file_t ef)
 {
-	int count;
-	int error;
+	int error, size;
 
 	ef->vnet_start = 0;
 	ef->vnet_stop = 0;
 	error = link_elf_lookup_set(&ef->lf, "vnet", (void ***)&ef->vnet_start,
-	    (void ***)&ef->vnet_stop, &count);
+	    (void ***)&ef->vnet_stop, NULL);
 	/* Error just means there is no vnet data set to relocate. */
 	if (error != 0)
 		return (0);
-	count *= sizeof(void *);
+	size = (uintptr_t)ef->vnet_stop - (uintptr_t)ef->vnet_start;
+	/* Empty set? */
+	if (size < 1)
+		return (0);
 	/*
 	 * Allocate space in the primary vnet area.  Copy in our
 	 * initialization from the data section and then initialize
 	 * all per-vnet storage from that.
 	 */
-	ef->vnet_base = (Elf_Addr)(uintptr_t)vnet_data_alloc(count);
-	if (ef->vnet_base == 0)
+	ef->vnet_base = (Elf_Addr)(uintptr_t)vnet_data_alloc(size);
+	if (ef->vnet_base == 0) {
+		printf("%s: vnet module space is out of space; "
+		    "cannot allocate %d for %s\n",
+		    __func__, size, ef->lf.pathname);
 		return (ENOSPC);
-	memcpy((void *)ef->vnet_base, (void *)ef->vnet_start, count);
-	vnet_data_copy((void *)ef->vnet_base, count);
+	}
+	memcpy((void *)ef->vnet_base, (void *)ef->vnet_start, size);
+	vnet_data_copy((void *)ef->vnet_base, size);
 	elf_set_add(&set_vnet_list, ef->vnet_start, ef->vnet_stop,
 	    ef->vnet_base);
 
@@ -768,10 +789,8 @@ link_elf_load_file(linker_class_t cls, const char* filename,
 	Elf_Phdr *segs[MAXSEGS];
 	int nsegs;
 	Elf_Phdr *phdyn;
-	Elf_Phdr *phphdr;
 	caddr_t mapbase;
 	size_t mapsize;
-	Elf_Off base_offset;
 	Elf_Addr base_vaddr;
 	Elf_Addr base_vlimit;
 	int error = 0;
@@ -870,7 +889,6 @@ link_elf_load_file(linker_class_t cls, const char* filename,
 	phlimit = phdr + hdr->e_phnum;
 	nsegs = 0;
 	phdyn = NULL;
-	phphdr = NULL;
 	while (phdr < phlimit) {
 		switch (phdr->p_type) {
 		case PT_LOAD:
@@ -884,10 +902,6 @@ link_elf_load_file(linker_class_t cls, const char* filename,
 			 */
 			segs[nsegs] = phdr;
 			++nsegs;
-			break;
-
-		case PT_PHDR:
-			phphdr = phdr;
 			break;
 
 		case PT_DYNAMIC:
@@ -917,7 +931,6 @@ link_elf_load_file(linker_class_t cls, const char* filename,
 	 * out our contiguous region, and to establish the base
 	 * address for relocation.
 	 */
-	base_offset = trunc_page(segs[0]->p_offset);
 	base_vaddr = trunc_page(segs[0]->p_vaddr);
 	base_vlimit = round_page(segs[nsegs - 1]->p_vaddr +
 	    segs[nsegs - 1]->p_memsz);
@@ -946,7 +959,7 @@ link_elf_load_file(linker_class_t cls, const char* filename,
 		goto out;
 	}
 #else
-	ef->address = malloc(mapsize, M_LINKER, M_WAITOK);
+	ef->address = malloc(mapsize, M_LINKER, M_EXEC | M_WAITOK);
 #endif
 	mapbase = ef->address;
 
@@ -1169,8 +1182,8 @@ link_elf_unload_file(linker_file_t file)
 static void
 link_elf_unload_preload(linker_file_t file)
 {
-	if (file->filename != NULL)
-		preload_delete_name(file->filename);
+	if (file->pathname != NULL)
+		preload_delete_name(file->pathname);
 }
 
 static const char *
@@ -1186,81 +1199,48 @@ symbol_name(elf_file_t ef, Elf_Size r_info)
 }
 
 static int
-relocate_file1(elf_file_t ef, int (*elf_reloc_func)(linker_file_t lf,
-    Elf_Addr relocbase, const void *data, int type, elf_lookup_fn lookup))
+symbol_type(elf_file_t ef, Elf_Size r_info)
 {
-	const Elf_Rel *rellim;
+	const Elf_Sym *ref;
+
+	if (ELF_R_SYM(r_info)) {
+		ref = ef->symtab + ELF_R_SYM(r_info);
+		return (ELF_ST_TYPE(ref->st_info));
+	}
+	return (STT_NOTYPE);
+}
+
+static int
+relocate_file1(elf_file_t ef, elf_lookup_fn lookup, elf_reloc_fn reloc,
+    bool ifuncs)
+{
 	const Elf_Rel *rel;
-	const Elf_Rela *relalim;
 	const Elf_Rela *rela;
 	const char *symname;
 
-	/* Perform relocations without addend if there are any: */
-	rel = ef->rel;
-	if (rel != NULL) {
-		rellim = (const Elf_Rel *)
-		    ((const char *)ef->rel + ef->relsize);
-		while (rel < rellim) {
-			if (elf_reloc_func(&ef->lf, (Elf_Addr)ef->address, rel,
-			    ELF_RELOC_REL, elf_lookup)) {
-				symname = symbol_name(ef, rel->r_info);
-				printf("link_elf: symbol %s undefined\n", symname);
-				return (ENOENT);
-			}
-			rel++;
-		}
-	}
+#define	APPLY_RELOCS(iter, tbl, tblsize, type) do {			\
+	for ((iter) = (tbl); (iter) != NULL &&				\
+	    (iter) < (tbl) + (tblsize) / sizeof(*(iter)); (iter)++) {	\
+		if ((symbol_type(ef, (iter)->r_info) ==			\
+		    STT_GNU_IFUNC ||					\
+		    elf_is_ifunc_reloc((iter)->r_info)) != ifuncs)	\
+			continue;					\
+		if (reloc(&ef->lf, (Elf_Addr)ef->address,		\
+		    (iter), (type), lookup)) {				\
+			symname = symbol_name(ef, (iter)->r_info);	\
+			printf("link_elf: symbol %s undefined\n",	\
+			    symname);					\
+			return (ENOENT);				\
+		}							\
+	}								\
+} while (0)
 
-	/* Perform relocations with addend if there are any: */
-	rela = ef->rela;
-	if (rela != NULL) {
-		relalim = (const Elf_Rela *)
-		    ((const char *)ef->rela + ef->relasize);
-		while (rela < relalim) {
-			if (elf_reloc_func(&ef->lf, (Elf_Addr)ef->address, rela,
-			    ELF_RELOC_RELA, elf_lookup)) {
-				symname = symbol_name(ef, rela->r_info);
-				printf("link_elf: symbol %s undefined\n",
-				    symname);
-				return (ENOENT);
-			}
-			rela++;
-		}
-	}
+	APPLY_RELOCS(rel, ef->rel, ef->relsize, ELF_RELOC_REL);
+	APPLY_RELOCS(rela, ef->rela, ef->relasize, ELF_RELOC_RELA);
+	APPLY_RELOCS(rel, ef->pltrel, ef->pltrelsize, ELF_RELOC_REL);
+	APPLY_RELOCS(rela, ef->pltrela, ef->pltrelasize, ELF_RELOC_RELA);
 
-	/* Perform PLT relocations without addend if there are any: */
-	rel = ef->pltrel;
-	if (rel != NULL) {
-		rellim = (const Elf_Rel *)
-		    ((const char *)ef->pltrel + ef->pltrelsize);
-		while (rel < rellim) {
-			if (elf_reloc_func(&ef->lf, (Elf_Addr)ef->address, rel,
-			    ELF_RELOC_REL, elf_lookup)) {
-				symname = symbol_name(ef, rel->r_info);
-				printf("link_elf: symbol %s undefined\n",
-				    symname);
-				return (ENOENT);
-			}
-			rel++;
-		}
-	}
-
-	/* Perform relocations with addend if there are any: */
-	rela = ef->pltrela;
-	if (rela != NULL) {
-		relalim = (const Elf_Rela *)
-		    ((const char *)ef->pltrela + ef->pltrelasize);
-		while (rela < relalim) {
-			if (elf_reloc_func(&ef->lf, (Elf_Addr)ef->address, rela,
-			    ELF_RELOC_RELA, elf_lookup)) {
-				symname = symbol_name(ef, rela->r_info);
-				printf("link_elf: symbol %s undefined\n",
-				    symname);
-				return (ENOENT);
-			}
-			rela++;
-		}
-	}
+#undef APPLY_RELOCS
 
 	return (0);
 }
@@ -1268,14 +1248,12 @@ relocate_file1(elf_file_t ef, int (*elf_reloc_func)(linker_file_t lf,
 static int
 relocate_file(elf_file_t ef)
 {
-	int e;
+	int error;
 
-	e = relocate_file1(ef, elf_reloc);
-#if defined(__i386__) || defined(__amd64__)
-	if (e == 0)
-		e = relocate_file1(ef, elf_reloc_ifunc);
-#endif
-	return (e);
+	error = relocate_file1(ef, elf_lookup, elf_reloc, false);
+	if (error == 0)
+		error = relocate_file1(ef, elf_lookup, elf_reloc, true);
+	return (error);
 }
 
 /*
@@ -1299,7 +1277,7 @@ elf_hash(const char *name)
 }
 
 static int
-link_elf_lookup_symbol(linker_file_t lf, const char* name, c_linker_sym_t* sym)
+link_elf_lookup_symbol(linker_file_t lf, const char *name, c_linker_sym_t *sym)
 {
 	elf_file_t ef = (elf_file_t) lf;
 	unsigned long symnum;
@@ -1687,26 +1665,45 @@ link_elf_strtab_get(linker_file_t lf, caddr_t *strtab)
 	return (ef->ddbstrcnt);
 }
 
-#if defined(__i386__) || defined(__amd64__)
+#if defined(__i386__) || defined(__amd64__) || defined(__aarch64__)
+/*
+ * Use this lookup routine when performing relocations early during boot.
+ * The generic lookup routine depends on kobj, which is not initialized
+ * at that point.
+ */
+static int
+elf_lookup_ifunc(linker_file_t lf, Elf_Size symidx, int deps __unused,
+    Elf_Addr *res)
+{
+	elf_file_t ef;
+	const Elf_Sym *symp;
+	caddr_t val;
+
+	ef = (elf_file_t)lf;
+	symp = ef->symtab + symidx;
+	if (ELF_ST_TYPE(symp->st_info) == STT_GNU_IFUNC) {
+		val = (caddr_t)ef->address + symp->st_value;
+		*res = ((Elf_Addr (*)(void))val)();
+		return (0);
+	}
+	return (ENOENT);
+}
+
 void
 link_elf_ireloc(caddr_t kmdp)
 {
 	struct elf_file eff;
 	elf_file_t ef;
-	volatile char *c;
-	size_t i;
 
-	ef =  &eff;
+	ef = &eff;
 
-	/* Do not use bzero/memset before ireloc is done. */
-	for (c = (char *)ef, i = 0; i < sizeof(*ef); i++)
-		c[i] = 0;
+	bzero_early(ef, sizeof(*ef));
 
 	ef->modptr = kmdp;
 	ef->dynamic = (Elf_Dyn *)&_DYNAMIC;
 	parse_dynamic(ef);
 	ef->address = 0;
 	link_elf_preload_parse_symbols(ef);
-	relocate_file1(ef, elf_reloc_ifunc);
+	relocate_file1(ef, elf_lookup_ifunc, elf_reloc, true);
 }
 #endif

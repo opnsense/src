@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 1982, 1986, 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
  * (c) UNIX System Laboratories, Inc.
@@ -18,7 +20,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -95,6 +97,11 @@ __FBSDID("$FreeBSD$");
 #include <sys/vnode.h>
 
 #include <security/mac/mac_framework.h>
+
+_Static_assert(sizeof(struct acctv3) - offsetof(struct acctv3, ac_trailer) ==
+    sizeof(struct acctv2) - offsetof(struct acctv2, ac_trailer), "trailer");
+_Static_assert(sizeof(struct acctv3) - offsetof(struct acctv3, ac_len2) ==
+    sizeof(struct acctv2) - offsetof(struct acctv2, ac_len2), "len2");
 
 /*
  * The routines implemented in this file are described in:
@@ -339,7 +346,7 @@ acct_disable(struct thread *td, int logging)
 int
 acct_process(struct thread *td)
 {
-	struct acctv2 acct;
+	struct acctv3 acct;
 	struct timeval ut, st, tmp;
 	struct plimit *oldlim;
 	struct proc *p;
@@ -421,7 +428,7 @@ acct_process(struct thread *td)
 	/* Setup ancillary structure fields. */
 	acct.ac_flagx |= ANVER;
 	acct.ac_zero = 0;
-	acct.ac_version = 2;
+	acct.ac_version = 3;
 	acct.ac_len = acct.ac_len2 = sizeof(acct);
 
 	/*

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2000 John Baldwin <jhb@FreeBSD.org>
  * All rights reserved.
  *
@@ -339,7 +341,7 @@ ktr_tracepoint(uint64_t mask, const char *file, int line, const char *format,
 #ifdef KTR_ALQ
 	if (ktr_alq_enabled) {
 		if (td->td_critnest == 0 &&
-		    (td->td_flags & TDF_IDLETD) == 0 &&
+		    (TD_IS_IDLETHREAD(td)) == 0 &&
 		    td != ald_thread) {
 			if (ktr_alq_max && ktr_alq_cnt > ktr_alq_max)
 				goto done;
@@ -416,7 +418,7 @@ DB_SHOW_COMMAND(ktr, db_ktr_all)
 	tstate.first = -1;
 	db_ktr_verbose = 0;
 	db_ktr_verbose |= (strchr(modif, 'v') != NULL) ? 2 : 0;
-	db_ktr_verbose |= (strchr(modif, 'V') != NULL) ? 1 : 0; /* just timestap please */
+	db_ktr_verbose |= (strchr(modif, 'V') != NULL) ? 1 : 0; /* just timestamp please */
 	if (strchr(modif, 'a') != NULL) {
 		db_disable_pager();
 		while (cncheckc() == -1)

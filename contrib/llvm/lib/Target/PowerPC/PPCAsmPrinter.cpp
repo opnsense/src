@@ -158,23 +158,6 @@ public:
 
 } // end anonymous namespace
 
-/// stripRegisterPrefix - This method strips the character prefix from a
-/// register name so that only the number is left.  Used by for linux asm.
-static const char *stripRegisterPrefix(const char *RegName) {
-  switch (RegName[0]) {
-    case 'r':
-    case 'f':
-    case 'q': // for QPX
-    case 'v':
-      if (RegName[1] == 's')
-        return RegName + 2;
-      return RegName + 1;
-    case 'c': if (RegName[1] == 'r') return RegName + 2;
-  }
-
-  return RegName;
-}
-
 void PPCAsmPrinter::printOperand(const MachineInstr *MI, unsigned OpNo,
                                  raw_ostream &O) {
   const DataLayout &DL = getDataLayout();
@@ -182,27 +165,15 @@ void PPCAsmPrinter::printOperand(const MachineInstr *MI, unsigned OpNo,
 
   switch (MO.getType()) {
   case MachineOperand::MO_Register: {
-    unsigned Reg = MO.getReg();
+    unsigned Reg = PPCInstrInfo::getRegNumForOperand(MI->getDesc(),
+                                                     MO.getReg(), OpNo);
 
-    // There are VSX instructions that use VSX register numbering (vs0 - vs63)
-    // as well as those that use VMX register numbering (v0 - v31 which
-    // correspond to vs32 - vs63). If we have an instruction that uses VSX
-    // numbering, we need to convert the VMX registers to VSX registers.
-    // Namely, we print 32-63 when the instruction operates on one of the
-    // VMX registers.
-    // (Please synchronize with PPCInstPrinter::printOperand)
-    if (MI->getDesc().TSFlags & PPCII::UseVSXReg) {
-      if (PPCInstrInfo::isVRRegister(Reg))
-        Reg = PPC::VSX32 + (Reg - PPC::V0);
-      else if (PPCInstrInfo::isVFRegister(Reg))
-        Reg = PPC::VSX32 + (Reg - PPC::VF0);
-    }
     const char *RegName = PPCInstPrinter::getRegisterName(Reg);
 
     // Linux assembler (Others?) does not take register mnemonics.
     // FIXME - What about special registers used in mfspr/mtspr?
     if (!Subtarget->isDarwin())
-      RegName = stripRegisterPrefix(RegName);
+      RegName = PPCRegisterInfo::stripRegisterPrefix(RegName);
     O << RegName;
     return;
   }
@@ -279,6 +250,21 @@ bool PPCAsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
       if (MI->getOperand(OpNo).isImm())
         O << "i";
       return false;
+    case 'x':
+      if(!MI->getOperand(OpNo).isReg())
+        return true;
+      // This operand uses VSX numbering.
+      // If the operand is a VMX register, convert it to a VSX register.
+      unsigned Reg = MI->getOperand(OpNo).getReg();
+      if (PPCInstrInfo::isVRRegister(Reg))
+        Reg = PPC::VSX32 + (Reg - PPC::V0);
+      else if (PPCInstrInfo::isVFRegister(Reg))
+        Reg = PPC::VSX32 + (Reg - PPC::VF0);
+      const char *RegName;
+      RegName = PPCInstPrinter::getRegisterName(Reg);
+      RegName = PPCRegisterInfo::stripRegisterPrefix(RegName);
+      O << RegName;
+      return false;
     }
   }
 
@@ -303,7 +289,7 @@ bool PPCAsmPrinter::PrintAsmMemoryOperand(const MachineInstr *MI, unsigned OpNo,
       {
         const char *RegName = "r0";
         if (!Subtarget->isDarwin())
-          RegName = stripRegisterPrefix(RegName);
+          RegName = PPCRegisterInfo::stripRegisterPrefix(RegName);
         O << RegName << ", ";
         printOperand(MI, OpNo, O);
         return false;
@@ -341,7 +327,7 @@ MCSymbol *PPCAsmPrinter::lookUpOrCreateTOCEntry(MCSymbol *Sym) {
 }
 
 void PPCAsmPrinter::EmitEndOfAsmFile(Module &M) {
-  SM.serializeToStackMapSection();
+  emitStackMaps(SM);
 }
 
 void PPCAsmPrinter::LowerSTACKMAP(StackMaps &SM, const MachineInstr &MI) {
@@ -510,6 +496,32 @@ void PPCAsmPrinter::EmitInstruction(const MachineInstr *MI) {
   const Module *M = MF->getFunction().getParent();
   PICLevel::Level PL = M->getPICLevel();
 
+#ifndef NDEBUG
+  // Validate that SPE and FPU are mutually exclusive in codegen
+  if (!MI->isInlineAsm()) {
+    for (const MachineOperand &MO: MI->operands()) {
+      if (MO.isReg()) {
+        unsigned Reg = MO.getReg();
+        if (Subtarget->hasSPE()) {
+          if (PPC::F4RCRegClass.contains(Reg) ||
+              PPC::F8RCRegClass.contains(Reg) ||
+              PPC::QBRCRegClass.contains(Reg) ||
+              PPC::QFRCRegClass.contains(Reg) ||
+              PPC::QSRCRegClass.contains(Reg) ||
+              PPC::VFRCRegClass.contains(Reg) ||
+              PPC::VRRCRegClass.contains(Reg) ||
+              PPC::VSFRCRegClass.contains(Reg) ||
+              PPC::VSSRCRegClass.contains(Reg)
+              )
+            llvm_unreachable("SPE targets cannot have FPRegs!");
+        } else {
+          if (PPC::SPERCRegClass.contains(Reg))
+            llvm_unreachable("SPE register found in FPU-targeted code!");
+        }
+      }
+    }
+  }
+#endif
   // Lower multi-instruction pseudo operations.
   switch (MI->getOpcode()) {
   default: break;
@@ -563,33 +575,63 @@ void PPCAsmPrinter::EmitInstruction(const MachineInstr *MI) {
     // Transform %rd = UpdateGBR(%rt, %ri)
     // Into: lwz %rt, .L0$poff - .L0$pb(%ri)
     //       add %rd, %rt, %ri
+    // or into (if secure plt mode is on):
+    //       addis r30, r30, .LTOC - .L0$pb@ha
+    //       addi r30, r30, .LTOC - .L0$pb@l
     // Get the offset from the GOT Base Register to the GOT
     LowerPPCMachineInstrToMCInst(MI, TmpInst, *this, isDarwin);
-    MCSymbol *PICOffset =
-      MF->getInfo<PPCFunctionInfo>()->getPICOffsetSymbol();
-    TmpInst.setOpcode(PPC::LWZ);
-    const MCExpr *Exp =
-      MCSymbolRefExpr::create(PICOffset, MCSymbolRefExpr::VK_None, OutContext);
-    const MCExpr *PB =
-      MCSymbolRefExpr::create(MF->getPICBaseSymbol(),
-                              MCSymbolRefExpr::VK_None,
-                              OutContext);
-    const MCOperand TR = TmpInst.getOperand(1);
-    const MCOperand PICR = TmpInst.getOperand(0);
+    if (Subtarget->isSecurePlt() && isPositionIndependent() ) {
+      unsigned PICR = TmpInst.getOperand(0).getReg();
+      MCSymbol *LTOCSymbol = OutContext.getOrCreateSymbol(StringRef(".LTOC"));
+      const MCExpr *PB =
+        MCSymbolRefExpr::create(MF->getPICBaseSymbol(),
+                                OutContext);
 
-    // Step 1: lwz %rt, .L$poff - .L$pb(%ri)
-    TmpInst.getOperand(1) =
-        MCOperand::createExpr(MCBinaryExpr::createSub(Exp, PB, OutContext));
-    TmpInst.getOperand(0) = TR;
-    TmpInst.getOperand(2) = PICR;
-    EmitToStreamer(*OutStreamer, TmpInst);
+      const MCExpr *LTOCDeltaExpr =
+        MCBinaryExpr::createSub(MCSymbolRefExpr::create(LTOCSymbol, OutContext),
+                                PB, OutContext);
 
-    TmpInst.setOpcode(PPC::ADD4);
-    TmpInst.getOperand(0) = PICR;
-    TmpInst.getOperand(1) = TR;
-    TmpInst.getOperand(2) = PICR;
-    EmitToStreamer(*OutStreamer, TmpInst);
-    return;
+      const MCExpr *LTOCDeltaHi =
+        PPCMCExpr::createHa(LTOCDeltaExpr, false, OutContext);
+      EmitToStreamer(*OutStreamer, MCInstBuilder(PPC::ADDIS)
+                                   .addReg(PICR)
+                                   .addReg(PICR)
+                                   .addExpr(LTOCDeltaHi));
+
+      const MCExpr *LTOCDeltaLo =
+        PPCMCExpr::createLo(LTOCDeltaExpr, false, OutContext);
+      EmitToStreamer(*OutStreamer, MCInstBuilder(PPC::ADDI)
+                                   .addReg(PICR)
+                                   .addReg(PICR)
+                                   .addExpr(LTOCDeltaLo));
+      return;
+    } else {
+      MCSymbol *PICOffset =
+        MF->getInfo<PPCFunctionInfo>()->getPICOffsetSymbol();
+      TmpInst.setOpcode(PPC::LWZ);
+      const MCExpr *Exp =
+        MCSymbolRefExpr::create(PICOffset, MCSymbolRefExpr::VK_None, OutContext);
+      const MCExpr *PB =
+        MCSymbolRefExpr::create(MF->getPICBaseSymbol(),
+                                MCSymbolRefExpr::VK_None,
+                                OutContext);
+      const MCOperand TR = TmpInst.getOperand(1);
+      const MCOperand PICR = TmpInst.getOperand(0);
+
+      // Step 1: lwz %rt, .L$poff - .L$pb(%ri)
+      TmpInst.getOperand(1) =
+          MCOperand::createExpr(MCBinaryExpr::createSub(Exp, PB, OutContext));
+      TmpInst.getOperand(0) = TR;
+      TmpInst.getOperand(2) = PICR;
+      EmitToStreamer(*OutStreamer, TmpInst);
+
+      TmpInst.setOpcode(PPC::ADD4);
+      TmpInst.getOperand(0) = PICR;
+      TmpInst.getOperand(1) = TR;
+      TmpInst.getOperand(2) = PICR;
+      EmitToStreamer(*OutStreamer, TmpInst);
+      return;
+    }
   }
   case PPC::LWZtoc: {
     // Transform %r3 = LWZtoc @min1, %r2
@@ -741,11 +783,11 @@ void PPCAsmPrinter::EmitInstruction(const MachineInstr *MI) {
     else if (MO.isGlobal()) {
       const GlobalValue *GV = MO.getGlobal();
       MOSymbol = getSymbol(GV);
-      DEBUG(
-        unsigned char GVFlags = Subtarget->classifyGlobalReference(GV);
-        assert((GVFlags & PPCII::MO_NLP_FLAG) &&
-               "LDtocL used on symbol that could be accessed directly is "
-               "invalid. Must match ADDIStocHA."));
+      LLVM_DEBUG(
+          unsigned char GVFlags = Subtarget->classifyGlobalReference(GV);
+          assert((GVFlags & PPCII::MO_NLP_FLAG) &&
+                 "LDtocL used on symbol that could be accessed directly is "
+                 "invalid. Must match ADDIStocHA."));
       MOSymbol = lookUpOrCreateTOCEntry(MOSymbol);
     }
 
@@ -770,11 +812,9 @@ void PPCAsmPrinter::EmitInstruction(const MachineInstr *MI) {
 
     if (MO.isGlobal()) {
       const GlobalValue *GV = MO.getGlobal();
-      DEBUG(
-        unsigned char GVFlags = Subtarget->classifyGlobalReference(GV);
-        assert (
-            !(GVFlags & PPCII::MO_NLP_FLAG) &&
-            "Interposable definitions must use indirect access."));
+      LLVM_DEBUG(unsigned char GVFlags = Subtarget->classifyGlobalReference(GV);
+                 assert(!(GVFlags & PPCII::MO_NLP_FLAG) &&
+                        "Interposable definitions must use indirect access."));
       MOSymbol = getSymbol(GV);
     } else if (MO.isCPI()) {
       MOSymbol = GetCPISymbol(MO.getIndex());
@@ -1233,7 +1273,7 @@ void PPCLinuxAsmPrinter::EmitFunctionEntryLabel() {
 
   if (!Subtarget->isPPC64()) {
     const PPCFunctionInfo *PPCFI = MF->getInfo<PPCFunctionInfo>();
-    if (PPCFI->usesPICBase()) {
+    if (PPCFI->usesPICBase() && !Subtarget->isSecurePlt()) {
       MCSymbol *RelocSymbol = PPCFI->getPICOffsetSymbol();
       MCSymbol *PICBase = MF->getPICBaseSymbol();
       OutStreamer->EmitLabel(RelocSymbol);
@@ -1255,7 +1295,7 @@ void PPCLinuxAsmPrinter::EmitFunctionEntryLabel() {
   if (Subtarget->isELFv2ABI()) {
     // In the Large code model, we allow arbitrary displacements between
     // the text section and its associated TOC section.  We place the
-    // full 8-byte offset to the TOC in memory immediatedly preceding
+    // full 8-byte offset to the TOC in memory immediately preceding
     // the function global entry point.
     if (TM.getCodeModel() == CodeModel::Large
         && !MF->getRegInfo().use_empty(PPC::X2)) {
@@ -1458,6 +1498,7 @@ void PPCDarwinAsmPrinter::EmitStartOfAsmFile(Module &M) {
     "ppc750",
     "ppc970",
     "ppcA2",
+    "ppce500",
     "ppce500mc",
     "ppce5500",
     "power3",

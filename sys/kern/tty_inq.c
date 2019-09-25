@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2008 Ed Schouten <ed@FreeBSD.org>
  * All rights reserved.
  *
@@ -326,7 +328,7 @@ ttyinq_write(struct ttyinq *ti, const void *buf, size_t nbytes, int quote)
 int
 ttyinq_write_nofrag(struct ttyinq *ti, const void *buf, size_t nbytes, int quote)
 {
-	size_t ret;
+	size_t ret __unused;
 
 	if (ttyinq_bytesleft(ti) < nbytes)
 		return (-1);

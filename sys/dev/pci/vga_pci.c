@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2005 John Baldwin <jhb@FreeBSD.org>
  * All rights reserved.
  *
@@ -207,7 +209,7 @@ vga_pci_unmap_bios(device_t dev, void *bios)
 int
 vga_pci_repost(device_t dev)
 {
-#if defined(__amd64__) || (defined(__i386__) && !defined(PC98))
+#if defined(__amd64__) || defined(__i386__)
 	x86regs_t regs;
 
 	if (!vga_pci_is_boot_display(dev))
@@ -278,6 +280,17 @@ vga_pci_suspend(device_t dev)
 {
 
 	return (bus_generic_suspend(dev));
+}
+
+static int
+vga_pci_detach(device_t dev)
+{
+	int error; 
+
+	error = bus_generic_detach(dev);
+	if (error == 0)
+		error = device_delete_children(dev);
+	return (error);
 }
 
 static int
@@ -618,6 +631,7 @@ static device_method_t vga_pci_methods[] = {
 	DEVMETHOD(device_attach,	vga_pci_attach),
 	DEVMETHOD(device_shutdown,	bus_generic_shutdown),
 	DEVMETHOD(device_suspend,	vga_pci_suspend),
+	DEVMETHOD(device_detach,	vga_pci_detach),
 	DEVMETHOD(device_resume,	vga_pci_resume),
 
 	/* Bus interface */

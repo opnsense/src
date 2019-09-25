@@ -19,8 +19,9 @@
 
 using namespace llvm;
 
-bool BaseIndexOffset::equalBaseIndex(BaseIndexOffset &Other,
-                                     const SelectionDAG &DAG, int64_t &Off) {
+bool BaseIndexOffset::equalBaseIndex(const BaseIndexOffset &Other,
+                                     const SelectionDAG &DAG,
+                                     int64_t &Off) const {
   // Conservatively fail if we a match failed..
   if (!Base.getNode() || !Other.Base.getNode())
     return false;
@@ -75,7 +76,7 @@ bool BaseIndexOffset::equalBaseIndex(BaseIndexOffset &Other,
 }
 
 /// Parses tree in Ptr for base, index, offset addresses.
-BaseIndexOffset BaseIndexOffset::match(LSBaseSDNode *N,
+BaseIndexOffset BaseIndexOffset::match(const LSBaseSDNode *N,
                                        const SelectionDAG &DAG) {
   SDValue Ptr = N->getBasePtr();
 
@@ -99,16 +100,43 @@ BaseIndexOffset BaseIndexOffset::match(LSBaseSDNode *N,
   }
 
   // Consume constant adds & ors with appropriate masking.
-  while (Base->getOpcode() == ISD::ADD || Base->getOpcode() == ISD::OR) {
-    if (auto *C = dyn_cast<ConstantSDNode>(Base->getOperand(1))) {
+  while (true) {
+    switch (Base->getOpcode()) {
+    case ISD::OR:
       // Only consider ORs which act as adds.
-      if (Base->getOpcode() == ISD::OR &&
-          !DAG.MaskedValueIsZero(Base->getOperand(0), C->getAPIntValue()))
-        break;
-      Offset += C->getSExtValue();
-      Base = Base->getOperand(0);
-      continue;
+      if (auto *C = dyn_cast<ConstantSDNode>(Base->getOperand(1)))
+        if (DAG.MaskedValueIsZero(Base->getOperand(0), C->getAPIntValue())) {
+          Offset += C->getSExtValue();
+          Base = DAG.getTargetLoweringInfo().unwrapAddress(Base->getOperand(0));
+          continue;
+        }
+      break;
+    case ISD::ADD:
+      if (auto *C = dyn_cast<ConstantSDNode>(Base->getOperand(1))) {
+        Offset += C->getSExtValue();
+        Base = DAG.getTargetLoweringInfo().unwrapAddress(Base->getOperand(0));
+        continue;
+      }
+      break;
+    case ISD::LOAD:
+    case ISD::STORE: {
+      auto *LSBase = cast<LSBaseSDNode>(Base.getNode());
+      unsigned int IndexResNo = (Base->getOpcode() == ISD::LOAD) ? 1 : 0;
+      if (LSBase->isIndexed() && Base.getResNo() == IndexResNo)
+        if (auto *C = dyn_cast<ConstantSDNode>(LSBase->getOffset())) {
+          auto Off = C->getSExtValue();
+          if (LSBase->getAddressingMode() == ISD::PRE_DEC ||
+              LSBase->getAddressingMode() == ISD::POST_DEC)
+            Offset -= Off;
+          else
+            Offset += Off;
+          Base = DAG.getTargetLoweringInfo().unwrapAddress(LSBase->getBasePtr());
+          continue;
+        }
+      break;
     }
+    }
+    // If we get here break out of the loop.
     break;
   }
 

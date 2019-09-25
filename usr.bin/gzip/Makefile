@@ -29,8 +29,7 @@ LINKS+=		${BINDIR}/gzip ${BINDIR}/gunzip \
 		${BINDIR}/zdiff ${BINDIR}/xzdiff \
 		${BINDIR}/zdiff ${BINDIR}/zcmp
 
-.if ${MK_TESTS} != "no"
-SUBDIR+=	tests
-.endif
+HAS_TESTS=
+SUBDIR.${MK_TESTS}+= tests
 
 .include <bsd.prog.mk>

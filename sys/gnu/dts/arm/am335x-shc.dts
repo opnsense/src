@@ -1,11 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * support for the bosch am335x based shc c3 board
  *
  * Copyright, C) 2015 Heiko Schocher <hs@denx.de>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 /dts-v1/;
 
@@ -46,7 +44,7 @@
 			gpios = <&gpio1 29 GPIO_ACTIVE_HIGH>;
 			linux,code = <KEY_BACK>;
 			debounce-interval = <1000>;
-			gpio-key,wakeup;
+			wakeup-source;
 		};
 
 		front_button {
@@ -54,7 +52,7 @@
 			gpios = <&gpio1 25 GPIO_ACTIVE_HIGH>;
 			linux,code = <KEY_FRONT>;
 			debounce-interval = <1000>;
-			gpio-key,wakeup;
+			wakeup-source;
 		};
 	};
 
@@ -64,50 +62,50 @@
 
 		compatible = "gpio-leds";
 
-		led@1 {
+		led1 {
 			label = "shc:power:red";
 			gpios = <&gpio0 23 GPIO_ACTIVE_HIGH>;
 			default-state = "off";
 		};
 
-		led@2 {
+		led2 {
 			label = "shc:power:bl";
 			gpios = <&gpio0 22 GPIO_ACTIVE_HIGH>;
 			linux,default-trigger = "timer";
 			default-state = "on";
 		};
 
-		led@3 {
+		led3 {
 			label = "shc:lan:red";
 			gpios = <&gpio0 26 GPIO_ACTIVE_HIGH>;
 			default-state = "off";
 		};
 
-		led@4 {
+		led4 {
 			label = "shc:lan:bl";
 			gpios = <&gpio1 17 GPIO_ACTIVE_HIGH>;
 			default-state = "off";
 		};
 
-		led@5 {
+		led5 {
 			label = "shc:cloud:red";
 			gpios = <&gpio2 2 GPIO_ACTIVE_HIGH>;
 			default-state = "off";
 		};
 
-		led@6 {
+		led6 {
 			label = "shc:cloud:bl";
 			gpios = <&gpio1 18 GPIO_ACTIVE_HIGH>;
 			default-state = "off";
 		};
 	};
 
-	memory {
+	memory@80000000 {
 		device_type = "memory";
 		reg = <0x80000000 0x20000000>; /* 512 MB */
 	};
 
-	vmmcsd_fixed: fixedregulator@0 {
+	vmmcsd_fixed: fixedregulator0 {
 		compatible = "regulator-fixed";
 		regulator-name = "vmmcsd_fixed";
 		regulator-min-microvolt = <3300000>;
@@ -138,7 +136,7 @@
 &epwmss1 {
 	status = "okay";
 
-	ehrpwm1: ehrpwm@48302200 {
+	ehrpwm1: pwm@200 {
 		pinctrl-names = "default";
 		pinctrl-0 = <&ehrpwm1_pins>;
 		status = "okay";
@@ -188,7 +186,7 @@
 	};
 
 	at24@50 {
-		compatible = "at24,24c32";
+		compatible = "atmel,24c32";
 		pagesize = <32>;
 		reg = <0x50>;
 	};
@@ -205,8 +203,7 @@
 	pinctrl-1 = <&cpsw_sleep>;
 	status = "okay";
 	slaves = <1>;
-	cpsw_emac0: slave@4a100200  {
-		phy_id = <&davinci_mdio>, <0>;
+	cpsw_emac0: slave@200 {
 		phy-mode = "mii";
 		phy-handle = <&ethernetphy0>;
 	};
@@ -216,7 +213,7 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&mmc1_pins>;
 	bus-width = <0x4>;
-	cd-gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;
+	cd-gpios = <&gpio0 6 GPIO_ACTIVE_LOW>;
 	cd-inverted;
 	max-frequency = <26000000>;
 	vmmc-supply = <&vmmcsd_fixed>;

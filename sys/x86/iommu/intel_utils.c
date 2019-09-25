@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2013 The FreeBSD Foundation
  * All rights reserved.
  *
@@ -366,8 +368,7 @@ dmar_flush_transl_to_ram(struct dmar_unit *unit, void *dst, size_t sz)
 	 * If DMAR does not snoop paging structures accesses, flush
 	 * CPU cache to memory.
 	 */
-	pmap_invalidate_cache_range((uintptr_t)dst, (uintptr_t)dst + sz,
-	    TRUE);
+	pmap_force_invalidate_cache_range((uintptr_t)dst, (uintptr_t)dst + sz);
 }
 
 void
@@ -613,7 +614,6 @@ dmar_barrier_exit(struct dmar_unit *dmar, u_int barrier_id)
 	DMAR_UNLOCK(dmar);
 }
 
-int dmar_match_verbose;
 int dmar_batch_coalesce = 100;
 struct timespec dmar_hw_timeout = {
 	.tv_sec = 0,
@@ -657,9 +657,6 @@ static SYSCTL_NODE(_hw, OID_AUTO, dmar, CTLFLAG_RD, NULL, "");
 SYSCTL_INT(_hw_dmar, OID_AUTO, tbl_pagecnt, CTLFLAG_RD,
     &dmar_tbl_pagecnt, 0,
     "Count of pages used for DMAR pagetables");
-SYSCTL_INT(_hw_dmar, OID_AUTO, match_verbose, CTLFLAG_RWTUN,
-    &dmar_match_verbose, 0,
-    "Verbose matching of the PCI devices to DMAR paths");
 SYSCTL_INT(_hw_dmar, OID_AUTO, batch_coalesce, CTLFLAG_RWTUN,
     &dmar_batch_coalesce, 0,
     "Number of qi batches between interrupt");

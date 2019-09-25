@@ -10,10 +10,6 @@
 #ifndef liblldb_ScriptInterpreterNone_h_
 #define liblldb_ScriptInterpreterNone_h_
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
 #include "lldb/Interpreter/ScriptInterpreter.h"
 
 namespace lldb_private {
@@ -25,7 +21,7 @@ public:
   ~ScriptInterpreterNone() override;
 
   bool ExecuteOneLine(
-      const char *command, CommandReturnObject *result,
+      llvm::StringRef command, CommandReturnObject *result,
       const ExecuteScriptOptions &options = ExecuteScriptOptions()) override;
 
   void ExecuteInterpreterLoop() override;

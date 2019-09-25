@@ -51,7 +51,7 @@ struct ural_tx_radiotap_header {
 	uint16_t	wt_chan_freq;
 	uint16_t	wt_chan_flags;
 	uint8_t		wt_antenna;
-} __packed __aligned(8);
+} __packed;
 
 #define RAL_TX_RADIOTAP_PRESENT						\
 	((1 << IEEE80211_RADIOTAP_FLAGS) |				\
@@ -90,6 +90,7 @@ enum {
 
 struct ural_softc {
 	struct ieee80211com		sc_ic;
+	struct ieee80211_ratectl_tx_stats sc_txs;
 	struct mbufq			sc_snd;
 	device_t			sc_dev;
 	struct usb_device		*sc_udev;

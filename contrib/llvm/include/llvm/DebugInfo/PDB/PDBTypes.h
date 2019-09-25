@@ -12,6 +12,7 @@
 
 #include "llvm/DebugInfo/CodeView/CodeView.h"
 #include "llvm/DebugInfo/PDB/IPDBEnumChildren.h"
+#include "llvm/DebugInfo/PDB/IPDBFrameData.h"
 #include "llvm/DebugInfo/PDB/Native/RawTypes.h"
 #include <cctype>
 #include <cstddef>
@@ -22,8 +23,12 @@
 namespace llvm {
 namespace pdb {
 
+typedef uint32_t SymIndexId;
+
 class IPDBDataStream;
+class IPDBInjectedSource;
 class IPDBLineNumber;
+class IPDBSectionContrib;
 class IPDBSourceFile;
 class IPDBTable;
 class PDBSymDumper;
@@ -65,6 +70,9 @@ using IPDBEnumSourceFiles = IPDBEnumChildren<IPDBSourceFile>;
 using IPDBEnumDataStreams = IPDBEnumChildren<IPDBDataStream>;
 using IPDBEnumLineNumbers = IPDBEnumChildren<IPDBLineNumber>;
 using IPDBEnumTables = IPDBEnumChildren<IPDBTable>;
+using IPDBEnumInjectedSources = IPDBEnumChildren<IPDBInjectedSource>;
+using IPDBEnumSectionContribs = IPDBEnumChildren<IPDBSectionContrib>;
+using IPDBEnumFrameData = IPDBEnumChildren<IPDBFrameData>;
 
 /// Specifies which PDB reader implementation is to be used.  Only a value
 /// of PDB_ReaderType::DIA is currently supported, but Native is in the works.
@@ -96,13 +104,18 @@ enum PDB_NameSearchFlags {
   NS_CaseInsensitive = 0x2,
   NS_FileNameExtMatch = 0x4,
   NS_Regex = 0x8,
-  NS_UndecoratedName = 0x10
+  NS_UndecoratedName = 0x10,
+
+  // For backward compatibility.
+  NS_CaseInFileNameExt = NS_CaseInsensitive | NS_FileNameExtMatch,
+  NS_CaseRegex = NS_Regex | NS_CaseSensitive,
+  NS_CaseInRex = NS_Regex | NS_CaseInsensitive
 };
 
 /// Specifies the hash algorithm that a source file from a PDB was hashed with.
 /// This corresponds to the CV_SourceChksum_t enumeration and are documented
 /// here: https://msdn.microsoft.com/en-us/library/e96az21x.aspx
-enum class PDB_Checksum { None = 0, MD5 = 1, SHA1 = 2 };
+enum class PDB_Checksum { None = 0, MD5 = 1, SHA1 = 2, SHA256 = 3 };
 
 /// These values correspond to the CV_CPU_TYPE_e enumeration, and are documented
 /// here: https://msdn.microsoft.com/en-us/library/b2fc64ek.aspx
@@ -131,6 +144,13 @@ enum class PDB_Machine {
   SH5 = 0x1A8,
   Thumb = 0x1C2,
   WceMipsV2 = 0x169
+};
+
+enum class PDB_SourceCompression {
+  None,
+  RunLengthEncoded,
+  Huffman,
+  LZ,
 };
 
 /// These values correspond to the CV_call_e enumeration, and are documented
@@ -192,6 +212,18 @@ enum class PDB_SymType {
   CustomType,
   ManagedType,
   Dimension,
+  CallSite,
+  InlineSite,
+  BaseInterface,
+  VectorType,
+  MatrixType,
+  HLSLType,
+  Caller,
+  Callee,
+  Export,
+  HeapAllocationSite,
+  CoffGroup,
+  Inlinee,
   Max
 };
 
@@ -209,6 +241,7 @@ enum class PDB_LocType {
   IlRel,
   MetaData,
   Constant,
+  RegRelAliasIndir,
   Max
 };
 
@@ -218,11 +251,24 @@ enum class PDB_UdtType { Struct, Class, Union, Interface };
 
 /// These values correspond to the StackFrameTypeEnum enumeration, and are
 /// documented here: https://msdn.microsoft.com/en-us/library/bc5207xw.aspx.
-enum class PDB_StackFrameType { FPO, KernelTrap, KernelTSS, EBP, FrameData };
+enum class PDB_StackFrameType : uint16_t {
+  FPO,
+  KernelTrap,
+  KernelTSS,
+  EBP,
+  FrameData,
+  Unknown = 0xffff
+};
 
-/// These values correspond to the StackFrameTypeEnum enumeration, and are
-/// documented here: https://msdn.microsoft.com/en-us/library/bc5207xw.aspx.
-enum class PDB_MemoryType { Code, Data, Stack, HeapCode };
+/// These values correspond to the MemoryTypeEnum enumeration, and are
+/// documented here: https://msdn.microsoft.com/en-us/library/ms165609.aspx.
+enum class PDB_MemoryType : uint16_t {
+  Code,
+  Data,
+  Stack,
+  HeapCode,
+  Any = 0xffff
+};
 
 /// These values correspond to the Basictype enumeration, and are documented
 /// here: https://msdn.microsoft.com/en-us/library/4szdtzc3.aspx
@@ -244,13 +290,15 @@ enum class PDB_BuiltinType {
   Complex = 28,
   Bitfield = 29,
   BSTR = 30,
-  HResult = 31
+  HResult = 31,
+  Char16 = 32,
+  Char32 = 33
 };
 
 /// These values correspond to the flags that can be combined to control the
 /// return of an undecorated name for a C++ decorated name, and are documented
 /// here: https://msdn.microsoft.com/en-us/library/kszfk0fs.aspx
-enum PDB_UndnameFlags: uint32_t {
+enum PDB_UndnameFlags : uint32_t {
   Undname_Complete = 0x0,
   Undname_NoLeadingUnderscores = 0x1,
   Undname_NoMsKeywords = 0x2,
@@ -301,6 +349,36 @@ enum PDB_VariantType {
 
 struct Variant {
   Variant() = default;
+
+  explicit Variant(bool V) : Type(PDB_VariantType::Bool) { Value.Bool = V; }
+  explicit Variant(int8_t V) : Type(PDB_VariantType::Int8) { Value.Int8 = V; }
+  explicit Variant(int16_t V) : Type(PDB_VariantType::Int16) {
+    Value.Int16 = V;
+  }
+  explicit Variant(int32_t V) : Type(PDB_VariantType::Int32) {
+    Value.Int32 = V;
+  }
+  explicit Variant(int64_t V) : Type(PDB_VariantType::Int64) {
+    Value.Int64 = V;
+  }
+  explicit Variant(float V) : Type(PDB_VariantType::Single) {
+    Value.Single = V;
+  }
+  explicit Variant(double V) : Type(PDB_VariantType::Double) {
+    Value.Double = V;
+  }
+  explicit Variant(uint8_t V) : Type(PDB_VariantType::UInt8) {
+    Value.UInt8 = V;
+  }
+  explicit Variant(uint16_t V) : Type(PDB_VariantType::UInt16) {
+    Value.UInt16 = V;
+  }
+  explicit Variant(uint32_t V) : Type(PDB_VariantType::UInt32) {
+    Value.UInt32 = V;
+  }
+  explicit Variant(uint64_t V) : Type(PDB_VariantType::UInt64) {
+    Value.UInt64 = V;
+  }
 
   Variant(const Variant &Other) {
     *this = Other;

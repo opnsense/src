@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1985, 1986, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -53,6 +55,7 @@ struct	in_aliasreq {
 struct igmp_ifsoftc;
 struct in_multi;
 struct lltable;
+SLIST_HEAD(in_multi_head, in_multi);
 
 /*
  * IPv4 per-interface state.
@@ -77,7 +80,7 @@ struct in_ifaddr {
 	u_long	ia_subnet;		/* subnet address */
 	u_long	ia_subnetmask;		/* mask of subnet */
 	LIST_ENTRY(in_ifaddr) ia_hash;	/* entry in bucket of inet addresses */
-	TAILQ_ENTRY(in_ifaddr) ia_link;	/* list of internet addresses */
+	CK_STAILQ_ENTRY(in_ifaddr) ia_link;	/* list of internet addresses */
 	struct	sockaddr_in ia_addr;	/* reserve space for interface name */
 	struct	sockaddr_in ia_dstaddr; /* reserve space for broadcast addr */
 #define	ia_broadaddr	ia_dstaddr
@@ -104,7 +107,7 @@ extern	u_char	inetctlerrmap[];
 /*
  * Hash table for IP addresses.
  */
-TAILQ_HEAD(in_ifaddrhead, in_ifaddr);
+CK_STAILQ_HEAD(in_ifaddrhead, in_ifaddr);
 LIST_HEAD(in_ifaddrhashhead, in_ifaddr);
 
 VNET_DECLARE(struct in_ifaddrhashhead *, in_ifaddrhashtbl);
@@ -169,12 +172,10 @@ do { \
 	/* struct rm_priotracker *t; */					\
 do {									\
 	IN_IFADDR_RLOCK((t));						\
-	for ((ia) = TAILQ_FIRST(&V_in_ifaddrhead);			\
+	for ((ia) = CK_STAILQ_FIRST(&V_in_ifaddrhead);			\
 	    (ia) != NULL && (ia)->ia_ifp != (ifp);			\
-	    (ia) = TAILQ_NEXT((ia), ia_link))				\
+	    (ia) = CK_STAILQ_NEXT((ia), ia_link))				\
 		continue;						\
-	if ((ia) != NULL)						\
-		ifa_ref(&(ia)->ia_ifa);					\
 	IN_IFADDR_RUNLOCK((t));						\
 } while (0)
 
@@ -231,7 +232,59 @@ struct in_mfilter {
 	struct ip_msource_tree	imf_sources; /* source list for (S,G) */
 	u_long			imf_nsrc;    /* # of source entries */
 	uint8_t			imf_st[2];   /* state before/at commit */
+	struct in_multi	       *imf_inm;     /* associated multicast address */
+	STAILQ_ENTRY(in_mfilter) imf_entry;  /* list entry */
 };
+
+/*
+ * Helper types and functions for IPv4 multicast filters.
+ */
+STAILQ_HEAD(ip_mfilter_head, in_mfilter);
+
+struct in_mfilter *ip_mfilter_alloc(int mflags, int st0, int st1);
+void ip_mfilter_free(struct in_mfilter *);
+
+static inline void
+ip_mfilter_init(struct ip_mfilter_head *head)
+{
+
+	STAILQ_INIT(head);
+}
+
+static inline struct in_mfilter *
+ip_mfilter_first(const struct ip_mfilter_head *head)
+{
+
+	return (STAILQ_FIRST(head));
+}
+
+static inline void
+ip_mfilter_insert(struct ip_mfilter_head *head, struct in_mfilter *imf)
+{
+
+	STAILQ_INSERT_TAIL(head, imf, imf_entry);
+}
+
+static inline void
+ip_mfilter_remove(struct ip_mfilter_head *head, struct in_mfilter *imf)
+{
+
+	STAILQ_REMOVE(head, imf, in_mfilter, imf_entry);
+}
+
+#define	IP_MFILTER_FOREACH(imf, head) \
+	STAILQ_FOREACH(imf, head, imf_entry)
+
+static inline size_t
+ip_mfilter_count(struct ip_mfilter_head *head)
+{
+	struct in_mfilter *imf;
+	size_t num = 0;
+
+	STAILQ_FOREACH(imf, head, imf_entry)
+		num++;
+	return (num);
+}
 
 /*
  * IPv4 group descriptor.
@@ -327,19 +380,51 @@ SYSCTL_DECL(_net_inet_raw);
  * consumers of IN_*_MULTI() macros should acquire the locks before
  * calling them; users of the in_{add,del}multi() functions should not.
  */
-extern struct mtx in_multi_mtx;
-#define	IN_MULTI_LOCK()		mtx_lock(&in_multi_mtx)
-#define	IN_MULTI_UNLOCK()	mtx_unlock(&in_multi_mtx)
-#define	IN_MULTI_LOCK_ASSERT()	mtx_assert(&in_multi_mtx, MA_OWNED)
-#define	IN_MULTI_UNLOCK_ASSERT() mtx_assert(&in_multi_mtx, MA_NOTOWNED)
+extern struct mtx in_multi_list_mtx;
+extern struct sx in_multi_sx;
+
+#define	IN_MULTI_LIST_LOCK()		mtx_lock(&in_multi_list_mtx)
+#define	IN_MULTI_LIST_UNLOCK()	mtx_unlock(&in_multi_list_mtx)
+#define	IN_MULTI_LIST_LOCK_ASSERT()	mtx_assert(&in_multi_list_mtx, MA_OWNED)
+#define	IN_MULTI_LIST_UNLOCK_ASSERT() mtx_assert(&in_multi_list_mtx, MA_NOTOWNED)
+
+#define	IN_MULTI_LOCK()		sx_xlock(&in_multi_sx)
+#define	IN_MULTI_UNLOCK()	sx_xunlock(&in_multi_sx)
+#define	IN_MULTI_LOCK_ASSERT()	sx_assert(&in_multi_sx, SA_XLOCKED)
+#define	IN_MULTI_UNLOCK_ASSERT() sx_assert(&in_multi_sx, SA_XUNLOCKED)
+
+void inm_disconnect(struct in_multi *inm);
+extern int ifma_restart;
 
 /* Acquire an in_multi record. */
 static __inline void
 inm_acquire_locked(struct in_multi *inm)
 {
 
-	IN_MULTI_LOCK_ASSERT();
+	IN_MULTI_LIST_LOCK_ASSERT();
 	++inm->inm_refcount;
+}
+
+static __inline void
+inm_acquire(struct in_multi *inm)
+{
+	IN_MULTI_LIST_LOCK();
+	inm_acquire_locked(inm);
+	IN_MULTI_LIST_UNLOCK();
+}
+
+static __inline void
+inm_rele_locked(struct in_multi_head *inmh, struct in_multi *inm)
+{
+	MPASS(inm->inm_refcount > 0);
+	IN_MULTI_LIST_LOCK_ASSERT();
+
+	if (--inm->inm_refcount == 0) {
+		MPASS(inmh != NULL);
+		inm_disconnect(inm);
+		inm->inm_ifma->ifma_protospec = NULL;
+		SLIST_INSERT_HEAD(inmh, inm, inm_nrele);
+	}
 }
 
 /*
@@ -362,11 +447,10 @@ void	inm_commit(struct in_multi *);
 void	inm_clear_recorded(struct in_multi *);
 void	inm_print(const struct in_multi *);
 int	inm_record_source(struct in_multi *inm, const in_addr_t);
-void	inm_release(struct in_multi *);
-void	inm_release_locked(struct in_multi *);
+void	inm_release_deferred(struct in_multi *);
+void	inm_release_list_deferred(struct in_multi_head *);
 struct	in_multi *
-	in_addmulti(struct in_addr *, struct ifnet *);
-void	in_delmulti(struct in_multi *);
+in_addmulti(struct in_addr *, struct ifnet *);
 int	in_joingroup(struct ifnet *, const struct in_addr *,
 	    /*const*/ struct in_mfilter *, struct in_multi **);
 int	in_joingroup_locked(struct ifnet *, const struct in_addr *,

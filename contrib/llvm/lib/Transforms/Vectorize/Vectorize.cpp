@@ -27,15 +27,11 @@ using namespace llvm;
 void llvm::initializeVectorization(PassRegistry &Registry) {
   initializeLoopVectorizePass(Registry);
   initializeSLPVectorizerPass(Registry);
-  initializeLoadStoreVectorizerPass(Registry);
+  initializeLoadStoreVectorizerLegacyPassPass(Registry);
 }
 
 void LLVMInitializeVectorization(LLVMPassRegistryRef R) {
   initializeVectorization(*unwrap(R));
-}
-
-// DEPRECATED: Remove after the LLVM 5 release.
-void LLVMAddBBVectorizePass(LLVMPassManagerRef PM) {
 }
 
 void LLVMAddLoopVectorizePass(LLVMPassManagerRef PM) {

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 1982, 1986 The Regents of the University of California.
  * Copyright (c) 1989, 1990 William Jolitz
  * Copyright (c) 1994 John Dyson
@@ -47,7 +49,6 @@ __FBSDID("$FreeBSD$");
 #include "opt_npx.h"
 #include "opt_reset.h"
 #include "opt_cpu.h"
-#include "opt_xbox.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -85,10 +86,6 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_map.h>
 #include <vm/vm_param.h>
 
-#ifdef XBOX
-#include <machine/xbox.h>
-#endif
-
 #ifndef NSFBUFS
 #define	NSFBUFS		(512 + maxusers * 16)
 #endif
@@ -98,7 +95,7 @@ _Static_assert(OFFSETOF_CURTHREAD == offsetof(struct pcpu, pc_curthread),
 _Static_assert(OFFSETOF_CURPCB == offsetof(struct pcpu, pc_curpcb),
     "OFFSETOF_CURPCB does not correspond with offset of pc_curpcb.");
 _Static_assert(__OFFSETOF_MONITORBUF == offsetof(struct pcpu, pc_monitorbuf),
-    "__OFFSETOF_MONINORBUF does not correspond with offset of pc_monitorbuf.");
+    "__OFFSETOF_MONITORBUF does not correspond with offset of pc_monitorbuf.");
 
 union savefpu *
 get_pcb_user_save_td(struct thread *td)
@@ -207,9 +204,11 @@ cpu_fork(struct thread *td1, struct proc *p2, struct thread *td2, int flags)
 	 * Create a new fresh stack for the new process.
 	 * Copy the trap frame for the return to user mode as if from a
 	 * syscall.  This copies most of the user mode register values.
-	 * The -16 is so we can expand the trapframe if we go to vm86.
+	 * The -VM86_STACK_SPACE (-16) is so we can expand the trapframe
+	 * if we go to vm86.
 	 */
-	td2->td_frame = (struct trapframe *)((caddr_t)td2->td_pcb - 16) - 1;
+	td2->td_frame = (struct trapframe *)((caddr_t)td2->td_pcb -
+	    VM86_STACK_SPACE) - 1;
 	bcopy(td1->td_frame, td2->td_frame, sizeof(struct trapframe));
 
 	td2->td_frame->tf_eax = 0;		/* Child returns zero */
@@ -241,8 +240,7 @@ cpu_fork(struct thread *td1, struct proc *p2, struct thread *td2, int flags)
 	pcb2->pcb_ebp = 0;
 	pcb2->pcb_esp = (int)td2->td_frame - sizeof(void *);
 	pcb2->pcb_ebx = (int)td2;		/* fork_trampoline argument */
-	pcb2->pcb_eip = (int)fork_trampoline;
-	pcb2->pcb_psl = PSL_KERNEL;		/* ints disabled */
+	pcb2->pcb_eip = (int)fork_trampoline + setidt_disp;
 	/*-
 	 * pcb2->pcb_dr*:	cloned above.
 	 * pcb2->pcb_savefpu:	cloned above.
@@ -348,8 +346,7 @@ cpu_thread_clean(struct thread *td)
 		 * XXX do we need to move the TSS off the allocated pages
 		 * before freeing them?  (not done here)
 		 */
-		kmem_free(kernel_arena, (vm_offset_t)pcb->pcb_ext,
-		    ctob(IOPAGES + 1));
+		pmap_trm_free(pcb->pcb_ext, ctob(IOPAGES + 1));
 		pcb->pcb_ext = NULL;
 	}
 }
@@ -371,7 +368,8 @@ cpu_thread_alloc(struct thread *td)
 	struct xstate_hdr *xhdr;
 
 	td->td_pcb = pcb = get_pcb_td(td);
-	td->td_frame = (struct trapframe *)((caddr_t)pcb - 16) - 1;
+	td->td_frame = (struct trapframe *)((caddr_t)pcb -
+	    VM86_STACK_SPACE) - 1;
 	pcb->pcb_ext = NULL; 
 	pcb->pcb_save = get_pcb_user_save_pcb(pcb);
 	if (use_xsave) {
@@ -386,6 +384,21 @@ cpu_thread_free(struct thread *td)
 {
 
 	cpu_thread_clean(td);
+}
+
+bool
+cpu_exec_vmspace_reuse(struct proc *p __unused, vm_map_t map __unused)
+{
+
+	return (true);
+}
+
+int
+cpu_procctl(struct thread *td __unused, int idtype __unused, id_t id __unused,
+    int com __unused, void *data __unused)
+{
+
+	return (EINVAL);
 }
 
 void
@@ -466,8 +479,7 @@ cpu_copy_thread(struct thread *td, struct thread *td0)
 	pcb2->pcb_ebp = 0;
 	pcb2->pcb_esp = (int)td->td_frame - sizeof(void *); /* trampoline arg */
 	pcb2->pcb_ebx = (int)td;			    /* trampoline arg */
-	pcb2->pcb_eip = (int)fork_trampoline;
-	pcb2->pcb_psl &= ~(PSL_I);	/* interrupts must be disabled */
+	pcb2->pcb_eip = (int)fork_trampoline + setidt_disp;
 	pcb2->pcb_gs = rgs();
 	/*
 	 * If we didn't copy the pcb, we'd need to do the following registers:
@@ -586,8 +598,8 @@ sf_buf_map(struct sf_buf *sf, int flags)
 	 */
 	ptep = vtopte(sf->kva);
 	opte = *ptep;
-	*ptep = VM_PAGE_TO_PHYS(sf->m) | pgeflag | PG_RW | PG_V |
-	    pmap_cache_bits(sf->m->md.pat_mode, 0);
+	*ptep = VM_PAGE_TO_PHYS(sf->m) | PG_RW | PG_V |
+	    pmap_cache_bits(kernel_pmap, sf->m->md.pat_mode, 0);
 
 	/*
 	 * Avoid unnecessary TLB invalidations: If the sf_buf's old
@@ -653,7 +665,7 @@ sf_buf_invalidate(struct sf_buf *sf)
 	 * settings are recalculated.
 	 */
 	pmap_qenter(sf->kva, &m, 1);
-	pmap_invalidate_cache_range(sf->kva, sf->kva + PAGE_SIZE, FALSE);
+	pmap_invalidate_cache_range(sf->kva, sf->kva + PAGE_SIZE);
 }
 
 /*

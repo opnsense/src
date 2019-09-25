@@ -21,16 +21,13 @@
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/DeclOpenMP.h"
 #include "clang/AST/DeclTemplate.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/ErrorHandling.h"
 
 namespace clang {
 
 namespace declvisitor {
-
-template <typename T> struct make_ptr { using type = T *; };
-template <typename T> struct make_const_ptr { using type = const T *; };
-
-/// \brief A simple visitor class that helps create declaration visitors.
+/// A simple visitor class that helps create declaration visitors.
 template<template <typename> class Ptr, typename ImplClass, typename RetTy=void>
 class Base {
 public:
@@ -62,20 +59,20 @@ public:
 
 } // namespace declvisitor
 
-/// \brief A simple visitor class that helps create declaration visitors.
+/// A simple visitor class that helps create declaration visitors.
 ///
 /// This class does not preserve constness of Decl pointers (see also
 /// ConstDeclVisitor).
-template<typename ImplClass, typename RetTy = void>
+template <typename ImplClass, typename RetTy = void>
 class DeclVisitor
- : public declvisitor::Base<declvisitor::make_ptr, ImplClass, RetTy> {};
+    : public declvisitor::Base<std::add_pointer, ImplClass, RetTy> {};
 
-/// \brief A simple visitor class that helps create declaration visitors.
+/// A simple visitor class that helps create declaration visitors.
 ///
 /// This class preserves constness of Decl pointers (see also DeclVisitor).
-template<typename ImplClass, typename RetTy = void>
+template <typename ImplClass, typename RetTy = void>
 class ConstDeclVisitor
- : public declvisitor::Base<declvisitor::make_const_ptr, ImplClass, RetTy> {};
+    : public declvisitor::Base<llvm::make_const_ptr, ImplClass, RetTy> {};
 
 } // namespace clang
 

@@ -516,29 +516,27 @@ bool CMIDriverMgr::ParseArgs(const int argc, const char *argv[],
       const CMIUtilString strArg(argv[i]);
 
       // Argument "--executable" is also check for in CMIDriver::ParseArgs()
-      if ((0 ==
-           strArg.compare(
-               "--interpreter")) || // Given by the client such as Eclipse
-          (0 == strArg.compare("--executable"))) // Used to specify that there
-                                                 // is executable argument also
-                                                 // on the command line
-      {                                          // See fn description.
+      if (("--interpreter" == strArg) || // Given by the client such as Eclipse
+          ("--executable" == strArg))    // Used to specify that there
+                                         // is executable argument also
+                                         // on the command line
+      {                                  // See fn description.
         bHaveArgInterpret = true;
       }
-      if (0 == strArg.compare("--version")) {
+      if ("--version" == strArg) {
         bHaveArgVersion = true;
       }
-      if (0 == strArg.compare("--versionLong")) {
+      if ("--versionLong" == strArg) {
         bHaveArgVersionLong = true;
       }
-      if (0 == strArg.compare("--log")) {
+      if ("--log" == strArg) {
         bHaveArgLog = true;
       }
       if (0 == strArg.compare(0, 10, "--log-dir=")) {
         strLogDir = strArg.substr(10, CMIUtilString::npos);
         bHaveArgLogDir = true;
       }
-      if ((0 == strArg.compare("--help")) || (0 == strArg.compare("-h"))) {
+      if (("--help" == strArg) || ("-h" == strArg)) {
         bHaveArgHelp = true;
       }
     }
@@ -640,6 +638,7 @@ CMIUtilString CMIDriverMgr::GetHelpOnCmdLineArgOptions() const {
       MIRSRC(IDE_MI_APP_ARG_VERSION), MIRSRC(IDE_MI_APP_ARG_VERSION_LONG),
       MIRSRC(IDE_MI_APP_ARG_INTERPRETER), MIRSRC(IDE_MI_APP_ARG_SOURCE),
       MIRSRC(IDE_MI_APP_ARG_EXECUTEABLE),
+      MIRSRC(IDE_MI_APP_ARG_SYNCHRONOUS),
       CMIUtilString::Format(
           MIRSRC(IDE_MI_APP_ARG_APP_LOG),
           CMICmnLogMediumFile::Instance().GetFileName().c_str()),

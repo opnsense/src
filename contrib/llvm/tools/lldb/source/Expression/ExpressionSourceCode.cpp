@@ -93,22 +93,19 @@ public:
       m_state = CURRENT_FILE_POPPED;
   }
 
-  // An entry is valid if it occurs before the current line in
-  // the current file.
+  // An entry is valid if it occurs before the current line in the current
+  // file.
   bool IsValidEntry(uint32_t line) {
     switch (m_state) {
     case CURRENT_FILE_NOT_YET_PUSHED:
       return true;
     case CURRENT_FILE_PUSHED:
-      // If we are in file included in the current file,
-      // the entry should be added.
+      // If we are in file included in the current file, the entry should be
+      // added.
       if (m_file_stack.back() != m_current_file)
         return true;
 
-      if (line >= m_current_file_line)
-        return false;
-      else
-        return true;
+      return line < m_current_file_line;
     default:
       return false;
     }
@@ -378,7 +375,5 @@ bool ExpressionSourceCode::GetOriginalBodyBounds(
     return false;
   start_loc += strlen(start_marker);
   end_loc = transformed_text.find(end_marker);
-  if (end_loc == std::string::npos)
-    return false;
-  return true;
+  return end_loc != std::string::npos;
 }

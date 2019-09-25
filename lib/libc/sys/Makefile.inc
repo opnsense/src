@@ -12,7 +12,17 @@
 #
 # MDASM names override the default syscall names in MIASM.
 # NOASM will prevent the default syscall code from being generated.
+# PSEUDO generates _<sys>() and __sys_<sys>() symbols, but not <sys>().
 #
+# While historically machine dependent, all architectures have the following
+# declarations in common:
+#
+NOASM=	exit.o \
+	getlogin.o \
+	sstk.o \
+	yield.o
+PSEUDO=	_exit.o \
+	_getlogin.o
 .sinclude "${LIBC_SRCTOP}/${LIBC_ARCH}/sys/Makefile.inc"
 
 SRCS+= clock_gettime.c gettimeofday.c __vdso_gettimeofday.c
@@ -24,11 +34,21 @@ SRCS+=	\
 	__error.c \
 	interposing_table.c
 
-SRCS+= futimens.c utimensat.c
-NOASM+= futimens.o utimensat.o
-PSEUDO+= _futimens.o _utimensat.o
+SRCS+= getdents.c lstat.c mknod.c stat.c
 
+SRCS+= fstat.c fstatat.c fstatfs.c getfsstat.c statfs.c
+NOASM+= fstat.o fstatat.o fstatfs.o getfsstat.o statfs.o
+PSEUDO+= _fstat.o _fstatat.o _fstatfs.o _getfsstat.o _statfs.o
+
+SRCS+= getdirentries.c
+NOASM+= getdirentries.o
+PSEUDO+= _getdirentries.o
+
+SRCS+= brk.c
 SRCS+= pipe.c
+SRCS+= vadvise.c
+
+SRCS+=	compat-stub.c
 
 INTERPOSED = \
 	accept \
@@ -107,7 +127,7 @@ SYM_MAPS+=	${LIBC_SRCTOP}/sys/Symbol.map
 CLEANFILES+=	${SASM} ${SPSEUDO}
 
 .if ${MACHINE_CPUARCH} == "amd64" || ${MACHINE_CPUARCH} == "i386" || \
-    ${MACHINE_CPUARCH} == "powerpc" || ${MACHINE_ARCH:Marmv6*}
+    ${MACHINE_CPUARCH} == "powerpc" || ${MACHINE_ARCH:Marmv[67]*}
 NOTE_GNU_STACK='\t.section .note.GNU-stack,"",%%progbits\n'
 .else
 NOTE_GNU_STACK=''
@@ -157,13 +177,16 @@ MAN+=	abort2.2 \
 	connectat.2 \
 	cpuset.2 \
 	cpuset_getaffinity.2 \
+	cpuset_getdomain.2 \
 	dup.2 \
 	execve.2 \
 	_exit.2 \
 	extattr_get_file.2 \
 	fcntl.2 \
 	ffclock.2 \
+	fhlink.2 \
 	fhopen.2 \
+	fhreadlink.2 \
 	flock.2 \
 	fork.2 \
 	fsync.2 \
@@ -180,6 +203,7 @@ MAN+=	abort2.2 \
 	getpgrp.2 \
 	getpid.2 \
 	getpriority.2 \
+	getrandom.2 \
 	getrlimit.2 \
 	getrusage.2 \
 	getsid.2 \
@@ -236,7 +260,6 @@ MAN+=	abort2.2 \
 	nanosleep.2 \
 	nfssvc.2 \
 	ntp_adjtime.2 \
-	numa_getaffinity.2 \
 	open.2 \
 	pathconf.2 \
 	pdfork.2 \
@@ -353,6 +376,7 @@ MLINKS+=nanosleep.2 clock_nanosleep.2
 MLINKS+=cpuset.2 cpuset_getid.2 \
 	cpuset.2 cpuset_setid.2
 MLINKS+=cpuset_getaffinity.2 cpuset_setaffinity.2
+MLINKS+=cpuset_getdomain.2 cpuset_setdomain.2
 MLINKS+=dup.2 dup2.2
 MLINKS+=execve.2 fexecve.2
 MLINKS+=extattr_get_file.2 extattr.2 \
@@ -370,10 +394,12 @@ MLINKS+=extattr_get_file.2 extattr.2 \
 MLINKS+=ffclock.2 ffclock_getcounter.2 \
 	ffclock.2 ffclock_getestimate.2 \
 	ffclock.2 ffclock_setestimate.2
+MLINKS+=fhlink.2 fhlinkat.2
 MLINKS+=fhopen.2 fhstat.2 fhopen.2 fhstatfs.2
 MLINKS+=fsync.2 fdatasync.2
 MLINKS+=getdirentries.2 getdents.2
-MLINKS+=getfh.2 lgetfh.2
+MLINKS+=getfh.2 lgetfh.2 \
+	getfh.2 getfhat.2
 MLINKS+=getgid.2 getegid.2
 MLINKS+=getitimer.2 setitimer.2
 MLINKS+=getlogin.2 getlogin_r.3
@@ -407,13 +433,11 @@ MLINKS+=mount.2 nmount.2 \
 MLINKS+=mq_receive.2 mq_timedreceive.2
 MLINKS+=mq_send.2 mq_timedsend.2
 MLINKS+=ntp_adjtime.2 ntp_gettime.2
-MLINKS+=numa_getaffinity.2 numa_setaffinity.2
 MLINKS+=open.2 openat.2
 MLINKS+=pathconf.2 fpathconf.2
 MLINKS+=pathconf.2 lpathconf.2
 MLINKS+=pdfork.2 pdgetpid.2\
-	pdfork.2 pdkill.2 \
-	pdfork.2 pdwait4.2
+	pdfork.2 pdkill.2
 MLINKS+=pipe.2 pipe2.2
 MLINKS+=poll.2 ppoll.2
 MLINKS+=rctl_add_rule.2 rctl_get_limits.2 \

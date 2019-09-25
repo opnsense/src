@@ -10,11 +10,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *	This product includes software developed by the University of
- *	California, Berkeley and its contributors.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -1655,14 +1651,11 @@ env_init(void)
 		|| (strncmp((char *)ep->value, "unix:", 5) == 0))) {
 		char hbuf[256+1];
 		char *cp2 = strchr((char *)ep->value, ':');
-                size_t buflen;
 
 		gethostname(hbuf, sizeof(hbuf));
 		hbuf[sizeof(hbuf)-1] = '\0';
- 		buflen = strlen(hbuf) + strlen(cp2) + 1;
-		cp = (char *)malloc(sizeof(char)*buflen);
+		asprintf(&cp, "%s%s", hbuf, cp2);
 		assert(cp != NULL);
-		snprintf((char *)cp, buflen, "%s%s", hbuf, cp2);
 		free(ep->value);
 		ep->value = (unsigned char *)cp;
 	}

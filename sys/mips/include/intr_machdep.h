@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2004 Juli Mallett <jmallett@FreeBSD.org>
  * All rights reserved.
  *
@@ -71,6 +73,6 @@ mips_intrcnt_inc(mips_intrcnt_t counter)
 {
 	if (counter)
 		atomic_add_long(counter, 1);
-	PCPU_INC(cnt.v_intr);
+	VM_CNT_INC(v_intr);
 }
 #endif /* !_MACHINE_INTR_MACHDEP_H_ */

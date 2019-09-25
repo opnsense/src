@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
  * All rights reserved.
  *
@@ -40,7 +42,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -163,15 +165,16 @@ rip6_input(struct mbuf **mp, int *offp, int proto)
 	struct inpcb *last = NULL;
 	struct mbuf *opts = NULL;
 	struct sockaddr_in6 fromsa;
+	struct epoch_tracker et;
 
 	RIP6STAT_INC(rip6s_ipackets);
 
-	init_sin6(&fromsa, m); /* general init */
+	init_sin6(&fromsa, m, 0); /* general init */
 
 	ifp = m->m_pkthdr.rcvif;
 
-	INP_INFO_RLOCK(&V_ripcbinfo);
-	LIST_FOREACH(in6p, &V_ripcb, inp_list) {
+	INP_INFO_RLOCK_ET(&V_ripcbinfo, et);
+	CK_LIST_FOREACH(in6p, &V_ripcb, inp_list) {
 		/* XXX inp locking */
 		if ((in6p->inp_vflag & INP_IPV6) == 0)
 			continue;
@@ -184,6 +187,45 @@ rip6_input(struct mbuf **mp, int *offp, int proto)
 		if (!IN6_IS_ADDR_UNSPECIFIED(&in6p->in6p_faddr) &&
 		    !IN6_ARE_ADDR_EQUAL(&in6p->in6p_faddr, &ip6->ip6_src))
 			continue;
+		if (last != NULL) {
+			struct mbuf *n = m_copym(m, 0, M_COPYALL, M_NOWAIT);
+
+#if defined(IPSEC) || defined(IPSEC_SUPPORT)
+			/*
+			 * Check AH/ESP integrity.
+			 */
+			if (IPSEC_ENABLED(ipv6)) {
+				if (n != NULL &&
+				    IPSEC_CHECK_POLICY(ipv6, n, last) != 0) {
+					m_freem(n);
+					/* Do not inject data into pcb. */
+					n = NULL;
+				}
+			}
+#endif /* IPSEC */
+			if (n) {
+				if (last->inp_flags & INP_CONTROLOPTS ||
+				    last->inp_socket->so_options & SO_TIMESTAMP)
+					ip6_savecontrol(last, n, &opts);
+				/* strip intermediate headers */
+				m_adj(n, *offp);
+				if (sbappendaddr(&last->inp_socket->so_rcv,
+						(struct sockaddr *)&fromsa,
+						 n, opts) == 0) {
+					m_freem(n);
+					if (opts)
+						m_freem(opts);
+					RIP6STAT_INC(rip6s_fullsock);
+				} else
+					sorwakeup(last->inp_socket);
+				opts = NULL;
+			}
+			INP_RUNLOCK(last);
+			last = NULL;
+		}
+		INP_RLOCK(in6p);
+		if (__predict_false(in6p->inp_flags2 & INP_FREED))
+			goto skip_2;
 		if (jailed_without_vnet(in6p->inp_cred)) {
 			/*
 			 * Allow raw socket in jail to receive multicast;
@@ -193,16 +235,21 @@ rip6_input(struct mbuf **mp, int *offp, int proto)
 			if (!IN6_IS_ADDR_MULTICAST(&ip6->ip6_dst) &&
 			    prison_check_ip6(in6p->inp_cred,
 			    &ip6->ip6_dst) != 0)
-				continue;
+				goto skip_2;
 		}
-		INP_RLOCK(in6p);
 		if (in6p->in6p_cksum != -1) {
 			RIP6STAT_INC(rip6s_isum);
-			if (in6_cksum(m, proto, *offp,
+			if (m->m_pkthdr.len - (*offp + in6p->in6p_cksum) < 2 ||
+			    in6_cksum(m, proto, *offp,
 			    m->m_pkthdr.len - *offp)) {
-				INP_RUNLOCK(in6p);
 				RIP6STAT_INC(rip6s_badsum);
-				continue;
+				/*
+				 * Drop the received message, don't send an
+				 * ICMP6 message. Set proto to IPPROTO_NONE
+				 * to achieve that.
+				 */
+				proto = IPPROTO_NONE;
+				goto skip_2;
 			}
 		}
 		/*
@@ -248,48 +295,15 @@ rip6_input(struct mbuf **mp, int *offp, int proto)
 			}
 			if (blocked != MCAST_PASS) {
 				IP6STAT_INC(ip6s_notmember);
-				INP_RUNLOCK(in6p);
-				continue;
+				goto skip_2;
 			}
-		}
-		if (last != NULL) {
-			struct mbuf *n = m_copy(m, 0, (int)M_COPYALL);
-
-#if defined(IPSEC) || defined(IPSEC_SUPPORT)
-			/*
-			 * Check AH/ESP integrity.
-			 */
-			if (IPSEC_ENABLED(ipv6)) {
-				if (n != NULL &&
-				    IPSEC_CHECK_POLICY(ipv6, n, last) != 0) {
-					m_freem(n);
-					/* Do not inject data into pcb. */
-					n = NULL;
-				}
-			}
-#endif /* IPSEC */
-			if (n) {
-				if (last->inp_flags & INP_CONTROLOPTS ||
-				    last->inp_socket->so_options & SO_TIMESTAMP)
-					ip6_savecontrol(last, n, &opts);
-				/* strip intermediate headers */
-				m_adj(n, *offp);
-				if (sbappendaddr(&last->inp_socket->so_rcv,
-						(struct sockaddr *)&fromsa,
-						 n, opts) == 0) {
-					m_freem(n);
-					if (opts)
-						m_freem(opts);
-					RIP6STAT_INC(rip6s_fullsock);
-				} else
-					sorwakeup(last->inp_socket);
-				opts = NULL;
-			}
-			INP_RUNLOCK(last);
 		}
 		last = in6p;
+		continue;
+skip_2:
+		INP_RUNLOCK(in6p);
 	}
-	INP_INFO_RUNLOCK(&V_ripcbinfo);
+	INP_INFO_RUNLOCK_ET(&V_ripcbinfo, et);
 #if defined(IPSEC) || defined(IPSEC_SUPPORT)
 	/*
 	 * Check AH/ESP integrity.
@@ -335,9 +349,6 @@ rip6_input(struct mbuf **mp, int *offp, int proto)
 void
 rip6_ctlinput(int cmd, struct sockaddr *sa, void *d)
 {
-	struct ip6_hdr *ip6;
-	struct mbuf *m;
-	int off = 0;
 	struct ip6ctlparam *ip6cp = NULL;
 	const struct sockaddr_in6 *sa6_src = NULL;
 	void *cmdarg;
@@ -361,14 +372,9 @@ rip6_ctlinput(int cmd, struct sockaddr *sa, void *d)
 	 */
 	if (d != NULL) {
 		ip6cp = (struct ip6ctlparam *)d;
-		m = ip6cp->ip6c_m;
-		ip6 = ip6cp->ip6c_ip6;
-		off = ip6cp->ip6c_off;
 		cmdarg = ip6cp->ip6c_cmdarg;
 		sa6_src = ip6cp->ip6c_src;
 	} else {
-		m = NULL;
-		ip6 = NULL;
 		cmdarg = NULL;
 		sa6_src = &sa6_any;
 	}
@@ -387,7 +393,6 @@ rip6_output(struct mbuf *m, struct socket *so, ...)
 	struct mbuf *control;
 	struct m_tag *mtag;
 	struct sockaddr_in6 *dstsock;
-	struct in6_addr *dst;
 	struct ip6_hdr *ip6;
 	struct inpcb *in6p;
 	u_int	plen = m->m_pkthdr.len;
@@ -409,7 +414,6 @@ rip6_output(struct mbuf *m, struct socket *so, ...)
 	in6p = sotoinpcb(so);
 	INP_WLOCK(in6p);
 
-	dst = &dstsock->sin6_addr;
 	if (control != NULL) {
 		if ((error = ip6_setpktopts(control, &opt,
 		    in6p->in6p_outputopts, so->so_cred,
@@ -498,7 +502,7 @@ rip6_output(struct mbuf *m, struct socket *so, ...)
 			off = offsetof(struct icmp6_hdr, icmp6_cksum);
 		else
 			off = in6p->in6p_cksum;
-		if (plen < off + 1) {
+		if (plen < off + 2) {
 			error = EINVAL;
 			goto bad;
 		}
@@ -742,23 +746,25 @@ rip6_bind(struct socket *so, struct sockaddr *nam, struct thread *td)
 		return (EINVAL);
 	if ((error = prison_check_ip6(td->td_ucred, &addr->sin6_addr)) != 0)
 		return (error);
-	if (TAILQ_EMPTY(&V_ifnet) || addr->sin6_family != AF_INET6)
+	if (CK_STAILQ_EMPTY(&V_ifnet) || addr->sin6_family != AF_INET6)
 		return (EADDRNOTAVAIL);
 	if ((error = sa6_embedscope(addr, V_ip6_use_defzone)) != 0)
 		return (error);
 
+	NET_EPOCH_ENTER();
 	if (!IN6_IS_ADDR_UNSPECIFIED(&addr->sin6_addr) &&
-	    (ifa = ifa_ifwithaddr((struct sockaddr *)addr)) == NULL)
+	    (ifa = ifa_ifwithaddr((struct sockaddr *)addr)) == NULL) {
+		NET_EPOCH_EXIT();
 		return (EADDRNOTAVAIL);
+	}
 	if (ifa != NULL &&
 	    ((struct in6_ifaddr *)ifa)->ia6_flags &
 	    (IN6_IFF_ANYCAST|IN6_IFF_NOTREADY|
 	     IN6_IFF_DETACHED|IN6_IFF_DEPRECATED)) {
-		ifa_free(ifa);
+		NET_EPOCH_EXIT();
 		return (EADDRNOTAVAIL);
 	}
-	if (ifa != NULL)
-		ifa_free(ifa);
+	NET_EPOCH_EXIT();
 	INP_INFO_WLOCK(&V_ripcbinfo);
 	INP_WLOCK(inp);
 	inp->in6p_laddr = addr->sin6_addr;
@@ -780,7 +786,7 @@ rip6_connect(struct socket *so, struct sockaddr *nam, struct thread *td)
 
 	if (nam->sa_len != sizeof(*addr))
 		return (EINVAL);
-	if (TAILQ_EMPTY(&V_ifnet))
+	if (CK_STAILQ_EMPTY(&V_ifnet))
 		return (EADDRNOTAVAIL);
 	if (addr->sin6_family != AF_INET6)
 		return (EAFNOSUPPORT);

@@ -47,10 +47,6 @@ struct urtw_data {
 };
 typedef STAILQ_HEAD(, urtw_data) urtw_datahead;
 
-/* XXX not correct..  */
-#define	URTW_MIN_RXBUFSZ						\
-	(sizeof(struct ieee80211_frame_min))
-
 #define URTW_RX_DATA_LIST_COUNT		4
 #define URTW_TX_DATA_LIST_COUNT		16
 #define URTW_RX_MAXSIZE			0x9c4
@@ -59,23 +55,27 @@ typedef STAILQ_HEAD(, urtw_data) urtw_datahead;
 
 struct urtw_rx_radiotap_header {
 	struct ieee80211_radiotap_header wr_ihdr;
+	uint64_t	wr_tsf;
 	uint8_t		wr_flags;
+	uint8_t		wr_pad;
 	uint16_t	wr_chan_freq;
 	uint16_t	wr_chan_flags;
 	int8_t		wr_dbm_antsignal;
 } __packed __aligned(8);
 
 #define URTW_RX_RADIOTAP_PRESENT					\
-	((1 << IEEE80211_RADIOTAP_FLAGS) |				\
+	((1 << IEEE80211_RADIOTAP_TSFT) |				\
+	 (1 << IEEE80211_RADIOTAP_FLAGS) |				\
 	 (1 << IEEE80211_RADIOTAP_CHANNEL) |				\
 	 (1 << IEEE80211_RADIOTAP_DBM_ANTSIGNAL))
 
 struct urtw_tx_radiotap_header {
 	struct ieee80211_radiotap_header wt_ihdr;
 	uint8_t		wt_flags;
+	uint8_t		wt_pad;
 	uint16_t	wt_chan_freq;
 	uint16_t	wt_chan_flags;
-} __packed __aligned(8);
+} __packed;
 
 #define URTW_TX_RADIOTAP_PRESENT					\
 	((1 << IEEE80211_RADIOTAP_FLAGS) |				\

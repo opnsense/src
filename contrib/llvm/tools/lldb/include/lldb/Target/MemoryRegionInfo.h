@@ -14,7 +14,6 @@
 #include "lldb/Core/RangeMap.h"
 #include "llvm/Support/FormatProviders.h"
 #include "lldb/Utility/ConstString.h"
-#include "lldb/Utility/Range.h"
 
 namespace lldb_private {
 class MemoryRegionInfo {
@@ -25,7 +24,7 @@ public:
 
   MemoryRegionInfo()
       : m_range(), m_read(eDontKnow), m_write(eDontKnow), m_execute(eDontKnow),
-        m_mapped(eDontKnow) {}
+        m_mapped(eDontKnow), m_flash(eDontKnow), m_blocksize(0) {}
 
   ~MemoryRegionInfo() {}
 
@@ -58,9 +57,17 @@ public:
 
   void SetName(const char *name) { m_name = ConstString(name); }
 
+  OptionalBool GetFlash() const { return m_flash; }
+
+  void SetFlash(OptionalBool val) { m_flash = val; }
+
+  lldb::offset_t GetBlocksize() const { return m_blocksize; }
+
+  void SetBlocksize(lldb::offset_t blocksize) { m_blocksize = blocksize; }
+
   //----------------------------------------------------------------------
-  // Get permissions as a uint32_t that is a mask of one or more bits from
-  // the lldb::Permissions
+  // Get permissions as a uint32_t that is a mask of one or more bits from the
+  // lldb::Permissions
   //----------------------------------------------------------------------
   uint32_t GetLLDBPermissions() const {
     uint32_t permissions = 0;
@@ -74,8 +81,8 @@ public:
   }
 
   //----------------------------------------------------------------------
-  // Set permissions from a uint32_t that contains one or more bits from
-  // the lldb::Permissions
+  // Set permissions from a uint32_t that contains one or more bits from the
+  // lldb::Permissions
   //----------------------------------------------------------------------
   void SetLLDBPermissions(uint32_t permissions) {
     m_read = (permissions & lldb::ePermissionsReadable) ? eYes : eNo;
@@ -98,7 +105,29 @@ protected:
   OptionalBool m_execute;
   OptionalBool m_mapped;
   ConstString m_name;
+  OptionalBool m_flash;
+  lldb::offset_t m_blocksize;
 };
+  
+inline bool operator<(const MemoryRegionInfo &lhs,
+                      const MemoryRegionInfo &rhs) {
+  return lhs.GetRange() < rhs.GetRange();
+}
+
+inline bool operator<(const MemoryRegionInfo &lhs, lldb::addr_t rhs) {
+  return lhs.GetRange().GetRangeBase() < rhs;
+}
+
+inline bool operator<(lldb::addr_t lhs, const MemoryRegionInfo &rhs) {
+  return lhs < rhs.GetRange().GetRangeBase();
+}
+
+// Forward-declarable wrapper.
+class MemoryRegionInfos : public std::vector<lldb_private::MemoryRegionInfo> {
+public:
+  //using std::vector<lldb_private::MemoryRegionInfo>::vector;
+};
+
 }
 
 namespace llvm {

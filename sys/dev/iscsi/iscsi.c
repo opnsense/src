@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2012 The FreeBSD Foundation
  * All rights reserved.
  *
@@ -1206,8 +1208,8 @@ iscsi_pdu_handle_r2t(struct icl_pdu *response)
 	for (;;) {
 		len = total_len;
 
-		if (len > is->is_max_data_segment_length)
-			len = is->is_max_data_segment_length;
+		if (len > is->is_max_send_data_segment_length)
+			len = is->is_max_send_data_segment_length;
 
 		if (off + len > csio->dxfer_len) {
 			ISCSI_SESSION_WARN(is, "target requested invalid "
@@ -1315,6 +1317,7 @@ iscsi_ioctl_daemon_wait(struct iscsi_softc *sc,
     struct iscsi_daemon_request *request)
 {
 	struct iscsi_session *is;
+	struct icl_drv_limits idl;
 	int error;
 
 	sx_slock(&sc->sc_lock);
@@ -1354,10 +1357,9 @@ iscsi_ioctl_daemon_wait(struct iscsi_softc *sc,
 		request->idr_tsih = 0;	/* New or reinstated session. */
 		memcpy(&request->idr_conf, &is->is_conf,
 		    sizeof(request->idr_conf));
-		
+
 		error = icl_limits(is->is_conf.isc_offload,
-		    is->is_conf.isc_iser,
-		    &request->idr_limits.isl_max_data_segment_length);
+		    is->is_conf.isc_iser, &idl);
 		if (error != 0) {
 			ISCSI_SESSION_WARN(is, "icl_limits for offload \"%s\" "
 			    "failed with error %d", is->is_conf.isc_offload,
@@ -1365,6 +1367,14 @@ iscsi_ioctl_daemon_wait(struct iscsi_softc *sc,
 			sx_sunlock(&sc->sc_lock);
 			return (error);
 		}
+		request->idr_limits.isl_max_recv_data_segment_length =
+		    idl.idl_max_recv_data_segment_length;
+		request->idr_limits.isl_max_send_data_segment_length =
+		    idl.idl_max_send_data_segment_length;
+		request->idr_limits.isl_max_burst_length =
+		    idl.idl_max_burst_length;
+		request->idr_limits.isl_first_burst_length =
+		    idl.idl_first_burst_length;
 
 		sx_sunlock(&sc->sc_lock);
 		return (0);
@@ -1419,12 +1429,10 @@ iscsi_ioctl_daemon_handoff(struct iscsi_softc *sc,
 	is->is_initial_r2t = handoff->idh_initial_r2t;
 	is->is_immediate_data = handoff->idh_immediate_data;
 
-	/*
-	 * Cap MaxRecvDataSegmentLength obtained from the target to the maximum
-	 * size supported by our ICL module.
-	 */
-	is->is_max_data_segment_length = min(ic->ic_max_data_segment_length,
-	    handoff->idh_max_data_segment_length);
+	is->is_max_recv_data_segment_length =
+	    handoff->idh_max_recv_data_segment_length;
+	is->is_max_send_data_segment_length =
+	    handoff->idh_max_send_data_segment_length;
 	is->is_max_burst_length = handoff->idh_max_burst_length;
 	is->is_first_burst_length = handoff->idh_first_burst_length;
 
@@ -1636,7 +1644,7 @@ iscsi_ioctl_daemon_send(struct iscsi_softc *sc,
 		return (EIO);
 
 	datalen = ids->ids_data_segment_len;
-	if (datalen > ISCSI_MAX_DATA_SEGMENT_LENGTH)
+	if (datalen > is->is_max_send_data_segment_length)
 		return (EINVAL);
 	if (datalen > 0) {
 		data = malloc(datalen, M_ISCSI, M_WAITOK);
@@ -1780,6 +1788,18 @@ iscsi_ioctl_session_add(struct iscsi_softc *sc, struct iscsi_session_add *isa)
 
 	is = malloc(sizeof(*is), M_ISCSI, M_ZERO | M_WAITOK);
 	memcpy(&is->is_conf, &isa->isa_conf, sizeof(is->is_conf));
+
+	/*
+	 * Set some default values, from RFC 3720, section 12.
+	 *
+	 * These values are updated by the handoff IOCTL, but are
+	 * needed prior to the handoff to support sending the ISER
+	 * login PDU.
+	 */
+	is->is_max_recv_data_segment_length = 8192;
+	is->is_max_send_data_segment_length = 8192;
+	is->is_max_burst_length = 262144;
+	is->is_first_burst_length = 65536;
 
 	sx_xlock(&sc->sc_lock);
 
@@ -1935,12 +1955,15 @@ iscsi_ioctl_session_list(struct iscsi_softc *sc, struct iscsi_session_list *isl)
 		else
 			iss.iss_data_digest = ISCSI_DIGEST_NONE;
 
-		iss.iss_max_data_segment_length = is->is_max_data_segment_length;
+		iss.iss_max_send_data_segment_length =
+		    is->is_max_send_data_segment_length;
+		iss.iss_max_recv_data_segment_length =
+		    is->is_max_recv_data_segment_length;
 		iss.iss_max_burst_length = is->is_max_burst_length;
 		iss.iss_first_burst_length = is->is_first_burst_length;
 		iss.iss_immediate_data = is->is_immediate_data;
 		iss.iss_connected = is->is_connected;
-	
+
 		error = copyout(&iss, isl->isl_pstates + i, sizeof(iss));
 		if (error != 0) {
 			sx_sunlock(&sc->sc_lock);
@@ -2290,12 +2313,13 @@ iscsi_action_scsiio(struct iscsi_session *is, union ccb *ccb)
 		len = csio->dxfer_len;
 		//ISCSI_SESSION_DEBUG(is, "adding %zd of immediate data", len);
 		if (len > is->is_first_burst_length) {
-			ISCSI_SESSION_DEBUG(is, "len %zd -> %zd", len, is->is_first_burst_length);
+			ISCSI_SESSION_DEBUG(is, "len %zd -> %d", len, is->is_first_burst_length);
 			len = is->is_first_burst_length;
 		}
-		if (len > is->is_max_data_segment_length) {
-			ISCSI_SESSION_DEBUG(is, "len %zd -> %zd", len, is->is_max_data_segment_length);
-			len = is->is_max_data_segment_length;
+		if (len > is->is_max_send_data_segment_length) {
+			ISCSI_SESSION_DEBUG(is, "len %zd -> %d", len,
+			    is->is_max_send_data_segment_length);
+			len = is->is_max_send_data_segment_length;
 		}
 
 		error = icl_pdu_append_data(request, csio->data_ptr, len, M_NOWAIT);

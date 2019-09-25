@@ -1,6 +1,6 @@
-# $Id: Makefile 2605 2012-10-02 17:52:20Z jkoshy $
+# $Id: Makefile 3632 2018-10-10 21:12:43Z jkoshy $
 
-TOP=	${.CURDIR}/..
+TOP=	..
 
 LIB=	elf
 
@@ -35,6 +35,7 @@ SRCS=	elf.c							\
 	gelf_ehdr.c						\
 	gelf_getclass.c						\
 	gelf_fsize.c						\
+	gelf_mips64el.c						\
 	gelf_move.c						\
 	gelf_phdr.c						\
 	gelf_rel.c						\
@@ -51,6 +52,7 @@ SRCS=	elf.c							\
 	libelf_checksum.c					\
 	libelf_data.c						\
 	libelf_ehdr.c						\
+	libelf_elfmachine.c					\
 	libelf_extended.c					\
 	libelf_memory.c						\
 	libelf_open.c						\

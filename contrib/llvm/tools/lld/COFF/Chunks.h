@@ -16,6 +16,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/iterator.h"
 #include "llvm/ADT/iterator_range.h"
+#include "llvm/MC/StringTableBuilder.h"
 #include "llvm/Object/COFF.h"
 #include <utility>
 #include <vector>
@@ -35,11 +36,14 @@ class DefinedImportData;
 class DefinedRegular;
 class ObjFile;
 class OutputSection;
+class RuntimePseudoReloc;
 class Symbol;
 
-// Mask for section types (code, data, bss, disacardable, etc.)
-// and permissions (writable, readable or executable).
-const uint32_t PermMask = 0xFF0000F0;
+// Mask for permissions (discardable, writable, readable, executable, etc).
+const uint32_t PermMask = 0xFE000000;
+
+// Mask for section types (code, data, bss).
+const uint32_t TypeMask = 0x000000E0;
 
 // A Chunk represents a chunk of data that will occupy space in the
 // output (if the resolver chose that). It may or may not be backed by
@@ -60,6 +64,17 @@ public:
   // before calling this function.
   virtual void writeTo(uint8_t *Buf) const {}
 
+  // Called by the writer once before assigning addresses and writing
+  // the output.
+  virtual void readRelocTargets() {}
+
+  // Called if restarting thunk addition.
+  virtual void resetRelocTargets() {}
+
+  // Called by the writer after an RVA is assigned, but before calling
+  // getSize().
+  virtual void finalizeContents() {}
+
   // The writer sets and uses the addresses.
   uint64_t getRVA() const { return RVA; }
   void setRVA(uint64_t V) { RVA = V; }
@@ -70,7 +85,7 @@ public:
   virtual bool hasData() const { return true; }
 
   // Returns readable/writable/executable bits.
-  virtual uint32_t getPermissions() const { return 0; }
+  virtual uint32_t getOutputCharacteristics() const { return 0; }
 
   // Returns the section name if this is a section chunk.
   // It is illegal to call this function on non-section chunks.
@@ -107,6 +122,10 @@ protected:
 public:
   // The offset from beginning of the output section. The writer sets a value.
   uint64_t OutputSectionOff = 0;
+
+  // Whether this section needs to be kept distinct from other sections during
+  // ICF. This is set by the driver using address-significance tables.
+  bool KeepUnique = false;
 };
 
 // A chunk corresponding a section of an input file.
@@ -133,11 +152,13 @@ public:
 
   SectionChunk(ObjFile *File, const coff_section *Header);
   static bool classof(const Chunk *C) { return C->kind() == SectionKind; }
+  void readRelocTargets() override;
+  void resetRelocTargets() override;
   size_t getSize() const override { return Header->SizeOfRawData; }
   ArrayRef<uint8_t> getContents() const;
   void writeTo(uint8_t *Buf) const override;
   bool hasData() const override;
-  uint32_t getPermissions() const override;
+  uint32_t getOutputCharacteristics() const override;
   StringRef getSectionName() const override { return SectionName; }
   void getBaserels(std::vector<Baserel> *Res) override;
   bool isCOMDAT() const;
@@ -150,6 +171,8 @@ public:
   void applyRelARM64(uint8_t *Off, uint16_t Type, OutputSection *OS, uint64_t S,
                      uint64_t P) const;
 
+  void getRuntimePseudoRelocs(std::vector<RuntimePseudoReloc> &Res);
+
   // Called if the garbage collector decides to not include this chunk
   // in a final output. It's supposed to print out a log message to stdout.
   void printDiscardedMessage() const;
@@ -159,16 +182,6 @@ public:
   void addAssociative(SectionChunk *Child);
 
   StringRef getDebugName() override;
-
-  // Returns true if the chunk was not dropped by GC.
-  bool isLive() { return Live; }
-
-  // Used by the garbage collector.
-  void markLive() {
-    assert(Config->DoGC && "should only mark things live from GC");
-    assert(!isLive() && "Cannot mark an already live section!");
-    Live = true;
-  }
 
   // True if this is a codeview debug info chunk. These will not be laid out in
   // the image. Instead they will end up in the PDB, if one is requested.
@@ -190,10 +203,13 @@ public:
   // Allow iteration over the associated child chunks for this section.
   ArrayRef<SectionChunk *> children() const { return AssocChildren; }
 
+  // The section ID this chunk belongs to in its Obj.
+  uint32_t getSectionNumber() const;
+
   // A pointer pointing to a replacement for this chunk.
   // Initially it points to "this" object. If this chunk is merged
   // with other chunk by ICF, it points to another chunk,
-  // and this chunk is considrered as dead.
+  // and this chunk is considered as dead.
   SectionChunk *Repl;
 
   // The CRC of the contents as described in the COFF spec 4.5.5.
@@ -208,18 +224,50 @@ public:
   // The COMDAT leader symbol if this is a COMDAT chunk.
   DefinedRegular *Sym = nullptr;
 
-private:
-  StringRef SectionName;
-  std::vector<SectionChunk *> AssocChildren;
-  llvm::iterator_range<const coff_relocation *> Relocs;
-  size_t NumRelocs;
+  ArrayRef<coff_relocation> Relocs;
 
   // Used by the garbage collector.
   bool Live;
 
+  // When inserting a thunk, we need to adjust a relocation to point to
+  // the thunk instead of the actual original target Symbol.
+  std::vector<Symbol *> RelocTargets;
+
+private:
+  StringRef SectionName;
+  std::vector<SectionChunk *> AssocChildren;
+
   // Used for ICF (Identical COMDAT Folding)
   void replace(SectionChunk *Other);
   uint32_t Class[2] = {0, 0};
+};
+
+// This class is used to implement an lld-specific feature (not implemented in
+// MSVC) that minimizes the output size by finding string literals sharing tail
+// parts and merging them.
+//
+// If string tail merging is enabled and a section is identified as containing a
+// string literal, it is added to a MergeChunk with an appropriate alignment.
+// The MergeChunk then tail merges the strings using the StringTableBuilder
+// class and assigns RVAs and section offsets to each of the member chunks based
+// on the offsets assigned by the StringTableBuilder.
+class MergeChunk : public Chunk {
+public:
+  MergeChunk(uint32_t Alignment);
+  static void addSection(SectionChunk *C);
+  void finalizeContents() override;
+
+  uint32_t getOutputCharacteristics() const override;
+  StringRef getSectionName() const override { return ".rdata"; }
+  size_t getSize() const override;
+  void writeTo(uint8_t *Buf) const override;
+
+  static std::map<uint32_t, MergeChunk *> Instances;
+  std::vector<SectionChunk *> Sections;
+
+private:
+  llvm::StringTableBuilder Builder;
+  bool Finalized = false;
 };
 
 // A chunk for common symbols. Common chunks don't have actual data.
@@ -228,7 +276,7 @@ public:
   CommonChunk(const COFFSymbolRef Sym);
   size_t getSize() const override { return Sym.getValue(); }
   bool hasData() const override { return false; }
-  uint32_t getPermissions() const override;
+  uint32_t getOutputCharacteristics() const override;
   StringRef getSectionName() const override { return ".bss"; }
 
 private:
@@ -263,7 +311,7 @@ static const uint8_t ImportThunkARM64[] = {
 };
 
 // Windows-specific.
-// A chunk for DLL import jump table entry. In a final output, it's
+// A chunk for DLL import jump table entry. In a final output, its
 // contents will be a JMP instruction to some __imp_ symbol.
 class ImportThunkChunkX64 : public Chunk {
 public:
@@ -307,11 +355,31 @@ private:
   Defined *ImpSymbol;
 };
 
+class RangeExtensionThunkARM : public Chunk {
+public:
+  explicit RangeExtensionThunkARM(Defined *T) : Target(T) {}
+  size_t getSize() const override;
+  void writeTo(uint8_t *Buf) const override;
+
+  Defined *Target;
+};
+
+class RangeExtensionThunkARM64 : public Chunk {
+public:
+  explicit RangeExtensionThunkARM64(Defined *T) : Target(T) {}
+  size_t getSize() const override;
+  void writeTo(uint8_t *Buf) const override;
+
+  Defined *Target;
+};
+
 // Windows-specific.
 // See comments for DefinedLocalImport class.
 class LocalImportChunk : public Chunk {
 public:
-  explicit LocalImportChunk(Defined *S) : Sym(S) {}
+  explicit LocalImportChunk(Defined *S) : Sym(S) {
+    Alignment = Config->Wordsize;
+  }
   size_t getSize() const override;
   void getBaserels(std::vector<Baserel> *Res) override;
   void writeTo(uint8_t *Buf) const override;
@@ -320,17 +388,41 @@ private:
   Defined *Sym;
 };
 
-// Windows-specific.
-// A chunk for SEH table which contains RVAs of safe exception handler
-// functions. x86-only.
-class SEHTableChunk : public Chunk {
+// Duplicate RVAs are not allowed in RVA tables, so unique symbols by chunk and
+// offset into the chunk. Order does not matter as the RVA table will be sorted
+// later.
+struct ChunkAndOffset {
+  Chunk *InputChunk;
+  uint32_t Offset;
+
+  struct DenseMapInfo {
+    static ChunkAndOffset getEmptyKey() {
+      return {llvm::DenseMapInfo<Chunk *>::getEmptyKey(), 0};
+    }
+    static ChunkAndOffset getTombstoneKey() {
+      return {llvm::DenseMapInfo<Chunk *>::getTombstoneKey(), 0};
+    }
+    static unsigned getHashValue(const ChunkAndOffset &CO) {
+      return llvm::DenseMapInfo<std::pair<Chunk *, uint32_t>>::getHashValue(
+          {CO.InputChunk, CO.Offset});
+    }
+    static bool isEqual(const ChunkAndOffset &LHS, const ChunkAndOffset &RHS) {
+      return LHS.InputChunk == RHS.InputChunk && LHS.Offset == RHS.Offset;
+    }
+  };
+};
+
+using SymbolRVASet = llvm::DenseSet<ChunkAndOffset>;
+
+// Table which contains symbol RVAs. Used for /safeseh and /guard:cf.
+class RVATableChunk : public Chunk {
 public:
-  explicit SEHTableChunk(std::set<Defined *> S) : Syms(std::move(S)) {}
+  explicit RVATableChunk(SymbolRVASet S) : Syms(std::move(S)) {}
   size_t getSize() const override { return Syms.size() * 4; }
   void writeTo(uint8_t *Buf) const override;
 
 private:
-  std::set<Defined *> Syms;
+  SymbolRVASet Syms;
 };
 
 // Windows-specific.
@@ -356,10 +448,80 @@ public:
   uint8_t Type;
 };
 
+// This is a placeholder Chunk, to allow attaching a DefinedSynthetic to a
+// specific place in a section, without any data. This is used for the MinGW
+// specific symbol __RUNTIME_PSEUDO_RELOC_LIST_END__, even though the concept
+// of an empty chunk isn't MinGW specific.
+class EmptyChunk : public Chunk {
+public:
+  EmptyChunk() {}
+  size_t getSize() const override { return 0; }
+  void writeTo(uint8_t *Buf) const override {}
+};
+
+// MinGW specific, for the "automatic import of variables from DLLs" feature.
+// This provides the table of runtime pseudo relocations, for variable
+// references that turned out to need to be imported from a DLL even though
+// the reference didn't use the dllimport attribute. The MinGW runtime will
+// process this table after loading, before handling control over to user
+// code.
+class PseudoRelocTableChunk : public Chunk {
+public:
+  PseudoRelocTableChunk(std::vector<RuntimePseudoReloc> &Relocs)
+      : Relocs(std::move(Relocs)) {
+    Alignment = 4;
+  }
+  size_t getSize() const override;
+  void writeTo(uint8_t *Buf) const override;
+
+private:
+  std::vector<RuntimePseudoReloc> Relocs;
+};
+
+// MinGW specific; information about one individual location in the image
+// that needs to be fixed up at runtime after loading. This represents
+// one individual element in the PseudoRelocTableChunk table.
+class RuntimePseudoReloc {
+public:
+  RuntimePseudoReloc(Defined *Sym, SectionChunk *Target, uint32_t TargetOffset,
+                     int Flags)
+      : Sym(Sym), Target(Target), TargetOffset(TargetOffset), Flags(Flags) {}
+
+  Defined *Sym;
+  SectionChunk *Target;
+  uint32_t TargetOffset;
+  // The Flags field contains the size of the relocation, in bits. No other
+  // flags are currently defined.
+  int Flags;
+};
+
+// MinGW specific. A Chunk that contains one pointer-sized absolute value.
+class AbsolutePointerChunk : public Chunk {
+public:
+  AbsolutePointerChunk(uint64_t Value) : Value(Value) {
+    Alignment = getSize();
+  }
+  size_t getSize() const override;
+  void writeTo(uint8_t *Buf) const override;
+
+private:
+  uint64_t Value;
+};
+
 void applyMOV32T(uint8_t *Off, uint32_t V);
 void applyBranch24T(uint8_t *Off, int32_t V);
 
+void applyArm64Addr(uint8_t *Off, uint64_t S, uint64_t P, int Shift);
+void applyArm64Imm(uint8_t *Off, uint64_t Imm, uint32_t RangeLimit);
+void applyArm64Branch26(uint8_t *Off, int64_t V);
+
 } // namespace coff
 } // namespace lld
+
+namespace llvm {
+template <>
+struct DenseMapInfo<lld::coff::ChunkAndOffset>
+    : lld::coff::ChunkAndOffset::DenseMapInfo {};
+}
 
 #endif

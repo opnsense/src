@@ -29,7 +29,7 @@
  *
  */
 
-#include "assym.s"
+#include "assym.inc"
 #include "opt_kstack_pages.h"
 #include "opt_sched.h"
 
@@ -70,31 +70,15 @@ ENTRY(cpu_throw)
 
 #ifdef VFP
 	/* Backup the new thread pointer around a call to C code */
-	mov	x19, x1
+	mov	x19, x0
+	mov	x20, x1
 	bl	vfp_discard
-	mov	x1, x19
+	mov	x1, x20
+	mov	x0, x19
 #endif
 
-	/* Store the new curthread */
-	str	x1, [x18, #PC_CURTHREAD]
-	/* And the new pcb */
-	ldr	x4, [x1, #TD_PCB]
-	str	x4, [x18, #PC_CURPCB]
-
-	/*
-	 * TODO: We may need to flush the cache here.
-	 */
-
-	/* Switch to the new pmap */
-	ldr	x5, [x4, #PCB_L0ADDR]
-	msr	ttbr0_el1, x5
-	isb
-
-	/* Invalidate the TLB */
-	dsb	sy
-	tlbi	vmalle1is
-	dsb	sy
-	isb
+	bl	pmap_switch
+	mov	x4, x0
 
 	/* If we are single stepping, enable it */
 	ldr	w5, [x4, #PCB_FLAGS]
@@ -104,6 +88,8 @@ ENTRY(cpu_throw)
 	ldp	x5, x6, [x4, #PCB_SP]
 	mov	sp, x5
 	msr	tpidr_el0, x6
+	ldr	x6, [x4, #PCB_TPIDRRO]
+	msr	tpidrro_el0, x6
 	ldp	x8, x9, [x4, #PCB_REGS + 8 * 8]
 	ldp	x10, x11, [x4, #PCB_REGS + 10 * 8]
 	ldp	x12, x13, [x4, #PCB_REGS + 12 * 8]
@@ -149,6 +135,8 @@ ENTRY(cpu_switch)
 	str	x30, [x4, #PCB_REGS + 30 * 8]
 	/* And the old stack pointer */
 	mov	x5, sp
+	mrs	x6, tpidrro_el0
+	str	x6, [x4, #PCB_TPIDRRO]
 	mrs	x6, tpidr_el0
 	stp	x5, x6, [x4, #PCB_SP]
 
@@ -156,48 +144,30 @@ ENTRY(cpu_switch)
 	ldr	w5, [x4, #PCB_FLAGS]
 	clear_step_flag w5, x6
 
-#ifdef VFP
 	mov	x19, x0
 	mov	x20, x1
 	mov	x21, x2
+
+#ifdef VFP
 	/* Load the pcb address */
 	mov	x1, x4
 	bl	vfp_save_state
-	mov	x2, x21
 	mov	x1, x20
 	mov	x0, x19
 #endif
 
-	/* Store the new curthread */
-	str	x1, [x18, #PC_CURTHREAD]
+	bl	pmap_switch
+	/* Move the new pcb out of the way */
+	mov	x4, x0
+
+	mov	x2, x21
+	mov	x1, x20
+	mov	x0, x19
 
 	/*
-	 * Restore the saved context and set it as curpcb.
+	 * Release the old thread.
 	 */
-	ldr	x4, [x1, #TD_PCB]
-	str	x4, [x18, #PC_CURPCB]
-
-	/*
-	 * TODO: We may need to flush the cache here if switching
-	 * to a user process.
-	 */
-
-	/* Switch to the new pmap */
-	ldr	x5, [x4, #PCB_L0ADDR]
-	msr	ttbr0_el1, x5
-	isb
-
-	/* Invalidate the TLB */
-	dsb	sy
-	tlbi	vmalle1is
-	dsb	sy
-	isb
-
-	/*
-	 * Release the old thread. This doesn't need to be a store-release
-	 * as the above dsb instruction will provide release semantics.
-	 */
-	str	x2, [x0, #TD_LOCK]
+	stlr	x2, [x0, #TD_LOCK]
 #if defined(SCHED_ULE) && defined(SMP)
 	/* Spin if TD_LOCK points to a blocked_lock */
 	ldr	x2, =_C_LABEL(blocked_lock)
@@ -215,6 +185,8 @@ ENTRY(cpu_switch)
 	ldp	x5, x6, [x4, #PCB_SP]
 	mov	sp, x5
 	msr	tpidr_el0, x6
+	ldr	x6, [x4, #PCB_TPIDRRO]
+	msr	tpidrro_el0, x6
 	ldp	x8, x9, [x4, #PCB_REGS + 8 * 8]
 	ldp	x10, x11, [x4, #PCB_REGS + 10 * 8]
 	ldp	x12, x13, [x4, #PCB_REGS + 12 * 8]
@@ -264,12 +236,12 @@ ENTRY(fork_trampoline)
 	msr	daifset, #2
 
 	/* Restore sp and lr */
-	ldp	x0, x1, [sp]
+	ldp	x0, x1, [sp, #TF_SP]
 	msr	sp_el0, x0
 	mov	lr, x1
 
 	/* Restore elr and spsr */
-	ldp	x0, x1, [sp, #16]
+	ldp	x0, x1, [sp, #TF_ELR]
 	msr	elr_el1, x0
 	msr	spsr_el1, x1
 
@@ -301,6 +273,8 @@ ENTRY(savectx)
 	str	x30, [x0, #PCB_REGS + 30 * 8]
 	/* And the old stack pointer */
 	mov	x5, sp
+	mrs	x6, tpidrro_el0
+	str	x6, [x0, #PCB_TPIDRRO]
 	mrs	x6, tpidr_el0
 	stp	x5, x6, [x0, #PCB_SP]
 

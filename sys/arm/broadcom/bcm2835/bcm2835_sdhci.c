@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2012 Oleksandr Tymoshenko <gonzo@freebsd.org>
  * All rights reserved.
  *
@@ -41,7 +43,6 @@ __FBSDID("$FreeBSD$");
 
 #include <machine/bus.h>
 
-#include <dev/fdt/fdt_common.h>
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
 
@@ -53,6 +54,8 @@ __FBSDID("$FreeBSD$");
 #include "mmcbr_if.h"
 #include "sdhci_if.h"
 
+#include "opt_mmccam.h"
+
 #include "bcm2835_dma.h"
 #include <arm/broadcom/bcm2835/bcm2835_mbox_prop.h>
 #include "bcm2835_vcbus.h"
@@ -63,8 +66,17 @@ __FBSDID("$FreeBSD$");
 #define	NUM_DMA_SEGS			2
 
 #ifdef DEBUG
-#define dprintf(fmt, args...) do { printf("%s(): ", __func__);   \
-    printf(fmt,##args); } while (0)
+static int bcm2835_sdhci_debug = 0;
+
+TUNABLE_INT("hw.bcm2835.sdhci.debug", &bcm2835_sdhci_debug);
+SYSCTL_INT(_hw_sdhci, OID_AUTO, bcm2835_sdhci_debug, CTLFLAG_RWTUN,
+    &bcm2835_sdhci_debug, 0, "bcm2835 SDHCI debug level");
+
+#define	dprintf(fmt, args...)					\
+	do {							\
+		if (bcm2835_sdhci_debug)			\
+			printf("%s: " fmt, __func__, ##args);	\
+	}  while (0)
 #else
 #define dprintf(fmt, args...)
 #endif
@@ -74,6 +86,7 @@ static int bcm2835_sdhci_pio_mode = 0;
 
 static struct ofw_compat_data compat_data[] = {
 	{"broadcom,bcm2835-sdhci",	1},
+	{"brcm,bcm2835-sdhci",		1},
 	{"brcm,bcm2835-mmc",		1},
 	{NULL,				0}
 };
@@ -679,5 +692,7 @@ static driver_t bcm_sdhci_driver = {
 
 DRIVER_MODULE(sdhci_bcm, simplebus, bcm_sdhci_driver, bcm_sdhci_devclass,
     NULL, NULL);
-MODULE_DEPEND(sdhci_bcm, sdhci, 1, 1, 1);
+SDHCI_DEPEND(sdhci_bcm);
+#ifndef MMCCAM
 MMC_DECLARE_BRIDGE(sdhci_bcm);
+#endif

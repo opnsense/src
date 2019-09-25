@@ -1,5 +1,7 @@
 /*	$OpenBSD: sbbc.c,v 1.7 2009/11/09 17:53:39 nicm Exp $	*/
 /*-
+ * SPDX-License-Identifier: (ISC AND BSD-2-Clause-FreeBSD)
+ *
  * Copyright (c) 2008 Mark Kettenis
  *
  * Permission to use, copy, modify, and distribute this software for any
@@ -618,7 +620,7 @@ sbbc_uart_sbbc_probe(device_t dev)
 	sc = device_get_softc(dev);
 	sc->sc_class = &uart_sbbc_class;
 	device_set_desc(dev, "Serengeti console");
-	return (uart_bus_probe(dev, 0, 0, SBBC_PCI_BAR, 0));
+	return (uart_bus_probe(dev, 0, 0, 0, SBBC_PCI_BAR, 0, 0));
 }
 
 /*

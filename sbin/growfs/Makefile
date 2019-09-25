@@ -20,10 +20,9 @@ CFLAGS+= -DFS_DEBUG
 NO_WCAST_ALIGN= yes
 .endif
 
-LIBADD=	util
+LIBADD=	ufs util
 
-.if ${MK_TESTS} != "no"
-SUBDIR+=    tests
-.endif
+HAS_TESTS=
+SUBDIR.${MK_TESTS}+= tests
 
 .include <bsd.prog.mk>

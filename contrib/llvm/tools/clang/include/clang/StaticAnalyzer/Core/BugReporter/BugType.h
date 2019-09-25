@@ -1,4 +1,4 @@
-//===---  BugType.h - Bug Information Desciption ----------------*- C++ -*-===//
+//===---  BugType.h - Bug Information Description ---------------*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -52,7 +52,7 @@ public:
     // FIXME: This is a workaround to ensure that the correct check name is used
     // The check names are set after the constructors are run.
     // In case the BugType object is initialized in the checker's ctor
-    // the Check field will be empty. To circumvent this problem we use 
+    // the Check field will be empty. To circumvent this problem we use
     // CheckerBase whenever it is possible.
     StringRef CheckName =
         Checker ? Checker->getCheckName().getName() : Check.getName();
@@ -65,8 +65,6 @@ public:
   ///  by a sink node.
   bool isSuppressOnSink() const { return SuppressOnSink; }
   void setSuppressOnSink(bool x) { SuppressOnSink = x; }
-
-  virtual void FlushReports(BugReporter& BR);
 };
 
 class BuiltinBug : public BugType {

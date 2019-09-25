@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1983, 1988, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -105,7 +107,9 @@ static int ifmap_size;
 static struct timespec uptime;
 
 static const char *netname4(in_addr_t, in_addr_t);
+#ifdef INET6
 static const char *netname6(struct sockaddr_in6 *, struct sockaddr_in6 *);
+#endif
 static void p_rtable_sysctl(int, int);
 static void p_rtentry_sysctl(const char *name, struct rt_msghdr *);
 static int p_sockaddr(const char *name, struct sockaddr *, struct sockaddr *,
@@ -358,9 +362,10 @@ p_rtentry_sysctl(const char *name, struct rt_msghdr *rtm)
 	xo_open_instance(name);
 	sa = (struct sockaddr *)(rtm + 1);
 	for (i = 0; i < RTAX_MAX; i++) {
-		if (rtm->rtm_addrs & (1 << i))
+		if (rtm->rtm_addrs & (1 << i)) {
 			addr[i] = sa;
-		sa = (struct sockaddr *)((char *)sa + SA_SIZE(sa));
+			sa = (struct sockaddr *)((char *)sa + SA_SIZE(sa));
+		}
 	}
 
 	protrusion = p_sockaddr("destination", addr[RTAX_DST],

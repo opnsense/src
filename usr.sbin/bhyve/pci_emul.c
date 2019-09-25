@@ -237,6 +237,17 @@ done:
 	return (error);
 }
 
+void
+pci_print_supported_devices()
+{
+	struct pci_devemu **pdpp, *pdp;
+
+	SET_FOREACH(pdpp, pci_devemu_set) {
+		pdp = *pdpp;
+		printf("%s\n", pdp->pe_emu);
+	}
+}
+
 static int
 pci_valid_pba_offset(struct pci_devinst *pi, uint64_t offset)
 {
@@ -863,7 +874,7 @@ msixcap_cfgwrite(struct pci_devinst *pi, int capoff, int offset,
 {
 	uint16_t msgctrl, rwmask;
 	int off;
-	
+
 	off = offset - capoff;
 	/* Message Control Register */
 	if (off == 2 && bytes == 2) {
@@ -876,8 +887,8 @@ msixcap_cfgwrite(struct pci_devinst *pi, int capoff, int offset,
 		pi->pi_msix.enabled = val & PCIM_MSIXCTRL_MSIX_ENABLE;
 		pi->pi_msix.function_mask = val & PCIM_MSIXCTRL_FUNCTION_MASK;
 		pci_lintr_update(pi);
-	} 
-	
+	}
+
 	CFGWRITE(pi, offset, val, bytes);
 }
 
@@ -936,15 +947,23 @@ pci_emul_add_pciecap(struct pci_devinst *pi, int type)
 	int err;
 	struct pciecap pciecap;
 
-	if (type != PCIEM_TYPE_ROOT_PORT)
-		return (-1);
-
 	bzero(&pciecap, sizeof(pciecap));
 
+	/*
+	 * Use the integrated endpoint type for endpoints on a root complex bus.
+	 *
+	 * NB: bhyve currently only supports a single PCI bus that is the root
+	 * complex bus, so all endpoints are integrated.
+	 */
+	if ((type == PCIEM_TYPE_ENDPOINT) && (pi->pi_bus == 0))
+		type = PCIEM_TYPE_ROOT_INT_EP;
+
 	pciecap.capid = PCIY_EXPRESS;
-	pciecap.pcie_capabilities = PCIECAP_VERSION | PCIEM_TYPE_ROOT_PORT;
-	pciecap.link_capabilities = 0x411;	/* gen1, x1 */
-	pciecap.link_status = 0x11;		/* gen1, x1 */
+	pciecap.pcie_capabilities = PCIECAP_VERSION | type;
+	if (type != PCIEM_TYPE_ROOT_INT_EP) {
+		pciecap.link_capabilities = 0x411;	/* gen1, x1 */
+		pciecap.link_status = 0x11;		/* gen1, x1 */
+	}
 
 	err = pci_emul_add_capability(pi, (u_char *)&pciecap, sizeof(pciecap));
 	return (err);
@@ -1336,11 +1355,11 @@ pci_bus_write_dsdt(int bus)
 		dsdt_line("Name (PPRT, Package ()");
 		dsdt_line("{");
 		pci_walk_lintr(bus, pci_pirq_prt_entry, NULL);
- 		dsdt_line("})");
+		dsdt_line("})");
 		dsdt_line("Name (APRT, Package ()");
 		dsdt_line("{");
 		pci_walk_lintr(bus, pci_apic_prt_entry, NULL);
- 		dsdt_line("})");
+		dsdt_line("})");
 		dsdt_line("Method (_PRT, 0, NotSerialized)");
 		dsdt_line("{");
 		dsdt_line("  If (PICM)");
@@ -1726,7 +1745,7 @@ pci_emul_cmdsts_write(struct pci_devinst *pi, int coff, uint32_t new, int bytes)
 	 * interrupt.
 	 */
 	pci_lintr_update(pi);
-}	
+}
 
 static void
 pci_cfgrw(struct vmctx *ctx, int vcpu, int in, int bus, int slot, int func,

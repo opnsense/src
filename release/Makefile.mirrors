@@ -19,6 +19,7 @@ FTPDIR?=		${RELEASEDIR}/ftp-stage
 .if exists(${RELEASEDIR})
 STAGE_TARGETS?=		iso-images-stage
 .endif
+SRCBRANCH!=		${SVN_CMD} info --show-item relative-url ${WORLDDIR}
 
 .if (defined(EMBEDDED_TARGET) && !empty(EMBEDDED_TARGET)) || (defined(EMBEDDEDBUILD) && !empty(EMBEDDEDBUILD))
 . if ${TARGET:Marm*} != "" || ${EMBEDDED_TARGET:Marm*} != ""
@@ -58,11 +59,6 @@ TLD?=			${FTPDIR}/releases
 
 .if defined(EMBEDDED) && !empty(EMBEDDED)
 . if ${TARGET:Marm*} != "" && (${TARGET_ARCH:Marm*} != "" || ${TARGET_ARCH} == "aarch64")
-.  if !defined(BOARDNAME) && empty(BOARDNAME)
-BOARDNAME:=		${KERNCONF}
-.  else
-OLDNAME:=		${KERNCONF}
-.  endif
 .  if ${BRANCH} == "STABLE" || ${BRANCH} == "CURRENT" || ${BRANCH} == "PRERELEASE" || ${BRANCH:MALPHA*} != ""
 SNAPSHOT=		1
 .  endif
@@ -91,12 +87,6 @@ iso-images-stage:
 	cd ${RELEASEDIR} && rm -f CHECKSUM.*
 . for IMAGE in ${IMAGES}
 .  if defined(EMBEDDED) && !empty(EMBEDDED)
-.   if defined(OLDNAME) && !empty(OLDNAME)
-	@# arm/armv6 IMX6 -> WANDBOARD, for example.
-	cd ${RELEASEDIR} && \
-		mv ${OSRELEASE}-${OLDNAME}.${IMAGE}.xz \
-		${OSRELEASE}-${BOARDNAME}.${IMAGE}.xz
-.   endif
 	cd ${RELEASEDIR} && \
 		mv ${OSRELEASE}-${BOARDNAME}.${IMAGE}.xz \
 		${OSRELEASE}-${BOARDNAME}-${SNAP_SUFFIX}.${IMAGE}.xz
@@ -150,12 +140,6 @@ iso-images-stage:
 .else # not snapshot
 . for IMAGE in ${IMAGES}
 .  if defined(EMBEDDED) && !empty(EMBEDDED)
-.   if defined(OLDNAME) && !empty(OLDNAME)
-	@# arm/armv6 IMX6 -> WANDBOARD, for example.
-	cd ${RELEASEDIR} && \
-		mv ${OSRELEASE}-${OLDNAME}.${IMAGE}.xz \
-		${OSRELEASE}-${BOARDNAME}.${IMAGE}.xz
-.   endif
 	cp -p ${RELEASEDIR}/${OSRELEASE}-${BOARDNAME}.${IMAGE}.xz \
 		${ISO_DIR}/${OSRELEASE}-${BOARDNAME}.${IMAGE}.xz
 	cd ${TLD}/ISO-IMAGES/${REVISION} && \
@@ -202,6 +186,9 @@ iso-images-stage:
 .if exists(${RELEASEDIR}/ftp)
 	mkdir -p ${FTP_DIR}
 	cp -p ${RELEASEDIR}/ftp/*.txz ${RELEASEDIR}/ftp/MANIFEST ${FTP_DIR}
+	echo ${BUILDDATE} > ${FTP_DIR}/BUILDDATE
+	echo ${SRCBRANCH} > ${FTP_DIR}/SRCBRANCH
+	echo r${SVNREVISION} > ${FTP_DIR}/REVISION
 	cd ${TLD}/${TARGET} && \
 		ln -s ${TARGET_ARCH}/${REVISION}-${BRANCH} \
 			${REVISION}-${BRANCH}

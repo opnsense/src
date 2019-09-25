@@ -43,6 +43,33 @@ raw_ostream &llvm::pdb::operator<<(raw_ostream &OS,
 }
 
 raw_ostream &llvm::pdb::operator<<(raw_ostream &OS,
+                                   const PDB_BuiltinType &Type) {
+  switch (Type) {
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_BuiltinType, None, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_BuiltinType, Void, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_BuiltinType, Char, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_BuiltinType, WCharT, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_BuiltinType, Int, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_BuiltinType, UInt, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_BuiltinType, Float, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_BuiltinType, BCD, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_BuiltinType, Bool, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_BuiltinType, Long, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_BuiltinType, ULong, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_BuiltinType, Currency, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_BuiltinType, Date, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_BuiltinType, Variant, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_BuiltinType, Complex, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_BuiltinType, Bitfield, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_BuiltinType, BSTR, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_BuiltinType, HResult, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_BuiltinType, Char16, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_BuiltinType, Char32, OS)
+  }
+  return OS;
+}
+
+raw_ostream &llvm::pdb::operator<<(raw_ostream &OS,
                                    const PDB_CallingConv &Conv) {
   OS << "__";
   switch (Conv) {
@@ -113,6 +140,8 @@ raw_ostream &llvm::pdb::operator<<(raw_ostream &OS, const PDB_LocType &Loc) {
     CASE_OUTPUT_ENUM_CLASS_STR(PDB_LocType, IlRel, "IL rel", OS)
     CASE_OUTPUT_ENUM_CLASS_STR(PDB_LocType, MetaData, "metadata", OS)
     CASE_OUTPUT_ENUM_CLASS_STR(PDB_LocType, Constant, "constant", OS)
+    CASE_OUTPUT_ENUM_CLASS_STR(PDB_LocType, RegRelAliasIndir,
+                               "regrelaliasindir", OS)
   default:
     OS << "Unknown";
   }
@@ -139,6 +168,7 @@ raw_ostream &llvm::pdb::operator<<(raw_ostream &OS,
     CASE_OUTPUT_ENUM_CLASS_NAME(PDB_Checksum, None, OS)
     CASE_OUTPUT_ENUM_CLASS_NAME(PDB_Checksum, MD5, OS)
     CASE_OUTPUT_ENUM_CLASS_NAME(PDB_Checksum, SHA1, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_Checksum, SHA256, OS)
   }
   return OS;
 }
@@ -199,8 +229,20 @@ raw_ostream &llvm::pdb::operator<<(raw_ostream &OS, const PDB_SymType &Tag) {
     CASE_OUTPUT_ENUM_CLASS_NAME(PDB_SymType, CustomType, OS)
     CASE_OUTPUT_ENUM_CLASS_NAME(PDB_SymType, ManagedType, OS)
     CASE_OUTPUT_ENUM_CLASS_NAME(PDB_SymType, Dimension, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_SymType, CallSite, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_SymType, InlineSite, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_SymType, BaseInterface, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_SymType, VectorType, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_SymType, MatrixType, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_SymType, HLSLType, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_SymType, Caller, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_SymType, Callee, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_SymType, Export, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_SymType, HeapAllocationSite, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_SymType, CoffGroup, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_SymType, Inlinee, OS)
   default:
-    OS << "Unknown";
+    OS << "Unknown SymTag " << uint32_t(Tag);
   }
   return OS;
 }
@@ -254,6 +296,18 @@ raw_ostream &llvm::pdb::operator<<(raw_ostream &OS,
   return OS;
 }
 
+raw_ostream &llvm::pdb::operator<<(raw_ostream &OS,
+                                   const PDB_SourceCompression &Compression) {
+  switch (Compression) {
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_SourceCompression, None, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_SourceCompression, Huffman, OS)
+    CASE_OUTPUT_ENUM_CLASS_NAME(PDB_SourceCompression, LZ, OS)
+    CASE_OUTPUT_ENUM_CLASS_STR(PDB_SourceCompression, RunLengthEncoded, "RLE",
+                               OS)
+  }
+  return OS;
+}
+
 raw_ostream &llvm::pdb::operator<<(raw_ostream &OS, const Variant &Value) {
   switch (Value.Type) {
     case PDB_VariantType::Bool:
@@ -278,7 +332,7 @@ raw_ostream &llvm::pdb::operator<<(raw_ostream &OS, const Variant &Value) {
       OS << Value.Value.Single;
       break;
     case PDB_VariantType::UInt16:
-      OS << Value.Value.Double;
+      OS << Value.Value.UInt16;
       break;
     case PDB_VariantType::UInt32:
       OS << Value.Value.UInt32;

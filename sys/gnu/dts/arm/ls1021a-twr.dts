@@ -1,5 +1,6 @@
 /*
  * Copyright 2013-2014 Freescale Semiconductor, Inc.
+ * Copyright 2018 NXP
  *
  * This file is dual-licensed: you can use it either under the terms
  * of the GPL or the X11 license, at your option. Note that this dual
@@ -50,6 +51,7 @@
 
 / {
 	model = "LS1021A TWR Board";
+	compatible = "fsl,ls1021a-twr", "fsl,ls1021a";
 
 	aliases {
 		enet2_rgmii_phy = &rgmii_phy1;
@@ -108,12 +110,23 @@
 
 	panel: panel {
 		compatible = "nec,nl4827hc19-05b";
+
+		port {
+			panel_in: endpoint {
+				remote-endpoint = <&dcu_out>;
+			};
+		};
 	};
 };
 
 &dcu {
-	fsl,panel = <&panel>;
 	status = "okay";
+
+	port {
+		dcu_out: endpoint {
+			remote-endpoint = <&panel_in>;
+		};
+	};
 };
 
 &dspi1 {
@@ -176,7 +189,7 @@
 		reg = <0x0a>;
 		VDDA-supply = <&reg_3p3v>;
 		VDDIO-supply = <&reg_3p3v>;
-		clocks = <&sys_mclk 1>;
+		clocks = <&sys_mclk>;
 	};
 };
 
@@ -192,6 +205,7 @@
 		#size-cells = <1>;
 		compatible = "cfi-flash";
 		reg = <0x0 0x0 0x8000000>;
+		big-endian;
 		bank-width = <2>;
 		device-width = <1>;
 	};
@@ -217,6 +231,10 @@
 	};
 };
 
+&esdhc {
+        status = "okay";
+};
+
 &sai1 {
 	status = "okay";
 };
@@ -231,4 +249,20 @@
 
 &uart1 {
 	status = "okay";
+};
+
+&can0 {
+	status = "okay";
+};
+
+&can1 {
+	status = "okay";
+};
+
+&can2 {
+	status = "disabled";
+};
+
+&can3 {
+	status = "disabled";
 };

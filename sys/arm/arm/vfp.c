@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2014 Ian Lepore <ian@freebsd.org>
  * Copyright (c) 2012 Mark Tinguely
  *
@@ -291,7 +293,7 @@ vfp_store(struct vfp_state *vfpsave, boolean_t disable_vfp)
 		    " .fpu	vfpv3\n"
 		    " vstmia	%0!, {d0-d15}\n"	/* d0-d15 */
 		    " cmp	%1, #0\n"		/* -D16 or -D32? */
-		    " vstmiane	r0!, {d16-d31}\n"	/* d16-d31 */
+		    " vstmiane	%0!, {d16-d31}\n"	/* d16-d31 */
 		    " addeq	%0, %0, #128\n"		/* skip missing regs */
 		    : "+&r" (vfpsave) : "r" (is_d32) : "cc"
 		    );

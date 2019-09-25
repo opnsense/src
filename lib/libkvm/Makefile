@@ -6,18 +6,19 @@ LIB=	kvm
 
 SHLIBDIR?= /lib
 SHLIB_MAJOR=	7
-CFLAGS+=-DLIBC_SCCS -I${.CURDIR}
+CFLAGS+=-DNO__SCCSID -I${.CURDIR}
 
 WARNS?=	6
 
 SRCS=	kvm.c kvm_cptime.c kvm_getloadavg.c \
-	kvm_getswapinfo.c kvm_pcpu.c kvm_proc.c kvm_vnet.c \
+	kvm_getswapinfo.c kvm_pcpu.c kvm_private.c kvm_proc.c kvm_vnet.c \
 	kvm_minidump_aarch64.c \
 	kvm_amd64.c kvm_minidump_amd64.c \
 	kvm_arm.c kvm_minidump_arm.c \
 	kvm_i386.c kvm_minidump_i386.c \
 	kvm_minidump_mips.c \
 	kvm_powerpc.c kvm_powerpc64.c \
+	kvm_minidump_riscv.c \
 	kvm_sparc64.c
 INCS=	kvm.h
 
@@ -38,8 +39,7 @@ MLINKS+=kvm_read.3 kvm_read2.3 kvm_read.3 kvm_write.3
 
 .include <src.opts.mk>
 
-.if ${MK_TESTS} != "no"
-SUBDIR+=	tests
-.endif
+HAS_TESTS=
+SUBDIR.${MK_TESTS}=	tests
 
 .include <bsd.lib.mk>

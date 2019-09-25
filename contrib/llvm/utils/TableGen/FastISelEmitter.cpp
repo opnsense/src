@@ -36,8 +36,19 @@ struct InstructionMemo {
   std::string Name;
   const CodeGenRegisterClass *RC;
   std::string SubRegNo;
-  std::vector<std::string>* PhysRegs;
+  std::vector<std::string> PhysRegs;
   std::string PredicateCheck;
+
+  InstructionMemo(StringRef Name, const CodeGenRegisterClass *RC,
+                  std::string SubRegNo, std::vector<std::string> PhysRegs,
+                  std::string PredicateCheck)
+      : Name(Name), RC(RC), SubRegNo(std::move(SubRegNo)),
+        PhysRegs(std::move(PhysRegs)),
+        PredicateCheck(std::move(PredicateCheck)) {}
+
+  // Make sure we do not copy InstructionMemo.
+  InstructionMemo(const InstructionMemo &Other) = delete;
+  InstructionMemo(InstructionMemo &&Other) = default;
 };
 } // End anonymous namespace
 
@@ -199,13 +210,13 @@ struct OperandsSignature {
       // Handle imm operands specially.
       if (!Op->isLeaf() && Op->getOperator()->getName() == "imm") {
         unsigned PredNo = 0;
-        if (!Op->getPredicateFns().empty()) {
-          TreePredicateFn PredFn = Op->getPredicateFns()[0];
+        if (!Op->getPredicateCalls().empty()) {
+          TreePredicateFn PredFn = Op->getPredicateCalls()[0].Fn;
           // If there is more than one predicate weighing in on this operand
           // then we don't handle it.  This doesn't typically happen for
           // immediates anyway.
-          if (Op->getPredicateFns().size() > 1 ||
-              !PredFn.isImmediatePattern())
+          if (Op->getPredicateCalls().size() > 1 ||
+              !PredFn.isImmediatePattern() || PredFn.usesOperands())
             return false;
           // Ignore any instruction with 'FastIselShouldIgnore', these are
           // not needed and just bloat the fast instruction selector.  For
@@ -225,7 +236,7 @@ struct OperandsSignature {
 
       // For now, filter out any operand with a predicate.
       // For now, filter out any operand with multiple values.
-      if (!Op->getPredicateFns().empty() || Op->getNumTypes() != 1)
+      if (!Op->getPredicateCalls().empty() || Op->getNumTypes() != 1)
         return false;
 
       if (!Op->isLeaf()) {
@@ -453,6 +464,13 @@ void FastISelMap::collectPatterns(CodeGenDAGPatterns &CGP) {
     if (II.Operands.empty())
       continue;
 
+    // Allow instructions to be marked as unavailable for FastISel for
+    // certain cases, i.e. an ISA has two 'and' instruction which differ
+    // by what registers they can use but are otherwise identical for
+    // codegen purposes.
+    if (II.FastISelShouldIgnore)
+      continue;
+
     // For now, ignore multi-instruction patterns.
     bool MultiInsts = false;
     for (unsigned i = 0, e = Dst->getNumChildren(); i != e; ++i) {
@@ -511,7 +529,7 @@ void FastISelMap::collectPatterns(CodeGenDAGPatterns &CGP) {
     }
 
     // For now, filter out any instructions with predicates.
-    if (!InstPatNode->getPredicateFns().empty())
+    if (!InstPatNode->getPredicateCalls().empty())
       continue;
 
     // Check all the operands.
@@ -520,10 +538,10 @@ void FastISelMap::collectPatterns(CodeGenDAGPatterns &CGP) {
                              DstRC))
       continue;
 
-    std::vector<std::string>* PhysRegInputs = new std::vector<std::string>();
+    std::vector<std::string> PhysRegInputs;
     if (InstPatNode->getOperator()->getName() == "imm" ||
         InstPatNode->getOperator()->getName() == "fpimm")
-      PhysRegInputs->push_back("");
+      PhysRegInputs.push_back("");
     else {
       // Compute the PhysRegs used by the given pattern, and check that
       // the mapping from the src to dst patterns is simple.
@@ -541,7 +559,7 @@ void FastISelMap::collectPatterns(CodeGenDAGPatterns &CGP) {
           ++DstIndex;
         }
 
-        PhysRegInputs->push_back(PhysReg);
+        PhysRegInputs.push_back(PhysReg);
       }
 
       if (Op->getName() != "EXTRACT_SUBREG" && DstIndex < Dst->getNumChildren())
@@ -565,13 +583,13 @@ void FastISelMap::collectPatterns(CodeGenDAGPatterns &CGP) {
     std::string PredicateCheck = Pattern.getPredicateCheck();
 
     // Ok, we found a pattern that we can handle. Remember it.
-    InstructionMemo Memo = {
+    InstructionMemo Memo(
       Pattern.getDstPattern()->getOperator()->getName(),
       DstRC,
       SubRegNo,
       PhysRegInputs,
       PredicateCheck
-    };
+    );
 
     int complexity = Pattern.getPatternComplexity(CGP);
 
@@ -585,8 +603,8 @@ void FastISelMap::collectPatterns(CodeGenDAGPatterns &CGP) {
 
        // Note: Instructions with the same complexity will appear in the order
           // that they are encountered.
-    SimplePatterns[Operands][OpcodeName][VT][RetVT].insert(
-      std::make_pair(complexity, Memo));
+    SimplePatterns[Operands][OpcodeName][VT][RetVT].emplace(complexity,
+                                                            std::move(Memo));
 
     // If any of the operands were immediates with predicates on them, strip
     // them down to a signature that doesn't have predicates so that we can
@@ -641,22 +659,22 @@ void FastISelMap::emitInstructionCode(raw_ostream &OS,
       OS << "  ";
     }
 
-    for (unsigned i = 0; i < Memo.PhysRegs->size(); ++i) {
-      if ((*Memo.PhysRegs)[i] != "")
+    for (unsigned i = 0; i < Memo.PhysRegs.size(); ++i) {
+      if (Memo.PhysRegs[i] != "")
         OS << "  BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc, "
-           << "TII.get(TargetOpcode::COPY), "
-           << (*Memo.PhysRegs)[i] << ").addReg(Op" << i << ");\n";
+           << "TII.get(TargetOpcode::COPY), " << Memo.PhysRegs[i]
+           << ").addReg(Op" << i << ");\n";
     }
 
     OS << "  return fastEmitInst_";
     if (Memo.SubRegNo.empty()) {
-      Operands.PrintManglingSuffix(OS, *Memo.PhysRegs,
-     ImmediatePredicates, true);
+      Operands.PrintManglingSuffix(OS, Memo.PhysRegs, ImmediatePredicates,
+                                   true);
       OS << "(" << InstNS << "::" << Memo.Name << ", ";
       OS << "&" << InstNS << "::" << Memo.RC->getName() << "RegClass";
       if (!Operands.empty())
         OS << ", ";
-      Operands.PrintArguments(OS, *Memo.PhysRegs);
+      Operands.PrintArguments(OS, Memo.PhysRegs);
       OS << ");\n";
     } else {
       OS << "extractsubreg(" << RetVTName
@@ -811,7 +829,7 @@ void FastISelMap::printFunctionDefinitions(raw_ostream &OS) {
       = SignaturesWithConstantForms.find(Operands);
     if (MI != SignaturesWithConstantForms.end()) {
       // Unique any duplicates out of the list.
-      std::sort(MI->second.begin(), MI->second.end());
+      llvm::sort(MI->second);
       MI->second.erase(std::unique(MI->second.begin(), MI->second.end()),
                        MI->second.end());
 

@@ -19,19 +19,12 @@ namespace coff {
 // Windows-specific.
 // IdataContents creates all chunks for the DLL import table.
 // You are supposed to call add() to add symbols and then
-// call getChunks() to get a list of chunks.
+// call create() to populate the chunk vectors.
 class IdataContents {
 public:
   void add(DefinedImportData *Sym) { Imports.push_back(Sym); }
   bool empty() { return Imports.empty(); }
-  std::vector<Chunk *> getChunks();
 
-  uint64_t getDirRVA() { return Dirs[0]->getRVA(); }
-  uint64_t getDirSize();
-  uint64_t getIATRVA() { return Addresses[0]->getRVA(); }
-  uint64_t getIATSize();
-
-private:
   void create();
 
   std::vector<DefinedImportData *> Imports;
@@ -76,6 +69,11 @@ class EdataContents {
 public:
   EdataContents();
   std::vector<Chunk *> Chunks;
+
+  uint64_t getRVA() { return Chunks[0]->getRVA(); }
+  uint64_t getSize() {
+    return Chunks.back()->getRVA() + Chunks.back()->getSize() - getRVA();
+  }
 };
 
 } // namespace coff

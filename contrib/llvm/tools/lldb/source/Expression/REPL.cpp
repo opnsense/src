@@ -7,10 +7,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
 #include "lldb/Expression/REPL.h"
 #include "lldb/Core/Debugger.h"
 #include "lldb/Core/PluginManager.h"
@@ -61,14 +57,12 @@ lldb::REPLSP REPL::Create(Status &err, lldb::LanguageType language,
 
 std::string REPL::GetSourcePath() {
   ConstString file_basename = GetSourceFileBasename();
-
-  FileSpec tmpdir_file_spec;
-  if (HostInfo::GetLLDBPath(lldb::ePathTypeLLDBTempSystemDir,
-                            tmpdir_file_spec)) {
+  FileSpec tmpdir_file_spec = HostInfo::GetProcessTempDir();
+  if (tmpdir_file_spec) {
     tmpdir_file_spec.GetFilename().SetCString(file_basename.AsCString());
     m_repl_source_path = tmpdir_file_spec.GetPath();
   } else {
-    tmpdir_file_spec = FileSpec("/tmp", false);
+    tmpdir_file_spec = FileSpec("/tmp");
     tmpdir_file_spec.AppendPathComponent(file_basename.AsCString());
   }
 
@@ -243,10 +237,8 @@ void REPL::IOHandlerInputComplete(IOHandler &io_handler, std::string &code) {
                   IOHandler::Type::REPL, IOHandler::Type::CommandInterpreter)) {
             // We typed "quit" or an alias to quit so we need to check if the
             // command interpreter is above us and tell it that it is done as
-            // well
-            // so we don't drop back into the command interpreter if we have
-            // already
-            // quit
+            // well so we don't drop back into the command interpreter if we
+            // have already quit
             lldb::IOHandlerSP io_handler_sp(ci.GetIOHandler());
             if (io_handler_sp)
               io_handler_sp->SetIsDone(true);
@@ -420,11 +412,12 @@ void REPL::IOHandlerInputComplete(IOHandler &io_handler, std::string &code) {
 
           // Update our code on disk
           if (!m_repl_source_path.empty()) {
-            lldb_private::File file(m_repl_source_path.c_str(),
-                                    File::eOpenOptionWrite |
-                                        File::eOpenOptionTruncate |
-                                        File::eOpenOptionCanCreate,
-                                    lldb::eFilePermissionsFileDefault);
+            lldb_private::File file;
+            FileSystem::Instance().Open(file, FileSpec(m_repl_source_path),
+                                        File::eOpenOptionWrite |
+                                            File::eOpenOptionTruncate |
+                                            File::eOpenOptionCanCreate,
+                                        lldb::eFilePermissionsFileDefault);
             std::string code(m_code.CopyList());
             code.append(1, '\n');
             size_t bytes_written = code.size();
@@ -433,7 +426,7 @@ void REPL::IOHandlerInputComplete(IOHandler &io_handler, std::string &code) {
 
             // Now set the default file and line to the REPL source file
             m_target.GetSourceManager().SetDefaultFileAndLine(
-                FileSpec(m_repl_source_path, false), new_default_line);
+                FileSpec(m_repl_source_path), new_default_line);
           }
           static_cast<IOHandlerEditline &>(io_handler)
               .SetBaseLineNumber(m_code.GetSize() + 1);
@@ -444,8 +437,8 @@ void REPL::IOHandlerInputComplete(IOHandler &io_handler, std::string &code) {
       }
     }
 
-    // Don't complain about the REPL process going away if we are in the process
-    // of quitting.
+    // Don't complain about the REPL process going away if we are in the
+    // process of quitting.
     if (!did_quit && (!process_sp || !process_sp->IsAlive())) {
       error_sp->Printf(
           "error: REPL process is no longer alive, exiting REPL\n");
@@ -457,7 +450,7 @@ void REPL::IOHandlerInputComplete(IOHandler &io_handler, std::string &code) {
 int REPL::IOHandlerComplete(IOHandler &io_handler, const char *current_line,
                             const char *cursor, const char *last_char,
                             int skip_first_n_matches, int max_matches,
-                            StringList &matches) {
+                            StringList &matches, StringList &descriptions) {
   matches.Clear();
 
   llvm::StringRef line(current_line, cursor - current_line);
@@ -470,7 +463,7 @@ int REPL::IOHandlerComplete(IOHandler &io_handler, const char *current_line,
     const char *lldb_current_line = line.substr(1).data();
     return debugger.GetCommandInterpreter().HandleCompletion(
         lldb_current_line, cursor, last_char, skip_first_n_matches, max_matches,
-        matches);
+        matches, descriptions);
   }
 
   // Strip spaces from the line and see if we had only spaces
@@ -542,11 +535,9 @@ Status REPL::RunLoop() {
 
   debugger.PushIOHandler(io_handler_sp);
 
-  // Check if we are in dedicated REPL mode where LLDB was start with the
-  // "--repl" option
-  // from the command line. Currently we know this by checking if the debugger
-  // already
-  // has a IOHandler thread.
+  // Check if we are in dedicated REPL mode where LLDB was start with the "--
+  // repl" option from the command line. Currently we know this by checking if
+  // the debugger already has a IOHandler thread.
   if (!debugger.HasIOHandlerThread()) {
     // The debugger doesn't have an existing IOHandler thread, so this must be
     // dedicated REPL mode...
@@ -566,8 +557,8 @@ Status REPL::RunLoop() {
   io_handler_sp->WaitForPop();
 
   if (m_dedicated_repl_mode) {
-    // If we were in dedicated REPL mode we would have started the
-    // IOHandler thread, and we should kill our process
+    // If we were in dedicated REPL mode we would have started the IOHandler
+    // thread, and we should kill our process
     lldb::ProcessSP process_sp = m_target.GetProcessSP();
     if (process_sp && process_sp->IsAlive())
       process_sp->Destroy(false);

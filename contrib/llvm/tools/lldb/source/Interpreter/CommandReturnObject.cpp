@@ -9,10 +9,6 @@
 
 #include "lldb/Interpreter/CommandReturnObject.h"
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
 #include "lldb/Utility/Status.h"
 #include "lldb/Utility/StreamString.h"
 
@@ -25,8 +21,8 @@ static void DumpStringToStreamWithNewline(Stream &strm, const std::string &s,
   if (s.empty()) {
     add_newline = add_newline_if_empty;
   } else {
-    // We already checked for empty above, now make sure there is a newline
-    // in the error, and if there isn't one, add one.
+    // We already checked for empty above, now make sure there is a newline in
+    // the error, and if there isn't one, add one.
     strm.Write(s.c_str(), s.size());
 
     const char last_char = *s.rbegin();
@@ -127,8 +123,8 @@ void CommandReturnObject::SetError(llvm::StringRef error_str) {
   SetStatus(eReturnStatusFailed);
 }
 
-// Similar to AppendError, but do not prepend 'Status: ' to message, and
-// don't append "\n" to the end of it.
+// Similar to AppendError, but do not prepend 'Status: ' to message, and don't
+// append "\n" to the end of it.
 
 void CommandReturnObject::AppendRawError(llvm::StringRef in_string) {
   if (in_string.empty())

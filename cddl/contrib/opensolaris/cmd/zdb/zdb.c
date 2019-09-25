@@ -63,6 +63,7 @@
 #include <sys/zfeature.h>
 #include <sys/abd.h>
 #include <sys/blkptr.h>
+#include <sys/dsl_scan.h>
 #include <zfs_comutil.h>
 #include <libcmdutils.h>
 #undef verify
@@ -108,8 +109,10 @@ static uint64_t *zopt_object = NULL;
 static unsigned zopt_objects = 0;
 static libzfs_handle_t *g_zfs;
 static uint64_t max_inflight = 1000;
+static int leaked_objects = 0;
 
 static void snprintf_blkptr_compact(char *, size_t, const blkptr_t *);
+static void mos_obj_refd(uint64_t);
 
 /*
  * These libumem hooks provide a reasonable set of defaults for the allocator's
@@ -774,7 +777,6 @@ verify_spacemap_refcounts(spa_t *spa)
 static void
 dump_spacemap(objset_t *os, space_map_t *sm)
 {
-	uint64_t alloc, offset, entry;
 	char *ddata[] = { "ALLOC", "FREE", "CONDENSE", "INVALID",
 	    "INVALID", "INVALID", "INVALID", "INVALID" };
 
@@ -791,41 +793,73 @@ dump_spacemap(objset_t *os, space_map_t *sm)
 	/*
 	 * Print out the freelist entries in both encoded and decoded form.
 	 */
-	alloc = 0;
-	for (offset = 0; offset < space_map_length(sm);
-	    offset += sizeof (entry)) {
-		uint8_t mapshift = sm->sm_shift;
+	uint8_t mapshift = sm->sm_shift;
+	int64_t alloc = 0;
+	uint64_t word;
+	for (uint64_t offset = 0; offset < space_map_length(sm);
+	    offset += sizeof (word)) {
 
 		VERIFY0(dmu_read(os, space_map_object(sm), offset,
-		    sizeof (entry), &entry, DMU_READ_PREFETCH));
-		if (SM_DEBUG_DECODE(entry)) {
+		    sizeof (word), &word, DMU_READ_PREFETCH));
 
+		if (sm_entry_is_debug(word)) {
 			(void) printf("\t    [%6llu] %s: txg %llu, pass %llu\n",
-			    (u_longlong_t)(offset / sizeof (entry)),
-			    ddata[SM_DEBUG_ACTION_DECODE(entry)],
-			    (u_longlong_t)SM_DEBUG_TXG_DECODE(entry),
-			    (u_longlong_t)SM_DEBUG_SYNCPASS_DECODE(entry));
-		} else {
-			(void) printf("\t    [%6llu]    %c  range:"
-			    " %010llx-%010llx  size: %06llx\n",
-			    (u_longlong_t)(offset / sizeof (entry)),
-			    SM_TYPE_DECODE(entry) == SM_ALLOC ? 'A' : 'F',
-			    (u_longlong_t)((SM_OFFSET_DECODE(entry) <<
-			    mapshift) + sm->sm_start),
-			    (u_longlong_t)((SM_OFFSET_DECODE(entry) <<
-			    mapshift) + sm->sm_start +
-			    (SM_RUN_DECODE(entry) << mapshift)),
-			    (u_longlong_t)(SM_RUN_DECODE(entry) << mapshift));
-			if (SM_TYPE_DECODE(entry) == SM_ALLOC)
-				alloc += SM_RUN_DECODE(entry) << mapshift;
-			else
-				alloc -= SM_RUN_DECODE(entry) << mapshift;
+			    (u_longlong_t)(offset / sizeof (word)),
+			    ddata[SM_DEBUG_ACTION_DECODE(word)],
+			    (u_longlong_t)SM_DEBUG_TXG_DECODE(word),
+			    (u_longlong_t)SM_DEBUG_SYNCPASS_DECODE(word));
+			continue;
 		}
+
+		uint8_t words;
+		char entry_type;
+		uint64_t entry_off, entry_run, entry_vdev = SM_NO_VDEVID;
+
+		if (sm_entry_is_single_word(word)) {
+			entry_type = (SM_TYPE_DECODE(word) == SM_ALLOC) ?
+			    'A' : 'F';
+			entry_off = (SM_OFFSET_DECODE(word) << mapshift) +
+			    sm->sm_start;
+			entry_run = SM_RUN_DECODE(word) << mapshift;
+			words = 1;
+		} else {
+			/* it is a two-word entry so we read another word */
+			ASSERT(sm_entry_is_double_word(word));
+
+			uint64_t extra_word;
+			offset += sizeof (extra_word);
+			VERIFY0(dmu_read(os, space_map_object(sm), offset,
+			    sizeof (extra_word), &extra_word,
+			    DMU_READ_PREFETCH));
+
+			ASSERT3U(offset, <=, space_map_length(sm));
+
+			entry_run = SM2_RUN_DECODE(word) << mapshift;
+			entry_vdev = SM2_VDEV_DECODE(word);
+			entry_type = (SM2_TYPE_DECODE(extra_word) == SM_ALLOC) ?
+			    'A' : 'F';
+			entry_off = (SM2_OFFSET_DECODE(extra_word) <<
+			    mapshift) + sm->sm_start;
+			words = 2;
+		}
+
+		(void) printf("\t    [%6llu]    %c  range:"
+		    " %010llx-%010llx  size: %06llx vdev: %06llu words: %u\n",
+		    (u_longlong_t)(offset / sizeof (word)),
+		    entry_type, (u_longlong_t)entry_off,
+		    (u_longlong_t)(entry_off + entry_run),
+		    (u_longlong_t)entry_run,
+		    (u_longlong_t)entry_vdev, words);
+
+		if (entry_type == 'A')
+			alloc += entry_run;
+		else
+			alloc -= entry_run;
 	}
-	if (alloc != space_map_allocated(sm)) {
-		(void) printf("space_map_object alloc (%llu) INCONSISTENT "
-		    "with space map summary (%llu)\n",
-		    (u_longlong_t)space_map_allocated(sm), (u_longlong_t)alloc);
+	if ((uint64_t)alloc != space_map_allocated(sm)) {
+		(void) printf("space_map_object alloc (%lld) INCONSISTENT "
+		    "with space map summary (%lld)\n",
+		    (longlong_t)space_map_allocated(sm), (longlong_t)alloc);
 	}
 }
 
@@ -1155,7 +1189,7 @@ dump_ddt(ddt_t *ddt, enum ddt_type type, enum ddt_class class)
 	while ((error = ddt_object_walk(ddt, type, class, &walk, &dde)) == 0)
 		dump_dde(ddt, &dde, walk);
 
-	ASSERT(error == ENOENT);
+	ASSERT3U(error, ==, ENOENT);
 
 	(void) printf("\n");
 }
@@ -1560,6 +1594,8 @@ dump_dsl_dir(objset_t *os, uint64_t object, void *data, size_t size)
 	DO(CHILD_RSRV);
 	DO(REFRSRV);
 #undef DO
+	(void) printf("\t\tclones = %llu\n",
+	    (u_longlong_t)dd->dd_clones);
 }
 
 /*ARGSUSED*/
@@ -1742,6 +1778,33 @@ dump_full_bpobj(bpobj_t *bpo, const char *name, int indent)
 }
 
 static void
+bpobj_count_refd(bpobj_t *bpo)
+{
+	mos_obj_refd(bpo->bpo_object);
+
+	if (bpo->bpo_havesubobj && bpo->bpo_phys->bpo_subobjs != 0) {
+		mos_obj_refd(bpo->bpo_phys->bpo_subobjs);
+		for (uint64_t i = 0; i < bpo->bpo_phys->bpo_num_subobjs; i++) {
+			uint64_t subobj;
+			bpobj_t subbpo;
+			int error;
+			VERIFY0(dmu_read(bpo->bpo_os,
+			    bpo->bpo_phys->bpo_subobjs,
+			    i * sizeof (subobj), sizeof (subobj), &subobj, 0));
+			error = bpobj_open(&subbpo, bpo->bpo_os, subobj);
+			if (error != 0) {
+				(void) printf("ERROR %u while trying to open "
+				    "subobj id %llu\n",
+				    error, (u_longlong_t)subobj);
+				continue;
+			}
+			bpobj_count_refd(&subbpo);
+			bpobj_close(&subbpo);
+		}
+	}
+}
+
+static void
 dump_deadlist(dsl_deadlist_t *dl)
 {
 	dsl_deadlist_entry_t *dle;
@@ -1749,6 +1812,23 @@ dump_deadlist(dsl_deadlist_t *dl)
 	char bytes[32];
 	char comp[32];
 	char uncomp[32];
+	uint64_t empty_bpobj =
+	    dmu_objset_spa(dl->dl_os)->spa_dsl_pool->dp_empty_bpobj;
+
+	/* force the tree to be loaded */
+	dsl_deadlist_space_range(dl, 0, UINT64_MAX, &unused, &unused, &unused);
+
+	if (dl->dl_oldfmt) {
+		if (dl->dl_bpobj.bpo_object != empty_bpobj)
+			bpobj_count_refd(&dl->dl_bpobj);
+	} else {
+		mos_obj_refd(dl->dl_object);
+		for (dle = avl_first(&dl->dl_tree); dle;
+		    dle = AVL_NEXT(&dl->dl_tree, dle)) {
+			if (dle->dle_bpobj.bpo_object != empty_bpobj)
+				bpobj_count_refd(&dle->dle_bpobj);
+		}
+	}
 
 	/* make sure nicenum has enough space */
 	CTASSERT(sizeof (bytes) >= NN_NUMBUF_SZ);
@@ -1773,9 +1853,6 @@ dump_deadlist(dsl_deadlist_t *dl)
 		return;
 
 	(void) printf("\n");
-
-	/* force the tree to be loaded */
-	dsl_deadlist_space_range(dl, 0, UINT64_MAX, &unused, &unused, &unused);
 
 	for (dle = avl_first(&dl->dl_tree); dle;
 	    dle = AVL_NEXT(&dl->dl_tree, dle)) {
@@ -1957,9 +2034,12 @@ dump_znode(objset_t *os, uint64_t object, void *data, size_t size)
 
 	if (dump_opt['d'] > 4) {
 		error = zfs_obj_to_path(os, object, path, sizeof (path));
-		if (error != 0) {
+		if (error == ESTALE) {
+			(void) snprintf(path, sizeof (path), "on delete queue");
+		} else if (error != 0) {
+			leaked_objects++;
 			(void) snprintf(path, sizeof (path),
-			    "\?\?\?<object#%llu>", (u_longlong_t)object);
+			    "path not found, possibly leaked");
 		}
 		(void) printf("\tpath	%s\n", path);
 	}
@@ -2061,7 +2141,7 @@ dump_object(objset_t *os, uint64_t object, int verbosity, int *print_header)
 	dnode_t *dn;
 	void *bonus = NULL;
 	size_t bsize = 0;
-	char iblk[32], dblk[32], lsize[32], asize[32], fill[32];
+	char iblk[32], dblk[32], lsize[32], asize[32], fill[32], dnsize[32];
 	char bonus_size[32];
 	char aux[50];
 	int error;
@@ -2074,9 +2154,9 @@ dump_object(objset_t *os, uint64_t object, int verbosity, int *print_header)
 	CTASSERT(sizeof (bonus_size) >= NN_NUMBUF_SZ);
 
 	if (*print_header) {
-		(void) printf("\n%10s  %3s  %5s  %5s  %5s  %5s  %6s  %s\n",
-		    "Object", "lvl", "iblk", "dblk", "dsize", "lsize",
-		    "%full", "type");
+		(void) printf("\n%10s  %3s  %5s  %5s  %5s  %6s %5s  %6s  %s\n",
+		    "Object", "lvl", "iblk", "dblk", "dsize", "dnsize",
+		    "lsize", "%full", "type");
 		*print_header = 0;
 	}
 
@@ -2098,6 +2178,7 @@ dump_object(objset_t *os, uint64_t object, int verbosity, int *print_header)
 	zdb_nicenum(doi.doi_max_offset, lsize, sizeof (lsize));
 	zdb_nicenum(doi.doi_physical_blocks_512 << 9, asize, sizeof (asize));
 	zdb_nicenum(doi.doi_bonus_size, bonus_size, sizeof (bonus_size));
+	zdb_nicenum(doi.doi_dnodesize, dnsize, sizeof (dnsize));
 	(void) sprintf(fill, "%6.2f", 100.0 * doi.doi_fill_count *
 	    doi.doi_data_block_size / (object == 0 ? DNODES_PER_BLOCK : 1) /
 	    doi.doi_max_offset);
@@ -2114,13 +2195,13 @@ dump_object(objset_t *os, uint64_t object, int verbosity, int *print_header)
 		    ZDB_COMPRESS_NAME(doi.doi_compress));
 	}
 
-	(void) printf("%10lld  %3u  %5s  %5s  %5s  %5s  %6s  %s%s\n",
+	(void) printf("%10lld  %3u  %5s  %5s  %5s  %6s  %5s  %6s  %s%s\n",
 	    (u_longlong_t)object, doi.doi_indirection, iblk, dblk,
-	    asize, lsize, fill, ZDB_OT_NAME(doi.doi_type), aux);
+	    asize, dnsize, lsize, fill, ZDB_OT_NAME(doi.doi_type), aux);
 
 	if (doi.doi_bonus_type != DMU_OT_NONE && verbosity > 3) {
-		(void) printf("%10s  %3s  %5s  %5s  %5s  %5s  %6s  %s\n",
-		    "", "", "", "", "", bonus_size, "bonus",
+		(void) printf("%10s  %3s  %5s  %5s  %5s  %5s  %5s  %6s  %s\n",
+		    "", "", "", "", "", "", bonus_size, "bonus",
 		    ZDB_OT_NAME(doi.doi_bonus_type));
 	}
 
@@ -2183,6 +2264,30 @@ dump_object(objset_t *os, uint64_t object, int verbosity, int *print_header)
 		dmu_buf_rele(db, FTAG);
 }
 
+static void
+count_dir_mos_objects(dsl_dir_t *dd)
+{
+	mos_obj_refd(dd->dd_object);
+	mos_obj_refd(dsl_dir_phys(dd)->dd_child_dir_zapobj);
+	mos_obj_refd(dsl_dir_phys(dd)->dd_deleg_zapobj);
+	mos_obj_refd(dsl_dir_phys(dd)->dd_props_zapobj);
+	mos_obj_refd(dsl_dir_phys(dd)->dd_clones);
+}
+
+static void
+count_ds_mos_objects(dsl_dataset_t *ds)
+{
+	mos_obj_refd(ds->ds_object);
+	mos_obj_refd(dsl_dataset_phys(ds)->ds_next_clones_obj);
+	mos_obj_refd(dsl_dataset_phys(ds)->ds_props_obj);
+	mos_obj_refd(dsl_dataset_phys(ds)->ds_userrefs_obj);
+	mos_obj_refd(dsl_dataset_phys(ds)->ds_snapnames_zapobj);
+
+	if (!dsl_dataset_is_snapshot(ds)) {
+		count_dir_mos_objects(ds->ds_dir);
+	}
+}
+
 static const char *objset_types[DMU_OST_NUMTYPES] = {
 	"NONE", "META", "ZPL", "ZVOL", "OTHER", "ANY" };
 
@@ -2235,10 +2340,11 @@ dump_dir(objset_t *os)
 	dmu_objset_name(os, osname);
 
 	(void) printf("Dataset %s [%s], ID %llu, cr_txg %llu, "
-	    "%s, %llu objects%s\n",
+	    "%s, %llu objects%s%s\n",
 	    osname, type, (u_longlong_t)dmu_objset_id(os),
 	    (u_longlong_t)dds.dds_creation_txg,
-	    numbuf, (u_longlong_t)usedobjs, blkbuf);
+	    numbuf, (u_longlong_t)usedobjs, blkbuf,
+	    (dds.dds_inconsistent) ? " (inconsistent)" : "");
 
 	if (zopt_objects != 0) {
 		for (i = 0; i < zopt_objects; i++)
@@ -2259,6 +2365,7 @@ dump_dir(objset_t *os)
 			(void) printf("ds_remap_deadlist:\n");
 			dump_deadlist(&ds->ds_remap_deadlist);
 		}
+		count_ds_mos_objects(ds);
 	}
 
 	if (verbosity < 2)
@@ -2281,13 +2388,19 @@ dump_dir(objset_t *os)
 		object_count++;
 	}
 
-	ASSERT3U(object_count, ==, usedobjs);
-
 	(void) printf("\n");
 
 	if (error != ESRCH) {
 		(void) fprintf(stderr, "dmu_object_next() = %d\n", error);
 		abort();
+	}
+
+	ASSERT3U(object_count, ==, usedobjs);
+
+	if (leaked_objects != 0) {
+		(void) printf("%d potentially leaked objects detected\n",
+		    leaked_objects);
+		leaked_objects = 0;
 	}
 }
 
@@ -2788,6 +2901,7 @@ zdb_blkptr_done(zio_t *zio)
 
 	mutex_enter(&spa->spa_scrub_lock);
 	spa->spa_scrub_inflight--;
+	spa->spa_load_verify_ios--;
 	cv_broadcast(&spa->spa_scrub_io_cv);
 
 	if (ioerr && !(zio->io_flags & ZIO_FLAG_SPECULATIVE)) {
@@ -2859,9 +2973,10 @@ zdb_blkptr_cb(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
 			flags |= ZIO_FLAG_SPECULATIVE;
 
 		mutex_enter(&spa->spa_scrub_lock);
-		while (spa->spa_scrub_inflight > max_inflight)
+		while (spa->spa_load_verify_ios > max_inflight)
 			cv_wait(&spa->spa_scrub_io_cv, &spa->spa_scrub_lock);
 		spa->spa_scrub_inflight++;
+		spa->spa_load_verify_ios++;
 		mutex_exit(&spa->spa_scrub_lock);
 
 		zio_nowait(zio_read(NULL, spa, bp, abd, size,
@@ -3000,7 +3115,7 @@ zdb_claim_removing(spa_t *spa, zdb_cb_t *zcb)
 	spa_config_enter(spa, SCL_CONFIG, FTAG, RW_READER);
 
 	spa_vdev_removal_t *svr = spa->spa_vdev_removal;
-	vdev_t *vd = svr->svr_vdev;
+	vdev_t *vd = vdev_lookup_top(spa, svr->svr_vdev_id);
 	vdev_indirect_mapping_t *vim = vd->vdev_indirect_mapping;
 
 	for (uint64_t msi = 0; msi < vd->vdev_ms_count; msi++) {
@@ -3016,13 +3131,17 @@ zdb_claim_removing(spa_t *spa, zdb_cb_t *zcb)
 			    svr->svr_allocd_segs, SM_ALLOC));
 
 			/*
-			 * Clear everything past what has been synced,
-			 * because we have not allocated mappings for it yet.
+			 * Clear everything past what has been synced unless
+			 * it's past the spacemap, because we have not allocated
+			 * mappings for it yet.
 			 */
-			range_tree_clear(svr->svr_allocd_segs,
-			    vdev_indirect_mapping_max_offset(vim),
-			    msp->ms_sm->sm_start + msp->ms_sm->sm_size -
-			    vdev_indirect_mapping_max_offset(vim));
+			uint64_t vim_max_offset =
+			    vdev_indirect_mapping_max_offset(vim);
+			uint64_t sm_end = msp->ms_sm->sm_start +
+			    msp->ms_sm->sm_size;
+			if (sm_end > vim_max_offset)
+				range_tree_clear(svr->svr_allocd_segs,
+				    vim_max_offset, sm_end - vim_max_offset);
 		}
 
 		zcb->zcb_removing_size +=
@@ -3095,15 +3214,14 @@ typedef struct checkpoint_sm_exclude_entry_arg {
 } checkpoint_sm_exclude_entry_arg_t;
 
 static int
-checkpoint_sm_exclude_entry_cb(maptype_t type, uint64_t offset, uint64_t size,
-    void *arg)
+checkpoint_sm_exclude_entry_cb(space_map_entry_t *sme, void *arg)
 {
 	checkpoint_sm_exclude_entry_arg_t *cseea = arg;
 	vdev_t *vd = cseea->cseea_vd;
-	metaslab_t *ms = vd->vdev_ms[offset >> vd->vdev_ms_shift];
-	uint64_t end = offset + size;
+	metaslab_t *ms = vd->vdev_ms[sme->sme_offset >> vd->vdev_ms_shift];
+	uint64_t end = sme->sme_offset + sme->sme_run;
 
-	ASSERT(type == SM_FREE);
+	ASSERT(sme->sme_type == SM_FREE);
 
 	/*
 	 * Since the vdev_checkpoint_sm exists in the vdev level
@@ -3121,7 +3239,7 @@ checkpoint_sm_exclude_entry_cb(maptype_t type, uint64_t offset, uint64_t size,
 	 * metaslab boundaries. So if needed we could add code
 	 * that handles metaslab-crossing segments in the future.
 	 */
-	VERIFY3U(offset, >=, ms->ms_start);
+	VERIFY3U(sme->sme_offset, >=, ms->ms_start);
 	VERIFY3U(end, <=, ms->ms_start + ms->ms_size);
 
 	/*
@@ -3129,10 +3247,10 @@ checkpoint_sm_exclude_entry_cb(maptype_t type, uint64_t offset, uint64_t size,
 	 * also verify that the entry is there to begin with.
 	 */
 	mutex_enter(&ms->ms_lock);
-	range_tree_remove(ms->ms_allocatable, offset, size);
+	range_tree_remove(ms->ms_allocatable, sme->sme_offset, sme->sme_run);
 	mutex_exit(&ms->ms_lock);
 
-	cseea->cseea_checkpoint_size += size;
+	cseea->cseea_checkpoint_size += sme->sme_run;
 	return (0);
 }
 
@@ -4107,15 +4225,14 @@ typedef struct verify_checkpoint_sm_entry_cb_arg {
 #define	ENTRIES_PER_PROGRESS_UPDATE 10000
 
 static int
-verify_checkpoint_sm_entry_cb(maptype_t type, uint64_t offset, uint64_t size,
-    void *arg)
+verify_checkpoint_sm_entry_cb(space_map_entry_t *sme, void *arg)
 {
 	verify_checkpoint_sm_entry_cb_arg_t *vcsec = arg;
 	vdev_t *vd = vcsec->vcsec_vd;
-	metaslab_t *ms = vd->vdev_ms[offset >> vd->vdev_ms_shift];
-	uint64_t end = offset + size;
+	metaslab_t *ms = vd->vdev_ms[sme->sme_offset >> vd->vdev_ms_shift];
+	uint64_t end = sme->sme_offset + sme->sme_run;
 
-	ASSERT(type == SM_FREE);
+	ASSERT(sme->sme_type == SM_FREE);
 
 	if ((vcsec->vcsec_entryid % ENTRIES_PER_PROGRESS_UPDATE) == 0) {
 		(void) fprintf(stderr,
@@ -4129,7 +4246,7 @@ verify_checkpoint_sm_entry_cb(maptype_t type, uint64_t offset, uint64_t size,
 	/*
 	 * See comment in checkpoint_sm_exclude_entry_cb()
 	 */
-	VERIFY3U(offset, >=, ms->ms_start);
+	VERIFY3U(sme->sme_offset, >=, ms->ms_start);
 	VERIFY3U(end, <=, ms->ms_start + ms->ms_size);
 
 	/*
@@ -4138,7 +4255,7 @@ verify_checkpoint_sm_entry_cb(maptype_t type, uint64_t offset, uint64_t size,
 	 * their respective ms_allocateable trees should not contain them.
 	 */
 	mutex_enter(&ms->ms_lock);
-	range_tree_verify(ms->ms_allocatable, offset, size);
+	range_tree_verify(ms->ms_allocatable, sme->sme_offset, sme->sme_run);
 	mutex_exit(&ms->ms_lock);
 
 	return (0);
@@ -4384,7 +4501,7 @@ verify_checkpoint(spa_t *spa)
 	    DMU_POOL_ZPOOL_CHECKPOINT, sizeof (uint64_t),
 	    sizeof (uberblock_t) / sizeof (uint64_t), &checkpoint);
 
-	if (error == ENOENT) {
+	if (error == ENOENT && !dump_opt['L']) {
 		/*
 		 * If the feature is active but the uberblock is missing
 		 * then we must be in the middle of discarding the
@@ -4407,10 +4524,165 @@ verify_checkpoint(spa_t *spa)
 		error = 3;
 	}
 
-	if (error == 0)
+	if (error == 0 && !dump_opt['L'])
 		verify_checkpoint_blocks(spa);
 
 	return (error);
+}
+
+/* ARGSUSED */
+static void
+mos_leaks_cb(void *arg, uint64_t start, uint64_t size)
+{
+	for (uint64_t i = start; i < size; i++) {
+		(void) printf("MOS object %llu referenced but not allocated\n",
+		    (u_longlong_t)i);
+	}
+}
+
+static range_tree_t *mos_refd_objs;
+
+static void
+mos_obj_refd(uint64_t obj)
+{
+	if (obj != 0 && mos_refd_objs != NULL)
+		range_tree_add(mos_refd_objs, obj, 1);
+}
+
+static void
+mos_leak_vdev(vdev_t *vd)
+{
+	mos_obj_refd(vd->vdev_dtl_object);
+	mos_obj_refd(vd->vdev_ms_array);
+	mos_obj_refd(vd->vdev_top_zap);
+	mos_obj_refd(vd->vdev_indirect_config.vic_births_object);
+	mos_obj_refd(vd->vdev_indirect_config.vic_mapping_object);
+	mos_obj_refd(vd->vdev_leaf_zap);
+	if (vd->vdev_checkpoint_sm != NULL)
+		mos_obj_refd(vd->vdev_checkpoint_sm->sm_object);
+	if (vd->vdev_indirect_mapping != NULL) {
+		mos_obj_refd(vd->vdev_indirect_mapping->
+		    vim_phys->vimp_counts_object);
+	}
+	if (vd->vdev_obsolete_sm != NULL)
+		mos_obj_refd(vd->vdev_obsolete_sm->sm_object);
+
+	for (uint64_t m = 0; m < vd->vdev_ms_count; m++) {
+		metaslab_t *ms = vd->vdev_ms[m];
+		mos_obj_refd(space_map_object(ms->ms_sm));
+	}
+
+	for (uint64_t c = 0; c < vd->vdev_children; c++) {
+		mos_leak_vdev(vd->vdev_child[c]);
+	}
+}
+
+static int
+dump_mos_leaks(spa_t *spa)
+{
+	int rv = 0;
+	objset_t *mos = spa->spa_meta_objset;
+	dsl_pool_t *dp = spa->spa_dsl_pool;
+
+	/* Visit and mark all referenced objects in the MOS */
+
+	mos_obj_refd(DMU_POOL_DIRECTORY_OBJECT);
+	mos_obj_refd(spa->spa_pool_props_object);
+	mos_obj_refd(spa->spa_config_object);
+	mos_obj_refd(spa->spa_ddt_stat_object);
+	mos_obj_refd(spa->spa_feat_desc_obj);
+	mos_obj_refd(spa->spa_feat_enabled_txg_obj);
+	mos_obj_refd(spa->spa_feat_for_read_obj);
+	mos_obj_refd(spa->spa_feat_for_write_obj);
+	mos_obj_refd(spa->spa_history);
+	mos_obj_refd(spa->spa_errlog_last);
+	mos_obj_refd(spa->spa_errlog_scrub);
+	mos_obj_refd(spa->spa_all_vdev_zaps);
+	mos_obj_refd(spa->spa_dsl_pool->dp_bptree_obj);
+	mos_obj_refd(spa->spa_dsl_pool->dp_tmp_userrefs_obj);
+	mos_obj_refd(spa->spa_dsl_pool->dp_scan->scn_phys.scn_queue_obj);
+	bpobj_count_refd(&spa->spa_deferred_bpobj);
+	mos_obj_refd(dp->dp_empty_bpobj);
+	bpobj_count_refd(&dp->dp_obsolete_bpobj);
+	bpobj_count_refd(&dp->dp_free_bpobj);
+	mos_obj_refd(spa->spa_l2cache.sav_object);
+	mos_obj_refd(spa->spa_spares.sav_object);
+
+	mos_obj_refd(spa->spa_condensing_indirect_phys.
+	    scip_next_mapping_object);
+	mos_obj_refd(spa->spa_condensing_indirect_phys.
+	    scip_prev_obsolete_sm_object);
+	if (spa->spa_condensing_indirect_phys.scip_next_mapping_object != 0) {
+		vdev_indirect_mapping_t *vim =
+		    vdev_indirect_mapping_open(mos,
+		    spa->spa_condensing_indirect_phys.scip_next_mapping_object);
+		mos_obj_refd(vim->vim_phys->vimp_counts_object);
+		vdev_indirect_mapping_close(vim);
+	}
+
+	if (dp->dp_origin_snap != NULL) {
+		dsl_dataset_t *ds;
+
+		dsl_pool_config_enter(dp, FTAG);
+		VERIFY0(dsl_dataset_hold_obj(dp,
+		    dsl_dataset_phys(dp->dp_origin_snap)->ds_next_snap_obj,
+		    FTAG, &ds));
+		count_ds_mos_objects(ds);
+		dump_deadlist(&ds->ds_deadlist);
+		dsl_dataset_rele(ds, FTAG);
+		dsl_pool_config_exit(dp, FTAG);
+
+		count_ds_mos_objects(dp->dp_origin_snap);
+		dump_deadlist(&dp->dp_origin_snap->ds_deadlist);
+	}
+	count_dir_mos_objects(dp->dp_mos_dir);
+	if (dp->dp_free_dir != NULL)
+		count_dir_mos_objects(dp->dp_free_dir);
+	if (dp->dp_leak_dir != NULL)
+		count_dir_mos_objects(dp->dp_leak_dir);
+
+	mos_leak_vdev(spa->spa_root_vdev);
+
+	for (uint64_t class = 0; class < DDT_CLASSES; class++) {
+		for (uint64_t type = 0; type < DDT_TYPES; type++) {
+			for (uint64_t cksum = 0;
+			    cksum < ZIO_CHECKSUM_FUNCTIONS; cksum++) {
+				ddt_t *ddt = spa->spa_ddt[cksum];
+				mos_obj_refd(ddt->ddt_object[type][class]);
+			}
+		}
+	}
+
+	/*
+	 * Visit all allocated objects and make sure they are referenced.
+	 */
+	uint64_t object = 0;
+	while (dmu_object_next(mos, &object, B_FALSE, 0) == 0) {
+		if (range_tree_contains(mos_refd_objs, object, 1)) {
+			range_tree_remove(mos_refd_objs, object, 1);
+		} else {
+			dmu_object_info_t doi;
+			const char *name;
+			dmu_object_info(mos, object, &doi);
+			if (doi.doi_type & DMU_OT_NEWTYPE) {
+				dmu_object_byteswap_t bswap =
+				    DMU_OT_BYTESWAP(doi.doi_type);
+				name = dmu_ot_byteswap[bswap].ob_name;
+			} else {
+				name = dmu_ot[doi.doi_type].ot_name;
+			}
+
+			(void) printf("MOS object %llu (%s) leaked\n",
+			    (u_longlong_t)object, name);
+			rv = 2;
+		}
+	}
+	(void) range_tree_walk(mos_refd_objs, mos_leaks_cb, NULL);
+	if (!range_tree_is_empty(mos_refd_objs))
+		rv = 2;
+	range_tree_vacate(mos_refd_objs, NULL, NULL);
+	range_tree_destroy(mos_refd_objs);
+	return (rv);
 }
 
 static void
@@ -4444,7 +4716,9 @@ dump_zpool(spa_t *spa)
 		dump_metaslab_groups(spa);
 
 	if (dump_opt['d'] || dump_opt['i']) {
+		mos_refd_objs = range_tree_create(NULL, NULL);
 		dump_dir(dp->dp_meta_objset);
+
 		if (dump_opt['d'] >= 3) {
 			dsl_pool_t *dp = spa->spa_dsl_pool;
 			dump_full_bpobj(&spa->spa_deferred_bpobj,
@@ -4470,6 +4744,9 @@ dump_zpool(spa_t *spa)
 		}
 		(void) dmu_objset_find(spa_name(spa), dump_one_dir,
 		    NULL, DS_FIND_SNAPSHOTS | DS_FIND_CHILDREN);
+
+		if (rc == 0 && !dump_opt['L'])
+			rc = dump_mos_leaks(spa);
 
 		for (spa_feature_t f = 0; f < SPA_FEATURES; f++) {
 			uint64_t refcount;
@@ -4500,6 +4777,7 @@ dump_zpool(spa_t *spa)
 			rc = verify_device_removal_feature_counts(spa);
 		}
 	}
+
 	if (rc == 0 && (dump_opt['b'] || dump_opt['c']))
 		rc = dump_block_stats(spa);
 
@@ -4512,7 +4790,7 @@ dump_zpool(spa_t *spa)
 	if (dump_opt['h'])
 		dump_history(spa);
 
-	if (rc == 0 && !dump_opt['L'])
+	if (rc == 0)
 		rc = verify_checkpoint(spa);
 
 	if (rc != 0) {
@@ -4905,19 +5183,18 @@ zdb_embedded_block(char *thing)
 	    words + 8, words + 9, words + 10, words + 11,
 	    words + 12, words + 13, words + 14, words + 15);
 	if (err != 16) {
-		(void) printf("invalid input format\n");
+		(void) fprintf(stderr, "invalid input format\n");
 		exit(1);
 	}
 	ASSERT3U(BPE_GET_LSIZE(&bp), <=, SPA_MAXBLOCKSIZE);
 	buf = malloc(SPA_MAXBLOCKSIZE);
 	if (buf == NULL) {
-		(void) fprintf(stderr, "%s: failed to allocate %llu bytes\n",
-		    __func__, SPA_MAXBLOCKSIZE);
+		(void) fprintf(stderr, "out of memory\n");
 		exit(1);
 	}
 	err = decode_embedded_bp(&bp, buf, BPE_GET_LSIZE(&bp));
 	if (err != 0) {
-		(void) printf("decode failed: %u\n", err);
+		(void) fprintf(stderr, "decode failed: %u\n", err);
 		free(buf);
 		exit(1);
 	}
@@ -5370,5 +5647,5 @@ main(int argc, char **argv)
 	libzfs_fini(g_zfs);
 	kernel_fini();
 
-	return (0);
+	return (error);
 }

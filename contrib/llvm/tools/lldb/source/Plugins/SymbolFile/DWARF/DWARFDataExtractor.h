@@ -10,7 +10,6 @@
 #ifndef liblldb_DWARFDataExtractor_h_
 #define liblldb_DWARFDataExtractor_h_
 
-// Other libraries and framework includes.
 #include "lldb/Core/dwarf.h"
 #include "lldb/Utility/DataExtractor.h"
 
@@ -29,7 +28,7 @@ public:
   dw_offset_t GetDWARFOffset(lldb::offset_t *offset_ptr) const;
 
   size_t GetDWARFSizeofInitialLength() const { return m_is_dwarf64 ? 12 : 4; }
-
+  size_t GetDWARFSizeOfOffset() const { return m_is_dwarf64 ? 8 : 4; }
   bool IsDWARF64() const { return m_is_dwarf64; }
 
 protected:

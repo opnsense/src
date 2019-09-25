@@ -202,16 +202,24 @@ ntb_plx_init(device_t dev)
 		if (sc->alut)
 			PNTX_WRITE(sc, 0xc94, 0);
 
-		/* Enable Link Interface LUT entries 0/1 for peer 0/1. */
-		PNTX_WRITE(sc, 0xdb4, 0x00090001);
+		/* Enable all Link Interface LUT entries for peer. */
+		for (i = 0; i < 32; i += 2) {
+			PNTX_WRITE(sc, 0xdb4 + i * 2,
+			    0x00010001 | ((i + 1) << 19) | (i << 3));
+		}
 	}
 
 	/*
-	 * Enable Virtual Interface LUT entry 0 for 0:0.0 and
-	 * entry 1 for our Requester ID reported by chip.
+	 * Enable Virtual Interface LUT entry 0 for 0:0.*.
+	 * entry 1 for our Requester ID reported by the chip,
+	 * entries 2-5 for 0/64/128/192:4.* of I/OAT DMA engines.
+	 * XXX: Its a hack, we can't know all DMA engines, but this covers all
+	 * I/OAT of Xeon E5/E7 at least from Sandy Bridge till Skylake I saw.
 	 */
 	val = (NTX_READ(sc, 0xc90) << 16) | 0x00010001;
 	NTX_WRITE(sc, sc->link ? 0xdb4 : 0xd94, val);
+	NTX_WRITE(sc, sc->link ? 0xdb8 : 0xd98, 0x40210021);
+	NTX_WRITE(sc, sc->link ? 0xdbc : 0xd9c, 0xc0218021);
 
 	/* Set Link to Virtual address translation. */
 	for (i = 0; i < sc->mw_count; i++) {
@@ -462,6 +470,43 @@ ntb_plx_detach(device_t dev)
 	return (0);
 }
 
+static int
+ntb_plx_port_number(device_t dev)
+{
+	struct ntb_plx_softc *sc = device_get_softc(dev);
+
+	return (sc->link ? 1 : 0);
+}
+
+static int
+ntb_plx_peer_port_count(device_t dev)
+{
+
+	return (1);
+}
+
+static int
+ntb_plx_peer_port_number(device_t dev, int pidx)
+{
+	struct ntb_plx_softc *sc = device_get_softc(dev);
+
+	if (pidx != 0)
+		return (-EINVAL);
+
+	return (sc->link ? 0 : 1);
+}
+
+static int
+ntb_plx_peer_port_idx(device_t dev, int port)
+{
+	int peer_port;
+
+	peer_port = ntb_plx_peer_port_number(dev, 0);
+	if (peer_port == -EINVAL || port != peer_port)
+		return (-EINVAL);
+
+	return (0);
+}
 
 static bool
 ntb_plx_link_is_up(device_t dev, enum ntb_speed *speed, enum ntb_width *width)
@@ -966,6 +1011,10 @@ static device_method_t ntb_plx_methods[] = {
 	DEVMETHOD(bus_child_location_str, ntb_child_location_str),
 	DEVMETHOD(bus_print_child,	ntb_print_child),
 	/* NTB interface */
+	DEVMETHOD(ntb_port_number,	ntb_plx_port_number),
+	DEVMETHOD(ntb_peer_port_count,	ntb_plx_peer_port_count),
+	DEVMETHOD(ntb_peer_port_number,	ntb_plx_peer_port_number),
+	DEVMETHOD(ntb_peer_port_idx, 	ntb_plx_peer_port_idx),
 	DEVMETHOD(ntb_link_is_up,	ntb_plx_link_is_up),
 	DEVMETHOD(ntb_link_enable,	ntb_plx_link_enable),
 	DEVMETHOD(ntb_link_disable,	ntb_plx_link_disable),

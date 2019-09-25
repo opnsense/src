@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1997, Stefan Esser <se@freebsd.org>
  * Copyright (c) 2000, Michael Smith <msmith@freebsd.org>
  * Copyright (c) 2000, BSDi
@@ -34,7 +36,7 @@
 
 /*
  * Export definitions of the pci bus so that we can more easily share
- * it with "subclass" busses.
+ * it with "subclass" buses.
  */
 DECLARE_CLASS(pci_driver);
 

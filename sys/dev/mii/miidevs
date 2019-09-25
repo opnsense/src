@@ -224,6 +224,7 @@ model ICS 1889			0x0001 ICS1889 10/100 media interface
 model ICS 1890			0x0002 ICS1890 10/100 media interface
 model ICS 1892			0x0003 ICS1892 10/100 media interface
 model ICS 1893			0x0004 ICS1893 10/100 media interface
+model ICS 1893C			0x0005 ICS1893C 10/100 media interface
 
 /* Intel Corporation PHYs */
 model xxINTEL I82553		0x0000 i82553 10/100 media interface
@@ -317,7 +318,7 @@ model yyREALTEK RTL8201L	0x0020 RTL8201L 10/100 media interface
 model xxREALTEK RTL8169S	0x0011 RTL8169S/8110S/8211 1000BASE-T media interface
 model REALTEK RTL8305SC		0x0005 RTL8305SC 10/100 802.1q switch
 model REALTEK RTL8201E		0x0008 RTL8201E 10/100 media interface
-model REALTEK RTL8251		0x0000 RTL8251 1000BASE-T media interface
+model REALTEK RTL8251		0x0000 RTL8251/8153 1000BASE-T media interface
 model REALTEK RTL8169S		0x0011 RTL8169S/8110S/8211 1000BASE-T media interface
 
 /* Seeq Seeq PHYs */

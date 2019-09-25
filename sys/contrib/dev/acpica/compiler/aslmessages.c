@@ -8,7 +8,7 @@
  *
  * 1. Copyright Notice
  *
- * Some or all of this work - Copyright (c) 1999 - 2017, Intel Corp.
+ * Some or all of this work - Copyright (c) 1999 - 2018, Intel Corp.
  * All rights reserved.
  *
  * 2. License
@@ -285,7 +285,7 @@ const char                      *AslCompilerMsgs [] =
 /*    ASL_MSG_NON_ASCII */                  "Invalid characters found in file",
 /*    ASL_MSG_NON_ZERO */                   "Operand evaluates to zero",
 /*    ASL_MSG_NOT_EXIST */                  "Object does not exist",
-/*    ASL_MSG_NOT_FOUND */                  "Object not found or not accessible from scope",
+/*    ASL_MSG_NOT_FOUND */                  "Object not found or not accessible from current scope",
 /*    ASL_MSG_NOT_METHOD */                 "Not a control method, cannot invoke",
 /*    ASL_MSG_NOT_PARAMETER */              "Not a parameter, used as local only",
 /*    ASL_MSG_NOT_REACHABLE */              "Object is not accessible from this scope",
@@ -342,8 +342,8 @@ const char                      *AslCompilerMsgs [] =
 /*    ASL_MSG_RANGE */                      "Constant out of range",
 /*    ASL_MSG_BUFFER_ALLOCATION */          "Could not allocate line buffer",
 /*    ASL_MSG_MISSING_DEPENDENCY */         "Missing dependency",
-/*    ASL_MSG_ILLEGAL_FORWARD_REF */        "Illegal forward reference within a method",
-/*    ASL_MSG_ILLEGAL_METHOD_REF */         "Illegal reference across two methods",
+/*    ASL_MSG_ILLEGAL_FORWARD_REF */        "Illegal forward reference",
+/*    ASL_MSG_ILLEGAL_METHOD_REF */         "Object is declared in a different method",
 /*    ASL_MSG_LOCAL_NOT_USED */             "Method Local is set but never used",
 /*    ASL_MSG_ARG_AS_LOCAL_NOT_USED */      "Method Argument (as a local) is set but never used",
 /*    ASL_MSG_ARG_NOT_USED */               "Method Argument is never used",
@@ -352,7 +352,16 @@ const char                      *AslCompilerMsgs [] =
 /*    ASL_MSG_EXCEPTION_NOT_RECEIVED */     "Expected remark, warning, or error did not occur. Message ID:",
 /*    ASL_MSG_NULL_RESOURCE_TEMPLATE */     "Empty Resource Template (END_TAG only)",
 /*    ASL_MSG_FOUND_HERE */                 "Original name creation/declaration below: ",
-/*    ASL_MSG_ILLEGAL_RECURSION */          "Illegal recursive call to method that creates named objects"
+/*    ASL_MSG_ILLEGAL_RECURSION */          "Illegal recursive call to method that creates named objects",
+/*    ASL_MSG_EXTERN_COLLISION */           "A name cannot be defined and declared external in the same table",
+/*    ASL_MSG_FOUND_HERE_EXTERN */          "Remove one of the declarations indicated above or below:",
+/*    ASL_MSG_OEM_TABLE_ID */               "Invalid OEM Table ID",
+/*    ASL_MSG_OEM_ID */                     "Invalid OEM ID",
+/*    ASL_MSG_UNLOAD */                     "Unload is not supported by all operating systems",
+/*    ASL_MSG_OFFSET */                     "Unnecessary/redundant use of Offset operator",
+/*    ASL_MSG_LONG_SLEEP */                 "Very long Sleep, greater than 1 second",
+/*    ASL_MSG_PREFIX_NOT_EXIST */           "One or more prefix Scopes do not exist",
+/*    ASL_MSG_NAMEPATH_NOT_EXIST */         "One or more objects within the Pathname do not exist"
 };
 
 /* Table compiler */
@@ -490,7 +499,7 @@ AeDecodeExceptionLevel (
 
     /* Differentiate the string type to be used (IDE is all lower case) */
 
-    if (Gbl_VerboseErrors)
+    if (AslGbl_VerboseErrors)
     {
         return (AslErrorLevel[Level]);
     }

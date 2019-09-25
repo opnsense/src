@@ -37,14 +37,6 @@ def LeonCASA : SubtargetFeature<
   "Enable CASA instruction for LEON3 and LEON4 processors"
 >;
 
-
-def ReplaceSDIV : SubtargetFeature<
-  "replacesdiv",
-  "PerformSDIVReplace",
-  "true",
-  "AT697E erratum fix: Do not emit SDIV, emit SDIVCC instead"
->;
-          
 def InsertNOPLoad: SubtargetFeature<
   "insertnopload",
   "InsertNOPLoad",
@@ -66,3 +58,7 @@ def FixAllFDIVSQRT : SubtargetFeature<
   "true",
   "LEON erratum fix: Fix FDIVS/FDIVD/FSQRTS/FSQRTD instructions with NOPs and floating-point store" 
 >;
+
+def LeonCycleCounter
+  : SubtargetFeature<"leoncyclecounter", "HasLeonCycleCounter", "true",
+                     "Use the Leon cycle counter register">;

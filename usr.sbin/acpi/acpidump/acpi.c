@@ -67,6 +67,8 @@ static void	acpi_handle_ecdt(ACPI_TABLE_HEADER *sdp);
 static void	acpi_handle_hpet(ACPI_TABLE_HEADER *sdp);
 static void	acpi_handle_mcfg(ACPI_TABLE_HEADER *sdp);
 static void	acpi_handle_slit(ACPI_TABLE_HEADER *sdp);
+static void	acpi_handle_wddt(ACPI_TABLE_HEADER *sdp);
+static void	acpi_handle_lpit(ACPI_TABLE_HEADER *sdp);
 static void	acpi_print_srat_cpu(uint32_t apic_id, uint32_t proximity_domain,
 		    uint32_t flags);
 static void	acpi_print_srat_memory(ACPI_SRAT_MEM_AFFINITY *mp);
@@ -681,6 +683,113 @@ acpi_handle_slit(ACPI_TABLE_HEADER *sdp)
 }
 
 static void
+acpi_handle_wddt(ACPI_TABLE_HEADER *sdp)
+{
+	ACPI_TABLE_WDDT *wddt;
+
+	printf(BEGIN_COMMENT);
+	acpi_print_sdt(sdp);
+	wddt = (ACPI_TABLE_WDDT *)sdp;
+	printf("\tSpecVersion=0x%04x, TableVersion=0x%04x\n",
+	    wddt->SpecVersion, wddt->TableVersion);
+	printf("\tPciVendorId=0x%04x, Address=", wddt->PciVendorId);
+	acpi_print_gas(&wddt->Address);
+	printf("\n\tMaxCount=%u, MinCount=%u, Period=%ums\n",
+	    wddt->MaxCount, wddt->MinCount, wddt->Period);
+
+#define	PRINTFLAG(var, flag)	printflag((var), ACPI_WDDT_## flag, #flag)
+	printf("\tStatus=");
+	PRINTFLAG(wddt->Status, AVAILABLE);
+	PRINTFLAG(wddt->Status, ACTIVE);
+	PRINTFLAG(wddt->Status, TCO_OS_OWNED);
+	PRINTFLAG(wddt->Status, USER_RESET);
+	PRINTFLAG(wddt->Status, WDT_RESET);
+	PRINTFLAG(wddt->Status, POWER_FAIL);
+	PRINTFLAG(wddt->Status, UNKNOWN_RESET);
+	PRINTFLAG_END();
+	printf("\tCapability=");
+	PRINTFLAG(wddt->Capability, AUTO_RESET);
+	PRINTFLAG(wddt->Capability, ALERT_SUPPORT);
+	PRINTFLAG_END();
+#undef PRINTFLAG
+
+	printf(END_COMMENT);
+}
+
+static void
+acpi_print_native_lpit(ACPI_LPIT_NATIVE *nl)
+{
+	printf("\tEntryTrigger=");
+	acpi_print_gas(&nl->EntryTrigger);
+	printf("\tResidency=%u\n", nl->Residency);
+	printf("\tLatency=%u\n", nl->Latency);
+	if (nl->Header.Flags & ACPI_LPIT_NO_COUNTER)
+		printf("\tResidencyCounter=Not Present");
+	else {
+		printf("\tResidencyCounter=");
+		acpi_print_gas(&nl->ResidencyCounter);
+	}
+	if (nl->CounterFrequency)
+		printf("\tCounterFrequency=%ju\n", nl->CounterFrequency);
+	else
+		printf("\tCounterFrequency=TSC\n");
+}
+
+static void
+acpi_print_lpit(ACPI_LPIT_HEADER *lpit)
+{
+	if (lpit->Type == ACPI_LPIT_TYPE_NATIVE_CSTATE)
+		printf("\tType=ACPI_LPIT_TYPE_NATIVE_CSTATE\n");
+	else
+		warnx("unknown LPIT type %u", lpit->Type);
+
+	printf("\tLength=%u\n", lpit->Length);
+	printf("\tUniqueId=0x%04x\n", lpit->UniqueId);
+#define	PRINTFLAG(var, flag)	printflag((var), ACPI_LPIT_## flag, #flag)
+	printf("\tFlags=");
+	PRINTFLAG(lpit->Flags, STATE_DISABLED);
+	PRINTFLAG_END();
+#undef PRINTFLAG
+
+	if (lpit->Type == ACPI_LPIT_TYPE_NATIVE_CSTATE)
+		return acpi_print_native_lpit((ACPI_LPIT_NATIVE *)lpit);
+}
+
+static void
+acpi_walk_lpit(ACPI_TABLE_HEADER *table, void *first,
+    void (*action)(ACPI_LPIT_HEADER *))
+{
+	ACPI_LPIT_HEADER *subtable;
+	char *end;
+
+	subtable = first;
+	end = (char *)table + table->Length;
+	while ((char *)subtable < end) {
+		printf("\n");
+		if (subtable->Length < sizeof(ACPI_LPIT_HEADER)) {
+			warnx("invalid subtable length %u", subtable->Length);
+			return;
+		}
+		action(subtable);
+		subtable = (ACPI_LPIT_HEADER *)((char *)subtable +
+		    subtable->Length);
+	}
+}
+
+static void
+acpi_handle_lpit(ACPI_TABLE_HEADER *sdp)
+{
+	ACPI_TABLE_LPIT *lpit;
+
+	printf(BEGIN_COMMENT);
+	acpi_print_sdt(sdp);
+	lpit = (ACPI_TABLE_LPIT *)sdp;
+	acpi_walk_lpit(sdp, (lpit + 1), acpi_print_lpit);
+
+	printf(END_COMMENT);
+}
+
+static void
 acpi_print_srat_cpu(uint32_t apic_id, uint32_t proximity_domain,
     uint32_t flags)
 {
@@ -861,7 +970,18 @@ acpi_handle_tcpa(ACPI_TABLE_HEADER *sdp)
 
 	printf(END_COMMENT);
 }
-
+static void acpi_handle_tpm2(ACPI_TABLE_HEADER *sdp)
+{
+	ACPI_TABLE_TPM2 *tpm2;
+	
+	printf (BEGIN_COMMENT);
+	acpi_print_sdt(sdp);
+	tpm2 = (ACPI_TABLE_TPM2 *) sdp;
+	printf ("\t\tControlArea=%jx\n", tpm2->ControlAddress);
+	printf ("\t\tStartMethod=%x\n", tpm2->StartMethod);	
+	printf (END_COMMENT);
+}
+	
 static const char *
 devscope_type2str(int type)
 {
@@ -1656,6 +1776,12 @@ acpi_handle_rsdt(ACPI_TABLE_HEADER *rsdp)
 			acpi_handle_dmar(sdp);
 		else if (!memcmp(sdp->Signature, ACPI_SIG_NFIT, 4))
 			acpi_handle_nfit(sdp);
+		else if (!memcmp(sdp->Signature, ACPI_SIG_WDDT, 4))
+			acpi_handle_wddt(sdp);
+		else if (!memcmp(sdp->Signature, ACPI_SIG_LPIT, 4))
+			acpi_handle_lpit(sdp);
+		else if (!memcmp(sdp->Signature, ACPI_SIG_TPM2, 4))
+			acpi_handle_tpm2(sdp);
 		else {
 			printf(BEGIN_COMMENT);
 			acpi_print_sdt(sdp);

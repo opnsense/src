@@ -30,7 +30,7 @@ class PPCFrameLowering: public TargetFrameLowering {
   const unsigned BasePointerSaveOffset;
 
   /**
-   * \brief Find register[s] that can be used in function prologue and epilogue
+   * Find register[s] that can be used in function prologue and epilogue
    *
    * Find register[s] that can be use as scratch register[s] in function
    * prologue and epilogue to save various registers (Link Register, Base
@@ -67,7 +67,7 @@ class PPCFrameLowering: public TargetFrameLowering {
   bool twoUniqueScratchRegsRequired(MachineBasicBlock *MBB) const;
 
   /**
-   * \brief Create branch instruction for PPC::TCRETURN* (tail call return)
+   * Create branch instruction for PPC::TCRETURN* (tail call return)
    *
    * \param[in] MBB that is terminated by PPC::TCRETURN*
    */
@@ -99,6 +99,13 @@ public:
                                  MachineBasicBlock::iterator MI,
                                  const std::vector<CalleeSavedInfo> &CSI,
                                  const TargetRegisterInfo *TRI) const override;
+  /// This function will assign callee saved gprs to volatile vector registers
+  /// for prologue spills when applicable. It returns false if there are any
+  /// registers which were not spilled to volatile vector registers.
+  bool
+  assignCalleeSavedSpillSlots(MachineFunction &MF,
+                              const TargetRegisterInfo *TRI,
+                              std::vector<CalleeSavedInfo> &CSI) const override;
 
   MachineBasicBlock::iterator
   eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,

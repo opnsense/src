@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: Beerware
+ *
  * ----------------------------------------------------------------------------
  * "THE BEER-WARE LICENSE" (Revision 42):
  * <phk@FreeBSD.org> wrote this file.  As long as you retain this notice you
@@ -30,6 +32,8 @@ extern int bootAP;
 extern void *dpcpu;
 extern char *bootSTK;
 extern void *bootstacks[];
+extern unsigned int boot_address;
+extern unsigned int bootMP_size;
 extern volatile u_int cpu_ipi_pending[];
 extern volatile int aps_ready;
 extern struct mtx ap_boot_mtx;
@@ -55,7 +59,7 @@ struct cpu_info {
 	int	cpu_disabled:1;
 	int	cpu_hyperthread:1;
 };
-extern struct cpu_info cpu_info[];
+extern struct cpu_info *cpu_info;
 
 #ifdef COUNT_IPIS
 extern u_long *ipi_invltlb_counts[MAXCPU];
@@ -81,6 +85,7 @@ void	assign_cpu_ids(void);
 void	cpu_add(u_int apic_id, char boot_cpu);
 void	cpustop_handler(void);
 void	cpususpend_handler(void);
+void	alloc_ap_trampoline(vm_paddr_t *physmap, unsigned int *physmap_idx);
 void	init_secondary_tail(void);
 void	invltlb_handler(void);
 void	invlpg_handler(void);
@@ -93,7 +98,6 @@ void 	ipi_bitmap_handler(struct trapframe frame);
 void	ipi_cpu(int cpu, u_int ipi);
 int	ipi_nmi_handler(void);
 void	ipi_selected(cpuset_t cpus, u_int ipi);
-u_int	mp_bootaddress(u_int);
 void	set_interrupt_apic_ids(void);
 void	smp_cache_flush(void);
 void	smp_masked_invlpg(cpuset_t mask, vm_offset_t addr, struct pmap *pmap);

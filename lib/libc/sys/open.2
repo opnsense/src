@@ -9,7 +9,7 @@
 .\" 2. Redistributions in binary form must reproduce the above copyright
 .\"    notice, this list of conditions and the following disclaimer in the
 .\"    documentation and/or other materials provided with the distribution.
-.\" 4. Neither the name of the University nor the names of its contributors
+.\" 3. Neither the name of the University nor the names of its contributors
 .\"    may be used to endorse or promote products derived from this software
 .\"    without specific prior written permission.
 .\"
@@ -28,7 +28,7 @@
 .\"     @(#)open.2	8.2 (Berkeley) 11/16/93
 .\" $FreeBSD$
 .\"
-.Dd March 28, 2018
+.Dd June 14, 2019
 .Dt OPEN 2
 .Os
 .Sh NAME
@@ -183,10 +183,7 @@ The descriptor remains in non-blocking mode for subsequent operations.
 If
 .Dv O_FSYNC
 is used in the mask, all writes will
-immediately be written to disk,
-the kernel will not cache written data
-and all writes on the descriptor will not return until
-the data to be written completes.
+immediately and synchronously be written to disk.
 .Pp
 .Dv O_SYNC
 is a synonym for
@@ -526,7 +523,7 @@ in one of its non-final components.
 The
 .Fn open
 function appeared in
-.At v6 .
+.At v1 .
 The
 .Fn openat
 function was introduced in

@@ -34,10 +34,6 @@ using namespace llvm;
 
 #define DEBUG_TYPE "winehstate"
 
-namespace llvm {
-void initializeWinEHStatePassPass(PassRegistry &);
-}
-
 namespace {
 const int OverdefinedState = INT_MIN;
 
@@ -369,7 +365,7 @@ void WinEHStatePass::emitExceptionRegistrationRecord(Function *F) {
 
   // Insert an unlink before all returns.
   for (BasicBlock &BB : *F) {
-    TerminatorInst *T = BB.getTerminator();
+    Instruction *T = BB.getTerminator();
     if (!isa<ReturnInst>(T))
       continue;
     Builder.SetInsertPoint(T);
@@ -695,10 +691,10 @@ void WinEHStatePass::addStateStores(Function &F, WinEHFuncInfo &FuncInfo) {
       Worklist.push_back(BB);
       continue;
     }
-    DEBUG(dbgs() << "X86WinEHState: " << BB->getName()
-                 << " InitialState=" << InitialState << '\n');
-    DEBUG(dbgs() << "X86WinEHState: " << BB->getName()
-                 << " FinalState=" << FinalState << '\n');
+    LLVM_DEBUG(dbgs() << "X86WinEHState: " << BB->getName()
+                      << " InitialState=" << InitialState << '\n');
+    LLVM_DEBUG(dbgs() << "X86WinEHState: " << BB->getName()
+                      << " FinalState=" << FinalState << '\n');
     InitialStates.insert({BB, InitialState});
     FinalStates.insert({BB, FinalState});
   }
@@ -743,8 +739,8 @@ void WinEHStatePass::addStateStores(Function &F, WinEHFuncInfo &FuncInfo) {
       continue;
 
     int PrevState = getPredState(FinalStates, F, ParentBaseState, BB);
-    DEBUG(dbgs() << "X86WinEHState: " << BB->getName()
-                 << " PrevState=" << PrevState << '\n');
+    LLVM_DEBUG(dbgs() << "X86WinEHState: " << BB->getName()
+                      << " PrevState=" << PrevState << '\n');
 
     for (Instruction &I : *BB) {
       CallSite CS(&I);

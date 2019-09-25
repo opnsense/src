@@ -25,7 +25,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd May 9, 2017
+.Dd January 30, 2019
 .Dt BNXT 4
 .Os
 .Sh NAME
@@ -36,6 +36,7 @@ To compile this driver into the kernel,
 place the following lines in your
 kernel configuration file:
 .Bd -ragged -offset indent
+.Cd "device iflib"
 .Cd "device bnxt"
 .Ed
 .Pp
@@ -110,7 +111,7 @@ These variables must be set before loading the driver, either via
 or through the use of
 .Xr kenv 1 .
 These are provided by the
-.Xr iflib 9
+.Xr iflib 4
 framework, and might be better documented there.
 .Bl -tag -width indent
 .It Va dev.bnxt.X.iflib.override_nrxds

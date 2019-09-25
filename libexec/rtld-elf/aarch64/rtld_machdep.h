@@ -59,8 +59,16 @@ Elf_Addr reloc_jmpslot(Elf_Addr *where, Elf_Addr target,
 #define	call_init_pointer(obj, target) \
 	(((InitArrFunc)(target))(main_argc, main_argv, environ))
 
+/*
+ * Pass zeros into the ifunc resolver so we can change them later. The first
+ * 8 arguments on arm64 are passed in registers so make them known values
+ * if we decide to use them later. Because of this ifunc resolvers can assume
+ * no arguments are passeed in, and if this changes later will be able to
+ * compare the argument with 0 to see if it is set.
+ */
 #define	call_ifunc_resolver(ptr) \
-	(((Elf_Addr (*)(void))ptr)())
+	(((Elf_Addr (*)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, \
+	    uint64_t, uint64_t, uint64_t))ptr)(0, 0, 0, 0, 0, 0, 0, 0))
 
 #define	round(size, align)				\
 	(((size) + (align) - 1) & ~((align) - 1))
@@ -69,6 +77,8 @@ Elf_Addr reloc_jmpslot(Elf_Addr *where, Elf_Addr target,
 #define	calculate_tls_offset(prev_offset, prev_size, size, align) \
 	round(prev_offset + prev_size, align)
 #define	calculate_tls_end(off, size) 	((off) + (size))
+#define calculate_tls_post_size(align) \
+	round(TLS_TCB_SIZE, align) - TLS_TCB_SIZE
 
 #define	TLS_TCB_SIZE	16
 typedef struct {

@@ -34,12 +34,11 @@
 #include "LinkerScript.h"
 #include "OutputSections.h"
 #include "Relocations.h"
-#include "Strings.h"
 #include "Symbols.h"
 #include "SyntheticSections.h"
 #include "Target.h"
 #include "lld/Common/Memory.h"
-
+#include "lld/Common/Strings.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
@@ -342,7 +341,7 @@ static bool is843419ErratumSequence(uint32_t Instr1, uint32_t Instr2,
 // patch or 0 if no patch required.
 static uint64_t scanCortexA53Errata843419(InputSection *IS, uint64_t &Off,
                                           uint64_t Limit) {
-  uint64_t ISAddr = IS->getParent()->Addr + IS->OutSecOff;
+  uint64_t ISAddr = IS->getVA(0);
 
   // Advance Off so that (ISAddr + Off) modulo 0x1000 is at least 0xff8.
   uint64_t InitialPageOff = (ISAddr + Off) & 0xfff;
@@ -357,7 +356,7 @@ static uint64_t scanCortexA53Errata843419(InputSection *IS, uint64_t &Off,
   }
 
   uint64_t PatchOff = 0;
-  const uint8_t *Buf = IS->Data.begin();
+  const uint8_t *Buf = IS->data().begin();
   const ulittle32_t *InstBuf = reinterpret_cast<const ulittle32_t *>(Buf + Off);
   uint32_t Instr1 = *InstBuf++;
   uint32_t Instr2 = *InstBuf++;
@@ -406,13 +405,13 @@ lld::elf::Patch843419Section::Patch843419Section(InputSection *P, uint64_t Off)
 }
 
 uint64_t lld::elf::Patch843419Section::getLDSTAddr() const {
-  return Patchee->getParent()->Addr + Patchee->OutSecOff + PatcheeOffset;
+  return Patchee->getVA(PatcheeOffset);
 }
 
 void lld::elf::Patch843419Section::writeTo(uint8_t *Buf) {
   // Copy the instruction that we will be replacing with a branch in the
   // Patchee Section.
-  write32le(Buf, read32le(Patchee->Data.begin() + PatcheeOffset));
+  write32le(Buf, read32le(Patchee->data().begin() + PatcheeOffset));
 
   // Apply any relocation transferred from the original PatcheeSection.
   // For a SyntheticSection Buf already has OutSecOff added, but relocateAlloc
@@ -452,7 +451,7 @@ void AArch64Err843419Patcher::init() {
         continue;
       if (!IsCodeMapSymbol(Def) && !IsDataMapSymbol(Def))
         continue;
-      if (auto *Sec = dyn_cast<InputSection>(Def->Section))
+      if (auto *Sec = dyn_cast_or_null<InputSection>(Def->Section))
         if (Sec->Flags & SHF_EXECINSTR)
           SectionMap[Sec].push_back(Def);
     }
@@ -488,7 +487,8 @@ void AArch64Err843419Patcher::insertPatches(
     InputSectionDescription &ISD, std::vector<Patch843419Section *> &Patches) {
   uint64_t ISLimit;
   uint64_t PrevISLimit = ISD.Sections.front()->OutSecOff;
-  uint64_t PatchUpperBound = PrevISLimit + Target->ThunkSectionSpacing;
+  uint64_t PatchUpperBound = PrevISLimit + Target->getThunkSectionSpacing();
+  uint64_t OutSecAddr = ISD.Sections.front()->getParent()->Addr;
 
   // Set the OutSecOff of patches to the place where we want to insert them.
   // We use a similar strategy to Thunk placement. Place patches roughly
@@ -499,12 +499,12 @@ void AArch64Err843419Patcher::insertPatches(
     ISLimit = IS->OutSecOff + IS->getSize();
     if (ISLimit > PatchUpperBound) {
       while (PatchIt != PatchEnd) {
-        if ((*PatchIt)->getLDSTAddr() >= PrevISLimit)
+        if ((*PatchIt)->getLDSTAddr() - OutSecAddr >= PrevISLimit)
           break;
         (*PatchIt)->OutSecOff = PrevISLimit;
         ++PatchIt;
       }
-      PatchUpperBound = PrevISLimit + Target->ThunkSectionSpacing;
+      PatchUpperBound = PrevISLimit + Target->getThunkSectionSpacing();
     }
     PrevISLimit = ISLimit;
   }
@@ -539,25 +539,28 @@ static void implementPatch(uint64_t AdrpAddr, uint64_t PatcheeOffset,
                            InputSection *IS,
                            std::vector<Patch843419Section *> &Patches) {
   // There may be a relocation at the same offset that we are patching. There
-  // are three cases that we need to consider.
+  // are four cases that we need to consider.
   // Case 1: R_AARCH64_JUMP26 branch relocation. We have already patched this
   // instance of the erratum on a previous patch and altered the relocation. We
   // have nothing more to do.
-  // Case 2: A load/store register (unsigned immediate) class relocation. There
+  // Case 2: A TLS Relaxation R_RELAX_TLS_IE_TO_LE. In this case the ADRP that
+  // we read will be transformed into a MOVZ later so we actually don't match
+  // the sequence and have nothing more to do.
+  // Case 3: A load/store register (unsigned immediate) class relocation. There
   // are two of these R_AARCH_LD64_ABS_LO12_NC and R_AARCH_LD64_GOT_LO12_NC and
   // they are both absolute. We need to add the same relocation to the patch,
   // and replace the relocation with a R_AARCH_JUMP26 branch relocation.
-  // Case 3: No relocation. We must create a new R_AARCH64_JUMP26 branch
+  // Case 4: No relocation. We must create a new R_AARCH64_JUMP26 branch
   // relocation at the offset.
   auto RelIt = std::find_if(
       IS->Relocations.begin(), IS->Relocations.end(),
       [=](const Relocation &R) { return R.Offset == PatcheeOffset; });
-  if (RelIt != IS->Relocations.end() && RelIt->Type == R_AARCH64_JUMP26)
+  if (RelIt != IS->Relocations.end() &&
+      (RelIt->Type == R_AARCH64_JUMP26 || RelIt->Expr == R_RELAX_TLS_IE_TO_LE))
     return;
 
-  if (Config->Verbose)
-    message("detected cortex-a53-843419 erratum sequence starting at " +
-            utohexstr(AdrpAddr) + " in unpatched output.");
+  log("detected cortex-a53-843419 erratum sequence starting at " +
+      utohexstr(AdrpAddr) + " in unpatched output.");
 
   auto *PS = make<Patch843419Section>(IS, PatcheeOffset);
   Patches.push_back(PS);
@@ -600,10 +603,10 @@ AArch64Err843419Patcher::patchInputSectionDescription(
       auto DataSym = std::next(CodeSym);
       uint64_t Off = (*CodeSym)->Value;
       uint64_t Limit =
-          (DataSym == MapSyms.end()) ? IS->Data.size() : (*DataSym)->Value;
+          (DataSym == MapSyms.end()) ? IS->data().size() : (*DataSym)->Value;
 
       while (Off < Limit) {
-        uint64_t StartAddr = IS->getParent()->Addr + IS->OutSecOff + Off;
+        uint64_t StartAddr = IS->getVA(Off);
         if (uint64_t PatcheeOffset = scanCortexA53Errata843419(IS, Off, Limit))
           implementPatch(StartAddr, PatcheeOffset, IS, Patches);
       }

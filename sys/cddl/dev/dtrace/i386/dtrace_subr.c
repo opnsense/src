@@ -45,6 +45,7 @@
 #include <machine/cpufunc.h>
 #include <machine/frame.h>
 #include <machine/psl.h>
+#include <machine/trap.h>
 #include <vm/pmap.h>
 
 extern uintptr_t 	kernelbase;
@@ -319,6 +320,9 @@ dtrace_gethrtime_init(void *arg)
 	struct pcpu *pc;
 	int i;
 #endif
+
+	if (vm_guest != VM_GUEST_NO)
+		return;
 
 	/* The current CPU is the reference one. */
 	sched_pin();

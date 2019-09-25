@@ -16,7 +16,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -267,7 +267,7 @@ intoa(n_long addr)
 }
 
 static char *
-number(char *s, int *n)
+number(char *s, n_long *n)
 {
 	for (*n = 0; isdigit(*s); s++)
 		*n = (*n * 10) + *s - '0';
@@ -280,7 +280,7 @@ ip_convertaddr(char *p)
 #define IP_ANYADDR	0
 	n_long addr = 0, n;
 
-	if (p == (char *)0 || *p == '\0')
+	if (p == NULL || *p == '\0')
 		return IP_ANYADDR;
 	p = number(p, &n);
 	addr |= (n << 24) & 0xff000000;

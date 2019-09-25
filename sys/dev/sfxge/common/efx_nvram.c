@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2009-2016 Solarflare Communications Inc.
  * All rights reserved.
  *
@@ -460,10 +462,11 @@ efx_nvram_validate(
 	if ((rc = envop->envo_type_to_partn(enp, type, &partn)) != 0)
 		goto fail1;
 
-	if (envop->envo_type_to_partn != NULL &&
-	    ((rc = envop->envo_buffer_validate(enp, partn,
-	    partn_data, partn_size)) != 0))
-		goto fail2;
+	if (envop->envo_buffer_validate != NULL) {
+		if ((rc = envop->envo_buffer_validate(enp, partn,
+			    partn_data, partn_size)) != 0)
+			goto fail2;
+	}
 
 	return (0);
 
@@ -506,12 +509,11 @@ efx_mcdi_nvram_partitions(
 	__out			unsigned int *npartnp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_NVRAM_PARTITIONS_IN_LEN,
-			    MC_CMD_NVRAM_PARTITIONS_OUT_LENMAX)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_NVRAM_PARTITIONS_IN_LEN,
+		MC_CMD_NVRAM_PARTITIONS_OUT_LENMAX);
 	unsigned int npartn;
 	efx_rc_t rc;
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_NVRAM_PARTITIONS;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_NVRAM_PARTITIONS_IN_LEN;
@@ -569,11 +571,10 @@ efx_mcdi_nvram_metadata(
 	__in			size_t size)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_NVRAM_METADATA_IN_LEN,
-			    MC_CMD_NVRAM_METADATA_OUT_LENMAX)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_NVRAM_METADATA_IN_LEN,
+		MC_CMD_NVRAM_METADATA_OUT_LENMAX);
 	efx_rc_t rc;
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_NVRAM_METADATA;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_NVRAM_METADATA_IN_LEN;
@@ -659,12 +660,11 @@ efx_mcdi_nvram_info(
 	__out_opt		uint32_t *erase_sizep,
 	__out_opt		uint32_t *write_sizep)
 {
-	uint8_t payload[MAX(MC_CMD_NVRAM_INFO_IN_LEN,
-			    MC_CMD_NVRAM_INFO_V2_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_NVRAM_INFO_IN_LEN,
+		MC_CMD_NVRAM_INFO_V2_OUT_LEN);
 	efx_mcdi_req_t req;
 	efx_rc_t rc;
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_NVRAM_INFO;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_NVRAM_INFO_IN_LEN;
@@ -720,12 +720,11 @@ efx_mcdi_nvram_update_start(
 	__in			efx_nic_t *enp,
 	__in			uint32_t partn)
 {
-	uint8_t payload[MAX(MC_CMD_NVRAM_UPDATE_START_V2_IN_LEN,
-			    MC_CMD_NVRAM_UPDATE_START_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_NVRAM_UPDATE_START_V2_IN_LEN,
+		MC_CMD_NVRAM_UPDATE_START_OUT_LEN);
 	efx_mcdi_req_t req;
 	efx_rc_t rc;
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_NVRAM_UPDATE_START;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_NVRAM_UPDATE_START_V2_IN_LEN;
@@ -762,8 +761,8 @@ efx_mcdi_nvram_read(
 	__in			uint32_t mode)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_NVRAM_READ_IN_V2_LEN,
-			    MC_CMD_NVRAM_READ_OUT_LENMAX)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_NVRAM_READ_IN_V2_LEN,
+		MC_CMD_NVRAM_READ_OUT_LENMAX);
 	efx_rc_t rc;
 
 	if (size > MC_CMD_NVRAM_READ_OUT_LENMAX) {
@@ -771,7 +770,6 @@ efx_mcdi_nvram_read(
 		goto fail1;
 	}
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_NVRAM_READ;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_NVRAM_READ_IN_V2_LEN;
@@ -817,11 +815,10 @@ efx_mcdi_nvram_erase(
 	__in			size_t size)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_NVRAM_ERASE_IN_LEN,
-			    MC_CMD_NVRAM_ERASE_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_NVRAM_ERASE_IN_LEN,
+		MC_CMD_NVRAM_ERASE_OUT_LEN);
 	efx_rc_t rc;
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_NVRAM_ERASE;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_NVRAM_ERASE_IN_LEN;
@@ -857,27 +854,31 @@ efx_mcdi_nvram_write(
 	__in			efx_nic_t *enp,
 	__in			uint32_t partn,
 	__in			uint32_t offset,
-	__out_bcount(size)	caddr_t data,
+	__in_bcount(size)	caddr_t data,
 	__in			size_t size)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MCDI_CTL_SDU_LEN_MAX_V1,
-			    MCDI_CTL_SDU_LEN_MAX_V2)];
+	uint8_t *payload;
 	efx_rc_t rc;
 	size_t max_data_size;
+	size_t payload_len = enp->en_nic_cfg.enc_mcdi_max_payload_length;
 
-	max_data_size = enp->en_nic_cfg.enc_mcdi_max_payload_length
-	    - MC_CMD_NVRAM_WRITE_IN_LEN(0);
-	EFSYS_ASSERT3U(enp->en_nic_cfg.enc_mcdi_max_payload_length, >, 0);
-	EFSYS_ASSERT3U(max_data_size, <,
-		    enp->en_nic_cfg.enc_mcdi_max_payload_length);
+	max_data_size = payload_len - MC_CMD_NVRAM_WRITE_IN_LEN(0);
+	EFSYS_ASSERT3U(payload_len, >, 0);
+	EFSYS_ASSERT3U(max_data_size, <, payload_len);
 
 	if (size > max_data_size) {
 		rc = EINVAL;
 		goto fail1;
 	}
 
-	(void) memset(payload, 0, sizeof (payload));
+	EFSYS_KMEM_ALLOC(enp->en_esip, payload_len, payload);
+	if (payload == NULL) {
+		rc = ENOMEM;
+		goto fail2;
+	}
+
+	(void) memset(payload, 0, payload_len);
 	req.emr_cmd = MC_CMD_NVRAM_WRITE;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_NVRAM_WRITE_IN_LEN(size);
@@ -895,11 +896,16 @@ efx_mcdi_nvram_write(
 
 	if (req.emr_rc != 0) {
 		rc = req.emr_rc;
-		goto fail2;
+		goto fail3;
 	}
+
+	EFSYS_KMEM_FREE(enp->en_esip, payload_len, payload);
 
 	return (0);
 
+fail3:
+	EFSYS_PROBE(fail3);
+	EFSYS_KMEM_FREE(enp->en_esip, payload_len, payload);
 fail2:
 	EFSYS_PROBE(fail2);
 fail1:
@@ -922,12 +928,11 @@ efx_mcdi_nvram_update_finish(
 {
 	const efx_nic_cfg_t *encp = &enp->en_nic_cfg;
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_NVRAM_UPDATE_FINISH_V2_IN_LEN,
-			    MC_CMD_NVRAM_UPDATE_FINISH_V2_OUT_LEN)];
-	uint32_t result = 0; /* FIXME: use MC_CMD_NVRAM_VERIFY_RC_UNKNOWN */
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_NVRAM_UPDATE_FINISH_V2_IN_LEN,
+		MC_CMD_NVRAM_UPDATE_FINISH_V2_OUT_LEN);
+	uint32_t result = MC_CMD_NVRAM_VERIFY_RC_UNKNOWN;
 	efx_rc_t rc;
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_NVRAM_UPDATE_FINISH;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_NVRAM_UPDATE_FINISH_V2_IN_LEN;
@@ -994,12 +999,11 @@ efx_mcdi_nvram_test(
 	__in			uint32_t partn)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_NVRAM_TEST_IN_LEN,
-			    MC_CMD_NVRAM_TEST_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_NVRAM_TEST_IN_LEN,
+		MC_CMD_NVRAM_TEST_OUT_LEN);
 	int result;
 	efx_rc_t rc;
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_NVRAM_TEST;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_NVRAM_TEST_IN_LEN;

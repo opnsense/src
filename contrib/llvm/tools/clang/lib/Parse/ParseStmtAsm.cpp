@@ -7,7 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file implements parsing for GCC and Microsoft inline assembly. 
+// This file implements parsing for GCC and Microsoft inline assembly.
 //
 //===----------------------------------------------------------------------===//
 
@@ -239,7 +239,7 @@ ExprResult Parser::ParseMSAsmIdentifier(llvm::SmallVectorImpl<Token> &LineToks,
                                  /*AllowDestructorName=*/false,
                                  /*AllowConstructorName=*/false,
                                  /*AllowDeductionGuide=*/false,
-                                 /*ObjectType=*/nullptr, TemplateKWLoc, Id);
+                                 /*ObjectType=*/nullptr, &TemplateKWLoc, Id);
     // Perform the lookup.
     Result = Actions.LookupInlineAsmIdentifier(SS, TemplateKWLoc, Id,
                                                IsUnevaluatedContext);
@@ -637,7 +637,7 @@ StmtResult Parser::ParseMicrosoftAsmStatement(SourceLocation AsmLoc) {
   // Filter out "fpsw" and "mxcsr". They aren't valid GCC asm clobber
   // constraints. Clang always adds fpsr to the clobber list anyway.
   llvm::erase_if(Clobbers, [](const std::string &C) {
-    return C == "fpsw" || C == "mxcsr";
+    return C == "fpsr" || C == "mxcsr";
   });
 
   // Build the vector of clobber StringRefs.

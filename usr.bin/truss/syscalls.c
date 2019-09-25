@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright 1997 Sean Eric Fagan
  *
  * Redistribution and use in source and binary forms, with or without
@@ -39,13 +41,16 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/capsicum.h>
 #include <sys/types.h>
+#define	_WANT_FREEBSD11_KEVENT
 #include <sys/event.h>
 #include <sys/ioccom.h>
 #include <sys/mount.h>
 #include <sys/ptrace.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
+#define _WANT_FREEBSD11_STAT
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <netinet/in.h>
@@ -145,6 +150,18 @@ static struct syscall decoded_syscalls[] = {
 	  .args = { { Int, 0 }, { Timespec | OUT, 1 } } },
 	{ .name = "close", .ret_type = 1, .nargs = 1,
 	  .args = { { Int, 0 } } },
+	{ .name = "compat11.fstat", .ret_type = 1, .nargs = 2,
+	  .args = { { Int, 0 }, { Stat11 | OUT, 1 } } },
+	{ .name = "compat11.fstatat", .ret_type = 1, .nargs = 4,
+	  .args = { { Atfd, 0 }, { Name | IN, 1 }, { Stat11 | OUT, 2 },
+		    { Atflags, 3 } } },
+	{ .name = "compat11.kevent", .ret_type = 1, .nargs = 6,
+	  .args = { { Int, 0 }, { Kevent11, 1 }, { Int, 2 },
+		    { Kevent11 | OUT, 3 }, { Int, 4 }, { Timespec, 5 } } },
+	{ .name = "compat11.lstat", .ret_type = 1, .nargs = 2,
+	  .args = { { Name | IN, 0 }, { Stat11 | OUT, 1 } } },
+	{ .name = "compat11.stat", .ret_type = 1, .nargs = 2,
+	  .args = { { Name | IN, 0 }, { Stat11 | OUT, 1 } } },
 	{ .name = "connect", .ret_type = 1, .nargs = 3,
 	  .args = { { Int, 0 }, { Sockaddr | IN, 1 }, { Socklent, 2 } } },
 	{ .name = "connectat", .ret_type = 1, .nargs = 4,
@@ -243,6 +260,8 @@ static struct syscall decoded_syscalls[] = {
 	  .args = { { Int, 0 } } },
 	{ .name = "getpriority", .ret_type = 1, .nargs = 2,
 	  .args = { { Priowhich, 0 }, { Int, 1 } } },
+	{ .name = "getrandom", .ret_type = 1, .nargs = 3,
+	  .args = { { BinString | OUT, 0 }, { Sizet, 1 }, { UInt, 2 } } },
 	{ .name = "getrlimit", .ret_type = 1, .nargs = 2,
 	  .args = { { Resource, 0 }, { Rlimit | OUT, 1 } } },
 	{ .name = "getrusage", .ret_type = 1, .nargs = 2,
@@ -371,13 +390,13 @@ static struct syscall decoded_syscalls[] = {
 	  .args = { { Name, 0 }, { Quotactlcmd, 1 }, { Int, 2 }, { Ptr, 3 } } },
 	{ .name = "read", .ret_type = 1, .nargs = 3,
 	  .args = { { Int, 0 }, { BinString | OUT, 1 }, { Sizet, 2 } } },
-	{ .name = "readv", .ret_type = 1, .nargs = 3,
-	  .args = { { Int, 0 }, { Iovec | OUT, 1 }, { Int, 2 } } },
 	{ .name = "readlink", .ret_type = 1, .nargs = 3,
 	  .args = { { Name, 0 }, { Readlinkres | OUT, 1 }, { Sizet, 2 } } },
 	{ .name = "readlinkat", .ret_type = 1, .nargs = 4,
 	  .args = { { Atfd, 0 }, { Name, 1 }, { Readlinkres | OUT, 2 },
 		    { Sizet, 3 } } },
+	{ .name = "readv", .ret_type = 1, .nargs = 3,
+	  .args = { { Int, 0 }, { Iovec | OUT, 1 }, { Int, 2 } } },
 	{ .name = "reboot", .ret_type = 1, .nargs = 1,
 	  .args = { { Reboothowto, 0 } } },
 	{ .name = "recvfrom", .ret_type = 1, .nargs = 6,
@@ -442,6 +461,10 @@ static struct syscall decoded_syscalls[] = {
 	{ .name = "setsockopt", .ret_type = 1, .nargs = 5,
 	  .args = { { Int, 0 }, { Sockoptlevel, 1 }, { Sockoptname, 2 },
 		    { Ptr | IN, 3 }, { Socklent, 4 } } },
+	{ .name = "shm_open", .ret_type = 1, .nargs = 3,
+	  .args = { { Name | IN, 0 }, { Open, 1 }, { Octal, 2 } } },
+	{ .name = "shm_unlink", .ret_type = 1, .nargs = 1,
+	  .args = { { Name | IN, 0 } } },
 	{ .name = "shutdown", .ret_type = 1, .nargs = 2,
 	  .args = { { Int, 0 }, { Shutdown, 1 } } },
 	{ .name = "sigaction", .ret_type = 1, .nargs = 3,
@@ -562,7 +585,7 @@ static struct syscall decoded_syscalls[] = {
 	  .args = { { Int, 0 }, { CloudABIFDStat | OUT, 1 } } },
 	{ .name = "cloudabi_sys_fd_stat_put", .ret_type = 1, .nargs = 3,
 	  .args = { { Int, 0 }, { CloudABIFDStat | IN, 1 },
-	            { ClouduABIFDSFlags, 2 } } },
+	            { CloudABIFDSFlags, 2 } } },
 	{ .name = "cloudabi_sys_fd_sync", .ret_type = 1, .nargs = 1,
 	  .args = { { Int, 0 } } },
 	{ .name = "cloudabi_sys_file_advise", .ret_type = 1, .nargs = 4,
@@ -1107,6 +1130,7 @@ print_kevent(FILE *fp, struct kevent *ke)
 	case EVFILT_PROC:
 	case EVFILT_TIMER:
 	case EVFILT_PROCDESC:
+	case EVFILT_EMPTY:
 		fprintf(fp, "%ju", (uintmax_t)ke->ident);
 		break;
 	case EVFILT_SIGNAL:
@@ -1121,7 +1145,7 @@ print_kevent(FILE *fp, struct kevent *ke)
 	print_mask_arg(sysdecode_kevent_flags, fp, ke->flags);
 	fprintf(fp, ",");
 	sysdecode_kevent_fflags(fp, ke->filter, ke->fflags, 16);
-	fprintf(fp, ",%p,%p", (void *)ke->data, (void *)ke->udata);
+	fprintf(fp, ",%#jx,%p", (uintmax_t)ke->data, ke->udata);
 }
 
 static void
@@ -2057,8 +2081,66 @@ print_arg(struct syscall_args *sc, unsigned long *args, long *retval,
 		free(ke);
 		break;
 	}
+	case Kevent11: {
+		struct kevent_freebsd11 *ke11;
+		struct kevent ke;
+		int numevents = -1;
+		size_t bytes;
+		int i;
+
+		if (sc->offset == 1)
+			numevents = args[sc->offset+1];
+		else if (sc->offset == 3 && retval[0] != -1)
+			numevents = retval[0];
+
+		if (numevents >= 0) {
+			bytes = sizeof(struct kevent_freebsd11) * numevents;
+			if ((ke11 = malloc(bytes)) == NULL)
+				err(1,
+				    "Cannot malloc %zu bytes for kevent array",
+				    bytes);
+		} else
+			ke11 = NULL;
+		memset(&ke, 0, sizeof(ke));
+		if (numevents >= 0 && get_struct(pid, (void *)args[sc->offset],
+		    ke11, bytes) != -1) {
+			fputc('{', fp);
+			for (i = 0; i < numevents; i++) {
+				fputc(' ', fp);
+				ke.ident = ke11[i].ident;
+				ke.filter = ke11[i].filter;
+				ke.flags = ke11[i].flags;
+				ke.fflags = ke11[i].fflags;
+				ke.data = ke11[i].data;
+				ke.udata = ke11[i].udata;
+				print_kevent(fp, &ke);
+			}
+			fputs(" }", fp);
+		} else {
+			fprintf(fp, "0x%lx", args[sc->offset]);
+		}
+		free(ke11);
+		break;
+	}
 	case Stat: {
 		struct stat st;
+
+		if (get_struct(pid, (void *)args[sc->offset], &st, sizeof(st))
+		    != -1) {
+			char mode[12];
+
+			strmode(st.st_mode, mode);
+			fprintf(fp,
+			    "{ mode=%s,inode=%ju,size=%jd,blksize=%ld }", mode,
+			    (uintmax_t)st.st_ino, (intmax_t)st.st_size,
+			    (long)st.st_blksize);
+		} else {
+			fprintf(fp, "0x%lx", args[sc->offset]);
+		}
+		break;
+	}
+	case Stat11: {
+		struct freebsd11_stat st;
 
 		if (get_struct(pid, (void *)args[sc->offset], &st, sizeof(st))
 		    != -1) {
@@ -2442,7 +2524,7 @@ print_arg(struct syscall_args *sc, unsigned long *args, long *retval,
 	case CloudABIClockID:
 		fputs(xlookup(cloudabi_clockid, args[sc->offset]), fp);
 		break;
-	case ClouduABIFDSFlags:
+	case CloudABIFDSFlags:
 		fputs(xlookup_bits(cloudabi_fdsflags, args[sc->offset]), fp);
 		break;
 	case CloudABIFDStat: {
@@ -2562,7 +2644,7 @@ print_syscall_ret(struct trussinfo *trussinfo, int errorp, long *retval)
 	t = trussinfo->curthread;
 	sc = t->cs.sc;
 	if (trussinfo->flags & COUNTONLY) {
-		timespecsubt(&t->after, &t->before, &timediff);
+		timespecsub(&t->after, &t->before, &timediff);
 		timespecadd(&sc->time, &timediff, &sc->time);
 		sc->ncalls++;
 		if (errorp)

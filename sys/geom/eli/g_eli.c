@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2005-2011 Pawel Jakub Dawidek <pawel@dawidek.net>
  * All rights reserved.
  *
@@ -197,10 +199,10 @@ g_eli_crypto_rerun(struct cryptop *crp)
 			break;
 	}
 	KASSERT(wr != NULL, ("Invalid worker (%u).", bp->bio_pflags));
-	G_ELI_DEBUG(1, "Rerunning crypto %s request (sid: %ju -> %ju).",
-	    bp->bio_cmd == BIO_READ ? "READ" : "WRITE", (uintmax_t)wr->w_sid,
-	    (uintmax_t)crp->crp_sid);
-	wr->w_sid = crp->crp_sid;
+	G_ELI_DEBUG(1, "Rerunning crypto %s request (sid: %p -> %p).",
+	    bp->bio_cmd == BIO_READ ? "READ" : "WRITE", wr->w_sid,
+	    crp->crp_session);
+	wr->w_sid = crp->crp_session;
 	crp->crp_etype = 0;
 	error = crypto_dispatch(crp);
 	if (error == 0)
@@ -252,7 +254,8 @@ g_eli_read_done(struct bio *bp)
 			pbp->bio_driver2 = NULL;
 		}
 		g_io_deliver(pbp, pbp->bio_error);
-		atomic_subtract_int(&sc->sc_inflight, 1);
+		if (sc != NULL)
+			atomic_subtract_int(&sc->sc_inflight, 1);
 		return;
 	}
 	mtx_lock(&sc->sc_queue_mtx);
@@ -297,7 +300,8 @@ g_eli_write_done(struct bio *bp)
 	 */
 	sc = pbp->bio_to->geom->softc;
 	g_io_deliver(pbp, pbp->bio_error);
-	atomic_subtract_int(&sc->sc_inflight, 1);
+	if (sc != NULL)
+		atomic_subtract_int(&sc->sc_inflight, 1);
 }
 
 /*
@@ -871,8 +875,25 @@ g_eli_create(struct gctl_req *req, struct g_class *mp, struct g_provider *bpp,
 	G_ELI_DEBUG(0, "Device %s created.", pp->name);
 	G_ELI_DEBUG(0, "Encryption: %s %u", g_eli_algo2str(sc->sc_ealgo),
 	    sc->sc_ekeylen);
-	if (sc->sc_flags & G_ELI_FLAG_AUTH)
+	switch (sc->sc_ealgo) {
+	case CRYPTO_3DES_CBC:
+		gone_in(13,
+		    "support for GEOM_ELI volumes encrypted with 3des");
+		break;
+	case CRYPTO_BLF_CBC:
+		gone_in(13,
+		    "support for GEOM_ELI volumes encrypted with blowfish");
+		break;
+	}
+	if (sc->sc_flags & G_ELI_FLAG_AUTH) {
 		G_ELI_DEBUG(0, " Integrity: %s", g_eli_algo2str(sc->sc_aalgo));
+		switch (sc->sc_aalgo) {
+		case CRYPTO_MD5_HMAC:
+			gone_in(13,
+		    "support for GEOM_ELI volumes authenticated with hmac/md5");
+			break;
+		}
+	}
 	G_ELI_DEBUG(0, "    Crypto: %s",
 	    sc->sc_crypto == G_ELI_CRYPTO_SW ? "software" : "hardware");
 	return (gp);
@@ -1084,7 +1105,7 @@ g_eli_taste(struct g_class *mp, struct g_provider *pp, int flags __unused)
                                  memcpy(key, keybuf->kb_ents[i].ke_data,
                                      sizeof(key));
 
-                                 if (g_eli_mkey_decrypt(&md, key,
+                                 if (g_eli_mkey_decrypt_any(&md, key,
                                      mkey, &nkey) == 0 ) {
                                          explicit_bzero(key, sizeof(key));
                                          goto have_key;
@@ -1159,7 +1180,7 @@ g_eli_taste(struct g_class *mp, struct g_provider *pp, int flags __unused)
                 /*
                  * Decrypt Master-Key.
                  */
-                error = g_eli_mkey_decrypt(&md, key, mkey, &nkey);
+                error = g_eli_mkey_decrypt_any(&md, key, mkey, &nkey);
                 bzero(key, sizeof(key));
                 if (error == -1) {
                         if (i == tries) {
@@ -1222,17 +1243,17 @@ g_eli_dumpconf(struct sbuf *sb, const char *indent, struct g_geom *gp,
 	    (uintmax_t)sc->sc_ekeys_allocated);
 	sbuf_printf(sb, "%s<Flags>", indent);
 	if (sc->sc_flags == 0)
-		sbuf_printf(sb, "NONE");
+		sbuf_cat(sb, "NONE");
 	else {
 		int first = 1;
 
 #define ADD_FLAG(flag, name)	do {					\
 	if (sc->sc_flags & (flag)) {					\
 		if (!first)						\
-			sbuf_printf(sb, ", ");				\
+			sbuf_cat(sb, ", ");				\
 		else							\
 			first = 0;					\
-		sbuf_printf(sb, name);					\
+		sbuf_cat(sb, name);					\
 	}								\
 } while (0)
 		ADD_FLAG(G_ELI_FLAG_SUSPEND, "SUSPEND");
@@ -1251,7 +1272,7 @@ g_eli_dumpconf(struct sbuf *sb, const char *indent, struct g_geom *gp,
 		ADD_FLAG(G_ELI_FLAG_GELIDISPLAYPASS, "GELIDISPLAYPASS");
 #undef  ADD_FLAG
 	}
-	sbuf_printf(sb, "</Flags>\n");
+	sbuf_cat(sb, "</Flags>\n");
 
 	if (!(sc->sc_flags & G_ELI_FLAG_ONETIME)) {
 		sbuf_printf(sb, "%s<UsedKey>%u</UsedKey>\n", indent,
@@ -1261,16 +1282,16 @@ g_eli_dumpconf(struct sbuf *sb, const char *indent, struct g_geom *gp,
 	sbuf_printf(sb, "%s<Crypto>", indent);
 	switch (sc->sc_crypto) {
 	case G_ELI_CRYPTO_HW:
-		sbuf_printf(sb, "hardware");
+		sbuf_cat(sb, "hardware");
 		break;
 	case G_ELI_CRYPTO_SW:
-		sbuf_printf(sb, "software");
+		sbuf_cat(sb, "software");
 		break;
 	default:
-		sbuf_printf(sb, "UNKNOWN");
+		sbuf_cat(sb, "UNKNOWN");
 		break;
 	}
-	sbuf_printf(sb, "</Crypto>\n");
+	sbuf_cat(sb, "</Crypto>\n");
 	if (sc->sc_flags & G_ELI_FLAG_AUTH) {
 		sbuf_printf(sb,
 		    "%s<AuthenticationAlgorithm>%s</AuthenticationAlgorithm>\n",

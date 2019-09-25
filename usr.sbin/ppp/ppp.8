@@ -5823,6 +5823,13 @@ If
 is specified, all priority port lists are disabled and even
 .Dv IPTOS_LOWDELAY
 packets are not prioritised.
+.It set urgent length Ar length
+This command tells ppp to prioritize small packets up to
+.Ar length
+bytes.
+If
+.Ar length
+is not specified, or 0, this feature is disabled.
 .It set vj slotcomp on|off
 This command tells
 .Nm
@@ -5950,9 +5957,9 @@ to get online information about what is available.
 The following URLs contain useful information:
 .Bl -bullet -compact
 .It
-http://www.FreeBSD.org/doc/en_US.ISO8859-1/books/faq/ppp.html
+https://www.FreeBSD.org/doc/en_US.ISO8859-1/books/faq/ppp.html
 .It
-http://www.FreeBSD.org/doc/handbook/userppp.html
+https://www.FreeBSD.org/doc/handbook/userppp.html
 .El
 .El
 .Sh FILES

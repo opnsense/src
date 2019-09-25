@@ -37,6 +37,9 @@
 __FBSDID("$FreeBSD$");
 
 #include <assert.h>
+#ifndef WITHOUT_CAPSICUM
+#include <capsicum_helpers.h>
+#endif
 #include <err.h>
 #include <errno.h>
 #include <stdlib.h>
@@ -71,7 +74,7 @@ static int mevent_timid = 43;
 static int mevent_pipefd[2];
 static pthread_mutex_t mevent_lmutex = PTHREAD_MUTEX_INITIALIZER;
 
-struct mevent {	
+struct mevent {
 	void	(*me_func)(int, enum ev_type, void *);
 #define me_msecs me_fd
 	int	me_fd;
@@ -81,7 +84,7 @@ struct mevent {
 	int	me_cq;
 	int	me_state;
 	int	me_closefd;
-	LIST_ENTRY(mevent) me_list;			   
+	LIST_ENTRY(mevent) me_list;
 };
 
 static LIST_HEAD(listhead, mevent) global_head, change_head;
@@ -420,7 +423,7 @@ mevent_dispatch(void)
 
 #ifndef WITHOUT_CAPSICUM
 	cap_rights_init(&rights, CAP_KQUEUE);
-	if (cap_rights_limit(mfd, &rights) == -1 && errno != ENOSYS)
+	if (caph_rights_limit(mfd, &rights) == -1)
 		errx(EX_OSERR, "Unable to apply rights for sandbox");
 #endif
 
@@ -437,9 +440,9 @@ mevent_dispatch(void)
 
 #ifndef WITHOUT_CAPSICUM
 	cap_rights_init(&rights, CAP_EVENT, CAP_READ, CAP_WRITE);
-	if (cap_rights_limit(mevent_pipefd[0], &rights) == -1 && errno != ENOSYS)
+	if (caph_rights_limit(mevent_pipefd[0], &rights) == -1)
 		errx(EX_OSERR, "Unable to apply rights for sandbox");
-	if (cap_rights_limit(mevent_pipefd[1], &rights) == -1 && errno != ENOSYS)
+	if (caph_rights_limit(mevent_pipefd[1], &rights) == -1)
 		errx(EX_OSERR, "Unable to apply rights for sandbox");
 #endif
 

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0
+ *
  * This file is provided under a dual BSD/GPLv2 license.  When using or
  * redistributing this file, you may do so under either license.
  *
@@ -528,7 +530,7 @@ SCI_STATUS scif_user_parameters_set(
    if (scif_parms->sas.is_sata_ncq_enabled != 1 && scif_parms->sas.is_sata_ncq_enabled != 0)
       return SCI_FAILURE_INVALID_PARAMETER_VALUE;
 
-   if (scif_parms->sas.max_ncq_depth < 1 && scif_parms->sas.max_ncq_depth > 32)
+   if (scif_parms->sas.max_ncq_depth < 1 || scif_parms->sas.max_ncq_depth > 32)
       return SCI_FAILURE_INVALID_PARAMETER_VALUE;
 
    if (scif_parms->sas.is_sata_standby_timer_enabled != 1

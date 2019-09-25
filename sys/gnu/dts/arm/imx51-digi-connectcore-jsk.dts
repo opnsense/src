@@ -17,14 +17,30 @@
 		     "digi,connectcore-ccxmx51-som", "fsl,imx51";
 
 	chosen {
-		linux,stdout-path = &uart1;
+		stdout-path = &uart1;
 	};
+};
+
+&esdhc1 {
+	status = "okay";
 };
 
 &owire {
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_owire>;
 	status = "okay";
+};
+
+&pmic {
+	fsl,mc13xxx-uses-rtc;
+
+	regulators {
+		vcoincell_reg: vcoincell {
+			regulator-min-microvolt = <3000000>;
+			regulator-max-microvolt = <3000000>;
+			regulator-always-on;
+		};
+	};
 };
 
 &uart1 {

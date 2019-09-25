@@ -8,7 +8,7 @@
  *
  * 1. Copyright Notice
  *
- * Some or all of this work - Copyright (c) 1999 - 2017, Intel Corp.
+ * Some or all of this work - Copyright (c) 1999 - 2018, Intel Corp.
  * All rights reserved.
  *
  * 2. License
@@ -419,15 +419,39 @@ BOOLEAN
 AcpiUtDetectHexPrefix (
     char                    **String)
 {
+    char                    *InitialPosition = *String;
 
+    AcpiUtRemoveHexPrefix (String);
+    if (*String != InitialPosition)
+    {
+        return (TRUE); /* String is past leading 0x */
+    }
+
+    return (FALSE);     /* Not a hex string */
+}
+
+
+/*******************************************************************************
+ *
+ * FUNCTION:    AcpiUtRemoveHexPrefix
+ *
+ * PARAMETERS:  String                  - Pointer to input ASCII string
+ *
+ * RETURN:      none
+ *
+ * DESCRIPTION: Remove a hex "0x" prefix
+ *
+ ******************************************************************************/
+
+void
+AcpiUtRemoveHexPrefix (
+    char                    **String)
+{
     if ((**String == ACPI_ASCII_ZERO) &&
         (tolower ((int) *(*String + 1)) == 'x'))
     {
         *String += 2;        /* Go past the leading 0x */
-        return (TRUE);
     }
-
-    return (FALSE);     /* Not a hex string */
 }
 
 

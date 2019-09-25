@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2009, Nathan Whitehorn <nwhitehorn@FreeBSD.org>
  * Copyright (c) 2013, Luiz Otavio O Souza <loos@FreeBSD.org>
  * Copyright (c) 2013 The FreeBSD Foundation
@@ -40,6 +42,8 @@ __FBSDID("$FreeBSD$");
 #include <dev/ofw/ofw_bus.h>
 
 #include "gpiobus_if.h"
+
+#define	GPIO_ACTIVE_LOW		1
 
 static struct ofw_gpiobus_devinfo *ofw_gpiobus_setup_devinfo(device_t,
 	device_t, phandle_t);
@@ -317,10 +321,8 @@ ofw_gpiobus_setup_devinfo(device_t bus, device_t child, phandle_t node)
 		ofw_gpiobus_destroy_devinfo(bus, dinfo);
 		return (NULL);
 	}
-	for (i = 0; i < devi->npins; i++) {
-		devi->flags[i] = pins[i].flags;
+	for (i = 0; i < devi->npins; i++)
 		devi->pins[i] = pins[i].pin;
-	}
 	free(pins, M_DEVBUF);
 	/* Parse the interrupt resources. */
 	if (ofw_bus_intr_to_rl(bus, node, &dinfo->opd_dinfo.rl, NULL) != 0) {
@@ -360,7 +362,7 @@ ofw_gpiobus_parse_gpios_impl(device_t consumer, phandle_t cnode, char *pname,
 	pcell_t *gpios;
 	phandle_t gpio;
 
-	ncells = OF_getencprop_alloc(cnode, pname, sizeof(*gpios),
+	ncells = OF_getencprop_alloc_multi(cnode, pname, sizeof(*gpios),
             (void **)&gpios);
 	if (ncells == -1) {
 		device_printf(consumer,

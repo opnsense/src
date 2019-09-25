@@ -1,2 +1,0 @@
-.\" $FreeBSD$
-Set to build OpenSSL as libcrypto/libssl provider as replacement of the LibreSSL equivalents.

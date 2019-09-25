@@ -26,6 +26,14 @@
 //    of vectorization. It decides on the optimal vector width, which
 //    can be one, if vectorization is not profitable.
 //
+// There is a development effort going on to migrate loop vectorizer to the
+// VPlan infrastructure and to introduce outer loop vectorization support (see
+// docs/Proposal/VectorizationPlan.rst and
+// http://lists.llvm.org/pipermail/llvm-dev/2017-December/119523.html). For this
+// purpose, we temporarily introduced the VPlan-native vectorization path: an
+// alternative vectorization path that is natively implemented on top of the
+// VPlan infrastructure. See EnableVPlanNativePath for enabling.
+//
 //===----------------------------------------------------------------------===//
 //
 // The reduction-variable vectorization is based on the paper:
@@ -70,12 +78,13 @@ class TargetTransformInfo;
 
 /// The LoopVectorize Pass.
 struct LoopVectorizePass : public PassInfoMixin<LoopVectorizePass> {
-  bool DisableUnrolling = false;
+  /// If false, consider all loops for interleaving.
+  /// If true, only loops that explicitly request interleaving are considered.
+  bool InterleaveOnlyWhenForced = false;
 
-  /// If true, consider all loops for vectorization.
-  /// If false, only loops that explicitly request vectorization are
-  /// considered.
-  bool AlwaysVectorize = true;
+  /// If false, consider all loops for vectorization.
+  /// If true, only loops that explicitly request vectorization are considered.
+  bool VectorizeOnlyWhenForced = false;
 
   ScalarEvolution *SE;
   LoopInfo *LI;

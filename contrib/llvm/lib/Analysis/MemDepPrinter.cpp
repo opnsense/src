@@ -13,7 +13,6 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/Analysis/MemoryDependenceAnalysis.h"
 #include "llvm/Analysis/Passes.h"
-#include "llvm/IR/CallSite.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -106,9 +105,9 @@ bool MemDepPrinter::runOnFunction(Function &F) {
     if (!Res.isNonLocal()) {
       Deps[Inst].insert(std::make_pair(getInstTypePair(Res),
                                        static_cast<BasicBlock *>(nullptr)));
-    } else if (auto CS = CallSite(Inst)) {
+    } else if (auto *Call = dyn_cast<CallBase>(Inst)) {
       const MemoryDependenceResults::NonLocalDepInfo &NLDI =
-        MDA.getNonLocalCallDependency(CS);
+          MDA.getNonLocalCallDependency(Call);
 
       DepSet &InstDeps = Deps[Inst];
       for (const NonLocalDepEntry &I : NLDI) {
@@ -118,7 +117,7 @@ bool MemDepPrinter::runOnFunction(Function &F) {
     } else {
       SmallVector<NonLocalDepResult, 4> NLDI;
       assert( (isa<LoadInst>(Inst) || isa<StoreInst>(Inst) ||
-               isa<VAArgInst>(Inst)) && "Unknown memory instruction!"); 
+               isa<VAArgInst>(Inst)) && "Unknown memory instruction!");
       MDA.getNonLocalPointerDependency(Inst, NLDI);
 
       DepSet &InstDeps = Deps[Inst];

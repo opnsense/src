@@ -10,12 +10,8 @@
 #ifndef liblldb_ClangPersistentVariables_h_
 #define liblldb_ClangPersistentVariables_h_
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
 #include "llvm/ADT/DenseMap.h"
 
-// Project includes
 #include "ClangExpressionVariable.h"
 #include "ClangModulesDeclVendor.h"
 
@@ -25,9 +21,8 @@ namespace lldb_private {
 
 //----------------------------------------------------------------------
 /// @class ClangPersistentVariables ClangPersistentVariables.h
-/// "lldb/Expression/ClangPersistentVariables.h"
-/// @brief Manages persistent values that need to be preserved between
-/// expression invocations.
+/// "lldb/Expression/ClangPersistentVariables.h" Manages persistent values
+/// that need to be preserved between expression invocations.
 ///
 /// A list of variables that can be accessed and updated by any expression.  See
 /// ClangPersistentVariable for more discussion.  Also provides an increasing,
@@ -54,16 +49,11 @@ public:
       const CompilerType &compiler_type, lldb::ByteOrder byte_order,
       uint32_t addr_byte_size) override;
 
-  //----------------------------------------------------------------------
-  /// Return the next entry in the sequence of strings "$0", "$1", ... for
-  /// use naming persistent expression convenience variables.
-  ///
-  /// @return
-  ///     A string that contains the next persistent variable name.
-  //----------------------------------------------------------------------
-  ConstString GetNextPersistentVariableName() override;
-
   void RemovePersistentVariable(lldb::ExpressionVariableSP variable) override;
+  llvm::StringRef
+  GetPersistentVariablePrefix(bool is_error) const override {
+    return "$";
+  }
 
   void RegisterPersistentDecl(const ConstString &name, clang::NamedDecl *decl);
 

@@ -10,14 +10,10 @@
 #ifndef liblldb_PathMappingList_h_
 #define liblldb_PathMappingList_h_
 
-// C Includes
-// C++ Includes
 #include <map>
 #include <vector>
-// Other libraries and framework includes
 #include "lldb/Utility/ConstString.h"
 #include "lldb/Utility/Status.h"
-// Project includes
 
 namespace lldb_private {
 
@@ -90,7 +86,7 @@ public:
   bool RemapPath(llvm::StringRef path, std::string &new_path) const;
   bool RemapPath(const char *, std::string &) const = delete;
 
-  bool ReverseRemapPath(const ConstString &path, ConstString &new_path) const;
+  bool ReverseRemapPath(const FileSpec &file, FileSpec &fixed) const;
 
   //------------------------------------------------------------------
   /// Finds a source file given a file spec using the path remappings.

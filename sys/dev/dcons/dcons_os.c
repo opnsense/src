@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (C) 2003,2004
  * 	Hidetoshi Shimokawa. All rights reserved.
  *
@@ -50,6 +52,7 @@
 #include <sys/proc.h>
 #include <sys/ucred.h>
 
+#include <machine/atomic.h>
 #include <machine/bus.h>
 
 #include <dev/dcons/dcons.h>
@@ -133,11 +136,15 @@ extern struct gdb_dbgport *gdb_cur;
 #endif
 
 static tsw_outwakeup_t dcons_outwakeup;
+static tsw_free_t      dcons_free;
 
 static struct ttydevsw dcons_ttydevsw = {
 	.tsw_flags      = TF_NOPREFIX,
 	.tsw_outwakeup  = dcons_outwakeup,
+	.tsw_free       = dcons_free,
 };
+
+static int dcons_close_refs;
 
 #if (defined(GDB) || defined(DDB))
 static int
@@ -193,6 +200,14 @@ dcons_os_putc(struct dcons_softc *dc, int c)
 
 	if (dg.dma_tag != NULL)
 		bus_dmamap_sync(dg.dma_tag, dg.dma_map, BUS_DMASYNC_PREWRITE);
+}
+
+static void
+dcons_free(void *xsc __unused)
+{
+
+	/* Our deferred free has arrived, now we're waiting for one fewer. */
+	atomic_subtract_rel_int(&dcons_close_refs, 1);
 }
 
 static void
@@ -307,11 +322,16 @@ dcons_drv_init(int stage)
 		 * Allow read/write access to dcons buffer.
 		 */
 		for (pa = trunc_page(addr); pa < addr + size; pa += PAGE_SIZE)
-			*vtopte(KERNBASE + pa) |= PG_RW;
+			*vtopte(PMAP_MAP_LOW + pa) |= PG_RW;
 		invltlb();
 #endif
 		/* XXX P to V */
+#ifdef __amd64__
 		dg.buf = (struct dcons_buf *)(vm_offset_t)(KERNBASE + addr);
+#else /* __i386__ */
+		dg.buf = (struct dcons_buf *)((vm_offset_t)PMAP_MAP_LOW +
+		    addr);
+#endif
 		dg.size = size;
 		if (dcons_load_buffer(dg.buf, dg.size, sc) < 0)
 			dg.buf = NULL;
@@ -389,6 +409,8 @@ dcons_detach(int port)
 	dc = &sc[port];
 	tp = dc->tty;
 
+	/* tty_rel_gone() schedules a deferred free callback, count it. */
+	atomic_add_int(&dcons_close_refs, 1);
 	tty_lock(tp);
 	tty_rel_gone(tp);
 
@@ -423,6 +445,9 @@ dcons_modevent(module_t mode, int type, void *data)
 			contigfree(dg.buf, DCONS_BUF_SIZE, M_DEVBUF);
 		}
 
+		/* Wait for tty deferred free callbacks to complete. */
+		while (atomic_load_acq_int(&dcons_close_refs) > 0)
+                        pause_sbt("dcunld", mstosbt(50), mstosbt(10), 0);
 		break;
 	case MOD_SHUTDOWN:
 #if 0		/* Keep connection after halt */

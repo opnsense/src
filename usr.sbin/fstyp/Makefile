@@ -13,9 +13,11 @@ MAN=	fstyp.8
 
 WARNS?=	2
 
+.include <bsd.endian.mk>
 
-.if ${MK_TESTS} != "no"
-SUBDIR+=	tests
+.if ${TARGET_ENDIANNESS} == 1234
+HAS_TESTS=
+SUBDIR.${MK_TESTS}+= tests
 .endif
 
 .if ${MK_ZFS} != "no"
@@ -29,13 +31,12 @@ CFLAGS+= -I${SRCTOP}/cddl/contrib/opensolaris/lib/libnvpair
 CFLAGS+= -I${SRCTOP}/cddl/contrib/opensolaris/lib/libzpool/common
 CFLAGS+= -I${SRCTOP}/sys/cddl/contrib/opensolaris/uts/common/fs/zfs
 CFLAGS+= -I${SRCTOP}/sys/cddl/contrib/opensolaris/uts/common
-CFLAGS+= -I${SRCTOP}/sys/cddl/contrib/opensolaris/uts/common/sys
 CFLAGS+= -I${SRCTOP}/cddl/contrib/opensolaris/head
 .endif
 
 CFLAGS+=-I${SRCTOP}/sys
 
-LIBADD=	geom md
+LIBADD=	geom md ufs
 
 .if ${MK_ZFS} != "no"
 LIBADD+=nvpair zfs

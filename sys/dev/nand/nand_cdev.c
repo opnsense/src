@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (C) 2009-2012 Semihalf
  * All rights reserved.
  *
@@ -99,7 +101,7 @@ nand_make_dev(struct nand_chip *chip)
 	parent_unit = device_get_unit(parent);
 	unit = parent_unit * 4 + chip->num;
 	chip->cdev = make_dev(&nand_cdevsw, unit, UID_ROOT, GID_WHEEL,
-	    0666, "%s%d.%d", name, parent_unit, chip->num);
+	    0640, "%s%d.%d", name, parent_unit, chip->num);
 
 	if (chip->cdev == NULL)
 		return (ENXIO);

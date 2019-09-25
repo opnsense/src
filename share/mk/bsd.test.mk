@@ -10,9 +10,6 @@
 
 __<bsd.test.mk>__:
 
-# HBSDTODO: Research why compiling the tests fail with SafeStack.
-NOSAFESTACK=	yes
-
 # Third-party software (kyua, etc) prefix.
 LOCALBASE?=	/usr/local
 
@@ -45,7 +42,7 @@ TESTS_ENV?=
 # Force all tests in a separate distribution file.
 #
 # We want this to be the case even when the distribution name is already
-# overriden.  For example: we want the tests for programs in the 'games'
+# overridden.  For example: we want the tests for programs in the 'games'
 # distribution to end up in the 'tests' distribution; the test programs
 # themselves have all the necessary logic to detect that the games are not
 # installed and thus won't cause false negatives.
@@ -66,6 +63,7 @@ _TESTS=
 
 # Pull in the definitions of all supported test interfaces.
 .include <atf.test.mk>
+.include <googletest.test.mk>
 .include <plain.test.mk>
 .include <tap.test.mk>
 

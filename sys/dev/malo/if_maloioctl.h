@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2007 Marvell Semiconductor, Inc.
  * Copyright (c) 2007 Sam Leffler, Errno Consulting
  * Copyright (c) 2008 Weongyo Jeong <weongyo@freebsd.org>
@@ -91,7 +93,7 @@ struct malo_rx_radiotap_header {
 	int8_t		wr_antsignal;
 	int8_t		wr_antnoise;
 	u_int8_t	wr_antenna;
-};
+} __packed __aligned(8);
 
 #define MALO_TX_RADIOTAP_PRESENT (		\
 	(1 << IEEE80211_RADIOTAP_FLAGS)		| \
@@ -109,6 +111,6 @@ struct malo_tx_radiotap_header {
 	u_int16_t	wt_chan_flags;
 	u_int8_t	wt_txpower;
 	u_int8_t	wt_antenna;
-};
+} __packed;
 
 #endif /* _DEV_MALO_MVIOCTL_H */

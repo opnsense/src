@@ -10,17 +10,13 @@
 #ifndef liblldb_ObjCLanguageRuntime_h_
 #define liblldb_ObjCLanguageRuntime_h_
 
-// C Includes
-// C++ Includes
 #include <functional>
 #include <map>
 #include <memory>
 #include <unordered_set>
 
-// Other libraries and framework includes
 #include "llvm/Support/Casting.h"
 
-// Project includes
 #include "lldb/Core/PluginInterface.h"
 #include "lldb/Core/ThreadSafeDenseMap.h"
 #include "lldb/Symbol/CompilerType.h"
@@ -48,10 +44,9 @@ public:
   class ClassDescriptor;
   typedef std::shared_ptr<ClassDescriptor> ClassDescriptorSP;
 
-  // the information that we want to support retrieving from an ObjC class
-  // this needs to be pure virtual since there are at least 2 different
-  // implementations
-  // of the runtime, and more might come
+  // the information that we want to support retrieving from an ObjC class this
+  // needs to be pure virtual since there are at least 2 different
+  // implementations of the runtime, and more might come
   class ClassDescriptor {
   public:
     ClassDescriptor()
@@ -66,8 +61,8 @@ public:
 
     virtual ClassDescriptorSP GetMetaclass() const = 0;
 
-    // virtual if any implementation has some other version-specific rules
-    // but for the known v1/v2 this is all that needs to be done
+    // virtual if any implementation has some other version-specific rules but
+    // for the known v1/v2 this is all that needs to be done
     virtual bool IsKVO() {
       if (m_is_kvo == eLazyBoolCalculate) {
         const char *class_name = GetClassName().AsCString();
@@ -78,8 +73,8 @@ public:
       return (m_is_kvo == eLazyBoolYes);
     }
 
-    // virtual if any implementation has some other version-specific rules
-    // but for the known v1/v2 this is all that needs to be done
+    // virtual if any implementation has some other version-specific rules but
+    // for the known v1/v2 this is all that needs to be done
     virtual bool IsCFType() {
       if (m_is_cf == eLazyBoolCalculate) {
         const char *class_name = GetClassName().AsCString();
@@ -268,15 +263,14 @@ public:
   virtual DeclVendor *GetDeclVendor() { return nullptr; }
 
   // Finds the byte offset of the child_type ivar in parent_type.  If it can't
-  // find the
-  // offset, returns LLDB_INVALID_IVAR_OFFSET.
+  // find the offset, returns LLDB_INVALID_IVAR_OFFSET.
 
   virtual size_t GetByteOffsetForIvar(CompilerType &parent_qual_type,
                                       const char *ivar_name);
 
-  // Given the name of an Objective-C runtime symbol (e.g., ivar offset symbol),
-  // try to determine from the runtime what the value of that symbol would be.
-  // Useful when the underlying binary is stripped.
+  // Given the name of an Objective-C runtime symbol (e.g., ivar offset
+  // symbol), try to determine from the runtime what the value of that symbol
+  // would be. Useful when the underlying binary is stripped.
   virtual lldb::addr_t LookupRuntimeSymbol(const ConstString &name) {
     return LLDB_INVALID_ADDRESS;
   }
@@ -334,8 +328,7 @@ protected:
 
 private:
   // We keep a map of <Class,Selector>->Implementation so we don't have to call
-  // the resolver
-  // function over and over.
+  // the resolver function over and over.
 
   // FIXME: We need to watch for the loading of Protocols, and flush the cache
   // for any

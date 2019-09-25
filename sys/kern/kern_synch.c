@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1982, 1986, 1990, 1991, 1993
  *	The Regents of the University of California.  All rights reserved.
  * (c) UNIX System Laboratories, Inc.
@@ -15,7 +17,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -107,7 +109,7 @@ sleepinit(void *unused)
  * vmem tries to lock the sleepq mutexes when free'ing kva, so make sure
  * it is available.
  */
-SYSINIT(sleepinit, SI_SUB_KMEM, SI_ORDER_ANY, sleepinit, 0);
+SYSINIT(sleepinit, SI_SUB_KMEM, SI_ORDER_ANY, sleepinit, NULL);
 
 /*
  * General sleep call.  Suspends the current thread until a wakeup is
@@ -129,14 +131,12 @@ _sleep(void *ident, struct lock_object *lock, int priority,
     const char *wmesg, sbintime_t sbt, sbintime_t pr, int flags)
 {
 	struct thread *td;
-	struct proc *p;
 	struct lock_class *class;
 	uintptr_t lock_state;
 	int catch, pri, rval, sleepq_flags;
 	WITNESS_SAVE_DECL(lock_witness);
 
 	td = curthread;
-	p = td->td_proc;
 #ifdef KTRACE
 	if (KTRPOINT(td, KTR_CSW))
 		ktrcsw(1, 0, wmesg);
@@ -145,8 +145,9 @@ _sleep(void *ident, struct lock_object *lock, int priority,
 	    "Sleeping on \"%s\"", wmesg);
 	KASSERT(sbt != 0 || mtx_owned(&Giant) || lock != NULL,
 	    ("sleeping without a lock"));
-	KASSERT(p != NULL, ("msleep1"));
-	KASSERT(ident != NULL && TD_IS_RUNNING(td), ("msleep"));
+	KASSERT(ident != NULL, ("_sleep: NULL ident"));
+	KASSERT(TD_IS_RUNNING(td), ("_sleep: curthread not running"));
+	KASSERT(td->td_epochnest == 0, ("sleeping in an epoch section"));
 	if (priority & PDROP)
 		KASSERT(lock != NULL && lock != &Giant.lock_object,
 		    ("PDROP requires a non-Giant lock"));
@@ -175,7 +176,7 @@ _sleep(void *ident, struct lock_object *lock, int priority,
 
 	sleepq_lock(ident);
 	CTR5(KTR_PROC, "sleep: thread %ld (pid %ld, %s) on %s (%p)",
-	    td->td_tid, p->p_pid, td->td_name, wmesg, ident);
+	    td->td_tid, td->td_proc->p_pid, td->td_name, wmesg, ident);
 
 	if (lock == &Giant.lock_object)
 		mtx_assert(&Giant, MA_OWNED);
@@ -233,22 +234,20 @@ msleep_spin_sbt(void *ident, struct mtx *mtx, const char *wmesg,
     sbintime_t sbt, sbintime_t pr, int flags)
 {
 	struct thread *td;
-	struct proc *p;
 	int rval;
 	WITNESS_SAVE_DECL(mtx);
 
 	td = curthread;
-	p = td->td_proc;
 	KASSERT(mtx != NULL, ("sleeping without a mutex"));
-	KASSERT(p != NULL, ("msleep1"));
-	KASSERT(ident != NULL && TD_IS_RUNNING(td), ("msleep"));
+	KASSERT(ident != NULL, ("msleep_spin_sbt: NULL ident"));
+	KASSERT(TD_IS_RUNNING(td), ("msleep_spin_sbt: curthread not running"));
 
 	if (SCHEDULER_STOPPED_TD(td))
 		return (0);
 
 	sleepq_lock(ident);
 	CTR5(KTR_PROC, "msleep_spin: thread %ld (pid %ld, %s) on %s (%p)",
-	    td->td_tid, p->p_pid, td->td_name, wmesg, ident);
+	    td->td_tid, td->td_proc->p_pid, td->td_name, wmesg, ident);
 
 	DROP_GIANT();
 	mtx_assert(mtx, MA_OWNED | MA_NOTRECURSED);
@@ -369,6 +368,19 @@ wakeup_one(void *ident)
 		kick_proc0();
 }
 
+void
+wakeup_any(void *ident)
+{
+	int wakeup_swapper;
+
+	sleepq_lock(ident);
+	wakeup_swapper = sleepq_signal(ident, SLEEPQ_SLEEP | SLEEPQ_UNFAIR,
+	    0, 0);
+	sleepq_release(ident);
+	if (wakeup_swapper)
+		kick_proc0();
+}
+
 static void
 kdb_switch(void)
 {
@@ -427,13 +439,14 @@ mi_switch(int flags, struct thread *newtd)
 	td->td_incruntime += runtime;
 	PCPU_SET(switchtime, new_switchtime);
 	td->td_generation++;	/* bump preempt-detect counter */
-	PCPU_INC(cnt.v_swtch);
+	VM_CNT_INC(v_swtch);
 	PCPU_SET(switchticks, ticks);
 	CTR4(KTR_PROC, "mi_switch: old thread %ld (td_sched %p, pid %ld, %s)",
 	    td->td_tid, td_get_sched(td), td->td_proc->p_pid, td->td_name);
 #ifdef KDTRACE_HOOKS
-	if ((flags & SW_PREEMPT) != 0 || ((flags & SW_INVOL) != 0 &&
-	    (flags & SW_TYPE_MASK) == SWT_NEEDRESCHED))
+	if (__predict_false(sdt_probes_enabled) &&
+	    ((flags & SW_PREEMPT) != 0 || ((flags & SW_INVOL) != 0 &&
+	    (flags & SW_TYPE_MASK) == SWT_NEEDRESCHED)))
 		SDT_PROBE0(sched, , , preempt);
 #endif
 	sched_switch(td, newtd, flags);

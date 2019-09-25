@@ -134,7 +134,6 @@ static struct data_blk *lastblk;
 
 static TAILQ_HEAD(seghd, suj_seg) allsegs;
 static uint64_t oldseq;
-static struct uufsd *disk = NULL;
 static struct fs *fs = NULL;
 static ino_t sujino;
 
@@ -190,29 +189,6 @@ err_suj(const char * restrict fmt, ...)
 }
 
 /*
- * Open the given provider, load superblock.
- */
-static void
-opendisk(const char *devnam)
-{
-	if (disk != NULL)
-		return;
-	disk = Malloc(sizeof(*disk));
-	if (disk == NULL)
-		err(EX_OSERR, "malloc(%zu)", sizeof(*disk));
-	if (ufs_disk_fillout(disk, devnam) == -1) {
-		err(EX_OSERR, "ufs_disk_fillout(%s) failed: %s", devnam,
-		    disk->d_error);
-	}
-	fs = &disk->d_fs;
-	if (real_dev_bsize == 0 && ioctl(disk->d_fd, DIOCGSECTORSIZE,
-	    &real_dev_bsize) == -1)
-		real_dev_bsize = secsize;
-	if (debug)
-		printf("dev_bsize %u\n", real_dev_bsize);
-}
-
-/*
  * Mark file system as clean, write the super-block back, close the disk.
  */
 static void
@@ -237,12 +213,10 @@ closedisk(const char *devnam)
 	fs->fs_clean = 1;
 	fs->fs_time = time(NULL);
 	fs->fs_mtime = time(NULL);
-	if (sbwrite(disk, 0) == -1)
-		err(EX_OSERR, "sbwrite(%s)", devnam);
-	if (ufs_disk_close(disk) == -1)
+	if (sbput(disk.d_fd, fs, 0) == -1)
+		err(EX_OSERR, "sbput(%s)", devnam);
+	if (ufs_disk_close(&disk) == -1)
 		err(EX_OSERR, "ufs_disk_close(%s)", devnam);
-	free(disk);
-	disk = NULL;
 	fs = NULL;
 }
 
@@ -272,7 +246,11 @@ cg_lookup(int cgx)
 	sc->sc_cgp = (struct cg *)sc->sc_cgbuf;
 	sc->sc_cgx = cgx;
 	LIST_INSERT_HEAD(hd, sc, sc_next);
-	if (bread(disk, fsbtodb(fs, cgtod(fs, sc->sc_cgx)), sc->sc_cgbuf,
+	/*
+	 * Use bread() here rather than cgget() because the cylinder group
+	 * may be corrupted but we want it anyway so we can fix it.
+	 */
+	if (bread(&disk, fsbtodb(fs, cgtod(fs, sc->sc_cgx)), sc->sc_cgbuf,
 	    fs->fs_bsize) == -1)
 		err_suj("Unable to read cylinder group %d\n", sc->sc_cgx);
 
@@ -376,7 +354,7 @@ dblk_read(ufs2_daddr_t blk, int size)
 			free(dblk->db_buf);
 		dblk->db_buf = errmalloc(size);
 		dblk->db_size = size;
-		if (bread(disk, fsbtodb(fs, blk), dblk->db_buf, size) == -1)
+		if (bread(&disk, fsbtodb(fs, blk), dblk->db_buf, size) == -1)
 			err_suj("Failed to read data block %jd\n", blk);
 	}
 	return (dblk->db_buf);
@@ -401,7 +379,7 @@ dblk_write(void)
 		LIST_FOREACH(dblk, &dbhash[i], db_next) {
 			if (dblk->db_dirty == 0 || dblk->db_size == 0)
 				continue;
-			if (bwrite(disk, fsbtodb(fs, dblk->db_blk),
+			if (bwrite(&disk, fsbtodb(fs, dblk->db_blk),
 			    dblk->db_buf, dblk->db_size) == -1)
 				err_suj("Unable to write block %jd\n",
 				    dblk->db_blk);
@@ -435,7 +413,7 @@ ino_read(ino_t ino)
 	iblk->ib_buf = errmalloc(fs->fs_bsize);
 	iblk->ib_blk = blk;
 	LIST_INSERT_HEAD(hd, iblk, ib_next);
-	if (bread(disk, fsbtodb(fs, blk), iblk->ib_buf, fs->fs_bsize) == -1)
+	if (bread(&disk, fsbtodb(fs, blk), iblk->ib_buf, fs->fs_bsize) == -1)
 		err_suj("Failed to read inode block %jd\n", blk);
 found:
 	sc->sc_lastiblk = iblk;
@@ -478,7 +456,7 @@ iblk_write(struct ino_blk *iblk)
 
 	if (iblk->ib_dirty == 0)
 		return;
-	if (bwrite(disk, fsbtodb(fs, iblk->ib_blk), iblk->ib_buf,
+	if (bwrite(&disk, fsbtodb(fs, iblk->ib_blk), iblk->ib_buf,
 	    fs->fs_bsize) == -1)
 		err_suj("Failed to write inode block %jd\n", iblk->ib_blk);
 }
@@ -760,7 +738,7 @@ ino_blkatoff(union dinode *ip, ino_t ino, ufs_lbn_t lbn, int *frags)
 	/*
 	 * Handle extattr blocks first.
 	 */
-	if (lbn < 0 && lbn >= -NXADDR) {
+	if (lbn < 0 && lbn >= -UFS_NXADDR) {
 		lbn = -1 - lbn;
 		if (lbn > lblkno(fs, ip->dp2.di_extsize - 1))
 			return (0);
@@ -773,13 +751,13 @@ ino_blkatoff(union dinode *ip, ino_t ino, ufs_lbn_t lbn, int *frags)
 	if (DIP(ip, di_mode) == IFLNK &&
 	    DIP(ip, di_size) < fs->fs_maxsymlinklen)
 		return (0);
-	if (lbn >= 0 && lbn < NDADDR) {
+	if (lbn >= 0 && lbn < UFS_NDADDR) {
 		*frags = numfrags(fs, sblksize(fs, DIP(ip, di_size), lbn));
 		return (DIP(ip, di_db[lbn]));
 	}
 	*frags = fs->fs_frag;
 
-	for (i = 0, tmpval = NINDIR(fs), cur = NDADDR; i < NIADDR; i++,
+	for (i = 0, tmpval = NINDIR(fs), cur = UFS_NDADDR; i < UFS_NIADDR; i++,
 	    tmpval *= NINDIR(fs), cur = next) {
 		next = cur + tmpval;
 		if (lbn == -cur - i)
@@ -1039,7 +1017,7 @@ ino_visit(union dinode *ip, ino_t ino, ino_visitor visitor, int flags)
 	fragcnt = 0;
 	if ((flags & VISIT_EXT) &&
 	    fs->fs_magic == FS_UFS2_MAGIC && ip->dp2.di_extsize) {
-		for (i = 0; i < NXADDR; i++) {
+		for (i = 0; i < UFS_NXADDR; i++) {
 			if (ip->dp2.di_extb[i] == 0)
 				continue;
 			frags = sblksize(fs, ip->dp2.di_extsize, i);
@@ -1052,7 +1030,7 @@ ino_visit(union dinode *ip, ino_t ino, ino_visitor visitor, int flags)
 	if (mode == IFBLK || mode == IFCHR ||
 	    (mode == IFLNK && size < fs->fs_maxsymlinklen))
 		return (fragcnt);
-	for (i = 0; i < NDADDR; i++) {
+	for (i = 0; i < UFS_NDADDR; i++) {
 		if (DIP(ip, di_db[i]) == 0)
 			continue;
 		frags = sblksize(fs, size, i);
@@ -1065,7 +1043,7 @@ ino_visit(union dinode *ip, ino_t ino, ino_visitor visitor, int flags)
 	 * real pointers to them.
 	 */
 	flags |= VISIT_ROOT;
-	for (i = 0, tmpval = NINDIR(fs), lbn = NDADDR; i < NIADDR; i++,
+	for (i = 0, tmpval = NINDIR(fs), lbn = UFS_NDADDR; i < UFS_NIADDR; i++,
 	    lbn = nextlbn) {
 		nextlbn = lbn + tmpval;
 		tmpval *= NINDIR(fs);
@@ -1125,7 +1103,7 @@ ino_adjblks(struct suj_ino *sino)
 	 * to the size in the inode or the maximum size permitted by
 	 * populated indirects.
 	 */
-	if (visitlbn >= NDADDR) {
+	if (visitlbn >= UFS_NDADDR) {
 		isize = DIP(ip, di_size);
 		size = lblktosize(fs, visitlbn + 1);
 		if (isize > size)
@@ -1163,7 +1141,7 @@ blk_free_lbn(ufs2_daddr_t blk, ino_t ino, ufs_lbn_t lbn, int frags, int follow)
 
 	mask = blk_freemask(blk, ino, lbn, frags);
 	resid = 0;
-	if (lbn <= -NDADDR && follow && mask == 0)
+	if (lbn <= -UFS_NDADDR && follow && mask == 0)
 		indir_visit(ino, lbn, blk, &resid, blk_free_visit, VISIT_INDIR);
 	else
 		blk_free(blk, mask, frags);
@@ -1255,7 +1233,7 @@ ino_free_children(ino_t ino, ufs_lbn_t lbn, ufs2_daddr_t blk, int frags)
 	dp = (struct direct *)&block[0];
 	for (dpoff = 0; dpoff < size && dp->d_reclen; dpoff += dp->d_reclen) {
 		dp = (struct direct *)&block[dpoff];
-		if (dp->d_ino == 0 || dp->d_ino == WINO)
+		if (dp->d_ino == 0 || dp->d_ino == UFS_WINO)
 			continue;
 		if (dp->d_namlen == 1 && dp->d_name[0] == '.')
 			continue;
@@ -1280,8 +1258,8 @@ ino_reclaim(union dinode *ip, ino_t ino, int mode)
 {
 	uint32_t gen;
 
-	if (ino == ROOTINO)
-		err_suj("Attempting to free ROOTINO\n");
+	if (ino == UFS_ROOTINO)
+		err_suj("Attempting to free UFS_ROOTINO\n");
 	if (debug)
 		printf("Truncating and freeing ino %ju, nlink %d, mode %o\n",
 		    (uintmax_t)ino, DIP(ip, di_nlink), DIP(ip, di_mode));
@@ -1349,8 +1327,8 @@ ino_adjust(struct suj_ino *sino)
 	struct suj_ino *stmp;
 	union dinode *ip;
 	nlink_t nlink;
+	nlink_t reqlink;
 	int recmode;
-	int reqlink;
 	int isdot;
 	int mode;
 	ino_t ino;
@@ -1397,7 +1375,7 @@ ino_adjust(struct suj_ino *sino)
 	}
 	ip = ino_read(ino);
 	mode = DIP(ip, di_mode) & IFMT;
-	if (nlink > LINK_MAX)
+	if (nlink > UFS_LINK_MAX)
 		err_suj("ino %ju nlink manipulation error, new %ju, old %d\n",
 		    (uintmax_t)ino, (uintmax_t)nlink, DIP(ip, di_nlink));
 	if (debug)
@@ -1542,7 +1520,7 @@ ino_trunc(ino_t ino, off_t size)
 	if (size > cursize)
 		size = cursize;
 	lastlbn = lblkno(fs, blkroundup(fs, size));
-	for (i = lastlbn; i < NDADDR; i++) {
+	for (i = lastlbn; i < UFS_NDADDR; i++) {
 		if (DIP(ip, di_db[i]) == 0)
 			continue;
 		frags = sblksize(fs, cursize, i);
@@ -1553,7 +1531,7 @@ ino_trunc(ino_t ino, off_t size)
 	/*
 	 * Follow indirect blocks, freeing anything required.
 	 */
-	for (i = 0, tmpval = NINDIR(fs), lbn = NDADDR; i < NIADDR; i++,
+	for (i = 0, tmpval = NINDIR(fs), lbn = UFS_NDADDR; i < UFS_NIADDR; i++,
 	    lbn = nextlbn) {
 		nextlbn = lbn + tmpval;
 		tmpval *= NINDIR(fs);
@@ -1585,7 +1563,7 @@ ino_trunc(ino_t ino, off_t size)
 	 * If we're truncating direct blocks we have to adjust frags
 	 * accordingly.
 	 */
-	if (visitlbn < NDADDR && totalfrags) {
+	if (visitlbn < UFS_NDADDR && totalfrags) {
 		long oldspace, newspace;
 
 		bn = DIP(ip, di_db[visitlbn]);
@@ -1637,9 +1615,9 @@ ino_check(struct suj_ino *sino)
 	struct suj_rec *srec;
 	struct jrefrec *rrec;
 	nlink_t dotlinks;
-	int newlinks;
-	int removes;
-	int nlink;
+	nlink_t newlinks;
+	nlink_t removes;
+	nlink_t nlink;
 	ino_t ino;
 	int isdot;
 	int isat;
@@ -1892,8 +1870,7 @@ cg_write(struct suj_cg *sc)
 	 * before writing the block.
 	 */
 	fs->fs_cs(fs, sc->sc_cgx) = cgp->cg_cs;
-	if (bwrite(disk, fsbtodb(fs, cgtod(fs, sc->sc_cgx)), sc->sc_cgbuf,
-	    fs->fs_bsize) == -1)
+	if (cgput(&disk, cgp) == -1)
 		err_suj("Unable to write cylinder group %d\n", sc->sc_cgx);
 }
 
@@ -2458,7 +2435,7 @@ jblocks_next(struct jblocks *jblocks, int bytes, int *actual)
 	int freecnt;
 	int blocks;
 
-	blocks = bytes / disk->d_bsize;
+	blocks = bytes / disk.d_bsize;
 	jext = &jblocks->jb_extent[jblocks->jb_head];
 	freecnt = jext->je_blocks - jblocks->jb_off;
 	if (freecnt == 0) {
@@ -2470,7 +2447,7 @@ jblocks_next(struct jblocks *jblocks, int bytes, int *actual)
 	}
 	if (freecnt > blocks)
 		freecnt = blocks;
-	*actual = freecnt * disk->d_bsize;
+	*actual = freecnt * disk.d_bsize;
 	daddr = jext->je_daddr + jblocks->jb_off;
 
 	return (daddr);
@@ -2484,7 +2461,7 @@ static void
 jblocks_advance(struct jblocks *jblocks, int bytes)
 {
 
-	jblocks->jb_off += bytes / disk->d_bsize;
+	jblocks->jb_off += bytes / disk.d_bsize;
 }
 
 static void
@@ -2575,7 +2552,7 @@ restart:
 		/*
 		 * Read 1MB at a time and scan for records within this block.
 		 */
-		if (bread(disk, blk, &block, size) == -1) {
+		if (bread(&disk, blk, &block, size) == -1) {
 			err_suj("Error reading journal block %jd\n",
 			    (intmax_t)blk);
 		}
@@ -2656,8 +2633,9 @@ suj_find(ino_t ino, ufs_lbn_t lbn, ufs2_daddr_t blk, int frags)
 	if (sujino)
 		return;
 	bytes = lfragtosize(fs, frags);
-	if (bread(disk, fsbtodb(fs, blk), block, bytes) <= 0)
-		err_suj("Failed to read ROOTINO directory block %jd\n", blk);
+	if (bread(&disk, fsbtodb(fs, blk), block, bytes) <= 0)
+		err_suj("Failed to read UFS_ROOTINO directory block %jd\n",
+		    blk);
 	for (off = 0; off < bytes; off += dp->d_reclen) {
 		dp = (struct direct *)&block[off];
 		if (dp->d_reclen == 0)
@@ -2687,7 +2665,12 @@ suj_check(const char *filesys)
 	struct suj_seg *segn;
 
 	initsuj();
-	opendisk(filesys);
+	fs = &sblock;
+	if (real_dev_bsize == 0 && ioctl(disk.d_fd, DIOCGSECTORSIZE,
+	    &real_dev_bsize) == -1)
+		real_dev_bsize = secsize;
+	if (debug)
+		printf("dev_bsize %u\n", real_dev_bsize);
 
 	/*
 	 * Set an exit point when SUJ check failed
@@ -2710,9 +2693,9 @@ suj_check(const char *filesys)
 	/*
 	 * Find the journal inode.
 	 */
-	ip = ino_read(ROOTINO);
+	ip = ino_read(UFS_ROOTINO);
 	sujino = 0;
-	ino_visit(ip, ROOTINO, suj_find, 0);
+	ino_visit(ip, UFS_ROOTINO, suj_find, 0);
 	if (sujino == 0) {
 		printf("Journal inode removed.  Use tunefs to re-create.\n");
 		sblock.fs_flags &= ~FS_SUJ;
@@ -2790,7 +2773,6 @@ initsuj(void)
 	lastblk = NULL;
 	TAILQ_INIT(&allsegs);
 	oldseq = 0;
-	disk = NULL;
 	fs = NULL;
 	sujino = 0;
 	freefrags = 0;

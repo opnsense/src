@@ -1,4 +1,5 @@
 /******************************************************************************
+  SPDX-License-Identifier: BSD-3-Clause
 
   Copyright (c) 2001-2015, Intel Corporation 
   All rights reserved.
@@ -695,9 +696,6 @@ static s32 e1000_init_nvm_params_ich8lan(struct e1000_hw *hw)
 		dev_spec->shadow_ram[i].modified = FALSE;
 		dev_spec->shadow_ram[i].value    = 0xFFFF;
 	}
-
-	E1000_MUTEX_INIT(&dev_spec->nvm_mutex);
-	E1000_MUTEX_INIT(&dev_spec->swflag_mutex);
 
 	/* Function Pointers */
 	nvm->ops.acquire	= e1000_acquire_nvm_ich8lan;
@@ -1499,24 +1497,24 @@ s32 e1000_disable_ulp_lpt_lp(struct e1000_hw *hw, bool force)
 	ret_val = e1000_read_phy_reg_hv_locked(hw, I218_ULP_CONFIG1, &phy_reg);
 	if (ret_val)
 		goto release;
-		phy_reg &= ~(I218_ULP_CONFIG1_IND |
-			     I218_ULP_CONFIG1_STICKY_ULP |
-			     I218_ULP_CONFIG1_RESET_TO_SMBUS |
-			     I218_ULP_CONFIG1_WOL_HOST |
-			     I218_ULP_CONFIG1_INBAND_EXIT |
-			     I218_ULP_CONFIG1_EN_ULP_LANPHYPC |
-			     I218_ULP_CONFIG1_DIS_CLR_STICKY_ON_PERST |
-			     I218_ULP_CONFIG1_DISABLE_SMB_PERST);
-		e1000_write_phy_reg_hv_locked(hw, I218_ULP_CONFIG1, phy_reg);
+	phy_reg &= ~(I218_ULP_CONFIG1_IND |
+		     I218_ULP_CONFIG1_STICKY_ULP |
+		     I218_ULP_CONFIG1_RESET_TO_SMBUS |
+		     I218_ULP_CONFIG1_WOL_HOST |
+		     I218_ULP_CONFIG1_INBAND_EXIT |
+		     I218_ULP_CONFIG1_EN_ULP_LANPHYPC |
+		     I218_ULP_CONFIG1_DIS_CLR_STICKY_ON_PERST |
+		     I218_ULP_CONFIG1_DISABLE_SMB_PERST);
+	e1000_write_phy_reg_hv_locked(hw, I218_ULP_CONFIG1, phy_reg);
 
-		/* Commit ULP changes by starting auto ULP configuration */
-		phy_reg |= I218_ULP_CONFIG1_START;
-		e1000_write_phy_reg_hv_locked(hw, I218_ULP_CONFIG1, phy_reg);
+	/* Commit ULP changes by starting auto ULP configuration */
+	phy_reg |= I218_ULP_CONFIG1_START;
+	e1000_write_phy_reg_hv_locked(hw, I218_ULP_CONFIG1, phy_reg);
 
-		/* Clear Disable SMBus Release on PERST# in MAC */
-		mac_reg = E1000_READ_REG(hw, E1000_FEXTNVM7);
-		mac_reg &= ~E1000_FEXTNVM7_DISABLE_SMB_PERST;
-		E1000_WRITE_REG(hw, E1000_FEXTNVM7, mac_reg);
+	/* Clear Disable SMBus Release on PERST# in MAC */
+	mac_reg = E1000_READ_REG(hw, E1000_FEXTNVM7);
+	mac_reg &= ~E1000_FEXTNVM7_DISABLE_SMB_PERST;
+	E1000_WRITE_REG(hw, E1000_FEXTNVM7, mac_reg);
 
 release:
 	hw->phy.ops.release(hw);
@@ -1559,13 +1557,13 @@ static s32 e1000_check_for_copper_link_ich8lan(struct e1000_hw *hw)
 	if (!mac->get_link_status)
 		return E1000_SUCCESS;
 
-		/* First we want to see if the MII Status Register reports
-		 * link.  If so, then we want to get the current speed/duplex
-		 * of the PHY.
-		 */
-		ret_val = e1000_phy_has_link_generic(hw, 1, 0, &link);
-		if (ret_val)
-			return ret_val;
+	/* First we want to see if the MII Status Register reports
+	 * link.  If so, then we want to get the current speed/duplex
+	 * of the PHY.
+	 */
+	ret_val = e1000_phy_has_link_generic(hw, 1, 0, &link);
+	if (ret_val)
+		return ret_val;
 
 	if (hw->mac.type == e1000_pchlan) {
 		ret_val = e1000_k1_gig_workaround_hv(hw, link);
@@ -1851,7 +1849,7 @@ static s32 e1000_acquire_nvm_ich8lan(struct e1000_hw *hw)
 {
 	DEBUGFUNC("e1000_acquire_nvm_ich8lan");
 
-	E1000_MUTEX_LOCK(&hw->dev_spec.ich8lan.nvm_mutex);
+	ASSERT_CTX_LOCK_HELD(hw);
 
 	return E1000_SUCCESS;
 }
@@ -1866,9 +1864,7 @@ static void e1000_release_nvm_ich8lan(struct e1000_hw *hw)
 {
 	DEBUGFUNC("e1000_release_nvm_ich8lan");
 
-	E1000_MUTEX_UNLOCK(&hw->dev_spec.ich8lan.nvm_mutex);
-
-	return;
+	ASSERT_CTX_LOCK_HELD(hw);
 }
 
 /**
@@ -1885,7 +1881,7 @@ static s32 e1000_acquire_swflag_ich8lan(struct e1000_hw *hw)
 
 	DEBUGFUNC("e1000_acquire_swflag_ich8lan");
 
-	E1000_MUTEX_LOCK(&hw->dev_spec.ich8lan.swflag_mutex);
+	ASSERT_CTX_LOCK_HELD(hw);
 
 	while (timeout) {
 		extcnf_ctrl = E1000_READ_REG(hw, E1000_EXTCNF_CTRL);
@@ -1926,9 +1922,6 @@ static s32 e1000_acquire_swflag_ich8lan(struct e1000_hw *hw)
 	}
 
 out:
-	if (ret_val)
-		E1000_MUTEX_UNLOCK(&hw->dev_spec.ich8lan.swflag_mutex);
-
 	return ret_val;
 }
 
@@ -1953,10 +1946,6 @@ static void e1000_release_swflag_ich8lan(struct e1000_hw *hw)
 	} else {
 		DEBUGOUT("Semaphore unexpectedly released by sw/fw/hw\n");
 	}
-
-	E1000_MUTEX_UNLOCK(&hw->dev_spec.ich8lan.swflag_mutex);
-
-	return;
 }
 
 /**
@@ -5031,8 +5020,6 @@ static s32 e1000_reset_hw_ich8lan(struct e1000_hw *hw)
 		E1000_WRITE_REG(hw, E1000_FEXTNVM3, reg);
 	}
 
-	if (!ret_val)
-		E1000_MUTEX_UNLOCK(&hw->dev_spec.ich8lan.swflag_mutex);
 
 	if (ctrl & E1000_CTRL_PHY_RST) {
 		ret_val = hw->phy.ops.get_cfg_done(hw);

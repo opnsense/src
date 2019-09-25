@@ -8,7 +8,7 @@
  *
  * 1. Copyright Notice
  *
- * Some or all of this work - Copyright (c) 1999 - 2017, Intel Corp.
+ * Some or all of this work - Copyright (c) 1999 - 2018, Intel Corp.
  * All rights reserved.
  *
  * 2. License
@@ -182,13 +182,13 @@ DtCompileRsdp (
     /* Compile the "common" RSDP (ACPI 1.0) */
 
     Status = DtCompileTable (PFieldList, AcpiDmTableInfoRsdp1,
-        &Gbl_RootTable, TRUE);
+        &AslGbl_RootTable);
     if (ACPI_FAILURE (Status))
     {
         return (Status);
     }
 
-    Rsdp = ACPI_CAST_PTR (ACPI_TABLE_RSDP, Gbl_RootTable->Buffer);
+    Rsdp = ACPI_CAST_PTR (ACPI_TABLE_RSDP, AslGbl_RootTable->Buffer);
     DtSetTableChecksum (&Rsdp->Checksum);
 
     if (Rsdp->Revision > 0)
@@ -196,18 +196,18 @@ DtCompileRsdp (
         /* Compile the "extended" part of the RSDP as a subtable */
 
         Status = DtCompileTable (PFieldList, AcpiDmTableInfoRsdp2,
-            &Subtable, TRUE);
+            &Subtable);
         if (ACPI_FAILURE (Status))
         {
             return (Status);
         }
 
-        DtInsertSubtable (Gbl_RootTable, Subtable);
+        DtInsertSubtable (AslGbl_RootTable, Subtable);
 
         /* Set length and extended checksum for entire RSDP */
 
         RsdpExtension = ACPI_CAST_PTR (ACPI_RSDP_EXTENSION, Subtable->Buffer);
-        RsdpExtension->Length = Gbl_RootTable->Length + Subtable->Length;
+        RsdpExtension->Length = AslGbl_RootTable->Length + Subtable->Length;
         DtSetTableChecksum (&RsdpExtension->ExtendedChecksum);
     }
 
@@ -240,7 +240,7 @@ DtCompileFadt (
 
 
     Status = DtCompileTable (PFieldList, AcpiDmTableInfoFadt1,
-        &Subtable, TRUE);
+        &Subtable);
     if (ACPI_FAILURE (Status))
     {
         return (Status);
@@ -255,7 +255,7 @@ DtCompileFadt (
     if (Revision == 2)
     {
         Status = DtCompileTable (PFieldList, AcpiDmTableInfoFadt2,
-            &Subtable, TRUE);
+            &Subtable);
         if (ACPI_FAILURE (Status))
         {
             return (Status);
@@ -266,7 +266,7 @@ DtCompileFadt (
     else if (Revision >= 2)
     {
         Status = DtCompileTable (PFieldList, AcpiDmTableInfoFadt3,
-            &Subtable, TRUE);
+            &Subtable);
         if (ACPI_FAILURE (Status))
         {
             return (Status);
@@ -277,7 +277,7 @@ DtCompileFadt (
         if (Revision >= 5)
         {
             Status = DtCompileTable (PFieldList, AcpiDmTableInfoFadt5,
-                &Subtable, TRUE);
+                &Subtable);
             if (ACPI_FAILURE (Status))
             {
                 return (Status);
@@ -289,7 +289,7 @@ DtCompileFadt (
         if (Revision >= 6)
         {
             Status = DtCompileTable (PFieldList, AcpiDmTableInfoFadt6,
-                &Subtable, TRUE);
+                &Subtable);
             if (ACPI_FAILURE (Status))
             {
                 return (Status);
@@ -326,7 +326,7 @@ DtCompileFacs (
 
 
     Status = DtCompileTable (PFieldList, AcpiDmTableInfoFacs,
-        &Gbl_RootTable, TRUE);
+        &AslGbl_RootTable);
     if (ACPI_FAILURE (Status))
     {
         return (Status);
@@ -340,6 +340,6 @@ DtCompileFacs (
     DtCreateSubtable (ReservedBuffer, ReservedSize, &Subtable);
 
     ACPI_FREE (ReservedBuffer);
-    DtInsertSubtable (Gbl_RootTable, Subtable);
+    DtInsertSubtable (AslGbl_RootTable, Subtable);
     return (AE_OK);
 }

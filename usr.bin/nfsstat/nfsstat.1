@@ -9,7 +9,7 @@
 .\" 2. Redistributions in binary form must reproduce the above copyright
 .\"    notice, this list of conditions and the following disclaimer in the
 .\"    documentation and/or other materials provided with the distribution.
-.\" 4. Neither the name of the University nor the names of its contributors
+.\" 3. Neither the name of the University nor the names of its contributors
 .\"    may be used to endorse or promote products derived from this software
 .\"    without specific prior written permission.
 .\"
@@ -28,7 +28,7 @@
 .\"     From: @(#)nfsstat.1	8.1 (Berkeley) 6/6/93
 .\" $FreeBSD$
 .\"
-.Dd November 23, 2016
+.Dd October 1, 2018
 .Dt NFSSTAT 1
 .Os
 .Sh NAME
@@ -38,6 +38,7 @@
 statistics
 .Sh SYNOPSIS
 .Nm
+.Op Fl -libxo
 .Op Fl cdEemszW
 .Op Fl M Ar core
 .Op Fl N Ar system
@@ -58,7 +59,7 @@ The options are as follows:
 .It Fl c
 Only display client side statistics.
 .It Fl d
-Display statistics for the new NFS server that are similar to those
+Display statistics for the NFS server that are similar to those
 displayed by
 .Xr iostat 8 .
 This includes kilobytes per transfer, transfers per second, and megabytes per
@@ -97,11 +98,10 @@ Extract values associated with the name list from the specified core
 instead of the default
 .Pa /dev/kmem .
 .It Fl m
-Report the mount options for all new NFS client mounts.
+Report the mount options for all NFS client mounts.
 This option overrides all others and
 .Nm
 will exit after completing the report.
-This option is only supported by the new NFS client.
 .It Fl N
 Extract the name list from the specified system instead of the default
 .Pa /boot/kernel/kernel .
@@ -124,6 +124,15 @@ activity for both the client and server at
 second intervals.
 .It Fl z
 Reset statistics after displaying them.
+.It Fl q
+Do not print header
+.It Fl -libxo
+Generate output via
+.Xr libxo 3
+in a selection of different human and machine readable formats.
+See
+.Xr xo_parse_args 3
+for details on command line arguments.
 .El
 .Sh FILES
 .Bl -tag -width ".Pa /boot/kernel/kernel" -compact

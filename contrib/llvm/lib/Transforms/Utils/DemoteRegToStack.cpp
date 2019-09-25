@@ -9,11 +9,11 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/Analysis/CFG.h"
+#include "llvm/Transforms/Utils/Local.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Type.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
-#include "llvm/Transforms/Utils/Local.h"
 using namespace llvm;
 
 /// DemoteRegToStack - This function takes a virtual register computed by an
@@ -90,7 +90,7 @@ AllocaInst *llvm::DemoteRegToStack(Instruction &I, bool VolatileLoads,
   // careful if I is an invoke instruction, because we can't insert the store
   // AFTER the terminator instruction.
   BasicBlock::iterator InsertPt;
-  if (!isa<TerminatorInst>(I)) {
+  if (!I.isTerminator()) {
     InsertPt = ++I.getIterator();
     for (; isa<PHINode>(InsertPt) || InsertPt->isEHPad(); ++InsertPt)
       /* empty */;   // Don't insert before PHI nodes or landingpad instrs.

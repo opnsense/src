@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2008-2009, Stacey Son <sson@freebsd.org>
  * All rights reserved.
  *
@@ -71,7 +73,7 @@ static d_mmap_single_t ksyms_mmap_single;
 
 static struct cdevsw ksyms_cdevsw = {
 	.d_version =	D_VERSION,
-	.d_flags =	D_TRACKCLOSE,
+	.d_flags =	0,
 	.d_open =	ksyms_open,
 	.d_read =	ksyms_read,
 	.d_mmap_single = ksyms_mmap_single,

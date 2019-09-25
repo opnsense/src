@@ -7,6 +7,7 @@ SHLIB_MAJOR?=	0
 LIBADD+=	pthread
 
 SRCS=	sqlite3.c
+INCS=	sqlite3.h sqlite3ext.h
 
 SQLITE=	${SRCTOP}/contrib/sqlite3
 .PATH:	${SQLITE}
@@ -32,9 +33,6 @@ CFLAGS+=	-I${SQLITE} \
 		-DHAVE_STRERROR_R=1 \
 		-DHAVE_POSIX_FALLOCATE=1 \
 		-D_REENTRANT=1 \
-		-DSQLITE_THREADSAFE=1 \
-		-DSQLITE_ENABLE_FTS3 \
-		-DSQLITE_ENABLE_FTS4 \
-		-DSQLITE_ENABLE_RTREE
+		-DSQLITE_THREADSAFE=1
 
 .include <bsd.lib.mk>

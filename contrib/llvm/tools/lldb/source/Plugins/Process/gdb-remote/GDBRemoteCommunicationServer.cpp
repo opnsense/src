@@ -13,14 +13,11 @@
 
 #include "GDBRemoteCommunicationServer.h"
 
-// C Includes
-// C++ Includes
 #include <cstring>
 
-// Project includes
 #include "ProcessGDBRemoteLog.h"
-#include "Utility/StringExtractorGDBRemote.h"
 #include "lldb/Utility/StreamString.h"
+#include "lldb/Utility/StringExtractorGDBRemote.h"
 
 using namespace lldb;
 using namespace lldb_private;

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2009 Oleksandr Tymoshenko <gonzo@freebsd.org>
  * All rights reserved.
  *
@@ -38,7 +40,10 @@
 
 #ifdef FDT
 #include <dev/ofw/ofw_bus_subr.h>
-#include <gnu/dts/include/dt-bindings/gpio/gpio.h>
+#endif
+
+#ifdef	INTRNG
+#include <sys/intr.h>
 #endif
 
 #include "gpio_if.h"
@@ -102,9 +107,21 @@ struct gpiobus_ivar
 {
 	struct resource_list	rl;	/* isr resource list */
 	uint32_t	npins;	/* pins total */
-	uint32_t	*flags;	/* pins flags */
 	uint32_t	*pins;	/* pins map */
 };
+
+enum gpiobus_ivars {
+	GPIOBUS_IVAR_NPINS	= 10500,
+	GPIOBUS_IVAR_PINS,
+};
+
+#define GPIOBUS_ACCESSOR(var, ivar, type)                                 \
+        __BUS_ACCESSOR(gpiobus, var, GPIOBUS, ivar, type)
+
+GPIOBUS_ACCESSOR(npins,		NPINS,		uint32_t)
+GPIOBUS_ACCESSOR(pins,		PINS,		const uint32_t *)
+
+#undef GPIOBUS_ACCESSOR
 
 #ifdef FDT
 struct ofw_gpiobus_devinfo {

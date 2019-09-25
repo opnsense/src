@@ -21,11 +21,11 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
-#include "llvm/CodeGen/MachineValueType.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/MC/LaneBitmask.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MachineValueType.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Printable.h"
 #include <cassert>
@@ -238,12 +238,12 @@ private:
 
 protected:
   TargetRegisterInfo(const TargetRegisterInfoDesc *ID,
-                     regclass_iterator RegClassBegin,
-                     regclass_iterator RegClassEnd,
+                     regclass_iterator RCB,
+                     regclass_iterator RCE,
                      const char *const *SRINames,
                      const LaneBitmask *SRILaneMasks,
                      LaneBitmask CoveringLanes,
-                     const RegClassInfo *const RSI,
+                     const RegClassInfo *const RCIs,
                      unsigned Mode = 0);
   virtual ~TargetRegisterInfo();
 
@@ -444,12 +444,19 @@ public:
     return false;
   }
 
+  /// Returns the original SrcReg unless it is the target of a copy-like
+  /// operation, in which case we chain backwards through all such operations
+  /// to the ultimate source register.  If a physical register is encountered,
+  /// we stop the search.
+  virtual unsigned lookThruCopyLike(unsigned SrcReg,
+                                    const MachineRegisterInfo *MRI) const;
+
   /// Return a null-terminated list of all of the callee-saved registers on
   /// this target. The register should be in the order of desired callee-save
   /// stack frame offset. The first register is closest to the incoming stack
   /// pointer if stack grows down, and vice versa.
   /// Notice: This function does not take into account disabled CSRs.
-  ///         In most cases you will want to use instead the function 
+  ///         In most cases you will want to use instead the function
   ///         getCalleeSavedRegs that is implemented in MachineRegisterInfo.
   virtual const MCPhysReg*
   getCalleeSavedRegs(const MachineFunction *MF) const = 0;
@@ -503,6 +510,13 @@ public:
   /// markSuperRegs() and checkAllSuperRegsMarked() in this case.
   virtual BitVector getReservedRegs(const MachineFunction &MF) const = 0;
 
+  /// Returns false if we can't guarantee that Physreg, specified as an IR asm
+  /// clobber constraint, will be preserved across the statement.
+  virtual bool isAsmClobberable(const MachineFunction &MF,
+                               unsigned PhysReg) const {
+    return true;
+  }
+
   /// Returns true if PhysReg is unallocatable and constant throughout the
   /// function.  Used by MachineRegisterInfo::isConstantPhysReg().
   virtual bool isConstantPhysReg(unsigned PhysReg) const { return false; }
@@ -511,7 +525,7 @@ public:
   /// guaranteed to be restored before any uses. This is useful for targets that
   /// have call sequences where a GOT register may be updated by the caller
   /// prior to a call and is guaranteed to be restored (also by the caller)
-  /// after the call. 
+  /// after the call.
   virtual bool isCallerPreservedPhysReg(unsigned PhysReg,
                                         const MachineFunction &MF) const {
     return false;
@@ -752,6 +766,9 @@ public:
   virtual const RegClassWeight &getRegClassWeight(
     const TargetRegisterClass *RC) const = 0;
 
+  /// Returns size in bits of a phys/virtual/generic register.
+  unsigned getRegSizeInBits(unsigned Reg, const MachineRegisterInfo &MRI) const;
+
   /// Get the weight in units of pressure for this register unit.
   virtual unsigned getRegUnitWeight(unsigned RegUnit) const = 0;
 
@@ -806,13 +823,6 @@ public:
                                   MachineFunction &MF) const {
     // Do nothing.
   }
-
-  /// The creation of multiple copy hints have been implemented in
-  /// weightCalcHelper(), but since this affects so many tests for many
-  /// targets, this is temporarily disabled per default. THIS SHOULD BE
-  /// "GENERAL GOODNESS" and hopefully all targets will update their tests
-  /// and enable this soon. This hook should then be removed.
-  virtual bool enableMultipleCopyHints() const { return false; }
 
   /// Allow the target to reverse allocation order of local live ranges. This
   /// will generally allocate shorter local live ranges first. For targets with
@@ -961,7 +971,7 @@ public:
   //===--------------------------------------------------------------------===//
   /// Subtarget Hooks
 
-  /// \brief SrcRC and DstRC will be morphed into NewRC if this returns true.
+  /// SrcRC and DstRC will be morphed into NewRC if this returns true.
   virtual bool shouldCoalesce(MachineInstr *MI,
                               const TargetRegisterClass *SrcRC,
                               unsigned SubReg,
@@ -985,6 +995,12 @@ public:
   /// of the set as well.
   bool checkAllSuperRegsMarked(const BitVector &RegisterSet,
       ArrayRef<MCPhysReg> Exceptions = ArrayRef<MCPhysReg>()) const;
+
+  virtual const TargetRegisterClass *
+  getConstrainedRegClassForOperand(const MachineOperand &MO,
+                                   const MachineRegisterInfo &MRI) const {
+    return nullptr;
+  }
 };
 
 //===----------------------------------------------------------------------===//
@@ -1151,7 +1167,8 @@ struct VirtReg2IndexFunctor {
 ///
 /// Usage: OS << printReg(Reg, TRI, SubRegIdx) << '\n';
 Printable printReg(unsigned Reg, const TargetRegisterInfo *TRI = nullptr,
-                   unsigned SubRegIdx = 0);
+                   unsigned SubIdx = 0,
+                   const MachineRegisterInfo *MRI = nullptr);
 
 /// Create Printable object to print register units on a \ref raw_ostream.
 ///
@@ -1163,11 +1180,11 @@ Printable printReg(unsigned Reg, const TargetRegisterInfo *TRI = nullptr,
 /// Usage: OS << printRegUnit(Unit, TRI) << '\n';
 Printable printRegUnit(unsigned Unit, const TargetRegisterInfo *TRI);
 
-/// \brief Create Printable object to print virtual registers and physical
+/// Create Printable object to print virtual registers and physical
 /// registers on a \ref raw_ostream.
 Printable printVRegOrUnit(unsigned VRegOrUnit, const TargetRegisterInfo *TRI);
 
-/// \brief Create Printable object to print register classes or register banks
+/// Create Printable object to print register classes or register banks
 /// on a \ref raw_ostream.
 Printable printRegClassOrBank(unsigned Reg, const MachineRegisterInfo &RegInfo,
                               const TargetRegisterInfo *TRI);

@@ -4,9 +4,11 @@
 DIRDEPS = \
 	include \
 	include/xlocale \
-	sys/boot/i386/btx/btx \
-	sys/boot/i386/btx/lib \
-	sys/boot/libstand32 \
+	lib/libmd \
+	stand/i386/btx/btx \
+	stand/i386/btx/lib \
+	stand/libsa32 \
+	stand/zfs32 \
 
 
 .include <dirdeps.mk>

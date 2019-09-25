@@ -262,9 +262,9 @@ sfs_readdir_common(uint64_t parent_id, uint64_t id, struct vop_readdir_args *ap,
 		entry.d_fileno = id;
 		entry.d_type = DT_DIR;
 		entry.d_name[0] = '.';
-		entry.d_name[1] = '\0';
 		entry.d_namlen = 1;
 		entry.d_reclen = sizeof(entry);
+		dirent_terminate(&entry);
 		error = vfs_read_dirent(ap, &entry, uio->uio_offset);
 		if (error != 0)
 			return (SET_ERROR(error));
@@ -277,9 +277,9 @@ sfs_readdir_common(uint64_t parent_id, uint64_t id, struct vop_readdir_args *ap,
 		entry.d_type = DT_DIR;
 		entry.d_name[0] = '.';
 		entry.d_name[1] = '.';
-		entry.d_name[2] = '\0';
 		entry.d_namlen = 2;
 		entry.d_reclen = sizeof(entry);
+		dirent_terminate(&entry);
 		error = vfs_read_dirent(ap, &entry, uio->uio_offset);
 		if (error != 0)
 			return (SET_ERROR(error));
@@ -499,7 +499,7 @@ zfsctl_common_getattr(vnode_t *vp, vattr_t *vap)
 	vap->va_blksize = 0;
 	vap->va_nblocks = 0;
 	vap->va_seq = 0;
-	vap->va_fsid = vp->v_mount->mnt_stat.f_fsid.val[0];
+	vn_fsid(vp, vap);
 	vap->va_mode = zfsctl_ctldir_mode;
 	vap->va_type = VDIR;
 	/*
@@ -694,6 +694,7 @@ zfsctl_root_readdir(ap)
 	strcpy(entry.d_name, node->snapdir->sn_name);
 	entry.d_namlen = strlen(entry.d_name);
 	entry.d_reclen = sizeof(entry);
+	dirent_terminate(&entry);
 	error = vfs_read_dirent(ap, &entry, uio->uio_offset);
 	if (error != 0) {
 		if (error == ENAMETOOLONG)
@@ -743,7 +744,7 @@ zfsctl_common_pathconf(ap)
 	 */
 	switch (ap->a_name) {
 	case _PC_LINK_MAX:
-		*ap->a_retval = INT_MAX;
+		*ap->a_retval = MIN(LONG_MAX, ZFS_LINK_MAX);
 		return (0);
 
 	case _PC_FILESIZEBITS:
@@ -752,10 +753,6 @@ zfsctl_common_pathconf(ap)
 
 	case _PC_MIN_HOLE_SIZE:
 		*ap->a_retval = (int)SPA_MINBLOCKSIZE;
-		return (0);
-
-	case _PC_ACL_EXTENDED:
-		*ap->a_retval = 0;
 		return (0);
 
 	case _PC_ACL_NFS4:
@@ -1097,6 +1094,9 @@ zfsctl_snapdir_readdir(ap)
 		strcpy(entry.d_name, snapname);
 		entry.d_namlen = strlen(entry.d_name);
 		entry.d_reclen = sizeof(entry);
+		/* NOTE: d_off is the offset for the *next* entry. */
+		entry.d_off = cookie + dots_offset;
+		dirent_terminate(&entry);
 		error = vfs_read_dirent(ap, &entry, uio->uio_offset);
 		if (error != 0) {
 			if (error == ENAMETOOLONG)

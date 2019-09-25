@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2010-2016 Solarflare Communications Inc.
  * All rights reserved.
  *
@@ -149,8 +151,8 @@ sfxge_estimate_rsrc_limits(struct sfxge_softc *sc)
 
 	limits.edl_min_evq_count = 1;
 	limits.edl_max_evq_count = evq_max;
-	limits.edl_min_txq_count = SFXGE_TXQ_NTYPES;
-	limits.edl_max_txq_count = evq_max + SFXGE_TXQ_NTYPES - 1;
+	limits.edl_min_txq_count = SFXGE_EVQ0_N_TXQ(sc);
+	limits.edl_max_txq_count = evq_max + SFXGE_EVQ0_N_TXQ(sc) - 1;
 	limits.edl_min_rxq_count = 1;
 	limits.edl_max_rxq_count = evq_max;
 
@@ -166,12 +168,12 @@ sfxge_estimate_rsrc_limits(struct sfxge_softc *sc)
 		return (rc);
 	}
 
-	KASSERT(txq_allocated >= SFXGE_TXQ_NTYPES,
-		("txq_allocated < SFXGE_TXQ_NTYPES"));
+	KASSERT(txq_allocated >= SFXGE_EVQ0_N_TXQ(sc),
+		("txq_allocated < %u", SFXGE_EVQ0_N_TXQ(sc)));
 
 	sc->evq_max = MIN(evq_allocated, evq_max);
 	sc->evq_max = MIN(rxq_allocated, sc->evq_max);
-	sc->evq_max = MIN(txq_allocated - (SFXGE_TXQ_NTYPES - 1),
+	sc->evq_max = MIN(txq_allocated - (SFXGE_EVQ0_N_TXQ(sc) - 1),
 			  sc->evq_max);
 
 	KASSERT(sc->evq_max <= evq_max,
@@ -203,7 +205,7 @@ sfxge_set_drv_limits(struct sfxge_softc *sc)
 	limits.edl_min_evq_count = limits.edl_max_evq_count =
 	    sc->intr.n_alloc;
 	limits.edl_min_txq_count = limits.edl_max_txq_count =
-	    sc->intr.n_alloc + SFXGE_TXQ_NTYPES - 1;
+	    sc->intr.n_alloc + SFXGE_EVQ0_N_TXQ(sc) - 1;
 	limits.edl_min_rxq_count = limits.edl_max_rxq_count =
 	    sc->intr.n_alloc;
 
@@ -760,12 +762,17 @@ sfxge_create(struct sfxge_softc *sc)
 	}
 	sc->rxq_entries = sfxge_rx_ring_entries;
 
+	if (efx_nic_cfg_get(enp)->enc_features & EFX_FEATURE_TXQ_CKSUM_OP_DESC)
+		sc->txq_dynamic_cksum_toggle_supported = B_TRUE;
+	else
+		sc->txq_dynamic_cksum_toggle_supported = B_FALSE;
+
 	if (!ISP2(sfxge_tx_ring_entries) ||
 	    (sfxge_tx_ring_entries < EFX_TXQ_MINNDESCS) ||
-	    (sfxge_tx_ring_entries > EFX_TXQ_MAXNDESCS(efx_nic_cfg_get(enp)))) {
+	    (sfxge_tx_ring_entries > efx_nic_cfg_get(enp)->enc_txq_max_ndescs)) {
 		log(LOG_ERR, "%s=%d must be power of 2 from %u to %u",
 		    SFXGE_PARAM_TX_RING, sfxge_tx_ring_entries,
-		    EFX_TXQ_MINNDESCS, EFX_TXQ_MAXNDESCS(efx_nic_cfg_get(enp)));
+		    EFX_TXQ_MINNDESCS, efx_nic_cfg_get(enp)->enc_txq_max_ndescs);
 		error = EINVAL;
 		goto fail_tx_ring_entries;
 	}

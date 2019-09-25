@@ -11,14 +11,14 @@
 #include <errno.h>
 #include <stdint.h>
 
-#include "lldb/Core/RegisterValue.h"
-#include "lldb/Core/Scalar.h"
 #include "lldb/Target/Process.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Target/Thread.h"
 #include "lldb/Utility/DataBufferHeap.h"
 #include "lldb/Utility/DataExtractor.h"
 #include "lldb/Utility/Endian.h"
+#include "lldb/Utility/RegisterValue.h"
+#include "lldb/Utility/Scalar.h"
 #include "llvm/Support/Compiler.h"
 
 #include "RegisterContextPOSIX_x86.h"
@@ -376,7 +376,7 @@ RegisterContextPOSIX_x86::FPRType RegisterContextPOSIX_x86::GetFPRType() {
   if (m_fpr_type == eNotValid) {
     // TODO: Use assembly to call cpuid on the inferior and query ebx or ecx
     m_fpr_type = eXSAVE; // extended floating-point registers, if available
-    if (false == ReadFPR())
+    if (!ReadFPR())
       m_fpr_type = eFXSAVE; // assume generic floating-point registers
   }
   return m_fpr_type;
@@ -414,8 +414,8 @@ size_t RegisterContextPOSIX_x86::GetFXSAVEOffset() {
 
 const RegisterInfo *RegisterContextPOSIX_x86::GetRegisterInfo() {
   // Commonly, this method is overridden and g_register_infos is copied and
-  // specialized.
-  // So, use GetRegisterInfo() rather than g_register_infos in this scope.
+  // specialized. So, use GetRegisterInfo() rather than g_register_infos in
+  // this scope.
   return m_register_info_ap->GetRegisterInfo();
 }
 
@@ -531,8 +531,8 @@ bool RegisterContextPOSIX_x86::IsRegisterSetAvailable(size_t set_index) {
   return (set_index < num_sets);
 }
 
-// Used when parsing DWARF and EH frame information and any other
-// object file sections that contain register numbers in them.
+// Used when parsing DWARF and EH frame information and any other object file
+// sections that contain register numbers in them.
 uint32_t RegisterContextPOSIX_x86::ConvertRegisterKindToRegisterNumber(
     lldb::RegisterKind kind, uint32_t num) {
   const uint32_t num_regs = GetRegisterCount();

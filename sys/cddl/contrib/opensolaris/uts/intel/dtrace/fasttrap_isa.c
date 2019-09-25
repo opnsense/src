@@ -28,38 +28,23 @@
  * Use is subject to license terms.
  */
 
-#ifdef illumos
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-#endif
-
 #include <sys/fasttrap_isa.h>
 #include <sys/fasttrap_impl.h>
 #include <sys/dtrace.h>
 #include <sys/dtrace_impl.h>
 #include <sys/cmn_err.h>
-#ifdef illumos
-#include <sys/regset.h>
-#include <sys/privregs.h>
-#include <sys/segments.h>
-#include <sys/x86_archext.h>
-#else
-#include <cddl/dev/dtrace/dtrace_cddl.h>
 #include <sys/types.h>
+#include <sys/dtrace_bsd.h>
 #include <sys/proc.h>
 #include <sys/rmlock.h>
-#include <sys/dtrace_bsd.h>
+#include <cddl/dev/dtrace/dtrace_cddl.h>
 #include <cddl/dev/dtrace/x86/regset.h>
 #include <machine/segments.h>
 #include <machine/reg.h>
 #include <machine/pcb.h>
-#endif
+#include <machine/trap.h>
 #include <sys/sysmacros.h>
-#ifdef illumos
-#include <sys/trap.h>
-#include <sys/archsystm.h>
-#else
 #include <sys/ptrace.h>
-#endif /* illumos */
 
 #ifdef __i386__
 #define	r_rax	r_eax
@@ -257,12 +242,10 @@ fasttrap_anarg(struct reg *rp, int function_entry, int argno)
 		DTRACE_CPUFLAG_CLEAR(CPU_DTRACE_NOFAULT | CPU_DTRACE_BADADDR);
 	} else {
 #endif
-#ifdef __i386
-		uint32_t *stack = (uint32_t *)rp->r_esp;
+		uint32_t *stack = (uint32_t *)rp->r_rsp;
 		DTRACE_CPUFLAG_SET(CPU_DTRACE_NOFAULT);
 		value = dtrace_fuword32(&stack[argno + shift]);
 		DTRACE_CPUFLAG_CLEAR(CPU_DTRACE_NOFAULT | CPU_DTRACE_BADADDR);
-#endif
 #ifdef __amd64
 	}
 #endif
@@ -690,7 +673,6 @@ fasttrap_fulword_noerr(const void *uaddr)
 }
 #endif
 
-#ifdef __i386__
 static uint32_t
 fasttrap_fuword32_noerr(const void *uaddr)
 {
@@ -701,7 +683,6 @@ fasttrap_fuword32_noerr(const void *uaddr)
 
 	return (0);
 }
-#endif
 
 static void
 fasttrap_return_common(struct reg *rp, uintptr_t pc, pid_t pid,
@@ -710,16 +691,9 @@ fasttrap_return_common(struct reg *rp, uintptr_t pc, pid_t pid,
 	fasttrap_tracepoint_t *tp;
 	fasttrap_bucket_t *bucket;
 	fasttrap_id_t *id;
-#ifdef illumos
-	kmutex_t *pid_mtx;
-
-	pid_mtx = &cpu_core[CPU->cpu_id].cpuc_pid_lock;
-	mutex_enter(pid_mtx);
-#else
 	struct rm_priotracker tracker;
 
 	rm_rlock(&fasttrap_tp_lock, &tracker);
-#endif
 	bucket = &fasttrap_tpoints.fth_table[FASTTRAP_TPOINTS_INDEX(pid, pc)];
 
 	for (tp = bucket->ftb_data; tp != NULL; tp = tp->ftt_next) {
@@ -734,11 +708,7 @@ fasttrap_return_common(struct reg *rp, uintptr_t pc, pid_t pid,
 	 * is not essential to the correct execution of the process.
 	 */
 	if (tp == NULL) {
-#ifdef illumos
-		mutex_exit(pid_mtx);
-#else
 		rm_runlock(&fasttrap_tp_lock, &tracker);
-#endif
 		return;
 	}
 
@@ -759,38 +729,21 @@ fasttrap_return_common(struct reg *rp, uintptr_t pc, pid_t pid,
 		    rp->r_rax, rp->r_rbx, 0, 0);
 	}
 
-#ifdef illumos
-	mutex_exit(pid_mtx);
-#else
 	rm_runlock(&fasttrap_tp_lock, &tracker);
-#endif
 }
 
 static void
 fasttrap_sigsegv(proc_t *p, kthread_t *t, uintptr_t addr)
 {
-#ifdef illumos
-	sigqueue_t *sqp = kmem_zalloc(sizeof (sigqueue_t), KM_SLEEP);
+	ksiginfo_t ksi;
 
-	sqp->sq_info.si_signo = SIGSEGV;
-	sqp->sq_info.si_code = SEGV_MAPERR;
-	sqp->sq_info.si_addr = (caddr_t)addr;
-
-	mutex_enter(&p->p_lock);
-	sigaddqa(p, t, sqp);
-	mutex_exit(&p->p_lock);
-
-	if (t != NULL)
-		aston(t);
-#else
-	ksiginfo_t *ksi = kmem_zalloc(sizeof (ksiginfo_t), KM_SLEEP);
-
-	ksiginfo_init(ksi);
-	ksi->ksi_signo = SIGSEGV;
-	ksi->ksi_code = SEGV_MAPERR;
-	ksi->ksi_addr = (caddr_t)addr;
-	(void) tdksignal(t, SIGSEGV, ksi);
-#endif
+	ksiginfo_init(&ksi);
+	ksi.ksi_signo = SIGSEGV;
+	ksi.ksi_code = SEGV_MAPERR;
+	ksi.ksi_addr = (caddr_t)addr;
+	PROC_LOCK(p);
+	(void)tdksignal(t, SIGSEGV, &ksi);
+	PROC_UNLOCK(p);
 }
 
 #ifdef __amd64
@@ -816,7 +769,6 @@ fasttrap_usdt_args64(fasttrap_probe_t *probe, struct reg *rp, int argc,
 }
 #endif
 
-#ifdef __i386__
 static void
 fasttrap_usdt_args32(fasttrap_probe_t *probe, struct reg *rp, int argc,
     uint32_t *argv)
@@ -834,7 +786,6 @@ fasttrap_usdt_args32(fasttrap_probe_t *probe, struct reg *rp, int argc,
 		argv[i] = 0;
 	}
 }
-#endif
 
 static int
 fasttrap_do_seg(fasttrap_tracepoint_t *tp, struct reg *rp, uintptr_t *addr)
@@ -972,12 +923,10 @@ fasttrap_pid_probe(struct trapframe *tf)
 	struct reg reg, *rp;
 	proc_t *p = curproc, *pp;
 	struct rm_priotracker tracker;
+	uint64_t gen;
 	uintptr_t pc;
 	uintptr_t new_pc = 0;
 	fasttrap_bucket_t *bucket;
-#ifdef illumos
-	kmutex_t *pid_mtx;
-#endif
 	fasttrap_tracepoint_t *tp, tp_local;
 	pid_t pid;
 	dtrace_icookie_t cookie;
@@ -1017,25 +966,29 @@ fasttrap_pid_probe(struct trapframe *tf)
 	 * parent. We know that there's only one thread of control in such a
 	 * process: this one.
 	 */
-#ifdef illumos
-	while (p->p_flag & SVFORK) {
-		p = p->p_parent;
-	}
-
-	pid = p->p_pid;
-	pid_mtx = &cpu_core[CPU->cpu_id].cpuc_pid_lock;
-	mutex_enter(pid_mtx);
-#else
 	pp = p;
 	sx_slock(&proctree_lock);
 	while (pp->p_vmspace == pp->p_pptr->p_vmspace)
 		pp = pp->p_pptr;
 	pid = pp->p_pid;
+	if (pp != p) {
+		PROC_LOCK(pp);
+		if ((pp->p_flag & P_WEXIT) != 0) {
+			/*
+			 * This can happen if the child was created with
+			 * rfork(2).  Userspace tracing cannot work reliably in
+			 * such a scenario, but we can at least try.
+			 */
+			PROC_UNLOCK(pp);
+			sx_sunlock(&proctree_lock);
+			return (-1);
+		}
+		_PHOLD_LITE(pp);
+		PROC_UNLOCK(pp);
+	}
 	sx_sunlock(&proctree_lock);
-	pp = NULL;
 
 	rm_rlock(&fasttrap_tp_lock, &tracker);
-#endif
 
 	bucket = &fasttrap_tpoints.fth_table[FASTTRAP_TPOINTS_INDEX(pid, pc)];
 
@@ -1054,13 +1007,29 @@ fasttrap_pid_probe(struct trapframe *tf)
 	 * fasttrap_ioctl), or somehow we have mislaid this tracepoint.
 	 */
 	if (tp == NULL) {
-#ifdef illumos
-		mutex_exit(pid_mtx);
-#else
 		rm_runlock(&fasttrap_tp_lock, &tracker);
+		gen = atomic_load_acq_64(&pp->p_fasttrap_tp_gen);
+		if (pp != p)
+			PRELE(pp);
+		if (curthread->t_fasttrap_tp_gen != gen) {
+			/*
+			 * At least one tracepoint associated with this PID has
+			 * been removed from the table since #BP was raised.
+			 * Speculate that we hit a tracepoint that has since
+			 * been removed, and retry the instruction.
+			 */
+			curthread->t_fasttrap_tp_gen = gen;
+#ifdef __amd64
+			tf->tf_rip = pc;
+#else
+			tf->tf_eip = pc;
 #endif
+			return (0);
+		}
 		return (-1);
 	}
+	if (pp != p)
+		PRELE(pp);
 
 	/*
 	 * Set the program counter to the address of the traced instruction
@@ -1113,9 +1082,9 @@ fasttrap_pid_probe(struct trapframe *tf)
 				}
 			}
 		} else {
-#else /* __amd64 */
+#endif
 			uintptr_t s0, s1, s2, s3, s4, s5;
-			uint32_t *stack = (uint32_t *)rp->r_esp;
+			uint32_t *stack = (uint32_t *)rp->r_rsp;
 
 			/*
 			 * In 32-bit mode, all arguments are passed on the
@@ -1168,7 +1137,6 @@ fasttrap_pid_probe(struct trapframe *tf)
 					    t[2], t[3], t[4]);
 				}
 			}
-#endif /* __amd64 */
 #ifdef __amd64
 		}
 #endif
@@ -1180,11 +1148,7 @@ fasttrap_pid_probe(struct trapframe *tf)
 	 * tracepoint again later if we need to light up any return probes.
 	 */
 	tp_local = *tp;
-#ifdef illumos
-	mutex_exit(pid_mtx);
-#else
 	rm_runlock(&fasttrap_tp_lock, &tracker);
-#endif
 	tp = &tp_local;
 
 	/*
@@ -1236,12 +1200,10 @@ fasttrap_pid_probe(struct trapframe *tf)
 			addr = rp->r_rsp + sizeof (uintptr_t);
 		} else {
 #endif
-#ifdef __i386__
 			uint32_t dst32;
-			ret = dst32 = fasttrap_fuword32((void *)rp->r_esp);
+			ret = dst32 = fasttrap_fuword32((void *)rp->r_rsp);
 			dst = dst32;
-			addr = rp->r_esp + sizeof (uint32_t);
-#endif
+			addr = rp->r_rsp + sizeof (uint32_t);
 #ifdef __amd64
 		}
 #endif
@@ -1386,10 +1348,8 @@ fasttrap_pid_probe(struct trapframe *tf)
 			ret = fasttrap_sulword((void *)rp->r_rsp, rp->r_rbp);
 		} else {
 #endif
-#ifdef __i386__
 			rp->r_rsp -= sizeof (uint32_t);
 			ret = fasttrap_suword32((void *)rp->r_rsp, rp->r_rbp);
-#endif
 #ifdef __amd64
 		}
 #endif
@@ -1508,28 +1468,6 @@ fasttrap_pid_probe(struct trapframe *tf)
 		uint8_t scratch[2 * FASTTRAP_MAX_INSTR_SIZE + 7];
 #endif
 		uint_t i = 0;
-#ifdef illumos
-		klwp_t *lwp = ttolwp(curthread);
-
-		/*
-		 * Compute the address of the ulwp_t and step over the
-		 * ul_self pointer. The method used to store the user-land
-		 * thread pointer is very different on 32- and 64-bit
-		 * kernels.
-		 */
-#if defined(__amd64)
-		if (p->p_model == DATAMODEL_LP64) {
-			addr = lwp->lwp_pcb.pcb_fsbase;
-			addr += sizeof (void *);
-		} else {
-			addr = lwp->lwp_pcb.pcb_gsbase;
-			addr += sizeof (caddr32_t);
-		}
-#else
-		addr = USD_GETBASE(&lwp->lwp_pcb.pcb_gsdesc);
-		addr += sizeof (void *);
-#endif
-#else	/* !illumos */
 		fasttrap_scrspace_t *scrspace;
 		scrspace = fasttrap_scraddr(curthread, tp->ftt_proc);
 		if (scrspace == NULL) {
@@ -1545,7 +1483,6 @@ fasttrap_pid_probe(struct trapframe *tf)
 			break;
 		}
 		addr = scrspace->ftss_addr;
-#endif /* illumos */
 
 		/*
 		 * Generic Instruction Tracing
@@ -1709,7 +1646,6 @@ fasttrap_pid_probe(struct trapframe *tf)
 			i += sizeof (uint64_t);
 		} else {
 #endif
-#ifdef __i386__
 			/*
 			 * Set up the jmp to the next instruction; note that
 			 * the size of the traced instruction cancels out.
@@ -1718,7 +1654,6 @@ fasttrap_pid_probe(struct trapframe *tf)
 			/* LINTED - alignment */
 			*(uint32_t *)&scratch[i] = pc - addr - 5;
 			i += sizeof (uint32_t);
-#endif
 #ifdef __amd64
 		}
 #endif
@@ -1789,11 +1724,9 @@ done:
 
 	rp->r_rip = new_pc;
 
-#ifndef illumos
 	PROC_LOCK(p);
 	proc_write_regs(curthread, rp);
 	PROC_UNLOCK(p);
-#endif
 
 	return (0);
 }
@@ -1885,9 +1818,7 @@ fasttrap_getreg(struct reg *rp, uint_t reg)
 	case REG_ERR:		return (rp->r_err);
 	case REG_RIP:		return (rp->r_rip);
 	case REG_CS:		return (rp->r_cs);
-#ifdef illumos
-	case REG_RFL:		return (rp->r_rfl);
-#endif
+	case REG_RFL:		return (rp->r_rflags);
 	case REG_RSP:		return (rp->r_rsp);
 	case REG_SS:		return (rp->r_ss);
 	case REG_FS:		return (rp->r_fs);

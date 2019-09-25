@@ -11,14 +11,10 @@
 #ifndef liblldb_ThreadSafeDenseSet_h_
 #define liblldb_ThreadSafeDenseSet_h_
 
-// C Includes
-// C++ Includes
 #include <mutex>
 
-// Other libraries and framework includes
 #include "llvm/ADT/DenseSet.h"
 
-// Project includes
 
 namespace lldb_private {
 
@@ -46,7 +42,7 @@ public:
   }
 
   void Clear() {
-    stds::lock_guard<_MutexType> guard(m_mutex);
+    std::lock_guard<_MutexType> guard(m_mutex);
     m_set.clear();
   }
 

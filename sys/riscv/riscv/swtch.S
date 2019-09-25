@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2015-2016 Ruslan Bukin <br@bsdpad.com>
+ * Copyright (c) 2015-2017 Ruslan Bukin <br@bsdpad.com>
  * All rights reserved.
  *
  * Portions of this software were developed by SRI International and the
@@ -32,7 +32,7 @@
  * SUCH DAMAGE.
  */
 
-#include "assym.s"
+#include "assym.inc"
 #include "opt_sched.h"
 
 #include <machine/param.h>
@@ -42,25 +42,185 @@
 
 __FBSDID("$FreeBSD$");
 
+#ifdef FPE
+.macro __fpe_state_save p
+	/*
+	 * Enable FPE usage in supervisor mode,
+	 * so we can access registers.
+	 */
+	li	t0, SSTATUS_FS_INITIAL
+	csrs	sstatus, t0
+
+	/* Store registers */
+	frcsr	t0
+	sd	t0, (PCB_FCSR)(\p)
+	fsd	f0, (PCB_X + 0 * 16)(\p)
+	fsd	f1, (PCB_X + 1 * 16)(\p)
+	fsd	f2, (PCB_X + 2 * 16)(\p)
+	fsd	f3, (PCB_X + 3 * 16)(\p)
+	fsd	f4, (PCB_X + 4 * 16)(\p)
+	fsd	f5, (PCB_X + 5 * 16)(\p)
+	fsd	f6, (PCB_X + 6 * 16)(\p)
+	fsd	f7, (PCB_X + 7 * 16)(\p)
+	fsd	f8, (PCB_X + 8 * 16)(\p)
+	fsd	f9, (PCB_X + 9 * 16)(\p)
+	fsd	f10, (PCB_X + 10 * 16)(\p)
+	fsd	f11, (PCB_X + 11 * 16)(\p)
+	fsd	f12, (PCB_X + 12 * 16)(\p)
+	fsd	f13, (PCB_X + 13 * 16)(\p)
+	fsd	f14, (PCB_X + 14 * 16)(\p)
+	fsd	f15, (PCB_X + 15 * 16)(\p)
+	fsd	f16, (PCB_X + 16 * 16)(\p)
+	fsd	f17, (PCB_X + 17 * 16)(\p)
+	fsd	f18, (PCB_X + 18 * 16)(\p)
+	fsd	f19, (PCB_X + 19 * 16)(\p)
+	fsd	f20, (PCB_X + 20 * 16)(\p)
+	fsd	f21, (PCB_X + 21 * 16)(\p)
+	fsd	f22, (PCB_X + 22 * 16)(\p)
+	fsd	f23, (PCB_X + 23 * 16)(\p)
+	fsd	f24, (PCB_X + 24 * 16)(\p)
+	fsd	f25, (PCB_X + 25 * 16)(\p)
+	fsd	f26, (PCB_X + 26 * 16)(\p)
+	fsd	f27, (PCB_X + 27 * 16)(\p)
+	fsd	f28, (PCB_X + 28 * 16)(\p)
+	fsd	f29, (PCB_X + 29 * 16)(\p)
+	fsd	f30, (PCB_X + 30 * 16)(\p)
+	fsd	f31, (PCB_X + 31 * 16)(\p)
+
+	/* Disable FPE usage in supervisor mode. */
+	li	t0, SSTATUS_FS_MASK
+	csrc	sstatus, t0
+.endm
+
+.macro __fpe_state_load p
+	/*
+	 * Enable FPE usage in supervisor mode,
+	 * so we can access registers.
+	 */
+	li	t0, SSTATUS_FS_INITIAL
+	csrs	sstatus, t0
+
+	/* Restore registers */
+	ld	t0, (PCB_FCSR)(\p)
+	fscsr	t0
+	fld	f0, (PCB_X + 0 * 16)(\p)
+	fld	f1, (PCB_X + 1 * 16)(\p)
+	fld	f2, (PCB_X + 2 * 16)(\p)
+	fld	f3, (PCB_X + 3 * 16)(\p)
+	fld	f4, (PCB_X + 4 * 16)(\p)
+	fld	f5, (PCB_X + 5 * 16)(\p)
+	fld	f6, (PCB_X + 6 * 16)(\p)
+	fld	f7, (PCB_X + 7 * 16)(\p)
+	fld	f8, (PCB_X + 8 * 16)(\p)
+	fld	f9, (PCB_X + 9 * 16)(\p)
+	fld	f10, (PCB_X + 10 * 16)(\p)
+	fld	f11, (PCB_X + 11 * 16)(\p)
+	fld	f12, (PCB_X + 12 * 16)(\p)
+	fld	f13, (PCB_X + 13 * 16)(\p)
+	fld	f14, (PCB_X + 14 * 16)(\p)
+	fld	f15, (PCB_X + 15 * 16)(\p)
+	fld	f16, (PCB_X + 16 * 16)(\p)
+	fld	f17, (PCB_X + 17 * 16)(\p)
+	fld	f18, (PCB_X + 18 * 16)(\p)
+	fld	f19, (PCB_X + 19 * 16)(\p)
+	fld	f20, (PCB_X + 20 * 16)(\p)
+	fld	f21, (PCB_X + 21 * 16)(\p)
+	fld	f22, (PCB_X + 22 * 16)(\p)
+	fld	f23, (PCB_X + 23 * 16)(\p)
+	fld	f24, (PCB_X + 24 * 16)(\p)
+	fld	f25, (PCB_X + 25 * 16)(\p)
+	fld	f26, (PCB_X + 26 * 16)(\p)
+	fld	f27, (PCB_X + 27 * 16)(\p)
+	fld	f28, (PCB_X + 28 * 16)(\p)
+	fld	f29, (PCB_X + 29 * 16)(\p)
+	fld	f30, (PCB_X + 30 * 16)(\p)
+	fld	f31, (PCB_X + 31 * 16)(\p)
+
+	/* Disable FPE usage in supervisor mode. */
+	li	t0, SSTATUS_FS_MASK
+	csrc	sstatus, t0
+.endm
+
 /*
- * void cpu_throw(struct thread *old, struct thread *new)
+ * void
+ * fpe_state_save(struct thread *td)
+ */
+ENTRY(fpe_state_save)
+	/* Get pointer to PCB */
+	ld	a0, TD_PCB(a0)
+	__fpe_state_save a0
+	ret
+END(fpe_state_save)
+#endif /* FPE */
+
+/*
+ * void
+ * fpe_state_clear(void)
+ */
+ENTRY(fpe_state_clear)
+	/*
+	 * Enable FPE usage in supervisor mode,
+	 * so we can access registers.
+	 */
+	li	t0, SSTATUS_FS_INITIAL
+	csrs	sstatus, t0
+
+	fscsr	zero
+	fcvt.d.l f0, zero
+	fcvt.d.l f1, zero
+	fcvt.d.l f2, zero
+	fcvt.d.l f3, zero
+	fcvt.d.l f4, zero
+	fcvt.d.l f5, zero
+	fcvt.d.l f6, zero
+	fcvt.d.l f7, zero
+	fcvt.d.l f8, zero
+	fcvt.d.l f9, zero
+	fcvt.d.l f10, zero
+	fcvt.d.l f11, zero
+	fcvt.d.l f12, zero
+	fcvt.d.l f13, zero
+	fcvt.d.l f14, zero
+	fcvt.d.l f15, zero
+	fcvt.d.l f16, zero
+	fcvt.d.l f17, zero
+	fcvt.d.l f18, zero
+	fcvt.d.l f19, zero
+	fcvt.d.l f20, zero
+	fcvt.d.l f21, zero
+	fcvt.d.l f22, zero
+	fcvt.d.l f23, zero
+	fcvt.d.l f24, zero
+	fcvt.d.l f25, zero
+	fcvt.d.l f26, zero
+	fcvt.d.l f27, zero
+	fcvt.d.l f28, zero
+	fcvt.d.l f29, zero
+	fcvt.d.l f30, zero
+	fcvt.d.l f31, zero
+
+	/* Disable FPE usage in supervisor mode. */
+	li	t0, SSTATUS_FS_MASK
+	csrc	sstatus, t0
+
+	ret
+END(fpe_state_clear)
+	
+/*
+ * void cpu_throw(struct thread *old __unused, struct thread *new)
  */
 ENTRY(cpu_throw)
+	/* Activate the new thread's pmap. */
+	mv	s0, a1
+	mv	a0, a1
+	call	_C_LABEL(pmap_activate_sw)
+	mv	a0, s0
+
 	/* Store the new curthread */
-	sd	a1, PC_CURTHREAD(gp)
+	sd	a0, PC_CURTHREAD(tp)
 	/* And the new pcb */
-	ld	x13, TD_PCB(a1)
-	sd	x13, PC_CURPCB(gp)
-
-	sfence.vm
-
-	/* Switch to the new pmap */
-	ld	t0, PCB_L1ADDR(x13)
-	csrw	sptbr, t0
-
-	/* TODO: Invalidate the TLB */
-
-	sfence.vm
+	ld	x13, TD_PCB(a0)
+	sd	x13, PC_CURPCB(tp)
 
 	/* Load registers */
 	ld	ra, (PCB_RA)(x13)
@@ -79,10 +239,21 @@ ENTRY(cpu_throw)
 	ld	s9, (PCB_S + 9 * 8)(x13)
 	ld	s10, (PCB_S + 10 * 8)(x13)
 	ld	s11, (PCB_S + 11 * 8)(x13)
-	ret
 
-.Lcpu_throw_panic_str:
-	.asciz "cpu_throw: %p\0"
+#ifdef FPE
+	/* Is FPE enabled for new thread? */
+	ld	t0, TD_FRAME(a0)
+	ld	t1, (TF_SSTATUS)(t0)
+	li	t2, SSTATUS_FS_MASK
+	and	t3, t1, t2
+	beqz	t3, 1f		/* No, skip. */
+
+	/* Restore registers. */
+	__fpe_state_load x13
+1:
+#endif
+
+	ret
 END(cpu_throw)
 
 /*
@@ -95,10 +266,10 @@ END(cpu_throw)
  */
 ENTRY(cpu_switch)
 	/* Store the new curthread */
-	sd	a1, PC_CURTHREAD(gp)
+	sd	a1, PC_CURTHREAD(tp)
 	/* And the new pcb */
 	ld	x13, TD_PCB(a1)
-	sd	x13, PC_CURPCB(gp)
+	sd	x13, PC_CURPCB(tp)
 
 	/* Save the old context. */
 	ld	x13, TD_PCB(a0)
@@ -121,35 +292,50 @@ ENTRY(cpu_switch)
 	sd	s10, (PCB_S + 10 * 8)(x13)
 	sd	s11, (PCB_S + 11 * 8)(x13)
 
+#ifdef FPE
+	/*
+	 * Is FPE enabled and is it in dirty state
+	 * for the old thread?
+	 */
+	ld	t0, TD_FRAME(a0)
+	ld	t1, (TF_SSTATUS)(t0)
+	li	t2, SSTATUS_FS_MASK
+	and	t3, t1, t2
+	li	t2, SSTATUS_FS_DIRTY
+	bne	t3, t2, 1f		/* No, skip. */
+
+	/* Yes, mark FPE state clean and save registers. */
+	li	t2, ~SSTATUS_FS_MASK
+	and	t3, t1, t2
+	li	t2, SSTATUS_FS_CLEAN
+	or	t3, t3, t2
+	sd	t3, (TF_SSTATUS)(t0)
+
+	__fpe_state_save x13
+1:
+#endif
+
+	/* Activate the new thread's pmap */
+	mv	s0, a0
+	mv	s1, a1
+	mv	s2, a2
+	mv	a0, a1
+	call	_C_LABEL(pmap_activate_sw)
+	mv	a1, s1
+
+	/* Release the old thread */
+	sd	s2, TD_LOCK(s0)
+#if defined(SCHED_ULE) && defined(SMP)
+	/* Spin if TD_LOCK points to a blocked_lock */
+	la	s2, _C_LABEL(blocked_lock)
+1:
+	ld	t0, TD_LOCK(a1)
+	beq	t0, s2, 1b
+#endif
 	/*
 	 * Restore the saved context.
 	 */
 	ld	x13, TD_PCB(a1)
-
-	/*
-	 * TODO: We may need to flush the cache here if switching
-	 * to a user process.
-	 */
-
-	sfence.vm
-
-	/* Switch to the new pmap */
-	ld	t0, PCB_L1ADDR(x13)
-	csrw	sptbr, t0
-
-	/* TODO: Invalidate the TLB */
-
-	sfence.vm
-
-	/* Release the old thread */
-	sd	a2, TD_LOCK(a0)
-#if defined(SCHED_ULE) && defined(SMP)
-	/* Spin if TD_LOCK points to a blocked_lock */
-	la	a2, _C_LABEL(blocked_lock)
-1:
-	ld	t0, TD_LOCK(a1)
-	beq	t0, a2, 1b
-#endif
 
 	/* Restore the registers */
 	ld	ra, (PCB_RA)(x13)
@@ -168,6 +354,20 @@ ENTRY(cpu_switch)
 	ld	s9, (PCB_S + 9 * 8)(x13)
 	ld	s10, (PCB_S + 10 * 8)(x13)
 	ld	s11, (PCB_S + 11 * 8)(x13)
+
+#ifdef FPE
+	/* Is FPE enabled for new thread? */
+	ld	t0, TD_FRAME(a1)
+	ld	t1, (TF_SSTATUS)(t0)
+	li	t2, SSTATUS_FS_MASK
+	and	t3, t1, t2
+	beqz	t3, 1f		/* No, skip. */
+
+	/* Restore registers. */
+	__fpe_state_load x13
+1:
+#endif
+
 	ret
 .Lcpu_switch_panic_str:
 	.asciz "cpu_switch: %p\0"
@@ -187,7 +387,7 @@ ENTRY(fork_trampoline)
 	/* Restore sstatus */
 	ld	t0, (TF_SSTATUS)(sp)
 	/* Ensure interrupts disabled */
-	li	t1, ~SSTATUS_IE
+	li	t1, ~SSTATUS_SIE
 	and	t0, t0, t1
 	csrw	sstatus, t0
 
@@ -226,16 +426,16 @@ ENTRY(fork_trampoline)
 	ld	a6, (TF_A + 6 * 8)(sp)
 	ld	a7, (TF_A + 7 * 8)(sp)
 
-	/* Load user ra and sp */
-	ld	tp, (TF_TP)(sp)
+	/* Load user ra and gp */
 	ld	ra, (TF_RA)(sp)
+	ld	gp, (TF_GP)(sp)
 
 	/*
 	 * Store our pcpup on stack, we will load it back
 	 * on kernel mode trap.
 	 */
-	sd	gp, (TF_SIZE)(sp)
-	ld	gp, (TF_GP)(sp)
+	sd	tp, (TF_SIZE)(sp)
+	ld	tp, (TF_TP)(sp)
 
 	/* Save kernel stack so we can use it doing a user trap */
 	addi	sp, sp, TF_SIZE
@@ -244,13 +444,15 @@ ENTRY(fork_trampoline)
 	/* Load user stack */
 	ld	sp, (TF_SP - TF_SIZE)(sp)
 
-	eret
+	sret
 END(fork_trampoline)
 
 ENTRY(savectx)
 	/* Store ra, sp and the callee-saved registers */
 	sd	ra, (PCB_RA)(a0)
 	sd	sp, (PCB_SP)(a0)
+	sd	tp, (PCB_TP)(a0)
+	sd	gp, (PCB_GP)(a0)
 
 	/* s[0-11] */
 	sd	s0, (PCB_S + 0 * 8)(a0)
@@ -266,9 +468,8 @@ ENTRY(savectx)
 	sd	s10, (PCB_S + 10 * 8)(a0)
 	sd	s11, (PCB_S + 11 * 8)(a0)
 
-	/* Store the VFP registers */
-#ifdef VFP
-	/* TODO */
+#ifdef FPE
+	__fpe_state_save a0
 #endif
 	ret
 END(savectx)

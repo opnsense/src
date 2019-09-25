@@ -1,6 +1,8 @@
 /*	$NetBSD: tmpfs_subr.c,v 1.35 2007/07/09 21:10:50 ad Exp $	*/
 
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ *
  * Copyright (c) 2005 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
@@ -37,15 +39,18 @@
 __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
+#include <sys/systm.h>
+#include <sys/dirent.h>
 #include <sys/fnv_hash.h>
 #include <sys/lock.h>
+#include <sys/limits.h>
+#include <sys/mount.h>
 #include <sys/namei.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/random.h>
 #include <sys/rwlock.h>
 #include <sys/stat.h>
-#include <sys/systm.h>
 #include <sys/sysctl.h>
 #include <sys/vnode.h>
 #include <sys/vmmeter.h>
@@ -57,6 +62,7 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_pageout.h>
 #include <vm/vm_pager.h>
 #include <vm/vm_extern.h>
+#include <vm/swap_pager.h>
 
 #include <fs/tmpfs/tmpfs.h>
 #include <fs/tmpfs/tmpfs_fifoops.h>
@@ -100,7 +106,7 @@ tmpfs_mem_avail(void)
 {
 	vm_ooffset_t avail;
 
-	avail = swap_pager_avail + vm_cnt.v_free_count - tmpfs_pages_reserved;
+	avail = swap_pager_avail + vm_free_count() - tmpfs_pages_reserved;
 	if (__predict_false(avail < 0))
 		avail = 0;
 	return (avail);
@@ -212,6 +218,8 @@ tmpfs_alloc_node(struct mount *mp, struct tmpfs_mount *tmp, enum vtype type,
 		 */
 		return (EBUSY);
 	}
+	if ((mp->mnt_kern_flag & MNT_RDONLY) != 0)
+		return (EROFS);
 
 	nnode = (struct tmpfs_node *)uma_zalloc_arg(tmp->tm_node_pool, tmp,
 	    M_WAITOK);
@@ -224,7 +232,7 @@ tmpfs_alloc_node(struct mount *mp, struct tmpfs_mount *tmp, enum vtype type,
 	nnode->tn_uid = uid;
 	nnode->tn_gid = gid;
 	nnode->tn_mode = mode;
-	nnode->tn_id = alloc_unr(tmp->tm_ino_unr);
+	nnode->tn_id = alloc_unr64(&tmp->tm_ino_unr);
 	nnode->tn_refcount = 1;
 
 	/* Type-specific initialization. */
@@ -362,7 +370,6 @@ tmpfs_free_node_locked(struct tmpfs_mount *tmp, struct tmpfs_node *node,
 		panic("tmpfs_free_node: type %p %d", node, (int)node->tn_type);
 	}
 
-	free_unr(tmp->tm_ino_unr, node->tn_id);
 	uma_zfree(tmp->tm_node_pool, node);
 	TMPFS_LOCK(tmp);
 	tmpfs_free_tmp(tmp);
@@ -481,6 +488,8 @@ tmpfs_destroy_vobject(struct vnode *vp, vm_object_t obj)
 	VI_LOCK(vp);
 	vm_object_clear_flag(obj, OBJ_TMPFS);
 	obj->un_pager.swp.swp_tmpfs = NULL;
+	if (vp->v_writecount < 0)
+		vp->v_writecount = 0;
 	VI_UNLOCK(vp);
 	VM_OBJECT_WUNLOCK(obj);
 }
@@ -544,8 +553,7 @@ loop:
 			goto loop;
 		}
 		TMPFS_NODE_UNLOCK(node);
-		error = vget(vp, lkflag | LK_INTERLOCK | LK_CANRECURSE,
-		    curthread);
+		error = vget(vp, lkflag | LK_INTERLOCK, curthread);
 		if (error == ENOENT) {
 			TMPFS_NODE_LOCK(node);
 			goto loop;
@@ -728,8 +736,8 @@ tmpfs_alloc_file(struct vnode *dvp, struct vnode **vpp, struct vattr *vap,
 	if (vap->va_type == VDIR) {
 		/* Ensure that we do not overflow the maximum number of links
 		 * imposed by the system. */
-		MPASS(dnode->tn_links <= LINK_MAX);
-		if (dnode->tn_links == LINK_MAX) {
+		MPASS(dnode->tn_links <= TMPFS_LINK_MAX);
+		if (dnode->tn_links == TMPFS_LINK_MAX) {
 			return (EMLINK);
 		}
 
@@ -1104,7 +1112,8 @@ tmpfs_dir_destroy(struct tmpfs_mount *tmp, struct tmpfs_node *dnode)
  * error happens.
  */
 static int
-tmpfs_dir_getdotdent(struct tmpfs_node *node, struct uio *uio)
+tmpfs_dir_getdotdent(struct tmpfs_mount *tm, struct tmpfs_node *node,
+    struct uio *uio)
 {
 	int error;
 	struct dirent dent;
@@ -1116,15 +1125,15 @@ tmpfs_dir_getdotdent(struct tmpfs_node *node, struct uio *uio)
 	dent.d_type = DT_DIR;
 	dent.d_namlen = 1;
 	dent.d_name[0] = '.';
-	dent.d_name[1] = '\0';
 	dent.d_reclen = GENERIC_DIRSIZ(&dent);
+	dirent_terminate(&dent);
 
 	if (dent.d_reclen > uio->uio_resid)
 		error = EJUSTRETURN;
 	else
 		error = uiomove(&dent, dent.d_reclen, uio);
 
-	tmpfs_set_status(node, TMPFS_NODE_ACCESSED);
+	tmpfs_set_status(tm, node, TMPFS_NODE_ACCESSED);
 
 	return (error);
 }
@@ -1137,7 +1146,8 @@ tmpfs_dir_getdotdent(struct tmpfs_node *node, struct uio *uio)
  * error happens.
  */
 static int
-tmpfs_dir_getdotdotdent(struct tmpfs_node *node, struct uio *uio)
+tmpfs_dir_getdotdotdent(struct tmpfs_mount *tm, struct tmpfs_node *node,
+    struct uio *uio)
 {
 	int error;
 	struct dirent dent;
@@ -1160,15 +1170,15 @@ tmpfs_dir_getdotdotdent(struct tmpfs_node *node, struct uio *uio)
 	dent.d_namlen = 2;
 	dent.d_name[0] = '.';
 	dent.d_name[1] = '.';
-	dent.d_name[2] = '\0';
 	dent.d_reclen = GENERIC_DIRSIZ(&dent);
+	dirent_terminate(&dent);
 
 	if (dent.d_reclen > uio->uio_resid)
 		error = EJUSTRETURN;
 	else
 		error = uiomove(&dent, dent.d_reclen, uio);
 
-	tmpfs_set_status(node, TMPFS_NODE_ACCESSED);
+	tmpfs_set_status(tm, node, TMPFS_NODE_ACCESSED);
 
 	return (error);
 }
@@ -1181,8 +1191,8 @@ tmpfs_dir_getdotdotdent(struct tmpfs_node *node, struct uio *uio)
  * error code if another error happens.
  */
 int
-tmpfs_dir_getdents(struct tmpfs_node *node, struct uio *uio, int maxcookies,
-    u_long *cookies, int *ncookies)
+tmpfs_dir_getdents(struct tmpfs_mount *tm, struct tmpfs_node *node,
+    struct uio *uio, int maxcookies, u_long *cookies, int *ncookies)
 {
 	struct tmpfs_dir_cursor dc;
 	struct tmpfs_dirent *de;
@@ -1203,7 +1213,7 @@ tmpfs_dir_getdents(struct tmpfs_node *node, struct uio *uio, int maxcookies,
 	 */
 	switch (uio->uio_offset) {
 	case TMPFS_DIRCOOKIE_DOT:
-		error = tmpfs_dir_getdotdent(node, uio);
+		error = tmpfs_dir_getdotdent(tm, node, uio);
 		if (error != 0)
 			return (error);
 		uio->uio_offset = TMPFS_DIRCOOKIE_DOTDOT;
@@ -1211,7 +1221,7 @@ tmpfs_dir_getdents(struct tmpfs_node *node, struct uio *uio, int maxcookies,
 			cookies[(*ncookies)++] = off = uio->uio_offset;
 		/* FALLTHROUGH */
 	case TMPFS_DIRCOOKIE_DOTDOT:
-		error = tmpfs_dir_getdotdotdent(node, uio);
+		error = tmpfs_dir_getdotdotdent(tm, node, uio);
 		if (error != 0)
 			return (error);
 		de = tmpfs_dir_first(node, &dc);
@@ -1281,8 +1291,8 @@ tmpfs_dir_getdents(struct tmpfs_node *node, struct uio *uio, int maxcookies,
 		d.d_namlen = de->td_namelen;
 		MPASS(de->td_namelen < sizeof(d.d_name));
 		(void)memcpy(d.d_name, de->ud.td_name, de->td_namelen);
-		d.d_name[de->td_namelen] = '\0';
 		d.d_reclen = GENERIC_DIRSIZ(&d);
+		dirent_terminate(&d);
 
 		/* Stop reading if the directory entry we are treating is
 		 * bigger than the amount of data that can be returned. */
@@ -1313,7 +1323,7 @@ tmpfs_dir_getdents(struct tmpfs_node *node, struct uio *uio, int maxcookies,
 	node->tn_dir.tn_readdir_lastn = off;
 	node->tn_dir.tn_readdir_lastp = de;
 
-	tmpfs_set_status(node, TMPFS_NODE_ACCESSED);
+	tmpfs_set_status(tm, node, TMPFS_NODE_ACCESSED);
 	return error;
 }
 
@@ -1410,7 +1420,15 @@ retry:
 				    NULL);
 				vm_page_lock(m);
 				if (rv == VM_PAGER_OK) {
-					vm_page_deactivate(m);
+					/*
+					 * Since the page was not resident,
+					 * and therefore not recently
+					 * accessed, immediately enqueue it
+					 * for asynchronous laundering.  The
+					 * current operation is not regarded
+					 * as an access.
+					 */
+					vm_page_launder(m);
 					vm_page_unlock(m);
 					vm_page_xunbusy(m);
 				} else {
@@ -1760,10 +1778,10 @@ tmpfs_chtimes(struct vnode *vp, struct vattr *vap,
 }
 
 void
-tmpfs_set_status(struct tmpfs_node *node, int status)
+tmpfs_set_status(struct tmpfs_mount *tm, struct tmpfs_node *node, int status)
 {
 
-	if ((node->tn_status & status) == status)
+	if ((node->tn_status & status) == status || tm->tm_ronly)
 		return;
 	TMPFS_NODE_LOCK(node);
 	node->tn_status |= status;
@@ -1804,7 +1822,7 @@ tmpfs_itimes(struct vnode *vp, const struct timespec *acc,
 	TMPFS_NODE_UNLOCK(node);
 
 	/* XXX: FIX? The entropy here is desirable, but the harvesting may be expensive */
-	random_harvest_queue(node, sizeof(*node), 1, RANDOM_FS_ATIME);
+	random_harvest_queue(node, sizeof(*node), RANDOM_FS_ATIME);
 }
 
 void

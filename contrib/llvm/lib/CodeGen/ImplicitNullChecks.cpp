@@ -90,7 +90,7 @@ class ImplicitNullChecks : public MachineFunctionPass {
   /// A data type for representing the result computed by \c
   /// computeDependence.  States whether it is okay to reorder the
   /// instruction passed to \c computeDependence with at most one
-  /// depednency.
+  /// dependency.
   struct DependenceResult {
     /// Can we actually re-order \p MI with \p Insts (see \c
     /// computeDependence).
@@ -115,7 +115,7 @@ class ImplicitNullChecks : public MachineFunctionPass {
   /// \c canHandle should return true for all instructions in \p
   /// Insts.
   DependenceResult computeDependence(const MachineInstr *MI,
-                                     ArrayRef<MachineInstr *> Insts);
+                                     ArrayRef<MachineInstr *> Block);
 
   /// Represents one null check that can be made implicit.
   class NullCheck {
@@ -134,7 +134,7 @@ class ImplicitNullChecks : public MachineFunctionPass {
     // The block branched to if the pointer is null.
     MachineBasicBlock *NullSucc;
 
-    // If this is non-null, then MemOperation has a dependency on on this
+    // If this is non-null, then MemOperation has a dependency on this
     // instruction; and it needs to be hoisted to execute before MemOperation.
     MachineInstr *OnlyDependency;
 
@@ -198,7 +198,7 @@ class ImplicitNullChecks : public MachineFunctionPass {
   SuitabilityResult isSuitableMemoryOp(MachineInstr &MI, unsigned PointerReg,
                                        ArrayRef<MachineInstr *> PrevInsts);
 
-  /// Return true if \p FaultingMI can be hoisted from after the the
+  /// Return true if \p FaultingMI can be hoisted from after the
   /// instructions in \p InstsSeenSoFar to before them.  Set \p Dependence to a
   /// non-null value if we also need to (and legally can) hoist a depedency.
   bool canHoistInst(MachineInstr *FaultingMI, unsigned PointerReg,
@@ -344,11 +344,11 @@ ImplicitNullChecks::areMemoryOpsAliased(MachineInstr &MI,
           return AR_MayAlias;
         continue;
       }
-      llvm::AliasResult AAResult = AA->alias(
-          MemoryLocation(MMO1->getValue(), MemoryLocation::UnknownSize,
-                         MMO1->getAAInfo()),
-          MemoryLocation(MMO2->getValue(), MemoryLocation::UnknownSize,
-                         MMO2->getAAInfo()));
+      llvm::AliasResult AAResult =
+          AA->alias(MemoryLocation(MMO1->getValue(), LocationSize::unknown(),
+                                   MMO1->getAAInfo()),
+                    MemoryLocation(MMO2->getValue(), LocationSize::unknown(),
+                                   MMO2->getAAInfo()));
       if (AAResult != NoAlias)
         return AR_MayAlias;
     }
@@ -360,10 +360,10 @@ ImplicitNullChecks::SuitabilityResult
 ImplicitNullChecks::isSuitableMemoryOp(MachineInstr &MI, unsigned PointerReg,
                                        ArrayRef<MachineInstr *> PrevInsts) {
   int64_t Offset;
-  unsigned BaseReg;
+  MachineOperand *BaseOp;
 
-  if (!TII->getMemOpBaseRegImmOfs(MI, BaseReg, Offset, TRI) ||
-      BaseReg != PointerReg)
+  if (!TII->getMemOperandWithOffset(MI, BaseOp, Offset, TRI) ||
+      !BaseOp->isReg() || BaseOp->getReg() != PointerReg)
     return SR_Unsuitable;
 
   // We want the mem access to be issued at a sane offset from PointerReg,
@@ -496,6 +496,32 @@ bool ImplicitNullChecks::analyzeBlockForNullChecks(
   if (NotNullSucc->pred_size() != 1)
     return false;
 
+  // To prevent the invalid transformation of the following code:
+  //
+  //   mov %rax, %rcx
+  //   test %rax, %rax
+  //   %rax = ...
+  //   je throw_npe
+  //   mov(%rcx), %r9
+  //   mov(%rax), %r10
+  //
+  // into:
+  //
+  //   mov %rax, %rcx
+  //   %rax = ....
+  //   faulting_load_op("movl (%rax), %r10", throw_npe)
+  //   mov(%rcx), %r9
+  //
+  // we must ensure that there are no instructions between the 'test' and
+  // conditional jump that modify %rax.
+  const unsigned PointerReg = MBP.LHS.getReg();
+
+  assert(MBP.ConditionDef->getParent() ==  &MBB && "Should be in basic block");
+
+  for (auto I = MBB.rbegin(); MBP.ConditionDef != &*I; ++I)
+    if (I->modifiesRegister(PointerReg, TRI))
+      return false;
+
   // Starting with a code fragment like:
   //
   //   test %rax, %rax
@@ -550,8 +576,6 @@ bool ImplicitNullChecks::analyzeBlockForNullChecks(
   // ptr could be some non-null invalid reference that never gets loaded from
   // because some_cond is always true.
 
-  const unsigned PointerReg = MBP.LHS.getReg();
-
   SmallVector<MachineInstr *, 8> InstsSeenSoFar;
 
   for (auto &MI : *NotNullSucc) {
@@ -596,9 +620,8 @@ MachineInstr *ImplicitNullChecks::insertFaultingInstr(
 
   unsigned DefReg = NoRegister;
   if (NumDefs != 0) {
-    DefReg = MI->defs().begin()->getReg();
-    assert(std::distance(MI->defs().begin(), MI->defs().end()) == 1 &&
-           "expected exactly one def!");
+    DefReg = MI->getOperand(0).getReg();
+    assert(NumDefs == 1 && "expected exactly one def!");
   }
 
   FaultMaps::FaultKind FK;
@@ -628,7 +651,7 @@ MachineInstr *ImplicitNullChecks::insertFaultingInstr(
     }
   }
 
-  MIB.setMemRefs(MI->memoperands_begin(), MI->memoperands_end());
+  MIB.setMemRefs(MI->memoperands());
 
   return MIB;
 }

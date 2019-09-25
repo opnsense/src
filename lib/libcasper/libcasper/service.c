@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2013 The FreeBSD Foundation
  * Copyright (c) 2015 Mariusz Zaborski <oshogbo@FreeBSD.org>
  * All rights reserved.
@@ -134,7 +136,8 @@ service_connection_add(struct service *service, int sock,
 	sconn = malloc(sizeof(*sconn));
 	if (sconn == NULL)
 		return (NULL);
-	sconn->sc_chan = cap_wrap(sock);
+	sconn->sc_chan = cap_wrap(sock,
+	    service_get_channel_flags(service));
 	if (sconn->sc_chan == NULL) {
 		serrno = errno;
 		free(sconn);
@@ -147,7 +150,7 @@ service_connection_add(struct service *service, int sock,
 		sconn->sc_limits = nvlist_clone(limits);
 		if (sconn->sc_limits == NULL) {
 			serrno = errno;
-			(void)cap_unwrap(sconn->sc_chan);
+			(void)cap_unwrap(sconn->sc_chan, NULL);
 			free(sconn);
 			errno = serrno;
 			return (NULL);
@@ -264,16 +267,20 @@ service_message(struct service *service, struct service_connection *sconn)
 {
 	nvlist_t *nvlin, *nvlout;
 	const char *cmd;
-	int error;
+	int error, flags;
 
-	nvlin = cap_recv_nvlist(service_connection_get_chan(sconn), 0);
+	flags = 0;
+	if ((service->s_flags & CASPER_SERVICE_NO_UNIQ_LIMITS) != 0)
+		flags = NV_FLAG_NO_UNIQUE;
+
+	nvlin = cap_recv_nvlist(service_connection_get_chan(sconn));
 	if (nvlin == NULL) {
 		service_connection_remove(service, sconn);
 		return;
 	}
 
 	error = EDOOFUS;
-	nvlout = nvlist_create(0);
+	nvlout = nvlist_create(flags);
 
 	cmd = nvlist_get_string(nvlin, "cmd");
 	if (strcmp(cmd, "limit_set") == 0) {
@@ -341,6 +348,20 @@ service_name(struct service *service)
 	return (service->s_name);
 }
 
+int
+service_get_channel_flags(struct service *service)
+{
+	int flags;
+
+	assert(service->s_magic == SERVICE_MAGIC);
+	flags = 0;
+
+	if ((service->s_flags & CASPER_SERVICE_NO_UNIQ_LIMITS) != 0)
+		flags |= CASPER_NO_UNIQ;
+
+	return (flags);
+}
+
 static void
 stdnull(void)
 {
@@ -406,7 +427,7 @@ service_start(struct service *service, int sock, int procfd)
 	service_clean(sock, procfd, service->s_flags);
 
 	if (service_connection_add(service, sock, NULL) == NULL)
-		exit(1);
+		_exit(1);
 
 	for (;;) {
 		FD_ZERO(&fds);
@@ -422,7 +443,7 @@ service_start(struct service *service, int sock, int procfd)
 		nfds = select(maxfd + 1, &fds, NULL, NULL, NULL);
 		if (nfds < 0) {
 			if (errno != EINTR)
-				exit(1);
+				_exit(1);
 			continue;
 		} else if (nfds == 0) {
 			/* Timeout. */
@@ -447,5 +468,5 @@ service_start(struct service *service, int sock, int procfd)
 		}
 	}
 
-	exit(0);
+	_exit(0);
 }

@@ -17,8 +17,12 @@
 #include <string>
 
 namespace llvm {
+namespace objcopy {
 
 LLVM_ATTRIBUTE_NORETURN extern void error(Twine Message);
+LLVM_ATTRIBUTE_NORETURN extern void reportError(StringRef File, Error E);
+LLVM_ATTRIBUTE_NORETURN extern void reportError(StringRef File,
+                                                std::error_code EC);
 
 // This is taken from llvm-readobj.
 // [see here](llvm/tools/llvm-readobj/llvm-readobj.h:38)
@@ -27,11 +31,12 @@ template <class T> T unwrapOrError(Expected<T> EO) {
     return *EO;
   std::string Buf;
   raw_string_ostream OS(Buf);
-  logAllUnhandledErrors(EO.takeError(), OS, "");
+  logAllUnhandledErrors(EO.takeError(), OS);
   OS.flush();
   error(Buf);
 }
 
+} // end namespace objcopy
 } // end namespace llvm
 
 #endif // LLVM_TOOLS_OBJCOPY_OBJCOPY_H

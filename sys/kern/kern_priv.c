@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2006 nCircle Network Security, Inc.
  * Copyright (c) 2009 Robert N. M. Watson
  * All rights reserved.
@@ -31,8 +33,6 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
-#include "opt_pax.h"
-
 #include <sys/param.h>
 #include <sys/jail.h>
 #include <sys/kernel.h>
@@ -61,6 +61,11 @@ SYSCTL_INT(_security_bsd, OID_AUTO, suser_enabled, CTLFLAG_RWTUN,
 static int	unprivileged_mlock = 1;
 SYSCTL_INT(_security_bsd, OID_AUTO, unprivileged_mlock, CTLFLAG_RWTUN,
     &unprivileged_mlock, 0, "Allow non-root users to call mlock(2)");
+
+static int	unprivileged_read_msgbuf = 1;
+SYSCTL_INT(_security_bsd, OID_AUTO, unprivileged_read_msgbuf,
+    CTLFLAG_RW, &unprivileged_read_msgbuf, 0,
+    "Unprivileged processes may read the kernel message buffer");
 
 SDT_PROVIDER_DEFINE(priv);
 SDT_PROBE_DEFINE1(priv, kernel, priv_check, priv__ok, "int");
@@ -109,6 +114,17 @@ priv_check_cred(struct ucred *cred, int priv, int flags)
 		}
 	}
 
+	if (unprivileged_read_msgbuf) {
+		/*
+		 * Allow an unprivileged user to read the kernel message
+		 * buffer.
+		 */
+		if (priv == PRIV_MSGBUF) {
+			error = 0;
+			goto out;
+		}
+	}
+
 	/*
 	 * Having determined if privilege is restricted by various policies,
 	 * now determine if privilege is granted.  At this point, any policy
@@ -138,17 +154,6 @@ priv_check_cred(struct ucred *cred, int priv, int flags)
 			break;
 		}
 	}
-
-#if !defined(PAX_HARDENING)
-	/*
-	 * Inspecting kernel module information should be root-only
-	 * when PAX_HARDENING is set.
-	 */
-	if (priv == PRIV_KLD_STAT) {
-		error = 0;
-		goto out;
-	}
-#endif
 
 	/*
 	 * Writes to kernel/physical memory are a typical root-only operation,

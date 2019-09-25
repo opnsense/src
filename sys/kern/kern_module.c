@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1997 Doug Rabson
  * All rights reserved.
  *
@@ -24,8 +26,6 @@
  * SUCH DAMAGE.
  */
 
-#include "opt_compat.h"
-
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
@@ -36,7 +36,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/malloc.h>
 #include <sys/sysproto.h>
 #include <sys/sysent.h>
-#include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
@@ -90,7 +89,7 @@ module_init(void *arg)
 	    SHUTDOWN_PRI_DEFAULT);
 }
 
-SYSINIT(module, SI_SUB_KLD, SI_ORDER_FIRST, module_init, 0);
+SYSINIT(module, SI_SUB_KLD, SI_ORDER_FIRST, module_init, NULL);
 
 static void
 module_shutdown(void *arg1, int arg2)
@@ -310,11 +309,7 @@ int
 sys_modnext(struct thread *td, struct modnext_args *uap)
 {
 	module_t mod;
-	int error;
-
-	error = priv_check(td, PRIV_KLD_STAT);
-	if (error)
-		return (error);
+	int error = 0;
 
 	td->td_retval[0] = -1;
 
@@ -347,10 +342,6 @@ sys_modfnext(struct thread *td, struct modfnext_args *uap)
 	module_t mod;
 	int error;
 
-	error = priv_check(td, PRIV_KLD_STAT);
-	if (error)
-		return (error);
-
 	td->td_retval[0] = -1;
 
 	MOD_SLOCK;
@@ -380,14 +371,10 @@ sys_modstat(struct thread *td, struct modstat_args *uap)
 {
 	module_t mod;
 	modspecific_t data;
-	int error;
+	int error = 0;
 	int id, namelen, refs, version;
 	struct module_stat *stat;
 	char *name;
-
-	error = priv_check(td, PRIV_KLD_STAT);
-	if (error)
-		return (error);
 
 	MOD_SLOCK;
 	mod = module_lookupbyid(uap->modid);
@@ -435,13 +422,9 @@ sys_modstat(struct thread *td, struct modstat_args *uap)
 int
 sys_modfind(struct thread *td, struct modfind_args *uap)
 {
-	int error;
+	int error = 0;
 	char name[MAXMODNAME];
 	module_t mod;
-
-	error = priv_check(td, PRIV_KLD_STAT);
-	if (error)
-		return (error);
 
 	if ((error = copyinstr(uap->name, name, sizeof name, 0)) != 0)
 		return (error);
@@ -489,10 +472,6 @@ freebsd32_modstat(struct thread *td, struct freebsd32_modstat_args *uap)
 	int id, namelen, refs, version;
 	struct module_stat32 *stat32;
 	char *name;
-
-	error = priv_check(td, PRIV_KLD_STAT);
-	if (error)
-		return (error);
 
 	MOD_SLOCK;
 	mod = module_lookupbyid(uap->modid);

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2008-2016 Solarflare Communications Inc.
  * All rights reserved.
  *
@@ -812,6 +814,8 @@ efx_mcdi_get_proxy_handle(
 {
 	efx_rc_t rc;
 
+	_NOTE(ARGUNUSED(enp))
+
 	/*
 	 * Return proxy handle from MCDI request that returned with error
 	 * MC_MCD_ERR_PROXY_PENDING. This handle is used to wait for a matching
@@ -919,10 +923,10 @@ efx_mcdi_version(
 	__out_opt		efx_mcdi_boot_t *statusp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MAX(MC_CMD_GET_VERSION_IN_LEN,
-				MC_CMD_GET_VERSION_OUT_LEN),
-			    MAX(MC_CMD_GET_BOOT_STATUS_IN_LEN,
-				MC_CMD_GET_BOOT_STATUS_OUT_LEN))];
+	EFX_MCDI_DECLARE_BUF(payload,
+		MAX(MC_CMD_GET_VERSION_IN_LEN, MC_CMD_GET_BOOT_STATUS_IN_LEN),
+		MAX(MC_CMD_GET_VERSION_OUT_LEN,
+			MC_CMD_GET_BOOT_STATUS_OUT_LEN));
 	efx_word_t *ver_words;
 	uint16_t version[4];
 	uint32_t build;
@@ -931,7 +935,6 @@ efx_mcdi_version(
 
 	EFSYS_ASSERT3U(enp->en_features, &, EFX_FEATURE_MCDI);
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_GET_VERSION;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_GET_VERSION_IN_LEN;
@@ -1032,7 +1035,8 @@ efx_mcdi_do_reboot(
 	__in		efx_nic_t *enp,
 	__in		boolean_t after_assertion)
 {
-	uint8_t payload[MAX(MC_CMD_REBOOT_IN_LEN, MC_CMD_REBOOT_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_REBOOT_IN_LEN,
+		MC_CMD_REBOOT_OUT_LEN);
 	efx_mcdi_req_t req;
 	efx_rc_t rc;
 
@@ -1045,7 +1049,6 @@ efx_mcdi_do_reboot(
 	 */
 	EFSYS_ASSERT3U(enp->en_magic, ==, EFX_NIC_MAGIC);
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_REBOOT;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_REBOOT_IN_LEN;
@@ -1096,8 +1099,8 @@ efx_mcdi_read_assertion(
 	__in		efx_nic_t *enp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_GET_ASSERTS_IN_LEN,
-			    MC_CMD_GET_ASSERTS_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_GET_ASSERTS_IN_LEN,
+		MC_CMD_GET_ASSERTS_OUT_LEN);
 	const char *reason;
 	unsigned int flags;
 	unsigned int index;
@@ -1107,7 +1110,7 @@ efx_mcdi_read_assertion(
 
 	/*
 	 * Before we attempt to chat to the MC, we should verify that the MC
-	 * isn't in it's assertion handler, either due to a previous reboot,
+	 * isn't in its assertion handler, either due to a previous reboot,
 	 * or because we're reinitializing due to an eec_exception().
 	 *
 	 * Use GET_ASSERTS to read any assertion state that may be present.
@@ -1198,11 +1201,10 @@ efx_mcdi_drv_attach(
 	__in		boolean_t attach)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_DRV_ATTACH_IN_LEN,
-			    MC_CMD_DRV_ATTACH_EXT_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_DRV_ATTACH_IN_LEN,
+		MC_CMD_DRV_ATTACH_EXT_OUT_LEN);
 	efx_rc_t rc;
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_DRV_ATTACH;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_DRV_ATTACH_IN_LEN;
@@ -1249,11 +1251,10 @@ efx_mcdi_get_board_cfg(
 {
 	efx_mcdi_iface_t *emip = &(enp->en_mcdi.em_emip);
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_GET_BOARD_CFG_IN_LEN,
-			    MC_CMD_GET_BOARD_CFG_OUT_LENMIN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_GET_BOARD_CFG_IN_LEN,
+		MC_CMD_GET_BOARD_CFG_OUT_LENMIN);
 	efx_rc_t rc;
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_GET_BOARD_CFG;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_GET_BOARD_CFG_IN_LEN;
@@ -1329,11 +1330,10 @@ efx_mcdi_get_resource_limits(
 	__out_opt	uint32_t *ntxqp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_GET_RESOURCE_LIMITS_IN_LEN,
-			    MC_CMD_GET_RESOURCE_LIMITS_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_GET_RESOURCE_LIMITS_IN_LEN,
+		MC_CMD_GET_RESOURCE_LIMITS_OUT_LEN);
 	efx_rc_t rc;
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_GET_RESOURCE_LIMITS;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_GET_RESOURCE_LIMITS_IN_LEN;
@@ -1376,11 +1376,10 @@ efx_mcdi_get_phy_cfg(
 	efx_port_t *epp = &(enp->en_port);
 	efx_nic_cfg_t *encp = &(enp->en_nic_cfg);
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_GET_PHY_CFG_IN_LEN,
-			    MC_CMD_GET_PHY_CFG_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_GET_PHY_CFG_IN_LEN,
+		MC_CMD_GET_PHY_CFG_OUT_LEN);
 	efx_rc_t rc;
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_GET_PHY_CFG;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_GET_PHY_CFG_IN_LEN;
@@ -1617,11 +1616,10 @@ efx_mcdi_bist_start(
 	__in			efx_bist_type_t type)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_START_BIST_IN_LEN,
-			    MC_CMD_START_BIST_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_START_BIST_IN_LEN,
+		MC_CMD_START_BIST_OUT_LEN);
 	efx_rc_t rc;
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_START_BIST;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_START_BIST_IN_LEN;
@@ -1680,11 +1678,10 @@ efx_mcdi_log_ctrl(
 	__in		efx_nic_t *enp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_LOG_CTRL_IN_LEN,
-			    MC_CMD_LOG_CTRL_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_LOG_CTRL_IN_LEN,
+		MC_CMD_LOG_CTRL_OUT_LEN);
 	efx_rc_t rc;
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_LOG_CTRL;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_LOG_CTRL_IN_LEN;
@@ -1729,8 +1726,8 @@ efx_mcdi_mac_stats(
 	__in		uint16_t period_ms)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_MAC_STATS_IN_LEN,
-			    MC_CMD_MAC_STATS_OUT_DMA_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_MAC_STATS_IN_LEN,
+		MC_CMD_MAC_STATS_OUT_DMA_LEN);
 	int clear = (action == EFX_STATS_CLEAR);
 	int upload = (action == EFX_STATS_UPLOAD);
 	int enable = (action == EFX_STATS_ENABLE_NOEVENTS);
@@ -1738,7 +1735,6 @@ efx_mcdi_mac_stats(
 	int disable = (action == EFX_STATS_DISABLE);
 	efx_rc_t rc;
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_MAC_STATS;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_MAC_STATS_IN_LEN;
@@ -1888,11 +1884,10 @@ efx_mcdi_get_function_info(
 	__out_opt		uint32_t *vfp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_GET_FUNCTION_INFO_IN_LEN,
-			    MC_CMD_GET_FUNCTION_INFO_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_GET_FUNCTION_INFO_IN_LEN,
+		MC_CMD_GET_FUNCTION_INFO_OUT_LEN);
 	efx_rc_t rc;
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_GET_FUNCTION_INFO;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_GET_FUNCTION_INFO_IN_LEN;
@@ -1933,11 +1928,10 @@ efx_mcdi_privilege_mask(
 	__out			uint32_t *maskp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_PRIVILEGE_MASK_IN_LEN,
-			    MC_CMD_PRIVILEGE_MASK_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_PRIVILEGE_MASK_IN_LEN,
+		MC_CMD_PRIVILEGE_MASK_OUT_LEN);
 	efx_rc_t rc;
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_PRIVILEGE_MASK;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_PRIVILEGE_MASK_IN_LEN;
@@ -1982,11 +1976,10 @@ efx_mcdi_set_workaround(
 	__out_opt		uint32_t *flagsp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_WORKAROUND_IN_LEN,
-			    MC_CMD_WORKAROUND_EXT_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_WORKAROUND_IN_LEN,
+		MC_CMD_WORKAROUND_EXT_OUT_LEN);
 	efx_rc_t rc;
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_WORKAROUND;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_WORKAROUND_IN_LEN;
@@ -2026,10 +2019,9 @@ efx_mcdi_get_workarounds(
 	__out_opt		uint32_t *enabledp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MC_CMD_GET_WORKAROUNDS_OUT_LEN];
+	EFX_MCDI_DECLARE_BUF(payload, 0, MC_CMD_GET_WORKAROUNDS_OUT_LEN);
 	efx_rc_t rc;
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_GET_WORKAROUNDS;
 	req.emr_in_buf = NULL;
 	req.emr_in_length = 0;
@@ -2075,14 +2067,13 @@ efx_mcdi_get_phy_media_info(
 	__out_bcount(len)	uint8_t *data)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_GET_PHY_MEDIA_INFO_IN_LEN,
-			    MC_CMD_GET_PHY_MEDIA_INFO_OUT_LEN(
-				EFX_PHY_MEDIA_INFO_PAGE_SIZE))];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_GET_PHY_MEDIA_INFO_IN_LEN,
+		MC_CMD_GET_PHY_MEDIA_INFO_OUT_LEN(
+			EFX_PHY_MEDIA_INFO_PAGE_SIZE));
 	efx_rc_t rc;
 
 	EFSYS_ASSERT((uint32_t)offset + len <= EFX_PHY_MEDIA_INFO_PAGE_SIZE);
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_GET_PHY_MEDIA_INFO;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_GET_PHY_MEDIA_INFO_IN_LEN;

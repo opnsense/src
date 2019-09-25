@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1989, 1993, 1994
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -49,13 +51,23 @@ __FBSDID("$FreeBSD$");
 #include <fcntl.h>
 #include <fts.h>
 #include <limits.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
+static volatile sig_atomic_t siginfo;
+
 static void usage(void);
 static int may_have_nfs4acl(const FTSENT *ent, int hflag);
+
+static void
+siginfo_handler(int sig __unused)
+{
+
+	siginfo = 1;
+}
 
 int
 main(int argc, char *argv[])
@@ -125,6 +137,8 @@ done:	argv += optind;
 	if (argc < 2)
 		usage();
 
+	(void)signal(SIGINFO, siginfo_handler);
+
 	if (Rflag) {
 		if (hflag)
 			errx(1, "the -R and -h options may not be "
@@ -192,10 +206,10 @@ done:	argv += optind;
 		    && !fflag) {
 			warn("%s", p->fts_path);
 			rval = 1;
-		} else if (vflag) {
+		} else if (vflag || siginfo) {
 			(void)printf("%s", p->fts_path);
 
-			if (vflag > 1) {
+			if (vflag > 1 || siginfo) {
 				char m1[12], m2[12];
 
 				strmode(p->fts_statp->st_mode, m1);
@@ -207,6 +221,7 @@ done:	argv += optind;
 				    newmode, m2);
 			}
 			(void)printf("\n");
+			siginfo = 0;
 		}
 	}
 	if (errno)

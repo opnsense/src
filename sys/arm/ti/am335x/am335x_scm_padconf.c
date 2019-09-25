@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2012 Damjan Marion <dmarion@FreeBSD.org>
  * All rights reserved.
  *
@@ -293,7 +295,7 @@ const static struct ti_pinmux_padconf ti_padconf_devmap[] = {
 	{  .ballname = NULL  },
 };
 
-const struct ti_pinmux_device ti_pinmux_dev = {
+const struct ti_pinmux_device ti_am335x_pinmux_dev = {
 	.padconf_muxmode_mask	= 0x7,
 	.padconf_sate_mask	= 0x78,
 	.padstate		= ti_padstate_devmap,

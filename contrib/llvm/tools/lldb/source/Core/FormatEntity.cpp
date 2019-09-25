@@ -10,28 +10,28 @@
 #include "lldb/Core/FormatEntity.h"
 
 #include "lldb/Core/Address.h"
-#include "lldb/Core/AddressRange.h" // for AddressRange
+#include "lldb/Core/AddressRange.h"
 #include "lldb/Core/Debugger.h"
+#include "lldb/Core/DumpRegisterValue.h"
 #include "lldb/Core/Module.h"
-#include "lldb/Core/RegisterValue.h" // for RegisterValue
 #include "lldb/Core/ValueObject.h"
 #include "lldb/Core/ValueObjectVariable.h"
 #include "lldb/DataFormatters/DataVisualization.h"
-#include "lldb/DataFormatters/FormatClasses.h" // for TypeNameSpecifier...
+#include "lldb/DataFormatters/FormatClasses.h"
 #include "lldb/DataFormatters/FormatManager.h"
-#include "lldb/DataFormatters/TypeSummary.h" // for TypeSummaryImpl::...
+#include "lldb/DataFormatters/TypeSummary.h"
 #include "lldb/Expression/ExpressionVariable.h"
 #include "lldb/Interpreter/CommandInterpreter.h"
 #include "lldb/Symbol/Block.h"
 #include "lldb/Symbol/CompileUnit.h"
-#include "lldb/Symbol/CompilerType.h" // for CompilerType
+#include "lldb/Symbol/CompilerType.h"
 #include "lldb/Symbol/Function.h"
 #include "lldb/Symbol/LineEntry.h"
 #include "lldb/Symbol/Symbol.h"
-#include "lldb/Symbol/SymbolContext.h" // for SymbolContext
+#include "lldb/Symbol/SymbolContext.h"
 #include "lldb/Symbol/VariableList.h"
 #include "lldb/Target/ExecutionContext.h"
-#include "lldb/Target/ExecutionContextScope.h" // for ExecutionContextS...
+#include "lldb/Target/ExecutionContextScope.h"
 #include "lldb/Target/Language.h"
 #include "lldb/Target/Process.h"
 #include "lldb/Target/RegisterContext.h"
@@ -41,31 +41,32 @@
 #include "lldb/Target/Target.h"
 #include "lldb/Target/Thread.h"
 #include "lldb/Utility/AnsiTerminal.h"
-#include "lldb/Utility/ArchSpec.h"    // for ArchSpec
-#include "lldb/Utility/ConstString.h" // for ConstString, oper...
+#include "lldb/Utility/ArchSpec.h"
+#include "lldb/Utility/ConstString.h"
 #include "lldb/Utility/FileSpec.h"
-#include "lldb/Utility/Log.h"        // for Log
-#include "lldb/Utility/Logging.h"    // for GetLogIfAllCatego...
-#include "lldb/Utility/SharingPtr.h" // for SharingPtr
+#include "lldb/Utility/Log.h"
+#include "lldb/Utility/Logging.h"
+#include "lldb/Utility/RegisterValue.h"
+#include "lldb/Utility/SharingPtr.h"
 #include "lldb/Utility/Stream.h"
 #include "lldb/Utility/StreamString.h"
-#include "lldb/Utility/StringList.h"     // for StringList
-#include "lldb/Utility/StructuredData.h" // for StructuredData::O...
-#include "lldb/lldb-defines.h"           // for LLDB_INVALID_ADDRESS
-#include "lldb/lldb-forward.h"           // for ValueObjectSP
+#include "lldb/Utility/StringList.h"
+#include "lldb/Utility/StructuredData.h"
+#include "lldb/lldb-defines.h"
+#include "lldb/lldb-forward.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/ADT/Triple.h"       // for Triple, Triple::O...
-#include "llvm/Support/Compiler.h" // for LLVM_FALLTHROUGH
+#include "llvm/ADT/Triple.h"
+#include "llvm/Support/Compiler.h"
 
-#include <ctype.h>     // for isxdigit
-#include <inttypes.h>  // for PRIu64, PRIx64
-#include <memory>      // for shared_ptr, opera...
-#include <stdio.h>     // for sprintf
-#include <stdlib.h>    // for strtoul
-#include <string.h>    // for size_t, strchr
-#include <type_traits> // for move
-#include <utility>     // for pair
+#include <ctype.h>
+#include <inttypes.h>
+#include <memory>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <type_traits>
+#include <utility>
 
 namespace lldb_private {
 class ScriptInterpreter;
@@ -127,6 +128,7 @@ static FormatEntity::Entry::Definition g_frame_child_entries[] = {
     ENTRY("flags", FrameRegisterFlags, UInt64),
     ENTRY("no-debug", FrameNoDebug, None),
     ENTRY_CHILDREN("reg", FrameRegisterByName, UInt64, g_string_entry),
+    ENTRY("is-artificial", FrameIsArtificial, UInt32),
 };
 
 static FormatEntity::Entry::Definition g_function_child_entries[] = {
@@ -145,6 +147,7 @@ static FormatEntity::Entry::Definition g_function_child_entries[] = {
 static FormatEntity::Entry::Definition g_line_child_entries[] = {
     ENTRY_CHILDREN("file", LineEntryFile, None, g_file_child_entries),
     ENTRY("number", LineEntryLineNumber, UInt32),
+    ENTRY("column", LineEntryColumn, UInt32),
     ENTRY("start-addr", LineEntryStartAddress, UInt64),
     ENTRY("end-addr", LineEntryEndAddress, UInt64),
 };
@@ -355,6 +358,7 @@ const char *FormatEntity::Entry::TypeToCString(Type t) {
     ENUM_TO_CSTR(FrameRegisterFP);
     ENUM_TO_CSTR(FrameRegisterFlags);
     ENUM_TO_CSTR(FrameRegisterByName);
+    ENUM_TO_CSTR(FrameIsArtificial);
     ENUM_TO_CSTR(ScriptFrame);
     ENUM_TO_CSTR(FunctionID);
     ENUM_TO_CSTR(FunctionDidChange);
@@ -371,6 +375,7 @@ const char *FormatEntity::Entry::TypeToCString(Type t) {
     ENUM_TO_CSTR(FunctionIsOptimized);
     ENUM_TO_CSTR(LineEntryFile);
     ENUM_TO_CSTR(LineEntryLineNumber);
+    ENUM_TO_CSTR(LineEntryColumn);
     ENUM_TO_CSTR(LineEntryStartAddress);
     ENUM_TO_CSTR(LineEntryEndAddress);
     ENUM_TO_CSTR(CurrentPCArrow);
@@ -467,10 +472,9 @@ static bool DumpAddressOffsetFromFunction(Stream &s, const SymbolContext *sc,
       if (sc->function) {
         func_addr = sc->function->GetAddressRange().GetBaseAddress();
         if (sc->block && !concrete_only) {
-          // Check to make sure we aren't in an inline
-          // function. If we are, use the inline block
-          // range that contains "format_addr" since
-          // blocks can be discontiguous.
+          // Check to make sure we aren't in an inline function. If we are, use
+          // the inline block range that contains "format_addr" since blocks
+          // can be discontiguous.
           Block *inline_block = sc->block->GetContainingInlinedBlock();
           AddressRange inline_range;
           if (inline_block &&
@@ -622,7 +626,7 @@ static bool DumpRegister(Stream &s, StackFrame *frame, RegisterKind reg_kind,
         if (reg_info) {
           RegisterValue reg_value;
           if (reg_ctx->ReadRegister(reg_info, reg_value)) {
-            reg_value.Dump(&s, reg_info, false, false, format);
+            DumpRegisterValue(reg_value, &s, reg_info, false, false, format);
             return true;
           }
         }
@@ -822,8 +826,7 @@ static bool DumpValue(Stream &s, const SymbolContext *sc,
   if (do_deref_pointer && !is_array_range) {
     // I have not deref-ed yet, let's do it
     // this happens when we are not going through
-    // GetValueForVariableExpressionPath
-    // to get to the target ValueObject
+    // GetValueForVariableExpressionPath to get to the target ValueObject
     Status error;
     target = target->Dereference(error).get();
     if (error.Fail()) {
@@ -842,9 +845,9 @@ static bool DumpValue(Stream &s, const SymbolContext *sc,
     return false;
   }
 
-  // we do not want to use the summary for a bitfield of type T:n
-  // if we were originally dealing with just a T - that would get
-  // us into an endless recursion
+  // we do not want to use the summary for a bitfield of type T:n if we were
+  // originally dealing with just a T - that would get us into an endless
+  // recursion
   if (target->IsBitfield() && was_var_indexed) {
     // TODO: check for a (T:n)-specific summary - we should still obey that
     StreamString bitfield_name;
@@ -905,8 +908,7 @@ static bool DumpValue(Stream &s, const SymbolContext *sc,
   }
 
   // if directly trying to print ${var}, and this is an aggregate, display a
-  // nice
-  // type @ location message
+  // nice type @ location message
   if (is_aggregate && was_plain_var) {
     s << target->GetTypeName() << " @ " << target->GetLocationAsCString();
     return true;
@@ -1021,7 +1023,7 @@ static bool DumpRegister(Stream &s, StackFrame *frame, const char *reg_name,
       if (reg_info) {
         RegisterValue reg_value;
         if (reg_ctx->ReadRegister(reg_info, reg_value)) {
-          reg_value.Dump(&s, reg_info, false, false, format);
+          DumpRegisterValue(reg_value, &s, reg_info, false, false, format);
           return true;
         }
       }
@@ -1142,8 +1144,8 @@ bool FormatEntity::Format(const Entry &entry, Stream &s,
       if (!success)
         break;
     }
-    // Only if all items in a scope succeed, then do we
-    // print the output into the main stream
+    // Only if all items in a scope succeed, then do we print the output into
+    // the main stream
     if (success)
       s.Write(scope_stream.GetString().data(), scope_stream.GetString().size());
   }
@@ -1206,9 +1208,8 @@ bool FormatEntity::Format(const Entry &entry, Stream &s,
           // Watch for the special "tid" format...
           if (entry.printf_format == "tid") {
             // TODO(zturner): Rather than hardcoding this to be platform
-            // specific, it should be controlled by a
-            // setting and the default value of the setting can be different
-            // depending on the platform.
+            // specific, it should be controlled by a setting and the default
+            // value of the setting can be different depending on the platform.
             Target &target = thread->GetProcess()->GetTarget();
             ArchSpec arch(target.GetArchitecture());
             llvm::Triple::OSType ostype = arch.IsValid()
@@ -1489,6 +1490,13 @@ bool FormatEntity::Format(const Entry &entry, Stream &s,
       }
     }
     return false;
+
+  case Entry::Type::FrameIsArtificial: {
+    if (exe_ctx)
+      if (StackFrame *frame = exe_ctx->GetFramePtr())
+        return frame->IsArtificial();
+    return false;
+  }
 
   case Entry::Type::ScriptFrame:
     if (exe_ctx) {
@@ -1817,6 +1825,16 @@ bool FormatEntity::Format(const Entry &entry, Stream &s,
     }
     return false;
 
+  case Entry::Type::LineEntryColumn:
+    if (sc && sc->line_entry.IsValid() && sc->line_entry.column) {
+      const char *format = "%" PRIu32;
+      if (!entry.printf_format.empty())
+        format = entry.printf_format.c_str();
+      s.Printf(format, sc->line_entry.column);
+      return true;
+    }
+    return false;
+
   case Entry::Type::LineEntryStartAddress:
   case Entry::Type::LineEntryEndAddress:
     if (sc && sc->line_entry.range.GetBaseAddress().IsValid()) {
@@ -1914,9 +1932,9 @@ static Status ParseEntry(const llvm::StringRef &format_str,
             error.SetErrorStringWithFormat("%s", error_strm.GetData());
           } else if (sep_char == ':') {
             // Any value whose separator is a with a ':' means this value has a
-            // string argument
-            // that needs to be stored in the entry (like "${script.var:}").
-            // In this case the string value is the empty string which is ok.
+            // string argument that needs to be stored in the entry (like
+            // "${script.var:}"). In this case the string value is the empty
+            // string which is ok.
           } else {
             error.SetErrorStringWithFormat("%s", "invalid entry definitions");
           }
@@ -1926,8 +1944,7 @@ static Status ParseEntry(const llvm::StringRef &format_str,
           error = ParseEntry(value, entry_def, entry);
         } else if (sep_char == ':') {
           // Any value whose separator is a with a ':' means this value has a
-          // string argument
-          // that needs to be stored in the entry (like
+          // string argument that needs to be stored in the entry (like
           // "${script.var:modulename.function}")
           entry.string = value.str();
         } else {
@@ -2065,17 +2082,17 @@ Status FormatEntity::ParseInternal(llvm::StringRef &format, Entry &parent_entry,
       case '0':
         // 1 to 3 octal chars
         {
-          // Make a string that can hold onto the initial zero char,
-          // up to 3 octal digits, and a terminating NULL.
+          // Make a string that can hold onto the initial zero char, up to 3
+          // octal digits, and a terminating NULL.
           char oct_str[5] = {0, 0, 0, 0, 0};
 
           int i;
           for (i = 0; (format[i] >= '0' && format[i] <= '7') && i < 4; ++i)
             oct_str[i] = format[i];
 
-          // We don't want to consume the last octal character since
-          // the main for loop will do this for us, so we advance p by
-          // one less than i (even if i is zero)
+          // We don't want to consume the last octal character since the main
+          // for loop will do this for us, so we advance p by one less than i
+          // (even if i is zero)
           format = format.drop_front(i);
           unsigned long octal_value = ::strtoul(oct_str, nullptr, 8);
           if (octal_value <= UINT8_MAX) {
@@ -2115,8 +2132,8 @@ Status FormatEntity::ParseInternal(llvm::StringRef &format, Entry &parent_entry,
         break;
 
       default:
-        // Just desensitize any other character by just printing what
-        // came after the '\'
+        // Just desensitize any other character by just printing what came
+        // after the '\'
         parent_entry.AppendChar(desens_char);
         break;
       }
@@ -2142,10 +2159,9 @@ Status FormatEntity::ParseInternal(llvm::StringRef &format, Entry &parent_entry,
           if (!variable_format.empty()) {
             entry.printf_format = variable_format.str();
 
-            // If the format contains a '%' we are going to assume this is
-            // a printf style format. So if you want to format your thread ID
-            // using "0x%llx" you can use:
-            // ${thread.id%0x%llx}
+            // If the format contains a '%' we are going to assume this is a
+            // printf style format. So if you want to format your thread ID
+            // using "0x%llx" you can use: ${thread.id%0x%llx}
             //
             // If there is no '%' in the format, then it is assumed to be a
             // LLDB format name, or one of the extended formats specified in
@@ -2264,9 +2280,9 @@ Status FormatEntity::ParseInternal(llvm::StringRef &format, Entry &parent_entry,
               return error;
             }
           }
-          // Check if this entry just wants to insert a constant string
-          // value into the parent_entry, if so, insert the string with
-          // AppendText, else append the entry to the parent_entry.
+          // Check if this entry just wants to insert a constant string value
+          // into the parent_entry, if so, insert the string with AppendText,
+          // else append the entry to the parent_entry.
           if (entry.type == Entry::Type::InsertString)
             parent_entry.AppendText(entry.string.c_str());
           else
@@ -2350,12 +2366,11 @@ static void AddMatches(const FormatEntity::Entry::Definition *def,
   }
 }
 
-size_t FormatEntity::AutoComplete(llvm::StringRef str, int match_start_point,
-                                  int max_return_elements, bool &word_complete,
-                                  StringList &matches) {
-  word_complete = false;
-  str = str.drop_front(match_start_point);
-  matches.Clear();
+size_t FormatEntity::AutoComplete(CompletionRequest &request) {
+  llvm::StringRef str = request.GetCursorArgumentPrefix().str();
+
+  request.SetWordComplete(false);
+  str = str.drop_front(request.GetMatchStartPoint());
 
   const size_t dollar_pos = str.rfind('$');
   if (dollar_pos == llvm::StringRef::npos)
@@ -2365,7 +2380,7 @@ size_t FormatEntity::AutoComplete(llvm::StringRef str, int match_start_point,
   if (dollar_pos == str.size() - 1) {
     std::string match = str.str();
     match.append("{");
-    matches.AppendString(match);
+    request.AddCompletion(match);
     return 1;
   }
 
@@ -2383,8 +2398,10 @@ size_t FormatEntity::AutoComplete(llvm::StringRef str, int match_start_point,
   llvm::StringRef partial_variable(str.substr(dollar_pos + 2));
   if (partial_variable.empty()) {
     // Suggest all top level entites as we are just past "${"
-    AddMatches(&g_root, str, llvm::StringRef(), matches);
-    return matches.GetSize();
+    StringList new_matches;
+    AddMatches(&g_root, str, llvm::StringRef(), new_matches);
+    request.AddCompletions(new_matches);
+    return request.GetNumberOfMatches();
   }
 
   // We have a partially specified variable, find it
@@ -2400,19 +2417,23 @@ size_t FormatEntity::AutoComplete(llvm::StringRef str, int match_start_point,
     // Exact match
     if (n > 0) {
       // "${thread.info" <TAB>
-      matches.AppendString(MakeMatch(str, "."));
+      request.AddCompletion(MakeMatch(str, "."));
     } else {
       // "${thread.id" <TAB>
-      matches.AppendString(MakeMatch(str, "}"));
-      word_complete = true;
+      request.AddCompletion(MakeMatch(str, "}"));
+      request.SetWordComplete(true);
     }
   } else if (remainder.equals(".")) {
     // "${thread." <TAB>
-    AddMatches(entry_def, str, llvm::StringRef(), matches);
+    StringList new_matches;
+    AddMatches(entry_def, str, llvm::StringRef(), new_matches);
+    request.AddCompletions(new_matches);
   } else {
     // We have a partial match
     // "${thre" <TAB>
-    AddMatches(entry_def, str, remainder, matches);
+    StringList new_matches;
+    AddMatches(entry_def, str, remainder, new_matches);
+    request.AddCompletions(new_matches);
   }
-  return matches.GetSize();
+  return request.GetNumberOfMatches();
 }

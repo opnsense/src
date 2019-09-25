@@ -122,8 +122,10 @@ spibus_child_location_str(device_t bus, device_t child, char *buf,
     size_t buflen)
 {
 	struct spibus_ivar *devi = SPIBUS_IVAR(child);
+	int cs;
 
-	snprintf(buf, buflen, "cs=%d", devi->cs);
+	cs = devi->cs & ~SPIBUS_CS_HIGH; /* trim 'cs high' bit */
+	snprintf(buf, buflen, "bus=%d cs=%d", device_get_unit(bus), cs);
 	return (0);
 }
 
@@ -214,6 +216,7 @@ spibus_hinted_child(device_t bus, const char *dname, int dunit)
 	child = BUS_ADD_CHILD(bus, 0, dname, dunit);
 	devi = SPIBUS_IVAR(child);
 	devi->mode = SPIBUS_MODE_NONE;
+	resource_int_value(dname, dunit, "clock", &devi->clock);
 	resource_int_value(dname, dunit, "cs", &devi->cs);
 	resource_int_value(dname, dunit, "mode", &devi->mode);
 }

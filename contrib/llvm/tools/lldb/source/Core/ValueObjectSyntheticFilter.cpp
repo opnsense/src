@@ -9,14 +9,14 @@
 
 #include "lldb/Core/ValueObjectSyntheticFilter.h"
 
-#include "lldb/Core/Value.h" // for Value
+#include "lldb/Core/Value.h"
 #include "lldb/Core/ValueObject.h"
 #include "lldb/DataFormatters/TypeSynthetic.h"
-#include "lldb/Target/ExecutionContext.h" // for ExecutionContext
+#include "lldb/Target/ExecutionContext.h"
 #include "lldb/Utility/Log.h"
-#include "lldb/Utility/Logging.h"    // for GetLogIfAllCategoriesSet
-#include "lldb/Utility/SharingPtr.h" // for SharingPtr
-#include "lldb/Utility/Status.h"     // for Status
+#include "lldb/Utility/Logging.h"
+#include "lldb/Utility/SharingPtr.h"
+#include "lldb/Utility/Status.h"
 
 #include "llvm/ADT/STLExtras.h"
 
@@ -119,7 +119,7 @@ bool ValueObjectSynthetic::MightHaveChildren() {
   if (m_might_have_children == eLazyBoolCalculate)
     m_might_have_children =
         (m_synth_filter_ap->MightHaveChildren() ? eLazyBoolYes : eLazyBoolNo);
-  return (m_might_have_children == eLazyBoolNo ? false : true);
+  return (m_might_have_children != eLazyBoolNo);
 }
 
 uint64_t ValueObjectSynthetic::GetByteSize() { return m_parent->GetByteSize(); }
@@ -129,7 +129,19 @@ lldb::ValueType ValueObjectSynthetic::GetValueType() const {
 }
 
 void ValueObjectSynthetic::CreateSynthFilter() {
-  m_synth_filter_ap = (m_synth_sp->GetFrontEnd(*m_parent));
+  ValueObject *valobj_for_frontend = m_parent;
+  if (m_synth_sp->WantsDereference())
+  {
+    CompilerType type = m_parent->GetCompilerType();
+    if (type.IsValid() && type.IsPointerOrReferenceType())
+    {
+      Status error;
+      lldb::ValueObjectSP deref_sp = m_parent->Dereference(error);
+      if (error.Success())
+        valobj_for_frontend = deref_sp.get();
+    }
+  }
+  m_synth_filter_ap = (m_synth_sp->GetFrontEnd(*valobj_for_frontend));
   if (!m_synth_filter_ap.get())
     m_synth_filter_ap = llvm::make_unique<DummySyntheticFrontEnd>(*m_parent);
 }
@@ -162,7 +174,7 @@ bool ValueObjectSynthetic::UpdateValue() {
   }
 
   // let our backend do its update
-  if (m_synth_filter_ap->Update() == false) {
+  if (!m_synth_filter_ap->Update()) {
     if (log)
       log->Printf("[ValueObjectSynthetic::UpdateValue] name=%s, synthetic "
                   "filter said caches are stale - clearing",
@@ -171,10 +183,9 @@ bool ValueObjectSynthetic::UpdateValue() {
     m_children_byindex.Clear();
     m_name_toindex.Clear();
     // usually, an object's value can change but this does not alter its
-    // children count
-    // for a synthetic VO that might indeed happen, so we need to tell the upper
-    // echelons
-    // that they need to come back to us asking for children
+    // children count for a synthetic VO that might indeed happen, so we need
+    // to tell the upper echelons that they need to come back to us asking for
+    // children
     m_children_count_valid = false;
     m_synthetic_children_cache.Clear();
     m_synthetic_children_count = UINT32_MAX;
@@ -224,7 +235,7 @@ lldb::ValueObjectSP ValueObjectSynthetic::GetChildAtIndex(size_t idx,
   UpdateValueIfNeeded();
 
   ValueObject *valobj;
-  if (m_children_byindex.GetValueForKey(idx, valobj) == false) {
+  if (!m_children_byindex.GetValueForKey(idx, valobj)) {
     if (can_create && m_synth_filter_ap.get() != nullptr) {
       if (log)
         log->Printf("[ValueObjectSynthetic::GetChildAtIndex] name=%s, child at "

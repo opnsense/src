@@ -11,10 +11,16 @@
         defaults
         ..
         dtb
+            allwinner             tags=package=runtime
+            ..
             overlays              tags=package=runtime
+            ..
+            rockchip              tags=package=runtime
             ..
         ..
         firmware
+        ..
+        lua
         ..
         kernel
         ..
@@ -31,8 +37,6 @@
         autofs
         ..
         bluetooth
-        ..
-        casper
         ..
         cron.d
         ..
@@ -74,8 +78,6 @@
         ..
         security
         ..
-        skel
-        ..
         ssh
         ..
         ssl
@@ -89,6 +91,8 @@
         casper
         ..
         geom
+        ..
+        nvmecontrol
         ..
     ..
     libexec

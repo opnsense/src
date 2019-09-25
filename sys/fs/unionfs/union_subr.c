@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1994 Jan-Simon Pendry
  * Copyright (c) 1994
  *	The Regents of the University of California.  All rights reserved.
@@ -16,7 +18,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -346,6 +348,13 @@ unionfs_noderem(struct vnode *vp, struct thread *td)
 	vp->v_vnlock = &(vp->v_lock);
 	vp->v_data = NULL;
 	vp->v_object = NULL;
+	if (vp->v_writecount > 0) {
+		if (uvp != NULL)
+			VOP_ADD_WRITECOUNT(uvp, -vp->v_writecount);
+		else if (lvp != NULL)
+			VOP_ADD_WRITECOUNT(lvp, -vp->v_writecount);
+	} else if (vp->v_writecount < 0)
+		vp->v_writecount = 0;
 	VI_UNLOCK(vp);
 
 	if (lvp != NULLVP)
@@ -939,10 +948,14 @@ unionfs_vn_create_on_upper(struct vnode **vpp, struct vnode *udvp,
 		vput(vp);
 		goto unionfs_vn_create_on_upper_free_out1;
 	}
-	VOP_ADD_WRITECOUNT(vp, 1);
+	error = VOP_ADD_WRITECOUNT(vp, 1);
 	CTR3(KTR_VFS, "%s: vp %p v_writecount increased to %d",  __func__, vp,
 	    vp->v_writecount);
-	*vpp = vp;
+	if (error == 0) {
+		*vpp = vp;
+	} else {
+		VOP_CLOSE(vp, fmode, cred, td);
+	}
 
 unionfs_vn_create_on_upper_free_out1:
 	VOP_UNLOCK(udvp, LK_RELEASE);
@@ -1076,7 +1089,7 @@ unionfs_copyfile(struct unionfs_node *unp, int docopy, struct ucred *cred,
 		}
 	}
 	VOP_CLOSE(uvp, FWRITE, cred, td);
-	VOP_ADD_WRITECOUNT(uvp, -1);
+	VOP_ADD_WRITECOUNT_CHECKED(uvp, -1);
 	CTR3(KTR_VFS, "%s: vp %p v_writecount decreased to %d", __func__, uvp,
 	    uvp->v_writecount);
 

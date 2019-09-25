@@ -39,6 +39,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/user.h>
 
 #include <sys/un.h>
+#define	_WANT_UNPCB
 #include <sys/unpcb.h>
 
 #include <net/route.h>
@@ -56,6 +57,7 @@ __FBSDID("$FreeBSD$");
 #include <ctype.h>
 #include <err.h>
 #include <errno.h>
+#include <jail.h>
 #include <netdb.h>
 #include <pwd.h>
 #include <stdarg.h>
@@ -75,9 +77,13 @@ static int	 opt_c;		/* Show connected sockets */
 static int	 opt_j;		/* Show specified jail */
 static int	 opt_L;		/* Don't show IPv4 or IPv6 loopback sockets */
 static int	 opt_l;		/* Show listening sockets */
+static int	 opt_q;		/* Don't show header */
+static int	 opt_S;		/* Show protocol stack if applicable */
 static int	 opt_s;		/* Show protocol state if applicable */
+static int	 opt_U;		/* Show remote UDP encapsulation port number */
 static int	 opt_u;		/* Show Unix domain sockets */
 static int	 opt_v;		/* Verbose mode */
+static int	 opt_w;		/* Wide print area for addresses */
 
 /*
  * Default protocols to use if no -P was defined.
@@ -96,18 +102,21 @@ static int	*ports;
 
 struct addr {
 	struct sockaddr_storage address;
+	unsigned int encaps_port;
+	int state;
 	struct addr *next;
 };
 
 struct sock {
-	void *socket;
-	void *pcb;
+	kvaddr_t socket;
+	kvaddr_t pcb;
 	int shown;
 	int vflag;
 	int family;
 	int proto;
 	int state;
 	const char *protoname;
+	char stack[TCP_FUNCTION_NAME_LEN_MAX];
 	struct addr *laddr;
 	struct addr *faddr;
 	struct sock *next;
@@ -531,6 +540,8 @@ gather_sctp(void)
 					    "address family %d not supported",
 					    xraddr->address.sa.sa_family);
 				}
+				faddr->encaps_port = xraddr->encaps_port;
+				faddr->state = xraddr->state;
 				faddr->next = NULL;
 				if (prev_faddr == NULL)
 					sock->faddr = faddr;
@@ -563,8 +574,7 @@ gather_inet(int proto)
 {
 	struct xinpgen *xig, *exig;
 	struct xinpcb *xip;
-	struct xtcpcb *xtp;
-	struct inpcb *inp;
+	struct xtcpcb *xtp = NULL;
 	struct xsocket *so;
 	struct sock *sock;
 	struct addr *laddr, *faddr;
@@ -627,54 +637,52 @@ gather_inet(int proto)
 		xig = (struct xinpgen *)(void *)((char *)xig + xig->xig_len);
 		if (xig >= exig)
 			break;
-		xip = (struct xinpcb *)xig;
-		xtp = (struct xtcpcb *)xig;
 		switch (proto) {
 		case IPPROTO_TCP:
+			xtp = (struct xtcpcb *)xig;
+			xip = &xtp->xt_inp;
 			if (xtp->xt_len != sizeof(*xtp)) {
 				warnx("struct xtcpcb size mismatch");
 				goto out;
 			}
-			inp = &xtp->xt_inp;
-			so = &xtp->xt_socket;
-			protoname = xtp->xt_tp.t_flags & TF_TOE ? "toe" : "tcp";
+			protoname = xtp->t_flags & TF_TOE ? "toe" : "tcp";
 			break;
 		case IPPROTO_UDP:
 		case IPPROTO_DIVERT:
+			xip = (struct xinpcb *)xig;
 			if (xip->xi_len != sizeof(*xip)) {
 				warnx("struct xinpcb size mismatch");
 				goto out;
 			}
-			inp = &xip->xi_inp;
-			so = &xip->xi_socket;
 			break;
 		default:
 			errx(1, "protocol %d not supported", proto);
 		}
-		if ((inp->inp_vflag & vflag) == 0)
+		so = &xip->xi_socket;
+		if ((xip->inp_vflag & vflag) == 0)
 			continue;
-		if (inp->inp_vflag & INP_IPV4) {
-			if ((inp->inp_fport == 0 && !opt_l) ||
-			    (inp->inp_fport != 0 && !opt_c))
+		if (xip->inp_vflag & INP_IPV4) {
+			if ((xip->inp_fport == 0 && !opt_l) ||
+			    (xip->inp_fport != 0 && !opt_c))
 				continue;
 #define	__IN_IS_ADDR_LOOPBACK(pina) \
 	((ntohl((pina)->s_addr) >> IN_CLASSA_NSHIFT) == IN_LOOPBACKNET)
 			if (opt_L &&
-			    (__IN_IS_ADDR_LOOPBACK(&inp->inp_faddr) ||
-			     __IN_IS_ADDR_LOOPBACK(&inp->inp_laddr)))
+			    (__IN_IS_ADDR_LOOPBACK(&xip->inp_faddr) ||
+			     __IN_IS_ADDR_LOOPBACK(&xip->inp_laddr)))
 				continue;
 #undef	__IN_IS_ADDR_LOOPBACK
-		} else if (inp->inp_vflag & INP_IPV6) {
-			if ((inp->inp_fport == 0 && !opt_l) ||
-			    (inp->inp_fport != 0 && !opt_c))
+		} else if (xip->inp_vflag & INP_IPV6) {
+			if ((xip->inp_fport == 0 && !opt_l) ||
+			    (xip->inp_fport != 0 && !opt_c))
 				continue;
 			if (opt_L &&
-			    (IN6_IS_ADDR_LOOPBACK(&inp->in6p_faddr) ||
-			     IN6_IS_ADDR_LOOPBACK(&inp->in6p_laddr)))
+			    (IN6_IS_ADDR_LOOPBACK(&xip->in6p_faddr) ||
+			     IN6_IS_ADDR_LOOPBACK(&xip->in6p_laddr)))
 				continue;
 		} else {
 			if (opt_v)
-				warnx("invalid vflag 0x%x", inp->inp_vflag);
+				warnx("invalid vflag 0x%x", xip->inp_vflag);
 			continue;
 		}
 		if ((sock = calloc(1, sizeof(*sock))) == NULL)
@@ -685,26 +693,29 @@ gather_inet(int proto)
 			err(1, "malloc()");
 		sock->socket = so->xso_so;
 		sock->proto = proto;
-		if (inp->inp_vflag & INP_IPV4) {
+		if (xip->inp_vflag & INP_IPV4) {
 			sock->family = AF_INET;
 			sockaddr(&laddr->address, sock->family,
-			    &inp->inp_laddr, inp->inp_lport);
+			    &xip->inp_laddr, xip->inp_lport);
 			sockaddr(&faddr->address, sock->family,
-			    &inp->inp_faddr, inp->inp_fport);
-		} else if (inp->inp_vflag & INP_IPV6) {
+			    &xip->inp_faddr, xip->inp_fport);
+		} else if (xip->inp_vflag & INP_IPV6) {
 			sock->family = AF_INET6;
 			sockaddr(&laddr->address, sock->family,
-			    &inp->in6p_laddr, inp->inp_lport);
+			    &xip->in6p_laddr, xip->inp_lport);
 			sockaddr(&faddr->address, sock->family,
-			    &inp->in6p_faddr, inp->inp_fport);
+			    &xip->in6p_faddr, xip->inp_fport);
 		}
 		laddr->next = NULL;
 		faddr->next = NULL;
 		sock->laddr = laddr;
 		sock->faddr = faddr;
-		sock->vflag = inp->inp_vflag;
-		if (proto == IPPROTO_TCP)
-			sock->state = xtp->xt_tp.t_state;
+		sock->vflag = xip->inp_vflag;
+		if (proto == IPPROTO_TCP) {
+			sock->state = xtp->t_state;
+			memcpy(sock->stack, xtp->xt_stack,
+			    TCP_FUNCTION_NAME_LEN_MAX);
+		}
 		sock->protoname = protoname;
 		hash = (int)((uintptr_t)sock->socket % HASHSIZE);
 		sock->next = sockhash[hash];
@@ -778,8 +789,8 @@ gather_unix(int proto)
 			warnx("struct xunpcb size mismatch");
 			goto out;
 		}
-		if ((xup->xu_unp.unp_conn == NULL && !opt_l) ||
-		    (xup->xu_unp.unp_conn != NULL && !opt_c))
+		if ((xup->unp_conn == 0 && !opt_l) ||
+		    (xup->unp_conn != 0 && !opt_c))
 			continue;
 		if ((sock = calloc(1, sizeof(*sock))) == NULL)
 			err(1, "malloc()");
@@ -792,11 +803,11 @@ gather_unix(int proto)
 		sock->proto = proto;
 		sock->family = AF_UNIX;
 		sock->protoname = protoname;
-		if (xup->xu_unp.unp_addr != NULL)
+		if (xup->xu_addr.sun_family == AF_UNIX)
 			laddr->address =
 			    *(struct sockaddr_storage *)(void *)&xup->xu_addr;
-		else if (xup->xu_unp.unp_conn != NULL)
-			*(void **)&(faddr->address) = xup->xu_unp.unp_conn;
+		else if (xup->unp_conn != 0)
+			*(kvaddr_t*)&(faddr->address) = xup->unp_conn;
 		laddr->next = NULL;
 		faddr->next = NULL;
 		sock->laddr = laddr;
@@ -936,7 +947,7 @@ check_ports(struct sock *s)
 }
 
 static const char *
-sctp_state(int state)
+sctp_conn_state(int state)
 {
 	switch (state) {
 	case SCTP_CLOSED:
@@ -975,11 +986,30 @@ sctp_state(int state)
 	}
 }
 
+static const char *
+sctp_path_state(int state)
+{
+	switch (state) {
+	case SCTP_UNCONFIRMED:
+		return "UNCONFIRMED";
+		break;
+	case SCTP_ACTIVE:
+		return "ACTIVE";
+		break;
+	case SCTP_INACTIVE:
+		return "INACTIVE";
+		break;
+	default:
+		return "UNKNOWN";
+		break;
+	}
+}
+
 static void
 displaysock(struct sock *s, int pos)
 {
-	void *p;
-	int hash, first;
+	kvaddr_t p;
+	int hash, first, offset;
 	struct addr *laddr, *faddr;
 	struct sock *s_tmp;
 
@@ -996,7 +1026,8 @@ displaysock(struct sock *s, int pos)
 	faddr = s->faddr;
 	first = 1;
 	while (laddr != NULL || faddr != NULL) {
-		while (pos < 36)
+		offset = 36;
+		while (pos < offset)
 			pos += xprintf(" ");
 		switch (s->family) {
 		case AF_INET:
@@ -1006,10 +1037,12 @@ displaysock(struct sock *s, int pos)
 				if (s->family == AF_INET6 && pos >= 58)
 					pos += xprintf(" ");
 			}
-			while (pos < 58)
+			offset += opt_w ? 46 : 22;
+			while (pos < offset)
 				pos += xprintf(" ");
 			if (faddr != NULL)
 				pos += printaddr(&faddr->address);
+			offset += opt_w ? 46 : 22;
 			break;
 		case AF_UNIX:
 			if ((laddr == NULL) || (faddr == NULL))
@@ -1021,9 +1054,10 @@ displaysock(struct sock *s, int pos)
 				break;
 			}
 			/* client */
-			p = *(void **)&(faddr->address);
-			if (p == NULL) {
+			p = *(kvaddr_t*)&(faddr->address);
+			if (p == 0) {
 				pos += xprintf("(not connected)");
+				offset += opt_w ? 92 : 44;
 				break;
 			}
 			pos += xprintf("-> ");
@@ -1041,25 +1075,65 @@ displaysock(struct sock *s, int pos)
 				pos += xprintf("??");
 			else
 				pos += printaddr(&s_tmp->laddr->address);
+			offset += opt_w ? 92 : 44;
 			break;
 		default:
 			abort();
 		}
-		if (first && opt_s &&
-		    (s->proto == IPPROTO_SCTP || s->proto == IPPROTO_TCP)) {
-			while (pos < 80)
-				pos += xprintf(" ");
-			switch (s->proto) {
-			case IPPROTO_SCTP:
-				pos += xprintf("%s", sctp_state(s->state));
-				break;
-			case IPPROTO_TCP:
-				if (s->state >= 0 && s->state < TCP_NSTATES)
-					pos +=
-					    xprintf("%s", tcpstates[s->state]);
-				else
-					pos += xprintf("?");
-				break;
+		if (opt_U) {
+			if (faddr != NULL &&
+			    s->proto == IPPROTO_SCTP &&
+			    s->state != SCTP_CLOSED &&
+			    s->state != SCTP_BOUND &&
+			    s->state != SCTP_LISTEN) {
+				while (pos < offset)
+					pos += xprintf(" ");
+				pos += xprintf("%u",
+				    ntohs(faddr->encaps_port));
+			}
+			offset += 7;
+		}
+		if (opt_s) {
+			if (faddr != NULL &&
+			    s->proto == IPPROTO_SCTP &&
+			    s->state != SCTP_CLOSED &&
+			    s->state != SCTP_BOUND &&
+			    s->state != SCTP_LISTEN) {
+				while (pos < offset)
+					pos += xprintf(" ");
+				pos += xprintf("%s",
+				    sctp_path_state(faddr->state));
+			}
+			offset += 13;
+		}
+		if (first) {
+			if (opt_s) {
+				if (s->proto == IPPROTO_SCTP ||
+				    s->proto == IPPROTO_TCP) {
+					while (pos < offset)
+						pos += xprintf(" ");
+					switch (s->proto) {
+					case IPPROTO_SCTP:
+						pos += xprintf("%s",
+						    sctp_conn_state(s->state));
+						break;
+					case IPPROTO_TCP:
+						if (s->state >= 0 &&
+						    s->state < TCP_NSTATES)
+							pos += xprintf("%s",
+							    tcpstates[s->state]);
+						else
+							pos += xprintf("?");
+						break;
+					}
+				}
+				offset += 13;
+			}
+			if (opt_S && s->proto == IPPROTO_TCP) {
+				while (pos < offset)
+					pos += xprintf(" ");
+				xprintf("%.*s", TCP_FUNCTION_NAME_LEN_MAX,
+				    s->stack);
 			}
 		}
 		if (laddr != NULL)
@@ -1083,21 +1157,30 @@ display(void)
 	struct sock *s;
 	int hash, n, pos;
 
-	printf("%-8s %-10s %-5s %-2s %-6s %-21s %-21s",
-	    "USER", "COMMAND", "PID", "FD", "PROTO",
-	    "LOCAL ADDRESS", "FOREIGN ADDRESS");
-	if (opt_s)
-		printf(" %-12s", "STATE");
-	printf("\n");
+	if (opt_q != 1) {
+		printf("%-8s %-10s %-5s %-2s %-6s %-*s %-*s",
+		    "USER", "COMMAND", "PID", "FD", "PROTO",
+		    opt_w ? 45 : 21, "LOCAL ADDRESS",
+		    opt_w ? 45 : 21, "FOREIGN ADDRESS");
+		if (opt_U)
+			printf(" %-6s", "ENCAPS");
+		if (opt_s) {
+			printf(" %-12s", "PATH STATE");
+			printf(" %-12s", "CONN STATE");
+		}
+		if (opt_S)
+			printf(" %.*s", TCP_FUNCTION_NAME_LEN_MAX, "STACK");
+		printf("\n");
+	}
 	setpassent(1);
 	for (xf = xfiles, n = 0; n < nxfiles; ++n, ++xf) {
-		if (xf->xf_data == NULL)
+		if (xf->xf_data == 0)
 			continue;
 		if (opt_j >= 0 && opt_j != getprocjid(xf->xf_pid))
 			continue;
 		hash = (int)((uintptr_t)xf->xf_data % HASHSIZE);
 		for (s = sockhash[hash]; s != NULL; s = s->next) {
-			if ((void *)s->socket != xf->xf_data)
+			if (s->socket != xf->xf_data)
 				continue;
 			if (!check_ports(s))
 				continue;
@@ -1158,7 +1241,7 @@ static void
 usage(void)
 {
 	fprintf(stderr,
-	    "usage: sockstat [-46cLlsu] [-j jid] [-p ports] [-P protocols]\n");
+	    "usage: sockstat [-46cLlSsUuvw] [-j jid] [-p ports] [-P protocols]\n");
 	exit(1);
 }
 
@@ -1169,7 +1252,7 @@ main(int argc, char *argv[])
 	int o, i;
 
 	opt_j = -1;
-	while ((o = getopt(argc, argv, "46cj:Llp:P:suv")) != -1)
+	while ((o = getopt(argc, argv, "46cj:Llp:P:qSsUuvw")) != -1)
 		switch (o) {
 		case '4':
 			opt_4 = 1;
@@ -1181,7 +1264,9 @@ main(int argc, char *argv[])
 			opt_c = 1;
 			break;
 		case 'j':
-			opt_j = atoi(optarg);
+			opt_j = jail_getid(optarg);
+			if (opt_j < 0)
+				errx(1, "%s", jail_errmsg);
 			break;
 		case 'L':
 			opt_L = 1;
@@ -1195,14 +1280,26 @@ main(int argc, char *argv[])
 		case 'P':
 			protos_defined = parse_protos(optarg);
 			break;
+		case 'q':
+			opt_q = 1;
+			break;
+		case 'S':
+			opt_S = 1;
+			break;
 		case 's':
 			opt_s = 1;
+			break;
+		case 'U':
+			opt_U = 1;
 			break;
 		case 'u':
 			opt_u = 1;
 			break;
 		case 'v':
 			++opt_v;
+			break;
+		case 'w':
+			opt_w = 1;
 			break;
 		default:
 			usage();

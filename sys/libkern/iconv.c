@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2000-2001 Boris Popov
  * All rights reserved.
  *
@@ -409,7 +411,7 @@ iconv_sysctl_add(SYSCTL_HANDLER_ARGS)
 		return error;
 	if (din.ia_version != ICONV_ADD_VER)
 		return EINVAL;
-	if (din.ia_datalen > ICONV_CSMAXDATALEN || din.ia_datalen < 0)
+	if (din.ia_datalen > ICONV_CSMAXDATALEN)
 		return EINVAL;
 	if (strnlen(din.ia_from, sizeof(din.ia_from)) >= ICONV_CSNMAXLEN)
 		return EINVAL;

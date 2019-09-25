@@ -1,5 +1,7 @@
 #!/bin/sh
 #
+# SPDX-License-Identifier: BSD-3-Clause
+#
 # Copyright (c) 2008 Yahoo!, Inc.
 # All rights reserved.
 #
@@ -31,8 +33,29 @@
 
 usage()
 {
-	echo "usage: crashinfo [-d crashdir] [-n dumpnr] [-k kernel] [core]"
+	echo "usage: crashinfo [-b] [-d crashdir] [-n dumpnr]" \
+		"[-k kernel] [core]"
 	exit 1
+}
+
+# Remove an uncompressed copy of a dump
+cleanup()
+{
+
+	[ -e $VMCORE ] && rm -f $VMCORE
+}
+
+# Find a gdb binary to use and save the value in GDB.
+find_gdb()
+{
+	local binary
+
+	for binary in /usr/local/bin/gdb /usr/libexec/gdb /usr/bin/gdb; do
+		if [ -x ${binary} ]; then
+			GDB=${binary}
+			return
+		fi
+	done
 }
 
 # Run a single gdb command against a kernel file in batch mode.
@@ -44,10 +67,10 @@ gdb_command()
 
 	k=$1 ; shift
 
-	if [ -x /usr/local/bin/gdb ]; then
-		/usr/local/bin/gdb -batch -ex "$@" $k
+	if [ ${GDB} = /usr/local/bin/gdb ]; then
+		${GDB} -batch -ex "$@" $k
 	else
-		echo -e "$@" | /usr/bin/gdb -x /dev/stdin -batch $k
+		echo -e "$@" | ${GDB} -x /dev/stdin -batch $k
 	fi
 }
 
@@ -82,12 +105,16 @@ find_kernel()
 	done
 }
 
+BATCH=false
 CRASHDIR=/var/crash
 DUMPNR=
 KERNEL=
 
-while getopts "d:n:k:" opt; do
+while getopts "bd:n:k:" opt; do
 	case "$opt" in
+	b)
+		BATCH=true
+		;;
 	d)
 		CRASHDIR=$OPTARG
 		;;
@@ -113,7 +140,7 @@ if [ $# -eq 1 ]; then
 
 	# Figure out the crash directory and number from the vmcore name.
 	CRASHDIR=`dirname $1`
-	DUMPNR=$(expr $(basename $1) : 'vmcore\.\([0-9]*\)$')
+	DUMPNR=$(expr $(basename $1) : 'vmcore\.\([0-9]*\)')
 	if [ -z "$DUMPNR" ]; then
 		echo "Unable to determine dump number from vmcore file $1."
 		exit 1
@@ -142,9 +169,28 @@ INFO=$CRASHDIR/info.$DUMPNR
 FILE=$CRASHDIR/core.txt.$DUMPNR
 HOSTNAME=`hostname`
 
-if [ ! -e $VMCORE ]; then
-	echo "$VMCORE not found"
+if $BATCH; then
+	echo "Writing crash summary to $FILE."
+	exec > $FILE 2>&1
+fi
+
+find_gdb
+if [ -z "$GDB" ]; then
+	echo "Unable to find a kernel debugger."
 	exit 1
+fi
+
+if [ ! -e $VMCORE ]; then
+    	if [ -e $VMCORE.gz ]; then
+		trap cleanup EXIT HUP INT QUIT TERM
+		gzcat $VMCORE.gz > $VMCORE
+	elif [ -e $VMCORE.zst ]; then
+		trap cleanup EXIT HUP INT QUIT TERM
+		zstdcat $VMCORE.zst > $VMCORE
+	else
+		echo "$VMCORE not found"
+		exit 1
+	fi
 fi
 
 if [ ! -e $INFO ]; then
@@ -164,8 +210,6 @@ elif [ ! -e $KERNEL ]; then
 	exit 1
 fi
 
-echo "Writing crash summary to $FILE."
-
 umask 077
 
 # Simulate uname
@@ -174,7 +218,10 @@ osrelease=$(gdb_command $KERNEL 'printf "%s", osrelease')
 version=$(gdb_command $KERNEL 'printf "%s", version' | tr '\t\n' '  ')
 machine=$(gdb_command $KERNEL 'printf "%s", machine')
 
-exec > $FILE 2>&1
+if ! $BATCH; then
+	echo "Writing crash summary to $FILE."
+	exec > $FILE 2>&1
+fi
 
 echo "$HOSTNAME dumped core - see $VMCORE"
 echo
@@ -191,11 +238,7 @@ file=`mktemp /tmp/crashinfo.XXXXXX`
 if [ $? -eq 0 ]; then
 	echo "bt" >> $file
 	echo "quit" >> $file
-	if [ -x /usr/local/bin/kgdb ]; then
-		/usr/local/bin/kgdb $KERNEL $VMCORE < $file
-	else
-		kgdb $KERNEL $VMCORE < $file
-	fi
+	${GDB%gdb}kgdb $KERNEL $VMCORE < $file
 	rm -f $file
 	echo
 fi

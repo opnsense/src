@@ -1,4 +1,4 @@
-/*	$NetBSD: gzip.c,v 1.112 2017/08/23 13:04:17 christos Exp $	*/
+/*	$NetBSD: gzip.c,v 1.116 2018/10/27 11:39:12 skrll Exp $	*/
 
 /*-
  * SPDX-License-Identifier: BSD-2-Clause-NetBSD
@@ -49,6 +49,7 @@ __FBSDID("$FreeBSD$");
  *	- make bzip2/compress -v/-t/-l support work as well as possible
  */
 
+#include <sys/endian.h>
 #include <sys/param.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -83,6 +84,9 @@ enum filetype {
 #ifndef NO_XZ_SUPPORT
 	FT_XZ,
 #endif
+#ifndef NO_LZ_SUPPORT
+	FT_LZ,
+#endif
 	FT_LAST,
 	FT_UNKNOWN
 };
@@ -107,6 +111,11 @@ enum filetype {
 #include <lzma.h>
 #define XZ_SUFFIX	".xz"
 #define XZ_MAGIC	"\3757zXZ"
+#endif
+
+#ifndef NO_LZ_SUPPORT
+#define LZ_SUFFIX	".lz"
+#define LZ_MAGIC	"LZIP"
 #endif
 
 #define GZ_SUFFIX	".gz"
@@ -154,6 +163,9 @@ static suffixes_t suffixes[] = {
 #ifndef NO_XZ_SUPPORT
 	SUFFIX(XZ_SUFFIX,	""),
 #endif
+#ifndef NO_LZ_SUPPORT
+	SUFFIX(LZ_SUFFIX,	""),
+#endif
 	SUFFIX(GZ_SUFFIX,	""),	/* Overwritten by -S "" */
 #endif /* SMALL */
 #undef SUFFIX
@@ -161,7 +173,7 @@ static suffixes_t suffixes[] = {
 #define NUM_SUFFIXES (nitems(suffixes))
 #define SUFFIX_MAXLEN	30
 
-static	const char	gzip_version[] = "FreeBSD gzip 20171121";
+static	const char	gzip_version[] = "FreeBSD gzip 20190107";
 
 #ifndef SMALL
 static	const char	gzip_copyright[] = \
@@ -245,6 +257,7 @@ static	void	display_license(void);
 static	const suffixes_t *check_suffix(char *, int);
 static	ssize_t	read_retry(int, void *, size_t);
 static	ssize_t	write_retry(int, const void *, size_t);
+static void	print_list_out(off_t, off_t, const char*);
 
 #ifdef SMALL
 #define infile_set(f,t) infile_set(f)
@@ -288,6 +301,11 @@ static	off_t	unpack(int, int, char *, size_t, off_t *);
 
 #ifndef NO_XZ_SUPPORT
 static	off_t	unxz(int, int, char *, size_t, off_t *);
+static	off_t	unxz_len(int);
+#endif
+
+#ifndef NO_LZ_SUPPORT
+static	off_t	unlz(int, int, char *, size_t, off_t *);
 #endif
 
 #ifdef SMALL
@@ -1016,10 +1034,7 @@ gz_uncompress(int in, int out, char *pre, size_t prelen, off_t *gsizep,
 					maybe_warnx("truncated input");
 					goto stop_and_fail;
 				}
-				origcrc = ((unsigned)z.next_in[0] & 0xff) |
-					((unsigned)z.next_in[1] & 0xff) << 8 |
-					((unsigned)z.next_in[2] & 0xff) << 16 |
-					((unsigned)z.next_in[3] & 0xff) << 24;
+				origcrc = le32dec(&z.next_in[0]);
 				if (origcrc != crc) {
 					maybe_warnx("invalid compressed"
 					     " data--crc error");
@@ -1047,10 +1062,7 @@ gz_uncompress(int in, int out, char *pre, size_t prelen, off_t *gsizep,
 					maybe_warnx("truncated input");
 					goto stop_and_fail;
 				}
-				origlen = ((unsigned)z.next_in[0] & 0xff) |
-					((unsigned)z.next_in[1] & 0xff) << 8 |
-					((unsigned)z.next_in[2] & 0xff) << 16 |
-					((unsigned)z.next_in[3] & 0xff) << 24;
+				origlen = le32dec(&z.next_in[0]);
 
 				if (origlen != out_sub_tot) {
 					maybe_warnx("invalid compressed"
@@ -1162,6 +1174,11 @@ file_gettype(u_char *buf)
 #ifndef NO_XZ_SUPPORT
 	if (memcmp(buf, XZ_MAGIC, 4) == 0)	/* XXX: We only have 4 bytes */
 		return FT_XZ;
+	else
+#endif
+#ifndef NO_LZ_SUPPORT
+	if (memcmp(buf, LZ_MAGIC, 4) == 0)
+		return FT_LZ;
 	else
 #endif
 		return FT_UNKNOWN;
@@ -1429,6 +1446,7 @@ file_uncompress(char *file, char *outfile, size_t outsize)
 	unsigned char header1[4];
 	enum filetype method;
 	int fd, ofd, zfd = -1;
+	int error;
 	size_t in_size;
 #ifndef SMALL
 	ssize_t rv;
@@ -1444,7 +1462,6 @@ file_uncompress(char *file, char *outfile, size_t outsize)
 		goto lose;
 	}
 	if (fstat(fd, &isb) != 0) {
-		close(fd);
 		maybe_warn("can't stat %s", file);
 		goto lose;
 	}
@@ -1497,7 +1514,7 @@ file_uncompress(char *file, char *outfile, size_t outsize)
 			goto lose;
 		}
 		infile_newdata(rv);
-		timestamp = ts[3] << 24 | ts[2] << 16 | ts[1] << 8 | ts[0];
+		timestamp = le32dec(&ts[0]);
 
 		if (header1[3] & ORIG_NAME) {
 			rbytes = pread(fd, name, sizeof(name) - 1, GZIP_ORIGNAME);
@@ -1602,14 +1619,21 @@ file_uncompress(char *file, char *outfile, size_t outsize)
 
 		size = zuncompress(in, out, NULL, 0, NULL);
 		/* need to fclose() if ferror() is true... */
-		if (ferror(in) | fclose(in)) {
-			maybe_warn("failed infile fclose");
-			unlink(outfile);
+		error = ferror(in);
+		if (error | fclose(in)) {
+			if (error)
+				maybe_warn("failed infile");
+			else
+				maybe_warn("failed infile fclose");
+			if (cflag == 0)
+				unlink(outfile);
 			(void)fclose(out);
+			goto lose;
 		}
 		if (fclose(out) != 0) {
 			maybe_warn("failed outfile fclose");
-			unlink(outfile);
+			if (cflag == 0)
+				unlink(outfile);
 			goto lose;
 		}
 		break;
@@ -1630,14 +1654,23 @@ file_uncompress(char *file, char *outfile, size_t outsize)
 #ifndef NO_XZ_SUPPORT
 	case FT_XZ:
 		if (lflag) {
-			maybe_warnx("no -l with xz files");
-			goto lose;
+			size = unxz_len(fd);
+			print_list_out(in_size, size, file);
+			return -1;
 		}
-
 		size = unxz(fd, zfd, NULL, 0, NULL);
 		break;
 #endif
 
+#ifndef NO_LZ_SUPPORT
+	case FT_LZ:
+		if (lflag) {
+			maybe_warnx("no -l with lzip files");
+			goto lose;
+		}
+		size = unlz(fd, zfd, NULL, 0, NULL);
+		break;
+#endif
 #ifndef SMALL
 	case FT_UNKNOWN:
 		if (lflag) {
@@ -1867,6 +1900,12 @@ handle_stdin(void)
 #ifndef NO_XZ_SUPPORT
 	case FT_XZ:
 		usize = unxz(STDIN_FILENO, STDOUT_FILENO,
+			     (char *)header1, sizeof header1, &gsize);
+		break;
+#endif
+#ifndef NO_LZ_SUPPORT
+	case FT_LZ:
+		usize = unlz(STDIN_FILENO, STDOUT_FILENO,
 			     (char *)header1, sizeof header1, &gsize);
 		break;
 #endif
@@ -2170,12 +2209,10 @@ print_list(int fd, off_t out, const char *outfile, time_t ts)
 				maybe_warnx("read of uncompressed size");
 
 			else {
-				usize = buf[4] | buf[5] << 8 |
-					buf[6] << 16 | buf[7] << 24;
+				usize = le32dec(&buf[4]);
 				in = (off_t)usize;
 #ifndef SMALL
-				crc = buf[0] | buf[1] << 8 |
-				      buf[2] << 16 | buf[3] << 24;
+				crc = le32dec(&buf[0]);
 #endif
 			}
 		}
@@ -2197,6 +2234,12 @@ print_list(int fd, off_t out, const char *outfile, time_t ts)
 #else
 	(void)&ts;	/* XXX */
 #endif
+	print_list_out(out, in, outfile);
+}
+
+static void
+print_list_out(off_t out, off_t in, const char *outfile)
+{
 	printf("%12llu %12llu ", (unsigned long long)out, (unsigned long long)in);
 	print_ratio(in, out, stdout);
 	printf(" %s\n", outfile);
@@ -2270,6 +2313,9 @@ display_version(void)
 #endif
 #ifndef NO_XZ_SUPPORT
 #include "unxz.c"
+#endif
+#ifndef NO_LZ_SUPPORT
+#include "unlz.c"
 #endif
 
 static ssize_t

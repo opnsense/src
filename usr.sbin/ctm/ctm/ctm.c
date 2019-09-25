@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: Beerware
+ *
  * ----------------------------------------------------------------------------
  * "THE BEER-WARE LICENSE" (Revision 42):
  * <phk@FreeBSD.org> wrote this file.  As long as you retain this notice you
@@ -142,6 +144,9 @@ main(int argc, char **argv)
 	warnx("%d errors during option processing",stat);
 	return Exit_Pilot;
     }
+    fprintf(stderr, "CTM will be removed from FreeBSD-13, and will be "
+	"provided as a port (misc/ctm) or package (ctm).\n\n");
+
     stat = Exit_Done;
     argc -= optind;
     argv += optind;

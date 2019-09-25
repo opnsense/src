@@ -72,9 +72,8 @@ INCSDIR_atf-c++.hpp= ${INCLUDEDIR}
 MAN=		atf-c++.3
 MLINKS+=	atf-c++.3 atf-c-api++.3  # Backwards compatibility.
 
-.if ${MK_TESTS} != "no"
-SUBDIR=		tests
-.endif
+HAS_TESTS=
+SUBDIR.${MK_TESTS}+= tests
 
 .include "../common.mk"
 .include <bsd.lib.mk>

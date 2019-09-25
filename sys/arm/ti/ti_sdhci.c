@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2013 Ian Lepore <ian@freebsd.org>
  * Copyright (c) 2011 Ben Gray <ben.r.gray@gmail.com>.
  * All rights reserved.
@@ -39,6 +41,8 @@ __FBSDID("$FreeBSD$");
 #include <sys/rman.h>
 #include <sys/sysctl.h>
 #include <sys/taskqueue.h>
+#include <sys/lock.h>
+#include <sys/mutex.h>
 
 #include <machine/bus.h>
 #include <machine/resource.h>
@@ -59,6 +63,8 @@ __FBSDID("$FreeBSD$");
 #include <arm/ti/ti_prcm.h>
 #include <arm/ti/ti_hwmods.h>
 #include "gpio_if.h"
+
+#include "opt_mmccam.h"
 
 struct ti_sdhci_softc {
 	device_t		dev;
@@ -121,6 +127,11 @@ static struct ofw_compat_data compat_data[] = {
 #define	  MMCHS_SD_CAPA_VS18		  (1 << 26)
 #define	  MMCHS_SD_CAPA_VS30		  (1 << 25)
 #define	  MMCHS_SD_CAPA_VS33		  (1 << 24)
+
+/* Forward declarations, CAM-relataed */
+// static void ti_sdhci_cam_poll(struct cam_sim *);
+// static void ti_sdhci_cam_action(struct cam_sim *, union ccb *);
+// static int ti_sdhci_cam_settran_settings(struct ti_sdhci_softc *sc, union ccb *);
 
 static inline uint32_t
 ti_mmchs_read_4(struct ti_sdhci_softc *sc, bus_size_t off)
@@ -241,6 +252,22 @@ ti_sdhci_write_1(device_t dev, struct sdhci_slot *slot, bus_size_t off,
 	struct ti_sdhci_softc *sc = device_get_softc(dev);
 	uint32_t val32;
 
+#ifdef MMCCAM
+	uint32_t newval32;
+	if (off == SDHCI_HOST_CONTROL) {
+		val32 = ti_mmchs_read_4(sc, MMCHS_CON);
+		newval32  = val32;
+		if (val & SDHCI_CTRL_8BITBUS) {
+			device_printf(dev, "Custom-enabling 8-bit bus\n");
+			newval32 |= MMCHS_CON_DW8;
+		} else {
+			device_printf(dev, "Custom-disabling 8-bit bus\n");
+			newval32 &= ~MMCHS_CON_DW8;
+		}
+		if (newval32 != val32)
+			ti_mmchs_write_4(sc, MMCHS_CON, newval32);
+	}
+#endif
 	val32 = RD4(sc, off & ~3);
 	val32 &= ~(0xff << (off & 3) * 8);
 	val32 |= (val << (off & 3) * 8);
@@ -455,15 +482,14 @@ ti_sdhci_hw_init(device_t dev)
 	 * The attach() routine has examined fdt data and set flags in
 	 * slot.host.caps to reflect what voltages we can handle.  Set those
 	 * values in the CAPA register.  The manual says that these values can
-	 * only be set once, "before initialization" whatever that means, and
-	 * that they survive a reset.  So maybe doing this will be a no-op if
-	 * u-boot has already initialized the hardware.
+	 * only be set once, and that they survive a reset so unless u-boot didn't
+	 * set this register this code is a no-op.
 	 */
 	regval = ti_mmchs_read_4(sc, MMCHS_SD_CAPA);
 	if (sc->slot.host.caps & MMC_OCR_LOW_VOLTAGE)
 		regval |= MMCHS_SD_CAPA_VS18;
-	if (sc->slot.host.caps & (MMC_OCR_290_300 | MMC_OCR_300_310))
-		regval |= MMCHS_SD_CAPA_VS30;
+	if (sc->slot.host.caps & (MMC_OCR_320_330 | MMC_OCR_330_340))
+		regval |= MMCHS_SD_CAPA_VS33;
 	ti_mmchs_write_4(sc, MMCHS_SD_CAPA, regval);
 
 	/* Set initial host configuration (1-bit, std speed, pwr off). */
@@ -497,17 +523,20 @@ ti_sdhci_attach(device_t dev)
 	}
 
 	/*
-	 * The hardware can inherently do dual-voltage (1p8v, 3p0v) on the first
+	 * The hardware can inherently do dual-voltage (1p8v, 3p3v) on the first
 	 * device, and only 1p8v on other devices unless an external transceiver
 	 * is used.  The only way we could know about a transceiver is fdt data.
 	 * Note that we have to do this before calling ti_sdhci_hw_init() so
 	 * that it can set the right values in the CAPA register, which can only
 	 * be done once and never reset.
 	 */
-	sc->slot.host.caps |= MMC_OCR_LOW_VOLTAGE;
-	if (sc->mmchs_clk_id == MMC1_CLK || OF_hasprop(node, "ti,dual-volt")) {
-		sc->slot.host.caps |= MMC_OCR_290_300 | MMC_OCR_300_310;
-	}
+	if (OF_hasprop(node, "ti,dual-volt")) {
+		sc->slot.host.caps |= MMC_OCR_LOW_VOLTAGE | MMC_OCR_320_330 | MMC_OCR_330_340;
+	} else if (OF_hasprop(node, "no-1-8-v")) {
+		sc->slot.host.caps |= MMC_OCR_320_330 | MMC_OCR_330_340;
+	} else
+		sc->slot.host.caps |= MMC_OCR_LOW_VOLTAGE;
+
 
 	/*
 	 * Set the offset from the device's memory start to the MMCHS registers.
@@ -659,7 +688,6 @@ ti_sdhci_attach(device_t dev)
 	bus_generic_attach(dev);
 
 	sdhci_start_slot(&sc->slot);
-
 	return (0);
 
 fail:
@@ -729,5 +757,8 @@ static driver_t ti_sdhci_driver = {
 
 DRIVER_MODULE(sdhci_ti, simplebus, ti_sdhci_driver, ti_sdhci_devclass, NULL,
     NULL);
-MODULE_DEPEND(sdhci_ti, sdhci, 1, 1, 1);
+SDHCI_DEPEND(sdhci_ti);
+
+#ifndef MMCCAM
 MMC_DECLARE_BRIDGE(sdhci_ti);
+#endif

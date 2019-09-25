@@ -38,9 +38,9 @@ class DbiStream {
   friend class DbiStreamBuilder;
 
 public:
-  DbiStream(PDBFile &File, std::unique_ptr<msf::MappedBlockStream> Stream);
+  explicit DbiStream(std::unique_ptr<BinaryStream> Stream);
   ~DbiStream();
-  Error reload();
+  Error reload(PDBFile *Pdb);
 
   PdbRaw_DbiVer getDbiVersion() const;
   uint32_t getAge() const;
@@ -63,6 +63,8 @@ public:
 
   PDB_Machine getMachineType() const;
 
+  const DbiStreamHeader *getHeader() const { return Header; }
+
   BinarySubstreamRef getSectionContributionData() const;
   BinarySubstreamRef getSecMapSubstreamData() const;
   BinarySubstreamRef getModiSubstreamData() const;
@@ -76,7 +78,7 @@ public:
 
   const DbiModuleList &modules() const;
 
-  FixedStreamArray<object::coff_section> getSectionHeaders();
+  FixedStreamArray<object::coff_section> getSectionHeaders() const;
 
   FixedStreamArray<object::FpoData> getFpoRecords();
 
@@ -87,12 +89,11 @@ public:
 
 private:
   Error initializeSectionContributionData();
-  Error initializeSectionHeadersData();
+  Error initializeSectionHeadersData(PDBFile *Pdb);
   Error initializeSectionMapData();
-  Error initializeFpoRecords();
+  Error initializeFpoRecords(PDBFile *Pdb);
 
-  PDBFile &Pdb;
-  std::unique_ptr<msf::MappedBlockStream> Stream;
+  std::unique_ptr<BinaryStream> Stream;
 
   PDBStringTable ECNames;
 

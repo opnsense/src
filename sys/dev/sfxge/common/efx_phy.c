@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2007-2016 Solarflare Communications Inc.
  * All rights reserved.
  *
@@ -299,7 +301,7 @@ efx_phy_media_type_get(
 		*typep = epp->ep_fixed_port_type;
 }
 
-	__checkReturn	efx_rc_t
+	__checkReturn		efx_rc_t
 efx_phy_module_get_info(
 	__in			efx_nic_t *enp,
 	__in			uint8_t dev_addr,
@@ -312,7 +314,7 @@ efx_phy_module_get_info(
 	EFSYS_ASSERT3U(enp->en_magic, ==, EFX_NIC_MAGIC);
 	EFSYS_ASSERT(data != NULL);
 
-	if ((uint32_t)offset + len > 0xff) {
+	if ((uint32_t)offset + len > 0x100) {
 		rc = EINVAL;
 		goto fail1;
 	}

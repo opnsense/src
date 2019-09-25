@@ -1,6 +1,8 @@
 /*	$NetBSD: tmpfs_vnops.c,v 1.39 2007/07/23 15:41:01 jmmv Exp $	*/
 
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ *
  * Copyright (c) 2005, 2006 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
@@ -37,16 +39,19 @@
 __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
+#include <sys/systm.h>
+#include <sys/dirent.h>
 #include <sys/fcntl.h>
+#include <sys/limits.h>
 #include <sys/lockf.h>
 #include <sys/lock.h>
+#include <sys/mount.h>
 #include <sys/namei.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/rwlock.h>
 #include <sys/sched.h>
 #include <sys/stat.h>
-#include <sys/systm.h>
 #include <sys/sysctl.h>
 #include <sys/unistd.h>
 #include <sys/vnode.h>
@@ -476,7 +481,7 @@ tmpfs_read(struct vop_read_args *v)
 	if (uio->uio_offset < 0)
 		return (EINVAL);
 	node = VP_TO_TMPFS_NODE(vp);
-	tmpfs_set_status(node, TMPFS_NODE_ACCESSED);
+	tmpfs_set_status(VFS_TO_TMPFS(vp->v_mount), node, TMPFS_NODE_ACCESSED);
 	return (uiomove_object(node->tn_reg.tn_aobj, node->tn_size, uio));
 }
 
@@ -614,8 +619,8 @@ tmpfs_link(struct vop_link_args *v)
 
 	/* Ensure that we do not overflow the maximum number of links imposed
 	 * by the system. */
-	MPASS(node->tn_links <= LINK_MAX);
-	if (node->tn_links == LINK_MAX) {
+	MPASS(node->tn_links <= TMPFS_LINK_MAX);
+	if (node->tn_links == TMPFS_LINK_MAX) {
 		error = EMLINK;
 		goto out;
 	}
@@ -1183,18 +1188,22 @@ tmpfs_symlink(struct vop_symlink_args *v)
 }
 
 static int
-tmpfs_readdir(struct vop_readdir_args *v)
+tmpfs_readdir(struct vop_readdir_args *va)
 {
-	struct vnode *vp = v->a_vp;
-	struct uio *uio = v->a_uio;
-	int *eofflag = v->a_eofflag;
-	u_long **cookies = v->a_cookies;
-	int *ncookies = v->a_ncookies;
-
-	int error;
-	ssize_t startresid;
-	int maxcookies;
+	struct vnode *vp;
+	struct uio *uio;
+	struct tmpfs_mount *tm;
 	struct tmpfs_node *node;
+	u_long **cookies;
+	int *eofflag, *ncookies;
+	ssize_t startresid;
+	int error, maxcookies;
+
+	vp = va->a_vp;
+	uio = va->a_uio;
+	eofflag = va->a_eofflag;
+	cookies = va->a_cookies;
+	ncookies = va->a_ncookies;
 
 	/* This operation only makes sense on directory nodes. */
 	if (vp->v_type != VDIR)
@@ -1202,6 +1211,7 @@ tmpfs_readdir(struct vop_readdir_args *v)
 
 	maxcookies = 0;
 	node = VP_TO_TMPFS_DIR(vp);
+	tm = VFS_TO_TMPFS(vp->v_mount);
 
 	startresid = uio->uio_resid;
 
@@ -1215,9 +1225,9 @@ tmpfs_readdir(struct vop_readdir_args *v)
 	}
 
 	if (cookies == NULL)
-		error = tmpfs_dir_getdents(node, uio, 0, NULL, NULL);
+		error = tmpfs_dir_getdents(tm, node, uio, 0, NULL, NULL);
 	else
-		error = tmpfs_dir_getdents(node, uio, maxcookies, *cookies,
+		error = tmpfs_dir_getdents(tm, node, uio, maxcookies, *cookies,
 		    ncookies);
 
 	/* Buffer was filled without hitting EOF. */
@@ -1253,7 +1263,7 @@ tmpfs_readlink(struct vop_readlink_args *v)
 
 	error = uiomove(node->tn_link, MIN(node->tn_size, uio->uio_resid),
 	    uio);
-	tmpfs_set_status(node, TMPFS_NODE_ACCESSED);
+	tmpfs_set_status(VFS_TO_TMPFS(vp->v_mount), node, TMPFS_NODE_ACCESSED);
 
 	return (error);
 }
@@ -1338,7 +1348,7 @@ tmpfs_pathconf(struct vop_pathconf_args *v)
 {
 	struct vnode *vp = v->a_vp;
 	int name = v->a_name;
-	register_t *retval = v->a_retval;
+	long *retval = v->a_retval;
 
 	int error;
 
@@ -1346,7 +1356,7 @@ tmpfs_pathconf(struct vop_pathconf_args *v)
 
 	switch (name) {
 	case _PC_LINK_MAX:
-		*retval = LINK_MAX;
+		*retval = TMPFS_LINK_MAX;
 		break;
 
 	case _PC_NAME_MAX:

@@ -9,7 +9,7 @@
 .\" 2. Redistributions in binary form must reproduce the above copyright
 .\"    notice, this list of conditions and the following disclaimer in the
 .\"    documentation and/or other materials provided with the distribution.
-.\" 4. Neither the name of the University nor the names of its contributors
+.\" 3. Neither the name of the University nor the names of its contributors
 .\"    may be used to endorse or promote products derived from this software
 .\"    without specific prior written permission.
 .\"
@@ -28,7 +28,7 @@
 .\"	@(#)mincore.2	8.1 (Berkeley) 6/9/93
 .\" $FreeBSD$
 .\"
-.Dd January 17, 2003
+.Dd January 7, 2019
 .Dt MINCORE 2
 .Os
 .Sh NAME
@@ -47,7 +47,8 @@ system call determines whether each of the pages in the region beginning at
 .Fa addr
 and continuing for
 .Fa len
-bytes is resident.
+bytes is resident or mapped, depending on the value of sysctl
+.Va vm.mincore_mapped .
 .\"The beginning address,
 .\".Fa addr ,
 .\"is first rounded down to a multiple of the page size (see
@@ -73,7 +74,9 @@ Page has been referenced.
 .It Dv MINCORE_MODIFIED_OTHER
 Page has been modified.
 .It Dv MINCORE_SUPER
-Page is part of a "super" page. (only i386 & amd64)
+Page is part of a large
+.Pq Dq super
+page.
 .El
 .Pp
 The information returned by
@@ -83,6 +86,18 @@ The only way to ensure that a page is resident is to lock it into memory
 with the
 .Xr mlock 2
 system call.
+.Pp
+If the
+.Va vm.mincore_mapped
+sysctl is set to a non-zero value (default), only the current process'
+mappings of the pages in the specified virtual address range are examined.
+This does not preclude the system from returning
+.Dv MINCORE_REFERENCED_OTHER
+and
+.Dv MINCORE_MODIFIED_OTHER
+statuses.
+Otherwise, if the sysctl value is zero, all resident pages backing the
+specified address range are examined, regardless of the mapping state.
 .Sh RETURN VALUES
 .Rv -std mincore
 .Sh ERRORS

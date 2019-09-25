@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1989, 1993, 1994
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -57,6 +59,9 @@ extern struct fixs neaster, npaskha, ncny, nfullmoon, nnewmoon;
 extern struct fixs nmarequinox, nsepequinox, njunsolstice, ndecsolstice;
 extern double UTCOffset;
 extern int EastLongitude;
+#ifdef WITH_ICONV
+extern const char *outputEncoding;
+#endif
 
 #define isleap(y) ((((y) % 4) == 0 && ((y) % 100) != 0) || ((y) % 400) == 0)
 
@@ -195,3 +200,7 @@ void	fpom(int year, double utcoffset, double *ffms, double *fnms);
 void	equinoxsolstice(int year, double UTCoffset, int *equinoxdays, int *solsticedays);
 void	fequinoxsolstice(int year, double UTCoffset, double *equinoxdays, double *solsticedays);
 int	calculatesunlongitude30(int year, int degreeGMToffset, int *ichinesemonths);
+
+#ifdef WITH_ICONV
+void	set_new_encoding(void);
+#endif

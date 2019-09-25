@@ -18,17 +18,24 @@ _PRIVATELIBS=	\
 		bsdstat \
 		devdctl \
 		event \
+		gmock \
+		gtest \
+		gmock_main \
+		gtest_main \
 		heimipcc \
 		heimipcs \
+		ifconfig \
 		ldns \
 		sqlite3 \
 		ssh \
 		ucl \
-		unbound
+		unbound \
+		zstd
 
 _INTERNALLIBS=	\
 		amu \
 		bsnmptools \
+		c_nossp_pic \
 		cron \
 		elftc \
 		fifolog \
@@ -41,7 +48,7 @@ _INTERNALLIBS=	\
 		opts \
 		parse \
 		pe \
-		readline \
+		pmcstat \
 		sl \
 		sm \
 		smdb \
@@ -59,6 +66,7 @@ _LIBRARIES=	\
 		asn1 \
 		auditd \
 		avl \
+		be \
 		begemot \
 		bluetooth \
 		bsdxml \
@@ -75,6 +83,7 @@ _LIBRARIES=	\
 		cap_pwd \
 		cap_random \
 		cap_sysctl \
+		cap_syslog \
 		com_err \
 		compiler_rt \
 		crypt \
@@ -108,6 +117,7 @@ _LIBRARIES=	\
 		heimsqlite \
 		hx509 \
 		ipsec \
+		ipt \
 		jail \
 		kadm5clnt \
 		kadm5srv \
@@ -131,6 +141,7 @@ _LIBRARIES=	\
 		ngatm \
 		nv \
 		nvpair \
+		opencsd \
 		opie \
 		pam \
 		panel \
@@ -143,7 +154,7 @@ _LIBRARIES=	\
 		procstat \
 		pthread \
 		radius \
-		readline \
+		regex \
 		roken \
 		rpcsec_gss \
 		rpcsvc \
@@ -161,7 +172,6 @@ _LIBRARIES=	\
 		tacplus \
 		termcap \
 		termcapw \
-		tls \
 		ufs \
 		ugidfw \
 		ulog \
@@ -203,13 +213,30 @@ _LIBRARIES+= \
 		osmvendor
 .endif
 
+.if ${MK_BEARSSL} == "yes"
+_INTERNALLIBS+= \
+		bearssl \
+		secureboot \
+
+LIBBEARSSL?=	${LIBBEARSSLDIR}/libbearssl${PIE_SUFFIX}.a
+LIBSECUREBOOT?=	${LIBSECUREBOOTDIR}/libsecureboot${PIE_SUFFIX}.a
+.endif
+
+.if ${MK_VERIEXEC} == "yes"
+_INTERNALLIBS+= veriexec
+
+LIBVERIEXEC?=	${LIBVERIEXECDIR}/libveriexec${PIE_SUFFIX}.a
+.endif
+
 # Each library's LIBADD needs to be duplicated here for static linkage of
 # 2nd+ order consumers.  Auto-generating this would be better.
 _DP_80211=	sbuf bsdxml
 _DP_archive=	z bz2 lzma bsdxml
+_DP_zstd=	pthread
 .if ${MK_BLACKLIST} != "no"
 _DP_blacklist+=	pthread
 .endif
+_DP_crypto=	pthread
 .if ${MK_OPENSSL} != "no"
 _DP_archive+=	crypto
 .else
@@ -217,7 +244,6 @@ _DP_archive+=	md
 .endif
 _DP_sqlite3=	pthread
 _DP_ssl=	crypto
-_DP_tls=	crypto ssl
 _DP_ssh=	crypto crypt z
 .if ${MK_LDNS} != "no"
 _DP_ssh+=	ldns
@@ -235,6 +261,10 @@ _DP_cap_grp=	nv
 _DP_cap_pwd=	nv
 _DP_cap_random=	nv
 _DP_cap_sysctl=	nv
+_DP_cap_syslog=	nv
+.if ${MK_OFED} != "no"
+_DP_pcap=	ibverbs mlx5
+.endif
 _DP_pjdlog=	util
 _DP_opie=	md
 _DP_usb=	pthread
@@ -245,6 +275,7 @@ _DP_radius=	md
 .else
 _DP_radius=	crypto
 .endif
+_DP_rtld_db=	elf procstat
 _DP_procstat=	kvm util elf
 .if ${MK_CXX} == "yes"
 .if ${MK_LIBCPLUSPLUS} != "no"
@@ -256,12 +287,12 @@ _DP_proc=	supcplusplus
 .if ${MK_CDDL} != "no"
 _DP_proc+=	ctf
 .endif
-_DP_proc+=	elf rtld_db util
+_DP_proc+=	elf procstat rtld_db util
 _DP_mp=	crypto
 _DP_memstat=	kvm
 _DP_magic=	z
 _DP_mt=		sbuf bsdxml
-_DP_ldns=	crypto
+_DP_ldns=	ssl crypto
 .if ${MK_OPENSSL} != "no"
 _DP_fetch=	ssl crypto
 .else
@@ -273,6 +304,10 @@ _DP_dpv=	dialog figpar util ncursesw
 _DP_dialog=	ncursesw m
 _DP_cuse=	pthread
 _DP_atf_cxx=	atf_c
+_DP_gtest=	pthread
+_DP_gmock=	gtest
+_DP_gmock_main=	gmock
+_DP_gtest_main=	gtest
 _DP_devstat=	kvm
 _DP_pam=	radius tacplus opie md util
 .if ${MK_KERBEROS} != "no"
@@ -284,7 +319,6 @@ _DP_pam+=	ssh
 .if ${MK_NIS} != "no"
 _DP_pam+=	ypclnt
 .endif
-_DP_readline=	ncursesw
 _DP_roken=	crypt
 _DP_kadm5clnt=	com_err krb5 roken
 _DP_kadm5srv=	com_err hdb krb5 roken
@@ -303,6 +337,7 @@ _DP_gssapi_krb5+=	gssapi krb5 crypto roken asn1 com_err
 _DP_lzma=	pthread
 _DP_ucl=	m
 _DP_vmmapi=	util
+_DP_opencsd=	cxxrt
 _DP_ctf=	z
 _DP_dtrace=	ctf elf proc pthread rtld_db
 _DP_xo=		util
@@ -325,6 +360,7 @@ _DP_zfs=	md pthread umem util uutil m nvpair avl bsdxml geom nvpair z \
 		zfs_core
 _DP_zfs_core=	nvpair
 _DP_zpool=	md pthread z nvpair avl umem
+_DP_be=		zfs nvpair
 
 # OFED support
 .if ${MK_OFED} != "no"
@@ -344,17 +380,26 @@ _DP_osmvendor=	ibumad pthread
 
 # Define special cases
 LDADD_supcplusplus=	-lsupc++
-LIBATF_C=	${DESTDIR}${LIBDIR_BASE}/libprivateatf-c.a
-LIBATF_CXX=	${DESTDIR}${LIBDIR_BASE}/libprivateatf-c++.a
+LIBATF_C=	${LIBDESTDIR}${LIBDIR_BASE}/libprivateatf-c.a
+LIBATF_CXX=	${LIBDESTDIR}${LIBDIR_BASE}/libprivateatf-c++.a
 LDADD_atf_c=	-lprivateatf-c
 LDADD_atf_cxx=	-lprivateatf-c++
 
+LIBGMOCK=	${LIBDESTDIR}${LIBDIR_BASE}/libprivategmock.a
+LIBGMOCK_MAIN=	${LIBDESTDIR}${LIBDIR_BASE}/libprivategmock_main.a
+LIBGTEST=	${LIBDESTDIR}${LIBDIR_BASE}/libprivategtest.a
+LIBGTEST_MAIN=	${LIBDESTDIR}${LIBDIR_BASE}/libprivategtest_main.a
+LDADD_gmock=	-lprivategmock
+LDADD_gtest=	-lprivategtest
+LDADD_gmock_main= -lprivategmock_main
+LDADD_gtest_main= -lprivategtest_main
+
 .for _l in ${_PRIVATELIBS}
-LIB${_l:tu}?=	${DESTDIR}${LIBDIR_BASE}/libprivate${_l}.a
+LIB${_l:tu}?=	${LIBDESTDIR}${LIBDIR_BASE}/libprivate${_l}.a
 .endfor
 
 .for _l in ${_LIBRARIES}
-.if ${_INTERNALLIBS:M${_l}}
+.if ${_INTERNALLIBS:M${_l}} || !defined(SYSROOT)
 LDADD_${_l}_L+=		-L${LIB${_l:tu}DIR}
 .endif
 DPADD_${_l}?=	${LIB${_l:tu}}
@@ -385,6 +430,15 @@ LDADD_${_l}+=	${LDADD_${_d}}
 DPADD_atf_cxx+=	${DPADD_atf_c}
 LDADD_atf_cxx+=	${LDADD_atf_c}
 
+DPADD_gmock+=	${DPADD_gtest}
+LDADD_gmock+=	${LDADD_gtest}
+
+DPADD_gmock_main+=	${DPADD_gmock}
+LDADD_gmock_main+=	${LDADD_gmock}
+
+DPADD_gtest_main+=	${DPADD_gtest}
+LDADD_gtest_main+=	${LDADD_gtest}
+
 # Detect LDADD/DPADD that should be LIBADD, before modifying LDADD here.
 _BADLDADD=
 .for _l in ${LDADD:M-l*:N-l*/*:C,^-l,,}
@@ -407,9 +461,6 @@ LIBELFTC?=	${LIBELFTCDIR}/libelftc.a
 
 LIBPEDIR=	${OBJTOP}/lib/libpe
 LIBPE?=		${LIBPEDIR}/libpe.a
-
-LIBREADLINEDIR=	${OBJTOP}/gnu/lib/libreadline/readline
-LIBREADLINE?=	${LIBREADLINEDIR}/libreadline.a
 
 LIBOPENBSDDIR=	${OBJTOP}/lib/libopenbsd
 LIBOPENBSD?=	${LIBOPENBSDDIR}/libopenbsd.a
@@ -465,6 +516,14 @@ LIBBSNMPTOOLS?=	${LIBBSNMPTOOLSDIR}/libbsnmptools.a
 LIBAMUDIR=	${OBJTOP}/usr.sbin/amd/libamu
 LIBAMU?=	${LIBAMUDIR}/libamu.a
 
+LIBBE?=		${LIBBEDIR}/libbe.a
+
+LIBPMCSTATDIR=	${OBJTOP}/lib/libpmcstat
+LIBPMCSTAT?=	${LIBPMCSTATDIR}/libpmcstat.a
+
+LIBC_NOSSP_PICDIR=	${OBJTOP}/lib/libc
+LIBC_NOSSP_PIC?=	${LIBC_NOSSP_PICDIR}/libc_nossp_pic.a
+
 # Define a directory for each library.  This is useful for adding -L in when
 # not using a --sysroot or for meta mode bootstrapping when there is no
 # Makefile.depend.  These are sorted by directory.
@@ -479,18 +538,18 @@ LIBZFS_COREDIR=	${OBJTOP}/cddl/lib/libzfs_core
 LIBZPOOLDIR=	${OBJTOP}/cddl/lib/libzpool
 
 # OFED support
-LIBCXGB4DIR=	${OBJTOP}/contrib/ofed/libcxgb4
-LIBIBCMDIR=	${OBJTOP}/contrib/ofed/libibcm
-LIBIBMADDIR=	${OBJTOP}/contrib/ofed/libibmad
-LIBIBNETDISCDIR=${OBJTOP}/contrib/ofed/libibnetdisc
-LIBIBUMADDIR=	${OBJTOP}/contrib/ofed/libibumad
-LIBIBVERBSDIR=	${OBJTOP}/contrib/ofed/libibverbs
-LIBMLX4DIR=	${OBJTOP}/contrib/ofed/libmlx4
-LIBMLX5DIR=	${OBJTOP}/contrib/ofed/libmlx5
-LIBRDMACMDIR=	${OBJTOP}/contrib/ofed/librdmacm
-LIBOSMCOMPDIR=	${OBJTOP}/contrib/ofed/opensm/complib
-LIBOPENSMDIR=	${OBJTOP}/contrib/ofed/opensm/libopensm
-LIBOSMVENDORDIR=${OBJTOP}/contrib/ofed/opensm/libvendor
+LIBCXGB4DIR=	${OBJTOP}/lib/ofed/libcxgb4
+LIBIBCMDIR=	${OBJTOP}/lib/ofed/libibcm
+LIBIBMADDIR=	${OBJTOP}/lib/ofed/libibmad
+LIBIBNETDISCDIR=${OBJTOP}/lib/ofed/libibnetdisc
+LIBIBUMADDIR=	${OBJTOP}/lib/ofed/libibumad
+LIBIBVERBSDIR=	${OBJTOP}/lib/ofed/libibverbs
+LIBMLX4DIR=	${OBJTOP}/lib/ofed/libmlx4
+LIBMLX5DIR=	${OBJTOP}/lib/ofed/libmlx5
+LIBRDMACMDIR=	${OBJTOP}/lib/ofed/librdmacm
+LIBOSMCOMPDIR=	${OBJTOP}/lib/ofed/complib
+LIBOPENSMDIR=	${OBJTOP}/lib/ofed/libopensm
+LIBOSMVENDORDIR=${OBJTOP}/lib/ofed/libvendor
 
 LIBDIALOGDIR=	${OBJTOP}/gnu/lib/libdialog
 LIBGCOVDIR=	${OBJTOP}/gnu/lib/libgcov
@@ -518,6 +577,10 @@ LIBROKENDIR=	${OBJTOP}/kerberos5/lib/libroken
 LIBWINDDIR=	${OBJTOP}/kerberos5/lib/libwind
 LIBATF_CDIR=	${OBJTOP}/lib/atf/libatf-c
 LIBATF_CXXDIR=	${OBJTOP}/lib/atf/libatf-c++
+LIBGMOCKDIR=	${OBJTOP}/lib/googletest/gmock
+LIBGMOCK_MAINDIR=	${OBJTOP}/lib/googletest/gmock_main
+LIBGTESTDIR=	${OBJTOP}/lib/googletest/gtest
+LIBGTEST_MAINDIR=	${OBJTOP}/lib/googletest/gtest_main
 LIBALIASDIR=	${OBJTOP}/lib/libalias/libalias
 LIBBLACKLISTDIR=	${OBJTOP}/lib/libblacklist
 LIBBLOCKSRUNTIMEDIR=	${OBJTOP}/lib/libblocksruntime
@@ -528,6 +591,7 @@ LIBCAP_GRPDIR=	${OBJTOP}/lib/libcasper/services/cap_grp
 LIBCAP_PWDDIR=	${OBJTOP}/lib/libcasper/services/cap_pwd
 LIBCAP_RANDOMDIR=	${OBJTOP}/lib/libcasper/services/cap_random
 LIBCAP_SYSCTLDIR=	${OBJTOP}/lib/libcasper/services/cap_sysctl
+LIBCAP_SYSLOGDIR=	${OBJTOP}/lib/libcasper/services/cap_syslog
 LIBBSDXMLDIR=	${OBJTOP}/lib/libexpat
 LIBKVMDIR=	${OBJTOP}/lib/libkvm
 LIBPTHREADDIR=	${OBJTOP}/lib/libthr
@@ -544,7 +608,6 @@ LIBCRYPTODIR=	${OBJTOP}/secure/lib/libcrypto
 LIBSSHDIR=	${OBJTOP}/secure/lib/libssh
 LIBSSLDIR=	${OBJTOP}/secure/lib/libssl
 LIBTEKENDIR=	${OBJTOP}/sys/teken/libteken
-LIBTLSDIR=	${OBJTOP}/secure/lib/libtls
 LIBEGACYDIR=	${OBJTOP}/tools/build
 LIBLNDIR=	${OBJTOP}/usr.bin/lex/lib
 

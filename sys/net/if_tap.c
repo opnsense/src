@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (C) 1999-2000 by Maksim Yevmenkin <m_evmenkin@yahoo.com>
  * All rights reserved.
  *
@@ -35,7 +37,6 @@
  * $Id: if_tap.c,v 0.21 2000/07/23 21:46:02 max Exp $
  */
 
-#include "opt_compat.h"
 #include "opt_inet.h"
 
 #include <sys/param.h>
@@ -77,7 +78,6 @@
 
 #include <net/if_tapvar.h>
 #include <net/if_tap.h>
-
 
 #define CDEV_NAME	"tap"
 #define TAPDEBUG	if (tapdebug) printf
@@ -180,6 +180,7 @@ SYSCTL_INT(_net_link_tap, OID_AUTO, devfs_cloning, CTLFLAG_RWTUN, &tapdclone, 0,
 SYSCTL_INT(_net_link_tap, OID_AUTO, debug, CTLFLAG_RW, &tapdebug, 0, "");
 
 DEV_MODULE(if_tap, tapmodevent, NULL);
+MODULE_VERSION(if_tap, 1);
 
 static int
 tap_clone_create(struct if_clone *ifc, int unit, caddr_t params)
@@ -222,15 +223,17 @@ tap_destroy(struct tap_softc *tp)
 	struct ifnet *ifp = tp->tap_ifp;
 
 	CURVNET_SET(ifp->if_vnet);
-	sx_xlock(&tap_ioctl_sx);
-	ifp->if_softc = NULL;
-	sx_xunlock(&tap_ioctl_sx);
 
 	destroy_dev(tp->tap_dev);
 	seldrain(&tp->tap_rsel);
 	knlist_clear(&tp->tap_rsel.si_note, 0);
 	knlist_destroy(&tp->tap_rsel.si_note);
 	ether_ifdetach(ifp);
+
+	sx_xlock(&tap_ioctl_sx);
+	ifp->if_softc = NULL;
+	sx_xunlock(&tap_ioctl_sx);
+
 	if_free(ifp);
 
 	mtx_destroy(&tp->tap_mtx);
@@ -552,7 +555,7 @@ tapclose(struct cdev *dev, int foo, int bar, struct thread *td)
 		if (ifp->if_drv_flags & IFF_DRV_RUNNING) {
 			ifp->if_drv_flags &= ~IFF_DRV_RUNNING;
 			mtx_unlock(&tp->tap_mtx);
-			TAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) {
+			CK_STAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) {
 				rtinit(ifa, (int)RTM_DELETE, 0);
 			}
 			if_purgeaddrs(ifp);
@@ -740,10 +743,12 @@ tapifstart(struct ifnet *ifp)
 static int
 tapioctl(struct cdev *dev, u_long cmd, caddr_t data, int flag, struct thread *td)
 {
+	struct ifreq		 ifr;
 	struct tap_softc	*tp = dev->si_drv1;
 	struct ifnet		*ifp = tp->tap_ifp;
 	struct tapinfo		*tapp = NULL;
 	int			 f;
+	int			 error;
 #if defined(COMPAT_FREEBSD6) || defined(COMPAT_FREEBSD5) || \
     defined(COMPAT_FREEBSD4)
 	int			 ival;
@@ -755,7 +760,18 @@ tapioctl(struct cdev *dev, u_long cmd, caddr_t data, int flag, struct thread *td
 			if (ifp->if_type != tapp->type)
 				return (EPROTOTYPE);
 			mtx_lock(&tp->tap_mtx);
-			ifp->if_mtu = tapp->mtu;
+			if (ifp->if_mtu != tapp->mtu) {
+				strlcpy(ifr.ifr_name, if_name(ifp), IFNAMSIZ);
+				ifr.ifr_mtu = tapp->mtu;
+				CURVNET_SET(ifp->if_vnet);
+				error = ifhwioctl(SIOCSIFMTU, ifp,
+				    (caddr_t)&ifr, td);
+				CURVNET_RESTORE();
+				if (error) {
+					mtx_unlock(&tp->tap_mtx);
+					return (error);
+				}
+			}
 			ifp->if_baudrate = tapp->baudrate;
 			mtx_unlock(&tp->tap_mtx);
 			break;

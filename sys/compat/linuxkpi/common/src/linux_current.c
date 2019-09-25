@@ -67,6 +67,7 @@ linux_alloc_current(struct thread *td, int flags)
 	ts->task_thread = td;
 	ts->comm = td->td_name;
 	ts->pid = td->td_tid;
+	ts->group_leader = ts;
 	atomic_set(&ts->usage, 1);
 	atomic_set(&ts->state, TASK_RUNNING);
 	init_completion(&ts->parked);
@@ -213,6 +214,22 @@ linux_get_pid_task(pid_t pid)
 		PROC_UNLOCK(p);
 	}
 	return (NULL);
+}
+
+bool
+linux_task_exiting(struct task_struct *task)
+{
+	struct proc *p;
+	bool ret;
+
+	ret = false;
+	p = pfind(task->pid);
+	if (p != NULL) {
+		if ((p->p_flag & P_WEXIT) != 0)
+			ret = true;
+		PROC_UNLOCK(p);
+	}
+	return (ret);
 }
 
 static void

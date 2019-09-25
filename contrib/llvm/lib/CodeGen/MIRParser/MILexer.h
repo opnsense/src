@@ -63,6 +63,17 @@ struct MIToken {
     kw_renamable,
     kw_tied_def,
     kw_frame_setup,
+    kw_frame_destroy,
+    kw_nnan,
+    kw_ninf,
+    kw_nsz,
+    kw_arcp,
+    kw_contract,
+    kw_afn,
+    kw_reassoc,
+    kw_nuw,
+    kw_nsw,
+    kw_exact,
     kw_debug_location,
     kw_cfi_same_value,
     kw_cfi_offset,
@@ -78,6 +89,7 @@ struct MIToken {
     kw_cfi_restore_state,
     kw_cfi_undefined,
     kw_cfi_window_save,
+    kw_cfi_aarch64_negate_ra_sign_state,
     kw_blockaddress,
     kw_intrinsic,
     kw_target_index,
@@ -92,6 +104,7 @@ struct MIToken {
     kw_non_temporal,
     kw_invariant,
     kw_align,
+    kw_addrspace,
     kw_stack,
     kw_got,
     kw_jump_table,
@@ -104,6 +117,9 @@ struct MIToken {
     kw_successors,
     kw_floatpred,
     kw_intpred,
+    kw_pre_instr_symbol,
+    kw_post_instr_symbol,
+    kw_unknown_size,
 
     // Named metadata keywords
     md_tbaa,
@@ -111,20 +127,20 @@ struct MIToken {
     md_noalias,
     md_range,
     md_diexpr,
+    md_dilocation,
 
     // Identifier tokens
     Identifier,
-    IntegerType,
     NamedRegister,
+    NamedVirtualRegister,
     MachineBasicBlockLabel,
     MachineBasicBlock,
-    PointerType,
-    ScalarType,
     StackObject,
     FixedStackObject,
     NamedGlobalValue,
     GlobalValue,
     ExternalSymbol,
+    MCSymbol,
 
     // Other tokens
     IntegerLiteral,
@@ -168,7 +184,7 @@ public:
 
   bool isRegister() const {
     return Kind == NamedRegister || Kind == underscore ||
-           Kind == VirtualRegister;
+           Kind == NamedVirtualRegister || Kind == VirtualRegister;
   }
 
   bool isRegisterFlag() const {

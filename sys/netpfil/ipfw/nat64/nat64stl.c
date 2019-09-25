@@ -1,7 +1,8 @@
 /*-
- * Copyright (c) 2015-2016 Yandex LLC
- * Copyright (c) 2015-2016 Andrey V. Elsukov <ae@FreeBSD.org>
- * All rights reserved.
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
+ * Copyright (c) 2015-2019 Yandex LLC
+ * Copyright (c) 2015-2019 Andrey V. Elsukov <ae@FreeBSD.org>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -55,10 +56,9 @@ __FBSDID("$FreeBSD$");
 #include <netinet6/ip_fw_nat64.h>
 
 #include <netpfil/ipfw/ip_fw_private.h>
-#include <netpfil/ipfw/nat64/ip_fw_nat64.h>
-#include <netpfil/ipfw/nat64/nat64_translate.h>
-#include <netpfil/ipfw/nat64/nat64stl.h>
 #include <netpfil/pf/pf.h>
+
+#include "nat64stl.h"
 
 #define	NAT64_LOOKUP(chain, cmd)	\
 	(struct nat64stl_cfg *)SRV_OBJECT((chain), (cmd)->arg1)
@@ -93,22 +93,22 @@ nat64stl_handle_ip4(struct ip_fw_chain *chain, struct nat64stl_cfg *cfg,
 	ip = mtod(m, struct ip*);
 	if (nat64_check_ip4(ip->ip_src.s_addr) != 0 ||
 	    nat64_check_ip4(ip->ip_dst.s_addr) != 0 ||
-	    nat64_check_private_ip4(ip->ip_src.s_addr) != 0 ||
-	    nat64_check_private_ip4(ip->ip_dst.s_addr) != 0)
+	    nat64_check_private_ip4(&cfg->base, ip->ip_src.s_addr) != 0 ||
+	    nat64_check_private_ip4(&cfg->base, ip->ip_dst.s_addr) != 0)
 		return (NAT64SKIP);
 
 	daddr = TARG_VAL(chain, tablearg, nh6);
 	if (nat64_check_ip6(&daddr) != 0)
 		return (NAT64MFREE);
-	saddr = cfg->prefix6;
-	nat64_set_ip4(&saddr, ip->ip_src.s_addr);
 
-	if (cfg->flags & NAT64_LOG) {
+	saddr = cfg->base.plat_prefix;
+	nat64_embed_ip4(&saddr, cfg->base.plat_plen, ip->ip_src.s_addr);
+	if (cfg->base.flags & NAT64_LOG) {
 		logdata = &loghdr;
 		nat64stl_log(logdata, m, AF_INET, cfg->no.kidx);
 	} else
 		logdata = NULL;
-	return (nat64_do_handle_ip4(m, &saddr, &daddr, 0, &cfg->stats,
+	return (nat64_do_handle_ip4(m, &saddr, &daddr, 0, &cfg->base,
 	    logdata));
 }
 
@@ -121,7 +121,10 @@ nat64stl_handle_ip6(struct ip_fw_chain *chain, struct nat64stl_cfg *cfg,
 	uint32_t aaddr;
 
 	aaddr = htonl(TARG_VAL(chain, tablearg, nh4));
-
+	if (nat64_check_private_ip4(&cfg->base, aaddr) != 0) {
+		NAT64STAT_INC(&cfg->base.stats, dropped);
+		return (NAT64MFREE);
+	}
 	/*
 	 * NOTE: we expect ipfw_chk() did m_pullup() up to upper level
 	 * protocol's headers. Also we skip some checks, that ip6_input(),
@@ -129,15 +132,16 @@ nat64stl_handle_ip6(struct ip_fw_chain *chain, struct nat64stl_cfg *cfg,
 	 */
 	ip6 = mtod(m, struct ip6_hdr *);
 	/* Check ip6_dst matches configured prefix */
-	if (bcmp(&ip6->ip6_dst, &cfg->prefix6, cfg->plen6 / 8) != 0)
+	if (memcmp(&ip6->ip6_dst, &cfg->base.plat_prefix,
+	    cfg->base.plat_plen / 8) != 0)
 		return (NAT64SKIP);
 
-	if (cfg->flags & NAT64_LOG) {
+	if (cfg->base.flags & NAT64_LOG) {
 		logdata = &loghdr;
 		nat64stl_log(logdata, m, AF_INET6, cfg->no.kidx);
 	} else
 		logdata = NULL;
-	return (nat64_do_handle_ip6(m, aaddr, 0, &cfg->stats, logdata));
+	return (nat64_do_handle_ip6(m, aaddr, 0, &cfg->base, logdata));
 }
 
 static int
@@ -145,14 +149,14 @@ nat64stl_handle_icmp6(struct ip_fw_chain *chain, struct nat64stl_cfg *cfg,
     struct mbuf *m)
 {
 	struct pfloghdr loghdr, *logdata;
-	nat64_stats_block *stats;
+	struct nat64_counters *stats;
 	struct ip6_hdr *ip6i;
 	struct icmp6_hdr *icmp6;
 	uint32_t tablearg;
 	int hlen, proto;
 
 	hlen = 0;
-	stats = &cfg->stats;
+	stats = &cfg->base.stats;
 	proto = nat64_getlasthdr(m, &hlen);
 	if (proto != IPPROTO_ICMPV6) {
 		NAT64STAT_INC(stats, dropped);
@@ -190,13 +194,13 @@ nat64stl_handle_icmp6(struct ip_fw_chain *chain, struct nat64stl_cfg *cfg,
 		m_freem(m);
 		return (NAT64RETURN);
 	}
-	if (cfg->flags & NAT64_LOG) {
+	if (cfg->base.flags & NAT64_LOG) {
 		logdata = &loghdr;
 		nat64stl_log(logdata, m, AF_INET6, cfg->no.kidx);
 	} else
 		logdata = NULL;
 	return (nat64_handle_icmp6(m, 0,
-	    htonl(TARG_VAL(chain, tablearg, nh4)), 0, stats, logdata));
+	    htonl(TARG_VAL(chain, tablearg, nh4)), 0, &cfg->base, logdata));
 }
 
 int
@@ -257,7 +261,7 @@ ipfw_nat64stl(struct ip_fw_chain *chain, struct ip_fw_args *args,
 	if (ret == NAT64MFREE)
 		m_freem(args->m);
 	args->m = NULL;
-	return (IP_FW_DENY);
+	return (IP_FW_NAT64);
 }
 
 

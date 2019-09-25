@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1998 Kenneth D. Merry.
  * All rights reserved.
  *
@@ -37,7 +39,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -191,6 +193,11 @@ dsmatchselect(const char *args, devstat_select_mode select_mode, int maxshowdevs
 	int i;
 	int retval = 0;
 
+	if (!args) {
+		warnx("dsmatchselect: no arguments");
+		return(1);
+	}
+
 	/*
 	 * Break the (pipe delimited) input string out into separate
 	 * strings.
@@ -249,6 +256,11 @@ dsselect(const char *args, devstat_select_mode select_mode, int maxshowdevs,
 	int i;
 	int retval = 0;
 
+	if (!args) {
+		warnx("dsselect: no argument");
+		return(1);
+	}
+
 	/*
 	 * If we've gone through this code before, free previously
 	 * allocated resources.
@@ -276,7 +288,7 @@ dsselect(const char *args, devstat_select_mode select_mode, int maxshowdevs,
 			;
 		if (*cp)
 			*cp++ = '\0';
-		if (cp - args == 0)
+		if (cp - tmpstr1 == 0)
 			break;
 		for (i = 0; i < num_devices; i++) {
 			asprintf(&buffer, "%s%d", dev_select[i].device_name,
@@ -300,7 +312,7 @@ dsselect(const char *args, devstat_select_mode select_mode, int maxshowdevs,
 		}
 		if (i >= num_devices)
 			error("%s: unknown drive", args);
-		args = cp;
+		tmpstr1 = cp;
 	}
 	free(tmpstr);
 

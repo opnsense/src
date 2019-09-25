@@ -6,11 +6,11 @@
  * warranty of any kind, whether express or implied.
  */
 
-#include "skeleton.dtsi"
-
 #define MBUS_ID(target,attributes) (((target) << 24) | ((attributes) << 16))
 
 / {
+	#address-cells = <1>;
+	#size-cells = <1>;
 	model = "Marvell Orion5x SoC";
 	compatible = "marvell,orion5x";
 	interrupt-parent = <&intc>;
@@ -144,9 +144,10 @@
 
 			wdt: wdt@20300 {
 				compatible = "marvell,orion-wdt";
-				reg = <0x20300 0x28>;
+				reg = <0x20300 0x28>, <0x20108 0x4>;
 				interrupt-parent = <&bridge_intc>;
 				interrupts = <3>;
+				clocks = <&core_clk 0>;
 				status = "okay";
 			};
 

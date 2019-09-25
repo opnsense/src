@@ -1,6 +1,8 @@
 /* $FreeBSD$ */
 
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2012 SRI International
  * Copyright (c) 1992, 1993
  *	The Regents of the University of California.  All rights reserved.
@@ -35,11 +37,13 @@
 
 #include_next <sys/cdefs.h>
 
+#ifndef __dead
 #ifdef __dead2
 #define __dead __dead2
 #else
 #define __dead
 #endif
+#endif /* !__dead */
 
 /*
  * The __CONCAT macro is used to concatenate parts of symbol names, e.g.

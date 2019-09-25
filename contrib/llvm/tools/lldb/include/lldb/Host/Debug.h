@@ -10,12 +10,8 @@
 #ifndef liblldb_Debug_h_
 #define liblldb_Debug_h_
 
-// C Includes
-// C++ Includes
 #include <vector>
 
-// Other libraries and framework includes
-// Project includes
 #include "lldb/lldb-private.h"
 
 namespace lldb_private {
@@ -25,7 +21,8 @@ namespace lldb_private {
 //------------------------------------------------------------------
 struct ResumeAction {
   lldb::tid_t tid;       // The thread ID that this action applies to,
-                         // LLDB_INVALID_THREAD_ID for the default thread action
+                         // LLDB_INVALID_THREAD_ID for the default thread
+                         // action
   lldb::StateType state; // Valid values are eStateStopped/eStateSuspended,
                          // eStateRunning, and eStateStepping.
   int signal; // When resuming this thread, resume it with this signal if this
@@ -34,10 +31,9 @@ struct ResumeAction {
 
 //------------------------------------------------------------------
 // A class that contains instructions for all threads for
-// NativeProcessProtocol::Resume(). Each thread can either run, stay
-// suspended, or step when the process is resumed. We optionally
-// have the ability to also send a signal to the thread when the
-// action is run or step.
+// NativeProcessProtocol::Resume(). Each thread can either run, stay suspended,
+// or step when the process is resumed. We optionally have the ability to also
+// send a signal to the thread when the action is run or step.
 //------------------------------------------------------------------
 class ResumeActionList {
 public:

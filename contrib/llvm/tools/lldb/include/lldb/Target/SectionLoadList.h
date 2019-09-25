@@ -11,14 +11,10 @@
 #ifndef liblldb_SectionLoadList_h_
 #define liblldb_SectionLoadList_h_
 
-// C Includes
-// C++ Includes
 #include <map>
 #include <mutex>
 
-// Other libraries and framework includes
 #include "llvm/ADT/DenseMap.h"
-// Project includes
 #include "lldb/Core/Section.h"
 #include "lldb/lldb-public.h"
 
@@ -34,8 +30,8 @@ public:
   SectionLoadList(const SectionLoadList &rhs);
 
   ~SectionLoadList() {
-    // Call clear since this takes a lock and clears the section load list
-    // in case another thread is currently using this section load list
+    // Call clear since this takes a lock and clears the section load list in
+    // case another thread is currently using this section load list
     Clear();
   }
 
@@ -55,14 +51,14 @@ public:
                              bool warn_multiple = false);
 
   // The old load address should be specified when unloading to ensure we get
-  // the correct instance of the section as a shared library could be loaded
-  // at more than one location.
+  // the correct instance of the section as a shared library could be loaded at
+  // more than one location.
   bool SetSectionUnloaded(const lldb::SectionSP &section_sp,
                           lldb::addr_t load_addr);
 
   // Unload all instances of a section. This function can be used on systems
-  // that don't support multiple copies of the same shared library to be
-  // loaded at the same time.
+  // that don't support multiple copies of the same shared library to be loaded
+  // at the same time.
   size_t SetSectionUnloaded(const lldb::SectionSP &section_sp);
 
   void Dump(Stream &s, Target *target);

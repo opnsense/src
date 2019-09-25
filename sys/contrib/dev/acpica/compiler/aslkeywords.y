@@ -9,7 +9,7 @@ NoEcho('
  *
  * 1. Copyright Notice
  *
- * Some or all of this work - Copyright (c) 1999 - 2017, Intel Corp.
+ * Some or all of this work - Copyright (c) 1999 - 2018, Intel Corp.
  * All rights reserved.
  *
  * 2. License
@@ -166,8 +166,8 @@ AccessAttribKeyword
     | PARSEOP_ACCESSATTRIB_SND_RCV          {$$ = TrCreateLeafOp (PARSEOP_ACCESSATTRIB_SND_RCV);}
     | PARSEOP_ACCESSATTRIB_WORD             {$$ = TrCreateLeafOp (PARSEOP_ACCESSATTRIB_WORD);}
     | PARSEOP_ACCESSATTRIB_WORD_CALL        {$$ = TrCreateLeafOp (PARSEOP_ACCESSATTRIB_WORD_CALL);}
-    | PARSEOP_ACCESSATTRIB_MULTIBYTE
-        PARSEOP_OPEN_PAREN                  {$<n>$ = TrCreateLeafOp (PARSEOP_ACCESSATTRIB_MULTIBYTE);}
+    | PARSEOP_ACCESSATTRIB_BYTES
+        PARSEOP_OPEN_PAREN                  {$<n>$ = TrCreateLeafOp (PARSEOP_ACCESSATTRIB_BYTES);}
         ByteConst
         PARSEOP_CLOSE_PAREN                 {$$ = TrLinkOpChildren ($<n>3,1,$4);}
     | PARSEOP_ACCESSATTRIB_RAW_BYTES

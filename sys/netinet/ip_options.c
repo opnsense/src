@@ -1,4 +1,6 @@
 /*
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1982, 1986, 1988, 1993
  *      The Regents of the University of California.
  * Copyright (c) 2005 Andre Oppermann, Internet Business Solutions AG.
@@ -12,7 +14,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -66,13 +68,13 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/socketvar.h>
 
-static VNET_DEFINE(int, ip_dosourceroute);
+VNET_DEFINE_STATIC(int, ip_dosourceroute);
 SYSCTL_INT(_net_inet_ip, IPCTL_SOURCEROUTE, sourceroute,
     CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(ip_dosourceroute), 0,
     "Enable forwarding source routed IP packets");
 #define	V_ip_dosourceroute	VNET(ip_dosourceroute)
 
-static VNET_DEFINE(int,	ip_acceptsourceroute);
+VNET_DEFINE_STATIC(int,	ip_acceptsourceroute);
 SYSCTL_INT(_net_inet_ip, IPCTL_ACCEPTSOURCEROUTE, accept_sourceroute, 
     CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(ip_acceptsourceroute), 0, 
     "Enable accepting source routed IP packets");
@@ -114,9 +116,10 @@ ip_dooptions(struct mbuf *m, int pass)
 	else if (V_ip_doopts == 2) {
 		type = ICMP_UNREACH;
 		code = ICMP_UNREACH_FILTER_PROHIB;
-		goto bad;
+		goto bad_unlocked;
 	}
 
+	NET_EPOCH_ENTER();
 	dst = ip->ip_dst;
 	cp = (u_char *)(ip + 1);
 	cnt = (ip->ip_hl << 2) - sizeof (struct ip);
@@ -222,6 +225,7 @@ dropit:
 #endif
 					IPSTAT_INC(ips_cantforward);
 					m_freem(m);
+					NET_EPOCH_EXIT();
 					return (1);
 				}
 			}
@@ -248,7 +252,6 @@ dropit:
 
 				memcpy(cp + off, &(IA_SIN(ia)->sin_addr),
 				    sizeof(struct in_addr));
-				ifa_free(&ia->ia_ifa);
 			} else {
 				/* XXX MRT 0 for routing */
 				if (fib4_lookup_nh_ext(M_GETFIB(m),
@@ -296,7 +299,6 @@ dropit:
 			if ((ia = (INA)ifa_ifwithaddr((SA)&ipaddr)) != NULL) {
 				memcpy(cp + off, &(IA_SIN(ia)->sin_addr),
 				    sizeof(struct in_addr));
-				ifa_free(&ia->ia_ifa);
 			} else if (fib4_lookup_nh_ext(M_GETFIB(m),
 			    ipaddr.sin_addr, 0, 0, &nh_ext) == 0) {
 				memcpy(cp + off, &nh_ext.nh_src,
@@ -351,7 +353,6 @@ dropit:
 					continue;
 				(void)memcpy(sin, &IA_SIN(ia)->sin_addr,
 				    sizeof(struct in_addr));
-				ifa_free(&ia->ia_ifa);
 				cp[IPOPT_OFFSET] += sizeof(struct in_addr);
 				off += sizeof(struct in_addr);
 				break;
@@ -379,12 +380,15 @@ dropit:
 			cp[IPOPT_OFFSET] += sizeof(uint32_t);
 		}
 	}
+	NET_EPOCH_EXIT();
 	if (forward && V_ipforwarding) {
 		ip_forward(m, 1);
 		return (1);
 	}
 	return (0);
 bad:
+	NET_EPOCH_EXIT();
+bad_unlocked:
 	icmp_error(m, type, code, 0, 0);
 	IPSTAT_INC(ips_badoptions);
 	return (1);

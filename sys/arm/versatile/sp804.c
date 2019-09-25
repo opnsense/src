@@ -36,13 +36,15 @@ __FBSDID("$FreeBSD$");
 #include <sys/kernel.h>
 #include <sys/module.h>
 #include <sys/malloc.h>
-#include <sys/rman.h>
+
 #include <sys/timeet.h>
 #include <sys/timetc.h>
 #include <sys/watchdog.h>
 #include <machine/bus.h>
 #include <machine/cpu.h>
 #include <machine/intr.h>
+
+#include <machine/machdep.h> /* For arm_set_delay */
 
 #include <dev/ofw/openfirm.h>
 #include <dev/ofw/ofw_bus.h>
@@ -111,6 +113,7 @@ struct sp804_timer_softc {
 	bus_space_write_4(sc->bst, sc->bsh, reg, val)
 
 static unsigned sp804_timer_tc_get_timecount(struct timecounter *);
+static void sp804_timer_delay(int, void *);
 
 static unsigned
 sp804_timer_tc_get_timecount(struct timecounter *tc)
@@ -289,6 +292,8 @@ sp804_timer_attach(device_t dev)
 		     (sp804_timer_tc_read_4(SP804_PRIMECELL_ID0 + i*4) & 0xff);
 	}
 
+	arm_set_delay(sp804_timer_delay, sc);
+
 	device_printf(dev, "PrimeCell ID: %08x\n", id);
 
 	sc->timer_initialized = 1;
@@ -312,34 +317,12 @@ static devclass_t sp804_timer_devclass;
 
 DRIVER_MODULE(sp804_timer, simplebus, sp804_timer_driver, sp804_timer_devclass, 0, 0);
 
-void
-DELAY(int usec)
+static void
+sp804_timer_delay(int usec, void *arg)
 {
+	struct sp804_timer_softc *sc = arg;
 	int32_t counts;
 	uint32_t first, last;
-	device_t timer_dev;
-	struct sp804_timer_softc *sc;
-	int timer_initialized = 0;
-
-	timer_dev = devclass_get_device(sp804_timer_devclass, 0);
-
-	if (timer_dev) {
-		sc = device_get_softc(timer_dev);
-
-		if (sc)
-			timer_initialized = sc->timer_initialized;
-	}
-
-	if (!timer_initialized) {
-		/*
-		 * Timer is not initialized yet
-		 */
-		for (; usec > 0; usec--)
-			for (counts = 200; counts > 0; counts--)
-				/* Prevent gcc from optimizing  out the loop */
-				cpufunc_nullop();
-		return;
-	}
 
 	/* Get the number of times to count */
 	counts = usec * ((sc->tc.tc_frequency / 1000000) + 1);
@@ -350,7 +333,7 @@ DELAY(int usec)
 		last = sp804_timer_tc_get_timecount(&sc->tc);
 		if (last == first)
 			continue;
-		if (last>first) {
+		if (last > first) {
 			counts -= (int32_t)(last - first);
 		} else {
 			counts -= (int32_t)((0xFFFFFFFF - first) + last);

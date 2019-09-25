@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2001 Matthew Dillon.  All Rights Reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -60,14 +62,14 @@ static MALLOC_DEFINE(M_MTXPOOL, "mtx_pool", "mutex pool");
 
 /* Pool sizes must be a power of two */
 #ifndef MTX_POOL_SLEEP_SIZE
-#define MTX_POOL_SLEEP_SIZE		128
+#define MTX_POOL_SLEEP_SIZE		1024
 #endif
 
 struct mtxpool_header {
 	int		mtxpool_size;
 	int		mtxpool_mask;
 	int		mtxpool_shift;
-	int		mtxpool_next;
+	int		mtxpool_next __aligned(CACHE_LINE_SIZE);
 };
 
 struct mtx_pool {

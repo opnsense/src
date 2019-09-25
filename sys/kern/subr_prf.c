@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1986, 1988, 1991, 1993
  *	The Regents of the University of California.  All rights reserved.
  * (c) UNIX System Laboratories, Inc.
@@ -15,7 +17,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -39,7 +41,6 @@ __FBSDID("$FreeBSD$");
 
 #ifdef _KERNEL
 #include "opt_ddb.h"
-#include "opt_pax.h"
 #include "opt_printf.h"
 #endif  /* _KERNEL */
 
@@ -53,7 +54,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/kernel.h>
 #include <sys/msgbuf.h>
 #include <sys/malloc.h>
-#include <sys/pax.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/stddef.h>
@@ -120,8 +120,21 @@ static void  putchar(int ch, void *arg);
 static char *ksprintn(char *nbuf, uintmax_t num, int base, int *len, int upper);
 static void  snprintf_func(int ch, void *arg);
 
-static int msgbufmapped;		/* Set when safe to use msgbuf */
+static bool msgbufmapped;		/* Set when safe to use msgbuf */
 int msgbuftrigger;
+struct msgbuf *msgbufp;
+
+#ifndef BOOT_TAG_SZ
+#define	BOOT_TAG_SZ	32
+#endif
+#ifndef BOOT_TAG
+/* Tag used to mark the start of a boot in dmesg */
+#define	BOOT_TAG	"---<<BOOT>>---"
+#endif
+
+static char current_boot_tag[BOOT_TAG_SZ + 1] = BOOT_TAG;
+SYSCTL_STRING(_kern, OID_AUTO, boot_tag, CTLFLAG_RDTUN | CTLFLAG_NOFETCH,
+    current_boot_tag, 0, "Tag added to dmesg at start of boot");
 
 static int log_console_output = 1;
 SYSCTL_INT(_kern, OID_AUTO, log_console_output, CTLFLAG_RWTUN,
@@ -176,49 +189,6 @@ uprintf(const char *fmt, ...)
 	pca.tty = p->p_session->s_ttyp;
 	SESS_UNLOCK(p->p_session);
 	PROC_UNLOCK(p);
-	if (pca.tty == NULL) {
-		sx_sunlock(&proctree_lock);
-		return (0);
-	}
-	pca.flags = TOTTY;
-	pca.p_bufr = NULL;
-	va_start(ap, fmt);
-	tty_lock(pca.tty);
-	sx_sunlock(&proctree_lock);
-	retval = kvprintf(fmt, putchar, &pca, 10, ap);
-	tty_unlock(pca.tty);
-	va_end(ap);
-	return (retval);
-}
-
-int
-hbsd_uprintf(const char *fmt, ...)
-{
-	va_list ap;
-	struct putchar_arg pca;
-	struct proc *p;
-	struct thread *td;
-	int p_locked, retval;
-
-	td = curthread;
-	if (TD_IS_IDLETHREAD(td))
-		return (0);
-
-	sx_slock(&proctree_lock);
-	p = td->td_proc;
-	if ((p_locked = PROC_LOCKED(p)))
-		PROC_LOCK(p);
-	if ((p->p_flag & P_CONTROLT) == 0) {
-		if (p_locked)
-			PROC_UNLOCK(p);
-		sx_sunlock(&proctree_lock);
-		return (0);
-	}
-	SESS_LOCK(p->p_session);
-	pca.tty = p->p_session->s_ttyp;
-	SESS_UNLOCK(p->p_session);
-	if (p_locked)
-		PROC_UNLOCK(p);
 	if (pca.tty == NULL) {
 		sx_sunlock(&proctree_lock);
 		return (0);
@@ -318,6 +288,7 @@ _vprintf(int level, int flags, const char *fmt, va_list ap)
 	char bufr[PRINTF_BUFR_SIZE];
 #endif
 
+	TSENTER();
 	pca.tty = NULL;
 	pca.pri = level;
 	pca.flags = flags;
@@ -345,6 +316,7 @@ _vprintf(int level, int flags, const char *fmt, va_list ap)
 	}
 #endif
 
+	TSEXIT();
 	return (retval);
 }
 
@@ -695,11 +667,12 @@ kvprintf(char const *fmt, void (*func)(int, void*), void *arg, int radix, va_lis
 	uintmax_t num;
 	int base, lflag, qflag, tmp, width, ladjust, sharpflag, neg, sign, dot;
 	int cflag, hflag, jflag, tflag, zflag;
-	int dwidth, upper;
+	int bconv, dwidth, upper;
 	char padc;
 	int stop = 0, retval = 0;
 
 	num = 0;
+	q = NULL;
 	if (!func)
 		d = (char *) arg;
 	else
@@ -721,7 +694,7 @@ kvprintf(char const *fmt, void (*func)(int, void*), void *arg, int radix, va_lis
 		}
 		percent = fmt - 1;
 		qflag = 0; lflag = 0; ladjust = 0; sharpflag = 0; neg = 0;
-		sign = 0; dot = 0; dwidth = 0; upper = 0;
+		sign = 0; dot = 0; bconv = 0; dwidth = 0; upper = 0;
 		cflag = 0; hflag = 0; jflag = 0; tflag = 0; zflag = 0;
 reswitch:	switch (ch = (u_char)*fmt++) {
 		case '.':
@@ -755,6 +728,7 @@ reswitch:	switch (ch = (u_char)*fmt++) {
 				padc = '0';
 				goto reswitch;
 			}
+			/* FALLTHROUGH */
 		case '1': case '2': case '3': case '4':
 		case '5': case '6': case '7': case '8': case '9':
 				for (n = 0;; ++fmt) {
@@ -769,28 +743,9 @@ reswitch:	switch (ch = (u_char)*fmt++) {
 				width = n;
 			goto reswitch;
 		case 'b':
-			num = (u_int)va_arg(ap, int);
-			p = va_arg(ap, char *);
-			for (q = ksprintn(nbuf, num, *p++, NULL, 0); *q;)
-				PCHAR(*q--);
-
-			if (num == 0)
-				break;
-
-			for (tmp = 0; *p;) {
-				n = *p++;
-				if (num & (1 << (n - 1))) {
-					PCHAR(tmp ? ',' : '<');
-					for (; (n = *p) > ' '; ++p)
-						PCHAR(n);
-					tmp = 1;
-				} else
-					for (; *p > ' '; ++p)
-						continue;
-			}
-			if (tmp)
-				PCHAR('>');
-			break;
+			ladjust = 1;
+			bconv = 1;
+			goto handle_nosign;
 		case 'c':
 			width -= 1;
 
@@ -928,6 +883,10 @@ handle_nosign:
 				num = (u_char)va_arg(ap, int);
 			else
 				num = va_arg(ap, u_int);
+			if (bconv) {
+				q = va_arg(ap, char *);
+				base = *q++;
+			}
 			goto number;
 handle_sign:
 			if (jflag)
@@ -984,6 +943,26 @@ number:
 
 			while (*p)
 				PCHAR(*p--);
+
+			if (bconv && num != 0) {
+				/* %b conversion flag format. */
+				tmp = retval;
+				while (*q) {
+					n = *q++;
+					if (num & (1 << (n - 1))) {
+						PCHAR(retval != tmp ?
+						    ',' : '<');
+						for (; (n = *q) > ' '; ++q)
+							PCHAR(n);
+					} else
+						for (; *q > ' '; ++q)
+							continue;
+				}
+				if (retval != tmp) {
+					PCHAR('>');
+					width -= retval - tmp;
+				}
+			}
 
 			if (ladjust)
 				while (width-- > 0)
@@ -1055,25 +1034,24 @@ msgbufinit(void *ptr, int size)
 {
 	char *cp;
 	static struct msgbuf *oldp = NULL;
+	bool print_boot_tag;
 
 	size -= sizeof(*msgbufp);
 	cp = (char *)ptr;
+	print_boot_tag = !msgbufmapped;
+	/* Attempt to fetch kern.boot_tag tunable on first mapping */
+	if (!msgbufmapped)
+		TUNABLE_STR_FETCH("kern.boot_tag", current_boot_tag,
+		    sizeof(current_boot_tag));
 	msgbufp = (struct msgbuf *)(cp + size);
 	msgbuf_reinit(msgbufp, cp, size);
 	if (msgbufmapped && oldp != msgbufp)
 		msgbuf_copy(oldp, msgbufp);
-	msgbufmapped = 1;
+	msgbufmapped = true;
+	if (print_boot_tag && *current_boot_tag != '\0')
+		printf("%s\n", current_boot_tag);
 	oldp = msgbufp;
 }
-
-#ifdef PAX_HARDENING
-int unprivileged_read_msgbuf = 0;
-#else
-int unprivileged_read_msgbuf = 1;
-#endif
-SYSCTL_INT(_security_bsd, OID_AUTO, unprivileged_read_msgbuf,
-    CTLFLAG_RW, &unprivileged_read_msgbuf, 0,
-    "Unprivileged processes may read the kernel message buffer");
 
 /* Sysctls for accessing/clearing the msgbuf */
 static int
@@ -1083,11 +1061,9 @@ sysctl_kern_msgbuf(SYSCTL_HANDLER_ARGS)
 	u_int seq;
 	int error, len;
 
-	if (!unprivileged_read_msgbuf) {
-		error = priv_check(req->td, PRIV_MSGBUF);
-		if (error)
-			return (error);
-	}
+	error = priv_check(req->td, PRIV_MSGBUF);
+	if (error)
+		return (error);
 
 	/* Read the whole buffer, one chunk at a time. */
 	mtx_lock(&msgbuf_lock);

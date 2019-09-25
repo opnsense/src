@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 2002 Mike Barcroft <mike@FreeBSD.org>
  * Copyright (c) 1990, 1993
  *	The Regents of the University of California.  All rights reserved.
@@ -100,16 +102,18 @@ typedef	__int64_t	__register_t;
 typedef	__int64_t	__segsz_t;		/* segment size (in pages) */
 typedef	__uint64_t	__size_t;		/* sizeof() */
 typedef	__int64_t	__ssize_t;		/* byte count or error */
-typedef	__int64_t	__time_t;		/* time()... */
-typedef	__uint64_t	__uintfptr_t;
-typedef	__uint64_t	__uintptr_t;
 #else
 typedef	__int32_t	__ptrdiff_t;		/* ptr1 - ptr2 */
 typedef	__int32_t	__register_t;
 typedef	__int32_t	__segsz_t;		/* segment size (in pages) */
 typedef	__uint32_t	__size_t;		/* sizeof() */
 typedef	__int32_t	__ssize_t;		/* byte count or error */
-typedef	__int32_t	__time_t;		/* time()... */
+#endif
+typedef	__int64_t	__time_t;		/* time()... */
+#ifdef __LP64__
+typedef	__uint64_t	__uintfptr_t;
+typedef	__uint64_t	__uintptr_t;
+#else
 typedef	__uint32_t	__uintfptr_t;
 typedef	__uint32_t	__uintptr_t;
 #endif
@@ -141,25 +145,5 @@ typedef	int		___wchar_t;
 
 #define	__WCHAR_MIN	__INT_MIN	/* min value for a wchar_t */
 #define	__WCHAR_MAX	__INT_MAX	/* max value for a wchar_t */
-
-/*
- * Unusual type definitions.
- */
-#if defined(__GNUCLIKE_BUILTIN_VARARGS)
-typedef __builtin_va_list	__va_list;	/* internally known to gcc */
-#else
-typedef	struct {
-	char	__gpr;
-	char	__fpr;
-	char	__pad[2];
-	char	*__stack;
-	char	*__base;
-} __va_list;
-#endif /* post GCC 2.95 */
-#if defined(__GNUC_VA_LIST_COMPATIBILITY) && !defined(__GNUC_VA_LIST) \
-    && !defined(__NO_GNUC_VA_LIST)
-#define __GNUC_VA_LIST
-typedef __va_list		__gnuc_va_list;	/* compatibility w/GNU headers*/
-#endif
 
 #endif /* !_MACHINE__TYPES_H_ */

@@ -9,11 +9,7 @@
 
 #include "lldb/Interpreter/OptionValueChar.h"
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
-#include "lldb/Interpreter/Args.h"
+#include "lldb/Interpreter/OptionArgParser.h"
 #include "lldb/Utility/Stream.h"
 #include "lldb/Utility/StringList.h"
 #include "llvm/ADT/STLExtras.h"
@@ -47,7 +43,7 @@ Status OptionValueChar::SetValueFromString(llvm::StringRef value,
   case eVarSetOperationReplace:
   case eVarSetOperationAssign: {
     bool success = false;
-    char char_value = Args::StringToChar(value, '\0', &success);
+    char char_value = OptionArgParser::ToChar(value, '\0', &success);
     if (success) {
       m_current_value = char_value;
       m_value_was_set = true;

@@ -1,11 +1,6 @@
-/*
- * Copyright 2013 Freescale Semiconductor, Inc.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- */
+// SPDX-License-Identifier: (GPL-2.0 OR MIT)
+//
+// Copyright 2013 Freescale Semiconductor, Inc.
 
 /dts-v1/;
 #include "vf610.dtsi"
@@ -18,7 +13,8 @@
 		bootargs = "console=ttyLP1,115200";
 	};
 
-	memory {
+	memory@80000000 {
+		device_type = "memory";
 		reg = <0x80000000 0x8000000>;
 	};
 
@@ -96,6 +92,10 @@
 &clks {
 	clocks = <&sxosc>, <&fxosc>, <&enet_ext>, <&audio_ext>;
 	clock-names = "sxosc", "fxosc", "enet_ext", "audio_ext";
+	assigned-clocks = <&clks VF610_CLK_ENET_SEL>,
+			  <&clks VF610_CLK_ENET_TS_SEL>;
+	assigned-clock-parents = <&clks VF610_CLK_ENET_EXT>,
+				 <&clks VF610_CLK_ENET_EXT>;
 };
 
 &dspi0 {
@@ -162,7 +162,7 @@
 	pinctrl-0 = <&pinctrl_i2c0>;
 	status = "okay";
 
-	codec: sgtl5000@0a {
+	codec: sgtl5000@a {
 	       #sound-dai-cells = <0>;
 	       compatible = "fsl,sgtl5000";
 	       reg = <0x0a>;

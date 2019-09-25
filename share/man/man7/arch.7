@@ -26,7 +26,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd May 16, 2017
+.Dd August 14, 2019
 .Dt ARCH 7
 .Os
 .Sh NAME
@@ -68,7 +68,7 @@ and
 .Vt ptrdiff_t
 should be avoided.
 .Pp
-On some architectures, e.g.
+On some architectures, e.g.,
 .Dv sparc64 ,
 .Dv powerpc
 and AIM variants of
@@ -90,12 +90,13 @@ architectures, the final release.
 .Pp
 .Bl -column -offset indent "Sy Architecture" "Sy Initial Release" "Sy Final Release"
 .It Sy Architecture Ta Sy Initial Release Ta Sy Final Release
+.It aarch64     Ta 11.0
 .It alpha       Ta 3.2   Ta 6.4
 .It amd64       Ta 5.1
 .It arm         Ta 6.0
-.It armeb       Ta 8.0
+.It armeb       Ta 8.0   Ta 11.x
 .It armv6       Ta 10.0
-.It arm64       Ta 11.0
+.It armv7       Ta 12.0
 .It ia64        Ta 5.0   Ta 10.x
 .It i386        Ta 1.0
 .It mips        Ta 8.0
@@ -161,9 +162,11 @@ Examples are:
 .It Dv powerpc64   Ta Dv powerpc
 .It Dv mips64*     Ta Dv mips*
 .El
-.Dv arm64
+.Dv aarch64
 currently does not support execution of
 .Dv armv6
+or
+.Dv armv7
 binaries, even if the CPU implements
 .Dv AArch32
 execution state.
@@ -188,11 +191,10 @@ require only 4-byte alignment for 64-bit integers.
 Machine-dependent type sizes:
 .Bl -column -offset indent "Sy Architecture" "Sy void *" "Sy long double" "Sy time_t"
 .It Sy Architecture Ta Sy void * Ta Sy long double Ta Sy time_t
+.It aarch64     Ta 8 Ta 16 Ta 8
 .It amd64       Ta 8 Ta 16 Ta 8
 .It arm         Ta 4 Ta  8 Ta 8
-.It armeb       Ta 4 Ta  8 Ta 8
 .It armv6       Ta 4 Ta  8 Ta 8
-.It arm64       Ta 8 Ta 16 Ta 8
 .It i386        Ta 4 Ta 12 Ta 4
 .It mips        Ta 4 Ta  8 Ta 8
 .It mipsel      Ta 4 Ta  8 Ta 8
@@ -203,8 +205,8 @@ Machine-dependent type sizes:
 .It mips64el    Ta 8 Ta  8 Ta 8
 .It mips64elhf  Ta 8 Ta  8 Ta 8
 .It mips64hf    Ta 8 Ta  8 Ta 8
-.It powerpc     Ta 4 Ta  8 Ta 4
-.It powerpcspe  Ta 4 Ta  8 Ta 4
+.It powerpc     Ta 4 Ta  8 Ta 8
+.It powerpcspe  Ta 4 Ta  8 Ta 8
 .It powerpc64   Ta 8 Ta  8 Ta 8
 .It riscv64     Ta 8 Ta 16 Ta 8
 .It riscv64sf   Ta 8 Ta 16 Ta 8
@@ -212,16 +214,15 @@ Machine-dependent type sizes:
 .El
 .Pp
 .Sy time_t
-is 8 bytes on all supported architectures except i386 and 32-bit
-variants of powerpc.
+is 8 bytes on all supported architectures except i386.
 .Ss Endianness and Char Signedness
 .Bl -column -offset indent "Sy Architecture" "Sy Endianness" "Sy char Signedness"
 .It Sy Architecture Ta Sy Endianness Ta Sy char Signedness
+.It aarch64     Ta little Ta unsigned
 .It amd64       Ta little Ta   signed
 .It arm         Ta little Ta unsigned
-.It armeb       Ta big    Ta unsigned
 .It armv6       Ta little Ta unsigned
-.It arm64       Ta little Ta unsigned
+.It armv7       Ta little Ta unsigned
 .It i386        Ta little Ta   signed
 .It mips        Ta big    Ta   signed
 .It mipsel      Ta little Ta   signed
@@ -242,11 +243,11 @@ variants of powerpc.
 .Ss Page Size
 .Bl -column -offset indent "Sy Architecture" "Sy Page Sizes"
 .It Sy Architecture Ta Sy Page Sizes
+.It aarch64     Ta 4K, 2M, 1G
 .It amd64       Ta 4K, 2M, 1G
 .It arm         Ta 4K
-.It armeb       Ta 4K
 .It armv6       Ta 4K, 1M
-.It arm64       Ta 4K, 2M, 1G
+.It armv7       Ta 4K, 1M
 .It i386        Ta 4K, 2M (PAE), 4M
 .It mips        Ta 4K
 .It mipsel      Ta 4K
@@ -267,11 +268,11 @@ variants of powerpc.
 .Ss Floating Point
 .Bl -column -offset indent "Sy Architecture" "Sy float, double" "Sy long double"
 .It Sy Architecture Ta Sy float, double Ta Sy long double
+.It aarch64     Ta hard Ta soft, quad precision
 .It amd64       Ta hard Ta hard, 80 bit
 .It arm         Ta soft Ta soft, double precision
-.It armeb       Ta soft Ta soft, double precision
 .It armv6       Ta hard(1) Ta hard, double precision
-.It arm64       Ta hard Ta soft, quad precision
+.It armv7       Ta hard(1) Ta hard, double precision
 .It i386        Ta hard Ta hard, 80 bit
 .It mips        Ta soft Ta identical to double
 .It mipsel      Ta soft Ta identical to double
@@ -294,6 +295,50 @@ variants of powerpc.
 .Fx 11.0 ,
 armv6 used the softfp ABI even though it supported only processors
 with a floating point unit.
+.Ss Default Tool Chain
+.Fx uses a variety of tool chain components for the supported CPU
+architectures:
+.Xr clang 1
+and
+.Xr ld.lld 1
+provided by the base system,
+GNU
+.Xr gcc 1
+and Binutils
+.Xr ld 1 ,
+or an external toolchain compiler and linker provided by a port or package.
+This table shows the default tool chain for each architecture.
+.Bl -column -offset indent "Sy Architecture" "Sy Compiler" "Sy Linker"
+.It Sy Architecture Ta Sy Compiler Ta Sy Linker
+.It aarch64     Ta Clang     Ta lld
+.It amd64       Ta Clang     Ta lld
+.It arm         Ta Clang     Ta GNU ld 2.17.50
+.It armv6       Ta Clang     Ta GNU ld 2.17.50
+.It armv7       Ta Clang     Ta lld
+.It i386        Ta Clang     Ta lld
+.It mips        Ta GCC 4.2.1 Ta GNU ld 2.17.50
+.It mipsel      Ta GCC 4.2.1 Ta GNU ld 2.17.50
+.It mipselhf    Ta GCC 4.2.1 Ta GNU ld 2.17.50
+.It mipshf      Ta GCC 4.2.1 Ta GNU ld 2.17.50
+.It mipsn32     Ta GCC 4.2.1 Ta GNU ld 2.17.50
+.It mips64      Ta GCC 4.2.1 Ta GNU ld 2.17.50
+.It mips64el    Ta GCC 4.2.1 Ta GNU ld 2.17.50
+.It mips64elhf  Ta GCC 4.2.1 Ta GNU ld 2.17.50
+.It mips64hf    Ta GCC 4.2.1 Ta GNU ld 2.17.50
+.It powerpc     Ta GCC 4.2.1 Ta GNU ld 2.17.50
+.It powerpcspe  Ta GCC 4.2.1 Ta GNU ld 2.17.50
+.It powerpc64   Ta GCC 4.2.1 Ta GNU ld 2.17.50
+.It riscv64     Ta GCC(1)    Ta GNU ld(1)
+.It riscv64sf   Ta GCC(1)    Ta GNU ld(1)
+.It sparc64     Ta GCC 4.2.1 Ta GNU ld 2.17.50
+.El
+.Pp
+(1) External toolchain provided by ports/packages.
+.Pp
+Note that GCC 4.2.1 is deprecated, and scheduled for removal on 2020-03-31.
+Any CPU architectures not migrated by then
+(to either base system Clang or external toolchain)
+may be removed from the tree after that date.
 .Ss Predefined Macros
 The compiler provides a number of predefined macros.
 Some of these provide architecture-specific details and are explained below.
@@ -319,11 +364,11 @@ is not used on
 Architecture-specific macros:
 .Bl -column -offset indent "Sy Architecture" "Sy Predefined macros"
 .It Sy Architecture Ta Sy Predefined macros
+.It aarch64     Ta Dv __aarch64__
 .It amd64       Ta Dv __amd64__, Dv __x86_64__
 .It arm         Ta Dv __arm__
-.It armeb       Ta Dv __arm__
 .It armv6       Ta Dv __arm__, Dv __ARM_ARCH >= 6
-.It arm64       Ta Dv __aarch64__
+.It armv7       Ta Dv __arm__, Dv __ARM_ARCH >= 7
 .It i386        Ta Dv __i386__
 .It mips        Ta Dv __mips__, Dv __MIPSEB__, Dv __mips_o32
 .It mipsel      Ta Dv __mips__, Dv __mips_o32
@@ -337,9 +382,118 @@ Architecture-specific macros:
 .It powerpc     Ta Dv __powerpc__
 .It powerpcspe  Ta Dv __powerpc__, Dv __SPE__
 .It powerpc64   Ta Dv __powerpc__, Dv __powerpc64__
-.It riscv64     Ta Dv __riscv__, Dv __riscv64
-.It riscv64sf   Ta Dv __riscv__, Dv __riscv64
+.It riscv64     Ta Dv __riscv, Dv __riscv_xlen == 64
+.It riscv64sf   Ta Dv __riscv, Dv __riscv_xlen == 64
 .It sparc64     Ta Dv __sparc64__
+.El
+.Pp
+Compilers may define additional variants of architecture-specific macros.
+The macros above are preferred for use in
+.Fx .
+.Ss Important Xr make 1 variables
+Most of the externally settable variables are defined in the
+.Xr build 7
+man page.
+These variables are not otherwise documented and are used extensively
+in the build system.
+.Bl -column -offset indent "Sy Variable" "Sy Meaning and usage"
+.It Dv MACHINE	Represent the hardware platform.
+This is the same as the native platform's
+.Xr uname 1
+.Fl m
+output.
+It defines both the userland / kernel interface, as well as the
+bootloader / kernel interface.
+It should only be used in these contexts.
+Each CPU architecture may have multiple hardware platforms it supports
+where
+.Dv MACHINE
+differs among them.
+It is used to collect together all the files from
+.Xr config 8
+to build the kernel.
+It is often the same as
+.Dv MACHINE_ARCH
+just as one CPU architecture can be implemented by many different
+hardware platforms, one hardware platform may support multiple CPU
+architecture family members, though with different binaries.
+For example,
+.Dv MACHINE
+of i386 supported the IBM-AT hardware platform while the
+.Dv MACHINE
+of pc98 supported the Japanese company NEC's PC-9801 and PC-9821
+hardware platforms.
+Both of these hardware platforms supported only the
+.Dv MACHINE_ARCH
+of i386 where they shared a common ABI, except for certain kernel /
+userland interfaces relating to underlying hardware platform
+differences in bus architecture, device enumeration and boot interface.
+Generally,
+.Dv MACHINE
+should only be used in src/sys and src/stand or in system imagers or
+installers.
+.It Dv MACHINE_ARCH	Represents the CPU processor architecture.
+This is the same as the native platforms
+.Xr uname 1
+.Fl p
+output.
+It defines the CPU instruction family supported.
+It may also encode a variation in the byte ordering of multi-byte
+integers (endian).
+It may also encode a variation in the size of the integer or pointer.
+It may also encode a ISA revision.
+It may also encode hard versus soft floating point ABI and usage.
+It may also encode a variant ABI when the other factors do not
+uniquely define the ABI (e.g., MIPS' n32 ABI).
+It, along with
+.Dv MACHINE ,
+defines the ABI used by the system.
+For example, the MIPS CPU processor family supports 9 different
+combinations encoding pointer size, endian and hard versus soft float (for
+8 combinations) as well as N32 (which only ever had one variation of
+all these).
+Generally, the plain CPU name specifies the most common (or at least
+first) variant of the CPU.
+This is why mips and mips64 imply 'big endian' while 'arm' and 'armv7'
+imply little endian.
+If we ever were to support the so-called x32 ABI (using 32-bit
+pointers on the amd64 architecture), it would most likely be encoded
+as amd64-x32.
+It is unfortunate that amd64 specifies the 64-bit evolution of the x86
+platform (it matches the 'first rule') as everybody else uses x86_64.
+There is no standard name for the processor: each OS selects its own
+conventions.
+.It Dv MACHINE_CPUARCH	Represents the source location for a given
+.Dv MACHINE_ARCH .
+For example,
+.Dv MACHINE_CPUARCH
+is defined to be mips for all the flavors of mips that we support
+since we support them all with a shared set of sources.
+While amd64 and i386 are closely related, MACHINE_CPUARCH is not x86
+for them.
+The FreeBSD source base supports amd64 and i386 with two
+distinct source bases living in subdirectories named amd64 and i386
+(though behind the scenes there's some sharing that fits into this
+framework).
+.It Dv CPUTYPE	Sets the flavor of
+.Dv MACHINE_ARCH
+to build.
+It is used to optimize the build for a specific CPU / core that the
+binaries run on.
+Generally, this does not change the ABI, though it can be a fine line
+between optimization for specific cases.
+.It Dv TARGET	Used to set
+.Dv MACHINE
+in the top level Makefile for cross building.
+Unused outside of that scope.
+It is not passed down to the rest of the build.
+Makefiles outside of the top level should not use it at all (though
+some have their own private copy for hysterical raisons).
+.It Dv TARGET_ARCH	Used to set
+.Dv MACHINE_ARCH
+by the top level Makefile for cross building.
+Like
+.Dv TARGET , it is unused outside of that scope.
 .El
 .Sh SEE ALSO
 .Xr src.conf 5 ,

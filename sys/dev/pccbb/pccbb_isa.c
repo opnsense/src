@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2002-2004 M. Warner Losh.
  * All rights reserved.
  *
@@ -104,7 +106,6 @@ SYSCTL_INT(_hw_pcic, OID_AUTO, pd6722_vsense, CTLFLAG_RDTUN,
 #define	DPRINTF(x) do { if (cbb_debug) printf x; } while (0)
 #define	DEVPRINTF(x) do { if (cbb_debug) device_printf x; } while (0)
 
-/* XXX Not sure that PNP0E03 should be claimed, except maybe on pc98 */
 static struct isa_pnp_id pcic_ids[] = {
 	{EXCA_PNP_ACTIONTEC,		NULL},		/* AEI0218 */
 	{EXCA_PNP_IBM3765,		NULL},		/* IBM3765 */
@@ -113,8 +114,6 @@ static struct isa_pnp_id pcic_ids[] = {
 	{EXCA_PNP_VLSI_82C146,		NULL},		/* PNP0E02 */
 	{EXCA_PNP_82365_CARDBUS,	NULL},		/* PNP0E03 */
 	{EXCA_PNP_SCM_SWAPBOX,		NULL},		/* SCM0469 */
-	{EXCA_NEC_PC9801_102,		NULL},		/* NEC8091 */
-	{EXCA_NEC_PC9821RA_E01,         NULL},          /* NEC8121 */
 	{0}
 };
 
@@ -255,3 +254,4 @@ static driver_t cbb_isa_driver = {
 
 DRIVER_MODULE(cbb, isa, cbb_isa_driver, cbb_devclass, 0, 0);
 MODULE_DEPEND(cbb, exca, 1, 1, 1);
+ISA_PNP_INFO(pcic_ids);

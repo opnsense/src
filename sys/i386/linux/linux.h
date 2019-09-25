@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1994-1996 Søren Schmidt
  * All rights reserved.
  *
@@ -6,25 +8,22 @@
  * modification, are permitted provided that the following conditions
  * are met:
  * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer
- *    in this position and unchanged.
+ *    notice, this list of conditions and the following disclaimer.
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. The name of the author may not be used to endorse or promote products
- *    derived from this software without specific prior written permission
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
- * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
- * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
  * $FreeBSD$
  */
 
@@ -35,6 +34,8 @@
 
 #include <compat/linux/linux.h>
 #include <i386/linux/linux_syscall.h>
+
+#define LINUX_LEGACY_SYSCALLS
 
 /*
  * debugging support
@@ -108,7 +109,7 @@ typedef struct {
  */
 #define LINUX_AT_COUNT		20	/* Count of used aux entry types.
 					 * Keep this synchronized with
-					 * elf_linux_fixup() code.
+					 * linux_fixup_elf() code.
 					 */
 struct l___sysctl_args
 {
@@ -215,19 +216,19 @@ struct l_stat64 {
 	l_ulonglong	st_ino;
 };
 
-struct l_statfs64 { 
-        l_int           f_type; 
-        l_int           f_bsize; 
-        uint64_t        f_blocks; 
-        uint64_t        f_bfree; 
-        uint64_t        f_bavail; 
-        uint64_t        f_files; 
-        uint64_t        f_ffree; 
-        l_fsid_t        f_fsid;
-        l_int           f_namelen;
-        l_int           f_frsize;
-        l_int           f_flags;
-        l_int           f_spare[4];
+struct l_statfs64 {
+	l_int		f_type;
+	l_int		f_bsize;
+	uint64_t	f_blocks;
+	uint64_t	f_bfree;
+	uint64_t	f_bavail;
+	uint64_t	f_files;
+	uint64_t	f_ffree;
+	l_fsid_t	f_fsid;
+	l_int		f_namelen;
+	l_int		f_frsize;
+	l_int		f_flags;
+	l_int		f_spare[4];
 };
 
 #define	LINUX_NSIG_WORDS	2
@@ -429,11 +430,11 @@ struct l_sigframe {
 
 struct l_rt_sigframe {
 	l_int			sf_sig;
-	l_siginfo_t 		*sf_siginfo;
+	l_siginfo_t		*sf_siginfo;
 	struct l_ucontext	*sf_ucontext;
 	l_siginfo_t		sf_si;
-	struct l_ucontext 	sf_sc;
-	l_handler_t 		sf_handler;
+	struct l_ucontext	sf_sc;
+	l_handler_t		sf_handler;
 };
 
 extern struct sysentvec linux_sysvec;
@@ -447,15 +448,10 @@ extern struct sysentvec linux_sysvec;
 
 union l_semun {
 	l_int		val;
-	struct l_semid_ds	*buf;
+	l_uintptr_t	buf;
 	l_ushort	*array;
-	struct l_seminfo	*__buf;
-	void		*__pad;
-};
-
-struct l_sockaddr {
-	l_ushort	sa_family;
-	char		sa_data[14];
+	l_uintptr_t	__buf;
+	l_uintptr_t	__pad;
 };
 
 struct l_ifmap {
@@ -466,9 +462,6 @@ struct l_ifmap {
 	u_char		dma;
 	u_char		port;
 };
-
-#define	LINUX_IFHWADDRLEN	6
-#define	LINUX_IFNAMSIZ		16
 
 struct l_ifreq {
 	union {

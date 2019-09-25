@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2008 Isilon Inc http://www.isilon.com/
  * Authors: Doug Rabson <dfr@rabson.org>
  * Developed with Red Inc: Alfred Perlstein <alfred@freebsd.org>
@@ -202,7 +204,7 @@ nlm_advlock_internal(struct vnode *vp, void *id, int op, struct flock *fl,
 	union nfsfh fh;
 	struct sockaddr *sa;
 	struct sockaddr_storage ss;
-	char servername[MNAMELEN];
+	char *servername;
 	struct timeval timo;
 	int retries;
 	rpcvers_t vers;
@@ -218,6 +220,7 @@ nlm_advlock_internal(struct vnode *vp, void *id, int op, struct flock *fl,
 
 	ASSERT_VOP_LOCKED(vp, "nlm_advlock_1");
 
+	servername = malloc(MNAMELEN, M_TEMP, M_WAITOK); /* XXXKIB vp locked */
 	nmp = VFSTONFS(vp->v_mount);
 	/*
 	 * Push any pending writes to the server and flush our cache
@@ -381,7 +384,7 @@ nlm_advlock_internal(struct vnode *vp, void *id, int op, struct flock *fl,
 	AUTH_DESTROY(auth);
 
 	nlm_host_release(host);
-
+	free(servername, M_TEMP);
 	return (error);
 }
 

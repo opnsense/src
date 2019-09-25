@@ -30,6 +30,7 @@
  * Copyright (c) 2014 Integros [integros.com]
  * Copyright 2016 Igor Kozhukhov <ikozhukhov@gmail.com>.
  * Copyright 2016 Nexenta Systems, Inc.
+ * Copyright (c) 2018 Datto Inc.
  */
 
 #include <assert.h>
@@ -72,6 +73,7 @@
 #include <aclutils.h>
 #include <directory.h>
 #include <idmap.h>
+#include <libshare.h>
 #endif
 
 #include "zfs_iter.h"
@@ -350,7 +352,7 @@ get_usage(zfs_help_t idx)
 	case HELP_BOOKMARK:
 		return (gettext("\tbookmark <snapshot> <bookmark>\n"));
 	case HELP_CHANNEL_PROGRAM:
-		return (gettext("\tprogram [-n] [-t <instruction limit>] "
+		return (gettext("\tprogram [-jn] [-t <instruction limit>] "
 		    "[-m <memory limit (b)>] <pool> <program file> "
 		    "[lua args...]\n"));
 	}
@@ -2360,6 +2362,7 @@ us_compare(const void *larg, const void *rarg, void *unused)
 		case ZFS_PROP_NAME:
 			propname = "name";
 			if (numname) {
+compare_nums:
 				(void) nvlist_lookup_uint64(lnvl, propname,
 				    &lv64);
 				(void) nvlist_lookup_uint64(rnvl, propname,
@@ -2367,10 +2370,12 @@ us_compare(const void *larg, const void *rarg, void *unused)
 				if (rv64 != lv64)
 					rc = (rv64 < lv64) ? 1 : -1;
 			} else {
-				(void) nvlist_lookup_string(lnvl, propname,
-				    &lvstr);
-				(void) nvlist_lookup_string(rnvl, propname,
-				    &rvstr);
+				if ((nvlist_lookup_string(lnvl, propname,
+						&lvstr) == ENOENT) ||
+				    (nvlist_lookup_string(rnvl, propname,
+						&rvstr) == ENOENT)) {
+					goto compare_nums;
+				}
 				rc = strcmp(lvstr, rvstr);
 			}
 			break;
@@ -3812,7 +3817,7 @@ zfs_do_send(int argc, char **argv)
 	};
 
 	/* check options */
-	while ((c = getopt_long(argc, argv, ":i:I:RbDpvnPLet:c", long_options,
+	while ((c = getopt_long(argc, argv, ":i:I:RbDpVvnPLet:c", long_options,
 	    NULL)) != -1) {
 		switch (c) {
 		case 'i':
@@ -3835,6 +3840,10 @@ zfs_do_send(int argc, char **argv)
 		case 'P':
 			flags.parsable = B_TRUE;
 			flags.verbose = B_TRUE;
+			break;
+		case 'V':
+			flags.progress = B_TRUE;
+			flags.progressastitle = B_TRUE;
 			break;
 		case 'v':
 			if (flags.verbose)
@@ -5811,7 +5820,12 @@ zfs_do_holds(int argc, char **argv)
 
 #define	CHECK_SPINNER 30
 #define	SPINNER_TIME 3		/* seconds */
-#define	MOUNT_TIME 5		/* seconds */
+#define	MOUNT_TIME 1		/* seconds */
+
+typedef struct get_all_state {
+	boolean_t	ga_verbose;
+	get_all_cb_t	*ga_cbp;
+} get_all_state_t;
 
 static int
 get_one_dataset(zfs_handle_t *zhp, void *data)
@@ -5820,10 +5834,10 @@ get_one_dataset(zfs_handle_t *zhp, void *data)
 	static int spinval = 0;
 	static int spincheck = 0;
 	static time_t last_spin_time = (time_t)0;
-	get_all_cb_t *cbp = data;
+	get_all_state_t *state = data;
 	zfs_type_t type = zfs_get_type(zhp);
 
-	if (cbp->cb_verbose) {
+	if (state->ga_verbose) {
 		if (--spincheck < 0) {
 			time_t now = time(NULL);
 			if (last_spin_time + SPINNER_TIME < now) {
@@ -5849,25 +5863,23 @@ get_one_dataset(zfs_handle_t *zhp, void *data)
 		zfs_close(zhp);
 		return (0);
 	}
-	libzfs_add_handle(cbp, zhp);
-	assert(cbp->cb_used <= cbp->cb_alloc);
+	libzfs_add_handle(state->ga_cbp, zhp);
+	assert(state->ga_cbp->cb_used <= state->ga_cbp->cb_alloc);
 
 	return (0);
 }
 
 static void
-get_all_datasets(zfs_handle_t ***dslist, size_t *count, boolean_t verbose)
+get_all_datasets(get_all_cb_t *cbp, boolean_t verbose)
 {
-	get_all_cb_t cb = { 0 };
-	cb.cb_verbose = verbose;
-	cb.cb_getone = get_one_dataset;
+	get_all_state_t state = {
+		.ga_verbose = verbose,
+		.ga_cbp = cbp
+	};
 
 	if (verbose)
 		set_progress_header(gettext("Reading ZFS config"));
-	(void) zfs_iter_root(g_zfs, get_one_dataset, &cb);
-
-	*dslist = cb.cb_handles;
-	*count = cb.cb_used;
+	(void) zfs_iter_root(g_zfs, get_one_dataset, &state);
 
 	if (verbose)
 		finish_progress(gettext("done."));
@@ -5878,8 +5890,19 @@ get_all_datasets(zfs_handle_t ***dslist, size_t *count, boolean_t verbose)
  * similar, we have a common function with an extra parameter to determine which
  * mode we are using.
  */
-#define	OP_SHARE	0x1
-#define	OP_MOUNT	0x2
+typedef enum { OP_SHARE, OP_MOUNT } share_mount_op_t;
+
+typedef struct share_mount_state {
+	share_mount_op_t	sm_op;
+	boolean_t	sm_verbose;
+	int	sm_flags;
+	char	*sm_options;
+	char	*sm_proto; /* only valid for OP_SHARE */
+	pthread_mutex_t	sm_lock; /* protects the remaining fields */
+	uint_t	sm_total; /* number of filesystems to process */
+	uint_t	sm_done; /* number of filesystems processed */
+	int	sm_status; /* -1 if any of the share/mount operations failed */
+} share_mount_state_t;
 
 /*
  * Share or mount a dataset.
@@ -6100,9 +6123,6 @@ report_mount_progress(int current, int total)
 	time_t now = time(NULL);
 	char info[32];
 
-	/* report 1..n instead of 0..n-1 */
-	++current;
-
 	/* display header if we're here for the first time */
 	if (current == 1) {
 		set_progress_header(gettext("Mounting ZFS filesystems"));
@@ -6119,6 +6139,29 @@ report_mount_progress(int current, int total)
 		finish_progress(info);
 	else
 		update_progress(info);
+}
+
+/*
+ * zfs_foreach_mountpoint() callback that mounts or shares on filesystem and
+ * updates the progress meter
+ */
+static int
+share_mount_one_cb(zfs_handle_t *zhp, void *arg)
+{
+	share_mount_state_t *sms = arg;
+	int ret;
+
+	ret = share_mount_one(zhp, sms->sm_op, sms->sm_flags, sms->sm_proto,
+	    B_FALSE, sms->sm_options);
+
+	pthread_mutex_lock(&sms->sm_lock);
+	if (ret != 0)
+		sms->sm_status = ret;
+	sms->sm_done++;
+	if (sms->sm_verbose)
+		report_mount_progress(sms->sm_done, sms->sm_total);
+	pthread_mutex_unlock(&sms->sm_lock);
+	return (ret);
 }
 
 static void
@@ -6193,8 +6236,6 @@ share_mount(int op, int argc, char **argv)
 
 	/* check number of arguments */
 	if (do_all) {
-		zfs_handle_t **dslist = NULL;
-		size_t i, count = 0;
 		char *protocol = NULL;
 
 		if (op == OP_SHARE && argc > 0) {
@@ -6215,24 +6256,48 @@ share_mount(int op, int argc, char **argv)
 		}
 
 		start_progress_timer();
-		get_all_datasets(&dslist, &count, verbose);
+		get_all_cb_t cb = { 0 };
+		get_all_datasets(&cb, verbose);
 
-		if (count == 0)
+		if (cb.cb_used == 0) {
+			if (options != NULL)
+				free(options);
 			return (0);
-
-		qsort(dslist, count, sizeof (void *), libzfs_dataset_cmp);
-
-		for (i = 0; i < count; i++) {
-			if (verbose)
-				report_mount_progress(i, count);
-
-			if (share_mount_one(dslist[i], op, flags, protocol,
-			    B_FALSE, options) != 0)
-				ret = 1;
-			zfs_close(dslist[i]);
 		}
 
-		free(dslist);
+#ifdef illumos
+		if (op == OP_SHARE) {
+			sa_init_selective_arg_t sharearg;
+			sharearg.zhandle_arr = cb.cb_handles;
+			sharearg.zhandle_len = cb.cb_used;
+			if ((ret = zfs_init_libshare_arg(g_zfs,
+			    SA_INIT_SHARE_API_SELECTIVE, &sharearg)) != SA_OK) {
+				(void) fprintf(stderr, gettext(
+				    "Could not initialize libshare, %d"), ret);
+				return (ret);
+			}
+		}
+#endif
+		share_mount_state_t share_mount_state = { 0 };
+		share_mount_state.sm_op = op;
+		share_mount_state.sm_verbose = verbose;
+		share_mount_state.sm_flags = flags;
+		share_mount_state.sm_options = options;
+		share_mount_state.sm_proto = protocol;
+		share_mount_state.sm_total = cb.cb_used;
+		pthread_mutex_init(&share_mount_state.sm_lock, NULL);
+
+		/*
+		 * libshare isn't mt-safe, so only do the operation in parallel
+		 * if we're mounting.
+		 */
+		zfs_foreach_mountpoint(g_zfs, cb.cb_handles, cb.cb_used,
+		    share_mount_one_cb, &share_mount_state, op == OP_MOUNT);
+		ret = share_mount_state.sm_status;
+
+		for (int i = 0; i < cb.cb_used; i++)
+			zfs_close(cb.cb_handles[i]);
+		free(cb.cb_handles);
 	} else if (argc == 0) {
 		struct mnttab entry;
 
@@ -7026,11 +7091,28 @@ zfs_do_diff(int argc, char **argv)
 	return (err != 0);
 }
 
+/*
+ * zfs remap <filesystem | volume>
+ *
+ * Remap the indirect blocks in the given fileystem or volume.
+ */
 static int
 zfs_do_remap(int argc, char **argv)
 {
 	const char *fsname;
 	int err = 0;
+	int c;
+
+	/* check options */
+	while ((c = getopt(argc, argv, "")) != -1) {
+		switch (c) {
+		case '?':
+			(void) fprintf(stderr,
+			    gettext("invalid option '%c'\n"), optopt);
+			usage(B_FALSE);
+		}
+	}
+
 	if (argc != 2) {
 		(void) fprintf(stderr, gettext("wrong number of arguments\n"));
 		usage(B_FALSE);
@@ -7157,12 +7239,12 @@ zfs_do_channel_program(int argc, char **argv)
 	nvlist_t *outnvl;
 	uint64_t instrlimit = ZCP_DEFAULT_INSTRLIMIT;
 	uint64_t memlimit = ZCP_DEFAULT_MEMLIMIT;
-	boolean_t sync_flag = B_TRUE;
+	boolean_t sync_flag = B_TRUE, json_output = B_FALSE;
 	zpool_handle_t *zhp;
 
 	/* check options */
 	while (-1 !=
-	    (c = getopt(argc, argv, "nt:(instr-limit)m:(memory-limit)"))) {
+	    (c = getopt(argc, argv, "jnt:(instr-limit)m:(memory-limit)"))) {
 		switch (c) {
 		case 't':
 		case 'm': {
@@ -7202,6 +7284,10 @@ zfs_do_channel_program(int argc, char **argv)
 		}
 		case 'n': {
 			sync_flag = B_FALSE;
+			break;
+		}
+		case 'j': {
+			json_output = B_TRUE;
 			break;
 		}
 		case '?':
@@ -7326,11 +7412,14 @@ zfs_do_channel_program(int argc, char **argv)
 		    gettext("Channel program execution failed:\n%s\n"),
 		    errstring);
 	} else {
-		(void) printf("Channel program fully executed ");
-		if (nvlist_empty(outnvl)) {
-			(void) printf("with no return value.\n");
+		if (json_output) {
+			(void) nvlist_print_json(stdout, outnvl);
+		} else if (nvlist_empty(outnvl)) {
+			(void) fprintf(stdout, gettext("Channel program fully "
+			    "executed and did not produce output.\n"));
 		} else {
-			(void) printf("with return value:\n");
+			(void) fprintf(stdout, gettext("Channel program fully "
+			    "executed and produced output:\n"));
 			dump_nvlist(outnvl, 4);
 		}
 	}

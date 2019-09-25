@@ -22,8 +22,8 @@
 namespace llvm {
 namespace codeview {
 
-/// Distinguishes individual records in .debug$T section or PDB type stream. The
-/// documentation and headers talk about this as the "leaf" type.
+/// Distinguishes individual records in .debug$T or .debug$P section or PDB type
+/// stream. The documentation and headers talk about this as the "leaf" type.
 enum class TypeRecordKind : uint16_t {
 #define TYPE_RECORD(lf_ename, value, name) name = value,
 #include "CodeViewTypes.def"
@@ -231,6 +231,8 @@ enum class FrameProcedureOptions : uint32_t {
   Inlined = 0x00000800,
   StrictSecurityChecks = 0x00001000,
   SafeBuffers = 0x00002000,
+  EncodedLocalBasePointerMask = 0x0000C000,
+  EncodedParamBasePointerMask = 0x00030000,
   ProfileGuidedOptimization = 0x00040000,
   ValidProfileCounts = 0x00080000,
   OptimizedForSpeed = 0x00100000,
@@ -356,7 +358,9 @@ enum class PointerOptions : uint32_t {
   Const = 0x00000400,
   Unaligned = 0x00000800,
   Restrict = 0x00001000,
-  WinRTSmartPointer = 0x00080000
+  WinRTSmartPointer = 0x00080000,
+  LValueRefThisPointer = 0x00100000,
+  RValueRefThisPointer = 0x00200000
 };
 CV_DEFINE_ENUM_CLASS_FLAGS_OPERATORS(PointerOptions)
 
@@ -510,6 +514,19 @@ enum class RegisterId : uint16_t {
 #undef CV_REGISTER
 };
 
+/// Two-bit value indicating which register is the designated frame pointer
+/// register. Appears in the S_FRAMEPROC record flags.
+enum class EncodedFramePtrReg : uint8_t {
+  None = 0,
+  StackPtr = 1,
+  FramePtr = 2,
+  BasePtr = 3,
+};
+
+RegisterId decodeFramePtrReg(EncodedFramePtrReg EncodedReg, CPUType CPU);
+
+EncodedFramePtrReg encodeFramePtrReg(RegisterId Reg, CPUType CPU);
+
 /// These values correspond to the THUNK_ORDINAL enumeration.
 enum class ThunkOrdinal : uint8_t {
   Standard,
@@ -531,7 +548,7 @@ enum LineFlags : uint16_t {
   LF_HaveColumns = 1, // CV_LINES_HAVE_COLUMNS
 };
 
-/// Data in the the SUBSEC_FRAMEDATA subection.
+/// Data in the SUBSEC_FRAMEDATA subection.
 struct FrameData {
   support::ulittle32_t RvaStart;
   support::ulittle32_t CodeSize;

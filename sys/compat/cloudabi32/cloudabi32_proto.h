@@ -11,6 +11,7 @@
 #include <sys/signal.h>
 #include <sys/acl.h>
 #include <sys/cpuset.h>
+#include <sys/domainset.h>
 #include <sys/_ffcounter.h>
 #include <sys/_semaphore.h>
 #include <sys/ucontext.h>
@@ -349,6 +350,12 @@ int	cloudabi_sys_thread_yield(struct thread *, struct cloudabi_sys_thread_yield_
 
 
 #endif /* COMPAT_FREEBSD10 */
+
+
+#ifdef COMPAT_FREEBSD11
+
+
+#endif /* COMPAT_FREEBSD11 */
 
 #define	CLOUDABI32_SYS_AUE_cloudabi_sys_clock_res_get	AUE_NULL
 #define	CLOUDABI32_SYS_AUE_cloudabi_sys_clock_time_get	AUE_NULL

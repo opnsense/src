@@ -292,7 +292,7 @@ abort_handler(struct trapframe *tf, int prefetch)
 	void *onfault;
 #endif
 
-	PCPU_INC(cnt.v_trap);
+	VM_CNT_INC(v_trap);
 	td = curthread;
 
 	fsr = (prefetch) ? cp15_ifsr_get(): cp15_dfsr_get();
@@ -599,8 +599,11 @@ abort_fatal(struct trapframe *tf, u_int idx, u_int fsr, u_int far,
 	printf(", pc =%08x\n\n", tf->tf_pc);
 
 #ifdef KDB
-	if (debugger_on_panic || kdb_active)
+	if (debugger_on_trap) {
+		kdb_why = KDB_WHY_TRAP;
 		kdb_trap(fsr, 0, tf);
+		kdb_why = KDB_WHY_UNSET;
+	}
 #endif
 	panic("Fatal abort");
 	/*NOTREACHED*/

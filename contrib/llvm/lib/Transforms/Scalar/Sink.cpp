@@ -72,18 +72,18 @@ static bool isSafeToMove(Instruction *Inst, AliasAnalysis &AA,
         return false;
   }
 
-  if (isa<TerminatorInst>(Inst) || isa<PHINode>(Inst) || Inst->isEHPad() ||
+  if (Inst->isTerminator() || isa<PHINode>(Inst) || Inst->isEHPad() ||
       Inst->mayThrow())
     return false;
 
-  if (auto CS = CallSite(Inst)) {
+  if (auto *Call = dyn_cast<CallBase>(Inst)) {
     // Convergent operations cannot be made control-dependent on additional
     // values.
-    if (CS.hasFnAttr(Attribute::Convergent))
+    if (Call->hasFnAttr(Attribute::Convergent))
       return false;
 
     for (Instruction *S : Stores)
-      if (isModSet(AA.getModRefInfo(S, CS)))
+      if (isModSet(AA.getModRefInfo(S, Call)))
         return false;
   }
 
@@ -104,7 +104,7 @@ static bool IsAcceptableTarget(Instruction *Inst, BasicBlock *SuccToSinkTo,
 
   // It's never legal to sink an instruction into a block which terminates in an
   // EH-pad.
-  if (SuccToSinkTo->getTerminator()->isExceptional())
+  if (SuccToSinkTo->getTerminator()->isExceptionalTerminator())
     return false;
 
   // If the block has multiple predecessors, this would introduce computation
@@ -114,7 +114,7 @@ static bool IsAcceptableTarget(Instruction *Inst, BasicBlock *SuccToSinkTo,
   if (SuccToSinkTo->getUniquePredecessor() != Inst->getParent()) {
     // We cannot sink a load across a critical edge - there may be stores in
     // other code paths.
-    if (isa<LoadInst>(Inst))
+    if (Inst->mayReadFromMemory())
       return false;
 
     // We don't want to sink across a critical edge if we don't dominate the
@@ -187,11 +187,9 @@ static bool SinkInstruction(Instruction *Inst,
   if (!SuccToSinkTo)
     return false;
 
-  DEBUG(dbgs() << "Sink" << *Inst << " (";
-        Inst->getParent()->printAsOperand(dbgs(), false);
-        dbgs() << " -> ";
-        SuccToSinkTo->printAsOperand(dbgs(), false);
-        dbgs() << ")\n");
+  LLVM_DEBUG(dbgs() << "Sink" << *Inst << " (";
+             Inst->getParent()->printAsOperand(dbgs(), false); dbgs() << " -> ";
+             SuccToSinkTo->printAsOperand(dbgs(), false); dbgs() << ")\n");
 
   // Move the instruction.
   Inst->moveBefore(&*SuccToSinkTo->getFirstInsertionPt());
@@ -244,7 +242,7 @@ static bool iterativelySinkInstructions(Function &F, DominatorTree &DT,
 
   do {
     MadeChange = false;
-    DEBUG(dbgs() << "Sinking iteration " << NumSinkIter << "\n");
+    LLVM_DEBUG(dbgs() << "Sinking iteration " << NumSinkIter << "\n");
     // Process all basic blocks.
     for (BasicBlock &I : F)
       MadeChange |= ProcessBlock(I, DT, LI, AA);

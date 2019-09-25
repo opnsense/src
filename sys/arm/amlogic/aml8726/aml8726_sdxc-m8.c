@@ -46,7 +46,6 @@ __FBSDID("$FreeBSD$");
 #include <machine/bus.h>
 #include <machine/cpu.h>
 
-#include <dev/fdt/fdt_common.h>
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
 
@@ -797,7 +796,7 @@ aml8726_sdxc_attach(device_t dev)
 	}
 
 	len = OF_getprop_alloc(node, "mmc-voltages",
-	    sizeof(char), (void **)&voltages);
+	    (void **)&voltages);
 
 	if (len < 0) {
 		device_printf(dev, "missing mmc-voltages attribute in FDT\n");

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2011, 2016 Chelsio Communications, Inc.
  * All rights reserved.
  *
@@ -195,6 +197,30 @@ static inline int act_open_has_tid(int status)
 		status != CPL_ERR_CONN_EXIST);
 }
 
+/*
+ * Convert an ACT_OPEN_RPL status to an errno.
+ */
+static inline int
+act_open_rpl_status_to_errno(int status)
+{
+
+	switch (status) {
+	case CPL_ERR_CONN_RESET:
+		return (ECONNREFUSED);
+	case CPL_ERR_ARP_MISS:
+		return (EHOSTUNREACH);
+	case CPL_ERR_CONN_TIMEDOUT:
+		return (ETIMEDOUT);
+	case CPL_ERR_TCAM_FULL:
+		return (EAGAIN);
+	case CPL_ERR_CONN_EXIST:
+		return (EAGAIN);
+	default:
+		return (EIO);
+	}
+}
+
+
 enum {
 	CPL_CONN_POLICY_AUTO = 0,
 	CPL_CONN_POLICY_ASK  = 1,
@@ -306,9 +332,14 @@ union opcode_tid {
 
 /* partitioning of TID fields that also carry a queue id */
 #define S_TID_TID    0
-#define M_TID_TID    0x3fff
+#define M_TID_TID    0x7ff
 #define V_TID_TID(x) ((x) << S_TID_TID)
 #define G_TID_TID(x) (((x) >> S_TID_TID) & M_TID_TID)
+
+#define S_TID_COOKIE    11
+#define M_TID_COOKIE    0x7
+#define V_TID_COOKIE(x) ((x) << S_TID_COOKIE)
+#define G_TID_COOKIE(x) (((x) >> S_TID_COOKIE) & M_TID_COOKIE)
 
 #define S_TID_QID    14
 #define M_TID_QID    0x3ff
@@ -892,7 +923,8 @@ struct cpl_get_tcb {
 	WR_HDR;
 	union opcode_tid ot;
 	__be16 reply_ctrl;
-	__be16 cookie;
+	__u8 rsvd;
+	__u8 cookie;
 };
 
 /* cpl_get_tcb.reply_ctrl fields */
@@ -1033,6 +1065,14 @@ struct cpl_abort_req {
 	__u8  rsvd2[6];
 };
 
+struct cpl_abort_req_core {
+	union opcode_tid ot;
+	__be32 rsvd0;
+	__u8  rsvd1;
+	__u8  cmd;
+	__u8  rsvd2[6];
+};
+
 struct cpl_abort_rpl_rss {
 	RSS_HDR
 	union opcode_tid ot;
@@ -1048,6 +1088,14 @@ struct cpl_abort_rpl_rss6 {
 
 struct cpl_abort_rpl {
 	WR_HDR;
+	union opcode_tid ot;
+	__be32 rsvd0;
+	__u8  rsvd1;
+	__u8  cmd;
+	__u8  rsvd2[6];
+};
+
+struct cpl_abort_rpl_core {
 	union opcode_tid ot;
 	__be32 rsvd0;
 	__u8  rsvd1;
@@ -2704,6 +2752,30 @@ enum {
 	CPL_FW4_ACK_FLAGS_FLOWC		= 0x4,	/* fw_flowc_wr complete */
 };
 
+#define S_CPL_FW4_ACK_OPCODE    24
+#define M_CPL_FW4_ACK_OPCODE    0xff
+#define V_CPL_FW4_ACK_OPCODE(x) ((x) << S_CPL_FW4_ACK_OPCODE)
+#define G_CPL_FW4_ACK_OPCODE(x) \
+    (((x) >> S_CPL_FW4_ACK_OPCODE) & M_CPL_FW4_ACK_OPCODE)
+
+#define S_CPL_FW4_ACK_FLOWID    0
+#define M_CPL_FW4_ACK_FLOWID    0xffffff
+#define V_CPL_FW4_ACK_FLOWID(x) ((x) << S_CPL_FW4_ACK_FLOWID)
+#define G_CPL_FW4_ACK_FLOWID(x) \
+    (((x) >> S_CPL_FW4_ACK_FLOWID) & M_CPL_FW4_ACK_FLOWID)
+
+#define S_CPL_FW4_ACK_CR        24
+#define M_CPL_FW4_ACK_CR        0xff
+#define V_CPL_FW4_ACK_CR(x)     ((x) << S_CPL_FW4_ACK_CR)
+#define G_CPL_FW4_ACK_CR(x)     (((x) >> S_CPL_FW4_ACK_CR) & M_CPL_FW4_ACK_CR)
+
+#define S_CPL_FW4_ACK_SEQVAL    0
+#define M_CPL_FW4_ACK_SEQVAL    0x1
+#define V_CPL_FW4_ACK_SEQVAL(x) ((x) << S_CPL_FW4_ACK_SEQVAL)
+#define G_CPL_FW4_ACK_SEQVAL(x) \
+    (((x) >> S_CPL_FW4_ACK_SEQVAL) & M_CPL_FW4_ACK_SEQVAL)
+#define F_CPL_FW4_ACK_SEQVAL    V_CPL_FW4_ACK_SEQVAL(1U)
+
 struct cpl_fw6_msg {
 	RSS_HDR
 	u8 opcode;
@@ -3102,7 +3174,8 @@ struct cpl_rx_mps_pkt {
 struct cpl_tx_tls_sfo {
 	__be32 op_to_seg_len;
 	__be32 pld_len;
-	__be64 rsvd;
+	__be32 type_protover;
+	__be32 r1_lo;
 	__be32 seqno_numivs;
 	__be32 ivgen_hdrlen;
 	__be64 scmd1;
@@ -3126,15 +3199,28 @@ struct cpl_tx_tls_sfo {
 #define V_CPL_TX_TLS_SFO_CPL_LEN(x)     ((x) << S_CPL_TX_TLS_SFO_CPL_LEN)
 #define G_CPL_TX_TLS_SFO_CPL_LEN(x)     \
 	(((x) >> S_CPL_TX_TLS_SFO_CPL_LEN) & M_CPL_TX_TLS_SFO_CPL_LEN)
+
 #define S_CPL_TX_TLS_SFO_SEG_LEN        0
 #define M_CPL_TX_TLS_SFO_SEG_LEN        0xffff
 #define V_CPL_TX_TLS_SFO_SEG_LEN(x)     ((x) << S_CPL_TX_TLS_SFO_SEG_LEN)
 #define G_CPL_TX_TLS_SFO_SEG_LEN(x)     \
 	(((x) >> S_CPL_TX_TLS_SFO_SEG_LEN) & M_CPL_TX_TLS_SFO_SEG_LEN)
 
+#define S_CPL_TX_TLS_SFO_TYPE           24
+#define M_CPL_TX_TLS_SFO_TYPE           0xff
+#define V_CPL_TX_TLS_SFO_TYPE(x)        ((x) << S_CPL_TX_TLS_SFO_TYPE)
+#define G_CPL_TX_TLS_SFO_TYPE(x)        \
+    (((x) >> S_CPL_TX_TLS_SFO_TYPE) & M_CPL_TX_TLS_SFO_TYPE)
+
+#define S_CPL_TX_TLS_SFO_PROTOVER       8
+#define M_CPL_TX_TLS_SFO_PROTOVER       0xffff
+#define V_CPL_TX_TLS_SFO_PROTOVER(x)    ((x) << S_CPL_TX_TLS_SFO_PROTOVER)
+#define G_CPL_TX_TLS_SFO_PROTOVER(x)    \
+    (((x) >> S_CPL_TX_TLS_SFO_PROTOVER) & M_CPL_TX_TLS_SFO_PROTOVER)
+
 struct cpl_tls_data {
 	RSS_HDR
-	__be32 op_tid;
+	union opcode_tid ot;
 	__be32 length_pkd;
 	__be32 seq;
 	__be32 r1;
@@ -3160,7 +3246,7 @@ struct cpl_tls_data {
 
 struct cpl_rx_tls_cmp {
 	RSS_HDR
-	__be32 op_tid;
+	union opcode_tid ot;
 	__be32 pdulength_length;
 	__be32 seq;
 	__be32 ddp_report;

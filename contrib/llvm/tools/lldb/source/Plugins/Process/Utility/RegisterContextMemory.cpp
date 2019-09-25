@@ -9,15 +9,11 @@
 
 #include "RegisterContextMemory.h"
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
 #include "DynamicRegisterInfo.h"
-#include "lldb/Core/RegisterValue.h"
 #include "lldb/Target/Process.h"
 #include "lldb/Target/Thread.h"
 #include "lldb/Utility/DataBufferHeap.h"
+#include "lldb/Utility/RegisterValue.h"
 #include "lldb/Utility/Status.h"
 
 using namespace lldb;
@@ -32,9 +28,9 @@ RegisterContextMemory::RegisterContextMemory(Thread &thread,
                                              addr_t reg_data_addr)
     : RegisterContext(thread, concrete_frame_idx), m_reg_infos(reg_infos),
       m_reg_valid(), m_reg_data(), m_reg_data_addr(reg_data_addr) {
-  // Resize our vector of bools to contain one bool for every register.
-  // We will use these boolean values to know when a register value
-  // is valid in m_reg_data.
+  // Resize our vector of bools to contain one bool for every register. We will
+  // use these boolean values to know when a register value is valid in
+  // m_reg_data.
   const size_t num_regs = reg_infos.GetNumRegisters();
   assert(num_regs > 0);
   m_reg_valid.resize(num_regs);

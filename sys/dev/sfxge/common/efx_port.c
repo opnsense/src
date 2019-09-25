@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2009-2016 Solarflare Communications Inc.
  * All rights reserved.
  *
@@ -64,7 +66,7 @@ efx_port_init(
 	epp->ep_emop->emo_reconfigure(enp);
 
 	/* Pick up current phy capababilities */
-	efx_port_poll(enp, NULL);
+	(void) efx_port_poll(enp, NULL);
 
 	/*
 	 * Turn on the PHY if available, otherwise reset it, and
@@ -112,7 +114,6 @@ efx_port_poll(
 	EFSYS_ASSERT3U(enp->en_mod_flags, &, EFX_MOD_PORT);
 
 	EFSYS_ASSERT(emop != NULL);
-	EFSYS_ASSERT(!epp->ep_mac_stats_pending);
 
 	if (link_modep == NULL)
 		link_modep = &ignore_link_mode;
@@ -148,7 +149,7 @@ efx_port_loopback_set(
 	EFSYS_ASSERT(link_mode < EFX_LINK_NMODES);
 
 	if (EFX_TEST_QWORD_BIT(encp->enc_loopback_types[link_mode],
-		loopback_type) == 0) {
+		(int)loopback_type) == 0) {
 		rc = ENOTSUP;
 		goto fail1;
 	}

@@ -12,6 +12,7 @@
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/PrettyPrinter.h"
+#include "clang/Lex/MacroInfo.h"
 
 using namespace clang;
 using namespace clang::index;
@@ -94,6 +95,9 @@ SymbolInfo index::getSymbolInfo(const Decl *D) {
 
   if (isFunctionLocalSymbol(D)) {
     Info.Properties |= (SymbolPropertySet)SymbolProperty::Local;
+  }
+  if (isa<ObjCProtocolDecl>(D->getDeclContext())) {
+    Info.Properties |= (SymbolPropertySet)SymbolProperty::ProtocolInterface;
   }
 
   if (const TagDecl *TD = dyn_cast<TagDecl>(D)) {
@@ -348,6 +352,15 @@ SymbolInfo index::getSymbolInfo(const Decl *D) {
   return Info;
 }
 
+SymbolInfo index::getSymbolInfoForMacro(const MacroInfo &) {
+  SymbolInfo Info;
+  Info.Kind = SymbolKind::Macro;
+  Info.SubKind = SymbolSubKind::None;
+  Info.Properties = SymbolPropertySet();
+  Info.Lang = SymbolLanguage::C;
+  return Info;
+}
+
 bool index::applyForEachSymbolRoleInterruptible(SymbolRoleSet Roles,
                                    llvm::function_ref<bool(SymbolRole)> Fn) {
 #define APPLY_FOR_ROLE(Role) \
@@ -364,6 +377,7 @@ bool index::applyForEachSymbolRoleInterruptible(SymbolRoleSet Roles,
   APPLY_FOR_ROLE(Dynamic);
   APPLY_FOR_ROLE(AddressOf);
   APPLY_FOR_ROLE(Implicit);
+  APPLY_FOR_ROLE(Undefinition);
   APPLY_FOR_ROLE(RelationChildOf);
   APPLY_FOR_ROLE(RelationBaseOf);
   APPLY_FOR_ROLE(RelationOverrideOf);
@@ -405,6 +419,7 @@ void index::printSymbolRoles(SymbolRoleSet Roles, raw_ostream &OS) {
     case SymbolRole::Dynamic: OS << "Dyn"; break;
     case SymbolRole::AddressOf: OS << "Addr"; break;
     case SymbolRole::Implicit: OS << "Impl"; break;
+    case SymbolRole::Undefinition: OS << "Undef"; break;
     case SymbolRole::RelationChildOf: OS << "RelChild"; break;
     case SymbolRole::RelationBaseOf: OS << "RelBase"; break;
     case SymbolRole::RelationOverrideOf: OS << "RelOver"; break;
@@ -507,6 +522,7 @@ void index::applyForEachSymbolProperty(SymbolPropertySet Props,
   APPLY_FOR_PROPERTY(IBOutletCollection);
   APPLY_FOR_PROPERTY(GKInspectable);
   APPLY_FOR_PROPERTY(Local);
+  APPLY_FOR_PROPERTY(ProtocolInterface);
 
 #undef APPLY_FOR_PROPERTY
 }
@@ -527,6 +543,7 @@ void index::printSymbolProperties(SymbolPropertySet Props, raw_ostream &OS) {
     case SymbolProperty::IBOutletCollection: OS << "IBColl"; break;
     case SymbolProperty::GKInspectable: OS << "GKI"; break;
     case SymbolProperty::Local: OS << "local"; break;
+    case SymbolProperty::ProtocolInterface: OS << "protocol"; break;
     }
   });
 }

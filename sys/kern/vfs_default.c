@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -15,7 +17,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -79,9 +81,7 @@ static int	dirent_exists(struct vnode *vp, const char *dirname,
 #define DIRENT_MINSIZE (sizeof(struct dirent) - (MAXNAMLEN+1) + 4)
 
 static int vop_stdis_text(struct vop_is_text_args *ap);
-static int vop_stdset_text(struct vop_set_text_args *ap);
 static int vop_stdunset_text(struct vop_unset_text_args *ap);
-static int vop_stdget_writecount(struct vop_get_writecount_args *ap);
 static int vop_stdadd_writecount(struct vop_add_writecount_args *ap);
 static int vop_stdfdatasync(struct vop_fdatasync_args *ap);
 static int vop_stdgetpages_async(struct vop_getpages_async_args *ap);
@@ -139,7 +139,6 @@ struct vop_vector default_vnodeops = {
 	.vop_is_text =		vop_stdis_text,
 	.vop_set_text =		vop_stdset_text,
 	.vop_unset_text =	vop_stdunset_text,
-	.vop_get_writecount =	vop_stdget_writecount,
 	.vop_add_writecount =	vop_stdadd_writecount,
 };
 
@@ -480,6 +479,13 @@ vop_stdpathconf(ap)
 		case _PC_PATH_MAX:
 			*ap->a_retval = PATH_MAX;
 			return (0);
+		case _PC_ACL_EXTENDED:
+		case _PC_ACL_NFS4:
+		case _PC_CAP_PRESENT:
+		case _PC_INF_PRESENT:
+		case _PC_MAC_PRESENT:
+			*ap->a_retval = 0;
+			return (0);
 		default:
 			return (EINVAL);
 	}
@@ -503,7 +509,7 @@ vop_stdlock(ap)
 
 	ilk = VI_MTX(vp);
 	return (lockmgr_lock_fast_path(vp->v_vnlock, ap->a_flags,
-	    (ilk != NULL) ? &ilk->lock_object : NULL, ap->a_file, ap->a_line));
+	    &ilk->lock_object, ap->a_file, ap->a_line));
 }
 
 /* See above. */
@@ -519,7 +525,7 @@ vop_stdunlock(ap)
 
 	ilk = VI_MTX(vp);
 	return (lockmgr_unlock_fast_path(vp->v_vnlock, ap->a_flags,
-	    (ilk != NULL) ? &ilk->lock_object : NULL));
+	    &ilk->lock_object));
 }
 
 /* See above. */
@@ -597,7 +603,13 @@ vop_stdgetwritemount(ap)
 	return (0);
 }
 
-/* XXX Needs good comment and VOP_BMAP(9) manpage */
+/*
+ * If the file system doesn't implement VOP_BMAP, then return sensible defaults:
+ * - Return the vnode's bufobj instead of any underlying device's bufobj
+ * - Calculate the physical block number as if there were equal size
+ *   consecutive blocks, but
+ * - Report no contiguous runs of blocks.
+ */
 int
 vop_stdbmap(ap)
 	struct vop_bmap_args /* {
@@ -629,98 +641,8 @@ vop_stdfsync(ap)
 		struct thread *a_td;
 	} */ *ap;
 {
-	struct vnode *vp;
-	struct buf *bp, *nbp;
-	struct bufobj *bo;
-	struct mount *mp;
-	int error, maxretry;
 
-	error = 0;
-	maxretry = 10000;     /* large, arbitrarily chosen */
-	vp = ap->a_vp;
-	mp = NULL;
-	if (vp->v_type == VCHR) {
-		VI_LOCK(vp);
-		mp = vp->v_rdev->si_mountpt;
-		VI_UNLOCK(vp);
-	}
-	bo = &vp->v_bufobj;
-	BO_LOCK(bo);
-loop1:
-	/*
-	 * MARK/SCAN initialization to avoid infinite loops.
-	 */
-        TAILQ_FOREACH(bp, &bo->bo_dirty.bv_hd, b_bobufs) {
-                bp->b_vflags &= ~BV_SCANNED;
-		bp->b_error = 0;
-	}
-
-	/*
-	 * Flush all dirty buffers associated with a vnode.
-	 */
-loop2:
-	TAILQ_FOREACH_SAFE(bp, &bo->bo_dirty.bv_hd, b_bobufs, nbp) {
-		if ((bp->b_vflags & BV_SCANNED) != 0)
-			continue;
-		bp->b_vflags |= BV_SCANNED;
-		if (BUF_LOCK(bp, LK_EXCLUSIVE | LK_NOWAIT, NULL)) {
-			if (ap->a_waitfor != MNT_WAIT)
-				continue;
-			if (BUF_LOCK(bp,
-			    LK_EXCLUSIVE | LK_INTERLOCK | LK_SLEEPFAIL,
-			    BO_LOCKPTR(bo)) != 0) {
-				BO_LOCK(bo);
-				goto loop1;
-			}
-			BO_LOCK(bo);
-		}
-		BO_UNLOCK(bo);
-		KASSERT(bp->b_bufobj == bo,
-		    ("bp %p wrong b_bufobj %p should be %p",
-		    bp, bp->b_bufobj, bo));
-		if ((bp->b_flags & B_DELWRI) == 0)
-			panic("fsync: not dirty");
-		if ((vp->v_object != NULL) && (bp->b_flags & B_CLUSTEROK)) {
-			vfs_bio_awrite(bp);
-		} else {
-			bremfree(bp);
-			bawrite(bp);
-		}
-		if (maxretry < 1000)
-			pause("dirty", hz < 1000 ? 1 : hz / 1000);
-		BO_LOCK(bo);
-		goto loop2;
-	}
-
-	/*
-	 * If synchronous the caller expects us to completely resolve all
-	 * dirty buffers in the system.  Wait for in-progress I/O to
-	 * complete (which could include background bitmap writes), then
-	 * retry if dirty blocks still exist.
-	 */
-	if (ap->a_waitfor == MNT_WAIT) {
-		bufobj_wwait(bo, 0, 0);
-		if (bo->bo_dirty.bv_cnt > 0) {
-			/*
-			 * If we are unable to write any of these buffers
-			 * then we fail now rather than trying endlessly
-			 * to write them out.
-			 */
-			TAILQ_FOREACH(bp, &bo->bo_dirty.bv_hd, b_bobufs)
-				if ((error = bp->b_error) == 0)
-					continue;
-			if ((mp != NULL && mp->mnt_secondary_writes > 0) ||
-			    (error == 0 && --maxretry >= 0))
-				goto loop1;
-			if (error == 0)
-				error = EAGAIN;
-		}
-	}
-	BO_UNLOCK(bo);
-	if (error != 0)
-		vn_printf(vp, "fsync: giving up on dirty (error = %d) ", error);
-
-	return (error);
+	return (vn_fsync_buf(ap->a_vp, ap->a_waitfor));
 }
 
 static int
@@ -733,12 +655,8 @@ vop_stdfdatasync(struct vop_fdatasync_args *ap)
 int
 vop_stdfdatasync_buf(struct vop_fdatasync_args *ap)
 {
-	struct vop_fsync_args apf;
 
-	apf.a_vp = ap->a_vp;
-	apf.a_waitfor = MNT_WAIT;
-	apf.a_td = ap->a_td;
-	return (vop_stdfsync(&apf));
+	return (vn_fsync_buf(ap->a_vp, MNT_WAIT));
 }
 
 /* XXX Needs good comment and more info in the manpage (VOP_GETPAGES(9)). */
@@ -1119,7 +1037,7 @@ int
 vop_stdunp_bind(struct vop_unp_bind_args *ap)
 {
 
-	ap->a_vp->v_socket = ap->a_socket;
+	ap->a_vp->v_unpcb = ap->a_unpcb;
 	return (0);
 }
 
@@ -1127,7 +1045,7 @@ int
 vop_stdunp_connect(struct vop_unp_connect_args *ap)
 {
 
-	*ap->a_socket = ap->a_vp->v_socket;
+	*ap->a_unpcb = ap->a_vp->v_unpcb;
 	return (0);
 }
 
@@ -1135,7 +1053,7 @@ int
 vop_stdunp_detach(struct vop_unp_detach_args *ap)
 {
 
-	ap->a_vp->v_socket = NULL;
+	ap->a_vp->v_unpcb = NULL;
 	return (0);
 }
 
@@ -1143,39 +1061,84 @@ static int
 vop_stdis_text(struct vop_is_text_args *ap)
 {
 
-	return ((ap->a_vp->v_vflag & VV_TEXT) != 0);
+	return (ap->a_vp->v_writecount < 0);
 }
 
-static int
+int
 vop_stdset_text(struct vop_set_text_args *ap)
 {
+	struct vnode *vp;
+	struct mount *mp;
+	int error;
 
-	ap->a_vp->v_vflag |= VV_TEXT;
-	return (0);
+	vp = ap->a_vp;
+	VI_LOCK(vp);
+	if (vp->v_writecount > 0) {
+		error = ETXTBSY;
+	} else {
+		/*
+		 * If requested by fs, keep a use reference to the
+		 * vnode until the last text reference is released.
+		 */
+		mp = vp->v_mount;
+		if (mp != NULL && (mp->mnt_kern_flag & MNTK_TEXT_REFS) != 0 &&
+		    vp->v_writecount == 0) {
+			vp->v_iflag |= VI_TEXT_REF;
+			vrefl(vp);
+		}
+
+		vp->v_writecount--;
+		error = 0;
+	}
+	VI_UNLOCK(vp);
+	return (error);
 }
 
 static int
 vop_stdunset_text(struct vop_unset_text_args *ap)
 {
+	struct vnode *vp;
+	int error;
+	bool last;
 
-	ap->a_vp->v_vflag &= ~VV_TEXT;
-	return (0);
-}
-
-static int
-vop_stdget_writecount(struct vop_get_writecount_args *ap)
-{
-
-	*ap->a_writecount = ap->a_vp->v_writecount;
-	return (0);
+	vp = ap->a_vp;
+	last = false;
+	VI_LOCK(vp);
+	if (vp->v_writecount < 0) {
+		if ((vp->v_iflag & VI_TEXT_REF) != 0 &&
+		    vp->v_writecount == -1) {
+			last = true;
+			vp->v_iflag &= ~VI_TEXT_REF;
+		}
+		vp->v_writecount++;
+		error = 0;
+	} else {
+		error = EINVAL;
+	}
+	VI_UNLOCK(vp);
+	if (last)
+		vunref(vp);
+	return (error);
 }
 
 static int
 vop_stdadd_writecount(struct vop_add_writecount_args *ap)
 {
+	struct vnode *vp;
+	int error;
 
-	ap->a_vp->v_writecount += ap->a_inc;
-	return (0);
+	vp = ap->a_vp;
+	VI_LOCK_FLAGS(vp, MTX_DUPOK);
+	if (vp->v_writecount < 0) {
+		error = ETXTBSY;
+	} else {
+		VNASSERT(vp->v_writecount + ap->a_inc >= 0, vp,
+		    ("neg writecount increment %d", ap->a_inc));
+		vp->v_writecount += ap->a_inc;
+		error = 0;
+	}
+	VI_UNLOCK(vp);
+	return (error);
 }
 
 /*

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2005-2011 Pawel Jakub Dawidek <pawel@dawidek.net>
  * All rights reserved.
  *
@@ -485,7 +487,7 @@ g_eli_auth_run(struct g_eli_worker *wr, struct bio *bp)
 			plaindata += data_secsize;
 		}
 
-		crp->crp_sid = wr->w_sid;
+		crp->crp_session = wr->w_sid;
 		crp->crp_ilen = sc->sc_alen + data_secsize;
 		crp->crp_olen = data_secsize;
 		crp->crp_opaque = (void *)bp;

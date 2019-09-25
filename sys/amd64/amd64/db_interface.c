@@ -36,6 +36,10 @@ __FBSDID("$FreeBSD$");
 #include <sys/kdb.h>
 #include <sys/pcpu.h>
 
+#include <machine/cpufunc.h>
+#include <machine/md_var.h>
+#include <machine/specialreg.h>
+
 #include <ddb/ddb.h>
 
 /*
@@ -62,6 +66,9 @@ db_read_bytes(vm_offset_t addr, size_t size, char *data)
 
 /*
  * Write bytes to kernel address space for debugger.
+ * We need to disable write protection temporarily so we can write
+ * things (such as break points) that might be in write-protected
+ * memory.
  */
 int
 db_write_bytes(vm_offset_t addr, size_t size, char *data)
@@ -69,15 +76,19 @@ db_write_bytes(vm_offset_t addr, size_t size, char *data)
 	jmp_buf jb;
 	void *prev_jb;
 	char *dst;
+	bool old_wp;
 	int ret;
 
+	old_wp = false;
 	prev_jb = kdb_jmpbuf(jb);
 	ret = setjmp(jb);
 	if (ret == 0) {
+		old_wp = disable_wp();
 		dst = (char *)addr;
 		while (size-- > 0)
 			*dst++ = *data++;
 	}
+	restore_wp(old_wp);
 	(void)kdb_jmpbuf(prev_jb);
 	return (ret);
 }
@@ -93,4 +104,5 @@ db_show_mdpcpu(struct pcpu *pc)
 	db_printf("gs32p        = %p\n", pc->pc_gs32p);
 	db_printf("ldt          = %p\n", pc->pc_ldt);
 	db_printf("tss          = %p\n", pc->pc_tss);
+	db_printf("tlb gen      = %u\n", pc->pc_smp_tlb_done);
 }

@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1980, 1986, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -52,7 +54,7 @@ __FBSDID("$FreeBSD$");
 
 static ino_t startinum;
 
-static int iblock(struct inodesc *, long ilevel, off_t isize, int type);
+static int iblock(struct inodesc *, off_t isize, int type);
 
 int
 ckinode(union dinode *dp, struct inodesc *idesc)
@@ -67,6 +69,8 @@ ckinode(union dinode *dp, struct inodesc *idesc)
 	if (idesc->id_fix != IGNORE)
 		idesc->id_fix = DONTKNOW;
 	idesc->id_lbn = -1;
+	idesc->id_lballoc = -1;
+	idesc->id_level = 0;
 	idesc->id_entryno = 0;
 	idesc->id_filesize = DIP(dp, di_size);
 	mode = DIP(dp, di_mode) & IFMT;
@@ -78,7 +82,7 @@ ckinode(union dinode *dp, struct inodesc *idesc)
 	else
 		dino.dp2 = dp->dp2;
 	ndb = howmany(DIP(&dino, di_size), sblock.fs_bsize);
-	for (i = 0; i < NDADDR; i++) {
+	for (i = 0; i < UFS_NDADDR; i++) {
 		idesc->id_lbn++;
 		if (--ndb == 0 &&
 		    (offset = blkoff(&sblock, DIP(&dino, di_size))) != 0)
@@ -100,7 +104,7 @@ ckinode(union dinode *dp, struct inodesc *idesc)
 					printf(
 					    "YOU MUST RERUN FSCK AFTERWARDS\n");
 					rerun = 1;
-					inodirty();
+					inodirty(dp);
 
 				}
 			}
@@ -115,18 +119,19 @@ ckinode(union dinode *dp, struct inodesc *idesc)
 			return (ret);
 	}
 	idesc->id_numfrags = sblock.fs_frag;
-	remsize = DIP(&dino, di_size) - sblock.fs_bsize * NDADDR;
+	remsize = DIP(&dino, di_size) - sblock.fs_bsize * UFS_NDADDR;
 	sizepb = sblock.fs_bsize;
-	for (i = 0; i < NIADDR; i++) {
+	for (i = 0; i < UFS_NIADDR; i++) {
 		sizepb *= NINDIR(&sblock);
+		idesc->id_level = i + 1;
 		if (DIP(&dino, di_ib[i])) {
 			idesc->id_blkno = DIP(&dino, di_ib[i]);
-			ret = iblock(idesc, i + 1, remsize, BT_LEVEL1 + i);
+			ret = iblock(idesc, remsize, BT_LEVEL1 + i);
 			if (ret & STOP)
 				return (ret);
-		} else {
+		} else if (remsize > 0) {
 			idesc->id_lbn += sizepb / sblock.fs_bsize;
-			if (idesc->id_type == DATA && remsize > 0) {
+			if (idesc->id_type == DATA) {
 				/* An empty block in a directory XXX */
 				getpathname(pathbuf, idesc->id_number,
 						idesc->id_number);
@@ -140,7 +145,7 @@ ckinode(union dinode *dp, struct inodesc *idesc)
 					printf(
 					    "YOU MUST RERUN FSCK AFTERWARDS\n");
 					rerun = 1;
-					inodirty();
+					inodirty(dp);
 					break;
 				}
 			}
@@ -151,7 +156,7 @@ ckinode(union dinode *dp, struct inodesc *idesc)
 }
 
 static int
-iblock(struct inodesc *idesc, long ilevel, off_t isize, int type)
+iblock(struct inodesc *idesc, off_t isize, int type)
 {
 	struct bufarea *bp;
 	int i, n, (*func)(struct inodesc *), nif;
@@ -169,8 +174,8 @@ iblock(struct inodesc *idesc, long ilevel, off_t isize, int type)
 	if (chkrange(idesc->id_blkno, idesc->id_numfrags))
 		return (SKIP);
 	bp = getdatablk(idesc->id_blkno, sblock.fs_bsize, type);
-	ilevel--;
-	for (sizepb = sblock.fs_bsize, i = 0; i < ilevel; i++)
+	idesc->id_level--;
+	for (sizepb = sblock.fs_bsize, i = 0; i < idesc->id_level; i++)
 		sizepb *= NINDIR(&sblock);
 	if (howmany(isize, sizepb) > NINDIR(&sblock))
 		nif = NINDIR(&sblock);
@@ -192,19 +197,21 @@ iblock(struct inodesc *idesc, long ilevel, off_t isize, int type)
 		flush(fswritefd, bp);
 	}
 	for (i = 0; i < nif; i++) {
-		if (ilevel == 0)
-			idesc->id_lbn++;
 		if (IBLK(bp, i)) {
 			idesc->id_blkno = IBLK(bp, i);
-			if (ilevel == 0)
+			if (idesc->id_level == 0) {
+				idesc->id_lbn++;
 				n = (*func)(idesc);
-			else
-				n = iblock(idesc, ilevel, isize, type);
+			} else {
+				n = iblock(idesc, isize, type);
+				idesc->id_level++;
+			}
 			if (n & STOP) {
 				bp->b_flags &= ~B_INUSE;
 				return (n);
 			}
 		} else {
+			idesc->id_lbn += sizepb / sblock.fs_bsize;
 			if (idesc->id_type == DATA && isize > 0) {
 				/* An empty block in a directory XXX */
 				getpathname(pathbuf, idesc->id_number,
@@ -219,7 +226,7 @@ iblock(struct inodesc *idesc, long ilevel, off_t isize, int type)
 					printf(
 					    "YOU MUST RERUN FSCK AFTERWARDS\n");
 					rerun = 1;
-					inodirty();
+					inodirty(dp);
 					bp->b_flags &= ~B_INUSE;
 					return(STOP);
 				}
@@ -284,7 +291,7 @@ ginode(ino_t inumber)
 {
 	ufs2_daddr_t iblk;
 
-	if (inumber < ROOTINO || inumber > maxino)
+	if (inumber < UFS_ROOTINO || inumber > maxino)
 		errx(EEXIT, "bad inode number %ju to ginode",
 		    (uintmax_t)inumber);
 	if (startinum == 0 ||
@@ -348,9 +355,9 @@ getnextinode(ino_t inumber, int rebuildcg)
 		mode = DIP(dp, di_mode) & IFMT;
 		if (mode == 0) {
 			if (memcmp(dp->dp2.di_db, ufs2_zino.di_db,
-				NDADDR * sizeof(ufs2_daddr_t)) ||
+				UFS_NDADDR * sizeof(ufs2_daddr_t)) ||
 			      memcmp(dp->dp2.di_ib, ufs2_zino.di_ib,
-				NIADDR * sizeof(ufs2_daddr_t)) ||
+				UFS_NIADDR * sizeof(ufs2_daddr_t)) ||
 			      dp->dp2.di_mode || dp->dp2.di_size)
 				return (NULL);
 			goto inodegood;
@@ -370,20 +377,20 @@ getnextinode(ino_t inumber, int rebuildcg)
 			if (DIP(dp, di_size) < (off_t)sblock.fs_maxsymlinklen) {
 				ndb = howmany(DIP(dp, di_size),
 				    sizeof(ufs2_daddr_t));
-				if (ndb > NDADDR) {
-					j = ndb - NDADDR;
+				if (ndb > UFS_NDADDR) {
+					j = ndb - UFS_NDADDR;
 					for (ndb = 1; j > 1; j--)
 						ndb *= NINDIR(&sblock);
-					ndb += NDADDR;
+					ndb += UFS_NDADDR;
 				}
 			}
 		}
-		for (j = ndb; ndb < NDADDR && j < NDADDR; j++)
+		for (j = ndb; ndb < UFS_NDADDR && j < UFS_NDADDR; j++)
 			if (DIP(dp, di_db[j]) != 0)
 				return (NULL);
-		for (j = 0, ndb -= NDADDR; ndb > 0; j++)
+		for (j = 0, ndb -= UFS_NDADDR; ndb > 0; j++)
 			ndb /= NINDIR(&sblock);
-		for (; j < NIADDR; j++)
+		for (; j < UFS_NIADDR; j++)
 			if (DIP(dp, di_ib[j]) != 0)
 				return (NULL);
 	}
@@ -449,8 +456,8 @@ cacheino(union dinode *dp, ino_t inumber)
 	struct inoinfo *inp, **inpp;
 	int i, blks;
 
-	if (howmany(DIP(dp, di_size), sblock.fs_bsize) > NDADDR)
-		blks = NDADDR + NIADDR;
+	if (howmany(DIP(dp, di_size), sblock.fs_bsize) > UFS_NDADDR)
+		blks = UFS_NDADDR + UFS_NIADDR;
 	else if (DIP(dp, di_size) > 0)
 		blks = howmany(DIP(dp, di_size), sblock.fs_bsize);
 	else
@@ -462,16 +469,16 @@ cacheino(union dinode *dp, ino_t inumber)
 	inpp = &inphead[inumber % dirhash];
 	inp->i_nexthash = *inpp;
 	*inpp = inp;
-	inp->i_parent = inumber == ROOTINO ? ROOTINO : (ino_t)0;
+	inp->i_parent = inumber == UFS_ROOTINO ? UFS_ROOTINO : (ino_t)0;
 	inp->i_dotdot = (ino_t)0;
 	inp->i_number = inumber;
 	inp->i_isize = DIP(dp, di_size);
 	inp->i_numblks = blks;
-	for (i = 0; i < MIN(blks, NDADDR); i++)
+	for (i = 0; i < MIN(blks, UFS_NDADDR); i++)
 		inp->i_blks[i] = DIP(dp, di_db[i]);
-	if (blks > NDADDR)
-		for (i = 0; i < NIADDR; i++)
-			inp->i_blks[NDADDR + i] = DIP(dp, di_ib[i]);
+	if (blks > UFS_NDADDR)
+		for (i = 0; i < UFS_NIADDR; i++)
+			inp->i_blks[UFS_NDADDR + i] = DIP(dp, di_ib[i]);
 	if (inplast == listmax) {
 		listmax += 100;
 		inpsort = (struct inoinfo **)reallocarray((char *)inpsort,
@@ -517,7 +524,7 @@ inocleanup(void)
 }
 
 void
-inodirty(void)
+inodirty(union dinode *dp)
 {
 
 	dirty(pbp);
@@ -542,7 +549,7 @@ clri(struct inodesc *idesc, const char *type, int flag)
 			(void)ckinode(dp, idesc);
 			inoinfo(idesc->id_number)->ino_state = USTATE;
 			clearinode(dp);
-			inodirty();
+			inodirty(dp);
 		} else {
 			cmd.value = idesc->id_number;
 			cmd.size = -DIP(dp, di_nlink);
@@ -577,7 +584,7 @@ findino(struct inodesc *idesc)
 	if (dirp->d_ino == 0)
 		return (KEEPON);
 	if (strcmp(dirp->d_name, idesc->id_name) == 0 &&
-	    dirp->d_ino >= ROOTINO && dirp->d_ino <= maxino) {
+	    dirp->d_ino >= UFS_ROOTINO && dirp->d_ino <= maxino) {
 		idesc->id_parent = dirp->d_ino;
 		return (STOP|FOUND);
 	}
@@ -606,7 +613,7 @@ pinode(ino_t ino)
 	time_t t;
 
 	printf(" I=%lu ", (u_long)ino);
-	if (ino < ROOTINO || ino > maxino)
+	if (ino < UFS_ROOTINO || ino > maxino)
 		return;
 	dp = ginode(ino);
 	printf(" OWNER=");
@@ -664,7 +671,7 @@ allocino(ino_t request, int type)
 	int cg;
 
 	if (request == 0)
-		request = ROOTINO;
+		request = UFS_ROOTINO;
 	else if (inoinfo(request)->ino_state != USTATE)
 		return (0);
 	for (ino = request; ino < maxino; ino++)
@@ -673,7 +680,7 @@ allocino(ino_t request, int type)
 	if (ino == maxino)
 		return (0);
 	cg = ino_to_cg(&sblock, ino);
-	cgbp = cgget(cg);
+	cgbp = cglookup(cg);
 	cgp = cgbp->b_un.b_cg;
 	if (!check_cgmagic(cg, cgbp))
 		return (0);
@@ -709,7 +716,7 @@ allocino(ino_t request, int type)
 	DIP_SET(dp, di_size, sblock.fs_fsize);
 	DIP_SET(dp, di_blocks, btodb(sblock.fs_fsize));
 	n_files++;
-	inodirty();
+	inodirty(dp);
 	inoinfo(ino)->ino_type = IFTODT(type);
 	return (ino);
 }
@@ -730,7 +737,7 @@ freeino(ino_t ino)
 	dp = ginode(ino);
 	(void)ckinode(dp, &idesc);
 	clearinode(dp);
-	inodirty();
+	inodirty(dp);
 	inoinfo(ino)->ino_state = USTATE;
 	n_files--;
 }

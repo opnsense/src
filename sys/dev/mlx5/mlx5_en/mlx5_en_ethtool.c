@@ -121,55 +121,165 @@ done:
 }
 
 static int
-mlx5e_tc_maxrate_handler(SYSCTL_HANDLER_ARGS)
+mlx5e_get_max_alloc(struct mlx5e_priv *priv)
 {
-	struct mlx5e_priv *priv = arg1;
-	int prio_index = arg2;
 	struct mlx5_core_dev *mdev = priv->mdev;
-	u8 max_bw_unit[IEEE_8021QAZ_MAX_TCS];
-	u8 max_bw_value[IEEE_8021QAZ_MAX_TCS];
-	int i, err;
-	u64 bw_val;
-	u64 result = priv->params_ethtool.max_bw_value[prio_index];
-	const u64 upper_limit_mbps = 255 * MLX5E_100MB;
-	const u64 upper_limit_gbps = 255 * MLX5E_1GB;
+	int err;
+	int x;
 
 	PRIV_LOCK(priv);
-	err = sysctl_handle_64(oidp, &result, 0, req);
-	if (err || !req->newptr ||
-	    result == priv->params_ethtool.max_bw_value[prio_index])
-		goto done;
-
-	if (result % MLX5E_100MB) {
-		err = ERANGE;
-		goto done;
+	err = -mlx5_query_port_tc_bw_alloc(mdev, priv->params_ethtool.max_bw_share);
+	if (err == 0) {
+		/* set default value */
+		for (x = 0; x != IEEE_8021QAZ_MAX_TCS; x++) {
+			priv->params_ethtool.max_bw_share[x] =
+			    100 / IEEE_8021QAZ_MAX_TCS;
+		}
+		err = -mlx5_set_port_tc_bw_alloc(mdev,
+		    priv->params_ethtool.max_bw_share);
 	}
+	PRIV_UNLOCK(priv);
 
-	memset(max_bw_value, 0, sizeof(max_bw_value));
-	memset(max_bw_unit, 0, sizeof(max_bw_unit));
+	return (err);
+}
 
-	for (i = 0; i <= mlx5_max_tc(mdev); i++) {
-		bw_val = (i == prio_index) ? result : priv->params_ethtool.max_bw_value[i];
+static int
+mlx5e_get_dscp(struct mlx5e_priv *priv)
+{
+	struct mlx5_core_dev *mdev = priv->mdev;
+	int err;
 
-		if (!bw_val) {
+	if (MLX5_CAP_GEN(mdev, qcam_reg) == 0 ||
+	    MLX5_CAP_QCAM_REG(mdev, qpts) == 0 ||
+	    MLX5_CAP_QCAM_REG(mdev, qpdpm) == 0)
+		return (EOPNOTSUPP);
+
+	PRIV_LOCK(priv);
+	err = -mlx5_query_dscp2prio(mdev, priv->params_ethtool.dscp2prio);
+	if (err)
+		goto done;
+
+	err = -mlx5_query_trust_state(mdev, &priv->params_ethtool.trust_state);
+	if (err)
+		goto done;
+done:
+	PRIV_UNLOCK(priv);
+	return (err);
+}
+
+static void
+mlx5e_tc_get_parameters(struct mlx5e_priv *priv,
+    u64 *new_bw_value, u8 *max_bw_value, u8 *max_bw_unit)
+{
+	const u64 upper_limit_mbps = 255 * MLX5E_100MB;
+	const u64 upper_limit_gbps = 255 * MLX5E_1GB;
+	u64 temp;
+	int i;
+
+	memset(max_bw_value, 0, IEEE_8021QAZ_MAX_TCS);
+	memset(max_bw_unit, 0, IEEE_8021QAZ_MAX_TCS);
+
+	for (i = 0; i <= mlx5_max_tc(priv->mdev); i++) {
+		temp = (new_bw_value != NULL) ?
+		    new_bw_value[i] : priv->params_ethtool.max_bw_value[i];
+
+		if (!temp) {
 			max_bw_unit[i] = MLX5_BW_NO_LIMIT;
-		} else if (bw_val > upper_limit_gbps) {
-			result = 0;
+		} else if (temp > upper_limit_gbps) {
 			max_bw_unit[i] = MLX5_BW_NO_LIMIT;
-		} else if (bw_val <= upper_limit_mbps) {
-			max_bw_value[i] = howmany(bw_val, MLX5E_100MB);
+		} else if (temp <= upper_limit_mbps) {
+			max_bw_value[i] = howmany(temp, MLX5E_100MB);
 			max_bw_unit[i]  = MLX5_100_MBPS_UNIT;
 		} else {
-			max_bw_value[i] = howmany(bw_val, MLX5E_1GB);
+			max_bw_value[i] = howmany(temp, MLX5E_1GB);
 			max_bw_unit[i]  = MLX5_GBPS_UNIT;
 		}
 	}
+}
+
+static int
+mlx5e_tc_maxrate_handler(SYSCTL_HANDLER_ARGS)
+{
+	struct mlx5e_priv *priv = arg1;
+	struct mlx5_core_dev *mdev = priv->mdev;
+	u8 max_bw_unit[IEEE_8021QAZ_MAX_TCS];
+	u8 max_bw_value[IEEE_8021QAZ_MAX_TCS];
+	u64 new_bw_value[IEEE_8021QAZ_MAX_TCS];
+	u8 max_rates = mlx5_max_tc(mdev) + 1;
+	u8 x;
+	int err;
+
+	PRIV_LOCK(priv);
+	err = SYSCTL_OUT(req, priv->params_ethtool.max_bw_value,
+	    sizeof(priv->params_ethtool.max_bw_value[0]) * max_rates);
+	if (err || !req->newptr)
+		goto done;
+	err = SYSCTL_IN(req, new_bw_value,
+	    sizeof(new_bw_value[0]) * max_rates);
+	if (err)
+		goto done;
+
+	/* range check input value */
+	for (x = 0; x != max_rates; x++) {
+		if (new_bw_value[x] % MLX5E_100MB) {
+			err = ERANGE;
+			goto done;
+		}
+	}
+
+	mlx5e_tc_get_parameters(priv, new_bw_value, max_bw_value, max_bw_unit);
 
 	err = -mlx5_modify_port_tc_rate_limit(mdev, max_bw_value, max_bw_unit);
 	if (err)
 		goto done;
 
-	priv->params_ethtool.max_bw_value[prio_index] = result;
+	memcpy(priv->params_ethtool.max_bw_value, new_bw_value,
+	    sizeof(priv->params_ethtool.max_bw_value));
+done:
+	PRIV_UNLOCK(priv);
+	return (err);
+}
+
+static int
+mlx5e_tc_rate_share_handler(SYSCTL_HANDLER_ARGS)
+{
+	struct mlx5e_priv *priv = arg1;
+	struct mlx5_core_dev *mdev = priv->mdev;
+	u8 max_bw_share[IEEE_8021QAZ_MAX_TCS];
+	u8 max_rates = mlx5_max_tc(mdev) + 1;
+	int i;
+	int err;
+	int sum;
+
+	PRIV_LOCK(priv);
+	err = SYSCTL_OUT(req, priv->params_ethtool.max_bw_share, max_rates);
+	if (err || !req->newptr)
+		goto done;
+	err = SYSCTL_IN(req, max_bw_share, max_rates);
+	if (err)
+		goto done;
+
+	/* range check input value */
+	for (sum = i = 0; i != max_rates; i++) {
+		if (max_bw_share[i] < 1 || max_bw_share[i] > 100) {
+			err = ERANGE;
+			goto done;
+		}
+		sum += max_bw_share[i];
+	}
+
+	/* sum of values should be as close to 100 as possible */
+	if (sum < (100 - max_rates + 1) || sum > 100) {
+		err = ERANGE;
+		goto done;
+	}
+
+	err = -mlx5_set_port_tc_bw_alloc(mdev, max_bw_share);
+	if (err)
+		goto done;
+
+	memcpy(priv->params_ethtool.max_bw_share, max_bw_share,
+	    sizeof(priv->params_ethtool.max_bw_share));
 done:
 	PRIV_UNLOCK(priv);
 	return (err);
@@ -188,12 +298,11 @@ mlx5e_get_prio_tc(struct mlx5e_priv *priv)
 		return (EOPNOTSUPP);
 	}
 
-	for (i = 0; i <= mlx5_max_tc(priv->mdev); i++) {
-		err = -mlx5_query_port_prio_tc(mdev, i, &(priv->params_ethtool.prio_tc[i]));
+	for (i = 0; i != MLX5E_MAX_PRIORITY; i++) {
+		err = -mlx5_query_port_prio_tc(mdev, i, priv->params_ethtool.prio_tc + i);
 		if (err)
 			break;
 	}
-
 	PRIV_UNLOCK(priv);
 	return (err);
 }
@@ -202,28 +311,119 @@ static int
 mlx5e_prio_to_tc_handler(SYSCTL_HANDLER_ARGS)
 {
 	struct mlx5e_priv *priv = arg1;
-	int prio_index = arg2;
 	struct mlx5_core_dev *mdev = priv->mdev;
+	uint8_t temp[MLX5E_MAX_PRIORITY];
 	int err;
-	uint8_t result = priv->params_ethtool.prio_tc[prio_index];
+	int i;
 
 	PRIV_LOCK(priv);
-	err = sysctl_handle_8(oidp, &result, 0, req);
-	if (err || !req->newptr ||
-	    result == priv->params_ethtool.prio_tc[prio_index])
+	err = SYSCTL_OUT(req, priv->params_ethtool.prio_tc, MLX5E_MAX_PRIORITY);
+	if (err || !req->newptr)
+		goto done;
+	err = SYSCTL_IN(req, temp, MLX5E_MAX_PRIORITY);
+	if (err)
 		goto done;
 
-	if (result > mlx5_max_tc(mdev)) {
+	for (i = 0; i != MLX5E_MAX_PRIORITY; i++) {
+		if (temp[i] > mlx5_max_tc(mdev)) {
+			err = ERANGE;
+			goto done;
+		}
+	}
+
+	for (i = 0; i != MLX5E_MAX_PRIORITY; i++) {
+		if (temp[i] == priv->params_ethtool.prio_tc[i])
+			continue;
+		err = -mlx5_set_port_prio_tc(mdev, i, temp[i]);
+		if (err)
+			goto done;
+		/* update cached value */
+		priv->params_ethtool.prio_tc[i] = temp[i];
+	}
+done:
+	PRIV_UNLOCK(priv);
+	return (err);
+}
+
+static int
+mlx5e_trust_state_handler(SYSCTL_HANDLER_ARGS)
+{
+	struct mlx5e_priv *priv = arg1;
+	struct mlx5_core_dev *mdev = priv->mdev;
+	int err;
+	u8 result;
+
+	PRIV_LOCK(priv);
+	result = priv->params_ethtool.trust_state;
+	err = sysctl_handle_8(oidp, &result, 0, req);
+	if (err || !req->newptr ||
+	    result == priv->params_ethtool.trust_state)
+		goto done;
+
+	switch (result) {
+	case MLX5_QPTS_TRUST_PCP:
+	case MLX5_QPTS_TRUST_DSCP:
+		break;
+	case MLX5_QPTS_TRUST_BOTH:
+		if (!MLX5_CAP_QCAM_FEATURE(mdev, qpts_trust_both)) {
+			err = EOPNOTSUPP;
+			goto done;
+		}
+		break;
+	default:
 		err = ERANGE;
 		goto done;
 	}
 
-	err = -mlx5_set_port_prio_tc(mdev, prio_index, result);
+	err = -mlx5_set_trust_state(mdev, result);
 	if (err)
 		goto done;
 
-	priv->params_ethtool.prio_tc[prio_index] = result;
+	priv->params_ethtool.trust_state = result;
 
+	/* update inline mode */
+	mlx5e_refresh_sq_inline(priv);
+#ifdef RATELIMIT
+	mlx5e_rl_refresh_sq_inline(&priv->rl);
+#endif
+done:
+	PRIV_UNLOCK(priv);
+	return (err);
+}
+
+static int
+mlx5e_dscp_prio_handler(SYSCTL_HANDLER_ARGS)
+{
+	struct mlx5e_priv *priv = arg1;
+	int prio_index = arg2;
+	struct mlx5_core_dev *mdev = priv->mdev;
+	uint8_t dscp2prio[MLX5_MAX_SUPPORTED_DSCP];
+	uint8_t x;
+	int err;
+
+	PRIV_LOCK(priv);
+	err = SYSCTL_OUT(req, priv->params_ethtool.dscp2prio + prio_index,
+	    sizeof(priv->params_ethtool.dscp2prio) / 8);
+	if (err || !req->newptr)
+		goto done;
+
+	memcpy(dscp2prio, priv->params_ethtool.dscp2prio, sizeof(dscp2prio));
+	err = SYSCTL_IN(req, dscp2prio + prio_index, sizeof(dscp2prio) / 8);
+	if (err)
+		goto done;
+	for (x = 0; x != MLX5_MAX_SUPPORTED_DSCP; x++) {
+		if (dscp2prio[x] > 7) {
+			err = ERANGE;
+			goto done;
+		}
+	}
+	err = -mlx5_set_dscp2prio(mdev, dscp2prio);
+	if (err)
+		goto done;
+
+	/* update local array */
+	memcpy(priv->params_ethtool.dscp2prio, dscp2prio,
+	    sizeof(priv->params_ethtool.dscp2prio));
 done:
 	PRIV_UNLOCK(priv);
 	return (err);
@@ -391,6 +591,24 @@ mlx5e_ethtool_handler(SYSCTL_HANDLER_ARGS)
 			mlx5e_open_locked(priv->ifp);
 		break;
 
+	case MLX5_PARAM_OFFSET(channels_rsss):
+		/* network interface must be down */
+		if (was_opened)
+			mlx5e_close_locked(priv->ifp);
+
+		/* import number of channels */
+		if (priv->params_ethtool.channels_rsss < 1)
+			priv->params_ethtool.channels_rsss = 1;
+		else if (priv->params_ethtool.channels_rsss > 128)
+			priv->params_ethtool.channels_rsss = 128;
+
+		priv->params.channels_rsss = priv->params_ethtool.channels_rsss;
+
+		/* restart network interface, if any */
+		if (was_opened)
+			mlx5e_open_locked(priv->ifp);
+		break;
+
 	case MLX5_PARAM_OFFSET(channels):
 		/* network interface must be down */
 		if (was_opened)
@@ -417,8 +635,8 @@ mlx5e_ethtool_handler(SYSCTL_HANDLER_ARGS)
 			mlx5e_close_locked(priv->ifp);
 
 		/* import RX coalesce mode */
-		if (priv->params_ethtool.rx_coalesce_mode != 0)
-			priv->params_ethtool.rx_coalesce_mode = 1;
+		if (priv->params_ethtool.rx_coalesce_mode > 3)
+			priv->params_ethtool.rx_coalesce_mode = 3;
 		priv->params.rx_cq_moderation_mode =
 		    priv->params_ethtool.rx_coalesce_mode;
 
@@ -457,21 +675,24 @@ mlx5e_ethtool_handler(SYSCTL_HANDLER_ARGS)
 			mlx5e_close_locked(priv->ifp);
 
 		/* import HW LRO mode */
-		if (priv->params_ethtool.hw_lro != 0) {
-			if ((priv->ifp->if_capenable & IFCAP_LRO) &&
-			    MLX5_CAP_ETH(priv->mdev, lro_cap)) {
-				priv->params.hw_lro_en = 1;
-				priv->params_ethtool.hw_lro = 1;
+		if (priv->params_ethtool.hw_lro != 0 &&
+		    MLX5_CAP_ETH(priv->mdev, lro_cap)) {
+			priv->params_ethtool.hw_lro = 1;
+			/* check if feature should actually be enabled */
+			if (priv->ifp->if_capenable & IFCAP_LRO) {
+				priv->params.hw_lro_en = true;
 			} else {
-				priv->params.hw_lro_en = 0;
-				priv->params_ethtool.hw_lro = 0;
-				error = EINVAL;
+				priv->params.hw_lro_en = false;
 
-				if_printf(priv->ifp, "Can't enable HW LRO: "
-				    "The HW or SW LRO feature is disabled\n");
+				if_printf(priv->ifp, "To enable HW LRO "
+				    "please also enable LRO via ifconfig(8).\n");
 			}
 		} else {
-			priv->params.hw_lro_en = 0;
+			/* return an error if HW does not support this feature */
+			if (priv->params_ethtool.hw_lro != 0)
+				error = EINVAL;
+			priv->params.hw_lro_en = false;
+			priv->params_ethtool.hw_lro = 0;
 		}
 		/* restart network interface, if any */
 		if (was_opened)
@@ -495,18 +716,6 @@ mlx5e_ethtool_handler(SYSCTL_HANDLER_ARGS)
 		/* restart network interface, if any */
 		if (was_opened)
 			mlx5e_open_locked(priv->ifp);
-		break;
-
-	case MLX5_PARAM_OFFSET(tx_bufring_disable):
-		/* rangecheck input value */
-		priv->params_ethtool.tx_bufring_disable =
-		    priv->params_ethtool.tx_bufring_disable ? 1 : 0;
-
-		/* reconfigure the sendqueues, if any */
-		if (was_opened) {
-			mlx5e_close_locked(priv->ifp);
-			mlx5e_open_locked(priv->ifp);
-		}
 		break;
 
 	case MLX5_PARAM_OFFSET(tx_completion_fact):
@@ -814,26 +1023,79 @@ static const char *mlx5e_port_stats_debug_desc[] = {
 };
 
 static int
+mlx5e_ethtool_debug_channel_info(SYSCTL_HANDLER_ARGS)
+{
+	struct mlx5e_priv *priv;
+	struct sbuf sb;
+	struct mlx5e_channel *c;
+	struct mlx5e_sq *sq;
+	struct mlx5e_rq *rq;
+	int error, i, tc;
+
+	priv = arg1;
+	error = sysctl_wire_old_buffer(req, 0);
+	if (error != 0)
+		return (error);
+	if (sbuf_new_for_sysctl(&sb, NULL, 128, req) == NULL)
+		return (ENOMEM);
+	sbuf_clear_flags(&sb, SBUF_INCLUDENUL);
+
+	PRIV_LOCK(priv);
+	if (test_bit(MLX5E_STATE_OPENED, &priv->state) == 0)
+		goto out;
+	for (i = 0; i < priv->params.num_channels; i++) {
+		c = &priv->channel[i];
+		rq = &c->rq;
+		sbuf_printf(&sb, "channel %d rq %d cq %d\n",
+		    c->ix, rq->rqn, rq->cq.mcq.cqn);
+		for (tc = 0; tc < c->num_tc; tc++) {
+			sq = &c->sq[tc];
+			sbuf_printf(&sb, "channel %d tc %d sq %d cq %d\n",
+			    c->ix, tc, sq->sqn, sq->cq.mcq.cqn);
+		}
+	}
+out:
+	PRIV_UNLOCK(priv);
+	error = sbuf_finish(&sb);
+	sbuf_delete(&sb);
+	return (error);
+}
+
+static int
 mlx5e_ethtool_debug_stats(SYSCTL_HANDLER_ARGS)
 {
 	struct mlx5e_priv *priv = arg1;
-	int error;
 	int sys_debug;
+	int error;
 
+	PRIV_LOCK(priv);
+	if (priv->gone != 0) {
+		error = ENODEV;
+		goto done;
+	}
 	sys_debug = priv->sysctl_debug;
-	error = sysctl_handle_int(oidp, &priv->sysctl_debug, 0, req);
-	if (error || !req->newptr)
-		return (error);
-	priv->sysctl_debug = !!priv->sysctl_debug;
+	error = sysctl_handle_int(oidp, &sys_debug, 0, req);
+	if (error != 0 || !req->newptr)
+		goto done;
+	sys_debug = sys_debug ? 1 : 0;
 	if (sys_debug == priv->sysctl_debug)
-		return (error);
-	if (priv->sysctl_debug)
+		goto done;
+
+	if ((priv->sysctl_debug = sys_debug)) {
 		mlx5e_create_stats(&priv->stats.port_stats_debug.ctx,
 		    SYSCTL_CHILDREN(priv->sysctl_ifnet), "debug_stats",
 		    mlx5e_port_stats_debug_desc, MLX5E_PORT_STATS_DEBUG_NUM,
 		    priv->stats.port_stats_debug.arg);
-	else
+		SYSCTL_ADD_PROC(&priv->stats.port_stats_debug.ctx,
+		    SYSCTL_CHILDREN(priv->sysctl_ifnet), OID_AUTO,
+		    "hw_ctx_debug",
+		    CTLFLAG_RD | CTLFLAG_MPSAFE | CTLTYPE_STRING, priv, 0,
+		    mlx5e_ethtool_debug_channel_info, "S", "");
+	} else {
 		sysctl_ctx_free(&priv->stats.port_stats_debug.ctx);
+	}
+done:
+	PRIV_UNLOCK(priv);
 	return (error);
 }
 
@@ -879,7 +1141,6 @@ mlx5e_create_diagnostics(struct mlx5e_priv *priv)
 void
 mlx5e_create_ethtool(struct mlx5e_priv *priv)
 {
-	struct mlx5_core_dev *mdev = priv->mdev;
 	struct sysctl_oid *node, *qos_node;
 	const char *pnameunit;
 	unsigned x;
@@ -891,6 +1152,7 @@ mlx5e_create_ethtool(struct mlx5e_priv *priv)
 	priv->params_ethtool.tx_queue_size = 1 << priv->params.log_sq_size;
 	priv->params_ethtool.rx_queue_size = 1 << priv->params.log_rq_size;
 	priv->params_ethtool.channels = priv->params.num_channels;
+	priv->params_ethtool.channels_rsss = priv->params.channels_rsss;
 	priv->params_ethtool.coalesce_pkts_max = MLX5E_FLD_MAX(cqc, cq_max_count);
 	priv->params_ethtool.coalesce_usecs_max = MLX5E_FLD_MAX(cqc, cq_period);
 	priv->params_ethtool.rx_coalesce_mode = priv->params.rx_cq_moderation_mode;
@@ -982,32 +1244,53 @@ mlx5e_create_ethtool(struct mlx5e_priv *priv)
 	qos_node = SYSCTL_ADD_NODE(&priv->sysctl_ctx,
 	    SYSCTL_CHILDREN(node), OID_AUTO,
 	    "qos", CTLFLAG_RW, NULL, "Quality Of Service configuration");
-	if (node == NULL)
+	if (qos_node == NULL)
 		return;
 
-	/* Prioriry rate limit support */
-	if (mlx5e_getmaxrate(priv))
-		return;
-
-	for (i = 0; i <= mlx5_max_tc(mdev); i++) {
-		char name[32];
-		snprintf(name, sizeof(name), "tc_%d_max_rate", i);
+	/* Priority rate limit support */
+	if (mlx5e_getmaxrate(priv) == 0) {
 		SYSCTL_ADD_PROC(&priv->sysctl_ctx, SYSCTL_CHILDREN(qos_node),
-				OID_AUTO, name, CTLTYPE_U64 | CTLFLAG_RW | CTLFLAG_MPSAFE,
-				priv, i, mlx5e_tc_maxrate_handler, "QU",
-				"Max rate for priority, specified in kilobits, where kilo=1000, \
-				max_rate must be divisible by 100000");
+		    OID_AUTO, "tc_max_rate", CTLTYPE_U64 | CTLFLAG_RWTUN | CTLFLAG_MPSAFE,
+		    priv, 0, mlx5e_tc_maxrate_handler, "QU",
+		    "Max rate for priority, specified in kilobits, where kilo=1000, "
+		    "max_rate must be divisible by 100000");
 	}
 
-	if (mlx5e_get_prio_tc(priv))
-		return;
-
-	for (i = 0; i <= mlx5_max_tc(mdev); i++) {
-		char name[32];
-		snprintf(name, sizeof(name), "prio_%d_to_tc", i);
+	/* Bandwidth limiting by ratio */
+	if (mlx5e_get_max_alloc(priv) == 0) {
 		SYSCTL_ADD_PROC(&priv->sysctl_ctx, SYSCTL_CHILDREN(qos_node),
-				OID_AUTO, name, CTLTYPE_U8 | CTLFLAG_RW | CTLFLAG_MPSAFE,
-				priv, i, mlx5e_prio_to_tc_handler, "CU",
-				"Set priority to traffic class");
+		    OID_AUTO, "tc_rate_share", CTLTYPE_U8 | CTLFLAG_RWTUN | CTLFLAG_MPSAFE,
+		    priv, 0, mlx5e_tc_rate_share_handler, "QU",
+		    "Specify bandwidth ratio from 1 to 100 "
+		    "for the available traffic classes");
+	}
+
+	/* Priority to traffic class mapping */
+	if (mlx5e_get_prio_tc(priv) == 0) {
+		SYSCTL_ADD_PROC(&priv->sysctl_ctx, SYSCTL_CHILDREN(qos_node),
+		    OID_AUTO, "prio_0_7_tc", CTLTYPE_U8 | CTLFLAG_RWTUN | CTLFLAG_MPSAFE,
+		    priv, 0, mlx5e_prio_to_tc_handler, "CU",
+		    "Set traffic class 0 to 7 for priority 0 to 7 inclusivly");
+	}
+
+	/* DSCP support */
+	if (mlx5e_get_dscp(priv) == 0) {
+		for (i = 0; i != MLX5_MAX_SUPPORTED_DSCP; i += 8) {
+			char name[32];
+			snprintf(name, sizeof(name), "dscp_%d_%d_prio", i, i + 7);
+			SYSCTL_ADD_PROC(&priv->sysctl_ctx, SYSCTL_CHILDREN(qos_node),
+				OID_AUTO, name, CTLTYPE_U8 | CTLFLAG_RWTUN | CTLFLAG_MPSAFE,
+				priv, i, mlx5e_dscp_prio_handler, "CU",
+				"Set DSCP to priority mapping, 0..7");
+		}
+#define	A	"Set trust state, 1:PCP 2:DSCP"
+#define	B	" 3:BOTH"
+		SYSCTL_ADD_PROC(&priv->sysctl_ctx, SYSCTL_CHILDREN(qos_node),
+		    OID_AUTO, "trust_state", CTLTYPE_U8 | CTLFLAG_RWTUN | CTLFLAG_MPSAFE,
+		    priv, 0, mlx5e_trust_state_handler, "CU",
+		    MLX5_CAP_QCAM_FEATURE(priv->mdev, qpts_trust_both) ?
+		    A B : A);
+#undef B
+#undef A
 	}
 }

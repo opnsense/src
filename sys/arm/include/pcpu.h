@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1999 Luoqi Chen <luoqi@freebsd.org>
  * All rights reserved.
  *
@@ -63,10 +65,11 @@ struct vmspace;
 	int pc_dbreg_cmd;						\
 	int pc_bp_harden_kind;						\
 	uint32_t pc_original_actlr;					\
-	char __pad[11]
+	uint64_t pc_clock;						\
+	char __pad[139]
 #else
 #define PCPU_MD_FIELDS							\
-	char __pad[157]
+	char __pad[93]
 #endif
 
 #ifdef _KERNEL

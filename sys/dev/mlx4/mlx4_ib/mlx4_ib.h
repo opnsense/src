@@ -195,7 +195,7 @@ enum mlx4_ib_qp_flags {
 	/* Mellanox specific flags start from IB_QP_CREATE_RESERVED_START */
 	MLX4_IB_ROCE_V2_GSI_QP = MLX4_IB_QP_CREATE_ROCE_V2_GSI,
 	MLX4_IB_SRIOV_TUNNEL_QP = 1 << 30,
-	MLX4_IB_SRIOV_SQP = 1 << 31,
+	MLX4_IB_SRIOV_SQP = 1U << 31,
 };
 
 struct mlx4_ib_gid_entry {
@@ -726,11 +726,6 @@ int mlx4_ib_umem_write_mtt(struct mlx4_ib_dev *dev, struct mlx4_mtt *mtt,
 struct ib_mr *mlx4_ib_reg_user_mr(struct ib_pd *pd, u64 start, u64 length,
 				  u64 virt_addr, int access_flags,
 				  struct ib_udata *udata);
-struct ib_mr *mlx4_ib_reg_phys_mr(struct ib_pd *pd,
-				  struct ib_phys_buf *buffer_list,
-				  int num_phys_buf,
-				  int access_flags,
-				  u64 *virt_addr);
 int mlx4_ib_dereg_mr(struct ib_mr *mr);
 struct ib_mw *mlx4_ib_alloc_mw(struct ib_pd *pd, enum ib_mw_type type,
 			       struct ib_udata *udata);

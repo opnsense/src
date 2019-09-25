@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2008 Alexander Motin <mav@FreeBSD.org>
  * All rights reserved.
  *
@@ -28,8 +30,10 @@
 #ifndef	__SDHCI_H__
 #define	__SDHCI_H__
 
-#define	DMA_BLOCK_SIZE	4096
-#define	DMA_BOUNDARY	0	/* DMA reload every 4K */
+#include "opt_mmccam.h"
+
+/* Macro for sizing the SDMA bounce buffer on the SDMA buffer boundary. */
+#define	SDHCI_SDMA_BNDRY_TO_BBUFSZ(bndry)	(4096 * (1 << bndry))
 
 /* Controller doesn't honor resets unless we touch the clock register */
 #define	SDHCI_QUIRK_CLOCK_BEFORE_RESET			(1 << 0)
@@ -89,6 +93,10 @@
 #define	SDHCI_QUIRK_PRESET_VALUE_BROKEN			(1 << 27)
 /* Controller does not support or the support for ACMD12 is broken. */
 #define	SDHCI_QUIRK_BROKEN_AUTO_STOP			(1 << 28)
+/* Controller supports eMMC HS400 mode if SDHCI_CAN_SDR104 is set. */
+#define	SDHCI_QUIRK_MMC_HS400_IF_CAN_SDR104		(1 << 29)
+/* SDMA boundary in SDHCI_BLOCK_SIZE broken - use front-end supplied value. */
+#define	SDHCI_QUIRK_BROKEN_SDMA_BOUNDARY		(1 << 30)
 
 /*
  * Controller registers
@@ -96,6 +104,14 @@
 #define	SDHCI_DMA_ADDRESS	0x00
 
 #define	SDHCI_BLOCK_SIZE	0x04
+#define	 SDHCI_BLKSZ_SDMA_BNDRY_4K	0x00
+#define	 SDHCI_BLKSZ_SDMA_BNDRY_8K	0x01
+#define	 SDHCI_BLKSZ_SDMA_BNDRY_16K	0x02
+#define	 SDHCI_BLKSZ_SDMA_BNDRY_32K	0x03
+#define	 SDHCI_BLKSZ_SDMA_BNDRY_64K	0x04
+#define	 SDHCI_BLKSZ_SDMA_BNDRY_128K	0x05
+#define	 SDHCI_BLKSZ_SDMA_BNDRY_256K	0x06
+#define	 SDHCI_BLKSZ_SDMA_BNDRY_512K	0x07
 #define	 SDHCI_MAKE_BLKSZ(dma, blksz) (((dma & 0x7) << 12) | (blksz & 0xFFF))
 
 #define	SDHCI_BLOCK_COUNT	0x06
@@ -356,6 +372,8 @@ struct sdhci_slot {
 	bus_dmamap_t	dmamap;
 	u_char		*dmamem;
 	bus_addr_t	paddr;		/* DMA buffer address */
+	uint32_t	sdma_bbufsz;	/* SDMA bounce buffer size */
+	uint8_t		sdma_boundary;	/* SDMA boundary */
 	struct task	card_task;	/* Card presence check task */
 	struct timeout_task
 			card_delayed_task;/* Card insert delayed task */
@@ -391,6 +409,15 @@ struct sdhci_slot {
 #define	STOP_STARTED		2
 #define	SDHCI_USE_DMA		4	/* Use DMA for this req. */
 #define	PLATFORM_DATA_STARTED	8	/* Data xfer is handled by platform */
+
+#ifdef MMCCAM
+	/* CAM stuff */
+	union ccb	*ccb;
+	struct cam_devq	*devq;
+	struct cam_sim	*sim;
+	struct mtx	sim_mtx;
+	u_char		card_present;	/* XXX Maybe derive this from elsewhere? */
+#endif
 };
 
 int sdhci_generic_read_ivar(device_t bus, device_t child, int which,
@@ -418,5 +445,10 @@ uint32_t sdhci_generic_min_freq(device_t brdev, struct sdhci_slot *slot);
 bool sdhci_generic_get_card_present(device_t brdev, struct sdhci_slot *slot);
 void sdhci_generic_set_uhs_timing(device_t brdev, struct sdhci_slot *slot);
 void sdhci_handle_card_present(struct sdhci_slot *slot, bool is_present);
+
+#define	SDHCI_VERSION	2
+
+#define	SDHCI_DEPEND(name)						\
+    MODULE_DEPEND(name, sdhci, SDHCI_VERSION, SDHCI_VERSION, SDHCI_VERSION);
 
 #endif	/* __SDHCI_H__ */

@@ -10,7 +10,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
-/include/ "skeleton.dtsi"
 / {
 	model = "Picochip picoXcell PC3X2";
 	compatible = "picochip,pc3x2";
@@ -124,7 +123,7 @@
 			#size-cells = <1>;
 			ranges = <0 0x200000 0x80000>;
 
-			rtc0: rtc@00000 {
+			rtc0: rtc@0 {
 				compatible = "picochip,pc3x2-rtc";
 				clock-freq = <200000000>;
 				reg = <0x00000 0xf>;

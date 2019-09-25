@@ -38,7 +38,7 @@ static bool GetMaxU64(const lldb_private::DataExtractor &data,
   lldb::offset_t saved_offset = *offset;
 
   for (uint32_t i = 0; i < count; ++i, ++value) {
-    if (GetMaxU64(data, offset, value, byte_size) == false) {
+    if (!GetMaxU64(data, offset, value, byte_size)) {
       *offset = saved_offset;
       return false;
     }
@@ -60,7 +60,7 @@ static bool GetMaxS64(const lldb_private::DataExtractor &data,
   lldb::offset_t saved_offset = *offset;
 
   for (uint32_t i = 0; i < count; ++i, ++value) {
-    if (GetMaxS64(data, offset, value, byte_size) == false) {
+    if (!GetMaxS64(data, offset, value, byte_size)) {
       *offset = saved_offset;
       return false;
     }
@@ -133,20 +133,19 @@ bool ELFHeader::Parse(lldb_private::DataExtractor &data,
     return false;
 
   // Read e_entry, e_phoff and e_shoff.
-  if (GetMaxU64(data, offset, &e_entry, byte_size, 3) == false)
+  if (!GetMaxU64(data, offset, &e_entry, byte_size, 3))
     return false;
 
   // Read e_flags.
   if (data.GetU32(offset, &e_flags, 1) == NULL)
     return false;
 
-  // Read e_ehsize, e_phentsize, e_phnum, e_shentsize, e_shnum and
-  // e_shstrndx.
+  // Read e_ehsize, e_phentsize, e_phnum, e_shentsize, e_shnum and e_shstrndx.
   if (data.GetU16(offset, &e_ehsize, 6) == NULL)
     return false;
 
-  // Initialize e_phnum, e_shnum, and e_shstrndx with the values
-  // read from the header.
+  // Initialize e_phnum, e_shnum, and e_shstrndx with the values read from the
+  // header.
   e_phnum = e_phnum_hdr;
   e_shnum = e_shnum_hdr;
   e_shstrndx = e_shstrndx_hdr;
@@ -233,11 +232,11 @@ bool ELFSectionHeader::Parse(const lldb_private::DataExtractor &data,
     return false;
 
   // Read sh_flags.
-  if (GetMaxU64(data, offset, &sh_flags, byte_size) == false)
+  if (!GetMaxU64(data, offset, &sh_flags, byte_size))
     return false;
 
   // Read sh_addr, sh_off and sh_size.
-  if (GetMaxU64(data, offset, &sh_addr, byte_size, 3) == false)
+  if (!GetMaxU64(data, offset, &sh_addr, byte_size, 3))
     return false;
 
   // Read sh_link and sh_info.
@@ -245,7 +244,7 @@ bool ELFSectionHeader::Parse(const lldb_private::DataExtractor &data,
     return false;
 
   // Read sh_addralign and sh_entsize.
-  if (GetMaxU64(data, offset, &sh_addralign, byte_size, 2) == false)
+  if (!GetMaxU64(data, offset, &sh_addralign, byte_size, 2))
     return false;
 
   return true;
@@ -333,7 +332,7 @@ bool ELFSymbol::Parse(const lldb_private::DataExtractor &data,
 
   if (parsing_32) {
     // Read st_value and st_size.
-    if (GetMaxU64(data, offset, &st_value, byte_size, 2) == false)
+    if (!GetMaxU64(data, offset, &st_value, byte_size, 2))
       return false;
 
     // Read st_info and st_other.
@@ -377,7 +376,7 @@ bool ELFProgramHeader::Parse(const lldb_private::DataExtractor &data,
 
   if (parsing_32) {
     // Read p_offset, p_vaddr, p_paddr, p_filesz and p_memsz.
-    if (GetMaxU64(data, offset, &p_offset, byte_size, 5) == false)
+    if (!GetMaxU64(data, offset, &p_offset, byte_size, 5))
       return false;
 
     // Read p_flags.
@@ -385,7 +384,7 @@ bool ELFProgramHeader::Parse(const lldb_private::DataExtractor &data,
       return false;
 
     // Read p_align.
-    if (GetMaxU64(data, offset, &p_align, byte_size) == false)
+    if (!GetMaxU64(data, offset, &p_align, byte_size))
       return false;
   } else {
     // Read p_flags.
@@ -393,7 +392,7 @@ bool ELFProgramHeader::Parse(const lldb_private::DataExtractor &data,
       return false;
 
     // Read p_offset, p_vaddr, p_paddr, p_filesz, p_memsz and p_align.
-    if (GetMaxU64(data, offset, &p_offset, byte_size, 6) == false)
+    if (!GetMaxU64(data, offset, &p_offset, byte_size, 6))
       return false;
   }
 
@@ -421,10 +420,7 @@ bool ELFRel::Parse(const lldb_private::DataExtractor &data,
   const unsigned byte_size = data.GetAddressByteSize();
 
   // Read r_offset and r_info.
-  if (GetMaxU64(data, offset, &r_offset, byte_size, 2) == false)
-    return false;
-
-  return true;
+  return GetMaxU64(data, offset, &r_offset, byte_size, 2) != false;
 }
 
 //------------------------------------------------------------------------------
@@ -437,11 +433,11 @@ bool ELFRela::Parse(const lldb_private::DataExtractor &data,
   const unsigned byte_size = data.GetAddressByteSize();
 
   // Read r_offset and r_info.
-  if (GetMaxU64(data, offset, &r_offset, byte_size, 2) == false)
+  if (!GetMaxU64(data, offset, &r_offset, byte_size, 2))
     return false;
 
   // Read r_addend;
-  if (GetMaxS64(data, offset, &r_addend, byte_size) == false)
+  if (!GetMaxS64(data, offset, &r_addend, byte_size))
     return false;
 
   return true;

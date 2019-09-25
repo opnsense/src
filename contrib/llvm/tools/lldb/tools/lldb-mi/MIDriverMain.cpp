@@ -26,13 +26,11 @@
 //                  MICmdBase.h / .cpp
 //                  MICmdCmd.h / .cpp
 
-#if defined(_MSC_VER)
-#define _INC_SIGNAL // Stop window's signal.h being included -
-                    // CODETAG_IOR_SIGNALS
-#endif              // _MSC_VER
-
 // Third party headers:
 #include "lldb/API/SBHostOS.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Support/PrettyStackTrace.h"
+#include "llvm/Support/Signals.h"
 #include <atomic>
 #include <csignal>
 #include <stdio.h>
@@ -44,7 +42,7 @@
 #include "MIDriver.h"
 #include "MIDriverMgr.h"
 #include "MIUtilDebug.h"
-#include "Platform.h" // Define signals - CODETAG_IOR_SIGNALS
+#include "Platform.h"
 
 #if defined(_MSC_VER)
 #pragma warning(                                                               \
@@ -167,12 +165,12 @@ bool DriverSystemShutdown(const bool vbAppExitOk) {
 //--
 int main(int argc, char const *argv[]) {
 #if MICONFIG_DEBUG_SHOW_ATTACH_DBG_DLG
-#ifdef _WIN32
-  CMIUtilDebug::ShowDlgWaitForDbgAttach();
-#else
   CMIUtilDebug::WaitForDbgAttachInfinteLoop();
-#endif //  _WIN32
 #endif // MICONFIG_DEBUG_SHOW_ATTACH_DBG_DLG
+
+  llvm::StringRef ToolName = argv[0];
+  llvm::sys::PrintStackTraceOnErrorSignal(ToolName);
+  llvm::PrettyStackTraceProgram X(argc, argv);
 
   // *** Order is important here ***
   bool bOk = DriverSystemInit();

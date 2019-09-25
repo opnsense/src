@@ -23,10 +23,13 @@ EFIINCMD=	${EFIINC}/${MACHINE}
 FDTSRC=		${BOOTSRC}/fdt
 FICLSRC=	${BOOTSRC}/ficl
 LDRSRC=		${BOOTSRC}/common
+LIBLUASRC=	${BOOTSRC}/liblua
+LUASRC=		${SRCTOP}/contrib/lua/src
 SASRC=		${BOOTSRC}/libsa
 SYSDIR=		${SRCTOP}/sys
 UBOOTSRC=	${BOOTSRC}/uboot
-ZFSSRC=		${BOOTSRC}/zfs
+ZFSSRC=		${SASRC}/zfs
+LIBCSRC=	${SRCTOP}/lib/libc
 
 BOOTOBJ=	${OBJTOP}/stand
 
@@ -51,10 +54,16 @@ CFLAGS+=	-I${SASRC} -D_STANDALONE
 CFLAGS+=	-I${SYSDIR}
 # Spike the floating point interfaces
 CFLAGS+=	-Ddouble=jagged-little-pill -Dfloat=floaty-mcfloatface
-
+.if ${MACHINE_ARCH} == "i386" || ${MACHINE_ARCH} == "amd64"
+# Slim down the image. This saves about 15% in size with clang 6 on x86
+# Our most constrained /boot/loader env is BIOS booting on x86, where
+# our text + data + BTX have to fit into 640k below the ISA hole.
+# Experience has shown that problems arise between ~520k to ~530k.
+CFLAGS.clang+=	-Oz
+CFLAGS.gcc+=	-Os
+.endif
 
 # GELI Support, with backward compat hooks (mostly)
-.if defined(HAVE_GELI)
 .if defined(LOADER_NO_GELI_SUPPORT)
 MK_LOADER_GELI=no
 .warning "Please move from LOADER_NO_GELI_SUPPORT to WITHOUT_LOADER_GELI"
@@ -65,10 +74,8 @@ MK_LOADER_GELI=yes
 .endif
 .if ${MK_LOADER_GELI} == "yes"
 CFLAGS+=	-DLOADER_GELI_SUPPORT
-CFLAGS+=	-I${BOOTSRC}/geli
-LIBGELIBOOT=	${BOOTOBJ}/geli/libgeliboot.a
+CFLAGS+=	-I${SASRC}/geli
 .endif # MK_LOADER_GELI
-.endif # HAVE_GELI
 
 # These should be confined to loader.mk, but can't because uboot/lib
 # also uses it. It's part of loader, but isn't a loader so we can't
@@ -89,7 +96,7 @@ CFLAGS+=	-m32 -mcpu=powerpc
 # build 32-bit and some 64-bit (lib*, efi). Centralize all the 32-bit magic here
 # and activate it when DO32 is explicitly defined to be 1.
 .if ${MACHINE_ARCH} == "amd64" && ${DO32:U0} == 1
-CFLAGS+=	-m32 -mcpu=i386
+CFLAGS+=	-m32
 # LD_FLAGS is passed directly to ${LD}, not via ${CC}:
 LD_FLAGS+=	-m elf_i386_fbsd
 AFLAGS+=	--32
@@ -107,6 +114,11 @@ CFLAGS+=	-mgeneral-regs-only -fPIC
 CFLAGS+=	-march=rv64imac -mabi=lp64
 .else
 CFLAGS+=	-msoft-float
+.endif
+
+# -msoft-float seems to be insufficient for powerpcspe
+.if ${MACHINE_ARCH} == "powerpcspe"
+CFLAGS+=	-mno-spe
 .endif
 
 .if ${MACHINE_CPUARCH} == "i386" || (${MACHINE_CPUARCH} == "amd64" && ${DO32:U0} == 1)
@@ -146,6 +158,18 @@ CFLAGS+=	-G0 -fno-pic -mno-abicalls
 CFLAGS+=	-mlittle-endian
 .endif
 .endif
+
+#
+# Have a sensible default
+#
+.if ${MK_LOADER_LUA} == "yes"
+LOADER_DEFAULT_INTERP?=lua
+.elif ${MK_FORTH} == "yes"
+LOADER_DEFAULT_INTERP?=4th
+.else
+LOADER_DEFAULT_INTERP?=simp
+.endif
+LOADER_INTERP?=${LOADER_DEFAULT_INTERP}
 
 # Make sure we use the machine link we're about to create
 CFLAGS+=-I.

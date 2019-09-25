@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1982, 1986, 1988, 1990, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -33,6 +35,7 @@
 __FBSDID("$FreeBSD$");
 
 #include "opt_inet.h"
+#include "opt_ratelimit.h"
 #include "opt_ipsec.h"
 #include "opt_mbuf_stress_test.h"
 #include "opt_mpath.h"
@@ -62,7 +65,6 @@ __FBSDID("$FreeBSD$");
 #include <net/netisr.h>
 #include <net/pfil.h>
 #include <net/route.h>
-#include <net/flowtable.h>
 #ifdef RADIX_MPATH
 #include <net/radix_mpath.h>
 #endif
@@ -78,6 +80,10 @@ __FBSDID("$FreeBSD$");
 #include <netinet/in_var.h>
 #include <netinet/ip_var.h>
 #include <netinet/ip_options.h>
+
+#include <netinet/udp.h>
+#include <netinet/udp_var.h>
+
 #ifdef SCTP
 #include <netinet/sctp.h>
 #include <netinet/sctp_crc32.h>
@@ -102,20 +108,20 @@ extern int in_mcast_loop;
 extern	struct protosw inetsw[];
 
 static inline int
-ip_output_pfil(struct mbuf **mp, struct ifnet **ifp, struct inpcb *inp,
+ip_output_pfil(struct mbuf **mp, struct ifnet *ifp, struct inpcb *inp,
     struct sockaddr_in *dst, int *fibnum, int *error)
 {
+	struct m_tag *fwd_tag = NULL;
 	struct mbuf *m;
 	struct in_addr odst;
 	struct ip *ip;
-	u_short ifidx;
 
 	m = *mp;
 	ip = mtod(m, struct ip *);
 
 	/* Run through list of hooks for output packets. */
 	odst.s_addr = ip->ip_dst.s_addr;
-	*error = pfil_run_hooks(&V_inet_pfil_hook, mp, *ifp, PFIL_OUT, 0, inp);
+	*error = pfil_run_hooks(&V_inet_pfil_hook, mp, ifp, PFIL_OUT, 0, inp);
 	m = *mp;
 	if ((*error) != 0 || m == NULL)
 		return 1; /* Finished */
@@ -179,15 +185,13 @@ ip_output_pfil(struct mbuf **mp, struct ifnet **ifp, struct inpcb *inp,
 		return 1; /* Finished */
 	}
 	/* Or forward to some other address? */
-	if (IP_HAS_NEXTHOP(m) && !ip_get_fwdtag(m, dst, &ifidx)) {
-		if (ifidx != 0) {
-			struct ifnet *nifp = ifnet_byindex(ifidx);
-			if (nifp != NULL) {
-				*ifp = nifp;
-			}
-		}
+	if ((m->m_flags & M_IP_NEXTHOP) &&
+	    ((fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL)) != NULL)) {
+		bcopy((fwd_tag+1), dst, sizeof(struct sockaddr_in));
 		m->m_flags |= M_SKIP_FIREWALL;
-		ip_flush_fwdtag(m);
+		m->m_flags &= ~M_IP_NEXTHOP;
+		m_tag_delete(m, fwd_tag);
+
 		return -1; /* Reloop for CHANGE of dst */
 	}
 
@@ -225,7 +229,6 @@ ip_output(struct mbuf *m, struct mbuf *opt, struct route *ro, int flags,
 	struct route iproute;
 	struct rtentry *rte;	/* cache for ro->ro_rt */
 	uint32_t fibnum;
-	int have_ia_ref;
 #if defined(IPSEC) || defined(IPSEC_SUPPORT)
 	int no_route_but_check_spd = 0;
 #endif
@@ -245,11 +248,6 @@ ip_output(struct mbuf *m, struct mbuf *opt, struct route *ro, int flags,
 		bzero(ro, sizeof (*ro));
 	}
 
-#ifdef FLOWTABLE
-	if (ro->ro_rt == NULL)
-		(void )flowtable_lookup(AF_INET, m, ro);
-#endif
-
 	if (opt) {
 		int len = 0;
 		m = ip_insertoptions(m, opt, &len);
@@ -264,11 +262,12 @@ ip_output(struct mbuf *m, struct mbuf *opt, struct route *ro, int flags,
 		ip->ip_v = IPVERSION;
 		ip->ip_hl = hlen >> 2;
 		ip_fillid(ip);
-		IPSTAT_INC(ips_localout);
 	} else {
 		/* Header already set, fetch hlen from there */
 		hlen = ip->ip_hl << 2;
 	}
+	if ((flags & IP_FORWARDING) == 0)
+		IPSTAT_INC(ips_localout);
 
 	/*
 	 * dst/gw handling:
@@ -286,6 +285,7 @@ ip_output(struct mbuf *m, struct mbuf *opt, struct route *ro, int flags,
 		dst->sin_len = sizeof(*dst);
 		dst->sin_addr = ip->ip_dst;
 	}
+	NET_EPOCH_ENTER();
 again:
 	/*
 	 * Validate route against routing table additions;
@@ -307,14 +307,10 @@ again:
 		    !RT_LINK_IS_UP(rte->rt_ifp) ||
 			  dst->sin_family != AF_INET ||
 			  dst->sin_addr.s_addr != ip->ip_dst.s_addr)) {
-		RTFREE(rte);
-		rte = ro->ro_rt = (struct rtentry *)NULL;
-		if (ro->ro_lle)
-			LLE_FREE(ro->ro_lle);	/* zeros ro_lle */
-		ro->ro_lle = (struct llentry *)NULL;
+		RO_INVALIDATE_CACHE(ro);
+		rte = NULL;
 	}
 	ia = NULL;
-	have_ia_ref = 0;
 	/*
 	 * If routing to interface only, short circuit routing lookup.
 	 * The use of an all-ones broadcast address implies this; an
@@ -330,7 +326,6 @@ again:
 			error = ENETUNREACH;
 			goto bad;
 		}
-		have_ia_ref = 1;
 		ip->ip_dst.s_addr = INADDR_BROADCAST;
 		dst->sin_addr = ip->ip_dst;
 		ifp = ia->ia_ifp;
@@ -345,10 +340,10 @@ again:
 			error = ENETUNREACH;
 			goto bad;
 		}
-		have_ia_ref = 1;
 		ifp = ia->ia_ifp;
 		ip->ip_ttl = 1;
-		isbroadcast = in_broadcast(dst->sin_addr, ifp);
+		isbroadcast = ifp->if_flags & IFF_BROADCAST ?
+		    in_ifaddr_broadcast(dst->sin_addr, ia) : 0;
 	} else if (IN_MULTICAST(ntohl(ip->ip_dst.s_addr)) &&
 	    imo != NULL && imo->imo_multicast_ifp != NULL) {
 		/*
@@ -357,8 +352,6 @@ again:
 		 */
 		ifp = imo->imo_multicast_ifp;
 		IFP_TO_IA(ifp, ia, &in_ifa_tracker);
-		if (ia)
-			have_ia_ref = 1;
 		isbroadcast = 0;	/* fool gcc */
 	} else {
 		/*
@@ -401,11 +394,12 @@ again:
 			gw = (struct sockaddr_in *)rte->rt_gateway;
 		if (rte->rt_flags & RTF_HOST)
 			isbroadcast = (rte->rt_flags & RTF_BROADCAST);
+		else if (ifp->if_flags & IFF_BROADCAST)
+			isbroadcast = in_ifaddr_broadcast(gw->sin_addr, ia);
 		else
-			isbroadcast = in_broadcast(gw->sin_addr, ifp);
+			isbroadcast = 0;
 	}
 
-haveroute:
 	/*
 	 * Calculate MTU.  If we have a route that is up, use that,
 	 * otherwise use the interface's MTU.
@@ -574,8 +568,7 @@ sendit:
 
 	/* Jump over all PFIL processing if hooks are not active. */
 	if (PFIL_HOOKED(&V_inet_pfil_hook)) {
-		struct ifnet *same = ifp;
-		switch (ip_output_pfil(&m, &ifp, inp, dst, &fibnum, &error)) {
+		switch (ip_output_pfil(&m, ifp, inp, dst, &fibnum, &error)) {
 		case 1: /* Finished */
 			goto done;
 
@@ -586,23 +579,18 @@ sendit:
 		case -1: /* Need to try again */
 			/* Reset everything for a new round */
 			RO_RTFREE(ro);
-			if (have_ia_ref)
-				ifa_free(&ia->ia_ifa);
 			ro->ro_prepend = NULL;
 			rte = NULL;
 			gw = dst;
 			ip = mtod(m, struct ip *);
-			if (same != ifp) {
-				goto haveroute;
-			}
 			goto again;
 
 		}
 	}
 
-	/* 127/8 must not appear on wire - RFC1122. */
-	if ((ntohl(ip->ip_dst.s_addr) >> IN_CLASSA_NSHIFT) == IN_LOOPBACKNET ||
-	    (ntohl(ip->ip_src.s_addr) >> IN_CLASSA_NSHIFT) == IN_LOOPBACKNET) {
+	/* IN_LOOPBACK must not appear on the wire - RFC1122. */
+	if (IN_LOOPBACK(ntohl(ip->ip_dst.s_addr)) ||
+	    IN_LOOPBACK(ntohl(ip->ip_src.s_addr))) {
 		if ((ifp->if_flags & IFF_LOOPBACK) == 0) {
 			IPSTAT_INC(ips_badaddr);
 			error = EADDRNOTAVAIL;
@@ -659,8 +647,23 @@ sendit:
 		 */
 		m_clrprotoflags(m);
 		IP_PROBE(send, NULL, NULL, ip, ifp, ip, NULL);
+#ifdef RATELIMIT
+		if (inp != NULL) {
+			if (inp->inp_flags2 & INP_RATE_LIMIT_CHANGED)
+				in_pcboutput_txrtlmt(inp, ifp, m);
+			/* stamp send tag on mbuf */
+			m->m_pkthdr.snd_tag = inp->inp_snd_tag;
+		} else {
+			m->m_pkthdr.snd_tag = NULL;
+		}
+#endif
 		error = (*ifp->if_output)(ifp, m,
 		    (const struct sockaddr *)gw, ro);
+#ifdef RATELIMIT
+		/* check for route change */
+		if (error == EAGAIN)
+			in_pcboutput_eagain(inp);
+#endif
 		goto done;
 	}
 
@@ -696,8 +699,23 @@ sendit:
 
 			IP_PROBE(send, NULL, NULL, mtod(m, struct ip *), ifp,
 			    mtod(m, struct ip *), NULL);
+#ifdef RATELIMIT
+			if (inp != NULL) {
+				if (inp->inp_flags2 & INP_RATE_LIMIT_CHANGED)
+					in_pcboutput_txrtlmt(inp, ifp, m);
+				/* stamp send tag on mbuf */
+				m->m_pkthdr.snd_tag = inp->inp_snd_tag;
+			} else {
+				m->m_pkthdr.snd_tag = NULL;
+			}
+#endif
 			error = (*ifp->if_output)(ifp, m,
 			    (const struct sockaddr *)gw, ro);
+#ifdef RATELIMIT
+			/* check for route change */
+			if (error == EAGAIN)
+				in_pcboutput_eagain(inp);
+#endif
 		} else
 			m_freem(m);
 	}
@@ -706,11 +724,7 @@ sendit:
 		IPSTAT_INC(ips_fragmented);
 
 done:
-	/*
-	 * Release the route if using our private route, or if
-	 * (with flowtable) we don't have our own reference.
-	 */
-	if (ro == &iproute || ro->ro_flags & RT_NORTREF)
+	if (ro == &iproute)
 		RO_RTFREE(ro);
 	else if (rte == NULL)
 		/*
@@ -719,10 +733,9 @@ done:
 		 * calling RTFREE on it again.
 		 */
 		ro->ro_rt = NULL;
-	if (have_ia_ref)
-		ifa_free(&ia->ia_ifa);
+	NET_EPOCH_EXIT();
 	return (error);
-bad:
+ bad:
 	m_freem(m);
 	goto done;
 }
@@ -912,24 +925,35 @@ void
 in_delayed_cksum(struct mbuf *m)
 {
 	struct ip *ip;
-	uint16_t csum, offset, ip_len;
+	struct udphdr *uh;
+	uint16_t cklen, csum, offset;
 
 	ip = mtod(m, struct ip *);
 	offset = ip->ip_hl << 2 ;
-	ip_len = ntohs(ip->ip_len);
-	csum = in_cksum_skip(m, ip_len, offset);
-	if (m->m_pkthdr.csum_flags & CSUM_UDP && csum == 0)
-		csum = 0xffff;
+
+	if (m->m_pkthdr.csum_flags & CSUM_UDP) {
+		/* if udp header is not in the first mbuf copy udplen */
+		if (offset + sizeof(struct udphdr) > m->m_len) {
+			m_copydata(m, offset + offsetof(struct udphdr,
+			    uh_ulen), sizeof(cklen), (caddr_t)&cklen);
+			cklen = ntohs(cklen);
+		} else {
+			uh = (struct udphdr *)mtodo(m, offset);
+			cklen = ntohs(uh->uh_ulen);
+		}
+		csum = in_cksum_skip(m, cklen + offset, offset);
+		if (csum == 0)
+			csum = 0xffff;
+	} else {
+		cklen = ntohs(ip->ip_len);
+		csum = in_cksum_skip(m, cklen, offset);
+	}
 	offset += m->m_pkthdr.csum_data;	/* checksum offset */
 
-	/* find the mbuf in the chain where the checksum starts*/
-	while ((m != NULL) && (offset >= m->m_len)) {
-		offset -= m->m_len;
-		m = m->m_next;
-	}
-	KASSERT(m != NULL, ("in_delayed_cksum: checksum outside mbuf chain."));
-	KASSERT(offset + sizeof(u_short) <= m->m_len, ("in_delayed_cksum: checksum split between mbufs."));
-	*(u_short *)(m->m_data + offset) = csum;
+	if (offset + sizeof(csum) > m->m_len)
+		m_copyback(m, offset, sizeof(csum), (caddr_t)&csum);
+	else
+		*(u_short *)mtodo(m, offset) = csum;
 }
 
 /*
@@ -970,11 +994,30 @@ ip_ctloutput(struct socket *so, struct sockopt *sopt)
 				INP_WUNLOCK(inp);
 				error = 0;
 				break;
+			case SO_REUSEPORT_LB:
+				INP_WLOCK(inp);
+				if ((so->so_options & SO_REUSEPORT_LB) != 0)
+					inp->inp_flags2 |= INP_REUSEPORT_LB;
+				else
+					inp->inp_flags2 &= ~INP_REUSEPORT_LB;
+				INP_WUNLOCK(inp);
+				error = 0;
+				break;
 			case SO_SETFIB:
 				INP_WLOCK(inp);
 				inp->inp_inc.inc_fibnum = so->so_fibnum;
 				INP_WUNLOCK(inp);
 				error = 0;
+				break;
+			case SO_MAX_PACING_RATE:
+#ifdef RATELIMIT
+				INP_WLOCK(inp);
+				inp->inp_flags2 |= INP_RATE_LIMIT_CHANGED;
+				INP_WUNLOCK(inp);
+				error = 0;
+#else
+				error = EOPNOTSUPP;
+#endif
 				break;
 			default:
 				break;
@@ -1031,6 +1074,7 @@ ip_ctloutput(struct socket *so, struct sockopt *sopt)
 		case IP_MINTTL:
 		case IP_RECVOPTS:
 		case IP_RECVRETOPTS:
+		case IP_ORIGDSTADDR:
 		case IP_RECVDSTADDR:
 		case IP_RECVTTL:
 		case IP_RECVIF:
@@ -1090,6 +1134,10 @@ ip_ctloutput(struct socket *so, struct sockopt *sopt)
 
 			case IP_RECVDSTADDR:
 				OPTSET(INP_RECVDSTADDR);
+				break;
+
+			case IP_ORIGDSTADDR:
+				OPTSET2(INP_ORIGDSTADDR, optval);
 				break;
 
 			case IP_RECVTTL:
@@ -1210,13 +1258,24 @@ ip_ctloutput(struct socket *so, struct sockopt *sopt)
 		switch (sopt->sopt_name) {
 		case IP_OPTIONS:
 		case IP_RETOPTS:
-			if (inp->inp_options)
-				error = sooptcopyout(sopt,
-						     mtod(inp->inp_options,
-							  char *),
-						     inp->inp_options->m_len);
-			else
+			INP_RLOCK(inp);
+			if (inp->inp_options) {
+				struct mbuf *options;
+
+				options = m_copym(inp->inp_options, 0,
+				    M_COPYALL, M_NOWAIT);
+				INP_RUNLOCK(inp);
+				if (options != NULL) {
+					error = sooptcopyout(sopt,
+							     mtod(options, char *),
+							     options->m_len);
+					m_freem(options);
+				} else
+					error = ENOMEM;
+			} else {
+				INP_RUNLOCK(inp);
 				sopt->sopt_valsize = 0;
+			}
 			break;
 
 		case IP_TOS:
@@ -1224,6 +1283,7 @@ ip_ctloutput(struct socket *so, struct sockopt *sopt)
 		case IP_MINTTL:
 		case IP_RECVOPTS:
 		case IP_RECVRETOPTS:
+		case IP_ORIGDSTADDR:
 		case IP_RECVDSTADDR:
 		case IP_RECVTTL:
 		case IP_RECVIF:
@@ -1267,6 +1327,10 @@ ip_ctloutput(struct socket *so, struct sockopt *sopt)
 
 			case IP_RECVDSTADDR:
 				optval = OPTBIT(INP_RECVDSTADDR);
+				break;
+
+			case IP_ORIGDSTADDR:
+				optval = OPTBIT2(INP_ORIGDSTADDR);
 				break;
 
 			case IP_RECVTTL:
@@ -1395,91 +1459,5 @@ ip_mloopback(struct ifnet *ifp, const struct mbuf *m, int hlen)
 		ip->ip_sum = 0;
 		ip->ip_sum = in_cksum(copym, hlen);
 		if_simloop(ifp, copym, AF_INET, 0);
-	}
-}
-
-struct ip_fwdtag {
-	struct sockaddr_in dst;
-	u_short if_index;
-};
-
-int
-ip_set_fwdtag(struct mbuf *m, struct sockaddr_in *dst, u_short ifidx)
-{
-	struct ip_fwdtag *fwd_info;
-	struct m_tag *fwd_tag;
-
-	KASSERT(dst != NULL, ("%s: !dst", __func__));
-	KASSERT(dst->sin_family == AF_INET, ("%s: !AF_INET", __func__));
-
-	fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL);
-	if (fwd_tag != NULL) {
-		KASSERT(((struct ip_fwdtag *)(fwd_tag+1))->dst.sin_family ==
-		    AF_INET, ("%s: !AF_INET", __func__));
-
-		m_tag_unlink(m, fwd_tag);
-	} else {
-		fwd_tag = m_tag_get(PACKET_TAG_IPFORWARD, sizeof(*fwd_info),
-		    M_NOWAIT);
-		if (fwd_tag == NULL) {
-			return (ENOBUFS);
-		}
-	}
-
-	fwd_info = (struct ip_fwdtag *)(fwd_tag+1);
-
-	bcopy(dst, &fwd_info->dst, sizeof(fwd_info->dst));
-	fwd_info->if_index = ifidx;
-	m->m_flags |= M_IP_NEXTHOP;
-
-	if (in_localip(fwd_info->dst.sin_addr))
-		m->m_flags |= M_FASTFWD_OURS;
-	else
-		m->m_flags &= ~M_FASTFWD_OURS;
-
-	m_tag_prepend(m, fwd_tag);
-
-	return (0);
-}
-
-int
-ip_get_fwdtag(struct mbuf *m, struct sockaddr_in *dst, u_short *ifidx)
-{
-	struct ip_fwdtag *fwd_info;
-	struct m_tag *fwd_tag;
-
-	fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL);
-	if (fwd_tag == NULL) {
-		return (ENOENT);
-	}
-
-	fwd_info = (struct ip_fwdtag *)(fwd_tag+1);
-
-	KASSERT(((struct sockaddr *)&fwd_info->dst)->sa_family == AF_INET,
-	    ("%s: !AF_INET", __func__));
-
-	if (dst != NULL) {
-		bcopy(&fwd_info->dst, dst, sizeof(*dst));
-	}
-
-	if (ifidx != NULL) {
-		*ifidx = fwd_info->if_index;
-	}
-
-	return (0);
-}
-
-void
-ip_flush_fwdtag(struct mbuf *m)
-{
-	struct m_tag *fwd_tag;
-
-	fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL);
-	if (fwd_tag != NULL) {
-		KASSERT(((struct sockaddr *)(fwd_tag+1))->sa_family ==
-		    AF_INET, ("%s: !AF_INET", __func__));
-
-		m->m_flags &= ~(M_IP_NEXTHOP | M_FASTFWD_OURS);
-		m_tag_delete(m, fwd_tag);
 	}
 }

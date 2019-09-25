@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1982, 1986, 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -278,6 +280,8 @@ get_process_cputime(struct proc *targetp, struct timespec *ats)
 	PROC_STATLOCK(targetp);
 	rufetch(targetp, &ru);
 	runtime = targetp->p_rux.rux_runtime;
+	if (curthread->td_proc == targetp)
+		runtime += cpu_ticks() - PCPU_GET(switchtime);
 	PROC_STATUNLOCK(targetp);
 	cputick2timespec(runtime, ats);
 }
@@ -390,6 +394,11 @@ sys_clock_settime(struct thread *td, struct clock_settime_args *uap)
 	return (kern_clock_settime(td, uap->clock_id, &ats));
 }
 
+static int allow_insane_settime = 0;
+SYSCTL_INT(_debug, OID_AUTO, allow_insane_settime, CTLFLAG_RWTUN,
+    &allow_insane_settime, 0,
+    "do not perform possibly restrictive checks on settime(2) args");
+
 int
 kern_clock_settime(struct thread *td, clockid_t clock_id, struct timespec *ats)
 {
@@ -402,6 +411,8 @@ kern_clock_settime(struct thread *td, clockid_t clock_id, struct timespec *ats)
 		return (EINVAL);
 	if (ats->tv_nsec < 0 || ats->tv_nsec >= 1000000000 ||
 	    ats->tv_sec < 0)
+		return (EINVAL);
+	if (!allow_insane_settime && ats->tv_sec > 8000ULL * 365 * 24 * 60 * 60)
 		return (EINVAL);
 	/* XXX Don't convert nsec->usec and back */
 	TIMESPEC_TO_TIMEVAL(&atv, ats);
@@ -532,7 +543,7 @@ kern_clock_nanosleep(struct thread *td, clockid_t clock_id, int flags,
 				    atomic_load_acq_int(&rtc_generation);
 			error = kern_clock_gettime(td, clock_id, &now);
 			KASSERT(error == 0, ("kern_clock_gettime: %d", error));
-			timespecsub(&ts, &now);
+			timespecsub(&ts, &now, &ts);
 		}
 		if (ts.tv_sec < 0 || (ts.tv_sec == 0 && ts.tv_nsec == 0)) {
 			error = EWOULDBLOCK;
@@ -1509,7 +1520,7 @@ realtimer_gettime(struct itimer *it, struct itimerspec *ovalue)
 	realtimer_clocktime(it->it_clockid, &cts);
 	*ovalue = it->it_time;
 	if (ovalue->it_value.tv_sec != 0 || ovalue->it_value.tv_nsec != 0) {
-		timespecsub(&ovalue->it_value, &cts);
+		timespecsub(&ovalue->it_value, &cts, &ovalue->it_value);
 		if (ovalue->it_value.tv_sec < 0 ||
 		    (ovalue->it_value.tv_sec == 0 &&
 		     ovalue->it_value.tv_nsec == 0)) {
@@ -1550,9 +1561,10 @@ realtimer_settime(struct itimer *it, int flags,
 		ts = val.it_value;
 		if ((flags & TIMER_ABSTIME) == 0) {
 			/* Convert to absolute time. */
-			timespecadd(&it->it_time.it_value, &cts);
+			timespecadd(&it->it_time.it_value, &cts,
+				&it->it_time.it_value);
 		} else {
-			timespecsub(&ts, &cts);
+			timespecsub(&ts, &cts, &ts);
 			/*
 			 * We don't care if ts is negative, tztohz will
 			 * fix it.
@@ -1620,22 +1632,23 @@ realtimer_expire(void *arg)
 	if (timespeccmp(&cts, &it->it_time.it_value, >=)) {
 		if (timespecisset(&it->it_time.it_interval)) {
 			timespecadd(&it->it_time.it_value,
-				    &it->it_time.it_interval);
+				    &it->it_time.it_interval,
+				    &it->it_time.it_value);
 			while (timespeccmp(&cts, &it->it_time.it_value, >=)) {
 				if (it->it_overrun < INT_MAX)
 					it->it_overrun++;
 				else
 					it->it_ksi.ksi_errno = ERANGE;
 				timespecadd(&it->it_time.it_value,
-					    &it->it_time.it_interval);
+					    &it->it_time.it_interval,
+					    &it->it_time.it_value);
 			}
 		} else {
 			/* single shot timer ? */
 			timespecclear(&it->it_time.it_value);
 		}
 		if (timespecisset(&it->it_time.it_value)) {
-			ts = it->it_time.it_value;
-			timespecsub(&ts, &cts);
+			timespecsub(&it->it_time.it_value, &cts, &ts);
 			TIMESPEC_TO_TIMEVAL(&tv, &ts);
 			callout_reset(&it->it_callout, tvtohz(&tv),
 				 realtimer_expire, it);
@@ -1647,7 +1660,7 @@ realtimer_expire(void *arg)
 		itimer_leave(it);
 	} else if (timespecisset(&it->it_time.it_value)) {
 		ts = it->it_time.it_value;
-		timespecsub(&ts, &cts);
+		timespecsub(&ts, &cts, &ts);
 		TIMESPEC_TO_TIMEVAL(&tv, &ts);
 		callout_reset(&it->it_callout, tvtohz(&tv), realtimer_expire,
  			it);

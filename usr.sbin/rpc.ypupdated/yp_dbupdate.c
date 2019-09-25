@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 1996
  *	Bill Paul <wpaul@ctr.columbia.edu>.  All rights reserved.
  *
@@ -79,7 +81,7 @@ ypmap_update(char *netname, char *map, unsigned int op, unsigned int keylen,
 	DB *dbp;
 	DBT key = { NULL, 0 }, data = { NULL, 0 };
 	char *yp_last = "YP_LAST_MODIFIED";
-	char yplastbuf[YPMAXRECORD];
+	char yplastbuf[32];
 	char *domptr;
 	int rval = 0;
 

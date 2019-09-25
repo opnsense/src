@@ -9,7 +9,7 @@
 .\" 2. Redistributions in binary form must reproduce the above copyright
 .\"    notice, this list of conditions and the following disclaimer in the
 .\"    documentation and/or other materials provided with the distribution.
-.\" 4. Neither the name of the University nor the names of its contributors
+.\" 3. Neither the name of the University nor the names of its contributors
 .\"    may be used to endorse or promote products derived from this software
 .\"    without specific prior written permission.
 .\"
@@ -28,7 +28,7 @@
 .\"     From: @(#)ifconfig.8	8.3 (Berkeley) 1/5/94
 .\" $FreeBSD$
 .\"
-.Dd September 17, 2016
+.Dd May 3, 2019
 .Dt IFCONFIG 8
 .Os
 .Sh NAME
@@ -460,6 +460,8 @@ this directive is used to select between 802.11a
 and 802.11g
 .Pq Cm 11g
 operating modes.
+.It Cm txrtlmt
+Set if the driver supports TX rate limiting.
 .It Cm inst Ar minst , Cm instance Ar minst
 Set the media instance to
 .Ar minst .
@@ -722,10 +724,6 @@ controls whether this flag is set by default or not.
 .It Cm -accept_rtadv
 Clear a flag
 .Cm accept_rtadv .
-.It Cm autoconf
-Set a flag to accept router advertisements on an interface.
-.It Fl autoconf
-Disable autoconfiguration.
 .It Cm no_radr
 Set a flag to control whether routers from which the system accepts
 Router Advertisement messages will be added to the Default Router List
@@ -798,6 +796,10 @@ Note that the address family keyword
 .Dq Li inet6
 is needed for them:
 .Bl -tag -width indent
+.It Cm autoconf
+Set the IPv6 autoconfigured address bit.
+.It Fl autoconf
+Clear the IPv6 autoconfigured address bit.
 .It Cm deprecated
 Set the IPv6 deprecated address bit.
 .It Fl deprecated
@@ -830,13 +832,13 @@ is one of
 .Cm sta ,
 .Cm ahdemo
 (or
-.Cm adhoc-demo ),
+.Cm adhoc-demo ) ,
 .Cm ibss ,
 (or
-.Cm adhoc ),
+.Cm adhoc ) ,
 .Cm ap ,
 (or
-.Cm hostap ),
+.Cm hostap ) ,
 .Cm wds ,
 .Cm tdma ,
 .Cm mesh ,
@@ -2467,7 +2469,7 @@ src/dst address for IPv4 or IPv6.
 .It Cm l4
 src/dst port for TCP/UDP/SCTP.
 .El
-.It Cm use_flowid
+.It Cm -use_flowid
 Enable local hash computation for RSS hash on the interface.
 The
 .Li loadbalance
@@ -2476,7 +2478,7 @@ and
 modes will use the RSS hash from the network card if available
 to avoid computing one, this may give poor traffic distribution
 if the hash is invalid or uses less of the protocol header information.
-.Cm use_flowid
+.Cm -use_flowid
 disables use of RSS hash from the network card.
 The default value can be set via the
 .Va net.link.lagg.default_use_flowid
@@ -2489,8 +2491,8 @@ and
 .Li 1
 means
 .Dq enabled .
-.It Cm -use_flowid
-Disable local hash computation for RSS hash on the interface.
+.It Cm use_flowid
+Use the RSS hash from the network card if available.
 .It Cm flowid_shift Ar number
 Set a shift parameter for RSS local hash computation.
 Hash is calculated by using flowid bits in a packet header mbuf
@@ -2516,7 +2518,7 @@ means
 Disable lacp strict compliance on the interface.
 .El
 .Pp
-The following parameters are specific to IP tunnel interfaces,
+The following parameters apply to IP tunnel interfaces,
 .Xr gif 4 :
 .Bl -tag -width indent
 .It Cm tunnel Ar src_addr dest_addr
@@ -2566,9 +2568,26 @@ Clear a flag
 .Cm send_rev_ethip_ver .
 .El
 .Pp
-The following parameters are specific to GRE tunnel interfaces,
+The following parameters apply to GRE tunnel interfaces,
 .Xr gre 4 :
 .Bl -tag -width indent
+.It Cm tunnel Ar src_addr dest_addr
+Configure the physical source and destination address for GRE tunnel
+interfaces.
+The arguments
+.Ar src_addr
+and
+.Ar dest_addr
+are interpreted as the outer source/destination for the encapsulating
+IPv4/IPv6 header.
+.It Fl tunnel
+Unconfigure the physical source and destination address for GRE tunnel
+interfaces previously configured with
+.Cm tunnel .
+.It Cm deletetunnel
+Another name for the
+.Fl tunnel
+parameter.
 .It Cm grekey Ar key
 Configure the GRE key to be used for outgoing packets.
 Note that

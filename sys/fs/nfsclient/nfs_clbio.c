@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -13,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -79,7 +81,7 @@ static int nfs_directio_write(struct vnode *vp, struct uio *uiop,
  * Vnode op for VM getpages.
  */
 SYSCTL_DECL(_vfs_nfs);
-static int use_buf_pager = 0;
+static int use_buf_pager = 1;
 SYSCTL_INT(_vfs_nfs, OID_AUTO, use_buf_pager, CTLFLAG_RWTUN,
     &use_buf_pager, 0,
     "Use buffer pager instead of direct readrpc call");
@@ -184,8 +186,8 @@ ncl_getpages(struct vop_getpages_args *ap)
 
 	kva = (vm_offset_t) bp->b_data;
 	pmap_qenter(kva, pages, npages);
-	PCPU_INC(cnt.v_vnodein);
-	PCPU_ADD(cnt.v_vnodepgsin, npages);
+	VM_CNT_INC(v_vnodein);
+	VM_CNT_ADD(v_vnodepgsin, npages);
 
 	count = npages << PAGE_SHIFT;
 	iov.iov_base = (caddr_t) kva;
@@ -319,8 +321,8 @@ ncl_putpages(struct vop_putpages_args *ap)
 	for (i = 0; i < npages; i++)
 		rtvals[i] = VM_PAGER_ERROR;
 
-	PCPU_INC(cnt.v_vnodeout);
-	PCPU_ADD(cnt.v_vnodepgsout, count);
+	VM_CNT_INC(v_vnodeout);
+	VM_CNT_ADD(v_vnodepgsout, count);
 
 	iov.iov_base = unmapped_buf;
 	iov.iov_len = count;
@@ -1637,7 +1639,7 @@ ncl_doio(struct vnode *vp, struct buf *bp, struct ucred *cr, struct thread *td,
 		    }
 		}
 		/* ASSERT_VOP_LOCKED(vp, "ncl_doio"); */
-		if (p && (vp->v_vflag & VV_TEXT)) {
+		if (p && vp->v_writecount <= -1) {
 			mtx_lock(&np->n_mtx);
 			if (NFS_TIMESPEC_COMPARE(&np->n_mtime, &np->n_vattr.na_mtime)) {
 				mtx_unlock(&np->n_mtx);
@@ -1830,7 +1832,7 @@ ncl_doio(struct vnode *vp, struct buf *bp, struct ucred *cr, struct thread *td,
  */
 
 int
-ncl_meta_setsize(struct vnode *vp, struct ucred *cred, struct thread *td, u_quad_t nsize)
+ncl_meta_setsize(struct vnode *vp, struct thread *td, u_quad_t nsize)
 {
 	struct nfsnode *np = VTONFS(vp);
 	u_quad_t tsize;
@@ -1852,7 +1854,7 @@ ncl_meta_setsize(struct vnode *vp, struct ucred *cred, struct thread *td, u_quad
 		 * truncation point.  We may have a B_DELWRI and/or B_CACHE
 		 * buffer that now needs to be truncated.
 		 */
-		error = vtruncbuf(vp, cred, nsize, biosize);
+		error = vtruncbuf(vp, nsize, biosize);
 		lbn = nsize / biosize;
 		bufsize = nsize - (lbn * biosize);
 		bp = nfs_getcacheblk(vp, lbn, bufsize, td);

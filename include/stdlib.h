@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1990, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -79,7 +81,7 @@ __BEGIN_DECLS
 #endif
 extern int __mb_cur_max;
 extern int ___mb_cur_max(void);
-#define	MB_CUR_MAX	(___mb_cur_max())
+#define	MB_CUR_MAX	((size_t)___mb_cur_max())
 
 _Noreturn void	 abort(void);
 int	 abs(int) __pure2;
@@ -206,7 +208,7 @@ double	 erand48(unsigned short[3]);
 /* char	*fcvt(double, int, int * __restrict, int * __restrict); */
 /* char	*gcvt(double, int, int * __restrict, int * __restrict); */
 int	 grantpt(int);
-char	*initstate(unsigned long /* XSI requires u_int */, char *, long);
+char	*initstate(unsigned int, char *, size_t);
 long	 jrand48(unsigned short[3]);
 char	*l64a(long);
 void	 lcong48(unsigned short[7]);
@@ -223,13 +225,9 @@ int	 putenv(char *);
 long	 random(void);
 unsigned short
 	*seed48(unsigned short[3]);
-#ifndef _SETKEY_DECLARED
-int	 setkey(const char *);
-#define	_SETKEY_DECLARED
-#endif
 char	*setstate(/* const */ char *);
 void	 srand48(long);
-void	 srandom(unsigned long);
+void	 srandom(unsigned int);
 int	 unlockpt(int);
 #endif /* __XSI_VISIBLE */
 
@@ -240,27 +238,22 @@ extern void (*malloc_message)(void *, const char *);
 /*
  * The alloca() function can't be implemented in C, and on some
  * platforms it can't be implemented at all as a callable function.
- * The GNU C compiler provides a built-in alloca() which we can use;
- * in all other cases, provide a prototype, mainly to pacify various
- * incarnations of lint.  On platforms where alloca() is not in libc,
- * programs which use it will fail to link when compiled with non-GNU
- * compilers.
+ * The GNU C compiler provides a built-in alloca() which we can use.
+ * On platforms where alloca() is not in libc, programs which use it
+ * will fail to link when compiled with non-GNU compilers.
  */
 #if __GNUC__ >= 2 || defined(__INTEL_COMPILER)
 #undef  alloca	/* some GNU bits try to get cute and define this on their own */
 #define alloca(sz) __builtin_alloca(sz)
-#elif defined(lint)
-void	*alloca(size_t);
 #endif
 
 void	 abort2(const char *, int, void **) __dead2;
 __uint32_t
 	 arc4random(void);
-void	 arc4random_addrandom(unsigned char *, int);
 void	 arc4random_buf(void *, size_t);
-void	 arc4random_stir(void);
 __uint32_t 
 	 arc4random_uniform(__uint32_t);
+
 #ifdef __BLOCKS__
 int	 atexit_b(void (^ _Nonnull)(void));
 void	*bsearch_b(const void *, const void *, size_t,
@@ -280,6 +273,7 @@ int	 cgetstr(char *, const char *, char **);
 int	 cgetustr(char *, const char *, char **);
 
 int	 daemon(int, int);
+int	 daemonfd(int, int);
 char	*devname(__dev_t, __mode_t);
 char	*devname_r(__dev_t, __mode_t, char *, int);
 char	*fdevname(int);

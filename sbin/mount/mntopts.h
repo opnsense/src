@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1994
  *      The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -56,6 +58,7 @@ struct mntopt {
 #define MOPT_ACLS		{ "acls",	0, MNT_ACLS, 0 }
 #define MOPT_NFS4ACLS		{ "nfsv4acls",	0, MNT_NFS4ACLS, 0 }
 #define MOPT_AUTOMOUNTED	{ "automounted",0, MNT_AUTOMOUNTED, 0 }
+#define MOPT_UNTRUSTED		{ "untrusted",  0, MNT_UNTRUSTED, 0 }
 
 /* Control flags. */
 #define MOPT_FORCE		{ "force",	0, MNT_FORCE, 0 }
@@ -91,7 +94,8 @@ struct mntopt {
 	MOPT_MULTILABEL,						\
 	MOPT_ACLS,							\
 	MOPT_NFS4ACLS,							\
-	MOPT_AUTOMOUNTED
+	MOPT_AUTOMOUNTED,						\
+	MOPT_UNTRUSTED
 
 void getmntopts(const char *, const struct mntopt *, int *, int *);
 void rmslashes(char *, char *);

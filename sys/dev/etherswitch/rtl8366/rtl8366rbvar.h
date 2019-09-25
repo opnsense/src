@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2015-2016 Hiroki Mori.
  * Copyright (c) 2011-2012 Stefan Bethke.
  * All rights reserved.
@@ -29,6 +31,9 @@
 
 #ifndef _DEV_ETHERSWITCH_RTL8366RBVAR_H_
 #define	_DEV_ETHERSWITCH_RTL8366RBVAR_H_
+
+#define	RTL8366RB		0
+#define	RTL8366SR		1
 
 #define RTL8366_IIC_ADDR	0xa8
 #define RTL_IICBUS_TIMEOUT	100	/* us */
@@ -173,9 +178,7 @@
 	(0x8000 | (1 << (((phy) & 0x1f) + 9)) | (((page) & (sc->chip_type == 0 ? 0xf : 0x7)) << 5) | ((reg) & 0x1f))
 
 /* general characteristics of the chip */
-#define	RTL8366_CPU_PORT			5
-#define	RTL8366_NUM_PORTS			6
-#define	RTL8366_NUM_PHYS			(RTL8366_NUM_PORTS-1)
+#define	RTL8366_NUM_PHYS			5
 #define	RTL8366_NUM_VLANS			16
 #define	RTL8366_NUM_PHY_REG			32
 

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1990, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -293,14 +295,16 @@ int	 vprintf(const char * __restrict, __va_list);
 int	 vsprintf(char * __restrict, const char * __restrict,
 	    __va_list);
 
-#if __ISO_C_VISIBLE >= 1999
+#if __ISO_C_VISIBLE >= 1999 || __POSIX_VISIBLE >= 199506
 int	 snprintf(char * __restrict, size_t, const char * __restrict,
 	    ...) __printflike(3, 4);
+int	 vsnprintf(char * __restrict, size_t, const char * __restrict,
+	    __va_list) __printflike(3, 0);
+#endif
+#if __ISO_C_VISIBLE >= 1999
 int	 vfscanf(FILE * __restrict, const char * __restrict, __va_list)
 	    __scanflike(2, 0);
 int	 vscanf(const char * __restrict, __va_list) __scanflike(1, 0);
-int	 vsnprintf(char * __restrict, size_t, const char * __restrict,
-	    __va_list) __printflike(3, 0);
 int	 vsscanf(const char * __restrict, const char * __restrict, __va_list)
 	    __scanflike(2, 0);
 #endif
@@ -346,7 +350,7 @@ int	 ferror_unlocked(FILE *);
 int	 fileno_unlocked(FILE *);
 #endif
 
-#if __POSIX_VISIBLE >= 200112
+#if __POSIX_VISIBLE >= 200112 || __XSI_VISIBLE >= 500
 int	 fseeko(FILE *, __off_t, int);
 __off_t	 ftello(FILE *);
 #endif
@@ -367,44 +371,9 @@ ssize_t	 getdelim(char ** __restrict, size_t * __restrict, int,
 FILE	*open_memstream(char **, size_t *);
 int	 renameat(int, const char *, int, const char *);
 int	 vdprintf(int, const char * __restrict, __va_list) __printflike(2, 0);
-
-/*
- * Every programmer and his dog wrote functions called getline() and dprintf()
- * before POSIX.1-2008 came along and decided to usurp the names, so we
- * don't prototype them by default unless one of the following is true:
- *   a) the app has requested them specifically by defining _WITH_GETLINE or
- *      _WITH_DPRINTF, respectively
- *   b) the app has requested a POSIX.1-2008 environment via _POSIX_C_SOURCE
- *   c) the app defines a GNUism such as _BSD_SOURCE or _GNU_SOURCE
- */
-#ifndef _WITH_GETLINE
-#if defined(_BSD_SOURCE) || defined(_GNU_SOURCE)
-#define	_WITH_GETLINE
-#elif defined(_POSIX_C_SOURCE)
-#if _POSIX_C_SOURCE >= 200809
-#define	_WITH_GETLINE
-#endif
-#endif
-#endif
-
-#ifdef _WITH_GETLINE
+/* _WITH_GETLINE to allow pre 11 sources to build on 11+ systems */
 ssize_t	 getline(char ** __restrict, size_t * __restrict, FILE * __restrict);
-#endif
-
-#ifndef _WITH_DPRINTF
-#if defined(_BSD_SOURCE) || defined(_GNU_SOURCE)
-#define	_WITH_DPRINTF
-#elif defined(_POSIX_C_SOURCE)
-#if _POSIX_C_SOURCE >= 200809
-#define	_WITH_DPRINTF
-#endif
-#endif
-#endif
-
-#ifdef _WITH_DPRINTF
-int	 (dprintf)(int, const char * __restrict, ...) __printflike(2, 3);
-#endif
-
+int	 dprintf(int, const char * __restrict, ...) __printflike(2, 3);
 #endif /* __POSIX_VISIBLE >= 200809 */
 
 /*

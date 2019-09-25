@@ -1,6 +1,8 @@
 /*	$NetBSD: fpu_sqrt.c,v 1.4 2005/12/11 12:18:42 christos Exp $ */
 
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1992, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -224,12 +226,12 @@ fpu_sqrt(struct fpemu *fe)
 		return (x);
 	}
 	if (x->fp_sign) {
+		fe->fe_cx |= FPSCR_VXSQRT;
 		return (fpu_newnan(fe));
 	}
 	if (ISINF(x)) {
-		fe->fe_cx |= FPSCR_VXSQRT;
-		DUMPFPN(FPE_REG, 0);
-		return (0);
+		DUMPFPN(FPE_REG, x);
+		return (x);
 	}
 
 	/*
@@ -351,7 +353,7 @@ fpu_sqrt(struct fpemu *fe)
 	FPU_SUBC(d0, x0, t0);
 	if ((int)d0 >= 0) {
 		x0 = d0, x1 = d1, x2 = d2;
-		q |= bit;
+		q = bit;
 		y1 |= 1;		/* now t1, y1 are set in concrete */
 	}
 	ODD_DOUBLE;
@@ -383,12 +385,12 @@ fpu_sqrt(struct fpemu *fe)
 	FPU_SUBCS(d2, x2, t2);
 	FPU_SUBCS(d1, x1, t1);
 	FPU_SUBC(d0, x0, t0);
-	ODD_DOUBLE;
 	if ((int)d0 >= 0) {
-		x0 = d0, x1 = d1, x2 = d2;
-		q |= bit;
+		x0 = d0, x1 = d1, x2 = d2; x3 = d3;
+		q = bit;
 		y2 |= 1;
 	}
+	ODD_DOUBLE;
 	while ((bit >>= 1) != 0) {
 		EVEN_DOUBLE;
 		t3 = y3 | bit;
@@ -397,7 +399,7 @@ fpu_sqrt(struct fpemu *fe)
 		FPU_SUBCS(d1, x1, t1);
 		FPU_SUBC(d0, x0, t0);
 		if ((int)d0 >= 0) {
-			x0 = d0, x1 = d1, x2 = d2;
+			x0 = d0, x1 = d1, x2 = d2; x3 = d3;
 			q |= bit;
 			y3 |= bit << 1;
 		}

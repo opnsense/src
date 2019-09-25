@@ -7,7 +7,7 @@ typedef enum x {
 } x;
 
 /* See r303597, r303598, r309219, and r309343 */
-void 
+void
 t(void)
 {
 	/*
@@ -36,4 +36,25 @@ t(void)
 	 */
 
 	/* r309343	*/
+}
+
+int
+c(void)
+{
+	if (1) {		/*- a christmas tree  *
+					             ***
+					            ***** */
+		/*- another one *
+			       ***
+			      ***** */
+		7;
+	}
+
+	if (1)			/*- a christmas tree  *
+						     ***
+						    ***** */
+		/*- another one *
+			       ***
+			      ***** */
+		1;
 }

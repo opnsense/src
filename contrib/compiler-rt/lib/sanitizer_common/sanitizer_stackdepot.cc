@@ -26,7 +26,7 @@ struct StackDepotNode {
   u32 tag;
   uptr stack[1];  // [size]
 
-  static const u32 kTabSizeLog = 20;
+  static const u32 kTabSizeLog = SANITIZER_ANDROID ? 16 : 20;
   // Lower kTabSizeLog bits are equal for all items in one bucket.
   // We use these bits to store the per-stack use counter.
   static const u32 kUseCountBits = kTabSizeLog;
@@ -135,8 +135,8 @@ bool StackDepotReverseMap::IdDescPair::IdComparator(
   return a.id < b.id;
 }
 
-StackDepotReverseMap::StackDepotReverseMap()
-    : map_(StackDepotGetStats()->n_uniq_ids + 100) {
+StackDepotReverseMap::StackDepotReverseMap() {
+  map_.reserve(StackDepotGetStats()->n_uniq_ids + 100);
   for (int idx = 0; idx < StackDepot::kTabSize; idx++) {
     atomic_uintptr_t *p = &theDepot.tab[idx];
     uptr v = atomic_load(p, memory_order_consume);
@@ -146,7 +146,7 @@ StackDepotReverseMap::StackDepotReverseMap()
       map_.push_back(pair);
     }
   }
-  InternalSort(&map_, map_.size(), IdDescPair::IdComparator);
+  Sort(map_.data(), map_.size(), &IdDescPair::IdComparator);
 }
 
 StackTrace StackDepotReverseMap::Get(u32 id) {

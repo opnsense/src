@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1997,1998 Maxim Bolotin and Oleg Sharoiko.
  * All rights reserved.
  *
@@ -572,6 +574,8 @@ cs_attach(device_t dev)
 		return (error);
 	}
 
+	gone_by_fcp101_dev(dev);
+
 	return (0);
 }
 
@@ -1005,7 +1009,7 @@ cs_setmode(struct cs_softc *sc)
 			 * frames we're interested in.
 			 */
 			if_maddr_rlock(ifp);
-			TAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
+			CK_STAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
 				struct sockaddr_dl *dl =
 				    (struct sockaddr_dl *)ifma->ifma_addr;
 

@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2013-2016 Qlogic Corporation
  * All rights reserved.
  *
@@ -986,7 +988,7 @@ qla_set_multi(qla_host_t *ha, uint32_t add_multi)
 
 	if_maddr_rlock(ifp);
 
-	TAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
+	CK_STAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
 
 		if (ifma->ifma_addr->sa_family != AF_LINK)
 			continue;
@@ -1978,7 +1980,7 @@ qla_free_rcv_bufs(qla_host_t *ha)
 int
 ql_get_mbuf(qla_host_t *ha, qla_rx_buf_t *rxb, struct mbuf *nmp)
 {
-	struct mbuf *mp = nmp;
+	register struct mbuf *mp = nmp;
 	struct ifnet   		*ifp;
 	int            		ret = 0;
 	uint32_t		offset;

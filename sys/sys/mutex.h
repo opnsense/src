@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1997 Berkeley Software Design, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -123,6 +125,8 @@ int	__mtx_trylock_spin_flags(volatile uintptr_t *c, int opts,
 	     const char *file, int line);
 void	__mtx_unlock_spin_flags(volatile uintptr_t *c, int opts,
 	    const char *file, int line);
+void	mtx_spin_wait_unlocked(struct mtx *m);
+
 #if defined(INVARIANTS) || defined(INVARIANT_SUPPORT)
 void	__mtx_assert(const volatile uintptr_t *c, int what, const char *file,
 	    int line);
@@ -134,7 +138,7 @@ void	_thread_lock(struct thread *td, int opts, const char *file, int line);
 void	_thread_lock(struct thread *);
 #endif
 
-#if defined(LOCK_PROFILING) || defined(KLD_MODULE)
+#if defined(LOCK_PROFILING) || (defined(KLD_MODULE) && !defined(KLD_TIED))
 #define	thread_lock(tdp)						\
 	thread_lock_flags_((tdp), 0, __FILE__, __LINE__)
 #elif LOCK_DEBUG > 0

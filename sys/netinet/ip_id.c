@@ -1,5 +1,6 @@
-
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2008 Michael J. Silbersack.
  * All rights reserved.
  *
@@ -74,8 +75,6 @@ __FBSDID("$FreeBSD$");
  * enabled.
  */
 
-#include "opt_pax.h"
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/counter.h>
@@ -99,14 +98,8 @@ __FBSDID("$FreeBSD$");
  * suggested by RFC6864.  We use per-CPU counter for that, or if
  * user wants to, we can turn on random ID generation.
  */
-static VNET_DEFINE(int, ip_rfc6864) = 1;
-
-#ifdef PAX_HARDENING
-static VNET_DEFINE(int, ip_do_randomid) = 1;
-#else
-static VNET_DEFINE(int, ip_do_randomid) = 0;
-#endif
-
+VNET_DEFINE_STATIC(int, ip_rfc6864) = 1;
+VNET_DEFINE_STATIC(int, ip_do_randomid) = 0;
 #define	V_ip_rfc6864		VNET(ip_rfc6864)
 #define	V_ip_do_randomid	VNET(ip_do_randomid)
 
@@ -114,13 +107,13 @@ static VNET_DEFINE(int, ip_do_randomid) = 0;
  * Random ID state engine.
  */
 static MALLOC_DEFINE(M_IPID, "ipid", "randomized ip id state");
-static VNET_DEFINE(uint16_t *, id_array);
-static VNET_DEFINE(bitstr_t *, id_bits);
-static VNET_DEFINE(int, array_ptr);
-static VNET_DEFINE(int, array_size);
-static VNET_DEFINE(int, random_id_collisions);
-static VNET_DEFINE(int, random_id_total);
-static VNET_DEFINE(struct mtx, ip_id_mtx);
+VNET_DEFINE_STATIC(uint16_t *, id_array);
+VNET_DEFINE_STATIC(bitstr_t *, id_bits);
+VNET_DEFINE_STATIC(int, array_ptr);
+VNET_DEFINE_STATIC(int, array_size);
+VNET_DEFINE_STATIC(int, random_id_collisions);
+VNET_DEFINE_STATIC(int, random_id_total);
+VNET_DEFINE_STATIC(struct mtx, ip_id_mtx);
 #define	V_id_array	VNET(id_array)
 #define	V_id_bits	VNET(id_bits)
 #define	V_array_ptr	VNET(array_ptr)
@@ -132,7 +125,7 @@ static VNET_DEFINE(struct mtx, ip_id_mtx);
 /*
  * Non-random ID state engine is simply a per-cpu counter.
  */
-static VNET_DEFINE(counter_u64_t, ip_id);
+VNET_DEFINE_STATIC(counter_u64_t, ip_id);
 #define	V_ip_id		VNET(ip_id)
 
 static int	sysctl_ip_randomid(SYSCTL_HANDLER_ARGS);
@@ -290,11 +283,6 @@ ipid_sysinit(void)
 	
 	CPU_FOREACH(i)
 		arc4rand(zpcpu_get_cpu(V_ip_id, i), sizeof(uint64_t), 0);
-
-#ifdef PAX_HARDENING
-	if (V_ip_do_randomid)
-		ip_initid(8192);
-#endif
 }
 VNET_SYSINIT(ip_id, SI_SUB_PROTO_DOMAIN, SI_ORDER_ANY, ipid_sysinit, NULL);
 

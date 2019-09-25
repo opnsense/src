@@ -3,6 +3,7 @@
  *
  * Copyright (c) 2011 NetApp, Inc.
  * All rights reserved.
+ * Copyright (c) 2019 Joyent, Inc.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -55,13 +56,15 @@ __FBSDID("$FreeBSD$");
 #include "virtio.h"
 #include "block_if.h"
 
-#define VTBLK_RINGSZ	64
+#define VTBLK_RINGSZ	128
+
+_Static_assert(VTBLK_RINGSZ <= BLOCKIF_RING_MAX, "Each ring entry must be able to queue a request");
 
 #define VTBLK_S_OK	0
 #define VTBLK_S_IOERR	1
 #define	VTBLK_S_UNSUPP	2
 
-#define	VTBLK_BLK_ID_BYTES	20
+#define	VTBLK_BLK_ID_BYTES	20 + 1
 
 /* Capability bits */
 #define	VTBLK_F_SEG_MAX		(1 << 2)	/* Maximum request segments */
@@ -109,9 +112,9 @@ struct virtio_blk_hdr {
 #define	VBH_OP_WRITE		1
 #define	VBH_OP_FLUSH		4
 #define	VBH_OP_FLUSH_OUT	5
-#define	VBH_OP_IDENT		8		
+#define	VBH_OP_IDENT		8
 #define	VBH_FLAG_BARRIER	0x80000000	/* OR'ed into vbh_type */
-	uint32_t       	vbh_type;
+	uint32_t	vbh_type;
 	uint32_t	vbh_ioprio;
 	uint64_t	vbh_sector;
 } __packed;
@@ -125,8 +128,8 @@ static int pci_vtblk_debug;
 
 struct pci_vtblk_ioreq {
 	struct blockif_req		io_req;
-	struct pci_vtblk_softc	       *io_sc;
-	uint8_t			       *io_status;
+	struct pci_vtblk_softc		*io_sc;
+	uint8_t				*io_status;
 	uint16_t			io_idx;
 };
 
@@ -151,7 +154,7 @@ static int pci_vtblk_cfgwrite(void *, int, int, uint32_t);
 static struct virtio_consts vtblk_vi_consts = {
 	"vtblk",		/* our name */
 	1,			/* we support 1 virtqueue */
-	sizeof(struct vtblk_config), /* config reg size */
+	sizeof(struct vtblk_config),	/* config reg size */
 	pci_vtblk_reset,	/* reset */
 	pci_vtblk_notify,	/* device-wide qnotify */
 	pci_vtblk_cfgread,	/* read PCI config */
@@ -249,7 +252,7 @@ pci_vtblk_proc(struct pci_vtblk_softc *sc, struct vqueue_info *vq)
 	}
 	io->io_req.br_resid = iolen;
 
-	DPRINTF(("virtio-block: %s op, %zd bytes, %d segs, offset %ld\n\r", 
+	DPRINTF(("virtio-block: %s op, %zd bytes, %d segs, offset %ld\n\r",
 		 writeop ? "write" : "read/ident", iolen, i - 1,
 		 io->io_req.br_offset));
 
@@ -309,7 +312,7 @@ pci_vtblk_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 	 */
 	snprintf(bident, sizeof(bident), "%d:%d", pi->pi_slot, pi->pi_func);
 	bctxt = blockif_open(opts, bident);
-	if (bctxt == NULL) {       	
+	if (bctxt == NULL) {
 		perror("Could not open backing file");
 		return (1);
 	}
@@ -343,14 +346,23 @@ pci_vtblk_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 	 */
 	MD5Init(&mdctx);
 	MD5Update(&mdctx, opts, strlen(opts));
-	MD5Final(digest, &mdctx);	
-	sprintf(sc->vbsc_ident, "BHYVE-%02X%02X-%02X%02X-%02X%02X",
+	MD5Final(digest, &mdctx);
+	snprintf(sc->vbsc_ident, VTBLK_BLK_ID_BYTES,
+	    "BHYVE-%02X%02X-%02X%02X-%02X%02X",
 	    digest[0], digest[1], digest[2], digest[3], digest[4], digest[5]);
 
 	/* setup virtio block config space */
 	sc->vbsc_cfg.vbc_capacity = size / DEV_BSIZE; /* 512-byte units */
 	sc->vbsc_cfg.vbc_size_max = 0;	/* not negotiated */
-	sc->vbsc_cfg.vbc_seg_max = BLOCKIF_IOV_MAX;
+
+	/*
+	 * If Linux is presented with a seg_max greater than the virtio queue
+	 * size, it can stumble into situations where it violates its own
+	 * invariants and panics.  For safety, we keep seg_max clamped, paying
+	 * heed to the two extra descriptors needed for the header and status
+	 * of a request.
+	 */
+	sc->vbsc_cfg.vbc_seg_max = MIN(VTBLK_RINGSZ - 2, BLOCKIF_IOV_MAX);
 	sc->vbsc_cfg.vbc_geometry.cylinders = 0;	/* no geometry */
 	sc->vbsc_cfg.vbc_geometry.heads = 0;
 	sc->vbsc_cfg.vbc_geometry.sectors = 0;

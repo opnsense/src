@@ -1,4 +1,5 @@
 .\"
+.\" Copyright (c) 2018-2019 Alexander Motin <mav@FreeBSD.org>
 .\" Copyright (c) 2012 Intel Corporation
 .\" All rights reserved.
 .\"
@@ -33,7 +34,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd February 24, 2017
+.Dd August 5, 2019
 .Dt NVMECONTROL 8
 .Os
 .Sh NAME
@@ -47,6 +48,7 @@
 .Op Fl v
 .Op Fl x
 .Aq device id
+.Aq namespace id
 .Nm
 .Ic perftest
 .Aq Fl n Ar num_threads
@@ -64,13 +66,112 @@
 .Op Fl x
 .Op Fl v Ar vendor-string
 .Op Fl b
+.Op Fl f Ar LSP
+.Op Fl i Ar LSI
+.Op Fl r
 .Aq device id
+.Aq namespace id
+.Nm
+.Ic ns active
+.Aq device id
+.Nm
+.Ic ns allocated
+.Aq device id
+.Nm
+.Ic ns attach
+.Aq Fl n Ar nsid
+.Aq Fl c Ar cntid
+.Aq device id
+.Nm
+.Ic ns attached
+.Aq Fl n Ar nsid
+.Aq device id
+.Nm
+.Ic ns controllers
+.Aq device id
+.Nm
+.Ic ns create
+.Aq Fl s Ar nsze
+.Op Fl c Ar ncap
+.Op Fl f Ar lbaf
+.Op Fl m Ar mset
+.Op Fl n Ar nmic
+.Op Fl p Ar pi
+.Op Fl l Ar pil
+.Op Fl L Ar flbas
+.Op Fl d Ar dps
+.Aq device id
+.Nm
+.Ic ns delete
+.Aq Fl n Ar nsid
+.Aq device id
+.Nm
+.Ic ns detach
+.Aq Fl n Ar nsid
+.Aq Fl c Ar cntid
+.Aq device id
+.Nm
+.Ic ns identify
+.Op Fl v
+.Op Fl x
+.Aq Fl n Ar nsid
+.Aq device id
+.Nm
+.Ic nsid
+.Aq device id
+.Aq namespace id
+.Nm
+.Ic resv acquire
+.Aq Fl c Ar crkey
+.Op Fl p Ar prkey
+.Aq Fl t Ar rtype
+.Aq Fl a Ar racqa
+.Aq namespace id
+.Nm
+.Ic resv register
+.Op Fl c Ar crkey
+.Aq Fl k Ar nrkey
+.Aq Fl r Ar rrega
+.Op Fl i Ar iekey
+.Op Fl p Ar cptpl
+.Aq namespace id
+.Nm
+.Ic resv release
+.Aq Fl c Ar crkey
+.Aq Fl t Ar rtype
+.Aq Fl a Ar rrela
+.Aq namespace id
+.Nm
+.Ic resv report
+.Op Fl e
+.Op Fl v
+.Op Fl x
 .Aq namespace id
 .Nm
 .Ic firmware
 .Op Fl s Ar slot
 .Op Fl f Ar path_to_firmware
 .Op Fl a
+.Aq device id
+.Nm
+.Ic format
+.Op Fl f Ar fmt
+.Op Fl m Ar mset
+.Op Fl o Ar pi
+.Op Fl l Ar pil
+.Op Fl E
+.Op Fl C
+.Aq device id
+.Aq namespace id
+.Nm
+.Ic sanitize
+.Aq Fl a Ar sanact
+.Op Fl c Ar owpass
+.Op Fl d
+.Op Fl p Ar ovrpat
+.Op Fl r
+.Op Fl I
+.Op Fl U
 .Aq device id
 .Nm
 .Ic power
@@ -102,21 +203,223 @@ high-speed storage devices over PCI Express.
 .Ss logpage
 The logpage command knows how to print log pages of various types.
 It also knows about vendor specific log pages from hgst/wdc and intel.
-Page 0xc1 for hgst/wdc contains the advanced smart information about
-the drive.
-Page 0xc1 is read latency stats for intel.
-Page 0xc2 is write latency stats for intel.
-Page 0xc5 is temperature stats for intel.
-Page 0xca is advanced smart information for intel.
+Note that some vendors use the same log page numbers for different data.
+.Pp
+.Bl -tag -compact -width "Page 0x00"
+.It Dv Page 0x01
+Drive Error Log
+.It Dv Page 0x02
+Health/SMART Data
+.It Dv Page 0x03
+Firmware Information
+.It Dv Page 0x04
+Changed Namespace List
+.It Dv Page 0x05
+Commands Supported and Effects
+.It Dv Page 0x80
+Reservation Notification
+.It Dv Page 0x81
+Sanitize Status
+.It Dv Page 0xc1
+Advanced SMART information (WDC/HGST)
+.It Dv Page 0xc1
+Read latency stats (Intel)
+.It Dv Page 0xc2
+Wite latency stats (Intel)
+.It Dv Page 0xc5
+Temperature stats (Intel)
+.It Dv Page 0xca
+Advanced SMART information (Intel)
+.El
 .Pp
 Specifying
-.Fl p
+.Fl v
 .Ic help
 will list all valid vendors and pages.
 .Fl x
 will print the page as hex.
 .Fl b
 will print the binary data for the page.
+.Fl s
+will set Log Specific Field.
+.Fl i
+will set Log Specific Identifier.
+.Fl r
+will set Retain Asynchronous Event.
+.Ss ns
+Various namespace management commands.
+If namespace management is supported by device, allow list, create and delete
+namespaces, list, attach and detach controllers to namespaces.
+.Ss resv acquire
+Acquire or preempt namespace reservation, using specified parameters:
+.Bl -tag -width 6n
+.It Fl a
+Acquire action:
+.Bl -tag -compact -width 6n
+.It Dv 0
+Acquire
+.It Dv 1
+Preempt
+.It Dv 2
+Preempt and abort
+.El
+.It Fl c
+Current reservation key.
+.It Fl p
+Preempt reservation key.
+.It Fl t
+Reservation type:
+.Bl -tag -compact -width 6n
+.It Dv 1
+Write Exclusive
+.It Dv 2
+Exclusive Access
+.It Dv 3
+Write Exclusive - Registrants Only
+.It Dv 4
+Exclusive Access - Registrants Only
+.It Dv 5
+Write Exclusive - All Registrants
+.It Dv 6
+Exclusive Access - All Registrants
+.El
+.El
+.Ss resv register
+Register, unregister or replace reservation key, using specified parameters:
+.Bl -tag -width 6n
+.It Fl c
+Current reservation key.
+.It Fl k
+New reservation key.
+.It Fl r
+Register action:
+.Bl -tag -compact -width 6n
+.It Dv 0
+Register
+.It Dv 1
+Unregister
+.It Dv 2
+Replace
+.El
+.It Fl i
+Ignore Existing Key
+.It Fl p
+Change Persist Through Power Loss State:
+.Bl -tag -compact -width 6n
+.It Dv 0
+No change to PTPL state
+.It Dv 2
+Set PTPL state to ‘0’.
+Reservations are released and registrants are cleared on a power on.
+.It Dv 3
+Set PTPL state to ‘1’.
+Reservations and registrants persist across a power loss.
+.El
+.El
+.Ss resv release
+Release or clear reservation, using specified parameters:
+.Bl -tag -width 6n
+.It Fl c
+Current reservation key.
+.It Fl t
+Reservation type.
+.It Fl a
+Release action:
+.Bl -tag -compact -width 6n
+.It Dv 0
+Release
+.It Dv 1
+Clean
+.El
+.El
+.Ss resv report
+Print reservation status, using specified parameters:
+.Bl -tag -width 6n
+.It Fl x
+Print reservation status in hex.
+.It Fl e
+Use Extended Data Structure.
+.El
+.Ss format
+Format either specified namespace, or all namespaces of specified controller,
+using specified parameters:
+.Ar fmt
+LBA Format,
+.Ar mset
+Metadata Settings,
+.Ar pi
+Protection Information,
+.Ar pil
+Protection Information Location.
+When formatting specific namespace, existing values are used as defaults.
+When formatting all namespaces, all parameters should be specified.
+Some controllers may not support formatting or erasing specific or all
+namespaces.
+Option
+.Fl E
+enables User Data Erase during format.
+Option
+.Fl C
+enables Cryptographic Erase during format.
+.Ss sanitize
+Sanitize NVM subsystem of specified controller,
+using specified parameters:
+.Bl -tag -width 6n
+.It Fl a Ar operation
+Specify the sanitize operation to perform.
+.Bl -tag -width 16n
+.It overwrite
+Perform an overwrite operation by writing a user supplied
+data pattern to the device one or more times.
+The pattern is given by the
+.Fl p
+argument.
+The number of times is given by the
+.Fl c
+argument.
+.It block
+Perform a block erase operation.
+All the device's blocks are set to a vendor defined
+value, typically zero.
+.It crypto
+Perform a cryptographic erase operation.
+The encryption keys are changed to prevent the decryption
+of the data.
+.It exitfailure
+Exits a previously failed sanitize operation.
+A failed sanitize operation can only be exited if it was
+run in the unrestricted completion mode, as provided by the
+.Fl U
+argument.
+.El
+.It Fl c Ar passes
+The number of passes when performing an
+.Sq overwrite
+operation.
+Valid values are between 1 and 16.
+The default is 1.
+.It Fl d
+No Deallocate After Sanitize.
+.It Fl I
+When performing an
+.Sq overwrite
+operation, the pattern is inverted between consecutive passes.
+.It Fl p Ar pattern
+32 bits of pattern to use when performing an
+.Sq overwrite
+operation.
+The pattern is repeated as needed to fill each block.
+.It Fl U
+Perform the sanitize in the unrestricted completion mode.
+If the operation fails, it can later be exited with the
+.Sq exitfailure
+operation.
+.It Fl r
+Run in
+.Dq report only
+mode.
+This will report status on a sanitize that is already running on the drive.
+.El
 .Ss wdc
 The various wdc command retrieve log data from the wdc/hgst drives.
 The
@@ -143,9 +446,9 @@ Display an hexadecimal dump of the nvme0 IDENTIFY_NAMESPACE data for namespace
 .Pp
 .Dl nvmecontrol perftest -n 32 -o read -s 512 -t 30 nvme0ns1
 .Pp
-Run a performance test on nvme0ns1 using 32 kernel threads for 30 seconds.  Each
-thread will issue a single 512 byte read command.  Results are printed to
-stdout when 30 seconds expires.
+Run a performance test on nvme0ns1 using 32 kernel threads for 30 seconds.
+Each thread will issue a single 512 byte read command.
+Results are printed to stdout when 30 seconds expires.
 .Pp
 .Dl nvmecontrol reset nvme0
 .Pp
@@ -197,6 +500,24 @@ Set the current power mode.
 .Dl nvmecontrol power nvme0
 .Pp
 Get the current power mode.
+.Sh DYNAMIC LOADING
+The directories
+.Pa /lib/nvmecontrol
+and
+.Pa /usr/local/lib/nvmecontrol
+are scanned for any .so files.
+These files are loaded.
+The members of the
+.Va top
+linker set are added to the top-level commands.
+The members of the
+.Va logpage
+linker set are added to the logpage parsers.
+.Sh HISTORY
+The
+.Nm
+utility appeared in
+.Fx 9.2 .
 .Sh AUTHORS
 .An -nosplit
 .Nm

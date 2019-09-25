@@ -40,6 +40,9 @@ __FBSDID("$FreeBSD$");
 #include <netinet/tcp.h>
 #include <sys/uio.h>
 
+#ifndef WITHOUT_CAPSICUM
+#include <capsicum_helpers.h>
+#endif
 #include <err.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -139,8 +142,8 @@ init_dbgport(int sport)
 	conn_fd = -1;
 
 	if ((listen_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-		perror("socket");
-		exit(1);
+		perror("cannot create socket");
+		exit(4);
 	}
 
 	sin.sin_len = sizeof(sin);
@@ -151,23 +154,23 @@ init_dbgport(int sport)
 	reuse = 1;
 	if (setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &reuse,
 	    sizeof(reuse)) < 0) {
-		perror("setsockopt");
-		exit(1);
+		perror("cannot set socket options");
+		exit(4);
 	}
 
 	if (bind(listen_fd, (struct sockaddr *)&sin, sizeof(sin)) < 0) {
-		perror("bind");
-		exit(1);
+		perror("cannot bind socket");
+		exit(4);
 	}
 
 	if (listen(listen_fd, 1) < 0) {
-		perror("listen");
-		exit(1);
+		perror("cannot listen socket");
+		exit(4);
 	}
 
 #ifndef WITHOUT_CAPSICUM
 	cap_rights_init(&rights, CAP_ACCEPT, CAP_READ, CAP_WRITE);
-	if (cap_rights_limit(listen_fd, &rights) == -1 && errno != ENOSYS)
+	if (caph_rights_limit(listen_fd, &rights) == -1)
 		errx(EX_OSERR, "Unable to apply rights for sandbox");
 #endif
 

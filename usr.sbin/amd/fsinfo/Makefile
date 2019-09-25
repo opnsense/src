@@ -5,7 +5,7 @@
 #
 # $FreeBSD$
 
-.PATH: ${.CURDIR}/../../../contrib/amd/fsinfo
+.PATH:	${SRCTOP}/contrib/amd/fsinfo
 
 PROG=	fsinfo
 MAN=	fsinfo.8

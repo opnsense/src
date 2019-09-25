@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -13,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -520,7 +522,7 @@ struct nfs_vattr {
 struct nfsvattr {
 	struct vattr	na_vattr;
 	nfsattrbit_t	na_suppattr;
-	u_int32_t	na_mntonfileno;
+	u_int64_t	na_mntonfileno;
 	u_int64_t	na_filesid[2];
 };
 
@@ -588,6 +590,7 @@ struct nfst_rec {
 #define	NFSNST_NEWSTATE	0x1
 #define	NFSNST_REVOKE		0x2
 #define	NFSNST_GOTSTATE		0x4
+#define	NFSNST_RECLAIMED	0x8
 
 /*
  * This structure is linked onto nfsrv_stablefirst for the duration of
@@ -626,18 +629,7 @@ void nfsrvd_rcv(struct socket *, void *, int);
  * mbufs any more.)
  */
 #define	NFSSOCKADDR(a, t)	((t)(a))
-#define	NFSSOCKADDRALLOC(a) 					\
-    do {							\
-	MALLOC((a), struct sockaddr *, sizeof (struct sockaddr), \
-	    M_SONAME, M_WAITOK); 				\
-	NFSBZERO((a), sizeof (struct sockaddr)); 		\
-    } while (0)
 #define	NFSSOCKADDRSIZE(a, s)		((a)->sa_len = (s))
-#define	NFSSOCKADDRFREE(a) 					\
-	do { 							\
-		if (a) 						\
-			FREE((caddr_t)(a), M_SONAME); 		\
-	} while (0)
 
 /*
  * These should be defined as a process or thread structure, as required
@@ -709,6 +701,18 @@ void nfsrvd_rcv(struct socket *, void *, int);
 #define	NFSSESSIONMUTEXPTR(s)	(&((s)->mtx))
 #define	NFSLOCKSESSION(s)	mtx_lock(&((s)->mtx))
 #define	NFSUNLOCKSESSION(s)	mtx_unlock(&((s)->mtx))
+#define	NFSLAYOUTMUTEXPTR(l)	(&((l)->mtx))
+#define	NFSLOCKLAYOUT(l)	mtx_lock(&((l)->mtx))
+#define	NFSUNLOCKLAYOUT(l)	mtx_unlock(&((l)->mtx))
+#define	NFSDDSMUTEXPTR		(&nfsrv_dslock_mtx)
+#define	NFSDDSLOCK()		mtx_lock(&nfsrv_dslock_mtx)
+#define	NFSDDSUNLOCK()		mtx_unlock(&nfsrv_dslock_mtx)
+#define	NFSDDONTLISTMUTEXPTR	(&nfsrv_dontlistlock_mtx)
+#define	NFSDDONTLISTLOCK()	mtx_lock(&nfsrv_dontlistlock_mtx)
+#define	NFSDDONTLISTUNLOCK()	mtx_unlock(&nfsrv_dontlistlock_mtx)
+#define	NFSDRECALLMUTEXPTR	(&nfsrv_recalllock_mtx)
+#define	NFSDRECALLLOCK()	mtx_lock(&nfsrv_recalllock_mtx)
+#define	NFSDRECALLUNLOCK()	mtx_unlock(&nfsrv_recalllock_mtx)
 
 /*
  * Use these macros to initialize/free a mutex.
@@ -730,12 +734,6 @@ int nfsmsleep(void *, void *, int, const char *, struct timespec *);
 #define	NFSMAKEDEV(m, n)	makedev((m), (n))
 #define	NFSMAJOR(d)		major(d)
 #define	NFSMINOR(d)		minor(d)
-
-/*
- * Define this to be the macro that returns the minimum size required
- * for a directory entry.
- */
-#define	DIRENT_SIZE(dp)		GENERIC_DIRSIZ(dp)
 
 /*
  * The vnode tag for nfsv4root.
@@ -902,6 +900,7 @@ int newnfs_realign(struct mbuf **, int);
 #define	NFSSTA_HASWRITEVERF	0x00040000  /* Has write verifier */
 #define	NFSSTA_GOTFSINFO	0x00100000  /* Got the fsinfo */
 #define	NFSSTA_OPENMODE		0x00200000  /* Must use correct open mode */
+#define	NFSSTA_FLEXFILE		0x00800000  /* Use Flex File Layout */
 #define	NFSSTA_NOLAYOUTCOMMIT	0x04000000  /* Don't do LayoutCommit */
 #define	NFSSTA_SESSPERSIST	0x08000000  /* Has a persistent session */
 #define	NFSSTA_TIMEO		0x10000000  /* Experiencing a timeout */
@@ -932,6 +931,7 @@ int newnfs_realign(struct mbuf **, int);
 #define	NFSHASNOLAYOUTCOMMIT(n)	((n)->nm_state & NFSSTA_NOLAYOUTCOMMIT)
 #define	NFSHASSESSPERSIST(n)	((n)->nm_state & NFSSTA_SESSPERSIST)
 #define	NFSHASPNFS(n)		((n)->nm_state & NFSSTA_PNFS)
+#define	NFSHASFLEXFILE(n)	((n)->nm_state & NFSSTA_FLEXFILE)
 #define	NFSHASOPENMODE(n)	((n)->nm_state & NFSSTA_OPENMODE)
 #define	NFSHASONEOPENOWN(n)	(((n)->nm_flag & NFSMNT_ONEOPENOWN) != 0 &&	\
 				    (n)->nm_minorvers > 0)
@@ -1044,6 +1044,36 @@ struct nfsreq {
  * used in both places that call getnewvnode().
  */
 extern const char nfs_vnode_tag[];
+
+/*
+ * Check for the errors that indicate a DS should be disabled.
+ * ENXIO indicates that the krpc cannot do an RPC on the DS.
+ * EIO is returned by the RPC as an indication of I/O problems on the
+ * server.
+ * Are there other fatal errors?
+ */
+#define	nfsds_failerr(e)	((e) == ENXIO || (e) == EIO)
+
+/*
+ * Get a pointer to the MDS session, which is always the first element
+ * in the list.
+ * This macro can only be safely used when the NFSLOCKMNT() lock is held.
+ * The inline function can be used when the lock isn't held.
+ */
+#define	NFSMNT_MDSSESSION(m)	(&(TAILQ_FIRST(&((m)->nm_sess))->nfsclds_sess))
+
+static __inline struct nfsclsession *
+nfsmnt_mdssession(struct nfsmount *nmp)
+{
+	struct nfsclsession *tsep;
+
+	tsep = NULL;
+	mtx_lock(&nmp->nm_mtx);
+	if (TAILQ_FIRST(&nmp->nm_sess) != NULL)
+		tsep = NFSMNT_MDSSESSION(nmp);
+	mtx_unlock(&nmp->nm_mtx);
+	return (tsep);
+}
 
 #endif	/* _KERNEL */
 

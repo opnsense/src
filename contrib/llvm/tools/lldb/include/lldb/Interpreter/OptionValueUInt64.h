@@ -11,10 +11,6 @@
 #ifndef liblldb_OptionValueUInt64_h_
 #define liblldb_OptionValueUInt64_h_
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
 #include "lldb/Interpreter/OptionValue.h"
 
 namespace lldb_private {
@@ -34,9 +30,9 @@ public:
 
   //---------------------------------------------------------------------
   // Decode a uint64_t from "value_cstr" return a OptionValueUInt64 object
-  // inside of a lldb::OptionValueSP object if all goes well. If the
-  // string isn't a uint64_t value or any other error occurs, return an
-  // empty lldb::OptionValueSP and fill error in with the correct stuff.
+  // inside of a lldb::OptionValueSP object if all goes well. If the string
+  // isn't a uint64_t value or any other error occurs, return an empty
+  // lldb::OptionValueSP and fill error in with the correct stuff.
   //---------------------------------------------------------------------
   static lldb::OptionValueSP Create(const char *, Status &) = delete;
   static lldb::OptionValueSP Create(llvm::StringRef value_str, Status &error);

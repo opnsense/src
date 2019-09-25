@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2001-2007, by Cisco Systems, Inc. All rights reserved.
  * Copyright (c) 2008-2012, by Randall Stewart. All rights reserved.
  * Copyright (c) 2008-2012, by Michael Tuexen. All rights reserved.
@@ -58,10 +60,10 @@ sctp_addr_mgmt_ep_sa(struct sctp_inpcb *, struct sockaddr *,
     uint32_t, uint32_t, struct sctp_ifa *);
 
 
-extern int 
+extern int
 sctp_asconf_iterator_ep(struct sctp_inpcb *inp, void *ptr,
     uint32_t val);
-extern void 
+extern void
 sctp_asconf_iterator_stcb(struct sctp_inpcb *inp,
     struct sctp_tcb *stcb,
     void *ptr, uint32_t type);

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2006 nCircle Network Security, Inc.
  * All rights reserved.
  *
@@ -144,7 +146,6 @@
  */
 #define	PRIV_KLD_LOAD		130	/* Load a kernel module. */
 #define	PRIV_KLD_UNLOAD		131	/* Unload a kernel module. */
-#define PRIV_KLD_STAT		132	/* Lookup a kernel module */
 
 /*
  * Privileges associated with the MAC Framework and specific MAC policy

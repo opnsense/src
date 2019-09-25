@@ -1,4 +1,4 @@
-//===-- hwasan_new_delete.cc ------------------------------------------------===//
+//===-- hwasan_new_delete.cc ----------------------------------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -15,6 +15,7 @@
 #include "hwasan.h"
 #include "interception/interception.h"
 #include "sanitizer_common/sanitizer_allocator.h"
+#include "sanitizer_common/sanitizer_allocator_report.h"
 
 #if HWASAN_REPLACE_OPERATORS_NEW_AND_DELETE
 
@@ -32,7 +33,7 @@ namespace std {
 #define OPERATOR_NEW_BODY(nothrow) \
   GET_MALLOC_STACK_TRACE; \
   void *res = hwasan_malloc(size, &stack);\
-  if (!nothrow && UNLIKELY(!res)) DieOnFailure::OnOOM();\
+  if (!nothrow && UNLIKELY(!res)) ReportOutOfMemory(size, &stack);\
   return res
 
 INTERCEPTOR_ATTRIBUTE
@@ -50,7 +51,7 @@ void *operator new[](size_t size, std::nothrow_t const&) {
 
 #define OPERATOR_DELETE_BODY \
   GET_MALLOC_STACK_TRACE; \
-  if (ptr) HwasanDeallocate(&stack, ptr)
+  if (ptr) hwasan_free(ptr, &stack)
 
 INTERCEPTOR_ATTRIBUTE
 void operator delete(void *ptr) NOEXCEPT { OPERATOR_DELETE_BODY; }

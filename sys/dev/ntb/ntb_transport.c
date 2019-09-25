@@ -81,7 +81,7 @@ SYSCTL_UINT(_hw_ntb_transport, OID_AUTO, debug_level, CTLFLAG_RWTUN,
 
 static unsigned transport_mtu = 0x10000;
 
-static uint64_t max_mw_size;
+static uint64_t max_mw_size = 256*1024*1024;
 SYSCTL_UQUAD(_hw_ntb_transport, OID_AUTO, max_mw_size, CTLFLAG_RDTUN, &max_mw_size, 0,
     "If enabled (non-zero), limit the size of large memory windows. "
     "Both sides of the NTB MUST set the same value here.");
@@ -177,15 +177,17 @@ struct ntb_transport_mw {
 	size_t		xlat_align;
 	size_t		xlat_align_size;
 	bus_addr_t	addr_limit;
-	/* Tx buff is off vbase / phys_addr */
+	/* Tx buff is vbase / phys_addr / tx_size */
 	caddr_t		vbase;
-	size_t		xlat_size;
-	size_t		buff_size;
-	/* Rx buff is off virt_addr / dma_addr */
+	size_t		tx_size;
+	/* Rx buff is virt_addr / dma_addr / rx_size */
 	bus_dma_tag_t	dma_tag;
 	bus_dmamap_t	dma_map;
 	caddr_t		virt_addr;
 	bus_addr_t	dma_addr;
+	size_t		rx_size;
+	/* rx_size increased to size alignment requirements of the hardware. */
+	size_t		buff_size;
 };
 
 struct ntb_transport_child {
@@ -332,7 +334,7 @@ ntb_transport_attach(device_t dev)
 	struct ntb_transport_child **cpp = &nt->child;
 	struct ntb_transport_child *nc;
 	struct ntb_transport_mw *mw;
-	uint64_t db_bitmap, size;
+	uint64_t db_bitmap;
 	int rc, i, db_count, spad_count, qp, qpu, qpo, qpt;
 	char cfg[128] = "";
 	char buf[32];
@@ -375,8 +377,16 @@ ntb_transport_attach(device_t dev)
 		if (rc != 0)
 			goto err;
 
+		mw->tx_size = mw->phys_size;
+		if (max_mw_size != 0 && mw->tx_size > max_mw_size) {
+			device_printf(dev, "Memory window %d limited from "
+			    "%ju to %ju\n", i, (uintmax_t)mw->phys_size,
+			    max_mw_size);
+			mw->tx_size = max_mw_size;
+		}
+
+		mw->rx_size = 0;
 		mw->buff_size = 0;
-		mw->xlat_size = 0;
 		mw->virt_addr = NULL;
 		mw->dma_addr = 0;
 
@@ -390,10 +400,7 @@ ntb_transport_attach(device_t dev)
 		 * that NTB windows are symmetric and this allocation remain,
 		 * but even if not, we will just reallocate it later.
 		 */
-		size = mw->phys_size;
-		if (max_mw_size != 0 && size > max_mw_size)
-			size = max_mw_size;
-		ntb_set_mw(nt, i, size);
+		ntb_set_mw(nt, i, mw->tx_size);
 	}
 
 	qpu = 0;
@@ -461,6 +468,13 @@ ntb_transport_attach(device_t dev)
 		goto err;
 
 	ntb_link_enable(dev, NTB_SPEED_AUTO, NTB_WIDTH_AUTO);
+
+	for (i = 0; i < nt->mw_count; i++) {
+		mw = &nt->mw_vec[i];
+		rc = ntb_mw_set_trans(nt->dev, i, mw->dma_addr, mw->buff_size);
+		if (rc != 0)
+			ntb_printf(0, "load time mw%d xlat fails, rc %d\n", i, rc);
+	}
 
 	if (enable_xeon_watchdog != 0)
 		callout_reset(&nt->link_watchdog, 0, xeon_link_watchdog_hb, nt);
@@ -551,7 +565,7 @@ ntb_transport_init_queue(struct ntb_transport_ctx *nt, unsigned int qp_num)
 	struct ntb_transport_mw *mw;
 	struct ntb_transport_qp *qp;
 	vm_paddr_t mw_base;
-	uint64_t mw_size, qp_offset;
+	uint64_t qp_offset;
 	size_t tx_size;
 	unsigned num_qps_mw, mw_num, mw_count;
 
@@ -573,9 +587,8 @@ ntb_transport_init_queue(struct ntb_transport_ctx *nt, unsigned int qp_num)
 		num_qps_mw = nt->qp_count / mw_count;
 
 	mw_base = mw->phys_addr;
-	mw_size = mw->phys_size;
 
-	tx_size = mw_size / num_qps_mw;
+	tx_size = mw->tx_size / num_qps_mw;
 	qp_offset = tx_size * (qp_num / mw_count);
 
 	qp->tx_mw = mw->vbase + qp_offset;
@@ -1088,6 +1101,7 @@ static void
 ntb_transport_link_work(void *arg)
 {
 	struct ntb_transport_ctx *nt = arg;
+	struct ntb_transport_mw *mw;
 	device_t dev = nt->dev;
 	struct ntb_transport_qp *qp;
 	uint64_t val64, size;
@@ -1097,11 +1111,7 @@ ntb_transport_link_work(void *arg)
 
 	/* send the local info, in the opposite order of the way we read it */
 	for (i = 0; i < nt->mw_count; i++) {
-		size = nt->mw_vec[i].phys_size;
-
-		if (max_mw_size != 0 && size > max_mw_size)
-			size = max_mw_size;
-
+		size = nt->mw_vec[i].tx_size;
 		ntb_peer_spad_write(dev, NTBT_MW0_SZ_HIGH + (i * 2),
 		    size >> 32);
 		ntb_peer_spad_write(dev, NTBT_MW0_SZ_LOW + (i * 2), size);
@@ -1132,9 +1142,27 @@ ntb_transport_link_work(void *arg)
 		ntb_spad_read(dev, NTBT_MW0_SZ_LOW + (i * 2), &val);
 		val64 |= val;
 
-		rc = ntb_set_mw(nt, i, val64);
-		if (rc != 0)
-			goto free_mws;
+		mw = &nt->mw_vec[i];
+		mw->rx_size = val64;
+		val64 = roundup(val64, mw->xlat_align_size);
+		if (mw->buff_size != val64) {
+
+			rc = ntb_set_mw(nt, i, val64);
+			if (rc != 0) {
+				ntb_printf(0, "link up set mw%d fails, rc %d\n",
+				    i, rc);
+				goto free_mws;
+			}
+
+			/* Notify HW the memory location of the receive buffer */
+			rc = ntb_mw_set_trans(nt->dev, i, mw->dma_addr,
+			    mw->buff_size);
+			if (rc != 0) {
+				ntb_printf(0, "link up mw%d xlat fails, rc %d\n",
+				     i, rc);
+				goto free_mws;
+			}
+		}
 	}
 
 	nt->link_is_up = true;
@@ -1179,42 +1207,37 @@ ntb_set_mw(struct ntb_transport_ctx *nt, int num_mw, size_t size)
 {
 	struct ntb_transport_mw *mw = &nt->mw_vec[num_mw];
 	struct ntb_load_cb_args cba;
-	size_t xlat_size, buff_size;
-	int rc;
+	size_t buff_size;
 
 	if (size == 0)
 		return (EINVAL);
 
-	xlat_size = roundup(size, mw->xlat_align_size);
-	buff_size = xlat_size;
+	buff_size = roundup(size, mw->xlat_align_size);
 
 	/* No need to re-setup */
-	if (mw->xlat_size == xlat_size)
+	if (mw->buff_size == buff_size)
 		return (0);
 
 	if (mw->buff_size != 0)
 		ntb_free_mw(nt, num_mw);
 
 	/* Alloc memory for receiving data.  Must be aligned */
-	mw->xlat_size = xlat_size;
 	mw->buff_size = buff_size;
 
 	if (bus_dma_tag_create(bus_get_dma_tag(nt->dev), mw->xlat_align, 0,
 	    mw->addr_limit, BUS_SPACE_MAXADDR,
 	    NULL, NULL, mw->buff_size, 1, mw->buff_size,
 	    0, NULL, NULL, &mw->dma_tag)) {
-		ntb_printf(0, "Unable to create MW tag of size %zu/%zu\n",
-		    mw->buff_size, mw->xlat_size);
-		mw->xlat_size = 0;
+		ntb_printf(0, "Unable to create MW tag of size %zu\n",
+		    mw->buff_size);
 		mw->buff_size = 0;
 		return (ENOMEM);
 	}
 	if (bus_dmamem_alloc(mw->dma_tag, (void **)&mw->virt_addr,
 	    BUS_DMA_WAITOK | BUS_DMA_ZERO, &mw->dma_map)) {
 		bus_dma_tag_destroy(mw->dma_tag);
-		ntb_printf(0, "Unable to allocate MW buffer of size %zu/%zu\n",
-		    mw->buff_size, mw->xlat_size);
-		mw->xlat_size = 0;
+		ntb_printf(0, "Unable to allocate MW buffer of size %zu\n",
+		    mw->buff_size);
 		mw->buff_size = 0;
 		return (ENOMEM);
 	}
@@ -1222,21 +1245,12 @@ ntb_set_mw(struct ntb_transport_ctx *nt, int num_mw, size_t size)
 	    mw->buff_size, ntb_load_cb, &cba, BUS_DMA_NOWAIT) || cba.error) {
 		bus_dmamem_free(mw->dma_tag, mw->virt_addr, mw->dma_map);
 		bus_dma_tag_destroy(mw->dma_tag);
-		ntb_printf(0, "Unable to load MW buffer of size %zu/%zu\n",
-		    mw->buff_size, mw->xlat_size);
-		mw->xlat_size = 0;
+		ntb_printf(0, "Unable to load MW buffer of size %zu\n",
+		    mw->buff_size);
 		mw->buff_size = 0;
 		return (ENOMEM);
 	}
 	mw->dma_addr = cba.addr;
-
-	/* Notify HW the memory location of the receive buffer */
-	rc = ntb_mw_set_trans(nt->dev, num_mw, mw->dma_addr, mw->xlat_size);
-	if (rc) {
-		ntb_printf(0, "Unable to set mw%d translation\n", num_mw);
-		ntb_free_mw(nt, num_mw);
-		return (rc);
-	}
 
 	return (0);
 }
@@ -1253,7 +1267,6 @@ ntb_free_mw(struct ntb_transport_ctx *nt, int num_mw)
 	bus_dmamap_unload(mw->dma_tag, mw->dma_map);
 	bus_dmamem_free(mw->dma_tag, mw->virt_addr, mw->dma_map);
 	bus_dma_tag_destroy(mw->dma_tag);
-	mw->xlat_size = 0;
 	mw->buff_size = 0;
 	mw->virt_addr = NULL;
 }
@@ -1280,7 +1293,7 @@ ntb_transport_setup_qp_mw(struct ntb_transport_ctx *nt, unsigned int qp_num)
 	else
 		num_qps_mw = nt->qp_count / mw_count;
 
-	rx_size = mw->xlat_size / num_qps_mw;
+	rx_size = mw->rx_size / num_qps_mw;
 	qp->rx_buff = mw->virt_addr + rx_size * (qp_num / mw_count);
 	rx_size -= sizeof(struct ntb_rx_info);
 

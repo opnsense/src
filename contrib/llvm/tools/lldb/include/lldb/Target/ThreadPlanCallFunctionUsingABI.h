@@ -11,10 +11,6 @@
 #ifndef liblldb_ThreadPlanCallFunctionUsingABI_h_
 #define liblldb_ThreadPlanCallFunctionUsingABI_h_
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
 #include "lldb/Target/ABI.h"
 #include "lldb/Target/Thread.h"
 #include "lldb/Target/ThreadPlanCallFunction.h"
@@ -27,11 +23,9 @@ namespace lldb_private {
 
 class ThreadPlanCallFunctionUsingABI : public ThreadPlanCallFunction {
   // Create a thread plan to call a function at the address passed in the
-  // "function"
-  // argument, this function is executed using register manipulation instead of
-  // JIT.
-  // Class derives from ThreadPlanCallFunction and differs by calling a
-  // alternative
+  // "function" argument, this function is executed using register manipulation
+  // instead of JIT. Class derives from ThreadPlanCallFunction and differs by
+  // calling a alternative
   // ABI interface ABI::PrepareTrivialCall() which provides more detailed
   // information.
 public:

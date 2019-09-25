@@ -1,6 +1,14 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2005 David Xu <davidxu@freebsd.org>
+ * Copyright (c) 2016-2017 Robert N. M. Watson
  * All rights reserved.
+ *
+ * Portions of this software were developed by BAE Systems, the University of
+ * Cambridge Computer Laboratory, and Memorial University under DARPA/AFRL
+ * contract FA8650-15-C-7558 ("CADETS"), as part of the DARPA Transparent
+ * Computing (TC) research program.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -46,7 +54,6 @@
 __FBSDID("$FreeBSD$");
 
 #include "opt_capsicum.h"
-#include "opt_compat.h"
 
 #include <sys/param.h>
 #include <sys/kernel.h>
@@ -85,6 +92,8 @@ __FBSDID("$FreeBSD$");
 #include <sys/user.h>
 #include <sys/vnode.h>
 #include <machine/atomic.h>
+
+#include <security/audit/audit.h>
 
 FEATURE(p1003_1b_mqueue, "POSIX P1003.1B message queues support");
 
@@ -384,7 +393,7 @@ mqnode_free(struct mqfs_node *node)
 static __inline void
 mqnode_addref(struct mqfs_node *node)
 {
-	atomic_fetchadd_int(&node->mn_refcount, 1);
+	atomic_add_int(&node->mn_refcount, 1);
 }
 
 static __inline void
@@ -1334,14 +1343,12 @@ mqfs_read(struct vop_read_args *ap)
 	char buf[80];
 	struct vnode *vp = ap->a_vp;
 	struct uio *uio = ap->a_uio;
-	struct mqfs_node *pn;
 	struct mqueue *mq;
 	int len, error;
 
 	if (vp->v_type != VREG)
 		return (EINVAL);
 
-	pn = VTON(vp);
 	mq = VTOMQ(vp);
 	snprintf(buf, sizeof(buf),
 		"QSIZE:%-10ld MAXMSG:%-10ld CURMSG:%-10ld MSGSIZE:%-10ld\n",
@@ -1421,7 +1428,6 @@ mqfs_readdir(struct vop_readdir_args *ap)
 		entry.d_fileno = pn->mn_fileno;
 		for (i = 0; i < MQFS_NAMELEN - 1 && pn->mn_name[i] != '\0'; ++i)
 			entry.d_name[i] = pn->mn_name[i];
-		entry.d_name[i] = 0;
 		entry.d_namlen = i;
 		switch (pn->mn_type) {
 		case mqfstype_root:
@@ -1440,6 +1446,7 @@ mqfs_readdir(struct vop_readdir_args *ap)
 			panic("%s has unexpected node type: %d", pn->mn_name,
 				pn->mn_type);
 		}
+		dirent_terminate(&entry);
 		if (entry.d_reclen > uio->uio_resid)
                         break;
 		if (offset >= uio->uio_offset) {
@@ -1728,9 +1735,8 @@ mqueue_send(struct mqueue *mq, const char *msg_ptr,
 		goto bad;
 	}
 	for (;;) {
-		ts2 = *abs_timeout;
 		getnanotime(&ts);
-		timespecsub(&ts2, &ts);
+		timespecsub(abs_timeout, &ts, &ts2);
 		if (ts2.tv_sec < 0 || (ts2.tv_sec == 0 && ts2.tv_nsec <= 0)) {
 			error = ETIMEDOUT;
 			break;
@@ -1880,9 +1886,8 @@ mqueue_receive(struct mqueue *mq, char *msg_ptr,
 	}
 
 	for (;;) {
-		ts2 = *abs_timeout;
 		getnanotime(&ts);
-		timespecsub(&ts2, &ts);
+		timespecsub(abs_timeout, &ts, &ts2);
 		if (ts2.tv_sec < 0 || (ts2.tv_sec == 0 && ts2.tv_nsec <= 0)) {
 			error = ETIMEDOUT;
 			return (error);
@@ -2012,6 +2017,9 @@ kern_kmq_open(struct thread *td, const char *upath, int flags, mode_t mode,
 	struct mqueue *mq;
 	int fd, error, len, cmode;
 
+	AUDIT_ARG_FFLAGS(flags);
+	AUDIT_ARG_MODE(mode);
+
 	fdp = td->td_proc->p_fd;
 	cmode = (((mode & ~fdp->fd_cmask) & ALLPERMS) & ~S_ISTXT);
 	mq = NULL;
@@ -2034,6 +2042,7 @@ kern_kmq_open(struct thread *td, const char *upath, int flags, mode_t mode,
 	len = strlen(path);
 	if (len < 2 || path[0] != '/' || strchr(path + 1, '/') != NULL)
 		return (EINVAL);
+	AUDIT_ARG_UPATH1_CANON(path);
 
 	error = falloc(td, &fp, &fd, O_CLOEXEC);
 	if (error)
@@ -2133,6 +2142,7 @@ sys_kmq_unlink(struct thread *td, struct kmq_unlink_args *uap)
 	len = strlen(path);
 	if (len < 2 || path[0] != '/' || strchr(path + 1, '/') != NULL)
 		return (EINVAL);
+	AUDIT_ARG_UPATH1_CANON(path);
 
 	sx_xlock(&mqfs_data.mi_lock);
 	pn = mqfs_search(mqfs_data.mi_root, path + 1, len - 1, td->td_ucred);
@@ -2175,9 +2185,8 @@ static __inline int
 getmq(struct thread *td, int fd, struct file **fpp, struct mqfs_node **ppn,
 	struct mqueue **pmq)
 {
-	cap_rights_t rights;
 
-	return _getmq(td, fd, cap_rights_init(&rights, CAP_EVENT), fget,
+	return _getmq(td, fd, &cap_event_rights, fget,
 	    fpp, ppn, pmq);
 }
 
@@ -2185,9 +2194,8 @@ static __inline int
 getmq_read(struct thread *td, int fd, struct file **fpp,
 	 struct mqfs_node **ppn, struct mqueue **pmq)
 {
-	cap_rights_t rights;
 
-	return _getmq(td, fd, cap_rights_init(&rights, CAP_READ), fget_read,
+	return _getmq(td, fd, &cap_read_rights, fget_read,
 	    fpp, ppn, pmq);
 }
 
@@ -2195,9 +2203,8 @@ static __inline int
 getmq_write(struct thread *td, int fd, struct file **fpp,
 	struct mqfs_node **ppn, struct mqueue **pmq)
 {
-	cap_rights_t rights;
 
-	return _getmq(td, fd, cap_rights_init(&rights, CAP_WRITE), fget_write,
+	return _getmq(td, fd, &cap_write_rights, fget_write,
 	    fpp, ppn, pmq);
 }
 
@@ -2210,6 +2217,7 @@ kern_kmq_setattr(struct thread *td, int mqd, const struct mq_attr *attr,
 	u_int oflag, flag;
 	int error;
 
+	AUDIT_ARG_FD(mqd);
 	if (attr != NULL && (attr->mq_flags & ~O_NONBLOCK) != 0)
 		return (EINVAL);
 	error = getmq(td, mqd, &fp, NULL, &mq);
@@ -2260,6 +2268,7 @@ sys_kmq_timedreceive(struct thread *td, struct kmq_timedreceive_args *uap)
 	int error;
 	int waitok;
 
+	AUDIT_ARG_FD(uap->mqd);
 	error = getmq_read(td, uap->mqd, &fp, NULL, &mq);
 	if (error)
 		return (error);
@@ -2286,6 +2295,7 @@ sys_kmq_timedsend(struct thread *td, struct kmq_timedsend_args *uap)
 	struct timespec *abs_timeout, ets;
 	int error, waitok;
 
+	AUDIT_ARG_FD(uap->mqd);
 	error = getmq_write(td, uap->mqd, &fp, NULL, &mq);
 	if (error)
 		return (error);
@@ -2307,9 +2317,6 @@ out:
 static int
 kern_kmq_notify(struct thread *td, int mqd, struct sigevent *sigev)
 {
-#ifdef CAPABILITIES
-	cap_rights_t rights;
-#endif
 	struct filedesc *fdp;
 	struct proc *p;
 	struct mqueue *mq;
@@ -2317,6 +2324,7 @@ kern_kmq_notify(struct thread *td, int mqd, struct sigevent *sigev)
 	struct mqueue_notifier *nt, *newnt = NULL;
 	int error;
 
+	AUDIT_ARG_FD(mqd);
 	if (sigev != NULL) {
 		if (sigev->sigev_notify != SIGEV_SIGNAL &&
 		    sigev->sigev_notify != SIGEV_THREAD_ID &&
@@ -2341,8 +2349,7 @@ again:
 		goto out;
 	}
 #ifdef CAPABILITIES
-	error = cap_check(cap_rights(fdp, mqd),
-	    cap_rights_init(&rights, CAP_EVENT));
+	error = cap_check(cap_rights(fdp, mqd), &cap_event_rights);
 	if (error) {
 		FILEDESC_SUNLOCK(fdp);
 		goto out;
@@ -2430,11 +2437,13 @@ sys_kmq_notify(struct thread *td, struct kmq_notify_args *uap)
 static void
 mqueue_fdclose(struct thread *td, int fd, struct file *fp)
 {
-	struct filedesc *fdp;
 	struct mqueue *mq;
+#ifdef INVARIANTS
+	struct filedesc *fdp;
  
 	fdp = td->td_proc->p_fd;
 	FILEDESC_LOCK_ASSERT(fdp);
+#endif
 
 	if (fp->f_ops == &mqueueops) {
 		mq = FPTOMQ(fp);
@@ -2782,6 +2791,7 @@ freebsd32_kmq_timedsend(struct thread *td,
 	int error;
 	int waitok;
 
+	AUDIT_ARG_FD(uap->mqd);
 	error = getmq_write(td, uap->mqd, &fp, NULL, &mq);
 	if (error)
 		return (error);
@@ -2812,6 +2822,7 @@ freebsd32_kmq_timedreceive(struct thread *td,
 	struct timespec *abs_timeout, ets;
 	int error, waitok;
 
+	AUDIT_ARG_FD(uap->mqd);
 	error = getmq_read(td, uap->mqd, &fp, NULL, &mq);
 	if (error)
 		return (error);

@@ -55,7 +55,7 @@ struct trapframe {
 	uint64_t tf_a[8];
 	uint64_t tf_sepc;
 	uint64_t tf_sstatus;
-	uint64_t tf_sbadaddr;
+	uint64_t tf_stval;
 	uint64_t tf_scause;
 };
 
@@ -73,5 +73,8 @@ struct sigframe {
 };
 
 #endif /* !LOCORE */
+
+/* Definitions for syscalls */
+#define	NARGREG		8				/* 8 args in regs */
 
 #endif /* !_MACHINE_FRAME_H_ */

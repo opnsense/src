@@ -36,14 +36,13 @@
 __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
-#define _WANT_MSG_PROTOTYPES
-#define _WANT_SEM_PROTOTYPES
-#define _WANT_SHM_PROTOTYPES
-#define _KERNEL
-#include <sys/sem.h>
-#include <sys/shm.h>
+#define	_WANT_SYSVMSG_INTERNALS
 #include <sys/msg.h>
-#undef _KERNEL
+#define	_WANT_SYSVSEM_INTERNALS
+#define	_WANT_SEMUN
+#include <sys/sem.h>
+#define	_WANT_SYSVSHM_INTERNALS
+#include <sys/shm.h>
 
 #include <ctype.h>
 #include <err.h>

@@ -228,8 +228,6 @@ static const struct {
 	RT5392_DEF_RF
 };
 
-static const uint8_t rt2860_chan_2ghz[] =
-	{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14 };
 static const uint8_t rt2860_chan_5ghz[] =
 	{ 36, 38, 40, 44, 46, 48, 52, 54, 56, 60, 62, 64, 100, 102, 104,
 	  108, 110, 112, 116, 118, 120, 124, 126, 128, 132, 134, 136, 140,
@@ -1083,20 +1081,23 @@ rt2860_intr_coherent(struct rt2860_softc *sc)
 static void
 rt2860_drain_stats_fifo(struct rt2860_softc *sc)
 {
+	struct ieee80211_ratectl_tx_status *txs = &sc->sc_txs;
 	struct ieee80211_node *ni;
 	uint32_t stat;
-	int retrycnt;
 	uint8_t wcid, mcs, pid;
 
 	/* drain Tx status FIFO (maxsize = 16) */
+	txs->flags = IEEE80211_RATECTL_STATUS_LONG_RETRY;
 	while ((stat = RAL_READ(sc, RT2860_TX_STAT_FIFO)) & RT2860_TXQ_VLD) {
 		DPRINTFN(4, ("tx stat 0x%08x\n", stat));
 
 		wcid = (stat >> RT2860_TXQ_WCID_SHIFT) & 0xff;
+		if (wcid > RT2860_WCID_MAX)
+			continue;
 		ni = sc->wcid2ni[wcid];
 
 		/* if no ACK was requested, no feedback is available */
-		if (!(stat & RT2860_TXQ_ACKREQ) || wcid == 0xff || ni == NULL)
+		if (!(stat & RT2860_TXQ_ACKREQ) || ni == NULL)
 			continue;
 
 		/* update per-STA AMRR stats */
@@ -1110,14 +1111,15 @@ rt2860_drain_stats_fifo(struct rt2860_softc *sc)
 			mcs = (stat >> RT2860_TXQ_MCS_SHIFT) & 0x7f;
 			pid = (stat >> RT2860_TXQ_PID_SHIFT) & 0xf;
 			if (mcs + 1 != pid)
-				retrycnt = 1;
+				txs->long_retries = 1;
 			else
-				retrycnt = 0;
-			ieee80211_ratectl_tx_complete(ni->ni_vap, ni,
-			    IEEE80211_RATECTL_TX_SUCCESS, &retrycnt, NULL);
+				txs->long_retries = 0;
+			txs->status = IEEE80211_RATECTL_TX_SUCCESS;
+			ieee80211_ratectl_tx_complete(ni, txs);
 		} else {
-			ieee80211_ratectl_tx_complete(ni->ni_vap, ni,
-			    IEEE80211_RATECTL_TX_FAILURE, &retrycnt, NULL);
+			txs->status = IEEE80211_RATECTL_TX_FAIL_UNSPECIFIED;
+			txs->long_retries = 1;	/* XXX */
+			ieee80211_ratectl_tx_complete(ni, txs);
 			if_inc_counter(ni->ni_vap->iv_ifp,
 			    IFCOUNTER_OERRORS, 1);
 		}
@@ -1457,7 +1459,7 @@ rt2860_tx(struct rt2860_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 	struct rt2860_txd *txd;
 	struct rt2860_txwi *txwi;
 	struct ieee80211_frame *wh;
-	const struct ieee80211_txparam *tp;
+	const struct ieee80211_txparam *tp = ni->ni_txparms;
 	struct ieee80211_key *k;
 	struct mbuf *m1;
 	bus_dma_segment_t segs[RT2860_MAX_SCATTER];
@@ -1486,11 +1488,10 @@ rt2860_tx(struct rt2860_softc *sc, struct mbuf *m, struct ieee80211_node *ni)
 	hdrlen = ieee80211_anyhdrsize(wh);
 	type = wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
 
-	tp = &vap->iv_txparms[ieee80211_chan2mode(ni->ni_chan)];
-	if (IEEE80211_IS_MULTICAST(wh->i_addr1)) {
-		rate = tp->mcastrate;
-	} else if (m->m_flags & M_EAPOL) {
+	if (m->m_flags & M_EAPOL) {
 		rate = tp->mgmtrate;
+	} else if (IEEE80211_IS_MULTICAST(wh->i_addr1)) {
+		rate = tp->mcastrate;
 	} else if (tp->ucastrate != IEEE80211_FIXED_RATE_NONE) {
 		rate = tp->ucastrate;
 	} else {
@@ -2309,8 +2310,7 @@ rt2860_getradiocaps(struct ieee80211com *ic, int maxchans, int *nchans,
 	memset(bands, 0, sizeof(bands));
 	setbit(bands, IEEE80211_MODE_11B);
 	setbit(bands, IEEE80211_MODE_11G);
-	ieee80211_add_channel_list_2ghz(chans, maxchans, nchans,
-	    rt2860_chan_2ghz, nitems(rt2860_chan_2ghz), bands, 0);
+	ieee80211_add_channels_default_2ghz(chans, maxchans, nchans, bands, 0);
 
 	if (sc->rf_rev == RT2860_RF_2750 || sc->rf_rev == RT2860_RF_2850) {
 		setbit(bands, IEEE80211_MODE_11A);
@@ -3114,10 +3114,13 @@ static int
 rt2860_updateedca(struct ieee80211com *ic)
 {
 	struct rt2860_softc *sc = ic->ic_softc;
+	struct chanAccParams chp;
 	const struct wmeParams *wmep;
 	int aci;
 
-	wmep = ic->ic_wme.wme_chanParams.cap_wmeParams;
+	ieee80211_wme_ic_getparams(ic, &chp);
+
+	wmep = chp.cap_wmeParams;
 
 	/* update MAC TX configuration registers */
 	for (aci = 0; aci < WME_NUM_AC; aci++) {

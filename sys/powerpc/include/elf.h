@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2001 David E. O'Brien
  * Copyright (c) 1996-1997 John D. Polstra.
  * All rights reserved.
@@ -67,9 +69,13 @@
 typedef struct {	/* Auxiliary vector entry on initial stack */
 	int	a_type;			/* Entry type. */
 	union {
+#ifdef __powerpc64__
+		int	a_val;		/* Integer value */
+#else
 		long	a_val;		/* Integer value. */
 		void	*a_ptr;		/* Address. */
 		void	(*a_fcn)(void);	/* Function pointer (not used). */
+#endif
 	} a_un;
 } Elf32_Auxinfo;
 

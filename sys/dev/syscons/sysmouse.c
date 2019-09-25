@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1999 Kazutaka YOKOTA <yokota@zodiac.mech.utsunomiya-u.ac.jp>
  * All rights reserved.
  *
@@ -199,12 +201,6 @@ smdev_ioctl(struct tty *tp, u_long cmd, caddr_t data, struct thread *td)
 		mouse_status.dy = 0;
 		mouse_status.dz = 0;
 		return 0;
-
-#ifdef notyet
-	case MOUSE_GETVARS:	/* get internal mouse variables */
-	case MOUSE_SETVARS:	/* set internal mouse variables */
-		return ENODEV;
-#endif
 
 	case MOUSE_READSTATE:	/* read status from the device */
 	case MOUSE_READDATA:	/* read data from the device */

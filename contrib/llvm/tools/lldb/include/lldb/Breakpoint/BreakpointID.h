@@ -10,10 +10,6 @@
 #ifndef liblldb_BreakpointID_h_
 #define liblldb_BreakpointID_h_
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
 
 #include "lldb/lldb-private.h"
 
@@ -57,7 +53,7 @@ public:
 
   //------------------------------------------------------------------
   /// Takes an input string containing the description of a breakpoint or
-  /// breakpoint and location and returns the a BreakpointID filled out with
+  /// breakpoint and location and returns a BreakpointID filled out with
   /// the proper id and location.
   ///
   /// @param[in] input

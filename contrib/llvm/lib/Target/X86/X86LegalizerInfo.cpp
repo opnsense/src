@@ -21,6 +21,7 @@
 
 using namespace llvm;
 using namespace TargetOpcode;
+using namespace LegalizeActions;
 
 /// FIXME: The following static functions are SizeChangeStrategy functions
 /// that are meant to temporarily mimic the behaviour of the old legalization
@@ -38,7 +39,7 @@ addAndInterleaveWithUnsupported(LegalizerInfo::SizeAndActionsVec &result,
     result.push_back(v[i]);
     if (i + 1 < v[i].first && i + 1 < v.size() &&
         v[i + 1].first != v[i].first + 1)
-      result.push_back({v[i].first + 1, LegalizerInfo::Unsupported});
+      result.push_back({v[i].first + 1, Unsupported});
   }
 }
 
@@ -46,11 +47,11 @@ static LegalizerInfo::SizeAndActionsVec
 widen_1(const LegalizerInfo::SizeAndActionsVec &v) {
   assert(v.size() >= 1);
   assert(v[0].first > 1);
-  LegalizerInfo::SizeAndActionsVec result = {{1, LegalizerInfo::WidenScalar},
-                                             {2, LegalizerInfo::Unsupported}};
+  LegalizerInfo::SizeAndActionsVec result = {{1, WidenScalar},
+                                             {2, Unsupported}};
   addAndInterleaveWithUnsupported(result, v);
   auto Largest = result.back().first;
-  result.push_back({Largest + 1, LegalizerInfo::Unsupported});
+  result.push_back({Largest + 1, Unsupported});
   return result;
 }
 
@@ -81,16 +82,18 @@ X86LegalizerInfo::X86LegalizerInfo(const X86Subtarget &STI,
       G_CONSTANT, 0, widenToLargerTypesAndNarrowToLargest);
 
   computeTables();
+  verify(*STI.getInstrInfo());
 }
 
 void X86LegalizerInfo::setLegalizerInfo32bit() {
 
-  const LLT p0 = LLT::pointer(0, TM.getPointerSize() * 8);
+  const LLT p0 = LLT::pointer(0, TM.getPointerSizeInBits(0));
   const LLT s1 = LLT::scalar(1);
   const LLT s8 = LLT::scalar(8);
   const LLT s16 = LLT::scalar(16);
   const LLT s32 = LLT::scalar(32);
   const LLT s64 = LLT::scalar(64);
+  const LLT s128 = LLT::scalar(128);
 
   for (auto Ty : {p0, s1, s8, s16, s32})
     setAction({G_IMPLICIT_DEF, Ty}, Legal);
@@ -122,6 +125,20 @@ void X86LegalizerInfo::setLegalizerInfo32bit() {
   setAction({G_GEP, p0}, Legal);
   setAction({G_GEP, 1, s32}, Legal);
 
+  if (!Subtarget.is64Bit()) {
+    getActionDefinitionsBuilder(G_PTRTOINT)
+        .legalForCartesianProduct({s1, s8, s16, s32}, {p0})
+        .maxScalar(0, s32)
+        .widenScalarToNextPow2(0, /*Min*/ 8);
+    getActionDefinitionsBuilder(G_INTTOPTR).legalFor({{p0, s32}});
+
+    // Shifts and SDIV
+    getActionDefinitionsBuilder(
+        {G_SHL, G_LSHR, G_ASHR, G_SDIV, G_SREM, G_UDIV, G_UREM})
+        .legalFor({s8, s16, s32})
+        .clampScalar(0, s8, s32);
+  }
+
   // Control-flow
   setAction({G_BRCOND, s1}, Legal);
 
@@ -135,6 +152,7 @@ void X86LegalizerInfo::setLegalizerInfo32bit() {
     setAction({G_SEXT, Ty}, Legal);
     setAction({G_ANYEXT, Ty}, Legal);
   }
+  setAction({G_ANYEXT, s128}, Legal);
 
   // Comparison
   setAction({G_ICMP, s1}, Legal);
@@ -158,10 +176,18 @@ void X86LegalizerInfo::setLegalizerInfo64bit() {
   if (!Subtarget.is64Bit())
     return;
 
+  const LLT p0 = LLT::pointer(0, TM.getPointerSizeInBits(0));
+  const LLT s1 = LLT::scalar(1);
+  const LLT s8 = LLT::scalar(8);
+  const LLT s16 = LLT::scalar(16);
+  const LLT s32 = LLT::scalar(32);
   const LLT s64 = LLT::scalar(64);
   const LLT s128 = LLT::scalar(128);
 
   setAction({G_IMPLICIT_DEF, s64}, Legal);
+  // Need to have that, as tryFoldImplicitDef will create this pattern:
+  // s128 = EXTEND (G_IMPLICIT_DEF s32/s64) -> s128 = G_IMPLICIT_DEF
+  setAction({G_IMPLICIT_DEF, s128}, Legal);
 
   setAction({G_PHI, s64}, Legal);
 
@@ -173,6 +199,11 @@ void X86LegalizerInfo::setLegalizerInfo64bit() {
 
   // Pointer-handling
   setAction({G_GEP, 1, s64}, Legal);
+  getActionDefinitionsBuilder(G_PTRTOINT)
+      .legalForCartesianProduct({s1, s8, s16, s32, s64}, {p0})
+      .maxScalar(0, s64)
+      .widenScalarToNextPow2(0, /*Min*/ 8);
+  getActionDefinitionsBuilder(G_INTTOPTR).legalFor({{p0, s64}});
 
   // Constants
   setAction({TargetOpcode::G_CONSTANT, s64}, Legal);
@@ -182,8 +213,34 @@ void X86LegalizerInfo::setLegalizerInfo64bit() {
     setAction({extOp, s64}, Legal);
   }
 
+  getActionDefinitionsBuilder(G_SITOFP)
+    .legalForCartesianProduct({s32, s64})
+      .clampScalar(1, s32, s64)
+      .widenScalarToNextPow2(1)
+      .clampScalar(0, s32, s64)
+      .widenScalarToNextPow2(0);
+
+  getActionDefinitionsBuilder(G_FPTOSI)
+      .legalForCartesianProduct({s32, s64})
+      .clampScalar(1, s32, s64)
+      .widenScalarToNextPow2(0)
+      .clampScalar(0, s32, s64)
+      .widenScalarToNextPow2(1);
+
   // Comparison
   setAction({G_ICMP, 1, s64}, Legal);
+
+  getActionDefinitionsBuilder(G_FCMP)
+      .legalForCartesianProduct({s8}, {s32, s64})
+      .clampScalar(0, s8, s8)
+      .clampScalar(1, s32, s64)
+      .widenScalarToNextPow2(1);
+
+  // Shifts and SDIV
+  getActionDefinitionsBuilder(
+      {G_SHL, G_LSHR, G_ASHR, G_SDIV, G_SREM, G_UDIV, G_UREM})
+      .legalFor({s8, s16, s32, s64})
+      .clampScalar(0, s8, s64);
 
   // Merge/Unmerge
   setAction({G_MERGE_VALUES, s128}, Legal);
@@ -214,7 +271,7 @@ void X86LegalizerInfo::setLegalizerInfoSSE1() {
 
   // Merge/Unmerge
   for (const auto &Ty : {v4s32, v2s64}) {
-    setAction({G_MERGE_VALUES, Ty}, Legal);
+    setAction({G_CONCAT_VECTORS, Ty}, Legal);
     setAction({G_UNMERGE_VALUES, 1, Ty}, Legal);
   }
   setAction({G_MERGE_VALUES, 1, s64}, Legal);
@@ -250,17 +307,20 @@ void X86LegalizerInfo::setLegalizerInfoSSE2() {
   setAction({G_FPEXT, s64}, Legal);
   setAction({G_FPEXT, 1, s32}, Legal);
 
+  setAction({G_FPTRUNC, s32}, Legal);
+  setAction({G_FPTRUNC, 1, s64}, Legal);
+
   // Constants
   setAction({TargetOpcode::G_FCONSTANT, s64}, Legal);
 
   // Merge/Unmerge
   for (const auto &Ty :
        {v16s8, v32s8, v8s16, v16s16, v4s32, v8s32, v2s64, v4s64}) {
-    setAction({G_MERGE_VALUES, Ty}, Legal);
+    setAction({G_CONCAT_VECTORS, Ty}, Legal);
     setAction({G_UNMERGE_VALUES, 1, Ty}, Legal);
   }
   for (const auto &Ty : {v16s8, v8s16, v4s32, v2s64}) {
-    setAction({G_MERGE_VALUES, 1, Ty}, Legal);
+    setAction({G_CONCAT_VECTORS, 1, Ty}, Legal);
     setAction({G_UNMERGE_VALUES, Ty}, Legal);
   }
 }
@@ -307,12 +367,12 @@ void X86LegalizerInfo::setLegalizerInfoAVX() {
   // Merge/Unmerge
   for (const auto &Ty :
        {v32s8, v64s8, v16s16, v32s16, v8s32, v16s32, v4s64, v8s64}) {
-    setAction({G_MERGE_VALUES, Ty}, Legal);
+    setAction({G_CONCAT_VECTORS, Ty}, Legal);
     setAction({G_UNMERGE_VALUES, 1, Ty}, Legal);
   }
   for (const auto &Ty :
        {v16s8, v32s8, v8s16, v16s16, v4s32, v8s32, v2s64, v4s64}) {
-    setAction({G_MERGE_VALUES, 1, Ty}, Legal);
+    setAction({G_CONCAT_VECTORS, 1, Ty}, Legal);
     setAction({G_UNMERGE_VALUES, Ty}, Legal);
   }
 }
@@ -340,11 +400,11 @@ void X86LegalizerInfo::setLegalizerInfoAVX2() {
 
   // Merge/Unmerge
   for (const auto &Ty : {v64s8, v32s16, v16s32, v8s64}) {
-    setAction({G_MERGE_VALUES, Ty}, Legal);
+    setAction({G_CONCAT_VECTORS, Ty}, Legal);
     setAction({G_UNMERGE_VALUES, 1, Ty}, Legal);
   }
   for (const auto &Ty : {v32s8, v16s16, v8s32, v4s64}) {
-    setAction({G_MERGE_VALUES, 1, Ty}, Legal);
+    setAction({G_CONCAT_VECTORS, 1, Ty}, Legal);
     setAction({G_UNMERGE_VALUES, Ty}, Legal);
   }
 }

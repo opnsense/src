@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Device Tree for the ARM Integrator/CP platform
  */
@@ -11,6 +12,32 @@
 
 	chosen {
 		bootargs = "root=/dev/ram0 console=ttyAMA0,38400n8 earlyprintk";
+	};
+
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		cpu@0 {
+			device_type = "cpu";
+			/*
+			 * Since the board has pluggable CPU modules, we
+			 * cannot define a proper compatible here. Let the
+			 * boot loader fill in the apropriate compatible
+			 * string if necessary.
+			 */
+			/* compatible = "arm,arm920t"; */
+			reg = <0>;
+			/*
+			 * TBD comment.
+			 */
+					 /* kHz     uV   */
+			operating-points = <50000  0
+					    48000  0>;
+			clocks = <&cmcore>;
+			clock-names = "cpu";
+			clock-latency = <1000000>; /* 1 ms */
+		};
 	};
 
 	/*
@@ -58,20 +85,37 @@
 
 	core-module@10000000 {
 		/* 24 MHz chrystal on the core module */
-		xtal24mhz: xtal24mhz@24M {
+		cm24mhz: cm24mhz@24M {
 			#clock-cells = <0>;
 			compatible = "fixed-clock";
 			clock-frequency = <24000000>;
 		};
 
-		/*
-		 * External oscillator on the core module, usually used
-		 * to drive video circuitry. Driven from the 24MHz clock.
-		 */
-		auxosc: cm_aux_osc@25M {
+		/* Oscillator on the core module, clocks the CPU core */
+		cmcore: cmosc@24M {
+			compatible = "arm,syscon-icst525-integratorcp-cm-core";
 			#clock-cells = <0>;
-			compatible = "arm,integrator-cm-auxosc";
-			clocks = <&xtal24mhz>;
+			lock-offset = <0x14>;
+			vco-offset = <0x08>;
+			clocks = <&cm24mhz>;
+		};
+
+		/* Oscillator on the core module, clocks the memory bus */
+		cmmem: cmosc@24M {
+			compatible = "arm,syscon-icst525-integratorcp-cm-mem";
+			#clock-cells = <0>;
+			lock-offset = <0x14>;
+			vco-offset = <0x08>;
+			clocks = <&cm24mhz>;
+		};
+
+		/* Auxilary oscillator on the core module, clocks the CLCD */
+		auxosc: auxosc@24M {
+			compatible = "arm,syscon-icst525";
+			#clock-cells = <0>;
+			lock-offset = <0x14>;
+			vco-offset = <0x1c>;
+			clocks = <&cm24mhz>;
 		};
 
 		/* The KMI clock is the 24 MHz oscillator divided to 8MHz */
@@ -80,7 +124,7 @@
 			compatible = "fixed-factor-clock";
 			clock-div = <3>;
 			clock-mult = <1>;
-			clocks = <&xtal24mhz>;
+			clocks = <&cm24mhz>;
 		};
 
 		/* The timer clock is the 24 MHz oscillator divided to 1MHz */
@@ -89,12 +133,12 @@
 			compatible = "fixed-factor-clock";
 			clock-div = <24>;
 			clock-mult = <1>;
-			clocks = <&xtal24mhz>;
+			clocks = <&cm24mhz>;
 		};
 	};
 
 	syscon {
-		compatible = "arm,integrator-cp-syscon";
+		compatible = "arm,integrator-cp-syscon", "syscon";
 		reg = <0xcb000000 0x100>;
 	};
 
@@ -146,6 +190,43 @@
 		reg = <0xc8000000 0x10>;
 		interrupt-parent = <&pic>;
 		interrupts = <27>;
+	};
+
+	bridge {
+		compatible = "ti,ths8134a", "ti,ths8134";
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@0 {
+				reg = <0>;
+
+				vga_bridge_in: endpoint {
+					remote-endpoint = <&clcd_pads_vga_dac>;
+				};
+			};
+
+			port@1 {
+				reg = <1>;
+
+				vga_bridge_out: endpoint {
+					remote-endpoint = <&vga_con_in>;
+				};
+			};
+		};
+	};
+
+	vga {
+		compatible = "vga-connector";
+
+		port {
+			vga_con_in: endpoint {
+				remote-endpoint = <&vga_bridge_out>;
+			};
+		};
 	};
 
 	fpga {
@@ -209,7 +290,30 @@
 			reg = <0xC0000000 0x1000>;
 			interrupts = <22>;
 			clocks = <&auxosc>, <&pclk>;
-			clock-names = "clcd", "apb_pclk";
+			clock-names = "clcdclk", "apb_pclk";
+			/* 640x480 16bpp @ 25.175MHz is 36827428 bytes/s */
+			max-memory-bandwidth = <40000000>;
+
+			/*
+			 * This port is routed through a PLD (Programmable
+			 * Logic Device) that routes the output from the CLCD
+			 * (after transformations) to the VGA DAC and also an
+			 * external panel connector. The PLD is essential for
+			 * supporting RGB565/BGR565.
+			 *
+			 * The signals from the port thus reaches two endpoints.
+			 * The PLD is managed through a few special bits in the
+			 * FPGA "sysreg".
+			 *
+			 * This arrangement can be clearly seen in
+			 * ARM DUI 0225D, page 3-41, figure 3-19.
+			 */
+			port@0 {
+				clcd_pads_vga_dac: endpoint {
+					remote-endpoint = <&vga_bridge_in>;
+					arm,pl11x,tft-r0g0b0-pads = <0 8 16>;
+				};
+			};
 		};
 	};
 };

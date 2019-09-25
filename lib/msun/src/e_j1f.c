@@ -32,7 +32,7 @@ huge    = 1e30,
 one	= 1.0,
 invsqrtpi=  5.6418961287e-01, /* 0x3f106ebb */
 tpi      =  6.3661974669e-01, /* 0x3f22f983 */
-	/* R0/S0 on [0,2] */
+/* R0/S0 on [0,2] */
 r00  = -6.2500000000e-02, /* 0xbd800000 */
 r01  =  1.4070566976e-03, /* 0x3ab86cfd */
 r02  = -1.5995563444e-05, /* 0xb7862e36 */
@@ -56,8 +56,7 @@ __ieee754_j1f(float x)
 	if(ix>=0x7f800000) return one/x;
 	y = fabsf(x);
 	if(ix >= 0x40000000) {	/* |x| >= 2.0 */
-		s = sinf(y);
-		c = cosf(y);
+		sincosf(y, &s, &c);
 		ss = -s-c;
 		cc = s-c;
 		if(ix<0x7f000000) {  /* make sure y+y not overflow */
@@ -114,8 +113,7 @@ __ieee754_y1f(float x)
 	if(ix==0) return -one/vzero;
 	if(hx<0) return vzero/vzero;
         if(ix >= 0x40000000) {  /* |x| >= 2.0 */
-                s = sinf(x);
-                c = cosf(x);
+                sincosf(x, &s, &c);
                 ss = -s-c;
                 cc = s-c;
                 if(ix<0x7f000000) {  /* make sure x+x not overflow */

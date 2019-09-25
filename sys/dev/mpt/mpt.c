@@ -2,6 +2,8 @@
  * Generic routines for LSI Fusion adapters.
  * FreeBSD Version.
  *
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD AND BSD-3-Clause
+ *
  * Copyright (c) 2000, 2001 by Greg Ansley
  *
  * Redistribution and use in source and binary forms, with or without
@@ -1544,7 +1546,7 @@ mpt_get_portfacts(struct mpt_softc *mpt, U8 port, MSG_PORT_FACTS_REPLY *freplp)
 
 /*
  * Send the initialization request. This is where we specify how many
- * SCSI busses and how many devices per bus we wish to emulate.
+ * SCSI buses and how many devices per bus we wish to emulate.
  * This is also the command that specifies the max size of the reply
  * frames from the IOC that we will be allocating.
  */
@@ -1559,7 +1561,7 @@ mpt_send_ioc_init(struct mpt_softc *mpt, uint32_t who)
 	init.WhoInit = who;
 	init.Function = MPI_FUNCTION_IOC_INIT;
 	init.MaxDevices = 0;	/* at least 256 devices per bus */
-	init.MaxBuses = 16;	/* at least 16 busses */
+	init.MaxBuses = 16;	/* at least 16 buses */
 
 	init.MsgVersion = htole16(MPI_VERSION);
 	init.HeaderVersion = htole16(MPI_HEADER_VERSION);

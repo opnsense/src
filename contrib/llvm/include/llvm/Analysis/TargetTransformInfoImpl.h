@@ -27,7 +27,7 @@
 
 namespace llvm {
 
-/// \brief Base class for use as a mix-in that aids implementing
+/// Base class for use as a mix-in that aids implementing
 /// a TargetTransformInfo-compatible class.
 class TargetTransformInfoImplBase {
 protected:
@@ -155,8 +155,12 @@ public:
     case Intrinsic::sideeffect:
     case Intrinsic::dbg_declare:
     case Intrinsic::dbg_value:
+    case Intrinsic::dbg_label:
     case Intrinsic::invariant_start:
     case Intrinsic::invariant_end:
+    case Intrinsic::launder_invariant_group:
+    case Intrinsic::strip_invariant_group:
+    case Intrinsic::is_constant:
     case Intrinsic::lifetime_start:
     case Intrinsic::lifetime_end:
     case Intrinsic::objectsize:
@@ -246,6 +250,10 @@ public:
                     C2.ScaleCost, C2.ImmCost, C2.SetupCost);
   }
 
+  bool canMacroFuseCmp() { return false; }
+
+  bool shouldFavorPostInc() const { return false; }
+
   bool isLegalMaskedStore(Type *DataType) { return false; }
 
   bool isLegalMaskedLoad(Type *DataType) { return false; }
@@ -275,6 +283,8 @@ public:
 
   bool isProfitableToHoist(Instruction *I) { return true; }
 
+  bool useAA() { return false; }
+
   bool isTypeLegal(Type *Ty) { return false; }
 
   unsigned getJumpBufAlignment() { return 0; }
@@ -283,6 +293,8 @@ public:
 
   bool shouldBuildLookupTables() { return true; }
   bool shouldBuildLookupTablesForConstant(Constant *C) { return true; }
+
+  bool useColdCCForColdCall(Function &F) { return false; }
 
   unsigned getScalarizationOverhead(Type *Ty, bool Insert, bool Extract) {
     return 0;
@@ -302,6 +314,8 @@ public:
 
   bool enableInterleavedAccessVectorization() { return false; }
 
+  bool enableMaskedInterleavedAccessVectorization() { return false; }
+
   bool isFPVectorizationPotentiallyUnsafe() { return false; }
 
   bool allowsMisalignedMemoryAccesses(LLVMContext &Context,
@@ -317,7 +331,7 @@ public:
   bool haveFastSqrt(Type *Ty) { return false; }
 
   bool isFCmpOrdCheaperThanFCmpZero(Type *Ty) { return true; }
-  
+
   unsigned getFPOpCost(Type *Ty) { return TargetTransformInfo::TCC_Basic; }
 
   int getIntImmCodeSizeCost(unsigned Opcode, unsigned Idx, const APInt &Imm,
@@ -342,6 +356,10 @@ public:
   unsigned getRegisterBitWidth(bool Vector) const { return 32; }
 
   unsigned getMinVectorRegisterBitWidth() { return 128; }
+
+  bool shouldMaximizeVectorBandwidth(bool OptSize) const { return false; }
+
+  unsigned getMinimumVF(unsigned ElemWidth) const { return 0; }
 
   bool
   shouldConsiderAddressTypePromotion(const Instruction &I,
@@ -435,8 +453,9 @@ public:
   unsigned getInterleavedMemoryOpCost(unsigned Opcode, Type *VecTy,
                                       unsigned Factor,
                                       ArrayRef<unsigned> Indices,
-                                      unsigned Alignment,
-                                      unsigned AddressSpace) {
+                                      unsigned Alignment, unsigned AddressSpace,
+                                      bool UseMaskForCond = false,
+                                      bool UseMaskForGaps = false) {
     return 1;
   }
 
@@ -505,6 +524,24 @@ public:
             Callee->getFnAttribute("target-cpu")) &&
            (Caller->getFnAttribute("target-features") ==
             Callee->getFnAttribute("target-features"));
+  }
+
+  bool areFunctionArgsABICompatible(const Function *Caller, const Function *Callee,
+                                    SmallPtrSetImpl<Argument *> &Args) const {
+    return (Caller->getFnAttribute("target-cpu") ==
+            Callee->getFnAttribute("target-cpu")) &&
+           (Caller->getFnAttribute("target-features") ==
+            Callee->getFnAttribute("target-features"));
+  }
+
+  bool isIndexedLoadLegal(TTI::MemIndexedMode Mode, Type *Ty,
+                          const DataLayout &DL) const {
+    return false;
+  }
+
+  bool isIndexedStoreLegal(TTI::MemIndexedMode Mode, Type *Ty,
+                           const DataLayout &DL) const {
+    return false;
   }
 
   unsigned getLoadStoreVecRegBitWidth(unsigned AddrSpace) const { return 128; }
@@ -629,7 +666,7 @@ protected:
   }
 };
 
-/// \brief CRTP base class for use as a mix-in that aids implementing
+/// CRTP base class for use as a mix-in that aids implementing
 /// a TargetTransformInfo-compatible class.
 template <typename T>
 class TargetTransformInfoImplCRTPBase : public TargetTransformInfoImplBase {

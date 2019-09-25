@@ -50,6 +50,9 @@
 #include <elf.h>
 
 #include <asm/unistd.h>
+#ifdef __s390__
+#include <asm/zcrypt.h>
+#endif
 
 #include <errno.h>
 #include <signal.h>
@@ -163,6 +166,12 @@ static const struct sock_filter preauth_insns[] = {
 #ifdef __NR_exit_group
 	SC_ALLOW(__NR_exit_group),
 #endif
+#ifdef __NR_geteuid
+	SC_ALLOW(__NR_geteuid),
+#endif
+#ifdef __NR_geteuid32
+	SC_ALLOW(__NR_geteuid32),
+#endif
 #ifdef __NR_getpgid
 	SC_ALLOW(__NR_getpgid),
 #endif
@@ -174,6 +183,12 @@ static const struct sock_filter preauth_insns[] = {
 #endif
 #ifdef __NR_gettimeofday
 	SC_ALLOW(__NR_gettimeofday),
+#endif
+#ifdef __NR_getuid
+	SC_ALLOW(__NR_getuid),
+#endif
+#ifdef __NR_getuid32
+	SC_ALLOW(__NR_getuid32),
 #endif
 #ifdef __NR_madvise
 	SC_ALLOW(__NR_madvise),
@@ -189,6 +204,9 @@ static const struct sock_filter preauth_insns[] = {
 #endif
 #ifdef __NR_munmap
 	SC_ALLOW(__NR_munmap),
+#endif
+#ifdef __NR_nanosleep
+	SC_ALLOW(__NR_nanosleep),
 #endif
 #ifdef __NR__newselect
 	SC_ALLOW(__NR__newselect),
@@ -222,6 +240,7 @@ static const struct sock_filter preauth_insns[] = {
 #endif
 #ifdef __NR_socketcall
 	SC_ALLOW_ARG(__NR_socketcall, 0, SYS_SHUTDOWN),
+	SC_DENY(__NR_socketcall, EACCES),
 #endif
 #if defined(__NR_ioctl) && defined(__s390__)
 	/* Allow ioctls for ICA crypto card on s390 */
@@ -235,7 +254,7 @@ static const struct sock_filter preauth_insns[] = {
 	 * x86-64 syscall under some circumstances, e.g.
 	 * https://bugs.debian.org/849923
 	 */
-	SC_ALLOW(__NR_clock_gettime & ~__X32_SYSCALL_BIT);
+	SC_ALLOW(__NR_clock_gettime & ~__X32_SYSCALL_BIT),
 #endif
 
 	/* Default deny */

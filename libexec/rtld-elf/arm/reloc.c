@@ -18,11 +18,18 @@ __FBSDID("$FreeBSD$");
 #include "rtld.h"
 #include "paths.h"
 
+#ifdef __ARM_FP
+/*
+ * On processors that have hard floating point supported, we also support
+ * running soft float binaries. If we're being built with hard float support,
+ * check the ELF headers to make sure that this is a hard float binary. If it is
+ * a soft float binary, force the dynamic linker to use the alternative soft
+ * float path.
+ */
 void
 arm_abi_variant_hook(Elf_Auxinfo **aux_info)
 {
 	Elf_Word ehdr;
-	struct stat sb;
 
 	/*
 	 * If we're running an old kernel that doesn't provide any data fail
@@ -40,17 +47,6 @@ arm_abi_variant_hook(Elf_Auxinfo **aux_info)
 		return;
 
 	/*
-	 * If there's no /usr/libsoft, then we don't have a system with both
-	 * hard and soft float. In that case, hope for the best and just
-	 * return. Such systems are required to have all soft or all hard
-	 * float ABI binaries and libraries. This is, at best, a transition
-	 * compatibility hack. Once we're fully hard-float, this should
-	 * be removed.
-	 */
-	if (stat("/usr/libsoft", &sb) != 0 || !S_ISDIR(sb.st_mode))
-		return;
-
-	/*
 	 * This is a soft float ABI binary. We need to use the soft float
 	 * settings.
 	 */
@@ -60,6 +56,7 @@ arm_abi_variant_hook(Elf_Auxinfo **aux_info)
 	ld_standard_library_path = SOFT_STANDARD_LIBRARY_PATH;
 	ld_env_prefix = LD_SOFT_;
 }
+#endif
 
 void
 init_pltgot(Obj_Entry *obj)
@@ -78,7 +75,7 @@ do_copy_relocations(Obj_Entry *dstobj)
 
 	assert(dstobj->mainprog);	/* COPY relocations are invalid elsewhere */
 
-   	rellim = (const Elf_Rel *) ((caddr_t) dstobj->rel + dstobj->relsize);
+	rellim = (const Elf_Rel *)((const char *) dstobj->rel + dstobj->relsize);
 	for (rel = dstobj->rel;  rel < rellim;  rel++) {
 		if (ELF_R_TYPE(rel->r_info) == R_ARM_COPY) {
 	    		void *dstaddr;
@@ -91,7 +88,7 @@ do_copy_relocations(Obj_Entry *dstobj)
 			SymLook req;
 			int res;
 			
-			dstaddr = (void *) (dstobj->relocbase + rel->r_offset);
+			dstaddr = (void *)(dstobj->relocbase + rel->r_offset);
 			dstsym = dstobj->symtab + ELF_R_SYM(rel->r_info);
 			name = dstobj->strtab + dstsym->st_name;
 			size = dstsym->st_size;
@@ -128,8 +125,6 @@ do_copy_relocations(Obj_Entry *dstobj)
 void _rtld_bind_start(void);
 void _rtld_relocate_nonplt_self(Elf_Dyn *, Elf_Addr);
 
-int open();
-int _open();
 void
 _rtld_relocate_nonplt_self(Elf_Dyn *dynp, Elf_Addr relocbase)
 {
@@ -148,7 +143,7 @@ _rtld_relocate_nonplt_self(Elf_Dyn *dynp, Elf_Addr relocbase)
 			break;
 		}
 	}
-	rellim = (const Elf_Rel *)((caddr_t)rel + relsz);
+	rellim = (const Elf_Rel *)((const char *)rel + relsz);
 	size = (rellim - 1)->r_offset - rel->r_offset;
 	for (; rel < rellim; rel++) {
 		where = (Elf_Addr *)(relocbase + rel->r_offset);
@@ -324,12 +319,10 @@ reloc_nonplt_object(Obj_Entry *obj, const Elf_Rel *rel, SymCache *cache,
 			if (def == NULL)
 				return -1;
 
-			if (!defobj->tls_done && allocate_tls_offset(obj))
+			if (!defobj->tls_done && !allocate_tls_offset(obj))
 				return -1;
 
-			/* XXX: FIXME */
-			tmp = (Elf_Addr)def->st_value + defobj->tlsoffset +
-			    TLS_TCB_SIZE;
+			tmp = (Elf_Addr)def->st_value + defobj->tlsoffset;
 			if (__predict_true(RELOC_ALIGNED_P(where)))
 				*where = tmp;
 			else
@@ -380,7 +373,7 @@ reloc_non_plt(Obj_Entry *obj, Obj_Entry *obj_rtld, int flags,
 	cache = calloc(obj->dynsymcount, sizeof(SymCache));
 	/* No need to check for NULL here */
 
-	rellim = (const Elf_Rel *)((caddr_t)obj->rel + obj->relsize);
+	rellim = (const Elf_Rel *)((const char *)obj->rel + obj->relsize);
 	for (rel = obj->rel; rel < rellim; rel++) {
 		if (reloc_nonplt_object(obj, rel, cache, flags, lockstate) < 0)
 			goto done;
@@ -396,12 +389,12 @@ done:
  *  * Process the PLT relocations.
  *   */
 int
-reloc_plt(Obj_Entry *obj)
+reloc_plt(Obj_Entry *obj, int flags __unused, RtldLockState *lockstate __unused)
 {
 	const Elf_Rel *rellim;
 	const Elf_Rel *rel;
 		
-	rellim = (const Elf_Rel *)((char *)obj->pltrel +
+	rellim = (const Elf_Rel *)((const char *)obj->pltrel +
 	    obj->pltrelsize);
 	for (rel = obj->pltrel;  rel < rellim;  rel++) {
 		Elf_Addr *where;
@@ -428,7 +421,7 @@ reloc_jmpslots(Obj_Entry *obj, int flags, RtldLockState *lockstate)
 	Elf_Addr *where;
 	Elf_Addr target;
 	
-	rellim = (const Elf_Rel *)((char *)obj->pltrel + obj->pltrelsize);
+	rellim = (const Elf_Rel *)((const char *)obj->pltrel + obj->pltrelsize);
 	for (rel = obj->pltrel; rel < rellim; rel++) {
 		assert(ELF_R_TYPE(rel->r_info) == R_ARM_JUMP_SLOT);
 		where = (Elf_Addr *)(obj->relocbase + rel->r_offset);
@@ -450,7 +443,8 @@ reloc_jmpslots(Obj_Entry *obj, int flags, RtldLockState *lockstate)
 }
 
 int
-reloc_iresolve(Obj_Entry *obj, struct Struct_RtldLockState *lockstate)
+reloc_iresolve(Obj_Entry *obj __unused,
+    struct Struct_RtldLockState *lockstate __unused)
 {
 
 	/* XXX not implemented */
@@ -458,8 +452,8 @@ reloc_iresolve(Obj_Entry *obj, struct Struct_RtldLockState *lockstate)
 }
 
 int
-reloc_gnu_ifunc(Obj_Entry *obj, int flags,
-    struct Struct_RtldLockState *lockstate)
+reloc_gnu_ifunc(Obj_Entry *obj __unused, int flags __unused,
+    struct Struct_RtldLockState *lockstate __unused)
 {
 
 	/* XXX not implemented */
@@ -467,8 +461,9 @@ reloc_gnu_ifunc(Obj_Entry *obj, int flags,
 }
 
 Elf_Addr
-reloc_jmpslot(Elf_Addr *where, Elf_Addr target, const Obj_Entry *defobj,
-    const Obj_Entry *obj, const Elf_Rel *rel)
+reloc_jmpslot(Elf_Addr *where, Elf_Addr target,
+    const Obj_Entry *defobj __unused, const Obj_Entry *obj __unused,
+    const Elf_Rel *rel)
 {
 
 	assert(ELF_R_TYPE(rel->r_info) == R_ARM_JUMP_SLOT);

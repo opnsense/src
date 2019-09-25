@@ -259,7 +259,7 @@ WindowsResourceParser::TreeNode::addChild(ArrayRef<UTF16> NameRef,
   std::vector<UTF16> EndianCorrectedName;
   if (sys::IsBigEndianHost) {
     EndianCorrectedName.resize(NameRef.size() + 1);
-    std::copy(NameRef.begin(), NameRef.end(), EndianCorrectedName.begin() + 1);
+    llvm::copy(NameRef, EndianCorrectedName.begin() + 1);
     EndianCorrectedName[0] = UNI_UTF16_BYTE_ORDER_MARK_SWAPPED;
     CorrectedName = makeArrayRef(EndianCorrectedName);
   } else
@@ -334,7 +334,7 @@ private:
   void writeDirectoryTree();
   void writeDirectoryStringTable();
   void writeFirstSectionRelocations();
-  std::unique_ptr<MemoryBuffer> OutputBuffer;
+  std::unique_ptr<WritableMemoryBuffer> OutputBuffer;
   char *BufferStart;
   uint64_t CurrentOffset = 0;
   COFF::MachineTypes MachineType;
@@ -360,7 +360,7 @@ WindowsResourceCOFFWriter::WindowsResourceCOFFWriter(
       Data(Parser.getData()), StringTable(Parser.getStringTable()) {
   performFileLayout();
 
-  OutputBuffer = MemoryBuffer::getNewMemBuffer(FileSize);
+  OutputBuffer = WritableMemoryBuffer::getNewMemBuffer(FileSize);
 }
 
 void WindowsResourceCOFFWriter::performFileLayout() {
@@ -425,7 +425,7 @@ static std::time_t getTime() {
 }
 
 std::unique_ptr<MemoryBuffer> WindowsResourceCOFFWriter::write() {
-  BufferStart = const_cast<char *>(OutputBuffer->getBufferStart());
+  BufferStart = OutputBuffer->getBufferStart();
 
   writeCOFFHeader();
   writeFirstSectionHeader();
@@ -501,8 +501,7 @@ void WindowsResourceCOFFWriter::writeFirstSection() {
 void WindowsResourceCOFFWriter::writeSecondSection() {
   // Now write the .rsrc$02 section.
   for (auto const &RawDataEntry : Data) {
-    std::copy(RawDataEntry.begin(), RawDataEntry.end(),
-              BufferStart + CurrentOffset);
+    llvm::copy(RawDataEntry, BufferStart + CurrentOffset);
     CurrentOffset += alignTo(RawDataEntry.size(), sizeof(uint64_t));
   }
 
@@ -672,7 +671,7 @@ void WindowsResourceCOFFWriter::writeDirectoryStringTable() {
     support::endian::write16le(BufferStart + CurrentOffset, Length);
     CurrentOffset += sizeof(uint16_t);
     auto *Start = reinterpret_cast<UTF16 *>(BufferStart + CurrentOffset);
-    std::copy(String.begin(), String.end(), Start);
+    llvm::copy(String, Start);
     CurrentOffset += Length * sizeof(UTF16);
     TotalStringTableSize += Length * sizeof(UTF16) + sizeof(uint16_t);
   }

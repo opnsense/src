@@ -1,5 +1,7 @@
 /* $FreeBSD$ */
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1998 The NetBSD Foundation, Inc. All rights reserved.
  * Copyright (c) 1998 Lennart Augustsson. All rights reserved.
  * Copyright (c) 2008 Hans Petter Selasky. All rights reserved.
@@ -455,8 +457,8 @@ usbd_do_request_flags(struct usb_device *udev, struct mtx *mtx,
 		return (USB_ERR_INVAL);
 #endif
 	if ((mtx != NULL) && (mtx != &Giant)) {
-		mtx_unlock(mtx);
-		mtx_assert(mtx, MA_NOTOWNED);
+		USB_MTX_UNLOCK(mtx);
+		USB_MTX_ASSERT(mtx, MA_NOTOWNED);
 	}
 
 	/*
@@ -710,7 +712,7 @@ done:
 		usbd_ctrl_unlock(udev);
 
 	if ((mtx != NULL) && (mtx != &Giant))
-		mtx_lock(mtx);
+		USB_MTX_LOCK(mtx);
 
 	switch (err) {
 	case USB_ERR_NORMAL_COMPLETION:
@@ -988,7 +990,7 @@ usbd_req_get_desc(struct usb_device *udev,
     uint8_t retries)
 {
 	struct usb_device_request req;
-	uint8_t *buf;
+	uint8_t *buf = desc;
 	usb_error_t err;
 
 	DPRINTFN(4, "id=%d, type=%d, index=%d, max_len=%d\n",
@@ -1010,6 +1012,32 @@ usbd_req_get_desc(struct usb_device *udev,
 		err = usbd_do_request_flags(udev, mtx, &req,
 		    desc, 0, NULL, 500 /* ms */);
 
+		if (err != 0 && err != USB_ERR_TIMEOUT &&
+		    min_len != max_len) {
+			/* clear descriptor data */
+			memset(desc, 0, max_len);
+
+			/* try to read full descriptor length */
+			USETW(req.wLength, max_len);
+
+			err = usbd_do_request_flags(udev, mtx, &req,
+			    desc, USB_SHORT_XFER_OK, NULL, 500 /* ms */);
+
+			if (err == 0) {
+				/* verify length */
+				if (buf[0] > max_len)
+					buf[0] = max_len;
+				else if (buf[0] < 2)
+					err = USB_ERR_INVAL;
+
+				min_len = buf[0];
+
+				/* enforce descriptor type */
+				buf[1] = type;
+				goto done;
+			}
+		}
+
 		if (err) {
 			if (!retries) {
 				goto done;
@@ -1020,7 +1048,6 @@ usbd_req_get_desc(struct usb_device *udev,
 
 			continue;
 		}
-		buf = desc;
 
 		if (min_len == max_len) {
 
@@ -1153,7 +1180,11 @@ usbd_req_get_string_any(struct usb_device *udev, struct mtx *mtx, char *buf,
 		    *s == '+' ||
 		    *s == ' ' ||
 		    *s == '.' ||
-		    *s == ',') {
+		    *s == ',' ||
+		    *s == ':' ||
+		    *s == '/' ||
+		    *s == '(' ||
+		    *s == ')') {
 			/* allowed */
 			s++;
 		}
@@ -1570,8 +1601,9 @@ usbd_req_get_port_status(struct usb_device *udev, struct mtx *mtx,
 	USETW(req.wValue, 0);
 	req.wIndex[0] = port;
 	req.wIndex[1] = 0;
-	USETW(req.wLength, sizeof *ps);
-	return (usbd_do_request(udev, mtx, &req, ps));
+	USETW(req.wLength, sizeof(*ps));
+
+	return (usbd_do_request_flags(udev, mtx, &req, ps, 0, NULL, 1000));
 }
 
 /*------------------------------------------------------------------------*

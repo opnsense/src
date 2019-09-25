@@ -28,7 +28,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd April 15, 2018
+.Dd March 10, 2018
 .Dt PFIL 9
 .Os
 .Sh NAME
@@ -61,9 +61,9 @@ typedef int (*pfil_func_flags_t)(void *arg, struct mbuf **mp, struct ifnet *, in
 .Fn pfil_head_unregister "struct pfil_head *head"
 .Ft "struct pfil_head *"
 .Fn pfil_head_get "int af" "u_long dlt"
-.Ft void
+.Ft int
 .Fn pfil_add_hook "pfil_func_t" "void *arg" "struct pfil_head *"
-.Ft void
+.Ft int
 .Fn pfil_add_hook_flags "pfil_func_flags_t" "void *arg" "int flags" "struct pfil_head *"
 .Ft int
 .Fn pfil_remove_hook "pfil_func_t" "void *arg" "struct pfil_head *"

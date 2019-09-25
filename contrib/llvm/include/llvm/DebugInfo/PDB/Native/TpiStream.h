@@ -51,16 +51,27 @@ public:
   uint32_t getNumHashBuckets() const;
   FixedStreamArray<support::ulittle32_t> getHashValues() const;
   FixedStreamArray<codeview::TypeIndexOffset> getTypeIndexOffsets() const;
-  HashTable &getHashAdjusters();
+  HashTable<support::ulittle32_t> &getHashAdjusters();
 
   codeview::CVTypeRange types(bool *HadError) const;
   const codeview::CVTypeArray &typeArray() const { return TypeRecords; }
 
   codeview::LazyRandomTypeCollection &typeCollection() { return *Types; }
 
+  Expected<codeview::TypeIndex>
+  findFullDeclForForwardRef(codeview::TypeIndex ForwardRefTI) const;
+
+  std::vector<codeview::TypeIndex> findRecordsByName(StringRef Name) const;
+
+  codeview::CVType getType(codeview::TypeIndex Index);
+
   BinarySubstreamRef getTypeRecordsSubstream() const;
 
   Error commit();
+
+  void buildHashMap();
+
+  bool supportsTypeLookup() const;
 
 private:
   PDBFile &Pdb;
@@ -75,7 +86,9 @@ private:
   std::unique_ptr<BinaryStream> HashStream;
   FixedStreamArray<support::ulittle32_t> HashValues;
   FixedStreamArray<codeview::TypeIndexOffset> TypeIndexOffsets;
-  HashTable HashAdjusters;
+  HashTable<support::ulittle32_t> HashAdjusters;
+
+  std::vector<std::vector<codeview::TypeIndex>> HashMap;
 
   const TpiStreamHeader *Header;
 };

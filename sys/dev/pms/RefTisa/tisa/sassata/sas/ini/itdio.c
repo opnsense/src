@@ -1820,12 +1820,6 @@ tiNumOfLunIOCTLreq(
       break;
     }
     tdIORequestBody = (tdIORequestBody_t *)tiRequestBody;
-    
-    if(tdIORequestBody == agNULL)
-    {
-      status = IOCTL_CALL_FAIL;
-      break;
-    }
     tdIORequestBody->tiIORequest = tiIORequest;
     
     /* save context if we need to abort later */
@@ -1880,7 +1874,9 @@ tiNumOfLunIOCTLreq(
       
     agSSPFrame->dataLength = REPORT_LUN_LEN;
     agSSPFrame->agSgl.len =	sizeof(agsaSSPCmdInfoUnit_t);
-    
+    agSSPFrame->agSgl.extReserved = 0;
+    CLEAR_ESGL_EXTEND(agSSPFrame->agSgl.extReserved);
+
     status = saSSPStart(agRoot, agIORequest, 0, agDevHandle, agRequestType,agSASRequestBody,agNULL,
     										   &ossaSSPIoctlCompleted);
     if(status != AGSA_RC_SUCCESS)

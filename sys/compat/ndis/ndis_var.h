@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 2003
  *	Bill Paul <wpaul@windriver.com>.  All rights reserved.
  *
@@ -1734,8 +1736,6 @@ extern int ndis_get_supported_oids(void *, ndis_oid **, int *);
 extern int ndis_send_packets(void *, ndis_packet **, int);
 extern int ndis_send_packet(void *, ndis_packet *);
 extern int ndis_convert_res(void *);
-extern int ndis_alloc_amem(void *);
-extern void ndis_free_amem(void *);
 extern void ndis_free_packet(ndis_packet *);
 extern void ndis_free_bufs(ndis_buffer *);
 extern int ndis_reset_nic(void *);
@@ -1743,7 +1743,7 @@ extern int ndis_halt_nic(void *);
 extern int ndis_shutdown_nic(void *);
 extern int ndis_pnpevent_nic(void *, int);
 extern int ndis_init_nic(void *);
-extern void ndis_return_packet(struct mbuf *, void *, void *);
+extern void ndis_return_packet(ndis_packet *);
 extern int ndis_init_dma(void *);
 extern int ndis_destroy_dma(void *);
 extern int ndis_create_sysctls(void *);

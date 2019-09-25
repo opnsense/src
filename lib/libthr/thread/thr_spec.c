@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1995 John Birrell <jb@cimlogic.com.au>.
  * All rights reserved.
  *
@@ -42,16 +44,20 @@ __FBSDID("$FreeBSD$");
 
 #include "thr_private.h"
 
-static struct pthread_key _thread_keytable[PTHREAD_KEYS_MAX];
+/* Used in symbol lookup of libthread_db */
+struct pthread_key _thread_keytable[PTHREAD_KEYS_MAX];
 
-__weak_reference(_pthread_key_create, pthread_key_create);
-__weak_reference(_pthread_key_delete, pthread_key_delete);
-__weak_reference(_pthread_getspecific, pthread_getspecific);
-__weak_reference(_pthread_setspecific, pthread_setspecific);
-
+__weak_reference(_thr_key_create, pthread_key_create);
+__weak_reference(_thr_key_create, _pthread_key_create);
+__weak_reference(_thr_key_delete, pthread_key_delete);
+__weak_reference(_thr_key_delete, _pthread_key_delete);
+__weak_reference(_thr_getspecific, pthread_getspecific);
+__weak_reference(_thr_getspecific, _pthread_getspecific);
+__weak_reference(_thr_setspecific, pthread_setspecific);
+__weak_reference(_thr_setspecific, _pthread_setspecific);
 
 int
-_pthread_key_create(pthread_key_t *key, void (*destructor)(void *))
+_thr_key_create(pthread_key_t *key, void (*destructor)(void *))
 {
 	struct pthread *curthread;
 	int i;
@@ -79,7 +85,7 @@ _pthread_key_create(pthread_key_t *key, void (*destructor)(void *))
 }
 
 int
-_pthread_key_delete(pthread_key_t userkey)
+_thr_key_delete(pthread_key_t userkey)
 {
 	struct pthread *curthread;
 	int key, ret;
@@ -152,8 +158,7 @@ _thread_cleanupspecific(void)
 		}
 	}
 	THR_LOCK_RELEASE(curthread, &_keytable_lock);
-	munmap(curthread->specific, PTHREAD_KEYS_MAX * sizeof(struct
-	    pthread_specific_elem));
+	__thr_free(curthread->specific);
 	curthread->specific = NULL;
 	if (curthread->specific_data_count > 0) {
 		stderr_debug("Thread %p has exited with leftover "
@@ -163,7 +168,7 @@ _thread_cleanupspecific(void)
 }
 
 int 
-_pthread_setspecific(pthread_key_t userkey, const void *value)
+_thr_setspecific(pthread_key_t userkey, const void *value)
 {
 	struct pthread *pthread;
 	void *tmp;
@@ -176,10 +181,9 @@ _pthread_setspecific(pthread_key_t userkey, const void *value)
 
 	pthread = _get_curthread();
 	if (pthread->specific == NULL) {
-		tmp = mmap(NULL, PTHREAD_KEYS_MAX *
-		    sizeof(struct pthread_specific_elem),
-		    PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-		if (tmp == MAP_FAILED)
+		tmp = __thr_calloc(PTHREAD_KEYS_MAX,
+		    sizeof(struct pthread_specific_elem));
+		if (tmp == NULL)
 			return (ENOMEM);
 		pthread->specific = tmp;
 	}
@@ -194,7 +198,7 @@ _pthread_setspecific(pthread_key_t userkey, const void *value)
 }
 
 void *
-_pthread_getspecific(pthread_key_t userkey)
+_thr_getspecific(pthread_key_t userkey)
 {
 	struct pthread *pthread;
 	const void *data;

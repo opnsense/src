@@ -22,7 +22,7 @@
 /*
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2013, Joyent, Inc. All rights reserved.
- * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2016 by Delphix. All rights reserved.
  */
 
 #include <sys/types.h>
@@ -343,13 +343,13 @@ static const dt_ident_t _dtrace_globals[] = {
 	&dt_idops_func, "void(@)" },
 { "mod", DT_IDENT_ACTFUNC, 0, DT_ACT_MOD, DT_ATTR_STABCMN,
 	DT_VERS_1_2, &dt_idops_func, "_symaddr(uintptr_t)" },
+#ifdef illumos
 { "msgdsize", DT_IDENT_FUNC, 0, DIF_SUBR_MSGDSIZE,
 	DT_ATTR_STABCMN, DT_VERS_1_0,
 	&dt_idops_func, "size_t(mblk_t *)" },
 { "msgsize", DT_IDENT_FUNC, 0, DIF_SUBR_MSGSIZE,
 	DT_ATTR_STABCMN, DT_VERS_1_0,
 	&dt_idops_func, "size_t(mblk_t *)" },
-#ifdef illumos
 { "mutex_owned", DT_IDENT_FUNC, 0, DIF_SUBR_MUTEX_OWNED,
 	DT_ATTR_EVOLCMN, DT_VERS_1_0,
 	&dt_idops_func, "int(genunix`kmutex_t *)" },
@@ -397,8 +397,6 @@ static const dt_ident_t _dtrace_globals[] = {
 { "printf", DT_IDENT_ACTFUNC, 0, DT_ACT_PRINTF, DT_ATTR_STABCMN, DT_VERS_1_0,
 	&dt_idops_func, "void(@, ...)" },
 { "printm", DT_IDENT_ACTFUNC, 0, DT_ACT_PRINTM, DT_ATTR_STABCMN, DT_VERS_1_0,
-	&dt_idops_func, "void(size_t, uintptr_t *)" },
-{ "printt", DT_IDENT_ACTFUNC, 0, DT_ACT_PRINTT, DT_ATTR_STABCMN, DT_VERS_1_0,
 	&dt_idops_func, "void(size_t, uintptr_t *)" },
 { "probefunc", DT_IDENT_SCALAR, 0, DIF_VAR_PROBEFUNC,
 	DT_ATTR_STABCMN, DT_VERS_1_0, &dt_idops_type, "string" },
@@ -511,8 +509,6 @@ static const dt_ident_t _dtrace_globals[] = {
 	&dt_idops_func, "void(@, size_t, ...)" },
 { "trunc", DT_IDENT_ACTFUNC, 0, DT_ACT_TRUNC, DT_ATTR_STABCMN,
 	DT_VERS_1_0, &dt_idops_func, "void(...)" },
-{ "typeref", DT_IDENT_FUNC, 0, DIF_SUBR_TYPEREF, DT_ATTR_STABCMN, DT_VERS_1_1,
-	&dt_idops_func, "uintptr_t *(void *, size_t, string, size_t)" },
 { "uaddr", DT_IDENT_ACTFUNC, 0, DT_ACT_UADDR, DT_ATTR_STABCMN,
 	DT_VERS_1_2, &dt_idops_func, "_usymaddr(uintptr_t)" },
 { "ucaller", DT_IDENT_SCALAR, 0, DIF_VAR_UCALLER, DT_ATTR_STABCMN,
@@ -1190,7 +1186,7 @@ alloc:
 #endif
 	dtp->dt_provbuckets = _dtrace_strbuckets;
 	dtp->dt_provs = calloc(dtp->dt_provbuckets, sizeof (dt_provider_t *));
-	dt_proc_hash_create(dtp);
+	dt_proc_init(dtp);
 	dtp->dt_vmax = DT_VERS_LATEST;
 	dtp->dt_cpp_path = strdup(_dtrace_defcpp);
 	dtp->dt_cpp_argv = malloc(sizeof (char *));
@@ -1207,12 +1203,13 @@ alloc:
 	(void) uname(&dtp->dt_uts);
 
 	if (dtp->dt_mods == NULL || dtp->dt_provs == NULL ||
-	    dtp->dt_procs == NULL || dtp->dt_ld_path == NULL ||
+	    dtp->dt_procs == NULL || dtp->dt_proc_env == NULL ||
+	    dtp->dt_ld_path == NULL || dtp->dt_cpp_path == NULL ||
 #ifdef __FreeBSD__
 	    dtp->dt_kmods == NULL ||
 	    dtp->dt_objcopy_path == NULL ||
 #endif
-	    dtp->dt_cpp_path == NULL || dtp->dt_cpp_argv == NULL)
+	    dtp->dt_cpp_argv == NULL)
 		return (set_open_errno(dtp, errp, EDT_NOMEM));
 
 	for (i = 0; i < DTRACEOPT_MAX; i++)
@@ -1639,7 +1636,7 @@ dtrace_close(dtrace_hdl_t *dtp)
 	int i;
 
 	if (dtp->dt_procs != NULL)
-		dt_proc_hash_destroy(dtp);
+		dt_proc_fini(dtp);
 
 	while ((pgp = dt_list_next(&dtp->dt_programs)) != NULL)
 		dt_program_destroy(dtp, pgp);

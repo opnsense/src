@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2003 Silicon Graphics International Corp.
  * Copyright (c) 2014-2017 Alexander Motin <mav@FreeBSD.org>
  * All rights reserved.
@@ -41,6 +43,7 @@
 #define	_CTL_BACKEND_H_
 
 #include <cam/ctl/ctl_ioctl.h>
+#include <sys/nv.h>
 
 typedef enum {
 	CTL_LUN_SERSEQ_OFF,
@@ -173,7 +176,7 @@ struct ctl_be_lun {
 	be_lun_config_t		lun_config_status; /* passed to CTL */
 	struct ctl_backend_driver *be;		/* passed to CTL */
 	void			*ctl_lun;	/* used by CTL */
-	ctl_options_t		options;	/* passed to CTL */
+	nvlist_t	 	*options;	/* passed to CTL */
 	STAILQ_ENTRY(ctl_be_lun) links;		/* used by CTL */
 };
 

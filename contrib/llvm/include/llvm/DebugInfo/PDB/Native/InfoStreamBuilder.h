@@ -35,10 +35,21 @@ public:
   InfoStreamBuilder &operator=(const InfoStreamBuilder &) = delete;
 
   void setVersion(PdbRaw_ImplVer V);
+  void addFeature(PdbRaw_FeatureSig Sig);
+
+  // If this is true, the PDB contents are hashed and this hash is used as
+  // PDB GUID and as Signature. The age is always 1.
+  void setHashPDBContentsToGUID(bool B);
+
+  // These only have an effect if hashPDBContentsToGUID() is false.
   void setSignature(uint32_t S);
   void setAge(uint32_t A);
   void setGuid(codeview::GUID G);
-  void addFeature(PdbRaw_FeatureSig Sig);
+
+  bool hashPDBContentsToGUID() const { return HashPDBContentsToGUID; }
+  uint32_t getAge() const { return Age; }
+  codeview::GUID getGuid() const { return Guid; }
+  Optional<uint32_t> getSignature() const { return Signature; }
 
   uint32_t finalize();
 
@@ -52,9 +63,11 @@ private:
 
   std::vector<PdbRaw_FeatureSig> Features;
   PdbRaw_ImplVer Ver;
-  uint32_t Sig;
   uint32_t Age;
+  Optional<uint32_t> Signature;
   codeview::GUID Guid;
+
+  bool HashPDBContentsToGUID = false;
 
   NamedStreamMap &NamedStreams;
 };

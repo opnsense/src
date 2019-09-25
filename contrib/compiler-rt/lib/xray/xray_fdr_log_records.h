@@ -12,6 +12,9 @@
 //===----------------------------------------------------------------------===//
 #ifndef XRAY_XRAY_FDR_LOG_RECORDS_H
 #define XRAY_XRAY_FDR_LOG_RECORDS_H
+#include <cstdint>
+
+namespace __xray {
 
 enum class RecordType : uint8_t { Function, Metadata };
 
@@ -32,6 +35,8 @@ struct alignas(16) MetadataRecord {
     CustomEventMarker,
     CallArgument,
     BufferExtents,
+    TypedEventMarker,
+    Pid,
   };
 
   // Use 7 bits to identify this record type.
@@ -65,5 +70,7 @@ struct alignas(8) FunctionRecord {
 } __attribute__((packed));
 
 static_assert(sizeof(FunctionRecord) == 8, "Wrong size for FunctionRecord.");
+
+} // namespace __xray
 
 #endif // XRAY_XRAY_FDR_LOG_RECORDS_H

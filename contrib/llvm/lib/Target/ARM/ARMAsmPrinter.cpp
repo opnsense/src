@@ -117,7 +117,7 @@ bool ARMAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
   // globals from all functions in PromotedGlobals.
   for (auto *GV : AFI->getGlobalsPromotedToConstantPool())
     PromotedGlobals.insert(GV);
-  
+
   // Calculate this function's optimization goal.
   unsigned OptimizationGoal;
   if (F.hasFnAttribute(Attribute::OptimizeNone))
@@ -233,6 +233,15 @@ void ARMAsmPrinter::printOperand(const MachineInstr *MI, int OpNum,
     GetCPISymbol(MO.getIndex())->print(O, MAI);
     break;
   }
+}
+
+MCSymbol *ARMAsmPrinter::GetCPISymbol(unsigned CPID) const {
+  // The AsmPrinter::GetCPISymbol superclass method tries to use CPID as
+  // indexes in MachineConstantPool, which isn't in sync with indexes used here.
+  const DataLayout &DL = getDataLayout();
+  return OutContext.getOrCreateSymbol(Twine(DL.getPrivateGlobalPrefix()) +
+                                      "CPI" + Twine(getFunctionNumber()) + "_" +
+                                      Twine(CPID));
 }
 
 //===--------------------------------------------------------------------===//
@@ -358,22 +367,35 @@ bool ARMAsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNum,
 
       unsigned NumVals = InlineAsm::getNumOperandRegisters(Flags);
       unsigned RC;
-      InlineAsm::hasRegClassConstraint(Flags, RC);
-      if (RC == ARM::GPRPairRegClassID) {
+      bool FirstHalf;
+      const ARMBaseTargetMachine &ATM =
+        static_cast<const ARMBaseTargetMachine &>(TM);
+
+      // 'Q' should correspond to the low order register and 'R' to the high
+      // order register.  Whether this corresponds to the upper or lower half
+      // depends on the endianess mode.
+      if (ExtraCode[0] == 'Q')
+        FirstHalf = ATM.isLittleEndian();
+      else
+        // ExtraCode[0] == 'R'.
+        FirstHalf = !ATM.isLittleEndian();
+      const TargetRegisterInfo *TRI = MF->getSubtarget().getRegisterInfo();
+      if (InlineAsm::hasRegClassConstraint(Flags, RC) &&
+          ARM::GPRPairRegClass.hasSubClassEq(TRI->getRegClass(RC))) {
         if (NumVals != 1)
           return true;
         const MachineOperand &MO = MI->getOperand(OpNum);
         if (!MO.isReg())
           return true;
         const TargetRegisterInfo *TRI = MF->getSubtarget().getRegisterInfo();
-        unsigned Reg = TRI->getSubReg(MO.getReg(), ExtraCode[0] == 'Q' ?
+        unsigned Reg = TRI->getSubReg(MO.getReg(), FirstHalf ?
             ARM::gsub_0 : ARM::gsub_1);
         O << ARMInstPrinter::getRegisterName(Reg);
         return false;
       }
       if (NumVals != 2)
         return true;
-      unsigned RegOp = ExtraCode[0] == 'Q' ? OpNum : OpNum + 1;
+      unsigned RegOp = FirstHalf ? OpNum : OpNum + 1;
       if (RegOp >= MI->getNumOperands())
         return true;
       const MachineOperand &MO = MI->getOperand(RegOp);
@@ -543,29 +565,6 @@ void ARMAsmPrinter::EmitEndOfAsmFile(Module &M) {
     // linker can safely perform dead code stripping.  Since LLVM never
     // generates code that does this, it is always safe to set.
     OutStreamer->EmitAssemblerFlag(MCAF_SubsectionsViaSymbols);
-  }
-
-  if (TT.isOSBinFormatCOFF()) {
-    const auto &TLOF =
-        static_cast<const TargetLoweringObjectFileCOFF &>(getObjFileLowering());
-
-    std::string Flags;
-    raw_string_ostream OS(Flags);
-
-    for (const auto &Function : M)
-      TLOF.emitLinkerFlagsForGlobal(OS, &Function);
-    for (const auto &Global : M.globals())
-      TLOF.emitLinkerFlagsForGlobal(OS, &Global);
-    for (const auto &Alias : M.aliases())
-      TLOF.emitLinkerFlagsForGlobal(OS, &Alias);
-
-    OS.flush();
-
-    // Output collected flags
-    if (!Flags.empty()) {
-      OutStreamer->SwitchSection(TLOF.getDrectveSection());
-      OutStreamer->EmitBytes(Flags);
-    }
   }
 
   // The last attribute to be emitted is ABI_optimization_goals
@@ -828,15 +827,31 @@ MCSymbol *ARMAsmPrinter::GetARMGVSymbol(const GlobalValue *GV,
     assert(Subtarget->isTargetWindows() &&
            "Windows is the only supported COFF target");
 
-    bool IsIndirect = (TargetFlags & ARMII::MO_DLLIMPORT);
+    bool IsIndirect =
+        (TargetFlags & (ARMII::MO_DLLIMPORT | ARMII::MO_COFFSTUB));
     if (!IsIndirect)
       return getSymbol(GV);
 
     SmallString<128> Name;
-    Name = "__imp_";
+    if (TargetFlags & ARMII::MO_DLLIMPORT)
+      Name = "__imp_";
+    else if (TargetFlags & ARMII::MO_COFFSTUB)
+      Name = ".refptr.";
     getNameWithPrefix(Name, GV);
 
-    return OutContext.getOrCreateSymbol(Name);
+    MCSymbol *MCSym = OutContext.getOrCreateSymbol(Name);
+
+    if (TargetFlags & ARMII::MO_COFFSTUB) {
+      MachineModuleInfoCOFF &MMICOFF =
+          MMI->getObjFileInfo<MachineModuleInfoCOFF>();
+      MachineModuleInfoImpl::StubValueTy &StubSym =
+          MMICOFF.getGVStubEntry(MCSym);
+
+      if (!StubSym.getPointer())
+        StubSym = MachineModuleInfoImpl::StubValueTy(getSymbol(GV), true);
+    }
+
+    return MCSym;
   } else if (Subtarget->isTargetELF()) {
     return getSymbol(GV);
   }
@@ -1004,7 +1019,7 @@ void ARMAsmPrinter::EmitJumpTableTBInst(const MachineInstr *MI,
 
   if (Subtarget->isThumb1Only())
     EmitAlignment(2);
-  
+
   MCSymbol *JTISymbol = GetARMJTIPICJumpTableLabel(JTI);
   OutStreamer->EmitLabel(JTISymbol);
 
@@ -1056,10 +1071,12 @@ void ARMAsmPrinter::EmitUnwindingInstruction(const MachineInstr *MI) {
   MCTargetStreamer &TS = *OutStreamer->getTargetStreamer();
   ARMTargetStreamer &ATS = static_cast<ARMTargetStreamer &>(TS);
   const MachineFunction &MF = *MI->getParent()->getParent();
-  const TargetRegisterInfo *RegInfo = MF.getSubtarget().getRegisterInfo();
+  const TargetRegisterInfo *TargetRegInfo =
+    MF.getSubtarget().getRegisterInfo();
+  const MachineRegisterInfo &MachineRegInfo = MF.getRegInfo();
   const ARMFunctionInfo &AFI = *MF.getInfo<ARMFunctionInfo>();
 
-  unsigned FramePtr = RegInfo->getFrameRegister(MF);
+  unsigned FramePtr = TargetRegInfo->getFrameRegister(MF);
   unsigned Opc = MI->getOpcode();
   unsigned SrcReg, DstReg;
 
@@ -1086,6 +1103,8 @@ void ARMAsmPrinter::EmitUnwindingInstruction(const MachineInstr *MI) {
     unsigned StartOp = 2 + 2;
     // Use all the operands.
     unsigned NumOffset = 0;
+    // Amount of SP adjustment folded into a push.
+    unsigned Pad = 0;
 
     switch (Opc) {
     default:
@@ -1107,6 +1126,18 @@ void ARMAsmPrinter::EmitUnwindingInstruction(const MachineInstr *MI) {
         // temporary to workaround PR11902.
         if (MO.isImplicit())
           continue;
+        // Registers, pushed as a part of folding an SP update into the
+        // push instruction are marked as undef and should not be
+        // restored when unwinding, because the function can modify the
+        // corresponding stack slots.
+        if (MO.isUndef()) {
+          assert(RegList.empty() &&
+                 "Pad registers must come before restored ones");
+          unsigned Width =
+            TargetRegInfo->getRegSizeInBits(MO.getReg(), MachineRegInfo) / 8;
+          Pad += Width;
+          continue;
+        }
         RegList.push_back(MO.getReg());
       }
       break;
@@ -1118,8 +1149,12 @@ void ARMAsmPrinter::EmitUnwindingInstruction(const MachineInstr *MI) {
       RegList.push_back(SrcReg);
       break;
     }
-    if (MAI->getExceptionHandlingType() == ExceptionHandling::ARM)
+    if (MAI->getExceptionHandlingType() == ExceptionHandling::ARM) {
       ATS.emitRegSave(RegList, Opc == ARM::VSTMDDB_UPD);
+      // Account for the SP adjustment, folded into the push.
+      if (Pad)
+        ATS.emitPad(Pad);
+    }
   } else {
     // Changes of stack / frame pointer.
     if (SrcReg == ARM::SP) {

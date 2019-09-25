@@ -24,6 +24,7 @@
 #include "llvm/MC/MCLinkerOptimizationHint.h"
 #include "llvm/MC/MCObjectFileInfo.h"
 #include "llvm/MC/MCObjectStreamer.h"
+#include "llvm/MC/MCObjectWriter.h"
 #include "llvm/MC/MCSection.h"
 #include "llvm/MC/MCSectionMachO.h"
 #include "llvm/MC/MCStreamer.h"
@@ -63,9 +64,11 @@ private:
 
 public:
   MCMachOStreamer(MCContext &Context, std::unique_ptr<MCAsmBackend> MAB,
-                  raw_pwrite_stream &OS, std::unique_ptr<MCCodeEmitter> Emitter,
+                  std::unique_ptr<MCObjectWriter> OW,
+                  std::unique_ptr<MCCodeEmitter> Emitter,
                   bool DWARFMustBeAtTheEnd, bool label)
-      : MCObjectStreamer(Context, std::move(MAB), OS, std::move(Emitter)),
+      : MCObjectStreamer(Context, std::move(MAB), std::move(OW),
+                         std::move(Emitter)),
         LabelSections(label), DWARFMustBeAtTheEnd(DWARFMustBeAtTheEnd),
         CreatedADWARFSection(false) {}
 
@@ -86,10 +89,10 @@ public:
   void EmitAssemblerFlag(MCAssemblerFlag Flag) override;
   void EmitLinkerOptions(ArrayRef<std::string> Options) override;
   void EmitDataRegion(MCDataRegionType Kind) override;
-  void EmitVersionMin(MCVersionMinType Kind, unsigned Major,
-                      unsigned Minor, unsigned Update) override;
-  void EmitBuildVersion(unsigned Platform, unsigned Major,
-                        unsigned Minor, unsigned Update) override;
+  void EmitVersionMin(MCVersionMinType Kind, unsigned Major, unsigned Minor,
+                      unsigned Update, VersionTuple SDKVersion) override;
+  void EmitBuildVersion(unsigned Platform, unsigned Major, unsigned Minor,
+                        unsigned Update, VersionTuple SDKVersion) override;
   void EmitThumbFunc(MCSymbol *Func) override;
   bool EmitSymbolAttribute(MCSymbol *Symbol, MCSymbolAttr Attribute) override;
   void EmitSymbolDesc(MCSymbol *Symbol, unsigned DescValue) override;
@@ -99,7 +102,8 @@ public:
   void EmitLocalCommonSymbol(MCSymbol *Symbol, uint64_t Size,
                              unsigned ByteAlignment) override;
   void EmitZerofill(MCSection *Section, MCSymbol *Symbol = nullptr,
-                    uint64_t Size = 0, unsigned ByteAlignment = 0) override;
+                    uint64_t Size = 0, unsigned ByteAlignment = 0,
+                    SMLoc Loc = SMLoc()) override;
   void EmitTBSSSymbol(MCSection *Section, MCSymbol *Symbol, uint64_t Size,
                       unsigned ByteAlignment = 0) override;
 
@@ -266,14 +270,16 @@ void MCMachOStreamer::EmitDataRegion(MCDataRegionType Kind) {
 }
 
 void MCMachOStreamer::EmitVersionMin(MCVersionMinType Kind, unsigned Major,
-                                     unsigned Minor, unsigned Update) {
-  getAssembler().setVersionMin(Kind, Major, Minor, Update);
+                                     unsigned Minor, unsigned Update,
+                                     VersionTuple SDKVersion) {
+  getAssembler().setVersionMin(Kind, Major, Minor, Update, SDKVersion);
 }
 
 void MCMachOStreamer::EmitBuildVersion(unsigned Platform, unsigned Major,
-                                       unsigned Minor, unsigned Update) {
+                                       unsigned Minor, unsigned Update,
+                                       VersionTuple SDKVersion) {
   getAssembler().setBuildVersion((MachO::PlatformType)Platform, Major, Minor,
-                                 Update);
+                                 Update, SDKVersion);
 }
 
 void MCMachOStreamer::EmitThumbFunc(MCSymbol *Symbol) {
@@ -410,9 +416,18 @@ void MCMachOStreamer::EmitLocalCommonSymbol(MCSymbol *Symbol, uint64_t Size,
 }
 
 void MCMachOStreamer::EmitZerofill(MCSection *Section, MCSymbol *Symbol,
-                                   uint64_t Size, unsigned ByteAlignment) {
-  // On darwin all virtual sections have zerofill type.
-  assert(Section->isVirtualSection() && "Section does not have zerofill type!");
+                                   uint64_t Size, unsigned ByteAlignment,
+                                   SMLoc Loc) {
+  // On darwin all virtual sections have zerofill type. Disallow the usage of
+  // .zerofill in non-virtual functions. If something similar is needed, use
+  // .space or .zero.
+  if (!Section->isVirtualSection()) {
+    getContext().reportError(
+        Loc, "The usage of .zerofill is restricted to sections of "
+             "ZEROFILL type. Use .zero or .space instead.");
+    return; // Early returning here shouldn't harm. EmitZeros should work on any
+            // section.
+  }
 
   PushSection();
   SwitchSection(Section);
@@ -447,6 +462,7 @@ void MCMachOStreamer::EmitInstToData(const MCInst &Inst,
     Fixup.setOffset(Fixup.getOffset() + DF->getContents().size());
     DF->getFixups().push_back(Fixup);
   }
+  DF->setHasInstructions(STI);
   DF->getContents().append(Code.begin(), Code.end());
 }
 
@@ -485,15 +501,15 @@ void MCMachOStreamer::FinishImpl() {
 
 MCStreamer *llvm::createMachOStreamer(MCContext &Context,
                                       std::unique_ptr<MCAsmBackend> &&MAB,
-                                      raw_pwrite_stream &OS,
+                                      std::unique_ptr<MCObjectWriter> &&OW,
                                       std::unique_ptr<MCCodeEmitter> &&CE,
                                       bool RelaxAll, bool DWARFMustBeAtTheEnd,
                                       bool LabelSections) {
   MCMachOStreamer *S =
-      new MCMachOStreamer(Context, std::move(MAB), OS, std::move(CE),
+      new MCMachOStreamer(Context, std::move(MAB), std::move(OW), std::move(CE),
                           DWARFMustBeAtTheEnd, LabelSections);
   const Triple &Target = Context.getObjectFileInfo()->getTargetTriple();
-  S->EmitVersionForTarget(Target);
+  S->EmitVersionForTarget(Target, Context.getObjectFileInfo()->getSDKVersion());
   if (RelaxAll)
     S->getAssembler().setRelaxAll(true);
   return S;

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2002-2007, Jeffrey Roberson <jeff@freebsd.org>
  * All rights reserved.
  *
@@ -281,7 +283,7 @@ static int trysteal_limit = 2;
 static struct tdq	tdq_cpu[MAXCPU];
 static struct tdq	*balance_tdq;
 static int balance_ticks;
-static DPCPU_DEFINE(uint32_t, randomval);
+DPCPU_DEFINE_STATIC(uint32_t, randomval);
 
 #define	TDQ_SELF()	(&tdq_cpu[PCPU_GET(cpuid)])
 #define	TDQ_CPU(x)	(&tdq_cpu[(x)])
@@ -658,7 +660,7 @@ int __noinline cpu_search_both(const struct cpu_group *cg,
  * according to the match argument.  This routine actually compares the
  * load on all paths through the tree and finds the least loaded cpu on
  * the least loaded path, which may differ from the least loaded cpu in
- * the system.  This balances work among caches and busses.
+ * the system.  This balances work among caches and buses.
  *
  * This inline is instantiated in three forms below using constants for the
  * match argument.  It is reduced to the minimum set for each case.  It is
@@ -881,9 +883,6 @@ static void
 sched_balance(void)
 {
 	struct tdq *tdq;
-
-	if (smp_started == 0 || rebalance == 0)
-		return;
 
 	balance_ticks = max(balance_interval / 2, 1) +
 	    (sched_random() % balance_interval);
@@ -1254,6 +1253,8 @@ sched_pickcpu(struct thread *td, int flags)
 
 	self = PCPU_GET(cpuid);
 	ts = td_get_sched(td);
+	KASSERT(!CPU_ABSENT(ts->ts_cpu), ("sched_pickcpu: Start scheduler on "
+	    "absent CPU %d for thread %s.", ts->ts_cpu, td->td_name));
 	if (smp_started == 0)
 		return (self);
 	/*
@@ -1277,7 +1278,7 @@ sched_pickcpu(struct thread *td, int flags)
 	}
 	/*
 	 * If the thread can run on the last cpu and the affinity has not
-	 * expired or it is idle run it there.
+	 * expired and it is idle, run it there.
 	 */
 	tdq = TDQ_CPU(ts->ts_cpu);
 	cg = tdq->tdq_cg;
@@ -1324,6 +1325,7 @@ sched_pickcpu(struct thread *td, int flags)
 	if (cpu == -1)
 		cpu = sched_lowest(cpu_top, mask, -1, INT_MAX, ts->ts_cpu);
 	KASSERT(cpu != -1, ("sched_pickcpu: Failed to find a cpu."));
+	KASSERT(!CPU_ABSENT(cpu), ("sched_pickcpu: Picked absent CPU %d.", cpu));
 	/*
 	 * Compare the lowest loaded cpu to current cpu.
 	 */
@@ -1408,7 +1410,6 @@ sched_setup_smp(void)
 			panic("Can't find cpu group for %d\n", i);
 	}
 	balance_tdq = TDQ_SELF();
-	sched_balance();
 }
 #endif
 
@@ -1469,6 +1470,7 @@ sched_initticks(void *dummy)
 	 * what realstathz is.
 	 */
 	balance_interval = realstathz;
+	balance_ticks = balance_interval;
 	affinity = SCHED_AFFINITY_DEFAULT;
 #endif
 	if (sched_idlespinthresh < 0)
@@ -1666,6 +1668,7 @@ schedinit(void)
 	ts0->ts_ltick = ticks;
 	ts0->ts_ftick = ticks;
 	ts0->ts_slice = 0;
+	ts0->ts_cpu = curcpu;	/* set valid CPU number */
 }
 
 /*
@@ -1951,6 +1954,9 @@ sched_switch_migrate(struct tdq *tdq, struct thread *td, int flags)
 {
 	struct tdq *tdn;
 
+	KASSERT(!CPU_ABSENT(td_get_sched(td)->ts_cpu), ("sched_switch_migrate: "
+	    "thread %s queued on absent CPU %d.", td->td_name,
+	    td_get_sched(td)->ts_cpu));
 	tdn = TDQ_CPU(td_get_sched(td)->ts_cpu);
 #ifdef SMP
 	tdq_load_rem(tdq, td);
@@ -2240,6 +2246,7 @@ sched_fork_thread(struct thread *td, struct thread *child)
 	child->td_lastcpu = NOCPU;
 	child->td_lock = TDQ_LOCKPTR(tdq);
 	child->td_cpuset = cpuset_ref(td->td_cpuset);
+	child->td_domain.dr_policy = td->td_cpuset->cs_domain;
 	ts2->ts_cpu = ts->ts_cpu;
 	ts2->ts_flags = 0;
 	/*
@@ -2346,26 +2353,14 @@ sched_preempt(struct thread *td)
  * to static priorities in msleep() or similar.
  */
 void
-sched_userret(struct thread *td)
+sched_userret_slowpath(struct thread *td)
 {
-	/*
-	 * XXX we cheat slightly on the locking here to avoid locking in  
-	 * the usual case.  Setting td_priority here is essentially an
-	 * incomplete workaround for not setting it properly elsewhere.
-	 * Now that some interrupt handlers are threads, not setting it
-	 * properly elsewhere can clobber it in the window between setting
-	 * it here and returning to user mode, so don't waste time setting
-	 * it perfectly here.
-	 */
-	KASSERT((td->td_flags & TDF_BORROWING) == 0,
-	    ("thread with borrowed priority returning to userland"));
-	if (td->td_priority != td->td_user_pri) {
-		thread_lock(td);
-		td->td_priority = td->td_user_pri;
-		td->td_base_pri = td->td_user_pri;
-		tdq_setlowpri(TDQ_SELF(), td);
-		thread_unlock(td);
-        }
+
+	thread_lock(td);
+	td->td_priority = td->td_user_pri;
+	td->td_base_pri = td->td_user_pri;
+	tdq_setlowpri(TDQ_SELF(), td);
+	thread_unlock(td);
 }
 
 /*
@@ -2384,7 +2379,7 @@ sched_clock(struct thread *td)
 	/*
 	 * We run the long term load balancer infrequently on the first cpu.
 	 */
-	if (balance_tdq == tdq) {
+	if (balance_tdq == tdq && smp_started != 0 && rebalance != 0) {
 		if (balance_ticks && --balance_ticks == 0)
 			sched_balance();
 	}
@@ -3070,7 +3065,7 @@ SYSCTL_INT(_kern_sched, OID_AUTO, trysteal_limit, CTLFLAG_RW, &trysteal_limit,
 SYSCTL_INT(_kern_sched, OID_AUTO, always_steal, CTLFLAG_RW, &always_steal, 0,
     "Always run the stealer from the idle thread");
 SYSCTL_PROC(_kern_sched, OID_AUTO, topology_spec, CTLTYPE_STRING |
-    CTLFLAG_RD, NULL, 0, sysctl_kern_sched_topology_spec, "A",
+    CTLFLAG_MPSAFE | CTLFLAG_RD, NULL, 0, sysctl_kern_sched_topology_spec, "A",
     "XML dump of detected CPU topology");
 #endif
 

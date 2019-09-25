@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2013 Rui Paulo <rpaulo@FreeBSD.org>
  * Copyright (c) 2017 Manuel Stuehn
  * All rights reserved.
@@ -49,7 +51,6 @@ __FBSDID("$FreeBSD$");
 #include <machine/intr.h>
 #include <machine/atomic.h>
 
-#include <dev/fdt/fdt_common.h>
 #include <dev/ofw/openfirm.h>
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
@@ -703,7 +704,7 @@ ti_pruss_mmap(struct cdev *cdev, vm_ooffset_t offset, vm_paddr_t *paddr,
 	device_t dev = cdev->si_drv1;
 	struct ti_pruss_softc *sc = device_get_softc(dev);
 
-	if (offset > rman_get_size(sc->sc_mem_res))
+	if (offset >= rman_get_size(sc->sc_mem_res))
 		return (ENOSPC);
 	*paddr = rman_get_start(sc->sc_mem_res) + offset;
 	*memattr = VM_MEMATTR_UNCACHEABLE;

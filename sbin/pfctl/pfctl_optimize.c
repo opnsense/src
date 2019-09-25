@@ -84,13 +84,13 @@ TAILQ_HEAD(superblocks, superblock);
  * Description of the PF rule structure.
  */
 enum {
-    BARRIER,	/* the presence of the field puts the rule in it's own block */
+    BARRIER,	/* the presence of the field puts the rule in its own block */
     BREAK,	/* the field may not differ between rules in a superblock */
     NOMERGE,	/* the field may not differ between rules when combined */
     COMBINED,	/* the field may itself be combined with other rules */
     DC,		/* we just don't care about the field */
     NEVER};	/* we should never see this field set?!? */
-struct pf_rule_field {
+static struct pf_rule_field {
 	const char	*prf_name;
 	int		 prf_type;
 	size_t		 prf_offset;
@@ -104,7 +104,7 @@ struct pf_rule_field {
 
 
     /*
-     * The presence of these fields in a rule put the rule in it's own
+     * The presence of these fields in a rule put the rule in its own
      * superblock.  Thus it will not be optimized.  It also prevents the
      * rule from being re-ordered at all.
      */
@@ -242,8 +242,9 @@ int	superblock_inclusive(struct superblock *, struct pf_opt_rule *);
 void	superblock_free(struct pfctl *, struct superblock *);
 
 
-int (*skip_comparitors[PF_SKIP_COUNT])(struct pf_rule *, struct pf_rule *);
-const char *skip_comparitors_names[PF_SKIP_COUNT];
+static int (*skip_comparitors[PF_SKIP_COUNT])(struct pf_rule *,
+    struct pf_rule *);
+static const char *skip_comparitors_names[PF_SKIP_COUNT];
 #define PF_SKIP_COMPARITORS {				\
     { "ifp", PF_SKIP_IFP, skip_cmp_ifp },		\
     { "dir", PF_SKIP_DIR, skip_cmp_dir },		\
@@ -255,8 +256,8 @@ const char *skip_comparitors_names[PF_SKIP_COUNT];
     { "dport", PF_SKIP_DST_PORT, skip_cmp_dst_port }	\
 }
 
-struct pfr_buffer table_buffer;
-int table_identifier;
+static struct pfr_buffer table_buffer;
+static int table_identifier;
 
 
 int
@@ -1499,14 +1500,24 @@ superblock_inclusive(struct superblock *block, struct pf_opt_rule *por)
 int
 interface_group(const char *ifname)
 {
+	int			s;
+	struct ifgroupreq	ifgr;
+
 	if (ifname == NULL || !ifname[0])
 		return (0);
 
-	/* Real interfaces must end in a number, interface groups do not */
-	if (isdigit(ifname[strlen(ifname) - 1]))
-		return (0);
-	else
-		return (1);
+	s = get_query_socket();
+
+	memset(&ifgr, 0, sizeof(ifgr));
+	strlcpy(ifgr.ifgr_name, ifname, IFNAMSIZ);
+	if (ioctl(s, SIOCGIFGMEMB, (caddr_t)&ifgr) == -1) {
+		if (errno == ENOENT)
+			return (0);
+		else
+			err(1, "SIOCGIFGMEMB");
+	}
+
+	return (1);
 }
 
 

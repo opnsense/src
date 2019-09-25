@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1994 Herb Peyerl <hpeyerl@novatel.ca>
  * All rights reserved.
  *
@@ -203,6 +205,8 @@ vx_attach(device_t dev)
 	VX_LOCK(sc);
 	vx_stop(sc);
 	VX_UNLOCK(sc);
+
+	gone_by_fcp101_dev(dev);
 
 	return 1;
 }

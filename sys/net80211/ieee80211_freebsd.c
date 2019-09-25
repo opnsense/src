@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2003-2009 Sam Leffler, Errno Consulting
  * All rights reserved.
  *
@@ -66,8 +68,6 @@ SYSCTL_INT(_net_wlan, OID_AUTO, debug, CTLFLAG_RW, &ieee80211_debug,
 	    0, "debugging printfs");
 #endif
 
-static MALLOC_DEFINE(M_80211_COM, "80211com", "802.11 com state");
-
 static const char wlanname[] = "wlan";
 static struct if_clone *wlan_cloner;
 
@@ -134,13 +134,12 @@ int
 ieee80211_sysctl_msecs_ticks(SYSCTL_HANDLER_ARGS)
 {
 	int msecs = ticks_to_msecs(*(int *)arg1);
-	int error, t;
+	int error;
 
 	error = sysctl_handle_int(oidp, &msecs, 0, req);
 	if (error || !req->newptr)
 		return error;
-	t = msecs_to_ticks(msecs);
-	*(int *)arg1 = (t < 1) ? 1 : t;
+	*(int *)arg1 = msecs_to_ticks(msecs);
 	return 0;
 }
 
@@ -304,6 +303,52 @@ ieee80211_sysctl_vdetach(struct ieee80211vap *vap)
 		vap->iv_sysctl = NULL;
 	}
 }
+
+#define	MS(_v, _f)	(((_v) & _f##_M) >> _f##_S)
+int
+ieee80211_com_vincref(struct ieee80211vap *vap)
+{
+	uint32_t ostate;
+
+	ostate = atomic_fetchadd_32(&vap->iv_com_state, IEEE80211_COM_REF_ADD);
+
+	if (ostate & IEEE80211_COM_DETACHED) {
+		atomic_subtract_32(&vap->iv_com_state, IEEE80211_COM_REF_ADD);
+		return (ENETDOWN);
+	}
+
+	if (MS(ostate, IEEE80211_COM_REF) == IEEE80211_COM_REF_MAX) {
+		atomic_subtract_32(&vap->iv_com_state, IEEE80211_COM_REF_ADD);
+		return (EOVERFLOW);
+	}
+
+	return (0);
+}
+
+void
+ieee80211_com_vdecref(struct ieee80211vap *vap)
+{
+	uint32_t ostate;
+
+	ostate = atomic_fetchadd_32(&vap->iv_com_state, -IEEE80211_COM_REF_ADD);
+
+	KASSERT(MS(ostate, IEEE80211_COM_REF) != 0,
+	    ("com reference counter underflow"));
+
+	(void) ostate;
+}
+
+void
+ieee80211_com_vdetach(struct ieee80211vap *vap)
+{
+	int sleep_time;
+
+	sleep_time = msecs_to_ticks(250);
+	atomic_set_32(&vap->iv_com_state, IEEE80211_COM_DETACHED);
+	while (MS(atomic_load_32(&vap->iv_com_state), IEEE80211_COM_REF) != 0)
+		pause("comref", sleep_time);
+}
+#undef	MS
 
 int
 ieee80211_node_dectestref(struct ieee80211_node *ni)
@@ -553,6 +598,57 @@ ieee80211_get_rx_params(struct mbuf *m, struct ieee80211_rx_stats *rxs)
 	rx = (struct ieee80211_rx_params *)(mtag + 1);
 	memcpy(rxs, &rx->params, sizeof(*rxs));
 	return (0);
+}
+
+const struct ieee80211_rx_stats *
+ieee80211_get_rx_params_ptr(struct mbuf *m)
+{
+	struct m_tag *mtag;
+	struct ieee80211_rx_params *rx;
+
+	mtag = m_tag_locate(m, MTAG_ABI_NET80211, NET80211_TAG_RECV_PARAMS,
+	    NULL);
+	if (mtag == NULL)
+		return (NULL);
+	rx = (struct ieee80211_rx_params *)(mtag + 1);
+	return (&rx->params);
+}
+
+
+/*
+ * Add TOA parameters to the given mbuf.
+ */
+int
+ieee80211_add_toa_params(struct mbuf *m, const struct ieee80211_toa_params *p)
+{
+	struct m_tag *mtag;
+	struct ieee80211_toa_params *rp;
+
+	mtag = m_tag_alloc(MTAG_ABI_NET80211, NET80211_TAG_TOA_PARAMS,
+	    sizeof(struct ieee80211_toa_params), M_NOWAIT);
+	if (mtag == NULL)
+		return (0);
+
+	rp = (struct ieee80211_toa_params *)(mtag + 1);
+	memcpy(rp, p, sizeof(*rp));
+	m_tag_prepend(m, mtag);
+	return (1);
+}
+
+int
+ieee80211_get_toa_params(struct mbuf *m, struct ieee80211_toa_params *p)
+{
+	struct m_tag *mtag;
+	struct ieee80211_toa_params *rp;
+
+	mtag = m_tag_locate(m, MTAG_ABI_NET80211, NET80211_TAG_TOA_PARAMS,
+	    NULL);
+	if (mtag == NULL)
+		return (0);
+	rp = (struct ieee80211_toa_params *)(mtag + 1);
+	if (p != NULL)
+		memcpy(p, rp, sizeof(*p));
+	return (1);
 }
 
 /*

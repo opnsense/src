@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2013 Jilles Tjoelker
  * All rights reserved.
  *
@@ -39,5 +41,7 @@ extern const int __hidden_sys_nerr __hidden;
 #define __hidden_sys_errlist sys_errlist
 #define __hidden_sys_nerr sys_nerr
 #endif
+
+extern const char __uprefix[] __hidden;
 
 #endif /* __ERRLST_H__ */

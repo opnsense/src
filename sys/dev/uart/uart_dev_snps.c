@@ -61,22 +61,47 @@ struct snps_softc {
 #endif
 };
 
-static int
-snps_uart_attach(struct uart_softc *uart_sc)
+/*
+ * To use early printf on 64 bits Allwinner SoC, add to kernel config
+ * options SOCDEV_PA=0x0
+ * options SOCDEV_VA=0x40000000
+ * options EARLY_PRINTF
+ *
+ * To use early printf on 32 bits Allwinner SoC, add to kernel config
+ * options SOCDEV_PA=0x01C00000
+ * options SOCDEV_VA=0x10000000
+ * options EARLY_PRINTF
+ *
+ * remove the if 0
+*/
+#if 0
+#ifdef EARLY_PRINTF
+static void
+uart_snps_early_putc(int c)
 {
-	struct snps_softc *sc;
+	volatile uint32_t *stat;
+	volatile uint32_t *tx;
 
-	sc = (struct snps_softc *)uart_sc;
+#ifdef ALLWINNER_64
+	stat = (uint32_t *) (SOCDEV_VA + 0x1C2807C);
+	tx = (uint32_t *) (SOCDEV_VA + 0x1C28000);
+#endif
+#ifdef ALLWINNER_32
+	stat = (uint32_t *) (SOCDEV_VA + 0x2807C);
+	tx = (uint32_t *) (SOCDEV_VA + 0x28000);
+#endif
 
-	/* UART requires to read USR reg when IIR_BUSY */
-	sc->ns8250.busy_detect = 1;
-
-	return (ns8250_bus_attach(uart_sc));
+	while ((*stat & (1 << 2)) == 0)
+		continue;
+	*tx = c;
 }
+early_putc_t *early_putc = uart_snps_early_putc;
+#endif /* EARLY_PRINTF */
+#endif
 
 static kobj_method_t snps_methods[] = {
 	KOBJMETHOD(uart_probe,		ns8250_bus_probe),
-	KOBJMETHOD(uart_attach,		snps_uart_attach),
+	KOBJMETHOD(uart_attach,		ns8250_bus_attach),
 	KOBJMETHOD(uart_detach,		ns8250_bus_detach),
 	KOBJMETHOD(uart_flush,		ns8250_bus_flush),
 	KOBJMETHOD(uart_getsig,		ns8250_bus_getsig),
@@ -102,6 +127,7 @@ struct uart_class uart_snps_class = {
 
 static struct ofw_compat_data compat_data[] = {
 	{ "snps,dw-apb-uart",		(uintptr_t)&uart_snps_class },
+	{ "marvell,armada-38x-uart",	(uintptr_t)&uart_snps_class },
 	{ NULL,				(uintptr_t)NULL }
 };
 UART_FDT_CLASS(compat_data);
@@ -110,9 +136,7 @@ UART_FDT_CLASS(compat_data);
 static int
 snps_get_clocks(device_t dev, clk_t *baudclk, clk_t *apb_pclk)
 {
-	struct snps_softc *sc;
 
-	sc = device_get_softc(dev);
 	*baudclk = NULL;
 	*apb_pclk = NULL;
 
@@ -136,7 +160,7 @@ snps_probe(device_t dev)
 	struct snps_softc *sc;
 	struct uart_class *uart_class;
 	phandle_t node;
-	uint32_t shift, clock;
+	uint32_t shift, iowidth, clock;
 	uint64_t freq;
 	int error;
 #ifdef EXT_RESOURCES
@@ -159,6 +183,8 @@ snps_probe(device_t dev)
 	node = ofw_bus_get_node(dev);
 	if (OF_getencprop(node, "reg-shift", &shift, sizeof(shift)) <= 0)
 		shift = 0;
+	if (OF_getencprop(node, "reg-io-width", &iowidth, sizeof(iowidth)) <= 0)
+		iowidth = 1;
 	if (OF_getencprop(node, "clock-frequency", &clock, sizeof(clock)) <= 0)
 		clock = 0;
 
@@ -200,7 +226,7 @@ snps_probe(device_t dev)
 	if (bootverbose && clock == 0)
 		device_printf(dev, "could not determine frequency\n");
 
-	error = uart_bus_probe(dev, (int)shift, (int)clock, 0, 0);
+	error = uart_bus_probe(dev, (int)shift, (int)iowidth, (int)clock, 0, 0, UART_F_BUSY_DETECT);
 	if (error != 0)
 		return (error);
 

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2005-2006 Pawel Jakub Dawidek <pjd@FreeBSD.org>
  * All rights reserved.
  *
@@ -2621,15 +2623,15 @@ g_journal_dumpconf(struct sbuf *sb, const char *indent, struct g_geom *gp,
 
 		sbuf_printf(sb, "%s<Role>", indent);
 		if (cp == sc->sc_dconsumer) {
-			sbuf_printf(sb, "Data");
+			sbuf_cat(sb, "Data");
 			first = 0;
 		}
 		if (cp == sc->sc_jconsumer) {
 			if (!first)
-				sbuf_printf(sb, ",");
-			sbuf_printf(sb, "Journal");
+				sbuf_cat(sb, ",");
+			sbuf_cat(sb, "Journal");
 		}
-		sbuf_printf(sb, "</Role>\n");
+		sbuf_cat(sb, "</Role>\n");
 		if (cp == sc->sc_jconsumer) {
 			sbuf_printf(sb, "<Jstart>%jd</Jstart>\n",
 			    (intmax_t)sc->sc_jstart);

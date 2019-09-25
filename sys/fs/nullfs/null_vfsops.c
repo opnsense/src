@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1992, 1993, 1995
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -13,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -72,19 +74,17 @@ static vfs_extattrctl_t	nullfs_extattrctl;
 static int
 nullfs_mount(struct mount *mp)
 {
-	int error = 0;
 	struct vnode *lowerrootvp, *vp;
 	struct vnode *nullm_rootvp;
 	struct null_mount *xmp;
-	struct thread *td = curthread;
+	struct null_node *nn;
+	struct nameidata nd, *ndp;
 	char *target;
-	int isvnunlocked = 0, len;
-	struct nameidata nd, *ndp = &nd;
+	int error, len;
+	bool isvnunlocked;
 
 	NULLFSDEBUG("nullfs_mount(mp = %p)\n", (void *)mp);
 
-	if (!prison_allow(td->td_ucred, PR_ALLOW_MOUNT_NULLFS))
-		return (EPERM);
 	if (mp->mnt_flag & MNT_ROOTFS)
 		return (EOPNOTSUPP);
 
@@ -111,14 +111,18 @@ nullfs_mount(struct mount *mp)
 	/*
 	 * Unlock lower node to avoid possible deadlock.
 	 */
-	if ((mp->mnt_vnodecovered->v_op == &null_vnodeops) &&
+	if (mp->mnt_vnodecovered->v_op == &null_vnodeops &&
 	    VOP_ISLOCKED(mp->mnt_vnodecovered) == LK_EXCLUSIVE) {
 		VOP_UNLOCK(mp->mnt_vnodecovered, 0);
-		isvnunlocked = 1;
+		isvnunlocked = true;
+	} else {
+		isvnunlocked = false;
 	}
+
 	/*
 	 * Find lower node
 	 */
+	ndp = &nd;
 	NDINIT(ndp, LOOKUP, FOLLOW|LOCKLEAF, UIO_SYSSPACE, target, curthread);
 	error = namei(ndp);
 
@@ -141,10 +145,13 @@ nullfs_mount(struct mount *mp)
 	/*
 	 * Check multi null mount to avoid `lock against myself' panic.
 	 */
-	if (lowerrootvp == VTONULL(mp->mnt_vnodecovered)->null_lowervp) {
-		NULLFSDEBUG("nullfs_mount: multi null mount?\n");
-		vput(lowerrootvp);
-		return (EDEADLK);
+	if (mp->mnt_vnodecovered->v_op == &null_vnodeops) {
+		nn = VTONULL(mp->mnt_vnodecovered);
+		if (nn == NULL || lowerrootvp == nn->null_lowervp) {
+			NULLFSDEBUG("nullfs_mount: multi null mount?\n");
+			vput(lowerrootvp);
+			return (EDEADLK);
+		}
 	}
 
 	xmp = (struct null_mount *) malloc(sizeof(struct null_mount),
@@ -228,7 +235,7 @@ nullfs_unmount(mp, mntflags)
 {
 	struct null_mount *mntdata;
 	struct mount *ump;
-	int error, flags;
+	int error, flags, rootrefs;
 
 	NULLFSDEBUG("nullfs_unmount: mp = %p\n", (void *)mp);
 
@@ -237,10 +244,20 @@ nullfs_unmount(mp, mntflags)
 	else
 		flags = 0;
 
-	/* There is 1 extra root vnode reference (nullm_rootvp). */
-	error = vflush(mp, 1, flags, curthread);
-	if (error)
-		return (error);
+	for (rootrefs = 1;; rootrefs = 0) {
+		/* There is 1 extra root vnode reference (nullm_rootvp). */
+		error = vflush(mp, rootrefs, flags, curthread);
+		if (error)
+			return (error);
+		MNT_ILOCK(mp);
+		if (mp->mnt_nvnodelistsize == 0) {
+			MNT_IUNLOCK(mp);
+			break;
+		}
+		MNT_IUNLOCK(mp);
+		if ((mntflags & MNT_FORCE) == 0)
+			return (EBUSY);
+	}
 
 	/*
 	 * Finally, throw away the null_mount structure

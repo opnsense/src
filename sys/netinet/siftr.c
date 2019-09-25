@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2007-2009
  * 	Swinburne University of Technology, Melbourne, Australia.
  * Copyright (c) 2009-2010, The FreeBSD Foundation
@@ -150,8 +152,6 @@ __FBSDID("$FreeBSD$");
 #endif
 
 /* useful macros */
-#define CAST_PTR_INT(X) (*((int*)(X)))
-
 #define UPPER_SHORT(X)	(((X) & 0xFFFF0000) >> 16)
 #define LOWER_SHORT(X)	((X) & 0x0000FFFF)
 
@@ -266,12 +266,13 @@ struct siftr_stats
 	uint32_t nskip_out_dejavu;
 };
 
-static DPCPU_DEFINE(struct siftr_stats, ss);
+DPCPU_DEFINE_STATIC(struct siftr_stats, ss);
 
 static volatile unsigned int siftr_exit_pkt_manager_thread = 0;
 static unsigned int siftr_enabled = 0;
 static unsigned int siftr_pkts_per_log = 1;
 static unsigned int siftr_generate_hashes = 0;
+static uint16_t     siftr_port_filter = 0;
 /* static unsigned int siftr_binary_log = 0; */
 static char siftr_logfile[PATH_MAX] = "/var/log/siftr.log";
 static char siftr_logfile_shadow[PATH_MAX] = "/var/log/siftr.log";
@@ -316,6 +317,10 @@ SYSCTL_UINT(_net_inet_siftr, OID_AUTO, ppl, CTLFLAG_RW,
 SYSCTL_UINT(_net_inet_siftr, OID_AUTO, genhashes, CTLFLAG_RW,
     &siftr_generate_hashes, 0,
     "enable packet hash generation");
+
+SYSCTL_U16(_net_inet_siftr, OID_AUTO, port_filter, CTLFLAG_RW,
+    &siftr_port_filter, 0,
+    "enable packet filter on a TCP port");
 
 /* XXX: TODO
 SYSCTL_UINT(_net_inet_siftr, OID_AUTO, binary, CTLFLAG_RW,
@@ -708,7 +713,7 @@ siftr_findinpcb(int ipver, struct ip *ip, struct mbuf *m, uint16_t sport,
 	struct inpcb *inp;
 
 	/* We need the tcbinfo lock. */
-	INP_INFO_UNLOCK_ASSERT(&V_tcbinfo);
+	INP_INFO_WUNLOCK_ASSERT(&V_tcbinfo);
 
 	if (dir == PFIL_IN)
 		inp = (ipver == INP_IPV4 ?
@@ -907,6 +912,16 @@ siftr_chkpkt(void *arg, struct mbuf **m, struct ifnet *ifp, int dir,
 		goto inp_unlock;
 	}
 
+	/*
+	 * Only pkts selected by the tcp port filter
+	 * can be inserted into the pkt_queue
+	 */
+	if ((siftr_port_filter != 0) && 
+	    (siftr_port_filter != ntohs(inp->inp_lport)) &&
+	    (siftr_port_filter != ntohs(inp->inp_fport))) {
+		goto inp_unlock;
+	}
+
 	pn = malloc(sizeof(struct pkt_node), M_SIFTR_PKTNODE, M_NOWAIT|M_ZERO);
 
 	if (pn == NULL) {
@@ -1083,6 +1098,16 @@ siftr_chkpkt6(void *arg, struct mbuf **m, struct ifnet *ifp, int dir,
 		goto inp_unlock6;
 	}
 
+	/*
+	 * Only pkts selected by the tcp port filter
+	 * can be inserted into the pkt_queue
+	 */
+	if ((siftr_port_filter != 0) && 
+	    (siftr_port_filter != ntohs(inp->inp_lport)) &&
+	    (siftr_port_filter != ntohs(inp->inp_fport))) {
+		goto inp_unlock6;
+	}
+
 	pn = malloc(sizeof(struct pkt_node), M_SIFTR_PKTNODE, M_NOWAIT|M_ZERO);
 
 	if (pn == NULL) {
@@ -1199,10 +1224,10 @@ siftr_manage_ops(uint8_t action)
 	struct timeval tval;
 	struct flow_hash_node *counter, *tmp_counter;
 	struct sbuf *s;
-	int i, key_index, ret, error;
+	int i, key_index, error;
 	uint32_t bytes_to_write, total_skipped_pkts;
 	uint16_t lport, fport;
-	uint8_t *key, ipver;
+	uint8_t *key, ipver __unused;
 
 #ifdef SIFTR_IPV6
 	uint32_t laddr[4];
@@ -1219,7 +1244,7 @@ siftr_manage_ops(uint8_t action)
 	if ((s = sbuf_new(NULL, NULL, 200, SBUF_AUTOEXTEND)) == NULL)
 		return (-1);
 
-	if (action == SIFTR_ENABLE) {
+	if (action == SIFTR_ENABLE && siftr_pkt_manager_thr == NULL) {
 		/*
 		 * Create our alq
 		 * XXX: We should abort if alq_open fails!
@@ -1233,7 +1258,7 @@ siftr_manage_ops(uint8_t action)
 
 		siftr_exit_pkt_manager_thread = 0;
 
-		ret = kthread_add(&siftr_pkt_manager_thread, NULL, NULL,
+		kthread_add(&siftr_pkt_manager_thread, NULL, NULL,
 		    &siftr_pkt_manager_thr, RFNOWAIT, 0,
 		    "siftr_pkt_manager_thr");
 
@@ -1424,7 +1449,8 @@ siftr_manage_ops(uint8_t action)
 
 		alq_close(siftr_alq);
 		siftr_alq = NULL;
-	}
+	} else
+		error = EINVAL;
 
 	sbuf_delete(s);
 
@@ -1440,29 +1466,33 @@ siftr_manage_ops(uint8_t action)
 static int
 siftr_sysctl_enabled_handler(SYSCTL_HANDLER_ARGS)
 {
-	if (req->newptr == NULL)
-		goto skip;
+	int error;
+	uint32_t new;
 
-	/* If the value passed in isn't 0 or 1, return an error. */
-	if (CAST_PTR_INT(req->newptr) != 0 && CAST_PTR_INT(req->newptr) != 1)
-		return (1);
-
-	/* If we are changing state (0 to 1 or 1 to 0). */
-	if (CAST_PTR_INT(req->newptr) != siftr_enabled )
-		if (siftr_manage_ops(CAST_PTR_INT(req->newptr))) {
-			siftr_manage_ops(SIFTR_DISABLE);
-			return (1);
+	new = siftr_enabled;
+	error = sysctl_handle_int(oidp, &new, 0, req);
+	if (error == 0 && req->newptr != NULL) {
+		if (new > 1)
+			return (EINVAL);
+		else if (new != siftr_enabled) {
+			if ((error = siftr_manage_ops(new)) == 0) {
+				siftr_enabled = new;
+			} else {
+				siftr_manage_ops(SIFTR_DISABLE);
+			}
 		}
+	}
 
-skip:
-	return (sysctl_handle_int(oidp, arg1, arg2, req));
+	return (error);
 }
 
 
 static void
 siftr_shutdown_handler(void *arg)
 {
-	siftr_manage_ops(SIFTR_DISABLE);
+	if (siftr_enabled == 1) {
+		siftr_manage_ops(SIFTR_DISABLE);
+	}
 }
 
 

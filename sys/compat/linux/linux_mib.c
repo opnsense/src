@@ -149,8 +149,8 @@ linux_map_osrel(char *osrelease, int *osrel)
 	if (osrelease == sep || sep != eosrelease)
 		return (EINVAL);
 
-	v = v0 * 1000000 + v1 * 1000 + v2;
-	if (v < 1000000)
+	v = LINUX_KERNVER(v0, v1, v2);
+	if (v < LINUX_KERNVER(1, 0, 0))
 		return (EINVAL);
 
 	if (osrel != NULL)
@@ -434,7 +434,7 @@ linux_osd_jail_register(void)
 
 	linux_osd_jail_slot =
 	    osd_jail_register(linux_prison_destructor, methods);
-	/* Copy the system linux info to any current prisons. */
+	/* Copy the system Linux info to any current prisons. */
 	sx_slock(&allprison_lock);
 	TAILQ_FOREACH(pr, &allprison, pr_list)
 		linux_alloc_prison(pr, NULL);

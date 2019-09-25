@@ -132,10 +132,14 @@ out:
 static inline int
 sysfs_create_file(struct kobject *kobj, const struct attribute *attr)
 {
+	struct sysctl_oid *oid;
 
-	SYSCTL_ADD_OID(NULL, SYSCTL_CHILDREN(kobj->oidp), OID_AUTO,
+	oid = SYSCTL_ADD_OID(NULL, SYSCTL_CHILDREN(kobj->oidp), OID_AUTO,
 	    attr->name, CTLTYPE_STRING|CTLFLAG_RW|CTLFLAG_MPSAFE, kobj,
 	    (uintptr_t)attr, sysctl_handle_attr, "A", "");
+	if (!oid) {
+		return (-ENOMEM);
+	}
 
 	return (0);
 }
@@ -148,12 +152,27 @@ sysfs_remove_file(struct kobject *kobj, const struct attribute *attr)
 		sysctl_remove_name(kobj->oidp, attr->name, 1, 1);
 }
 
-static inline void
-sysfs_remove_group(struct kobject *kobj, const struct attribute_group *grp)
+static inline int
+sysfs_create_files(struct kobject *kobj, const struct attribute * const *attrs)
 {
+	int error = 0;
+	int i;
 
-	if (kobj->oidp)
-		sysctl_remove_name(kobj->oidp, grp->name, 1, 1);
+	for (i = 0; attrs[i] && !error; i++)
+		error = sysfs_create_file(kobj, attrs[i]);
+	while (error && --i >= 0)
+		sysfs_remove_file(kobj, attrs[i]);
+
+	return (error);
+}
+
+static inline void
+sysfs_remove_files(struct kobject *kobj, const struct attribute * const *attrs)
+{
+	int i;
+
+	for (i = 0; attrs[i]; i++)
+		sysfs_remove_file(kobj, attrs[i]);
 }
 
 static inline int
@@ -162,8 +181,12 @@ sysfs_create_group(struct kobject *kobj, const struct attribute_group *grp)
 	struct attribute **attr;
 	struct sysctl_oid *oidp;
 
-	oidp = SYSCTL_ADD_NODE(NULL, SYSCTL_CHILDREN(kobj->oidp),
-	    OID_AUTO, grp->name, CTLFLAG_RD|CTLFLAG_MPSAFE, NULL, grp->name);
+	/* Don't create the group node if grp->name is undefined. */
+	if (grp->name)
+		oidp = SYSCTL_ADD_NODE(NULL, SYSCTL_CHILDREN(kobj->oidp),
+		    OID_AUTO, grp->name, CTLFLAG_RD|CTLFLAG_MPSAFE, NULL, grp->name);
+	else
+		oidp = kobj->oidp;
 	for (attr = grp->attrs; *attr != NULL; attr++) {
 		SYSCTL_ADD_OID(NULL, SYSCTL_CHILDREN(oidp), OID_AUTO,
 		    (*attr)->name, CTLTYPE_STRING|CTLFLAG_RW|CTLFLAG_MPSAFE,
@@ -173,12 +196,62 @@ sysfs_create_group(struct kobject *kobj, const struct attribute_group *grp)
 	return (0);
 }
 
+static inline void
+sysfs_remove_group(struct kobject *kobj, const struct attribute_group *grp)
+{
+
+	if (kobj->oidp)
+		sysctl_remove_name(kobj->oidp, grp->name, 1, 1);
+}
+
+static inline int
+sysfs_create_groups(struct kobject *kobj, const struct attribute_group **grps)
+{
+	int error = 0;
+	int i;
+
+	for (i = 0; grps[i] && !error; i++)
+		error = sysfs_create_group(kobj, grps[i]);
+	while (error && --i >= 0)
+		sysfs_remove_group(kobj, grps[i]);
+
+	return (error);
+}
+
+static inline int
+sysfs_merge_group(struct kobject *kobj, const struct attribute_group *grp)
+{
+
+	/* Really expected behavior is to return failure if group exists. */
+	return (sysfs_create_group(kobj, grp));
+}
+
+static inline void
+sysfs_unmerge_group(struct kobject *kobj, const struct attribute_group *grp)
+{
+	struct attribute **attr;
+	struct sysctl_oid *oidp;
+
+	SLIST_FOREACH(oidp, SYSCTL_CHILDREN(kobj->oidp), oid_link) {
+		if (strcmp(oidp->oid_name, grp->name) != 0)
+			continue;
+		for (attr = grp->attrs; *attr != NULL; attr++) {
+			sysctl_remove_name(oidp, (*attr)->name, 1, 1);
+		}
+	}
+}
+
 static inline int
 sysfs_create_dir(struct kobject *kobj)
 {
+	struct sysctl_oid *oid;
 
-	kobj->oidp = SYSCTL_ADD_NODE(NULL, SYSCTL_CHILDREN(kobj->parent->oidp),
+	oid = SYSCTL_ADD_NODE(NULL, SYSCTL_CHILDREN(kobj->parent->oidp),
 	    OID_AUTO, kobj->name, CTLFLAG_RD|CTLFLAG_MPSAFE, NULL, kobj->name);
+	if (!oid) {
+		return (-ENOMEM);
+	}
+	kobj->oidp = oid;
 
 	return (0);
 }
@@ -190,6 +263,22 @@ sysfs_remove_dir(struct kobject *kobj)
 	if (kobj->oidp == NULL)
 		return;
 	sysctl_remove_oid(kobj->oidp, 1, 1);
+}
+
+static inline bool
+sysfs_streq(const char *s1, const char *s2)
+{
+	int l1, l2;
+
+	l1 = strlen(s1);
+	l2 = strlen(s2);
+
+	if (l1 != 0 && s1[l1-1] == '\n')
+		l1--;
+	if (l2 != 0 && s2[l2-1] == '\n')
+		l2--;
+
+	return (l1 == l2 && strncmp(s1, s2, l1) == 0);
 }
 
 #define sysfs_attr_init(attr) do {} while(0)

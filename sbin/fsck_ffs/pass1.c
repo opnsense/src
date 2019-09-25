@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1980, 1986, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -96,7 +98,7 @@ pass1(void)
 	for (c = 0; c < sblock.fs_ncg; c++) {
 		inumber = c * sblock.fs_ipg;
 		setinodebuf(inumber);
-		cgbp = cgget(c);
+		cgbp = cglookup(c);
 		cgp = cgbp->b_un.b_cg;
 		rebuildcg = 0;
 		if (!check_cgmagic(c, cgbp))
@@ -166,7 +168,7 @@ pass1(void)
 		 * Scan the allocated inodes.
 		 */
 		for (i = 0; i < inosused; i++, inumber++) {
-			if (inumber < ROOTINO) {
+			if (inumber < UFS_ROOTINO) {
 				(void)getnextinode(inumber, rebuildcg);
 				continue;
 			}
@@ -245,30 +247,31 @@ checkinode(ino_t inumber, struct inodesc *idesc, int rebuildcg)
 	off_t kernmaxfilesize;
 	ufs2_daddr_t ndb;
 	mode_t mode;
+	uintmax_t fixsize;
 	int j, ret, offset;
 
 	if ((dp = getnextinode(inumber, rebuildcg)) == NULL)
-		return (0);
+		goto unknown;
 	mode = DIP(dp, di_mode) & IFMT;
 	if (mode == 0) {
 		if ((sblock.fs_magic == FS_UFS1_MAGIC &&
 		     (memcmp(dp->dp1.di_db, ufs1_zino.di_db,
-			NDADDR * sizeof(ufs1_daddr_t)) ||
+			UFS_NDADDR * sizeof(ufs1_daddr_t)) ||
 		      memcmp(dp->dp1.di_ib, ufs1_zino.di_ib,
-			NIADDR * sizeof(ufs1_daddr_t)) ||
+			UFS_NIADDR * sizeof(ufs1_daddr_t)) ||
 		      dp->dp1.di_mode || dp->dp1.di_size)) ||
 		    (sblock.fs_magic == FS_UFS2_MAGIC &&
 		     (memcmp(dp->dp2.di_db, ufs2_zino.di_db,
-			NDADDR * sizeof(ufs2_daddr_t)) ||
+			UFS_NDADDR * sizeof(ufs2_daddr_t)) ||
 		      memcmp(dp->dp2.di_ib, ufs2_zino.di_ib,
-			NIADDR * sizeof(ufs2_daddr_t)) ||
+			UFS_NIADDR * sizeof(ufs2_daddr_t)) ||
 		      dp->dp2.di_mode || dp->dp2.di_size))) {
 			pfatal("PARTIALLY ALLOCATED INODE I=%lu",
 			    (u_long)inumber);
 			if (reply("CLEAR") == 1) {
 				dp = ginode(inumber);
 				clearinode(dp);
-				inodirty();
+				inodirty(dp);
 			}
 		}
 		inoinfo(inumber)->ino_state = USTATE;
@@ -291,7 +294,7 @@ checkinode(ino_t inumber, struct inodesc *idesc, int rebuildcg)
 		dp = ginode(inumber);
 		DIP_SET(dp, di_size, sblock.fs_fsize);
 		DIP_SET(dp, di_mode, IFREG|0600);
-		inodirty();
+		inodirty(dp);
 	}
 	if ((mode == IFBLK || mode == IFCHR || mode == IFIFO ||
 	     mode == IFSOCK) && DIP(dp, di_size) != 0) {
@@ -327,24 +330,24 @@ checkinode(ino_t inumber, struct inodesc *idesc, int rebuildcg)
 			else
 				ndb = howmany(DIP(dp, di_size),
 				    sizeof(ufs2_daddr_t));
-			if (ndb > NDADDR) {
-				j = ndb - NDADDR;
+			if (ndb > UFS_NDADDR) {
+				j = ndb - UFS_NDADDR;
 				for (ndb = 1; j > 1; j--)
 					ndb *= NINDIR(&sblock);
-				ndb += NDADDR;
+				ndb += UFS_NDADDR;
 			}
 		}
 	}
-	for (j = ndb; ndb < NDADDR && j < NDADDR; j++)
+	for (j = ndb; ndb < UFS_NDADDR && j < UFS_NDADDR; j++)
 		if (DIP(dp, di_db[j]) != 0) {
 			if (debug)
 				printf("bad direct addr[%d]: %ju\n", j,
 				    (uintmax_t)DIP(dp, di_db[j]));
 			goto unknown;
 		}
-	for (j = 0, ndb -= NDADDR; ndb > 0; j++)
+	for (j = 0, ndb -= UFS_NDADDR; ndb > 0; j++)
 		ndb /= NINDIR(&sblock);
-	for (; j < NIADDR; j++)
+	for (; j < UFS_NIADDR; j++)
 		if (DIP(dp, di_ib[j]) != 0) {
 			if (debug)
 				printf("bad indirect addr: %ju\n",
@@ -379,7 +382,7 @@ checkinode(ino_t inumber, struct inodesc *idesc, int rebuildcg)
 	if (sblock.fs_magic == FS_UFS2_MAGIC && dp->dp2.di_extsize > 0) {
 		idesc->id_type = ADDR;
 		ndb = howmany(dp->dp2.di_extsize, sblock.fs_bsize);
-		for (j = 0; j < NXADDR; j++) {
+		for (j = 0; j < UFS_NXADDR; j++) {
 			if (--ndb == 0 &&
 			    (offset = blkoff(&sblock, dp->dp2.di_extsize)) != 0)
 				idesc->id_numfrags = numfrags(&sblock,
@@ -408,7 +411,7 @@ checkinode(ino_t inumber, struct inodesc *idesc, int rebuildcg)
 		if (bkgrdflag == 0) {
 			dp = ginode(inumber);
 			DIP_SET(dp, di_blocks, idesc->id_entryno);
-			inodirty();
+			inodirty(dp);
 		} else {
 			cmd.value = idesc->id_number;
 			cmd.size = idesc->id_entryno - DIP(dp, di_blocks);
@@ -420,6 +423,46 @@ checkinode(ino_t inumber, struct inodesc *idesc, int rebuildcg)
 				rwerror("ADJUST INODE BLOCK COUNT", cmd.value);
 		}
 	}
+	/*
+	 * Soft updates will always ensure that the file size is correct
+	 * for files that contain only direct block pointers. However
+	 * soft updates does not roll back sizes for files with indirect
+	 * blocks that it has set to unallocated because their contents
+	 * have not yet been written to disk. Hence, the file can appear
+	 * to have a hole at its end because the block pointer has been
+	 * rolled back to zero. Thus, id_lballoc tracks the last allocated
+	 * block in the file. Here, for files that extend into indirect
+	 * blocks, we check for a size past the last allocated block of
+	 * the file and if that is found, shorten the file to reference
+	 * the last allocated block to avoid having it reference a hole
+	 * at its end.
+	 */
+	if (DIP(dp, di_size) > UFS_NDADDR * sblock.fs_bsize &&
+	    idesc->id_lballoc < lblkno(&sblock, DIP(dp, di_size) - 1)) {
+		fixsize = lblktosize(&sblock, idesc->id_lballoc + 1);
+		pwarn("INODE %lu: FILE SIZE %ju BEYOND END OF ALLOCATED FILE, "
+		      "SIZE SHOULD BE %ju", (u_long)inumber,
+		      (uintmax_t)DIP(dp, di_size), fixsize);
+		if (preen)
+			printf(" (ADJUSTED)\n");
+		else if (reply("ADJUST") == 0)
+			return (1);
+		if (bkgrdflag == 0) {
+			dp = ginode(inumber);
+			DIP_SET(dp, di_size, fixsize);
+			inodirty(dp);
+		} else {
+			cmd.value = idesc->id_number;
+			cmd.size = fixsize;
+			if (debug)
+				printf("setsize ino %ju size set to %ju\n",
+				    (uintmax_t)cmd.value, (uintmax_t)cmd.size);
+			if (sysctl(setsize, MIBSIZE, 0, 0,
+			    &cmd, sizeof cmd) == -1)
+				rwerror("SET INODE SIZE", cmd.value);
+		}
+
+	}
 	return (1);
 unknown:
 	pfatal("UNKNOWN FILE TYPE I=%lu", (u_long)inumber);
@@ -428,7 +471,7 @@ unknown:
 		inoinfo(inumber)->ino_state = USTATE;
 		dp = ginode(inumber);
 		clearinode(dp);
-		inodirty();
+		inodirty(dp);
 	}
 	return (1);
 }
@@ -521,5 +564,7 @@ pass1check(struct inodesc *idesc)
 		 */
 		idesc->id_entryno++;
 	}
+	if (idesc->id_level == 0 && idesc->id_lballoc < idesc->id_lbn)
+		idesc->id_lballoc = idesc->id_lbn;
 	return (res);
 }

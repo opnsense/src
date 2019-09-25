@@ -42,6 +42,7 @@
 __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 
 #include <assert.h>
@@ -52,7 +53,6 @@ __FBSDID("$FreeBSD$");
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <sys/stat.h>
 
 #include "makefs.h"
 #include "mtree.h"
@@ -81,13 +81,14 @@ walk_dir(const char *root, const char *dir, fsnode *parent, fsnode *join)
 	char		path[MAXPATHLEN + 1];
 	struct stat	stbuf;
 	char		*name, *rp;
-	int		dot, len;
+	size_t		len;
+	int		dot;
 
 	assert(root != NULL);
 	assert(dir != NULL);
 
 	len = snprintf(path, sizeof(path), "%s/%s", root, dir);
-	if (len >= (int)sizeof(path))
+	if (len >= sizeof(path))
 		errx(1, "Pathname too long.");
 	if (debug & DEBUG_WALK_DIR)
 		printf("walk_dir: %s %p\n", path, parent);
@@ -121,8 +122,8 @@ walk_dir(const char *root, const char *dir, fsnode *parent, fsnode *join)
 			}
 		if (debug & DEBUG_WALK_DIR_NODE)
 			printf("scanning %s/%s/%s\n", root, dir, name);
-		if (snprintf(path + len, sizeof(path) - len, "/%s", name) >=
-		    (int)sizeof(path) - len)
+		if ((size_t)snprintf(path + len, sizeof(path) - len, "/%s",
+		    name) >= sizeof(path) - len)
 			errx(1, "Pathname too long.");
 		if (lstat(path, &stbuf) == -1)
 			err(1, "Can't lstat `%s'", path);
@@ -333,6 +334,7 @@ apply_specfile(const char *specfile, const char *dir, fsnode *parent, int specon
 				/* merge in the changes */
 	apply_specdir(dir, root, parent, speconly);
 
+	free_nodes(root);
 }
 
 static void
@@ -397,8 +399,8 @@ apply_specdir(const char *dir, NODE *specnode, fsnode *dirnode, int speconly)
 			if (strcmp(curnode->name, curfsnode->name) == 0)
 				break;
 		}
-		if (snprintf(path, sizeof(path), "%s/%s",
-		    dir, curnode->name) >= sizeof(path))
+		if ((size_t)snprintf(path, sizeof(path), "%s/%s", dir,
+		    curnode->name) >= sizeof(path))
 			errx(1, "Pathname too long.");
 		if (curfsnode == NULL) {	/* need new entry */
 			struct stat	stbuf;

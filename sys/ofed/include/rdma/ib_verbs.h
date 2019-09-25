@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0
+ *
  * Copyright (c) 2004 Mellanox Technologies Ltd.  All rights reserved.
  * Copyright (c) 2004 Infinicon Corporation.  All rights reserved.
  * Copyright (c) 2004 Intel Corporation.  All rights reserved.
@@ -396,6 +398,7 @@ enum ib_port_cap_flags {
 
 enum ib_port_width {
 	IB_WIDTH_1X	= 1,
+	IB_WIDTH_2X	= 16,
 	IB_WIDTH_4X	= 2,
 	IB_WIDTH_8X	= 4,
 	IB_WIDTH_12X	= 8
@@ -405,6 +408,7 @@ static inline int ib_width_enum_to_int(enum ib_port_width width)
 {
 	switch (width) {
 	case IB_WIDTH_1X:  return  1;
+	case IB_WIDTH_2X:  return  2;
 	case IB_WIDTH_4X:  return  4;
 	case IB_WIDTH_8X:  return  8;
 	case IB_WIDTH_12X: return 12;
@@ -670,7 +674,11 @@ enum ib_rate {
 	IB_RATE_25_GBPS  = 15,
 	IB_RATE_100_GBPS = 16,
 	IB_RATE_200_GBPS = 17,
-	IB_RATE_300_GBPS = 18
+	IB_RATE_300_GBPS = 18,
+	IB_RATE_28_GBPS  = 19,
+	IB_RATE_50_GBPS  = 20,
+	IB_RATE_400_GBPS = 21,
+	IB_RATE_600_GBPS = 22,
 };
 
 /**
@@ -1318,11 +1326,6 @@ enum ib_access_flags {
 	IB_ACCESS_MW_BIND	= (1<<4),
 	IB_ZERO_BASED		= (1<<5),
 	IB_ACCESS_ON_DEMAND     = (1<<6),
-};
-
-struct ib_phys_buf {
-	u64	addr;
-	u64	size;
 };
 
 /*
@@ -1997,11 +2000,6 @@ struct ib_device {
 						      int wc_cnt);
 	struct ib_mr *             (*get_dma_mr)(struct ib_pd *pd,
 						 int mr_access_flags);
-	struct ib_mr *		   (*reg_phys_mr)(struct ib_pd *pd,
-						  struct ib_phys_buf *phys_buf_array,
-						  int num_phys_buf,
-						  int mr_access_flags,
-						  u64 *iova_start);
 	struct ib_mr *             (*reg_user_mr)(struct ib_pd *pd,
 						  u64 start, u64 length,
 						  u64 virt_addr,
@@ -2266,6 +2264,13 @@ static inline u8 rdma_start_port(const struct ib_device *device)
 static inline u8 rdma_end_port(const struct ib_device *device)
 {
 	return rdma_cap_ib_switch(device) ? 0 : device->phys_port_cnt;
+}
+
+static inline int rdma_is_port_valid(const struct ib_device *device,
+				     unsigned int port)
+{
+	return (port >= rdma_start_port(device) &&
+		port <= rdma_end_port(device));
 }
 
 static inline bool rdma_protocol_ib(const struct ib_device *device, u8 port_num)

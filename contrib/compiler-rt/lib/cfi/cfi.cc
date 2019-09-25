@@ -13,15 +13,33 @@
 
 #include <assert.h>
 #include <elf.h>
+
+#include "sanitizer_common/sanitizer_common.h"
+#if SANITIZER_FREEBSD
+#include <sys/link_elf.h>
+#endif
 #include <link.h>
 #include <string.h>
+#include <stdlib.h>
 #include <sys/mman.h>
 
+#if SANITIZER_LINUX
 typedef ElfW(Phdr) Elf_Phdr;
 typedef ElfW(Ehdr) Elf_Ehdr;
+typedef ElfW(Addr) Elf_Addr;
+typedef ElfW(Sym) Elf_Sym;
+typedef ElfW(Dyn) Elf_Dyn;
+#elif SANITIZER_FREEBSD
+#if SANITIZER_WORDSIZE == 64
+#define ElfW64_Dyn Elf_Dyn
+#define ElfW64_Sym Elf_Sym
+#else
+#define ElfW32_Dyn Elf_Dyn
+#define ElfW32_Sym Elf_Sym
+#endif
+#endif
 
 #include "interception/interception.h"
-#include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_flag_parser.h"
 #include "ubsan/ubsan_init.h"
 #include "ubsan/ubsan_flags.h"
@@ -132,7 +150,11 @@ void ShadowBuilder::Start() {
 void ShadowBuilder::AddUnchecked(uptr begin, uptr end) {
   uint16_t *shadow_begin = MemToShadow(begin, shadow_);
   uint16_t *shadow_end = MemToShadow(end - 1, shadow_) + 1;
-  memset(shadow_begin, kUncheckedShadow,
+  // memset takes a byte, so our unchecked shadow value requires both bytes to
+  // be the same. Make sure we're ok during compilation.
+  static_assert((kUncheckedShadow & 0xff) == ((kUncheckedShadow >> 8) & 0xff),
+                "Both bytes of the 16-bit value must be the same!");
+  memset(shadow_begin, kUncheckedShadow & 0xff,
          (shadow_end - shadow_begin) * sizeof(*shadow_begin));
 }
 
@@ -150,15 +172,25 @@ void ShadowBuilder::Add(uptr begin, uptr end, uptr cfi_check) {
     *s = sv;
 }
 
-#if SANITIZER_LINUX
+#if SANITIZER_LINUX || SANITIZER_FREEBSD || SANITIZER_NETBSD
 void ShadowBuilder::Install() {
   MprotectReadOnly(shadow_, GetShadowSize());
   uptr main_shadow = GetShadow();
   if (main_shadow) {
     // Update.
+#if SANITIZER_LINUX
     void *res = mremap((void *)shadow_, GetShadowSize(), GetShadowSize(),
                        MREMAP_MAYMOVE | MREMAP_FIXED, (void *)main_shadow);
     CHECK(res != MAP_FAILED);
+#elif SANITIZER_NETBSD
+    void *res = mremap((void *)shadow_, GetShadowSize(), (void *)main_shadow,
+                       GetShadowSize(), MAP_FIXED);
+    CHECK(res != MAP_FAILED);
+#else
+    void *res = MmapFixedOrDie(shadow_, GetShadowSize());
+    CHECK(res != MAP_FAILED);
+    ::memcpy(&shadow_, &main_shadow, GetShadowSize());
+#endif
   } else {
     // Initial setup.
     CHECK_EQ(kCfiShadowLimitsStorageSize, GetPageSizeCached());
@@ -179,17 +211,17 @@ void ShadowBuilder::Install() {
 //    dlopen(RTLD_NOLOAD | RTLD_LAZY)
 //    dlsym("__cfi_check").
 uptr find_cfi_check_in_dso(dl_phdr_info *info) {
-  const ElfW(Dyn) *dynamic = nullptr;
+  const Elf_Dyn *dynamic = nullptr;
   for (int i = 0; i < info->dlpi_phnum; ++i) {
     if (info->dlpi_phdr[i].p_type == PT_DYNAMIC) {
       dynamic =
-          (const ElfW(Dyn) *)(info->dlpi_addr + info->dlpi_phdr[i].p_vaddr);
+          (const Elf_Dyn *)(info->dlpi_addr + info->dlpi_phdr[i].p_vaddr);
       break;
     }
   }
   if (!dynamic) return 0;
   uptr strtab = 0, symtab = 0, strsz = 0;
-  for (const ElfW(Dyn) *p = dynamic; p->d_tag != PT_NULL; ++p) {
+  for (const Elf_Dyn *p = dynamic; p->d_tag != PT_NULL; ++p) {
     if (p->d_tag == DT_SYMTAB)
       symtab = p->d_un.d_ptr;
     else if (p->d_tag == DT_STRTAB)
@@ -223,7 +255,7 @@ uptr find_cfi_check_in_dso(dl_phdr_info *info) {
     return 0;
   }
 
-  for (const ElfW(Sym) *p = (const ElfW(Sym) *)symtab; (ElfW(Addr))p < strtab;
+  for (const Elf_Sym *p = (const Elf_Sym *)symtab; (Elf_Addr)p < strtab;
        ++p) {
     // There is no reliable way to find the end of the symbol table. In
     // lld-produces files, there are other sections between symtab and strtab.
@@ -379,6 +411,8 @@ __cfi_slowpath_diag(u64 CallSiteTypeId, void *Ptr, void *DiagData) {
 }
 #endif
 
+static void EnsureInterceptorsInitialized();
+
 // Setup shadow for dlopen()ed libraries.
 // The actual shadow setup happens after dlopen() returns, which means that
 // a library can not be a target of any CFI checks while its constructors are
@@ -388,6 +422,7 @@ __cfi_slowpath_diag(u64 CallSiteTypeId, void *Ptr, void *DiagData) {
 // We could insert a high-priority constructor into the library, but that would
 // not help with the uninstrumented libraries.
 INTERCEPTOR(void*, dlopen, const char *filename, int flag) {
+  EnsureInterceptorsInitialized();
   EnterLoader();
   void *handle = REAL(dlopen)(filename, flag);
   ExitLoader();
@@ -395,10 +430,25 @@ INTERCEPTOR(void*, dlopen, const char *filename, int flag) {
 }
 
 INTERCEPTOR(int, dlclose, void *handle) {
+  EnsureInterceptorsInitialized();
   EnterLoader();
   int res = REAL(dlclose)(handle);
   ExitLoader();
   return res;
+}
+
+static BlockingMutex interceptor_init_lock(LINKER_INITIALIZED);
+static bool interceptors_inited = false;
+
+static void EnsureInterceptorsInitialized() {
+  BlockingMutexLock lock(&interceptor_init_lock);
+  if (interceptors_inited)
+    return;
+
+  INTERCEPT_FUNCTION(dlopen);
+  INTERCEPT_FUNCTION(dlclose);
+
+  interceptors_inited = true;
 }
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE
@@ -410,9 +460,6 @@ void __cfi_init() {
   SanitizerToolName = "CFI";
   InitializeFlags();
   InitShadow();
-
-  INTERCEPT_FUNCTION(dlopen);
-  INTERCEPT_FUNCTION(dlclose);
 
 #ifdef CFI_ENABLE_DIAG
   __ubsan::InitAsPlugin();

@@ -62,6 +62,8 @@ __FBSDID("$FreeBSD$");
 
 #include "sdhci_if.h"
 
+#include "opt_mmccam.h"
+
 /* Tegra SDHOST controller vendor register definitions */
 #define	SDMMC_VENDOR_CLOCK_CNTRL		0x100
 #define	 VENDOR_CLOCK_CNTRL_CLK_SHIFT			8
@@ -311,13 +313,6 @@ tegra_sdhci_attach(device_t dev)
 
 	rv = clk_get_by_ofw_index(dev, 0, 0, &sc->clk);
 	if (rv != 0) {
-
-		device_printf(dev, "Cannot get clock\n");
-		goto fail;
-	}
-
-	rv = clk_get_by_ofw_index(dev, 0, 0, &sc->clk);
-	if (rv != 0) {
 		device_printf(dev, "Cannot get clock\n");
 		goto fail;
 	}
@@ -463,5 +458,7 @@ static DEFINE_CLASS_0(sdhci, tegra_sdhci_driver, tegra_sdhci_methods,
     sizeof(struct tegra_sdhci_softc));
 DRIVER_MODULE(sdhci_tegra, simplebus, tegra_sdhci_driver, tegra_sdhci_devclass,
     NULL, NULL);
-MODULE_DEPEND(sdhci_tegra, sdhci, 1, 1, 1);
+SDHCI_DEPEND(sdhci_tegra);
+#ifndef MMCCAM
 MMC_DECLARE_BRIDGE(sdhci);
+#endif

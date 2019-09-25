@@ -34,9 +34,10 @@
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
- *
- * $FreeBSD$
  */
+
+#include <sys/cdefs.h>
+__FBSDID("$FreeBSD$");
 
 #define	LINUXKPI_PARAM_PREFIX ibcore_
 #define	KBUILD_MODNAME "ibcore"
@@ -1752,7 +1753,7 @@ find_mad_agent(struct ib_mad_port_private *port_priv,
 			if (!class)
 				goto out;
 			if (convert_mgmt_class(mad_hdr->mgmt_class) >=
-			    IB_MGMT_MAX_METHODS)
+			    ARRAY_SIZE(class->method_table))
 				goto out;
 			method = class->method_table[convert_mgmt_class(
 							mad_hdr->mgmt_class)];

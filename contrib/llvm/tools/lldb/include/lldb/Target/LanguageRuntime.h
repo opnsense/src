@@ -11,10 +11,6 @@
 #ifndef liblldb_LanguageRuntime_h_
 #define liblldb_LanguageRuntime_h_
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
 #include "lldb/Breakpoint/BreakpointResolver.h"
 #include "lldb/Breakpoint/BreakpointResolverName.h"
 #include "lldb/Core/PluginInterface.h"
@@ -85,26 +81,23 @@ public:
                                         Address &address,
                                         Value::ValueType &value_type) = 0;
 
-  // This call should return a CompilerType given a generic type name
-  // and an ExecutionContextScope in which one can actually fetch
-  // any specialization information required.
+  // This call should return a CompilerType given a generic type name and an
+  // ExecutionContextScope in which one can actually fetch any specialization
+  // information required.
   virtual CompilerType GetConcreteType(ExecutionContextScope *exe_scope,
                                        ConstString abstract_type_name) {
     return CompilerType();
   }
 
   // This should be a fast test to determine whether it is likely that this
-  // value would
-  // have a dynamic type.
+  // value would have a dynamic type.
   virtual bool CouldHaveDynamicValue(ValueObject &in_value) = 0;
 
   // The contract for GetDynamicTypeAndAddress() is to return a "bare-bones"
-  // dynamic type
-  // For instance, given a Base* pointer, GetDynamicTypeAndAddress() will return
-  // the type of
-  // Derived, not Derived*. The job of this API is to correct this misalignment
-  // between the
-  // static type and the discovered dynamic type
+  // dynamic type For instance, given a Base* pointer,
+  // GetDynamicTypeAndAddress() will return the type of Derived, not Derived*.
+  // The job of this API is to correct this misalignment between the static
+  // type and the discovered dynamic type
   virtual TypeAndOrName FixUpDynamicType(const TypeAndOrName &type_and_or_name,
                                          ValueObject &static_value) = 0;
 
@@ -126,6 +119,17 @@ public:
   static Breakpoint::BreakpointPreconditionSP
   CreateExceptionPrecondition(lldb::LanguageType language, bool catch_bp,
                               bool throw_bp);
+
+  virtual lldb::ValueObjectSP GetExceptionObjectForThread(
+      lldb::ThreadSP thread_sp) {
+    return lldb::ValueObjectSP();
+  }
+
+  virtual lldb::ThreadSP GetBacktraceThreadFromException(
+      lldb::ValueObjectSP thread_sp) {
+    return lldb::ThreadSP();
+  }
+
   Process *GetProcess() { return m_process; }
 
   Target &GetTargetRef() { return m_process->GetTarget(); }
@@ -144,18 +148,16 @@ public:
 
   virtual void ModulesDidLoad(const ModuleList &module_list) {}
 
-  // Called by the Clang expression evaluation engine to allow runtimes to alter
-  // the set of target options provided to
-  // the compiler.
-  // If the options prototype is modified, runtimes must return true, false
-  // otherwise.
+  // Called by the Clang expression evaluation engine to allow runtimes to
+  // alter the set of target options provided to the compiler. If the options
+  // prototype is modified, runtimes must return true, false otherwise.
   virtual bool GetOverrideExprOptions(clang::TargetOptions &prototype) {
     return false;
   }
 
   // Called by ClangExpressionParser::PrepareForExecution to query for any
-  // custom LLVM IR passes
-  // that need to be run before an expression is assembled and run.
+  // custom LLVM IR passes that need to be run before an expression is
+  // assembled and run.
   virtual bool GetIRPasses(LLVMUserExpression::IRPasses &custom_passes) {
     return false;
   }

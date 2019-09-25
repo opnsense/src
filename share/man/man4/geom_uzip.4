@@ -25,7 +25,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd October 9, 2006
+.Dd February 26, 2019
 .Dt GEOM_UZIP 4
 .Os
 .Sh NAME
@@ -36,6 +36,7 @@ To compile this driver into the kernel,
 place the following line in your
 kernel configuration file:
 .Bd -ragged -offset indent
+.Cd "device xz"
 .Cd "options GEOM_UZIP"
 .Ed
 .Pp

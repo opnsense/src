@@ -30,13 +30,15 @@ OrderedBasicBlock::OrderedBasicBlock(const BasicBlock *BasicB)
   LastInstFound = BB->end();
 }
 
-/// \brief Given no cached results, find if \p A comes before \p B in \p BB.
+/// Given no cached results, find if \p A comes before \p B in \p BB.
 /// Cache and number out instruction while walking \p BB.
 bool OrderedBasicBlock::comesBefore(const Instruction *A,
                                     const Instruction *B) {
   const Instruction *Inst = nullptr;
   assert(!(LastInstFound == BB->end() && NextInstPos != 0) &&
          "Instruction supposed to be in NumberedInsts");
+  assert(A->getParent() == BB && "Instruction supposed to be in the block!");
+  assert(B->getParent() == BB && "Instruction supposed to be in the block!");
 
   // Start the search with the instruction found in the last lookup round.
   auto II = BB->begin();
@@ -58,13 +60,14 @@ bool OrderedBasicBlock::comesBefore(const Instruction *A,
   return Inst != B;
 }
 
-/// \brief Find out whether \p A dominates \p B, meaning whether \p A
+/// Find out whether \p A dominates \p B, meaning whether \p A
 /// comes before \p B in \p BB. This is a simplification that considers
 /// cached instruction positions and ignores other basic blocks, being
 /// only relevant to compare relative instructions positions inside \p BB.
 bool OrderedBasicBlock::dominates(const Instruction *A, const Instruction *B) {
   assert(A->getParent() == B->getParent() &&
          "Instructions must be in the same basic block!");
+  assert(A->getParent() == BB && "Instructions must be in the tracked block!");
 
   // First we lookup the instructions. If they don't exist, lookup will give us
   // back ::end(). If they both exist, we compare the numbers. Otherwise, if NA

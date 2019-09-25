@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1989, 1991, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -38,6 +40,7 @@
 #ifdef _KERNEL
 #include <sys/lock.h>
 #include <sys/lockmgr.h>
+#include <sys/tslog.h>
 #include <sys/_mutex.h>
 #include <sys/_sx.h>
 #endif
@@ -65,8 +68,8 @@ struct fid {
  * filesystem statistics
  */
 #define	MFSNAMELEN	16		/* length of type name including null */
-#define	MNAMELEN	88		/* size of on/from name bufs */
-#define	STATFS_VERSION	0x20030518	/* current version number */
+#define	MNAMELEN	1024		/* size of on/from name bufs */
+#define	STATFS_VERSION	0x20140518	/* current version number */
 struct statfs {
 	uint32_t f_version;		/* structure version number */
 	uint32_t f_type;		/* type of filesystem */
@@ -91,6 +94,34 @@ struct statfs {
 	char	  f_mntfromname[MNAMELEN];  /* mounted filesystem */
 	char	  f_mntonname[MNAMELEN];    /* directory on which mounted */
 };
+
+#if defined(_WANT_FREEBSD11_STATFS) || defined(_KERNEL)
+#define	FREEBSD11_STATFS_VERSION	0x20030518 /* current version number */
+struct freebsd11_statfs {
+	uint32_t f_version;		/* structure version number */
+	uint32_t f_type;		/* type of filesystem */
+	uint64_t f_flags;		/* copy of mount exported flags */
+	uint64_t f_bsize;		/* filesystem fragment size */
+	uint64_t f_iosize;		/* optimal transfer block size */
+	uint64_t f_blocks;		/* total data blocks in filesystem */
+	uint64_t f_bfree;		/* free blocks in filesystem */
+	int64_t	 f_bavail;		/* free blocks avail to non-superuser */
+	uint64_t f_files;		/* total file nodes in filesystem */
+	int64_t	 f_ffree;		/* free nodes avail to non-superuser */
+	uint64_t f_syncwrites;		/* count of sync writes since mount */
+	uint64_t f_asyncwrites;		/* count of async writes since mount */
+	uint64_t f_syncreads;		/* count of sync reads since mount */
+	uint64_t f_asyncreads;		/* count of async reads since mount */
+	uint64_t f_spare[10];		/* unused spare */
+	uint32_t f_namemax;		/* maximum filename length */
+	uid_t	  f_owner;		/* user that mounted the filesystem */
+	fsid_t	  f_fsid;		/* filesystem id */
+	char	  f_charspare[80];	/* spare string space */
+	char	  f_fstypename[16];	/* filesystem type name */
+	char	  f_mntfromname[88];	/* mounted filesystem */
+	char	  f_mntonname[88];	/* directory on which mounted */
+};
+#endif /* _WANT_FREEBSD11_STATFS || _KERNEL */
 
 #ifdef _KERNEL
 #define	OMFSNAMELEN	16	/* length of fs type name, including null */
@@ -147,6 +178,7 @@ struct vfsopt {
  * put on a doubly linked list.
  *
  * Lock reference:
+ * 	l - mnt_listmtx
  *	m - mountlist_mtx
  *	i - interlock
  *	v - vnode freelist mutex
@@ -166,8 +198,6 @@ struct mount {
 	int		mnt_ref;		/* (i) Reference count */
 	struct vnodelst	mnt_nvnodelist;		/* (i) list of vnodes */
 	int		mnt_nvnodelistsize;	/* (i) # of vnodes */
-	struct vnodelst	mnt_activevnodelist;	/* (v) list of active vnodes */
-	int		mnt_activevnodelistsize;/* (v) # of active vnodes */
 	int		mnt_writeopcount;	/* (i) write syscalls pending */
 	int		mnt_kern_flag;		/* (i) kernel only flags */
 	uint64_t	mnt_flag;		/* (i) flags shared with user */
@@ -188,6 +218,11 @@ struct mount {
 	struct thread	*mnt_susp_owner;	/* (i) thread owning suspension */
 #define	mnt_endzero	mnt_gjprovider
 	char		*mnt_gjprovider;	/* gjournal provider name */
+	struct mtx	mnt_listmtx;
+	struct vnodelst	mnt_activevnodelist;	/* (l) list of active vnodes */
+	int		mnt_activevnodelistsize;/* (l) # of active vnodes */
+	struct vnodelst	mnt_tmpfreevnodelist;	/* (l) list of free vnodes */
+	int		mnt_tmpfreevnodelistsize;/* (l) # of free vnodes */
 	struct lock	mnt_explock;		/* vfs_export walkers lock */
 	TAILQ_ENTRY(mount) mnt_upper_link;	/* (m) we in the all uppers */
 	TAILQ_HEAD(, mount) mnt_uppers;		/* (m) upper mounts over us*/
@@ -261,6 +296,7 @@ void          __mnt_vnode_markerfree_active(struct vnode **mvp, struct mount *);
 #define	MNT_NOCLUSTERW	0x0000000080000000ULL /* disable cluster write */
 #define	MNT_SUJ		0x0000000100000000ULL /* using journaled soft updates */
 #define	MNT_AUTOMOUNTED	0x0000000200000000ULL /* mounted by automountd(8) */
+#define	MNT_UNTRUSTED	0x0000000800000000ULL /* filesys metadata untrusted */
 
 /*
  * NFS export related mount flags.
@@ -282,6 +318,7 @@ void          __mnt_vnode_markerfree_active(struct vnode **mvp, struct mount *);
 #define	MNT_ROOTFS	0x0000000000004000ULL /* identifies the root fs */
 #define	MNT_USER	0x0000000000008000ULL /* mounted by a user */
 #define	MNT_IGNORE	0x0000000000800000ULL /* do not show entry in df */
+#define	MNT_VERIFIED	0x0000000400000000ULL /* filesystem is verified */
 
 /*
  * Mask of flags that are visible to statfs().
@@ -297,7 +334,8 @@ void          __mnt_vnode_markerfree_active(struct vnode **mvp, struct mount *);
 			MNT_NOCLUSTERW	| MNT_SUIDDIR	| MNT_SOFTDEP	| \
 			MNT_IGNORE	| MNT_EXPUBLIC	| MNT_NOSYMFOLLOW | \
 			MNT_GJOURNAL	| MNT_MULTILABEL | MNT_ACLS	| \
-			MNT_NFS4ACLS	| MNT_AUTOMOUNTED)
+			MNT_NFS4ACLS	| MNT_AUTOMOUNTED | MNT_VERIFIED | \
+			MNT_UNTRUSTED)
 
 /* Mask of flags that can be updated. */
 #define	MNT_UPDATEMASK (MNT_NOSUID	| MNT_NOEXEC	| \
@@ -306,7 +344,7 @@ void          __mnt_vnode_markerfree_active(struct vnode **mvp, struct mount *);
 			MNT_NOSYMFOLLOW	| MNT_IGNORE	| \
 			MNT_NOCLUSTERR	| MNT_NOCLUSTERW | MNT_SUIDDIR	| \
 			MNT_ACLS	| MNT_USER	| MNT_NFS4ACLS	| \
-			MNT_AUTOMOUNTED)
+			MNT_AUTOMOUNTED | MNT_UNTRUSTED)
 
 /*
  * External filesystem command modifier flags.
@@ -330,23 +368,20 @@ void          __mnt_vnode_markerfree_active(struct vnode **mvp, struct mount *);
 /*
  * Internal filesystem control flags stored in mnt_kern_flag.
  *
- * MNTK_UNMOUNT locks the mount entry so that name lookup cannot proceed
- * past the mount point.  This keeps the subtree stable during mounts
- * and unmounts.
+ * MNTK_UNMOUNT locks the mount entry so that name lookup cannot
+ * proceed past the mount point.  This keeps the subtree stable during
+ * mounts and unmounts.  When non-forced unmount flushes all vnodes
+ * from the mp queue, the MNTK_UNMOUNT flag prevents insmntque() from
+ * queueing new vnodes.
  *
  * MNTK_UNMOUNTF permits filesystems to detect a forced unmount while
  * dounmount() is still waiting to lock the mountpoint. This allows
  * the filesystem to cancel operations that might otherwise deadlock
  * with the unmount attempt (used by NFS).
- *
- * MNTK_NOINSMNTQ is strict subset of MNTK_UNMOUNT. They are separated
- * to allow for failed unmount attempt to restore the syncer vnode for
- * the mount.
  */
 #define MNTK_UNMOUNTF	0x00000001	/* forced unmount in progress */
 #define MNTK_ASYNC	0x00000002	/* filtered async flag */
 #define MNTK_SOFTDEP	0x00000004	/* async disabled by softdep */
-#define MNTK_NOINSMNTQ	0x00000008	/* insmntque is not allowed */
 #define	MNTK_DRAINING	0x00000010	/* lock draining is happening */
 #define	MNTK_REFEXPIRE	0x00000020	/* refcount expiring is happening */
 #define MNTK_EXTENDED_SHARED	0x00000040 /* Allow shared locking for more ops */
@@ -360,6 +395,7 @@ void          __mnt_vnode_markerfree_active(struct vnode **mvp, struct mount *);
 #define	MNTK_MARKER		0x00001000
 #define	MNTK_UNMAPPED_BUFS	0x00002000
 #define	MNTK_USES_BCACHE	0x00004000 /* FS uses the buffer cache. */
+#define	MNTK_TEXT_REFS		0x00008000 /* Keep use ref for text */
 #define MNTK_NOASYNC	0x00800000	/* disable async */
 #define MNTK_UNMOUNT	0x01000000	/* unmount in progress */
 #define	MNTK_MWAIT	0x02000000	/* waiting for unmount to finish */
@@ -480,6 +516,7 @@ struct vfsconf {
 	int	vfc_typenum;		/* historic filesystem type number */
 	int	vfc_refcount;		/* number mounted of this type */
 	int	vfc_flags;		/* permanent flags */
+	int	vfc_prison_flag;	/* prison allow.mount.* flag */
 	struct	vfsoptdecl *vfc_opts;	/* mount options */
 	TAILQ_ENTRY(vfsconf) vfc_list;	/* list of vfscons */
 };
@@ -516,7 +553,8 @@ struct ovfsconf {
 #define	VFCF_UNICODE	0x00200000	/* stores file names as Unicode */
 #define	VFCF_JAIL	0x00400000	/* can be mounted from within a jail */
 #define	VFCF_DELEGADMIN	0x00800000	/* supports delegated administration */
-#define	VFCF_SBDRY	0x01000000	/* defer stop requests */
+#define	VFCF_SBDRY	0x01000000	/* Stop at Boundary: defer stop requests
+					   to kernel->user (AST) transition */
 
 typedef uint32_t fsctlop_t;
 
@@ -673,9 +711,11 @@ vfs_statfs_t	__vfs_statfs;
 #define	VFS_MOUNT(MP) ({						\
 	int _rc;							\
 									\
+	TSRAW(curthread, TS_ENTER, "VFS_MOUNT", (MP)->mnt_vfc->vfc_name);\
 	VFS_PROLOGUE(MP);						\
 	_rc = (*(MP)->mnt_op->vfs_mount)(MP);				\
 	VFS_EPILOGUE(MP);						\
+	TSRAW(curthread, TS_EXIT, "VFS_MOUNT", (MP)->mnt_vfc->vfc_name);\
 	_rc; })
 
 #define	VFS_UNMOUNT(MP, FORCE) ({					\
@@ -813,7 +853,8 @@ vfs_statfs_t	__vfs_statfs;
  */
 #define VFS_VERSION_00	0x19660120
 #define VFS_VERSION_01	0x20121030
-#define VFS_VERSION	VFS_VERSION_01
+#define VFS_VERSION_02	0x20180504
+#define VFS_VERSION	VFS_VERSION_02
 
 #define VFS_SET(vfsops, fsname, flags) \
 	static struct vfsconf fsname ## _vfsconf = {		\
@@ -862,9 +903,9 @@ int	vfs_filteropt(struct vfsoptlist *, const char **legal);
 void	vfs_opterror(struct vfsoptlist *opts, const char *fmt, ...);
 int	vfs_scanopt(struct vfsoptlist *opts, const char *name, const char *fmt, ...);
 int	vfs_setopt(struct vfsoptlist *opts, const char *name, void *value,
-	    size_t len);
+	    int len);
 int	vfs_setopt_part(struct vfsoptlist *opts, const char *name, void *value,
-	    size_t len);
+	    int len);
 int	vfs_setopts(struct vfsoptlist *opts, const char *name,
 	    const char *value);
 int	vfs_setpublicfs			    /* set publicly exported fs */
@@ -933,11 +974,15 @@ void	syncer_resume(void);
 struct stat;
 
 __BEGIN_DECLS
+int	fhlink(struct fhandle *, const char *);
+int	fhlinkat(struct fhandle *, int, const char *);
 int	fhopen(const struct fhandle *, int);
+int	fhreadlink(struct fhandle *, char *, size_t);
 int	fhstat(const struct fhandle *, struct stat *);
 int	fhstatfs(const struct fhandle *, struct statfs *);
 int	fstatfs(int, struct statfs *);
 int	getfh(const char *, fhandle_t *);
+int	getfhat(int, char *, struct fhandle *, int);
 int	getfsstat(struct statfs *, long, int);
 int	getmntinfo(struct statfs **, int);
 int	lgetfh(const char *, fhandle_t *);

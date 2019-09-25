@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (C) 1994, David Greenman
  * Copyright (c) 1990, 1993
  *	The Regents of the University of California.  All rights reserved.
@@ -43,7 +45,6 @@ __FBSDID("$FreeBSD$");
  */
 
 #include "opt_clock.h"
-#include "opt_compat.h"
 #include "opt_cpu.h"
 #include "opt_isa.h"
 
@@ -230,6 +231,7 @@ ia32_syscall(struct trapframe *frame)
 	}
 
 	syscallret(td, error);
+	amd64_syscall_ret_flush_l1d(error);
 }
 
 static void
@@ -263,7 +265,7 @@ setup_lcall_gate(void)
 	bzero(&uap, sizeof(uap));
 	uap.start = 0;
 	uap.num = 1;
-	lcall_addr = curproc->p_psstrings - sz_lcall_tramp;
+	lcall_addr = curproc->p_sysent->sv_psstrings - sz_lcall_tramp;
 	bzero(&desc, sizeof(desc));
 	desc.sd_type = SDT_MEMERA;
 	desc.sd_dpl = SEL_UPL;

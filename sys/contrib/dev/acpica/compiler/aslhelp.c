@@ -8,7 +8,7 @@
  *
  * 1. Copyright Notice
  *
- * Some or all of this work - Copyright (c) 1999 - 2017, Intel Corp.
+ * Some or all of this work - Copyright (c) 1999 - 2018, Intel Corp.
  * All rights reserved.
  *
  * 2. License
@@ -208,6 +208,7 @@ Usage (
     ACPI_OPTION ("-vx <messageid>", "Expect a specific warning, remark, or error");
     ACPI_OPTION ("-w <1|2|3>",      "Set warning reporting level");
     ACPI_OPTION ("-we",             "Report warnings as errors");
+    ACPI_OPTION ("-ww <messageid>", "Report specific warning or remark as error");
 
     printf ("\nAML Bytecode Generation (*.aml):\n");
     ACPI_OPTION ("-oa",             "Disable all optimizations (compatibility mode)");

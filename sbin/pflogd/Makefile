@@ -8,7 +8,7 @@ SRCS= 	pflogd.c pidfile.c privsep.c privsep_fdpass.c
 MAN=	pflogd.8
 
 CFLAGS+=-include ${SRCTOP}/lib/libpcap/config.h
-CFLAGS+=-I${.CURDIR}/../../contrib/libpcap
+CFLAGS+=-I${SRCTOP}/contrib/libpcap
 
 LIBADD=	pcap
 

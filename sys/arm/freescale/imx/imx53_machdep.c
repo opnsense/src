@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2013 Ian Lepore <ian@freebsd.org>
  * All rights reserved.
  *
@@ -45,12 +47,9 @@ __FBSDID("$FreeBSD$");
 
 #include "platform_if.h"
 
-static vm_offset_t
-imx53_lastaddr(platform_t plat)
-{
-
-	return (devmap_lastaddr());
-}
+static platform_attach_t imx53_attach;
+static platform_devmap_init_t imx53_devmap_init;
+static platform_cpu_reset_t imx53_cpu_reset;
 
 static int
 imx53_attach(platform_t plat)
@@ -84,7 +83,8 @@ imx53_cpu_reset(platform_t plat)
 	imx_wdog_cpu_reset(0x53F98000);
 }
 
-u_int imx_soc_type()
+u_int
+imx_soc_type(void)
 {
 	return (IMXSOC_53);
 }
@@ -92,11 +92,9 @@ u_int imx_soc_type()
 static platform_method_t imx53_methods[] = {
 	PLATFORMMETHOD(platform_attach,		imx53_attach),
 	PLATFORMMETHOD(platform_devmap_init,	imx53_devmap_init),
-	PLATFORMMETHOD(platform_lastaddr,	imx53_lastaddr),
 	PLATFORMMETHOD(platform_cpu_reset,	imx53_cpu_reset),
 
 	PLATFORMMETHOD_END,
 };
 
-FDT_PLATFORM_DEF(imx53, "i.MX53", 0, "fsl,imx53", 0);
-
+FDT_PLATFORM_DEF(imx53, "i.MX53", 0, "fsl,imx53", 100);

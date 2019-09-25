@@ -32,7 +32,7 @@ public:
   const MCPhysReg *getCalleeSavedRegs(const MachineFunction *MF) const override;
 
   BitVector getReservedRegs(const MachineFunction &MF) const override;
-  
+
   bool requiresRegisterScavenging(const MachineFunction &MF) const override;
 
   bool trackLivenessAfterRegAlloc(const MachineFunction &MF) const override;

@@ -30,8 +30,8 @@ public:
     WeakRefDirective = "\t.weak\t";
 
     UsesELFSectionDirectiveForBSS = true;
-    HasSingleParameterDotFile = false;
-    HasDotTypeDotSizeDirective = false;
+    HasSingleParameterDotFile = true;
+    HasDotTypeDotSizeDirective = true;
 
     SupportsDebugInformation = true;
     ExceptionsType = ExceptionHandling::DwarfCFI;
@@ -43,6 +43,10 @@ public:
     // section will be parsable, but with odd offsets and
     // line numbers, etc.
     CodePointerSize = 8;
+  }
+
+  void setDwarfUsesRelocationsAcrossSections(bool enable) {
+    DwarfUsesRelocationsAcrossSections = enable;
   }
 };
 }

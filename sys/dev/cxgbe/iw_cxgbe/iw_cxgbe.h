@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2009-2013, 2016 Chelsio, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -68,6 +70,9 @@
 #define KTR_IW_CXGBE	KTR_SPARE3
 
 extern int c4iw_debug;
+extern int use_dsgl;
+extern int inline_threshold;
+
 #define PDBG(fmt, args...) \
 do { \
 	if (c4iw_debug) \
@@ -854,11 +859,9 @@ struct c4iw_ep {
 	unsigned int mpa_pkt_len;
 	u32 ird;
 	u32 ord;
-	u32 smac_idx;
 	u32 tx_chan;
 	u32 mtu;
 	u16 mss;
-	u16 emss;
 	u16 plen;
 	u16 rss_qid;
 	u16 txq_idx;
@@ -897,8 +900,6 @@ typedef int (*c4iw_handler_func)(struct c4iw_dev *dev, struct mbuf *m);
 
 int c4iw_ep_redirect(void *ctx, struct dst_entry *old, struct dst_entry *new,
 		     struct l2t_entry *l2t);
-void c4iw_put_qpid(struct c4iw_rdev *rdev, u32 qpid,
-		   struct c4iw_dev_ucontext *uctx);
 u32 c4iw_get_resource(struct c4iw_id_table *id_table);
 void c4iw_put_resource(struct c4iw_id_table *id_table, u32 entry);
 int c4iw_init_resource(struct c4iw_rdev *rdev, u32 nr_tpt, u32 nr_pdid);
@@ -964,7 +965,6 @@ void c4iw_pblpool_free(struct c4iw_rdev *rdev, u32 addr, int size);
 int c4iw_ofld_send(struct c4iw_rdev *rdev, struct mbuf *m);
 void c4iw_flush_hw_cq(struct c4iw_cq *cq);
 void c4iw_count_rcqes(struct t4_cq *cq, struct t4_wq *wq, int *count);
-void c4iw_count_scqes(struct t4_cq *cq, struct t4_wq *wq, int *count);
 int c4iw_ep_disconnect(struct c4iw_ep *ep, int abrupt, gfp_t gfp);
 int __c4iw_ep_disconnect(struct c4iw_ep *ep, int abrupt, gfp_t gfp);
 int c4iw_flush_rq(struct t4_wq *wq, struct t4_cq *cq, int count);
@@ -979,21 +979,4 @@ u32 c4iw_get_qpid(struct c4iw_rdev *rdev, struct c4iw_dev_ucontext *uctx);
 void c4iw_put_qpid(struct c4iw_rdev *rdev, u32 qid,
 		struct c4iw_dev_ucontext *uctx);
 void c4iw_ev_dispatch(struct c4iw_dev *dev, struct t4_cqe *err_cqe);
-void __iomem *c4iw_bar2_addrs(struct c4iw_rdev *rdev, unsigned int qid,
-		enum t4_bar2_qtype qtype,
-		unsigned int *pbar2_qid, u64 *pbar2_pa);
-extern struct cxgb4_client t4c_client;
-extern c4iw_handler_func c4iw_handlers[NUM_CPL_CMDS];
-extern int c4iw_max_read_depth;
-
-#if defined(__i386__) || defined(__amd64__)
-#define L1_CACHE_BYTES 128
-#else
-#define L1_CACHE_BYTES 32
-#endif
-
-void your_reg_device(struct c4iw_dev *dev);
-
-#define SGE_CTRLQ_NUM	0
-
 #endif

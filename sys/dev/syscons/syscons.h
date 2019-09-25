@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1995-1998 Søren Schmidt
  * All rights reserved.
  *
@@ -38,14 +40,6 @@
 #include <sys/_lock.h>
 #include <sys/_mutex.h>
 
-/* machine-dependent part of the header */
-
-#ifdef PC98
-#include <pc98/cbus/sc_machdep.h>
-#elif defined(__i386__)
-/* nothing for the moment */
-#endif
-
 /* default values for configuration options */
 
 #ifndef MAXCONS
@@ -76,11 +70,11 @@
 #endif
 
 #ifndef SC_CURSOR_CHAR
-#define SC_CURSOR_CHAR	(0x07)
+#define SC_CURSOR_CHAR	7
 #endif
 
 #ifndef SC_MOUSE_CHAR
-#define SC_MOUSE_CHAR	(0xd0)
+#define SC_MOUSE_CHAR	8
 #endif
 
 #if SC_MOUSE_CHAR <= SC_CURSOR_CHAR && SC_CURSOR_CHAR < (SC_MOUSE_CHAR + 4)
@@ -175,11 +169,14 @@ typedef struct sc_vtb {
 	int		vtb_tail;	/* valid for VTB_RINGBUFFER only */
 } sc_vtb_t;
 
-/* text cursor attributes */
+/* text and some mouse cursor attributes */
 struct cursor_attr {
-	int		flags;
-	int		base;
-	int		height;
+	u_char		flags;
+	u_char		base;
+	u_char		height;
+	u_char		bg[3];
+	u_char		mouse_ba;
+	u_char		mouse_ia;
 };
 
 /* softc */
@@ -321,7 +318,7 @@ typedef struct scr_stat {
 	int		cursor_pos;		/* cursor buffer position */
 	int		cursor_oldpos;		/* cursor old buffer position */
 	struct cursor_attr dflt_curs_attr;
-	struct cursor_attr curr_curs_attr;
+	struct cursor_attr base_curs_attr;
 	struct cursor_attr curs_attr;
 
 	int		mouse_pos;		/* mouse buffer position */
@@ -337,6 +334,7 @@ typedef struct scr_stat {
 	struct proc 	*mouse_proc;		/* proc* of controlling proc */
 	pid_t 		mouse_pid;		/* pid of controlling proc */
 	int		mouse_signal;		/* signal # to report with */
+	const void	*mouse_data;		/* renderer (pixmap) data */
 
 	u_short		bell_duration;
 	u_short		bell_pitch;
@@ -523,8 +521,6 @@ typedef struct sc_renderer {
 		       SI_SUB_DRIVERS, SI_ORDER_MIDDLE)
 
 typedef struct {
-	int		cursor_start;
-	int		cursor_end;
 	int		shift_state;
 	int		bell_pitch;
 } bios_values_t;

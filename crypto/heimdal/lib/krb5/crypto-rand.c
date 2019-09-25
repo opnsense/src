@@ -63,10 +63,10 @@ seed_something(void)
        we do not have to deal with it. */
     if (RAND_status() != 1) {
 #ifndef _WIN32
+#ifndef OPENSSL_NO_EGD
 	krb5_context context;
 	const char *p;
 
-#ifndef OPENSSL_NO_EGD
 	/* Try using egd */
 	if (!krb5_init_context(&context)) {
 	    p = krb5_config_get_string(context, NULL, "libdefaults",

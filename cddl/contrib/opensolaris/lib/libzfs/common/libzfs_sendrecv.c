@@ -85,6 +85,8 @@ typedef struct progress_arg {
 	zfs_handle_t *pa_zhp;
 	int pa_fd;
 	boolean_t pa_parsable;
+	boolean_t pa_astitle;
+	uint64_t pa_size;
 } progress_arg_t;
 
 typedef struct dataref {
@@ -489,15 +491,10 @@ typedef struct fsavl_node {
 static int
 fsavl_compare(const void *arg1, const void *arg2)
 {
-	const fsavl_node_t *fn1 = arg1;
-	const fsavl_node_t *fn2 = arg2;
+	const fsavl_node_t *fn1 = (const fsavl_node_t *)arg1;
+	const fsavl_node_t *fn2 = (const fsavl_node_t *)arg2;
 
-	if (fn1->fn_guid > fn2->fn_guid)
-		return (+1);
-	else if (fn1->fn_guid < fn2->fn_guid)
-		return (-1);
-	else
-		return (0);
+	return (AVL_CMP(fn1->fn_guid, fn2->fn_guid));
 }
 
 /*
@@ -935,6 +932,7 @@ typedef struct send_dump_data {
 	uint64_t prevsnap_obj;
 	boolean_t seenfrom, seento, replicate, doall, fromorigin;
 	boolean_t verbose, dryrun, parsable, progress, embed_data, std_out;
+	boolean_t progressastitle;
 	boolean_t large_block, compress;
 	int outfd;
 	boolean_t err;
@@ -1115,14 +1113,14 @@ send_progress_thread(void *arg)
 	zfs_cmd_t zc = { 0 };
 	zfs_handle_t *zhp = pa->pa_zhp;
 	libzfs_handle_t *hdl = zhp->zfs_hdl;
-	unsigned long long bytes;
+	unsigned long long bytes, total;
 	char buf[16];
 	time_t t;
 	struct tm *tm;
 
 	(void) strlcpy(zc.zc_name, zhp->zfs_name, sizeof (zc.zc_name));
 
-	if (!pa->pa_parsable)
+	if (!pa->pa_parsable && !pa->pa_astitle)
 		(void) fprintf(stderr, "TIME        SENT   SNAPSHOT\n");
 
 	/*
@@ -1139,7 +1137,16 @@ send_progress_thread(void *arg)
 		tm = localtime(&t);
 		bytes = zc.zc_cookie;
 
-		if (pa->pa_parsable) {
+		if (pa->pa_astitle) {
+			int pct;
+			if (pa->pa_size > bytes)
+				pct = 100 * bytes / pa->pa_size;
+			else
+				pct = 100;
+
+			setproctitle("sending %s (%d%%: %llu/%llu)",
+			    zhp->zfs_name, pct, bytes, pa->pa_size);
+		} else if (pa->pa_parsable) {
 			(void) fprintf(stderr, "%02d:%02d:%02d\t%llu\t%s\n",
 			    tm->tm_hour, tm->tm_min, tm->tm_sec,
 			    bytes, zhp->zfs_name);
@@ -1209,6 +1216,7 @@ dump_snapshot(zfs_handle_t *zhp, void *arg)
 	boolean_t isfromsnap, istosnap, fromorigin;
 	boolean_t exclude = B_FALSE;
 	FILE *fout = sdd->std_out ? stdout : stderr;
+	uint64_t size = 0;
 
 	err = 0;
 	thissnap = strchr(zhp->zfs_name, '@') + 1;
@@ -1283,15 +1291,16 @@ dump_snapshot(zfs_handle_t *zhp, void *arg)
 	fromorigin = sdd->prevsnap[0] == '\0' &&
 	    (sdd->fromorigin || sdd->replicate);
 
-	if (sdd->verbose) {
-		uint64_t size = 0;
+	if (sdd->progress && sdd->dryrun) {
 		(void) estimate_ioctl(zhp, sdd->prevsnap_obj,
 		    fromorigin, flags, &size);
+		sdd->size += size;
+	}
 
+	if (sdd->verbose) {
 		send_print_verbose(fout, zhp->zfs_name,
 		    sdd->prevsnap[0] ? sdd->prevsnap : NULL,
 		    size, sdd->parsable);
-		sdd->size += size;
 	}
 
 	if (!sdd->dryrun) {
@@ -1303,6 +1312,8 @@ dump_snapshot(zfs_handle_t *zhp, void *arg)
 			pa.pa_zhp = zhp;
 			pa.pa_fd = sdd->outfd;
 			pa.pa_parsable = sdd->parsable;
+			pa.pa_size = sdd->size;
+			pa.pa_astitle = sdd->progressastitle;
 
 			if ((err = pthread_create(&tid, NULL,
 			    send_progress_thread, &pa)) != 0) {
@@ -1585,6 +1596,7 @@ zfs_send_resume(libzfs_handle_t *hdl, sendflags_t *flags, int outfd,
 	int error = 0;
 	char name[ZFS_MAX_DATASET_NAME_LEN];
 	enum lzc_send_flags lzc_flags = 0;
+	uint64_t size = 0;
 	FILE *fout = (flags->verbose && flags->dryrun) ? stdout : stderr;
 
 	(void) snprintf(errbuf, sizeof (errbuf), dgettext(TEXT_DOMAIN,
@@ -1653,12 +1665,13 @@ zfs_send_resume(libzfs_handle_t *hdl, sendflags_t *flags, int outfd,
 		fromname = name;
 	}
 
-	if (flags->verbose) {
-		uint64_t size = 0;
+	if (flags->progress) {
 		error = lzc_send_space(zhp->zfs_name, fromname,
 		    lzc_flags, &size);
 		if (error == 0)
 			size = MAX(0, (int64_t)(size - bytes));
+	}
+	if (flags->verbose) {
 		send_print_verbose(fout, zhp->zfs_name, fromname,
 		    size, flags->parsable);
 	}
@@ -1674,6 +1687,8 @@ zfs_send_resume(libzfs_handle_t *hdl, sendflags_t *flags, int outfd,
 			pa.pa_zhp = zhp;
 			pa.pa_fd = outfd;
 			pa.pa_parsable = flags->parsable;
+			pa.pa_size = size;
+			pa.pa_astitle = flags->progressastitle;
 
 			error = pthread_create(&tid, NULL,
 			    send_progress_thread, &pa);
@@ -1883,6 +1898,7 @@ zfs_send(zfs_handle_t *zhp, const char *fromsnap, const char *tosnap,
 	sdd.verbose = flags->verbose;
 	sdd.parsable = flags->parsable;
 	sdd.progress = flags->progress;
+	sdd.progressastitle = flags->progressastitle;
 	sdd.dryrun = flags->dryrun;
 	sdd.large_block = flags->largeblock;
 	sdd.embed_data = flags->embed_data;
@@ -1919,7 +1935,7 @@ zfs_send(zfs_handle_t *zhp, const char *fromsnap, const char *tosnap,
 		sdd.cleanup_fd = -1;
 		sdd.snapholds = NULL;
 	}
-	if (flags->verbose || sdd.snapholds != NULL) {
+	if (flags->progress || sdd.snapholds != NULL) {
 		/*
 		 * Do a verbose no-op dry run to get all the verbose output
 		 * or to gather snapshot hold's before generating any data,
@@ -2145,7 +2161,6 @@ recv_rename(libzfs_handle_t *hdl, const char *name, const char *tryname,
     int baselen, char *newname, recvflags_t *flags)
 {
 	static int seq;
-	zfs_cmd_t zc = { 0 };
 	int err;
 	prop_changelist_t *clp;
 	zfs_handle_t *zhp;
@@ -2162,19 +2177,13 @@ recv_rename(libzfs_handle_t *hdl, const char *name, const char *tryname,
 	if (err)
 		return (err);
 
-	zc.zc_objset_type = DMU_OST_ZFS;
-	(void) strlcpy(zc.zc_name, name, sizeof (zc.zc_name));
-
 	if (tryname) {
 		(void) strcpy(newname, tryname);
-
-		(void) strlcpy(zc.zc_value, tryname, sizeof (zc.zc_value));
-
 		if (flags->verbose) {
 			(void) printf("attempting rename %s to %s\n",
-			    zc.zc_name, zc.zc_value);
+			    name, newname);
 		}
-		err = ioctl(hdl->libzfs_fd, ZFS_IOC_RENAME, &zc);
+		err = lzc_rename(name, newname);
 		if (err == 0)
 			changelist_rename(clp, name, tryname);
 	} else {
@@ -2186,13 +2195,11 @@ recv_rename(libzfs_handle_t *hdl, const char *name, const char *tryname,
 
 		(void) snprintf(newname, ZFS_MAX_DATASET_NAME_LEN,
 		    "%.*srecv-%u-%u", baselen, name, getpid(), seq);
-		(void) strlcpy(zc.zc_value, newname, sizeof (zc.zc_value));
-
 		if (flags->verbose) {
 			(void) printf("failed - trying rename %s to %s\n",
-			    zc.zc_name, zc.zc_value);
+			    name, newname);
 		}
-		err = ioctl(hdl->libzfs_fd, ZFS_IOC_RENAME, &zc);
+		err = lzc_rename(name, newname);
 		if (err == 0)
 			changelist_rename(clp, name, newname);
 		if (err && flags->verbose) {
@@ -2217,7 +2224,6 @@ static int
 recv_destroy(libzfs_handle_t *hdl, const char *name, int baselen,
     char *newname, recvflags_t *flags)
 {
-	zfs_cmd_t zc = { 0 };
 	int err = 0;
 	prop_changelist_t *clp;
 	zfs_handle_t *zhp;
@@ -2240,17 +2246,20 @@ recv_destroy(libzfs_handle_t *hdl, const char *name, int baselen,
 	if (err)
 		return (err);
 
-	zc.zc_objset_type = DMU_OST_ZFS;
-	zc.zc_defer_destroy = defer;
-	(void) strlcpy(zc.zc_name, name, sizeof (zc.zc_name));
-
 	if (flags->verbose)
-		(void) printf("attempting destroy %s\n", zc.zc_name);
-	err = ioctl(hdl->libzfs_fd, ZFS_IOC_DESTROY, &zc);
+		(void) printf("attempting destroy %s\n", name);
+	if (zhp->zfs_type == ZFS_TYPE_SNAPSHOT) {
+		nvlist_t *nv = fnvlist_alloc();
+		fnvlist_add_boolean(nv, name);
+		err = lzc_destroy_snaps(nv, defer, NULL);
+		fnvlist_free(nv);
+	} else {
+		err = lzc_destroy(name);
+	}
 	if (err == 0) {
 		if (flags->verbose)
 			(void) printf("success\n");
-		changelist_remove(clp, zc.zc_name);
+		changelist_remove(clp, name);
 	}
 
 	(void) changelist_postfix(clp);
@@ -2552,7 +2561,7 @@ again:
 					needagain = B_TRUE;
 				else
 					progress = B_TRUE;
-				sprintf(guidname, "%lu", thisguid);
+				sprintf(guidname, "%" PRIu64, thisguid);
 				nvlist_add_boolean(deleted, guidname);
 				continue;
 			}
@@ -2609,7 +2618,7 @@ again:
 				needagain = B_TRUE;
 			else
 				progress = B_TRUE;
-			sprintf(guidname, "%lu", parent_fromsnap_guid);
+			sprintf(guidname, "%" PRIu64, parent_fromsnap_guid);
 			nvlist_add_boolean(deleted, guidname);
 			continue;
 		}
@@ -2642,7 +2651,7 @@ again:
 		if (stream_parent_fromsnap_guid != 0 &&
                     parent_fromsnap_guid != 0 &&
                     stream_parent_fromsnap_guid != parent_fromsnap_guid) {
-			sprintf(guidname, "%lu", parent_fromsnap_guid);
+			sprintf(guidname, "%" PRIu64, parent_fromsnap_guid);
 			if (nvlist_exists(deleted, guidname)) {
 				progress = B_TRUE;
 				needagain = B_TRUE;
@@ -3269,11 +3278,18 @@ zfs_receive_one(libzfs_handle_t *hdl, int infd, const char *tosnap,
 		}
 	} else {
 		/*
-		 * if the fs does not exist, look for it based on the
-		 * fromsnap GUID
+		 * If the fs does not exist, look for it based on the
+		 * fromsnap GUID.
 		 */
-		(void) snprintf(errbuf, sizeof (errbuf), dgettext(TEXT_DOMAIN,
-		    "cannot receive incremental stream"));
+		if (resuming) {
+			(void) snprintf(errbuf, sizeof (errbuf),
+			    dgettext(TEXT_DOMAIN,
+			    "cannot receive resume stream"));
+		} else {
+			(void) snprintf(errbuf, sizeof (errbuf),
+			    dgettext(TEXT_DOMAIN,
+			    "cannot receive incremental stream"));
+		}
 
 		(void) strcpy(zc.zc_name, zc.zc_value);
 		*strchr(zc.zc_name, '@') = '\0';

@@ -10,8 +10,7 @@ MAN=	ln.1 symlink.7
 LINKS=	${BINDIR}/ln ${BINDIR}/link
 MLINKS=	ln.1 link.1
 
-.if ${MK_TESTS} != "no"
-SUBDIR+= 	tests
-.endif
+HAS_TESTS=
+SUBDIR.${MK_TESTS}+= tests
 
 .include <bsd.prog.mk>

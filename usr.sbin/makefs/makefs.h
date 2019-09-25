@@ -153,6 +153,7 @@ typedef struct makefs_fsinfo {
 	off_t	maxsize;	/* maximum size image can be */
 	off_t	freefiles;	/* free file entries to leave */
 	off_t	freeblocks;	/* free blocks to leave */
+	off_t	offset;		/* offset from start of file */
 	off_t	roundup;	/* round image size up to this value */
 	int	freefilepc;	/* free file % */
 	int	freeblockpc;	/* free block % */
@@ -176,21 +177,20 @@ fsnode *	walk_dir(const char *, const char *, fsnode *, fsnode *);
 void		free_fsnodes(fsnode *);
 option_t *	copy_opts(const option_t *);
 
-void		ffs_prep_opts(fsinfo_t *);
-int		ffs_parse_opts(const char *, fsinfo_t *);
-void		ffs_cleanup_opts(fsinfo_t *);
-void		ffs_makefs(const char *, const char *, fsnode *, fsinfo_t *);
+#define DECLARE_FUN(fs)							\
+void		fs ## _prep_opts(fsinfo_t *);				\
+int		fs ## _parse_opts(const char *, fsinfo_t *);		\
+void		fs ## _cleanup_opts(fsinfo_t *);			\
+void		fs ## _makefs(const char *, const char *, fsnode *, fsinfo_t *)
 
-void		cd9660_prep_opts(fsinfo_t *);
-int		cd9660_parse_opts(const char *, fsinfo_t *);
-void		cd9660_cleanup_opts(fsinfo_t *);
-void		cd9660_makefs(const char *, const char *, fsnode *, fsinfo_t *);
-
+DECLARE_FUN(cd9660);
+DECLARE_FUN(ffs);
+DECLARE_FUN(msdos);
 
 extern	u_int		debug;
 extern	int		dupsok;
 extern	struct timespec	start_time;
-extern struct stat stampst;
+extern	struct stat stampst;
 
 /*
  * If -x is specified, we want to exclude nodes which do not appear
@@ -226,6 +226,7 @@ extern struct stat stampst;
 #define	DEBUG_APPLY_SPECFILE		0x04000000
 #define	DEBUG_APPLY_SPECENTRY		0x08000000
 #define	DEBUG_APPLY_SPECONLY		0x10000000
+#define	DEBUG_MSDOSFS			0x20000000
 
 
 #define	TIMER_START(x)				\
@@ -273,8 +274,8 @@ extern struct stat stampst;
 #define        DINODE1_SIZE    (sizeof(struct ufs1_dinode))
 #define        DINODE2_SIZE    (sizeof(struct ufs2_dinode))
 
-#define MAXSYMLINKLEN_UFS1     ((NDADDR + NIADDR) * sizeof(ufs1_daddr_t))
-#define MAXSYMLINKLEN_UFS2     ((NDADDR + NIADDR) * sizeof(ufs2_daddr_t))
+#define UFS1_MAXSYMLINKLEN   ((UFS_NDADDR + UFS_NIADDR) * sizeof(ufs1_daddr_t))
+#define UFS2_MAXSYMLINKLEN   ((UFS_NDADDR + UFS_NIADDR) * sizeof(ufs2_daddr_t))
 
 #if (BYTE_ORDER == LITTLE_ENDIAN)
 #define DIRSIZ_SWAP(oldfmt, dp, needswap)      \

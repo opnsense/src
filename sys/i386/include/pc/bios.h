@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1997 Michael Smith
  * Copyright (c) 1998 Jonathan Lemon
  * All rights reserved.
@@ -265,8 +267,8 @@ struct smbios_structure_header {
 };
 
 #ifdef _KERNEL
-#define BIOS_PADDRTOVADDR(x)	((x) + KERNBASE)
-#define BIOS_VADDRTOPADDR(x)	((x) - KERNBASE)
+#define BIOS_PADDRTOVADDR(x)	((x) + PMAP_MAP_LOW)
+#define BIOS_VADDRTOPADDR(x)	((x) - PMAP_MAP_LOW)
 
 struct bios_oem_signature {
 	char * anchor;		/* search anchor string in BIOS memory */

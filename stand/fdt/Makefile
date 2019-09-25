@@ -17,8 +17,4 @@ CFLAGS+=	-I${SYSDIR}/contrib/libfdt/ -I${LDRSRC}
 
 CFLAGS+=	-Wformat -Wall
 
-.if ${MACHINE_CPUARCH} == "aarch64"
-NOPIE=		1
-.endif
-
 .include <bsd.lib.mk>

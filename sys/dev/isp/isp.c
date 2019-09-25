@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  *  Copyright (c) 2009-2018 Alexander Motin <mav@FreeBSD.org>
  *  Copyright (c) 1997-2009 by Matthew Jacob
  *  All rights reserved.
@@ -2789,6 +2791,7 @@ isp_getpdb(ispsoftc_t *isp, int chan, uint16_t id, isp_pdb_t *pdb)
 	if (IS_24XX(isp)) {
 		isp_get_pdb_24xx(isp, isp->isp_iocb, &un.bill);
 		pdb->handle = un.bill.pdb_handle;
+		pdb->prli_word0 = un.bill.pdb_prli_svc0;
 		pdb->prli_word3 = un.bill.pdb_prli_svc3;
 		pdb->portid = BITS2WORD_24XX(un.bill.pdb_portid_bits);
 		ISP_MEMCPY(pdb->portname, un.bill.pdb_portname, 8);
@@ -2805,6 +2808,7 @@ isp_getpdb(ispsoftc_t *isp, int chan, uint16_t id, isp_pdb_t *pdb)
 	} else {
 		isp_get_pdb_21xx(isp, isp->isp_iocb, &un.fred);
 		pdb->handle = un.fred.pdb_loopid;
+		pdb->prli_word0 = un.fred.pdb_prli_svc0;
 		pdb->prli_word3 = un.fred.pdb_prli_svc3;
 		pdb->portid = BITS2WORD(un.fred.pdb_portid_bits);
 		ISP_MEMCPY(pdb->portname, un.fred.pdb_portname, 8);
@@ -3194,6 +3198,7 @@ isp_pdb_sync(ispsoftc_t *isp, int chan)
 			lp->state = FC_PORTDB_STATE_VALID;
 			isp_async(isp, ISPASYNC_DEV_CHANGED, chan, lp);
 			lp->portid = lp->new_portid;
+			lp->prli_word0 = lp->new_prli_word0;
 			lp->prli_word3 = lp->new_prli_word3;
 			break;
 		case FC_PORTDB_STATE_VALID:
@@ -3245,7 +3250,9 @@ isp_pdb_add_update(ispsoftc_t *isp, int chan, isp_pdb_t *pdb)
 		/* Old device, nothing new. */
 		if (lp->portid == pdb->portid &&
 		    lp->handle == pdb->handle &&
-		    lp->prli_word3 == pdb->prli_word3) {
+		    lp->prli_word3 == pdb->prli_word3 &&
+		    ((pdb->prli_word0 & PRLI_WD0_EST_IMAGE_PAIR) ==
+		     (lp->prli_word0 & PRLI_WD0_EST_IMAGE_PAIR))) {
 			if (lp->state != FC_PORTDB_STATE_NEW)
 				lp->state = FC_PORTDB_STATE_VALID;
 			isp_prt(isp, ISP_LOG_SANCFG,
@@ -3258,6 +3265,7 @@ isp_pdb_add_update(ispsoftc_t *isp, int chan, isp_pdb_t *pdb)
 		lp->state = FC_PORTDB_STATE_CHANGED;
 		lp->handle = pdb->handle;
 		lp->new_portid = pdb->portid;
+		lp->new_prli_word0 = pdb->prli_word0;
 		lp->new_prli_word3 = pdb->prli_word3;
 		isp_prt(isp, ISP_LOG_SANCFG,
 		    "Chan %d Port 0x%06x@0x%04x is changed",
@@ -3275,6 +3283,7 @@ isp_pdb_add_update(ispsoftc_t *isp, int chan, isp_pdb_t *pdb)
 	lp->probational = 0;
 	lp->state = FC_PORTDB_STATE_NEW;
 	lp->portid = lp->new_portid = pdb->portid;
+	lp->prli_word0 = lp->new_prli_word0 = pdb->prli_word0;
 	lp->prli_word3 = lp->new_prli_word3 = pdb->prli_word3;
 	lp->handle = pdb->handle;
 	lp->port_wwn = wwpn;
@@ -4481,7 +4490,7 @@ isp_start(XS_T *xs)
 
 	/*
 	 * Now see if we need to synchronize the ISP with respect to anything.
-	 * We do dual duty here (cough) for synchronizing for busses other
+	 * We do dual duty here (cough) for synchronizing for buses other
 	 * than which we got here to send a command to.
 	 */
 	reqp = (ispreq_t *) local;

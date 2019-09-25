@@ -11,15 +11,17 @@
 #define SymbolFileDWARF_DWARFAttribute_h_
 
 #include "DWARFDefines.h"
+#include "DWARFFormValue.h"
 #include "llvm/ADT/SmallVector.h"
 #include <vector>
 
-class DWARFCompileUnit;
-class DWARFFormValue;
+class DWARFUnit;
 
 class DWARFAttribute {
 public:
-  DWARFAttribute(dw_attr_t attr, dw_form_t form) : m_attr(attr), m_form(form) {}
+  DWARFAttribute(dw_attr_t attr, dw_form_t form,
+                 DWARFFormValue::ValueType value)
+      : m_attr(attr), m_form(form), m_value(value) {}
 
   void set(dw_attr_t attr, dw_form_t form) {
     m_attr = attr;
@@ -29,9 +31,11 @@ public:
   void set_form(dw_form_t form) { m_form = form; }
   dw_attr_t get_attr() const { return m_attr; }
   dw_form_t get_form() const { return m_form; }
-  void get(dw_attr_t &attr, dw_form_t &form) const {
+  void get(dw_attr_t &attr, dw_form_t &form,
+           DWARFFormValue::ValueType &val) const {
     attr = m_attr;
     form = m_form;
+    val = m_value;
   }
   bool operator==(const DWARFAttribute &rhs) const {
     return m_attr == rhs.m_attr && m_form == rhs.m_form;
@@ -43,6 +47,7 @@ public:
 protected:
   dw_attr_t m_attr;
   dw_form_t m_form;
+  DWARFFormValue::ValueType m_value;
 };
 
 class DWARFAttributes {
@@ -50,9 +55,9 @@ public:
   DWARFAttributes();
   ~DWARFAttributes();
 
-  void Append(const DWARFCompileUnit *cu, dw_offset_t attr_die_offset,
+  void Append(const DWARFUnit *cu, dw_offset_t attr_die_offset,
               dw_attr_t attr, dw_form_t form);
-  const DWARFCompileUnit *CompileUnitAtIndex(uint32_t i) const {
+  const DWARFUnit *CompileUnitAtIndex(uint32_t i) const {
     return m_infos[i].cu;
   }
   dw_offset_t DIEOffsetAtIndex(uint32_t i) const {
@@ -73,7 +78,7 @@ public:
 
 protected:
   struct AttributeValue {
-    const DWARFCompileUnit *cu; // Keep the compile unit with each attribute in
+    const DWARFUnit *cu;        // Keep the compile unit with each attribute in
                                 // case we have DW_FORM_ref_addr values
     dw_offset_t die_offset;
     DWARFAttribute attr;

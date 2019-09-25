@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2001 Charles Mott <cm@linktel.net>
  * All rights reserved.
  *
@@ -720,7 +722,8 @@ LibAliasProxyRule(struct libalias *la, const char *cmd)
 				err = RuleNumberDelete(la, rule_to_delete);
 				if (err)
 					ret = -1;
-				ret = 0;
+				else
+					ret = 0;
 				goto getout;
 			}
 

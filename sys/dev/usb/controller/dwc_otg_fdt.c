@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2012 Hans Petter Selasky. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -56,7 +58,12 @@ __FBSDID("$FreeBSD$");
 #include <dev/usb/controller/dwc_otg_fdt.h>
 
 static device_probe_t dwc_otg_probe;
-static device_detach_t dwc_otg_detach;
+
+static struct ofw_compat_data compat_data[] = {
+	{ "synopsys,designware-hs-otg2",	1 },
+	{ "snps,dwc2",				1 },
+	{ NULL,					0 }
+};
 
 static int
 dwc_otg_probe(device_t dev)
@@ -65,7 +72,7 @@ dwc_otg_probe(device_t dev)
 	if (!ofw_bus_status_okay(dev))
 		return (ENXIO);
 
-	if (!ofw_bus_is_compatible(dev, "synopsys,designware-hs-otg2"))
+	if (!ofw_bus_search_compatible(dev, compat_data)->ocd_data)
 		return (ENXIO);
 
 	device_set_desc(dev, "DWC OTG 2.0 integrated USB controller");
@@ -159,11 +166,10 @@ error:
 	return (ENXIO);
 }
 
-static int
+int
 dwc_otg_detach(device_t dev)
 {
 	struct dwc_otg_fdt_softc *sc = device_get_softc(dev);
-	int err;
 
 	/* during module unload there are lots of children leftover */
 	device_delete_children(dev);
@@ -174,7 +180,7 @@ dwc_otg_detach(device_t dev)
 		 */
 		dwc_otg_uninit(&sc->sc_otg);
 
-		err = bus_teardown_intr(dev, sc->sc_otg.sc_irq_res,
+		bus_teardown_intr(dev, sc->sc_otg.sc_irq_res,
 		    sc->sc_otg.sc_intr_hdl);
 		sc->sc_otg.sc_intr_hdl = NULL;
 	}

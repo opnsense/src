@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 2000 Berkeley Software Design, Inc.
  * Copyright (c) 1997, 1998, 1999, 2000
  *	Bill Paul <wpaul@osd.bsdi.com>.  All rights reserved.
@@ -191,6 +193,8 @@ static driver_t pcn_driver = {
 static devclass_t pcn_devclass;
 
 DRIVER_MODULE(pcn, pci, pcn_driver, pcn_devclass, 0, 0);
+MODULE_PNP_INFO("U16:vendor;U16:device", pci, pcn, pcn_devs,
+    nitems(pcn_devs) - 1);
 DRIVER_MODULE(miibus, pcn, miibus_driver, miibus_devclass, 0, 0);
 
 #define PCN_CSR_SETBIT(sc, reg, x)			\
@@ -369,7 +373,7 @@ pcn_setmulti(sc)
 
 	/* now program new ones */
 	if_maddr_rlock(ifp);
-	TAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
+	CK_STAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
 		if (ifma->ifma_addr->sa_family != AF_LINK)
 			continue;
 		h = ether_crc32_le(LLADDR((struct sockaddr_dl *)
@@ -679,6 +683,8 @@ pcn_attach(dev)
 fail:
 	if (error)
 		pcn_detach(dev);
+
+	gone_by_fcp101_dev(dev);
 
 	return(error);
 }

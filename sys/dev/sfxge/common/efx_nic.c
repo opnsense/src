@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2007-2016 Solarflare Communications Inc.
  * All rights reserved.
  *
@@ -103,78 +105,6 @@ efx_family(
 
 	*efp = EFX_FAMILY_INVALID;
 	return (ENOTSUP);
-}
-
-
-#define	EFX_BIU_MAGIC0	0x01234567
-#define	EFX_BIU_MAGIC1	0xfedcba98
-
-	__checkReturn	efx_rc_t
-efx_nic_biu_test(
-	__in		efx_nic_t *enp)
-{
-	efx_oword_t oword;
-	efx_rc_t rc;
-
-	/*
-	 * Write magic values to scratch registers 0 and 1, then
-	 * verify that the values were written correctly.  Interleave
-	 * the accesses to ensure that the BIU is not just reading
-	 * back the cached value that was last written.
-	 */
-	EFX_POPULATE_OWORD_1(oword, FRF_AZ_DRIVER_DW0, EFX_BIU_MAGIC0);
-	EFX_BAR_TBL_WRITEO(enp, FR_AZ_DRIVER_REG, 0, &oword, B_TRUE);
-
-	EFX_POPULATE_OWORD_1(oword, FRF_AZ_DRIVER_DW0, EFX_BIU_MAGIC1);
-	EFX_BAR_TBL_WRITEO(enp, FR_AZ_DRIVER_REG, 1, &oword, B_TRUE);
-
-	EFX_BAR_TBL_READO(enp, FR_AZ_DRIVER_REG, 0, &oword, B_TRUE);
-	if (EFX_OWORD_FIELD(oword, FRF_AZ_DRIVER_DW0) != EFX_BIU_MAGIC0) {
-		rc = EIO;
-		goto fail1;
-	}
-
-	EFX_BAR_TBL_READO(enp, FR_AZ_DRIVER_REG, 1, &oword, B_TRUE);
-	if (EFX_OWORD_FIELD(oword, FRF_AZ_DRIVER_DW0) != EFX_BIU_MAGIC1) {
-		rc = EIO;
-		goto fail2;
-	}
-
-	/*
-	 * Perform the same test, with the values swapped.  This
-	 * ensures that subsequent tests don't start with the correct
-	 * values already written into the scratch registers.
-	 */
-	EFX_POPULATE_OWORD_1(oword, FRF_AZ_DRIVER_DW0, EFX_BIU_MAGIC1);
-	EFX_BAR_TBL_WRITEO(enp, FR_AZ_DRIVER_REG, 0, &oword, B_TRUE);
-
-	EFX_POPULATE_OWORD_1(oword, FRF_AZ_DRIVER_DW0, EFX_BIU_MAGIC0);
-	EFX_BAR_TBL_WRITEO(enp, FR_AZ_DRIVER_REG, 1, &oword, B_TRUE);
-
-	EFX_BAR_TBL_READO(enp, FR_AZ_DRIVER_REG, 0, &oword, B_TRUE);
-	if (EFX_OWORD_FIELD(oword, FRF_AZ_DRIVER_DW0) != EFX_BIU_MAGIC1) {
-		rc = EIO;
-		goto fail3;
-	}
-
-	EFX_BAR_TBL_READO(enp, FR_AZ_DRIVER_REG, 1, &oword, B_TRUE);
-	if (EFX_OWORD_FIELD(oword, FRF_AZ_DRIVER_DW0) != EFX_BIU_MAGIC0) {
-		rc = EIO;
-		goto fail4;
-	}
-
-	return (0);
-
-fail4:
-	EFSYS_PROBE(fail4);
-fail3:
-	EFSYS_PROBE(fail3);
-fail2:
-	EFSYS_PROBE(fail2);
-fail1:
-	EFSYS_PROBE1(fail1, efx_rc_t, rc);
-
-	return (rc);
 }
 
 #if EFSYS_OPT_SIENA
@@ -287,7 +217,8 @@ efx_nic_create(
 		    EFX_FEATURE_MCDI_DMA |
 		    EFX_FEATURE_PIO_BUFFERS |
 		    EFX_FEATURE_FW_ASSISTED_TSO |
-		    EFX_FEATURE_FW_ASSISTED_TSO_V2;
+		    EFX_FEATURE_FW_ASSISTED_TSO_V2 |
+		    EFX_FEATURE_TXQ_CKSUM_OP_DESC;
 		break;
 #endif	/* EFSYS_OPT_HUNTINGTON */
 
@@ -306,7 +237,8 @@ efx_nic_create(
 		    EFX_FEATURE_MAC_HEADER_FILTERS |
 		    EFX_FEATURE_MCDI_DMA |
 		    EFX_FEATURE_PIO_BUFFERS |
-		    EFX_FEATURE_FW_ASSISTED_TSO_V2;
+		    EFX_FEATURE_FW_ASSISTED_TSO_V2 |
+		    EFX_FEATURE_TXQ_CKSUM_OP_DESC;
 		break;
 #endif	/* EFSYS_OPT_MEDFORD */
 
@@ -613,6 +545,7 @@ efx_nic_cfg_get(
 	__in		efx_nic_t *enp)
 {
 	EFSYS_ASSERT3U(enp->en_magic, ==, EFX_NIC_MAGIC);
+	EFSYS_ASSERT3U(enp->en_mod_flags, &, EFX_MOD_PROBE);
 
 	return (&(enp->en_nic_cfg));
 }
@@ -632,139 +565,6 @@ efx_nic_register_test(
 
 	if ((rc = enop->eno_register_test(enp)) != 0)
 		goto fail1;
-
-	return (0);
-
-fail1:
-	EFSYS_PROBE1(fail1, efx_rc_t, rc);
-
-	return (rc);
-}
-
-	__checkReturn	efx_rc_t
-efx_nic_test_registers(
-	__in		efx_nic_t *enp,
-	__in		efx_register_set_t *rsp,
-	__in		size_t count)
-{
-	unsigned int bit;
-	efx_oword_t original;
-	efx_oword_t reg;
-	efx_oword_t buf;
-	efx_rc_t rc;
-
-	while (count > 0) {
-		/* This function is only suitable for registers */
-		EFSYS_ASSERT(rsp->rows == 1);
-
-		/* bit sweep on and off */
-		EFSYS_BAR_READO(enp->en_esbp, rsp->address, &original,
-			    B_TRUE);
-		for (bit = 0; bit < 128; bit++) {
-			/* Is this bit in the mask? */
-			if (~(rsp->mask.eo_u32[bit >> 5]) & (1 << bit))
-				continue;
-
-			/* Test this bit can be set in isolation */
-			reg = original;
-			EFX_AND_OWORD(reg, rsp->mask);
-			EFX_SET_OWORD_BIT(reg, bit);
-
-			EFSYS_BAR_WRITEO(enp->en_esbp, rsp->address, &reg,
-				    B_TRUE);
-			EFSYS_BAR_READO(enp->en_esbp, rsp->address, &buf,
-				    B_TRUE);
-
-			EFX_AND_OWORD(buf, rsp->mask);
-			if (memcmp(&reg, &buf, sizeof (reg))) {
-				rc = EIO;
-				goto fail1;
-			}
-
-			/* Test this bit can be cleared in isolation */
-			EFX_OR_OWORD(reg, rsp->mask);
-			EFX_CLEAR_OWORD_BIT(reg, bit);
-
-			EFSYS_BAR_WRITEO(enp->en_esbp, rsp->address, &reg,
-				    B_TRUE);
-			EFSYS_BAR_READO(enp->en_esbp, rsp->address, &buf,
-				    B_TRUE);
-
-			EFX_AND_OWORD(buf, rsp->mask);
-			if (memcmp(&reg, &buf, sizeof (reg))) {
-				rc = EIO;
-				goto fail2;
-			}
-		}
-
-		/* Restore the old value */
-		EFSYS_BAR_WRITEO(enp->en_esbp, rsp->address, &original,
-			    B_TRUE);
-
-		--count;
-		++rsp;
-	}
-
-	return (0);
-
-fail2:
-	EFSYS_PROBE(fail2);
-fail1:
-	EFSYS_PROBE1(fail1, efx_rc_t, rc);
-
-	/* Restore the old value */
-	EFSYS_BAR_WRITEO(enp->en_esbp, rsp->address, &original, B_TRUE);
-
-	return (rc);
-}
-
-	__checkReturn	efx_rc_t
-efx_nic_test_tables(
-	__in		efx_nic_t *enp,
-	__in		efx_register_set_t *rsp,
-	__in		efx_pattern_type_t pattern,
-	__in		size_t count)
-{
-	efx_sram_pattern_fn_t func;
-	unsigned int index;
-	unsigned int address;
-	efx_oword_t reg;
-	efx_oword_t buf;
-	efx_rc_t rc;
-
-	EFSYS_ASSERT(pattern < EFX_PATTERN_NTYPES);
-	func = __efx_sram_pattern_fns[pattern];
-
-	while (count > 0) {
-		/* Write */
-		address = rsp->address;
-		for (index = 0; index < rsp->rows; ++index) {
-			func(2 * index + 0, B_FALSE, &reg.eo_qword[0]);
-			func(2 * index + 1, B_FALSE, &reg.eo_qword[1]);
-			EFX_AND_OWORD(reg, rsp->mask);
-			EFSYS_BAR_WRITEO(enp->en_esbp, address, &reg, B_TRUE);
-
-			address += rsp->step;
-		}
-
-		/* Read */
-		address = rsp->address;
-		for (index = 0; index < rsp->rows; ++index) {
-			func(2 * index + 0, B_FALSE, &reg.eo_qword[0]);
-			func(2 * index + 1, B_FALSE, &reg.eo_qword[1]);
-			EFX_AND_OWORD(reg, rsp->mask);
-			EFSYS_BAR_READO(enp->en_esbp, address, &buf, B_TRUE);
-			if (memcmp(&reg, &buf, sizeof (reg))) {
-				rc = EIO;
-				goto fail1;
-			}
-
-			address += rsp->step;
-		}
-
-		++rsp;
-		--count;
-	}
 
 	return (0);
 
@@ -886,13 +686,12 @@ efx_mcdi_get_loopback_modes(
 {
 	efx_nic_cfg_t *encp = &(enp->en_nic_cfg);
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_GET_LOOPBACK_MODES_IN_LEN,
-			    MC_CMD_GET_LOOPBACK_MODES_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_GET_LOOPBACK_MODES_IN_LEN,
+		MC_CMD_GET_LOOPBACK_MODES_OUT_LEN);
 	efx_qword_t mask;
 	efx_qword_t modes;
 	efx_rc_t rc;
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_GET_LOOPBACK_MODES;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_GET_LOOPBACK_MODES_IN_LEN;

@@ -1,5 +1,7 @@
 /* $FreeBSD$ */
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2008 Hans Petter Selasky <hselasky@FreeBSD.org>
  * Copyright (c) 2018 The FreeBSD Foundation
  * All rights reserved.
@@ -74,9 +76,11 @@ enum {
 	MSC_MAX_INDEX,
 };
 
+#define	MSC_DEFAULT_VENDOR_ID		USB_TEMPLATE_VENDOR
+#define	MSC_DEFAULT_PRODUCT_ID		0x27df
 #define	MSC_DEFAULT_INTERFACE		"USB Mass Storage Interface"
 #define	MSC_DEFAULT_CONFIGURATION	"Default Config"
-#define	MSC_DEFAULT_MANUFACTURER	"FreeBSD foundation"
+#define	MSC_DEFAULT_MANUFACTURER	USB_TEMPLATE_MANUFACTURER
 #define	MSC_DEFAULT_PRODUCT		"USB Memory Stick"
 #define	MSC_DEFAULT_SERIAL_NUMBER	"March 2008"
 
@@ -138,8 +142,8 @@ static const struct usb_temp_interface_desc *msc_interfaces[] = {
 
 static const struct usb_temp_config_desc msc_config_desc = {
 	.ppIfaceDesc = msc_interfaces,
-	.bmAttributes = UC_BUS_POWERED,
-	.bMaxPower = 25,		/* 50 mA */
+	.bmAttributes = 0,
+	.bMaxPower = 0,
 	.iConfiguration = MSC_CONFIGURATION_INDEX,
 };
 
@@ -151,8 +155,8 @@ static const struct usb_temp_config_desc *msc_configs[] = {
 struct usb_temp_device_desc usb_template_msc = {
 	.getStringDesc = &msc_get_string_desc,
 	.ppConfigDesc = msc_configs,
-	.idVendor = USB_TEMPLATE_VENDOR,
-	.idProduct = 0x0012,
+	.idVendor = MSC_DEFAULT_VENDOR_ID,
+	.idProduct = MSC_DEFAULT_PRODUCT_ID,
 	.bcdDevice = 0x0100,
 	.bDeviceClass = UDCLASS_COMM,
 	.bDeviceSubClass = 0,
@@ -255,4 +259,4 @@ msc_uninit(void *arg __unused)
 }
 
 SYSINIT(msc_init, SI_SUB_LOCK, SI_ORDER_FIRST, msc_init, NULL);
-SYSUNINIT(msc_init, SI_SUB_LOCK, SI_ORDER_FIRST, msc_uninit, NULL);
+SYSUNINIT(msc_uninit, SI_SUB_LOCK, SI_ORDER_FIRST, msc_uninit, NULL);

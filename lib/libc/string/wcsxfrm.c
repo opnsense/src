@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright 2010 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 1995 Alex Tatmanjants <alex@elvisti.kiev.ua>
  *		at Electronni Visti IA, Kiev, Ukraine.
@@ -71,7 +73,7 @@ error:
 	slen = wcslen(src);
 	if (slen < len)
 		(void) wcscpy(dest, src);
-	else {
+	else if (len > 0) {
 		(void) wcsncpy(dest, src, len - 1);
 		dest[len - 1] = L'\0';
 	}

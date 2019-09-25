@@ -1,6 +1,8 @@
 /*	$NetBSD: tmpfs_fifoops.c,v 1.5 2005/12/11 12:24:29 christos Exp $	*/
 
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ *
  * Copyright (c) 2005 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
@@ -37,7 +39,7 @@
  __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
-#include <sys/filedesc.h>
+#include <sys/mount.h>
 #include <sys/proc.h>
 #include <sys/vnode.h>
 
@@ -54,7 +56,8 @@ tmpfs_fifo_close(struct vop_close_args *v)
 	struct tmpfs_node *node;
 
 	node = VP_TO_TMPFS_NODE(v->a_vp);
-	tmpfs_set_status(node, TMPFS_NODE_ACCESSED);
+	tmpfs_set_status(VFS_TO_TMPFS(v->a_vp->v_mount), node,
+	    TMPFS_NODE_ACCESSED);
 	tmpfs_update(v->a_vp);
 	return (fifo_specops.vop_close(v));
 }

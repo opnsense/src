@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2000 Matthew Jacob
  * All rights reserved.
  *
@@ -34,17 +36,15 @@
 #ifndef	__SCSI_ENC_INTERNAL_H__
 #define	__SCSI_ENC_INTERNAL_H__
 
+#include <sys/sysctl.h>
+
 typedef struct enc_element {
-	uint32_t
-		 enctype	: 8,	/* enclosure type */
-		 subenclosure : 8,	/* subenclosure id */
-		 svalid	: 1,		/* enclosure information valid */
-		 overall_status_elem: 1,/*
-					 * This object represents generic
-					 * status about all objects of this
-					 * type.
-					 */
-		 priv	: 14;		/* private data, per object */
+	uint8_t	 elm_idx;		/* index of element */
+	uint8_t	 elm_type;		/* element type */
+	uint8_t	 subenclosure;		/* subenclosure id */
+	uint8_t	 type_elm_idx;		/* index of element within type */
+	uint8_t	 svalid;		/* enclosure information valid */
+	uint16_t priv;			/* private data, per object */
 	uint8_t	 encstat[4];		/* state && stats */
 	uint8_t *physical_path;		/* Device physical path data. */
 	u_int    physical_path_len;	/* Length of device path data. */
@@ -53,10 +53,8 @@ typedef struct enc_element {
 
 typedef enum {
 	ENC_NONE,
-	ENC_SES_SCSI2,
 	ENC_SES,
 	ENC_SES_PASSTHROUGH,
-	ENC_SEN,
 	ENC_SAFT,
 	ENC_SEMB_SES,
 	ENC_SEMB_SAFT
@@ -166,6 +164,9 @@ struct enc_softc {
 	struct enc_fsm_state 	*enc_fsm_states;
 
 	struct intr_config_hook  enc_boot_hold_ch;
+
+#define 	ENC_ANNOUNCE_SZ		400
+	char			announce_buf[ENC_ANNOUNCE_SZ];
 };
 
 static inline enc_cache_t *
@@ -201,6 +202,9 @@ enc_softc_init_t	ses_softc_init;
 /* SAF-TE interface */
 enc_softc_init_t	safte_softc_init;
 
+SYSCTL_DECL(_kern_cam_enc);
+extern int enc_verbose;
+
 /* Helper macros */
 MALLOC_DECLARE(M_SCSIENC);
 #define	ENC_CFLAGS		CAM_RETRY_SELTO
@@ -213,7 +217,7 @@ MALLOC_DECLARE(M_SCSIENC);
 #else
 #define	ENC_DLOG		if (0) enc_log
 #endif
-#define	ENC_VLOG		if (bootverbose) enc_log
+#define	ENC_VLOG		if (enc_verbose) enc_log
 #define	ENC_MALLOC(amt)		malloc(amt, M_SCSIENC, M_NOWAIT)
 #define	ENC_MALLOCZ(amt)	malloc(amt, M_SCSIENC, M_ZERO|M_NOWAIT)
 /* Cast away const avoiding GCC warnings. */

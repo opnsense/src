@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1999 Kazutaka YOKOTA <yokota@zodiac.mech.utsunomiya-u.ac.jp>
  * All rights reserved.
  *
@@ -29,7 +31,6 @@
 __FBSDID("$FreeBSD$");
 
 #include "opt_kbd.h"
-#include "opt_pax.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -46,6 +47,7 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/kbio.h>
 
+#include <dev/evdev/input-event-codes.h>
 #include <dev/kbd/kbdreg.h>
 
 #define KBD_INDEX(dev)	dev2unit(dev)
@@ -81,13 +83,7 @@ static keyboard_t	**keyboard = &kbd_ini;
 static keyboard_switch_t *kbdsw_ini;
        keyboard_switch_t **kbdsw = &kbdsw_ini;
 
-#ifdef PAX_HARDENING
-/* Only root should be able to change keyboard mapping */
-static int keymap_restrict_change = 4;
-#else
 static int keymap_restrict_change;
-#endif
-
 static SYSCTL_NODE(_hw, OID_AUTO, kbd, CTLFLAG_RD, 0, "kbd");
 SYSCTL_INT(_hw_kbd, OID_AUTO, keymap_restrict_change, CTLFLAG_RW,
     &keymap_restrict_change, 0, "restrict ability to change keymap");
@@ -1334,13 +1330,7 @@ genkbd_keyaction(keyboard_t *kbd, int keycode, int up, int *shiftstate,
 			state &= ~NLKDOWN;
 			break;
 		case CLK:
-#ifndef PC98
 			state &= ~CLKDOWN;
-#else
-			state &= ~CLKED;
-			i = state & LOCK_MASK;
-			(void)kbdd_ioctl(kbd, KDSETLED, (caddr_t)&i);
-#endif
 			break;
 		case SLK:
 			state &= ~SLKDOWN;
@@ -1370,13 +1360,7 @@ genkbd_keyaction(keyboard_t *kbd, int keycode, int up, int *shiftstate,
 				set_lockkey_state(kbd, state, NLK);
 				break;
 			case CLK:
-#ifndef PC98
 				set_lockkey_state(kbd, state, CLK);
-#else
-				state |= CLKED;
-				i = state & LOCK_MASK;
-				(void)kbdd_ioctl(kbd, KDSETLED, (caddr_t)&i);
-#endif
 				break;
 			case SLK:
 				set_lockkey_state(kbd, state, SLK);
@@ -1491,4 +1475,42 @@ genkbd_keyaction(keyboard_t *kbd, int keycode, int up, int *shiftstate,
 		}
 	}
 	/* NOT REACHED */
+}
+
+void
+kbd_ev_event(keyboard_t *kbd, uint16_t type, uint16_t code, int32_t value)
+{
+	int delay[2], led = 0, leds, oleds;
+
+	if (type == EV_LED) {
+		leds = oleds = KBD_LED_VAL(kbd);
+		switch (code) {
+		case LED_CAPSL:
+			led = CLKED;
+			break;
+		case LED_NUML:
+			led = NLKED;
+			break;
+		case LED_SCROLLL:
+			led = SLKED;
+			break;
+		}
+
+		if (value)
+			leds |= led;
+		else
+			leds &= ~led;
+
+		if (leds != oleds)
+			kbdd_ioctl(kbd, KDSETLED, (caddr_t)&leds);
+
+	} else if (type == EV_REP && code == REP_DELAY) {
+		delay[0] = value;
+		delay[1] = kbd->kb_delay2;
+		kbdd_ioctl(kbd, KDSETREPEAT, (caddr_t)delay);
+	} else if (type == EV_REP && code == REP_PERIOD) {
+		delay[0] = kbd->kb_delay1;
+		delay[1] = value;
+		kbdd_ioctl(kbd, KDSETREPEAT, (caddr_t)delay);
+	}
 }

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2013 Mark Johnston <markj@FreeBSD.org>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -29,13 +31,19 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#include "opt_sctp.h"
+
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/sdt.h>
 
 SDT_PROVIDER_DEFINE(ip);
+#ifdef SCTP
+SDT_PROVIDER_DEFINE(sctp);
+#endif
 SDT_PROVIDER_DEFINE(tcp);
 SDT_PROVIDER_DEFINE(udp);
+SDT_PROVIDER_DEFINE(udplite);
 
 SDT_PROBE_DEFINE6_XLATE(ip, , , receive,
     "void *", "pktinfo_t *",
@@ -52,6 +60,30 @@ SDT_PROBE_DEFINE6_XLATE(ip, , , send,
     "struct ifnet *", "ifinfo_t *",
     "struct ip *", "ipv4info_t *",
     "struct ip6_hdr *", "ipv6info_t *");
+
+#ifdef SCTP
+SDT_PROBE_DEFINE5_XLATE(sctp, , , receive,
+    "void *", "pktinfo_t *",
+    "struct sctp_tcb *", "csinfo_t *",
+    "struct mbuf *", "ipinfo_t *",
+    "struct sctp_tcb *", "sctpsinfo_t *" ,
+    "struct sctphdr *", "sctpinfo_t *");
+
+SDT_PROBE_DEFINE5_XLATE(sctp, , , send,
+    "void *", "pktinfo_t *",
+    "struct sctp_tcb *", "csinfo_t *",
+    "uint8_t *", "ipinfo_t *",
+    "struct sctp_tcb *", "sctpsinfo_t *" ,
+    "struct sctphdr *", "sctpinfo_t *");
+
+SDT_PROBE_DEFINE6_XLATE(sctp, , , state__change,
+    "void *", "void *",
+    "struct sctp_tcb *", "csinfo_t *",
+    "void *", "void *",
+    "struct sctp_tcb *", "sctpsinfo_t *",
+    "void *", "void *",
+    "int", "sctplsinfo_t *");
+#endif
 
 SDT_PROBE_DEFINE5_XLATE(tcp, , , accept__established,
     "void *", "pktinfo_t *",
@@ -153,3 +185,17 @@ SDT_PROBE_DEFINE5_XLATE(udp, , , send,
     "uint8_t *", "ipinfo_t *",
     "struct inpcb *", "udpsinfo_t *",
     "struct udphdr *", "udpinfo_t *");
+
+SDT_PROBE_DEFINE5_XLATE(udplite, , , receive,
+    "void *", "pktinfo_t *",
+    "struct inpcb *", "csinfo_t *",
+    "uint8_t *", "ipinfo_t *",
+    "struct inpcb *", "udplitesinfo_t *",
+    "struct udphdr *", "udpliteinfo_t *");
+
+SDT_PROBE_DEFINE5_XLATE(udplite, , , send,
+    "void *", "pktinfo_t *",
+    "struct inpcb *", "csinfo_t *",
+    "uint8_t *", "ipinfo_t *",
+    "struct inpcb *", "udplitesinfo_t *",
+    "struct udphdr *", "udpliteinfo_t *");

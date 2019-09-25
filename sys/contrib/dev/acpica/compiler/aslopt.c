@@ -8,7 +8,7 @@
  *
  * 1. Copyright Notice
  *
- * Some or all of this work - Copyright (c) 1999 - 2017, Intel Corp.
+ * Some or all of this work - Copyright (c) 1999 - 2018, Intel Corp.
  * All rights reserved.
  *
  * 2. License
@@ -406,7 +406,7 @@ OptBuildShortestPath (
      * Construct a new target string
      */
     NewPathExternal =
-        ACPI_ALLOCATE_ZEROED (TargetPath->Length + NumCarats + 1);
+        UtLocalCacheCalloc (TargetPath->Length + NumCarats + 1);
 
     /* Insert the Carats into the Target string */
 
@@ -522,7 +522,6 @@ OptBuildShortestPath (
 
 Cleanup:
 
-    ACPI_FREE (NewPathExternal);
     return (Status);
 }
 
@@ -679,7 +678,7 @@ OptOptimizeNamePath (
 
     /* This is an optional optimization */
 
-    if (!Gbl_ReferenceOptimizationFlag)
+    if (!AslGbl_ReferenceOptimizationFlag)
     {
         return_VOID;
     }

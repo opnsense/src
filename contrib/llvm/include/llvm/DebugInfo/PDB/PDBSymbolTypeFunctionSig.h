@@ -19,17 +19,15 @@ class raw_ostream;
 namespace pdb {
 
 class PDBSymbolTypeFunctionSig : public PDBSymbol {
-public:
-  PDBSymbolTypeFunctionSig(const IPDBSession &PDBSession,
-                           std::unique_ptr<IPDBRawSymbol> Symbol);
-
   DECLARE_PDB_SYMBOL_CONCRETE_TYPE(PDB_SymType::FunctionSig)
-
+public:
   std::unique_ptr<IPDBEnumSymbols> getArguments() const;
 
   void dump(PDBSymDumper &Dumper) const override;
   void dumpRight(PDBSymDumper &Dumper) const override;
   void dumpArgList(raw_ostream &OS) const;
+
+  bool isCVarArgs() const;
 
   FORWARD_SYMBOL_METHOD(getCallingConvention)
   FORWARD_SYMBOL_ID_METHOD(getClassParent)

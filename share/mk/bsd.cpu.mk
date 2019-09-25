@@ -31,6 +31,8 @@ MACHINE_CPU = ultrasparc
 . if ${MACHINE_CPUARCH} == "amd64" || ${MACHINE_CPUARCH} == "i386"
 .  if ${CPUTYPE} == "barcelona"
 CPUTYPE = amdfam10
+.  elif ${CPUTYPE} == "skx"
+CPUTYPE = skylake-avx512
 .  elif ${CPUTYPE} == "core-avx2"
 CPUTYPE = haswell
 .  elif ${CPUTYPE} == "core-avx-i"
@@ -110,11 +112,8 @@ _CPUCFLAGS = -march=${CPUTYPE}
 _CPUCFLAGS = -march=armv5te -D__XSCALE__
 .  elif ${CPUTYPE:M*soft*} != ""
 _CPUCFLAGS = -mfloat-abi=softfp
-.  elif ${CPUTYPE} == "armv6"
-# Not sure we still need ARM_ARCH_6=1 here.
-_CPUCFLAGS = -march=${CPUTYPE} -DARM_ARCH_6=1
 .  elif ${CPUTYPE} == "cortexa"
-_CPUCFLAGS = -march=armv7 -DARM_ARCH_6=1 -mfpu=vfp
+_CPUCFLAGS = -march=armv7 -mfpu=vfp
 .  elif ${CPUTYPE:Marmv[4567]*} != ""
 # Handle all the armvX types that FreeBSD runs:
 #	armv4, armv4t, armv5, armv5te, armv6, armv6t2, armv7, armv7-a, armv7ve
@@ -137,6 +136,8 @@ _CPUCFLAGS = -Wa,-me500 -msoft-float
 .  else
 _CPUCFLAGS = -mcpu=${CPUTYPE} -mno-powerpc64
 .  endif
+. elif ${MACHINE_ARCH} == "powerpcspe"
+_CPUCFLAGS = -Wa,-me500 -mspe=yes -mabi=spe -mfloat-gprs=double -mcpu=8548
 . elif ${MACHINE_ARCH} == "powerpc64"
 _CPUCFLAGS = -mcpu=${CPUTYPE}
 . elif ${MACHINE_CPUARCH} == "mips"
@@ -153,8 +154,6 @@ _CPUCFLAGS = -march=${CPUTYPE}
 #	sb1, xlp, xlr
 _CPUCFLAGS = -march=${CPUTYPE:S/^mips//}
 . endif
-. elif ${MACHINE_CPUARCH} == "riscv"
-_CPUCFLAGS = -msoft-float # -march="RV64I" # RISCVTODO
 . elif ${MACHINE_ARCH} == "sparc64"
 .  if ${CPUTYPE} == "v9"
 _CPUCFLAGS = -mcpu=v9
@@ -202,7 +201,8 @@ MACHINE_CPU = 3dnow mmx k6 k5 i586
 MACHINE_CPU = mmx k6 k5 i586
 .  elif ${CPUTYPE} == "k5"
 MACHINE_CPU = k5 i586
-.  elif ${CPUTYPE} == "cannonlake" || ${CPUTYPE} == "knm" || \
+.  elif ${CPUTYPE} == "icelake-server" || ${CPUTYPE} == "icelake-client" || \
+    ${CPUTYPE} == "cannonlake" || ${CPUTYPE} == "knm" || \
     ${CPUTYPE} == "skylake-avx512" || ${CPUTYPE} == "knl"
 MACHINE_CPU = avx512 avx2 avx sse42 sse41 ssse3 sse3 sse2 sse i686 mmx i586
 .  elif ${CPUTYPE} == "skylake" || ${CPUTYPE} == "broadwell" || \
@@ -210,7 +210,8 @@ MACHINE_CPU = avx512 avx2 avx sse42 sse41 ssse3 sse3 sse2 sse i686 mmx i586
 MACHINE_CPU = avx2 avx sse42 sse41 ssse3 sse3 sse2 sse i686 mmx i586
 .  elif ${CPUTYPE} == "ivybridge" || ${CPUTYPE} == "sandybridge"
 MACHINE_CPU = avx sse42 sse41 ssse3 sse3 sse2 sse i686 mmx i586
-.  elif ${CPUTYPE} == "goldmont" || ${CPUTYPE} == "westmere" || \
+.  elif ${CPUTYPE} == "tremont" || ${CPUTYPE} == "goldmont-plus" || \
+    ${CPUTYPE} == "goldmont" || ${CPUTYPE} == "westmere" || \
     ${CPUTYPE} == "nehalem" || ${CPUTYPE} == "silvermont"
 MACHINE_CPU = sse42 sse41 ssse3 sse3 sse2 sse i686 mmx i586
 .  elif ${CPUTYPE} == "penryn"
@@ -265,7 +266,8 @@ MACHINE_CPU = k8 3dnow sse3
 .  elif ${CPUTYPE} == "opteron" || ${CPUTYPE} == "athlon64" || \
     ${CPUTYPE} == "athlon-fx" || ${CPUTYPE} == "k8"
 MACHINE_CPU = k8 3dnow
-.  elif ${CPUTYPE} == "cannonlake" || ${CPUTYPE} == "knm" || \
+.  elif ${CPUTYPE} == "icelake-server" || ${CPUTYPE} == "icelake-client" || \
+    ${CPUTYPE} == "cannonlake" || ${CPUTYPE} == "knm" || \
     ${CPUTYPE} == "skylake-avx512" || ${CPUTYPE} == "knl"
 MACHINE_CPU = avx512 avx2 avx sse42 sse41 ssse3 sse3
 .  elif ${CPUTYPE} == "skylake" || ${CPUTYPE} == "broadwell" || \
@@ -273,7 +275,8 @@ MACHINE_CPU = avx512 avx2 avx sse42 sse41 ssse3 sse3
 MACHINE_CPU = avx2 avx sse42 sse41 ssse3 sse3
 .  elif ${CPUTYPE} == "ivybridge" || ${CPUTYPE} == "sandybridge"
 MACHINE_CPU = avx sse42 sse41 ssse3 sse3
-.  elif ${CPUTYPE} == "goldmont" || ${CPUTYPE} == "westmere" || \
+.  elif ${CPUTYPE} == "tremont" || ${CPUTYPE} == "goldmont-plus" || \
+    ${CPUTYPE} == "goldmont" || ${CPUTYPE} == "westmere" || \
     ${CPUTYPE} == "nehalem" || ${CPUTYPE} == "silvermont"
 MACHINE_CPU = sse42 sse41 ssse3 sse3
 .  elif ${CPUTYPE} == "penryn"
@@ -309,6 +312,26 @@ MACHINE_CPU = v9 ultrasparc ultrasparc3
 
 .if ${MACHINE_CPUARCH} == "mips"
 CFLAGS += -G0
+AFLAGS+= -${MIPS_ENDIAN} -mabi=${MIPS_ABI}
+CFLAGS+= -${MIPS_ENDIAN} -mabi=${MIPS_ABI}
+LDFLAGS+= -${MIPS_ENDIAN} -mabi=${MIPS_ABI}
+. if ${MACHINE_ARCH:Mmips*el*} != ""
+MIPS_ENDIAN=	EL
+. else
+MIPS_ENDIAN=	EB
+. endif
+. if ${MACHINE_ARCH:Mmips64*} != ""
+MIPS_ABI?=	64
+. elif ${MACHINE_ARCH:Mmipsn32*} != ""
+MIPS_ABI?=	n32
+. else
+MIPS_ABI?=	32
+. endif
+. if ${MACHINE_ARCH:Mmips*hf}
+CFLAGS += -mhard-float
+. else
+CFLAGS += -msoft-float
+. endif
 .endif
 
 ########## arm
@@ -317,26 +340,36 @@ MACHINE_CPU += arm
 . if ${MACHINE_ARCH:Marmv6*} != ""
 MACHINE_CPU += armv6
 . endif
-# armv6 is a hybrid. It can use the softfp ABI, but doesn't emulate
-# floating point in the general case, so don't define softfp for
-# it at this time. arm and armeb are pure softfp, so define it
-# for them.
-. if ${MACHINE_ARCH:Marmv6*} == ""
+. if ${MACHINE_ARCH:Marmv7*} != ""
+MACHINE_CPU += armv7
+. endif
+# armv6 and armv7 are a hybrid. It can use the softfp ABI, but doesn't emulate
+# floating point in the general case, so don't define softfp for it at this
+# time. arm is pure softfp, so define it for them.
+. if ${MACHINE_ARCH:Marmv[67]*} == ""
 MACHINE_CPU += softfp
 . endif
-# Normally armv6 is hard float ABI from FreeBSD 11 onwards. However
-# when CPUTYPE has 'soft' in it, we use the soft-float ABI to allow
-# building of soft-float ABI libraries. In this case, we have to
-# add the -mfloat-abi=softfp to force that.
-.if ${MACHINE_ARCH:Marmv6*} && defined(CPUTYPE) && ${CPUTYPE:M*soft*} != ""
+# Normally armv6 and armv7 are hard float ABI from FreeBSD 11 onwards. However
+# when CPUTYPE has 'soft' in it, we use the soft-float ABI to allow building of
+# soft-float ABI libraries. In this case, we have to add the -mfloat-abi=softfp
+# to force that.
+.if ${MACHINE_ARCH:Marmv[67]*} && defined(CPUTYPE) && ${CPUTYPE:M*soft*} != ""
 # Needs to be CFLAGS not _CPUCFLAGS because it's needed for the ABI
 # not a nice optimization.
 CFLAGS += -mfloat-abi=softfp
 .endif
 .endif
 
+.if ${MACHINE_ARCH} == "powerpcspe"
+CFLAGS += -mcpu=8548 -Wa,-me500 -mspe=yes -mabi=spe -mfloat-gprs=double
+.endif
+
 .if ${MACHINE_CPUARCH} == "riscv"
-CFLAGS += -msoft-float
+.if ${MACHINE_ARCH:Mriscv*sf}
+CFLAGS += -march=rv64imac -mabi=lp64
+.else
+CFLAGS += -march=rv64imafdc -mabi=lp64d
+.endif
 .endif
 
 # NB: COPTFLAGS is handled in /usr/src/sys/conf/kern.pre.mk
@@ -361,7 +394,7 @@ CFLAGS += ${_CPUCFLAGS}
 # (-mfpmath= is not supported)
 #
 .if ${MACHINE_CPUARCH} == "i386" || ${MACHINE_CPUARCH} == "amd64"
-CFLAGS_NO_SIMD.clang= -mno-avx
+CFLAGS_NO_SIMD.clang= -mno-avx -mno-avx2
 CFLAGS_NO_SIMD= -mno-mmx -mno-sse
 .endif
 CFLAGS_NO_SIMD += ${CFLAGS_NO_SIMD.${COMPILER_TYPE}}

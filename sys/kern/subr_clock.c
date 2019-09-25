@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1988 University of Utah.
  * Copyright (c) 1982, 1990, 1993
  *	The Regents of the University of California.  All rights reserved.
@@ -15,7 +17,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -249,7 +251,7 @@ clock_bcd_to_ts(const struct bcd_clocktime *bct, struct timespec *ts, bool ampm)
 void
 clock_ts_to_ct(const struct timespec *ts, struct clocktime *ct)
 {
-	int i, year, days;
+	time_t i, year, days;
 	time_t rsec;	/* remainder seconds */
 	time_t secs;
 
@@ -291,6 +293,20 @@ clock_ts_to_ct(const struct timespec *ts, struct clocktime *ct)
 		clock_print_ct(ct, 9);
 		printf("]\n");
 	}
+
+	KASSERT(ct->year >= 0 && ct->year < 10000,
+	    ("year %d isn't a 4 digit year", ct->year));
+	KASSERT(ct->mon >= 1 && ct->mon <= 12,
+	    ("month %d not in 1-12", ct->mon));
+	KASSERT(ct->day >= 1 && ct->day <= 31,
+	    ("day %d not in 1-31", ct->day));
+	KASSERT(ct->hour >= 0 && ct->hour <= 23,
+	    ("hour %d not in 0-23", ct->hour));
+	KASSERT(ct->min >= 0 && ct->min <= 59,
+	    ("minute %d not in 0-59", ct->min));
+	/* Not sure if this interface needs to handle leapseconds or not. */
+	KASSERT(ct->sec >= 0 && ct->sec <= 60,
+	    ("seconds %d not in 0-60", ct->sec));
 }
 
 void

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2004 Tim J. Robbins
  * Copyright (c) 2002 Doug Rabson
  * Copyright (c) 2000 Marcel Moolenaar
@@ -56,10 +58,12 @@ __FBSDID("$FreeBSD$");
 #include <sys/wait.h>
 
 #include <machine/frame.h>
+#include <machine/md_var.h>
 #include <machine/pcb.h>
 #include <machine/psl.h>
 #include <machine/segments.h>
 #include <machine/specialreg.h>
+#include <x86/ifunc.h>
 
 #include <vm/pmap.h>
 #include <vm/vm.h>
@@ -255,7 +259,7 @@ linux_ipc(struct thread *td, struct linux_ipc_args *args)
 		struct linux_semop_args a;
 
 		a.semid = args->arg1;
-		a.tsops = args->ptr;
+		a.tsops = PTRIN(args->ptr);
 		a.nsops = args->arg2;
 		return (linux_semop(td, &a));
 	}
@@ -274,7 +278,7 @@ linux_ipc(struct thread *td, struct linux_ipc_args *args)
 		a.semid = args->arg1;
 		a.semnum = args->arg2;
 		a.cmd = args->arg3;
-		error = copyin(args->ptr, &a.arg, sizeof(a.arg));
+		error = copyin(PTRIN(args->ptr), &a.arg, sizeof(a.arg));
 		if (error)
 			return (error);
 		return (linux_semctl(td, &a));
@@ -283,7 +287,7 @@ linux_ipc(struct thread *td, struct linux_ipc_args *args)
 		struct linux_msgsnd_args a;
 
 		a.msqid = args->arg1;
-		a.msgp = args->ptr;
+		a.msgp = PTRIN(args->ptr);
 		a.msgsz = args->arg2;
 		a.msgflg = args->arg3;
 		return (linux_msgsnd(td, &a));
@@ -300,13 +304,13 @@ linux_ipc(struct thread *td, struct linux_ipc_args *args)
 
 			if (args->ptr == 0)
 				return (EINVAL);
-			error = copyin(args->ptr, &tmp, sizeof(tmp));
+			error = copyin(PTRIN(args->ptr), &tmp, sizeof(tmp));
 			if (error)
 				return (error);
 			a.msgp = PTRIN(tmp.msgp);
 			a.msgtyp = tmp.msgtyp;
 		} else {
-			a.msgp = args->ptr;
+			a.msgp = PTRIN(args->ptr);
 			a.msgtyp = args->arg5;
 		}
 		return (linux_msgrcv(td, &a));
@@ -323,22 +327,29 @@ linux_ipc(struct thread *td, struct linux_ipc_args *args)
 
 		a.msqid = args->arg1;
 		a.cmd = args->arg2;
-		a.buf = args->ptr;
+		a.buf = PTRIN(args->ptr);
 		return (linux_msgctl(td, &a));
 	}
 	case LINUX_SHMAT: {
 		struct linux_shmat_args a;
+		l_uintptr_t addr;
+		int error;
 
 		a.shmid = args->arg1;
-		a.shmaddr = args->ptr;
+		a.shmaddr = PTRIN(args->ptr);
 		a.shmflg = args->arg2;
-		a.raddr = PTRIN((l_uint)args->arg3);
-		return (linux_shmat(td, &a));
+		error = linux_shmat(td, &a);
+		if (error != 0)
+			return (error);
+		addr = td->td_retval[0];
+		error = copyout(&addr, PTRIN(args->arg3), sizeof(addr));
+		td->td_retval[0] = 0;
+		return (error);
 	}
 	case LINUX_SHMDT: {
 		struct linux_shmdt_args a;
 
-		a.shmaddr = args->ptr;
+		a.shmaddr = PTRIN(args->ptr);
 		return (linux_shmdt(td, &a));
 	}
 	case LINUX_SHMGET: {
@@ -354,7 +365,7 @@ linux_ipc(struct thread *td, struct linux_ipc_args *args)
 
 		a.shmid = args->arg1;
 		a.cmd = args->arg2;
-		a.buf = args->ptr;
+		a.buf = PTRIN(args->ptr);
 		return (linux_shmctl(td, &a));
 	}
 	default:
@@ -819,4 +830,49 @@ linux_set_thread_area(struct thread *td,
 	update_gdt_gsbase(td, info.base_addr);
 
 	return (0);
+}
+
+int futex_xchgl_nosmap(int oparg, uint32_t *uaddr, int *oldval);
+int futex_xchgl_smap(int oparg, uint32_t *uaddr, int *oldval);
+DEFINE_IFUNC(, int, futex_xchgl, (int, uint32_t *, int *), static)
+{
+
+	return ((cpu_stdext_feature & CPUID_STDEXT_SMAP) != 0 ?
+	    futex_xchgl_smap : futex_xchgl_nosmap);
+}
+
+int futex_addl_nosmap(int oparg, uint32_t *uaddr, int *oldval);
+int futex_addl_smap(int oparg, uint32_t *uaddr, int *oldval);
+DEFINE_IFUNC(, int, futex_addl, (int, uint32_t *, int *), static)
+{
+
+	return ((cpu_stdext_feature & CPUID_STDEXT_SMAP) != 0 ?
+	    futex_addl_smap : futex_addl_nosmap);
+}
+
+int futex_orl_nosmap(int oparg, uint32_t *uaddr, int *oldval);
+int futex_orl_smap(int oparg, uint32_t *uaddr, int *oldval);
+DEFINE_IFUNC(, int, futex_orl, (int, uint32_t *, int *), static)
+{
+
+	return ((cpu_stdext_feature & CPUID_STDEXT_SMAP) != 0 ?
+	    futex_orl_smap : futex_orl_nosmap);
+}
+
+int futex_andl_nosmap(int oparg, uint32_t *uaddr, int *oldval);
+int futex_andl_smap(int oparg, uint32_t *uaddr, int *oldval);
+DEFINE_IFUNC(, int, futex_andl, (int, uint32_t *, int *), static)
+{
+
+	return ((cpu_stdext_feature & CPUID_STDEXT_SMAP) != 0 ?
+	    futex_andl_smap : futex_andl_nosmap);
+}
+
+int futex_xorl_nosmap(int oparg, uint32_t *uaddr, int *oldval);
+int futex_xorl_smap(int oparg, uint32_t *uaddr, int *oldval);
+DEFINE_IFUNC(, int, futex_xorl, (int, uint32_t *, int *), static)
+{
+
+	return ((cpu_stdext_feature & CPUID_STDEXT_SMAP) != 0 ?
+	    futex_xorl_smap : futex_xorl_nosmap);
 }

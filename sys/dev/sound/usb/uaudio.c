@@ -2,6 +2,8 @@
 /*	$FreeBSD$ */
 
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ *
  * Copyright (c) 1999 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
@@ -98,7 +100,7 @@ static int uaudio_default_channels = 0;		/* use default */
 static int uaudio_buffer_ms = 8;
 
 #ifdef USB_DEBUG
-static int uaudio_debug = 0;
+static int uaudio_debug;
 
 static SYSCTL_NODE(_hw_usb, OID_AUTO, uaudio, CTLFLAG_RW, 0, "USB uaudio");
 
@@ -134,6 +136,8 @@ uaudio_buffer_ms_sysctl(SYSCTL_HANDLER_ARGS)
 SYSCTL_PROC(_hw_usb_uaudio, OID_AUTO, buffer_ms, CTLTYPE_INT | CTLFLAG_RWTUN,
     0, sizeof(int), uaudio_buffer_ms_sysctl, "I",
     "uaudio buffering delay from 2ms to 8ms");
+#else
+#define	uaudio_debug 0
 #endif
 
 #define	UAUDIO_NFRAMES		64	/* must be factor of 8 due HS-USB */
@@ -1516,7 +1520,8 @@ uaudio20_check_rate(struct usb_device *udev, uint8_t iface_no,
 {
 	struct usb_device_request req;
 	usb_error_t error;
-	uint8_t data[255];
+#define	UAUDIO20_MAX_RATES 32	/* we support at maxium 32 rates */
+	uint8_t data[2 + UAUDIO20_MAX_RATES * 12];
 	uint16_t actlen;
 	uint16_t rates;
 	uint16_t x;
@@ -1528,19 +1533,57 @@ uaudio20_check_rate(struct usb_device *udev, uint8_t iface_no,
 	req.bRequest = UA20_CS_RANGE;
 	USETW2(req.wValue, UA20_CS_SAM_FREQ_CONTROL, 0);
 	USETW2(req.wIndex, clockid, iface_no);
-	USETW(req.wLength, 255);
+	/*
+	 * Assume there is at least one rate to begin with, else some
+	 * devices might refuse to return the USB descriptor:
+	 */
+	USETW(req.wLength, (2 + 1 * 12));
 
-        error = usbd_do_request_flags(udev, NULL, &req, data,
+	error = usbd_do_request_flags(udev, NULL, &req, data,
 	    USB_SHORT_XFER_OK, &actlen, USB_DEFAULT_TIMEOUT);
 
-	if (error != 0 || actlen < 2)
-		return (USB_ERR_INVAL);
+	if (error != 0 || actlen < 2) {
+		/*
+		 * Likely the descriptor doesn't fit into the supplied
+		 * buffer. Try using a larger buffer and see if that
+		 * helps:
+		 */
+		rates = MIN(UAUDIO20_MAX_RATES, (255 - 2) / 12);
+		error = USB_ERR_INVAL;
+	} else {
+		rates = UGETW(data);
 
-	rates = data[0] | (data[1] << 8);
+		if (rates > UAUDIO20_MAX_RATES) {
+			DPRINTF("Too many rates truncating to %d\n", UAUDIO20_MAX_RATES);
+			rates = UAUDIO20_MAX_RATES;
+			error = USB_ERR_INVAL;
+		} else if (rates > 1) {
+			DPRINTF("Need to read full rate descriptor\n");
+			error = USB_ERR_INVAL;
+		}
+	}
+
+	if (error != 0) {
+		/*
+		 * Try to read full rate descriptor.
+		 */
+		actlen = (2 + rates * 12);
+
+		USETW(req.wLength, actlen);
+
+	        error = usbd_do_request_flags(udev, NULL, &req, data,
+		    USB_SHORT_XFER_OK, &actlen, USB_DEFAULT_TIMEOUT);
+	
+		if (error != 0 || actlen < 2)
+			return (USB_ERR_INVAL);
+
+		rates = UGETW(data);
+	}
+
 	actlen = (actlen - 2) / 12;
 
 	if (rates > actlen) {
-		DPRINTF("Too many rates\n");
+		DPRINTF("Too many rates truncating to %d\n", actlen);
 		rates = actlen;
 	}
 
@@ -1702,7 +1745,7 @@ uaudio_chan_fill_info_sub(struct uaudio_softc *sc, struct usb_device *udev,
 			continue;
 		}
 
-		if ((acdp != NULL) &&
+		if ((acdp != NULL || sc->sc_uq_au_vendor_class != 0) &&
 		    (desc->bDescriptorType == UDESC_CS_INTERFACE) &&
 		    (desc->bDescriptorSubtype == AS_GENERAL) &&
 		    (asid.v1 == NULL)) {
@@ -1718,7 +1761,7 @@ uaudio_chan_fill_info_sub(struct uaudio_softc *sc, struct usb_device *udev,
 				}
 			}
 		}
-		if ((acdp != NULL) &&
+		if ((acdp != NULL || sc->sc_uq_au_vendor_class != 0) &&
 		    (desc->bDescriptorType == UDESC_CS_INTERFACE) &&
 		    (desc->bDescriptorSubtype == FORMAT_TYPE) &&
 		    (asf1d.v1 == NULL)) {
@@ -1757,7 +1800,7 @@ uaudio_chan_fill_info_sub(struct uaudio_softc *sc, struct usb_device *udev,
 				continue;
 			}
 		}
-		if ((acdp != NULL) &&
+		if ((acdp != NULL || sc->sc_uq_au_vendor_class != 0) &&
 		    (desc->bDescriptorType == UDESC_CS_ENDPOINT) &&
 		    (desc->bDescriptorSubtype == AS_GENERAL) &&
 		    (sed.v1 == NULL)) {
@@ -2159,6 +2202,14 @@ uaudio_chan_play_sync_callback(struct usb_xfer *xfer, usb_error_t error)
 		break;
 
 	case USB_ST_SETUP:
+		/*
+		 * Check if the recording stream can be used as a
+		 * source of jitter information to save some
+		 * isochronous bandwidth:
+		 */
+		if (ch->priv_sc->sc_rec_chan.num_alt != 0 &&
+		    uaudio_debug == 0)
+			break;
 		usbd_xfer_set_frames(xfer, 1);
 		usbd_xfer_set_frame_len(xfer, 0, usbd_xfer_max_framelen(xfer));
 		usbd_transfer_submit(xfer);
@@ -6234,3 +6285,4 @@ MODULE_DEPEND(uaudio, usb, 1, 1, 1);
 MODULE_DEPEND(uaudio, sound, SOUND_MINVER, SOUND_PREFVER, SOUND_MAXVER);
 MODULE_VERSION(uaudio, 1);
 USB_PNP_HOST_INFO(uaudio_devs);
+USB_PNP_HOST_INFO(uaudio_vendor_midi);

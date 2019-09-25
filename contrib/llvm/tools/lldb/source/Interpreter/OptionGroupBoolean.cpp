@@ -9,10 +9,6 @@
 
 #include "lldb/Interpreter/OptionGroupBoolean.h"
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
 #include "lldb/Host/OptionParser.h"
 
 using namespace lldb;
@@ -32,7 +28,7 @@ OptionGroupBoolean::OptionGroupBoolean(uint32_t usage_mask, bool required,
   m_option_definition.option_has_arg = no_argument_toggle_default
                                            ? OptionParser::eNoArgument
                                            : OptionParser::eRequiredArgument;
-  m_option_definition.enum_values = nullptr;
+  m_option_definition.enum_values = {};
   m_option_definition.completion_type = 0;
   m_option_definition.argument_type = eArgTypeBoolean;
   m_option_definition.usage_text = usage_text;
@@ -45,8 +41,8 @@ Status OptionGroupBoolean::SetOptionValue(uint32_t option_idx,
                                           ExecutionContext *execution_context) {
   Status error;
   if (m_option_definition.option_has_arg == OptionParser::eNoArgument) {
-    // Not argument, toggle the default value and mark the option as having been
-    // set
+    // Not argument, toggle the default value and mark the option as having
+    // been set
     m_value.SetCurrentValue(!m_value.GetDefaultValue());
     m_value.SetOptionWasSet();
   } else {

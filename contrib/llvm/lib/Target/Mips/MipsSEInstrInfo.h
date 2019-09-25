@@ -76,6 +76,13 @@ public:
                          MachineBasicBlock::iterator II, const DebugLoc &DL,
                          unsigned *NewImm) const;
 
+protected:
+  /// If the specific machine instruction is a instruction that moves/copies
+  /// value from one register to another register return true along with
+  /// @Source machine operand and @Destination machine operand.
+  bool isCopyInstrImpl(const MachineInstr &MI, const MachineOperand *&Source,
+                       const MachineOperand *&Destination) const override;
+
 private:
   unsigned getAnalyzableBrOpc(unsigned Opc) const override;
 
@@ -107,9 +114,11 @@ private:
                       unsigned CvtOpc, unsigned MovOpc, bool IsI64) const;
 
   void expandExtractElementF64(MachineBasicBlock &MBB,
-                               MachineBasicBlock::iterator I, bool FP64) const;
+                               MachineBasicBlock::iterator I, bool isMicroMips,
+                               bool FP64) const;
   void expandBuildPairF64(MachineBasicBlock &MBB,
-                          MachineBasicBlock::iterator I, bool FP64) const;
+                          MachineBasicBlock::iterator I, bool isMicroMips,
+                          bool FP64) const;
   void expandEhReturn(MachineBasicBlock &MBB,
                       MachineBasicBlock::iterator I) const;
 };

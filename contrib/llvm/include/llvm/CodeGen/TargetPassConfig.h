@@ -16,7 +16,7 @@
 
 #include "llvm/Pass.h"
 #include "llvm/Support/CodeGen.h"
-#include <cassert> 
+#include <cassert>
 #include <string>
 
 namespace llvm {
@@ -84,26 +84,25 @@ template <> struct isPodLike<IdentifyingPassPtr> {
 /// This is an ImmutablePass solely for the purpose of exposing CodeGen options
 /// to the internals of other CodeGen passes.
 class TargetPassConfig : public ImmutablePass {
-public:
-  /// Pseudo Pass IDs. These are defined within TargetPassConfig because they
-  /// are unregistered pass IDs. They are only useful for use with
-  /// TargetPassConfig APIs to identify multiple occurrences of the same pass.
-  ///
-
-  /// EarlyTailDuplicate - A clone of the TailDuplicate pass that runs early
-  /// during codegen, on SSA form.
-  static char EarlyTailDuplicateID;
-
-  /// PostRAMachineLICM - A clone of the LICM pass that runs during late machine
-  /// optimization after regalloc.
-  static char PostRAMachineLICMID;
-
 private:
   PassManagerBase *PM = nullptr;
   AnalysisID StartBefore = nullptr;
   AnalysisID StartAfter = nullptr;
   AnalysisID StopBefore = nullptr;
   AnalysisID StopAfter = nullptr;
+
+  unsigned StartBeforeInstanceNum = 0;
+  unsigned StartBeforeCount = 0;
+
+  unsigned StartAfterInstanceNum = 0;
+  unsigned StartAfterCount = 0;
+
+  unsigned StopBeforeInstanceNum = 0;
+  unsigned StopBeforeCount = 0;
+
+  unsigned StopAfterInstanceNum = 0;
+  unsigned StopAfterCount = 0;
+
   bool Started = true;
   bool Stopped = false;
   bool AddingMachinePasses = false;
@@ -159,26 +158,19 @@ public:
 
   CodeGenOpt::Level getOptLevel() const;
 
-  /// Describe the status of the codegen
-  /// pipeline set by this target pass config.
-  /// Having a limited codegen pipeline means that options
-  /// have been used to restrict what codegen is doing.
-  /// In particular, that means that codegen won't emit
-  /// assembly code.
-  bool hasLimitedCodeGenPipeline() const;
+  /// Returns true if one of the `-start-after`, `-start-before`, `-stop-after`
+  /// or `-stop-before` options is set.
+  static bool hasLimitedCodeGenPipeline();
+
+  /// Returns true if none of the `-stop-before` and `-stop-after` options is
+  /// set.
+  static bool willCompleteCodeGenPipeline();
 
   /// If hasLimitedCodeGenPipeline is true, this method
   /// returns a string with the name of the options, separated
   /// by \p Separator that caused this pipeline to be limited.
   std::string
   getLimitedCodeGenPipelineReason(const char *Separator = "/") const;
-
-  /// Check if the codegen pipeline is limited in such a way that it
-  /// won't be complete. When the codegen pipeline is not complete,
-  /// this means it may not be possible to generate assembly from it.
-  bool willCompleteCodeGenPipeline() const {
-    return !hasLimitedCodeGenPipeline() || (!StopAfter && !StopBefore);
-  }
 
   void setDisableVerify(bool Disable) { setOpt(DisableVerify, Disable); }
 
@@ -218,9 +210,6 @@ public:
   /// Return true if the optimized regalloc pipeline is enabled.
   bool getOptimizeRegAlloc() const;
 
-  /// Return true if shrink wrapping is enabled.
-  bool getEnableShrinkWrap() const;
-
   /// Return true if the default global register allocator is in use and
   /// has not be overriden on the command line with '-regalloc=...'
   bool usingDefaultRegAlloc() const;
@@ -229,7 +218,7 @@ public:
   /// representation to the MI representation.
   /// Adds IR based lowering and target specific optimization passes and finally
   /// the core instruction selection passes.
-  /// \returns true if an error occured, false otherwise.
+  /// \returns true if an error occurred, false otherwise.
   bool addISelPasses();
 
   /// Add common target configurable passes that perform LLVM IR to IR
@@ -319,10 +308,6 @@ public:
   /// Add a pass to perform basic verification of the machine function if
   /// verification is enabled.
   void addVerifyPass(const std::string &Banner);
-
-  /// Check whether or not GlobalISel should be enabled by default.
-  /// Fallback/abort behavior is controlled via other methods.
-  virtual bool isGlobalISelEnabled() const;
 
   /// Check whether or not GlobalISel should abort on error.
   /// When this is disabled, GlobalISel will fall back on SDISel instead of

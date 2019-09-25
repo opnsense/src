@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2009-2010
  *	Swinburne University of Technology, Melbourne, Australia
  * Copyright (c) 2010 Lawrence Stewart <lstewart@freebsd.org>
@@ -77,8 +79,6 @@ __FBSDID("$FreeBSD$");
 
 #include <netinet/khelp/h_ertt.h>
 
-#define	CAST_PTR_INT(X)	(*((int*)(X)))
-
 /* Largest possible number returned by random(). */
 #define	RANDOM_MAX	INT_MAX
 
@@ -87,9 +87,9 @@ static int	hd_mod_init(void);
 
 static int ertt_id;
 
-static VNET_DEFINE(uint32_t, hd_qthresh) = 20;
-static VNET_DEFINE(uint32_t, hd_qmin) = 5;
-static VNET_DEFINE(uint32_t, hd_pmax) = 5;
+VNET_DEFINE_STATIC(uint32_t, hd_qthresh) = 20;
+VNET_DEFINE_STATIC(uint32_t, hd_qmin) = 5;
+VNET_DEFINE_STATIC(uint32_t, hd_pmax) = 5;
 #define	V_hd_qthresh	VNET(hd_qthresh)
 #define	V_hd_qmin	VNET(hd_qmin)
 #define	V_hd_pmax	VNET(hd_pmax)
@@ -186,8 +186,7 @@ hd_pmax_handler(SYSCTL_HANDLER_ARGS)
 	new = V_hd_pmax;
 	error = sysctl_handle_int(oidp, &new, 0, req);
 	if (error == 0 && req->newptr != NULL) {
-		if (CAST_PTR_INT(req->newptr) == 0 ||
-		    CAST_PTR_INT(req->newptr) > 100)
+		if (new == 0 || new > 100)
 			error = EINVAL;
 		else
 			V_hd_pmax = new;
@@ -205,7 +204,7 @@ hd_qmin_handler(SYSCTL_HANDLER_ARGS)
 	new = V_hd_qmin;
 	error = sysctl_handle_int(oidp, &new, 0, req);
 	if (error == 0 && req->newptr != NULL) {
-		if (CAST_PTR_INT(req->newptr) > V_hd_qthresh)
+		if (new > V_hd_qthresh)
 			error = EINVAL;
 		else
 			V_hd_qmin = new;
@@ -223,8 +222,7 @@ hd_qthresh_handler(SYSCTL_HANDLER_ARGS)
 	new = V_hd_qthresh;
 	error = sysctl_handle_int(oidp, &new, 0, req);
 	if (error == 0 && req->newptr != NULL) {
-		if (CAST_PTR_INT(req->newptr) < 1 ||
-		    CAST_PTR_INT(req->newptr) < V_hd_qmin)
+		if (new == 0 || new < V_hd_qmin)
 			error = EINVAL;
 		else
 			V_hd_qthresh = new;

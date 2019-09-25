@@ -259,6 +259,8 @@ static driver_t rl_driver = {
 static devclass_t rl_devclass;
 
 DRIVER_MODULE(rl, pci, rl_driver, rl_devclass, 0, 0);
+MODULE_PNP_INFO("U16:vendor;U16:device", pci, rl, rl_devs,
+    nitems(rl_devs) - 1);
 DRIVER_MODULE(rl, cardbus, rl_driver, rl_devclass, 0, 0);
 DRIVER_MODULE(miibus, rl, miibus_driver, miibus_devclass, 0, 0);
 
@@ -538,7 +540,7 @@ rl_rxfilter(struct rl_softc *sc)
 	} else {
 		/* Now program new ones. */
 		if_maddr_rlock(ifp);
-		TAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
+		CK_STAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
 			if (ifma->ifma_addr->sa_family != AF_LINK)
 				continue;
 			h = ether_crc32_be(LLADDR((struct sockaddr_dl *)

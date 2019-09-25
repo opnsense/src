@@ -1,75 +1,119 @@
 
 #include "hwasan.h"
+#include "hwasan_mapping.h"
 #include "hwasan_thread.h"
 #include "hwasan_poisoning.h"
 #include "hwasan_interface_internal.h"
 
+#include "sanitizer_common/sanitizer_file.h"
+#include "sanitizer_common/sanitizer_placement_new.h"
 #include "sanitizer_common/sanitizer_tls_get_addr.h"
+
 
 namespace __hwasan {
 
-HwasanThread *HwasanThread::Create(thread_callback_t start_routine,
-                               void *arg) {
-  uptr PageSize = GetPageSizeCached();
-  uptr size = RoundUpTo(sizeof(HwasanThread), PageSize);
-  HwasanThread *thread = (HwasanThread*)MmapOrDie(size, __func__);
-  thread->start_routine_ = start_routine;
-  thread->arg_ = arg;
-  thread->destructor_iterations_ = GetPthreadDestructorIterations();
-
-  return thread;
+static u32 RandomSeed() {
+  u32 seed;
+  do {
+    if (UNLIKELY(!GetRandom(reinterpret_cast<void *>(&seed), sizeof(seed),
+                            /*blocking=*/false))) {
+      seed = static_cast<u32>(
+          (NanoTime() >> 12) ^
+          (reinterpret_cast<uptr>(__builtin_frame_address(0)) >> 4));
+    }
+  } while (!seed);
+  return seed;
 }
 
-void HwasanThread::SetThreadStackAndTls() {
-  uptr tls_size = 0;
-  uptr stack_size = 0;
-  GetThreadStackAndTls(IsMainThread(), &stack_bottom_, &stack_size,
-                       &tls_begin_, &tls_size);
+void Thread::Init(uptr stack_buffer_start, uptr stack_buffer_size) {
+  static u64 unique_id;
+  unique_id_ = unique_id++;
+  random_state_ = flags()->random_tags ? RandomSeed() : unique_id_;
+  if (auto sz = flags()->heap_history_size)
+    heap_allocations_ = HeapAllocationsRingBuffer::New(sz);
+
+  HwasanTSDThreadInit();  // Only needed with interceptors.
+  uptr *ThreadLong = GetCurrentThreadLongPtr();
+  // The following implicitly sets (this) as the current thread.
+  stack_allocations_ = new (ThreadLong)
+      StackAllocationsRingBuffer((void *)stack_buffer_start, stack_buffer_size);
+  // Check that it worked.
+  CHECK_EQ(GetCurrentThread(), this);
+
+  // ScopedTaggingDisable needs GetCurrentThread to be set up.
+  ScopedTaggingDisabler disabler;
+
+  uptr tls_size;
+  uptr stack_size;
+  GetThreadStackAndTls(IsMainThread(), &stack_bottom_, &stack_size, &tls_begin_,
+                       &tls_size);
   stack_top_ = stack_bottom_ + stack_size;
   tls_end_ = tls_begin_ + tls_size;
 
-  int local;
-  CHECK(AddrIsInStack((uptr)&local));
+  if (stack_bottom_) {
+    int local;
+    CHECK(AddrIsInStack((uptr)&local));
+    CHECK(MemIsApp(stack_bottom_));
+    CHECK(MemIsApp(stack_top_ - 1));
+  }
+
+  if (flags()->verbose_threads) {
+    if (IsMainThread()) {
+      Printf("sizeof(Thread): %zd sizeof(HeapRB): %zd sizeof(StackRB): %zd\n",
+             sizeof(Thread), heap_allocations_->SizeInBytes(),
+             stack_allocations_->size() * sizeof(uptr));
+    }
+    Print("Creating  : ");
+  }
 }
 
-void HwasanThread::Init() {
-  SetThreadStackAndTls();
-  CHECK(MEM_IS_APP(stack_bottom_));
-  CHECK(MEM_IS_APP(stack_top_ - 1));
-}
-
-void HwasanThread::TSDDtor(void *tsd) {
-  HwasanThread *t = (HwasanThread*)tsd;
-  t->Destroy();
-}
-
-void HwasanThread::ClearShadowForThreadStackAndTLS() {
-  TagMemory(stack_bottom_, stack_top_ - stack_bottom_, 0);
+void Thread::ClearShadowForThreadStackAndTLS() {
+  if (stack_top_ != stack_bottom_)
+    TagMemory(stack_bottom_, stack_top_ - stack_bottom_, 0);
   if (tls_begin_ != tls_end_)
     TagMemory(tls_begin_, tls_end_ - tls_begin_, 0);
 }
 
-void HwasanThread::Destroy() {
-  malloc_storage().CommitBack();
+void Thread::Destroy() {
+  if (flags()->verbose_threads)
+    Print("Destroying: ");
+  AllocatorSwallowThreadLocalCache(allocator_cache());
   ClearShadowForThreadStackAndTLS();
-  uptr size = RoundUpTo(sizeof(HwasanThread), GetPageSizeCached());
-  UnmapOrDie(this, size);
+  if (heap_allocations_)
+    heap_allocations_->Delete();
   DTLS_Destroy();
 }
 
-thread_return_t HwasanThread::ThreadStart() {
-  Init();
+void Thread::Print(const char *Prefix) {
+  Printf("%sT%zd %p stack: [%p,%p) sz: %zd tls: [%p,%p)\n", Prefix,
+         unique_id_, this, stack_bottom(), stack_top(),
+         stack_top() - stack_bottom(),
+         tls_begin(), tls_end());
+}
 
-  if (!start_routine_) {
-    // start_routine_ == 0 if we're on the main thread or on one of the
-    // OS X libdispatch worker threads. But nobody is supposed to call
-    // ThreadStart() for the worker threads.
-    return 0;
-  }
+static u32 xorshift(u32 state) {
+  state ^= state << 13;
+  state ^= state >> 17;
+  state ^= state << 5;
+  return state;
+}
 
-  thread_return_t res = start_routine_(arg_);
-
-  return res;
+// Generate a (pseudo-)random non-zero tag.
+tag_t Thread::GenerateRandomTag() {
+  if (tagging_disabled_) return 0;
+  tag_t tag;
+  do {
+    if (flags()->random_tags) {
+      if (!random_buffer_)
+        random_buffer_ = random_state_ = xorshift(random_state_);
+      CHECK(random_buffer_);
+      tag = random_buffer_ & 0xFF;
+      random_buffer_ >>= 8;
+    } else {
+      tag = random_state_ = (random_state_ + 1) & 0xFF;
+    }
+  } while (!tag);
+  return tag;
 }
 
 } // namespace __hwasan

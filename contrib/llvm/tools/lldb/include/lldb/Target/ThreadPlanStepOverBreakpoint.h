@@ -10,10 +10,6 @@
 #ifndef liblldb_ThreadPlanStepOverBreakpoint_h_
 #define liblldb_ThreadPlanStepOverBreakpoint_h_
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
 #include "lldb/Target/Thread.h"
 #include "lldb/Target/ThreadPlan.h"
 
@@ -31,6 +27,7 @@ public:
   bool StopOthers() override;
   lldb::StateType GetPlanRunState() override;
   bool WillStop() override;
+  void WillPop() override;
   bool MischiefManaged() override;
   void ThreadDestroyed() override;
   void SetAutoContinue(bool do_it);

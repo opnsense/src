@@ -17,11 +17,11 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/CodeGen/CallingConvLower.h"
-#include "llvm/CodeGen/MachineValueType.h"
 #include "llvm/CodeGen/TargetCallingConv.h"
 #include "llvm/IR/CallSite.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MachineValueType.h"
 #include <cstdint>
 #include <functional>
 
@@ -40,6 +40,7 @@ class Value;
 class CallLowering {
   const TargetLowering *TLI;
 
+  virtual void anchor();
 public:
   struct ArgInfo {
     unsigned Reg;
@@ -108,6 +109,9 @@ public:
     MachineIRBuilder &MIRBuilder;
     MachineRegisterInfo &MRI;
     CCAssignFn *AssignFn;
+
+  private:
+    virtual void anchor();
   };
 
 protected:
@@ -123,7 +127,7 @@ protected:
   }
 
   template <typename FuncInfoTy>
-  void setArgFlags(ArgInfo &Arg, unsigned OpNum, const DataLayout &DL,
+  void setArgFlags(ArgInfo &Arg, unsigned OpIdx, const DataLayout &DL,
                    const FuncInfoTy &FuncInfo) const;
 
   /// Invoke Handler::assignArg on each of the given \p Args and then use
@@ -131,19 +135,19 @@ protected:
   ///
   /// \return True if everything has succeeded, false otherwise.
   bool handleAssignments(MachineIRBuilder &MIRBuilder, ArrayRef<ArgInfo> Args,
-                         ValueHandler &Callback) const;
+                         ValueHandler &Handler) const;
 
 public:
   CallLowering(const TargetLowering *TLI) : TLI(TLI) {}
   virtual ~CallLowering() = default;
 
   /// This hook must be implemented to lower outgoing return values, described
-  /// by \p Val, into the specified virtual register \p VReg.
+  /// by \p Val, into the specified virtual registers \p VRegs.
   /// This hook is used by GlobalISel.
   ///
   /// \return True if the lowering succeeds, false otherwise.
-  virtual bool lowerReturn(MachineIRBuilder &MIRBuilder,
-                           const Value *Val, unsigned VReg) const {
+  virtual bool lowerReturn(MachineIRBuilder &MIRBuilder, const Value *Val,
+                           ArrayRef<unsigned> VRegs) const {
     return false;
   }
 

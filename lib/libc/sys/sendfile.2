@@ -25,7 +25,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd January 7, 2016
+.Dd January 25, 2019
 .Dt SENDFILE 2
 .Os
 .Sh NAME
@@ -104,7 +104,7 @@ variable pointed to by
 The least significant 16 bits of
 .Fa flags
 argument is a bitmap of these values:
-.Bl -tag -offset indent
+.Bl -tag -offset indent -width "SF_USER_READAHEAD"
 .It Dv SF_NODISKIO
 This flag causes
 .Nm
@@ -155,23 +155,17 @@ sleeps until the network stack no longer references the VM pages
 of the file, making subsequent modifications to it safe.
 Please note that this is not a guarantee that the data has actually
 been sent.
-.El
-.Pp
-The most significant 16 bits of
-.Fa flags
-specify amount of pages that
+.It Dv SF_USER_READAHEAD
 .Nm
-may read ahead when reading the file.
-A macro
-.Fn SF_FLAGS
-is provided to combine readahead amount and flags.
-Example shows specifing readahead of 16 pages and
-.Dv SF_NOCACHE
-flag:
-.Pp
-.Bd -literal -offset indent -compact
-	SF_FLAGS(16, SF_NOCACHE)
-.Ed
+has some internal heuristics to do readahead when sending data.
+This flag forces
+.Nm
+to override any heuristically calculated readahead and use exactly the
+application specified readahead.
+See
+.Sx SETTING READAHEAD
+for more details on readahead.
+.El
 .Pp
 When using a socket marked for non-blocking I/O,
 .Fn sendfile
@@ -183,6 +177,34 @@ written is returned in
 and the error
 .Er EAGAIN
 is returned.
+.Sh SETTING READAHEAD
+.Nm
+uses internal heuristics based on request size and file system layout
+to do readahead.
+Additionally application may request extra readahead.
+The most significant 16 bits of
+.Fa flags
+specify amount of pages that
+.Nm
+may read ahead when reading the file.
+A macro
+.Fn SF_FLAGS
+is provided to combine readahead amount and flags.
+An example showing specifying readahead of 16 pages and
+.Dv SF_NOCACHE
+flag:
+.Pp
+.Bd -literal -offset indent -compact
+	SF_FLAGS(16, SF_NOCACHE)
+.Ed
+.Pp
+.Nm
+will use either application specified readahead or internally calculated,
+whichever is bigger.
+Setting flag
+.Dv SF_USER_READAHEAD
+would turn off any heuristics and set maximum possible readahead length to
+the number of pages specified via flags.
 .Sh IMPLEMENTATION NOTES
 The
 .Fx
@@ -314,6 +336,12 @@ is negative.
 .It Bq Er EIO
 An error occurred while reading from
 .Fa fd .
+.It Bq Er ENOTCAPABLE
+The
+.Fa fd
+or the
+.Fa s
+argument has insufficient rights.
 .It Bq Er ENOBUFS
 The system was unable to allocate an internal buffer.
 .It Bq Er ENOTCONN
@@ -375,3 +403,14 @@ The
 .Fx 11
 implementation was written by
 .An Gleb Smirnoff Aq Mt glebius@FreeBSD.org .
+.Sh BUGS
+The
+.Fn sendfile
+system call will not fail, i.e., return
+.Dv -1
+and set
+.Va errno
+to
+.Er EFAULT ,
+if provided an invalid address for
+.Fa sbytes .

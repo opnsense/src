@@ -20,6 +20,7 @@ SHLIB_LDSCRIPT=	libc++.ldscript
 SRCS+=		algorithm.cpp
 SRCS+=		any.cpp
 SRCS+=		bind.cpp
+SRCS+=		charconv.cpp
 SRCS+=		chrono.cpp
 SRCS+=		condition_variable.cpp
 SRCS+=		debug.cpp
@@ -47,6 +48,9 @@ SRCS+=		utility.cpp
 SRCS+=		valarray.cpp
 SRCS+=		variant.cpp
 SRCS+=		vector.cpp
+SRCS+=		filesystem/directory_iterator.cpp
+SRCS+=		filesystem/int128_builtins.cpp
+SRCS+=		filesystem/operations.cpp
 
 CXXRT_SRCS+=	auxhelper.cc
 CXXRT_SRCS+=	dynamic_cast.cc
@@ -72,9 +76,7 @@ CFLAGS+=	-nostdinc++
 CFLAGS+=	-nostdlib
 CFLAGS+=	-D_LIBCPP_BUILDING_LIBRARY
 CFLAGS+=	-DLIBCXXRT
-.if empty(CXXFLAGS:M-std=*)
-CXXFLAGS+=	-std=c++11
-.endif
+CXXSTD?=	c++11
 
 LIBADD+=	cxxrt
 INCSGROUPS=	STD EXP EXT
@@ -84,6 +86,7 @@ STD_HEADERS+=	__bsd_locale_defaults.h
 STD_HEADERS+=	__bsd_locale_fallbacks.h
 STD_HEADERS+=	__config
 STD_HEADERS+=	__debug
+STD_HEADERS+=	__errc
 STD_HEADERS+=	__functional_03
 STD_HEADERS+=	__functional_base
 STD_HEADERS+=	__functional_base_03
@@ -91,6 +94,7 @@ STD_HEADERS+=	__hash_table
 STD_HEADERS+=	__libcpp_version
 STD_HEADERS+=	__locale
 STD_HEADERS+=	__mutex_base
+STD_HEADERS+=	__node_handle
 STD_HEADERS+=	__nullptr
 STD_HEADERS+=	__split_buffer
 STD_HEADERS+=	__sso_allocator
@@ -104,6 +108,7 @@ STD_HEADERS+=	algorithm
 STD_HEADERS+=	any
 STD_HEADERS+=	array
 STD_HEADERS+=	atomic
+STD_HEADERS+=	bit
 STD_HEADERS+=	bitset
 STD_HEADERS+=	cassert
 STD_HEADERS+=	ccomplex
@@ -111,6 +116,7 @@ STD_HEADERS+=	cctype
 STD_HEADERS+=	cerrno
 STD_HEADERS+=	cfenv
 STD_HEADERS+=	cfloat
+STD_HEADERS+=	charconv
 STD_HEADERS+=	chrono
 STD_HEADERS+=	cinttypes
 STD_HEADERS+=	ciso646
@@ -118,6 +124,7 @@ STD_HEADERS+=	climits
 STD_HEADERS+=	clocale
 STD_HEADERS+=	cmath
 STD_HEADERS+=	codecvt
+STD_HEADERS+=	compare
 STD_HEADERS+=	complex
 STD_HEADERS+=	complex.h
 STD_HEADERS+=	condition_variable
@@ -138,6 +145,7 @@ STD_HEADERS+=	cwctype
 STD_HEADERS+=	deque
 STD_HEADERS+=	errno.h
 STD_HEADERS+=	exception
+STD_HEADERS+=	filesystem
 STD_HEADERS+=	float.h
 STD_HEADERS+=	forward_list
 STD_HEADERS+=	fstream
@@ -172,6 +180,7 @@ STD_HEADERS+=	scoped_allocator
 STD_HEADERS+=	set
 STD_HEADERS+=	setjmp.h
 STD_HEADERS+=	shared_mutex
+STD_HEADERS+=	span
 STD_HEADERS+=	sstream
 STD_HEADERS+=	stack
 STD_HEADERS+=	stdbool.h
@@ -198,6 +207,7 @@ STD_HEADERS+=	utility
 STD_HEADERS+=	valarray
 STD_HEADERS+=	variant
 STD_HEADERS+=	vector
+STD_HEADERS+=	version
 STD_HEADERS+=	wchar.h
 STD_HEADERS+=	wctype.h
 
@@ -222,7 +232,6 @@ EXP_HEADERS+=	any
 EXP_HEADERS+=	chrono
 EXP_HEADERS+=	coroutine
 EXP_HEADERS+=	deque
-EXP_HEADERS+=	dynarray
 EXP_HEADERS+=	filesystem
 EXP_HEADERS+=	forward_list
 EXP_HEADERS+=	functional
@@ -236,6 +245,7 @@ EXP_HEADERS+=	propagate_const
 EXP_HEADERS+=	ratio
 EXP_HEADERS+=	regex
 EXP_HEADERS+=	set
+EXP_HEADERS+=	simd
 EXP_HEADERS+=	string
 EXP_HEADERS+=	string_view
 EXP_HEADERS+=	system_error
@@ -259,15 +269,5 @@ EXT_HEADERS+=	hash_set
 EXT+=		${HDRDIR}/ext/${hdr}
 .endfor
 EXTDIR=		${CXXINCLUDEDIR}/ext
-
-.if ${MK_GNUCXX} == "no" && ${COMPILER_TYPE} == "gcc"
-CLEANFILES+=	libstdc++.so libstdc++.a
-
-afterinstall:
-	${INSTALL_SYMLINK} ${DESTDIR}${LIBDIR}/lib${LIB}.so \
-		${.OBJDIR}/libstdc++.so
-	${INSTALL_SYMLINK} ${DESTDIR}${LIBDIR}/lib${LIB}.a \
-		${.OBJDIR}/libstdc++.a
-.endif
 
 .include <bsd.lib.mk>

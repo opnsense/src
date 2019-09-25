@@ -10,12 +10,8 @@
 #ifndef liblldb_ClangUserExpression_h_
 #define liblldb_ClangUserExpression_h_
 
-// C Includes
-// C++ Includes
 #include <vector>
 
-// Other libraries and framework includes
-// Project includes
 #include "ASTResultSynthesizer.h"
 #include "ASTStructExtractor.h"
 #include "ClangExpressionDeclMap.h"
@@ -35,13 +31,13 @@ namespace lldb_private {
 
 //----------------------------------------------------------------------
 /// @class ClangUserExpression ClangUserExpression.h
-/// "lldb/Expression/ClangUserExpression.h"
-/// @brief Encapsulates a single expression for use with Clang
+/// "lldb/Expression/ClangUserExpression.h" Encapsulates a single expression
+/// for use with Clang
 ///
 /// LLDB uses expressions for various purposes, notably to call functions
 /// and as a backend for the expr command.  ClangUserExpression encapsulates
-/// the objects needed to parse and interpret or JIT an expression.  It
-/// uses the Clang parser to produce LLVM IR from the expression.
+/// the objects needed to parse and interpret or JIT an expression.  It uses
+/// the Clang parser to produce LLVM IR from the expression.
 //----------------------------------------------------------------------
 class ClangUserExpression : public LLVMUserExpression {
 public:
@@ -69,8 +65,8 @@ public:
                       bool keep_result_in_memory);
 
     //------------------------------------------------------------------
-    /// Return the object that the parser should allow to access ASTs.
-    /// May be NULL if the ASTs do not need to be transformed.
+    /// Return the object that the parser should allow to access ASTs. May be
+    /// NULL if the ASTs do not need to be transformed.
     ///
     /// @param[in] passthrough
     ///     The ASTConsumer that the returned transformer should send
@@ -143,6 +139,9 @@ public:
              lldb_private::ExecutionPolicy execution_policy,
              bool keep_result_in_memory, bool generate_debug_info) override;
 
+  bool Complete(ExecutionContext &exe_ctx, CompletionRequest &request,
+                unsigned complete_pos) override;
+
   ExpressionTypeSystemHelper *GetTypeSystemHelper() override {
     return &m_type_system_helper;
   }
@@ -174,11 +173,18 @@ private:
                     lldb::addr_t struct_address,
                     DiagnosticManager &diagnostic_manager) override;
 
+  void UpdateLanguageForExpr(DiagnosticManager &diagnostic_manager,
+                             ExecutionContext &exe_ctx);
+  bool SetupPersistentState(DiagnosticManager &diagnostic_manager,
+                                   ExecutionContext &exe_ctx);
+  bool PrepareForParsing(DiagnosticManager &diagnostic_manager,
+                         ExecutionContext &exe_ctx);
+
   ClangUserExpressionHelper m_type_system_helper;
 
   class ResultDelegate : public Materializer::PersistentVariableDelegate {
   public:
-    ResultDelegate();
+    ResultDelegate(lldb::TargetSP target) : m_target_sp(target) {}
     ConstString GetName() override;
     void DidDematerialize(lldb::ExpressionVariableSP &variable) override;
 
@@ -188,8 +194,16 @@ private:
   private:
     PersistentExpressionState *m_persistent_state;
     lldb::ExpressionVariableSP m_variable;
+    lldb::TargetSP m_target_sp;
   };
 
+  /// The language type of the current expression.
+  lldb::LanguageType m_expr_lang = lldb::eLanguageTypeUnknown;
+
+  /// The absolute character position in the transformed source code where the
+  /// user code (as typed by the user) starts. If the variable is empty, then we
+  /// were not able to calculate this position.
+  llvm::Optional<size_t> m_user_expression_start_pos;
   ResultDelegate m_result_delegate;
 };
 

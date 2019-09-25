@@ -12,7 +12,7 @@
 
 #include "InputFiles.h"
 #include "LTO.h"
-#include "Strings.h"
+#include "lld/Common/Strings.h"
 #include "llvm/ADT/CachedHashString.h"
 #include "llvm/ADT/DenseMap.h"
 
@@ -37,22 +37,17 @@ class SymbolTable {
 public:
   template <class ELFT> void addFile(InputFile *File);
   template <class ELFT> void addCombinedLTOObject();
-  template <class ELFT> void addSymbolWrap(StringRef Name);
-  void applySymbolWrap();
+  void wrap(Symbol *Sym, Symbol *Real, Symbol *Wrap);
 
   ArrayRef<Symbol *> getSymbols() const { return SymVector; }
 
-  Defined *addAbsolute(StringRef Name,
-                       uint8_t Visibility = llvm::ELF::STV_HIDDEN,
-                       uint8_t Binding = llvm::ELF::STB_GLOBAL);
-
-  template <class ELFT> Symbol *addUndefined(StringRef Name);
   template <class ELFT>
   Symbol *addUndefined(StringRef Name, uint8_t Binding, uint8_t StOther,
                        uint8_t Type, bool CanOmitFromDynSym, InputFile *File);
-  Symbol *addRegular(StringRef Name, uint8_t StOther, uint8_t Type,
-                     uint64_t Value, uint64_t Size, uint8_t Binding,
-                     SectionBase *Section, InputFile *File);
+
+  Defined *addDefined(StringRef Name, uint8_t StOther, uint8_t Type,
+                      uint64_t Value, uint64_t Size, uint8_t Binding,
+                      SectionBase *Section, InputFile *File);
 
   template <class ELFT>
   void addShared(StringRef Name, SharedFile<ELFT> &F,
@@ -60,8 +55,8 @@ public:
                  uint32_t VerdefIndex);
 
   template <class ELFT>
-  Symbol *addLazyArchive(StringRef Name, ArchiveFile &F,
-                         const llvm::object::Archive::Symbol S);
+  void addLazyArchive(StringRef Name, ArchiveFile &F,
+                      const llvm::object::Archive::Symbol S);
 
   template <class ELFT> void addLazyObject(StringRef Name, LazyObjFile &Obj);
 
@@ -72,13 +67,11 @@ public:
                     uint8_t Binding, uint8_t StOther, uint8_t Type,
                     InputFile &File);
 
-  std::pair<Symbol *, bool> insert(StringRef Name);
-  std::pair<Symbol *, bool> insert(StringRef Name, uint8_t Type,
-                                   uint8_t Visibility, bool CanOmitFromDynSym,
-                                   InputFile *File);
+  std::pair<Symbol *, bool> insert(StringRef Name, uint8_t Visibility,
+                                   bool CanOmitFromDynSym, InputFile *File);
 
-  template <class ELFT> void fetchIfLazy(StringRef Name);
-  template <class ELFT> void scanShlibUndefined();
+  template <class ELFT> void fetchLazy(Symbol *Sym);
+
   void scanVersionScript();
 
   Symbol *find(StringRef Name);
@@ -87,13 +80,16 @@ public:
 
   void handleDynamicList();
 
+  // Set of .so files to not link the same shared object file more than once.
+  llvm::DenseMap<StringRef, InputFile *> SoNames;
+
 private:
+  std::pair<Symbol *, bool> insertName(StringRef Name);
+
   std::vector<Symbol *> findByVersion(SymbolVersion Ver);
   std::vector<Symbol *> findAllByVersion(SymbolVersion Ver);
-  void defsym(Symbol *Dst, Symbol *Src);
 
   llvm::StringMap<std::vector<Symbol *>> &getDemangledSyms();
-  void handleAnonymousVersion();
   void assignExactVersion(SymbolVersion Ver, uint16_t VersionId,
                           StringRef VersionName);
   void assignWildcardVersion(SymbolVersion Ver, uint16_t VersionId);
@@ -113,23 +109,11 @@ private:
   // is used to uniquify them.
   llvm::DenseSet<llvm::CachedHashStringRef> ComdatGroups;
 
-  // Set of .so files to not link the same shared object file more than once.
-  llvm::DenseSet<StringRef> SoNames;
-
   // A map from demangled symbol names to their symbol objects.
   // This mapping is 1:N because two symbols with different versions
   // can have the same name. We use this map to handle "extern C++ {}"
   // directive in version scripts.
   llvm::Optional<llvm::StringMap<std::vector<Symbol *>>> DemangledSyms;
-
-  struct WrappedSymbol {
-    Symbol *Sym;
-    Symbol *Real;
-    Symbol *Wrap;
-  };
-
-  // For -wrap.
-  std::vector<WrappedSymbol> WrappedSymbols;
 
   // For LTO.
   std::unique_ptr<BitcodeCompiler> LTO;

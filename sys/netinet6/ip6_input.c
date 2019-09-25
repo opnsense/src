@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
  * All rights reserved.
  *
@@ -41,7 +43,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -220,7 +222,7 @@ ip6_init(void)
 	TUNABLE_INT_FETCH("net.inet6.ip6.accept_rtadv", &V_ip6_accept_rtadv);
 	TUNABLE_INT_FETCH("net.inet6.ip6.no_radr", &V_ip6_no_radr);
 
-	TAILQ_INIT(&V_in6_ifaddrhead);
+	CK_STAILQ_INIT(&V_in6_ifaddrhead);
 	V_in6_ifaddrhashtbl = hashinit(IN6ADDR_NHASH, M_IFADDR,
 	    &V_in6_ifaddrhmask);
 
@@ -375,10 +377,10 @@ ip6_destroy(void *unused __unused)
 
 	/* Cleanup addresses. */
 	IFNET_RLOCK();
-	TAILQ_FOREACH(ifp, &V_ifnet, if_link) {
+	CK_STAILQ_FOREACH(ifp, &V_ifnet, if_link) {
 		/* Cannot lock here - lock recursion. */
 		/* IF_ADDR_LOCK(ifp); */
-		TAILQ_FOREACH_SAFE(ifa, &ifp->if_addrhead, ifa_link, nifa) {
+		CK_STAILQ_FOREACH_SAFE(ifa, &ifp->if_addrhead, ifa_link, nifa) {
 
 			if (ifa->ifa_addr->sa_family != AF_INET6)
 				continue;
@@ -575,15 +577,6 @@ ip6_input(struct mbuf *m)
 		goto passin;
 	}
 
-	if (m->m_flags & M_SKIP_PFIL) {
-		/*
-		 * Dummynet reinjected this packet.
-		 */
-		m->m_flags &= ~M_SKIP_PFIL;
-		ip6 = mtod(m, struct ip6_hdr *);
-		goto reinjected;
-	}
-
 	/*
 	 * mbuf statistics
 	 */
@@ -727,13 +720,15 @@ ip6_input(struct mbuf *m)
 #endif
 	/*
 	 * Try to forward the packet, but if we fail continue.
+	 * ip6_tryforward() does not generate redirects, so fall
+	 * through to normal processing if redirects are required.
 	 * ip6_tryforward() does inbound and outbound packet firewall
 	 * processing. If firewall has decided that destination becomes
 	 * our local address, it sets M_FASTFWD_OURS flag. In this
 	 * case skip another inbound firewall processing and update
 	 * ip6 pointer.
 	 */
-	if (V_ip6_forwarding != 0
+	if (V_ip6_forwarding != 0 && V_ip6_sendredirects == 0
 #if defined(IPSEC) || defined(IPSEC_SUPPORT)
 	    && (!IPSEC_ENABLED(ipv6) ||
 	    IPSEC_CAPS(ipv6, m, IPSEC_CAP_OPERABLE) == 0)
@@ -774,8 +769,8 @@ ip6_input(struct mbuf *m)
 		return;
 	ip6 = mtod(m, struct ip6_hdr *);
 	srcrt = !IN6_ARE_ADDR_EQUAL(&odst, &ip6->ip6_dst);
-reinjected:
-	if (IP6_HAS_NEXTHOP(m)) {
+	if ((m->m_flags & (M_IP6_NEXTHOP | M_FASTFWD_OURS)) == M_IP6_NEXTHOP &&
+	    m_tag_find(m, PACKET_TAG_IPFORWARD, NULL) != NULL) {
 		/*
 		 * Directly ship the packet on.  This allows forwarding
 		 * packets originally destined to us to some other directly
@@ -1220,13 +1215,102 @@ ip6_savecontrol_v4(struct inpcb *inp, struct mbuf *m, struct mbuf **mp,
 
 #ifdef SO_TIMESTAMP
 	if ((inp->inp_socket->so_options & SO_TIMESTAMP) != 0) {
-		struct timeval tv;
+		union {
+			struct timeval tv;
+			struct bintime bt;
+			struct timespec ts;
+		} t;
+		struct bintime boottimebin, bt1;
+		struct timespec ts1;
+		bool stamped;
 
-		microtime(&tv);
-		*mp = sbcreatecontrol((caddr_t) &tv, sizeof(tv),
-		    SCM_TIMESTAMP, SOL_SOCKET);
-		if (*mp)
-			mp = &(*mp)->m_next;
+		stamped = false;
+		switch (inp->inp_socket->so_ts_clock) {
+		case SO_TS_REALTIME_MICRO:
+			if ((m->m_flags & (M_PKTHDR | M_TSTMP)) == (M_PKTHDR |
+			    M_TSTMP)) {
+				mbuf_tstmp2timespec(m, &ts1);
+				timespec2bintime(&ts1, &bt1);
+				getboottimebin(&boottimebin);
+				bintime_add(&bt1, &boottimebin);
+				bintime2timeval(&bt1, &t.tv);
+			} else {
+				microtime(&t.tv);
+			}
+			*mp = sbcreatecontrol((caddr_t) &t.tv, sizeof(t.tv),
+			    SCM_TIMESTAMP, SOL_SOCKET);
+			if (*mp != NULL) {
+				mp = &(*mp)->m_next;
+				stamped = true;
+			}
+			break;
+
+		case SO_TS_BINTIME:
+			if ((m->m_flags & (M_PKTHDR | M_TSTMP)) == (M_PKTHDR |
+			    M_TSTMP)) {
+				mbuf_tstmp2timespec(m, &ts1);
+				timespec2bintime(&ts1, &t.bt);
+				getboottimebin(&boottimebin);
+				bintime_add(&t.bt, &boottimebin);
+			} else {
+				bintime(&t.bt);
+			}
+			*mp = sbcreatecontrol((caddr_t)&t.bt, sizeof(t.bt),
+			    SCM_BINTIME, SOL_SOCKET);
+			if (*mp != NULL) {
+				mp = &(*mp)->m_next;
+				stamped = true;
+			}
+			break;
+
+		case SO_TS_REALTIME:
+			if ((m->m_flags & (M_PKTHDR | M_TSTMP)) == (M_PKTHDR |
+			    M_TSTMP)) {
+				mbuf_tstmp2timespec(m, &t.ts);
+				getboottimebin(&boottimebin);
+				bintime2timespec(&boottimebin, &ts1);
+				timespecadd(&t.ts, &ts1, &t.ts);
+			} else {
+				nanotime(&t.ts);
+			}
+			*mp = sbcreatecontrol((caddr_t)&t.ts, sizeof(t.ts),
+			    SCM_REALTIME, SOL_SOCKET);
+			if (*mp != NULL) {
+				mp = &(*mp)->m_next;
+				stamped = true;
+			}
+			break;
+
+		case SO_TS_MONOTONIC:
+			if ((m->m_flags & (M_PKTHDR | M_TSTMP)) == (M_PKTHDR |
+			    M_TSTMP))
+				mbuf_tstmp2timespec(m, &t.ts);
+			else
+				nanouptime(&t.ts);
+			*mp = sbcreatecontrol((caddr_t)&t.ts, sizeof(t.ts),
+			    SCM_MONOTONIC, SOL_SOCKET);
+			if (*mp != NULL) {
+				mp = &(*mp)->m_next;
+				stamped = true;
+			}
+			break;
+
+		default:
+			panic("unknown (corrupted) so_ts_clock");
+		}
+		if (stamped && (m->m_flags & (M_PKTHDR | M_TSTMP)) ==
+		    (M_PKTHDR | M_TSTMP)) {
+			struct sock_timestamp_info sti;
+
+			bzero(&sti, sizeof(sti));
+			sti.st_info_flags = ST_INFO_HW;
+			if ((m->m_flags & M_TSTMP_HPREC) != 0)
+				sti.st_info_flags |= ST_INFO_HW_HPREC;
+			*mp = sbcreatecontrol((caddr_t)&sti, sizeof(sti),
+			    SCM_TIME_INFO, SOL_SOCKET);
+			if (*mp != NULL)
+				mp = &(*mp)->m_next;
+		}
 	}
 #endif
 

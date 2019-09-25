@@ -33,6 +33,7 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/SlotIndexes.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
+#include "llvm/Config/llvm-config.h"
 #include "llvm/MC/LaneBitmask.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
@@ -991,6 +992,7 @@ void LiveInterval::print(raw_ostream &OS) const {
   // Print subranges
   for (const SubRange &SR : subranges())
     OS << SR;
+  OS << " weight:" << weight;
 }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
@@ -1308,17 +1310,17 @@ void ConnectedVNInfoEqClasses::Distribute(LiveInterval &LI, LiveInterval *LIV[],
     MachineOperand &MO = *RI;
     MachineInstr *MI = RI->getParent();
     ++RI;
-    // DBG_VALUE instructions don't have slot indexes, so get the index of the
-    // instruction before them.
-    // Normally, DBG_VALUE instructions are removed before this function is
-    // called, but it is not a requirement.
-    SlotIndex Idx;
-    if (MI->isDebugValue())
-      Idx = LIS.getSlotIndexes()->getIndexBefore(*MI);
-    else
-      Idx = LIS.getInstructionIndex(*MI);
-    LiveQueryResult LRQ = LI.Query(Idx);
-    const VNInfo *VNI = MO.readsReg() ? LRQ.valueIn() : LRQ.valueDefined();
+    const VNInfo *VNI;
+    if (MI->isDebugValue()) {
+      // DBG_VALUE instructions don't have slot indexes, so get the index of
+      // the instruction before them. The value is defined there too.
+      SlotIndex Idx = LIS.getSlotIndexes()->getIndexBefore(*MI);
+      VNI = LI.Query(Idx).valueOut();
+    } else {
+      SlotIndex Idx = LIS.getInstructionIndex(*MI);
+      LiveQueryResult LRQ = LI.Query(Idx);
+      VNI = MO.readsReg() ? LRQ.valueIn() : LRQ.valueDefined();
+    }
     // In the case of an <undef> use that isn't tied to any def, VNI will be
     // NULL. If the use is tied to a def, VNI will be the defined value.
     if (!VNI)

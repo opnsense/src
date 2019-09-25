@@ -33,8 +33,8 @@ using namespace clang;
 using namespace lldb_private;
 
 //------------------------------------------------------------------
-// Scoped class that will remove an active lexical decl from the set
-// when it goes out of scope.
+// Scoped class that will remove an active lexical decl from the set when it
+// goes out of scope.
 //------------------------------------------------------------------
 namespace {
 class ScopedLexicalDeclEraser {
@@ -141,8 +141,8 @@ ClangASTSource::~ClangASTSource() {
     m_ast_importer_sp->ForgetDestination(m_ast_context);
 
   // We are in the process of destruction, don't create clang ast context on
-  // demand
-  // by passing false to Target::GetScratchClangASTContext(create_on_demand).
+  // demand by passing false to
+  // Target::GetScratchClangASTContext(create_on_demand).
   ClangASTContext *scratch_clang_ast_context =
       m_target->GetScratchClangASTContext(false);
 
@@ -231,8 +231,8 @@ bool ClangASTSource::FindExternalVisibleDeclsByName(
   }
 
   if (!GetLookupsEnabled()) {
-    // Wait until we see a '$' at the start of a name before we start doing
-    // any lookups so we can avoid lookup up all of the builtin types.
+    // Wait until we see a '$' at the start of a name before we start doing any
+    // lookups so we can avoid lookup up all of the builtin types.
     if (!decl_name.empty() && decl_name[0] == '$') {
       SetLookupsEnabled(true);
     } else {
@@ -297,8 +297,8 @@ void ClangASTSource::CompleteType(TagDecl *tag_decl) {
   }
 
   if (!m_ast_importer_sp->CompleteTagDecl(tag_decl)) {
-    // We couldn't complete the type.  Maybe there's a definition
-    // somewhere else that can be completed.
+    // We couldn't complete the type.  Maybe there's a definition somewhere
+    // else that can be completed.
 
     if (log)
       log->Printf("      CTD[%u] Type could not be completed in the module in "
@@ -332,11 +332,9 @@ void ClangASTSource::CompleteType(TagDecl *tag_decl) {
 
         TypeList types;
 
-        SymbolContext null_sc;
         ConstString name(tag_decl->getName().str().c_str());
 
-        i->first->FindTypesInNamespace(null_sc, name, &i->second, UINT32_MAX,
-                                       types);
+        i->first->FindTypesInNamespace(name, &i->second, UINT32_MAX, types);
 
         for (uint32_t ti = 0, te = types.GetSize(); ti != te && !found; ++ti) {
           lldb::TypeSP type = types.GetTypeAtIndex(ti);
@@ -366,7 +364,6 @@ void ClangASTSource::CompleteType(TagDecl *tag_decl) {
     } else {
       TypeList types;
 
-      SymbolContext null_sc;
       ConstString name(tag_decl->getName().str().c_str());
       CompilerDeclContext namespace_decl;
 
@@ -374,7 +371,7 @@ void ClangASTSource::CompleteType(TagDecl *tag_decl) {
 
       bool exact_match = false;
       llvm::DenseSet<SymbolFile *> searched_symbol_files;
-      module_list.FindTypes(null_sc, name, exact_match, UINT32_MAX,
+      module_list.FindTypes(nullptr, name, exact_match, UINT32_MAX,
                             searched_symbol_files, types);
 
       for (uint32_t ti = 0, te = types.GetSize(); ti != te && !found; ++ti) {
@@ -398,8 +395,8 @@ void ClangASTSource::CompleteType(TagDecl *tag_decl) {
             const_cast<TagDecl *>(tag_type->getDecl());
 
         // We have found a type by basename and we need to make sure the decl
-        // contexts
-        // are the same before we can try to complete this type with another
+        // contexts are the same before we can try to complete this type with
+        // another
         if (!ClangASTContext::DeclsAreEquivalent(tag_decl, candidate_tag_decl))
           continue;
 
@@ -771,18 +768,16 @@ bool ClangASTSource::IgnoreName(const ConstString name,
   static const ConstString id_name("id");
   static const ConstString Class_name("Class");
 
-  if (name == id_name || name == Class_name)
-    return true;
+  if (m_ast_context->getLangOpts().ObjC)
+    if (name == id_name || name == Class_name)
+      return true;
 
   StringRef name_string_ref = name.GetStringRef();
 
   // The ClangASTSource is not responsible for finding $-names.
-  if (name_string_ref.empty() ||
-      (ignore_all_dollar_names && name_string_ref.startswith("$")) ||
-      name_string_ref.startswith("_$"))
-    return true;
-
-  return false;
+  return name_string_ref.empty() ||
+         (ignore_all_dollar_names && name_string_ref.startswith("$")) ||
+         name_string_ref.startswith("_$");
 }
 
 void ClangASTSource::FindExternalVisibleDecls(
@@ -804,10 +799,8 @@ void ClangASTSource::FindExternalVisibleDecls(
     SymbolVendor *symbol_vendor = module_sp->GetSymbolVendor();
 
     if (symbol_vendor) {
-      SymbolContext null_sc;
-
       found_namespace_decl =
-          symbol_vendor->FindNamespace(null_sc, name, &namespace_decl);
+          symbol_vendor->FindNamespace(name, &namespace_decl);
 
       if (found_namespace_decl) {
         context.m_namespace_map->push_back(
@@ -837,10 +830,8 @@ void ClangASTSource::FindExternalVisibleDecls(
       if (!symbol_vendor)
         continue;
 
-      SymbolContext null_sc;
-
       found_namespace_decl =
-          symbol_vendor->FindNamespace(null_sc, name, &namespace_decl);
+          symbol_vendor->FindNamespace(name, &namespace_decl);
 
       if (found_namespace_decl) {
         context.m_namespace_map->push_back(
@@ -860,14 +851,14 @@ void ClangASTSource::FindExternalVisibleDecls(
       break;
 
     TypeList types;
-    SymbolContext null_sc;
-    const bool exact_match = false;
+    const bool exact_match = true;
     llvm::DenseSet<lldb_private::SymbolFile *> searched_symbol_files;
     if (module_sp && namespace_decl)
-      module_sp->FindTypesInNamespace(null_sc, name, &namespace_decl, 1, types);
-    else
-      m_target->GetImages().FindTypes(null_sc, name, exact_match, 1,
+      module_sp->FindTypesInNamespace(name, &namespace_decl, 1, types);
+    else {
+      m_target->GetImages().FindTypes(module_sp.get(), name, exact_match, 1,
                                       searched_symbol_files, types);
+    }
 
     if (size_t num_types = types.GetSize()) {
       for (size_t ti = 0; ti < num_types; ++ti) {
@@ -1243,8 +1234,8 @@ void ClangASTSource::FindObjCMethodDecls(NameSearchContext &context) {
       break;
 
     // Fall back and check for methods in categories.  If we find methods this
-    // way, we need to check that they're actually in
-    // categories on the desired class.
+    // way, we need to check that they're actually in categories on the desired
+    // class.
 
     SymbolContextList candidate_sc_list;
 
@@ -1591,8 +1582,7 @@ void ClangASTSource::FindObjCPropertyAndIvarDecls(NameSearchContext &context) {
 
   do {
     // Check the runtime only if the debug information didn't have a complete
-    // interface
-    // and nothing was in the modules.
+    // interface and nothing was in the modules.
 
     lldb::ProcessSP process(m_target->GetProcessSP());
 
@@ -1645,21 +1635,18 @@ static bool ImportOffsetMap(llvm::DenseMap<const D *, O> &destination_map,
                             ClangASTSource &source) {
   // When importing fields into a new record, clang has a hard requirement that
   // fields be imported in field offset order.  Since they are stored in a
-  // DenseMap
-  // with a pointer as the key type, this means we cannot simply iterate over
-  // the
-  // map, as the order will be non-deterministic.  Instead we have to sort by
-  // the offset
-  // and then insert in sorted order.
+  // DenseMap with a pointer as the key type, this means we cannot simply
+  // iterate over the map, as the order will be non-deterministic.  Instead we
+  // have to sort by the offset and then insert in sorted order.
   typedef llvm::DenseMap<const D *, O> MapType;
   typedef typename MapType::value_type PairType;
   std::vector<PairType> sorted_items;
   sorted_items.reserve(source_map.size());
   sorted_items.assign(source_map.begin(), source_map.end());
-  std::sort(sorted_items.begin(), sorted_items.end(),
-            [](const PairType &lhs, const PairType &rhs) {
-              return lhs.second < rhs.second;
-            });
+  llvm::sort(sorted_items.begin(), sorted_items.end(),
+             [](const PairType &lhs, const PairType &rhs) {
+               return lhs.second < rhs.second;
+             });
 
   for (const auto &item : sorted_items) {
     DeclFromUser<D> user_decl(const_cast<D *>(item.first));
@@ -1884,10 +1871,8 @@ void ClangASTSource::CompleteNamespaceMap(
       if (!symbol_vendor)
         continue;
 
-      SymbolContext null_sc;
-
-      found_namespace_decl = symbol_vendor->FindNamespace(
-          null_sc, name, &module_parent_namespace_decl);
+      found_namespace_decl =
+          symbol_vendor->FindNamespace(name, &module_parent_namespace_decl);
 
       if (!found_namespace_decl)
         continue;
@@ -1919,10 +1904,8 @@ void ClangASTSource::CompleteNamespaceMap(
       if (!symbol_vendor)
         continue;
 
-      SymbolContext null_sc;
-
       found_namespace_decl =
-          symbol_vendor->FindNamespace(null_sc, name, &null_namespace_decl);
+          symbol_vendor->FindNamespace(name, &null_namespace_decl);
 
       if (!found_namespace_decl)
         continue;
@@ -2051,9 +2034,8 @@ CompilerType ClangASTSource::GuardedCopyType(const CompilerType &src_type) {
 
   if (copied_qual_type.getAsOpaquePtr() &&
       copied_qual_type->getCanonicalTypeInternal().isNull())
-    // this shouldn't happen, but we're hardening because the AST importer seems
-    // to be generating bad types
-    // on occasion.
+    // this shouldn't happen, but we're hardening because the AST importer
+    // seems to be generating bad types on occasion.
     return CompilerType();
 
   return CompilerType(m_ast_context, copied_qual_type);
@@ -2156,6 +2138,18 @@ clang::NamedDecl *NameSearchContext::AddFunDecl(const CompilerType &type,
       log->Printf("Function type wasn't a FunctionProtoType");
   }
 
+  // If this is an operator (e.g. operator new or operator==), only insert the
+  // declaration we inferred from the symbol if we can provide the correct
+  // number of arguments. We shouldn't really inject random decl(s) for
+  // functions that are analyzed semantically in a special way, otherwise we
+  // will crash in clang.
+  clang::OverloadedOperatorKind op_kind = clang::NUM_OVERLOADED_OPERATORS;
+  if (func_proto_type &&
+      ClangASTContext::IsOperator(decl_name.getAsString().c_str(), op_kind)) {
+    if (!ClangASTContext::CheckOverloadedOperatorKindParameterCount(
+            false, op_kind, func_proto_type->getNumParams()))
+      return NULL;
+  }
   m_decls.push_back(func_decl);
 
   return func_decl;

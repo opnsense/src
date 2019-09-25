@@ -2,8 +2,9 @@
 
 /* BPF socket interface code, originally contributed by Archie Cobbs. */
 
-/*
- * Copyright (c) 2018 Franco Fichtner <franco@opnsense.org>
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1995, 1996, 1998, 1999
  * The Internet Software Consortium.    All rights reserved.
  *
@@ -94,41 +95,24 @@ if_register_bpf(struct interface_info *info, int flags)
  * Packet write filter program:
  * 'ip and udp and src port bootps and dst port (bootps or bootpc)'
  */
-struct bpf_insn dhcp_bpf_wfilter[] = {
-	/* Set packet index for IP packet... */
-	BPF_STMT(BPF_LDX + BPF_W + BPF_IMM, 0),
-
-	/* Test whether this is a VLAN packet... */
-	BPF_STMT(BPF_LD + BPF_H + BPF_IND, 12),
-	BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, ETHERTYPE_VLAN, 0, 1),
-
-	/* Correct the packet index for VLAN... */
-	BPF_STMT(BPF_LDX + BPF_W + BPF_IMM, 4),
-
-	/* Make sure it is an IPv4 packet... */
+static struct bpf_insn dhcp_bpf_wfilter[] = {
 	BPF_STMT(BPF_LD + BPF_B + BPF_IND, 14),
-	BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, (IPVERSION << 4) + 5, 0, 18),
+	BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, (IPVERSION << 4) + 5, 0, 12),
 
 	/* Make sure this is an IP packet... */
-	BPF_STMT(BPF_LD + BPF_H + BPF_IND, 12),
-	BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, ETHERTYPE_IP, 0, 16),
+	BPF_STMT(BPF_LD + BPF_H + BPF_ABS, 12),
+	BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, ETHERTYPE_IP, 0, 10),
 
 	/* Make sure it's a UDP packet... */
-	BPF_STMT(BPF_LD + BPF_B + BPF_IND, 23),
-	BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, IPPROTO_UDP, 0, 14),
+	BPF_STMT(BPF_LD + BPF_B + BPF_ABS, 23),
+	BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, IPPROTO_UDP, 0, 8),
 
 	/* Make sure this isn't a fragment... */
-	BPF_STMT(BPF_LD + BPF_H + BPF_IND, 20),
-	BPF_JUMP(BPF_JMP + BPF_JSET + BPF_K, 0x1fff, 12, 0),	/* patched */
+	BPF_STMT(BPF_LD + BPF_H + BPF_ABS, 20),
+	BPF_JUMP(BPF_JMP + BPF_JSET + BPF_K, 0x1fff, 6, 0),	/* patched */
 
 	/* Get the IP header length... */
-	BPF_STMT(BPF_MISC + BPF_TXA, 0),
-	BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, 0, 0, 2),
 	BPF_STMT(BPF_LDX + BPF_B + BPF_MSH, 14),
-	BPF_JUMP(BPF_JMP + BPF_JA, 1, 0, 0),
-	BPF_STMT(BPF_LDX + BPF_B + BPF_MSH, 18),
-	BPF_STMT(BPF_ALU + BPF_ADD + BPF_X, 0),
-	BPF_STMT(BPF_MISC + BPF_TAX, 0),
 
 	/* Make sure it's from the right port... */
 	BPF_STMT(BPF_LD + BPF_H + BPF_IND, 14),
@@ -145,7 +129,7 @@ struct bpf_insn dhcp_bpf_wfilter[] = {
 	BPF_STMT(BPF_RET+BPF_K, 0),
 };
 
-int dhcp_bpf_wfilter_len = sizeof(dhcp_bpf_wfilter) / sizeof(struct bpf_insn);
+static int dhcp_bpf_wfilter_len = nitems(dhcp_bpf_wfilter);
 
 void
 if_register_send(struct interface_info *info)
@@ -170,8 +154,8 @@ if_register_send(struct interface_info *info)
 	p.bf_len = dhcp_bpf_wfilter_len;
 	p.bf_insns = dhcp_bpf_wfilter;
 
-	if (dhcp_bpf_wfilter[11].k == 0x1fff)
-		dhcp_bpf_wfilter[11].k = htons(IP_MF|IP_OFFMASK);
+	if (dhcp_bpf_wfilter[7].k == 0x1fff)
+		dhcp_bpf_wfilter[7].k = htons(IP_MF|IP_OFFMASK);
 
 	if (ioctl(info->wfdesc, BIOCSETWF, &p) < 0)
 		error("Can't install write filter program: %m");
@@ -200,7 +184,7 @@ if_register_send(struct interface_info *info)
  * XXX: Changes to the filter program may require changes to the
  * constant offsets used in if_register_send to patch the BPF program!
  */
-struct bpf_insn dhcp_bpf_filter[] = {
+static struct bpf_insn dhcp_bpf_filter[] = {
 	/* Make sure this is an IP packet... */
 	BPF_STMT(BPF_LD + BPF_H + BPF_ABS, 12),
 	BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, ETHERTYPE_IP, 0, 8),
@@ -227,7 +211,7 @@ struct bpf_insn dhcp_bpf_filter[] = {
 	BPF_STMT(BPF_RET+BPF_K, 0),
 };
 
-int dhcp_bpf_filter_len = sizeof(dhcp_bpf_filter) / sizeof(struct bpf_insn);
+static int dhcp_bpf_filter_len = nitems(dhcp_bpf_filter);
 
 void
 if_register_receive(struct interface_info *info)

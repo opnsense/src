@@ -61,7 +61,7 @@ cloudabi32_proc_setregs(struct thread *td, struct image_params *imgp,
 	 * tpidrurw to the TCB.
 	 */
 	regs = td->td_frame;
-	regs->tf_r0 = td->td_retval[0] =
+	regs->tf_r0 =
 	    stack + roundup(sizeof(cloudabi32_tcb_t), sizeof(register_t));
 	(void)cpu_set_user_tls(td, TO_PTR(stack));
 }
@@ -174,7 +174,6 @@ static struct sysentvec cloudabi32_elf_sysvec = {
 	.sv_fixup		= cloudabi32_fixup,
 	.sv_name		= "CloudABI ELF32",
 	.sv_coredump		= elf32_coredump,
-	.sv_pagesize		= PAGE_SIZE,
 	.sv_minuser		= VM_MIN_ADDRESS,
 	.sv_maxuser		= VM_MAXUSER_ADDRESS,
 	.sv_stackprot		= VM_PROT_READ | VM_PROT_WRITE,

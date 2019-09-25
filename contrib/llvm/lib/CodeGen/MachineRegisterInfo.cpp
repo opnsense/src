@@ -22,6 +22,7 @@
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/Config/llvm-config.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/Function.h"
@@ -65,21 +66,57 @@ void MachineRegisterInfo::setRegBank(unsigned Reg,
   VRegInfo[Reg].first = &RegBank;
 }
 
-const TargetRegisterClass *
-MachineRegisterInfo::constrainRegClass(unsigned Reg,
-                                       const TargetRegisterClass *RC,
-                                       unsigned MinNumRegs) {
-  const TargetRegisterClass *OldRC = getRegClass(Reg);
+static const TargetRegisterClass *
+constrainRegClass(MachineRegisterInfo &MRI, unsigned Reg,
+                  const TargetRegisterClass *OldRC,
+                  const TargetRegisterClass *RC, unsigned MinNumRegs) {
   if (OldRC == RC)
     return RC;
   const TargetRegisterClass *NewRC =
-    getTargetRegisterInfo()->getCommonSubClass(OldRC, RC);
+      MRI.getTargetRegisterInfo()->getCommonSubClass(OldRC, RC);
   if (!NewRC || NewRC == OldRC)
     return NewRC;
   if (NewRC->getNumRegs() < MinNumRegs)
     return nullptr;
-  setRegClass(Reg, NewRC);
+  MRI.setRegClass(Reg, NewRC);
   return NewRC;
+}
+
+const TargetRegisterClass *
+MachineRegisterInfo::constrainRegClass(unsigned Reg,
+                                       const TargetRegisterClass *RC,
+                                       unsigned MinNumRegs) {
+  return ::constrainRegClass(*this, Reg, getRegClass(Reg), RC, MinNumRegs);
+}
+
+bool
+MachineRegisterInfo::constrainRegAttrs(unsigned Reg,
+                                       unsigned ConstrainingReg,
+                                       unsigned MinNumRegs) {
+  const LLT RegTy = getType(Reg);
+  const LLT ConstrainingRegTy = getType(ConstrainingReg);
+  if (RegTy.isValid() && ConstrainingRegTy.isValid() &&
+      RegTy != ConstrainingRegTy)
+    return false;
+  const auto ConstrainingRegCB = getRegClassOrRegBank(ConstrainingReg);
+  if (!ConstrainingRegCB.isNull()) {
+    const auto RegCB = getRegClassOrRegBank(Reg);
+    if (RegCB.isNull())
+      setRegClassOrRegBank(Reg, ConstrainingRegCB);
+    else if (RegCB.is<const TargetRegisterClass *>() !=
+             ConstrainingRegCB.is<const TargetRegisterClass *>())
+      return false;
+    else if (RegCB.is<const TargetRegisterClass *>()) {
+      if (!::constrainRegClass(
+              *this, Reg, RegCB.get<const TargetRegisterClass *>(),
+              ConstrainingRegCB.get<const TargetRegisterClass *>(), MinNumRegs))
+        return false;
+    } else if (RegCB != ConstrainingRegCB)
+      return false;
+  }
+  if (ConstrainingRegTy.isValid())
+    setType(Reg, ConstrainingRegTy);
+  return true;
 }
 
 bool
@@ -107,10 +144,11 @@ MachineRegisterInfo::recomputeRegClass(unsigned Reg) {
   return true;
 }
 
-unsigned MachineRegisterInfo::createIncompleteVirtualRegister() {
+unsigned MachineRegisterInfo::createIncompleteVirtualRegister(StringRef Name) {
   unsigned Reg = TargetRegisterInfo::index2VirtReg(getNumVirtRegs());
   VRegInfo.grow(Reg);
   RegAllocHints.grow(Reg);
+  insertVRegByName(Name, Reg);
   return Reg;
 }
 
@@ -118,47 +156,48 @@ unsigned MachineRegisterInfo::createIncompleteVirtualRegister() {
 /// function with the specified register class.
 ///
 unsigned
-MachineRegisterInfo::createVirtualRegister(const TargetRegisterClass *RegClass){
+MachineRegisterInfo::createVirtualRegister(const TargetRegisterClass *RegClass,
+                                           StringRef Name) {
   assert(RegClass && "Cannot create register without RegClass!");
   assert(RegClass->isAllocatable() &&
          "Virtual register RegClass must be allocatable.");
 
   // New virtual register number.
-  unsigned Reg = createIncompleteVirtualRegister();
+  unsigned Reg = createIncompleteVirtualRegister(Name);
   VRegInfo[Reg].first = RegClass;
   if (TheDelegate)
     TheDelegate->MRI_NoteNewVirtualRegister(Reg);
   return Reg;
 }
 
-LLT MachineRegisterInfo::getType(unsigned VReg) const {
-  VRegToTypeMap::const_iterator TypeIt = getVRegToType().find(VReg);
-  return TypeIt != getVRegToType().end() ? TypeIt->second : LLT{};
-}
-
-void MachineRegisterInfo::setType(unsigned VReg, LLT Ty) {
-  // Check that VReg doesn't have a class.
-  assert((getRegClassOrRegBank(VReg).isNull() ||
-         !getRegClassOrRegBank(VReg).is<const TargetRegisterClass *>()) &&
-         "Can't set the size of a non-generic virtual register");
-  getVRegToType()[VReg] = Ty;
-}
-
-unsigned
-MachineRegisterInfo::createGenericVirtualRegister(LLT Ty) {
-  // New virtual register number.
-  unsigned Reg = createIncompleteVirtualRegister();
-  // FIXME: Should we use a dummy register class?
-  VRegInfo[Reg].first = static_cast<RegisterBank *>(nullptr);
-  getVRegToType()[Reg] = Ty;
+unsigned MachineRegisterInfo::cloneVirtualRegister(unsigned VReg,
+                                                   StringRef Name) {
+  unsigned Reg = createIncompleteVirtualRegister(Name);
+  VRegInfo[Reg].first = VRegInfo[VReg].first;
+  setType(Reg, getType(VReg));
   if (TheDelegate)
     TheDelegate->MRI_NoteNewVirtualRegister(Reg);
   return Reg;
 }
 
-void MachineRegisterInfo::clearVirtRegTypes() {
-  getVRegToType().clear();
+void MachineRegisterInfo::setType(unsigned VReg, LLT Ty) {
+  VRegToType.grow(VReg);
+  VRegToType[VReg] = Ty;
 }
+
+unsigned
+MachineRegisterInfo::createGenericVirtualRegister(LLT Ty, StringRef Name) {
+  // New virtual register number.
+  unsigned Reg = createIncompleteVirtualRegister(Name);
+  // FIXME: Should we use a dummy register class?
+  VRegInfo[Reg].first = static_cast<RegisterBank *>(nullptr);
+  setType(Reg, Ty);
+  if (TheDelegate)
+    TheDelegate->MRI_NoteNewVirtualRegister(Reg);
+  return Reg;
+}
+
+void MachineRegisterInfo::clearVirtRegTypes() { VRegToType.clear(); }
 
 /// clearVirtRegs - Remove all virtual registers (after physreg assignment).
 void MachineRegisterInfo::clearVirtRegs() {
@@ -343,7 +382,7 @@ void MachineRegisterInfo::replaceRegWith(unsigned FromReg, unsigned ToReg) {
   assert(FromReg != ToReg && "Cannot replace a reg with itself");
 
   const TargetRegisterInfo *TRI = getTargetRegisterInfo();
-  
+
   // TODO: This could be more efficient by bulk changing the operands.
   for (reg_iterator I = reg_begin(FromReg), E = reg_end(); I != E; ) {
     MachineOperand &O = *I;

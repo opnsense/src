@@ -32,31 +32,25 @@ __FBSDID("$FreeBSD$");
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
-#include <sys/diskmbr.h>
-#include <sys/gpt.h>
+#include <gpt.h>
+#include <mbr.h>
 
 #include "endian.h"
 #include "image.h"
 #include "mkimg.h"
 #include "scheme.h"
 
-#ifndef GPT_ENT_TYPE_FREEBSD_NANDFS
-#define	GPT_ENT_TYPE_FREEBSD_NANDFS	\
-    {0x74ba7dd9,0xa689,0x11e1,0xbd,0x04,{0x00,0xe0,0x81,0x28,0x6a,0xcf}}
-#endif
-
-static uuid_t gpt_uuid_efi = GPT_ENT_TYPE_EFI;
-static uuid_t gpt_uuid_freebsd = GPT_ENT_TYPE_FREEBSD;
-static uuid_t gpt_uuid_freebsd_boot = GPT_ENT_TYPE_FREEBSD_BOOT;
-static uuid_t gpt_uuid_freebsd_nandfs = GPT_ENT_TYPE_FREEBSD_NANDFS;
-static uuid_t gpt_uuid_freebsd_swap = GPT_ENT_TYPE_FREEBSD_SWAP;
-static uuid_t gpt_uuid_freebsd_ufs = GPT_ENT_TYPE_FREEBSD_UFS;
-static uuid_t gpt_uuid_freebsd_vinum = GPT_ENT_TYPE_FREEBSD_VINUM;
-static uuid_t gpt_uuid_freebsd_zfs = GPT_ENT_TYPE_FREEBSD_ZFS;
-static uuid_t gpt_uuid_mbr = GPT_ENT_TYPE_MBR;
-static uuid_t gpt_uuid_ms_basic_data = GPT_ENT_TYPE_MS_BASIC_DATA;
+static mkimg_uuid_t gpt_uuid_efi = GPT_ENT_TYPE_EFI;
+static mkimg_uuid_t gpt_uuid_freebsd = GPT_ENT_TYPE_FREEBSD;
+static mkimg_uuid_t gpt_uuid_freebsd_boot = GPT_ENT_TYPE_FREEBSD_BOOT;
+static mkimg_uuid_t gpt_uuid_freebsd_nandfs = GPT_ENT_TYPE_FREEBSD_NANDFS;
+static mkimg_uuid_t gpt_uuid_freebsd_swap = GPT_ENT_TYPE_FREEBSD_SWAP;
+static mkimg_uuid_t gpt_uuid_freebsd_ufs = GPT_ENT_TYPE_FREEBSD_UFS;
+static mkimg_uuid_t gpt_uuid_freebsd_vinum = GPT_ENT_TYPE_FREEBSD_VINUM;
+static mkimg_uuid_t gpt_uuid_freebsd_zfs = GPT_ENT_TYPE_FREEBSD_ZFS;
+static mkimg_uuid_t gpt_uuid_mbr = GPT_ENT_TYPE_MBR;
+static mkimg_uuid_t gpt_uuid_ms_basic_data = GPT_ENT_TYPE_MS_BASIC_DATA;
 
 static struct mkimg_alias gpt_aliases[] = {
     {	ALIAS_EFI, ALIAS_PTR2TYPE(&gpt_uuid_efi) },
@@ -265,9 +259,9 @@ gpt_write(lba_t imgsz, void *bootcode)
 	le64enc(&hdr->hdr_lba_end, imgsz - tblsz - 2);
 	mkimg_uuid(&uuid);
 	mkimg_uuid_enc(&hdr->hdr_uuid, &uuid);
-	le32enc(&hdr->hdr_entries, nparts);
+	le32enc(&hdr->hdr_entries, tblsz * secsz / sizeof(struct gpt_ent));
 	le32enc(&hdr->hdr_entsz, sizeof(struct gpt_ent));
-	crc = crc32(tbl, nparts * sizeof(struct gpt_ent));
+	crc = crc32(tbl, tblsz * secsz);
 	le32enc(&hdr->hdr_crc_table, crc);
 	error = gpt_write_hdr(hdr, 1, imgsz - 1, 2);
 	if (!error)

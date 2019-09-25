@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1988 University of Utah.
  * Copyright (c) 1982, 1990, 1993
  *	The Regents of the University of California.
@@ -20,7 +22,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -136,19 +138,22 @@ settime_task_func(void *arg, int pending)
 {
 	struct timespec ts;
 	struct rtc_instance *rtc;
+	int error;
 
 	rtc = arg;
 	if (!(rtc->flags & CLOCKF_SETTIME_NO_TS)) {
 		getnanotime(&ts);
 		if (!(rtc->flags & CLOCKF_SETTIME_NO_ADJ)) {
 			ts.tv_sec -= utc_offset();
-			timespecadd(&ts, &rtc->resadj);
+			timespecadd(&ts, &rtc->resadj, &ts);
 		}
 	} else {
 		ts.tv_sec  = 0;
 		ts.tv_nsec = 0;
 	}
-	CLOCK_SETTIME(rtc->clockdev, &ts);
+	error = CLOCK_SETTIME(rtc->clockdev, &ts);
+	if (error != 0 && bootverbose)
+		device_printf(rtc->clockdev, "CLOCK_SETTIME error %d\n", error);
 }
 
 static void
@@ -299,7 +304,7 @@ read_clocks(struct timespec *ts, bool debug_read)
 			continue;
 		}
 		if (!(rtc->flags & CLOCKF_GETTIME_NO_ADJ)) {
-			timespecadd(ts, &rtc->resadj);
+			timespecadd(ts, &rtc->resadj, ts);
 			ts->tv_sec += utc_offset();
 		}
 		if (!debug_read) {

@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2005, David Xu <davidxu@freebsd.org>
  * All rights reserved.
  *
@@ -38,7 +40,8 @@ int	_pthread_timedjoin_np(pthread_t pthread, void **thread_return,
 	const struct timespec *abstime);
 static int join_common(pthread_t, void **, const struct timespec *);
 
-__weak_reference(_pthread_join, pthread_join);
+__weak_reference(_thr_join, pthread_join);
+__weak_reference(_thr_join, _pthread_join);
 __weak_reference(_pthread_timedjoin_np, pthread_timedjoin_np);
 
 static void backout_join(void *arg)
@@ -52,7 +55,7 @@ static void backout_join(void *arg)
 }
 
 int
-_pthread_join(pthread_t pthread, void **thread_return)
+_thr_join(pthread_t pthread, void **thread_return)
 {
 	return (join_common(pthread, thread_return, NULL));
 }

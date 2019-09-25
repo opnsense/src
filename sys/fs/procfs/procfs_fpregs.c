@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1993 Jan-Simon Pendry
  * Copyright (c) 1993
  *	The Regents of the University of California.  All rights reserved.
@@ -14,7 +16,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -37,14 +39,10 @@
  * $FreeBSD$
  */
 
-#include "opt_compat.h"
-#include "opt_pax.h"
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
-#include <sys/pax.h>
 #include <sys/proc.h>
 #include <sys/ptrace.h>
 #include <sys/sysent.h>
@@ -104,7 +102,6 @@ procfs_doprocfpregs(PFS_FILL_ARGS)
 		return (EBUSY);
 	}
 
-	/* XXXKSE: */
 	td2 = FIRST_THREAD_IN_PROC(p);
 #ifdef COMPAT_FREEBSD32
 	if (SV_CURPROC_FLAG(SV_ILP32)) {
@@ -113,8 +110,10 @@ procfs_doprocfpregs(PFS_FILL_ARGS)
 			return (EINVAL);
 		}
 		wrap32 = 1;
-	}
+		memset(&r32, 0, sizeof(r32));
+	} else
 #endif
+		memset(&r, 0, sizeof(r));
 	error = PROC(read, fpregs, td2, &r);
 	if (error == 0) {
 		PROC_UNLOCK(p);
@@ -122,17 +121,11 @@ procfs_doprocfpregs(PFS_FILL_ARGS)
 		PROC_LOCK(p);
 	}
 	if (error == 0 && uio->uio_rw == UIO_WRITE) {
-		if (!P_SHOULDSTOP(p)) {
+		if (!P_SHOULDSTOP(p))
 			error = EBUSY;
-		}
-#ifdef PAX_HARDENING
-		else if ((error = pax_procfs_harden(td2)) == 0) {
-#else
-		else {
-#endif
+		else
 			/* XXXKSE: */
 			error = PROC(write, fpregs, td2, &r);
-		}
 	}
 	PROC_UNLOCK(p);
 

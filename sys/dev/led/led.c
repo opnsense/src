@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: Beerware
+ *
  * ----------------------------------------------------------------------------
  * "THE BEER-WARE LICENSE" (Revision 42):
  * <phk@FreeBSD.org> wrote this file.  As long as you retain this notice you
@@ -259,7 +261,7 @@ led_set(char const *name, char const *cmd)
 	mtx_unlock(&led_mtx);
 	if (sb != NULL)
 		sbuf_delete(sb);
-	return (0);
+	return (error);
 }
 
 static struct cdevsw led_cdevsw = {

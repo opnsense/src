@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2001 Jake Burkholder.
  * Copyright (c) 1992 Terrence R. Lambert.
  * Copyright (c) 1982, 1987, 1990 The Regents of the University of California.
@@ -15,7 +17,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -38,7 +40,6 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
-#include "opt_compat.h"
 #include "opt_ddb.h"
 #include "opt_kstack_pages.h"
 
@@ -126,6 +127,7 @@ long realmem;
 
 void *dpcpu0;
 char pcpu0[PCPU_PAGES * PAGE_SIZE];
+struct pcpu dummy_pcpu[MAXCPU];
 struct trapframe frame0;
 
 vm_offset_t kstack0;
@@ -187,8 +189,8 @@ cpu_startup(void *arg)
 	EVENTHANDLER_REGISTER(shutdown_final, sparc64_shutdown_final, NULL,
 	    SHUTDOWN_PRI_LAST);
 
-	printf("avail memory = %lu (%lu MB)\n", vm_cnt.v_free_count * PAGE_SIZE,
-	    vm_cnt.v_free_count / ((1024 * 1024) / PAGE_SIZE));
+	printf("avail memory = %lu (%lu MB)\n", vm_free_count() * PAGE_SIZE,
+	    vm_free_count() / ((1024 * 1024) / PAGE_SIZE));
 
 	if (bootverbose)
 		printf("machine: %s\n", sparc64_model);
@@ -997,7 +999,7 @@ exec_setregs(struct thread *td, struct image_params *imgp, u_long stack)
 	bzero(pcb, sizeof(*pcb));
 	bzero(tf, sizeof(*tf));
 	tf->tf_out[0] = stack;
-	tf->tf_out[3] = p->p_psstrings;
+	tf->tf_out[3] = p->p_sysent->sv_psstrings;
 	tf->tf_out[6] = sp - SPOFF - sizeof(struct frame);
 	tf->tf_tnpc = imgp->entry_addr + 4;
 	tf->tf_tpc = imgp->entry_addr;
@@ -1006,9 +1008,6 @@ exec_setregs(struct thread *td, struct image_params *imgp, u_long stack)
 	 * header, it turns out that just always using TSO performs best.
 	 */
 	tf->tf_tstate = TSTATE_IE | TSTATE_PEF | TSTATE_MM_TSO;
-
-	td->td_retval[0] = tf->tf_out[0];
-	td->td_retval[1] = tf->tf_out[1];
 }
 
 int
@@ -1057,6 +1056,7 @@ fill_fpregs(struct thread *td, struct fpreg *fpregs)
 	bcopy(pcb->pcb_ufp, fpregs->fr_regs, sizeof(fpregs->fr_regs));
 	fpregs->fr_fsr = tf->tf_fsr;
 	fpregs->fr_gsr = tf->tf_gsr;
+	fpregs->fr_pad[0] = 0;
 	return (0);
 }
 

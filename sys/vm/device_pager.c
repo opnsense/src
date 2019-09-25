@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1990 University of Utah.
  * Copyright (c) 1991, 1993
  *	The Regents of the University of California.  All rights reserved.
@@ -15,7 +17,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -148,9 +150,9 @@ cdev_pager_allocate(void *handle, enum obj_type tp, struct cdev_pager_ops *ops,
 	 * of the page size.  Do a check to avoid wrap.
 	 */
 	size = round_page(size);
-	pindex = UOFF_TO_IDX(foff) + UOFF_TO_IDX(size);
-	if (pindex > OBJ_MAX_SIZE || pindex < UOFF_TO_IDX(foff) ||
-	    pindex < UOFF_TO_IDX(size))
+	pindex = OFF_TO_IDX(foff) + OFF_TO_IDX(size);
+	if (pindex > OBJ_MAX_SIZE || pindex < OFF_TO_IDX(foff) ||
+	    pindex < OFF_TO_IDX(size))
 		return (NULL);
 
 	if (ops->cdev_pg_ctor(handle, size, prot, foff, cred, &color) != 0)
@@ -234,7 +236,7 @@ cdev_pager_free_page(vm_object_t object, vm_page_t m)
 		KASSERT((m->oflags & VPO_UNMANAGED) == 0, ("unmanaged %p", m));
 		pmap_remove_all(m);
 		vm_page_lock(m);
-		vm_page_remove(m);
+		(void)vm_page_remove(m);
 		vm_page_unlock(m);
 	} else if (object->type == OBJT_DEVICE)
 		dev_pager_free_page(object, m);

@@ -1,6 +1,8 @@
 #!/bin/sh
 # $FreeBSD$
 
+. $(atf_get_srcdir)/conf.sh
+
 init_test()
 {
 	cipher=$1
@@ -39,7 +41,7 @@ init_head()
 }
 init_body()
 {
-	. $(atf_get_srcdir)/conf.sh
+	geli_test_setup
 
 	sectors=32
 
@@ -50,7 +52,6 @@ init_body()
 }
 init_cleanup()
 {
-	. $(atf_get_srcdir)/conf.sh
 	geli_test_cleanup
 }
 
@@ -62,7 +63,7 @@ init_B_head()
 }
 init_B_body()
 {
-	. $(atf_get_srcdir)/conf.sh
+	geli_test_setup
 
 	sectors=100
 
@@ -104,7 +105,6 @@ init_B_body()
 }
 init_B_cleanup()
 {
-	. $(atf_get_srcdir)/conf.sh
 	geli_test_cleanup
 }
 
@@ -116,7 +116,7 @@ init_J_head()
 }
 init_J_body()
 {
-	. $(atf_get_srcdir)/conf.sh
+	geli_test_setup
 
 	sectors=100
 	md=$(attach_md -t malloc -s `expr $sectors + 1`)
@@ -223,7 +223,6 @@ init_J_body()
 }
 init_J_cleanup()
 {
-	. $(atf_get_srcdir)/conf.sh
 	geli_test_cleanup
 }
 
@@ -260,7 +259,7 @@ init_a_head()
 }
 init_a_body()
 {
-	. $(atf_get_srcdir)/conf.sh
+	geli_test_setup
 
 	sectors=100
 
@@ -272,7 +271,6 @@ init_a_body()
 }
 init_a_cleanup()
 {
-	. $(atf_get_srcdir)/conf.sh
 	geli_test_cleanup
 }
 
@@ -304,19 +302,12 @@ init_alias_head()
 }
 init_alias_body()
 {
-	. $(atf_get_srcdir)/conf.sh
+	geli_test_setup
 
 	md=$(attach_md -t malloc -s 1024k)
 	atf_check dd if=/dev/random of=keyfile bs=512 count=16 status=none
 
 	for spec in aes:0:AES-XTS:128 aes:128:AES-XTS:128 aes:256:AES-XTS:256 \
-		3des:0:3DES-CBC:192 3des:192:3DES-CBC:192 \
-		blowfish:0:Blowfish-CBC:128 blowfish:128:Blowfish-CBC:128 \
-		blowfish:160:Blowfish-CBC:160 blowfish:192:Blowfish-CBC:192 \
-		blowfish:224:Blowfish-CBC:224 blowfish:256:Blowfish-CBC:256 \
-		blowfish:288:Blowfish-CBC:288 blowfish:352:Blowfish-CBC:352 \
-		blowfish:384:Blowfish-CBC:384 blowfish:416:Blowfish-CBC:416 \
-		blowfish:448:Blowfish-CBC:448 \
 		camellia:0:CAMELLIA-CBC:128 camellia:128:CAMELLIA-CBC:128 \
 		camellia:256:CAMELLIA-CBC:256 ; do
 
@@ -330,7 +321,6 @@ init_alias_body()
 }
 init_alias_cleanup()
 {
-	. $(atf_get_srcdir)/conf.sh
 	geli_test_cleanup
 }
 
@@ -342,7 +332,7 @@ init_i_P_head()
 }
 init_i_P_body()
 {
-	. $(atf_get_srcdir)/conf.sh
+	geli_test_setup
 
 	sectors=100
 	md=$(attach_md -t malloc -s `expr $sectors + 1`)
@@ -354,7 +344,6 @@ init_i_P_body()
 }
 init_i_P_cleanup()
 {
-	. $(atf_get_srcdir)/conf.sh
 	geli_test_cleanup
 }
 
@@ -366,7 +355,7 @@ nokey_head()
 }
 nokey_body()
 {
-	. $(atf_get_srcdir)/conf.sh
+	geli_test_setup
 
 	sectors=100
 	md=$(attach_md -t malloc -s `expr $sectors + 1`)
@@ -376,7 +365,6 @@ nokey_body()
 }
 nokey_cleanup()
 {
-	. $(atf_get_srcdir)/conf.sh
 	geli_test_cleanup
 }
 

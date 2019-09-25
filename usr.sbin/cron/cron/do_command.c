@@ -47,6 +47,8 @@ do_command(e, u)
 	entry	*e;
 	user	*u;
 {
+	pid_t pid;
+
 	Debug(DPROC, ("[%d] do_command(%s, (%s,%d,%d))\n",
 		getpid(), e->cmd, u->name, e->uid, e->gid))
 
@@ -57,9 +59,11 @@ do_command(e, u)
 	 * vfork() is unsuitable, since we have much to do, and the parent
 	 * needs to be able to run off and fork other processes.
 	 */
-	switch (fork()) {
+	switch ((pid = fork())) {
 	case -1:
 		log_it("CRON",getpid(),"error","can't fork");
+		if (e->flags & INTERVAL)
+			e->lastexit = time(NULL);
 		break;
 	case 0:
 		/* child process */
@@ -70,6 +74,12 @@ do_command(e, u)
 		break;
 	default:
 		/* parent process */
+		Debug(DPROC, ("[%d] main process forked child #%d, "
+		    "returning to work\n", getpid(), pid))
+		if (e->flags & INTERVAL) {
+			e->lastexit = 0;
+			e->child = pid;
+		}
 		break;
 	}
 	Debug(DPROC, ("[%d] main process returning to work\n", getpid()))
@@ -83,7 +93,7 @@ child_process(e, u)
 {
 	int		stdin_pipe[2], stdout_pipe[2];
 	register char	*input_data;
-	char		*usernm, *mailto;
+	char		*usernm, *mailto, *mailfrom;
 	int		children = 0;
 # if defined(LOGIN_CAP)
 	struct passwd	*pwd;
@@ -101,6 +111,7 @@ child_process(e, u)
 	 */
 	usernm = env_get("LOGNAME", e->envp);
 	mailto = env_get("MAILTO", e->envp);
+	mailfrom = env_get("MAILFROM", e->envp);
 
 #ifdef PAM
 	/* use PAM to see if the user's account is available,
@@ -493,8 +504,12 @@ child_process(e, u)
 					warn("%s", MAILCMD);
 					(void) _exit(ERROR_EXIT);
 				}
-				fprintf(mail, "From: Cron Daemon <%s@%s>\n",
-					usernm, hostname);
+				if (mailfrom == NULL || *mailfrom == '\0')
+					fprintf(mail, "From: Cron Daemon <%s@%s>\n",
+					    usernm, hostname);
+				else
+					fprintf(mail, "From: Cron Daemon <%s>\n",
+					    mailfrom);
 				fprintf(mail, "To: %s\n", mailto);
 				fprintf(mail, "Subject: Cron <%s@%s> %s\n",
 					usernm, first_word(hostname, "."),

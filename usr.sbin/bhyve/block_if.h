@@ -41,15 +41,21 @@
 #include <sys/uio.h>
 #include <sys/unistd.h>
 
-#define BLOCKIF_IOV_MAX		33	/* not practical to be IOV_MAX */
+/*
+ * BLOCKIF_IOV_MAX is the maximum number of scatter/gather entries in
+ * a single request.  BLOCKIF_RING_MAX is the maxmimum number of
+ * pending requests that can be queued.
+ */
+#define	BLOCKIF_IOV_MAX		128	/* not practical to be IOV_MAX */
+#define	BLOCKIF_RING_MAX	128
 
 struct blockif_req {
-	struct iovec	br_iov[BLOCKIF_IOV_MAX];
 	int		br_iovcnt;
 	off_t		br_offset;
 	ssize_t		br_resid;
 	void		(*br_callback)(struct blockif_req *req, int err);
 	void		*br_param;
+	struct iovec	br_iov[BLOCKIF_IOV_MAX];
 };
 
 struct blockif_ctxt;

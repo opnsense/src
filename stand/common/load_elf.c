@@ -245,6 +245,12 @@ __elfN(load_elf_header)(char *filename, elf_file_t ef)
 		goto error;
 	}
 
+#ifdef LOADER_VERIEXEC
+	if (verify_file(ef->fd, filename, bytes_read, VE_MUST) < 0) {
+	    err = EAUTH;
+	    goto error;
+	}
+#endif
 	return (0);
 
 error:
@@ -477,7 +483,7 @@ __elfN(loadimage)(struct preloaded_file *fp, elf_file_t ef, uint64_t off)
 			off += 0x01000000;
 			ehdr->e_entry += off;
 #ifdef ELF_VERBOSE
-			printf("Converted entry 0x%08x\n", ehdr->e_entry);
+			printf("Converted entry 0x%jx\n", (uintmax_t)ehdr->e_entry);
 #endif
 		} else
 			off = 0;
@@ -503,8 +509,8 @@ __elfN(loadimage)(struct preloaded_file *fp, elf_file_t ef, uint64_t off)
 		off -= ehdr->e_entry & ~PAGE_MASK;
 		ehdr->e_entry += off;
 #ifdef ELF_VERBOSE
-		printf("ehdr->e_entry 0x%08x, va<->pa off %llx\n",
-		    ehdr->e_entry, off);
+		printf("ehdr->e_entry 0x%jx, va<->pa off %llx\n",
+		    (uintmax_t)ehdr->e_entry, off);
 #endif
 #else
 		off = 0;	/* other archs use direct mapped kernels */

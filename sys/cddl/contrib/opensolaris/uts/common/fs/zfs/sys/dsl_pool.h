@@ -53,7 +53,7 @@ struct dsl_scan;
 
 extern uint64_t zfs_dirty_data_max;
 extern uint64_t zfs_dirty_data_max_max;
-extern uint64_t zfs_dirty_data_sync;
+extern uint64_t zfs_dirty_data_sync_pct;
 extern int zfs_dirty_data_max_percent;
 extern int zfs_delay_min_dirty_percent;
 extern uint64_t zfs_delay_scale;
@@ -76,6 +76,7 @@ typedef struct zfs_blkstat {
 
 typedef struct zfs_all_blkstats {
 	zfs_blkstat_t	zab_type[DN_MAX_LEVELS + 1][DMU_OT_TOTAL + 1];
+	kmutex_t	zab_lock;
 } zfs_all_blkstats_t;
 
 

@@ -10,7 +10,6 @@
 #ifndef liblldb_SocketAddress_h_
 #define liblldb_SocketAddress_h_
 
-// C Includes
 #include <stdint.h>
 
 #ifdef _WIN32
@@ -28,9 +27,6 @@ typedef ADDRESS_FAMILY sa_family_t;
 #include <sys/types.h>
 #endif
 
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
 #include <string>
 #include <vector>
 
@@ -111,17 +107,16 @@ public:
   uint16_t GetPort() const;
 
   //------------------------------------------------------------------
-  // Set the port if the socket address for the family has a port.
-  // The family must be set correctly prior to calling this function.
+  // Set the port if the socket address for the family has a port. The family
+  // must be set correctly prior to calling this function.
   //------------------------------------------------------------------
   bool SetPort(uint16_t port);
 
   //------------------------------------------------------------------
-  // Set the socket address according to the first match from a call
-  // to getaddrinfo() (or equivalent functions for systems that don't
-  // have getaddrinfo(). If "addr_info_ptr" is not NULL, it will get
-  // filled in with the match that was used to populate this socket
-  // address.
+  // Set the socket address according to the first match from a call to
+  // getaddrinfo() (or equivalent functions for systems that don't have
+  // getaddrinfo(). If "addr_info_ptr" is not NULL, it will get filled in with
+  // the match that was used to populate this socket address.
   //------------------------------------------------------------------
   bool
   getaddrinfo(const char *host,    // Hostname ("foo.bar.com" or "foo" or IP
@@ -133,9 +128,9 @@ public:
               int ai_protocol = 0, int ai_flags = 0);
 
   //------------------------------------------------------------------
-  // Quick way to set the SocketAddress to localhost given the family.
-  // Returns true if successful, false if "family" doesn't support
-  // localhost or if "family" is not supported by this class.
+  // Quick way to set the SocketAddress to localhost given the family. Returns
+  // true if successful, false if "family" doesn't support localhost or if
+  // "family" is not supported by this class.
   //------------------------------------------------------------------
   bool SetToLocalhost(sa_family_t family, uint16_t port);
 
@@ -190,11 +185,10 @@ public:
   }
 
   //------------------------------------------------------------------
-  // Conversion operators to allow getting the contents of this class
-  // as a pointer to the appropriate structure. This allows an instance
-  // of this class to be used in calls that take one of the sockaddr
-  // structure variants without having to manually use the correct
-  // accessor function.
+  // Conversion operators to allow getting the contents of this class as a
+  // pointer to the appropriate structure. This allows an instance of this
+  // class to be used in calls that take one of the sockaddr structure variants
+  // without having to manually use the correct accessor function.
   //------------------------------------------------------------------
 
   operator struct sockaddr *() { return &m_socket_addr.sa; }

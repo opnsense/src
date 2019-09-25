@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) KATO Takenori, 1997, 1998.
  * 
  * All rights reserved.  Unpublished rights reserved under the copyright
@@ -59,37 +61,6 @@ SYSCTL_INT(_hw, OID_AUTO, lower_amd64_sharedpage, CTLFLAG_RDTUN,
  *  1: force disable CLFLUSH
  */
 static int	hw_clflush_disable = -1;
-
-/*
- * -1: SDBG not supported (default)
- *  0: disabled SDBG
- *  1: enabled SDBG
- */
-static int	hw_sdbg_status = -1;
-SYSCTL_INT(_hw, OID_AUTO, intel_sdbg, CTLFLAG_RD,
-    &hw_sdbg_status, 0, "Intel Silicon Debug Interface status");
-
-static void
-init_intel(void)
-{
-	uint64_t msr;
-
-	if (cpu_feature2 & CPUID2_SDBG) {
-		msr = rdmsr(MSR_IA32_DEBUG_INTERFACE);
-		if ((msr & IA32_DEBUG_INTERFACE_EN) != 0 &&
-		    (msr & IA32_DEBUG_INTERFACE_LOCK) == 0) {
-			msr &= IA32_DEBUG_INTERFACE_MASK;
-			msr |= IA32_DEBUG_INTERFACE_LOCK;
-			wrmsr(MSR_IA32_DEBUG_INTERFACE, msr);
-		}
-
-		/*
-		 * Reread the status after applied quirk.
-		 */
-		msr = rdmsr(MSR_IA32_DEBUG_INTERFACE);
-		hw_sdbg_status = (msr & IA32_DEBUG_INTERFACE_EN) ? 1 : 0;
-	}
-}
 
 static void
 init_amd(void)
@@ -153,10 +124,34 @@ init_amd(void)
 	 */
 	if (CPUID_TO_FAMILY(cpu_id) == 0x16 && CPUID_TO_MODEL(cpu_id) <= 0xf) {
 		if ((cpu_feature2 & CPUID2_HV) == 0) {
-			msr = rdmsr(0xc0011020);
+			msr = rdmsr(MSR_LS_CFG);
 			msr |= (uint64_t)1 << 15;
-			wrmsr(0xc0011020, msr);
+			wrmsr(MSR_LS_CFG, msr);
 		}
+	}
+
+	/* Ryzen erratas. */
+	if (CPUID_TO_FAMILY(cpu_id) == 0x17 && CPUID_TO_MODEL(cpu_id) == 0x1 &&
+	    (cpu_feature2 & CPUID2_HV) == 0) {
+		/* 1021 */
+		msr = rdmsr(0xc0011029);
+		msr |= 0x2000;
+		wrmsr(0xc0011029, msr);
+
+		/* 1033 */
+		msr = rdmsr(MSR_LS_CFG);
+		msr |= 0x10;
+		wrmsr(MSR_LS_CFG, msr);
+
+		/* 1049 */
+		msr = rdmsr(0xc0011028);
+		msr |= 0x10;
+		wrmsr(0xc0011028, msr);
+
+		/* 1095 */
+		msr = rdmsr(MSR_LS_CFG);
+		msr |= 0x200000000000000;
+		wrmsr(MSR_LS_CFG, msr);
 	}
 
 	/*
@@ -238,27 +233,31 @@ initializecpu(void)
 	if (cpu_stdext_feature & CPUID_STDEXT_FSGSBASE)
 		cr4 |= CR4_FSGSBASE;
 
+	if (cpu_stdext_feature2 & CPUID_STDEXT2_PKU)
+		cr4 |= CR4_PKE;
+
 	/*
 	 * Postpone enabling the SMEP on the boot CPU until the page
 	 * tables are switched from the boot loader identity mapping
 	 * to the kernel tables.  The boot loader enables the U bit in
 	 * its tables.
 	 */
-	if (!IS_BSP() && (cpu_stdext_feature & CPUID_STDEXT_SMEP))
-		cr4 |= CR4_SMEP;
+	if (!IS_BSP()) {
+		if (cpu_stdext_feature & CPUID_STDEXT_SMEP)
+			cr4 |= CR4_SMEP;
+		if (cpu_stdext_feature & CPUID_STDEXT_SMAP)
+			cr4 |= CR4_SMAP;
+	}
 	load_cr4(cr4);
-	if ((amd_feature & AMDID_NX) != 0) {
+	if (IS_BSP() && (amd_feature & AMDID_NX) != 0) {
 		msr = rdmsr(MSR_EFER) | EFER_NXE;
 		wrmsr(MSR_EFER, msr);
 		pg_nx = PG_NX;
 	}
 	hw_ibrs_recalculate();
 	hw_ssb_recalculate(false);
-	hw_mds_recalculate();
+	amd64_syscall_ret_flush_l1d_recalc();
 	switch (cpu_vendor_id) {
-	case CPU_VENDOR_INTEL:
-		init_intel();
-		break;
 	case CPU_VENDOR_AMD:
 		init_amd();
 		break;
@@ -266,6 +265,10 @@ initializecpu(void)
 		init_via();
 		break;
 	}
+
+	if ((amd_feature & AMDID_RDTSCP) != 0 ||
+	    (cpu_stdext_feature2 & CPUID_STDEXT2_RDPID) != 0)
+		wrmsr(MSR_TSC_AUX, PCPU_GET(cpuid));
 }
 
 void

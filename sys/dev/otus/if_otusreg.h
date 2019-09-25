@@ -900,7 +900,7 @@ struct otus_rx_radiotap_header {
 	uint16_t	wr_chan_freq;
 	uint16_t	wr_chan_flags;
 	uint8_t		wr_antsignal;
-} __packed;
+} __packed __aligned(8);
 
 #define OTUS_RX_RADIOTAP_PRESENT			\
 	(1 << IEEE80211_RADIOTAP_FLAGS |		\
@@ -997,6 +997,7 @@ struct otus_vap {
 
 struct otus_softc {
 	struct ieee80211com		sc_ic;
+	struct ieee80211_ratectl_tx_stats sc_txs;
 	struct mbufq			sc_snd;
 	device_t			sc_dev;
 	struct usb_device		*sc_udev;

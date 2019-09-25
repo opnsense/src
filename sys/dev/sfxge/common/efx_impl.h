@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2007-2016 Solarflare Communications Inc.
  * All rights reserved.
  *
@@ -140,6 +142,8 @@ typedef struct efx_tx_ops_s {
 						uint32_t, uint16_t,
 						efx_desc_t *, int);
 	void		(*etxo_qdesc_vlantci_create)(efx_txq_t *, uint16_t,
+						efx_desc_t *);
+	void		(*etxo_qdesc_checksum_create)(efx_txq_t *, uint16_t,
 						efx_desc_t *);
 #if EFSYS_OPT_QSTATS
 	void		(*etxo_qstats_update)(efx_txq_t *,
@@ -285,7 +289,6 @@ typedef struct efx_port_s {
 	uint32_t		ep_default_adv_cap_mask;
 	uint32_t		ep_phy_cap_mask;
 	boolean_t		ep_mac_drain;
-	boolean_t		ep_mac_stats_pending;
 #if EFSYS_OPT_BIST
 	efx_bist_type_t		ep_current_bist;
 #endif
@@ -537,7 +540,7 @@ efx_mcdi_nvram_write(
 	__in			efx_nic_t *enp,
 	__in			uint32_t partn,
 	__in			uint32_t offset,
-	__out_bcount(size)	caddr_t data,
+	__in_bcount(size)	caddr_t data,
 	__in			size_t size);
 
 	__checkReturn		efx_rc_t
@@ -1048,10 +1051,6 @@ struct efx_txq_s {
 	} while (B_FALSE)
 
 extern	__checkReturn	efx_rc_t
-efx_nic_biu_test(
-	__in		efx_nic_t *enp);
-
-extern	__checkReturn	efx_rc_t
 efx_mac_select(
 	__in		efx_nic_t *enp);
 
@@ -1118,32 +1117,6 @@ efx_vpd_hunk_set(
 	__in			efx_vpd_value_t *evvp);
 
 #endif	/* EFSYS_OPT_VPD */
-
-#if EFSYS_OPT_DIAG
-
-extern	efx_sram_pattern_fn_t	__efx_sram_pattern_fns[];
-
-typedef struct efx_register_set_s {
-	unsigned int		address;
-	unsigned int		step;
-	unsigned int		rows;
-	efx_oword_t		mask;
-} efx_register_set_t;
-
-extern	__checkReturn	efx_rc_t
-efx_nic_test_registers(
-	__in		efx_nic_t *enp,
-	__in		efx_register_set_t *rsp,
-	__in		size_t count);
-
-extern	__checkReturn	efx_rc_t
-efx_nic_test_tables(
-	__in		efx_nic_t *enp,
-	__in		efx_register_set_t *rsp,
-	__in		efx_pattern_type_t pattern,
-	__in		size_t count);
-
-#endif	/* EFSYS_OPT_DIAG */
 
 #if EFSYS_OPT_MCDI
 

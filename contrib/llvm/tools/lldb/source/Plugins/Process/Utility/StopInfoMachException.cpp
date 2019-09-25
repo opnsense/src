@@ -9,10 +9,12 @@
 
 #include "StopInfoMachException.h"
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
+
+#if defined(__APPLE__)
+// Needed for the EXC_RESOURCE interpretation macros
+#include <kern/exc_resource.h>
+#endif
+
 #include "lldb/Breakpoint/Watchpoint.h"
 #include "lldb/Symbol/Symbol.h"
 #include "lldb/Target/DynamicLoader.h"
@@ -41,6 +43,12 @@ const char *StopInfoMachException::GetDescription() {
     const char *code_desc = NULL;
     const char *subcode_label = "subcode";
     const char *subcode_desc = NULL;
+
+#if defined(__APPLE__)
+    char code_desc_buf[32];
+    char subcode_desc_buf[32];
+#endif
+
     switch (m_value) {
     case 1: // EXC_BAD_ACCESS
       exc_desc = "EXC_BAD_ACCESS";
@@ -275,6 +283,47 @@ const char *StopInfoMachException::GetDescription() {
       break;
     case 11:
       exc_desc = "EXC_RESOURCE";
+#if defined(__APPLE__)
+      {
+        int resource_type = EXC_RESOURCE_DECODE_RESOURCE_TYPE(m_exc_code);
+
+        code_label = "limit";
+        code_desc = code_desc_buf;
+        subcode_label = "observed";
+        subcode_desc = subcode_desc_buf;
+
+        switch (resource_type) {
+        case RESOURCE_TYPE_CPU:
+          exc_desc = "EXC_RESOURCE RESOURCE_TYPE_CPU";
+          snprintf(code_desc_buf, sizeof(code_desc_buf), "%d%%",
+            (int)EXC_RESOURCE_CPUMONITOR_DECODE_PERCENTAGE(m_exc_code));
+          snprintf(subcode_desc_buf, sizeof(subcode_desc_buf), "%d%%",
+            (int)EXC_RESOURCE_CPUMONITOR_DECODE_PERCENTAGE_OBSERVED(m_exc_subcode));
+          break;
+        case RESOURCE_TYPE_WAKEUPS:
+          exc_desc = "EXC_RESOURCE RESOURCE_TYPE_WAKEUPS";
+          snprintf(code_desc_buf, sizeof(code_desc_buf), "%d w/s",
+            (int)EXC_RESOURCE_CPUMONITOR_DECODE_WAKEUPS_PERMITTED(m_exc_code));
+          snprintf(subcode_desc_buf, sizeof(subcode_desc_buf), "%d w/s",
+            (int)EXC_RESOURCE_CPUMONITOR_DECODE_WAKEUPS_OBSERVED(m_exc_subcode));
+          break;
+        case RESOURCE_TYPE_MEMORY:
+          exc_desc = "EXC_RESOURCE RESOURCE_TYPE_MEMORY";
+          snprintf(code_desc_buf, sizeof(code_desc_buf), "%d MB",
+            (int)EXC_RESOURCE_HWM_DECODE_LIMIT(m_exc_code));
+          subcode_desc = nullptr;
+          subcode_label = "unused";
+          break;
+        case RESOURCE_TYPE_IO:
+          exc_desc = "EXC_RESOURCE RESOURCE_TYPE_IO";
+          snprintf(code_desc_buf, sizeof(code_desc_buf), "%d MB",
+            (int)EXC_RESOURCE_IO_DECODE_LIMIT(m_exc_code));
+          snprintf(subcode_desc_buf, sizeof(subcode_desc_buf), "%d MB",
+            (int)EXC_RESOURCE_IO_OBSERVED(m_exc_subcode));;
+          break;
+        }
+      }
+#endif
       break;
     case 12:
       exc_desc = "EXC_GUARD";
@@ -356,8 +405,8 @@ StopInfoSP StopInfoMachException::CreateStopReasonWithMachException(
       if (exc_code == 0x10003) // EXC_SOFT_SIGNAL
       {
         if (exc_sub_code == 5) {
-          // On MacOSX, a SIGTRAP can signify that a process has called
-          // exec, so we should check with our dynamic loader to verify.
+          // On MacOSX, a SIGTRAP can signify that a process has called exec,
+          // so we should check with our dynamic loader to verify.
           ProcessSP process_sp(thread.GetProcess());
           if (process_sp) {
             DynamicLoader *dynamic_loader = process_sp->GetDynamicLoader();
@@ -403,10 +452,8 @@ StopInfoSP StopInfoMachException::CreateStopReasonWithMachException(
           if (!exc_sub_code) {
             // This looks like a plain trap.
             // Have to check if there is a breakpoint here as well.  When you
-            // single-step onto a trap,
-            // the single step stops you not to trap.  Since we also do that
-            // check below, let's just use
-            // that logic.
+            // single-step onto a trap, the single step stops you not to trap.
+            // Since we also do that check below, let's just use that logic.
             is_actual_breakpoint = true;
             is_trace_if_actual_breakpoint_missing = true;
           } else {
@@ -419,8 +466,8 @@ StopInfoSP StopInfoMachException::CreateStopReasonWithMachException(
                   (lldb::addr_t)exc_sub_code);
             if (wp_sp && wp_sp->IsEnabled()) {
               // Debugserver may piggyback the hardware index of the fired
-              // watchpoint in the exception data.
-              // Set the hardware index if that's the case.
+              // watchpoint in the exception data. Set the hardware index if
+              // that's the case.
               if (exc_data_count >= 3)
                 wp_sp->SetHardwareIndex((uint32_t)exc_sub_sub_code);
               return StopInfo::CreateStopReasonWithWatchpointID(thread,
@@ -450,16 +497,15 @@ StopInfoSP StopInfoMachException::CreateStopReasonWithMachException(
         if (exc_code == 0x102) // EXC_ARM_DA_DEBUG
         {
           // It's a watchpoint, then, if the exc_sub_code indicates a
-          // known/enabled
-          // data break address from our watchpoint list.
+          // known/enabled data break address from our watchpoint list.
           lldb::WatchpointSP wp_sp;
           if (target)
             wp_sp = target->GetWatchpointList().FindByAddress(
                 (lldb::addr_t)exc_sub_code);
           if (wp_sp && wp_sp->IsEnabled()) {
             // Debugserver may piggyback the hardware index of the fired
-            // watchpoint in the exception data.
-            // Set the hardware index if that's the case.
+            // watchpoint in the exception data. Set the hardware index if
+            // that's the case.
             if (exc_data_count >= 3)
               wp_sp->SetHardwareIndex((uint32_t)exc_sub_sub_code);
             return StopInfo::CreateStopReasonWithWatchpointID(thread,
@@ -473,9 +519,9 @@ StopInfoSP StopInfoMachException::CreateStopReasonWithMachException(
           is_actual_breakpoint = true;
           is_trace_if_actual_breakpoint_missing = true;
         } else if (exc_code == 0) // FIXME not EXC_ARM_BREAKPOINT but a kernel
-                                  // is currently returning this so accept it as
-                                  // indicating a breakpoint until the kernel is
-                                  // fixed
+                                  // is currently returning this so accept it
+                                  // as indicating a breakpoint until the
+                                  // kernel is fixed
         {
           is_actual_breakpoint = true;
           is_trace_if_actual_breakpoint_missing = true;
@@ -493,16 +539,15 @@ StopInfoSP StopInfoMachException::CreateStopReasonWithMachException(
         if (exc_code == 0x102) // EXC_ARM_DA_DEBUG
         {
           // It's a watchpoint, then, if the exc_sub_code indicates a
-          // known/enabled
-          // data break address from our watchpoint list.
+          // known/enabled data break address from our watchpoint list.
           lldb::WatchpointSP wp_sp;
           if (target)
             wp_sp = target->GetWatchpointList().FindByAddress(
                 (lldb::addr_t)exc_sub_code);
           if (wp_sp && wp_sp->IsEnabled()) {
             // Debugserver may piggyback the hardware index of the fired
-            // watchpoint in the exception data.
-            // Set the hardware index if that's the case.
+            // watchpoint in the exception data. Set the hardware index if
+            // that's the case.
             if (exc_data_count >= 3)
               wp_sp->SetHardwareIndex((uint32_t)exc_sub_sub_code);
             return StopInfo::CreateStopReasonWithWatchpointID(thread,
@@ -514,8 +559,7 @@ StopInfoSP StopInfoMachException::CreateStopReasonWithMachException(
             return StopInfo::CreateStopReasonToTrace(thread);
         }
         // It looks like exc_sub_code has the 4 bytes of the instruction that
-        // triggered the
-        // exception, i.e. our breakpoint opcode
+        // triggered the exception, i.e. our breakpoint opcode
         is_actual_breakpoint = exc_code == 1;
         break;
       }
@@ -534,23 +578,21 @@ StopInfoSP StopInfoMachException::CreateStopReasonWithMachException(
         if (process_sp)
           bp_site_sp = process_sp->GetBreakpointSiteList().FindByAddress(pc);
         if (bp_site_sp && bp_site_sp->IsEnabled()) {
-          // Update the PC if we were asked to do so, but only do
-          // so if we find a breakpoint that we know about cause
-          // this could be a trap instruction in the code
+          // Update the PC if we were asked to do so, but only do so if we find
+          // a breakpoint that we know about cause this could be a trap
+          // instruction in the code
           if (pc_decrement > 0 && adjust_pc_if_needed)
             reg_ctx_sp->SetPC(pc);
 
           // If the breakpoint is for this thread, then we'll report the hit,
-          // but if it is for another thread,
-          // we can just report no reason.  We don't need to worry about
-          // stepping over the breakpoint here, that
+          // but if it is for another thread, we can just report no reason.  We
+          // don't need to worry about stepping over the breakpoint here, that
           // will be taken care of when the thread resumes and notices that
-          // there's a breakpoint under the pc.
-          // If we have an operating system plug-in, we might have set a thread
-          // specific breakpoint using the
+          // there's a breakpoint under the pc. If we have an operating system
+          // plug-in, we might have set a thread specific breakpoint using the
           // operating system thread ID, so we can't make any assumptions about
-          // the thread ID so we must always
-          // report the breakpoint regardless of the thread.
+          // the thread ID so we must always report the breakpoint regardless
+          // of the thread.
           if (bp_site_sp->ValidForThisThread(&thread) ||
               thread.GetProcess()->GetOperatingSystem() != NULL)
             return StopInfo::CreateStopReasonWithBreakpointSiteID(

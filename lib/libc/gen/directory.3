@@ -9,7 +9,7 @@
 .\" 2. Redistributions in binary form must reproduce the above copyright
 .\"    notice, this list of conditions and the following disclaimer in the
 .\"    documentation and/or other materials provided with the distribution.
-.\" 4. Neither the name of the University nor the names of its contributors
+.\" 3. Neither the name of the University nor the names of its contributors
 .\"    may be used to endorse or promote products derived from this software
 .\"    without specific prior written permission.
 .\"
@@ -28,7 +28,7 @@
 .\"     @(#)directory.3	8.1 (Berkeley) 6/4/93
 .\" $FreeBSD$
 .\"
-.Dd August 31, 2016
+.Dd April 30, 2019
 .Dt DIRECTORY 3
 .Os
 .Sh NAME
@@ -264,6 +264,30 @@ return (NOT_FOUND);
 .Xr open 2 ,
 .Xr read 2 ,
 .Xr dir 5
+.Sh STANDARDS
+The
+.Fn closedir ,
+.Fn dirfd ,
+.Fn fdopendir ,
+.Fn opendir ,
+.Fn readdir ,
+.Fn readdir_r ,
+.Fn rewinddir ,
+.Fn seekdir
+and
+.Fn telldir
+functions are expected to conform to
+.St -p1003.1-2008 .
+The
+.Fn fdclosedir
+function and the
+.Fa d_off ,
+.Fa d_reclen
+and
+.Fa d_type
+fields of
+.Vt struct dirent
+are non-standard, and should not be used in portable programs.
 .Sh HISTORY
 The
 .Fn opendir ,
@@ -292,14 +316,15 @@ is likely to be wrong if there are parallel unlinks happening
 and the directory is larger than one page.
 There is code to ensure that a
 .Fn seekdir
-to the location given by a 
+to the location given by a
 .Fn telldir
-immediately before the last 
+immediately before the last
 .Fn readdir
 will always set the correct location to return the same value as that last
 .Fn readdir
 performed.
-This is enough for some applications which want to "push back the last entry read" E.g. Samba. 
+This is enough for some applications which want to
+"push back the last entry read", e.g., Samba.
 Seeks back to any other location,
 other than the beginning of the directory,
 may result in unexpected behaviour if deletes are present.

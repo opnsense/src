@@ -10,15 +10,11 @@
 #ifndef liblldb_RangeMap_h_
 #define liblldb_RangeMap_h_
 
-// C Includes
-// C++ Includes
 #include <algorithm>
 #include <vector>
 
-// Other libraries and framework includes
 #include "llvm/ADT/SmallVector.h"
 
-// Project includes
 #include "lldb/lldb-private.h"
 
 // Uncomment to make sure all Range objects are sorted when needed
@@ -27,9 +23,8 @@
 namespace lldb_private {
 
 //----------------------------------------------------------------------
-// Templatized classes for dealing with generic ranges and also
-// collections of ranges, or collections of ranges that have associated
-// data.
+// Templatized classes for dealing with generic ranges and also collections of
+// ranges, or collections of ranges that have associated data.
 //----------------------------------------------------------------------
 
 //----------------------------------------------------------------------
@@ -170,8 +165,6 @@ public:
 #ifdef ASSERT_RANGEMAP_ARE_SORTED
   bool IsSorted() const {
     typename Collection::const_iterator pos, end, prev;
-    // First we determine if we can combine any of the Entry objects so we
-    // don't end up allocating and making a new collection for no reason
     for (pos = m_entries.begin(), end = m_entries.end(), prev = end; pos != end;
          prev = pos++) {
       if (prev != end && *pos < *prev)
@@ -214,8 +207,8 @@ public:
           else
             minimal_ranges.push_back(*pos);
         }
-        // Use the swap technique in case our new vector is much smaller.
-        // We must swap when using the STL because std::vector objects never
+        // Use the swap technique in case our new vector is much smaller. We
+        // must swap when using the STL because std::vector objects never
         // release or reduce the memory once it has been allocated/reserved.
         m_entries.swap(minimal_ranges);
       }
@@ -228,8 +221,8 @@ public:
 #endif
     if (m_entries.empty())
       return fail_value;
-    // m_entries must be sorted, so if we aren't empty, we grab the
-    // first range's base
+    // m_entries must be sorted, so if we aren't empty, we grab the first
+    // range's base
     return m_entries.front().GetRangeBase();
   }
 
@@ -239,8 +232,8 @@ public:
 #endif
     if (m_entries.empty())
       return fail_value;
-    // m_entries must be sorted, so if we aren't empty, we grab the
-    // last range's end
+    // m_entries must be sorted, so if we aren't empty, we grab the last
+    // range's end
     return m_entries.back().GetRangeEnd();
   }
 
@@ -446,8 +439,8 @@ public:
           else
             minimal_ranges.push_back(*pos);
         }
-        // Use the swap technique in case our new vector is much smaller.
-        // We must swap when using the STL because std::vector objects never
+        // Use the swap technique in case our new vector is much smaller. We
+        // must swap when using the STL because std::vector objects never
         // release or reduce the memory once it has been allocated/reserved.
         m_entries.swap(minimal_ranges);
       }
@@ -460,8 +453,8 @@ public:
 #endif
     if (m_entries.empty())
       return fail_value;
-    // m_entries must be sorted, so if we aren't empty, we grab the
-    // first range's base
+    // m_entries must be sorted, so if we aren't empty, we grab the first
+    // range's base
     return m_entries.front().GetRangeBase();
   }
 
@@ -471,8 +464,8 @@ public:
 #endif
     if (m_entries.empty())
       return fail_value;
-    // m_entries must be sorted, so if we aren't empty, we grab the
-    // last range's end
+    // m_entries must be sorted, so if we aren't empty, we grab the last
+    // range's end
     return m_entries.back().GetRangeEnd();
   }
 
@@ -604,8 +597,8 @@ protected:
 
 //----------------------------------------------------------------------
 // A simple range  with data class where you get to define the type of
-// the range base "B", the type used for the range byte size "S", and
-// the type for the associated data "T".
+// the range base "B", the type used for the range byte size "S", and the type
+// for the associated data "T".
 //----------------------------------------------------------------------
 template <typename B, typename S, typename T>
 struct RangeData : public Range<B, S> {
@@ -640,200 +633,11 @@ struct RangeData : public Range<B, S> {
   }
 };
 
-template <typename B, typename S, typename T, unsigned N> class RangeDataArray {
+template <typename B, typename S, typename T, unsigned N = 0>
+class RangeDataVector {
 public:
   typedef RangeData<B, S, T> Entry;
   typedef llvm::SmallVector<Entry, N> Collection;
-
-  RangeDataArray() = default;
-
-  ~RangeDataArray() = default;
-
-  void Append(const Entry &entry) { m_entries.push_back(entry); }
-
-  void Sort() {
-    if (m_entries.size() > 1)
-      std::stable_sort(m_entries.begin(), m_entries.end());
-  }
-
-#ifdef ASSERT_RANGEMAP_ARE_SORTED
-  bool IsSorted() const {
-    typename Collection::const_iterator pos, end, prev;
-    // First we determine if we can combine any of the Entry objects so we
-    // don't end up allocating and making a new collection for no reason
-    for (pos = m_entries.begin(), end = m_entries.end(), prev = end; pos != end;
-         prev = pos++) {
-      if (prev != end && *pos < *prev)
-        return false;
-    }
-    return true;
-  }
-#endif
-
-  void CombineConsecutiveEntriesWithEqualData() {
-#ifdef ASSERT_RANGEMAP_ARE_SORTED
-    assert(IsSorted());
-#endif
-    typename Collection::iterator pos;
-    typename Collection::iterator end;
-    typename Collection::iterator prev;
-    bool can_combine = false;
-    // First we determine if we can combine any of the Entry objects so we
-    // don't end up allocating and making a new collection for no reason
-    for (pos = m_entries.begin(), end = m_entries.end(), prev = end; pos != end;
-         prev = pos++) {
-      if (prev != end && prev->data == pos->data) {
-        can_combine = true;
-        break;
-      }
-    }
-
-    // We we can combine at least one entry, then we make a new collection
-    // and populate it accordingly, and then swap it into place.
-    if (can_combine) {
-      Collection minimal_ranges;
-      for (pos = m_entries.begin(), end = m_entries.end(), prev = end;
-           pos != end; prev = pos++) {
-        if (prev != end && prev->data == pos->data)
-          minimal_ranges.back().SetRangeEnd(pos->GetRangeEnd());
-        else
-          minimal_ranges.push_back(*pos);
-      }
-      // Use the swap technique in case our new vector is much smaller.
-      // We must swap when using the STL because std::vector objects never
-      // release or reduce the memory once it has been allocated/reserved.
-      m_entries.swap(minimal_ranges);
-    }
-  }
-
-  void Clear() { m_entries.clear(); }
-
-  bool IsEmpty() const { return m_entries.empty(); }
-
-  size_t GetSize() const { return m_entries.size(); }
-
-  const Entry *GetEntryAtIndex(size_t i) const {
-    return ((i < m_entries.size()) ? &m_entries[i] : nullptr);
-  }
-
-  // Clients must ensure that "i" is a valid index prior to calling this
-  // function
-  const Entry &GetEntryRef(size_t i) const { return m_entries[i]; }
-
-  static bool BaseLessThan(const Entry &lhs, const Entry &rhs) {
-    return lhs.GetRangeBase() < rhs.GetRangeBase();
-  }
-
-  uint32_t FindEntryIndexThatContains(B addr) const {
-#ifdef ASSERT_RANGEMAP_ARE_SORTED
-    assert(IsSorted());
-#endif
-    if (!m_entries.empty()) {
-      Entry entry(addr, 1);
-      typename Collection::const_iterator begin = m_entries.begin();
-      typename Collection::const_iterator end = m_entries.end();
-      typename Collection::const_iterator pos =
-          std::lower_bound(begin, end, entry, BaseLessThan);
-
-      if (pos != end && pos->Contains(addr)) {
-        return std::distance(begin, pos);
-      } else if (pos != begin) {
-        --pos;
-        if (pos->Contains(addr))
-          return std::distance(begin, pos);
-      }
-    }
-    return UINT32_MAX;
-  }
-
-  Entry *FindEntryThatContains(B addr) {
-#ifdef ASSERT_RANGEMAP_ARE_SORTED
-    assert(IsSorted());
-#endif
-    if (!m_entries.empty()) {
-      Entry entry;
-      entry.SetRangeBase(addr);
-      entry.SetByteSize(1);
-      typename Collection::iterator begin = m_entries.begin();
-      typename Collection::iterator end = m_entries.end();
-      typename Collection::iterator pos =
-          std::lower_bound(begin, end, entry, BaseLessThan);
-
-      if (pos != end && pos->Contains(addr)) {
-        return &(*pos);
-      } else if (pos != begin) {
-        --pos;
-        if (pos->Contains(addr)) {
-          return &(*pos);
-        }
-      }
-    }
-    return nullptr;
-  }
-
-  const Entry *FindEntryThatContains(B addr) const {
-#ifdef ASSERT_RANGEMAP_ARE_SORTED
-    assert(IsSorted());
-#endif
-    if (!m_entries.empty()) {
-      Entry entry;
-      entry.SetRangeBase(addr);
-      entry.SetByteSize(1);
-      typename Collection::const_iterator begin = m_entries.begin();
-      typename Collection::const_iterator end = m_entries.end();
-      typename Collection::const_iterator pos =
-          std::lower_bound(begin, end, entry, BaseLessThan);
-
-      if (pos != end && pos->Contains(addr)) {
-        return &(*pos);
-      } else if (pos != begin) {
-        --pos;
-        if (pos->Contains(addr)) {
-          return &(*pos);
-        }
-      }
-    }
-    return nullptr;
-  }
-
-  const Entry *FindEntryThatContains(const Entry &range) const {
-#ifdef ASSERT_RANGEMAP_ARE_SORTED
-    assert(IsSorted());
-#endif
-    if (!m_entries.empty()) {
-      typename Collection::const_iterator begin = m_entries.begin();
-      typename Collection::const_iterator end = m_entries.end();
-      typename Collection::const_iterator pos =
-          std::lower_bound(begin, end, range, BaseLessThan);
-
-      if (pos != end && pos->Contains(range)) {
-        return &(*pos);
-      } else if (pos != begin) {
-        --pos;
-        if (pos->Contains(range)) {
-          return &(*pos);
-        }
-      }
-    }
-    return nullptr;
-  }
-
-  Entry *Back() { return (m_entries.empty() ? nullptr : &m_entries.back()); }
-
-  const Entry *Back() const {
-    return (m_entries.empty() ? nullptr : &m_entries.back());
-  }
-
-protected:
-  Collection m_entries;
-};
-
-// Same as RangeDataArray, but uses std::vector as to not
-// require static storage of N items in the class itself
-template <typename B, typename S, typename T> class RangeDataVector {
-public:
-  typedef RangeData<B, S, T> Entry;
-  typedef std::vector<Entry> Collection;
 
   RangeDataVector() = default;
 
@@ -878,8 +682,8 @@ public:
       }
     }
 
-    // We we can combine at least one entry, then we make a new collection
-    // and populate it accordingly, and then swap it into place.
+    // We we can combine at least one entry, then we make a new collection and
+    // populate it accordingly, and then swap it into place.
     if (can_combine) {
       Collection minimal_ranges;
       for (pos = m_entries.begin(), end = m_entries.end(), prev = end;
@@ -889,44 +693,14 @@ public:
         else
           minimal_ranges.push_back(*pos);
       }
-      // Use the swap technique in case our new vector is much smaller.
-      // We must swap when using the STL because std::vector objects never
-      // release or reduce the memory once it has been allocated/reserved.
+      // Use the swap technique in case our new vector is much smaller. We must
+      // swap when using the STL because std::vector objects never release or
+      // reduce the memory once it has been allocated/reserved.
       m_entries.swap(minimal_ranges);
     }
   }
 
-  // Calculate the byte size of ranges with zero byte sizes by finding
-  // the next entry with a base address > the current base address
-  void CalculateSizesOfZeroByteSizeRanges(S full_size = 0) {
-#ifdef ASSERT_RANGEMAP_ARE_SORTED
-    assert(IsSorted());
-#endif
-    typename Collection::iterator pos;
-    typename Collection::iterator end;
-    typename Collection::iterator next;
-    for (pos = m_entries.begin(), end = m_entries.end(); pos != end; ++pos) {
-      if (pos->GetByteSize() == 0) {
-        // Watch out for multiple entries with same address and make sure
-        // we find an entry that is greater than the current base address
-        // before we use that for the size
-        auto curr_base = pos->GetRangeBase();
-        for (next = pos + 1; next != end; ++next) {
-          auto next_base = next->GetRangeBase();
-          if (next_base > curr_base) {
-            pos->SetByteSize(next_base - curr_base);
-            break;
-          }
-        }
-        if (next == end && full_size > curr_base)
-          pos->SetByteSize(full_size - curr_base);
-      }
-    }
-  }
-
   void Clear() { m_entries.clear(); }
-
-  void Reserve(typename Collection::size_type size) { m_entries.resize(size); }
 
   bool IsEmpty() const { return m_entries.empty(); }
 
@@ -949,22 +723,9 @@ public:
   }
 
   uint32_t FindEntryIndexThatContains(B addr) const {
-#ifdef ASSERT_RANGEMAP_ARE_SORTED
-    assert(IsSorted());
-#endif
-    if (!m_entries.empty()) {
-      Entry entry(addr, 1);
-      typename Collection::const_iterator begin = m_entries.begin();
-      typename Collection::const_iterator end = m_entries.end();
-      typename Collection::const_iterator pos =
-          std::lower_bound(begin, end, entry, BaseLessThan);
-
-      while (pos != begin && pos[-1].Contains(addr))
-        --pos;
-
-      if (pos != end && pos->Contains(addr))
-        return std::distance(begin, pos);
-    }
+    const Entry *entry = FindEntryThatContains(addr);
+    if (entry)
+      return std::distance(m_entries.begin(), entry);
     return UINT32_MAX;
   }
 
@@ -984,47 +745,13 @@ public:
   }
 
   Entry *FindEntryThatContains(B addr) {
-#ifdef ASSERT_RANGEMAP_ARE_SORTED
-    assert(IsSorted());
-#endif
-    if (!m_entries.empty()) {
-      Entry entry;
-      entry.SetRangeBase(addr);
-      entry.SetByteSize(1);
-      typename Collection::iterator begin = m_entries.begin();
-      typename Collection::iterator end = m_entries.end();
-      typename Collection::iterator pos =
-          std::lower_bound(begin, end, entry, BaseLessThan);
-
-      while (pos != begin && pos[-1].Contains(addr))
-        --pos;
-
-      if (pos != end && pos->Contains(addr))
-        return &(*pos);
-    }
-    return nullptr;
+    return const_cast<Entry *>(
+        static_cast<const RangeDataVector *>(this)->FindEntryThatContains(
+            addr));
   }
 
   const Entry *FindEntryThatContains(B addr) const {
-#ifdef ASSERT_RANGEMAP_ARE_SORTED
-    assert(IsSorted());
-#endif
-    if (!m_entries.empty()) {
-      Entry entry;
-      entry.SetRangeBase(addr);
-      entry.SetByteSize(1);
-      typename Collection::const_iterator begin = m_entries.begin();
-      typename Collection::const_iterator end = m_entries.end();
-      typename Collection::const_iterator pos =
-          std::lower_bound(begin, end, entry, BaseLessThan);
-
-      while (pos != begin && pos[-1].Contains(addr))
-        --pos;
-
-      if (pos != end && pos->Contains(addr))
-        return &(*pos);
-    }
-    return nullptr;
+    return FindEntryThatContains(Entry(addr, 1));
   }
 
   const Entry *FindEntryThatContains(const Entry &range) const {
@@ -1060,8 +787,8 @@ public:
   }
 
   // This method will return the entry that contains the given address, or the
-  // entry following that address.  If you give it an address of 0 and the first
-  // entry starts at address 0x100, you will get the entry at 0x100.
+  // entry following that address.  If you give it an address of 0 and the
+  // first entry starts at address 0x100, you will get the entry at 0x100.
   //
   // For most uses, FindEntryThatContains is the correct one to use, this is a
   // less commonly needed behavior.  It was added for core file memory regions,
@@ -1102,8 +829,8 @@ protected:
 
 //----------------------------------------------------------------------
 // A simple range  with data class where you get to define the type of
-// the range base "B", the type used for the range byte size "S", and
-// the type for the associated data "T".
+// the range base "B", the type used for the range byte size "S", and the type
+// for the associated data "T".
 //----------------------------------------------------------------------
 template <typename B, typename T> struct AddressData {
   typedef B BaseType;

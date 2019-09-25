@@ -10,10 +10,6 @@
 #ifndef liblldb_CommandObjectHelp_h_
 #define liblldb_CommandObjectHelp_h_
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
 #include "lldb/Host/OptionParser.h"
 #include "lldb/Interpreter/CommandObject.h"
 #include "lldb/Interpreter/Options.h"
@@ -30,10 +26,7 @@ public:
 
   ~CommandObjectHelp() override;
 
-  int HandleCompletion(Args &input, int &cursor_index,
-                       int &cursor_char_position, int match_start_point,
-                       int max_return_elements, bool &word_complete,
-                       StringList &matches) override;
+  int HandleCompletion(CompletionRequest &request) override;
 
   static void GenerateAdditionalHelpAvenuesMessage(
       Stream *s, llvm::StringRef command, llvm::StringRef prefix,

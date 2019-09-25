@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1995-1996 Søren Schmidt
  * All rights reserved.
  *
@@ -35,7 +37,8 @@
 
 #ifdef _KERNEL
 
-#define	AUXARGS_ENTRY(pos, id, val) {suword(pos++, id); suword(pos++, val);}
+#define	AUXARGS_ENTRY(pos, id, val) \
+    {(pos)->a_type = (id); (pos)->a_un.a_val = (val); (pos)++;}
 
 struct image_params;
 struct thread;
@@ -61,7 +64,7 @@ typedef struct {
 	Elf_Note	hdr;
 	const char *	vendor;
 	int		flags;
-	boolean_t	(*trans_osrel)(const Elf_Note *, int32_t *);
+	bool		(*trans_osrel)(const Elf_Note *, int32_t *);
 #define	BN_CAN_FETCH_OSREL	0x0001	/* Deprecated. */
 #define	BN_TRANSLATE_OSREL	0x0002	/* Use trans_osrel to fetch osrel */
 		/* after checking the image ABI specification, if needed. */
@@ -95,6 +98,7 @@ int	__elfN(remove_brand_entry)(Elf_Brandinfo *entry);
 int	__elfN(freebsd_fixup)(register_t **, struct image_params *);
 int	__elfN(coredump)(struct thread *, struct vnode *, off_t, int);
 size_t	__elfN(populate_note)(int, void *, void *, size_t, void **);
+void	__elfN(stackgap)(struct image_params *, u_long *);
 
 /* Machine specific function to dump per-thread information. */
 void	__elfN(dump_thread)(struct thread *, void *, size_t *);

@@ -10,15 +10,11 @@
 #ifndef liblldb_Memory_h_
 #define liblldb_Memory_h_
 
-// C Includes
-// C++ Includes
 #include <map>
 #include <mutex>
 #include <vector>
 
-// Other libraries and framework includes
 
-// Project includes
 #include "lldb/Core/RangeMap.h"
 #include "lldb/lldb-private.h"
 
@@ -120,8 +116,8 @@ protected:
 
 //----------------------------------------------------------------------
 // A class that can track allocated memory and give out allocated memory
-// without us having to make an allocate/deallocate call every time we
-// need some memory in a process that is being debugged.
+// without us having to make an allocate/deallocate call every time we need
+// some memory in a process that is being debugged.
 //----------------------------------------------------------------------
 class AllocatedMemoryCache {
 public:

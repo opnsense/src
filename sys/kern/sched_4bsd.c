@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1982, 1986, 1990, 1991, 1993
  *	The Regents of the University of California.  All rights reserved.
  * (c) UNIX System Laboratories, Inc.
@@ -15,7 +17,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -174,7 +176,7 @@ struct pcpuidlestat {
 	u_int idlecalls;
 	u_int oldidlecalls;
 };
-static DPCPU_DEFINE(struct pcpuidlestat, idlestat);
+DPCPU_DEFINE_STATIC(struct pcpuidlestat, idlestat);
 
 static void
 setup_runqs(void)
@@ -779,6 +781,7 @@ sched_fork_thread(struct thread *td, struct thread *childtd)
 	childtd->td_lastcpu = NOCPU;
 	childtd->td_lock = &sched_lock;
 	childtd->td_cpuset = cpuset_ref(td->td_cpuset);
+	childtd->td_domain.dr_policy = td->td_cpuset->cs_domain;
 	childtd->td_priority = childtd->td_base_pri;
 	ts = td_get_sched(childtd);
 	bzero(ts, sizeof(*ts));
@@ -1478,25 +1481,13 @@ sched_preempt(struct thread *td)
 }
 
 void
-sched_userret(struct thread *td)
+sched_userret_slowpath(struct thread *td)
 {
-	/*
-	 * XXX we cheat slightly on the locking here to avoid locking in
-	 * the usual case.  Setting td_priority here is essentially an
-	 * incomplete workaround for not setting it properly elsewhere.
-	 * Now that some interrupt handlers are threads, not setting it
-	 * properly elsewhere can clobber it in the window between setting
-	 * it here and returning to user mode, so don't waste time setting
-	 * it perfectly here.
-	 */
-	KASSERT((td->td_flags & TDF_BORROWING) == 0,
-	    ("thread with borrowed priority returning to userland"));
-	if (td->td_priority != td->td_user_pri) {
-		thread_lock(td);
-		td->td_priority = td->td_user_pri;
-		td->td_base_pri = td->td_user_pri;
-		thread_unlock(td);
-	}
+
+	thread_lock(td);
+	td->td_priority = td->td_user_pri;
+	td->td_base_pri = td->td_user_pri;
+	thread_unlock(td);
 }
 
 void

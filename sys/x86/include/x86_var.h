@@ -44,6 +44,7 @@ extern	u_int	cpu_feature;
 extern	u_int	cpu_feature2;
 extern	u_int	amd_feature;
 extern	u_int	amd_feature2;
+extern	u_int	amd_rascap;
 extern	u_int	amd_pminfo;
 extern	u_int	amd_extended_feature_extensions;
 extern	u_int	via_feature_rng;
@@ -81,6 +82,7 @@ extern	int	_ufssel;
 extern	int	_ugssel;
 extern	int	use_xsave;
 extern	uint64_t xsave_mask;
+extern	u_int	max_apic_id;
 extern	int	pti;
 extern	int	hw_ibrs_active;
 extern	int	hw_mds_disable;
@@ -115,16 +117,20 @@ cpu_getmaxphyaddr(void)
 #endif
 }
 
+bool	acpi_get_fadt_bootflags(uint16_t *flagsp);
 void	*alloc_fpusave(int flags);
 void	busdma_swi(void);
 bool	cpu_mwait_usable(void);
 void	cpu_probe_amdc1e(void);
 void	cpu_setregs(void);
+bool	disable_wp(void);
+void	restore_wp(bool old_wp);
 void	dump_add_page(vm_paddr_t);
 void	dump_drop_page(vm_paddr_t);
 void	finishidentcpu(void);
 void	identify_cpu1(void);
 void	identify_cpu2(void);
+void	identify_cpu_fixup_bsp(void);
 void	identify_hypervisor(void);
 void	initializecpu(void);
 void	initializecpucache(void);
@@ -143,7 +149,7 @@ void	nmi_handle_intr(u_int type, struct trapframe *frame);
 void	pagecopy(void *from, void *to);
 void	printcpuinfo(void);
 int	pti_get_default(void);
-int	user_dbreg_trap(void);
+int	user_dbreg_trap(register_t dr6);
 int	minidumpsys(struct dumperinfo *);
 struct pcb *get_pcb_td(struct thread *td);
 

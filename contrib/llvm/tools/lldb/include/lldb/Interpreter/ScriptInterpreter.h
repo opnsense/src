@@ -10,15 +10,12 @@
 #ifndef liblldb_ScriptInterpreter_h_
 #define liblldb_ScriptInterpreter_h_
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
 #include "lldb/lldb-private.h"
 
 #include "lldb/Breakpoint/BreakpointOptions.h"
-#include "lldb/Core/Broadcaster.h"
 #include "lldb/Core/PluginInterface.h"
+#include "lldb/Core/SearchFilter.h"
+#include "lldb/Utility/Broadcaster.h"
 #include "lldb/Utility/Status.h"
 #include "lldb/Utility/StructuredData.h"
 
@@ -96,13 +93,13 @@ public:
   virtual bool Interrupt() { return false; }
 
   virtual bool ExecuteOneLine(
-      const char *command, CommandReturnObject *result,
+      llvm::StringRef command, CommandReturnObject *result,
       const ExecuteScriptOptions &options = ExecuteScriptOptions()) = 0;
 
   virtual void ExecuteInterpreterLoop() = 0;
 
   virtual bool ExecuteOneLineWithReturn(
-      const char *in_string, ScriptReturnType return_type, void *ret_value,
+      llvm::StringRef in_string, ScriptReturnType return_type, void *ret_value,
       const ExecuteScriptOptions &options = ExecuteScriptOptions()) {
     return true;
   }
@@ -173,6 +170,17 @@ public:
   }
 
   virtual StructuredData::GenericSP
+  CreateFrameRecognizer(const char *class_name) {
+    return StructuredData::GenericSP();
+  }
+
+  virtual lldb::ValueObjectListSP GetRecognizedArguments(
+      const StructuredData::ObjectSP &implementor,
+      lldb::StackFrameSP frame_sp) {
+    return lldb::ValueObjectListSP();
+  }
+
+  virtual StructuredData::GenericSP
   OSPlugin_CreatePluginObject(const char *class_name,
                               lldb::ProcessSP process_sp) {
     return StructuredData::GenericSP();
@@ -232,6 +240,26 @@ public:
                                 bool &script_error) {
     script_error = true;
     return lldb::eStateStepping;
+  }
+
+  virtual StructuredData::GenericSP
+  CreateScriptedBreakpointResolver(const char *class_name,
+                                   StructuredDataImpl *args_data,
+                                   lldb::BreakpointSP &bkpt_sp) {
+    return StructuredData::GenericSP();
+  }
+  
+  virtual bool
+  ScriptedBreakpointResolverSearchCallback(StructuredData::GenericSP implementor_sp,
+                                           SymbolContext *sym_ctx)
+  {
+    return false;
+  }
+
+  virtual lldb::SearchDepth
+  ScriptedBreakpointResolverSearchDepth(StructuredData::GenericSP implementor_sp)
+  {
+    return lldb::eSearchDepthModule;
   }
 
   virtual StructuredData::ObjectSP
@@ -343,7 +371,7 @@ public:
   }
 
   virtual bool
-  RunScriptBasedCommand(const char *impl_function, const char *args,
+  RunScriptBasedCommand(const char *impl_function, llvm::StringRef args,
                         ScriptedCommandSynchronicity synchronicity,
                         lldb_private::CommandReturnObject &cmd_retobj,
                         Status &error,
@@ -351,12 +379,11 @@ public:
     return false;
   }
 
-  virtual bool
-  RunScriptBasedCommand(StructuredData::GenericSP impl_obj_sp, const char *args,
-                        ScriptedCommandSynchronicity synchronicity,
-                        lldb_private::CommandReturnObject &cmd_retobj,
-                        Status &error,
-                        const lldb_private::ExecutionContext &exe_ctx) {
+  virtual bool RunScriptBasedCommand(
+      StructuredData::GenericSP impl_obj_sp, llvm::StringRef args,
+      ScriptedCommandSynchronicity synchronicity,
+      lldb_private::CommandReturnObject &cmd_retobj, Status &error,
+      const lldb_private::ExecutionContext &exe_ctx) {
     return false;
   }
 

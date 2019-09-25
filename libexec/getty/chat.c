@@ -62,7 +62,7 @@ static int    chat_unalarm(void);
 static int    getdigit(unsigned char **, int, int);
 static char   **read_chat(char **);
 static char   *cleanchr(char **, unsigned char);
-static char   *cleanstr(const unsigned char *, int);
+static const char *cleanstr(const unsigned char *, int);
 static const char *result(int);
 static int    chat_expect(const char *);
 static int    chat_send(char const *);
@@ -141,7 +141,7 @@ read_chat(char **chatstr)
 		int l;
 
 		if ((l=strlen(str)) > 0 && (tmp=malloc(l + 1)) != NULL &&
-		    (res=malloc((l / 2 + 1) * sizeof(char *))) != NULL) {
+		    (res=malloc(((l + 1) / 2 + 1) * sizeof(char *))) != NULL) {
 			static char ws[] = " \t";
 			char * p;
 
@@ -216,7 +216,7 @@ read_chat(char **chatstr)
 					q = strrchr(p+1, *p);
 					if (q != NULL && *q == *p && q[1] == '\0') {
 						*q = '\0';
-						strcpy(p, p+1);
+						p++;
 					}
 				}
 
@@ -270,7 +270,7 @@ cleanchr(char **buf, unsigned char ch)
  * clean a string for display (ctrl/meta characters)
  */
 
-static char *
+static const char *
 cleanstr(const unsigned char *s, int l)
 {
 	static unsigned char * tmp = NULL;
@@ -281,7 +281,7 @@ cleanstr(const unsigned char *s, int l)
 
 	if (tmp == NULL) {
 		tmplen = 0;
-		return (char *)"(mem alloc error)";
+		return "(mem alloc error)";
 	} else {
 		int i = 0;
 		char * p = tmp;

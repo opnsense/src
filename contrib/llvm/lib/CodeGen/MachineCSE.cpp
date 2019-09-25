@@ -176,11 +176,14 @@ bool MachineCSE::PerformTrivialCopyPropagation(MachineInstr *MI,
     // class given a super-reg class and subreg index.
     if (DefMI->getOperand(1).getSubReg())
       continue;
-    const TargetRegisterClass *RC = MRI->getRegClass(Reg);
-    if (!MRI->constrainRegClass(SrcReg, RC))
+    if (!MRI->constrainRegAttrs(SrcReg, Reg))
       continue;
-    DEBUG(dbgs() << "Coalescing: " << *DefMI);
-    DEBUG(dbgs() << "***     to: " << *MI);
+    LLVM_DEBUG(dbgs() << "Coalescing: " << *DefMI);
+    LLVM_DEBUG(dbgs() << "***     to: " << *MI);
+
+    // Update matching debug values.
+    DefMI->changeDebugValuesDefReg(SrcReg);
+
     // Propagate SrcReg of copies to MI.
     MO.setReg(SrcReg);
     MRI->clearKillFlags(SrcReg);
@@ -232,6 +235,21 @@ MachineCSE::isPhysDefTriviallyDead(unsigned Reg,
   return false;
 }
 
+static bool isCallerPreservedOrConstPhysReg(unsigned Reg,
+                                            const MachineFunction &MF,
+                                            const TargetRegisterInfo &TRI) {
+  // MachineRegisterInfo::isConstantPhysReg directly called by
+  // MachineRegisterInfo::isCallerPreservedOrConstPhysReg expects the
+  // reserved registers to be frozen. That doesn't cause a problem  post-ISel as
+  // most (if not all) targets freeze reserved registers right after ISel.
+  //
+  // It does cause issues mid-GlobalISel, however, hence the additional
+  // reservedRegsFrozen check.
+  const MachineRegisterInfo &MRI = MF.getRegInfo();
+  return TRI.isCallerPreservedPhysReg(Reg, MF) ||
+         (MRI.reservedRegsFrozen() && MRI.isConstantPhysReg(Reg));
+}
+
 /// hasLivePhysRegDefUses - Return true if the specified instruction read/write
 /// physical registers (except for dead defs of physical registers). It also
 /// returns the physical register def by reference if it's the only one and the
@@ -251,7 +269,7 @@ bool MachineCSE::hasLivePhysRegDefUses(const MachineInstr *MI,
     if (TargetRegisterInfo::isVirtualRegister(Reg))
       continue;
     // Reading either caller preserved or constant physregs is ok.
-    if (!MRI->isCallerPreservedOrConstPhysReg(Reg))
+    if (!isCallerPreservedOrConstPhysReg(Reg, *MI->getMF(), *TRI))
       for (MCRegAliasIterator AI(Reg, TRI, true); AI.isValid(); ++AI)
         PhysRefs.insert(*AI);
   }
@@ -315,7 +333,7 @@ bool MachineCSE::PhysRegDefsReach(MachineInstr *CSMI, MachineInstr *MI,
   unsigned LookAheadLeft = LookAheadLimit;
   while (LookAheadLeft) {
     // Skip over dbg_value's.
-    while (I != E && I != EE && I->isDebugValue())
+    while (I != E && I != EE && I->isDebugInstr())
       ++I;
 
     if (I == EE) {
@@ -354,7 +372,7 @@ bool MachineCSE::PhysRegDefsReach(MachineInstr *CSMI, MachineInstr *MI,
 
 bool MachineCSE::isCSECandidate(MachineInstr *MI) {
   if (MI->isPosition() || MI->isPHI() || MI->isImplicitDef() || MI->isKill() ||
-      MI->isInlineAsm() || MI->isDebugValue())
+      MI->isInlineAsm() || MI->isDebugInstr())
     return false;
 
   // Ignore copies.
@@ -446,25 +464,23 @@ bool MachineCSE::isProfitableToCSE(unsigned CSReg, unsigned Reg,
   // Heuristics #3: If the common subexpression is used by PHIs, do not reuse
   // it unless the defined value is already used in the BB of the new use.
   bool HasPHI = false;
-  SmallPtrSet<MachineBasicBlock*, 4> CSBBs;
-  for (MachineInstr &MI : MRI->use_nodbg_instructions(CSReg)) {
-    HasPHI |= MI.isPHI();
-    CSBBs.insert(MI.getParent());
+  for (MachineInstr &UseMI : MRI->use_nodbg_instructions(CSReg)) {
+    HasPHI |= UseMI.isPHI();
+    if (UseMI.getParent() == MI->getParent())
+      return true;
   }
 
-  if (!HasPHI)
-    return true;
-  return CSBBs.count(MI->getParent());
+  return !HasPHI;
 }
 
 void MachineCSE::EnterScope(MachineBasicBlock *MBB) {
-  DEBUG(dbgs() << "Entering: " << MBB->getName() << '\n');
+  LLVM_DEBUG(dbgs() << "Entering: " << MBB->getName() << '\n');
   ScopeType *Scope = new ScopeType(VNT);
   ScopeMap[MBB] = Scope;
 }
 
 void MachineCSE::ExitScope(MachineBasicBlock *MBB) {
-  DEBUG(dbgs() << "Exiting: " << MBB->getName() << '\n');
+  LLVM_DEBUG(dbgs() << "Exiting: " << MBB->getName() << '\n');
   DenseMap<MachineBasicBlock*, ScopeType*>::iterator SI = ScopeMap.find(MBB);
   assert(SI != ScopeMap.end());
   delete SI->second;
@@ -548,13 +564,12 @@ bool MachineCSE::ProcessBlock(MachineBasicBlock *MBB) {
     // Found a common subexpression, eliminate it.
     unsigned CSVN = VNT.lookup(MI);
     MachineInstr *CSMI = Exps[CSVN];
-    DEBUG(dbgs() << "Examining: " << *MI);
-    DEBUG(dbgs() << "*** Found a common subexpression: " << *CSMI);
+    LLVM_DEBUG(dbgs() << "Examining: " << *MI);
+    LLVM_DEBUG(dbgs() << "*** Found a common subexpression: " << *CSMI);
 
     // Check if it's profitable to perform this CSE.
     bool DoCSE = true;
-    unsigned NumDefs = MI->getDesc().getNumDefs() +
-                       MI->getDesc().getNumImplicitDefs();
+    unsigned NumDefs = MI->getNumDefs();
 
     for (unsigned i = 0, e = MI->getNumOperands(); NumDefs && i != e; ++i) {
       MachineOperand &MO = MI->getOperand(i);
@@ -583,16 +598,17 @@ bool MachineCSE::ProcessBlock(MachineBasicBlock *MBB) {
              "Do not CSE physical register defs!");
 
       if (!isProfitableToCSE(NewReg, OldReg, CSMI, MI)) {
-        DEBUG(dbgs() << "*** Not profitable, avoid CSE!\n");
+        LLVM_DEBUG(dbgs() << "*** Not profitable, avoid CSE!\n");
         DoCSE = false;
         break;
       }
 
-      // Don't perform CSE if the result of the old instruction cannot exist
-      // within the register class of the new instruction.
-      const TargetRegisterClass *OldRC = MRI->getRegClass(OldReg);
-      if (!MRI->constrainRegClass(NewReg, OldRC)) {
-        DEBUG(dbgs() << "*** Not the same register class, avoid CSE!\n");
+      // Don't perform CSE if the result of the new instruction cannot exist
+      // within the constraints (register class, bank, or low-level type) of
+      // the old instruction.
+      if (!MRI->constrainRegAttrs(NewReg, OldReg)) {
+        LLVM_DEBUG(
+            dbgs() << "*** Not the same register constraints, avoid CSE!\n");
         DoCSE = false;
         break;
       }

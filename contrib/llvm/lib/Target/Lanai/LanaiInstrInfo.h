@@ -15,6 +15,7 @@
 #define LLVM_LIB_TARGET_LANAI_LANAIINSTRINFO_H
 
 #include "LanaiRegisterInfo.h"
+#include "MCTargetDesc/LanaiMCTargetDesc.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 
 #define GET_INSTRINFO_HEADER
@@ -67,13 +68,13 @@ public:
 
   bool expandPostRAPseudo(MachineInstr &MI) const override;
 
-  bool getMemOpBaseRegImmOfs(MachineInstr &LdSt, unsigned &BaseReg,
-                             int64_t &Offset,
-                             const TargetRegisterInfo *TRI) const override;
+  bool getMemOperandWithOffset(MachineInstr &LdSt, MachineOperand *&BaseOp,
+                               int64_t &Offset,
+                               const TargetRegisterInfo *TRI) const override;
 
-  bool getMemOpBaseRegImmOfsWidth(MachineInstr &LdSt, unsigned &BaseReg,
-                                  int64_t &Offset, unsigned &Width,
-                                  const TargetRegisterInfo *TRI) const;
+  bool getMemOperandWithOffsetWidth(MachineInstr &LdSt, MachineOperand *&BaseOp,
+                                    int64_t &Offset, unsigned &Width,
+                                    const TargetRegisterInfo *TRI) const;
 
   std::pair<unsigned, unsigned>
   decomposeMachineOperandsTargetFlags(unsigned TF) const override;

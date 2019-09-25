@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2012, 2013 Konstantin Belousov <kib@FreeBSD.org>
  * All rights reserved.
  *
@@ -34,6 +36,10 @@
 #include <sys/proc.h>
 #endif
 
+extern struct pcpu __pcpu[];
+
+#define	EARLY_COUNTER	&__pcpu[0].pc_early_dummy_counter
+
 #ifdef __powerpc64__
 
 #define	counter_enter()	do {} while (0)
@@ -44,7 +50,7 @@ static inline uint64_t
 counter_u64_read_one(uint64_t *p, int cpu)
 {
 
-	return (*(uint64_t *)((char *)p + sizeof(struct pcpu) * cpu));
+	return (*(uint64_t *)((char *)p + UMA_PCPU_ALLOC_SIZE * cpu));
 }
 
 static inline uint64_t
@@ -64,7 +70,7 @@ static void
 counter_u64_zero_one_cpu(void *arg)
 {
 
-	*((uint64_t *)((char *)arg + sizeof(struct pcpu) *
+	*((uint64_t *)((char *)arg + UMA_PCPU_ALLOC_SIZE *
 	    PCPU_GET(cpuid))) = 0;
 }
 
@@ -78,8 +84,6 @@ counter_u64_zero_inline(counter_u64_t c)
 #endif
 
 #define	counter_u64_add_protected(c, i)	counter_u64_add(c, i)
-
-extern struct pcpu __pcpu[MAXCPU];
 
 static inline void
 counter_u64_add(counter_u64_t c, int64_t inc)
@@ -109,7 +113,7 @@ static inline uint64_t
 counter_u64_read_one(uint64_t *p, int cpu)
 {
 
-	return (*(uint64_t *)((char *)p + sizeof(struct pcpu) * cpu));
+	return (*(uint64_t *)((char *)p + UMA_PCPU_ALLOC_SIZE * cpu));
 }
 
 static inline uint64_t
@@ -130,7 +134,7 @@ static void
 counter_u64_zero_one_cpu(void *arg)
 {
 
-	*((uint64_t *)((char *)arg + sizeof(struct pcpu) *
+	*((uint64_t *)((char *)arg + UMA_PCPU_ALLOC_SIZE *
 	    PCPU_GET(cpuid))) = 0;
 }
 

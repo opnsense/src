@@ -9,9 +9,8 @@
 
 #include "lldb/Core/Value.h"
 
-#include "lldb/Core/Address.h"  // for Address
+#include "lldb/Core/Address.h"
 #include "lldb/Core/Module.h"
-#include "lldb/Core/State.h"
 #include "lldb/Symbol/CompilerType.h"
 #include "lldb/Symbol/ObjectFile.h"
 #include "lldb/Symbol/SymbolContext.h"
@@ -21,20 +20,21 @@
 #include "lldb/Target/Process.h"
 #include "lldb/Target/SectionLoadList.h"
 #include "lldb/Target/Target.h"
-#include "lldb/Utility/ConstString.h" // for ConstString
+#include "lldb/Utility/ConstString.h"
 #include "lldb/Utility/DataBufferHeap.h"
 #include "lldb/Utility/DataExtractor.h"
-#include "lldb/Utility/Endian.h"   // for InlHostByteOrder
-#include "lldb/Utility/FileSpec.h" // for FileSpec
+#include "lldb/Utility/Endian.h"
+#include "lldb/Utility/FileSpec.h"
+#include "lldb/Utility/State.h"
 #include "lldb/Utility/Stream.h"
-#include "lldb/lldb-defines.h" // for LLDB_INVALID_ADDRESS
-#include "lldb/lldb-forward.h" // for DataBufferSP, ModuleSP
-#include "lldb/lldb-types.h"   // for addr_t
+#include "lldb/lldb-defines.h"
+#include "lldb/lldb-forward.h"
+#include "lldb/lldb-types.h"
 
-#include <memory> // for make_shared
-#include <string> // for string
+#include <memory>
+#include <string>
 
-#include <inttypes.h> // for PRIx64
+#include <inttypes.h>
 
 using namespace lldb;
 using namespace lldb_private;
@@ -224,8 +224,9 @@ uint64_t Value::GetValueByteSize(Status *error_ptr, ExecutionContext *exe_ctx) {
   {
     const CompilerType &ast_type = GetCompilerType();
     if (ast_type.IsValid())
-      byte_size = ast_type.GetByteSize(
-          exe_ctx ? exe_ctx->GetBestExecutionContextScope() : nullptr);
+      if (llvm::Optional<uint64_t> size = ast_type.GetByteSize(
+              exe_ctx ? exe_ctx->GetBestExecutionContextScope() : nullptr))
+        byte_size = *size;
   } break;
   }
 
@@ -344,10 +345,9 @@ Status Value::GetValueAsData(ExecutionContext *exe_ctx, DataExtractor &data,
 
     uint32_t limit_byte_size = UINT32_MAX;
 
-    if (ast_type.IsValid()) {
-      limit_byte_size = ast_type.GetByteSize(
-          exe_ctx ? exe_ctx->GetBestExecutionContextScope() : nullptr);
-    }
+    if (llvm::Optional<uint64_t> size = ast_type.GetByteSize(
+            exe_ctx ? exe_ctx->GetBestExecutionContextScope() : nullptr))
+      limit_byte_size = *size;
 
     if (limit_byte_size <= m_value.GetByteSize()) {
       if (m_value.GetData(data, limit_byte_size))
@@ -365,11 +365,10 @@ Status Value::GetValueAsData(ExecutionContext *exe_ctx, DataExtractor &data,
       if (process == NULL || !process->IsAlive()) {
         Target *target = exe_ctx->GetTargetPtr();
         if (target) {
-          // Allow expressions to run and evaluate things when the target
-          // has memory sections loaded. This allows you to use "target modules
-          // load"
-          // to load your executable and any shared libraries, then execute
-          // commands where you can look at types in data sections.
+          // Allow expressions to run and evaluate things when the target has
+          // memory sections loaded. This allows you to use "target modules
+          // load" to load your executable and any shared libraries, then
+          // execute commands where you can look at types in data sections.
           const SectionLoadList &target_sections = target->GetSectionLoadList();
           if (!target_sections.IsEmpty()) {
             address = m_value.ULongLong(LLDB_INVALID_ADDRESS);
@@ -406,8 +405,8 @@ Status Value::GetValueAsData(ExecutionContext *exe_ctx, DataExtractor &data,
         error.SetErrorString("invalid file address");
       } else {
         if (module == NULL) {
-          // The only thing we can currently lock down to a module so that
-          // we can resolve a file address, is a variable.
+          // The only thing we can currently lock down to a module so that we
+          // can resolve a file address, is a variable.
           Variable *variable = GetVariable();
           if (variable) {
             SymbolContext var_sc;
@@ -541,12 +540,11 @@ Status Value::GetValueAsData(ExecutionContext *exe_ctx, DataExtractor &data,
     } else if ((address_type == eAddressTypeLoad) ||
                (address_type == eAddressTypeFile)) {
       if (file_so_addr.IsValid()) {
-        // We have a file address that we were able to translate into a
-        // section offset address so we might be able to read this from
-        // the object files if we don't have a live process. Lets always
-        // try and read from the process if we have one though since we
-        // want to read the actual value by setting "prefer_file_cache"
-        // to false.
+        // We have a file address that we were able to translate into a section
+        // offset address so we might be able to read this from the object
+        // files if we don't have a live process. Lets always try and read from
+        // the process if we have one though since we want to read the actual
+        // value by setting "prefer_file_cache" to false.
         const bool prefer_file_cache = false;
         if (exe_ctx->GetTargetRef().ReadMemory(file_so_addr, prefer_file_cache,
                                                dst, byte_size,
@@ -555,10 +553,10 @@ Status Value::GetValueAsData(ExecutionContext *exe_ctx, DataExtractor &data,
               "read memory from 0x%" PRIx64 " failed", (uint64_t)address);
         }
       } else {
-        // The execution context might have a NULL process, but it
-        // might have a valid process in the exe_ctx->target, so use
-        // the ExecutionContext::GetProcess accessor to ensure we
-        // get the process if there is one.
+        // The execution context might have a NULL process, but it might have a
+        // valid process in the exe_ctx->target, so use the
+        // ExecutionContext::GetProcess accessor to ensure we get the process
+        // if there is one.
         Process *process = exe_ctx->GetProcessPtr();
 
         if (process) {
@@ -669,6 +667,25 @@ const char *Value::GetContextTypeAsCString(ContextType context_type) {
     return "Variable *";
   };
   return "???";
+}
+
+void Value::ConvertToLoadAddress(Module *module, Target *target) {
+  if (!module || !target || (GetValueType() != eValueTypeFileAddress))
+    return;
+
+  lldb::addr_t file_addr = GetScalar().ULongLong(LLDB_INVALID_ADDRESS);
+  if (file_addr == LLDB_INVALID_ADDRESS)
+    return;
+
+  Address so_addr;
+  if (!module->ResolveFileAddress(file_addr, so_addr))
+    return;
+  lldb::addr_t load_addr = so_addr.GetLoadAddress(target);
+  if (load_addr == LLDB_INVALID_ADDRESS)
+    return;
+
+  SetValueType(Value::eValueTypeLoadAddress);
+  GetScalar() = load_addr;
 }
 
 ValueList::ValueList(const ValueList &rhs) { m_values = rhs.m_values; }

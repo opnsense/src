@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2001 Dag-Erling Coïdan Smørgrav
  * All rights reserved.
  *
@@ -826,8 +828,9 @@ pfs_readdir(struct vop_readdir_args *va)
 		/* PFS_DELEN was picked to fit PFS_NAMLEN */
 		for (i = 0; i < PFS_NAMELEN - 1 && pn->pn_name[i] != '\0'; ++i)
 			pfsent->entry.d_name[i] = pn->pn_name[i];
-		pfsent->entry.d_name[i] = 0;
 		pfsent->entry.d_namlen = i;
+		/* NOTE: d_off is the offset of the *next* entry. */
+		pfsent->entry.d_off = offset + PFS_DELEN;
 		switch (pn->pn_type) {
 		case pfstype_procdir:
 			KASSERT(p != NULL,
@@ -851,6 +854,7 @@ pfs_readdir(struct vop_readdir_args *va)
 			panic("%s has unexpected node type: %d", pn->pn_name, pn->pn_type);
 		}
 		PFS_TRACE(("%s", pfsent->entry.d_name));
+		dirent_terminate(&pfsent->entry);
 		STAILQ_INSERT_TAIL(&lst, pfsent, link);
 		offset += PFS_DELEN;
 		resid -= PFS_DELEN;
@@ -866,7 +870,7 @@ pfs_readdir(struct vop_readdir_args *va)
 		free(pfsent, M_IOV);
 		i++;
 	}
-	PFS_TRACE(("%d bytes", i * PFS_DELEN));
+	PFS_TRACE(("%ju bytes", (uintmax_t)(i * PFS_DELEN)));
 	PFS_RETURN (error);
 }
 
@@ -963,7 +967,8 @@ pfs_setattr(struct vop_setattr_args *va)
 	PFS_TRACE(("%s", pn->pn_name));
 	pfs_assert_not_owned(pn);
 
-	PFS_RETURN (EOPNOTSUPP);
+	/* Silently ignore unchangeable attributes. */
+	PFS_RETURN (0);
 }
 
 /*

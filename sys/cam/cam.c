@@ -1,6 +1,8 @@
 /*-
  * Generic utility routines for the Common Access Method layer.
  *
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1997 Justin T. Gibbs.
  * All rights reserved.
  *
@@ -413,7 +415,6 @@ cam_error_string(struct cam_device *device, union ccb *ccb, char *str,
 		switch (ccb->ccb_h.func_code) {
 		case XPT_ATA_IO:
 			ata_command_sbuf(&ccb->ataio, &sb);
-			sbuf_printf(&sb, "\n");
 			break;
 		case XPT_SCSI_IO:
 #ifdef _KERNEL
@@ -421,17 +422,22 @@ cam_error_string(struct cam_device *device, union ccb *ccb, char *str,
 #else /* !_KERNEL */
 			scsi_command_string(device, &ccb->csio, &sb);
 #endif /* _KERNEL/!_KERNEL */
-			sbuf_printf(&sb, "\n");
 			break;
 		case XPT_SMP_IO:
 			smp_command_sbuf(&ccb->smpio, &sb, path_str, 79 -
 					 strlen(path_str), (proto_flags &
 					 CAM_ESMF_PRINT_FULL_CMD) ? 79 : 0);
-			sbuf_printf(&sb, "\n");
+			break;
+		case XPT_NVME_IO:
+		case XPT_NVME_ADMIN:
+			nvme_command_sbuf(&ccb->nvmeio, &sb);
 			break;
 		default:
+			sbuf_printf(&sb, "CAM func %#x",
+			    ccb->ccb_h.func_code);
 			break;
 		}
+		sbuf_printf(&sb, "\n");
 	}
 
 	if (flags & CAM_ESF_CAM_STATUS) {

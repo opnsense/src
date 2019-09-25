@@ -31,6 +31,8 @@
 #include <libnvpair.h>
 #include <sys/param.h>
 #include <sys/types.h>
+#include <sys/fs/zfs.h>
+
 
 #ifdef	__cplusplus
 extern "C" {
@@ -56,6 +58,8 @@ int lzc_destroy_snaps(nvlist_t *, boolean_t, nvlist_t **);
 int lzc_bookmark(nvlist_t *, nvlist_t **);
 int lzc_get_bookmarks(const char *, nvlist_t *, nvlist_t **);
 int lzc_destroy_bookmarks(nvlist_t *, nvlist_t **);
+int lzc_initialize(const char *, pool_initialize_func_t, nvlist_t *,
+    nvlist_t **);
 
 int lzc_snaprange_space(const char *, const char *, uint64_t *);
 
@@ -86,6 +90,9 @@ boolean_t lzc_exists(const char *);
 
 int lzc_rollback(const char *, char *, int);
 int lzc_rollback_to(const char *, const char *);
+
+int lzc_rename(const char *, const char *);
+int lzc_destroy(const char *);
 
 int lzc_channel_program(const char *, const char *, uint64_t,
     uint64_t, nvlist_t *, nvlist_t **);

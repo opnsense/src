@@ -50,7 +50,8 @@ Variable::Variable(
       m_symfile_type_sp(symfile_type_sp), m_scope(scope),
       m_owner_scope(context), m_scope_range(scope_range),
       m_declaration(decl_ptr), m_location(location), m_external(external),
-      m_artificial(artificial), m_static_member(static_member) {}
+      m_artificial(artificial), m_loc_is_const_data(false),
+      m_static_member(static_member) {}
 
 //----------------------------------------------------------------------
 // Destructor
@@ -156,14 +157,14 @@ void Variable::Dump(Stream *s, bool show_context) const {
                                 .GetBaseAddress()
                                 .GetFileAddress();
     }
-    ABI *abi = nullptr;
+    ABISP abi;
     if (m_owner_scope) {
       ModuleSP module_sp(m_owner_scope->CalculateSymbolContextModule());
       if (module_sp)
-        abi = ABI::FindPlugin(ProcessSP(), module_sp->GetArchitecture()).get();
+        abi = ABI::FindPlugin(ProcessSP(), module_sp->GetArchitecture());
     }
     m_location.GetDescription(s, lldb::eDescriptionLevelBrief,
-                              loclist_base_addr, abi);
+                              loclist_base_addr, abi.get());
   }
 
   if (m_external)
@@ -239,9 +240,8 @@ bool Variable::LocationIsValidForFrame(StackFrame *frame) {
               target_sp.get());
       if (loclist_base_load_addr == LLDB_INVALID_ADDRESS)
         return false;
-      // It is a location list. We just need to tell if the location
-      // list contains the current address when converted to a load
-      // address
+      // It is a location list. We just need to tell if the location list
+      // contains the current address when converted to a load address
       return m_location.LocationListContainsAddress(
           loclist_base_load_addr,
           frame->GetFrameCodeAddress().GetLoadAddress(target_sp.get()));
@@ -251,8 +251,8 @@ bool Variable::LocationIsValidForFrame(StackFrame *frame) {
 }
 
 bool Variable::LocationIsValidForAddress(const Address &address) {
-  // Be sure to resolve the address to section offset prior to
-  // calling this function.
+  // Be sure to resolve the address to section offset prior to calling this
+  // function.
   if (address.IsSectionOffset()) {
     SymbolContext sc;
     CalculateSymbolContext(&sc);
@@ -268,9 +268,8 @@ bool Variable::LocationIsValidForAddress(const Address &address) {
             sc.function->GetAddressRange().GetBaseAddress().GetFileAddress();
         if (loclist_base_file_addr == LLDB_INVALID_ADDRESS)
           return false;
-        // It is a location list. We just need to tell if the location
-        // list contains the current address when converted to a load
-        // address
+        // It is a location list. We just need to tell if the location list
+        // contains the current address when converted to a load address
         return m_location.LocationListContainsAddress(loclist_base_file_addr,
                                                       address.GetFileAddress());
       }
@@ -294,8 +293,8 @@ bool Variable::IsInScope(StackFrame *frame) {
   case eValueTypeVariableArgument:
   case eValueTypeVariableLocal:
     if (frame) {
-      // We don't have a location list, we just need to see if the block
-      // that this variable was defined in is currently
+      // We don't have a location list, we just need to see if the block that
+      // this variable was defined in is currently
       Block *deepest_frame_block =
           frame->GetSymbolContext(eSymbolContextBlock).block;
       if (deepest_frame_block) {
@@ -313,8 +312,7 @@ bool Variable::IsInScope(StackFrame *frame) {
           return false;
 
         // If no scope range is specified then it means that the scope is the
-        // same as the
-        // scope of the enclosing lexical block.
+        // same as the scope of the enclosing lexical block.
         if (m_scope_range.IsEmpty())
           return true;
 
@@ -455,17 +453,17 @@ Status Variable::GetValuesForVariableExpressionPath(
 }
 
 bool Variable::DumpLocationForAddress(Stream *s, const Address &address) {
-  // Be sure to resolve the address to section offset prior to
-  // calling this function.
+  // Be sure to resolve the address to section offset prior to calling this
+  // function.
   if (address.IsSectionOffset()) {
     SymbolContext sc;
     CalculateSymbolContext(&sc);
     if (sc.module_sp == address.GetModule()) {
-      ABI *abi = nullptr;
+      ABISP abi;
       if (m_owner_scope) {
         ModuleSP module_sp(m_owner_scope->CalculateSymbolContextModule());
         if (module_sp)
-          abi = ABI::FindPlugin(ProcessSP(), module_sp->GetArchitecture()).get();
+          abi = ABI::FindPlugin(ProcessSP(), module_sp->GetArchitecture());
       }
 
       const addr_t file_addr = address.GetFileAddress();
@@ -477,11 +475,12 @@ bool Variable::DumpLocationForAddress(Stream *s, const Address &address) {
             return false;
           return m_location.DumpLocationForAddress(s, eDescriptionLevelBrief,
                                                    loclist_base_file_addr,
-                                                   file_addr, abi);
+                                                   file_addr, abi.get());
         }
       }
-      return m_location.DumpLocationForAddress(
-          s, eDescriptionLevelBrief, LLDB_INVALID_ADDRESS, file_addr, abi);
+      return m_location.DumpLocationForAddress(s, eDescriptionLevelBrief,
+                                               LLDB_INVALID_ADDRESS, file_addr,
+                                               abi.get());
     }
   }
   return false;
@@ -606,7 +605,7 @@ static void PrivateAutoComplete(
       case eTypeClassObjCObjectPointer:
       case eTypeClassPointer: {
         bool omit_empty_base_classes = true;
-        if (compiler_type.GetNumChildren(omit_empty_base_classes) > 0)
+        if (compiler_type.GetNumChildren(omit_empty_base_classes, nullptr) > 0)
           matches.AppendString((prefix_path + "->").str());
         else {
           matches.AppendString(prefix_path.str());
@@ -647,11 +646,12 @@ static void PrivateAutoComplete(
       break;
 
     case '-':
-      if (partial_path[1] == '>' && !prefix_path.str().empty()) {
+      if (partial_path.size() > 1 && partial_path[1] == '>' &&
+          !prefix_path.str().empty()) {
         switch (type_class) {
         case lldb::eTypeClassPointer: {
           CompilerType pointee_type(compiler_type.GetPointeeType());
-          if (partial_path[2]) {
+          if (partial_path.size() > 2 && partial_path[2]) {
             // If there is more after the "->", then search deeper
             PrivateAutoComplete(
                 frame, partial_path.substr(2), prefix_path + "->",
@@ -675,7 +675,7 @@ static void PrivateAutoComplete(
         case lldb::eTypeClassUnion:
         case lldb::eTypeClassStruct:
         case lldb::eTypeClassClass:
-          if (partial_path[1]) {
+          if (partial_path.size() > 1 && partial_path[1]) {
             // If there is more after the ".", then search deeper
             PrivateAutoComplete(frame, partial_path.substr(1),
                                 prefix_path + ".", compiler_type, matches,
@@ -759,13 +759,15 @@ static void PrivateAutoComplete(
 }
 
 size_t Variable::AutoComplete(const ExecutionContext &exe_ctx,
-                              llvm::StringRef partial_path, StringList &matches,
-                              bool &word_complete) {
-  word_complete = false;
+                              CompletionRequest &request) {
   CompilerType compiler_type;
 
-  PrivateAutoComplete(exe_ctx.GetFramePtr(), partial_path, "", compiler_type,
-                      matches, word_complete);
+  bool word_complete = false;
+  StringList matches;
+  PrivateAutoComplete(exe_ctx.GetFramePtr(), request.GetCursorArgumentPrefix(),
+                      "", compiler_type, matches, word_complete);
+  request.SetWordComplete(word_complete);
+  request.AddCompletions(matches);
 
-  return matches.GetSize();
+  return request.GetNumberOfMatches();
 }

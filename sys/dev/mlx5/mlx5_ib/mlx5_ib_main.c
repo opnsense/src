@@ -50,9 +50,11 @@
 #include <dev/mlx5/fs.h>
 #include "mlx5_ib.h"
 
-#define DRIVER_NAME "mlx5_ib"
-#define DRIVER_VERSION "3.4.1-BETA"
-#define DRIVER_RELDATE	"October 2017"
+#define DRIVER_NAME "mlx5ib"
+#ifndef DRIVER_VERSION
+#define DRIVER_VERSION "3.5.1"
+#endif
+#define DRIVER_RELDATE	"April 2019"
 
 MODULE_DESCRIPTION("Mellanox Connect-IB HCA IB driver");
 MODULE_LICENSE("Dual BSD/GPL");
@@ -61,12 +63,8 @@ MODULE_DEPEND(mlx5ib, mlx5, 1, 1, 1);
 MODULE_DEPEND(mlx5ib, ibcore, 1, 1, 1);
 MODULE_VERSION(mlx5ib, 1);
 
-static int deprecated_prof_sel = 2;
-module_param_named(prof_sel, deprecated_prof_sel, int, 0444);
-MODULE_PARM_DESC(prof_sel, "profile selector. Deprecated here. Moved to module mlx5_core");
-
-static char mlx5_version[] =
-	DRIVER_NAME ": Mellanox Connect-IB Infiniband driver v"
+static const char mlx5_version[] =
+	DRIVER_NAME ": Mellanox Connect-IB Infiniband driver "
 	DRIVER_VERSION " (" DRIVER_RELDATE ")\n";
 
 enum {
@@ -182,7 +180,7 @@ static int translate_eth_proto_oper(u32 eth_proto_oper, u8 *active_speed,
 	case MLX5E_PROT_MASK(MLX5E_10GBASE_KR):
 	case MLX5E_PROT_MASK(MLX5E_10GBASE_CR):
 	case MLX5E_PROT_MASK(MLX5E_10GBASE_SR):
-	case MLX5E_PROT_MASK(MLX5E_10GBASE_ER):
+	case MLX5E_PROT_MASK(MLX5E_10GBASE_ER_LR):
 		*active_width = IB_WIDTH_1X;
 		*active_speed = IB_SPEED_QDR;
 		break;
@@ -195,7 +193,7 @@ static int translate_eth_proto_oper(u32 eth_proto_oper, u8 *active_speed,
 	case MLX5E_PROT_MASK(MLX5E_40GBASE_CR4):
 	case MLX5E_PROT_MASK(MLX5E_40GBASE_KR4):
 	case MLX5E_PROT_MASK(MLX5E_40GBASE_SR4):
-	case MLX5E_PROT_MASK(MLX5E_40GBASE_LR4):
+	case MLX5E_PROT_MASK(MLX5E_40GBASE_LR4_ER4):
 		*active_width = IB_WIDTH_4X;
 		*active_speed = IB_SPEED_QDR;
 		break;
@@ -217,6 +215,62 @@ static int translate_eth_proto_oper(u32 eth_proto_oper, u8 *active_speed,
 		*active_speed = IB_SPEED_EDR;
 		break;
 	default:
+		*active_width = IB_WIDTH_4X;
+		*active_speed = IB_SPEED_QDR;
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int translate_eth_ext_proto_oper(u32 eth_proto_oper, u8 *active_speed,
+					u8 *active_width)
+{
+	switch (eth_proto_oper) {
+	case MLX5E_PROT_MASK(MLX5E_SGMII_100M):
+	case MLX5E_PROT_MASK(MLX5E_1000BASE_X_SGMII):
+		*active_width = IB_WIDTH_1X;
+		*active_speed = IB_SPEED_SDR;
+		break;
+	case MLX5E_PROT_MASK(MLX5E_5GBASE_R):
+		*active_width = IB_WIDTH_1X;
+		*active_speed = IB_SPEED_DDR;
+		break;
+	case MLX5E_PROT_MASK(MLX5E_10GBASE_XFI_XAUI_1):
+		*active_width = IB_WIDTH_1X;
+		*active_speed = IB_SPEED_QDR;
+		break;
+	case MLX5E_PROT_MASK(MLX5E_40GBASE_XLAUI_4_XLPPI_4):
+		*active_width = IB_WIDTH_4X;
+		*active_speed = IB_SPEED_QDR;
+		break;
+	case MLX5E_PROT_MASK(MLX5E_25GAUI_1_25GBASE_CR_KR):
+		*active_width = IB_WIDTH_1X;
+		*active_speed = IB_SPEED_EDR;
+		break;
+	case MLX5E_PROT_MASK(MLX5E_50GAUI_2_LAUI_2_50GBASE_CR2_KR2):
+		*active_width = IB_WIDTH_2X;
+		*active_speed = IB_SPEED_EDR;
+		break;
+	case MLX5E_PROT_MASK(MLX5E_50GAUI_1_LAUI_1_50GBASE_CR_KR):
+		*active_width = IB_WIDTH_1X;
+		*active_speed = IB_SPEED_HDR;
+		break;
+	case MLX5E_PROT_MASK(MLX5E_CAUI_4_100GBASE_CR4_KR4):
+		*active_width = IB_WIDTH_4X;
+		*active_speed = IB_SPEED_EDR;
+		break;
+	case MLX5E_PROT_MASK(MLX5E_100GAUI_2_100GBASE_CR2_KR2):
+		*active_width = IB_WIDTH_2X;
+		*active_speed = IB_SPEED_HDR;
+		break;
+	case MLX5E_PROT_MASK(MLX5E_200GAUI_4_200GBASE_CR4_KR4):
+		*active_width = IB_WIDTH_4X;
+		*active_speed = IB_SPEED_HDR;
+		break;
+	default:
+		*active_width = IB_WIDTH_4X;
+		*active_speed = IB_SPEED_QDR;
 		return -EINVAL;
 	}
 
@@ -227,10 +281,12 @@ static int mlx5_query_port_roce(struct ib_device *device, u8 port_num,
 				struct ib_port_attr *props)
 {
 	struct mlx5_ib_dev *dev = to_mdev(device);
+	u32 out[MLX5_ST_SZ_DW(ptys_reg)] = {};
 	struct net_device *ndev;
 	enum ib_mtu ndev_ib_mtu;
 	u16 qkey_viol_cntr;
 	u32 eth_prot_oper;
+	bool ext;
 	int err;
 
 	memset(props, 0, sizeof(*props));
@@ -238,12 +294,20 @@ static int mlx5_query_port_roce(struct ib_device *device, u8 port_num,
 	/* Possible bad flows are checked before filling out props so in case
 	 * of an error it will still be zeroed out.
 	 */
-	err = mlx5_query_port_eth_proto_oper(dev->mdev, &eth_prot_oper, port_num);
+	err = mlx5_query_port_ptys(dev->mdev, out, sizeof(out), MLX5_PTYS_EN,
+	    port_num);
 	if (err)
 		return err;
 
-	translate_eth_proto_oper(eth_prot_oper, &props->active_speed,
-				 &props->active_width);
+	ext = MLX5_CAP_PCAM_FEATURE(dev->mdev, ptys_extended_ethernet);
+	eth_prot_oper = MLX5_GET_ETH_PROTO(ptys_reg, out, ext, eth_proto_oper);
+
+	if (ext)
+		translate_eth_ext_proto_oper(eth_prot_oper, &props->active_speed,
+		    &props->active_width);
+	else
+		translate_eth_proto_oper(eth_prot_oper, &props->active_speed,
+		    &props->active_width);
 
 	props->port_cap_flags  |= IB_PORT_CM_SUP;
 	props->port_cap_flags  |= IB_PORT_IP_BASED_GIDS;
@@ -285,14 +349,16 @@ static void ib_gid_to_mlx5_roce_addr(const union ib_gid *gid,
 					       source_l3_address);
 	void *mlx5_addr_mac	= MLX5_ADDR_OF(roce_addr_layout, mlx5_addr,
 					       source_mac_47_32);
+	u16 vlan_id;
 
 	if (!gid)
 		return;
 	ether_addr_copy(mlx5_addr_mac, IF_LLADDR(attr->ndev));
 
-	if (is_vlan_dev(attr->ndev)) {
+	vlan_id = rdma_vlan_dev_vlan_id(attr->ndev);
+	if (vlan_id != 0xffff) {
 		MLX5_SET_RA(mlx5_addr, vlan_valid, 1);
-		MLX5_SET_RA(mlx5_addr, vlan_id, vlan_dev_vlan_id(attr->ndev));
+		MLX5_SET_RA(mlx5_addr, vlan_id, vlan_id);
 	}
 
 	switch (attr->gid_type) {
@@ -376,6 +442,27 @@ __be16 mlx5_get_roce_udp_sport(struct mlx5_ib_dev *dev, u8 port_num,
 		return 0;
 
 	return cpu_to_be16(MLX5_CAP_ROCE(dev->mdev, r_roce_min_src_udp_port));
+}
+
+int mlx5_get_roce_gid_type(struct mlx5_ib_dev *dev, u8 port_num,
+			   int index, enum ib_gid_type *gid_type)
+{
+	struct ib_gid_attr attr;
+	union ib_gid gid;
+	int ret;
+
+	ret = ib_get_cached_gid(&dev->ib_dev, port_num, index, &gid, &attr);
+	if (ret)
+		return ret;
+
+	if (!attr.ndev)
+		return -ENODEV;
+
+	dev_put(attr.ndev);
+
+	*gid_type = attr.gid_type;
+
+	return 0;
 }
 
 static int mlx5_use_mad_ifc(struct mlx5_ib_dev *dev)
@@ -580,7 +667,7 @@ static int mlx5_ib_query_device(struct ib_device *ibdev,
 		return err;
 
 	props->fw_ver = ((u64)fw_rev_maj(dev->mdev) << 32) |
-		(fw_rev_min(dev->mdev) << 16) |
+		((u32)fw_rev_min(dev->mdev) << 16) |
 		fw_rev_sub(dev->mdev);
 	props->device_cap_flags    = IB_DEVICE_CHANGE_PHY_PORT |
 		IB_DEVICE_PORT_ACTIVE_EVENT		|
@@ -749,9 +836,7 @@ static int translate_active_width(struct ib_device *ibdev, u8 active_width,
 	if (active_width & MLX5_IB_WIDTH_1X) {
 		*ib_width = IB_WIDTH_1X;
 	} else if (active_width & MLX5_IB_WIDTH_2X) {
-		mlx5_ib_dbg(dev, "active_width %d is not supported by IB spec\n",
-			    (int)active_width);
-		err = -EINVAL;
+		*ib_width = IB_WIDTH_2X;
 	} else if (active_width & MLX5_IB_WIDTH_4X) {
 		*ib_width = IB_WIDTH_4X;
 	} else if (active_width & MLX5_IB_WIDTH_8X) {
@@ -992,6 +1077,14 @@ static int mlx5_ib_modify_port(struct ib_device *ibdev, u8 port, int mask,
 	struct ib_port_attr attr;
 	u32 tmp;
 	int err;
+
+	/*
+	 * CM layer calls ib_modify_port() regardless of the link
+	 * layer. For Ethernet ports, qkey violation and Port
+	 * capabilities are meaningless.
+	 */
+	if (mlx5_ib_port_link_layer(ibdev, port) == IB_LINK_LAYER_ETHERNET)
+		return 0;
 
 	mutex_lock(&dev->cap_mask_mutex);
 
@@ -1306,6 +1399,70 @@ static int mlx5_ib_set_vma_data(struct vm_area_struct *vma,
 	list_add(&vma_prv->list, vma_head);
 
 	return 0;
+}
+
+static void mlx5_ib_disassociate_ucontext(struct ib_ucontext *ibcontext)
+{
+	int ret;
+	struct vm_area_struct *vma;
+	struct mlx5_ib_vma_private_data *vma_private, *n;
+	struct mlx5_ib_ucontext *context = to_mucontext(ibcontext);
+	struct task_struct *owning_process  = NULL;
+	struct mm_struct   *owning_mm       = NULL;
+
+	owning_process = get_pid_task(ibcontext->tgid, PIDTYPE_PID);
+	if (!owning_process)
+		return;
+
+	owning_mm = get_task_mm(owning_process);
+	if (!owning_mm) {
+		pr_info("no mm, disassociate ucontext is pending task termination\n");
+		while (1) {
+			put_task_struct(owning_process);
+			usleep_range(1000, 2000);
+			owning_process = get_pid_task(ibcontext->tgid,
+						      PIDTYPE_PID);
+			if (!owning_process || owning_process->task_thread->
+			    td_proc->p_state == PRS_ZOMBIE) {
+				pr_info("disassociate ucontext done, task was terminated\n");
+				/* in case task was dead need to release the
+				 * task struct.
+				 */
+				if (owning_process)
+					put_task_struct(owning_process);
+				return;
+			}
+		}
+	}
+
+	/* need to protect from a race on closing the vma as part of
+	 * mlx5_ib_vma_close.
+	 */
+	down_write(&owning_mm->mmap_sem);
+	list_for_each_entry_safe(vma_private, n, &context->vma_private_list,
+				 list) {
+		vma = vma_private->vma;
+		ret = zap_vma_ptes(vma, vma->vm_start,
+				   PAGE_SIZE);
+		if (ret == -ENOTSUP) {
+			if (bootverbose)
+				WARN_ONCE(
+	"%s: zap_vma_ptes not implemented for unmanaged mappings", __func__);
+		} else {
+			WARN(ret, "%s: zap_vma_ptes failed, error %d",
+			    __func__, -ret);
+		}
+		/* context going to be destroyed, should
+		 * not access ops any more.
+		 */
+		/* XXXKIB vma->vm_flags &= ~(VM_SHARED | VM_MAYSHARE); */
+		vma->vm_ops = NULL;
+		list_del(&vma_private->list);
+		kfree(vma_private);
+	}
+	up_write(&owning_mm->mmap_sem);
+	mmput(owning_mm);
+	put_task_struct(owning_process);
 }
 
 static inline char *mmap_cmd2str(enum mlx5_ib_mmap_cmd cmd)
@@ -2310,7 +2467,7 @@ static void mlx5_ib_event(struct mlx5_core_dev *dev, void *context,
 	struct mlx5_ib_dev *ibdev = (struct mlx5_ib_dev *)context;
 	struct ib_event ibev;
 	bool fatal = false;
-	u8 port = 0;
+	u8 port = (u8)param;
 
 	switch (event) {
 	case MLX5_DEV_EVENT_SYS_ERROR:
@@ -2322,8 +2479,6 @@ static void mlx5_ib_event(struct mlx5_core_dev *dev, void *context,
 	case MLX5_DEV_EVENT_PORT_UP:
 	case MLX5_DEV_EVENT_PORT_DOWN:
 	case MLX5_DEV_EVENT_PORT_INITIALIZED:
-		port = (u8)param;
-
 		/* In RoCE, port up/down events are handled in
 		 * mlx5_netdev_event().
 		 */
@@ -2337,35 +2492,32 @@ static void mlx5_ib_event(struct mlx5_core_dev *dev, void *context,
 
 	case MLX5_DEV_EVENT_LID_CHANGE:
 		ibev.event = IB_EVENT_LID_CHANGE;
-		port = (u8)param;
 		break;
 
 	case MLX5_DEV_EVENT_PKEY_CHANGE:
 		ibev.event = IB_EVENT_PKEY_CHANGE;
-		port = (u8)param;
 
 		schedule_work(&ibdev->devr.ports[port - 1].pkey_change_work);
 		break;
 
 	case MLX5_DEV_EVENT_GUID_CHANGE:
 		ibev.event = IB_EVENT_GID_CHANGE;
-		port = (u8)param;
 		break;
 
 	case MLX5_DEV_EVENT_CLIENT_REREG:
 		ibev.event = IB_EVENT_CLIENT_REREGISTER;
-		port = (u8)param;
 		break;
 
 	default:
-		break;
+		/* unsupported event */
+		return;
 	}
 
 	ibev.device	      = &ibdev->ib_dev;
 	ibev.element.port_num = port;
 
-	if (port < 1 || port > ibdev->num_ports) {
-		mlx5_ib_warn(ibdev, "warning: event on port %d\n", port);
+	if (!rdma_is_port_valid(&ibdev->ib_dev, port)) {
+		mlx5_ib_warn(ibdev, "warning: event(%d) on port %d\n", event, port);
 		return;
 	}
 
@@ -2771,7 +2923,7 @@ static int mlx5_enable_roce(struct mlx5_ib_dev *dev)
 	VNET_FOREACH(vnet_iter) {
 		IFNET_RLOCK();
 		CURVNET_SET_QUIET(vnet_iter);
-		TAILQ_FOREACH(idev, &V_ifnet, if_link) {
+		CK_STAILQ_FOREACH(idev, &V_ifnet, if_link) {
 			/* check if network interface belongs to mlx5en */
 			if (!mlx5_netdev_match(idev, dev->mdev, "mce"))
 				continue;
@@ -2934,7 +3086,6 @@ static void *mlx5_ib_add(struct mlx5_core_dev *mdev)
 	struct mlx5_ib_dev *dev;
 	enum rdma_link_layer ll;
 	int port_type_cap;
-	const char *name;
 	int err;
 	int i;
 
@@ -2943,8 +3094,6 @@ static void *mlx5_ib_add(struct mlx5_core_dev *mdev)
 
 	if ((ll == IB_LINK_LAYER_ETHERNET) && !MLX5_CAP_GEN(mdev, roce))
 		return NULL;
-
-	printk_once(KERN_INFO "%s", mlx5_version);
 
 	dev = (struct mlx5_ib_dev *)ib_alloc_device(sizeof(*dev));
 	if (!dev)
@@ -2967,9 +3116,7 @@ static void *mlx5_ib_add(struct mlx5_core_dev *mdev)
 
 	MLX5_INIT_DOORBELL_LOCK(&dev->uar_lock);
 
-	name = "mlx5_%d";
-
-	strlcpy(dev->ib_dev.name, name, IB_DEVICE_NAME_MAX);
+	snprintf(dev->ib_dev.name, IB_DEVICE_NAME_MAX, "mlx5_%d", device_get_unit(mdev->pdev->dev.bsddev));
 	dev->ib_dev.owner		= THIS_MODULE;
 	dev->ib_dev.node_type		= RDMA_NODE_IB_CA;
 	dev->ib_dev.local_dma_lkey	= 0 /* not supported for now */;
@@ -3051,7 +3198,6 @@ static void *mlx5_ib_add(struct mlx5_core_dev *mdev)
 	dev->ib_dev.get_dma_mr		= mlx5_ib_get_dma_mr;
 	dev->ib_dev.reg_user_mr		= mlx5_ib_reg_user_mr;
 	dev->ib_dev.rereg_user_mr	= mlx5_ib_rereg_user_mr;
-	dev->ib_dev.reg_phys_mr		= mlx5_ib_reg_phys_mr;
 	dev->ib_dev.dereg_mr		= mlx5_ib_dereg_mr;
 	dev->ib_dev.attach_mcast	= mlx5_ib_mcg_attach;
 	dev->ib_dev.detach_mcast	= mlx5_ib_mcg_detach;
@@ -3067,6 +3213,8 @@ static void *mlx5_ib_add(struct mlx5_core_dev *mdev)
 		dev->ib_dev.get_vf_stats	= mlx5_ib_get_vf_stats;
 		dev->ib_dev.set_vf_guid		= mlx5_ib_set_vf_guid;
 	}
+
+	dev->ib_dev.disassociate_ucontext = mlx5_ib_disassociate_ucontext;
 
 	mlx5_ib_internal_fill_odp_caps(dev);
 
@@ -3219,9 +3367,6 @@ static int __init mlx5_ib_init(void)
 {
 	int err;
 
-	if (deprecated_prof_sel != 2)
-		pr_warn("prof_sel is deprecated for mlx5_ib, set it for mlx5_core\n");
-
 	err = mlx5_ib_odp_init();
 	if (err)
 		return err;
@@ -3242,6 +3387,14 @@ static void __exit mlx5_ib_cleanup(void)
 	mlx5_unregister_interface(&mlx5_ib_interface);
 	mlx5_ib_odp_cleanup();
 }
+
+static void
+mlx5_ib_show_version(void __unused *arg)
+{
+
+	printf("%s", mlx5_version);
+}
+SYSINIT(mlx5_ib_show_version, SI_SUB_DRIVERS, SI_ORDER_ANY, mlx5_ib_show_version, NULL);
 
 module_init_order(mlx5_ib_init, SI_ORDER_THIRD);
 module_exit_order(mlx5_ib_cleanup, SI_ORDER_THIRD);

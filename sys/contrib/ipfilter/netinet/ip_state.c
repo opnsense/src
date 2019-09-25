@@ -20,7 +20,7 @@
 #include <sys/param.h>
 #include <sys/file.h>
 #if defined(_KERNEL) && defined(__FreeBSD_version) && \
-    (__FreeBSD_version >= 400000) && !defined(KLD_MODULE)
+    !defined(KLD_MODULE)
 #include "opt_inet6.h"
 #endif
 #if !defined(_KERNEL) && !defined(__KERNEL__)
@@ -28,30 +28,25 @@
 # include <stdlib.h>
 # include <string.h>
 # define _KERNEL
-# ifdef __OpenBSD__
-struct file;
-# endif
 # include <sys/uio.h>
 # undef _KERNEL
 #endif
-#if defined(_KERNEL) && (__FreeBSD_version >= 220000)
+#if defined(_KERNEL) && defined(__FreeBSD_version)
 # include <sys/filio.h>
 # include <sys/fcntl.h>
 #else
 # include <sys/ioctl.h>
 #endif
 #include <sys/time.h>
-#if !defined(linux)
 # include <sys/protosw.h>
-#endif
 #include <sys/socket.h>
 #if defined(_KERNEL)
 # include <sys/systm.h>
-# if !defined(__SVR4) && !defined(__svr4__)
+# if !defined(__SVR4)
 #  include <sys/mbuf.h>
 # endif
 #endif
-#if defined(__SVR4) || defined(__svr4__)
+#if defined(__SVR4)
 # include <sys/filio.h>
 # include <sys/byteorder.h>
 # ifdef _KERNEL
@@ -69,9 +64,7 @@ struct file;
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
 #include <netinet/tcp.h>
-#if !defined(__hpux) && !defined(linux)
 # include <netinet/tcp_fsm.h>
-#endif
 #include <netinet/udp.h>
 #include <netinet/ip_icmp.h>
 #if !defined(_KERNEL)
@@ -982,17 +975,17 @@ ipf_state_putent(softc, softs, data)
 		/*
 		 * Look up all the interface names in the rule.
 		 */
-		for (i = 0; i < 4; i++) {
+		for (i = 0; i < FR_NUM(fr->fr_ifnames); i++) {
 			if (fr->fr_ifnames[i] == -1) {
 				fr->fr_ifas[i] = NULL;
 				continue;
 			}
-			name = fr->fr_names + fr->fr_ifnames[i];
+			name = FR_NAME(fr, fr_ifnames[i]);
 			fr->fr_ifas[i] = ipf_resolvenic(softc, name,
 							fr->fr_family);
 		}
 
-		for (i = 0; i < 4; i++) {
+		for (i = 0; i < FR_NUM(isn->is_ifname); i++) {
 			name = isn->is_ifname[i];
 			isn->is_ifp[i] = ipf_resolvenic(softc, name,
 							isn->is_v);
@@ -1083,7 +1076,7 @@ ipf_state_insert(softc, is, rev)
 	/*
 	 * Look up all the interface names in the state entry.
 	 */
-	for (i = 0; i < 4; i++) {
+	for (i = 0; i < FR_NUM(is->is_ifp); i++) {
 		if (is->is_ifp[i] != NULL)
 			continue;
 		is->is_ifp[i] = ipf_resolvenic(softc, is->is_ifname[i],
@@ -1801,7 +1794,7 @@ ipf_state_add(softc, fin, stsave, flags)
 		     fr->fr_names[fr->fr_ifnames[out << 1] + 1] == '\0')) {
 			is->is_ifp[out << 1] = fr->fr_ifas[0];
 			strncpy(is->is_ifname[out << 1],
-				fr->fr_names + fr->fr_ifnames[0],
+				FR_NAME(fr, fr_ifnames[0]),
 				sizeof(fr->fr_ifnames[0]));
 		} else {
 			is->is_ifp[out << 1] = fin->fin_ifp;
@@ -1812,21 +1805,21 @@ ipf_state_add(softc, fin, stsave, flags)
 		is->is_ifp[(out << 1) + 1] = fr->fr_ifas[1];
 		if (fr->fr_ifnames[1] != -1) {
 			strncpy(is->is_ifname[(out << 1) + 1],
-				fr->fr_names + fr->fr_ifnames[1],
+				FR_NAME(fr, fr_ifnames[1]),
 				sizeof(fr->fr_ifnames[1]));
 		}
 
 		is->is_ifp[(1 - out) << 1] = fr->fr_ifas[2];
 		if (fr->fr_ifnames[2] != -1) {
 			strncpy(is->is_ifname[((1 - out) << 1)],
-				fr->fr_names + fr->fr_ifnames[2],
+				FR_NAME(fr, fr_ifnames[2]),
 				sizeof(fr->fr_ifnames[2]));
 		}
 
 		is->is_ifp[((1 - out) << 1) + 1] = fr->fr_ifas[3];
 		if (fr->fr_ifnames[3] != -1) {
 			strncpy(is->is_ifname[((1 - out) << 1) + 1],
-				fr->fr_names + fr->fr_ifnames[3],
+				FR_NAME(fr, fr_ifnames[3]),
 				sizeof(fr->fr_ifnames[3]));
 		}
 	} else {
@@ -3581,7 +3574,7 @@ ipf_state_sync(softc, ifp)
 		/*
 		 * Look up all the interface names in the state entry.
 		 */
-		for (i = 0; i < 4; i++) {
+		for (i = 0; i < FR_NUM(is->is_ifp); i++) {
 			if (ifp == NULL || ifp == is->is_ifp[i])
 				is->is_ifp[i] = ipf_resolvenic(softc,
 							      is->is_ifname[i],

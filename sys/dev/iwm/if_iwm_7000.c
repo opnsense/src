@@ -81,6 +81,7 @@ __FBSDID("$FreeBSD$");
 
 #define IWM7260_FW	"iwm7260fw"
 #define IWM3160_FW	"iwm3160fw"
+#define IWM3168_FW	"iwm3168fw"
 #define IWM7265_FW	"iwm7265fw"
 #define IWM7265D_FW	"iwm7265Dfw"
 
@@ -111,6 +112,14 @@ const struct iwm_cfg iwm3165_cfg = {
 	.fw_name = IWM7265D_FW,
 	IWM_DEVICE_7000_COMMON,
 	.host_interrupt_operation_mode = 0,
+};
+
+const struct iwm_cfg iwm3168_cfg = {
+	.name = "Intel(R) Dual Band Wireless AC 3168",
+	.fw_name = IWM3168_FW,
+	IWM_DEVICE_7000_COMMON,
+	.host_interrupt_operation_mode = 0,
+	.nvm_type = IWM_NVM_SDP,
 };
 
 const struct iwm_cfg iwm7265_cfg = {

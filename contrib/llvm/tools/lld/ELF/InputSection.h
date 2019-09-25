@@ -18,8 +18,6 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/TinyPtrVector.h"
 #include "llvm/Object/ELF.h"
-#include "llvm/Support/Threading.h"
-#include <mutex>
 
 namespace lld {
 namespace elf {
@@ -63,6 +61,9 @@ public:
 
   unsigned Bss : 1;
 
+  // Set for sections that should not be folded by ICF.
+  unsigned KeepUnique : 1;
+
   // These corresponds to the fields in Elf_Shdr.
   uint32_t Alignment;
   uint64_t Flags;
@@ -80,13 +81,15 @@ public:
   // section.
   uint64_t getOffset(uint64_t Offset) const;
 
+  uint64_t getVA(uint64_t Offset = 0) const;
+
 protected:
   SectionBase(Kind SectionKind, StringRef Name, uint64_t Flags,
               uint64_t Entsize, uint64_t Alignment, uint32_t Type,
               uint32_t Info, uint32_t Link)
       : Name(Name), Repl(this), SectionKind(SectionKind), Live(false),
-        Bss(false), Alignment(Alignment), Flags(Flags), Entsize(Entsize),
-        Type(Type), Link(Link), Info(Info) {}
+        Bss(false), KeepUnique(false), Alignment(Alignment), Flags(Flags),
+        Entsize(Entsize), Type(Type), Link(Link), Info(Info) {}
 };
 
 // This corresponds to a section of an input file.
@@ -103,7 +106,7 @@ public:
 
   static bool classof(const SectionBase *S) { return S->kind() != Output; }
 
-  // The file which contains this section. It's dynamic type is always
+  // The file which contains this section. Its dynamic type is always
   // ObjFile<ELFT>, but in order to avoid ELFT, we use InputFile as
   // its static type.
   InputFile *File;
@@ -112,7 +115,12 @@ public:
     return cast_or_null<ObjFile<ELFT>>(File);
   }
 
-  ArrayRef<uint8_t> Data;
+  ArrayRef<uint8_t> data() const {
+    if (UncompressedSize >= 0 && !UncompressedBuf)
+      uncompress();
+    return RawData;
+  }
+
   uint64_t getOffsetInFile() const;
 
   // True if this section has already been placed to a linker script
@@ -161,10 +169,10 @@ public:
 
   InputSection *getLinkOrderDep() const;
 
-  // Compilers emit zlib-compressed debug sections if the -gz option
-  // is given. This function checks if this section is compressed, and
-  // if so, decompress in memory.
-  void maybeUncompress();
+  // Get the function symbol that encloses this offset from within the
+  // section.
+  template <class ELFT>
+  Defined *getEnclosingFunction(uint64_t Offset);
 
   // Returns a source location string. Used to construct an error message.
   template <class ELFT> std::string getLocation(uint64_t Offset);
@@ -182,16 +190,31 @@ public:
   // This vector contains such "cooked" relocations.
   std::vector<Relocation> Relocations;
 
+  // A function compiled with -fsplit-stack calling a function
+  // compiled without -fsplit-stack needs its prologue adjusted. Find
+  // such functions and adjust their prologues.  This is very similar
+  // to relocation. See https://gcc.gnu.org/wiki/SplitStacks for more
+  // information.
+  template <typename ELFT>
+  void adjustSplitStackFunctionPrologues(uint8_t *Buf, uint8_t *End);
+
+
   template <typename T> llvm::ArrayRef<T> getDataAs() const {
-    size_t S = Data.size();
+    size_t S = data().size();
     assert(S % sizeof(T) == 0);
-    return llvm::makeArrayRef<T>((const T *)Data.data(), S / sizeof(T));
+    return llvm::makeArrayRef<T>((const T *)data().data(), S / sizeof(T));
   }
 
-private:
+protected:
+  void parseCompressedHeader();
+  void uncompress() const;
+
+  mutable ArrayRef<uint8_t> RawData;
+
   // A pointer that owns uncompressed data if a section is compressed by zlib.
   // Since the feature is not used often, this is usually a nullptr.
-  std::unique_ptr<char[]> UncompressBuf;
+  mutable std::unique_ptr<char[]> UncompressedBuf;
+  int64_t UncompressedSize = -1;
 };
 
 // SectionPiece represents a piece of splittable section contents.
@@ -200,7 +223,7 @@ private:
 // be found by looking at the next one).
 struct SectionPiece {
   SectionPiece(size_t Off, uint32_t Hash, bool Live)
-      : InputOff(Off), Hash(Hash), OutputOff(-1),
+      : InputOff(Off), Hash(Hash), OutputOff(0),
         Live(Live || !Config->GcSections) {}
 
   uint32_t InputOff;
@@ -223,15 +246,9 @@ public:
   static bool classof(const SectionBase *S) { return S->kind() == Merge; }
   void splitIntoPieces();
 
-  // Mark the piece at a given offset live. Used by GC.
-  void markLiveAt(uint64_t Offset) {
-    if (this->Flags & llvm::ELF::SHF_ALLOC)
-      LiveOffsets.insert(Offset);
-  }
-
-  // Translate an offset in the input section to an offset
-  // in the output section.
-  uint64_t getOffset(uint64_t Offset) const;
+  // Translate an offset in the input section to an offset in the parent
+  // MergeSyntheticSection.
+  uint64_t getParentOffset(uint64_t Offset) const;
 
   // Splittable sections are handled as a sequence of data
   // rather than a single large blob of data.
@@ -243,24 +260,21 @@ public:
   llvm::CachedHashStringRef getData(size_t I) const {
     size_t Begin = Pieces[I].InputOff;
     size_t End =
-        (Pieces.size() - 1 == I) ? Data.size() : Pieces[I + 1].InputOff;
-    return {toStringRef(Data.slice(Begin, End - Begin)), Pieces[I].Hash};
+        (Pieces.size() - 1 == I) ? data().size() : Pieces[I + 1].InputOff;
+    return {toStringRef(data().slice(Begin, End - Begin)), Pieces[I].Hash};
   }
 
   // Returns the SectionPiece at a given input section offset.
   SectionPiece *getSectionPiece(uint64_t Offset);
-  const SectionPiece *getSectionPiece(uint64_t Offset) const;
+  const SectionPiece *getSectionPiece(uint64_t Offset) const {
+    return const_cast<MergeInputSection *>(this)->getSectionPiece(Offset);
+  }
 
   SyntheticSection *getParent() const;
 
 private:
   void splitStrings(ArrayRef<uint8_t> A, size_t Size);
   void splitNonStrings(ArrayRef<uint8_t> A, size_t Size);
-
-  mutable llvm::DenseMap<uint32_t, uint32_t> OffsetMap;
-  mutable llvm::once_flag InitOffsetMap;
-
-  llvm::DenseSet<uint64_t> LiveOffsets;
 };
 
 struct EhSectionPiece {
@@ -268,7 +282,9 @@ struct EhSectionPiece {
                  unsigned FirstRelocation)
       : InputOff(Off), Sec(Sec), Size(Size), FirstRelocation(FirstRelocation) {}
 
-  ArrayRef<uint8_t> data() { return {Sec->Data.data() + this->InputOff, Size}; }
+  ArrayRef<uint8_t> data() {
+    return {Sec->data().data() + this->InputOff, Size};
+  }
 
   size_t InputOff;
   ssize_t OutputOff = -1;
@@ -310,6 +326,8 @@ public:
   // beginning of the output section.
   template <class ELFT> void writeTo(uint8_t *Buf);
 
+  uint64_t getOffset(uint64_t Offset) const { return OutSecOff + Offset; }
+
   OutputSection *getParent() const;
 
   // This variable has two usages. Initially, it represents an index in the
@@ -320,7 +338,7 @@ public:
 
   static bool classof(const SectionBase *S);
 
-  InputSectionBase *getRelocatedSection();
+  InputSectionBase *getRelocatedSection() const;
 
   template <class ELFT, class RelTy>
   void relocateNonAlloc(uint8_t *Buf, llvm::ArrayRef<RelTy> Rels);
@@ -342,9 +360,6 @@ private:
 
 // The list of all input sections.
 extern std::vector<InputSectionBase *> InputSections;
-
-// Builds section order for handling --symbol-ordering-file.
-llvm::DenseMap<SectionBase *, int> buildSectionOrder();
 
 } // namespace elf
 

@@ -39,7 +39,7 @@
 
 #include "elfcopy.h"
 
-ELFTC_VCSID("$Id: main.c 3520 2017-04-17 01:47:52Z kaiwang27 $");
+ELFTC_VCSID("$Id: main.c 3577 2017-09-14 02:19:42Z emaste $");
 
 enum options
 {
@@ -372,15 +372,6 @@ create_elf(struct elfcopy *ecp)
 		create_symtab(ecp);
 
 	/*
-	 * First processing of output sections: at this stage we copy the
-	 * content of each section from input to output object.  Section
-	 * content will be modified and printed (mcs) if need. Also content of
-	 * relocation section probably will be filtered and updated according
-	 * to symbol table changes.
-	 */
-	copy_content(ecp);
-
-	/*
 	 * Write the underlying ehdr. Note that it should be called
 	 * before elf_setshstrndx() since it will overwrite e->e_shstrndx.
 	 */
@@ -388,8 +379,14 @@ create_elf(struct elfcopy *ecp)
 		errx(EXIT_FAILURE, "gelf_update_ehdr() failed: %s",
 		    elf_errmsg(-1));
 
-	/* Generate section name string table (.shstrtab). */
-	set_shstrtab(ecp);
+	/*
+	 * First processing of output sections: at this stage we copy the
+	 * content of each section from input to output object.  Section
+	 * content will be modified and printed (mcs) if need. Also content of
+	 * relocation section probably will be filtered and updated according
+	 * to symbol table changes.
+	 */
+	copy_content(ecp);
 
 	/*
 	 * Second processing of output sections: Update section headers.
@@ -485,6 +482,9 @@ free_elf(struct elfcopy *ecp)
 
 	/* Free symbol table buffers. */
 	free_symtab(ecp);
+
+	/* Free section name string table. */
+	elftc_string_table_destroy(ecp->shstrtab->strtab);
 
 	/* Free internal section list. */
 	if (!TAILQ_EMPTY(&ecp->v_sec)) {
@@ -1017,13 +1017,16 @@ elfcopy_main(struct elfcopy *ecp, int argc, char **argv)
 		}
 	}
 
-	if (optind == argc || optind + 2 < argc)
+	argc -= optind;
+	argv += optind;
+
+	if (argc == 0 || argc > 2)
 		elfcopy_usage();
 
-	infile = argv[optind];
+	infile = argv[0];
 	outfile = NULL;
-	if (optind + 1 < argc)
-		outfile = argv[optind + 1];
+	if (argc > 1)
+		outfile = argv[1];
 
 	create_file(ecp, infile, outfile);
 }
@@ -1067,7 +1070,10 @@ mcs_main(struct elfcopy *ecp, int argc, char **argv)
 		}
 	}
 
-	if (optind == argc)
+	argc -= optind;
+	argv += optind;
+
+	if (argc == 0)
 		mcs_usage();
 
 	/* Must specify one operation at least. */
@@ -1104,7 +1110,7 @@ mcs_main(struct elfcopy *ecp, int argc, char **argv)
 		sac->string = string;
 	}
 
-	for (i = optind; i < argc; i++) {
+	for (i = 0; i < argc; i++) {
 		/* If only -p is specified, output to /dev/null */
 		if (print && !append && !compress && !delete)
 			create_file(ecp, argv[i], "/dev/null");
@@ -1180,15 +1186,24 @@ strip_main(struct elfcopy *ecp, int argc, char **argv)
 		}
 	}
 
+	argc -= optind;
+	argv += optind;
+
 	if (ecp->strip == 0 &&
 	    ((ecp->flags & DISCARD_LOCAL) == 0) &&
 	    ((ecp->flags & DISCARD_LLABEL) == 0) &&
 	    lookup_symop_list(ecp, NULL, SYMOP_STRIP) == NULL)
 		ecp->strip = STRIP_ALL;
-	if (optind == argc)
+	if (argc == 0)
+		strip_usage();
+	/*
+	 * Only accept a single input file if an output file had been
+	 * specified.
+	 */
+	if (outfile != NULL && argc != 1)
 		strip_usage();
 
-	for (i = optind; i < argc; i++)
+	for (i = 0; i < argc; i++)
 		create_file(ecp, argv[i], outfile);
 }
 
@@ -1565,7 +1580,6 @@ main(int argc, char **argv)
 	ecp = calloc(1, sizeof(*ecp));
 	if (ecp == NULL)
 		err(EXIT_FAILURE, "calloc failed");
-	memset(ecp, 0, sizeof(*ecp));
 
 	ecp->itf = ecp->otf = ETF_ELF;
 	ecp->iec = ecp->oec = ELFCLASSNONE;

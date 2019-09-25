@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 2012 Oleksandr Tymoshenko.
  * Copyright (c) 1994-1998 Mark Brinicombe.
  * Copyright (c) 1994 Brini.
@@ -55,19 +57,21 @@ __FBSDID("$FreeBSD$");
 #include <machine/platform.h>
 #include <machine/platformvar.h>
 
-#include <dev/fdt/fdt_common.h>
+#include <dev/ofw/openfirm.h>
 
 #include <arm/broadcom/bcm2835/bcm2835_wdog.h>
 #include <arm/broadcom/bcm2835/bcm2836_mp.h>
 
 #include "platform_if.h"
 
-static vm_offset_t
-bcm2835_lastaddr(platform_t plat)
-{
-
-	return (devmap_lastaddr());
-}
+#ifdef SOC_BCM2835
+static platform_devmap_init_t bcm2835_devmap_init;
+#endif
+#ifdef SOC_BCM2836
+static platform_devmap_init_t bcm2836_devmap_init;
+#endif
+static platform_late_init_t bcm2835_late_init;
+static platform_cpu_reset_t bcm2835_cpu_reset;
 
 static void
 bcm2835_late_init(platform_t plat)
@@ -77,7 +81,7 @@ bcm2835_late_init(platform_t plat)
 	int len;
 
 	system = OF_finddevice("/system");
-	if (system != 0) {
+	if (system != -1) {
 		len = OF_getencprop(system, "linux,serial", cells,
 		    sizeof(cells));
 		if (len > 0)
@@ -126,7 +130,6 @@ bcm2835_cpu_reset(platform_t plat)
 #ifdef SOC_BCM2835
 static platform_method_t bcm2835_methods[] = {
 	PLATFORMMETHOD(platform_devmap_init,	bcm2835_devmap_init),
-	PLATFORMMETHOD(platform_lastaddr,	bcm2835_lastaddr),
 	PLATFORMMETHOD(platform_late_init,	bcm2835_late_init),
 	PLATFORMMETHOD(platform_cpu_reset,	bcm2835_cpu_reset),
 
@@ -139,7 +142,6 @@ FDT_PLATFORM_DEF2(bcm2835, bcm2835, "bcm2835", 0, "brcm,bcm2835", 100);
 #ifdef SOC_BCM2836
 static platform_method_t bcm2836_methods[] = {
 	PLATFORMMETHOD(platform_devmap_init,	bcm2836_devmap_init),
-	PLATFORMMETHOD(platform_lastaddr,	bcm2835_lastaddr),
 	PLATFORMMETHOD(platform_late_init,	bcm2835_late_init),
 	PLATFORMMETHOD(platform_cpu_reset,	bcm2835_cpu_reset),
 
@@ -152,4 +154,5 @@ static platform_method_t bcm2836_methods[] = {
 };
 FDT_PLATFORM_DEF2(bcm2836, bcm2836_legacy, "bcm2836 (legacy)", 0, "brcm,bcm2709", 100);
 FDT_PLATFORM_DEF2(bcm2836, bcm2836, "bcm2836", 0, "brcm,bcm2836", 100);
+FDT_PLATFORM_DEF2(bcm2836, bcm2837, "bcm2837", 0, "brcm,bcm2837", 100);
 #endif

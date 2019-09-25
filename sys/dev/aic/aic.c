@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1999 Luoqi Chen.
  * All rights reserved.
  *
@@ -280,7 +282,7 @@ aic_action(struct cam_sim *sim, union ccb *ccb)
                 cpi->max_lun = 7;
                 cpi->initiator_id = aic->initiator;
                 cpi->bus_id = cam_sim_bus(sim);
-		cpi->base_transfer_speed = 3300;
+                cpi->base_transfer_speed = 3300;
                 strlcpy(cpi->sim_vid, "FreeBSD", SIM_IDLEN);
                 strlcpy(cpi->hba_vid, "Adaptec", HBA_IDLEN);
                 strlcpy(cpi->dev_name, cam_sim_name(sim), DEV_IDLEN);
@@ -1575,6 +1577,7 @@ aic_attach(struct aic_softc *aic)
 		printf(", fast SCSI");
 	printf("\n");
 	mtx_unlock(&aic->lock);
+	gone_in_dev(aic->dev, 12, "aic(4) driver");
 	return (0);
 }
 

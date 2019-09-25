@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1995 Bruce D. Evans.
  * All rights reserved.
  *
@@ -38,6 +40,11 @@ extern uint64_t	*vm_page_dump;
 extern int	hw_lower_amd64_sharedpage;
 extern int	hw_ibrs_disable;
 extern int	hw_ssb_disable;
+extern int	nmi_flush_l1d_sw;
+extern int	syscall_ret_l1d_flush_mode;
+
+extern vm_paddr_t intel_graphics_stolen_base;
+extern vm_paddr_t intel_graphics_stolen_size;
 
 /*
  * The file "conf/ldscript.amd64" defines the symbol "kernphys".  Its
@@ -52,8 +59,11 @@ void	amd64_conf_fast_syscall(void);
 void	amd64_db_resume_dbreg(void);
 void	amd64_lower_shared_page(struct sysentvec *);
 void	amd64_syscall(struct thread *td, int traced);
+void	amd64_syscall_ret_flush_l1d(int error);
+void	amd64_syscall_ret_flush_l1d_recalc(void);
 void	doreti_iret(void) __asm(__STRING(doreti_iret));
 void	doreti_iret_fault(void) __asm(__STRING(doreti_iret_fault));
+void	flush_l1d_sw_abi(void);
 void	ld_ds(void) __asm(__STRING(ld_ds));
 void	ld_es(void) __asm(__STRING(ld_es));
 void	ld_fs(void) __asm(__STRING(ld_fs));
@@ -69,7 +79,9 @@ void	gsbase_load_fault(void) __asm(__STRING(gsbase_load_fault));
 void	fpstate_drop(struct thread *td);
 void	pagezero(void *addr);
 void	setidt(int idx, alias_for_inthand_t *func, int typ, int dpl, int ist);
+void	sse2_pagezero(void *addr);
 struct savefpu *get_pcb_user_save_td(struct thread *td);
 struct savefpu *get_pcb_user_save_pcb(struct pcb *pcb);
+void	pci_early_quirks(void);
 
 #endif /* !_MACHINE_MD_VAR_H_ */

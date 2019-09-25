@@ -20,26 +20,26 @@ namespace lldb_private {
 
 //----------------------------------------------------------------------
 /// @class IRMemoryMap IRMemoryMap.h "lldb/Expression/IRMemoryMap.h"
-/// @brief Encapsulates memory that may exist in the process but must
+/// Encapsulates memory that may exist in the process but must
 ///     also be available in the host process.
 ///
-/// This class encapsulates a group of memory objects that must be readable
-/// or writable from the host process regardless of whether the process
-/// exists.  This allows the IR interpreter as well as JITted code to access
-/// the same memory.  All allocations made by this class are represented as
-/// disjoint intervals.
+/// This class encapsulates a group of memory objects that must be readable or
+/// writable from the host process regardless of whether the process exists.
+/// This allows the IR interpreter as well as JITted code to access the same
+/// memory.  All allocations made by this class are represented as disjoint
+/// intervals.
 ///
 /// Point queries against this group of memory objects can be made by the
-/// address in the tar at which they reside.  If the inferior does not
-/// exist, allocations still get made-up addresses.  If an inferior appears
-/// at some point, then those addresses need to be re-mapped.
+/// address in the tar at which they reside.  If the inferior does not exist,
+/// allocations still get made-up addresses.  If an inferior appears at some
+/// point, then those addresses need to be re-mapped.
 //----------------------------------------------------------------------
 class IRMemoryMap {
 public:
   IRMemoryMap(lldb::TargetSP target_sp);
   ~IRMemoryMap();
 
-  enum AllocationPolicy {
+  enum AllocationPolicy : uint8_t {
     eAllocationPolicyInvalid =
         0, ///< It is an error for an allocation to have this policy.
     eAllocationPolicyHostOnly, ///< This allocation was created in the host and
@@ -83,39 +83,39 @@ public:
   lldb::TargetSP GetTarget() { return m_target_wp.lock(); }
 
 protected:
-  // This function should only be used if you know you are using the JIT.
-  // Any other cases should use GetBestExecutionContextScope().
+  // This function should only be used if you know you are using the JIT. Any
+  // other cases should use GetBestExecutionContextScope().
 
   lldb::ProcessWP &GetProcessWP() { return m_process_wp; }
 
 private:
   struct Allocation {
     lldb::addr_t
-        m_process_alloc; ///< The (unaligned) base for the remote allocation
+        m_process_alloc; ///< The (unaligned) base for the remote allocation.
     lldb::addr_t
-        m_process_start; ///< The base address of the allocation in the process
-    size_t m_size;       ///< The size of the requested allocation
-    uint32_t m_permissions; ///< The access permissions on the memory in the
-                            ///process.  In the host, the memory is always
-                            ///read/write.
-    uint8_t m_alignment;    ///< The alignment of the requested allocation
+        m_process_start; ///< The base address of the allocation in the process.
+    size_t m_size;       ///< The size of the requested allocation.
     DataBufferHeap m_data;
 
-    ///< Flags
+    /// Flags. Keep these grouped together to avoid structure padding.
     AllocationPolicy m_policy;
     bool m_leak;
+    uint8_t m_permissions; ///< The access permissions on the memory in the
+                           /// process. In the host, the memory is always
+                           /// read/write.
+    uint8_t m_alignment;   ///< The alignment of the requested allocation.
 
   public:
     Allocation(lldb::addr_t process_alloc, lldb::addr_t process_start,
                size_t size, uint32_t permissions, uint8_t alignment,
                AllocationPolicy m_policy);
 
-    Allocation()
-        : m_process_alloc(LLDB_INVALID_ADDRESS),
-          m_process_start(LLDB_INVALID_ADDRESS), m_size(0), m_permissions(0),
-          m_alignment(0), m_data(), m_policy(eAllocationPolicyInvalid),
-          m_leak(false) {}
+    DISALLOW_COPY_AND_ASSIGN(Allocation);
   };
+
+  static_assert(sizeof(Allocation) <=
+                    (4 * sizeof(lldb::addr_t)) + sizeof(DataBufferHeap),
+                "IRMemoryMap::Allocation is larger than expected");
 
   lldb::ProcessWP m_process_wp;
   lldb::TargetWP m_target_wp;

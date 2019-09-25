@@ -13,10 +13,10 @@
 #include "lldb/API/SBLaunchInfo.h"
 #include "lldb/API/SBUnixSignals.h"
 #include "lldb/Host/File.h"
-#include "lldb/Interpreter/Args.h"
 #include "lldb/Target/Platform.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Utility/ArchSpec.h"
+#include "lldb/Utility/Args.h"
 #include "lldb/Utility/Status.h"
 
 #include "llvm/Support/FileSystem.h"
@@ -53,8 +53,7 @@ struct PlatformConnectOptions {
 //----------------------------------------------------------------------
 struct PlatformShellCommand {
   PlatformShellCommand(const char *shell_command = NULL)
-      : m_command(), m_working_dir(), m_status(0), m_signo(0),
-        m_timeout_sec(UINT32_MAX) {
+      : m_command(), m_working_dir(), m_status(0), m_signo(0) {
     if (shell_command && shell_command[0])
       m_command = shell_command;
   }
@@ -66,7 +65,7 @@ struct PlatformShellCommand {
   std::string m_output;
   int m_status;
   int m_signo;
-  uint32_t m_timeout_sec;
+  Timeout<std::ratio<1>> m_timeout = llvm::None;
 };
 //----------------------------------------------------------------------
 // SBPlatformConnectOptions
@@ -182,11 +181,16 @@ void SBPlatformShellCommand::SetWorkingDirectory(const char *path) {
 }
 
 uint32_t SBPlatformShellCommand::GetTimeoutSeconds() {
-  return m_opaque_ptr->m_timeout_sec;
+  if (m_opaque_ptr->m_timeout)
+    return m_opaque_ptr->m_timeout->count();
+  return UINT32_MAX;
 }
 
 void SBPlatformShellCommand::SetTimeoutSeconds(uint32_t sec) {
-  m_opaque_ptr->m_timeout_sec = sec;
+  if (sec == UINT32_MAX)
+    m_opaque_ptr->m_timeout = llvm::None;
+  else
+    m_opaque_ptr->m_timeout = std::chrono::seconds(sec);
 }
 
 int SBPlatformShellCommand::GetSignal() { return m_opaque_ptr->m_signo; }
@@ -240,9 +244,9 @@ bool SBPlatform::SetWorkingDirectory(const char *path) {
   PlatformSP platform_sp(GetSP());
   if (platform_sp) {
     if (path)
-      platform_sp->SetWorkingDirectory(FileSpec{path, false});
+      platform_sp->SetWorkingDirectory(FileSpec(path));
     else
-      platform_sp->SetWorkingDirectory(FileSpec{});
+      platform_sp->SetWorkingDirectory(FileSpec());
     return true;
   }
   return false;
@@ -271,7 +275,7 @@ void SBPlatform::DisconnectRemote() {
 bool SBPlatform::IsConnected() {
   PlatformSP platform_sp(GetSP());
   if (platform_sp)
-    platform_sp->IsConnected();
+    return platform_sp->IsConnected();
   return false;
 }
 
@@ -326,27 +330,24 @@ const char *SBPlatform::GetHostname() {
 }
 
 uint32_t SBPlatform::GetOSMajorVersion() {
-  uint32_t major, minor, update;
-  PlatformSP platform_sp(GetSP());
-  if (platform_sp && platform_sp->GetOSVersion(major, minor, update))
-    return major;
-  return UINT32_MAX;
+  llvm::VersionTuple version;
+  if (PlatformSP platform_sp = GetSP())
+    version = platform_sp->GetOSVersion();
+  return version.empty() ? UINT32_MAX : version.getMajor();
 }
 
 uint32_t SBPlatform::GetOSMinorVersion() {
-  uint32_t major, minor, update;
-  PlatformSP platform_sp(GetSP());
-  if (platform_sp && platform_sp->GetOSVersion(major, minor, update))
-    return minor;
-  return UINT32_MAX;
+  llvm::VersionTuple version;
+  if (PlatformSP platform_sp = GetSP())
+    version = platform_sp->GetOSVersion();
+  return version.getMinor().getValueOr(UINT32_MAX);
 }
 
 uint32_t SBPlatform::GetOSUpdateVersion() {
-  uint32_t major, minor, update;
-  PlatformSP platform_sp(GetSP());
-  if (platform_sp && platform_sp->GetOSVersion(major, minor, update))
-    return update;
-  return UINT32_MAX;
+  llvm::VersionTuple version;
+  if (PlatformSP platform_sp = GetSP())
+    version = platform_sp->GetOSVersion();
+  return version.getSubminor().getValueOr(UINT32_MAX);
 }
 
 SBError SBPlatform::Get(SBFileSpec &src, SBFileSpec &dst) {
@@ -363,9 +364,9 @@ SBError SBPlatform::Get(SBFileSpec &src, SBFileSpec &dst) {
 SBError SBPlatform::Put(SBFileSpec &src, SBFileSpec &dst) {
   return ExecuteConnected([&](const lldb::PlatformSP &platform_sp) {
     if (src.Exists()) {
-      uint32_t permissions = src.ref().GetPermissions();
+      uint32_t permissions = FileSystem::Instance().GetPermissions(src.ref());
       if (permissions == 0) {
-        if (llvm::sys::fs::is_directory(src.ref().GetPath()))
+        if (FileSystem::Instance().IsDirectory(src.ref()))
           permissions = eFilePermissionsDirectoryDefault;
         else
           permissions = eFilePermissionsFileDefault;
@@ -405,18 +406,20 @@ SBError SBPlatform::Run(SBPlatformShellCommand &shell_command) {
       if (working_dir)
         shell_command.SetWorkingDirectory(working_dir);
     }
-    return platform_sp->RunShellCommand(
-        command, FileSpec{working_dir, false},
-        &shell_command.m_opaque_ptr->m_status,
-        &shell_command.m_opaque_ptr->m_signo,
-        &shell_command.m_opaque_ptr->m_output,
-        shell_command.m_opaque_ptr->m_timeout_sec);
+    return platform_sp->RunShellCommand(command, FileSpec(working_dir),
+                                        &shell_command.m_opaque_ptr->m_status,
+                                        &shell_command.m_opaque_ptr->m_signo,
+                                        &shell_command.m_opaque_ptr->m_output,
+                                        shell_command.m_opaque_ptr->m_timeout);
   });
 }
 
 SBError SBPlatform::Launch(SBLaunchInfo &launch_info) {
   return ExecuteConnected([&](const lldb::PlatformSP &platform_sp) {
-    return platform_sp->LaunchProcess(launch_info.ref());
+    ProcessLaunchInfo info = launch_info.ref();
+    Status error = platform_sp->LaunchProcess(info);
+    launch_info.set_ref(info);
+    return error;
   });
 }
 
@@ -446,7 +449,7 @@ SBError SBPlatform::MakeDirectory(const char *path, uint32_t file_permissions) {
   PlatformSP platform_sp(GetSP());
   if (platform_sp) {
     sb_error.ref() =
-        platform_sp->MakeDirectory(FileSpec{path, false}, file_permissions);
+        platform_sp->MakeDirectory(FileSpec(path), file_permissions);
   } else {
     sb_error.SetErrorString("invalid platform");
   }
@@ -457,7 +460,7 @@ uint32_t SBPlatform::GetFilePermissions(const char *path) {
   PlatformSP platform_sp(GetSP());
   if (platform_sp) {
     uint32_t file_permissions = 0;
-    platform_sp->GetFilePermissions(FileSpec{path, false}, file_permissions);
+    platform_sp->GetFilePermissions(FileSpec(path), file_permissions);
     return file_permissions;
   }
   return 0;
@@ -468,8 +471,8 @@ SBError SBPlatform::SetFilePermissions(const char *path,
   SBError sb_error;
   PlatformSP platform_sp(GetSP());
   if (platform_sp) {
-    sb_error.ref() = platform_sp->SetFilePermissions(FileSpec{path, false},
-                                                     file_permissions);
+    sb_error.ref() =
+        platform_sp->SetFilePermissions(FileSpec(path), file_permissions);
   } else {
     sb_error.SetErrorString("invalid platform");
   }

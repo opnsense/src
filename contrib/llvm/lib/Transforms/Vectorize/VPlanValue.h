@@ -37,13 +37,38 @@ class VPUser;
 // coming from the input IR, instructions which VPlan will generate if executed
 // and live-outs which the VPlan will need to fix accordingly.
 class VPValue {
+  friend class VPBuilder;
+  friend class VPlanHCFGTransforms;
+  friend class VPBasicBlock;
+  friend class VPInterleavedAccessInfo;
+
 private:
   const unsigned char SubclassID; ///< Subclass identifier (for isa/dyn_cast).
 
   SmallVector<VPUser *, 1> Users;
 
 protected:
-  VPValue(const unsigned char SC) : SubclassID(SC) {}
+  // Hold the underlying Value, if any, attached to this VPValue.
+  Value *UnderlyingVal;
+
+  VPValue(const unsigned char SC, Value *UV = nullptr)
+      : SubclassID(SC), UnderlyingVal(UV) {}
+
+  // DESIGN PRINCIPLE: Access to the underlying IR must be strictly limited to
+  // the front-end and back-end of VPlan so that the middle-end is as
+  // independent as possible of the underlying IR. We grant access to the
+  // underlying IR using friendship. In that way, we should be able to use VPlan
+  // for multiple underlying IRs (Polly?) by providing a new VPlan front-end,
+  // back-end and analysis information for the new IR.
+
+  /// Return the underlying Value attached to this VPValue.
+  Value *getUnderlyingValue() { return UnderlyingVal; }
+
+  // Set \p Val as the underlying Value of this VPValue.
+  void setUnderlyingValue(Value *Val) {
+    assert(!UnderlyingVal && "Underlying Value is already set.");
+    UnderlyingVal = Val;
+  }
 
 public:
   /// An enumeration for keeping track of the concrete subclass of VPValue that
@@ -52,7 +77,7 @@ public:
   /// type identification.
   enum { VPValueSC, VPUserSC, VPInstructionSC };
 
-  VPValue() : SubclassID(VPValueSC) {}
+  VPValue(Value *UV = nullptr) : VPValue(VPValueSC, UV) {}
   VPValue(const VPValue &) = delete;
   VPValue &operator=(const VPValue &) = delete;
 
@@ -81,6 +106,20 @@ public:
   const_user_range users() const {
     return const_user_range(user_begin(), user_end());
   }
+
+  /// Returns true if the value has more than one unique user.
+  bool hasMoreThanOneUniqueUser() {
+    if (getNumUsers() == 0)
+      return false;
+
+    // Check if all users match the first user.
+    auto Current = std::next(user_begin());
+    while (Current != user_end() && *user_begin() == *Current)
+      Current++;
+    return Current != user_end();
+  }
+
+  void replaceAllUsesWith(VPValue *New);
 };
 
 typedef DenseMap<Value *, VPValue *> Value2VPValueTy;
@@ -93,11 +132,6 @@ raw_ostream &operator<<(raw_ostream &OS, const VPValue &V);
 class VPUser : public VPValue {
 private:
   SmallVector<VPValue *, 2> Operands;
-
-  void addOperand(VPValue *Operand) {
-    Operands.push_back(Operand);
-    Operand->addUser(*this);
-  }
 
 protected:
   VPUser(const unsigned char SC) : VPValue(SC) {}
@@ -120,11 +154,18 @@ public:
            V->getVPValueID() <= VPInstructionSC;
   }
 
+  void addOperand(VPValue *Operand) {
+    Operands.push_back(Operand);
+    Operand->addUser(*this);
+  }
+
   unsigned getNumOperands() const { return Operands.size(); }
   inline VPValue *getOperand(unsigned N) const {
     assert(N < Operands.size() && "Operand index out of bounds");
     return Operands[N];
   }
+
+  void setOperand(unsigned I, VPValue *New) { Operands[I] = New; }
 
   typedef SmallVectorImpl<VPValue *>::iterator operand_iterator;
   typedef SmallVectorImpl<VPValue *>::const_iterator const_operand_iterator;

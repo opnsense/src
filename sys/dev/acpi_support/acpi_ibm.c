@@ -74,6 +74,7 @@ ACPI_MODULE_NAME("IBM")
 #define ACPI_IBM_METHOD_FANSTATUS	12
 #define ACPI_IBM_METHOD_THERMAL		13
 #define ACPI_IBM_METHOD_HANDLEREVENTS	14
+#define ACPI_IBM_METHOD_MIC_LED		15
 
 /* Hotkeys/Buttons */
 #define IBM_RTC_HOTKEY1			0x64
@@ -175,6 +176,10 @@ struct acpi_ibm_softc {
 	int		led_busy;
 	int		led_state;
 
+	/* Mic led handle */
+	ACPI_HANDLE	mic_led_handle;
+	int		mic_led_state;
+
 	int		wlan_bt_flags;
 	int		thermal_updt_supported;
 
@@ -258,7 +263,11 @@ static struct {
 		.method		= ACPI_IBM_METHOD_FANSTATUS,
 		.description	= "Fan enable",
 	},
-
+	{
+		.name		= "mic_led",
+		.method		= ACPI_IBM_METHOD_MIC_LED,
+		.description	= "Mic led",
+	},
 	{ NULL, 0, NULL, 0 }
 };
 
@@ -340,7 +349,7 @@ static devclass_t acpi_ibm_devclass;
 DRIVER_MODULE(acpi_ibm, acpi, acpi_ibm_driver, acpi_ibm_devclass,
 	      0, 0);
 MODULE_DEPEND(acpi_ibm, acpi, 1, 1, 1);
-static char    *ibm_ids[] = {"IBM0068", "LEN0068", NULL};
+static char    *ibm_ids[] = {"IBM0068", "LEN0068", "LEN0268", NULL};
 
 static void
 ibm_led(void *softc, int onoff)
@@ -371,6 +380,35 @@ ibm_led_task(struct acpi_ibm_softc *sc, int pending __unused)
 }
 
 static int
+acpi_ibm_mic_led_set (struct acpi_ibm_softc *sc, int arg)
+{
+	ACPI_OBJECT_LIST input;
+	ACPI_OBJECT params[1];
+	ACPI_STATUS status;
+
+	if (arg < 0 || arg > 1)
+		return (EINVAL);
+
+	if (sc->mic_led_handle) {
+		params[0].Type = ACPI_TYPE_INTEGER;
+		params[0].Integer.Value = 0;
+		/* mic led: 0 off, 2 on */
+		if (arg == 1)
+			params[0].Integer.Value = 2;
+
+		input.Pointer = params;
+		input.Count = 1;
+
+		status = AcpiEvaluateObject (sc->handle, "MMTS", &input, NULL);
+		if (ACPI_SUCCESS(status))
+			sc->mic_led_state = arg;
+		return(status);
+	}
+
+	return (0);
+}
+
+static int
 acpi_ibm_probe(device_t dev)
 {
 	if (acpi_disabled("ibm") ||
@@ -387,9 +425,14 @@ static int
 acpi_ibm_attach(device_t dev)
 {
 	int i;
+	int hkey;
 	struct acpi_ibm_softc	*sc;
 	char *maker, *product;
-	devclass_t		ec_devclass;
+	ACPI_OBJECT_LIST input;
+	ACPI_OBJECT params[1];
+	ACPI_OBJECT out_obj;
+	ACPI_BUFFER result;
+	devclass_t ec_devclass;
 
 	ACPI_FUNCTION_TRACE((char *)(uintptr_t) __func__);
 
@@ -424,15 +467,42 @@ acpi_ibm_attach(device_t dev)
 		    "initialmask", CTLFLAG_RD,
 		    &sc->events_initialmask, 0, "Initial eventmask");
 
-		/* The availmask is the bitmask of supported events */
-		if (ACPI_FAILURE(acpi_GetInteger(sc->handle,
-		    IBM_NAME_EVENTS_AVAILMASK, &sc->events_availmask)))
+		if (ACPI_SUCCESS (acpi_GetInteger(sc->handle, "MHKV", &hkey))) {
+			device_printf(dev, "Firmware version is 0x%X\n", hkey);
+			switch(hkey >> 8)
+			{
+			case 1:
+				/* The availmask is the bitmask of supported events */
+				if (ACPI_FAILURE(acpi_GetInteger(sc->handle,
+				    IBM_NAME_EVENTS_AVAILMASK, &sc->events_availmask)))
+					sc->events_availmask = 0xffffffff;
+				break;
+
+			case 2:
+				result.Length = sizeof(out_obj);
+				result.Pointer = &out_obj;
+				params[0].Type = ACPI_TYPE_INTEGER;
+				params[0].Integer.Value = 1;
+				input.Pointer = params;
+				input.Count = 1;
+
+				sc->events_availmask = 0xffffffff;
+
+				if (ACPI_SUCCESS(AcpiEvaluateObject (sc->handle,
+				    IBM_NAME_EVENTS_AVAILMASK, &input, &result)))
+					sc->events_availmask = out_obj.Integer.Value;
+				break;
+			default:
+				device_printf(dev, "Unknown firmware version 0x%x\n", hkey);
+				break;
+			}
+		} else
 			sc->events_availmask = 0xffffffff;
 
 		SYSCTL_ADD_UINT(sc->sysctl_ctx,
-		    SYSCTL_CHILDREN(sc->sysctl_tree), OID_AUTO,
-		    "availmask", CTLFLAG_RD,
-		    &sc->events_availmask, 0, "Mask of supported events");
+				SYSCTL_CHILDREN(sc->sysctl_tree), OID_AUTO,
+				"availmask", CTLFLAG_RD,
+				&sc->events_availmask, 0, "Mask of supported events");
 	}
 
 	/* Hook up proc nodes */
@@ -551,6 +621,9 @@ acpi_ibm_resume(device_t dev)
 		acpi_ibm_sysctl_set(sc, i, val);
 	}
 	ACPI_SERIAL_END(ibm);
+
+	/* The mic led does not turn back on when sysctl_set is called in the above loop */
+	acpi_ibm_mic_led_set(sc, sc->mic_led_state);
 
 	return (0);
 }
@@ -739,6 +812,12 @@ acpi_ibm_sysctl_get(struct acpi_ibm_softc *sc, int method)
 		else
 			val = -1;
 		break;
+	case ACPI_IBM_METHOD_MIC_LED:
+		if (sc->mic_led_handle)
+			return sc->mic_led_state;
+		else
+			val = -1;
+		break;
 	}
 
 	return (val);
@@ -781,6 +860,10 @@ acpi_ibm_sysctl_set(struct acpi_ibm_softc *sc, int method, int arg)
 
 	case ACPI_IBM_METHOD_MUTE:
 		return acpi_ibm_mute_set(sc, arg);
+		break;
+
+	case ACPI_IBM_METHOD_MIC_LED:
+		return acpi_ibm_mic_led_set (sc, arg);
 		break;
 
 	case ACPI_IBM_METHOD_THINKLIGHT:
@@ -841,6 +924,17 @@ acpi_ibm_sysctl_init(struct acpi_ibm_softc *sc, int method)
 	case ACPI_IBM_METHOD_MUTE:
 		/* EC is required here, which was already checked before */
 		return (TRUE);
+
+	case ACPI_IBM_METHOD_MIC_LED:
+		if (ACPI_SUCCESS(AcpiGetHandle(sc->handle, "MMTS", &sc->mic_led_handle)))
+		{
+			/* Turn off mic led by default */
+			acpi_ibm_mic_led_set (sc, 0);
+			return(TRUE);
+		}
+		else
+			sc->mic_led_handle = NULL;
+		return (FALSE);
 
 	case ACPI_IBM_METHOD_THINKLIGHT:
 		sc->cmos_handle = NULL;

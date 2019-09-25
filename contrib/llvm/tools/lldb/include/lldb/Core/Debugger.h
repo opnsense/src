@@ -10,44 +10,40 @@
 #ifndef liblldb_Debugger_h_
 #define liblldb_Debugger_h_
 
-// C Includes
 #include <stdint.h>
 
-// C++ Includes
 #include <memory>
 #include <vector>
 
-// Other libraries and framework includes
-// Project includes
-#include "lldb/Core/Broadcaster.h"
 #include "lldb/Core/FormatEntity.h"
 #include "lldb/Core/IOHandler.h"
 #include "lldb/Core/SourceManager.h"
 #include "lldb/Core/UserSettingsController.h"
 #include "lldb/Host/HostThread.h"
 #include "lldb/Host/Terminal.h"
-#include "lldb/Target/ExecutionContext.h" // for ExecutionContext
+#include "lldb/Target/ExecutionContext.h"
 #include "lldb/Target/Platform.h"
 #include "lldb/Target/TargetList.h"
-#include "lldb/Utility/ConstString.h" // for ConstString
-#include "lldb/Utility/FileSpec.h"    // for FileSpec
-#include "lldb/Utility/Status.h"      // for Status
+#include "lldb/Utility/Broadcaster.h"
+#include "lldb/Utility/ConstString.h"
+#include "lldb/Utility/FileSpec.h"
+#include "lldb/Utility/Status.h"
 #include "lldb/Utility/UserID.h"
-#include "lldb/lldb-defines.h"              // for DISALLOW_COPY_AND_ASSIGN
-#include "lldb/lldb-enumerations.h"         // for ScriptLanguage, Langua...
-#include "lldb/lldb-forward.h"              // for StreamFileSP, DebuggerSP
-#include "lldb/lldb-private-enumerations.h" // for VarSetOperationType
-#include "lldb/lldb-private-types.h"        // for LoadPluginCallbackType
-#include "lldb/lldb-types.h"                // for LogOutputCallback, thr...
+#include "lldb/lldb-defines.h"
+#include "lldb/lldb-enumerations.h"
+#include "lldb/lldb-forward.h"
+#include "lldb/lldb-private-enumerations.h"
+#include "lldb/lldb-private-types.h"
+#include "lldb/lldb-types.h"
 
-#include "llvm/ADT/ArrayRef.h"           // for ArrayRef
-#include "llvm/ADT/StringMap.h"          // for StringMap
-#include "llvm/ADT/StringRef.h"          // for StringRef
-#include "llvm/Support/DynamicLibrary.h" // for DynamicLibrary
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/Threading.h"
 
-#include <assert.h> // for assert
-#include <stddef.h> // for size_t
+#include <assert.h>
+#include <stddef.h>
 #include <stdio.h>
 
 namespace lldb_private {
@@ -76,7 +72,7 @@ namespace lldb_private {
 
 //----------------------------------------------------------------------
 /// @class Debugger Debugger.h "lldb/Core/Debugger.h"
-/// @brief A class to manage flag bits.
+/// A class to manage flag bits.
 ///
 /// Provides a global root objects for the debugger core.
 //----------------------------------------------------------------------
@@ -156,11 +152,9 @@ public:
   lldb::ListenerSP GetListener() { return m_listener_sp; }
 
   // This returns the Debugger's scratch source manager.  It won't be able to
-  // look up files in debug
-  // information, but it can look up files by absolute path and display them to
-  // you.
-  // To get the target's source manager, call GetSourceManager on the target
-  // instead.
+  // look up files in debug information, but it can look up files by absolute
+  // path and display them to you. To get the target's source manager, call
+  // GetSourceManager on the target instead.
   SourceManager &GetSourceManager();
 
   lldb::TargetSP GetSelectedTarget() {
@@ -171,10 +165,9 @@ public:
   //------------------------------------------------------------------
   /// Get accessor for the target list.
   ///
-  /// The target list is part of the global debugger object. This
-  /// the single debugger shared instance to control where targets
-  /// get created and to allow for tracking and searching for targets
-  /// based on certain criteria.
+  /// The target list is part of the global debugger object. This the single
+  /// debugger shared instance to control where targets get created and to
+  /// allow for tracking and searching for targets based on certain criteria.
   ///
   /// @return
   ///     A global shared target list.
@@ -188,15 +181,15 @@ public:
   void DispatchInputEndOfFile();
 
   //------------------------------------------------------------------
-  // If any of the streams are not set, set them to the in/out/err
-  // stream of the top most input reader to ensure they at least have
-  // something
+  // If any of the streams are not set, set them to the in/out/err stream of
+  // the top most input reader to ensure they at least have something
   //------------------------------------------------------------------
   void AdoptTopIOHandlerFilesIfInvalid(lldb::StreamFileSP &in,
                                        lldb::StreamFileSP &out,
                                        lldb::StreamFileSP &err);
 
-  void PushIOHandler(const lldb::IOHandlerSP &reader_sp);
+  void PushIOHandler(const lldb::IOHandlerSP &reader_sp,
+                     bool cancel_top_handler = true);
 
   bool PopIOHandler(const lldb::IOHandlerSP &reader_sp);
 
@@ -268,6 +261,8 @@ public:
   void SetPrompt(llvm::StringRef p);
   void SetPrompt(const char *) = delete;
 
+  llvm::StringRef GetReproducerPath() const;
+
   bool GetUseExternalEditor() const;
 
   bool SetUseExternalEditor(bool use_external_editor_p);
@@ -276,11 +271,13 @@ public:
 
   bool SetUseColor(bool use_color);
 
+  bool GetHighlightSource() const;
+
   lldb::StopShowColumn GetStopShowColumn() const;
 
-  const FormatEntity::Entry *GetStopShowColumnAnsiPrefix() const;
+  llvm::StringRef GetStopShowColumnAnsiPrefix() const;
 
-  const FormatEntity::Entry *GetStopShowColumnAnsiSuffix() const;
+  llvm::StringRef GetStopShowColumnAnsiSuffix() const;
 
   uint32_t GetStopSourceLineCount(bool before) const;
 
@@ -323,9 +320,8 @@ public:
   Status RunREPL(lldb::LanguageType language, const char *repl_options);
 
   // This is for use in the command interpreter, when you either want the
-  // selected target, or if no target
-  // is present you want to prime the dummy target with entities that will be
-  // copied over to new targets.
+  // selected target, or if no target is present you want to prime the dummy
+  // target with entities that will be copied over to new targets.
   Target *GetSelectedOrDummyTarget(bool prefer_dummy = false);
   Target *GetDummyTarget();
 
@@ -378,8 +374,8 @@ protected:
   lldb::BroadcasterManagerSP m_broadcaster_manager_sp; // The debugger acts as a
                                                        // broadcaster manager of
                                                        // last resort.
-  // It needs to get constructed before the target_list or any other
-  // member that might want to broadcast through the debugger.
+  // It needs to get constructed before the target_list or any other member
+  // that might want to broadcast through the debugger.
 
   TerminalState m_terminal_state;
   TargetList m_target_list;
@@ -418,8 +414,8 @@ protected:
   };
 
 private:
-  // Use Debugger::CreateInstance() to get a shared pointer to a new
-  // debugger object
+  // Use Debugger::CreateInstance() to get a shared pointer to a new debugger
+  // object
   Debugger(lldb::LogOutputCallback m_log_callback, void *baton);
 
   DISALLOW_COPY_AND_ASSIGN(Debugger);

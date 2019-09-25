@@ -137,7 +137,6 @@ void os_remove_device(pqisrc_softstate_t *softs,
 		xpt_async(AC_LOST_DEVICE, tmppath, NULL);
 		xpt_free_path(tmppath);
 		pqisrc_free_device(softs, device);
-		OS_SLEEP(10000);
 	}
 
 	DBG_FUNC("OUT\n");
@@ -726,7 +725,7 @@ static int pqisrc_io_start(struct cam_sim *sim, union ccb *ccb)
 		return error;
 	}
 	/* Check device reset */
-	if (DEV_RESET(dvp)) {
+	if (dvp->reset_in_progress) {
 		ccb->ccb_h.status = CAM_SCSI_BUSY | CAM_REQ_INPROG | CAM_BUSY;
 		DBG_WARN("Device %d reset returned busy\n", ccb->ccb_h.target_id);
 		return error;

@@ -101,6 +101,9 @@ public:
     llvm_unreachable("Stmt can't have complex result type!");
   }
   ComplexPairTy VisitExpr(Expr *S);
+  ComplexPairTy VisitConstantExpr(ConstantExpr *E) {
+    return Visit(E->getSubExpr());
+  }
   ComplexPairTy VisitParenExpr(ParenExpr *PE) { return Visit(PE->getSubExpr());}
   ComplexPairTy VisitGenericSelectionExpr(GenericSelectionExpr *GE) {
     return Visit(GE->getResultExpr());
@@ -155,8 +158,9 @@ public:
   }
   ComplexPairTy VisitOpaqueValueExpr(OpaqueValueExpr *E) {
     if (E->isGLValue())
-      return EmitLoadOfLValue(CGF.getOpaqueLValueMapping(E), E->getExprLoc());
-    return CGF.getOpaqueRValueMapping(E).getComplexVal();
+      return EmitLoadOfLValue(CGF.getOrCreateOpaqueLValueMapping(E),
+                              E->getExprLoc());
+    return CGF.getOrCreateOpaqueRValueMapping(E).getComplexVal();
   }
 
   ComplexPairTy VisitPseudoObjectExpr(PseudoObjectExpr *E) {
@@ -504,10 +508,11 @@ ComplexPairTy ComplexExprEmitter::EmitCast(CastKind CK, Expr *Op,
   case CK_ARCExtendBlockObject:
   case CK_CopyAndAutoreleaseBlockObject:
   case CK_BuiltinFnToFnPtr:
-  case CK_ZeroToOCLEvent:
-  case CK_ZeroToOCLQueue:
+  case CK_ZeroToOCLOpaqueType:
   case CK_AddressSpaceConversion:
   case CK_IntToOCLSampler:
+  case CK_FixedPointCast:
+  case CK_FixedPointToBoolean:
     llvm_unreachable("invalid cast kind for complex value");
 
   case CK_FloatingRealToComplex:
@@ -594,7 +599,7 @@ ComplexPairTy ComplexExprEmitter::EmitBinSub(const BinOpInfo &Op) {
   return ComplexPairTy(ResR, ResI);
 }
 
-/// \brief Emit a libcall for a binary operation on complex types.
+/// Emit a libcall for a binary operation on complex types.
 ComplexPairTy ComplexExprEmitter::EmitComplexBinOpLibCall(StringRef LibCallName,
                                                           const BinOpInfo &Op) {
   CallArgList Args;
@@ -628,11 +633,11 @@ ComplexPairTy ComplexExprEmitter::EmitComplexBinOpLibCall(StringRef LibCallName,
 
   llvm::Instruction *Call;
   RValue Res = CGF.EmitCall(FuncInfo, Callee, ReturnValueSlot(), Args, &Call);
-  cast<llvm::CallInst>(Call)->setCallingConv(CGF.CGM.getBuiltinCC());
+  cast<llvm::CallInst>(Call)->setCallingConv(CGF.CGM.getRuntimeCC());
   return Res.getComplexVal();
 }
 
-/// \brief Lookup the libcall name for a given floating point type complex
+/// Lookup the libcall name for a given floating point type complex
 /// multiply.
 static StringRef getComplexMultiplyLibCallName(llvm::Type *Ty) {
   switch (Ty->getTypeID()) {
@@ -1055,7 +1060,7 @@ ComplexPairTy ComplexExprEmitter::VisitInitListExpr(InitListExpr *E) {
     return Visit(E->getInit(0));
   }
 
-  // Empty init list intializes to null
+  // Empty init list initializes to null
   assert(E->getNumInits() == 0 && "Unexpected number of inits");
   QualType Ty = E->getType()->castAs<ComplexType>()->getElementType();
   llvm::Type* LTy = CGF.ConvertType(Ty);

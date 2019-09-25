@@ -39,9 +39,14 @@ __FBSDID("$FreeBSD$");
 #include <unistd.h>
 
 enum {
+	MODE_ASLR,
 	MODE_INVALID,
 	MODE_TRACE,
 	MODE_TRAPCAP,
+	MODE_STACKGAP,
+#ifdef PROC_KPTI_CTL
+	MODE_KPTI,
+#endif
 };
 
 static pid_t
@@ -58,11 +63,18 @@ str2pid(const char *str)
 	return (res);
 }
 
+#ifdef PROC_KPTI_CTL
+#define	KPTI_USAGE "|kpti"
+#else
+#define	KPTI_USAGE
+#endif
+
 static void __dead2
 usage(void)
 {
 
-	fprintf(stderr, "Usage: proccontrol -m (trace|trapcap) [-q] "
+	fprintf(stderr, "Usage: proccontrol -m (aslr|trace|trapcap|"
+	    "stackgap"KPTI_USAGE") [-q] "
 	    "[-s (enable|disable)] [-p pid | command]\n");
 	exit(1);
 }
@@ -81,10 +93,18 @@ main(int argc, char *argv[])
 	while ((ch = getopt(argc, argv, "m:qs:p:")) != -1) {
 		switch (ch) {
 		case 'm':
-			if (strcmp(optarg, "trace") == 0)
+			if (strcmp(optarg, "aslr") == 0)
+				mode = MODE_ASLR;
+			else if (strcmp(optarg, "trace") == 0)
 				mode = MODE_TRACE;
 			else if (strcmp(optarg, "trapcap") == 0)
 				mode = MODE_TRAPCAP;
+			else if (strcmp(optarg, "stackgap") == 0)
+				mode = MODE_STACKGAP;
+#ifdef PROC_KPTI_CTL
+			else if (strcmp(optarg, "kpti") == 0)
+				mode = MODE_KPTI;
+#endif
 			else
 				usage();
 			break;
@@ -121,12 +141,23 @@ main(int argc, char *argv[])
 
 	if (query) {
 		switch (mode) {
+		case MODE_ASLR:
+			error = procctl(P_PID, pid, PROC_ASLR_STATUS, &arg);
+			break;
 		case MODE_TRACE:
 			error = procctl(P_PID, pid, PROC_TRACE_STATUS, &arg);
 			break;
 		case MODE_TRAPCAP:
 			error = procctl(P_PID, pid, PROC_TRAPCAP_STATUS, &arg);
 			break;
+		case MODE_STACKGAP:
+			error = procctl(P_PID, pid, PROC_STACKGAP_STATUS, &arg);
+			break;
+#ifdef PROC_KPTI_CTL
+		case MODE_KPTI:
+			error = procctl(P_PID, pid, PROC_KPTI_STATUS, &arg);
+			break;
+#endif
 		default:
 			usage();
 			break;
@@ -134,6 +165,23 @@ main(int argc, char *argv[])
 		if (error != 0)
 			err(1, "procctl status");
 		switch (mode) {
+		case MODE_ASLR:
+			switch (arg & ~PROC_ASLR_ACTIVE) {
+			case PROC_ASLR_FORCE_ENABLE:
+				printf("force enabled");
+				break;
+			case PROC_ASLR_FORCE_DISABLE:
+				printf("force disabled");
+				break;
+			case PROC_ASLR_NOFORCE:
+				printf("not forced");
+				break;
+			}
+			if ((arg & PROC_ASLR_ACTIVE) != 0)
+				printf(", active\n");
+			else
+				printf(", not active\n");
+			break;
 		case MODE_TRACE:
 			if (arg == -1)
 				printf("disabled\n");
@@ -152,9 +200,50 @@ main(int argc, char *argv[])
 				break;
 			}
 			break;
+		case MODE_STACKGAP:
+			switch (arg & (PROC_STACKGAP_ENABLE |
+			    PROC_STACKGAP_DISABLE)) {
+			case PROC_STACKGAP_ENABLE:
+				printf("enabled\n");
+				break;
+			case PROC_STACKGAP_DISABLE:
+				printf("disabled\n");
+				break;
+			}
+			switch (arg & (PROC_STACKGAP_ENABLE_EXEC |
+			    PROC_STACKGAP_DISABLE_EXEC)) {
+			case PROC_STACKGAP_ENABLE_EXEC:
+				printf("enabled after exec\n");
+				break;
+			case PROC_STACKGAP_DISABLE_EXEC:
+				printf("disabled after exec\n");
+				break;
+			}
+			break;
+#ifdef PROC_KPTI_CTL
+		case MODE_KPTI:
+			switch (arg & ~PROC_KPTI_STATUS_ACTIVE) {
+			case PROC_KPTI_CTL_ENABLE_ON_EXEC:
+				printf("enabled");
+				break;
+			case PROC_KPTI_CTL_DISABLE_ON_EXEC:
+				printf("disabled");
+				break;
+			}
+			if ((arg & PROC_KPTI_STATUS_ACTIVE) != 0)
+				printf(", active\n");
+			else
+				printf(", not active\n");
+			break;
+#endif
 		}
 	} else {
 		switch (mode) {
+		case MODE_ASLR:
+			arg = enable ? PROC_ASLR_FORCE_ENABLE :
+			    PROC_ASLR_FORCE_DISABLE;
+			error = procctl(P_PID, pid, PROC_ASLR_CTL, &arg);
+			break;
 		case MODE_TRACE:
 			arg = enable ? PROC_TRACE_CTL_ENABLE :
 			    PROC_TRACE_CTL_DISABLE;
@@ -165,6 +254,19 @@ main(int argc, char *argv[])
 			    PROC_TRAPCAP_CTL_DISABLE;
 			error = procctl(P_PID, pid, PROC_TRAPCAP_CTL, &arg);
 			break;
+		case MODE_STACKGAP:
+			arg = enable ? PROC_STACKGAP_ENABLE_EXEC :
+			    (PROC_STACKGAP_DISABLE |
+			    PROC_STACKGAP_DISABLE_EXEC);
+			error = procctl(P_PID, pid, PROC_STACKGAP_CTL, &arg);
+			break;
+#ifdef PROC_KPTI_CTL
+		case MODE_KPTI:
+			arg = enable ? PROC_KPTI_CTL_ENABLE_ON_EXEC :
+			    PROC_KPTI_CTL_DISABLE_ON_EXEC;
+			error = procctl(P_PID, pid, PROC_KPTI_CTL, &arg);
+			break;
+#endif
 		default:
 			usage();
 			break;

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2016 iXsystems Inc.
  * All rights reserved.
  *
@@ -32,12 +34,19 @@
 __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
+#ifndef WITHOUT_CAPSICUM
+#include <sys/capsicum.h>
+#endif
 #include <sys/linker_set.h>
 #include <sys/uio.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 
+#ifndef WITHOUT_CAPSICUM
+#include <capsicum_helpers.h>
+#endif
+#include <err.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -48,6 +57,7 @@ __FBSDID("$FreeBSD$");
 #include <assert.h>
 #include <pthread.h>
 #include <libgen.h>
+#include <sysexits.h>
 
 #include "bhyverun.h"
 #include "pci_emul.h"
@@ -267,7 +277,11 @@ pci_vtcon_sock_add(struct pci_vtcon_softc *sc, const char *name,
 {
 	struct pci_vtcon_sock *sock;
 	struct sockaddr_un sun;
+	char *pathcopy;
 	int s = -1, fd = -1, error = 0;
+#ifndef WITHOUT_CAPSICUM
+	cap_rights_t rights;
+#endif
 
 	sock = calloc(1, sizeof(struct pci_vtcon_sock));
 	if (sock == NULL) {
@@ -281,15 +295,24 @@ pci_vtcon_sock_add(struct pci_vtcon_softc *sc, const char *name,
 		goto out;
 	}
 
-	fd = open(dirname(path), O_RDONLY | O_DIRECTORY);
+	pathcopy = strdup(path);
+	if (pathcopy == NULL) {
+		error = -1;
+		goto out;
+	}
+
+	fd = open(dirname(pathcopy), O_RDONLY | O_DIRECTORY);
 	if (fd < 0) {
+		free(pathcopy);
 		error = -1;
 		goto out;
 	}
 
 	sun.sun_family = AF_UNIX;
 	sun.sun_len = sizeof(struct sockaddr_un);
-	strncpy(sun.sun_path, basename((char *)path), sizeof(sun.sun_path));
+	strcpy(pathcopy, path);
+	strlcpy(sun.sun_path, basename(pathcopy), sizeof(sun.sun_path));
+	free(pathcopy);
 
 	if (bindat(fd, s, (struct sockaddr *)&sun, sun.sun_len) < 0) {
 		error = -1;
@@ -306,6 +329,11 @@ pci_vtcon_sock_add(struct pci_vtcon_softc *sc, const char *name,
 		goto out;
 	}
 
+#ifndef WITHOUT_CAPSICUM
+	cap_rights_init(&rights, CAP_ACCEPT, CAP_EVENT, CAP_READ, CAP_WRITE);
+	if (caph_rights_limit(s, &rights) == -1)
+		errx(EX_OSERR, "Unable to apply rights for sandbox");
+#endif
 
 	sock->vss_port = pci_vtcon_port_add(sc, name, pci_vtcon_sock_tx, sock);
 	if (sock->vss_port == NULL) {
@@ -556,6 +584,7 @@ pci_vtcon_notify_tx(void *vsc, struct vqueue_info *vq)
 
 	while (vq_has_descs(vq)) {
 		n = vq_getchain(vq, &idx, iov, 1, flags);
+		assert(n >= 1);
 		if (port != NULL)
 			port->vsp_cb(port, port->vsp_arg, iov, 1);
 
@@ -578,7 +607,7 @@ pci_vtcon_notify_rx(void *vsc, struct vqueue_info *vq)
 
 	if (!port->vsp_rx_ready) {
 		port->vsp_rx_ready = 1;
-		vq->vq_used->vu_flags |= VRING_USED_F_NO_NOTIFY;
+		vq_kick_disable(vq);
 	}
 }
 
@@ -627,7 +656,7 @@ pci_vtcon_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 
 	while ((opt = strsep(&opts, ",")) != NULL) {
 		portname = strsep(&opt, "=");
-		portpath = strdup(opt);
+		portpath = opt;
 
 		/* create port */
 		if (pci_vtcon_sock_add(sc, portname, portpath) < 0) {

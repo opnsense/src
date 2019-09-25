@@ -85,26 +85,19 @@ FBSD_1.0 {
 	fchown;
 	fcntl;
 	fhopen;
-	fhstat;
-	fhstatfs;
 	flock;
 	fork;
 	fpathconf;
-	fstat;
-	fstatfs;
 	fsync;
 	futimes;
 	getaudit;
 	getaudit_addr;
 	getauid;
 	getcontext;
-	getdents;
-	getdirentries;
 	getdtablesize;
 	getegid;
 	geteuid;
 	getfh;
-	getfsstat;
 	getgid;
 	getgroups;
 	getitimer;
@@ -128,7 +121,6 @@ FBSD_1.0 {
 	jail;
 	jail_attach;
 	kenv;
-	kevent;
 	kill;
 	kldfind;
 	kldfirstmod;
@@ -163,7 +155,6 @@ FBSD_1.0 {
 	link;
 	lio_listio;
 	listen;
-	lstat;
 	lutimes;
 	mac_syscall;
 	madvise;
@@ -171,7 +162,6 @@ FBSD_1.0 {
 	minherit;
 	mkdir;
 	mkfifo;
-	mknod;
 	mlock;
 	mlockall;
 	modfind;
@@ -189,13 +179,8 @@ FBSD_1.0 {
 	munlockall;
 	munmap;
 	nanosleep;
-	netbsd_lchown;
-	netbsd_msync;
 	nfssvc;
-	nfstat;
-	nlstat;
 	nmount;
-	nstat;
 	ntp_adjtime;
 	ntp_gettime;
 	open;
@@ -275,8 +260,6 @@ FBSD_1.0 {
 	sigwaitinfo;
 	socket;
 	socketpair;
-	stat;
-	statfs;
 	swapoff;
 	swapon;
 	symlink;
@@ -330,7 +313,6 @@ FBSD_1.1 {
 	fchmodat;
 	fchownat;
 	fexecve;
-	fstatat;
 	futimesat;
 	jail_get;
 	jail_set;
@@ -339,7 +321,6 @@ FBSD_1.1 {
 	lpathconf;
 	mkdirat;
 	mkfifoat;
-	mknodat;
 	msgctl;
 	readlinkat;
 	renameat;
@@ -401,6 +382,30 @@ FBSD_1.4 {
 FBSD_1.5 {
 	clock_nanosleep;
 	fdatasync;
+	fhstat;
+	fhstatfs;
+	fstat;
+	fstatat;
+	fstatfs;
+	getdents;
+	getdirentries;
+	getfsstat;
+	getrandom;
+	kevent;
+	lstat;
+	mknod;
+	mknodat;
+	stat;
+	statfs;
+	cpuset_getdomain;
+	cpuset_setdomain;
+};
+
+FBSD_1.6 {
+	fhlink;
+	fhlinkat;
+	fhreadlink;
+	getfhat;
 };
 
 FBSDprivate_1.0 {
@@ -472,21 +477,13 @@ FBSDprivate_1.0 {
 	__sys_acct;
 	_adjtime;
 	__sys_adjtime;
-	_aio_cancel;
 	__sys_aio_cancel;
-	_aio_error;
 	__sys_aio_error;
-	_aio_fsync;
 	__sys_aio_fsync;
-	_aio_read;
 	__sys_aio_read;
-	_aio_return;
 	__sys_aio_return;
-	_aio_suspend;
 	__sys_aio_suspend;
-	_aio_waitcomplete;
 	__sys_aio_waitcomplete;
-	_aio_write;
 	__sys_aio_write;
 	_audit;
 	__sys_audit;
@@ -606,8 +603,6 @@ FBSDprivate_1.0 {
 	__sys_getauid;
 	_getcontext;
 	__sys_getcontext;
-	_getdents;
-	__sys_getdents;
 	_getdirentries;
 	__sys_getdirentries;
 	_getdtablesize;
@@ -732,12 +727,9 @@ FBSDprivate_1.0 {
 	__sys_lgetfh;
 	_link;
 	__sys_link;
-	_lio_listio;
 	__sys_lio_listio;
 	_listen;
 	__sys_listen;
-	_lstat;
-	__sys_lstat;
 	_lutimes;
 	__sys_lutimes;
 	_mac_syscall;
@@ -790,20 +782,10 @@ FBSDprivate_1.0 {
 	__sys_munmap;
 	_nanosleep;
 	__sys_nanosleep;
-	_netbsd_lchown;
-	__sys_netbsd_lchown;
-	_netbsd_msync;
-	__sys_netbsd_msync;
 	_nfssvc;
 	__sys_nfssvc;
-	_nfstat;
-	__sys_nfstat;
-	_nlstat;
-	__sys_nlstat;
 	_nmount;
 	__sys_nmount;
-	_nstat;
-	__sys_nstat;
 	_ntp_adjtime;
 	__sys_ntp_adjtime;
 	_ntp_gettime;
@@ -971,8 +953,6 @@ FBSDprivate_1.0 {
 	__sys_socket;
 	_socketpair;
 	__sys_socketpair;
-	_stat;
-	__sys_stat;
 	_statfs;
 	__sys_statfs;
 	_swapcontext;
@@ -1031,8 +1011,6 @@ FBSDprivate_1.0 {
 	__sys_utrace;
 	_uuidgen;
 	__sys_uuidgen;
-	_vadvise;
-	__sys_vadvise;
 	_wait4;
 	__sys_wait4;
 	_wait6;
@@ -1046,4 +1024,8 @@ FBSDprivate_1.0 {
 	gssd_syscall;
 	__libc_interposing_slot;
 	__libc_sigwait;
+	_cpuset_getdomain;
+	__sys_cpuset_getdomain;
+	_cpuset_setdomain;
+	__sys_cpuset_setdomain;
 };

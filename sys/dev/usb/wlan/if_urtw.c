@@ -16,6 +16,9 @@
 
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
+
+#include "opt_wlan.h"
+
 #include <sys/param.h>
 #include <sys/sockio.h>
 #include <sys/sysctl.h>
@@ -30,10 +33,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/bus.h>
 #include <sys/endian.h>
 #include <sys/kdb.h>
-
-#include <machine/bus.h>
-#include <machine/resource.h>
-#include <sys/rman.h>
 
 #include <net/if.h>
 #include <net/if_var.h>
@@ -61,6 +60,12 @@ __FBSDID("$FreeBSD$");
 
 #include <dev/usb/wlan/if_urtwreg.h>
 #include <dev/usb/wlan/if_urtwvar.h>
+
+/* copy some rate indices from if_rtwn_ridx.h */
+#define	URTW_RIDX_CCK5		2
+#define	URTW_RIDX_CCK11		3
+#define	URTW_RIDX_OFDM6		4
+#define	URTW_RIDX_OFDM24	8
 
 static SYSCTL_NODE(_hw_usb, OID_AUTO, urtw, CTLFLAG_RW, 0, "USB Realtek 8187L");
 #ifdef URTW_DEBUG
@@ -205,9 +210,6 @@ static uint8_t urtw_8225z2_agc[] = {
 	0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31,
 	0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31
 };
-
-static const uint8_t urtw_chan_2ghz[] =
-	{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14 };
 
 static uint32_t urtw_8225_channel[] = {
 	0x0000,		/* dummy channel 0  */
@@ -668,6 +670,7 @@ static void		urtw_scan_end(struct ieee80211com *);
 static void		urtw_getradiocaps(struct ieee80211com *, int, int *,
 			   struct ieee80211_channel[]);
 static void		urtw_set_channel(struct ieee80211com *);
+static void		urtw_update_promisc(struct ieee80211com *);
 static void		urtw_update_mcast(struct ieee80211com *);
 static int		urtw_tx_start(struct urtw_softc *,
 			    struct ieee80211_node *, struct mbuf *,
@@ -679,7 +682,6 @@ static void		urtw_ledtask(void *, int);
 static void		urtw_watchdog(void *);
 static void		urtw_set_multi(void *);
 static int		urtw_isbmode(uint16_t);
-static uint16_t		urtw_rate2rtl(uint32_t);
 static uint16_t		urtw_rtl2rate(uint32_t);
 static usb_error_t	urtw_set_rate(struct urtw_softc *);
 static usb_error_t	urtw_update_msr(struct urtw_softc *);
@@ -750,6 +752,7 @@ static void		urtw_free_tx_data_list(struct urtw_softc *);
 static void		urtw_free_rx_data_list(struct urtw_softc *);
 static void		urtw_free_data_list(struct urtw_softc *,
 			    struct urtw_data data[], int, int);
+static usb_error_t	urtw_set_macaddr(struct urtw_softc *, const uint8_t *);
 static usb_error_t	urtw_adapter_start(struct urtw_softc *);
 static usb_error_t	urtw_adapter_start_b(struct urtw_softc *);
 static usb_error_t	urtw_set_mode(struct urtw_softc *, uint32_t);
@@ -863,7 +866,7 @@ urtw_attach(device_t dev)
 
 	sc->sc_rts_retry = URTW_DEFAULT_RTS_RETRY;
 	sc->sc_tx_retry = URTW_DEFAULT_TX_RETRY;
-	sc->sc_currate = 3;
+	sc->sc_currate = URTW_RIDX_CCK11;
 	sc->sc_preamble_mode = urtw_preamble_mode;
 
 	ic->ic_softc = sc;
@@ -895,6 +898,7 @@ urtw_attach(device_t dev)
 	ic->ic_updateslot = urtw_updateslot;
 	ic->ic_vap_create = urtw_vap_create;
 	ic->ic_vap_delete = urtw_vap_delete;
+	ic->ic_update_promisc = urtw_update_promisc;
 	ic->ic_update_mcast = urtw_update_mcast;
 	ic->ic_parent = urtw_parent;
 	ic->ic_transmit = urtw_transmit;
@@ -1184,9 +1188,23 @@ fail:
 }
 
 static usb_error_t
+urtw_set_macaddr(struct urtw_softc *sc, const uint8_t *macaddr)
+{
+	usb_error_t error;
+
+	urtw_write32_m(sc, URTW_MAC0, ((const uint32_t *)macaddr)[0]);
+	urtw_write16_m(sc, URTW_MAC4, ((const uint32_t *)macaddr)[1] & 0xffff);
+
+fail:
+	return (error);
+}
+
+static usb_error_t
 urtw_adapter_start(struct urtw_softc *sc)
 {
 	struct ieee80211com *ic = &sc->sc_ic;
+	struct ieee80211vap *vap = TAILQ_FIRST(&ic->ic_vaps);
+	const uint8_t *macaddr;
 	usb_error_t error;
 
 	error = urtw_reset(sc);
@@ -1206,8 +1224,11 @@ urtw_adapter_start(struct urtw_softc *sc)
 	if (error)
 		goto fail;
 	/* applying MAC address again.  */
-	urtw_write32_m(sc, URTW_MAC0, ((uint32_t *)ic->ic_macaddr)[0]);
-	urtw_write16_m(sc, URTW_MAC4, ((uint32_t *)ic->ic_macaddr)[1] & 0xffff);
+	macaddr = vap ? vap->iv_myaddr : ic->ic_macaddr;
+	urtw_set_macaddr(sc, macaddr);
+	if (error)
+		goto fail;
+
 	error = urtw_set_mode(sc, URTW_EPROM_CMD_NORMAL);
 	if (error)
 		goto fail;
@@ -1577,8 +1598,7 @@ urtw_getradiocaps(struct ieee80211com *ic,
 	memset(bands, 0, sizeof(bands));
 	setbit(bands, IEEE80211_MODE_11B);
 	setbit(bands, IEEE80211_MODE_11G);
-	ieee80211_add_channel_list_2ghz(chans, maxchans, nchans,
-	    urtw_chan_2ghz, nitems(urtw_chan_2ghz), bands, 0);
+	ieee80211_add_channels_default_2ghz(chans, maxchans, nchans, bands, 0);
 }
 
 static void
@@ -1631,6 +1651,17 @@ fail:
 }
 
 static void
+urtw_update_promisc(struct ieee80211com *ic)
+{
+	struct urtw_softc *sc = ic->ic_softc;
+
+	URTW_LOCK(sc);
+	if (sc->sc_flags & URTW_RUNNING)
+		urtw_rx_setconf(sc);
+	URTW_UNLOCK(sc);
+}
+
+static void
 urtw_update_mcast(struct ieee80211com *ic)
 {
 
@@ -1643,7 +1674,7 @@ urtw_tx_start(struct urtw_softc *sc, struct ieee80211_node *ni, struct mbuf *m0,
 {
 	struct ieee80211_frame *wh = mtod(m0, struct ieee80211_frame *);
 	struct ieee80211_key *k;
-	const struct ieee80211_txparam *tp;
+	const struct ieee80211_txparam *tp = ni->ni_txparms;
 	struct ieee80211com *ic = &sc->sc_ic;
 	struct ieee80211vap *vap = ni->ni_vap;
 	struct usb_xfer *rtl8187b_pipes[URTW_8187B_TXPIPE_MAX] = {
@@ -1653,13 +1684,16 @@ urtw_tx_start(struct urtw_softc *sc, struct ieee80211_node *ni, struct mbuf *m0,
 		sc->sc_xfer[URTW_8187B_BULK_TX_VO]
 	};
 	struct usb_xfer *xfer;
-	int dur = 0, rtsdur = 0, rtsenable = 0, ctsenable = 0, rate,
-	    pkttime = 0, txdur = 0, isshort = 0, xferlen;
+	int dur = 0, rtsdur = 0, rtsenable = 0, ctsenable = 0, rate, type,
+	    pkttime = 0, txdur = 0, isshort = 0, xferlen, ismcast;
 	uint16_t acktime, rtstime, ctstime;
 	uint32_t flags;
 	usb_error_t error;
 
 	URTW_ASSERT_LOCKED(sc);
+
+	ismcast = IEEE80211_IS_MULTICAST(wh->i_addr1);
+	type = wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
 
 	/*
 	 * Software crypto.
@@ -1681,22 +1715,17 @@ urtw_tx_start(struct urtw_softc *sc, struct ieee80211_node *ni, struct mbuf *m0,
 	if (ieee80211_radiotap_active_vap(vap)) {
 		struct urtw_tx_radiotap_header *tap = &sc->sc_txtap;
 
-		/* XXX Are variables correct?  */
 		tap->wt_flags = 0;
-		tap->wt_chan_freq = htole16(ic->ic_curchan->ic_freq);
-		tap->wt_chan_flags = htole16(ic->ic_curchan->ic_flags);
-
 		ieee80211_radiotap_tx(vap, m0);
 	}
 
-	if ((wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_MGT ||
-	    (wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_CTL) {
-		tp = &vap->iv_txparms[ieee80211_chan2mode(ic->ic_curchan)];
+	if (type == IEEE80211_FC0_TYPE_MGT ||
+	    type == IEEE80211_FC0_TYPE_CTL ||
+	    (m0->m_flags & M_EAPOL) != 0) {
 		rate = tp->mgmtrate;
 	} else {
-		tp = &vap->iv_txparms[ieee80211_chan2mode(ni->ni_chan)];
 		/* for data frames */
-		if (IEEE80211_IS_MULTICAST(wh->i_addr1))
+		if (ismcast)
 			rate = tp->mcastrate;
 		else if (tp->ucastrate != IEEE80211_FIXED_RATE_NONE)
 			rate = tp->ucastrate;
@@ -1706,7 +1735,7 @@ urtw_tx_start(struct urtw_softc *sc, struct ieee80211_node *ni, struct mbuf *m0,
 
 	sc->sc_stats.txrates[sc->sc_currate]++;
 
-	if (IEEE80211_IS_MULTICAST(wh->i_addr1))
+	if (ismcast)
 		txdur = pkttime = urtw_compute_txtime(m0->m_pkthdr.len +
 		    IEEE80211_CRC_LEN, rate, 0, 0);
 	else {
@@ -1764,14 +1793,12 @@ urtw_tx_start(struct urtw_softc *sc, struct ieee80211_node *ni, struct mbuf *m0,
 			flags |= URTW_TX_FLAG_CTS;
 		if (rtsenable) {
 			flags |= URTW_TX_FLAG_RTS;
-			flags |= (urtw_rate2rtl(11) & 0xf) <<
-			    URTW_TX_FLAG_RTSRATE_SHIFT;
+			flags |= URTW_RIDX_CCK5 << URTW_TX_FLAG_RTSRATE_SHIFT;
 			tx->rtsdur = rtsdur;
 		}
 		tx->flag = htole32(flags);
 		tx->txdur = txdur;
-		if ((wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) ==
-		    IEEE80211_FC0_TYPE_MGT &&
+		if (type == IEEE80211_FC0_TYPE_MGT &&
 		    (wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK) ==
 		    IEEE80211_FC0_SUBTYPE_PROBE_RESP)
 			tx->retry = 1;
@@ -1786,7 +1813,7 @@ urtw_tx_start(struct urtw_softc *sc, struct ieee80211_node *ni, struct mbuf *m0,
 			flags |= URTW_TX_FLAG_RTS;
 			tx->rtsdur = rtsdur;
 		}
-		flags |= (urtw_rate2rtl(11) & 0xf) << URTW_TX_FLAG_RTSRATE_SHIFT;
+		flags |= URTW_RIDX_CCK5 << URTW_TX_FLAG_RTSRATE_SHIFT;
 		tx->flag = htole32(flags);
 		tx->retry = 3;		/* CW minimum  */
 		tx->retry |= 7 << 4;	/* CW maximum  */
@@ -1799,7 +1826,7 @@ urtw_tx_start(struct urtw_softc *sc, struct ieee80211_node *ni, struct mbuf *m0,
 	data->m = m0;
 
 	if (sc->sc_flags & URTW_RTL8187B) {
-		switch (wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) {
+		switch (type) {
 		case IEEE80211_FC0_TYPE_CTL:
 		case IEEE80211_FC0_TYPE_MGT:
 			xfer = sc->sc_xfer[URTW_8187B_BULK_TX_EP12];
@@ -1882,11 +1909,13 @@ static void
 urtw_watchdog(void *arg)
 {
 	struct urtw_softc *sc = arg;
+	struct ieee80211com *ic = &sc->sc_ic;
 
 	if (sc->sc_txtimer > 0) {
 		if (--sc->sc_txtimer == 0) {
 			device_printf(sc->sc_dev, "device timeout\n");
-			counter_u64_add(sc->sc_ic.ic_oerrors, 1);
+			counter_u64_add(ic->ic_oerrors, 1);
+			ieee80211_restart_all(ic);
 			return;
 		}
 		callout_reset(&sc->sc_watchdog_ch, hz, urtw_watchdog, sc);
@@ -1906,9 +1935,9 @@ urtw_set_rate(struct urtw_softc *sc)
 	uint16_t data;
 	usb_error_t error;
 
-	basic_rate = urtw_rate2rtl(48);
-	min_rr_rate = urtw_rate2rtl(12);
-	max_rr_rate = urtw_rate2rtl(48);
+	basic_rate = URTW_RIDX_OFDM24;
+	min_rr_rate = URTW_RIDX_OFDM6;
+	max_rr_rate = URTW_RIDX_OFDM24;
 
 	urtw_write8_m(sc, URTW_RESP_RATE,
 	    max_rr_rate << URTW_RESP_MAX_RATE_SHIFT |
@@ -1923,19 +1952,6 @@ urtw_set_rate(struct urtw_softc *sc)
 	urtw_write16_m(sc, URTW_BRSR, data);
 fail:
 	return (error);
-}
-
-static uint16_t
-urtw_rate2rtl(uint32_t rate)
-{
-	unsigned int i;
-
-	for (i = 0; i < nitems(urtw_ratetable); i++) {
-		if (rate == urtw_ratetable[i].reg)
-			return urtw_ratetable[i].val;
-	}
-
-	return (3);
 }
 
 static uint16_t
@@ -3182,6 +3198,8 @@ static usb_error_t
 urtw_8225v2b_rf_init(struct urtw_softc *sc)
 {
 	struct ieee80211com *ic = &sc->sc_ic;
+	struct ieee80211vap *vap = TAILQ_FIRST(&ic->ic_vaps);
+	const uint8_t *macaddr;
 	unsigned int i;
 	uint8_t data8;
 	usb_error_t error;
@@ -3229,8 +3247,10 @@ urtw_8225v2b_rf_init(struct urtw_softc *sc)
 	urtw_write8_m(sc, URTW_CONFIG1, data8);
 
 	/* applying MAC address again.  */
-	urtw_write32_m(sc, URTW_MAC0, ((uint32_t *)ic->ic_macaddr)[0]);
-	urtw_write16_m(sc, URTW_MAC4, ((uint32_t *)ic->ic_macaddr)[1] & 0xffff);
+	macaddr = vap ? vap->iv_myaddr : ic->ic_macaddr;
+	error = urtw_set_macaddr(sc, macaddr);
+	if (error)
+		goto fail;
 
 	error = urtw_set_mode(sc, URTW_EPROM_CMD_NORMAL);
 	if (error)
@@ -3890,7 +3910,6 @@ urtw_rx_setconf(struct urtw_softc *sc)
 	if (sc->sc_flags & URTW_RTL8187B) {
 		data = data | URTW_RX_FILTER_MNG | URTW_RX_FILTER_DATA |
 		    URTW_RX_FILTER_MCAST | URTW_RX_FILTER_BCAST |
-		    URTW_RX_FILTER_NICMAC | URTW_RX_CHECK_BSSID |
 		    URTW_RX_FIFO_THRESHOLD_NONE |
 		    URTW_MAX_RX_DMA_2048 |
 		    URTW_RX_AUTORESETPHY | URTW_RCR_ONLYERLPKT;
@@ -3905,19 +3924,21 @@ urtw_rx_setconf(struct urtw_softc *sc)
 		if (sc->sc_crcmon == 1 && ic->ic_opmode == IEEE80211_M_MONITOR)
 			data = data | URTW_RX_FILTER_CRCERR;
 
-		if (ic->ic_opmode == IEEE80211_M_MONITOR ||
-		    ic->ic_promisc > 0 || ic->ic_allmulti > 0) {
-			data = data | URTW_RX_FILTER_ALLMAC;
-		} else {
-			data = data | URTW_RX_FILTER_NICMAC;
-			data = data | URTW_RX_CHECK_BSSID;
-		}
-
 		data = data &~ URTW_RX_FIFO_THRESHOLD_MASK;
 		data = data | URTW_RX_FIFO_THRESHOLD_NONE |
 		    URTW_RX_AUTORESETPHY;
 		data = data &~ URTW_MAX_RX_DMA_MASK;
 		data = data | URTW_MAX_RX_DMA_2048 | URTW_RCR_ONLYERLPKT;
+	}
+
+	/* XXX allmulti should not be checked here... */
+	if (ic->ic_opmode == IEEE80211_M_MONITOR ||
+	    ic->ic_promisc > 0 || ic->ic_allmulti > 0) {
+		data = data | URTW_RX_FILTER_CTL;
+		data = data | URTW_RX_FILTER_ALLMAC;
+	} else {
+		data = data | URTW_RX_FILTER_NICMAC;
+		data = data | URTW_RX_CHECK_BSSID;
 	}
 
 	urtw_write32_m(sc, URTW_RX, data);
@@ -3935,50 +3956,56 @@ urtw_rxeof(struct usb_xfer *xfer, struct urtw_data *data, int *rssi_p,
 	struct urtw_softc *sc = data->sc;
 	struct ieee80211com *ic = &sc->sc_ic;
 	uint8_t noise = 0, rate;
+	uint64_t mactime;
 
 	usbd_xfer_status(xfer, &actlen, NULL, NULL, NULL);
-
-	if (actlen < (int)URTW_MIN_RXBUFSZ) {
-		counter_u64_add(ic->ic_ierrors, 1);
-		return (NULL);
-	}
 
 	if (sc->sc_flags & URTW_RTL8187B) {
 		struct urtw_8187b_rxhdr *rx;
 
+		if (actlen < sizeof(*rx) + IEEE80211_ACK_LEN)
+			goto fail;
+
 		rx = (struct urtw_8187b_rxhdr *)(data->buf +
 		    (actlen - (sizeof(struct urtw_8187b_rxhdr))));
 		flen = le32toh(rx->flag) & 0xfff;
-		if (flen > actlen) {
-			counter_u64_add(ic->ic_ierrors, 1);
-			return (NULL);
-		}
+		if (flen > actlen - sizeof(*rx))
+			goto fail;
+
 		rate = (le32toh(rx->flag) >> URTW_RX_FLAG_RXRATE_SHIFT) & 0xf;
 		/* XXX correct? */
 		rssi = rx->rssi & URTW_RX_RSSI_MASK;
 		noise = rx->noise;
+
+		if (ieee80211_radiotap_active(ic))
+			mactime = rx->mactime;
 	} else {
 		struct urtw_8187l_rxhdr *rx;
+
+		if (actlen < sizeof(*rx) + IEEE80211_ACK_LEN)
+			goto fail;
 
 		rx = (struct urtw_8187l_rxhdr *)(data->buf +
 		    (actlen - (sizeof(struct urtw_8187l_rxhdr))));
 		flen = le32toh(rx->flag) & 0xfff;
-		if (flen > actlen) {
-			counter_u64_add(ic->ic_ierrors, 1);
-			return (NULL);
-		}
+		if (flen > actlen - sizeof(*rx))
+			goto fail;
 
 		rate = (le32toh(rx->flag) >> URTW_RX_FLAG_RXRATE_SHIFT) & 0xf;
 		/* XXX correct? */
 		rssi = rx->rssi & URTW_RX_8187L_RSSI_MASK;
 		noise = rx->noise;
+
+		if (ieee80211_radiotap_active(ic))
+			mactime = rx->mactime;
 	}
 
+	if (flen < IEEE80211_ACK_LEN)
+		goto fail;
+
 	mnew = m_getcl(M_NOWAIT, MT_DATA, M_PKTHDR);
-	if (mnew == NULL) {
-		counter_u64_add(ic->ic_ierrors, 1);
-		return (NULL);
-	}
+	if (mnew == NULL)
+		goto fail;
 
 	m = data->m;
 	data->m = mnew;
@@ -3990,20 +4017,23 @@ urtw_rxeof(struct usb_xfer *xfer, struct urtw_data *data, int *rssi_p,
 	if (ieee80211_radiotap_active(ic)) {
 		struct urtw_rx_radiotap_header *tap = &sc->sc_rxtap;
 
-		/* XXX Are variables correct?  */
-		tap->wr_chan_freq = htole16(ic->ic_curchan->ic_freq);
-		tap->wr_chan_flags = htole16(ic->ic_curchan->ic_flags);
+		tap->wr_tsf = mactime;
+		tap->wr_flags = 0;
 		tap->wr_dbm_antsignal = (int8_t)rssi;
 	}
 
 	wh = mtod(m, struct ieee80211_frame *);
-	if ((wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK) == IEEE80211_FC0_TYPE_DATA)
+	if (IEEE80211_IS_DATA(wh))
 		sc->sc_currate = (rate > 0) ? rate : sc->sc_currate;
 
 	*rssi_p = rssi;
 	*nf_p = noise;		/* XXX correct? */
 
 	return (m);
+
+fail:
+	counter_u64_add(ic->ic_ierrors, 1);
+	return (NULL);
 }
 
 static void
@@ -4011,7 +4041,6 @@ urtw_bulk_rx_callback(struct usb_xfer *xfer, usb_error_t error)
 {
 	struct urtw_softc *sc = usbd_xfer_softc(xfer);
 	struct ieee80211com *ic = &sc->sc_ic;
-	struct ieee80211_frame *wh;
 	struct ieee80211_node *ni;
 	struct mbuf *m = NULL;
 	struct urtw_data *data;
@@ -4049,9 +4078,13 @@ setup:
 		 */
 		URTW_UNLOCK(sc);
 		if (m != NULL) {
-			wh = mtod(m, struct ieee80211_frame *);
-			ni = ieee80211_find_rxnode(ic,
-			    (struct ieee80211_frame_min *)wh);
+			if (m->m_pkthdr.len >=
+			    sizeof(struct ieee80211_frame_min)) {
+				ni = ieee80211_find_rxnode(ic,
+				    mtod(m, struct ieee80211_frame_min *));
+			} else
+				ni = NULL;
+
 			if (ni != NULL) {
 				(void) ieee80211_input(ni, m, rssi, nf);
 				/* node is no longer needed */

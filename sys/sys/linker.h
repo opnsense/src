@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1997-2000 Doug Rabson
  * All rights reserved.
  *
@@ -73,6 +75,7 @@ struct linker_file {
     int			userrefs;	/* kldload(2) count */
     int			flags;
 #define LINKER_FILE_LINKED	0x1	/* file has been fully linked */
+#define LINKER_FILE_MODULES	0x2	/* file has >0 modules at preload */
     TAILQ_ENTRY(linker_file) link;	/* list of all loaded files */
     char*		filename;	/* file which was loaded */
     char*		pathname;	/* file name with full path */
@@ -269,9 +272,8 @@ extern int kld_debug;
 typedef int elf_lookup_fn(linker_file_t, Elf_Size, int, Elf_Addr *);
 
 /* Support functions */
+bool	elf_is_ifunc_reloc(Elf_Size r_info);
 int	elf_reloc(linker_file_t _lf, Elf_Addr base, const void *_rel,
-	    int _type, elf_lookup_fn _lu);
-int	elf_reloc_ifunc(linker_file_t _lf, Elf_Addr base, const void *_rel,
 	    int _type, elf_lookup_fn _lu);
 int	elf_reloc_local(linker_file_t _lf, Elf_Addr base, const void *_rel,
 	    int _type, elf_lookup_fn _lu);

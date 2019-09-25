@@ -4,7 +4,7 @@
 _LIBARCHIVEDIR=	${SRCTOP}/contrib/libarchive
 
 PROG=	bsdtar
-BSDTAR_VERSION_STRING=	3.3.2
+BSDTAR_VERSION_STRING=	3.4.0
 
 .PATH: ${_LIBARCHIVEDIR}/tar
 SRCS=	bsdtar.c	\
@@ -33,8 +33,7 @@ CFLAGS+=	-I${_LIBARCHIVEDIR}/libarchive_fe
 SYMLINKS=	bsdtar ${BINDIR}/tar
 MLINKS=	bsdtar.1 tar.1
 
-.if ${MK_TESTS} != "no"
-SUBDIR+=	tests
-.endif
+HAS_TESTS=
+SUBDIR.${MK_TESTS}+= tests
 
 .include <bsd.prog.mk>

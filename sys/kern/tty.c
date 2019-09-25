@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2008 Ed Schouten <ed@FreeBSD.org>
  * All rights reserved.
  *
@@ -31,7 +33,6 @@
 __FBSDID("$FreeBSD$");
 
 #include "opt_capsicum.h"
-#include "opt_compat.h"
 
 #include <sys/param.h>
 #include <sys/capsicum.h>
@@ -1205,7 +1206,7 @@ tty_to_xtty(struct tty *tp, struct xtty *xt)
 	xt->xt_pgid = tp->t_pgrp ? tp->t_pgrp->pg_id : 0;
 	xt->xt_sid = tp->t_session ? tp->t_session->s_sid : 0;
 	xt->xt_flags = tp->t_flags;
-	xt->xt_dev = tp->t_dev ? dev2udev(tp->t_dev) : NODEV;
+	xt->xt_dev = tp->t_dev ? dev2udev(tp->t_dev) : (uint32_t)NODEV;
 }
 
 static int

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2011-2015 LSI Corp.
  * Copyright (c) 2013-2015 Avago Technologies
  * All rights reserved.
@@ -46,6 +48,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/uio.h>
 #include <sys/sysctl.h>
 #include <sys/endian.h>
+#include <sys/proc.h>
 #include <sys/queue.h>
 #include <sys/kthread.h>
 #include <sys/taskqueue.h>
@@ -629,9 +632,11 @@ mpssas_add_device(struct mps_softc *sc, u16 handle, u8 linkrate){
 
 	sassc = sc->sassc;
 	mpssas_startup_increment(sassc);
-	if ((mps_config_get_sas_device_pg0(sc, &mpi_reply, &config_page,
-	     MPI2_SAS_DEVICE_PGAD_FORM_HANDLE, handle))) {
-		printf("%s: error reading SAS device page0\n", __func__);
+	if (mps_config_get_sas_device_pg0(sc, &mpi_reply, &config_page,
+	    MPI2_SAS_DEVICE_PGAD_FORM_HANDLE, handle) != 0) {
+		mps_dprint(sc, MPS_INFO|MPS_MAPPING|MPS_FAULT,
+		    "Error reading SAS device %#x page0, iocstatus= 0x%x\n",
+		    handle, mpi_reply.IOCStatus);
 		error = ENXIO;
 		goto out;
 	}
@@ -643,11 +648,14 @@ mpssas_add_device(struct mps_softc *sc, u16 handle, u8 linkrate){
 		Mpi2ConfigReply_t tmp_mpi_reply;
 		Mpi2SasDevicePage0_t parent_config_page;
 
-		if ((mps_config_get_sas_device_pg0(sc, &tmp_mpi_reply,
-		     &parent_config_page, MPI2_SAS_DEVICE_PGAD_FORM_HANDLE,
-		     le16toh(config_page.ParentDevHandle)))) {
-			printf("%s: error reading SAS device %#x page0\n",
-			       __func__, le16toh(config_page.ParentDevHandle));
+		if (mps_config_get_sas_device_pg0(sc, &tmp_mpi_reply,
+		    &parent_config_page, MPI2_SAS_DEVICE_PGAD_FORM_HANDLE,
+		    le16toh(config_page.ParentDevHandle)) != 0) {
+			mps_dprint(sc, MPS_MAPPING|MPS_FAULT,
+			    "Error reading parent SAS device %#x page0, "
+			    "iocstatus= 0x%x\n",
+			    le16toh(config_page.ParentDevHandle),
+			    tmp_mpi_reply.IOCStatus);
 		} else {
 			parent_sas_address = parent_config_page.SASAddress.High;
 			parent_sas_address = (parent_sas_address << 32) |
@@ -658,6 +666,8 @@ mpssas_add_device(struct mps_softc *sc, u16 handle, u8 linkrate){
 	/* TODO Check proper endianness */
 	sas_address = config_page.SASAddress.High;
 	sas_address = (sas_address << 32) | config_page.SASAddress.Low;
+        mps_dprint(sc, MPS_MAPPING, "Handle 0x%04x SAS Address from SAS device "
+            "page0 = %jx\n", handle, sas_address);
 
 	/*
 	 * Always get SATA Identify information because this is used to
@@ -668,12 +678,13 @@ mpssas_add_device(struct mps_softc *sc, u16 handle, u8 linkrate){
 		ret = mpssas_get_sas_address_for_sata_disk(sc, &sas_address,
 		    handle, device_info, &is_SATA_SSD);
 		if (ret) {
-			mps_dprint(sc, MPS_INFO, "%s: failed to get disk type "
-			    "(SSD or HDD) for SATA device with handle 0x%04x\n",
+			mps_dprint(sc, MPS_MAPPING|MPS_ERROR,
+			    "%s: failed to get disk type (SSD or HDD) for SATA "
+			    "device with handle 0x%04x\n",
 			    __func__, handle);
 		} else {
-			mps_dprint(sc, MPS_INFO, "SAS Address from SATA "
-			    "device = %jx\n", sas_address);
+			mps_dprint(sc, MPS_MAPPING, "Handle 0x%04x SAS Address "
+			    "from SATA device = %jx\n", handle, sas_address);
 		}
 	}
 
@@ -716,8 +727,8 @@ mpssas_add_device(struct mps_softc *sc, u16 handle, u8 linkrate){
 	targ = &sassc->targets[id];
 	if (!(targ->flags & MPS_TARGET_FLAGS_RAID_COMPONENT)) {
 		if (mpssas_check_id(sassc, id) != 0) {
-			device_printf(sc->mps_dev, "Excluding target id %d\n",
-			    id);
+			mps_dprint(sc, MPS_MAPPING|MPS_INFO,
+			    "Excluding target id %d\n", id);
 			error = ENXIO;
 			goto out;
 		}
@@ -730,8 +741,6 @@ mpssas_add_device(struct mps_softc *sc, u16 handle, u8 linkrate){
 		}
 	}
 
-	mps_dprint(sc, MPS_MAPPING, "SAS Address from SAS device page0 = %jx\n",
-	    sas_address);
 	targ->devinfo = device_info;
 	targ->devname = le32toh(config_page.DeviceName.High);
 	targ->devname = (targ->devname << 32) | 
@@ -972,8 +981,9 @@ mpssas_get_sata_identify(struct mps_softc *sc, u16 handle,
  		 * If the request returns an error then we need to do a diag
  		 * reset
  		 */ 
- 		printf("%s: request for page completed with error %d",
-		    __func__, error);
+ 		mps_dprint(sc, MPS_INFO|MPS_FAULT|MPS_MAPPING,
+		    "Request for SATA PASSTHROUGH page completed with error %d",
+		    error);
 		error = ENXIO;
 		goto out;
 	}
@@ -981,8 +991,9 @@ mpssas_get_sata_identify(struct mps_softc *sc, u16 handle,
 	bcopy(reply, mpi_reply, sizeof(Mpi2SataPassthroughReply_t));
 	if ((le16toh(reply->IOCStatus) & MPI2_IOCSTATUS_MASK) !=
 	    MPI2_IOCSTATUS_SUCCESS) {
-		printf("%s: error reading SATA PASSTHRU; iocstatus = 0x%x\n",
-		    __func__, reply->IOCStatus);
+		mps_dprint(sc, MPS_INFO|MPS_MAPPING|MPS_FAULT,
+		    "Error reading device %#x SATA PASSTHRU; iocstatus= 0x%x\n",
+		    handle, reply->IOCStatus);
 		error = ENXIO;
 		goto out;
 	}
@@ -1104,6 +1115,7 @@ out:
 /**
  * mpssas_SSU_to_SATA_devices 
  * @sc: per adapter object
+ * @howto: mast of RB_* bits for how we're rebooting
  *
  * Looks through the target list and issues a StartStopUnit SCSI command to each
  * SATA direct-access device.  This helps to ensure that data corruption is
@@ -1199,7 +1211,9 @@ mpssas_SSU_to_SATA_devices(struct mps_softc *sc, int howto)
 	 */
 	while (sc->SSU_refcount > 0) {
 		pause("mpswait", hz/10);
-		
+		if (SCHEDULER_STOPPED())
+			xpt_sim_poll(sassc->sim);
+
 		if (--timeout == 0) {
 			mps_dprint(sc, MPS_FAULT, "Time has expired waiting "
 			    "for SSU commands to complete.\n");
@@ -1235,6 +1249,7 @@ mpssas_stop_unit_done(struct cam_periph *periph, union ccb *done_ccb)
 /**
  * mpssas_ir_shutdown - IR shutdown notification
  * @sc: per adapter object
+ * @howto: mast of RB_* bits for how we're rebooting
  *
  * Sending RAID Action to alert the Integrated RAID subsystem of the IOC that
  * the host system is shutting down.

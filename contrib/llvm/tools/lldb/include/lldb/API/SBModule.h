@@ -129,6 +129,21 @@ public:
 
   lldb::SBCompileUnit GetCompileUnitAtIndex(uint32_t);
 
+  //------------------------------------------------------------------
+  /// Find compile units related to *this module and passed source
+  /// file.
+  ///
+  /// @param[in] sb_file_spec
+  ///     A lldb::SBFileSpec object that contains source file
+  ///     specification.
+  ///
+  /// @return
+  ///     A lldb::SBSymbolContextList that gets filled in with all of
+  ///     the symbol contexts for all the matches.
+  //------------------------------------------------------------------
+  lldb::SBSymbolContextList
+  FindCompileUnits(const lldb::SBFileSpec &sb_file_spec);
+
   size_t GetNumSymbols();
 
   lldb::SBSymbol GetSymbolAtIndex(size_t idx);
@@ -294,6 +309,7 @@ public:
   lldb::SBFileSpec GetSymbolFileSpec() const;
 
   lldb::SBAddress GetObjectFileHeaderAddress() const;
+  lldb::SBAddress GetObjectFileEntryPointAddress() const;
 
 private:
   friend class SBAddress;

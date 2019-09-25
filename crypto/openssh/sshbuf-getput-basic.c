@@ -1,4 +1,4 @@
-/*	$OpenBSD: sshbuf-getput-basic.c,v 1.6 2016/06/16 11:00:17 dtucker Exp $	*/
+/*	$OpenBSD: sshbuf-getput-basic.c,v 1.7 2017/06/01 04:51:58 djm Exp $	*/
 /*
  * Copyright (c) 2011 Damien Miller
  *
@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "xmalloc.h"
 #include "ssherr.h"
 #include "sshbuf.h"
 
@@ -365,7 +366,7 @@ sshbuf_put_string(struct sshbuf *buf, const void *v, size_t len)
 int
 sshbuf_put_cstring(struct sshbuf *buf, const char *v)
 {
-	return sshbuf_put_string(buf, (u_char *)v, v == NULL ? 0 : strlen(v));
+	return sshbuf_put_string(buf, v, v == NULL ? 0 : strlen(v));
 }
 
 int
@@ -461,4 +462,104 @@ sshbuf_get_bignum2_bytes_direct(struct sshbuf *buf,
 		return SSH_ERR_INTERNAL_ERROR;
 	}
 	return 0;
+}
+
+/*
+ * store struct pwd
+ */
+int
+sshbuf_put_passwd(struct sshbuf *buf, const struct passwd *pwent)
+{
+	int r;
+
+	/*
+	 * We never send pointer values of struct passwd.
+	 * It is safe from wild pointer even if a new pointer member is added.
+	 */
+
+	if ((r = sshbuf_put_u64(buf, sizeof(*pwent)) != 0) ||
+	    (r = sshbuf_put_cstring(buf, pwent->pw_name)) != 0 ||
+	    (r = sshbuf_put_cstring(buf, "*")) != 0 ||
+	    (r = sshbuf_put_u32(buf, pwent->pw_uid)) != 0 ||
+	    (r = sshbuf_put_u32(buf, pwent->pw_gid)) != 0 ||
+#ifdef HAVE_STRUCT_PASSWD_PW_CHANGE
+	    (r = sshbuf_put_time(buf, pwent->pw_change)) != 0 ||
+#endif
+#ifdef HAVE_STRUCT_PASSWD_PW_GECOS
+	    (r = sshbuf_put_cstring(buf, pwent->pw_gecos)) != 0 ||
+#endif
+#ifdef HAVE_STRUCT_PASSWD_PW_CLASS
+	    (r = sshbuf_put_cstring(buf, pwent->pw_class)) != 0 ||
+#endif
+	    (r = sshbuf_put_cstring(buf, pwent->pw_dir)) != 0 ||
+	    (r = sshbuf_put_cstring(buf, pwent->pw_shell)) != 0 ||
+#ifdef HAVE_STRUCT_PASSWD_PW_EXPIRE
+	    (r = sshbuf_put_time(buf, pwent->pw_expire)) != 0 ||
+#endif
+	    (r = sshbuf_put_u32(buf, pwent->pw_fields)) != 0) {
+		return r;
+	}
+	return 0;
+}
+
+/*
+ * extract struct pwd
+ */
+struct passwd *
+sshbuf_get_passwd(struct sshbuf *buf)
+{
+	struct passwd *pw;
+	u_int64_t len;
+	int r;
+
+	/* check if size of struct passwd is as same as sender's size */
+	r = sshbuf_get_u64(buf, &len);
+	if (r != 0 || len != sizeof(*pw))
+		return NULL;
+
+	pw = xcalloc(1, sizeof(*pw));
+	if (sshbuf_get_cstring(buf, &pw->pw_name, NULL) != 0 ||
+	    sshbuf_get_cstring(buf, &pw->pw_passwd, NULL) != 0 ||
+	    sshbuf_get_u32(buf, &pw->pw_uid) != 0 ||
+	    sshbuf_get_u32(buf, &pw->pw_gid) != 0 ||
+#ifdef HAVE_STRUCT_PASSWD_PW_CHANGE
+	    sshbuf_get_time(buf, &pw->pw_change) != 0 ||
+#endif
+#ifdef HAVE_STRUCT_PASSWD_PW_GECOS
+	    sshbuf_get_cstring(buf, &pw->pw_gecos, NULL) != 0 ||
+#endif
+#ifdef HAVE_STRUCT_PASSWD_PW_CLASS
+	    sshbuf_get_cstring(buf, &pw->pw_class, NULL) != 0 ||
+#endif
+	    sshbuf_get_cstring(buf, &pw->pw_dir, NULL) != 0 ||
+	    sshbuf_get_cstring(buf, &pw->pw_shell, NULL) != 0 ||
+#ifdef HAVE_STRUCT_PASSWD_PW_EXPIRE
+	    sshbuf_get_time(buf, &pw->pw_expire) != 0 ||
+#endif
+	    sshbuf_get_u32(buf, &pw->pw_fields) != 0) {
+		sshbuf_free_passwd(pw);
+		return NULL;
+	}
+	return pw;
+}
+
+/*
+ * free struct passwd obtained from sshbuf_get_passwd.
+ */
+void
+sshbuf_free_passwd(struct passwd *pwent)
+{
+	if (pwent == NULL)
+		return;
+	free(pwent->pw_shell);
+	free(pwent->pw_dir);
+#ifdef HAVE_STRUCT_PASSWD_PW_CLASS
+	free(pwent->pw_class);
+#endif
+#ifdef HAVE_STRUCT_PASSWD_PW_GECOS
+	free(pwent->pw_gecos);
+#endif
+	free(pwent->pw_passwd);
+	free(pwent->pw_name);
+	free(pwent);
 }

@@ -16,6 +16,7 @@
 
 #include "Targets/AArch64.h"
 #include "Targets/AMDGPU.h"
+#include "Targets/ARC.h"
 #include "Targets/ARM.h"
 #include "Targets/AVR.h"
 #include "Targets/BPF.h"
@@ -25,10 +26,10 @@
 #include "Targets/MSP430.h"
 #include "Targets/Mips.h"
 #include "Targets/NVPTX.h"
-#include "Targets/Nios2.h"
 #include "Targets/OSTargets.h"
 #include "Targets/PNaCl.h"
 #include "Targets/PPC.h"
+#include "Targets/RISCV.h"
 #include "Targets/SPIR.h"
 #include "Targets/Sparc.h"
 #include "Targets/SystemZ.h"
@@ -37,6 +38,7 @@
 #include "Targets/X86.h"
 #include "Targets/XCore.h"
 #include "clang/Basic/Diagnostic.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Triple.h"
 
 using namespace clang;
@@ -121,6 +123,9 @@ TargetInfo *AllocateTarget(const llvm::Triple &Triple,
   switch (Triple.getArch()) {
   default:
     return nullptr;
+
+  case llvm::Triple::arc:
+    return new ARCTargetInfo(Triple, Opts);
 
   case llvm::Triple::xcore:
     return new XCoreTargetInfo(Triple, Opts);
@@ -240,9 +245,6 @@ TargetInfo *AllocateTarget(const llvm::Triple &Triple,
 
   case llvm::Triple::msp430:
     return new MSP430TargetInfo(Triple, Opts);
-
-  case llvm::Triple::nios2:
-    return new LinuxTargetInfo<Nios2TargetInfo>(Triple, Opts);
 
   case llvm::Triple::mips:
     switch (os) {
@@ -370,6 +372,17 @@ TargetInfo *AllocateTarget(const llvm::Triple &Triple,
   case llvm::Triple::r600:
     return new AMDGPUTargetInfo(Triple, Opts);
 
+  case llvm::Triple::riscv32:
+    // TODO: add cases for FreeBSD, NetBSD, RTEMS once tested.
+    if (os == llvm::Triple::Linux)
+      return new LinuxTargetInfo<RISCV32TargetInfo>(Triple, Opts);
+    return new RISCV32TargetInfo(Triple, Opts);
+  case llvm::Triple::riscv64:
+    // TODO: add cases for FreeBSD, NetBSD, RTEMS once tested.
+    if (os == llvm::Triple::Linux)
+      return new LinuxTargetInfo<RISCV64TargetInfo>(Triple, Opts);
+    return new RISCV64TargetInfo(Triple, Opts);
+
   case llvm::Triple::sparc:
     switch (os) {
     case llvm::Triple::Linux:
@@ -482,6 +495,8 @@ TargetInfo *AllocateTarget(const llvm::Triple &Triple,
       return new NaClTargetInfo<X86_32TargetInfo>(Triple, Opts);
     case llvm::Triple::ELFIAMCU:
       return new MCUX86_32TargetInfo(Triple, Opts);
+    case llvm::Triple::Hurd:
+      return new HurdTargetInfo<X86_32TargetInfo>(Triple, Opts);
     default:
       return new X86_32TargetInfo(Triple, Opts);
     }
@@ -553,19 +568,29 @@ TargetInfo *AllocateTarget(const llvm::Triple &Triple,
   case llvm::Triple::wasm32:
     if (Triple.getSubArch() != llvm::Triple::NoSubArch ||
         Triple.getVendor() != llvm::Triple::UnknownVendor ||
-        Triple.getOS() != llvm::Triple::UnknownOS ||
-        Triple.getEnvironment() != llvm::Triple::UnknownEnvironment ||
-        !(Triple.isOSBinFormatELF() || Triple.isOSBinFormatWasm()))
+        !Triple.isOSBinFormatWasm())
       return nullptr;
-    return new WebAssemblyOSTargetInfo<WebAssembly32TargetInfo>(Triple, Opts);
+    switch (Triple.getOS()) {
+      case llvm::Triple::WASI:
+        return new WASITargetInfo<WebAssembly32TargetInfo>(Triple, Opts);
+      case llvm::Triple::UnknownOS:
+        return new WebAssemblyOSTargetInfo<WebAssembly32TargetInfo>(Triple, Opts);
+      default:
+        return nullptr;
+    }
   case llvm::Triple::wasm64:
     if (Triple.getSubArch() != llvm::Triple::NoSubArch ||
         Triple.getVendor() != llvm::Triple::UnknownVendor ||
-        Triple.getOS() != llvm::Triple::UnknownOS ||
-        Triple.getEnvironment() != llvm::Triple::UnknownEnvironment ||
-        !(Triple.isOSBinFormatELF() || Triple.isOSBinFormatWasm()))
+        !Triple.isOSBinFormatWasm())
       return nullptr;
-    return new WebAssemblyOSTargetInfo<WebAssembly64TargetInfo>(Triple, Opts);
+    switch (Triple.getOS()) {
+      case llvm::Triple::WASI:
+        return new WASITargetInfo<WebAssembly64TargetInfo>(Triple, Opts);
+      case llvm::Triple::UnknownOS:
+        return new WebAssemblyOSTargetInfo<WebAssembly64TargetInfo>(Triple, Opts);
+      default:
+        return nullptr;
+    }
 
   case llvm::Triple::renderscript32:
     return new LinuxTargetInfo<RenderScript32TargetInfo>(Triple, Opts);
@@ -595,6 +620,10 @@ TargetInfo::CreateTargetInfo(DiagnosticsEngine &Diags,
   // Set the target CPU if specified.
   if (!Opts->CPU.empty() && !Target->setCPU(Opts->CPU)) {
     Diags.Report(diag::err_target_unknown_cpu) << Opts->CPU;
+    SmallVector<StringRef, 32> ValidList;
+    Target->fillValidCPUList(ValidList);
+    if (!ValidList.empty())
+      Diags.Report(diag::note_valid_options) << llvm::join(ValidList, ", ");
     return nullptr;
   }
 
@@ -621,6 +650,9 @@ TargetInfo::CreateTargetInfo(DiagnosticsEngine &Diags,
   Opts->Features.clear();
   for (const auto &F : Features)
     Opts->Features.push_back((F.getValue() ? "+" : "-") + F.getKey().str());
+  // Sort here, so we handle the features in a predictable order. (This matters
+  // when we're dealing with features that overlap.)
+  llvm::sort(Opts->Features);
 
   if (!Target->handleTargetFeatures(Opts->Features, Diags))
     return nullptr;
@@ -631,6 +663,8 @@ TargetInfo::CreateTargetInfo(DiagnosticsEngine &Diags,
 
   if (!Target->validateTarget(Diags))
     return nullptr;
+
+  Target->CheckFixedPointBits();
 
   return Target.release();
 }

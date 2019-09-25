@@ -27,14 +27,12 @@ exclude()
 }
 
 exclude EXFAIL common/aggs/tst.subr.d
-exclude EXFAIL common/dtraceUtil/tst.DataModel32.d.ksh
 exclude EXFAIL common/dtraceUtil/tst.ELFGenerationOut.d.ksh
 exclude EXFAIL common/dtraceUtil/tst.ELFGenerationWithO.d.ksh
 exclude EXFAIL common/funcs/tst.copyin.d
 exclude EXFAIL common/funcs/tst.copyinto.d
 exclude EXFAIL common/funcs/tst.ddi_pathname.d
 exclude EXFAIL common/io/tst.fds.d
-exclude EXFAIL common/ip/tst.ipv4localudp.ksh
 exclude EXFAIL common/mdb/tst.dtracedcmd.ksh
 exclude EXFAIL common/misc/tst.dofmax.ksh
 exclude EXFAIL common/misc/tst.include.ksh
@@ -119,17 +117,14 @@ exclude SKIP common/builtinvar/tst.ipl.d
 exclude SKIP common/builtinvar/tst.ipl1.d
 
 # These tests rely on being able to find a host via broadcast pings.
+exclude EXFAIL common/ip/tst.ipv4remotesctp.ksh
 exclude EXFAIL common/ip/tst.ipv4remotetcp.ksh
 exclude EXFAIL common/ip/tst.ipv4remoteudp.ksh
+exclude EXFAIL common/ip/tst.ipv4remoteudplite.ksh
 exclude EXFAIL common/ip/tst.ipv6remoteicmp.ksh
 exclude EXFAIL common/ip/tst.ipv4remoteicmp.ksh
-
-# FreeBSD never places tcpcbs in the TIME_WAIT state, so the probe never fires.
-exclude EXFAIL common/ip/tst.localtcpstate.ksh
+exclude EXFAIL common/ip/tst.remotesctpstate.ksh
 exclude EXFAIL common/ip/tst.remotetcpstate.ksh
-
-# Depends on the number of probes in /bin/sh and the current DOF limit.
-exclude EXFAIL common/pid/err.D_PROC_CREATEFAIL.many.d
 
 # Tries to enable pid$target:libc::entry, though there's no "libc" module.
 # Currently unsure as to whether this might be a libproc bug.
@@ -141,11 +136,6 @@ exclude EXFAIL common/pid/tst.newprobes.ksh
 # libproc+librtld_db don't handle dlopen(2) yet.
 exclude EXFAIL common/pid/tst.provregex2.ksh
 exclude EXFAIL common/pid/tst.provregex4.ksh
-
-# libproc doesn't properly handle probe sites that correspond to multiple
-# symbols.
-exclude EXFAIL common/pid/tst.weak1.d
-exclude EXFAIL common/pid/tst.weak2.d
 
 # This test appears to be invalid. dtrace is supposed to press on if a
 # depends_on pragma cannot be satisfied, per the comment above
@@ -202,3 +192,6 @@ exclude EXFAIL common/usdt/tst.static2.ksh
 
 # Uses the Solaris-specific ppriv(1).
 exclude EXFAIL common/usdt/tst.user.ksh
+
+# Triggers a lock assertion by using the raise() action from a profile probe.
+exclude SKIP common/ustack/tst.spin.ksh

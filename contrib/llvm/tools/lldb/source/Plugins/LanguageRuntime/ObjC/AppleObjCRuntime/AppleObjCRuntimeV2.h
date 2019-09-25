@@ -10,14 +10,10 @@
 #ifndef liblldb_AppleObjCRuntimeV2_h_
 #define liblldb_AppleObjCRuntimeV2_h_
 
-// C Includes
-// C++ Includes
 #include <map>
 #include <memory>
 #include <mutex>
 
-// Other libraries and framework includes
-// Project includes
 #include "AppleObjCRuntime.h"
 #include "lldb/Target/ObjCLanguageRuntime.h"
 #include "lldb/lldb-private.h"
@@ -93,6 +89,8 @@ public:
   TaggedPointerVendor *GetTaggedPointerVendor() override {
     return m_tagged_pointer_vendor_ap.get();
   }
+
+  lldb::addr_t GetTaggedPointerObfuscator();
 
   void GetValuesForGlobalCFBooleans(lldb::addr_t &cf_true,
                                     lldb::addr_t &cf_false) override;
@@ -330,6 +328,7 @@ private:
   std::mutex m_get_shared_cache_class_info_args_mutex;
 
   std::unique_ptr<DeclVendor> m_decl_vendor_ap;
+  lldb::addr_t m_tagged_pointer_obfuscator;
   lldb::addr_t m_isa_hash_table_ptr;
   HashTableSignature m_hash_signature;
   bool m_has_object_getClass;

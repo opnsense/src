@@ -53,9 +53,45 @@ namespace llvm {
 #include "AArch64GenSystemOperands.inc"
   }
 }
+
+namespace llvm {
+  namespace AArch64TSB {
+#define GET_TSB_IMPL
+#include "AArch64GenSystemOperands.inc"
+  }
+}
+
+namespace llvm {
+  namespace AArch64PRCTX {
+#define GET_PRCTX_IMPL
+#include "AArch64GenSystemOperands.inc"
+  }
+}
+
 namespace llvm {
   namespace AArch64PRFM {
 #define GET_PRFM_IMPL
+#include "AArch64GenSystemOperands.inc"
+  }
+}
+
+namespace llvm {
+  namespace AArch64SVEPRFM {
+#define GET_SVEPRFM_IMPL
+#include "AArch64GenSystemOperands.inc"
+  }
+}
+
+namespace llvm {
+  namespace AArch64SVEPredPattern {
+#define GET_SVEPREDPAT_IMPL
+#include "AArch64GenSystemOperands.inc"
+  }
+}
+
+namespace llvm {
+  namespace AArch64ExactFPImm {
+#define GET_EXACTFPIMM_IMPL
 #include "AArch64GenSystemOperands.inc"
   }
 }
@@ -70,6 +106,13 @@ namespace llvm {
 namespace llvm {
   namespace AArch64PSBHint {
 #define GET_PSB_IMPL
+#include "AArch64GenSystemOperands.inc"
+  }
+}
+
+namespace llvm {
+  namespace AArch64BTIHint {
+#define GET_BTI_IMPL
 #include "AArch64GenSystemOperands.inc"
   }
 }

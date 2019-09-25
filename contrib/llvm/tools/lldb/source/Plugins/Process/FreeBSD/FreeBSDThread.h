@@ -10,11 +10,9 @@
 #ifndef liblldb_FreeBSDThread_H_
 #define liblldb_FreeBSDThread_H_
 
-// C++ Includes
 #include <memory>
 #include <string>
 
-// Other libraries and framework includes
 #include "RegisterContextPOSIX.h"
 #include "lldb/Target/Thread.h"
 
@@ -24,7 +22,7 @@ class POSIXBreakpointProtocol;
 
 //------------------------------------------------------------------------------
 // @class FreeBSDThread
-// @brief Abstraction of a FreeBSD thread.
+// Abstraction of a FreeBSD thread.
 class FreeBSDThread : public lldb_private::Thread {
 public:
   //------------------------------------------------------------------

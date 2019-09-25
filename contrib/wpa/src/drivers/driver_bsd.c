@@ -662,7 +662,7 @@ rtbuf_len(void)
 #undef WPA_OUI_TYPE
 
 static int bsd_sta_deauth(void *priv, const u8 *own_addr, const u8 *addr,
-			  int reason_code);
+			  u16 reason_code);
 
 static const char *
 ether_sprintf(const u8 *addr)
@@ -754,7 +754,7 @@ bsd_read_sta_driver_data(void *priv, struct hostap_sta_driver_data *data,
 }
 
 static int
-bsd_sta_deauth(void *priv, const u8 *own_addr, const u8 *addr, int reason_code)
+bsd_sta_deauth(void *priv, const u8 *own_addr, const u8 *addr, u16 reason_code)
 {
 	return bsd_send_mlme_param(priv, IEEE80211_MLME_DEAUTH, reason_code,
 				   addr);
@@ -762,7 +762,7 @@ bsd_sta_deauth(void *priv, const u8 *own_addr, const u8 *addr, int reason_code)
 
 static int
 bsd_sta_disassoc(void *priv, const u8 *own_addr, const u8 *addr,
-		 int reason_code)
+		 u16 reason_code)
 {
 	return bsd_send_mlme_param(priv, IEEE80211_MLME_DISASSOC, reason_code,
 				   addr);
@@ -1025,7 +1025,7 @@ wpa_driver_bsd_set_drop_unencrypted(void *priv, int enabled)
 }
 
 static int
-wpa_driver_bsd_deauthenticate(void *priv, const u8 *addr, int reason_code)
+wpa_driver_bsd_deauthenticate(void *priv, const u8 *addr, u16 reason_code)
 {
 	return bsd_send_mlme_param(priv, IEEE80211_MLME_DEAUTH, reason_code,
 				   addr);
@@ -1234,6 +1234,11 @@ wpa_driver_bsd_event_receive(int sock, void *ctx, void *sock_ctx)
 	struct ieee80211_join_event *join;
 	int n;
 
+	/*
+	 * CID 1394785: Memory - illegal access (STRING_NULL):
+	 * Though global->event_buf is a char *, it actually contains
+	 * a struct rt_msghdr *. See below.
+	 */
 	n = read(sock, global->event_buf, global->event_buf_len);
 	if (n < 0) {
 		if (errno != EINTR && errno != EAGAIN)
@@ -1242,6 +1247,10 @@ wpa_driver_bsd_event_receive(int sock, void *ctx, void *sock_ctx)
 		return;
 	}
 
+	/*
+	 * CID 1394785: global->event_buf is assigned here to a
+	 * struct rt_msghdr *.
+	 */
 	rtm = (struct rt_msghdr *) global->event_buf;
 	if (rtm->rtm_version != RTM_VERSION) {
 		wpa_printf(MSG_DEBUG, "Invalid routing message version=%d",

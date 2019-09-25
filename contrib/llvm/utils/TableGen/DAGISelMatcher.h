@@ -13,8 +13,8 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/CodeGen/MachineValueType.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/MachineValueType.h"
 
 namespace llvm {
   struct CodeGenRegister;
@@ -414,10 +414,14 @@ private:
 /// see if the node is acceptable.
 class CheckPredicateMatcher : public Matcher {
   TreePattern *Pred;
+  const SmallVector<unsigned, 4> Operands;
 public:
-  CheckPredicateMatcher(const TreePredicateFn &pred);
+  CheckPredicateMatcher(const TreePredicateFn &pred,
+                        const SmallVectorImpl<unsigned> &Operands);
 
   TreePredicateFn getPredicate() const;
+  unsigned getNumOperands() const;
+  unsigned getOperandNo(unsigned i) const;
 
   static bool classof(const Matcher *N) {
     return N->getKind() == CheckPredicate;

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1980, 1992, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -42,6 +44,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/param.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/queue.h>
 #include <sys/sysctl.h>
 
 #include <netinet/in.h>
@@ -53,6 +56,7 @@ __FBSDID("$FreeBSD$");
 #include <netinet/tcp_timer.h>
 #include <netinet/tcp_var.h>
 
+#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 #include <paths.h>
@@ -234,7 +238,7 @@ showtcp(void)
 	domode(&stats);
 
 #define DO(stat, row, col) \
-	mvwprintw(wnd, row, col, "%12lu", stats.stat)
+	mvwprintw(wnd, row, col, "%12"PRIu64, stats.stat)
 #define	L(row, stat) DO(stat, row, 0)
 #define	R(row, stat) DO(stat, row, 38)
 	L(1, tcps_connattempt);		R(1, tcps_sndtotal);

@@ -27,7 +27,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd September 08, 2017
+.Dd February 20, 2019
 .Dt ZPOOL 8
 .Os
 .Sh NAME
@@ -121,6 +121,11 @@
 .Ar pool | id
 .Op Ar newpool
 .Nm
+.Cm initialize
+.Op Fl cs
+.Ar pool
+.Op Ar device Ns ...
+.Nm
 .Cm iostat
 .Op Fl T Cm d Ns | Ns Cm u
 .Op Fl v
@@ -182,7 +187,7 @@
 .Op Ar device ...
 .Nm
 .Cm status
-.Op Fl vx
+.Op Fl Dvx
 .Op Fl T Cm d Ns | Ns Cm u
 .Op Ar pool
 .Ar ...
@@ -599,10 +604,6 @@ Amount of storage space within the pool that has been physically allocated.
 .It Sy capacity
 Percentage of pool space used. This property can also be referred to by its
 shortened column name, "cap".
-.It Sy comment
-A text string consisting of printable ASCII characters that will be stored
-such that it is available even if the pool becomes faulted.  An administrator
-can provide additional information about a pool using this property.
 .It Sy dedupratio
 The deduplication ratio specified for a pool, expressed as a multiplier.
 For example, a
@@ -1437,6 +1438,32 @@ to fully rewind.
 .El
 .It Xo
 .Nm
+.Cm initialize
+.Op Fl cs
+.Ar pool
+.Op Ar device Ns ...
+.Xc
+Begins initializing by writing to all unallocated regions on the specified
+devices, or all eligible devices in the pool if no individual devices are
+specified.
+Only leaf data or log devices may be initialized.
+.Bl -tag -width Ds
+.It Fl c, -cancel
+Cancel initializing on the specified devices, or all eligible devices if none
+are specified.
+If one or more target devices are invalid or are not currently being
+initialized, the command will fail and no cancellation will occur on any device.
+.It Fl s -suspend
+Suspend initializing on the specified devices, or all eligible devices if none
+are specified.
+If one or more target devices are invalid or are not currently being
+initialized, the command will fail and no suspension will occur on any device.
+Initializing can then be resumed by running
+.Nm zpool Cm initialize
+with no flags on the relevant target devices.
+.El
+.It Xo
+.Nm
 .Cm iostat
 .Op Fl T Cm d Ns | Ns Cm u
 .Op Fl v
@@ -1548,9 +1575,11 @@ section for a list of valid properties. The default list is
 .Sy size ,
 .Sy used ,
 .Sy available ,
-.Sy fragmentation ,
+.Sy checkpoint ,
 .Sy expandsize ,
+.Sy fragmentation ,
 .Sy capacity  ,
+.Sy dedupratio ,
 .Sy health ,
 .Sy altroot .
 .It Fl T Cm d Ns | Ns Cm u
@@ -1829,7 +1858,7 @@ section, above, for more information on the available pool properties.
 .It Xo
 .Nm
 .Cm status
-.Op Fl vx
+.Op Fl Dvx
 .Op Fl T Cm d Ns | Ns Cm u
 .Op Ar pool
 .Ar ...
@@ -1858,14 +1887,12 @@ done and the estimated time to completion. Both of these are only approximate,
 because the amount of data in the pool and the other workloads on the system
 can change.
 .Bl -tag -width indent
-.It Fl x
-Only display status for pools that are exhibiting errors or are otherwise
-unavailable.
-Warnings about pools not using the latest on-disk format, having non-native
-block size or disabled features will not be included.
-.It Fl v
-Displays verbose data error information, printing out a complete list of all
-data errors since the last complete pool scrub.
+.It Fl D
+Display a histogram of deduplication statistics, showing the allocated
+.Pq physically present on disk
+and referenced
+.Pq logically referenced in the pool
+block counts and sizes by reference count.
 .It Fl T Cm d Ns | Ns Cm u
 Print a timestamp.
 .Pp
@@ -1877,6 +1904,14 @@ Use modifier
 .Cm u
 for unixtime
 .Pq equals Qq Ic date +%s .
+.It Fl v
+Displays verbose data error information, printing out a complete list of all
+data errors since the last complete pool scrub.
+.It Fl x
+Only display status for pools that are exhibiting errors or are otherwise
+unavailable.
+Warnings about pools not using the latest on-disk format, having non-native
+block size or disabled features will not be included.
 .El
 .It Xo
 .Nm

@@ -303,20 +303,6 @@ jp.capsctrl.kbd:pt:Japonês 106x
 jp.capsctrl.kbd:es:Japonés 106x
 jp.capsctrl.kbd:uk:Японська 106x
 
-jp.pc98.kbd:en:Japanese PC-98x1
-jp.pc98.kbd:de:Japanisch PC-98x1
-jp.pc98.kbd:fr:Japonais PC-98x1
-jp.pc98.kbd:pt:Japonês PC-98x1
-jp.pc98.kbd:es:Japonés PC-98x1
-jp.pc98.kbd:uk:Японська PC-98x1
-
-jp.pc98.iso.kbd:en:Japanese PC-98x1 (ISO)
-jp.pc98.iso.kbd:de:Japanisch PC-98x1 (ISO)
-jp.pc98.iso.kbd:fr:Japonais PC-98x1 (ISO)
-jp.pc98.iso.kbd:pt:Japonês PC-98x1 (ISO)
-jp.pc98.iso.kbd:es:Japonés PC-98x1 (ISO)
-jp.pc98.iso.kbd:uk:Японська PC-98x1 (ISO)
-
 kz.kst.kbd:en:Kazakh
 kz.kst.kbd:de:Kasachisch
 kz.kst.kbd:fr:Kazakh
@@ -534,6 +520,12 @@ uk.dvorak.kbd:fr:Royaume Uni Dvorak
 uk.dvorak.kbd:pt:Reino Unido Dvorak
 uk.dvorak.kbd:es:Británico Dvorak
 
+uk.macbook.kbd:en:United Kingdom Macbook
+uk.macbook.kbd:de:Vereinigtes Königreich Macbook
+uk.macbook.kbd:fr:Royaume Uni Macbook
+uk.macbook.kbd:pt:Reino Unido Macbook
+uk.macbook.kbd:es:Británico Macbook
+
 us.kbd:en:United States of America
 us.kbd:de:US-amerikanisch
 us.kbd:fr:États Unis d'Amérique
@@ -589,6 +581,12 @@ us.unix.kbd:de:US-amerikanisch traditionelles Unix Layout
 us.unix.kbd:fr:États Unis d'Amérique unix
 us.unix.kbd:pt:Estados Unidos da América unix
 us.unix.kbd:es:Estadounidense Unix tradicional
+
+us.macbook.kbd:en:United States of America Macbook/Macbook Pro ISO-8859-1
+us.macbook.kbd:de:US-amerikanisch Macbook/Macbook Pro ISO-8859-1
+us.macbook.kbd:fr:États Unis d'Amérique Macbook / Macbook Pro ISO-8859-1
+us.macbook.kbd:pt:Estados Unidos da América Macbook/Macbook Pro ISO-8859-1
+us.macbook.kbd:es:Estadounidense Macbook/Macbook Pro ISO-8859-1
 
 ua.kbd.from-iso5:en:Ukrainian
 ua.kbd.from-iso5:de:Ukrainisch

@@ -46,10 +46,12 @@ __FBSDID("$FreeBSD$");
 #include <sys/uio.h>
 #include <sys/sysctl.h>
 #include <sys/endian.h>
+#include <sys/proc.h>
 #include <sys/queue.h>
 #include <sys/kthread.h>
 #include <sys/taskqueue.h>
 #include <sys/sbuf.h>
+#include <sys/reboot.h>
 
 #include <machine/bus.h>
 #include <machine/resource.h>
@@ -127,7 +129,7 @@ int mprsas_get_sas_address_for_sata_disk(struct mpr_softc *sc,
     u64 *sas_address, u16 handle, u32 device_info, u8 *is_SATA_SSD);
 static int mprsas_volume_add(struct mpr_softc *sc,
     u16 handle);
-static void mprsas_SSU_to_SATA_devices(struct mpr_softc *sc);
+static void mprsas_SSU_to_SATA_devices(struct mpr_softc *sc, int howto);
 static void mprsas_stop_unit_done(struct cam_periph *periph,
     union ccb *done_ccb);
 
@@ -816,9 +818,11 @@ mprsas_add_device(struct mpr_softc *sc, u16 handle, u8 linkrate)
 
 	sassc = sc->sassc;
 	mprsas_startup_increment(sassc);
-	if ((mpr_config_get_sas_device_pg0(sc, &mpi_reply, &config_page,
-	     MPI2_SAS_DEVICE_PGAD_FORM_HANDLE, handle))) {
-		printf("%s: error reading SAS device page0\n", __func__);
+	if (mpr_config_get_sas_device_pg0(sc, &mpi_reply, &config_page,
+	    MPI2_SAS_DEVICE_PGAD_FORM_HANDLE, handle) != 0) {
+		mpr_dprint(sc, MPR_INFO|MPR_MAPPING|MPR_FAULT,
+		    "Error reading SAS device %#x page0, iocstatus= 0x%x\n",
+		    handle, mpi_reply.IOCStatus);
 		error = ENXIO;
 		goto out;
 	}
@@ -830,11 +834,14 @@ mprsas_add_device(struct mpr_softc *sc, u16 handle, u8 linkrate)
 		Mpi2ConfigReply_t tmp_mpi_reply;
 		Mpi2SasDevicePage0_t parent_config_page;
 
-		if ((mpr_config_get_sas_device_pg0(sc, &tmp_mpi_reply,
-		     &parent_config_page, MPI2_SAS_DEVICE_PGAD_FORM_HANDLE,
-		     le16toh(config_page.ParentDevHandle)))) {
-			printf("%s: error reading SAS device %#x page0\n",
-			    __func__, le16toh(config_page.ParentDevHandle));
+		if (mpr_config_get_sas_device_pg0(sc, &tmp_mpi_reply,
+		    &parent_config_page, MPI2_SAS_DEVICE_PGAD_FORM_HANDLE,
+		    le16toh(config_page.ParentDevHandle)) != 0) {
+			mpr_dprint(sc, MPR_MAPPING|MPR_FAULT,
+			    "Error reading parent SAS device %#x page0, "
+			    "iocstatus= 0x%x\n",
+			    le16toh(config_page.ParentDevHandle),
+			    tmp_mpi_reply.IOCStatus);
 		} else {
 			parent_sas_address = parent_config_page.SASAddress.High;
 			parent_sas_address = (parent_sas_address << 32) |
@@ -845,8 +852,8 @@ mprsas_add_device(struct mpr_softc *sc, u16 handle, u8 linkrate)
 	/* TODO Check proper endianness */
 	sas_address = config_page.SASAddress.High;
 	sas_address = (sas_address << 32) | config_page.SASAddress.Low;
-	mpr_dprint(sc, MPR_INFO, "SAS Address from SAS device page0 = %jx\n",
-	    sas_address);
+	mpr_dprint(sc, MPR_MAPPING, "Handle 0x%04x SAS Address from SAS device "
+	    "page0 = %jx\n", handle, sas_address);
 
 	/*
 	 * Always get SATA Identify information because this is used to
@@ -857,12 +864,13 @@ mprsas_add_device(struct mpr_softc *sc, u16 handle, u8 linkrate)
 		ret = mprsas_get_sas_address_for_sata_disk(sc, &sas_address,
 		    handle, device_info, &is_SATA_SSD);
 		if (ret) {
-			mpr_dprint(sc, MPR_ERROR, "%s: failed to get disk type "
-			    "(SSD or HDD) for SATA device with handle 0x%04x\n",
+			mpr_dprint(sc, MPR_MAPPING|MPR_ERROR,
+			    "%s: failed to get disk type (SSD or HDD) for SATA "
+			    "device with handle 0x%04x\n",
 			    __func__, handle);
 		} else {
-			mpr_dprint(sc, MPR_INFO, "SAS Address from SATA "
-			    "device = %jx\n", sas_address);
+			mpr_dprint(sc, MPR_MAPPING, "Handle 0x%04x SAS Address "
+			    "from SATA device = %jx\n", handle, sas_address);
 		}
 	}
 
@@ -905,8 +913,8 @@ mprsas_add_device(struct mpr_softc *sc, u16 handle, u8 linkrate)
 	targ = &sassc->targets[id];
 	if (!(targ->flags & MPR_TARGET_FLAGS_RAID_COMPONENT)) {
 		if (mprsas_check_id(sassc, id) != 0) {
-			device_printf(sc->mpr_dev, "Excluding target id %d\n",
-			    id);
+			mpr_dprint(sc, MPR_MAPPING|MPR_INFO,
+			    "Excluding target id %d\n", id);
 			error = ENXIO;
 			goto out;
 		}
@@ -919,8 +927,6 @@ mprsas_add_device(struct mpr_softc *sc, u16 handle, u8 linkrate)
 		}
 	}
 
-	mpr_dprint(sc, MPR_MAPPING, "SAS Address from SAS device page0 = %jx\n",
-	    sas_address);
 	targ->devinfo = device_info;
 	targ->devname = le32toh(config_page.DeviceName.High);
 	targ->devname = (targ->devname << 32) | 
@@ -1183,8 +1189,9 @@ mprsas_get_sata_identify(struct mpr_softc *sc, u16 handle,
 		 * If the request returns an error then we need to do a diag
 		 * reset
 		 */
-		printf("%s: request for page completed with error %d",
-		    __func__, error);
+		mpr_dprint(sc, MPR_INFO|MPR_FAULT|MPR_MAPPING,
+		    "Request for SATA PASSTHROUGH page completed with error %d",
+		    error);
 		error = ENXIO;
 		goto out;
 	}
@@ -1192,8 +1199,9 @@ mprsas_get_sata_identify(struct mpr_softc *sc, u16 handle,
 	bcopy(reply, mpi_reply, sizeof(Mpi2SataPassthroughReply_t));
 	if ((le16toh(reply->IOCStatus) & MPI2_IOCSTATUS_MASK) !=
 	    MPI2_IOCSTATUS_SUCCESS) {
-		printf("%s: error reading SATA PASSTHRU; iocstatus = 0x%x\n",
-		    __func__, reply->IOCStatus);
+		mpr_dprint(sc, MPR_INFO|MPR_MAPPING|MPR_FAULT,
+		    "Error reading device %#x SATA PASSTHRU; iocstatus= 0x%x\n",
+		    handle, reply->IOCStatus);
 		error = ENXIO;
 		goto out;
 	}
@@ -1327,7 +1335,8 @@ mprsas_add_pcie_device(struct mpr_softc *sc, u16 handle, u8 linkrate)
 	    __func__, id);
 
 	if (mprsas_check_id(sassc, id) != 0) {
-		device_printf(sc->mpr_dev, "Excluding target id %d\n", id);
+		mpr_dprint(sc, MPR_MAPPING|MPR_INFO,
+		    "Excluding target id %d\n", id);
 		error = ENXIO;
 		goto out;
 	}
@@ -1462,7 +1471,7 @@ out:
  * Return nothing.
  */
 static void
-mprsas_SSU_to_SATA_devices(struct mpr_softc *sc)
+mprsas_SSU_to_SATA_devices(struct mpr_softc *sc, int howto)
 {
 	struct mprsas_softc *sassc = sc->sassc;
 	union ccb *ccb;
@@ -1470,7 +1479,7 @@ mprsas_SSU_to_SATA_devices(struct mpr_softc *sc)
 	target_id_t targetid;
 	struct mprsas_target *target;
 	char path_str[64];
-	struct timeval cur_time, start_time;
+	int timeout;
 
 	mpr_lock(sc);
 
@@ -1537,17 +1546,25 @@ mprsas_SSU_to_SATA_devices(struct mpr_softc *sc)
 	mpr_unlock(sc);
 
 	/*
-	 * Wait until all of the SSU commands have completed or time has
-	 * expired (60 seconds).  Pause for 100ms each time through.  If any
-	 * command times out, the target will be reset in the SCSI command
-	 * timeout routine.
+	 * Timeout after 60 seconds by default or 10 seconds if howto has
+	 * RB_NOSYNC set which indicates we're likely handling a panic.
 	 */
-	getmicrotime(&start_time);
-	while (sc->SSU_refcount) {
+	timeout = 600;
+	if (howto & RB_NOSYNC)
+		timeout = 100;
+
+	/*
+	 * Wait until all of the SSU commands have completed or time
+	 * has expired. Pause for 100ms each time through.  If any
+	 * command times out, the target will be reset in the SCSI
+	 * command timeout routine.
+	 */
+	while (sc->SSU_refcount > 0) {
 		pause("mprwait", hz/10);
+		if (SCHEDULER_STOPPED())
+			xpt_sim_poll(sassc->sim);
 		
-		getmicrotime(&cur_time);
-		if ((cur_time.tv_sec - start_time.tv_sec) > 60) {
+		if (--timeout == 0) {
 			mpr_dprint(sc, MPR_ERROR, "Time has expired waiting "
 			    "for SSU commands to complete.\n");
 			break;
@@ -1589,7 +1606,7 @@ mprsas_stop_unit_done(struct cam_periph *periph, union ccb *done_ccb)
  * Return nothing.
  */
 void
-mprsas_ir_shutdown(struct mpr_softc *sc)
+mprsas_ir_shutdown(struct mpr_softc *sc, int howto)
 {
 	u16 volume_mapping_flags;
 	u16 ioc_pg8_flags = le16toh(sc->ioc_pg8.Flags);
@@ -1694,5 +1711,5 @@ out:
 			}
 		}
 	}
-	mprsas_SSU_to_SATA_devices(sc);
+	mprsas_SSU_to_SATA_devices(sc, howto);
 }

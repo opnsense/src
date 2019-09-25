@@ -7,10 +7,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
 #include "lldb/Target/ThreadPlanStepRange.h"
 #include "lldb/Breakpoint/BreakpointLocation.h"
 #include "lldb/Breakpoint/BreakpointSite.h"
@@ -31,8 +27,8 @@ using namespace lldb;
 using namespace lldb_private;
 
 //----------------------------------------------------------------------
-// ThreadPlanStepRange: Step through a stack range, either stepping over or into
-// based on the value of \a type.
+// ThreadPlanStepRange: Step through a stack range, either stepping over or
+// into based on the value of \a type.
 //----------------------------------------------------------------------
 
 ThreadPlanStepRange::ThreadPlanStepRange(ThreadPlanKind kind, const char *name,
@@ -61,7 +57,15 @@ void ThreadPlanStepRange::DidPush() {
   SetNextBranchBreakpoint();
 }
 
-bool ThreadPlanStepRange::ValidatePlan(Stream *error) { return true; }
+bool ThreadPlanStepRange::ValidatePlan(Stream *error) {
+  if (m_could_not_resolve_hw_bp) {
+    if (error)
+      error->PutCString(
+          "Could not create hardware breakpoint for thread plan.");
+    return false;
+  }
+  return true;
+}
 
 Vote ThreadPlanStepRange::ShouldReportStop(Event *event_ptr) {
   Log *log(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_STEP));
@@ -74,15 +78,14 @@ Vote ThreadPlanStepRange::ShouldReportStop(Event *event_ptr) {
 }
 
 void ThreadPlanStepRange::AddRange(const AddressRange &new_range) {
-  // For now I'm just adding the ranges.  At some point we may want to
-  // condense the ranges if they overlap, though I don't think it is likely
-  // to be very important.
+  // For now I'm just adding the ranges.  At some point we may want to condense
+  // the ranges if they overlap, though I don't think it is likely to be very
+  // important.
   m_address_ranges.push_back(new_range);
 
   // Fill the slot for this address range with an empty DisassemblerSP in the
-  // instruction ranges. I want the
-  // indices to match, but I don't want to do the work to disassemble this range
-  // if I don't step into it.
+  // instruction ranges. I want the indices to match, but I don't want to do
+  // the work to disassemble this range if I don't step into it.
   m_instruction_ranges.push_back(DisassemblerSP());
 }
 
@@ -158,12 +161,11 @@ bool ThreadPlanStepRange::InRange() {
         } else if (new_context.line_entry.range.GetBaseAddress().GetLoadAddress(
                        m_thread.CalculateTarget().get()) != pc_load_addr) {
           // Another thing that sometimes happens here is that we step out of
-          // one line into the MIDDLE of another
-          // line.  So far I mostly see this due to bugs in the debug
-          // information.
-          // But we probably don't want to be in the middle of a line range, so
-          // in that case reset the stepping
-          // range to the line we've stepped into the middle of and continue.
+          // one line into the MIDDLE of another line.  So far I mostly see
+          // this due to bugs in the debug information. But we probably don't
+          // want to be in the middle of a line range, so in that case reset
+          // the stepping range to the line we've stepped into the middle of
+          // and continue.
           m_addr_context = new_context;
           m_address_ranges.clear();
           AddRange(m_addr_context.line_entry.range);
@@ -260,9 +262,8 @@ InstructionList *ThreadPlanStepRange::GetInstructionsForAddress(
         return nullptr;
       else {
         // Find where we are in the instruction list as well.  If we aren't at
-        // an instruction,
-        // return nullptr. In this case, we're probably lost, and shouldn't try
-        // to do anything fancy.
+        // an instruction, return nullptr. In this case, we're probably lost,
+        // and shouldn't try to do anything fancy.
 
         insn_offset =
             m_instruction_ranges[i]
@@ -288,6 +289,7 @@ void ThreadPlanStepRange::ClearNextBranchBreakpoint() {
                   m_next_branch_bp_sp->GetID());
     GetTarget().RemoveBreakpointByID(m_next_branch_bp_sp->GetID());
     m_next_branch_bp_sp.reset();
+    m_could_not_resolve_hw_bp = false;
   }
 }
 
@@ -297,8 +299,7 @@ bool ThreadPlanStepRange::SetNextBranchBreakpoint() {
 
   Log *log(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_STEP));
   // Stepping through ranges using breakpoints doesn't work yet, but with this
-  // off we fall back to instruction
-  // single stepping.
+  // off we fall back to instruction single stepping.
   if (!m_use_fast_step)
     return false;
 
@@ -339,6 +340,11 @@ bool ThreadPlanStepRange::SetNextBranchBreakpoint() {
       m_next_branch_bp_sp =
           GetTarget().CreateBreakpoint(run_to_address, is_internal, false);
       if (m_next_branch_bp_sp) {
+
+        if (m_next_branch_bp_sp->IsHardware() &&
+            !m_next_branch_bp_sp->HasResolvedLocations())
+          m_could_not_resolve_hw_bp = true;
+
         if (log) {
           lldb::break_id_t bp_site_id = LLDB_INVALID_BREAK_ID;
           BreakpointLocationSP bp_loc =
@@ -355,8 +361,10 @@ bool ThreadPlanStepRange::SetNextBranchBreakpoint() {
                       run_to_address.GetLoadAddress(
                           &m_thread.GetProcess()->GetTarget()));
         }
+
         m_next_branch_bp_sp->SetThreadID(m_thread.GetID());
         m_next_branch_bp_sp->SetBreakpointKind("next-branch-location");
+
         return true;
       } else
         return false;
@@ -383,9 +391,8 @@ bool ThreadPlanStepRange::NextRangeBreakpointExplainsStop(
     size_t num_owners = bp_site_sp->GetNumberOfOwners();
     bool explains_stop = true;
     // If all the owners are internal, then we are probably just stepping over
-    // this range from multiple threads,
-    // or multiple frames, so we want to continue.  If one is not internal, then
-    // we should not explain the stop,
+    // this range from multiple threads, or multiple frames, so we want to
+    // continue.  If one is not internal, then we should not explain the stop,
     // and let the user breakpoint handle the stop.
     for (size_t i = 0; i < num_owners; i++) {
       if (!bp_site_sp->GetOwnerAtIndex(i)->GetBreakpoint().IsInternal()) {
@@ -418,8 +425,8 @@ bool ThreadPlanStepRange::MischiefManaged() {
   // I do this check first because we might have stepped somewhere that will
   // fool InRange into
   // thinking it needs to step past the end of that line.  This happens, for
-  // instance, when stepping
-  // over inlined code that is in the middle of the current line.
+  // instance, when stepping over inlined code that is in the middle of the
+  // current line.
 
   if (!m_no_more_plans)
     return false;
@@ -457,8 +464,8 @@ bool ThreadPlanStepRange::IsPlanStale() {
     }
     return true;
   } else if (frame_order == eFrameCompareEqual && InSymbol()) {
-    // If we are not in a place we should step through, we've gotten stale.
-    // One tricky bit here is that some stubs don't push a frame, so we should.
+    // If we are not in a place we should step through, we've gotten stale. One
+    // tricky bit here is that some stubs don't push a frame, so we should.
     // check that we are in the same symbol.
     if (!InRange()) {
       // Set plan Complete when we reach next instruction just after the range

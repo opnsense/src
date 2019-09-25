@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1999 Michael Smith <msmith@freebsd.org>
  * All rights reserved.
  *
@@ -314,6 +316,13 @@ struct ata_params;
 typedef void (*ada_probe_veto_fn)(void *, struct cam_path *,
     struct ata_params *, int *);
 EVENTHANDLER_DECLARE(ada_probe_veto, ada_probe_veto_fn);
+
+/* Swap device events */
+struct swdevt;
+typedef void (*swapon_fn)(void *, struct swdevt *);
+typedef void (*swapoff_fn)(void *, struct swdevt *);
+EVENTHANDLER_DECLARE(swapon, swapon_fn);
+EVENTHANDLER_DECLARE(swapoff, swapoff_fn);
 
 /* newbus device events */
 enum evhdev_detach {

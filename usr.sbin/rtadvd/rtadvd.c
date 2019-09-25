@@ -1,7 +1,9 @@
 /*	$FreeBSD$	*/
 /*	$KAME: rtadvd.c,v 1.82 2003/08/05 12:34:23 itojun Exp $	*/
 
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
  * Copyright (C) 2011 Hiroki Sato <hrs@FreeBSD.org>
  * All rights reserved.
@@ -1050,14 +1052,7 @@ check_accept_rtadv(int idx)
 		    __func__, idx);
 		return (0);
 	}
-#if (__FreeBSD_version < 900000)
-	/*
-	 * RA_RECV: !ip6.forwarding && ip6.accept_rtadv
-	 * RA_SEND: ip6.forwarding
-	 */
-	return ((getinet6sysctl(IPV6CTL_FORWARDING) == 0) &&
-	    (getinet6sysctl(IPV6CTL_ACCEPT_RTADV) == 1));
-#else
+
 	/*
 	 * RA_RECV: ND6_IFF_ACCEPT_RTADV
 	 * RA_SEND: ip6.forwarding
@@ -1068,7 +1063,6 @@ check_accept_rtadv(int idx)
 	}
 
 	return (ifi->ifi_nd_flags & ND6_IFF_ACCEPT_RTADV);
-#endif
 }
 
 static void

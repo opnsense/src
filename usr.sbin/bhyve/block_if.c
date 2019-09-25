@@ -42,6 +42,9 @@ __FBSDID("$FreeBSD$");
 #include <sys/disk.h>
 
 #include <assert.h>
+#ifndef WITHOUT_CAPSICUM
+#include <capsicum_helpers.h>
+#endif
 #include <err.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -62,7 +65,7 @@ __FBSDID("$FreeBSD$");
 #define BLOCKIF_SIG	0xb109b109
 
 #define BLOCKIF_NUMTHR	8
-#define BLOCKIF_MAXREQ	(64 + BLOCKIF_NUMTHR)
+#define BLOCKIF_MAXREQ	(BLOCKIF_RING_MAX + BLOCKIF_NUMTHR)
 
 enum blockop {
 	BOP_READ,
@@ -101,8 +104,8 @@ struct blockif_ctxt {
 	int			bc_psectoff;
 	int			bc_closing;
 	pthread_t		bc_btid[BLOCKIF_NUMTHR];
-        pthread_mutex_t		bc_mtx;
-        pthread_cond_t		bc_cond;
+	pthread_mutex_t		bc_mtx;
+	pthread_cond_t		bc_cond;
 
 	/* Request elements and free/pending/busy queues */
 	TAILQ_HEAD(, blockif_elem) bc_freeq;       
@@ -473,7 +476,7 @@ blockif_open(const char *optstr, const char *ident)
 	if (ro)
 		cap_rights_clear(&rights, CAP_FSYNC, CAP_WRITE);
 
-	if (cap_rights_limit(fd, &rights) == -1 && errno != ENOSYS)
+	if (caph_rights_limit(fd, &rights) == -1)
 		errx(EX_OSERR, "Unable to apply rights for sandbox");
 #endif
 
@@ -504,7 +507,7 @@ blockif_open(const char *optstr, const char *ident)
 		psectsz = sbuf.st_blksize;
 
 #ifndef WITHOUT_CAPSICUM
-	if (cap_ioctls_limit(fd, cmds, nitems(cmds)) == -1 && errno != ENOSYS)
+	if (caph_ioctls_limit(fd, cmds, nitems(cmds)) == -1)
 		errx(EX_OSERR, "Unable to apply rights for sandbox");
 #endif
 

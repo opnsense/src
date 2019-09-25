@@ -1,5 +1,0 @@
-.\" $FreeBSD$
-Set to not build
-.Xr hbsd-update 8
-and
-.Xr hbsd-update-build 8 .

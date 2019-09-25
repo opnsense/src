@@ -23,7 +23,7 @@
 .\" SUCH DAMAGE.
 .\"
 .\" $FreeBSD$
-.Dd March 19, 2018
+.Dd October 6, 2018
 .Dt LOADER.CONF 5
 .Os
 .Sh NAME
@@ -147,6 +147,15 @@ If a password is set, the user must provide specified password to boot.
 If set to
 .Dq YES ,
 module names will be displayed as they are loaded.
+.It Ar module_blacklist
+Blacklist of modules.
+Modules specified in the blacklist may not be loaded automatically with a
+.Ar *_load
+directive, but they may be loaded directly at the
+.Xr loader 8
+prompt.
+Blacklisted modules may still be loaded indirectly as dependencies of other
+modules.
 .It Ar *_load
 If set to
 .Dq YES ,
@@ -220,6 +229,19 @@ selects the video console which prevents any input and hides all output
 replacing it with
 .Dq spinning
 character (useful for embedded products and such).
+.It Va efi_max_resolution
+Specify the maximum desired resolution for the EFI console.
+The following values are accepted:
+.Bl -column "WidthxHeight"
+.It Sy Value Ta Sy Resolution
+.It 480p Ta 640x480
+.It 720p Ta 1280x720
+.It 1080p Ta 1920x1080
+.It 2160p Ta 3840x2160
+.It 4k Ta 3840x2160
+.It 5k Ta 5120x2880
+.It Va Width Ns x Ns Va Height Ta Va Width Ns x Ns Va Height
+.El
 .It Va kernel
 .Pq Dq kernel
 .It Va kernels
@@ -276,6 +298,29 @@ See the entropy entries in
 .Pq Dq /boot/entropy
 The name of the very early
 boot-time entropy cache file.
+.It Va cpu_microcode_load
+.Pq Dq NO
+If set to
+.Dq YES ,
+the microcode update file specified by
+.Va cpu_microcode_name
+will be loaded and applied very early during boot.
+This provides functionality similar to
+.Xr cpucontrol 8
+but ensures that CPU features enabled by microcode updates can be
+used by the kernel.
+The update will be re-applied automatically when resuming from an
+ACPI sleep state.
+If the update file contains updates for multiple processor models,
+the kernel will search for and extract a matching update.
+Currently this setting is supported only on Intel
+.Dv i386
+and
+.Dv amd64
+processors.
+It has no effect on other processor types.
+.It Va cpu_microcode_name
+A path to a microcode update file.
 .El
 .Sh OTHER SETTINGS
 Other settings that may be used in
@@ -306,6 +351,7 @@ machine-specific settings for sites with a common loader.conf.
 .Sh SEE ALSO
 .Xr rc.conf 5 ,
 .Xr boot 8 ,
+.Xr cpucontrol 8 ,
 .Xr loader 8 ,
 .Xr loader.4th 8
 .Sh HISTORY

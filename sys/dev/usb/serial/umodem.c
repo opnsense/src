@@ -4,6 +4,8 @@
 __FBSDID("$FreeBSD$");
 
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD AND BSD-2-Clause-NetBSD
+ *
  * Copyright (c) 2003, M. Warner Losh <imp@FreeBSD.org>.
  * All rights reserved.
  *
@@ -454,6 +456,8 @@ umodem_attach(device_t dev)
 		usbd_xfer_set_stall(sc->sc_xfer[UMODEM_BULK_RD]);
 		mtx_unlock(&sc->sc_mtx);
 	}
+
+	ucom_set_usb_mode(&sc->sc_super_ucom, uaa->usb_mode);
 
 	error = ucom_attach(&sc->sc_super_ucom, &sc->sc_ucom, 1, sc,
 	    &umodem_callback, &sc->sc_mtx);

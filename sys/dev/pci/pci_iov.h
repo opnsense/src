@@ -39,7 +39,7 @@ int	pci_iov_attach_name(device_t dev, struct nvlist *pf_schema,
 static __inline int
 pci_iov_attach(device_t dev, struct nvlist *pf_schema, struct nvlist *vf_schema)
 {
-	return (PCI_IOV_ATTACH_NAME(device_get_parent(dev), dev, pf_schema,
+	return (PCI_IOV_ATTACH(device_get_parent(dev), dev, pf_schema,
 	    vf_schema, device_get_nameunit(dev)));
 }
 

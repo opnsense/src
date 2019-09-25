@@ -9,13 +9,9 @@
 
 #include "lldb/DataFormatters/TypeFormat.h"
 
-// C Includes
 
-// C++ Includes
 
-// Other libraries and framework includes
 
-// Project includes
 #include "lldb/lldb-enumerations.h"
 #include "lldb/lldb-public.h"
 
@@ -98,25 +94,27 @@ bool TypeFormatImpl_Format::FormatObject(ValueObject *valobj,
             return false;
         }
 
+        ExecutionContextScope *exe_scope =
+            exe_ctx.GetBestExecutionContextScope();
+        llvm::Optional<uint64_t> size = compiler_type.GetByteSize(exe_scope);
+        if (!size)
+          return false;
         StreamString sstr;
-        ExecutionContextScope *exe_scope(
-            exe_ctx.GetBestExecutionContextScope());
         compiler_type.DumpTypeValue(
-            &sstr,       // The stream to use for display
-            GetFormat(), // Format to display this type with
-            data,        // Data to extract from
-            0,           // Byte offset into "m_data"
-            compiler_type.GetByteSize(
-                exe_scope),                 // Byte size of item in "m_data"
+            &sstr,                          // The stream to use for display
+            GetFormat(),                    // Format to display this type with
+            data,                           // Data to extract from
+            0,                              // Byte offset into "m_data"
+            *size,                          // Byte size of item in "m_data"
             valobj->GetBitfieldBitSize(),   // Bitfield bit size
             valobj->GetBitfieldBitOffset(), // Bitfield bit offset
             exe_scope);
-        // Given that we do not want to set the ValueObject's m_error
-        // for a formatting error (or else we wouldn't be able to reformat
-        // until a next update), an empty string is treated as a "false"
-        // return from here, but that's about as severe as we get
-        // CompilerType::DumpTypeValue() should always return
-        // something, even if that something is an error message
+        // Given that we do not want to set the ValueObject's m_error for a
+        // formatting error (or else we wouldn't be able to reformat until a
+        // next update), an empty string is treated as a "false" return from
+        // here, but that's about as severe as we get
+        // CompilerType::DumpTypeValue() should always return something, even
+        // if that something is an error message
         dest = sstr.GetString();
       }
     }
@@ -163,11 +161,10 @@ bool TypeFormatImpl_EnumType::FormatObject(ValueObject *valobj,
     if (!target_sp)
       return false;
     const ModuleList &images(target_sp->GetImages());
-    SymbolContext sc;
     TypeList types;
     llvm::DenseSet<lldb_private::SymbolFile *> searched_symbol_files;
-    images.FindTypes(sc, m_enum_type, false, UINT32_MAX, searched_symbol_files,
-                     types);
+    images.FindTypes(nullptr, m_enum_type, false, UINT32_MAX,
+                     searched_symbol_files, types);
     if (types.GetSize() == 0)
       return false;
     for (lldb::TypeSP type_sp : types.Types()) {
@@ -182,7 +179,7 @@ bool TypeFormatImpl_EnumType::FormatObject(ValueObject *valobj,
     }
   } else
     valobj_enum_type = iter->second;
-  if (valobj_enum_type.IsValid() == false)
+  if (!valobj_enum_type.IsValid())
     return false;
   DataExtractor data;
   Status error;

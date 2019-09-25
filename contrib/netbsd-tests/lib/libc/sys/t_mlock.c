@@ -103,7 +103,7 @@ ATF_TC_BODY(mlock_err, tc)
 	unsigned long vmin = 0;
 	size_t len = sizeof(vmin);
 #endif
-#if !defined(__aarch64__) && !defined(__riscv__)
+#if !defined(__aarch64__) && !defined(__riscv)
 	void *invalid_ptr;
 #endif
 	int null_errno = ENOMEM;	/* error expected for NULL */
@@ -168,7 +168,7 @@ ATF_TC_BODY(mlock_err, tc)
 	(void)free(buf);
 
 /* There is no sbrk on AArch64 and RISC-V */
-#if !defined(__aarch64__) && !defined(__riscv__)
+#if !defined(__aarch64__) && !defined(__riscv)
 	/*
 	 * Try to create a pointer to an unmapped page - first after current
 	 * brk will likely do.

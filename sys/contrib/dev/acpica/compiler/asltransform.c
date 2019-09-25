@@ -8,7 +8,7 @@
  *
  * 1. Copyright Notice
  *
- * Some or all of this work - Copyright (c) 1999 - 2017, Intel Corp.
+ * Some or all of this work - Copyright (c) 1999 - 2018, Intel Corp.
  * All rights reserved.
  *
  * 2. License
@@ -404,8 +404,8 @@ TrAmlTransformWalkEnd (
 
     if (Op->Asl.ParseOpcode == PARSEOP_DEFINITION_BLOCK)
     {
-        Op->Asl.Value.Arg = Gbl_ExternalsListHead;
-        Gbl_ExternalsListHead = NULL;
+        Op->Asl.Value.Arg = AslGbl_ExternalsListHead;
+        AslGbl_ExternalsListHead = NULL;
     }
 
     return (AE_OK);
@@ -455,16 +455,12 @@ TrTransformSubtree (
          * TBD: Zero the tempname (_T_x) count. Probably shouldn't be a global,
          * however
          */
-        Gbl_TempCount = 0;
+        AslGbl_TempCount = 0;
         break;
 
     case PARSEOP_EXTERNAL:
 
-        if (Gbl_DoExternals == TRUE)
-        {
-            ExDoExternal (Op);
-        }
-
+        ExDoExternal (Op);
         break;
 
     case PARSEOP___METHOD__:
@@ -494,6 +490,21 @@ TrTransformSubtree (
         /* At the root, invocation not within a control method */
 
         Op->Asl.Value.String = "\\";
+        break;
+
+    case PARSEOP_UNLOAD:
+
+        AslError (ASL_WARNING, ASL_MSG_UNLOAD, Op, NULL);
+        break;
+
+    case PARSEOP_SLEEP:
+
+        /* Remark for very long sleep values */
+
+        if (Op->Asl.Child->Asl.Value.Integer > 1000)
+        {
+            AslError (ASL_REMARK, ASL_MSG_LONG_SLEEP, Op, NULL);
+        }
         break;
 
     default:
@@ -529,7 +540,7 @@ TrDoDefinitionBlock (
 
     /* Reset external list when starting a definition block */
 
-    Gbl_ExternalsListHead = NULL;
+    AslGbl_ExternalsListHead = NULL;
 
     Next = Op->Asl.Child;
     for (i = 0; i < 5; i++)
@@ -544,12 +555,12 @@ TrDoDefinitionBlock (
              */
             if (!ACPI_COMPARE_NAME (Next->Asl.Value.String, ACPI_SIG_DSDT))
             {
-                Gbl_ReferenceOptimizationFlag = FALSE;
+                AslGbl_ReferenceOptimizationFlag = FALSE;
             }
         }
     }
 
-    Gbl_FirstLevelInsertionNode = Next;
+    AslGbl_FirstLevelInsertionNode = Next;
 }
 
 
@@ -595,7 +606,7 @@ TrDoSwitch (
 
     /* Create a new temp name of the form _T_x */
 
-    PredicateValueName = TrAmlGetNextTempName (StartNode, &Gbl_TempCount);
+    PredicateValueName = TrAmlGetNextTempName (StartNode, &AslGbl_TempCount);
     if (!PredicateValueName)
     {
         return;

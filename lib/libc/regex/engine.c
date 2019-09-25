@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1992, 1993, 1994 Henry Spencer.
  * Copyright (c) 1992, 1993, 1994
  *	The Regents of the University of California.  All rights reserved.
@@ -14,7 +16,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -46,6 +48,7 @@ __FBSDID("$FreeBSD$");
  */
 
 #ifdef SNAMES
+#define	stepback sstepback
 #define	matcher	smatcher
 #define	walk	swalk
 #define	dissect	sdissect
@@ -56,6 +59,7 @@ __FBSDID("$FreeBSD$");
 #define	match	smat
 #endif
 #ifdef LNAMES
+#define	stepback lstepback
 #define	matcher	lmatcher
 #define	walk	lwalk
 #define	dissect	ldissect
@@ -66,6 +70,7 @@ __FBSDID("$FreeBSD$");
 #define	match	lmat
 #endif
 #ifdef MNAMES
+#define	stepback mstepback
 #define	matcher	mmatcher
 #define	walk	mwalk
 #define	dissect	mdissect
@@ -138,6 +143,39 @@ static const char *pchar(int ch);
 #define	AT(t, p1, p2, s1, s2)	/* nothing */
 #define	NOTE(s)	/* nothing */
 #endif
+
+/*
+ * Given a multibyte string pointed to by start, step back nchar characters
+ * from current position pointed to by cur.
+ */
+static const char *
+stepback(const char *start, const char *cur, int nchar)
+{
+	const char *ret;
+	int wc, mbc;
+	mbstate_t mbs;
+	size_t clen;
+
+	if (MB_CUR_MAX == 1)
+		return ((cur - nchar) > start ? cur - nchar : NULL);
+
+	ret = cur;
+	for (wc = nchar; wc > 0; wc--) {
+		for (mbc = 1; mbc <= MB_CUR_MAX; mbc++) {
+			if ((ret - mbc) < start)
+				return (NULL);
+			memset(&mbs, 0, sizeof(mbs));
+			clen = mbrtowc(NULL, ret - mbc, mbc, &mbs);
+			if (clen != (size_t)-1 && clen != (size_t)-2)
+				break;
+		}
+		if (mbc > MB_CUR_MAX)
+			return (NULL);
+		ret -= mbc;
+	}
+
+	return (ret);
+}
 
 /*
  - matcher - the actual matching engine
@@ -242,8 +280,13 @@ matcher(struct re_guts *g,
 	ZAPSTATE(&m->mbs);
 
 	/* Adjust start according to moffset, to speed things up */
-	if (dp != NULL && g->moffset > -1)
-		start = ((dp - g->moffset) < start) ? start : dp - g->moffset;
+	if (dp != NULL && g->moffset > -1) {
+		const char *nstart;
+
+		nstart = stepback(start, dp, g->moffset);
+		if (nstart != NULL)
+			start = nstart;
+	}
 
 	SP("mloop", m->st, *start);
 
@@ -383,7 +426,7 @@ dissect(struct match *m,
 	const char *ssp;	/* start of string matched by subsubRE */
 	const char *sep;	/* end of string matched by subsubRE */
 	const char *oldssp;	/* previous ssp */
-	const char *dp;
+	const char *dp __unused;
 
 	AT("diss", start, stop, startst, stopst);
 	sp = start;
@@ -396,7 +439,7 @@ dissect(struct match *m,
 			es += OPND(m->g->strip[es]);
 			break;
 		case OCH_:
-			while (OP(m->g->strip[es]) != O_CH)
+			while (OP(m->g->strip[es]) != (sop)O_CH)
 				es += OPND(m->g->strip[es]);
 			break;
 		}
@@ -510,7 +553,7 @@ dissect(struct match *m,
 				assert(OP(m->g->strip[esub]) == OOR2);
 				ssub = esub + 1;
 				esub += OPND(m->g->strip[esub]);
-				if (OP(m->g->strip[esub]) == OOR2)
+				if (OP(m->g->strip[esub]) == (sop)OOR2)
 					esub--;
 				else
 					assert(OP(m->g->strip[esub]) == O_CH);
@@ -645,7 +688,7 @@ backref(struct match *m,
 			do {
 				assert(OP(s) == OOR2);
 				ss += OPND(s);
-			} while (OP(s = m->g->strip[ss]) != O_CH);
+			} while (OP(s = m->g->strip[ss]) != (sop)O_CH);
 			/* note that the ss++ gets us past the O_CH */
 			break;
 		default:	/* have to make a choice */
@@ -678,7 +721,7 @@ backref(struct match *m,
 		ssp = m->offp + m->pmatch[i].rm_so;
 		if (memcmp(sp, ssp, len) != 0)
 			return(NULL);
-		while (m->g->strip[ss] != SOP(O_BACK, i))
+		while (m->g->strip[ss] != (sop)SOP(O_BACK, i))
 			ss++;
 		return(backref(m, sp+len, stop, ss+1, stopst, lev, rec));
 	case OQUEST_:		/* to null or not */
@@ -710,13 +753,13 @@ backref(struct match *m,
 			if (dp != NULL)
 				return(dp);
 			/* that one missed, try next one */
-			if (OP(m->g->strip[esub]) == O_CH)
+			if (OP(m->g->strip[esub]) == (sop)O_CH)
 				return(NULL);	/* there is none */
 			esub++;
-			assert(OP(m->g->strip[esub]) == OOR2);
+			assert(OP(m->g->strip[esub]) == (sop)OOR2);
 			ssub = esub + 1;
 			esub += OPND(m->g->strip[esub]);
-			if (OP(m->g->strip[esub]) == OOR2)
+			if (OP(m->g->strip[esub]) == (sop)OOR2)
 				esub--;
 			else
 				assert(OP(m->g->strip[esub]) == O_CH);
@@ -845,7 +888,7 @@ walk(struct match *m, const char *start, const char *stop, sopno startst,
 			else
 				matchp = p;
 		}
-		if (EQ(st, empty) || p == stop || clen > stop - p)
+		if (EQ(st, empty) || p == stop || clen > (size_t)(stop - p))
 			break;		/* NOTE BREAK OUT */
 
 		/* no, we must deal with this character */
@@ -967,22 +1010,22 @@ step(struct re_guts *g,
 			break;
 		case OCH_:		/* mark the first two branches */
 			FWD(aft, aft, 1);
-			assert(OP(g->strip[pc+OPND(s)]) == OOR2);
+			assert(OP(g->strip[pc+OPND(s)]) == (sop)OOR2);
 			FWD(aft, aft, OPND(s));
 			break;
 		case OOR1:		/* done a branch, find the O_CH */
 			if (ISSTATEIN(aft, here)) {
 				for (look = 1;
-						OP(s = g->strip[pc+look]) != O_CH;
-						look += OPND(s))
-					assert(OP(s) == OOR2);
+				    OP(s = g->strip[pc+look]) != (sop)O_CH;
+				    look += OPND(s))
+					assert(OP(s) == (sop)OOR2);
 				FWD(aft, aft, look + 1);
 			}
 			break;
 		case OOR2:		/* propagate OCH_'s marking */
 			FWD(aft, aft, 1);
-			if (OP(g->strip[pc+OPND(s)]) != O_CH) {
-				assert(OP(g->strip[pc+OPND(s)]) == OOR2);
+			if (OP(g->strip[pc+OPND(s)]) != (sop)O_CH) {
+				assert(OP(g->strip[pc+OPND(s)]) == (sop)OOR2);
 				FWD(aft, aft, OPND(s));
 			}
 			break;
@@ -1081,6 +1124,7 @@ pchar(int ch)
 #endif
 #endif
 
+#undef	stepback
 #undef	matcher
 #undef	walk
 #undef	dissect

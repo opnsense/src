@@ -1,6 +1,8 @@
 /*	$NetBSD: armreg.h,v 1.37 2007/01/06 00:50:54 christos Exp $	*/
 
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 1998, 2001 Ben Harris
  * Copyright (c) 1994-1996 Mark Brinicombe.
  * Copyright (c) 1994 Brini.
@@ -40,6 +42,10 @@
 
 #ifndef MACHINE_ARMREG_H
 #define MACHINE_ARMREG_H
+
+#ifndef _SYS_CDEFS_H_
+#error Please include sys/cdefs.h before including machine/armreg.h
+#endif
 
 #define INSN_SIZE	4
 #define INSN_COND_MASK	0xf0000000	/* Condition mask */
@@ -144,7 +150,7 @@
 #define	 CPU_ID_CORTEXA9R2	(CPU_ID_CORTEXA9 | (2 << CPU_ID_VARIANT_SHIFT))
 #define	 CPU_ID_CORTEXA9R3	(CPU_ID_CORTEXA9 | (3 << CPU_ID_VARIANT_SHIFT))
 #define	 CPU_ID_CORTEXA9R4	(CPU_ID_CORTEXA9 | (4 << CPU_ID_VARIANT_SHIFT))
-/* XXX: Cortx-A12 is the old name for this part, it has been renamed the A17 */
+/* XXX: Cortex-A12 is the old name for this part, it has been renamed the A17 */
 #define	CPU_ID_CORTEXA12	(CPU_ID_ARM_LTD | CPU_ID_CPUID_SCHEME | 0xc0d0)
 #define	 CPU_ID_CORTEXA12R0	(CPU_ID_CORTEXA12 | (0 << CPU_ID_VARIANT_SHIFT))
 #define	CPU_ID_CORTEXA15	(CPU_ID_ARM_LTD | CPU_ID_CPUID_SCHEME | 0xc0f0)
@@ -472,5 +478,8 @@
 #define	ARM_REG_NUM_SP		13
 
 #define THUMB_INSN_SIZE		2		/* Some are 4 bytes.  */
+
+/* ARM Hypervisor Related Defines */
+#define	ARM_CP15_HDCR_HPMN	0x0000001f
 
 #endif /* !MACHINE_ARMREG_H */

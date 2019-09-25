@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (C) 2005 Daniel M. Eischen <deischen@freebsd.org>
  * Copyright (c) 2005 David Xu <davidxu@freebsd.org>
  * Copyright (c) 1995-1998 John Birrell <jb@cimlogic.com.au>.
@@ -570,6 +572,8 @@ struct pthread {
 	/* Sleep queue */
 	struct	sleepqueue	*sleepqueue;
 
+	/* pthread_set/get_name_np */
+	char			*name;
 };
 
 #define THR_SHOULD_GC(thrd) 						\
@@ -719,6 +723,8 @@ extern char		*_usrstack __hidden;
 extern int		_libthr_debug;
 extern int		_thread_event_mask;
 extern struct pthread	*_thread_last_event;
+/* Used in symbol lookup of libthread_db */
+extern struct pthread_key	_thread_keytable[];
 
 /* List of all threads: */
 extern pthreadlist	_thread_list;
@@ -973,6 +979,8 @@ void __pthread_cxa_finalize(struct dl_phdr_info *phdr_info);
 void _thr_tsd_unload(struct dl_phdr_info *phdr_info) __hidden;
 void _thr_sigact_unload(struct dl_phdr_info *phdr_info) __hidden;
 void _thr_stack_fix_protection(struct pthread *thrd);
+void __pthread_distribute_static_tls(size_t offset, void *src, size_t len,
+    size_t total_len);
 
 int *__error_threaded(void) __hidden;
 void __thr_interpose_libc(void) __hidden;
@@ -1002,6 +1010,94 @@ void *__thr_pshared_offpage(void *key, int doalloc) __hidden;
 void __thr_pshared_destroy(void *key) __hidden;
 void __thr_pshared_atfork_pre(void) __hidden;
 void __thr_pshared_atfork_post(void) __hidden;
+
+void *__thr_calloc(size_t num, size_t size);
+void __thr_free(void *cp);
+void *__thr_malloc(size_t nbytes);
+void *__thr_realloc(void *cp, size_t nbytes);
+void __thr_malloc_init(void);
+void __thr_malloc_prefork(struct pthread *curthread);
+void __thr_malloc_postfork(struct pthread *curthread);
+
+int _thr_join(pthread_t, void **);
+int _Tthr_kill(pthread_t, int);
+int _thr_getthreadid_np(void);
+void __thr_cleanup_push_imp(void (*)(void *), void *,
+    struct _pthread_cleanup_info *);
+void __thr_cleanup_pop_imp(int);
+void _thr_cleanup_push(void (*)(void *), void *);
+void _thr_cleanup_pop(int);
+void _Tthr_testcancel(void);
+void _Tthr_cancel_enter(int);
+void _Tthr_cancel_leave(int);
+int _thr_cancel(pthread_t);
+int _thr_atfork(void (*)(void), void (*)(void), void (*)(void));
+int _thr_attr_destroy(pthread_attr_t *);
+int _thr_attr_get_np(pthread_t, pthread_attr_t *);
+int _thr_attr_getdetachstate(const pthread_attr_t *, int *);
+int _thr_attr_getguardsize(const pthread_attr_t * __restrict,
+    size_t * __restrict);
+int _thr_attr_getinheritsched(const pthread_attr_t * __restrict,
+    int * __restrict);
+int _thr_attr_getschedparam(const pthread_attr_t * __restrict,
+    struct sched_param * __restrict);
+int _thr_attr_getschedpolicy(const pthread_attr_t * __restrict,
+    int * __restrict);
+int _thr_attr_getscope(const pthread_attr_t * __restrict, int * __restrict);
+int _thr_attr_getstackaddr(const pthread_attr_t *, void **);
+int _thr_attr_getstacksize(const pthread_attr_t * __restrict,
+    size_t * __restrict);
+int _thr_attr_init(pthread_attr_t *);
+int _thr_attr_setdetachstate(pthread_attr_t *, int);
+int _thr_attr_setguardsize(pthread_attr_t *, size_t);
+int _thr_attr_setinheritsched(pthread_attr_t *, int);
+int _thr_attr_setschedparam(pthread_attr_t * __restrict,
+    const struct sched_param * __restrict);
+int _thr_attr_setschedpolicy(pthread_attr_t *, int);
+int _thr_attr_setscope(pthread_attr_t *, int);
+int _thr_attr_setstackaddr(pthread_attr_t *, void *);
+int _thr_attr_setstacksize(pthread_attr_t *, size_t);
+int _thr_cond_init(pthread_cond_t * __restrict,
+    const pthread_condattr_t * __restrict);
+int _thr_cond_destroy(pthread_cond_t *);
+int _thr_cond_timedwait(pthread_cond_t * __restrict,
+    pthread_mutex_t * __restrict, const struct timespec * __restrict);
+int _thr_cond_signal(pthread_cond_t * cond);
+int _thr_cond_broadcast(pthread_cond_t * cond);
+int __thr_cond_wait(pthread_cond_t *, pthread_mutex_t *);
+int _thr_cond_wait(pthread_cond_t *, pthread_mutex_t *);
+int _thr_detach(pthread_t);
+int _thr_equal(pthread_t, pthread_t);
+void _Tthr_exit(void *);
+int _thr_key_create(pthread_key_t *, void (*)(void *));
+int _thr_key_delete(pthread_key_t);
+int _thr_setspecific(pthread_key_t, const void *);
+void *_thr_getspecific(pthread_key_t);
+int _thr_setcancelstate(int, int *);
+int _thr_setcanceltype(int, int *);
+pthread_t _Tthr_self(void);
+int _thr_rwlock_init(pthread_rwlock_t *, const pthread_rwlockattr_t *);
+int _thr_rwlock_destroy(pthread_rwlock_t *);
+int _Tthr_rwlock_rdlock(pthread_rwlock_t *);
+int _Tthr_rwlock_tryrdlock(pthread_rwlock_t *);
+int _Tthr_rwlock_trywrlock(pthread_rwlock_t *);
+int _Tthr_rwlock_wrlock(pthread_rwlock_t *);
+int _Tthr_rwlock_unlock(pthread_rwlock_t *);
+int _thr_once(pthread_once_t *, void (*)(void));
+int _thr_sigmask(int, const sigset_t *, sigset_t *);
+int _thr_main_np(void);
+int _thr_mutexattr_init(pthread_mutexattr_t *);
+int _thr_mutexattr_destroy(pthread_mutexattr_t *);
+int _thr_mutexattr_settype(pthread_mutexattr_t *, int);
+int _thr_mutexattr_getrobust(pthread_mutexattr_t *, int *);
+int _thr_mutexattr_setrobust(pthread_mutexattr_t *, int);
+int __Tthr_mutex_init(pthread_mutex_t * __restrict,
+    const pthread_mutexattr_t * __restrict);
+int _Tthr_mutex_consistent(pthread_mutex_t *);
+int _thr_mutex_destroy(pthread_mutex_t *);
+int _thr_mutex_unlock(pthread_mutex_t *);
+int __Tthr_mutex_lock(pthread_mutex_t *);
+int __Tthr_mutex_trylock(pthread_mutex_t *);
 
 __END_DECLS
 __NULLABILITY_PRAGMA_POP

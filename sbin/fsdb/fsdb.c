@@ -157,6 +157,7 @@ CMDFUNC(chctime);			/* Change ctime */
 CMDFUNC(chatime);			/* Change atime */
 CMDFUNC(chinum);			/* Change inode # of dirent */
 CMDFUNC(chname);			/* Change dirname of dirent */
+CMDFUNC(chsize);			/* Change size */
 
 struct cmdtable cmds[] = {
 	{ "help", "Print out help", 1, 1, FL_RO, helpfn },
@@ -186,6 +187,7 @@ struct cmdtable cmds[] = {
 	{ "chgrp", "Change group of current inode to GROUP", 2, 2, FL_WR, chgroup },
 	{ "chflags", "Change flags of current inode to FLAGS", 2, 2, FL_WR, chaflags },
 	{ "chgen", "Change generation number of current inode to GEN", 2, 2, FL_WR, chgen },
+	{ "chsize", "Change size of current inode to SIZE", 2, 2, FL_WR, chsize },
 	{ "btime", "Change btime of current inode to BTIME", 2, 2, FL_WR, chbtime },
 	{ "mtime", "Change mtime of current inode to MTIME", 2, 2, FL_WR, chmtime },
 	{ "ctime", "Change ctime of current inode to CTIME", 2, 2, FL_WR, chctime },
@@ -233,8 +235,8 @@ cmdloop(void)
     EditLine *elptr;
     HistEvent he;
 
-    curinode = ginode(ROOTINO);
-    curinum = ROOTINO;
+    curinode = ginode(UFS_ROOTINO);
+    curinum = UFS_ROOTINO;
     printactive(0);
 
     hist = history_init();
@@ -301,11 +303,11 @@ union dinode *curinode;
 ino_t curinum, ocurrent;
 
 #define GETINUM(ac,inum)    inum = strtoul(argv[ac], &cp, 0); \
-    if (inum < ROOTINO || inum > maxino || cp == argv[ac] || *cp != '\0' ) { \
+if (inum < UFS_ROOTINO || inum > maxino || cp == argv[ac] || *cp != '\0' ) { \
 	printf("inode %ju out of range; range is [%ju,%ju]\n",		\
-	    (uintmax_t)inum, (uintmax_t)ROOTINO, (uintmax_t)maxino);	\
+	    (uintmax_t)inum, (uintmax_t)UFS_ROOTINO, (uintmax_t)maxino);\
 	return 1; \
-    }
+}
 
 /*
  * Focus on given inode number
@@ -340,7 +342,7 @@ CMDFUNCSTART(zapi)
     GETINUM(1,inum);
     dp = ginode(inum);
     clearinode(dp);
-    inodirty();
+    inodirty(dp);
     if (curinode)			/* re-set after potential change */
 	curinode = ginode(curinum);
     return 0;
@@ -370,7 +372,7 @@ CMDFUNCSTART(uplink)
     DIP_SET(curinode, di_nlink, DIP(curinode, di_nlink) + 1);
     printf("inode %ju link count now %d\n",
 	(uintmax_t)curinum, DIP(curinode, di_nlink));
-    inodirty();
+    inodirty(curinode);
     return 0;
 }
 
@@ -381,7 +383,7 @@ CMDFUNCSTART(downlink)
     DIP_SET(curinode, di_nlink, DIP(curinode, di_nlink) - 1);
     printf("inode %ju link count now %d\n",
 	(uintmax_t)curinum, DIP(curinode, di_nlink));
-    inodirty();
+    inodirty(curinode);
     return 0;
 }
 
@@ -476,7 +478,7 @@ CMDFUNCSTART(findblk)
 	 */
 	inum = c * sblock.fs_ipg;
 	/* Read cylinder group. */
-	cgbp = cgget(c);
+	cgbp = cglookup(c);
 	cgp = cgbp->b_un.b_cg;
 	/*
 	 * Get a highest used inode number for a given cylinder group.
@@ -488,8 +490,8 @@ CMDFUNCSTART(findblk)
 	    inosused = sblock.fs_ipg;
 
 	for (; inosused > 0; inum++, inosused--) {
-	    /* Skip magic inodes: 0, WINO, ROOTINO. */
-	    if (inum < ROOTINO)
+	    /* Skip magic inodes: 0, UFS_WINO, UFS_ROOTINO. */
+	    if (inum < UFS_ROOTINO)
 		continue;
 	    /*
 	     * Check if the block we are looking for is just an inode block.
@@ -533,10 +535,10 @@ CMDFUNCSTART(findblk)
 	    }
 	    /* Look through direct data blocks. */
 	    if (is_ufs2 ?
-		find_blks64(curinode->dp2.di_db, NDADDR, wantedblk64) :
-		find_blks32(curinode->dp1.di_db, NDADDR, wantedblk32))
+		find_blks64(curinode->dp2.di_db, UFS_NDADDR, wantedblk64) :
+		find_blks32(curinode->dp1.di_db, UFS_NDADDR, wantedblk32))
 		goto end;
-	    for (i = 0; i < NIADDR; i++) {
+	    for (i = 0; i < UFS_NIADDR; i++) {
 		/*
 		 * Does the block we are looking for belongs to the
 		 * indirect blocks?
@@ -565,6 +567,10 @@ CMDFUNCSTART(findblk)
 end:
     curinum = ocurrent;
     curinode = ginode(curinum);
+    if (is_ufs2)
+	free(wantedblk64);
+    else
+	free(wantedblk32);
     return 0;
 }
 
@@ -728,8 +734,8 @@ CMDFUNCSTART(focusname)
     ocurrent = curinum;
     
     if (argv[1][0] == '/') {
-	curinum = ROOTINO;
-	curinode = ginode(ROOTINO);
+	curinum = UFS_ROOTINO;
+	curinode = ginode(UFS_ROOTINO);
     } else {
 	if (!checkactivedir())
 	    return 1;
@@ -915,7 +921,7 @@ CMDFUNCSTART(newtype)
     }
     DIP_SET(curinode, di_mode, DIP(curinode, di_mode) & ~IFMT);
     DIP_SET(curinode, di_mode, DIP(curinode, di_mode) | type);
-    inodirty();
+    inodirty(curinode);
     printactive(0);
     return 0;
 }
@@ -936,7 +942,7 @@ CMDFUNCSTART(chlen)
     }
     
     DIP_SET(curinode, di_size, len);
-    inodirty();
+    inodirty(curinode);
     printactive(0);
     return rval;
 }
@@ -958,7 +964,7 @@ CMDFUNCSTART(chmode)
     
     DIP_SET(curinode, di_mode, DIP(curinode, di_mode) & ~07777);
     DIP_SET(curinode, di_mode, DIP(curinode, di_mode) | modebits);
-    inodirty();
+    inodirty(curinode);
     printactive(0);
     return rval;
 }
@@ -983,7 +989,7 @@ CMDFUNCSTART(chaflags)
 	return(1);
     }
     DIP_SET(curinode, di_flags, flags);
-    inodirty();
+    inodirty(curinode);
     printactive(0);
     return rval;
 }
@@ -1008,7 +1014,32 @@ CMDFUNCSTART(chgen)
 	return(1);
     }
     DIP_SET(curinode, di_gen, gen);
-    inodirty();
+    inodirty(curinode);
+    printactive(0);
+    return rval;
+}
+
+CMDFUNCSTART(chsize)
+{
+    int rval = 1;
+    off_t size;
+    char *cp;
+
+    if (!checkactive())
+	return 1;
+
+    size = strtoll(argv[1], &cp, 0);
+    if (cp == argv[1] || *cp != '\0') {
+	warnx("bad size `%s'", argv[1]);
+	return 1;
+    }
+
+    if (size < 0) {
+	warnx("size set to negative (%jd)\n", (intmax_t)size);
+	return(1);
+    }
+    DIP_SET(curinode, di_size, size);
+    inodirty(curinode);
     printactive(0);
     return rval;
 }
@@ -1033,7 +1064,7 @@ CMDFUNCSTART(linkcount)
     }
     
     DIP_SET(curinode, di_nlink, lcnt);
-    inodirty();
+    inodirty(curinode);
     printactive(0);
     return rval;
 }
@@ -1060,7 +1091,7 @@ CMDFUNCSTART(chowner)
     }
     
     DIP_SET(curinode, di_uid, uid);
-    inodirty();
+    inodirty(curinode);
     printactive(0);
     return rval;
 }
@@ -1086,7 +1117,7 @@ CMDFUNCSTART(chgroup)
     }
     
     DIP_SET(curinode, di_gid, gid);
-    inodirty();
+    inodirty(curinode);
     printactive(0);
     return rval;
 }
@@ -1155,7 +1186,7 @@ CMDFUNCSTART(chbtime)
 	return 1;
     curinode->dp2.di_birthtime = _time_to_time64(secs);
     curinode->dp2.di_birthnsec = nsecs;
-    inodirty();
+    inodirty(curinode);
     printactive(0);
     return 0;
 }
@@ -1172,7 +1203,7 @@ CMDFUNCSTART(chmtime)
     else
 	curinode->dp2.di_mtime = _time_to_time64(secs);
     DIP_SET(curinode, di_mtimensec, nsecs);
-    inodirty();
+    inodirty(curinode);
     printactive(0);
     return 0;
 }
@@ -1189,7 +1220,7 @@ CMDFUNCSTART(chatime)
     else
 	curinode->dp2.di_atime = _time_to_time64(secs);
     DIP_SET(curinode, di_atimensec, nsecs);
-    inodirty();
+    inodirty(curinode);
     printactive(0);
     return 0;
 }
@@ -1206,7 +1237,7 @@ CMDFUNCSTART(chctime)
     else
 	curinode->dp2.di_ctime = _time_to_time64(secs);
     DIP_SET(curinode, di_ctimensec, nsecs);
-    inodirty();
+    inodirty(curinode);
     printactive(0);
     return 0;
 }

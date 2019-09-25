@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2010 The FreeBSD Foundation
  * All rights reserved.
  *
@@ -33,9 +35,6 @@
 #define _RTLD_DB_H_
 
 #include <sys/param.h>
-#include <sys/cdefs.h>
-#include <sys/types.h>
-
 
 #define	RD_VERSION	1
 
@@ -49,11 +48,17 @@ typedef enum {
 	RD_NOMAPS
 } rd_err_e;
 
+/* XXX struct rd_agent should be private. */
+struct procstat;
+
 typedef struct rd_agent {
 	struct proc_handle *rda_php;
+
 	uintptr_t rda_dlactivity_addr;
 	uintptr_t rda_preinit_addr;
 	uintptr_t rda_postinit_addr;
+
+	struct procstat *rda_procstat;
 } rd_agent_t;
 
 typedef struct rd_loadobj {

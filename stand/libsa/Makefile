@@ -9,7 +9,6 @@
 .include <bsd.init.mk>
 
 LIBSA_CPUARCH?=${MACHINE_CPUARCH}
-LIBC_SRC=	${SRCTOP}/lib/libc
 
 LIB?=		sa
 
@@ -21,24 +20,28 @@ SRCS+=	gzguts.h zutil.h __main.c abort.c assert.c bcd.c environment.c getopt.c g
 # private (pruned) versions of libc string functions
 SRCS+=	strcasecmp.c
 
-.PATH: ${LIBC_SRC}/net
+.PATH: ${LIBCSRC}/net
 
 SRCS+= ntoh.c
 
 # string functions from libc
-.PATH: ${LIBC_SRC}/string
+.PATH: ${LIBCSRC}/string
 SRCS+=	bcmp.c bcopy.c bzero.c ffs.c fls.c \
 	memccpy.c memchr.c memcmp.c memcpy.c memmove.c memset.c \
-	qdivrem.c strcat.c strchr.c strcmp.c strcpy.c stpcpy.c stpncpy.c \
+	strcat.c strchr.c strcmp.c strcpy.c stpcpy.c stpncpy.c \
 	strcspn.c strlcat.c strlcpy.c strlen.c strncat.c strncmp.c strncpy.c \
 	strnlen.c strpbrk.c strrchr.c strsep.c strspn.c strstr.c strtok.c swab.c
 
 # stdlib functions from libc
-.PATH: ${LIBC_SRC}/stdlib
+.PATH: ${LIBCSRC}/stdlib
 SRCS+=	abs.c strtol.c strtoll.c strtoul.c strtoull.c
 
+# common boot code
+.PATH:	${SYSDIR}/kern
+SRCS+=	subr_boot.c
+
 .if ${MACHINE_CPUARCH} == "arm"
-.PATH: ${LIBC_SRC}/arm/gen
+.PATH: ${LIBCSRC}/arm/gen
 
 # Do not generate movt/movw, because the relocation fixup for them does not
 # translate to the -Bsymbolic -pie format required by self_reloc() in loader(8).
@@ -50,31 +53,30 @@ CFLAGS.clang+=	-mno-movt
 .endif
 CFLAGS.clang+=	-mfpu=none
 
-# Compiler support functions
-.PATH: ${SRCTOP}/contrib/compiler-rt/lib/builtins/
-# __clzsi2 and ctzsi2 for various builtin functions
-SRCS+=	clzsi2.c ctzsi2.c
-# Divide and modulus functions called by the compiler
-SRCS+=	 divmoddi4.c  divmodsi4.c  divdi3.c  divsi3.c  moddi3.c  modsi3.c
-SRCS+=	udivmoddi4.c udivmodsi4.c udivdi3.c udivsi3.c umoddi3.c umodsi3.c
-
 .PATH: ${SRCTOP}/contrib/compiler-rt/lib/builtins/arm/
 SRCS+=	aeabi_idivmod.S aeabi_ldivmod.S aeabi_uidivmod.S aeabi_uldivmod.S
 SRCS+=	aeabi_memcmp.S aeabi_memcpy.S aeabi_memmove.S aeabi_memset.S
 .endif
 
 .if ${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "riscv"
-.PATH: ${LIBC_SRC}/${MACHINE_CPUARCH}/gen
+.PATH: ${LIBCSRC}/${MACHINE_CPUARCH}/gen
 .endif
 
+# Compiler support functions
+.PATH: ${SRCTOP}/contrib/compiler-rt/lib/builtins/
+# __clzsi2 and ctzsi2 for various builtin functions
+SRCS+=	clzsi2.c ctzsi2.c
+# Divide and modulus functions called by the compiler
+SRCS+=	divmoddi4.c  divmodsi4.c  divdi3.c  divsi3.c  moddi3.c  modsi3.c
+SRCS+=	udivmoddi4.c udivmodsi4.c udivdi3.c udivsi3.c umoddi3.c umodsi3.c
+SRCS+=	ashldi3.c ashrdi3.c lshrdi3.c
+
 .if ${MACHINE_CPUARCH} == "powerpc"
-.PATH: ${LIBC_SRC}/quad
-SRCS+=	ashldi3.c ashrdi3.c
 SRCS+=	syncicache.c
 .endif
 
 # uuid functions from libc
-.PATH: ${LIBC_SRC}/uuid
+.PATH: ${LIBCSRC}/uuid
 SRCS+= uuid_create_nil.c uuid_equal.c uuid_from_string.c uuid_is_nil.c uuid_to_string.c
 
 # _setjmp/_longjmp
@@ -90,8 +92,8 @@ CFLAGS+= -DBZ_NO_STDIO -DBZ_NO_COMPRESS
 SRCS+=bzlib.c crctable.c decompress.c huffman.c randtable.c
 
 # decompression functionality from zlib
-.PATH: ${SRCTOP}/contrib/zlib
-CFLAGS+=-DHAVE_MEMCPY -I${SRCTOP}/contrib/zlib
+.PATH: ${SRCTOP}/sys/contrib/zlib
+CFLAGS+=-DHAVE_MEMCPY -I${SRCTOP}/sys/contrib/zlib
 SRCS+=	adler32.c crc32.c
 SRCS+=	infback.c inffast.c inflate.c inftrees.c zutil.c
 
@@ -103,7 +105,6 @@ STAND_H_INC=ctype.h fcntl.h signal.h stdio.h stdlib.h
 OTHER_INC=stdarg.h errno.h stdint.h
 
 beforedepend:
-	echo beforedepend; \
 	mkdir -p ${FAKE_DIRS}; \
 	for i in ${SAFE_INCS}; do \
 		ln -sf ${SRCTOP}/include/$$i $$i; \
@@ -141,10 +142,29 @@ SRCS+=	pkgfs.c
 SRCS+=	nandfs.c
 .endif
 
+# kernel ufs support
+.PATH: ${SRCTOP}/sys/ufs/ffs
+SRCS+=ffs_subr.c ffs_tables.c
+
 CFLAGS.bzipfs.c+= -I${SRCTOP}/contrib/bzip2
 
 # explicit_bzero
 .PATH: ${SYSDIR}/libkern
 SRCS+=  explicit_bzero.c
+
+# Maybe GELI
+.if ${MK_LOADER_GELI} == "yes"
+.include "${SASRC}/geli/Makefile.inc"
+.endif
+
+.if ${MK_LOADER_VERIEXEC} == "yes" && ${MK_BEARSSL} == "yes"
+.include "${SRCTOP}/lib/libbearssl/Makefile.libsa.inc"
+.include "${SRCTOP}/lib/libsecureboot/Makefile.libsa.inc"
+.endif
+
+# Maybe ZFS
+.if ${MK_LOADER_ZFS} == "yes"
+.include "${SASRC}/zfs/Makefile.inc"
+.endif
 
 .include <bsd.lib.mk>

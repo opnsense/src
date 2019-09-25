@@ -8,7 +8,7 @@
  *
  * 1. Copyright Notice
  *
- * Some or all of this work - Copyright (c) 1999 - 2017, Intel Corp.
+ * Some or all of this work - Copyright (c) 1999 - 2018, Intel Corp.
  * All rights reserved.
  *
  * 2. License
@@ -969,7 +969,11 @@ AcpiDbCommandDispatch (
     case CMD_DISASSEMBLE:
     case CMD_DISASM:
 
+#ifdef ACPI_DISASSEMBLER
         (void) AcpiDbDisassembleMethod (AcpiGbl_DbArgs[1]);
+#else
+        AcpiOsPrintf ("The AML Disassembler is not configured/present\n");
+#endif
         break;
 
     case CMD_DUMP:
@@ -1083,7 +1087,11 @@ AcpiDbCommandDispatch (
 
     case CMD_LIST:
 
+#ifdef ACPI_DISASSEMBLER
         AcpiDbDisassembleAml (AcpiGbl_DbArgs[1], Op);
+#else
+        AcpiOsPrintf ("The AML Disassembler is not configured/present\n");
+#endif
         break;
 
     case CMD_LOCKS:

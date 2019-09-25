@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: (BSD-3-Clause AND MIT-CMU)
+ *
  * Copyright (c) 1991, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -13,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -69,6 +71,7 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/cpuset.h>
 #include <sys/lock.h>
 #include <sys/mman.h>
 #include <sys/mount.h>
@@ -93,6 +96,8 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_page.h>
 #include <vm/vm_pageout.h>
 #include <vm/vm_pager.h>
+#include <vm/vm_phys.h>
+#include <vm/vm_pagequeue.h>
 #include <vm/swap_pager.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_extern.h>
@@ -142,18 +147,28 @@ struct object_q vm_object_list;
 struct mtx vm_object_list_mtx;	/* lock for object list and count */
 
 struct vm_object kernel_object_store;
-struct vm_object kmem_object_store;
 
 static SYSCTL_NODE(_vm_stats, OID_AUTO, object, CTLFLAG_RD, 0,
     "VM object stats");
 
-static long object_collapses;
-SYSCTL_LONG(_vm_stats_object, OID_AUTO, collapses, CTLFLAG_RD,
-    &object_collapses, 0, "VM object collapses");
+static counter_u64_t object_collapses = EARLY_COUNTER;
+SYSCTL_COUNTER_U64(_vm_stats_object, OID_AUTO, collapses, CTLFLAG_RD,
+    &object_collapses,
+    "VM object collapses");
 
-static long object_bypasses;
-SYSCTL_LONG(_vm_stats_object, OID_AUTO, bypasses, CTLFLAG_RD,
-    &object_bypasses, 0, "VM object bypasses");
+static counter_u64_t object_bypasses = EARLY_COUNTER;
+SYSCTL_COUNTER_U64(_vm_stats_object, OID_AUTO, bypasses, CTLFLAG_RD,
+    &object_bypasses,
+    "VM object bypasses");
+
+static void
+counter_startup(void)
+{
+
+	object_collapses = counter_u64_alloc(M_WAITOK);
+	object_bypasses = counter_u64_alloc(M_WAITOK);
+}
+SYSINIT(object_counters, SI_SUB_CPU, SI_ORDER_ANY, counter_startup, NULL);
 
 static uma_zone_t obj_zone;
 
@@ -259,6 +274,7 @@ _vm_object_allocate(objtype_t type, vm_pindex_t size, vm_object_t object)
 		panic("_vm_object_allocate: type %d is undefined", type);
 	}
 	object->size = size;
+	object->domain.dr_policy = NULL;
 	object->generation = 1;
 	object->ref_count = 1;
 	object->memattr = VM_MEMATTR_DEFAULT;
@@ -290,14 +306,6 @@ vm_object_init(void)
 #if VM_NRESERVLEVEL > 0
 	kernel_object->flags |= OBJ_COLORED;
 	kernel_object->pg_color = (u_short)atop(VM_MIN_KERNEL_ADDRESS);
-#endif
-
-	rw_init(&kmem_object->lock, "kmem vm object");
-	_vm_object_allocate(OBJT_PHYS, atop(VM_MAX_KERNEL_ADDRESS -
-	    VM_MIN_KERNEL_ADDRESS), kmem_object);
-#if VM_NRESERVLEVEL > 0
-	kmem_object->flags |= OBJ_COLORED;
-	kmem_object->pg_color = (u_short)atop(VM_MIN_KERNEL_ADDRESS);
 #endif
 
 	/*
@@ -485,33 +493,11 @@ vm_object_vndeallocate(vm_object_t object)
 	if (!umtx_shm_vnobj_persistent && object->ref_count == 1)
 		umtx_shm_object_terminated(object);
 
-	/*
-	 * The test for text of vp vnode does not need a bypass to
-	 * reach right VV_TEXT there, since it is obtained from
-	 * object->handle.
-	 */
-	if (object->ref_count > 1 || (vp->v_vflag & VV_TEXT) == 0) {
-		object->ref_count--;
-		VM_OBJECT_WUNLOCK(object);
-		/* vrele may need the vnode lock. */
-		vrele(vp);
-	} else {
-		vhold(vp);
-		VM_OBJECT_WUNLOCK(object);
-		vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
-		vdrop(vp);
-		VM_OBJECT_WLOCK(object);
-		object->ref_count--;
-		if (object->type == OBJT_DEAD) {
-			VM_OBJECT_WUNLOCK(object);
-			VOP_UNLOCK(vp, 0);
-		} else {
-			if (object->ref_count == 0)
-				VOP_UNSET_TEXT(vp);
-			VM_OBJECT_WUNLOCK(object);
-			vput(vp);
-		}
-	}
+	object->ref_count--;
+
+	/* vrele may need the vnode lock. */
+	VM_OBJECT_WUNLOCK(object);
+	vrele(vp);
 }
 
 /*
@@ -529,7 +515,6 @@ void
 vm_object_deallocate(vm_object_t object)
 {
 	vm_object_t temp;
-	struct vnode *vp;
 
 	while (object != NULL) {
 		VM_OBJECT_WLOCK(object);
@@ -552,25 +537,6 @@ vm_object_deallocate(vm_object_t object)
 			VM_OBJECT_WUNLOCK(object);
 			return;
 		} else if (object->ref_count == 1) {
-			if (object->type == OBJT_SWAP &&
-			    (object->flags & OBJ_TMPFS) != 0) {
-				vp = object->un_pager.swp.swp_tmpfs;
-				vhold(vp);
-				VM_OBJECT_WUNLOCK(object);
-				vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
-				VM_OBJECT_WLOCK(object);
-				if (object->type == OBJT_DEAD ||
-				    object->ref_count != 1) {
-					VM_OBJECT_WUNLOCK(object);
-					VOP_UNLOCK(vp, 0);
-					vdrop(vp);
-					return;
-				}
-				if ((object->flags & OBJ_TMPFS) != 0)
-					VOP_UNSET_TEXT(vp);
-				VOP_UNLOCK(vp, 0);
-				vdrop(vp);
-			}
 			if (object->shadow_count == 0 &&
 			    object->handle == NULL &&
 			    (object->type == OBJT_DEFAULT ||
@@ -713,13 +679,11 @@ static void
 vm_object_terminate_pages(vm_object_t object)
 {
 	vm_page_t p, p_next;
-	struct mtx *mtx, *mtx1;
-	struct vm_pagequeue *pq, *pq1;
+	struct mtx *mtx;
 
 	VM_OBJECT_ASSERT_WLOCKED(object);
 
 	mtx = NULL;
-	pq = NULL;
 
 	/*
 	 * Free any remaining pageable pages.  This also removes them from the
@@ -729,50 +693,20 @@ vm_object_terminate_pages(vm_object_t object)
 	 */
 	TAILQ_FOREACH_SAFE(p, &object->memq, listq, p_next) {
 		vm_page_assert_unbusied(p);
-		if ((object->flags & OBJ_UNMANAGED) == 0) {
+		if ((object->flags & OBJ_UNMANAGED) == 0)
 			/*
 			 * vm_page_free_prep() only needs the page
 			 * lock for managed pages.
 			 */
-			mtx1 = vm_page_lockptr(p);
-			if (mtx1 != mtx) {
-				if (mtx != NULL)
-					mtx_unlock(mtx);
-				if (pq != NULL) {
-					vm_pagequeue_unlock(pq);
-					pq = NULL;
-				}
-				mtx = mtx1;
-				mtx_lock(mtx);
-			}
-		}
+			vm_page_change_lock(p, &mtx);
 		p->object = NULL;
-		if (p->wire_count != 0)
-			goto unlist;
-		PCPU_INC(cnt.v_pfree);
-		p->flags &= ~PG_ZERO;
-		if (p->queue != PQ_NONE) {
-			KASSERT(p->queue < PQ_COUNT, ("vm_object_terminate: "
-			    "page %p is not queued", p));
-			pq1 = vm_page_pagequeue(p);
-			if (pq != pq1) {
-				if (pq != NULL)
-					vm_pagequeue_unlock(pq);
-				pq = pq1;
-				vm_pagequeue_lock(pq);
-			}
-		}
-		if (vm_page_free_prep(p, true))
+		if (vm_page_wired(p))
 			continue;
-unlist:
-		TAILQ_REMOVE(&object->memq, p, listq);
+		VM_CNT_INC(v_pfree);
+		vm_page_free(p);
 	}
-	if (pq != NULL)
-		vm_pagequeue_unlock(pq);
 	if (mtx != NULL)
 		mtx_unlock(mtx);
-
-	vm_page_free_phys_pglist(&object->memq);
 
 	/*
 	 * If the object contained any pages, then reset it to an empty state.
@@ -1258,7 +1192,7 @@ next_page:
 		if (tm->valid != VM_PAGE_BITS_ALL)
 			goto next_pindex;
 		vm_page_lock(tm);
-		if (tm->hold_count != 0 || tm->wire_count != 0) {
+		if (vm_page_held(tm)) {
 			vm_page_unlock(tm);
 			goto next_pindex;
 		}
@@ -1350,6 +1284,7 @@ vm_object_shadow(
 	result->backing_object_offset = *offset;
 	if (source != NULL) {
 		VM_OBJECT_WLOCK(source);
+		result->domain = source->domain;
 		LIST_INSERT_HEAD(&source->shadow_head, result, shadow_list);
 		source->shadow_count++;
 #if VM_NRESERVLEVEL > 0
@@ -1405,6 +1340,7 @@ vm_object_split(vm_map_entry_t entry)
 	 */
 	VM_OBJECT_WLOCK(new_object);
 	VM_OBJECT_WLOCK(orig_object);
+	new_object->domain = orig_object->domain;
 	source = orig_object->backing_object;
 	if (source != NULL) {
 		VM_OBJECT_WLOCK(source);
@@ -1545,13 +1481,6 @@ vm_object_scan_all_shadowed(vm_object_t object)
 
 	backing_object = object->backing_object;
 
-	/*
-	 * Initial conditions:
-	 *
-	 * We do not want to have to test for the existence of swap
-	 * pages in the backing object.  XXX but with the new swapper this
-	 * would be pretty easy to do.
-	 */
 	if (backing_object->type != OBJT_DEFAULT &&
 	    backing_object->type != OBJT_SWAP)
 		return (false);
@@ -1646,10 +1575,8 @@ vm_object_collapse_scan(vm_object_t object, int op)
 			vm_page_lock(p);
 			KASSERT(!pmap_page_is_mapped(p),
 			    ("freeing mapped page %p", p));
-			if (p->wire_count == 0)
+			if (vm_page_remove(p))
 				vm_page_free(p);
-			else
-				vm_page_remove(p);
 			vm_page_unlock(p);
 			continue;
 		}
@@ -1690,10 +1617,8 @@ vm_object_collapse_scan(vm_object_t object, int op)
 			vm_page_lock(p);
 			KASSERT(!pmap_page_is_mapped(p),
 			    ("freeing mapped page %p", p));
-			if (p->wire_count == 0)
+			if (vm_page_remove(p))
 				vm_page_free(p);
-			else
-				vm_page_remove(p);
 			vm_page_unlock(p);
 			continue;
 		}
@@ -1777,8 +1702,8 @@ vm_object_collapse(vm_object_t object)
 		VM_OBJECT_WLOCK(backing_object);
 		if (backing_object->handle != NULL ||
 		    (backing_object->type != OBJT_DEFAULT &&
-		     backing_object->type != OBJT_SWAP) ||
-		    (backing_object->flags & OBJ_DEAD) ||
+		    backing_object->type != OBJT_SWAP) ||
+		    (backing_object->flags & (OBJ_DEAD | OBJ_NOSPLIT)) != 0 ||
 		    object->handle != NULL ||
 		    (object->type != OBJT_DEFAULT &&
 		     object->type != OBJT_SWAP) ||
@@ -1879,7 +1804,7 @@ vm_object_collapse(vm_object_t object)
 			vm_object_destroy(backing_object);
 
 			vm_object_pip_wakeup(object);
-			object_collapses++;
+			counter_u64_add(object_collapses, 1);
 		} else {
 			/*
 			 * If we do not entirely shadow the backing object,
@@ -1920,7 +1845,7 @@ vm_object_collapse(vm_object_t object)
 			 */
 			backing_object->ref_count--;
 			VM_OBJECT_WUNLOCK(backing_object);
-			object_bypasses++;
+			counter_u64_add(object_bypasses, 1);
 		}
 
 		/*
@@ -1961,7 +1886,6 @@ vm_object_page_remove(vm_object_t object, vm_pindex_t start, vm_pindex_t end,
 {
 	vm_page_t p, next;
 	struct mtx *mtx;
-	struct pglist pgl;
 
 	VM_OBJECT_ASSERT_WLOCKED(object);
 	KASSERT((object->flags & OBJ_UNMANAGED) == 0 ||
@@ -1970,7 +1894,6 @@ vm_object_page_remove(vm_object_t object, vm_pindex_t start, vm_pindex_t end,
 	if (object->resident_page_count == 0)
 		return;
 	vm_object_pip_add(object, 1);
-	TAILQ_INIT(&pgl);
 again:
 	p = vm_page_find_least(object, start);
 	mtx = NULL;
@@ -1997,7 +1920,7 @@ again:
 			VM_OBJECT_WLOCK(object);
 			goto again;
 		}
-		if (p->wire_count != 0) {
+		if (vm_page_wired(p)) {
 			if ((options & OBJPR_NOTMAPPED) == 0 &&
 			    object->ref_count != 0)
 				pmap_remove_all(p);
@@ -2024,13 +1947,10 @@ again:
 		}
 		if ((options & OBJPR_NOTMAPPED) == 0 && object->ref_count != 0)
 			pmap_remove_all(p);
-		p->flags &= ~PG_ZERO;
-		if (vm_page_free_prep(p, false))
-			TAILQ_INSERT_TAIL(&pgl, p, listq);
+		vm_page_free(p);
 	}
 	if (mtx != NULL)
 		mtx_unlock(mtx);
-	vm_page_free_phys_pglist(&pgl);
 	vm_object_pip_wakeup(object);
 }
 
@@ -2153,7 +2073,7 @@ vm_object_coalesce(vm_object_t prev_object, vm_ooffset_t prev_offset,
 	VM_OBJECT_WLOCK(prev_object);
 	if ((prev_object->type != OBJT_DEFAULT &&
 	    prev_object->type != OBJT_SWAP) ||
-	    (prev_object->flags & OBJ_TMPFS_NODE) != 0) {
+	    (prev_object->flags & OBJ_NOSPLIT) != 0) {
 		VM_OBJECT_WUNLOCK(prev_object);
 		return (FALSE);
 	}
@@ -2177,8 +2097,9 @@ vm_object_coalesce(vm_object_t prev_object, vm_ooffset_t prev_offset,
 	next_size >>= PAGE_SHIFT;
 	next_pindex = OFF_TO_IDX(prev_offset) + prev_size;
 
-	if ((prev_object->ref_count > 1) &&
-	    (prev_object->size != next_pindex)) {
+	if (prev_object->ref_count > 1 &&
+	    prev_object->size != next_pindex &&
+	    (prev_object->flags & OBJ_ONEMAPPING) == 0) {
 		VM_OBJECT_WUNLOCK(prev_object);
 		return (FALSE);
 	}
@@ -2414,14 +2335,15 @@ sysctl_vm_object_list(SYSCTL_HANDLER_ARGS)
 			 * sysctl is only meant to give an
 			 * approximation of the system anyway.
 			 */
-			if (vm_page_active(m))
+			if (m->queue == PQ_ACTIVE)
 				kvo->kvo_active++;
-			else if (vm_page_inactive(m))
+			else if (m->queue == PQ_INACTIVE)
 				kvo->kvo_inactive++;
 		}
 
 		kvo->kvo_vn_fileid = 0;
 		kvo->kvo_vn_fsid = 0;
+		kvo->kvo_vn_fsid_freebsd11 = 0;
 		freepath = NULL;
 		fullpath = "";
 		vp = NULL;
@@ -2463,6 +2385,8 @@ sysctl_vm_object_list(SYSCTL_HANDLER_ARGS)
 			if (VOP_GETATTR(vp, &va, curthread->td_ucred) == 0) {
 				kvo->kvo_vn_fileid = va.va_fileid;
 				kvo->kvo_vn_fsid = va.va_fsid;
+				kvo->kvo_vn_fsid_freebsd11 = va.va_fsid;
+								/* truncate */
 			}
 			vput(vp);
 		}

@@ -1,5 +1,7 @@
 /* $FreeBSD$ */
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2010 Hans Petter Selasky
  * Copyright (c) 2018 The FreeBSD Foundation
  * All rights reserved.
@@ -74,8 +76,10 @@ enum {
 	KBD_MAX_INDEX,
 };
 
+#define	KBD_DEFAULT_VENDOR_ID		USB_TEMPLATE_VENDOR
+#define	KBD_DEFAULT_PRODUCT_ID		0x27db
 #define	KBD_DEFAULT_INTERFACE		"Keyboard Interface"
-#define	KBD_DEFAULT_MANUFACTURER	"FreeBSD foundation"
+#define	KBD_DEFAULT_MANUFACTURER	USB_TEMPLATE_MANUFACTURER
 #define	KBD_DEFAULT_PRODUCT		"Keyboard Test Device"
 #define	KBD_DEFAULT_SERIAL_NUMBER	"March 2008"
 
@@ -153,8 +157,8 @@ static const struct usb_temp_interface_desc *keyboard_interfaces[] = {
 
 static const struct usb_temp_config_desc keyboard_config_desc = {
 	.ppIfaceDesc = keyboard_interfaces,
-	.bmAttributes = UC_BUS_POWERED,
-	.bMaxPower = 25,		/* 50 mA */
+	.bmAttributes = 0,
+	.bMaxPower = 0,
 	.iConfiguration = KBD_PRODUCT_INDEX,
 };
 
@@ -170,8 +174,8 @@ struct usb_temp_device_desc usb_template_kbd = {
 	.getStringDesc = &keyboard_get_string_desc,
 	.getVendorDesc = &keyboard_get_vendor_desc,
 	.ppConfigDesc = keyboard_configs,
-	.idVendor = USB_TEMPLATE_VENDOR,
-	.idProduct = 0x00CB,
+	.idVendor = KBD_DEFAULT_VENDOR_ID,
+	.idProduct = KBD_DEFAULT_PRODUCT_ID,
 	.bcdDevice = 0x0100,
 	.bDeviceClass = UDCLASS_COMM,
 	.bDeviceSubClass = 0,
@@ -287,4 +291,4 @@ kbd_uninit(void *arg __unused)
 }
 
 SYSINIT(kbd_init, SI_SUB_LOCK, SI_ORDER_FIRST, kbd_init, NULL);
-SYSUNINIT(kbd_init, SI_SUB_LOCK, SI_ORDER_FIRST, kbd_uninit, NULL);
+SYSUNINIT(kbd_uninit, SI_SUB_LOCK, SI_ORDER_FIRST, kbd_uninit, NULL);

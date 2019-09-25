@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -13,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -96,6 +98,7 @@
 #define	NFSSESSIONHASHSIZE	20	/* Size of server session hash table */
 #endif
 #define	NFSSTATEHASHSIZE	10	/* Size of server stateid hash table */
+#define	NFSLAYOUTHIGHWATER	1000000	/* Upper limit for # of layouts */
 #ifndef	NFSCLDELEGHIGHWATER
 #define	NFSCLDELEGHIGHWATER	10000	/* limit for client delegations */
 #endif
@@ -169,8 +172,45 @@ struct nfsd_addsock_args {
 
 /*
  * nfsd argument for new krpc.
+ * (New version supports pNFS, indicated by NFSSVC_NEWSTRUCT flag.)
  */
 struct nfsd_nfsd_args {
+	const char *principal;	/* GSS-API service principal name */
+	int	minthreads;	/* minimum service thread count */
+	int	maxthreads;	/* maximum service thread count */
+	int	version;	/* Allow multiple variants */
+	char	*addr;		/* pNFS DS addresses */
+	int	addrlen;	/* Length of addrs */
+	char	*dnshost;	/* DNS names for DS addresses */
+	int	dnshostlen;	/* Length of DNS names */
+	char	*dspath;	/* DS Mount path on MDS */
+	int	dspathlen;	/* Length of DS Mount path on MDS */
+	char	*mdspath;	/* MDS mount for DS path on MDS */
+	int	mdspathlen;	/* Length of MDS mount for DS path on MDS */
+	int	mirrorcnt;	/* Number of mirrors to create on DSs */
+};
+
+/*
+ * NFSDEV_MAXMIRRORS - Maximum level of mirroring for a DS.
+ * (Most will only put files on two DSs, but this setting allows up to 4.)
+ * NFSDEV_MAXVERS - maximum number of NFS versions supported by Flex File.
+ */
+#define	NFSDEV_MAXMIRRORS	4
+#define	NFSDEV_MAXVERS		4
+
+struct nfsd_pnfsd_args {
+	int	op;		/* Which pNFSd op to perform. */
+	char	*mdspath;	/* Path of MDS file. */
+	char	*dspath;	/* Path of recovered DS mounted on dir. */
+	char	*curdspath;	/* Path of current DS mounted on dir. */
+};
+
+#define	PNFSDOP_DELDSSERVER	1
+#define	PNFSDOP_COPYMR		2
+#define	PNFSDOP_FORCEDELDS	3
+
+/* Old version. */
+struct nfsd_nfsd_oargs {
 	const char *principal;	/* GSS-API service principal name */
 	int	minthreads;	/* minimum service thread count */
 	int	maxthreads;	/* maximum service thread count */
@@ -210,6 +250,11 @@ struct nfsd_oidargs {
 	int		nid_usertimeout;/* User name timeout (minutes) */
 	u_char		*nid_name;	/* Name */
 	int		nid_namelen;	/* and its length */
+};
+
+struct nfsuserd_args {
+	sa_family_t	nuserd_family;	/* Address family to use */
+	u_short		nuserd_port;	/* Port# */
 };
 
 struct nfsd_clid {
@@ -265,7 +310,7 @@ struct nfsreferral {
 	u_char		*nfr_srvlist;	/* List of servers */
 	int		nfr_srvcnt;	/* number of servers */
 	vnode_t		nfr_vp;	/* vnode for referral */
-	u_int32_t	nfr_dfileno;	/* assigned dir inode# */
+	uint64_t	nfr_dfileno;	/* assigned dir inode# */
 };
 
 /*
@@ -288,6 +333,8 @@ struct nfsreferral {
 #define	LCL_ADMINREVOKED	0x00008000
 #define	LCL_RECLAIMCOMPLETE	0x00010000
 #define	LCL_NFSV41		0x00020000
+#define	LCL_DONEBINDCONN	0x00040000
+#define	LCL_RECLAIMONEFS	0x00080000
 
 #define	LCL_GSS		LCL_KERBV	/* Or of all mechs */
 
@@ -376,10 +423,14 @@ typedef struct {
 	(t)->bits[2] = (f)->bits[2];					\
 } while (0)
 
-#define	NFSSETSUPP_ATTRBIT(b) do { 					\
+#define	NFSSETSUPP_ATTRBIT(b, n) do { 					\
 	(b)->bits[0] = NFSATTRBIT_SUPP0; 				\
-	(b)->bits[1] = (NFSATTRBIT_SUPP1 | NFSATTRBIT_SUPPSETONLY);	\
-	(b)->bits[2] = NFSATTRBIT_SUPP2;				\
+	(b)->bits[1] = (NFSATTRBIT_SUPP1 | NFSATTRBIT_SUPPSETONLY1);	\
+	(b)->bits[2] = (NFSATTRBIT_SUPP2 | NFSATTRBIT_SUPPSETONLY2);	\
+	if (((n)->nd_flag & ND_NFSV41) == 0) {				\
+		(b)->bits[1] &= ~NFSATTRBIT_NFSV41_1;			\
+		(b)->bits[2] &= ~NFSATTRBIT_NFSV41_2;			\
+	}								\
 } while (0)
 
 #define	NFSISSET_ATTRBIT(b, p)	((b)->bits[(p) / 32] & (1 << ((p) % 32)))
@@ -398,16 +449,22 @@ typedef struct {
 	(b)->bits[2] &= ((a)->bits[2]);		 			\
 } while (0)
 
-#define	NFSCLRNOTFILLABLE_ATTRBIT(b) do { 				\
+#define	NFSCLRNOTFILLABLE_ATTRBIT(b, n) do { 				\
 	(b)->bits[0] &= NFSATTRBIT_SUPP0;	 			\
 	(b)->bits[1] &= NFSATTRBIT_SUPP1;				\
 	(b)->bits[2] &= NFSATTRBIT_SUPP2;				\
+	if (((n)->nd_flag & ND_NFSV41) == 0) {				\
+		(b)->bits[1] &= ~NFSATTRBIT_NFSV41_1;			\
+		(b)->bits[2] &= ~NFSATTRBIT_NFSV41_2;			\
+	}								\
 } while (0)
 
-#define	NFSCLRNOTSETABLE_ATTRBIT(b) do { 				\
+#define	NFSCLRNOTSETABLE_ATTRBIT(b, n) do { 				\
 	(b)->bits[0] &= NFSATTRBIT_SETABLE0;	 			\
 	(b)->bits[1] &= NFSATTRBIT_SETABLE1;				\
 	(b)->bits[2] &= NFSATTRBIT_SETABLE2;				\
+	if (((n)->nd_flag & ND_NFSV41) == 0)				\
+		(b)->bits[2] &= ~NFSATTRBIT_NFSV41_2;			\
 } while (0)
 
 #define	NFSNONZERO_ATTRBIT(b)	((b)->bits[0] || (b)->bits[1] || (b)->bits[2])
@@ -582,8 +639,8 @@ struct nfsrv_descript {
 	NFSSOCKADDR_T		nd_nam2;	/* return socket addr */
 	caddr_t			nd_dpos;	/* Current dissect pos */
 	caddr_t			nd_bpos;	/* Current build pos */
+	u_int64_t		nd_flag;	/* nd_flag */
 	u_int16_t		nd_procnum;	/* RPC # */
-	u_int32_t		nd_flag;	/* nd_flag */
 	u_int32_t		nd_repstat;	/* Reply status */
 	int			*nd_errp;	/* Pointer to ret status */
 	u_int32_t		nd_retxid;	/* Reply xid */
@@ -602,6 +659,8 @@ struct nfsrv_descript {
 	uint32_t		nd_slotid;	/* Slotid for this RPC */
 	SVCXPRT			*nd_xprt;	/* Server RPC handle */
 	uint32_t		*nd_sequence;	/* Sequence Op. ptr */
+	nfsv4stateid_t		nd_curstateid;	/* Current StateID */
+	nfsv4stateid_t		nd_savedcurstateid; /* Saved Current StateID */
 };
 
 #define	nd_princlen	nd_gssnamelen
@@ -638,6 +697,10 @@ struct nfsrv_descript {
 #define	ND_CACHETHIS		0x08000000
 #define	ND_LASTOP		0x10000000
 #define	ND_LOOPBADSESS		0x20000000
+#define	ND_DSSERVER		0x40000000
+#define	ND_CURSTATEID		0x80000000
+#define	ND_SAVEDCURSTATEID	0x100000000
+#define	ND_HASSLOTID		0x200000000
 
 /*
  * ND_GSS should be the "or" of all GSS type authentications.

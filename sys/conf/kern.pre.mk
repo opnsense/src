@@ -27,6 +27,14 @@ _srcconf_included_:
 # The kernel build always expects .OBJDIR=.CURDIR.
 .OBJDIR: ${.CURDIR}
 
+.if defined(NO_OBJWALK) || ${MK_AUTO_OBJ} == "yes"
+NO_OBJWALK=		t
+NO_MODULES_OBJ=	t
+.endif
+.if !defined(NO_OBJWALK)
+_obj=		obj
+.endif
+
 # Can be overridden by makeoptions or /etc/make.conf
 KERNEL_KO?=	kernel
 KERNEL?=	kernel
@@ -38,7 +46,6 @@ M=		${MACHINE}
 
 AWK?=		awk
 CP?=		cp
-LINT?=		lint
 NM?=		nm
 OBJCOPY?=	objcopy
 SIZE?=		size
@@ -70,22 +77,27 @@ COPTFLAGS+= ${_CPUCFLAGS}
 .endif
 NOSTDINC= -nostdinc
 
-INCLUDES= ${NOSTDINC} ${INCLMAGIC} -I. -I$S
+INCLUDES= ${NOSTDINC} ${INCLMAGIC} -I. -I$S -I$S/contrib/ck/include
 
 CFLAGS=	${COPTFLAGS} ${DEBUG}
 CFLAGS+= ${INCLUDES} -D_KERNEL -DHAVE_KERNEL_OPTION_HEADERS -include opt_global.h
 CFLAGS_PARAM_INLINE_UNIT_GROWTH?=100
 CFLAGS_PARAM_LARGE_FUNCTION_GROWTH?=1000
 .if ${MACHINE_CPUARCH} == "mips"
-CFLAGS_ARCH_PARAMS?=--param max-inline-insns-single=1000
+CFLAGS_ARCH_PARAMS?=--param max-inline-insns-single=1000 -DMACHINE_ARCH='"${MACHINE_ARCH}"'
 .endif
 CFLAGS.gcc+= -fno-common -fms-extensions -finline-limit=${INLINE_LIMIT}
 CFLAGS.gcc+= --param inline-unit-growth=${CFLAGS_PARAM_INLINE_UNIT_GROWTH}
 CFLAGS.gcc+= --param large-function-growth=${CFLAGS_PARAM_LARGE_FUNCTION_GROWTH}
+CFLAGS.gcc+= -fms-extensions
 .if defined(CFLAGS_ARCH_PARAMS)
 CFLAGS.gcc+=${CFLAGS_ARCH_PARAMS}
 .endif
-WERROR?= -Werror
+.if ${COMPILER_TYPE} == "gcc" && ${COMPILER_VERSION} < 50000
+WERROR?=	-Wno-error
+.else
+WERROR?=	-Werror
+.endif
 
 # XXX LOCORE means "don't declare C stuff" not "for locore.s".
 ASM_CFLAGS= -x assembler-with-cpp -DLOCORE ${CFLAGS} ${ASM_CFLAGS.${.IMPSRC:T}} 
@@ -110,14 +122,21 @@ DEFINED_PROF=	${PROF}
 CFLAGS+=	${CONF_CFLAGS}
 
 .if defined(LINKER_FEATURES) && ${LINKER_FEATURES:Mbuild-id}
-LDFLAGS+=	-Wl,--build-id=sha1
+LDFLAGS+=	--build-id=sha1
 .endif
 
-# Optional linting. This can be overridden in /etc/make.conf.
-LINTFLAGS=	${LINTOBJKERNFLAGS}
-
+.if (${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "amd64" || \
+    ${MACHINE_CPUARCH} == "i386") && \
+    defined(LINKER_FEATURES) && ${LINKER_FEATURES:Mifunc} == ""
+.error amd64/arm64/i386 kernel requires linker ifunc support
+.endif
 .if ${MACHINE_CPUARCH} == "amd64"
-LDFLAGS+=	-Wl,-z max-page-size=2097152 -Wl,-z common-page-size=4096
+LDFLAGS+=	-z max-page-size=2097152
+.if ${LINKER_TYPE} != "lld"
+LDFLAGS+=	-z common-page-size=4096
+.else
+LDFLAGS+=	-z notext -z ifunc-noplt
+.endif
 .endif
 
 NORMAL_C= ${CC} -c ${CFLAGS} ${WERROR} ${PROF} ${.IMPSRC}
@@ -131,6 +150,9 @@ NORMAL_M= ${AWK} -f $S/tools/makeobjops.awk ${.IMPSRC} -c ; \
 NORMAL_FW= uudecode -o ${.TARGET} ${.ALLSRC}
 NORMAL_FWO= ${LD} -b binary --no-warn-mismatch -d -warn-common -r \
 	-m ${LD_EMULATION} -o ${.TARGET} ${.ALLSRC:M*.fw}
+
+# for ZSTD in the kernel (include zstd/lib/freebsd before other CFLAGS)
+ZSTD_C= ${CC} -c -DZSTD_HEAPMODE=1 -I$S/contrib/zstd/lib/freebsd ${CFLAGS} -I$S/contrib/zstd/lib -I$S/contrib/zstd/lib/common ${WERROR} -Wno-inline -Wno-missing-prototypes ${PROF} -U__BMI__ ${.IMPSRC}
 
 # Common for dtrace / zfs
 CDDL_CFLAGS=	-DFREEBSD_NAMECACHE -nostdinc -I$S/cddl/compat/opensolaris -I$S/cddl/contrib/opensolaris/uts/common -I$S -I$S/cddl/contrib/opensolaris/common ${CFLAGS} -Wno-unknown-pragmas -Wno-missing-prototypes -Wno-undef -Wno-strict-prototypes -Wno-cast-qual -Wno-parentheses -Wno-redundant-decls -Wno-missing-braces -Wno-uninitialized -Wno-unused -Wno-inline -Wno-switch -Wno-pointer-arith -Wno-unknown-pragmas
@@ -172,8 +194,6 @@ NORMAL_CTFCONVERT=
 NORMAL_CTFCONVERT=	@:
 .endif
 
-NORMAL_LINT=	${LINT} ${LINTFLAGS} ${CFLAGS:M-[DIU]*} ${.IMPSRC}
-
 # Linux Kernel Programming Interface C-flags
 LINUXKPI_INCLUDES=	-I$S/compat/linuxkpi/common/include
 LINUXKPI_C=		${NORMAL_C} ${LINUXKPI_INCLUDES}
@@ -186,6 +206,12 @@ OFEDCFLAGS=	${CFLAGS:N-I*} -DCONFIG_INFINIBAND_USER_MEM \
 		${OFEDINCLUDES} ${CFLAGS:M-I*} ${OFEDNOERR}
 OFED_C_NOIMP=	${CC} -c -o ${.TARGET} ${OFEDCFLAGS} ${WERROR} ${PROF}
 OFED_C=		${OFED_C_NOIMP} ${.IMPSRC}
+
+# mlxfw C flags.
+MLXFW_C=	${OFED_C_NOIMP} \
+		-I${SRCTOP}/sys/contrib/xz-embedded/freebsd \
+		-I${SRCTOP}/sys/contrib/xz-embedded/linux/lib/xz \
+		${.IMPSRC}
 
 GEN_CFILES= $S/$M/$M/genassym.c ${MFILES:T:S/.m$/.c/}
 SYSTEM_CFILES= config.c env.c hints.c vnode_if.c
@@ -200,15 +226,17 @@ MD_ROOT_SIZE_CONFIGURED!=	grep MD_ROOT_SIZE opt_md.h || true ; echo
 SYSTEM_OBJS+= embedfs_${MFS_IMAGE:T:R}.o
 .endif
 .endif
-SYSTEM_LD= @${LD} -Bdynamic -T ${LDSCRIPT} ${_LDFLAGS} --no-warn-mismatch \
-	--warn-common --export-dynamic --dynamic-linker /red/herring \
+SYSTEM_LD= @${LD} -m ${LD_EMULATION} -Bdynamic -T ${LDSCRIPT} ${_LDFLAGS} \
+	--no-warn-mismatch --warn-common --export-dynamic \
+	--dynamic-linker /red/herring \
 	-o ${.TARGET} -X ${SYSTEM_OBJS} vers.o
 SYSTEM_LD_TAIL= @${OBJCOPY} --strip-symbol gcc2_compiled. ${.TARGET} ; \
 	${SIZE} ${.TARGET} ; chmod 755 ${.TARGET}
 SYSTEM_DEP+= ${LDSCRIPT}
 
 # Calculate path for .m files early, if needed.
-.if !defined(NO_MODULES) && !defined(__MPATH)
+.if !defined(NO_MODULES) && !defined(__MPATH) && !make(install) && \
+    (empty(.MAKEFLAGS:M-V) || defined(NO_SKIP_MPATH))
 __MPATH!=find ${S:tA}/ -name \*_if.m
 .endif
 
@@ -233,7 +261,7 @@ MKMODULESENV+=	DEBUG_FLAGS="${DEBUG}"
 MKMODULESENV+=	__MPATH="${__MPATH}"
 .endif
 
-# Architecture and output format arguments for objdump to convert image to
+# Architecture and output format arguments for objcopy to convert image to
 # object file
 
 .if ${MFS_IMAGE:Uno} != "no"
@@ -254,6 +282,7 @@ EMBEDFS_ARCH.${MACHINE_ARCH}!= sed -n '/OUTPUT_ARCH/s/.*(\(.*\)).*/\1/p' ${LDSCR
 
 EMBEDFS_FORMAT.arm?=		elf32-littlearm
 EMBEDFS_FORMAT.armv6?=		elf32-littlearm
+EMBEDFS_FORMAT.armv7?=		elf32-littlearm
 EMBEDFS_FORMAT.aarch64?=	elf64-littleaarch64
 EMBEDFS_FORMAT.mips?=		elf32-tradbigmips
 EMBEDFS_FORMAT.mipsel?=		elf32-tradlittlemips

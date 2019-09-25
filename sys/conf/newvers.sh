@@ -1,5 +1,7 @@
 #!/bin/sh -
 #
+# SPDX-License-Identifier: BSD-3-Clause
+#
 # Copyright (c) 1984, 1986, 1990, 1993
 #	The Regents of the University of California.  All rights reserved.
 #
@@ -43,12 +45,11 @@
 #                      included if the tree is modified.
 
 TYPE="FreeBSD"
-REVISION="11.2"
-BRANCH="RELEASE-p14"
+REVISION="12.1"
+BRANCH="BETA1"
 if [ -n "${BRANCH_OVERRIDE}" ]; then
 	BRANCH=${BRANCH_OVERRIDE}
 fi
-BRANCH="${BRANCH}-HBSD"
 RELEASE="${REVISION}-${BRANCH}"
 VERSION="${TYPE} ${RELEASE}"
 
@@ -64,7 +65,8 @@ findvcs()
 	cd ${SYSDIR}/..
 	while [ $(pwd) != "/" ]; do
 		if [ -e "./$1" ]; then
-			VCSDIR=$(pwd)"/$1"
+			VCSTOP=$(pwd)
+			VCSDIR=${VCSTOP}"/$1"
 			cd ${savedir}
 			return 0
 		fi
@@ -181,7 +183,7 @@ done
 if findvcs .git; then
 	for dir in /usr/bin /usr/local/bin; do
 		if [ -x "${dir}/git" ] ; then
-			git_cmd="${dir}/git --git-dir=${VCSDIR}"
+			git_cmd="${dir}/git -c help.autocorrect=0 --git-dir=${VCSDIR}"
 			break
 		fi
 	done
@@ -238,7 +240,7 @@ if [ -n "$git_cmd" ] ; then
 	if [ -n "$git_b" ] ; then
 		git="${git}(${git_b})"
 	fi
-	if $git_cmd --work-tree=${VCSDIR}/.. diff-index \
+	if $git_cmd --work-tree=${VCSTOP} diff-index \
 	    --name-only HEAD | read dummy; then
 		git="${git}-dirty"
 		modified=true
@@ -290,17 +292,11 @@ while getopts rR opt; do
 done
 shift $((OPTIND - 1))
 
-if [ -n "${HBSD_EXTRA}" ] ; then
-	hbsdv=" [${HBSD_EXTRA}]"
-else
-	hbsdv=" "
-fi
-
 if [ -z "${include_metadata}" ]; then
-	VERINFO="${VERSION}${hbsdv}${svn}${git}${hg}${p4version}"
+	VERINFO="${VERSION}${svn}${git}${hg}${p4version} ${i}"
 	VERSTR="${VERINFO}\\n"
 else
-	VERINFO="${VERSION} #${v}${hbsdv}${svn}${git}${hg}${p4version}: ${t}"
+	VERINFO="${VERSION} #${v}${svn}${git}${hg}${p4version}: ${t}"
 	VERSTR="${VERINFO}\\n    ${u}@${h}:${d}\\n"
 fi
 

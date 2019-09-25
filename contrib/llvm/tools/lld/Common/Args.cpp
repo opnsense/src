@@ -13,18 +13,23 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Option/ArgList.h"
+#include "llvm/Support/Path.h"
 
 using namespace llvm;
 using namespace lld;
 
 int lld::args::getInteger(opt::InputArgList &Args, unsigned Key, int Default) {
-  int V = Default;
-  if (auto *Arg = Args.getLastArg(Key)) {
-    StringRef S = Arg->getValue();
-    if (!to_integer(S, V, 10))
-      error(Arg->getSpelling() + ": number expected, but got '" + S + "'");
-  }
-  return V;
+  auto *A = Args.getLastArg(Key);
+  if (!A)
+    return Default;
+
+  int V;
+  if (to_integer(A->getValue(), V, 10))
+    return V;
+
+  StringRef Spelling = Args.getArgString(A->getIndex());
+  error(Spelling + ": number expected, but got '" + A->getValue() + "'");
+  return 0;
 }
 
 std::vector<StringRef> lld::args::getStrings(opt::InputArgList &Args, int Id) {
@@ -36,7 +41,7 @@ std::vector<StringRef> lld::args::getStrings(opt::InputArgList &Args, int Id) {
 
 uint64_t lld::args::getZOptionValue(opt::InputArgList &Args, int Id,
                                     StringRef Key, uint64_t Default) {
-  for (auto *Arg : Args.filtered(Id)) {
+  for (auto *Arg : Args.filtered_reverse(Id)) {
     std::pair<StringRef, StringRef> KV = StringRef(Arg->getValue()).split('=');
     if (KV.first == Key) {
       uint64_t Result = Default;
@@ -59,4 +64,10 @@ std::vector<StringRef> lld::args::getLines(MemoryBufferRef MB) {
       Ret.push_back(S);
   }
   return Ret;
+}
+
+StringRef lld::args::getFilenameWithoutExe(StringRef Path) {
+  if (Path.endswith_lower(".exe"))
+    return sys::path::stem(Path);
+  return sys::path::filename(Path);
 }

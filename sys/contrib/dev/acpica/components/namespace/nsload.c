@@ -8,7 +8,7 @@
  *
  * 1. Copyright Notice
  *
- * Some or all of this work - Copyright (c) 1999 - 2017, Intel Corp.
+ * Some or all of this work - Copyright (c) 1999 - 2018, Intel Corp.
  * All rights reserved.
  *
  * 2. License
@@ -173,7 +173,6 @@ AcpiNsDeleteSubtree (
 #endif
 
 
-#ifndef ACPI_NO_METHOD_EXECUTION
 /*******************************************************************************
  *
  * FUNCTION:    AcpiNsLoadTable
@@ -270,23 +269,17 @@ Unlock:
         "**** Completed Table Object Initialization\n"));
 
     /*
-     * Execute any module-level code that was detected during the table load
-     * phase. Although illegal since ACPI 2.0, there are many machines that
-     * contain this type of code. Each block of detected executable AML code
-     * outside of any control method is wrapped with a temporary control
-     * method object and placed on a global list. The methods on this list
-     * are executed below.
+     * This case handles the legacy option that groups all module-level
+     * code blocks together and defers execution until all of the tables
+     * are loaded. Execute all of these blocks at this time.
+     * Execute any module-level code that was detected during the table
+     * load phase.
      *
-     * This case executes the module-level code for each table immediately
-     * after the table has been loaded. This provides compatibility with
-     * other ACPI implementations. Optionally, the execution can be deferred
-     * until later, see AcpiInitializeObjects.
+     * Note: this option is deprecated and will be eliminated in the
+     * future. Use of this option can cause problems with AML code that
+     * depends upon in-order immediate execution of module-level code.
      */
-    if (!AcpiGbl_ParseTableAsTermList && !AcpiGbl_GroupModuleLevelCode)
-    {
-        AcpiNsExecModuleCodeList ();
-    }
-
+    AcpiNsExecModuleCodeList ();
     return_ACPI_STATUS (Status);
 }
 
@@ -482,5 +475,4 @@ AcpiNsUnloadNamespace (
     Status = AcpiNsDeleteSubtree (Handle);
     return_ACPI_STATUS (Status);
 }
-#endif
 #endif

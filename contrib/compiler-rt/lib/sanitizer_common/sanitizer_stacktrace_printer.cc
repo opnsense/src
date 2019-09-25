@@ -17,8 +17,8 @@
 
 namespace __sanitizer {
 
-// sanitizer_symbolizer_fuchsia.cc implements these differently for Fuchsia.
-#if !SANITIZER_FUCHSIA
+// sanitizer_symbolizer_markup.cc implements these differently.
+#if !SANITIZER_SYMBOLIZER_MARKUP
 
 static const char *StripFunctionName(const char *function, const char *prefix) {
   if (!function) return nullptr;
@@ -98,6 +98,8 @@ static const char *DemangleFunctionName(const char *function) {
     return "pthread_equal";
   if (!internal_strcmp(function, "__libc_thr_curcpu"))
     return "pthread_curcpu_np";
+  if (!internal_strcmp(function, "__libc_thr_sigsetmask"))
+    return "pthread_sigmask";
 #endif
 
   return function;
@@ -228,7 +230,7 @@ void RenderData(InternalScopedString *buffer, const char *format,
   }
 }
 
-#endif  // !SANITIZER_FUCHSIA
+#endif  // !SANITIZER_SYMBOLIZER_MARKUP
 
 void RenderSourceLocation(InternalScopedString *buffer, const char *file,
                           int line, int column, bool vs_style,

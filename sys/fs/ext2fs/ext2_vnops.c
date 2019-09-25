@@ -5,6 +5,8 @@
  *  University of Utah, Department of Computer Science
  */
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1982, 1986, 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
  * (c) UNIX System Laboratories, Inc.
@@ -21,7 +23,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -49,6 +51,8 @@
 #include <sys/kernel.h>
 #include <sys/fcntl.h>
 #include <sys/filio.h>
+#include <sys/limits.h>
+#include <sys/sdt.h>
 #include <sys/stat.h>
 #include <sys/bio.h>
 #include <sys/buf.h>
@@ -65,6 +69,7 @@
 #include <sys/conf.h>
 #include <sys/file.h>
 #include <sys/extattr.h>
+#include <sys/vmmeter.h>
 
 #include <vm/vm.h>
 #include <vm/vm_param.h>
@@ -81,17 +86,24 @@
 #include <fs/ext2fs/fs.h>
 #include <fs/ext2fs/inode.h>
 #include <fs/ext2fs/ext2_acl.h>
-#include <fs/ext2fs/ext2_extern.h>
 #include <fs/ext2fs/ext2fs.h>
+#include <fs/ext2fs/ext2_extern.h>
 #include <fs/ext2fs/ext2_dinode.h>
 #include <fs/ext2fs/ext2_dir.h>
 #include <fs/ext2fs/ext2_mount.h>
 #include <fs/ext2fs/ext2_extattr.h>
+#include <fs/ext2fs/ext2_extents.h>
+
+SDT_PROVIDER_DECLARE(ext2fs);
+/*
+ * ext2fs trace probe:
+ * arg0: verbosity. Higher numbers give more verbose messages
+ * arg1: Textual message
+ */
+SDT_PROBE_DEFINE2(ext2fs, , vnops, trace, "int", "char*");
 
 static int ext2_makeinode(int mode, struct vnode *, struct vnode **, struct componentname *);
 static void ext2_itimes_locked(struct vnode *);
-static int ext4_ext_read(struct vop_read_args *);
-static int ext2_ind_read(struct vop_read_args *);
 
 static vop_access_t	ext2_access;
 static int ext2_chmod(struct vnode *, int, struct ucred *, struct thread *);
@@ -630,7 +642,8 @@ ext2_mknod(struct vop_mknod_args *ap)
 		 * Want to be able to use this to make badblock
 		 * inodes, so don't truncate the dev number.
 		 */
-		ip->i_rdev = vap->va_rdev;
+		if (!(ip->i_flag & IN_E4EXTENTS))
+			ip->i_rdev = vap->va_rdev;
 	}
 	/*
 	 * Remove inode, then reload it through VFS_VGET so it is
@@ -689,7 +702,7 @@ ext2_link(struct vop_link_args *ap)
 		panic("ext2_link: no name");
 #endif
 	ip = VTOI(vp);
-	if ((nlink_t)ip->i_nlink >= EXT2_LINK_MAX) {
+	if ((nlink_t)ip->i_nlink >= EXT4_LINK_MAX) {
 		error = EMLINK;
 		goto out;
 	}
@@ -708,6 +721,33 @@ ext2_link(struct vop_link_args *ap)
 	}
 out:
 	return (error);
+}
+
+static int
+ext2_inc_nlink(struct inode *ip)
+{
+
+	ip->i_nlink++;
+
+	if (S_ISDIR(ip->i_mode) &&
+	    EXT2_HAS_RO_COMPAT_FEATURE(ip->i_e2fs, EXT2F_ROCOMPAT_DIR_NLINK) &&
+	    ip->i_nlink > 1) {
+		if (ip->i_nlink >= EXT4_LINK_MAX || ip->i_nlink == 2)
+			ip->i_nlink = 1;
+	} else if (ip->i_nlink > EXT4_LINK_MAX) {
+		ip->i_nlink--;
+		return (EMLINK);
+	}
+
+	return (0);
+}
+
+static void
+ext2_dec_nlink(struct inode *ip)
+{
+
+	if (!S_ISDIR(ip->i_mode) || ip->i_nlink > 2)
+		ip->i_nlink--;
 }
 
 /*
@@ -744,7 +784,7 @@ ext2_rename(struct vop_rename_args *ap)
 	struct componentname *tcnp = ap->a_tcnp;
 	struct componentname *fcnp = ap->a_fcnp;
 	struct inode *ip, *xp, *dp;
-	struct dirtemplate dirbuf;
+	struct dirtemplate *dirbuf;
 	int doingdirectory = 0, oldparent = 0, newparent = 0;
 	int error = 0;
 	u_char namlen;
@@ -783,7 +823,8 @@ abortit:
 	 * not call us in that case.  Temporarily just warn if they do.
 	 */
 	if (fvp == tvp) {
-		printf("ext2_rename: fvp == tvp (can't happen)\n");
+		SDT_PROBE2(ext2fs, , vnops, trace, 1,
+		    "rename: fvp == tvp (can't happen)");
 		error = 0;
 		goto abortit;
 	}
@@ -792,7 +833,8 @@ abortit:
 		goto abortit;
 	dp = VTOI(fdvp);
 	ip = VTOI(fvp);
-	if (ip->i_nlink >= EXT2_LINK_MAX) {
+	if (ip->i_nlink >= EXT4_LINK_MAX &&
+	    !EXT2_HAS_RO_COMPAT_FEATURE(ip->i_e2fs, EXT2F_ROCOMPAT_DIR_NLINK)) {
 		VOP_UNLOCK(fvp, 0);
 		error = EMLINK;
 		goto abortit;
@@ -835,7 +877,7 @@ abortit:
 	 *    completing our work, the link count
 	 *    may be wrong, but correctable.
 	 */
-	ip->i_nlink++;
+	ext2_inc_nlink(ip);
 	ip->i_flag |= IN_CHANGE;
 	if ((error = ext2_update(fvp, !DOINGASYNC(fvp))) != 0) {
 		VOP_UNLOCK(fvp, 0);
@@ -890,11 +932,10 @@ abortit:
 		 * parent we don't fool with the link count.
 		 */
 		if (doingdirectory && newparent) {
-			if ((nlink_t)dp->i_nlink >= EXT2_LINK_MAX) {
-				error = EMLINK;
+			error = ext2_inc_nlink(dp);
+			if (error)
 				goto bad;
-			}
-			dp->i_nlink++;
+
 			dp->i_flag |= IN_CHANGE;
 			error = ext2_update(tdvp, !DOINGASYNC(tdvp));
 			if (error)
@@ -903,7 +944,7 @@ abortit:
 		error = ext2_direnter(ip, tdvp, tcnp);
 		if (error) {
 			if (doingdirectory && newparent) {
-				dp->i_nlink--;
+				ext2_dec_nlink(dp);
 				dp->i_flag |= IN_CHANGE;
 				(void)ext2_update(tdvp, 1);
 			}
@@ -936,8 +977,7 @@ abortit:
 		 * (both directories, or both not directories).
 		 */
 		if ((xp->i_mode & IFMT) == IFDIR) {
-			if (!ext2_dirempty(xp, dp->i_number, tcnp->cn_cred) ||
-			    xp->i_nlink > 2) {
+			if (!ext2_dirempty(xp, dp->i_number, tcnp->cn_cred)) {
 				error = ENOTEMPTY;
 				goto bad;
 			}
@@ -960,7 +1000,7 @@ abortit:
 		 * of the target directory.
 		 */
 		if (doingdirectory && !newparent) {
-			dp->i_nlink--;
+			ext2_dec_nlink(dp);
 			dp->i_flag |= IN_CHANGE;
 		}
 		vput(tdvp);
@@ -974,7 +1014,7 @@ abortit:
 		 * it above, as the remaining link would point to
 		 * a directory without "." or ".." entries.
 		 */
-		xp->i_nlink--;
+		ext2_dec_nlink(xp);
 		if (doingdirectory) {
 			if (--xp->i_nlink != 0)
 				panic("ext2_rename: linked directory");
@@ -1031,25 +1071,38 @@ abortit:
 		 * and ".." set to point to the new parent.
 		 */
 		if (doingdirectory && newparent) {
-			dp->i_nlink--;
+			ext2_dec_nlink(dp);
 			dp->i_flag |= IN_CHANGE;
-			error = vn_rdwr(UIO_READ, fvp, (caddr_t)&dirbuf,
-			    sizeof(struct dirtemplate), (off_t)0,
+			dirbuf = malloc(dp->i_e2fs->e2fs_bsize, M_TEMP, M_WAITOK | M_ZERO);
+			if (!dirbuf) {
+				error = ENOMEM;
+				goto bad;
+			}
+			error = vn_rdwr(UIO_READ, fvp, (caddr_t)dirbuf,
+			    ip->i_e2fs->e2fs_bsize, (off_t)0,
 			    UIO_SYSSPACE, IO_NODELOCKED | IO_NOMACCHECK,
 			    tcnp->cn_cred, NOCRED, NULL, NULL);
 			if (error == 0) {
 				/* Like ufs little-endian: */
-				namlen = dirbuf.dotdot_type;
+				namlen = dirbuf->dotdot_type;
 				if (namlen != 2 ||
-				    dirbuf.dotdot_name[0] != '.' ||
-				    dirbuf.dotdot_name[1] != '.') {
+				    dirbuf->dotdot_name[0] != '.' ||
+				    dirbuf->dotdot_name[1] != '.') {
 					ext2_dirbad(xp, (doff_t)12,
 					    "rename: mangled dir");
 				} else {
-					dirbuf.dotdot_ino = newparent;
+					dirbuf->dotdot_ino = newparent;
+					/*
+					 * dirblock 0 could be htree root,
+					 * try both csum update functions.
+					 */
+					ext2_dirent_csum_set(ip,
+					    (struct ext2fs_direct_2 *)dirbuf);
+					ext2_dx_csum_set(ip,
+					    (struct ext2fs_direct_2 *)dirbuf);
 					(void)vn_rdwr(UIO_WRITE, fvp,
-					    (caddr_t)&dirbuf,
-					    sizeof(struct dirtemplate),
+					    (caddr_t)dirbuf,
+					    ip->i_e2fs->e2fs_bsize,
 					    (off_t)0, UIO_SYSSPACE,
 					    IO_NODELOCKED | IO_SYNC |
 					    IO_NOMACCHECK, tcnp->cn_cred,
@@ -1057,10 +1110,11 @@ abortit:
 					cache_purge(fdvp);
 				}
 			}
+			free(dirbuf, M_TEMP);
 		}
 		error = ext2_dirremove(fdvp, fcnp);
 		if (!error) {
-			xp->i_nlink--;
+			ext2_dec_nlink(xp);
 			xp->i_flag |= IN_CHANGE;
 		}
 		xp->i_flag &= ~IN_RENAME;
@@ -1080,7 +1134,7 @@ out:
 	if (doingdirectory)
 		ip->i_flag &= ~IN_RENAME;
 	if (vn_lock(fvp, LK_EXCLUSIVE) == 0) {
-		ip->i_nlink--;
+		ext2_dec_nlink(ip);
 		ip->i_flag |= IN_CHANGE;
 		ip->i_flag &= ~IN_RENAME;
 		vput(fvp);
@@ -1242,12 +1296,14 @@ out:
 static int
 ext2_mkdir(struct vop_mkdir_args *ap)
 {
+	struct m_ext2fs *fs;
 	struct vnode *dvp = ap->a_dvp;
 	struct vattr *vap = ap->a_vap;
 	struct componentname *cnp = ap->a_cnp;
 	struct inode *ip, *dp;
 	struct vnode *tvp;
 	struct dirtemplate dirtemplate, *dtp;
+	char *buf = NULL;
 	int error, dmode;
 
 #ifdef INVARIANTS
@@ -1255,7 +1311,8 @@ ext2_mkdir(struct vop_mkdir_args *ap)
 		panic("ext2_mkdir: no name");
 #endif
 	dp = VTOI(dvp);
-	if ((nlink_t)dp->i_nlink >= EXT2_LINK_MAX) {
+	if ((nlink_t)dp->i_nlink >= EXT4_LINK_MAX &&
+	    !EXT2_HAS_RO_COMPAT_FEATURE(dp->i_e2fs, EXT2F_ROCOMPAT_DIR_NLINK)) {
 		error = EMLINK;
 		goto out;
 	}
@@ -1270,6 +1327,7 @@ ext2_mkdir(struct vop_mkdir_args *ap)
 	if (error)
 		goto out;
 	ip = VTOI(tvp);
+	fs = ip->i_e2fs;
 	ip->i_gid = dp->i_gid;
 #ifdef SUIDDIR
 	{
@@ -1306,7 +1364,7 @@ ext2_mkdir(struct vop_mkdir_args *ap)
 	 * be done before reference is created
 	 * so reparation is possible if we crash.
 	 */
-	dp->i_nlink++;
+	ext2_inc_nlink(dp);
 	dp->i_flag |= IN_CHANGE;
 	error = ext2_update(dvp, !DOINGASYNC(dvp));
 	if (error)
@@ -1328,12 +1386,25 @@ ext2_mkdir(struct vop_mkdir_args *ap)
 #undef  DIRBLKSIZ
 #define DIRBLKSIZ  VTOI(dvp)->i_e2fs->e2fs_bsize
 	dirtemplate.dotdot_reclen = DIRBLKSIZ - 12;
-	error = vn_rdwr(UIO_WRITE, tvp, (caddr_t)&dirtemplate,
-	    sizeof(dirtemplate), (off_t)0, UIO_SYSSPACE,
+	buf = malloc(DIRBLKSIZ, M_TEMP, M_WAITOK | M_ZERO);
+	if (!buf) {
+		error = ENOMEM;
+		ext2_dec_nlink(dp);
+		dp->i_flag |= IN_CHANGE;
+		goto bad;
+	}
+	if (EXT2_HAS_RO_COMPAT_FEATURE(fs, EXT2F_ROCOMPAT_METADATA_CKSUM)) {
+		dirtemplate.dotdot_reclen -= sizeof(struct ext2fs_direct_tail);
+		ext2_init_dirent_tail(EXT2_DIRENT_TAIL(buf, DIRBLKSIZ));
+	}
+	memcpy(buf, &dirtemplate, sizeof(dirtemplate));
+	ext2_dirent_csum_set(ip, (struct ext2fs_direct_2 *)buf);
+	error = vn_rdwr(UIO_WRITE, tvp, (caddr_t)buf,
+	    DIRBLKSIZ, (off_t)0, UIO_SYSSPACE,
 	    IO_NODELOCKED | IO_SYNC | IO_NOMACCHECK, cnp->cn_cred, NOCRED,
 	    NULL, NULL);
 	if (error) {
-		dp->i_nlink--;
+		ext2_dec_nlink(dp);
 		dp->i_flag |= IN_CHANGE;
 		goto bad;
 	}
@@ -1358,7 +1429,7 @@ ext2_mkdir(struct vop_mkdir_args *ap)
 	/* Directory set up, now install its entry in the parent directory. */
 	error = ext2_direnter(ip, dvp, cnp);
 	if (error) {
-		dp->i_nlink--;
+		ext2_dec_nlink(dp);
 		dp->i_flag |= IN_CHANGE;
 	}
 bad:
@@ -1373,6 +1444,7 @@ bad:
 	} else
 		*ap->a_vpp = tvp;
 out:
+	free(buf, M_TEMP);
 	return (error);
 #undef  DIRBLKSIZ
 #define DIRBLKSIZ  DEV_BSIZE
@@ -1400,7 +1472,7 @@ ext2_rmdir(struct vop_rmdir_args *ap)
 	 *  the current directory and thus be
 	 *  non-empty.)
 	 */
-	if (ip->i_nlink != 2 || !ext2_dirempty(ip, dp->i_number, cnp->cn_cred)) {
+	if (!ext2_dirempty(ip, dp->i_number, cnp->cn_cred)) {
 		error = ENOTEMPTY;
 		goto out;
 	}
@@ -1417,22 +1489,15 @@ ext2_rmdir(struct vop_rmdir_args *ap)
 	error = ext2_dirremove(dvp, cnp);
 	if (error)
 		goto out;
-	dp->i_nlink--;
+	ext2_dec_nlink(dp);
 	dp->i_flag |= IN_CHANGE;
 	cache_purge(dvp);
 	VOP_UNLOCK(dvp, 0);
 	/*
 	 * Truncate inode.  The only stuff left
-	 * in the directory is "." and "..".  The
-	 * "." reference is inconsequential since
-	 * we're quashing it.  The ".." reference
-	 * has already been adjusted above.  We've
-	 * removed the "." reference and the reference
-	 * in the parent directory, but there may be
-	 * other hard links so decrement by 2 and
-	 * worry about them later.
+	 * in the directory is "." and "..".
 	 */
-	ip->i_nlink -= 2;
+	ip->i_nlink = 0;
 	error = ext2_truncate(vp, (off_t)0, IO_SYNC, cnp->cn_cred,
 	    cnp->cn_thread);
 	cache_purge(ITOV(ip));
@@ -1512,7 +1577,12 @@ ext2_strategy(struct vop_strategy_args *ap)
 	if (vp->v_type == VBLK || vp->v_type == VCHR)
 		panic("ext2_strategy: spec");
 	if (bp->b_blkno == bp->b_lblkno) {
-		error = ext2_bmaparray(vp, bp->b_lblkno, &blkno, NULL, NULL);
+
+		if (VTOI(ap->a_vp)->i_flag & IN_E4EXTENTS)
+			error = ext4_bmapext(vp, bp->b_lblkno, &blkno, NULL, NULL);
+		else
+			error = ext2_bmaparray(vp, bp->b_lblkno, &blkno, NULL, NULL);
+
 		bp->b_blkno = blkno;
 		if (error) {
 			bp->b_error = error;
@@ -1592,7 +1662,11 @@ ext2_pathconf(struct vop_pathconf_args *ap)
 
 	switch (ap->a_name) {
 	case _PC_LINK_MAX:
-		*ap->a_retval = EXT2_LINK_MAX;
+		if (EXT2_HAS_RO_COMPAT_FEATURE(VTOI(ap->a_vp)->i_e2fs,
+		    EXT2F_ROCOMPAT_DIR_NLINK))
+			*ap->a_retval = INT_MAX;
+		else
+			*ap->a_retval = EXT4_LINK_MAX;
 		break;
 	case _PC_NAME_MAX:
 		*ap->a_retval = NAME_MAX;
@@ -1857,6 +1931,11 @@ ext2_vinit(struct mount *mntp, struct vop_vector *fifoops, struct vnode **vpp)
 	vp = *vpp;
 	ip = VTOI(vp);
 	vp->v_type = IFTOVT(ip->i_mode);
+	/*
+	 * Only unallocated inodes should be of type VNON.
+	 */
+	if (ip->i_mode != 0 && vp->v_type == VNON)
+		return (EINVAL);
 	if (vp->v_type == VFIFO)
 		vp->v_op = fifoops;
 
@@ -1966,28 +2045,6 @@ bad:
  */
 static int
 ext2_read(struct vop_read_args *ap)
-{
-	struct vnode *vp;
-	struct inode *ip;
-	int error;
-
-	vp = ap->a_vp;
-	ip = VTOI(vp);
-
-	/* EXT4_EXT_LOCK(ip); */
-	if (ip->i_flag & IN_E4EXTENTS)
-		error = ext4_ext_read(ap);
-	else
-		error = ext2_ind_read(ap);
-	/* EXT4_EXT_UNLOCK(ip); */
-	return (error);
-}
-
-/*
- * Vnode op for reading.
- */
-static int
-ext2_ind_read(struct vop_read_args *ap)
 {
 	struct vnode *vp;
 	struct inode *ip;
@@ -2107,122 +2164,6 @@ ext2_ioctl(struct vop_ioctl_args *ap)
 	default:
 		return (ENOTTY);
 	}
-}
-
-/*
- * this function handles ext4 extents block mapping
- */
-static int
-ext4_ext_read(struct vop_read_args *ap)
-{
-	static unsigned char zeroes[EXT2_MAX_BLOCK_SIZE];
-	struct vnode *vp;
-	struct inode *ip;
-	struct uio *uio;
-	struct m_ext2fs *fs;
-	struct buf *bp;
-	struct ext4_extent nex, *ep;
-	struct ext4_extent_path path;
-	daddr_t lbn, newblk;
-	off_t bytesinfile;
-	int cache_type;
-	ssize_t orig_resid;
-	int error;
-	long size, xfersize, blkoffset;
-
-	vp = ap->a_vp;
-	ip = VTOI(vp);
-	uio = ap->a_uio;
-	memset(&path, 0, sizeof(path));
-
-	orig_resid = uio->uio_resid;
-	KASSERT(orig_resid >= 0, ("%s: uio->uio_resid < 0", __func__));
-	if (orig_resid == 0)
-		return (0);
-	KASSERT(uio->uio_offset >= 0, ("%s: uio->uio_offset < 0", __func__));
-	fs = ip->i_e2fs;
-	if (uio->uio_offset < ip->i_size && uio->uio_offset >= fs->e2fs_maxfilesize)
-		return (EOVERFLOW);
-
-	while (uio->uio_resid > 0) {
-		if ((bytesinfile = ip->i_size - uio->uio_offset) <= 0)
-			break;
-		lbn = lblkno(fs, uio->uio_offset);
-		size = blksize(fs, ip, lbn);
-		blkoffset = blkoff(fs, uio->uio_offset);
-
-		xfersize = fs->e2fs_fsize - blkoffset;
-		xfersize = MIN(xfersize, uio->uio_resid);
-		xfersize = MIN(xfersize, bytesinfile);
-
-		/* get block from ext4 extent cache */
-		cache_type = ext4_ext_in_cache(ip, lbn, &nex);
-		switch (cache_type) {
-		case EXT4_EXT_CACHE_NO:
-			ext4_ext_find_extent(fs, ip, lbn, &path);
-			if (path.ep_is_sparse)
-				ep = &path.ep_sparse_ext;
-			else
-				ep = path.ep_ext;
-			if (ep == NULL)
-				return (EIO);
-
-			ext4_ext_put_cache(ip, ep,
-			    path.ep_is_sparse ? EXT4_EXT_CACHE_GAP : EXT4_EXT_CACHE_IN);
-
-			newblk = lbn - ep->e_blk + (ep->e_start_lo |
-			    (daddr_t)ep->e_start_hi << 32);
-
-			if (path.ep_bp != NULL) {
-				brelse(path.ep_bp);
-				path.ep_bp = NULL;
-			}
-			break;
-
-		case EXT4_EXT_CACHE_GAP:
-			/* block has not been allocated yet */
-			break;
-
-		case EXT4_EXT_CACHE_IN:
-			newblk = lbn - nex.e_blk + (nex.e_start_lo |
-			    (daddr_t)nex.e_start_hi << 32);
-			break;
-
-		default:
-			panic("%s: invalid cache type", __func__);
-		}
-
-		if (cache_type == EXT4_EXT_CACHE_GAP ||
-		    (cache_type == EXT4_EXT_CACHE_NO && path.ep_is_sparse)) {
-			if (xfersize > sizeof(zeroes))
-				xfersize = sizeof(zeroes);
-			error = uiomove(zeroes, xfersize, uio);
-			if (error)
-				return (error);
-		} else {
-			error = bread(ip->i_devvp, fsbtodb(fs, newblk), size,
-			    NOCRED, &bp);
-			if (error) {
-				brelse(bp);
-				return (error);
-			}
-
-			size -= bp->b_resid;
-			if (size < xfersize) {
-				if (size == 0) {
-					bqrelse(bp);
-					break;
-				}
-				xfersize = size;
-			}
-			error = uiomove(bp->b_data + blkoffset, xfersize, uio);
-			bqrelse(bp);
-			if (error)
-				return (error);
-		}
-	}
-
-	return (0);
 }
 
 /*

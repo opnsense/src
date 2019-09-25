@@ -55,6 +55,10 @@ def IsRV32 : Predicate<"!Subtarget->is64Bit()">,
 def RV64           : HwMode<"+64bit">;
 def RV32           : HwMode<"-64bit">;
 
+def FeatureRelax
+    : SubtargetFeature<"relax", "EnableLinkerRelax", "true",
+                       "Enable Linker relaxation.">;
+
 //===----------------------------------------------------------------------===//
 // Registers, calling conventions, instruction descriptions.
 //===----------------------------------------------------------------------===//
@@ -62,6 +66,12 @@ def RV32           : HwMode<"-64bit">;
 include "RISCVRegisterInfo.td"
 include "RISCVCallingConv.td"
 include "RISCVInstrInfo.td"
+
+//===----------------------------------------------------------------------===//
+// Named operands for CSR instructions.
+//===----------------------------------------------------------------------===//
+
+include "RISCVSystemOperands.td"
 
 //===----------------------------------------------------------------------===//
 // RISC-V processors supported.
@@ -84,7 +94,13 @@ def RISCVAsmParser : AsmParser {
   let AllowDuplicateRegisterNames = 1;
 }
 
+def RISCVAsmWriter : AsmWriter {
+  int PassSubtarget = 1;
+}
+
 def RISCV : Target {
   let InstructionSet = RISCVInstrInfo;
   let AssemblyParsers = [RISCVAsmParser];
+  let AssemblyWriters = [RISCVAsmWriter];
+  let AllowRegisterRenaming = 1;
 }

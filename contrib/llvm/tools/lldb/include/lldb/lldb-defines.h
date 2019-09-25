@@ -12,7 +12,7 @@
 
 #include "lldb/lldb-types.h"
 
-#if defined(_MSC_VER)
+#if defined(_WIN32)
 #if defined(EXPORT_LIBLLDB)
 #define LLDB_API __declspec(dllexport)
 #elif defined(IMPORT_LIBLLDB)
@@ -20,7 +20,7 @@
 #else
 #define LLDB_API
 #endif
-#else // defined (_MSC_VER)
+#else // defined (_WIN32)
 #define LLDB_API
 #endif
 
@@ -135,6 +135,7 @@
 #define LLDB_OPT_SET_8 (1U << 7)
 #define LLDB_OPT_SET_9 (1U << 8)
 #define LLDB_OPT_SET_10 (1U << 9)
+#define LLDB_OPT_SET_11 (1U << 10)
 #define LLDB_OPT_SET_FROM_TO(A, B)                                             \
   (((1U << (B)) - 1) ^ (((1U << (A)) - 1) >> 1))
 

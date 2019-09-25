@@ -2,7 +2,6 @@
  * Copyright (c) 2015 Baptiste Daroussin <bapt@FreeBSD.org>
  *
  * Copyright (c) 2015 Netflix, Inc.
- * All rights reserved.
  * Written by: Scott Long <scottl@freebsd.org>
  *
  * Copyright (c) 2008 Yahoo!, Inc.
@@ -365,8 +364,7 @@ mps_read_config_page(int fd, U8 PageType, U8 PageNumber, U32 PageAddress,
 	req.Action = MPI2_CONFIG_ACTION_PAGE_READ_CURRENT;
 	req.PageAddress = PageAddress;
 	req.Header = header;
-	req.Header.PageLength = reply.Header.PageLength;
-	if (reply.Header.PageLength == 0)
+	if (req.Header.PageLength == 0)
 		req.Header.PageLength = 4;
 
 	len = req.Header.PageLength * 4;
@@ -653,27 +651,32 @@ mps_pass_command(int fd, void *req, uint32_t req_len, void *reply,
 {
 	struct mprs_pass_thru pass;
 
+	bzero(&pass, sizeof(pass));
 	pass.PtrRequest = (uint64_t)(uintptr_t)req;
 	pass.PtrReply = (uint64_t)(uintptr_t)reply;
-	pass.PtrData = (uint64_t)(uintptr_t)data_in;
-	pass.PtrDataOut = (uint64_t)(uintptr_t)data_out;
 	pass.RequestSize = req_len;
 	pass.ReplySize = reply_len;
-	pass.DataSize = datain_len;
-	pass.DataOutSize = dataout_len;
 	if (datain_len && dataout_len) {
+		pass.PtrData = (uint64_t)(uintptr_t)data_in;
+		pass.PtrDataOut = (uint64_t)(uintptr_t)data_out;
+		pass.DataSize = datain_len;
+		pass.DataOutSize = dataout_len;
 		if (is_mps) {
 			pass.DataDirection = MPS_PASS_THRU_DIRECTION_BOTH;
 		} else {
 			pass.DataDirection = MPR_PASS_THRU_DIRECTION_BOTH;
 		}
 	} else if (datain_len) {
+		pass.PtrData = (uint64_t)(uintptr_t)data_in;
+		pass.DataSize = datain_len;
 		if (is_mps) {
 			pass.DataDirection = MPS_PASS_THRU_DIRECTION_READ;
 		} else {
 			pass.DataDirection = MPR_PASS_THRU_DIRECTION_READ;
 		}
 	} else if (dataout_len) {
+		pass.PtrData = (uint64_t)(uintptr_t)data_out;
+		pass.DataSize = dataout_len;
 		if (is_mps) {
 			pass.DataDirection = MPS_PASS_THRU_DIRECTION_WRITE;
 		} else {

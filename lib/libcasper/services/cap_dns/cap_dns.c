@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2012-2013 The FreeBSD Foundation
  * All rights reserved.
  *
@@ -137,7 +139,7 @@ cap_gethostbyname2(cap_channel_t *chan, const char *name, int type)
 	nvlist_add_string(nvl, "cmd", "gethostbyname");
 	nvlist_add_number(nvl, "family", (uint64_t)type);
 	nvlist_add_string(nvl, "name", name);
-	nvl = cap_xfer_nvlist(chan, nvl, 0);
+	nvl = cap_xfer_nvlist(chan, nvl);
 	if (nvl == NULL) {
 		h_errno = NO_RECOVERY;
 		return (NULL);
@@ -164,7 +166,7 @@ cap_gethostbyaddr(cap_channel_t *chan, const void *addr, socklen_t len,
 	nvlist_add_string(nvl, "cmd", "gethostbyaddr");
 	nvlist_add_binary(nvl, "addr", addr, (size_t)len);
 	nvlist_add_number(nvl, "family", (uint64_t)type);
-	nvl = cap_xfer_nvlist(chan, nvl, 0);
+	nvl = cap_xfer_nvlist(chan, nvl);
 	if (nvl == NULL) {
 		h_errno = NO_RECOVERY;
 		return (NULL);
@@ -240,7 +242,7 @@ cap_getaddrinfo(cap_channel_t *chan, const char *hostname, const char *servname,
 		nvlist_add_number(nvl, "hints.ai_protocol",
 		    (uint64_t)hints->ai_protocol);
 	}
-	nvl = cap_xfer_nvlist(chan, nvl, 0);
+	nvl = cap_xfer_nvlist(chan, nvl);
 	if (nvl == NULL)
 		return (EAI_MEMORY);
 	if (nvlist_get_number(nvl, "error") != 0) {
@@ -290,7 +292,7 @@ cap_getnameinfo(cap_channel_t *chan, const struct sockaddr *sa, socklen_t salen,
 	nvlist_add_number(nvl, "servlen", (uint64_t)servlen);
 	nvlist_add_binary(nvl, "sa", sa, (size_t)salen);
 	nvlist_add_number(nvl, "flags", (uint64_t)flags);
-	nvl = cap_xfer_nvlist(chan, nvl, 0);
+	nvl = cap_xfer_nvlist(chan, nvl);
 	if (nvl == NULL)
 		return (EAI_MEMORY);
 	if (nvlist_get_number(nvl, "error") != 0) {
@@ -472,7 +474,8 @@ dns_gethostbyname(const nvlist_t *limits, const nvlist_t *nvlin,
 	struct hostent *hp;
 	int family;
 
-	if (!dns_allowed_type(limits, "NAME"))
+	if (!dns_allowed_type(limits, "NAME2ADDR") &&
+	    !dns_allowed_type(limits, "NAME"))
 		return (NO_RECOVERY);
 
 	family = (int)nvlist_get_number(nvlin, "family");
@@ -496,7 +499,8 @@ dns_gethostbyaddr(const nvlist_t *limits, const nvlist_t *nvlin,
 	size_t addrsize;
 	int family;
 
-	if (!dns_allowed_type(limits, "ADDR"))
+	if (!dns_allowed_type(limits, "ADDR2NAME") &&
+	    !dns_allowed_type(limits, "ADDR"))
 		return (NO_RECOVERY);
 
 	family = (int)nvlist_get_number(nvlin, "family");
@@ -522,7 +526,8 @@ dns_getnameinfo(const nvlist_t *limits, const nvlist_t *nvlin, nvlist_t *nvlout)
 	socklen_t salen;
 	int error, flags;
 
-	if (!dns_allowed_type(limits, "NAME"))
+	if (!dns_allowed_type(limits, "ADDR2NAME") &&
+	    !dns_allowed_type(limits, "ADDR"))
 		return (NO_RECOVERY);
 
 	error = 0;
@@ -615,7 +620,8 @@ dns_getaddrinfo(const nvlist_t *limits, const nvlist_t *nvlin, nvlist_t *nvlout)
 	unsigned int ii;
 	int error, family, n;
 
-	if (!dns_allowed_type(limits, "ADDR"))
+	if (!dns_allowed_type(limits, "NAME2ADDR") &&
+	    !dns_allowed_type(limits, "NAME"))
 		return (NO_RECOVERY);
 
 	hostname = dnvlist_get_string(nvlin, "hostname", NULL);
@@ -700,7 +706,9 @@ dns_limit(const nvlist_t *oldlimits, const nvlist_t *newlimits)
 			if (strncmp(name, "type", sizeof("type") - 1) != 0)
 				return (EINVAL);
 			type = nvlist_get_string(newlimits, name);
-			if (strcmp(type, "ADDR") != 0 &&
+			if (strcmp(type, "ADDR2NAME") != 0 &&
+			    strcmp(type, "NAME2ADDR") != 0 &&
+			    strcmp(type, "ADDR") != 0 &&
 			    strcmp(type, "NAME") != 0) {
 				return (EINVAL);
 			}

@@ -12,7 +12,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "DebugHandlerBase.h"
+#include "llvm/CodeGen/DebugHandlerBase.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/CodeGen/AsmPrinter.h"
@@ -24,6 +24,8 @@
 #include "llvm/MC/MCStreamer.h"
 
 using namespace llvm;
+
+#define DEBUG_TYPE "dwarfdebug"
 
 Optional<DbgVariableLocation>
 DbgVariableLocation::extractFromMachineInstruction(
@@ -123,27 +125,19 @@ MCSymbol *DebugHandlerBase::getLabelAfterInsn(const MachineInstr *MI) {
   return LabelsAfterInsn.lookup(MI);
 }
 
-int DebugHandlerBase::fragmentCmp(const DIExpression *P1,
-                                  const DIExpression *P2) {
-  auto Fragment1 = *P1->getFragmentInfo();
-  auto Fragment2 = *P2->getFragmentInfo();
-  unsigned l1 = Fragment1.OffsetInBits;
-  unsigned l2 = Fragment2.OffsetInBits;
-  unsigned r1 = l1 + Fragment1.SizeInBits;
-  unsigned r2 = l2 + Fragment2.SizeInBits;
-  if (r1 <= l2)
-    return -1;
-  else if (r2 <= l1)
-    return 1;
-  else
-    return 0;
-}
+// Return the function-local offset of an instruction.
+const MCExpr *
+DebugHandlerBase::getFunctionLocalOffsetAfterInsn(const MachineInstr *MI) {
+  MCContext &MC = Asm->OutContext;
 
-bool DebugHandlerBase::fragmentsOverlap(const DIExpression *P1,
-                                        const DIExpression *P2) {
-  if (!P1->isFragment() || !P2->isFragment())
-    return true;
-  return fragmentCmp(P1, P2) == 0;
+  MCSymbol *Start = Asm->getFunctionBegin();
+  const auto *StartRef = MCSymbolRefExpr::create(Start, MC);
+
+  MCSymbol *AfterInsn = getLabelAfterInsn(MI);
+  assert(AfterInsn && "Expected label after instruction");
+  const auto *AfterRef = MCSymbolRefExpr::create(AfterInsn, MC);
+
+  return MCBinaryExpr::createSub(AfterRef, StartRef, MC);
 }
 
 /// If this type is derived from a base type then return base type size.
@@ -211,8 +205,10 @@ void DebugHandlerBase::beginFunction(const MachineFunction *MF) {
 
   // Calculate history for local variables.
   assert(DbgValues.empty() && "DbgValues map wasn't cleaned!");
-  calculateDbgValueHistory(MF, Asm->MF->getSubtarget().getRegisterInfo(),
-                           DbgValues);
+  assert(DbgLabels.empty() && "DbgLabels map wasn't cleaned!");
+  calculateDbgEntityHistory(MF, Asm->MF->getSubtarget().getRegisterInfo(),
+                            DbgValues, DbgLabels);
+  LLVM_DEBUG(DbgValues.dump());
 
   // Request labels for the full history.
   for (const auto &I : DbgValues) {
@@ -232,8 +228,8 @@ void DebugHandlerBase::beginFunction(const MachineFunction *MF) {
           const DIExpression *Fragment = I->first->getDebugExpression();
           if (std::all_of(Ranges.begin(), I,
                           [&](DbgValueHistoryMap::InstrRange Pred) {
-                            return !fragmentsOverlap(
-                                Fragment, Pred.first->getDebugExpression());
+                            return !Fragment->fragmentsOverlap(
+                                Pred.first->getDebugExpression());
                           }))
             LabelsBeforeInsn[I->first] = Asm->getFunctionBegin();
           else
@@ -247,6 +243,12 @@ void DebugHandlerBase::beginFunction(const MachineFunction *MF) {
       if (Range.second)
         requestLabelAfterInsn(Range.second);
     }
+  }
+
+  // Ensure there is a symbol before DBG_LABEL.
+  for (const auto &I : DbgLabels) {
+    const MachineInstr *MI = I.second;
+    requestLabelBeforeInsn(MI);
   }
 
   PrevInstLoc = DebugLoc();
@@ -316,6 +318,7 @@ void DebugHandlerBase::endFunction(const MachineFunction *MF) {
   if (hasDebugInfo(MMI, MF))
     endFunctionImpl(MF);
   DbgValues.clear();
+  DbgLabels.clear();
   LabelsBeforeInsn.clear();
   LabelsAfterInsn.clear();
 }

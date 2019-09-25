@@ -34,7 +34,7 @@
 .\"     From: @(#)tcp.4	8.1 (Berkeley) 6/5/93
 .\" $FreeBSD$
 .\"
-.Dd August 6, 2018
+.Dd July 23, 2019
 .Dt TCP 4
 .Os
 .Sh NAME
@@ -459,7 +459,7 @@ The actual limit applied to a session's reassembly queue will be the lower of
 the system-calculated automatic limit and the user-specified
 .Va reass.maxqueuelen
 limit.
-.It Va rexmit_min , rexmit_slop
+.It Va rexmit_initial , rexmit_min , rexmit_slop
 Adjust the retransmit timer calculation for
 .Tn TCP .
 The slop is
@@ -481,6 +481,7 @@ code.
 For this reason, we use 200ms of slop and a near-0
 minimum, which gives us an effective minimum of 200ms (similar to
 .Tn Linux ) .
+The initial value is used before an RTT measurement has been performed.
 .It Va initcwnd_segments
 Enable the ability to specify initial congestion window in number of segments.
 The default value is 10 as suggested by RFC 6928.
@@ -594,12 +595,22 @@ downshift.
 List of available TCP function blocks (TCP stacks).
 .It Va functions_default
 The default TCP function block (TCP stack).
+.It Va functions_inherit_listen_socket_stack
+Determines whether to inherit listen socket's tcp stack or use the current
+system default tcp stack, as defined by
+.Va functions_default
+.Pc .
+Default is true.
 .It Va insecure_rst
 Use criteria defined in RFC793 instead of RFC5961 for accepting RST segments.
 Default is false.
 .It Va insecure_syn
 Use criteria defined in RFC793 instead of RFC5961 for accepting SYN segments.
 Default is false.
+.It Va ts_offset_per_conn
+When initializing the TCP timestamps, use a per connection offset instead of a
+per host pair offset.
+Default is to use per connection offsets as recommended in RFC 7323.
 .El
 .Sh ERRORS
 A socket operation may fail with one of the following errors returned:
@@ -607,7 +618,7 @@ A socket operation may fail with one of the following errors returned:
 .It Bq Er EISCONN
 when trying to establish a connection on a socket which
 already has one;
-.It Bq Er ENOBUFS
+.It Bo Er ENOBUFS Bc or Bo Er ENOMEM Bc
 when the system runs out of memory for
 an internal data structure;
 .It Bq Er ETIMEDOUT
@@ -647,7 +658,8 @@ when trying to use a TCP function block that is not available;
 .Xr mod_cc 4 ,
 .Xr siftr 4 ,
 .Xr syncache 4 ,
-.Xr setkey 8
+.Xr setkey 8 ,
+.Xr tcp_functions 9
 .Rs
 .%A "V. Jacobson"
 .%A "R. Braden"

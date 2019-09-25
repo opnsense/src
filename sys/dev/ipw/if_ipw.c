@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2004-2006
  *      Damien Bergamini <damien.bergamini@free.fr>. All rights reserved.
  * Copyright (c) 2006 Sam Leffler, Errno Consulting
@@ -200,6 +202,8 @@ static driver_t ipw_driver = {
 static devclass_t ipw_devclass;
 
 DRIVER_MODULE(ipw, pci, ipw_driver, ipw_devclass, NULL, NULL);
+MODULE_PNP_INFO("U16:vendor;U16:device;D:#", pci, ipw, ipw_ident_table,
+    nitems(ipw_ident_table) - 1);
 
 MODULE_VERSION(ipw, 1);
 
@@ -1322,10 +1326,7 @@ ipw_release_sbd(struct ipw_softc *sc, struct ipw_soft_bd *sbd)
 		bus_dmamap_unload(sc->txbuf_dmat, sbuf->map);
 		SLIST_INSERT_HEAD(&sc->free_sbuf, sbuf, next);
 
-		if (sbuf->m->m_flags & M_TXCB)
-			ieee80211_process_callback(sbuf->ni, sbuf->m, 0/*XXX*/);
-		m_freem(sbuf->m);
-		ieee80211_free_node(sbuf->ni);
+		ieee80211_tx_complete(sbuf->ni, sbuf->m, 0/*XXX*/);
 
 		sc->sc_tx_timer = 0;
 		break;
@@ -1728,7 +1729,7 @@ ipw_start(struct ipw_softc *sc)
 
 	IPW_LOCK_ASSERT(sc);
 
-	while (sc->txfree < 1 + IPW_MAX_NSEG &&
+	while (sc->txfree >= 1 + IPW_MAX_NSEG &&
 	    (m = mbufq_dequeue(&sc->sc_snd)) != NULL) {
 		ni = (struct ieee80211_node *) m->m_pkthdr.rcvif;
 		if (ipw_tx_start(sc, m, ni) != 0) {

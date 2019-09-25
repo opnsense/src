@@ -9,7 +9,7 @@
 .\" 2. Redistributions in binary form must reproduce the above copyright
 .\"    notice, this list of conditions and the following disclaimer in the
 .\"    documentation and/or other materials provided with the distribution.
-.\" 4. Neither the name of the University nor the names of its contributors
+.\" 3. Neither the name of the University nor the names of its contributors
 .\"    may be used to endorse or promote products derived from this software
 .\"    without specific prior written permission.
 .\"
@@ -28,7 +28,7 @@
 .\"     From: @(#)whois.1	8.1 (Berkeley) 6/6/93
 .\" $FreeBSD$
 .\"
-.Dd April 25, 2016
+.Dd August 1, 2019
 .Dt WHOIS 1
 .Os
 .Sh NAME
@@ -272,13 +272,21 @@ to return a brief description of its
 object type:
 .Pp
 .Dl Ic whois -r -- '-t domain'
-.Sh SEE ALSO
+.Sh STANDARDS
 .Rs
-.%A Ken Harrenstien
-.%A Vic White
+.%A K. Harrenstien
+.%A M. Stahl
+.%A E. Feinler
+.%D October 1985
+.%R RFC 954
 .%T NICNAME/WHOIS
-.%D 1 March 1982
-.%O RFC 812
+.Re
+.Pp
+.Rs
+.%A L. Daigle
+.%D September 2004
+.%R RFC 3912
+.%T WHOIS Protocol Specification
 .Re
 .Sh HISTORY
 The

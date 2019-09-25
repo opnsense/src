@@ -9,25 +9,25 @@
 
 #include "lldb/Core/AddressResolverName.h"
 
-#include "lldb/Core/Address.h"      // for Address, operator==
-#include "lldb/Core/AddressRange.h" // for AddressRange
+#include "lldb/Core/Address.h"
+#include "lldb/Core/AddressRange.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Symbol/Function.h"
 #include "lldb/Symbol/Symbol.h"
 #include "lldb/Symbol/SymbolContext.h"
 #include "lldb/Utility/Log.h"
-#include "lldb/Utility/Logging.h"   // for GetLogIfAllCategoriesSet, LIB...
-#include "lldb/Utility/Stream.h"    // for Stream
-#include "lldb/lldb-enumerations.h" // for SymbolType::eSymbolTypeCode
-#include "lldb/lldb-forward.h"      // for ModuleSP
-#include "lldb/lldb-types.h"        // for addr_t
-#include "llvm/ADT/StringRef.h"     // for StringRef
+#include "lldb/Utility/Logging.h"
+#include "lldb/Utility/Stream.h"
+#include "lldb/lldb-enumerations.h"
+#include "lldb/lldb-forward.h"
+#include "lldb/lldb-types.h"
+#include "llvm/ADT/StringRef.h"
 
-#include <memory> // for shared_ptr
-#include <string> // for string
-#include <vector> // for vector
+#include <memory>
+#include <string>
+#include <vector>
 
-#include <stdint.h> // for uint32_t
+#include <stdint.h>
 
 using namespace lldb;
 using namespace lldb_private;
@@ -62,9 +62,8 @@ AddressResolverName::~AddressResolverName() = default;
 // FIXME: Right now we look at the module level, and call the module's
 // "FindFunctions".
 // Greg says he will add function tables, maybe at the CompileUnit level to
-// accelerate function
-// lookup.  At that point, we should switch the depth to CompileUnit, and look
-// in these tables.
+// accelerate function lookup.  At that point, we should switch the depth to
+// CompileUnit, and look in these tables.
 
 Searcher::CallbackReturn
 AddressResolverName::SearchCallback(SearchFilter &filter,
@@ -187,8 +186,8 @@ AddressResolverName::SearchCallback(SearchFilter &filter,
   return Searcher::eCallbackReturnContinue;
 }
 
-Searcher::Depth AddressResolverName::GetDepth() {
-  return Searcher::eDepthModule;
+lldb::SearchDepth AddressResolverName::GetDepth() {
+  return lldb::eSearchDepthModule;
 }
 
 void AddressResolverName::GetDescription(Stream *s) {

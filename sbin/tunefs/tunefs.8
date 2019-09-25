@@ -9,7 +9,7 @@
 .\" 2. Redistributions in binary form must reproduce the above copyright
 .\"    notice, this list of conditions and the following disclaimer in the
 .\"    documentation and/or other materials provided with the distribution.
-.\" 4. Neither the name of the University nor the names of its contributors
+.\" 3. Neither the name of the University nor the names of its contributors
 .\"    may be used to endorse or promote products derived from this software
 .\"    without specific prior written permission.
 .\"
@@ -28,7 +28,7 @@
 .\"     @(#)tunefs.8	8.2 (Berkeley) 12/11/93
 .\" $FreeBSD$
 .\"
-.Dd April 19, 2016
+.Dd January 29, 2019
 .Dt TUNEFS 8
 .Os
 .Sh NAME
@@ -112,6 +112,7 @@ By default
 sets it to half of the space reserved to minfree.
 .It Fl L Ar volname
 Add/modify an optional file system volume label.
+Legal characters are alphanumerics, dashes, and underscores.
 .It Fl l Cm enable | disable
 Turn on/off MAC multilabel flag.
 .It Fl m Ar minfree

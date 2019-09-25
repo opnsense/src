@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright 1998 Sean Eric Fagan
  *
  * Redistribution and use in source and binary forms, with or without
@@ -34,6 +36,7 @@ __FBSDID("$FreeBSD$");
 
 /* FreeBSD/mips-specific system call handling. */
 
+#define	_WANT_MIPS_REGNUM
 #include <sys/ptrace.h>
 #include <sys/syscall.h>
 

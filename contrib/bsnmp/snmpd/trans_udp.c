@@ -67,7 +67,8 @@ const struct transport_def udp_trans = {
 	udp_close_port,
 	udp_init_port,
 	udp_send,
-	udp_recv
+	udp_recv,
+	NULL
 };
 static struct transport *my_trans;
 
@@ -328,7 +329,7 @@ udp_recv(struct tport *tp, struct port_input *pi)
 			    sizeof(struct in_addr));
 		if (cmsg->cmsg_level == SOL_SOCKET &&
 		    cmsg->cmsg_type == SCM_CREDS)
-			cred = (struct sockcred *)CMSG_DATA(cmsg);
+			cred = (struct sockcred *)(void *)CMSG_DATA(cmsg);
 	}
 
 	if (pi->cred)

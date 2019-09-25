@@ -103,7 +103,7 @@ typedef void* (*notefunc_t)(void *, size_t *);
 
 static void cb_put_phdr(vm_map_entry_t, void *);
 static void cb_size_segment(vm_map_entry_t, void *);
-static void each_writable_segment(vm_map_entry_t, segment_callback,
+static void each_dumpable_segment(vm_map_entry_t, segment_callback,
     void *closure);
 static void elf_detach(void);	/* atexit() handler. */
 static void *elf_note_fpregset(void *, size_t *);
@@ -119,6 +119,7 @@ static void *elf_note_x86_xstate(void *, size_t *);
 #endif
 #if defined(__powerpc__)
 static void *elf_note_powerpc_vmx(void *, size_t *);
+static void *elf_note_powerpc_vsx(void *, size_t *);
 #endif
 static void *elf_note_procstat_auxv(void *, size_t *);
 static void *elf_note_procstat_files(void *, size_t *);
@@ -218,13 +219,15 @@ elf_coredump(int efd, int fd, pid_t pid)
 	/* Size the program segments. */
 	seginfo.count = 0;
 	seginfo.size = 0;
-	each_writable_segment(map, cb_size_segment, &seginfo);
+	each_dumpable_segment(map, cb_size_segment, &seginfo);
 
 	/*
 	 * Build the header and the notes using sbuf and write to the file.
 	 */
 	sb = sbuf_new_auto();
 	hdrsize = sizeof(Elf_Ehdr) + sizeof(Elf_Phdr) * (1 + seginfo.count);
+	if (seginfo.count + 1 >= PN_XNUM)
+		hdrsize += sizeof(Elf_Shdr);
 	/* Start header + notes section. */
 	sbuf_start_section(sb, NULL);
 	/* Make empty header subsection. */
@@ -287,7 +290,7 @@ elf_coredump(int efd, int fd, pid_t pid)
 }
 
 /*
- * A callback for each_writable_segment() to write out the segment's
+ * A callback for each_dumpable_segment() to write out the segment's
  * program header entry.
  */
 static void
@@ -317,7 +320,7 @@ cb_put_phdr(vm_map_entry_t entry, void *closure)
 }
 
 /*
- * A callback for each_writable_segment() to gather information about
+ * A callback for each_dumpable_segment() to gather information about
  * the number of segments and their total size.
  */
 static void
@@ -335,7 +338,7 @@ cb_size_segment(vm_map_entry_t entry, void *closure)
  * data.
  */
 static void
-each_writable_segment(vm_map_entry_t map, segment_callback func, void *closure)
+each_dumpable_segment(vm_map_entry_t map, segment_callback func, void *closure)
 {
 	vm_map_entry_t entry;
 
@@ -379,6 +382,7 @@ elf_putnotes(pid_t pid, struct sbuf *sb, size_t *sizep)
 #endif
 #if defined(__powerpc__)
 		elf_putnote(NT_PPC_VMX, elf_note_powerpc_vmx, tids + i, sb);
+		elf_putnote(NT_PPC_VSX, elf_note_powerpc_vsx, tids + i, sb);
 #endif
 	}
 
@@ -439,6 +443,7 @@ elf_puthdr(int efd, pid_t pid, vm_map_entry_t map, void *hdr, size_t hdrsize,
 {
 	Elf_Ehdr *ehdr, binhdr;
 	Elf_Phdr *phdr;
+	Elf_Shdr *shdr;
 	struct phdr_closure phc;
 	ssize_t cnt;
 
@@ -449,7 +454,6 @@ elf_puthdr(int efd, pid_t pid, vm_map_entry_t map, void *hdr, size_t hdrsize,
 		errx(1, "Failed to re-read ELF header");
 
 	ehdr = (Elf_Ehdr *)hdr;
-	phdr = (Elf_Phdr *)((char *)hdr + sizeof(Elf_Ehdr));
 
 	ehdr->e_ident[EI_MAG0] = ELFMAG0;
 	ehdr->e_ident[EI_MAG1] = ELFMAG1;
@@ -469,14 +473,40 @@ elf_puthdr(int efd, pid_t pid, vm_map_entry_t map, void *hdr, size_t hdrsize,
 	ehdr->e_flags = binhdr.e_flags;
 	ehdr->e_ehsize = sizeof(Elf_Ehdr);
 	ehdr->e_phentsize = sizeof(Elf_Phdr);
-	ehdr->e_phnum = numsegs + 1;
 	ehdr->e_shentsize = sizeof(Elf_Shdr);
-	ehdr->e_shnum = 0;
 	ehdr->e_shstrndx = SHN_UNDEF;
+	if (numsegs + 1 < PN_XNUM) {
+		ehdr->e_phnum = numsegs + 1;
+		ehdr->e_shnum = 0;
+	} else {
+		ehdr->e_phnum = PN_XNUM;
+		ehdr->e_shnum = 1;
+
+		ehdr->e_shoff = ehdr->e_phoff +
+		    (numsegs + 1) * ehdr->e_phentsize;
+
+		shdr = (Elf_Shdr *)((char *)hdr + ehdr->e_shoff);
+		memset(shdr, 0, sizeof(*shdr));
+		/*
+		 * A special first section is used to hold large segment and
+		 * section counts.  This was proposed by Sun Microsystems in
+		 * Solaris and has been adopted by Linux; the standard ELF
+		 * tools are already familiar with the technique.
+		 *
+		 * See table 7-7 of the Solaris "Linker and Libraries Guide"
+		 * (or 12-7 depending on the version of the document) for more
+		 * details.
+		 */
+		shdr->sh_type = SHT_NULL;
+		shdr->sh_size = ehdr->e_shnum;
+		shdr->sh_link = ehdr->e_shstrndx;
+		shdr->sh_info = numsegs + 1;
+	}
 
 	/*
 	 * Fill in the program header entries.
 	 */
+	phdr = (Elf_Phdr *)((char *)hdr + ehdr->e_phoff);
 
 	/* The note segement. */
 	phdr->p_type = PT_NOTE;
@@ -492,7 +522,7 @@ elf_puthdr(int efd, pid_t pid, vm_map_entry_t map, void *hdr, size_t hdrsize,
 	/* All the writable segments from the program. */
 	phc.phdr = phdr;
 	phc.offset = segoff;
-	each_writable_segment(map, cb_put_phdr, &phc);
+	each_dumpable_segment(map, cb_put_phdr, &phc);
 }
 
 /*
@@ -774,6 +804,30 @@ elf_note_powerpc_vmx(void *arg, size_t *sizep)
 	memcpy(vmx, &info, sizeof(*vmx));
 	*sizep = sizeof(*vmx);
 	return (vmx);
+}
+
+static void *
+elf_note_powerpc_vsx(void *arg, size_t *sizep)
+{
+	lwpid_t tid;
+	char *vshr_data;
+	static bool has_vsx = true;
+	uint64_t vshr[32];
+
+	tid = *(lwpid_t *)arg;
+	if (has_vsx) {
+		if (ptrace(PT_GETVSRREGS, tid, (void *)vshr,
+		    sizeof(vshr)) != 0)
+			has_vsx = false;
+	}
+	if (!has_vsx) {
+		*sizep = 0;
+		return (NULL);
+	}
+	vshr_data = calloc(1, sizeof(vshr));
+	memcpy(vshr_data, vshr, sizeof(vshr));
+	*sizep = sizeof(vshr);
+	return (vshr_data);
 }
 #endif
 

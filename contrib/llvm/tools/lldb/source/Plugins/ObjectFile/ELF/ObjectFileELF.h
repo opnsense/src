@@ -10,10 +10,8 @@
 #ifndef liblldb_ObjectFileELF_h_
 #define liblldb_ObjectFileELF_h_
 
-// C Includes
 #include <stdint.h>
 
-// C++ Includes
 #include <vector>
 
 #include "lldb/Symbol/ObjectFile.h"
@@ -54,10 +52,10 @@ struct ELFNote {
 
 //------------------------------------------------------------------------------
 /// @class ObjectFileELF
-/// @brief Generic ELF object file reader.
+/// Generic ELF object file reader.
 ///
-/// This class provides a generic ELF (32/64 bit) reader plugin implementing the
-/// ObjectFile protocol.
+/// This class provides a generic ELF (32/64 bit) reader plugin implementing
+/// the ObjectFile protocol.
 class ObjectFileELF : public lldb_private::ObjectFile {
 public:
   ~ObjectFileELF() override;
@@ -113,7 +111,7 @@ public:
 
   uint32_t GetAddressByteSize() const override;
 
-  lldb::AddressClass GetAddressClass(lldb::addr_t file_addr) override;
+  lldb_private::AddressClass GetAddressClass(lldb::addr_t file_addr) override;
 
   lldb_private::Symtab *GetSymtab() override;
 
@@ -123,7 +121,7 @@ public:
 
   void Dump(lldb_private::Stream *s) override;
 
-  bool GetArchitecture(lldb_private::ArchSpec &arch) override;
+  lldb_private::ArchSpec GetArchitecture() override;
 
   bool GetUUID(lldb_private::UUID *uuid) override;
 
@@ -136,6 +134,8 @@ public:
 
   lldb_private::Address GetEntryPointAddress() override;
 
+  lldb_private::Address GetBaseAddress() override;
+
   ObjectFile::Type CalculateType() override;
 
   ObjectFile::Strata CalculateStrata() override;
@@ -147,19 +147,18 @@ public:
   size_t ReadSectionData(lldb_private::Section *section,
                          lldb_private::DataExtractor &section_data) override;
 
-  // Returns number of program headers found in the ELF file.
-  size_t GetProgramHeaderCount();
-
-  // Returns the program header with the given index.
-  const elf::ELFProgramHeader *GetProgramHeaderByIndex(lldb::user_id_t id);
-
-  // Returns segment data for the given index.
-  lldb_private::DataExtractor GetSegmentDataByIndex(lldb::user_id_t id);
+  llvm::ArrayRef<elf::ELFProgramHeader> ProgramHeaders();
+  lldb_private::DataExtractor GetSegmentData(const elf::ELFProgramHeader &H);
 
   llvm::StringRef
   StripLinkerSymbolAnnotations(llvm::StringRef symbol_name) const override;
 
   void RelocateSection(lldb_private::Section *section) override;
+
+protected:
+
+  std::vector<LoadableData>
+  GetLoadableData(lldb_private::Target &target) override;
 
 private:
   ObjectFileELF(const lldb::ModuleSP &module_sp, lldb::DataBufferSP &data_sp,
@@ -171,8 +170,6 @@ private:
                 const lldb::ProcessSP &process_sp, lldb::addr_t header_addr);
 
   typedef std::vector<elf::ELFProgramHeader> ProgramHeaderColl;
-  typedef ProgramHeaderColl::iterator ProgramHeaderCollIter;
-  typedef ProgramHeaderColl::const_iterator ProgramHeaderCollConstIter;
 
   struct ELFSectionHeaderInfo : public elf::ELFSectionHeader {
     lldb_private::ConstString section_name;
@@ -186,7 +183,7 @@ private:
   typedef DynamicSymbolColl::iterator DynamicSymbolCollIter;
   typedef DynamicSymbolColl::const_iterator DynamicSymbolCollConstIter;
 
-  typedef std::map<lldb::addr_t, lldb::AddressClass>
+  typedef std::map<lldb::addr_t, lldb_private::AddressClass>
       FileAddressToAddressClassMap;
 
   /// Version of this reader common to all plugins based on this class.
@@ -225,10 +222,10 @@ private:
   /// The address class for each symbol in the elf file
   FileAddressToAddressClassMap m_address_class_map;
 
-  /// Returns a 1 based index of the given section header.
+  /// Returns the index of the given section header.
   size_t SectionIndex(const SectionHeaderCollIter &I);
 
-  /// Returns a 1 based index of the given section header.
+  /// Returns the index of the given section header.
   size_t SectionIndex(const SectionHeaderCollConstIter &I) const;
 
   // Parses the ELF program headers.
@@ -243,20 +240,22 @@ private:
 
   /// Parses all section headers present in this object file and populates
   /// m_program_headers.  This method will compute the header list only once.
-  /// Returns the number of headers parsed.
-  size_t ParseProgramHeaders();
+  /// Returns true iff the headers have been successfully parsed.
+  bool ParseProgramHeaders();
 
   /// Parses all section headers present in this object file and populates
   /// m_section_headers.  This method will compute the header list only once.
   /// Returns the number of headers parsed.
   size_t ParseSectionHeaders();
 
+  lldb::SectionType GetSectionType(const ELFSectionHeaderInfo &H) const;
+
   static void ParseARMAttributes(lldb_private::DataExtractor &data,
                                  uint64_t length,
                                  lldb_private::ArchSpec &arch_spec);
 
-  /// Parses the elf section headers and returns the uuid, debug link name, crc,
-  /// archspec.
+  /// Parses the elf section headers and returns the uuid, debug link name,
+  /// crc, archspec.
   static size_t GetSectionHeaderInfo(SectionHeaderColl &section_headers,
                                      lldb_private::DataExtractor &object_data,
                                      const elf::ELFHeader &header,
@@ -383,6 +382,8 @@ private:
   RefineModuleDetailsFromNote(lldb_private::DataExtractor &data,
                               lldb_private::ArchSpec &arch_spec,
                               lldb_private::UUID &uuid);
+
+  bool AnySegmentHasPhysicalAddress();
 };
 
 #endif // liblldb_ObjectFileELF_h_

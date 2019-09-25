@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2009, 2013 The FreeBSD Foundation
  * All rights reserved.
  *
@@ -91,7 +93,7 @@ struct vt_driver;
 void vt_allocate(const struct vt_driver *, void *);
 void vt_deallocate(const struct vt_driver *, void *);
 
-typedef unsigned int 	vt_axis_t;
+typedef unsigned int	vt_axis_t;
 
 /*
  * List of locks
@@ -154,11 +156,15 @@ struct vt_device {
 #define	VDF_INITIALIZED	0x20	/* vtterm_cnprobe already done. */
 #define	VDF_MOUSECURSOR	0x40	/* Mouse cursor visible. */
 #define	VDF_QUIET_BELL	0x80	/* Disable bell. */
+#define	VDF_SUSPENDED	0x100	/* Device has been suspended. */
 #define	VDF_DOWNGRADE	0x8000	/* The driver is being downgraded. */
 	int			 vd_keyboard;	/* (G) Keyboard index. */
 	unsigned int		 vd_kbstate;	/* (?) Device unit. */
 	unsigned int		 vd_unit;	/* (c) Device unit. */
 	int			 vd_altbrk;	/* (?) Alt break seq. state */
+	term_char_t		*vd_drawn;	/* (?) Most recent char drawn. */
+	term_color_t		*vd_drawnfg;	/* (?) Most recent fg color drawn. */
+	term_color_t		*vd_drawnbg;	/* (?) Most recent bg color drawn. */
 };
 
 #define	VD_PASTEBUF(vd)	((vd)->vd_pastebuf.vpb_buf)
@@ -170,7 +176,7 @@ struct vt_device {
 #define	VT_LOCK_ASSERT(vd, what)	mtx_assert(&(vd)->vd_lock, what)
 
 void vt_resume(struct vt_device *vd);
-void vt_resume_flush_timer(struct vt_device *vd, int ms);
+void vt_resume_flush_timer(struct vt_window *vw, int ms);
 void vt_suspend(struct vt_device *vd);
 
 /*
@@ -211,8 +217,10 @@ struct vt_buf {
 #define	VBF_DEFAULT_HISTORY_SIZE	500
 #endif
 
+void vtbuf_lock(struct vt_buf *);
+void vtbuf_unlock(struct vt_buf *);
 void vtbuf_copy(struct vt_buf *, const term_rect_t *, const term_pos_t *);
-void vtbuf_fill_locked(struct vt_buf *, const term_rect_t *, term_char_t);
+void vtbuf_fill(struct vt_buf *, const term_rect_t *, term_char_t);
 void vtbuf_init_early(struct vt_buf *);
 void vtbuf_init(struct vt_buf *, const term_pos_t *);
 void vtbuf_grow(struct vt_buf *, const term_pos_t *, unsigned int);
@@ -316,6 +324,8 @@ typedef void vd_postswitch_t(struct vt_device *vd);
 typedef void vd_blank_t(struct vt_device *vd, term_color_t color);
 typedef void vd_bitblt_text_t(struct vt_device *vd, const struct vt_window *vw,
     const term_rect_t *area);
+typedef void vd_invalidate_text_t(struct vt_device *vd,
+    const term_rect_t *area);
 typedef void vd_bitblt_bmp_t(struct vt_device *vd, const struct vt_window *vw,
     const uint8_t *pattern, const uint8_t *mask,
     unsigned int width, unsigned int height,
@@ -341,6 +351,7 @@ struct vt_driver {
 	vd_drawrect_t	*vd_drawrect;
 	vd_setpixel_t	*vd_setpixel;
 	vd_bitblt_text_t *vd_bitblt_text;
+	vd_invalidate_text_t *vd_invalidate_text;
 	vd_bitblt_bmp_t	*vd_bitblt_bmp;
 
 	/* Framebuffer ioctls, if present. */

@@ -8,6 +8,8 @@ DTS=	\
 	imx6dl-nitrogen6x.dts \
 	imx6q-nitrogen6_max.dts \
 	imx6q-nitrogen6x.dts \
+	imx6qp-nitrogen6_max.dts \
+	imx6sx-nitrogen6sx.dts \
 	imx6dl-riotboard.dts \
 	imx6dl-wandboard.dts \
 	imx6dl-wandboard-revb1.dts \

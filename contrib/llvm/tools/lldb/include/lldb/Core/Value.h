@@ -10,20 +10,20 @@
 #ifndef liblldb_Value_h_
 #define liblldb_Value_h_
 
-#include "lldb/Core/Scalar.h"
 #include "lldb/Symbol/CompilerType.h"
 #include "lldb/Utility/DataBufferHeap.h"
+#include "lldb/Utility/Scalar.h"
 #include "lldb/Utility/Status.h"
-#include "lldb/lldb-enumerations.h"         // for ByteOrder, ByteOrder::eB...
-#include "lldb/lldb-private-enumerations.h" // for AddressType
-#include "lldb/lldb-private-types.h"        // for type128, RegisterInfo
+#include "lldb/lldb-enumerations.h"
+#include "lldb/lldb-private-enumerations.h"
+#include "lldb/lldb-private-types.h"
 
-#include "llvm/ADT/APInt.h" // for APInt
+#include "llvm/ADT/APInt.h"
 
 #include <vector>
 
-#include <stdint.h> // for uint8_t, uint32_t, uint64_t
-#include <string.h> // for size_t, memcpy
+#include <stdint.h>
+#include <string.h>
 
 namespace lldb_private {
 class DataExtractor;
@@ -48,8 +48,8 @@ namespace lldb_private {
 
 class Value {
 public:
-  // Values Less than zero are an error, greater than or equal to zero
-  // returns what the Scalar result is.
+  // Values Less than zero are an error, greater than or equal to zero returns
+  // what the Scalar result is.
   enum ValueType {
     // m_value contains...
     // ============================
@@ -107,8 +107,7 @@ public:
               byte_order != lldb::eByteOrderInvalid);
     }
     // Casts a vector, if valid, to an unsigned int of matching or largest
-    // supported size.
-    // Truncates to the beginning of the vector if required.
+    // supported size. Truncates to the beginning of the vector if required.
     // Returns a default constructed Scalar if the Vector data is internally
     // inconsistent.
     llvm::APInt rhs = llvm::APInt(BITWIDTH_INT128, NUM_OF_WORDS_INT128,
@@ -228,6 +227,9 @@ public:
   static const char *GetValueTypeAsCString(ValueType context_type);
 
   static const char *GetContextTypeAsCString(ContextType context_type);
+
+  /// Convert this value's file address to a load address, if possible.
+  void ConvertToLoadAddress(Module *module, Target *target);
 
   bool GetData(DataExtractor &data);
 

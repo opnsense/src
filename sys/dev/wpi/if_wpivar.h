@@ -26,7 +26,7 @@ struct wpi_rx_radiotap_header {
 	int8_t		wr_dbm_antsignal;
 	int8_t		wr_dbm_antnoise;
 	uint8_t		wr_antenna;
-} __packed;
+} __packed __aligned(8);
 
 #define WPI_RX_RADIOTAP_PRESENT						\
 	((1 << IEEE80211_RADIOTAP_TSFT) |				\
@@ -63,6 +63,7 @@ struct wpi_tx_data {
 	bus_addr_t		cmd_paddr;
 	struct mbuf		*m;
 	struct ieee80211_node	*ni;
+	int			hdrlen;
 };
 
 struct wpi_tx_ring {
@@ -170,6 +171,7 @@ struct wpi_softc {
 
 	struct mtx		sc_mtx;
 	struct ieee80211com	sc_ic;
+	struct ieee80211_ratectl_tx_status sc_txs;
 
 	struct mtx		tx_mtx;
 

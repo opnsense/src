@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1984, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -13,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -60,7 +62,6 @@ __FBSDID("$FreeBSD$");
 #include <net/if_dl.h>
 #include <net/if_types.h>
 #include <net/route.h>
-#include <net/iso88025.h>
 
 #include <netinet/in.h>
 #include <netinet/if_ether.h>
@@ -301,7 +302,6 @@ valid_type(int type)
 	case IFT_INFINIBAND:
 	case IFT_ISO88023:
 	case IFT_ISO88024:
-	case IFT_ISO88025:
 	case IFT_L2VLAN:
 	case IFT_BRIDGE:
 		return (1);
@@ -404,7 +404,7 @@ set(int argc, char **argv)
 	 * the prefix route covering the local end of the
 	 * PPP link should be returned, on which ARP applies.
 	 */
-	rtm = rtmsg(RTM_GET, dst, &sdl_m);
+	rtm = rtmsg(RTM_GET, dst, NULL);
 	if (rtm == NULL) {
 		xo_warn("%s", host);
 		return (1);
@@ -466,7 +466,6 @@ delete(char *host)
 	struct sockaddr_in *addr, *dst;
 	struct rt_msghdr *rtm;
 	struct sockaddr_dl *sdl;
-	struct sockaddr_dl sdl_m;
 
 	dst = getaddr(host);
 	if (dst == NULL)
@@ -477,17 +476,8 @@ delete(char *host)
 	 */
 	flags &= ~RTF_ANNOUNCE;
 
-	/*
-	 * setup the data structure to notify the kernel
-	 * it is the ARP entry the RTM_GET is interested
-	 * in
-	 */
-	bzero(&sdl_m, sizeof(sdl_m));
-	sdl_m.sdl_len = sizeof(sdl_m);
-	sdl_m.sdl_family = AF_LINK;
-
 	for (;;) {	/* try twice */
-		rtm = rtmsg(RTM_GET, dst, &sdl_m);
+		rtm = rtmsg(RTM_GET, dst, NULL);
 		if (rtm == NULL) {
 			xo_warn("%s", host);
 			return (1);
@@ -511,7 +501,7 @@ delete(char *host)
 		}
 
 		/*
-		 * Regualar entry delete failed, now check if there
+		 * Regular entry delete failed, now check if there
 		 * is a proxy-arp entry to remove.
 		 */
 		if (flags & RTF_ANNOUNCE) {
@@ -600,9 +590,7 @@ print_entry(struct sockaddr_dl *sdl,
 {
 	const char *host;
 	struct hostent *hp;
-	struct iso88025_sockaddr_dl_data *trld;
 	struct if_nameindex *p;
-	int seg;
 
 	if (ifnameindex == NULL)
 		if ((ifnameindex = if_nameindex()) == NULL)
@@ -667,17 +655,6 @@ print_entry(struct sockaddr_dl *sdl,
 	case IFT_ETHER:
 		xo_emit(" [{:type/ethernet}]");
 		break;
-	case IFT_ISO88025:
-		xo_emit(" [{:type/token-ring}]");
-		trld = SDL_ISO88025(sdl);
-		if (trld->trld_rcf != 0) {
-			xo_emit(" rt=%x", ntohs(trld->trld_rcf));
-			for (seg = 0;
-			     seg < ((TR_RCF_RIFLEN(trld->trld_rcf) - 2 ) / 2);
-			     seg++)
-				xo_emit(":%x", ntohs(*(trld->trld_route[seg])));
-		}
-                break;
 	case IFT_FDDI:
 		xo_emit(" [{:type/fddi}]");
 		break;
@@ -815,7 +792,8 @@ doit:
 	}
 	do {
 		l = read(s, (char *)&m_rtmsg, sizeof(m_rtmsg));
-	} while (l > 0 && (rtm->rtm_seq != seq || rtm->rtm_pid != pid));
+	} while (l > 0 && (rtm->rtm_type != cmd || rtm->rtm_seq != seq ||
+	    rtm->rtm_pid != pid));
 	if (l < 0)
 		xo_warn("read from routing socket");
 	return (rtm);

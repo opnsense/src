@@ -59,11 +59,10 @@
 
 #include <machine/bus.h>
 
-#include <dev/fdt/fdt_common.h>
-#include <dev/fdt/fdt_pinctrl.h>
 #include <dev/ofw/openfirm.h>
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
+#include <dev/fdt/fdt_pinctrl.h>
 
 #include <arm/freescale/imx/imx_iomuxvar.h>
 #include <arm/freescale/imx/imx_machdep.h>
@@ -154,8 +153,8 @@ iomux_configure_pins(device_t dev, phandle_t cfgxref)
 
 	sc = device_get_softc(dev);
 	cfgnode = OF_node_from_xref(cfgxref);
-	ntuples = OF_getencprop_alloc(cfgnode, "fsl,pins", sizeof(*cfgtuples),
-	    (void **)&cfgtuples);
+	ntuples = OF_getencprop_alloc_multi(cfgnode, "fsl,pins",
+	    sizeof(*cfgtuples), (void **)&cfgtuples);
 	if (ntuples < 0)
 		return (ENOENT);
 	if (ntuples == 0)

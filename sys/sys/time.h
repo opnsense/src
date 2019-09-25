@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1982, 1986, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -287,7 +289,24 @@ tvtosbt(struct timeval _tv)
 #endif /* __BSD_VISIBLE */
 
 #ifdef _KERNEL
+/*
+ * Simple macros to convert ticks to milliseconds
+ * or microseconds and vice-versa. The answer
+ * will always be at least 1. Note the return
+ * value is a uint32_t however we step up the
+ * operations to 64 bit to avoid any overflow/underflow
+ * problems.
+ */
+#define TICKS_2_MSEC(t) max(1, (uint32_t)(hz == 1000) ? \
+	  (t) : (((uint64_t)(t) * (uint64_t)1000)/(uint64_t)hz))
+#define TICKS_2_USEC(t) max(1, (uint32_t)(hz == 1000) ? \
+	  ((t) * 1000) : (((uint64_t)(t) * (uint64_t)1000000)/(uint64_t)hz))
+#define MSEC_2_TICKS(m) max(1, (uint32_t)((hz == 1000) ? \
+	  (m) : ((uint64_t)(m) * (uint64_t)hz)/(uint64_t)1000))
+#define USEC_2_TICKS(u) max(1, (uint32_t)((hz == 1000) ? \
+	 ((u) / 1000) : ((uint64_t)(u) * (uint64_t)hz)/(uint64_t)1000000))
 
+#endif
 /* Operations on timespecs */
 #define	timespecclear(tvp)	((tvp)->tv_sec = (tvp)->tv_nsec = 0)
 #define	timespecisset(tvp)	((tvp)->tv_sec || (tvp)->tv_nsec)
@@ -295,24 +314,27 @@ tvtosbt(struct timeval _tv)
 	(((tvp)->tv_sec == (uvp)->tv_sec) ?				\
 	    ((tvp)->tv_nsec cmp (uvp)->tv_nsec) :			\
 	    ((tvp)->tv_sec cmp (uvp)->tv_sec))
-#define	timespecadd(vvp, uvp)						\
+
+#define	timespecadd(tsp, usp, vsp)					\
 	do {								\
-		(vvp)->tv_sec += (uvp)->tv_sec;				\
-		(vvp)->tv_nsec += (uvp)->tv_nsec;			\
-		if ((vvp)->tv_nsec >= 1000000000) {			\
-			(vvp)->tv_sec++;				\
-			(vvp)->tv_nsec -= 1000000000;			\
+		(vsp)->tv_sec = (tsp)->tv_sec + (usp)->tv_sec;		\
+		(vsp)->tv_nsec = (tsp)->tv_nsec + (usp)->tv_nsec;	\
+		if ((vsp)->tv_nsec >= 1000000000L) {			\
+			(vsp)->tv_sec++;				\
+			(vsp)->tv_nsec -= 1000000000L;			\
 		}							\
 	} while (0)
-#define	timespecsub(vvp, uvp)						\
+#define	timespecsub(tsp, usp, vsp)					\
 	do {								\
-		(vvp)->tv_sec -= (uvp)->tv_sec;				\
-		(vvp)->tv_nsec -= (uvp)->tv_nsec;			\
-		if ((vvp)->tv_nsec < 0) {				\
-			(vvp)->tv_sec--;				\
-			(vvp)->tv_nsec += 1000000000;			\
+		(vsp)->tv_sec = (tsp)->tv_sec - (usp)->tv_sec;		\
+		(vsp)->tv_nsec = (tsp)->tv_nsec - (usp)->tv_nsec;	\
+		if ((vsp)->tv_nsec < 0) {				\
+			(vsp)->tv_sec--;				\
+			(vsp)->tv_nsec += 1000000000L;			\
 		}							\
 	} while (0)
+
+#ifdef _KERNEL
 
 /* Operations on timevals. */
 

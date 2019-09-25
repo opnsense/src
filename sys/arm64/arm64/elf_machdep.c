@@ -31,8 +31,6 @@
  * SUCH DAMAGE.
  */
 
-#include "opt_pax.h"
-
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
@@ -42,7 +40,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/exec.h>
 #include <sys/imgact.h>
 #include <sys/linker.h>
-#include <sys/pax.h>
 #include <sys/proc.h>
 #include <sys/sysent.h>
 #include <sys/imgact_elf.h>
@@ -73,7 +70,6 @@ static struct sysentvec elf64_freebsd_sysvec = {
 	.sv_coredump	= __elfN(coredump),
 	.sv_imgact_try	= NULL,
 	.sv_minsigstksz	= MINSIGSTKSZ,
-	.sv_pagesize	= PAGE_SIZE,
 	.sv_minuser	= VM_MIN_ADDRESS,
 	.sv_maxuser	= VM_MAXUSER_ADDRESS,
 	.sv_usrstack	= USRSTACK,
@@ -83,7 +79,8 @@ static struct sysentvec elf64_freebsd_sysvec = {
 	.sv_setregs	= exec_setregs,
 	.sv_fixlimit	= NULL,
 	.sv_maxssiz	= NULL,
-	.sv_flags	= SV_SHP | SV_TIMEKEEP | SV_ABI_FREEBSD | SV_LP64,
+	.sv_flags	= SV_SHP | SV_TIMEKEEP | SV_ABI_FREEBSD | SV_LP64 |
+	    SV_ASLR,
 	.sv_set_syscall_retval = cpu_set_syscall_retval,
 	.sv_fetch_syscall_args = cpu_fetch_syscall_args,
 	.sv_syscallnames = syscallnames,
@@ -92,7 +89,6 @@ static struct sysentvec elf64_freebsd_sysvec = {
 	.sv_schedtail	= NULL,
 	.sv_thread_detach = NULL,
 	.sv_trap	= NULL,
-	.sv_pax_aslr_init = pax_aslr_init_vmspace,
 };
 INIT_SYSENTVEC(elf64_sysvec, &elf64_freebsd_sysvec);
 
@@ -133,11 +129,18 @@ elf64_dump_thread(struct thread *td __unused, void *dst __unused,
 
 }
 
+bool
+elf_is_ifunc_reloc(Elf_Size r_info __unused)
+{
+
+	return (ELF_R_TYPE(r_info) == R_AARCH64_IRELATIVE);
+}
+
 static int
 elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
     int type, int local, elf_lookup_fn lookup)
 {
-	Elf_Addr *where, addr, addend;
+	Elf_Addr *where, addr, addend, val;
 	Elf_Word rtype, symidx;
 	const Elf_Rel *rel;
 	const Elf_Rela *rela;
@@ -179,6 +182,12 @@ elf_reloc_internal(linker_file_t lf, Elf_Addr relocbase, const void *data,
 		if (error != 0)
 			return (-1);
 		*where = addr + addend;
+		break;
+	case R_AARCH64_IRELATIVE:
+		addr = relocbase + addend;
+		val = ((Elf64_Addr (*)(void))addr)();
+		if (*where != val)
+			*where = val;
 		break;
 	default:
 		printf("kldload: unexpected relocation type %d\n", rtype);

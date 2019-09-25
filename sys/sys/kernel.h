@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 1995 Terrence R. Lambert
  * All rights reserved.
  *
@@ -52,6 +54,9 @@
 /* for intrhook below */
 #include <sys/queue.h>
 
+/* for timestamping SYSINITs; other files may assume this is included here */
+#include <sys/tslog.h>
+
 /* Global variables for the kernel. */
 
 /* 1.1 */
@@ -96,7 +101,6 @@ enum sysinit_sub_id {
 	SI_SUB_WITNESS		= 0x1A80000,	/* witness initialization */
 	SI_SUB_MTX_POOL_DYNAMIC	= 0x1AC0000,	/* dynamic mutex pool */
 	SI_SUB_LOCK		= 0x1B00000,	/* various locks */
-	SI_SUB_PAX		= 0x1B80000,	/* pax setup */
 	SI_SUB_EVENTHANDLER	= 0x1C00000,	/* eventhandler init */
 	SI_SUB_VNET_PRELINK	= 0x1E00000,	/* vnet init before modules */
 	SI_SUB_KLD		= 0x2000000,	/* KLD and module setup */
@@ -228,6 +232,35 @@ struct sysinit {
  * correct warnings when -Wcast-qual is used.
  *
  */
+#ifdef TSLOG
+struct sysinit_tslog {
+	sysinit_cfunc_t func;
+	const void * data;
+	const char * name;
+};
+static inline void
+sysinit_tslog_shim(const void * data)
+{
+	const struct sysinit_tslog * x = data;
+
+	TSRAW(curthread, TS_ENTER, "SYSINIT", x->name);
+	(x->func)(x->data);
+	TSRAW(curthread, TS_EXIT, "SYSINIT", x->name);
+}
+#define	C_SYSINIT(uniquifier, subsystem, order, func, ident)	\
+	static struct sysinit_tslog uniquifier ## _sys_init_tslog = {	\
+		func,						\
+		(ident),					\
+		#uniquifier					\
+	};							\
+	static struct sysinit uniquifier ## _sys_init = {	\
+		subsystem,					\
+		order,						\
+		sysinit_tslog_shim,				\
+		&uniquifier ## _sys_init_tslog			\
+	};							\
+	DATA_WSET(sysinit_set,uniquifier ## _sys_init)
+#else
 #define	C_SYSINIT(uniquifier, subsystem, order, func, ident)	\
 	static struct sysinit uniquifier ## _sys_init = {	\
 		subsystem,					\
@@ -235,7 +268,8 @@ struct sysinit {
 		func,						\
 		(ident)						\
 	};							\
-	DATA_SET(sysinit_set,uniquifier ## _sys_init)
+	DATA_WSET(sysinit_set,uniquifier ## _sys_init)
+#endif
 
 #define	SYSINIT(uniquifier, subsystem, order, func, ident)	\
 	C_SYSINIT(uniquifier, subsystem, order,			\
@@ -251,7 +285,7 @@ struct sysinit {
 		func,						\
 		(ident)						\
 	};							\
-	DATA_SET(sysuninit_set,uniquifier ## _sys_uninit)
+	DATA_WSET(sysuninit_set,uniquifier ## _sys_uninit)
 
 #define	SYSUNINIT(uniquifier, subsystem, order, func, ident)	\
 	C_SYSUNINIT(uniquifier, subsystem, order,		\

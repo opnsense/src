@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2005, David Xu <davidxu@freebsd.org>
  * All rights reserved.
  *
@@ -33,10 +35,16 @@ __FBSDID("$FreeBSD$");
 
 #include "thr_private.h"
 
-__weak_reference(_pthread_cancel, pthread_cancel);
-__weak_reference(_pthread_setcancelstate, pthread_setcancelstate);
-__weak_reference(_pthread_setcanceltype, pthread_setcanceltype);
-__weak_reference(_pthread_testcancel, pthread_testcancel);
+__weak_reference(_thr_cancel, pthread_cancel);
+__weak_reference(_thr_cancel, _pthread_cancel);
+__weak_reference(_thr_setcancelstate, pthread_setcancelstate);
+__weak_reference(_thr_setcancelstate, _pthread_setcancelstate);
+__weak_reference(_thr_setcanceltype, pthread_setcanceltype);
+__weak_reference(_thr_setcanceltype, _pthread_setcanceltype);
+__weak_reference(_Tthr_testcancel, pthread_testcancel);
+__weak_reference(_Tthr_testcancel, _pthread_testcancel);
+__weak_reference(_Tthr_cancel_enter, _pthread_cancel_enter);
+__weak_reference(_Tthr_cancel_leave, _pthread_cancel_leave);
 
 static inline void
 testcancel(struct pthread *curthread)
@@ -53,7 +61,7 @@ _thr_testcancel(struct pthread *curthread)
 }
 
 int
-_pthread_cancel(pthread_t pthread)
+_thr_cancel(pthread_t pthread)
 {
 	struct pthread *curthread = _get_curthread();
 	int ret;
@@ -75,7 +83,7 @@ _pthread_cancel(pthread_t pthread)
 }
 
 int
-_pthread_setcancelstate(int state, int *oldstate)
+_thr_setcancelstate(int state, int *oldstate)
 {
 	struct pthread *curthread = _get_curthread();
 	int oldval;
@@ -102,7 +110,7 @@ _pthread_setcancelstate(int state, int *oldstate)
 }
 
 int
-_pthread_setcanceltype(int type, int *oldtype)
+_thr_setcanceltype(int type, int *oldtype)
 {
 	struct pthread	*curthread = _get_curthread();
 	int oldval;
@@ -128,7 +136,7 @@ _pthread_setcanceltype(int type, int *oldtype)
 }
 
 void
-_pthread_testcancel(void)
+_Tthr_testcancel(void)
 {
 	struct pthread *curthread;
 
@@ -167,13 +175,13 @@ _thr_cancel_leave(struct pthread *curthread, int maycancel)
 }
 
 void
-_pthread_cancel_enter(int maycancel)
+_Tthr_cancel_enter(int maycancel)
 {
 	_thr_cancel_enter2(_get_curthread(), maycancel);
 }
 
 void
-_pthread_cancel_leave(int maycancel)
+_Tthr_cancel_leave(int maycancel)
 {
 	_thr_cancel_leave(_get_curthread(), maycancel);
 }

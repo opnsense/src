@@ -7,10 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-// C Includes
-// C++ Includes
 
-// Project includes
 #include "lldb/Expression/LLVMUserExpression.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/StreamFile.h"
@@ -74,9 +71,8 @@ LLVMUserExpression::DoExecute(DiagnosticManager &diagnostic_manager,
                               lldb::UserExpressionSP &shared_ptr_to_me,
                               lldb::ExpressionVariableSP &result) {
   // The expression log is quite verbose, and if you're just tracking the
-  // execution of the
-  // expression, it's quite convenient to have these logs come out with the STEP
-  // log as well.
+  // execution of the expression, it's quite convenient to have these logs come
+  // out with the STEP log as well.
   Log *log(lldb_private::GetLogIfAnyCategoriesSet(LIBLLDB_LOG_EXPRESSIONS |
                                                   LIBLLDB_LOG_STEP));
 

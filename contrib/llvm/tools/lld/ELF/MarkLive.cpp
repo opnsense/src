@@ -20,15 +20,15 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "MarkLive.h"
 #include "InputSection.h"
 #include "LinkerScript.h"
 #include "OutputSections.h"
-#include "Strings.h"
 #include "SymbolTable.h"
 #include "Symbols.h"
 #include "Target.h"
-#include "Writer.h"
 #include "lld/Common/Memory.h"
+#include "lld/Common/Strings.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Object/ELF.h"
 #include <functional>
@@ -45,7 +45,7 @@ using namespace lld::elf;
 template <class ELFT>
 static typename ELFT::uint getAddend(InputSectionBase &Sec,
                                      const typename ELFT::Rel &Rel) {
-  return Target->getImplicitAddend(Sec.Data.begin() + Rel.r_offset,
+  return Target->getImplicitAddend(Sec.data().begin() + Rel.r_offset,
                                    Rel.getType(Config->IsMips64EL));
 }
 
@@ -60,8 +60,9 @@ static typename ELFT::uint getAddend(InputSectionBase &Sec,
 static DenseMap<StringRef, std::vector<InputSectionBase *>> CNamedSections;
 
 template <class ELFT, class RelT>
-static void resolveReloc(InputSectionBase &Sec, RelT &Rel,
-                         std::function<void(InputSectionBase *, uint64_t)> Fn) {
+static void
+resolveReloc(InputSectionBase &Sec, RelT &Rel,
+             llvm::function_ref<void(InputSectionBase *, uint64_t)> Fn) {
   Symbol &B = Sec.getFile<ELFT>()->getRelocTargetSym(Rel);
 
   // If a symbol is referenced in a live section, it is used.
@@ -90,7 +91,7 @@ static void resolveReloc(InputSectionBase &Sec, RelT &Rel,
 template <class ELFT>
 static void
 forEachSuccessor(InputSection &Sec,
-                 std::function<void(InputSectionBase *, uint64_t)> Fn) {
+                 llvm::function_ref<void(InputSectionBase *, uint64_t)> Fn) {
   if (Sec.AreRelocsRela) {
     for (const typename ELFT::Rela &Rel : Sec.template relas<ELFT>())
       resolveReloc<ELFT>(Sec, Rel, Fn);
@@ -120,7 +121,7 @@ forEachSuccessor(InputSection &Sec,
 template <class ELFT, class RelTy>
 static void
 scanEhFrameSection(EhInputSection &EH, ArrayRef<RelTy> Rels,
-                   std::function<void(InputSectionBase *, uint64_t)> Fn) {
+                   llvm::function_ref<void(InputSectionBase *, uint64_t)> Fn) {
   const endianness E = ELFT::TargetEndianness;
 
   for (unsigned I = 0, N = EH.Pieces.size(); I < N; ++I) {
@@ -155,13 +156,9 @@ scanEhFrameSection(EhInputSection &EH, ArrayRef<RelTy> Rels,
 template <class ELFT>
 static void
 scanEhFrameSection(EhInputSection &EH,
-                   std::function<void(InputSectionBase *, uint64_t)> Fn) {
+                   llvm::function_ref<void(InputSectionBase *, uint64_t)> Fn) {
   if (!EH.NumRelocations)
     return;
-
-  // Unfortunately we need to split .eh_frame early since some relocations in
-  // .eh_frame keep other section alive and some don't.
-  EH.split<ELFT>();
 
   if (EH.AreRelocsRela)
     scanEhFrameSection<ELFT>(EH, EH.template relas<ELFT>(), Fn);
@@ -207,7 +204,7 @@ template <class ELFT> static void doGcSections() {
     // (splittable) sections, each piece of data has independent liveness bit.
     // So we explicitly tell it which offset is in use.
     if (auto *MS = dyn_cast<MergeInputSection>(Sec))
-      MS->markLiveAt(Offset);
+      MS->getSectionPiece(Offset)->Live = true;
 
     if (Sec->Live)
       return;
@@ -253,9 +250,10 @@ template <class ELFT> static void doGcSections() {
 
     if (Sec->Flags & SHF_LINK_ORDER)
       continue;
-    if (isReserved<ELFT>(Sec) || Script->shouldKeep(Sec))
+
+    if (isReserved<ELFT>(Sec) || Script->shouldKeep(Sec)) {
       Enqueue(Sec, 0);
-    else if (isValidCIdentifier(Sec->Name)) {
+    } else if (isValidCIdentifier(Sec->Name)) {
       CNamedSections[Saver.save("__start_" + Sec->Name)].push_back(Sec);
       CNamedSections[Saver.save("__stop_" + Sec->Name)].push_back(Sec);
     }
@@ -270,22 +268,33 @@ template <class ELFT> static void doGcSections() {
 // input sections. This function make some or all of them on
 // so that they are emitted to the output file.
 template <class ELFT> void elf::markLive() {
-  // If -gc-sections is missing, no sections are removed.
   if (!Config->GcSections) {
+    // If -gc-sections is missing, no sections are removed.
     for (InputSectionBase *Sec : InputSections)
       Sec->Live = true;
+
+    // If a DSO defines a symbol referenced in a regular object, it is needed.
+    for (Symbol *Sym : Symtab->getSymbols())
+      if (auto *S = dyn_cast<SharedSymbol>(Sym))
+        if (S->IsUsedInRegularObj && !S->isWeak())
+          S->getFile<ELFT>().IsNeeded = true;
     return;
   }
 
   // The -gc-sections option works only for SHF_ALLOC sections
   // (sections that are memory-mapped at runtime). So we can
-  // unconditionally make non-SHF_ALLOC sections alive.
+  // unconditionally make non-SHF_ALLOC sections alive except
+  // SHF_LINK_ORDER and SHT_REL/SHT_RELA sections.
   //
-  // Non SHF_ALLOC sections are not removed even if they are
+  // Usually, SHF_ALLOC sections are not removed even if they are
   // unreachable through relocations because reachability is not
   // a good signal whether they are garbage or not (e.g. there is
   // usually no section referring to a .comment section, but we
-  // want to keep it.)
+  // want to keep it.).
+  //
+  // Note on SHF_LINK_ORDER: Such sections contain metadata and they
+  // have a reverse dependency on the InputSection they are linked with.
+  // We are able to garbage collect them.
   //
   // Note on SHF_REL{,A}: Such sections reach here only when -r
   // or -emit-reloc were given. And they are subject of garbage
@@ -293,8 +302,9 @@ template <class ELFT> void elf::markLive() {
   // remove its relocation section.
   for (InputSectionBase *Sec : InputSections) {
     bool IsAlloc = (Sec->Flags & SHF_ALLOC);
+    bool IsLinkOrder = (Sec->Flags & SHF_LINK_ORDER);
     bool IsRel = (Sec->Type == SHT_REL || Sec->Type == SHT_RELA);
-    if (!IsAlloc && !IsRel)
+    if (!IsAlloc && !IsLinkOrder && !IsRel)
       Sec->Live = true;
   }
 
@@ -305,8 +315,7 @@ template <class ELFT> void elf::markLive() {
   if (Config->PrintGcSections)
     for (InputSectionBase *Sec : InputSections)
       if (!Sec->Live)
-        message("removing unused section from '" + Sec->Name + "' in file '" +
-                Sec->File->getName() + "'");
+        message("removing unused section " + toString(Sec));
 }
 
 template void elf::markLive<ELF32LE>();

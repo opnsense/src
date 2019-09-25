@@ -33,6 +33,7 @@
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Mangler.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/PassTimingInfo.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/LTO/LTO.h"
@@ -220,7 +221,7 @@ bool LTOCodeGenerator::writeMergedModules(StringRef Path) {
   }
 
   // write bitcode to it
-  WriteBitcodeToFile(MergedModule.get(), Out.os(), ShouldEmbedUselists);
+  WriteBitcodeToFile(*MergedModule, Out.os(), ShouldEmbedUselists);
   Out.os().close();
 
   if (Out.os().has_error()) {

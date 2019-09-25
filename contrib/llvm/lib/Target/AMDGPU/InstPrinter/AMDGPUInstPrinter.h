@@ -80,22 +80,24 @@ private:
                   raw_ostream &O);
   void printDA(const MCInst *MI, unsigned OpNo, const MCSubtargetInfo &STI,
                raw_ostream &O);
-  void printR128(const MCInst *MI, unsigned OpNo, const MCSubtargetInfo &STI,
+  void printR128A16(const MCInst *MI, unsigned OpNo, const MCSubtargetInfo &STI,
                  raw_ostream &O);
   void printLWE(const MCInst *MI, unsigned OpNo,
+                const MCSubtargetInfo &STI, raw_ostream &O);
+  void printD16(const MCInst *MI, unsigned OpNo,
                 const MCSubtargetInfo &STI, raw_ostream &O);
   void printExpCompr(const MCInst *MI, unsigned OpNo,
                      const MCSubtargetInfo &STI, raw_ostream &O);
   void printExpVM(const MCInst *MI, unsigned OpNo,
                   const MCSubtargetInfo &STI, raw_ostream &O);
-  void printDFMT(const MCInst *MI, unsigned OpNo,
-                 const MCSubtargetInfo &STI, raw_ostream &O);
-  void printNFMT(const MCInst *MI, unsigned OpNo,
-                 const MCSubtargetInfo &STI, raw_ostream &O);
+  void printFORMAT(const MCInst *MI, unsigned OpNo,
+                   const MCSubtargetInfo &STI, raw_ostream &O);
 
   void printRegOperand(unsigned RegNo, raw_ostream &O);
   void printVOPDst(const MCInst *MI, unsigned OpNo, const MCSubtargetInfo &STI,
                    raw_ostream &O);
+  void printVINTRPDst(const MCInst *MI, unsigned OpNo, const MCSubtargetInfo &STI,
+                      raw_ostream &O);
   void printImmediate16(uint32_t Imm, const MCSubtargetInfo &STI,
                         raw_ostream &O);
   void printImmediateV216(uint32_t Imm, const MCSubtargetInfo &STI,
@@ -214,13 +216,16 @@ protected:
                   raw_ostream &O);
 };
 
-// FIXME: R600 specific parts of AMDGPUInstrPrinter should be moved here, and
-// MCTargetDesc should be using R600InstPrinter for the R600 target.
-class R600InstPrinter : public AMDGPUInstPrinter {
+class R600InstPrinter : public MCInstPrinter {
 public:
   R600InstPrinter(const MCAsmInfo &MAI, const MCInstrInfo &MII,
                   const MCRegisterInfo &MRI)
-    : AMDGPUInstPrinter(MAI, MII, MRI) {}
+    : MCInstPrinter(MAI, MII, MRI) {}
+
+  void printInst(const MCInst *MI, raw_ostream &O, StringRef Annot,
+                 const MCSubtargetInfo &STI) override;
+  void printInstruction(const MCInst *MI, raw_ostream &O);
+  static const char *getRegisterName(unsigned RegNo);
 
   void printAbs(const MCInst *MI, unsigned OpNo, raw_ostream &O);
   void printBankSwizzle(const MCInst *MI, unsigned OpNo, raw_ostream &O);

@@ -10,6 +10,7 @@
 #ifndef LLVM_DEBUGINFO_PDB_PDBSYMBOLDATA_H
 #define LLVM_DEBUGINFO_PDB_PDBSYMBOLDATA_H
 
+#include "IPDBLineNumber.h"
 #include "PDBSymbol.h"
 #include "PDBTypes.h"
 
@@ -20,12 +21,8 @@ class raw_ostream;
 namespace pdb {
 
 class PDBSymbolData : public PDBSymbol {
-public:
-  PDBSymbolData(const IPDBSession &PDBSession,
-                std::unique_ptr<IPDBRawSymbol> DataSymbol);
-
   DECLARE_PDB_SYMBOL_CONCRETE_TYPE(PDB_SymType::Data)
-
+public:
   void dump(PDBSymDumper &Dumper) const override;
 
   FORWARD_SYMBOL_METHOD(getAccess)
@@ -53,9 +50,11 @@ public:
   FORWARD_SYMBOL_METHOD(getValue)
   FORWARD_SYMBOL_METHOD(getVirtualAddress)
   FORWARD_SYMBOL_METHOD(isVolatileType)
-};
 
+  std::unique_ptr<IPDBEnumLineNumbers> getLineNumbers() const;
+  uint32_t getCompilandId() const;
+};
+} // namespace pdb
 } // namespace llvm
-}
 
 #endif // LLVM_DEBUGINFO_PDB_PDBSYMBOLDATA_H

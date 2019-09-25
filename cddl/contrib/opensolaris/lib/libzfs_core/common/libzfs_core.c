@@ -296,6 +296,34 @@ lzc_remap(const char *fsname)
 	return (error);
 }
 
+int
+lzc_rename(const char *source, const char *target)
+{
+	zfs_cmd_t zc = { 0 };
+	int error;
+
+	ASSERT3S(g_refcount, >, 0);
+	VERIFY3S(g_fd, !=, -1);
+
+	(void) strlcpy(zc.zc_name, source, sizeof (zc.zc_name));
+	(void) strlcpy(zc.zc_value, target, sizeof (zc.zc_value));
+	error = ioctl(g_fd, ZFS_IOC_RENAME, &zc);
+	if (error != 0)
+		error = errno;
+	return (error);
+}
+
+int
+lzc_destroy(const char *fsname)
+{
+	int error;
+
+	nvlist_t *args = fnvlist_alloc();
+	error = lzc_ioctl(ZFS_IOC_DESTROY, fsname, args, NULL);
+	nvlist_free(args);
+	return (error);
+}
+
 /*
  * Creates snapshots.
  *
@@ -1084,4 +1112,41 @@ lzc_channel_program_nosync(const char *pool, const char *program,
 {
 	return (lzc_channel_program_impl(pool, program, B_FALSE, timeout,
 	    memlimit, argnvl, outnvl));
+}
+
+/*
+ * Changes initializing state.
+ *
+ * vdevs should be a list of (<key>, guid) where guid is a uint64 vdev GUID.
+ * The key is ignored.
+ *
+ * If there are errors related to vdev arguments, per-vdev errors are returned
+ * in an nvlist with the key "vdevs". Each error is a (guid, errno) pair where
+ * guid is stringified with PRIu64, and errno is one of the following as
+ * an int64_t:
+ *	- ENODEV if the device was not found
+ *	- EINVAL if the devices is not a leaf or is not concrete (e.g. missing)
+ *	- EROFS if the device is not writeable
+ *	- EBUSY start requested but the device is already being initialized
+ *	- ESRCH cancel/suspend requested but device is not being initialized
+ *
+ * If the errlist is empty, then return value will be:
+ *	- EINVAL if one or more arguments was invalid
+ *	- Other spa_open failures
+ *	- 0 if the operation succeeded
+ */
+int
+lzc_initialize(const char *poolname, pool_initialize_func_t cmd_type,
+    nvlist_t *vdevs, nvlist_t **errlist)
+{
+	int error;
+	nvlist_t *args = fnvlist_alloc();
+	fnvlist_add_uint64(args, ZPOOL_INITIALIZE_COMMAND, (uint64_t)cmd_type);
+	fnvlist_add_nvlist(args, ZPOOL_INITIALIZE_VDEVS, vdevs);
+
+	error = lzc_ioctl(ZFS_IOC_POOL_INITIALIZE, poolname, args, errlist);
+
+	fnvlist_free(args);
+
+	return (error);
 }

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1990 William Jolitz.
  * Copyright (c) 1991 The Regents of the University of California.
  * All rights reserved.
@@ -11,7 +13,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -59,6 +61,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/specialreg.h>
 #include <machine/segments.h>
 #include <machine/ucontext.h>
+#include <x86/ifunc.h>
 
 /*
  * Floating point support.
@@ -97,6 +100,17 @@ xsave(char *addr, uint64_t mask)
 	    "memory");
 }
 
+static __inline void
+xsaveopt(char *addr, uint64_t mask)
+{
+	uint32_t low, hi;
+
+	low = mask;
+	hi = mask >> 32;
+	__asm __volatile("xsaveopt %0" : "=m" (*addr) : "a" (low), "d" (hi) :
+	    "memory");
+}
+
 #else	/* !(__GNUCLIKE_ASM && !lint) */
 
 void	fldcw(u_short cw);
@@ -110,6 +124,7 @@ void	ldmxcsr(u_int csr);
 void	stmxcsr(u_int *csr);
 void	xrstor(char *addr, uint64_t mask);
 void	xsave(char *addr, uint64_t mask);
+void	xsaveopt(char *addr, uint64_t mask);
 
 #endif	/* __GNUCLIKE_ASM && !lint */
 
@@ -140,7 +155,7 @@ SYSCTL_INT(_hw, HW_FLOATINGPT, floatingpoint, CTLFLAG_RD,
     SYSCTL_NULL_INT_PTR, 1, "Floating point instructions executed in hardware");
 
 int lazy_fpu_switch = 0;
-SYSCTL_INT(_hw, OID_AUTO, lazy_fpu_switch, CTLFLAG_RWTUN | CTLFLAG_NOFETCH,
+SYSCTL_INT(_hw, OID_AUTO, lazy_fpu_switch, CTLFLAG_RD,
     &lazy_fpu_switch, 0,
     "Lazily load FPU context after context switch");
 
@@ -154,24 +169,68 @@ struct xsave_area_elm_descr {
 	u_int	size;
 } *xsave_area_desc;
 
-void
-fpusave(void *addr)
+static void
+fpusave_xsaveopt(void *addr)
 {
 
-	if (use_xsave)
-		xsave((char *)addr, xsave_mask);
-	else
-		fxsave((char *)addr);
+	xsaveopt((char *)addr, xsave_mask);
 }
 
-void
-fpurestore(void *addr)
+static void
+fpusave_xsave(void *addr)
+{
+
+	xsave((char *)addr, xsave_mask);
+}
+
+static void
+fpurestore_xrstor(void *addr)
+{
+
+	xrstor((char *)addr, xsave_mask);
+}
+
+static void
+fpusave_fxsave(void *addr)
+{
+
+	fxsave((char *)addr);
+}
+
+static void
+fpurestore_fxrstor(void *addr)
+{
+
+	fxrstor((char *)addr);
+}
+
+static void
+init_xsave(void)
 {
 
 	if (use_xsave)
-		xrstor((char *)addr, xsave_mask);
-	else
-		fxrstor((char *)addr);
+		return;
+	if ((cpu_feature2 & CPUID2_XSAVE) == 0)
+		return;
+	use_xsave = 1;
+	TUNABLE_INT_FETCH("hw.use_xsave", &use_xsave);
+}
+
+DEFINE_IFUNC(, void, fpusave, (void *), static)
+{
+
+	init_xsave();
+	if (use_xsave)
+		return ((cpu_stdext_feature & CPUID_EXTSTATE_XSAVEOPT) != 0 ?
+		    fpusave_xsaveopt : fpusave_xsave);
+	return (fpusave_fxsave);
+}
+
+DEFINE_IFUNC(, void, fpurestore, (void *), static)
+{
+
+	init_xsave();
+	return (use_xsave ? fpurestore_xrstor : fpurestore_fxrstor);
 }
 
 void
@@ -208,15 +267,10 @@ fpuinit_bsp1(void)
 {
 	u_int cp[4];
 	uint64_t xsave_mask_user;
+	bool old_wp;
 
-	TUNABLE_INT_FETCH("hw.lazy_fpu_switch", &lazy_fpu_switch);
-	if ((cpu_feature2 & CPUID2_XSAVE) != 0) {
-		use_xsave = 1;
-		TUNABLE_INT_FETCH("hw.use_xsave", &use_xsave);
-	}
 	if (!use_xsave)
 		return;
-
 	cpuid_count(0xd, 0x0, cp);
 	xsave_mask = XFEATURE_ENABLED_X87 | XFEATURE_ENABLED_SSE;
 	if ((cp[0] & xsave_mask) != xsave_mask)
@@ -237,8 +291,14 @@ fpuinit_bsp1(void)
 		 * Patch the XSAVE instruction in the cpu_switch code
 		 * to XSAVEOPT.  We assume that XSAVE encoding used
 		 * REX byte, and set the bit 4 of the r/m byte.
+		 *
+		 * It seems that some BIOSes give control to the OS
+		 * with CR0.WP already set, making the kernel text
+		 * read-only before cpu_startup().
 		 */
+		old_wp = disable_wp();
 		ctx_switch_xsave[3] |= 0x10;
+		restore_wp(old_wp);
 	}
 }
 
@@ -309,6 +369,7 @@ fpuinit(void)
 static void
 fpuinitstate(void *arg __unused)
 {
+	uint64_t *xstate_bv;
 	register_t saveintr;
 	int cp[4], i, max_ext_n;
 
@@ -317,7 +378,7 @@ fpuinitstate(void *arg __unused)
 	saveintr = intr_disable();
 	stop_emulating();
 
-	fpusave(fpu_initialstate);
+	fpusave_fxsave(fpu_initialstate);
 	if (fpu_initialstate->sv_env.en_mxcsr_mask)
 		cpu_mxcsr_mask = fpu_initialstate->sv_env.en_mxcsr_mask;
 	else
@@ -339,6 +400,10 @@ fpuinitstate(void *arg __unused)
 	 * Save Area.
 	 */
 	if (use_xsave) {
+		xstate_bv = (uint64_t *)((char *)(fpu_initialstate + 1) +
+		    offsetof(struct xstate_hdr, xstate_bv));
+		*xstate_bv = XFEATURE_ENABLED_X87 | XFEATURE_ENABLED_SSE;
+
 		max_ext_n = flsl(xsave_mask);
 		xsave_area_desc = malloc(max_ext_n * sizeof(struct
 		    xsave_area_elm_descr), M_DEVBUF, M_WAITOK | M_ZERO);
@@ -708,8 +773,7 @@ void
 fpu_activate_sw(struct thread *td)
 {
 
-	if (lazy_fpu_switch || (td->td_pflags & TDP_KTHREAD) != 0 ||
-	    !PCB_USER_FPU(td->td_pcb)) {
+	if ((td->td_pflags & TDP_KTHREAD) != 0 || !PCB_USER_FPU(td->td_pcb)) {
 		PCPU_SET(fpcurthread, NULL);
 		start_emulating();
 	} else if (PCPU_GET(fpcurthread) != td) {
@@ -953,6 +1017,7 @@ static driver_t fpupnp_driver = {
 static devclass_t fpupnp_devclass;
 
 DRIVER_MODULE(fpupnp, acpi, fpupnp_driver, fpupnp_devclass, 0, 0);
+ISA_PNP_INFO(fpupnp_ids);
 #endif	/* DEV_ISA */
 
 static MALLOC_DEFINE(M_FPUKERN_CTX, "fpukern_ctx",
@@ -1000,7 +1065,7 @@ fpu_kern_ctx_savefpu(struct fpu_kern_ctx *ctx)
 	return ((struct savefpu *)p);
 }
 
-int
+void
 fpu_kern_enter(struct thread *td, struct fpu_kern_ctx *ctx, u_int flags)
 {
 	struct pcb *pcb;
@@ -1032,11 +1097,11 @@ fpu_kern_enter(struct thread *td, struct fpu_kern_ctx *ctx, u_int flags)
 		fpurestore(fpu_initialstate);
 		set_pcb_flags(pcb, PCB_KERNFPU | PCB_FPUNOSAVE |
 		    PCB_FPUINITDONE);
-		return (0);
+		return;
 	}
 	if ((flags & FPU_KERN_KTHR) != 0 && is_fpu_kern_thread(0)) {
 		ctx->flags = FPU_KERN_CTX_DUMMY | FPU_KERN_CTX_INUSE;
-		return (0);
+		return;
 	}
 	critical_enter();
 	KASSERT(!PCB_USER_FPU(pcb) || pcb->pcb_save ==
@@ -1050,7 +1115,6 @@ fpu_kern_enter(struct thread *td, struct fpu_kern_ctx *ctx, u_int flags)
 	set_pcb_flags(pcb, PCB_KERNFPU);
 	clear_pcb_flags(pcb, PCB_FPUINITDONE);
 	critical_exit();
-	return (0);
 }
 
 int

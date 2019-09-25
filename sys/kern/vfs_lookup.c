@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1982, 1986, 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
  * (c) UNIX System Laboratories, Inc.
@@ -15,7 +17,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -90,9 +92,9 @@ static int
 crossmp_vop_lock1(struct vop_lock1_args *ap)
 {
 	struct vnode *vp;
-	struct lock *lk;
-	const char *file;
-	int flags, line;
+	struct lock *lk __unused;
+	const char *file __unused;
+	int flags, line __unused;
 
 	vp = ap->a_vp;
 	lk = vp->v_vnlock;
@@ -116,7 +118,7 @@ static int
 crossmp_vop_unlock(struct vop_unlock_args *ap)
 {
 	struct vnode *vp;
-	struct lock *lk;
+	struct lock *lk __unused;
 	int flags;
 
 	vp = ap->a_vp;
@@ -157,10 +159,6 @@ nameiinit(void *dummy __unused)
 	getnewvnode("crossmp", NULL, &crossmp_vnodeops, &vp_crossmp);
 }
 SYSINIT(vfs, SI_SUB_VFS, SI_ORDER_SECOND, nameiinit, NULL);
-
-static int lookup_shared = 1;
-SYSCTL_INT(_vfs, OID_AUTO, lookup_shared, CTLFLAG_RWTUN, &lookup_shared, 0,
-    "enables shared locks for path name translation");
 
 static int lookup_cap_dotdot = 1;
 SYSCTL_INT(_vfs, OID_AUTO, lookup_cap_dotdot, CTLFLAG_RWTUN,
@@ -305,8 +303,6 @@ namei(struct nameidata *ndp)
 	    ("namei: flags contaminated with nameiops"));
 	MPASS(ndp->ni_startdir == NULL || ndp->ni_startdir->v_type == VDIR ||
 	    ndp->ni_startdir->v_type == VBAD);
-	if (!lookup_shared)
-		cnp->cn_flags &= ~LOCKSHARED;
 	fdp = p->p_fd;
 	TAILQ_INIT(&ndp->ni_cap_tracker);
 	ndp->ni_lcf = 0;
@@ -392,6 +388,7 @@ namei(struct nameidata *ndp)
 	dp = NULL;
 	cnp->cn_nameptr = cnp->cn_pnbuf;
 	if (cnp->cn_pnbuf[0] == '/') {
+		ndp->ni_resflags |= NIRES_ABS;
 		error = namei_handle_root(ndp, &dp);
 	} else {
 		if (ndp->ni_startdir != NULL) {
@@ -499,7 +496,7 @@ namei(struct nameidata *ndp)
 			error = ENOENT;
 			break;
 		}
-		if (linklen + ndp->ni_pathlen >= MAXPATHLEN) {
+		if (linklen + ndp->ni_pathlen > MAXPATHLEN) {
 			if (ndp->ni_pathlen > 1)
 				uma_zfree(namei_zone, cp);
 			error = ENAMETOOLONG;
@@ -658,10 +655,7 @@ lookup(struct nameidata *ndp)
 	 * We use shared locks until we hit the parent of the last cn then
 	 * we adjust based on the requesting flags.
 	 */
-	if (lookup_shared)
-		cnp->cn_lkflags = LK_SHARED;
-	else
-		cnp->cn_lkflags = LK_EXCLUSIVE;
+	cnp->cn_lkflags = LK_SHARED;
 	dp = ndp->ni_startdir;
 	ndp->ni_startdir = NULLVP;
 	vn_lock(dp,
@@ -1085,7 +1079,7 @@ nextname:
 		VOP_UNLOCK(dp, 0);
 success:
 	/*
-	 * Because of lookup_shared we may have the vnode shared locked, but
+	 * Because of shared lookup we may have the vnode shared locked, but
 	 * the caller may want it to be exclusively locked.
 	 */
 	if (needs_exclusive_leaf(dp->v_mount, cnp->cn_flags) &&
@@ -1259,6 +1253,7 @@ NDINIT_ALL(struct nameidata *ndp, u_long op, u_long flags, enum uio_seg segflg,
 	ndp->ni_dirp = namep;
 	ndp->ni_dirfd = dirfd;
 	ndp->ni_startdir = startdir;
+	ndp->ni_resflags = 0;
 	if (rightsp != NULL)
 		ndp->ni_rightsneeded = *rightsp;
 	else
@@ -1287,6 +1282,10 @@ NDFREE(struct nameidata *ndp, const u_int flags)
 	if (!(flags & NDF_NO_VP_UNLOCK) &&
 	    (ndp->ni_cnd.cn_flags & LOCKLEAF) && ndp->ni_vp)
 		unlock_vp = 1;
+	if (!(flags & NDF_NO_DVP_UNLOCK) &&
+	    (ndp->ni_cnd.cn_flags & LOCKPARENT) &&
+	    ndp->ni_dvp != ndp->ni_vp)
+		unlock_dvp = 1;
 	if (!(flags & NDF_NO_VP_RELE) && ndp->ni_vp) {
 		if (unlock_vp) {
 			vput(ndp->ni_vp);
@@ -1297,10 +1296,6 @@ NDFREE(struct nameidata *ndp, const u_int flags)
 	}
 	if (unlock_vp)
 		VOP_UNLOCK(ndp->ni_vp, 0);
-	if (!(flags & NDF_NO_DVP_UNLOCK) &&
-	    (ndp->ni_cnd.cn_flags & LOCKPARENT) &&
-	    ndp->ni_dvp != ndp->ni_vp)
-		unlock_dvp = 1;
 	if (!(flags & NDF_NO_DVP_RELE) &&
 	    (ndp->ni_cnd.cn_flags & (LOCKPARENT|WANTPARENT))) {
 		if (unlock_dvp) {

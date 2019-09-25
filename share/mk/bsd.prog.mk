@@ -4,7 +4,7 @@
 .include <bsd.init.mk>
 .include <bsd.compiler.mk>
 
-.SUFFIXES: .out .o .c .cc .cpp .cxx .C .m .y .l .ln .s .S .asm
+.SUFFIXES: .out .o .bc .c .cc .cpp .cxx .C .m .y .l .ll .ln .s .S .asm
 
 # XXX The use of COPTS in modern makefiles is discouraged.
 .if defined(COPTS)
@@ -34,12 +34,21 @@ PROG=	${PROG_CXX}
 MK_DEBUG_FILES=	no
 .endif
 
+.if ${MK_RETPOLINE} != "no"
+CFLAGS+= -mretpoline
+CXXFLAGS+= -mretpoline
+# retpolineplt is broken with static linking (PR 233336)
+.if !defined(NO_SHARED) || ${NO_SHARED} == "no" || ${NO_SHARED} == "NO"
+LDFLAGS+= -Wl,-zretpolineplt
+.endif
+.endif
+
 .if defined(CRUNCH_CFLAGS)
 CFLAGS+=${CRUNCH_CFLAGS}
 .else
 .if ${MK_DEBUG_FILES} != "no" && empty(DEBUG_FLAGS:M-g) && \
     empty(DEBUG_FLAGS:M-gdwarf-*)
-CFLAGS+= -g
+CFLAGS+= ${DEBUG_FILES_CFLAGS}
 CTFFLAGS+= -g
 .endif
 .endif
@@ -57,49 +66,6 @@ TAG_ARGS=	-T ${TAGS:[*]:S/ /,/g}
 
 .if defined(NO_SHARED) && (${NO_SHARED} != "no" && ${NO_SHARED} != "NO")
 LDFLAGS+= -static
-.endif
-
-.if defined(MK_PIE)
-# Ports will not have MK_PIE defined and the following logic requires
-# it be defined.
-
-.if ${LDFLAGS:M-static}
-NOPIE=yes
-.endif
-
-.if !defined(NOPIE)
-.if ${MK_PIE} != "no"
-
-CFLAGS+= -fPIC -fPIE
-CXXFLAGS+= -fPIC -fPIE
-LDFLAGS+= -pie
-
-# Only toggle SafeStack for PIE binaries. SafeStack requires ASLR in
-# order to be effective.
-.if !defined(NOSAFESTACK)
-.if ${MK_SAFESTACK} != "no"
-CFLAGS+=	-fsanitize=safe-stack
-CXXFLAGS+=	-fsanitize=safe-stack
-LDFLAGS+=	-fsanitize=safe-stack
-.endif # ${MK_SAFESTACK} != "no"
-.endif # !defined(NOSAFESTACK)
-
-.endif # ${MK_PIE} != no
-.endif # !defined(NOPIE)
-.endif # defined(MK_PIE)
-
-.if defined(MK_RELRO)
-.if ${MK_RELRO} != "no"
-LDFLAGS+=	-Wl,-z,relro
-.endif
-
-.if ${MK_BIND_NOW} != "no"
-LDFLAGS+=	-Wl,-z,now
-.endif
-.endif
-
-.if defined(MK_LIBRESSL) && ${MK_LIBRESSL} != "no"
-CFLAGS+=	-DHAVE_LIBRESSL
 .endif
 
 .if ${MK_DEBUG_FILES} != "no"
@@ -128,7 +94,11 @@ PROGNAME?=	${PROG}
 
 .if defined(SRCS)
 
-OBJS+=  ${SRCS:N*.h:R:S/$/.o/g}
+OBJS+=  ${SRCS:N*.h:${OBJS_SRCS_FILTER:ts:}:S/$/.o/g}
+
+# LLVM bitcode / textual IR representations of the program
+BCOBJS+=${SRCS:N*.[hsS]:N*.asm:${OBJS_SRCS_FILTER:ts:}:S/$/.bco/g}
+LLOBJS+=${SRCS:N*.[hsS]:N*.asm:${OBJS_SRCS_FILTER:ts:}:S/$/.llo/g}
 
 .if target(beforelinking)
 beforelinking: ${OBJS}
@@ -160,7 +130,10 @@ SRCS=	${PROG}.c
 # - the name of the object gets put into the executable symbol table instead of
 #   the name of a variable temporary object.
 # - it's useful to keep objects around for crunching.
-OBJS+=	${PROG}.o
+OBJS+=		${PROG}.o
+BCOBJS+=	${PROG}.bc
+LLOBJS+=	${PROG}.ll
+CLEANFILES+=	${PROG}.o ${PROG}.bc ${PROG}.ll
 
 .if target(beforelinking)
 beforelinking: ${OBJS}
@@ -190,6 +163,16 @@ ${PROGNAME}.debug: ${PROG_FULL}
 	${OBJCOPY} --only-keep-debug ${PROG_FULL} ${.TARGET}
 .endif
 
+.if defined(LLVM_LINK)
+${PROG_FULL}.bc: ${BCOBJS}
+	${LLVM_LINK} -o ${.TARGET} ${BCOBJS}
+
+${PROG_FULL}.ll: ${LLOBJS}
+	${LLVM_LINK} -S -o ${.TARGET} ${LLOBJS}
+
+CLEANFILES+=	${PROG_FULL}.bc ${PROG_FULL}.ll
+.endif # defined(LLVM_LINK)
+
 .if	${MK_MAN} != "no" && !defined(MAN) && \
 	!defined(MAN1) && !defined(MAN2) && !defined(MAN3) && \
 	!defined(MAN4) && !defined(MAN5) && !defined(MAN6) && \
@@ -209,14 +192,14 @@ all: all-man
 .endif
 
 .if defined(PROG)
-CLEANFILES+= ${PROG}
+CLEANFILES+= ${PROG} ${PROG}.bc ${PROG}.ll
 .if ${MK_DEBUG_FILES} != "no"
-CLEANFILES+=	${PROG_FULL} ${PROGNAME}.debug
+CLEANFILES+= ${PROG_FULL} ${PROGNAME}.debug
 .endif
 .endif
 
 .if defined(OBJS)
-CLEANFILES+= ${OBJS}
+CLEANFILES+= ${OBJS} ${BCOBJS} ${LLOBJS}
 .endif
 
 .include <bsd.libnames.mk>
@@ -311,6 +294,10 @@ NLSNAME?=	${PROG}
 .include <bsd.confs.mk>
 .include <bsd.files.mk>
 .include <bsd.incs.mk>
+
+LINKOWN?=	${BINOWN}
+LINKGRP?=	${BINGRP}
+LINKMODE?=	${BINMODE}
 .include <bsd.links.mk>
 
 .if ${MK_MAN} != "no"
@@ -320,15 +307,15 @@ realinstall: maninstall
 
 .endif	# !target(install)
 
-.if !target(lint)
-lint: ${SRCS:M*.c}
-.if defined(PROG)
-	${LINT} ${LINTFLAGS} ${CFLAGS:M-[DIU]*} ${.ALLSRC}
-.endif
-.endif
-
 .if ${MK_MAN} != "no"
 .include <bsd.man.mk>
+.endif
+
+.if defined(HAS_TESTS)
+MAKE+=			MK_MAKE_CHECK_USE_SANDBOX=yes
+SUBDIR_TARGETS+=	check
+TESTS_LD_LIBRARY_PATH+=	${.OBJDIR}
+TESTS_PATH+=		${.OBJDIR}
 .endif
 
 .if defined(PROG)

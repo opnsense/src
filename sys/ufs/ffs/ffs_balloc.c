@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: (BSD-2-Clause-FreeBSD AND BSD-3-Clause)
+ *
  * Copyright (c) 2002 Networks Associates Technology, Inc.
  * All rights reserved.
  *
@@ -40,7 +42,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -97,22 +99,22 @@ ffs_balloc_ufs1(struct vnode *vp, off_t startoffset, int size,
 	struct fs *fs;
 	ufs1_daddr_t nb;
 	struct buf *bp, *nbp;
+	struct mount *mp;
 	struct ufsmount *ump;
-	struct indir indirs[NIADDR + 2];
+	struct indir indirs[UFS_NIADDR + 2];
 	int deallocated, osize, nsize, num, i, error;
 	ufs2_daddr_t newb;
 	ufs1_daddr_t *bap, pref;
-	ufs1_daddr_t *allocib, *blkp, *allocblk, allociblk[NIADDR + 1];
-	ufs2_daddr_t *lbns_remfree, lbns[NIADDR + 1];
+	ufs1_daddr_t *allocib, *blkp, *allocblk, allociblk[UFS_NIADDR + 1];
+	ufs2_daddr_t *lbns_remfree, lbns[UFS_NIADDR + 1];
 	int unwindidx = -1;
 	int saved_inbdflush;
-	static struct timeval lastfail;
-	static int curfail;
 	int gbflags, reclaimed;
 
 	ip = VTOI(vp);
 	dp = ip->i_din1;
 	fs = ITOFS(ip);
+	mp = ITOVFS(ip);
 	ump = ITOUMP(ip);
 	lbn = lblkno(fs, startoffset);
 	size = blkoff(fs, startoffset) + size;
@@ -134,7 +136,7 @@ ffs_balloc_ufs1(struct vnode *vp, off_t startoffset, int size,
 	 * this fragment has to be extended to be a full block.
 	 */
 	lastlbn = lblkno(fs, ip->i_size);
-	if (lastlbn < NDADDR && lastlbn < lbn) {
+	if (lastlbn < UFS_NDADDR && lastlbn < lbn) {
 		nb = lastlbn;
 		osize = blksize(fs, ip, nb);
 		if (osize < fs->fs_bsize && osize > 0) {
@@ -155,14 +157,16 @@ ffs_balloc_ufs1(struct vnode *vp, off_t startoffset, int size,
 			ip->i_flag |= IN_CHANGE | IN_UPDATE;
 			if (flags & IO_SYNC)
 				bwrite(bp);
+			else if (DOINGASYNC(vp))
+				bdwrite(bp);
 			else
 				bawrite(bp);
 		}
 	}
 	/*
-	 * The first NDADDR blocks are direct blocks
+	 * The first UFS_NDADDR blocks are direct blocks
 	 */
-	if (lbn < NDADDR) {
+	if (lbn < UFS_NDADDR) {
 		if (flags & BA_METAONLY)
 			panic("ffs_balloc_ufs1: BA_METAONLY for direct block");
 		nb = dp->di_db[lbn];
@@ -264,17 +268,16 @@ ffs_balloc_ufs1(struct vnode *vp, off_t startoffset, int size,
 		bp->b_blkno = fsbtodb(fs, nb);
 		vfs_bio_clrbuf(bp);
 		if (DOINGSOFTDEP(vp)) {
-			softdep_setup_allocdirect(ip, NDADDR + indirs[0].in_off,
-			    newb, 0, fs->fs_bsize, 0, bp);
+			softdep_setup_allocdirect(ip,
+			    UFS_NDADDR + indirs[0].in_off, newb, 0,
+			    fs->fs_bsize, 0, bp);
+			bdwrite(bp);
+		} else if ((flags & IO_SYNC) == 0 && DOINGASYNC(vp)) {
+			if (bp->b_bufsize == fs->fs_bsize)
+				bp->b_flags |= B_CLUSTEROK;
 			bdwrite(bp);
 		} else {
-			/*
-			 * Write synchronously so that indirect blocks
-			 * never point at garbage.
-			 */
-			if (DOINGASYNC(vp))
-				bdwrite(bp);
-			else if ((error = bwrite(bp)) != 0)
+			if ((error = bwrite(bp)) != 0)
 				goto fail;
 		}
 		allocib = &dp->di_ib[indirs[0].in_off];
@@ -294,6 +297,11 @@ retry:
 		}
 		bap = (ufs1_daddr_t *)bp->b_data;
 		nb = bap[indirs[i].in_off];
+		if ((error = UFS_CHECK_BLKNO(mp, ip->i_number, nb,
+		    fs->fs_bsize)) != 0) {
+			brelse(bp);
+			goto fail;
+		}
 		if (i == num)
 			break;
 		i += 1;
@@ -312,17 +320,21 @@ retry:
 		if ((error = ffs_alloc(ip, lbn, pref, (int)fs->fs_bsize,
 		    flags | IO_BUFLOCKED, cred, &newb)) != 0) {
 			brelse(bp);
+			UFS_LOCK(ump);
 			if (DOINGSOFTDEP(vp) && ++reclaimed == 1) {
-				UFS_LOCK(ump);
 				softdep_request_cleanup(fs, vp, cred,
 				    FLUSH_BLOCKS_WAIT);
 				UFS_UNLOCK(ump);
 				goto retry;
 			}
-			if (ppsratecheck(&lastfail, &curfail, 1)) {
+			if (ppsratecheck(&ump->um_last_fullmsg,
+			    &ump->um_secs_fullmsg, 1)) {
+				UFS_UNLOCK(ump);
 				ffs_fserr(fs, ip->i_number, "filesystem full");
 				uprintf("\n%s: write failed, filesystem "
 				    "is full\n", fs->fs_fsmnt);
+			} else {
+				UFS_UNLOCK(ump);
 			}
 			goto fail;
 		}
@@ -339,11 +351,11 @@ retry:
 			softdep_setup_allocindir_meta(nbp, ip, bp,
 			    indirs[i - 1].in_off, nb);
 			bdwrite(nbp);
+		} else if ((flags & IO_SYNC) == 0 && DOINGASYNC(vp)) {
+			if (nbp->b_bufsize == fs->fs_bsize)
+				nbp->b_flags |= B_CLUSTEROK;
+			bdwrite(nbp);
 		} else {
-			/*
-			 * Write synchronously so that indirect blocks
-			 * never point at garbage.
-			 */
 			if ((error = bwrite(nbp)) != 0) {
 				brelse(bp);
 				goto fail;
@@ -384,24 +396,28 @@ retry:
 		 * the file. Otherwise it has been allocated in the metadata
 		 * area, so we want to find our own place out in the data area.
 		 */
-		if (pref == 0 || (lbn > NDADDR && fs->fs_metaspace != 0))
+		if (pref == 0 || (lbn > UFS_NDADDR && fs->fs_metaspace != 0))
 			pref = ffs_blkpref_ufs1(ip, lbn, indirs[i].in_off,
 			    &bap[0]);
 		error = ffs_alloc(ip, lbn, pref, (int)fs->fs_bsize,
 		    flags | IO_BUFLOCKED, cred, &newb);
 		if (error) {
 			brelse(bp);
+			UFS_LOCK(ump);
 			if (DOINGSOFTDEP(vp) && ++reclaimed == 1) {
-				UFS_LOCK(ump);
 				softdep_request_cleanup(fs, vp, cred,
 				    FLUSH_BLOCKS_WAIT);
 				UFS_UNLOCK(ump);
 				goto retry;
 			}
-			if (ppsratecheck(&lastfail, &curfail, 1)) {
+			if (ppsratecheck(&ump->um_last_fullmsg,
+			    &ump->um_secs_fullmsg, 1)) {
+				UFS_UNLOCK(ump);
 				ffs_fserr(fs, ip->i_number, "filesystem full");
 				uprintf("\n%s: write failed, filesystem "
 				    "is full\n", fs->fs_fsmnt);
+			} else {
+				UFS_UNLOCK(ump);
 			}
 			goto fail;
 		}
@@ -550,7 +566,7 @@ fail:
 		lbns_remfree++;
 #endif
 		ffs_blkfree(ump, fs, ump->um_devvp, *blkp, fs->fs_bsize,
-		    ip->i_number, vp->v_type, NULL);
+		    ip->i_number, vp->v_type, NULL, SINGLETON_KEY);
 	}
 	return (error);
 }
@@ -571,21 +587,21 @@ ffs_balloc_ufs2(struct vnode *vp, off_t startoffset, int size,
 	ufs_lbn_t lbn, lastlbn;
 	struct fs *fs;
 	struct buf *bp, *nbp;
+	struct mount *mp;
 	struct ufsmount *ump;
-	struct indir indirs[NIADDR + 2];
+	struct indir indirs[UFS_NIADDR + 2];
 	ufs2_daddr_t nb, newb, *bap, pref;
-	ufs2_daddr_t *allocib, *blkp, *allocblk, allociblk[NIADDR + 1];
-	ufs2_daddr_t *lbns_remfree, lbns[NIADDR + 1];
+	ufs2_daddr_t *allocib, *blkp, *allocblk, allociblk[UFS_NIADDR + 1];
+	ufs2_daddr_t *lbns_remfree, lbns[UFS_NIADDR + 1];
 	int deallocated, osize, nsize, num, i, error;
 	int unwindidx = -1;
 	int saved_inbdflush;
-	static struct timeval lastfail;
-	static int curfail;
 	int gbflags, reclaimed;
 
 	ip = VTOI(vp);
 	dp = ip->i_din2;
 	fs = ITOFS(ip);
+	mp = ITOVFS(ip);
 	ump = ITOUMP(ip);
 	lbn = lblkno(fs, startoffset);
 	size = blkoff(fs, startoffset) + size;
@@ -604,7 +620,7 @@ ffs_balloc_ufs2(struct vnode *vp, off_t startoffset, int size,
 	 * Check for allocating external data.
 	 */
 	if (flags & IO_EXT) {
-		if (lbn >= NXADDR)
+		if (lbn >= UFS_NXADDR)
 			return (EFBIG);
 		/*
 		 * If the next write will extend the data into a new block,
@@ -718,7 +734,7 @@ ffs_balloc_ufs2(struct vnode *vp, off_t startoffset, int size,
 	 * this fragment has to be extended to be a full block.
 	 */
 	lastlbn = lblkno(fs, ip->i_size);
-	if (lastlbn < NDADDR && lastlbn < lbn) {
+	if (lastlbn < UFS_NDADDR && lastlbn < lbn) {
 		nb = lastlbn;
 		osize = blksize(fs, ip, nb);
 		if (osize < fs->fs_bsize && osize > 0) {
@@ -745,9 +761,9 @@ ffs_balloc_ufs2(struct vnode *vp, off_t startoffset, int size,
 		}
 	}
 	/*
-	 * The first NDADDR blocks are direct blocks
+	 * The first UFS_NDADDR blocks are direct blocks
 	 */
-	if (lbn < NDADDR) {
+	if (lbn < UFS_NDADDR) {
 		if (flags & BA_METAONLY)
 			panic("ffs_balloc_ufs2: BA_METAONLY for direct block");
 		nb = dp->di_db[lbn];
@@ -852,17 +868,16 @@ ffs_balloc_ufs2(struct vnode *vp, off_t startoffset, int size,
 		bp->b_blkno = fsbtodb(fs, nb);
 		vfs_bio_clrbuf(bp);
 		if (DOINGSOFTDEP(vp)) {
-			softdep_setup_allocdirect(ip, NDADDR + indirs[0].in_off,
-			    newb, 0, fs->fs_bsize, 0, bp);
+			softdep_setup_allocdirect(ip,
+			    UFS_NDADDR + indirs[0].in_off, newb, 0,
+			    fs->fs_bsize, 0, bp);
+			bdwrite(bp);
+		} else if ((flags & IO_SYNC) == 0 && DOINGASYNC(vp)) {
+			if (bp->b_bufsize == fs->fs_bsize)
+				bp->b_flags |= B_CLUSTEROK;
 			bdwrite(bp);
 		} else {
-			/*
-			 * Write synchronously so that indirect blocks
-			 * never point at garbage.
-			 */
-			if (DOINGASYNC(vp))
-				bdwrite(bp);
-			else if ((error = bwrite(bp)) != 0)
+			if ((error = bwrite(bp)) != 0)
 				goto fail;
 		}
 		allocib = &dp->di_ib[indirs[0].in_off];
@@ -882,6 +897,11 @@ retry:
 		}
 		bap = (ufs2_daddr_t *)bp->b_data;
 		nb = bap[indirs[i].in_off];
+		if ((error = UFS_CHECK_BLKNO(mp, ip->i_number, nb,
+		    fs->fs_bsize)) != 0) {
+			brelse(bp);
+			goto fail;
+		}
 		if (i == num)
 			break;
 		i += 1;
@@ -900,17 +920,21 @@ retry:
 		if ((error = ffs_alloc(ip, lbn, pref, (int)fs->fs_bsize,
 		    flags | IO_BUFLOCKED, cred, &newb)) != 0) {
 			brelse(bp);
+			UFS_LOCK(ump);
 			if (DOINGSOFTDEP(vp) && ++reclaimed == 1) {
-				UFS_LOCK(ump);
 				softdep_request_cleanup(fs, vp, cred,
 				    FLUSH_BLOCKS_WAIT);
 				UFS_UNLOCK(ump);
 				goto retry;
 			}
-			if (ppsratecheck(&lastfail, &curfail, 1)) {
+			if (ppsratecheck(&ump->um_last_fullmsg,
+			    &ump->um_secs_fullmsg, 1)) {
+				UFS_UNLOCK(ump);
 				ffs_fserr(fs, ip->i_number, "filesystem full");
 				uprintf("\n%s: write failed, filesystem "
 				    "is full\n", fs->fs_fsmnt);
+			} else {
+				UFS_UNLOCK(ump);
 			}
 			goto fail;
 		}
@@ -928,11 +952,11 @@ retry:
 			softdep_setup_allocindir_meta(nbp, ip, bp,
 			    indirs[i - 1].in_off, nb);
 			bdwrite(nbp);
+		} else if ((flags & IO_SYNC) == 0 && DOINGASYNC(vp)) {
+			if (nbp->b_bufsize == fs->fs_bsize)
+				nbp->b_flags |= B_CLUSTEROK;
+			bdwrite(nbp);
 		} else {
-			/*
-			 * Write synchronously so that indirect blocks
-			 * never point at garbage.
-			 */
 			if ((error = bwrite(nbp)) != 0) {
 				brelse(bp);
 				goto fail;
@@ -973,24 +997,28 @@ retry:
 		 * the file. Otherwise it has been allocated in the metadata
 		 * area, so we want to find our own place out in the data area.
 		 */
-		if (pref == 0 || (lbn > NDADDR && fs->fs_metaspace != 0))
+		if (pref == 0 || (lbn > UFS_NDADDR && fs->fs_metaspace != 0))
 			pref = ffs_blkpref_ufs2(ip, lbn, indirs[i].in_off,
 			    &bap[0]);
 		error = ffs_alloc(ip, lbn, pref, (int)fs->fs_bsize,
 		    flags | IO_BUFLOCKED, cred, &newb);
 		if (error) {
 			brelse(bp);
+			UFS_LOCK(ump);
 			if (DOINGSOFTDEP(vp) && ++reclaimed == 1) {
-				UFS_LOCK(ump);
 				softdep_request_cleanup(fs, vp, cred,
 				    FLUSH_BLOCKS_WAIT);
 				UFS_UNLOCK(ump);
 				goto retry;
 			}
-			if (ppsratecheck(&lastfail, &curfail, 1)) {
+			if (ppsratecheck(&ump->um_last_fullmsg,
+			    &ump->um_secs_fullmsg, 1)) {
+				UFS_UNLOCK(ump);
 				ffs_fserr(fs, ip->i_number, "filesystem full");
 				uprintf("\n%s: write failed, filesystem "
 				    "is full\n", fs->fs_fsmnt);
+			} else {
+				UFS_UNLOCK(ump);
 			}
 			goto fail;
 		}
@@ -1145,7 +1173,7 @@ fail:
 		lbns_remfree++;
 #endif
 		ffs_blkfree(ump, fs, ump->um_devvp, *blkp, fs->fs_bsize,
-		    ip->i_number, vp->v_type, NULL);
+		    ip->i_number, vp->v_type, NULL, SINGLETON_KEY);
 	}
 	return (error);
 }

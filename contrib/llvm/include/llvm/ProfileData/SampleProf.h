@@ -49,7 +49,8 @@ enum class sampleprof_error {
   unsupported_writing_format,
   truncated_name_table,
   not_implemented,
-  counter_overflow
+  counter_overflow,
+  ostream_seek_unsupported
 };
 
 inline std::error_code make_error_code(sampleprof_error E) {
@@ -78,11 +79,29 @@ struct is_error_code_enum<llvm::sampleprof_error> : std::true_type {};
 namespace llvm {
 namespace sampleprof {
 
-static inline uint64_t SPMagic() {
+enum SampleProfileFormat {
+  SPF_None = 0,
+  SPF_Text = 0x1,
+  SPF_Compact_Binary = 0x2,
+  SPF_GCC = 0x3,
+  SPF_Binary = 0xff
+};
+
+static inline uint64_t SPMagic(SampleProfileFormat Format = SPF_Binary) {
   return uint64_t('S') << (64 - 8) | uint64_t('P') << (64 - 16) |
          uint64_t('R') << (64 - 24) | uint64_t('O') << (64 - 32) |
          uint64_t('F') << (64 - 40) | uint64_t('4') << (64 - 48) |
-         uint64_t('2') << (64 - 56) | uint64_t(0xff);
+         uint64_t('2') << (64 - 56) | uint64_t(Format);
+}
+
+// Get the proper representation of a string in the input Format.
+static inline StringRef getRepInFormat(StringRef Name,
+                                       SampleProfileFormat Format,
+                                       std::string &GUIDBuf) {
+  if (Name.empty())
+    return Name;
+  GUIDBuf = std::to_string(Function::getGUID(Name));
+  return (Format == SPF_Compact_Binary) ? StringRef(GUIDBuf) : Name;
 }
 
 static inline uint64_t SPVersion() { return 103; }
@@ -275,6 +294,9 @@ public:
   /// with the maximum total sample count.
   const FunctionSamples *findFunctionSamplesAt(const LineLocation &Loc,
                                                StringRef CalleeName) const {
+    std::string CalleeGUID;
+    CalleeName = getRepInFormat(CalleeName, Format, CalleeGUID);
+
     auto iter = CallsiteSamples.find(Loc);
     if (iter == CallsiteSamples.end())
       return nullptr;
@@ -362,15 +384,16 @@ public:
                             uint64_t Threshold) const {
     if (TotalSamples <= Threshold)
       return;
-    S.insert(Function::getGUID(Name));
+    S.insert(getGUID(Name));
     // Import hot CallTargets, which may not be available in IR because full
     // profile annotation cannot be done until backend compilation in ThinLTO.
     for (const auto &BS : BodySamples)
       for (const auto &TS : BS.second.getCallTargets())
         if (TS.getValue() > Threshold) {
-          Function *Callee = M->getFunction(TS.getKey());
+          const Function *Callee =
+              M->getFunction(getNameInModule(TS.getKey(), M));
           if (!Callee || !Callee->getSubprogram())
-            S.insert(Function::getGUID(TS.getKey()));
+            S.insert(getGUID(TS.getKey()));
         }
     for (const auto &CS : CallsiteSamples)
       for (const auto &NameFS : CS.second)
@@ -381,7 +404,93 @@ public:
   void setName(StringRef FunctionName) { Name = FunctionName; }
 
   /// Return the function name.
-  const StringRef &getName() const { return Name; }
+  StringRef getName() const { return Name; }
+
+  /// Return the original function name if it exists in Module \p M.
+  StringRef getFuncNameInModule(const Module *M) const {
+    return getNameInModule(Name, M);
+  }
+
+  /// Translate \p Name into its original name in Module.
+  /// When the Format is not SPF_Compact_Binary, \p Name needs no translation.
+  /// When the Format is SPF_Compact_Binary, \p Name in current FunctionSamples
+  /// is actually GUID of the original function name. getNameInModule will
+  /// translate \p Name in current FunctionSamples into its original name.
+  /// If the original name doesn't exist in \p M, return empty StringRef.
+  StringRef getNameInModule(StringRef Name, const Module *M) const {
+    if (Format != SPF_Compact_Binary)
+      return Name;
+    // Expect CurrentModule to be initialized by GUIDToFuncNameMapper.
+    if (M != CurrentModule)
+      llvm_unreachable("Input Module should be the same as CurrentModule");
+    auto iter = GUIDToFuncNameMap.find(std::stoull(Name.data()));
+    if (iter == GUIDToFuncNameMap.end())
+      return StringRef();
+    return iter->second;
+  }
+
+  /// Returns the line offset to the start line of the subprogram.
+  /// We assume that a single function will not exceed 65535 LOC.
+  static unsigned getOffset(const DILocation *DIL);
+
+  /// Get the FunctionSamples of the inline instance where DIL originates
+  /// from.
+  ///
+  /// The FunctionSamples of the instruction (Machine or IR) associated to
+  /// \p DIL is the inlined instance in which that instruction is coming from.
+  /// We traverse the inline stack of that instruction, and match it with the
+  /// tree nodes in the profile.
+  ///
+  /// \returns the FunctionSamples pointer to the inlined instance.
+  const FunctionSamples *findFunctionSamples(const DILocation *DIL) const;
+
+  static SampleProfileFormat Format;
+  /// GUIDToFuncNameMap saves the mapping from GUID to the symbol name, for
+  /// all the function symbols defined or declared in CurrentModule.
+  static DenseMap<uint64_t, StringRef> GUIDToFuncNameMap;
+  static Module *CurrentModule;
+
+  class GUIDToFuncNameMapper {
+  public:
+    GUIDToFuncNameMapper(Module &M) {
+      if (Format != SPF_Compact_Binary)
+        return;
+
+      for (const auto &F : M) {
+        StringRef OrigName = F.getName();
+        GUIDToFuncNameMap.insert({Function::getGUID(OrigName), OrigName});
+        /// Local to global var promotion used by optimization like thinlto
+        /// will rename the var and add suffix like ".llvm.xxx" to the
+        /// original local name. In sample profile, the suffixes of function
+        /// names are all stripped. Since it is possible that the mapper is
+        /// built in post-thin-link phase and var promotion has been done,
+        /// we need to add the substring of function name without the suffix
+        /// into the GUIDToFuncNameMap.
+        auto pos = OrigName.find('.');
+        if (pos != StringRef::npos) {
+          StringRef NewName = OrigName.substr(0, pos);
+          GUIDToFuncNameMap.insert({Function::getGUID(NewName), NewName});
+        }
+      }
+      CurrentModule = &M;
+    }
+
+    ~GUIDToFuncNameMapper() {
+      if (Format != SPF_Compact_Binary)
+        return;
+
+      GUIDToFuncNameMap.clear();
+      CurrentModule = nullptr;
+    }
+  };
+
+  // Assume the input \p Name is a name coming from FunctionSamples itself.
+  // If the format is SPF_Compact_Binary, the name is already a GUID and we
+  // don't want to return the GUID of GUID.
+  static uint64_t getGUID(StringRef Name) {
+    return (Format == SPF_Compact_Binary) ? std::stoull(Name.data())
+                                          : Function::getGUID(Name);
+  }
 
 private:
   /// Mangled name of the function.

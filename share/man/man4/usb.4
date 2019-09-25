@@ -24,7 +24,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd April 29, 2017
+.Dd April 24, 2018
 .Dt USB 4
 .Os
 .Sh NAME
@@ -131,6 +131,17 @@ Any interface specific driver can attach to the device.
 .It
 If none is found, generic interface class drivers can attach.
 .El
+.Sh SYSCTL VARIABLES
+The following variables are available as both
+.Xr sysctl 8
+variables and
+.Xr loader 8
+tunables:
+.Bl -tag -width indent
+.It Va hw.usb.debug
+Debug output level, where 0 is debugging disabled and larger values increase
+debug message verbosity.
+Default is 0.
 .Sh SEE ALSO
 The
 .Tn USB

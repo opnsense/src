@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 1982, 1986 The Regents of the University of California.
  * Copyright (c) 1989, 1990 William Jolitz
  * Copyright (c) 1994 John Dyson
@@ -39,8 +41,6 @@
  *	from: @(#)vm_machdep.c	7.3 (Berkeley) 5/13/91
  *	Utah $Hdr: vm_machdep.c 1.16.1.1 89/06/23$
  */
-
-#include "opt_compat.h"
 
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
@@ -105,11 +105,6 @@ cpu_fork(struct thread *td1, struct proc *p2, struct thread *td2, int flags)
 	/* Point the pcb to the top of the stack */
 	pcb2 = (struct pcb *)
 	    (td2->td_kstack + td2->td_kstack_pages * PAGE_SIZE) - 1;
-#ifdef __XSCALE__
-#ifndef CPU_XSCALE_CORE3
-	pmap_use_minicache(td2->td_kstack, td2->td_kstack_pages * PAGE_SIZE);
-#endif
-#endif
 #ifdef VFP
 	/* Store actual state of VFP */
 	if (curthread == td1) {
@@ -227,7 +222,7 @@ cpu_set_syscall_retval(struct thread *td, int error)
 		/* nothing to do */
 		break;
 	default:
-		frame->tf_r0 = error;
+		frame->tf_r0 = SV_ABI_ERRNO(td->td_proc, error);
 		frame->tf_spsr |= PSR_C;    /* carry bit */
 		break;
 	}
@@ -311,12 +306,6 @@ cpu_thread_alloc(struct thread *td)
 	 * the ARM EABI.
 	 */
 	td->td_frame = (struct trapframe *)((caddr_t)td->td_pcb) - 1;
-
-#ifdef __XSCALE__
-#ifndef CPU_XSCALE_CORE3
-	pmap_use_minicache(td->td_kstack, td->td_kstack_pages * PAGE_SIZE);
-#endif
-#endif
 }
 
 void
@@ -358,3 +347,17 @@ cpu_exit(struct thread *td)
 {
 }
 
+bool
+cpu_exec_vmspace_reuse(struct proc *p __unused, vm_map_t map __unused)
+{
+
+	return (true);
+}
+
+int
+cpu_procctl(struct thread *td __unused, int idtype __unused, id_t id __unused,
+    int com __unused, void *data __unused)
+{
+
+	return (EINVAL);
+}

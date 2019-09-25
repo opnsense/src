@@ -10,10 +10,6 @@
 #ifndef liblldb_CommandObjectScript_h_
 #define liblldb_CommandObjectScript_h_
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
 #include "lldb/Interpreter/CommandObject.h"
 
 namespace lldb_private {
@@ -30,7 +26,7 @@ public:
   ~CommandObjectScript() override;
 
 protected:
-  bool DoExecute(const char *command, CommandReturnObject &result) override;
+  bool DoExecute(llvm::StringRef command, CommandReturnObject &result) override;
 };
 
 } // namespace lldb_private

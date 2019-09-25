@@ -5,12 +5,15 @@ SHLIBDIR?=	/lib/casper
 .include <src.opts.mk>
 
 PACKAGE=libcasper
-LIB=	cap_sysctl
 
-SHLIB_MAJOR=	0
+SHLIB_MAJOR=	1
 INCSDIR?=	${INCLUDEDIR}/casper
 
+.if ${MK_CASPER} != "no"
+SHLIB=	cap_sysctl
+
 SRCS=	cap_sysctl.c
+.endif
 
 INCS=	cap_sysctl.h
 
@@ -18,8 +21,12 @@ LIBADD=	nv
 
 CFLAGS+=-I${.CURDIR}
 
-.if ${MK_TESTS} != "no"
-SUBDIR+=	tests
-.endif
+HAS_TESTS=
+SUBDIR.${MK_TESTS}+= tests
+
+MAN+=	cap_sysctl.3
+
+MLINKS+=cap_sysctl.3 libcap_sysctl.3
+MLINKS+=cap_sysctl.3 cap_sysctlbyname.3
 
 .include <bsd.lib.mk>

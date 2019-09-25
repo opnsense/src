@@ -88,10 +88,10 @@ vdev_geom_set_rotation_rate(vdev_t *vd, struct g_consumer *cp)
 	uint16_t rate;
 
 	error = g_getattr("GEOM::rotation_rate", cp, &rate);
-	if (error == 0)
-		vd->vdev_rotation_rate = rate;
+	if (error == 0 && rate == 1)
+		vd->vdev_nonrot = B_TRUE;
 	else
-		vd->vdev_rotation_rate = VDEV_RATE_UNKNOWN;
+		vd->vdev_nonrot = B_FALSE;
 }
 
 static void
@@ -154,6 +154,29 @@ vdev_geom_attrchanged(struct g_consumer *cp, const char *attr)
 			vdev_geom_set_physpath(vd, cp, /*null_update*/B_TRUE);
 			return;
 		}
+	}
+}
+
+static void
+vdev_geom_resize(struct g_consumer *cp)
+{
+	struct consumer_priv_t *priv;
+	struct consumer_vdev_elem *elem;
+	spa_t *spa;
+	vdev_t *vd;
+
+	priv = (struct consumer_priv_t *)&cp->private;
+	if (SLIST_EMPTY(priv))
+		return;
+
+	SLIST_FOREACH(elem, priv, elems) {
+		vd = elem->vd;
+		if (vd->vdev_state != VDEV_STATE_HEALTHY)
+			continue;
+		spa = vd->vdev_spa;
+		if (!spa->spa_autoexpand)
+			continue;
+		vdev_online(spa, vd->vdev_guid, ZFS_ONLINE_EXPAND, NULL);
 	}
 }
 
@@ -229,6 +252,7 @@ vdev_geom_attach(struct g_provider *pp, vdev_t *vd, boolean_t sanity)
 		gp = g_new_geomf(&zfs_vdev_class, "zfs::vdev");
 		gp->orphan = vdev_geom_orphan;
 		gp->attrchanged = vdev_geom_attrchanged;
+		gp->resize = vdev_geom_resize;
 		cp = g_new_consumer(gp);
 		error = g_attach(cp, pp);
 		if (error != 0) {
@@ -415,9 +439,10 @@ vdev_geom_io(struct g_consumer *cp, int *cmds, void **datas, off_t *offsets,
  * least one valid label was found.
  */
 static int
-vdev_geom_read_config(struct g_consumer *cp, nvlist_t **config)
+vdev_geom_read_config(struct g_consumer *cp, nvlist_t **configp)
 {
 	struct g_provider *pp;
+	nvlist_t *config;
 	vdev_phys_t *vdev_lists[VDEV_LABELS];
 	char *buf;
 	size_t buflen;
@@ -442,7 +467,6 @@ vdev_geom_read_config(struct g_consumer *cp, nvlist_t **config)
 
 	buflen = sizeof(vdev_lists[0]->vp_nvlist);
 
-	*config = NULL;
 	/* Create all of the IO requests */
 	for (l = 0; l < VDEV_LABELS; l++) {
 		cmds[l] = BIO_READ;
@@ -458,6 +482,7 @@ vdev_geom_read_config(struct g_consumer *cp, nvlist_t **config)
 	    VDEV_LABELS);
 
 	/* Parse the labels */
+	config = *configp = NULL;
 	nlabels = 0;
 	for (l = 0; l < VDEV_LABELS; l++) {
 		if (errors[l] != 0)
@@ -465,24 +490,26 @@ vdev_geom_read_config(struct g_consumer *cp, nvlist_t **config)
 
 		buf = vdev_lists[l]->vp_nvlist;
 
-		if (nvlist_unpack(buf, buflen, config, 0) != 0)
+		if (nvlist_unpack(buf, buflen, &config, 0) != 0)
 			continue;
 
-		if (nvlist_lookup_uint64(*config, ZPOOL_CONFIG_POOL_STATE,
+		if (nvlist_lookup_uint64(config, ZPOOL_CONFIG_POOL_STATE,
 		    &state) != 0 || state > POOL_STATE_L2CACHE) {
-			nvlist_free(*config);
-			*config = NULL;
+			nvlist_free(config);
 			continue;
 		}
 
 		if (state != POOL_STATE_SPARE &&
 		    state != POOL_STATE_L2CACHE &&
-		    (nvlist_lookup_uint64(*config, ZPOOL_CONFIG_POOL_TXG,
+		    (nvlist_lookup_uint64(config, ZPOOL_CONFIG_POOL_TXG,
 		    &txg) != 0 || txg == 0)) {
-			nvlist_free(*config);
-			*config = NULL;
+			nvlist_free(config);
 			continue;
 		}
+
+		if (*configp != NULL)
+			nvlist_free(*configp);
+		*configp = config;
 
 		nlabels++;
 	}
@@ -689,10 +716,12 @@ vdev_geom_attach_by_guids(vdev_t *vd)
 	struct g_geom *gp;
 	struct g_provider *pp, *best_pp;
 	struct g_consumer *cp;
+	const char *vdpath;
 	enum match match, best_match;
 
 	g_topology_assert();
 
+	vdpath = vd->vdev_path + sizeof("/dev/") - 1;
 	cp = NULL;
 	best_pp = NULL;
 	best_match = NO_MATCH;
@@ -707,6 +736,10 @@ vdev_geom_attach_by_guids(vdev_t *vd)
 				if (match > best_match) {
 					best_match = match;
 					best_pp = pp;
+				} else if (match == best_match) {
+					if (strcmp(pp->name, vdpath) == 0) {
+						best_pp = pp;
+					}
 				}
 				if (match == FULL_MATCH)
 					goto out;
@@ -791,7 +824,7 @@ vdev_geom_open(vdev_t *vd, uint64_t *psize, uint64_t *max_psize,
 	/*
 	 * We must have a pathname, and it must be absolute.
 	 */
-	if (vd->vdev_path == NULL || vd->vdev_path[0] != '/') {
+	if (vd->vdev_path == NULL || strncmp(vd->vdev_path, "/dev/", 5) != 0) {
 		vd->vdev_stat.vs_aux = VDEV_AUX_BAD_LABEL;
 		return (EINVAL);
 	}
@@ -1094,7 +1127,6 @@ sendreq:
 		break;
 	case ZIO_TYPE_IOCTL:
 		bp->bio_cmd = BIO_FLUSH;
-		bp->bio_flags |= BIO_ORDERED;
 		bp->bio_data = NULL;
 		bp->bio_offset = cp->provider->mediasize;
 		bp->bio_length = 0;
@@ -1147,9 +1179,11 @@ vdev_ops_t vdev_geom_ops = {
 	vdev_geom_io_start,
 	vdev_geom_io_done,
 	NULL,
+	NULL,
 	vdev_geom_hold,
 	vdev_geom_rele,
 	NULL,
+	vdev_default_xlate,
 	VDEV_TYPE_DISK,		/* name of this vdev type */
 	B_TRUE			/* leaf vdev */
 };

@@ -40,7 +40,6 @@ WORLDDIR?=	${.CURDIR}/..
 PORTSDIR?=	/usr/ports
 DOCDIR?=	/usr/doc
 RELNOTES_LANG?= en_US.ISO8859-1
-KERNCONF?=	HARDENEDBSD
 
 .if !defined(TARGET) || empty(TARGET)
 TARGET=		${MACHINE}
@@ -72,7 +71,7 @@ VOLUME_LABEL=	${REVISION:C/[.-]/_/g}_${BRANCH:C/[.-]/_/g}_${TARGET_ARCH}
 .endif
 
 .if !defined(VOLUME_LABEL) || empty(VOLUME_LABEL)
-VOLUME_LABEL=	HardenedBSD_Install
+VOLUME_LABEL=	FreeBSD_Install
 .endif
 
 .if !exists(${DOCDIR})
@@ -91,6 +90,15 @@ EXTRA_PACKAGES+= src.txz
 .endif
 .if !defined(NODOC)
 EXTRA_PACKAGES+= reldoc
+. if !defined(SVN) || empty(SVN)
+.  for S in svn svnlite
+.   for D in /usr/local/bin /usr/bin
+.    if(exists(${D}/${S}))
+SVN?=	${D}/${S}
+.    endif
+.   endfor
+.  endfor
+. endif
 .endif
 
 RELEASE_TARGETS= ftp
@@ -133,7 +141,8 @@ base.txz:
 	cd ${WORLDDIR} && ${IMAKE} distributeworld DISTDIR=${.OBJDIR}/${DISTDIR}
 # Set up mergemaster root database
 	sh ${.CURDIR}/scripts/mm-mtree.sh -m ${WORLDDIR} -F \
-	    "TARGET_ARCH=${TARGET_ARCH} TARGET=${TARGET}" -D "${.OBJDIR}/${DISTDIR}/base"
+	    "TARGET_ARCH=${TARGET_ARCH} TARGET=${TARGET} ${.MAKE.JOBS:D-j${.MAKE.JOBS}}" \
+	    -D "${.OBJDIR}/${DISTDIR}/base"
 	etcupdate extract -B -M "TARGET_ARCH=${TARGET_ARCH} TARGET=${TARGET}" \
 	    -s ${WORLDDIR} -d "${.OBJDIR}/${DISTDIR}/base/var/db/etcupdate"
 # Package all components
@@ -142,8 +151,7 @@ base.txz:
 
 kernel.txz:
 	mkdir -p ${DISTDIR}
-	cd ${WORLDDIR} && ${IMAKE} distributekernel packagekernel \
-		DISTDIR=${.OBJDIR}/${DISTDIR} KERNCONF=${KERNCONF}
+	cd ${WORLDDIR} && ${IMAKE} distributekernel packagekernel DISTDIR=${.OBJDIR}/${DISTDIR}
 	mv ${DISTDIR}/kernel*.txz .
 
 src.txz:
@@ -163,14 +171,22 @@ ports.txz:
 	    ${XZ_CMD} > ${.OBJDIR}/ports.txz
 
 reldoc:
-	cd ${.CURDIR}/doc && ${MAKE} all install clean 'FORMATS=html txt' \
-	    INSTALL_COMPRESSED='' URLS_ABSOLUTE=YES DOCDIR=${.OBJDIR}/rdoc
+	cd ${DOCDIR}/en_US.ISO8859-1/htdocs/releases/${REVISION}R && \
+	    env MAN4DIR=${WORLDDIR}/share/man/man4 \
+	    SVN=${SVN} \
+	    _BRANCH=${BRANCH} \
+	    ${MAKE} all install clean "FORMATS=html txt" \
+	    INSTALL_COMPRESSED='' URLS_ABSOLUTE=YES DOCDIR=${.OBJDIR}/rdoc \
+	    WEBDIR=${DOCDIR} DESTDIR=${.OBJDIR}/rdoc
 	mkdir -p reldoc
 .for i in hardware readme relnotes errata
-	ln -f rdoc/${RELNOTES_LANG}/${i}/article.txt reldoc/${i:tu}.TXT
-	ln -f rdoc/${RELNOTES_LANG}/${i}/article.html reldoc/${i:tu}.HTM
+	ln -f ${.OBJDIR}/rdoc/${i:tl}.txt \
+		reldoc/${i:tu}.TXT
+	ln -f ${.OBJDIR}/rdoc/${i:tl}.html \
+		reldoc/${i:tu}.HTML
 .endfor
-	cp rdoc/${RELNOTES_LANG}/readme/docbook.css reldoc
+	cp ${.OBJDIR}/rdoc/docbook.css \
+		reldoc/
 
 disc1: packagesystem
 # Install system
@@ -180,10 +196,11 @@ disc1: packagesystem
 	    MK_INSTALLLIB=no MK_LIB32=no MK_MAIL=no \
 	    MK_NCP=no MK_TOOLCHAIN=no MK_PROFILE=no \
 	    MK_RESCUE=no MK_DICT=no \
-	    MK_KERNEL_SYMBOLS=no MK_TESTS=no MK_DEBUG_FILES=no
+	    MK_KERNEL_SYMBOLS=no MK_TESTS=no MK_DEBUG_FILES=no \
+	    -DDB_FROM_SRC
 # Copy distfiles
 	mkdir -p ${.TARGET}/usr/freebsd-dist
-	for dist in MANIFEST $$(ls *.txz | grep -vE -- '(base|lib32|kernel)-dbg'); \
+	for dist in MANIFEST $$(ls *.txz | grep -vE -- '(base|lib32)-dbg'); \
 	    do cp $${dist} ${.TARGET}/usr/freebsd-dist; \
 	done
 # Copy documentation, if generated
@@ -195,11 +212,8 @@ disc1: packagesystem
 	echo sendmail_enable=\"NONE\" > ${.TARGET}/etc/rc.conf
 	echo hostid_enable=\"NO\" >> ${.TARGET}/etc/rc.conf
 	echo vfs.mountroot.timeout=\"10\" >> ${.TARGET}/boot/loader.conf
+	echo kernels_autodetect=\"NO\" >> ${.TARGET}/boot/loader.conf
 	cp ${.CURDIR}/rc.local ${.TARGET}/etc
-	# XXXOP - try to work around installer lockup on random dev in a virtual machine
-	dd if=/dev/random of=${.TARGET}/boot/entropy bs=4k count=1
-	chown 0:0 ${.TARGET}/boot/entropy
-	chmod 0600 ${.TARGET}/boot/entropy
 	touch ${.TARGET}
 
 bootonly: packagesystem
@@ -207,11 +221,12 @@ bootonly: packagesystem
 	mkdir -p ${.TARGET}
 	cd ${WORLDDIR} && ${IMAKE} installkernel installworld distribution \
 	    DESTDIR=${.OBJDIR}/${.TARGET} MK_AMD=no MK_AT=no \
-	    MK_GAMES=no MK_GROFF=no \
+	    MK_GAMES=no \
 	    MK_INSTALLLIB=no MK_LIB32=no MK_MAIL=no \
 	    MK_NCP=no MK_TOOLCHAIN=no MK_PROFILE=no \
 	    MK_RESCUE=no MK_DICT=no \
-	    MK_KERNEL_SYMBOLS=no MK_TESTS=no MK_DEBUG_FILES=no
+	    MK_KERNEL_SYMBOLS=no MK_TESTS=no MK_DEBUG_FILES=no \
+	    -DDB_FROM_SRC
 # Copy manifest only (no distfiles) to get checksums
 	mkdir -p ${.TARGET}/usr/freebsd-dist
 	cp MANIFEST ${.TARGET}/usr/freebsd-dist
@@ -224,18 +239,16 @@ bootonly: packagesystem
 	echo sendmail_enable=\"NONE\" > ${.TARGET}/etc/rc.conf
 	echo hostid_enable=\"NO\" >> ${.TARGET}/etc/rc.conf
 	echo vfs.mountroot.timeout=\"10\" >> ${.TARGET}/boot/loader.conf
+	echo kernels_autodetect=\"NO\" >> ${.TARGET}/boot/loader.conf
 	cp ${.CURDIR}/rc.local ${.TARGET}/etc
-	# XXXOP - try to work around installer lockup on random dev in a virtual machine
-	dd if=/dev/random of=${.TARGET}/boot/entropy bs=4k count=1
-	chown 0:0 ${.TARGET}/boot/entropy
-	chmod 0600 ${.TARGET}/boot/entropy
 
 dvd: packagesystem
 # Install system
 	mkdir -p ${.TARGET}
 	cd ${WORLDDIR} && ${IMAKE} installkernel installworld distribution \
 		DESTDIR=${.OBJDIR}/${.TARGET} MK_RESCUE=no MK_KERNEL_SYMBOLS=no \
-		MK_TESTS=no MK_DEBUG_FILES=no
+		MK_TESTS=no MK_DEBUG_FILES=no \
+		-DDB_FROM_SRC
 # Copy distfiles
 	mkdir -p ${.TARGET}/usr/freebsd-dist
 	for dist in MANIFEST $$(ls *.txz | grep -v -- '(base|lib32)-dbg'); \
@@ -250,11 +263,8 @@ dvd: packagesystem
 	echo sendmail_enable=\"NONE\" > ${.TARGET}/etc/rc.conf
 	echo hostid_enable=\"NO\" >> ${.TARGET}/etc/rc.conf
 	echo vfs.mountroot.timeout=\"10\" >> ${.TARGET}/boot/loader.conf
+	echo kernels_autodetect=\"NO\" >> ${.TARGET}/boot/loader.conf
 	cp ${.CURDIR}/rc.local ${.TARGET}/etc
-	# XXXOP - try to work around installer lockup on random dev in a virtual machine
-	dd if=/dev/random of=${.TARGET}/boot/entropy bs=4k count=1
-	chown 0:0 ${.TARGET}/boot/entropy
-	chmod 0600 ${.TARGET}/boot/entropy
 	touch ${.TARGET}
 
 release.iso: disc1.iso

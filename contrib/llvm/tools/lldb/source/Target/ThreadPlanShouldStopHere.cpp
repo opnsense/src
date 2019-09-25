@@ -7,10 +7,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
 #include "lldb/Target/ThreadPlanShouldStopHere.h"
 #include "lldb/Symbol/Symbol.h"
 #include "lldb/Target/RegisterContext.h"
@@ -43,11 +39,11 @@ ThreadPlanShouldStopHere::ThreadPlanShouldStopHere(
 ThreadPlanShouldStopHere::~ThreadPlanShouldStopHere() = default;
 
 bool ThreadPlanShouldStopHere::InvokeShouldStopHereCallback(
-    FrameComparison operation) {
+    FrameComparison operation, Status &status) {
   bool should_stop_here = true;
   if (m_callbacks.should_stop_here_callback) {
     should_stop_here = m_callbacks.should_stop_here_callback(
-        m_owner, m_flags, operation, m_baton);
+        m_owner, m_flags, operation, status, m_baton);
     Log *log(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_STEP));
     if (log) {
       lldb::addr_t current_addr =
@@ -63,7 +59,7 @@ bool ThreadPlanShouldStopHere::InvokeShouldStopHereCallback(
 
 bool ThreadPlanShouldStopHere::DefaultShouldStopHereCallback(
     ThreadPlan *current_plan, Flags &flags, FrameComparison operation,
-    void *baton) {
+    Status &status, void *baton) {
   bool should_stop_here = true;
   StackFrame *frame = current_plan->GetThread().GetStackFrameAtIndex(0).get();
   if (!frame)
@@ -86,8 +82,8 @@ bool ThreadPlanShouldStopHere::DefaultShouldStopHereCallback(
   // Always avoid code with line number 0.
   // FIXME: At present the ShouldStop and the StepFromHere calculate this
   // independently.  If this ever
-  // becomes expensive (this one isn't) we can try to have this set a state that
-  // the StepFromHere can use.
+  // becomes expensive (this one isn't) we can try to have this set a state
+  // that the StepFromHere can use.
   if (frame) {
     SymbolContext sc;
     sc = frame->GetSymbolContext(eSymbolContextLineEntry);
@@ -100,13 +96,12 @@ bool ThreadPlanShouldStopHere::DefaultShouldStopHereCallback(
 
 ThreadPlanSP ThreadPlanShouldStopHere::DefaultStepFromHereCallback(
     ThreadPlan *current_plan, Flags &flags, FrameComparison operation,
-    void *baton) {
+    Status &status, void *baton) {
   const bool stop_others = false;
   const size_t frame_index = 0;
   ThreadPlanSP return_plan_sp;
-  // If we are stepping through code at line number 0, then we need to step over
-  // this range.  Otherwise
-  // we will step out.
+  // If we are stepping through code at line number 0, then we need to step
+  // over this range.  Otherwise we will step out.
   Log *log(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_STEP));
 
   StackFrame *frame = current_plan->GetThread().GetStackFrameAtIndex(0).get();
@@ -119,8 +114,7 @@ ThreadPlanSP ThreadPlanShouldStopHere::DefaultStepFromHereCallback(
     AddressRange range = sc.line_entry.range;
 
     // If the whole function is marked line 0 just step out, that's easier &
-    // faster than continuing
-    // to step through it.
+    // faster than continuing to step through it.
     bool just_step_out = false;
     if (sc.symbol && sc.symbol->ValueIsAddress()) {
       Address symbol_end = sc.symbol->GetAddress();
@@ -139,8 +133,8 @@ ThreadPlanSP ThreadPlanShouldStopHere::DefaultStepFromHereCallback(
                     "Queueing StepInRange plan to step through line 0 code.");
 
       return_plan_sp = current_plan->GetThread().QueueThreadPlanForStepInRange(
-          false, range, sc, NULL, eOnlyDuringStepping, eLazyBoolCalculate,
-          eLazyBoolNo);
+          false, range, sc, NULL, eOnlyDuringStepping, status,
+          eLazyBoolCalculate, eLazyBoolNo);
     }
   }
 
@@ -148,24 +142,25 @@ ThreadPlanSP ThreadPlanShouldStopHere::DefaultStepFromHereCallback(
     return_plan_sp =
         current_plan->GetThread().QueueThreadPlanForStepOutNoShouldStop(
             false, nullptr, true, stop_others, eVoteNo, eVoteNoOpinion,
-            frame_index, true);
+            frame_index, status, true);
   return return_plan_sp;
 }
 
 ThreadPlanSP ThreadPlanShouldStopHere::QueueStepOutFromHerePlan(
-    lldb_private::Flags &flags, lldb::FrameComparison operation) {
+    lldb_private::Flags &flags, lldb::FrameComparison operation,
+    Status &status) {
   ThreadPlanSP return_plan_sp;
   if (m_callbacks.step_from_here_callback) {
-    return_plan_sp =
-        m_callbacks.step_from_here_callback(m_owner, flags, operation, m_baton);
+    return_plan_sp = m_callbacks.step_from_here_callback(
+        m_owner, flags, operation, status, m_baton);
   }
   return return_plan_sp;
 }
 
 lldb::ThreadPlanSP ThreadPlanShouldStopHere::CheckShouldStopHereAndQueueStepOut(
-    lldb::FrameComparison operation) {
-  if (!InvokeShouldStopHereCallback(operation))
-    return QueueStepOutFromHerePlan(m_flags, operation);
+    lldb::FrameComparison operation, Status &status) {
+  if (!InvokeShouldStopHereCallback(operation, status))
+    return QueueStepOutFromHerePlan(m_flags, operation, status);
   else
     return ThreadPlanSP();
 }

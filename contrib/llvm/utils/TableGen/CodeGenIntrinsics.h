@@ -15,7 +15,7 @@
 #define LLVM_UTILS_TABLEGEN_CODEGENINTRINSICS_H
 
 #include "SDNodeProperties.h"
-#include "llvm/CodeGen/MachineValueType.h"
+#include "llvm/Support/MachineValueType.h"
 #include <string>
 #include <vector>
 
@@ -123,6 +123,9 @@ struct CodeGenIntrinsic {
 
   /// True if the intrinsic is no-return.
   bool isNoReturn;
+
+  /// True if the intrinsic is cold.
+  bool isCold;
 
   /// True if the intrinsic is marked as convergent.
   bool isConvergent;

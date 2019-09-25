@@ -42,6 +42,7 @@ SRCS=		dt_aggregate.c \
 		dt_string.c \
 		dt_strtab.c \
 		dt_subr.c \
+		dt_sugar.c \
 		dt_work.c \
 		dt_xlator.c \
 		gmatch.c
@@ -50,11 +51,13 @@ DSRCS=		errno.d			\
 		io.d			\
 		ip.d			\
 		psinfo.d		\
+		sctp.d			\
 		siftr.d			\
 		signal.d		\
 		tcp.d			\
 		socket.d		\
 		udp.d			\
+		udplite.d		\
 		unistd.d
 
 FILES=		${DSRCS}

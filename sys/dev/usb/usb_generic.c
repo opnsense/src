@@ -1,5 +1,7 @@
 /* $FreeBSD$ */
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2008 Hans Petter Selasky. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -181,7 +183,8 @@ ugen_open(struct usb_fifo *f, int fflags)
 	struct usb_endpoint_descriptor *ed = ep->edesc;
 	uint8_t type;
 
-	DPRINTFN(6, "flag=0x%x\n", fflags);
+	DPRINTFN(1, "flag=0x%x pid=%d name=%s\n", fflags,
+	    curthread->td_proc->p_pid, curthread->td_proc->p_comm);
 
 	mtx_lock(f->priv_mtx);
 	switch (usbd_get_speed(f->udev)) {
@@ -211,7 +214,9 @@ ugen_open(struct usb_fifo *f, int fflags)
 static void
 ugen_close(struct usb_fifo *f, int fflags)
 {
-	DPRINTFN(6, "flag=0x%x\n", fflags);
+
+	DPRINTFN(1, "flag=0x%x pid=%d name=%s\n", fflags,
+	    curthread->td_proc->p_pid, curthread->td_proc->p_comm);
 
 	/* cleanup */
 
@@ -236,7 +241,7 @@ ugen_open_pipe_write(struct usb_fifo *f)
 	struct usb_endpoint *ep = usb_fifo_softc(f);
 	struct usb_endpoint_descriptor *ed = ep->edesc;
 
-	mtx_assert(f->priv_mtx, MA_OWNED);
+	USB_MTX_ASSERT(f->priv_mtx, MA_OWNED);
 
 	if (f->xfer[0] || f->xfer[1]) {
 		/* transfers are already opened */
@@ -305,7 +310,7 @@ ugen_open_pipe_read(struct usb_fifo *f)
 	struct usb_endpoint *ep = usb_fifo_softc(f);
 	struct usb_endpoint_descriptor *ed = ep->edesc;
 
-	mtx_assert(f->priv_mtx, MA_OWNED);
+	USB_MTX_ASSERT(f->priv_mtx, MA_OWNED);
 
 	if (f->xfer[0] || f->xfer[1]) {
 		/* transfers are already opened */
@@ -1214,6 +1219,40 @@ complete:
 }
 
 static int
+ugen_fs_copy_out_cancelled(struct usb_fs_endpoint *fs_ep_uptr)
+{
+	struct usb_fs_endpoint fs_ep;
+	int error;
+
+	error = copyin(fs_ep_uptr, &fs_ep, sizeof(fs_ep));
+	if (error)
+		return (error);
+
+	fs_ep.status = USB_ERR_CANCELLED;
+	fs_ep.aFrames = 0;
+	fs_ep.isoc_time_complete = 0;
+
+	/* update "aFrames" */
+	error = copyout(&fs_ep.aFrames, &fs_ep_uptr->aFrames,
+	    sizeof(fs_ep.aFrames));
+	if (error)
+		goto done;
+
+	/* update "isoc_time_complete" */
+	error = copyout(&fs_ep.isoc_time_complete,
+	    &fs_ep_uptr->isoc_time_complete,
+	    sizeof(fs_ep.isoc_time_complete));
+	if (error)
+		goto done;
+
+	/* update "status" */
+	error = copyout(&fs_ep.status, &fs_ep_uptr->status,
+	    sizeof(fs_ep.status));
+done:
+	return (error);
+}
+
+static int
 ugen_fs_copy_out(struct usb_fifo *f, uint8_t ep_index)
 {
 	struct usb_device_request *req;
@@ -1238,7 +1277,12 @@ ugen_fs_copy_out(struct usb_fifo *f, uint8_t ep_index)
 		return (EINVAL);
 
 	mtx_lock(f->priv_mtx);
-	if (usbd_transfer_pending(xfer)) {
+	if (!xfer->flags_int.transferring &&
+	    !xfer->flags_int.started) {
+		mtx_unlock(f->priv_mtx);
+		DPRINTF("Returning fake cancel event\n");
+		return (ugen_fs_copy_out_cancelled(f->fs_ep_ptr + ep_index));
+	} else if (usbd_transfer_pending(xfer)) {
 		mtx_unlock(f->priv_mtx);
 		return (EBUSY);		/* should not happen */
 	}
@@ -1359,6 +1403,7 @@ complete:
 	    sizeof(fs_ep.isoc_time_complete));
 	if (error)
 		goto done;
+
 	/* update "status" */
 	error = copyout(&fs_ep.status, &fs_ep_uptr->status,
 	    sizeof(fs_ep.status));
@@ -1447,12 +1492,15 @@ ugen_ioctl(struct usb_fifo *f, u_long cmd, void *addr, int fflags)
 		xfer = f->fs_xfer[u.pstart->ep_index];
 		if (usbd_transfer_pending(xfer)) {
 			usbd_transfer_stop(xfer);
+
 			/*
 			 * Check if the USB transfer was stopped
-			 * before it was even started. Else a cancel
-			 * callback will be pending.
+			 * before it was even started and fake a
+			 * cancel event.
 			 */
-			if (!xfer->flags_int.transferring) {
+			if (!xfer->flags_int.transferring &&
+			    !xfer->flags_int.started) {
+				DPRINTF("Issuing fake completion event\n");
 				ugen_fs_set_complete(xfer->priv_sc,
 				    USB_P2U(xfer->priv_fifo));
 			}

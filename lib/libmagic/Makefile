@@ -8,12 +8,14 @@ CONTRDIR=	${SRCTOP}/contrib/file
 
 LIB=	magic
 SHLIB_MAJOR=	4
+.if !make(build-tools)
 LIBADD=	z
+.endif
 MAN=	libmagic.3 magic.5
 
-SRCS=	apprentice.c apptype.c ascmagic.c cdf.c cdf_time.c compress.c \
-	der.c encoding.c fsmagic.c funcs.c \
-	is_tar.c magic.c print.c readcdf.c readelf.c softmagic.c
+SRCS=	apprentice.c apptype.c ascmagic.c buffer.c cdf.c cdf_time.c \
+	compress.c der.c encoding.c fsmagic.c funcs.c \
+	is_tar.c magic.c print.c readcdf.c readelf.c seccomp.c softmagic.c
 INCS=	magic.h
 
 MAGICPATH?=	/usr/share/misc
@@ -41,7 +43,7 @@ magic.mgc: mkmagic magic
 CLEANFILES+=	mkmagic
 build-tools: mkmagic
 mkmagic: apprentice.c cdf_time.c encoding.c funcs.c magic.c print.c ${INCS} ${BUILD_TOOLS_META}
-	${CC} ${CFLAGS} -DCOMPILE_ONLY ${LDFLAGS} -o ${.TARGET} ${.ALLSRC:N*.h} \
+	${CC:N${CCACHE_BIN}} ${CFLAGS} -DCOMPILE_ONLY ${LDFLAGS} -o ${.TARGET} ${.ALLSRC:N*.h} \
 	    ${LDADD}
 
 FILEVER!= awk '$$1 == "\#define" && $$2 == "VERSION" { print $$3; exit }' \

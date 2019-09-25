@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (C) 2018 Vincenzo Maffione
  * All rights reserved.
  *
@@ -23,6 +25,7 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
+
 /* $FreeBSD$ */
 
 #if defined(__FreeBSD__)
@@ -65,6 +68,8 @@ nmreq_register_from_legacy(struct nmreq *nmr, struct nmreq_header *hdr,
 	req->nr_rx_slots = nmr->nr_rx_slots;
 	req->nr_tx_rings = nmr->nr_tx_rings;
 	req->nr_rx_rings = nmr->nr_rx_rings;
+	req->nr_host_tx_rings = 0;
+	req->nr_host_rx_rings = 0;
 	req->nr_mem_id = nmr->nr_arg2;
 	req->nr_ringid = nmr->nr_ringid & NETMAP_RING_MASK;
 	if ((nmr->nr_flags & NR_REG_MASK) == NR_REG_DEFAULT) {
@@ -246,6 +251,8 @@ nmreq_from_legacy(struct nmreq *nmr, u_long ioctl_cmd)
 			req->nr_rx_slots = nmr->nr_rx_slots;
 			req->nr_tx_rings = nmr->nr_tx_rings;
 			req->nr_rx_rings = nmr->nr_rx_rings;
+			req->nr_host_tx_rings = 0;
+			req->nr_host_rx_rings = 0;
 			req->nr_mem_id = nmr->nr_arg2;
 		}
 		break;
@@ -364,8 +371,8 @@ netmap_ioctl_legacy(struct netmap_priv_d *priv, u_long cmd, caddr_t data,
 		struct nmreq *nmr = (struct nmreq *) data;
 		struct nmreq_header *hdr;
 
-		if (nmr->nr_version < 11) {
-			nm_prerr("Minimum supported API is 11 (requested %u)",
+		if (nmr->nr_version < 14) {
+			nm_prerr("Minimum supported API is 14 (requested %u)",
 			    nmr->nr_version);
 			return EINVAL;
 		}

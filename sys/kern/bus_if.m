@@ -66,6 +66,16 @@ CODE {
 
 		panic("bus_add_child is not implemented");
 	}
+
+	static int null_reset_post(device_t bus, device_t dev)
+	{
+		return (0);
+	}
+
+	static int null_reset_prepare(device_t bus, device_t dev)
+	{
+		return (0);
+	}
 };
 
 /**
@@ -206,7 +216,7 @@ METHOD void driver_added {
 /**
  * @brief Create a new child device
  *
- * For busses which use use drivers supporting DEVICE_IDENTIFY() to
+ * For buses which use use drivers supporting DEVICE_IDENTIFY() to
  * enumerate their devices, this method is used to create new
  * device instances. The new device will be added after the last
  * existing child with the same order. Implementations of bus_add_child
@@ -472,10 +482,48 @@ METHOD int teardown_intr {
 };
 
 /**
+ * @brief Suspend an interrupt handler
+ *
+ * This method is used to mark a handler as suspended in the case
+ * that the associated device is powered down and cannot be a source
+ * for the, typically shared, interrupt.
+ * The value of @p _irq must be the interrupt resource passed
+ * to a previous call to BUS_SETUP_INTR().
+ * 
+ * @param _dev		the parent device of @p _child
+ * @param _child	the device which allocated the resource
+ * @param _irq		the resource representing the interrupt
+ */
+METHOD int suspend_intr {
+	device_t	_dev;
+	device_t	_child;
+	struct resource *_irq;
+} DEFAULT bus_generic_suspend_intr;
+
+/**
+ * @brief Resume an interrupt handler
+ *
+ * This method is used to clear suspended state of a handler when
+ * the associated device is powered up and can be an interrupt source
+ * again.
+ * The value of @p _irq must be the interrupt resource passed
+ * to a previous call to BUS_SETUP_INTR().
+ * 
+ * @param _dev		the parent device of @p _child
+ * @param _child	the device which allocated the resource
+ * @param _irq		the resource representing the interrupt
+ */
+METHOD int resume_intr {
+	device_t	_dev;
+	device_t	_child;
+	struct resource *_irq;
+} DEFAULT bus_generic_resume_intr;
+
+/**
  * @brief Define a resource which can be allocated with
  * BUS_ALLOC_RESOURCE().
  *
- * This method is used by some busses (typically ISA) to allow a
+ * This method is used by some buses (typically ISA) to allow a
  * driver to describe a resource range that it would like to
  * allocate. The resource defined by @p _type and @p _rid is defined
  * to start at @p _start and to include @p _count indices in its
@@ -562,7 +610,7 @@ METHOD struct resource_list * get_resource_list {
  * should return -1 if it is present.  Any errors in determining
  * should be returned as a normal errno value.  Client drivers are to
  * assume that the device is present, even if there is an error
- * determining if it is there.  Busses are to try to avoid returning
+ * determining if it is there.  Buses are to try to avoid returning
  * errors, but newcard will return an error if the device fails to
  * implement this method.
  * 
@@ -810,3 +858,48 @@ METHOD int get_cpus {
 	size_t		_setsize;
 	cpuset_t	*_cpuset;
 } DEFAULT bus_generic_get_cpus;
+
+/**
+ * @brief Prepares the given child of the bus for reset
+ *
+ * Typically bus detaches or suspends children' drivers, and then
+ * calls this method to save bus-specific information, for instance,
+ * PCI config space, which is damaged by reset.
+ *
+ * The bus_helper_reset_prepare() helper is provided to ease
+ * implementing bus reset methods.
+ *
+ * @param _dev		the bus device
+ * @param _child	the child device
+ */
+METHOD int reset_prepare {
+	device_t _dev;
+	device_t _child;
+} DEFAULT null_reset_prepare;
+
+/**
+ * @brief Restores the child operations after the reset
+ *
+ * The bus_helper_reset_post() helper is provided to ease
+ * implementing bus reset methods.
+ *
+ * @param _dev		the bus device
+ * @param _child	the child device
+ */
+METHOD int reset_post {
+	device_t _dev;
+	device_t _child;
+} DEFAULT null_reset_post;
+
+/**
+ * @brief Performs reset of the child
+ *
+ * @param _dev		the bus device
+ * @param _child	the child device
+ * @param _flags	DEVF_RESET_ flags
+ */
+METHOD int reset_child {
+	device_t _dev;
+	device_t _child;
+	int _flags;
+};

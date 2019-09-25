@@ -1244,6 +1244,7 @@ zfs_write(vnode_t *vp, uio_t *uio, int ioflag, cred_t *cr, caller_context_t *ct)
 	return (0);
 }
 
+/* ARGSUSED */
 void
 zfs_get_done(zgd_t *zgd, int error)
 {
@@ -1260,9 +1261,6 @@ zfs_get_done(zgd_t *zgd, int error)
 	 * txg stopped from syncing.
 	 */
 	VN_RELE_ASYNC(ZTOV(zp), dsl_pool_vnrele_taskq(dmu_objset_pool(os)));
-
-	if (error == 0 && zgd->zgd_bp)
-		zil_lwb_add_block(zgd->zgd_lwb, zgd->zgd_bp);
 
 	kmem_free(zgd, sizeof (zgd_t));
 }
@@ -1387,11 +1385,7 @@ zfs_get_data(void *arg, lr_write_t *lr, char *buf, struct lwb *lwb, zio_t *zio)
 				 * TX_WRITE2 relies on the data previously
 				 * written by the TX_WRITE that caused
 				 * EALREADY.  We zero out the BP because
-				 * it is the old, currently-on-disk BP,
-				 * so there's no need to zio_flush() its
-				 * vdevs (flushing would needlesly hurt
-				 * performance, and doesn't work on
-				 * indirect vdevs).
+				 * it is the old, currently-on-disk BP.
 				 */
 				zgd->zgd_bp = NULL;
 				BP_ZERO(bp);
@@ -2529,8 +2523,8 @@ zfs_readdir(vnode_t *vp, uio_t *uio, cred_t *cr, int *eofp, int *ncookies, u_lon
 			 */
 			eodp->ed_ino = objnum;
 			eodp->ed_reclen = reclen;
-			/* NOTE: ed_off is the offset for the *next* entry */
-			next = &(eodp->ed_off);
+			/* NOTE: ed_off is the offset for the *next* entry. */
+			next = &eodp->ed_off;
 			eodp->ed_eflags = zap.za_normalization_conflict ?
 			    ED_CASE_CONFLICT : 0;
 			(void) strncpy(eodp->ed_name, zap.za_name,
@@ -2543,8 +2537,11 @@ zfs_readdir(vnode_t *vp, uio_t *uio, cred_t *cr, int *eofp, int *ncookies, u_lon
 			odp->d_ino = objnum;
 			odp->d_reclen = reclen;
 			odp->d_namlen = strlen(zap.za_name);
+			/* NOTE: d_off is the offset for the *next* entry. */
+			next = &odp->d_off;
 			(void) strlcpy(odp->d_name, zap.za_name, odp->d_namlen + 1);
 			odp->d_type = type;
+			dirent_terminate(odp);
 			odp = (dirent64_t *)((intptr_t)odp + reclen);
 		}
 		outcount += reclen;
@@ -2567,6 +2564,9 @@ zfs_readdir(vnode_t *vp, uio_t *uio, cred_t *cr, int *eofp, int *ncookies, u_lon
 			offset += 1;
 		}
 
+		/* Fill the offset right after advancing the cursor. */
+		if (next != NULL)
+			*next = offset;
 		if (cooks != NULL) {
 			*cooks++ = offset;
 			ncooks--;
@@ -2655,7 +2655,6 @@ zfs_getattr(vnode_t *vp, vattr_t *vap, int flags, cred_t *cr,
 	int	error = 0;
 	uint32_t blksize;
 	u_longlong_t nblocks;
-	uint64_t links;
 	uint64_t mtime[2], ctime[2], crtime[2], rdev;
 	xvattr_t *xvap = (xvattr_t *)vap;	/* vap may be an xvattr_t * */
 	xoptattr_t *xoap = NULL;
@@ -2704,14 +2703,13 @@ zfs_getattr(vnode_t *vp, vattr_t *vap, int flags, cred_t *cr,
 #ifdef illumos
 	vap->va_fsid = zp->z_zfsvfs->z_vfs->vfs_dev;
 #else
-	vap->va_fsid = vp->v_mount->mnt_stat.f_fsid.val[0];
+	vn_fsid(vp, vap);
 #endif
 	vap->va_nodeid = zp->z_id;
-	if ((vp->v_flag & VROOT) && zfs_show_ctldir(zp))
-		links = zp->z_links + 1;
-	else
-		links = zp->z_links;
-	vap->va_nlink = MIN(links, LINK_MAX);	/* nlink_t limit! */
+	vap->va_nlink = zp->z_links;
+	if ((vp->v_flag & VROOT) && zfs_show_ctldir(zp) &&
+	    zp->z_links < ZFS_LINK_MAX)
+		vap->va_nlink++;
 	vap->va_size = zp->z_size;
 #ifdef illumos
 	vap->va_rdev = vp->v_rdev;
@@ -4416,7 +4414,7 @@ zfs_pathconf(vnode_t *vp, int cmd, ulong_t *valp, cred_t *cr,
 
 	switch (cmd) {
 	case _PC_LINK_MAX:
-		*valp = INT_MAX;
+		*valp = MIN(LONG_MAX, ZFS_LINK_MAX);
 		return (0);
 
 	case _PC_FILESIZEBITS:
@@ -4600,8 +4598,8 @@ zfs_getpages(struct vnode *vp, vm_page_t *ma, int count, int *rbehind,
 	if (error != 0)
 		return (zfs_vm_pagerret_error);
 
-	PCPU_INC(cnt.v_vnodein);
-	PCPU_ADD(cnt.v_vnodepgsin, count + pgsin_b + pgsin_a);
+	VM_CNT_INC(v_vnodein);
+	VM_CNT_ADD(v_vnodepgsin, count + pgsin_b + pgsin_a);
 	if (rbehind != NULL)
 		*rbehind = pgsin_b;
 	if (rahead != NULL)
@@ -4751,8 +4749,8 @@ zfs_putpages(struct vnode *vp, vm_page_t *ma, size_t len, int flags,
 			vm_page_undirty(ma[i]);
 		}
 		zfs_vmobject_wunlock(object);
-		PCPU_INC(cnt.v_vnodeout);
-		PCPU_ADD(cnt.v_vnodepgsout, ncount);
+		VM_CNT_INC(v_vnodeout);
+		VM_CNT_ADD(v_vnodepgsout, ncount);
 	}
 	dmu_tx_commit(tx);
 
@@ -5197,9 +5195,8 @@ zfs_freebsd_setattr(ap)
 		 * Privileged non-jail processes may not modify system flags
 		 * if securelevel > 0 and any existing system flags are set.
 		 * Privileged jail processes behave like privileged non-jail
-		 * processes if the security.jail.chflags_allowed sysctl is
-		 * is non-zero; otherwise, they behave like unprivileged
-		 * processes.
+		 * processes if the PR_ALLOW_CHFLAGS permission bit is set;
+		 * otherwise, they behave like unprivileged processes.
 		 */
 		if (secpolicy_fs_owner(vp->v_mount, cred) == 0 ||
 		    priv_check_cred(cred, PRIV_VFS_SYSFLAGS, 0) == 0) {
@@ -6004,6 +6001,7 @@ struct vop_vector zfs_vnodeops = {
 	.vop_inactive =		zfs_freebsd_inactive,
 	.vop_reclaim =		zfs_freebsd_reclaim,
 	.vop_access =		zfs_freebsd_access,
+	.vop_allocate =		VOP_EINVAL,
 	.vop_lookup =		zfs_cache_lookup,
 	.vop_cachedlookup =	zfs_freebsd_lookup,
 	.vop_getattr =		zfs_freebsd_getattr,

@@ -37,7 +37,7 @@
  * \file
  *
  * This file contains functions to resolve DNS queries and 
- * validate the answers. Synchonously and asynchronously.
+ * validate the answers. Synchronously and asynchronously.
  *
  */
 
@@ -62,6 +62,7 @@
 #include "services/localzone.h"
 #include "services/cache/infra.h"
 #include "services/cache/rrset.h"
+#include "services/authzone.h"
 #include "sldns/sbuffer.h"
 #ifdef HAVE_PTHREAD
 #include <signal.h>
@@ -88,6 +89,7 @@ static struct ub_ctx* ub_ctx_create_nopipe(void)
 	WSADATA wsa_data;
 #endif
 	
+	checklock_start();
 	log_init(NULL, 0, NULL); /* logs to stderr */
 	log_ident_set("libunbound");
 #ifdef USE_WINSOCK
@@ -107,13 +109,13 @@ static struct ub_ctx* ub_ctx_create_nopipe(void)
 	alloc_init(&ctx->superalloc, NULL, 0);
 	seed = (unsigned int)time(NULL) ^ (unsigned int)getpid();
 	if(!(ctx->seed_rnd = ub_initstate(seed, NULL))) {
-		seed = 0;
+		explicit_bzero(&seed, sizeof(seed));
 		ub_randfree(ctx->seed_rnd);
 		free(ctx);
 		errno = ENOMEM;
 		return NULL;
 	}
-	seed = 0;
+	explicit_bzero(&seed, sizeof(seed));
 	lock_basic_init(&ctx->qqpipe_lock);
 	lock_basic_init(&ctx->rrpipe_lock);
 	lock_basic_init(&ctx->cfglock);
@@ -126,6 +128,25 @@ static struct ub_ctx* ub_ctx_create_nopipe(void)
 	}
 	ctx->env->cfg = config_create_forlib();
 	if(!ctx->env->cfg) {
+		free(ctx->env);
+		ub_randfree(ctx->seed_rnd);
+		free(ctx);
+		errno = ENOMEM;
+		return NULL;
+	}
+	/* init edns_known_options */
+	if(!edns_known_options_init(ctx->env)) {
+		config_delete(ctx->env->cfg);
+		free(ctx->env);
+		ub_randfree(ctx->seed_rnd);
+		free(ctx);
+		errno = ENOMEM;
+		return NULL;
+	}
+	ctx->env->auth_zones = auth_zones_create();
+	if(!ctx->env->auth_zones) {
+		edns_known_options_delete(ctx->env);
+		config_delete(ctx->env->cfg);
 		free(ctx->env);
 		ub_randfree(ctx->seed_rnd);
 		free(ctx);
@@ -151,6 +172,7 @@ ub_ctx_create(void)
 		ub_randfree(ctx->seed_rnd);
 		config_delete(ctx->env->cfg);
 		modstack_desetup(&ctx->mods, ctx->env);
+		edns_known_options_delete(ctx->env);
 		free(ctx->env);
 		free(ctx);
 		errno = e;
@@ -162,6 +184,7 @@ ub_ctx_create(void)
 		ub_randfree(ctx->seed_rnd);
 		config_delete(ctx->env->cfg);
 		modstack_desetup(&ctx->mods, ctx->env);
+		edns_known_options_delete(ctx->env);
 		free(ctx->env);
 		free(ctx);
 		errno = e;
@@ -204,7 +227,7 @@ ub_ctx_create_event(struct event_base* eb)
 	
 /** delete q */
 static void
-delq(rbnode_t* n, void* ATTR_UNUSED(arg))
+delq(rbnode_type* n, void* ATTR_UNUSED(arg))
 {
 	struct ctx_query* q = (struct ctx_query*)n;
 	context_query_delete(q);
@@ -298,6 +321,8 @@ ub_ctx_delete(struct ub_ctx* ctx)
 		rrset_cache_delete(ctx->env->rrset_cache);
 		infra_delete(ctx->env->infra_cache);
 		config_delete(ctx->env->cfg);
+		edns_known_options_delete(ctx->env);
+		auth_zones_delete(ctx->env->auth_zones);
 		free(ctx->env);
 	}
 	ub_randfree(ctx->seed_rnd);
@@ -367,7 +392,6 @@ ub_ctx_add_ta(struct ub_ctx* ctx, const char* ta)
 	}
 	if(!cfg_strlist_insert(&ctx->env->cfg->trust_anchor_list, dup)) {
 		lock_basic_unlock(&ctx->cfglock);
-		free(dup);
 		return UB_NOMEM;
 	}
 	lock_basic_unlock(&ctx->cfglock);
@@ -387,7 +411,6 @@ ub_ctx_add_ta_file(struct ub_ctx* ctx, const char* fname)
 	}
 	if(!cfg_strlist_insert(&ctx->env->cfg->trust_anchor_file_list, dup)) {
 		lock_basic_unlock(&ctx->cfglock);
-		free(dup);
 		return UB_NOMEM;
 	}
 	lock_basic_unlock(&ctx->cfglock);
@@ -407,7 +430,6 @@ int ub_ctx_add_ta_autr(struct ub_ctx* ctx, const char* fname)
 	if(!cfg_strlist_insert(&ctx->env->cfg->auto_trust_anchor_file_list,
 		dup)) {
 		lock_basic_unlock(&ctx->cfglock);
-		free(dup);
 		return UB_NOMEM;
 	}
 	lock_basic_unlock(&ctx->cfglock);
@@ -427,7 +449,6 @@ ub_ctx_trustedkeys(struct ub_ctx* ctx, const char* fname)
 	}
 	if(!cfg_strlist_insert(&ctx->env->cfg->trusted_keys_file_list, dup)) {
 		lock_basic_unlock(&ctx->cfglock);
-		free(dup);
 		return UB_NOMEM;
 	}
 	lock_basic_unlock(&ctx->cfglock);
@@ -487,7 +508,7 @@ ub_fd(struct ub_ctx* ctx)
 /** process answer from bg worker */
 static int
 process_answer_detail(struct ub_ctx* ctx, uint8_t* msg, uint32_t len,
-	ub_callback_t* cb, void** cbarg, int* err,
+	ub_callback_type* cb, void** cbarg, int* err,
 	struct ub_result** res)
 {
 	struct ctx_query* q;
@@ -554,7 +575,7 @@ static int
 process_answer(struct ub_ctx* ctx, uint8_t* msg, uint32_t len)
 {
 	int err;
-	ub_callback_t cb;
+	ub_callback_type cb;
 	void* cbarg;
 	struct ub_result* res;
 	int r;
@@ -597,7 +618,7 @@ int
 ub_wait(struct ub_ctx* ctx)
 {
 	int err;
-	ub_callback_t cb;
+	ub_callback_type cb;
 	void* cbarg;
 	struct ub_result* res;
 	int r;
@@ -665,7 +686,7 @@ ub_resolve(struct ub_ctx* ctx, const char* name, int rrtype,
 	}
 	/* create new ctx_query and attempt to add to the list */
 	lock_basic_unlock(&ctx->cfglock);
-	q = context_new(ctx, name, rrtype, rrclass, NULL, NULL);
+	q = context_new(ctx, name, rrtype, rrclass, NULL, NULL, NULL);
 	if(!q)
 		return UB_NOMEM;
 	/* become a resolver thread for a bit */
@@ -693,7 +714,8 @@ ub_resolve(struct ub_ctx* ctx, const char* name, int rrtype,
 
 int 
 ub_resolve_event(struct ub_ctx* ctx, const char* name, int rrtype, 
-	int rrclass, void* mydata, ub_event_callback_t callback, int* async_id)
+	int rrclass, void* mydata, ub_event_callback_type callback,
+	int* async_id)
 {
 	struct ctx_query* q;
 	int r;
@@ -721,8 +743,7 @@ ub_resolve_event(struct ub_ctx* ctx, const char* name, int rrtype,
 	ub_comm_base_now(ctx->event_worker->base);
 
 	/* create new ctx_query and attempt to add to the list */
-	q = context_new(ctx, name, rrtype, rrclass, (ub_callback_t)callback,
-		mydata);
+	q = context_new(ctx, name, rrtype, rrclass, NULL, callback, mydata);
 	if(!q)
 		return UB_NOMEM;
 
@@ -735,7 +756,7 @@ ub_resolve_event(struct ub_ctx* ctx, const char* name, int rrtype,
 
 int 
 ub_resolve_async(struct ub_ctx* ctx, const char* name, int rrtype, 
-	int rrclass, void* mydata, ub_callback_t callback, int* async_id)
+	int rrclass, void* mydata, ub_callback_type callback, int* async_id)
 {
 	struct ctx_query* q;
 	uint8_t* msg = NULL;
@@ -767,7 +788,7 @@ ub_resolve_async(struct ub_ctx* ctx, const char* name, int rrtype,
 	}
 
 	/* create new ctx_query and attempt to add to the list */
-	q = context_new(ctx, name, rrtype, rrclass, callback, mydata);
+	q = context_new(ctx, name, rrtype, rrclass, callback, NULL, mydata);
 	if(!q)
 		return UB_NOMEM;
 
@@ -937,7 +958,6 @@ ub_ctx_set_fwd(struct ub_ctx* ctx, const char* addr)
 		return UB_NOMEM;
 	}
 	if(!cfg_strlist_insert(&s->addrs, dupl)) {
-		free(dupl);
 		lock_basic_unlock(&ctx->cfglock);
 		errno=ENOMEM;
 		return UB_NOMEM;
@@ -1020,7 +1040,6 @@ int ub_ctx_set_stub(struct ub_ctx* ctx, const char* zone, const char* addr,
 	}
 	if(!cfg_strlist_insert(&elem->addrs, a)) {
 		lock_basic_unlock(&ctx->cfglock);
-		free(a);
 		errno = ENOMEM;
 		return UB_NOMEM;
 	}
@@ -1208,7 +1227,6 @@ ub_ctx_hosts(struct ub_ctx* ctx, const char* fname)
 				ins)) {
 				lock_basic_unlock(&ctx->cfglock);
 				fclose(in);
-				free(ins);
 				errno=ENOMEM;
 				return UB_NOMEM;
 			}

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ *
  * Copyright (c) 2001 Jake Burkholder.
  * Copyright (c) 2000 Eduardo Horvath.
  * Copyright (c) 1999 The NetBSD Foundation, Inc.
@@ -31,8 +33,6 @@
  *	from: NetBSD: mdreloc.c,v 1.42 2008/04/28 20:23:04 martin Exp
  */
 
-#include "opt_pax.h"
-
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
@@ -42,7 +42,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/exec.h>
 #include <sys/imgact.h>
 #include <sys/linker.h>
-#include <sys/pax.h>
 #include <sys/proc.h>
 #include <sys/sysent.h>
 #include <sys/imgact_elf.h>
@@ -72,7 +71,6 @@ static struct sysentvec elf64_freebsd_sysvec = {
 	.sv_coredump	= __elfN(coredump),
 	.sv_imgact_try	= NULL,
 	.sv_minsigstksz	= MINSIGSTKSZ,
-	.sv_pagesize	= PAGE_SIZE,
 	.sv_minuser	= VM_MIN_ADDRESS,
 	.sv_maxuser	= VM_MAXUSER_ADDRESS,
 	.sv_usrstack	= USRSTACK,
@@ -82,14 +80,13 @@ static struct sysentvec elf64_freebsd_sysvec = {
 	.sv_setregs	= exec_setregs,
 	.sv_fixlimit	= NULL,
 	.sv_maxssiz	= NULL,
-	.sv_flags	= SV_ABI_FREEBSD | SV_LP64,
+	.sv_flags	= SV_ABI_FREEBSD | SV_LP64 | SV_ASLR,
 	.sv_set_syscall_retval = cpu_set_syscall_retval,
 	.sv_fetch_syscall_args = cpu_fetch_syscall_args,
 	.sv_syscallnames = syscallnames,
 	.sv_schedtail	= NULL,
 	.sv_thread_detach = NULL,
 	.sv_trap	= NULL,
-	.sv_pax_aslr_init = pax_aslr_init_vmspace,
 };
 
 static Elf64_Brandinfo freebsd_brand_info = {
@@ -313,6 +310,13 @@ static const long reloc_target_bitmask[] = {
 #undef _BM
 };
 #define	RELOC_VALUE_BITMASK(t)	(reloc_target_bitmask[t])
+
+bool
+elf_is_ifunc_reloc(Elf_Size r_info __unused)
+{
+
+	return (false);
+}
 
 int
 elf_reloc_local(linker_file_t lf, Elf_Addr relocbase, const void *data,

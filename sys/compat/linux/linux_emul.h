@@ -40,7 +40,6 @@ struct linux_emuldata {
 	int    *child_set_tid;	/* in clone(): Child's TID to set on clone */
 	int    *child_clear_tid;/* in clone(): Child's TID to clear on exit */
 
-	int	pdeath_signal;		/* parent death signal */
 	int	flags;			/* thread emuldata flags */
 	int	em_tid;			/* thread id */
 
@@ -49,6 +48,7 @@ struct linux_emuldata {
 
 struct linux_emuldata	*em_find(struct thread *);
 
+int	linux_exec_imgact_try(struct image_params *);
 void	linux_proc_init(struct thread *, struct thread *, int);
 void	linux_proc_exit(void *, struct proc *);
 void	linux_schedtail(struct thread *);
@@ -76,5 +76,7 @@ struct linux_pemuldata {
 #define	LINUX_PEM_SUNLOCK(p)	sx_sunlock(&(p)->pem_sx)
 
 struct linux_pemuldata	*pem_find(struct proc *);
+
+extern const int linux_errtbl[];
 
 #endif	/* !_LINUX_EMUL_H_ */

@@ -36,7 +36,7 @@
 #include <stdbool.h>
 #include <sys/cdefs.h>
 #include <sys/param.h>
-#include <sys/disklabel.h>
+#include <sys/disk/bsd.h>
 #include <efi.h>
 
 #include "boot_module.h"
@@ -115,9 +115,9 @@ init_dev(dev_info_t* dev)
 	bs = devinfo->dev->Media->BlockSize;
 	if (bs != 0 && bs <= BSD_LABEL_BUFFER / 2)
 		dl = (struct disklabel *)&buffer[bs];
-	if (dl == NULL || dl->d_magic != DISKMAGIC || dl->d_magic2 != DISKMAGIC)
+	if (dl == NULL || dl->d_magic != BSD_MAGIC || dl->d_magic2 != BSD_MAGIC)
 		dl = (struct disklabel *)&buffer[BSD_LABEL_OFFSET];
-	if (dl->d_magic != DISKMAGIC || dl->d_magic2 != DISKMAGIC ||
+	if (dl->d_magic != BSD_MAGIC || dl->d_magic2 != BSD_MAGIC ||
 	    dl->d_partitions[0].p_offset == 0)
 		return (-1);
 	devinfo->partoff = dl->d_partitions[0].p_offset;

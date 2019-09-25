@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -13,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -76,10 +78,8 @@ __FBSDID("$FreeBSD$");
 #include <netinet/ip_var.h>
 #include <arpa/inet.h>
 
-#ifdef HAVE_LIBCASPER
 #include <libcasper.h>
 #include <casper/cap_dns.h>
-#endif
 
 #ifdef IPSEC
 #include <netipsec/ipsec.h>
@@ -90,12 +90,16 @@ __FBSDID("$FreeBSD$");
 #include <errno.h>
 #include <math.h>
 #include <netdb.h>
+#include <stddef.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sysexits.h>
+#include <time.h>
 #include <unistd.h>
+
+#include "utils.h"
 
 #define	INADDR_LEN	((int)sizeof(in_addr_t))
 #define	TIMEVAL_LEN	((int)sizeof(struct tv32))
@@ -118,7 +122,7 @@ __FBSDID("$FreeBSD$");
 
 struct tv32 {
 	int32_t tv32_sec;
-	int32_t tv32_usec;
+	int32_t tv32_nsec;
 };
 
 /* various options */
@@ -204,27 +208,21 @@ static double tsumsq = 0.0;	/* sum of all times squared, for std. dev. */
 static volatile sig_atomic_t finish_up;
 static volatile sig_atomic_t siginfo_p;
 
-#ifdef HAVE_LIBCASPER
 static cap_channel_t *capdns;
-#endif
 
 static void fill(char *, char *);
-static u_short in_cksum(u_short *, int);
-#ifdef HAVE_LIBCASPER
 static cap_channel_t *capdns_setup(void);
-#endif
 static void check_status(void);
 static void finish(void) __dead2;
 static void pinger(void);
 static char *pr_addr(struct in_addr);
 static char *pr_ntime(n_time);
-static void pr_icmph(struct icmp *);
+static void pr_icmph(struct icmp *, struct ip *, const u_char *const);
 static void pr_iph(struct ip *);
-static void pr_pack(char *, int, struct sockaddr_in *, struct timeval *);
-static void pr_retip(struct ip *);
+static void pr_pack(char *, ssize_t, struct sockaddr_in *, struct timespec *);
+static void pr_retip(struct ip *, const u_char *);
 static void status(int);
 static void stopit(int);
-static void tvsub(struct timeval *, const struct timeval *);
 static void usage(void) __dead2;
 
 int
@@ -232,9 +230,8 @@ main(int argc, char *const *argv)
 {
 	struct sockaddr_in from, sock_in;
 	struct in_addr ifaddr;
-	struct timeval last, intvl;
+	struct timespec last, intvl;
 	struct iovec iov;
-	struct ip *ip;
 	struct msghdr msg;
 	struct sigaction si_sa;
 	size_t sz;
@@ -246,10 +243,11 @@ main(int argc, char *const *argv)
 #endif
 	struct sockaddr_in *to;
 	double t;
-	u_long alarmtimeout, ultmp;
+	u_long alarmtimeout;
+	long ltmp;
 	int almost_done, ch, df, hold, i, icmp_len, mib[4], preload;
 	int ssend_errno, srecv_errno, tos, ttl;
-	char ctrl[CMSG_SPACE(sizeof(struct timeval))];
+	char ctrl[CMSG_SPACE(sizeof(struct timespec))];
 	char hnamebuf[MAXHOSTNAMELEN], snamebuf[MAXHOSTNAMELEN];
 #ifdef IP_OPTIONS
 	char rspace[MAX_IPOPTLEN];	/* record route space */
@@ -262,6 +260,8 @@ main(int argc, char *const *argv)
 #endif
 	cap_rights_t rights;
 	bool cansandbox;
+
+	options |= F_NUMERIC;
 
 	/*
 	 * Do the stuff that we need root priv's for *first*, and
@@ -315,12 +315,12 @@ main(int argc, char *const *argv)
 			options |= F_AUDIBLE;
 			break;
 		case 'c':
-			ultmp = strtoul(optarg, &ep, 0);
-			if (*ep || ep == optarg || ultmp > LONG_MAX || !ultmp)
+			ltmp = strtol(optarg, &ep, 0);
+			if (*ep || ep == optarg || ltmp <= 0)
 				errx(EX_USAGE,
 				    "invalid count of packets to transmit: `%s'",
 				    optarg);
-			npackets = ultmp;
+			npackets = ltmp;
 			break;
 		case 'D':
 			options |= F_HDRINCL;
@@ -338,46 +338,46 @@ main(int argc, char *const *argv)
 			setbuf(stdout, (char *)NULL);
 			break;
 		case 'G': /* Maximum packet size for ping sweep */
-			ultmp = strtoul(optarg, &ep, 0);
-			if (*ep || ep == optarg)
+			ltmp = strtol(optarg, &ep, 0);
+			if (*ep || ep == optarg || ltmp <= 0)
 				errx(EX_USAGE, "invalid packet size: `%s'",
 				    optarg);
-			if (uid != 0 && ultmp > DEFDATALEN) {
+			if (uid != 0 && ltmp > DEFDATALEN) {
 				errno = EPERM;
 				err(EX_NOPERM,
-				    "packet size too large: %lu > %u",
-				    ultmp, DEFDATALEN);
+				    "packet size too large: %ld > %u",
+				    ltmp, DEFDATALEN);
 			}
 			options |= F_SWEEP;
-			sweepmax = ultmp;
+			sweepmax = ltmp;
 			break;
 		case 'g': /* Minimum packet size for ping sweep */
-			ultmp = strtoul(optarg, &ep, 0);
-			if (*ep || ep == optarg)
+			ltmp = strtol(optarg, &ep, 0);
+			if (*ep || ep == optarg || ltmp <= 0)
 				errx(EX_USAGE, "invalid packet size: `%s'",
 				    optarg);
-			if (uid != 0 && ultmp > DEFDATALEN) {
+			if (uid != 0 && ltmp > DEFDATALEN) {
 				errno = EPERM;
 				err(EX_NOPERM,
-				    "packet size too large: %lu > %u",
-				    ultmp, DEFDATALEN);
+				    "packet size too large: %ld > %u",
+				    ltmp, DEFDATALEN);
 			}
 			options |= F_SWEEP;
-			sweepmin = ultmp;
+			sweepmin = ltmp;
 			break;
 		case 'h': /* Packet size increment for ping sweep */
-			ultmp = strtoul(optarg, &ep, 0);
-			if (*ep || ep == optarg || ultmp < 1)
+			ltmp = strtol(optarg, &ep, 0);
+			if (*ep || ep == optarg || ltmp < 1)
 				errx(EX_USAGE, "invalid increment size: `%s'",
 				    optarg);
-			if (uid != 0 && ultmp > DEFDATALEN) {
+			if (uid != 0 && ltmp > DEFDATALEN) {
 				errno = EPERM;
 				err(EX_NOPERM,
-				    "packet size too large: %lu > %u",
-				    ultmp, DEFDATALEN);
+				    "packet size too large: %ld > %u",
+				    ltmp, DEFDATALEN);
 			}
 			options |= F_SWEEP;
-			sweepincr = ultmp;
+			sweepincr = ltmp;
 			break;
 		case 'I':		/* multicast interface */
 			if (inet_aton(optarg, &ifaddr) == 0)
@@ -403,15 +403,15 @@ main(int argc, char *const *argv)
 			loop = 0;
 			break;
 		case 'l':
-			ultmp = strtoul(optarg, &ep, 0);
-			if (*ep || ep == optarg || ultmp > INT_MAX)
+			ltmp = strtol(optarg, &ep, 0);
+			if (*ep || ep == optarg || ltmp > INT_MAX || ltmp < 0)
 				errx(EX_USAGE,
 				    "invalid preload value: `%s'", optarg);
 			if (uid) {
 				errno = EPERM;
 				err(EX_NOPERM, "-l flag");
 			}
-			preload = ultmp;
+			preload = ltmp;
 			break;
 		case 'M':
 			switch(optarg[0]) {
@@ -429,10 +429,10 @@ main(int argc, char *const *argv)
 			}
 			break;
 		case 'm':		/* TTL */
-			ultmp = strtoul(optarg, &ep, 0);
-			if (*ep || ep == optarg || ultmp > MAXTTL)
+			ltmp = strtol(optarg, &ep, 0);
+			if (*ep || ep == optarg || ltmp > MAXTTL || ltmp < 0)
 				errx(EX_USAGE, "invalid TTL: `%s'", optarg);
-			ttl = ultmp;
+			ttl = ltmp;
 			options |= F_TTL;
 			break;
 		case 'n':
@@ -474,24 +474,24 @@ main(int argc, char *const *argv)
 			source = optarg;
 			break;
 		case 's':		/* size of packet to send */
-			ultmp = strtoul(optarg, &ep, 0);
-			if (*ep || ep == optarg)
+			ltmp = strtol(optarg, &ep, 0);
+			if (*ep || ep == optarg || ltmp < 0)
 				errx(EX_USAGE, "invalid packet size: `%s'",
 				    optarg);
-			if (uid != 0 && ultmp > DEFDATALEN) {
+			if (uid != 0 && ltmp > DEFDATALEN) {
 				errno = EPERM;
 				err(EX_NOPERM,
-				    "packet size too large: %lu > %u",
-				    ultmp, DEFDATALEN);
+				    "packet size too large: %ld > %u",
+				    ltmp, DEFDATALEN);
 			}
-			datalen = ultmp;
+			datalen = ltmp;
 			break;
 		case 'T':		/* multicast TTL */
-			ultmp = strtoul(optarg, &ep, 0);
-			if (*ep || ep == optarg || ultmp > MAXTTL)
+			ltmp = strtol(optarg, &ep, 0);
+			if (*ep || ep == optarg || ltmp > MAXTTL || ltmp < 0)
 				errx(EX_USAGE, "invalid multicast TTL: `%s'",
 				    optarg);
-			mttl = ultmp;
+			mttl = ltmp;
 			options |= F_MTTL;
 			break;
 		case 't':
@@ -517,10 +517,10 @@ main(int argc, char *const *argv)
 			break;
 		case 'z':
 			options |= F_HDRINCL;
-			ultmp = strtoul(optarg, &ep, 0);
-			if (*ep || ep == optarg || ultmp > MAXTOS)
+			ltmp = strtol(optarg, &ep, 0);
+			if (*ep || ep == optarg || ltmp > MAXTOS || ltmp < 0)
 				errx(EX_USAGE, "invalid TOS: `%s'", optarg);
-			tos = ultmp;
+			tos = ltmp;
 			break;
 		default:
 			usage();
@@ -563,21 +563,17 @@ main(int argc, char *const *argv)
 	if (options & F_PINGFILLED) {
 		fill((char *)datap, payload);
 	}
-#ifdef HAVE_LIBCASPER
 	capdns = capdns_setup();
-#endif
 	if (source) {
 		bzero((char *)&sock_in, sizeof(sock_in));
 		sock_in.sin_family = AF_INET;
 		if (inet_aton(source, &sock_in.sin_addr) != 0) {
 			shostname = source;
 		} else {
-#ifdef HAVE_LIBCASPER
 			if (capdns != NULL)
 				hp = cap_gethostbyname2(capdns, source,
 				    AF_INET);
 			else
-#endif
 				hp = gethostbyname2(source, AF_INET);
 			if (!hp)
 				errx(EX_NOHOST, "cannot resolve %s: %s",
@@ -606,11 +602,9 @@ main(int argc, char *const *argv)
 	if (inet_aton(target, &to->sin_addr) != 0) {
 		hostname = target;
 	} else {
-#ifdef HAVE_LIBCASPER
 		if (capdns != NULL)
 			hp = cap_gethostbyname2(capdns, target, AF_INET);
 		else
-#endif
 			hp = gethostbyname2(target, AF_INET);
 		if (!hp)
 			errx(EX_NOHOST, "cannot resolve %s: %s",
@@ -624,17 +618,16 @@ main(int argc, char *const *argv)
 		hostname = hnamebuf;
 	}
 
-#ifdef HAVE_LIBCASPER
 	/* From now on we will use only reverse DNS lookups. */
+#ifdef WITH_CASPER
 	if (capdns != NULL) {
 		const char *types[1];
 
-		types[0] = "ADDR";
+		types[0] = "ADDR2NAME";
 		if (cap_dns_type_limit(capdns, types, 1) < 0)
 			err(1, "unable to limit access to system.dns service");
 	}
 #endif
-
 	if (connect(ssend, (struct sockaddr *)&whereto, sizeof(whereto)) != 0)
 		err(1, "connect");
 
@@ -698,7 +691,9 @@ main(int argc, char *const *argv)
 #endif /*IPSEC*/
 
 	if (options & F_HDRINCL) {
-		ip = (struct ip*)outpackhdr;
+		struct ip ip;
+
+		memcpy(&ip, outpackhdr, sizeof(ip));
 		if (!(options & (F_TTL | F_MTTL))) {
 			mib[0] = CTL_NET;
 			mib[1] = PF_INET;
@@ -709,23 +704,22 @@ main(int argc, char *const *argv)
 				err(1, "sysctl(net.inet.ip.ttl)");
 		}
 		setsockopt(ssend, IPPROTO_IP, IP_HDRINCL, &hold, sizeof(hold));
-		ip->ip_v = IPVERSION;
-		ip->ip_hl = sizeof(struct ip) >> 2;
-		ip->ip_tos = tos;
-		ip->ip_id = 0;
-		ip->ip_off = htons(df ? IP_DF : 0);
-		ip->ip_ttl = ttl;
-		ip->ip_p = IPPROTO_ICMP;
-		ip->ip_src.s_addr = source ? sock_in.sin_addr.s_addr : INADDR_ANY;
-		ip->ip_dst = to->sin_addr;
+		ip.ip_v = IPVERSION;
+		ip.ip_hl = sizeof(struct ip) >> 2;
+		ip.ip_tos = tos;
+		ip.ip_id = 0;
+		ip.ip_off = htons(df ? IP_DF : 0);
+		ip.ip_ttl = ttl;
+		ip.ip_p = IPPROTO_ICMP;
+		ip.ip_src.s_addr = source ? sock_in.sin_addr.s_addr : INADDR_ANY;
+		ip.ip_dst = to->sin_addr;
+		memcpy(outpackhdr, &ip, sizeof(ip));
         }
 
 	if (options & F_NUMERIC)
 		cansandbox = true;
-#ifdef HAVE_LIBCASPER
 	else if (capdns != NULL)
-		cansandbox = true;
-#endif
+		cansandbox = CASPER_SUPPORT;
 	else
 		cansandbox = false;
 
@@ -735,7 +729,7 @@ main(int argc, char *const *argv)
 	 * We must connect(2) our socket before this point.
 	 */
 	if (cansandbox && cap_enter() < 0 && errno != ENOSYS)
-		err(1, "cap_enter");
+		err(1, "caph_enter_casper");
 
 	cap_rights_init(&rights, CAP_RECV, CAP_EVENT, CAP_SETSOCKOPT);
 	if (cap_rights_limit(srecv, &rights) < 0 && errno != ENOSYS)
@@ -787,9 +781,15 @@ main(int argc, char *const *argv)
 		}
 	}
 #ifdef SO_TIMESTAMP
-	{ int on = 1;
-	if (setsockopt(srecv, SOL_SOCKET, SO_TIMESTAMP, &on, sizeof(on)) < 0)
-		err(EX_OSERR, "setsockopt SO_TIMESTAMP");
+	{
+		int on = 1;
+		int ts_clock = SO_TS_MONOTONIC;
+		if (setsockopt(srecv, SOL_SOCKET, SO_TIMESTAMP, &on,
+		    sizeof(on)) < 0)
+			err(EX_OSERR, "setsockopt SO_TIMESTAMP");
+		if (setsockopt(srecv, SOL_SOCKET, SO_TS_CLOCK, &ts_clock,
+		    sizeof(ts_clock)) < 0)
+			err(EX_OSERR, "setsockopt SO_TS_CLOCK");
 	}
 #endif
 	if (sweepmax) {
@@ -886,6 +886,7 @@ main(int argc, char *const *argv)
 	msg.msg_iovlen = 1;
 #ifdef SO_TIMESTAMP
 	msg.msg_control = (caddr_t)ctrl;
+	msg.msg_controllen = sizeof(ctrl);
 #endif
 	iov.iov_base = packet;
 	iov.iov_len = IP_MAXPACKET;
@@ -898,49 +899,40 @@ main(int argc, char *const *argv)
 		while (preload--)	/* fire off them quickies */
 			pinger();
 	}
-	(void)gettimeofday(&last, NULL);
+	(void)clock_gettime(CLOCK_MONOTONIC, &last);
 
 	if (options & F_FLOOD) {
 		intvl.tv_sec = 0;
-		intvl.tv_usec = 10000;
+		intvl.tv_nsec = 10000000;
 	} else {
 		intvl.tv_sec = interval / 1000;
-		intvl.tv_usec = interval % 1000 * 1000;
+		intvl.tv_nsec = interval % 1000 * 1000000;
 	}
 
 	almost_done = 0;
 	while (!finish_up) {
-		struct timeval now, timeout;
+		struct timespec now, timeout;
 		fd_set rfds;
-		int cc, n;
+		int n;
+		ssize_t cc;
 
 		check_status();
 		if ((unsigned)srecv >= FD_SETSIZE)
 			errx(EX_OSERR, "descriptor too large");
 		FD_ZERO(&rfds);
 		FD_SET(srecv, &rfds);
-		(void)gettimeofday(&now, NULL);
-		timeout.tv_sec = last.tv_sec + intvl.tv_sec - now.tv_sec;
-		timeout.tv_usec = last.tv_usec + intvl.tv_usec - now.tv_usec;
-		while (timeout.tv_usec < 0) {
-			timeout.tv_usec += 1000000;
-			timeout.tv_sec--;
-		}
-		while (timeout.tv_usec >= 1000000) {
-			timeout.tv_usec -= 1000000;
-			timeout.tv_sec++;
-		}
+		(void)clock_gettime(CLOCK_MONOTONIC, &now);
+		timespecadd(&last, &intvl, &timeout);
+		timespecsub(&timeout, &now, &timeout);
 		if (timeout.tv_sec < 0)
-			timerclear(&timeout);
-		n = select(srecv + 1, &rfds, NULL, NULL, &timeout);
+			timespecclear(&timeout);
+		n = pselect(srecv + 1, &rfds, NULL, NULL, &timeout, NULL);
 		if (n < 0)
 			continue;	/* Must be EINTR. */
 		if (n == 1) {
-			struct timeval *tv = NULL;
+			struct timespec *tv = NULL;
 #ifdef SO_TIMESTAMP
-			struct cmsghdr *cmsg = (struct cmsghdr *)&ctrl;
-
-			msg.msg_controllen = sizeof(ctrl);
+			struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
 #endif
 			msg.msg_namelen = sizeof(from);
 			if ((cc = recvmsg(srecv, &msg, 0)) < 0) {
@@ -950,7 +942,8 @@ main(int argc, char *const *argv)
 				continue;
 			}
 #ifdef SO_TIMESTAMP
-			if (cmsg->cmsg_level == SOL_SOCKET &&
+			if (cmsg != NULL &&
+			    cmsg->cmsg_level == SOL_SOCKET &&
 			    cmsg->cmsg_type == SCM_TIMESTAMP &&
 			    cmsg->cmsg_len == CMSG_LEN(sizeof *tv)) {
 				/* Copy to avoid alignment problems: */
@@ -959,7 +952,7 @@ main(int argc, char *const *argv)
 			}
 #endif
 			if (tv == NULL) {
-				(void)gettimeofday(&now, NULL);
+				(void)clock_gettime(CLOCK_MONOTONIC, &now);
 				tv = &now;
 			}
 			pr_pack((char *)packet, cc, &from, tv);
@@ -983,17 +976,17 @@ main(int argc, char *const *argv)
 				if (almost_done)
 					break;
 				almost_done = 1;
-				intvl.tv_usec = 0;
+				intvl.tv_nsec = 0;
 				if (nreceived) {
 					intvl.tv_sec = 2 * tmax / 1000;
 					if (!intvl.tv_sec)
 						intvl.tv_sec = 1;
 				} else {
 					intvl.tv_sec = waittime / 1000;
-					intvl.tv_usec = waittime % 1000 * 1000;
+					intvl.tv_nsec = waittime % 1000 * 1000000;
 				}
 			}
-			(void)gettimeofday(&last, NULL);
+			(void)clock_gettime(CLOCK_MONOTONIC, &last);
 			if (ntransmitted - nreceived - 1 > nmissedmax) {
 				nmissedmax = ntransmitted - nreceived - 1;
 				if (options & F_MISSED)
@@ -1030,53 +1023,69 @@ stopit(int sig __unused)
  *	Compose and transmit an ICMP ECHO REQUEST packet.  The IP packet
  * will be added on by the kernel.  The ID field is our UNIX process ID,
  * and the sequence number is an ascending integer.  The first TIMEVAL_LEN
- * bytes of the data portion are used to hold a UNIX "timeval" struct in
+ * bytes of the data portion are used to hold a UNIX "timespec" struct in
  * host byte-order, to compute the round-trip time.
  */
 static void
 pinger(void)
 {
-	struct timeval now;
+	struct timespec now;
 	struct tv32 tv32;
-	struct ip *ip;
-	struct icmp *icp;
+	struct icmp icp;
 	int cc, i;
 	u_char *packet;
 
 	packet = outpack;
-	icp = (struct icmp *)outpack;
-	icp->icmp_type = icmp_type;
-	icp->icmp_code = 0;
-	icp->icmp_cksum = 0;
-	icp->icmp_seq = htons(ntransmitted);
-	icp->icmp_id = ident;			/* ID */
+	memcpy(&icp, outpack, ICMP_MINLEN + phdr_len);
+	icp.icmp_type = icmp_type;
+	icp.icmp_code = 0;
+	icp.icmp_cksum = 0;
+	icp.icmp_seq = htons(ntransmitted);
+	icp.icmp_id = ident;			/* ID */
 
 	CLR(ntransmitted % mx_dup_ck);
 
 	if ((options & F_TIME) || timing) {
-		(void)gettimeofday(&now, NULL);
-
-		tv32.tv32_sec = htonl(now.tv_sec);
-		tv32.tv32_usec = htonl(now.tv_usec);
+		(void)clock_gettime(CLOCK_MONOTONIC, &now);
+		/*
+		 * Truncate seconds down to 32 bits in order
+		 * to fit the timestamp within 8 bytes of the
+		 * packet. We're only concerned with
+		 * durations, not absolute times.
+		 */
+		tv32.tv32_sec = (uint32_t)htonl(now.tv_sec);
+		tv32.tv32_nsec = (uint32_t)htonl(now.tv_nsec);
 		if (options & F_TIME)
-			icp->icmp_otime = htonl((now.tv_sec % (24*60*60))
-				* 1000 + now.tv_usec / 1000);
+			icp.icmp_otime = htonl((now.tv_sec % (24*60*60))
+				* 1000 + now.tv_nsec / 1000000);
 		if (timing)
 			bcopy((void *)&tv32,
 			    (void *)&outpack[ICMP_MINLEN + phdr_len],
 			    sizeof(tv32));
 	}
 
+	memcpy(outpack, &icp, ICMP_MINLEN + phdr_len);
+
 	cc = ICMP_MINLEN + phdr_len + datalen;
 
 	/* compute ICMP checksum here */
-	icp->icmp_cksum = in_cksum((u_short *)icp, cc);
+	icp.icmp_cksum = in_cksum(outpack, cc);
+	/* Update icmp_cksum in the raw packet data buffer. */
+	memcpy(outpack + offsetof(struct icmp, icmp_cksum), &icp.icmp_cksum,
+	    sizeof(icp.icmp_cksum));
 
 	if (options & F_HDRINCL) {
+		struct ip ip;
+
 		cc += sizeof(struct ip);
-		ip = (struct ip *)outpackhdr;
-		ip->ip_len = htons(cc);
-		ip->ip_sum = in_cksum((u_short *)outpackhdr, cc);
+		ip.ip_len = htons(cc);
+		/* Update ip_len in the raw packet data buffer. */
+		memcpy(outpackhdr + offsetof(struct ip, ip_len), &ip.ip_len,
+		    sizeof(ip.ip_len));
+		ip.ip_sum = in_cksum(outpackhdr, cc);
+		/* Update ip_sum in the raw packet data buffer. */
+		memcpy(outpackhdr + offsetof(struct ip, ip_sum), &ip.ip_sum,
+		    sizeof(ip.ip_sum));
 		packet = outpackhdr;
 	}
 	i = send(ssend, (char *)packet, cc, 0);
@@ -1106,56 +1115,71 @@ pinger(void)
  * program to be run without having intermingled output (or statistics!).
  */
 static void
-pr_pack(char *buf, int cc, struct sockaddr_in *from, struct timeval *tv)
+pr_pack(char *buf, ssize_t cc, struct sockaddr_in *from, struct timespec *tv)
 {
 	struct in_addr ina;
-	u_char *cp, *dp;
-	struct icmp *icp;
-	struct ip *ip;
-	const void *tp;
+	u_char *cp, *dp, l;
+	struct icmp icp;
+	struct ip ip;
+	const u_char *icmp_data_raw;
 	double triptime;
-	int dupflag, hlen, i, j, recv_len, seq;
+	int dupflag, hlen, i, j, recv_len;
+	uint16_t seq;
 	static int old_rrlen;
 	static char old_rr[MAX_IPOPTLEN];
+	struct ip oip;
+	u_char oip_header_len;
+	struct icmp oicmp;
+	const u_char *oicmp_raw;
+
+	/*
+	 * Get size of IP header of the received packet. The
+	 * information is contained in the lower four bits of the
+	 * first byte.
+	 */
+	memcpy(&l, buf, sizeof(l));
+	hlen = (l & 0x0f) << 2;
+	memcpy(&ip, buf, hlen);
 
 	/* Check the IP header */
-	ip = (struct ip *)buf;
-	hlen = ip->ip_hl << 2;
 	recv_len = cc;
 	if (cc < hlen + ICMP_MINLEN) {
 		if (options & F_VERBOSE)
-			warn("packet too short (%d bytes) from %s", cc,
+			warn("packet too short (%zd bytes) from %s", cc,
 			     inet_ntoa(from->sin_addr));
 		return;
 	}
 
+#ifndef icmp_data
+	icmp_data_raw = buf + hlen + offsetof(struct icmp, icmp_ip);
+#else
+	icmp_data_raw = buf + hlen + offsetof(struct icmp, icmp_data);
+#endif
+
 	/* Now the ICMP part */
 	cc -= hlen;
-	icp = (struct icmp *)(buf + hlen);
-	if (icp->icmp_type == icmp_type_rsp) {
-		if (icp->icmp_id != ident)
+	memcpy(&icp, buf + hlen, MIN((ssize_t)sizeof(icp), cc));
+	if (icp.icmp_type == icmp_type_rsp) {
+		if (icp.icmp_id != ident)
 			return;			/* 'Twas not our ECHO */
 		++nreceived;
 		triptime = 0.0;
 		if (timing) {
-			struct timeval tv1;
+			struct timespec tv1;
 			struct tv32 tv32;
-#ifndef icmp_data
-			tp = &icp->icmp_ip;
-#else
-			tp = icp->icmp_data;
-#endif
-			tp = (const char *)tp + phdr_len;
+			const u_char *tp;
+
+			tp = icmp_data_raw + phdr_len;
 
 			if ((size_t)(cc - ICMP_MINLEN - phdr_len) >=
 			    sizeof(tv1)) {
 				/* Copy to avoid alignment problems: */
 				memcpy(&tv32, tp, sizeof(tv32));
 				tv1.tv_sec = ntohl(tv32.tv32_sec);
-				tv1.tv_usec = ntohl(tv32.tv32_usec);
-				tvsub(tv, &tv1);
+				tv1.tv_nsec = ntohl(tv32.tv32_nsec);
+				timespecsub(tv, &tv1, tv);
  				triptime = ((double)tv->tv_sec) * 1000.0 +
- 				    ((double)tv->tv_usec) / 1000.0;
+				    ((double)tv->tv_nsec) / 1000000.0;
 				tsum += triptime;
 				tsumsq += triptime * triptime;
 				if (triptime < tmin)
@@ -1166,7 +1190,7 @@ pr_pack(char *buf, int cc, struct sockaddr_in *from, struct timeval *tv)
 				timing = 0;
 		}
 
-		seq = ntohs(icp->icmp_seq);
+		seq = ntohs(icp.icmp_seq);
 
 		if (TST(seq % mx_dup_ck)) {
 			++nrepeats;
@@ -1188,10 +1212,9 @@ pr_pack(char *buf, int cc, struct sockaddr_in *from, struct timeval *tv)
 		if (options & F_FLOOD)
 			(void)write(STDOUT_FILENO, &BSPACE, 1);
 		else {
-			(void)printf("%d bytes from %s: icmp_seq=%u", cc,
-			   inet_ntoa(*(struct in_addr *)&from->sin_addr.s_addr),
-			   seq);
-			(void)printf(" ttl=%d", ip->ip_ttl);
+			(void)printf("%zd bytes from %s: icmp_seq=%u", cc,
+			    pr_addr(from->sin_addr), seq);
+			(void)printf(" ttl=%d", ip.ip_ttl);
 			if (timing)
 				(void)printf(" time=%.3f ms", triptime);
 			if (dupflag)
@@ -1201,12 +1224,12 @@ pr_pack(char *buf, int cc, struct sockaddr_in *from, struct timeval *tv)
 			if (options & F_MASK) {
 				/* Just prentend this cast isn't ugly */
 				(void)printf(" mask=%s",
-					inet_ntoa(*(struct in_addr *)&(icp->icmp_mask)));
+					inet_ntoa(*(struct in_addr *)&(icp.icmp_mask)));
 			}
 			if (options & F_TIME) {
-				(void)printf(" tso=%s", pr_ntime(icp->icmp_otime));
-				(void)printf(" tsr=%s", pr_ntime(icp->icmp_rtime));
-				(void)printf(" tst=%s", pr_ntime(icp->icmp_ttime));
+				(void)printf(" tso=%s", pr_ntime(icp.icmp_otime));
+				(void)printf(" tsr=%s", pr_ntime(icp.icmp_rtime));
+				(void)printf(" tst=%s", pr_ntime(icp.icmp_ttime));
 			}
 			if (recv_len != send_len) {
                         	(void)printf(
@@ -1214,7 +1237,8 @@ pr_pack(char *buf, int cc, struct sockaddr_in *from, struct timeval *tv)
 				     recv_len, send_len);
 			}
 			/* check the data */
-			cp = (u_char*)&icp->icmp_data[phdr_len];
+			cp = (u_char*)(buf + hlen + offsetof(struct icmp,
+				icmp_data) + phdr_len);
 			dp = &outpack[ICMP_MINLEN + phdr_len];
 			cc -= ICMP_MINLEN + phdr_len;
 			i = 0;
@@ -1229,7 +1253,8 @@ pr_pack(char *buf, int cc, struct sockaddr_in *from, struct timeval *tv)
 	(void)printf("\nwrong data byte #%d should be 0x%x but was 0x%x",
 	    i, *dp, *cp);
 					(void)printf("\ncp:");
-					cp = (u_char*)&icp->icmp_data[0];
+					cp = (u_char*)(buf + hlen +
+					    offsetof(struct icmp, icmp_data));
 					for (i = 0; i < datalen; ++i, ++cp) {
 						if ((i % 16) == 8)
 							(void)printf("\n\t");
@@ -1257,22 +1282,22 @@ pr_pack(char *buf, int cc, struct sockaddr_in *from, struct timeval *tv)
 		 * as root to avoid leaking information not normally
 		 * available to those not running as root.
 		 */
-#ifndef icmp_data
-		struct ip *oip = &icp->icmp_ip;
-#else
-		struct ip *oip = (struct ip *)icp->icmp_data;
-#endif
-		struct icmp *oicmp = (struct icmp *)(oip + 1);
+		memcpy(&oip_header_len, icmp_data_raw, sizeof(oip_header_len));
+		oip_header_len = (oip_header_len & 0x0f) << 2;
+		memcpy(&oip, icmp_data_raw, oip_header_len);
+		oicmp_raw = icmp_data_raw + oip_header_len;
+		memcpy(&oicmp, oicmp_raw, offsetof(struct icmp, icmp_id) +
+		    sizeof(oicmp.icmp_id));
 
 		if (((options & F_VERBOSE) && uid == 0) ||
 		    (!(options & F_QUIET2) &&
-		     (oip->ip_dst.s_addr == whereto.sin_addr.s_addr) &&
-		     (oip->ip_p == IPPROTO_ICMP) &&
-		     (oicmp->icmp_type == ICMP_ECHO) &&
-		     (oicmp->icmp_id == ident))) {
-		    (void)printf("%d bytes from %s: ", cc,
+		     (oip.ip_dst.s_addr == whereto.sin_addr.s_addr) &&
+		     (oip.ip_p == IPPROTO_ICMP) &&
+		     (oicmp.icmp_type == ICMP_ECHO) &&
+		     (oicmp.icmp_id == ident))) {
+		    (void)printf("%zd bytes from %s: ", cc,
 			pr_addr(from->sin_addr));
-		    pr_icmph(icp);
+		    pr_icmph(&icp, &oip, oicmp_raw);
 		} else
 		    return;
 	}
@@ -1367,65 +1392,6 @@ pr_pack(char *buf, int cc, struct sockaddr_in *from, struct timeval *tv)
 }
 
 /*
- * in_cksum --
- *	Checksum routine for Internet Protocol family headers (C Version)
- */
-u_short
-in_cksum(u_short *addr, int len)
-{
-	int nleft, sum;
-	u_short *w;
-	union {
-		u_short	us;
-		u_char	uc[2];
-	} last;
-	u_short answer;
-
-	nleft = len;
-	sum = 0;
-	w = addr;
-
-	/*
-	 * Our algorithm is simple, using a 32 bit accumulator (sum), we add
-	 * sequential 16 bit words to it, and at the end, fold back all the
-	 * carry bits from the top 16 bits into the lower 16 bits.
-	 */
-	while (nleft > 1)  {
-		sum += *w++;
-		nleft -= 2;
-	}
-
-	/* mop up an odd byte, if necessary */
-	if (nleft == 1) {
-		last.uc[0] = *(u_char *)w;
-		last.uc[1] = 0;
-		sum += last.us;
-	}
-
-	/* add back carry outs from top 16 bits to low 16 bits */
-	sum = (sum >> 16) + (sum & 0xffff);	/* add hi 16 to low 16 */
-	sum += (sum >> 16);			/* add carry */
-	answer = ~sum;				/* truncate to 16 bits */
-	return(answer);
-}
-
-/*
- * tvsub --
- *	Subtract 2 timeval structs:  out = out - in.  Out is assumed to
- * be >= in.
- */
-static void
-tvsub(struct timeval *out, const struct timeval *in)
-{
-
-	if ((out->tv_usec -= in->tv_usec) < 0) {
-		--out->tv_sec;
-		out->tv_usec += 1000000;
-	}
-	out->tv_sec -= in->tv_sec;
-}
-
-/*
  * status --
  *	Print out statistics when SIGINFO is received.
  */
@@ -1517,7 +1483,7 @@ static char *ttab[] = {
  *	Print a descriptive string about an ICMP header.
  */
 static void
-pr_icmph(struct icmp *icp)
+pr_icmph(struct icmp *icp, struct ip *oip, const u_char *const oicmp_raw)
 {
 
 	switch(icp->icmp_type) {
@@ -1555,19 +1521,11 @@ pr_icmph(struct icmp *icp)
 			break;
 		}
 		/* Print returned IP header information */
-#ifndef icmp_data
-		pr_retip(&icp->icmp_ip);
-#else
-		pr_retip((struct ip *)icp->icmp_data);
-#endif
+		pr_retip(oip, oicmp_raw);
 		break;
 	case ICMP_SOURCEQUENCH:
 		(void)printf("Source Quench\n");
-#ifndef icmp_data
-		pr_retip(&icp->icmp_ip);
-#else
-		pr_retip((struct ip *)icp->icmp_data);
-#endif
+		pr_retip(oip, oicmp_raw);
 		break;
 	case ICMP_REDIRECT:
 		switch(icp->icmp_code) {
@@ -1588,11 +1546,7 @@ pr_icmph(struct icmp *icp)
 			break;
 		}
 		(void)printf("(New addr: %s)\n", inet_ntoa(icp->icmp_gwaddr));
-#ifndef icmp_data
-		pr_retip(&icp->icmp_ip);
-#else
-		pr_retip((struct ip *)icp->icmp_data);
-#endif
+		pr_retip(oip, oicmp_raw);
 		break;
 	case ICMP_ECHO:
 		(void)printf("Echo Request\n");
@@ -1611,20 +1565,12 @@ pr_icmph(struct icmp *icp)
 			    icp->icmp_code);
 			break;
 		}
-#ifndef icmp_data
-		pr_retip(&icp->icmp_ip);
-#else
-		pr_retip((struct ip *)icp->icmp_data);
-#endif
+		pr_retip(oip, oicmp_raw);
 		break;
 	case ICMP_PARAMPROB:
 		(void)printf("Parameter problem: pointer = 0x%02x\n",
 		    icp->icmp_hun.ih_pptr);
-#ifndef icmp_data
-		pr_retip(&icp->icmp_ip);
-#else
-		pr_retip((struct ip *)icp->icmp_data);
-#endif
+		pr_retip(oip, oicmp_raw);
 		break;
 	case ICMP_TSTAMP:
 		(void)printf("Timestamp\n");
@@ -1707,11 +1653,9 @@ pr_addr(struct in_addr ina)
 	if (options & F_NUMERIC)
 		return inet_ntoa(ina);
 
-#ifdef HAVE_LIBCASPER
 	if (capdns != NULL)
 		hp = cap_gethostbyaddr(capdns, (char *)&ina, 4, AF_INET);
 	else
-#endif
 		hp = gethostbyaddr((char *)&ina, 4, AF_INET);
 
 	if (hp == NULL)
@@ -1727,14 +1671,9 @@ pr_addr(struct in_addr ina)
  *	Dump some info on a returned (via ICMP) IP packet.
  */
 static void
-pr_retip(struct ip *ip)
+pr_retip(struct ip *ip, const u_char *cp)
 {
-	u_char *cp;
-	int hlen;
-
 	pr_iph(ip);
-	hlen = ip->ip_hl << 2;
-	cp = (u_char *)ip + hlen;
 
 	if (ip->ip_p == 6)
 		(void)printf("TCP: from port %u, to port %u (decimal)\n",
@@ -1747,7 +1686,7 @@ pr_retip(struct ip *ip)
 static char *
 pr_ntime(n_time timestamp)
 {
-	static char buf[10];
+	static char buf[11];
 	int hour, min, sec;
 
 	sec = ntohl(timestamp) / 1000;
@@ -1791,14 +1730,14 @@ fill(char *bp, char *patp)
 	}
 }
 
-#ifdef HAVE_LIBCASPER
 static cap_channel_t *
 capdns_setup(void)
 {
 	cap_channel_t *capcas, *capdnsloc;
+#ifdef WITH_CASPER
 	const char *types[2];
 	int families[1];
-
+#endif
 	capcas = cap_init();
 	if (capcas == NULL)
 		err(1, "unable to create casper process");
@@ -1807,17 +1746,17 @@ capdns_setup(void)
 	cap_close(capcas);
 	if (capdnsloc == NULL)
 		err(1, "unable to open system.dns service");
-	types[0] = "NAME";
-	types[1] = "ADDR";
+#ifdef WITH_CASPER
+	types[0] = "NAME2ADDR";
+	types[1] = "ADDR2NAME";
 	if (cap_dns_type_limit(capdnsloc, types, 2) < 0)
 		err(1, "unable to limit access to system.dns service");
 	families[0] = AF_INET;
 	if (cap_dns_family_limit(capdnsloc, families, 1) < 0)
 		err(1, "unable to limit access to system.dns service");
-
+#endif
 	return (capdnsloc);
 }
-#endif /* HAVE_LIBCASPER */
 
 #if defined(IPSEC) && defined(IPSEC_POLICY_IPSEC)
 #define	SECOPT		" [-P policy]"

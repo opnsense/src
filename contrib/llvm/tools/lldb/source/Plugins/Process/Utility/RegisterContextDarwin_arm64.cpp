@@ -8,25 +8,17 @@
 //
 //===----------------------------------------------------------------------===//
 
-#if defined(__APPLE__)
-
 #include "RegisterContextDarwin_arm64.h"
+#include "RegisterContextDarwinConstants.h"
 
-// C Includes
-#include <mach/mach_types.h>
-#include <mach/thread_act.h>
-#include <sys/sysctl.h>
-
-// C++ Includes
-// Other libraries and framework includes
-#include "lldb/Core/RegisterValue.h"
-#include "lldb/Core/Scalar.h"
 #include "lldb/Target/Process.h"
 #include "lldb/Target/Thread.h"
 #include "lldb/Utility/DataBufferHeap.h"
 #include "lldb/Utility/DataExtractor.h"
 #include "lldb/Utility/Endian.h"
 #include "lldb/Utility/Log.h"
+#include "lldb/Utility/RegisterValue.h"
+#include "lldb/Utility/Scalar.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Compiler.h"
 
@@ -38,8 +30,7 @@
 #define LLVM_EXTENSION
 #endif
 
-// Project includes
-#include "ARM64_DWARF_Registers.h"
+#include "Utility/ARM64_DWARF_Registers.h"
 
 using namespace lldb;
 using namespace lldb_private;
@@ -149,9 +140,9 @@ const size_t k_num_fpu_registers = llvm::array_lengthof(g_fpu_regnums);
 const size_t k_num_exc_registers = llvm::array_lengthof(g_exc_regnums);
 
 //----------------------------------------------------------------------
-// Register set definitions. The first definitions at register set index
-// of zero is for all registers, followed by other registers sets. The
-// register information for the all register set need not be filled in.
+// Register set definitions. The first definitions at register set index of
+// zero is for all registers, followed by other registers sets. The register
+// information for the all register set need not be filled in.
 //----------------------------------------------------------------------
 static const RegisterSet g_reg_sets[] = {
     {
@@ -299,8 +290,9 @@ int RegisterContextDarwin_arm64::WriteRegisterSet(uint32_t set) {
 void RegisterContextDarwin_arm64::LogDBGRegisters(Log *log, const DBG &dbg) {
   if (log) {
     for (uint32_t i = 0; i < 16; i++)
-      log->Printf("BVR%-2u/BCR%-2u = { 0x%8.8llx, 0x%8.8llx } WVR%-2u/WCR%-2u "
-                  "= { 0x%8.8llx, 0x%8.8llx }",
+      log->Printf("BVR%-2u/BCR%-2u = { 0x%8.8" PRIu64 ", 0x%8.8" PRIu64
+                  " } WVR%-2u/WCR%-2u "
+                  "= { 0x%8.8" PRIu64 ", 0x%8.8" PRIu64 " }",
                   i, i, dbg.bvr[i], dbg.bcr[i], i, i, dbg.wvr[i], dbg.wcr[i]);
   }
 }
@@ -346,12 +338,22 @@ bool RegisterContextDarwin_arm64::ReadRegister(const RegisterInfo *reg_info,
   case gpr_x26:
   case gpr_x27:
   case gpr_x28:
-  case gpr_fp:
-  case gpr_sp:
-  case gpr_lr:
-  case gpr_pc:
-  case gpr_cpsr:
     value.SetUInt64(gpr.x[reg - gpr_x0]);
+    break;
+  case gpr_fp:
+    value.SetUInt64(gpr.fp);
+    break;
+  case gpr_sp:
+    value.SetUInt64(gpr.sp);
+    break;
+  case gpr_lr:
+    value.SetUInt64(gpr.lr);
+    break;
+  case gpr_pc:
+    value.SetUInt64(gpr.pc);
+    break;
+  case gpr_cpsr:
+    value.SetUInt64(gpr.cpsr);
     break;
 
   case gpr_w0:
@@ -921,7 +923,7 @@ uint32_t RegisterContextDarwin_arm64::ConvertRegisterKindToRegisterNumber(
 }
 
 uint32_t RegisterContextDarwin_arm64::NumSupportedHardwareWatchpoints() {
-#if defined(__arm64__) || defined(__aarch64__)
+#if defined(__APPLE__) && (defined(__arm64__) || defined(__aarch64__))
   // autodetect how many watchpoints are supported dynamically...
   static uint32_t g_num_supported_hw_watchpoints = UINT32_MAX;
   if (g_num_supported_hw_watchpoints == UINT32_MAX) {
@@ -954,7 +956,7 @@ uint32_t RegisterContextDarwin_arm64::SetHardwareWatchpoint(lldb::addr_t addr,
     return LLDB_INVALID_INDEX32;
 
   // We must watch for either read or write
-  if (read == false && write == false)
+  if (!read && !write)
     return LLDB_INVALID_INDEX32;
 
   // Can't watch more than 4 bytes per WVR/WCR pair
@@ -1043,5 +1045,3 @@ bool RegisterContextDarwin_arm64::ClearHardwareWatchpoint(uint32_t hw_index) {
   }
   return false;
 }
-
-#endif

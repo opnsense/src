@@ -7,19 +7,16 @@
 //
 //===----------------------------------------------------------------------===//
 
-// C Includes
-#include <inttypes.h> // PRIx64
+#include <inttypes.h>
 #include <stdarg.h>
-#include <stddef.h> // offsetof
+#include <stddef.h>
 
-// C++ Includes
-// Other libraries and framework includes
-#include "lldb/Core/RegisterValue.h"
-#include "lldb/Core/Scalar.h"
 #include "lldb/Utility/DataBufferHeap.h"
 #include "lldb/Utility/DataExtractor.h"
 #include "lldb/Utility/Endian.h"
 #include "lldb/Utility/Log.h"
+#include "lldb/Utility/RegisterValue.h"
+#include "lldb/Utility/Scalar.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Compiler.h"
 
@@ -29,7 +26,6 @@
 #define LLVM_EXTENSION
 #endif
 
-// Project includes
 #include "RegisterContextDarwin_x86_64.h"
 
 using namespace lldb;
@@ -165,9 +161,9 @@ enum ehframe_dwarf_regnums {
    sizeof(RegisterContextDarwin_x86_64::FPU))
 
 // These macros will auto define the register name, alt name, register size,
-// register offset, encoding, format and native register. This ensures that
-// the register state structures are defined correctly and have the correct
-// sizes and offsets.
+// register offset, encoding, format and native register. This ensures that the
+// register state structures are defined correctly and have the correct sizes
+// and offsets.
 #define DEFINE_GPR(reg, alt)                                                   \
   #reg, alt, sizeof(((RegisterContextDarwin_x86_64::GPR *) NULL)->reg),        \
                     GPR_OFFSET(reg), eEncodingUint, eFormatHex
@@ -525,9 +521,9 @@ const size_t k_num_fpu_registers = llvm::array_lengthof(g_fpu_regnums);
 const size_t k_num_exc_registers = llvm::array_lengthof(g_exc_regnums);
 
 //----------------------------------------------------------------------
-// Register set definitions. The first definitions at register set index
-// of zero is for all registers, followed by other registers sets. The
-// register information for the all register set need not be filled in.
+// Register set definitions. The first definitions at register set index of
+// zero is for all registers, followed by other registers sets. The register
+// information for the all register set need not be filled in.
 //----------------------------------------------------------------------
 static const RegisterSet g_reg_sets[] = {
     {

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1998-2014 Dag-Erling Smørgrav
  * All rights reserved.
  *
@@ -102,9 +104,16 @@ int		 fetch_no_proxy_match(const char *);
 #define url_seterr(n)	 fetch_seterr(url_errlist, n)
 
 #ifndef NDEBUG
-#define DEBUG(x) do { if (fetchDebug) { x; } } while (0)
+#define DEBUGF(...)							\
+	do {								\
+		if (fetchDebug)						\
+			fprintf(stderr, __VA_ARGS__);			\
+	} while (0)
 #else
-#define DEBUG(x) do { } while (0)
+#define DEBUGF(...)							\
+	do {								\
+		/* nothing */						\
+	} while (0)
 #endif
 
 /*

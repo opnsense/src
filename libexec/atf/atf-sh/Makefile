@@ -72,9 +72,8 @@ FILESGROUPS=	SUBR
 SUBRDIR=	${SHAREDIR}/atf
 SUBR=		libatf-sh.subr
 
-.if ${MK_TESTS} != "no"
-SUBDIR+=	tests
-.endif
+HAS_TESTS=
+SUBDIR.${MK_TESTS}+= tests
 
 .include "../../../lib/atf/common.mk"
 .include <bsd.prog.mk>

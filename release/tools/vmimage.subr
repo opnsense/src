@@ -14,13 +14,10 @@ write_partition_layout() {
 		SWAPOPT="-p freebsd-swap/swapfs::${SWAPSIZE}"
 	fi
 
-	_OBJDIR="$(make -C ${WORLDDIR} -V .OBJDIR)"
-	_OBJDIR="$(realpath ${_OBJDIR})"
-	if [ -d "${_OBJDIR%%/usr/src}/${TARGET}.${TARGET_ARCH}" ]; then
-		BOOTFILES="/${_OBJDIR%%/usr/src}/${TARGET}.${TARGET_ARCH}/usr/src/stand"
-	else
-		BOOTFILES="/${_OBJDIR}/stand"
-	fi
+	BOOTFILES="$(env TARGET=${TARGET} TARGET_ARCH=${TARGET_ARCH} \
+		WITH_UNIFIED_OBJDIR=yes \
+		make -C ${WORLDDIR}/stand -V .OBJDIR)"
+	BOOTFILES="$(realpath ${BOOTFILES})"
 
 	case "${TARGET}:${TARGET_ARCH}" in
 		amd64:amd64 | i386:i386)
@@ -144,10 +141,15 @@ vm_install_base() {
 	hostname="$(echo $(uname -o) | tr '[:upper:]' '[:lower:]')"
 	echo "hostname=\"${hostname}\"" >> ${DESTDIR}/etc/rc.conf
 
+	if ! [ -z "${QEMUSTATIC}" ]; then
+		export EMULATOR=/qemu
+		cp ${QEMUSTATIC} ${DESTDIR}/${EMULATOR}
+	fi
+
 	mkdir -p ${DESTDIR}/dev
 	mount -t devfs devfs ${DESTDIR}/dev
-	chroot ${DESTDIR} /usr/bin/newaliases
-	chroot ${DESTDIR} /etc/rc.d/ldconfig forcestart
+	chroot ${DESTDIR} ${EMULATOR} /usr/bin/newaliases
+	chroot ${DESTDIR} ${EMULATOR} /bin/sh /etc/rc.d/ldconfig forcestart
 	umount_loop ${DESTDIR}/dev
 
 	cp /etc/resolv.conf ${DESTDIR}/etc/resolv.conf
@@ -173,6 +175,9 @@ vm_extra_enable_services() {
 	if [ -z "${VMCONFIG}" -o -c "${VMCONFIG}" ]; then
 		echo 'ifconfig_DEFAULT="DHCP inet6 accept_rtadv"' >> \
 			${DESTDIR}/etc/rc.conf
+		# Expand the filesystem to fill the disk.
+		echo 'growfs_enable="YES"' >> ${DESTDIR}/etc/rc.conf
+		touch ${DESTDIR}/firstboot
 	fi
 
 	return 0
@@ -184,9 +189,9 @@ vm_extra_install_packages() {
 	fi
 	mkdir -p ${DESTDIR}/dev
 	mount -t devfs devfs ${DESTDIR}/dev
-	chroot ${DESTDIR} env ASSUME_ALWAYS_YES=yes \
+	chroot ${DESTDIR} ${EMULATOR} env ASSUME_ALWAYS_YES=yes \
 		/usr/sbin/pkg bootstrap -y
-	chroot ${DESTDIR} env ASSUME_ALWAYS_YES=yes \
+	chroot ${DESTDIR} ${EMULATOR} env ASSUME_ALWAYS_YES=yes \
 		/usr/sbin/pkg install -y ${VM_EXTRA_PACKAGES}
 	umount_loop ${DESTDIR}/dev
 
@@ -206,13 +211,16 @@ vm_extra_pre_umount() {
 	# Note: When overriding this function, removing resolv.conf in the
 	# disk image must be included.
 
+	if ! [ -z "${QEMUSTATIC}" ]; then
+		rm -f ${DESTDIR}/${EMULATOR}
+	fi
 	rm -f ${DESTDIR}/etc/resolv.conf
 	return 0
 }
 
 vm_extra_pkg_rmcache() {
 	if [ -e ${DESTDIR}/usr/local/sbin/pkg ]; then
-		chroot ${DESTDIR} env ASSUME_ALWAYS_YES=yes \
+		chroot ${DESTDIR} ${EMULATOR} env ASSUME_ALWAYS_YES=yes \
 			/usr/local/sbin/pkg clean -y -a
 	fi
 

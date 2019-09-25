@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1982, 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -40,11 +42,13 @@
 #include <sys/systm.h>
 #include <sys/bus.h>
 #include <sys/eventhandler.h>
+#include <sys/jail.h>
 #include <sys/kernel.h>
 #include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/module.h>
 #include <sys/mbuf.h>
+#include <sys/proc.h>
 #include <sys/priv.h>
 #include <sys/random.h>
 #include <sys/socket.h>
@@ -52,6 +56,7 @@
 #include <sys/sysctl.h>
 #include <sys/uuid.h>
 
+#include <net/ieee_oui.h>
 #include <net/if.h>
 #include <net/if_var.h>
 #include <net/if_arp.h>
@@ -83,6 +88,8 @@
 #endif
 #include <security/mac/mac_framework.h>
 
+#include <crypto/sha1.h>
+
 #ifdef CTASSERT
 CTASSERT(sizeof (struct ether_header) == ETHER_ADDR_LEN * 2 + 2);
 CTASSERT(sizeof (struct ether_addr) == ETHER_ADDR_LEN);
@@ -100,9 +107,6 @@ void	(*ng_ether_detach_p)(struct ifnet *ifp);
 void	(*vlan_input_p)(struct ifnet *, struct mbuf *);
 
 /* if_bridge(4) support */
-struct mbuf *(*bridge_input_p)(struct ifnet *, struct mbuf *); 
-int	(*bridge_output_p)(struct ifnet *, struct mbuf *, 
-		struct sockaddr *, struct rtentry *);
 void	(*bridge_dn_p)(struct mbuf *, struct ifnet *);
 
 /* if_lagg(4) support */
@@ -118,8 +122,6 @@ static	void ether_reassign(struct ifnet *, struct vnet *, char *);
 #endif
 static	int ether_requestencap(struct ifnet *, struct if_encap_req *);
 
-#define	ETHER_IS_BROADCAST(addr) \
-	(bcmp(etherbroadcastaddr, (addr), ETHER_ADDR_LEN) == 0)
 
 #define senderr(e) do { error = (e); goto bad;} while (0)
 
@@ -291,7 +293,6 @@ ether_output(struct ifnet *ifp, struct mbuf *m,
 	int hlen;	/* link layer header length */
 	uint32_t pflags;
 	struct llentry *lle = NULL;
-	struct rtentry *rt0 = NULL;
 	int addref = 0;
 
 	phdr = NULL;
@@ -313,7 +314,13 @@ ether_output(struct ifnet *ifp, struct mbuf *m,
 				if (lle == NULL) {
 					/* if we lookup, keep cache */
 					addref = 1;
-				}
+				} else
+					/*
+					 * Notify LLE code that
+					 * the entry was used
+					 * by datapath.
+					 */
+					llentry_mark_used(lle);
 			}
 			if (lle != NULL) {
 				phdr = lle->r_linkdata;
@@ -321,7 +328,6 @@ ether_output(struct ifnet *ifp, struct mbuf *m,
 				pflags = lle->r_flags;
 			}
 		}
-		rt0 = ro->ro_rt;
 	}
 
 #ifdef MAC
@@ -460,7 +466,8 @@ ether_output_frame(struct ifnet *ifp, struct mbuf *m)
 	uint8_t pcp;
 
 	pcp = ifp->if_pcp;
-	if (pcp != IFNET_PCP_NONE && !ether_set_pcp(&m, ifp, pcp))
+	if (pcp != IFNET_PCP_NONE && ifp->if_type != IFT_L2VLAN &&
+	    !ether_set_pcp(&m, ifp, pcp))
 		return (0);
 
 	if (PFIL_HOOKED(&V_link_pfil_hook)) {
@@ -512,7 +519,7 @@ ether_input_internal(struct ifnet *ifp, struct mbuf *m)
 	}
 	eh = mtod(m, struct ether_header *);
 	etype = ntohs(eh->ether_type);
-	random_harvest_queue(m, sizeof(*m), 2, RANDOM_NET_ETHER);
+	random_harvest_queue_ether(m, sizeof(*m));
 
 	CURVNET_SET_QUIET(ifp->if_vnet);
 
@@ -1290,7 +1297,7 @@ static SYSCTL_NODE(_net_link, IFT_L2VLAN, vlan, CTLFLAG_RW, 0,
 static SYSCTL_NODE(_net_link_vlan, PF_LINK, link, CTLFLAG_RW, 0,
     "for consistency");
 
-static VNET_DEFINE(int, soft_pad);
+VNET_DEFINE_STATIC(int, soft_pad);
 #define	V_soft_pad	VNET(soft_pad)
 SYSCTL_INT(_net_link_vlan, OID_AUTO, soft_pad, CTLFLAG_RW | CTLFLAG_VNET,
     &VNET_NAME(soft_pad), 0,
@@ -1348,7 +1355,7 @@ ether_8021q_frame(struct mbuf **mp, struct ifnet *ife, struct ifnet *p,
 	 * knows how to find the VLAN tag to use, so we attach a
 	 * packet tag that holds it.
 	 */
-	if ((mtag = m_tag_locate(*mp, MTAG_8021Q,
+	if (vlan_mtag_pcp && (mtag = m_tag_locate(*mp, MTAG_8021Q,
 	    MTAG_8021Q_PCP_OUT, NULL)) != NULL)
 		tag = EVL_MAKETAG(vid, *(uint8_t *)(mtag + 1), 0);
 	else
@@ -1364,6 +1371,39 @@ ether_8021q_frame(struct mbuf **mp, struct ifnet *ife, struct ifnet *p,
 		}
 	}
 	return (true);
+}
+
+/*
+ * Allocate an address from the FreeBSD Foundation OUI.  This uses a
+ * cryptographic hash function on the containing jail's UUID and the interface
+ * name to attempt to provide a unique but stable address.  Pseudo-interfaces
+ * which require a MAC address should use this function to allocate
+ * non-locally-administered addresses.
+ */
+void
+ether_gen_addr(struct ifnet *ifp, struct ether_addr *hwaddr)
+{
+#define	ETHER_GEN_ADDR_BUFSIZ	HOSTUUIDLEN + IFNAMSIZ + 2
+	SHA1_CTX ctx;
+	char buf[ETHER_GEN_ADDR_BUFSIZ];
+	char uuid[HOSTUUIDLEN + 1];
+	uint64_t addr;
+	int i, sz;
+	char digest[SHA1_RESULTLEN];
+
+	getcredhostuuid(curthread->td_ucred, uuid, sizeof(uuid));
+	sz = snprintf(buf, ETHER_GEN_ADDR_BUFSIZ, "%s-%s", uuid, ifp->if_xname);
+	SHA1Init(&ctx);
+	SHA1Update(&ctx, buf, sz);
+	SHA1Final(digest, &ctx);
+
+	addr = ((digest[0] << 16) | (digest[1] << 8) | digest[2]) &
+	    OUI_FREEBSD_GENERATED_MASK;
+	addr = OUI_FREEBSD(addr);
+	for (i = 0; i < ETHER_ADDR_LEN; ++i) {
+		hwaddr->octet[i] = addr >> ((ETHER_ADDR_LEN - i - 1) * 8) &
+		    0xFF;
+	}
 }
 
 DECLARE_MODULE(ether, ether_mod, SI_SUB_INIT_IF, SI_ORDER_ANY);

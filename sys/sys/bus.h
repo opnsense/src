@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1997,1998,2003 Doug Rabson
  * All rights reserved.
  *
@@ -44,7 +46,7 @@
  */
 struct u_businfo {
 	int	ub_version;		/**< @brief interface version */
-#define BUS_USER_VERSION	1
+#define BUS_USER_VERSION	2
 	int	ub_generation;		/**< @brief generation count */
 };
 
@@ -61,20 +63,23 @@ typedef enum device_state {
 
 /**
  * @brief Device information exported to userspace.
+ * The strings are placed one after the other, separated by NUL characters.
+ * Fields should be added after the last one and order maintained for compatibility
  */
+#define BUS_USER_BUFFER		(3*1024)
 struct u_device {
 	uintptr_t	dv_handle;
 	uintptr_t	dv_parent;
-
-	char		dv_name[32];		/**< @brief Name of device in tree. */
-	char		dv_desc[32];		/**< @brief Driver description */
-	char		dv_drivername[32];	/**< @brief Driver name */
-	char		dv_pnpinfo[128];	/**< @brief Plug and play info */
-	char		dv_location[128];	/**< @brief Where is the device? */
 	uint32_t	dv_devflags;		/**< @brief API Flags for device */
 	uint16_t	dv_flags;		/**< @brief flags for dev state */
 	device_state_t	dv_state;		/**< @brief State of attachment */
-	/* XXX more driver info? */
+	char		dv_fields[BUS_USER_BUFFER]; /**< @brief NUL terminated fields */
+	/* name (name of the device in tree) */
+	/* desc (driver description) */
+	/* drivername (Name of driver without unit number) */
+	/* pnpinfo (Plug and play information from bus) */
+	/* location (Location of device on parent */
+	/* NUL */
 };
 
 /* Flags exported via dv_flags. */
@@ -87,6 +92,9 @@ struct u_device {
 #define	DF_EXTERNALSOFTC 0x40		/* softc not allocated by us */
 #define	DF_REBID	0x80		/* Can rebid after attach */
 #define	DF_SUSPENDED	0x100		/* Device is suspended. */
+#define	DF_QUIET_CHILDREN 0x200		/* Default to quiet for all my children */
+#define	DF_ATTACHED_ONCE 0x400		/* Has been attached at least once */
+#define	DF_NEEDNOMATCH	0x800		/* Has a pending NOMATCH event */
 
 /**
  * @brief Device request structure used for ioctl's.
@@ -120,6 +128,9 @@ struct devreq {
 #define	DEV_CLEAR_DRIVER _IOW('D', 8, struct devreq)
 #define	DEV_RESCAN	_IOW('D', 9, struct devreq)
 #define	DEV_DELETE	_IOW('D', 10, struct devreq)
+#define	DEV_FREEZE	_IOW('D', 11, struct devreq)
+#define	DEV_THAW	_IOW('D', 12, struct devreq)
+#define	DEV_RESET	_IOW('D', 13, struct devreq)
 
 /* Flags for DEV_DETACH and DEV_DISABLE. */
 #define	DEVF_FORCE_DETACH	0x0000001
@@ -133,10 +144,15 @@ struct devreq {
 /* Flags for DEV_DELETE. */
 #define	DEVF_FORCE_DELETE	0x0000001
 
+/* Flags for DEV_RESET */
+#define	DEVF_RESET_DETACH	0x0000001	/* Detach drivers vs suspend
+						   device */
+
 #ifdef _KERNEL
 
 #include <sys/eventhandler.h>
 #include <sys/kobj.h>
+#include <sys/systm.h>
 
 /**
  * devctl hooks.  Typically one should use the devctl_notify
@@ -150,7 +166,8 @@ void devctl_notify(const char *__system, const char *__subsystem,
     const char *__type, const char *__data);
 void devctl_queue_data_f(char *__data, int __flags);
 void devctl_queue_data(char *__data);
-void devctl_safe_quote(char *__dst, const char *__src, size_t len);
+struct sbuf;
+void devctl_safe_quote_sb(struct sbuf *__sb, const char *__src);
 
 /**
  * Device name parsers.  Hook to allow device enumerators to map
@@ -393,14 +410,14 @@ int	resource_list_print_type(struct resource_list *rl,
 				 const char *format);
 
 /*
- * The root bus, to which all top-level busses are attached.
+ * The root bus, to which all top-level buses are attached.
  */
 extern device_t root_bus;
 extern devclass_t root_devclass;
 void	root_bus_configure(void);
 
 /*
- * Useful functions for implementing busses.
+ * Useful functions for implementing buses.
  */
 
 int	bus_generic_activate_resource(device_t dev, device_t child, int type,
@@ -474,11 +491,17 @@ int	bus_generic_suspend(device_t dev);
 int	bus_generic_suspend_child(device_t dev, device_t child);
 int	bus_generic_teardown_intr(device_t dev, device_t child,
 				  struct resource *irq, void *cookie);
+int	bus_generic_suspend_intr(device_t dev, device_t child,
+				  struct resource *irq);
+int	bus_generic_resume_intr(device_t dev, device_t child,
+				  struct resource *irq);
 int	bus_generic_unmap_resource(device_t dev, device_t child, int type,
 				   struct resource *r,
 				   struct resource_map *map);
 int	bus_generic_write_ivar(device_t dev, device_t child, int which,
 			       uintptr_t value);
+int	bus_helper_reset_post(device_t dev, int flags);
+int	bus_helper_reset_prepare(device_t dev, int flags);
 int	bus_null_rescan(device_t dev);
 
 /*
@@ -524,6 +547,8 @@ int	bus_setup_intr(device_t dev, struct resource *r, int flags,
 		       driver_filter_t filter, driver_intr_t handler, 
 		       void *arg, void **cookiep);
 int	bus_teardown_intr(device_t dev, struct resource *r, void *cookie);
+int	bus_suspend_intr(device_t dev, struct resource *r);
+int	bus_resume_intr(device_t dev, struct resource *r);
 int	bus_bind_intr(device_t dev, struct resource *r, int cpu);
 int	bus_describe_intr(device_t dev, struct resource *irq, void *cookie,
 			  const char *fmt, ...) __printflike(4, 5);
@@ -582,6 +607,7 @@ device_state_t	device_get_state(device_t dev);
 int	device_get_unit(device_t dev);
 struct sysctl_ctx_list *device_get_sysctl_ctx(device_t dev);
 struct sysctl_oid *device_get_sysctl_tree(device_t dev);
+int	device_has_quiet_children(device_t dev);
 int	device_is_alive(device_t dev);	/* did probe succeed? */
 int	device_is_attached(device_t dev);	/* did attach succeed? */
 int	device_is_enabled(device_t dev);
@@ -595,6 +621,7 @@ int	device_probe_and_attach(device_t dev);
 int	device_probe_child(device_t bus, device_t dev);
 int	device_quiesce(device_t dev);
 void	device_quiet(device_t dev);
+void	device_quiet_children(device_t dev);
 void	device_set_desc(device_t dev, const char* desc);
 void	device_set_desc_copy(device_t dev, const char* desc);
 int	device_set_devclass(device_t dev, const char *classname);
@@ -657,7 +684,7 @@ void	bus_data_generation_update(void);
  * Some convenience defines for probe routines to return.  These are just
  * suggested values, and there's nothing magical about them.
  * BUS_PROBE_SPECIFIC is for devices that cannot be reprobed, and that no
- * possible other driver may exist (typically legacy drivers who don't fallow
+ * possible other driver may exist (typically legacy drivers who don't follow
  * all the rules, or special needs drivers).  BUS_PROBE_VENDOR is the
  * suggested value that vendor supplied drivers use.  This is for source or
  * binary drivers that are not yet integrated into the FreeBSD tree.  Its use
@@ -670,7 +697,7 @@ void	bus_data_generation_update(void);
  * supports the newer ones would return BUS_PROBE_DEFAULT.  BUS_PROBE_GENERIC
  * is for drivers that wish to have a generic form and a specialized form,
  * like is done with the pci bus and the acpi pci bus.  BUS_PROBE_HOOVER is
- * for those busses that implement a generic device place-holder for devices on
+ * for those buses that implement a generic device placeholder for devices on
  * the bus that have no more specific driver for them (aka ugen).
  * BUS_PROBE_NOWILDCARD or lower means that the device isn't really bidding
  * for a device node, but accepts only devices that its parent has told it
@@ -694,12 +721,13 @@ void	bus_data_generation_update(void);
  * probed in earlier passes.
  */
 #define	BUS_PASS_ROOT		0	/* Used to attach root0. */
-#define	BUS_PASS_BUS		10	/* Busses and bridges. */
+#define	BUS_PASS_BUS		10	/* Buses and bridges. */
 #define	BUS_PASS_CPU		20	/* CPU devices. */
 #define	BUS_PASS_RESOURCE	30	/* Resource discovery. */
 #define	BUS_PASS_INTERRUPT	40	/* Interrupt controllers. */
 #define	BUS_PASS_TIMER		50	/* Timers and clocks. */
 #define	BUS_PASS_SCHEDULER	60	/* Start scheduler. */
+#define	BUS_PASS_SUPPORTDEV	100000	/* Drivers which support DEFAULT drivers. */
 #define	BUS_PASS_DEFAULT	__INT_MAX /* Everything else. */
 
 #define	BUS_PASS_ORDER_FIRST	0
@@ -729,7 +757,7 @@ struct	module;
 int	driver_module_handler(struct module *, int, void *);
 
 /**
- * Module support for automatically adding drivers to busses.
+ * Module support for automatically adding drivers to buses.
  */
 struct driver_module_data {
 	int		(*dmd_chainevh)(struct module *, int, void *);
@@ -780,16 +808,24 @@ DECLARE_MODULE(name##_##busname, name##_##busname##_mod,		\
 static __inline type varp ## _get_ ## var(device_t dev)			\
 {									\
 	uintptr_t v;							\
-	BUS_READ_IVAR(device_get_parent(dev), dev,			\
+	int e;								\
+	e = BUS_READ_IVAR(device_get_parent(dev), dev,			\
 	    ivarp ## _IVAR_ ## ivar, &v);				\
+	KASSERT(e == 0, ("%s failed for %s on bus %s, error = %d",	\
+	    __func__, device_get_nameunit(dev),				\
+	    device_get_nameunit(device_get_parent(dev)), e));		\
 	return ((type) v);						\
 }									\
 									\
 static __inline void varp ## _set_ ## var(device_t dev, type t)		\
 {									\
 	uintptr_t v = (uintptr_t) t;					\
-	BUS_WRITE_IVAR(device_get_parent(dev), dev,			\
+	int e;								\
+	e = BUS_WRITE_IVAR(device_get_parent(dev), dev,			\
 	    ivarp ## _IVAR_ ## ivar, v);				\
+	KASSERT(e == 0, ("%s failed for %s on bus %s, error = %d",	\
+	    __func__, device_get_nameunit(dev),				\
+	    device_get_nameunit(device_get_parent(dev)), e));		\
 }
 
 /**

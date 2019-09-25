@@ -97,7 +97,7 @@ uptr Unwind_GetIP(struct _Unwind_Context *ctx) {
   // Clear the Thumb bit.
   return val & ~(uptr)1;
 #else
-  return _Unwind_GetIP(ctx);
+  return (uptr)_Unwind_GetIP(ctx);
 #endif
 }
 
@@ -149,7 +149,7 @@ void BufferedStackTrace::SlowUnwindStackWithContext(uptr pc, void *context,
 
   void *map = acquire_my_map_info_list();
   CHECK(map);
-  InternalScopedBuffer<backtrace_frame_t> frames(kStackTraceMax);
+  InternalMmapVector<backtrace_frame_t> frames(kStackTraceMax);
   // siginfo argument appears to be unused.
   sptr res = unwind_backtrace_signal_arch(/* siginfo */ 0, context, map,
                                           frames.data(),

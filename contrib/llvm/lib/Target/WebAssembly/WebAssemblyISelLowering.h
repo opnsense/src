@@ -8,7 +8,7 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// \brief This file defines the interfaces that WebAssembly uses to lower LLVM
+/// This file defines the interfaces that WebAssembly uses to lower LLVM
 /// code into a selection DAG.
 ///
 //===----------------------------------------------------------------------===//
@@ -29,21 +29,22 @@ enum NodeType : unsigned {
 #undef HANDLE_NODETYPE
 };
 
-}  // end namespace WebAssemblyISD
+} // end namespace WebAssemblyISD
 
 class WebAssemblySubtarget;
 class WebAssemblyTargetMachine;
 
 class WebAssemblyTargetLowering final : public TargetLowering {
- public:
+public:
   WebAssemblyTargetLowering(const TargetMachine &TM,
                             const WebAssemblySubtarget &STI);
 
- private:
+private:
   /// Keep a pointer to the WebAssemblySubtarget around so that we can make the
   /// right decision when generating code for different targets.
   const WebAssemblySubtarget *Subtarget;
 
+  AtomicExpansionKind shouldExpandAtomicRMWInIR(AtomicRMWInst *) const override;
   FastISel *createFastISel(FunctionLoweringInfo &FuncInfo,
                            const TargetLibraryInfo *LibInfo) const override;
   bool isOffsetFoldingLegal(const GlobalAddressSDNode *GA) const override;
@@ -52,9 +53,9 @@ class WebAssemblyTargetLowering final : public TargetLowering {
   EmitInstrWithCustomInserter(MachineInstr &MI,
                               MachineBasicBlock *MBB) const override;
   const char *getTargetNodeName(unsigned Opcode) const override;
-  std::pair<unsigned, const TargetRegisterClass *> getRegForInlineAsmConstraint(
-      const TargetRegisterInfo *TRI, StringRef Constraint,
-      MVT VT) const override;
+  std::pair<unsigned, const TargetRegisterClass *>
+  getRegForInlineAsmConstraint(const TargetRegisterInfo *TRI,
+                               StringRef Constraint, MVT VT) const override;
   bool isCheapToSpeculateCttz() const override;
   bool isCheapToSpeculateCtlz() const override;
   bool isLegalAddressingMode(const DataLayout &DL, const AddrMode &AM, Type *Ty,
@@ -63,6 +64,12 @@ class WebAssemblyTargetLowering final : public TargetLowering {
   bool allowsMisalignedMemoryAccesses(EVT, unsigned AddrSpace, unsigned Align,
                                       bool *Fast) const override;
   bool isIntDivCheap(EVT VT, AttributeList Attr) const override;
+
+  EVT getSetCCResultType(const DataLayout &DL, LLVMContext &Context,
+                         EVT VT) const override;
+  bool getTgtMemIntrinsic(IntrinsicInfo &Info, const CallInst &I,
+                          MachineFunction &MF,
+                          unsigned Intrinsic) const override;
 
   SDValue LowerCall(CallLoweringInfo &CLI,
                     SmallVectorImpl<SDValue> &InVals) const override;
@@ -90,13 +97,19 @@ class WebAssemblyTargetLowering final : public TargetLowering {
   SDValue LowerJumpTable(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerVASTART(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerCopyToReg(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerINTRINSIC_VOID(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerSIGN_EXTEND_INREG(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerVECTOR_SHUFFLE(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerAccessVectorElement(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerShift(SDValue Op, SelectionDAG &DAG) const;
 };
 
 namespace WebAssembly {
 FastISel *createFastISel(FunctionLoweringInfo &funcInfo,
                          const TargetLibraryInfo *libInfo);
-}  // end namespace WebAssembly
+} // end namespace WebAssembly
 
-}  // end namespace llvm
+} // end namespace llvm
 
 #endif

@@ -32,9 +32,10 @@
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
- *
- * $FreeBSD$
  */
+
+#include <sys/cdefs.h>
+__FBSDID("$FreeBSD$");
 
 #include "core_priv.h"
 
@@ -257,8 +258,13 @@ static ssize_t rate_show(struct ib_port *p, struct port_attribute *unused,
 		speed = " EDR";
 		rate = 250;
 		break;
+	case IB_SPEED_HDR:
+		speed = " HDR";
+		rate = 500;
+		break;
 	case IB_SPEED_SDR:
 	default:		/* default to SDR for invalid rates */
+		speed = " SDR";
 		rate = 25;
 		break;
 	}

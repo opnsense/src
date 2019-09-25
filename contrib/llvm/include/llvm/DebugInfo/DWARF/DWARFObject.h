@@ -33,24 +33,29 @@ public:
   virtual ArrayRef<SectionName> getSectionNames() const { return {}; }
   virtual bool isLittleEndian() const = 0;
   virtual uint8_t getAddressSize() const { llvm_unreachable("unimplemented"); }
-  virtual const DWARFSection &getInfoSection() const { return Dummy; }
+  virtual void
+  forEachInfoSections(function_ref<void(const DWARFSection &)> F) const {}
   virtual void
   forEachTypesSections(function_ref<void(const DWARFSection &)> F) const {}
   virtual StringRef getAbbrevSection() const { return ""; }
   virtual const DWARFSection &getLocSection() const { return Dummy; }
+  virtual const DWARFSection &getLoclistsSection() const { return Dummy; }
   virtual StringRef getARangeSection() const { return ""; }
   virtual StringRef getDebugFrameSection() const { return ""; }
   virtual StringRef getEHFrameSection() const { return ""; }
   virtual const DWARFSection &getLineSection() const { return Dummy; }
+  virtual StringRef getLineStringSection() const { return ""; }
   virtual StringRef getStringSection() const { return ""; }
   virtual const DWARFSection &getRangeSection() const { return Dummy; }
+  virtual const DWARFSection &getRnglistsSection() const { return Dummy; }
   virtual StringRef getMacinfoSection() const { return ""; }
-  virtual StringRef getPubNamesSection() const { return ""; }
-  virtual StringRef getPubTypesSection() const { return ""; }
-  virtual StringRef getGnuPubNamesSection() const { return ""; }
-  virtual StringRef getGnuPubTypesSection() const { return ""; }
+  virtual const DWARFSection &getPubNamesSection() const { return Dummy; }
+  virtual const DWARFSection &getPubTypesSection() const { return Dummy; }
+  virtual const DWARFSection &getGnuPubNamesSection() const { return Dummy; }
+  virtual const DWARFSection &getGnuPubTypesSection() const { return Dummy; }
   virtual const DWARFSection &getStringOffsetSection() const { return Dummy; }
-  virtual const DWARFSection &getInfoDWOSection() const { return Dummy; }
+  virtual void
+  forEachInfoDWOSections(function_ref<void(const DWARFSection &)> F) const {}
   virtual void
   forEachTypesDWOSections(function_ref<void(const DWARFSection &)> F) const {}
   virtual StringRef getAbbrevDWOSection() const { return ""; }
@@ -61,12 +66,14 @@ public:
     return Dummy;
   }
   virtual const DWARFSection &getRangeDWOSection() const { return Dummy; }
+  virtual const DWARFSection &getRnglistsDWOSection() const { return Dummy; }
   virtual const DWARFSection &getAddrSection() const { return Dummy; }
   virtual const DWARFSection &getAppleNamesSection() const { return Dummy; }
   virtual const DWARFSection &getAppleTypesSection() const { return Dummy; }
   virtual const DWARFSection &getAppleNamespacesSection() const {
     return Dummy;
   }
+  virtual const DWARFSection &getDebugNamesSection() const { return Dummy; }
   virtual const DWARFSection &getAppleObjCSection() const { return Dummy; }
   virtual StringRef getCUIndexSection() const { return ""; }
   virtual StringRef getGdbIndexSection() const { return ""; }

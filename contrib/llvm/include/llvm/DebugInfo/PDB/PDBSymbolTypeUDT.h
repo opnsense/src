@@ -10,6 +10,7 @@
 #ifndef LLVM_DEBUGINFO_PDB_PDBSYMBOLTYPEUDT_H
 #define LLVM_DEBUGINFO_PDB_PDBSYMBOLTYPEUDT_H
 
+#include "IPDBLineNumber.h"
 #include "IPDBSession.h"
 #include "PDBSymbol.h"
 #include "PDBSymbolTypeBaseClass.h"
@@ -22,17 +23,8 @@ class raw_ostream;
 namespace pdb {
 
 class PDBSymbolTypeUDT : public PDBSymbol {
-public:
-  PDBSymbolTypeUDT(const IPDBSession &PDBSession,
-                   std::unique_ptr<IPDBRawSymbol> UDTSymbol);
-
-  std::unique_ptr<PDBSymbolTypeUDT> clone() const {
-    return getSession().getConcreteSymbolById<PDBSymbolTypeUDT>(
-        getSymIndexId());
-  }
-
   DECLARE_PDB_SYMBOL_CONCRETE_TYPE(PDB_SymType::UDT)
-
+public:
   void dump(PDBSymDumper &Dumper) const override;
 
   FORWARD_SYMBOL_ID_METHOD(getClassParent)
@@ -45,6 +37,7 @@ public:
   FORWARD_SYMBOL_METHOD(getLength)
   FORWARD_SYMBOL_ID_METHOD(getLexicalParent)
   FORWARD_SYMBOL_METHOD(getName)
+  FORWARD_SYMBOL_METHOD(getSrcLineOnTypeDefn)
   FORWARD_SYMBOL_METHOD(isNested)
   FORWARD_SYMBOL_METHOD(hasOverloadedOperator)
   FORWARD_SYMBOL_METHOD(isPacked)
@@ -53,6 +46,7 @@ public:
   FORWARD_SYMBOL_METHOD(isUnalignedType)
   FORWARD_SYMBOL_ID_METHOD(getVirtualTableShape)
   FORWARD_SYMBOL_METHOD(isVolatileType)
+  FORWARD_SYMBOL_METHOD(getAccess)
 };
 }
 } // namespace llvm

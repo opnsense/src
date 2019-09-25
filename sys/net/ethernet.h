@@ -71,6 +71,9 @@ struct ether_addr {
 } __packed;
 
 #define	ETHER_IS_MULTICAST(addr) (*(addr) & 0x01) /* is address mcast/bcast? */
+#define	ETHER_IS_BROADCAST(addr) \
+	(((addr)[0] & (addr)[1] & (addr)[2] & \
+	  (addr)[3] & (addr)[4] & (addr)[5]) == 0xff)
 
 /*
  * 802.1q Virtual LAN header.
@@ -419,6 +422,7 @@ void	ether_vlan_mtap(struct bpf_if *, struct mbuf *,
 struct mbuf  *ether_vlanencap(struct mbuf *, uint16_t);
 bool	ether_8021q_frame(struct mbuf **mp, struct ifnet *ife, struct ifnet *p,
 	    uint16_t vid, uint8_t pcp);
+void	ether_gen_addr(struct ifnet *ifp, struct ether_addr *hwaddr);
 
 #ifdef _SYS_EVENTHANDLER_H_
 /* new ethernet interface attached event */

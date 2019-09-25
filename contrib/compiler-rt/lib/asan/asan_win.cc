@@ -159,6 +159,14 @@ INTERCEPTOR_WINAPI(DWORD, CreateThread,
 namespace __asan {
 
 void InitializePlatformInterceptors() {
+  // The interceptors were not designed to be removable, so we have to keep this
+  // module alive for the life of the process.
+  HMODULE pinned;
+  CHECK(GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                           GET_MODULE_HANDLE_EX_FLAG_PIN,
+                           (LPCWSTR)&InitializePlatformInterceptors,
+                           &pinned));
+
   ASAN_INTERCEPT_FUNC(CreateThread);
   ASAN_INTERCEPT_FUNC(SetUnhandledExceptionFilter);
 
@@ -222,8 +230,8 @@ uptr FindDynamicShadowStart() {
   uptr alignment = 8 * granularity;
   uptr left_padding = granularity;
   uptr space_size = kHighShadowEnd + left_padding;
-  uptr shadow_start =
-      FindAvailableMemoryRange(space_size, alignment, granularity, nullptr);
+  uptr shadow_start = FindAvailableMemoryRange(space_size, alignment,
+                                               granularity, nullptr, nullptr);
   CHECK_NE((uptr)0, shadow_start);
   CHECK(IsAligned(shadow_start, alignment));
   return shadow_start;
@@ -264,11 +272,6 @@ ShadowExceptionHandler(PEXCEPTION_POINTERS exception_pointers) {
 
   // Determine the address of the page that is being accessed.
   uptr page = RoundDownTo(addr, page_size);
-
-  // Query the existing page.
-  MEMORY_BASIC_INFORMATION mem_info = {};
-  if (::VirtualQuery((LPVOID)page, &mem_info, sizeof(mem_info)) == 0)
-    return EXCEPTION_CONTINUE_SEARCH;
 
   // Commit the page.
   uptr result =
@@ -317,6 +320,13 @@ int __asan_set_seh_filter() {
   if (prev_seh_handler != &SEHHandler)
     default_seh_handler = prev_seh_handler;
   return 0;
+}
+
+bool HandleDlopenInit() {
+  // Not supported on this platform.
+  static_assert(!SANITIZER_SUPPORTS_INIT_FOR_DLOPEN,
+                "Expected SANITIZER_SUPPORTS_INIT_FOR_DLOPEN to be false");
+  return false;
 }
 
 #if !ASAN_DYNAMIC

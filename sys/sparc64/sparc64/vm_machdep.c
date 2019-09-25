@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1982, 1986 The Regents of the University of California.
  * Copyright (c) 1989, 1990 William Jolitz
  * Copyright (c) 1994 John Dyson
@@ -17,7 +19,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -371,6 +373,21 @@ cpu_fork_kthread_handler(struct thread *td, void (*func)(void *), void *arg)
 	fp->fr_local[1] = (u_long)arg;
 }
 
+bool
+cpu_exec_vmspace_reuse(struct proc *p __unused, vm_map_t map __unused)
+{
+
+	return (true);
+}
+
+int
+cpu_procctl(struct thread *td __unused, int idtype __unused, id_t id __unused,
+    int com __unused, void *data __unused)
+{
+
+	return (EINVAL);
+}
+
 int
 is_physical_memory(vm_paddr_t addr)
 {
@@ -390,7 +407,8 @@ swi_vm(void *v)
 }
 
 void *
-uma_small_alloc(uma_zone_t zone, vm_size_t bytes, u_int8_t *flags, int wait)
+uma_small_alloc(uma_zone_t zone, vm_size_t bytes, int domain, u_int8_t *flags,
+    int wait)
 {
 	vm_paddr_t pa;
 	vm_page_t m;
@@ -400,7 +418,7 @@ uma_small_alloc(uma_zone_t zone, vm_size_t bytes, u_int8_t *flags, int wait)
 
 	*flags = UMA_SLAB_PRIV;
 
-	m = vm_page_alloc(NULL, 0, 
+	m = vm_page_alloc_domain(NULL, 0, domain,
 	    malloc2vm_flags(wait) | VM_ALLOC_WIRED | VM_ALLOC_NOOBJ);
 	if (m == NULL)
 		return (NULL);
@@ -426,9 +444,8 @@ uma_small_free(void *mem, vm_size_t size, u_int8_t flags)
 
 	PMAP_STATS_INC(uma_nsmall_free);
 	m = PHYS_TO_VM_PAGE(TLB_DIRECT_TO_PHYS((vm_offset_t)mem));
-	m->wire_count--;
+	vm_page_unwire_noq(m);
 	vm_page_free(m);
-	atomic_subtract_int(&vm_cnt.v_wire_count, 1);
 }
 
 void
@@ -444,4 +461,29 @@ sf_buf_unmap(struct sf_buf *sf)
 
 	pmap_qremove(sf->kva, 1);
 	return (1);
+}
+
+uint32_t casuword32_int(volatile uint32_t *base, uint32_t oldval,
+    uint32_t newval);
+uint32_t
+casuword32(volatile uint32_t *base, uint32_t oldval, uint32_t newval)
+{
+	uint32_t ret;
+
+	ret = casuword32_int(base, oldval, newval);
+	if (ret != -1)
+		ret = ret != oldval;
+	return (ret);
+}
+
+u_long casuword64_int(volatile u_long *p, u_long oldval, u_long newval);
+u_long
+casuword(volatile u_long *p, u_long oldval, u_long newval)
+{
+	u_long ret;
+
+	ret = casuword64_int(p, oldval, newval);
+	if (ret != -1L)
+		ret = ret != oldval;
+	return (ret);
 }

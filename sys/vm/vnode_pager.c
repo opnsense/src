@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 1990 University of Utah.
  * Copyright (c) 1991 The Regents of the University of California.
  * All rights reserved.
@@ -57,6 +59,7 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/sysctl.h>
 #include <sys/proc.h>
 #include <sys/vnode.h>
 #include <sys/mount.h>
@@ -67,6 +70,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/conf.h>
 #include <sys/rwlock.h>
 #include <sys/sf_buf.h>
+#include <sys/domainset.h>
 
 #include <machine/atomic.h>
 
@@ -105,6 +109,12 @@ struct pagerops vnodepagerops = {
 
 int vnode_pbuf_freecnt;
 int vnode_async_pbuf_freecnt;
+
+static struct domainset *vnode_domainset = NULL;
+
+SYSCTL_PROC(_debug, OID_AUTO, vnode_domainset, CTLTYPE_STRING | CTLFLAG_RW,
+    &vnode_domainset, 0, sysctl_handle_domainset, "A",
+    "Default vnode NUMA policy");
 
 /* Create the VM system backing object for this vnode */
 int
@@ -239,6 +249,7 @@ retry:
 
 		object->un_pager.vnp.vnp_size = size;
 		object->un_pager.vnp.writemappings = 0;
+		object->domain.dr_policy = vnode_domainset;
 
 		object->handle = handle;
 		VI_LOCK(vp);
@@ -295,12 +306,23 @@ vnode_pager_dealloc(vm_object_t object)
 	ASSERT_VOP_ELOCKED(vp, "vnode_pager_dealloc");
 	if (object->un_pager.vnp.writemappings > 0) {
 		object->un_pager.vnp.writemappings = 0;
-		VOP_ADD_WRITECOUNT(vp, -1);
+		VOP_ADD_WRITECOUNT_CHECKED(vp, -1);
 		CTR3(KTR_VFS, "%s: vp %p v_writecount decreased to %d",
 		    __func__, vp, vp->v_writecount);
 	}
 	vp->v_object = NULL;
-	VOP_UNSET_TEXT(vp);
+	VI_LOCK(vp);
+
+	/*
+	 * vm_map_entry_set_vnode_text() cannot reach this vnode by
+	 * following object->handle.  Clear all text references now.
+	 * This also clears the transient references from
+	 * kern_execve(), which is fine because dead_vnodeops uses nop
+	 * for VOP_UNSET_TEXT().
+	 */
+	if (vp->v_writecount < 0)
+		vp->v_writecount = 0;
+	VI_UNLOCK(vp);
 	VM_OBJECT_WUNLOCK(object);
 	while (refs-- > 0)
 		vunref(vp);
@@ -743,6 +765,9 @@ vnode_pager_generic_getpages(struct vnode *vp, vm_page_t *m, int count,
 	struct bufobj *bo;
 	struct buf *bp;
 	off_t foff;
+#ifdef INVARIANTS
+	off_t blkno0;
+#endif
 	int bsize, pagesperblock, *freecnt;
 	int error, before, after, rbehind, rahead, poff, i;
 	int bytecount, secmask;
@@ -760,7 +785,7 @@ vnode_pager_generic_getpages(struct vnode *vp, vm_page_t *m, int count,
 
 	KASSERT(foff < object->un_pager.vnp.vnp_size,
 	    ("%s: page %p offset beyond vp %p size", __func__, m[0], vp));
-	KASSERT(count <= sizeof(bp->b_pages),
+	KASSERT(count <= nitems(bp->b_pages),
 	    ("%s: requested %d pages", __func__, count));
 
 	/*
@@ -796,8 +821,8 @@ vnode_pager_generic_getpages(struct vnode *vp, vm_page_t *m, int count,
 		relpbuf(bp, freecnt);
 		VM_OBJECT_WLOCK(object);
 		for (i = 0; i < count; i++) {
-			PCPU_INC(cnt.v_vnodein);
-			PCPU_INC(cnt.v_vnodepgsin);
+			VM_CNT_INC(v_vnodein);
+			VM_CNT_INC(v_vnodepgsin);
 			error = vnode_pager_input_old(object, m[i]);
 			if (error)
 				break;
@@ -816,8 +841,8 @@ vnode_pager_generic_getpages(struct vnode *vp, vm_page_t *m, int count,
 	if (pagesperblock == 0) {
 		relpbuf(bp, freecnt);
 		for (i = 0; i < count; i++) {
-			PCPU_INC(cnt.v_vnodein);
-			PCPU_INC(cnt.v_vnodepgsin);
+			VM_CNT_INC(v_vnodein);
+			VM_CNT_INC(v_vnodepgsin);
 			error = vnode_pager_input_smlfs(object, m[i]);
 			if (error)
 				break;
@@ -843,6 +868,9 @@ vnode_pager_generic_getpages(struct vnode *vp, vm_page_t *m, int count,
 		return (VM_PAGER_OK);
 	}
 
+#ifdef INVARIANTS
+	blkno0 = bp->b_blkno;
+#endif
 	bp->b_blkno += (foff % bsize) / DEV_BSIZE;
 
 	/* Recalculate blocks available after/before to pages. */
@@ -864,7 +892,25 @@ vnode_pager_generic_getpages(struct vnode *vp, vm_page_t *m, int count,
 	rbehind = min(rbehind, m[0]->pindex);
 	rahead = min(rahead, after);
 	rahead = min(rahead, object->size - m[count - 1]->pindex);
-	KASSERT(rbehind + rahead + count <= sizeof(bp->b_pages),
+	/*
+	 * Check that total amount of pages fit into buf.  Trim rbehind and
+	 * rahead evenly if not.
+	 */
+	if (rbehind + rahead + count > nitems(bp->b_pages)) {
+		int trim, sum;
+
+		trim = rbehind + rahead + count - nitems(bp->b_pages) + 1;
+		sum = rbehind + rahead;
+		if (rbehind == before) {
+			/* Roundup rbehind trim to block size. */
+			rbehind -= roundup(trim * rbehind / sum, pagesperblock);
+			if (rbehind < 0)
+				rbehind = 0;
+		} else
+			rbehind -= trim * rbehind / sum;
+		rahead -= trim * rahead / sum;
+	}
+	KASSERT(rbehind + rahead + count <= nitems(bp->b_pages),
 	    ("%s: behind %d ahead %d count %d", __func__,
 	    rbehind, rahead, count));
 
@@ -947,8 +993,18 @@ vnode_pager_generic_getpages(struct vnode *vp, vm_page_t *m, int count,
 	if (a_rahead)
 		*a_rahead = bp->b_pgafter;
 
-	KASSERT(bp->b_npages <= sizeof(bp->b_pages),
+#ifdef INVARIANTS
+	KASSERT(bp->b_npages <= nitems(bp->b_pages),
 	    ("%s: buf %p overflowed", __func__, bp));
+	for (int j = 1, prev = 0; j < bp->b_npages; j++) {
+		if (bp->b_pages[j] == bogus_page)
+			continue;
+		KASSERT(bp->b_pages[j]->pindex - bp->b_pages[prev]->pindex ==
+		    j - prev, ("%s: pages array not consecutive, bp %p",
+		     __func__, bp));
+		prev = j;
+	}
+#endif
 
 	/*
 	 * Recalculate first offset and bytecount with regards to read behind.
@@ -987,10 +1043,17 @@ vnode_pager_generic_getpages(struct vnode *vp, vm_page_t *m, int count,
 	bp->b_vp = vp;
 	bp->b_bcount = bp->b_bufsize = bp->b_runningbufspace = bytecount;
 	bp->b_iooffset = dbtob(bp->b_blkno);
+	KASSERT(IDX_TO_OFF(m[0]->pindex - bp->b_pages[0]->pindex) ==
+	    (blkno0 - bp->b_blkno) * DEV_BSIZE +
+	    IDX_TO_OFF(m[0]->pindex) % bsize,
+	    ("wrong offsets bsize %d m[0] %ju b_pages[0] %ju "
+	    "blkno0 %ju b_blkno %ju", bsize,
+	    (uintmax_t)m[0]->pindex, (uintmax_t)bp->b_pages[0]->pindex,
+	    (uintmax_t)blkno0, (uintmax_t)bp->b_blkno));
 
 	atomic_add_long(&runningbufspace, bp->b_runningbufspace);
-	PCPU_INC(cnt.v_vnodein);
-	PCPU_ADD(cnt.v_vnodepgsin, bp->b_npages);
+	VM_CNT_INC(v_vnodein);
+	VM_CNT_ADD(v_vnodepgsin, bp->b_npages);
 
 	if (iodone != NULL) { /* async */
 		bp->b_pgiodone = iodone;
@@ -1124,7 +1187,7 @@ vnode_pager_putpages(vm_object_t object, vm_page_t *m, int count,
 	 * daemon up.  This should be probably be addressed XXX.
 	 */
 
-	if (vm_cnt.v_free_count < vm_cnt.v_pageout_free_min)
+	if (vm_page_count_min())
 		flags |= VM_PAGER_PUT_SYNC;
 
 	/*
@@ -1342,8 +1405,8 @@ write_done:
 	for (; i < ncount; i++)
 		rtvals[i] = ma[i]->dirty == 0 ? VM_PAGER_OK : VM_PAGER_ERROR;
 	VM_OBJECT_RUNLOCK(object);
-	PCPU_ADD(cnt.v_vnodepgsout, i);
-	PCPU_INC(cnt.v_vnodeout);
+	VM_CNT_ADD(v_vnodepgsout, i);
+	VM_CNT_INC(v_vnodeout);
 	return (rtvals[0]);
 }
 
@@ -1452,13 +1515,13 @@ vnode_pager_update_writecount(vm_object_t object, vm_offset_t start,
 	object->un_pager.vnp.writemappings += (vm_ooffset_t)end - start;
 	vp = object->handle;
 	if (old_wm == 0 && object->un_pager.vnp.writemappings != 0) {
-		ASSERT_VOP_ELOCKED(vp, "v_writecount inc");
-		VOP_ADD_WRITECOUNT(vp, 1);
+		ASSERT_VOP_LOCKED(vp, "v_writecount inc");
+		VOP_ADD_WRITECOUNT_CHECKED(vp, 1);
 		CTR3(KTR_VFS, "%s: vp %p v_writecount increased to %d",
 		    __func__, vp, vp->v_writecount);
 	} else if (old_wm != 0 && object->un_pager.vnp.writemappings == 0) {
-		ASSERT_VOP_ELOCKED(vp, "v_writecount dec");
-		VOP_ADD_WRITECOUNT(vp, -1);
+		ASSERT_VOP_LOCKED(vp, "v_writecount dec");
+		VOP_ADD_WRITECOUNT_CHECKED(vp, -1);
 		CTR3(KTR_VFS, "%s: vp %p v_writecount decreased to %d",
 		    __func__, vp, vp->v_writecount);
 	}
@@ -1500,7 +1563,7 @@ vnode_pager_release_writecount(vm_object_t object, vm_offset_t start,
 	VM_OBJECT_WUNLOCK(object);
 	mp = NULL;
 	vn_start_write(vp, &mp, V_WAIT);
-	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
+	vn_lock(vp, LK_SHARED | LK_RETRY);
 
 	/*
 	 * Decrement the object's writemappings, by swapping the start

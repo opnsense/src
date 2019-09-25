@@ -10,9 +10,7 @@
 #ifndef liblldb_MinidumpTypes_h_
 #define liblldb_MinidumpTypes_h_
 
-// Project includes
 
-// Other libraries and framework includes
 #include "lldb/Utility/Status.h"
 
 #include "llvm/ADT/ArrayRef.h"
@@ -42,6 +40,21 @@ enum class MinidumpHeaderConstants : uint32_t {
   LLVM_MARK_AS_BITMASK_ENUM(/* LargestValue = */ Signature)
 
 };
+
+enum class CvSignature : uint32_t {
+  Pdb70 = 0x53445352, // RSDS
+  ElfBuildId = 0x4270454c, // BpEL (Breakpad/Crashpad minidumps)
+};
+
+// Reference:
+// https://crashpad.chromium.org/doxygen/structcrashpad_1_1CodeViewRecordPDB70.html
+struct CvRecordPdb70 {
+  uint8_t Uuid[16];
+  llvm::support::ulittle32_t Age;
+  // char PDBFileName[];
+};
+static_assert(sizeof(CvRecordPdb70) == 20,
+              "sizeof CvRecordPdb70 is not correct!");
 
 // Reference:
 // https://msdn.microsoft.com/en-us/library/windows/desktop/ms680394.aspx
@@ -83,7 +96,10 @@ enum class MinidumpStreamType : uint32_t {
   LinuxEnviron = 0x47670007,    /* /proc/$x/environ   */
   LinuxAuxv = 0x47670008,       /* /proc/$x/auxv      */
   LinuxMaps = 0x47670009,       /* /proc/$x/maps      */
-  LinuxDSODebug = 0x4767000A
+  LinuxDSODebug = 0x4767000A,
+  LinuxProcStat = 0x4767000B,   /* /proc/$x/stat      */
+  LinuxProcUptime = 0x4767000C, /* uptime             */
+  LinuxProcFD = 0x4767000D,     /* /proc/$x/fb        */
 };
 
 // for MinidumpSystemInfo.processor_arch
@@ -243,25 +259,6 @@ struct MinidumpMemoryInfoListHeader {
 static_assert(sizeof(MinidumpMemoryInfoListHeader) == 16,
               "sizeof MinidumpMemoryInfoListHeader is not correct!");
 
-// Reference:
-// https://msdn.microsoft.com/en-us/library/windows/desktop/ms680386(v=vs.85).aspx
-struct MinidumpMemoryInfo {
-  llvm::support::ulittle64_t base_address;
-  llvm::support::ulittle64_t allocation_base;
-  llvm::support::ulittle32_t allocation_protect;
-  llvm::support::ulittle32_t alignment1;
-  llvm::support::ulittle64_t region_size;
-  llvm::support::ulittle32_t state;
-  llvm::support::ulittle32_t protect;
-  llvm::support::ulittle32_t type;
-  llvm::support::ulittle32_t alignment2;
-
-  static std::vector<const MinidumpMemoryInfo *>
-  ParseMemoryInfoList(llvm::ArrayRef<uint8_t> &data);
-};
-static_assert(sizeof(MinidumpMemoryInfo) == 48,
-              "sizeof MinidumpMemoryInfo is not correct!");
-
 enum class MinidumpMemoryInfoState : uint32_t {
   MemCommit = 0x1000,
   MemFree = 0x10000,
@@ -296,6 +293,45 @@ enum class MinidumpMemoryProtectionContants : uint32_t {
                    PageExecuteWriteCopy,
   LLVM_MARK_AS_BITMASK_ENUM(/* LargestValue = */ PageTargetsInvalid)
 };
+
+// Reference:
+// https://msdn.microsoft.com/en-us/library/windows/desktop/ms680386(v=vs.85).aspx
+struct MinidumpMemoryInfo {
+  llvm::support::ulittle64_t base_address;
+  llvm::support::ulittle64_t allocation_base;
+  llvm::support::ulittle32_t allocation_protect;
+  llvm::support::ulittle32_t alignment1;
+  llvm::support::ulittle64_t region_size;
+  llvm::support::ulittle32_t state;
+  llvm::support::ulittle32_t protect;
+  llvm::support::ulittle32_t type;
+  llvm::support::ulittle32_t alignment2;
+
+  static std::vector<const MinidumpMemoryInfo *>
+  ParseMemoryInfoList(llvm::ArrayRef<uint8_t> &data);
+
+  bool isReadable() const {
+    const auto mask = MinidumpMemoryProtectionContants::PageNoAccess;
+    return (static_cast<uint32_t>(mask) & protect) == 0;
+  }
+
+  bool isWritable() const {
+    const auto mask = MinidumpMemoryProtectionContants::PageWritable;
+    return (static_cast<uint32_t>(mask) & protect) != 0;
+  }
+
+  bool isExecutable() const {
+    const auto mask = MinidumpMemoryProtectionContants::PageExecutable;
+    return (static_cast<uint32_t>(mask) & protect) != 0;
+  }
+  
+  bool isMapped() const {
+    return state != static_cast<uint32_t>(MinidumpMemoryInfoState::MemFree);
+  }
+};
+
+static_assert(sizeof(MinidumpMemoryInfo) == 48,
+              "sizeof MinidumpMemoryInfo is not correct!");
 
 // Reference:
 // https://msdn.microsoft.com/en-us/library/windows/desktop/ms680517(v=vs.85).aspx

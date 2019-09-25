@@ -25,7 +25,9 @@
  * SUCH DAMAGE.
  */
 
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1995-1998 John Birrell <jb@cimlogic.com.au>
  * All rights reserved.
  *
@@ -73,10 +75,11 @@ __FBSDID("$FreeBSD$");
 #include "rtld_lock.h"
 #include "thr_private.h"
 
-__weak_reference(_pthread_atfork, pthread_atfork);
+__weak_reference(_thr_atfork, _pthread_atfork);
+__weak_reference(_thr_atfork, pthread_atfork);
 
 int
-_pthread_atfork(void (*prepare)(void), void (*parent)(void),
+_thr_atfork(void (*prepare)(void), void (*parent)(void),
     void (*child)(void))
 {
 	struct pthread *curthread;
@@ -168,6 +171,7 @@ __thr_fork(void)
 	 */
 	if (_thr_isthreaded() != 0) {
 		was_threaded = 1;
+		__thr_malloc_prefork(curthread);
 		_malloc_prefork();
 		__thr_pshared_atfork_pre();
 		_rtld_atfork_pre(rtld_locks);
@@ -194,6 +198,10 @@ __thr_fork(void)
 		 * _libpthread_init(), it will add us back to list.
 		 */
 		curthread->tlflags &= ~TLFLAGS_IN_TDLIST;
+
+		/* before thr_self() */
+		if (was_threaded)
+			__thr_malloc_postfork(curthread);
 
 		/* child is a new kernel thread. */
 		thr_self(&curthread->tid);
@@ -239,6 +247,7 @@ __thr_fork(void)
 		_thr_signal_postfork();
 
 		if (was_threaded) {
+			__thr_malloc_postfork(curthread);
 			_rtld_atfork_post(rtld_locks);
 			__thr_pshared_atfork_post();
 			_malloc_postfork();

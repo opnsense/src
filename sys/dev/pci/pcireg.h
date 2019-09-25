@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1997, Stefan Esser <se@freebsd.org>
  * All rights reserved.
  *
@@ -119,6 +121,9 @@
 #define	PCIM_HDRTYPE_CARDBUS	0x02
 #define	PCIM_MFDEV		0x80
 #define	PCIR_BIST	0x0f
+
+/* PCI Spec rev 2.2: 0FFFFh is an invalid value for Vendor ID. */
+#define	PCIV_INVALID	0xffff 
 
 /* Capability Register Offsets */
 
@@ -1045,3 +1050,19 @@
 #define	PCIR_SRIOV_BARS		0x24
 #define	PCIR_SRIOV_BAR(x)	(PCIR_SRIOV_BARS + (x) * 4)
 
+/*
+ * PCI Express Firmware Interface definitions
+ */
+#define	PCI_OSC_STATUS		0
+#define	PCI_OSC_SUPPORT		1
+#define	PCIM_OSC_SUPPORT_EXT_PCI_CONF	0x01	/* Extended PCI Config Space */
+#define	PCIM_OSC_SUPPORT_ASPM		0x02	/* Active State Power Management */
+#define	PCIM_OSC_SUPPORT_CPMC		0x04	/* Clock Power Management Cap */
+#define	PCIM_OSC_SUPPORT_SEG_GROUP	0x08	/* PCI Segment Groups supported */
+#define	PCIM_OSC_SUPPORT_MSI		0x10	/* MSI signalling supported */
+#define	PCI_OSC_CTL		2
+#define	PCIM_OSC_CTL_PCIE_HP		0x01	/* PCIe Native Hot Plug */
+#define	PCIM_OSC_CTL_SHPC_HP		0x02	/* SHPC Native Hot Plug */
+#define	PCIM_OSC_CTL_PCIE_PME		0x04	/* PCIe Native Power Mgt Events */
+#define	PCIM_OSC_CTL_PCIE_AER		0x08	/* PCIe Advanced Error Reporting */
+#define	PCIM_OSC_CTL_PCIE_CAP_STRUCT	0x10	/* Various Capability Structures */

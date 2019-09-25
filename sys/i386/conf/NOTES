@@ -221,23 +221,6 @@ options 	NPX_DEBUG	# enable npx debugging
 #
 options 	PERFMON
 
-#
-# XBOX causes the kernel to be bootable on the Microsoft XBox console system.
-# The resulting kernel will auto-detect whether it is being booted on a XBox,
-# so kernels compiled with this option will also work on an ordinary PC.
-# This option require I686_CPU.
-#
-# xboxfb includes support for the XBox frame buffer device. It is fully USB-
-# keyboard aware, and will only be used if an xbox is detected. This option
-# (obviously) requires XBOX support in your kernel.
-#
-# NOTE: xboxfb currently conflicts with syscons(4); if you have an XBOX and
-# include both in your kernel; you will not get any video output. Ordinary
-# PC's do not suffer from this.
-#
-options 	XBOX
-device		xboxfb
-
 
 #####################################################################
 # NETWORKING OPTIONS
@@ -292,6 +275,7 @@ device		nvram		# Access to rtc cmos via /dev/nvram
 device		speaker		#Play IBM BASIC-style noises out your speaker
 hint.speaker.0.at="isa"
 hint.speaker.0.port="0x61"
+device		gzip		#Exec gzipped a.out's.  REQUIRES COMPAT_AOUT!
 device		apm_saver	# Requires APM
 
 
@@ -334,31 +318,6 @@ options 	AUTO_EOI_1
 
 options 	MAXMEM=(128*1024)
 #options 	BROKEN_KEYBOARD_RESET
-
-#
-# EISA bus
-#
-# The EISA bus device is `eisa'.  It provides auto-detection and
-# configuration support for all devices on the EISA bus.
-
-device		eisa
-
-# By default, only 10 EISA slots are probed, since the slot numbers
-# above clash with the configuration address space of the PCI subsystem,
-# and the EISA probe is not very smart about this.  This is sufficient
-# for most machines, but in particular the HP NetServer LC series comes
-# with an onboard AIC7770 dual-channel SCSI controller on EISA slot #11,
-# thus you need to bump this figure to 12 for them.
-options 	EISA_SLOTS=12
-
-#
-# MCA bus:
-#
-# The MCA bus device is `mca'.  It provides auto-detection and
-# configuration support for all devices on the MCA bus.
-# No hints are required for MCA.
-
-device		mca
 
 #
 # AGP GART support
@@ -532,11 +491,9 @@ device		cpufreq
 
 # Direct Rendering modules for 3D acceleration.
 device		drm		# DRM core module required by DRM drivers
-device		i915drm		# Intel i830 through i915
 device		mach64drm	# ATI Rage Pro, Rage Mobility P/M, Rage XL
 device		mgadrm		# AGP Matrox G200, G400, G450, G550
 device		r128drm		# ATI Rage 128
-device		radeondrm	# ATI Radeon
 device		savagedrm	# S3 Savage3D, Savage4
 device		sisdrm		# SiS 300/305, 540, 630
 device		tdfxdrm		# 3dfx Voodoo 3/4/5 and Banshee
@@ -571,8 +528,6 @@ hint.mse.0.irq="5"
 # ed:   Western Digital and SMC 80xx; Novell NE1000 and NE2000; 3Com 3C503
 #       HP PC Lan+, various PC Card devices
 #       (requires miibus)
-# ie:   AT&T StarLAN 10 and EN100; 3Com 3C507; unknown NI5210;
-#       Intel EtherExpress
 # ipw:	Intel PRO/Wireless 2100 IEEE 802.11 adapter
 # iwi:	Intel PRO/Wireless 2200BG/2225BG/2915ABG IEEE 802.11 adapters
 #	Requires the iwi firmware module
@@ -585,7 +540,6 @@ hint.mse.0.irq="5"
 # nfe:	nVidia nForce MCP on-board Ethernet Networking (BSD open source)
 # sbni: Granch SBNI12-xx ISA and PCI adapters
 # vmx:	VMware VMXNET3 Ethernet (BSD open source)
-# wl:   Lucent Wavelan (ISA card only).
 # wpi:	Intel 3945ABG Wireless LAN controller
 #	Requires the wpi firmware module
 
@@ -611,12 +565,6 @@ hint.ed.0.at="isa"
 hint.ed.0.port="0x280"
 hint.ed.0.irq="5"
 hint.ed.0.maddr="0xd8000"
-device		ie		# EtherExpress 8/16, 3C507, StarLAN 10 etc.
-# Hints only required for Starlan
-hint.ie.2.at="isa"
-hint.ie.2.port="0x300"
-hint.ie.2.irq="5"
-hint.ie.2.maddr="0xd0000"
 device		ipw		# Intel 2100 wireless NICs.
 device		iwi		# Intel 2200BG/2225BG/2915ABG wireless NICs.
 device		iwn		# Intel 4965/1000/5000/6000 wireless NICs.
@@ -636,11 +584,6 @@ hint.sbni.0.port="0x210"
 hint.sbni.0.irq="0xefdead"
 hint.sbni.0.flags="0"
 device		vmx		# VMware VMXNET3 Ethernet
-device		wl
-hint.wl.0.at="isa"
-hint.wl.0.port="0x300"
-options 	WLCACHE		# enables the signal-strength cache
-options 	WLDEBUG		# enables verbose debugging output
 device		wpi		# Intel 3945ABG wireless NICs.
 
 # IEEE 802.11 adapter firmware modules
@@ -700,6 +643,7 @@ device		wpifw
 device		if_ntb		# Virtual NTB network interface
 device		ntb_transport	# NTB packet transport driver
 device		ntb		# NTB hardware interface
+device		ntb_hw_amd	# AMD NTB hardware driver
 device		ntb_hw_intel	# Intel NTB hardware driver
 device		ntb_hw_plx	# PLX NTB hardware driver
 
@@ -719,7 +663,6 @@ device		arcmsr		# Areca SATA II RAID
 # The driver is implemented as a SIM, and so, needs the CAM infrastructure.
 #
 options 	TWA_DEBUG		# 0-10; 10 prints the most messages.
-options 	TWA_FLASH_FIRMWARE	# firmware image bundled when defined.
 device		twa			# 3ware 9000 series PATA/SATA RAID
 
 #
@@ -839,9 +782,7 @@ device 		hyperv		# HyperV drivers
 # smapi: System Management Application Program Interface driver
 # smbios: DMI/SMBIOS entry point
 # vpd: Vital Product Data kernel interface
-# pmtimer: Adjust system timer at wakeup time
 # pbio: Parallel (8255 PPI) basic I/O (mode 0) port (e.g. Advantech PCL-724)
-# spic: Sony Programmable I/O controller (VAIO notebooks)
 # asmc: Apple System Management Controller
 # si: Specialix International SI/XIO or SX intelligent serial card driver
 # tpm: Trusted Platform Module
@@ -874,15 +815,10 @@ device		ipmi
 device		smapi
 device		smbios
 device		vpd
-device		pmtimer
 device		pbio
 hint.pbio.0.at="isa"
 hint.pbio.0.port="0x360"
-device		spic
-hint.spic.0.at="isa"
-hint.spic.0.port="0x10a0"
 device		asmc
-device		si
 device		tpm
 device		padlock_rng	# VIA Padlock RNG
 device		rdrand_rng	# Intel Bull Mountain RNG
@@ -960,19 +896,6 @@ options 	ENABLE_ALART		# Control alarm on Intel intpm driver
 options 	PMAP_SHPGPERPROC=201
 
 #
-# Change the size of the kernel virtual address space.  Due to
-# constraints in loader(8) on i386, this must be a multiple of 4.
-# 256 = 1 GB of kernel address space.  Increasing this also causes
-# a reduction of the address space in user processes.  512 splits
-# the 4GB cpu address space in half (2GB user, 2GB kernel).  For PAE
-# kernels, the value will need to be double non-PAE.  A value of 1024
-# for PAE kernels is necessary to split the address space in half.
-# This will likely need to be increased to handle memory sizes >4GB.
-# PAE kernels default to a value of 512.
-#
-options 	KVA_PAGES=260
-
-#
 # Number of initial kernel page table pages used for early bootstrap.
 # This number should include enough pages to map the kernel, any
 # modules or other data loaded with the kernel by the loader, and data
@@ -984,6 +907,15 @@ options 	NKPT=31
 
 #####################################################################
 # ABI Emulation
+
+# Enable iBCS2 runtime support for SCO and ISC binaries
+#options 	IBCS2
+
+# Emulate spx device for client side of SVR3 local X interface
+options 	SPX_HACK
+
+# Enable (32-bit) a.out binary support
+options 	COMPAT_AOUT
 
 # Enable 32-bit runtime support for CloudABI binaries.
 options 	COMPAT_CLOUDABI32
@@ -1007,26 +939,10 @@ device		ndis
 #####################################################################
 # VM OPTIONS
 
-# Disable the 4 MByte page PSE CPU feature.  The PSE feature allows the
-# kernel to use 4 MByte pages to map the kernel instead of 4k pages.
-# This saves on the amount of memory needed for page tables needed to
-# map the kernel.  You should only disable this feature as a temporary
-# workaround if you are having problems with it enabled.
-#
-#options 	DISABLE_PSE
-
-# Disable the global pages PGE CPU feature.  The PGE feature allows pages
-# to be marked with the PG_G bit.  TLB entries for these pages are not
-# flushed from the cache when %cr3 is reloaded.  This can make context
-# switches less expensive.  You should only disable this feature as a
-# temporary workaround if you are having problems with it enabled.
-#
-#options 	DISABLE_PG_G
-
 # KSTACK_PAGES is the number of memory pages to assign to the kernel
 # stack of each thread.
 
-options 	KSTACK_PAGES=3
+options 	KSTACK_PAGES=5
 
 # Enable detailed accounting by the PV entry allocator.
 

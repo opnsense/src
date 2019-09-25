@@ -1245,7 +1245,7 @@ zfs_aclset_common(znode_t *zp, zfs_acl_t *aclp, cred_t *cr, dmu_tx_t *tx)
 				    otype == DMU_OT_ACL ?
 				    DMU_OT_SYSACL : DMU_OT_NONE,
 				    otype == DMU_OT_ACL ?
-				    DN_MAX_BONUSLEN : 0, tx);
+				    DN_OLD_MAX_BONUSLEN : 0, tx);
 			} else {
 				(void) dmu_object_set_blocksize(zfsvfs->z_os,
 				    aoid, aclp->z_acl_bytes, 0, tx);
@@ -1655,7 +1655,9 @@ zfs_acl_ids_create(znode_t *dzp, int flag, vattr_t *vap, cred_t *cr,
 				acl_ids->z_fgid = 0;
 		}
 		if (acl_ids->z_fgid == 0) {
+#ifndef __FreeBSD_kernel__
 			if (dzp->z_mode & S_ISGID) {
+#endif
 				char		*domain;
 				uint32_t	rid;
 
@@ -1674,15 +1676,13 @@ zfs_acl_ids_create(znode_t *dzp, int flag, vattr_t *vap, cred_t *cr,
 					    FUID_INDEX(acl_ids->z_fgid),
 					    acl_ids->z_fgid, ZFS_GROUP);
 				}
+#ifndef __FreeBSD_kernel__
 			} else {
 				acl_ids->z_fgid = zfs_fuid_create_cred(zfsvfs,
 				    ZFS_GROUP, cr, &acl_ids->z_fuidp);
-#ifdef __FreeBSD_kernel__
-				gid = acl_ids->z_fgid = dzp->z_gid;
-#else
 				gid = crgetgid(cr);
-#endif
 			}
+#endif
 		}
 	}
 

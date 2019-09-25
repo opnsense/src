@@ -35,9 +35,6 @@
 /* Define if you system's inet_ntoa is busted (e.g. Irix gcc issue) */
 /* #undef BROKEN_INET_NTOA */
 
-/* ia_uinfo routines not supported by OS yet */
-/* #undef BROKEN_LIBIAF */
-
 /* Define if your struct dirent expects you to allocate extra space for d_name
    */
 /* #undef BROKEN_ONE_BYTE_DIRENT_D_NAME */
@@ -75,6 +72,12 @@
 
 /* Define if your snprintf is busted */
 /* #undef BROKEN_SNPRINTF */
+
+/* strndup broken, see APAR IY61211 */
+/* #undef BROKEN_STRNDUP */
+
+/* strnlen broken, see APAR IY62551 */
+/* #undef BROKEN_STRNLEN */
 
 /* strnvis detected broken */
 #define BROKEN_STRNVIS 1
@@ -133,6 +136,9 @@
 /* Enable for PKCS#11 support */
 #define ENABLE_PKCS11 /**/
 
+/* define if fflush(NULL) does not work */
+/* #undef FFLUSH_NULL_BUG */
+
 /* File names may not contain backslash characters */
 /* #undef FILESYSTEM_NO_BACKSLASH */
 
@@ -142,7 +148,7 @@
 /* fsid_t has member __val */
 /* #undef FSID_HAS___VAL */
 
-/* Define to 1 if the `getpgrp' function requires zero arguments. */
+/* getpgrp takes one arg */
 #define GETPGRP_VOID 1
 
 /* Conflicting defs for getspnam */
@@ -185,7 +191,7 @@
 #define HAVE_ARC4RANDOM_BUF 1
 
 /* Define to 1 if you have the `arc4random_stir' function. */
-#define HAVE_ARC4RANDOM_STIR 1
+/* #undef HAVE_ARC4RANDOM_STIR */
 
 /* Define to 1 if you have the `arc4random_uniform' function. */
 #define HAVE_ARC4RANDOM_UNIFORM 1
@@ -253,6 +259,12 @@
 /* Define to 1 if you have the <bstring.h> header file. */
 /* #undef HAVE_BSTRING_H */
 
+/* Define to 1 if you have the `bzero' function. */
+#define HAVE_BZERO 1
+
+/* calloc(0, x) returns NULL */
+#define HAVE_CALLOC 1
+
 /* Define to 1 if you have the `cap_rights_limit' function. */
 #define HAVE_CAP_RIGHTS_LIMIT 1
 
@@ -296,6 +308,10 @@
 /* Define to 1 if you have the declaration of `authenticate', and to 0 if you
    don't. */
 /* #undef HAVE_DECL_AUTHENTICATE */
+
+/* Define to 1 if you have the declaration of `bzero', and to 0 if you don't.
+   */
+#define HAVE_DECL_BZERO 1
 
 /* Define to 1 if you have the declaration of `GLOB_NOMATCH', and to 0 if you
    don't. */
@@ -345,6 +361,10 @@
    don't. */
 /* #undef HAVE_DECL_PASSWDEXPIRED */
 
+/* Define to 1 if you have the declaration of `readv', and to 0 if you don't.
+   */
+#define HAVE_DECL_READV 1
+
 /* Define to 1 if you have the declaration of `setauthdb', and to 0 if you
    don't. */
 /* #undef HAVE_DECL_SETAUTHDB */
@@ -374,6 +394,21 @@
 /* Define if you have /dev/ptc */
 /* #undef HAVE_DEV_PTS_AND_PTC */
 
+/* Define if libcrypto has DH_get0_key */
+#define HAVE_DH_GET0_KEY 1
+
+/* Define if libcrypto has DH_get0_pqg */
+#define HAVE_DH_GET0_PQG 1
+
+/* Define if libcrypto has DH_set0_key */
+#define HAVE_DH_SET0_KEY 1
+
+/* Define if libcrypto has DH_set0_pqg */
+#define HAVE_DH_SET0_PQG 1
+
+/* Define if libcrypto has DH_set_length */
+#define HAVE_DH_SET_LENGTH 1
+
 /* Define to 1 if you have the <dirent.h> header file. */
 #define HAVE_DIRENT_H 1
 
@@ -385,6 +420,30 @@
 
 /* Define to 1 if you have the `DSA_generate_parameters_ex' function. */
 #define HAVE_DSA_GENERATE_PARAMETERS_EX 1
+
+/* Define if libcrypto has DSA_get0_key */
+#define HAVE_DSA_GET0_KEY 1
+
+/* Define if libcrypto has DSA_get0_pqg */
+#define HAVE_DSA_GET0_PQG 1
+
+/* Define if libcrypto has DSA_set0_key */
+#define HAVE_DSA_SET0_KEY 1
+
+/* Define if libcrypto has DSA_set0_pqg */
+#define HAVE_DSA_SET0_PQG 1
+
+/* Define if libcrypto has DSA_SIG_get0 */
+#define HAVE_DSA_SIG_GET0 1
+
+/* Define if libcrypto has DSA_SIG_set0 */
+#define HAVE_DSA_SIG_SET0 1
+
+/* Define if libcrypto has ECDSA_SIG_get0 */
+#define HAVE_ECDSA_SIG_GET0 1
+
+/* Define if libcrypto has ECDSA_SIG_set0 */
+#define HAVE_ECDSA_SIG_SET0 1
 
 /* Define to 1 if you have the <elf.h> header file. */
 #define HAVE_ELF_H 1
@@ -416,6 +475,15 @@
 /* Define if libcrypto has EVP_CIPHER_CTX_ctrl */
 #define HAVE_EVP_CIPHER_CTX_CTRL 1
 
+/* Define if libcrypto has EVP_CIPHER_CTX_set_iv */
+/* #undef HAVE_EVP_CIPHER_CTX_GET_IV */
+
+/* Define if libcrypto has EVP_CIPHER_CTX_iv */
+#define HAVE_EVP_CIPHER_CTX_IV 1
+
+/* Define if libcrypto has EVP_CIPHER_CTX_iv_noconst */
+#define HAVE_EVP_CIPHER_CTX_IV_NOCONST 1
+
 /* Define to 1 if you have the `EVP_DigestFinal_ex' function. */
 #define HAVE_EVP_DIGESTFINAL_EX 1
 
@@ -423,13 +491,22 @@
 #define HAVE_EVP_DIGESTINIT_EX 1
 
 /* Define to 1 if you have the `EVP_MD_CTX_cleanup' function. */
-#define HAVE_EVP_MD_CTX_CLEANUP 1
+/* #undef HAVE_EVP_MD_CTX_CLEANUP */
 
 /* Define to 1 if you have the `EVP_MD_CTX_copy_ex' function. */
 #define HAVE_EVP_MD_CTX_COPY_EX 1
 
+/* Define if libcrypto has EVP_MD_CTX_free */
+#define HAVE_EVP_MD_CTX_FREE 1
+
 /* Define to 1 if you have the `EVP_MD_CTX_init' function. */
-#define HAVE_EVP_MD_CTX_INIT 1
+/* #undef HAVE_EVP_MD_CTX_INIT */
+
+/* Define if libcrypto has EVP_MD_CTX_new */
+#define HAVE_EVP_MD_CTX_NEW 1
+
+/* Define if libcrypto has EVP_PKEY_get0_RSA */
+#define HAVE_EVP_PKEY_GET0_RSA 1
 
 /* Define to 1 if you have the `EVP_ripemd160' function. */
 #define HAVE_EVP_RIPEMD160 1
@@ -464,11 +541,17 @@
 /* Define to 1 if you have the <floatingpoint.h> header file. */
 #define HAVE_FLOATINGPOINT_H 1
 
+/* Define to 1 if you have the `flock' function. */
+#define HAVE_FLOCK 1
+
 /* Define to 1 if you have the `fmt_scaled' function. */
 /* #undef HAVE_FMT_SCALED */
 
 /* Define to 1 if you have the `freeaddrinfo' function. */
 #define HAVE_FREEADDRINFO 1
+
+/* Define to 1 if you have the `freezero' function. */
+/* #undef HAVE_FREEZERO */
 
 /* Define to 1 if the system has the type `fsblkcnt_t'. */
 #define HAVE_FSBLKCNT_T 1
@@ -509,6 +592,9 @@
 /* Define to 1 if you have the `getlastlogxbyname' function. */
 /* #undef HAVE_GETLASTLOGXBYNAME */
 
+/* Define to 1 if you have the `getline' function. */
+#define HAVE_GETLINE 1
+
 /* Define to 1 if you have the `getluid' function. */
 /* #undef HAVE_GETLUID */
 
@@ -542,17 +628,20 @@
 /* Define to 1 if you have the `getpwanam' function. */
 /* #undef HAVE_GETPWANAM */
 
+/* Define to 1 if you have the `getrandom' function. */
+#define HAVE_GETRANDOM 1
+
 /* Define to 1 if you have the `getrlimit' function. */
 #define HAVE_GETRLIMIT 1
 
 /* Define if getrrsetbyname() exists */
 /* #undef HAVE_GETRRSETBYNAME */
 
-/* Define to 1 if you have the `getrusage' function. */
-/* #undef HAVE_GETRUSAGE */
-
 /* Define to 1 if you have the `getseuserbyname' function. */
 /* #undef HAVE_GETSEUSERBYNAME */
+
+/* Define to 1 if you have the `getsid' function. */
+#define HAVE_GETSID 1
 
 /* Define to 1 if you have the `gettimeofday' function. */
 #define HAVE_GETTIMEOFDAY 1
@@ -615,7 +704,7 @@
 #define HAVE_HEADER_AD 1
 
 /* Define to 1 if you have the `HMAC_CTX_init' function. */
-#define HAVE_HMAC_CTX_INIT 1
+/* #undef HAVE_HMAC_CTX_INIT */
 
 /* Define if you have ut_host in utmp.h */
 /* #undef HAVE_HOST_IN_UTMP */
@@ -634,6 +723,9 @@
 
 /* Define if you have ut_id in utmpx.h */
 #define HAVE_ID_IN_UTMPX 1
+
+/* Define to 1 if you have the <ifaddrs.h> header file. */
+#define HAVE_IFADDRS_H 1
 
 /* Define to 1 if you have the `inet_aton' function. */
 #define HAVE_INET_ATON 1
@@ -770,6 +862,10 @@
 /* Define to 1 if you have the <maillock.h> header file. */
 /* #undef HAVE_MAILLOCK_H */
 
+/* Define to 1 if your system has a GNU libc compatible `malloc' function, and
+   to 0 otherwise. */
+#define HAVE_MALLOC 1
+
 /* Define to 1 if you have the `mblen' function. */
 #define HAVE_MBLEN 1
 
@@ -811,6 +907,9 @@
 
 /* Define to 1 if you have the <net/if_tun.h> header file. */
 #define HAVE_NET_IF_TUN_H 1
+
+/* Define to 1 if you have the <net/route.h> header file. */
+#define HAVE_NET_ROUTE_H 1
 
 /* Define if you are on NeXT */
 /* #undef HAVE_NEXT */
@@ -894,17 +993,27 @@
 /* Define to 1 if you have the `pututxline' function. */
 #define HAVE_PUTUTXLINE 1
 
+/* Define to 1 if you have the `raise' function. */
+#define HAVE_RAISE 1
+
 /* Define to 1 if you have the `readpassphrase' function. */
 #define HAVE_READPASSPHRASE 1
 
 /* Define to 1 if you have the <readpassphrase.h> header file. */
 #define HAVE_READPASSPHRASE_H 1
 
+/* Define to 1 if your system has a GNU libc compatible `realloc' function,
+   and to 0 otherwise. */
+#define HAVE_REALLOC 1
+
 /* Define to 1 if you have the `reallocarray' function. */
 #define HAVE_REALLOCARRAY 1
 
 /* Define to 1 if you have the `realpath' function. */
 #define HAVE_REALPATH 1
+
+/* Define to 1 if you have the `recallocarray' function. */
+/* #undef HAVE_RECALLOCARRAY */
 
 /* Define to 1 if you have the `recvmsg' function. */
 #define HAVE_RECVMSG 1
@@ -921,8 +1030,47 @@
 /* Define to 1 if you have the `RSA_generate_key_ex' function. */
 #define HAVE_RSA_GENERATE_KEY_EX 1
 
+/* Define if libcrypto has RSA_get0_crt_params */
+#define HAVE_RSA_GET0_CRT_PARAMS 1
+
+/* Define if libcrypto has RSA_get0_factors */
+#define HAVE_RSA_GET0_FACTORS 1
+
+/* Define if libcrypto has RSA_get0_key */
+#define HAVE_RSA_GET0_KEY 1
+
 /* Define to 1 if you have the `RSA_get_default_method' function. */
 #define HAVE_RSA_GET_DEFAULT_METHOD 1
+
+/* Define if libcrypto has RSA_meth_dup */
+#define HAVE_RSA_METH_DUP 1
+
+/* Define if libcrypto has RSA_meth_free */
+#define HAVE_RSA_METH_FREE 1
+
+/* Define if libcrypto has RSA_meth_get_finish */
+#define HAVE_RSA_METH_GET_FINISH 1
+
+/* Define if libcrypto has RSA_meth_set1_name */
+#define HAVE_RSA_METH_SET1_NAME 1
+
+/* Define if libcrypto has RSA_meth_set_finish */
+#define HAVE_RSA_METH_SET_FINISH 1
+
+/* Define if libcrypto has RSA_meth_set_priv_dec */
+#define HAVE_RSA_METH_SET_PRIV_DEC 1
+
+/* Define if libcrypto has RSA_meth_set_priv_enc */
+#define HAVE_RSA_METH_SET_PRIV_ENC 1
+
+/* Define if libcrypto has RSA_get0_srt_params */
+#define HAVE_RSA_SET0_CRT_PARAMS 1
+
+/* Define if libcrypto has RSA_set0_factors */
+#define HAVE_RSA_SET0_FACTORS 1
+
+/* Define if libcrypto has RSA_set0_key */
+#define HAVE_RSA_SET0_KEY 1
 
 /* Define to 1 if you have the <sandbox.h> header file. */
 /* #undef HAVE_SANDBOX_H */
@@ -1104,6 +1252,9 @@
 /* Define to 1 if you have the `strmode' function. */
 #define HAVE_STRMODE 1
 
+/* Define to 1 if you have the `strndup' function. */
+#define HAVE_STRNDUP 1
+
 /* Define to 1 if you have the `strnlen' function. */
 #define HAVE_STRNLEN 1
 
@@ -1115,6 +1266,9 @@
 
 /* Define to 1 if you have the `strsep' function. */
 #define HAVE_STRSEP 1
+
+/* Define to 1 if you have the `strsignal' function. */
+#define HAVE_STRSIGNAL 1
 
 /* Define to 1 if you have the `strtoll' function. */
 #define HAVE_STRTOLL 1
@@ -1155,8 +1309,17 @@
 /* define if you have struct sockaddr_storage data type */
 #define HAVE_STRUCT_SOCKADDR_STORAGE 1
 
+/* Define to 1 if `f_flags' is a member of `struct statfs'. */
+/* #undef HAVE_STRUCT_STATFS_F_FLAGS */
+
 /* Define to 1 if `st_blksize' is a member of `struct stat'. */
 #define HAVE_STRUCT_STAT_ST_BLKSIZE 1
+
+/* Define to 1 if `st_mtim' is a member of `struct stat'. */
+#define HAVE_STRUCT_STAT_ST_MTIM 1
+
+/* Define to 1 if `st_mtime' is a member of `struct stat'. */
+#define HAVE_STRUCT_STAT_ST_MTIME 1
 
 /* Define to 1 if the system has the type `struct timespec'. */
 #define HAVE_STRUCT_TIMESPEC 1
@@ -1194,6 +1357,12 @@
 /* Define if your system defines sys_errlist[] */
 #define HAVE_SYS_ERRLIST 1
 
+/* Define to 1 if you have the <sys/file.h> header file. */
+#define HAVE_SYS_FILE_H 1
+
+/* Define to 1 if you have the <sys/label.h> header file. */
+/* #undef HAVE_SYS_LABEL_H */
+
 /* Define to 1 if you have the <sys/mman.h> header file. */
 #define HAVE_SYS_MMAN_H 1
 
@@ -1221,6 +1390,9 @@
 /* Define to 1 if you have the <sys/ptrace.h> header file. */
 #define HAVE_SYS_PTRACE_H 1
 
+/* Define to 1 if you have the <sys/random.h> header file. */
+#define HAVE_SYS_RANDOM_H 1
+
 /* Define to 1 if you have the <sys/select.h> header file. */
 #define HAVE_SYS_SELECT_H 1
 
@@ -1239,6 +1411,9 @@
 /* Define to 1 if you have the <sys/strtio.h> header file. */
 /* #undef HAVE_SYS_STRTIO_H */
 
+/* Define to 1 if you have the <sys/sysctl.h> header file. */
+#define HAVE_SYS_SYSCTL_H 1
+
 /* Force use of sys/syslog.h on Ultrix */
 /* #undef HAVE_SYS_SYSLOG_H */
 
@@ -1256,6 +1431,9 @@
 
 /* Define to 1 if you have the <sys/un.h> header file. */
 #define HAVE_SYS_UN_H 1
+
+/* Define to 1 if you have the <sys/vfs.h> header file. */
+/* #undef HAVE_SYS_VFS_H */
 
 /* Define to 1 if you have the `tcgetpgrp' function. */
 #define HAVE_TCGETPGRP 1
@@ -1474,11 +1652,11 @@
 /* Need setpgrp to acquire controlling tty */
 /* #undef NEED_SETPGRP */
 
+/* compiler does not accept __attribute__ on prototype args */
+/* #undef NO_ATTRIBUTE_ON_PROTOTYPE_ARGS */
+
 /* compiler does not accept __attribute__ on return types */
 /* #undef NO_ATTRIBUTE_ON_RETURN_TYPE */
-
-/* Define if you don't want to use lastlog in session.c */
-/* #undef NO_SSH_LASTLOG */
 
 /* Define to disable UID restoration test */
 /* #undef NO_UID_RESTORATION_TEST */
@@ -1601,12 +1779,6 @@
 /* The size of `short int', as computed by sizeof. */
 #define SIZEOF_SHORT_INT 2
 
-/* Define if you want S/Key support */
-/* #undef SKEY */
-
-/* Define if your skeychallenge() function takes 4 arguments (NetBSD) */
-/* #undef SKEYCHALLENGE_4ARG */
-
 /* Define as const if snprintf() can declare const char *fmt */
 #define SNPRINTF_CONST const
 
@@ -1659,6 +1831,9 @@
 /* syslog_r function is safe to use in in a signal handler */
 /* #undef SYSLOG_R_SAFE_IN_SIGHAND */
 
+/* Support routing domains using Linux VRF */
+/* #undef SYS_RDOMAIN_LINUX */
+
 /* Support passwords > 8 chars */
 /* #undef UNIXWARE_LONG_PASSWORDS */
 
@@ -1704,7 +1879,7 @@
 /* Define if you want to enable AIX4's authenticate function */
 /* #undef WITH_AIXAUTHENTICATE */
 
-/* Define if you have/want arrays (cluster-wide session managment, not C
+/* Define if you have/want arrays (cluster-wide session management, not C
    arrays) */
 /* #undef WITH_IRIX_ARRAY */
 
@@ -1722,9 +1897,6 @@
 
 /* Define if you want SELinux support. */
 /* #undef WITH_SELINUX */
-
-/* include SSH protocol version 1 support */
-/* #undef WITH_SSH1 */
 
 /* Define WORDS_BIGENDIAN to 1 if your processor stores words with the most
    significant byte first (like Motorola and SPARC, unlike Intel). */
@@ -1764,11 +1936,20 @@
 /* Define if we don't have struct __res_state in resolv.h */
 /* #undef __res_state */
 
+/* Define to rpl_calloc if the replacement function should be used. */
+/* #undef calloc */
+
 /* Define to `__inline__' or `__inline' if that's what the C compiler
    calls it, or to nothing if 'inline' is not supported under any name.  */
 #ifndef __cplusplus
 /* #undef inline */
 #endif
+
+/* Define to rpl_malloc if the replacement function should be used. */
+/* #undef malloc */
+
+/* Define to rpl_realloc if the replacement function should be used. */
+/* #undef realloc */
 
 /* type to use in place of socklen_t if not defined */
 /* #undef socklen_t */

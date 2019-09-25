@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1987, 1993
  *	The Regents of the University of California.
  * Copyright (c) 2005, 2009 Robert N. M. Watson
@@ -12,7 +14,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -36,6 +38,9 @@
 #define	_SYS_MALLOC_H_
 
 #include <sys/param.h>
+#ifdef _KERNEL
+#include <sys/systm.h>
+#endif
 #include <sys/queue.h>
 #include <sys/_lock.h>
 #include <sys/_mutex.h>
@@ -44,7 +49,7 @@
 #define	MINALLOCSIZE	UMA_SMALLEST_UNIT
 
 /*
- * flags to malloc.
+ * Flags to memory allocation functions.
  */
 #define	M_NOWAIT	0x0001		/* do not block */
 #define	M_WAITOK	0x0002		/* ok to block */
@@ -52,8 +57,10 @@
 #define	M_NOVM		0x0200		/* don't ask VM for pages */
 #define	M_USE_RESERVE	0x0400		/* can alloc out of reserve memory */
 #define	M_NODUMP	0x0800		/* don't dump pages in this allocation */
-#define	M_FIRSTFIT	0x1000		/* Only for vmem, fast fit. */
-#define	M_BESTFIT	0x2000		/* Only for vmem, low fragmentation. */
+#define	M_FIRSTFIT	0x1000		/* only for vmem, fast fit */
+#define	M_BESTFIT	0x2000		/* only for vmem, low fragmentation */
+#define	M_EXEC		0x4000		/* allocate executable space */
+#define	M_NEXTFIT	0x8000		/* only for vmem, follow cursor */
 
 #define	M_MAGIC		877983977	/* time when first defined :-) */
 
@@ -95,7 +102,7 @@ struct malloc_type_internal {
 	uint32_t	mti_probes[DTMALLOC_PROBE_MAX];
 					/* DTrace probe ID array. */
 	u_char		mti_zone;
-	struct malloc_type_stats	mti_stats[MAXCPU];
+	struct malloc_type_stats	*mti_stats;
 };
 
 /*
@@ -148,19 +155,13 @@ MALLOC_DECLARE(M_DEVBUF);
 MALLOC_DECLARE(M_TEMP);
 
 /*
- * Deprecated macro versions of not-quite-malloc() and free().
- */
-#define	MALLOC(space, cast, size, type, flags) \
-	((space) = (cast)malloc((u_long)(size), (type), (flags)))
-#define	FREE(addr, type) free((addr), (type))
-
-/*
  * XXX this should be declared in <sys/uio.h>, but that tends to fail
  * because <sys/uio.h> is included in a header before the source file
  * has a chance to include <sys/malloc.h> to get MALLOC_DECLARE() defined.
  */
 MALLOC_DECLARE(M_IOV);
 
+struct domainset;
 extern struct mtx malloc_mtx;
 
 /*
@@ -173,9 +174,67 @@ void	*contigmalloc(unsigned long size, struct malloc_type *type, int flags,
 	    vm_paddr_t low, vm_paddr_t high, unsigned long alignment,
 	    vm_paddr_t boundary) __malloc_like __result_use_check
 	    __alloc_size(1) __alloc_align(6);
+void	*contigmalloc_domainset(unsigned long size, struct malloc_type *type,
+	    struct domainset *ds, int flags, vm_paddr_t low, vm_paddr_t high,
+	    unsigned long alignment, vm_paddr_t boundary)
+	    __malloc_like __result_use_check __alloc_size(1) __alloc_align(7);
 void	free(void *addr, struct malloc_type *type);
-void	*malloc(unsigned long size, struct malloc_type *type, int flags)
-	    __malloc_like __result_use_check __alloc_size(1);
+void	free_domain(void *addr, struct malloc_type *type);
+void	*malloc(size_t size, struct malloc_type *type, int flags) __malloc_like
+	    __result_use_check __alloc_size(1);
+/*
+ * Try to optimize malloc(..., ..., M_ZERO) allocations by doing zeroing in
+ * place if the size is known at compilation time.
+ *
+ * Passing the flag down requires malloc to blindly zero the entire object.
+ * In practice a lot of the zeroing can be avoided if most of the object
+ * gets explicitly initialized after the allocation. Letting the compiler
+ * zero in place gives it the opportunity to take advantage of this state.
+ *
+ * Note that the operation is only applicable if both flags and size are
+ * known at compilation time. If M_ZERO is passed but M_WAITOK is not, the
+ * allocation can fail and a NULL check is needed. However, if M_WAITOK is
+ * passed we know the allocation must succeed and the check can be elided.
+ *
+ *	_malloc_item = malloc(_size, type, (flags) &~ M_ZERO);
+ *	if (((flags) & M_WAITOK) != 0 || _malloc_item != NULL)
+ *		bzero(_malloc_item, _size);
+ *
+ * If the flag is set, the compiler knows the left side is always true,
+ * therefore the entire statement is true and the callsite is:
+ *
+ *	_malloc_item = malloc(_size, type, (flags) &~ M_ZERO);
+ *	bzero(_malloc_item, _size);
+ *
+ * If the flag is not set, the compiler knows the left size is always false
+ * and the NULL check is needed, therefore the callsite is:
+ *
+ * 	_malloc_item = malloc(_size, type, (flags) &~ M_ZERO);
+ *	if (_malloc_item != NULL)
+ *		bzero(_malloc_item, _size);			
+ *
+ * The implementation is a macro because of what appears to be a clang 6 bug:
+ * an inline function variant ended up being compiled to a mere malloc call
+ * regardless of argument. gcc generates expected code (like the above).
+ */
+#define	malloc(size, type, flags) ({					\
+	void *_malloc_item;						\
+	size_t _size = (size);						\
+	if (__builtin_constant_p(size) && __builtin_constant_p(flags) &&\
+	    ((flags) & M_ZERO) != 0) {					\
+		_malloc_item = malloc(_size, type, (flags) &~ M_ZERO);	\
+		if (((flags) & M_WAITOK) != 0 ||			\
+		    __predict_true(_malloc_item != NULL))		\
+			bzero(_malloc_item, _size);			\
+	} else {							\
+		_malloc_item = malloc(_size, type, flags);		\
+	}								\
+	_malloc_item;							\
+})
+
+void	*malloc_domainset(size_t size, struct malloc_type *type,
+	    struct domainset *ds, int flags) __malloc_like __result_use_check
+	    __alloc_size(1);
 void	*mallocarray(size_t nmemb, size_t size, struct malloc_type *type,
 	    int flags) __malloc_like __result_use_check
 	    __alloc_size2(1, 2);
@@ -185,10 +244,10 @@ void	malloc_type_allocated(struct malloc_type *type, unsigned long size);
 void	malloc_type_freed(struct malloc_type *type, unsigned long size);
 void	malloc_type_list(malloc_type_list_func_t *, void *);
 void	malloc_uninit(void *);
-void	*realloc(void *addr, unsigned long size, struct malloc_type *type,
-	    int flags) __result_use_check __alloc_size(2);
-void	*reallocf(void *addr, unsigned long size, struct malloc_type *type,
-	    int flags) __result_use_check __alloc_size(2);
+void	*realloc(void *addr, size_t size, struct malloc_type *type, int flags)
+	    __result_use_check __alloc_size(2);
+void	*reallocf(void *addr, size_t size, struct malloc_type *type, int flags)
+	    __result_use_check __alloc_size(2);
 
 struct malloc_type *malloc_desc2type(const char *desc);
 

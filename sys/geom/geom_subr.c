@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2002 Poul-Henning Kamp
  * Copyright (c) 2002 Networks Associates Technology, Inc.
  * All rights reserved.
@@ -347,6 +349,7 @@ g_new_geomf(struct g_class *mp, const char *fmt, ...)
 	gp->rank = 1;
 	LIST_INIT(&gp->consumer);
 	LIST_INIT(&gp->provider);
+	LIST_INIT(&gp->aliases);
 	LIST_INSERT_HEAD(&mp->geom, gp, geom);
 	TAILQ_INSERT_HEAD(&geoms, gp, geoms);
 	strcpy(gp->name, sbuf_data(sb));
@@ -367,6 +370,7 @@ g_new_geomf(struct g_class *mp, const char *fmt, ...)
 void
 g_destroy_geom(struct g_geom *gp)
 {
+	struct g_geom_alias *gap, *gaptmp;
 
 	g_topology_assert();
 	G_VALID_GEOM(gp);
@@ -380,6 +384,8 @@ g_destroy_geom(struct g_geom *gp)
 	g_cancel_event(gp);
 	LIST_REMOVE(gp, geom);
 	TAILQ_REMOVE(&geoms, gp, geoms);
+	LIST_FOREACH_SAFE(gap, &gp->aliases, ga_next, gaptmp)
+		g_free(gap);
 	g_free(gp->name);
 	g_free(gp);
 }
@@ -627,6 +633,14 @@ g_resize_provider_event(void *arg, int flag)
 	LIST_FOREACH_SAFE(cp, &pp->consumers, consumers, cp2) {
 		gp = cp->geom;
 		if (gp->resize == NULL && size < pp->mediasize) {
+			/*
+			 * XXX: g_dev_orphan method does deferred destroying
+			 * and it is possible, that other event could already
+			 * call the orphan method. Check consumer's flags to
+			 * do not schedule it twice.
+			 */
+			if (cp->flags & G_CF_ORPHAN)
+				continue;
 			cp->flags |= G_CF_ORPHAN;
 			cp->geom->orphan(cp);
 		}
@@ -1036,16 +1050,16 @@ g_handleattr(struct bio *bp, const char *attribute, const void *val, int len)
 		bzero(bp->bio_data, bp->bio_length);
 		if (strlcpy(bp->bio_data, val, bp->bio_length) >=
 		    bp->bio_length) {
-			printf("%s: %s bio_length %jd len %zu -> EFAULT\n",
-			    __func__, bp->bio_to->name,
+			printf("%s: %s %s bio_length %jd strlen %zu -> EFAULT\n",
+			    __func__, bp->bio_to->name, attribute,
 			    (intmax_t)bp->bio_length, strlen(val));
 			error = EFAULT;
 		}
 	} else if (bp->bio_length == len) {
 		bcopy(val, bp->bio_data, len);
 	} else {
-		printf("%s: %s bio_length %jd len %d -> EFAULT\n", __func__,
-		    bp->bio_to->name, (intmax_t)bp->bio_length, len);
+		printf("%s: %s %s bio_length %jd len %d -> EFAULT\n", __func__,
+		    bp->bio_to->name, attribute, (intmax_t)bp->bio_length, len);
 		error = EFAULT;
 	}
 	if (error == 0)
@@ -1252,6 +1266,18 @@ g_compare_names(const char *namea, const char *nameb)
 	if (strcmp(namea + deva, nameb + devb) == 0)
 		return (1);
 	return (0);
+}
+
+void
+g_geom_add_alias(struct g_geom *gp, const char *alias)
+{
+	struct g_geom_alias *gap;
+
+	gap = (struct g_geom_alias *)g_malloc(
+		sizeof(struct g_geom_alias) + strlen(alias) + 1, M_WAITOK);
+	strcpy((char *)(gap + 1), alias);
+	gap->ga_alias = (const char *)(gap + 1);
+	LIST_INSERT_HEAD(&gp->aliases, gap, ga_next);
 }
 
 #if defined(DIAGNOSTIC) || defined(DDB)
@@ -1573,6 +1599,10 @@ DB_SHOW_COMMAND(bio, db_show_bio)
 		db_printf("  caller2: %p\n", bp->bio_caller2);
 		db_printf("  bio_from: %p\n", bp->bio_from);
 		db_printf("  bio_to: %p\n", bp->bio_to);
+
+#if defined(BUF_TRACKING) || defined(FULL_BUF_TRACKING)
+		db_printf("  bio_track_bp: %p\n", bp->bio_track_bp);
+#endif
 	}
 }
 

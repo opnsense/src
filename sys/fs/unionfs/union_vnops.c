@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1992, 1993, 1994, 1995 Jan-Simon Pendry.
  * Copyright (c) 1992, 1993, 1994, 1995
  *      The Regents of the University of California.
@@ -17,7 +19,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -2509,6 +2511,33 @@ unionfs_vptofh(struct vop_vptofh_args *ap)
 	return (EOPNOTSUPP);
 }
 
+static int
+unionfs_add_writecount(struct vop_add_writecount_args *ap)
+{
+	struct vnode *tvp, *vp;
+	struct unionfs_node *unp;
+	int error;
+
+	vp = ap->a_vp;
+	unp = VTOUNIONFS(vp);
+	tvp = unp->un_uppervp != NULL ? unp->un_uppervp : unp->un_lowervp;
+	VI_LOCK(vp);
+	/* text refs are bypassed to lowervp */
+	VNASSERT(vp->v_writecount >= 0, vp, ("wrong null writecount"));
+	VNASSERT(vp->v_writecount + ap->a_inc >= 0, vp,
+	    ("wrong writecount inc %d", ap->a_inc));
+	if (tvp != NULL)
+		error = VOP_ADD_WRITECOUNT(tvp, ap->a_inc);
+	else if (vp->v_writecount < 0)
+		error = ETXTBSY;
+	else
+		error = 0;
+	if (error == 0)
+		vp->v_writecount += ap->a_inc;
+	VI_UNLOCK(vp);
+	return (error);
+}
+
 struct vop_vector unionfs_vnodeops = {
 	.vop_default =		&default_vnodeops,
 
@@ -2557,4 +2586,5 @@ struct vop_vector unionfs_vnodeops = {
 	.vop_whiteout =		unionfs_whiteout,
 	.vop_write =		unionfs_write,
 	.vop_vptofh =		unionfs_vptofh,
+	.vop_add_writecount =	unionfs_add_writecount,
 };

@@ -350,9 +350,7 @@ template <> bool AVRDAGToDAGISel::select<ISD::STORE>(SDNode *N) {
   SDNode *ResNode = CurDAG->getMachineNode(Opc, DL, MVT::Other, Ops);
 
   // Transfer memory operands.
-  MachineSDNode::mmo_iterator MemOp = MF->allocateMemRefsArray(1);
-  MemOp[0] = ST->getMemOperand();
-  cast<MachineSDNode>(ResNode)->setMemRefs(MemOp, MemOp + 1);
+  CurDAG->setNodeMemRefs(cast<MachineSDNode>(ResNode), {ST->getMemOperand()});
 
   ReplaceUses(SDValue(N, 0), SDValue(ResNode, 0));
   CurDAG->RemoveDeadNode(N);
@@ -407,9 +405,7 @@ template <> bool AVRDAGToDAGISel::select<ISD::LOAD>(SDNode *N) {
   }
 
   // Transfer memory operands.
-  MachineSDNode::mmo_iterator MemOp = MF->allocateMemRefsArray(1);
-  MemOp[0] = LD->getMemOperand();
-  cast<MachineSDNode>(ResNode)->setMemRefs(MemOp, MemOp + 1);
+  CurDAG->setNodeMemRefs(cast<MachineSDNode>(ResNode), {LD->getMemOperand()});
 
   ReplaceUses(SDValue(N, 0), SDValue(ResNode, 0));
   ReplaceUses(SDValue(N, 1), SDValue(ResNode, 1));
@@ -519,12 +515,9 @@ bool AVRDAGToDAGISel::selectMultiplication(llvm::SDNode *N) {
 }
 
 void AVRDAGToDAGISel::Select(SDNode *N) {
-  // Dump information about the Node being selected
-  DEBUG(errs() << "Selecting: "; N->dump(CurDAG); errs() << "\n");
-
   // If we have a custom node, we already have selected!
   if (N->isMachineOpcode()) {
-    DEBUG(errs() << "== "; N->dump(CurDAG); errs() << "\n");
+    LLVM_DEBUG(errs() << "== "; N->dump(CurDAG); errs() << "\n");
     N->setNodeId(-1);
     return;
   }

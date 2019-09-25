@@ -3,12 +3,6 @@
 
 .include <src.opts.mk>
 
-# XXX MISSING:		deroff diction graph learn plot
-#			spell spline struct xsend
-# XXX Use GNU versions: diff ld patch
-# Moved to secure: bdes
-#
-
 SUBDIR=	alias \
 	apply \
 	asa \
@@ -35,6 +29,7 @@ SUBDIR=	alias \
 	csplit \
 	ctlstat \
 	cut \
+	diff \
 	dirname \
 	du \
 	elf2aout \
@@ -109,7 +104,6 @@ SUBDIR=	alias \
 	nfsstat \
 	nice \
 	nl \
-	numactl \
 	nohup \
 	opieinfo \
 	opiekey \
@@ -120,6 +114,7 @@ SUBDIR=	alias \
 	patch \
 	pathchk \
 	perror \
+	posixshmcontrol \
 	pr \
 	printenv \
 	printf \
@@ -141,7 +136,6 @@ SUBDIR=	alias \
 	script \
 	sdiff \
 	sed \
-	send-pr \
 	seq \
 	shar \
 	showmount \
@@ -194,7 +188,8 @@ SUBDIR=	alias \
 	xo \
 	xz \
 	xzdec \
-	yes
+	yes \
+	zstd
 
 # NB: keep these sorted by MK_* knobs
 
@@ -218,15 +213,11 @@ SUBDIR.${MK_GAMES}+=	number
 SUBDIR.${MK_GAMES}+=	pom
 SUBDIR.${MK_GAMES}+=	primes
 SUBDIR.${MK_GAMES}+=	random
-.if ${MK_GNU_DIFF} == "no"
-SUBDIR+=		diff
-.endif
 .if ${MK_GPL_DTC} != "yes"
 .if ${COMPILER_FEATURES:Mc++11}
 SUBDIR+=	dtc
 .endif
 .endif
-SUBDIR.${MK_GROFF}+=	vgrind
 SUBDIR.${MK_HESIOD}+=	hesinfo
 SUBDIR.${MK_ICONV}+=	iconv
 SUBDIR.${MK_ICONV}+=	mkcsmapper
@@ -244,14 +235,8 @@ SUBDIR.${MK_MAIL}+=	from
 SUBDIR.${MK_MAIL}+=	mail
 SUBDIR.${MK_MAIL}+=	msgs
 SUBDIR.${MK_MAKE}+=	bmake
-SUBDIR.${MK_MAN_UTILS}+=	catman
-.if ${MK_MANDOCDB} == "no"	# AND
-SUBDIR.${MK_MAN_UTILS}+=	makewhatis
-.endif
 SUBDIR.${MK_MAN_UTILS}+=	man
-.if ${MK_LIBRESSL} == "no"
 SUBDIR.${MK_NETCAT}+=	nc
-.endif
 SUBDIR.${MK_NIS}+=	ypcat
 SUBDIR.${MK_NIS}+=	ypmatch
 SUBDIR.${MK_NIS}+=	ypwhich
@@ -261,14 +246,10 @@ SUBDIR.${MK_OPENSSL}+=	chkey
 SUBDIR.${MK_OPENSSL}+=	dc
 SUBDIR.${MK_OPENSSL}+=	newkey
 SUBDIR.${MK_QUOTAS}+=	quota
-SUBDIR.${MK_RCMDS}+=	rlogin
-SUBDIR.${MK_RCMDS}+=	rsh
 SUBDIR.${MK_SENDMAIL}+=	vacation
 SUBDIR.${MK_TALK}+=	talk
 SUBDIR.${MK_TELNET}+=	telnet
 SUBDIR.${MK_TESTS}+=	tests
-SUBDIR.${MK_TEXTPROC}+=	checknr
-SUBDIR.${MK_TEXTPROC}+=	colcrt
 SUBDIR.${MK_TEXTPROC}+=	ul
 SUBDIR.${MK_TFTP}+=	tftp
 SUBDIR.${MK_TOOLCHAIN}+=	addr2line
@@ -277,7 +258,7 @@ SUBDIR.${MK_TOOLCHAIN}+=	c89
 SUBDIR.${MK_TOOLCHAIN}+=	c99
 SUBDIR.${MK_TOOLCHAIN}+=	ctags
 SUBDIR.${MK_TOOLCHAIN}+=	cxxfilt
-SUBDIR.${MK_TOOLCHAIN}+=	elfcopy
+SUBDIR.${MK_TOOLCHAIN}+=	objcopy
 SUBDIR.${MK_TOOLCHAIN}+=	file2c
 # ARM64TODO gprof does not build
 # RISCVTODO gprof does not build
@@ -292,9 +273,6 @@ SUBDIR.${MK_TOOLCHAIN}+=	readelf
 SUBDIR.${MK_TOOLCHAIN}+=	rpcgen
 SUBDIR.${MK_TOOLCHAIN}+=	unifdef
 SUBDIR.${MK_TOOLCHAIN}+=	size
-.if ${MK_LINT} != "no" && ${MACHINE_ARCH} != "aarch64" # ARM64TODO xlint does not build
-SUBDIR.${MK_TOOLCHAIN}+=	xlint
-.endif
 SUBDIR.${MK_TOOLCHAIN}+=	xstr
 SUBDIR.${MK_TOOLCHAIN}+=	yacc
 SUBDIR.${MK_VI}+=	vi
@@ -302,12 +280,13 @@ SUBDIR.${MK_VT}+=	vtfontcvt
 SUBDIR.${MK_USB}+=	usbhidaction
 SUBDIR.${MK_USB}+=	usbhidctl
 SUBDIR.${MK_UTMPX}+=	last
-.if ${MACHINE_CPUARCH} != "riscv" # RISCVTODO users does not build
+.if ${MK_CXX} != "no"
 SUBDIR.${MK_UTMPX}+=	users
 .endif
 SUBDIR.${MK_UTMPX}+=	who
 SUBDIR.${MK_SVN}+=	svn
 SUBDIR.${MK_SVNLITE}+=	svn
+SUBDIR.${MK_OFED}+=	ofed
 
 # These are normally only handled for build-tools.
 .if make(clean*)

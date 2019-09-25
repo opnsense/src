@@ -10,9 +10,9 @@
 #include "lldb/Host/TaskPool.h"
 #include "lldb/Host/ThreadLauncher.h"
 
-#include <cstdint> // for uint32_t
-#include <queue>   // for queue
-#include <thread>  // for thread
+#include <cstdint>
+#include <queue>
+#include <thread>
 
 namespace lldb_private {
 
@@ -49,8 +49,8 @@ void TaskPool::AddTaskImpl(std::function<void()> &&task_fn) {
 TaskPoolImpl::TaskPoolImpl() : m_thread_count(0) {}
 
 unsigned GetHardwareConcurrencyHint() {
-  // std::thread::hardware_concurrency may return 0
-  // if the value is not well defined or not computable.
+  // std::thread::hardware_concurrency may return 0 if the value is not well
+  // defined or not computable.
   static const unsigned g_hardware_concurrency = 
     std::max(1u, std::thread::hardware_concurrency());
   return g_hardware_concurrency;
@@ -64,9 +64,8 @@ void TaskPoolImpl::AddTask(std::function<void()> &&task_fn) {
   if (m_thread_count < GetHardwareConcurrencyHint()) {
     m_thread_count++;
     // Note that this detach call needs to happen with the m_tasks_mutex held.
-    // This prevents the thread
-    // from exiting prematurely and triggering a linux libc bug
-    // (https://sourceware.org/bugzilla/show_bug.cgi?id=19951).
+    // This prevents the thread from exiting prematurely and triggering a linux
+    // libc bug (https://sourceware.org/bugzilla/show_bug.cgi?id=19951).
     lldb_private::ThreadLauncher::LaunchThread("task-pool.worker", WorkerPtr,
                                                this, nullptr, min_stack_size)
         .Release();

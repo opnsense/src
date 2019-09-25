@@ -10,18 +10,14 @@
 #ifndef lldb_TypeSynthetic_h_
 #define lldb_TypeSynthetic_h_
 
-// C Includes
 #include <stdint.h>
 
-// C++ Includes
 #include <functional>
 #include <initializer_list>
 #include <memory>
 #include <string>
 #include <vector>
 
-// Other libraries and framework includes
-// Project includes
 #include "lldb/lldb-enumerations.h"
 #include "lldb/lldb-public.h"
 
@@ -55,34 +51,29 @@ public:
   virtual size_t GetIndexOfChildWithName(const ConstString &name) = 0;
 
   // this function is assumed to always succeed and it if fails, the front-end
-  // should know to deal
-  // with it in the correct way (most probably, by refusing to return any
-  // children)
-  // the return value of Update() should actually be interpreted as
-  // "ValueObjectSyntheticFilter cache is good/bad"
-  // if =true, ValueObjectSyntheticFilter is allowed to use the children it
-  // fetched previously and cached
-  // if =false, ValueObjectSyntheticFilter must throw away its cache, and query
-  // again for children
+  // should know to deal with it in the correct way (most probably, by refusing
+  // to return any children) the return value of Update() should actually be
+  // interpreted as "ValueObjectSyntheticFilter cache is good/bad" if =true,
+  // ValueObjectSyntheticFilter is allowed to use the children it fetched
+  // previously and cached if =false, ValueObjectSyntheticFilter must throw
+  // away its cache, and query again for children
   virtual bool Update() = 0;
 
   // if this function returns false, then CalculateNumChildren() MUST return 0
-  // since UI frontends
-  // might validly decide not to inquire for children given a false return value
-  // from this call
-  // if it returns true, then CalculateNumChildren() can return any number >= 0
-  // (0 being valid)
-  // it should if at all possible be more efficient than CalculateNumChildren()
+  // since UI frontends might validly decide not to inquire for children given
+  // a false return value from this call if it returns true, then
+  // CalculateNumChildren() can return any number >= 0 (0 being valid) it
+  // should if at all possible be more efficient than CalculateNumChildren()
   virtual bool MightHaveChildren() = 0;
 
   // if this function returns a non-null ValueObject, then the returned
-  // ValueObject will stand
-  // for this ValueObject whenever a "value" request is made to this ValueObject
+  // ValueObject will stand for this ValueObject whenever a "value" request is
+  // made to this ValueObject
   virtual lldb::ValueObjectSP GetSyntheticValue() { return nullptr; }
 
-  // if this function returns a non-empty ConstString, then clients are expected
-  // to use the return
-  // as the name of the type of this ValueObject for display purposes
+  // if this function returns a non-empty ConstString, then clients are
+  // expected to use the return as the name of the type of this ValueObject for
+  // display purposes
   virtual ConstString GetSyntheticTypeName() { return ConstString(); }
 
   typedef std::shared_ptr<SyntheticChildrenFrontEnd> SharedPointer;
@@ -212,6 +203,19 @@ public:
       return *this;
     }
 
+    bool GetFrontEndWantsDereference() const {
+      return (m_flags & lldb::eTypeOptionFrontEndWantsDereference) ==
+             lldb::eTypeOptionFrontEndWantsDereference;
+    }
+
+    Flags &SetFrontEndWantsDereference(bool value = true) {
+      if (value)
+        m_flags |= lldb::eTypeOptionFrontEndWantsDereference;
+      else
+        m_flags &= ~lldb::eTypeOptionFrontEndWantsDereference;
+      return *this;
+    }
+
     uint32_t GetValue() { return m_flags; }
 
     void SetValue(uint32_t value) { m_flags = value; }
@@ -231,6 +235,8 @@ public:
   bool SkipsReferences() const { return m_flags.GetSkipReferences(); }
 
   bool NonCacheable() const { return m_flags.GetNonCacheable(); }
+  
+  bool WantsDereference() const { return m_flags.GetFrontEndWantsDereference();} 
 
   void SetCascades(bool value) { m_flags.SetCascades(value); }
 

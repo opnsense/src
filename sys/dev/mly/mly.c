@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2000, 2001 Michael Smith
  * Copyright (c) 2000 BSDi
  * All rights reserved.
@@ -1213,7 +1215,6 @@ mly_fetch_event(struct mly_softc *sc)
 {
     struct mly_command		*mc;
     struct mly_command_ioctl	*mci;
-    int				s;
     u_int32_t			event;
 
     debug_called(1);
@@ -1235,14 +1236,11 @@ mly_fetch_event(struct mly_softc *sc)
      * Get an event number to fetch.  It's possible that we've raced with another
      * context for the last event, in which case there will be no more events.
      */
-    s = splcam();
     if (sc->mly_event_counter == sc->mly_event_waiting) {
 	mly_release_command(mc);
-	splx(s);
 	return;
     }
     event = sc->mly_event_counter++;
-    splx(s);
 
     /* 
      * Build the ioctl.
@@ -2110,10 +2108,10 @@ mly_cam_action(struct cam_sim *sim, union ccb *ccb)
 	cpi->max_lun = MLY_MAX_LUNS - 1;
 	cpi->initiator_id = sc->mly_controllerparam->initiator_id;
 	strlcpy(cpi->sim_vid, "FreeBSD", SIM_IDLEN);
-        strlcpy(cpi->hba_vid, "Mylex", HBA_IDLEN);
-        strlcpy(cpi->dev_name, cam_sim_name(sim), DEV_IDLEN);
-        cpi->unit_number = cam_sim_unit(sim);
-        cpi->bus_id = cam_sim_bus(sim);
+	strlcpy(cpi->hba_vid, "Mylex", HBA_IDLEN);
+	strlcpy(cpi->dev_name, cam_sim_name(sim), DEV_IDLEN);
+	cpi->unit_number = cam_sim_unit(sim);
+	cpi->bus_id = cam_sim_bus(sim);
 	cpi->base_transfer_speed = 132 * 1024;	/* XXX what to set this to? */
 	cpi->transport = XPORT_SPI;
 	cpi->transport_version = 2;

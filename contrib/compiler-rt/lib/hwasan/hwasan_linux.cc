@@ -1,4 +1,4 @@
-//===-- hwasan_linux.cc -----------------------------------------------------===//
+//===-- hwasan_linux.cc -----------------------------------------*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -6,54 +6,66 @@
 // License. See LICENSE.TXT for details.
 //
 //===----------------------------------------------------------------------===//
-//
-// This file is a part of HWAddressSanitizer.
-//
-// Linux-, NetBSD- and FreeBSD-specific code.
+///
+/// \file
+/// This file is a part of HWAddressSanitizer and contains Linux-, NetBSD- and
+/// FreeBSD-specific code.
+///
 //===----------------------------------------------------------------------===//
 
 #include "sanitizer_common/sanitizer_platform.h"
 #if SANITIZER_FREEBSD || SANITIZER_LINUX || SANITIZER_NETBSD
 
 #include "hwasan.h"
+#include "hwasan_dynamic_shadow.h"
+#include "hwasan_interface_internal.h"
+#include "hwasan_mapping.h"
+#include "hwasan_report.h"
 #include "hwasan_thread.h"
+#include "hwasan_thread_list.h"
 
+#include <dlfcn.h>
 #include <elf.h>
 #include <link.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <signal.h>
+#include <sys/resource.h>
+#include <sys/time.h>
 #include <unistd.h>
 #include <unwind.h>
-#include <sys/time.h>
-#include <sys/resource.h>
 
 #include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_procmaps.h"
 
+#if HWASAN_WITH_INTERCEPTORS && !SANITIZER_ANDROID
+SANITIZER_INTERFACE_ATTRIBUTE
+THREADLOCAL uptr __hwasan_tls;
+#endif
+
 namespace __hwasan {
 
-void ReserveShadowMemoryRange(uptr beg, uptr end, const char *name) {
+static void ReserveShadowMemoryRange(uptr beg, uptr end, const char *name) {
   CHECK_EQ((beg % GetMmapGranularity()), 0);
   CHECK_EQ(((end + 1) % GetMmapGranularity()), 0);
   uptr size = end - beg + 1;
   DecreaseTotalMmap(size);  // Don't count the shadow against mmap_limit_mb.
-  void *res = MmapFixedNoReserve(beg, size, name);
-  if (res != (void *)beg) {
+  if (!MmapFixedNoReserve(beg, size, name)) {
     Report(
         "ReserveShadowMemoryRange failed while trying to map 0x%zx bytes. "
         "Perhaps you're using ulimit -v\n",
         size);
     Abort();
   }
-  if (common_flags()->no_huge_pages_for_shadow) NoHugePagesInRegion(beg, size);
-  if (common_flags()->use_madv_dontdump) DontDumpShadowMemory(beg, size);
 }
 
 static void ProtectGap(uptr addr, uptr size) {
+  if (!size)
+    return;
   void *res = MmapFixedNoAccess(addr, size, "shadow gap");
-  if (addr == (uptr)res) return;
+  if (addr == (uptr)res)
+    return;
   // A few pages at the start of the address space can not be protected.
   // But we really want to protect as much as possible, to prevent this memory
   // being returned as a result of a non-FIXED mmap().
@@ -63,61 +75,147 @@ static void ProtectGap(uptr addr, uptr size) {
       addr += step;
       size -= step;
       void *res = MmapFixedNoAccess(addr, size, "shadow gap");
-      if (addr == (uptr)res) return;
+      if (addr == (uptr)res)
+        return;
     }
   }
 
   Report(
-      "ERROR: Failed to protect the shadow gap. "
-      "ASan cannot proceed correctly. ABORTING.\n");
+      "ERROR: Failed to protect shadow gap [%p, %p]. "
+      "HWASan cannot proceed correctly. ABORTING.\n", (void *)addr,
+      (void *)(addr + size));
   DumpProcessMap();
   Die();
 }
 
-bool InitShadow() {
-  const uptr maxVirtualAddress = GetMaxUserVirtualAddress();
+static uptr kLowMemStart;
+static uptr kLowMemEnd;
+static uptr kLowShadowEnd;
+static uptr kLowShadowStart;
+static uptr kHighShadowStart;
+static uptr kHighShadowEnd;
+static uptr kHighMemStart;
+static uptr kHighMemEnd;
 
-  // LowMem covers as much of the first 4GB as possible.
-  const uptr kLowMemEnd = 1UL<<32;
-  const uptr kLowShadowEnd = kLowMemEnd >> kShadowScale;
-  const uptr kLowShadowStart = kLowShadowEnd >> kShadowScale;
+static void PrintRange(uptr start, uptr end, const char *name) {
+  Printf("|| [%p, %p] || %.*s ||\n", (void *)start, (void *)end, 10, name);
+}
 
+static void PrintAddressSpaceLayout() {
+  PrintRange(kHighMemStart, kHighMemEnd, "HighMem");
+  if (kHighShadowEnd + 1 < kHighMemStart)
+    PrintRange(kHighShadowEnd + 1, kHighMemStart - 1, "ShadowGap");
+  else
+    CHECK_EQ(kHighShadowEnd + 1, kHighMemStart);
+  PrintRange(kHighShadowStart, kHighShadowEnd, "HighShadow");
+  if (kLowShadowEnd + 1 < kHighShadowStart)
+    PrintRange(kLowShadowEnd + 1, kHighShadowStart - 1, "ShadowGap");
+  else
+    CHECK_EQ(kLowMemEnd + 1, kHighShadowStart);
+  PrintRange(kLowShadowStart, kLowShadowEnd, "LowShadow");
+  if (kLowMemEnd + 1 < kLowShadowStart)
+    PrintRange(kLowMemEnd + 1, kLowShadowStart - 1, "ShadowGap");
+  else
+    CHECK_EQ(kLowMemEnd + 1, kLowShadowStart);
+  PrintRange(kLowMemStart, kLowMemEnd, "LowMem");
+  CHECK_EQ(0, kLowMemStart);
+}
+
+static uptr GetHighMemEnd() {
   // HighMem covers the upper part of the address space.
-  const uptr kHighShadowEnd = (maxVirtualAddress >> kShadowScale) + 1;
-  const uptr kHighShadowStart = Max(kLowMemEnd, kHighShadowEnd >> kShadowScale);
-  CHECK(kHighShadowStart < kHighShadowEnd);
+  uptr max_address = GetMaxUserVirtualAddress();
+  // Adjust max address to make sure that kHighMemEnd and kHighMemStart are
+  // properly aligned:
+  max_address |= (GetMmapGranularity() << kShadowScale) - 1;
+  return max_address;
+}
 
-  const uptr kHighMemStart = kHighShadowStart << kShadowScale;
-  CHECK(kHighShadowEnd <= kHighMemStart);
+static void InitializeShadowBaseAddress(uptr shadow_size_bytes) {
+  __hwasan_shadow_memory_dynamic_address =
+      FindDynamicShadowStart(shadow_size_bytes);
+}
 
-  if (Verbosity()) {
-    Printf("|| `[%p, %p]` || HighMem    ||\n", (void *)kHighMemStart,
-           (void *)maxVirtualAddress);
-    if (kHighMemStart > kHighShadowEnd)
-      Printf("|| `[%p, %p]` || ShadowGap2 ||\n", (void *)kHighShadowEnd,
-             (void *)kHighMemStart);
-    Printf("|| `[%p, %p]` || HighShadow ||\n", (void *)kHighShadowStart,
-           (void *)kHighShadowEnd);
-    if (kHighShadowStart > kLowMemEnd)
-      Printf("|| `[%p, %p]` || ShadowGap2 ||\n", (void *)kHighShadowEnd,
-             (void *)kHighMemStart);
-    Printf("|| `[%p, %p]` || LowMem     ||\n", (void *)kLowShadowEnd,
-           (void *)kLowMemEnd);
-    Printf("|| `[%p, %p]` || LowShadow  ||\n", (void *)kLowShadowStart,
-           (void *)kLowShadowEnd);
-    Printf("|| `[%p, %p]` || ShadowGap1 ||\n", (void *)0,
-           (void *)kLowShadowStart);
-  }
+bool InitShadow() {
+  // Define the entire memory range.
+  kHighMemEnd = GetHighMemEnd();
 
-  ReserveShadowMemoryRange(kLowShadowStart, kLowShadowEnd - 1, "low shadow");
-  ReserveShadowMemoryRange(kHighShadowStart, kHighShadowEnd - 1, "high shadow");
-  ProtectGap(0, kLowShadowStart);
-  if (kHighShadowStart > kLowMemEnd)
-    ProtectGap(kLowMemEnd, kHighShadowStart - kLowMemEnd);
-  if (kHighMemStart > kHighShadowEnd)
-    ProtectGap(kHighShadowEnd, kHighMemStart - kHighShadowEnd);
+  // Determine shadow memory base offset.
+  InitializeShadowBaseAddress(MemToShadowSize(kHighMemEnd));
+
+  // Place the low memory first.
+  kLowMemEnd = __hwasan_shadow_memory_dynamic_address - 1;
+  kLowMemStart = 0;
+
+  // Define the low shadow based on the already placed low memory.
+  kLowShadowEnd = MemToShadow(kLowMemEnd);
+  kLowShadowStart = __hwasan_shadow_memory_dynamic_address;
+
+  // High shadow takes whatever memory is left up there (making sure it is not
+  // interfering with low memory in the fixed case).
+  kHighShadowEnd = MemToShadow(kHighMemEnd);
+  kHighShadowStart = Max(kLowMemEnd, MemToShadow(kHighShadowEnd)) + 1;
+
+  // High memory starts where allocated shadow allows.
+  kHighMemStart = ShadowToMem(kHighShadowStart);
+
+  // Check the sanity of the defined memory ranges (there might be gaps).
+  CHECK_EQ(kHighMemStart % GetMmapGranularity(), 0);
+  CHECK_GT(kHighMemStart, kHighShadowEnd);
+  CHECK_GT(kHighShadowEnd, kHighShadowStart);
+  CHECK_GT(kHighShadowStart, kLowMemEnd);
+  CHECK_GT(kLowMemEnd, kLowMemStart);
+  CHECK_GT(kLowShadowEnd, kLowShadowStart);
+  CHECK_GT(kLowShadowStart, kLowMemEnd);
+
+  if (Verbosity())
+    PrintAddressSpaceLayout();
+
+  // Reserve shadow memory.
+  ReserveShadowMemoryRange(kLowShadowStart, kLowShadowEnd, "low shadow");
+  ReserveShadowMemoryRange(kHighShadowStart, kHighShadowEnd, "high shadow");
+
+  // Protect all the gaps.
+  ProtectGap(0, Min(kLowMemStart, kLowShadowStart));
+  if (kLowMemEnd + 1 < kLowShadowStart)
+    ProtectGap(kLowMemEnd + 1, kLowShadowStart - kLowMemEnd - 1);
+  if (kLowShadowEnd + 1 < kHighShadowStart)
+    ProtectGap(kLowShadowEnd + 1, kHighShadowStart - kLowShadowEnd - 1);
+  if (kHighShadowEnd + 1 < kHighMemStart)
+    ProtectGap(kHighShadowEnd + 1, kHighMemStart - kHighShadowEnd - 1);
 
   return true;
+}
+
+void InitThreads() {
+  CHECK(__hwasan_shadow_memory_dynamic_address);
+  uptr guard_page_size = GetMmapGranularity();
+  uptr thread_space_start =
+      __hwasan_shadow_memory_dynamic_address - (1ULL << kShadowBaseAlignment);
+  uptr thread_space_end =
+      __hwasan_shadow_memory_dynamic_address - guard_page_size;
+  ReserveShadowMemoryRange(thread_space_start, thread_space_end - 1,
+                           "hwasan threads");
+  ProtectGap(thread_space_end,
+             __hwasan_shadow_memory_dynamic_address - thread_space_end);
+  InitThreadList(thread_space_start, thread_space_end - thread_space_start);
+}
+
+static void MadviseShadowRegion(uptr beg, uptr end) {
+  uptr size = end - beg + 1;
+  if (common_flags()->no_huge_pages_for_shadow)
+    NoHugePagesInRegion(beg, size);
+  if (common_flags()->use_madv_dontdump)
+    DontDumpShadowMemory(beg, size);
+}
+
+void MadviseShadow() {
+  MadviseShadowRegion(kLowShadowStart, kLowShadowEnd);
+  MadviseShadowRegion(kHighShadowStart, kHighShadowEnd);
+}
+
+bool MemIsApp(uptr p) {
+  CHECK(GetTagFromPointer(p) == 0);
+  return p >= kHighMemStart || (p >= kLowMemStart && p <= kLowMemEnd);
 }
 
 static void HwasanAtExit(void) {
@@ -136,37 +234,81 @@ void InstallAtExitHandler() {
 
 // ---------------------- TSD ---------------- {{{1
 
+extern "C" void __hwasan_thread_enter() {
+  hwasanThreadList().CreateCurrentThread();
+}
+
+extern "C" void __hwasan_thread_exit() {
+  Thread *t = GetCurrentThread();
+  // Make sure that signal handler can not see a stale current thread pointer.
+  atomic_signal_fence(memory_order_seq_cst);
+  if (t)
+    hwasanThreadList().ReleaseThread(t);
+}
+
+#if HWASAN_WITH_INTERCEPTORS
 static pthread_key_t tsd_key;
 static bool tsd_key_inited = false;
 
-void HwasanTSDInit(void (*destructor)(void *tsd)) {
-  CHECK(!tsd_key_inited);
-  tsd_key_inited = true;
-  CHECK_EQ(0, pthread_key_create(&tsd_key, destructor));
-}
-
-HwasanThread *GetCurrentThread() {
-  return (HwasanThread*)pthread_getspecific(tsd_key);
-}
-
-void SetCurrentThread(HwasanThread *t) {
-  // Make sure that HwasanTSDDtor gets called at the end.
-  CHECK(tsd_key_inited);
-  // Make sure we do not reset the current HwasanThread.
-  CHECK_EQ(0, pthread_getspecific(tsd_key));
-  pthread_setspecific(tsd_key, (void *)t);
+void HwasanTSDThreadInit() {
+  if (tsd_key_inited)
+    CHECK_EQ(0, pthread_setspecific(tsd_key,
+                                    (void *)GetPthreadDestructorIterations()));
 }
 
 void HwasanTSDDtor(void *tsd) {
-  HwasanThread *t = (HwasanThread*)tsd;
-  if (t->destructor_iterations_ > 1) {
-    t->destructor_iterations_--;
-    CHECK_EQ(0, pthread_setspecific(tsd_key, tsd));
+  uptr iterations = (uptr)tsd;
+  if (iterations > 1) {
+    CHECK_EQ(0, pthread_setspecific(tsd_key, (void *)(iterations - 1)));
     return;
   }
-  // Make sure that signal handler can not see a stale current thread pointer.
-  atomic_signal_fence(memory_order_seq_cst);
-  HwasanThread::TSDDtor(tsd);
+  __hwasan_thread_exit();
+}
+
+void HwasanTSDInit() {
+  CHECK(!tsd_key_inited);
+  tsd_key_inited = true;
+  CHECK_EQ(0, pthread_key_create(&tsd_key, HwasanTSDDtor));
+}
+#else
+void HwasanTSDInit() {}
+void HwasanTSDThreadInit() {}
+#endif
+
+#if SANITIZER_ANDROID
+uptr *GetCurrentThreadLongPtr() {
+  return (uptr *)get_android_tls_ptr();
+}
+#else
+uptr *GetCurrentThreadLongPtr() {
+  return &__hwasan_tls;
+}
+#endif
+
+#if SANITIZER_ANDROID
+void AndroidTestTlsSlot() {
+  uptr kMagicValue = 0x010203040A0B0C0D;
+  *(uptr *)get_android_tls_ptr() = kMagicValue;
+  dlerror();
+  if (*(uptr *)get_android_tls_ptr() != kMagicValue) {
+    Printf(
+        "ERROR: Incompatible version of Android: TLS_SLOT_SANITIZER(6) is used "
+        "for dlerror().\n");
+    Die();
+  }
+}
+#else
+void AndroidTestTlsSlot() {}
+#endif
+
+Thread *GetCurrentThread() {
+  uptr *ThreadLong = GetCurrentThreadLongPtr();
+#if HWASAN_WITH_INTERCEPTORS
+  if (!*ThreadLong)
+    __hwasan_thread_enter();
+#endif
+  auto *R = (StackAllocationsRingBuffer *)ThreadLong;
+  return hwasanThreadList().GetThreadByBufferAddress((uptr)(R->Next()));
 }
 
 struct AccessInfo {
@@ -177,73 +319,92 @@ struct AccessInfo {
   bool recover;
 };
 
+static AccessInfo GetAccessInfo(siginfo_t *info, ucontext_t *uc) {
+  // Access type is passed in a platform dependent way (see below) and encoded
+  // as 0xXY, where X&1 is 1 for store, 0 for load, and X&2 is 1 if the error is
+  // recoverable. Valid values of Y are 0 to 4, which are interpreted as
+  // log2(access_size), and 0xF, which means that access size is passed via
+  // platform dependent register (see below).
 #if defined(__aarch64__)
-static AccessInfo GetAccessInfo(siginfo_t *info, ucontext_t *uc) {
-  // Access type is encoded in HLT immediate as 0x1XY,
-  // where X&1 is 1 for store, 0 for load,
-  // and X&2 is 1 if the error is recoverable.
-  // Valid values of Y are 0 to 4, which are interpreted as log2(access_size),
-  // and 0xF, which means that access size is stored in X1 register.
-  // Access address is always in X0 register.
-  AccessInfo ai;
+  // Access type is encoded in BRK immediate as 0x900 + 0xXY. For Y == 0xF,
+  // access size is stored in X1 register. Access address is always in X0
+  // register.
   uptr pc = (uptr)info->si_addr;
-  unsigned code = ((*(u32 *)pc) >> 5) & 0xffff;
-  if ((code & 0xff00) != 0x100)
-    return AccessInfo{0, 0, false, false}; // Not ours.
-  bool is_store = code & 0x10;
-  bool recover = code & 0x20;
-  unsigned size_log = code & 0xf;
-  if (size_log > 4 && size_log != 0xf)
-    return AccessInfo{0, 0, false, false}; // Not ours.
+  const unsigned code = ((*(u32 *)pc) >> 5) & 0xffff;
+  if ((code & 0xff00) != 0x900)
+    return AccessInfo{}; // Not ours.
 
-  ai.is_store = is_store;
-  ai.is_load = !is_store;
-  ai.addr = uc->uc_mcontext.regs[0];
-  if (size_log == 0xf)
-    ai.size = uc->uc_mcontext.regs[1];
-  else
-    ai.size = 1U << size_log;
-  ai.recover = recover;
-  return ai;
-}
+  const bool is_store = code & 0x10;
+  const bool recover = code & 0x20;
+  const uptr addr = uc->uc_mcontext.regs[0];
+  const unsigned size_log = code & 0xf;
+  if (size_log > 4 && size_log != 0xf)
+    return AccessInfo{}; // Not ours.
+  const uptr size = size_log == 0xf ? uc->uc_mcontext.regs[1] : 1U << size_log;
+
+#elif defined(__x86_64__)
+  // Access type is encoded in the instruction following INT3 as
+  // NOP DWORD ptr [EAX + 0x40 + 0xXY]. For Y == 0xF, access size is stored in
+  // RSI register. Access address is always in RDI register.
+  uptr pc = (uptr)uc->uc_mcontext.gregs[REG_RIP];
+  uint8_t *nop = (uint8_t*)pc;
+  if (*nop != 0x0f || *(nop + 1) != 0x1f || *(nop + 2) != 0x40  ||
+      *(nop + 3) < 0x40)
+    return AccessInfo{}; // Not ours.
+  const unsigned code = *(nop + 3);
+
+  const bool is_store = code & 0x10;
+  const bool recover = code & 0x20;
+  const uptr addr = uc->uc_mcontext.gregs[REG_RDI];
+  const unsigned size_log = code & 0xf;
+  if (size_log > 4 && size_log != 0xf)
+    return AccessInfo{}; // Not ours.
+  const uptr size =
+      size_log == 0xf ? uc->uc_mcontext.gregs[REG_RSI] : 1U << size_log;
+
 #else
-static AccessInfo GetAccessInfo(siginfo_t *info, ucontext_t *uc) {
-  return AccessInfo{0, 0, false, false};
-}
+# error Unsupported architecture
 #endif
 
-static bool HwasanOnSIGILL(int signo, siginfo_t *info, ucontext_t *uc) {
-  SignalContext sig{info, uc};
+  return AccessInfo{addr, size, is_store, !is_store, recover};
+}
+
+static bool HwasanOnSIGTRAP(int signo, siginfo_t *info, ucontext_t *uc) {
   AccessInfo ai = GetAccessInfo(info, uc);
   if (!ai.is_store && !ai.is_load)
     return false;
 
-  InternalScopedBuffer<BufferedStackTrace> stack_buffer(1);
+  InternalMmapVector<BufferedStackTrace> stack_buffer(1);
   BufferedStackTrace *stack = stack_buffer.data();
   stack->Reset();
-  GetStackTrace(stack, kStackTraceMax, sig.pc, sig.bp, uc,
-                common_flags()->fast_unwind_on_fatal);
-
-  ReportTagMismatch(stack, ai.addr, ai.size, ai.is_store);
+  SignalContext sig{info, uc};
+  GetStackTrace(stack, kStackTraceMax, StackTrace::GetNextInstructionPc(sig.pc),
+                sig.bp, uc, common_flags()->fast_unwind_on_fatal);
 
   ++hwasan_report_count;
-  if (flags()->halt_on_error || !ai.recover)
-    Die();
 
+  bool fatal = flags()->halt_on_error || !ai.recover;
+  ReportTagMismatch(stack, ai.addr, ai.size, ai.is_store, fatal);
+
+#if defined(__aarch64__)
   uc->uc_mcontext.pc += 4;
+#elif defined(__x86_64__)
+#else
+# error Unsupported architecture
+#endif
   return true;
 }
 
 static void OnStackUnwind(const SignalContext &sig, const void *,
                           BufferedStackTrace *stack) {
-  GetStackTrace(stack, kStackTraceMax, sig.pc, sig.bp, sig.context,
-                common_flags()->fast_unwind_on_fatal);
+  GetStackTrace(stack, kStackTraceMax, StackTrace::GetNextInstructionPc(sig.pc),
+                sig.bp, sig.context, common_flags()->fast_unwind_on_fatal);
 }
 
 void HwasanOnDeadlySignal(int signo, void *info, void *context) {
   // Probably a tag mismatch.
-  if (signo == SIGILL)
-    if (HwasanOnSIGILL(signo, (siginfo_t *)info, (ucontext_t*)context))
+  if (signo == SIGTRAP)
+    if (HwasanOnSIGTRAP(signo, (siginfo_t *)info, (ucontext_t*)context))
       return;
 
   HandleDeadlySignal(info, context, GetTid(), &OnStackUnwind, nullptr);

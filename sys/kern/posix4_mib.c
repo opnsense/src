@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 1998
  *	HD Associates, Inc.  All rights reserved.
  *
@@ -171,5 +173,5 @@ p31b_set_standard(void *dummy)
 }
 
 SYSINIT(p31b_set_standard, SI_SUB_P1003_1B, SI_ORDER_ANY, p31b_set_standard, 
-	0);
+    NULL);
 

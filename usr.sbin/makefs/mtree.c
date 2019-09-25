@@ -25,6 +25,10 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#if HAVE_NBTOOL_CONFIG_H
+#include "nbtool_config.h"
+#endif
+
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
@@ -432,7 +436,7 @@ create_node(const char *name, u_int type, fsnode *parent, fsnode *global)
 	n->inode = ecalloc(1, sizeof(*n->inode));
 
 	/* Assign global options/defaults. */
-	bcopy(global->inode, n->inode, sizeof(*n->inode));
+	memcpy(n->inode, global->inode, sizeof(*n->inode));
 	n->inode->st.st_mode = (n->inode->st.st_mode & ~S_IFMT) | n->type;
 
 	if (n->type == S_IFLNK)
@@ -482,7 +486,8 @@ read_mtree_keywords(FILE *fp, fsnode *node)
 	struct stat *st, sb;
 	intmax_t num;
 	u_long flset, flclr;
-	int error, istemp, type;
+	int error, istemp;
+	uint32_t type;
 
 	st = &node->inode->st;
 	do {
@@ -531,11 +536,13 @@ read_mtree_keywords(FILE *fp, fsnode *node)
 					break;
 				}
 				flset = flclr = 0;
+#if HAVE_STRUCT_STAT_ST_FLAGS
 				if (!strtofflags(&value, &flset, &flclr)) {
 					st->st_flags &= ~flclr;
 					st->st_flags |= flset;
 				} else
 					error = errno;
+#endif
 			} else
 				error = ENOSYS;
 			break;
@@ -637,14 +644,17 @@ read_mtree_keywords(FILE *fp, fsnode *node)
 				st->st_atime = num;
 				st->st_ctime = num;
 				st->st_mtime = num;
+#if HAVE_STRUCT_STAT_ST_MTIMENSEC
 				if (p == NULL)
 					break;
 				error = read_number(p, 10, &num, 0,
 				    INTMAX_MAX);
 				if (error)
 					break;
-				if (num != 0)
-					error = EINVAL;
+				st->st_atimensec = num;
+				st->st_ctimensec = num;
+				st->st_mtimensec = num;
+#endif
 			} else if (strcmp(keyword, "type") == 0) {
 				if (value == NULL) {
 					error = ENOATTR;
@@ -1030,8 +1040,8 @@ read_mtree(const char *fname, fsnode *node)
 	if (error)
 		goto out;
 
-	bzero(&mtree_global, sizeof(mtree_global));
-	bzero(&mtree_global_inode, sizeof(mtree_global_inode));
+	memset(&mtree_global, 0, sizeof(mtree_global));
+	memset(&mtree_global_inode, 0, sizeof(mtree_global_inode));
 	mtree_global.inode = &mtree_global_inode;
 	mtree_global_inode.nlink = 1;
 	mtree_global_inode.st.st_nlink = 1;

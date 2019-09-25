@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2002, 2005-2007, 2011 Marcel Moolenaar
  * All rights reserved.
  *
@@ -50,6 +52,14 @@ __FBSDID("$FreeBSD$");
 #include "g_part_if.h"
 
 FEATURE(geom_part_gpt, "GEOM partitioning class for GPT partitions support");
+
+SYSCTL_DECL(_kern_geom_part);
+static SYSCTL_NODE(_kern_geom_part, OID_AUTO, gpt, CTLFLAG_RW, 0,
+    "GEOM_PART_GPT GUID Partition Table");
+
+static u_int allow_nesting = 0;
+SYSCTL_UINT(_kern_geom_part_gpt, OID_AUTO, allow_nesting,
+    CTLFLAG_RWTUN, &allow_nesting, 0, "Allow GPT to be nested inside other schemes");
 
 CTASSERT(offsetof(struct gpt_hdr, padding) == 92);
 CTASSERT(sizeof(struct gpt_ent) == 128);
@@ -146,6 +156,7 @@ static struct g_part_scheme g_part_gpt_scheme = {
 G_PART_SCHEME_DECLARE(g_part_gpt);
 MODULE_VERSION(geom_part_gpt, 0);
 
+static struct uuid gpt_uuid_apple_apfs = GPT_ENT_TYPE_APPLE_APFS;
 static struct uuid gpt_uuid_apple_boot = GPT_ENT_TYPE_APPLE_BOOT;
 static struct uuid gpt_uuid_apple_core_storage =
     GPT_ENT_TYPE_APPLE_CORE_STORAGE;
@@ -207,6 +218,7 @@ static struct g_part_uuid_alias {
 	int alias;
 	int mbrtype;
 } gpt_uuid_alias_match[] = {
+	{ &gpt_uuid_apple_apfs,		G_PART_ALIAS_APPLE_APFS,	 0 },
 	{ &gpt_uuid_apple_boot,		G_PART_ALIAS_APPLE_BOOT,	 0xab },
 	{ &gpt_uuid_apple_core_storage,	G_PART_ALIAS_APPLE_CORE_STORAGE, 0 },
 	{ &gpt_uuid_apple_hfs,		G_PART_ALIAS_APPLE_HFS,		 0xaf },
@@ -647,8 +659,8 @@ g_part_gpt_create(struct g_part_table *basetable, struct g_part_parms *gpp)
 	struct g_part_gpt_table *table;
 	size_t tblsz;
 
-	/* We don't nest, which means that our depth should be 0. */
-	if (basetable->gpt_depth != 0)
+	/* Our depth should be 0 unless nesting was explicitly enabled. */
+	if (!allow_nesting && basetable->gpt_depth != 0)
 		return (ENXIO);
 
 	table = (struct g_part_gpt_table *)basetable;
@@ -708,14 +720,14 @@ g_part_gpt_dumpconf(struct g_part_table *table, struct g_part_entry *baseentry,
 	entry = (struct g_part_gpt_entry *)baseentry;
 	if (indent == NULL) {
 		/* conftxt: libdisk compatibility */
-		sbuf_printf(sb, " xs GPT xt ");
+		sbuf_cat(sb, " xs GPT xt ");
 		sbuf_printf_uuid(sb, &entry->ent.ent_type);
 	} else if (entry != NULL) {
 		/* confxml: partition entry information */
 		sbuf_printf(sb, "%s<label>", indent);
 		g_gpt_printf_utf16(sb, entry->ent.ent_name,
 		    sizeof(entry->ent.ent_name) >> 1);
-		sbuf_printf(sb, "</label>\n");
+		sbuf_cat(sb, "</label>\n");
 		if (entry->ent.ent_attr & GPT_ENT_ATTR_BOOTME)
 			sbuf_printf(sb, "%s<attrib>bootme</attrib>\n", indent);
 		if (entry->ent.ent_attr & GPT_ENT_ATTR_BOOTONCE) {
@@ -728,16 +740,16 @@ g_part_gpt_dumpconf(struct g_part_table *table, struct g_part_entry *baseentry,
 		}
 		sbuf_printf(sb, "%s<rawtype>", indent);
 		sbuf_printf_uuid(sb, &entry->ent.ent_type);
-		sbuf_printf(sb, "</rawtype>\n");
+		sbuf_cat(sb, "</rawtype>\n");
 		sbuf_printf(sb, "%s<rawuuid>", indent);
 		sbuf_printf_uuid(sb, &entry->ent.ent_uuid);
-		sbuf_printf(sb, "</rawuuid>\n");
+		sbuf_cat(sb, "</rawuuid>\n");
 		sbuf_printf(sb, "%s<efimedia>", indent);
 		sbuf_printf(sb, "HD(%d,GPT,", entry->base.gpe_index);
 		sbuf_printf_uuid(sb, &entry->ent.ent_uuid);
 		sbuf_printf(sb, ",%#jx,%#jx)", (intmax_t)entry->base.gpe_start,
 		    (intmax_t)(entry->base.gpe_end - entry->base.gpe_start + 1));
-		sbuf_printf(sb, "</efimedia>\n");
+		sbuf_cat(sb, "</efimedia>\n");
 	} else {
 		/* confxml: scheme information */
 	}
@@ -810,8 +822,8 @@ g_part_gpt_probe(struct g_part_table *table, struct g_consumer *cp)
 	u_char *buf;
 	int error, index, pri, res;
 
-	/* We don't nest, which means that our depth should be 0. */
-	if (table->gpt_depth != 0)
+	/* Our depth should be 0 unless nesting was explicitly enabled. */
+	if (!allow_nesting && table->gpt_depth != 0)
 		return (ENXIO);
 
 	pp = cp->provider;
@@ -920,6 +932,14 @@ g_part_gpt_read(struct g_part_table *basetable, struct g_consumer *cp)
 		    pp->name);
 		printf("GEOM: %s: GPT rejected -- may not be recoverable.\n",
 		    pp->name);
+		if (prihdr != NULL)
+			g_free(prihdr);
+		if (pritbl != NULL)
+			g_free(pritbl);
+		if (sechdr != NULL)
+			g_free(sechdr);
+		if (sectbl != NULL)
+			g_free(sectbl);
 		return (EINVAL);
 	}
 
@@ -978,10 +998,9 @@ g_part_gpt_read(struct g_part_table *basetable, struct g_consumer *cp)
 
 	basetable->gpt_first = table->hdr->hdr_lba_start;
 	basetable->gpt_last = table->hdr->hdr_lba_end;
-	basetable->gpt_entries = (table->hdr->hdr_lba_start - 2) *
-	    pp->sectorsize / table->hdr->hdr_entsz;
+	basetable->gpt_entries = table->hdr->hdr_entries;
 
-	for (index = table->hdr->hdr_entries - 1; index >= 0; index--) {
+	for (index = basetable->gpt_entries - 1; index >= 0; index--) {
 		if (EQUUID(&tbl[index].ent_type, &gpt_uuid_unused))
 			continue;
 		entry = (struct g_part_gpt_entry *)g_part_new_entry(

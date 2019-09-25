@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2011, Bryan Venteicher <bryanv@FreeBSD.org>
  * All rights reserved.
  *
@@ -266,8 +268,8 @@ struct vtnet_mac_filter {
 CTASSERT(sizeof(struct vtnet_mac_filter) <= PAGE_SIZE);
 
 #define VTNET_TX_TIMEOUT	5
-#define VTNET_CSUM_OFFLOAD	(CSUM_TCP | CSUM_UDP | CSUM_SCTP)
-#define VTNET_CSUM_OFFLOAD_IPV6	(CSUM_TCP_IPV6 | CSUM_UDP_IPV6 | CSUM_SCTP_IPV6)
+#define VTNET_CSUM_OFFLOAD	(CSUM_TCP | CSUM_UDP)
+#define VTNET_CSUM_OFFLOAD_IPV6	(CSUM_TCP_IPV6 | CSUM_UDP_IPV6)
 
 #define VTNET_CSUM_ALL_OFFLOAD	\
     (VTNET_CSUM_OFFLOAD | VTNET_CSUM_OFFLOAD_IPV6 | CSUM_TSO)
@@ -320,7 +322,7 @@ CTASSERT(sizeof(struct vtnet_mac_filter) <= PAGE_SIZE);
 #define VTNET_MRG_RX_SEGS	1
 #define VTNET_MIN_RX_SEGS	2
 #define VTNET_MAX_RX_SEGS	34
-#define VTNET_MIN_TX_SEGS	4
+#define VTNET_MIN_TX_SEGS	32
 #define VTNET_MAX_TX_SEGS	64
 
 /*

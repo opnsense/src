@@ -22,7 +22,7 @@
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2011 Nexenta Systems, Inc. All rights reserved.
- * Copyright (c) 2011, 2015 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2018 by Delphix. All rights reserved.
  * Copyright 2017 Joyent, Inc.
  */
 
@@ -276,8 +276,8 @@ spa_write_cachefile(spa_t *target, boolean_t removing, boolean_t postsysevent)
 				nvl = fnvlist_alloc();
 
 			if (spa->spa_import_flags & ZFS_IMPORT_TEMP_NAME) {
-				pool_name = fnvlist_lookup_string(spa->spa_config,
-					ZPOOL_CONFIG_POOL_NAME);
+				pool_name = fnvlist_lookup_string(
+				    spa->spa_config, ZPOOL_CONFIG_POOL_NAME);
 			} else {
 				pool_name = spa_name(spa);
 			}
@@ -419,7 +419,7 @@ spa_config_generate(spa_t *spa, vdev_t *vd, uint64_t txg, int getstats)
 	 */
 	if (spa->spa_import_flags & ZFS_IMPORT_TEMP_NAME) {
 		pool_name = fnvlist_lookup_string(spa->spa_config,
-			ZPOOL_CONFIG_POOL_NAME);
+		    ZPOOL_CONFIG_POOL_NAME);
 	} else {
 		pool_name = spa_name(spa);
 	}
@@ -559,6 +559,18 @@ spa_config_update(spa_t *spa, int what)
 		 */
 		for (c = 0; c < rvd->vdev_children; c++) {
 			vdev_t *tvd = rvd->vdev_child[c];
+
+			/*
+			 * Explicitly skip vdevs that are indirect or
+			 * log vdevs that are being removed. The reason
+			 * is that both of those can have vdev_ms_array
+			 * set to 0 and we wouldn't want to change their
+			 * metaslab size nor call vdev_expand() on them.
+			 */
+			if (!vdev_is_concrete(tvd) ||
+			    (tvd->vdev_islog && tvd->vdev_removing))
+				continue;
+
 			if (tvd->vdev_ms_array == 0) {
 				vdev_ashift_optimize(tvd);
 				vdev_metaslab_set_size(tvd);

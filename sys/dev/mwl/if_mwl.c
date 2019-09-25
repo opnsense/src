@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2007-2009 Sam Leffler, Errno Consulting
  * Copyright (c) 2007-2008 Marvell Semiconductor, Inc.
  * All rights reserved.
@@ -1529,7 +1531,7 @@ mwl_key_alloc(struct ieee80211vap *vap, struct ieee80211_key *k,
 			return 0;
 		}
 		/* give the caller what they requested */
-		*keyix = *rxkeyix = k - vap->iv_nw_keys;
+		*keyix = *rxkeyix = ieee80211_crypto_get_key_wepidx(vap, k);
 	} else {
 		/*
 		 * Firmware handles key allocation.
@@ -2434,13 +2436,13 @@ mwl_node_getmimoinfo(const struct ieee80211_node *ni,
 	if (mn->mn_ai.rssi_c > rssi_max)
 		rssi_max = mn->mn_ai.rssi_c;
 
-	CVT(mi->rssi[0], mn->mn_ai.rssi_a);
-	CVT(mi->rssi[1], mn->mn_ai.rssi_b);
-	CVT(mi->rssi[2], mn->mn_ai.rssi_c);
+	CVT(mi->ch[0].rssi[0], mn->mn_ai.rssi_a);
+	CVT(mi->ch[1].rssi[0], mn->mn_ai.rssi_b);
+	CVT(mi->ch[2].rssi[0], mn->mn_ai.rssi_c);
 
-	mi->noise[0] = mn->mn_ai.nf_a;
-	mi->noise[1] = mn->mn_ai.nf_b;
-	mi->noise[2] = mn->mn_ai.nf_c;
+	mi->ch[0].noise[0] = mn->mn_ai.nf_a;
+	mi->ch[1].noise[0] = mn->mn_ai.nf_b;
+	mi->ch[2].noise[0] = mn->mn_ai.nf_c;
 #undef CVT
 }
 
@@ -2522,12 +2524,12 @@ mwl_rxbuf_init(struct mwl_softc *sc, struct mwl_rxbuf *bf)
 }
 
 static void
-mwl_ext_free(struct mbuf *m, void *data, void *arg)
+mwl_ext_free(struct mbuf *m)
 {
-	struct mwl_softc *sc = arg;
+	struct mwl_softc *sc = m->m_ext.ext_arg1;
 
 	/* XXX bounds check data */
-	mwl_putrxdma(sc, data);
+	mwl_putrxdma(sc, m->m_ext.ext_buf);
 	/*
 	 * If we were previously blocked by a lack of rx dma buffers
 	 * check if we now have enough to restart rx interrupt handling.
@@ -2612,7 +2614,6 @@ mwl_rx_proc(void *arg, int npending)
 	struct mwl_rxdesc *ds;
 	struct mbuf *m;
 	struct ieee80211_qosframe *wh;
-	struct ieee80211_qosframe_addr4 *wh4;
 	struct ieee80211_node *ni;
 	struct mwl_node *mn;
 	int off, len, hdrlen, pktlen, rssi, ntodo;
@@ -2746,8 +2747,8 @@ mwl_rx_proc(void *arg, int npending)
 		 * descriptor using the replacement dma
 		 * buffer we just installed above.
 		 */
-		MEXTADD(m, data, MWL_AGGR_SIZE, mwl_ext_free,
-		    data, sc, 0, EXT_NET_DRV);
+		m_extadd(m, data, MWL_AGGR_SIZE, mwl_ext_free, sc, NULL, 0,
+		    EXT_NET_DRV);
 		m->m_data += off - hdrlen;
 		m->m_pkthdr.len = m->m_len = pktlen;
 		/* NB: dma buffer assumed read-only */
@@ -2759,15 +2760,8 @@ mwl_rx_proc(void *arg, int npending)
 		/* NB: don't need to do this sometimes but ... */
 		/* XXX special case so we can memcpy after m_devget? */
 		ovbcopy(data + sizeof(uint16_t), wh, hdrlen);
-		if (IEEE80211_QOS_HAS_SEQ(wh)) {
-			if (IEEE80211_IS_DSTODS(wh)) {
-				wh4 = mtod(m,
-				    struct ieee80211_qosframe_addr4*);
-				*(uint16_t *)wh4->i_qos = ds->QosCtrl;
-			} else {
-				*(uint16_t *)wh->i_qos = ds->QosCtrl;
-			}
-		}
+		if (IEEE80211_QOS_HAS_SEQ(wh))
+			*(uint16_t *)ieee80211_getqos(wh) = ds->QosCtrl;
 		/*
 		 * The f/w strips WEP header but doesn't clear
 		 * the WEP bit; mark the packet with M_WEP so
@@ -2891,10 +2885,14 @@ mwl_txq_update(struct mwl_softc *sc, int ac)
 {
 #define	MWL_EXPONENT_TO_VALUE(v)	((1<<v)-1)
 	struct ieee80211com *ic = &sc->sc_ic;
+	struct chanAccParams chp;
 	struct mwl_txq *txq = sc->sc_ac2q[ac];
-	struct wmeParams *wmep = &ic->ic_wme.wme_chanParams.cap_wmeParams[ac];
+	struct wmeParams *wmep;
 	struct mwl_hal *mh = sc->sc_mh;
 	int aifs, cwmin, cwmax, txoplim;
+
+	ieee80211_wme_ic_getparams(ic, &chp);
+	wmep = &chp.cap_wmeParams[ac];
 
 	aifs = wmep->wmep_aifsn;
 	/* XXX in sta mode need to pass log values for cwmin/max */
@@ -3094,13 +3092,9 @@ mwl_tx_start(struct mwl_softc *sc, struct ieee80211_node *ni, struct mwl_txbuf *
 	copyhdrlen = hdrlen;
 	pktlen = m0->m_pkthdr.len;
 	if (IEEE80211_QOS_HAS_SEQ(wh)) {
-		if (IEEE80211_IS_DSTODS(wh)) {
-			qos = *(uint16_t *)
-			    (((struct ieee80211_qosframe_addr4 *) wh)->i_qos);
+		qos = *(uint16_t *)ieee80211_getqos(wh);
+		if (IEEE80211_IS_DSTODS(wh))
 			copyhdrlen -= sizeof(qos);
-		} else
-			qos = *(uint16_t *)
-			    (((struct ieee80211_qosframe *) wh)->i_qos);
 	} else
 		qos = 0;
 

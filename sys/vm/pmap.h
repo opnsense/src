@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1991, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -13,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -140,6 +142,7 @@ void		 pmap_init(void);
 boolean_t	 pmap_is_modified(vm_page_t m);
 boolean_t	 pmap_is_prefaultable(pmap_t pmap, vm_offset_t va);
 boolean_t	 pmap_is_referenced(vm_page_t m);
+boolean_t	 pmap_is_valid_memattr(pmap_t, vm_memattr_t);
 vm_offset_t	 pmap_map(vm_offset_t *, vm_paddr_t, vm_paddr_t, int);
 int		 pmap_mincore(pmap_t pmap, vm_offset_t addr,
 		    vm_paddr_t *locked_pa);
@@ -165,7 +168,6 @@ boolean_t	 pmap_ts_referenced(vm_page_t m);
 void		 pmap_unwire(pmap_t pmap, vm_offset_t start, vm_offset_t end);
 void		 pmap_zero_page(vm_page_t);
 void		 pmap_zero_page_area(vm_page_t, int off, int size);
-void		 pmap_zero_page_idle(vm_page_t);
 
 #define	pmap_resident_count(pm)	((pm)->pm_stats.resident_count)
 #define	pmap_wired_count(pm)	((pm)->pm_stats.wired_count)

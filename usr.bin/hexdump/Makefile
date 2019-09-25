@@ -10,8 +10,7 @@ MLINKS=	hexdump.1 hd.1
 LINKS=	${BINDIR}/hexdump ${BINDIR}/od
 LINKS+=	${BINDIR}/hexdump ${BINDIR}/hd
 
-.if ${MK_TESTS} != "no"
-SUBDIR+=	tests
-.endif
+HAS_TESTS=
+SUBDIR.${MK_TESTS}+= tests
 
 .include <bsd.prog.mk>

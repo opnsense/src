@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1983, 1988, 1993
  *	Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -212,6 +214,7 @@ int	mflag;		/* show memory stats */
 int	noutputs = 0;	/* how much outputs before we exit */
 int	numeric_addr;	/* show addresses numerically */
 int	numeric_port;	/* show ports numerically */
+int	Pflag;		/* show TCP log ID */
 static int pflag;	/* show given protocol */
 static int	Qflag;		/* show netisr information */
 int	rflag;		/* show routing tables (or routing stats) */
@@ -245,7 +248,7 @@ main(int argc, char *argv[])
 	if (argc < 0)
 		exit(EXIT_FAILURE);
 
-	while ((ch = getopt(argc, argv, "46AaBbdF:f:ghI:iLlM:mN:np:Qq:RrSTsuWw:xz"))
+	while ((ch = getopt(argc, argv, "46AaBbdF:f:ghI:iLlM:mN:nPp:Qq:RrSTsuWw:xz"))
 	    != -1)
 		switch(ch) {
 		case '4':
@@ -341,6 +344,9 @@ main(int argc, char *argv[])
 			break;
 		case 'n':
 			numeric_addr = numeric_port = 1;
+			break;
+		case 'P':
+			Pflag = 1;
 			break;
 		case 'p':
 			if ((tp = name2protox(optarg)) == NULL) {
@@ -479,7 +485,6 @@ main(int argc, char *argv[])
 		xo_open_container("statistics");
 		if (sflag) {
 			rt_stats();
-			flowtable_stats();
 		} else
 			routepr(fib, af);
 		xo_close_container("statistics");

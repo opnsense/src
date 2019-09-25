@@ -88,7 +88,8 @@ ASAN_FLAG(bool, check_malloc_usable_size, true,
           "295.*.")
 ASAN_FLAG(bool, unmap_shadow_on_exit, false,
           "If set, explicitly unmaps the (huge) shadow at exit.")
-ASAN_FLAG(bool, protect_shadow_gap, true, "If set, mprotect the shadow gap")
+ASAN_FLAG(bool, protect_shadow_gap, !SANITIZER_RTEMS,
+          "If set, mprotect the shadow gap")
 ASAN_FLAG(bool, print_stats, false,
           "Print various statistics after printing an error message or if "
           "atexit=1.")
@@ -136,9 +137,9 @@ ASAN_FLAG(
     "Android. ")
 ASAN_FLAG(
     int, detect_invalid_pointer_pairs, 0,
-    "If non-zero, try to detect operations like <, <=, >, >= and - on "
-    "invalid pointer pairs (e.g. when pointers belong to different objects). "
-    "The bigger the value the harder we try.")
+    "If >= 2, detect operations like <, <=, >, >= and - on invalid pointer "
+    "pairs (e.g. when pointers belong to different objects); "
+    "If == 1, detect invalid operations only when both pointers are non-null.")
 ASAN_FLAG(
     bool, detect_container_overflow, true,
     "If true, honor the container overflow annotations. See "
@@ -151,8 +152,6 @@ ASAN_FLAG(const char *, suppressions, "", "Suppressions file name.")
 ASAN_FLAG(bool, halt_on_error, true,
           "Crash the program after printing the first error report "
           "(WARNING: USE AT YOUR OWN RISK!)")
-ASAN_FLAG(bool, use_odr_indicator, false,
-          "Use special ODR indicator symbol for ODR violation detection")
 ASAN_FLAG(bool, allocator_frees_and_returns_null_on_realloc_zero, true,
           "realloc(p, 0) is equivalent to free(p) by default (Same as the "
           "POSIX standard). If set to false, realloc(p, 0) will return a "

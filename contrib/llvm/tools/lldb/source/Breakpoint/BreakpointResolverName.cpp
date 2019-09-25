@@ -7,20 +7,18 @@
 //
 //===----------------------------------------------------------------------===//
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
 #include "lldb/Breakpoint/BreakpointResolverName.h"
 
 #include "Plugins/Language/CPlusPlus/CPlusPlusLanguage.h"
 #include "Plugins/Language/ObjC/ObjCLanguage.h"
 #include "lldb/Breakpoint/BreakpointLocation.h"
+#include "lldb/Core/Architecture.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Symbol/Block.h"
 #include "lldb/Symbol/Function.h"
 #include "lldb/Symbol/Symbol.h"
 #include "lldb/Symbol/SymbolContext.h"
+#include "lldb/Target/Target.h"
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/StreamString.h"
 
@@ -28,7 +26,7 @@ using namespace lldb;
 using namespace lldb_private;
 
 BreakpointResolverName::BreakpointResolverName(
-    Breakpoint *bkpt, const char *name_cstr, uint32_t name_type_mask,
+    Breakpoint *bkpt, const char *name_cstr, FunctionNameType name_type_mask,
     LanguageType language, Breakpoint::MatchType type, lldb::addr_t offset,
     bool skip_prologue)
     : BreakpointResolver(bkpt, BreakpointResolver::NameResolver, offset),
@@ -49,7 +47,7 @@ BreakpointResolverName::BreakpointResolverName(
 
 BreakpointResolverName::BreakpointResolverName(
     Breakpoint *bkpt, const char *names[], size_t num_names,
-    uint32_t name_type_mask, LanguageType language, lldb::addr_t offset,
+    FunctionNameType name_type_mask, LanguageType language, lldb::addr_t offset,
     bool skip_prologue)
     : BreakpointResolver(bkpt, BreakpointResolver::NameResolver, offset),
       m_match_type(Breakpoint::Exact), m_language(language),
@@ -59,9 +57,12 @@ BreakpointResolverName::BreakpointResolverName(
   }
 }
 
-BreakpointResolverName::BreakpointResolverName(
-    Breakpoint *bkpt, std::vector<std::string> names, uint32_t name_type_mask,
-    LanguageType language, lldb::addr_t offset, bool skip_prologue)
+BreakpointResolverName::BreakpointResolverName(Breakpoint *bkpt,
+                                               std::vector<std::string> names,
+                                               FunctionNameType name_type_mask,
+                                               LanguageType language,
+                                               lldb::addr_t offset,
+                                               bool skip_prologue)
     : BreakpointResolver(bkpt, BreakpointResolver::NameResolver, offset),
       m_match_type(Breakpoint::Exact), m_language(language),
       m_skip_prologue(skip_prologue) {
@@ -159,9 +160,8 @@ BreakpointResolver *BreakpointResolverName::CreateFromStructuredData(
       return nullptr;
     }
     std::vector<std::string> names;
-    std::vector<uint32_t> name_masks;
+    std::vector<FunctionNameType> name_masks;
     for (size_t i = 0; i < num_elem; i++) {
-      uint32_t name_mask;
       llvm::StringRef name;
 
       success = names_array->GetItemAtIndexAsString(i, name);
@@ -169,13 +169,14 @@ BreakpointResolver *BreakpointResolverName::CreateFromStructuredData(
         error.SetErrorString("BRN::CFSD: name entry is not a string.");
         return nullptr;
       }
-      success = names_mask_array->GetItemAtIndexAsInteger(i, name_mask);
+      std::underlying_type<FunctionNameType>::type fnt;
+      success = names_mask_array->GetItemAtIndexAsInteger(i, fnt);
       if (!success) {
         error.SetErrorString("BRN::CFSD: name mask entry is not an integer.");
         return nullptr;
       }
       names.push_back(name);
-      name_masks.push_back(name_mask);
+      name_masks.push_back(static_cast<FunctionNameType>(fnt));
     }
 
     BreakpointResolverName *resolver = new BreakpointResolverName(
@@ -218,7 +219,7 @@ StructuredData::ObjectSP BreakpointResolverName::SerializeToStructuredData() {
 }
 
 void BreakpointResolverName::AddNameLookup(const ConstString &name,
-                                           uint32_t name_type_mask) {
+                                           FunctionNameType name_type_mask) {
   ObjCLanguage::MethodName objc_method(name.GetCString(), false);
   if (objc_method.IsValid(false)) {
     std::vector<ConstString> objc_names;
@@ -239,9 +240,8 @@ void BreakpointResolverName::AddNameLookup(const ConstString &name,
 // FIXME: Right now we look at the module level, and call the module's
 // "FindFunctions".
 // Greg says he will add function tables, maybe at the CompileUnit level to
-// accelerate function
-// lookup.  At that point, we should switch the depth to CompileUnit, and look
-// in these tables.
+// accelerate function lookup.  At that point, we should switch the depth to
+// CompileUnit, and look in these tables.
 
 Searcher::CallbackReturn
 BreakpointResolverName::SearchCallback(SearchFilter &filter,
@@ -299,8 +299,8 @@ BreakpointResolverName::SearchCallback(SearchFilter &filter,
     break;
   }
 
-  // If the filter specifies a Compilation Unit, remove the ones that don't pass
-  // at this point.
+  // If the filter specifies a Compilation Unit, remove the ones that don't
+  // pass at this point.
   if (filter_by_cu || filter_by_language) {
     uint32_t num_functions = func_list.GetSize();
 
@@ -365,6 +365,12 @@ BreakpointResolverName::SearchCallback(SearchFilter &filter,
                 sc.symbol->GetPrologueByteSize();
             if (prologue_byte_size)
               break_addr.SetOffset(break_addr.GetOffset() + prologue_byte_size);
+            else {
+              const Architecture *arch =
+                  m_breakpoint->GetTarget().GetArchitecturePlugin();
+              if (arch)
+                arch->AdjustBreakpointAddress(*sc.symbol, break_addr);
+            }
           }
         }
 
@@ -389,8 +395,8 @@ BreakpointResolverName::SearchCallback(SearchFilter &filter,
   return Searcher::eCallbackReturnContinue;
 }
 
-Searcher::Depth BreakpointResolverName::GetDepth() {
-  return Searcher::eDepthModule;
+lldb::SearchDepth BreakpointResolverName::GetDepth() {
+  return lldb::eSearchDepthModule;
 }
 
 void BreakpointResolverName::GetDescription(Stream *s) {

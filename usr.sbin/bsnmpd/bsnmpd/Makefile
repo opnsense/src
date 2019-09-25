@@ -7,13 +7,15 @@
 CONTRIB=${SRCTOP}/contrib/bsnmp
 .PATH: ${CONTRIB}/snmpd
 
+CONFS=	snmpd.config
+CONFSMODE=	600
 PROG=	bsnmpd
 SRCS=	main.c action.c config.c export.c trap.c trans_udp.c trans_lsock.c
-SRCS+=	oid.h tree.c tree.h
+SRCS+=	trans_inet.c oid.h tree.c tree.h
 XSYM=	snmpMIB begemotSnmpdModuleTable begemotSnmpd begemotTrapSinkTable \
 	sysUpTime snmpTrapOID coldStart authenticationFailure \
 	begemotSnmpdTransUdp begemotSnmpdTransLsock begemotSnmpdLocalPortTable \
-	freeBSD freeBSDVersion
+	freeBSD freeBSDVersion begemotSnmpdTransInet
 CLEANFILES= oid.h tree.c tree.h
 
 MAN=	bsnmpd.1 snmpmod.3
@@ -123,7 +125,6 @@ BMIBSDIR= ${SHAREDIR}/snmp/mibs
 DEFS=	tree.def
 DEFSDIR= ${SHAREDIR}/snmp/defs
 
-CFLAGS+= -DSNMPTREE_TYPES
 CFLAGS+= -I${CONTRIB}/lib -I${CONTRIB}/snmpd -I. -DUSE_LIBBEGEMOT
 CFLAGS+= -DHAVE_STDINT_H -DHAVE_INTTYPES_H -DHAVE_ERR_H -DHAVE_STRLCPY
 LIBADD=	begemot bsnmp
@@ -140,18 +141,15 @@ LIBADD+=	wrap
 .endif
 
 oid.h: tree.def Makefile
-	gensnmptree -e ${XSYM} < ${.ALLSRC:M*.def} > ${.TARGET}
+	gensnmptree -I${CONTRIB}/lib -e ${XSYM} < ${.ALLSRC:M*.def} > ${.TARGET}
 
 .ORDER: tree.c tree.h
 tree.h: .NOMETA
 tree.c tree.h: tree.def
-	gensnmptree -l < ${.ALLSRC}
+	gensnmptree -I${CONTRIB}/lib -l -f < ${.ALLSRC}
 
 MANFILTER=	sed -e 's%@MODPATH@%${LIBDIR}/%g'		\
 		    -e 's%@DEFPATH@%${DEFSDIR}/%g'		\
 		    -e 's%@MIBSPATH@%${BMIBSDIR}/%g'
-
-NO_WCAST_ALIGN=	yes
-WARNS?=		6
 
 .include <bsd.prog.mk>

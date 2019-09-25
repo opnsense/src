@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1998 Berkeley Software Design, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -166,7 +168,7 @@ LOCK_DELAY_SYSINIT_DEFAULT(mtx_spin_delay);
  * System-wide mutexes
  */
 struct mtx blocked_lock;
-struct mtx Giant;
+struct mtx __exclusive_cache_line Giant;
 
 static void _mtx_lock_indefinite_check(struct mtx *, struct lock_delay_arg *);
 
@@ -484,7 +486,7 @@ __mtx_lock_sleep(volatile uintptr_t *c, uintptr_t v)
 	int64_t all_time = 0;
 #endif
 #if defined(KDTRACE_HOOKS) || defined(LOCK_PROFILING)
-	int doing_lockprof;
+	int doing_lockprof = 0;
 #endif
 
 	td = curthread;
@@ -688,7 +690,7 @@ _mtx_lock_spin_cookie(volatile uintptr_t *c, uintptr_t v)
 	int64_t spin_time = 0;
 #endif
 #if defined(KDTRACE_HOOKS) || defined(LOCK_PROFILING)
-	int doing_lockprof;
+	int doing_lockprof = 0;
 #endif
 
 	tid = (uintptr_t)curthread;
@@ -1027,7 +1029,7 @@ __mtx_unlock_sleep(volatile uintptr_t *c, uintptr_t v)
 	 * This turnstile is now no longer associated with the mutex.  We can
 	 * unlock the chain lock so a new turnstile may take it's place.
 	 */
-	turnstile_unpend(ts, TS_EXCLUSIVE_LOCK);
+	turnstile_unpend(ts);
 	turnstile_chain_unlock(&m->lock_object);
 }
 
@@ -1204,7 +1206,7 @@ _mtx_lock_indefinite_check(struct mtx *m, struct lock_delay_arg *ldap)
 
 	ldap->spin_cnt++;
 	if (ldap->spin_cnt < 60000000 || kdb_active || panicstr != NULL)
-		DELAY(1);
+		cpu_lock_delay();
 	else {
 		td = mtx_owner(m);
 
@@ -1220,6 +1222,31 @@ _mtx_lock_indefinite_check(struct mtx *m, struct lock_delay_arg *ldap)
 		panic("spin lock held too long");
 	}
 	cpu_spinwait();
+}
+
+void
+mtx_spin_wait_unlocked(struct mtx *m)
+{
+	struct lock_delay_arg lda;
+
+	KASSERT(m->mtx_lock != MTX_DESTROYED,
+	    ("%s() of destroyed mutex %p", __func__, m));
+	KASSERT(LOCK_CLASS(&m->lock_object) == &lock_class_mtx_spin,
+	    ("%s() of sleep mutex %p (%s)", __func__, m,
+	    m->lock_object.lo_name));
+	KASSERT(!mtx_owned(m), ("%s() waiting on myself on lock %p (%s)", __func__, m,
+	    m->lock_object.lo_name));
+
+	lda.spin_cnt = 0;
+
+	while (atomic_load_acq_ptr(&m->mtx_lock) != MTX_UNOWNED) {
+		if (__predict_true(lda.spin_cnt < 10000000)) {
+			cpu_spinwait();
+			lda.spin_cnt++;
+		} else {
+			_mtx_lock_indefinite_check(m, &lda);
+		}
+	}
 }
 
 #ifdef DDB

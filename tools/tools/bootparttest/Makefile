@@ -13,8 +13,6 @@ CFLAGS=		-I${SRCTOP}/stand/common \
 		-DLOADER_GPT_SUPPORT -DLOADER_MBR_SUPPORT -DPART_DEBUG \
 		-DDISK_DEBUG
 
-DPADD+=		${LIBGEOM}
-LDADD+=		${LIBGEOM}
-LDFLAGS+=	-lgeom
+LIBADD+=	geom
 
 .include <bsd.prog.mk>

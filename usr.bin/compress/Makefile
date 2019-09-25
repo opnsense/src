@@ -11,8 +11,7 @@ MLINKS=	compress.1 uncompress.1
 # XXX zopen is not part of libc
 # MAN=zopen.3
 
-.if ${MK_TESTS} != "no"
-SUBDIR+=	tests
-.endif
+HAS_TESTS=
+SUBDIR.${MK_TESTS}+= tests
 
 .include <bsd.prog.mk>

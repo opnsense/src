@@ -221,22 +221,27 @@ FakeStack *AsanThread::AsyncSignalSafeLazyInitFakeStack() {
 void AsanThread::Init(const InitOptions *options) {
   next_stack_top_ = next_stack_bottom_ = 0;
   atomic_store(&stack_switching_, false, memory_order_release);
-  fake_stack_ = nullptr;  // Will be initialized lazily if needed.
   CHECK_EQ(this->stack_size(), 0U);
   SetThreadStackAndTls(options);
-  CHECK_GT(this->stack_size(), 0U);
-  CHECK(AddrIsInMem(stack_bottom_));
-  CHECK(AddrIsInMem(stack_top_ - 1));
+  if (stack_top_ != stack_bottom_) {
+    CHECK_GT(this->stack_size(), 0U);
+    CHECK(AddrIsInMem(stack_bottom_));
+    CHECK(AddrIsInMem(stack_top_ - 1));
+  }
   ClearShadowForThreadStackAndTLS();
+  fake_stack_ = nullptr;
+  if (__asan_option_detect_stack_use_after_return)
+    AsyncSignalSafeLazyInitFakeStack();
   int local = 0;
   VReport(1, "T%d: stack [%p,%p) size 0x%zx; local=%p\n", tid(),
           (void *)stack_bottom_, (void *)stack_top_, stack_top_ - stack_bottom_,
           &local);
 }
 
-// Fuchsia doesn't use ThreadStart.
-// asan_fuchsia.c defines CreateMainThread and SetThreadStackAndTls.
-#if !SANITIZER_FUCHSIA
+// Fuchsia and RTEMS don't use ThreadStart.
+// asan_fuchsia.c/asan_rtems.c define CreateMainThread and
+// SetThreadStackAndTls.
+#if !SANITIZER_FUCHSIA && !SANITIZER_RTEMS
 
 thread_return_t AsanThread::ThreadStart(
     tid_t os_id, atomic_uintptr_t *signal_thread_is_registered) {
@@ -286,26 +291,37 @@ void AsanThread::SetThreadStackAndTls(const InitOptions *options) {
   DCHECK_EQ(options, nullptr);
   uptr tls_size = 0;
   uptr stack_size = 0;
-  GetThreadStackAndTls(tid() == 0, const_cast<uptr *>(&stack_bottom_),
-                       const_cast<uptr *>(&stack_size), &tls_begin_, &tls_size);
+  GetThreadStackAndTls(tid() == 0, &stack_bottom_, &stack_size, &tls_begin_,
+                       &tls_size);
   stack_top_ = stack_bottom_ + stack_size;
   tls_end_ = tls_begin_ + tls_size;
   dtls_ = DTLS_Get();
 
-  int local;
-  CHECK(AddrIsInStack((uptr)&local));
+  if (stack_top_ != stack_bottom_) {
+    int local;
+    CHECK(AddrIsInStack((uptr)&local));
+  }
 }
 
-#endif  // !SANITIZER_FUCHSIA
+#endif  // !SANITIZER_FUCHSIA && !SANITIZER_RTEMS
 
 void AsanThread::ClearShadowForThreadStackAndTLS() {
-  PoisonShadow(stack_bottom_, stack_top_ - stack_bottom_, 0);
-  if (tls_begin_ != tls_end_)
-    PoisonShadow(tls_begin_, tls_end_ - tls_begin_, 0);
+  if (stack_top_ != stack_bottom_)
+    PoisonShadow(stack_bottom_, stack_top_ - stack_bottom_, 0);
+  if (tls_begin_ != tls_end_) {
+    uptr tls_begin_aligned = RoundDownTo(tls_begin_, SHADOW_GRANULARITY);
+    uptr tls_end_aligned = RoundUpTo(tls_end_, SHADOW_GRANULARITY);
+    FastPoisonShadowPartialRightRedzone(tls_begin_aligned,
+                                        tls_end_ - tls_begin_aligned,
+                                        tls_end_aligned - tls_end_, 0);
+  }
 }
 
 bool AsanThread::GetStackFrameAccessByAddr(uptr addr,
                                            StackFrameAccess *access) {
+  if (stack_top_ == stack_bottom_)
+    return false;
+
   uptr bottom = 0;
   if (AddrIsInStack(addr)) {
     bottom = stack_bottom();
@@ -386,6 +402,9 @@ static bool ThreadStackContainsAddress(ThreadContextBase *tctx_base,
 }
 
 AsanThread *GetCurrentThread() {
+  if (SANITIZER_RTEMS && !asan_inited)
+    return nullptr;
+
   AsanThreadContext *context =
       reinterpret_cast<AsanThreadContext *>(AsanTSDGet());
   if (!context) {
@@ -475,6 +494,11 @@ void LockThreadRegistry() {
 
 void UnlockThreadRegistry() {
   __asan::asanThreadRegistry().Unlock();
+}
+
+ThreadRegistry *GetThreadRegistryLocked() {
+  __asan::asanThreadRegistry().CheckLocked();
+  return &__asan::asanThreadRegistry();
 }
 
 void EnsureMainThreadIDIsCorrect() {

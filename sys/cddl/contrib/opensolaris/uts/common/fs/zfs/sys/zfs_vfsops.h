@@ -46,6 +46,8 @@ struct zfsvfs {
 	zfsvfs_t	*z_parent;	/* parent fs */
 	objset_t	*z_os;		/* objset reference */
 	uint64_t	z_root;		/* id of root znode */
+	struct vnode	*z_rootvnode;	/* root vnode */
+	struct rmlock	z_rootvnodelock;/* protection for root vnode */
 	uint64_t	z_unlinkedobj;	/* id of unlinked zapobj */
 	uint64_t	z_max_blksz;	/* maximum block size for files */
 	uint64_t	z_fuid_obj;	/* fuid table object number */
@@ -85,6 +87,9 @@ struct zfsvfs {
 	sa_attr_type_t	*z_attr_table;	/* SA attr mapping->id */
 #define	ZFS_OBJ_MTX_SZ	64
 	kmutex_t	z_hold_mtx[ZFS_OBJ_MTX_SZ];	/* znode hold locks */
+#if defined(__FreeBSD__)
+	struct task	z_unlinked_drain_task;
+#endif
 };
 
 /*

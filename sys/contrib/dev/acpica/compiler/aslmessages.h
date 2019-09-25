@@ -8,7 +8,7 @@
  *
  * 1. Copyright Notice
  *
- * Some or all of this work - Copyright (c) 1999 - 2017, Intel Corp.
+ * Some or all of this work - Copyright (c) 1999 - 2018, Intel Corp.
  * All rights reserved.
  *
  * 2. License
@@ -355,6 +355,15 @@ typedef enum
     ASL_MSG_NULL_RESOURCE_TEMPLATE,
     ASL_MSG_FOUND_HERE,
     ASL_MSG_ILLEGAL_RECURSION,
+    ASL_MSG_EXTERN_COLLISION,
+    ASL_MSG_EXTERN_FOUND_HERE,
+    ASL_MSG_OEM_TABLE_ID,
+    ASL_MSG_OEM_ID,
+    ASL_MSG_UNLOAD,
+    ASL_MSG_OFFSET,
+    ASL_MSG_LONG_SLEEP,
+    ASL_MSG_PREFIX_NOT_EXIST,
+    ASL_MSG_NAMEPATH_NOT_EXIST,
 
     /* These messages are used by the Data Table compiler only */
 

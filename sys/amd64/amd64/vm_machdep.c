@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 1982, 1986 The Regents of the University of California.
  * Copyright (c) 1989, 1990 William Jolitz
  * Copyright (c) 1994 John Dyson
@@ -45,7 +47,6 @@ __FBSDID("$FreeBSD$");
 
 #include "opt_isa.h"
 #include "opt_cpu.h"
-#include "opt_compat.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -58,13 +59,16 @@ __FBSDID("$FreeBSD$");
 #include <sys/mbuf.h>
 #include <sys/mutex.h>
 #include <sys/pioctl.h>
+#include <sys/priv.h>
 #include <sys/proc.h>
+#include <sys/procctl.h>
 #include <sys/smp.h>
 #include <sys/sysctl.h>
 #include <sys/sysent.h>
 #include <sys/unistd.h>
 #include <sys/vnode.h>
 #include <sys/vmmeter.h>
+#include <sys/wait.h>
 
 #include <machine/cpu.h>
 #include <machine/md_var.h>
@@ -85,7 +89,7 @@ _Static_assert(OFFSETOF_CURTHREAD == offsetof(struct pcpu, pc_curthread),
 _Static_assert(OFFSETOF_CURPCB == offsetof(struct pcpu, pc_curpcb),
     "OFFSETOF_CURPCB does not correspond with offset of pc_curpcb.");
 _Static_assert(OFFSETOF_MONITORBUF == offsetof(struct pcpu, pc_monitorbuf),
-    "OFFSETOF_MONINORBUF does not correspond with offset of pc_monitorbuf.");
+    "OFFSETOF_MONITORBUF does not correspond with offset of pc_monitorbuf.");
 
 struct savefpu *
 get_pcb_user_save_td(struct thread *td)
@@ -180,6 +184,7 @@ cpu_fork(struct thread *td1, struct proc *p2, struct thread *td2, int flags)
 	/* Point mdproc and then copy over td1's contents */
 	mdp2 = &p2->p_md;
 	bcopy(&p1->p_md, mdp2, sizeof(*mdp2));
+	p2->p_amd64_md_flags = p1->p_amd64_md_flags;
 
 	/*
 	 * Create a new fresh stack for the new process.
@@ -224,7 +229,7 @@ cpu_fork(struct thread *td1, struct proc *p2, struct thread *td2, int flags)
 	/* Setup to release spin count in fork_exit(). */
 	td2->td_md.md_spinlock_count = 1;
 	td2->td_md.md_saved_flags = PSL_KERNEL | PSL_I;
-	td2->td_md.md_invl_gen.gen = 0;
+	pmap_thread_init_invl_gen(td2);
 
 	/* As an i386, do not copy io permission bitmap. */
 	pcb2->pcb_tssp = NULL;
@@ -235,6 +240,10 @@ cpu_fork(struct thread *td1, struct proc *p2, struct thread *td2, int flags)
 	/* Copy the LDT, if necessary. */
 	mdp1 = &td1->td_proc->p_md;
 	mdp2 = &p2->p_md;
+	if (mdp1->md_ldt == NULL) {
+		mdp2->md_ldt = NULL;
+		return;
+	}
 	mtx_lock(&dt_lock);
 	if (mdp1->md_ldt != NULL) {
 		if (flags & RFMEM) {
@@ -290,11 +299,8 @@ cpu_exit(struct thread *td)
 	/*
 	 * If this process has a custom LDT, release it.
 	 */
-	mtx_lock(&dt_lock);
-	if (td->td_proc->p_md.md_ldt != 0)
+	if (td->td_proc->p_md.md_ldt != NULL)
 		user_ldt_free(td);
-	else
-		mtx_unlock(&dt_lock);
 }
 
 void
@@ -329,8 +335,7 @@ cpu_thread_clean(struct thread *td)
 	if (pcb->pcb_tssp != NULL) {
 		pmap_pti_remove_kva((vm_offset_t)pcb->pcb_tssp,
 		    (vm_offset_t)pcb->pcb_tssp + ctob(IOPAGES + 1));
-		kmem_free(kernel_arena, (vm_offset_t)pcb->pcb_tssp,
-		    ctob(IOPAGES + 1));
+		kmem_free((vm_offset_t)pcb->pcb_tssp, ctob(IOPAGES + 1));
 		pcb->pcb_tssp = NULL;
 	}
 }
@@ -368,17 +373,88 @@ cpu_thread_free(struct thread *td)
 	cpu_thread_clean(td);
 }
 
+bool
+cpu_exec_vmspace_reuse(struct proc *p, vm_map_t map)
+{
+
+	return (((curproc->p_amd64_md_flags & P_MD_KPTI) != 0) ==
+	    (vm_map_pmap(map)->pm_ucr3 != PMAP_NO_CR3));
+}
+
+static void
+cpu_procctl_kpti(struct proc *p, int com, int *val)
+{
+
+	if (com == PROC_KPTI_CTL) {
+		if (pti && *val == PROC_KPTI_CTL_ENABLE_ON_EXEC)
+			p->p_amd64_md_flags |= P_MD_KPTI;
+		if (*val == PROC_KPTI_CTL_DISABLE_ON_EXEC)
+			p->p_amd64_md_flags &= ~P_MD_KPTI;
+	} else /* PROC_KPTI_STATUS */ {
+		*val = (p->p_amd64_md_flags & P_MD_KPTI) != 0 ?
+		    PROC_KPTI_CTL_ENABLE_ON_EXEC:
+		    PROC_KPTI_CTL_DISABLE_ON_EXEC;
+		if (vmspace_pmap(p->p_vmspace)->pm_ucr3 != PMAP_NO_CR3)
+			*val |= PROC_KPTI_STATUS_ACTIVE;
+	}
+}
+
+int
+cpu_procctl(struct thread *td, int idtype, id_t id, int com, void *data)
+{
+	struct proc *p;
+	int error, val;
+
+	switch (com) {
+	case PROC_KPTI_CTL:
+	case PROC_KPTI_STATUS:
+		if (idtype != P_PID) {
+			error = EINVAL;
+			break;
+		}
+		if (com == PROC_KPTI_CTL) {
+			/* sad but true and not a joke */
+			error = priv_check(td, PRIV_IO);
+			if (error != 0)
+				break;
+			error = copyin(data, &val, sizeof(val));
+			if (error != 0)
+				break;
+			if (val != PROC_KPTI_CTL_ENABLE_ON_EXEC &&
+			    val != PROC_KPTI_CTL_DISABLE_ON_EXEC) {
+				error = EINVAL;
+				break;
+			}
+		}
+		error = pget(id, PGET_CANSEE | PGET_NOTWEXIT | PGET_NOTID, &p);
+		if (error == 0) {
+			cpu_procctl_kpti(p, com, &val);
+			PROC_UNLOCK(p);
+			if (com == PROC_KPTI_STATUS)
+				error = copyout(&val, data, sizeof(val));
+		}
+		break;
+	default:
+		error = EINVAL;
+		break;
+	}
+	return (error);
+}
+
 void
 cpu_set_syscall_retval(struct thread *td, int error)
 {
+	struct trapframe *frame;
+
+	frame = td->td_frame;
+	if (__predict_true(error == 0)) {
+		frame->tf_rax = td->td_retval[0];
+		frame->tf_rdx = td->td_retval[1];
+		frame->tf_rflags &= ~PSL_C;
+		return;
+	}
 
 	switch (error) {
-	case 0:
-		td->td_frame->tf_rax = td->td_retval[0];
-		td->td_frame->tf_rdx = td->td_retval[1];
-		td->td_frame->tf_rflags &= ~PSL_C;
-		break;
-
 	case ERESTART:
 		/*
 		 * Reconstruct pc, we know that 'syscall' is 2 bytes,
@@ -392,8 +468,8 @@ cpu_set_syscall_retval(struct thread *td, int error)
 		 * Require full context restore to get the arguments
 		 * in the registers reloaded at return to usermode.
 		 */
-		td->td_frame->tf_rip -= td->td_frame->tf_err;
-		td->td_frame->tf_r10 = td->td_frame->tf_rcx;
+		frame->tf_rip -= frame->tf_err;
+		frame->tf_r10 = frame->tf_rcx;
 		set_pcb_flags(td->td_pcb, PCB_FULL_IRET);
 		break;
 
@@ -401,8 +477,8 @@ cpu_set_syscall_retval(struct thread *td, int error)
 		break;
 
 	default:
-		td->td_frame->tf_rax = SV_ABI_ERRNO(td->td_proc, error);
-		td->td_frame->tf_rflags |= PSL_C;
+		frame->tf_rax = SV_ABI_ERRNO(td->td_proc, error);
+		frame->tf_rflags |= PSL_C;
 		break;
 	}
 }
@@ -469,6 +545,7 @@ cpu_copy_thread(struct thread *td, struct thread *td0)
 	/* Setup to release spin count in fork_exit(). */
 	td->td_md.md_spinlock_count = 1;
 	td->td_md.md_saved_flags = PSL_KERNEL | PSL_I;
+	pmap_thread_init_invl_gen(td);
 }
 
 /*

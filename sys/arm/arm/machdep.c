@@ -1,6 +1,8 @@
 /*	$NetBSD: arm32_machdep.c,v 1.44 2004/03/24 15:34:47 atatat Exp $	*/
 
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 2004 Olivier Houchard
  * Copyright (c) 1994-1998 Mark Brinicombe.
  * Copyright (c) 1994 Brini.
@@ -42,10 +44,8 @@
  * Updated	: 18/04/01 updated for new wscons
  */
 
-#include "opt_compat.h"
 #include "opt_ddb.h"
 #include "opt_kstack_pages.h"
-#include "opt_pax.h"
 #include "opt_platform.h"
 #include "opt_sched.h"
 #include "opt_timer.h"
@@ -65,7 +65,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/kernel.h>
 #include <sys/linker.h>
 #include <sys/msgbuf.h>
-#include <sys/pax.h>
 #include <sys/reboot.h>
 #include <sys/rwlock.h>
 #include <sys/sched.h>
@@ -78,6 +77,7 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_page.h>
 #include <vm/vm_pager.h>
 
+#include <machine/asm.h>
 #include <machine/debug_monitor.h>
 #include <machine/machdep.h>
 #include <machine/metadata.h>
@@ -104,6 +104,14 @@ __FBSDID("$FreeBSD$");
     defined(COMPAT_FREEBSD6) || defined(COMPAT_FREEBSD7) || \
     defined(COMPAT_FREEBSD9)
 #error FreeBSD/arm doesn't provide compatibility with releases prior to 10
+#endif
+
+#if __ARM_ARCH >= 6 && !defined(INTRNG)
+#error armv6 requires INTRNG
+#endif
+
+#ifndef _ARM_ARCH_5E
+#error FreeBSD requires ARMv5 or later
 #endif
 
 struct pcpu __pcpu[MAXCPU];
@@ -145,7 +153,7 @@ static struct pv_addr kernelstack;
 #endif /* __ARM_ARCH >= 6 */
 #endif /* FDT */
 
-#ifdef MULTIDELAY
+#ifdef PLATFORM
 static delay_func *delay_impl;
 static void *delay_arg;
 #endif
@@ -225,8 +233,8 @@ cpu_startup(void *dummy)
 	    (uintmax_t)arm32_ptob(realmem),
 	    (uintmax_t)arm32_ptob(realmem) / mbyte);
 	printf("avail memory = %ju (%ju MB)\n",
-	    (uintmax_t)arm32_ptob(vm_cnt.v_free_count),
-	    (uintmax_t)arm32_ptob(vm_cnt.v_free_count) / mbyte);
+	    (uintmax_t)arm32_ptob(vm_free_count()),
+	    (uintmax_t)arm32_ptob(vm_free_count()) / mbyte);
 	if (bootverbose) {
 		arm_physmem_print_tables();
 		devmap_print_table();
@@ -269,8 +277,22 @@ cpu_flush_dcache(void *ptr, size_t len)
 int
 cpu_est_clockrate(int cpu_id, uint64_t *rate)
 {
+#if __ARM_ARCH >= 6
+	struct pcpu *pc;
 
+	pc = pcpu_find(cpu_id);
+	if (pc == NULL || rate == NULL)
+		return (EINVAL);
+
+	if (pc->pc_clock == 0)
+		return (EOPNOTSUPP);
+
+	*rate = pc->pc_clock;
+
+	return (0);
+#else
 	return (ENXIO);
+#endif
 }
 
 void
@@ -300,6 +322,7 @@ cpu_idle_wakeup(int cpu)
 	return (0);
 }
 
+#ifdef NO_EVENTTIMERS
 /*
  * Most ARM platforms don't need to do anything special to init their clocks
  * (they get intialized during normal device attachment), and by not defining a
@@ -310,8 +333,14 @@ cpu_idle_wakeup(int cpu)
 void
 arm_generic_initclocks(void)
 {
+}
+__weak_reference(arm_generic_initclocks, cpu_initclocks);
 
-#ifndef NO_EVENTTIMERS
+#else
+void
+cpu_initclocks(void)
+{
+
 #ifdef SMP
 	if (PCPU_GET(cpuid) == 0)
 		cpu_initclocks_bsp();
@@ -320,11 +349,10 @@ arm_generic_initclocks(void)
 #else
 	cpu_initclocks_bsp();
 #endif
-#endif
 }
-__weak_reference(arm_generic_initclocks, cpu_initclocks);
+#endif
 
-#ifdef MULTIDELAY
+#ifdef PLATFORM
 void
 arm_set_delay(delay_func *impl, void *arg)
 {
@@ -338,7 +366,9 @@ void
 DELAY(int usec)
 {
 
+	TSENTER();
 	delay_impl(usec, delay_arg);
+	TSEXIT();
 }
 #endif
 
@@ -611,6 +641,7 @@ sendsig(catcher, ksi, mask)
 	/* make the stack aligned */
 	fp = (struct sigframe *)STACKALIGN(fp);
 	/* Populate the siginfo frame. */
+	bzero(&frame, sizeof(frame));
 	get_mcontext(td, &frame.sf_uc.uc_mcontext, 0);
 #ifdef VFP
 	get_vfpcontext(td, &frame.sf_vfp);
@@ -653,9 +684,9 @@ sendsig(catcher, ksi, mask)
 	tf->tf_usr_sp = (register_t)fp;
 	sysent = p->p_sysent;
 	if (sysent->sv_sigcode_base != 0)
-		tf->tf_usr_lr = (register_t)p->p_sigcode_base;
+		tf->tf_usr_lr = (register_t)sysent->sv_sigcode_base;
 	else
-		tf->tf_usr_lr = (register_t)(p->p_psstrings -
+		tf->tf_usr_lr = (register_t)(sysent->sv_psstrings -
 		    *(sysent->sv_szsigcode));
 	/* Set the mode to enter in the signal handler */
 #if __ARM_ARCH >= 7
@@ -857,9 +888,10 @@ initarm(struct arm_boot_params *abp)
 
 	/*
 	 * Add one table for end of kernel map, one for stacks, msgbuf and
-	 * L1 and L2 tables map and one for vectors map.
+	 * L1 and L2 tables map,  one for vectors map and two for
+	 * l2 structures from pmap_bootstrap.
 	 */
-	l2size += 3;
+	l2size += 5;
 
 	/* Make it divisible by 4 */
 	l2size = (l2size + 3) & ~3;

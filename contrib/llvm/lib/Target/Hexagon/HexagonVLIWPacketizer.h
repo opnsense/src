@@ -59,18 +59,20 @@ class HexagonPacketizerList : public VLIWPacketizerList {
   bool PacketStalls = false;
 
 protected:
-  /// \brief A handle to the branch probability pass.
+  /// A handle to the branch probability pass.
   const MachineBranchProbabilityInfo *MBPI;
   const MachineLoopInfo *MLI;
 
 private:
   const HexagonInstrInfo *HII;
   const HexagonRegisterInfo *HRI;
+  const bool Minimal;
 
 public:
   HexagonPacketizerList(MachineFunction &MF, MachineLoopInfo &MLI,
                         AliasAnalysis *AA,
-                        const MachineBranchProbabilityInfo *MBPI);
+                        const MachineBranchProbabilityInfo *MBPI,
+                        bool Minimal);
 
   // initPacketizerState - initialize some internal flags.
   void initPacketizerState() override;
@@ -147,7 +149,7 @@ protected:
   bool hasDeadDependence(const MachineInstr &I, const MachineInstr &J);
   bool hasControlDependence(const MachineInstr &I, const MachineInstr &J);
   bool hasRegMaskDependence(const MachineInstr &I, const MachineInstr &J);
-  bool hasV4SpecificDependence(const MachineInstr &I, const MachineInstr &J);
+  bool hasDualStoreDependence(const MachineInstr &I, const MachineInstr &J);
   bool producesStall(const MachineInstr &MI);
 };
 

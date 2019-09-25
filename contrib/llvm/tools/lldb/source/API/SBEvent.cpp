@@ -12,11 +12,11 @@
 #include "lldb/API/SBStream.h"
 
 #include "lldb/Breakpoint/Breakpoint.h"
-#include "lldb/Core/Event.h"
 #include "lldb/Core/StreamFile.h"
 #include "lldb/Interpreter/CommandInterpreter.h"
 #include "lldb/Target/Process.h"
 #include "lldb/Utility/ConstString.h"
+#include "lldb/Utility/Event.h"
 #include "lldb/Utility/Stream.h"
 
 using namespace lldb;
@@ -146,8 +146,8 @@ void SBEvent::reset(Event *event_ptr) {
 }
 
 bool SBEvent::IsValid() const {
-  // Do NOT use m_opaque_ptr directly!!! Must use the SBEvent::get()
-  // accessor. See comments in SBEvent::get()....
+  // Do NOT use m_opaque_ptr directly!!! Must use the SBEvent::get() accessor.
+  // See comments in SBEvent::get()....
   return SBEvent::get() != NULL;
 }
 

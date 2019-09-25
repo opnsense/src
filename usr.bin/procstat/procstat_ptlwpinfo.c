@@ -36,7 +36,7 @@
 #include "procstat.h"
 
 void
-procstat_ptlwpinfo(struct procstat *prstat)
+procstat_ptlwpinfo(struct procstat *prstat, struct kinfo_proc *kipp __unused)
 {
 	struct ptrace_lwpinfo *pl;
 	unsigned int count, i;
@@ -45,14 +45,16 @@ procstat_ptlwpinfo(struct procstat *prstat)
 	if (pl == NULL)
 		return;
 
-	if (!hflag)
-		xo_emit("{:/%6s %7s %5s %5s %5s %6s %5s} {[:/%d}{:/%s}{]:}"
-		    " {:/%s}\n",
+	if ((procstat_opts & PS_OPT_NOHEADER) == 0)
+		xo_emit(
+	    "{T:/%6s %7s %5s %5s %5s %6s %5s} {[:/%d}{T:/%s}{]:} {T:/%s}\n",
 		    "LWPID", "EVENT", "SIGNO", "CODE", "ERRNO", "PID", "UID",
 		    2 * sizeof(void *) + 2, "ADDR", "TDNAME");
 
+	xo_open_container("threads");
 	for (i = 0; i < count; i++) {
-		xo_emit("{:lpwid/%6d} ", pl[i].pl_lwpid);
+		xo_open_container("thread");
+		xo_emit("{:lwpid/%6d} ", pl[i].pl_lwpid);
 		switch (pl[i].pl_event) {
 		case PL_EVENT_NONE:
 			xo_emit("{eq:event/none}{d:event/%7s} ", "none");
@@ -85,7 +87,9 @@ procstat_ptlwpinfo(struct procstat *prstat)
 			    2 * sizeof(void *) + 2, "-");
 		}
 		xo_emit("{:tdname/%s}\n", pl[i].pl_tdname);
+		xo_close_container("thread");
 	}
+	xo_close_container("threads");
 
 	procstat_freeptlwpinfo(prstat, pl);
 }

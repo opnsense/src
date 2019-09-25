@@ -91,10 +91,16 @@ static int	fix_unaligned(struct thread *td, struct trapframe *frame);
 static int	handle_onfault(struct trapframe *frame);
 static void	syscall(struct trapframe *frame);
 
-#ifdef __powerpc64__
+#if defined(__powerpc64__) && defined(AIM)
        void	handle_kernel_slb_spill(int, register_t, register_t);
 static int	handle_user_slb_spill(pmap_t pm, vm_offset_t addr);
 extern int	n_slbs;
+#endif
+
+extern vm_offset_t __startkernel;
+
+#ifdef KDB
+int db_trap_glue(struct trapframe *);		/* Called from trap_subr.S */
 #endif
 
 struct powerpc_exception {
@@ -119,6 +125,7 @@ static struct powerpc_exception powerpc_exceptions[] = {
 	{ EXC_EXI,	"external interrupt" },
 	{ EXC_ALI,	"alignment" },
 	{ EXC_PGM,	"program" },
+	{ EXC_HEA,	"hypervisor emulation assistance" },
 	{ EXC_FPU,	"floating-point unavailable" },
 	{ EXC_APU,	"auxiliary proc unavailable" },
 	{ EXC_DECR,	"decrementer" },
@@ -131,6 +138,7 @@ static struct powerpc_exception powerpc_exceptions[] = {
 	{ EXC_PERF,	"performance monitoring" },
 	{ EXC_VEC,	"altivec unavailable" },
 	{ EXC_VSX,	"vsx unavailable" },
+	{ EXC_FAC,	"facility unavailable" },
 	{ EXC_ITMISS,	"instruction tlb miss" },
 	{ EXC_DLMISS,	"data load tlb miss" },
 	{ EXC_DSMISS,	"data store tlb miss" },
@@ -141,6 +149,26 @@ static struct powerpc_exception powerpc_exceptions[] = {
 	{ EXC_RUNMODETRC,	"run mode/trace" },
 	{ EXC_LAST,	NULL }
 };
+
+#define ESR_BITMASK							\
+    "\20"								\
+    "\040b0\037b1\036b2\035b3\034PIL\033PRR\032PTR\031FP"		\
+    "\030ST\027b9\026DLK\025ILK\024b12\023b13\022BO\021PIE"		\
+    "\020b16\017b17\016b18\015b19\014b20\013b21\012b22\011b23"		\
+    "\010SPE\007EPID\006b26\005b27\004b28\003b29\002b30\001b31"
+#define	MCSR_BITMASK							\
+    "\20"								\
+    "\040MCP\037ICERR\036DCERR\035TLBPERR\034L2MMU_MHIT\033b5\032b6\031b7"	\
+    "\030b8\027b9\026b10\025NMI\024MAV\023MEA\022b14\021IF"		\
+    "\020LD\017ST\016LDG\015b19\014b20\013b21\012b22\011b23"		\
+    "\010b24\007b25\006b26\005b27\004b28\003b29\002TLBSYNC\001BSL2_ERR"
+#define	MSSSR_BITMASK							\
+    "\20"								\
+    "\040b0\037b1\036b2\035b3\034b4\033b5\032b6\031b7"			\
+    "\030b8\027b9\026b10\025b11\024b12\023L2TAG\022L2DAT\021L3TAG"	\
+    "\020L3DAT\017APE\016DPE\015TEA\014b20\013b21\012b22\011b23"	\
+    "\010b24\007b25\006b26\005b27\004b28\003b29\002b30\001b31"
+
 
 static const char *
 trapname(u_int vector)
@@ -155,6 +183,16 @@ trapname(u_int vector)
 	return ("unknown");
 }
 
+static inline bool
+frame_is_trap_inst(struct trapframe *frame)
+{
+#ifdef AIM
+	return (frame->exc == EXC_PGM && frame->srr1 & EXC_PGM_TRAP);
+#else
+	return ((frame->cpu.booke.esr & ESR_PTR) != 0);
+#endif
+}
+
 void
 trap(struct trapframe *frame)
 {
@@ -166,8 +204,16 @@ trap(struct trapframe *frame)
 	int		sig, type, user;
 	u_int		ucode;
 	ksiginfo_t	ksi;
+	register_t 	fscr;
 
-	PCPU_INC(cnt.v_trap);
+	VM_CNT_INC(v_trap);
+
+#ifdef KDB
+	if (kdb_active) {
+		kdb_reenter();
+		return;
+	}
+#endif
 
 	td = curthread;
 	p = td->td_proc;
@@ -211,7 +257,7 @@ trap(struct trapframe *frame)
 			ucode = TRAP_TRACE;
 			break;
 
-#ifdef __powerpc64__
+#if defined(__powerpc64__) && defined(AIM)
 		case EXC_ISE:
 		case EXC_DSE:
 			if (handle_user_slb_spill(&p->p_vmspace->vm_pmap,
@@ -255,6 +301,19 @@ trap(struct trapframe *frame)
 			enable_fpu(td);
 			break;
 
+		case EXC_FAC:
+			fscr = mfspr(SPR_FSCR);
+			if ((fscr & FSCR_IC_MASK) == FSCR_IC_HTM) {
+				CTR0(KTR_TRAP, "Hardware Transactional Memory subsystem disabled");
+			}
+			sig = SIGILL;
+			ucode =	ILL_ILLOPC;
+			break;
+		case EXC_HEA:
+			sig = SIGILL;
+			ucode =	ILL_ILLOPC;
+			break;
+
 		case EXC_VECAST_E:
 		case EXC_VECAST_G4:
 		case EXC_VECAST_G5:
@@ -290,11 +349,7 @@ trap(struct trapframe *frame)
 
 		case EXC_PGM:
 			/* Identify the trap reason */
-#ifdef AIM
-			if (frame->srr1 & EXC_PGM_TRAP) {
-#else
-			if (frame->cpu.booke.esr & ESR_PTR) {
-#endif
+			if (frame_is_trap_inst(frame)) {
 #ifdef KDTRACE_HOOKS
 				inst = fuword32((const void *)frame->srr0);
 				if (inst == 0x0FFFDDDD &&
@@ -306,7 +361,7 @@ trap(struct trapframe *frame)
  				sig = SIGTRAP;
 				ucode = TRAP_BRKPT;
 			} else {
-				sig = ppc_instr_emulate(frame, td->td_pcb);
+				sig = ppc_instr_emulate(frame, td);
 				if (sig == SIGILL) {
 					if (frame->srr1 & EXC_PGM_PRIV)
 						ucode = ILL_PRVOPC;
@@ -336,9 +391,9 @@ trap(struct trapframe *frame)
 		KASSERT(cold || td->td_ucred != NULL,
 		    ("kernel trap doesn't have ucred"));
 		switch (type) {
-#ifdef KDTRACE_HOOKS
 		case EXC_PGM:
-			if (frame->srr1 & EXC_PGM_TRAP) {
+#ifdef KDTRACE_HOOKS
+			if (frame_is_trap_inst(frame)) {
 				if (*(uint32_t *)frame->srr0 == EXC_DTRACE) {
 					if (dtrace_invop_jump_addr != NULL) {
 						dtrace_invop_jump_addr(frame);
@@ -346,11 +401,16 @@ trap(struct trapframe *frame)
 					}
 				}
 			}
-			break;
 #endif
-#ifdef __powerpc64__
+#ifdef KDB
+			if (db_trap_glue(frame))
+				return;
+#endif
+			break;
+#if defined(__powerpc64__) && defined(AIM)
 		case EXC_DSE:
-			if ((frame->dar & SEGMENT_MASK) == USER_ADDR) {
+			if (td->td_pcb->pcb_cpu.aim.usr_vsid != 0 &&
+			    (frame->dar & SEGMENT_MASK) == USER_ADDR) {
 				__asm __volatile ("slbmte %0, %1" ::
 					"r"(td->td_pcb->pcb_cpu.aim.usr_vsid),
 					"r"(USER_SLB_SLBE));
@@ -395,7 +455,7 @@ trap_fatal(struct trapframe *frame)
 
 	printtrap(frame->exc, frame, 1, (frame->srr1 & PSL_PR));
 #ifdef KDB
-	if (debugger_on_panic) {
+	if (debugger_on_trap) {
 		kdb_why = KDB_WHY_TRAP;
 		handled = kdb_trap(frame->exc, 0, frame);
 		kdb_why = KDB_WHY_UNSET;
@@ -407,12 +467,44 @@ trap_fatal(struct trapframe *frame)
 }
 
 static void
+cpu_printtrap(u_int vector, struct trapframe *frame, int isfatal, int user)
+{
+#ifdef AIM
+	uint16_t ver;
+
+	switch (vector) {
+	case EXC_DSE:
+	case EXC_DSI:
+	case EXC_DTMISS:
+		printf("   dsisr           = 0x%lx\n",
+		    (u_long)frame->cpu.aim.dsisr);
+		break;
+	case EXC_MCHK:
+		ver = mfpvr() >> 16;
+		if (MPC745X_P(ver))
+			printf("    msssr0         = 0x%b\n",
+			    (int)mfspr(SPR_MSSSR0), MSSSR_BITMASK);
+		break;
+	}
+#elif defined(BOOKE)
+	vm_paddr_t pa;
+
+	switch (vector) {
+	case EXC_MCHK:
+		pa = mfspr(SPR_MCARU);
+		pa = (pa << 32) | (u_register_t)mfspr(SPR_MCAR);
+		printf("   mcsr            = 0x%b\n",
+		    (int)mfspr(SPR_MCSR), MCSR_BITMASK);
+		printf("   mcar            = 0x%jx\n", (uintmax_t)pa);
+	}
+	printf("   esr             = 0x%b\n",
+	    (int)frame->cpu.booke.esr, ESR_BITMASK);
+#endif
+}
+
+static void
 printtrap(u_int vector, struct trapframe *frame, int isfatal, int user)
 {
-	uint16_t ver;
-#ifdef BOOKE
-	vm_paddr_t pa;
-#endif
 
 	printf("\n");
 	printf("%s %s trap:\n", isfatal ? "fatal" : "handled",
@@ -423,11 +515,8 @@ printtrap(u_int vector, struct trapframe *frame, int isfatal, int user)
 	case EXC_DSE:
 	case EXC_DSI:
 	case EXC_DTMISS:
+	case EXC_ALI:
 		printf("   virtual address = 0x%" PRIxPTR "\n", frame->dar);
-#ifdef AIM
-		printf("   dsisr           = 0x%lx\n",
-		    (u_long)frame->cpu.aim.dsisr);
-#endif
 		break;
 	case EXC_ISE:
 	case EXC_ISI:
@@ -435,26 +524,16 @@ printtrap(u_int vector, struct trapframe *frame, int isfatal, int user)
 		printf("   virtual address = 0x%" PRIxPTR "\n", frame->srr0);
 		break;
 	case EXC_MCHK:
-		ver = mfpvr() >> 16;
-#if defined(AIM)
-		if (MPC745X_P(ver))
-			printf("    msssr0         = 0x%lx\n",
-			    (u_long)mfspr(SPR_MSSSR0));
-#elif defined(BOOKE)
-		pa = mfspr(SPR_MCARU);
-		pa = (pa << 32) | (u_register_t)mfspr(SPR_MCAR);
-		printf("   mcsr            = 0x%lx\n", (u_long)mfspr(SPR_MCSR));
-		printf("   mcar            = 0x%jx\n", (uintmax_t)pa);
-#endif
 		break;
 	}
-#ifdef BOOKE
-	printf("   esr             = 0x%" PRIxPTR "\n",
-	    frame->cpu.booke.esr);
-#endif
-	printf("   srr0            = 0x%" PRIxPTR "\n", frame->srr0);
+	cpu_printtrap(vector, frame, isfatal, user);
+	printf("   srr0            = 0x%" PRIxPTR " (0x%" PRIxPTR ")\n",
+	    frame->srr0, frame->srr0 - (register_t)(__startkernel - KERNBASE));
 	printf("   srr1            = 0x%lx\n", (u_long)frame->srr1);
-	printf("   lr              = 0x%" PRIxPTR "\n", frame->lr);
+	printf("   current msr     = 0x%" PRIxPTR "\n", mfmsr());
+	printf("   lr              = 0x%" PRIxPTR " (0x%" PRIxPTR ")\n",
+	    frame->lr, frame->lr - (register_t)(__startkernel - KERNBASE));
+	printf("   frame           = %p\n", frame);
 	printf("   curthread       = %p\n", curthread);
 	if (curthread != NULL)
 		printf("          pid = %d, comm = %s\n",
@@ -587,20 +666,21 @@ syscall(struct trapframe *frame)
 	td = curthread;
 	td->td_frame = frame;
 
-#ifdef __powerpc64__
+#if defined(__powerpc64__) && defined(AIM)
 	/*
 	 * Speculatively restore last user SLB segment, which we know is
 	 * invalid already, since we are likely to do copyin()/copyout().
 	 */
-	__asm __volatile ("slbmte %0, %1; isync" ::
-            "r"(td->td_pcb->pcb_cpu.aim.usr_vsid), "r"(USER_SLB_SLBE));
+	if (td->td_pcb->pcb_cpu.aim.usr_vsid != 0)
+		__asm __volatile ("slbmte %0, %1; isync" ::
+		    "r"(td->td_pcb->pcb_cpu.aim.usr_vsid), "r"(USER_SLB_SLBE));
 #endif
 
 	error = syscallenter(td);
 	syscallret(td, error);
 }
 
-#ifdef __powerpc64__
+#if defined(__powerpc64__) && defined(AIM)
 /* Handle kernel SLB faults -- runs in real mode, all seat belts off */
 void
 handle_kernel_slb_spill(int type, register_t dar, register_t srr0)
@@ -611,7 +691,7 @@ handle_kernel_slb_spill(int type, register_t dar, register_t srr0)
 	int i;
 
 	addr = (type == EXC_ISE) ? srr0 : dar;
-	slbcache = PCPU_GET(slb);
+	slbcache = PCPU_GET(aim.slb);
 	esid = (uintptr_t)addr >> ADDR_SR_SHFT;
 	slbe = (esid << SLBE_ESID_SHIFT) | SLBE_VALID;
 	
@@ -654,6 +734,9 @@ handle_user_slb_spill(pmap_t pm, vm_offset_t addr)
 	uint64_t esid;
 	int i;
 
+	if (pm->pm_slb == NULL)
+		return (-1);
+
 	esid = (uintptr_t)addr >> ADDR_SR_SHFT;
 
 	PMAP_LOCK(pm);
@@ -688,10 +771,7 @@ trap_pfault(struct trapframe *frame, int user)
 	struct		proc *p;
 	vm_map_t	map;
 	vm_prot_t	ftype;
-	int		rv;
-#ifdef AIM
-	register_t	user_sr;
-#endif
+	int		rv, is_user;
 
 	td = curthread;
 	p = td->td_proc;
@@ -716,21 +796,14 @@ trap_pfault(struct trapframe *frame, int user)
 		KASSERT(p->p_vmspace != NULL, ("trap_pfault: vmspace  NULL"));
 		map = &p->p_vmspace->vm_map;
 	} else {
-#ifdef BOOKE
-		if (eva < VM_MAXUSER_ADDRESS) {
-#else
-		if ((eva >> ADDR_SR_SHFT) == (USER_ADDR >> ADDR_SR_SHFT)) {
-#endif
-			map = &p->p_vmspace->vm_map;
+		rv = pmap_decode_kernel_ptr(eva, &is_user, &eva);
+		if (rv != 0)
+			return (SIGSEGV);
 
-#ifdef AIM
-			user_sr = td->td_pcb->pcb_cpu.aim.usr_segm;
-			eva &= ADDR_PIDX | ADDR_POFF;
-			eva |= user_sr << ADDR_SR_SHFT;
-#endif
-		} else {
+		if (is_user)
+			map = &p->p_vmspace->vm_map;
+		else
 			map = kernel_map;
-		}
 	}
 	va = trunc_page(eva);
 
@@ -759,15 +832,63 @@ static int
 fix_unaligned(struct thread *td, struct trapframe *frame)
 {
 	struct thread	*fputhread;
+#ifdef BOOKE
+	uint32_t	inst;
+#endif
 	int		indicator, reg;
 	double		*fpr;
 
+#ifdef __SPE__
+	indicator = (frame->cpu.booke.esr & (ESR_ST|ESR_SPE));
+	if (indicator & ESR_SPE) {
+		if (copyin((void *)frame->srr0, &inst, sizeof(inst)) != 0)
+			return (-1);
+		reg = EXC_ALI_INST_RST(inst);
+		fpr = (double *)td->td_pcb->pcb_vec.vr[reg];
+		fputhread = PCPU_GET(vecthread);
+
+		/* Juggle the SPE to ensure that we've initialized
+		 * the registers, and that their current state is in
+		 * the PCB.
+		 */
+		if (fputhread != td) {
+			if (fputhread)
+				save_vec(fputhread);
+			enable_vec(td);
+		}
+		save_vec(td);
+
+		if (!(indicator & ESR_ST)) {
+			if (copyin((void *)frame->dar, fpr,
+			    sizeof(double)) != 0)
+				return (-1);
+			frame->fixreg[reg] = td->td_pcb->pcb_vec.vr[reg][1];
+			enable_vec(td);
+		} else {
+			td->td_pcb->pcb_vec.vr[reg][1] = frame->fixreg[reg];
+			if (copyout(fpr, (void *)frame->dar,
+			    sizeof(double)) != 0)
+				return (-1);
+		}
+		return (0);
+	}
+#else
+#ifdef BOOKE
+	indicator = (frame->cpu.booke.esr & ESR_ST) ? EXC_ALI_STFD : EXC_ALI_LFD;
+#else
 	indicator = EXC_ALI_OPCODE_INDICATOR(frame->cpu.aim.dsisr);
+#endif
 
 	switch (indicator) {
 	case EXC_ALI_LFD:
 	case EXC_ALI_STFD:
+#ifdef BOOKE
+		if (copyin((void *)frame->srr0, &inst, sizeof(inst)) != 0)
+			return (-1);
+		reg = EXC_ALI_INST_RST(inst);
+#else
 		reg = EXC_ALI_RST(frame->cpu.aim.dsisr);
+#endif
 		fpr = &td->td_pcb->pcb_fpu.fpr[reg].fpr;
 		fputhread = PCPU_GET(fputhread);
 
@@ -795,36 +916,28 @@ fix_unaligned(struct thread *td, struct trapframe *frame)
 		return (0);
 		break;
 	}
+#endif
 
 	return (-1);
 }
 
 #ifdef KDB
-int db_trap_glue(struct trapframe *);		/* Called from trap_subr.S */
-
 int
 db_trap_glue(struct trapframe *frame)
 {
+
 	if (!(frame->srr1 & PSL_PR)
 	    && (frame->exc == EXC_TRC || frame->exc == EXC_RUNMODETRC
-#ifdef AIM
-		|| (frame->exc == EXC_PGM
-		    && (frame->srr1 & EXC_PGM_TRAP))
-#else
-		|| (frame->exc == EXC_DEBUG)
-#endif
+	    	|| frame_is_trap_inst(frame)
 		|| frame->exc == EXC_BPT
+		|| frame->exc == EXC_DEBUG
 		|| frame->exc == EXC_DSI)) {
 		int type = frame->exc;
 
 		/* Ignore DTrace traps. */
 		if (*(uint32_t *)frame->srr0 == EXC_DTRACE)
 			return (0);
-#ifdef AIM
-		if (type == EXC_PGM && (frame->srr1 & EXC_PGM_TRAP)) {
-#else
-		if (frame->cpu.booke.esr & ESR_PTR) {
-#endif
+		if (frame_is_trap_inst(frame)) {
 			type = T_BREAKPOINT;
 		}
 		return (kdb_trap(type, 0, frame));

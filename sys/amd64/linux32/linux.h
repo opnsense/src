@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2004 Tim J. Robbins
  * Copyright (c) 2001 Doug Rabson
  * Copyright (c) 1994-1996 Søren Schmidt
@@ -35,6 +37,8 @@
 
 #include <compat/linux/linux.h>
 #include <amd64/linux32/linux32_syscall.h>
+
+#define	LINUX_LEGACY_SYSCALLS
 
 /*
  * debugging support
@@ -114,7 +118,7 @@ typedef struct {
  */
 #define	LINUX_AT_COUNT		20	/* Count of used aux entry types.
 					 * Keep this synchronized with
-					 * elf_linux_fixup() code.
+					 * linux_fixup_elf() code.
 					 */
 struct l___sysctl_args
 {
@@ -240,19 +244,19 @@ struct l_stat64 {
 	l_ulonglong	st_ino;
 } __packed;
 
-struct l_statfs64 { 
-        l_int           f_type; 
-        l_int           f_bsize; 
-        uint64_t        f_blocks; 
-        uint64_t        f_bfree; 
-        uint64_t        f_bavail; 
-        uint64_t        f_files; 
-        uint64_t        f_ffree; 
-        l_fsid_t        f_fsid;
-        l_int           f_namelen;
-        l_int           f_frsize;
-        l_int           f_flags;
-        l_int           f_spare[4];
+struct l_statfs64 {
+	l_int		f_type;
+	l_int		f_bsize;
+	uint64_t	f_blocks;
+	uint64_t	f_bfree;
+	uint64_t	f_bavail;
+	uint64_t	f_files;
+	uint64_t	f_ffree;
+	l_fsid_t	f_fsid;
+	l_int		f_namelen;
+	l_int		f_frsize;
+	l_int		f_flags;
+	l_int		f_spare[4];
 } __packed;
 
 /* sigaction flags */
@@ -452,11 +456,11 @@ struct l_sigframe {
 
 struct l_rt_sigframe {
 	l_int			sf_sig;
-	l_uintptr_t 		sf_siginfo;
+	l_uintptr_t		sf_siginfo;
 	l_uintptr_t		sf_ucontext;
 	l_siginfo_t		sf_si;
-	struct l_ucontext 	sf_sc;
-	l_handler_t 		sf_handler;
+	struct l_ucontext	sf_sc;
+	l_handler_t		sf_handler;
 } __packed;
 
 /*
@@ -474,11 +478,6 @@ union l_semun {
 	l_uintptr_t	__pad;
 } __packed;
 
-struct l_sockaddr {
-	l_ushort	sa_family;
-	char		sa_data[14];
-} __packed;
-
 struct l_ifmap {
 	l_ulong		mem_start;
 	l_ulong		mem_end;
@@ -487,9 +486,6 @@ struct l_ifmap {
 	u_char		dma;
 	u_char		port;
 } __packed;
-
-#define	LINUX_IFHWADDRLEN	6
-#define	LINUX_IFNAMSIZ		16
 
 struct l_ifreq {
 	union {

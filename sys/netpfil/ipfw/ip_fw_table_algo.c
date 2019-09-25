@@ -2320,7 +2320,6 @@ ta_del_ifidx(void *ta_state, struct table_info *ti, struct tentry_info *tei,
 	tb = (struct ta_buf_ifidx *)ta_buf;
 	ifname = (char *)tei->paddr;
 	icfg = (struct iftable_cfg *)ta_state;
-	ife = tb->ife;
 
 	ife = (struct ifentry *)ipfw_objhash_lookup_name(icfg->ii, 0, ifname);
 
@@ -3267,10 +3266,10 @@ static int
 ta_init_fhash(struct ip_fw_chain *ch, void **ta_state, struct table_info *ti,
     char *data, uint8_t tflags)
 {
-	int i;
 	struct fhash_cfg *cfg;
 	struct fhashentry4 *fe4;
 	struct fhashentry6 *fe6;
+	u_int i;
 
 	cfg = malloc(sizeof(struct fhash_cfg), M_IPFW, M_WAITOK | M_ZERO);
 
@@ -3673,7 +3672,7 @@ ta_prepare_mod_fhash(void *ta_buf, uint64_t *pflags)
 {
 	struct mod_item *mi;
 	struct fhashbhead *head;
-	int i;
+	u_int i;
 
 	mi = (struct mod_item *)ta_buf;
 
@@ -4048,6 +4047,7 @@ static void
 ta_foreach_kfib(void *ta_state, struct table_info *ti, ta_foreach_f *f,
     void *arg)
 {
+	RIB_RLOCK_TRACKER;
 	struct rib_head *rh;
 	int error;
 

@@ -27,7 +27,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd April 29, 2016
+.Dd August 7, 2019
 .Dt PTHREAD_COND_WAIT 3
 .Os
 .Sh NAME
@@ -38,7 +38,7 @@
 .Sh SYNOPSIS
 .In pthread.h
 .Ft int
-.Fn pthread_cond_wait "pthread_cond_t *cond" "pthread_mutex_t *mutex"
+.Fn pthread_cond_wait "pthread_cond_t *restrict cond" "pthread_mutex_t *restrict mutex"
 .Sh DESCRIPTION
 The
 .Fn pthread_cond_wait
@@ -78,8 +78,8 @@ was not locked by the calling thread.
 .It Bq Er EOWNERDEAD
 The argument
 .Fa mutex
-points to a robust mutex and the previous owning thread terminated
-while holding the mutex lock.
+points to a robust mutex and the process containing the previous owning
+thread terminated while holding the mutex lock.
 The lock was granted to the caller and it is up to the new owner
 to make the state consistent.
 .It Bq Er ENOTRECOVERABLE

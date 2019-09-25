@@ -19,10 +19,16 @@
 #include "lldb/Utility/StreamString.h"
 #include "lldb/lldb-private.h"
 
+#include <future>
+
 using namespace lldb_private;
 
 void SymbolFile::PreloadSymbols() {
   // No-op for most implementations.
+}
+
+std::recursive_mutex &SymbolFile::GetModuleMutex() const {
+  return GetObjectFile()->GetModule()->GetMutex();
 }
 
 SymbolFile *SymbolFile::FindPlugin(ObjectFile *obj_file) {
@@ -30,8 +36,7 @@ SymbolFile *SymbolFile::FindPlugin(ObjectFile *obj_file) {
   if (obj_file != nullptr) {
 
     // We need to test the abilities of this section list. So create what it
-    // would
-    // be with this new obj_file.
+    // would be with this new obj_file.
     lldb::ModuleSP module_sp(obj_file->GetModule());
     if (module_sp) {
       // Default to the main module section list.
@@ -60,16 +65,16 @@ SymbolFile *SymbolFile::FindPlugin(ObjectFile *obj_file) {
         if (sym_file_abilities > best_symfile_abilities) {
           best_symfile_abilities = sym_file_abilities;
           best_symfile_ap.reset(curr_symfile_ap.release());
-          // If any symbol file parser has all of the abilities, then
-          // we should just stop looking.
+          // If any symbol file parser has all of the abilities, then we should
+          // just stop looking.
           if ((kAllAbilities & sym_file_abilities) == kAllAbilities)
             break;
         }
       }
     }
     if (best_symfile_ap.get()) {
-      // Let the winning symbol file parser initialize itself more
-      // completely now that it has been chosen
+      // Let the winning symbol file parser initialize itself more completely
+      // now that it has been chosen
       best_symfile_ap->InitializeObject();
     }
   }
@@ -92,30 +97,27 @@ TypeSystem *SymbolFile::GetTypeSystemForLanguage(lldb::LanguageType language) {
 
 uint32_t SymbolFile::ResolveSymbolContext(const FileSpec &file_spec,
                                           uint32_t line, bool check_inlines,
-                                          uint32_t resolve_scope,
+                                          lldb::SymbolContextItem resolve_scope,
                                           SymbolContextList &sc_list) {
   return 0;
 }
 
-uint32_t SymbolFile::FindGlobalVariables(
-    const ConstString &name, const CompilerDeclContext *parent_decl_ctx,
-    bool append, uint32_t max_matches, VariableList &variables) {
-  if (!append)
-    variables.Clear();
+uint32_t
+SymbolFile::FindGlobalVariables(const ConstString &name,
+                                const CompilerDeclContext *parent_decl_ctx,
+                                uint32_t max_matches, VariableList &variables) {
   return 0;
 }
 
 uint32_t SymbolFile::FindGlobalVariables(const RegularExpression &regex,
-                                         bool append, uint32_t max_matches,
+                                         uint32_t max_matches,
                                          VariableList &variables) {
-  if (!append)
-    variables.Clear();
   return 0;
 }
 
 uint32_t SymbolFile::FindFunctions(const ConstString &name,
                                    const CompilerDeclContext *parent_decl_ctx,
-                                   uint32_t name_type_mask,
+                                   lldb::FunctionNameType name_type_mask,
                                    bool include_inlines, bool append,
                                    SymbolContextList &sc_list) {
   if (!append)
@@ -138,9 +140,8 @@ void SymbolFile::GetMangledNamesForFunction(
 }
 
 uint32_t SymbolFile::FindTypes(
-    const SymbolContext &sc, const ConstString &name,
-    const CompilerDeclContext *parent_decl_ctx, bool append,
-    uint32_t max_matches,
+    const ConstString &name, const CompilerDeclContext *parent_decl_ctx,
+    bool append, uint32_t max_matches,
     llvm::DenseSet<lldb_private::SymbolFile *> &searched_symbol_files,
     TypeMap &types) {
   if (!append)
@@ -153,4 +154,18 @@ size_t SymbolFile::FindTypes(const std::vector<CompilerContext> &context,
   if (!append)
     types.Clear();
   return 0;
+}
+
+void SymbolFile::AssertModuleLock() {
+  // The code below is too expensive to leave enabled in release builds. It's
+  // enabled in debug builds or when the correct macro is set.
+#if defined(LLDB_CONFIGURATION_DEBUG)
+  // We assert that we have to module lock by trying to acquire the lock from a
+  // different thread. Note that we must abort if the result is true to
+  // guarantee correctness.
+  assert(std::async(std::launch::async,
+                    [this] { return this->GetModuleMutex().try_lock(); })
+                 .get() == false &&
+         "Module is not locked");
+#endif
 }

@@ -3,12 +3,12 @@
 # Directories to include in cscope name file and TAGS.
 CSCOPEDIRS=	bsm cam cddl compat conf contrib crypto ddb dev fs gdb \
 		geom gnu isa kern libkern modules net net80211 \
-		netgraph netinet netinet6 netipsec netnatm netpfil \
+		netgraph netinet netinet6 netipsec netpfil \
 		netsmb nfs nfsclient nfsserver nlm ofed opencrypto \
 		rpc security sys ufs vm xdr xen ${CSCOPE_ARCHDIR}
 .if !defined(CSCOPE_ARCHDIR)
 .if defined(ALL_ARCH)
-CSCOPE_ARCHDIR = amd64 arm arm64 i386 mips pc98 powerpc riscv sparc64 x86
+CSCOPE_ARCHDIR = amd64 arm arm64 i386 mips powerpc riscv sparc64 x86
 .else
 CSCOPE_ARCHDIR = ${MACHINE}
 .if ${MACHINE} != ${MACHINE_CPUARCH}

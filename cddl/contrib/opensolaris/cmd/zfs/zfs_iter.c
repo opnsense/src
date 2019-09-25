@@ -225,7 +225,7 @@ zfs_compare(const void *larg, const void *rarg, void *unused)
 		*rat = '\0';
 
 	ret = strcmp(lname, rname);
-	if (ret == 0) {
+	if (ret == 0 && (lat != NULL || rat != NULL)) {
 		/*
 		 * If we're comparing a dataset to one of its snapshots, we
 		 * always make the full dataset first.
@@ -445,13 +445,13 @@ zfs_for_each(int argc, char **argv, int flags, zfs_type_t types,
 
 		/*
 		 * If we're recursive, then we always allow filesystems as
-		 * arguments.  If we also are interested in snapshots, then we
-		 * can take volumes as well.
+		 * arguments.  If we also are interested in snapshots or
+		 * bookmarks, then we can take volumes as well.
 		 */
 		argtype = types;
 		if (flags & ZFS_ITER_RECURSE) {
 			argtype |= ZFS_TYPE_FILESYSTEM;
-			if (types & ZFS_TYPE_SNAPSHOT)
+			if (types & (ZFS_TYPE_SNAPSHOT | ZFS_TYPE_BOOKMARK))
 				argtype |= ZFS_TYPE_VOLUME;
 		}
 

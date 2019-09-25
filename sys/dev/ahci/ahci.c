@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2009-2012 Alexander Motin <mav@FreeBSD.org>
  * All rights reserved.
  *
@@ -37,6 +39,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/malloc.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
+#include <sys/sysctl.h>
 #include <machine/stdarg.h>
 #include <machine/resource.h>
 #include <machine/bus.h>
@@ -78,6 +81,8 @@ static void ahci_stop(struct ahci_channel *ch);
 static void ahci_clo(struct ahci_channel *ch);
 static void ahci_start_fr(struct ahci_channel *ch);
 static void ahci_stop_fr(struct ahci_channel *ch);
+static int ahci_phy_check_events(struct ahci_channel *ch, u_int32_t serr);
+static uint32_t ahci_ch_detval(struct ahci_channel *ch, uint32_t val);
 
 static int ahci_sata_connect(struct ahci_channel *ch);
 static int ahci_sata_phy_reset(struct ahci_channel *ch);
@@ -97,6 +102,13 @@ static MALLOC_DEFINE(M_AHCI, "AHCI driver", "AHCI driver data buffers");
 #define RECOVERY_READ_LOG	1
 #define RECOVERY_REQUEST_SENSE	2
 #define recovery_slot		spriv_field1
+
+static uint32_t
+ahci_ch_detval(struct ahci_channel *ch, uint32_t val)
+{
+
+	return ch->disablephy ? ATA_SC_DET_DISABLE : val;
+}
 
 int
 ahci_ctlr_setup(device_t dev)
@@ -174,6 +186,7 @@ ahci_attach(device_t dev)
 	ctlr->ccc = 0;
 	resource_int_value(device_get_name(dev),
 	    device_get_unit(dev), "ccc", &ctlr->ccc);
+	mtx_init(&ctlr->ch_mtx, "AHCI channels lock", NULL, MTX_DEF);
 
 	/* Setup our own memory management for channels. */
 	ctlr->sc_iomem.rm_start = rman_get_start(ctlr->r_mem);
@@ -249,7 +262,8 @@ ahci_attach(device_t dev)
 	    (ctlr->caps & AHCI_CAP_64BIT) ? BUS_SPACE_MAXADDR :
 	    BUS_SPACE_MAXADDR_32BIT, BUS_SPACE_MAXADDR, NULL, NULL,
 	    BUS_SPACE_MAXSIZE, BUS_SPACE_UNRESTRICTED, BUS_SPACE_MAXSIZE,
-	    0, NULL, NULL, &ctlr->dma_tag)) {
+	    ctlr->dma_coherent ? BUS_DMA_COHERENT : 0, NULL, NULL, 
+	    &ctlr->dma_tag)) {
 		ahci_free_mem(dev);
 		rman_fini(&ctlr->sc_iomem);
 		return (ENXIO);
@@ -333,6 +347,16 @@ ahci_attach(device_t dev)
 		if ((ctlr->ichannels & (1 << unit)) == 0)
 			device_disable(child);
 	}
+	/* Attach any remapped NVME device */
+	for (; unit < ctlr->channels + ctlr->remapped_devices; unit++) {
+		child = device_add_child(dev, "nvme", -1);
+		if (child == NULL) {
+			device_printf(dev, "failed to add remapped NVMe device");
+			    continue;
+		}
+		device_set_ivars(child, (void *)(intptr_t)(unit | AHCI_REMAPPED_UNIT));
+	}
+
 	if (ctlr->caps & AHCI_CAP_EMS) {
 		child = device_add_child(dev, "ahciem", -1);
 		if (child == NULL)
@@ -366,6 +390,7 @@ ahci_detach(device_t dev)
 	/* Free memory. */
 	rman_fini(&ctlr->sc_iomem);
 	ahci_free_mem(dev);
+	mtx_destroy(&ctlr->ch_mtx);
 	return (0);
 }
 
@@ -482,6 +507,12 @@ ahci_intr(void *data)
 				ctlr->interrupt[unit].function(arg);
 		}
 	}
+	for (; unit < ctlr->channels + ctlr->remapped_devices; unit++) {
+		if ((arg = ctlr->interrupt[unit].argument)) {
+			ctlr->interrupt[unit].function(arg);
+		}
+	}
+
 	/* AHCI declares level triggered IS. */
 	if (!(ctlr->quirks & AHCI_Q_EDGEIS))
 		ATA_OUTL(ctlr->r_mem, AHCI_IS, is);
@@ -531,12 +562,23 @@ ahci_alloc_resource(device_t dev, device_t child, int type, int *rid,
 	struct resource *res;
 	rman_res_t st;
 	int offset, size, unit;
+	bool is_remapped;
 
 	unit = (intptr_t)device_get_ivars(child);
+	if (unit & AHCI_REMAPPED_UNIT) {
+		unit &= ~AHCI_REMAPPED_UNIT;
+		unit -= ctlr->channels;
+		is_remapped = true;
+	} else
+		is_remapped = false;
 	res = NULL;
 	switch (type) {
 	case SYS_RES_MEMORY:
-		if (unit >= 0) {
+		if (is_remapped) {
+			offset = ctlr->remap_offset + unit * ctlr->remap_size;
+			size = ctlr->remap_size;
+		}
+		else if (unit >= 0) {
 			offset = AHCI_OFFSET + (unit << 7);
 			size = 128;
 		} else if (*rid == 0) {
@@ -597,7 +639,7 @@ ahci_setup_intr(device_t dev, device_t child, struct resource *irq,
     void *argument, void **cookiep)
 {
 	struct ahci_controller *ctlr = device_get_softc(dev);
-	int unit = (intptr_t)device_get_ivars(child);
+	int unit = (intptr_t)device_get_ivars(child) & ~AHCI_REMAPPED_UNIT;
 
 	if (filter != NULL) {
 		printf("ahci.c: we cannot use a filter here\n");
@@ -613,7 +655,7 @@ ahci_teardown_intr(device_t dev, device_t child, struct resource *irq,
     void *cookie)
 {
 	struct ahci_controller *ctlr = device_get_softc(dev);
-	int unit = (intptr_t)device_get_ivars(child);
+	int unit = (intptr_t)device_get_ivars(child) & ~AHCI_REMAPPED_UNIT;
 
 	ctlr->interrupt[unit].function = NULL;
 	ctlr->interrupt[unit].argument = NULL;
@@ -626,7 +668,7 @@ ahci_print_child(device_t dev, device_t child)
 	int retval, channel;
 
 	retval = bus_print_child_header(dev, child);
-	channel = (int)(intptr_t)device_get_ivars(child);
+	channel = (int)(intptr_t)device_get_ivars(child) & ~AHCI_REMAPPED_UNIT;
 	if (channel >= 0)
 		retval += printf(" at channel %d", channel);
 	retval += bus_print_child_footer(dev, child);
@@ -639,7 +681,7 @@ ahci_child_location_str(device_t dev, device_t child, char *buf,
 {
 	int channel;
 
-	channel = (int)(intptr_t)device_get_ivars(child);
+	channel = (int)(intptr_t)device_get_ivars(child) & ~AHCI_REMAPPED_UNIT;
 	if (channel >= 0)
 		snprintf(buf, buflen, "channel=%d", channel);
 	return (0);
@@ -653,6 +695,50 @@ ahci_get_dma_tag(device_t dev, device_t child)
 	return (ctlr->dma_tag);
 }
 
+void
+ahci_attached(device_t dev, struct ahci_channel *ch)
+{
+	struct ahci_controller *ctlr = device_get_softc(dev);
+
+	mtx_lock(&ctlr->ch_mtx);
+	ctlr->ch[ch->unit] = ch;
+	mtx_unlock(&ctlr->ch_mtx);
+}
+
+void
+ahci_detached(device_t dev, struct ahci_channel *ch)
+{
+	struct ahci_controller *ctlr = device_get_softc(dev);
+
+	mtx_lock(&ctlr->ch_mtx);
+	mtx_lock(&ch->mtx);
+	ctlr->ch[ch->unit] = NULL;
+	mtx_unlock(&ch->mtx);
+	mtx_unlock(&ctlr->ch_mtx);
+}
+
+struct ahci_channel *
+ahci_getch(device_t dev, int n)
+{
+	struct ahci_controller *ctlr = device_get_softc(dev);
+	struct ahci_channel *ch;
+
+	KASSERT(n >= 0 && n < AHCI_MAX_PORTS, ("Bad channel number %d", n));
+	mtx_lock(&ctlr->ch_mtx);
+	ch = ctlr->ch[n];
+	if (ch != NULL)
+		mtx_lock(&ch->mtx);
+	mtx_unlock(&ctlr->ch_mtx);
+	return (ch);
+}
+
+void
+ahci_putch(struct ahci_channel *ch)
+{
+
+	mtx_unlock(&ch->mtx);
+}
+
 static int
 ahci_ch_probe(device_t dev)
 {
@@ -662,11 +748,38 @@ ahci_ch_probe(device_t dev)
 }
 
 static int
+ahci_ch_disablephy_proc(SYSCTL_HANDLER_ARGS)
+{
+	struct ahci_channel *ch;
+	int error, value;
+
+	ch = arg1;
+	value = ch->disablephy;
+	error = sysctl_handle_int(oidp, &value, 0, req);
+	if (error != 0 || req->newptr == NULL || (value != 0 && value != 1))
+		return (error);
+
+	mtx_lock(&ch->mtx);
+	ch->disablephy = value;
+	if (value) {
+		ahci_ch_deinit(ch->dev);
+	} else {
+		ahci_ch_init(ch->dev);
+		ahci_phy_check_events(ch, ATA_SE_PHY_CHANGED | ATA_SE_EXCHANGED);
+	}
+	mtx_unlock(&ch->mtx);
+
+	return (0);
+}
+
+static int
 ahci_ch_attach(device_t dev)
 {
 	struct ahci_controller *ctlr = device_get_softc(device_get_parent(dev));
 	struct ahci_channel *ch = device_get_softc(dev);
 	struct cam_devq *devq;
+	struct sysctl_ctx_list *ctx;
+	struct sysctl_oid *tree;
 	int rid, error, i, sata_rev = 0;
 	u_int32_t version;
 
@@ -784,6 +897,12 @@ ahci_ch_attach(device_t dev)
 		    ahci_ch_pm, ch);
 	}
 	mtx_unlock(&ch->mtx);
+	ahci_attached(device_get_parent(dev), ch);
+	ctx = device_get_sysctl_ctx(dev);
+	tree = device_get_sysctl_tree(dev);
+	SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(tree), OID_AUTO, "disable_phy",
+	    CTLFLAG_RW | CTLTYPE_UINT, ch, 0, ahci_ch_disablephy_proc, "IU",
+	    "Disable PHY");
 	return (0);
 
 err3:
@@ -804,6 +923,7 @@ ahci_ch_detach(device_t dev)
 {
 	struct ahci_channel *ch = device_get_softc(dev);
 
+	ahci_detached(device_get_parent(dev), ch);
 	mtx_lock(&ch->mtx);
 	xpt_async(AC_LOST_DEVICE, ch->path, NULL);
 	/* Forget about reset. */
@@ -937,18 +1057,22 @@ ahci_dmainit(device_t dev)
 	struct ahci_channel *ch = device_get_softc(dev);
 	struct ahci_dc_cb_args dcba;
 	size_t rfsize;
+	int error;
 
 	/* Command area. */
-	if (bus_dma_tag_create(bus_get_dma_tag(dev), 1024, 0,
+	error = bus_dma_tag_create(bus_get_dma_tag(dev), 1024, 0,
 	    BUS_SPACE_MAXADDR, BUS_SPACE_MAXADDR,
 	    NULL, NULL, AHCI_WORK_SIZE, 1, AHCI_WORK_SIZE,
-	    0, NULL, NULL, &ch->dma.work_tag))
+	    0, NULL, NULL, &ch->dma.work_tag);
+	if (error != 0)
 		goto error;
-	if (bus_dmamem_alloc(ch->dma.work_tag, (void **)&ch->dma.work,
-	    BUS_DMA_ZERO, &ch->dma.work_map))
+	error = bus_dmamem_alloc(ch->dma.work_tag, (void **)&ch->dma.work,
+	    BUS_DMA_ZERO, &ch->dma.work_map);
+	if (error != 0)
 		goto error;
-	if (bus_dmamap_load(ch->dma.work_tag, ch->dma.work_map, ch->dma.work,
-	    AHCI_WORK_SIZE, ahci_dmasetupc_cb, &dcba, 0) || dcba.error) {
+	error = bus_dmamap_load(ch->dma.work_tag, ch->dma.work_map, ch->dma.work,
+	    AHCI_WORK_SIZE, ahci_dmasetupc_cb, &dcba, BUS_DMA_NOWAIT);
+	if (error != 0 || (error = dcba.error) != 0) {
 		bus_dmamem_free(ch->dma.work_tag, ch->dma.work, ch->dma.work_map);
 		goto error;
 	}
@@ -958,33 +1082,37 @@ ahci_dmainit(device_t dev)
 	    rfsize = 4096;
 	else
 	    rfsize = 256;
-	if (bus_dma_tag_create(bus_get_dma_tag(dev), rfsize, 0,
+	error = bus_dma_tag_create(bus_get_dma_tag(dev), rfsize, 0,
 	    BUS_SPACE_MAXADDR, BUS_SPACE_MAXADDR,
 	    NULL, NULL, rfsize, 1, rfsize,
-	    0, NULL, NULL, &ch->dma.rfis_tag))
+	    0, NULL, NULL, &ch->dma.rfis_tag);
+	if (error != 0)
 		goto error;
-	if (bus_dmamem_alloc(ch->dma.rfis_tag, (void **)&ch->dma.rfis, 0,
-	    &ch->dma.rfis_map))
+	error = bus_dmamem_alloc(ch->dma.rfis_tag, (void **)&ch->dma.rfis, 0,
+	    &ch->dma.rfis_map);
+	if (error != 0)
 		goto error;
-	if (bus_dmamap_load(ch->dma.rfis_tag, ch->dma.rfis_map, ch->dma.rfis,
-	    rfsize, ahci_dmasetupc_cb, &dcba, 0) || dcba.error) {
+	error = bus_dmamap_load(ch->dma.rfis_tag, ch->dma.rfis_map, ch->dma.rfis,
+	    rfsize, ahci_dmasetupc_cb, &dcba, BUS_DMA_NOWAIT);
+	if (error != 0 || (error = dcba.error) != 0) {
 		bus_dmamem_free(ch->dma.rfis_tag, ch->dma.rfis, ch->dma.rfis_map);
 		goto error;
 	}
 	ch->dma.rfis_bus = dcba.maddr;
 	/* Data area. */
-	if (bus_dma_tag_create(bus_get_dma_tag(dev), 2, 0,
+	error = bus_dma_tag_create(bus_get_dma_tag(dev), 2, 0,
 	    BUS_SPACE_MAXADDR, BUS_SPACE_MAXADDR,
 	    NULL, NULL,
 	    AHCI_SG_ENTRIES * PAGE_SIZE * ch->numslots,
 	    AHCI_SG_ENTRIES, AHCI_PRD_MAX,
-	    0, busdma_lock_mutex, &ch->mtx, &ch->dma.data_tag)) {
+	    0, busdma_lock_mutex, &ch->mtx, &ch->dma.data_tag);
+	if (error != 0)
 		goto error;
-	}
 	return;
 
 error:
-	device_printf(dev, "WARNING - DMA initialization failed\n");
+	device_printf(dev, "WARNING - DMA initialization failed, error %d\n",
+	    error);
 	ahci_dmafini(dev);
 }
 
@@ -1520,6 +1648,7 @@ ahci_execute_transaction(struct ahci_slot *slot)
 	int fis_size, i, softreset;
 	uint8_t *fis = ch->dma.rfis + 0x40;
 	uint8_t val;
+	uint16_t cmd_flags;
 
 	/* Get a piece of the workspace for this request */
 	ctp = (struct ahci_cmd_tab *)
@@ -1533,12 +1662,12 @@ ahci_execute_transaction(struct ahci_slot *slot)
 	/* Setup the command list entry */
 	clp = (struct ahci_cmd_list *)
 	    (ch->dma.work + AHCI_CL_OFFSET + (AHCI_CL_SIZE * slot->slot));
-	clp->cmd_flags = htole16(
+	cmd_flags =
 		    (ccb->ccb_h.flags & CAM_DIR_OUT ? AHCI_CMD_WRITE : 0) |
 		    (ccb->ccb_h.func_code == XPT_SCSI_IO ?
 		     (AHCI_CMD_ATAPI | AHCI_CMD_PREFETCH) : 0) |
 		    (fis_size / sizeof(u_int32_t)) |
-		    (port << 12));
+		    (port << 12);
 	clp->prd_length = htole16(slot->dma.nsegs);
 	/* Special handling for Soft Reset command. */
 	if ((ccb->ccb_h.func_code == XPT_ATA_IO) &&
@@ -1549,7 +1678,7 @@ ahci_execute_transaction(struct ahci_slot *slot)
 			ahci_stop(ch);
 			ahci_clo(ch);
 			ahci_start(ch, 0);
-			clp->cmd_flags |= AHCI_CMD_RESET | AHCI_CMD_CLR_BUSY;
+			cmd_flags |= AHCI_CMD_RESET | AHCI_CMD_CLR_BUSY;
 		} else {
 			softreset = 2;
 			/* Prepare FIS receive area for check. */
@@ -1559,6 +1688,7 @@ ahci_execute_transaction(struct ahci_slot *slot)
 	} else
 		softreset = 0;
 	clp->bytecount = 0;
+	clp->cmd_flags = htole16(cmd_flags);
 	clp->cmd_table_phys = htole64(ch->dma.work_bus + AHCI_CT_OFFSET +
 				  (AHCI_CT_SIZE * slot->slot));
 	bus_dmamap_sync(ch->dma.work_tag, ch->dma.work_map,
@@ -1607,6 +1737,14 @@ ahci_execute_transaction(struct ahci_slot *slot)
 				break;
 			}
 		}
+
+		/*
+		 * Some Marvell controllers require additional time
+		 * after soft reset to work properly. Setup delay
+		 * to 50ms after soft reset.
+		 */
+		if (ch->quirks & AHCI_Q_MRVL_SR_DEL)
+			DELAY(50000);
 
 		/*
 		 * Marvell HBAs with non-RAID firmware do not wait for
@@ -2484,7 +2622,7 @@ static int
 ahci_sata_phy_reset(struct ahci_channel *ch)
 {
 	int sata_rev;
-	uint32_t val;
+	uint32_t val, detval;
 
 	if (ch->listening) {
 		val = ATA_INL(ch->r_mem, AHCI_P_CMD);
@@ -2501,12 +2639,14 @@ ahci_sata_phy_reset(struct ahci_channel *ch)
 		val = ATA_SC_SPD_SPEED_GEN3;
 	else
 		val = 0;
+	detval = ahci_ch_detval(ch, ATA_SC_DET_RESET);
 	ATA_OUTL(ch->r_mem, AHCI_P_SCTL,
-	    ATA_SC_DET_RESET | val |
+	    detval | val |
 	    ATA_SC_IPM_DIS_PARTIAL | ATA_SC_IPM_DIS_SLUMBER);
 	DELAY(1000);
+	detval = ahci_ch_detval(ch, ATA_SC_DET_IDLE);
 	ATA_OUTL(ch->r_mem, AHCI_P_SCTL,
-	    ATA_SC_DET_IDLE | val | ((ch->pm_level > 0) ? 0 :
+	    detval | val | ((ch->pm_level > 0) ? 0 :
 	    (ATA_SC_IPM_DIS_PARTIAL | ATA_SC_IPM_DIS_SLUMBER)));
 	if (!ahci_sata_connect(ch)) {
 		if (ch->caps & AHCI_CAP_SSS) {

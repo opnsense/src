@@ -1,5 +1,7 @@
 /* $FreeBSD$ */
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  *  Copyright (c) 2009-2018 Alexander Motin <mav@FreeBSD.org>
  *  Copyright (c) 1997-2009 by Matthew Jacob
  *  All rights reserved.
@@ -1382,6 +1384,7 @@ typedef struct {
  */
 typedef struct {
 	uint16_t	handle;
+	uint16_t	prli_word0;
 	uint16_t	prli_word3;
 	uint32_t		: 8,
 			portid	: 24;

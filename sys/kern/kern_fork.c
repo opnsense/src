@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1982, 1986, 1989, 1991, 1993
  *	The Regents of the University of California.  All rights reserved.
  * (c) UNIX System Laboratories, Inc.
@@ -15,7 +17,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -39,7 +41,6 @@ __FBSDID("$FreeBSD$");
 
 #include "opt_ktrace.h"
 #include "opt_kstack_pages.h"
-#include "opt_pax.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -54,7 +55,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/mutex.h>
-#include <sys/pax.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/procdesc.h>
@@ -69,7 +69,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/acct.h>
 #include <sys/ktr.h>
 #include <sys/ktrace.h>
-#include <sys/unistd.h>	
+#include <sys/unistd.h>
 #include <sys/sdt.h>
 #include <sys/sx.h>
 #include <sys/sysent.h>
@@ -83,7 +83,6 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_map.h>
 #include <vm/vm_extern.h>
 #include <vm/uma.h>
-#include <vm/vm_domain.h>
 
 #ifdef KDTRACE_HOOKS
 #include <sys/dtrace_bsd.h>
@@ -187,7 +186,7 @@ sys_rfork(struct thread *td, struct rfork_args *uap)
 
 int	nprocs = 1;		/* process 0 */
 int	lastpid = 0;
-SYSCTL_INT(_kern, OID_AUTO, lastpid, CTLFLAG_RD, &lastpid, 0, 
+SYSCTL_INT(_kern, OID_AUTO, lastpid, CTLFLAG_RD, &lastpid, 0,
     "Last used PID");
 
 /*
@@ -198,12 +197,8 @@ SYSCTL_INT(_kern, OID_AUTO, lastpid, CTLFLAG_RD, &lastpid, 0,
  * modulus that is too big causes a LOT more process table scans and slows
  * down fork processing as the pidchecked caching is defeated.
  */
-int randompid = 0;
+static int randompid = 0;
 
-#ifdef PAX_HARDENING
-SYSCTL_INT(_kern, OID_AUTO, randompid, CTLFLAG_RD, &randompid, 0,
-    "Random PID modulus");
-#else
 static int
 sysctl_kern_randompid(SYSCTL_HANDLER_ARGS)
 {
@@ -224,7 +219,7 @@ sysctl_kern_randompid(SYSCTL_HANDLER_ARGS)
 		else if (pid < 0 || pid > pid_max - 100)
 			/* out of range */
 			randompid = pid_max - 100;
-		else if (pid < 100)	 
+		else if (pid < 100)
 			/* Make it reasonable */
 			randompid = 100;
 		else
@@ -236,7 +231,6 @@ sysctl_kern_randompid(SYSCTL_HANDLER_ARGS)
 
 SYSCTL_PROC(_kern, OID_AUTO, randompid, CTLTYPE_INT|CTLFLAG_RW,
     0, 0, sysctl_kern_randompid, "I", "Random PID modulus. Special values: 0: disable, 1: choose random value");
-#endif
 
 static int
 fork_findpid(int flags)
@@ -400,14 +394,12 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 	struct filedesc_to_leader *fdtol;
 	struct sigacts *newsigacts;
 
-	sx_assert(&proctree_lock, SX_SLOCKED);
+	sx_assert(&proctree_lock, SX_LOCKED);
 	sx_assert(&allproc_lock, SX_XLOCKED);
 
 	p1 = td->td_proc;
 
 	trypid = fork_findpid(fr->fr_flags);
-
-	sx_sunlock(&proctree_lock);
 
 	p2->p_state = PRS_NEW;		/* protect against others */
 	p2->p_pid = trypid;
@@ -415,29 +407,28 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 	LIST_INSERT_HEAD(&allproc, p2, p_list);
 	allproc_gen++;
 	LIST_INSERT_HEAD(PIDHASH(p2->p_pid), p2, p_hash);
-	tidhash_add(td2);
 	PROC_LOCK(p2);
 	PROC_LOCK(p1);
 
 	sx_xunlock(&allproc_lock);
+	sx_xunlock(&proctree_lock);
 
 	bcopy(&p1->p_startcopy, &p2->p_startcopy,
 	    __rangeof(struct proc, p_startcopy, p_endcopy));
-	p2->p_elf_machine = p1->p_elf_machine;
-	p2->p_elf_flags = p1->p_elf_flags;
+	p2->p_fctl0 = p1->p_fctl0;
 	pargs_hold(p2->p_args);
 
 	PROC_UNLOCK(p1);
 
 	bzero(&p2->p_startzero,
 	    __rangeof(struct proc, p_startzero, p_endzero));
-	p2->p_ptevents = 0;
-	p2->p_pdeathsig = 0;
 
 	/* Tell the prison that we exist. */
 	prison_proc_hold(p2->p_ucred->cr_prison);
 
 	PROC_UNLOCK(p2);
+
+	tidhash_add(td2);
 
 	/*
 	 * Malloc things while we don't hold any locks.
@@ -471,7 +462,7 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 			fdtol->fdl_refcount++;
 			FILEDESC_XUNLOCK(p1->p_fd);
 		} else {
-			/* 
+			/*
 			 * Shared file descriptor table, and different
 			 * process leaders.
 			 */
@@ -490,16 +481,11 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 
 	bzero(&td2->td_startzero,
 	    __rangeof(struct thread, td_startzero, td_endzero));
-	td2->td_sleeptimo = 0;
-	td2->td_vslock_sz = 0;
-	bzero(&td2->td_si, sizeof(td2->td_si));
 
 	bcopy(&td->td_startcopy, &td2->td_startcopy,
 	    __rangeof(struct thread, td_startcopy, td_endcopy));
-	td2->td_sa = td->td_sa;
 
 	bcopy(&p2->p_comm, &td2->td_name, sizeof(td2->td_name));
-	td2->td_pax = p2->p_pax;
 	td2->td_sigstk = td->td_sigstk;
 	td2->td_flags = TDF_INMEM;
 	td2->td_lend_user_pri = PRI_MAX;
@@ -521,18 +507,13 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 	 * Increase reference counts on shared objects.
 	 */
 	p2->p_flag = P_INMEM;
-	p2->p_flag2 = p1->p_flag2 & (P2_NOTRACE | P2_NOTRACE_EXEC | P2_TRAPCAP);
+	p2->p_flag2 = p1->p_flag2 & (P2_ASLR_DISABLE | P2_ASLR_ENABLE |
+	    P2_ASLR_IGNSTART | P2_NOTRACE | P2_NOTRACE_EXEC |
+	    P2_TRAPCAP |
+	    P2_STKGAP_DISABLE | P2_STKGAP_DISABLE_EXEC);
 	p2->p_swtick = ticks;
 	if (p1->p_flag & P_PROFIL)
 		startprofclock(p2);
-
-	/*
-	 * Whilst the proc lock is held, copy the VM domain data out
-	 * using the VM domain method.
-	 */
-	vm_domain_policy_init(&p2->p_vm_dom_policy);
-	vm_domain_policy_localcopy(&p2->p_vm_dom_policy,
-	    &p1->p_vm_dom_policy);
 
 	if (fr->fr_flags & RFSIGSHARE) {
 		p2->p_sigacts = sigacts_hold(p1->p_sigacts);
@@ -666,6 +647,7 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 		pptr = p1;
 	}
 	p2->p_pptr = pptr;
+	p2->p_oppid = pptr->p_pid;
 	LIST_INSERT_HEAD(&pptr->p_children, p2, p_sibling);
 	LIST_INIT(&p2->p_reaplist);
 	LIST_INSERT_HEAD(&p2->p_reaper->p_reaplist, p2, p_reapsibling);
@@ -688,20 +670,20 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 	vm_forkproc(td, p2, td2, vm2, fr->fr_flags);
 
 	if (fr->fr_flags == (RFFDG | RFPROC)) {
-		PCPU_INC(cnt.v_forks);
-		PCPU_ADD(cnt.v_forkpages, p2->p_vmspace->vm_dsize +
+		VM_CNT_INC(v_forks);
+		VM_CNT_ADD(v_forkpages, p2->p_vmspace->vm_dsize +
 		    p2->p_vmspace->vm_ssize);
 	} else if (fr->fr_flags == (RFFDG | RFPROC | RFPPWAIT | RFMEM)) {
-		PCPU_INC(cnt.v_vforks);
-		PCPU_ADD(cnt.v_vforkpages, p2->p_vmspace->vm_dsize +
+		VM_CNT_INC(v_vforks);
+		VM_CNT_ADD(v_vforkpages, p2->p_vmspace->vm_dsize +
 		    p2->p_vmspace->vm_ssize);
 	} else if (p1 == &proc0) {
-		PCPU_INC(cnt.v_kthreads);
-		PCPU_ADD(cnt.v_kthreadpages, p2->p_vmspace->vm_dsize +
+		VM_CNT_INC(v_kthreads);
+		VM_CNT_ADD(v_kthreadpages, p2->p_vmspace->vm_dsize +
 		    p2->p_vmspace->vm_ssize);
 	} else {
-		PCPU_INC(cnt.v_rforks);
-		PCPU_ADD(cnt.v_rforkpages, p2->p_vmspace->vm_dsize +
+		VM_CNT_INC(v_rforks);
+		VM_CNT_ADD(v_rforkpages, p2->p_vmspace->vm_dsize +
 		    p2->p_vmspace->vm_ssize);
 	}
 
@@ -744,18 +726,6 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 	 * but before we wait for the debugger.
 	 */
 	_PHOLD(p2);
-	if (p1->p_ptevents & PTRACE_FORK) {
-		/*
-		 * Arrange for debugger to receive the fork event.
-		 *
-		 * We can report PL_FLAG_FORKED regardless of
-		 * P_FOLLOWFORK settings, but it does not make a sense
-		 * for runaway child.
-		 */
-		td->td_dbgflags |= TDB_FORK;
-		td->td_dbg_forked = p2->p_pid;
-		td2->td_dbgflags |= TDB_STOPATFORK;
-	}
 	if (fr->fr_flags & RFPPWAIT) {
 		td->td_pflags |= TDP_RFPPWAIT;
 		td->td_rfppwait_p = p2;
@@ -779,7 +749,42 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 		procdesc_finit(p2->p_procdesc, fp_procdesc);
 		fdrop(fp_procdesc, td);
 	}
-
+	
+	/*
+	 * Speculative check for PTRACE_FORK. PTRACE_FORK is not
+	 * synced with forks in progress so it is OK if we miss it
+	 * if being set atm.
+	 */
+	if ((p1->p_ptevents & PTRACE_FORK) != 0) {
+		sx_xlock(&proctree_lock);
+		PROC_LOCK(p2);
+		
+		/*
+		 * p1->p_ptevents & p1->p_pptr are protected by both
+		 * process and proctree locks for modifications,
+		 * so owning proctree_lock allows the race-free read.
+		 */
+		if ((p1->p_ptevents & PTRACE_FORK) != 0) {
+			/*
+			 * Arrange for debugger to receive the fork event.
+			 *
+			 * We can report PL_FLAG_FORKED regardless of
+			 * P_FOLLOWFORK settings, but it does not make a sense
+			 * for runaway child.
+			 */
+			td->td_dbgflags |= TDB_FORK;
+			td->td_dbg_forked = p2->p_pid;
+			td2->td_dbgflags |= TDB_STOPATFORK;
+			proc_set_traced(p2, true);
+			CTR2(KTR_PTRACE,
+			    "do_fork: attaching to new child pid %d: oppid %d",
+			    p2->p_pid, p2->p_oppid);
+			proc_reparent(p2, p1->p_pptr, false);
+		}
+		PROC_UNLOCK(p2);
+		sx_xunlock(&proctree_lock);
+	}
+	
 	if ((fr->fr_flags & RFSTOPPED) == 0) {
 		/*
 		 * If RFSTOPPED not requested, make child runnable and
@@ -796,11 +801,6 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 	}
 
 	PROC_LOCK(p2);
-	/*
-	 * Wait until debugger is attached to child.
-	 */
-	while (td2->td_proc == p2 && (td2->td_dbgflags & TDB_STOPATFORK) != 0)
-		cv_wait(&p2->p_dbgwait, &p2->p_mtx);
 	_PRELE(p2);
 	racct_proc_fork_done(p2);
 	PROC_UNLOCK(p2);
@@ -826,15 +826,6 @@ fork1(struct thread *td, struct fork_req *fr)
 		MPASS(fr->fr_procp != NULL && fr->fr_pidp == NULL);
 	else
 		MPASS(fr->fr_procp == NULL);
-
-#ifdef PAX_SEGVGUARD
-	if (td->td_proc->p_pid != 0) {
-		error = pax_segvguard_check(curthread, curthread->td_proc->p_textvp,
-				td->td_proc->p_comm);
-		if (error)
-			return (error);
-	}
-#endif
 
 	/* Check for the undefined or unimplemented flags. */
 	if ((flags & ~(RFFLAGS | RFTSIGFLAGS(RFTSIGMASK))) != 0)
@@ -896,17 +887,20 @@ fork1(struct thread *td, struct fork_req *fr)
 	 * processes; don't let root exceed the limit.
 	 */
 	nprocs_new = atomic_fetchadd_int(&nprocs, 1) + 1;
-	if ((nprocs_new >= maxproc - 10 && priv_check_cred(td->td_ucred,
-	    PRIV_MAXPROC, 0) != 0) || nprocs_new >= maxproc) {
-		error = EAGAIN;
-		sx_xlock(&allproc_lock);
-		if (ppsratecheck(&lastfail, &curfail, 1)) {
-			printf("maxproc limit exceeded by uid %u (pid %d); "
-			    "see tuning(7) and login.conf(5)\n",
-			    td->td_ucred->cr_ruid, p1->p_pid);
+	if (nprocs_new >= maxproc - 10) {
+		if (priv_check_cred(td->td_ucred, PRIV_MAXPROC, 0) != 0 ||
+		    nprocs_new >= maxproc) {
+			error = EAGAIN;
+			sx_xlock(&allproc_lock);
+			if (ppsratecheck(&lastfail, &curfail, 1)) {
+				printf("maxproc limit exceeded by uid %u "
+				    "(pid %d); see tuning(7) and "
+				    "login.conf(5)\n",
+				    td->td_ucred->cr_ruid, p1->p_pid);
+			}
+			sx_xunlock(&allproc_lock);
+			goto fail2;
 		}
-		sx_xunlock(&allproc_lock);
-		goto fail2;
 	}
 
 	/*
@@ -987,7 +981,7 @@ fork1(struct thread *td, struct fork_req *fr)
 	STAILQ_INIT(&newproc->p_ktr);
 
 	/* We have to lock the process tree while we look for a pid. */
-	sx_slock(&proctree_lock);
+	sx_xlock(&proctree_lock);
 	sx_xlock(&allproc_lock);
 
 	/*
@@ -1009,8 +1003,8 @@ fork1(struct thread *td, struct fork_req *fr)
 	}
 
 	error = EAGAIN;
-	sx_sunlock(&proctree_lock);
 	sx_xunlock(&allproc_lock);
+	sx_xunlock(&proctree_lock);
 #ifdef MAC
 	mac_proc_destroy(newproc);
 #endif
@@ -1095,24 +1089,15 @@ fork_exit(void (*callout)(void *, struct trapframe *), void *arg,
 void
 fork_return(struct thread *td, struct trapframe *frame)
 {
-	struct proc *p, *dbg;
+	struct proc *p;
 
 	p = td->td_proc;
 	if (td->td_dbgflags & TDB_STOPATFORK) {
-		sx_xlock(&proctree_lock);
 		PROC_LOCK(p);
-		if (p->p_pptr->p_ptevents & PTRACE_FORK) {
+		if ((p->p_flag & P_TRACED) != 0) {
 			/*
-			 * If debugger still wants auto-attach for the
-			 * parent's children, do it now.
+			 * Inform the debugger if one is still present.
 			 */
-			dbg = p->p_pptr->p_pptr;
-			proc_set_traced(p, true);
-			CTR2(KTR_PTRACE,
-		    "fork_return: attaching to new child pid %d: oppid %d",
-			    p->p_pid, p->p_oppid);
-			proc_reparent(p, dbg);
-			sx_xunlock(&proctree_lock);
 			td->td_dbgflags |= TDB_CHILD | TDB_SCX | TDB_FSTP;
 			ptracestop(td, SIGSTOP, NULL);
 			td->td_dbgflags &= ~(TDB_CHILD | TDB_SCX);
@@ -1120,9 +1105,7 @@ fork_return(struct thread *td, struct trapframe *frame)
 			/*
 			 * ... otherwise clear the request.
 			 */
-			sx_xunlock(&proctree_lock);
 			td->td_dbgflags &= ~TDB_STOPATFORK;
-			cv_broadcast(&p->p_dbgwait);
 		}
 		PROC_UNLOCK(p);
 	} else if (p->p_flag & P_TRACED || td->td_dbgflags & TDB_BORN) {

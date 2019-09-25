@@ -132,6 +132,6 @@ void ARMInstrInfo::expandLoadStackGuard(MachineBasicBlock::iterator MI) const {
   BuildMI(MBB, MI, DL, get(ARM::LDRi12), Reg)
       .addReg(Reg, RegState::Kill)
       .addImm(0)
-      .setMemRefs(MI->memoperands_begin(), MI->memoperands_end())
+      .cloneMemRefs(*MI)
       .add(predOps(ARMCC::AL));
 }

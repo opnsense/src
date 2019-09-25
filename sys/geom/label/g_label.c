@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2004-2005 Pawel Jakub Dawidek <pjd@FreeBSD.org>
  * All rights reserved.
  *
@@ -93,6 +95,7 @@ const struct g_label_desc *g_labels[] = {
 	&g_label_reiserfs,
 	&g_label_ntfs,
 	&g_label_disk_ident,
+	&g_label_flashmap,
 #endif
 	NULL
 };
@@ -211,7 +214,11 @@ g_label_create(struct gctl_req *req, struct g_class *mp, struct g_provider *pp,
 	}
 	gp = NULL;
 	cp = NULL;
-	snprintf(name, sizeof(name), "%s/%s", dir, label);
+	if (snprintf(name, sizeof(name), "%s/%s", dir, label) >= sizeof(name)) {
+		if (req != NULL)
+			gctl_error(req, "Label name %s is too long.", label);
+		return (NULL);
+	}
 	LIST_FOREACH(gp, &mp->geom, geom) {
 		pp2 = LIST_FIRST(&gp->provider);
 		if (pp2 == NULL)

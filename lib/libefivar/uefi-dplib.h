@@ -1,6 +1,5 @@
 /*-
  * Copyright (c) 2017 Netflix, Inc.
- * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -576,7 +575,7 @@ StrHexToBytes(const char *str, size_t len, uint8_t *buf, size_t buflen)
 	/*
 	 * Sanity check preconditions.
 	 */
-	if (buflen != len / 2 || (len % 1) == 1)
+	if (buflen != len / 2 || (len % 2) == 1)
 		return 1;
 	for (i = 0; i < len; i += 2) {
 		if (!isxdigit(str[i]) || !isxdigit(str[i + 1]))

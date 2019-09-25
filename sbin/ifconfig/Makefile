@@ -35,13 +35,14 @@ SRCS+=	ifvxlan.c		# VXLAN support
 SRCS+=	ifgre.c			# GRE keys etc
 SRCS+=	ifgif.c			# GIF reversed header workaround
 SRCS+=	ifipsec.c		# IPsec VTI
-SRCS+=	ifstf.c			# STF configuration options
 
 SRCS+=	sfp.c			# SFP/SFP+ information
 LIBADD+=	m
 
+.if ${MK_WIRELESS_SUPPORT} != "no"
 SRCS+=	ifieee80211.c		# SIOC[GS]IEEE80211 support
 LIBADD+=	80211
+.endif
 
 SRCS+=	carp.c			# SIOC[GS]VH support
 SRCS+=	ifgroup.c		# ...
@@ -68,8 +69,7 @@ MAN=	ifconfig.8
 CFLAGS+= -Wall -Wmissing-prototypes -Wcast-qual -Wwrite-strings -Wnested-externs
 WARNS?=	2
 
-.if ${MK_TESTS} != "no"
-SUBDIR+=	tests
-.endif
+HAS_TESTS=
+SUBDIR.${MK_TESTS}+= tests
 
 .include <bsd.prog.mk>

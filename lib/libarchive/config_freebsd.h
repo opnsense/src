@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2003-2007 Tim Kientzle
  * All rights reserved.
  *
@@ -207,6 +209,7 @@
 #define HAVE_TZSET 1
 #define HAVE_UINTMAX_T 1
 #define HAVE_UNISTD_H 1
+#define HAVE_UNLINKAT 1
 #define HAVE_UNSETENV 1
 #define HAVE_UNSIGNED_LONG_LONG 1
 #define HAVE_UNSIGNED_LONG_LONG_INT 1

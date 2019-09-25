@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
  * All rights reserved.
  *
@@ -41,7 +43,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -169,7 +171,7 @@ struct protosw inet6sw[] = {
 	.pr_type =		SOCK_STREAM,
 	.pr_domain =		&inet6domain,
 	.pr_protocol =		IPPROTO_TCP,
-	.pr_flags =		PR_CONNREQUIRED|PR_WANTRCVD|PR_LISTEN,
+	.pr_flags =		PR_CONNREQUIRED|PR_IMPLOPCL|PR_WANTRCVD|PR_LISTEN,
 	.pr_input =		tcp6_input,
 	.pr_ctlinput =		tcp6_ctlinput,
 	.pr_ctloutput =		tcp_ctloutput,
@@ -280,7 +282,6 @@ struct protosw inet6sw[] = {
 	.pr_input =		encap6_input,
 	.pr_output =		rip6_output,
 	.pr_ctloutput =		rip6_ctloutput,
-	.pr_init =		encap_init,
 	.pr_usrreqs =		&rip6_usrreqs
 },
 #endif /* INET */
@@ -292,7 +293,6 @@ struct protosw inet6sw[] = {
 	.pr_input =		encap6_input,
 	.pr_output =		rip6_output,
 	.pr_ctloutput =		rip6_ctloutput,
-	.pr_init =		encap_init,
 	.pr_usrreqs =		&rip6_usrreqs
 },
 {
@@ -303,7 +303,6 @@ struct protosw inet6sw[] = {
 	.pr_input =		encap6_input,
 	.pr_output =		rip6_output,
 	.pr_ctloutput =		rip6_ctloutput,
-	.pr_init =		encap_init,
 	.pr_usrreqs =		&rip6_usrreqs
 },
 {

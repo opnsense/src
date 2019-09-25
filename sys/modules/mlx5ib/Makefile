@@ -16,13 +16,16 @@ mlx5_ib_qp.c \
 mlx5_ib_srq.c \
 mlx5_ib_virt.c \
 device_if.h bus_if.h vnode_if.h pci_if.h \
-opt_inet.h opt_inet6.h
+opt_inet.h opt_inet6.h opt_ratelimit.h
 
 CFLAGS+= -I${SRCTOP}/sys/ofed/include
 CFLAGS+= -I${SRCTOP}/sys/ofed/include/uapi
 CFLAGS+= -I${SRCTOP}/sys/compat/linuxkpi/common/include
 CFLAGS+= -DCONFIG_INFINIBAND_USER_MEM
-CFLAGS+= -DINET -DINET6
+
+.if defined(CONFIG_BUILD_FPGA)
+CFLAGS+= -DCONFIG_MLX5_FPGA
+.endif
 
 .include <bsd.kmod.mk>
 

@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2009-2013, 2016 Chelsio, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -44,7 +46,7 @@ __FBSDID("$FreeBSD$");
 
 #include "iw_cxgbe.h"
 #include "user.h"
-extern int use_dsgl;
+
 static int fastreg_support = 1;
 module_param(fastreg_support, int, 0644);
 MODULE_PARM_DESC(fastreg_support, "Advertise fastreg support (default = 1)");

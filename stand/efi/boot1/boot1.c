@@ -56,10 +56,11 @@ static EFI_GUID LoadedImageGUID = LOADED_IMAGE_PROTOCOL;
 static EFI_GUID ConsoleControlGUID = EFI_CONSOLE_CONTROL_PROTOCOL_GUID;
 
 /*
- * Provide Malloc / Free backed by EFIs AllocatePool / FreePool which ensures
+ * Provide Malloc / Free / Calloc backed by EFIs AllocatePool / FreePool which ensures
  * memory is correctly aligned avoiding EFI_INVALID_PARAMETER returns from
  * EFI methods.
  */
+
 void *
 Malloc(size_t len, const char *file __unused, int line __unused)
 {
@@ -76,6 +77,19 @@ Free(void *buf, const char *file __unused, int line __unused)
 {
 	if (buf != NULL)
 		(void)BS->FreePool(buf);
+}
+
+void *
+Calloc(size_t n1, size_t n2, const char *file, int line)
+{
+	size_t bytes;
+	void *res;
+
+	bytes = n1 * n2;
+	if ((res = Malloc(bytes, file, line)) != NULL)
+		bzero(res, bytes);
+
+	return (res);
 }
 
 /*
@@ -391,7 +405,7 @@ efi_main(EFI_HANDLE Ximage, EFI_SYSTEM_TABLE *Xsystab)
 	EFI_STATUS status;
 	EFI_CONSOLE_CONTROL_PROTOCOL *ConsoleControl = NULL;
 	SIMPLE_TEXT_OUTPUT_INTERFACE *conout = NULL;
-	UINTN i, max_dim, best_mode, cols, rows, hsize, nhandles;
+	UINTN i, hsize, nhandles;
 	CHAR16 *text;
 	UINT16 boot_current;
 	size_t sz;
@@ -410,22 +424,13 @@ efi_main(EFI_HANDLE Ximage, EFI_SYSTEM_TABLE *Xsystab)
 		(void)ConsoleControl->SetMode(ConsoleControl,
 		    EfiConsoleControlScreenText);
 	/*
-	 * Reset the console and find the best text mode.
+	 * Reset the console enable the cursor. Later we'll choose a better
+	 * console size through GOP/UGA.
 	 */
 	conout = ST->ConOut;
 	conout->Reset(conout, TRUE);
-	max_dim = best_mode = 0;
-	for (i = 0; ; i++) {
-		status = conout->QueryMode(conout, i, &cols, &rows);
-		if (EFI_ERROR(status))
-			break;
-		if (cols * rows > max_dim) {
-			max_dim = cols * rows;
-			best_mode = i;
-		}
-	}
-	if (max_dim > 0)
-		conout->SetMode(conout, best_mode);
+	/* Explicitly set conout to mode 0, 80x25 */
+	conout->SetMode(conout, 0);
 	conout->EnableCursor(conout, TRUE);
 	conout->ClearScreen(conout);
 

@@ -8,7 +8,7 @@
  *
  * 1. Copyright Notice
  *
- * Some or all of this work - Copyright (c) 1999 - 2017, Intel Corp.
+ * Some or all of this work - Copyright (c) 1999 - 2018, Intel Corp.
  * All rights reserved.
  *
  * 2. License
@@ -728,11 +728,7 @@ OpcEncodePldBuffer (
     UINT32                  Dword;
 
 
-    Buffer = ACPI_ALLOCATE_ZEROED (ACPI_PLD_BUFFER_SIZE);
-    if (!Buffer)
-    {
-        return (NULL);
-    }
+    Buffer = ACPI_CAST_PTR (UINT32, UtLocalCacheCalloc (ACPI_PLD_BUFFER_SIZE));
 
     /* First 32 bits */
 

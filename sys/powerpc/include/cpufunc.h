@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1998 Doug Rabson
  * All rights reserved.
  *
@@ -201,7 +203,7 @@ intr_restore(register_t msr)
 }
 
 static __inline struct pcpu *
-powerpc_get_pcpup(void)
+get_pcpu(void)
 {
 	struct pcpu *ret;
 

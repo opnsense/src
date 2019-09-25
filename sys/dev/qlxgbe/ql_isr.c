@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2013-2016 Qlogic Corporation
  * All rights reserved.
  *
@@ -791,7 +793,7 @@ ql_mbx_isr(void *arg)
 	ha = arg;
 
 	if (ha == NULL) {
-		device_printf(ha->pci_dev, "%s: arg == NULL\n", __func__);
+		printf("%s: arg == NULL\n", __func__);
 		return;
 	}
 

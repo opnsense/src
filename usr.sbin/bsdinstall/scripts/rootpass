@@ -27,7 +27,7 @@
 # $FreeBSD$
 
 clear
-echo "HardenedBSD Installer"
+echo "FreeBSD Installer"
 echo "========================"
 echo
 

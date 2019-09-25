@@ -10,10 +10,6 @@
 #ifndef liblldb_AppleObjCRuntimeV1_h_
 #define liblldb_AppleObjCRuntimeV1_h_
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
 #include "AppleObjCRuntime.h"
 #include "lldb/Target/ObjCLanguageRuntime.h"
 #include "lldb/lldb-private.h"
@@ -44,6 +40,8 @@ public:
       return false;
     }
   }
+
+  lldb::addr_t GetTaggedPointerObfuscator();
 
   class ClassDescriptorV1 : public ObjCLanguageRuntime::ClassDescriptor {
   public:

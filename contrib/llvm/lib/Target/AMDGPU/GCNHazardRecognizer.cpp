@@ -16,6 +16,7 @@
 #include "SIDefines.h"
 #include "SIInstrInfo.h"
 #include "SIRegisterInfo.h"
+#include "MCTargetDesc/AMDGPUMCTargetDesc.h"
 #include "Utils/AMDGPUBaseInfo.h"
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -39,7 +40,7 @@ using namespace llvm;
 GCNHazardRecognizer::GCNHazardRecognizer(const MachineFunction &MF) :
   CurrCycleInstr(nullptr),
   MF(MF),
-  ST(MF.getSubtarget<SISubtarget>()),
+  ST(MF.getSubtarget<GCNSubtarget>()),
   TII(*ST.getInstrInfo()),
   TRI(TII.getRegisterInfo()),
   ClauseUses(TRI.getNumRegUnits()),
@@ -87,14 +88,28 @@ static bool isSMovRel(unsigned Opcode) {
   }
 }
 
-static bool isSendMsgTraceDataOrGDS(const MachineInstr &MI) {
+static bool isSendMsgTraceDataOrGDS(const SIInstrInfo &TII,
+                                    const MachineInstr &MI) {
+  if (TII.isAlwaysGDS(MI.getOpcode()))
+    return true;
+
   switch (MI.getOpcode()) {
   case AMDGPU::S_SENDMSG:
   case AMDGPU::S_SENDMSGHALT:
   case AMDGPU::S_TTRACEDATA:
     return true;
+  // These DS opcodes don't support GDS.
+  case AMDGPU::DS_NOP:
+  case AMDGPU::DS_PERMUTE_B32:
+  case AMDGPU::DS_BPERMUTE_B32:
+    return false;
   default:
-    // TODO: GDS
+    if (TII.isDS(MI.getOpcode())) {
+      int GDS = AMDGPU::getNamedOperandIdx(MI.getOpcode(),
+                                           AMDGPU::OpName::gds);
+      if (MI.getOperand(GDS).getImm())
+        return true;
+    }
     return false;
   }
 }
@@ -144,7 +159,7 @@ GCNHazardRecognizer::getHazardType(SUnit *SU, int Stalls) {
       checkReadM0Hazards(MI) > 0)
     return NoopHazard;
 
-  if (ST.hasReadM0SendMsgHazard() && isSendMsgTraceDataOrGDS(*MI) &&
+  if (ST.hasReadM0SendMsgHazard() && isSendMsgTraceDataOrGDS(TII, *MI) &&
       checkReadM0Hazards(MI) > 0)
     return NoopHazard;
 
@@ -198,7 +213,7 @@ unsigned GCNHazardRecognizer::PreEmitNoops(MachineInstr *MI) {
                                            isSMovRel(MI->getOpcode())))
     return std::max(WaitStates, checkReadM0Hazards(MI));
 
-  if (ST.hasReadM0SendMsgHazard() && isSendMsgTraceDataOrGDS(*MI))
+  if (ST.hasReadM0SendMsgHazard() && isSendMsgTraceDataOrGDS(TII, *MI))
     return std::max(WaitStates, checkReadM0Hazards(MI));
 
   return WaitStates;
@@ -212,6 +227,14 @@ void GCNHazardRecognizer::AdvanceCycle() {
   // When the scheduler detects a stall, it will call AdvanceCycle() without
   // emitting any instructions.
   if (!CurrCycleInstr)
+    return;
+
+  // Do not track non-instructions which do not affect the wait states.
+  // If included, these instructions can lead to buffer overflow such that
+  // detectable hazards are missed.
+  if (CurrCycleInstr->getOpcode() == AMDGPU::IMPLICIT_DEF)
+    return;
+  else if (CurrCycleInstr->isDebugInstr())
     return;
 
   unsigned NumWaitStates = TII.getNumWaitStates(*CurrCycleInstr);
@@ -252,8 +275,7 @@ int GCNHazardRecognizer::getWaitStatesSince(
         return WaitStates;
 
       unsigned Opcode = MI->getOpcode();
-      if (Opcode == AMDGPU::DBG_VALUE || Opcode == AMDGPU::IMPLICIT_DEF ||
-          Opcode == AMDGPU::INLINEASM)
+      if (Opcode == AMDGPU::INLINEASM)
         continue;
     }
     ++WaitStates;
@@ -355,13 +377,13 @@ int GCNHazardRecognizer::checkSoftClauseHazards(MachineInstr *MEM) {
 }
 
 int GCNHazardRecognizer::checkSMRDHazards(MachineInstr *SMRD) {
-  const SISubtarget &ST = MF.getSubtarget<SISubtarget>();
+  const GCNSubtarget &ST = MF.getSubtarget<GCNSubtarget>();
   int WaitStatesNeeded = 0;
 
   WaitStatesNeeded = checkSoftClauseHazards(SMRD);
 
   // This SMRD hazard only affects SI.
-  if (ST.getGeneration() != SISubtarget::SOUTHERN_ISLANDS)
+  if (ST.getGeneration() != AMDGPUSubtarget::SOUTHERN_ISLANDS)
     return WaitStatesNeeded;
 
   // A read of an SGPR by SMRD instruction requires 4 wait states when the
@@ -398,7 +420,7 @@ int GCNHazardRecognizer::checkSMRDHazards(MachineInstr *SMRD) {
 }
 
 int GCNHazardRecognizer::checkVMEMHazards(MachineInstr* VMEM) {
-  if (ST.getGeneration() < SISubtarget::VOLCANIC_ISLANDS)
+  if (ST.getGeneration() < AMDGPUSubtarget::VOLCANIC_ISLANDS)
     return 0;
 
   int WaitStatesNeeded = checkSoftClauseHazards(VMEM);
@@ -634,7 +656,7 @@ int GCNHazardRecognizer::checkRFEHazards(MachineInstr *RFE) {
 }
 
 int GCNHazardRecognizer::checkAnyInstHazards(MachineInstr *MI) {
-  if (MI->isDebugValue())
+  if (MI->isDebugInstr())
     return 0;
 
   const SIRegisterInfo *TRI = ST.getRegisterInfo();

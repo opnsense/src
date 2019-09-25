@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 1996 Gardner Buchanan <gbuchanan@shl.com>
  * All rights reserved.
  *
@@ -225,6 +227,9 @@ sn_attach(device_t dev)
 		sn_detach(dev);
 		return err;
 	}
+
+	gone_by_fcp101_dev(dev);
+
 	return 0;
 }
 
@@ -1416,7 +1421,7 @@ sn_getmcf(struct ifnet *ifp, uint8_t *mcf)
 	bzero(mcf, MCFSZ);
 
 	if_maddr_rlock(ifp);
-	TAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
+	CK_STAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
 	    if (ifma->ifma_addr->sa_family != AF_LINK) {
 		if_maddr_runlock(ifp);
 		return 0;

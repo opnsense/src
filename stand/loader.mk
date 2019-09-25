@@ -1,7 +1,5 @@
 # $FreeBSD$
 
-.include "defs.mk"
-
 .PATH: ${LDRSRC} ${BOOTSRC}/libsa
 
 CFLAGS+=-I${LDRSRC}
@@ -13,11 +11,8 @@ SRCS+=	module.c
 .if ${MACHINE} == "i386" || ${MACHINE_CPUARCH} == "amd64"
 SRCS+=	load_elf32.c load_elf32_obj.c reloc_elf32.c
 SRCS+=	load_elf64.c load_elf64_obj.c reloc_elf64.c
-.elif ${MACHINE} == "pc98"
-SRCS+=	load_elf32.c load_elf32_obj.c reloc_elf32.c
 .elif ${MACHINE_CPUARCH} == "aarch64"
 SRCS+=	load_elf64.c reloc_elf64.c
-NOPIE=	1
 .elif ${MACHINE_CPUARCH} == "arm"
 SRCS+=	load_elf32.c reloc_elf32.c
 .elif ${MACHINE_CPUARCH} == "powerpc"
@@ -62,12 +57,28 @@ SRCS+=	isapnp.c
 SRCS+=	pnp.c
 .endif
 
-# Forth interpreter
-.if ${MK_FORTH} != "no"
+.if ${LOADER_INTERP} == "lua"
+SRCS+=	interp_lua.c
+.include "${BOOTSRC}/lua.mk"
+LDR_INTERP=	${LIBLUA}
+LDR_INTERP32=	${LIBLUA32}
+.elif ${LOADER_INTERP} == "4th"
 SRCS+=	interp_forth.c
 .include "${BOOTSRC}/ficl.mk"
-.else
+LDR_INTERP=	${LIBFICL}
+LDR_INTERP32=	${LIBFICL32}
+.elif ${LOADER_INTERP} == "simp"
 SRCS+=	interp_simple.c
+.else
+.error Unknown interpreter ${LOADER_INTERP}
+.endif
+
+.if ${MK_LOADER_VERIEXEC} != "no"
+CFLAGS+= -DLOADER_VERIEXEC -I${SRCTOP}/lib/libsecureboot/h
+.endif
+
+.if ${MK_LOADER_VERIEXEC_PASS_MANIFEST} != "no"
+CFLAGS+= -DLOADER_VERIEXEC_PASS_MANIFEST -I${SRCTOP}/lib/libsecureboot/h
 .endif
 
 .if defined(BOOT_PROMPT_123)
@@ -122,18 +133,11 @@ CFLAGS+= -DLOADER_GPT_SUPPORT
 CFLAGS+= -DLOADER_MBR_SUPPORT
 .endif
 
-.if defined(HAVE_ZFS)
+.if ${HAVE_ZFS:Uno} == "yes"
 CFLAGS+=	-DLOADER_ZFS_SUPPORT
 CFLAGS+=	-I${ZFSSRC}
 CFLAGS+=	-I${SYSDIR}/cddl/boot/zfs
 SRCS+=		zfs_cmd.c
-.if ${MACHINE_CPUARCH} == "amd64" && ${DO32:U0} == 1
-# Have to override to use 32-bit version of zfs library...
-# kinda lame to select that there XXX
-LIBZFSBOOT=	${BOOTOBJ}/zfs32/libzfsboot.a
-.else
-LIBZFSBOOT=	${BOOTOBJ}/zfs/libzfsboot.a
-.endif
 .endif
 
 LIBFICL=	${BOOTOBJ}/ficl/libficl.a
@@ -142,9 +146,12 @@ LIBFICL32=	${LIBFICL}
 .else
 LIBFICL32=	${BOOTOBJ}/ficl32/libficl.a
 .endif
-.if ${MK_FORTH} != no
-LDR_INTERP=	${LIBFICL}
-LDR_INTERP32=	${LIBFICL32}
+
+LIBLUA=		${BOOTOBJ}/liblua/liblua.a
+.if ${MACHINE} == "i386"
+LIBLUA32=	${LIBLUA}
+.else
+LIBLUA32=	${BOOTOBJ}/liblua32/liblua.a
 .endif
 
 CLEANFILES+=	vers.c

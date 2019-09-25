@@ -334,13 +334,13 @@ traverse_visitbp(traverse_data_t *td, const dnode_phys_t *dnp,
 			goto post;
 		dnode_phys_t *child_dnp = buf->b_data;
 
-		for (i = 0; i < epb; i++) {
+		for (i = 0; i < epb; i += child_dnp[i].dn_extra_slots + 1) {
 			prefetch_dnode_metadata(td, &child_dnp[i],
 			    zb->zb_objset, zb->zb_blkid * epb + i);
 		}
 
 		/* recursively visitbp() blocks below this */
-		for (i = 0; i < epb; i++) {
+		for (i = 0; i < epb; i += child_dnp[i].dn_extra_slots + 1) {
 			err = traverse_dnode(td, &child_dnp[i],
 			    zb->zb_objset, zb->zb_blkid * epb + i);
 			if (err != 0)
@@ -442,7 +442,7 @@ prefetch_dnode_metadata(traverse_data_t *td, const dnode_phys_t *dnp,
 
 	if (dnp->dn_flags & DNODE_FLAG_SPILL_BLKPTR) {
 		SET_BOOKMARK(&czb, objset, object, 0, DMU_SPILL_BLKID);
-		traverse_prefetch_metadata(td, &dnp->dn_spill, &czb);
+		traverse_prefetch_metadata(td, DN_SPILL_BLKPTR(dnp), &czb);
 	}
 }
 
@@ -477,7 +477,7 @@ traverse_dnode(traverse_data_t *td, const dnode_phys_t *dnp,
 
 	if (err == 0 && (dnp->dn_flags & DNODE_FLAG_SPILL_BLKPTR)) {
 		SET_BOOKMARK(&czb, objset, object, 0, DMU_SPILL_BLKID);
-		err = traverse_visitbp(td, dnp, &dnp->dn_spill, &czb);
+		err = traverse_visitbp(td, dnp, DN_SPILL_BLKPTR(dnp), &czb);
 	}
 
 	if (err == 0 && (td->td_flags & TRAVERSE_POST)) {
@@ -499,8 +499,9 @@ traverse_prefetcher(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
     const zbookmark_phys_t *zb, const dnode_phys_t *dnp, void *arg)
 {
 	prefetch_data_t *pfd = arg;
-	arc_flags_t aflags = ARC_FLAG_NOWAIT | ARC_FLAG_PREFETCH;
-
+	arc_flags_t aflags = ARC_FLAG_NOWAIT | ARC_FLAG_PREFETCH |
+	    ARC_FLAG_PRESCIENT_PREFETCH;
+	
 	ASSERT(pfd->pd_bytes_fetched >= 0);
 	if (bp == NULL)
 		return (0);

@@ -9,7 +9,7 @@ NoEcho('
  *
  * 1. Copyright Notice
  *
- * Some or all of this work - Copyright (c) 1999 - 2017, Intel Corp.
+ * Some or all of this work - Copyright (c) 1999 - 2018, Intel Corp.
  * All rights reserved.
  *
  * 2. License
@@ -175,7 +175,7 @@ NoEcho('
 %token <i> PARSEOP_ACCESSATTRIB_BLOCK
 %token <i> PARSEOP_ACCESSATTRIB_BLOCK_CALL
 %token <i> PARSEOP_ACCESSATTRIB_BYTE
-%token <i> PARSEOP_ACCESSATTRIB_MULTIBYTE
+%token <i> PARSEOP_ACCESSATTRIB_BYTES
 %token <i> PARSEOP_ACCESSATTRIB_QUICK
 %token <i> PARSEOP_ACCESSATTRIB_RAW_BYTES
 %token <i> PARSEOP_ACCESSATTRIB_RAW_PROCESS

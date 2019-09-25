@@ -8,7 +8,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "lldb/Symbol/ObjectFile.h"
-#include "Plugins/ObjectContainer/BSD-Archive/ObjectContainerBSDArchive.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/ModuleSpec.h"
 #include "lldb/Core/PluginManager.h"
@@ -16,12 +15,10 @@
 #include "lldb/Symbol/ObjectContainer.h"
 #include "lldb/Symbol/SymbolFile.h"
 #include "lldb/Target/Process.h"
-#include "lldb/Target/RegisterContext.h"
 #include "lldb/Target/SectionLoadList.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Utility/DataBuffer.h"
 #include "lldb/Utility/DataBufferHeap.h"
-#include "lldb/Utility/DataBufferLLVM.h"
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/RegularExpression.h"
 #include "lldb/Utility/Timer.h"
@@ -49,12 +46,11 @@ ObjectFile::FindPlugin(const lldb::ModuleSP &module_sp, const FileSpec *file,
       FileSpec archive_file;
       ObjectContainerCreateInstance create_object_container_callback;
 
-      const bool file_exists = file->Exists();
+      const bool file_exists = FileSystem::Instance().Exists(*file);
       if (!data_sp) {
-        // We have an object name which most likely means we have
-        // a .o file in a static archive (.a file). Try and see if
-        // we have a cached archive first without reading any data
-        // first
+        // We have an object name which most likely means we have a .o file in
+        // a static archive (.a file). Try and see if we have a cached archive
+        // first without reading any data first
         if (file_exists && module_sp->GetObjectName()) {
           for (uint32_t idx = 0;
                (create_object_container_callback =
@@ -73,13 +69,13 @@ ObjectFile::FindPlugin(const lldb::ModuleSP &module_sp, const FileSpec *file,
               return object_file_sp;
           }
         }
-        // Ok, we didn't find any containers that have a named object, now
-        // lets read the first 512 bytes from the file so the object file
-        // and object container plug-ins can use these bytes to see if they
-        // can parse this file.
+        // Ok, we didn't find any containers that have a named object, now lets
+        // read the first 512 bytes from the file so the object file and object
+        // container plug-ins can use these bytes to see if they can parse this
+        // file.
         if (file_size > 0) {
-          data_sp =
-              DataBufferLLVM::CreateSliceFromPath(file->GetPath(), 512, file_offset);
+          data_sp = FileSystem::Instance().CreateDataBuffer(file->GetPath(),
+                                                            512, file_offset);
           data_offset = 0;
         }
       }
@@ -94,16 +90,17 @@ ObjectFile::FindPlugin(const lldb::ModuleSP &module_sp, const FileSpec *file,
         const bool must_exist = true;
         if (ObjectFile::SplitArchivePathWithObject(
                 path_with_object, archive_file, archive_object, must_exist)) {
-          file_size = archive_file.GetByteSize();
+          file_size = FileSystem::Instance().GetByteSize(archive_file);
           if (file_size > 0) {
             file = &archive_file;
             module_sp->SetFileSpecAndObjectName(archive_file, archive_object);
             // Check if this is a object container by iterating through all
-            // object
-            // container plugin instances and then trying to get an object file
-            // from the container plugins since we had a name. Also, don't read
+            // object container plugin instances and then trying to get an
+            // object file from the container plugins since we had a name.
+            // Also, don't read
             // ANY data in case there is data cached in the container plug-ins
-            // (like BSD archives caching the contained objects within an file).
+            // (like BSD archives caching the contained objects within an
+            // file).
             for (uint32_t idx = 0;
                  (create_object_container_callback =
                       PluginManager::GetObjectContainerCreateCallbackAtIndex(
@@ -120,17 +117,17 @@ ObjectFile::FindPlugin(const lldb::ModuleSP &module_sp, const FileSpec *file,
               if (object_file_sp.get())
                 return object_file_sp;
             }
-            // We failed to find any cached object files in the container
-            // plug-ins, so lets read the first 512 bytes and try again below...
-            data_sp = DataBufferLLVM::CreateSliceFromPath(archive_file.GetPath(),
-                                                     512, file_offset);
+            // We failed to find any cached object files in the container plug-
+            // ins, so lets read the first 512 bytes and try again below...
+            data_sp = FileSystem::Instance().CreateDataBuffer(
+                archive_file.GetPath(), 512, file_offset);
           }
         }
       }
 
       if (data_sp && data_sp->GetByteSize() > 0) {
-        // Check if this is a normal object file by iterating through
-        // all object file plugin instances.
+        // Check if this is a normal object file by iterating through all
+        // object file plugin instances.
         ObjectFileCreateInstance create_object_file_callback;
         for (uint32_t idx = 0;
              (create_object_file_callback =
@@ -143,9 +140,9 @@ ObjectFile::FindPlugin(const lldb::ModuleSP &module_sp, const FileSpec *file,
             return object_file_sp;
         }
 
-        // Check if this is a object container by iterating through
-        // all object container plugin instances and then trying to get
-        // an object file from the container.
+        // Check if this is a object container by iterating through all object
+        // container plugin instances and then trying to get an object file
+        // from the container.
         for (uint32_t idx = 0;
              (create_object_container_callback =
                   PluginManager::GetObjectContainerCreateCallbackAtIndex(
@@ -164,8 +161,8 @@ ObjectFile::FindPlugin(const lldb::ModuleSP &module_sp, const FileSpec *file,
       }
     }
   }
-  // We didn't find it, so clear our shared pointer in case it
-  // contains anything and return an empty shared pointer
+  // We didn't find it, so clear our shared pointer in case it contains
+  // anything and return an empty shared pointer
   object_file_sp.reset();
   return object_file_sp;
 }
@@ -186,8 +183,8 @@ ObjectFileSP ObjectFile::FindPlugin(const lldb::ModuleSP &module_sp,
                        static_cast<void *>(process_sp.get()), header_addr);
     uint32_t idx;
 
-    // Check if this is a normal object file by iterating through
-    // all object file plugin instances.
+    // Check if this is a normal object file by iterating through all object
+    // file plugin instances.
     ObjectFileCreateMemoryInstance create_callback;
     for (idx = 0;
          (create_callback =
@@ -201,8 +198,8 @@ ObjectFileSP ObjectFile::FindPlugin(const lldb::ModuleSP &module_sp,
     }
   }
 
-  // We didn't find it, so clear our shared pointer in case it
-  // contains anything and return an empty shared pointer
+  // We didn't find it, so clear our shared pointer in case it contains
+  // anything and return an empty shared pointer
   object_file_sp.reset();
   return object_file_sp;
 }
@@ -211,10 +208,12 @@ size_t ObjectFile::GetModuleSpecifications(const FileSpec &file,
                                            lldb::offset_t file_offset,
                                            lldb::offset_t file_size,
                                            ModuleSpecList &specs) {
-  DataBufferSP data_sp = DataBufferLLVM::CreateSliceFromPath(file.GetPath(), 512, file_offset);
+  DataBufferSP data_sp =
+      FileSystem::Instance().CreateDataBuffer(file.GetPath(), 512, file_offset);
   if (data_sp) {
     if (file_size == 0) {
-      const lldb::offset_t actual_file_size = file.GetByteSize();
+      const lldb::offset_t actual_file_size =
+          FileSystem::Instance().GetByteSize(file);
       if (actual_file_size > file_offset)
         file_size = actual_file_size - file_offset;
     }
@@ -326,11 +325,11 @@ AddressClass ObjectFile::GetAddressClass(addr_t file_addr) {
           const SectionType section_type = section_sp->GetType();
           switch (section_type) {
           case eSectionTypeInvalid:
-            return eAddressClassUnknown;
+            return AddressClass::eUnknown;
           case eSectionTypeCode:
-            return eAddressClassCode;
+            return AddressClass::eCode;
           case eSectionTypeContainer:
-            return eAddressClassUnknown;
+            return AddressClass::eUnknown;
           case eSectionTypeData:
           case eSectionTypeDataCString:
           case eSectionTypeDataCStringPointers:
@@ -343,45 +342,53 @@ AddressClass ObjectFile::GetAddressClass(addr_t file_addr) {
           case eSectionTypeDataObjCMessageRefs:
           case eSectionTypeDataObjCCFStrings:
           case eSectionTypeGoSymtab:
-            return eAddressClassData;
+            return AddressClass::eData;
           case eSectionTypeDebug:
           case eSectionTypeDWARFDebugAbbrev:
+          case eSectionTypeDWARFDebugAbbrevDwo:
           case eSectionTypeDWARFDebugAddr:
           case eSectionTypeDWARFDebugAranges:
           case eSectionTypeDWARFDebugCuIndex:
           case eSectionTypeDWARFDebugFrame:
           case eSectionTypeDWARFDebugInfo:
+          case eSectionTypeDWARFDebugInfoDwo:
           case eSectionTypeDWARFDebugLine:
+          case eSectionTypeDWARFDebugLineStr:
           case eSectionTypeDWARFDebugLoc:
+          case eSectionTypeDWARFDebugLocLists:
           case eSectionTypeDWARFDebugMacInfo:
           case eSectionTypeDWARFDebugMacro:
+          case eSectionTypeDWARFDebugNames:
           case eSectionTypeDWARFDebugPubNames:
           case eSectionTypeDWARFDebugPubTypes:
           case eSectionTypeDWARFDebugRanges:
+          case eSectionTypeDWARFDebugRngLists:
           case eSectionTypeDWARFDebugStr:
+          case eSectionTypeDWARFDebugStrDwo:
           case eSectionTypeDWARFDebugStrOffsets:
+          case eSectionTypeDWARFDebugStrOffsetsDwo:
+          case eSectionTypeDWARFDebugTypes:
           case eSectionTypeDWARFAppleNames:
           case eSectionTypeDWARFAppleTypes:
           case eSectionTypeDWARFAppleNamespaces:
           case eSectionTypeDWARFAppleObjC:
-            return eAddressClassDebug;
+          case eSectionTypeDWARFGNUDebugAltLink:
+            return AddressClass::eDebug;
           case eSectionTypeEHFrame:
           case eSectionTypeARMexidx:
           case eSectionTypeARMextab:
           case eSectionTypeCompactUnwind:
-            return eAddressClassRuntime;
+            return AddressClass::eRuntime;
           case eSectionTypeELFSymbolTable:
           case eSectionTypeELFDynamicSymbols:
           case eSectionTypeELFRelocationEntries:
           case eSectionTypeELFDynamicLinkInfo:
           case eSectionTypeOther:
-            return eAddressClassUnknown;
+            return AddressClass::eUnknown;
           case eSectionTypeAbsoluteAddress:
             // In case of absolute sections decide the address class based on
-            // the symbol
-            // type because the section type isn't specify if it is a code or a
-            // data
-            // section.
+            // the symbol type because the section type isn't specify if it is
+            // a code or a data section.
             break;
           }
         }
@@ -390,67 +397,67 @@ AddressClass ObjectFile::GetAddressClass(addr_t file_addr) {
       const SymbolType symbol_type = symbol->GetType();
       switch (symbol_type) {
       case eSymbolTypeAny:
-        return eAddressClassUnknown;
+        return AddressClass::eUnknown;
       case eSymbolTypeAbsolute:
-        return eAddressClassUnknown;
+        return AddressClass::eUnknown;
       case eSymbolTypeCode:
-        return eAddressClassCode;
+        return AddressClass::eCode;
       case eSymbolTypeTrampoline:
-        return eAddressClassCode;
+        return AddressClass::eCode;
       case eSymbolTypeResolver:
-        return eAddressClassCode;
+        return AddressClass::eCode;
       case eSymbolTypeData:
-        return eAddressClassData;
+        return AddressClass::eData;
       case eSymbolTypeRuntime:
-        return eAddressClassRuntime;
+        return AddressClass::eRuntime;
       case eSymbolTypeException:
-        return eAddressClassRuntime;
+        return AddressClass::eRuntime;
       case eSymbolTypeSourceFile:
-        return eAddressClassDebug;
+        return AddressClass::eDebug;
       case eSymbolTypeHeaderFile:
-        return eAddressClassDebug;
+        return AddressClass::eDebug;
       case eSymbolTypeObjectFile:
-        return eAddressClassDebug;
+        return AddressClass::eDebug;
       case eSymbolTypeCommonBlock:
-        return eAddressClassDebug;
+        return AddressClass::eDebug;
       case eSymbolTypeBlock:
-        return eAddressClassDebug;
+        return AddressClass::eDebug;
       case eSymbolTypeLocal:
-        return eAddressClassData;
+        return AddressClass::eData;
       case eSymbolTypeParam:
-        return eAddressClassData;
+        return AddressClass::eData;
       case eSymbolTypeVariable:
-        return eAddressClassData;
+        return AddressClass::eData;
       case eSymbolTypeVariableType:
-        return eAddressClassDebug;
+        return AddressClass::eDebug;
       case eSymbolTypeLineEntry:
-        return eAddressClassDebug;
+        return AddressClass::eDebug;
       case eSymbolTypeLineHeader:
-        return eAddressClassDebug;
+        return AddressClass::eDebug;
       case eSymbolTypeScopeBegin:
-        return eAddressClassDebug;
+        return AddressClass::eDebug;
       case eSymbolTypeScopeEnd:
-        return eAddressClassDebug;
+        return AddressClass::eDebug;
       case eSymbolTypeAdditional:
-        return eAddressClassUnknown;
+        return AddressClass::eUnknown;
       case eSymbolTypeCompiler:
-        return eAddressClassDebug;
+        return AddressClass::eDebug;
       case eSymbolTypeInstrumentation:
-        return eAddressClassDebug;
+        return AddressClass::eDebug;
       case eSymbolTypeUndefined:
-        return eAddressClassUnknown;
+        return AddressClass::eUnknown;
       case eSymbolTypeObjCClass:
-        return eAddressClassRuntime;
+        return AddressClass::eRuntime;
       case eSymbolTypeObjCMetaClass:
-        return eAddressClassRuntime;
+        return AddressClass::eRuntime;
       case eSymbolTypeObjCIVar:
-        return eAddressClassRuntime;
+        return AddressClass::eRuntime;
       case eSymbolTypeReExported:
-        return eAddressClassRuntime;
+        return AddressClass::eRuntime;
       }
     }
   }
-  return eAddressClassUnknown;
+  return AddressClass::eUnknown;
 }
 
 DataBufferSP ObjectFile::ReadMemory(const ProcessSP &process_sp,
@@ -470,16 +477,14 @@ DataBufferSP ObjectFile::ReadMemory(const ProcessSP &process_sp,
 size_t ObjectFile::GetData(lldb::offset_t offset, size_t length,
                            DataExtractor &data) const {
   // The entire file has already been mmap'ed into m_data, so just copy from
-  // there
-  // as the back mmap buffer will be shared with shared pointers.
+  // there as the back mmap buffer will be shared with shared pointers.
   return data.SetData(m_data, offset, length);
 }
 
 size_t ObjectFile::CopyData(lldb::offset_t offset, size_t length,
                             void *dst) const {
   // The entire file has already been mmap'ed into m_data, so just copy from
-  // there
-  // Note that the data remains in target byte order.
+  // there Note that the data remains in target byte order.
   return m_data.CopyData(offset, length, dst);
 }
 
@@ -559,8 +564,8 @@ size_t ObjectFile::ReadSectionData(Section *section,
     return GetData(section->GetFileOffset(), section->GetFileSize(),
                    section_data);
   } else {
-    // The object file now contains a full mmap'ed copy of the object file data,
-    // so just use this
+    // The object file now contains a full mmap'ed copy of the object file
+    // data, so just use this
     if (!section->IsRelocated())
       RelocateSection(section);
 
@@ -581,11 +586,9 @@ bool ObjectFile::SplitArchivePathWithObject(const char *path_with_object,
     std::string obj;
     if (regex_match.GetMatchAtIndex(path_with_object, 1, path) &&
         regex_match.GetMatchAtIndex(path_with_object, 2, obj)) {
-      archive_file.SetFile(path, false);
+      archive_file.SetFile(path, FileSpec::Style::native);
       archive_object.SetCString(obj.c_str());
-      if (must_exist && !archive_file.Exists())
-        return false;
-      return true;
+      return !(must_exist && !FileSystem::Instance().Exists(archive_file));
     }
   }
   return false;
@@ -648,41 +651,31 @@ ConstString ObjectFile::GetNextSyntheticSymbolName() {
   return ConstString(ss.GetString());
 }
 
-Status ObjectFile::LoadInMemory(Target &target, bool set_pc) {
-  Status error;
-  ProcessSP process = target.CalculateProcess();
-  if (!process)
-    return Status("No Process");
-  if (set_pc && !GetEntryPointAddress().IsValid())
-    return Status("No entry address in object file");
-
+std::vector<ObjectFile::LoadableData>
+ObjectFile::GetLoadableData(Target &target) {
+  std::vector<LoadableData> loadables;
   SectionList *section_list = GetSectionList();
   if (!section_list)
-    return Status("No section in object file");
+    return loadables;
+  // Create a list of loadable data from loadable sections
   size_t section_count = section_list->GetNumSections(0);
   for (size_t i = 0; i < section_count; ++i) {
+    LoadableData loadable;
     SectionSP section_sp = section_list->GetSectionAtIndex(i);
-    addr_t addr = target.GetSectionLoadList().GetSectionLoadAddress(section_sp);
-    if (addr != LLDB_INVALID_ADDRESS) {
-      DataExtractor section_data;
-      // We can skip sections like bss
-      if (section_sp->GetFileSize() == 0)
-        continue;
-      section_sp->GetSectionData(section_data);
-      lldb::offset_t written = process->WriteMemory(
-          addr, section_data.GetDataStart(), section_data.GetByteSize(), error);
-      if (written != section_data.GetByteSize())
-        return error;
-    }
+    loadable.Dest =
+        target.GetSectionLoadList().GetSectionLoadAddress(section_sp);
+    if (loadable.Dest == LLDB_INVALID_ADDRESS)
+      continue;
+    // We can skip sections like bss
+    if (section_sp->GetFileSize() == 0)
+      continue;
+    DataExtractor section_data;
+    section_sp->GetSectionData(section_data);
+    loadable.Contents = llvm::ArrayRef<uint8_t>(section_data.GetDataStart(),
+                                                section_data.GetByteSize());
+    loadables.push_back(loadable);
   }
-  if (set_pc) {
-    ThreadList &thread_list = process->GetThreadList();
-    ThreadSP curr_thread(thread_list.GetSelectedThread());
-    RegisterContextSP reg_context(curr_thread->GetRegisterContext());
-    Address file_entry = GetEntryPointAddress();
-    reg_context->SetPC(file_entry.GetLoadAddress(&target));
-  }
-  return error;
+  return loadables;
 }
 
 void ObjectFile::RelocateSection(lldb_private::Section *section)
@@ -691,5 +684,65 @@ void ObjectFile::RelocateSection(lldb_private::Section *section)
 
 DataBufferSP ObjectFile::MapFileData(const FileSpec &file, uint64_t Size,
                                      uint64_t Offset) {
-  return DataBufferLLVM::CreateSliceFromPath(file.GetPath(), Size, Offset);
+  return FileSystem::Instance().CreateDataBuffer(file.GetPath(), Size, Offset);
+}
+
+void llvm::format_provider<ObjectFile::Type>::format(
+    const ObjectFile::Type &type, raw_ostream &OS, StringRef Style) {
+  switch (type) {
+  case ObjectFile::eTypeInvalid:
+    OS << "invalid";
+    break;
+  case ObjectFile::eTypeCoreFile:
+    OS << "core file";
+    break;
+  case ObjectFile::eTypeExecutable:
+    OS << "executable";
+    break;
+  case ObjectFile::eTypeDebugInfo:
+    OS << "debug info";
+    break;
+  case ObjectFile::eTypeDynamicLinker:
+    OS << "dynamic linker";
+    break;
+  case ObjectFile::eTypeObjectFile:
+    OS << "object file";
+    break;
+  case ObjectFile::eTypeSharedLibrary:
+    OS << "shared library";
+    break;
+  case ObjectFile::eTypeStubLibrary:
+    OS << "stub library";
+    break;
+  case ObjectFile::eTypeJIT:
+    OS << "jit";
+    break;
+  case ObjectFile::eTypeUnknown:
+    OS << "unknown";
+    break;
+  }
+}
+
+void llvm::format_provider<ObjectFile::Strata>::format(
+    const ObjectFile::Strata &strata, raw_ostream &OS, StringRef Style) {
+  switch (strata) {
+  case ObjectFile::eStrataInvalid:
+    OS << "invalid";
+    break;
+  case ObjectFile::eStrataUnknown:
+    OS << "unknown";
+    break;
+  case ObjectFile::eStrataUser:
+    OS << "user";
+    break;
+  case ObjectFile::eStrataKernel:
+    OS << "kernel";
+    break;
+  case ObjectFile::eStrataRawImage:
+    OS << "raw image";
+    break;
+  case ObjectFile::eStrataJIT:
+    OS << "jit";
+    break;
+  }
 }

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2000-2001 Boris Popov
  * All rights reserved.
  *
@@ -104,8 +106,8 @@ smbfs_readvdir(struct vnode *vp, struct uio *uio, struct ucred *cred)
 		de.d_namlen = offset + 1;
 		de.d_name[0] = '.';
 		de.d_name[1] = '.';
-		de.d_name[offset + 1] = '\0';
 		de.d_type = DT_DIR;
+		dirent_terminate(&de);
 		error = uiomove(&de, DE_SIZE, uio);
 		if (error)
 			goto out;
@@ -154,7 +156,7 @@ smbfs_readvdir(struct vnode *vp, struct uio *uio, struct ucred *cred)
 		de.d_type = (ctx->f_attr.fa_attr & SMB_FA_DIR) ? DT_DIR : DT_REG;
 		de.d_namlen = ctx->f_nmlen;
 		bcopy(ctx->f_name, de.d_name, de.d_namlen);
-		de.d_name[de.d_namlen] = '\0';
+		dirent_terminate(&de);
 		if (smbfs_fastlookup) {
 			error = smbfs_nget(vp->v_mount, vp, ctx->f_name,
 			    ctx->f_nmlen, &ctx->f_attr, &newvp);
@@ -373,9 +375,6 @@ smbfs_doio(struct vnode *vp, struct buf *bp, struct ucred *cr, struct thread *td
 		 */
 		if (error == EINTR
 		    || (!error && (bp->b_flags & B_NEEDCOMMIT))) {
-			int s;
-
-			s = splbio();
 			bp->b_flags &= ~(B_INVAL|B_NOCACHE);
 			if ((bp->b_flags & B_ASYNC) == 0)
 			    bp->b_flags |= B_EINTR;
@@ -385,7 +384,6 @@ smbfs_doio(struct vnode *vp, struct buf *bp, struct ucred *cr, struct thread *td
 			}
 			if ((bp->b_flags & B_ASYNC) == 0)
 			    bp->b_flags |= B_EINTR;
-			splx(s);
 		} else {
 			if (error) {
 				bp->b_ioflags |= BIO_ERROR;
@@ -470,8 +468,8 @@ smbfs_getpages(ap)
 
 	kva = (vm_offset_t) bp->b_data;
 	pmap_qenter(kva, pages, npages);
-	PCPU_INC(cnt.v_vnodein);
-	PCPU_ADD(cnt.v_vnodepgsin, npages);
+	VM_CNT_INC(v_vnodein);
+	VM_CNT_ADD(v_vnodepgsin, npages);
 
 	count = npages << PAGE_SHIFT;
 	iov.iov_base = (caddr_t) kva;
@@ -595,8 +593,8 @@ smbfs_putpages(ap)
 
 	kva = (vm_offset_t) bp->b_data;
 	pmap_qenter(kva, pages, npages);
-	PCPU_INC(cnt.v_vnodeout);
-	PCPU_ADD(cnt.v_vnodepgsout, count);
+	VM_CNT_INC(v_vnodeout);
+	VM_CNT_ADD(v_vnodepgsout, count);
 
 	iov.iov_base = (caddr_t) kva;
 	iov.iov_len = count;

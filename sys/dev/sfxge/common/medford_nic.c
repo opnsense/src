@@ -43,12 +43,11 @@ efx_mcdi_get_rxdp_config(
 	__out		uint32_t *end_paddingp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_GET_RXDP_CONFIG_IN_LEN,
-			    MC_CMD_GET_RXDP_CONFIG_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_GET_RXDP_CONFIG_IN_LEN,
+		MC_CMD_GET_RXDP_CONFIG_OUT_LEN);
 	uint32_t end_padding;
 	efx_rc_t rc;
 
-	memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_GET_RXDP_CONFIG;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_GET_RXDP_CONFIG_IN_LEN;
@@ -314,6 +313,13 @@ medford_board_cfg(
 	encp->enc_evq_limit = 1024;
 	encp->enc_rxq_limit = EFX_RXQ_LIMIT_TARGET;
 	encp->enc_txq_limit = EFX_TXQ_LIMIT_TARGET;
+
+	/*
+	 * The maximum supported transmit queue size is 2048. TXQs with 4096
+	 * descriptors are not supported as the top bit is used for vfifo
+	 * stuffing.
+	 */
+	encp->enc_txq_max_ndescs = 2048;
 
 	encp->enc_buftbl_limit = 0xFFFFFFFF;
 

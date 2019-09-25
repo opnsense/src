@@ -8,7 +8,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "DWARFAttribute.h"
-#include "DWARFCompileUnit.h"
+#include "DWARFUnit.h"
 #include "DWARFDebugInfo.h"
 
 DWARFAttributes::DWARFAttributes() : m_infos() {}
@@ -26,10 +26,10 @@ uint32_t DWARFAttributes::FindAttributeIndex(dw_attr_t attr) const {
   return UINT32_MAX;
 }
 
-void DWARFAttributes::Append(const DWARFCompileUnit *cu,
-                             dw_offset_t attr_die_offset, dw_attr_t attr,
-                             dw_form_t form) {
-  AttributeValue attr_value = {cu, attr_die_offset, {attr, form}};
+void DWARFAttributes::Append(const DWARFUnit *cu, dw_offset_t attr_die_offset,
+                             dw_attr_t attr, dw_form_t form) {
+  AttributeValue attr_value = {
+      cu, attr_die_offset, {attr, form, DWARFFormValue::ValueType()}};
   m_infos.push_back(attr_value);
 }
 
@@ -48,12 +48,11 @@ bool DWARFAttributes::RemoveAttribute(dw_attr_t attr) {
 
 bool DWARFAttributes::ExtractFormValueAtIndex(
     uint32_t i, DWARFFormValue &form_value) const {
-  const DWARFCompileUnit *cu = CompileUnitAtIndex(i);
+  const DWARFUnit *cu = CompileUnitAtIndex(i);
   form_value.SetCompileUnit(cu);
   form_value.SetForm(FormAtIndex(i));
   lldb::offset_t offset = DIEOffsetAtIndex(i);
-  return form_value.ExtractValue(
-      cu->GetSymbolFileDWARF()->get_debug_info_data(), &offset);
+  return form_value.ExtractValue(cu->GetData(), &offset);
 }
 
 uint64_t DWARFAttributes::FormValueAsUnsigned(dw_attr_t attr,

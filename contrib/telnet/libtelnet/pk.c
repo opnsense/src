@@ -228,7 +228,7 @@ pk_encode(char *in, char *out, DesData *key)
 	memset(buf,0,sizeof(buf));
 	deslen = ((strlen(in) + 7)/8)*8;
 	DES_key_sched(key, &k);
-	DES_cbc_encrypt(in,buf,deslen, &k,&i,DES_ENCRYPT);
+	DES_cbc_encrypt(in, buf, deslen, &k, &i, DES_ENCRYPT);
 	for (l=0,op=0;l<deslen;l++) {
 		out[op++] = hextab[(buf[l] & 0xf0) >> 4];
 		out[op++] = hextab[(buf[l] & 0x0f)];
@@ -260,6 +260,6 @@ pk_decode(char *in, char *out, DesData *key)
 		buf[l] = n1*16 +n2;
 	}
 	DES_key_sched(key, &k);
-	DES_cbc_encrypt(buf,out,strlen(in)/2, &k,&i,DES_DECRYPT);
+	DES_cbc_encrypt(buf, out, strlen(in) / 2, &k, &i, DES_DECRYPT);
 	out[strlen(in)/2] = '\0';
 }

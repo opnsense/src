@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (C) 1994, David Greenman
  * Copyright (c) 1990, 1993
  *	The Regents of the University of California.  All rights reserved.
@@ -143,6 +145,11 @@ userret(struct thread *td, struct trapframe *frame)
 	 */
 	if (p->p_flag & P_PROFIL)
 		addupc_task(td, TRAPF_PC(frame), td->td_pticks * psratio);
+
+#ifdef HWPMC_HOOKS
+	if (PMC_THREAD_HAS_SAMPLES(td))
+		PMC_CALL_HOOK(td, PMC_FN_THR_USERRET, NULL);
+#endif
 	/*
 	 * Let the scheduler adjust our priority etc.
 	 */
@@ -159,11 +166,19 @@ userret(struct thread *td, struct trapframe *frame)
 	WITNESS_WARN(WARN_PANIC, NULL, "userret: returning");
 	KASSERT(td->td_critnest == 0,
 	    ("userret: Returning in a critical section"));
+	KASSERT(td->td_epochnest == 0,
+	    ("userret: Returning in an epoch section"));
 	KASSERT(td->td_locks == 0,
 	    ("userret: Returning with %d locks held", td->td_locks));
 	KASSERT(td->td_rw_rlocks == 0,
 	    ("userret: Returning with %d rwlocks held in read mode",
 	    td->td_rw_rlocks));
+	KASSERT(td->td_sx_slocks == 0,
+	    ("userret: Returning with %d sx locks held in shared mode",
+	    td->td_sx_slocks));
+	KASSERT(td->td_lk_slocks == 0,
+	    ("userret: Returning with %d lockmanager locks held in shared mode",
+	    td->td_lk_slocks));
 	KASSERT((td->td_pflags & TDP_NOFAULTING) == 0,
 	    ("userret: Returning with pagefaults disabled"));
 	KASSERT(td->td_no_sleeping == 0,
@@ -236,7 +251,7 @@ ast(struct trapframe *framep)
 	td->td_flags &= ~(TDF_ASTPENDING | TDF_NEEDSIGCHK | TDF_NEEDSUSPCHK |
 	    TDF_NEEDRESCHED | TDF_ALRMPEND | TDF_PROFPEND | TDF_MACPEND);
 	thread_unlock(td);
-	PCPU_INC(cnt.v_trap);
+	VM_CNT_INC(v_trap);
 
 	if (td->td_cowgen != p->p_cowgen)
 		thread_cow_update(td);
@@ -311,8 +326,10 @@ ast(struct trapframe *framep)
 	    !SIGISEMPTY(p->p_siglist)) {
 		PROC_LOCK(p);
 		mtx_lock(&p->p_sigacts->ps_mtx);
-		while ((sig = cursig(td)) != 0)
+		while ((sig = cursig(td)) != 0) {
+			KASSERT(sig >= 0, ("sig %d", sig));
 			postsig(sig);
+		}
 		mtx_unlock(&p->p_sigacts->ps_mtx);
 		PROC_UNLOCK(p);
 	}

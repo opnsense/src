@@ -15,6 +15,7 @@
 #include "sanitizer_common/sanitizer_allocator.h"
 #include "sanitizer_common/sanitizer_allocator_checks.h"
 #include "sanitizer_common/sanitizer_allocator_interface.h"
+#include "sanitizer_common/sanitizer_allocator_report.h"
 #include "sanitizer_common/sanitizer_errno.h"
 #include "msan.h"
 #include "msan_allocator.h"
@@ -56,7 +57,8 @@ struct MsanMapUnmapCallback {
     static const uptr kMetadataSize = sizeof(Metadata);
     typedef __sanitizer::CompactSizeClassMap SizeClassMap;
     static const uptr kRegionSizeLog = __msan::kRegionSizeLog;
-    typedef __msan::ByteMap ByteMap;
+    using AddressSpaceView = LocalAddressSpaceView;
+    using ByteMap = __msan::ByteMap;
     typedef MsanMapUnmapCallback MapUnmapCallback;
     static const uptr kFlags = 0;
   };
@@ -77,6 +79,7 @@ struct MsanMapUnmapCallback {
     typedef DefaultSizeClassMap SizeClassMap;
     typedef MsanMapUnmapCallback MapUnmapCallback;
     static const uptr kFlags = 0;
+    using AddressSpaceView = LocalAddressSpaceView;
   };
 
   typedef SizeClassAllocator64<AP64> PrimaryAllocator;
@@ -91,6 +94,7 @@ struct MsanMapUnmapCallback {
     typedef DefaultSizeClassMap SizeClassMap;
     typedef MsanMapUnmapCallback MapUnmapCallback;
     static const uptr kFlags = 0;
+    using AddressSpaceView = LocalAddressSpaceView;
   };
 
   typedef SizeClassAllocator64<AP64> PrimaryAllocator;
@@ -106,7 +110,8 @@ struct MsanMapUnmapCallback {
     static const uptr kMetadataSize = sizeof(Metadata);
     typedef __sanitizer::CompactSizeClassMap SizeClassMap;
     static const uptr kRegionSizeLog = __msan::kRegionSizeLog;
-    typedef __msan::ByteMap ByteMap;
+    using AddressSpaceView = LocalAddressSpaceView;
+    using ByteMap = __msan::ByteMap;
     typedef MsanMapUnmapCallback MapUnmapCallback;
     static const uptr kFlags = 0;
   };
@@ -119,7 +124,7 @@ typedef CombinedAllocator<PrimaryAllocator, AllocatorCache,
 
 static Allocator allocator;
 static AllocatorCache fallback_allocator_cache;
-static SpinMutex fallback_mutex;
+static StaticSpinMutex fallback_mutex;
 
 void MsanAllocatorInit() {
   SetAllocatorMayReturnNull(common_flags()->allocator_may_return_null);
@@ -139,9 +144,11 @@ void MsanThreadLocalMallocStorage::CommitBack() {
 static void *MsanAllocate(StackTrace *stack, uptr size, uptr alignment,
                           bool zeroise) {
   if (size > kMaxAllowedMallocSize) {
-    Report("WARNING: MemorySanitizer failed to allocate %p bytes\n",
-           (void *)size);
-    return Allocator::FailureHandler::OnBadRequest();
+    if (AllocatorMayReturnNull()) {
+      Report("WARNING: MemorySanitizer failed to allocate 0x%zx bytes\n", size);
+      return nullptr;
+    }
+    ReportAllocationSizeTooBig(size, kMaxAllowedMallocSize, stack);
   }
   MsanThread *t = GetCurrentThread();
   void *allocated;
@@ -152,6 +159,12 @@ static void *MsanAllocate(StackTrace *stack, uptr size, uptr alignment,
     SpinMutexLock l(&fallback_mutex);
     AllocatorCache *cache = &fallback_allocator_cache;
     allocated = allocator.Allocate(cache, size, alignment);
+  }
+  if (UNLIKELY(!allocated)) {
+    SetAllocatorOutOfMemory();
+    if (AllocatorMayReturnNull())
+      return nullptr;
+    ReportOutOfMemory(size, stack);
   }
   Metadata *meta =
       reinterpret_cast<Metadata *>(allocator.GetMetaData(allocated));
@@ -222,6 +235,15 @@ void *MsanReallocate(StackTrace *stack, void *old_p, uptr new_size,
   return new_p;
 }
 
+void *MsanCalloc(StackTrace *stack, uptr nmemb, uptr size) {
+  if (UNLIKELY(CheckForCallocOverflow(size, nmemb))) {
+    if (AllocatorMayReturnNull())
+      return nullptr;
+    ReportCallocOverflow(nmemb, size, stack);
+  }
+  return MsanAllocate(stack, nmemb * size, sizeof(u64), true);
+}
+
 static uptr AllocationSize(const void *p) {
   if (!p) return 0;
   const void *beg = allocator.GetBlockBegin(p);
@@ -235,9 +257,7 @@ void *msan_malloc(uptr size, StackTrace *stack) {
 }
 
 void *msan_calloc(uptr nmemb, uptr size, StackTrace *stack) {
-  if (UNLIKELY(CheckForCallocOverflow(size, nmemb)))
-    return SetErrnoOnNull(Allocator::FailureHandler::OnBadRequest());
-  return SetErrnoOnNull(MsanAllocate(stack, nmemb * size, sizeof(u64), true));
+  return SetErrnoOnNull(MsanCalloc(stack, nmemb, size));
 }
 
 void *msan_realloc(void *ptr, uptr size, StackTrace *stack) {
@@ -258,7 +278,9 @@ void *msan_pvalloc(uptr size, StackTrace *stack) {
   uptr PageSize = GetPageSizeCached();
   if (UNLIKELY(CheckForPvallocOverflow(size, PageSize))) {
     errno = errno_ENOMEM;
-    return Allocator::FailureHandler::OnBadRequest();
+    if (AllocatorMayReturnNull())
+      return nullptr;
+    ReportPvallocOverflow(size, stack);
   }
   // pvalloc(0) should allocate one page.
   size = size ? RoundUpTo(size, PageSize) : PageSize;
@@ -268,7 +290,9 @@ void *msan_pvalloc(uptr size, StackTrace *stack) {
 void *msan_aligned_alloc(uptr alignment, uptr size, StackTrace *stack) {
   if (UNLIKELY(!CheckAlignedAllocAlignmentAndSize(alignment, size))) {
     errno = errno_EINVAL;
-    return Allocator::FailureHandler::OnBadRequest();
+    if (AllocatorMayReturnNull())
+      return nullptr;
+    ReportInvalidAlignedAllocAlignment(size, alignment, stack);
   }
   return SetErrnoOnNull(MsanAllocate(stack, size, alignment, false));
 }
@@ -276,7 +300,9 @@ void *msan_aligned_alloc(uptr alignment, uptr size, StackTrace *stack) {
 void *msan_memalign(uptr alignment, uptr size, StackTrace *stack) {
   if (UNLIKELY(!IsPowerOfTwo(alignment))) {
     errno = errno_EINVAL;
-    return Allocator::FailureHandler::OnBadRequest();
+    if (AllocatorMayReturnNull())
+      return nullptr;
+    ReportInvalidAllocationAlignment(alignment, stack);
   }
   return SetErrnoOnNull(MsanAllocate(stack, size, alignment, false));
 }
@@ -284,11 +310,13 @@ void *msan_memalign(uptr alignment, uptr size, StackTrace *stack) {
 int msan_posix_memalign(void **memptr, uptr alignment, uptr size,
                         StackTrace *stack) {
   if (UNLIKELY(!CheckPosixMemalignAlignment(alignment))) {
-    Allocator::FailureHandler::OnBadRequest();
-    return errno_EINVAL;
+    if (AllocatorMayReturnNull())
+      return errno_EINVAL;
+    ReportInvalidPosixMemalignAlignment(alignment, stack);
   }
   void *ptr = MsanAllocate(stack, size, alignment, false);
   if (UNLIKELY(!ptr))
+    // OOM error is already taken care of by MsanAllocate.
     return errno_ENOMEM;
   CHECK(IsAligned((uptr)ptr, alignment));
   *memptr = ptr;

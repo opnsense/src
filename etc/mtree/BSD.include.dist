@@ -90,6 +90,8 @@
     cam
         ata
         ..
+        mmc
+        ..
         nvme
         ..
         scsi
@@ -126,8 +128,6 @@
         ..
         io
         ..
-        lmc
-        ..
         mfi
         ..
         mlx5
@@ -152,13 +152,17 @@
         ..
         ppbus
         ..
+        pwm
+        ..
         smbus
         ..
         speaker
         ..
+        tcp_log
+        ..
         usb
         ..
-        utopia
+        veriexec
         ..
         vkbd
         ..
@@ -238,7 +242,7 @@
     gssapi
     ..
     infiniband
-        complib 
+        complib
         ..
         iba
         ..
@@ -256,6 +260,8 @@
     krb5
     ..
     lib80211
+    ..
+    libipt
     ..
     libmilter
     ..
@@ -286,6 +292,8 @@
     netinet
         cc
         ..
+        netdump
+        ..
     ..
     netinet6
     ..
@@ -313,6 +321,18 @@
     ..
     nfsserver
     ..
+    opencsd
+        c_api
+        ..
+        etmv3
+        ..
+        etmv4
+        ..
+        ptm
+        ..
+        stm
+        ..
+    ..
     openssl
     ..
     pcap
@@ -338,10 +358,14 @@
         ..
         mac_partition
         ..
+        mac_veriexec
+        ..
     ..
     ssp
     ..
     sys
+        disk
+        ..
     ..
     teken
     ..

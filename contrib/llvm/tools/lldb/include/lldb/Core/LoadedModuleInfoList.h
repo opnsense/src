@@ -10,13 +10,14 @@
 #ifndef liblldb_LoadedModuleInfoList_h_
 #define liblldb_LoadedModuleInfoList_h_
 
-// C Includes
 
-// C++ Includes
+#include <cassert>
+#include <string>
 #include <vector>
 
-// Other libraries and framework includes
+#include "lldb/lldb-defines.h"
 #include "lldb/lldb-private-forward.h"
+#include "lldb/lldb-types.h"
 
 namespace lldb_private {
 class LoadedModuleInfoList {

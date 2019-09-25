@@ -10,26 +10,21 @@
 #ifndef lldb_DataVisualization_h_
 #define lldb_DataVisualization_h_
 
-// C Includes
-// C++ Includes
 
-// Other libraries and framework includes
-// Project includes
 #include "lldb/DataFormatters/FormatClasses.h"
 #include "lldb/DataFormatters/FormatManager.h"
 #include "lldb/Utility/ConstString.h"
 
 namespace lldb_private {
 
-// this class is the high-level front-end of LLDB Data Visualization
-// code in FormatManager.h/cpp is the low-level implementation of this feature
-// clients should refer to this class as the entry-point into the data
-// formatters
+// this class is the high-level front-end of LLDB Data Visualization code in
+// FormatManager.h/cpp is the low-level implementation of this feature clients
+// should refer to this class as the entry-point into the data formatters
 // unless they have a good reason to bypass this and go to the backend
 class DataVisualization {
 public:
-  // use this call to force the FM to consider itself updated even when there is
-  // no apparent reason for that
+  // use this call to force the FM to consider itself updated even when there
+  // is no apparent reason for that
   static void ForceUpdate();
 
   static uint32_t GetCurrentRevision();

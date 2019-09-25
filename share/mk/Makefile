@@ -23,11 +23,11 @@ FILES=	\
 	bsd.cpu.mk \
 	bsd.crunchgen.mk \
 	bsd.dep.mk \
+	bsd.dirs.mk \
 	bsd.doc.mk \
 	bsd.dtb.mk \
 	bsd.endian.mk \
 	bsd.files.mk \
-	bsd.hardenedbsd.mk \
 	bsd.incs.mk \
 	bsd.info.mk \
 	bsd.init.mk \
@@ -51,10 +51,13 @@ FILES=	\
 	bsd.progs.mk \
 	bsd.snmpmod.mk \
 	bsd.subdir.mk \
+	bsd.suffixes-posix.mk \
+	bsd.suffixes.mk \
 	bsd.symver.mk \
 	bsd.sys.mk \
 	bsd.test.mk \
 	dirdeps.mk \
+	dirdeps-options.mk \
 	gendirdeps.mk \
 	install-new.mk \
 	meta.autodep.mk \
@@ -70,6 +73,8 @@ FILESDIR=	${BINDIR}/mk
 
 .if ${MK_TESTS} != "no"
 FILES+=	atf.test.mk
+FILES+=	googletest.test.inc.mk
+FILES+=	googletest.test.mk
 FILES+=	plain.test.mk
 FILES+=	suite.test.mk
 FILES+=	tap.test.mk

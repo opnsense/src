@@ -10,13 +10,9 @@
 #ifndef liblldb_BreakpointResolverName_h_
 #define liblldb_BreakpointResolverName_h_
 
-// C Includes
-// C++ Includes
 #include <string>
 #include <vector>
 
-// Other libraries and framework includes
-// Project includes
 #include "lldb/Breakpoint/BreakpointResolver.h"
 #include "lldb/Core/Module.h"
 
@@ -24,32 +20,33 @@ namespace lldb_private {
 
 //----------------------------------------------------------------------
 /// @class BreakpointResolverName BreakpointResolverName.h
-/// "lldb/Breakpoint/BreakpointResolverName.h"
-/// @brief This class sets breakpoints on a given function name, either by exact
-/// match
-/// or by regular expression.
+/// "lldb/Breakpoint/BreakpointResolverName.h" This class sets breakpoints on
+/// a given function name, either by exact match or by regular expression.
 //----------------------------------------------------------------------
 
 class BreakpointResolverName : public BreakpointResolver {
 public:
   BreakpointResolverName(Breakpoint *bkpt, const char *name,
-                         uint32_t name_type_mask, lldb::LanguageType language,
+                         lldb::FunctionNameType name_type_mask,
+                         lldb::LanguageType language,
                          Breakpoint::MatchType type, lldb::addr_t offset,
                          bool skip_prologue);
 
   // This one takes an array of names.  It is always MatchType = Exact.
   BreakpointResolverName(Breakpoint *bkpt, const char *names[],
-                         size_t num_names, uint32_t name_type_mask,
+                         size_t num_names,
+                         lldb::FunctionNameType name_type_mask,
                          lldb::LanguageType language, lldb::addr_t offset,
                          bool skip_prologue);
 
   // This one takes a C++ array of names.  It is always MatchType = Exact.
   BreakpointResolverName(Breakpoint *bkpt, std::vector<std::string> names,
-                         uint32_t name_type_mask, lldb::LanguageType language,
-                         lldb::addr_t offset, bool skip_prologue);
+                         lldb::FunctionNameType name_type_mask,
+                         lldb::LanguageType language, lldb::addr_t offset,
+                         bool skip_prologue);
 
-  // Creates a function breakpoint by regular expression.  Takes over control of
-  // the lifespan of func_regex.
+  // Creates a function breakpoint by regular expression.  Takes over control
+  // of the lifespan of func_regex.
   BreakpointResolverName(Breakpoint *bkpt, RegularExpression &func_regex,
                          lldb::LanguageType language, lldb::addr_t offset,
                          bool skip_prologue);
@@ -67,7 +64,7 @@ public:
                                           SymbolContext &context, Address *addr,
                                           bool containing) override;
 
-  Searcher::Depth GetDepth() override;
+  lldb::SearchDepth GetDepth() override;
 
   void GetDescription(Stream *s) override;
 
@@ -91,7 +88,8 @@ protected:
   lldb::LanguageType m_language;
   bool m_skip_prologue;
 
-  void AddNameLookup(const ConstString &name, uint32_t name_type_mask);
+  void AddNameLookup(const ConstString &name,
+                     lldb::FunctionNameType name_type_mask);
 };
 
 } // namespace lldb_private

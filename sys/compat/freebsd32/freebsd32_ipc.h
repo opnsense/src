@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2002 Doug Rabson
  * All rights reserved.
  *
@@ -41,7 +43,7 @@ struct ipc_perm32 {
 
 struct semid_ds32 {
 	struct ipc_perm32 sem_perm;
-	uint32_t	sem_base;
+	uint32_t	__sem_base;
 	unsigned short	sem_nsems;
 	int32_t		sem_otime;
 	int32_t		sem_ctime;
@@ -67,8 +69,8 @@ union semun32 {
 
 struct msqid_ds32 {
 	struct ipc_perm32 msg_perm;
-	uint32_t	msg_first;
-	uint32_t	msg_last;
+	uint32_t	__msg_first;
+	uint32_t	__msg_last;
 	uint32_t	msg_cbytes;
 	uint32_t	msg_qnum;
 	uint32_t	msg_qbytes;
@@ -95,7 +97,7 @@ struct shmid_ds32 {
 	int32_t		shm_segsz;
 	pid_t		shm_lpid;
 	pid_t		shm_cpid;
-	int		shm_nattch;
+	unsigned int	shm_nattch;
 	int32_t		shm_atime;
 	int32_t		shm_dtime;
 	int32_t		shm_ctime;
@@ -141,7 +143,7 @@ struct ipc_perm32_old {
 
 struct semid_ds32_old {
 	struct ipc_perm32_old sem_perm;
-	uint32_t	sem_base;
+	uint32_t	__sem_base;
 	unsigned short	sem_nsems;
 	int32_t		sem_otime;
 	int32_t		sem_pad1;
@@ -152,8 +154,8 @@ struct semid_ds32_old {
 
 struct msqid_ds32_old {
 	struct ipc_perm32_old msg_perm;
-	uint32_t	msg_first;
-	uint32_t	msg_last;
+	uint32_t	__msg_first;
+	uint32_t	__msg_last;
 	uint32_t	msg_cbytes;
 	uint32_t	msg_qnum;
 	uint32_t	msg_qbytes;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015 Netflix, Inc. All Rights Reserved.
+ * Copyright (c) 2015 Netflix, Inc.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -46,6 +46,49 @@ efi_init_environment(void)
 }
 
 COMMAND_SET(efishow, "efi-show", "print some or all EFI variables", command_efi_show);
+
+const char *
+efi_memory_type(EFI_MEMORY_TYPE type)
+{
+	const char *types[] = {
+	    "Reserved",
+	    "LoaderCode",
+	    "LoaderData",
+	    "BootServicesCode",
+	    "BootServicesData",
+	    "RuntimeServicesCode",
+	    "RuntimeServicesData",
+	    "ConventionalMemory",
+	    "UnusableMemory",
+	    "ACPIReclaimMemory",
+	    "ACPIMemoryNVS",
+	    "MemoryMappedIO",
+	    "MemoryMappedIOPortSpace",
+	    "PalCode",
+	    "PersistentMemory"
+	};
+
+	switch (type) {
+	case EfiReservedMemoryType:
+	case EfiLoaderCode:
+	case EfiLoaderData:
+	case EfiBootServicesCode:
+	case EfiBootServicesData:
+	case EfiRuntimeServicesCode:
+	case EfiRuntimeServicesData:
+	case EfiConventionalMemory:
+	case EfiUnusableMemory:
+	case EfiACPIReclaimMemory:
+	case EfiACPIMemoryNVS:
+	case EfiMemoryMappedIO:
+	case EfiMemoryMappedIOPortSpace:
+	case EfiPalCode:
+	case EfiPersistentMemory:
+		return (types[type]);
+	default:
+		return ("Unknown");
+	}
+}
 
 static int
 efi_print_var(CHAR16 *varnamearg, EFI_GUID *matchguid, int lflag)
@@ -114,12 +157,12 @@ command_efi_show(int argc, char *argv[])
 	/*
 	 * efi-show [-a]
 	 *	print all the env
-	 * efi-show -u UUID
+	 * efi-show -g UUID
 	 *	print all the env vars tagged with UUID
 	 * efi-show -v var
 	 *	search all the env vars and print the ones matching var
-	 * eif-show -u UUID -v var
-	 * eif-show UUID var
+	 * efi-show -g UUID -v var
+	 * efi-show UUID var
 	 *	print all the env vars that match UUID and var
 	 */
 	/* NB: We assume EFI_GUID is the same as uuid_t */

@@ -1,4 +1,4 @@
-/*
+/*-
  * Copyright (c) 2002-2003 Luigi Rizzo
  * Copyright (c) 1996 Alex Nash, Paul Traina, Poul-Henning Kamp
  * Copyright (c) 1994 Ugen J.S.Antsilevich
@@ -37,8 +37,6 @@ struct cmdline_opts {
 	int	do_quiet;	/* Be quiet in add and flush */
 	int	do_pipe;	/* this cmd refers to a pipe/queue/sched */
 	int	do_nat; 	/* this cmd refers to a nat config */
-	int	do_dynamic;	/* display dynamic rules */
-	int	do_expired;	/* display expired dynamic rules */
 	int	do_compact;	/* show rules in compact mode */
 	int	do_force;	/* do not ask for confirmation */
 	int	show_sets;	/* display the set each rule belongs to */
@@ -48,6 +46,8 @@ struct cmdline_opts {
 
 	/* The options below can have multiple values. */
 
+	int	do_dynamic;	/* 1 - display dynamic rules */
+				/* 2 - display/delete only dynamic rules */
 	int	do_sort;	/* field to sort results (0 = no) */
 		/* valid fields are 1 and above */
 
@@ -124,7 +124,9 @@ enum tokens {
 	TOK_JAIL,
 	TOK_IN,
 	TOK_LIMIT,
+	TOK_SETLIMIT,
 	TOK_KEEPSTATE,
+	TOK_RECORDSTATE,
 	TOK_LAYER2,
 	TOK_OUT,
 	TOK_DIVERTED,
@@ -149,6 +151,7 @@ enum tokens {
 	TOK_TCPOPTS,
 	TOK_TCPSEQ,
 	TOK_TCPACK,
+	TOK_TCPMSS,
 	TOK_TCPWIN,
 	TOK_ICMPTYPES,
 	TOK_MAC,
@@ -262,6 +265,8 @@ enum tokens {
 	TOK_UNLOCK,
 	TOK_VLIST,
 	TOK_OLIST,
+	TOK_MISSING,
+	TOK_ORFLUSH,
 
 	/* NAT64 tokens */
 	TOK_NAT64STL,
@@ -276,6 +281,7 @@ enum tokens {
 	TOK_AGG_LEN,
 	TOK_AGG_COUNT,
 	TOK_MAX_PORTS,
+	TOK_STATES_CHUNKS,
 	TOK_JMAXLEN,
 	TOK_PORT_RANGE,
 	TOK_HOST_DEL_AGE,
@@ -286,14 +292,24 @@ enum tokens {
 	TOK_UDP_AGE,
 	TOK_ICMP_AGE,
 	TOK_LOGOFF,
+	TOK_PRIVATE,
+	TOK_PRIVATEOFF,
+
+	/* NAT64 CLAT tokens */
+	TOK_NAT64CLAT,
+	TOK_PLAT_PREFIX,
+	TOK_CLAT_PREFIX,
 
 	/* NPTv6 tokens */
 	TOK_NPTV6,
 	TOK_INTPREFIX,
 	TOK_EXTPREFIX,
 	TOK_PREFIXLEN,
+	TOK_EXTIF,
 
 	TOK_TCPSETMSS,
+
+	TOK_SKIPACTION,
 };
 
 /*
@@ -380,10 +396,12 @@ void ipfw_flush(int force);
 void ipfw_zero(int ac, char *av[], int optname);
 void ipfw_list(int ac, char *av[], int show_counters);
 void ipfw_internal_handler(int ac, char *av[]);
+void ipfw_nat64clat_handler(int ac, char *av[]);
 void ipfw_nat64lsn_handler(int ac, char *av[]);
 void ipfw_nat64stl_handler(int ac, char *av[]);
 void ipfw_nptv6_handler(int ac, char *av[]);
 int ipfw_check_object_name(const char *name);
+int ipfw_check_nat64prefix(const struct in6_addr *prefix, int length);
 
 #ifdef PF
 /* altq.c */

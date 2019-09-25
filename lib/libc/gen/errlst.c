@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1982, 1985, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -27,14 +29,15 @@
  * SUCH DAMAGE.
  */
 
-#if defined(LIBC_SCCS) && !defined(lint)
-static char sccsid[] = "@(#)errlst.c	8.2 (Berkeley) 11/16/93";
-#endif /* LIBC_SCCS and not lint */
 #include <sys/cdefs.h>
+__SCCSID("@(#)errlst.c	8.2 (Berkeley) 11/16/93");
 __FBSDID("$FreeBSD$");
 
+#include <errno.h>
 #include <stdio.h>
 #include "errlst.h"
+
+const char __uprefix[] = "Unknown error";
 
 const char *const sys_errlist[] = {
 	"No error: 0",				/*  0 - ENOERROR */
@@ -155,8 +158,67 @@ const char *const sys_errlist[] = {
 	"Not permitted in capability mode",	/* 94 - ECAPMODE */
 	"State not recoverable",		/* 95 - ENOTRECOVERABLE */
 	"Previous owner died",			/* 96 - EOWNERDEAD */
+
+/*
+ * Reserved space in sys_errlist, take the next slot for a next error code.
+ * Reserve prevents the array size from changing for some time.
+ */
+	__uprefix,				/* 97 */
+	__uprefix,				/* 98 */
+	__uprefix,				/* 99 */
+	__uprefix,				/* 100 */
+	__uprefix,				/* 101 */
+	__uprefix,				/* 102 */
+	__uprefix,				/* 103 */
+	__uprefix,				/* 104 */
+	__uprefix,				/* 105 */
+	__uprefix,				/* 106 */
+	__uprefix,				/* 107 */
+	__uprefix,				/* 108 */
+	__uprefix,				/* 109 */
+	__uprefix,				/* 110 */
+	__uprefix,				/* 111 */
+	__uprefix,				/* 112 */
+	__uprefix,				/* 113 */
+	__uprefix,				/* 114 */
+	__uprefix,				/* 115 */
+	__uprefix,				/* 116 */
+	__uprefix,				/* 117 */
+	__uprefix,				/* 118 */
+	__uprefix,				/* 119 */
+	__uprefix,				/* 120 */
+	__uprefix,				/* 121 */
+	__uprefix,				/* 122 */
+	__uprefix,				/* 123 */
+	__uprefix,				/* 124 */
+	__uprefix,				/* 125 */
+	__uprefix,				/* 126 */
+	__uprefix,				/* 127 */
+	__uprefix,				/* 128 */
+	__uprefix,				/* 129 */
+	__uprefix,				/* 130 */
+	__uprefix,				/* 131 */
+	__uprefix,				/* 132 */
+	__uprefix,				/* 133 */
+	__uprefix,				/* 134 */
+	__uprefix,				/* 135 */
+	__uprefix,				/* 136 */
+	__uprefix,				/* 137 */
+	__uprefix,				/* 138 */
+	__uprefix,				/* 139 */
+	__uprefix,				/* 140 */
+	__uprefix,				/* 141 */
+	__uprefix,				/* 142 */
+	__uprefix,				/* 143 */
+	__uprefix,				/* 144 */
+	__uprefix,				/* 145 */
+	__uprefix,				/* 146 */
+	__uprefix,				/* 147 */
+	__uprefix,				/* 148 */
+	__uprefix,				/* 149 */
+	__uprefix,				/* 150 */
 };
-const int sys_nerr = sizeof(sys_errlist) / sizeof(sys_errlist[0]);
+const int sys_nerr = ELAST + 1;
 
 #ifdef PIC
 __strong_reference(sys_errlist, __hidden_sys_errlist);

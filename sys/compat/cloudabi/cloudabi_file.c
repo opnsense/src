@@ -390,12 +390,11 @@ cloudabi_sys_file_readdir(struct thread *td,
 	struct file *fp;
 	struct vnode *vp;
 	void *readbuf;
-	cap_rights_t rights;
 	cloudabi_dircookie_t offset;
 	int error;
 
 	/* Obtain directory vnode. */
-	error = getvnode(td, uap->fd, cap_rights_init(&rights, CAP_READ), &fp);
+	error = getvnode(td, uap->fd, &cap_read_rights, &fp);
 	if (error != 0) {
 		if (error == EINVAL)
 			return (ENOTDIR);
@@ -559,12 +558,13 @@ cloudabi_sys_file_stat_fget(struct thread *td,
 	struct stat sb;
 	cloudabi_filestat_t csb;
 	struct file *fp;
-	cap_rights_t rights;
 	cloudabi_filetype_t filetype;
 	int error;
 
+	memset(&csb, 0, sizeof(csb));
+
 	/* Fetch file descriptor attributes. */
-	error = fget(td, uap->fd, cap_rights_init(&rights, CAP_FSTAT), &fp);
+	error = fget(td, uap->fd, &cap_fstat_rights, &fp);
 	if (error != 0)
 		return (error);
 	error = fo_stat(fp, &sb, td->td_ucred, td);
@@ -649,6 +649,8 @@ cloudabi_sys_file_stat_get(struct thread *td,
 	cloudabi_filestat_t csb;
 	char *path;
 	int error;
+
+	memset(&csb, 0, sizeof(csb));
 
 	error = copyin_path(uap->path, uap->path_len, &path);
 	if (error != 0)

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -45,6 +47,7 @@ static vop_lookup_t	dead_lookup;
 static vop_open_t	dead_open;
 static vop_getwritemount_t dead_getwritemount;
 static vop_rename_t	dead_rename;
+static vop_unset_text_t	dead_unset_text;
 
 struct vop_vector dead_vnodeops = {
 	.vop_default =		&default_vnodeops,
@@ -74,6 +77,7 @@ struct vop_vector dead_vnodeops = {
 	.vop_setattr =		VOP_EBADF,
 	.vop_symlink =		VOP_PANIC,
 	.vop_vptocnp =		VOP_EBADF,
+	.vop_unset_text =	dead_unset_text,
 	.vop_write =		dead_write,
 };
 
@@ -145,4 +149,11 @@ dead_rename(struct vop_rename_args *ap)
 
 	vop_rename_fail(ap);
 	return (EXDEV);
+}
+
+static int
+dead_unset_text(struct vop_unset_text_args *ap)
+{
+
+	return (0);
 }

@@ -343,12 +343,11 @@ efx_mcdi_fc_license_update_license(
 	__in		efx_nic_t *enp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MC_CMD_FC_IN_LICENSE_LEN];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_FC_IN_LICENSE_LEN, 0);
 	efx_rc_t rc;
 
 	EFSYS_ASSERT(enp->en_family == EFX_FAMILY_SIENA);
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_FC;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_FC_IN_LICENSE_LEN;
@@ -389,13 +388,12 @@ efx_mcdi_fc_license_get_key_stats(
 	__out		efx_key_stats_t *eksp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_FC_IN_LICENSE_LEN,
-			    MC_CMD_FC_OUT_LICENSE_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_FC_IN_LICENSE_LEN,
+		MC_CMD_FC_OUT_LICENSE_LEN);
 	efx_rc_t rc;
 
 	EFSYS_ASSERT(enp->en_family == EFX_FAMILY_SIENA);
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_FC;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_FC_IN_LICENSE_LEN;
@@ -522,7 +520,7 @@ efx_lic_v1v2_find_key(
 	return (found);
 
 fail1:
-	EFSYS_PROBE(fail1);
+	EFSYS_PROBE1(fail1, boolean_t, B_FALSE);
 
 	return (B_FALSE);
 }
@@ -565,7 +563,7 @@ fail3:
 fail2:
 	EFSYS_PROBE(fail2);
 fail1:
-	EFSYS_PROBE(fail1);
+	EFSYS_PROBE1(fail1, boolean_t, B_FALSE);
 
 	return (B_FALSE);
 }
@@ -587,7 +585,7 @@ efx_lic_v1v2_read_key(
 {
 	efx_rc_t rc;
 
-	_NOTE(ARGUNUSED(enp))
+	_NOTE(ARGUNUSED(enp, buffer_size))
 	EFSYS_ASSERT(length <= (EFX_LICENSE_V1V2_PAYLOAD_LENGTH_MAX +
 	    EFX_LICENSE_V1V2_HEADER_LENGTH));
 
@@ -659,7 +657,7 @@ efx_lic_v1v2_delete_key(
 	uint32_t move_start = offset + length;
 	uint32_t move_length = end - move_start;
 
-	_NOTE(ARGUNUSED(enp))
+	_NOTE(ARGUNUSED(enp, buffer_size))
 	EFSYS_ASSERT(end <= buffer_size);
 
 	/* Shift everything after the key down */
@@ -678,7 +676,7 @@ efx_lic_v1v2_create_partition(
 	__in			size_t buffer_size
 	)
 {
-	_NOTE(ARGUNUSED(enp))
+	_NOTE(ARGUNUSED(enp, buffer_size))
 	EFSYS_ASSERT(EFX_LICENSE_V1V2_HEADER_LENGTH <= buffer_size);
 
 	/* Write terminator */
@@ -714,8 +712,8 @@ efx_mcdi_licensed_app_state(
 	__out		boolean_t *licensedp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_GET_LICENSED_APP_STATE_IN_LEN,
-			    MC_CMD_GET_LICENSED_APP_STATE_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_GET_LICENSED_APP_STATE_IN_LEN,
+		MC_CMD_GET_LICENSED_APP_STATE_OUT_LEN);
 	uint32_t app_state;
 	efx_rc_t rc;
 
@@ -727,7 +725,6 @@ efx_mcdi_licensed_app_state(
 		goto fail1;
 	}
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_GET_LICENSED_APP_STATE;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_GET_LICENSED_APP_STATE_IN_LEN;
@@ -773,12 +770,11 @@ efx_mcdi_licensing_update_licenses(
 	__in		efx_nic_t *enp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MC_CMD_LICENSING_IN_LEN];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_LICENSING_IN_LEN, 0);
 	efx_rc_t rc;
 
 	EFSYS_ASSERT(enp->en_family == EFX_FAMILY_HUNTINGTON);
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_LICENSING;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_LICENSING_IN_LEN;
@@ -816,13 +812,12 @@ efx_mcdi_licensing_get_key_stats(
 	__out		efx_key_stats_t *eksp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_LICENSING_IN_LEN,
-			    MC_CMD_LICENSING_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_LICENSING_IN_LEN,
+		MC_CMD_LICENSING_OUT_LEN);
 	efx_rc_t rc;
 
 	EFSYS_ASSERT(enp->en_family == EFX_FAMILY_HUNTINGTON);
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_LICENSING;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_LICENSING_IN_LEN;
@@ -880,12 +875,11 @@ efx_mcdi_licensing_v3_update_licenses(
 	__in		efx_nic_t *enp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MC_CMD_LICENSING_V3_IN_LEN];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_LICENSING_V3_IN_LEN, 0);
 	efx_rc_t rc;
 
 	EFSYS_ASSERT(enp->en_family == EFX_FAMILY_MEDFORD);
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_LICENSING_V3;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_LICENSING_V3_IN_LEN;
@@ -916,13 +910,12 @@ efx_mcdi_licensing_v3_report_license(
 	__out		efx_key_stats_t *eksp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_LICENSING_V3_IN_LEN,
-			    MC_CMD_LICENSING_V3_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_LICENSING_V3_IN_LEN,
+		MC_CMD_LICENSING_V3_OUT_LEN);
 	efx_rc_t rc;
 
 	EFSYS_ASSERT(enp->en_family == EFX_FAMILY_MEDFORD);
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_LICENSING_V3;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_LICENSING_V3_IN_LEN;
@@ -979,14 +972,13 @@ efx_mcdi_licensing_v3_app_state(
 	__out		boolean_t *licensedp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_GET_LICENSED_V3_APP_STATE_IN_LEN,
-			    MC_CMD_GET_LICENSED_V3_APP_STATE_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_GET_LICENSED_V3_APP_STATE_IN_LEN,
+		MC_CMD_GET_LICENSED_V3_APP_STATE_OUT_LEN);
 	uint32_t app_state;
 	efx_rc_t rc;
 
 	EFSYS_ASSERT(enp->en_family == EFX_FAMILY_MEDFORD);
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_GET_LICENSED_V3_APP_STATE;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_GET_LICENSED_V3_APP_STATE_IN_LEN;
@@ -1037,8 +1029,8 @@ efx_mcdi_licensing_v3_get_id(
 			uint8_t *bufferp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_LICENSING_GET_ID_V3_IN_LEN,
-			    MC_CMD_LICENSING_GET_ID_V3_OUT_LENMIN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_LICENSING_GET_ID_V3_IN_LEN,
+		MC_CMD_LICENSING_GET_ID_V3_OUT_LENMIN);
 	efx_rc_t rc;
 
 	req.emr_cmd = MC_CMD_LICENSING_GET_ID_V3;
@@ -1049,7 +1041,6 @@ efx_mcdi_licensing_v3_get_id(
 		req.emr_in_length = MC_CMD_LICENSING_GET_ID_V3_IN_LEN;
 		req.emr_out_buf = bufferp;
 		req.emr_out_length = MC_CMD_LICENSING_GET_ID_V3_OUT_LENMIN;
-		(void) memset(payload, 0, sizeof (payload));
 	} else {
 		/* Request full buffer */
 		req.emr_in_buf = bufferp;
@@ -1187,7 +1178,7 @@ fail3:
 fail2:
 	EFSYS_PROBE(fail2);
 fail1:
-	EFSYS_PROBE(fail1);
+	EFSYS_PROBE1(fail1, boolean_t, B_FALSE);
 
 	return (B_FALSE);
 }

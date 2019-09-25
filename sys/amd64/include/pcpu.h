@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) Peter Wemm <peter@netplex.com.au>
  * All rights reserved.
  *
@@ -67,6 +69,7 @@
 	u_int	pc_cmci_mask;		/* MCx banks for CMCI */	\
 	uint64_t pc_dbreg[16];		/* ddb debugging regs */	\
 	uint64_t pc_pti_stack[PC_PTI_STACK_SZ];				\
+	register_t pc_pti_rsp0;						\
 	int pc_dbreg_cmd;		/* ddb debugging reg cmd */	\
 	u_int	pc_vcpu_id;		/* Xen vCPU ID */		\
 	uint32_t pc_pcid_next;						\
@@ -75,27 +78,16 @@
 	uint32_t pc_ibpb_set;						\
 	void	*pc_mds_buf;						\
 	void	*pc_mds_buf64;						\
-	uint32_t pc_pad[20];						\
+	uint32_t pc_pad[2];						\
 	uint8_t	pc_mds_tmp[64];						\
-	char	__pad[960]		/* be divisor of PAGE_SIZE	\
-					   after cache alignment */
+	char	__pad[3176]		/* pad to UMA_PCPU_ALLOC_SIZE */
 
 #define	PC_DBREG_CMD_NONE	0
 #define	PC_DBREG_CMD_LOAD	1
 
 #ifdef _KERNEL
 
-#ifdef lint
-
-extern struct pcpu *pcpup;
-
-#define	PCPU_GET(member)	(pcpup->pc_ ## member)
-#define	PCPU_ADD(member, val)	(pcpup->pc_ ## member += (val))
-#define	PCPU_INC(member)	PCPU_ADD(member, 1)
-#define	PCPU_PTR(member)	(&pcpup->pc_ ## member)
-#define	PCPU_SET(member, val)	(pcpup->pc_ ## member = (val))
-
-#elif defined(__GNUCLIKE_ASM) && defined(__GNUCLIKE___TYPEOF)
+#if defined(__GNUCLIKE_ASM) && defined(__GNUCLIKE___TYPEOF)
 
 /*
  * Evaluates to the byte offset of the per-cpu variable name.
@@ -214,6 +206,15 @@ extern struct pcpu *pcpup;
 	}								\
 }
 
+#define	get_pcpu() __extension__ ({					\
+	struct pcpu *__pc;						\
+									\
+	__asm __volatile("movq %%gs:%1,%0"				\
+	    : "=r" (__pc)						\
+	    : "m" (*(struct pcpu *)(__pcpu_offset(pc_prvspace))));	\
+	__pc;								\
+})
+
 #define	PCPU_GET(member)	__PCPU_GET(pc_ ## member)
 #define	PCPU_ADD(member, val)	__PCPU_ADD(pc_ ## member, val)
 #define	PCPU_INC(member)	__PCPU_INC(pc_ ## member)
@@ -230,8 +231,7 @@ __curthread(void)
 {
 	struct thread *td;
 
-	__asm("movq %%gs:%1,%0" : "=r" (td)
-	    : "m" (*(char *)OFFSETOF_CURTHREAD));
+	__asm("movq %%gs:%P1,%0" : "=r" (td) : "n" (OFFSETOF_CURTHREAD));
 	return (td);
 }
 #ifdef __clang__
@@ -245,18 +245,18 @@ __curpcb(void)
 {
 	struct pcb *pcb;
 
-	__asm("movq %%gs:%1,%0" : "=r" (pcb) : "m" (*(char *)OFFSETOF_CURPCB));
+	__asm("movq %%gs:%P1,%0" : "=r" (pcb) : "n" (OFFSETOF_CURPCB));
 	return (pcb);
 }
 #define	curpcb		(__curpcb())
 
 #define	IS_BSP()	(PCPU_GET(cpuid) == 0)
 
-#else /* !lint || defined(__GNUCLIKE_ASM) && defined(__GNUCLIKE___TYPEOF) */
+#else /* !__GNUCLIKE_ASM || !__GNUCLIKE___TYPEOF */
 
 #error "this file needs to be ported to your compiler"
 
-#endif /* lint, etc. */
+#endif /* __GNUCLIKE_ASM && __GNUCLIKE___TYPEOF */
 
 #endif /* _KERNEL */
 

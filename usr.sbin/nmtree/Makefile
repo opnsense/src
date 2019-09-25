@@ -19,8 +19,7 @@ LIBADD=		netbsd md util
 LINKS=		${BINDIR}/mtree ${BINDIR}/nmtree
 MLINKS=		mtree.8 nmtree.8
 
-.if ${MK_TESTS} != "no"
-SUBDIR+=	tests
-.endif
+HAS_TESTS=
+SUBDIR.${MK_TESTS}+= tests
 
 .include <bsd.prog.mk>

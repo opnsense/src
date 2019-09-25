@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1982, 1986, 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -16,7 +18,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -38,13 +40,13 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
-#include "opt_compat.h"
 #include "opt_posix.h"
 #include "opt_config.h"
 
 #include <sys/param.h>
 #include <sys/jail.h>
 #include <sys/kernel.h>
+#include <sys/limits.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
 #include <sys/proc.h>
@@ -84,8 +86,6 @@ SYSCTL_ROOT_NODE(OID_AUTO,  compat, CTLFLAG_RW, 0,
 	"Compatibility code");
 SYSCTL_ROOT_NODE(OID_AUTO, security, CTLFLAG_RW, 0, 
      	"Security");
-SYSCTL_ROOT_NODE(OID_AUTO, hardening, CTLFLAG_RW, 0,
-	"Kernel hardening features");
 #ifdef REGRESSION
 SYSCTL_ROOT_NODE(OID_AUTO, regression, CTLFLAG_RW, 0,
      "Regression test MIB");
@@ -136,10 +136,13 @@ SYSCTL_INT(_kern, KERN_SAVED_IDS, saved_ids, CTLFLAG_RD|CTLFLAG_CAPRD,
     SYSCTL_NULL_INT_PTR, 0, "Whether saved set-group/user ID is available");
 #endif
 
-char kernelname[MAXPATHLEN] = "/kernel";	/* XXX bloat */
+char kernelname[MAXPATHLEN] = "/boot/kernel/kernel";	/* XXX bloat */
 
 SYSCTL_STRING(_kern, KERN_BOOTFILE, bootfile, CTLFLAG_RW | CTLFLAG_MPSAFE,
     kernelname, sizeof kernelname, "Name of kernel file booted");
+
+SYSCTL_INT(_kern, KERN_MAXPHYS, maxphys, CTLFLAG_RD | CTLFLAG_CAPRD,
+    SYSCTL_NULL_INT_PTR, MAXPHYS, "Maximum block I/O access size");
 
 SYSCTL_INT(_hw, HW_NCPU, ncpu, CTLFLAG_RD|CTLFLAG_CAPRD,
     &mp_ncpus, 0, "Number of active CPUs");
@@ -175,37 +178,51 @@ SYSCTL_PROC(_kern, KERN_ARND, arandom,
 static int
 sysctl_hw_physmem(SYSCTL_HANDLER_ARGS)
 {
-	u_long val;
+	u_long val, p;
 
-	val = ctob(physmem);
+	p = SIZE_T_MAX >> PAGE_SHIFT;
+	if (physmem < p)
+		p = physmem;
+	val = ctob(p);
 	return (sysctl_handle_long(oidp, &val, 0, req));
 }
-
 SYSCTL_PROC(_hw, HW_PHYSMEM, physmem, CTLTYPE_ULONG | CTLFLAG_RD,
-	0, 0, sysctl_hw_physmem, "LU", "");
+    0, 0, sysctl_hw_physmem, "LU",
+    "Amount of physical memory (in bytes)");
 
 static int
 sysctl_hw_realmem(SYSCTL_HANDLER_ARGS)
 {
-	u_long val;
-	val = ctob(realmem);
+	u_long val, p;
+
+	p = SIZE_T_MAX >> PAGE_SHIFT;
+	if (realmem < p)
+		p = realmem;
+	val = ctob(p);
 	return (sysctl_handle_long(oidp, &val, 0, req));
 }
 SYSCTL_PROC(_hw, HW_REALMEM, realmem, CTLTYPE_ULONG | CTLFLAG_RD,
-	0, 0, sysctl_hw_realmem, "LU", "");
+    0, 0, sysctl_hw_realmem, "LU",
+    "Amount of memory (in bytes) reported by the firmware");
+
 static int
 sysctl_hw_usermem(SYSCTL_HANDLER_ARGS)
 {
-	u_long val;
+	u_long val, p, p1;
 
-	val = ctob(physmem - vm_cnt.v_wire_count);
+	p1 = physmem - vm_wire_count();
+	p = SIZE_T_MAX >> PAGE_SHIFT;
+	if (p1 < p)
+		p = p1;
+	val = ctob(p);
 	return (sysctl_handle_long(oidp, &val, 0, req));
 }
-
 SYSCTL_PROC(_hw, HW_USERMEM, usermem, CTLTYPE_ULONG | CTLFLAG_RD,
-	0, 0, sysctl_hw_usermem, "LU", "");
+    0, 0, sysctl_hw_usermem, "LU",
+    "Amount of memory (in bytes) which is not wired");
 
-SYSCTL_LONG(_hw, OID_AUTO, availpages, CTLFLAG_RD, &physmem, 0, "");
+SYSCTL_LONG(_hw, OID_AUTO, availpages, CTLFLAG_RD, &physmem, 0,
+    "Amount of physical memory (in pages)");
 
 u_long pagesizes[MAXPAGESIZES] = { PAGE_SIZE };
 
@@ -320,15 +337,15 @@ sysctl_hostname(SYSCTL_HANDLER_ARGS)
 }
 
 SYSCTL_PROC(_kern, KERN_HOSTNAME, hostname,
-    CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_PRISON | CTLFLAG_MPSAFE,
+    CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_PRISON | CTLFLAG_CAPRD | CTLFLAG_MPSAFE,
     (void *)(offsetof(struct prison, pr_hostname)), MAXHOSTNAMELEN,
     sysctl_hostname, "A", "Hostname");
 SYSCTL_PROC(_kern, KERN_NISDOMAINNAME, domainname,
-    CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_PRISON | CTLFLAG_MPSAFE,
+    CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_PRISON | CTLFLAG_CAPRD | CTLFLAG_MPSAFE,
     (void *)(offsetof(struct prison, pr_domainname)), MAXHOSTNAMELEN,
     sysctl_hostname, "A", "Name of the current YP/NIS domain");
 SYSCTL_PROC(_kern, KERN_HOSTUUID, hostuuid,
-    CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_PRISON | CTLFLAG_MPSAFE,
+    CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_PRISON | CTLFLAG_CAPRD | CTLFLAG_MPSAFE,
     (void *)(offsetof(struct prison, pr_hostuuid)), HOSTUUIDLEN,
     sysctl_hostname, "A", "Host UUID");
 

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright 2003-2011 Netlogic Microsystems (Netlogic). All rights
  * reserved.
  *
@@ -202,7 +204,7 @@ xlp_handle_msg_vc(u_int vcmask, int max_msgs)
 			nlm_restore_flags(mflags);
 			if (status != 0)	/*  no msg or error */
 				continue;
-			if (srcid < 0 && srcid >= 1024) {
+			if (srcid < 0 || srcid >= 1024) {
 				printf("[%s]: bad src id %d\n", __func__,
 				    srcid);
 				continue;

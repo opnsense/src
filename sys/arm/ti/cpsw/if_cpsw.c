@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2012 Damjan Marion <dmarion@Freebsd.org>
  * Copyright (c) 2016 Rubicon Communications, LLC (Netgate)
  * All rights reserved.
@@ -78,9 +80,10 @@ __FBSDID("$FreeBSD$");
 #include <dev/mii/mii.h>
 #include <dev/mii/miivar.h>
 
-#include <dev/fdt/fdt_common.h>
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
+
+#include <dev/fdt/fdt_common.h>
  
 #ifdef CPSW_ETHERSWITCH
 #include <dev/etherswitch/etherswitch.h>
@@ -741,25 +744,31 @@ cpsw_get_fdt_data(struct cpsw_softc *sc, int port)
 	phandle_t child;
 	unsigned long mdio_child_addr;
 
-	/* Find any slave with phy_id */
+	/* Find any slave with phy-handle/phy_id */
 	phy = -1;
 	vlan = -1;
 	for (child = OF_child(sc->node); child != 0; child = OF_peer(child)) {
-		if (OF_getprop_alloc(child, "name", 1, (void **)&name) < 0)
+		if (OF_getprop_alloc(child, "name", (void **)&name) < 0)
 			continue;
 		if (sscanf(name, "slave@%lx", &mdio_child_addr) != 1) {
 			OF_prop_free(name);
 			continue;
 		}
 		OF_prop_free(name);
-		if (mdio_child_addr != slave_mdio_addr[port])
+
+		if (mdio_child_addr != slave_mdio_addr[port] &&
+		    mdio_child_addr != (slave_mdio_addr[port] & 0xFFF))
 			continue;
 
-		len = OF_getproplen(child, "phy_id");
-		if (len / sizeof(pcell_t) == 2) {
-			/* Get phy address from fdt */
-			if (OF_getencprop(child, "phy_id", phy_id, len) > 0)
-				phy = phy_id[1];
+		if (fdt_get_phyaddr(child, NULL, &phy, NULL) != 0){
+			/* Users with old DTB will have phy_id instead */
+			phy = -1;
+			len = OF_getproplen(child, "phy_id");
+			if (len / sizeof(pcell_t) == 2) {
+				/* Get phy address from fdt */
+				if (OF_getencprop(child, "phy_id", phy_id, len) > 0)
+					phy = phy_id[1];
+			}
 		}
 
 		len = OF_getproplen(child, "dual_emac_res_vlan");
@@ -2464,7 +2473,7 @@ cpswp_ale_update_addresses(struct cpswp_softc *sc, int purge)
 
         /* Set other multicast addrs desired. */
         if_maddr_rlock(sc->ifp);
-        TAILQ_FOREACH(ifma, &sc->ifp->if_multiaddrs, ifma_link) {
+        CK_STAILQ_FOREACH(ifma, &sc->ifp->if_multiaddrs, ifma_link) {
                 if (ifma->ifma_addr->sa_family != AF_LINK)
                         continue;
 		cpsw_ale_mc_entry_set(sc->swsc, portmask, sc->vlan,

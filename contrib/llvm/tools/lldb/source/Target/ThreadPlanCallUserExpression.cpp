@@ -9,11 +9,7 @@
 
 #include "lldb/Target/ThreadPlanCallUserExpression.h"
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
 
-// Project includes
 #include "lldb/Breakpoint/Breakpoint.h"
 #include "lldb/Breakpoint/BreakpointLocation.h"
 #include "lldb/Core/Address.h"
@@ -44,8 +40,8 @@ ThreadPlanCallUserExpression::ThreadPlanCallUserExpression(
     lldb::UserExpressionSP &user_expression_sp)
     : ThreadPlanCallFunction(thread, function, CompilerType(), args, options),
       m_user_expression_sp(user_expression_sp) {
-  // User expressions are generally "User generated" so we should set them up to
-  // stop when done.
+  // User expressions are generally "User generated" so we should set them up
+  // to stop when done.
   SetIsMasterPlan(true);
   SetOkayToDiscard(false);
 }

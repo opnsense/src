@@ -58,8 +58,8 @@ efx_mcdi_init_txq(
 	__in		efsys_mem_t *esmp)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_INIT_TXQ_IN_LEN(EFX_TXQ_MAX_BUFS),
-			    MC_CMD_INIT_TXQ_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_INIT_TXQ_IN_LEN(EFX_TXQ_MAX_BUFS),
+		MC_CMD_INIT_TXQ_OUT_LEN);
 	efx_qword_t *dma_addr;
 	uint64_t addr;
 	int npages;
@@ -67,15 +67,14 @@ efx_mcdi_init_txq(
 	efx_rc_t rc;
 
 	EFSYS_ASSERT(EFX_TXQ_MAX_BUFS >=
-	    EFX_TXQ_NBUFS(EFX_TXQ_MAXNDESCS(&enp->en_nic_cfg)));
+	    EFX_TXQ_NBUFS(enp->en_nic_cfg.enc_txq_max_ndescs));
 
 	npages = EFX_TXQ_NBUFS(size);
-	if (npages > MC_CMD_INIT_TXQ_IN_DMA_ADDR_MAXNUM) {
+	if (MC_CMD_INIT_TXQ_IN_LEN(npages) > sizeof (payload)) {
 		rc = EINVAL;
 		goto fail1;
 	}
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_INIT_TXQ;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_INIT_TXQ_IN_LEN(npages);
@@ -87,12 +86,16 @@ efx_mcdi_init_txq(
 	MCDI_IN_SET_DWORD(req, INIT_TXQ_IN_LABEL, label);
 	MCDI_IN_SET_DWORD(req, INIT_TXQ_IN_INSTANCE, instance);
 
-	MCDI_IN_POPULATE_DWORD_7(req, INIT_TXQ_IN_FLAGS,
+	MCDI_IN_POPULATE_DWORD_9(req, INIT_TXQ_IN_FLAGS,
 	    INIT_TXQ_IN_FLAG_BUFF_MODE, 0,
 	    INIT_TXQ_IN_FLAG_IP_CSUM_DIS,
 	    (flags & EFX_TXQ_CKSUM_IPV4) ? 0 : 1,
 	    INIT_TXQ_IN_FLAG_TCP_CSUM_DIS,
 	    (flags & EFX_TXQ_CKSUM_TCPUDP) ? 0 : 1,
+	    INIT_TXQ_EXT_IN_FLAG_INNER_IP_CSUM_EN,
+	    (flags & EFX_TXQ_CKSUM_INNER_IPV4) ? 1 : 0,
+	    INIT_TXQ_EXT_IN_FLAG_INNER_TCP_CSUM_EN,
+	    (flags & EFX_TXQ_CKSUM_INNER_TCPUDP) ? 1 : 0,
 	    INIT_TXQ_EXT_IN_FLAG_TSOV2_EN, (flags & EFX_TXQ_FATSOV2) ? 1 : 0,
 	    INIT_TXQ_IN_FLAG_TCP_UDP_ONLY, 0,
 	    INIT_TXQ_IN_CRC_MODE, 0,
@@ -136,11 +139,10 @@ efx_mcdi_fini_txq(
 	__in		uint32_t instance)
 {
 	efx_mcdi_req_t req;
-	uint8_t payload[MAX(MC_CMD_FINI_TXQ_IN_LEN,
-			    MC_CMD_FINI_TXQ_OUT_LEN)];
+	EFX_MCDI_DECLARE_BUF(payload, MC_CMD_FINI_TXQ_IN_LEN,
+		MC_CMD_FINI_TXQ_OUT_LEN);
 	efx_rc_t rc;
 
-	(void) memset(payload, 0, sizeof (payload));
 	req.emr_cmd = MC_CMD_FINI_TXQ;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_FINI_TXQ_IN_LEN;
@@ -151,7 +153,7 @@ efx_mcdi_fini_txq(
 
 	efx_mcdi_execute_quiet(enp, &req);
 
-	if ((req.emr_rc != 0) && (req.emr_rc != MC_CMD_ERR_EALREADY)) {
+	if (req.emr_rc != 0) {
 		rc = req.emr_rc;
 		goto fail1;
 	}
@@ -159,7 +161,12 @@ efx_mcdi_fini_txq(
 	return (0);
 
 fail1:
-	EFSYS_PROBE1(fail1, efx_rc_t, rc);
+	/*
+	 * EALREADY is not an error, but indicates that the MC has rebooted and
+	 * that the TXQ has already been destroyed.
+	 */
+	if (rc != EALREADY)
+		EFSYS_PROBE1(fail1, efx_rc_t, rc);
 
 	return (rc);
 }
@@ -192,14 +199,23 @@ ef10_tx_qcreate(
 	__in		efx_txq_t *etp,
 	__out		unsigned int *addedp)
 {
-	efx_qword_t desc;
+	efx_nic_cfg_t *encp = &enp->en_nic_cfg;
+	uint16_t inner_csum;
+	efx_desc_t desc;
 	efx_rc_t rc;
 
 	_NOTE(ARGUNUSED(id))
 
+	inner_csum = EFX_TXQ_CKSUM_INNER_IPV4 | EFX_TXQ_CKSUM_INNER_TCPUDP;
+	if (((flags & inner_csum) != 0) &&
+	    (encp->enc_tunnel_encapsulations_supported == 0)) {
+		rc = EINVAL;
+		goto fail1;
+	}
+
 	if ((rc = efx_mcdi_init_txq(enp, n, eep->ee_index, label, index, flags,
 	    esmp)) != 0)
-		goto fail1;
+		goto fail2;
 
 	/*
 	 * A previous user of this TX queue may have written a descriptor to the
@@ -210,19 +226,15 @@ ef10_tx_qcreate(
 	 * a no-op TX option descriptor. See bug29981 for details.
 	 */
 	*addedp = 1;
-	EFX_POPULATE_QWORD_4(desc,
-	    ESF_DZ_TX_DESC_IS_OPT, 1,
-	    ESF_DZ_TX_OPTION_TYPE, ESE_DZ_TX_OPTION_DESC_CRC_CSUM,
-	    ESF_DZ_TX_OPTION_UDP_TCP_CSUM,
-	    (flags & EFX_TXQ_CKSUM_TCPUDP) ? 1 : 0,
-	    ESF_DZ_TX_OPTION_IP_CSUM,
-	    (flags & EFX_TXQ_CKSUM_IPV4) ? 1 : 0);
+	ef10_tx_qdesc_checksum_create(etp, flags, &desc);
 
-	EFSYS_MEM_WRITEQ(etp->et_esmp, 0, &desc);
+	EFSYS_MEM_WRITEQ(etp->et_esmp, 0, &desc.ed_eq);
 	ef10_tx_qpush(etp, *addedp, 0);
 
 	return (0);
 
+fail2:
+	EFSYS_PROBE(fail2);
 fail1:
 	EFSYS_PROBE1(fail1, efx_rc_t, rc);
 
@@ -284,10 +296,10 @@ ef10_tx_qpio_enable(
 
 fail3:
 	EFSYS_PROBE(fail3);
-	ef10_nic_pio_free(enp, etp->et_pio_bufnum, etp->et_pio_blknum);
-	etp->et_pio_size = 0;
+	(void) ef10_nic_pio_free(enp, etp->et_pio_bufnum, etp->et_pio_blknum);
 fail2:
 	EFSYS_PROBE(fail2);
+	etp->et_pio_size = 0;
 fail1:
 	EFSYS_PROBE1(fail1, efx_rc_t, rc);
 
@@ -302,10 +314,12 @@ ef10_tx_qpio_disable(
 
 	if (etp->et_pio_size != 0) {
 		/* Unlink the piobuf from this TXQ */
-		ef10_nic_pio_unlink(enp, etp->et_index);
+		if (ef10_nic_pio_unlink(enp, etp->et_index) != 0)
+			return;
 
 		/* Free the sub-allocated PIO block */
-		ef10_nic_pio_free(enp, etp->et_pio_bufnum, etp->et_pio_blknum);
+		(void) ef10_nic_pio_free(enp, etp->et_pio_bufnum,
+		    etp->et_pio_blknum);
 		etp->et_pio_size = 0;
 		etp->et_pio_write_offset = 0;
 	}
@@ -585,6 +599,8 @@ ef10_tx_qdesc_dma_create(
 	__in	boolean_t eop,
 	__out	efx_desc_t *edp)
 {
+	_NOTE(ARGUNUSED(etp))
+
 	/* No limitations on boundary crossing */
 	EFSYS_ASSERT(size <= etp->et_enp->en_nic_cfg.enc_tx_dma_desc_size_max);
 
@@ -608,6 +624,8 @@ ef10_tx_qdesc_tso_create(
 	__in	uint8_t  tcp_flags,
 	__out	efx_desc_t *edp)
 {
+	_NOTE(ARGUNUSED(etp))
+
 	EFSYS_PROBE4(tx_desc_tso_create, unsigned int, etp->et_index,
 		    uint16_t, ipv4_id, uint32_t, tcp_seq,
 		    uint8_t, tcp_flags);
@@ -630,6 +648,8 @@ ef10_tx_qdesc_tso2_create(
 	__out_ecount(count)	efx_desc_t *edp,
 	__in			int count)
 {
+	_NOTE(ARGUNUSED(etp, count))
+
 	EFSYS_PROBE4(tx_desc_tso2_create, unsigned int, etp->et_index,
 		    uint16_t, ipv4_id, uint32_t, tcp_seq,
 		    uint16_t, tcp_mss);
@@ -659,6 +679,8 @@ ef10_tx_qdesc_vlantci_create(
 	__in	uint16_t  tci,
 	__out	efx_desc_t *edp)
 {
+	_NOTE(ARGUNUSED(etp))
+
 	EFSYS_PROBE2(tx_desc_vlantci_create, unsigned int, etp->et_index,
 		    uint16_t, tci);
 
@@ -668,6 +690,30 @@ ef10_tx_qdesc_vlantci_create(
 			    ESE_DZ_TX_OPTION_DESC_VLAN,
 			    ESF_DZ_TX_VLAN_OP, tci ? 1 : 0,
 			    ESF_DZ_TX_VLAN_TAG1, tci);
+}
+
+	void
+ef10_tx_qdesc_checksum_create(
+	__in	efx_txq_t *etp,
+	__in	uint16_t flags,
+	__out	efx_desc_t *edp)
+{
+	_NOTE(ARGUNUSED(etp));
+
+	EFSYS_PROBE2(tx_desc_checksum_create, unsigned int, etp->et_index,
+		    uint32_t, flags);
+
+	EFX_POPULATE_QWORD_6(edp->ed_eq,
+	    ESF_DZ_TX_DESC_IS_OPT, 1,
+	    ESF_DZ_TX_OPTION_TYPE, ESE_DZ_TX_OPTION_DESC_CRC_CSUM,
+	    ESF_DZ_TX_OPTION_UDP_TCP_CSUM,
+	    (flags & EFX_TXQ_CKSUM_TCPUDP) ? 1 : 0,
+	    ESF_DZ_TX_OPTION_IP_CSUM,
+	    (flags & EFX_TXQ_CKSUM_IPV4) ? 1 : 0,
+	    ESF_DZ_TX_OPTION_INNER_UDP_TCP_CSUM,
+	    (flags & EFX_TXQ_CKSUM_INNER_TCPUDP) ? 1 : 0,
+	    ESF_DZ_TX_OPTION_INNER_IP_CSUM,
+	    (flags & EFX_TXQ_CKSUM_INNER_IPV4) ? 1 : 0);
 }
 
 
@@ -690,7 +736,14 @@ ef10_tx_qpace(
 	return (0);
 
 fail1:
-	EFSYS_PROBE1(fail1, efx_rc_t, rc);
+	/*
+	 * EALREADY is not an error, but indicates that the MC has rebooted and
+	 * that the TXQ has already been destroyed. Callers need to know that
+	 * the TXQ flush has completed to avoid waiting until timeout for a
+	 * flush done event that will not be delivered.
+	 */
+	if (rc != EALREADY)
+		EFSYS_PROBE1(fail1, efx_rc_t, rc);
 
 	return (rc);
 }

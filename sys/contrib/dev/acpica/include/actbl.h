@@ -8,7 +8,7 @@
  *
  * 1. Copyright Notice
  *
- * Some or all of this work - Copyright (c) 1999 - 2017, Intel Corp.
+ * Some or all of this work - Copyright (c) 1999 - 2018, Intel Corp.
  * All rights reserved.
  *
  * 2. License
@@ -182,6 +182,7 @@
 #define ACPI_SIG_XSDT           "XSDT"      /* Extended  System Description Table */
 #define ACPI_SIG_SSDT           "SSDT"      /* Secondary System Description Table */
 #define ACPI_RSDP_NAME          "RSDP"      /* Short name for RSDP, not signature */
+#define ACPI_OEM_NAME           "OEM"       /* Short name for OEM, not signature */
 
 
 /*

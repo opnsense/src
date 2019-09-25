@@ -10,6 +10,10 @@ ATF_TESTS_C+=		fmtmsg_test
 ATF_TESTS_C+=		fnmatch2_test
 ATF_TESTS_C+=		fpclassify2_test
 ATF_TESTS_C+=		ftw_test
+ATF_TESTS_C+=		getentropy_test
+ATF_TESTS_C+=		getmntinfo_test
+ATF_TESTS_C+=		glob2_test
+ATF_TESTS_C+=		makecontext_test
 ATF_TESTS_C+=		popen_test
 ATF_TESTS_C+=		posix_spawn_test
 ATF_TESTS_C+=		realpath2_test
@@ -58,6 +62,8 @@ NETBSD_ATF_TESTS_C+=	vis_test
 
 .include "../Makefile.netbsd-tests"
 
+CFLAGS.getentropy_test+=	-I${SRCTOP}/include
+LIBADD.getentropy_test+=	c
 LIBADD.humanize_number_test+=	util
 
 LIBADD.fpclassify_test+=m

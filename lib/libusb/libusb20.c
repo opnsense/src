@@ -1,5 +1,7 @@
 /* $FreeBSD$ */
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2008-2009 Hans Petter Selasky. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -812,6 +814,7 @@ libusb20_dev_req_string_sync(struct libusb20_device *pdev,
 {
 	struct LIBUSB20_CONTROL_SETUP_DECODED req;
 	int error;
+	int flags;
 
 	/* make sure memory is initialised */
 	memset(ptr, 0, len);
@@ -838,22 +841,24 @@ libusb20_dev_req_string_sync(struct libusb20_device *pdev,
 	error = libusb20_dev_request_sync(pdev, &req,
 	    ptr, NULL, 1000, LIBUSB20_TRANSFER_SINGLE_SHORT_NOT_OK);
 	if (error) {
-		return (error);
+		/* try to request full string */
+		req.wLength = 255;
+		flags = 0;
+	} else {
+		/* extract length and request full string */
+		req.wLength = *(uint8_t *)ptr;
+		flags = LIBUSB20_TRANSFER_SINGLE_SHORT_NOT_OK;
 	}
-	req.wLength = *(uint8_t *)ptr;	/* bytes */
 	if (req.wLength > len) {
 		/* partial string read */
 		req.wLength = len;
 	}
-	error = libusb20_dev_request_sync(pdev, &req,
-	    ptr, NULL, 1000, LIBUSB20_TRANSFER_SINGLE_SHORT_NOT_OK);
-
-	if (error) {
+	error = libusb20_dev_request_sync(pdev, &req, ptr, NULL, 1000, flags);
+	if (error)
 		return (error);
-	}
-	if (((uint8_t *)ptr)[1] != LIBUSB20_DT_STRING) {
+
+	if (((uint8_t *)ptr)[1] != LIBUSB20_DT_STRING)
 		return (LIBUSB20_ERROR_OTHER);
-	}
 	return (0);			/* success */
 }
 
@@ -949,6 +954,14 @@ libusb20_dev_alloc_config(struct libusb20_device *pdev, uint8_t configIndex)
 	uint16_t len;
 	uint8_t do_close;
 	int error;
+
+	/*
+	 * Catch invalid configuration descriptor reads early on to
+	 * avoid issues with devices that don't check for a valid USB
+	 * configuration read request.
+	 */
+	if (configIndex >= pdev->ddesc.bNumConfigurations)
+		return (NULL);
 
 	if (!pdev->is_opened) {
 		error = libusb20_dev_open(pdev, 0);

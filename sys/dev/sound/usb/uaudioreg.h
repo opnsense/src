@@ -2,6 +2,8 @@
 /* $FreeBSD$ */
 
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ *
  * Copyright (c) 1999 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
@@ -34,7 +36,7 @@
 #ifndef _UAUDIOREG_H_
 #define	_UAUDIOREG_H_
 
-#define	UAUDIO_VERSION		0x0100
+#define	UAUDIO_VERSION_10	0x0100
 #define	UAUDIO_VERSION_20	0x0200
 #define	UAUDIO_VERSION_30	0x0300
 

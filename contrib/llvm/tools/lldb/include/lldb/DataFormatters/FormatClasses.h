@@ -10,15 +10,11 @@
 #ifndef lldb_FormatClasses_h_
 #define lldb_FormatClasses_h_
 
-// C Includes
-// C++ Includes
 #include <functional>
 #include <memory>
 #include <string>
 #include <vector>
 
-// Other libraries and framework includes
-// Project includes
 #include "lldb/DataFormatters/TypeFormat.h"
 #include "lldb/DataFormatters/TypeSummary.h"
 #include "lldb/DataFormatters/TypeSynthetic.h"
@@ -160,8 +156,8 @@ public:
 
 private:
   bool m_is_regex;
-  // this works better than TypeAndOrName because the latter only wraps a TypeSP
-  // whereas TypePair can also be backed by a CompilerType
+  // this works better than TypeAndOrName because the latter only wraps a
+  // TypeSP whereas TypePair can also be backed by a CompilerType
   struct TypeOrName {
     std::string m_type_name;
     TypePair m_type_pair;

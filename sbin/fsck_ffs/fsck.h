@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause and BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2002 Networks Associates Technology, Inc.
  * All rights reserved.
  *
@@ -40,7 +42,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -229,7 +231,9 @@ struct inodesc {
 	ino_t id_parent;	/* for DATA nodes, their parent */
 	ufs_lbn_t id_lbn;	/* logical block number of current block */
 	ufs2_daddr_t id_blkno;	/* current block number being examined */
+	int id_level;		/* level of indirection of this block */
 	int id_numfrags;	/* number of frags contained in block */
+	ufs_lbn_t id_lballoc;	/* pass1: last LBN that is allocated */
 	off_t id_filesize;	/* for DATA nodes, the size of the directory */
 	ufs2_daddr_t id_entryno;/* for DATA nodes, current entry number */
 	int id_loc;		/* for DATA nodes, current location in dir */
@@ -289,6 +293,7 @@ extern long countdirs;		/* number of directories we actually found */
 #define MIBSIZE	3		/* size of fsck sysctl MIBs */
 extern int	adjrefcnt[MIBSIZE];	/* MIB command to adjust inode reference cnt */
 extern int	adjblkcnt[MIBSIZE];	/* MIB command to adjust inode block count */
+extern int	setsize[MIBSIZE];	/* MIB command to set inode size */
 extern int	adjndir[MIBSIZE];	/* MIB command to adjust number of directories */
 extern int	adjnbfree[MIBSIZE];	/* MIB command to adjust number of free blocks */
 extern int	adjnifree[MIBSIZE];	/* MIB command to adjust number of free inodes */
@@ -306,7 +311,7 @@ extern u_int	real_dev_bsize;		/* actual disk sector size, not overridden */
 extern char	nflag;			/* assume a no response */
 extern char	yflag;			/* assume a yes response */
 extern int	bkgrdflag;		/* use a snapshot to run on an active system */
-extern ufs2_daddr_t bflag;		/* location of alternate super block */
+extern off_t	bflag;			/* location of alternate super block */
 extern int	debug;			/* output debugging info */
 extern int	Eflag;			/* delete empty data blocks */
 extern int	Zflag;			/* zero empty data blocks */
@@ -314,6 +319,7 @@ extern int	zflag;			/* zero unused directory space */
 extern int	inoopt;			/* trim out unused inodes */
 extern char	ckclean;		/* only do work if not cleanly unmounted */
 extern int	cvtlevel;		/* convert to newer file system format */
+extern int	ckhashadd;		/* check hashes to be added */
 extern int	bkgrdcheck;		/* determine if background check is possible */
 extern int	bkgrdsumadj;		/* whether the kernel have ability to adjust superblock summary */
 extern char	usedsoftdep;		/* just fix soft dependency inconsistencies */
@@ -326,6 +332,7 @@ extern char	skipclean;		/* skip clean file systems if preening */
 extern int	fsmodified;		/* 1 => write done to file system */
 extern int	fsreadfd;		/* file descriptor for reading file system */
 extern int	fswritefd;		/* file descriptor for writing file system */
+extern struct	uufsd disk;		/* libufs user-ufs disk structure */
 extern int	surrender;		/* Give up if reads fail */
 extern int	wantrestart;		/* Restart fsck on early termination */
 
@@ -436,7 +443,7 @@ void		freeinodebuf(void);
 void		fsutilinit(void);
 int		ftypeok(union dinode *dp);
 void		getblk(struct bufarea *bp, ufs2_daddr_t blk, long size);
-struct bufarea *cgget(int cg);
+struct bufarea *cglookup(int cg);
 struct bufarea *getdatablk(ufs2_daddr_t blkno, long size, int type);
 struct inoinfo *getinoinfo(ino_t inumber);
 union dinode   *getnextinode(ino_t inumber, int rebuildcg);
@@ -445,7 +452,7 @@ union dinode   *ginode(ino_t inumber);
 void		infohandler(int sig);
 void		alarmhandler(int sig);
 void		inocleanup(void);
-void		inodirty(void);
+void		inodirty(union dinode *);
 struct inostat *inoinfo(ino_t inum);
 void		IOstats(char *what);
 int		linkup(ino_t orphan, ino_t parentdir, char *name);

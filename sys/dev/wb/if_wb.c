@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 1997, 1998
  *	Bill Paul <wpaul@ctr.columbia.edu>.  All rights reserved.
  *
@@ -143,7 +145,7 @@ static int wb_probe(device_t);
 static int wb_attach(device_t);
 static int wb_detach(device_t);
 
-static void wb_bfree(struct mbuf *, void *addr, void *args);
+static void wb_bfree(struct mbuf *);
 static int wb_newbuf(struct wb_softc *, struct wb_chain_onefrag *,
 		struct mbuf *);
 static int wb_encap(struct wb_softc *, struct wb_chain *, struct mbuf *);
@@ -438,7 +440,7 @@ wb_setmulti(sc)
 
 	/* now program new ones */
 	if_maddr_rlock(ifp);
-	TAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
+	CK_STAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
 		if (ifma->ifma_addr->sa_family != AF_LINK)
 			continue;
 		h = ~ether_crc32_be(LLADDR((struct sockaddr_dl *)
@@ -692,6 +694,8 @@ wb_attach(dev)
 		goto fail;
 	}
 
+	gone_by_fcp101_dev(dev);
+
 fail:
 	if (error)
 		wb_detach(dev);
@@ -824,7 +828,7 @@ wb_list_rx_init(sc)
 }
 
 static void
-wb_bfree(struct mbuf *m, void *buf, void *args)
+wb_bfree(struct mbuf *m)
 {
 }
 
@@ -843,10 +847,9 @@ wb_newbuf(sc, c, m)
 		MGETHDR(m_new, M_NOWAIT, MT_DATA);
 		if (m_new == NULL)
 			return(ENOBUFS);
-		m_new->m_data = c->wb_buf;
 		m_new->m_pkthdr.len = m_new->m_len = WB_BUFBYTES;
-		MEXTADD(m_new, c->wb_buf, WB_BUFBYTES, wb_bfree, c->wb_buf,
-		    NULL, 0, EXT_NET_DRV);
+		m_extadd(m_new, c->wb_buf, WB_BUFBYTES, wb_bfree, NULL, NULL,
+		    0, EXT_NET_DRV);
 	} else {
 		m_new = m;
 		m_new->m_len = m_new->m_pkthdr.len = WB_BUFBYTES;

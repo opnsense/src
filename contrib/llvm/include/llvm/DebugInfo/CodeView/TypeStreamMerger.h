@@ -23,7 +23,7 @@ struct GloballyHashedType;
 class GlobalTypeTableBuilder;
 class MergingTypeTableBuilder;
 
-/// \brief Merge one set of type records into another.  This method assumes
+/// Merge one set of type records into another.  This method assumes
 /// that all records are type records, and there are no Id records present.
 ///
 /// \param Dest The table to store the re-written type records into.
@@ -40,7 +40,7 @@ Error mergeTypeRecords(MergingTypeTableBuilder &Dest,
                        SmallVectorImpl<TypeIndex> &SourceToDest,
                        const CVTypeArray &Types);
 
-/// \brief Merge one set of id records into another.  This method assumes
+/// Merge one set of id records into another.  This method assumes
 /// that all records are id records, and there are no Type records present.
 /// However, since Id records can refer back to Type records, this method
 /// assumes that the referenced type records have also been merged into
@@ -65,7 +65,7 @@ Error mergeIdRecords(MergingTypeTableBuilder &Dest, ArrayRef<TypeIndex> Types,
                      SmallVectorImpl<TypeIndex> &SourceToDest,
                      const CVTypeArray &Ids);
 
-/// \brief Merge a unified set of type and id records, splitting them into
+/// Merge a unified set of type and id records, splitting them into
 /// separate output streams.
 ///
 /// \param DestIds The table to store the re-written id records into.
@@ -83,18 +83,21 @@ Error mergeIdRecords(MergingTypeTableBuilder &Dest, ArrayRef<TypeIndex> Types,
 Error mergeTypeAndIdRecords(MergingTypeTableBuilder &DestIds,
                             MergingTypeTableBuilder &DestTypes,
                             SmallVectorImpl<TypeIndex> &SourceToDest,
-                            const CVTypeArray &IdsAndTypes);
+                            const CVTypeArray &IdsAndTypes,
+                            Optional<uint32_t> &PCHSignature);
 
 Error mergeTypeAndIdRecords(GlobalTypeTableBuilder &DestIds,
                             GlobalTypeTableBuilder &DestTypes,
                             SmallVectorImpl<TypeIndex> &SourceToDest,
                             const CVTypeArray &IdsAndTypes,
-                            ArrayRef<GloballyHashedType> Hashes);
+                            ArrayRef<GloballyHashedType> Hashes,
+                            Optional<uint32_t> &PCHSignature);
 
 Error mergeTypeRecords(GlobalTypeTableBuilder &Dest,
                        SmallVectorImpl<TypeIndex> &SourceToDest,
                        const CVTypeArray &Types,
-                       ArrayRef<GloballyHashedType> Hashes);
+                       ArrayRef<GloballyHashedType> Hashes,
+                       Optional<uint32_t> &PCHSignature);
 
 Error mergeIdRecords(GlobalTypeTableBuilder &Dest, ArrayRef<TypeIndex> Types,
                      SmallVectorImpl<TypeIndex> &SourceToDest,

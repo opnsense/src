@@ -32,6 +32,8 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#define PFIOC_USE_LATEST
+
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -79,10 +81,11 @@ static u_int16_t	 returnicmpdefault =
 static u_int16_t	 returnicmp6default =
 			    (ICMP6_DST_UNREACH << 8) | ICMP6_DST_UNREACH_NOPORT;
 static int		 blockpolicy = PFRULE_DROP;
+static int		 failpolicy = PFRULE_DROP;
 static int		 require_order = 1;
 static int		 default_statelock;
 
-TAILQ_HEAD(files, file)		 files = TAILQ_HEAD_INITIALIZER(files);
+static TAILQ_HEAD(files, file)	 files = TAILQ_HEAD_INITIALIZER(files);
 static struct file {
 	TAILQ_ENTRY(file)	 entry;
 	FILE			*stream;
@@ -102,7 +105,7 @@ int		 lgetc(int);
 int		 lungetc(int);
 int		 findeol(void);
 
-TAILQ_HEAD(symhead, sym)	 symhead = TAILQ_HEAD_INITIALIZER(symhead);
+static TAILQ_HEAD(symhead, sym)	 symhead = TAILQ_HEAD_INITIALIZER(symhead);
 struct sym {
 	TAILQ_ENTRY(sym)	 entry;
 	int			 used;
@@ -198,7 +201,7 @@ struct peer {
 	struct node_port	*port;
 };
 
-struct node_queue {
+static struct node_queue {
 	char			 queue[PF_QNAME_SIZE];
 	char			 parent[PF_QNAME_SIZE];
 	char			 ifname[IFNAMSIZ];
@@ -212,7 +215,7 @@ struct node_qassign {
 	char		*pqname;
 };
 
-struct filter_opts {
+static struct filter_opts {
 	int			 marker;
 #define FOM_FLAGS	0x01
 #define FOM_ICMP	0x02
@@ -252,12 +255,12 @@ struct filter_opts {
 	}			 divert;
 } filter_opts;
 
-struct antispoof_opts {
+static struct antispoof_opts {
 	char			*label;
 	u_int			 rtableid;
 } antispoof_opts;
 
-struct scrub_opts {
+static struct scrub_opts {
 	int			 marker;
 #define SOM_MINTTL	0x01
 #define SOM_MAXMSS	0x02
@@ -275,7 +278,7 @@ struct scrub_opts {
 	u_int			 rtableid;
 } scrub_opts;
 
-struct queue_opts {
+static struct queue_opts {
 	int			marker;
 #define QOM_BWSPEC	0x01
 #define QOM_SCHEDULER	0x02
@@ -285,17 +288,17 @@ struct queue_opts {
 	struct node_queue_bw	queue_bwspec;
 	struct node_queue_opt	scheduler;
 	int			priority;
-	int			tbrsize;
+	unsigned int		tbrsize;
 	int			qlimit;
 } queue_opts;
 
-struct table_opts {
+static struct table_opts {
 	int			flags;
 	int			init_addr;
 	struct node_tinithead	init_nodes;
 } table_opts;
 
-struct pool_opts {
+static struct pool_opts {
 	int			 marker;
 #define POM_TYPE		0x01
 #define POM_STICKYADDRESS	0x02
@@ -306,10 +309,10 @@ struct pool_opts {
 
 } pool_opts;
 
-struct codel_opts	 codel_opts;
-struct node_hfsc_opts	 hfsc_opts;
-struct node_fairq_opts	 fairq_opts;
-struct node_state_opt	*keep_state_defaults = NULL;
+static struct codel_opts	 codel_opts;
+static struct node_hfsc_opts	 hfsc_opts;
+static struct node_fairq_opts	 fairq_opts;
+static struct node_state_opt	*keep_state_defaults = NULL;
 
 int		 disallow_table(struct node_host *, const char *);
 int		 disallow_urpf_failed(struct node_host *, const char *);
@@ -356,7 +359,7 @@ u_int16_t parseicmpspec(char *, sa_family_t);
 int	 kw_casecmp(const void *, const void *);
 int	 map_tos(char *string, int *);
 
-TAILQ_HEAD(loadanchorshead, loadanchors)
+static TAILQ_HEAD(loadanchorshead, loadanchors)
     loadanchorshead = TAILQ_HEAD_INITIALIZER(loadanchorshead);
 
 struct loadanchors {
@@ -455,8 +458,8 @@ int	parseport(char *, struct range *r, int);
 %token	MINTTL ERROR ALLOWOPTS FASTROUTE FILENAME ROUTETO DUPTO REPLYTO NO LABEL
 %token	NOROUTE URPFFAILED FRAGMENT USER GROUP MAXMSS MAXIMUM TTL TOS DROP TABLE
 %token	REASSEMBLE FRAGDROP FRAGCROP ANCHOR NATANCHOR RDRANCHOR BINATANCHOR
-%token	SET OPTIMIZATION TIMEOUT LIMIT LOGINTERFACE BLOCKPOLICY RANDOMID
-%token	REQUIREORDER SYNPROXY FINGERPRINTS NOSYNC DEBUG SKIP HOSTID
+%token	SET OPTIMIZATION TIMEOUT LIMIT LOGINTERFACE BLOCKPOLICY FAILPOLICY
+%token	RANDOMID REQUIREORDER SYNPROXY FINGERPRINTS NOSYNC DEBUG SKIP HOSTID
 %token	ANTISPOOF FOR INCLUDE
 %token	BITMASK RANDOM SOURCEHASH ROUNDROBIN STATICPORT PROBABILITY
 %token	ALTQ CBQ CODEL PRIQ HFSC FAIRQ BANDWIDTH TBRSIZE LINKSHARE REALTIME
@@ -639,6 +642,20 @@ option		: SET OPTIMIZATION STRING		{
 			if (check_rulestate(PFCTL_STATE_OPTION))
 				YYERROR;
 			blockpolicy = PFRULE_RETURN;
+		}
+		| SET FAILPOLICY DROP	{
+			if (pf->opts & PF_OPT_VERBOSE)
+				printf("set fail-policy drop\n");
+			if (check_rulestate(PFCTL_STATE_OPTION))
+				YYERROR;
+			failpolicy = PFRULE_DROP;
+		}
+		| SET FAILPOLICY RETURN {
+			if (pf->opts & PF_OPT_VERBOSE)
+				printf("set fail-policy return\n");
+			if (check_rulestate(PFCTL_STATE_OPTION))
+				YYERROR;
+			failpolicy = PFRULE_RETURN;
 		}
 		| SET REQUIREORDER yesno {
 			if (pf->opts & PF_OPT_VERBOSE)
@@ -1608,8 +1625,8 @@ queue_opt	: BANDWIDTH bandwidth	{
 				yyerror("tbrsize cannot be respecified");
 				YYERROR;
 			}
-			if ($2 < 0 || $2 > 65535) {
-				yyerror("tbrsize too big: max 65535");
+			if ($2 < 0 || $2 > UINT_MAX) {
+				yyerror("tbrsize too big: max %u", UINT_MAX);
 				YYERROR;
 			}
 			queue_opts.marker |= QOM_TBRSIZE;
@@ -1658,10 +1675,10 @@ bandwidth	: STRING {
 				}
 			}
 			free($1);
-			$$.bw_absolute = (u_int32_t)bps;
+			$$.bw_absolute = (u_int64_t)bps;
 		}
 		| NUMBER {
-			if ($1 < 0 || $1 > UINT_MAX) {
+			if ($1 < 0 || $1 >= LLONG_MAX) {
 				yyerror("bandwidth number too big");
 				YYERROR;
 			}
@@ -2334,7 +2351,7 @@ pfrule		: action dir logquick interface route af proto fromto
 					memcpy(&r.rpool.key, $5.key,
 					    sizeof(struct pf_poolhashkey));
 			}
-			if (r.rt && r.rt != PF_FASTROUTE) {
+			if (r.rt) {
 				decide_address_family($5.host, &r.af);
 				remove_invalid_hosts(&$5.host, &r.af);
 				if ($5.host == NULL) {
@@ -2636,7 +2653,12 @@ probability	: STRING				{
 		;
 
 
-action		: PASS			{ $$.b1 = PF_PASS; $$.b2 = $$.w = 0; }
+action		: PASS 			{
+			$$.b1 = PF_PASS;
+			$$.b2 = failpolicy;
+			$$.w = returnicmpdefault;
+			$$.w2 = returnicmp6default;
+		}
 		| BLOCK blockspec	{ $$ = $2; $$.b1 = PF_DROP; }
 		;
 
@@ -4386,7 +4408,7 @@ route_host	: STRING			{
 			$$ = calloc(1, sizeof(struct node_host));
 			if ($$ == NULL)
 				err(1, "route_host: calloc");
-			$$->ifname = $1;
+			$$->ifname = strdup($1);
 			set_ipmask($$, 128);
 			$$->next = NULL;
 			$$->tail = $$;
@@ -4396,7 +4418,7 @@ route_host	: STRING			{
 
 			$$ = $3;
 			for (n = $3; n != NULL; n = n->next)
-				n->ifname = $2;
+				n->ifname = strdup($2);
 		}
 		;
 
@@ -4425,8 +4447,9 @@ route		: /* empty */			{
 			$$.pool_opts = 0;
 		}
 		| FASTROUTE {
+			/* backwards-compat */
 			$$.host = NULL;
-			$$.rt = PF_FASTROUTE;
+			$$.rt = 0;
 			$$.pool_opts = 0;
 		}
 		| ROUTETO routespec pool_opts {
@@ -4712,6 +4735,8 @@ process_tabledef(char *name, struct table_opts *opts)
 {
 	struct pfr_buffer	 ab;
 	struct node_tinit	*ti;
+	unsigned long		 maxcount;
+	size_t			 s = sizeof(maxcount);
 
 	bzero(&ab, sizeof(ab));
 	ab.pfrb_type = PFRB_ADDRS;
@@ -4739,8 +4764,19 @@ process_tabledef(char *name, struct table_opts *opts)
 	if (!(pf->opts & PF_OPT_NOACTION) &&
 	    pfctl_define_table(name, opts->flags, opts->init_addr,
 	    pf->anchor->name, &ab, pf->anchor->ruleset.tticket)) {
-		yyerror("cannot define table %s: %s", name,
-		    pfr_strerror(errno));
+
+		if (sysctlbyname("net.pf.request_maxcount", &maxcount, &s,
+		    NULL, 0) == -1)
+			maxcount = 65535;
+
+		if (ab.pfrb_size > maxcount)
+			yyerror("cannot define table %s: too many elements.\n"
+			    "Consider increasing net.pf.request_maxcount.",
+			    name);
+		else
+			yyerror("cannot define table %s: %s", name,
+			    pfr_strerror(errno));
+
 		goto _error;
 	}
 	pf->tdirty = 1;
@@ -5470,6 +5506,7 @@ lookup(char *s)
 		{ "drop",		DROP},
 		{ "drop-ovl",		FRAGDROP},
 		{ "dup-to",		DUPTO},
+		{ "fail-policy",	FAILPOLICY},
 		{ "fairq",		FAIRQ},
 		{ "fastroute",		FASTROUTE},
 		{ "file",		FILENAME},
@@ -5591,10 +5628,10 @@ lookup(char *s)
 
 #define MAXPUSHBACK	128
 
-char	*parsebuf;
-int	 parseindex;
-char	 pushback_buffer[MAXPUSHBACK];
-int	 pushback_index = 0;
+static char	*parsebuf;
+static int	 parseindex;
+static char	 pushback_buffer[MAXPUSHBACK];
+static int	 pushback_index = 0;
 
 int
 lgetc(int quotec)
@@ -5741,8 +5778,10 @@ top:
 					return (0);
 				if (next == quotec || c == ' ' || c == '\t')
 					c = next;
-				else if (next == '\n')
+				else if (next == '\n') {
+					file->lineno++;
 					continue;
+				}
 				else
 					lungetc(next);
 			} else if (c == quotec) {
@@ -5934,6 +5973,7 @@ parse_config(char *filename, struct pfctl *xpf)
 	returnicmp6default =
 	    (ICMP6_DST_UNREACH << 8) | ICMP6_DST_UNREACH_NOPORT;
 	blockpolicy = PFRULE_DROP;
+	failpolicy = PFRULE_DROP;
 	require_order = 1;
 
 	if ((file = pushfile(filename, 0)) == NULL) {

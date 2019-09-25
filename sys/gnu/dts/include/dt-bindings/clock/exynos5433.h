@@ -1,10 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Copyright (c) 2014 Samsung Electronics Co., Ltd.
  * Author: Chanwoo Choi <cw00.choi@samsung.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #ifndef _DT_BINDINGS_CLOCK_EXYNOS5433_H
@@ -159,7 +156,7 @@
 #define CLK_ACLK_G2D_266		220
 #define CLK_ACLK_G2D_400		221
 #define CLK_ACLK_G3D_400		222
-#define CLK_ACLK_IMEM_SSX_266		223
+#define CLK_ACLK_IMEM_SSSX_266		223
 #define CLK_ACLK_BUS0_400		224
 #define CLK_ACLK_BUS1_400		225
 #define CLK_ACLK_IMEM_200		226
@@ -622,8 +619,9 @@
 #define CLK_SCLK_UFSUNIPRO		112
 #define CLK_SCLK_USBHOST30		113
 #define CLK_SCLK_USBDRD30		114
+#define CLK_PCIE			115
 
-#define FSYS_NR_CLK			115
+#define FSYS_NR_CLK			116
 
 /* CMU_G2D */
 #define CLK_MUX_ACLK_G2D_266_USER	1
@@ -765,7 +763,15 @@
 #define CLK_SCLK_RGB_VCLK				109
 #define CLK_SCLK_RGB_TV_VCLK				110
 
-#define DISP_NR_CLK					111
+#define CLK_PHYCLK_HDMIPHY_PIXEL_CLKO_PHY		111
+#define CLK_PHYCLK_HDMIPHY_TMDS_CLKO_PHY		112
+
+#define CLK_PCLK_DECON					113
+
+#define CLK_PHYCLK_MIPIDPHY0_BITCLKDIV8_PHY		114
+#define CLK_PHYCLK_MIPIDPHY0_RXCLKESC0_PHY		115
+
+#define DISP_NR_CLK					116
 
 /* CMU_AUD */
 #define CLK_MOUT_AUD_PLL_USER				1
@@ -1298,7 +1304,7 @@
 #define CLK_MOUT_ACLK_LITE_C_B				13
 #define CLK_MOUT_ACLK_LITE_C_A				14
 
-#define CLK_DIV_SCLK_ISP_WPWM				15
+#define CLK_DIV_SCLK_ISP_MPWM				15
 #define CLK_DIV_PCLK_CAM1_83				16
 #define CLK_DIV_PCLK_CAM1_166				17
 #define CLK_DIV_PCLK_DBG_CAM1				18
@@ -1399,5 +1405,11 @@
 #define CLK_SCLK_ISP_CA5				112
 
 #define CAM1_NR_CLK					113
+
+/* CMU_IMEM */
+#define CLK_ACLK_SLIMSSS		2
+#define CLK_PCLK_SLIMSSS		35
+
+#define IMEM_NR_CLK			36
 
 #endif /* _DT_BINDINGS_CLOCK_EXYNOS5433_H */

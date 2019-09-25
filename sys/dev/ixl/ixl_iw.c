@@ -1,6 +1,6 @@
 /******************************************************************************
 
-  Copyright (c) 2013-2017, Intel Corporation
+  Copyright (c) 2013-2018, Intel Corporation
   All rights reserved.
   
   Redistribution and use in source and binary forms, with or without 
@@ -333,7 +333,7 @@ ixl_iw_pf_msix_init(void *pf_handle,
 
 	if ((msix_info->aeq_vector < IXL_IW_VEC_BASE(pf)) ||
 	    (msix_info->aeq_vector >= IXL_IW_VEC_LIMIT(pf))) {
-		printf("%s: invalid MSIX vector (%i) for AEQ\n",
+		printf("%s: invalid MSI-X vector (%i) for AEQ\n",
 		    __func__, msix_info->aeq_vector);
 		return (EINVAL);
 	}

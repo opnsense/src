@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1980, 1986, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -61,6 +63,7 @@ unsigned long  numdirs, listmax;
 long countdirs;		/* number of directories we actually found */
 int	adjrefcnt[MIBSIZE];	/* MIB command to adjust inode reference cnt */
 int	adjblkcnt[MIBSIZE];	/* MIB command to adjust inode block count */
+int	setsize[MIBSIZE];	/* MIB command to set inode size */
 int	adjndir[MIBSIZE];	/* MIB command to adjust number of directories */
 int	adjnbfree[MIBSIZE];	/* MIB command to adjust number of free blocks */
 int	adjnifree[MIBSIZE];	/* MIB command to adjust number of free inodes */
@@ -78,7 +81,7 @@ u_int	real_dev_bsize;		/* actual disk sector size, not overridden */
 char	nflag;			/* assume a no response */
 char	yflag;			/* assume a yes response */
 int	bkgrdflag;		/* use a snapshot to run on an active system */
-ufs2_daddr_t bflag;		/* location of alternate super block */
+off_t	bflag;			/* location of alternate super block */
 int	debug;			/* output debugging info */
 int	Eflag;			/* delete empty data blocks */
 int	Zflag;			/* zero empty data blocks */
@@ -86,6 +89,7 @@ int	zflag;			/* zero unused directory space */
 int	inoopt;			/* trim out unused inodes */
 char	ckclean;		/* only do work if not cleanly unmounted */
 int	cvtlevel;		/* convert to newer file system format */
+int	ckhashadd;		/* check hashes to be added */
 int	bkgrdcheck;		/* determine if background check is possible */
 int	bkgrdsumadj;		/* whether the kernel have ability to adjust superblock summary */
 char	usedsoftdep;		/* just fix soft dependency inconsistencies */
@@ -129,6 +133,7 @@ fsckinit(void)
 	countdirs = 0;
 	bzero(adjrefcnt, sizeof(int) * MIBSIZE);
 	bzero(adjblkcnt, sizeof(int) * MIBSIZE);
+	bzero(setsize, sizeof(int) * MIBSIZE);
 	bzero(adjndir, sizeof(int) * MIBSIZE);
 	bzero(adjnbfree, sizeof(int) * MIBSIZE);
 	bzero(adjnifree, sizeof(int) * MIBSIZE);

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1990, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -140,6 +142,7 @@ atexit(void (*func)(void))
 	error = atexit_register(&fn);
 	return (error);
 }
+__weak_reference(atexit, __libc_atexit);
 
 /**
  * Register a block to be performed at exit.

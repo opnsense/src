@@ -57,8 +57,6 @@ __FBSDID("$FreeBSD$");
 
 extern int fl_pad;	/* XXXNM */
 
-SYSCTL_NODE(_hw, OID_AUTO, cxgbe, CTLFLAG_RD, 0, "cxgbe netmap parameters");
-
 /*
  * 0 = normal netmap rx
  * 1 = black hole
@@ -72,6 +70,10 @@ int rx_ndesc = 256;
 SYSCTL_INT(_hw_cxgbe, OID_AUTO, nm_rx_ndesc, CTLFLAG_RWTUN,
     &rx_ndesc, 0, "# of rx descriptors after which the hw cidx is updated.");
 
+int rx_nframes = 64;
+SYSCTL_INT(_hw_cxgbe, OID_AUTO, nm_rx_nframes, CTLFLAG_RWTUN,
+    &rx_nframes, 0, "max # of frames received before waking up netmap rx.");
+
 int holdoff_tmr_idx = 2;
 SYSCTL_INT(_hw_cxgbe, OID_AUTO, nm_holdoff_tmr_idx, CTLFLAG_RWTUN,
     &holdoff_tmr_idx, 0, "Holdoff timer index for netmap rx queues.");
@@ -83,7 +85,30 @@ SYSCTL_INT(_hw_cxgbe, OID_AUTO, nm_holdoff_tmr_idx, CTLFLAG_RWTUN,
  *  1: no backpressure, drop packets for the congested queue immediately.
  */
 static int nm_cong_drop = 1;
-TUNABLE_INT("hw.cxgbe.nm_cong_drop", &nm_cong_drop);
+SYSCTL_INT(_hw_cxgbe, OID_AUTO, nm_cong_drop, CTLFLAG_RDTUN,
+    &nm_cong_drop, 0,
+    "Congestion control for netmap rx queues (0 = backpressure, 1 = drop");
+
+int starve_fl = 0;
+SYSCTL_INT(_hw_cxgbe, OID_AUTO, starve_fl, CTLFLAG_RWTUN,
+    &starve_fl, 0, "Don't ring fl db for netmap rx queues.");
+
+/*
+ * Try to process tx credits in bulk.  This may cause a delay in the return of
+ * tx credits and is suitable for bursty or non-stop tx only.
+ */
+int lazy_tx_credit_flush = 1;
+SYSCTL_INT(_hw_cxgbe, OID_AUTO, lazy_tx_credit_flush, CTLFLAG_RWTUN,
+    &lazy_tx_credit_flush, 0, "lazy credit flush for netmap tx queues.");
+
+/*
+ * Split the netmap rx queues into two groups that populate separate halves of
+ * the RSS indirection table.  This allows filters with hashmask to steer to a
+ * particular group of queues.
+ */
+static int nm_split_rss = 0;
+SYSCTL_INT(_hw_cxgbe, OID_AUTO, nm_split_rss, CTLFLAG_RWTUN,
+    &nm_split_rss, 0, "Split the netmap rx queues into two groups.");
 
 static int
 alloc_nm_rxq_hwq(struct vi_info *vi, struct sge_nm_rxq *nm_rxq, int cong)
@@ -218,6 +243,7 @@ free_nm_rxq_hwq(struct vi_info *vi, struct sge_nm_rxq *nm_rxq)
 	if (rc != 0)
 		device_printf(sc->dev, "%s: failed for iq %d, fl %d: %d\n",
 		    __func__, nm_rxq->iq_cntxt_id, nm_rxq->fl_cntxt_id, rc);
+	nm_rxq->iq_cntxt_id = INVALID_NM_RXQ_CNTXT_ID;
 	return (rc);
 }
 
@@ -304,6 +330,7 @@ free_nm_txq_hwq(struct vi_info *vi, struct sge_nm_txq *nm_txq)
 	if (rc != 0)
 		device_printf(sc->dev, "%s: failed for eq %d: %d\n", __func__,
 		    nm_txq->cntxt_id, rc);
+	nm_txq->cntxt_id = INVALID_NM_TXQ_CNTXT_ID;
 	return (rc);
 }
 
@@ -312,9 +339,10 @@ cxgbe_netmap_on(struct adapter *sc, struct vi_info *vi, struct ifnet *ifp,
     struct netmap_adapter *na)
 {
 	struct netmap_slot *slot;
+	struct netmap_kring *kring;
 	struct sge_nm_rxq *nm_rxq;
 	struct sge_nm_txq *nm_txq;
-	int rc, i, j, hwidx;
+	int rc, i, j, hwidx, defq, nrssq;
 	struct hw_buf_info *hwb;
 
 	ASSERT_SYNCHRONIZED_OP(sc);
@@ -339,7 +367,10 @@ cxgbe_netmap_on(struct adapter *sc, struct vi_info *vi, struct ifnet *ifp,
 	nm_set_native_flags(na);
 
 	for_each_nm_rxq(vi, i, nm_rxq) {
-		struct irq *irq = &sc->irq[vi->first_intr + i];
+		kring = na->rx_rings[nm_rxq->nid];
+		if (!nm_kring_pending_on(kring) ||
+		    nm_rxq->iq_cntxt_id != INVALID_NM_RXQ_CNTXT_ID)
+			continue;
 
 		alloc_nm_rxq_hwq(vi, nm_rxq, tnl_cong(vi->pi, nm_cong_drop));
 		nm_rxq->fl_hwidx = hwidx;
@@ -363,10 +394,15 @@ cxgbe_netmap_on(struct adapter *sc, struct vi_info *vi, struct ifnet *ifp,
 		t4_write_reg(sc, sc->sge_kdoorbell_reg,
 		    nm_rxq->fl_db_val | V_PIDX(j));
 
-		atomic_cmpset_int(&irq->nm_state, NM_OFF, NM_ON);
+		(void) atomic_cmpset_int(&nm_rxq->nm_state, NM_OFF, NM_ON);
 	}
 
 	for_each_nm_txq(vi, i, nm_txq) {
+		kring = na->tx_rings[nm_txq->nid];
+		if (!nm_kring_pending_on(kring) ||
+		    nm_txq->cntxt_id != INVALID_NM_TXQ_CNTXT_ID)
+			continue;
+
 		alloc_nm_txq_hwq(vi, nm_txq);
 		slot = netmap_reset(na, NR_TX, i, 0);
 		MPASS(slot != NULL);	/* XXXNM: error check, not assert */
@@ -376,17 +412,71 @@ cxgbe_netmap_on(struct adapter *sc, struct vi_info *vi, struct ifnet *ifp,
 		vi->nm_rss = malloc(vi->rss_size * sizeof(uint16_t), M_CXGBE,
 		    M_ZERO | M_WAITOK);
 	}
-	for (i = 0; i < vi->rss_size;) {
-		for_each_nm_rxq(vi, j, nm_rxq) {
-			vi->nm_rss[i++] = nm_rxq->iq_abs_id;
-			if (i == vi->rss_size)
-				break;
+
+	MPASS(vi->nnmrxq > 0);
+	if (nm_split_rss == 0 || vi->nnmrxq == 1) {
+		for (i = 0; i < vi->rss_size;) {
+			for_each_nm_rxq(vi, j, nm_rxq) {
+				vi->nm_rss[i++] = nm_rxq->iq_abs_id;
+				if (i == vi->rss_size)
+					break;
+			}
+		}
+		defq = vi->nm_rss[0];
+	} else {
+		/* We have multiple queues and we want to split the table. */
+		MPASS(nm_split_rss != 0);
+		MPASS(vi->nnmrxq > 1);
+
+		nm_rxq = &sc->sge.nm_rxq[vi->first_nm_rxq];
+		nrssq = vi->nnmrxq;
+		if (vi->nnmrxq & 1) {
+			/*
+			 * Odd number of queues. The first rxq is designated the
+			 * default queue, the rest are split evenly.
+			 */
+			defq = nm_rxq->iq_abs_id;
+			nm_rxq++;
+			nrssq--;
+		} else {
+			/*
+			 * Even number of queues split into two halves.  The
+			 * first rxq in one of the halves is designated the
+			 * default queue.
+			 */
+#if 1
+			/* First rxq in the first half. */
+			defq = nm_rxq->iq_abs_id;
+#else
+			/* First rxq in the second half. */
+			defq = nm_rxq[vi->nnmrxq / 2].iq_abs_id;
+#endif
+		}
+
+		i = 0;
+		while (i < vi->rss_size / 2) {
+			for (j = 0; j < nrssq / 2; j++) {
+				vi->nm_rss[i++] = nm_rxq[j].iq_abs_id;
+				if (i == vi->rss_size / 2)
+					break;
+			}
+		}
+		while (i < vi->rss_size) {
+			for (j = nrssq / 2; j < nrssq; j++) {
+				vi->nm_rss[i++] = nm_rxq[j].iq_abs_id;
+				if (i == vi->rss_size)
+					break;
+			}
 		}
 	}
 	rc = -t4_config_rss_range(sc, sc->mbox, vi->viid, 0, vi->rss_size,
 	    vi->nm_rss, vi->rss_size);
 	if (rc != 0)
 		if_printf(ifp, "netmap rss_config failed: %d\n", rc);
+
+	rc = -t4_config_vi_rss(sc, sc->mbox, vi->viid, vi->hashen, defq, 0, 0);
+	if (rc != 0)
+		if_printf(ifp, "netmap rss hash/defaultq config failed: %d\n", rc);
 
 	return (rc);
 }
@@ -395,11 +485,15 @@ static int
 cxgbe_netmap_off(struct adapter *sc, struct vi_info *vi, struct ifnet *ifp,
     struct netmap_adapter *na)
 {
+	struct netmap_kring *kring;
 	int rc, i;
 	struct sge_nm_txq *nm_txq;
 	struct sge_nm_rxq *nm_rxq;
 
 	ASSERT_SYNCHRONIZED_OP(sc);
+
+	if (!nm_netmap_on(na))
+		return (0);
 
 	if ((vi->flags & VI_INIT_DONE) == 0)
 		return (0);
@@ -408,10 +502,18 @@ cxgbe_netmap_off(struct adapter *sc, struct vi_info *vi, struct ifnet *ifp,
 	    vi->rss, vi->rss_size);
 	if (rc != 0)
 		if_printf(ifp, "failed to restore RSS config: %d\n", rc);
+	rc = -t4_config_vi_rss(sc, sc->mbox, vi->viid, vi->hashen, vi->rss[0], 0, 0);
+	if (rc != 0)
+		if_printf(ifp, "failed to restore RSS hash/defaultq: %d\n", rc);
 	nm_clear_native_flags(na);
 
 	for_each_nm_txq(vi, i, nm_txq) {
 		struct sge_qstat *spg = (void *)&nm_txq->desc[nm_txq->sidx];
+
+		kring = na->tx_rings[nm_txq->nid];
+		if (!nm_kring_pending_off(kring) ||
+		    nm_txq->cntxt_id == INVALID_NM_TXQ_CNTXT_ID)
+			continue;
 
 		/* Wait for hw pidx to catch up ... */
 		while (be16toh(nm_txq->pidx) != spg->pidx)
@@ -424,9 +526,12 @@ cxgbe_netmap_off(struct adapter *sc, struct vi_info *vi, struct ifnet *ifp,
 		free_nm_txq_hwq(vi, nm_txq);
 	}
 	for_each_nm_rxq(vi, i, nm_rxq) {
-		struct irq *irq = &sc->irq[vi->first_intr + i];
+		kring = na->rx_rings[nm_rxq->nid];
+		if (!nm_kring_pending_off(kring) ||
+		    nm_rxq->iq_cntxt_id == INVALID_NM_RXQ_CNTXT_ID)
+			continue;
 
-		while (!atomic_cmpset_int(&irq->nm_state, NM_ON, NM_OFF))
+		while (!atomic_cmpset_int(&nm_rxq->nm_state, NM_ON, NM_OFF))
 			pause("nmst", 1);
 
 		free_nm_rxq_hwq(vi, nm_rxq);
@@ -539,8 +644,6 @@ ring_nm_txq_db(struct adapter *sc, struct sge_nm_txq *nm_txq)
 	}
 	nm_txq->dbidx = nm_txq->pidx;
 }
-
-int lazy_tx_credit_flush = 1;
 
 /*
  * Write work requests to send 'npkt' frames and ring the doorbell to send them
@@ -778,6 +881,13 @@ cxgbe_netmap_rxsync(struct netmap_kring *kring, int flags)
 		kring->nr_kflags &= ~NKR_PENDINTR;
 	}
 
+	if (nm_rxq->fl_db_saved > 0 && starve_fl == 0) {
+		wmb();
+		t4_write_reg(sc, sc->sge_kdoorbell_reg,
+		    nm_rxq->fl_db_val | V_PIDX(nm_rxq->fl_db_saved));
+		nm_rxq->fl_db_saved = 0;
+	}
+
 	/* Userspace done with buffers from kring->nr_hwcur to head */
 	n = head >= kring->nr_hwcur ? head - kring->nr_hwcur :
 	    kring->nkr_num_slots - kring->nr_hwcur + head;
@@ -814,8 +924,12 @@ cxgbe_netmap_rxsync(struct netmap_kring *kring, int flags)
 			}
 			if (++dbinc == 8 && n >= 32) {
 				wmb();
-				t4_write_reg(sc, sc->sge_kdoorbell_reg,
-				    nm_rxq->fl_db_val | V_PIDX(dbinc));
+				if (starve_fl)
+					nm_rxq->fl_db_saved += dbinc;
+				else {
+					t4_write_reg(sc, sc->sge_kdoorbell_reg,
+					    nm_rxq->fl_db_val | V_PIDX(dbinc));
+				}
 				dbinc = 0;
 			}
 		}
@@ -823,8 +937,12 @@ cxgbe_netmap_rxsync(struct netmap_kring *kring, int flags)
 
 		if (dbinc > 0) {
 			wmb();
-			t4_write_reg(sc, sc->sge_kdoorbell_reg,
-			    nm_rxq->fl_db_val | V_PIDX(dbinc));
+			if (starve_fl)
+				nm_rxq->fl_db_saved += dbinc;
+			else {
+				t4_write_reg(sc, sc->sge_kdoorbell_reg,
+				    nm_rxq->fl_db_val | V_PIDX(dbinc));
+			}
 		}
 	}
 
@@ -864,7 +982,7 @@ cxgbe_nm_attach(struct vi_info *vi)
 	na.nm_register = cxgbe_netmap_reg;
 	na.num_tx_rings = vi->nnmtxq;
 	na.num_rx_rings = vi->nnmrxq;
-	netmap_attach(&na);
+	netmap_attach(&na);	/* This adds IFCAP_NETMAP to if_capabilities */
 }
 
 void
@@ -902,9 +1020,8 @@ handle_nm_sge_egr_update(struct adapter *sc, struct ifnet *ifp,
 }
 
 void
-t4_nm_intr(void *arg)
+service_nm_rxq(struct sge_nm_rxq *nm_rxq)
 {
-	struct sge_nm_rxq *nm_rxq = arg;
 	struct vi_info *vi = nm_rxq->vi;
 	struct adapter *sc = vi->pi->adapter;
 	struct ifnet *ifp = vi->ifp;
@@ -914,10 +1031,12 @@ t4_nm_intr(void *arg)
 	struct iq_desc *d = &nm_rxq->iq_desc[nm_rxq->iq_cidx];
 	const void *cpl;
 	uint32_t lq;
-	u_int n = 0, work = 0;
+	u_int work = 0;
 	uint8_t opcode;
 	uint32_t fl_cidx = atomic_load_acq_32(&nm_rxq->fl_cidx);
 	u_int fl_credits = fl_cidx & 7;
+	u_int ndesc = 0;	/* desc processed since last cidx update */
+	u_int nframes = 0;	/* frames processed since last netmap wakeup */
 
 	while ((d->rsp.u.type_gen & F_RSPD_GEN) == nm_rxq->iq_gen) {
 
@@ -929,10 +1048,6 @@ t4_nm_intr(void *arg)
 
 		switch (G_RSPD_TYPE(d->rsp.u.type_gen)) {
 		case X_RSPD_TYPE_FLBUF:
-			if (black_hole != 2) {
-				/* No buffer packing so new buf every time */
-				MPASS(lq & F_RSPD_NEWBUF);
-			}
 
 			/* fall through */
 
@@ -951,9 +1066,13 @@ t4_nm_intr(void *arg)
 				ring->slot[fl_cidx].len = G_RSPD_LEN(lq) -
 				    sc->params.sge.fl_pktshift;
 				ring->slot[fl_cidx].flags = 0;
-				fl_cidx += (lq & F_RSPD_NEWBUF) ? 1 : 0;
-				fl_credits += (lq & F_RSPD_NEWBUF) ? 1 : 0;
-				if (__predict_false(fl_cidx == nm_rxq->fl_sidx))
+				nframes++;
+				if (!(lq & F_RSPD_NEWBUF)) {
+					MPASS(black_hole == 2);
+					break;
+				}
+				fl_credits++;
+				if (__predict_false(++fl_cidx == nm_rxq->fl_sidx))
 					fl_cidx = 0;
 				break;
 			default:
@@ -979,8 +1098,13 @@ t4_nm_intr(void *arg)
 			nm_rxq->iq_gen ^= F_RSPD_GEN;
 		}
 
-		if (__predict_false(++n == rx_ndesc)) {
+		if (__predict_false(++nframes == rx_nframes) && !black_hole) {
 			atomic_store_rel_32(&nm_rxq->fl_cidx, fl_cidx);
+			netmap_rx_irq(ifp, nm_rxq->nid, &work);
+			nframes = 0;
+		}
+
+		if (__predict_false(++ndesc == rx_ndesc)) {
 			if (black_hole && fl_credits >= 8) {
 				fl_credits /= 8;
 				IDXINCR(nm_rxq->fl_pidx, fl_credits * 8,
@@ -988,14 +1112,12 @@ t4_nm_intr(void *arg)
 				t4_write_reg(sc, sc->sge_kdoorbell_reg,
 				    nm_rxq->fl_db_val | V_PIDX(fl_credits));
 				fl_credits = fl_cidx & 7;
-			} else if (!black_hole) {
-				netmap_rx_irq(ifp, nm_rxq->nid, &work);
-				MPASS(work != 0);
 			}
 			t4_write_reg(sc, sc->sge_gts_reg,
-			    V_CIDXINC(n) | V_INGRESSQID(nm_rxq->iq_cntxt_id) |
+			    V_CIDXINC(ndesc) |
+			    V_INGRESSQID(nm_rxq->iq_cntxt_id) |
 			    V_SEINTARM(V_QINTR_TIMER_IDX(X_TIMERREG_UPDATE_CIDX)));
-			n = 0;
+			ndesc = 0;
 		}
 	}
 
@@ -1005,10 +1127,10 @@ t4_nm_intr(void *arg)
 		IDXINCR(nm_rxq->fl_pidx, fl_credits * 8, nm_rxq->fl_sidx);
 		t4_write_reg(sc, sc->sge_kdoorbell_reg,
 		    nm_rxq->fl_db_val | V_PIDX(fl_credits));
-	} else
+	} else if (nframes > 0)
 		netmap_rx_irq(ifp, nm_rxq->nid, &work);
 
-	t4_write_reg(sc, sc->sge_gts_reg, V_CIDXINC(n) |
+    	t4_write_reg(sc, sc->sge_gts_reg, V_CIDXINC(ndesc) |
 	    V_INGRESSQID((u32)nm_rxq->iq_cntxt_id) |
 	    V_SEINTARM(V_QINTR_TIMER_IDX(holdoff_tmr_idx)));
 }

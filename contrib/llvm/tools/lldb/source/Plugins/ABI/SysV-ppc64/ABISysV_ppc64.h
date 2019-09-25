@@ -10,10 +10,6 @@
 #ifndef liblldb_ABISysV_ppc64_h_
 #define liblldb_ABISysV_ppc64_h_
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
 #include "lldb/Target/ABI.h"
 #include "lldb/lldb-private.h"
 
@@ -108,6 +104,8 @@ private:
   ABISysV_ppc64(lldb::ProcessSP process_sp) : lldb_private::ABI(process_sp) {
     // Call CreateInstance instead.
   }
+
+  lldb::ByteOrder GetByteOrder() const;
 };
 
 #endif // liblldb_ABISysV_ppc64_h_

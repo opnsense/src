@@ -74,7 +74,7 @@ private:
 
   void createThunkFunction(Module &M, StringRef Name);
   void insertRegReturnAddrClobber(MachineBasicBlock &MBB, unsigned Reg);
-  void populateThunk(MachineFunction &MF, Optional<unsigned> Reg = None);
+  void populateThunk(MachineFunction &MF, unsigned Reg);
 };
 
 } // end anonymous namespace
@@ -91,7 +91,7 @@ bool X86RetpolineThunks::doInitialization(Module &M) {
 }
 
 bool X86RetpolineThunks::runOnMachineFunction(MachineFunction &MF) {
-  DEBUG(dbgs() << getPassName() << '\n');
+  LLVM_DEBUG(dbgs() << getPassName() << '\n');
 
   TM = &MF.getTarget();;
   STI = &MF.getSubtarget<X86Subtarget>();
@@ -115,7 +115,9 @@ bool X86RetpolineThunks::runOnMachineFunction(MachineFunction &MF) {
     // FIXME: It's a little silly to look at every function just to enumerate
     // the subtargets, but eventually we'll want to look at them for indirect
     // calls, so maybe this is OK.
-    if (!STI->useRetpoline() || STI->useRetpolineExternalThunk())
+    if ((!STI->useRetpolineIndirectCalls() &&
+         !STI->useRetpolineIndirectBranches()) ||
+        STI->useRetpolineExternalThunk())
       return false;
 
     // Otherwise, we need to insert the thunk.
@@ -214,6 +216,15 @@ void X86RetpolineThunks::createThunkFunction(Module &M, StringRef Name) {
   IRBuilder<> Builder(Entry);
 
   Builder.CreateRetVoid();
+
+  // MachineFunctions/MachineBasicBlocks aren't created automatically for the
+  // IR-level constructs we already made. Create them and insert them into the
+  // module.
+  MachineFunction &MF = MMI->getOrCreateMachineFunction(*F);
+  MachineBasicBlock *EntryMBB = MF.CreateMachineBasicBlock(Entry);
+
+  // Insert EntryMBB into MF. It's not in the module until we do this.
+  MF.insert(MF.end(), EntryMBB);
 }
 
 void X86RetpolineThunks::insertRegReturnAddrClobber(MachineBasicBlock &MBB,
@@ -225,25 +236,33 @@ void X86RetpolineThunks::insertRegReturnAddrClobber(MachineBasicBlock &MBB,
 }
 
 void X86RetpolineThunks::populateThunk(MachineFunction &MF,
-                                       Optional<unsigned> Reg) {
+                                       unsigned Reg) {
   // Set MF properties. We never use vregs...
   MF.getProperties().set(MachineFunctionProperties::Property::NoVRegs);
 
+  // Grab the entry MBB and erase any other blocks. O0 codegen appears to
+  // generate two bbs for the entry block.
   MachineBasicBlock *Entry = &MF.front();
   Entry->clear();
+  while (MF.size() > 1)
+    MF.erase(std::next(MF.begin()));
 
   MachineBasicBlock *CaptureSpec = MF.CreateMachineBasicBlock(Entry->getBasicBlock());
   MachineBasicBlock *CallTarget = MF.CreateMachineBasicBlock(Entry->getBasicBlock());
+  MCSymbol *TargetSym = MF.getContext().createTempSymbol();
   MF.push_back(CaptureSpec);
   MF.push_back(CallTarget);
 
   const unsigned CallOpc = Is64Bit ? X86::CALL64pcrel32 : X86::CALLpcrel32;
   const unsigned RetOpc = Is64Bit ? X86::RETQ : X86::RETL;
 
-  BuildMI(Entry, DebugLoc(), TII->get(CallOpc)).addMBB(CallTarget);
-  Entry->addSuccessor(CallTarget);
+  Entry->addLiveIn(Reg);
+  BuildMI(Entry, DebugLoc(), TII->get(CallOpc)).addSym(TargetSym);
+
+  // The MIR verifier thinks that the CALL in the entry block will fall through
+  // to CaptureSpec, so mark it as the successor. Technically, CaptureTarget is
+  // the successor, but the MIR verifier doesn't know how to cope with that.
   Entry->addSuccessor(CaptureSpec);
-  CallTarget->setHasAddressTaken();
 
   // In the capture loop for speculation, we want to stop the processor from
   // speculating as fast as possible. On Intel processors, the PAUSE instruction
@@ -259,7 +278,10 @@ void X86RetpolineThunks::populateThunk(MachineFunction &MF,
   CaptureSpec->setHasAddressTaken();
   CaptureSpec->addSuccessor(CaptureSpec);
 
+  CallTarget->addLiveIn(Reg);
+  CallTarget->setHasAddressTaken();
   CallTarget->setAlignment(4);
-  insertRegReturnAddrClobber(*CallTarget, *Reg);
+  insertRegReturnAddrClobber(*CallTarget, Reg);
+  CallTarget->back().setPreInstrSymbol(MF, TargetSym);
   BuildMI(CallTarget, DebugLoc(), TII->get(RetOpc));
 }

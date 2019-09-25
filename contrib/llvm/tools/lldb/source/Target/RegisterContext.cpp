@@ -7,14 +7,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-// C Includes
-// C++ Includes
-// Other libraries and framework includes
-// Project includes
 #include "lldb/Target/RegisterContext.h"
 #include "lldb/Core/Module.h"
-#include "lldb/Core/RegisterValue.h"
-#include "lldb/Core/Scalar.h"
 #include "lldb/Core/Value.h"
 #include "lldb/Expression/DWARFExpression.h"
 #include "lldb/Target/ExecutionContext.h"
@@ -24,6 +18,8 @@
 #include "lldb/Target/Thread.h"
 #include "lldb/Utility/DataExtractor.h"
 #include "lldb/Utility/Endian.h"
+#include "lldb/Utility/RegisterValue.h"
+#include "lldb/Utility/Scalar.h"
 
 using namespace lldb;
 using namespace lldb_private;
@@ -76,8 +72,7 @@ RegisterContext::UpdateDynamicRegisterSize(const lldb_private::ArchSpec &arch,
   ExecutionContext exe_ctx(CalculateThread());
 
   // In MIPS, the floating point registers size is depends on FR bit of SR
-  // register.
-  // if SR.FR  == 1 then all floating point registers are 64 bits.
+  // register. if SR.FR  == 1 then all floating point registers are 64 bits.
   // else they are all 32 bits.
 
   int expr_result;
@@ -136,7 +131,7 @@ uint64_t RegisterContext::GetPC(uint64_t fail_value) {
     if (target_sp) {
       Target *target = target_sp.get();
       if (target)
-        pc = target->GetOpcodeLoadAddress(pc, eAddressClassCode);
+        pc = target->GetOpcodeLoadAddress(pc, AddressClass::eCode);
     }
   }
 
@@ -262,8 +257,7 @@ bool RegisterContext::CopyFromRegisterContext(lldb::RegisterContextSP context) {
       RegisterValue reg_value;
 
       // If we can reconstruct the register from the frame we are copying from,
-      // then do so, otherwise
-      // use the value from frame 0.
+      // then do so, otherwise use the value from frame 0.
       if (context->ReadRegister(reg_info, reg_value)) {
         WriteRegister(reg_info, reg_value);
       } else if (frame_zero_context->ReadRegister(reg_info, reg_value)) {
@@ -355,12 +349,11 @@ Status RegisterContext::ReadRegisterValueFromMemory(
       return error;
     }
 
-    // We now have a memory buffer that contains the part or all of the register
-    // value. Set the register value using this memory data.
+    // We now have a memory buffer that contains the part or all of the
+    // register value. Set the register value using this memory data.
     // TODO: we might need to add a parameter to this function in case the byte
     // order of the memory data doesn't match the process. For now we are
-    // assuming
-    // they are the same.
+    // assuming they are the same.
     reg_value.SetFromMemoryData(reg_info, src, src_len,
                                 process_sp->GetByteOrder(), error);
   } else
@@ -381,8 +374,7 @@ Status RegisterContext::WriteRegisterValueToMemory(
 
     // TODO: we might need to add a parameter to this function in case the byte
     // order of the memory data doesn't match the process. For now we are
-    // assuming
-    // they are the same.
+    // assuming they are the same.
 
     const uint32_t bytes_copied = reg_value.GetAsMemoryData(
         reg_info, dst, dst_len, process_sp->GetByteOrder(), error);
@@ -431,9 +423,9 @@ ThreadSP RegisterContext::CalculateThread() {
 }
 
 StackFrameSP RegisterContext::CalculateStackFrame() {
-  // Register contexts might belong to many frames if we have inlined
-  // functions inside a frame since all inlined functions share the
-  // same registers, so we can't definitively say which frame we come from...
+  // Register contexts might belong to many frames if we have inlined functions
+  // inside a frame since all inlined functions share the same registers, so we
+  // can't definitively say which frame we come from...
   return StackFrameSP();
 }
 

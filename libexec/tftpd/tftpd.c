@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1983, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -372,7 +374,10 @@ main(int argc, char *argv[])
 			exit(1);
 		}
 		chdir("/");
-		setgroups(1, &nobody->pw_gid);
+		if (setgroups(1, &nobody->pw_gid) != 0) {
+			tftp_log(LOG_ERR, "setgroups failed");
+			exit(1);
+		}
 		if (setuid(nobody->pw_uid) != 0) {
 			tftp_log(LOG_ERR, "setuid failed");
 			exit(1);
@@ -520,7 +525,7 @@ tftp_wrq(int peer, char *recvbuffer, ssize_t size)
 	cp = parse_header(peer, recvbuffer, size, &filename, &mode);
 	size -= (cp - recvbuffer) + 1;
 
-	strcpy(fnbuf, filename);
+	strlcpy(fnbuf, filename, sizeof(fnbuf));
 	reduce_path(fnbuf);
 	filename = fnbuf;
 
@@ -565,7 +570,7 @@ tftp_rrq(int peer, char *recvbuffer, ssize_t size)
 	cp = parse_header(peer, recvbuffer, size, &filename, &mode);
 	size -= (cp - recvbuffer) + 1;
 
-	strcpy(fnbuf, filename);
+	strlcpy(fnbuf, filename, sizeof(fnbuf));
 	reduce_path(fnbuf);
 	filename = fnbuf;
 
@@ -802,6 +807,7 @@ tftp_xmitfile(int peer, const char *mode)
 	time_t now;
 	struct tftp_stats ts;
 
+	memset(&ts, 0, sizeof(ts));
 	now = time(NULL);
 	if (debug&DEBUG_SIMPLE)
 		tftp_log(LOG_DEBUG, "Transmitting file");

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright 1996-1998 John D. Polstra.
  * All rights reserved.
  *
@@ -26,8 +28,6 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
-#include "opt_pax.h"
-
 #include <sys/param.h>
 #include <sys/kernel.h>
 #include <sys/systm.h>
@@ -36,7 +36,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/linker.h>
 #include <sys/sysent.h>
 #include <sys/imgact_elf.h>
-#include <sys/pax.h>
 #include <sys/proc.h>
 #include <sys/syscall.h>
 #include <sys/signalvar.h>
@@ -72,7 +71,6 @@ struct sysentvec elf32_freebsd_sysvec = {
 	.sv_coredump	= __elfN(coredump),
 	.sv_imgact_try	= NULL,
 	.sv_minsigstksz	= MINSIGSTKSZ,
-	.sv_pagesize	= PAGE_SIZE,
 	.sv_minuser	= VM_MIN_ADDRESS,
 	.sv_maxuser	= VM_MAXUSER_ADDRESS,
 	.sv_usrstack	= USRSTACK,
@@ -84,9 +82,9 @@ struct sysentvec elf32_freebsd_sysvec = {
 	.sv_maxssiz	= NULL,
 	.sv_flags	=
 #if __ARM_ARCH >= 6
-			  SV_SHP | SV_TIMEKEEP |
+			  SV_ASLR | SV_SHP | SV_TIMEKEEP |
 #endif
-			  SV_ABI_FREEBSD | SV_ILP32 | SV_HWCAP,
+			  SV_ABI_FREEBSD | SV_ILP32 | SV_ASLR,
 	.sv_set_syscall_retval = cpu_set_syscall_retval,
 	.sv_fetch_syscall_args = cpu_fetch_syscall_args,
 	.sv_syscallnames = syscallnames,
@@ -95,7 +93,6 @@ struct sysentvec elf32_freebsd_sysvec = {
 	.sv_schedtail	= NULL,
 	.sv_thread_detach = NULL,
 	.sv_trap	= NULL,
-	.sv_pax_aslr_init = pax_aslr_init_vmspace,
 	.sv_hwcap	= &elf_hwcap,
 	.sv_hwcap2	= &elf_hwcap2,
 };
@@ -149,6 +146,13 @@ elf32_dump_thread(struct thread *td, void *dst, size_t *off)
 		*off = elf32_populate_note(NT_ARM_VFP, NULL, NULL, sizeof(vfp),
 		    NULL);
 #endif
+}
+
+bool
+elf_is_ifunc_reloc(Elf_Size r_info __unused)
+{
+
+	return (false);
 }
 
 /*

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1982, 1986, 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -177,7 +179,10 @@ struct file {
 	/*
 	 *  DTYPE_VNODE specific fields.
 	 */
-	int		f_seqcount;	/* (a) Count of sequential accesses. */
+	union {
+		int16_t	f_seqcount;	/* (a) Count of sequential accesses. */
+		int	f_pipegen;
+	};
 	off_t		f_nextoff;	/* next expected read/write offset. */
 	union {
 		struct cdev_privdata *fvn_cdevpriv;
@@ -207,18 +212,23 @@ struct file {
  * Userland version of struct file, for sysctl
  */
 struct xfile {
-	size_t	xf_size;	/* size of struct xfile */
+	ksize_t	xf_size;	/* size of struct xfile */
 	pid_t	xf_pid;		/* owning process */
 	uid_t	xf_uid;		/* effective uid of owning process */
 	int	xf_fd;		/* descriptor number */
-	void	*xf_file;	/* address of struct file */
+	int	_xf_int_pad1;
+	kvaddr_t xf_file;	/* address of struct file */
 	short	xf_type;	/* descriptor type */
+	short	_xf_short_pad1;
 	int	xf_count;	/* reference count */
 	int	xf_msgcount;	/* references from message queue */
+	int	_xf_int_pad2;
 	off_t	xf_offset;	/* file offset */
-	void	*xf_data;	/* file descriptor specific data */
-	void	*xf_vnode;	/* vnode pointer */
+	kvaddr_t xf_data;	/* file descriptor specific data */
+	kvaddr_t xf_vnode;	/* vnode pointer */
 	u_int	xf_flag;	/* flags (see fcntl.h) */
+	int	_xf_int_pad3;
+	int64_t	_xf_int64_pad[6];
 };
 
 #ifdef _KERNEL
@@ -274,8 +284,12 @@ _fnoop(void)
 	return (0);
 }
 
-#define	fhold(fp)							\
-	(refcount_acquire(&(fp)->f_count))
+static __inline __result_use_check bool
+fhold(struct file *fp)
+{
+	return (refcount_acquire_checked(&fp->f_count));
+}
+
 #define	fdrop(fp, td)							\
 	(refcount_release(&(fp)->f_count) ? _fdrop((fp), (td)) : _fnoop())
 

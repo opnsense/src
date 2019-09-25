@@ -52,7 +52,10 @@ public:
 
   bool AppendSuppressFileAction(int fd, bool read, bool write);
 
-  void FinalizeFileActions(Target *target, bool default_to_use_pty);
+  // Redirect stdin/stdout/stderr to a pty, if no action for the respective file
+  // descriptor is specified. (So if stdin and stdout already have file actions,
+  // but stderr doesn't, then only stderr will be redirected to a pty.)
+  llvm::Error SetUpPtyRedirection();
 
   size_t GetNumFileActions() const { return m_file_actions.size(); }
 
@@ -107,13 +110,18 @@ public:
     return m_monitor_callback;
   }
 
+  /// A Monitor callback which does not take any action on process events. Use
+  /// this if you don't need to take any particular action when the process
+  /// terminates, but you still need to reap it.
+  static bool NoOpMonitorCallback(lldb::pid_t pid, bool exited, int signal,
+                                  int status);
+
   bool GetMonitorSignals() const { return m_monitor_signals; }
 
   // If the LaunchInfo has a monitor callback, then arrange to monitor the
-  // process.
-  // Return true if the LaunchInfo has taken care of monitoring the process, and
-  // false if the
-  // caller might want to monitor the process themselves.
+  // process. Return true if the LaunchInfo has taken care of monitoring the
+  // process, and false if the caller might want to monitor the process
+  // themselves.
 
   bool MonitorProcess() const;
 
@@ -125,8 +133,6 @@ public:
   void SetListener(const lldb::ListenerSP &listener_sp) {
     m_listener_sp = listener_sp;
   }
-
-  lldb::ListenerSP GetListenerForProcess(Debugger &debugger);
 
   lldb::ListenerSP GetHijackListener() const { return m_hijack_listener_sp; }
 

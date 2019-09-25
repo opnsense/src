@@ -27,7 +27,7 @@ struct rt2560_rx_radiotap_header {
 	int8_t		wr_antsignal;
 	int8_t		wr_antnoise;
 	uint8_t		wr_antenna;
-};
+} __packed __aligned(8);
 
 #define RT2560_RX_RADIOTAP_PRESENT					\
 	((1 << IEEE80211_RADIOTAP_TSFT) |				\
@@ -45,7 +45,7 @@ struct rt2560_tx_radiotap_header {
 	uint16_t	wt_chan_freq;
 	uint16_t	wt_chan_flags;
 	uint8_t		wt_antenna;
-};
+} __packed;
 
 #define RT2560_TX_RADIOTAP_PRESENT					\
 	((1 << IEEE80211_RADIOTAP_FLAGS) |				\
@@ -105,6 +105,7 @@ struct rt2560_vap {
 
 struct rt2560_softc {
 	struct ieee80211com	sc_ic;
+	struct ieee80211_ratectl_tx_status sc_txs;
 	struct mtx		sc_mtx;
 	struct mbufq		sc_snd;
 	device_t		sc_dev;

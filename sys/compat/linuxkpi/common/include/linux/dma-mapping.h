@@ -119,6 +119,17 @@ dma_set_coherent_mask(struct device *dev, u64 mask)
 	return 0;
 }
 
+static inline int
+dma_set_mask_and_coherent(struct device *dev, u64 mask)
+{
+	int r;
+
+	r = dma_set_mask(dev, mask);
+	if (r == 0)
+		dma_set_coherent_mask(dev, mask);
+	return (r);
+}
+
 static inline void *
 dma_alloc_coherent(struct device *dev, size_t size, dma_addr_t *dma_handle,
     gfp_t flag)
@@ -134,8 +145,8 @@ dma_alloc_coherent(struct device *dev, size_t size, dma_addr_t *dma_handle,
 	else
 		high = BUS_SPACE_MAXADDR;
 	align = PAGE_SIZE << get_order(size);
-	mem = (void *)kmem_alloc_contig(kmem_arena, size, flag, 0, high, align,
-	    0, VM_MEMATTR_DEFAULT);
+	mem = (void *)kmem_alloc_contig(size, flag, 0, high, align, 0,
+	    VM_MEMATTR_DEFAULT);
 	if (mem)
 		*dma_handle = vtophys(mem);
 	else
@@ -156,7 +167,7 @@ dma_free_coherent(struct device *dev, size_t size, void *cpu_addr,
     dma_addr_t dma_handle)
 {
 
-	kmem_free(kmem_arena, (vm_offset_t)cpu_addr, size);
+	kmem_free((vm_offset_t)cpu_addr, size);
 }
 
 /* XXX This only works with no iommu. */
@@ -172,6 +183,14 @@ static inline void
 dma_unmap_single_attrs(struct device *dev, dma_addr_t addr, size_t size,
     enum dma_data_direction dir, struct dma_attrs *attrs)
 {
+}
+
+static inline dma_addr_t
+dma_map_page_attrs(struct device *dev, struct page *page, size_t offset,
+    size_t size, enum dma_data_direction dir, unsigned long attrs)
+{
+
+	return (VM_PAGE_TO_PHYS(page) + offset);
 }
 
 static inline int

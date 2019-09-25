@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2009-2016 Solarflare Communications Inc.
  * All rights reserved.
  *
@@ -392,6 +394,20 @@ efx_mcdi_phy_module_get_info(
 #define	EFX_MCDI_HAVE_PRIVILEGE(mask, priv)				\
 	(((mask) & (MC_CMD_PRIVILEGE_MASK_IN_GRP_ ## priv)) ==		\
 	(MC_CMD_PRIVILEGE_MASK_IN_GRP_ ## priv))
+
+#define	EFX_MCDI_BUF_SIZE(_in_len, _out_len)				\
+	EFX_P2ROUNDUP(size_t,						\
+		MAX(MAX(_in_len, _out_len), (2 * sizeof (efx_dword_t))),\
+		sizeof (efx_dword_t))
+
+/*
+ * The buffer size must be a multiple of dword to ensure that MCDI works
+ * properly with Siena based boards (which use on-chip buffer). Also, it
+ * should be at minimum the size of two dwords to allow space for extended
+ * error responses if the request/response buffer sizes are smaller.
+ */
+#define EFX_MCDI_DECLARE_BUF(_name, _in_len, _out_len)			\
+	uint8_t _name[EFX_MCDI_BUF_SIZE(_in_len, _out_len)] = {0}
 
 typedef enum efx_mcdi_feature_id_e {
 	EFX_MCDI_FEATURE_FW_UPDATE = 0,

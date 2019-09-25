@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1999, 2000 Matthew R. Green
  * Copyright (c) 2001 - 2003 by Thomas Moestl <tmm@FreeBSD.org>
  * Copyright (c) 2005 - 2006 Marius Strobl <marius@FreeBSD.org>
@@ -69,6 +71,7 @@ __FBSDID("$FreeBSD$");
 
 #include <dev/pci/pcireg.h>
 #include <dev/pci/pcivar.h>
+#include <dev/pci/pcib_private.h>
 
 #include <sparc64/pci/ofw_pci.h>
 #include <sparc64/pci/psychoreg.h>
@@ -141,6 +144,7 @@ static device_method_t psycho_methods[] = {
 	DEVMETHOD(pcib_read_config,	psycho_read_config),
 	DEVMETHOD(pcib_write_config,	psycho_write_config),
 	DEVMETHOD(pcib_route_interrupt,	psycho_route_interrupt),
+	DEVMETHOD(pcib_request_feature,	pcib_request_feature_allow),
 
 	/* ofw_bus interface */
 	DEVMETHOD(ofw_bus_get_node,	ofw_pci_get_node),
@@ -660,7 +664,7 @@ psycho_set_intr(struct psycho_softc *sc, u_int index, bus_addr_t intrmap,
 	    INTVEC(PSYCHO_READ8(sc, intrmap)) != vec ||
 	    intr_vectors[vec].iv_ic != &psycho_ic ||
 	    bus_setup_intr(sc->sc_dev, sc->sc_irq_res[index],
-	    INTR_TYPE_MISC | INTR_BRIDGE, filt, intr, sc,
+	    INTR_TYPE_MISC | INTR_BRIDGE | INTR_MPSAFE, filt, intr, sc,
 	    &sc->sc_ihand[index]) != 0)
 		panic("%s: failed to set up interrupt %d", __func__, index);
 }

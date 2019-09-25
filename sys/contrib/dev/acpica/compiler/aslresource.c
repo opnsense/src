@@ -8,7 +8,7 @@
  *
  * 1. Copyright Notice
  *
- * Some or all of this work - Copyright (c) 1999 - 2017, Intel Corp.
+ * Some or all of this work - Copyright (c) 1999 - 2018, Intel Corp.
  * All rights reserved.
  *
  * 2. License
@@ -197,7 +197,7 @@ RsSmallAddressCheck (
     ACPI_PARSE_OBJECT       *Op)
 {
 
-    if (Gbl_NoResourceChecking)
+    if (AslGbl_NoResourceChecking)
     {
         return;
     }
@@ -329,7 +329,7 @@ RsLargeAddressCheck (
     ACPI_PARSE_OBJECT       *Op)
 {
 
-    if (Gbl_NoResourceChecking)
+    if (AslGbl_NoResourceChecking)
     {
         return;
     }

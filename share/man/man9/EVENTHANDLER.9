@@ -23,7 +23,7 @@
 .\" SUCH DAMAGE.
 .\" $FreeBSD$
 .\"
-.Dd October 31, 2017
+.Dd October 21, 2018
 .Dt EVENTHANDLER 9
 .Os
 .Sh NAME
@@ -283,6 +283,10 @@ Callback invoked after cpu frequency has changed.
 Callback invoked before cpu frequency has changed.
 .It Vt dcons_poll
 Callback invoked to poll for dcons changes.
+.It Vt device_attach
+Callback invoked after a device has attached.
+.It Vt device_detach
+Callbacks invoked before and after a device has detached.
 .It Vt dev_clone
 Callbacks invoked when a new entry is created under
 .Pa /dev .
@@ -294,6 +298,8 @@ Callback invoked when an change has been made to an interface group.
 Callback invoked when an interfance has been removed from an interface group.
 .It Vt ifaddr_event
 Callbacks invoked when an address is set up on a network interface.
+.It Vt ifaddr_event_ext
+Callback invoked when an address has been added or removed from an interface. 
 .It Vt if_clone_event
 Callbacks invoked when an interface is cloned.
 .It Vt iflladdr_event

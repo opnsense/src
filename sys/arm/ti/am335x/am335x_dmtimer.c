@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2012 Damjan Marion <dmarion@Freebsd.org>
  * All rights reserved.
  *
@@ -38,9 +40,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/timetc.h>
 #include <machine/bus.h>
 
-#ifdef MULTIDELAY
 #include <machine/machdep.h> /* For arm_set_delay */
-#endif
 
 #include <dev/ofw/openfirm.h>
 #include <dev/ofw/ofw_bus.h>
@@ -241,9 +241,7 @@ am335x_dmtimer_tc_init(struct am335x_dmtimer_softc *sc)
 	am335x_dmtimer_tc_sc = sc;
 	tc_init(&sc->func.tc);
 
-#ifdef MULTIDELAY
 	arm_set_delay(am335x_dmtimer_delay, sc);
-#endif
 
 	return (0);
 }
@@ -360,20 +358,3 @@ am335x_dmtimer_delay(int usec, void *arg)
 		first = last;
 	}
 }
-
-#ifndef MULTIDELAY
-void
-DELAY(int usec)
-{
-	int32_t counts;
-
-	if (am335x_dmtimer_tc_sc == NULL) {
-		for (; usec > 0; usec--)
-			for (counts = 200; counts > 0; counts--)
-				/* Prevent gcc from optimizing  out the loop */
-				cpufunc_nullop();
-		return;
-	} else
-		am335x_dmtimer_delay(usec, am335x_dmtimer_tc_sc);
-}
-#endif

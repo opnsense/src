@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
  * All rights reserved.
  *
@@ -95,9 +97,7 @@ ip6_forward(struct mbuf *m, int srcrt)
 	struct ifnet *origifp;	/* maybe unnecessary */
 	u_int32_t inzone, outzone;
 	struct in6_addr src_in6, dst_in6, odst;
-#ifdef SCTP
-	int sw_csum;
-#endif
+	struct m_tag *fwd_tag;
 	char ip6bufs[INET6_ADDRSTRLEN], ip6bufd[INET6_ADDRSTRLEN];
 
 	/*
@@ -145,7 +145,8 @@ ip6_forward(struct mbuf *m, int srcrt)
 	 * It is important to save it before IPsec processing as IPsec
 	 * processing may modify the mbuf.
 	 */
-	mcopy = m_copy(m, 0, imin(m->m_pkthdr.len, ICMPV6_PLD_MAXLEN));
+	mcopy = m_copym(m, 0, imin(m->m_pkthdr.len, ICMPV6_PLD_MAXLEN),
+	    M_NOWAIT);
 #ifdef IPSTEALTH
 	if (V_ip6stealth == 0)
 #endif
@@ -359,17 +360,13 @@ again2:
 		goto out;
 	}
 	/* Or forward to some other address? */
-	if (IP6_HAS_NEXTHOP(m)) {
+	if ((m->m_flags & M_IP6_NEXTHOP) &&
+	    (fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL)) != NULL) {
 		dst = (struct sockaddr_in6 *)&rin6.ro_dst;
-		if (ip6_get_fwdtag(m, dst, NULL) != 0) {
-			if (mcopy) {
-				m_freem(m);
-				goto freecopy;
-			}
-			goto bad;
-		}
+		bcopy((fwd_tag+1), dst, sizeof(struct sockaddr_in6));
 		m->m_flags |= M_SKIP_FIREWALL;
-		ip6_flush_fwdtag(m);
+		m->m_flags &= ~M_IP6_NEXTHOP;
+		m_tag_delete(m, fwd_tag);
 		RTFREE(rt);
 		goto again2;
 	}

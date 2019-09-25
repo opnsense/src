@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1983, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -47,7 +49,7 @@
 struct ddloc_mem {
 	LIST_ENTRY(ddloc_mem) loc_lqe; /* entry in list */
 	long	loc_index;	/* key associated with structure */
-	long	loc_seek;	/* magic cookie returned by getdirentries */
+	off_t	loc_seek;	/* magic cookie returned by getdirentries */
 	long	loc_loc;	/* offset of entry in buffer */
 };
 
@@ -103,5 +105,8 @@ struct dirent	*_readdir_unlocked(DIR *, int);
 void 		_reclaim_telldir(DIR *);
 void 		_seekdir(DIR *, long);
 void		_fixtelldir(DIR *dirp, long oldseek, long oldloc);
+
+#define	RDU_SKIP	0x0001
+#define	RDU_SHORT	0x0002
 
 #endif

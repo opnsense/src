@@ -62,7 +62,7 @@ struct iwn_rx_radiotap_header {
 	uint16_t	wr_chan_flags;
 	int8_t		wr_dbm_antsignal;
 	int8_t		wr_dbm_antnoise;
-} __packed;
+} __packed __aligned(8);
 
 #define IWN_RX_RADIOTAP_PRESENT						\
 	((1 << IEEE80211_RADIOTAP_TSFT) |				\
@@ -100,6 +100,11 @@ struct iwn_tx_data {
 	bus_addr_t		scratch_paddr;
 	struct mbuf		*m;
 	struct ieee80211_node	*ni;
+	unsigned int		remapped:1;
+	unsigned int		long_retries:7;
+#define IWN_LONG_RETRY_FW_OVERFLOW	0x10
+#define IWN_LONG_RETRY_LIMIT_LOG	7
+#define IWN_LONG_RETRY_LIMIT		((1 << IWN_LONG_RETRY_LIMIT_LOG) - 3)
 };
 
 struct iwn_tx_ring {
@@ -138,8 +143,8 @@ struct iwn_node {
 	uint8_t				id;
 	struct {
 		uint64_t		bitmap;
+		int			short_retries;
 		int			startidx;
-		int			nframes;
 	} agg[IEEE80211_TID_SIZE];
 };
 
@@ -206,10 +211,10 @@ struct iwn_ops {
 			    uint16_t);
 	int		(*get_temperature)(struct iwn_softc *);
 	int		(*get_rssi)(struct iwn_softc *, struct iwn_rx_stat *);
-	int		(*set_txpower)(struct iwn_softc *,
-			    struct ieee80211_channel *, int);
+	int		(*set_txpower)(struct iwn_softc *, int);
 	int		(*init_gains)(struct iwn_softc *);
 	int		(*set_gains)(struct iwn_softc *);
+	int		(*rxon_assoc)(struct iwn_softc *, int);
 	int		(*add_node)(struct iwn_softc *, struct iwn_node_info *,
 			    int);
 	void		(*tx_done)(struct iwn_softc *, struct iwn_rx_desc *,
@@ -238,6 +243,7 @@ struct iwn_softc {
 	struct cdev		*sc_cdev;
 	struct mtx		sc_mtx;
 	struct ieee80211com	sc_ic;
+	struct ieee80211_ratectl_tx_status sc_txs;
 
 	u_int			sc_flags;
 #define IWN_FLAG_HAS_OTPROM	(1 << 1)
@@ -304,8 +310,7 @@ struct iwn_softc {
 	int			sc_cap_off;	/* PCIe Capabilities. */
 
 	/* Tasks used by the driver */
-	struct task		sc_radioon_task;
-	struct task		sc_radiooff_task;
+	struct task		sc_rftoggle_task;
 	struct task		sc_panic_task;
 	struct task		sc_xmit_task;
 

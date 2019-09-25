@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2011, 2015 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2016 by Delphix. All rights reserved.
  */
 
 #include <sys/zfs_context.h>
@@ -71,6 +71,9 @@ vdev_file_open(vdev_t *vd, uint64_t *psize, uint64_t *max_psize,
 	vnode_t *vp;
 	vattr_t vattr;
 	int error;
+
+	/* Rotational optimizations only make sense on block devices */
+	vd->vdev_nonrot = B_TRUE;
 
 	/*
 	 * We must have a pathname, and it must be absolute.
@@ -236,6 +239,10 @@ vdev_file_io_start(zio_t *zio)
 
 		switch (zio->io_cmd) {
 		case DKIOCFLUSHWRITECACHE:
+
+			if (zfs_nocacheflush)
+				break;
+
 			zio->io_error = VOP_FSYNC(vf->vf_vnode, FSYNC | FDSYNC,
 			    kcred, NULL);
 			break;
@@ -267,9 +274,11 @@ vdev_ops_t vdev_file_ops = {
 	vdev_file_io_start,
 	vdev_file_io_done,
 	NULL,
+	NULL,
 	vdev_file_hold,
 	vdev_file_rele,
 	NULL,
+	vdev_default_xlate,
 	VDEV_TYPE_FILE,		/* name of this vdev type */
 	B_TRUE			/* leaf vdev */
 };
@@ -286,9 +295,11 @@ vdev_ops_t vdev_disk_ops = {
 	vdev_file_io_start,
 	vdev_file_io_done,
 	NULL,
+	NULL,
 	vdev_file_hold,
 	vdev_file_rele,
 	NULL,
+	vdev_default_xlate,
 	VDEV_TYPE_DISK,		/* name of this vdev type */
 	B_TRUE			/* leaf vdev */
 };

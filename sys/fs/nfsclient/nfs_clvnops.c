@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -13,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -140,7 +142,6 @@ static vop_advlock_t	nfs_advlock;
 static vop_advlockasync_t nfs_advlockasync;
 static vop_getacl_t nfs_getacl;
 static vop_setacl_t nfs_setacl;
-static vop_set_text_t nfs_set_text;
 
 /*
  * Global vfs data structures for nfs
@@ -177,7 +178,6 @@ struct vop_vector newnfs_vnodeops = {
 	.vop_write =		ncl_write,
 	.vop_getacl =		nfs_getacl,
 	.vop_setacl =		nfs_setacl,
-	.vop_set_text =		nfs_set_text,
 };
 
 struct vop_vector newnfs_fifoops = {
@@ -208,8 +208,6 @@ static int nfs_renameit(struct vnode *sdvp, struct vnode *svp,
 /*
  * Global variables
  */
-#define	DIRHDSIZ	(sizeof (struct dirent) - (MAXNAMLEN + 1))
-
 SYSCTL_DECL(_vfs_nfs);
 
 static int	nfsaccess_cache_timeout = NFS_MAXATTRTIMO;
@@ -498,6 +496,7 @@ nfs_open(struct vop_open_args *ap)
 	int error;
 	int fmode = ap->a_mode;
 	struct ucred *cred;
+	vm_object_t obj;
 
 	if (vp->v_type != VREG && vp->v_type != VDIR && vp->v_type != VLNK)
 		return (EOPNOTSUPP);
@@ -611,6 +610,32 @@ nfs_open(struct vop_open_args *ap)
 	if (cred != NULL)
 		crfree(cred);
 	vnode_create_vobject(vp, vattr.va_size, ap->a_td);
+
+	/*
+	 * If the text file has been mmap'd, flush any dirty pages to the
+	 * buffer cache and then...
+	 * Make sure all writes are pushed to the NFS server.  If this is not
+	 * done, the modify time of the file can change while the text
+	 * file is being executed.  This will cause the process that is
+	 * executing the text file to be terminated.
+	 */
+	if (vp->v_writecount <= -1) {
+		if ((obj = vp->v_object) != NULL &&
+		    (obj->flags & OBJ_MIGHTBEDIRTY) != 0) {
+			VM_OBJECT_WLOCK(obj);
+			vm_object_page_clean(obj, 0, 0, OBJPC_SYNC);
+			VM_OBJECT_WUNLOCK(obj);
+		}
+
+		/* Now, flush the buffer cache. */
+		ncl_flush(vp, MNT_WAIT, curthread, 0, 0);
+
+		/* And, finally, make sure that n_mtime is up to date. */
+		np = VTONFS(vp);
+		mtx_lock(&np->n_mtx);
+		np->n_mtime = np->n_vattr.na_mtime;
+		mtx_unlock(&np->n_mtx);
+	}
 	return (0);
 }
 
@@ -929,8 +954,7 @@ nfs_setattr(struct vop_setattr_args *ap)
 			mtx_lock(&np->n_mtx);
 			tsize = np->n_size;
 			mtx_unlock(&np->n_mtx);
-			error = ncl_meta_setsize(vp, ap->a_cred, td,
-			    vap->va_size);
+			error = ncl_meta_setsize(vp, td, vap->va_size);
 			mtx_lock(&np->n_mtx);
  			if (np->n_flag & NMODIFIED) {
 			    tsize = np->n_size;
@@ -1193,7 +1217,7 @@ nfs_lookup(struct vop_lookup_args *ap)
 	 */
 	if (cnp->cn_nameiop == RENAME && (flags & ISLASTCN)) {
 		if (NFS_CMPFH(np, nfhp->nfh_fh, nfhp->nfh_len)) {
-			FREE((caddr_t)nfhp, M_NFSFH);
+			free(nfhp, M_NFSFH);
 			return (EISDIR);
 		}
 		error = nfscl_nget(mp, dvp, nfhp, cnp, td, &np, NULL,
@@ -1248,7 +1272,7 @@ nfs_lookup(struct vop_lookup_args *ap)
 			(void) nfscl_loadattrcache(&newvp, &nfsva, NULL, NULL,
 			    0, 1);
 	} else if (NFS_CMPFH(np, nfhp->nfh_fh, nfhp->nfh_len)) {
-		FREE((caddr_t)nfhp, M_NFSFH);
+		free(nfhp, M_NFSFH);
 		VREF(dvp);
 		newvp = dvp;
 		if (attrflag)
@@ -1817,7 +1841,7 @@ nfs_rename(struct vop_rename_args *ap)
 		 * For NFSv4, check to see if it is the same name and
 		 * replace the name, if it is different.
 		 */
-		MALLOC(newv4, struct nfsv4node *,
+		newv4 = malloc(
 		    sizeof (struct nfsv4node) +
 		    tdnp->n_fhp->nfh_len + tcnp->cn_namelen - 1,
 		    M_NFSV4NODE, M_WAITOK);
@@ -1838,7 +1862,7 @@ nnn[nnnl] = '\0';
 printf("ren replace=%s\n",nnn);
 }
 #endif
-			FREE((caddr_t)fnp->n_v4, M_NFSV4NODE);
+			free(fnp->n_v4, M_NFSV4NODE);
 			fnp->n_v4 = newv4;
 			newv4 = NULL;
 			fnp->n_v4->n4_fhlen = tdnp->n_fhp->nfh_len;
@@ -1851,7 +1875,7 @@ printf("ren replace=%s\n",nnn);
 		mtx_unlock(&tdnp->n_mtx);
 		mtx_unlock(&fnp->n_mtx);
 		if (newv4 != NULL)
-			FREE((caddr_t)newv4, M_NFSV4NODE);
+			free(newv4, M_NFSV4NODE);
 	}
 
 	if (fvp->v_type == VDIR) {
@@ -2389,7 +2413,7 @@ nfs_sillyrename(struct vnode *dvp, struct vnode *vp, struct componentname *cnp)
 	cache_purge(dvp);
 	np = VTONFS(vp);
 	KASSERT(vp->v_type != VDIR, ("nfs: sillyrename dir"));
-	MALLOC(sp, struct sillyrename *, sizeof (struct sillyrename),
+	sp = malloc(sizeof (struct sillyrename),
 	    M_NEWNFSREQ, M_WAITOK);
 	sp->s_cred = crhold(cnp->cn_cred);
 	sp->s_dvp = dvp;
@@ -2423,7 +2447,7 @@ nfs_sillyrename(struct vnode *dvp, struct vnode *vp, struct componentname *cnp)
 bad:
 	vrele(sp->s_dvp);
 	crfree(sp->s_cred);
-	free((caddr_t)sp, M_NEWNFSREQ);
+	free(sp, M_NEWNFSREQ);
 	return (error);
 }
 
@@ -2473,8 +2497,8 @@ nnn[nnnl] = '\0';
 printf("replace=%s\n",nnn);
 }
 #endif
-			    FREE((caddr_t)np->n_v4, M_NFSV4NODE);
-			    MALLOC(np->n_v4, struct nfsv4node *,
+			    free(np->n_v4, M_NFSV4NODE);
+			    np->n_v4 = malloc(
 				sizeof (struct nfsv4node) +
 				dnp->n_fhp->nfh_len + len - 1,
 				M_NFSV4NODE, M_WAITOK);
@@ -2493,10 +2517,10 @@ printf("replace=%s\n",nnn);
 		    vfs_hash_rehash(vp, hash);
 		    np->n_fhp = nfhp;
 		    if (onfhp != NULL)
-			FREE((caddr_t)onfhp, M_NFSFH);
+			free(onfhp, M_NFSFH);
 		    newvp = NFSTOV(np);
 		} else if (NFS_CMPFH(dnp, nfhp->nfh_fh, nfhp->nfh_len)) {
-		    FREE((caddr_t)nfhp, M_NFSFH);
+		    free(nfhp, M_NFSFH);
 		    VREF(dvp);
 		    newvp = dvp;
 		} else {
@@ -2666,7 +2690,7 @@ ncl_flush(struct vnode *vp, int waitfor, struct thread *td,
 #define	NFS_COMMITBVECSIZ	20
 #endif
 	struct buf *bvec_on_stack[NFS_COMMITBVECSIZ];
-	int bvecsize = 0, bveccount;
+	u_int bvecsize = 0, bveccount;
 
 	if (called_from_renewthread != 0)
 		slptimeo = hz;
@@ -3008,14 +3032,19 @@ nfs_advlock(struct vop_advlock_args *ap)
 	int ret, error = EOPNOTSUPP;
 	u_quad_t size;
 	
+	ret = NFSVOPLOCK(vp, LK_SHARED);
+	if (ret != 0)
+		return (EBADF);
 	if (NFS_ISV4(vp) && (ap->a_flags & (F_POSIX | F_FLOCK)) != 0) {
-		if (vp->v_type != VREG)
+		if (vp->v_type != VREG) {
+			NFSVOPUNLOCK(vp, 0);
 			return (EINVAL);
+		}
 		if ((ap->a_flags & F_POSIX) != 0)
 			cred = p->p_ucred;
 		else
 			cred = td->td_ucred;
-		NFSVOPLOCK(vp, LK_EXCLUSIVE | LK_RETRY);
+		NFSVOPLOCK(vp, LK_UPGRADE | LK_RETRY);
 		if (vp->v_iflag & VI_DOOMED) {
 			NFSVOPUNLOCK(vp, 0);
 			return (EBADF);
@@ -3094,9 +3123,6 @@ nfs_advlock(struct vop_advlock_args *ap)
 		NFSVOPUNLOCK(vp, 0);
 		return (0);
 	} else if (!NFS_ISV4(vp)) {
-		error = NFSVOPLOCK(vp, LK_SHARED);
-		if (error)
-			return (error);
 		if ((VFSTONFS(vp->v_mount)->nm_flag & NFSMNT_NOLOCKD) != 0) {
 			size = VTONFS(vp)->n_size;
 			NFSVOPUNLOCK(vp, 0);
@@ -3119,7 +3145,8 @@ nfs_advlock(struct vop_advlock_args *ap)
 				NFSVOPUNLOCK(vp, 0);
 			}
 		}
-	}
+	} else
+		NFSVOPUNLOCK(vp, 0);
 	return (error);
 }
 
@@ -3384,39 +3411,6 @@ nfs_setacl(struct vop_setacl_args *ap)
 	return (error);
 }
 
-static int
-nfs_set_text(struct vop_set_text_args *ap)
-{
-	struct vnode *vp = ap->a_vp;
-	struct nfsnode *np;
-
-	/*
-	 * If the text file has been mmap'd, flush any dirty pages to the
-	 * buffer cache and then...
-	 * Make sure all writes are pushed to the NFS server.  If this is not
-	 * done, the modify time of the file can change while the text
-	 * file is being executed.  This will cause the process that is
-	 * executing the text file to be terminated.
-	 */
-	if (vp->v_object != NULL) {
-		VM_OBJECT_WLOCK(vp->v_object);
-		vm_object_page_clean(vp->v_object, 0, 0, OBJPC_SYNC);
-		VM_OBJECT_WUNLOCK(vp->v_object);
-	}
-
-	/* Now, flush the buffer cache. */
-	ncl_flush(vp, MNT_WAIT, curthread, 0, 0);
-
-	/* And, finally, make sure that n_mtime is up to date. */
-	np = VTONFS(vp);
-	mtx_lock(&np->n_mtx);
-	np->n_mtime = np->n_vattr.na_mtime;
-	mtx_unlock(&np->n_mtx);
-
-	vp->v_vflag |= VV_TEXT;
-	return (0);
-}
-
 /*
  * Return POSIX pathconf information applicable to nfs filesystems.
  */
@@ -3451,7 +3445,7 @@ nfs_pathconf(struct vop_pathconf_args *ap)
 		 * For NFSv2 (or NFSv3 when not one of the above 4 a_names),
 		 * just fake them.
 		 */
-		pc.pc_linkmax = LINK_MAX;
+		pc.pc_linkmax = NFS_LINK_MAX;
 		pc.pc_namemax = NFS_MAXNAMLEN;
 		pc.pc_notrunc = 1;
 		pc.pc_chownrestricted = 1;
@@ -3461,7 +3455,11 @@ nfs_pathconf(struct vop_pathconf_args *ap)
 	}
 	switch (ap->a_name) {
 	case _PC_LINK_MAX:
+#ifdef _LP64
 		*ap->a_retval = pc.pc_linkmax;
+#else
+		*ap->a_retval = MIN(LONG_MAX, pc.pc_linkmax);
+#endif
 		break;
 	case _PC_NAME_MAX:
 		*ap->a_retval = pc.pc_namemax;
@@ -3478,9 +3476,6 @@ nfs_pathconf(struct vop_pathconf_args *ap)
 	case _PC_NO_TRUNC:
 		*ap->a_retval = pc.pc_notrunc;
 		break;
-	case _PC_ACL_EXTENDED:
-		*ap->a_retval = 0;
-		break;
 	case _PC_ACL_NFS4:
 		if (NFS_ISV4(vp) && nfsrv_useacl != 0 && attrflag != 0 &&
 		    NFSISSET_ATTRBIT(&nfsva.na_suppattr, NFSATTRBIT_ACL))
@@ -3493,9 +3488,6 @@ nfs_pathconf(struct vop_pathconf_args *ap)
 			*ap->a_retval = ACL_MAX_ENTRIES;
 		else
 			*ap->a_retval = 3;
-		break;
-	case _PC_MAC_PRESENT:
-		*ap->a_retval = 0;
 		break;
 	case _PC_PRIO_IO:
 		*ap->a_retval = 0;

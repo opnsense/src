@@ -45,6 +45,9 @@ __FBSDID("$FreeBSD$");
 
 #include <machine/iodev.h>
 
+#ifndef WITHOUT_CAPSICUM
+#include <capsicum_helpers.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -292,7 +295,7 @@ msix_table_read(struct passthru_softc *sc, uint64_t offset, int size)
 	int index;
 
 	pi = sc->psc_pi;
-	if (offset >= pi->pi_msix.pba_offset &&
+	if (pi->pi_msix.pba_page != NULL && offset >= pi->pi_msix.pba_offset &&
 	    offset < pi->pi_msix.pba_offset + pi->pi_msix.pba_size) {
 		switch(size) {
 		case 1:
@@ -371,7 +374,7 @@ msix_table_write(struct vmctx *ctx, int vcpu, struct passthru_softc *sc,
 	int index;
 
 	pi = sc->psc_pi;
-	if (offset >= pi->pi_msix.pba_offset &&
+	if (pi->pi_msix.pba_page != NULL && offset >= pi->pi_msix.pba_offset &&
 	    offset < pi->pi_msix.pba_offset + pi->pi_msix.pba_size) {
 		switch(size) {
 		case 1:
@@ -674,9 +677,9 @@ passthru_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 	}
 
 #ifndef WITHOUT_CAPSICUM
-	if (cap_rights_limit(pcifd, &rights) == -1 && errno != ENOSYS)
+	if (caph_rights_limit(pcifd, &rights) == -1)
 		errx(EX_OSERR, "Unable to apply rights for sandbox");
-	if (cap_ioctls_limit(pcifd, pci_ioctls, nitems(pci_ioctls)) == -1 && errno != ENOSYS)
+	if (caph_ioctls_limit(pcifd, pci_ioctls, nitems(pci_ioctls)) == -1)
 		errx(EX_OSERR, "Unable to apply rights for sandbox");
 #endif
 
@@ -689,9 +692,9 @@ passthru_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 	}
 
 #ifndef WITHOUT_CAPSICUM
-	if (cap_rights_limit(iofd, &rights) == -1 && errno != ENOSYS)
+	if (caph_rights_limit(iofd, &rights) == -1)
 		errx(EX_OSERR, "Unable to apply rights for sandbox");
-	if (cap_ioctls_limit(iofd, io_ioctls, nitems(io_ioctls)) == -1 && errno != ENOSYS)
+	if (caph_ioctls_limit(iofd, io_ioctls, nitems(io_ioctls)) == -1)
 		errx(EX_OSERR, "Unable to apply rights for sandbox");
 #endif
 
@@ -706,7 +709,7 @@ passthru_init(struct vmctx *ctx, struct pci_devinst *pi, char *opts)
 #ifndef WITHOUT_CAPSICUM
 	cap_rights_clear(&rights, CAP_IOCTL);
 	cap_rights_set(&rights, CAP_MMAP_RW);
-	if (cap_rights_limit(memfd, &rights) == -1 && errno != ENOSYS)
+	if (caph_rights_limit(memfd, &rights) == -1)
 		errx(EX_OSERR, "Unable to apply rights for sandbox");
 #endif
 

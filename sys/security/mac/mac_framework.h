@@ -88,7 +88,6 @@ struct ucred;
 struct vattr;
 struct vnode;
 struct vop_setlabel_args;
-struct prison;
 
 #include <sys/acl.h>			/* XXX acl_type_t */
 #include <sys/types.h>			/* accmode_t */
@@ -444,8 +443,6 @@ int	mac_vnode_execve_will_transition(struct ucred *cred,
 	    struct image_params *imgp);
 void	mac_vnode_relabel(struct ucred *cred, struct vnode *vp,
 	    struct label *newlabel);
-
-void mac_prison_destroy(struct prison *pr);
 
 /*
  * Calls to help various file systems implement labeling functionality using

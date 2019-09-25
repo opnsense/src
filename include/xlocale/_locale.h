@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2011, 2012 The FreeBSD Foundation
  * All rights reserved.
  *
@@ -49,7 +51,7 @@ typedef struct	_xlocale *locale_t;
 #endif
 
 locale_t	 duplocale(locale_t base);
-int		 freelocale(locale_t loc);
+void		 freelocale(locale_t loc);
 locale_t	 newlocale(int mask, const char *locale, locale_t base);
 const char	*querylocale(int mask, locale_t loc);
 locale_t	 uselocale(locale_t loc);

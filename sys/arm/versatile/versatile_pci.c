@@ -51,7 +51,6 @@ __FBSDID("$FreeBSD$");
 #include <dev/pci/pcib_private.h>
 #include "pcib_if.h"
 
-#include <dev/fdt/fdt_common.h>
 #include <dev/ofw/openfirm.h>
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
@@ -531,6 +530,7 @@ static device_method_t versatile_pci_methods[] = {
 	DEVMETHOD(pcib_read_config,	versatile_pci_read_config),
 	DEVMETHOD(pcib_write_config,	versatile_pci_write_config),
 	DEVMETHOD(pcib_route_interrupt,	versatile_pci_route_interrupt),
+	DEVMETHOD(pcib_request_feature,	pcib_request_feature_allow),
 
 	DEVMETHOD_END
 };

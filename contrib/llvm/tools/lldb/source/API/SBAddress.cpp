@@ -62,7 +62,7 @@ bool lldb::operator==(const SBAddress &lhs, const SBAddress &rhs) {
 }
 
 bool SBAddress::IsValid() const {
-  return m_opaque_ap.get() != NULL && m_opaque_ap->IsValid();
+  return m_opaque_ap != NULL && m_opaque_ap->IsValid();
 }
 
 void SBAddress::Clear() { m_opaque_ap.reset(new Address()); }
@@ -120,10 +120,9 @@ void SBAddress::SetLoadAddress(lldb::addr_t load_addr, lldb::SBTarget &target) {
   else
     m_opaque_ap->Clear();
 
-  // Check if we weren't were able to resolve a section offset address.
-  // If we weren't it is ok, the load address might be a location on the
-  // stack or heap, so we should just have an address with no section and
-  // a valid offset
+  // Check if we weren't were able to resolve a section offset address. If we
+  // weren't it is ok, the load address might be a location on the stack or
+  // heap, so we should just have an address with no section and a valid offset
   if (!m_opaque_ap->IsValid())
     m_opaque_ap->SetOffset(load_addr);
 }
@@ -157,15 +156,14 @@ Address *SBAddress::operator->() { return m_opaque_ap.get(); }
 const Address *SBAddress::operator->() const { return m_opaque_ap.get(); }
 
 Address &SBAddress::ref() {
-  if (m_opaque_ap.get() == NULL)
+  if (m_opaque_ap == NULL)
     m_opaque_ap.reset(new Address());
   return *m_opaque_ap;
 }
 
 const Address &SBAddress::ref() const {
-  // This object should already have checked with "IsValid()"
-  // prior to calling this function. In case you didn't we will assert
-  // and die to let you know.
+  // This object should already have checked with "IsValid()" prior to calling
+  // this function. In case you didn't we will assert and die to let you know.
   assert(m_opaque_ap.get());
   return *m_opaque_ap;
 }
@@ -200,8 +198,9 @@ SBModule SBAddress::GetModule() {
 
 SBSymbolContext SBAddress::GetSymbolContext(uint32_t resolve_scope) {
   SBSymbolContext sb_sc;
+  SymbolContextItem scope = static_cast<SymbolContextItem>(resolve_scope);
   if (m_opaque_ap->IsValid())
-    m_opaque_ap->CalculateSymbolContext(&sb_sc.ref(), resolve_scope);
+    m_opaque_ap->CalculateSymbolContext(&sb_sc.ref(), scope);
   return sb_sc;
 }
 
@@ -241,10 +240,4 @@ SBLineEntry SBAddress::GetLineEntry() {
       sb_line_entry.SetLineEntry(line_entry);
   }
   return sb_line_entry;
-}
-
-AddressClass SBAddress::GetAddressClass() {
-  if (m_opaque_ap->IsValid())
-    return m_opaque_ap->GetAddressClass();
-  return eAddressClassInvalid;
 }

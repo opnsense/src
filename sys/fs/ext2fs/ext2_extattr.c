@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2017, Fedor Uporov
  * All rights reserved.
  *
@@ -37,6 +39,7 @@
 #include <sys/endian.h>
 #include <sys/conf.h>
 #include <sys/extattr.h>
+#include <sys/sdt.h>
 
 #include <fs/ext2fs/fs.h>
 #include <fs/ext2fs/ext2fs.h>
@@ -45,6 +48,14 @@
 #include <fs/ext2fs/ext2_mount.h>
 #include <fs/ext2fs/ext2_extattr.h>
 #include <fs/ext2fs/ext2_extern.h>
+
+SDT_PROVIDER_DECLARE(ext2fs);
+/*
+ * ext2fs trace probe:
+ * arg0: verbosity. Higher numbers give more verbose messages
+ * arg1: Textual message
+ */
+SDT_PROBE_DEFINE2(ext2fs, , trace, extattr, "int", "char*");
 
 static int
 ext2_extattr_attrnamespace_to_bsd(int attrnamespace)
@@ -87,9 +98,8 @@ ext2_extattr_name_to_bsd(int attrnamespace, const char *name, int* name_len)
 	 * XXX: Not all linux namespaces are mapped to bsd for now,
 	 * return NULL, which will be converted to ENOTSUP on upper layer.
 	 */
-#ifdef EXT2FS_DEBUG
-	printf("can not convert ext2fs name to bsd: namespace=%d\n", attrnamespace);
-#endif
+	SDT_PROBE2(ext2fs, , trace, extattr, 1,
+	    "can not convert ext2fs name to bsd namespace");
 
 	return (NULL);
 }
@@ -161,6 +171,22 @@ ext2_extattr_check(struct ext2fs_extattr_entry *entry, char *end)
 	}
 
 	return (0);
+}
+
+static int
+ext2_extattr_block_check(struct inode *ip, struct buf *bp)
+{
+	struct ext2fs_extattr_header *header;
+	int error;
+
+	header = (struct ext2fs_extattr_header *)bp->b_data;
+
+	error = ext2_extattr_check(EXT2_IFIRST(header),
+	    bp->b_data + bp->b_bufsize);
+	if (error)
+		return (error);
+
+	return (ext2_extattr_blk_csum_verify(ip, bp));
 }
 
 int
@@ -265,7 +291,7 @@ ext2_extattr_block_list(struct inode *ip, int attrnamespace,
 		return (EINVAL);
 	}
 
-	error = ext2_extattr_check(EXT2_FIRST_ENTRY(bp), bp->b_data + bp->b_bufsize);
+	error = ext2_extattr_block_check(ip, bp);
 	if (error) {
 		brelse(bp);
 		return (error);
@@ -406,7 +432,7 @@ ext2_extattr_block_get(struct inode *ip, int attrnamespace,
 		return (EINVAL);
 	}
 
-	error = ext2_extattr_check(EXT2_FIRST_ENTRY(bp), bp->b_data + bp->b_bufsize);
+	error = ext2_extattr_block_check(ip, bp);
 	if (error) {
 		brelse(bp);
 		return (error);
@@ -614,7 +640,7 @@ ext2_extattr_block_clone(struct inode *ip, struct buf **bpp)
 	if (header->h_magic != EXTATTR_MAGIC || header->h_refcount == 1)
 		return (EINVAL);
 
-	facl = ext2_allocfacl(ip);
+	facl = ext2_alloc_meta(ip);
 	if (!facl)
 		return (ENOSPC);
 
@@ -666,7 +692,7 @@ ext2_extattr_block_delete(struct inode *ip, int attrnamespace, const char *name)
 		return (EINVAL);
 	}
 
-	error = ext2_extattr_check(EXT2_FIRST_ENTRY(bp), bp->b_data + bp->b_bufsize);
+	error = ext2_extattr_block_check(ip, bp);
 	if (error) {
 		brelse(bp);
 		return (error);
@@ -1059,8 +1085,7 @@ ext2_extattr_block_set(struct inode *ip, int attrnamespace,
 			return (EINVAL);
 		}
 
-		error = ext2_extattr_check(EXT2_FIRST_ENTRY(bp),
-		    bp->b_data + bp->b_bufsize);
+		error = ext2_extattr_block_check(ip, bp);
 		if (error) {
 			brelse(bp);
 			return (error);
@@ -1128,6 +1153,7 @@ ext2_extattr_block_set(struct inode *ip, int attrnamespace,
 		}
 
 		ext2_extattr_rehash(header, entry);
+		ext2_extattr_blk_csum_set(ip, bp);
 
 		return (bwrite(bp));
 	}
@@ -1139,7 +1165,7 @@ ext2_extattr_block_set(struct inode *ip, int attrnamespace,
 		return (ENOSPC);
 
 	/* Allocate block, fill EA header and insert entry */
-	ip->i_facl = ext2_allocfacl(ip);
+	ip->i_facl = ext2_alloc_meta(ip);
 	if (0 == ip->i_facl)
 		return (ENOSPC);
 
@@ -1175,6 +1201,7 @@ ext2_extattr_block_set(struct inode *ip, int attrnamespace,
 	}
 
 	ext2_extattr_rehash(header, entry);
+	ext2_extattr_blk_csum_set(ip, bp);
 
 	return (bwrite(bp));
 }
@@ -1205,7 +1232,8 @@ int ext2_extattr_free(struct inode *ip)
 		return (EINVAL);
 	}
 
-	error = ext2_extattr_check(EXT2_FIRST_ENTRY(bp), bp->b_data + bp->b_bufsize);
+	error = ext2_extattr_check(EXT2_FIRST_ENTRY(bp),
+	    bp->b_data + bp->b_bufsize);
 	if (error) {
 		brelse(bp);
 		return (error);

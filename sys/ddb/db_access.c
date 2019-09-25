@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: MIT-CMU
+ *
  * Mach Operating System
  * Copyright (c) 1991,1990 Carnegie Mellon University
  * All Rights Reserved.
@@ -33,6 +35,7 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/kdb.h>
+#include <sys/endian.h>
 
 #include <ddb/ddb.h>
 #include <ddb/db_access.h>
@@ -49,10 +52,6 @@ static unsigned db_extend[] = {	/* table for sign-extending */
 	0xFF800000U
 };
 
-#ifndef BYTE_MSF
-#define	BYTE_MSF	0
-#endif
-
 db_expr_t
 db_get_value(db_addr_t addr, int size, bool is_signed)
 {
@@ -67,9 +66,9 @@ db_get_value(db_addr_t addr, int size, bool is_signed)
 	}
 
 	value = 0;
-#if	BYTE_MSF
+#if _BYTE_ORDER == _BIG_ENDIAN
 	for (i = 0; i < size; i++)
-#else	/* BYTE_LSF */
+#else	/* _LITTLE_ENDIAN */
 	for (i = size - 1; i >= 0; i--)
 #endif
 	{
@@ -89,9 +88,9 @@ db_put_value(db_addr_t addr, int size, db_expr_t value)
 	char		data[sizeof(int)];
 	int		i;
 
-#if	BYTE_MSF
+#if _BYTE_ORDER == _BIG_ENDIAN
 	for (i = size - 1; i >= 0; i--)
-#else	/* BYTE_LSF */
+#else	/* _LITTLE_ENDIAN */
 	for (i = 0; i < size; i++)
 #endif
 	{

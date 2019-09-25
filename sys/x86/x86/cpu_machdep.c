@@ -41,8 +41,8 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#include "opt_acpi.h"
 #include "opt_atpic.h"
-#include "opt_compat.h"
 #include "opt_cpu.h"
 #include "opt_ddb.h"
 #include "opt_inet.h"
@@ -51,11 +51,9 @@ __FBSDID("$FreeBSD$");
 #include "opt_kstack_pages.h"
 #include "opt_maxmem.h"
 #include "opt_mp_watchdog.h"
-#include "opt_perfmon.h"
 #include "opt_platform.h"
 #ifdef __i386__
 #include "opt_apic.h"
-#include "opt_xbox.h"
 #endif
 
 #include <sys/param.h>
@@ -63,6 +61,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/systm.h>
 #include <sys/bus.h>
 #include <sys/cpu.h>
+#include <sys/domainset.h>
 #include <sys/kdb.h>
 #include <sys/kernel.h>
 #include <sys/ktr.h>
@@ -81,9 +80,6 @@ __FBSDID("$FreeBSD$");
 #include <machine/specialreg.h>
 #include <machine/md_var.h>
 #include <machine/mp_watchdog.h>
-#ifdef PERFMON
-#include <machine/perfmon.h>
-#endif
 #include <machine/tss.h>
 #ifdef SMP
 #include <machine/smp.h>
@@ -102,9 +98,9 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm_pager.h>
 #include <vm/vm_param.h>
 
-#ifndef PC98
 #include <isa/isareg.h>
-#endif
+
+#include <contrib/dev/acpica/include/acpi.h>
 
 #define	STATE_RUNNING	0x0
 #define	STATE_MWAIT	0x1
@@ -276,9 +272,7 @@ static void
 cpu_reset_real(void)
 {
 	struct region_descriptor null_idt;
-#ifndef PC98
 	int b;
-#endif
 
 	disable_intr();
 #ifdef CPU_ELAN
@@ -292,16 +286,6 @@ cpu_reset_real(void)
 		outl(0xcfc, 0xf);
 	}
 #endif
-#ifdef PC98
-	/*
-	 * Attempt to do a CPU reset via CPU reset port.
-	 */
-	if ((inb(0x35) & 0xa0) != 0xa0) {
-		outb(0x37, 0x0f);		/* SHUT0 = 0. */
-		outb(0x37, 0x0b);		/* SHUT1 = 0. */
-	}
-	outb(0xf0, 0x00);			/* Reset. */
-#else
 #if !defined(BROKEN_KEYBOARD_RESET)
 	/*
 	 * Attempt to do a CPU reset via the keyboard controller,
@@ -340,7 +324,6 @@ cpu_reset_real(void)
 		outb(0x92, b | 0x1);
 		DELAY(500000);  /* wait 0.5 sec to see if that did it */
 	}
-#endif /* PC98 */
 
 	printf("No known reset method worked, attempting CPU shutdown\n");
 	DELAY(1000000); /* wait 1 sec for printf to complete */
@@ -435,7 +418,6 @@ static int	idle_mwait = 1;		/* Use MONITOR/MWAIT for short idle. */
 SYSCTL_INT(_machdep, OID_AUTO, idle_mwait, CTLFLAG_RWTUN, &idle_mwait,
     0, "Use MONITOR/MWAIT for short idle");
 
-#ifndef PC98
 static void
 cpu_idle_acpi(sbintime_t sbt)
 {
@@ -454,7 +436,6 @@ cpu_idle_acpi(sbintime_t sbt)
 		acpi_cpu_c1();
 	atomic_store_int(state, STATE_RUNNING);
 }
-#endif /* !PC98 */
 
 static void
 cpu_idle_hlt(sbintime_t sbt)
@@ -562,11 +543,7 @@ cpu_probe_amdc1e(void)
 	}
 }
 
-#if defined(__i386__) && defined(PC98)
-void (*cpu_idle_fn)(sbintime_t) = cpu_idle_hlt;
-#else
 void (*cpu_idle_fn)(sbintime_t) = cpu_idle_acpi;
-#endif
 
 void
 cpu_idle(int busy)
@@ -651,9 +628,7 @@ static struct {
 	{ .id_fn = cpu_idle_mwait, .id_name = "mwait",
 	    .id_cpuid2_flag = CPUID2_MON },
 	{ .id_fn = cpu_idle_hlt, .id_name = "hlt" },
-#if !defined(__i386__) || !defined(PC98)
 	{ .id_fn = cpu_idle_acpi, .id_name = "acpi" },
-#endif
 };
 
 static int
@@ -669,11 +644,9 @@ idle_sysctl_available(SYSCTL_HANDLER_ARGS)
 		if (idle_tbl[i].id_cpuid2_flag != 0 &&
 		    (cpu_feature2 & idle_tbl[i].id_cpuid2_flag) == 0)
 			continue;
-#if !defined(__i386__) || !defined(PC98)
 		if (strcmp(idle_tbl[i].id_name, "acpi") == 0 &&
 		    cpu_idle_hook == NULL)
 			continue;
-#endif
 		p += sprintf(p, "%s%s", p != avail ? ", " : "",
 		    idle_tbl[i].id_name);
 	}
@@ -694,11 +667,9 @@ cpu_idle_selector(const char *new_idle_name)
 		if (idle_tbl[i].id_cpuid2_flag != 0 &&
 		    (cpu_feature2 & idle_tbl[i].id_cpuid2_flag) == 0)
 			continue;
-#if !defined(__i386__) || !defined(PC98)
 		if (strcmp(idle_tbl[i].id_name, "acpi") == 0 &&
 		    cpu_idle_hook == NULL)
 			continue;
-#endif
 		if (strcmp(idle_tbl[i].id_name, new_idle_name))
 			continue;
 		cpu_idle_fn = idle_tbl[i].id_fn;
@@ -739,6 +710,13 @@ cpu_idle_tun(void *unused __unused)
 
 	if (TUNABLE_STR_FETCH("machdep.idle", tunvar, sizeof(tunvar)))
 		cpu_idle_selector(tunvar);
+	else if (cpu_vendor_id == CPU_VENDOR_AMD &&
+	    CPUID_TO_FAMILY(cpu_id) == 0x17 && CPUID_TO_MODEL(cpu_id) == 0x1) {
+		/* Ryzen erratas 1057, 1109. */
+		cpu_idle_selector("hlt");
+		idle_mwait = 0;
+	}
+
 	if (cpu_vendor_id == CPU_VENDOR_INTEL && cpu_id == 0x506c9) {
 		/*
 		 * Apollo Lake errata APL31 (public errata APL30).
@@ -756,7 +734,7 @@ SYSINIT(cpu_idle_tun, SI_SUB_CPU, SI_ORDER_MIDDLE, cpu_idle_tun, NULL);
 static int panic_on_nmi = 1;
 SYSCTL_INT(_machdep, OID_AUTO, panic_on_nmi, CTLFLAG_RWTUN,
     &panic_on_nmi, 0,
-    "Panic on NMI");
+    "Panic on NMI raised by hardware failure");
 int nmi_is_broadcast = 1;
 SYSCTL_INT(_machdep, OID_AUTO, nmi_is_broadcast, CTLFLAG_RWTUN,
     &nmi_is_broadcast, 0,
@@ -765,36 +743,37 @@ SYSCTL_INT(_machdep, OID_AUTO, nmi_is_broadcast, CTLFLAG_RWTUN,
 int kdb_on_nmi = 1;
 SYSCTL_INT(_machdep, OID_AUTO, kdb_on_nmi, CTLFLAG_RWTUN,
     &kdb_on_nmi, 0,
-    "Go to KDB on NMI");
+    "Go to KDB on NMI with unknown source");
 #endif
 
-#ifdef DEV_ISA
 void
 nmi_call_kdb(u_int cpu, u_int type, struct trapframe *frame)
 {
+	bool claimed = false;
 
+#ifdef DEV_ISA
 	/* machine/parity/power fail/"kitchen sink" faults */
-	if (isa_nmi(frame->tf_err) == 0) {
+	if (isa_nmi(frame->tf_err)) {
+		claimed = true;
+		if (panic_on_nmi)
+			panic("NMI indicates hardware failure");
+	}
+#endif /* DEV_ISA */
 #ifdef KDB
+	if (!claimed && kdb_on_nmi) {
 		/*
 		 * NMI can be hooked up to a pushbutton for debugging.
 		 */
-		if (kdb_on_nmi) {
-			printf("NMI/cpu%d ... going to debugger\n", cpu);
-			kdb_trap(type, 0, frame);
-		}
-#endif /* KDB */
-	} else if (panic_on_nmi) {
-		panic("NMI indicates hardware failure");
+		printf("NMI/cpu%d ... going to debugger\n", cpu);
+		kdb_trap(type, 0, frame);
 	}
+#endif /* KDB */
 }
-#endif
 
 void
 nmi_handle_intr(u_int type, struct trapframe *frame)
 {
 
-#ifdef DEV_ISA
 #ifdef SMP
 	if (nmi_is_broadcast) {
 		nmi_call_kdb_smp(type, frame);
@@ -802,7 +781,6 @@ nmi_handle_intr(u_int type, struct trapframe *frame)
 	}
 #endif
 	nmi_call_kdb(PCPU_GET(cpuid), type, frame);
-#endif
 }
 
 int hw_ibrs_active;
@@ -914,7 +892,7 @@ hw_ssb_recalculate(bool all_cpus)
 		hw_ssb_set(true, all_cpus);
 		break;
 	case 2: /* auto */
-		hw_ssb_set((cpu_ia32_arch_caps & IA32_ARCH_CAP_SSBD_NO) != 0 ?
+		hw_ssb_set((cpu_ia32_arch_caps & IA32_ARCH_CAP_SSB_NO) != 0 ?
 		    false : true, all_cpus);
 		break;
 	}
@@ -1025,8 +1003,8 @@ hw_mds_recalculate(void)
 		CPU_FOREACH(i) {
 			pc = pcpu_find(i);
 			if (pc->pc_mds_buf == NULL) {
-				pc->pc_mds_buf = malloc(672, M_TEMP,
-				    M_WAITOK);
+				pc->pc_mds_buf = malloc_domainset(672, M_TEMP,
+				    DOMAINSET_PREF(pc->pc_domain), M_WAITOK);
 				bzero(pc->pc_mds_buf, 16);
 			}
 		}
@@ -1043,8 +1021,8 @@ hw_mds_recalculate(void)
 		CPU_FOREACH(i) {
 			pc = pcpu_find(i);
 			if (pc->pc_mds_buf == NULL) {
-				pc->pc_mds_buf = malloc(1536, M_TEMP,
-				    M_WAITOK);
+				pc->pc_mds_buf = malloc_domainset(1536, M_TEMP,
+				    DOMAINSET_PREF(pc->pc_domain), M_WAITOK);
 				bzero(pc->pc_mds_buf, 16);
 			}
 		}
@@ -1065,10 +1043,12 @@ hw_mds_recalculate(void)
 		CPU_FOREACH(i) {
 			pc = pcpu_find(i);
 			if (pc->pc_mds_buf == NULL) {
-				pc->pc_mds_buf = malloc(6 * 1024,
-				    M_TEMP, M_WAITOK);
-				b64 = (vm_offset_t)malloc(64 + 63,
-				    M_TEMP, M_WAITOK);
+				pc->pc_mds_buf = malloc_domainset(6 * 1024,
+				    M_TEMP, DOMAINSET_PREF(pc->pc_domain),
+				    M_WAITOK);
+				b64 = (vm_offset_t)malloc_domainset(64 + 63,
+				    M_TEMP, DOMAINSET_PREF(pc->pc_domain),
+				    M_WAITOK);
 				pc->pc_mds_buf64 = (void *)roundup2(b64, 64);
 				bzero(pc->pc_mds_buf64, 64);
 			}
@@ -1111,6 +1091,14 @@ hw_mds_recalculate(void)
 	}
 }
 
+static void
+hw_mds_recalculate_boot(void *arg __unused)
+{
+
+	hw_mds_recalculate();
+}
+SYSINIT(mds_recalc, SI_SUB_SMP, SI_ORDER_ANY, hw_mds_recalculate_boot, NULL);
+
 static int
 sysctl_mds_disable_handler(SYSCTL_HANDLER_ARGS)
 {
@@ -1133,3 +1121,48 @@ SYSCTL_PROC(_hw, OID_AUTO, mds_disable, CTLTYPE_INT |
     "Microarchitectural Data Sampling Mitigation "
     "(0 - off, 1 - on VERW, 2 - on SW, 3 - on AUTO");
 
+/*
+ * Enable and restore kernel text write permissions.
+ * Callers must ensure that disable_wp()/restore_wp() are executed
+ * without rescheduling on the same core.
+ */
+bool
+disable_wp(void)
+{
+	u_int cr0;
+
+	cr0 = rcr0();
+	if ((cr0 & CR0_WP) == 0)
+		return (false);
+	load_cr0(cr0 & ~CR0_WP);
+	return (true);
+}
+
+void
+restore_wp(bool old_wp)
+{
+
+	if (old_wp)
+		load_cr0(rcr0() | CR0_WP);
+}
+
+bool
+acpi_get_fadt_bootflags(uint16_t *flagsp)
+{
+#ifdef DEV_ACPI
+	ACPI_TABLE_FADT *fadt;
+	vm_paddr_t physaddr;
+
+	physaddr = acpi_find_table(ACPI_SIG_FADT);
+	if (physaddr == 0)
+		return (false);
+	fadt = acpi_map_table(physaddr, ACPI_SIG_FADT);
+	if (fadt == NULL)
+		return (false);
+	*flagsp = fadt->BootFlags;
+	acpi_unmap_table(fadt);
+	return (true);
+#else
+	return (false);
+#endif
+}

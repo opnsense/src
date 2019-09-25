@@ -34,8 +34,9 @@
 
 #define DEBUG_TYPE "avr-asm-parser"
 
-namespace llvm {
+using namespace llvm;
 
+namespace {
 /// Parses AVR assembly from a stream.
 class AVRAsmParser : public MCTargetAsmParser {
   const MCSubtargetInfo &STI;
@@ -244,6 +245,8 @@ public:
     O << "\n";
   }
 };
+
+} // end anonymous namespace.
 
 // Auto-generated Match Functions
 
@@ -482,7 +485,7 @@ bool AVRAsmParser::tryParseRelocExpression(OperandVector &Operands) {
 }
 
 bool AVRAsmParser::parseOperand(OperandVector &Operands) {
-  DEBUG(dbgs() << "parseOperand\n");
+  LLVM_DEBUG(dbgs() << "parseOperand\n");
 
   switch (getLexer().getKind()) {
   default:
@@ -510,6 +513,7 @@ bool AVRAsmParser::parseOperand(OperandVector &Operands) {
     case AsmToken::Real:
       if (!tryParseExpression(Operands))
         return false;
+      break;
     default:
       break;
     }
@@ -527,7 +531,7 @@ bool AVRAsmParser::parseOperand(OperandVector &Operands) {
 
 OperandMatchResultTy
 AVRAsmParser::parseMemriOperand(OperandVector &Operands) {
-  DEBUG(dbgs() << "parseMemriOperand()\n");
+  LLVM_DEBUG(dbgs() << "parseMemriOperand()\n");
 
   SMLoc E, S;
   MCExpr const *Expression;
@@ -708,5 +712,3 @@ unsigned AVRAsmParser::validateTargetOperandClass(MCParsedAsmOperand &AsmOp,
   }
   return Match_InvalidOperand;
 }
-
-} // end of namespace llvm

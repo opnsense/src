@@ -34,7 +34,7 @@
 
 #include "elfcopy.h"
 
-ELFTC_VCSID("$Id: sections.c 3443 2016-04-15 18:57:54Z kaiwang27 $");
+ELFTC_VCSID("$Id: sections.c 3646 2018-10-27 02:25:39Z emaste $");
 
 static void	add_gnu_debuglink(struct elfcopy *ecp);
 static uint32_t calc_crc32(const char *p, size_t len, uint32_t crc);
@@ -42,19 +42,18 @@ static void	check_section_rename(struct elfcopy *ecp, struct section *s);
 static void	filter_reloc(struct elfcopy *ecp, struct section *s);
 static int	get_section_flags(struct elfcopy *ecp, const char *name);
 static void	insert_sections(struct elfcopy *ecp);
-static void	insert_to_strtab(struct section *t, const char *s);
 static int	is_append_section(struct elfcopy *ecp, const char *name);
 static int	is_compress_section(struct elfcopy *ecp, const char *name);
 static int	is_debug_section(const char *name);
 static int	is_dwo_section(const char *name);
 static int	is_modify_section(struct elfcopy *ecp, const char *name);
 static int	is_print_section(struct elfcopy *ecp, const char *name);
-static int	lookup_string(struct section *t, const char *s);
 static void	modify_section(struct elfcopy *ecp, struct section *s);
 static void	pad_section(struct elfcopy *ecp, struct section *s);
 static void	print_data(const char *d, size_t sz);
 static void	print_section(struct section *s);
 static void	*read_section(struct section *s, size_t *size);
+static void	set_shstrtab(struct elfcopy *ecp);
 static void	update_reloc(struct elfcopy *ecp, struct section *s);
 static void	update_section_group(struct elfcopy *ecp, struct section *s);
 
@@ -119,21 +118,19 @@ is_remove_reloc_sec(struct elfcopy *ecp, uint32_t sh_info)
 		errx(EXIT_FAILURE, "elf_getshstrndx failed: %s",
 		    elf_errmsg(-1));
 
-	is = NULL;
-	while ((is = elf_nextscn(ecp->ein, is)) != NULL) {
-		if (sh_info == elf_ndxscn(is)) {
-			if (gelf_getshdr(is, &ish) == NULL)
-				errx(EXIT_FAILURE, "gelf_getshdr failed: %s",
-				    elf_errmsg(-1));
-			if ((name = elf_strptr(ecp->ein, indx, ish.sh_name)) ==
-			    NULL)
-				errx(EXIT_FAILURE, "elf_strptr failed: %s",
-				    elf_errmsg(-1));
-			if (is_remove_section(ecp, name))
-				return (1);
-			else
-				return (0);
-		}
+	is = elf_getscn(ecp->ein, sh_info);
+	if (is != NULL) {
+		if (gelf_getshdr(is, &ish) == NULL)
+			errx(EXIT_FAILURE, "gelf_getshdr failed: %s",
+			    elf_errmsg(-1));
+		if ((name = elf_strptr(ecp->ein, indx, ish.sh_name)) ==
+		    NULL)
+			errx(EXIT_FAILURE, "elf_strptr failed: %s",
+			    elf_errmsg(-1));
+		if (is_remove_section(ecp, name))
+			return (1);
+		else
+			return (0);
 	}
 	elferr = elf_errno();
 	if (elferr != 0)
@@ -314,18 +311,18 @@ insert_to_sec_list(struct elfcopy *ecp, struct section *sec, int tail)
 {
 	struct section *s;
 
-	if (!tail) {
+	if (tail || TAILQ_EMPTY(&ecp->v_sec) ||
+	    TAILQ_LAST(&ecp->v_sec, sectionlist)->off <= sec->off) {
+		TAILQ_INSERT_TAIL(&ecp->v_sec, sec, sec_list);
+	} else {
 		TAILQ_FOREACH(s, &ecp->v_sec, sec_list) {
 			if (sec->off < s->off) {
 				TAILQ_INSERT_BEFORE(s, sec, sec_list);
-				goto inc_nos;
+				break;
 			}
 		}
 	}
 
-	TAILQ_INSERT_TAIL(&ecp->v_sec, sec, sec_list);
-
-inc_nos:
 	if (sec->pseudo == 0)
 		ecp->nos++;
 }
@@ -689,7 +686,7 @@ filter_reloc(struct elfcopy *ecp, struct section *s)
 	Elf32_Rela	*rela32;
 	Elf64_Rela	*rela64;
 	Elf_Data	*id;
-	uint64_t	 cap, n, nrels;
+	uint64_t	 cap, n, nrels, sym;
 	int		 elferr, i;
 
 	if (gelf_getshdr(s->is, &ish) == NULL)
@@ -698,15 +695,13 @@ filter_reloc(struct elfcopy *ecp, struct section *s)
 
 	/* We don't want to touch relocation info for dynamic symbols. */
 	if ((ecp->flags & SYMTAB_EXIST) == 0) {
-		if (ish.sh_link == 0 || ecp->secndx[ish.sh_link] == 0) {
-			/*
-			 * This reloc section applies to the symbol table
-			 * that was stripped, so discard whole section.
-			 */
-			s->nocopy = 1;
-			s->sz = 0;
-		}
-		return;
+		/*
+		 * No symbol table in output.  If sh_link points to a section
+		 * that exists in the output object, this relocation section
+		 * is for dynamic symbols.  Don't touch it.
+		 */
+		if (ish.sh_link != 0 && ecp->secndx[ish.sh_link] != 0)
+			return;
 	} else {
 		/* Symbol table exist, check if index equals. */
 		if (ish.sh_link != elf_ndxscn(ecp->symtab->is))
@@ -716,13 +711,13 @@ filter_reloc(struct elfcopy *ecp, struct section *s)
 #define	COPYREL(REL, SZ) do {					\
 	if (nrels == 0) {					\
 		if ((REL##SZ = malloc(cap *			\
-		    sizeof(Elf##SZ##_Rel))) == NULL)		\
+		    sizeof(*REL##SZ))) == NULL)			\
 			err(EXIT_FAILURE, "malloc failed");	\
 	}							\
 	if (nrels >= cap) {					\
 		cap *= 2;					\
 		if ((REL##SZ = realloc(REL##SZ, cap *		\
-		    sizeof(Elf##SZ##_Rel))) == NULL)		\
+		    sizeof(*REL##SZ))) == NULL)			\
 			err(EXIT_FAILURE, "realloc failed");	\
 	}							\
 	REL##SZ[nrels].r_offset = REL.r_offset;			\
@@ -747,28 +742,45 @@ filter_reloc(struct elfcopy *ecp, struct section *s)
 			if (gelf_getrel(id, i, &rel) != &rel)
 				errx(EXIT_FAILURE, "gelf_getrel failed: %s",
 				    elf_errmsg(-1));
+			sym = GELF_R_SYM(rel.r_info);
 		} else {
 			if (gelf_getrela(id, i, &rela) != &rela)
 				errx(EXIT_FAILURE, "gelf_getrel failed: %s",
 				    elf_errmsg(-1));
+			sym = GELF_R_SYM(rela.r_info);
 		}
-		name = elf_strptr(ecp->ein, elf_ndxscn(ecp->strtab->is),
-		    GELF_R_SYM(rel.r_info));
-		if (name == NULL)
-			errx(EXIT_FAILURE, "elf_strptr failed: %s",
-			    elf_errmsg(-1));
-		if (lookup_symop_list(ecp, name, SYMOP_KEEP) != NULL) {
-			if (ecp->oec == ELFCLASS32) {
-				if (s->type == SHT_REL)
-					COPYREL(rel, 32);
-				else
-					COPYREL(rela, 32);
-			} else {
-				if (s->type == SHT_REL)
-					COPYREL(rel, 64);
-				else
-					COPYREL(rela, 64);
-			}
+		/*
+		 * If a relocation references a symbol and we are omitting
+		 * either that symbol or the entire symbol table we cannot
+		 * produce valid output, and so just omit the relocation.
+		 * Broken output like this is generally not useful, but some
+		 * uses of elfcopy/strip rely on it - for example, GCC's build
+		 * process uses it to check for build reproducibility by
+		 * stripping objects and comparing them.
+		 *
+		 * Relocations that do not reference a symbol are retained.
+		 */
+		if (sym != 0) {
+			if (ish.sh_link == 0 || ecp->secndx[ish.sh_link] == 0)
+				continue;
+			name = elf_strptr(ecp->ein, elf_ndxscn(ecp->strtab->is),
+			    sym);
+			if (name == NULL)
+				errx(EXIT_FAILURE, "elf_strptr failed: %s",
+				    elf_errmsg(-1));
+			if (lookup_symop_list(ecp, name, SYMOP_KEEP) == NULL)
+				continue;
+		}
+		if (ecp->oec == ELFCLASS32) {
+			if (s->type == SHT_REL)
+				COPYREL(rel, 32);
+			else
+				COPYREL(rela, 32);
+		} else {
+			if (s->type == SHT_REL)
+				COPYREL(rel, 64);
+			else
+				COPYREL(rela, 64);
 		}
 	}
 	elferr = elf_errno();
@@ -1323,10 +1335,9 @@ insert_sections(struct elfcopy *ecp)
 void
 add_to_shstrtab(struct elfcopy *ecp, const char *name)
 {
-	struct section *s;
 
-	s = ecp->shstrtab;
-	insert_to_strtab(s, name);
+	if (elftc_string_table_insert(ecp->shstrtab->strtab, name) == 0)
+		errx(EXIT_FAILURE, "elftc_string_table_insert failed");
 }
 
 void
@@ -1335,6 +1346,9 @@ update_shdr(struct elfcopy *ecp, int update_link)
 	struct section	*s;
 	GElf_Shdr	 osh;
 	int		 elferr;
+
+	/* Finalize the section name string table (.shstrtab). */
+	set_shstrtab(ecp);
 
 	TAILQ_FOREACH(s, &ecp->v_sec, sec_list) {
 		if (s->pseudo)
@@ -1345,7 +1359,8 @@ update_shdr(struct elfcopy *ecp, int update_link)
 			    elf_errmsg(-1));
 
 		/* Find section name in string table and set sh_name. */
-		osh.sh_name = lookup_string(ecp->shstrtab, s->name);
+		osh.sh_name = elftc_string_table_lookup(ecp->shstrtab->strtab,
+		    s->name);
 
 		/*
 		 * sh_link needs to be updated, since the index of the
@@ -1383,7 +1398,25 @@ update_shdr(struct elfcopy *ecp, int update_link)
 void
 init_shstrtab(struct elfcopy *ecp)
 {
+	Elf_Scn *shstrtab;
+	GElf_Shdr shdr;
 	struct section *s;
+	size_t indx, sizehint;
+
+	if (elf_getshdrstrndx(ecp->ein, &indx) == 0) {
+		shstrtab = elf_getscn(ecp->ein, indx);
+		if (shstrtab == NULL)
+			errx(EXIT_FAILURE, "elf_getscn failed: %s",
+			    elf_errmsg(-1));
+		if (gelf_getshdr(shstrtab, &shdr) != &shdr)
+			errx(EXIT_FAILURE, "gelf_getshdr failed: %s",
+			    elf_errmsg(-1));
+		sizehint = shdr.sh_size;
+	} else {
+		/* Clear the error from elf_getshdrstrndx(3). */
+		(void)elf_errno();
+		sizehint = 0;
+	}
 
 	if ((ecp->shstrtab = calloc(1, sizeof(*ecp->shstrtab))) == NULL)
 		err(EXIT_FAILURE, "calloc failed");
@@ -1395,19 +1428,22 @@ init_shstrtab(struct elfcopy *ecp)
 	s->loadable = 0;
 	s->type = SHT_STRTAB;
 	s->vma = 0;
+	s->strtab = elftc_string_table_create(sizehint);
 
-	insert_to_strtab(s, "");
-	insert_to_strtab(s, ".symtab");
-	insert_to_strtab(s, ".strtab");
-	insert_to_strtab(s, ".shstrtab");
+	add_to_shstrtab(ecp, "");
+	add_to_shstrtab(ecp, ".symtab");
+	add_to_shstrtab(ecp, ".strtab");
+	add_to_shstrtab(ecp, ".shstrtab");
 }
 
-void
+static void
 set_shstrtab(struct elfcopy *ecp)
 {
 	struct section	*s;
 	Elf_Data	*data;
 	GElf_Shdr	 sh;
+	const char	*image;
+	size_t		 sz;
 
 	s = ecp->shstrtab;
 
@@ -1440,19 +1476,21 @@ set_shstrtab(struct elfcopy *ecp)
 	 * which are reserved for this in the beginning of shstrtab.
 	 */
 	if (!(ecp->flags & SYMTAB_EXIST)) {
-		s->sz -= sizeof(".symtab\0.strtab");
-		memmove(s->buf, (char *)s->buf + sizeof(".symtab\0.strtab"),
-		    s->sz);
+		elftc_string_table_remove(s->strtab, ".symtab");
+		elftc_string_table_remove(s->strtab, ".strtab");
 	}
 
-	sh.sh_size	= s->sz;
+	image = elftc_string_table_image(s->strtab, &sz);
+	s->sz = sz;
+
+	sh.sh_size	= sz;
 	if (!gelf_update_shdr(s->os, &sh))
 		errx(EXIT_FAILURE, "gelf_update_shdr() failed: %s",
 		    elf_errmsg(-1));
 
 	data->d_align	= 1;
-	data->d_buf	= s->buf;
-	data->d_size	= s->sz;
+	data->d_buf	= (void *)(uintptr_t)image;
+	data->d_size	= sz;
 	data->d_off	= 0;
 	data->d_type	= ELF_T_BYTE;
 	data->d_version	= EV_CURRENT;
@@ -1576,73 +1614,6 @@ add_gnu_debuglink(struct elfcopy *ecp)
 
 	STAILQ_INSERT_TAIL(&ecp->v_sadd, sa, sadd_list);
 	ecp->flags |= SEC_ADD;
-}
-
-static void
-insert_to_strtab(struct section *t, const char *s)
-{
-	const char	*r;
-	char		*b, *c;
-	size_t		 len, slen;
-	int		 append;
-
-	if (t->sz == 0) {
-		t->cap = 512;
-		if ((t->buf = malloc(t->cap)) == NULL)
-			err(EXIT_FAILURE, "malloc failed");
-	}
-
-	slen = strlen(s);
-	append = 0;
-	b = t->buf;
-	for (c = b; c < b + t->sz;) {
-		len = strlen(c);
-		if (!append && len >= slen) {
-			r = c + (len - slen);
-			if (strcmp(r, s) == 0)
-				return;
-		} else if (len < slen && len != 0) {
-			r = s + (slen - len);
-			if (strcmp(c, r) == 0) {
-				t->sz -= len + 1;
-				memmove(c, c + len + 1, t->sz - (c - b));
-				append = 1;
-				continue;
-			}
-		}
-		c += len + 1;
-	}
-
-	while (t->sz + slen + 1 >= t->cap) {
-		t->cap *= 2;
-		if ((t->buf = realloc(t->buf, t->cap)) == NULL)
-			err(EXIT_FAILURE, "realloc failed");
-	}
-	b = t->buf;
-	strncpy(&b[t->sz], s, slen);
-	b[t->sz + slen] = '\0';
-	t->sz += slen + 1;
-}
-
-static int
-lookup_string(struct section *t, const char *s)
-{
-	const char	*b, *c, *r;
-	size_t		 len, slen;
-
-	slen = strlen(s);
-	b = t->buf;
-	for (c = b; c < b + t->sz;) {
-		len = strlen(c);
-		if (len >= slen) {
-			r = c + (len - slen);
-			if (strcmp(r, s) == 0)
-				return (r - b);
-		}
-		c += len + 1;
-	}
-
-	return (-1);
 }
 
 static uint32_t crctable[256] =

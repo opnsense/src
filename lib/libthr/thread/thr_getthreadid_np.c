@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2011 Jung-uk Kim <jkim@FreeBSD.org>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -33,13 +35,14 @@ __FBSDID("$FreeBSD$");
 
 #include "thr_private.h"
 
-__weak_reference(_pthread_getthreadid_np, pthread_getthreadid_np);
+__weak_reference(_thr_getthreadid_np, _pthread_getthreadid_np);
+__weak_reference(_thr_getthreadid_np, pthread_getthreadid_np);
 
 /*
  * Provide the equivelant to AIX pthread_getthreadid_np() function.
  */
 int
-_pthread_getthreadid_np(void)
+_thr_getthreadid_np(void)
 {
 	struct pthread *curthread;
 

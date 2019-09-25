@@ -10,13 +10,9 @@
 #ifndef liblldb_BreakpointIDList_h_
 #define liblldb_BreakpointIDList_h_
 
-// C Includes
-// C++ Includes
 #include <utility>
 #include <vector>
 
-// Other libraries and framework includes
-// Project includes
 
 #include "lldb/lldb-enumerations.h"
 #include "lldb/Breakpoint/BreakpointID.h"
@@ -55,7 +51,7 @@ public:
 
   bool FindBreakpointID(const char *bp_id, size_t *position) const;
 
-  void InsertStringArray(const char **string_array, size_t array_size,
+  void InsertStringArray(llvm::ArrayRef<const char *> string_array,
                          CommandReturnObject &result);
 
   // Returns a pair consisting of the beginning and end of a breakpoint

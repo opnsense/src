@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2013, Anish Gupta (akgupt3@gmail.com)
  * All rights reserved.
  *
@@ -42,6 +44,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/cpufunc.h>
 #include <machine/psl.h>
 #include <machine/md_var.h>
+#include <machine/reg.h>
 #include <machine/specialreg.h>
 #include <machine/smp.h>
 #include <machine/vmm.h>
@@ -507,8 +510,8 @@ vmcb_init(struct svm_softc *sc, int vcpu, uint64_t iopm_base_pa,
 	    PAT_VALUE(7, PAT_UNCACHEABLE);
 
 	/* Set up DR6/7 to power-on state */
-	state->dr6 = 0xffff0ff0;
-	state->dr7 = 0x400;
+	state->dr6 = DBREG_DR6_RESERVED1;
+	state->dr7 = DBREG_DR7_RESERVED1;
 }
 
 /*
@@ -521,6 +524,7 @@ svm_vminit(struct vm *vm, pmap_t pmap)
 	struct svm_vcpu *vcpu;
 	vm_paddr_t msrpm_pa, iopm_pa, pml4_pa;
 	int i;
+	uint16_t maxcpus;
 
 	svm_sc = malloc(sizeof (*svm_sc), M_SVM, M_WAITOK | M_ZERO);
 	if (((uintptr_t)svm_sc & PAGE_MASK) != 0)
@@ -574,7 +578,8 @@ svm_vminit(struct vm *vm, pmap_t pmap)
 	iopm_pa = vtophys(svm_sc->iopm_bitmap);
 	msrpm_pa = vtophys(svm_sc->msr_bitmap);
 	pml4_pa = svm_sc->nptp;
-	for (i = 0; i < VM_MAXCPU; i++) {
+	maxcpus = vm_get_maxcpus(svm_sc->vm);
+	for (i = 0; i < maxcpus; i++) {
 		vcpu = svm_get_vcpu(svm_sc, i);
 		vcpu->nextrip = ~0;
 		vcpu->lastcpu = NOCPU;
@@ -1937,6 +1942,7 @@ svm_vmrun(void *arg, int vcpu, register_t rip, pmap_t pmap,
 	struct vm *vm;
 	uint64_t vmcb_pa;
 	int handled;
+	uint16_t ldt_sel;
 
 	svm_sc = arg;
 	vm = svm_sc->vm;
@@ -2015,6 +2021,21 @@ svm_vmrun(void *arg, int vcpu, register_t rip, pmap_t pmap,
 			break;
 		}
 
+		if (vcpu_debugged(vm, vcpu)) {
+			enable_gintr();
+			vm_exit_debug(vm, vcpu, state->rip);
+			break;
+		}
+
+		/*
+		 * #VMEXIT resumes the host with the guest LDTR, so
+		 * save the current LDT selector so it can be restored
+		 * after an exit.  The userspace hypervisor probably
+		 * doesn't use a LDT, but save and restore it to be
+		 * safe.
+		 */
+		ldt_sel = sldt();
+
 		svm_inj_interrupts(svm_sc, vcpu, vlapic);
 
 		/* Activate the nested pmap on 'curcpu' */
@@ -2044,6 +2065,9 @@ svm_vmrun(void *arg, int vcpu, register_t rip, pmap_t pmap,
 		 * to be restored explicitly.
 		 */
 		restore_host_tss();
+
+		/* Restore host LDTR. */
+		lldt(ldt_sel);
 
 		/* #VMEXIT disables interrupts so re-enable them here. */ 
 		enable_gintr();
@@ -2259,20 +2283,20 @@ svm_vlapic_cleanup(void *arg, struct vlapic *vlapic)
 }
 
 struct vmm_ops vmm_ops_amd = {
-	svm_init,
-	svm_cleanup,
-	svm_restore,
-	svm_vminit,
-	svm_vmrun,
-	svm_vmcleanup,
-	svm_getreg,
-	svm_setreg,
-	vmcb_getdesc,
-	vmcb_setdesc,
-	svm_getcap,
-	svm_setcap,
-	svm_npt_alloc,
-	svm_npt_free,
-	svm_vlapic_init,
-	svm_vlapic_cleanup	
+	.init		= svm_init,
+	.cleanup	= svm_cleanup,
+	.resume		= svm_restore,
+	.vminit		= svm_vminit,
+	.vmrun		= svm_vmrun,
+	.vmcleanup	= svm_vmcleanup,
+	.vmgetreg	= svm_getreg,
+	.vmsetreg	= svm_setreg,
+	.vmgetdesc	= vmcb_getdesc,
+	.vmsetdesc	= vmcb_setdesc,
+	.vmgetcap	= svm_getcap,
+	.vmsetcap	= svm_setcap,
+	.vmspace_alloc	= svm_npt_alloc,
+	.vmspace_free	= svm_npt_free,
+	.vlapic_init	= svm_vlapic_init,
+	.vlapic_cleanup	= svm_vlapic_cleanup,
 };

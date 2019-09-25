@@ -4,6 +4,8 @@
 # machine-independent gen sources
 .PATH: ${LIBC_SRCTOP}/${LIBC_ARCH}/gen ${LIBC_SRCTOP}/gen
 
+CONFS=	shells
+
 SRCS+=	__getosreldate.c \
 	__pthread_mutex_init_calloc_cb_stub.c \
 	__xuname.c \
@@ -14,9 +16,12 @@ SRCS+=	__getosreldate.c \
 	_thread_init.c \
 	alarm.c \
 	arc4random.c \
+	arc4random-compat.c \
+	arc4random_uniform.c \
 	assert.c \
 	auxv.c \
 	basename.c \
+	basename_compat.c \
 	cap_sandboxed.c \
 	check_utility_compat.c \
 	clock.c \
@@ -29,6 +34,7 @@ SRCS+=	__getosreldate.c \
 	devname.c \
 	dirfd.c \
 	dirname.c \
+	dirname_compat.c \
 	disklabel.c \
 	dlfcn.c \
 	drand48.c \
@@ -39,6 +45,7 @@ SRCS+=	__getosreldate.c \
 	errlst.c \
 	errno.c \
 	exec.c \
+	exect.c \
 	fdevname.c \
 	feature_present.c \
 	fmtcheck.c \
@@ -55,6 +62,7 @@ SRCS+=	__getosreldate.c \
 	getcap.c \
 	getcwd.c \
 	getdomainname.c \
+	getentropy.c \
 	getgrent.c \
 	getgrouplist.c \
 	gethostname.c \
@@ -129,6 +137,7 @@ SRCS+=	__getosreldate.c \
 	termios.c \
 	time.c \
 	times.c \
+	timespec_get.c \
 	timezone.c \
 	tls.c \
 	ttyname.c \
@@ -146,9 +155,19 @@ SRCS+=	__getosreldate.c \
 	waitid.c \
 	wordexp.c
 .if ${MK_SYMVER} == yes
-SRCS+=	fts-compat.c \
+SRCS+=	devname-compat11.c \
+	fts-compat.c \
+	fts-compat11.c \
+	ftw-compat11.c \
+	getmntinfo-compat11.c \
+	glob-compat11.c \
+	nftw-compat11.c \
+	readdir-compat11.c \
+	scandir-compat11.c \
 	unvis-compat.c
 .endif
+
+CFLAGS.arc4random.c= -I${SRCTOP}/sys -I${SRCTOP}/sys/crypto/chacha20
 
 .PATH: ${SRCTOP}/contrib/libc-pwcache
 SRCS+=	pwcache.c pwcache.h
@@ -174,6 +193,7 @@ SYM_MAPS+=${LIBC_SRCTOP}/gen/Symbol.map
 
 MAN+=	alarm.3 \
 	arc4random.3 \
+	auxv.3 \
 	basename.3 \
 	cap_rights_get.3 \
 	cap_sandboxed.3 \
@@ -210,6 +230,7 @@ MAN+=	alarm.3 \
 	getcwd.3 \
 	getdiskbyname.3 \
 	getdomainname.3 \
+	getentropy.3 \
 	getfsent.3 \
 	getgrent.3 \
 	getgrouplist.3 \
@@ -284,6 +305,7 @@ MAN+=	alarm.3 \
 	tcsetsid.3 \
 	time.3 \
 	times.3 \
+	timespec_get.3 \
 	timezone.3 \
 	ttyname.3 \
 	tzset.3 \
@@ -298,12 +320,11 @@ MAN+=	alarm.3 \
 	vis.3 \
 	wordexp.3
 
-MLINKS+=arc4random.3 arc4random_addrandom.3 \
-	arc4random.3 arc4random_stir.3 \
-	arc4random.3 arc4random_buf.3 \
+MLINKS+=arc4random.3 arc4random_buf.3 \
 	arc4random.3 arc4random_uniform.3
-MLINKS+=basename.3 basename_r.3
+MLINKS+=auxv.3 elf_aux_info.3
 MLINKS+=ctermid.3 ctermid_r.3
+MLINKS+=daemon.3 daemonfd.3
 MLINKS+=devname.3 devname_r.3
 MLINKS+=devname.3 fdevname.3
 MLINKS+=devname.3 fdevname_r.3
@@ -471,6 +492,7 @@ MLINKS+=setjmp.3 _longjmp.3 \
 	setjmp.3 siglongjmp.3 \
 	setjmp.3 sigsetjmp.3
 MLINKS+=setmode.3 getmode.3
+MLINKS+=setproctitle.3 setproctitle_fast.3
 MLINKS+=sigsetops.3 sigaddset.3 \
 	sigsetops.3 sigdelset.3 \
 	sigsetops.3 sigemptyset.3 \

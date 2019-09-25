@@ -8,22 +8,22 @@
  * modification, are permitted provided that the following conditions
  * are met:
  * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer
- *    in this position and unchanged.
+ *    notice, this list of conditions and the following disclaimer.
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR(S) ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
- * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE AUTHOR(S) BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
- * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
  */
 
 #include <sys/cdefs.h>
@@ -50,7 +50,7 @@ __FBSDID("$FreeBSD$");
 #define _ARMAG_LEN 8		/* length of ar magic string */
 #define _ARHDR_LEN 60		/* length of ar header */
 #define _INIT_AS_CAP 128	/* initial archive string table size */
-#define _INIT_SYMOFF_CAP (256*(sizeof(uint32_t))) /* initial so table size */
+#define _INIT_SYMOFF_CAP (256*(sizeof(uint64_t))) /* initial so table size */
 #define _INIT_SYMNAME_CAP 1024			  /* initial sn table size */
 #define _MAXNAMELEN_SVR4 15	/* max member name length in svr4 variant */
 #define _TRUNCATE_LEN 15	/* number of bytes to keep for member name */
@@ -291,12 +291,13 @@ read_objs(struct bsdar *bsdar, const char *archive, int checkargv)
 	for (;;) {
 		r = archive_read_next_header(a, &entry);
 		if (r == ARCHIVE_FATAL)
-			bsdar_errc(bsdar, EX_DATAERR, 0, "%s",
+			bsdar_errc(bsdar, EX_DATAERR, archive_errno(a), "%s",
 			    archive_error_string(a));
 		if (r == ARCHIVE_EOF)
 			break;
 		if (r == ARCHIVE_WARN || r == ARCHIVE_RETRY)
-			bsdar_warnc(bsdar, 0, "%s", archive_error_string(a));
+			bsdar_warnc(bsdar, archive_errno(a), "%s",
+			    archive_error_string(a));
 		if (r == ARCHIVE_RETRY) {
 			bsdar_warnc(bsdar, 0, "Retrying...");
 			continue;
@@ -341,7 +342,7 @@ read_objs(struct bsdar *bsdar, const char *archive, int checkargv)
 				bsdar_errc(bsdar, EX_SOFTWARE, errno,
 				    "malloc failed");
 			if (archive_read_data(a, buff, size) != (ssize_t)size) {
-				bsdar_warnc(bsdar, 0, "%s",
+				bsdar_warnc(bsdar, archive_errno(a), "%s",
 				    archive_error_string(a));
 				free(buff);
 				continue;
@@ -556,6 +557,7 @@ write_cleanup(struct bsdar *bsdar)
 	free(bsdar->s_sn);
 	bsdar->as = NULL;
 	bsdar->s_so = NULL;
+	bsdar->s_so_max = 0;
 	bsdar->s_sn = NULL;
 }
 
@@ -594,7 +596,7 @@ write_data(struct bsdar *bsdar, struct archive *a, const void *buf, size_t s)
 	while (s > 0) {
 		written = archive_write_data(a, buf, s);
 		if (written < 0)
-			bsdar_errc(bsdar, EX_SOFTWARE, 0, "%s",
+			bsdar_errc(bsdar, EX_SOFTWARE, archive_errno(a), "%s",
 			    archive_error_string(a));
 		buf = (const char *)buf + written;
 		s -= written;
@@ -612,7 +614,10 @@ write_objs(struct bsdar *bsdar)
 	struct archive_entry	*entry;
 	size_t s_sz;		/* size of archive symbol table. */
 	size_t pm_sz;		/* size of pseudo members */
-	int			 i, nr;
+	size_t w_sz;		/* size of words in symbol table */
+	size_t			 i;
+	uint64_t		 nr;
+	uint32_t		 nr32;
 
 	if (elf_version(EV_CURRENT) == EV_NONE)
 		bsdar_errc(bsdar, EX_SOFTWARE, 0,
@@ -652,15 +657,32 @@ write_objs(struct bsdar *bsdar)
 	 *
 	 * absolute_offset = htobe32(relative_offset + size_of_pseudo_members)
 	 */
-
+	w_sz = sizeof(uint32_t);
 	if (bsdar->s_cnt != 0) {
 		s_sz = (bsdar->s_cnt + 1) * sizeof(uint32_t) + bsdar->s_sn_sz;
 		pm_sz = _ARMAG_LEN + (_ARHDR_LEN + s_sz);
 		if (bsdar->as != NULL)
 			pm_sz += _ARHDR_LEN + bsdar->as_sz;
-		for (i = 0; (size_t)i < bsdar->s_cnt; i++)
-			*(bsdar->s_so + i) = htobe32(*(bsdar->s_so + i) +
-			    pm_sz);
+		/* Use the 64-bit word size format if necessary. */
+		if (bsdar->s_so_max > UINT32_MAX - pm_sz) {
+			w_sz = sizeof(uint64_t);
+			pm_sz -= s_sz;
+			s_sz = (bsdar->s_cnt + 1) * sizeof(uint64_t) +
+			    bsdar->s_sn_sz;
+			pm_sz += s_sz;
+			/* Convert to big-endian. */
+			for (i = 0; i < bsdar->s_cnt; i++)
+				bsdar->s_so[i] =
+				    htobe64(bsdar->s_so[i] + pm_sz);
+		} else {
+			/*
+			 * Convert to big-endian and shuffle in-place to
+			 * the front of the allocation. XXX UB
+			 */
+			for (i = 0; i < bsdar->s_cnt; i++)
+				((uint32_t *)(bsdar->s_so))[i] =
+				    htobe32(bsdar->s_so[i] + pm_sz);
+		}
 	}
 
 	if ((a = archive_write_new()) == NULL)
@@ -681,16 +703,23 @@ write_objs(struct bsdar *bsdar)
 		if (entry == NULL)
 			bsdar_errc(bsdar, EX_SOFTWARE, 0,
 			    "archive_entry_new failed");
-		archive_entry_copy_pathname(entry, "/");
+		if (w_sz == sizeof(uint64_t))
+			archive_entry_copy_pathname(entry, "/SYM64/");
+		else
+			archive_entry_copy_pathname(entry, "/");
 		if ((bsdar->options & AR_D) == 0)
 			archive_entry_set_mtime(entry, time(NULL), 0);
-		archive_entry_set_size(entry, (bsdar->s_cnt + 1) *
-		    sizeof(uint32_t) + bsdar->s_sn_sz);
+		archive_entry_set_size(entry, (bsdar->s_cnt + 1) * w_sz +
+		    bsdar->s_sn_sz);
 		AC(archive_write_header(a, entry));
-		nr = htobe32(bsdar->s_cnt);
-		write_data(bsdar, a, &nr, sizeof(uint32_t));
-		write_data(bsdar, a, bsdar->s_so, sizeof(uint32_t) *
-		    bsdar->s_cnt);
+		if (w_sz == sizeof(uint64_t)) {
+			nr = htobe64(bsdar->s_cnt);
+			write_data(bsdar, a, &nr, sizeof(nr));
+		} else {
+			nr32 = htobe32((uint32_t)bsdar->s_cnt);
+			write_data(bsdar, a, &nr32, sizeof(nr32));
+		}
+		write_data(bsdar, a, bsdar->s_so, w_sz * bsdar->s_cnt);
 		write_data(bsdar, a, bsdar->s_sn, bsdar->s_sn_sz);
 		archive_entry_free(entry);
 	}
@@ -896,13 +925,15 @@ add_to_ar_sym_table(struct bsdar *bsdar, const char *name)
 		bsdar->s_sn_sz = 0;
 	}
 
-	if (bsdar->s_cnt * sizeof(uint32_t) >= bsdar->s_so_cap) {
+	if (bsdar->s_cnt * sizeof(uint64_t) >= bsdar->s_so_cap) {
 		bsdar->s_so_cap *= 2;
 		bsdar->s_so = realloc(bsdar->s_so, bsdar->s_so_cap);
 		if (bsdar->s_so == NULL)
 			bsdar_errc(bsdar, EX_SOFTWARE, errno, "realloc failed");
 	}
 	bsdar->s_so[bsdar->s_cnt] = bsdar->rela_off;
+	if ((uint64_t)bsdar->rela_off > bsdar->s_so_max)
+		bsdar->s_so_max = (uint64_t)bsdar->rela_off;
 	bsdar->s_cnt++;
 
 	/*

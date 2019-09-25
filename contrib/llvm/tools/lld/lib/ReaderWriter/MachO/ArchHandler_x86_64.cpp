@@ -80,6 +80,7 @@ public:
     switch (ref->kindValue()) {
     case ripRel32Got:
       assert(targetNowGOT && "target must be GOT");
+      LLVM_FALLTHROUGH;
     case ripRel32GotLoad:
       const_cast<Reference *>(ref)
         ->setKindValue(targetNowGOT ? ripRel32 : ripRel32GotLoadNowLea);
@@ -674,7 +675,7 @@ void ArchHandler_x86_64::applyFixupRelocatable(const Reference &ref,
     *loc32 = ref.addend() + inAtomAddress - fixupAddress;
     return;
   case delta32Anon:
-    // The value we write here should be the the delta to the target
+    // The value we write here should be the delta to the target
     // after taking in to account the difference from the fixup back to the
     // last defined label
     // ie, if we have:
@@ -690,7 +691,7 @@ void ArchHandler_x86_64::applyFixupRelocatable(const Reference &ref,
     *loc64 = ref.addend() + inAtomAddress - fixupAddress;
     return;
   case delta64Anon:
-    // The value we write here should be the the delta to the target
+    // The value we write here should be the delta to the target
     // after taking in to account the difference from the fixup back to the
     // last defined label
     // ie, if we have:

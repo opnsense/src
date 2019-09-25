@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
  * (c) UNIX System Laboratories, Inc.
@@ -197,11 +199,22 @@ void tzsetwall(void);
 time_t timelocal(struct tm * const);
 time_t timegm(struct tm * const);
 int timer_oshandle_np(timer_t timerid);
+time_t time2posix(time_t t);
+time_t posix2time(time_t t);
 #endif /* __BSD_VISIBLE */
 
 #if __POSIX_VISIBLE >= 200809 || defined(_XLOCALE_H_)
 #include <xlocale/_time.h>
 #endif
+
+#if defined(__BSD_VISIBLE) || __ISO_C_VISIBLE >= 2011 || \
+    (defined(cplusplus) && cplusplus >= 201703)
+#include <sys/_timespec.h>
+/* ISO/IEC 9899:201x 7.27.2.5 The timespec_get function */
+#define TIME_UTC	1	/* time elapsed since epoch */
+int timespec_get(struct timespec *ts, int base);
+#endif
+
 __END_DECLS
 
 #endif /* !_TIME_H_ */

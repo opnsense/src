@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2006-2007, Juniper Networks, Inc.
  * All rights reserved.
  *
@@ -31,6 +33,7 @@
 __FBSDID("$FreeBSD$");
 
 #include <sys/types.h>
+#define	_WANT_MIPS_REGNUM
 #include <sys/procfs.h>
 #include <ucontext.h>
 #include <string.h>

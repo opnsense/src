@@ -36,6 +36,7 @@ __FBSDID("$FreeBSD$");
 #include <dev/ic/ns16550.h>
 #ifndef WITHOUT_CAPSICUM
 #include <sys/capsicum.h>
+#include <capsicum_helpers.h>
 #endif
 
 #include <stdio.h>
@@ -55,9 +56,9 @@ __FBSDID("$FreeBSD$");
 #include "uart_emul.h"
 
 #define	COM1_BASE      	0x3F8
-#define COM1_IRQ	4
+#define	COM1_IRQ	4
 #define	COM2_BASE      	0x2F8
-#define COM2_IRQ	3
+#define	COM2_IRQ	3
 
 #define	DEFAULT_RCLK	1843200
 #define	DEFAULT_BAUD	9600
@@ -70,7 +71,7 @@ __FBSDID("$FreeBSD$");
 #define	MSR_DELTA_MASK	0x0f
 
 #ifndef REG_SCR
-#define REG_SCR		com_scr
+#define	REG_SCR		com_scr
 #endif
 
 #define	FIFOSZ	16
@@ -436,75 +437,75 @@ uart_write(struct uart_softc *sc, int offset, uint8_t value)
 		 */
 		sc->ier = value & 0x0F;
 		break;
-		case REG_FCR:
-			/*
-			 * When moving from FIFO and 16450 mode and vice versa,
-			 * the FIFO contents are reset.
-			 */
-			if ((sc->fcr & FCR_ENABLE) ^ (value & FCR_ENABLE)) {
-				fifosz = (value & FCR_ENABLE) ? FIFOSZ : 1;
-				rxfifo_reset(sc, fifosz);
-			}
+	case REG_FCR:
+		/*
+		 * When moving from FIFO and 16450 mode and vice versa,
+		 * the FIFO contents are reset.
+		 */
+		if ((sc->fcr & FCR_ENABLE) ^ (value & FCR_ENABLE)) {
+			fifosz = (value & FCR_ENABLE) ? FIFOSZ : 1;
+			rxfifo_reset(sc, fifosz);
+		}
 
-			/*
-			 * The FCR_ENABLE bit must be '1' for the programming
-			 * of other FCR bits to be effective.
-			 */
-			if ((value & FCR_ENABLE) == 0) {
-				sc->fcr = 0;
-			} else {
-				if ((value & FCR_RCV_RST) != 0)
-					rxfifo_reset(sc, FIFOSZ);
+		/*
+		 * The FCR_ENABLE bit must be '1' for the programming
+		 * of other FCR bits to be effective.
+		 */
+		if ((value & FCR_ENABLE) == 0) {
+			sc->fcr = 0;
+		} else {
+			if ((value & FCR_RCV_RST) != 0)
+				rxfifo_reset(sc, FIFOSZ);
 
-				sc->fcr = value &
-					 (FCR_ENABLE | FCR_DMA | FCR_RX_MASK);
-			}
-			break;
-		case REG_LCR:
-			sc->lcr = value;
-			break;
-		case REG_MCR:
-			/* Apply mask so that bits 5-7 are 0 */
-			sc->mcr = value & 0x1F;
-			msr = modem_status(sc->mcr);
+			sc->fcr = value &
+				 (FCR_ENABLE | FCR_DMA | FCR_RX_MASK);
+		}
+		break;
+	case REG_LCR:
+		sc->lcr = value;
+		break;
+	case REG_MCR:
+		/* Apply mask so that bits 5-7 are 0 */
+		sc->mcr = value & 0x1F;
+		msr = modem_status(sc->mcr);
 
-			/*
-			 * Detect if there has been any change between the
-			 * previous and the new value of MSR. If there is
-			 * then assert the appropriate MSR delta bit.
-			 */
-			if ((msr & MSR_CTS) ^ (sc->msr & MSR_CTS))
-				sc->msr |= MSR_DCTS;
-			if ((msr & MSR_DSR) ^ (sc->msr & MSR_DSR))
-				sc->msr |= MSR_DDSR;
-			if ((msr & MSR_DCD) ^ (sc->msr & MSR_DCD))
-				sc->msr |= MSR_DDCD;
-			if ((sc->msr & MSR_RI) != 0 && (msr & MSR_RI) == 0)
-				sc->msr |= MSR_TERI;
+		/*
+		 * Detect if there has been any change between the
+		 * previous and the new value of MSR. If there is
+		 * then assert the appropriate MSR delta bit.
+		 */
+		if ((msr & MSR_CTS) ^ (sc->msr & MSR_CTS))
+			sc->msr |= MSR_DCTS;
+		if ((msr & MSR_DSR) ^ (sc->msr & MSR_DSR))
+			sc->msr |= MSR_DDSR;
+		if ((msr & MSR_DCD) ^ (sc->msr & MSR_DCD))
+			sc->msr |= MSR_DDCD;
+		if ((sc->msr & MSR_RI) != 0 && (msr & MSR_RI) == 0)
+			sc->msr |= MSR_TERI;
 
-			/*
-			 * Update the value of MSR while retaining the delta
-			 * bits.
-			 */
-			sc->msr &= MSR_DELTA_MASK;
-			sc->msr |= msr;
-			break;
-		case REG_LSR:
-			/*
-			 * Line status register is not meant to be written to
-			 * during normal operation.
-			 */
-			break;
-		case REG_MSR:
-			/*
-			 * As far as I can tell MSR is a read-only register.
-			 */
-			break;
-		case REG_SCR:
-			sc->scr = value;
-			break;
-		default:
-			break;
+		/*
+		 * Update the value of MSR while retaining the delta
+		 * bits.
+		 */
+		sc->msr &= MSR_DELTA_MASK;
+		sc->msr |= msr;
+		break;
+	case REG_LSR:
+		/*
+		 * Line status register is not meant to be written to
+		 * during normal operation.
+		 */
+		break;
+	case REG_MSR:
+		/*
+		 * As far as I can tell MSR is a read-only register.
+		 */
+		break;
+	case REG_SCR:
+		sc->scr = value;
+		break;
+	default:
+		break;
 	}
 
 done:
@@ -657,7 +658,6 @@ uart_set_backend(struct uart_softc *sc, const char *opts)
 #ifndef WITHOUT_CAPSICUM
 	cap_rights_t rights;
 	cap_ioctl_t cmds[] = { TIOCGETA, TIOCSETA, TIOCGWINSZ };
-	cap_ioctl_t sicmds[] = { TIOCGETA, TIOCGWINSZ };
 #endif
 
 	retval = -1;
@@ -680,25 +680,22 @@ uart_set_backend(struct uart_softc *sc, const char *opts)
 	if (retval == 0)
 		retval = fcntl(sc->tty.fd, F_SETFL, O_NONBLOCK);
 
+	if (retval == 0) {
 #ifndef WITHOUT_CAPSICUM
-	cap_rights_init(&rights, CAP_EVENT, CAP_IOCTL, CAP_READ, CAP_WRITE);
-	if (cap_rights_limit(sc->tty.fd, &rights) == -1 && errno != ENOSYS)
-		errx(EX_OSERR, "Unable to apply rights for sandbox");
-	if (cap_ioctls_limit(sc->tty.fd, cmds, nitems(cmds)) == -1 && errno != ENOSYS)
-		errx(EX_OSERR, "Unable to apply rights for sandbox");
-	if (!uart_stdio) {
-		cap_rights_init(&rights, CAP_FCNTL, CAP_FSTAT, CAP_IOCTL, CAP_READ);
-		if (cap_rights_limit(STDIN_FILENO, &rights) == -1 && errno != ENOSYS)
+		cap_rights_init(&rights, CAP_EVENT, CAP_IOCTL, CAP_READ,
+		    CAP_WRITE);
+		if (caph_rights_limit(sc->tty.fd, &rights) == -1)
 			errx(EX_OSERR, "Unable to apply rights for sandbox");
-		if (cap_ioctls_limit(STDIN_FILENO, sicmds, nitems(sicmds)) == -1 && errno != ENOSYS)
+		if (caph_ioctls_limit(sc->tty.fd, cmds, nitems(cmds)) == -1)
 			errx(EX_OSERR, "Unable to apply rights for sandbox");
-		if (cap_fcntls_limit(STDIN_FILENO, CAP_FCNTL_GETFL) == -1 && errno != ENOSYS)
-			errx(EX_OSERR, "Unable to apply rights for sandbox");
-	}
+		if (!uart_stdio) {
+			if (caph_limit_stdin() == -1)
+				errx(EX_OSERR,
+				    "Unable to apply rights for sandbox");
+		}
 #endif
-
-	if (retval == 0)
 		uart_opentty(sc);
+	}
 
 	return (retval);
 }

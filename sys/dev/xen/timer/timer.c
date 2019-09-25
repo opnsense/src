@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2009 Adrian Chadd
  * Copyright (c) 2012 Spectra Logic Corporation
  * All rights reserved.
@@ -260,7 +262,7 @@ xentimer_gettime(device_t dev, struct timespec *ts)
 	timespecclear(ts);
 	xen_fetch_wallclock(ts);
 	xen_fetch_uptime(&u_ts);
-	timespecadd(ts, &u_ts);
+	timespecadd(ts, &u_ts, ts);
 
 	return (0);
 }

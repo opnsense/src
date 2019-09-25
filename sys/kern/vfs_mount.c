@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1999-2004 Poul-Henning Kamp
  * Copyright (c) 1999 Michael Smith
  * Copyright (c) 1989, 1993
@@ -17,7 +19,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -39,6 +41,7 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/conf.h>
+#include <sys/eventhandler.h>
 #include <sys/fcntl.h>
 #include <sys/jail.h>
 #include <sys/kernel.h>
@@ -93,6 +96,9 @@ struct mntlist mountlist = TAILQ_HEAD_INITIALIZER(mountlist);
 struct mtx mountlist_mtx;
 MTX_SYSINIT(mountlist, &mountlist_mtx, "mountlist", MTX_DEF);
 
+EVENTHANDLER_LIST_DEFINE(vfs_mounted);
+EVENTHANDLER_LIST_DEFINE(vfs_unmounted);
+
 /*
  * Global opts, taken by all filesystems
  */
@@ -114,6 +120,7 @@ mount_init(void *mem, int size, int flags)
 
 	mp = (struct mount *)mem;
 	mtx_init(&mp->mnt_mtx, "struct mount mtx", NULL, MTX_DEF);
+	mtx_init(&mp->mnt_listmtx, "struct mount vlist mtx", NULL, MTX_DEF);
 	lockinit(&mp->mnt_explock, PVFS, "explock", 0, 0);
 	return (0);
 }
@@ -125,6 +132,7 @@ mount_fini(void *mem, int size)
 
 	mp = (struct mount *)mem;
 	lockdestroy(&mp->mnt_explock);
+	mtx_destroy(&mp->mnt_listmtx);
 	mtx_destroy(&mp->mnt_mtx);
 }
 
@@ -467,6 +475,8 @@ vfs_mount_alloc(struct vnode *vp, struct vfsconf *vfsp, const char *fspath,
 	mp->mnt_nvnodelistsize = 0;
 	TAILQ_INIT(&mp->mnt_activevnodelist);
 	mp->mnt_activevnodelistsize = 0;
+	TAILQ_INIT(&mp->mnt_tmpfreevnodelist);
+	mp->mnt_tmpfreevnodelistsize = 0;
 	mp->mnt_ref = 0;
 	(void) vfs_busy(mp, MBF_NOWAIT);
 	atomic_add_acq_int(&vfsp->vfc_refcount, 1);
@@ -524,6 +534,8 @@ vfs_mount_destroy(struct mount *mp)
 		panic("vfs_mount_destroy: nonzero nvnodelistsize");
 	if (mp->mnt_activevnodelistsize != 0)
 		panic("vfs_mount_destroy: nonzero activevnodelistsize");
+	if (mp->mnt_tmpfreevnodelistsize != 0)
+		panic("vfs_mount_destroy: nonzero tmpfreevnodelistsize");
 	if (mp->mnt_lockref != 0)
 		panic("vfs_mount_destroy: nonzero lock refcount");
 	MNT_IUNLOCK(mp);
@@ -825,10 +837,20 @@ vfs_domount_first(
 	struct vattr va;
 	struct mount *mp;
 	struct vnode *newdp;
-	int error;
+	int error, error1;
 
 	ASSERT_VOP_ELOCKED(vp, __func__);
 	KASSERT((fsflags & MNT_UPDATE) == 0, ("MNT_UPDATE shouldn't be here"));
+
+	/*
+	 * If the jail of the calling thread lacks permission for this type of
+	 * file system, deny immediately.
+	 */
+	if (jailed(td->td_ucred) && !prison_allow(td->td_ucred,
+	    vfsp->vfc_prison_flag)) {
+		vput(vp);
+		return (EPERM);
+	}
 
 	/*
 	 * If the user is not root, ensure that they own the directory
@@ -867,8 +889,15 @@ vfs_domount_first(
 	 * XXX The final recipients of VFS_MOUNT just overwrite the ndp they
 	 * get.  No freeing of cn_pnbuf.
 	 */
-	error = VFS_MOUNT(mp);
-	if (error != 0) {
+	error1 = 0;
+	if ((error = VFS_MOUNT(mp)) != 0 ||
+	    (error1 = VFS_STATFS(mp, &mp->mnt_stat)) != 0 ||
+	    (error1 = VFS_ROOT(mp, LK_EXCLUSIVE, &newdp)) != 0) {
+		if (error1 != 0) {
+			error = error1;
+			if ((error1 = VFS_UNMOUNT(mp, 0)) != 0)
+				printf("VFS_UNMOUNT returned %d\n", error1);
+		}
 		vfs_unbusy(mp);
 		mp->mnt_vnodecovered = NULL;
 		vfs_mount_destroy(mp);
@@ -878,12 +907,12 @@ vfs_domount_first(
 		vrele(vp);
 		return (error);
 	}
+	VOP_UNLOCK(newdp, 0);
 
 	if (mp->mnt_opt != NULL)
 		vfs_freeopts(mp->mnt_opt);
 	mp->mnt_opt = mp->mnt_optnew;
 	*optlist = NULL;
-	(void)VFS_STATFS(mp, &mp->mnt_stat);
 
 	/*
 	 * Prevent external consumers of mount options from reading mnt_optnew.
@@ -909,10 +938,9 @@ vfs_domount_first(
 	TAILQ_INSERT_TAIL(&mountlist, mp, mnt_list);
 	mtx_unlock(&mountlist_mtx);
 	vfs_event_signal(NULL, VQ_MOUNT, 0);
-	if (VFS_ROOT(mp, LK_EXCLUSIVE, &newdp))
-		panic("mount: lost mount");
+	vn_lock(newdp, LK_EXCLUSIVE | LK_RETRY);
 	VOP_UNLOCK(vp, 0);
-	EVENTHANDLER_INVOKE(vfs_mounted, mp, newdp, td);
+	EVENTHANDLER_DIRECT_INVOKE(vfs_mounted, mp, newdp, td);
 	VOP_UNLOCK(newdp, 0);
 	mountcheckdirs(vp, newdp);
 	vrele(newdp);
@@ -1137,8 +1165,6 @@ vfs_domount(
 			vfsp = vfs_byname_kld(fstype, td, &error);
 		if (vfsp == NULL)
 			return (ENODEV);
-		if (jailed(td->td_ucred) && !(vfsp->vfc_flags & VFCF_JAIL))
-			return (EPERM);
 	}
 
 	/*
@@ -1311,7 +1337,7 @@ dounmount_cleanup(struct mount *mp, struct vnode *coveredvp, int mntkflags)
 int
 dounmount(struct mount *mp, int flags, struct thread *td)
 {
-	struct vnode *coveredvp, *fsrootvp;
+	struct vnode *coveredvp;
 	int error;
 	uint64_t async_flag;
 	int mnt_gen_r;
@@ -1356,14 +1382,13 @@ dounmount(struct mount *mp, int flags, struct thread *td)
 		dounmount_cleanup(mp, coveredvp, 0);
 		return (EBUSY);
 	}
-	mp->mnt_kern_flag |= MNTK_UNMOUNT | MNTK_NOINSMNTQ;
+	mp->mnt_kern_flag |= MNTK_UNMOUNT;
 	if (flags & MNT_NONBUSY) {
 		MNT_IUNLOCK(mp);
 		error = vfs_check_usecounts(mp);
 		MNT_ILOCK(mp);
 		if (error != 0) {
-			dounmount_cleanup(mp, coveredvp, MNTK_UNMOUNT |
-			    MNTK_NOINSMNTQ);
+			dounmount_cleanup(mp, coveredvp, MNTK_UNMOUNT);
 			return (error);
 		}
 	}
@@ -1413,22 +1438,6 @@ dounmount(struct mount *mp, int flags, struct thread *td)
 	MNT_IUNLOCK(mp);
 	cache_purgevfs(mp, false); /* remove cache entries for this file sys */
 	vfs_deallocate_syncvnode(mp);
-	/*
-	 * For forced unmounts, move process cdir/rdir refs on the fs root
-	 * vnode to the covered vnode.  For non-forced unmounts we want
-	 * such references to cause an EBUSY error.
-	 */
-	if ((flags & MNT_FORCE) &&
-	    VFS_ROOT(mp, LK_EXCLUSIVE, &fsrootvp) == 0) {
-		if (mp->mnt_vnodecovered != NULL &&
-		    (mp->mnt_flag & MNT_IGNORE) == 0)
-			mountcheckdirs(fsrootvp, mp->mnt_vnodecovered);
-		if (fsrootvp == rootvnode) {
-			vrele(rootvnode);
-			rootvnode = NULL;
-		}
-		vput(fsrootvp);
-	}
 	if ((mp->mnt_flag & MNT_RDONLY) != 0 || (flags & MNT_FORCE) != 0 ||
 	    (error = VFS_SYNC(mp, MNT_WAIT)) == 0)
 		error = VFS_UNMOUNT(mp, flags);
@@ -1440,19 +1449,7 @@ dounmount(struct mount *mp, int flags, struct thread *td)
 	 * it doesn't exist anymore.
 	 */
 	if (error && error != ENXIO) {
-		if ((flags & MNT_FORCE) &&
-		    VFS_ROOT(mp, LK_EXCLUSIVE, &fsrootvp) == 0) {
-			if (mp->mnt_vnodecovered != NULL &&
-			    (mp->mnt_flag & MNT_IGNORE) == 0)
-				mountcheckdirs(mp->mnt_vnodecovered, fsrootvp);
-			if (rootvnode == NULL) {
-				rootvnode = fsrootvp;
-				vref(rootvnode);
-			}
-			vput(fsrootvp);
-		}
 		MNT_ILOCK(mp);
-		mp->mnt_kern_flag &= ~MNTK_NOINSMNTQ;
 		if ((mp->mnt_flag & MNT_RDONLY) == 0) {
 			MNT_IUNLOCK(mp);
 			vfs_allocate_syncvnode(mp);
@@ -1475,12 +1472,16 @@ dounmount(struct mount *mp, int flags, struct thread *td)
 	mtx_lock(&mountlist_mtx);
 	TAILQ_REMOVE(&mountlist, mp, mnt_list);
 	mtx_unlock(&mountlist_mtx);
-	EVENTHANDLER_INVOKE(vfs_unmounted, mp, td);
+	EVENTHANDLER_DIRECT_INVOKE(vfs_unmounted, mp, td);
 	if (coveredvp != NULL) {
 		coveredvp->v_mountedhere = NULL;
 		VOP_UNLOCK(coveredvp, 0);
 	}
 	vfs_event_signal(NULL, VQ_UNMOUNT, 0);
+	if (rootvnode != NULL && mp == rootvnode->v_mount) {
+		vrele(rootvnode);
+		rootvnode = NULL;
+	}
 	if (mp == rootdevmp)
 		rootdevmp = NULL;
 	vfs_mount_destroy(mp);
@@ -1646,17 +1647,16 @@ vfs_getopt_size(struct vfsoptlist *opts, const char *name, off_t *value)
 	if (iv < 0)
 		return (EINVAL);
 	switch (vtp[0]) {
-	case 't':
-	case 'T':
+	case 't': case 'T':
 		iv *= 1024;
-	case 'g':
-	case 'G':
+		/* FALLTHROUGH */
+	case 'g': case 'G':
 		iv *= 1024;
-	case 'm':
-	case 'M':
+		/* FALLTHROUGH */
+	case 'm': case 'M':
 		iv *= 1024;
-	case 'k':
-	case 'K':
+		/* FALLTHROUGH */
+	case 'k': case 'K':
 		iv *= 1024;
 	case '\0':
 		break;
@@ -1734,7 +1734,7 @@ vfs_scanopt(struct vfsoptlist *opts, const char *name, const char *fmt, ...)
 }
 
 int
-vfs_setopt(struct vfsoptlist *opts, const char *name, void *value, size_t len)
+vfs_setopt(struct vfsoptlist *opts, const char *name, void *value, int len)
 {
 	struct vfsopt *opt;
 
@@ -1755,7 +1755,7 @@ vfs_setopt(struct vfsoptlist *opts, const char *name, void *value, size_t len)
 }
 
 int
-vfs_setopt_part(struct vfsoptlist *opts, const char *name, void *value, size_t len)
+vfs_setopt_part(struct vfsoptlist *opts, const char *name, void *value, int len)
 {
 	struct vfsopt *opt;
 

@@ -961,6 +961,8 @@ static int mlx4_MAD_IFC_wrapper(struct mlx4_dev *dev, int slave,
 				if (!err && slave != mlx4_master_func_num(dev)) {
 					u8 *state = outsmp->data + PORT_STATE_OFFSET;
 
+					if (port < 1 || port > dev->caps.num_ports)
+						return -EINVAL;
 					*state = (*state & 0xf0) | vf_port_state(dev, port, slave);
 					slave_cap_mask = priv->mfunc.master.slave_state[slave].ib_cap_mask[port];
 					memcpy(outsmp->data + PORT_CAPABILITY_LOCATION_IN_SMP, &slave_cap_mask, 4);
@@ -968,8 +970,12 @@ static int mlx4_MAD_IFC_wrapper(struct mlx4_dev *dev, int slave,
 				return err;
 			}
 			if (smp->attr_id == IB_SMP_ATTR_GUID_INFO) {
-				__be64 guid = mlx4_get_admin_guid(dev, slave,
-								  port);
+				__be64 guid;
+
+				if (port < 1 || port > dev->caps.num_ports)
+					return -EINVAL;
+
+				guid = mlx4_get_admin_guid(dev, slave, port);
 
 				/* set the PF admin guid to the FW/HW burned
 				 * GUID, if it wasn't yet set
@@ -2484,6 +2490,7 @@ int mlx4_cmd_init(struct mlx4_dev *dev)
 		init_rwsem(&priv->cmd.switch_sem);
 		mutex_init(&priv->cmd.slave_cmd_mutex);
 		sema_init(&priv->cmd.poll_sem, 1);
+		sema_init(&priv->cmd.event_sem, 0);
 		priv->cmd.use_events = 0;
 		priv->cmd.toggle     = 1;
 		priv->cmd.initialized = 1;
@@ -2611,7 +2618,9 @@ int mlx4_cmd_use_events(struct mlx4_dev *dev)
 {
 	struct mlx4_priv *priv = mlx4_priv(dev);
 	int i;
-	int err = 0;
+
+	if (priv->cmd.use_events != 0)
+		return 0;
 
 	priv->cmd.context = kmalloc(priv->cmd.max_cmds *
 				   sizeof (struct mlx4_cmd_context),
@@ -2633,7 +2642,8 @@ int mlx4_cmd_use_events(struct mlx4_dev *dev)
 	priv->cmd.context[priv->cmd.max_cmds - 1].next = -1;
 	priv->cmd.free_head = 0;
 
-	sema_init(&priv->cmd.event_sem, priv->cmd.max_cmds);
+	for (i = 0; i != priv->cmd.max_cmds; i++)
+		up(&priv->cmd.event_sem);
 
 	for (priv->cmd.token_mask = 1;
 	     priv->cmd.token_mask < priv->cmd.max_cmds;
@@ -2645,7 +2655,7 @@ int mlx4_cmd_use_events(struct mlx4_dev *dev)
 	priv->cmd.use_events = 1;
 	up_write(&priv->cmd.switch_sem);
 
-	return err;
+	return 0;
 }
 
 /*
@@ -2656,6 +2666,9 @@ void mlx4_cmd_use_polling(struct mlx4_dev *dev)
 	struct mlx4_priv *priv = mlx4_priv(dev);
 	int i;
 
+	if (priv->cmd.use_events == 0)
+		return;
+
 	down_write(&priv->cmd.switch_sem);
 	priv->cmd.use_events = 0;
 
@@ -2663,6 +2676,7 @@ void mlx4_cmd_use_polling(struct mlx4_dev *dev)
 		down(&priv->cmd.event_sem);
 
 	kfree(priv->cmd.context);
+	priv->cmd.context = NULL;
 
 	up(&priv->cmd.poll_sem);
 	up_write(&priv->cmd.switch_sem);
@@ -2734,11 +2748,11 @@ void mlx4_cmd_wake_completions(struct mlx4_dev *dev)
 	int i;
 
 	spin_lock(&priv->cmd.context_lock);
-	if (priv->cmd.context) {
+	if (priv->cmd.context != NULL) {
 		for (i = 0; i < priv->cmd.max_cmds; ++i) {
 			context = &priv->cmd.context[i];
 			context->fw_status = CMD_STAT_INTERNAL_ERR;
-			context->result    =
+			context->result =
 				mlx4_status_to_errno(CMD_STAT_INTERNAL_ERR);
 			complete(&context->done);
 		}

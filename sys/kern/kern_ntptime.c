@@ -300,6 +300,8 @@ ntp_sysctl(SYSCTL_HANDLER_ARGS)
 {
 	struct ntptimeval ntv;	/* temporary structure */
 
+	memset(&ntv, 0, sizeof(ntv));
+
 	NTP_LOCK();
 	ntp_gettime1(&ntv);
 	NTP_UNLOCK();
@@ -752,11 +754,12 @@ hardupdate(offset)
  * Therefore, the variables used are distinct from the hardclock()
  * variables, except for the actual time and frequency variables, which
  * are determined by this routine and updated atomically.
+ *
+ * tsp  - time at PPS
+ * nsec - hardware counter at PPS
  */
 void
-hardpps(tsp, nsec)
-	struct timespec *tsp;	/* time at PPS */
-	long nsec;		/* hardware counter at PPS */
+hardpps(struct timespec *tsp, long nsec)
 {
 	long u_sec, u_nsec, v_nsec; /* temps */
 	l_fp ftemp;

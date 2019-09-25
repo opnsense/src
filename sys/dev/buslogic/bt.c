@@ -3,8 +3,9 @@
  * Product specific probe and attach routines can be found in:
  * sys/dev/buslogic/bt_isa.c	BT-54X, BT-445 cards
  * sys/dev/buslogic/bt_mca.c	BT-64X, SDC3211B, SDC3211F
- * sys/dev/buslogic/bt_eisa.c	BT-74X, BT-75x cards, SDC3222F
  * sys/dev/buslogic/bt_pci.c	BT-946, BT-948, BT-956, BT-958 cards
+ *
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
  *
  * Copyright (c) 1998, 1999 Justin T. Gibbs.
  * All rights reserved.
@@ -169,7 +170,7 @@ static void	bttimeout(void *arg);
  * XXX
  * Do our own re-probe protection until a configuration
  * manager can do it for us.  This ensures that we don't
- * reprobe a card already found by the EISA or PCI probes.
+ * reprobe a card already found by the PCI probes.
  */
 struct bt_isa_port bt_isa_ports[] =
 {
@@ -313,7 +314,6 @@ bt_port_probe(device_t dev, struct bt_probe_info *info)
 			return (1);
 		}
 	} else {
-		/* VL/EISA/PCI DMA */
 		info->drq = -1;
 	}
 	switch (config_data.irq) {
@@ -482,7 +482,6 @@ bt_fetch_adapter_info(device_t dev)
 	 *		BT-542B/742A (revision H)
 	 *	2.xx	BusLogic "A" Series Host Adapters:
 	 *		BT-542B/742A (revision G and below)
-	 *	0.xx	AMI FastDisk VLB/EISA BusLogic Clone Host Adapter
 	 */
 	length_param = sizeof(esetup_info);
 	error = bt_cmd(bt, BOP_INQUIRE_ESETUP_INFO, &length_param, /*parmlen*/1,
@@ -499,19 +498,6 @@ bt_fetch_adapter_info(device_t dev)
 	if (esetup_info.bus_type == 'A'
 	 && bt->firmware_ver[0] == '2') {
 		snprintf(bt->model, sizeof(bt->model), "542B");
-	} else if (esetup_info.bus_type == 'E'
-	 	&& bt->firmware_ver[0] == '2') {
-
-		/*
-		 * The 742A seems to object if its mailboxes are
-		 * allocated above the 16MB mark.
-		 */
-		bt->mailbox_addrlimit = BUS_SPACE_MAXADDR_24BIT;
-		snprintf(bt->model, sizeof(bt->model), "742A");
-	} else if (esetup_info.bus_type == 'E'
-		&& bt->firmware_ver[0] == '0') {
-		/* AMI FastDisk EISA Series 441 0.x */
-		snprintf(bt->model, sizeof(bt->model), "747A");
 	} else {
 		ha_model_data_t model_data;
 		int i;
@@ -919,6 +905,7 @@ bt_attach(device_t dev)
 		device_printf(dev, "bus_setup_intr() failed: %d\n", error);
 		return (error);
 	}
+	gone_in_dev(dev, 12, "bt(4) driver");
 
 	return (0);
 }

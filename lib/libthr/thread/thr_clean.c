@@ -1,4 +1,7 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
+
  * Copyright (c) 1995 John Birrell <jb@cimlogic.com.au>.
  * All rights reserved.
  *
@@ -43,12 +46,18 @@ __FBSDID("$FreeBSD$");
 #undef pthread_cleanup_pop
 
 /* old binary compatible interfaces */
-__weak_reference(_pthread_cleanup_push, pthread_cleanup_push);
-__weak_reference(_pthread_cleanup_pop, pthread_cleanup_pop);
+__weak_reference(_thr_cleanup_pop, pthread_cleanup_pop);
+__weak_reference(_thr_cleanup_pop, _pthread_cleanup_pop);
+__weak_reference(_thr_cleanup_push, pthread_cleanup_push);
+__weak_reference(_thr_cleanup_push, _pthread_cleanup_push);
+
+/* help static linking when libc symbols have preference */
+__weak_reference(__thr_cleanup_push_imp, __pthread_cleanup_push_imp);
+__weak_reference(__thr_cleanup_pop_imp, __pthread_cleanup_pop_imp);
 
 void
-__pthread_cleanup_push_imp(void (*routine)(void *), void *arg,
-	struct _pthread_cleanup_info *info)
+__thr_cleanup_push_imp(void (*routine)(void *), void *arg,
+    struct _pthread_cleanup_info *info)
 {
 	struct pthread	*curthread = _get_curthread();
 	struct pthread_cleanup *newbuf;
@@ -62,7 +71,7 @@ __pthread_cleanup_push_imp(void (*routine)(void *), void *arg,
 }
 
 void
-__pthread_cleanup_pop_imp(int execute)
+__thr_cleanup_pop_imp(int execute)
 {
 	struct pthread	*curthread = _get_curthread();
 	struct pthread_cleanup *old;
@@ -77,7 +86,7 @@ __pthread_cleanup_pop_imp(int execute)
 }
 
 void
-_pthread_cleanup_push(void (*routine) (void *), void *arg)
+_thr_cleanup_push(void (*routine)(void *), void *arg)
 {
 	struct pthread	*curthread = _get_curthread();
 	struct pthread_cleanup *newbuf;
@@ -95,7 +104,7 @@ _pthread_cleanup_push(void (*routine) (void *), void *arg)
 }
 
 void
-_pthread_cleanup_pop(int execute)
+_thr_cleanup_pop(int execute)
 {
 	__pthread_cleanup_pop_imp(execute);
 }

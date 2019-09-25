@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2006-2008, Juniper Networks, Inc.
  * Copyright (c) 2008 Semihalf, Rafal Czubak
  * Copyright (c) 2009 The FreeBSD Foundation
@@ -372,7 +374,8 @@ fdt_lbc_reg_decode(phandle_t node, struct lbc_softc *sc,
 		return (ENXIO);
 
 	tuple_size = sizeof(pcell_t) * (addr_cells + size_cells);
-	tuples = OF_getencprop_alloc(node, "reg", tuple_size, (void **)&reg);
+	tuples = OF_getencprop_alloc_multi(node, "reg", tuple_size,
+	    (void **)&reg);
 	debugf("addr_cells = %d, size_cells = %d\n", addr_cells, size_cells);
 	debugf("tuples = %d, tuple size = %d\n", tuples, tuple_size);
 	if (tuples <= 0)
@@ -543,7 +546,7 @@ lbc_attach(device_t dev)
 	tuple_size = sizeof(pcell_t) * (sc->sc_addr_cells + par_addr_cells +
 	    sc->sc_size_cells);
 
-	tuples = OF_getencprop_alloc(node, "ranges", tuple_size,
+	tuples = OF_getencprop_alloc_multi(node, "ranges", tuple_size,
 	    (void **)&ranges);
 	if (tuples < 0) {
 		device_printf(dev, "could not retrieve 'ranges' property\n");
@@ -651,8 +654,8 @@ lbc_attach(device_t dev)
 			free(di, M_LBC);
 			continue;
 		}
-		debugf("added child name='%s', node=%p\n", di->di_ofw.obd_name,
-		    (void *)child);
+		debugf("added child name='%s', node=%x\n", di->di_ofw.obd_name,
+		    child);
 		device_set_ivars(cdev, di);
 	}
 

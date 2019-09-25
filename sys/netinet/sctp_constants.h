@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2001-2008, by Cisco Systems, Inc. All rights reserved.
  * Copyright (c) 2008-2012, by Randall Stewart. All rights reserved.
  * Copyright (c) 2008-2012, by Michael Tuexen. All rights reserved.
@@ -468,10 +470,14 @@ __FBSDID("$FreeBSD$");
 #define SCTP_STATE_IN_ACCEPT_QUEUE      0x1000
 #define SCTP_STATE_MASK			0x007f
 
-#define SCTP_GET_STATE(asoc)	((asoc)->state & SCTP_STATE_MASK)
-#define SCTP_SET_STATE(asoc, newstate)  ((asoc)->state = ((asoc)->state & ~SCTP_STATE_MASK) |  newstate)
-#define SCTP_CLEAR_SUBSTATE(asoc, substate) ((asoc)->state &= ~substate)
-#define SCTP_ADD_SUBSTATE(asoc, substate) ((asoc)->state |= substate)
+#define SCTP_GET_STATE(_stcb) \
+	((_stcb)->asoc.state & SCTP_STATE_MASK)
+#define SCTP_SET_STATE(_stcb, _state) \
+	sctp_set_state(_stcb, _state)
+#define SCTP_CLEAR_SUBSTATE(_stcb, _substate) \
+	(_stcb)->asoc.state &= ~(_substate)
+#define SCTP_ADD_SUBSTATE(_stcb, _substate) \
+	sctp_add_substate(_stcb, _substate)
 
 /* SCTP reachability state for each address */
 #define SCTP_ADDR_REACHABLE		0x001
@@ -976,6 +982,9 @@ __FBSDID("$FreeBSD$");
 #define IN4_ISLINKLOCAL_ADDRESS(a) \
     ((((uint8_t *)&(a)->s_addr)[0] == 169) && \
      (((uint8_t *)&(a)->s_addr)[1] == 254))
+
+/* Maximum size of optval for IPPROTO_SCTP level socket options. */
+#define SCTP_SOCKET_OPTION_LIMIT (64 * 1024)
 
 
 #if defined(_KERNEL)

@@ -3,6 +3,8 @@
  */
 
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2005 Maksim Yevmenkin <m_evmenkin@yahoo.com>
  * All rights reserved.
  *
@@ -31,7 +33,6 @@
  * $FreeBSD$
  */
 
-#include "opt_compat.h"
 #include "opt_evdev.h"
 #include "opt_kbd.h"
 #include "opt_kbdmux.h"
@@ -383,8 +384,10 @@ static keyboard_switch_t kbdmuxsw = {
 };
 
 #ifdef EVDEV_SUPPORT
+static evdev_event_t kbdmux_ev_event;
+
 static const struct evdev_methods kbdmux_evdev_methods = {
-	.ev_event = evdev_ev_kbd_event,
+	.ev_event = kbdmux_ev_event,
 };
 #endif
 
@@ -502,7 +505,7 @@ kbdmux_init(int unit, keyboard_t **kbdp, void *arg, int flags)
 		evdev_support_led(evdev, LED_CAPSL);
 		evdev_support_led(evdev, LED_SCROLLL);
 
-		if (evdev_register(evdev))
+		if (evdev_register_mtx(evdev, &Giant))
 			evdev_free(evdev);
 		else
 			state->ks_evdev = evdev;
@@ -1388,6 +1391,22 @@ kbdmux_poll(keyboard_t *kbd, int on)
 
 	return (0);
 }
+
+#ifdef EVDEV_SUPPORT
+static void
+kbdmux_ev_event(struct evdev_dev *evdev, uint16_t type, uint16_t code,
+    int32_t value)
+{
+	keyboard_t *kbd = evdev_get_softc(evdev);
+
+	if (evdev_rcpt_mask & EVDEV_RCPT_KBDMUX &&
+	    (type == EV_LED || type == EV_REP)) {
+		mtx_lock(&Giant);
+		kbd_ev_event(kbd, type, code, value);
+		mtx_unlock(&Giant);
+	}
+}
+#endif
 
 /*****************************************************************************
  *****************************************************************************

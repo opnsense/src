@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2003 Silicon Graphics International Corp.
  * All rights reserved.
  *
@@ -73,10 +75,10 @@ struct ctl_port_entry {
 };
 
 struct ctl_modepage_header {
-	uint8_t page_code;
-	uint8_t subpage;
-	uint16_t len_used;
-	uint16_t len_left;
+	uint8_t			page_code;
+	uint8_t			subpage;
+	uint16_t		len_used;
+	uint16_t		len_left;
 };
 
 union ctl_modepage_info {
@@ -156,6 +158,9 @@ int ctl_default_page_handler(struct ctl_scsiio *ctsio,
 int ctl_ie_page_handler(struct ctl_scsiio *ctsio,
 			struct ctl_page_index *page_index,
 			uint8_t *page_ptr);
+int ctl_temp_log_sense_handler(struct ctl_scsiio *ctsio,
+				   struct ctl_page_index *page_index,
+				   int pc);
 int ctl_lbp_log_sense_handler(struct ctl_scsiio *ctsio,
 				   struct ctl_page_index *page_index,
 				   int pc);
@@ -194,24 +199,6 @@ void ctl_isc_announce_iid(struct ctl_port *port, int iid);
 void ctl_isc_announce_mode(struct ctl_lun *lun, uint32_t initidx,
     uint8_t page, uint8_t subpage);
 
-/*
- * KPI to manipulate LUN/port options
- */
-
-struct ctl_option {
-	STAILQ_ENTRY(ctl_option)	links;
-	char			*name;
-	char			*value;
-};
-typedef STAILQ_HEAD(ctl_options, ctl_option) ctl_options_t;
-
-struct ctl_be_arg;
-void ctl_init_opts(ctl_options_t *opts, int num_args, struct ctl_be_arg *args);
-void ctl_update_opts(ctl_options_t *opts, int num_args,
-    struct ctl_be_arg *args);
-void ctl_free_opts(ctl_options_t *opts);
-char * ctl_get_opt(ctl_options_t *opts, const char *name);
-int ctl_get_opt_number(ctl_options_t *opts, const char *name, uint64_t *num);
 int ctl_expand_number(const char *buf, uint64_t *num);
 
 #endif	/* _KERNEL */

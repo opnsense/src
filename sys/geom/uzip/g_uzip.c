@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2004 Max Khon
  * Copyright (c) 2014 Juniper Networks, Inc.
  * Copyright (c) 2006-2016 Maxim Sobolev <sobomax@FreeBSD.org>
@@ -464,6 +466,27 @@ g_uzip_start(struct bio *bp)
 	sc = gp->softc;
 	sc->req_total++;
 
+	if (bp->bio_cmd == BIO_GETATTR) {
+		struct bio *bp2;
+		struct g_consumer *cp;
+		struct g_geom *gp;
+		struct g_provider *pp;
+
+		/* pass on MNT:* requests and ignore others */
+		if (strncmp(bp->bio_attribute, "MNT:", 4) == 0) {
+			bp2 = g_clone_bio(bp);
+			if (bp2 == NULL) {
+				g_io_deliver(bp, ENOMEM);
+				return;
+			}
+			bp2->bio_done = g_std_done;
+			pp = bp->bio_to;
+			gp = pp->geom;
+			cp = LIST_FIRST(&gp->consumer);
+			g_io_request(bp2, cp);
+			return;
+		}
+	}
 	if (bp->bio_cmd != BIO_READ) {
 		g_io_deliver(bp, EOPNOTSUPP);
 		return;
@@ -863,6 +886,7 @@ g_uzip_destroy_geom(struct gctl_req *req, struct g_class *mp, struct g_geom *gp)
 {
 	struct g_provider *pp;
 
+	KASSERT(gp != NULL, ("NULL geom"));
 	g_trace(G_T_TOPOLOGY, "%s(%s, %s)", __func__, mp->name, gp->name);
 	g_topology_assert();
 
@@ -872,7 +896,6 @@ g_uzip_destroy_geom(struct gctl_req *req, struct g_class *mp, struct g_geom *gp)
 		return (ENXIO);
 	}
 
-	KASSERT(gp != NULL, ("NULL geom"));
 	pp = LIST_FIRST(&gp->provider);
 	KASSERT(pp != NULL, ("NULL provider"));
 	if (pp->acr > 0 || pp->acw > 0 || pp->ace > 0)
@@ -898,5 +921,6 @@ static struct g_class g_uzip_class = {
 };
 
 DECLARE_GEOM_CLASS(g_uzip_class, g_uzip);
+MODULE_DEPEND(g_uzip, xz, 1, 1, 1);
 MODULE_DEPEND(g_uzip, zlib, 1, 1, 1);
 MODULE_VERSION(geom_uzip, 0);

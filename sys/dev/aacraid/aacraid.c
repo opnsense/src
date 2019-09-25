@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2000 Michael Smith
  * Copyright (c) 2001 Scott Long
  * Copyright (c) 2000 BSDi
@@ -37,7 +39,6 @@ __FBSDID("$FreeBSD$");
 #define AAC_DRIVERNAME			"aacraid"
 
 #include "opt_aacraid.h"
-#include "opt_compat.h"
 
 /* #include <stddef.h> */
 #include <sys/param.h>
@@ -59,7 +60,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/rman.h>
 
 #include <machine/bus.h>
-#include <sys/bus_dma.h>
 #include <machine/resource.h>
 
 #include <dev/pci/pcireg.h>

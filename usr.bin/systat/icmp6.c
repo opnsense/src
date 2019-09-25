@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1980, 1992, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -48,6 +50,7 @@ static char sccsid[] = "@(#)mbufs.c	8.1 (Berkeley) 6/6/93";
 #include <netinet/in.h>
 #include <netinet/icmp6.h>
 
+#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 #include <paths.h>
@@ -171,7 +174,7 @@ void
 showicmp6(void)
 {
 	struct icmp6stat stats;
-	u_long totalin, totalout;
+	uint64_t totalin, totalout;
 	int i;
 
 	memset(&stats, 0, sizeof stats);
@@ -182,11 +185,11 @@ showicmp6(void)
 	}
 	totalin += stats.icp6s_badcode + stats.icp6s_badlen +
 		stats.icp6s_checksum + stats.icp6s_tooshort;
-	mvwprintw(wnd, 1, 0, "%9lu", totalin);
-	mvwprintw(wnd, 1, 35, "%9lu", totalout);
+	mvwprintw(wnd, 1, 0, "%9"PRIu64, totalin);
+	mvwprintw(wnd, 1, 35, "%9"PRIu64, totalout);
 
 #define DO(stat, row, col) \
-	mvwprintw(wnd, row, col, "%9lu", stats.stat)
+	mvwprintw(wnd, row, col, "%9"PRIu64, stats.stat)
 
 	DO(icp6s_badcode, 2, 0);
 	DO(icp6s_badlen, 3, 0);

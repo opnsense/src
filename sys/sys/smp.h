@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: Beerware
+ *
  * ----------------------------------------------------------------------------
  * "THE BEER-WARE LICENSE" (Revision 42):
  * <phk@FreeBSD.org> wrote this file.  As long as you retain this notice you
@@ -120,8 +122,25 @@ struct topo_node * topo_next_node(struct topo_node *top,
 struct topo_node * topo_next_nonchild_node(struct topo_node *top,
     struct topo_node *node);
 void topo_set_pu_id(struct topo_node *node, cpuid_t id);
-int topo_analyze(struct topo_node *topo_root, int all, int *pkg_count,
-    int *cores_per_pkg, int *thrs_per_core);
+
+enum topo_level {
+	TOPO_LEVEL_PKG = 0,
+	/*
+	 * Some systems have useful sub-package core organizations.  On these,
+	 * a package has one or more subgroups.  Each subgroup contains one or
+	 * more cache groups (cores that share a last level cache).
+	 */
+	TOPO_LEVEL_GROUP,
+	TOPO_LEVEL_CACHEGROUP,
+	TOPO_LEVEL_CORE,
+	TOPO_LEVEL_THREAD,
+	TOPO_LEVEL_COUNT	/* Must be last */
+};
+struct topo_analysis {
+	int entities[TOPO_LEVEL_COUNT];
+};
+int topo_analyze(struct topo_node *topo_root, int all,
+    struct topo_analysis *results);
 
 #define	TOPO_FOREACH(i, root)	\
 	for (i = root; i != NULL; i = topo_next_node(root, i))
@@ -243,13 +262,6 @@ extern	struct mtx smp_ipi_mtx;
 
 int	quiesce_all_cpus(const char *, int);
 int	quiesce_cpus(cpuset_t, const char *, int);
-/*
- * smp_no_rendevous_barrier was renamed to smp_no_rendezvous_barrier
- * in __FreeBSD_version 1101508, with the old name remaining in 11.x
- * as an alias for compatibility.  The old name will be gone in 12.0
- * (__FreeBSD_version >= 1200028).
- */
-void	smp_no_rendevous_barrier(void *);
 void	smp_no_rendezvous_barrier(void *);
 void	smp_rendezvous(void (*)(void *), 
 		       void (*)(void *),

@@ -10,18 +10,14 @@
 #ifndef liblldb_HistoryThread_h_
 #define liblldb_HistoryThread_h_
 
-// C Includes
-// C++ Includes
 #include <mutex>
 
-// Other libraries and framework includes
-// Project includes
-#include "lldb/Core/Broadcaster.h"
-#include "lldb/Core/Event.h"
 #include "lldb/Core/UserSettingsController.h"
 #include "lldb/Target/ExecutionContextScope.h"
 #include "lldb/Target/StackFrameList.h"
 #include "lldb/Target/Thread.h"
+#include "lldb/Utility/Broadcaster.h"
+#include "lldb/Utility/Event.h"
 #include "lldb/Utility/UserID.h"
 #include "lldb/lldb-private.h"
 
@@ -29,13 +25,13 @@ namespace lldb_private {
 
 //----------------------------------------------------------------------
 /// @class HistoryThread HistoryThread.h "HistoryThread.h"
-/// @brief A thread object representing a backtrace from a previous point in the
+/// A thread object representing a backtrace from a previous point in the
 /// process execution
 ///
 /// This subclass of Thread is used to provide a backtrace from earlier in
 /// process execution.  It is given a backtrace list of pc addresses and
-/// optionally a stop_id of when those pc addresses were collected, and it will
-/// create stack frames for them.
+/// optionally a stop_id of when those pc addresses were collected, and it
+/// will create stack frames for them.
 //----------------------------------------------------------------------
 
 class HistoryThread : public lldb_private::Thread {

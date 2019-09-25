@@ -1,5 +1,5 @@
 %{
-/*	$OpenBSD: bc.y,v 1.44 2013/11/20 21:33:54 deraadt Exp $	*/
+/*	$OpenBSD: bc.y,v 1.46 2014/10/14 15:35:18 deraadt Exp $	*/
 
 /*
  * Copyright (c) 2003, Otto Moerbeek <otto@drijf.net>
@@ -771,7 +771,7 @@ grow(void)
 
 	if (current == instr_sz) {
 		newsize = instr_sz * 2 + 1;
-		p = realloc(instructions, newsize * sizeof(*p));
+		p = reallocarray(instructions, newsize, sizeof(*p));
 		if (p == NULL) {
 			free(instructions);
 			err(1, NULL);
@@ -996,7 +996,7 @@ yyerror(const char *s)
 			putchar('\\');
 		putchar(*p);
 	}
-	fputs("]pc\n", stdout);
+	fputs("]ec\n", stdout);
 	free(str);
 }
 
@@ -1132,7 +1132,7 @@ main(int argc, char *argv[])
 	init();
 	setvbuf(stdout, NULL, _IOLBF, 0);
 
-	sargv = malloc(argc * sizeof(char *));
+	sargv = reallocarray(NULL, argc, sizeof(char *));
 	if (sargv == NULL)
 		err(1, NULL);
 
@@ -1173,7 +1173,8 @@ main(int argc, char *argv[])
 	argc -= optind;
 	argv += optind;
 
-	interactive = isatty(STDIN_FILENO);
+	interactive = isatty(STDIN_FILENO) && isatty(STDOUT_FILENO) &&
+	    isatty(STDERR_FILENO);
 	for (i = 0; i < argc; i++)
 		sargv[sargc++] = argv[i];
 

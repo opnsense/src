@@ -279,7 +279,7 @@ linux_rt_sigprocmask(struct thread *td, struct linux_rt_sigprocmask_args *args)
 #endif
 
 	if (args->sigsetsize != sizeof(l_sigset_t))
-		return EINVAL;
+		return (EINVAL);
 
 	if (args->mask != NULL) {
 		error = copyin(args->mask, &set, sizeof(l_sigset_t));
@@ -377,7 +377,7 @@ linux_rt_sigpending(struct thread *td, struct linux_rt_sigpending_args *args)
 	l_sigset_t lset;
 
 	if (args->sigsetsize > sizeof(lset))
-		return EINVAL;
+		return (EINVAL);
 		/* NOT REACHED */
 
 #ifdef DEBUG
@@ -434,7 +434,7 @@ linux_rt_sigtimedwait(struct thread *td,
 		tv.tv_sec = (long)ltv.tv_sec;
 		tv.tv_usec = (suseconds_t)ltv.tv_usec;
 		if (itimerfix(&tv)) {
-			/* 
+			/*
 			 * The timeout was invalid. Convert it to something
 			 * valid that will act as it does under Linux.
 			 */
@@ -473,7 +473,7 @@ linux_rt_sigtimedwait(struct thread *td,
 		error = copyout(&linfo, args->ptr, sizeof(linfo));
 	}
 	if (error == 0)
-		td->td_retval[0] = sig; 
+		td->td_retval[0] = sig;
 
 	return (error);
 }
@@ -748,8 +748,7 @@ linux_rt_sigqueueinfo(struct thread *td, struct linux_rt_sigqueueinfo_args *args
 	sig = linux_to_bsd_signal(args->sig);
 
 	error = ESRCH;
-	if ((p = pfind(args->pid)) != NULL ||
-	    (p = zpfind(args->pid)) != NULL) {
+	if ((p = pfind_any(args->pid)) != NULL) {
 		error = p_cansignal(td, p, sig);
 		if (error != 0) {
 			PROC_UNLOCK(p);

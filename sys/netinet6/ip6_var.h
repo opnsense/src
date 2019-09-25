@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
  * All rights reserved.
  *
@@ -41,7 +43,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -63,6 +65,8 @@
 
 #ifndef _NETINET6_IP6_VAR_H_
 #define _NETINET6_IP6_VAR_H_
+
+#include <sys/epoch.h>
 
 /*
  * IP6 reassembly queue structure.  Each fragment
@@ -106,6 +110,7 @@ struct ip6_direct_ctx {
 	uint32_t	ip6dc_off;	/* offset to next header */
 };
 
+#if defined(_NETINET6_IN6_VAR_H_) && defined(_KERNEL)
 /*
  * Structure attached to inpcb.in6p_moptions and
  * passed to ip6_output when IPv6 multicast options are in use.
@@ -115,12 +120,11 @@ struct ip6_moptions {
 	struct	ifnet *im6o_multicast_ifp; /* ifp for outgoing multicasts */
 	u_char	im6o_multicast_hlim;	/* hoplimit for outgoing multicasts */
 	u_char	im6o_multicast_loop;	/* 1 >= hear sends if a member */
-	u_short	im6o_num_memberships;	/* no. memberships this socket */
-	u_short	im6o_max_memberships;	/* max memberships this socket */
-	struct	in6_multi **im6o_membership;	/* group memberships */
-	struct	in6_mfilter *im6o_mfilters;	/* source filters */
+	struct ip6_mfilter_head im6o_head; /* group membership list */
 };
-
+#else
+struct ip6_moptions;
+#endif
 /*
  * Control options for outgoing packets
  */
@@ -399,11 +403,6 @@ int	ip6_optlen(struct inpcb *);
 int	ip6_deletefraghdr(struct mbuf *, int, int);
 int	ip6_fragment(struct ifnet *, struct mbuf *, int, u_char, int,
 			uint32_t);
-
-#define	IP6_HAS_NEXTHOP(m)	((m)->m_flags & M_IP6_NEXTHOP)
-int	ip6_set_fwdtag(struct mbuf *, struct sockaddr_in6 *, u_short);
-int	ip6_get_fwdtag(struct mbuf *, struct sockaddr_in6 *, u_short *);
-void	ip6_flush_fwdtag(struct mbuf *);
 
 int	route6_input(struct mbuf **, int *, int);
 

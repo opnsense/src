@@ -1,5 +1,7 @@
 /* $FreeBSD$ */
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2008 Hans Petter Selasky. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -116,7 +118,7 @@ static void	usb_cdev_free(struct usb_device *);
 #ifdef	USB_TEMPLATE
 int	usb_template = USB_TEMPLATE;
 #else
-int	usb_template;
+int	usb_template = -1;
 #endif
 
 SYSCTL_PROC(_hw_usb, OID_AUTO, template,
@@ -1639,13 +1641,13 @@ usbd_clear_stall_proc(struct usb_proc_msg *_pm)
 
 	/* Change lock */
 	USB_BUS_UNLOCK(udev->bus);
-	mtx_lock(&udev->device_mtx);
+	USB_MTX_LOCK(&udev->device_mtx);
 
 	/* Start clear stall callback */
 	usbd_transfer_start(udev->ctrl_xfer[1]);
 
 	/* Change lock */
-	mtx_unlock(&udev->device_mtx);
+	USB_MTX_UNLOCK(&udev->device_mtx);
 	USB_BUS_LOCK(udev->bus);
 }
 

@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0
+ *
  * Copyright (c) 2004, 2005 Topspin Communications.  All rights reserved.
  * Copyright (c) 2005 Sun Microsystems, Inc. All rights reserved.
  * Copyright (c) 2004 Voltaire, Inc. All rights reserved.
@@ -30,6 +32,8 @@
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
+ *
+ * $FreeBSD$
  */
 
 #ifndef _IPOIB_H
@@ -129,8 +133,8 @@ enum {
 
 	IPOIB_NUM_WC		  = 4,
 
-	IPOIB_MAX_PATH_REC_QUEUE  = 3,
-	IPOIB_MAX_MCAST_QUEUE	  = 3,
+	IPOIB_MAX_PATH_REC_QUEUE  = 16,
+	IPOIB_MAX_MCAST_QUEUE	  = 16,
 
 	IPOIB_FLAG_OPER_UP	  = 0,
 	IPOIB_FLAG_INITIALIZED	  = 1,
@@ -514,7 +518,7 @@ void ipoib_path_iter_read(struct ipoib_path_iter *iter,
 			  struct ipoib_path *path);
 #endif
 
-int ipoib_change_mtu(struct ipoib_dev_priv *priv, int new_mtu);
+int ipoib_change_mtu(struct ipoib_dev_priv *priv, int new_mtu, bool propagate);
 
 int ipoib_mcast_attach(struct ipoib_dev_priv *priv, u16 mlid,
 		       union ib_gid *mgid, int set_qkey);

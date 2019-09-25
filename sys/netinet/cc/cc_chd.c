@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2009-2010
  *	Swinburne University of Technology, Melbourne, Australia
  * Copyright (c) 2010-2011 The FreeBSD Foundation
@@ -76,8 +78,6 @@ __FBSDID("$FreeBSD$");
 
 #include <netinet/khelp/h_ertt.h>
 
-#define	CAST_PTR_INT(X)	(*((int*)(X)))
-
 /*
  * Private signal type for rate based congestion signal.
  * See <netinet/cc.h> for appropriate bit-range to use for private signals.
@@ -115,11 +115,11 @@ struct chd {
 
 static int ertt_id;
 
-static VNET_DEFINE(uint32_t, chd_qmin) = 5;
-static VNET_DEFINE(uint32_t, chd_pmax) = 50;
-static VNET_DEFINE(uint32_t, chd_loss_fair) = 1;
-static VNET_DEFINE(uint32_t, chd_use_max) = 1;
-static VNET_DEFINE(uint32_t, chd_qthresh) = 20;
+VNET_DEFINE_STATIC(uint32_t, chd_qmin) = 5;
+VNET_DEFINE_STATIC(uint32_t, chd_pmax) = 50;
+VNET_DEFINE_STATIC(uint32_t, chd_loss_fair) = 1;
+VNET_DEFINE_STATIC(uint32_t, chd_use_max) = 1;
+VNET_DEFINE_STATIC(uint32_t, chd_qthresh) = 20;
 #define	V_chd_qthresh	VNET(chd_qthresh)
 #define	V_chd_qmin	VNET(chd_qmin)
 #define	V_chd_pmax	VNET(chd_pmax)
@@ -305,8 +305,7 @@ static void
 chd_cb_destroy(struct cc_var *ccv)
 {
 
-	if (ccv->cc_data != NULL)
-		free(ccv->cc_data, M_CHD);
+	free(ccv->cc_data, M_CHD);
 }
 
 static int
@@ -420,7 +419,7 @@ chd_loss_fair_handler(SYSCTL_HANDLER_ARGS)
 	new = V_chd_loss_fair;
 	error = sysctl_handle_int(oidp, &new, 0, req);
 	if (error == 0 && req->newptr != NULL) {
-		if (CAST_PTR_INT(req->newptr) > 1)
+		if (new > 1)
 			error = EINVAL;
 		else
 			V_chd_loss_fair = new;
@@ -438,8 +437,7 @@ chd_pmax_handler(SYSCTL_HANDLER_ARGS)
 	new = V_chd_pmax;
 	error = sysctl_handle_int(oidp, &new, 0, req);
 	if (error == 0 && req->newptr != NULL) {
-		if (CAST_PTR_INT(req->newptr) == 0 ||
-		    CAST_PTR_INT(req->newptr) > 100)
+		if (new == 0 || new > 100)
 			error = EINVAL;
 		else
 			V_chd_pmax = new;
@@ -457,7 +455,7 @@ chd_qthresh_handler(SYSCTL_HANDLER_ARGS)
 	new = V_chd_qthresh;
 	error = sysctl_handle_int(oidp, &new, 0, req);
 	if (error == 0 && req->newptr != NULL) {
-		if (CAST_PTR_INT(req->newptr) <= V_chd_qmin)
+		if (new <= V_chd_qmin)
 			error = EINVAL;
 		else
 			V_chd_qthresh = new;

@@ -51,14 +51,6 @@ CODE {
 		device_printf(bus, "PCI_IOV not implemented on this bus.\n");
 		return (NULL);
 	}
-
-	static int
-	compat_iov_attach(device_t bus, device_t dev, struct nvlist *pf_schema,
-	    struct nvlist *vf_schema)
-	{
-		return (PCI_IOV_ATTACH_NAME(bus, dev, pf_schema, vf_schema,
-		    device_get_nameunit(dev)));
-	}
 };
 
 HEADER {
@@ -67,6 +59,11 @@ HEADER {
 	enum pci_id_type {
 	    PCI_ID_RID,
 	    PCI_ID_MSI,
+	};
+
+	enum pci_feature {
+	    PCI_FEATURE_HP,		/* Hot Plug feature */
+	    PCI_FEATURE_AER,		/* Advanced Error Reporting */
 	};
 }
 
@@ -263,13 +260,6 @@ METHOD void child_added {
 };
 
 METHOD int iov_attach {
-	device_t	dev;
-	device_t	child;
-	struct nvlist	*pf_schema;
-	struct nvlist	*vf_schema;
-} DEFAULT compat_iov_attach;
-
-METHOD int iov_attach_name {
 	device_t	dev;
 	device_t	child;
 	struct nvlist	*pf_schema;

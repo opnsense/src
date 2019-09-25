@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (C) 2011-2014 Matteo Landi, Luigi Rizzo
  * Copyright (C) 2013-2016 Universita` di Pisa
  * All rights reserved.
@@ -2388,8 +2390,7 @@ nm_os_get_mbuf(struct ifnet *ifp, int len)
 #endif /* __FreeBSD_version >= 1100000 */
 #endif /* __FreeBSD__ */
 
-struct nmreq_option * nmreq_findoption(struct nmreq_option *, uint16_t);
-int nmreq_checkduplicate(struct nmreq_option *);
+struct nmreq_option * nmreq_getoption(struct nmreq_header *, uint16_t);
 
 int netmap_init_bridges(void);
 void netmap_uninit_bridges(void);

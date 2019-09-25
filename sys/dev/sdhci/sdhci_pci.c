@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2008 Alexander Motin <mav@FreeBSD.org>
  * All rights reserved.
  *
@@ -25,6 +27,8 @@
 
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
+
+#include "opt_mmccam.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -398,8 +402,9 @@ sdhci_pci_attach(device_t dev)
 		device_printf(dev, "Can't setup IRQ\n");
 	pci_enable_busmaster(dev);
 	/* Process cards detection. */
-	for (i = 0; i < sc->num_slots; i++)
+	for (i = 0; i < sc->num_slots; i++) {
 		sdhci_start_slot(&sc->slots[i]);
+	}
 
 	return (0);
 }
@@ -521,5 +526,8 @@ static devclass_t sdhci_pci_devclass;
 
 DRIVER_MODULE(sdhci_pci, pci, sdhci_pci_driver, sdhci_pci_devclass, NULL,
     NULL);
-MODULE_DEPEND(sdhci_pci, sdhci, 1, 1, 1);
+SDHCI_DEPEND(sdhci_pci);
+
+#ifndef MMCCAM
 MMC_DECLARE_BRIDGE(sdhci_pci);
+#endif

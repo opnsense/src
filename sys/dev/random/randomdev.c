@@ -130,6 +130,12 @@ READ_RANDOM_UIO(struct uio *uio, bool nonblock)
 	uint8_t *random_buf;
 	int error, spamcount;
 	ssize_t read_len, total_read, c;
+	/* 16 MiB takes about 0.08 s CPU time on my 2017 AMD Zen CPU */
+#define SIGCHK_PERIOD (16 * 1024 * 1024)
+	const size_t sigchk_period = SIGCHK_PERIOD;
+
+	CTASSERT(SIGCHK_PERIOD % PAGE_SIZE == 0);
+#undef SIGCHK_PERIOD
 
 	random_buf = malloc(PAGE_SIZE, M_ENTROPY, M_WAITOK);
 	p_random_alg_context->ra_pre_read();
@@ -150,6 +156,10 @@ READ_RANDOM_UIO(struct uio *uio, bool nonblock)
 		error = tsleep(&random_alg_context, PCATCH, "randseed", hz/10);
 		if (error == ERESTART || error == EINTR)
 			break;
+		/* Squash tsleep timeout condition */
+		if (error == EWOULDBLOCK)
+			error = 0;
+		KASSERT(error == 0, ("unexpected tsleep error %d", error));
 	}
 	if (error == 0) {
 		read_rate_increment((uio->uio_resid + sizeof(uint32_t))/sizeof(uint32_t));
@@ -160,18 +170,33 @@ READ_RANDOM_UIO(struct uio *uio, bool nonblock)
 			 * Belt-and-braces.
 			 * Round up the read length to a crypto block size multiple,
 			 * which is what the underlying generator is expecting.
-			 * See the random_buf size requirements in the Yarrow/Fortuna code.
+			 * See the random_buf size requirements in the Fortuna code.
 			 */
 			read_len = roundup(read_len, RANDOM_BLOCKSIZE);
 			/* Work in chunks page-sized or less */
 			read_len = MIN(read_len, PAGE_SIZE);
 			p_random_alg_context->ra_read(random_buf, read_len);
 			c = MIN(uio->uio_resid, read_len);
+			/*
+			 * uiomove() may yield the CPU before each 'c' bytes
+			 * (up to PAGE_SIZE) are copied out.
+			 */
 			error = uiomove(random_buf, c, uio);
 			total_read += c;
+			/*
+			 * Poll for signals every few MBs to avoid very long
+			 * uninterruptible syscalls.
+			 */
+			if (error == 0 && uio->uio_resid != 0 &&
+			    total_read % sigchk_period == 0) {
+				error = tsleep_sbt(&random_alg_context, PCATCH,
+				    "randrd", SBT_1NS, 0, C_HARDCLOCK);
+				/* Squash tsleep timeout condition */
+				if (error == EWOULDBLOCK)
+					error = 0;
+			}
 		}
-		if (total_read != uio->uio_resid && (error == ERESTART || error == EINTR))
-			/* Return partial read, not error. */
+		if (error == ERESTART || error == EINTR)
 			error = 0;
 	}
 	free(random_buf, M_ENTROPY);
@@ -233,7 +258,6 @@ randomdev_accumulate(uint8_t *buf, u_int count)
 	for (i = 0; i < RANDOM_KEYSIZE_WORDS; i += sizeof(event.he_entropy)/sizeof(event.he_entropy[0])) {
 		event.he_somecounter = (uint32_t)get_cyclecount();
 		event.he_size = sizeof(event.he_entropy);
-		event.he_bits = event.he_size/8;
 		event.he_source = RANDOM_CACHED;
 		event.he_destination = destination++; /* Harmless cheating */
 		memcpy(event.he_entropy, entropy_data + i, sizeof(event.he_entropy));

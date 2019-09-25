@@ -26,7 +26,7 @@
 
 #if HAVE_SYS_EVENT_H
 #include <sys/event.h>
-#elif defined(LLVM_ON_WIN32)
+#elif defined(_WIN32)
 #include <winsock2.h>
 #elif defined(__ANDROID__)
 #include <sys/syscall.h>
@@ -34,14 +34,14 @@
 #include <poll.h>
 #endif
 
-#ifdef LLVM_ON_WIN32
+#ifdef _WIN32
 #define POLL WSAPoll
 #else
 #define POLL poll
 #endif
 
 #if SIGNAL_POLLING_UNSUPPORTED
-#ifdef LLVM_ON_WIN32
+#ifdef _WIN32
 typedef int sigset_t;
 typedef int siginfo_t;
 #endif
@@ -108,8 +108,14 @@ Status MainLoop::RunImpl::Poll() {
   num_events = kevent(loop.m_kqueue, in_events.data(), in_events.size(),
                       out_events, llvm::array_lengthof(out_events), nullptr);
 
-  if (num_events < 0)
-    return Status("kevent() failed with error %d\n", num_events);
+  if (num_events < 0) {
+    if (errno == EINTR) {
+      // in case of EINTR, let the main loop run one iteration
+      // we need to zero num_events to avoid assertions failing
+      num_events = 0;
+    } else
+      return Status(errno, eErrorTypePOSIX);
+  }
   return Status();
 }
 
@@ -209,8 +215,8 @@ Status MainLoop::RunImpl::Poll() {
 
 void MainLoop::RunImpl::ProcessEvents() {
 #ifdef __ANDROID__
-  // Collect first all readable file descriptors into a separate vector and then
-  // iterate over it to invoke callbacks. Iterating directly over
+  // Collect first all readable file descriptors into a separate vector and
+  // then iterate over it to invoke callbacks. Iterating directly over
   // loop.m_read_fds is not possible because the callbacks can modify the
   // container which could invalidate the iterator.
   std::vector<IOObject::WaitableHandle> fds;
@@ -262,7 +268,7 @@ MainLoop::~MainLoop() {
 MainLoop::ReadHandleUP MainLoop::RegisterReadObject(const IOObjectSP &object_sp,
                                                     const Callback &callback,
                                                     Status &error) {
-#ifdef LLVM_ON_WIN32
+#ifdef _WIN32
   if (object_sp->GetFdType() != IOObject:: eFDTypeSocket) {
     error.SetErrorString("MainLoop: non-socket types unsupported on Windows");
     return nullptr;
@@ -285,8 +291,7 @@ MainLoop::ReadHandleUP MainLoop::RegisterReadObject(const IOObjectSP &object_sp,
 }
 
 // We shall block the signal, then install the signal handler. The signal will
-// be unblocked in
-// the Run() function to check for signal delivery.
+// be unblocked in the Run() function to check for signal delivery.
 MainLoop::SignalHandleUP
 MainLoop::RegisterSignal(int signo, const Callback &callback, Status &error) {
 #ifdef SIGNAL_POLLING_UNSUPPORTED
@@ -310,7 +315,7 @@ MainLoop::RegisterSignal(int signo, const Callback &callback, Status &error) {
   g_signal_flags[signo] = 0;
 
   // Even if using kqueue, the signal handler will still be invoked, so it's
-  // important to replace it with our "bening" handler.
+  // important to replace it with our "benign" handler.
   int ret = sigaction(signo, &new_action, &info.old_action);
   assert(ret == 0 && "sigaction failed");
 
@@ -321,9 +326,9 @@ MainLoop::RegisterSignal(int signo, const Callback &callback, Status &error) {
   assert(ret == 0);
 #endif
 
-  // If we're using kqueue, the signal needs to be unblocked in order to recieve
-  // it. If using pselect/ppoll, we need to block it, and later unblock it as a
-  // part of the system call.
+  // If we're using kqueue, the signal needs to be unblocked in order to
+  // receive it. If using pselect/ppoll, we need to block it, and later unblock
+  // it as a part of the system call.
   ret = pthread_sigmask(HAVE_SYS_EVENT_H ? SIG_UNBLOCK : SIG_BLOCK,
                         &new_action.sa_mask, &old_set);
   assert(ret == 0 && "pthread_sigmask failed");

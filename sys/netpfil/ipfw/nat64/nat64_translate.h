@@ -1,7 +1,8 @@
 /*-
- * Copyright (c) 2015-2016 Yandex LLC
- * Copyright (c) 2015-2016 Andrey V. Elsukov <ae@FreeBSD.org>
- * All rights reserved.
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
+ * Copyright (c) 2015-2019 Yandex LLC
+ * Copyright (c) 2015-2019 Andrey V. Elsukov <ae@FreeBSD.org>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -30,6 +31,83 @@
 #ifndef	_IP_FW_NAT64_TRANSLATE_H_
 #define	_IP_FW_NAT64_TRANSLATE_H_
 
+struct nat64_stats {
+	uint64_t	opcnt64;	/* 6to4 of packets translated */
+	uint64_t	opcnt46;	/* 4to6 of packets translated */
+	uint64_t	ofrags;		/* number of fragments generated */
+	uint64_t	ifrags;		/* number of fragments received */
+	uint64_t	oerrors;	/* number of output errors */
+	uint64_t	noroute4;
+	uint64_t	noroute6;
+	uint64_t	nomatch4;	/* No addr/port match */
+	uint64_t	noproto;	/* Protocol not supported */
+	uint64_t	nomem;		/* mbufs allocation failed */
+	uint64_t	dropped;	/* number of packets silently
+					 * dropped due to some errors/
+					 * unsupported/etc.
+					 */
+
+	uint64_t	jrequests;	/* jobs requests queued */
+	uint64_t	jcalls;		/* jobs handler calls */
+	uint64_t	jhostsreq;	/* hosts requests */
+	uint64_t	jportreq;	/* PG allocation requests */
+	uint64_t	jhostfails;	/* hosts requests failed */
+	uint64_t	jportfails;	/* PG allocation failed */
+	uint64_t	jmaxlen;
+	uint64_t	jnomem;
+	uint64_t	jreinjected;
+
+	uint64_t	screated;
+	uint64_t	sdeleted;
+	uint64_t	spgcreated;
+	uint64_t	spgdeleted;
+};
+
+#define	IPFW_NAT64_VERSION	1
+#define	NAT64STATS	(sizeof(struct nat64_stats) / sizeof(uint64_t))
+struct nat64_counters {
+	counter_u64_t		cnt[NAT64STATS];
+};
+#define	NAT64STAT_ADD(s, f, v)		\
+    counter_u64_add((s)->cnt[		\
+	offsetof(struct nat64_stats, f) / sizeof(uint64_t)], (v))
+#define	NAT64STAT_INC(s, f)	NAT64STAT_ADD(s, f, 1)
+#define	NAT64STAT_FETCH(s, f)		\
+    counter_u64_fetch((s)->cnt[	\
+	offsetof(struct nat64_stats, f) / sizeof(uint64_t)])
+
+#define	L3HDR(_ip, _t)	((_t)((uint32_t *)(_ip) + (_ip)->ip_hl))
+#define	TCP(p)		((struct tcphdr *)(p))
+#define	UDP(p)		((struct udphdr *)(p))
+#define	ICMP(p)		((struct icmphdr *)(p))
+#define	ICMP6(p)	((struct icmp6_hdr *)(p))
+
+#define	NAT64SKIP	0
+#define	NAT64RETURN	1
+#define	NAT64MFREE	-1
+
+/*
+ * According to RFC6877:
+ *  PLAT is provider-side translator (XLAT) that translates N:1 global
+ *  IPv6 addresses to global IPv4 addresses, and vice versa.
+ *
+ *  CLAT is customer-side translator (XLAT) that algorithmically
+ *  translates 1:1 private IPv4 addresses to global IPv6 addresses,
+ *  and vice versa.
+ */
+struct nat64_config {
+	struct in6_addr		clat_prefix;
+	struct in6_addr		plat_prefix;
+	uint32_t		flags;
+#define	NAT64_WKPFX		0x00010000	/* prefix is well-known */
+#define	NAT64_CLATPFX		0x00020000	/* dst prefix is configured */
+#define	NAT64_PLATPFX		0x00040000	/* src prefix is configured */
+	uint8_t			clat_plen;
+	uint8_t			plat_plen;
+
+	struct nat64_counters	stats;
+};
+
 static inline int
 nat64_check_ip6(struct in6_addr *addr)
 {
@@ -41,66 +119,39 @@ nat64_check_ip6(struct in6_addr *addr)
 	return (0);
 }
 
-extern int nat64_allow_private;
-static inline int
-nat64_check_private_ip4(in_addr_t ia)
-{
-
-	if (nat64_allow_private)
-		return (0);
-	/* WKPFX must not be used to represent non-global IPv4 addresses */
-//	if (cfg->flags & NAT64_WKPFX) {
-		/* IN_PRIVATE */
-		if ((ia & htonl(0xff000000)) == htonl(0x0a000000) ||
-		    (ia & htonl(0xfff00000)) == htonl(0xac100000) ||
-		    (ia & htonl(0xffff0000)) == htonl(0xc0a80000))
-			return (1);
-		/*
-		 * RFC 5735:
-		 *  192.0.0.0/24 - reserved for IETF protocol assignments
-		 *  192.88.99.0/24 - for use as 6to4 relay anycast addresses
-		 *  198.18.0.0/15 - for use in benchmark tests
-		 *  192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24 - for use
-		 *   in documentation and example code
-		 */
-		if ((ia & htonl(0xffffff00)) == htonl(0xc0000000) ||
-		    (ia & htonl(0xffffff00)) == htonl(0xc0586300) ||
-		    (ia & htonl(0xfffffe00)) == htonl(0xc6120000) ||
-		    (ia & htonl(0xffffff00)) == htonl(0xc0000200) ||
-		    (ia & htonl(0xfffffe00)) == htonl(0xc6336400) ||
-		    (ia & htonl(0xffffff00)) == htonl(0xcb007100))
-			return (1);
-//	}
-	return (0);
-}
-
 static inline int
 nat64_check_ip4(in_addr_t ia)
 {
 
-	/* IN_LOOPBACK */
-	if ((ia & htonl(0xff000000)) == htonl(0x7f000000))
-		return (1);
-	/* IN_LINKLOCAL */
-	if ((ia & htonl(0xffff0000)) == htonl(0xa9fe0000))
-		return (1);
-	/* IN_MULTICAST & IN_EXPERIMENTAL */
-	if ((ia & htonl(0xe0000000)) == htonl(0xe0000000))
+	/* These checks are ordered from most likely to least */
+	if (IN_MULTICAST(ntohl(ia)) || IN_LOOPBACK(ntohl(ia)) ||
+	    IN_LINKLOCAL(ntohl(ia)) || IN_EXPERIMENTAL(ntohl(ia)))
 		return (1);
 	return (0);
 }
 
-#define	nat64_get_ip4(_ip6)		((_ip6)->s6_addr32[3])
-#define	nat64_set_ip4(_ip6, _ip4)	(_ip6)->s6_addr32[3] = (_ip4)
+/* Well-known prefix 64:ff9b::/96 */
+#define	IPV6_ADDR_INT32_WKPFX	htonl(0x64ff9b)
+#define	IN6_IS_ADDR_WKPFX(a)	\
+    ((a)->s6_addr32[0] == IPV6_ADDR_INT32_WKPFX && \
+	(a)->s6_addr32[1] == 0 && (a)->s6_addr32[2] == 0)
 
+int nat64_check_private_ip4(const struct nat64_config *cfg, in_addr_t ia);
+int nat64_check_prefixlen(int length);
+int nat64_check_prefix6(const struct in6_addr *prefix, int length);
 int nat64_getlasthdr(struct mbuf *m, int *offset);
 int nat64_do_handle_ip4(struct mbuf *m, struct in6_addr *saddr,
-    struct in6_addr *daddr, uint16_t lport, nat64_stats_block *stats,
+    struct in6_addr *daddr, uint16_t lport, struct nat64_config *cfg,
     void *logdata);
 int nat64_do_handle_ip6(struct mbuf *m, uint32_t aaddr, uint16_t aport,
-    nat64_stats_block *stats, void *logdata);
-int nat64_handle_icmp6(struct mbuf *m, int hlen, uint32_t aaddr, uint16_t aport,
-    nat64_stats_block *stats, void *logdata);
+    struct nat64_config *cfg, void *logdata);
+int nat64_handle_icmp6(struct mbuf *m, int hlen, uint32_t aaddr,
+    uint16_t aport, struct nat64_config *cfg, void *logdata);
+void nat64_embed_ip4(struct in6_addr *ip6, int plen, in_addr_t ia);
+in_addr_t nat64_extract_ip4(const struct in6_addr *ip6, int plen);
+
+void nat64_set_output_method(int);
+int nat64_get_output_method(void);
 
 #endif
 

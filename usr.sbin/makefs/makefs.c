@@ -74,8 +74,9 @@ static fstype_t fstypes[] = {
 	# name, name ## _prep_opts, name ## _parse_opts, \
 	name ## _cleanup_opts, name ## _makefs  \
 }
-	ENTRY(ffs),
 	ENTRY(cd9660),
+	ENTRY(ffs),
+	ENTRY(msdos),
 	{ .type = NULL	},
 };
 
@@ -87,7 +88,6 @@ struct stat stampst;
 static	fstype_t *get_fstype(const char *);
 static int get_tstamp(const char *, struct stat *);
 static	void	usage(fstype_t *, fsinfo_t *);
-int		main(int, char *[]);
 
 int
 main(int argc, char *argv[])
@@ -98,8 +98,8 @@ main(int argc, char *argv[])
 	fsinfo_t	 fsoptions;
 	fsnode		*root;
 	int	 	 ch, i, len;
-	char		*subtree;
-	char		*specfile;
+	const char	*subtree;
+	const char	*specfile;
 
 	setprogname(argv[0]);
 
@@ -116,15 +116,18 @@ main(int argc, char *argv[])
 		fstype->prepare_options(&fsoptions);
 
 	specfile = NULL;
+#ifdef CLOCK_REALTIME
+	ch = clock_gettime(CLOCK_REALTIME, &start_time);
+#else
 	ch = gettimeofday(&start, NULL);
 	start_time.tv_sec = start.tv_sec;
 	start_time.tv_nsec = start.tv_usec * 1000;
-
+#endif
 	if (ch == -1)
 		err(1, "Unable to get system time");
 
 
-	while ((ch = getopt(argc, argv, "B:b:Dd:f:F:M:m:N:o:pR:s:S:t:T:xZ")) != -1) {
+	while ((ch = getopt(argc, argv, "B:b:Dd:f:F:M:m:N:O:o:pR:s:S:t:T:xZ")) != -1) {
 		switch (ch) {
 
 		case 'B':
@@ -202,7 +205,12 @@ main(int argc, char *argv[])
 			fsoptions.maxsize =
 			    strsuftoll("maximum size", optarg, 1LL, LLONG_MAX);
 			break;
-			
+
+		case 'O':
+			fsoptions.offset =
+			    strsuftoll("offset", optarg, 0LL, LLONG_MAX);
+			break;
+
 		case 'o':
 		{
 			char *p;
@@ -479,8 +487,8 @@ usage(fstype_t *fstype, fsinfo_t *fsoptions)
 	fprintf(stderr,
 "Usage: %s [-xZ] [-B endian] [-b free-blocks] [-d debug-mask]\n"
 "\t[-F mtree-specfile] [-f free-files] [-M minimum-size] [-m maximum-size]\n"
-"\t[-N userdb-dir] [-o fs-options] [-R roundup-size] [-S sector-size]\n"
-"\t[-s image-size] [-T <timestamp/file>] [-t fs-type]\n"
+"\t[-N userdb-dir] [-O offset] [-o fs-options] [-R roundup-size]\n"
+"\t[-S sector-size] [-s image-size] [-T <timestamp/file>] [-t fs-type]\n"
 "\timage-file directory | manifest [extra-directory ...]\n",
 	    prog);
 

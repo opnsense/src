@@ -28,7 +28,7 @@
 # $FreeBSD$
 #
 ############################################################ INCLUDES
- 
+
 BSDCFG_SHARE="/usr/share/bsdconfig"
 . $BSDCFG_SHARE/common.subr || exit 1
 f_dprintf "%s: loading includes..." "$0"
@@ -43,11 +43,6 @@ f_include $BSDCFG_SHARE/sysrc.subr
 #
 : ${KEYMAPFILE:=$BSDINSTALL_TMPETC/rc.conf.keymap}
 
-#
-# Default path to keymap INDEX containing descriptions
-#
-: ${MAPDESCFILE:=/usr/share/syscons/keymaps/INDEX.keymaps}
-
 ############################################################ GLOBALS
 
 #
@@ -57,8 +52,8 @@ hline_arrows_tab_enter="Press arrows, TAB or ENTER"
 msg_continue_with_keymap="Continue with %s keymap"
 msg_default="default"
 msg_error="Error"
-msg_freebsd_installer="HardenedBSD Installer"
-msg_keymap_menu_text="The system console driver for HardenedBSD defaults to\nstandard \"US\" keyboard map. Other keymaps can be chosen below."
+msg_freebsd_installer="FreeBSD Installer"
+msg_keymap_menu_text="The system console driver for FreeBSD defaults to standard \"US\"\nkeyboard map. Other keymaps can be chosen below."
 msg_keymap_selection="Keymap Selection"
 msg_ok="OK"
 msg_select="Select"

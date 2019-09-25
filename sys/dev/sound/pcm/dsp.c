@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2005-2009 Ariff Abdullah <ariff@FreeBSD.org>
  * Portions Copyright (c) Ryan Beasley <ryan.beasley@gmail.com> - GSoC 2006
  * Copyright (c) 1999 Cameron Grant <cg@FreeBSD.org>
@@ -42,6 +44,11 @@
 #include <vm/vm_pager.h>
 
 SND_DECLARE_FILE("$FreeBSD$");
+
+static int dsp_mmap_allow_prot_exec = 0;
+SYSCTL_INT(_hw_snd, OID_AUTO, compat_linux_mmap, CTLFLAG_RWTUN,
+    &dsp_mmap_allow_prot_exec, 0,
+    "linux mmap compatibility (-1=force disable 0=auto 1=force enable)");
 
 static int dsp_basename_clone = 1;
 SYSCTL_INT(_hw_snd, OID_AUTO, basename_clone, CTLFLAG_RWTUN,
@@ -2198,7 +2205,10 @@ dsp_mmap(struct cdev *i_dev, vm_ooffset_t offset, vm_paddr_t *paddr,
     int nprot, vm_memattr_t *memattr)
 {
 
-	/* XXX memattr is not honored */
+	/*
+	 * offset is in range due to checks in dsp_mmap_single().
+	 * XXX memattr is not honored.
+	 */
 	*paddr = vtophys(offset);
 	return (0);
 }
@@ -2210,7 +2220,21 @@ dsp_mmap_single(struct cdev *i_dev, vm_ooffset_t *offset,
 	struct snddev_info *d;
 	struct pcm_channel *wrch, *rdch, *c;
 
-	if (nprot & PROT_EXEC)
+	/*
+	 * Reject PROT_EXEC by default. It just doesn't makes sense.
+	 * Unfortunately, we have to give up this one due to linux_mmap
+	 * changes.
+	 *
+	 * https://lists.freebsd.org/pipermail/freebsd-emulation/2007-June/003698.html
+	 *
+	 */
+#ifdef SV_ABI_LINUX
+	if ((nprot & PROT_EXEC) && (dsp_mmap_allow_prot_exec < 0 ||
+	    (dsp_mmap_allow_prot_exec == 0 &&
+	    SV_CURPROC_ABI() != SV_ABI_LINUX)))
+#else
+	if ((nprot & PROT_EXEC) && dsp_mmap_allow_prot_exec < 1)
+#endif
 		return (EINVAL);
 
 	/*

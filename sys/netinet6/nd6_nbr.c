@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
  * All rights reserved.
  *
@@ -97,7 +99,7 @@ static void nd6_na_output_fib(struct ifnet *, const struct in6_addr *,
 static void nd6_ns_output_fib(struct ifnet *, const struct in6_addr *,
     const struct in6_addr *, const struct in6_addr *, uint8_t *, u_int);
 
-static VNET_DEFINE(int, dad_enhanced) = 1;
+VNET_DEFINE_STATIC(int, dad_enhanced) = 1;
 #define	V_dad_enhanced			VNET(dad_enhanced)
 
 SYSCTL_DECL(_net_inet6_ip6);
@@ -105,7 +107,7 @@ SYSCTL_INT(_net_inet6_ip6, OID_AUTO, dad_enhanced, CTLFLAG_VNET | CTLFLAG_RW,
     &VNET_NAME(dad_enhanced), 0,
     "Enable Enhanced DAD, which adds a random nonce to NS messages for DAD.");
 
-static VNET_DEFINE(int, dad_maxtry) = 15;	/* max # of *tries* to
+VNET_DEFINE_STATIC(int, dad_maxtry) = 15;	/* max # of *tries* to
 						   transmit DAD packet */
 #define	V_dad_maxtry			VNET(dad_maxtry)
 
@@ -892,7 +894,7 @@ nd6_na_input(struct mbuf *m, int off, int icmp6len)
 		LLE_WUNLOCK(ln);
 
 	if (chain != NULL)
-		nd6_flush_holdchain(ifp, ifp, chain, &sin6);
+		nd6_flush_holdchain(ifp, chain, &sin6);
 
 	if (checklink)
 		pfxlist_onlink_check();
@@ -1088,15 +1090,11 @@ caddr_t
 nd6_ifptomac(struct ifnet *ifp)
 {
 	switch (ifp->if_type) {
-	case IFT_ARCNET:
 	case IFT_ETHER:
-	case IFT_FDDI:
 	case IFT_IEEE1394:
 	case IFT_L2VLAN:
-	case IFT_IEEE80211:
 	case IFT_INFINIBAND:
 	case IFT_BRIDGE:
-	case IFT_ISO88025:
 		return IF_LLADDR(ifp);
 	default:
 		return NULL;
@@ -1122,8 +1120,8 @@ struct dadq {
 	bool dad_ondadq;	/* on dadq? Protected by DADQ_WLOCK. */
 };
 
-static VNET_DEFINE(TAILQ_HEAD(, dadq), dadq);
-static VNET_DEFINE(struct rwlock, dad_rwlock);
+VNET_DEFINE_STATIC(TAILQ_HEAD(, dadq), dadq);
+VNET_DEFINE_STATIC(struct rwlock, dad_rwlock);
 #define	V_dadq			VNET(dadq)
 #define	V_dad_rwlock		VNET(dad_rwlock)
 
@@ -1234,40 +1232,26 @@ nd6_dad_start(struct ifaddr *ifa, int delay)
 	struct dadq *dp;
 	char ip6buf[INET6_ADDRSTRLEN];
 
+	KASSERT((ia->ia6_flags & IN6_IFF_TENTATIVE) != 0,
+	    ("starting DAD on non-tentative address %p", ifa));
+
 	/*
 	 * If we don't need DAD, don't do it.
 	 * There are several cases:
-	 * - DAD is disabled (ip6_dad_count == 0)
+	 * - DAD is disabled globally or on the interface
 	 * - the interface address is anycast
 	 */
-	if (!(ia->ia6_flags & IN6_IFF_TENTATIVE)) {
-		log(LOG_DEBUG,
-			"nd6_dad_start: called with non-tentative address "
-			"%s(%s)\n",
-			ip6_sprintf(ip6buf, &ia->ia_addr.sin6_addr),
-			ifa->ifa_ifp ? if_name(ifa->ifa_ifp) : "???");
-		return;
-	}
-	if (ia->ia6_flags & IN6_IFF_ANYCAST) {
+	if ((ia->ia6_flags & IN6_IFF_ANYCAST) != 0 ||
+	    V_ip6_dad_count == 0 ||
+	    (ND_IFINFO(ifa->ifa_ifp)->flags & ND6_IFF_NO_DAD) != 0) {
 		ia->ia6_flags &= ~IN6_IFF_TENTATIVE;
 		return;
 	}
-	if (!V_ip6_dad_count) {
-		ia->ia6_flags &= ~IN6_IFF_TENTATIVE;
+	if ((ifa->ifa_ifp->if_flags & IFF_UP) == 0 ||
+	    (ifa->ifa_ifp->if_drv_flags & IFF_DRV_RUNNING) == 0 ||
+	    (ND_IFINFO(ifa->ifa_ifp)->flags & ND6_IFF_IFDISABLED) != 0)
 		return;
-	}
-	if (ifa->ifa_ifp == NULL)
-		panic("nd6_dad_start: ifa->ifa_ifp == NULL");
-	if (ND_IFINFO(ifa->ifa_ifp)->flags & ND6_IFF_NO_DAD) {
-		ia->ia6_flags &= ~IN6_IFF_TENTATIVE;
-		return;
-	}
-	if (!(ifa->ifa_ifp->if_flags & IFF_UP) ||
-	    !(ifa->ifa_ifp->if_drv_flags & IFF_DRV_RUNNING) ||
-	    (ND_IFINFO(ifa->ifa_ifp)->flags & ND6_IFF_IFDISABLED)) {
-		ia->ia6_flags |= IN6_IFF_TENTATIVE;
-		return;
-	}
+
 	if ((dp = nd6_dad_find(ifa, NULL)) != NULL) {
 		/*
 		 * DAD is already in progress.  Let the existing entry
@@ -1341,11 +1325,8 @@ nd6_dad_timer(struct dadq *dp)
 	struct in6_ifaddr *ia = (struct in6_ifaddr *)ifa;
 	char ip6buf[INET6_ADDRSTRLEN];
 
-	/* Sanity check */
-	if (ia == NULL) {
-		log(LOG_ERR, "nd6_dad_timer: called with null parameter\n");
-		goto err;
-	}
+	KASSERT(ia != NULL, ("DAD entry %p with no address", dp));
+
 	if (ND_IFINFO(ifp)->flags & ND6_IFF_IFDISABLED) {
 		/* Do not need DAD for ifdisabled interface. */
 		log(LOG_ERR, "nd6_dad_timer: cancel DAD on %s because of "
@@ -1483,10 +1464,8 @@ nd6_dad_duplicated(struct ifaddr *ifa, struct dadq *dp)
 		 */
 		switch (ifp->if_type) {
 		case IFT_ETHER:
-		case IFT_FDDI:
 		case IFT_ATM:
 		case IFT_IEEE1394:
-		case IFT_IEEE80211:
 		case IFT_INFINIBAND:
 			in6 = ia->ia_addr.sin6_addr;
 			if (in6_get_hw_ifid(ifp, &in6) == 0 &&
@@ -1536,17 +1515,11 @@ nd6_dad_ns_output(struct dadq *dp)
 static void
 nd6_dad_ns_input(struct ifaddr *ifa, struct nd_opt_nonce *ndopt_nonce)
 {
-	struct in6_ifaddr *ia;
-	struct ifnet *ifp;
-	const struct in6_addr *taddr6;
 	struct dadq *dp;
 
 	if (ifa == NULL)
 		panic("ifa == NULL in nd6_dad_ns_input");
 
-	ia = (struct in6_ifaddr *)ifa;
-	ifp = ifa->ifa_ifp;
-	taddr6 = &ia->ia_addr.sin6_addr;
 	/* Ignore Nonce option when Enhanced DAD is disabled. */
 	if (V_dad_enhanced == 0)
 		ndopt_nonce = NULL;

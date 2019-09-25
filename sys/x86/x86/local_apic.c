@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2003 John Baldwin <jhb@FreeBSD.org>
  * Copyright (c) 1996, by Steve Passe
  * All rights reserved.
@@ -44,6 +46,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/bus.h>
 #include <sys/kernel.h>
 #include <sys/lock.h>
+#include <sys/malloc.h>
 #include <sys/mutex.h>
 #include <sys/pcpu.h>
 #include <sys/proc.h>
@@ -75,13 +78,13 @@ __FBSDID("$FreeBSD$");
 
 #ifdef __amd64__
 #define	SDT_APIC	SDT_SYSIGT
-#define	SDT_APICT	SDT_SYSIGT
 #define	GSEL_APIC	0
 #else
 #define	SDT_APIC	SDT_SYS386IGT
-#define	SDT_APICT	SDT_SYS386TGT
 #define	GSEL_APIC	GSEL(GCODE_SEL, SEL_KPL)
 #endif
+
+static MALLOC_DEFINE(M_LAPIC, "local_apic", "Local APIC items");
 
 /* Sanity checks on IDT vectors. */
 CTASSERT(APIC_IO_INTS + APIC_NUM_IOINTS == APIC_TIMER_INT);
@@ -89,11 +92,16 @@ CTASSERT(APIC_TIMER_INT < APIC_LOCAL_INTS);
 CTASSERT(APIC_LOCAL_INTS == 240);
 CTASSERT(IPI_STOP < APIC_SPURIOUS_INT);
 
-/* Magic IRQ values for the timer and syscalls. */
-#define	IRQ_TIMER	(NUM_IO_INTS + 1)
-#define	IRQ_SYSCALL	(NUM_IO_INTS + 2)
-#define	IRQ_DTRACE_RET	(NUM_IO_INTS + 3)
-#define	IRQ_EVTCHN	(NUM_IO_INTS + 4)
+/*
+ * I/O interrupts use non-negative IRQ values.  These values are used
+ * to mark unused IDT entries or IDT entries reserved for a non-I/O
+ * interrupt.
+ */
+#define	IRQ_FREE	-1
+#define	IRQ_TIMER	-2
+#define	IRQ_SYSCALL	-3
+#define	IRQ_DTRACE_RET	-4
+#define	IRQ_EVTCHN	-5
 
 enum lat_timer_mode {
 	LAT_MODE_UNDEF =	0,
@@ -122,7 +130,7 @@ struct lvt {
 
 struct lapic {
 	struct lvt la_lvts[APIC_LVT_MAX + 1];
-	struct lvt la_elvts[APIC_ELVT_MAX + 1];;
+	struct lvt la_elvts[APIC_ELVT_MAX + 1];
 	u_int la_id:8;
 	u_int la_cluster:4;
 	u_int la_cluster_id:2;
@@ -134,7 +142,7 @@ struct lapic {
 	uint32_t lvt_timer_last;
 	/* Include IDT_SYSCALL to make indexing easier. */
 	int la_ioint_irqs[APIC_NUM_IOINTS + 1];
-} static lapics[MAX_APIC_ID + 1];
+} static *lapics;
 
 /* Global defaults for local APIC LVT entries. */
 static struct lvt lvts[APIC_LVT_MAX + 1] = {
@@ -194,6 +202,7 @@ static struct eventtimer lapic_et;
 #ifdef SMP
 static uint64_t lapic_ipi_wait_mult;
 #endif
+unsigned int max_apic_id;
 
 SYSCTL_NODE(_hw, OID_AUTO, apic, CTLFLAG_RD, 0, "APIC options");
 SYSCTL_INT(_hw_apic, OID_AUTO, x2apic_mode, CTLFLAG_RD, &x2apic_mode, 0, "");
@@ -201,6 +210,9 @@ SYSCTL_INT(_hw_apic, OID_AUTO, eoi_suppression, CTLFLAG_RD,
     &lapic_eoi_suppression, 0, "");
 SYSCTL_INT(_hw_apic, OID_AUTO, timer_tsc_deadline, CTLFLAG_RD,
     &lapic_timer_tsc_deadline, 0, "");
+
+static void lapic_calibrate_initcount(struct lapic *la);
+static void lapic_calibrate_deadline(struct lapic *la);
 
 static uint32_t
 lapic_read32(enum LAPIC_REGISTERS reg)
@@ -511,7 +523,7 @@ native_lapic_init(vm_paddr_t addr)
 
 	/* Local APIC CMCI. */
 	setidt(APIC_CMC_INT, pti ? IDTVEC(cmcint_pti) : IDTVEC(cmcint),
-	    SDT_APICT, SEL_KPL, GSEL_APIC);
+	    SDT_APIC, SEL_KPL, GSEL_APIC);
 
 	if ((resource_int_value("apic", 0, "clock", &i) != 0 || i != 0)) {
 		arat = 0;
@@ -617,7 +629,7 @@ native_lapic_create(u_int apic_id, int boot_cpu)
 {
 	int i;
 
-	if (apic_id > MAX_APIC_ID) {
+	if (apic_id > max_apic_id) {
 		printf("APIC: Ignoring local APIC with ID %d\n", apic_id);
 		if (boot_cpu)
 			panic("Can't ignore BSP");
@@ -641,7 +653,7 @@ native_lapic_create(u_int apic_id, int boot_cpu)
 		lapics[apic_id].la_elvts[i].lvt_active = 0;
 	}
 	for (i = 0; i <= APIC_NUM_IOINTS; i++)
-	    lapics[apic_id].la_ioint_irqs[i] = -1;
+	    lapics[apic_id].la_ioint_irqs[i] = IRQ_FREE;
 	lapics[apic_id].la_ioint_irqs[IDT_SYSCALL - APIC_IO_INTS] = IRQ_SYSCALL;
 	lapics[apic_id].la_ioint_irqs[APIC_TIMER_INT - APIC_IO_INTS] =
 	    IRQ_TIMER;
@@ -744,7 +756,6 @@ native_lapic_setup(int boot)
 	uint32_t version;
 	uint32_t maxlvt;
 	register_t saveintr;
-	char buf[MAXCOMLEN + 1];
 	int elvt_count;
 	int i;
 
@@ -773,14 +784,17 @@ native_lapic_setup(int boot)
 		    LAPIC_LVT_PCINT));
 	}
 
-	/* Program timer LVT and setup handler. */
+	/* Program timer LVT. */
 	la->lvt_timer_base = lvt_mode(la, APIC_LVT_TIMER,
 	    lapic_read32(LAPIC_LVT_TIMER));
 	la->lvt_timer_last = la->lvt_timer_base;
 	lapic_write32(LAPIC_LVT_TIMER, la->lvt_timer_base);
-	if (boot) {
-		snprintf(buf, sizeof(buf), "cpu%d:timer", PCPU_GET(cpuid));
-		intrcnt_add(buf, &la->la_timer_count);
+
+	/* Calibrate the timer parameters using BSP. */
+	if (boot && IS_BSP()) {
+		lapic_calibrate_initcount(la);
+		if (lapic_timer_tsc_deadline)
+			lapic_calibrate_deadline(la);
 	}
 
 	/* Setup the timer if configured. */
@@ -827,6 +841,29 @@ native_lapic_setup(int boot)
 
 	intr_restore(saveintr);
 }
+
+static void
+native_lapic_intrcnt(void *dummy __unused)
+{
+	struct pcpu *pc;
+	struct lapic *la;
+	char buf[MAXCOMLEN + 1];
+
+	/* If there are no APICs, skip this function. */
+	if (lapics == NULL)
+		return;
+
+	STAILQ_FOREACH(pc, &cpuhead, pc_allcpu) {
+		la = &lapics[pc->pc_apic_id];
+		if (!la->la_present)
+		    continue;
+
+		snprintf(buf, sizeof(buf), "cpu%d:timer", pc->pc_cpuid);
+		intrcnt_add(buf, &la->la_timer_count);
+	}
+}
+SYSINIT(native_lapic_intrcnt, SI_SUB_INTR, SI_ORDER_MIDDLE, native_lapic_intrcnt,
+    NULL);
 
 static void
 native_lapic_reenable_pmc(void)
@@ -917,7 +954,7 @@ native_lapic_disable_pmc(void)
 }
 
 static void
-lapic_calibrate_initcount(struct eventtimer *et, struct lapic *la)
+lapic_calibrate_initcount(struct lapic *la)
 {
 	u_long value;
 
@@ -943,7 +980,7 @@ lapic_calibrate_initcount(struct eventtimer *et, struct lapic *la)
 }
 
 static void
-lapic_calibrate_deadline(struct eventtimer *et, struct lapic *la __unused)
+lapic_calibrate_deadline(struct lapic *la __unused)
 {
 
 	if (bootverbose) {
@@ -985,11 +1022,6 @@ lapic_et_start(struct eventtimer *et, sbintime_t first, sbintime_t period)
 	struct lapic *la;
 
 	la = &lapics[PCPU_GET(apic_id)];
-	if (et->et_frequency == 0) {
-		lapic_calibrate_initcount(et, la);
-		if (lapic_timer_tsc_deadline)
-			lapic_calibrate_deadline(et, la);
-	}
 	if (period != 0) {
 		lapic_change_mode(et, la, LAT_MODE_PERIODIC);
 		la->la_timer_period = ((uint32_t)et->et_frequency * period) >>
@@ -1439,8 +1471,9 @@ native_lapic_enable_mca_elvt(void)
 
 	value = lapic_read32(LAPIC_EXT_LVT0 + APIC_ELVT_MCA);
 	if ((value & APIC_LVT_M) == 0) {
-		printf("AMD MCE Thresholding Extended LVT is already active\n");
-		return (-1);
+		if (bootverbose)
+			printf("AMD MCE Thresholding Extended LVT is already active\n");
+		return (APIC_ELVT_MCA);
 	}
 	lapics[apic_id].la_elvts[APIC_ELVT_MCA].lvt_masked = 0;
 	lapics[apic_id].la_elvts[APIC_ELVT_MCA].lvt_active = 1;
@@ -1483,7 +1516,7 @@ native_apic_alloc_vector(u_int apic_id, u_int irq)
 {
 	u_int vector;
 
-	KASSERT(irq < NUM_IO_INTS, ("Invalid IRQ %u", irq));
+	KASSERT(irq < num_io_irqs, ("Invalid IRQ %u", irq));
 
 	/*
 	 * Search for a free vector.  Currently we just use a very simple
@@ -1491,7 +1524,7 @@ native_apic_alloc_vector(u_int apic_id, u_int irq)
 	 */
 	mtx_lock_spin(&icu_lock);
 	for (vector = 0; vector < APIC_NUM_IOINTS; vector++) {
-		if (lapics[apic_id].la_ioint_irqs[vector] != -1)
+		if (lapics[apic_id].la_ioint_irqs[vector] != IRQ_FREE)
 			continue;
 		lapics[apic_id].la_ioint_irqs[vector] = irq;
 		mtx_unlock_spin(&icu_lock);
@@ -1517,7 +1550,7 @@ native_apic_alloc_vectors(u_int apic_id, u_int *irqs, u_int count, u_int align)
 	KASSERT(align >= count, ("align < count"));
 #ifdef INVARIANTS
 	for (run = 0; run < count; run++)
-		KASSERT(irqs[run] < NUM_IO_INTS, ("Invalid IRQ %u at index %u",
+		KASSERT(irqs[run] < num_io_irqs, ("Invalid IRQ %u at index %u",
 		    irqs[run], run));
 #endif
 
@@ -1531,7 +1564,7 @@ native_apic_alloc_vectors(u_int apic_id, u_int *irqs, u_int count, u_int align)
 	for (vector = 0; vector < APIC_NUM_IOINTS; vector++) {
 
 		/* Vector is in use, end run. */
-		if (lapics[apic_id].la_ioint_irqs[vector] != -1) {
+		if (lapics[apic_id].la_ioint_irqs[vector] != IRQ_FREE) {
 			run = 0;
 			first = 0;
 			continue;
@@ -1598,7 +1631,7 @@ native_apic_disable_vector(u_int apic_id, u_int vector)
 	 * We can not currently clear the idt entry because other cpus
 	 * may have a valid vector at this offset.
 	 */
-	setidt(vector, pti ? &IDTVEC(rsvd_pti) : &IDTVEC(rsvd), SDT_APICT,
+	setidt(vector, pti ? &IDTVEC(rsvd_pti) : &IDTVEC(rsvd), SDT_APIC,
 	    SEL_KPL, GSEL_APIC);
 #endif
 }
@@ -1612,7 +1645,7 @@ native_apic_free_vector(u_int apic_id, u_int vector, u_int irq)
 	KASSERT(vector >= APIC_IO_INTS && vector != IDT_SYSCALL &&
 	    vector <= APIC_IO_INTS + APIC_NUM_IOINTS,
 	    ("Vector %u does not map to an IRQ line", vector));
-	KASSERT(irq < NUM_IO_INTS, ("Invalid IRQ %u", irq));
+	KASSERT(irq < num_io_irqs, ("Invalid IRQ %u", irq));
 	KASSERT(lapics[apic_id].la_ioint_irqs[vector - APIC_IO_INTS] ==
 	    irq, ("IRQ mismatch"));
 #ifdef KDTRACE_HOOKS
@@ -1633,7 +1666,7 @@ native_apic_free_vector(u_int apic_id, u_int vector, u_int irq)
 		thread_unlock(td);
 	}
 	mtx_lock_spin(&icu_lock);
-	lapics[apic_id].la_ioint_irqs[vector - APIC_IO_INTS] = -1;
+	lapics[apic_id].la_ioint_irqs[vector - APIC_IO_INTS] = IRQ_FREE;
 	mtx_unlock_spin(&icu_lock);
 	if (!rebooting) {
 		thread_lock(td);
@@ -1678,13 +1711,13 @@ DB_SHOW_COMMAND(apic, db_show_apic)
 		verbose = 1;
 	else
 		verbose = 0;
-	for (apic_id = 0; apic_id <= MAX_APIC_ID; apic_id++) {
+	for (apic_id = 0; apic_id <= max_apic_id; apic_id++) {
 		if (lapics[apic_id].la_present == 0)
 			continue;
 		db_printf("Interrupts bound to lapic %u\n", apic_id);
 		for (i = 0; i < APIC_NUM_IOINTS + 1 && !db_pager_quit; i++) {
 			irq = lapics[apic_id].la_ioint_irqs[i];
-			if (irq == -1 || irq == IRQ_SYSCALL)
+			if (irq == IRQ_FREE || irq == IRQ_SYSCALL)
 				continue;
 #ifdef KDTRACE_HOOKS
 			if (irq == IRQ_DTRACE_RET)
@@ -1697,7 +1730,7 @@ DB_SHOW_COMMAND(apic, db_show_apic)
 			db_printf("vec 0x%2x -> ", i + APIC_IO_INTS);
 			if (irq == IRQ_TIMER)
 				db_printf("lapic timer\n");
-			else if (irq < NUM_IO_INTS) {
+			else if (irq < num_io_irqs) {
 				isrc = intr_lookup_source(irq);
 				if (isrc == NULL || verbose == 0)
 					db_printf("IRQ %u\n", irq);
@@ -1879,6 +1912,9 @@ apic_setup_local(void *dummy __unused)
 	if (best_enum == NULL)
 		return;
 
+	lapics = malloc(sizeof(*lapics) * (max_apic_id + 1), M_LAPIC,
+	    M_WAITOK | M_ZERO);
+
 	/* Initialize the local APIC. */
 	retval = best_enum->apic_setup_local();
 	if (retval != 0)
@@ -1912,8 +1948,8 @@ apic_setup_io(void *dummy __unused)
 	/*
 	 * Finish setting up the local APIC on the BSP once we know
 	 * how to properly program the LINT pins.  In particular, this
-	 * enables the EOI suppression mode, if LAPIC support it and
-	 * user did not disabled the mode.
+	 * enables the EOI suppression mode, if LAPIC supports it and
+	 * user did not disable the mode.
 	 */
 	lapic_setup(1);
 	if (bootverbose)
@@ -1921,6 +1957,10 @@ apic_setup_io(void *dummy __unused)
 
 	/* Enable the MSI "pic". */
 	init_ops.msi_init();
+
+#ifdef XENHVM
+	xen_intr_alloc_irqs();
+#endif
 }
 SYSINIT(apic_setup_io, SI_SUB_INTR, SI_ORDER_THIRD, apic_setup_io, NULL);
 
@@ -2136,7 +2176,7 @@ native_lapic_ipi_free(int vector)
 	KASSERT(func != (uintptr_t)&IDTVEC(rsvd) &&
 	    func != (uintptr_t)&IDTVEC(rsvd_pti),
 	    ("invalid idtfunc %#lx", func));
-	setidt(vector, pti ? &IDTVEC(rsvd_pti) : &IDTVEC(rsvd), SDT_APICT,
+	setidt(vector, pti ? &IDTVEC(rsvd_pti) : &IDTVEC(rsvd), SDT_APIC,
 	    SEL_KPL, GSEL_APIC);
 	mtx_unlock_spin(&icu_lock);
 }

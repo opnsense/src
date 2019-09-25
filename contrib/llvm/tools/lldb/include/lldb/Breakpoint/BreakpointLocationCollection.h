@@ -10,13 +10,9 @@
 #ifndef liblldb_BreakpointLocationCollection_h_
 #define liblldb_BreakpointLocationCollection_h_
 
-// C Includes
-// C++ Includes
 #include <mutex>
 #include <vector>
 
-// Other libraries and framework includes
-// Project includes
 #include "lldb/Utility/Iterable.h"
 #include "lldb/lldb-private.h"
 
@@ -178,8 +174,8 @@ public:
 
 protected:
   //------------------------------------------------------------------
-  // Classes that inherit from BreakpointLocationCollection can see
-  // and modify these
+  // Classes that inherit from BreakpointLocationCollection can see and modify
+  // these
   //------------------------------------------------------------------
 
 private:

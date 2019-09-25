@@ -1,5 +1,7 @@
 /* $FreeBSD$ */
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2015 Daisuke Aoyama. All rights reserved.
  * Copyright (c) 2012-2015 Hans Petter Selasky. All rights reserved.
  * Copyright (c) 2010-2011 Aleksandr Rybalko. All rights reserved.
@@ -98,10 +100,6 @@
    GINTSTS_WKUPINT | GINTSTS_USBSUSP | GINTMSK_OTGINTMSK |	\
    GINTSTS_SESSREQINT)
 
-#define	DWC_OTG_PHY_ULPI 0
-#define	DWC_OTG_PHY_HSIC 1
-#define	DWC_OTG_PHY_INTERNAL 2
-
 #ifndef DWC_OTG_PHY_DEFAULT
 #define	DWC_OTG_PHY_DEFAULT DWC_OTG_PHY_ULPI
 #endif
@@ -110,10 +108,10 @@ static int dwc_otg_phy_type = DWC_OTG_PHY_DEFAULT;
 
 static SYSCTL_NODE(_hw_usb, OID_AUTO, dwc_otg, CTLFLAG_RW, 0, "USB DWC OTG");
 SYSCTL_INT(_hw_usb_dwc_otg, OID_AUTO, phy_type, CTLFLAG_RDTUN,
-    &dwc_otg_phy_type, 0, "DWC OTG PHY TYPE - 0/1/2 - ULPI/HSIC/INTERNAL");
+    &dwc_otg_phy_type, 0, "DWC OTG PHY TYPE - 0/1/2/3 - ULPI/HSIC/INTERNAL/UTMI+");
 
 #ifdef USB_DEBUG
-static int dwc_otg_debug;
+static int dwc_otg_debug = 0;
 
 SYSCTL_INT(_hw_usb_dwc_otg, OID_AUTO, debug, CTLFLAG_RWTUN,
     &dwc_otg_debug, 0, "DWC OTG debug level");
@@ -1434,6 +1432,19 @@ dwc_otg_host_data_rx(struct dwc_otg_softc *sc, struct dwc_otg_td *td)
 					goto receive_pkt;
 				}
 			} else if (td->ep_type == UE_ISOCHRONOUS) {
+				if (td->hcsplt != 0) {
+					/*
+					 * Sometimes the complete
+					 * split packet may be queued
+					 * too early and the
+					 * transaction translator will
+					 * return a NAK. Ignore
+					 * this message and retry the
+					 * complete split instead.
+					 */
+					DPRINTF("Retrying complete split\n");
+					goto receive_pkt;
+				}
 				goto complete;
 			}
 			td->did_nak = 1;
@@ -1460,6 +1471,8 @@ dwc_otg_host_data_rx(struct dwc_otg_softc *sc, struct dwc_otg_td *td)
 				/* check if we are complete */
 				if (td->tt_xactpos == HCSPLT_XACTPOS_BEGIN) {
 					goto complete;
+				} else if (td->hcsplt != 0) {
+					goto receive_pkt;
 				} else {
 					/* get more packets */
 					goto busy;
@@ -1518,8 +1531,10 @@ receive_pkt:
   	if (td->hcsplt != 0) {
 		delta = td->tt_complete_slot - sc->sc_last_frame_num - 1;
 		if (td->tt_scheduled == 0 || delta < DWC_OTG_TT_SLOT_MAX) {
-			td->state = DWC_CHAN_ST_WAIT_C_PKT;
-			goto busy;
+			if (td->ep_type != UE_ISOCHRONOUS) {
+				td->state = DWC_CHAN_ST_WAIT_C_PKT;
+				goto busy;
+			}
 		}
 		delta = sc->sc_last_frame_num - td->tt_start_slot;
 		if (delta > DWC_OTG_TT_SLOT_MAX) {
@@ -1565,12 +1580,23 @@ receive_pkt:
 		hcchar = td->hcchar;
 		hcchar |= HCCHAR_EPDIR_IN;
 
-		/* receive complete split ASAP */
-		if ((sc->sc_last_frame_num & 1) != 0 &&
-		    td->ep_type == UE_ISOCHRONOUS)
-			hcchar |= HCCHAR_ODDFRM;
-		else
+		if (td->ep_type == UE_ISOCHRONOUS) {
+			if (td->hcsplt != 0) {
+				/* continously buffer */
+				if (sc->sc_last_frame_num & 1)
+					hcchar &= ~HCCHAR_ODDFRM;
+				else
+					hcchar |= HCCHAR_ODDFRM;
+			} else {
+				/* multi buffer, if any */
+				if (sc->sc_last_frame_num & 1)
+					hcchar |= HCCHAR_ODDFRM;
+				else
+					hcchar &= ~HCCHAR_ODDFRM;
+			}
+		} else {
 			hcchar &= ~HCCHAR_ODDFRM;
+		}
 
 		/* must enable channel before data can be received */
 		DWC_OTG_WRITE_4(sc, DOTG_HCCHAR(channel), hcchar);
@@ -3889,8 +3915,13 @@ dwc_otg_init(struct dwc_otg_softc *sc)
 		break;
 	}
 
-	/* select HSIC, ULPI or internal PHY mode */
-	switch (dwc_otg_phy_type) {
+	if (sc->sc_phy_type == 0)
+		sc->sc_phy_type = dwc_otg_phy_type + 1;
+	if (sc->sc_phy_bits == 0)
+		sc->sc_phy_bits = 16;
+
+	/* select HSIC, ULPI, UTMI+ or internal PHY mode */
+	switch (sc->sc_phy_type) {
 	case DWC_OTG_PHY_HSIC:
 		DWC_OTG_WRITE_4(sc, DOTG_GUSBCFG,
 		    GUSBCFG_PHYIF |
@@ -3907,6 +3938,16 @@ dwc_otg_init(struct dwc_otg_softc *sc)
 	case DWC_OTG_PHY_ULPI:
 		DWC_OTG_WRITE_4(sc, DOTG_GUSBCFG,
 		    GUSBCFG_ULPI_UTMI_SEL |
+		    GUSBCFG_TRD_TIM_SET(5) | temp);
+		DWC_OTG_WRITE_4(sc, DOTG_GOTGCTL, 0);
+
+		temp = DWC_OTG_READ_4(sc, DOTG_GLPMCFG);
+		DWC_OTG_WRITE_4(sc, DOTG_GLPMCFG,
+		    temp & ~GLPMCFG_HSIC_CONN);
+		break;
+	case DWC_OTG_PHY_UTMI:
+		DWC_OTG_WRITE_4(sc, DOTG_GUSBCFG,
+		    (sc->sc_phy_bits == 16 ? GUSBCFG_PHYIF : 0) |
 		    GUSBCFG_TRD_TIM_SET(5) | temp);
 		DWC_OTG_WRITE_4(sc, DOTG_GOTGCTL, 0);
 

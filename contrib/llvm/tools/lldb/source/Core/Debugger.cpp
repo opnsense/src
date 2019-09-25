@@ -9,66 +9,71 @@
 
 #include "lldb/Core/Debugger.h"
 
-#include "lldb/Breakpoint/Breakpoint.h" // for Breakpoint, Brea...
-#include "lldb/Core/Event.h"            // for Event, EventData...
+#include "lldb/Breakpoint/Breakpoint.h"
 #include "lldb/Core/FormatEntity.h"
-#include "lldb/Core/Listener.h" // for Listener
-#include "lldb/Core/Mangled.h"  // for Mangled
+#include "lldb/Core/Mangled.h"
+#include "lldb/Core/ModuleList.h"
 #include "lldb/Core/PluginManager.h"
-#include "lldb/Core/State.h"
 #include "lldb/Core/StreamAsynchronousIO.h"
 #include "lldb/Core/StreamFile.h"
 #include "lldb/DataFormatters/DataVisualization.h"
 #include "lldb/Expression/REPL.h"
-#include "lldb/Host/File.h" // for File, File::kInv...
+#include "lldb/Host/File.h"
+#include "lldb/Host/FileSystem.h"
 #include "lldb/Host/HostInfo.h"
 #include "lldb/Host/Terminal.h"
 #include "lldb/Host/ThreadLauncher.h"
 #include "lldb/Interpreter/CommandInterpreter.h"
-#include "lldb/Interpreter/OptionValue.h" // for OptionValue, Opt...
+#include "lldb/Interpreter/OptionValue.h"
 #include "lldb/Interpreter/OptionValueProperties.h"
 #include "lldb/Interpreter/OptionValueSInt64.h"
 #include "lldb/Interpreter/OptionValueString.h"
-#include "lldb/Interpreter/Property.h"          // for PropertyDefinition
-#include "lldb/Interpreter/ScriptInterpreter.h" // for ScriptInterpreter
+#include "lldb/Interpreter/Property.h"
+#include "lldb/Interpreter/ScriptInterpreter.h"
 #include "lldb/Symbol/Function.h"
 #include "lldb/Symbol/Symbol.h"
-#include "lldb/Symbol/SymbolContext.h" // for SymbolContext
+#include "lldb/Symbol/SymbolContext.h"
 #include "lldb/Target/Language.h"
 #include "lldb/Target/Process.h"
 #include "lldb/Target/StructuredDataPlugin.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Target/TargetList.h"
 #include "lldb/Target/Thread.h"
-#include "lldb/Target/ThreadList.h" // for ThreadList
+#include "lldb/Target/ThreadList.h"
 #include "lldb/Utility/AnsiTerminal.h"
-#include "lldb/Utility/Log.h"    // for LLDB_LOG_OPTION_...
-#include "lldb/Utility/Stream.h" // for Stream
+#include "lldb/Utility/Event.h"
+#include "lldb/Utility/Listener.h"
+#include "lldb/Utility/Log.h"
+#include "lldb/Utility/Reproducer.h"
+#include "lldb/Utility/State.h"
+#include "lldb/Utility/Stream.h"
 #include "lldb/Utility/StreamCallback.h"
 #include "lldb/Utility/StreamString.h"
 
-#if defined(LLVM_ON_WIN32)
-#include "lldb/Host/windows/PosixApi.h" // for PATH_MAX
+#if defined(_WIN32)
+#include "lldb/Host/windows/PosixApi.h"
+#include "lldb/Host/windows/windows.h"
 #endif
 
-#include "llvm/ADT/None.h"      // for None
-#include "llvm/ADT/STLExtras.h" // for make_unique
+#include "llvm/ADT/None.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/ADT/iterator.h" // for iterator_facade_...
+#include "llvm/ADT/iterator.h"
 #include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Process.h"
 #include "llvm/Support/Threading.h"
-#include "llvm/Support/raw_ostream.h" // for raw_fd_ostream
+#include "llvm/Support/raw_ostream.h"
 
-#include <list>   // for list
-#include <memory> // for make_shared
+#include <list>
+#include <memory>
 #include <mutex>
-#include <set>          // for set
-#include <stdio.h>      // for size_t, NULL
-#include <stdlib.h>     // for getenv
-#include <string.h>     // for strcmp
-#include <string>       // for string
-#include <system_error> // for error_code
+#include <set>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <string>
+#include <system_error>
 
 namespace lldb_private {
 class Address;
@@ -88,7 +93,7 @@ static std::recursive_mutex *g_debugger_list_mutex_ptr =
 static DebuggerList *g_debugger_list_ptr =
     nullptr; // NOTE: intentional leak to avoid issues with C++ destructor chain
 
-OptionEnumValueElement g_show_disassembly_enum_values[] = {
+static constexpr OptionEnumValueElement g_show_disassembly_enum_values[] = {
     {Debugger::eStopDisassemblyTypeNever, "never",
      "Never show disassembly when displaying a stop context."},
     {Debugger::eStopDisassemblyTypeNoDebugInfo, "no-debuginfo",
@@ -97,16 +102,14 @@ OptionEnumValueElement g_show_disassembly_enum_values[] = {
      "Show disassembly when there is no source information, or the source file "
      "is missing when displaying a stop context."},
     {Debugger::eStopDisassemblyTypeAlways, "always",
-     "Always show disassembly when displaying a stop context."},
-    {0, nullptr, nullptr}};
+     "Always show disassembly when displaying a stop context."} };
 
-OptionEnumValueElement g_language_enumerators[] = {
+static constexpr OptionEnumValueElement g_language_enumerators[] = {
     {eScriptLanguageNone, "none", "Disable scripting languages."},
     {eScriptLanguagePython, "python",
      "Select python as the default scripting language."},
     {eScriptLanguageDefault, "default",
-     "Select the lldb default as the default scripting language."},
-    {0, nullptr, nullptr}};
+     "Select the lldb default as the default scripting language."} };
 
 #define MODULE_WITH_FUNC                                                       \
   "{ "                                                                         \
@@ -118,8 +121,11 @@ OptionEnumValueElement g_language_enumerators[] = {
   "${module.file.basename}{`${function.name-without-args}"                     \
   "{${frame.no-debug}${function.pc-offset}}}}"
 
-#define FILE_AND_LINE "{ at ${line.file.basename}:${line.number}}"
+#define FILE_AND_LINE                                                          \
+  "{ at ${line.file.basename}:${line.number}{:${line.column}}}"
 #define IS_OPTIMIZED "{${function.is-optimized} [opt]}"
+
+#define IS_ARTIFICIAL "{${frame.is-artificial} [artificial]}"
 
 #define DEFAULT_THREAD_FORMAT                                                  \
   "thread #${thread.index}: tid = ${thread.id%tid}"                            \
@@ -145,11 +151,11 @@ OptionEnumValueElement g_language_enumerators[] = {
 
 #define DEFAULT_FRAME_FORMAT                                                   \
   "frame #${frame.index}: ${frame.pc}" MODULE_WITH_FUNC FILE_AND_LINE          \
-      IS_OPTIMIZED "\\n"
+      IS_OPTIMIZED IS_ARTIFICIAL "\\n"
 
 #define DEFAULT_FRAME_FORMAT_NO_ARGS                                           \
   "frame #${frame.index}: ${frame.pc}" MODULE_WITH_FUNC_NO_ARGS FILE_AND_LINE  \
-      IS_OPTIMIZED "\\n"
+      IS_OPTIMIZED IS_ARTIFICIAL "\\n"
 
 // Three parts to this disassembly format specification:
 //   1. If this is a new function/symbol (no previous symbol/function), print
@@ -161,23 +167,22 @@ OptionEnumValueElement g_language_enumerators[] = {
 //      address <+offset>:
 #define DEFAULT_DISASSEMBLY_FORMAT                                             \
   "{${function.initial-function}{${module.file.basename}`}{${function.name-"   \
-  "without-args}}:\n}{${function.changed}\n{${module.file.basename}`}{${"      \
-  "function.name-without-args}}:\n}{${current-pc-arrow} "                      \
+  "without-args}}:\\n}{${function.changed}\\n{${module.file.basename}`}{${"    \
+  "function.name-without-args}}:\\n}{${current-pc-arrow} "                     \
   "}${addr-file-or-load}{ "                                                    \
   "<${function.concrete-only-addr-offset-no-padding}>}: "
 
-// gdb's disassembly format can be emulated with
-// ${current-pc-arrow}${addr-file-or-load}{
-// <${function.name-without-args}${function.concrete-only-addr-offset-no-padding}>}:
+// gdb's disassembly format can be emulated with ${current-pc-arrow}${addr-
+// file-or-load}{ <${function.name-without-args}${function.concrete-only-addr-
+// offset-no-padding}>}:
 
 // lldb's original format for disassembly would look like this format string -
-// {${function.initial-function}{${module.file.basename}`}{${function.name-without-args}}:\n}{${function.changed}\n{${module.file.basename}`}{${function.name-without-args}}:\n}{${current-pc-arrow}
-// }{${addr-file-or-load}}:
+// {${function.initial-function}{${module.file.basename}`}{${function.name-
+// without-
+// args}}:\n}{${function.changed}\n{${module.file.basename}`}{${function.name-
+// without-args}}:\n}{${current-pc-arrow} }{${addr-file-or-load}}:
 
-#define DEFAULT_STOP_SHOW_COLUMN_ANSI_PREFIX "${ansi.underline}"
-#define DEFAULT_STOP_SHOW_COLUMN_ANSI_SUFFIX "${ansi.normal}"
-
-static OptionEnumValueElement s_stop_show_column_values[] = {
+static constexpr OptionEnumValueElement s_stop_show_column_values[] = {
     {eStopShowColumnAnsiOrCaret, "ansi-or-caret",
      "Highlight the stop column with ANSI terminal codes when color/ANSI mode "
      "is enabled; otherwise, fall back to using a text-only caret (^) as if "
@@ -189,98 +194,95 @@ static OptionEnumValueElement s_stop_show_column_values[] = {
      "Highlight the stop column with a caret character (^) underneath the stop "
      "column. This method introduces a new line in source listings that "
      "display thread stop locations."},
-    {eStopShowColumnNone, "none", "Do not highlight the stop column."},
-    {0, nullptr, nullptr}};
+    {eStopShowColumnNone, "none", "Do not highlight the stop column."}};
 
-static PropertyDefinition g_properties[] = {
-    {"auto-confirm", OptionValue::eTypeBoolean, true, false, nullptr, nullptr,
+static constexpr PropertyDefinition g_properties[] = {
+    {"auto-confirm", OptionValue::eTypeBoolean, true, false, nullptr, {},
      "If true all confirmation prompts will receive their default reply."},
     {"disassembly-format", OptionValue::eTypeFormatEntity, true, 0,
-     DEFAULT_DISASSEMBLY_FORMAT, nullptr,
+     DEFAULT_DISASSEMBLY_FORMAT, {},
      "The default disassembly format "
      "string to use when disassembling "
      "instruction sequences."},
     {"frame-format", OptionValue::eTypeFormatEntity, true, 0,
-     DEFAULT_FRAME_FORMAT, nullptr,
+     DEFAULT_FRAME_FORMAT, {},
      "The default frame format string to use "
      "when displaying stack frame information "
      "for threads."},
-    {"notify-void", OptionValue::eTypeBoolean, true, false, nullptr, nullptr,
+    {"notify-void", OptionValue::eTypeBoolean, true, false, nullptr, {},
      "Notify the user explicitly if an expression returns void (default: "
      "false)."},
     {"prompt", OptionValue::eTypeString, true,
-     OptionValueString::eOptionEncodeCharacterEscapeSequences, "(lldb) ",
-     nullptr, "The debugger command line prompt displayed for the user."},
+     OptionValueString::eOptionEncodeCharacterEscapeSequences, "(lldb) ", {},
+     "The debugger command line prompt displayed for the user."},
     {"script-lang", OptionValue::eTypeEnum, true, eScriptLanguagePython,
-     nullptr, g_language_enumerators,
+     nullptr, OptionEnumValues(g_language_enumerators),
      "The script language to be used for evaluating user-written scripts."},
-    {"stop-disassembly-count", OptionValue::eTypeSInt64, true, 4, nullptr,
-     nullptr,
+    {"stop-disassembly-count", OptionValue::eTypeSInt64, true, 4, nullptr, {},
      "The number of disassembly lines to show when displaying a "
      "stopped context."},
     {"stop-disassembly-display", OptionValue::eTypeEnum, true,
      Debugger::eStopDisassemblyTypeNoDebugInfo, nullptr,
-     g_show_disassembly_enum_values,
+     OptionEnumValues(g_show_disassembly_enum_values),
      "Control when to display disassembly when displaying a stopped context."},
-    {"stop-line-count-after", OptionValue::eTypeSInt64, true, 3, nullptr,
-     nullptr,
+    {"stop-line-count-after", OptionValue::eTypeSInt64, true, 3, nullptr, {},
      "The number of sources lines to display that come after the "
      "current source line when displaying a stopped context."},
-    {"stop-line-count-before", OptionValue::eTypeSInt64, true, 3, nullptr,
-     nullptr,
+    {"stop-line-count-before", OptionValue::eTypeSInt64, true, 3, nullptr, {},
      "The number of sources lines to display that come before the "
      "current source line when displaying a stopped context."},
+    {"highlight-source", OptionValue::eTypeBoolean, true, true, nullptr, {},
+     "If true, LLDB will highlight the displayed source code."},
     {"stop-show-column", OptionValue::eTypeEnum, false,
-     eStopShowColumnAnsiOrCaret, nullptr, s_stop_show_column_values,
+     eStopShowColumnAnsiOrCaret, nullptr, OptionEnumValues(s_stop_show_column_values),
      "If true, LLDB will use the column information from the debug info to "
      "mark the current position when displaying a stopped context."},
-    {"stop-show-column-ansi-prefix", OptionValue::eTypeFormatEntity, true, 0,
-     DEFAULT_STOP_SHOW_COLUMN_ANSI_PREFIX, nullptr,
+    {"stop-show-column-ansi-prefix", OptionValue::eTypeString, true, 0,
+     "${ansi.underline}", {},
      "When displaying the column marker in a color-enabled (i.e. ANSI) "
      "terminal, use the ANSI terminal code specified in this format at the "
      "immediately before the column to be marked."},
-    {"stop-show-column-ansi-suffix", OptionValue::eTypeFormatEntity, true, 0,
-     DEFAULT_STOP_SHOW_COLUMN_ANSI_SUFFIX, nullptr,
+    {"stop-show-column-ansi-suffix", OptionValue::eTypeString, true, 0,
+     "${ansi.normal}", {},
      "When displaying the column marker in a color-enabled (i.e. ANSI) "
      "terminal, use the ANSI terminal code specified in this format "
      "immediately after the column to be marked."},
-    {"term-width", OptionValue::eTypeSInt64, true, 80, nullptr, nullptr,
+    {"term-width", OptionValue::eTypeSInt64, true, 80, nullptr, {},
      "The maximum number of columns to use for displaying text."},
     {"thread-format", OptionValue::eTypeFormatEntity, true, 0,
-     DEFAULT_THREAD_FORMAT, nullptr,
+     DEFAULT_THREAD_FORMAT, {},
      "The default thread format string to use "
      "when displaying thread information."},
     {"thread-stop-format", OptionValue::eTypeFormatEntity, true, 0,
-     DEFAULT_THREAD_STOP_FORMAT, nullptr,
+     DEFAULT_THREAD_STOP_FORMAT, {},
      "The default thread format  "
      "string to use when displaying thread "
      "information as part of the stop display."},
-    {"use-external-editor", OptionValue::eTypeBoolean, true, false, nullptr,
-     nullptr, "Whether to use an external editor or not."},
-    {"use-color", OptionValue::eTypeBoolean, true, true, nullptr, nullptr,
+    {"use-external-editor", OptionValue::eTypeBoolean, true, false, nullptr, {},
+     "Whether to use an external editor or not."},
+    {"use-color", OptionValue::eTypeBoolean, true, true, nullptr, {},
      "Whether to use Ansi color codes or not."},
     {"auto-one-line-summaries", OptionValue::eTypeBoolean, true, true, nullptr,
-     nullptr,
+     {},
      "If true, LLDB will automatically display small structs in "
      "one-liner format (default: true)."},
-    {"auto-indent", OptionValue::eTypeBoolean, true, true, nullptr, nullptr,
+    {"auto-indent", OptionValue::eTypeBoolean, true, true, nullptr, {},
      "If true, LLDB will auto indent/outdent code. Currently only supported in "
      "the REPL (default: true)."},
-    {"print-decls", OptionValue::eTypeBoolean, true, true, nullptr, nullptr,
+    {"print-decls", OptionValue::eTypeBoolean, true, true, nullptr, {},
      "If true, LLDB will print the values of variables declared in an "
      "expression. Currently only supported in the REPL (default: true)."},
-    {"tab-size", OptionValue::eTypeUInt64, true, 4, nullptr, nullptr,
+    {"tab-size", OptionValue::eTypeUInt64, true, 4, nullptr, {},
      "The tab size to use when indenting code in multi-line input mode "
      "(default: 4)."},
     {"escape-non-printables", OptionValue::eTypeBoolean, true, true, nullptr,
-     nullptr,
+     {},
      "If true, LLDB will automatically escape non-printable and "
      "escape characters when formatting strings."},
     {"frame-format-unique", OptionValue::eTypeFormatEntity, true, 0,
-     DEFAULT_FRAME_FORMAT_NO_ARGS, nullptr,
+     DEFAULT_FRAME_FORMAT_NO_ARGS, {},
      "The default frame format string to use when displaying stack frame"
-     "information for threads from thread backtrace unique."},
-    {nullptr, OptionValue::eTypeInvalid, true, 0, nullptr, nullptr, nullptr}};
+     "information for threads from thread backtrace unique."}};
 
 enum {
   ePropertyAutoConfirm = 0,
@@ -293,6 +295,7 @@ enum {
   ePropertyStopDisassemblyDisplay,
   ePropertyStopLineCountAfter,
   ePropertyStopLineCountBefore,
+  ePropertyHighlightSource,
   ePropertyStopShowColumn,
   ePropertyStopShowColumnAnsiPrefix,
   ePropertyStopShowColumnAnsiSuffix,
@@ -410,6 +413,11 @@ void Debugger::SetPrompt(llvm::StringRef p) {
   GetCommandInterpreter().UpdatePrompt(new_prompt);
 }
 
+llvm::StringRef Debugger::GetReproducerPath() const {
+  auto &r = repro::Reproducer::Instance();
+  return r.GetReproducerPath().GetCString();
+}
+
 const FormatEntity::Entry *Debugger::GetThreadFormat() const {
   const uint32_t idx = ePropertyThreadFormat;
   return m_collection_sp->GetPropertyAtIndexAsFormatEntity(nullptr, idx);
@@ -467,20 +475,26 @@ bool Debugger::SetUseColor(bool b) {
   return ret;
 }
 
+bool Debugger::GetHighlightSource() const {
+  const uint32_t idx = ePropertyHighlightSource;
+  return m_collection_sp->GetPropertyAtIndexAsBoolean(
+      nullptr, idx, g_properties[idx].default_uint_value);
+}
+
 StopShowColumn Debugger::GetStopShowColumn() const {
   const uint32_t idx = ePropertyStopShowColumn;
   return (lldb::StopShowColumn)m_collection_sp->GetPropertyAtIndexAsEnumeration(
       nullptr, idx, g_properties[idx].default_uint_value);
 }
 
-const FormatEntity::Entry *Debugger::GetStopShowColumnAnsiPrefix() const {
+llvm::StringRef Debugger::GetStopShowColumnAnsiPrefix() const {
   const uint32_t idx = ePropertyStopShowColumnAnsiPrefix;
-  return m_collection_sp->GetPropertyAtIndexAsFormatEntity(nullptr, idx);
+  return m_collection_sp->GetPropertyAtIndexAsString(nullptr, idx, "");
 }
 
-const FormatEntity::Entry *Debugger::GetStopShowColumnAnsiSuffix() const {
+llvm::StringRef Debugger::GetStopShowColumnAnsiSuffix() const {
   const uint32_t idx = ePropertyStopShowColumnAnsiSuffix;
-  return m_collection_sp->GetPropertyAtIndexAsFormatEntity(nullptr, idx);
+  return m_collection_sp->GetPropertyAtIndexAsString(nullptr, idx, "");
 }
 
 uint32_t Debugger::GetStopSourceLineCount(bool before) const {
@@ -589,76 +603,79 @@ bool Debugger::LoadPlugin(const FileSpec &spec, Status &error) {
       return true;
     }
   } else {
-    // The g_load_plugin_callback is registered in SBDebugger::Initialize()
-    // and if the public API layer isn't available (code is linking against
-    // all of the internal LLDB static libraries), then we can't load plugins
+    // The g_load_plugin_callback is registered in SBDebugger::Initialize() and
+    // if the public API layer isn't available (code is linking against all of
+    // the internal LLDB static libraries), then we can't load plugins
     error.SetErrorString("Public API layer is not available");
   }
   return false;
 }
 
-static FileSpec::EnumerateDirectoryResult
+static FileSystem::EnumerateDirectoryResult
 LoadPluginCallback(void *baton, llvm::sys::fs::file_type ft,
-                   const FileSpec &file_spec) {
+                   llvm::StringRef path) {
   Status error;
 
-  static ConstString g_dylibext("dylib");
-  static ConstString g_solibext("so");
+  static ConstString g_dylibext(".dylib");
+  static ConstString g_solibext(".so");
 
   if (!baton)
-    return FileSpec::eEnumerateDirectoryResultQuit;
+    return FileSystem::eEnumerateDirectoryResultQuit;
 
   Debugger *debugger = (Debugger *)baton;
 
   namespace fs = llvm::sys::fs;
-  // If we have a regular file, a symbolic link or unknown file type, try
-  // and process the file. We must handle unknown as sometimes the directory
+  // If we have a regular file, a symbolic link or unknown file type, try and
+  // process the file. We must handle unknown as sometimes the directory
   // enumeration might be enumerating a file system that doesn't have correct
   // file type information.
   if (ft == fs::file_type::regular_file || ft == fs::file_type::symlink_file ||
       ft == fs::file_type::type_unknown) {
-    FileSpec plugin_file_spec(file_spec);
-    plugin_file_spec.ResolvePath();
+    FileSpec plugin_file_spec(path);
+    FileSystem::Instance().Resolve(plugin_file_spec);
 
     if (plugin_file_spec.GetFileNameExtension() != g_dylibext &&
         plugin_file_spec.GetFileNameExtension() != g_solibext) {
-      return FileSpec::eEnumerateDirectoryResultNext;
+      return FileSystem::eEnumerateDirectoryResultNext;
     }
 
     Status plugin_load_error;
     debugger->LoadPlugin(plugin_file_spec, plugin_load_error);
 
-    return FileSpec::eEnumerateDirectoryResultNext;
+    return FileSystem::eEnumerateDirectoryResultNext;
   } else if (ft == fs::file_type::directory_file ||
              ft == fs::file_type::symlink_file ||
              ft == fs::file_type::type_unknown) {
-    // Try and recurse into anything that a directory or symbolic link.
-    // We must also do this for unknown as sometimes the directory enumeration
-    // might be enumerating a file system that doesn't have correct file type
+    // Try and recurse into anything that a directory or symbolic link. We must
+    // also do this for unknown as sometimes the directory enumeration might be
+    // enumerating a file system that doesn't have correct file type
     // information.
-    return FileSpec::eEnumerateDirectoryResultEnter;
+    return FileSystem::eEnumerateDirectoryResultEnter;
   }
 
-  return FileSpec::eEnumerateDirectoryResultNext;
+  return FileSystem::eEnumerateDirectoryResultNext;
 }
 
 void Debugger::InstanceInitialize() {
-  FileSpec dir_spec;
   const bool find_directories = true;
   const bool find_files = true;
   const bool find_other = true;
   char dir_path[PATH_MAX];
-  if (HostInfo::GetLLDBPath(ePathTypeLLDBSystemPlugins, dir_spec)) {
-    if (dir_spec.Exists() && dir_spec.GetPath(dir_path, sizeof(dir_path))) {
-      FileSpec::EnumerateDirectory(dir_path, find_directories, find_files,
-                                   find_other, LoadPluginCallback, this);
+  if (FileSpec dir_spec = HostInfo::GetSystemPluginDir()) {
+    if (FileSystem::Instance().Exists(dir_spec) &&
+        dir_spec.GetPath(dir_path, sizeof(dir_path))) {
+      FileSystem::Instance().EnumerateDirectory(dir_path, find_directories,
+                                                find_files, find_other,
+                                                LoadPluginCallback, this);
     }
   }
 
-  if (HostInfo::GetLLDBPath(ePathTypeLLDBUserPlugins, dir_spec)) {
-    if (dir_spec.Exists() && dir_spec.GetPath(dir_path, sizeof(dir_path))) {
-      FileSpec::EnumerateDirectory(dir_path, find_directories, find_files,
-                                   find_other, LoadPluginCallback, this);
+  if (FileSpec dir_spec = HostInfo::GetUserPluginDir()) {
+    if (FileSystem::Instance().Exists(dir_spec) &&
+        dir_spec.GetPath(dir_path, sizeof(dir_path))) {
+      FileSystem::Instance().EnumerateDirectory(dir_path, find_directories,
+                                                find_files, find_other,
+                                                LoadPluginCallback, this);
     }
   }
 
@@ -774,6 +791,9 @@ Debugger::Debugger(lldb::LogOutputCallback log_callback, void *baton)
   m_collection_sp->AppendProperty(
       ConstString("platform"), ConstString("Platform settings."), true,
       Platform::GetGlobalPlatformProperties()->GetValueProperties());
+  m_collection_sp->AppendProperty(
+      ConstString("symbols"), ConstString("Symbol lookup and cache settings."),
+      true, ModuleList::GetGlobalModuleListProperties().GetValueProperties());
   if (m_command_interpreter_ap) {
     m_collection_sp->AppendProperty(
         ConstString("interpreter"),
@@ -790,16 +810,24 @@ Debugger::Debugger(lldb::LogOutputCallback log_callback, void *baton)
   const char *term = getenv("TERM");
   if (term && !strcmp(term, "dumb"))
     SetUseColor(false);
+  // Turn off use-color if we don't write to a terminal with color support.
+  if (!m_output_file_sp->GetFile().GetIsTerminalWithColors())
+    SetUseColor(false);
+
+#if defined(_WIN32) && defined(ENABLE_VIRTUAL_TERMINAL_PROCESSING)
+  // Enabling use of ANSI color codes because LLDB is using them to highlight
+  // text.
+  llvm::sys::Process::UseANSIEscapeCodes(true);
+#endif
 }
 
 Debugger::~Debugger() { Clear(); }
 
 void Debugger::Clear() {
   //----------------------------------------------------------------------
-  // Make sure we call this function only once. With the C++ global
-  // destructor chain having a list of debuggers and with code that can be
-  // running on other threads, we need to ensure this doesn't happen
-  // multiple times.
+  // Make sure we call this function only once. With the C++ global destructor
+  // chain having a list of debuggers and with code that can be running on
+  // other threads, we need to ensure this doesn't happen multiple times.
   //
   // The following functions call Debugger::Clear():
   //     Debugger::~Debugger();
@@ -824,8 +852,7 @@ void Debugger::Clear() {
     m_broadcaster_manager_sp->Clear();
 
     // Close the input file _before_ we close the input read communications
-    // class
-    // as it does NOT own the input file, our m_input_file does.
+    // class as it does NOT own the input file, our m_input_file does.
     m_terminal_state.Clear();
     if (m_input_file_sp)
       m_input_file_sp->GetFile().Close();
@@ -861,8 +888,8 @@ void Debugger::SetInputFileHandle(FILE *fh, bool tranfer_ownership) {
   if (!in_file.IsValid())
     in_file.SetStream(stdin, true);
 
-  // Save away the terminal state if that is relevant, so that we can restore it
-  // in RestoreInputState.
+  // Save away the terminal state if that is relevant, so that we can restore
+  // it in RestoreInputState.
   SaveInputTerminalState();
 }
 
@@ -876,8 +903,8 @@ void Debugger::SetOutputFileHandle(FILE *fh, bool tranfer_ownership) {
   if (!out_file.IsValid())
     out_file.SetStream(stdout, false);
 
-  // do not create the ScriptInterpreter just for setting the output file handle
-  // as the constructor will know how to do the right thing on its own
+  // do not create the ScriptInterpreter just for setting the output file
+  // handle as the constructor will know how to do the right thing on its own
   const bool can_create = false;
   ScriptInterpreter *script_interpreter =
       GetCommandInterpreter().GetScriptInterpreter(can_create);
@@ -1023,11 +1050,10 @@ void Debugger::RunIOHandler(const IOHandlerSP &reader_sp) {
 void Debugger::AdoptTopIOHandlerFilesIfInvalid(StreamFileSP &in,
                                                StreamFileSP &out,
                                                StreamFileSP &err) {
-  // Before an IOHandler runs, it must have in/out/err streams.
-  // This function is called when one ore more of the streams
-  // are nullptr. We use the top input reader's in/out/err streams,
-  // or fall back to the debugger file handles, or we fall back
-  // onto stdin/stdout/stderr as a last resort.
+  // Before an IOHandler runs, it must have in/out/err streams. This function
+  // is called when one ore more of the streams are nullptr. We use the top
+  // input reader's in/out/err streams, or fall back to the debugger file
+  // handles, or we fall back onto stdin/stdout/stderr as a last resort.
 
   std::lock_guard<std::recursive_mutex> guard(m_input_reader_stack.GetMutex());
   IOHandlerSP top_reader_sp(m_input_reader_stack.Top());
@@ -1066,7 +1092,8 @@ void Debugger::AdoptTopIOHandlerFilesIfInvalid(StreamFileSP &in,
   }
 }
 
-void Debugger::PushIOHandler(const IOHandlerSP &reader_sp) {
+void Debugger::PushIOHandler(const IOHandlerSP &reader_sp,
+                             bool cancel_top_handler) {
   if (!reader_sp)
     return;
 
@@ -1083,11 +1110,12 @@ void Debugger::PushIOHandler(const IOHandlerSP &reader_sp) {
   m_input_reader_stack.Push(reader_sp);
   reader_sp->Activate();
 
-  // Interrupt the top input reader to it will exit its Run() function
-  // and let this new input reader take over
+  // Interrupt the top input reader to it will exit its Run() function and let
+  // this new input reader take over
   if (top_reader_sp) {
     top_reader_sp->Deactivate();
-    top_reader_sp->Cancel();
+    if (cancel_top_handler)
+      top_reader_sp->Cancel();
   }
 }
 
@@ -1097,8 +1125,8 @@ bool Debugger::PopIOHandler(const IOHandlerSP &pop_reader_sp) {
 
   std::lock_guard<std::recursive_mutex> guard(m_input_reader_stack.GetMutex());
 
-  // The reader on the stop of the stack is done, so let the next
-  // read on the stack refresh its prompt and if there is one...
+  // The reader on the stop of the stack is done, so let the next read on the
+  // stack refresh its prompt and if there is one...
   if (m_input_reader_stack.IsEmpty())
     return false;
 
@@ -1193,8 +1221,8 @@ bool Debugger::FormatDisassemblerAddress(const FormatEntity::Entry *format,
       }
     }
   }
-  // The first context on a list of instructions will have a prev_sc that
-  // has no Function or Symbol -- if SymbolContext had an IsValid() method, it
+  // The first context on a list of instructions will have a prev_sc that has
+  // no Function or Symbol -- if SymbolContext had an IsValid() method, it
   // would return false.  But we do get a prev_sc pointer.
   if ((sc && (sc->function || sc->symbol)) && prev_sc &&
       (prev_sc->function == nullptr && prev_sc->symbol == nullptr)) {
@@ -1238,8 +1266,8 @@ bool Debugger::EnableLog(llvm::StringRef channel,
       if (log_options & LLDB_LOG_OPTION_APPEND)
         flags |= llvm::sys::fs::F_Append;
       int FD;
-      if (std::error_code ec =
-              llvm::sys::fs::openFileForWrite(log_file, FD, flags)) {
+      if (std::error_code ec = llvm::sys::fs::openFileForWrite(
+              log_file, FD, llvm::sys::fs::CD_CreateAlways, flags)) {
         error_stream << "Unable to open log file: " << ec.message();
         return false;
       }
@@ -1460,8 +1488,8 @@ void Debugger::HandleProcessEvent(const EventSP &event_sp) {
 }
 
 void Debugger::HandleThreadEvent(const EventSP &event_sp) {
-  // At present the only thread event we handle is the Frame Changed event,
-  // and all we do for that is just reprint the thread status for that thread.
+  // At present the only thread event we handle is the Frame Changed event, and
+  // all we do for that is just reprint the thread status for that thread.
   using namespace lldb;
   const uint32_t event_type = event_sp->GetType();
   const bool stop_format = true;
@@ -1514,8 +1542,8 @@ void Debugger::DefaultEventHandler() {
           CommandInterpreter::eBroadcastBitAsynchronousOutputData |
           CommandInterpreter::eBroadcastBitAsynchronousErrorData);
 
-  // Let the thread that spawned us know that we have started up and
-  // that we are now listening to all required events so no events get missed
+  // Let the thread that spawned us know that we have started up and that we
+  // are now listening to all required events so no events get missed
   m_sync_broadcaster.BroadcastEvent(eBroadcastBitEventThreadIsListening);
 
   bool done = false;
@@ -1580,27 +1608,28 @@ lldb::thread_result_t Debugger::EventHandlerThread(lldb::thread_arg_t arg) {
 
 bool Debugger::StartEventHandlerThread() {
   if (!m_event_handler_thread.IsJoinable()) {
-    // We must synchronize with the DefaultEventHandler() thread to ensure
-    // it is up and running and listening to events before we return from
-    // this function. We do this by listening to events for the
+    // We must synchronize with the DefaultEventHandler() thread to ensure it
+    // is up and running and listening to events before we return from this
+    // function. We do this by listening to events for the
     // eBroadcastBitEventThreadIsListening from the m_sync_broadcaster
-    ListenerSP listener_sp(
-        Listener::MakeListener("lldb.debugger.event-handler"));
+    ConstString full_name("lldb.debugger.event-handler");
+    ListenerSP listener_sp(Listener::MakeListener(full_name.AsCString()));
     listener_sp->StartListeningForEvents(&m_sync_broadcaster,
                                          eBroadcastBitEventThreadIsListening);
 
-    // Use larger 8MB stack for this thread
-    m_event_handler_thread = ThreadLauncher::LaunchThread(
-        "lldb.debugger.event-handler", EventHandlerThread, this, nullptr,
-        g_debugger_event_thread_stack_bytes);
+    auto thread_name =
+        full_name.GetLength() < llvm::get_max_thread_name_length() ?
+        full_name.AsCString() : "dbg.evt-handler";
 
-    // Make sure DefaultEventHandler() is running and listening to events before
-    // we return
-    // from this function. We are only listening for events of type
-    // eBroadcastBitEventThreadIsListening so we don't need to check the event,
-    // we just need
-    // to wait an infinite amount of time for it (nullptr timeout as the first
-    // parameter)
+    // Use larger 8MB stack for this thread
+    m_event_handler_thread = ThreadLauncher::LaunchThread(thread_name,
+        EventHandlerThread, this, nullptr, g_debugger_event_thread_stack_bytes);
+
+    // Make sure DefaultEventHandler() is running and listening to events
+    // before we return from this function. We are only listening for events of
+    // type eBroadcastBitEventThreadIsListening so we don't need to check the
+    // event, we just need to wait an infinite amount of time for it (nullptr
+    // timeout as the first parameter)
     lldb::EventSP event_sp;
     listener_sp->GetEvent(event_sp, llvm::None);
   }

@@ -11,11 +11,11 @@ MAN=		install.1
 .PATH:		${SRCTOP}/contrib/mtree
 CFLAGS+=	-I${SRCTOP}/contrib/mtree
 CFLAGS+=	-I${SRCTOP}/lib/libnetbsd
+CFLAGS+=	-DHAVE_STRUCT_STAT_ST_FLAGS=1
 
 LIBADD=	md
 
-.if ${MK_TESTS} != "no"
-SUBDIR+=	tests
-.endif
+HAS_TESTS=
+SUBDIR.${MK_TESTS}+= tests
 
 .include <bsd.prog.mk>

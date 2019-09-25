@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2015-2016 Ruslan Bukin <br@bsdpad.com>
+ * Copyright (c) 2015-2017 Ruslan Bukin <br@bsdpad.com>
  * All rights reserved.
  *
  * Portions of this software were developed by SRI International and the
@@ -33,70 +33,11 @@
  */
 
 #include <machine/asm.h>
-#include <machine/param.h>
 __FBSDID("$FreeBSD$");
 
 	.text
 	.align	2
 
-.Lpage_mask:
-	.word	PAGE_MASK
-
 ENTRY(riscv_nullop)
 	ret
 END(riscv_nullop)
-
-/*
- * Generic functions to read/modify/write the internal coprocessor registers
- */
-
-ENTRY(riscv_tlb_flushID)
-	sfence.vm
-	ret
-END(riscv_tlb_flushID)
-
-ENTRY(riscv_tlb_flushID_SE)
-	sfence.vm
-	ret
-END(riscv_tlb_flushID_SE)
-
-/*
- * void riscv_dcache_wb_range(vm_offset_t, vm_size_t)
- */
-ENTRY(riscv_dcache_wb_range)
-	sfence.vm
-	ret
-END(riscv_dcache_wb_range)
-
-/*
- * void riscv_dcache_wbinv_range(vm_offset_t, vm_size_t)
- */
-ENTRY(riscv_dcache_wbinv_range)
-	sfence.vm
-	ret
-END(riscv_dcache_wbinv_range)
-
-/*
- * void riscv_dcache_inv_range(vm_offset_t, vm_size_t)
- */
-ENTRY(riscv_dcache_inv_range)
-	sfence.vm
-	ret
-END(riscv_dcache_inv_range)
-
-/*
- * void riscv_idcache_wbinv_range(vm_offset_t, vm_size_t)
- */
-ENTRY(riscv_idcache_wbinv_range)
-	fence.i
-	sfence.vm
-	ret
-END(riscv_idcache_wbinv_range)
-
-/*
- * void riscv_icache_sync_range(vm_offset_t, vm_size_t)
- */
-ENTRY(riscv_icache_sync_range)
-	fence.i
-	ret
-END(riscv_icache_sync_range)

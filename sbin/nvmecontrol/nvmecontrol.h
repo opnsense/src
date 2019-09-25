@@ -32,63 +32,52 @@
 #define __NVMECONTROL_H__
 
 #include <dev/nvme/nvme.h>
+#include "comnd.h"
 
-typedef void (*nvme_fn_t)(int argc, char *argv[]);
+typedef void (*print_fn_t)(const struct nvme_controller_data *cdata, void *buf, uint32_t size);
 
-struct nvme_function {
-	const char	*name;
-	nvme_fn_t	fn;
-	const char	*usage;
+struct logpage_function {
+        SLIST_ENTRY(logpage_function)   link;
+	uint8_t		log_page;
+	const char     *vendor;
+	const char     *name;
+	print_fn_t	print_fn;
+	size_t		size;
 };
 
+#define NVME_LOGPAGE(unique, lp, vend, nam, fn, sz)			\
+	static struct logpage_function unique ## _lpf = {		\
+		.log_page = lp,						\
+		.vendor = vend,						\
+		.name = nam,						\
+		.print_fn = fn, 					\
+		.size = sz,						\
+	} ;								\
+        static void logpage_reg_##unique(void) __attribute__((constructor)); \
+        static void logpage_reg_##unique(void) { logpage_register(&unique##_lpf); }
+
+#define DEFAULT_SIZE	(4096)
+struct kv_name {
+	uint32_t key;
+	const char *name;
+};
+
+const char *kv_lookup(const struct kv_name *kv, size_t kv_count, uint32_t key);
+
+void logpage_register(struct logpage_function *p);
 #define NVME_CTRLR_PREFIX	"nvme"
 #define NVME_NS_PREFIX		"ns"
 
-#define DEVLIST_USAGE							       \
-"       nvmecontrol devlist\n"
-
-#define IDENTIFY_USAGE							       \
-"       nvmecontrol identify [-x [-v]] <controller id|namespace id>\n"
-
-#define PERFTEST_USAGE							       \
-"       nvmecontrol perftest <-n num_threads> <-o read|write>\n"	       \
-"                            <-s size_in_bytes> <-t time_in_seconds>\n"	       \
-"                            <-i intr|wait> [-f refthread] [-p]\n"	       \
-"                            <namespace id>\n"
-
-#define RESET_USAGE							       \
-"       nvmecontrol reset <controller id>\n"
-
-#define LOGPAGE_USAGE							       \
-"       nvmecontrol logpage <-p page_id> [-b] [-v vendor] [-x] <controller id|namespace id>\n"  \
-
-#define FIRMWARE_USAGE							       \
-"       nvmecontrol firmware [-s slot] [-f path_to_firmware] [-a] <controller id>\n"
-
-#define POWER_USAGE							       \
-"       nvmecontrol power [-l] [-p new-state [-w workload-hint]] <controller id>\n"
-
-#define WDC_USAGE							       \
-"       nvmecontrol wdc (cap-diag|drive-log|get-crash-dump|purge|purge-montior)\n"
-
-void devlist(int argc, char *argv[]);
-void identify(int argc, char *argv[]);
-void perftest(int argc, char *argv[]);
-void reset(int argc, char *argv[]);
-void logpage(int argc, char *argv[]);
-void firmware(int argc, char *argv[]);
-void power(int argc, char *argv[]);
-void wdc(int argc, char *argv[]);
-
 int open_dev(const char *str, int *fd, int show_error, int exit_on_error);
-void parse_ns_str(const char *ns_str, char *ctrlr_str, int *nsid);
+void get_nsid(int fd, char **ctrlr_str, uint32_t *nsid);
 void read_controller_data(int fd, struct nvme_controller_data *cdata);
-void read_namespace_data(int fd, int nsid, struct nvme_namespace_data *nsdata);
+void read_namespace_data(int fd, uint32_t nsid, struct nvme_namespace_data *nsdata);
 void print_hex(void *data, uint32_t length);
-void read_logpage(int fd, uint8_t log_page, int nsid, void *payload,
-    uint32_t payload_size);
-void gen_usage(struct nvme_function *);
-void dispatch(int argc, char *argv[], struct nvme_function *f);
+void print_namespace(struct nvme_namespace_data *nsdata);
+void read_logpage(int fd, uint8_t log_page, uint32_t nsid, uint8_t lsp,
+    uint16_t lsi, uint8_t rae, void *payload, uint32_t payload_size);
+void print_temp(uint16_t t);
+void print_intel_add_smart(const struct nvme_controller_data *cdata __unused, void *buf, uint32_t size __unused);
 
 /* Utility Routines */
 /*
@@ -112,5 +101,4 @@ to128(void *p)
 
 uint64_t le48dec(const void *pp);
 char * uint128_to_str(uint128_t u, char *buf, size_t buflen);
-
 #endif

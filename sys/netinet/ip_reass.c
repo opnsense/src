@@ -12,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -74,9 +74,9 @@ struct ipqbucket {
 	int			 count;
 };
 
-static VNET_DEFINE(struct ipqbucket, ipq[IPREASS_NHASH]);
+VNET_DEFINE_STATIC(struct ipqbucket, ipq[IPREASS_NHASH]);
 #define	V_ipq		VNET(ipq)
-static VNET_DEFINE(uint32_t, ipq_hashseed);
+VNET_DEFINE_STATIC(uint32_t, ipq_hashseed);
 #define V_ipq_hashseed   VNET(ipq_hashseed)
 
 #define	IPQ_LOCK(i)	mtx_lock(&V_ipq[i].lock)
@@ -84,7 +84,7 @@ static VNET_DEFINE(uint32_t, ipq_hashseed);
 #define	IPQ_UNLOCK(i)	mtx_unlock(&V_ipq[i].lock)
 #define	IPQ_LOCK_ASSERT(i)	mtx_assert(&V_ipq[i].lock, MA_OWNED)
 
-static VNET_DEFINE(int, ipreass_maxbucketsize);
+VNET_DEFINE_STATIC(int, ipreass_maxbucketsize);
 #define	V_ipreass_maxbucketsize	VNET(ipreass_maxbucketsize)
 
 void		ipreass_init(void);
@@ -141,7 +141,7 @@ SYSCTL_UINT(_net_inet_ip, OID_AUTO, curfrags, CTLFLAG_RD,
     __DEVOLATILE(u_int *, &nfrags), 0,
     "Current number of IPv4 fragments across all reassembly queues");
 
-static VNET_DEFINE(uma_zone_t, ipq_zone);
+VNET_DEFINE_STATIC(uma_zone_t, ipq_zone);
 #define	V_ipq_zone	VNET(ipq_zone)
 SYSCTL_PROC(_net_inet_ip, OID_AUTO, maxfragpackets, CTLFLAG_VNET |
     CTLTYPE_INT | CTLFLAG_RW, NULL, 0, sysctl_maxfragpackets, "I",
@@ -150,10 +150,10 @@ SYSCTL_UMA_CUR(_net_inet_ip, OID_AUTO, fragpackets, CTLFLAG_VNET,
     &VNET_NAME(ipq_zone),
     "Current number of IPv4 fragment reassembly queue entries");
 
-static VNET_DEFINE(int, noreass);
+VNET_DEFINE_STATIC(int, noreass);
 #define	V_noreass	VNET(noreass)
 
-static VNET_DEFINE(int, maxfragsperpacket);
+VNET_DEFINE_STATIC(int, maxfragsperpacket);
 #define	V_maxfragsperpacket	VNET(maxfragsperpacket)
 SYSCTL_INT(_net_inet_ip, OID_AUTO, maxfragsperpacket, CTLFLAG_VNET | CTLFLAG_RW,
     &VNET_NAME(maxfragsperpacket), 0,
@@ -196,7 +196,7 @@ ip_reass(struct mbuf *m)
 	 */
 	tmpmax = maxfrags;
 	if (V_noreass == 1 || V_maxfragsperpacket == 0 ||
-	    (tmpmax >= 0 && nfrags >= (u_int)tmpmax)) {
+	    (tmpmax >= 0 && atomic_load_int(&nfrags) >= (u_int)tmpmax)) {
 		IPSTAT_INC(ips_fragments);
 		IPSTAT_INC(ips_fragdropped);
 		m_freem(m);
@@ -211,21 +211,33 @@ ip_reass(struct mbuf *m)
 	 * convert offset of this to bytes.
 	 */
 	ip->ip_len = htons(ntohs(ip->ip_len) - hlen);
-	if (ip->ip_off & htons(IP_MF)) {
-		/*
-		 * Make sure that fragments have a data length
-		 * that's a non-zero multiple of 8 bytes.
-		 */
-		if (ip->ip_len == htons(0) || (ntohs(ip->ip_len) & 0x7) != 0) {
-			IPSTAT_INC(ips_toosmall); /* XXX */
-			IPSTAT_INC(ips_fragdropped);
-			m_freem(m);
-			return (NULL);
-		}
+	/*
+	 * Make sure that fragments have a data length
+	 * that's a non-zero multiple of 8 bytes, unless
+	 * this is the last fragment.
+	 */
+	if (ip->ip_len == htons(0) ||
+	    ((ip->ip_off & htons(IP_MF)) && (ntohs(ip->ip_len) & 0x7) != 0)) {
+		IPSTAT_INC(ips_toosmall); /* XXX */
+		IPSTAT_INC(ips_fragdropped);
+		m_freem(m);
+		return (NULL);
+	}
+	if (ip->ip_off & htons(IP_MF))
 		m->m_flags |= M_IP_FRAG;
-	} else
+	else
 		m->m_flags &= ~M_IP_FRAG;
 	ip->ip_off = htons(ntohs(ip->ip_off) << 3);
+
+	/*
+	 * Make sure the fragment lies within a packet of valid size.
+	 */
+	if (ntohs(ip->ip_len) + ntohs(ip->ip_off) > IP_MAXPACKET) {
+		IPSTAT_INC(ips_toolong);
+		IPSTAT_INC(ips_fragdropped);
+		m_freem(m);
+		return (NULL);
+	}
 
 	/*
 	 * Attempt reassembly; if it succeeds, proceed.
@@ -291,9 +303,28 @@ ip_reass(struct mbuf *m)
 		fp->ipq_src = ip->ip_src;
 		fp->ipq_dst = ip->ip_dst;
 		fp->ipq_frags = m;
+		if (m->m_flags & M_IP_FRAG)
+			fp->ipq_maxoff = -1;
+		else
+			fp->ipq_maxoff = ntohs(ip->ip_off) + ntohs(ip->ip_len);
 		m->m_nextpkt = NULL;
 		goto done;
 	} else {
+		/*
+		 * If we already saw the last fragment, make sure
+		 * this fragment's offset looks sane. Otherwise, if
+		 * this is the last fragment, record its endpoint.
+		 */
+		if (fp->ipq_maxoff > 0) {
+			i = ntohs(ip->ip_off) + ntohs(ip->ip_len);
+			if (((m->m_flags & M_IP_FRAG) && i >= fp->ipq_maxoff) ||
+			    ((m->m_flags & M_IP_FRAG) == 0 &&
+			    i != fp->ipq_maxoff)) {
+				fp = NULL;
+				goto dropfrag;
+			}
+		} else if ((m->m_flags & M_IP_FRAG) == 0)
+			fp->ipq_maxoff = ntohs(ip->ip_off) + ntohs(ip->ip_len);
 		fp->ipq_nfrags++;
 		atomic_add_int(&nfrags, 1);
 #ifdef MAC

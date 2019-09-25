@@ -10,8 +10,6 @@
 #ifndef SymbolFileDWARF_SymbolFileDWARF_h_
 #define SymbolFileDWARF_SymbolFileDWARF_h_
 
-// C Includes
-// C++ Includes
 #include <list>
 #include <map>
 #include <mutex>
@@ -19,7 +17,6 @@
 #include <unordered_map>
 #include <vector>
 
-// Other libraries and framework includes
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/Threading.h"
 
@@ -35,11 +32,9 @@
 #include "lldb/Utility/ConstString.h"
 #include "lldb/lldb-private.h"
 
-// Project includes
 #include "DWARFDataExtractor.h"
 #include "DWARFDefines.h"
-#include "HashedNameToDIE.h"
-#include "NameToDIE.h"
+#include "DWARFIndex.h"
 #include "UniqueDWARFASTType.h"
 
 //----------------------------------------------------------------------
@@ -54,8 +49,7 @@ class DWARFDebugAranges;
 class DWARFDebugInfo;
 class DWARFDebugInfoEntry;
 class DWARFDebugLine;
-class DWARFDebugPubnames;
-class DWARFDebugRanges;
+class DWARFDebugRangesBase;
 class DWARFDeclContext;
 class DWARFDIECollection;
 class DWARFFormValue;
@@ -72,12 +66,9 @@ public:
   friend class SymbolFileDWARFDwo;
   friend class DebugMapModule;
   friend struct DIERef;
-  friend class DWARFCompileUnit;
+  friend class DWARFUnit;
   friend class DWARFDIE;
   friend class DWARFASTParserClang;
-  friend class DWARFASTParserGo;
-  friend class DWARFASTParserJava;
-  friend class DWARFASTParserOCaml;
 
   //------------------------------------------------------------------
   // Static Functions
@@ -116,36 +107,34 @@ public:
   lldb::CompUnitSP ParseCompileUnitAtIndex(uint32_t index) override;
 
   lldb::LanguageType
-  ParseCompileUnitLanguage(const lldb_private::SymbolContext &sc) override;
+  ParseLanguage(lldb_private::CompileUnit &comp_unit) override;
 
-  size_t
-  ParseCompileUnitFunctions(const lldb_private::SymbolContext &sc) override;
+  size_t ParseFunctions(lldb_private::CompileUnit &comp_unit) override;
 
-  bool
-  ParseCompileUnitLineTable(const lldb_private::SymbolContext &sc) override;
+  bool ParseLineTable(lldb_private::CompileUnit &comp_unit) override;
 
-  bool
-  ParseCompileUnitDebugMacros(const lldb_private::SymbolContext &sc) override;
+  bool ParseDebugMacros(lldb_private::CompileUnit &comp_unit) override;
 
-  bool ParseCompileUnitSupportFiles(
-      const lldb_private::SymbolContext &sc,
-      lldb_private::FileSpecList &support_files) override;
+  bool ParseSupportFiles(lldb_private::CompileUnit &comp_unit,
+                         lldb_private::FileSpecList &support_files) override;
 
-  bool
-  ParseCompileUnitIsOptimized(const lldb_private::SymbolContext &sc) override;
+  bool ParseIsOptimized(lldb_private::CompileUnit &comp_unit) override;
+
+  size_t ParseTypes(lldb_private::CompileUnit &comp_unit) override;
 
   bool ParseImportedModules(
       const lldb_private::SymbolContext &sc,
       std::vector<lldb_private::ConstString> &imported_modules) override;
 
-  size_t ParseFunctionBlocks(const lldb_private::SymbolContext &sc) override;
-
-  size_t ParseTypes(const lldb_private::SymbolContext &sc) override;
+  size_t ParseBlocksRecursive(lldb_private::Function &func) override;
 
   size_t
   ParseVariablesForContext(const lldb_private::SymbolContext &sc) override;
 
   lldb_private::Type *ResolveTypeUID(lldb::user_id_t type_uid) override;
+  llvm::Optional<ArrayInfo> GetDynamicArrayInfoForUID(
+      lldb::user_id_t type_uid,
+      const lldb_private::ExecutionContext *exe_ctx) override;
 
   bool CompleteType(lldb_private::CompilerType &compiler_type) override;
 
@@ -170,29 +159,30 @@ public:
   ParseDeclsForContext(lldb_private::CompilerDeclContext decl_ctx) override;
 
   uint32_t ResolveSymbolContext(const lldb_private::Address &so_addr,
-                                uint32_t resolve_scope,
+                                lldb::SymbolContextItem resolve_scope,
                                 lldb_private::SymbolContext &sc) override;
 
   uint32_t
   ResolveSymbolContext(const lldb_private::FileSpec &file_spec, uint32_t line,
-                       bool check_inlines, uint32_t resolve_scope,
+                       bool check_inlines,
+                       lldb::SymbolContextItem resolve_scope,
                        lldb_private::SymbolContextList &sc_list) override;
 
   uint32_t
   FindGlobalVariables(const lldb_private::ConstString &name,
                       const lldb_private::CompilerDeclContext *parent_decl_ctx,
-                      bool append, uint32_t max_matches,
+                      uint32_t max_matches,
                       lldb_private::VariableList &variables) override;
 
   uint32_t FindGlobalVariables(const lldb_private::RegularExpression &regex,
-                               bool append, uint32_t max_matches,
+                               uint32_t max_matches,
                                lldb_private::VariableList &variables) override;
 
   uint32_t
   FindFunctions(const lldb_private::ConstString &name,
                 const lldb_private::CompilerDeclContext *parent_decl_ctx,
-                uint32_t name_type_mask, bool include_inlines, bool append,
-                lldb_private::SymbolContextList &sc_list) override;
+                lldb::FunctionNameType name_type_mask, bool include_inlines,
+                bool append, lldb_private::SymbolContextList &sc_list) override;
 
   uint32_t FindFunctions(const lldb_private::RegularExpression &regex,
                          bool include_inlines, bool append,
@@ -203,8 +193,7 @@ public:
       std::vector<lldb_private::ConstString> &mangled_names) override;
 
   uint32_t
-  FindTypes(const lldb_private::SymbolContext &sc,
-            const lldb_private::ConstString &name,
+  FindTypes(const lldb_private::ConstString &name,
             const lldb_private::CompilerDeclContext *parent_decl_ctx,
             bool append, uint32_t max_matches,
             llvm::DenseSet<lldb_private::SymbolFile *> &searched_symbol_files,
@@ -216,18 +205,19 @@ public:
   lldb_private::TypeList *GetTypeList() override;
 
   size_t GetTypes(lldb_private::SymbolContextScope *sc_scope,
-                  uint32_t type_mask,
+                  lldb::TypeClass type_mask,
                   lldb_private::TypeList &type_list) override;
 
   lldb_private::TypeSystem *
   GetTypeSystemForLanguage(lldb::LanguageType language) override;
 
   lldb_private::CompilerDeclContext FindNamespace(
-      const lldb_private::SymbolContext &sc,
       const lldb_private::ConstString &name,
       const lldb_private::CompilerDeclContext *parent_decl_ctx) override;
 
   void PreloadSymbols() override;
+
+  std::recursive_mutex &GetModuleMutex() const override;
 
   //------------------------------------------------------------------
   // PluginInterface protocol
@@ -236,21 +226,26 @@ public:
 
   uint32_t GetPluginVersion() override;
 
-  const lldb_private::DWARFDataExtractor &get_debug_abbrev_data();
-  const lldb_private::DWARFDataExtractor &get_debug_addr_data();
+  virtual const lldb_private::DWARFDataExtractor &get_debug_abbrev_data();
+  virtual const lldb_private::DWARFDataExtractor &get_debug_addr_data();
   const lldb_private::DWARFDataExtractor &get_debug_aranges_data();
   const lldb_private::DWARFDataExtractor &get_debug_frame_data();
-  const lldb_private::DWARFDataExtractor &get_debug_info_data();
+  virtual const lldb_private::DWARFDataExtractor &get_debug_info_data();
   const lldb_private::DWARFDataExtractor &get_debug_line_data();
+  const lldb_private::DWARFDataExtractor &get_debug_line_str_data();
   const lldb_private::DWARFDataExtractor &get_debug_macro_data();
   const lldb_private::DWARFDataExtractor &get_debug_loc_data();
+  const lldb_private::DWARFDataExtractor &get_debug_loclists_data();
   const lldb_private::DWARFDataExtractor &get_debug_ranges_data();
-  const lldb_private::DWARFDataExtractor &get_debug_str_data();
-  const lldb_private::DWARFDataExtractor &get_debug_str_offsets_data();
+  const lldb_private::DWARFDataExtractor &get_debug_rnglists_data();
+  virtual const lldb_private::DWARFDataExtractor &get_debug_str_data();
+  virtual const lldb_private::DWARFDataExtractor &get_debug_str_offsets_data();
+  const lldb_private::DWARFDataExtractor &get_debug_types_data();
   const lldb_private::DWARFDataExtractor &get_apple_names_data();
   const lldb_private::DWARFDataExtractor &get_apple_types_data();
   const lldb_private::DWARFDataExtractor &get_apple_namespaces_data();
   const lldb_private::DWARFDataExtractor &get_apple_objc_data();
+  const lldb_private::DWARFDataExtractor &get_gnu_debugaltlink();
 
   DWARFDebugAbbrev *DebugAbbrev();
 
@@ -260,9 +255,11 @@ public:
 
   const DWARFDebugInfo *DebugInfo() const;
 
-  DWARFDebugRanges *DebugRanges();
+  DWARFDebugRangesBase *DebugRanges();
 
-  const DWARFDebugRanges *DebugRanges() const;
+  const DWARFDebugRangesBase *DebugRanges() const;
+
+  const lldb_private::DWARFDataExtractor &DebugLocData();
 
   static bool SupportedVersion(uint16_t version);
 
@@ -273,19 +270,19 @@ public:
   HasForwardDeclForClangType(const lldb_private::CompilerType &compiler_type);
 
   lldb_private::CompileUnit *
-  GetCompUnitForDWARFCompUnit(DWARFCompileUnit *dwarf_cu,
+  GetCompUnitForDWARFCompUnit(DWARFUnit *dwarf_cu,
                               uint32_t cu_idx = UINT32_MAX);
 
   virtual size_t GetObjCMethodDIEOffsets(lldb_private::ConstString class_name,
                                          DIEArray &method_die_offsets);
 
-  bool Supports_DW_AT_APPLE_objc_complete_type(DWARFCompileUnit *cu);
+  bool Supports_DW_AT_APPLE_objc_complete_type(DWARFUnit *cu);
 
   lldb_private::DebugMacrosSP ParseDebugMacros(lldb::offset_t *offset);
 
   static DWARFDIE GetParentSymbolContextDIE(const DWARFDIE &die);
 
-  virtual lldb::CompUnitSP ParseCompileUnit(DWARFCompileUnit *dwarf_cu,
+  virtual lldb::CompUnitSP ParseCompileUnit(DWARFUnit *dwarf_cu,
                                             uint32_t cu_idx);
 
   virtual lldb_private::DWARFExpression::LocationListFormat
@@ -293,16 +290,35 @@ public:
 
   lldb::ModuleSP GetDWOModule(lldb_private::ConstString name);
 
+  typedef std::map<lldb_private::ConstString, lldb::ModuleSP>
+      ExternalTypeModuleMap;
+
+  /// Return the list of Clang modules imported by this SymbolFile.
+  const ExternalTypeModuleMap& getExternalTypeModules() const {
+      return m_external_type_modules;
+  }
+
   virtual DWARFDIE GetDIE(const DIERef &die_ref);
 
   virtual std::unique_ptr<SymbolFileDWARFDwo>
-  GetDwoSymbolFileForCompileUnit(DWARFCompileUnit &dwarf_cu,
+  GetDwoSymbolFileForCompileUnit(DWARFUnit &dwarf_cu,
                                  const DWARFDebugInfoEntry &cu_die);
 
   // For regular SymbolFileDWARF instances the method returns nullptr,
   // for the instances of the subclass SymbolFileDWARFDwo
   // the method returns a pointer to the base compile unit.
-  virtual DWARFCompileUnit *GetBaseCompileUnit();
+  virtual DWARFUnit *GetBaseCompileUnit();
+
+  static bool
+  DIEInDeclContext(const lldb_private::CompilerDeclContext *parent_decl_ctx,
+                   const DWARFDIE &die);
+
+  std::vector<lldb_private::CallEdge>
+  ParseCallEdgesInFunction(UserID func_id) override;
+
+  void Dump(lldb_private::Stream &s) override;
+
+  void DumpClangAST(lldb_private::Stream &s) override;
 
 protected:
   typedef llvm::DenseMap<const DWARFDebugInfoEntry *, lldb_private::Type *>
@@ -331,25 +347,20 @@ protected:
   bool DeclContextMatchesThisSymbolFile(
       const lldb_private::CompilerDeclContext *decl_ctx);
 
-  bool
-  DIEInDeclContext(const lldb_private::CompilerDeclContext *parent_decl_ctx,
-                   const DWARFDIE &die);
-
-  virtual DWARFCompileUnit *
+  virtual DWARFUnit *
   GetDWARFCompileUnit(lldb_private::CompileUnit *comp_unit);
 
-  DWARFCompileUnit *GetNextUnparsedDWARFCompileUnit(DWARFCompileUnit *prev_cu);
+  DWARFUnit *GetNextUnparsedDWARFCompileUnit(DWARFUnit *prev_cu);
 
   bool GetFunction(const DWARFDIE &die, lldb_private::SymbolContext &sc);
 
-  lldb_private::Function *
-  ParseCompileUnitFunction(const lldb_private::SymbolContext &sc,
-                           const DWARFDIE &die);
+  lldb_private::Function *ParseFunction(lldb_private::CompileUnit &comp_unit,
+                                        const DWARFDIE &die);
 
-  size_t ParseFunctionBlocks(const lldb_private::SymbolContext &sc,
-                             lldb_private::Block *parent_block,
-                             const DWARFDIE &die,
-                             lldb::addr_t subprogram_low_pc, uint32_t depth);
+  size_t ParseBlocksRecursive(lldb_private::CompileUnit &comp_unit,
+                              lldb_private::Block *parent_block,
+                              const DWARFDIE &die,
+                              lldb::addr_t subprogram_low_pc, uint32_t depth);
 
   size_t ParseTypes(const lldb_private::SymbolContext &sc, const DWARFDIE &die,
                     bool parse_siblings, bool parse_children);
@@ -375,24 +386,8 @@ protected:
   bool ClassOrStructIsVirtual(const DWARFDIE &die);
 
   // Given a die_offset, figure out the symbol context representing that die.
-  bool ResolveFunction(const DIERef &die_ref, bool include_inlines,
-                       lldb_private::SymbolContextList &sc_list);
-
   bool ResolveFunction(const DWARFDIE &die, bool include_inlines,
                        lldb_private::SymbolContextList &sc_list);
-
-  void FindFunctions(const lldb_private::ConstString &name,
-                     const NameToDIE &name_to_die, bool include_inlines,
-                     lldb_private::SymbolContextList &sc_list);
-
-  void FindFunctions(const lldb_private::RegularExpression &regex,
-                     const NameToDIE &name_to_die, bool include_inlines,
-                     lldb_private::SymbolContextList &sc_list);
-
-  void FindFunctions(const lldb_private::RegularExpression &regex,
-                     const DWARFMappedHash::MemoryTable &memory_table,
-                     bool include_inlines,
-                     lldb_private::SymbolContextList &sc_list);
 
   virtual lldb::TypeSP
   FindDefinitionTypeForDWARFDeclContext(const DWARFDeclContext &die_decl_ctx);
@@ -404,15 +399,8 @@ protected:
   lldb_private::Symbol *
   GetObjCClassSymbol(const lldb_private::ConstString &objc_class_name);
 
-  void ParseFunctions(const DIEArray &die_offsets, bool include_inlines,
-                      lldb_private::SymbolContextList &sc_list);
-
   lldb::TypeSP GetTypeForDIE(const DWARFDIE &die,
                              bool resolve_function_context = false);
-
-  void Index();
-
-  void DumpIndexes();
 
   void SetDebugMapModule(const lldb::ModuleSP &module_sp) {
     m_debug_map_module_wp = module_sp;
@@ -438,9 +426,6 @@ protected:
   bool FixupAddress(lldb_private::Address &addr);
 
   typedef std::set<lldb_private::Type *> TypeSet;
-
-  typedef std::map<lldb_private::ConstString, lldb::ModuleSP>
-      ExternalTypeModuleMap;
 
   void GetTypes(const DWARFDIE &die, dw_offset_t min_die_offset,
                 dw_offset_t max_die_offset, uint32_t type_mask,
@@ -482,15 +467,20 @@ protected:
   DWARFDataSegment m_data_debug_frame;
   DWARFDataSegment m_data_debug_info;
   DWARFDataSegment m_data_debug_line;
+  DWARFDataSegment m_data_debug_line_str;
   DWARFDataSegment m_data_debug_macro;
   DWARFDataSegment m_data_debug_loc;
+  DWARFDataSegment m_data_debug_loclists;
   DWARFDataSegment m_data_debug_ranges;
+  DWARFDataSegment m_data_debug_rnglists;
   DWARFDataSegment m_data_debug_str;
   DWARFDataSegment m_data_debug_str_offsets;
+  DWARFDataSegment m_data_debug_types;
   DWARFDataSegment m_data_apple_names;
   DWARFDataSegment m_data_apple_types;
   DWARFDataSegment m_data_apple_namespaces;
   DWARFDataSegment m_data_apple_objc;
+  DWARFDataSegment m_data_gnu_debugaltlink;
 
   // The unique pointer items below are generated on demand if and when someone
   // accesses
@@ -498,10 +488,6 @@ protected:
   std::unique_ptr<DWARFDebugAbbrev> m_abbr;
   std::unique_ptr<DWARFDebugInfo> m_info;
   std::unique_ptr<DWARFDebugLine> m_line;
-  std::unique_ptr<DWARFMappedHash::MemoryTable> m_apple_names_ap;
-  std::unique_ptr<DWARFMappedHash::MemoryTable> m_apple_types_ap;
-  std::unique_ptr<DWARFMappedHash::MemoryTable> m_apple_namespaces_ap;
-  std::unique_ptr<DWARFMappedHash::MemoryTable> m_apple_objc_ap;
   std::unique_ptr<GlobalVariableMap> m_global_aranges_ap;
 
   typedef std::unordered_map<lldb::offset_t, lldb_private::DebugMacrosSP>
@@ -509,23 +495,14 @@ protected:
   DebugMacrosMap m_debug_macros_map;
 
   ExternalTypeModuleMap m_external_type_modules;
-  NameToDIE m_function_basename_index; // All concrete functions
-  NameToDIE m_function_fullname_index; // All concrete functions
-  NameToDIE m_function_method_index;   // All inlined functions
-  NameToDIE
-      m_function_selector_index; // All method names for functions of classes
-  NameToDIE m_objc_class_selectors_index; // Given a class name, find all
-                                          // selectors for the class
-  NameToDIE m_global_index;               // Global and static variables
-  NameToDIE m_type_index;                 // All type DIE offsets
-  NameToDIE m_namespace_index;            // All type DIE offsets
-  bool m_indexed : 1, m_using_apple_tables : 1, m_fetched_external_modules : 1;
+  std::unique_ptr<lldb_private::DWARFIndex> m_index;
+  bool m_fetched_external_modules : 1;
   lldb_private::LazyBool m_supports_DW_AT_APPLE_objc_complete_type;
 
   typedef std::shared_ptr<std::set<DIERef>> DIERefSetSP;
   typedef std::unordered_map<std::string, DIERefSetSP> NameToOffsetMap;
   NameToOffsetMap m_function_scope_qualified_name_map;
-  std::unique_ptr<DWARFDebugRanges> m_ranges;
+  std::unique_ptr<DWARFDebugRangesBase> m_ranges;
   UniqueDWARFASTTypeMap m_unique_ast_type_map;
   DIEToTypePtr m_die_to_type;
   DIEToVariableSP m_die_to_variable_sp;

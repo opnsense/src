@@ -35,6 +35,8 @@
 #include <compat/linux/linux.h>
 #include <amd64/linux/linux_syscall.h>
 
+#define	LINUX_LEGACY_SYSCALLS
+
 /*
  * debugging support
  */
@@ -375,11 +377,6 @@ union l_semun {
 	l_uintptr_t	__pad;
 };
 
-struct l_sockaddr {
-	l_ushort	sa_family;
-	char		sa_data[14];
-};
-
 struct l_ifmap {
 	l_ulong		mem_start;
 	l_ulong		mem_end;
@@ -388,9 +385,6 @@ struct l_ifmap {
 	u_char		dma;
 	u_char		port;
 } __packed;
-
-#define	LINUX_IFHWADDRLEN	6
-#define	LINUX_IFNAMSIZ		16
 
 struct l_ifreq {
 	union {
@@ -459,7 +453,7 @@ struct l_pollfd {
 struct linux_robust_list {
 	l_uintptr_t			next;
 };
- 
+
 struct linux_robust_list_head {
 	struct linux_robust_list	list;
 	l_long				futex_offset;

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2002 Poul-Henning Kamp
  * Copyright (c) 2002 Networks Associates Technology, Inc.
  * All rights reserved.
@@ -136,6 +138,12 @@ gctl_copyin(struct gctl_req *req)
 	struct gctl_req_arg *ap;
 	char *p;
 	u_int i;
+
+	if (req->narg > GEOM_CTL_ARG_MAX) {
+		gctl_error(req, "too many arguments");
+		req->arg = NULL;
+		return;
+	}
 
 	ap = geom_alloc_copyin(req, req->arg, req->narg * sizeof(*ap));
 	if (ap == NULL) {
