@@ -138,7 +138,7 @@ vsyslog1(int pri, const char *fmt, va_list ap)
 	char ch, *p;
 	long tz_offset;
 	int cnt, fd, saved_errno;
-	char hostname[MAXHOSTNAMELEN], *stdp, tbuf[2048], fmt_cpy[1024],
+	char hostname[MAXHOSTNAMELEN], *stdp, tbuf[8192], fmt_cpy[1024],
 	    errstr[64], tz_sign;
 	FILE *fp, *fmt_fp;
 	struct bufcookie tbuf_cookie;
