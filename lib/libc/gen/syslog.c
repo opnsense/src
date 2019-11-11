@@ -136,7 +136,7 @@ vsyslog1(int pri, const char *fmt, va_list ap)
 	char ch, *p;
 	time_t now;
 	int fd, saved_errno;
-	char *stdp, tbuf[2048], fmt_cpy[1024], timbuf[26], errstr[64];
+	char *stdp, tbuf[8192], fmt_cpy[1024], timbuf[26], errstr[64];
 	FILE *fp, *fmt_fp;
 	struct bufcookie tbuf_cookie;
 	struct bufcookie fmt_cookie;
