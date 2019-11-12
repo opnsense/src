@@ -406,6 +406,7 @@ extern int invpcid_works;
 struct thread;
 
 void	pmap_activate_sw(struct thread *);
+void	pmap_allow_2m_x_ept_recalculate(void);
 void	pmap_bootstrap(vm_paddr_t *);
 int	pmap_cache_bits(pmap_t pmap, int mode, boolean_t is_pde);
 int	pmap_change_attr(vm_offset_t, vm_size_t, int);
