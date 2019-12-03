@@ -35,6 +35,7 @@
 
 #include "opt_inet.h"
 #include "opt_inet6.h"
+#include "opt_rss.h"
 
 #include "ixgbe.h"
 #include "ifdi_if.h"
@@ -1478,7 +1479,12 @@ ixv_initialize_receive_units(if_ctx_t ctx)
 			    scctx->isc_nrxd[0] - 1);
 	}
 
-	ixv_initialize_rss_mapping(adapter);
+	/*
+	 * Do not touch RSS and RETA settings for older hardware
+	 * as those are shared among PF and all VF.
+	 */
+	if (adapter->hw.mac.type >= ixgbe_mac_X550_vf)
+		ixv_initialize_rss_mapping(adapter);
 } /* ixv_initialize_receive_units */
 
 /************************************************************************
@@ -1913,7 +1919,6 @@ ixv_init_device_features(struct adapter *adapter)
 {
 	adapter->feat_cap = IXGBE_FEATURE_NETMAP
 	                  | IXGBE_FEATURE_VF
-	                  | IXGBE_FEATURE_RSS
 	                  | IXGBE_FEATURE_LEGACY_TX;
 
 	/* A tad short on feature flags for VFs, atm. */
@@ -1926,6 +1931,7 @@ ixv_init_device_features(struct adapter *adapter)
 	case ixgbe_mac_X550EM_x_vf:
 	case ixgbe_mac_X550EM_a_vf:
 		adapter->feat_cap |= IXGBE_FEATURE_NEEDS_CTXD;
+		adapter->feat_cap |= IXGBE_FEATURE_RSS;
 		break;
 	default:
 		break;
