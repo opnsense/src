@@ -226,11 +226,7 @@ CFLAGS+=	-fwrapv
 CFLAGS+=	-fstack-protector
 .endif
 
-#
-# Retpoline speculative execution vulnerability mitigation (CVE-2017-5715)
-#
-.if defined(COMPILER_FEATURES) && ${COMPILER_FEATURES:Mretpoline} != "" && \
-    ${MK_KERNEL_RETPOLINE} != "no"
+.if defined(MK_RETPOLINE) && ${MK_RETPOLINE} != "no"
 CFLAGS+=	-mretpoline
 .endif
 

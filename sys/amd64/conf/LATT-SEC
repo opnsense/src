@@ -1,0 +1,9 @@
+include HARDENEDBSD
+
+ident LATT-SEC
+
+options 	EVDEV_SUPPORT
+options		DEBUG_MEMGUARD
+options		DEBUG_REDZONE
+
+device 		evdev

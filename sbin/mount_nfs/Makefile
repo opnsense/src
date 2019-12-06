@@ -11,6 +11,8 @@ MOUNT=	${.CURDIR:H}/mount
 UMNTALL= ${SRCTOP}/usr.sbin/rpc.umntall
 CFLAGS+= -DNFS -I${MOUNT} -I${UMNTALL}
 
+CFI_OVERRIDE=	-fno-sanitize=cfi-icall
+
 .PATH: ${MOUNT} ${UMNTALL}
 
 .include <bsd.prog.mk>

@@ -1,0 +1,122 @@
+For detailed changes, see the changes either in the OpenBSD CVS repository or
+the GitHub mirror.
+
+2017-06-*   OpenNTPD 6.2p1
+	* Added option "query from <ip>" to ntpd.conf, to specify a local IP
+	  address for outgoing NTP queries.
+
+2017-06-12  OpenNTPD 6.1p1
+	* Quieted warnings about constraint connection retries.
+	* Implemented fork+exec for ntpd child processes.
+	* Added imsg inter-process reliability fixes.
+	* Fixed memory leaks and reduced heap memory usage.
+	* Numerous logging improvements and additions.
+
+	OpenNTPD portable-specific changes:
+
+	* Added macOS 10.12 getentropy support.
+	* Fixed arc4random blacklist use native implementations where
+	  possible.
+
+2016-05-30  OpenNTPD 6.0p1
+
+	* Fixed a link failure on older Linux distributions and a build
+	  failure on FreeBSD.
+	* Set MOD_MAXERROR to avoid unsynced time status when using
+	  ntp_adjtime.
+	* Fixed HTTP Timestamp header parsing to use strptime in a more
+	  portable fashion.
+	* Hardened TLS for ntpd constraints, enabling server name
+	  verification. Thanks to Luis M. Merino.
+
+2016-03-29  OpenNTPD 5.9p1
+
+	* When a single "constraint" is specified, try all returned addresses
+	  until one succeeds, rather than the first returned address.
+	* Relaxed the constraint error margin to be proportional to the number
+	  of NTP peers, avoid constant reconnections when there is a bad NTP
+	  peer.
+	* Removed disabled hotplug sensor support.
+	* Added support for detecting crashes in constraint subprocesses.
+	* Moved the execution of constraints from the ntp process to the
+	  parent process, allowing for better privilege separation since the
+	  ntp process can be further restricted.
+	* Added pledge(2) support.
+	* Updated to require LibreSSL 2.3.2 or greater.
+	* Fixed high CPU usage when the network is down.
+	* Fixed various memory leaks.
+	* Switched to RMS for jitter calculations.
+	* Unified logging functions with other OpenBSD base programs.
+
+	OpenNTPD portable-specific changes:
+
+	* Added support for syncing time with the Realtime Clock (RTC) on OSes
+	  that require it.
+	* CFLAGS is no longer overridden by the build system.
+	* FreeBSD RTABLE support is disabled
+	* FreeBSD is no longer linked with -lmd to avoid hash function
+	  collisions, causing failures in constraint certificate loading.
+	* Fixed crashes due to __progname being used before initialized.
+	* Added Solaris 10 compatibility.
+	* Added --disable-https-constraint build option for explicitly
+	  disabling constraint support.
+	* Synced build system files with LibreSSL
+
+	The libtls library, as shipped with LibreSSL 2.3.2 or later, is
+	required to use the HTTPS constraint feature, though it is not
+	required to use OpenNTPD.
+
+2015-03-24  OpenNTPD 5.7p4
+
+	* Added support for HTTPS constraints to validate NTP responses.
+	  See the man page and example config file for how to configure it.
+	  The initial announcement:
+	  http://marc.info/?l=openbsd-tech&m=142356166731390&w=2 is an
+	  explanation of the rationale and how the feature works.
+	* Workaround an apparent bug in Solaris adjtime that cause the clock
+	  to report sync/unsync continuously.
+	* Workaround an issue on systems with 32-bit time_t that causes an
+	  overflow if the system time is later than early 2036.
+
+	The libtls library, as shipped with LibreSSL 2.1.4 or later, is
+	required to use the HTTPS constraint feature, though it is not
+	required to use OpenNTPD.
+
+2015-01-27  OpenNTPD 5.7p3
+	* Fixed issue resolving hostnames when the network is initially
+	  unavailable.
+	* Fixed process name logging on Linux and OS X.
+	* Fixed adjfreq failures on Solaris due to uninitialized struct timex.
+	* Support building on Linux musl libc.
+	* Default privilege separation directory changed from /var/empty/ntp
+	  to /var/empty. Please ensure that if you are using the default from
+	  previous releases that the privsep directory is empty, owned by
+	  root, and has no write privileges for other users.
+
+2015-01-20  OpenNTPD 5.7p2
+
+	* Switched the drift file from an unscaled frequency offset to ppm.
+	  The latter format is compatible with that of ntp.org.  This allows
+	  easy switching between ntpd daemons
+	* Fixed a memory leak in DNS lookups.
+	* Added support for setting the process title on Linux and OS X.
+	  The different processes are now possible to tell apart by role in
+	  the process list.
+	* Import NetBSD support.
+	* Various bugfixes and refinements from the community.
+
+2015-01-08  OpenNTPD 5.7p1
+
+	* Support for a new build infrastructure based on the LibreSSL
+	  framework. Source code is integrated directly from the OpenBSD tree
+	  with few manual changes, easing maintenance.
+	* Removed support for several OSes pending test reports and updated
+	  portability code.
+	* Supports the Simple Network Time Protocol version 4 as described in
+	  RFC 5905
+	* Added route virtualization (rdomain) support.
+	* Added ntpctl(8), which allows for querying ntpd(8) at runtime.
+	* Finer-grained clock adjustment via adjfreq / ntp_adjtime where
+	  available.
+	* Improved latency on heavily-loaded machines.
+

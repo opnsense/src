@@ -86,6 +86,8 @@ SYSCTL_ROOT_NODE(OID_AUTO,  compat, CTLFLAG_RW, 0,
 	"Compatibility code");
 SYSCTL_ROOT_NODE(OID_AUTO, security, CTLFLAG_RW, 0, 
      	"Security");
+SYSCTL_ROOT_NODE(OID_AUTO, hardening, CTLFLAG_RW, 0,
+	"Kernel hardening features");
 #ifdef REGRESSION
 SYSCTL_ROOT_NODE(OID_AUTO, regression, CTLFLAG_RW, 0,
      "Regression test MIB");
@@ -404,7 +406,7 @@ SYSCTL_PROC(_kern, KERN_SECURELVL, securelevel,
 /* Actual kernel configuration options. */
 extern char kernconfstring[];
 
-SYSCTL_STRING(_kern, OID_AUTO, conftxt, CTLFLAG_RD | CTLFLAG_MPSAFE,
+SYSCTL_STRING(_kern, OID_AUTO, conftxt, CTLFLAG_RD | CTLFLAG_MPSAFE | CTLFLAG_ROOTONLY,
     kernconfstring, 0, "Kernel configuration file");
 #endif
 

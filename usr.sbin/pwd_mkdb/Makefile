@@ -7,6 +7,8 @@ PROG=	pwd_mkdb
 MAN=	pwd_mkdb.8
 SRCS=	pw_scan.c pwd_mkdb.c
 
+CFI_OVERRIDE=-fno-sanitize=cfi-icall
+
 CFLAGS+= -I${SRCTOP}/lib/libc/gen		# for pw_scan.h
 
 .include <bsd.prog.mk>

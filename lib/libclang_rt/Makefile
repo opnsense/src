@@ -14,6 +14,7 @@ SUBDIR+=	safestack
 SUBDIR+=	stats
 SUBDIR+=	stats_client
 .if ${MACHINE_CPUARCH} == "amd64"
+SUBDIR+=	cfi
 SUBDIR+=	tsan
 SUBDIR+=	tsan_cxx
 .endif

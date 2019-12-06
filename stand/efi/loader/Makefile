@@ -13,6 +13,10 @@ PROG=		${LOADER}.sym
 INTERNALPROG=
 WARNS?=		3
 
+.if ${MACHINE_CPUARCH} == "aarch64"
+NOPIE=	1
+.endif
+
 # architecture-specific loader code
 SRCS=	autoload.c \
 	bootinfo.c \

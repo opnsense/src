@@ -41,6 +41,7 @@ __FBSDID("$FreeBSD$");
 
 #include "opt_capsicum.h"
 #include "opt_ktrace.h"
+#include "opt_pax.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -67,6 +68,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/sx.h>
 #include <sys/unistd.h>
 #include <sys/vnode.h>
+#include <sys/pax.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/dirent.h>
@@ -1458,12 +1460,21 @@ sys_linkat(struct thread *td, struct linkat_args *uap)
 	    UIO_USERSPACE, (flag & AT_SYMLINK_FOLLOW) ? FOLLOW : NOFOLLOW));
 }
 
+#ifdef PAX_HARDENING
+int hardlink_check_uid = 1;
+#else
 int hardlink_check_uid = 0;
+#endif
 SYSCTL_INT(_security_bsd, OID_AUTO, hardlink_check_uid, CTLFLAG_RW,
     &hardlink_check_uid, 0,
     "Unprivileged processes cannot create hard links to files owned by other "
     "users");
+
+#ifdef PAX_HARDENING
+static int hardlink_check_gid = 1;
+#else
 static int hardlink_check_gid = 0;
+#endif
 SYSCTL_INT(_security_bsd, OID_AUTO, hardlink_check_gid, CTLFLAG_RW,
     &hardlink_check_gid, 0,
     "Unprivileged processes cannot create hard links to files owned by other "
@@ -1824,6 +1835,9 @@ restart:
 		    &nd.ni_cnd);
 		if (error != 0)
 			goto out;
+#endif
+#ifdef PAX_SEGVGUARD
+		pax_segvguard_remove(td, vp);
 #endif
 		vfs_notify_upper(vp, VFS_NOTIFY_UPPER_UNLINK);
 		error = VOP_REMOVE(nd.ni_dvp, vp, &nd.ni_cnd);

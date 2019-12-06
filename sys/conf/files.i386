@@ -58,6 +58,11 @@ ukbdmap.h			optional	ukbd_dflt_keymap	\
 	no-obj no-implicit-rule before-depend				\
 	clean		"ukbdmap.h"
 #
+kbdmuxmap.h			optional	kbdmux_dflt_keymap	\
+	compile-with	"/usr/sbin/kbdcontrol -L ${KBDMUX_DFLT_KEYMAP} | sed -e 's/^static keymap_t.* = /static keymap_t key_map = /' -e 's/^static accentmap_t.* = /static accentmap_t accent_map = /' > kbdmuxmap.h"			\
+	no-obj no-implicit-rule before-depend				\
+	clean		"kbdmuxmap.h"
+#
 hpt27xx_lib.o			optional	hpt27xx			\
 	dependency	"$S/dev/hpt27xx/i386-elf.hpt27xx_lib.o.uu"	\
 	compile-with	"uudecode < $S/dev/hpt27xx/i386-elf.hpt27xx_lib.o.uu" \
@@ -517,25 +522,6 @@ i386/i386/trap.c		standard
 i386/i386/uio_machdep.c		standard
 i386/i386/vm86.c		standard
 i386/i386/vm_machdep.c		standard
-i386/ibcs2/ibcs2_errno.c	optional ibcs2
-i386/ibcs2/ibcs2_fcntl.c	optional ibcs2
-i386/ibcs2/ibcs2_ioctl.c	optional ibcs2
-i386/ibcs2/ibcs2_ipc.c		optional ibcs2
-i386/ibcs2/ibcs2_isc.c		optional ibcs2
-i386/ibcs2/ibcs2_isc_sysent.c	optional ibcs2
-i386/ibcs2/ibcs2_misc.c		optional ibcs2
-i386/ibcs2/ibcs2_msg.c		optional ibcs2
-i386/ibcs2/ibcs2_other.c	optional ibcs2
-i386/ibcs2/ibcs2_signal.c	optional ibcs2
-i386/ibcs2/ibcs2_socksys.c	optional ibcs2
-i386/ibcs2/ibcs2_stat.c		optional ibcs2
-i386/ibcs2/ibcs2_sysent.c	optional ibcs2
-i386/ibcs2/ibcs2_sysi86.c	optional ibcs2
-i386/ibcs2/ibcs2_sysvec.c	optional ibcs2
-i386/ibcs2/ibcs2_util.c		optional ibcs2
-i386/ibcs2/ibcs2_xenix.c	optional ibcs2
-i386/ibcs2/ibcs2_xenix_sysent.c	optional ibcs2
-i386/ibcs2/imgact_coff.c	optional ibcs2
 i386/linux/imgact_linux.c	optional compat_linux
 i386/linux/linux_copyout.c	optional compat_linux
 i386/linux/linux_dummy.c	optional compat_linux
@@ -548,8 +534,6 @@ i386/pci/pci_pir.c		optional pci
 isa/syscons_isa.c		optional sc
 isa/vga_isa.c			optional vga
 kern/kern_clocksource.c		standard
-kern/imgact_aout.c		optional compat_aout
-kern/imgact_gzip.c		optional gzip
 kern/subr_sfbuf.c		standard
 libkern/divdi3.c		standard
 libkern/ffsll.c			standard

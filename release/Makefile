@@ -40,6 +40,7 @@ WORLDDIR?=	${.CURDIR}/..
 PORTSDIR?=	/usr/ports
 DOCDIR?=	/usr/doc
 RELNOTES_LANG?= en_US.ISO8859-1
+KERNCONF?=	HARDENEDBSD
 
 .if !defined(TARGET) || empty(TARGET)
 TARGET=		${MACHINE}
@@ -71,7 +72,7 @@ VOLUME_LABEL=	${REVISION:C/[.-]/_/g}_${BRANCH:C/[.-]/_/g}_${TARGET_ARCH}
 .endif
 
 .if !defined(VOLUME_LABEL) || empty(VOLUME_LABEL)
-VOLUME_LABEL=	FreeBSD_Install
+VOLUME_LABEL=	HardenedBSD_Install
 .endif
 
 .if !exists(${DOCDIR})
@@ -151,7 +152,8 @@ base.txz:
 
 kernel.txz:
 	mkdir -p ${DISTDIR}
-	cd ${WORLDDIR} && ${IMAKE} distributekernel packagekernel DISTDIR=${.OBJDIR}/${DISTDIR}
+	cd ${WORLDDIR} && ${IMAKE} distributekernel packagekernel \
+		DISTDIR=${.OBJDIR}/${DISTDIR} KERNCONF=${KERNCONF}
 	mv ${DISTDIR}/kernel*.txz .
 
 src.txz:
@@ -214,6 +216,10 @@ disc1: packagesystem
 	echo vfs.mountroot.timeout=\"10\" >> ${.TARGET}/boot/loader.conf
 	echo kernels_autodetect=\"NO\" >> ${.TARGET}/boot/loader.conf
 	cp ${.CURDIR}/rc.local ${.TARGET}/etc
+	# XXXOP - try to work around installer lockup on random dev in a virtual machine
+	dd if=/dev/random of=${.TARGET}/boot/entropy bs=4k count=1
+	chown 0:0 ${.TARGET}/boot/entropy
+	chmod 0600 ${.TARGET}/boot/entropy
 	touch ${.TARGET}
 
 bootonly: packagesystem
@@ -241,6 +247,10 @@ bootonly: packagesystem
 	echo vfs.mountroot.timeout=\"10\" >> ${.TARGET}/boot/loader.conf
 	echo kernels_autodetect=\"NO\" >> ${.TARGET}/boot/loader.conf
 	cp ${.CURDIR}/rc.local ${.TARGET}/etc
+	# XXXOP - try to work around installer lockup on random dev in a virtual machine
+	dd if=/dev/random of=${.TARGET}/boot/entropy bs=4k count=1
+	chown 0:0 ${.TARGET}/boot/entropy
+	chmod 0600 ${.TARGET}/boot/entropy
 
 dvd: packagesystem
 # Install system
@@ -265,6 +275,10 @@ dvd: packagesystem
 	echo vfs.mountroot.timeout=\"10\" >> ${.TARGET}/boot/loader.conf
 	echo kernels_autodetect=\"NO\" >> ${.TARGET}/boot/loader.conf
 	cp ${.CURDIR}/rc.local ${.TARGET}/etc
+	# XXXOP - try to work around installer lockup on random dev in a virtual machine
+	dd if=/dev/random of=${.TARGET}/boot/entropy bs=4k count=1
+	chown 0:0 ${.TARGET}/boot/entropy
+	chmod 0600 ${.TARGET}/boot/entropy
 	touch ${.TARGET}
 
 release.iso: disc1.iso

@@ -1,0 +1,149 @@
+.\"-
+.\" Copyright (c) 2017-2018 Olivér Pintér
+.\" All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.\" $HardenedBSD$
+.\"
+.Dd Jul 28, 2018
+.Dt LIBHBSDCONTROL 3
+.Os
+.Sh NAME
+.Nm hbsdcontrol_extattr_get_attr ,
+.Nm hbsdcontrol_extattr_set_attr ,
+.Nm hbsdcontrol_extattr_rm_attr ,
+.Nm hbsdcontrol_extattr_list_attrs ,
+.Nm hbsdcontrol_free_extattrs ,
+.Nm hbsdcontrol_get_feature_state ,
+.Nm hbsdcontrol_set_feature_state ,
+.Nm hbsdcontrol_rm_feature_state ,
+.Nm hbsdcontrol_list_feature_states ,
+.Nm hbsdcontrol_free_feature_states ,
+.Nm hbsdcontrol_set_debug ,
+.Nm hbsdcontrol_get_version
+.Nd "interface for accessing the HardenedBSD's feature state control variables"
+.Sh LIBRARY
+.Lb libhsdcontrol
+.Sh SYNOPSIS
+.In libhbsdcontrol.h
+.Ft int
+.Fo hbsdcontrol_extattr_get_attr
+.Fa "const char *file" "const char *attr" "int *val"
+.Fc
+.Ft int
+.Fo hbsdcontrol_extattr_set_attr
+.Fa "const char *file" "const char *attr" "const char int val"
+.Fc
+.Ft int
+.Fo hbsdcontrol_extattr_rm_attr
+.Fa "const char *file" "const char *attr"
+.Fc
+.Ft int
+.Fo hbsdcontrol_extattr_list_attrs
+.Fa "const char *file" "char ***attrs"
+.Fc
+.Ft void
+.Fo hbsdcontrol_free_attrs
+.Fa "char ***attrs"
+.Fc
+.Ft int
+.Fo hbsdcontrol_get_feature_state
+.Fa "const char *file" "const char *feature" "pax_feature_state_t *state
+.Fc
+.Ft int
+.Fo hbsdcontrol_set_feature_state
+.Fa "const char *file" "const char *feature" "pax_feature_state_t state"
+.Fc
+.Ft int
+.Fo hbsdcontrol_rm_feature_state
+.Fa "const char *file" "const char *features"
+.Fc
+.Ft int
+.Fo hbsdcontrol_list_feature_states
+.Fa "const char *file" "char **features"
+.Fc
+.Ft void
+.Fo hbsdcontrol_free_feature_states
+.Fa "char **features"
+.Fc
+.Ft const char *
+.Fo hbsdcontrol_get_version
+.Fa "void"
+.Fc
+.Fc
+.Sh DESCRIPTION
+The
+.Nm libhbsdcontrol
+library provides access to a special attributes which stored in file systems
+extended attributes.
+.Pp
+The
+.Fn hbsdcontrol_extattr_get_attr ,
+.Fn hbsdcontrol_extattr_set_attr ,
+.Fn hbsdcontrol_extattr_list_attrs
+and
+.Fn hbsdcontrol_extattr_rm_attr
+functions are used to manipulate the low level representation of
+.Nm HardenedBSD's
+.Nm PaX
+specific extattrs (
+.Xr extattr 2
+).
+The
+.Fa file
+parameter is the target file path, where the
+.Fa attr
+attriube will be created with the 
+.Fa val
+value.
+The
+.Fn hbsdcontrol_extattr_list_attrs
+allocates the required memory for the
+.Fa "attrs"
+which should be freed after the usage with
+.Fn hbsdcontrol_free_attrs
+function.
+.El
+.Sh RETURN VALUES
+.Bl
+.It
+The 
+.Fn hbsdcontrol_{get,set,list,rm}_{extattr,feature_state}
+function returns the value 0 if successful; error elsewhere.
+.It
+The
+.Fn hbsdcontrol_get_version
+return the library version as a pointer to const char string.
+.El
+.Sh SEE ALSO
+.Xr elf 3 ,
+.Xr security 7
+.Sh HISTORY
+The
+.Nm libhbsdcontrol
+library first appeared in HardenedBSD 11.2.
+.Sh AUTHORS
+The
+.Nm libhbsdcontrol
+library and this manual page were written by
+.An Oliver Pinter Aq Mt oliver.pinter@HardenedBSD.org .

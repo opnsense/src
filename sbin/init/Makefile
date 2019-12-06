@@ -22,6 +22,8 @@ CONFTTYS+=	ttys.${MACHINE_CPUARCH}
 .error MACHINE.ttys missing
 .endif
 
+NOCFI=	yes
+
 # Needed for getmntopts.c
 MOUNT=	${SRCTOP}/sbin/mount
 CFLAGS+=-I${MOUNT}

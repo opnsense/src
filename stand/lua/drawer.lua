@@ -37,6 +37,7 @@ local screen = require("screen")
 local drawer = {}
 
 local fbsd_brand
+local hbsd_brand
 local none
 
 local menu_name_handlers
@@ -199,7 +200,7 @@ local function drawbox()
 	end
 
 	local menu_header = loader.getenv("loader_menu_title") or
-	    "Welcome to FreeBSD"
+	    " Welcome to HardenedBSD "
 	local menu_header_align = loader.getenv("loader_menu_title_align")
 	local menu_header_x
 
@@ -286,6 +287,14 @@ fbsd_brand = {
 " | |   | | |    |    ||     |      |      |",
 " |_|   |_|  \\___|\\___||____/|_____/|_____/ "
 }
+hbsd_brand = {
+"  _    _               _                     _ ____   _____ _____  ",
+" | |  | |             | |                   | |  _ \\ / ____|  __ \\ ",
+" | |__| | __ _ _ __ __| | ___ _ __   ___  __| | |_) | (___ | |  | |",
+" |  __  |/ _` | '__/ _` |/ _ \\ '_ \\ / _ \\/ _` |  _ < \\___ \\| |  | |",
+" | |  | | (_| | | | (_| |  __/ | | |  __/ (_| | |_) |____) | |__| |",
+" |_|  |_|\\__,_|_|  \\__,_|\\___|_| |_|\\___|\\__,_|____/|_____/|_____/ "
+}
 none = {""}
 
 menu_name_handlers = {
@@ -323,6 +332,9 @@ branddefs = {
 	["fbsd"] = {
 		graphic = fbsd_brand,
 	},
+	["hbsd"] = {
+		graphic = hbsd_brand,
+	},
 	["none"] = {
 		graphic = none,
 	},
@@ -344,7 +356,7 @@ logodefs = {
 	},
 }
 
-brand_position = {x = 2, y = 1}
+brand_position = {x = 7, y = 1}
 logo_position = {x = 46, y = 4}
 menu_position = {x = 5, y = 10}
 frame_size = {w = 42, h = 13}
@@ -352,9 +364,9 @@ default_shift = {x = 0, y = 0}
 shift = default_shift
 
 -- Module exports
-drawer.default_brand = 'fbsd'
-drawer.default_color_logodef = 'orb'
-drawer.default_bw_logodef = 'orbbw'
+drawer.default_brand = 'hbsd'
+drawer.default_color_logodef = 'hardenedbsd'
+drawer.default_bw_logodef = 'hardenedbsdbw'
 
 function drawer.addBrand(name, def)
 	branddefs[name] = def

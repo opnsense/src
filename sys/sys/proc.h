@@ -310,6 +310,7 @@ struct thread {
 	u_char		td_pri_class;	/* (t) Scheduling class. */
 	u_char		td_user_pri;	/* (t) User pri from estcpu and nice. */
 	u_char		td_base_user_pri; /* (t) Base user pri */
+	uint32_t	td_pax;		/* (b) Cached PaX settings from process. */
 	u_char		td_pre_epoch_prio; /* (k) User pri on entry to epoch */
 	uintptr_t	td_rb_list;	/* (k) Robust list head. */
 	uintptr_t	td_rbp_list;	/* (k) Robust priv list head. */
@@ -653,9 +654,15 @@ struct proc {
 	rlim_t		p_cpulimit;	/* (c) Current CPU limit in seconds. */
 	signed char	p_nice;		/* (c) Process "nice" value. */
 	int		p_fibnum;	/* in this routing domain XXX MRT */
+	uint32_t	p_pax;		/* (b) PaX is enabled to this process */
 	pid_t		p_reapsubtree;	/* (e) Pid of the direct child of the
 					       reaper which spawned
 					       our subtree. */
+	vm_offset_t	p_usrstack;	/* (b) Process stack top. */
+	vm_offset_t	p_psstrings;	/* (b) Process psstrings address. */
+	vm_offset_t	p_timekeep_base;	/* (c) Address of timekeep structure. */
+	vm_offset_t	p_shared_page_base;	/* (c) Address of shared page. */
+	vm_offset_t	p_sigcode_base;	/* (c) Address of sigcode. */
 	uint16_t	p_elf_machine;	/* (x) ELF machine type */
 	uint64_t	p_elf_flags;	/* (x) ELF flags */
 /* End area that is copied on creation. */
@@ -760,9 +767,6 @@ struct proc {
 #define	P2_AST_SU	0x00000008	/* Handles SU ast for kthreads. */
 #define	P2_PTRACE_FSTP	0x00000010 /* SIGSTOP from PT_ATTACH not yet handled. */
 #define	P2_TRAPCAP	0x00000020	/* SIGTRAP on ENOTCAPABLE */
-#define	P2_ASLR_ENABLE	0x00000040	/* Force enable ASLR. */
-#define	P2_ASLR_DISABLE	0x00000080	/* Force disable ASLR. */
-#define	P2_ASLR_IGNSTART 0x00000100	/* Enable ASLR to consume sbrk area. */
 #define	P2_STKGAP_DISABLE 0x00000800	/* Disable stack gap for MAP_STACK */
 #define	P2_STKGAP_DISABLE_EXEC 0x00001000 /* Stack gap disabled after exec */
 

@@ -1,0 +1,25 @@
+* rename current functions in libhbsdcontrol to *_file
+
+* add *_fd functions
+
+* rewrite the main program
+
+* capsicumize the main program
+
+* create a proper documentation
+
+* check for file and parent directory permissions before applying rules
+
+* implement -i to set immutable flag to specific binary after custum rules has been added
+
+* implement json config file support
+
+* implement daemon support
+** subscribe to specific binary via kevent
+** dynamically update the rules when the binary changes
+
+* implement system wide settings support
+** not persistent: sysctl
+** persistent:
+*** /etc/sysctl.conf
+*** /boot/loader.conf

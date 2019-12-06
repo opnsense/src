@@ -110,3 +110,5 @@ CXXFLAGS.clang+= -stdlib=libc++
 STATIC_CFLAGS+= -mlong-calls
 STATIC_CXXFLAGS+= -mlong-calls
 .endif
+
+NOCFI=		yes

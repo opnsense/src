@@ -44,6 +44,9 @@ __FBSDID("$FreeBSD$");
 #include <sys/param.h>
 #include <sys/mount.h>
 #include <sys/mman.h>
+#ifdef HARDENEDBSD
+#include <sys/pax.h>
+#endif
 #include <sys/stat.h>
 #include <sys/sysctl.h>
 #include <sys/uio.h>
@@ -74,6 +77,12 @@ __FBSDID("$FreeBSD$");
 typedef void (*func_ptr_type)(void);
 typedef void * (*path_enum_proc) (const char *path, size_t len, void *arg);
 
+#ifdef HARDENEDBSD
+struct integriforce_so_check {
+	char	 isc_path[MAXPATHLEN];
+	int	 isc_result;
+};
+#endif
 
 /* Variables that cannot be static: */
 extern struct r_debug r_debug; /* For GDB */
@@ -118,6 +127,9 @@ static void linkmap_add(Obj_Entry *);
 static void linkmap_delete(Obj_Entry *);
 static void load_filtees(Obj_Entry *, int flags, RtldLockState *);
 static void unload_filtees(Obj_Entry *, RtldLockState *);
+#if defined(HARDENEDBSD) && defined(SHLIBRANDOM)
+static void randomize_neededs(Obj_Entry *obj, int flags);
+#endif
 static int load_needed_objects(Obj_Entry *, int);
 static int load_preload_objects(void);
 static Obj_Entry *load_object(const char *, int fd, const Obj_Entry *, int);
@@ -216,6 +228,10 @@ static Obj_Entry *obj_main;	/* The main program shared object */
 static Obj_Entry obj_rtld;	/* The dynamic linker shared object */
 static unsigned int obj_count;	/* Number of objects in obj_list */
 static unsigned int obj_loads;	/* Number of loads of objects (gen count) */
+
+#ifdef HARDENEDBSD
+static Elf_Word pax_flags = 0;	/* PaX / HardenedBSD flags */
+#endif
 
 static Objlist list_global =	/* Objects dlopened with RTLD_GLOBAL */
   STAILQ_HEAD_INITIALIZER(list_global);
@@ -420,6 +436,14 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
     main_argc = argc;
     main_argv = argv;
 
+#ifdef HARDENEDBSD
+    /* Load PaX flags */
+    if (aux_info[AT_PAXFLAGS] != NULL) {
+        pax_flags = aux_info[AT_PAXFLAGS]->a_un.a_val;
+        aux_info[AT_PAXFLAGS]->a_un.a_val = 0;
+    }
+#endif
+
     trust = !issetugid();
 
     md_abi_variant_hook(aux_info);
@@ -563,6 +587,10 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
     dbg("initializing thread locks");
     lockdflt_init();
 
+    if (aux_info[AT_STACKPROT] != NULL &&
+      aux_info[AT_STACKPROT]->a_un.a_val != 0)
+	    stack_prot = aux_info[AT_STACKPROT]->a_un.a_val;
+
     /*
      * Load the main program, or process its program header if it is
      * already loaded.
@@ -574,6 +602,9 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
 	if (obj_main == NULL)
 	    rtld_die();
 	max_stack_flags = obj_main->stack_flags;
+	if ((max_stack_flags & PF_X) == PF_X)
+	    if ((stack_prot & PROT_EXEC) == 0)
+	        max_stack_flags &= ~(PF_X);
     } else {				/* Main program already loaded. */
 	dbg("processing main program's program header");
 	assert(aux_info[AT_PHDR] != NULL);
@@ -605,10 +636,6 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
     }
     dbg("obj_main path %s", obj_main->path);
     obj_main->mainprog = true;
-
-    if (aux_info[AT_STACKPROT] != NULL &&
-      aux_info[AT_STACKPROT]->a_un.a_val != 0)
-	    stack_prot = aux_info[AT_STACKPROT]->a_un.a_val;
 
 #ifndef COMPAT_32BIT
     /*
@@ -1012,7 +1039,7 @@ digest_dynamic1(Obj_Entry *obj, int early, const Elf_Dyn **dyn_rpath,
     const Elf_Hashelt *hashtab;
     const Elf32_Word *hashval;
     Elf32_Word bkt, nmaskwords;
-    int bloom_size32;
+    unsigned int bloom_size32;
     int plttype = DT_REL;
 
     *dyn_rpath = NULL;
@@ -1405,7 +1432,7 @@ digest_phdr(const Elf_Phdr *phdr, int phnum, caddr_t entry, const char *path)
 	break;
     }
 
-    obj->stack_flags = PF_X | PF_R | PF_W;
+    obj->stack_flags = PF_R | PF_W;
 
     for (ph = phdr;  ph < phlimit;  ph++) {
 	switch (ph->p_type) {
@@ -2325,6 +2352,56 @@ process_needed(Obj_Entry *obj, Needed_Entry *needed, int flags)
     return (0);
 }
 
+#if defined(HARDENEDBSD) && defined(SHLIBRANDOM)
+static void
+randomize_neededs(Obj_Entry *obj, int flags)
+{
+    Needed_Entry **needs=NULL, *need=NULL;
+    unsigned int i, j, nneed;
+    size_t sz = sizeof(unsigned int);
+    int mib[2];
+
+    if (!(obj->needed) || (flags & RTLD_LO_FILTEES))
+	return;
+
+    mib[0] = CTL_KERN;
+    mib[1] = KERN_ARND;
+
+    for (nneed = 0, need = obj->needed; need != NULL; need = need->next)
+	nneed++;
+
+    if (nneed > 1) {
+	needs = xcalloc(nneed, sizeof(Needed_Entry **));
+	for (i = 0, need = obj->needed; i < nneed; i++, need = need->next)
+	    needs[i] = need;
+
+	for (i=0; i < nneed; i++) {
+	    do {
+		if (sysctl(mib, 2, &j, &sz, NULL, 0))
+		    goto err;
+
+		j %= nneed;
+	    } while (j == i);
+
+	    need = needs[i];
+	    needs[i] = needs[j];
+	    needs[j] = need;
+	}
+
+	for (i=0; i < nneed; i++)
+	    needs[i]->next = i + 1 < nneed ? needs[i + 1] : NULL;
+
+	obj->needed = needs[0];
+    }
+
+err:
+    if (needs != NULL)
+	free(needs);
+
+    return;
+}
+#endif
+
 /*
  * Given a shared object, traverse its list of needed objects, and load
  * each of them.  Returns 0 on success.  Generates an error message and
@@ -2338,6 +2415,11 @@ load_needed_objects(Obj_Entry *first, int flags)
     for (obj = first; obj != NULL; obj = TAILQ_NEXT(obj, next)) {
 	if (obj->marker)
 	    continue;
+#if defined(HARDENEDBSD) && defined(SHLIBRANDOM)
+        if ((pax_flags & (PAX_HARDENING_NOSHLIBRANDOM | PAX_HARDENING_SHLIBRANDOM)) !=
+	  PAX_HARDENING_NOSHLIBRANDOM)
+            randomize_neededs(obj, flags);
+#endif
 	if (process_needed(obj, obj->needed, flags) == -1)
 	    return (-1);
     }
@@ -2479,6 +2561,11 @@ do_load_object(int fd, const char *name, char *path, struct stat *sbp,
 {
     Obj_Entry *obj;
     struct statfs fs;
+#ifdef HARDENEDBSD
+    struct integriforce_so_check check;
+    int res, err;
+    size_t sz;
+#endif
 
     /*
      * but first, make sure that environment variables haven't been
@@ -2494,6 +2581,24 @@ do_load_object(int fd, const char *name, char *path, struct stat *sbp,
 	    return NULL;
 	}
     }
+#ifdef HARDENEDBSD
+    if (path != NULL) {
+	    sz = sizeof(int);
+	    err = sysctlbyname("kern.features.integriforce",
+		&res, &sz, NULL, 0);
+	    if (err == 0 && res == 1) {
+		    strlcpy(check.isc_path, path, MAXPATHLEN);
+		    check.isc_result = 0;
+		    sz = sizeof(struct integriforce_so_check);
+		    err = sysctlbyname("hardening.secadm.integriforce_so",
+			&check, &sz, &check, sizeof(struct integriforce_so_check));
+		    if (err == 0 && check.isc_result != 0) {
+			    _rtld_error("Integriforce validation failed on %s. Aborting.\n", path);
+			    return (NULL);
+		    }
+	    }
+    }
+#endif
     dbg("loading \"%s\"", printable_path(path));
     obj = map_object(fd, printable_path(path), sbp);
     if (obj == NULL)
@@ -2524,6 +2629,9 @@ do_load_object(int fd, const char *name, char *path, struct stat *sbp,
     obj_loads++;
     linkmap_add(obj);	/* for GDB & dlinfo() */
     max_stack_flags |= obj->stack_flags;
+    if ((max_stack_flags & PF_X) == PF_X)
+        if ((stack_prot & PROT_EXEC) == 0)
+            max_stack_flags &= ~(PF_X);
 
     dbg("  %p .. %p: %s", obj->mapbase,
          obj->mapbase + obj->mapsize - 1, obj->path);

@@ -19,6 +19,8 @@
 #
 # $FreeBSD$
 
+include 	HARDENEDBSD
+
 ident		ERL
 
 makeoptions	ARCH_FLAGS="-march=octeon+ -mabi=64"

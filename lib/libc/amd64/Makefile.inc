@@ -7,3 +7,5 @@
 GDTOASRCS+=strtorx.c
 SRCS+=machdep_ldisx.c
 SYM_MAPS+=${LIBC_SRCTOP}/amd64/Symbol.map
+
+MK_BIND_NOW=	no

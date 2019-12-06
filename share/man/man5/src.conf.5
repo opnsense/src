@@ -353,6 +353,16 @@ When set, it enforces these options:
 .It
 .Va WITHOUT_ZFS
 .El
+.It Va WITHOUT_CFI
+Set to build without Control-Flow Integrity (CFI)
+.Pp
+This is a default setting on
+arm/arm, arm/armv6, arm/armv7, i386/i386, mips/mipsel, mips/mips, mips/mips64el, mips/mips64, mips/mipsn32, mips/mipselhf, mips/mipshf, mips/mips64elhf, mips/mips64hf, powerpc/powerpc, powerpc/powerpc64, powerpc/powerpcspe, riscv/riscv64 and sparc64/sparc64.
+.It Va WITH_CFI
+Set to build with Control-Flow Integrity (CFI)
+.Pp
+This is a default setting on
+amd64/amd64 and arm64/aarch64.
 .It Va WITHOUT_CLANG
 Set to not build the Clang C/C++ compiler during the regular phase of the build.
 .Pp
@@ -367,6 +377,8 @@ When set, it enforces these options:
 .Va WITHOUT_CLANG_FULL
 .It
 .Va WITHOUT_LLVM_COV
+.It
+.Va WITHOUT_SAFESTACK
 .El
 .Pp
 When set, these options are also in effect:
@@ -421,6 +433,9 @@ This is a default setting on
 amd64/amd64, arm/arm, arm/armv6, arm/armv7, arm64/aarch64 and i386/i386.
 .It Va WITH_CLANG_EXTRAS
 Set to build additional clang and llvm tools, such as bugpoint.
+.Pp
+This is a default setting on
+amd64/amd64, arm/arm, arm/armv6, arm/armv7, arm64/aarch64, i386/i386, mips/mipsel, mips/mips, mips/mips64el, mips/mips64, mips/mipsn32, mips/mipselhf, mips/mipshf, mips/mips64elhf, mips/mips64hf, powerpc/powerpc, powerpc/powerpc64 and powerpc/powerpcspe.
 .It Va WITHOUT_CLANG_FULL
 Set to avoid building the ARCMigrate, Rewriter and StaticAnalyzer components of
 the Clang C/C++ compiler.
@@ -473,6 +488,8 @@ When set, it enforces these options:
 .It
 .Va WITHOUT_BINUTILS_BOOTSTRAP
 .It
+.Va WITHOUT_CFI
+.It
 .Va WITHOUT_CLANG_BOOTSTRAP
 .It
 .Va WITHOUT_ELFTOOLCHAIN_BOOTSTRAP
@@ -480,6 +497,8 @@ When set, it enforces these options:
 .Va WITHOUT_GCC_BOOTSTRAP
 .It
 .Va WITHOUT_LLD_BOOTSTRAP
+.It
+.Va WITHOUT_RETPOLINE
 .El
 .It Va WITHOUT_CRYPT
 Set to not build any crypto code.
@@ -548,11 +567,24 @@ When set, it enforces these options:
 .It
 .Va WITHOUT_LLVM_COV
 .It
+.Va WITHOUT_SAFESTACK
+.It
 .Va WITHOUT_TESTS
 .El
 .It Va WITHOUT_DEBUG_FILES
 Set to avoid building or installing standalone debug files for each
 executable binary and shared library.
+.It Va WITH_DEVD_PIE
+Enable building
+.Xr devd 8
+as a Position-Independent Executable (PIE).
+.Pp
+This option should be used with extreme caution.
+.Pp
+.Sy Warning :
+DO NOT USE
+this option if /usr is NOT on the same filesystem
+as /.
 .It Va WITHOUT_DIALOG
 Set to not build
 .Xr dialog 1 ,
@@ -732,8 +764,8 @@ Set to build bootloaders without Forth support.
 Set to build
 .Nm libc
 without floating-point support.
-.It Va WITHOUT_FREEBSD_UPDATE
-Set to not build
+.It Va WITH_FREEBSD_UPDATE
+Set to build
 .Xr freebsd-update 8 .
 .It Va WITHOUT_FTP
 Set to not build or install
@@ -853,6 +885,18 @@ Set to not build libgssapi.
 Set to not build
 .Xr hastd 8
 and related utilities.
+.It Va WITHOUT_HBSDCONTROL
+.\" $HardenedBSD$
+Set to not build
+.Xr hbsdcontrol 8 
+and
+.Xr libhbsdcontrol 3 .
+.It Va WITHOUT_HBSD_UPDATE
+.\" $HardenedBSD$
+Set to not build
+.Xr hbsd-update 8 
+and
+.Xr hbsd-update-build 8 .
 .It Va WITH_HESIOD
 Set to build Hesiod support.
 .It Va WITHOUT_HTML
@@ -962,9 +1006,6 @@ Set to build some programs without Kerberos support, like
 .Xr sshd 8 ,
 and
 .Xr telnetd 8 .
-.It Va WITH_KERNEL_RETPOLINE
-Set to enable the "retpoline" mitigation for CVE-2017-5715 in the kernel
-build.
 .It Va WITHOUT_KERNEL_SYMBOLS
 Set to not install kernel symbol files.
 .Bf -symbolic
@@ -1009,8 +1050,8 @@ Set to not build programs that support a legacy PC console; e.g.,
 .Xr kbdcontrol 1
 and
 .Xr vidcontrol 1 .
-.It Va WITHOUT_LIB32
-On 64-bit platforms, set to not build 32-bit library set and a
+.It Va WITH_LIB32
+On 64-bit platforms, set to build 32-bit library set and a
 .Nm ld-elf32.so.1
 runtime linker.
 .It Va WITHOUT_LIBCPLUSPLUS
@@ -1026,6 +1067,8 @@ When set, it enforces these options:
 .It
 .Va WITHOUT_LIBTHR
 .El
+.It Va WITH_LIBRESSL
+Set to build LibreSSL as libcrypto/libssl provider as replacement of the OpenSSL equivalents. 
 .It Va WITH_LIBSOFT
 On armv6 only, set to enable soft float ABI compatibility libraries.
 This option is for transitioning to the new hard float ABI.
@@ -1062,6 +1105,14 @@ enabled unless an alternate linker is provided via XLD.
 .Pp
 This is a default setting on
 arm/arm, arm/armv6, mips/mipsel, mips/mips, mips/mips64el, mips/mips64, mips/mipsn32, mips/mipselhf, mips/mipshf, mips/mips64elhf, mips/mips64hf, powerpc/powerpc, powerpc/powerpc64, powerpc/powerpcspe, riscv/riscv64 and sparc64/sparc64.
+When set, it enforces these options:
+.Pp
+.Bl -item -compact
+.It
+.Va WITHOUT_CFI
+.It
+.Va WITHOUT_RETPOLINE
+.El
 .It Va WITH_LLD_BOOTSTRAP
 Set to build the LLD linker during the bootstrap phase of the build.
 .Pp
@@ -1072,6 +1123,14 @@ Set to use GNU binutils ld as the system linker, instead of LLVM's LLD.
 .Pp
 This is a default setting on
 arm/arm, arm/armv6, mips/mipsel, mips/mips, mips/mips64el, mips/mips64, mips/mipsn32, mips/mipselhf, mips/mipshf, mips/mips64elhf, mips/mips64hf, powerpc/powerpc, powerpc/powerpc64, powerpc/powerpcspe, riscv/riscv64 and sparc64/sparc64.
+When set, it enforces these options:
+.Pp
+.Bl -item -compact
+.It
+.Va WITHOUT_CFI
+.It
+.Va WITHOUT_RETPOLINE
+.El
 .It Va WITH_LLD_IS_LD
 Set to use LLVM's LLD as the system linker, instead of GNU binutils ld.
 .Pp
@@ -1522,6 +1581,8 @@ Set to build LLVM's OpenMP runtime.
 .Pp
 This is a default setting on
 amd64/amd64 and i386/i386.
+.It Va WITH_OPENNTPD
+Set to build OpenNTPd in stead of ISC ntpd daemon and utilities.
 .It Va WITHOUT_OPENSSH
 Set to not build OpenSSH.
 .It Va WITHOUT_OPENSSL
@@ -1584,16 +1645,10 @@ bootstrap tool.
 Set to not build
 .Xr pmccontrol 8
 and related programs.
-.It Va WITHOUT_PORTSNAP
-Set to not build or install
+.It Va WITH_PORTSNAP
+Set to build or install
 .Xr portsnap 8
 and related files.
-When set, it enforces these options:
-.Pp
-.Bl -item -compact
-.It
-.Va WITHOUT_FREEBSD_UPDATE
-.El
 .It Va WITHOUT_PPP
 Set to not build
 .Xr ppp 8
@@ -1634,10 +1689,10 @@ by proxy.
 .It Va WITHOUT_RBOOTD
 Set to not build or install
 .Xr rbootd 8 .
-.It Va WITHOUT_REPRODUCIBLE_BUILD
-Set to include build metadata (such as the build time, user, and host)
-in the kernel, boot loaders, and uname output.
-Successive builds will not be bit-for-bit identical.
+.It Va WITH_REPRODUCIBLE_BUILD
+Set to exclude build metadata (such as the build time, user, or host)
+from the kernel, boot loaders, and uname output, so that builds produce
+bit-for-bit identical output.
 .It Va WITHOUT_RESCUE
 Set to not build
 .Xr rescue 8 .
@@ -1652,6 +1707,16 @@ utility.
 Set to build
 .Xr rpcbind 8
 with warmstart support.
+.It Va WITHOUT_SAFESTACK
+Set to compile world without SafeStack.
+.Pp
+This is a default setting on
+arm/arm, arm/armv6, arm/armv7, arm64/aarch64, i386/i386, mips/mipsel, mips/mips, mips/mips64el, mips/mips64, mips/mipsn32, mips/mipselhf, mips/mipshf, mips/mips64elhf, mips/mips64hf, powerpc/powerpc, powerpc/powerpc64, powerpc/powerpcspe, riscv/riscv64 and sparc64/sparc64.
+.It Va WITH_SAFESTACK
+Set to compile with SafeStack.
+.Pp
+This is a default setting on
+amd64/amd64.
 .It Va WITHOUT_SENDMAIL
 Set to not build
 .Xr sendmail 8
@@ -1673,6 +1738,9 @@ The set includes
 .Xr cc 1 ,
 .Xr make 1
 and necessary utilities like assembler, linker and library archive manager.
+.Pp
+This is a default setting on
+amd64/amd64, arm/arm, arm/armv7, arm64/aarch64, i386/i386, mips/mipsel, mips/mips, mips/mips64el, mips/mips64, mips/mipsn32, mips/mipselhf, mips/mipshf, mips/mips64elhf, mips/mips64hf, powerpc/powerpc, powerpc/powerpc64, powerpc/powerpcspe, riscv/riscv64 and sparc64/sparc64.
 .It Va WITH_SORT_THREADS
 Set to enable threads in
 .Xr sort 1 .
@@ -1690,6 +1758,9 @@ When set, it enforces these options:
 Set to not build kernel modules that include sourceless native code for host CPU.
 .It Va WITHOUT_SOURCELESS_UCODE
 Set to not build kernel modules that include sourceless microcode.
+.It Va WITH_SPECTREV1_FIX
+Build the base system with speculative load hardening, a SpectreV1
+vulnerability mitigation.
 .It Va WITHOUT_SSP
 Set to not build world with propolice stack smashing protection.
 .Pp
@@ -1874,6 +1945,8 @@ When set, it enforces these options:
 .Va WITHOUT_LLDB
 .It
 .Va WITHOUT_LLVM_COV
+.It
+.Va WITHOUT_SAFESTACK
 .El
 .It Va WITHOUT_UNBOUND
 Set to not build

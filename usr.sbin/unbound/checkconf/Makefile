@@ -12,4 +12,6 @@ CFLAGS+=	-I${UNBOUNDDIR} -I${LDNSDIR}
 LIBADD=	unbound pthread
 MAN=	local-unbound-checkconf.8
 
+CFI_OVERRIDE=-fno-sanitize=cfi-icall
+
 .include <bsd.prog.mk>

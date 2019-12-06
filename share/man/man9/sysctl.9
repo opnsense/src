@@ -766,6 +766,10 @@ Any user or process can write to this sysctl.
 A process in capability mode can read from this sysctl.
 .It Dv CTLFLAG_CAPWR
 A process in capability mode can write to this sysctl.
+.It Dv CTLFLAG_ROOTONLY
+Protect this sysctl by only allowing the non-jailed root user to
+access it.
+This flag is specific to HardenedBSD.
 .It Dv CTLFLAG_SECURE
 This sysctl can be written to only if the effective securelevel of the
 process is \[<=] 0.
@@ -956,6 +960,8 @@ Compatibility layer information.
 Debugging information.
 Various name spaces exist under
 .Va debug .
+.It Va hardening
+Kernel level hardening.
 .It Va hw
 Hardware and device driver information.
 .It Va kern

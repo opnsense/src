@@ -1,0 +1,9 @@
+include MALTA
+
+options PAX
+options PAX_ASLR
+options PAX_SEGVGUARD
+options PAX_NOEXEC
+options PAX_HARDENING
+options PAX_SYSCTLS
+options HBSD_DEBUG

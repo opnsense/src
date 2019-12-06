@@ -33,6 +33,8 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#include "opt_pax.h"
+
 #include <sys/param.h>
 #include <sys/jail.h>
 #include <sys/kernel.h>
@@ -62,7 +64,11 @@ static int	unprivileged_mlock = 1;
 SYSCTL_INT(_security_bsd, OID_AUTO, unprivileged_mlock, CTLFLAG_RWTUN,
     &unprivileged_mlock, 0, "Allow non-root users to call mlock(2)");
 
+#ifdef PAX_HARDENING
+static int	unprivileged_read_msgbuf = 0;
+#else
 static int	unprivileged_read_msgbuf = 1;
+#endif
 SYSCTL_INT(_security_bsd, OID_AUTO, unprivileged_read_msgbuf,
     CTLFLAG_RW, &unprivileged_read_msgbuf, 0,
     "Unprivileged processes may read the kernel message buffer");
@@ -155,6 +161,28 @@ priv_check_cred(struct ucred *cred, int priv, int flags)
 		}
 	}
 
+#if !defined(PAX_HARDENING)
+	/*
+	 * Inspecting kernel module information should be root-only
+	 * when PAX_HARDENING is set.
+	 */
+	if (priv == PRIV_KLD_STAT) {
+		error = 0;
+		goto out;
+	}
+#endif
+
+	if (priv == PRIV_SYSCTL_ROOTONLY) {
+#ifdef PAX_HARDENING
+		if (cred->cr_uid == 0) {
+#endif
+			error = 0;
+			goto out;
+#ifdef PAX_HARDENING
+		}
+#endif
+	}
+
 	/*
 	 * Writes to kernel/physical memory are a typical root-only operation,
 	 * but non-root users are expected to be able to read it (provided they
@@ -163,6 +191,18 @@ priv_check_cred(struct ucred *cred, int priv, int flags)
 	if (priv == PRIV_KMEM_READ) {
 		error = 0;
 		goto out;
+	}
+
+	/*
+	 * Allow unprivileged process debugging on a per-jail basis.
+	 * Do this here instead of prison_priv_check(), so it can also
+	 * apply to prison0.
+	 */
+	if (priv == PRIV_DEBUG_UNPRIV) {
+		if (prison_allow(cred, PR_ALLOW_UNPRIV_DEBUG)) {
+			error = 0;
+			goto out;
+		}
 	}
 
 	/*

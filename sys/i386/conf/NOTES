@@ -275,7 +275,6 @@ device		nvram		# Access to rtc cmos via /dev/nvram
 device		speaker		#Play IBM BASIC-style noises out your speaker
 hint.speaker.0.at="isa"
 hint.speaker.0.port="0x61"
-device		gzip		#Exec gzipped a.out's.  REQUIRES COMPAT_AOUT!
 device		apm_saver	# Requires APM
 
 
@@ -907,15 +906,6 @@ options 	NKPT=31
 
 #####################################################################
 # ABI Emulation
-
-# Enable iBCS2 runtime support for SCO and ISC binaries
-#options 	IBCS2
-
-# Emulate spx device for client side of SVR3 local X interface
-options 	SPX_HACK
-
-# Enable (32-bit) a.out binary support
-options 	COMPAT_AOUT
 
 # Enable 32-bit runtime support for CloudABI binaries.
 options 	COMPAT_CLOUDABI32

@@ -1,0 +1,5 @@
+.\" $HardenedBSD$
+Set to not build
+.Xr hbsdcontrol 8 
+and
+.Xr libhbsdcontrol 3 .

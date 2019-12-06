@@ -7,6 +7,8 @@ MAN=	rpc.ypxfrd.8
 SRCS=	ypxfrd_svc.c ypxfrd.h ypxfrd_server.c yp_error.c \
 	yp_access.c ypxfrd_main.c
 
+CFI_OVERRIDE=	-fno-sanitize=cfi-icall
+
 CFLAGS+= -I. -DXFRBLOCKSIZE=65535
 
 WARNS?=	2

@@ -6,7 +6,7 @@
 PACKAGE=rescue
 MAN=
 MK_SSP=	no
-NO_SHARED=	yes
+MK_CFI=	no
 
 PROG=	rescue
 BINDIR?=/rescue
@@ -233,6 +233,8 @@ CRUNCH_LIBS+= -lm
 CRUNCH_PROGS_usr.bin+=	iscsictl
 CRUNCH_PROGS_usr.sbin+=	iscsid
 .endif
+
+NOPIE=	yes
 
 .include <bsd.crunchgen.mk>
 .include <bsd.prog.mk>

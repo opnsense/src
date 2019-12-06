@@ -10,3 +10,5 @@ CFLAGS+=-I${BOOTSRC}/arm64/libarm64
 SRCS+=	cache.c
 
 CFLAGS+=	-mgeneral-regs-only
+
+NOPIE=	1

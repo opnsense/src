@@ -1,0 +1,10 @@
+Enable building
+.Xr devd 8
+as a Position-Independent Executable (PIE).
+.Pp
+This option should be used with extreme caution.
+.Pp
+.Sy Warning :
+DO NOT USE
+this option if /usr is NOT on the same filesystem
+as /.

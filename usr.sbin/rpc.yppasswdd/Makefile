@@ -14,6 +14,8 @@ SRCS=	util.c yp_access.c yp_dblookup.c yp_dbwrite.c \
 GENSRCS=yp.h yp_clnt.c yppasswd.h yppasswd_private.h yppasswd_private_svc.c \
 	yppasswd_private_xdr.c yppasswd_svc.c
 
+CFI_OVERRIDE=	-fno-sanitize=cfi-icall
+
 WARNS?=	 5
 CFLAGS+= -fno-strict-aliasing
 CFLAGS+= -I${SRCTOP}/usr.sbin/vipw \

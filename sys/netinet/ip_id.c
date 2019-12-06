@@ -75,6 +75,8 @@ __FBSDID("$FreeBSD$");
  * enabled.
  */
 
+#include "opt_pax.h"
+
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/counter.h>
@@ -99,7 +101,11 @@ __FBSDID("$FreeBSD$");
  * user wants to, we can turn on random ID generation.
  */
 VNET_DEFINE_STATIC(int, ip_rfc6864) = 1;
+#ifdef PAX_HARDENING
+VNET_DEFINE_STATIC(int, ip_do_randomid) = 1;
+#else
 VNET_DEFINE_STATIC(int, ip_do_randomid) = 0;
+#endif
 #define	V_ip_rfc6864		VNET(ip_rfc6864)
 #define	V_ip_do_randomid	VNET(ip_do_randomid)
 
@@ -283,6 +289,11 @@ ipid_sysinit(void)
 	
 	CPU_FOREACH(i)
 		arc4rand(zpcpu_get_cpu(V_ip_id, i), sizeof(uint64_t), 0);
+
+#ifdef PAX_HARDENING
+	if (V_ip_do_randomid)
+		ip_initid(8192);
+#endif
 }
 VNET_SYSINIT(ip_id, SI_SUB_PROTO_DOMAIN, SI_ORDER_ANY, ipid_sysinit, NULL);
 

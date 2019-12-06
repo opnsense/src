@@ -31,26 +31,6 @@ __FBSDID("$FreeBSD$");
 
 #include "libc_private.h"
 
-/*
- * Older FreeBSD 2.0, 2.1 and 2.2 had different ps_strings structures and
- * in different locations.
- * 1: old_ps_strings at the very top of the stack.
- * 2: old_ps_strings at SPARE_USRSPACE below the top of the stack.
- * 3: ps_strings at the very top of the stack.
- * We only support a kernel providing #3 style ps_strings.
- *
- * For historical purposes, a definition of the old ps_strings structure
- * and location is preserved below:
-struct old_ps_strings {
-	char	*old_ps_argvstr;
-	int	old_ps_nargvstr;
-	char	*old_ps_envstr;
-	int	old_ps_nenvstr;
-};
-#define	OLD_PS_STRINGS ((struct old_ps_strings *) \
-	(USRSTACK - SPARE_USRSPACE - sizeof(struct old_ps_strings)))
- */
-
 #include <stdarg.h>
 
 #define SPT_BUFSIZE 2048	/* from other parts of sendmail */

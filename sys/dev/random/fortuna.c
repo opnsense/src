@@ -38,6 +38,9 @@ __FBSDID("$FreeBSD$");
 #include <sys/limits.h>
 
 #ifdef _KERNEL
+
+#include "opt_pax.h"
+
 #include <sys/param.h>
 #include <sys/kernel.h>
 #include <sys/lock.h>

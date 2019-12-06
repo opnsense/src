@@ -42,6 +42,7 @@ __FBSDID("$FreeBSD$");
 
 #include "opt_capsicum.h"
 #include "opt_ktrace.h"
+#include "opt_pax.h"
 
 #include <sys/param.h>
 #include <sys/fail.h>
@@ -2003,6 +2004,15 @@ sysctl_root(SYSCTL_HANDLER_ARGS)
 			error = EPERM;
 			goto out;
 		}
+	}
+#endif
+
+#ifdef PAX_HARDENING
+	/* Is this sysctl available only to root? */
+	if (oid->oid_kind & CTLFLAG_ROOTONLY) {
+		error = priv_check(req->td, PRIV_SYSCTL_ROOTONLY);
+		if (error)
+			goto out;
 	}
 #endif
 

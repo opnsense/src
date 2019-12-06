@@ -4,6 +4,8 @@
 PACKAGE=runtime
 PROG=	md5
 
+CFI_OVERRIDE=-fno-sanitize=cfi-icall
+
 LINKS=	${BINDIR}/md5 ${BINDIR}/rmd160 \
 	${BINDIR}/md5 ${BINDIR}/sha1 \
 	${BINDIR}/md5 ${BINDIR}/sha224 \

@@ -44,4 +44,6 @@ CFLAGS+=       -DHESIOD
 .endif
 CFLAGS+=	-I${SRCTOP}/lib/libc/include
 
+NOPIE=	yes
+
 .include <bsd.lib.mk>

@@ -30,10 +30,10 @@
 ############################################################ MAIN
 
 cat $BSDINSTALL_TMPETC/rc.conf.* >> $BSDINSTALL_TMPETC/rc.conf
-rm $BSDINSTALL_TMPETC/rc.conf.*
+rm -f $BSDINSTALL_TMPETC/rc.conf.*
 
 cat $BSDINSTALL_CHROOT/etc/sysctl.conf $BSDINSTALL_TMPETC/sysctl.conf.* >> $BSDINSTALL_TMPETC/sysctl.conf
-rm $BSDINSTALL_TMPETC/sysctl.conf.*
+rm -f $BSDINSTALL_TMPETC/sysctl.conf.*
 
 if [ -f $BSDINSTALL_TMPETC/ttys.hardening ]; then
 	cat $BSDINSTALL_TMPETC/ttys.hardening > $BSDINSTALL_TMPETC/ttys
@@ -43,7 +43,7 @@ fi
 cp $BSDINSTALL_TMPETC/* $BSDINSTALL_CHROOT/etc
 
 cat $BSDINSTALL_TMPBOOT/loader.conf.* >> $BSDINSTALL_TMPBOOT/loader.conf
-rm $BSDINSTALL_TMPBOOT/loader.conf.*
+rm -f $BSDINSTALL_TMPBOOT/loader.conf.*
 # The 'opensolaris_load' line is a workaround for arm64, which does not
 # automatically load opensolaris.ko with zfs.ko.
 df -t zfs $BSDINSTALL_CHROOT > /dev/null && echo "opensolaris_load=\"YES\"" >> $BSDINSTALL_TMPBOOT/loader.conf

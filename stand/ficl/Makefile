@@ -4,6 +4,10 @@
 .include <bsd.init.mk>
 .include "${BOOTSRC}/ficl.mk"
 
+.if ${MACHINE_CPUARCH} == "aarch64"
+NOPIE=		1
+.endif
+
 .PATH: ${FICLSRC} ${FICLSRC}/${FICL_CPUARCH}
 
 BASE_SRCS=	dict.c ficl.c fileaccess.c float.c loader.c math64.c \

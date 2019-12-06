@@ -5,6 +5,7 @@
 ident		MALTA
 
 include		"std.MALTA"
+include 	HARDENEDBSD
  
 machine		mips mips
  

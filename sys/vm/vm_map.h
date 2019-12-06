@@ -206,7 +206,6 @@ struct vm_map {
 	vm_flags_t flags;		/* flags for this vm_map */
 	vm_map_entry_t root;		/* Root of a binary search tree */
 	pmap_t pmap;			/* (c) Physical map */
-	vm_offset_t anon_loc;
 	int busy;
 };
 
@@ -215,9 +214,6 @@ struct vm_map {
  */
 #define MAP_WIREFUTURE		0x01	/* wire all future pages */
 #define	MAP_BUSY_WAKEUP		0x02
-#define	MAP_IS_SUB_MAP		0x04	/* has parent */
-#define	MAP_ASLR		0x08	/* enabled ASLR */
-#define	MAP_ASLR_IGNSTART	0x10
 
 #ifdef	_KERNEL
 #if defined(KLD_MODULE) && !defined(KLD_TIED)
@@ -269,6 +265,13 @@ struct vmspace {
 	caddr_t vm_taddr;	/* (c) user virtual address of text */
 	caddr_t vm_daddr;	/* (c) user virtual address of data */
 	caddr_t vm_maxsaddr;	/* user VA at max stack growth */
+	vm_offset_t vm_aslr_delta_mmap;	/* mmap() random delta for ASLR */
+	vm_offset_t vm_aslr_delta_stack;	/* stack random delta for ASLR */
+	vm_offset_t vm_aslr_delta_exec;	/* exec base random delta for ASLR */
+	vm_offset_t vm_aslr_delta_vdso;	/* VDSO base random delta for ASLR */
+#ifdef __LP64__
+	vm_offset_t vm_aslr_delta_map32bit; /* random for MAP_32BIT mappings */
+#endif
 	volatile int vm_refcnt;	/* number of references */
 	/*
 	 * Keep the PMAP last, so that CPU-specific variations of that

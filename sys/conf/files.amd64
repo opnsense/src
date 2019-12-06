@@ -83,6 +83,11 @@ ukbdmap.h			optional	ukbd_dflt_keymap	\
 	no-obj no-implicit-rule before-depend				\
 	clean		"ukbdmap.h"
 #
+kbdmuxmap.h			optional	kbdmux_dflt_keymap	\
+	compile-with	"/usr/sbin/kbdcontrol -L ${KBDMUX_DFLT_KEYMAP} | sed -e 's/^static keymap_t.* = /static keymap_t key_map = /' -e 's/^static accentmap_t.* = /static accentmap_t accent_map = /' > kbdmuxmap.h"			\
+	no-obj no-implicit-rule before-depend				\
+	clean		"kbdmuxmap.h"
+#
 hpt27xx_lib.o			optional	hpt27xx			\
 	dependency	"$S/dev/hpt27xx/amd64-elf.hpt27xx_lib.o.uu"	\
 	compile-with	"uudecode < $S/dev/hpt27xx/amd64-elf.hpt27xx_lib.o.uu" \

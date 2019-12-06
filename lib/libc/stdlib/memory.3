@@ -50,6 +50,8 @@
 .Ft void *
 .Fn realloc "void *ptr" "size_t size"
 .Ft void *
+.Fn reallocarray "void *ptr" "size_t nmbr" "size_t size"
+.Ft void *
 .Fn calloc "size_t nelem" "size_t elsize"
 .Ft void *
 .Fn alloca "size_t size"
@@ -68,6 +70,7 @@ individual manual pages.
 .Xr free 3 ,
 .Xr malloc 3 ,
 .Xr realloc 3
+.Xr reallocarray 3
 .Sh STANDARDS
 These functions, with the exception of
 .Fn alloca

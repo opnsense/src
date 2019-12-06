@@ -1,5 +1,11 @@
 # $FreeBSD$
 
+.include <src.opts.mk>
+
+CFI_OVERRIDE= -fno-sanitize=cfi-icall
+
+.if ${MK_LIBRESSL} == "no"
+
 CONFS=	openssl.cnf
 CONFSDIR=	/etc/ssl
 PROG=	openssl
@@ -26,3 +32,7 @@ SRCS+=	spkac.c srp.c storeutl.c ts.c verify.c version.c x509.c
 
 .PATH:	${LCRYPTO_SRC}/apps \
 	${.CURDIR}/man
+
+.else
+.include "Makefile.libressl"
+.endif # ${MK_LIBRESSL} == "no"

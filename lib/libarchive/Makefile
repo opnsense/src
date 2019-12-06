@@ -19,6 +19,9 @@ CFLAGS+=	-I${.OBJDIR}
 .if ${MK_OPENSSL} != "no"
 CFLAGS+=	-DWITH_OPENSSL
 LIBADD+=	crypto
+.if ${MK_LIBRESSL} != "no"
+CFLAGS+=	-DHAVE_LIBRESSL=1
+.endif
 .else
 LIBADD+=	md
 .endif

@@ -1,0 +1,13 @@
+options 	PAX
+options 	PAX_CONTROL_ACL
+options 	PAX_CONTROL_ACL_OVERRIDE_SUPPORT
+options 	PAX_CONTROL_EXTATTR
+options 	PAX_JAIL_SUPPORT
+options 	PAX_ASLR
+options 	PAX_SYSCTLS
+options 	PAX_HARDENING
+options		PAX_NOEXEC
+options		PAX_SEGVGUARD
+
+options		INVARIANT_SUPPORT
+options 	INVARIANTS

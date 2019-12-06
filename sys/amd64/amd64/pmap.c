@@ -108,6 +108,7 @@ __FBSDID("$FreeBSD$");
  */
 
 #include "opt_ddb.h"
+#include "opt_pax.h"
 #include "opt_pmap.h"
 #include "opt_vm.h"
 
@@ -436,7 +437,12 @@ int invpcid_works = 0;
 SYSCTL_INT(_vm_pmap, OID_AUTO, invpcid_works, CTLFLAG_RD, &invpcid_works, 0,
     "Is the invpcid instruction available ?");
 
+#ifdef PAX
+/* The related part of code is in x86/identcpu.c - see pti_get_default() */
+int __read_frequently pti = 1;
+#else
 int __read_frequently pti = 0;
+#endif
 SYSCTL_INT(_vm_pmap, OID_AUTO, pti, CTLFLAG_RDTUN | CTLFLAG_NOFETCH,
     &pti, 0,
     "Page Table Isolation enabled");

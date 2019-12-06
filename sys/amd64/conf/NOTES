@@ -127,7 +127,6 @@ device		nvram		# Access to rtc cmos via /dev/nvram
 device		speaker		#Play IBM BASIC-style noises out your speaker
 hint.speaker.0.at="isa"
 hint.speaker.0.port="0x61"
-device		gzip		#Exec gzipped a.out's.  REQUIRES COMPAT_AOUT!
 
 
 #####################################################################
@@ -624,15 +623,6 @@ options 	EFIRT
 # Enable 32-bit runtime support for FreeBSD/i386 binaries.
 options 	COMPAT_FREEBSD32
 
-# Enable iBCS2 runtime support for SCO and ISC binaries
-#XXX#options 	IBCS2
-
-# Emulate spx device for client side of SVR3 local X interface
-#XXX#options 	SPX_HACK
-
-# Enable (32-bit) a.out binary support
-options 	COMPAT_AOUT
-
 # Enable 32-bit runtime support for CloudABI binaries.
 options 	COMPAT_CLOUDABI32
 
@@ -688,3 +678,4 @@ options 	VM_KMEM_SIZE_SCALE
 # Enable NDIS binary driver support
 options 	NDISAPI
 device		ndis
+

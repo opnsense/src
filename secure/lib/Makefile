@@ -8,6 +8,9 @@ SUBDIR+=libcrypto libssl
 .if ${MK_OPENSSH} != "no"
 SUBDIR+=libssh
 .endif
+.if ${MK_LIBRESSL} != "no"
+SUBDIR+=libtls
+.endif
 .endif
 
 SUBDIR.${MK_TESTS}+= tests

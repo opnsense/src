@@ -11,6 +11,8 @@ MAN=		geom.8
 CFLAGS+=	-I${.CURDIR} -I${.CURDIR}/core
 CFLAGS+=	-DGEOM_CLASS_DIR=\"${GEOM_CLASS_DIR}\"
 
+NOCFI=		yes
+
 LIBADD=		geom util
 
 .if defined(RESCUE) || defined(RELEASE_CRUNCH)

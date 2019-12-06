@@ -63,6 +63,7 @@ __DEFAULT_YES_OPTIONS = \
     AUTHPF \
     AUTOFS \
     BHYVE \
+    BIND_NOW \
     BINUTILS \
     BINUTILS_BOOTSTRAP \
     BLACKLIST \
@@ -79,6 +80,7 @@ __DEFAULT_YES_OPTIONS = \
     CASPER \
     CCD \
     CDDL \
+    CLANG_EXTRAS \
     CPP \
     CROSS_COMPILER \
     CRYPT \
@@ -101,7 +103,6 @@ __DEFAULT_YES_OPTIONS = \
     FMTREE \
     FORTH \
     FP_LIBC \
-    FREEBSD_UPDATE \
     FTP \
     GAMES \
     GCOV \
@@ -111,6 +112,8 @@ __DEFAULT_YES_OPTIONS = \
     GOOGLETEST \
     GPIO \
     HAST \
+    HBSD_UPDATE \
+    HBSDCONTROL \
     HTML \
     ICONV \
     INET \
@@ -125,7 +128,6 @@ __DEFAULT_YES_OPTIONS = \
     LDNS \
     LDNS_UTILS \
     LEGACY_CONSOLE \
-    LIB32 \
     LIBPTHREAD \
     LIBTHR \
     LLVM_COV \
@@ -147,25 +149,23 @@ __DEFAULT_YES_OPTIONS = \
     NLS_CATALOGS \
     NS_CACHING \
     NTP \
-    OFED \
     OPENSSL \
     PAM \
     PC_SYSINSTALL \
     PF \
     PKGBOOTSTRAP \
     PMC \
-    PORTSNAP \
     PPP \
     QUOTAS \
     RADIUS_SUPPORT \
     RBOOTD \
-    REPRODUCIBLE_BUILD \
     RESCUE \
     ROUTED \
     SENDMAIL \
     SERVICESDB \
     SETUID_LOGIN \
     SHAREDOCS \
+    SHLIBRANDOM \
     SOURCELESS \
     SOURCELESS_HOST \
     SOURCELESS_UCODE \
@@ -195,20 +195,29 @@ __DEFAULT_NO_OPTIONS = \
     BEARSSL \
     BSD_CRTBEGIN \
     BSD_GREP \
-    CLANG_EXTRAS \
+    BSD_GREP_FASTMATCH \
+    DEVD_PIE \
     DTRACE_TESTS \
+    FREEBSD_UPDATE \
     GNU_GREP_COMPAT \
     HESIOD \
+    LIB32 \
+    LIBRESSL \
     LIBSOFT \
     LOADER_FIREWIRE \
     LOADER_FORCE_LE \
     LOADER_VERIEXEC_PASS_MANIFEST \
     NAND \
+    OFED \
     OFED_EXTRA \
     OPENLDAP \
+    OPENNTPD \
+    PORTSNAP \
+    REPRODUCIBLE_BUILD \
     RPCBIND_WARMSTART_SUPPORT \
     SHARED_TOOLCHAIN \
     SORT_THREADS \
+    SPECTREV1_FIX \
     SVN \
     ZONEINFO_LEAPSECONDS_SUPPORT \
     ZONEINFO_OLD_TIMEZONES_SUPPORT \
@@ -356,6 +365,41 @@ BROKEN_OPTIONS+=SSP
 .if ${__T:Mmips*} || ${__T:Mpowerpc*} || ${__T:Msparc64} || ${__T:Mriscv*}
 BROKEN_OPTIONS+=EFI
 .endif
+
+.if ${__T} == "amd64" || ${__T} == "i386" || ${__T} == "aarch64"
+__DEFAULT_YES_OPTIONS+=PIE
+.else
+__DEFAULT_NO_OPTIONS+=PIE
+.endif
+
+.if ${__T} == "armv6"
+__DEFAULT_NO_OPTIONS+=SHARED_TOOLCHAIN
+.else
+__DEFAULT_YES_OPTIONS+=SHARED_TOOLCHAIN
+.endif
+
+.if ${__T} == "amd64"
+__DEFAULT_YES_OPTIONS+=SAFESTACK
+__DEFAULT_YES_OPTIONS+=RETPOLINE
+.else
+__DEFAULT_NO_OPTIONS+=SAFESTACK
+__DEFAULT_NO_OPTIONS+=RETPOLINE
+.endif
+
+.if ${__T} == "amd64" || ${__T} == "aarch64"
+__DEFAULT_YES_OPTIONS+=CFI
+__DEFAULT_YES_OPTIONS+=CLANG_EXTRAS
+__DEFAULT_YES_OPTIONS+=LLVM_AR_IS_AR
+__DEFAULT_YES_OPTIONS+=LLVM_NM_IS_NM
+__DEFAULT_YES_OPTIONS+=LLVM_OBJDUMP_IS_OBJDUMP
+.else
+__DEFAULT_NO_OPTIONS+=CFI
+__DEFAULT_NO_OPTIONS+=CLANG_EXTRAS
+__DEFAULT_NO_OPTIONS+=LLVM_AR_IS_AR
+__DEFAULT_NO_OPTIONS+=LLVM_NM_IS_NM
+__DEFAULT_NO_OPTIONS+=LLVM_OBJDUMP_IS_OBJDUMP
+.endif
+
 # OFW is only for powerpc and sparc64, exclude others
 .if ${__T:Mpowerpc*} == "" && ${__T:Msparc64} == ""
 BROKEN_OPTIONS+=LOADER_OFW
@@ -376,6 +420,7 @@ BROKEN_OPTIONS+=LOADER_GELI LOADER_LUA
 # profiling won't work on MIPS64 because there is only assembly for o32
 BROKEN_OPTIONS+=PROFILE
 .endif
+
 .if ${__T} == "aarch64" || ${__T} == "amd64" || ${__T} == "i386" || \
     ${__T} == "powerpc64" || ${__T} == "sparc64"
 __DEFAULT_YES_OPTIONS+=CXGBETOOL
@@ -551,15 +596,34 @@ MK_LLD:=	no
 MK_LLDB:=	no
 .endif
 
+.if ${MK_LOADER_VERIEXEC} == "no"
+MK_LOADER_VERIEXEC_PASS_MANIFEST := no
+.endif
+
 .if ${MK_CLANG} == "no"
 MK_CLANG_EXTRAS:= no
 MK_CLANG_FULL:= no
 MK_LLVM_COV:= no
+MK_SAFESTACK:=	no
 .endif
 
-.if ${MK_LOADER_VERIEXEC} == "no"
-MK_LOADER_VERIEXEC_PASS_MANIFEST := no
+.if ${MK_LLD_IS_LD} == "no" || ${MK_LLD_BOOTSTRAP} == "no"
+MK_CFI:=	no
+MK_RETPOLINE:=	no
 .endif
+
+.if ${MK_LIBRESSL} == "no"
+MK_OPENNTPD:=	no
+.endif
+
+.if ${MK_OPENNTPD} != "no"
+MK_NTP:=	no
+.endif
+
+.if ${MK_NTP} != "no"
+MK_OPENNTPD:=	no
+.endif
+
 
 #
 # MK_* options whose default value depends on another option.

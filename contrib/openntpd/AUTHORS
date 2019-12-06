@@ -1,0 +1,15 @@
+Credits
+-------
+OpenBSD's native ntpd was written by Henning Brauer and Alexander Guy in 2004.
+It has seen improvements from many others as well. Please see the commit logs
+for an exhaustive list of contributors.
+
+Portable OpenNTPD versions 3.9 and earlier were developed by Darren Tucker,
+with contributions from Christian Weisgerber, Jason Mader and Anthony
+O.Zabelin., and were based heavily on OpenSSH portable. It also has seen
+improvements from many others. Refer to the commit logs for an exhaustive list.
+
+This new portable version is based on the LibreSSL portable framework by
+Brent Cook.  It includes patches from FreeBSD, Debian and Gentoo OpenNTPD
+packages, along with with compatibility code from the portable OpenSSH and
+original portable OpenNTPD trees.

@@ -34,6 +34,8 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#include "opt_pax.h"
+
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/limits.h>
@@ -46,6 +48,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/vnode.h>
+#include <sys/pax.h>
 #include <sys/ptrace.h>
 #include <sys/rwlock.h>
 #include <sys/sx.h>

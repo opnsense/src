@@ -89,9 +89,10 @@ BROKEN_OPTIONS+= FORMAT_EXTENSIONS
 BROKEN_OPTIONS+= OFED
 .endif
 
-# Things that don't work based on toolchain support.
-.if ${MACHINE} != "i386" && ${MACHINE} != "amd64"
-BROKEN_OPTIONS+= KERNEL_RETPOLINE
+.if ${MACHINE_CPUARCH} == "amd64"
+__DEFAULT_YES_OPTIONS+=	RETPOLINE
+.else
+__DEFAULT_NO_OPTIONS+=	RETPOLINE
 .endif
 
 # EFI doesn't exist on mips, powerpc, sparc or riscv.

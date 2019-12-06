@@ -10,6 +10,7 @@ __BOOT_DEFS_MK__=${MFILE}
 MK_CTF=		no
 MK_SSP=		no
 MK_PROFILE=	no
+MK_SPECTREV1_FIX=	no
 MAN=
 .if !defined(PIC)
 NO_PIC=
@@ -35,6 +36,9 @@ BOOTOBJ=	${OBJTOP}/stand
 
 # BINDIR is where we install
 BINDIR?=	/boot
+
+MK_SAFESTACK=	no
+MK_CFI=		no
 
 LIBSA=		${BOOTOBJ}/libsa/libsa.a
 .if ${MACHINE} == "i386"

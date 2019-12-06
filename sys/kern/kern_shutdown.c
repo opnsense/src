@@ -43,6 +43,7 @@ __FBSDID("$FreeBSD$");
 #include "opt_ekcd.h"
 #include "opt_kdb.h"
 #include "opt_panic.h"
+#include "opt_pax.h"
 #include "opt_sched.h"
 #include "opt_watchdog.h"
 
@@ -64,6 +65,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/mount.h>
+#include <sys/pax.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/reboot.h>
@@ -859,6 +861,9 @@ vpanic(const char *fmt, va_list ap)
 	printf("cpuid = %d\n", PCPU_GET(cpuid));
 #endif
 	printf("time = %jd\n", (intmax_t )time_second);
+#ifdef PAX
+	pax_print_hbsd_context();
+#endif
 #ifdef KDB
 	if ((newpanic || trace_all_panics) && trace_on_panic)
 		kdb_backtrace();

@@ -146,6 +146,7 @@
  */
 #define	PRIV_KLD_LOAD		130	/* Load a kernel module. */
 #define	PRIV_KLD_UNLOAD		131	/* Unload a kernel module. */
+#define PRIV_KLD_STAT		132	/* Lookup a kernel module */
 
 /*
  * Privileges associated with the MAC Framework and specific MAC policy
@@ -508,10 +509,14 @@
 #define	PRIV_KMEM_READ		680	/* Open mem/kmem for reading. */
 #define	PRIV_KMEM_WRITE		681	/* Open mem/kmem for writing. */
 
+/* sysctl(9) privileges.
+ */
+#define	PRIV_SYSCTL_ROOTONLY	800
+
 /*
  * Track end of privilege list.
  */
-#define	_PRIV_HIGHEST		682
+#define	_PRIV_HIGHEST		801
 
 /*
  * Validate that a named privilege is known by the privilege system.  Invalid

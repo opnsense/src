@@ -16,7 +16,7 @@ LDIRS=	BSD_daemon \
 	drivers \
 	etc \
 	find_interface \
-	ibcs2 \
+	hardenedbsd \
 	indent \
 	ipfw \
 	jails \
@@ -99,11 +99,6 @@ SE_FIND_INTERFACE= \
 	README \
 	find_interface.c
 
-SE_DIRS+=	ibcs2
-SE_IBCS2=	\
-	README \
-	hello.uu
-
 SE_DIRS+=	indent
 SE_INDENT=	indent.pro
 
@@ -113,6 +108,9 @@ SUBDIR+=	ipfilter
 
 SE_DIRS+=	ipfw
 SE_IPFW=	change_rules.sh
+
+SE_DIRS+=	hardenedbsd
+SE_HARDENEDBSD=	hbsdcontrol.sh
 
 SE_DIRS+=	jails
 SE_JAILS= \

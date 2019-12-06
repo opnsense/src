@@ -62,6 +62,37 @@ SYSCTL_INT(_hw, OID_AUTO, lower_amd64_sharedpage, CTLFLAG_RDTUN,
  */
 static int	hw_clflush_disable = -1;
 
+/*
+ * -1: SDBG not supported (default)
+ *  0: disabled SDBG
+ *  1: enabled SDBG
+ */
+static int	hw_sdbg_status = -1;
+SYSCTL_INT(_hw, OID_AUTO, intel_sdbg, CTLFLAG_RD,
+    &hw_sdbg_status, 0, "Intel Silicon Debug Interface status");
+
+static void
+init_intel(void)
+{
+	uint64_t msr;
+
+	if ((cpu_feature2 & CPUID2_SDBG) && !(cpu_feature2 & CPUID2_HV)) {
+		msr = rdmsr(MSR_IA32_DEBUG_INTERFACE);
+		if ((msr & IA32_DEBUG_INTERFACE_EN) != 0 &&
+		    (msr & IA32_DEBUG_INTERFACE_LOCK) == 0) {
+			msr &= IA32_DEBUG_INTERFACE_MASK;
+			msr |= IA32_DEBUG_INTERFACE_LOCK;
+			wrmsr(MSR_IA32_DEBUG_INTERFACE, msr);
+		}
+
+		/*
+		 * Reread the status after applied quirk.
+		 */
+		msr = rdmsr(MSR_IA32_DEBUG_INTERFACE);
+		hw_sdbg_status = (msr & IA32_DEBUG_INTERFACE_EN) ? 1 : 0;
+	}
+}
+
 static void
 init_amd(void)
 {
@@ -258,6 +289,9 @@ initializecpu(void)
 	hw_ssb_recalculate(false);
 	amd64_syscall_ret_flush_l1d_recalc();
 	switch (cpu_vendor_id) {
+	case CPU_VENDOR_INTEL:
+		init_intel();
+		break;
 	case CPU_VENDOR_AMD:
 		init_amd();
 		break;

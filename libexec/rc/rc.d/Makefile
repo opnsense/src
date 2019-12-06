@@ -14,7 +14,6 @@ CONFS=	DAEMON \
 	abi \
 	addswap \
 	adjkerntz \
-	archdep \
 	bgfsck \
 	${_blacklistd} \
 	${_bluetooth} \
@@ -269,6 +268,10 @@ _nscd=		nscd
 
 .if ${MK_NTP} != "no"
 CONFS+=		ntpd
+.endif
+
+.if ${MK_OPENNTPD} != "no"
+CONFS+=		local_openntpd
 .endif
 
 .if ${MK_OFED} != "no"

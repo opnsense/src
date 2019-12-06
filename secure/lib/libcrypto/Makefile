@@ -1,6 +1,11 @@
 # $FreeBSD$
 
 SHLIBDIR?=	/lib
+
+.include <src.opts.mk>
+
+.if ${MK_LIBRESSL} == "no"
+
 SUBDIR=		engines
 
 .include <bsd.own.mk>
@@ -532,3 +537,7 @@ PICFLAG+=	-DOPENSSL_PIC
 	${LCRYPTO_SRC}/crypto/x509v3 \
 	${LCRYPTO_SRC}/include/openssl \
 	${.CURDIR}/man
+
+.else
+.include "Makefile.libressl"
+.endif # ${MK_LIBRESSL} != "no"

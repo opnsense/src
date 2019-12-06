@@ -2,6 +2,8 @@
 
 .include <src.opts.mk>
 
+MK_CFI=	no
+
 GREP_LIBZ=YES
 
 .if ${MK_BSD_GREP} != "yes"

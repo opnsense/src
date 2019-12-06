@@ -24,6 +24,8 @@ CONFS=	ppp.conf
 CONFSDIR=	${CONFDIR}/ppp
 CONFSMODE=	600
 
+CFI_OVERRIDE=	-fno-sanitize=cfi-icall
+
 .if ${MK_NETGRAPH} == "no"
 PPP_NO_NETGRAPH=
 .endif

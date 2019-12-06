@@ -1,5 +1,7 @@
 # $FreeBSD$
 
+SHLIBDIR?=      /lib
+
 PACKAGE=lib${LIB}
 LIBEXECINFO=	${SRCTOP}/contrib/libexecinfo
 

@@ -50,6 +50,7 @@
 #include <vm/uma.h>
 
 
+#include <sys/jail.h>
 #include <sys/malloc.h>
 #include <sys/socket.h> /* sockaddrs */
 #include <sys/selinfo.h>

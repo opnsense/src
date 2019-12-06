@@ -1,0 +1,66 @@
+.\"-
+.\" Copyright 2015 Shawn webb <shawn.webb@hardenedbsd.org>
+.\" All rights reserved
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted providing that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+.\" IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+.\" WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
+.\" DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+.\" STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
+.\" IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+.\" POSSIBILITY OF SUCH DAMAGE.
+.\"
+.\" $FreeBSD$
+.\"
+.Dd December 30, 2015
+.Dt HBSD-UPDATE-BUILD 8
+.Os FreeBSD
+.Sh NAME
+.Nm hbsd-update-build
+.Nd create binary update archives for HardenedBSD
+.Sh SYNOPSIS
+.Nm
+.Op Fl c Ar config
+.Op Fl e
+.Op Fl h
+.Sh DESCRIPTION
+The
+.Nm
+tool is used to create binary update archives for HardenedBSD.
+.Sh OPTIONS
+The following options are supported:
+.Bl -tag -width "-c config"
+.It Fl c Ar config
+Read configuration options from
+.Ar config .
+.It Fl e
+Do not clean the stage directory.
+Do not perform a new source-based build.
+Assume that all required build artifacts are pre-staged, including
+digital signatures.
+.It Fl h
+Show the help menu.
+.El
+.Sh EXAMPLES
+Some examples are listed here.
+.Pp
+Download and install the latest update onto the running system:
+.Dl % hbsd-update-build
+.El
+.Sh SEE ALSO
+.Xr hbsd-update-build.conf 5
+.Sh AUTHORS
+.An Shawn Webb Aq Mt shawn.webb@hardenedbsd.org

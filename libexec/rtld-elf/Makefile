@@ -6,8 +6,8 @@
 
 .include <src.opts.mk>
 PACKAGE=	clibs
-MK_PIE=		no # Always position independent using local rules
 MK_SSP=		no
+MK_CFI=		no
 
 CONFS=		libmap.conf
 PROG?=		ld-elf.so.1
@@ -102,6 +102,12 @@ beforeinstall:
 
 HAS_TESTS=
 SUBDIR.${MK_TESTS}+= tests
+
+.if ${MK_SHLIBRANDOM} != "no"
+CFLAGS+=	-DSHLIBRANDOM
+.endif
+
+NOPIE=	yes
 
 .include <bsd.prog.mk>
 ${PROG_FULL}:	${VERSION_MAP}

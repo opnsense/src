@@ -33,12 +33,14 @@
 __FBSDID("$FreeBSD$");
 
 #include "opt_kstack_pages.h"
+#include "opt_pax.h"
 
 #include <sys/param.h>
 #include <sys/cons.h>
 #include <sys/jail.h>
 #include <sys/kdb.h>
 #include <sys/kernel.h>
+#include <sys/pax.h>
 #include <sys/proc.h>
 #include <sys/sysent.h>
 #include <sys/systm.h>
@@ -356,6 +358,9 @@ DB_SHOW_COMMAND(thread, db_show_thread)
 	    (void *)(td->td_kstack + td->td_kstack_pages * PAGE_SIZE - 1));
 	db_printf(" flags: %#x ", td->td_flags);
 	db_printf(" pflags: %#x\n", td->td_pflags);
+#ifdef PAX
+	pax_db_printf_flags_td(td, PAX_LOG_DEFAULT);
+#endif
 	db_printf(" state: ");
 	switch (td->td_state) {
 	case TDS_INACTIVE:
@@ -480,6 +485,9 @@ DB_SHOW_COMMAND(proc, db_show_proc)
 		dump_args(p);
 		db_printf("\n");
 	}
+#ifdef PAX
+	pax_db_printf_flags(p, PAX_LOG_DEFAULT);
+#endif
 	db_printf(" repear: %p reapsubtree: %d\n",
 	    p->p_reaper, p->p_reapsubtree);
 	db_printf(" sigparent: %d\n", p->p_sigparent);

@@ -1,0 +1,9 @@
+include GENERIC-UP
+
+options		PAX
+options		PAX_SYSCTLS
+options		PAX_ASLR
+options		PAX_SEGVGUARD
+options		PAX_NOEXEC
+options		PAX_HARDENING
+options		HBSD_DEBUG

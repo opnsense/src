@@ -16,6 +16,8 @@ VIEW=	nview
 
 PROG=	nvi
 
+CFI_OVERRIDE=-fno-sanitize=cfi-icall
+
 CFLAGS+=	-D__REGEX_PRIVATE
 
 LINKS=	${BINDIR}/${VI} ${BINDIR}/${EX} ${BINDIR}/${VI} ${BINDIR}/${VIEW}

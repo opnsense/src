@@ -1,0 +1,2 @@
+.\" $FreeBSD: $
+Set to build OpenNTPd in stead of ISC ntpd daemon and utilities.

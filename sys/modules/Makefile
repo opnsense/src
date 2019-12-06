@@ -40,7 +40,6 @@ SUBDIR=	\
 	${_amdtemp} \
 	amr \
 	${_an} \
-	${_aout} \
 	${_apm} \
 	${_arcmsr} \
 	${_allwinner} \
@@ -94,7 +93,6 @@ SUBDIR=	\
 	${_cloudabi32} \
 	${_cloudabi64} \
 	${_cmx} \
-	${_coff} \
 	${_coretemp} \
 	${_cp} \
 	${_cpsw} \
@@ -156,7 +154,6 @@ SUBDIR=	\
 	i2c \
 	${_iavf} \
         ${_ibcore} \
-	${_ibcs2} \
 	${_ichwd} \
 	${_ida} \
 	if_bridge \
@@ -606,7 +603,6 @@ _rockchip=	rockchip
 .if ${MACHINE_CPUARCH} == "i386" || ${MACHINE_CPUARCH} == "amd64"
 _agp=		agp
 _an=		an
-_aout=		aout
 _bios=		bios
 _bktr=		bktr
 .if ${MK_SOURCELESS_UCODE} != "no"
@@ -767,13 +763,11 @@ _apm=		apm
 .if ${MK_SOURCELESS_UCODE} != "no"
 _ce=		ce
 .endif
-_coff=		coff
 .if ${MK_SOURCELESS_UCODE} != "no"
 _cp=		cp
 .endif
 _glxiic=	glxiic
 _glxsb=		glxsb
-#_ibcs2=		ibcs2
 _mse=		mse
 _ncr=		ncr
 _ncv=		ncv

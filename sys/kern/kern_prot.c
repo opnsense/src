@@ -48,6 +48,7 @@ __FBSDID("$FreeBSD$");
 
 #include "opt_inet.h"
 #include "opt_inet6.h"
+#include "opt_pax.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -58,6 +59,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/loginclass.h>
 #include <sys/malloc.h>
 #include <sys/mutex.h>
+#include <sys/pax.h>
 #include <sys/refcount.h>
 #include <sys/sx.h>
 #include <sys/priv.h>
@@ -1327,7 +1329,11 @@ securelevel_ge(struct ucred *cr, int level)
  * using a variety of system MIBs.
  * XXX: data declarations should be together near the beginning of the file.
  */
+#ifdef PAX_HARDENING
+static int	see_other_uids = 0;
+#else
 static int	see_other_uids = 1;
+#endif
 SYSCTL_INT(_security_bsd, OID_AUTO, see_other_uids, CTLFLAG_RW,
     &see_other_uids, 0,
     "Unprivileged processes may see subjects/objects with different real uid");
@@ -1357,7 +1363,11 @@ cr_canseeotheruids(struct ucred *u1, struct ucred *u2)
  * using a variety of system MIBs.
  * XXX: data declarations should be together near the beginning of the file.
  */
+#ifdef PAX_HARDENING
+static int	see_other_gids = 0;
+#else
 static int	see_other_gids = 1;
+#endif
 SYSCTL_INT(_security_bsd, OID_AUTO, see_other_gids, CTLFLAG_RW,
     &see_other_gids, 0,
     "Unprivileged processes may see subjects/objects with different real gid");
@@ -1632,19 +1642,47 @@ p_cansched(struct thread *td, struct proc *p)
 }
 
 /*
+ * Handle getting or setting the prison's unprivileged_proc_debug
+ * value.
+ */
+static int
+sysctl_unprivileged_proc_debug(SYSCTL_HANDLER_ARGS)
+{
+	struct prison *pr;
+	int error, val;
+
+	val = prison_allow(req->td->td_ucred, PR_ALLOW_UNPRIV_DEBUG) != 0;
+	error = sysctl_handle_int(oidp, &val, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	pr = req->td->td_ucred->cr_prison;
+	mtx_lock(&pr->pr_mtx);
+	switch (val) {
+	case 0:
+		pr->pr_allow &= ~(PR_ALLOW_UNPRIV_DEBUG);
+		break;
+	case 1:
+		pr->pr_allow |= PR_ALLOW_UNPRIV_DEBUG;
+		break;
+	default:
+		error = EINVAL;
+	}
+	mtx_unlock(&pr->pr_mtx);
+
+	return (error);
+}
+
+/*
  * The 'unprivileged_proc_debug' flag may be used to disable a variety of
  * unprivileged inter-process debugging services, including some procfs
  * functionality, ptrace(), and ktrace().  In the past, inter-process
  * debugging has been involved in a variety of security problems, and sites
  * not requiring the service might choose to disable it when hardening
  * systems.
- *
- * XXX: Should modifying and reading this variable require locking?
- * XXX: data declarations should be together near the beginning of the file.
  */
-static int	unprivileged_proc_debug = 1;
-SYSCTL_INT(_security_bsd, OID_AUTO, unprivileged_proc_debug, CTLFLAG_RW,
-    &unprivileged_proc_debug, 0,
+SYSCTL_PROC(_security_bsd, OID_AUTO, unprivileged_proc_debug,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_PRISON | CTLFLAG_SECURE, 0, 0,
+    sysctl_unprivileged_proc_debug, "I",
     "Unprivileged processes may use process debugging facilities");
 
 /*-
@@ -1662,11 +1700,8 @@ p_candebug(struct thread *td, struct proc *p)
 
 	KASSERT(td == curthread, ("%s: td not curthread", __func__));
 	PROC_LOCK_ASSERT(p, MA_OWNED);
-	if (!unprivileged_proc_debug) {
-		error = priv_check(td, PRIV_DEBUG_UNPRIV);
-		if (error)
-			return (error);
-	}
+	if ((error = priv_check(td, PRIV_DEBUG_UNPRIV)))
+		return (error);
 	if (td->td_proc == p)
 		return (0);
 	if ((error = prison_check(td->td_ucred, p->p_ucred)))

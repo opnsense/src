@@ -34,20 +34,11 @@ PROG=	${PROG_CXX}
 MK_DEBUG_FILES=	no
 .endif
 
-# ELF hardening knobs
-.if ${MK_BIND_NOW} != "no"
-LDFLAGS+= -Wl,-znow
-.endif
-.if ${MK_PIE} != "no" && (!defined(NO_SHARED) || ${NO_SHARED:tl} == "no")
-CFLAGS+= -fPIE
-CXXFLAGS+= -fPIE
-LDFLAGS+= -pie
-.endif
 .if ${MK_RETPOLINE} != "no"
 CFLAGS+= -mretpoline
 CXXFLAGS+= -mretpoline
 # retpolineplt is broken with static linking (PR 233336)
-.if !defined(NO_SHARED) || ${NO_SHARED:tl} == "no"
+.if !defined(NO_SHARED) || ${NO_SHARED} == "no" || ${NO_SHARED} == "NO"
 LDFLAGS+= -Wl,-zretpolineplt
 .endif
 .endif
@@ -73,8 +64,69 @@ TAGS+=		package=${PACKAGE:Uruntime}
 TAG_ARGS=	-T ${TAGS:[*]:S/ /,/g}
 .endif
 
-.if defined(NO_SHARED) && ${NO_SHARED:tl} != "no"
+.if defined(NO_SHARED) && (${NO_SHARED} != "no" && ${NO_SHARED} != "NO")
 LDFLAGS+= -static
+.endif
+
+.if defined(MK_PIE)
+# Ports will not have MK_PIE defined and the following logic requires
+# it be defined.
+
+.if ${LDFLAGS:M-static}
+NOPIE=yes
+.endif
+
+.if !defined(NOPIE)
+.if ${MK_PIE} != "no"
+
+CFLAGS+= -fPIC -fPIE
+CXXFLAGS+= -fPIC -fPIE
+LDFLAGS+= -pie
+
+# Only toggle SafeStack for PIE binaries. SafeStack requires ASLR in
+# order to be effective.
+.if !defined(NOSAFESTACK)
+.if ${MK_SAFESTACK} != "no"
+CFLAGS+=	-fsanitize=safe-stack
+CXXFLAGS+=	-fsanitize=safe-stack
+LDFLAGS+=	-fsanitize=safe-stack
+.endif # ${MK_SAFESTACK} != "no"
+.endif # !defined(NOSAFESTACK)
+
+.endif # ${MK_PIE} != no
+.endif # !defined(NOPIE)
+.endif # defined(MK_PIE)
+
+.if !defined(NOCFI) && defined(MK_CFI)
+.if ${MK_CFI} != "no"
+.if ${MK_LLD_IS_LD} == "no"
+.error WITH_CFI requires WITH_LLD_IS_LD
+.endif
+
+CFLAGS+=	-fsanitize=cfi -fvisibility=hidden -flto ${CFI_OVERRIDE}
+CXXFLAGS+=	-fsanitize=cfi -fvisibility=hidden -flto ${CFI_OVERRIDE}
+LDFLAGS+=	-fsanitize=cfi -fvisibility=hidden -flto ${CFI_OVERRIDE}
+.endif
+.endif
+
+.if defined(MK_RETPOLINE) && ${MK_RETPOLINE} != "no"
+CFLAGS+=	-mretpoline
+CXXFLAGS+=	-mretpoline
+.if !defined(NOPIE)
+LDFLAGS+=	-Wl,-z,retpolineplt
+.endif
+.endif
+
+.if defined(MK_BIND_NOW) && ${MK_BIND_NOW} != "no"
+LDFLAGS+=	-Wl,-z,now
+.endif
+
+.if defined(MK_SPECTREV1_FIX) && ${MK_SPECTREV1_FIX} != "no"
+CFLAGS+=	-mspeculative-load-hardening
+.endif
+
+.if defined(MK_LIBRESSL) && ${MK_LIBRESSL} != "no"
+CFLAGS+=	-DHAVE_LIBRESSL
 .endif
 
 .if ${MK_DEBUG_FILES} != "no"

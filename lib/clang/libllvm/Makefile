@@ -401,6 +401,7 @@ SRCS_MIN+=	DebugInfo/CodeView/RecordSerialization.cpp
 SRCS_MIN+=	DebugInfo/CodeView/SimpleTypeSerializer.cpp
 SRCS_EXT+=	DebugInfo/CodeView/StringsAndChecksums.cpp
 SRCS_MIN+=	DebugInfo/CodeView/SymbolDumper.cpp
+SRCS_MIN+=	DebugInfo/CodeView/SymbolRecordHelpers.cpp
 SRCS_MIN+=	DebugInfo/CodeView/SymbolRecordMapping.cpp
 SRCS_EXT+=	DebugInfo/CodeView/SymbolSerializer.cpp
 SRCS_MIN+=	DebugInfo/CodeView/TypeDumpVisitor.cpp

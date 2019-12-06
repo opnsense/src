@@ -1,0 +1,90 @@
+.\"-
+.\" Copyright (c) 2017-2018 Olivér Pintér
+.\" All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.\" $HardenedBSD$
+.\"
+.Dd Aug 19, 2018
+.Dt HBSDCONTROL 8
+.Os
+.Sh NAME
+.Nm hbsdcontrol
+.Nd "HardenedBSD's feature state control utility"
+.Sh SYNOPSIS
+.Nm
+.Op Fl d
+.Cm pax
+.Cm enable
+.Ar feature
+.Ar file
+.Nm
+.Op Fl d
+.Cm pax
+.Cm disable
+.Ar feature
+.Ar file
+.Nm
+.Op Fl d
+.Cm pax
+.Cm reset
+.Ar feature
+.Ar file
+.Nm
+.Op Fl d
+.Cm pax
+.Cm sysdef
+.Ar feature
+.Ar file
+.Nm
+.Op Fl d
+.Cm pax
+.Cm list
+.Ar file
+.Nm
+.Op Fl d
+.Op Fl h
+.Op Fl v
+.Sh EXIT STATUS
+Exit status is 0 on success, or 1 if the command fails.
+\.".Bl
+.It
+.El
+.Sh EXAMPLES
+Disable mprotect and pageexec on firefox's binary:
+.Bd -literal -offset indent
+# hbsdcontrol pax disable mprotect /usr/local/bin/firefox
+# hbsdcontrol pax disable pageexec /usr/local/bin/firefox
+.Ed
+.Sh SEE ALSO
+.Xr libhbsdcontrol 3 ,
+.Xr security 7
+.Sh HISTORY
+The
+.Nm hbsdcontrol
+utility first appeared in HardenedBSD 11.2.
+.Sh AUTHORS
+The
+.Nm hbsdcontrol
+utility and this manual page were written by
+.An Oliver Pinter Aq Mt oliver.pinter@HardenedBSD.org .

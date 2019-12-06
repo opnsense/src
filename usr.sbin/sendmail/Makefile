@@ -28,6 +28,8 @@ BINMODE=4555
 BINMODE=2555
 .endif
 
+CFI_OVERRIDE=-fno-sanitize=cfi-icall
+
 # Define the database format to use for aliases et al.
 DBMDEF=	-DNEWDB
 # If you don't want NIS alias/map support, comment out this line
@@ -67,6 +69,9 @@ CFLAGS+=${SENDMAIL_CFLAGS}
 DPADD+=${SENDMAIL_DPADD}
 LDADD+=${SENDMAIL_LDADD}
 LDFLAGS+=${SENDMAIL_LDFLAGS}
+
+# HBSDTODO: Research why sendmail compilation fails with SafeStack.
+MK_SAFESTACK=	no
 
 sm_os.h: ${SENDMAIL_DIR}/include/sm/os/sm_os_freebsd.h .NOMETA
 	ln -sf ${.ALLSRC} ${.TARGET}

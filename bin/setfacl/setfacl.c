@@ -34,6 +34,7 @@ __FBSDID("$FreeBSD$");
 #include <err.h>
 #include <errno.h>
 #include <fts.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -60,6 +61,7 @@ struct sf_entry {
 };
 static TAILQ_HEAD(, sf_entry) entrylist;
 
+
 bool have_mask;
 bool have_stdin;
 bool n_flag;
@@ -69,11 +71,20 @@ static bool L_flag;
 static bool R_flag;
 static bool need_mask;
 static acl_type_t acl_type = ACL_TYPE_ACCESS;
+static volatile sig_atomic_t siginfo;
 
 static int	handle_file(FTS *ftsp, FTSENT *file);
 static acl_t	clear_inheritance_flags(acl_t acl);
 static char	**stdin_files(void);
 static void	usage(void);
+static void	siginfo_handler(int signo __unused);
+
+static void
+siginfo_handler(int signo __unused)
+{
+
+	siginfo++;
+}
 
 static void
 usage(void)
@@ -178,6 +189,11 @@ handle_file(FTS *ftsp, FTSENT *file)
 	int local_error, ret;
 	struct sf_entry *entry;
 	bool follow_symlink;
+
+	if (siginfo) {
+		puts(file->fts_path);
+		siginfo = 0;
+	}
 
 	local_error = 0;
 	switch (file->fts_info) {
@@ -362,6 +378,7 @@ main(int argc, char *argv[])
 	have_mask = have_stdin = n_flag = false;
 
 	TAILQ_INIT(&entrylist);
+	signal(SIGINFO, siginfo_handler);
 
 	while ((ch = getopt(argc, argv, "HLM:PRX:a:bdhkm:nx:")) != -1)
 		switch(ch) {

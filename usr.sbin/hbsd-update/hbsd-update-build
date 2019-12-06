@@ -1,0 +1,833 @@
+#!/bin/sh
+#-
+# Copyright (c) 2015-2018 HardenedBSD
+# Author: Shawn Webb <shawn.webb@hardenedbsd.org>
+#
+# This work originally sponsored by G2, Inc
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+# 1. Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+# 2. Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in the
+#    documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+# ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+# OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+# HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+# LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+# OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+# SUCH DAMAGE.
+#
+# This script builds the update archive.
+#
+# Dependencies:
+#	1) git
+#	2) OpenSSL
+
+debug_print() {
+	echo ${1} >&2
+}
+
+usage() {
+	debug_print "USAGE: ${0} [-e] [-c build.conf]"
+	exit 1
+}
+
+setup_environment() {
+	REPO="git://github.com/HardenedBSD/hardenedBSD.git"
+	BRANCH="hardened/current/master"
+	UNSIGNED=0
+	PRIVKEY="/usr/share/keys/updater/private/updater.key"
+	PUBKEY="/usr/share/keys/updater/certs/updater.crt"
+	SIGNBIN="/usr/bin/openssl"
+	KERNELS="HARDENEDBSD"
+	KERNCONFIGFILE="" #only needed for custom kernel configs
+	SRCDIR="/usr/src"
+	STAGEDIR="/builds/updater/stage"
+	OUTPUTDIR="/builds/updater/output"
+	CHROOTDIR="/builds/updater/chroot"
+	LOGDIR="/builds/updater/logs"
+	FULLCLEAN="yes"
+	DEVMODE="" # set to empty instead of "no"
+	SRCCONFPATH=""
+	DEBUGBUILD=""
+	USE_EXISTING=0
+	LOGTOSTDOUT=0
+	INTEGRIFORCE=1
+	BUILDSRCSET=1
+	VERBOSE=0
+	TARGET=$(uname -m)
+	TARGET_ARCH=$(uname -p)
+	NEED_CROSS_UTILS=1
+	SCRIPTFILE=""
+	SILENT=""
+	JOBS=$(sysctl -n hw.ncpu)
+}
+
+cleanup_chroot() {
+	if [ ! -d ${CHROOTDIR} ]; then
+		return 0
+	fi
+
+	if mount | grep -q ${CHROOTDIR}/dev; then
+		umount ${CHROOTDIR}/dev
+	fi
+
+	if [ ! ${FULLCLEAN} = "no" ]; then
+		chflags -R noschg ${CHROOTDIR}
+		rm -rf ${CHROOTDIR}
+	fi
+}
+
+setup_directories() {
+	if [ ${USE_EXISTING} -eq 0 ]; then
+		rm -rf ${STAGEDIR} || true # Don't care if this fails
+	fi
+
+	mkdir -p ${STAGEDIR}
+	mkdir -p ${OUTPUTDIR}
+	mkdir -p ${LOGDIR}
+
+	touch ${STAGEDIR}/lock
+}
+
+setup_chroot() {
+	local res
+
+	if ! mount | grep -q ${CHROOTDIR}/dev; then
+		if [ ! -d ${CHROOTDIR}/dev ]; then
+			mkdir -p ${CHROOTDIR}/dev
+		fi
+
+		mount -t devfs devfs ${CHROOTDIR}/dev
+	fi
+
+	cd ${SRCDIR}
+	make -s installworld distribution DESTDIR=${CHROOTDIR}
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return ${res}
+	fi
+
+	mkdir -p ${CHROOTDIR}/usr/obj
+
+	return 0
+}
+
+clone_source() {
+	local res
+
+	if [ ! -d ${CHROOTDIR}/usr/src/.git ]; then
+		git clone ${REPO} ${CHROOTDIR}/usr/src
+		res=${?}
+		if [ ${res} -gt 0 ]; then
+			return ${res}
+		fi
+
+		cd ${CHROOTDIR}/usr/src
+		branch=$(git branch | grep -F "* " | awk '{print $2;}')
+		if [ ! "${branch}" = "${BRANCH}" ]; then
+			git checkout -b ${BRANCH} origin/${BRANCH}
+			res=${?}
+			if [ ${res} -gt 0 ]; then
+				return ${res}
+			fi
+		fi
+	else
+		cd ${CHROOTDIR}/usr/src
+		git pull
+		res=${?}
+		if [ ${res} -gt 0 ]; then
+			return ${res}
+		fi
+	fi
+
+	return 0
+}
+
+build_source() {
+	local res
+
+	debug_print "[*] Building world"
+	chroot ${CHROOTDIR} make \
+		-C /usr/src \
+		${SILENT} \
+		-j${JOBS} \
+		$(echo ${DEVMODE} | sed 's/yes/-DNO_CLEAN/') \
+		buildworld
+
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return ${res}
+	fi
+
+	debug_print "[*] Building mtree dists"
+	if [ -d ${CHROOTDIR}/tmp/mtree ]; then
+		chmod -R noschg ${CHROOTDIR}/tmp/mtree
+		rm -rf ${CHROOTDIR}/tmp/mtree
+	fi
+
+	mkdir -p ${CHROOTDIR}/tmp/mtree/etc/mtree
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return ${res}
+	fi
+
+	chroot ${CHROOTDIR} /bin/sh -c \
+		'(unset SHELL; cd /usr/src; \
+			echo "(cd etc/mtree; make install \
+			DESTDIR=/tmp/mtree)" | make buildenv)'
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return ${res}
+	fi
+
+	for kernel in $(echo ${KERNELS}); do
+		debug_print "[*] Building kernel ${kernel}"
+		if [ ! -z "${KERNCONFIGFILE}" ]; then
+		       	if [ -f "${KERNCONFIGFILE}" ]; then
+				cp -f ${KERNCONFIGFILE} ${CHROOTDIR}/usr/src/sys/$(uname -m)/conf
+				chroot ${CHROOTDIR} make \
+					-C /usr/src \
+					KERNCONF=${kernel} \
+					${SILENT} \
+					-j${JOBS} \
+					$(echo ${DEVMODE} | \
+						sed 's/yes/-DNO_KERNELCLEAN/') \
+					buildkernel
+				res=${?}
+				if [ ${res} -gt 0 ]; then
+					return ${res}
+				fi
+			else
+				debug_print "[-] Could not find kernel config file ${KERNCONFIGFILE}"
+				return 1
+			fi
+		else
+			chroot ${CHROOTDIR} make \
+				-C /usr/src \
+				KERNCONF=${kernel} \
+				-sj$(sysctl -n hw.ncpu) \
+				$(echo ${DEVMODE} | \
+					sed 's/yes/-DNO_KERNELCLEAN/') \
+				buildkernel
+			res=${?}
+			if [ ${res} -gt 0 ]; then
+				return ${res}
+			fi
+		fi
+	done
+
+	return 0
+}
+
+create_src_conf() {
+	if [ -z "${SRCCONFPATH}" ]; then
+		if [ ! -z "${DEBUGBUILD}" ]; then
+			echo "WITHOUT_DEBUG_FILES=1" \
+				> ${CHROOTDIR}/etc/src.conf
+		fi
+	else
+		cp ${SRCCONFPATH} ${CHROOTDIR}/etc/src.conf
+	fi
+}
+
+install_binutils() {
+	local res
+
+	if [ ${NEED_CROSS_UTILS} -eq 0 ]; then
+		debug_print "[*] Cross-build detected, but configured not to need binutils."
+		export CROSS_BINUTILS_PREFIX="/usr"
+		return 0
+	fi
+
+	debug_print "[*] Cross-build detected. Installing ${TARGET_ARCH}-binutils."
+
+	if [ -f /etc/resolv.conf ]; then
+		cp /etc/resolv.conf ${CHROOTDIR}/etc/resolv.conf
+	fi
+
+	chroot ${CHROOTDIR} \
+		env ASSUME_ALWAYS_YES=yes \
+		pkg bootstrap -y
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return ${res}
+	fi
+
+	chroot ${CHROOTDIR} \
+		env ASSUME_ALWAYS_YES=yes \
+		pkg update
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return ${res}
+	fi
+
+	chroot ${CHROOTDIR} \
+		env ASSUME_ALWAYS_YES=yes \
+		pkg install -y ${TARGET_ARCH}-binutils
+
+	return ${?}
+}
+
+prep_release() {
+	local res
+
+	chroot ${CHROOTDIR} \
+		make -s \
+			-C /usr/src/release \
+			clean
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return ${res}
+	fi
+
+	chroot ${CHROOTDIR} \
+		make -s \
+			-C /usr/src/release \
+			obj
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return ${res}
+	fi
+
+	RELEASEDIR="/usr/obj/usr/src/release"
+	if [ ! -d ${CHROOTDIR}${RELEASEDIR} ]; then
+		RELEASEDIR="/usr/obj/usr/src/${TARGET}.${TARGET_ARCH}/release"
+		if [ ! -d ${CHROOTDIR}${RELEASEDIR} ]; then
+			debug_print "[-] Unable to find the release directory."
+			res=1
+		fi
+	fi
+
+	return ${res}
+}
+
+build_base_archive() {
+	local res
+
+	debug_print "[*] Making base.txz in /usr/src/release"
+	chroot ${CHROOTDIR} \
+		make -s \
+			-C /usr/src/release \
+			base.txz
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return ${res}
+	fi
+
+	mv ${CHROOTDIR}${RELEASEDIR}/base.txz ${STAGEDIR}
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return ${res}
+	fi
+
+	build_mtree
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return ${res}
+	fi
+
+	return 0
+}
+
+build_etcupdate_archive() {
+	local res
+
+	debug_print "[*] Making etcupdate archive"
+	chroot ${CHROOTDIR} etcupdate build \
+		-B \
+		/tmp/etcupdate.tbz
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return ${res}
+	fi
+
+	cp ${CHROOTDIR}/tmp/etcupdate.tbz ${STAGEDIR}
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return ${res}
+	fi
+
+	return 0
+}
+
+build_kernel_archives() {
+	local res
+
+	for kernel in $(echo ${KERNELS}); do
+		chroot ${CHROOTDIR} make -sC /usr/src/release \
+			kernel.txz KERNCONF=${kernel}
+		res=${?}
+		if [ ${res} -gt 0 ]; then
+			return ${res}
+		fi
+
+		mv ${CHROOTDIR}${RELEASEDIR}/kernel.txz \
+			${STAGEDIR}/kernel-${kernel}.txz
+		res=${?}
+		if [ ${res} -gt 0 ]; then
+			return ${res}
+		fi
+	done
+
+	return 0
+}
+
+build_obsolete() {
+	local res
+
+	chroot ${CHROOTDIR} make -C /usr/src \
+		-f Makefile.inc1 \
+		-V OLD_FILES -V OLD_LIBS \
+		check-old > ${STAGEDIR}/ObsoleteFiles.txt
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return ${res}
+	fi
+
+	chroot ${CHROOTDIR} make -C /usr/src \
+		-f Makefile.inc1 \
+		-V OLD_DIRS \
+		check-old > ${STAGEDIR}/ObsoleteDirs.txt
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return ${res}
+	fi
+
+	return 0
+}
+
+build_src_tarball() {
+	chroot ${CHROOTDIR} make -sC /usr/src/release \
+		src.txz
+	return ${?}
+}
+
+build_mtree() {
+	local res
+
+	res=0
+
+	if [ -d ${CHROOTDIR}/tmp/mtree/etc/mtree ]; then
+		(
+			cd ${CHROOTDIR}/tmp/mtree/etc/mtree
+			tar -cf ${STAGEDIR}/mtree.tar *.dist
+			exit ${?}
+		)
+		res=${?}
+	fi
+
+	return ${res}
+}
+
+add_extra_files() {
+	local res
+
+	cat <<EOF > ${STAGEDIR}/skip.txt
+./etc
+./proc
+./root/.profile
+./root/.cshrc
+./var/empty
+EOF
+
+	cp ${CHROOTDIR}/usr/src/UPDATING ${STAGEDIR}/
+	cp ${CHROOTDIR}/usr/src/UPDATING-HardenedBSD ${STAGEDIR}/
+
+	if [ ${#SCRIPTFILE} -gt 0 ]; then
+		cp ${SCRIPTFILE} ${STAGEDIR}/script.sh
+		res=${?}
+		if [ ${res} -gt 0 ]; then
+			return ${res}
+		fi
+	fi
+
+	if [ ${BUILDSRCSET} -gt 0 ]; then
+		build_src_tarball
+		res=${?}
+		if [ ${res} -gt 0 ]; then
+			return ${res}
+		fi
+
+		cp ${CHROOTDIR}${RELEASEDIR}/src.txz \
+			${STAGEDIR}
+	fi
+
+	build_obsolete
+
+	return 0
+}
+
+check_integriforce_rule_exists() {
+	local checkfile
+
+	if [ ! -f ${STAGEDIR}/secadm.integriforce.rules ]; then
+		return 1
+	fi
+
+	checkfile=${1}
+	if [ -z "${checkfile}" ]; then
+		return 1
+	fi
+
+	if grep -Fqw "\"${checkfile}\"" ${STAGEDIR}/secadm.integriforce.rules; then
+		return 0
+	fi
+
+	return 1
+}
+
+build_integriforce_rules() {
+	local res
+	local tmpfile
+	local resfile
+	local ftype
+	local f
+	local h
+	local l
+
+	debug_print "[*] Building Integriforce rules"
+
+	if [ -d ${CHROOTDIR}/tmp/integriforce ]; then
+		rm -rf ${CHROOTDIR}/tmp/integriforce
+	fi
+
+	if [ -f ${STAGEDIR}/secadm.integriforce.rules ]; then
+		rm -f ${STAGEDIR}/secadm.integriforce.rules
+	fi
+
+	# Install world to a temporary location in the chroot
+	chroot ${CHROOTDIR} make \
+		-sC /usr/src \
+		DESTDIR=/tmp/integriforce \
+		WITHOUT_TESTS=1 \
+		installworld \
+		distribution
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return 1
+	fi
+
+	tmpfile=$(mktemp)
+	find ${CHROOTDIR}/tmp/integriforce -type f \
+		> ${tmpfile} 2> /dev/null
+	for f in $(cat ${tmpfile}); do
+		resfile=$(echo ${f} | sed s,${CHROOTDIR}/tmp/integriforce,,)
+		if [ -x ${f} ]; then
+			if check_integriforce_rule_exists ${resfile}; then
+				# This shouldn't happen, but let's be
+				# pedantic.
+				continue
+			fi
+
+			h=$(sha256 -q ${f})
+
+			# First do the executable
+			cat <<EOF >> ${STAGEDIR}/secadm.integriforce.rules
+integriforce {
+	path: "${resfile}",
+	hash: "${h}",
+	type: "sha256",
+	mode: "hard"
+},
+EOF
+
+			# Then do the dependencies if this is an ELF
+			# file
+			if file ${f} | grep -q ELF; then
+				for l in $(chroot ${CHROOTDIR}/tmp/integriforce ldd -f '%p\n' ${resfile} 2> /dev/null); do
+					if check_integriforce_rule_exists ${l}; then
+						continue
+					fi
+
+					if [ ! -f ${CHROOTDIR}/tmp/integriforce/${l} ]; then
+						debug_print "[-] Could not find library ${l} in ${CHROOTDIR}/tmp/integriforce"
+						debug_print "    This was from ${f}"
+						continue
+					fi
+
+					h=$(sha256 -q ${CHROOTDIR}/tmp/integriforce/${l})
+
+					cat <<EOF >> ${STAGEDIR}/secadm.integriforce.rules
+integriforce {
+	path: "${l}",
+	hash: "${h}",
+	type: "sha256",
+	mode: "hard"
+},
+EOF
+				done
+			fi
+		fi
+	done
+
+	rm -f ${tmpfile}
+
+	return 0
+}
+
+sign_artifacts() {
+	local files
+
+	debug_print "[*] Signing artifacts"
+
+	files="skip.txt ObsoleteFiles.txt ObsoleteDirs.txt"
+	if [ ${#SCRIPTFILE} -gt 0 ]; then
+		files="${files} script.sh"
+	fi
+
+	if [ -z "${PRIVKEY}" ]; then
+		return 0
+	else
+		if [ ! -f ${PRIVKEY} ]; then
+			return 1
+		fi
+	fi
+
+	for file in $(find ${STAGEDIR} -name \*.txz -o -name \*.tbz -o -name \*.tar); do
+		sha512 -q ${file} | ${SIGNBIN} rsautl \
+			-sign \
+			-inkey ${PRIVKEY} \
+			-out ${file}.sig
+	done
+
+	for f in ${files}; do
+		sha512 -q ${STAGEDIR}/${f} | openssl rsautl \
+			-sign \
+			-inkey ${PRIVKEY} \
+			-out ${STAGEDIR}/${f}.sig
+	done
+
+	if [ -f ${STAGEDIR}/secadm.integriforce.rules ]; then
+		sha512 -q ${STAGEDIR}/secadm.integriforce.rules | ${SIGNBIN} rsautl \
+			-sign \
+			-inkey ${PRIVKEY} \
+			-out ${STAGEDIR}/secadm.integriforce.rules.sig
+	fi
+
+	if [ -f ${PUBKEY} ]; then
+		cp ${PUBKEY} ${STAGEDIR}/pubkey.pem
+	fi
+
+	return 0
+}
+
+git_version() {
+	cd ${CHROOTDIR}/usr/src
+	git log -n 1 --format=format:%H
+
+	return 0
+}
+
+hbsd_version() {
+	(
+		cd ${CHROOTDIR}/usr/src
+		git show ${BRANCH}:sys/sys/pax.h | \
+		    awk '/#define[[:space:]]__HardenedBSD_version/{print $3}' | \
+		    sed -e 's/UL$//g'
+	)
+
+	return 0
+}
+
+full_version() {
+	echo "hbsd-v$(hbsd_version)-$(git_version)"
+	return 0
+}
+
+update_filename() {
+	echo "${OUTPUTDIR}/update-$(full_version).tar"
+	return 0
+}
+
+build_update_archive() {
+	ver=$(full_version)
+
+	cd ${STAGEDIR}
+	tar -cf $(update_filename) \
+		--exclude ./lock \
+		--exclude ./success \
+		.
+
+	return ${?}
+}
+
+sanity_check() {
+	if [ $(id -u) -gt 0 ]; then
+		echo "ERROR: ${0} must be run as root." >&2
+		exit 1
+	fi
+
+	if [ -f ${STAGEDIR}/lock ]; then
+		echo "ERROR: ${0} is already running." >&2
+		echo "       If you feel this is in error, remove the lockfile at ${STAGEDIR}/lock" >&2
+		exit 1
+	fi
+
+	return 0
+}
+
+sanity_check_archive() {
+	if [ ! -f ${STAGEDIR}/base.txz ]; then
+		debug_print "[-] Could not find ${STAGEDIR}/base.txz"
+		return 1
+	fi
+
+	if [ ${UNSIGNED} -eq 0 ]; then
+		if [ ! -f ${STAGEDIR}/base.txz.sig ]; then
+			debug_print "[-] Could not find ${STAGEDIR}/base.txz.sig"
+			return 1
+		fi
+	fi
+
+	for kernel in ${KERNELS}; do
+		if [ ! -f ${STAGEDIR}/kernel-${kernel}.txz ]; then
+			debug_print "[-] Could not find ${STAGEDIR}/kernel-${kernel}.txz"
+			return 1
+		fi
+
+		if [ ${UNSIGNED} -eq 0 ]; then
+			if [ ! -f ${STAGEDIR}/kernel-${kernel}.txz.sig ]; then
+				debug_print "[-] Could not find ${STAGEDIR}/kernel-${kernel}.txz.sig"
+				return 1
+			fi
+		fi
+	done
+
+	if [ ! -f ${STAGEDIR}/etcupdate.tbz ]; then
+		debug_print "[-] Could not find ${STAGEDIR}/etcupdate.tbz"
+		return 1
+	fi
+
+	if [ ${UNSIGNED} -eq 0 ]; then
+		if [ ! -f ${STAGEDIR}/etcupdate.tbz.sig ]; then
+			debug_print "[-] Could not find ${STAGEDIR}/etcupdate.tbz.sig"
+			return 1
+		fi
+	fi
+
+	if [ ! -f ${STAGEDIR}/skip.txt ]; then
+		debug_print "[-] Could not find ${STAGEDIR}/skip.txt"
+		return 1
+	fi
+
+	if [ ${UNSIGNED} -eq 0 ]; then
+		if [ ! -f ${STAGEDIR}/skip.txt.sig ]; then
+			debug_print "[-] Could not find ${STAGEDIR}/skip.txt.sig"
+			return 1
+		fi
+	fi
+
+	if [ ! -f ${STAGEDIR}/mtree.tar ]; then
+		debug_print "[-] Could not find ${STAGEDIR}/mtree.tar"
+		return 1
+	fi
+
+	if [ ${UNSIGNED} -eq 0 ]; then
+		if [ ! -f ${STAGEDIR}/mtree.tar.sig ]; then
+			debug_print "[-] Could not find ${STAGEDIR}/mtree.tar.sig"
+			return 1
+		fi
+	fi
+
+	return 0
+}
+
+log_build() {
+	if [ ${LOGTOSTDOUT} -eq 0 ]; then
+		logfile=$(date '+%F_%T')
+		debug_print "Log: ${LOGDIR}/${logfile}.log"
+		cat > ${LOGDIR}/${logfile}.log
+	else
+		cat >& 2
+	fi
+
+	return 0
+}
+
+main() {
+	set -e
+	setup_environment
+	sanity_check
+	while getopts 'ec:huv' opt; do
+		case ${opt} in
+			c)
+				BUILDCONF="${OPTARG}"
+				;;
+			e)
+				USE_EXISTING=1
+				;;
+			u)
+				UNSIGNED=1
+				;;
+			v)
+				VERBOSE=1
+				;;
+			*)
+				usage
+				;;
+		esac
+	done
+
+	if [ ! -z "${BUILDCONF}" ]; then
+		. ${BUILDCONF}
+	fi
+
+	setup_directories || exit 1
+
+	(
+		if [ ${USE_EXISTING} -eq 0 ]; then
+			cleanup_chroot || exit 1
+			setup_chroot || exit 1
+			if [ ! $(uname -m) = "${TARGET}" ]; then
+				install_binutils || exit 1
+			fi
+			clone_source || exit 1
+			create_src_conf || exit 1
+
+			export TARGET
+			export TARGET_ARCH
+
+			build_source || exit 1
+
+			prep_release || exit 1
+			build_base_archive || exit 1
+			build_kernel_archives || exit 1
+			build_etcupdate_archive || exit 1
+			if [ ${INTEGRIFORCE} -gt 0 ]; then
+				build_integriforce_rules || exit 1
+			fi
+
+			add_extra_files || exit 1
+		fi
+
+		if [ ${UNSIGNED} -eq 0 ]; then
+			sign_artifacts || exit 1
+		fi
+
+		sanity_check_archive || exit 1
+		build_update_archive || exit 1
+		touch ${STAGEDIR}/success
+		exit 0
+	) 2>&1 | log_build
+
+	if [ -f ${STAGEDIR}/success ]; then
+		echo "OK $(date '+%s')|$(full_version)|sha256:$(sha256 -q $(update_filename))"
+	else
+		echo "FAIL"
+	fi
+
+	rm -f ${STAGEDIR}/lock
+	rm -f ${STAGEDIR}/success
+}
+
+main "${@}"

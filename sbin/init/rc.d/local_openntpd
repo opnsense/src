@@ -1,0 +1,48 @@
+#!/bin/sh
+#
+# PROVIDE: local_openntpd
+# REQUIRE: DAEMON ntpdate
+# BEFORE:  LOGIN
+# KEYWORD: nojail shutdown
+#
+# Add the following lines to /etc/rc.conf.local or /etc/rc.conf
+# to enable this service:
+#
+# local_openntpd_enable (bool):	Set to NO by default.
+#				Set it to YES to enable local_openntpd.
+# local_openntpd_config (str):	Path to ntpd.conf
+#				Default: /etc/ntpd.conf
+# local_openntpd_flags (str):		Flags passed to ntpd(8)
+#				Default: none
+
+. /etc/rc.subr
+
+name=local_openntpd
+rcvar=local_openntpd_enable
+
+start_precmd="local_openntpd_checkconfig"
+restart_precmd="local_openntpd_checkconfig"
+configtest_cmd="local_openntpd_checkconfig"
+extra_commands="configtest"
+
+load_rc_config $name
+
+: ${local_openntpd_enable:="NO"}
+: ${local_openntpd_config:="/etc/ntpd.conf"}
+
+command=/usr/sbin/ntpd
+command_args="-f ${local_openntpd_config}"
+required_files=${local_openntpd_config}
+
+check_process()
+{
+        pgrep -f $command
+}
+
+local_openntpd_checkconfig()
+{
+	echo "Performing sanity check on ${name} configuration:"
+	eval ${command} ${command_args} ${local_openntpd_flags} -n
+}
+
+run_rc_command "$1"

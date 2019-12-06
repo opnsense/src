@@ -13,9 +13,9 @@ export PKGCMD="/usr/sbin/pkg -d"
 export PORTSDIR="${PORTSDIR:-/usr/ports}"
 
 _DVD_PACKAGES="archivers/unzip
+devel/git
 devel/subversion
 devel/subversion-static
-emulators/linux_base-c6
 graphics/drm-legacy-kmod
 graphics/drm-stable-kmod
 misc/freebsd-doc-all

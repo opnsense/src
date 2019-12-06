@@ -1,0 +1,131 @@
+1. Prerequisites
+----------------
+
+You will need an entropy (randomness) source.  If your OS has arc4random or
+getentropy then that is ideal. Otherwise, you can use the builtin arc4random
+implementation or the one built into LibreSSL.
+
+2. Building / Installation
+--------------------------
+
+If you have checked this source using Git, follow these initial steps to
+prepare the source tree for building:
+
+ 1. ensure you have the following packages installed:
+      automake, autoconf, git, libtool
+ 2. run './autogen.sh' to prepare the source tree for building
+    or run './dist.sh' to prepare a tarball.
+
+To install OpenNTPD with default options:
+
+./configure
+make
+make install
+
+This will install the OpenNTPD binary in /usr/local/sbin, configuration
+files in /usr/local/etc. To specify a different installation prefix,
+use the --prefix option to configure:
+
+./configure --prefix=/opt
+make
+make install
+
+Will install OpenNTPD in /opt/{etc,sbin}. You can also override
+specific paths, for example:
+
+./configure --prefix=/opt --sysconfdir=/etc/ntp
+make
+make install
+
+This will install the binaries in /opt/sbin, but will place the
+configuration files in /etc/ntp.
+
+OpenNTPD always uses Privilege Separation (ie the majority of the
+processing is done as a chroot'ed, unprivileged user).
+
+This requires that a user, group and directory to be created for it.
+The user should not be permitted to log in, and its home directory
+should be owned by root and be mode 755.
+
+If you do "make install", the Makefile will create the directory with
+the correct permissions and will prompt you for the rest if required.
+If, however, you need to perform all of these tasks yourself (eg if you
+are moving the built binaries to another system) then you will need to
+do something like the following (although the exact commands required
+for creating the user and group are system dependant):
+
+On most Linux and BSD systems, something like should work:
+
+ groupadd _ntp
+ useradd -g _ntp -s /sbin/nologin -d /var/empty -c 'OpenNTP daemon' _ntp
+ mkdir -p /var/empty
+ chown 0 /var/empty
+ chgrp 0 /var/empty
+ chmod 0755 /var/empty
+
+/var/empty here is a chroot directory used by ntpd for privilege separation of
+the DNS and NTP processes. This directory should not contain any files, must be
+owned by root, and must not be group or world-writable.
+
+NOTE:
+If you installed a previous OpenNTPD release and created a /var/empty/ntp
+directory, please delete the /var/empty/ntp directory and adjust the _ntp
+user's home directory to point to /var/empty instead.
+
+This is important because, if you have any other daemons that also use
+/var/empty as a home directory, they will all have an empty privilege
+separation directory.
+
+As of OS X 10.10, something like this should work similarly
+(thanks to jasper@ for suggesting)
+
+ dscl . create /Users/_ntp
+ dscl . create /Users/_ntp UserShell /sbin/nologin
+# Prevent user from showing up on the login screen
+ dscl . delete /Users/_ntp AuthenticationAuthority
+# Arbitrarily chosen UID that was free
+ dscl . create /Users/_ntp UniqueID 400
+ dscl . create /Users/_ntp PrimaryGroupID 400
+ dscl . create /Users/_ntp RealName "OpenNTPD user"
+ dseditgroup -o create _ntp
+ dscl . append /Groups/_ntp GroupMembership _ntp
+
+There are a few options to the configure script in addition to the ones
+provided by autoconf itself:
+
+--with-privsep-user=[user]
+	Specify unprivileged user used for privilege separation.  The default
+	is "_ntp".
+
+--with-privsep-path=path
+	ntpd will always use the home directory of the privsep user
+	to chroot to, but specifying this parameter will change the
+	post-installation checks and instructions to match the specified path.
+
+--with-cacert=[path]
+	Specify the CA certificate location for HTTPS constraint validation.
+	Defaults to /etc/ssl/certs/ca-certificates.crt
+
+If you need to pass special options to the compiler or linker, you
+can specify these as environment variables before running ./configure.
+For example:
+
+CFLAGS="-O2 " LDFLAGS="-s" ./configure
+
+
+3. Configuration
+----------------
+
+The runtime configuration files are installed by in ${prefix}/etc or
+whatever you specified as your --sysconfdir (/usr/local/etc by default).
+
+If no configuration file exists, the default one is used.  The default
+configuration file uses a selection of publicly accessible "pool" servers
+(see http://support.ntp.org/bin/view/Servers/NTPPoolServers)
+
+
+4. Problems?
+------------
+
+If you experience problems compiling, installing or running OpenNTPD,
+please report the problem to the address in the README file.

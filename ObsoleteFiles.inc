@@ -167,6 +167,7 @@ OLD_FILES+=usr/lib/clang/8.0.0/lib/freebsd/libclang_rt.asan-x86_64.a
 OLD_FILES+=usr/lib/clang/8.0.0/lib/freebsd/libclang_rt.asan-x86_64.so
 OLD_FILES+=usr/lib/clang/8.0.0/lib/freebsd/libclang_rt.asan_cxx-i386.a
 OLD_FILES+=usr/lib/clang/8.0.0/lib/freebsd/libclang_rt.asan_cxx-x86_64.a
+OLD_FILES+=usr/lib/clang/8.0.0/lib/freebsd/libclang_rt.cfi-x86_64.a
 OLD_FILES+=usr/lib/clang/8.0.0/lib/freebsd/libclang_rt.msan-x86_64.a
 OLD_FILES+=usr/lib/clang/8.0.0/lib/freebsd/libclang_rt.msan_cxx-x86_64.a
 OLD_FILES+=usr/lib/clang/8.0.0/lib/freebsd/libclang_rt.profile-arm.a
@@ -322,6 +323,7 @@ OLD_FILES+=usr/lib/clang/7.0.1/lib/freebsd/libclang_rt.asan-x86_64.a
 OLD_FILES+=usr/lib/clang/7.0.1/lib/freebsd/libclang_rt.asan-x86_64.so
 OLD_FILES+=usr/lib/clang/7.0.1/lib/freebsd/libclang_rt.asan_cxx-i386.a
 OLD_FILES+=usr/lib/clang/7.0.1/lib/freebsd/libclang_rt.asan_cxx-x86_64.a
+OLD_FILES+=usr/lib/clang/7.0.1/lib/freebsd/libclang_rt.cfi-x86_64.a
 OLD_FILES+=usr/lib/clang/7.0.1/lib/freebsd/libclang_rt.msan-x86_64.a
 OLD_FILES+=usr/lib/clang/7.0.1/lib/freebsd/libclang_rt.msan_cxx-x86_64.a
 OLD_FILES+=usr/lib/clang/7.0.1/lib/freebsd/libclang_rt.profile-arm.a
@@ -345,6 +347,8 @@ OLD_FILES+=usr/lib/clang/7.0.1/lib/freebsd/libclang_rt.ubsan_standalone_cxx-x86_
 OLD_DIRS+=usr/lib/clang/7.0.1/lib/freebsd
 OLD_DIRS+=usr/lib/clang/7.0.1/lib
 OLD_DIRS+=usr/lib/clang/7.0.1
+# 20190311: libexecinfo move to /lib
+OLD_LIBS+=usr/lib/libexecinfo.so.1
 # 20190216: new clang import which bumps version from 6.0.1 to 7.0.1.
 OLD_FILES+=usr/lib/clang/6.0.1/include/sanitizer/allocator_interface.h
 OLD_FILES+=usr/lib/clang/6.0.1/include/sanitizer/asan_interface.h
@@ -460,6 +464,7 @@ OLD_FILES+=usr/lib/clang/6.0.1/lib/freebsd/libclang_rt.asan-x86_64.a
 OLD_FILES+=usr/lib/clang/6.0.1/lib/freebsd/libclang_rt.asan-x86_64.so
 OLD_FILES+=usr/lib/clang/6.0.1/lib/freebsd/libclang_rt.asan_cxx-i386.a
 OLD_FILES+=usr/lib/clang/6.0.1/lib/freebsd/libclang_rt.asan_cxx-x86_64.a
+OLD_FILES+=usr/lib/clang/6.0.1/lib/freebsd/libclang_rt.cfi-x86_64.a
 OLD_FILES+=usr/lib/clang/6.0.1/lib/freebsd/libclang_rt.profile-arm.a
 OLD_FILES+=usr/lib/clang/6.0.1/lib/freebsd/libclang_rt.profile-armhf.a
 OLD_FILES+=usr/lib/clang/6.0.1/lib/freebsd/libclang_rt.profile-i386.a
@@ -872,6 +877,7 @@ OLD_FILES+=usr/lib/clang/6.0.0/lib/freebsd/libclang_rt.asan-x86_64.a
 OLD_FILES+=usr/lib/clang/6.0.0/lib/freebsd/libclang_rt.asan-x86_64.so
 OLD_FILES+=usr/lib/clang/6.0.0/lib/freebsd/libclang_rt.asan_cxx-i386.a
 OLD_FILES+=usr/lib/clang/6.0.0/lib/freebsd/libclang_rt.asan_cxx-x86_64.a
+OLD_FILES+=usr/lib/clang/6.0.0/lib/freebsd/libclang_rt.cfi-x86_64.a
 OLD_FILES+=usr/lib/clang/6.0.0/lib/freebsd/libclang_rt.profile-arm.a
 OLD_FILES+=usr/lib/clang/6.0.0/lib/freebsd/libclang_rt.profile-armhf.a
 OLD_FILES+=usr/lib/clang/6.0.0/lib/freebsd/libclang_rt.profile-i386.a
@@ -1243,7 +1249,6 @@ OLD_FILES+=etc/casper/system.random
 OLD_FILES+=etc/casper/system.sysctl
 OLD_DIRS+=etc/casper
 # 20171116: lint(1) removal
-OLD_FILES+=usr/bin/lint
 OLD_FILES+=usr/libexec/lint1
 OLD_FILES+=usr/libexec/lint2
 OLD_FILES+=usr/libdata/lint/llib-lposix.ln
@@ -2467,6 +2472,8 @@ OLD_LIBS+=usr/lib/libbsnmptools.so.0
 OLD_LIBS+=usr/lib/libbsnmptools.so
 # 20170102: sysdecode_getfsstat_flags() renamed to sysdecode_getfsstat_mode()
 OLD_FILES+=usr/share/man/man3/sysdecode_getfsstat_flags.3.gz
+# 20170102: librt move to /lib
+OLD_LIBS+=usr/lib/librt.so.1
 # 20161230: libarchive ACL pax test renamed to test_acl_pax_posix1e.tar.uu
 OLD_FILES+=usr/tests/lib/libarchive/test_acl_pax.tar.uu
 # 20161229: Three files from gnop tests consolidated into one
@@ -3165,6 +3172,8 @@ OLD_DIRS+=usr/lib/clang/3.7.0/lib
 OLD_DIRS+=usr/lib/clang/3.7.0
 # 20151130: libelf moved from /usr/lib to /lib (libkvm dependency in r291406)
 OLD_LIBS+=usr/lib/libelf.so.2
+# 20151120: remove unused pkg repo public key
+OLD_FILES+=usr/share/keys/pkg/trusted/hardenedbsd.crt.2014-09-04
 # 20151115: Fox bad upgrade scheme
 OLD_FILES+=usr/share/locale/zh_CN.GB18030/zh_Hans_CN.GB18030
 OLD_FILES+=usr/share/locale/zh_CN.GB2312/zh_Hans_CN.GB2312
@@ -4405,6 +4414,10 @@ OLD_FILES+=usr/tests/usr.sbin/pw/pw_modify
 # 20141202: update to mandoc CVS 20141201
 OLD_FILES+=usr.bin/preconv
 OLD_FILES+=share/man/man1/preconv.1.gz
+# 20141204 ibcs support removal
+OLD_FILES+=etc/rc.d/archdep
+OLD_FILES+=shate/examples/ibcs2/README
+OLD_FILES+=shate/examples/ibcs2/hello.uu
 # 20141129: mrouted rc.d scripts removed from base
 OLD_FILES+=etc/rc.d/mrouted
 # 20141126: convert sbin/mdconfig/tests to ATF format tests

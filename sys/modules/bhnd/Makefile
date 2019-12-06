@@ -61,7 +61,7 @@ SRCS+=	bhnd_nvram_data.c \
 SRCS+=	bhnd_nvram_map.h bhnd_nvram_map_data.h
 SRCS+=	bhnd_nvram_if.c bhnd_nvram_if.h
 
-SRCS+=	device_if.h bus_if.h
+SRCS+=	device_if.h bus_if.h ofw_bus_if.h
 
 SUBDIR=	bcma \
 	bcma_bhndb \

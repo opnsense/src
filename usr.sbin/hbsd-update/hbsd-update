@@ -1,0 +1,1295 @@
+#!/bin/sh
+#-
+# Copyright (c) 2015,2017 HardenedBSD
+# Author: Shawn Webb <shawn.webb@hardenedbsd.org>
+#
+# This work originally sponsored by G2, Inc
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+# 1. Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+# 2. Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in the
+#    documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+# ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+# OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+# HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+# LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+# OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+# SUCH DAMAGE.
+
+buildver=""
+jailname=""
+tmpdir=""
+zfsbe=""
+
+backupkern="kernel.old"
+configfile="/etc/hbsd-update.conf"
+mountpoint="/"
+kernel=""
+
+# dnssec variable is yes/no since it's user-visible via
+# hbsd-update.conf(5).
+dnssec="yes"
+dnssec_key="/usr/share/keys/hbsd-update/trusted/dnssec.key"
+revoke_dir="/usr/share/keys/hbsd-update/revoked"
+
+ignorever=0
+unsigned=0
+verbose=0
+integriforce=1
+no_kernel=0
+no_obsolete=0
+interactive=0
+install_src=0
+keeptmp=0
+local_resolver=0
+nodownload=0
+fetchonly=0
+nobase=0
+
+update_hash=""
+
+AWK="/usr/bin/awk"
+BEADM="/usr/local/sbin/beadm"
+CAT="/bin/cat"
+CHFLAGS="/bin/chflags"
+DRILL="/usr/bin/drill"
+ETCUPDATE="/usr/sbin/etcupdate"
+FETCH="/usr/bin/fetch"
+FIND="/usr/bin/find"
+GREP="/usr/bin/grep"
+JLS="/usr/sbin/jls"
+KLDXREF="/usr/sbin/kldxref"
+MKTEMP="/usr/bin/mktemp"
+OPENSSL="/usr/bin/openssl"
+PWD_MKDB="/usr/sbin/pwd_mkdb"
+SED="/usr/bin/sed"
+SHA256="/sbin/sha256"
+SHA512="/sbin/sha512"
+TAIL="/usr/bin/tail"
+TAR="/usr/bin/tar"
+UNBOUND_HOST="/usr/sbin/unbound-host"
+
+debug_print() {
+	echo -e "${1}" >&2
+}
+
+usage() {
+	debug_print "USAGE: ${0} OPTIONS"
+	debug_print "OPTIONS:"
+	debug_print "\t-b BEname\tInstall updates to ZFS Boot Environment <BEname>"
+	debug_print "\t-c config\tUse a non-default config file"
+	debug_print "\t-d\t\tDo not use DNSSEC validation"
+	debug_print "\t-f\t\tFetch only"
+	debug_print "\t-h\t\tShow this help screen"
+	debug_print "\t-I\t\tInteractively remove obsolete files"
+	debug_print "\t-i\t\tIgnore version check"
+	debug_print "\t-j jailname\tInstall updates to jail <jailname>"
+	debug_print "\t-K backupkern\tBackup the previous kernel to <backupkern>"
+	debug_print "\t-k kernel\tUse kernel <kernel>"
+	debug_print "\t-n\t\tDo not install kernel"
+	debug_print "\t-o\t\tDo not remove obsolete files/directories"
+	debug_print "\t-r path\tBootstrap root directory <path>"
+	debug_print "\t-s\t\tInstall sources (if present)"
+	debug_print "\t-t tmpdir\tTemporary directory"
+	debug_print "\t-U\t\tAllow unsigned updates"
+	debug_print "\t-v version\tUse a different version"
+	debug_print "\t-V\t\tVerbose output"
+	exit 1
+}
+
+sigint_handler() {
+	local destroybe
+
+	destroybe=0
+	if [ ! -z "${1}" ]; then
+		destroybe=${1}
+	fi
+
+	debug_print "[-] Caught SIGINT. Cleaning up."
+
+	cleanup
+	if [ ${destroybe} -eq 1 ]; then
+		destroy_be
+	fi
+
+	exit 0
+}
+
+get_tmpdir() {
+	if [ -z "${tmpdir}" ]; then
+		tmpdir=$(${MKTEMP} -d)
+	fi
+
+	echo ${tmpdir}
+
+	return 0
+}
+
+get_last_field() {
+	local data
+	local item
+	local nitems
+	local i
+
+	data="${1}"
+	nitems=0
+	for item in ${data}; do
+		nitems=$((${nitems} + 1))
+	done
+
+	i=0
+	for item in ${data}; do
+		if [ ${i} -eq $((${nitems} - 1)) ]; then
+			echo ${item}
+		fi
+		i=$((${i} + 1))
+	done
+}
+
+dnssec_check() {
+	local resolver_flag
+	local is_secure
+	local rec
+	local res
+	local val
+
+	if [ ${local_resolver} -gt 0 ]; then
+		resolver_flag="-r"
+	fi
+
+	case "${dnssec}" in
+		[yY]*)
+			if [ ${verbose} -gt 0 ]; then
+				debug_print "[*] Looking up version info with DNSSEC enabled."
+			fi
+			${UNBOUND_HOST} \
+				${resolver_flag} \
+				-v \
+				-t txt \
+				-f ${mountpoint}/${dnssec_key} \
+				${dnsrec} > ${tmpdir}/resolver.txt
+
+			val=$(${TAIL} -n 1 ${tmpdir}/resolver.txt)
+			if ! echo ${val} | grep -qF 'has TXT record'; then
+				debug_print "[-] Could not get DNS record."
+				return 2
+			fi
+
+			if echo ${val} | grep -qF 'failed'; then
+				debug_print "[-] DNSSEC validation failed."
+				return 2
+			fi
+
+			is_secure=$(get_last_field "${val}")
+			if [ ! "${is_secure}" = "(secure)" ]; then
+				debug_print "[*] DNSSEC validation failed."
+				return 2
+			fi
+
+			echo ${val} | awk '{print $5;}' | sed 's,",,g'
+
+			;;
+		*)
+			${DRILL} ${dnsrec} txt | \
+				${GREP} -F TXT | \
+				${GREP} -vF ';;' | \
+				${AWK} '{print $5;}' | \
+				${SED} 's,",,g'
+			;;
+	esac
+
+	return 0
+}
+
+get_version() {
+	local res
+	local dnssec_str
+
+	res=""
+
+	if [ ! -z "${buildver}" ] && [ -z "${update_hash}" ]; then
+		# User-specified version
+		update_hash=$(echo ${buildver} | ${SED} 's,|, ,g' | ${AWK} '{print $3;}')
+		if [ ${#update_hash} -gt 0 ]; then
+			buildver=$(echo ${buildver} | ${SED} 's,|, ,g' | ${AWK} '{print $2;}')
+		fi
+	elif [ -z "${buildver}" ]; then
+		# Prefer DNS, fallback to HTTP
+		res=$(dnssec_check)
+		if [ ${?} -eq 2 ]; then
+			debug_print "    [-] Bailing."
+			return 1
+		fi
+
+		buildver=$(echo ${res} | ${SED} 's,|, ,g' | ${AWK} '{print $2;}')
+		update_hash=$(echo ${res} | ${SED} 's,|, ,g' | ${AWK} '{print $3;}')
+	fi
+
+	if [ -z "${buildver}" ]; then
+		# Attempt to grab the version from the mirror.
+		if [ ${verbose} -gt 0 ]; then
+			debug_print "[*] Could not get version info from DNS. Falling back to the mirror."
+		fi
+
+		res=$(${FETCH} -o - ${baseurl}/update-latest.txt)
+		buildver=$(echo ${res} | ${SED} 's,|, ,g' | ${AWK} '{print $2;}')
+		update_hash=$(echo ${res} | ${SED} 's,|, ,g' | ${AWK} '{print $3;}')
+
+		if [ -z "${buildver}" ]; then
+			return 1
+		fi
+	fi
+
+	if [ -z "${update_hash}" ]; then
+		if [ ${unsigned} -eq 0 ]; then
+			debug_print "[-] Hash for the update has not been published. Cannot verify update. Bailing."
+			return 1
+		fi
+	else
+		# Validate the hash
+		hashalgo=$(echo ${update_hash} | awk -F ':' '{print $1;}')
+		hashcheck=$(echo ${update_hash} | awk -F ':' '{print $2;}')
+
+		case "${hashalgo}" in
+			sha256)
+				if [ ! ${#hashcheck} -eq 64 ]; then
+					return 1
+				fi
+				;;
+			sha512)
+				if [ ! ${#hashcheck} -eq 128 ]; then
+					return 1
+				fi
+				;;
+			*)
+				debug_print "[*] Unknown or unsupported hash algorithm: ${hashalgo}"
+				return 1
+				;;
+		esac
+	fi
+
+	echo ${buildver}
+
+	if [ ${verbose} -gt 0 ]; then
+		debug_print "[*] Latest build: ${buildver}"
+	fi
+
+	return 0
+}
+
+check_version() {
+	local testversion
+
+	if [ ${ignorever} -eq 1 ]; then
+		return 0
+	fi
+
+	if [ ! -f ${mountpoint}/var/db/hbsd-update/version ]; then
+		return 0
+	fi
+
+	testversion=$(cat ${mountpoint}/var/db/hbsd-update/version)
+	if [ "${buildver}" = "${testversion}" ]; then
+		return 1
+	fi
+
+	return 0
+}
+
+check_jailname() {
+	if [ -z "${jailname}" ]; then
+		return 0
+	fi
+
+	mountpoint=$(${JLS} -j ${jailname} path 2>/dev/null)
+	if [ -z "${mountpoint}" ]; then
+		debug_print "[-] Jail ${jailname} not found"
+		return 1
+	fi
+
+	return 0
+}
+
+fetch_update() {
+	local hashalgo
+	local filehash
+	local pubhash
+	local res
+
+	# Step 1: Download the update archive
+	${FETCH} -o ${tmpdir}/update.tar \
+		${baseurl}/update-$(get_version).tar
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return ${res}
+	fi
+
+	if [ ! -z "${update_hash}" ]; then
+		# Step 2: Validate the update archive
+		hashalgo=$(echo ${update_hash} | awk -F ':' '{print $1;}')
+		pubhash=$(echo ${update_hash} | awk -F ':' '{print $2;}')
+
+		case "${hashalgo}" in
+			sha256)
+				filehash=$(${SHA256} -q ${tmpdir}/update.tar)
+				;;
+			sha512)
+				filehash=$(${SHA512} -q ${tmpdir}/update.tar)
+				;;
+			*)
+				debug_print "[-] Update is signed with unknown hash algorithm: ${hashalgo}"
+				;;
+		esac
+
+		if [ ! "${filehash}" = "${pubhash}" ]; then
+			debug_print "[-] Hash for the update does not match.  Bailing."
+			return 1
+		fi
+
+		if [ ${verbose} -gt 0 ]; then
+			debug_print "[*] Verified hash: ${filehash} = ${pubhash}"
+		fi
+	fi
+
+	# Step 3: Untar the update archive
+	${TAR} -xf ${tmpdir}/update.tar \
+		-C ${tmpdir}
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return ${res}
+	fi
+
+	return 0
+}
+
+check_pubkey_validity() {
+	local updatehash
+	local filehash
+	local f
+
+	if [ ${verbose} -gt 0 ]; then
+		debug_print "[*] Checking validity of the public key"
+	fi
+
+	updatehash=$(${SHA256} -q ${tmpdir}/pubkey.pem)
+
+	for f in $(${FIND} ${mountpoint}/usr/share/keys/hbsd-update/revoked -type f); do
+		filehash=$(${SHA256} -q ${f})
+		if [ "${filehash}" = "${updatehash}" ]; then
+			echo "[-] This update has been signed with a revoked key." >&2
+			return 1
+		fi
+	done
+
+	caopt="-CApath"
+	if [ -f ${capath} ]; then
+		caopt="-CAfile"
+	fi
+
+	${OPENSSL} verify \
+		${caopt} ${capath} \
+		${tmpdir}/pubkey.pem \
+		> /dev/null 2>&1
+	res=${?}
+	return ${res}
+}
+
+validate_file() {
+	local res
+	local expected_hash
+	local computed_hash
+	local file
+	local defaulterror
+
+	file="${1}"
+	defaulterror=1
+	if [ ! -z "${2}" ]; then
+		defaulterror=${2}
+	fi
+
+	if [ -z "${file}" ]; then
+		debug_print "[-] validate_file: No file specified."
+		return 1
+	fi
+
+	if [ ! -f ${tmpdir}/${file} ]; then
+		return ${defaulterror}
+	fi
+
+	if [ ! -f ${tmpdir}/${file}.sig ]; then
+		return 1
+	fi
+
+	expected_hash=$(${OPENSSL} rsautl \
+	    -verify \
+	    -in ${tmpdir}/${file}.sig \
+	    -pubin \
+	    -inkey ${tmpdir}/pubkey.rsa.pem)
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return 1
+	fi
+
+	computed_hash=$(${SHA512} -q ${tmpdir}/${file})
+	if [ ! "${expected_hash}" = "${computed_hash}" ]; then
+		return 1
+	fi
+
+	return 0
+}
+
+check_set_validity() {
+	local res
+	local checkfiles
+	local extrafiles
+	local signedhash
+	local computedhash
+
+	checkfiles="base.txz etcupdate.tbz skip.txt mtree.tar"
+	extrafiles="ObsoleteFiles.txt ObsoleteDirs.txt script.sh"
+
+	if [ ${no_kernel} -eq 0 ]; then
+		checkfiles="${checkfiles} kernel-${kernel}.txz"
+	fi
+
+	if [ ${integriforce} -gt 0 ]; then
+		if [ -f ${tmpdir}/secadm.integriforce.rules ]; then
+			extrafiles="${extrafiles} secadm.integriforce.rules"
+		fi
+	fi
+
+	if [ ${install_src} -gt 0 ]; then
+		if [ -f ${tmpdir}/src.txz ]; then
+			extrafiles="${extrafiles} src.txz"
+		fi
+	fi
+
+	${OPENSSL} x509 \
+		-in ${tmpdir}/pubkey.pem \
+		-pubkey \
+		-noout \
+		> ${tmpdir}/pubkey.rsa.pem
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		debug_print "[-] Could not extract public key"
+		return 1
+	fi
+
+	for file in ${checkfiles}; do
+		if [ ${verbose} -gt 0 ]; then
+			debug_print "[*] Checking the validity of ${file}"
+		fi
+
+		if ! validate_file ${file}; then
+			debug_print "[-] ${file} failed to validate"
+			return 1
+		fi
+	done
+
+	# Extra files are optional files that we only care about if
+	# they exist. They must be signed if they exist.
+	for file in ${extrafiles}; do
+		if [ ${verbose} -gt 0 ]; then
+			debug_print "[*] Checking the validity of ${file}"
+		fi
+
+		if ! validate_file ${file} 0; then
+			debug_print "[-] ${file} failed to validate"
+			return 1
+		fi
+	done
+
+	return 0
+}
+
+apply_mtree() {
+	local res
+
+	if [ ${verbose} -gt 0 ]; then
+		debug_print "[*] Applying the mtree"
+	fi
+
+	if [ ! -f ${tmpdir}/mtree.tar ]; then
+		return 0
+	fi
+
+	if [ -d ${tmpdir}/mtree ]; then
+		rm -rf ${tmpdir}/mtree
+	fi
+
+	mkdir ${tmpdir}/mtree
+	if [ ${?} -gt 0 ]; then
+		return 1
+	fi
+
+	tar -xf ${tmpdir}/mtree.tar -C ${tmpdir}/mtree
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return 1
+	fi
+
+	mtree -eU \
+	    -f ${tmpdir}/mtree/BSD.root.dist \
+	    -p ${mountpoint}
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return 1
+	fi
+
+	mtree -eU \
+	    -f ${tmpdir}/mtree/BSD.usr.dist \
+	    -p ${mountpoint}/usr
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return 1
+	fi
+
+	mtree -eU \
+	    -f ${tmpdir}/mtree/BSD.include.dist \
+	    -p ${mountpoint}/usr/include
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return 1
+	fi
+
+	mtree -eU \
+	    -f ${tmpdir}/mtree/BSD.var.dist \
+	    -p ${mountpoint}/var
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return 1
+	fi
+
+	if [ -f ${tmpdir}/mtree/BSD.tests.dist ]; then
+		mkdir -p ${mountpoint}/usr/tests
+		mtree -eU \
+		    -f ${tmpdir}/mtree/BSD.tests.dist \
+		    -p ${mountpoint}/usr/tests
+	fi
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return 1
+	fi
+
+	return 0
+}
+
+apply_base() {
+	local needsresolve
+	local dirs
+	local dir
+	local res
+	local d
+
+	needsresolve=0
+	dirs="/bin /sbin /lib /libexec /usr/bin /usr/sbin /usr/lib"
+
+	if [ ${verbose} -gt 0 ]; then
+		debug_print "[*] Applying base"
+	fi
+
+	for dir in ${dirs}; do
+		if [ -d ${mountpoint}/${dir} ]; then
+			${CHFLAGS} -R noschg ${mountpoint}/${dir}
+			res=${?}
+			if [ ${res} -gt 0 ]; then
+				return ${res}
+			fi
+		fi
+	done
+
+	${TAR} -xpf ${tmpdir}/base.txz \
+		-X ${tmpdir}/skip.txt \
+		--exclude ./boot \
+		-C ${mountpoint}
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return 1
+	fi
+
+	boottmp=$(env TMPDIR=${tmpdir} ${MKTEMP} -d)
+	[ ! -d ${mountpoint}/boot ] && mkdir ${mountpoint}/boot
+	${TAR} -xpf ${tmpdir}/base.txz --include ./boot -C ${boottmp}
+	${TAR} -c -C ${boottmp}/boot -f - . | \
+		(cd ${mountpoint}/boot; ${TAR} -xpf -)
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return 1
+	fi
+
+	rm -rf ${boottmp}
+
+	if [ ${install_src} -gt 0 ]; then
+		if [ -f ${tmpdir}/src.txz ]; then
+			if [ ${verbose} -gt 0 ]; then
+				debug_print "[*] Installing sources"
+			fi
+
+			${FIND} ${mountpoint}/usr/src -type f -delete
+			res=${?}
+			if [ ${res} -gt 0 ]; then
+				echo "[-] Removing source files failed." >&2
+				return 1
+			fi
+
+			for d in $(${FIND} ${mountpoint}/usr/src -type d -depth 1); do
+				# Skip the .zfs directory
+				if [ ${d} = "${mountpoint}/usr/src/.zfs" ]; then
+					continue
+				fi
+
+				rm -rf ${d}
+				res=${?}
+				if [ ${res} -gt 0 ]; then
+					echo "[-] Removing source directories failed" >&2
+					return 1
+				fi
+			done
+
+			${TAR} -xpf ${tmpdir}/src.txz \
+				-C ${mountpoint}
+		fi
+	fi
+
+	if [ ${verbose} -gt 0 ]; then
+		debug_print "[*] Updating /etc"
+	fi
+
+	${ETCUPDATE} -t ${tmpdir}/etcupdate.tbz \
+	    -D ${mountpoint} \
+	    -I /etc/pwd.db \
+	    -I /etc/spwd.db > ${tmpdir}/etcupdate.log 2>&1
+
+	for res in $(awk '{print $1;}' ${tmpdir}/etcupdate.log); do
+		if [ "${res}" = "C" ]; then
+			needsresolve=1
+			break
+		fi
+	done
+
+	if [ ${needsresolve} -gt 0 ]; then
+		debug_print "[*] Manual merges need to be done."
+		${ETCUPDATE} resolve -D ${mountpoint}
+		res=${?}
+		if [ ${res} -gt 0 ]; then
+			return 1
+		fi
+	fi
+
+	if ${GREP} -q passwd ${tmpdir}/etcupdate.log; then
+		debug_print "[*] Updating the password database"
+
+		${PWD_MKDB} -d ${mountpoint}/etc -p \
+		    ${mountpoint}/etc/master.passwd
+		res=${?}
+		if [ ${res} -gt 0 ]; then
+			echo "[-] Making the password database failed" >&2
+			return ${res}
+		fi
+	fi
+
+	return 0
+}
+
+set_kernel_config() {
+	local cur_kernel
+
+	if [ ! -z "${kernel}" ]; then
+		if [ ! -f "${tmpdir}/kernel-${kernel}.txz" ]; then
+			echo "[-] Could not find any applicable kernels" >&2
+			return 1
+		fi
+
+		return 0
+	fi
+
+	cur_kernel=$(uname -v)
+	cur_kernel=${cur_kernel##*/}
+	cur_kernel=$(echo "${cur_kernel}" | sed 's/ //g')
+
+	f="${tmpdir}/kernel-${cur_kernel}.txz"
+	if [ -f "${f}" ]; then
+		kernel=${cur_kernel}
+	else
+		kernel="HARDENEDBSD"
+	fi
+
+	if [ ! -f "${tmpdir}/kernel-${kernel}.txz" ]; then
+		echo "[-] Could not find any applicable kernels" >&2
+		return 1
+	fi
+
+	return 0
+}
+
+apply_kernel() {
+	if [ ${verbose} -gt 0 ]; then
+		debug_print "[*] Applying kernel ${kernel}"
+	fi
+
+	if [ ! -z "${backupkern}" ]; then
+		rm -rf ${mountpoint}/boot/${backupkern}
+		cp -pR ${mountpoint}/boot/kernel \
+			${mountpoint}/boot/${backupkern}
+		res=${?}
+		if [ ${res} -gt 0 ]; then
+			return ${res}
+		fi
+
+		if [ -d ${mountpoint}/usr/lib/debug/boot/kernel ]; then
+			rm -rf ${mountpoint}/usr/lib/debug/boot/${backupkern}
+			cp -pR ${mountpoint}/usr/lib/debug/boot/kernel \
+				${mountpoint}/usr/lib/debug/boot/${backupkern}
+			res=${?}
+			if [ ${res} -gt 0 ]; then
+				return ${res}
+			fi
+		fi
+	fi
+
+	kerntmp=$(env TMPDIR=${tmpdir} ${MKTEMP} -d)
+
+	${TAR} -xpf ${tmpdir}/kernel-${kernel}.txz \
+		-X ${tmpdir}/skip.txt \
+		--include ./boot \
+		-C ${kerntmp}
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return 1
+	fi
+
+	${TAR} -cp -C ${kerntmp}/boot -f - . | \
+		(cd ${mountpoint}/boot; ${TAR} -xpf -)
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return ${res}
+	fi
+
+	rm -rf ${kerntmp}
+
+	${KLDXREF} ${mountpoint}/boot/kernel
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return 1
+	fi
+
+	return 0
+}
+
+apply_integriforce() {
+	local res
+	local f
+
+	debug_print "[*] Applying Integriforce rules"
+
+	f="${mountpoint}/etc/secadm.d/base.integriforce.rules"
+
+	if [ -f ${tmpdir}/secadm.integriforce.rules ]; then
+		if [ ! -d ${mountpoint}/etc/secadm.d ]; then
+			mkdir ${mountpoint}/etc/secadm.d
+			res=${?}
+			if [ ${res} -gt 0 ]; then
+				return 1
+			fi
+		fi
+
+		if [ -f ${mountpoint}/etc/secadm.d/base.integriforce.rules ]; then
+			chflags noschg ${f}
+			res=${?}
+			if [ ${res} -gt 0 ]; then
+				return 1
+			fi
+
+			chmod 0600 ${f}
+			res=${?}
+			if [ ${res} -gt 0 ]; then
+				return 1
+			fi
+		fi
+
+		cp ${tmpdir}/secadm.integriforce.rules ${f}
+		res=${?}
+		if [ ${res} -gt 0 ]; then
+			return 1
+		fi
+
+		chmod 0400 ${f}
+		res=${?}
+		if [ ${res} -gt 0 ]; then
+			return 1
+		fi
+
+		chflags schg ${f}
+		res=${?}
+		if [ ${res} -gt 0 ]; then
+			return 1
+		fi
+	fi
+
+	return 0
+}
+
+remove_obsolete() {
+	if [ ${verbose} -gt 0 ]; then
+		debug_print "[*] Removing obsolete files"
+	fi
+
+	if [ -f ${tmpdir}/ObsoleteFiles.txt ]; then
+		for file in $(cat ${tmpdir}/ObsoleteFiles.txt); do
+			if [ -f ${mountpoint}/${file} ]; then
+				if [ ${interactive} -gt 0 ]; then
+					read -p "Remove ${mountpoint}/${file} (Y/n)? " val
+					case "${val}" in
+						[Nn]*)
+							continue
+							;;
+					esac
+				fi
+
+				if [ ${verbose} -gt 0 ]; then
+					debug_print "    [+] Removing ${mountpoint}/${file}"
+				fi
+
+				rm -f ${mountpoint}/${file}
+			fi
+		done
+	fi
+
+	if [ -f ${tmpdir}/ObsoleteDirs.txt ]; then
+		for file in $(cat ${tmpdir}/ObsoleteDirs.txt); do
+			if [ -e ${mountpoint}/${file} ]; then
+				if [ ${verbose} -gt 0 ]; then
+					debug_print "    [+] Removing ${mountpoint}/${file}"
+				fi
+
+				rm -rf ${mountpoint}/${file}
+			fi
+		done
+	fi
+
+	return 0
+}
+
+create_be() {
+	if [ -z "${zfsbe}" ]; then
+		return 0
+	fi
+
+	${BEADM} create ${zfsbe}
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return ${res}
+	fi
+
+	mountpoint=$(${MKTEMP} -d)
+	${BEADM} mount ${zfsbe} ${mountpoint}
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return ${res}
+	fi
+
+	return 0
+}
+
+cache_version() {
+	# Cache the version number so that we can verify it against
+	# future update requests.
+	if [ ! -d ${mountpoint}/var/db/hbsd-update ]; then
+		mkdir -p ${mountpoint}/var/db/hbsd-update
+		res=${?}
+		if [ ${res} -gt 0 ]; then
+			return ${res}
+		fi
+	fi
+
+	echo ${buildver} > ${mountpoint}/var/db/hbsd-update/version
+}
+
+activate_be() {
+	if [ -z "${zfsbe}" ]; then
+		return 0
+	fi
+
+	${BEADM} umount ${zfsbe}
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return ${res}
+	fi
+
+	${BEADM} activate ${zfsbe}
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		return ${res}
+	fi
+
+	return 0
+}
+
+destroy_be() {
+	if [ -z "${zfsbe}" ]; then
+		return 0
+	fi
+
+	${BEADM} umount ${zfsbe}
+	${BEADM} destroy -F ${zfsbe}
+	return ${?}
+}
+
+cleanup() {
+	if [ ${keeptmp} -eq 0 ]; then
+		rm -rf ${tmpdir}
+	else
+		debug_print "[*] Temp directory kept at: ${tmpdir}"
+	fi
+}
+
+check_sanity() {
+	if [ ! -f ${configfile} ]; then
+		debug_print "[-] Configuration file missing"
+		exit 1
+	fi
+
+	. ${configfile}
+
+	if [ -z "${baseurl}" ]; then
+		debug_print "[-] Missing setting: baseurl"
+		exit 1
+	fi
+
+	if [ ${unsigned} -eq 0 ] && [ -z "${capath}" ]; then
+		debug_print "[-] Missing setting: capath"
+		exit 1
+	fi
+
+	if [ ! -z "${zfsbe}" ] && [ ! -z "${jailname}" ]; then
+		debug_print "[-] ZFS BE and Jail options are mutually exclusive"
+		exit 1
+	fi
+
+	if [ ${fetchonly} -gt 0 ] && [ ${nodownload} -gt 0 ]; then
+		debug_print "[-] Fetch only and no download options are mutually exclusive"
+		exit 1
+	fi
+
+	# FreeBSD / HardenedBSD 12 introduced bectl in base. bectl
+	# provides a beadm-compatible utility for managing ZFS Boot
+	# Environments (BEs). Since the majority of HardenedBSD users
+	# are on 11-STABLE, prefer beadm over bectl. Hopefully, bectl
+	# will one day exist on 11-STABLE.
+	if [ ! -z "${zfsbe}" ] && [ ! -x ${BEADM} ]; then
+		if [ -x /sbin/bectl ]; then
+			BEADM=/sbin/bectl
+		else
+			debug_print "[-] Please install sysutils/beadm"
+			exit 1
+		fi
+	fi
+}
+
+report_version() {
+	get_tmpdir > /dev/null
+	get_version
+	if [ ! ${?} -eq 0 ]; then
+		echo "[-] Could not get remote version number" >&2
+		cleanup
+		exit 1
+	fi
+
+	if [ -f ${mountpoint}/var/db/hbsd-update/version ]; then
+		echo "[+] Local version: $(cat ${mountpoint}/var/db/hbsd-update/version)"
+	fi
+
+	echo -n "[+] Remote version: ${buildver}"
+	
+	if [ ! -z "${update_hash}" ]; then
+		echo -n " $(echo ${update_hash} | sed 's,:, ,')"
+	fi
+
+	echo
+
+	cleanup
+	exit 0
+}
+
+pre_install_hook() {
+	return 0
+}
+
+post_install_hook() {
+	return 0
+}
+
+main() {
+	local do_report_version
+	local local_kernel
+
+	do_report_version=0
+	local_kernel=""
+	no_kernel=0
+
+	while getopts 'dfhinosBCDITUVb:c:j:K:k:r:t:u:v:' opt; do
+		case "${opt}" in
+			b)
+				zfsbe="${OPTARG}"
+				;;
+			B)
+				nobase=1
+				;;
+			c)
+				configfile="${OPTARG}"
+				;;
+			C)
+				do_report_version=1
+				;;
+			d)
+				dnssec="no"
+				;;
+			D)
+				nodownload=1
+				;;
+			f)
+				fetchonly=1
+				;;
+			i)
+				ignorever=1
+				;;
+			I)
+				interactive=1
+				;;
+			j)
+				jailname="${OPTARG}"
+				;;
+			K)
+				backupkern="${OPTARG}"
+				;;
+			k)
+				local_kernel="${OPTARG}"
+				;;
+			n)
+				no_kernel=1
+				;;
+			o)
+				no_obsolete=1
+				;;
+			r)
+				mountpoint="${OPTARG}"
+				;;
+			s)
+				install_src=1
+				;;
+			t)
+				tmpdir="${OPTARG}"
+				;;
+			T)
+				keeptmp=1
+				;;
+			U)
+				unsigned=1
+				;;
+			v)
+				buildver="${OPTARG}"
+				;;
+			V)
+				verbose=1
+				;;
+			*)
+				usage
+				;;
+		esac
+	done
+
+	check_sanity
+	check_jailname
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		exit 1
+	fi
+
+	if [ ${do_report_version} -gt 0 ]; then
+		report_version
+	fi
+
+	if [ ! -z "${local_kernel}" ]; then
+		kernel=${local_kernel}
+	fi
+
+	if [ ! -d ${mountpoint} ]; then
+		debug_print "[-] ${mountpoint} does not exist"
+		cleanup
+		exit 1
+	fi
+
+	trap sigint_handler INT
+
+	if [ -z "${tmpdir}" ]; then
+		get_tmpdir > /dev/null
+	fi
+
+	get_version
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		debug_print "[*] Could not get the version number"
+		if [ -f ${tmpdir}/resolver.txt ]; then
+			debug_print "[*] Raw DNS result:"
+			${CAT} ${tmpdir}/resolver.txt
+		fi
+		cleanup
+		exit 1
+	fi
+
+	check_version
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		debug_print "[*] This system is already on the latest version."
+		cleanup
+		exit 0
+	fi
+
+	if [ ${nodownload} -eq 0 ]; then
+		fetch_update
+		res=${?}
+		if [ ${res} -gt 0 ]; then
+			cleanup
+			exit 1
+		fi
+	fi
+
+	if [ ${fetchonly} -gt 0 ]; then
+		exit 0
+	fi
+
+	if [ ${no_kernel} -eq 0 ]; then
+		set_kernel_config
+		res=${?}
+		if [ ${res} -gt 0 ]; then
+			cleanup
+			exit 1
+		fi
+	fi
+
+	if [ ${unsigned} -eq 0 ]; then
+		check_pubkey_validity
+		res=${?}
+		if [ ${res} -gt 0 ]; then
+			cleanup
+			debug_print "[*] Public key failed to validate."
+			exit 1
+		fi
+
+		check_set_validity
+		res=${?}
+		if [ ${res} -gt 0 ]; then
+			cleanup
+			debug_print "[*] Public key failed to validate."
+			exit 1
+		fi
+	fi
+
+	if [ -f ${tmpdir}/script.sh ]; then
+		. ${tmpdir}/script.sh
+	fi
+
+	pre_install_hook
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		cleanup
+		exit 1
+	fi
+
+	create_be
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		cleanup
+		destroy_be
+		exit 1
+	fi
+
+	trap 'sigint_handler 1' INT
+
+	if [ ${nobase} -eq 0 ]; then
+		apply_mtree
+		res=${?}
+		if [ ${res} -gt 0 ]; then
+			cleanup
+			destroy_be
+			exit 1
+		fi
+
+		apply_base
+		res=${?}
+		if [ ${res} -gt 0 ]; then
+			cleanup
+			destroy_be
+			exit 1
+		fi
+	fi
+
+	if [ ${no_kernel} -eq 0 ]; then
+		apply_kernel
+		res=${?}
+		if [ ${res} -gt 0 ]; then
+			cleanup
+			destroy_be
+			exit 1
+		fi
+	fi
+
+	if [ ${no_obsolete} -eq 0 ]; then
+		remove_obsolete
+		res=${?}
+		if [ ${res} -gt 0 ]; then
+			cleanup
+			destroy_be
+			exit 1
+		fi
+	fi
+
+	if [ ${integriforce} -gt 0 ]; then
+		apply_integriforce
+		res=${?}
+		if [ ${res} -gt 0 ]; then
+			cleanup
+			destroy_be
+			exit 1
+		fi
+	fi
+
+	cache_version
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		cleanup
+		destroy_be
+		exit 1
+	fi
+
+	post_install_hook
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		cleanup
+		destroy_be
+		exit 1
+	fi
+
+	activate_be
+	res=${?}
+	if [ ${res} -gt 0 ]; then
+		cleanup
+		destroy_be
+		exit 1
+	fi
+
+	cleanup
+	exit 0
+}
+
+main "${@}"

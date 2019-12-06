@@ -1,0 +1,262 @@
+.\" $OpenBSD: BIO_set_callback.3,v 1.7 2018/03/20 19:33:16 schwarze Exp $
+.\" full merge up to: OpenSSL 99d63d46 Oct 26 13:56:48 2016 -0400
+.\" selective merge up to: OpenSSL 61f805c1 Jan 16 01:01:46 2018 +0800
+.\"
+.\" This file is a derived work.
+.\" The changes are covered by the following Copyright and license:
+.\"
+.\" Copyright (c) 2018 Ingo Schwarze <schwarze@openbsd.org>
+.\"
+.\" Permission to use, copy, modify, and distribute this software for any
+.\" purpose with or without fee is hereby granted, provided that the above
+.\" copyright notice and this permission notice appear in all copies.
+.\"
+.\" THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+.\" WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+.\" MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+.\" ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+.\" WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+.\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+.\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+.\"
+.\" The original file was written by Dr. Stephen Henson <steve@openssl.org>.
+.\" Copyright (c) 2000, 2016, 2017 The OpenSSL Project.  All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\"
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\"
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in
+.\"    the documentation and/or other materials provided with the
+.\"    distribution.
+.\"
+.\" 3. All advertising materials mentioning features or use of this
+.\"    software must display the following acknowledgment:
+.\"    "This product includes software developed by the OpenSSL Project
+.\"    for use in the OpenSSL Toolkit. (http://www.openssl.org/)"
+.\"
+.\" 4. The names "OpenSSL Toolkit" and "OpenSSL Project" must not be used to
+.\"    endorse or promote products derived from this software without
+.\"    prior written permission. For written permission, please contact
+.\"    openssl-core@openssl.org.
+.\"
+.\" 5. Products derived from this software may not be called "OpenSSL"
+.\"    nor may "OpenSSL" appear in their names without prior written
+.\"    permission of the OpenSSL Project.
+.\"
+.\" 6. Redistributions of any form whatsoever must retain the following
+.\"    acknowledgment:
+.\"    "This product includes software developed by the OpenSSL Project
+.\"    for use in the OpenSSL Toolkit (http://www.openssl.org/)"
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE OpenSSL PROJECT ``AS IS'' AND ANY
+.\" EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+.\" PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE OpenSSL PROJECT OR
+.\" ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+.\" SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+.\" NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+.\" LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+.\" STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+.\" ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
+.\" OF THE POSSIBILITY OF SUCH DAMAGE.
+.\"
+.Dd $Mdocdate: March 20 2018 $
+.Dt BIO_SET_CALLBACK 3
+.Os
+.Sh NAME
+.Nm BIO_set_callback ,
+.Nm BIO_get_callback ,
+.Nm BIO_set_callback_arg ,
+.Nm BIO_get_callback_arg ,
+.Nm BIO_debug_callback
+.Nd BIO callback functions
+.Sh SYNOPSIS
+.In openssl/bio.h
+.Ft void
+.Fo BIO_set_callback
+.Fa "BIO *b"
+.Fa "BIO_callback_fn cb"
+.Fc
+.Ft BIO_callback_fn
+.Fo BIO_get_callback
+.Fa "BIO *b"
+.Fc
+.Ft void
+.Fo BIO_set_callback_arg
+.Fa "BIO *b"
+.Fa "char *arg"
+.Fc
+.Ft char *
+.Fo BIO_get_callback_arg
+.Fa "const BIO *b"
+.Fc
+.Ft long
+.Fo BIO_debug_callback
+.Fa "BIO *bio"
+.Fa "int oper"
+.Fa "const char *argp"
+.Fa "int argi"
+.Fa "long argl"
+.Fa "long ret"
+.Fc
+.Ft typedef long
+.Fo "(*BIO_callback_fn)"
+.Fa "BIO *b"
+.Fa "int oper"
+.Fa "const char *argp"
+.Fa "int argi"
+.Fa "long argl"
+.Fa "long ret"
+.Fc
+.Sh DESCRIPTION
+.Fn BIO_set_callback
+and
+.Fn BIO_get_callback
+set and retrieve the BIO callback.
+The callback is called during most high level BIO operations.
+It can be used for debugging purposes to trace operations on a BIO
+or to modify its operation.
+.Pp
+.Fn BIO_set_callback_arg
+and
+.Fn BIO_get_callback_arg
+set and retrieve an argument for use in the callback.
+.Pp
+.Fn BIO_debug_callback
+is a standard debugging callback which prints
+out information relating to each BIO operation.
+If the callback argument is set, it is interpreted as a BIO
+to send the information to, otherwise stderr is used.
+.Pp
+.Fn BIO_callback_fn
+is the type of the callback function.
+The meaning of each argument is described below.
+.Pp
+The BIO the callback is attached to is passed in
+.Fa b .
+.Pp
+.Fa oper
+is set to the operation being performed.
+For some operations the callback is called twice,
+once before and once after the actual operation.
+The latter case has
+.Fa oper
+or'ed with
+.Dv BIO_CB_RETURN .
+.Pp
+The meaning of the arguments
+.Fa argp ,
+.Fa argi
+and
+.Fa argl
+depends on the value of
+.Fa oper
+(i.e. the operation being performed).
+.Pp
+When
+.Fa oper
+does not include
+.Dv BIO_CB_RETURN ,
+i.e. when the callback is invoked before an operation,
+the value passed into the callback via
+.Fa ret
+is always 1.
+In this case, if the callback returns a negative value, the library
+aborts the requested operation and instead returns the negative
+return value from the callback to the application.
+If the callback returns a non-negative value, that return value is
+ignored by the library, and the operation is performed normally.
+.Pp
+When
+.Fa oper
+includes
+.Dv BIO_CB_RETURN ,
+i.e. when the callback is invoked after an operation,
+the value passed into the callback via
+.Fa ret
+is the return value that the operation would return to the application
+if no callback were present.
+When a callback is present, the operation only passes this value
+to the callback and instead of it returns the return value of the
+callback to the application.
+.Pp
+The callback should normally simply return
+.Fa ret
+when it has finished processing, unless it specifically wishes to
+abort the operation or to modify the value returned to the application.
+.Ss Callback operations
+.Bl -tag -width Ds
+.It Fn BIO_free b
+.Fn callback b BIO_CB_FREE NULL 0L 0L 1L
+is called before the free operation.
+.It Fn BIO_read b out outl
+.Fn callback b BIO_CB_READ out outl 0L 1L
+is called before the read and
+.Fn callback b BIO_CB_READ|BIO_CB_RETURN out outl 0L ret
+after.
+.It Fn BIO_write b in inl
+.Fn callback b BIO_CB_WRITE in inl 0L 1L
+is called before the write and
+.Fn callback b BIO_CB_WRITE|BIO_CB_RETURN in inl 0L ret
+after.
+.It Fn BIO_gets b out outl
+.Fn callback b BIO_CB_GETS out outl 0L 1L
+is called before the operation and
+.Fn callback b BIO_CB_GETS|BIO_CB_RETURN out outl 0L ret
+after.
+.It Fn BIO_puts b in
+.Fn callback b BIO_CB_WRITE in 0 0L 1L
+is called before the operation and
+.Fn callback b BIO_CB_WRITE|BIO_CB_RETURN in 0 0L ret
+after.
+.It Fn BIO_ctrl b oper larg parg
+.Fn callback b BIO_CB_CTRL parg oper larg 1L
+is called before the call and
+.Fn callback b BIO_CB_CTRL|BIO_CB_RETURN parg oper larg ret
+after.
+.El
+.Sh RETURN VALUES
+.Fn BIO_get_callback
+returns a pointer to the function
+.Fa cb
+previously installed with
+.Fn BIO_set_callback ,
+or
+.Dv NULL
+if no callback was installed.
+.Pp
+.Fn BIO_get_callback_arg
+returns a pointer to the
+.Fa arg
+previously set with
+.Fn BIO_set_callback_arg ,
+or
+.Dv NULL
+if no such argument was set.
+.Pp
+.Fn BIO_debug_callback
+returns
+.Fa ret
+if the bit
+.Dv BIO_CB_RETURN
+is set in
+.Fa cmd ,
+or 1 otherwise.
+.Sh EXAMPLES
+The
+.Fn BIO_debug_callback
+function is a good example.
+Its source is in the file
+.Pa crypto/bio/bio_cb.c .
+.Sh SEE ALSO
+.Xr BIO_new 3
+.Sh HISTORY
+These functions appeared in SSLeay 0.8.1b or earlier
+and have been available since
+.Ox 2.4 .

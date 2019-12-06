@@ -1,0 +1,35 @@
+This is a new port of OpenBSD's native ntpd to other Unix flavours adding
+autoconf support and the necessary compatibility layer.  It is based on
+portability code from the OpenSSH and LibreSSL portable projects.
+
+OpenNTPD has a web site at http://www.openntpd.org/
+
+The current portable tree can be found at https://github.com/openntpd-portable
+
+Platform Requirements
+---------------------
+ - adjtime(2) and settimeofday(2) syscalls or equivalent.
+ - adjfreq(2) or an equivalent compatibility function for best results
+ - daemon(3), setresgid(2), setresuid(2) or equivalent
+ - A working arc4random(2) implementation, OpenSSL or LibreSSL
+     (this project shares the same arc4random compatibility code from LibreSSL)
+ - libtls (included with LibreSSL 2.1.4 or higher) is required for HTTPS time
+   constraint validation.
+
+At the time of writing the Portable version is known to build and work on:
+
+ - OpenBSD (5.6)
+ - Linux (Ubuntu 12.04, 14.04)
+ - FreeBSD (9.x, 10.x)
+ - NetBSD (6.1.5)
+ - Solaris (10.x, 11.x)
+ - Mac OS X (10.9)
+
+OpenNTPD may work on other operating systems, newer and older, but the above
+ones are tested regularly by the developer.
+
+Reports (success or otherwise) are welcome. You may report bugs or submit pull
+requests at the GitHub project: https://github.com/openntpd-portable
+
+Thanks,
+  Brent Cook <bcook at openbsd.org>.

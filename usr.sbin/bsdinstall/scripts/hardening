@@ -32,8 +32,28 @@ echo -n > $BSDINSTALL_TMPETC/rc.conf.hardening
 echo -n > $BSDINSTALL_TMPETC/sysctl.conf.hardening
 echo -n > $BSDINSTALL_TMPBOOT/loader.conf.hardening
 
+if [ `sysctl -n security.bsd.see_other_uids` -eq 0 ]; then
+	hide_uids=on
+fi
+
+if [ `sysctl -n security.bsd.see_other_gids` -eq 0 ]; then
+	hide_gids=on
+fi
+
+if [ `sysctl -n security.bsd.unprivileged_read_msgbuf` -eq 0 ]; then
+	read_msgbuf=on
+fi
+
+if [ `sysctl -n security.bsd.unprivileged_proc_debug` -eq 0 ]; then
+	proc_debug=on
+fi
+
+if [ `sysctl -n security.bsd.stack_guard_page` -gt 0 ]; then
+	stack_guard=on
+fi
+
 exec 3>&1
-FEATURES=$( dialog --backtitle "FreeBSD Installer" \
+FEATURES=$( dialog --backtitle "HardenedBSD Installer" \
     --title "System Hardening" --nocancel --separate-output \
     --checklist "Choose system security hardening options:" \
     0 0 0 \

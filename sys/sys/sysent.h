@@ -40,6 +40,7 @@ struct rlimit;
 struct sysent;
 struct thread;
 struct ksiginfo;
+struct proc;
 struct syscall_args;
 
 enum systrace_probe_t {
@@ -135,6 +136,7 @@ struct sysentvec {
 	void		(*sv_schedtail)(struct thread *);
 	void		(*sv_thread_detach)(struct thread *);
 	int		(*sv_trap)(struct thread *);
+	void		(* const sv_pax_aslr_init)(struct proc *p);
 	u_long		*sv_hwcap;	/* Value passed in AT_HWCAP. */
 	u_long		*sv_hwcap2;	/* Value passed in AT_HWCAP2. */
 };
@@ -146,7 +148,6 @@ struct sysentvec {
 #define	SV_SHP		0x010000	/* Shared page. */
 #define	SV_CAPSICUM	0x020000	/* Force cap_enter() on startup. */
 #define	SV_TIMEKEEP	0x040000	/* Shared page timehands. */
-#define	SV_ASLR		0x080000	/* ASLR allowed. */
 
 #define	SV_ABI_MASK	0xff
 #define	SV_ABI_ERRNO(p, e)	((p)->p_sysent->sv_errsize <= 0 ? e :	\
@@ -162,13 +163,8 @@ struct sysentvec {
 #define	SV_ABI_UNDEF	255
 
 #ifdef _KERNEL
-extern struct sysentvec aout_sysvec;
 extern struct sysent sysent[];
 extern const char *syscallnames[];
-
-#if defined(__amd64__)
-extern int i386_read_exec;
-#endif
 
 #define	NO_SYSCALL (-1)
 

@@ -1,0 +1,7 @@
+include GENERIC
+
+options PAX
+options PAX_ASLR
+
+options VIMAGE
+options GEOM_PART_VTOC8

@@ -172,6 +172,7 @@ _LIBRARIES=	\
 		tacplus \
 		termcap \
 		termcapw \
+		tls \
 		ufs \
 		ugidfw \
 		ulog \
@@ -194,6 +195,12 @@ _LIBRARIES=	\
 .if ${MK_BLACKLIST} != "no"
 _LIBRARIES+= \
 		blacklist \
+
+.endif
+
+.if ${MK_HBSDCONTROL} != "no"
+_LIBRARIES+= \
+		hbsdcontrol \
 
 .endif
 
@@ -244,6 +251,7 @@ _DP_archive+=	md
 .endif
 _DP_sqlite3=	pthread
 _DP_ssl=	crypto
+_DP_tls=	crypto ssl
 _DP_ssh=	crypto crypt z
 .if ${MK_LDNS} != "no"
 _DP_ssh+=	ldns
@@ -262,6 +270,9 @@ _DP_cap_pwd=	nv
 _DP_cap_random=	nv
 _DP_cap_sysctl=	nv
 _DP_cap_syslog=	nv
+.if ${MK_HBSDCONTROL} != "no"
+_DP_hbsdcontrol=	sbuf
+.endif
 .if ${MK_OFED} != "no"
 _DP_pcap=	ibverbs mlx5
 .endif
@@ -398,10 +409,6 @@ LDADD_gtest_main= -lprivategtest_main
 LIB${_l:tu}?=	${LIBDESTDIR}${LIBDIR_BASE}/libprivate${_l}.a
 .endfor
 
-.if ${MK_PIE} != "no"
-PIE_SUFFIX=	_pie
-.endif
-
 .for _l in ${_LIBRARIES}
 .if ${_INTERNALLIBS:M${_l}} || !defined(SYSROOT)
 LDADD_${_l}_L+=		-L${LIB${_l:tu}DIR}
@@ -409,14 +416,12 @@ LDADD_${_l}_L+=		-L${LIB${_l:tu}DIR}
 DPADD_${_l}?=	${LIB${_l:tu}}
 .if ${_PRIVATELIBS:M${_l}}
 LDADD_${_l}?=	-lprivate${_l}
-.elif ${_INTERNALLIBS:M${_l}}
-LDADD_${_l}?=	${LDADD_${_l}_L} -l${_l:S/${PIE_SUFFIX}//}${PIE_SUFFIX}
 .else
 LDADD_${_l}?=	${LDADD_${_l}_L} -l${_l}
 .endif
 # Add in all dependencies for static linkage.
 .if defined(_DP_${_l}) && (${_INTERNALLIBS:M${_l}} || \
-    (defined(NO_SHARED) && ${NO_SHARED:tl} != "no"))
+    (defined(NO_SHARED) && (${NO_SHARED} != "no" && ${NO_SHARED} != "NO")))
 .for _d in ${_DP_${_l}}
 DPADD_${_l}+=	${DPADD_${_d}}
 LDADD_${_l}+=	${LDADD_${_d}}
@@ -463,72 +468,77 @@ LDADD+=		${LDADD_${_l}}
 
 # INTERNALLIB definitions.
 LIBELFTCDIR=	${OBJTOP}/lib/libelftc
-LIBELFTC?=	${LIBELFTCDIR}/libelftc${PIE_SUFFIX}.a
+LIBELFTC?=	${LIBELFTCDIR}/libelftc.a
 
 LIBPEDIR=	${OBJTOP}/lib/libpe
-LIBPE?=		${LIBPEDIR}/libpe${PIE_SUFFIX}.a
+LIBPE?=		${LIBPEDIR}/libpe.a
 
 LIBOPENBSDDIR=	${OBJTOP}/lib/libopenbsd
-LIBOPENBSD?=	${LIBOPENBSDDIR}/libopenbsd${PIE_SUFFIX}.a
+LIBOPENBSD?=	${LIBOPENBSDDIR}/libopenbsd.a
 
 LIBSMDIR=	${OBJTOP}/lib/libsm
-LIBSM?=		${LIBSMDIR}/libsm${PIE_SUFFIX}.a
+LIBSM?=		${LIBSMDIR}/libsm.a
 
 LIBSMDBDIR=	${OBJTOP}/lib/libsmdb
-LIBSMDB?=	${LIBSMDBDIR}/libsmdb${PIE_SUFFIX}.a
+LIBSMDB?=	${LIBSMDBDIR}/libsmdb.a
 
 LIBSMUTILDIR=	${OBJTOP}/lib/libsmutil
-LIBSMUTIL?=	${LIBSMUTILDIR}/libsmutil${PIE_SUFFIX}.a
+LIBSMUTIL?=	${LIBSMUTILDIR}/libsmutil.a
 
 LIBNETBSDDIR?=	${OBJTOP}/lib/libnetbsd
-LIBNETBSD?=	${LIBNETBSDDIR}/libnetbsd${PIE_SUFFIX}.a
+LIBNETBSD?=	${LIBNETBSDDIR}/libnetbsd.a
 
 LIBVERSDIR?=	${OBJTOP}/kerberos5/lib/libvers
-LIBVERS?=	${LIBVERSDIR}/libvers${PIE_SUFFIX}.a
+LIBVERS?=	${LIBVERSDIR}/libvers.a
 
 LIBSLDIR=	${OBJTOP}/kerberos5/lib/libsl
-LIBSL?=		${LIBSLDIR}/libsl${PIE_SUFFIX}.a
+LIBSL?=		${LIBSLDIR}/libsl.a
 
 LIBIPFDIR=	${OBJTOP}/sbin/ipf/libipf
-LIBIPF?=	${LIBIPFDIR}/libipf${PIE_SUFFIX}.a
+LIBIPF?=	${LIBIPFDIR}/libipf.a
 
 LIBTELNETDIR=	${OBJTOP}/lib/libtelnet
-LIBTELNET?=	${LIBTELNETDIR}/libtelnet${PIE_SUFFIX}.a
+LIBTELNET?=	${LIBTELNETDIR}/libtelnet.a
 
 LIBCRONDIR=	${OBJTOP}/usr.sbin/cron/lib
-LIBCRON?=	${LIBCRONDIR}/libcron${PIE_SUFFIX}.a
+LIBCRON?=	${LIBCRONDIR}/libcron.a
 
 LIBNTPDIR=	${OBJTOP}/usr.sbin/ntp/libntp
-LIBNTP?=	${LIBNTPDIR}/libntp${PIE_SUFFIX}.a
+LIBNTP?=	${LIBNTPDIR}/libntp.a
 
 LIBNTPEVENTDIR=	${OBJTOP}/usr.sbin/ntp/libntpevent
-LIBNTPEVENT?=	${LIBNTPEVENTDIR}/libntpevent${PIE_SUFFIX}.a
+LIBNTPEVENT?=	${LIBNTPEVENTDIR}/libntpevent.a
 
 LIBOPTSDIR=	${OBJTOP}/usr.sbin/ntp/libopts
-LIBOPTS?=	${LIBOPTSDIR}/libopts${PIE_SUFFIX}.a
+LIBOPTS?=	${LIBOPTSDIR}/libopts.a
 
 LIBPARSEDIR=	${OBJTOP}/usr.sbin/ntp/libparse
-LIBPARSE?=	${LIBPARSEDIR}/libparse${PIE_SUFFIX}.a
+LIBPARSE?=	${LIBPARSEDIR}/libparse.a
 
 LIBLPRDIR=	${OBJTOP}/usr.sbin/lpr/common_source
-LIBLPR?=	${LIBLPRDIR}/liblpr${PIE_SUFFIX}.a
+LIBLPR?=	${LIBLPRDIR}/liblpr.a
 
 LIBFIFOLOGDIR=	${OBJTOP}/usr.sbin/fifolog/lib
-LIBFIFOLOG?=	${LIBFIFOLOGDIR}/libfifolog${PIE_SUFFIX}.a
+LIBFIFOLOG?=	${LIBFIFOLOGDIR}/libfifolog.a
 
 LIBBSNMPTOOLSDIR=	${OBJTOP}/usr.sbin/bsnmpd/tools/libbsnmptools
-LIBBSNMPTOOLS?=	${LIBBSNMPTOOLSDIR}/libbsnmptools${PIE_SUFFIX}.a
+LIBBSNMPTOOLS?=	${LIBBSNMPTOOLSDIR}/libbsnmptools.a
 
 LIBAMUDIR=	${OBJTOP}/usr.sbin/amd/libamu
-LIBAMU?=	${LIBAMUDIR}/libamu${PIE_SUFFIX}.a
+LIBAMU?=	${LIBAMUDIR}/libamu.a
 
-LIBBE?=		${LIBBEDIR}/libbe${PIE_SUFFIX}.a
+LIBBE?=		${LIBBEDIR}/libbe.a
 
 LIBPMCSTATDIR=	${OBJTOP}/lib/libpmcstat
-LIBPMCSTAT?=	${LIBPMCSTATDIR}/libpmcstat${PIE_SUFFIX}.a
+LIBPMCSTAT?=	${LIBPMCSTATDIR}/libpmcstat.a
 
 LIBC_NOSSP_PICDIR=	${OBJTOP}/lib/libc
 LIBC_NOSSP_PIC?=	${LIBC_NOSSP_PICDIR}/libc_nossp_pic.a
+
+.if ${MK_HBSDCONTROL} != "no"
+LIBHBSDCONTROLDIR=	${OBJTOP}/lib/libhbsdcontrol
+LIBHBSDCONTROL?=	${LIBHBSDCONTROLDIR}/libhbsdcontrol.a
+.endif
 
 # Define a directory for each library.  This is useful for adding -L in when
 # not using a --sysroot or for meta mode bootstrapping when there is no
@@ -614,6 +624,7 @@ LIBCRYPTODIR=	${OBJTOP}/secure/lib/libcrypto
 LIBSSHDIR=	${OBJTOP}/secure/lib/libssh
 LIBSSLDIR=	${OBJTOP}/secure/lib/libssl
 LIBTEKENDIR=	${OBJTOP}/sys/teken/libteken
+LIBTLSDIR=	${OBJTOP}/secure/lib/libtls
 LIBEGACYDIR=	${OBJTOP}/tools/build
 LIBLNDIR=	${OBJTOP}/usr.bin/lex/lib
 

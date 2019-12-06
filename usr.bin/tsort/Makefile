@@ -3,4 +3,6 @@
 
 PROG=	tsort
 
+CFI_OVERRIDE=-fno-sanitize=cfi-icall
+
 .include <bsd.prog.mk>

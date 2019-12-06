@@ -23,6 +23,8 @@ FILES=	cli.lua \
 	logo-beastie.lua \
 	logo-beastiebw.lua \
 	logo-fbsdbw.lua \
+	logo-hardenedbsd.lua \
+	logo-hardenedbsdbw.lua \
 	logo-orb.lua \
 	logo-orbbw.lua \
 	menu.lua \

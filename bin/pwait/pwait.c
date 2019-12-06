@@ -71,6 +71,7 @@ main(int argc, char *argv[])
 	long pid;
 	char *s, *end;
 	double timeout;
+	pid_t me;
 
 	tflag = verbose = 0;
 	memset(&itv, 0, sizeof(itv));
@@ -118,6 +119,8 @@ main(int argc, char *argv[])
 	if (argc == 0)
 		usage();
 
+	me = getpid();
+
 	kq = kqueue();
 	if (kq == -1)
 		err(1, "kqueue");
@@ -134,6 +137,10 @@ main(int argc, char *argv[])
 		pid = strtol(s, &end, 10);
 		if (pid < 0 || *end != '\0' || errno != 0) {
 			warnx("%s: bad process id", s);
+			continue;
+		}
+		if (pid == me) {
+			warnx("%s: ignoring own process id", s);
 			continue;
 		}
 		duplicate = 0;
