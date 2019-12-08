@@ -436,14 +436,6 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
     main_argc = argc;
     main_argv = argv;
 
-#ifdef HARDENEDBSD
-    /* Load PaX flags */
-    if (aux_info[AT_PAXFLAGS] != NULL) {
-        pax_flags = aux_info[AT_PAXFLAGS]->a_un.a_val;
-        aux_info[AT_PAXFLAGS]->a_un.a_val = 0;
-    }
-#endif
-
     trust = !issetugid();
 
     md_abi_variant_hook(aux_info);
