@@ -4052,7 +4052,7 @@ netmap_transmit(struct ifnet *ifp, struct mbuf *m)
 	if (busy < 0)
 		busy += kring->nkr_num_slots;
 	if (busy + mbq_len(q) >= kring->nkr_num_slots - 1) {
-		nm_prlim(2, "%s full hwcur %d hwtail %d qlen %d", na->name,
+		nm_prdis(2, "%s full hwcur %d hwtail %d qlen %d", na->name,
 			kring->nr_hwcur, kring->nr_hwtail, mbq_len(q));
 	} else {
 		mbq_enqueue(q, m);
