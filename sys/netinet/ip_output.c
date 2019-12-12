@@ -194,6 +194,7 @@ ip_output_pfil(struct mbuf **mp, struct ifnet **ifp, struct inpcb *inp,
 		}
 		m->m_flags |= M_SKIP_FIREWALL;
 		ip_flush_fwdtag(m);
+
 		return -1; /* Reloop for CHANGE of dst */
 	}
 

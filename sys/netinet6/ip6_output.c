@@ -322,6 +322,7 @@ ip6_output(struct mbuf *m0, struct ip6_pktopts *opt,
 	int sw_csum, tso;
 	int needfiblookup;
 	int has_fwd_tag = 0;
+	u_short ifidx;
 	uint32_t fibnum;
 	uint32_t id;
 
@@ -866,7 +867,13 @@ again:
 		goto done;
 	}
 	/* Or forward to some other address? */
-	if (IP6_HAS_NEXTHOP(m) && !ip6_get_fwdtag(m, &dst_sa, NULL)) {
+	if (IP6_HAS_NEXTHOP(m) && !ip6_get_fwdtag(m, &dst_sa, &ifidx)) {
+		if (ifidx != 0) {
+			struct ifnet *nifp = ifnet_byindex(ifidx);
+			if (nifp != NULL) {
+				ifp = nifp;
+			}
+		}
 		dst = (struct sockaddr_in6 *)&ro->ro_dst;
 		m->m_flags |= M_SKIP_FIREWALL;
 		ip6_flush_fwdtag(m);
