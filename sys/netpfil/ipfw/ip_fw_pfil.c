@@ -127,7 +127,6 @@ ipfw_check_packet(void *arg, struct mbuf **m0, struct ifnet *ifp, int dir,
 {
 	struct ip_fw_args args;
 	struct m_tag *tag;
-	u_short ifidx = 0;
 	int ipfw, ret;
 
 	/* convert dir to IPFW values */
@@ -139,24 +138,18 @@ ipfw_check_packet(void *arg, struct mbuf **m0, struct ifnet *ifp, int dir,
 #ifdef INET6
 	case IPV6_VERSION >> 4:
 		if (IP6_HAS_NEXTHOP(*m0)) {
-			ip6_get_fwdtag(*m0, NULL, &ifidx);
+			ip6_get_fwdtag(*m0, NULL, &ifp);
 		}
-		/* FALLTHROUGH */
+		break;
 #endif
 #ifdef INET
 	case IPVERSION:
 		if (IP_HAS_NEXTHOP(*m0)) {
-			ip_get_fwdtag(*m0, NULL, &ifidx);
+			ip_get_fwdtag(*m0, NULL, &ifp);
 		}
-		/* FALLTHROUGH */
+		break;
 #endif
 	default:
-		if (ifidx != 0) {
-			struct ifnet *nifp = ifnet_byindex(ifidx);
-			if (nifp != NULL) {
-				ifp = nifp;
-			}
-		}
 		break;
 	}
 
@@ -205,7 +198,7 @@ again:
 			MPASS((args.flags & (IPFW_ARGS_NH6 |
 			    IPFW_ARGS_NH6PTR)) == 0);
 			if (ip_set_fwdtag(*m0, (args.flags & IPFW_ARGS_NH4) ?
-			    &args.hopstore : args.next_hop, 0)) {
+			    &args.hopstore : args.next_hop, NULL)) {
 				ret = EACCES;
 				break;
 			}
@@ -229,7 +222,7 @@ again:
 				sa6->sin6_scope_id =
 				    args.hopstore6.sin6_scope_id;
 			}
-			if (ip6_set_fwdtag(*m0, sa6, 0)) {
+			if (ip6_set_fwdtag(*m0, sa6, NULL)) {
 				ret = EACCES;
 				break;
 			}

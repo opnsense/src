@@ -114,7 +114,6 @@ ip_output_pfil(struct mbuf **mp, struct ifnet **ifp, struct inpcb *inp,
 	struct mbuf *m;
 	struct in_addr odst;
 	struct ip *ip;
-	u_short ifidx;
 
 	m = *mp;
 	ip = mtod(m, struct ip *);
@@ -185,13 +184,7 @@ ip_output_pfil(struct mbuf **mp, struct ifnet **ifp, struct inpcb *inp,
 		return 1; /* Finished */
 	}
 	/* Or forward to some other address? */
-	if (IP_HAS_NEXTHOP(m) && !ip_get_fwdtag(m, dst, &ifidx)) {
-		if (ifidx != 0) {
-			struct ifnet *nifp = ifnet_byindex(ifidx);
-			if (nifp != NULL) {
-				*ifp = nifp;
-			}
-		}
+	if (IP_HAS_NEXTHOP(m) && !ip_get_fwdtag(m, dst, ifp)) {
 		m->m_flags |= M_SKIP_FIREWALL;
 		ip_flush_fwdtag(m);
 
@@ -1476,7 +1469,7 @@ struct ip_fwdtag {
 };
 
 int
-ip_set_fwdtag(struct mbuf *m, struct sockaddr_in *dst, u_short ifidx)
+ip_set_fwdtag(struct mbuf *m, struct sockaddr_in *dst, struct ifnet *ifp)
 {
 	struct ip_fwdtag *fwd_info;
 	struct m_tag *fwd_tag;
@@ -1501,7 +1494,7 @@ ip_set_fwdtag(struct mbuf *m, struct sockaddr_in *dst, u_short ifidx)
 	fwd_info = (struct ip_fwdtag *)(fwd_tag+1);
 
 	bcopy(dst, &fwd_info->dst, sizeof(fwd_info->dst));
-	fwd_info->if_index = ifidx;
+	fwd_info->if_index = ifp ? ifp->if_index : 0;
 	m->m_flags |= M_IP_NEXTHOP;
 
 	if (in_localip(fwd_info->dst.sin_addr))
@@ -1515,7 +1508,7 @@ ip_set_fwdtag(struct mbuf *m, struct sockaddr_in *dst, u_short ifidx)
 }
 
 int
-ip_get_fwdtag(struct mbuf *m, struct sockaddr_in *dst, u_short *ifidx)
+ip_get_fwdtag(struct mbuf *m, struct sockaddr_in *dst, struct ifnet **ifp)
 {
 	struct ip_fwdtag *fwd_info;
 	struct m_tag *fwd_tag;
@@ -1534,8 +1527,11 @@ ip_get_fwdtag(struct mbuf *m, struct sockaddr_in *dst, u_short *ifidx)
 		bcopy(&fwd_info->dst, dst, sizeof(*dst));
 	}
 
-	if (ifidx != NULL) {
-		*ifidx = fwd_info->if_index;
+	if (ifp != NULL && fwd_info->if_index != 0) {
+		struct ifnet *nifp = ifnet_byindex(fwd_info->if_index);
+		if (nifp != NULL) {
+			*ifp = nifp;
+		}
 	}
 
 	return (0);

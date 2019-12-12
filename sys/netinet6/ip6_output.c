@@ -322,7 +322,6 @@ ip6_output(struct mbuf *m0, struct ip6_pktopts *opt,
 	int sw_csum, tso;
 	int needfiblookup;
 	int has_fwd_tag = 0;
-	u_short ifidx;
 	uint32_t fibnum;
 	uint32_t id;
 
@@ -867,13 +866,7 @@ again:
 		goto done;
 	}
 	/* Or forward to some other address? */
-	if (IP6_HAS_NEXTHOP(m) && !ip6_get_fwdtag(m, &dst_sa, &ifidx)) {
-		if (ifidx != 0) {
-			struct ifnet *nifp = ifnet_byindex(ifidx);
-			if (nifp != NULL) {
-				ifp = nifp;
-			}
-		}
+	if (IP6_HAS_NEXTHOP(m) && !ip6_get_fwdtag(m, &dst_sa, &ifp)) {
 		dst = (struct sockaddr_in6 *)&ro->ro_dst;
 		m->m_flags |= M_SKIP_FIREWALL;
 		ip6_flush_fwdtag(m);
@@ -3165,7 +3158,7 @@ struct ip6_fwdtag {
 };
 
 int
-ip6_set_fwdtag(struct mbuf *m, struct sockaddr_in6 *dst, u_short ifidx)
+ip6_set_fwdtag(struct mbuf *m, struct sockaddr_in6 *dst, struct ifnet *ifp)
 {
 	struct ip6_fwdtag *fwd_info;
 	struct m_tag *fwd_tag;
@@ -3208,7 +3201,7 @@ ip6_set_fwdtag(struct mbuf *m, struct sockaddr_in6 *dst, u_short ifidx)
 	else
 		m->m_flags &= ~M_FASTFWD_OURS;
 
-	fwd_info->if_index = ifidx;
+	fwd_info->if_index = ifp ? ifp->if_index : 0;
 	m->m_flags |= M_IP6_NEXTHOP;
 
 	m_tag_prepend(m, fwd_tag);
@@ -3217,7 +3210,7 @@ ip6_set_fwdtag(struct mbuf *m, struct sockaddr_in6 *dst, u_short ifidx)
 }
 
 int
-ip6_get_fwdtag(struct mbuf *m, struct sockaddr_in6 *dst, u_short *ifidx)
+ip6_get_fwdtag(struct mbuf *m, struct sockaddr_in6 *dst, struct ifnet **ifp)
 {
 	struct ip6_fwdtag *fwd_info;
 	struct m_tag *fwd_tag;
@@ -3236,8 +3229,11 @@ ip6_get_fwdtag(struct mbuf *m, struct sockaddr_in6 *dst, u_short *ifidx)
 		bcopy((fwd_tag+1), dst, sizeof(*dst));
 	}
 
-	if (ifidx != NULL) {
-		*ifidx = fwd_info->if_index;
+	if (ifp != NULL && fwd_info->if_index != 0) {
+		struct ifnet *nifp = ifnet_byindex(fwd_info->if_index);
+		if (nifp != NULL) {
+			*ifp = nifp;
+		}
 	}
 
 	return (0);
