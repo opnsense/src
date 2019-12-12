@@ -182,7 +182,6 @@ ip6_tryforward(struct mbuf *m)
 			return (NULL);
 		}
 		dst.sin6_addr = tmp.sin6_addr;
-		ip6_flush_fwdtag(m);
 	} else {
 		/* Update dst since pfil could change it */
 		dst.sin6_addr = ip6->ip6_dst;
@@ -245,13 +244,13 @@ passin:
 	ip6 = mtod(m, struct ip6_hdr *);
 	if (IP6_HAS_NEXTHOP(m) ||
 	    !IN6_ARE_ADDR_EQUAL(&dst.sin6_addr, &ip6->ip6_dst)) {
+		struct ifnet *nifp = NULL;
 		if (IP6_HAS_NEXTHOP(m)) {
 			struct sockaddr_in6 tmp;
-			if (ip6_get_fwdtag(m, &tmp, NULL)) {
+			if (ip6_get_fwdtag(m, &tmp, &nifp)) {
 				return (NULL);
 			}
 			dst.sin6_addr = tmp.sin6_addr;
-			ip6_flush_fwdtag(m);
 		} else
 			dst.sin6_addr = ip6->ip6_dst;
 		/*
@@ -261,6 +260,8 @@ passin:
 			m = NULL;
 			goto dropout;
 		}
+		if (nifp != NULL && nifp != nh.nh_ifp)
+			return (m);	/* explicit interface wins */
 	}
 passout:
 #ifdef IPSTEALTH

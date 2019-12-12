@@ -302,7 +302,6 @@ passin:
 		struct sockaddr_in tmp;
 		if (!ip_get_fwdtag(m, &tmp, NULL)) {
 			dest.s_addr = tmp.sin_addr.s_addr;
-			ip_flush_fwdtag(m);
 		}
 	}
 
@@ -338,6 +337,7 @@ passin:
 	 * Destination address changed?
 	 */
 	if (odest.s_addr != dest.s_addr || IP_HAS_NEXTHOP(m)) {
+		struct ifnet *nifp = NULL;
 		/*
 		 * Is it now for a local address on this host?
 		 */
@@ -354,15 +354,16 @@ forwardlocal:
 		 */
 		if (IP_HAS_NEXTHOP(m)) {
 			struct sockaddr_in tmp;
-			if (ip_get_fwdtag(m, &tmp, NULL)) {
+			if (ip_get_fwdtag(m, &tmp, &nifp)) {
 				return (NULL);
 			}
 			dest.s_addr = tmp.sin_addr.s_addr;
-			ip_flush_fwdtag(m);
 		}
 		if (dest.s_addr != rtdest.s_addr &&
 		    ip_findroute(&nh, dest, m) != 0)
 			return (NULL);	/* icmp unreach already sent */
+		if (nifp != NULL && nifp != nh.nh_ifp)
+			return (m);	/* explicit interface wins */
 	}
 
 passout:
