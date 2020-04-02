@@ -1542,10 +1542,10 @@ ip6_ctloutput(struct socket *so, struct sockopt *sopt)
 				error = soopt_mcopyin(sopt, m); /* XXX */
 				if (error != 0)
 					break;
-				INP_WLOCK(in6p);
-				error = ip6_pcbopts(&inp->in6p_outputopts,
-						    m, so, sopt);
-				INP_WUNLOCK(in6p);
+				INP_WLOCK(inp);
+				error = ip6_pcbopts(&inp->in6p_outputopts, m,
+				    so, sopt);
+				INP_WUNLOCK(inp);
 				m_freem(m); /* XXX */
 				break;
 			}
