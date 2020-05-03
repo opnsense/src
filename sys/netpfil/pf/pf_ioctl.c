@@ -3005,7 +3005,8 @@ DIOCCHANGEADDR_error:
 	case DIOCRGETTABLES: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
 		struct pfr_table *pfrts;
-		size_t totlen, n;
+		size_t totlen;
+		int n;
 
 		if (io->pfrio_esize != sizeof(struct pfr_table)) {
 			error = ENODEV;
@@ -3013,6 +3014,11 @@ DIOCCHANGEADDR_error:
 		}
 		PF_RULES_RLOCK();
 		n = pfr_table_count(&io->pfrio_table, io->pfrio_flags);
+		if (n < 0) {
+			PF_RULES_RUNLOCK();
+			error = EINVAL;
+			break;
+		}
 		io->pfrio_size = min(io->pfrio_size, n);
 
 		totlen = io->pfrio_size * sizeof(struct pfr_table);
@@ -3036,7 +3042,8 @@ DIOCCHANGEADDR_error:
 	case DIOCRGETTSTATS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
 		struct pfr_tstats *pfrtstats;
-		size_t totlen, n;
+		size_t totlen;
+		int n;
 
 		if (io->pfrio_esize != sizeof(struct pfr_tstats)) {
 			error = ENODEV;
@@ -3044,6 +3051,11 @@ DIOCCHANGEADDR_error:
 		}
 		PF_RULES_WLOCK();
 		n = pfr_table_count(&io->pfrio_table, io->pfrio_flags);
+		if (n < 0) {
+			PF_RULES_WUNLOCK();
+			error = EINVAL;
+			break;
+		}
 		io->pfrio_size = min(io->pfrio_size, n);
 
 		totlen = io->pfrio_size * sizeof(struct pfr_tstats);
@@ -3066,7 +3078,8 @@ DIOCCHANGEADDR_error:
 	case DIOCRCLRTSTATS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
 		struct pfr_table *pfrts;
-		size_t totlen, n;
+		size_t totlen;
+		int n;
 
 		if (io->pfrio_esize != sizeof(struct pfr_table)) {
 			error = ENODEV;
@@ -3075,6 +3088,11 @@ DIOCCHANGEADDR_error:
 
 		PF_RULES_WLOCK();
 		n = pfr_table_count(&io->pfrio_table, io->pfrio_flags);
+		if (n < 0) {
+			PF_RULES_WUNLOCK();
+			error = EINVAL;
+			break;
+		}
 		io->pfrio_size = min(io->pfrio_size, n);
 
 		totlen = io->pfrio_size * sizeof(struct pfr_table);
@@ -3101,7 +3119,8 @@ DIOCCHANGEADDR_error:
 	case DIOCRSETTFLAGS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
 		struct pfr_table *pfrts;
-		size_t totlen, n;
+		size_t totlen;
+		int n;
 
 		if (io->pfrio_esize != sizeof(struct pfr_table)) {
 			error = ENODEV;
@@ -3110,6 +3129,12 @@ DIOCCHANGEADDR_error:
 
 		PF_RULES_RLOCK();
 		n = pfr_table_count(&io->pfrio_table, io->pfrio_flags);
+		if (n < 0) {
+			PF_RULES_RUNLOCK();
+			error = EINVAL;
+			break;
+		}
+
 		io->pfrio_size = min(io->pfrio_size, n);
 		PF_RULES_RUNLOCK();
 
