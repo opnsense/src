@@ -237,3 +237,21 @@ al.Pc:\
 	:np:nc:sp#115200:
 3wire.230400|230400-3wire:\
 	:np:nc:sp#230400:
+
+#
+# Entries for 3-wire serial terminals with root user autologin.
+#
+al.3wire:\
+	:al=root:tc=3wire:
+al.3wire.9600:\
+	:al=root:tc=3wire.9600:
+al.3wire.19200:\
+	:al=root:tc=3wire.19200:
+al.3wire.38400:\
+	:al=root:tc=3wire.38400:
+al.3wire.57600:\
+	:al=root:tc=3wire.57600:
+al.3wire.115200:\
+	:al=root:tc=3wire.115200:
+al.3wire.230400:\
+	:al=root:tc=3wire.230400:
