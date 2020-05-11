@@ -5640,7 +5640,7 @@ bad_locked:
 		PF_STATE_UNLOCK(s);
 bad:
 	m_freem(m0);
-	goto done;
+	*m = NULL;
 }
 
 static void
@@ -5737,7 +5737,6 @@ pf_route_shared(struct mbuf **m, struct pf_rule *r, int dir, struct ifnet *ifp,
 	if (ip_set_fwdtag(m0, &dst, ifp->if_index))
 		goto bad;
 
-done:
 	if ((r->rt == PF_DUPTO || r->rt == PF_REPLYTO) && IP_HAS_NEXTHOP(m0)) {
 		ip_forward(m0, 1);
 		if (r->rt == PF_REPLYTO)
@@ -5750,7 +5749,7 @@ bad_locked:
 		PF_STATE_UNLOCK(s);
 bad:
 	m_freem(m0);
-	goto done;
+	*m = NULL;
 }
 #endif /* INET */
 
@@ -5885,7 +5884,7 @@ bad_locked:
 		PF_STATE_UNLOCK(s);
 bad:
 	m_freem(m0);
-	goto done;
+	*m = NULL;
 }
 
 static void
@@ -5977,7 +5976,6 @@ pf_route6_shared(struct mbuf **m, struct pf_rule *r, int dir,
 	if (ip6_set_fwdtag(m0, &dst, ifp->if_index))
 		goto bad;
 
-done:
 	if ((r->rt == PF_DUPTO || r->rt == PF_REPLYTO) && IP6_HAS_NEXTHOP(m0)) {
 		ip6_forward(m0, 1);
 		if (r->rt == PF_REPLYTO)
@@ -5991,7 +5989,7 @@ bad_locked:
 		PF_STATE_UNLOCK(s);
 bad:
 	m_freem(m0);
-	goto done;
+	*m = NULL;
 }
 #endif /* INET6 */
 
