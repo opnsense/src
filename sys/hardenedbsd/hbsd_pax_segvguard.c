@@ -375,8 +375,11 @@ pax_segvguard_add(struct thread *td, struct vnode *vn, sbintime_t sbt)
 
 	error = VOP_GETATTR(vn, &vap, td->td_ucred);
 	if (error != 0) {
-		pax_log_segvguard(td->td_proc, PAX_LOG_DEFAULT,
-		    "%s:%d stat error. Bailing.", __func__, __LINE__);
+		if (bootverbose) {
+			pax_log_segvguard(td->td_proc, PAX_LOG_DEFAULT,
+			    "%s:%d stat error. Bailing.", __func__,
+			    __LINE__);
+		}
 
 		return (NULL);
 	}
