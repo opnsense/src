@@ -403,7 +403,7 @@ stf_encapcheck(const struct mbuf *m, int off, int proto, void *arg)
 		 * fail on: src = 10.1.1.1, ia6->ia_addr = 2002:0b00:.../24
 		 */
 
-		memcpy(&sin4mask.sin_addr, GET_V4(&mask6), sizeof(sin4mask));
+		memcpy(&sin4mask.sin_addr, GET_V4(&mask6), sizeof(sin4mask.sin_addr));
 #if STF_DEBUG > 3
 		{
 			char buf[INET6_ADDRSTRLEN + 1];
