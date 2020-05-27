@@ -73,6 +73,7 @@ int Fflag = 0;	/* force setting sysctl parameters */
 int aflag = 0;
 int dflag = 0;
 int uflag = 0;
+int forceflag = 0;
 
 const char *otherconf_script;
 const char *resolvconf_script = "/sbin/resolvconf";
@@ -162,6 +163,9 @@ main(int argc, char **argv)
 			break;
 		case 'u':
 			uflag = 1;
+			break;
+        case 'w':
+			forceflag = 1;
 			break;
 		default:
 			usage();

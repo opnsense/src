@@ -375,7 +375,13 @@ rtsol_input(int s)
 		    "OtherConfigFlag on %s is turned on", ifi->ifname);
 		ifi->otherconfig = 1;
 		CALL_SCRIPT(OTHER, NULL);
-	}
+	} else if(forceflag == 1) {
+         /* force the script as we really need the gateway */
+         warnmsg(LOG_DEBUG, __func__,
+		    "Forcing otherConfigFlag on %s", ifi->ifname);
+		ifi->otherconfig = 1;
+		CALL_SCRIPT(OTHER, NULL);
+    }
 	clock_gettime(CLOCK_MONOTONIC_FAST, &now);
 	newent_rai = 0;
 	rai = find_rainfo(ifi, &from);

@@ -155,6 +155,7 @@ extern int dflag;
 extern int aflag;
 extern int Fflag;
 extern int uflag;
+extern int forceflag;
 extern const char *otherconf_script;
 extern const char *resolvconf_script;
 struct ifinfo *find_ifinfo(int);
