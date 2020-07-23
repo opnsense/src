@@ -440,10 +440,10 @@ ngt_rint_bypass(struct tty *tp, const void *buf, size_t len)
 		 * unlikely but not impossible, flush the data first.
 		 */
 		sc->m->m_data = sc->m->m_pktdat;
-		NG_SEND_DATA_ONLY(error, sc->hook, sc->m);
+		NG_SEND_DATA_FLAGS(error, sc->hook, sc->m, NG_QUEUE);
 		sc->m = NULL;
 	}
-	NG_SEND_DATA_ONLY(error, sc->hook, m);
+	NG_SEND_DATA_FLAGS(error, sc->hook, m, NG_QUEUE);
 
 	return (total);
 }
@@ -497,7 +497,7 @@ ngt_rint(struct tty *tp, char c, int flags)
 	if (sc->hotchar == -1 || c == sc->hotchar || m->m_len >= MHLEN) {
 		m->m_data = m->m_pktdat;
 		sc->m = NULL;
-		NG_SEND_DATA_ONLY(error, sc->hook, m);	/* Will queue */
+		NG_SEND_DATA_FLAGS(error, sc->hook, m, NG_QUEUE);
 	}
 
 	return (error);
