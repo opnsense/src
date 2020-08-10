@@ -4349,6 +4349,7 @@ static void re_init_software_variable(struct re_softc *sc)
                 sc->re_dash = re_check_dash(sc);
 
         if (sc->re_dash) {
+#if defined(__amd64__) || defined(__i386__)
                 if (HW_DASH_SUPPORT_TYPE_3(sc)) {
                         u_int64_t CmacMemPhysAddress;
                         bus_space_handle_t cmac_ioaddr;
@@ -4368,6 +4369,9 @@ static void re_init_software_variable(struct re_softc *sc)
                                         sc->re_mapped_cmac_handle = cmac_ioaddr;
                         }
                 }
+#else
+                sc->re_dash = 0;
+#endif
         }
 
         switch(sc->re_type) {
