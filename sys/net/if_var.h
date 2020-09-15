@@ -685,6 +685,11 @@ void	if_inc_counter(struct ifnet *, ift_counter, int64_t);
 #define IF_LLADDR(ifp)							\
     LLADDR((struct sockaddr_dl *)((ifp)->if_addr->ifa_addr))
 
+struct sockaddr_dl;
+typedef u_int iflladdr_cb_t(void *, struct sockaddr_dl *, u_int);
+u_int if_foreach_lladdr(if_t, iflladdr_cb_t, void *);
+u_int if_foreach_llmaddr(if_t, iflladdr_cb_t, void *);
+
 uint64_t if_setbaudrate(if_t ifp, uint64_t baudrate);
 uint64_t if_getbaudrate(if_t ifp);
 int if_setcapabilities(if_t ifp, int capabilities);
