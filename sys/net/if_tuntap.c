@@ -108,6 +108,11 @@
 #include <sys/condvar.h>
 #include <security/mac/mac_framework.h>
 
+#ifdef DEV_NETMAP
+#include <dev/netmap/if_tun_netmap.h>
+MODULE_DEPEND(if_tun, netmap, 1, 1, 1);
+#endif /* DEV_NETMAP */
+
 struct tuntap_driver;
 
 /*
@@ -970,6 +975,9 @@ tuncreate(struct cdev *dev)
 		ifp->if_mtu = TUNMTU;
 		ifp->if_start = tunstart;
 		ifp->if_output = tunoutput;
+#ifdef DEV_NETMAP
+		ifp->if_input = netmap_tuninput;
+#endif /* DEV_NETMAP */
 
 		ifp->if_snd.ifq_drv_maxlen = 0;
 		IFQ_SET_READY(&ifp->if_snd);
@@ -1828,6 +1836,9 @@ tunwrite_l3(struct tuntap_softc *tp, struct mbuf *m)
 	CURVNET_SET(ifp->if_vnet);
 	M_SETFIB(m, ifp->if_fib);
 	NET_EPOCH_ENTER(et);
+#ifdef DEV_NETMAP
+	if (!netmap_tuncapture(ifp, isr, m))
+#endif /* DEV_NETMAP */
 	netisr_dispatch(isr, m);
 	NET_EPOCH_EXIT(et);
 	CURVNET_RESTORE();
