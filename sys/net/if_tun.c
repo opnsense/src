@@ -64,6 +64,11 @@
 
 #include <security/mac/mac_framework.h>
 
+#ifdef DEV_NETMAP
+#include <dev/netmap/if_tun_netmap.h>
+MODULE_DEPEND(if_tun, netmap, 1, 1, 1);
+#endif /* DEV_NETMAP */
+
 /*
  * tun_list is protected by global tunmtx.  Other mutable fields are
  * protected by tun->tun_mtx, or by their owning subsystem.  tun_dev is
@@ -447,6 +452,9 @@ tuncreate(const char *name, struct cdev *dev)
 	knlist_init_mtx(&sc->tun_rsel.si_note, &sc->tun_mtx);
 	ifp->if_capabilities |= IFCAP_LINKSTATE;
 	ifp->if_capenable |= IFCAP_LINKSTATE;
+#ifdef DEV_NETMAP
+	ifp->if_input = netmap_tuninput;
+#endif /* DEV_NETMAP */
 
 	if_attach(ifp);
 	bpfattach(ifp, DLT_NULL, sizeof(u_int32_t));
@@ -1004,6 +1012,9 @@ tunwrite(struct cdev *dev, struct uio *uio, int flag)
 	if_inc_counter(ifp, IFCOUNTER_IPACKETS, 1);
 	CURVNET_SET(ifp->if_vnet);
 	M_SETFIB(m, ifp->if_fib);
+#ifdef DEV_NETMAP
+	if (!netmap_tuncapture(ifp, isr, m))
+#endif /* DEV_NETMAP */
 	netisr_dispatch(isr, m);
 	CURVNET_RESTORE();
 	return (0);
