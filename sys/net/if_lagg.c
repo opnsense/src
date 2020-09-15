@@ -73,6 +73,15 @@ __FBSDID("$FreeBSD$");
 #include <net/if_lagg.h>
 #include <net/ieee8023ad_lacp.h>
 
+#ifdef DEV_NETMAP
+#include <net/netmap.h>
+#include <machine/bus.h>
+#include <sys/selinfo.h>
+#include <vm/vm.h>
+#include <vm/pmap.h>
+#include <dev/netmap/netmap_kern.h>
+#endif
+
 #define	LAGG_RLOCK()	struct epoch_tracker lagg_et; epoch_enter_preempt(net_epoch_preempt, &lagg_et)
 #define	LAGG_RUNLOCK()	epoch_exit_preempt(net_epoch_preempt, &lagg_et)
 #define	LAGG_RLOCK_ASSERT()	MPASS(in_epoch(net_epoch_preempt))
@@ -1751,6 +1760,13 @@ lagg_input(struct ifnet *ifp, struct mbuf *m)
 		m_freem(m);
 		m = NULL;
 	}
+
+#ifdef DEV_NETMAP
+	if (m != NULL && nm_netmap_on(NA(scifp))) {
+		scifp->if_input(scifp, m);
+		m = NULL;
+	}
+#endif
 
 	LAGG_RUNLOCK();
 	return (m);
