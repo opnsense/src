@@ -84,6 +84,16 @@ __FBSDID("$FreeBSD$");
 extern void	nd6_setmtu(struct ifnet *);
 #endif
 
+#ifdef DEV_NETMAP
+#include <net/netmap.h>
+#include <machine/bus.h>
+#include <sys/selinfo.h>
+#include <vm/vm.h>
+#include <vm/pmap.h>
+#include <dev/netmap/netmap_kern.h>
+MODULE_DEPEND(if_lagg, netmap, 1, 1, 1);
+#endif
+
 #define	LAGG_SX_INIT(_sc)	sx_init(&(_sc)->sc_sx, "if_lagg sx")
 #define	LAGG_SX_DESTROY(_sc)	sx_destroy(&(_sc)->sc_sx)
 #define	LAGG_XLOCK(_sc)		sx_xlock(&(_sc)->sc_sx)
@@ -2095,6 +2105,13 @@ lagg_input_ethernet(struct ifnet *ifp, struct mbuf *m)
 		m_freem(m);
 		m = NULL;
 	}
+
+#ifdef DEV_NETMAP
+	if (m != NULL && nm_netmap_on(NA(scifp))) {
+		scifp->if_input(scifp, m);
+		m = NULL;
+	}
+#endif
 
 	NET_EPOCH_EXIT(et);
 	return (m);
