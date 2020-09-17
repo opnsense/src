@@ -230,7 +230,7 @@ static unsigned int obj_count;	/* Number of objects in obj_list */
 static unsigned int obj_loads;	/* Number of loads of objects (gen count) */
 
 #ifdef HARDENEDBSD
-static Elf_Word pax_flags = 0;	/* PaX / HardenedBSD flags */
+static Elf_Word pax_flags = PAX_HARDENING_NOSHLIBRANDOM;	/* PaX / HardenedBSD flags */
 #endif
 
 static Objlist list_global =	/* Objects dlopened with RTLD_GLOBAL */
