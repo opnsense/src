@@ -60,6 +60,7 @@ SUBDIR=	\
 	ath_pci \
 	${_autofs} \
 	${_auxio} \
+	axgbe \
 	${_bce} \
 	${_bcm283x_clkman} \
 	${_bcm283x_pwm} \
