@@ -35,6 +35,7 @@ SRCS+=	ifvxlan.c		# VXLAN support
 SRCS+=	ifgre.c			# GRE keys etc
 SRCS+=	ifgif.c			# GIF reversed header workaround
 SRCS+=	ifipsec.c		# IPsec VTI
+SRCS+=	ifwg.c			# Wireguard
 SRCS+=	ifstf.c			# STF configuration options
 
 SRCS+=	sfp.c			# SFP/SFP+ information
@@ -64,6 +65,7 @@ CFLAGS+= -DINET
 CFLAGS+= -DJAIL
 LIBADD+=	jail
 .endif
+LIBADD+=	nv
 
 MAN=	ifconfig.8
 

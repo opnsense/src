@@ -575,6 +575,7 @@ MAN=	aac.4 \
 	watchdog.4 \
 	wb.4 \
 	${_wbwd.4} \
+	wg.4 \
 	wi.4 \
 	witness.4 \
 	wlan.4 \

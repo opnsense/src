@@ -1032,3 +1032,15 @@ taskqgroup_destroy(struct taskqgroup *qgroup)
 {
 }
 
+void
+taskqgroup_drain_all(struct taskqgroup *tqg)
+{
+	struct gtaskqueue *q;
+
+	for (int i = 0; i < mp_ncpus; i++) {
+		q = tqg->tqg_queue[i].tgc_taskq;
+		if (q == NULL)
+			continue;
+		gtaskqueue_drain_all(q);
+	}
+}
