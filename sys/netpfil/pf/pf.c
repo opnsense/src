@@ -5669,7 +5669,7 @@ bad_locked:
 		PF_STATE_UNLOCK(s);
 bad:
 	m_freem(m0);
-	*m = NULL;
+	goto done;
 }
 
 static void
@@ -5762,7 +5762,8 @@ bad_locked:
 		PF_STATE_UNLOCK(s);
 bad:
 	m_freem(m0);
-	*m = NULL;
+	if (r->rt != PF_DUPTO)
+		*m = NULL;
 }
 #endif /* INET */
 
@@ -5889,7 +5890,7 @@ bad_locked:
 		PF_STATE_UNLOCK(s);
 bad:
 	m_freem(m0);
-	*m = NULL;
+	goto done;
 }
 
 static void
@@ -5987,7 +5988,8 @@ bad_locked:
 		PF_STATE_UNLOCK(s);
 bad:
 	m_freem(m0);
-	*m = NULL;
+	if (r->rt != PF_DUPTO)
+		*m = NULL;
 }
 #endif /* INET6 */
 
