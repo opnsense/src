@@ -89,6 +89,7 @@ options 	RACCT			# Resource accounting framework
 options 	RCTL			# Resource limits
 
 # HardenedBSD hardening options
+options 	HARDEN_KLD		# Harden the kernel module interface
 options 	PAX			# PaX framework
 options 	PAX_CONTROL_ACL		# PaX MAC framework, required for secadm
 options 	PAX_CONTROL_ACL_OVERRIDE_SUPPORT # Allow to override hbsdcontrol settings with ACLs

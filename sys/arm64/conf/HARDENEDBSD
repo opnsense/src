@@ -1,6 +1,8 @@
 include GENERIC
 ident	HARDENEDBSD
 
+# HardenedBSD hardening options
+options 	HARDEN_KLD		# Harden the kernel module interface
 options 	PAX
 options 	PAX_CONTROL_ACL
 options 	PAX_CONTROL_ACL_OVERRIDE_SUPPORT

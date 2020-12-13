@@ -29,6 +29,8 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#include "opt_pax.h"
+
 #include <sys/param.h>
 #include <sys/kernel.h>
 #include <sys/systm.h>
@@ -312,9 +314,13 @@ sys_modnext(struct thread *td, struct modnext_args *uap)
 	module_t mod;
 	int error;
 
+#ifdef HARDEN_KLD
 	error = priv_check(td, PRIV_KLD_STAT);
 	if (error)
 		return (error);
+#else
+	error = 0;
+#endif
 
 	td->td_retval[0] = -1;
 
@@ -347,9 +353,11 @@ sys_modfnext(struct thread *td, struct modfnext_args *uap)
 	module_t mod;
 	int error;
 
+#ifdef HARDEN_KLD
 	error = priv_check(td, PRIV_KLD_STAT);
 	if (error)
 		return (error);
+#endif
 
 	td->td_retval[0] = -1;
 
@@ -385,9 +393,11 @@ sys_modstat(struct thread *td, struct modstat_args *uap)
 	struct module_stat *stat;
 	char *name;
 
+#ifdef HARDEN_KLD
 	error = priv_check(td, PRIV_KLD_STAT);
 	if (error)
 		return (error);
+#endif
 
 	MOD_SLOCK;
 	mod = module_lookupbyid(uap->modid);
@@ -439,9 +449,11 @@ sys_modfind(struct thread *td, struct modfind_args *uap)
 	char name[MAXMODNAME];
 	module_t mod;
 
+#ifdef HARDEN_KLD
 	error = priv_check(td, PRIV_KLD_STAT);
 	if (error)
 		return (error);
+#endif
 
 	if ((error = copyinstr(uap->name, name, sizeof name, 0)) != 0)
 		return (error);
@@ -490,9 +502,11 @@ freebsd32_modstat(struct thread *td, struct freebsd32_modstat_args *uap)
 	struct module_stat32 *stat32;
 	char *name;
 
+#ifdef HARDEN_KLD
 	error = priv_check(td, PRIV_KLD_STAT);
 	if (error)
 		return (error);
+#endif
 
 	MOD_SLOCK;
 	mod = module_lookupbyid(uap->modid);

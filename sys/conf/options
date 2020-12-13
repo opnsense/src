@@ -981,6 +981,9 @@ RACCT_DEFAULT_TO_DISABLED	opt_global.h
 # Resource Limits
 RCTL		opt_global.h
 
+# HardenedBSD general hardening features
+HARDEN_KLD	opt_pax.h
+
 # PaX-inspired hardening features
 PAX		opt_pax.h
 PAX_ASLR	opt_pax.h
