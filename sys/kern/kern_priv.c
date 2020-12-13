@@ -161,26 +161,19 @@ priv_check_cred(struct ucred *cred, int priv, int flags)
 		}
 	}
 
-#if !defined(HARDEN_KLD)
 	/*
-	 * Inspecting kernel module information should be root-only
-	 * when PAX_HARDENING is set.
+	 * Inspecting kernel module information should be root-only.
 	 */
 	if (priv == PRIV_KLD_STAT) {
 		error = 0;
 		goto out;
 	}
-#endif
 
 	if (priv == PRIV_SYSCTL_ROOTONLY) {
-#ifdef PAX_HARDENING
 		if (cred->cr_uid == 0) {
-#endif
 			error = 0;
 			goto out;
-#ifdef PAX_HARDENING
 		}
-#endif
 	}
 
 	/*
