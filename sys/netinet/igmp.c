@@ -312,6 +312,7 @@ igmp_scrub_context(struct mbuf *m)
 {
 
 	m->m_pkthdr.PH_loc.ptr = NULL;
+	m->m_pkthdr.rcvif = NULL;
 	m->m_pkthdr.flowid = 0;
 }
 
