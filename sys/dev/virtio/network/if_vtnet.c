@@ -2830,6 +2830,11 @@ vtnet_stop(struct vtnet_softc *sc)
 	/* Only advisory. */
 	vtnet_disable_interrupts(sc);
 
+#ifdef DEV_NETMAP
+	/* Stop any pending txsync/rxsync and disable them. */
+	netmap_disable_all_rings(ifp);
+#endif /* DEV_NETMAP */
+
 	/*
 	 * Stop the host adapter. This resets it to the pre-initialized
 	 * state. It will not generate any interrupts until after it is
@@ -3094,6 +3099,11 @@ vtnet_init_locked(struct vtnet_softc *sc, int init_mode)
 
 	vtnet_update_link_status(sc);
 	callout_reset(&sc->vtnet_tick_ch, hz, vtnet_tick, sc);
+
+#ifdef DEV_NETMAP
+	/* Re-enable txsync/rxsync. */
+	netmap_enable_all_rings(ifp);
+#endif /* DEV_NETMAP */
 
 	return;
 
