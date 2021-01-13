@@ -213,7 +213,6 @@ dev/axgbe/xgbe-sysctl.c		optional	axa
 dev/axgbe/xgbe-txrx.c		optional	axa
 dev/axgbe/xgbe_osdep.c		optional	axa
 dev/axgbe/xgbe-phy-v1.c		optional	axa
->>>>>>> 7113afc84c0b... 10Gigabit Ethernet driver for AMD SoC
 dev/cpufreq/cpufreq_dt.c	optional	cpufreq fdt
 dev/iicbus/twsi/mv_twsi.c	optional	twsi fdt
 dev/iicbus/twsi/a10_twsi.c	optional	twsi fdt
