@@ -960,6 +960,7 @@ iflib_netmap_txsync(struct netmap_kring *kring, int flags)
 	u_int const lim = kring->nkr_num_slots - 1;
 	u_int const head = kring->rhead;
 	struct if_pkt_info pi;
+	int pkt_sent, bytes_sent;
 
 	/*
 	 * interrupts on every tx packet are expensive so request
@@ -996,6 +997,7 @@ iflib_netmap_txsync(struct netmap_kring *kring, int flags)
 	 */
 
 	nm_i = kring->nr_hwcur;
+	pkt_sent = bytes_sent = 0;
 	if (nm_i != head) {	/* we have new packets to send */
 		pkt_info_zero(&pi);
 		pi.ipi_segs = txq->ift_segs;
@@ -1027,6 +1029,8 @@ iflib_netmap_txsync(struct netmap_kring *kring, int flags)
 			/* Fill the slot in the NIC ring. */
 			ctx->isc_txd_encap(ctx->ifc_softc, &pi);
 			DBG_COUNTER_INC(tx_encap);
+			pkt_sent++;
+			bytes_sent += len;
 
 			/* prefetch for next round */
 			__builtin_prefetch(&ring->slot[nm_i + 1]);
@@ -1081,6 +1085,10 @@ iflib_netmap_txsync(struct netmap_kring *kring, int flags)
 			    iflib_netmap_timer, txq,
 			    txq->ift_netmap_timer.c_cpu, 0);
 		}
+
+	if_inc_counter(ifp, IFCOUNTER_OBYTES, bytes_sent);
+	if_inc_counter(ifp, IFCOUNTER_OPACKETS, pkt_sent);
+
 	return (0);
 }
 
@@ -1108,6 +1116,7 @@ iflib_netmap_rxsync(struct netmap_kring *kring, int flags)
 	u_int n;
 	u_int const lim = kring->nkr_num_slots - 1;
 	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
+	int rx_bytes, rx_pkts;
 
 	if_ctx_t ctx = ifp->if_softc;
 	if_shared_ctx_t sctx = ctx->ifc_sctx;
@@ -1141,6 +1150,7 @@ iflib_netmap_rxsync(struct netmap_kring *kring, int flags)
 	 *
 	 * fl->ifl_cidx is set to 0 on a ring reinit
 	 */
+	rx_bytes = rx_pkts = 0;
 	if (netmap_no_pendintr || force_update) {
 		uint32_t hwtail_lim = nm_prev(kring->nr_hwcur, lim);
 		bool have_rxcq = sctx->isc_flags & IFLIB_HAS_RXCQ;
@@ -1169,6 +1179,10 @@ iflib_netmap_rxsync(struct netmap_kring *kring, int flags)
 			ri.iri_cidx = *cidxp;
 
 			error = ctx->isc_rxd_pkt_get(ctx->ifc_softc, &ri);
+			if (!error) {
+				rx_pkts++;
+				rx_bytes += ri.iri_len;
+			}
 			ring->slot[nm_i].len = error ? 0 : ri.iri_len - crclen;
 			ring->slot[nm_i].flags = 0;
 			if (have_rxcq) {
@@ -1200,6 +1214,9 @@ iflib_netmap_rxsync(struct netmap_kring *kring, int flags)
 	 * nm_i == (nic_i + kring->nkr_hwofs) % ring_size
 	 */
 	netmap_fl_refill(rxq, kring, false);
+	
+	if_inc_counter(ifp, IFCOUNTER_IBYTES, rx_bytes);
+	if_inc_counter(ifp, IFCOUNTER_IPACKETS, rx_pkts);
 
 	return (0);
 }
