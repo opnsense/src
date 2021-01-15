@@ -380,6 +380,7 @@ struct xgbe_phy_data {
 };
 
 static enum xgbe_an_mode xgbe_phy_an_mode(struct xgbe_prv_data *pdata);
+static int xgbe_phy_reset(struct xgbe_prv_data *pdata);
 
 static int
 xgbe_phy_i2c_xfer(struct xgbe_prv_data *pdata, struct xgbe_i2c_op *i2c_op)
@@ -2879,7 +2880,14 @@ xgbe_phy_link_status(struct xgbe_prv_data *pdata, int *an_restart)
 		axgbe_printf(1, "ENTERED RRC: rrc_count: %d\n",
 		    phy_data->rrc_count);
 		phy_data->rrc_count = 0;
-		xgbe_phy_rrc(pdata);
+		if (pdata->link_workaround) {
+			ret = xgbe_phy_reset(pdata);
+			if (ret) {
+				axgbe_error("Error resetting phy\n");
+			}
+		} else {
+			xgbe_phy_rrc(pdata);
+		}
 	}
 
 	return (0);
