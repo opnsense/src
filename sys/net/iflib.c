@@ -960,7 +960,7 @@ iflib_netmap_txsync(struct netmap_kring *kring, int flags)
 	u_int const lim = kring->nkr_num_slots - 1;
 	u_int const head = kring->rhead;
 	struct if_pkt_info pi;
-	int pkt_sent, bytes_sent;
+	int tx_pkts, tx_bytes;
 
 	/*
 	 * interrupts on every tx packet are expensive so request
@@ -997,7 +997,7 @@ iflib_netmap_txsync(struct netmap_kring *kring, int flags)
 	 */
 
 	nm_i = kring->nr_hwcur;
-	pkt_sent = bytes_sent = 0;
+	tx_pkts = tx_bytes = 0;
 	if (nm_i != head) {	/* we have new packets to send */
 		pkt_info_zero(&pi);
 		pi.ipi_segs = txq->ift_segs;
@@ -1029,8 +1029,8 @@ iflib_netmap_txsync(struct netmap_kring *kring, int flags)
 			/* Fill the slot in the NIC ring. */
 			ctx->isc_txd_encap(ctx->ifc_softc, &pi);
 			DBG_COUNTER_INC(tx_encap);
-			pkt_sent++;
-			bytes_sent += len;
+			tx_pkts++;
+			tx_bytes += len;
 
 			/* prefetch for next round */
 			__builtin_prefetch(&ring->slot[nm_i + 1]);
@@ -1086,8 +1086,8 @@ iflib_netmap_txsync(struct netmap_kring *kring, int flags)
 			    txq->ift_netmap_timer.c_cpu, 0);
 		}
 
-	if_inc_counter(ifp, IFCOUNTER_OBYTES, bytes_sent);
-	if_inc_counter(ifp, IFCOUNTER_OPACKETS, pkt_sent);
+	if_inc_counter(ifp, IFCOUNTER_OBYTES, tx_bytes);
+	if_inc_counter(ifp, IFCOUNTER_OPACKETS, tx_pkts);
 
 	return (0);
 }
