@@ -111,6 +111,8 @@ netmap_tuncapture(struct ifnet *ifp, int isr, struct mbuf *m)
 	}
 	eh = mtod(m, struct ether_header *);
 	eh->ether_type = htons(isr == AF_INET6 ? ETHERTYPE_IPV6 : ETHERTYPE_IP);
+	memcpy(eh->ether_shost, "\x02\x02\x02\x02\x02\x02", ETHER_ADDR_LEN);
+	memcpy(eh->ether_dhost, "\x06\x06\x06\x06\x06\x06", ETHER_ADDR_LEN);
 	(*ifp->if_input)(ifp, m);
 	return 1; /* stolen */
 }
