@@ -1219,8 +1219,8 @@ xgbe_phy_sfp_parse_eeprom(struct xgbe_prv_data *pdata)
 	 * 1G, we first check if it is a DAC and the bitrate is 10G.
 	 */
 	if (((sfp_base[XGBE_SFP_BASE_CV] & XGBE_SFP_BASE_CV_CP) ||
-		(phy_data->sfp_cable == XGBE_SFP_CABLE_PASSIVE)) &&
-		 xgbe_phy_sfp_bit_rate(sfp_eeprom, XGBE_SFP_SPEED_10000))
+	    (phy_data->sfp_cable == XGBE_SFP_CABLE_PASSIVE)) &&
+	    xgbe_phy_sfp_bit_rate(sfp_eeprom, XGBE_SFP_SPEED_10000))
 		phy_data->sfp_base = XGBE_SFP_BASE_10000_CR;
 	else if (sfp_base[XGBE_SFP_BASE_10GBE_CC] & XGBE_SFP_BASE_10GBE_CC_SR)
 		phy_data->sfp_base = XGBE_SFP_BASE_10000_SR;
@@ -2890,12 +2890,10 @@ xgbe_phy_link_status(struct xgbe_prv_data *pdata, int *an_restart)
 		phy_data->rrc_count = 0;
 		if (pdata->link_workaround) {
 			ret = xgbe_phy_reset(pdata);
-			if (ret) {
+			if (ret)
 				axgbe_error("Error resetting phy\n");
-			}
-		} else {
+		} else
 			xgbe_phy_rrc(pdata);
-		}
 	}
 
 	return (0);
