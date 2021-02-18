@@ -128,6 +128,7 @@ do {									\
 #define	SUPPORTED_10000baseCR_Full	(1 << 19)
 #define SUPPORTED_100baseT_Half		(1 << 20)
 #define SUPPORTED_1000baseT_Half	(1 << 21)
+#define SUPPORTED_1000baseBX_Full	(1 << 22)
 
 #define LPA_PAUSE_ASYM			0x0800
 
