@@ -280,11 +280,11 @@ axgbe_register(device_t dev)
 		 * No tunable found, generate one with default values
 		 * Note: only a reboot will reveal the new kenv
 		 */
-		error = kern_setenv("dev.ax.sph_enable", "1");
+		error = kern_setenv("dev.ax.sph_enable", "0");
 		if (error) {
 			printf("Error setting tunable, using default driver values\n");
 		}
-		axgbe_sph_enable = 1;
+		axgbe_sph_enable = 0;
 	}
 
 	if (!axgbe_sph_enable) {
