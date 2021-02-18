@@ -192,6 +192,7 @@ enum xgbe_sfp_base {
 	XGBE_SFP_BASE_1000_SX,
 	XGBE_SFP_BASE_1000_LX,
 	XGBE_SFP_BASE_1000_CX,
+	XGBE_SFP_BASE_1000_BX,
 	XGBE_SFP_BASE_10000_SR,
 	XGBE_SFP_BASE_10000_LR,
 	XGBE_SFP_BASE_10000_LRM,
@@ -238,6 +239,14 @@ enum xgbe_sfp_speed {
 #define XGBE_SFP_BASE_BR_10GBE_MIN		0x64
 #define XGBE_SFP_BASE_BR_10GBE_MAX		0x68
 
+/* Single mode, length of fiber in units of km */
+#define XGBE_SFP_BASE_SM_LEN_KM			14
+#define XGBE_SFP_BASE_SM_LEN_KM_MIN		0x0A
+
+/* Single mode, length of fiber in units of 100m */
+#define XGBE_SFP_BASE_SM_LEN_100M		15
+#define XGBE_SFP_BASE_SM_LEN_100M_MIN	0x64
+
 #define XGBE_SFP_BASE_CU_CABLE_LEN		18
 
 #define XGBE_SFP_BASE_VENDOR_NAME		20
@@ -246,6 +255,16 @@ enum xgbe_sfp_speed {
 #define XGBE_SFP_BASE_VENDOR_PN_LEN		16
 #define XGBE_SFP_BASE_VENDOR_REV		56
 #define XGBE_SFP_BASE_VENDOR_REV_LEN		4
+
+/* 
+ * Optical specification compliance - denotes wavelength 
+ * for optical tranceivers
+ */
+#define XGBE_SFP_BASE_OSC			60
+#define XGBE_SFP_BASE_OSC_LEN		2
+#define XGBE_SFP_BASE_OSC_1310		0x051E
+#define XGBE_SFP_BASE_OSC_1439		0x05D2
+#define XGBE_SFP_BASE_OSC_1550		0x060E
 
 #define XGBE_SFP_BASE_CC			63
 
@@ -779,6 +798,13 @@ xgbe_phy_sfp_phy_settings(struct xgbe_prv_data *pdata)
 				XGBE_SET_SUP(&pdata->phy, 1000baseX_Full);
 		}
 		break;
+	case XGBE_SFP_BASE_1000_BX:
+		pdata->phy.speed = SPEED_1000;
+		pdata->phy.duplex = DUPLEX_FULL;
+		pdata->phy.autoneg = AUTONEG_DISABLE;
+		pdata->phy.pause_autoneg = AUTONEG_DISABLE;
+		XGBE_SET_SUP(&pdata->phy, 1000baseBX_Full);
+		break;
 	case XGBE_SFP_BASE_10000_SR:
 	case XGBE_SFP_BASE_10000_LR:
 	case XGBE_SFP_BASE_10000_LRM:
@@ -1189,6 +1215,7 @@ xgbe_phy_sfp_parse_eeprom(struct xgbe_prv_data *pdata)
 	struct xgbe_phy_data *phy_data = pdata->phy_data;
 	struct xgbe_sfp_eeprom *sfp_eeprom = &phy_data->sfp_eeprom;
 	uint8_t *sfp_base;
+	uint16_t wavelen = 0;
 
 	sfp_base = sfp_eeprom->base;
 
@@ -1212,6 +1239,8 @@ xgbe_phy_sfp_parse_eeprom(struct xgbe_prv_data *pdata)
 		phy_data->sfp_cable_len = sfp_base[XGBE_SFP_BASE_CU_CABLE_LEN];
 	} else
 		phy_data->sfp_cable = XGBE_SFP_CABLE_ACTIVE;
+
+	wavelen = (sfp_base[XGBE_SFP_BASE_OSC] << 8) | sfp_base[XGBE_SFP_BASE_OSC + 1];
 
 	/*
 	 * Determine the type of SFP. Certain 10G SFP+ modules read as
@@ -1238,7 +1267,12 @@ xgbe_phy_sfp_parse_eeprom(struct xgbe_prv_data *pdata)
 		phy_data->sfp_base = XGBE_SFP_BASE_1000_CX;
 	else if (sfp_base[XGBE_SFP_BASE_1GBE_CC] & XGBE_SFP_BASE_1GBE_CC_T)
 		phy_data->sfp_base = XGBE_SFP_BASE_1000_T;
-
+	else if (xgbe_phy_sfp_bit_rate(sfp_eeprom, XGBE_SFP_SPEED_1000)
+			&& (sfp_base[XGBE_SFP_BASE_SM_LEN_KM] >= XGBE_SFP_BASE_SM_LEN_KM_MIN
+			|| sfp_base[XGBE_SFP_BASE_SM_LEN_100M] >= XGBE_SFP_BASE_SM_LEN_100M_MIN)
+			&& wavelen >= XGBE_SFP_BASE_OSC_1310)
+		phy_data->sfp_base = XGBE_SFP_BASE_1000_BX;
+		
 	switch (phy_data->sfp_base) {
 	case XGBE_SFP_BASE_1000_T:
 		phy_data->sfp_speed = XGBE_SFP_SPEED_100_1000;
@@ -1246,6 +1280,7 @@ xgbe_phy_sfp_parse_eeprom(struct xgbe_prv_data *pdata)
 	case XGBE_SFP_BASE_1000_SX:
 	case XGBE_SFP_BASE_1000_LX:
 	case XGBE_SFP_BASE_1000_CX:
+	case XGBE_SFP_BASE_1000_BX:
 		phy_data->sfp_speed = XGBE_SFP_SPEED_1000;
 		break;
 	case XGBE_SFP_BASE_10000_SR:
@@ -1271,29 +1306,29 @@ xgbe_phy_sfp_eeprom_info(struct xgbe_prv_data *pdata,
 	struct xgbe_sfp_ascii sfp_ascii;
 	char *sfp_data = (char *)&sfp_ascii;
 
-	axgbe_printf(3, "SFP detected:\n");
+	axgbe_printf(0, "SFP detected:\n");
 	memcpy(sfp_data, &sfp_eeprom->base[XGBE_SFP_BASE_VENDOR_NAME],
 	       XGBE_SFP_BASE_VENDOR_NAME_LEN);
 	sfp_data[XGBE_SFP_BASE_VENDOR_NAME_LEN] = '\0';
-	axgbe_printf(3, "  vendor:	 %s\n",
+	axgbe_printf(0, "  vendor:	 %s\n",
 	    sfp_data);
 
 	memcpy(sfp_data, &sfp_eeprom->base[XGBE_SFP_BASE_VENDOR_PN],
 	       XGBE_SFP_BASE_VENDOR_PN_LEN);
 	sfp_data[XGBE_SFP_BASE_VENDOR_PN_LEN] = '\0';
-	axgbe_printf(3, "  part number:    %s\n",
+	axgbe_printf(0, "  part number:    %s\n",
 	    sfp_data);
 
 	memcpy(sfp_data, &sfp_eeprom->base[XGBE_SFP_BASE_VENDOR_REV],
 	       XGBE_SFP_BASE_VENDOR_REV_LEN);
 	sfp_data[XGBE_SFP_BASE_VENDOR_REV_LEN] = '\0';
-	axgbe_printf(3, "  revision level: %s\n",
+	axgbe_printf(0, "  revision level: %s\n",
 	    sfp_data);
 
 	memcpy(sfp_data, &sfp_eeprom->extd[XGBE_SFP_BASE_VENDOR_SN],
 	       XGBE_SFP_BASE_VENDOR_SN_LEN);
 	sfp_data[XGBE_SFP_BASE_VENDOR_SN_LEN] = '\0';
-	axgbe_printf(3, "  serial number:  %s\n",
+	axgbe_printf(0, "  serial number:  %s\n",
 	    sfp_data);
 }
 
@@ -1392,13 +1427,19 @@ xgbe_phy_sfp_signals(struct xgbe_prv_data *pdata)
 	axgbe_printf(3, "%s: befor sfp_mod:%d sfp_gpio_address:0x%x\n",
 	    __func__, phy_data->sfp_mod_absent, phy_data->sfp_gpio_address);
 
+	ret = xgbe_phy_sfp_get_mux(pdata);
+	if (ret) {
+		axgbe_error("I2C error setting SFP MUX\n");
+		return;
+	}
+
 	gpio_reg = 0;
 	ret = xgbe_phy_i2c_read(pdata, phy_data->sfp_gpio_address, &gpio_reg,
 	    sizeof(gpio_reg), gpio_ports, sizeof(gpio_ports));
 	if (ret) {
 		axgbe_error("%s: I2C error reading SFP GPIO addr:0x%x\n",
 		    __func__, phy_data->sfp_gpio_address);
-		return;
+		goto put_mux;
 	}
 
 	phy_data->sfp_gpio_inputs = (gpio_ports[1] << 8) | gpio_ports[0];
@@ -1412,6 +1453,9 @@ xgbe_phy_sfp_signals(struct xgbe_prv_data *pdata)
 
 	axgbe_printf(3, "%s: after sfp_mod:%d sfp_gpio_inputs:0x%x\n",
 	    __func__, phy_data->sfp_mod_absent, phy_data->sfp_gpio_inputs);
+
+put_mux:
+	xgbe_phy_sfp_put_mux(pdata);
 }
 
 static void
@@ -1442,9 +1486,6 @@ xgbe_phy_sfp_detect(struct xgbe_prv_data *pdata)
 {
 	struct xgbe_phy_data *phy_data = pdata->phy_data;
 	int ret, prev_sfp_state = phy_data->sfp_mod_absent;
-
-	/* Reset the SFP signals and info */
-	xgbe_phy_sfp_reset(phy_data);
 
 	ret = xgbe_phy_get_comm_ownership(pdata);
 	if (ret)

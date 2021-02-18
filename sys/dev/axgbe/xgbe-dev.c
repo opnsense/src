@@ -1453,7 +1453,8 @@ xgbe_dev_read(struct xgbe_channel *channel)
 
 	if (!err || !etlt) {
 		/* No error if err is 0 or etlt is 0 */
-		if (etlt == 0x09) {
+		if (etlt == 0x09 &&
+			(if_getcapenable(pdata->netdev) & IFCAP_VLAN_HWTAGGING)) {
 			XGMAC_SET_BITS(packet->attributes, RX_PACKET_ATTRIBUTES,
 			    VLAN_CTAG, 1);
 			packet->vlan_ctag = XGMAC_GET_BITS_LE(rdesc->desc0,
@@ -2030,6 +2031,13 @@ static void
 xgbe_config_mac_address(struct xgbe_prv_data *pdata)
 {
 	xgbe_set_mac_address(pdata, IF_LLADDR(pdata->netdev));
+
+	/* 
+	 * Promisc mode does not work as intended. When receiving CARP
+	 * packets, the filter still seems to kick in. As a workaround,
+	 * enable the "Receive All" mode on the card during init.
+	 */
+	XGMAC_IOWRITE_BITS(pdata, MAC_PFR, RA, 1);
 
 	/* Filtering is done using perfect filtering and hash filtering */
 	if (pdata->hw_feat.hash_table_size) {
