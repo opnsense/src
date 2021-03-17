@@ -173,7 +173,6 @@ SUBDIR=	\
 	if_tun \
 	if_vlan \
 	if_vxlan \
-	if_wg \
 	iflib \
 	${_iir} \
 	imgact_binmisc \

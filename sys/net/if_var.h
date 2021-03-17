@@ -411,8 +411,6 @@ struct ifnet {
 #define	NET_EPOCH_EXIT() epoch_exit_preempt(net_epoch_preempt, &nep_et)
 #define	NET_EPOCH_EXIT_ET(et) epoch_exit_preempt(net_epoch_preempt, &(et))
 #define	NET_EPOCH_WAIT() epoch_wait_preempt(net_epoch_preempt)
-#define	NET_EPOCH_ASSERT() MPASS(in_epoch(net_epoch_preempt))
-#define	NET_EPOCH_CALL(f, c) epoch_call(net_epoch_preempt, (c), (f))
 
 
 /*

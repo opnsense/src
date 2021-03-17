@@ -575,7 +575,6 @@ MAN=	aac.4 \
 	watchdog.4 \
 	wb.4 \
 	${_wbwd.4} \
-	wg.4 \
 	wi.4 \
 	witness.4 \
 	wlan.4 \
@@ -765,7 +764,6 @@ MLINKS+=vte.4 if_vte.4
 MLINKS+=${_vtnet.4} ${_if_vtnet.4}
 MLINKS+=watchdog.4 SW_WATCHDOG.4
 MLINKS+=wb.4 if_wb.4
-MLINKS+=wg.4 if_wg.4
 MLINKS+=wi.4 if_wi.4
 MLINKS+=${_wpi.4} ${_if_wpi.4}
 MLINKS+=xe.4 if_xe.4
