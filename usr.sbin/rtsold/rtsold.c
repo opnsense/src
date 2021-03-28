@@ -119,10 +119,10 @@ main(int argc, char **argv)
 
 #ifndef SMALL
 	/* rtsold */
-	opts = "adDfFm1O:p:R:u";
+	opts = "adDfFm1M:O:p:R:u";
 #else
 	/* rtsol */
-	opts = "adDFO:R:u";
+	opts = "adDFM:O:R:u";
 	fflag = 1;
 	once = 1;
 #endif
@@ -150,6 +150,9 @@ main(int argc, char **argv)
 			break;
 		case '1':
 			once = 1;
+			break;
+		case 'M':
+			/* command line compat */
 			break;
 		case 'O':
 			otherconf_script = optarg;
