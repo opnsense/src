@@ -60,7 +60,7 @@ default_scheme(void)
 	if (strcmp(x86_bootmethod(), "UEFI") == 0)
 		return ("GPT");
 	else
-		return ("MBR");
+		return ("GPT"); /* OPNsense */
 }
 
 int
