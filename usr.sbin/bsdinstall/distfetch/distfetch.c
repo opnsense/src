@@ -69,7 +69,7 @@ main(void)
 	}
 
 	init_dialog(stdin, stdout);
-	dialog_vars.backtitle = __DECONST(char *, "HardenedBSD Installer");
+	dialog_vars.backtitle = __DECONST(char *, "OPNsense Installer");
 	dlg_put_backtitle();
 
 	for (i = 0; i < ndists; i++) {

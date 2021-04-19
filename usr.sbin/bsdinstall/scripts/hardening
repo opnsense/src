@@ -53,7 +53,7 @@ if [ `sysctl -n security.bsd.stack_guard_page` -gt 0 ]; then
 fi
 
 exec 3>&1
-FEATURES=$( dialog --backtitle "HardenedBSD Installer" \
+FEATURES=$( dialog --backtitle "OPNsense Installer" \
     --title "System Hardening" --nocancel --separate-output \
     --checklist "Choose system security hardening options:" \
     0 0 0 \
