@@ -71,7 +71,7 @@ main(void)
 	size_t span;
 	struct dpv_config *config;
 	struct dpv_file_node *dist = dists;
-	static char backtitle[] = "HardenedBSD Installer";
+	static char backtitle[] = "OPNsense Installer";
 	static char title[] = "Archive Extraction";
 	static char aprompt[] = "\n  Overall Progress:";
 	static char pprompt[] = "Extracting distribution files...\n";

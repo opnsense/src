@@ -42,7 +42,7 @@ DEVEL|PLAYGROUND)
 	_BUILD_NUMBER=`echo ${_HBSD_VERSION} | cut -d ':' -f 3`
 
 	exec 3>&1
-	MIRROR=`dialog --backtitle "HardenedBSD Installer" \
+	MIRROR=`dialog --backtitle "OPNsense Installer" \
 	    --title "Mirror Selection - development and experimental version" \
 	    --extra-button --extra-label "Other" \
 	    --menu "Please select the site closest to you or \"other\" if you'd like to specify a different choice.  Also note that not every site listed here carries more than the base distribution kits. Only Primary sites are guaranteed to carry the full range of possible distributions. Select a site that's close!" \
@@ -60,7 +60,7 @@ DEVEL|PLAYGROUND)
 	_mirror_prefix="installer"
 
 	exec 3>&1
-	MIRROR=`dialog --backtitle "HardenedBSD Installer" \
+	MIRROR=`dialog --backtitle "OPNsense Installer" \
 	    --title "Mirror Selection - HardenedBSD-stable ${_BUILD_TAG}" \
 	    --extra-button --extra-label "Other" \
 	    --menu "Please select the site closest to you or \"other\" if you'd like to specify a different choice.  Also note that not every site listed here carries more than the base distribution kits. Only Primary sites are guaranteed to carry the full range of possible distributions. Select a site that's close!" \
@@ -93,7 +93,7 @@ DEVEL|PLAYGROUND)
 	esac
 
 	exec 3>&1
-	MIRROR=`dialog --backtitle "HardenedBSD Installer" \
+	MIRROR=`dialog --backtitle "OPNsense Installer" \
 	    --title "Mirror Selection - Latest HardenedBSD-stable" \
 	    --extra-button --extra-label "Other" \
 	    --menu "Please select the site closest to you or \"other\" if you'd like to specify a different choice.  Also note that not every site listed here carries more than the base distribution kits. Only Primary sites are guaranteed to carry the full range of possible distributions. Select a site that's close!" \
@@ -120,7 +120,7 @@ $DIALOG_OK)
 	;;
 $DIALOG_EXTRA)
 	exec 3>&1
-	BSDINSTALL_DISTSITE=`dialog --backtitle "HardenedBSD Installer" \
+	BSDINSTALL_DISTSITE=`dialog --backtitle "OPNsense Installer" \
 	    --title "Mirror Selection" \
 	    --inputbox "Please enter the URL to an alternate HardenedBSD mirror:" \
 	    0 0 "$BSDINSTALL_DISTSITE" 2>&1 1>&3`
