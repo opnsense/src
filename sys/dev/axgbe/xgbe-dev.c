@@ -753,9 +753,12 @@ xgbe_enable_rx_vlan_stripping(struct xgbe_prv_data *pdata)
 static int
 xgbe_disable_rx_vlan_stripping(struct xgbe_prv_data *pdata)
 {
-	XGMAC_IOWRITE_BITS(pdata, MAC_VLANTR, EVLS, 0);
+	/* XGMAC_IOWRITE_BITS(pdata, MAC_VLANTR, EVLS, 0); */
 
-	axgbe_printf(0, "VLAN Stripping Disabled\n");
+	/* axgbe_printf(0, "VLAN Stripping Disabled\n"); */
+	
+	/* XXX: Workaround for potential firmware issue */
+	xgbe_enable_rx_vlan_stripping(pdata);
 
 	return (0);
 }
