@@ -1,4 +1,4 @@
-/*	$FreeBSD$	*/
+/*	$FreeBSD: releng/12.1/usr.sbin/rtadvd/rtadvd.c 350289 2019-07-24 14:39:31Z markj $	*/
 /*	$KAME: rtadvd.c,v 1.82 2003/08/05 12:34:23 itojun Exp $	*/
 
 /*-
@@ -535,7 +535,7 @@ rtmsg_input(struct sockinfo *s)
 				continue;
 			}
 
-			syslog(LOG_DEBUG, "<%s>: if_announcemsg (idx=%d:%d)",
+			syslog(LOG_INFO, "<%s>: if_announcemsg (idx=%d:%d)",
 			       __func__, ifan->ifan_index, ifan->ifan_what);
 			switch (ifan->ifan_what) {
 			case IFAN_ARRIVAL:
@@ -616,7 +616,7 @@ rtmsg_input(struct sockinfo *s)
 					update_prefix(pfx);
 					prefixchange = 1;
 				} else
-					syslog(LOG_DEBUG,
+					syslog(LOG_INFO,
 					    "<%s> new prefix(%s/%d) "
 					    "added on %s, "
 					    "but it was already in list",
@@ -647,7 +647,7 @@ rtmsg_input(struct sockinfo *s)
 			}
 			pfx = find_prefix(rai, addr, plen);
 			if (pfx == NULL) {
-				syslog(LOG_DEBUG,
+				syslog(LOG_INFO,
 				    "<%s> prefix(%s/%d) was deleted on %s, "
 				    "but it was not in list",
 				    __func__, inet_ntop(AF_INET6, addr,
@@ -913,7 +913,7 @@ rs_input(int len, struct nd_router_solicit *rs,
 	struct ifinfo *ifi;
 	struct soliciter *sol;
 
-	syslog(LOG_DEBUG,
+	syslog(LOG_INFO,
 	    "<%s> RS received from %s on %s",
 	    __func__,
 	    inet_ntop(AF_INET6, &from->sin6_addr, ntopbuf, sizeof(ntopbuf)),
@@ -1669,13 +1669,13 @@ ra_output(struct ifinfo *ifi)
 		rai = NULL;
 	}
 	if (rai == NULL) {
-		syslog(LOG_DEBUG, "<%s> rainfo is NULL on %s."
+		syslog(LOG_INFO, "<%s> rainfo is NULL on %s."
 		    "Skip sending RAs.",
 		    __func__, ifi->ifi_ifname);
 		return;
 	}
 	if (!(ifi->ifi_flags & IFF_UP)) {
-		syslog(LOG_DEBUG, "<%s> %s is not up.  "
+		syslog(LOG_INFO, "<%s> %s is not up.  "
 		    "Skip sending RAs.",
 		    __func__, ifi->ifi_ifname);
 		return;
@@ -1745,7 +1745,7 @@ ra_output(struct ifinfo *ifi)
 		memcpy(CMSG_DATA(cm), &hoplimit, sizeof(int));
 	}
 
-	syslog(LOG_DEBUG,
+	syslog(LOG_INFO,
 	    "<%s> send RA on %s, # of RS waitings = %d",
 	    __func__, ifi->ifi_ifname, ifi->ifi_rs_waitcount);
 
