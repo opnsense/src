@@ -121,7 +121,7 @@ static struct bpf_insn dhcp_bpf_wfilter[] = {
 
 	/* Make sure this isn't a fragment... */
 	BPF_STMT(BPF_LD + BPF_H + BPF_IND, 20),
-	BPF_JUMP(BPF_JMP + BPF_JSET + BPF_K, 0x1fff, 12, 0),	/* patched */
+	BPF_JUMP(BPF_JMP + BPF_JSET + BPF_K, IP_MF|IP_OFFMASK, 12, 0),
 
 	/* Get the IP header length... */
 	BPF_STMT(BPF_MISC + BPF_TXA, 0),
@@ -134,11 +134,11 @@ static struct bpf_insn dhcp_bpf_wfilter[] = {
 
 	/* Make sure it's from the right port... */
 	BPF_STMT(BPF_LD + BPF_H + BPF_IND, 14),
-	BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, 68, 0, 3),
+	BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, LOCAL_PORT, 0, 3),
 
 	/* Make sure it is to the right ports ... */
 	BPF_STMT(BPF_LD + BPF_H + BPF_IND, 16),
-	BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, 67, 0, 1),
+	BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, REMOTE_PORT, 0, 1),
 
 	/* If we passed all the tests, ask for the whole packet. */
 	BPF_STMT(BPF_RET+BPF_K, (u_int)-1),
@@ -171,9 +171,6 @@ if_register_send(struct interface_info *info)
 	/* Set up the bpf write filter program structure. */
 	p.bf_len = dhcp_bpf_wfilter_len;
 	p.bf_insns = dhcp_bpf_wfilter;
-
-	if (dhcp_bpf_wfilter[11].k == 0x1fff)
-		dhcp_bpf_wfilter[11].k = htons(IP_MF|IP_OFFMASK);
 
 	if (ioctl(info->wfdesc, BIOCSETWF, &p) < 0)
 		error("Can't install write filter program: %m");
@@ -228,7 +225,7 @@ static struct bpf_insn dhcp_bpf_filter[] = {
 
 	/* Make sure this isn't a fragment... */
 	BPF_STMT(BPF_LD + BPF_H + BPF_IND, 20),
-	BPF_JUMP(BPF_JMP + BPF_JSET + BPF_K, 0x1fff, 10, 0),
+	BPF_JUMP(BPF_JMP + BPF_JSET + BPF_K, IP_MF|IP_OFFMASK, 10, 0),
 
 	/* Get the IP header length... */
 	BPF_STMT(BPF_MISC + BPF_TXA, 0),
@@ -241,7 +238,7 @@ static struct bpf_insn dhcp_bpf_filter[] = {
 
 	/* Make sure it's to the right port... */
 	BPF_STMT(BPF_LD + BPF_H + BPF_IND, 16),
-	BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, 67, 0, 1),		/* patch */
+	BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, LOCAL_PORT, 0, 1),
 
 	/* If we passed all the tests, ask for the whole packet. */
 	BPF_STMT(BPF_RET+BPF_K, (u_int)-1),
@@ -294,13 +291,6 @@ if_register_receive(struct interface_info *info)
 	/* Set up the bpf filter program structure. */
 	p.bf_len = dhcp_bpf_filter_len;
 	p.bf_insns = dhcp_bpf_filter;
-
-	/* Patch the server port into the BPF program...
-	 *
-	 * XXX: changes to filter program may require changes to the
-	 * insn number(s) used below!
-	 */
-	dhcp_bpf_filter[21].k = LOCAL_PORT;
 
 	if (ioctl(info->rfdesc, BIOCSETF, &p) < 0)
 		error("Can't install packet filter program: %m");
