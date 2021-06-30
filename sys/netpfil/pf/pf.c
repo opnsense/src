@@ -3346,6 +3346,14 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 		KASSERT(sk != NULL, ("%s: null sk", __func__));
 		KASSERT(nk != NULL, ("%s: null nk", __func__));
 
+		if (nr->log) {
+			u_short natreason;
+
+			REASON_SET(&natreason, PFRES_MATCH);
+			PFLOG_PACKET(kif, m, af, direction, natreason, nr, a,
+			    ruleset, pd, 1);
+		}
+
 		if (pd->ip_sum)
 			bip_sum = *pd->ip_sum;
 
@@ -3559,10 +3567,10 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 
 	REASON_SET(&reason, PFRES_MATCH);
 
-	if (r->log || (nr != NULL && nr->log)) {
+	if (r->log) {
 		if (rewrite)
 			m_copyback(m, off, hdrlen, pd->hdr.any);
-		PFLOG_PACKET(kif, m, af, direction, reason, r->log ? r : nr, a,
+		PFLOG_PACKET(kif, m, af, direction, reason, r, a,
 		    ruleset, pd, 1);
 	}
 
