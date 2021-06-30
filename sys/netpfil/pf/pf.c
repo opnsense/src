@@ -3643,6 +3643,11 @@ pf_test_rule(struct pf_krule **rm, struct pf_kstate **sm, int direction,
 		KASSERT(sk != NULL, ("%s: null sk", __func__));
 		KASSERT(nk != NULL, ("%s: null nk", __func__));
 
+		if (nr->log) {
+			PFLOG_PACKET(kif, m, af, direction, PFRES_MATCH, nr, a,
+			    ruleset, pd, 1);
+		}
+
 		if (pd->ip_sum)
 			bip_sum = *pd->ip_sum;
 
@@ -3871,10 +3876,10 @@ pf_test_rule(struct pf_krule **rm, struct pf_kstate **sm, int direction,
 	/* apply actions for last matching pass/block rule */
 	pf_rule_to_actions(r, &pd->act);
 
-	if (r->log || (nr != NULL && nr->log)) {
+	if (r->log) {
 		if (rewrite)
 			m_copyback(m, off, hdrlen, pd->hdr.any);
-		PFLOG_PACKET(kif, m, af, direction, reason, r->log ? r : nr, a,
+		PFLOG_PACKET(kif, m, af, direction, reason, r, a,
 		    ruleset, pd, 1);
 	}
 
