@@ -392,6 +392,7 @@ axgbe_if_attach_pre(if_ctx_t ctx)
 	if_softc_ctx_t		scctx;
 	if_shared_ctx_t		sctx;
 	device_t		dev;
+	device_t		rdev;
 	unsigned int		ma_lo, ma_hi;
 	unsigned int		reg;
 
@@ -430,6 +431,16 @@ axgbe_if_attach_pre(if_ctx_t ctx)
         sc->pdata.xpcs_res = mac_res[1];
 
         /* Set the PCS indirect addressing definition registers*/
+	rdev = pci_find_dbsf(0, 0, 0, 0);
+	if (rdev && pci_get_device(rdev) == 0x15d0
+		&& pci_get_vendor(rdev) == 0x1022) {
+		pdata->xpcs_window_def_reg = PCS_V2_RV_WINDOW_DEF;
+		pdata->xpcs_window_sel_reg = PCS_V2_RV_WINDOW_SELECT;
+	} else {
+		pdata->xpcs_window_def_reg = PCS_V2_WINDOW_DEF;
+		pdata->xpcs_window_sel_reg = PCS_V2_WINDOW_SELECT;
+	}
+
 	pdata->xpcs_window_def_reg = PCS_V2_WINDOW_DEF;
 	pdata->xpcs_window_sel_reg = PCS_V2_WINDOW_SELECT;
 
