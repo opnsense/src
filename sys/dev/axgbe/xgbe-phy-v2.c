@@ -1478,9 +1478,6 @@ xgbe_phy_sfp_detect(struct xgbe_prv_data *pdata)
 	struct xgbe_phy_data *phy_data = pdata->phy_data;
 	int ret, prev_sfp_state = phy_data->sfp_mod_absent;
 
-	/* Reset the SFP signals and info */
-	xgbe_phy_sfp_reset(phy_data);
-
 	ret = xgbe_phy_get_comm_ownership(pdata);
 	if (ret)
 		return;
