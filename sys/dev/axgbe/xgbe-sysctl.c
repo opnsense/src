@@ -1622,6 +1622,18 @@ axgbe_sysctl_init(struct xgbe_prv_data *pdata)
 	SYSCTL_ADD_UINT(clist, top, OID_AUTO, "link_workaround",
 	    CTLFLAG_RWTUN, &pdata->link_workaround, 0,
 	    "enable the workaround for link issue in coming up");
+	
+	SYSCTL_ADD_UINT(clist, top, OID_AUTO, "rss_enabled",
+		CTLFLAG_RDTUN, &pdata->enable_rss, 1,
+		"shows the RSS feature state (1 - enable, 0 - disable)");
+	
+	SYSCTL_ADD_UINT(clist, top, OID_AUTO, "tx_pause",
+		CTLFLAG_RDTUN, &pdata->tx_pause, 1,
+		"shows the Flow Control TX pause feature state (1 - enable, 0 - disable)");
+
+	SYSCTL_ADD_UINT(clist, top, OID_AUTO, "rx_pause",
+		CTLFLAG_RDTUN, &pdata->rx_pause, 1,
+		"shows the Flow Control RX pause feature state (1 - enable, 0 - disable)");
 
 	SYSCTL_ADD_PROC(clist, top, OID_AUTO, "xgmac_register",
 	    CTLTYPE_STRING | CTLFLAG_RWTUN | CTLFLAG_MPSAFE,
