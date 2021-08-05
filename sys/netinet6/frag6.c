@@ -57,6 +57,7 @@ __FBSDID("$FreeBSD$");
 #include <net/netisr.h>
 #include <net/route.h>
 #include <net/vnet.h>
+#include <net/rss_config.h>
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
@@ -685,16 +686,18 @@ insert:
 	}
 
 #ifdef RSS
-	mtag = m_tag_alloc(MTAG_ABI_IPV6, IPV6_TAG_DIRECT, sizeof(*ip6dc),
-	    M_NOWAIT);
-	if (mtag == NULL)
-		goto dropfrag;
+	if (rss_get_enabled()) {
+		mtag = m_tag_alloc(MTAG_ABI_IPV6, IPV6_TAG_DIRECT, sizeof(*ip6dc),
+			M_NOWAIT);
+		if (mtag == NULL)
+			goto dropfrag;
 
-	ip6dc = (struct ip6_direct_ctx *)(mtag + 1);
-	ip6dc->ip6dc_nxt = nxt;
-	ip6dc->ip6dc_off = offset;
+		ip6dc = (struct ip6_direct_ctx *)(mtag + 1);
+		ip6dc->ip6dc_nxt = nxt;
+		ip6dc->ip6dc_off = offset;
 
-	m_tag_prepend(m, mtag);
+		m_tag_prepend(m, mtag);
+	}
 #endif
 
 	IP6Q_UNLOCK(hash);
@@ -702,11 +705,13 @@ insert:
 	in6_ifstat_inc(dstifp, ifs6_reass_ok);
 
 #ifdef RSS
-	/*
-	 * Queue/dispatch for reprocessing.
-	 */
-	netisr_dispatch(NETISR_IPV6_DIRECT, m);
-	return IPPROTO_DONE;
+	if (rss_get_enabled()) {
+		/*
+		* Queue/dispatch for reprocessing.
+		*/
+		netisr_dispatch(NETISR_IPV6_DIRECT, m);
+		return IPPROTO_DONE;
+	}
 #endif
 
 	/*

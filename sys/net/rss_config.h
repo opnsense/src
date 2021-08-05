@@ -110,6 +110,7 @@ extern int	rss_debug;
  * Device driver interfaces to query RSS properties that must be programmed
  * into hardware.
  */
+u_int	rss_get_enabled(void);
 u_int	rss_getbits(void);
 u_int	rss_getbucket(u_int hash);
 u_int	rss_get_indirection_to_bucket(u_int index);

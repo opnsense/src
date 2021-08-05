@@ -149,6 +149,15 @@ SYSCTL_INT(_net_inet_rss, OID_AUTO, debug, CTLFLAG_RWTUN, &rss_debug, 0,
     "RSS debug level");
 
 /*
+ * RSS enable toggle
+ * 0 - disable
+ * non-zero - enabled
+ */
+static u_int	rss_enabled = 0;
+SYSCTL_INT(_net_inet_rss, OID_AUTO, enabled, CTLFLAG_RWTUN, &rss_enabled, 0,
+    "RSS enabled");
+
+/*
  * RSS secret key, intended to prevent attacks on load-balancing.  Its
  * effectiveness may be limited by algorithm choice and available entropy
  * during the boot.
@@ -183,8 +192,8 @@ rss_init(__unused void *arg)
 	u_int cpuid;
 
 	/*
-	 * Validate tunables, coerce to sensible values.
-	 */
+	* Validate tunables, coerce to sensible values.
+	*/
 	switch (rss_hashalgo) {
 	case RSS_HASH_TOEPLITZ:
 	case RSS_HASH_NAIVE:
@@ -192,16 +201,16 @@ rss_init(__unused void *arg)
 
 	default:
 		RSS_DEBUG("invalid RSS hashalgo %u, coercing to %u\n",
-		    rss_hashalgo, RSS_HASH_TOEPLITZ);
+			rss_hashalgo, RSS_HASH_TOEPLITZ);
 		rss_hashalgo = RSS_HASH_TOEPLITZ;
 	}
 
 	/*
-	 * Count available CPUs.
-	 *
-	 * XXXRW: Note incorrect assumptions regarding contiguity of this set
-	 * elsewhere.
-	 */
+	* Count available CPUs.
+	*
+	* XXXRW: Note incorrect assumptions regarding contiguity of this set
+	* elsewhere.
+	*/
 	rss_ncpus = 0;
 	for (i = 0; i <= mp_maxid; i++) {
 		if (CPU_ABSENT(i))
@@ -212,34 +221,45 @@ rss_init(__unused void *arg)
 		rss_ncpus = RSS_MAXCPUS;
 
 	/*
-	 * Tune RSS table entries to be no less than 2x the number of CPUs
-	 * -- unless we're running uniprocessor, in which case there's not
-	 * much point in having buckets to rearrange for load-balancing!
-	 */
+	* Tune RSS table entries to be no less than 2x the number of CPUs
+	* -- unless we're running uniprocessor, in which case there's not
+	* much point in having buckets to rearrange for load-balancing!
+	*/
 	if (rss_ncpus > 1) {
-		if (rss_bits == 0)
+		if (rss_bits == 0) {
 			rss_bits = fls(rss_ncpus - 1) + 1;
-
+			if (!rss_enabled) {
+				/*
+				 * In order to prevent every driver from
+				 * having to check if RSS is enabled in the kernel,
+				 * the default round-robin (1:1 mapping between
+				 * buckets -> cpus) is set here, allowing
+				 * drivers to keep distributing packets over
+				 * multiple CPUs while RSS is disabled in the kernel.
+				 */
+				rss_bits = rss_bits - 1;
+			}
+		}
 		/*
-		 * Microsoft limits RSS table entries to 128, so apply that
-		 * limit to both auto-detected CPU counts and user-configured
-		 * ones.
-		 */
+		* Microsoft limits RSS table entries to 128, so apply that
+		* limit to both auto-detected CPU counts and user-configured
+		* ones.
+		*/
 		if (rss_bits == 0 || rss_bits > RSS_MAXBITS) {
 			RSS_DEBUG("RSS bits %u not valid, coercing to %u\n",
-			    rss_bits, RSS_MAXBITS);
+				rss_bits, RSS_MAXBITS);
 			rss_bits = RSS_MAXBITS;
 		}
 
 		/*
-		 * Figure out how many buckets to use; warn if less than the
-		 * number of configured CPUs, although this is not a fatal
-		 * problem.
-		 */
+		* Figure out how many buckets to use; warn if less than the
+		* number of configured CPUs, although this is not a fatal
+		* problem.
+		*/
 		rss_buckets = (1 << rss_bits);
 		if (rss_buckets < rss_ncpus)
 			RSS_DEBUG("WARNING: rss_buckets (%u) less than "
-			    "rss_ncpus (%u)\n", rss_buckets, rss_ncpus);
+				"rss_ncpus (%u)\n", rss_buckets, rss_ncpus);
 		rss_mask = rss_buckets - 1;
 	} else {
 		rss_bits = 0;
@@ -248,8 +268,8 @@ rss_init(__unused void *arg)
 	}
 
 	/*
-	 * Set up initial CPU assignments: round-robin by default.
-	 */
+	* Set up initial CPU assignments: round-robin by default.
+	*/
 	cpuid = CPU_FIRST();
 	for (i = 0; i < rss_buckets; i++) {
 		rss_table[i].rte_cpu = cpuid;
@@ -257,13 +277,20 @@ rss_init(__unused void *arg)
 	}
 
 	/*
-	 * Randomize rrs_key.
-	 *
-	 * XXXRW: Not yet.  If nothing else, will require an rss_isbadkey()
-	 * loop to check for "bad" RSS keys.
-	 */
+	* Randomize rrs_key.
+	*
+	* XXXRW: Not yet.  If nothing else, will require an rss_isbadkey()
+	* loop to check for "bad" RSS keys.
+	*/
+	
 }
 SYSINIT(rss_init, SI_SUB_SOFTINTR, SI_ORDER_SECOND, rss_init, NULL);
+
+u_int
+rss_get_enabled(void)
+{
+	return (rss_enabled);
+}
 
 static uint32_t
 rss_naive_hash(u_int keylen, const uint8_t *key, u_int datalen,
@@ -433,7 +460,11 @@ void
 rss_getkey(uint8_t *key)
 {
 
-	bcopy(rss_key, key, sizeof(rss_key));
+	if (rss_enabled) {
+		bcopy(rss_key, key, sizeof(rss_key));
+	} else {
+		arc4rand(key, sizeof(rss_key), 0);
+	}
 }
 
 /*
@@ -479,6 +510,10 @@ rss_gethashconfig(void)
 	 * as 2-tuple.
 	 * So for now disable UDP 4-tuple hashing until all of the other
 	 * pieces are in place.
+	 * 
+	 * XXX: The configuration is shared here regardless of RSS being 
+	 * enabled via sysctl, since drivers may still want to enable 
+	 * RSS in the hardware even if there is no support for it in the kernel.
 	 */
 	return (
 	    RSS_HASHTYPE_RSS_IPV4

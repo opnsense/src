@@ -495,34 +495,36 @@ ip_reass(struct mbuf *m)
 	IPQ_UNLOCK(hash);
 
 #ifdef	RSS
-	/*
-	 * Query the RSS layer for the flowid / flowtype for the
-	 * mbuf payload.
-	 *
-	 * For now, just assume we have to calculate a new one.
-	 * Later on we should check to see if the assigned flowid matches
-	 * what RSS wants for the given IP protocol and if so, just keep it.
-	 *
-	 * We then queue into the relevant netisr so it can be dispatched
-	 * to the correct CPU.
-	 *
-	 * Note - this may return 1, which means the flowid in the mbuf
-	 * is correct for the configured RSS hash types and can be used.
-	 */
-	if (rss_mbuf_software_hash_v4(m, 0, &rss_hash, &rss_type) == 0) {
-		m->m_pkthdr.flowid = rss_hash;
-		M_HASHTYPE_SET(m, rss_type);
-	}
+	if (rss_get_enabled()) {
+		/*
+		* Query the RSS layer for the flowid / flowtype for the
+		* mbuf payload.
+		*
+		* For now, just assume we have to calculate a new one.
+		* Later on we should check to see if the assigned flowid matches
+		* what RSS wants for the given IP protocol and if so, just keep it.
+		*
+		* We then queue into the relevant netisr so it can be dispatched
+		* to the correct CPU.
+		*
+		* Note - this may return 1, which means the flowid in the mbuf
+		* is correct for the configured RSS hash types and can be used.
+		*/
+		if (rss_mbuf_software_hash_v4(m, 0, &rss_hash, &rss_type) == 0) {
+			m->m_pkthdr.flowid = rss_hash;
+			M_HASHTYPE_SET(m, rss_type);
+		}
 
-	/*
-	 * Queue/dispatch for reprocessing.
-	 *
-	 * Note: this is much slower than just handling the frame in the
-	 * current receive context.  It's likely worth investigating
-	 * why this is.
-	 */
-	netisr_dispatch(NETISR_IP_DIRECT, m);
-	return (NULL);
+		/*
+		* Queue/dispatch for reprocessing.
+		*
+		* Note: this is much slower than just handling the frame in the
+		* current receive context.  It's likely worth investigating
+		* why this is.
+		*/
+		netisr_dispatch(NETISR_IP_DIRECT, m);
+		return (NULL);
+	}
 #endif
 
 	/* Handle in-line */
