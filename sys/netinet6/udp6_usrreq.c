@@ -985,7 +985,7 @@ retry:
 			 * RSS / NICs grow UDP Lite protocol awareness.
 			 */
 			if (rss_proto_software_hash_v6(faddr, laddr, fport,
-				inp->inp_lport, pr, &hash_val, &hash_type) == 0) {
+			    inp->inp_lport, pr, &hash_val, &hash_type) == 0) {
 				m->m_pkthdr.flowid = hash_val;
 				M_HASHTYPE_SET(m, hash_type);
 			}
