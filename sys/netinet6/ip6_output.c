@@ -2093,9 +2093,9 @@ do {									\
 				case IPV6_RSSBUCKETID:
 					if (rss_get_enabled()) {
 						retval =
-							rss_hash2bucket(inp->inp_flowid,
-							inp->inp_flowtype,
-							&rss_bucket);
+						    rss_hash2bucket(inp->inp_flowid,
+						    inp->inp_flowtype,
+						    &rss_bucket);
 						if (retval == 0)
 							optval = rss_bucket;
 						else
