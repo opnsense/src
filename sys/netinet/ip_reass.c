@@ -497,19 +497,19 @@ ip_reass(struct mbuf *m)
 #ifdef	RSS
 	if (rss_get_enabled()) {
 		/*
-		* Query the RSS layer for the flowid / flowtype for the
-		* mbuf payload.
-		*
-		* For now, just assume we have to calculate a new one.
-		* Later on we should check to see if the assigned flowid matches
-		* what RSS wants for the given IP protocol and if so, just keep it.
-		*
-		* We then queue into the relevant netisr so it can be dispatched
-		* to the correct CPU.
-		*
-		* Note - this may return 1, which means the flowid in the mbuf
-		* is correct for the configured RSS hash types and can be used.
-		*/
+		 * Query the RSS layer for the flowid / flowtype for the
+		 * mbuf payload.
+		 *
+		 * For now, just assume we have to calculate a new one.
+		 * Later on we should check to see if the assigned flowid matches
+		 * what RSS wants for the given IP protocol and if so, just keep it.
+		 *
+		 * We then queue into the relevant netisr so it can be dispatched
+		 * to the correct CPU.
+		 *
+		 * Note - this may return 1, which means the flowid in the mbuf
+		 * is correct for the configured RSS hash types and can be used.
+		 */
 		if (rss_mbuf_software_hash_v4(m, 0, &rss_hash, &rss_type) == 0) {
 			m->m_pkthdr.flowid = rss_hash;
 			M_HASHTYPE_SET(m, rss_type);
