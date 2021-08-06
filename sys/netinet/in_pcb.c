@@ -2190,6 +2190,7 @@ in_pcblookup_group(struct inpcbinfo *pcbinfo, struct inpcbgroup *pcbgroup,
 	 * For incoming connections, we may wish to do a wildcard
 	 * match for an RSS-local socket.
 	 */
+	if (rss_get_enabled())
 	if ((lookupflags & INPLOOKUP_WILDCARD) != 0) {
 		struct inpcb *local_wild = NULL, *local_exact = NULL;
 #ifdef INET6
@@ -2558,8 +2559,8 @@ struct inpcb *
 in_pcblookup(struct inpcbinfo *pcbinfo, struct in_addr faddr, u_int fport,
     struct in_addr laddr, u_int lport, int lookupflags, struct ifnet *ifp)
 {
-#if defined(PCBGROUP) && !defined(RSS)
-	struct inpcbgroup *pcbgroup;
+#ifdef PCBGROUP
+	struct inpcbgroup *pcbgroup = NULL;
 #endif
 
 	KASSERT((lookupflags & ~INPLOOKUP_MASK) == 0,
@@ -2577,12 +2578,15 @@ in_pcblookup(struct inpcbinfo *pcbinfo, struct in_addr faddr, u_int fport,
 	 * we could be doing RSS with a non-Toeplitz hash that is affordable
 	 * in software.
 	 */
-#if defined(PCBGROUP) && !defined(RSS)
+#ifdef PCBGROUP
+#ifdef RSS
+	if (!rss_get_enabled())
+#endif
 	if (in_pcbgroup_enabled(pcbinfo)) {
 		pcbgroup = in_pcbgroup_bytuple(pcbinfo, laddr, lport, faddr,
-		    fport);
+			fport);
 		return (in_pcblookup_group(pcbinfo, pcbgroup, faddr, fport,
-		    laddr, lport, lookupflags, ifp));
+			laddr, lport, lookupflags, ifp));
 	}
 #endif
 	return (in_pcblookup_hash(pcbinfo, faddr, fport, laddr, lport,

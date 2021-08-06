@@ -1913,6 +1913,8 @@ do {									\
 
 #ifdef	RSS
 				case IPV6_RECVRSSBUCKETID:
+					if (!rss_get_enabled())
+						break;
 					OPTSET2(INP_RECVRSSBUCKETID, optval);
 					break;
 #endif
@@ -1957,8 +1959,10 @@ do {									\
 					break;
 #ifdef	RSS
 				case IPV6_RSS_LISTEN_BUCKET:
+					if (!rss_get_enabled())
+						break;
 					if ((optval >= 0) &&
-					    (optval < rss_getnumbuckets())) {
+						(optval < rss_getnumbuckets())) {
 						INP_WLOCK(inp);
 						inp->inp_rss_listen_bucket = optval;
 						OPTSET2_N(INP_RSS_BUCKET_SET, 1);
@@ -2293,6 +2297,8 @@ do {									\
 					break;
 #ifdef	RSS
 				case IPV6_RSSBUCKETID:
+					if (!rss_get_enabled())
+						break;
 					retval =
 					    rss_hash2bucket(inp->inp_flowid,
 					    inp->inp_flowtype,
@@ -2304,6 +2310,8 @@ do {									\
 					break;
 
 				case IPV6_RECVRSSBUCKETID:
+					if (!rss_get_enabled())
+						break;
 					optval = OPTBIT2(INP_RECVRSSBUCKETID);
 					break;
 #endif

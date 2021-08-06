@@ -99,6 +99,9 @@ __FBSDID("$FreeBSD$");
 #include <net/if_types.h>
 #include <net/route.h>
 #include <net/route/nhop.h>
+#ifdef RSS
+#include <net/rss_config.h>
+#endif
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
@@ -1329,8 +1332,8 @@ struct inpcb *
 in6_pcblookup(struct inpcbinfo *pcbinfo, struct in6_addr *faddr, u_int fport,
     struct in6_addr *laddr, u_int lport, int lookupflags, struct ifnet *ifp)
 {
-#if defined(PCBGROUP) && !defined(RSS)
-	struct inpcbgroup *pcbgroup;
+#ifdef PCBGROUP
+	struct inpcbgroup *pcbgroup = NULL;
 #endif
 
 	KASSERT((lookupflags & ~INPLOOKUP_MASK) == 0,
@@ -1348,7 +1351,10 @@ in6_pcblookup(struct inpcbinfo *pcbinfo, struct in6_addr *faddr, u_int fport,
 	 * we could be doing RSS with a non-Toeplitz hash that is affordable
 	 * in software.
 	 */
-#if defined(PCBGROUP) && !defined(RSS)
+#ifdef PCBGROUP
+#ifdef RSS
+	if (!rss_get_enabled())
+#endif
 	if (in_pcbgroup_enabled(pcbinfo)) {
 		pcbgroup = in6_pcbgroup_bytuple(pcbinfo, laddr, lport, faddr,
 		    fport);
