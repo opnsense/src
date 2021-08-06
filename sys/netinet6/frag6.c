@@ -688,7 +688,7 @@ insert:
 #ifdef RSS
 	if (rss_get_enabled()) {
 		mtag = m_tag_alloc(MTAG_ABI_IPV6, IPV6_TAG_DIRECT, sizeof(*ip6dc),
-			M_NOWAIT);
+		    M_NOWAIT);
 		if (mtag == NULL)
 			goto dropfrag;
 
