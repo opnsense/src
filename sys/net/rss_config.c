@@ -241,10 +241,10 @@ rss_init(__unused void *arg)
 			}
 		}
 		/*
-		* Microsoft limits RSS table entries to 128, so apply that
-		* limit to both auto-detected CPU counts and user-configured
-		* ones.
-		*/
+		 * Microsoft limits RSS table entries to 128, so apply that
+		 * limit to both auto-detected CPU counts and user-configured
+		 * ones.
+		 */
 		if (rss_bits == 0 || rss_bits > RSS_MAXBITS) {
 			RSS_DEBUG("RSS bits %u not valid, coercing to %u\n",
 				rss_bits, RSS_MAXBITS);
