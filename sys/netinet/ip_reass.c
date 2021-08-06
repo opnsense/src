@@ -509,7 +509,7 @@ ip_reass(struct mbuf *m)
 	 * Note - this may return 1, which means the flowid in the mbuf
 	 * is correct for the configured RSS hash types and can be used.
 	 */
-	 	if (rss_get_enabled()) {
+	 if (rss_get_enabled()) {
 		if (rss_mbuf_software_hash_v4(m, 0, &rss_hash, &rss_type) == 0) {
 			m->m_pkthdr.flowid = rss_hash;
 			M_HASHTYPE_SET(m, rss_type);
