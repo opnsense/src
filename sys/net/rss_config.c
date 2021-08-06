@@ -192,8 +192,8 @@ rss_init(__unused void *arg)
 	u_int cpuid;
 
 	/*
-	* Validate tunables, coerce to sensible values.
-	*/
+	 * Validate tunables, coerce to sensible values.
+	 */
 	switch (rss_hashalgo) {
 	case RSS_HASH_TOEPLITZ:
 	case RSS_HASH_NAIVE:
