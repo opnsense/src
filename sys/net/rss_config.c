@@ -221,10 +221,10 @@ rss_init(__unused void *arg)
 		rss_ncpus = RSS_MAXCPUS;
 
 	/*
-	* Tune RSS table entries to be no less than 2x the number of CPUs
-	* -- unless we're running uniprocessor, in which case there's not
-	* much point in having buckets to rearrange for load-balancing!
-	*/
+	 * Tune RSS table entries to be no less than 2x the number of CPUs
+	 * -- unless we're running uniprocessor, in which case there's not
+	 * much point in having buckets to rearrange for load-balancing!
+	 */
 	if (rss_ncpus > 1) {
 		if (rss_bits == 0) {
 			rss_bits = fls(rss_ncpus - 1) + 1;
