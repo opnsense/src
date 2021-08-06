@@ -962,7 +962,7 @@ retry:
 
 	flags = 0;
 #ifdef	RSS
-	{
+	if (rss_get_enabled()) {
 		uint32_t hash_val, hash_type;
 		uint8_t pr;
 

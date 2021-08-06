@@ -1576,7 +1576,7 @@ retry:
 		M_HASHTYPE_SET(m, flowtype);
 	}
 #ifdef	RSS
-	else {
+	else if (rss_get_enabled()) {
 		uint32_t hash_val, hash_type;
 		/*
 		 * Calculate an appropriate RSS hash for UDP and
@@ -1612,6 +1612,7 @@ retry:
 	 * currently done) or set it to some software generated
 	 * hash value based on the packet contents.
 	 */
+	if (rss_get_enabled())
 	ipflags |= IP_NODEFAULTFLOWID;
 #endif	/* RSS */
 

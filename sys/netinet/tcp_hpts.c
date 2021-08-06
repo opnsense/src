@@ -1092,12 +1092,14 @@ hpts_cpuid(struct inpcb *inp){
 	}
 	/* If one is set the other must be the same */
 #ifdef	RSS
+	if (rss_get_enabled()) {
 	cpuid = rss_hash2cpuid(inp->inp_flowid, inp->inp_flowtype);
 	if (cpuid == NETISR_CPUID_NONE)
 		return (hpts_random_cpu(inp));
 	else
 		return (cpuid);
-#else
+	}
+#endif
 	/*
 	 * We don't have a flowid -> cpuid mapping, so cheat and just map
 	 * unknown cpuids to curcpu.  Not the best, but apparently better
@@ -1109,7 +1111,6 @@ hpts_cpuid(struct inpcb *inp){
 	}
 	cpuid = hpts_random_cpu(inp);
 	return (cpuid);
-#endif
 }
 
 /*
