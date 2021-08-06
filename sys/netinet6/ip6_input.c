@@ -251,12 +251,22 @@ ip6_init(void)
 
 	V_ip6_desync_factor = arc4random() % MAX_TEMP_DESYNC_FACTOR;
 
+#ifdef RSS
+	if (rss_get_enabled() == 0) {
+		ip6_nh.nh_m2cpuid = NULL;
+		ip6_nh.nh_policy = NETISR_POLICY_FLOW;
+		ip6_nh.nh_dispatch = NETISR_DISPATCH_DEFAULT;
+	}
+#endif
+
 	/* Skip global initialization stuff for non-default instances. */
 #ifdef VIMAGE
 	if (!IS_DEFAULT_VNET(curvnet)) {
 		netisr_register_vnet(&ip6_nh);
 #ifdef RSS
-		netisr_register_vnet(&ip6_direct_nh);
+		if (rss_get_enabled()) {
+			netisr_register_vnet(&ip6_direct_nh);
+		}
 #endif
 		return;
 	}
@@ -284,7 +294,9 @@ ip6_init(void)
 
 	netisr_register(&ip6_nh);
 #ifdef RSS
-	netisr_register(&ip6_direct_nh);
+	if (rss_get_enabled()) {
+		netisr_register(&ip6_direct_nh);
+	}
 #endif
 }
 
@@ -355,7 +367,9 @@ ip6_destroy(void *unused __unused)
 	int error;
 
 #ifdef RSS
-	netisr_unregister_vnet(&ip6_direct_nh);
+	if (rss_get_enabled()) {
+		netisr_unregister_vnet(&ip6_direct_nh);
+	}
 #endif
 	netisr_unregister_vnet(&ip6_nh);
 
@@ -1619,18 +1633,20 @@ ip6_savecontrol(struct inpcb *inp, struct mbuf *m, struct mbuf **mp)
 	}
 
 #ifdef	RSS
-	if (inp->inp_flags2 & INP_RECVRSSBUCKETID) {
-		uint32_t flowid, flow_type;
-		uint32_t rss_bucketid;
+	if (rss_get_enabled()) {
+		if (inp->inp_flags2 & INP_RECVRSSBUCKETID) {
+			uint32_t flowid, flow_type;
+			uint32_t rss_bucketid;
 
-		flowid = m->m_pkthdr.flowid;
-		flow_type = M_HASHTYPE_GET(m);
+			flowid = m->m_pkthdr.flowid;
+			flow_type = M_HASHTYPE_GET(m);
 
-		if (rss_hash2bucket(flowid, flow_type, &rss_bucketid) == 0) {
-			*mp = sbcreatecontrol((caddr_t) &rss_bucketid,
-			   sizeof(uint32_t), IPV6_RSSBUCKETID, IPPROTO_IPV6);
-			if (*mp)
-				mp = &(*mp)->m_next;
+			if (rss_hash2bucket(flowid, flow_type, &rss_bucketid) == 0) {
+				*mp = sbcreatecontrol((caddr_t) &rss_bucketid,
+				    sizeof(uint32_t), IPV6_RSSBUCKETID, IPPROTO_IPV6);
+				if (*mp)
+					mp = &(*mp)->m_next;
+			}
 		}
 	}
 #endif

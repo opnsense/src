@@ -1732,7 +1732,9 @@ do {									\
 
 #ifdef	RSS
 				case IPV6_RECVRSSBUCKETID:
-					OPTSET2(INP_RECVRSSBUCKETID, optval);
+					if (rss_get_enabled()) {
+						OPTSET2(INP_RECVRSSBUCKETID, optval);
+					}
 					break;
 #endif
 
@@ -1773,14 +1775,16 @@ do {									\
 					break;
 #ifdef	RSS
 				case IPV6_RSS_LISTEN_BUCKET:
-					if ((optval >= 0) &&
-					    (optval < rss_getnumbuckets())) {
-						INP_WLOCK(inp);
-						inp->inp_rss_listen_bucket = optval;
-						OPTSET2_N(INP_RSS_BUCKET_SET, 1);
-						INP_WUNLOCK(inp);
-					} else {
-						error = EINVAL;
+					if (rss_get_enabled()) {
+						if ((optval >= 0) &&
+							(optval < rss_getnumbuckets())) {
+							INP_WLOCK(inp);
+							inp->inp_rss_listen_bucket = optval;
+							OPTSET2_N(INP_RSS_BUCKET_SET, 1);
+							INP_WUNLOCK(inp);
+						} else {
+							error = EINVAL;
+						}
 					}
 					break;
 #endif
@@ -2087,18 +2091,21 @@ do {									\
 					break;
 #ifdef	RSS
 				case IPV6_RSSBUCKETID:
-					retval =
-					    rss_hash2bucket(inp->inp_flowid,
-					    inp->inp_flowtype,
-					    &rss_bucket);
-					if (retval == 0)
-						optval = rss_bucket;
-					else
-						error = EINVAL;
+					if (rss_get_enabled()) {
+						retval =
+						    rss_hash2bucket(inp->inp_flowid,
+						    inp->inp_flowtype,
+						    &rss_bucket);
+						if (retval == 0)
+							optval = rss_bucket;
+						else
+							error = EINVAL;
+					}
 					break;
 
 				case IPV6_RECVRSSBUCKETID:
-					optval = OPTBIT2(INP_RECVRSSBUCKETID);
+					if (rss_get_enabled())
+						optval = OPTBIT2(INP_RECVRSSBUCKETID);
 					break;
 #endif
 

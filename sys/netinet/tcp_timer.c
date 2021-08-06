@@ -192,12 +192,17 @@ inp_to_cpuid(struct inpcb *inp)
 	u_int cpuid;
 
 #ifdef	RSS
-	if (per_cpu_timers) {
+	if (rss_get_enabled() && per_cpu_timers) {
 		cpuid = rss_hash2cpuid(inp->inp_flowid, inp->inp_flowtype);
 		if (cpuid == NETISR_CPUID_NONE)
 			return (curcpu);	/* XXX */
 		else
 			return (cpuid);
+	} else if (per_cpu_timers) {
+		cpuid = inp->inp_flowid % (mp_maxid + 1);
+		if (! CPU_ABSENT(cpuid))
+			return (cpuid);
+		return (curcpu);
 	}
 #else
 	/* Legacy, pre-RSS behaviour */
