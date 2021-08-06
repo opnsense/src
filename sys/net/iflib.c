@@ -6468,11 +6468,7 @@ iflib_msix_init(if_ctx_t ctx)
 	queuemsgs = msgs - admincnt;
 #endif
 #ifdef RSS
-	if (rss_get_enabled() == 0) {
-		queues = queuemsgs;
-	} else {
-		queues = imin(queuemsgs, rss_getnumbuckets());
-	}
+	queues = imin(queuemsgs, rss_get_enabled() == 0 ? queuemsgs : rss_getnumbuckets());
 #else
 	queues = queuemsgs;
 #endif
