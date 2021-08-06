@@ -247,7 +247,7 @@ rss_init(__unused void *arg)
 		 */
 		if (rss_bits == 0 || rss_bits > RSS_MAXBITS) {
 			RSS_DEBUG("RSS bits %u not valid, coercing to %u\n",
-				rss_bits, RSS_MAXBITS);
+			    rss_bits, RSS_MAXBITS);
 			rss_bits = RSS_MAXBITS;
 		}
 
