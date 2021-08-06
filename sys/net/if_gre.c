@@ -667,7 +667,7 @@ gre_flowid(struct gre_softc *sc, struct mbuf *m, uint32_t af)
 			break;
 		} else {
 			flowid = mtod(m, struct ip6_hdr *)->ip6_src.s6_addr32[3] ^
-				mtod(m, struct ip6_hdr *)->ip6_dst.s6_addr32[3];
+			    mtod(m, struct ip6_hdr *)->ip6_dst.s6_addr32[3];
 			break;
 		}
 #endif
