@@ -654,7 +654,7 @@ gre_flowid(struct gre_softc *sc, struct mbuf *m, uint32_t af)
 			break;
 		} else {
 			flowid = mtod(m, struct ip *)->ip_src.s_addr ^
-		    	mtod(m, struct ip *)->ip_dst.s_addr;
+		    	    mtod(m, struct ip *)->ip_dst.s_addr;
 			break;
 		}
 #endif
