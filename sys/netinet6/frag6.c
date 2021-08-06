@@ -705,10 +705,10 @@ insert:
 	in6_ifstat_inc(dstifp, ifs6_reass_ok);
 
 #ifdef RSS
+	/*
+	 * Queue/dispatch for reprocessing.
+	 */
 	if (rss_get_enabled()) {
-		/*
-		* Queue/dispatch for reprocessing.
-		*/
 		netisr_dispatch(NETISR_IPV6_DIRECT, m);
 		return IPPROTO_DONE;
 	}
