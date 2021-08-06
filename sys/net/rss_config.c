@@ -201,7 +201,7 @@ rss_init(__unused void *arg)
 
 	default:
 		RSS_DEBUG("invalid RSS hashalgo %u, coercing to %u\n",
-			rss_hashalgo, RSS_HASH_TOEPLITZ);
+		    rss_hashalgo, RSS_HASH_TOEPLITZ);
 		rss_hashalgo = RSS_HASH_TOEPLITZ;
 	}
 
