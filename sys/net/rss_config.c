@@ -252,10 +252,10 @@ rss_init(__unused void *arg)
 		}
 
 		/*
-		* Figure out how many buckets to use; warn if less than the
-		* number of configured CPUs, although this is not a fatal
-		* problem.
-		*/
+		 * Figure out how many buckets to use; warn if less than the
+		 * number of configured CPUs, although this is not a fatal
+		 * problem.
+		 */
 		rss_buckets = (1 << rss_bits);
 		if (rss_buckets < rss_ncpus)
 			RSS_DEBUG("WARNING: rss_buckets (%u) less than "
