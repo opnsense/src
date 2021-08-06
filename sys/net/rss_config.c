@@ -259,7 +259,7 @@ rss_init(__unused void *arg)
 		rss_buckets = (1 << rss_bits);
 		if (rss_buckets < rss_ncpus)
 			RSS_DEBUG("WARNING: rss_buckets (%u) less than "
-				"rss_ncpus (%u)\n", rss_buckets, rss_ncpus);
+			    "rss_ncpus (%u)\n", rss_buckets, rss_ncpus);
 		rss_mask = rss_buckets - 1;
 	} else {
 		rss_bits = 0;
