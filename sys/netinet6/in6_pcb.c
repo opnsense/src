@@ -97,7 +97,9 @@ __FBSDID("$FreeBSD$");
 #include <net/if_llatbl.h>
 #include <net/if_types.h>
 #include <net/route.h>
+#ifdef RSS
 #include <net/rss_config.h>
+#endif
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
