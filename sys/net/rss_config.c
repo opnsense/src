@@ -206,11 +206,11 @@ rss_init(__unused void *arg)
 	}
 
 	/*
-	* Count available CPUs.
-	*
-	* XXXRW: Note incorrect assumptions regarding contiguity of this set
-	* elsewhere.
-	*/
+	 * Count available CPUs.
+	 *
+	 * XXXRW: Note incorrect assumptions regarding contiguity of this set
+	 * elsewhere.
+	 */
 	rss_ncpus = 0;
 	for (i = 0; i <= mp_maxid; i++) {
 		if (CPU_ABSENT(i))
