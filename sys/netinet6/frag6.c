@@ -57,7 +57,7 @@ __FBSDID("$FreeBSD$");
 #include <net/netisr.h>
 #include <net/route.h>
 #include <net/vnet.h>
-#ifdef	RSS
+#ifdef RSS
 #include <net/rss_config.h>
 #endif
 
