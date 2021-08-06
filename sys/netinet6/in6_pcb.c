@@ -1313,7 +1313,7 @@ in6_pcblookup(struct inpcbinfo *pcbinfo, struct in6_addr *faddr, u_int fport,
 #endif
 		if (in_pcbgroup_enabled(pcbinfo)) {
 			pcbgroup = in6_pcbgroup_bytuple(pcbinfo, laddr, lport, faddr,
-				fport);
+			    fport);
 			return (in6_pcblookup_group(pcbinfo, pcbgroup, faddr, fport,
 				laddr, lport, lookupflags, ifp));
 		}
