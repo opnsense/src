@@ -715,7 +715,7 @@ static void
 ether_init(__unused void *arg)
 {
 
-#ifdef	RSS
+#ifdef RSS
 	if (rss_get_enabled() == 0) {
 		ether_nh.nh_m2cpuid = NULL;
 		ether_nh.nh_policy = NETISR_POLICY_SOURCE;
