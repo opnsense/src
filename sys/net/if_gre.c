@@ -663,12 +663,11 @@ gre_flowid(struct gre_softc *sc, struct mbuf *m, uint32_t af)
 			flowid = rss_hash_ip6_2tuple(
 			    &mtod(m, struct ip6_hdr *)->ip6_src,
 			    &mtod(m, struct ip6_hdr *)->ip6_dst);
-			break;
 		} else {
 			flowid = mtod(m, struct ip6_hdr *)->ip6_src.s6_addr32[3] ^
 			    mtod(m, struct ip6_hdr *)->ip6_dst.s6_addr32[3];
-			break;
 		}
+		break;
 #endif
 	default:
 		flowid = 0;
