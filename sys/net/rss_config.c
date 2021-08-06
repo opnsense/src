@@ -268,8 +268,8 @@ rss_init(__unused void *arg)
 	}
 
 	/*
-	* Set up initial CPU assignments: round-robin by default.
-	*/
+	 * Set up initial CPU assignments: round-robin by default.
+	 */
 	cpuid = CPU_FIRST();
 	for (i = 0; i < rss_buckets; i++) {
 		rss_table[i].rte_cpu = cpuid;
