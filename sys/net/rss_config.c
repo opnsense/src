@@ -282,7 +282,6 @@ rss_init(__unused void *arg)
 	 * XXXRW: Not yet.  If nothing else, will require an rss_isbadkey()
 	 * loop to check for "bad" RSS keys.
 	 */
-	
 }
 SYSINIT(rss_init, SI_SUB_SOFTINTR, SI_ORDER_SECOND, rss_init, NULL);
 
