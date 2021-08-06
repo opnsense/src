@@ -2037,8 +2037,8 @@ in_pcblookup_group(struct inpcbinfo *pcbinfo, struct inpcbgroup *pcbgroup,
 	 * For incoming connections, we may wish to do a wildcard
 	 * match for an RSS-local socket.
 	 */
-	if ((lookupflags & INPLOOKUP_WILDCARD) != 0
-		&& rss_get_enabled()) {
+	if ((lookupflags & INPLOOKUP_WILDCARD) != 0 &&
+	    rss_get_enabled()) {
 		struct inpcb *local_wild = NULL, *local_exact = NULL;
 #ifdef INET6
 		struct inpcb *local_wild_mapped = NULL;
