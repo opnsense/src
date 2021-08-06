@@ -516,12 +516,12 @@ ip_reass(struct mbuf *m)
 		}
 
 		/*
-		* Queue/dispatch for reprocessing.
-		*
-		* Note: this is much slower than just handling the frame in the
-		* current receive context.  It's likely worth investigating
-		* why this is.
-		*/
+		 * Queue/dispatch for reprocessing.
+		 *
+		 * Note: this is much slower than just handling the frame in the
+		 * current receive context.  It's likely worth investigating
+		 * why this is.
+		 */
 		netisr_dispatch(NETISR_IP_DIRECT, m);
 		return (NULL);
 	}
