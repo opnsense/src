@@ -328,7 +328,7 @@ ip_init(void)
 		printf("%s: WARNING: unable to register output helper hook\n",
 		    __func__);
 
-#ifdef	RSS
+#ifdef RSS
 	if (rss_get_enabled() == 0) {
 		ip_nh.nh_m2cpuid = NULL;
 		ip_nh.nh_policy = NETISR_POLICY_FLOW;
