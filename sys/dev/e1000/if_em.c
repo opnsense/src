@@ -3254,7 +3254,7 @@ em_initialize_receive_unit(if_ctx_t ctx)
 		}
 	} else
 		rxcsum &= ~E1000_RXCSUM_TUOFL;
-	
+
 	if (adapter->rx_num_queues > 1) {
 		if (adapter->hw.mac.type >= igb_mac_min)
 			igb_initialize_rss_mapping(adapter);
