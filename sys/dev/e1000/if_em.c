@@ -3171,7 +3171,7 @@ em_initialize_receive_unit(if_ctx_t ctx)
 	struct e1000_hw	*hw = &adapter->hw;
 	struct em_rx_queue *que;
 	int i;
-	u32 rctl, rxcsum, rfctl;
+	u32 rctl, rxcsum, rfctl, mrqc;
 
 	INIT_DEBUGOUT("em_initialize_receive_units: begin");
 
@@ -3232,6 +3232,14 @@ em_initialize_receive_unit(if_ctx_t ctx)
 	}
 	E1000_WRITE_REG(hw, E1000_RFCTL, rfctl);
 
+	if (adapter->rx_num_queues > 1) {
+		if (adapter->hw.mac.type >= igb_mac_min)
+			igb_initialize_rss_mapping(adapter);
+		else
+			em_initialize_rss_mapping(adapter);
+	}
+
+	mrqc = E1000_READ_REG(hw, E1000_MRQC);
 	rxcsum = E1000_READ_REG(hw, E1000_RXCSUM);
 	if (if_getcapenable(ifp) & IFCAP_RXCSUM &&
 	    adapter->hw.mac.type >= e1000_82543) {
@@ -3252,17 +3260,13 @@ em_initialize_receive_unit(if_ctx_t ctx)
 			if (adapter->hw.mac.type > e1000_82575)
 				rxcsum |= E1000_RXCSUM_CRCOFL;
 		}
-	} else
+	} else {
+		if (mrqc & E1000_MRQC_ENABLE_RSS_8Q)
+			rxcsum |= E1000_RXCSUM_PCSD;
 		rxcsum &= ~E1000_RXCSUM_TUOFL;
+	}
 
 	E1000_WRITE_REG(hw, E1000_RXCSUM, rxcsum);
-
-	if (adapter->rx_num_queues > 1) {
-		if (adapter->hw.mac.type >= igb_mac_min)
-			igb_initialize_rss_mapping(adapter);
-		else
-			em_initialize_rss_mapping(adapter);
-	}
 
 	/*
 	 * XXX TEMPORARY WORKAROUND: on some systems with 82573
