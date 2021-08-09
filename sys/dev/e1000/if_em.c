@@ -3270,6 +3270,13 @@ em_initialize_receive_unit(if_ctx_t ctx)
 			em_initialize_rss_mapping(adapter);
 	}
 
+ 	{
+ 	 	u32 mrqc = E1000_READ_REG(hw, E1000_MRQC);
+ 
+		if (mrqc & E1000_MRQC_ENABLE_RSS_8Q)
+			rxcsum |= E1000_RXCSUM_PCSD;
+	}
+
 	E1000_WRITE_REG(hw, E1000_RXCSUM, rxcsum);
 
 	/*
