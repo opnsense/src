@@ -3171,7 +3171,7 @@ em_initialize_receive_unit(if_ctx_t ctx)
 	struct e1000_hw	*hw = &adapter->hw;
 	struct em_rx_queue *que;
 	int i;
-	u32 rctl, rxcsum, rfctl, mrqc;
+	u32 rctl, rxcsum, rfctl;
 
 	INIT_DEBUGOUT("em_initialize_receive_units: begin");
 
