@@ -3255,14 +3255,16 @@ em_initialize_receive_unit(if_ctx_t ctx)
 	} else
 		rxcsum &= ~E1000_RXCSUM_TUOFL;
 
-	E1000_WRITE_REG(hw, E1000_RXCSUM, rxcsum);
-
 	if (adapter->rx_num_queues > 1) {
 		if (adapter->hw.mac.type >= igb_mac_min)
 			igb_initialize_rss_mapping(adapter);
 		else
 			em_initialize_rss_mapping(adapter);
+
+		rxcsum |= E1000_RXCSUM_PCSD;
 	}
+
+	E1000_WRITE_REG(hw, E1000_RXCSUM, rxcsum);
 
 	/*
 	 * XXX TEMPORARY WORKAROUND: on some systems with 82573
