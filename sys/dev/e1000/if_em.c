@@ -3232,14 +3232,6 @@ em_initialize_receive_unit(if_ctx_t ctx)
 	}
 	E1000_WRITE_REG(hw, E1000_RFCTL, rfctl);
 
-	if (adapter->rx_num_queues > 1) {
-		if (adapter->hw.mac.type >= igb_mac_min)
-			igb_initialize_rss_mapping(adapter);
-		else
-			em_initialize_rss_mapping(adapter);
-	}
-
-	mrqc = E1000_READ_REG(hw, E1000_MRQC);
 	rxcsum = E1000_READ_REG(hw, E1000_RXCSUM);
 	if (if_getcapenable(ifp) & IFCAP_RXCSUM &&
 	    adapter->hw.mac.type >= e1000_82543) {
