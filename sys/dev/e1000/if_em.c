@@ -3264,6 +3264,12 @@ em_initialize_receive_unit(if_ctx_t ctx)
 		if (mrqc & E1000_MRQC_ENABLE_RSS_8Q)
 			rxcsum |= E1000_RXCSUM_PCSD;
 		rxcsum &= ~E1000_RXCSUM_TUOFL;
+	
+	if (adapter->rx_num_queues > 1) {
+		if (adapter->hw.mac.type >= igb_mac_min)
+			igb_initialize_rss_mapping(adapter);
+		else
+			em_initialize_rss_mapping(adapter);
 	}
 
 	E1000_WRITE_REG(hw, E1000_RXCSUM, rxcsum);
