@@ -3260,9 +3260,7 @@ em_initialize_receive_unit(if_ctx_t ctx)
 			if (adapter->hw.mac.type > e1000_82575)
 				rxcsum |= E1000_RXCSUM_CRCOFL;
 		}
-	} else {
-		if (mrqc & E1000_MRQC_ENABLE_RSS_8Q)
-			rxcsum |= E1000_RXCSUM_PCSD;
+	} else
 		rxcsum &= ~E1000_RXCSUM_TUOFL;
 	
 	if (adapter->rx_num_queues > 1) {
