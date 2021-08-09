@@ -3265,7 +3265,7 @@ em_initialize_receive_unit(if_ctx_t ctx)
  	{
  	 	u32 mrqc = E1000_READ_REG(hw, E1000_MRQC);
  
-		if (mrqc & E1000_MRQC_ENABLE_RSS_8Q)
+		if (mrqc)
 			rxcsum |= E1000_RXCSUM_PCSD;
 	}
 
