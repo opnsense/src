@@ -3260,13 +3260,8 @@ em_initialize_receive_unit(if_ctx_t ctx)
 			igb_initialize_rss_mapping(adapter);
 		else
 			em_initialize_rss_mapping(adapter);
-	}
 
- 	{
- 	 	u32 mrqc = E1000_READ_REG(hw, E1000_MRQC);
- 
-		if (mrqc)
-			rxcsum |= E1000_RXCSUM_PCSD;
+		rxcsum |= E1000_RXCSUM_PCSD;
 	}
 
 	E1000_WRITE_REG(hw, E1000_RXCSUM, rxcsum);
