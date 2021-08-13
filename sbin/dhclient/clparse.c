@@ -201,7 +201,6 @@ void
 parse_client_statement(FILE *cfile, struct interface_info *ip,
     struct client_config *config)
 {
-	int		 token;
 	char		*val;
 	struct option	*option;
 	time_t		 tmp;
@@ -299,15 +298,11 @@ parse_client_statement(FILE *cfile, struct interface_info *ip,
 		parse_reject_statement(cfile, config);
 		return;
 	default:
-		parse_warn("expecting a statement.");
-		skip_to_semi(cfile);
 		break;
 	}
-	token = next_token(&val, cfile);
-	if (token != SEMI) {
-		parse_warn("semicolon expected.");
-		skip_to_semi(cfile);
-	}
+
+	parse_warn("expecting a statement.");
+	skip_to_semi(cfile);
 }
 
 unsigned
