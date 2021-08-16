@@ -27,8 +27,8 @@
 # $FreeBSD$
 
 clear
-echo "FreeBSD Installer"
-echo "========================"
+echo "OPNsense Installer"
+echo "=================="
 echo
 
 echo "Please select a password for the system management account (root):"
