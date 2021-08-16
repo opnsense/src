@@ -91,7 +91,7 @@ main(int argc, const char **argv)
 
 	init_dialog(stdin, stdout);
 	if (!sade_mode)
-		dialog_vars.backtitle = __DECONST(char *, "FreeBSD Installer");
+		dialog_vars.backtitle = __DECONST(char *, "OPNsense Installer");
 	dialog_vars.item_help = TRUE;
 	nscroll = i = 0;
 
@@ -115,7 +115,7 @@ main(int argc, const char **argv)
 			return (error);
 		}
 	} else {
-		prompt = "Create partitions for FreeBSD. No changes will be "
+		prompt = "Create partitions for OPNsense. No changes will be "
 		    "made until you select Finish.";
 	}
 
@@ -285,7 +285,7 @@ validate_setup(void)
 
 	if (root == NULL) {
 		dialog_msgbox("Error", "No root partition was found. "
-		    "The root FreeBSD partition must have a mountpoint of '/'.",
+		    "The root OPNsense partition must have a mountpoint of '/'.",
 		0, 0, TRUE);
 		return (FALSE);
 	}
@@ -298,7 +298,7 @@ validate_setup(void)
 		dialog_vars.defaultno = TRUE;
 		cancel = dialog_yesno("Warning", "The chosen root partition "
 		    "has a preexisting filesystem. If it contains an existing "
-		    "FreeBSD system, please update it with freebsd-update "
+		    "OPNsense system, please update it with freebsd-update "
 		    "instead of installing a new system on it. The partition "
 		    "can also be erased by pressing \"No\" and then deleting "
 		    "and recreating it. Are you sure you want to proceed?",
