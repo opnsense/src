@@ -73,8 +73,8 @@ update_uefi_bootentry()
 		return
 	fi
 
-	$DIALOG --backtitle 'FreeBSD Installer' --title 'Boot configuration' \
-	    --yesno 'There is multiple "FreeBSD" efi boot entries, would you like to remove them all and add a new one?' 0 0
+	$DIALOG --backtitle 'OPNsense Installer' --title 'Boot configuration' \
+	    --yesno 'There are multiple "FreeBSD" efi boot entries, would you like to remove them all and add a new one?' 0 0
 	if [ $? -eq $DIALOG_OK ]; then
 		for entry in $(efibootmgr | awk '$NF == "FreeBSD" { sub(/.*Boot/,"", $1); sub(/\*/,"", $1); print $1 }'); do
 			efibootmgr -B -b ${entry}
@@ -89,7 +89,7 @@ update_uefi_bootentry()
 }
 
 f_dialog_title "Boot configuration"
-f_dialog_backtitle "FreeBSD Installer"
+f_dialog_backtitle "OPNsense Installer"
 
 if [ `uname -m` == powerpc ]; then
 	platform=`sysctl -n hw.platform`

@@ -36,7 +36,7 @@ export TZ
 
 # Set date
 exec 3>&1
-DATE=$(dialog --backtitle 'FreeBSD Installer' \
+DATE=$(dialog --backtitle 'OPNsense Installer' \
 	--title 'Time & Date' \
 	--ok-label 'Set Date' \
 	--cancel-label 'Skip' \
@@ -48,7 +48,7 @@ exec 3>&-
 
 # Set time
 exec 3>&1
-TIME=$(dialog --backtitle 'FreeBSD Installer' \
+TIME=$(dialog --backtitle 'OPNsense Installer' \
 	--title 'Time & Date' \
 	--ok-label 'Set Time' \
 	--cancel-label 'Skip' \

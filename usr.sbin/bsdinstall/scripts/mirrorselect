@@ -34,7 +34,7 @@
 : ${DIALOG_ESC=255}
 
 exec 3>&1
-MIRROR=`dialog --backtitle "FreeBSD Installer" \
+MIRROR=`dialog --backtitle "OPNsense Installer" \
     --title "Mirror Selection" --extra-button --extra-label "Other" \
     --menu "Please select the site closest to you or \"other\" if you'd like to specify a different choice.  Also note that not every site listed here carries more than the base distribution kits. Only Primary sites are guaranteed to carry the full range of possible distributions. Select a site that's close!" \
     0 0 0 \
@@ -165,9 +165,9 @@ $DIALOG_OK)
 	;;
 $DIALOG_EXTRA)
 	exec 3>&1
-	BSDINSTALL_DISTSITE=`dialog --backtitle "FreeBSD Installer" \
+	BSDINSTALL_DISTSITE=`dialog --backtitle "OPNsense Installer" \
 	    --title "Mirror Selection" \
-	    --inputbox "Please enter the URL to an alternate FreeBSD mirror:" \
+	    --inputbox "Please enter the URL to an alternate OPNsense mirror:" \
 	    0 0 "$BSDINSTALL_DISTSITE" 2>&1 1>&3`
 	MIRROR_BUTTON=$?
 	exec 3>&-

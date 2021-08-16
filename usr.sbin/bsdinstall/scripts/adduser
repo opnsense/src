@@ -27,8 +27,8 @@
 # $FreeBSD$
 
 clear
-echo "FreeBSD Installer"
-echo "========================"
+echo "OPNsense Installer"
+echo "=================="
 echo "Add Users"
 echo
 chroot $BSDINSTALL_CHROOT adduser 2>&1
