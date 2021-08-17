@@ -147,21 +147,20 @@ in_pcbgroup_init(struct inpcbinfo *pcbinfo, u_int hashfields,
 		return;
 
 #ifdef RSS
-	if (rss_get_enabled()) {
-		/*
-		 * If we're using RSS, then RSS determines the number of connection
-		 * groups to use: one connection group per RSS bucket.  If for some
-		 * reason RSS isn't able to provide a number of buckets, disable
-		 * connection groups entirely.
-		 *
-		 * XXXRW: Can this ever happen?
-		 */
-		numpcbgroups = rss_getnumbuckets();
-		if (numpcbgroups == 0)
-			return;
-	} else {
+	if (!rss_get_enabled()) {
 		return;
 	}
+	/*
+	 * If we're using RSS, then RSS determines the number of connection
+	 * groups to use: one connection group per RSS bucket.  If for some
+	 * reason RSS isn't able to provide a number of buckets, disable
+	 * connection groups entirely.
+	 *
+	 * XXXRW: Can this ever happen?
+	 */
+	numpcbgroups = rss_getnumbuckets();
+	if (numpcbgroups == 0)
+		return;
 #else
 	/*
 	 * Otherwise, we'll just use one per CPU for now.  If we decide to

@@ -153,7 +153,7 @@ SYSCTL_INT(_net_inet_rss, OID_AUTO, debug, CTLFLAG_RWTUN, &rss_debug, 0,
  * 0 - disable
  * non-zero - enabled
  */
-static u_int	rss_enabled = 0;
+static int	rss_enabled = 0;
 SYSCTL_INT(_net_inet_rss, OID_AUTO, enabled, CTLFLAG_RWTUN, &rss_enabled, 0,
     "RSS enabled");
 
@@ -459,11 +459,12 @@ void
 rss_getkey(uint8_t *key)
 {
 
-	if (rss_enabled) {
-		bcopy(rss_key, key, sizeof(rss_key));
-	} else {
+	if (!rss_enabled) {
 		arc4rand(key, sizeof(rss_key), 0);
+		return;
 	}
+
+	bcopy(rss_key, key, sizeof(rss_key));
 }
 
 /*
@@ -509,9 +510,9 @@ rss_gethashconfig(void)
 	 * as 2-tuple.
 	 * So for now disable UDP 4-tuple hashing until all of the other
 	 * pieces are in place.
-	 * 
-	 * XXX: The configuration is shared here regardless of RSS being 
-	 * enabled via sysctl, since drivers may still want to enable 
+	 *
+	 * XXX: The configuration is shared here regardless of RSS being
+	 * enabled via sysctl, since drivers may still want to enable
 	 * RSS in the hardware even if there is no support for it in the kernel.
 	 */
 	return (

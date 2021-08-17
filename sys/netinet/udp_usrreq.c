@@ -1613,7 +1613,7 @@ retry:
 	 * hash value based on the packet contents.
 	 */
 	if (rss_get_enabled())
-		ipflags |= IP_NODEFAULTFLOWID;
+	ipflags |= IP_NODEFAULTFLOWID;
 #endif	/* RSS */
 
 	if (unlock_udbinfo == UH_WLOCKED)
