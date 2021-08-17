@@ -154,7 +154,7 @@ SYSCTL_INT(_net_inet_rss, OID_AUTO, debug, CTLFLAG_RWTUN, &rss_debug, 0,
  * non-zero - enabled
  */
 static int	rss_enabled = 0;
-SYSCTL_INT(_net_inet_rss, OID_AUTO, enabled, CTLFLAG_RWTUN, &rss_enabled, 0,
+SYSCTL_INT(_net_inet_rss, OID_AUTO, enabled, CTLFLAG_RDTUN, &rss_enabled, 0,
     "RSS enabled");
 
 /*
