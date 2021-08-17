@@ -994,7 +994,7 @@ iflib_netmap_txsync(struct netmap_kring *kring, int flags)
 	u_int const lim = kring->nkr_num_slots - 1;
 	u_int const head = kring->rhead;
 	struct if_pkt_info pi;
-	int tx_pkts, tx_bytes;
+	int tx_pkts = 0, tx_bytes = 0;
 
 	/*
 	 * interrupts on every tx packet are expensive so request
@@ -1031,7 +1031,6 @@ iflib_netmap_txsync(struct netmap_kring *kring, int flags)
 	 */
 
 	nm_i = kring->nr_hwcur;
-	tx_pkts = tx_bytes = 0;
 	if (nm_i != head) {	/* we have new packets to send */
 		uint32_t pkt_len = 0, seg_idx = 0;
 		int nic_i_start = -1, flags = 0;
@@ -1078,8 +1077,10 @@ iflib_netmap_txsync(struct netmap_kring *kring, int flags)
 				/* Prepare the NIC TX ring. */
 				ctx->isc_txd_encap(ctx->ifc_softc, &pi);
 				DBG_COUNTER_INC(tx_encap);
+
+				/* Update transmit counters */
+				tx_bytes += pi.ipi_len;
 				tx_pkts++;
-				tx_bytes += len;
 
 				/* Reinit per-packet info for the next one. */
 				flags = seg_idx = pkt_len = 0;
@@ -1170,8 +1171,7 @@ iflib_netmap_rxsync(struct netmap_kring *kring, int flags)
 	u_int n;
 	u_int const lim = kring->nkr_num_slots - 1;
 	int force_update = (flags & NAF_FORCE_READ) || kring->nr_kflags & NKR_PENDINTR;
-	int rx_bytes, rx_pkts;
-	int i = 0;
+	int i = 0, rx_bytes = 0, rx_pkts = 0;
 
 	if_ctx_t ctx = ifp->if_softc;
 	if_shared_ctx_t sctx = ctx->ifc_sctx;
@@ -1205,7 +1205,6 @@ iflib_netmap_rxsync(struct netmap_kring *kring, int flags)
 	 *
 	 * fl->ifl_cidx is set to 0 on a ring reinit
 	 */
-	rx_bytes = rx_pkts = 0;
 	if (netmap_no_pendintr || force_update) {
 		uint32_t hwtail_lim = nm_prev(kring->nr_hwcur, lim);
 		bool have_rxcq = sctx->isc_flags & IFLIB_HAS_RXCQ;
@@ -1241,10 +1240,12 @@ iflib_netmap_rxsync(struct netmap_kring *kring, int flags)
 				} else {
 					ring->slot[nm_i].len = ri.iri_frags[i].irf_len;
 					if (i == (ri.iri_nfrags - 1)) {
-						rx_pkts++;
-						rx_bytes += ring->slot[nm_i].len;
 						ring->slot[nm_i].len -= crclen;
 						ring->slot[nm_i].flags = 0;
+
+						/* Update receive counters */
+						rx_bytes += ri.iri_len;
+						rx_pkts++;
 					} else
 						ring->slot[nm_i].flags = NS_MOREFRAG;
 				}
