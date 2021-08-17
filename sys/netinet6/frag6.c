@@ -689,16 +689,16 @@ insert:
 
 #ifdef RSS
 	if (rss_get_enabled()) {
-		mtag = m_tag_alloc(MTAG_ABI_IPV6, IPV6_TAG_DIRECT, sizeof(*ip6dc),
-		    M_NOWAIT);
-		if (mtag == NULL)
-			goto dropfrag;
+	mtag = m_tag_alloc(MTAG_ABI_IPV6, IPV6_TAG_DIRECT, sizeof(*ip6dc),
+	    M_NOWAIT);
+	if (mtag == NULL)
+		goto dropfrag;
 
-		ip6dc = (struct ip6_direct_ctx *)(mtag + 1);
-		ip6dc->ip6dc_nxt = nxt;
-		ip6dc->ip6dc_off = offset;
+	ip6dc = (struct ip6_direct_ctx *)(mtag + 1);
+	ip6dc->ip6dc_nxt = nxt;
+	ip6dc->ip6dc_off = offset;
 
-		m_tag_prepend(m, mtag);
+	m_tag_prepend(m, mtag);
 	}
 #endif
 
@@ -711,8 +711,8 @@ insert:
 	 * Queue/dispatch for reprocessing.
 	 */
 	if (rss_get_enabled()) {
-		netisr_dispatch(NETISR_IPV6_DIRECT, m);
-		return IPPROTO_DONE;
+	netisr_dispatch(NETISR_IPV6_DIRECT, m);
+	return IPPROTO_DONE;
 	}
 #endif
 

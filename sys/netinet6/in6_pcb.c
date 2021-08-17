@@ -1311,14 +1311,14 @@ in6_pcblookup(struct inpcbinfo *pcbinfo, struct in6_addr *faddr, u_int fport,
 	 */
 #ifdef PCBGROUP
 #ifdef RSS
-	if (rss_get_enabled() == 0) {
+	if (!rss_get_enabled()) {
 #endif
-		if (in_pcbgroup_enabled(pcbinfo)) {
-			pcbgroup = in6_pcbgroup_bytuple(pcbinfo, laddr, lport, faddr,
-			    fport);
-			return (in6_pcblookup_group(pcbinfo, pcbgroup, faddr, fport,
-			    laddr, lport, lookupflags, ifp));
-		}
+	if (in_pcbgroup_enabled(pcbinfo)) {
+		pcbgroup = in6_pcbgroup_bytuple(pcbinfo, laddr, lport, faddr,
+		    fport);
+		return (in6_pcblookup_group(pcbinfo, pcbgroup, faddr, fport,
+		    laddr, lport, lookupflags, ifp));
+	}
 #ifdef RSS
 	}
 #endif

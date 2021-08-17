@@ -962,42 +962,40 @@ retry:
 
 	flags = 0;
 #ifdef	RSS
-	{
-		if (rss_get_enabled()) {
-			uint32_t hash_val, hash_type;
-			uint8_t pr;
+	if (rss_get_enabled()) {
+		uint32_t hash_val, hash_type;
+		uint8_t pr;
 
-			pr = inp->inp_socket->so_proto->pr_protocol;
-			/*
-			 * Calculate an appropriate RSS hash for UDP and
-			 * UDP Lite.
-			 *
-			 * The called function will take care of figuring out
-			 * whether a 2-tuple or 4-tuple hash is required based
-			 * on the currently configured scheme.
-			 *
-			 * Later later on connected socket values should be
-			 * cached in the inpcb and reused, rather than constantly
-			 * re-calculating it.
-			 *
-			 * UDP Lite is a different protocol number and will
-			 * likely end up being hashed as a 2-tuple until
-			 * RSS / NICs grow UDP Lite protocol awareness.
-			 */
-			if (rss_proto_software_hash_v6(faddr, laddr, fport,
-			    inp->inp_lport, pr, &hash_val, &hash_type) == 0) {
-				m->m_pkthdr.flowid = hash_val;
-				M_HASHTYPE_SET(m, hash_type);
-			}
-
-			/*
-			 * Don't override with the inp cached flowid.
-			 *
-			 * Until the whole UDP path is vetted, it may actually
-			 * be incorrect.
-			 */
-			flags |= IP_NODEFAULTFLOWID;
+		pr = inp->inp_socket->so_proto->pr_protocol;
+		/*
+		 * Calculate an appropriate RSS hash for UDP and
+		 * UDP Lite.
+		 *
+		 * The called function will take care of figuring out
+		 * whether a 2-tuple or 4-tuple hash is required based
+		 * on the currently configured scheme.
+		 *
+		 * Later later on connected socket values should be
+		 * cached in the inpcb and reused, rather than constantly
+		 * re-calculating it.
+		 *
+		 * UDP Lite is a different protocol number and will
+		 * likely end up being hashed as a 2-tuple until
+		 * RSS / NICs grow UDP Lite protocol awareness.
+		 */
+		if (rss_proto_software_hash_v6(faddr, laddr, fport,
+		    inp->inp_lport, pr, &hash_val, &hash_type) == 0) {
+			m->m_pkthdr.flowid = hash_val;
+			M_HASHTYPE_SET(m, hash_type);
 		}
+
+		/*
+		 * Don't override with the inp cached flowid.
+		 *
+		 * Until the whole UDP path is vetted, it may actually
+		 * be incorrect.
+		 */
+		flags |= IP_NODEFAULTFLOWID;
 	}
 #endif
 
