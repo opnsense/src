@@ -412,6 +412,7 @@ ip6_output(struct mbuf *m0, struct ip6_pktopts *opt,
 {
 	struct ip6_hdr *ip6;
 	struct ifnet *ifp, *origifp;
+	struct ifnet *nifp = NULL;
 	struct mbuf *m = m0;
 	struct mbuf *mprev;
 	struct route_in6 *ro_pmtu;
@@ -433,7 +434,7 @@ ip6_output(struct mbuf *m0, struct ip6_pktopts *opt,
 	int sw_csum, tso;
 	int needfiblookup;
 	uint32_t fibnum;
-	struct m_tag *fwd_tag = NULL;
+	int has_fwd_tag = 0;
 	uint32_t id;
 
 	NET_EPOCH_ASSERT();
@@ -672,6 +673,7 @@ again:
 	 */
 	nh = NULL;
 	ifp = NULL;
+	origifp = NULL;
 	mtu = 0;
 	if (ro != NULL) {
 		if (ro->ro_nh != NULL && inp != NULL) {
@@ -679,13 +681,13 @@ again:
 			NH_VALIDATE((struct route *)ro, &inp->inp_rt_cookie,
 			    fibnum);
 		}
-		if (ro->ro_nh != NULL && fwd_tag == NULL &&
+		if (ro->ro_nh != NULL && !has_fwd_tag &&
 		    (!NH_IS_VALID(ro->ro_nh) ||
 		    ro->ro_dst.sin6_family != AF_INET6 ||
 		    !IN6_ARE_ADDR_EQUAL(&ro->ro_dst.sin6_addr, &ip6->ip6_dst)))
 			RO_INVALIDATE_CACHE(ro);
 
-		if (ro->ro_nh != NULL && fwd_tag == NULL &&
+		if (ro->ro_nh != NULL && !has_fwd_tag &&
 		    ro->ro_dst.sin6_family == AF_INET6 &&
 		    IN6_ARE_ADDR_EQUAL(&ro->ro_dst.sin6_addr, &ip6->ip6_dst)) {
 			nh = ro->ro_nh;
@@ -694,7 +696,7 @@ again:
 			if (ro->ro_lle)
 				LLE_FREE(ro->ro_lle);	/* zeros ro_lle */
 			ro->ro_lle = NULL;
-			if (fwd_tag == NULL) {
+			if (!has_fwd_tag) {
 				bzero(&dst_sa, sizeof(dst_sa));
 				dst_sa.sin6_family = AF_INET6;
 				dst_sa.sin6_len = sizeof(dst_sa);
@@ -708,8 +710,11 @@ again:
 					in6_ifstat_inc(ifp, ifs6_out_discard);
 				goto bad;
 			}
-			if (ifp != NULL)
-			    mtu = ifp->if_mtu;
+			if (ifp == NULL) {
+				error = EHOSTUNREACH;
+				goto bad;
+			}
+			mtu = ifp->if_mtu;
 		}
 		if (nh == NULL) {
 			/*
@@ -728,7 +733,7 @@ again:
 		struct in6_addr kdst;
 		uint32_t scopeid;
 
-		if (fwd_tag == NULL) {
+		if (!has_fwd_tag) {
 			bzero(&dst_sa, sizeof(dst_sa));
 			dst_sa.sin6_family = AF_INET6;
 			dst_sa.sin6_len = sizeof(dst_sa);
@@ -772,7 +777,7 @@ again:
 		ia = ifatoia6(nh->nh_ifa);
 		if (nh->nh_flags & NHF_GATEWAY)
 			dst->sin6_addr = nh->gw6_sa.sin6_addr;
-		else if (fwd_tag != NULL)
+		else if (has_fwd_tag)
 			dst->sin6_addr = dst_sa.sin6_addr;
 nonh6lookup:
 		;
@@ -1076,17 +1081,28 @@ nonh6lookup:
 		goto done;
 	}
 	/* Or forward to some other address? */
-	if ((m->m_flags & M_IP6_NEXTHOP) &&
-	    (fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL)) != NULL) {
+	if (IP6_HAS_NEXTHOP(m) && !ip6_get_fwdtag(m, &dst_sa, &nifp)) {
 		if (ro != NULL)
 			dst = (struct sockaddr_in6 *)&ro->ro_dst;
 		else
 			dst = &sin6;
-		bcopy((fwd_tag+1), &dst_sa, sizeof(struct sockaddr_in6));
 		m->m_flags |= M_SKIP_FIREWALL;
-		m->m_flags &= ~M_IP6_NEXTHOP;
-		m_tag_delete(m, fwd_tag);
-		goto again;
+		ip6_flush_fwdtag(m);
+		has_fwd_tag = 1;
+		if (!nifp)
+			goto again;
+		/*
+		 * pf(4) decided on interface so
+		 * emulate the previous way of
+		 * if_output() with new ifp/dst
+		 * combo and no route set.
+		 */
+		ifp = nifp;
+		ia = in6_ifawithifp(ifp, &ip6->ip6_src);
+		mtu = ifp->if_mtu;
+		dst = &sin6;
+		*dst = dst_sa;	/* XXX */
+		ro = NULL;
 	}
 
 passout:
@@ -3385,4 +3401,110 @@ ip6_optlen(struct inpcb *inp)
 	len += elen(inp->in6p_outputopts->ip6po_dest2);
 	return len;
 #undef elen
+}
+
+struct ip6_fwdtag {
+	struct sockaddr_in6 dst;
+	u_short if_index;
+};
+
+int
+ip6_set_fwdtag(struct mbuf *m, struct sockaddr_in6 *dst, struct ifnet *ifp)
+{
+	struct ip6_fwdtag *fwd_info;
+	struct m_tag *fwd_tag;
+	int error;
+
+	KASSERT(dst != NULL, ("%s: !dst", __func__));
+	KASSERT(dst->sin6_family == AF_INET6, ("%s: !AF_INET6", __func__));
+
+	fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL);
+	if (fwd_tag != NULL) {
+		KASSERT(((struct ip6_fwdtag *)(fwd_tag+1))->dst.sin6_family ==
+		    AF_INET6, ("%s: !AF_INET6", __func__));
+
+		m_tag_unlink(m, fwd_tag);
+	} else {
+		fwd_tag = m_tag_get(PACKET_TAG_IPFORWARD, sizeof(*dst),
+		    M_NOWAIT);
+		if (fwd_tag == NULL) {
+			return (ENOBUFS);
+		}
+	}
+
+	fwd_info = (struct ip6_fwdtag *)(fwd_tag+1);
+
+	fwd_info->if_index = ifp ? ifp->if_index : 0;
+
+	bcopy(dst, &fwd_info->dst, sizeof(fwd_info->dst));
+	if (fwd_info->if_index) {
+		/* force scope for pf(4) giving us an interface */
+		fwd_info->dst.sin6_scope_id = fwd_info->if_index;
+	}
+
+	/*
+	 * If nh6 address is link-local we should convert
+	 * it to kernel internal form before doing any
+	 * comparisons.
+	 */
+	error = sa6_embedscope(&fwd_info->dst, V_ip6_use_defzone);
+	if (error != 0) {
+		m_tag_free(fwd_tag);
+		return (error);
+	}
+
+	if (in6_localip(&fwd_info->dst.sin6_addr))
+		m->m_flags |= M_FASTFWD_OURS;
+	else
+		m->m_flags &= ~M_FASTFWD_OURS;
+
+	m->m_flags |= M_IP6_NEXTHOP;
+	m_tag_prepend(m, fwd_tag);
+
+	return (0);
+}
+
+int
+ip6_get_fwdtag(struct mbuf *m, struct sockaddr_in6 *dst, struct ifnet **ifp)
+{
+	struct ip6_fwdtag *fwd_info;
+	struct m_tag *fwd_tag;
+
+	fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL);
+	if (fwd_tag == NULL) {
+		return (ENOENT);
+	}
+
+	fwd_info = (struct ip6_fwdtag *)(fwd_tag+1);
+
+	KASSERT(((struct sockaddr *)&fwd_info->dst)->sa_family == AF_INET6,
+	    ("%s: !AF_INET6", __func__));
+
+	if (dst != NULL) {
+		bcopy((fwd_tag+1), dst, sizeof(*dst));
+	}
+
+	if (ifp != NULL && fwd_info->if_index != 0) {
+		struct ifnet *nifp = ifnet_byindex(fwd_info->if_index);
+		if (nifp != NULL) {
+			*ifp = nifp;
+		}
+	}
+
+	return (0);
+}
+
+void
+ip6_flush_fwdtag(struct mbuf *m)
+{
+	struct m_tag *fwd_tag;
+
+	fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL);
+	if (fwd_tag != NULL) {
+		KASSERT(((struct sockaddr *)(fwd_tag+1))->sa_family ==
+		    AF_INET6, ("%s: !AF_INET6", __func__));
+
+		m->m_flags &= ~(M_IP6_NEXTHOP | M_FASTFWD_OURS);
+		m_tag_delete(m, fwd_tag);
+	}
 }
