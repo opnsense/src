@@ -200,12 +200,12 @@ ip_tryforward(struct mbuf *m)
 	struct mbuf *m0 = NULL;
 	struct nhop_object *nh = NULL;
 	struct route ro;
-	struct sockaddr_in *dst;
+	struct sockaddr_in *dst = NULL;
 	const struct sockaddr *gw;
 	struct in_addr dest, odest, rtdest;
 	uint16_t ip_len, ip_off;
 	int error = 0;
-	struct m_tag *fwd_tag = NULL;
+	struct ifnet *nifp = NULL;
 	struct mbuf *mcopy = NULL;
 	struct in_addr redest;
 	/*
@@ -345,22 +345,19 @@ passin:
 	/*
 	 * Next hop forced by pfil(9) hook?
 	 */
-	if ((m->m_flags & M_IP_NEXTHOP) &&
-	    ((fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL)) != NULL)) {
-		/*
-		 * Now we will find route to forced destination.
-		 */
-		dest.s_addr = ((struct sockaddr_in *)
-			    (fwd_tag + 1))->sin_addr.s_addr;
-		m_tag_delete(m, fwd_tag);
-		m->m_flags &= ~M_IP_NEXTHOP;
+	if (IP_HAS_NEXTHOP(m) && !ip_get_fwdtag(m, dst, &nifp)) {
+		dest.s_addr = dst->sin_addr.s_addr;
+		ip_flush_fwdtag(m);
 	}
 
 	/*
 	 * Find route to destination.
 	 */
-	if (ip_findroute(&nh, dest, m) != 0)
+	if (!nifp && ip_findroute(&nh, dest, m) != 0)
 		return (NULL);	/* icmp unreach already sent */
+
+	if (!nifp)
+		nifp = nh->nh_ifp;
 
 	/*
 	 * Avoid second route lookup by caching destination.
@@ -373,7 +370,7 @@ passin:
 	if (!PFIL_HOOKED_OUT(V_inet_pfil_head))
 		goto passout;
 
-	if (pfil_run_hooks(V_inet_pfil_head, &m, nh->nh_ifp,
+	if (pfil_run_hooks(V_inet_pfil_head, &m, nifp,
 	    PFIL_OUT | PFIL_FWD, NULL) != PFIL_PASS)
 		goto drop;
 
@@ -386,11 +383,8 @@ passin:
 	/*
 	 * Destination address changed?
 	 */
-	if (m->m_flags & M_IP_NEXTHOP)
-		fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL);
-	else
-		fwd_tag = NULL;
-	if (odest.s_addr != dest.s_addr || fwd_tag != NULL) {
+	if (odest.s_addr != dest.s_addr || IP_HAS_NEXTHOP(m)) {
+		struct ifnet *nnifp = NULL;
 		/*
 		 * Is it now for a local address on this host?
 		 */
@@ -405,15 +399,14 @@ forwardlocal:
 		/*
 		 * Redo route lookup with new destination address
 		 */
-		if (fwd_tag) {
-			dest.s_addr = ((struct sockaddr_in *)
-				    (fwd_tag + 1))->sin_addr.s_addr;
-			m_tag_delete(m, fwd_tag);
-			m->m_flags &= ~M_IP_NEXTHOP;
+		if (!ip_get_fwdtag(m, dst, &nnifp)) {
+			dest.s_addr = dst->sin_addr.s_addr;
+			ip_flush_fwdtag(m);
 		}
-		if (dest.s_addr != rtdest.s_addr &&
+		if (!nnifp && dest.s_addr != rtdest.s_addr &&
 		    ip_findroute(&nh, dest, m) != 0)
 			return (NULL);	/* icmp unreach already sent */
+		nifp = nnifp ? nnifp : nh->nh_ifp;
 	}
 
 passout:
@@ -428,7 +421,7 @@ passout:
 	dst->sin_family = AF_INET;
 	dst->sin_len = sizeof(*dst);
 	dst->sin_addr = dest;
-	if (nh->nh_flags & NHF_GATEWAY) {
+	if (nh && nh->nh_ifp == nifp && nh->nh_flags & NHF_GATEWAY) {
 		gw = &nh->gw_sa;
 		ro.ro_flags |= RT_HAS_GW;
 	} else
@@ -438,14 +431,14 @@ passout:
 	 * Handle redirect case.
 	 */
 	redest.s_addr = 0;
-	if (V_ipsendredirects && (nh->nh_ifp == m->m_pkthdr.rcvif) &&
+	if (V_ipsendredirects && (nifp == m->m_pkthdr.rcvif) &&
 	    gw->sa_family == AF_INET)
 		mcopy = ip_redir_alloc(m, nh, ip, &redest.s_addr);
 
 	/*
 	 * Check if packet fits MTU or if hardware will fragment for us
 	 */
-	if (ip_len <= nh->nh_mtu) {
+	if (ip_len <= nifp->if_mtu) {
 		/*
 		 * Avoid confusing lower layers.
 		 */
@@ -453,8 +446,8 @@ passout:
 		/*
 		 * Send off the packet via outgoing interface
 		 */
-		IP_PROBE(send, NULL, NULL, ip, nh->nh_ifp, ip, NULL);
-		error = (*nh->nh_ifp->if_output)(nh->nh_ifp, m, gw, &ro);
+		IP_PROBE(send, NULL, NULL, ip, nifp, ip, NULL);
+		error = (*nifp->if_output)(nifp, m, gw, &ro);
 	} else {
 		/*
 		 * Handle EMSGSIZE with icmp reply needfrag for TCP MTU discovery
@@ -462,15 +455,15 @@ passout:
 		if (ip_off & IP_DF) {
 			IPSTAT_INC(ips_cantfrag);
 			icmp_error(m, ICMP_UNREACH, ICMP_UNREACH_NEEDFRAG,
-				0, nh->nh_mtu);
+				0, nifp->if_mtu);
 			goto consumed;
 		} else {
 			/*
 			 * We have to fragment the packet
 			 */
 			m->m_pkthdr.csum_flags |= CSUM_IP;
-			if (ip_fragment(ip, &m, nh->nh_mtu,
-			    nh->nh_ifp->if_hwassist) != 0)
+			if (ip_fragment(ip, &m, nifp->if_mtu,
+			    nifp->if_hwassist) != 0)
 				goto drop;
 			KASSERT(m != NULL, ("null mbuf and no error"));
 			/*
@@ -486,9 +479,9 @@ passout:
 				m_clrprotoflags(m);
 
 				IP_PROBE(send, NULL, NULL,
-				    mtod(m, struct ip *), nh->nh_ifp,
+				    mtod(m, struct ip *), nifp,
 				    mtod(m, struct ip *), NULL);
-				error = (*nh->nh_ifp->if_output)(nh->nh_ifp, m,
+				error = (*nifp->if_output)(nifp, m,
 				    gw, &ro);
 				if (error)
 					break;
