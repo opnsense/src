@@ -548,6 +548,20 @@ SYSCTL_ULONG(_net_pf, OID_AUTO, udpendpoint_hashsize, CTLFLAG_VNET | CTLFLAG_RDT
 SYSCTL_ULONG(_net_pf, OID_AUTO, request_maxcount, CTLFLAG_RWTUN,
     &pf_ioctl_maxcount, 0, "Maximum number of tables, addresses, ... in a single ioctl() call");
 
+VNET_DEFINE_STATIC(int, pf_share_forward) = 0;
+VNET_DEFINE_STATIC(int, pf_share_forward6) = 0;
+
+#define	V_pf_share_forward	VNET(pf_share_forward)
+#define	V_pf_share_forward6	VNET(pf_share_forward6)
+
+SYSCTL_INT(_net_pf, OID_AUTO, share_forward,
+	CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(pf_share_forward), 0,
+	"If set pf(4) will defer IPv4 forwarding to the network stack.");
+
+SYSCTL_INT(_net_pf, OID_AUTO, share_forward6,
+	CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(pf_share_forward6), 0,
+	"If set pf(4) will defer IPv6 forwarding to the network stack.");
+
 VNET_DEFINE(void *, pf_swi_cookie);
 VNET_DEFINE(struct intr_event *, pf_swi_ie);
 
@@ -9254,6 +9268,18 @@ pf_route(struct pf_krule *r, struct ifnet *oifp,
 		goto bad;
 	}
 
+	if (V_pf_share_forward) {
+		if (!IP_HAS_NEXTHOP(m0)) {
+			if (ip_set_fwdtag(m0, &dst->sin, ifp))
+				goto bad;
+
+			if (r->rt == PF_DUPTO)
+				ip_forward(m0, 1);
+		}
+
+		return (PF_PASS); /* XXX check this */
+	}
+
 	/*
 	 * Bind to the correct interface if we're if-bound. We don't know which
 	 * interface that will be until here, so we've inserted the state
@@ -9583,6 +9609,18 @@ pf_route6(struct pf_krule *r, struct ifnet *oifp,
 		action = PF_DROP;
 		SDT_PROBE1(pf, ip6, route_to, drop, __LINE__);
 		goto bad;
+	}
+
+	if (V_pf_share_forward6) {
+		if (!IP6_HAS_NEXTHOP(m0)) {
+			if (ip6_set_fwdtag(m0, &dst, ifp))
+				goto bad;
+
+			if (r->rt == PF_DUPTO)
+				ip6_forward(m0, 1);
+		}
+
+		return (PF_PASS); /* XXX check this */
 	}
 
 	/*
@@ -10938,6 +10976,19 @@ pf_test(sa_family_t af, int dir, int pflags, struct ifnet *ifp, struct mbuf **m0
 
 	if (!V_pf_status.running)
 		return (PF_PASS);
+
+#ifdef INET
+	if (af == AF_INET && dir == PF_OUT && IP_HAS_NEXTHOP(*m0) &&
+	    V_pf_share_forward) {
+		ip_get_fwdtag(*m0, NULL, &ifp);
+	}
+#endif /* INET */
+#ifdef INET6
+	if (af == AF_INET6 && dir == PF_OUT && IP6_HAS_NEXTHOP(*m0) &&
+	    V_pf_share_forward6) {
+		ip6_get_fwdtag(*m0, NULL, &ifp);
+	}
+#endif /* INET6 */
 
 	kif = (struct pfi_kkif *)ifp->if_pf_kif;
 

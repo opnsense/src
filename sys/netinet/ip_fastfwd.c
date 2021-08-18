@@ -240,12 +240,12 @@ ip_tryforward(struct mbuf *m)
 	struct mbuf *m0 = NULL;
 	struct nhop_object *nh = NULL;
 	struct route ro;
-	struct sockaddr_in *dst;
+	struct sockaddr_in *dst, ndst;
 	const struct sockaddr *gw;
 	struct in_addr dest, odest, rtdest, osrc;
 	uint16_t ip_len, ip_off;
 	int error = 0;
-	struct m_tag *fwd_tag = NULL;
+	struct ifnet *nifp = NULL;
 	struct mbuf *mcopy = NULL;
 	struct in_addr redest;
 	/*
@@ -381,22 +381,18 @@ passin:
 	/*
 	 * Next hop forced by pfil(9) hook?
 	 */
-	if ((m->m_flags & M_IP_NEXTHOP) &&
-	    ((fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL)) != NULL)) {
-		/*
-		 * Now we will find route to forced destination.
-		 */
-		dest.s_addr = ((struct sockaddr_in *)
-			    (fwd_tag + 1))->sin_addr.s_addr;
-		m_tag_delete(m, fwd_tag);
-		m->m_flags &= ~M_IP_NEXTHOP;
+	if (IP_HAS_NEXTHOP(m) && !ip_get_fwdtag(m, &ndst, &nifp)) {
+		dest.s_addr = ndst.sin_addr.s_addr;
 	}
 
 	/*
 	 * Find route to destination.
 	 */
-	if (ip_findroute(&nh, dest, m) != 0)
+	if (!nifp && ip_findroute(&nh, dest, m) != 0)
 		return (NULL);	/* icmp unreach already sent */
+
+	if (!nifp)
+		nifp = nh->nh_ifp;
 
 	/*
 	 * Avoid second route lookup by caching destination.
@@ -409,7 +405,7 @@ passin:
 	if (!PFIL_HOOKED_OUT(V_inet_pfil_head))
 		goto passout;
 
-	if (pfil_mbuf_fwd(V_inet_pfil_head, &m, nh->nh_ifp,
+	if (pfil_mbuf_fwd(V_inet_pfil_head, &m, nifp,
 	    NULL) != PFIL_PASS)
 		goto drop;
 
@@ -422,11 +418,8 @@ passin:
 	/*
 	 * Destination address changed?
 	 */
-	if (m->m_flags & M_IP_NEXTHOP)
-		fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL);
-	else
-		fwd_tag = NULL;
-	if (odest.s_addr != dest.s_addr || fwd_tag != NULL) {
+	if (odest.s_addr != dest.s_addr || IP_HAS_NEXTHOP(m)) {
+		struct ifnet *nnifp = NULL;
 		/*
 		 * Is it now for a local address on this host?
 		 */
@@ -441,15 +434,13 @@ forwardlocal:
 		/*
 		 * Redo route lookup with new destination address
 		 */
-		if (fwd_tag) {
-			dest.s_addr = ((struct sockaddr_in *)
-				    (fwd_tag + 1))->sin_addr.s_addr;
-			m_tag_delete(m, fwd_tag);
-			m->m_flags &= ~M_IP_NEXTHOP;
+		if (!ip_get_fwdtag(m, &ndst, &nnifp)) {
+			dest.s_addr = ndst.sin_addr.s_addr;
 		}
-		if (dest.s_addr != rtdest.s_addr &&
+		if (!nnifp && dest.s_addr != rtdest.s_addr &&
 		    ip_findroute(&nh, dest, m) != 0)
 			return (NULL);	/* icmp unreach already sent */
+		nifp = nnifp ? nnifp : nh->nh_ifp;
 	}
 
 passout:
@@ -464,7 +455,7 @@ passout:
 	dst->sin_family = AF_INET;
 	dst->sin_len = sizeof(*dst);
 	dst->sin_addr = dest;
-	if (nh->nh_flags & NHF_GATEWAY) {
+	if (nh && nh->nh_ifp == nifp && nh->nh_flags & NHF_GATEWAY) {
 		gw = &nh->gw_sa;
 		ro.ro_flags |= RT_HAS_GW;
 	} else
@@ -478,19 +469,19 @@ passout:
 	 * invalid checksum.
 	 */
 	if (__predict_false(m->m_pkthdr.csum_flags & CSUM_IP &
-	    ~nh->nh_ifp->if_hwassist)) {
+	    ~nifp->if_hwassist)) {
 		ip->ip_sum = 0;
 		ip->ip_sum = in_cksum(m, (ip->ip_hl << 2));
 		m->m_pkthdr.csum_flags &= ~CSUM_IP;
 	}
 	if (__predict_false(m->m_pkthdr.csum_flags & CSUM_DELAY_DATA &
-	    ~nh->nh_ifp->if_hwassist)) {
+	    ~nifp->if_hwassist)) {
 		in_delayed_cksum(m);
 		m->m_pkthdr.csum_flags &= ~CSUM_DELAY_DATA;
 	}
 #if defined(SCTP) || defined(SCTP_SUPPORT)
 	if (__predict_false(m->m_pkthdr.csum_flags & CSUM_IP_SCTP &
-	    ~nh->nh_ifp->if_hwassist)) {
+	    ~nifp->if_hwassist)) {
 		sctp_delayed_cksum(m, (uint32_t)(ip->ip_hl << 2));
 		m->m_pkthdr.csum_flags &= ~CSUM_IP_SCTP;
 	}
@@ -499,13 +490,13 @@ passout:
 	/* Handle redirect case. */
 	redest.s_addr = 0;
 	if (V_ipsendredirects && osrc.s_addr == ip->ip_src.s_addr &&
-	    nh->nh_ifp == m->m_pkthdr.rcvif)
+	    nifp == m->m_pkthdr.rcvif)
 		mcopy = ip_redir_alloc(m, nh, ip_len, &osrc, &redest);
 
 	/*
 	 * Check if packet fits MTU or if hardware will fragment for us
 	 */
-	if (ip_len <= nh->nh_mtu) {
+	if (ip_len <= nifp->if_mtu) {
 		/*
 		 * Avoid confusing lower layers.
 		 */
@@ -513,8 +504,8 @@ passout:
 		/*
 		 * Send off the packet via outgoing interface
 		 */
-		IP_PROBE(send, NULL, NULL, ip, nh->nh_ifp, ip, NULL);
-		error = (*nh->nh_ifp->if_output)(nh->nh_ifp, m, gw, &ro);
+		IP_PROBE(send, NULL, NULL, ip, nifp, ip, NULL);
+		error = (*nifp->if_output)(nifp, m, gw, &ro);
 	} else {
 		/*
 		 * Handle EMSGSIZE with icmp reply needfrag for TCP MTU discovery
@@ -522,15 +513,15 @@ passout:
 		if (ip_off & IP_DF) {
 			IPSTAT_INC(ips_cantfrag);
 			icmp_error(m, ICMP_UNREACH, ICMP_UNREACH_NEEDFRAG,
-				0, nh->nh_mtu);
+				0, nifp->if_mtu);
 			goto consumed;
 		} else {
 			/*
 			 * We have to fragment the packet
 			 */
 			m->m_pkthdr.csum_flags |= CSUM_IP;
-			if (ip_fragment(ip, &m, nh->nh_mtu,
-			    nh->nh_ifp->if_hwassist) != 0)
+			if (ip_fragment(ip, &m, nifp->if_mtu,
+			    nifp->if_hwassist) != 0)
 				goto drop;
 			KASSERT(m != NULL, ("null mbuf and no error"));
 			/*
@@ -546,9 +537,9 @@ passout:
 				m_clrprotoflags(m);
 
 				IP_PROBE(send, NULL, NULL,
-				    mtod(m, struct ip *), nh->nh_ifp,
+				    mtod(m, struct ip *), nifp,
 				    mtod(m, struct ip *), NULL);
-				error = (*nh->nh_ifp->if_output)(nh->nh_ifp, m,
+				error = (*nifp->if_output)(nifp, m,
 				    gw, &ro);
 				if (error)
 					break;
