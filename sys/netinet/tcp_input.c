@@ -634,6 +634,7 @@ tcp_input_with_port(struct mbuf **mp, int *offp, int proto, uint16_t port)
 	int off0;
 	int optlen = 0;
 #ifdef INET
+	struct sockaddr_in next_hop;
 	int len;
 	uint8_t ipttl;
 #endif
@@ -642,8 +643,8 @@ tcp_input_with_port(struct mbuf **mp, int *offp, int proto, uint16_t port)
 	int thflags;
 	int rstreason = 0;	/* For badport_bandlim accounting purposes */
 	uint8_t iptos;
-	struct m_tag *fwd_tag = NULL;
 #ifdef INET6
+	struct sockaddr_in6 next_hop6;
 	struct ip6_hdr *ip6 = NULL;
 	int isipv6;
 #else
@@ -828,28 +829,10 @@ tcp_input_with_port(struct mbuf **mp, int *offp, int proto, uint16_t port)
 	 */
 	drop_hdrlen = off0 + off;
 
-	/*
-	 * Grab info from PACKET_TAG_IPFORWARD tag prepended to the chain.
-	 */
-        if (
-#ifdef INET6
-	    (isipv6 && (m->m_flags & M_IP6_NEXTHOP))
-#ifdef INET
-	    || (!isipv6 && (m->m_flags & M_IP_NEXTHOP))
-#endif
-#endif
-#if defined(INET) && !defined(INET6)
-	    (m->m_flags & M_IP_NEXTHOP)
-#endif
-	    )
-		fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL);
-
 findpcb:
 #ifdef INET6
-	if (isipv6 && fwd_tag != NULL) {
-		struct sockaddr_in6 *next_hop6;
-
-		next_hop6 = (struct sockaddr_in6 *)(fwd_tag + 1);
+	if (isipv6 && IP6_HAS_NEXTHOP(m) &&
+	    !ip6_get_fwdtag(m, &next_hop6, NULL)) {
 		/*
 		 * Transparently forwarded. Pretend to be the destination.
 		 * Already got one like this?
@@ -864,11 +847,13 @@ findpcb:
 			 * any hardware-generated hash is ignored.
 			 */
 			inp = in6_pcblookup(&V_tcbinfo, &ip6->ip6_src,
-			    th->th_sport, &next_hop6->sin6_addr,
-			    next_hop6->sin6_port ? ntohs(next_hop6->sin6_port) :
+			    th->th_sport, &next_hop6.sin6_addr,
+			    next_hop6.sin6_port ? ntohs(next_hop6.sin6_port) :
 			    th->th_dport, INPLOOKUP_WILDCARD |
 			    INPLOOKUP_WLOCKPCB, m->m_pkthdr.rcvif);
 		}
+		/* Remove the tag from the packet. We don't need it anymore. */
+		ip_flush_fwdtag(m);
 	} else if (isipv6) {
 		inp = in6_pcblookup_mbuf(&V_tcbinfo, &ip6->ip6_src,
 		    th->th_sport, &ip6->ip6_dst, th->th_dport,
@@ -880,10 +865,7 @@ findpcb:
 	else
 #endif
 #ifdef INET
-	if (fwd_tag != NULL) {
-		struct sockaddr_in *next_hop;
-
-		next_hop = (struct sockaddr_in *)(fwd_tag+1);
+	if (IP_HAS_NEXTHOP(m) && !ip_get_fwdtag(m, &next_hop, NULL)) {
 		/*
 		 * Transparently forwarded. Pretend to be the destination.
 		 * already got one like this?
@@ -898,11 +880,13 @@ findpcb:
 			 * any hardware-generated hash is ignored.
 			 */
 			inp = in_pcblookup(&V_tcbinfo, ip->ip_src,
-			    th->th_sport, next_hop->sin_addr,
-			    next_hop->sin_port ? ntohs(next_hop->sin_port) :
+			    th->th_sport, next_hop.sin_addr,
+			    next_hop.sin_port ? ntohs(next_hop.sin_port) :
 			    th->th_dport, INPLOOKUP_WILDCARD |
 			    INPLOOKUP_WLOCKPCB, m->m_pkthdr.rcvif);
 		}
+		/* Remove the tag from the packet. We don't need it anymore. */
+		ip6_flush_fwdtag(m);
 	} else
 		inp = in_pcblookup_mbuf(&V_tcbinfo, ip->ip_src,
 		    th->th_sport, ip->ip_dst, th->th_dport,
