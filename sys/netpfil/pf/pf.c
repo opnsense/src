@@ -468,6 +468,20 @@ SYSCTL_ULONG(_net_pf, OID_AUTO, source_nodes_hashsize, CTLFLAG_RDTUN,
 SYSCTL_ULONG(_net_pf, OID_AUTO, request_maxcount, CTLFLAG_RWTUN,
     &pf_ioctl_maxcount, 0, "Maximum number of tables, addresses, ... in a single ioctl() call");
 
+VNET_DEFINE_STATIC(int, pf_share_forward) = 0;
+VNET_DEFINE_STATIC(int, pf_share_forward6) = 0;
+
+#define	V_pf_share_forward	VNET(pf_share_forward)
+#define	V_pf_share_forward6	VNET(pf_share_forward6)
+
+SYSCTL_INT(_net_pf, OID_AUTO, share_forward,
+	CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(pf_share_forward), 0,
+	"If set pf(4) will defer IPv4 forwarding to the network stack.");
+
+SYSCTL_INT(_net_pf, OID_AUTO, share_forward6,
+	CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(pf_share_forward6), 0,
+	"If set pf(4) will defer IPv6 forwarding to the network stack.");
+
 VNET_DEFINE(void *, pf_swi_cookie);
 VNET_DEFINE(struct intr_event *, pf_swi_ie);
 
@@ -7297,6 +7311,18 @@ pf_route(struct mbuf **m, struct pf_krule *r, struct ifnet *oifp,
 	if (ifp == NULL)
 		goto bad;
 
+	if (V_pf_share_forward) {
+		if (!IP_HAS_NEXTHOP(m0)) {
+			if (ip_set_fwdtag(m0, &dst, ifp))
+				goto bad;
+
+			if (r_rt == PF_DUPTO)
+				ip_forward(m0, 1);
+		}
+
+		return;
+	}
+
 	if (pd->dir == PF_IN) {
 		if (pf_test(PF_OUT, 0, ifp, &m0, inp, &pd->act) != PF_PASS)
 			goto bad;
@@ -7513,6 +7539,18 @@ pf_route6(struct mbuf **m, struct pf_krule *r, struct ifnet *oifp,
 
 	if (ifp == NULL)
 		goto bad;
+
+	if (V_pf_share_forward6) {
+		if (!IP6_HAS_NEXTHOP(m0)) {
+			if (ip6_set_fwdtag(m0, &dst, ifp))
+				goto bad;
+
+			if (r_rt == PF_DUPTO)
+				ip6_forward(m0, 1);
+		}
+
+		return;
+	}
 
 	if (pd->dir == PF_IN) {
 		if (pf_test6(PF_OUT, 0, ifp, &m0, inp, &pd->act) != PF_PASS)
@@ -7900,6 +7938,10 @@ pf_test(int dir, int pflags, struct ifnet *ifp, struct mbuf **m0,
 
 	if (!V_pf_status.running)
 		return (PF_PASS);
+
+	if (dir == PF_OUT && IP_HAS_NEXTHOP(m) && V_pf_share_forward) {
+		ip_get_fwdtag(m, NULL, &ifp);
+	}
 
 	PF_RULES_RLOCK();
 
@@ -8467,6 +8509,10 @@ pf_test6(int dir, int pflags, struct ifnet *ifp, struct mbuf **m0, struct inpcb 
 
 	if (!V_pf_status.running)
 		return (PF_PASS);
+
+	if (dir == PF_OUT && IP6_HAS_NEXTHOP(m) && V_pf_share_forward6) {
+		ip6_get_fwdtag(m, NULL, &ifp);
+	}
 
 	PF_RULES_RLOCK();
 
