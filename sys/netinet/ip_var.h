@@ -244,6 +244,11 @@ extern int	(*ip_rsvp_vif)(struct socket *, struct sockopt *);
 extern void	(*ip_rsvp_force_done)(struct socket *);
 extern int	(*rsvp_input_p)(struct mbuf **, int *, int);
 
+#define	IP_HAS_NEXTHOP(m)	((m)->m_flags & M_IP_NEXTHOP)
+int	ip_set_fwdtag(struct mbuf *, struct sockaddr_in *, struct ifnet *);
+int	ip_get_fwdtag(struct mbuf *, struct sockaddr_in *, struct ifnet **);
+void	ip_flush_fwdtag(struct mbuf *);
+
 VNET_DECLARE(struct pfil_head *, inet_pfil_head);
 #define	V_inet_pfil_head	VNET(inet_pfil_head)
 #define	PFIL_INET_NAME		"inet"

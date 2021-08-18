@@ -92,14 +92,14 @@ void
 ip6_forward(struct mbuf *m, int srcrt)
 {
 	struct ip6_hdr *ip6 = mtod(m, struct ip6_hdr *);
-	struct sockaddr_in6 dst;
+	struct sockaddr_in6 dst, gw6;
 	struct nhop_object *nh = NULL;
 	int error, type = 0, code = 0;
 	struct mbuf *mcopy = NULL;
 	struct ifnet *origifp;	/* maybe unnecessary */
+	struct ifnet *nifp = NULL;
 	u_int32_t inzone, outzone;
 	struct in6_addr odst;
-	struct m_tag *fwd_tag;
 	char ip6bufs[INET6_ADDRSTRLEN], ip6bufd[INET6_ADDRSTRLEN];
 
 	/*
@@ -352,30 +352,35 @@ again:
 		goto out;
 	}
 	/* Or forward to some other address? */
-	if ((m->m_flags & M_IP6_NEXTHOP) &&
-	    (fwd_tag = m_tag_find(m, PACKET_TAG_IPFORWARD, NULL)) != NULL) {
-		struct sockaddr_in6 *gw6 = (struct sockaddr_in6 *)(fwd_tag + 1);
-
+	if (IP6_HAS_NEXTHOP(m) && !ip6_get_fwdtag(m, &gw6, &nifp)) {
 		/* Update address and scopeid. Assume scope is embedded */
-		dst.sin6_scope_id = ntohs(in6_getscope(&gw6->sin6_addr));
-		dst.sin6_addr = gw6->sin6_addr;
+		dst.sin6_scope_id = ntohs(in6_getscope(&gw6.sin6_addr));
+		dst.sin6_addr = gw6.sin6_addr;
 		in6_clearscope(&dst.sin6_addr);
 
 		m->m_flags |= M_SKIP_FIREWALL;
-		m->m_flags &= ~M_IP6_NEXTHOP;
-		m_tag_delete(m, fwd_tag);
+		ip6_flush_fwdtag(m);
 		NH_FREE(nh);
-		goto again;
+		if (!nifp)
+			goto again;
+		/* XXX for safety but not sure */
+		if ((nifp->if_flags & IFF_LOOPBACK) != 0)
+			origifp = m->m_pkthdr.rcvif;
+		else
+			origifp = nifp;
 	}
 
 pass:
+	if (!nifp)
+		nifp = nh->nh_ifp;
+
 	/* See if the size was changed by the packet filter. */
 	/* TODO: change to nh->nh_mtu */
-	if (m->m_pkthdr.len > IN6_LINKMTU(nh->nh_ifp)) {
-		in6_ifstat_inc(nh->nh_ifp, ifs6_in_toobig);
+	if (m->m_pkthdr.len > IN6_LINKMTU(nifp)) {
+		in6_ifstat_inc(nifp, ifs6_in_toobig);
 		if (mcopy)
 			icmp6_error(mcopy, ICMP6_PACKET_TOO_BIG, 0,
-			    IN6_LINKMTU(nh->nh_ifp));
+			    IN6_LINKMTU(nifp));
 		goto bad;
 	}
 
@@ -384,13 +389,13 @@ pass:
 		in6_set_unicast_scopeid(&dst.sin6_addr, dst.sin6_scope_id);
 		dst.sin6_scope_id = 0;
 	}
-	error = nd6_output_ifp(nh->nh_ifp, origifp, m, &dst, NULL);
+	error = nd6_output_ifp(nifp, origifp, m, &dst, NULL);
 	if (error) {
-		in6_ifstat_inc(nh->nh_ifp, ifs6_out_discard);
+		in6_ifstat_inc(nifp, ifs6_out_discard);
 		IP6STAT_INC(ip6s_cantforward);
 	} else {
 		IP6STAT_INC(ip6s_forward);
-		in6_ifstat_inc(nh->nh_ifp, ifs6_out_forward);
+		in6_ifstat_inc(nifp, ifs6_out_forward);
 		if (type)
 			IP6STAT_INC(ip6s_redirectsent);
 		else {
