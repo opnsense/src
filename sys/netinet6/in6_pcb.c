@@ -1311,7 +1311,7 @@ in6_pcblookup(struct inpcbinfo *pcbinfo, struct in6_addr *faddr, u_int fport,
 	 */
 #ifdef PCBGROUP
 #ifdef RSS
-	if (!rss_get_enabled()) {
+	if (!rss_get_enabled())
 #endif
 	if (in_pcbgroup_enabled(pcbinfo)) {
 		pcbgroup = in6_pcbgroup_bytuple(pcbinfo, laddr, lport, faddr,
@@ -1319,9 +1319,6 @@ in6_pcblookup(struct inpcbinfo *pcbinfo, struct in6_addr *faddr, u_int fport,
 		return (in6_pcblookup_group(pcbinfo, pcbgroup, faddr, fport,
 		    laddr, lport, lookupflags, ifp));
 	}
-#ifdef RSS
-	}
-#endif
 #endif
 	return (in6_pcblookup_hash(pcbinfo, faddr, fport, laddr, lport,
 	    lookupflags, ifp));
