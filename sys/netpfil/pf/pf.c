@@ -3347,10 +3347,7 @@ pf_test_rule(struct pf_rule **rm, struct pf_state **sm, int direction,
 		KASSERT(nk != NULL, ("%s: null nk", __func__));
 
 		if (nr->log) {
-			u_short natreason;
-
-			REASON_SET(&natreason, PFRES_MATCH);
-			PFLOG_PACKET(kif, m, af, direction, natreason, nr, a,
+			PFLOG_PACKET(kif, m, af, direction, PFRES_MATCH, nr, a,
 			    ruleset, pd, 1);
 		}
 
