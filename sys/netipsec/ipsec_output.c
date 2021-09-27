@@ -338,7 +338,7 @@ setdf:
 	if (m_length(m, NULL) + hlen > pmtu) {
 		/*
 		 * If we're forwarding generate ICMP message here,
-		 * so that it contains pmtu substraced by header size.
+		 * so that it contains pmtu subtraced by header size.
 		 * Set error to EINPROGRESS, in order for the frame
 		 * to be dropped silently.
 		 */
@@ -720,7 +720,7 @@ ipsec6_check_pmtu(struct mbuf *m, struct secpolicy *sp, int forwarding)
 	if (m_length(m, NULL) + hlen > pmtu) {
 		/*
 		 * If we're forwarding generate ICMPv6 message here,
-		 * so that it contains pmtu substracted by header size.
+		 * so that it contains pmtu subtracted by header size.
 		 * Set error to EINPROGRESS, in order for the frame
 		 * to be dropped silently.
 		 */
