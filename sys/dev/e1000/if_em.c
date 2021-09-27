@@ -1507,7 +1507,6 @@ em_msix_link(void *arg)
 {
 	struct adapter *adapter = arg;
 	u32 reg_icr;
-	bool notlink = false;
 
 	++adapter->link_irq;
 	MPASS(adapter->hw.back != NULL);
@@ -1518,17 +1517,14 @@ em_msix_link(void *arg)
 
 	if (reg_icr & (E1000_ICR_RXSEQ | E1000_ICR_LSC))
 		em_handle_link(adapter->ctx);
-	else
-		notlink = true;
 
-	/* Re-arm for other/spurious interrupts */
-	if (notlink && adapter->hw.mac.type >= igb_mac_min) {
+	/* Re-arm unconditionally */
+	if (adapter->hw.mac.type >= igb_mac_min) {
 		E1000_WRITE_REG(&adapter->hw, E1000_IMS, E1000_IMS_LSC);
 		E1000_WRITE_REG(&adapter->hw, E1000_EIMS, adapter->link_mask);
 	} else if (adapter->hw.mac.type == e1000_82574) {
-		if (notlink)
-			E1000_WRITE_REG(&adapter->hw, E1000_IMS, E1000_IMS_LSC |
-			    E1000_IMS_OTHER);
+		E1000_WRITE_REG(&adapter->hw, E1000_IMS, E1000_IMS_LSC |
+		    E1000_IMS_OTHER);
 		/*
 		 * Because we must read the ICR for this interrupt it may
 		 * clear other causes using autoclear, for this reason we
@@ -1536,7 +1532,8 @@ em_msix_link(void *arg)
 		 */
 		if (reg_icr)
 			E1000_WRITE_REG(&adapter->hw, E1000_ICS, adapter->ims);
-	}
+	} else
+		E1000_WRITE_REG(&adapter->hw, E1000_IMS, E1000_IMS_LSC);
 
 	return (FILTER_HANDLED);
 }
@@ -1867,13 +1864,6 @@ em_if_update_admin_status(if_ctx_t ctx)
 
 	if (hw->mac.type < em_mac_min)
 		lem_smartspeed(adapter);
-	else if (hw->mac.type >= igb_mac_min &&
-	    adapter->intr_type == IFLIB_INTR_MSIX) {
-		E1000_WRITE_REG(&adapter->hw, E1000_IMS, E1000_IMS_LSC);
-		E1000_WRITE_REG(&adapter->hw, E1000_EIMS, adapter->link_mask);
-	} else if (hw->mac.type == e1000_82574 &&
-	    adapter->intr_type == IFLIB_INTR_MSIX)
-		E1000_WRITE_REG(hw, E1000_IMS, E1000_IMS_LSC | E1000_IMS_OTHER);
 }
 
 static void
