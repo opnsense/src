@@ -1427,11 +1427,11 @@ xgbe_phy_sfp_signals(struct xgbe_prv_data *pdata)
 	axgbe_printf(3, "%s: befor sfp_mod:%d sfp_gpio_address:0x%x\n",
 	    __func__, phy_data->sfp_mod_absent, phy_data->sfp_gpio_address);
 
-    ret = xgbe_phy_sfp_get_mux(pdata);
-    if (ret) {
-        axgbe_error("I2C error setting SFP MUX\n");
-        return;
-    }
+	ret = xgbe_phy_sfp_get_mux(pdata);
+	if (ret) {
+		axgbe_error("I2C error setting SFP MUX\n");
+		return;
+	}
 
 	gpio_reg = 0;
 	ret = xgbe_phy_i2c_read(pdata, phy_data->sfp_gpio_address, &gpio_reg,
@@ -1455,7 +1455,7 @@ xgbe_phy_sfp_signals(struct xgbe_prv_data *pdata)
 	    __func__, phy_data->sfp_mod_absent, phy_data->sfp_gpio_inputs);
 
 put_mux:
-    xgbe_phy_sfp_put_mux(pdata);
+	xgbe_phy_sfp_put_mux(pdata);
 }
 
 static void
