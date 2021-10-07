@@ -252,7 +252,7 @@ ip6_init(void)
 	V_ip6_desync_factor = arc4random() % MAX_TEMP_DESYNC_FACTOR;
 
 #ifdef RSS
-	if (rss_get_enabled()) {
+	if (!rss_get_enabled()) {
 		ip6_nh.nh_m2cpuid = NULL;
 		ip6_nh.nh_policy = NETISR_POLICY_FLOW;
 		ip6_nh.nh_dispatch = NETISR_DISPATCH_DEFAULT;
