@@ -1611,6 +1611,7 @@ axgbe_sysctl_init(struct xgbe_prv_data *pdata)
 	pdata->sysctl_xpcs_mmd = 1;
 	pdata->sysctl_xpcs_reg = 0;
 	pdata->link_workaround = 1;
+	pdata->enable_rss = 1;
 
 	SYSCTL_ADD_UINT(clist, top, OID_AUTO, "axgbe_debug_level", CTLFLAG_RWTUN,
 	    &pdata->debug_level, 0, "axgbe log level -- higher is verbose");
