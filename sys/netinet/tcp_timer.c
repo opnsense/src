@@ -212,11 +212,13 @@ inp_to_cpuid(struct inpcb *inp)
 
 	if (per_cpu_timers) {
 #ifdef	RSS
+		if (rss_get_enabled()) {
 		cpuid = rss_hash2cpuid(inp->inp_flowid, inp->inp_flowtype);
 		if (cpuid == NETISR_CPUID_NONE)
 			return (curcpu);	/* XXX */
 		else
 			return (cpuid);
+		}
 #endif
 		/*
 		 * We don't have a flowid -> cpuid mapping, so cheat and

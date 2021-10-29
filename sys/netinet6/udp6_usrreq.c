@@ -945,7 +945,11 @@ udp6_output(struct socket *so, int flags_arg, struct mbuf *m,
 
 	flags = 0;
 #if defined(ROUTE_MPATH) || defined(RSS)
+#ifdef RSS
+	if (rss_get_enabled() || CALC_FLOWID_OUTBOUND_SENDTO) {
+#else
 	if (CALC_FLOWID_OUTBOUND_SENDTO) {
+#endif
 		uint32_t hash_type, hash_val;
 		uint8_t pr;
 

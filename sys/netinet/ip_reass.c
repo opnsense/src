@@ -509,6 +509,7 @@ ip_reass(struct mbuf *m)
 	IPQ_UNLOCK(hash);
 
 #ifdef	RSS
+	if (rss_get_enabled()) {
 	/*
 	 * Query the RSS layer for the flowid / flowtype for the
 	 * mbuf payload.
@@ -537,6 +538,7 @@ ip_reass(struct mbuf *m)
 	 */
 	netisr_dispatch(NETISR_IP_DIRECT, m);
 	return (NULL);
+	}
 #endif
 
 	/* Handle in-line */
