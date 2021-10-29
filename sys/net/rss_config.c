@@ -467,7 +467,6 @@ rss_getkey(uint8_t *key)
 	}
 	
 	bcopy(rss_key, key, sizeof(rss_key));
-
 }
 
 /*
