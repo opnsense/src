@@ -342,9 +342,18 @@ ip_vnet_init(void *arg __unused)
 		printf("%s: WARNING: unable to register output helper hook\n",
 		    __func__);
 
+#ifdef RSS
+	if (!rss_get_enabled()) {
+		ip_nh.nh_m2cpuid = NULL;
+		ip_nh.nh_policy = NETISR_POLICY_FLOW;
+		ip_nh.nh_dispatch = NETISR_DISPATCH_DEFAULT;
+	}
+#endif
+
 #ifdef VIMAGE
 	netisr_register_vnet(&ip_nh);
 #ifdef	RSS
+	if (rss_get_enabled())
 	netisr_register_vnet(&ip_direct_nh);
 #endif
 #endif
@@ -375,8 +384,17 @@ ip_init(const void *unused __unused)
 	IPPROTO_REGISTER(IPPROTO_SCTP, sctp_input, sctp_ctlinput);
 #endif
 
+#ifdef RSS
+	if (!rss_get_enabled()) {
+		ip_nh.nh_m2cpuid = NULL;
+		ip_nh.nh_policy = NETISR_POLICY_FLOW;
+		ip_nh.nh_dispatch = NETISR_DISPATCH_DEFAULT;
+	}
+#endif
+
 	netisr_register(&ip_nh);
 #ifdef	RSS
+	if (rss_get_enabled())
 	netisr_register(&ip_direct_nh);
 #endif
 }
@@ -389,6 +407,7 @@ ip_destroy(void *unused __unused)
 	int error;
 
 #ifdef	RSS
+	if (rss_get_enabled())
 	netisr_unregister_vnet(&ip_direct_nh);
 #endif
 	netisr_unregister_vnet(&ip_nh);

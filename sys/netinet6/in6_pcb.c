@@ -100,6 +100,9 @@
 #include <net/if_types.h>
 #include <net/route.h>
 #include <net/route/nhop.h>
+#ifdef RSS
+#include <net/rss_config.h>
+#endif
 #include <net/vnet.h>
 
 #include <netinet/in.h>
