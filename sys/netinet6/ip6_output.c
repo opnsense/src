@@ -1962,7 +1962,7 @@ do {									\
 					if (!rss_get_enabled())
 						break;
 					if ((optval >= 0) &&
-						(optval < rss_getnumbuckets())) {
+					    (optval < rss_getnumbuckets())) {
 						INP_WLOCK(inp);
 						inp->inp_rss_listen_bucket = optval;
 						OPTSET2_N(INP_RSS_BUCKET_SET, 1);
