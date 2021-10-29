@@ -755,6 +755,12 @@ static void
 ether_init(__unused void *arg)
 {
 
+#ifdef RSS
+	if (!rss_get_enabled()) {
+		ether_nh.nh_m2cpuid = NULL;
+		ether_nh.nh_policy = NETISR_POLICY_SOURCE;
+	}
+#endif
 	netisr_register(&ether_nh);
 }
 SYSINIT(ether, SI_SUB_INIT_IF, SI_ORDER_ANY, ether_init, NULL);

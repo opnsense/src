@@ -147,6 +147,8 @@ in_pcbgroup_init(struct inpcbinfo *pcbinfo, u_int hashfields,
 		return;
 
 #ifdef RSS
+	if (!rss_get_enabled())
+		return;
 	/*
 	 * If we're using RSS, then RSS determines the number of connection
 	 * groups to use: one connection group per RSS bucket.  If for some
