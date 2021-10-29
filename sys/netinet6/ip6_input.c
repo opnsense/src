@@ -274,10 +274,19 @@ ip6_vnet_init(void *arg __unused)
 	    (V_ip6_temp_preferred_lifetime >> 3);
 	V_ip6_desync_factor = arc4random() % V_ip6_temp_max_desync_factor;
 
+#ifdef RSS
+	if (!rss_get_enabled()) {
+		ip6_nh.nh_m2cpuid = NULL;
+		ip6_nh.nh_policy = NETISR_POLICY_FLOW;
+		ip6_nh.nh_dispatch = NETISR_DISPATCH_DEFAULT;
+	}
+#endif
+
 	/* Skip global initialization stuff for non-default instances. */
 #ifdef VIMAGE
 	netisr_register_vnet(&ip6_nh);
 #ifdef RSS
+	if (rss_get_enabled())
 	netisr_register_vnet(&ip6_direct_nh);
 #endif
 #endif
@@ -310,8 +319,17 @@ ip6_init(void *arg __unused)
 	EVENTHANDLER_REGISTER(mbuf_lowmem, frag6_drain, NULL,
 	    LOWMEM_PRI_DEFAULT);
 
+#ifdef RSS
+	if (!rss_get_enabled()) {
+		ip6_nh.nh_m2cpuid = NULL;
+		ip6_nh.nh_policy = NETISR_POLICY_FLOW;
+		ip6_nh.nh_dispatch = NETISR_DISPATCH_DEFAULT;
+	}
+#endif
+
 	netisr_register(&ip6_nh);
 #ifdef RSS
+	if (rss_get_enabled())
 	netisr_register(&ip6_direct_nh);
 #endif
 }
@@ -355,6 +373,7 @@ ip6_destroy(void *unused __unused)
 	int error;
 
 #ifdef RSS
+	if (rss_get_enabled())
 	netisr_unregister_vnet(&ip6_direct_nh);
 #endif
 	netisr_unregister_vnet(&ip6_nh);
@@ -1570,6 +1589,7 @@ ip6_savecontrol(struct inpcb *inp, struct mbuf *m, struct mbuf **mp)
 	}
 
 #ifdef	RSS
+	if (rss_get_enabled())
 	if (inp->inp_flags2 & INP_RECVRSSBUCKETID) {
 		uint32_t flowid, flow_type;
 		uint32_t rss_bucketid;
