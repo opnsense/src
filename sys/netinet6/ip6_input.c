@@ -1543,7 +1543,7 @@ ip6_savecontrol(struct inpcb *inp, struct mbuf *m, struct mbuf **mp)
 
 		if (rss_hash2bucket(flowid, flow_type, &rss_bucketid) == 0) {
 			*mp = sbcreatecontrol((caddr_t) &rss_bucketid,
-			    sizeof(uint32_t), IPV6_RSSBUCKETID, IPPROTO_IPV6);
+			   sizeof(uint32_t), IPV6_RSSBUCKETID, IPPROTO_IPV6);
 			if (*mp)
 				mp = &(*mp)->m_next;
 		}
