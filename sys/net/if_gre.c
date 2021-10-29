@@ -74,6 +74,7 @@ __FBSDID("$FreeBSD$");
 #include <netinet/ip_var.h>
 #ifdef RSS
 #include <netinet/in_rss.h>
+#include <net/rss_config.h>
 #endif
 #endif
 
@@ -651,9 +652,11 @@ gre_flowid(struct gre_softc *sc, struct mbuf *m, uint32_t af)
 #ifdef INET
 	case AF_INET:
 #ifdef RSS
-		flowid = rss_hash_ip4_2tuple(mtod(m, struct ip *)->ip_src,
-		    mtod(m, struct ip *)->ip_dst);
-		break;
+		if (rss_get_enabled()) {
+			flowid = rss_hash_ip4_2tuple(mtod(m, struct ip *)->ip_src,
+			    mtod(m, struct ip *)->ip_dst);
+			break;
+		}
 #endif
 		flowid = mtod(m, struct ip *)->ip_src.s_addr ^
 		    mtod(m, struct ip *)->ip_dst.s_addr;
@@ -662,10 +665,12 @@ gre_flowid(struct gre_softc *sc, struct mbuf *m, uint32_t af)
 #ifdef INET6
 	case AF_INET6:
 #ifdef RSS
-		flowid = rss_hash_ip6_2tuple(
-		    &mtod(m, struct ip6_hdr *)->ip6_src,
-		    &mtod(m, struct ip6_hdr *)->ip6_dst);
-		break;
+		if (rss_get_enabled()) {
+			flowid = rss_hash_ip6_2tuple(
+			    &mtod(m, struct ip6_hdr *)->ip6_src,
+			    &mtod(m, struct ip6_hdr *)->ip6_dst);
+			break;
+		}
 #endif
 		flowid = mtod(m, struct ip6_hdr *)->ip6_src.s6_addr32[3] ^
 		    mtod(m, struct ip6_hdr *)->ip6_dst.s6_addr32[3];

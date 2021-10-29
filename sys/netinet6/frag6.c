@@ -56,6 +56,9 @@ __FBSDID("$FreeBSD$");
 #include <net/netisr.h>
 #include <net/route.h>
 #include <net/vnet.h>
+#ifdef RSS
+#include <net/rss_config.h>
+#endif
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
@@ -840,6 +843,7 @@ postinsert:
 	}
 
 #ifdef RSS
+	if (rss_get_enabled()) {
 	mtag = m_tag_alloc(MTAG_ABI_IPV6, IPV6_TAG_DIRECT, sizeof(*ip6dc),
 	    M_NOWAIT);
 	if (mtag == NULL)
@@ -850,6 +854,7 @@ postinsert:
 	ip6dc->ip6dc_off = offset;
 
 	m_tag_prepend(m, mtag);
+	}
 #endif
 
 	IP6QB_UNLOCK(bucket);
@@ -858,9 +863,11 @@ postinsert:
 
 #ifdef RSS
 	/* Queue/dispatch for reprocessing. */
+	if (rss_get_enabled()) {
 	netisr_dispatch(NETISR_IPV6_DIRECT, m);
 	*mp = NULL;
 	return (IPPROTO_DONE);
+	}
 #endif
 
 	/* Tell launch routine the next header. */
