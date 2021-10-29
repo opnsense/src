@@ -1250,6 +1250,8 @@ ip_ctloutput(struct socket *so, struct sockopt *sopt)
 				break;
 #ifdef RSS
 			case IP_RECVRSSBUCKETID:
+				if (!rss_get_enabled())
+					break;
 				OPTSET2(INP_RECVRSSBUCKETID, optval);
 				break;
 #endif
@@ -1467,6 +1469,8 @@ ip_ctloutput(struct socket *so, struct sockopt *sopt)
 				break;
 #ifdef	RSS
 			case IP_RSSBUCKETID:
+				if (!rss_get_enabled())
+					break;
 				retval = rss_hash2bucket(inp->inp_flowid,
 				    inp->inp_flowtype,
 				    &rss_bucket);

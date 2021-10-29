@@ -1417,7 +1417,11 @@ udp_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *addr,
 		M_HASHTYPE_SET(m, flowtype);
 	}
 #if defined(ROUTE_MPATH) || defined(RSS)
+#ifdef RSS
+	else if (rss_get_enabled() || CALC_FLOWID_OUTBOUND_SENDTO) {
+#else
 	else if (CALC_FLOWID_OUTBOUND_SENDTO) {
+#endif
 		uint32_t hash_val, hash_type;
 
 		hash_val = fib4_calc_packet_hash(laddr, faddr,
