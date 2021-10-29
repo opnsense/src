@@ -241,6 +241,7 @@ rss_init(__unused void *arg)
 				rss_bits = rss_bits - 1;
 			}
 		}
+
 		/*
 		 * Microsoft limits RSS table entries to 128, so apply that
 		 * limit to both auto-detected CPU counts and user-configured
