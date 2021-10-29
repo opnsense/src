@@ -1309,7 +1309,7 @@ ip_ctloutput(struct socket *so, struct sockopt *sopt)
 				if (!rss_get_enabled())
 					break;
 				if ((optval >= 0) &&
-					(optval < rss_getnumbuckets())) {
+				    (optval < rss_getnumbuckets())) {
 					inp->inp_rss_listen_bucket = optval;
 					OPTSET2(INP_RSS_BUCKET_SET, 1);
 				} else {
