@@ -2584,7 +2584,7 @@ in_pcblookup(struct inpcbinfo *pcbinfo, struct in_addr faddr, u_int fport,
 #endif
 	if (in_pcbgroup_enabled(pcbinfo)) {
 		pcbgroup = in_pcbgroup_bytuple(pcbinfo, laddr, lport, faddr,
-			fport);
+		    fport);
 		return (in_pcblookup_group(pcbinfo, pcbgroup, faddr, fport,
 			laddr, lport, lookupflags, ifp));
 	}
