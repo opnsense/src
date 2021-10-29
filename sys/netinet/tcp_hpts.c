@@ -1191,7 +1191,7 @@ hpts_cpuid(struct inpcb *inp, int *failed)
 		return(inp->inp_irq_cpu);
 	}
 	/* If one is set the other must be the same */
-#ifdef	RSS
+#ifdef RSS
 	if (rss_get_enabled()) {
 	cpuid = rss_hash2cpuid(inp->inp_flowid, inp->inp_flowtype);
 	if (cpuid == NETISR_CPUID_NONE)
