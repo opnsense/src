@@ -2010,8 +2010,18 @@ static s32 ixgbe_read_i2c_byte_generic_int(struct ixgbe_hw *hw, u8 byte_offset,
 
 	if (hw->mac.type >= ixgbe_mac_X550)
 		max_retry = 3;
-	if (ixgbe_is_sfp_probe(hw, byte_offset, dev_addr))
+	if (ixgbe_is_sfp_probe(hw, byte_offset, dev_addr)){
 		max_retry = IXGBE_SFP_DETECT_RETRIES;
+	}
+
+	/***
+	 * XXX : Workaround to prevent reading an sfp slot with nothing connected to it.
+	 *       There likely should be some signal to detect an empty slot, trying to keep reading for 1 second on every attempt isn't very practical
+	 *       sfp_probe_timed_out is reset on ixgbe_if_attach_post() which should be triggered on module placement.
+	 */
+	if (hw->sfp_probe_timed_out) {
+		max_retry = 0;
+	}
 
 	do {
 		if (lock && hw->mac.ops.acquire_swfw_sync(hw, swfw_mask))
@@ -2073,6 +2083,8 @@ fail:
 			DEBUGOUT("I2C byte read error.\n");
 
 	} while (retry < max_retry);
+
+	hw->sfp_probe_timed_out = hw->sfp_probe_timed_out || retry == max_retry;
 
 	return status;
 }
