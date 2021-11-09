@@ -4292,6 +4292,8 @@ struct ixgbe_hw {
 	bool allow_unsupported_sfp;
 	bool wol_enabled;
 	bool need_crosstalk_fix;
+	/* XXX flag for workaround to prevent reading an sfp[+] slot with nothing connected to it. */
+	bool sfp_probe_timed_out;
 	u32 fw_rst_cnt;
 	u8 api_branch;
 	u8 api_maj_ver;
