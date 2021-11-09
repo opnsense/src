@@ -1060,6 +1060,11 @@ ixgbe_if_attach_post(if_ctx_t ctx)
 	adapter = iflib_get_softc(ctx);
 	hw = &adapter->hw;
 
+	/**
+	 * XXX: Since we don't seem to be able to flag a missing module, make sure we don't keep reading an i2c bus for something that isn't there
+	 *      sfp_probe_timed_out will be set when i2c probe timeout is reached and will be reset on reinit using this event.
+	 */
+	hw->sfp_probe_timed_out = false;
 
 	if (adapter->intr_type == IFLIB_INTR_LEGACY &&
 		(adapter->feat_cap & IXGBE_FEATURE_LEGACY_IRQ) == 0) {
