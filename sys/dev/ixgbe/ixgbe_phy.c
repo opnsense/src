@@ -2010,9 +2010,8 @@ static s32 ixgbe_read_i2c_byte_generic_int(struct ixgbe_hw *hw, u8 byte_offset,
 
 	if (hw->mac.type >= ixgbe_mac_X550)
 		max_retry = 3;
-	if (ixgbe_is_sfp_probe(hw, byte_offset, dev_addr)){
+	if (ixgbe_is_sfp_probe(hw, byte_offset, dev_addr))
 		max_retry = IXGBE_SFP_DETECT_RETRIES;
-	}
 
 	/***
 	 * XXX : Workaround to prevent reading an sfp slot with nothing connected to it.
@@ -2084,7 +2083,8 @@ fail:
 
 	} while (retry < max_retry);
 
-	hw->sfp_probe_timed_out = hw->sfp_probe_timed_out || retry == max_retry;
+	/* XXX it's probably enough to set this to true since we are in the error path */
+	hw->sfp_probe_timed_out = hw->sfp_probe_timed_out || retry >= max_retry;
 
 	return status;
 }
