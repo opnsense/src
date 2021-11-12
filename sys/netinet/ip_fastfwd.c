@@ -200,7 +200,7 @@ ip_tryforward(struct mbuf *m)
 	struct mbuf *m0 = NULL;
 	struct nhop_object *nh = NULL;
 	struct route ro;
-	struct sockaddr_in *dst = NULL;
+	struct sockaddr_in *dst, ndst;
 	const struct sockaddr *gw;
 	struct in_addr dest, odest, rtdest;
 	uint16_t ip_len, ip_off;
@@ -345,8 +345,8 @@ passin:
 	/*
 	 * Next hop forced by pfil(9) hook?
 	 */
-	if (IP_HAS_NEXTHOP(m) && !ip_get_fwdtag(m, dst, &nifp)) {
-		dest.s_addr = dst->sin_addr.s_addr;
+	if (IP_HAS_NEXTHOP(m) && !ip_get_fwdtag(m, &ndst, &nifp)) {
+		dest.s_addr = ndst.sin_addr.s_addr;
 		ip_flush_fwdtag(m);
 	}
 
@@ -399,8 +399,8 @@ forwardlocal:
 		/*
 		 * Redo route lookup with new destination address
 		 */
-		if (!ip_get_fwdtag(m, dst, &nnifp)) {
-			dest.s_addr = dst->sin_addr.s_addr;
+		if (!ip_get_fwdtag(m, &ndst, &nnifp)) {
+			dest.s_addr = ndst.sin_addr.s_addr;
 			ip_flush_fwdtag(m);
 		}
 		if (!nnifp && dest.s_addr != rtdest.s_addr &&
