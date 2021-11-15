@@ -18,8 +18,10 @@ SUBDIR = \
 	isl \
 	isl12xx \
 	jedec_dimm \
+	max44009 \
 	mux \
 	nxprtc \
+	pcf8591 \
 	rtc8583 \
 	s35390a \
 	smb \
