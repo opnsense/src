@@ -3858,6 +3858,9 @@ keg_fetch_slab(uma_keg_t keg, uma_zone_t zone, int rdomain, const int flags)
 	int aflags, domain;
 	bool rr;
 
+	KASSERT((flags & (M_WAITOK | M_NOVM)) != (M_WAITOK | M_NOVM),
+	    ("%s: invalid flags %#x", __func__, flags));
+
 restart:
 	/*
 	 * Use the keg's policy if upper layers haven't already specified a
@@ -3883,17 +3886,29 @@ restart:
 			return (slab);
 
 		/*
-		 * M_NOVM means don't ask at all!
+		 * M_NOVM is used to break the recursion that can otherwise
+		 * occur if low-level memory management routines use UMA.
 		 */
-		if (flags & M_NOVM)
-			break;
+		if ((flags & M_NOVM) == 0) {
+			slab = keg_alloc_slab(keg, zone, domain, flags, aflags);
+			if (slab != NULL)
+				return (slab);
+		}
 
-		slab = keg_alloc_slab(keg, zone, domain, flags, aflags);
-		if (slab != NULL)
-			return (slab);
-		if (!rr && (flags & M_WAITOK) == 0)
-			break;
-		if (rr && vm_domainset_iter_policy(&di, &domain) != 0) {
+		if (!rr) {
+			if ((flags & M_USE_RESERVE) != 0) {
+				/*
+				 * Drain reserves from other domains before
+				 * giving up or sleeping.  It may be useful to
+				 * support per-domain reserves eventually.
+				 */
+				rdomain = UMA_ANYDOMAIN;
+				goto restart;
+			}
+			if ((flags & M_WAITOK) == 0)
+				break;
+			vm_wait_domain(domain);
+		} else if (vm_domainset_iter_policy(&di, &domain) != 0) {
 			if ((flags & M_WAITOK) != 0) {
 				vm_wait_doms(&keg->uk_dr.dr_policy->ds_mask, 0);
 				goto restart;
@@ -3967,7 +3982,8 @@ zone_import(void *arg, void **bucket, int max, int domain, int flags)
 		dom = &keg->uk_domain[slab->us_domain];
 		do {
 			bucket[i++] = slab_alloc_item(keg, slab);
-			if (dom->ud_free_items <= keg->uk_reserve) {
+			if (keg->uk_reserve > 0 &&
+			    dom->ud_free_items <= keg->uk_reserve) {
 				/*
 				 * Avoid depleting the reserve after a
 				 * successful item allocation, even if
