@@ -1920,7 +1920,9 @@ freevnode(struct vnode *vp)
 	mac_vnode_destroy(vp);
 #endif
 	if (vp->v_pollinfo != NULL) {
+		vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
 		destroy_vpollinfo(vp->v_pollinfo);
+		VOP_UNLOCK(vp);
 		vp->v_pollinfo = NULL;
 	}
 	vp->v_mountedhere = NULL;
@@ -5405,13 +5407,6 @@ extattr_check_cred(struct vnode *vp, int attrnamespace, struct ucred *cred,
 }
 
 #ifdef DEBUG_VFS_LOCKS
-/*
- * This only exists to suppress warnings from unlocked specfs accesses.  It is
- * no longer ok to have an unlocked VFS.
- */
-#define	IGNORE_LOCK(vp) (KERNEL_PANICKED() || (vp) == NULL ||		\
-	(vp)->v_type == VCHR ||	(vp)->v_type == VBAD)
-
 int vfs_badlock_ddb = 1;	/* Drop into debugger on violation. */
 SYSCTL_INT(_debug, OID_AUTO, vfs_badlock_ddb, CTLFLAG_RW, &vfs_badlock_ddb, 0,
     "Drop into debugger on lock violation");
@@ -5471,26 +5466,31 @@ assert_vop_locked(struct vnode *vp, const char *str)
 {
 	int locked;
 
-	if (!IGNORE_LOCK(vp)) {
-		locked = VOP_ISLOCKED(vp);
-		if (locked == 0 || locked == LK_EXCLOTHER)
-			vfs_badlock("is not locked but should be", str, vp);
-	}
+	if (KERNEL_PANICKED() || vp == NULL)
+		return;
+
+	locked = VOP_ISLOCKED(vp);
+	if (locked == 0 || locked == LK_EXCLOTHER)
+		vfs_badlock("is not locked but should be", str, vp);
 }
 
 void
 assert_vop_unlocked(struct vnode *vp, const char *str)
 {
+	if (KERNEL_PANICKED() || vp == NULL)
+		return;
 
-	if (!IGNORE_LOCK(vp) && VOP_ISLOCKED(vp) == LK_EXCLUSIVE)
+	if (VOP_ISLOCKED(vp) == LK_EXCLUSIVE)
 		vfs_badlock("is locked but should not be", str, vp);
 }
 
 void
 assert_vop_elocked(struct vnode *vp, const char *str)
 {
+	if (KERNEL_PANICKED() || vp == NULL)
+		return;
 
-	if (!IGNORE_LOCK(vp) && VOP_ISLOCKED(vp) != LK_EXCLUSIVE)
+	if (VOP_ISLOCKED(vp) != LK_EXCLUSIVE)
 		vfs_badlock("is not exclusive locked but should be", str, vp);
 }
 #endif /* DEBUG_VFS_LOCKS */
@@ -5578,6 +5578,54 @@ vop_fplookup_symlink_debugpost(void *ap __unused, int rc __unused)
 
 	VFS_SMR_ASSERT_ENTERED();
 }
+
+static void
+vop_fsync_debugprepost(struct vnode *vp, const char *name)
+{
+	if (vp->v_type == VCHR)
+		;
+	else if (MNT_EXTENDED_SHARED(vp->v_mount))
+		ASSERT_VOP_LOCKED(vp, name);
+	else
+		ASSERT_VOP_ELOCKED(vp, name);
+}
+
+void
+vop_fsync_debugpre(void *a)
+{
+	struct vop_fsync_args *ap;
+
+	ap = a;
+	vop_fsync_debugprepost(ap->a_vp, "fsync");
+}
+
+void
+vop_fsync_debugpost(void *a, int rc __unused)
+{
+	struct vop_fsync_args *ap;
+
+	ap = a;
+	vop_fsync_debugprepost(ap->a_vp, "fsync");
+}
+
+void
+vop_fdatasync_debugpre(void *a)
+{
+	struct vop_fdatasync_args *ap;
+
+	ap = a;
+	vop_fsync_debugprepost(ap->a_vp, "fsync");
+}
+
+void
+vop_fdatasync_debugpost(void *a, int rc __unused)
+{
+	struct vop_fdatasync_args *ap;
+
+	ap = a;
+	vop_fsync_debugprepost(ap->a_vp, "fsync");
+}
+
 void
 vop_strategy_debugpre(void *ap)
 {

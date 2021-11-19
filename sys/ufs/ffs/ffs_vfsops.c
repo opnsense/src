@@ -956,6 +956,7 @@ ffs_mountfs(odevvp, mp, td)
 
 	devvp = mntfs_allocvp(mp, odevvp);
 	VOP_UNLOCK(odevvp);
+	vn_lock(devvp, LK_EXCLUSIVE | LK_RETRY);
 	KASSERT(devvp->v_type == VCHR, ("reclaimed devvp"));
 	dev = devvp->v_rdev;
 	KASSERT(dev->si_snapdata == NULL, ("non-NULL snapshot data"));
@@ -977,6 +978,7 @@ ffs_mountfs(odevvp, mp, td)
 	BO_LOCK(&odevvp->v_bufobj);
 	odevvp->v_bufobj.bo_flag |= BO_NOBUFS;
 	BO_UNLOCK(&odevvp->v_bufobj);
+	VOP_UNLOCK(devvp);
 	if (dev->si_iosize_max != 0)
 		mp->mnt_iosize_max = dev->si_iosize_max;
 	if (mp->mnt_iosize_max > maxphys)
@@ -1264,6 +1266,7 @@ out:
 	odevvp->v_bufobj.bo_flag &= ~BO_NOBUFS;
 	BO_UNLOCK(&odevvp->v_bufobj);
 	atomic_store_rel_ptr((uintptr_t *)&dev->si_mountpt, 0);
+	vn_lock(devvp, LK_EXCLUSIVE | LK_RETRY);
 	mntfs_freevp(devvp);
 	dev_rel(dev);
 	return (error);
@@ -1459,6 +1462,7 @@ ffs_unmount(mp, mntflags)
 		taskqueue_free(ump->um_trim_tq);
 		free (ump->um_trimhash, M_TRIM);
 	}
+	vn_lock(ump->um_devvp, LK_EXCLUSIVE | LK_RETRY);
 	g_topology_lock();
 	g_vfs_close(ump->um_cp);
 	g_topology_unlock();
@@ -1544,7 +1548,7 @@ ffs_flushfiles(mp, flags, td)
 		 */
 	}
 #endif
-	ASSERT_VOP_LOCKED(ump->um_devvp, "ffs_flushfiles");
+	/* devvp is not locked there */
 	if (ump->um_devvp->v_vflag & VV_COPYONWRITE) {
 		if ((error = vflush(mp, 0, SKIPSYSTEM | flags, td)) != 0)
 			return (error);

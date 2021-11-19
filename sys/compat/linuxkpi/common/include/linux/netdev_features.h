@@ -1,10 +1,8 @@
 /*-
- * Copyright (c) 2010 Isilon Systems, Inc.
- * Copyright (c) 2010 iX Systems, Inc.
- * Copyright (c) 2010 Panasas, Inc.
- * Copyright (c) 2013-2015 Mellanox Technologies, Ltd.
- * Copyright (c) 2014 François Tigeot
- * All rights reserved.
+ * Copyright (c) 2020-2021 The FreeBSD Foundation
+ *
+ * Portions of this software were developed by Björn Zeeb
+ * under sponsorship from the FreeBSD Foundation.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -29,58 +27,22 @@
  *
  * $FreeBSD$
  */
-#ifndef _LINUX_DELAY_H_
-#define	_LINUX_DELAY_H_
+#ifndef	__LKPI_LINUX_NETDEV_FEATURES_H_
+#define	__LKPI_LINUX_NETDEV_FEATURES_H_
 
-#include <linux/jiffies.h>
-#include <sys/systm.h>
+#include <linux/types.h>
+#include <linux/bitops.h>
 
-static inline void
-linux_msleep(unsigned int ms)
-{
-	/* guard against invalid values */
-	if (ms == 0)
-		ms = 1;
-	pause_sbt("lnxsleep", mstosbt(ms), 0, C_HARDCLOCK);
-}
+typedef	uint32_t		netdev_features_t;
 
-#undef msleep
-#define	msleep(ms) linux_msleep(ms)
+#define NETIF_F_HIGHDMA         BIT(0)
+#define NETIF_F_SG              BIT(1)
+#define NETIF_F_IP_CSUM         BIT(2)
+#define NETIF_F_IPV6_CSUM       BIT(3)
+#define NETIF_F_TSO             BIT(4)
+#define NETIF_F_TSO6            BIT(5)
+#define NETIF_F_RXCSUM          BIT(6)
 
-#undef msleep_interruptible
-#define	msleep_interruptible(ms) linux_msleep_interruptible(ms)
+#define NETIF_F_CSUM_MASK       (NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM)
 
-#define	udelay(t)	DELAY(t)
-
-static inline void
-mdelay(unsigned long msecs)
-{
-	while (msecs--)
-		DELAY(1000);
-}
-
-static inline void
-ndelay(unsigned long x)
-{
-	DELAY(howmany(x, 1000));
-}
-
-static inline void
-usleep_range(unsigned long min, unsigned long max)
-{
-	DELAY(min);
-}
-
-extern unsigned int linux_msleep_interruptible(unsigned int ms);
-
-static inline void
-fsleep(unsigned long us)
-{
-
-	if (us < 10)
-		udelay(us);
-	else
-		usleep_range(us, us);
-}
-
-#endif	/* _LINUX_DELAY_H_ */
+#endif	/* __LKPI_LINUX_NETDEV_FEATURES_H_ */

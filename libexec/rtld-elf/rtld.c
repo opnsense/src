@@ -104,6 +104,7 @@ static Obj_Entry *dlopen_object(const char *name, int fd, Obj_Entry *refobj,
 static Obj_Entry *do_load_object(int, const char *, char *, struct stat *, int);
 static int do_search_info(const Obj_Entry *obj, int, struct dl_serinfo *);
 static bool donelist_check(DoneList *, const Obj_Entry *);
+static void dump_auxv(Elf_Auxinfo **aux_info);
 static void errmsg_restore(struct dlerror_save *);
 static struct dlerror_save *errmsg_save(void);
 static void *fill_search_info(const char *, size_t, void *);
@@ -364,6 +365,7 @@ enum {
 	LD_TRACE_LOADED_OBJECTS_FMT1,
 	LD_TRACE_LOADED_OBJECTS_FMT2,
 	LD_TRACE_LOADED_OBJECTS_ALL,
+	LD_SHOW_AUXV,
 };
 
 struct ld_env_var_desc {
@@ -396,6 +398,7 @@ static struct ld_env_var_desc ld_env_vars[] = {
 	LD_ENV_DESC(TRACE_LOADED_OBJECTS_FMT1, false),
 	LD_ENV_DESC(TRACE_LOADED_OBJECTS_FMT2, false),
 	LD_ENV_DESC(TRACE_LOADED_OBJECTS_ALL, false),
+	LD_ENV_DESC(SHOW_AUXV, false),
 };
 
 static const char *
@@ -856,6 +859,9 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
     dbg("checking for required versions");
     if (rtld_verify_versions(&list_main) == -1 && !ld_tracing)
 	rtld_die();
+
+    if (ld_get_env_var(LD_SHOW_AUXV) != NULL)
+       dump_auxv(aux_info);
 
     if (ld_tracing) {		/* We're done */
 	trace_loaded_objects(obj_main);
@@ -6056,6 +6062,82 @@ print_usage(const char *argv0)
 	    "  --        End of RTLD options\n"
 	    "  <binary>  Name of process to execute\n"
 	    "  <args>    Arguments to the executed process\n", argv0);
+}
+
+#define	AUXFMT(at, xfmt) [at] = { .name = #at, .fmt = xfmt }
+static const struct auxfmt {
+	const char *name;
+	const char *fmt;
+} auxfmts[] = {
+	AUXFMT(AT_NULL, NULL),
+	AUXFMT(AT_IGNORE, NULL),
+	AUXFMT(AT_EXECFD, "%ld"),
+	AUXFMT(AT_PHDR, "%p"),
+	AUXFMT(AT_PHENT, "%lu"),
+	AUXFMT(AT_PHNUM, "%lu"),
+	AUXFMT(AT_PAGESZ, "%lu"),
+	AUXFMT(AT_BASE, "%#lx"),
+	AUXFMT(AT_FLAGS, "%#lx"),
+	AUXFMT(AT_ENTRY, "%p"),
+	AUXFMT(AT_NOTELF, NULL),
+	AUXFMT(AT_UID, "%ld"),
+	AUXFMT(AT_EUID, "%ld"),
+	AUXFMT(AT_GID, "%ld"),
+	AUXFMT(AT_EGID, "%ld"),
+	AUXFMT(AT_EXECPATH, "%s"),
+	AUXFMT(AT_CANARY, "%p"),
+	AUXFMT(AT_CANARYLEN, "%lu"),
+	AUXFMT(AT_OSRELDATE, "%lu"),
+	AUXFMT(AT_NCPUS, "%lu"),
+	AUXFMT(AT_PAGESIZES, "%p"),
+	AUXFMT(AT_PAGESIZESLEN, "%lu"),
+	AUXFMT(AT_TIMEKEEP, "%p"),
+	AUXFMT(AT_STACKPROT, "%#lx"),
+	AUXFMT(AT_EHDRFLAGS, "%#lx"),
+	AUXFMT(AT_HWCAP, "%#lx"),
+	AUXFMT(AT_HWCAP2, "%#lx"),
+	AUXFMT(AT_BSDFLAGS, "%#lx"),
+	AUXFMT(AT_ARGC, "%lu"),
+	AUXFMT(AT_ARGV, "%p"),
+	AUXFMT(AT_ENVC, "%p"),
+	AUXFMT(AT_ENVV, "%p"),
+	AUXFMT(AT_PS_STRINGS, "%p"),
+	AUXFMT(AT_FXRNG, "%p"),
+};
+
+static bool
+is_ptr_fmt(const char *fmt)
+{
+	char last;
+
+	last = fmt[strlen(fmt) - 1];
+	return (last == 'p' || last == 's');
+}
+
+static void
+dump_auxv(Elf_Auxinfo **aux_info)
+{
+	Elf_Auxinfo *auxp;
+	const struct auxfmt *fmt;
+	int i;
+
+	for (i = 0; i < AT_COUNT; i++) {
+		auxp = aux_info[i];
+		if (auxp == NULL)
+			continue;
+		fmt = &auxfmts[i];
+		if (fmt->fmt == NULL)
+			continue;
+		rtld_fdprintf(STDOUT_FILENO, "%s:\t", fmt->name);
+		if (is_ptr_fmt(fmt->fmt)) {
+			rtld_fdprintfx(STDOUT_FILENO, fmt->fmt,
+			    auxp->a_un.a_ptr);
+		} else {
+			rtld_fdprintfx(STDOUT_FILENO, fmt->fmt,
+			    auxp->a_un.a_val);
+		}
+		rtld_fdprintf(STDOUT_FILENO, "\n");
+	}
 }
 
 /*

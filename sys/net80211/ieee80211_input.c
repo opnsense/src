@@ -170,7 +170,8 @@ ieee80211_input_mimo_all(struct ieee80211com *ic, struct mbuf *m)
  * XXX should handle 3 concurrent reassemblies per-spec.
  */
 struct mbuf *
-ieee80211_defrag(struct ieee80211_node *ni, struct mbuf *m, int hdrspace)
+ieee80211_defrag(struct ieee80211_node *ni, struct mbuf *m, int hdrspace,
+	int has_decrypted)
 {
 	struct ieee80211vap *vap = ni->ni_vap;
 	struct ieee80211_frame *wh = mtod(m, struct ieee80211_frame *);
@@ -188,6 +189,11 @@ ieee80211_defrag(struct ieee80211_node *ni, struct mbuf *m, int hdrspace)
 	/* Quick way out, if there's nothing to defragment */
 	if (!more_frag && fragno == 0 && ni->ni_rxfrag[0] == NULL)
 		return m;
+
+	/* Temporarily set flag to remember if fragment was encrypted. */
+	/* XXX use a non-packet altering storage for this in the future. */
+	if (has_decrypted)
+		wh->i_fc[1] |= IEEE80211_FC1_PROTECTED;
 
 	/*
 	 * Remove frag to insure it doesn't get reaped by timer.
@@ -219,10 +225,14 @@ ieee80211_defrag(struct ieee80211_node *ni, struct mbuf *m, int hdrspace)
 
 		lwh = mtod(mfrag, struct ieee80211_frame *);
 		last_rxseq = le16toh(*(uint16_t *)lwh->i_seq);
-		/* NB: check seq # and frag together */
+		/*
+		 * NB: check seq # and frag together. Also check that both
+		 * fragments are plaintext or that both are encrypted.
+		 */
 		if (rxseq == last_rxseq+1 &&
 		    IEEE80211_ADDR_EQ(wh->i_addr1, lwh->i_addr1) &&
-		    IEEE80211_ADDR_EQ(wh->i_addr2, lwh->i_addr2)) {
+		    IEEE80211_ADDR_EQ(wh->i_addr2, lwh->i_addr2) &&
+		    !((wh->i_fc[1] ^ lwh->i_fc[1]) & IEEE80211_FC1_PROTECTED)) {
 			/* XXX clear MORE_FRAG bit? */
 			/* track last seqnum and fragno */
 			*(uint16_t *) lwh->i_seq = *(uint16_t *) wh->i_seq;
@@ -252,6 +262,11 @@ ieee80211_defrag(struct ieee80211_node *ni, struct mbuf *m, int hdrspace)
 		ni->ni_rxfragstamp = ticks;
 		ni->ni_rxfrag[0] = mfrag;
 		mfrag = NULL;
+	}
+	/* Remember to clear protected flag that was temporarily set. */
+	if (mfrag != NULL) {
+		wh = mtod(mfrag, struct ieee80211_frame *);
+		wh->i_fc[1] &= ~IEEE80211_FC1_PROTECTED;
 	}
 	return mfrag;
 }
@@ -294,7 +309,8 @@ ieee80211_deliver_data(struct ieee80211vap *vap,
 }
 
 struct mbuf *
-ieee80211_decap(struct ieee80211vap *vap, struct mbuf *m, int hdrlen)
+ieee80211_decap(struct ieee80211vap *vap, struct mbuf *m, int hdrlen,
+	uint8_t qos)
 {
 	struct ieee80211_qosframe_addr4 wh;
 	struct ether_header *eh;
@@ -316,7 +332,9 @@ ieee80211_decap(struct ieee80211vap *vap, struct mbuf *m, int hdrlen)
 	    llc->llc_snap.org_code[1] == 0 && llc->llc_snap.org_code[2] == 0 &&
 	    /* NB: preserve AppleTalk frames that have a native SNAP hdr */
 	    !(llc->llc_snap.ether_type == htons(ETHERTYPE_AARP) ||
-	      llc->llc_snap.ether_type == htons(ETHERTYPE_IPX))) {
+	      llc->llc_snap.ether_type == htons(ETHERTYPE_IPX)) &&
+	    /* Do not want to touch A-MSDU frames. */
+	    !(qos & IEEE80211_QOS_AMSDU)) {
 		m_adj(m, hdrlen + sizeof(struct llc) - sizeof(*eh));
 		llc = NULL;
 	} else {
@@ -364,6 +382,10 @@ ieee80211_decap1(struct mbuf *m, int *framelen)
 #define	FF_LLC_SIZE	(sizeof(struct ether_header) + sizeof(struct llc))
 	struct ether_header *eh;
 	struct llc *llc;
+	const uint8_t llc_hdr_mac[ETHER_ADDR_LEN] = {
+		/* MAC address matching the 802.2 LLC header */
+		LLC_SNAP_LSAP, LLC_SNAP_LSAP, LLC_UI, 0, 0, 0
+	};
 
 	/*
 	 * The frame has an 802.3 header followed by an 802.2
@@ -376,6 +398,15 @@ ieee80211_decap1(struct mbuf *m, int *framelen)
 	if (m->m_len < FF_LLC_SIZE && (m = m_pullup(m, FF_LLC_SIZE)) == NULL)
 		return NULL;
 	eh = mtod(m, struct ether_header *);	/* 802.3 header is first */
+
+	/*
+	 * Detect possible attack where a single 802.11 frame is processed
+	 * as an A-MSDU frame due to an adversary setting the A-MSDU present
+	 * bit in the 802.11 QoS header. [FragAttacks]
+	 */
+	if (memcmp(eh->ether_dhost, llc_hdr_mac, ETHER_ADDR_LEN) == 0)
+		return NULL;
+
 	llc = (struct llc *)&eh[1];		/* 802.2 header follows */
 	*framelen = ntohs(eh->ether_type)	/* encap'd frame size */
 		  + sizeof(struct ether_header) - sizeof(struct llc);

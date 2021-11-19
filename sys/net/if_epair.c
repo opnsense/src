@@ -3,7 +3,6 @@
  *
  * Copyright (c) 2008 The FreeBSD Foundation
  * Copyright (c) 2009-2010 Bjoern A. Zeeb <bz@FreeBSD.org>
- * All rights reserved.
  *
  * This software was developed by CK Software GmbH under sponsorship
  * from the FreeBSD Foundation.
@@ -195,6 +194,19 @@ struct epair_dpcpu {
 						 * data in the ifq. */
 };
 DPCPU_DEFINE(struct epair_dpcpu, epair_dpcpu);
+
+static void
+epair_clear_mbuf(struct mbuf *m)
+{
+	/* Remove any CSUM_SND_TAG as ether_input will barf. */
+	if (m->m_pkthdr.csum_flags & CSUM_SND_TAG) {
+		m_snd_tag_rele(m->m_pkthdr.snd_tag);
+		m->m_pkthdr.snd_tag = NULL;
+		m->m_pkthdr.csum_flags &= ~CSUM_SND_TAG;
+	}
+
+	m_tag_delete_nonpersistent(m);
+}
 
 static void
 epair_dpcpu_init(void)
@@ -435,6 +447,8 @@ epair_start_locked(struct ifnet *ifp)
 		}
 		DPRINTF("packet %s -> %s\n", ifp->if_xname, oifp->if_xname);
 
+		epair_clear_mbuf(m);
+
 		/*
 		 * Add a reference so the interface cannot go while the
 		 * packet is in transit as we rely on rcvif to stay valid.
@@ -556,6 +570,9 @@ epair_transmit_locked(struct ifnet *ifp, struct mbuf *m)
 			(void)epair_add_ifp_for_draining(ifp);
 		return (error);
 	}
+
+	epair_clear_mbuf(m);
+
 	sc = oifp->if_softc;
 	/*
 	 * Add a reference so the interface cannot go while the
