@@ -1482,6 +1482,71 @@ xgbe_phy_sfp_reset(struct xgbe_phy_data *phy_data)
 }
 
 static void
+xgbe_log_gpio_expander(struct xgbe_prv_data *pdata)
+{
+	struct xgbe_phy_data *phy_data = pdata->phy_data;
+	uint8_t gpio_reg, gpio_ports[2];
+	unsigned int sfp_gpio_outputs;
+	unsigned int sfp_gpio_polarity;
+	unsigned int sfp_gpio_configuration;
+	int ret;
+
+	axgbe_printf(0, "%s: Input port registers: 0x%x\n", __func__, phy_data->sfp_gpio_inputs);
+
+	ret = xgbe_phy_sfp_get_mux(pdata);
+	if (ret) {
+		axgbe_error("I2C error setting SFP MUX\n");
+		return;
+	}
+
+	gpio_reg = 2;
+	ret = xgbe_phy_i2c_read(pdata, phy_data->sfp_gpio_address, &gpio_reg,
+	    sizeof(gpio_reg), gpio_ports, sizeof(gpio_ports));
+	if (ret) {
+		axgbe_error("%s: I2C error reading GPIO Output register:0x%x\n",
+		    __func__, phy_data->sfp_gpio_address);
+		goto put_mux;
+	}
+
+	sfp_gpio_outputs = (gpio_ports[1] << 8) | gpio_ports[0];
+
+	axgbe_printf(0, "%s: Output port registers: 0x%x\n", __func__, sfp_gpio_outputs);
+
+	memset(gpio_ports, 0, 2);
+
+	gpio_reg = 4;
+	ret = xgbe_phy_i2c_read(pdata, phy_data->sfp_gpio_address, &gpio_reg,
+	    sizeof(gpio_reg), gpio_ports, sizeof(gpio_ports));
+	if (ret) {
+		axgbe_error("%s: I2C error reading GPIO Polarity register:0x%x\n",
+		    __func__, phy_data->sfp_gpio_address);
+		goto put_mux;
+	}
+
+	sfp_gpio_polarity = (gpio_ports[1] << 8) | gpio_ports[0];
+
+	axgbe_printf(0, "%s: Polarity port registers: 0x%x\n", __func__, sfp_gpio_polarity);
+
+	memset(gpio_ports, 0, 2);
+
+	gpio_reg = 6;
+	ret = xgbe_phy_i2c_read(pdata, phy_data->sfp_gpio_address, &gpio_reg,
+	    sizeof(gpio_reg), gpio_ports, sizeof(gpio_ports));
+	if (ret) {
+		axgbe_error("%s: I2C error reading GPIO Configuration register:0x%x\n",
+		    __func__, phy_data->sfp_gpio_address);
+		goto put_mux;
+	}
+
+	sfp_gpio_configuration = (gpio_ports[1] << 8) | gpio_ports[0];
+
+	axgbe_printf(0, "%s: Configuration port registers: 0x%x\n", __func__, sfp_gpio_configuration);
+
+put_mux:
+	xgbe_phy_sfp_put_mux(pdata);
+}
+
+static void
 xgbe_phy_sfp_detect(struct xgbe_prv_data *pdata)
 {
 	struct xgbe_phy_data *phy_data = pdata->phy_data;
@@ -1504,7 +1569,7 @@ xgbe_phy_sfp_detect(struct xgbe_prv_data *pdata)
 	if (ret) {
 		/* Treat any error as if there isn't an SFP plugged in */
 		axgbe_error("%s: eeprom read failed\n", __func__);
-		axgbe_printf(0, "%s: GPIO inputs: 0x%x\n", __func__, phy_data->sfp_gpio_inputs);
+		xgbe_log_gpio_expander(pdata);
 		xgbe_phy_sfp_reset(phy_data);
 		xgbe_phy_sfp_mod_absent(pdata);
 		goto put;
