@@ -1504,6 +1504,7 @@ xgbe_phy_sfp_detect(struct xgbe_prv_data *pdata)
 	if (ret) {
 		/* Treat any error as if there isn't an SFP plugged in */
 		axgbe_error("%s: eeprom read failed\n", __func__);
+		axgbe_printf(0, "%s: GPIO inputs: 0x%x\n", __func__, phy_data->sfp_gpio_inputs);
 		xgbe_phy_sfp_reset(phy_data);
 		xgbe_phy_sfp_mod_absent(pdata);
 		goto put;
