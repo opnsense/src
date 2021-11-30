@@ -1397,7 +1397,8 @@ next_page:
 				 */
 				vm_page_aflag_set(tm, PGA_REFERENCED);
 			}
-			vm_page_busy_sleep(tm, "madvpo", false);
+			if (!vm_page_busy_sleep(tm, "madvpo", 0))
+				VM_OBJECT_WUNLOCK(tobject);
   			goto relookup;
 		}
 		vm_page_advise(tm, advice);
@@ -1581,7 +1582,8 @@ retry:
 		 */
 		if (vm_page_tryxbusy(m) == 0) {
 			VM_OBJECT_WUNLOCK(new_object);
-			vm_page_sleep_if_busy(m, "spltwt");
+			if (vm_page_busy_sleep(m, "spltwt", 0))
+				VM_OBJECT_WLOCK(orig_object);
 			VM_OBJECT_WLOCK(new_object);
 			goto retry;
 		}
@@ -1667,14 +1669,17 @@ vm_object_collapse_scan_wait(vm_object_t object, vm_page_t p)
 		VM_OBJECT_WUNLOCK(object);
 		VM_OBJECT_WUNLOCK(backing_object);
 		vm_radix_wait();
+		VM_OBJECT_WLOCK(object);
+	} else if (p->object == object) {
+		VM_OBJECT_WUNLOCK(backing_object);
+		if (vm_page_busy_sleep(p, "vmocol", 0))
+			VM_OBJECT_WLOCK(object);
 	} else {
-		if (p->object == object)
+		VM_OBJECT_WUNLOCK(object);
+		if (!vm_page_busy_sleep(p, "vmocol", 0))
 			VM_OBJECT_WUNLOCK(backing_object);
-		else
-			VM_OBJECT_WUNLOCK(object);
-		vm_page_busy_sleep(p, "vmocol", false);
+		VM_OBJECT_WLOCK(object);
 	}
-	VM_OBJECT_WLOCK(object);
 	VM_OBJECT_WLOCK(backing_object);
 	return (TAILQ_FIRST(&backing_object->memq));
 }
@@ -2095,6 +2100,21 @@ again:
 		next = TAILQ_NEXT(p, listq);
 
 		/*
+		 * Skip invalid pages if asked to do so.  Try to avoid acquiring
+		 * the busy lock, as some consumers rely on this to avoid
+		 * deadlocks.
+		 *
+		 * A thread may concurrently transition the page from invalid to
+		 * valid using only the busy lock, so the result of this check
+		 * is immediately stale.  It is up to consumers to handle this,
+		 * for instance by ensuring that all invalid->valid transitions
+		 * happen with a mutex held, as may be possible for a
+		 * filesystem.
+		 */
+		if ((options & OBJPR_VALIDONLY) != 0 && vm_page_none_valid(p))
+			continue;
+
+		/*
 		 * If the page is wired for any reason besides the existence
 		 * of managed, wired mappings, then it cannot be freed.  For
 		 * example, fictitious pages, which represent device memory,
@@ -2103,8 +2123,13 @@ again:
 		 * not specified.
 		 */
 		if (vm_page_tryxbusy(p) == 0) {
-			vm_page_sleep_if_busy(p, "vmopar");
+			if (vm_page_busy_sleep(p, "vmopar", 0))
+				VM_OBJECT_WLOCK(object);
 			goto again;
+		}
+		if ((options & OBJPR_VALIDONLY) != 0 && vm_page_none_valid(p)) {
+			vm_page_xunbusy(p);
+			continue;
 		}
 		if (vm_page_wired(p)) {
 wired:
@@ -2407,7 +2432,10 @@ again:
 					VM_OBJECT_RUNLOCK(tobject);
 				tobject = t1object;
 			}
-			vm_page_busy_sleep(tm, "unwbo", true);
+			tobject = tm->object;
+			if (!vm_page_busy_sleep(tm, "unwbo",
+			    VM_ALLOC_IGN_SBUSY))
+				VM_OBJECT_RUNLOCK(tobject);
 			goto again;
 		}
 		vm_page_unwire(tm, queue);

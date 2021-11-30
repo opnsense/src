@@ -6817,9 +6817,14 @@ nfsrv_layoutget(struct nfsrv_descript *nd, vnode_t vp, struct nfsexstuff *exp,
 			NFSD_DEBUG(1, "ret layout too small\n");
 			return (NFSERR_TOOSMALL);
 		}
-		if (*iomode == NFSLAYOUTIOMODE_RW)
+		if (*iomode == NFSLAYOUTIOMODE_RW) {
+			if ((lyp->lay_flags & NFSLAY_NOSPC) != 0) {
+				NFSUNLOCKLAYOUT(lhyp);
+				NFSD_DEBUG(1, "ret layout nospace\n");
+				return (NFSERR_NOSPC);
+			}
 			lyp->lay_flags |= NFSLAY_RW;
-		else
+		} else
 			lyp->lay_flags |= NFSLAY_READ;
 		NFSBCOPY(lyp->lay_xdr, layp, lyp->lay_layoutlen);
 		*layoutlenp = lyp->lay_layoutlen;
@@ -6892,6 +6897,7 @@ nfsrv_filelayout(struct nfsrv_descript *nd, int iomode, fhandle_t *fhp,
 	NFSBCOPY(fhp, &lyp->lay_fh, sizeof(*fhp));
 	lyp->lay_clientid.qval = nd->nd_clientid.qval;
 	lyp->lay_fsid = fs;
+	NFSBCOPY(devid, lyp->lay_deviceid, NFSX_V4DEVICEID);
 
 	/* Fill in the xdr for the files layout. */
 	tl = (uint32_t *)lyp->lay_xdr;
@@ -6941,6 +6947,7 @@ nfsrv_flexlayout(struct nfsrv_descript *nd, int iomode, int mirrorcnt,
 	lyp->lay_clientid.qval = nd->nd_clientid.qval;
 	lyp->lay_fsid = fs;
 	lyp->lay_mirrorcnt = mirrorcnt;
+	NFSBCOPY(devid, lyp->lay_deviceid, NFSX_V4DEVICEID);
 
 	/* Fill in the xdr for the files layout. */
 	tl = (uint32_t *)lyp->lay_xdr;
@@ -7015,6 +7022,10 @@ nfsrv_flexlayouterr(struct nfsrv_descript *nd, uint32_t *layp, int maxcnt,
 			if (stat != NFSERR_ACCES && stat != NFSERR_STALE &&
 			    stat != NFSERR_NOSPC)
 				nfsrv_delds(devid, p);
+
+			/* For NFSERR_NOSPC, mark all devids and layouts. */
+			if (stat == NFSERR_NOSPC)
+				nfsrv_marknospc(devid, true);
 		}
 	}
 }
@@ -7389,6 +7400,7 @@ nfsrv_addlayout(struct nfsrv_descript *nd, struct nfslayout **lypp,
 	/* Insert the new layout in the lists. */
 	*lypp = NULL;
 	atomic_add_int(&nfsrv_layoutcnt, 1);
+	nfsstatsv1.srvlayouts++;
 	NFSBCOPY(lyp->lay_xdr, layp, lyp->lay_layoutlen);
 	*layoutlenp = lyp->lay_layoutlen;
 	TAILQ_INSERT_HEAD(&lhyp->list, lyp, lay_list);
@@ -7481,6 +7493,7 @@ nfsrv_freelayout(struct nfslayouthead *lhp, struct nfslayout *lyp)
 
 	NFSD_DEBUG(4, "Freelayout=%p\n", lyp);
 	atomic_add_int(&nfsrv_layoutcnt, -1);
+	nfsstatsv1.srvlayouts--;
 	TAILQ_REMOVE(lhp, lyp, lay_list);
 	free(lyp, M_NFSDSTATE);
 }
@@ -8772,4 +8785,42 @@ nfsrv_findmirroredds(struct nfsmount *nmp)
 		return (NULL);
 	}
 	return (fndds);
+}
+
+/*
+ * Mark the appropriate devid and all associated layout as "out of space".
+ */
+void
+nfsrv_marknospc(char *devid, bool setit)
+{
+	struct nfsdevice *ds;
+	struct nfslayout *lyp;
+	struct nfslayouthash *lhyp;
+	int i;
+
+	NFSDDSLOCK();
+	TAILQ_FOREACH(ds, &nfsrv_devidhead, nfsdev_list) {
+		if (NFSBCMP(ds->nfsdev_deviceid, devid, NFSX_V4DEVICEID) == 0) {
+			NFSD_DEBUG(1, "nfsrv_marknospc: devid %d\n", setit);
+			ds->nfsdev_nospc = setit;
+		}
+	}
+	NFSDDSUNLOCK();
+
+	for (i = 0; i < nfsrv_layouthashsize; i++) {
+		lhyp = &nfslayouthash[i];
+		NFSLOCKLAYOUT(lhyp);
+		TAILQ_FOREACH(lyp, &lhyp->list, lay_list) {
+			if (NFSBCMP(lyp->lay_deviceid, devid,
+			    NFSX_V4DEVICEID) == 0) {
+				NFSD_DEBUG(1, "nfsrv_marknospc: layout %d\n",
+				    setit);
+				if (setit)
+					lyp->lay_flags |= NFSLAY_NOSPC;
+				else
+					lyp->lay_flags &= ~NFSLAY_NOSPC;
+			}
+		}
+		NFSUNLOCKLAYOUT(lhyp);
+	}
 }

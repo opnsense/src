@@ -36,6 +36,11 @@
 #   xargs -n1 | sort | uniq -d;
 # done
 
+# 20211115: vm_page busy functions removed
+OLD_FILES+=share/man/man9/vm_page_sbusy.9.gz
+OLD_FILES+=share/man/man9/vm_page_xbusy.9.gz
+OLD_FILES+=share/man/man9/vm_page_sleep_if_busy.9.gz
+
 # 20210923: rename boot(9) to kern_reboot(9)
 OLD_FILES+=usr/share/man/man9/boot.9.gz
 
