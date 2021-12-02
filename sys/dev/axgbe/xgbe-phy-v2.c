@@ -2132,6 +2132,29 @@ xgbe_phy_set_redrv_mode(struct xgbe_prv_data *pdata)
 }
 
 static void
+xgbe_phy_rx_reset(struct xgbe_prv_data *pdata)
+{
+	int reg;
+
+	reg = XMDIO_READ_BITS(pdata, MDIO_MMD_PCS, MDIO_PCS_DIGITAL_STAT,
+			     XGBE_PCS_PSEQ_STATE_MASK);
+
+	if (reg == XGBE_PCS_PSEQ_STATE_POWER_GOOD) {
+		/* Mailbox command timed out, reset of RX block is required.
+		 * This can be done by asserting the reset bit and waiting
+		 * for its completion.
+		 */
+		XMDIO_WRITE_BITS(pdata, MDIO_MMD_PMAPMD, MDIO_PMA_RX_CTRL1,
+				XGBE_PMA_RX_RST_0_MASK, XGBE_PMA_RX_RST_0_RESET_ON);
+		DELAY(20);
+		XMDIO_WRITE_BITS(pdata, MDIO_MMD_PMAPMD, MDIO_PMA_RX_CTRL1,
+				XGBE_PMA_RX_RST_0_MASK, XGBE_PMA_RX_RST_0_RESET_OFF);
+		DELAY(50);
+		axgbe_printf(0, "%s: firmware mailbox reset performed\n", __func__);
+	}
+}
+
+static void
 xgbe_phy_pll_ctrl(struct xgbe_prv_data *pdata, bool enable)
 {
 	XMDIO_WRITE_BITS(pdata, MDIO_MMD_PMAPMD, MDIO_VEND2_PMA_MISC_CTRL0,
@@ -2151,8 +2174,10 @@ xgbe_phy_perform_ratechange(struct xgbe_prv_data *pdata, unsigned int cmd,
 	xgbe_phy_pll_ctrl(pdata, false);
 
 	/* Log if a previous command did not complete */
-	if (XP_IOREAD_BITS(pdata, XP_DRIVER_INT_RO, STATUS))
+	if (XP_IOREAD_BITS(pdata, XP_DRIVER_INT_RO, STATUS)) {
 		axgbe_error("firmware mailbox not ready for command\n");
+		xgbe_phy_rx_reset(pdata);
+	}
 
 	/* Construct the command */
 	XP_SET_BITS(s0, XP_DRIVER_SCRATCH_0, COMMAND, cmd);
@@ -2175,6 +2200,9 @@ xgbe_phy_perform_ratechange(struct xgbe_prv_data *pdata, unsigned int cmd,
 	}
 
 	axgbe_printf(3, "firmware mailbox command did not complete\n");
+
+	/* Reset on error */
+	xgbe_phy_rx_reset(pdata);
 
 reenable_pll:
 	xgbe_phy_pll_ctrl(pdata, true);
