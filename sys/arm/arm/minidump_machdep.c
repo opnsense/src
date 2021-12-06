@@ -153,13 +153,14 @@ static char dumpbuf[PAGE_SIZE] __aligned(sizeof(uint64_t));
 CTASSERT(sizeof(dumpbuf) % sizeof(pt2_entry_t) == 0);
 
 int
-minidumpsys(struct dumperinfo *di)
+cpu_minidumpsys(struct dumperinfo *di, const struct minidumpstate *state)
 {
 	struct minidumphdr mdhdr;
+	struct msgbuf *mbp;
 	uint64_t dumpsize, *dump_avail_buf;
 	uint32_t ptesize;
 	uint32_t pa, prev_pa = 0, count = 0;
-	vm_offset_t va;
+	vm_offset_t va, kva_end;
 	int error, i;
 	char *addr;
 
@@ -174,26 +175,33 @@ minidumpsys(struct dumperinfo *di)
 	 */
 	dcache_wbinv_poc_all();
 
-	/* Walk page table pages, set bits in vm_page_dump */
+	/* Snapshot the KVA upper bound in case it grows. */
+	kva_end = kernel_vm_end;
+
+	/*
+	 * Walk the kernel page table pages, setting the active entries in the
+	 * dump bitmap.
+	 */
 	ptesize = 0;
-	for (va = KERNBASE; va < kernel_vm_end; va += PAGE_SIZE) {
+	for (va = KERNBASE; va < kva_end; va += PAGE_SIZE) {
 		pa = pmap_dump_kextract(va, NULL);
 		if (pa != 0 && vm_phys_is_dumpable(pa))
-			dump_add_page(pa);
+			vm_page_dump_add(state->dump_bitset, pa);
 		ptesize += sizeof(pt2_entry_t);
 	}
 
 	/* Calculate dump size. */
+	mbp = state->msgbufp;
 	dumpsize = ptesize;
-	dumpsize += round_page(msgbufp->msg_size);
+	dumpsize += round_page(mbp->msg_size);
 	dumpsize += round_page(nitems(dump_avail) * sizeof(uint64_t));
 	dumpsize += round_page(BITSET_SIZE(vm_page_dump_pages));
-	VM_PAGE_DUMP_FOREACH(pa) {
+	VM_PAGE_DUMP_FOREACH(state->dump_bitset, pa) {
 		/* Clear out undumpable pages now if needed */
 		if (vm_phys_is_dumpable(pa))
 			dumpsize += PAGE_SIZE;
 		else
-			dump_drop_page(pa);
+			vm_page_dump_drop(state->dump_bitset, pa);
 	}
 	dumpsize += PAGE_SIZE;
 
@@ -203,7 +211,7 @@ minidumpsys(struct dumperinfo *di)
 	bzero(&mdhdr, sizeof(mdhdr));
 	strcpy(mdhdr.magic, MINIDUMP_MAGIC);
 	mdhdr.version = MINIDUMP_VERSION;
-	mdhdr.msgbufsize = msgbufp->msg_size;
+	mdhdr.msgbufsize = mbp->msg_size;
 	mdhdr.bitmapsize = round_page(BITSET_SIZE(vm_page_dump_pages));
 	mdhdr.ptesize = ptesize;
 	mdhdr.kernbase = KERNBASE;
@@ -229,8 +237,7 @@ minidumpsys(struct dumperinfo *di)
 		goto fail;
 
 	/* Dump msgbuf up front */
-	error = blk_write(di, (char *)msgbufp->msg_ptr, 0,
-	    round_page(msgbufp->msg_size));
+	error = blk_write(di, mbp->msg_ptr, 0, round_page(mbp->msg_size));
 	if (error)
 		goto fail;
 
@@ -248,14 +255,14 @@ minidumpsys(struct dumperinfo *di)
 		goto fail;
 
 	/* Dump bitmap */
-	error = blk_write(di, (char *)vm_page_dump, 0,
+	error = blk_write(di, (char *)state->dump_bitset, 0,
 	    round_page(BITSET_SIZE(vm_page_dump_pages)));
 	if (error)
 		goto fail;
 
 	/* Dump kernel page table pages */
 	addr = dumpbuf;
-	for (va = KERNBASE; va < kernel_vm_end; va += PAGE_SIZE) {
+	for (va = KERNBASE; va < kva_end; va += PAGE_SIZE) {
 		pmap_dump_kextract(va, (pt2_entry_t *)addr);
 		addr += sizeof(pt2_entry_t);
 		if (addr == dumpbuf + sizeof(dumpbuf)) {
@@ -272,7 +279,7 @@ minidumpsys(struct dumperinfo *di)
 	}
 
 	/* Dump memory chunks */
-	VM_PAGE_DUMP_FOREACH(pa) {
+	VM_PAGE_DUMP_FOREACH(state->dump_bitset, pa) {
 		if (!count) {
 			prev_pa = pa;
 			count++;

@@ -469,7 +469,8 @@ static bool	swp_pager_swblk_empty(struct swblk *sb, int start, int limit);
 static void	swp_pager_free_empty_swblk(vm_object_t, struct swblk *sb);
 static int	swapongeom(struct vnode *);
 static int	swaponvp(struct thread *, struct vnode *, u_long);
-static int	swapoff_one(struct swdevt *sp, struct ucred *cred);
+static int	swapoff_one(struct swdevt *sp, struct ucred *cred,
+		    bool ignore_check);
 
 /*
  * Swap bitmap functions
@@ -2360,8 +2361,8 @@ sys_swapon(struct thread *td, struct swapon_args *uap)
 		goto done;
 	}
 
-	NDINIT(&nd, LOOKUP, ISOPEN | FOLLOW | AUDITVNODE1, UIO_USERSPACE,
-	    uap->name, td);
+	NDINIT(&nd, LOOKUP, ISOPEN | FOLLOW | LOCKLEAF | AUDITVNODE1,
+	    UIO_USERSPACE, uap->name, td);
 	error = namei(&nd);
 	if (error)
 		goto done;
@@ -2381,8 +2382,10 @@ sys_swapon(struct thread *td, struct swapon_args *uap)
 		error = swaponvp(td, vp, attr.va_size / DEV_BSIZE);
 	}
 
-	if (error)
-		vrele(vp);
+	if (error != 0)
+		vput(vp);
+	else
+		VOP_UNLOCK(vp);
 done:
 	sx_xunlock(&swdev_syscall_lock);
 	return (error);
@@ -2516,14 +2519,14 @@ sys_swapoff(struct thread *td, struct swapoff_args *uap)
 		error = EINVAL;
 		goto done;
 	}
-	error = swapoff_one(sp, td->td_ucred);
+	error = swapoff_one(sp, td->td_ucred, false);
 done:
 	sx_xunlock(&swdev_syscall_lock);
 	return (error);
 }
 
 static int
-swapoff_one(struct swdevt *sp, struct ucred *cred)
+swapoff_one(struct swdevt *sp, struct ucred *cred, bool ignore_check)
 {
 	u_long nblks;
 #ifdef MAC
@@ -2545,8 +2548,16 @@ swapoff_one(struct swdevt *sp, struct ucred *cred)
 	 * available virtual memory in the system will fit the amount
 	 * of data we will have to page back in, plus an epsilon so
 	 * the system doesn't become critically low on swap space.
+	 * The vm_free_count() part does not account e.g. for clean
+	 * pages that can be immediately reclaimed without paging, so
+	 * this is a very rough estimation.
+	 *
+	 * On the other hand, not turning swap off on swapoff_all()
+	 * means that we can lose swap data when filesystems go away,
+	 * which is arguably worse.
 	 */
-	if (vm_free_count() + swap_pager_avail < nblks + nswap_lowat)
+	if (!ignore_check &&
+	    vm_free_count() + swap_pager_avail < nblks + nswap_lowat)
 		return (ENOMEM);
 
 	/*
@@ -2596,7 +2607,7 @@ swapoff_all(void)
 			devname = devtoname(sp->sw_vp->v_rdev);
 		else
 			devname = "[file]";
-		error = swapoff_one(sp, thread0.td_ucred);
+		error = swapoff_one(sp, thread0.td_ucred, true);
 		if (error != 0) {
 			printf("Cannot remove swap device %s (error=%d), "
 			    "skipping.\n", devname, error);
@@ -3005,7 +3016,7 @@ swapongeom(struct vnode *vp)
 {
 	int error;
 
-	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
+	ASSERT_VOP_ELOCKED(vp, "swapongeom");
 	if (vp->v_type != VCHR || VN_IS_DOOMED(vp)) {
 		error = ENOENT;
 	} else {
@@ -3013,7 +3024,6 @@ swapongeom(struct vnode *vp)
 		error = swapongeom_locked(vp->v_rdev, vp);
 		g_topology_unlock();
 	}
-	VOP_UNLOCK(vp);
 	return (error);
 }
 
@@ -3035,24 +3045,30 @@ swapdev_strategy(struct buf *bp, struct swdevt *sp)
 	vp2 = sp->sw_id;
 	vhold(vp2);
 	if (bp->b_iocmd == BIO_WRITE) {
+		vn_lock(vp2, LK_EXCLUSIVE | LK_RETRY);
 		if (bp->b_bufobj)
 			bufobj_wdrop(bp->b_bufobj);
 		bufobj_wref(&vp2->v_bufobj);
+	} else {
+		vn_lock(vp2, LK_SHARED | LK_RETRY);
 	}
 	if (bp->b_bufobj != &vp2->v_bufobj)
 		bp->b_bufobj = &vp2->v_bufobj;
 	bp->b_vp = vp2;
 	bp->b_iooffset = dbtob(bp->b_blkno);
 	bstrategy(bp);
-	return;
+	VOP_UNLOCK(vp2);
 }
 
 static void
 swapdev_close(struct thread *td, struct swdevt *sp)
 {
+	struct vnode *vp;
 
-	VOP_CLOSE(sp->sw_vp, FREAD | FWRITE, td->td_ucred, td);
-	vrele(sp->sw_vp);
+	vp = sp->sw_vp;
+	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
+	VOP_CLOSE(vp, FREAD | FWRITE, td->td_ucred, td);
+	vput(vp);
 }
 
 static int
@@ -3061,6 +3077,7 @@ swaponvp(struct thread *td, struct vnode *vp, u_long nblks)
 	struct swdevt *sp;
 	int error;
 
+	ASSERT_VOP_ELOCKED(vp, "swaponvp");
 	if (nblks == 0)
 		return (ENXIO);
 	mtx_lock(&sw_dev_mtx);
@@ -3072,14 +3089,12 @@ swaponvp(struct thread *td, struct vnode *vp, u_long nblks)
 	}
 	mtx_unlock(&sw_dev_mtx);
 
-	(void) vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
 #ifdef MAC
 	error = mac_system_check_swapon(td->td_ucred, vp);
 	if (error == 0)
 #endif
 		error = VOP_OPEN(vp, FREAD | FWRITE, td->td_ucred, td, NULL);
-	(void) VOP_UNLOCK(vp);
-	if (error)
+	if (error != 0)
 		return (error);
 
 	swaponsomething(vp, vp, nblks, swapdev_strategy, swapdev_close,
