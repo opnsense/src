@@ -701,10 +701,10 @@ _linux_pci_register_driver(struct pci_driver *pdrv, devclass_t dc)
 	pdrv->bsddriver.methods = pci_methods;
 	pdrv->bsddriver.size = sizeof(struct pci_dev);
 
-	mtx_lock(&Giant);
+	bus_topo_lock();
 	error = devclass_add_driver(dc, &pdrv->bsddriver,
 	    BUS_PASS_DEFAULT, &pdrv->bsdclass);
-	mtx_unlock(&Giant);
+	bus_topo_unlock();
 	return (-error);
 }
 
@@ -873,10 +873,10 @@ linux_pci_unregister_driver(struct pci_driver *pdrv)
 	spin_lock(&pci_lock);
 	list_del(&pdrv->node);
 	spin_unlock(&pci_lock);
-	mtx_lock(&Giant);
+	bus_topo_lock();
 	if (bus != NULL)
 		devclass_delete_driver(bus, &pdrv->bsddriver);
-	mtx_unlock(&Giant);
+	bus_topo_unlock();
 }
 
 void
@@ -889,10 +889,10 @@ linux_pci_unregister_drm_driver(struct pci_driver *pdrv)
 	spin_lock(&pci_lock);
 	list_del(&pdrv->node);
 	spin_unlock(&pci_lock);
-	mtx_lock(&Giant);
+	bus_topo_lock();
 	if (bus != NULL)
 		devclass_delete_driver(bus, &pdrv->bsddriver);
-	mtx_unlock(&Giant);
+	bus_topo_unlock();
 }
 
 int
