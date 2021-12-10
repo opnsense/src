@@ -571,7 +571,7 @@ retry:
 		as_written_offset = uio->uio_offset - diff;
 
 		if (as_written_offset - diff > filesize)
-			fuse_vnode_setsize(vp, as_written_offset);
+			fuse_vnode_setsize(vp, as_written_offset, false);
 		if (as_written_offset - diff >= filesize)
 			fvdat->flag &= ~FN_SIZECHANGE;
 
@@ -715,7 +715,7 @@ again:
 			 * Extend file _after_ locking buffer so we won't race
 			 * with other readers
 			 */
-			err = fuse_vnode_setsize(vp, uio->uio_offset + n);
+			err = fuse_vnode_setsize(vp, uio->uio_offset + n, false);
 			filesize = uio->uio_offset + n;
 			fvdat->flag |= FN_SIZECHANGE;
 			if (err) {
@@ -1006,13 +1006,18 @@ fuse_io_strategy(struct vnode *vp, struct buf *bp)
 		/*
 	         * Setup for actual write
 	         */
-		error = fuse_vnode_size(vp, &filesize, cred, curthread);
-		if (error) {
-			bp->b_ioflags |= BIO_ERROR;
-			bp->b_error = error;
-			bufdone(bp);
-			return (error);
-		}
+		/*
+		 * If the file's size is cached, use that value, even if the
+		 * cache is expired.  At this point we're already committed to
+		 * writing something.  If the FUSE server has changed the
+		 * file's size behind our back, it's too late for us to do
+		 * anything about it.  In particular, we can't invalidate any
+		 * part of the file's buffers because VOP_STRATEGY is called
+		 * with them already locked.
+		 */
+		filesize = fvdat->cached_attrs.va_size;
+		/* filesize must've been cached by fuse_vnop_open.  */
+		KASSERT(filesize != VNOVAL, ("filesize should've been cached"));
 
 		if ((off_t)bp->b_lblkno * biosize + bp->b_dirtyend > filesize)
 			bp->b_dirtyend = filesize - 

@@ -516,8 +516,7 @@ ipf_p_ftp_addport(softf, fin, ip, nat, ftp, dlen, nport, inc)
 #endif
 
 	/*
-	 * Add skeleton NAT entry for connection which will come back the
-	 * other way.
+	 * If an existing entry already exists, use it instead.
 	 */
 #ifdef USE_INET6
 	if (nat->nat_v[0] == 6) {
@@ -550,6 +549,9 @@ ipf_p_ftp_addport(softf, fin, ip, nat, ftp, dlen, nport, inc)
 	if (nat2 != NULL)
 		return APR_INC(inc);
 
+	/*
+	 * An existing entry doesn't exist. Let's make one.
+	 */
 	ipn = ipf_proxy_rule_rev(nat);
 	if (ipn == NULL)
 		return APR_ERR(1);
@@ -1258,15 +1260,13 @@ ipf_p_ftp_valid(softf, ftp, side, buf, len)
 	size_t len;
 {
 	ftpside_t *ftps;
-	int ret;
 
 	ftps = &ftp->ftp_side[side];
 
 	if (side == 0)
-		ret = ipf_p_ftp_client_valid(softf, ftps, buf, len);
+		return(ipf_p_ftp_client_valid(softf, ftps, buf, len));
 	else
-		ret = ipf_p_ftp_server_valid(softf, ftps, buf, len);
-	return ret;
+		return(ipf_p_ftp_server_valid(softf, ftps, buf, len));
 }
 
 
@@ -1525,6 +1525,8 @@ whilemore:
 			len = wptr - rptr;
 			f->ftps_junk = ipf_p_ftp_valid(softf, ftp, rv,
 						       rptr, len);
+			DT5(junk_ftp_valid, int, len, int, rv, u_long, rptr,
+			    u_long, wptr, int, f->ftps_junk);
 
 			if (softf->ipf_p_ftp_debug & DEBUG_PARSE) {
 				printf("%s=%d len %d rv %d ptr %lx/%lx ",

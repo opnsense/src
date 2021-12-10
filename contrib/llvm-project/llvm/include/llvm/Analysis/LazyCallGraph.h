@@ -60,6 +60,7 @@
 
 namespace llvm {
 
+template <class GraphType> struct GraphTraits;
 class Module;
 class Value;
 
@@ -115,8 +116,6 @@ public:
   class EdgeSequence;
   class SCC;
   class RefSCC;
-  class edge_iterator;
-  class call_edge_iterator;
 
   /// A class used to represent edges in the call graph.
   ///
@@ -420,7 +419,7 @@ public:
   /// outer structure. SCCs do not support mutation of the call graph, that
   /// must be done through the containing \c RefSCC in order to fully reason
   /// about the ordering and connections of the graph.
-  class SCC {
+  class LLVM_EXTERNAL_VISIBILITY SCC {
     friend class LazyCallGraph;
     friend class LazyCallGraph::Node;
 
@@ -464,7 +463,7 @@ public:
     /// Dump a short description of this SCC to stderr.
     void dump() const;
 
-#ifndef NDEBUG
+#if !defined(NDEBUG) || defined(EXPENSIVE_CHECKS)
     /// Verify invariants about the SCC.
     ///
     /// This will attempt to validate all of the basic invariants within an
@@ -585,7 +584,7 @@ public:
     /// Dump a short description of this RefSCC to stderr.
     void dump() const;
 
-#ifndef NDEBUG
+#if !defined(NDEBUG) || defined(EXPENSIVE_CHECKS)
     /// Verify invariants about the RefSCC and all its SCCs.
     ///
     /// This will attempt to validate all of the invariants *within* the
@@ -1099,28 +1098,10 @@ public:
         continue;
       }
 
-      // The blockaddress constant expression is a weird special case, we can't
-      // generically walk its operands the way we do for all other constants.
-      if (BlockAddress *BA = dyn_cast<BlockAddress>(C)) {
-        // If we've already visited the function referred to by the block
-        // address, we don't need to revisit it.
-        if (Visited.count(BA->getFunction()))
-          continue;
-
-        // If all of the blockaddress' users are instructions within the
-        // referred to function, we don't need to insert a cycle.
-        if (llvm::all_of(BA->users(), [&](User *U) {
-              if (Instruction *I = dyn_cast<Instruction>(U))
-                return I->getFunction() == BA->getFunction();
-              return false;
-            }))
-          continue;
-
-        // Otherwise we should go visit the referred to function.
-        Visited.insert(BA->getFunction());
-        Worklist.push_back(BA->getFunction());
+      // blockaddresses are weird and don't participate in the call graph anyway,
+      // skip them.
+      if (isa<BlockAddress>(C))
         continue;
-      }
 
       for (Value *Op : C->operand_values())
         if (Visited.insert(cast<Constant>(Op)).second)

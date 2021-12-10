@@ -486,9 +486,16 @@ public:
            // allocated on device, which are a subset of __global.
            (A == LangAS::opencl_global && (B == LangAS::opencl_global_device ||
                                            B == LangAS::opencl_global_host)) ||
+           (A == LangAS::sycl_global && (B == LangAS::sycl_global_device ||
+                                         B == LangAS::sycl_global_host)) ||
            // Consider pointer size address spaces to be equivalent to default.
            ((isPtrSizeAddressSpace(A) || A == LangAS::Default) &&
-            (isPtrSizeAddressSpace(B) || B == LangAS::Default));
+            (isPtrSizeAddressSpace(B) || B == LangAS::Default)) ||
+           // Default is a superset of SYCL address spaces.
+           (A == LangAS::Default &&
+            (B == LangAS::sycl_private || B == LangAS::sycl_local ||
+             B == LangAS::sycl_global || B == LangAS::sycl_global_device ||
+             B == LangAS::sycl_global_host));
   }
 
   /// Returns true if the address space in these qualifiers is equal to or
@@ -1797,40 +1804,6 @@ protected:
     PackExpansionTypeBitfields PackExpansionTypeBits;
   };
 
-  static_assert(sizeof(TypeBitfields) <= 8,
-		"TypeBitfields is larger than 8 bytes!");
-  static_assert(sizeof(ArrayTypeBitfields) <= 8,
-		"ArrayTypeBitfields is larger than 8 bytes!");
-  static_assert(sizeof(AttributedTypeBitfields) <= 8,
-		"AttributedTypeBitfields is larger than 8 bytes!");
-  static_assert(sizeof(AutoTypeBitfields) <= 8,
-		"AutoTypeBitfields is larger than 8 bytes!");
-  static_assert(sizeof(BuiltinTypeBitfields) <= 8,
-		"BuiltinTypeBitfields is larger than 8 bytes!");
-  static_assert(sizeof(FunctionTypeBitfields) <= 8,
-		"FunctionTypeBitfields is larger than 8 bytes!");
-  static_assert(sizeof(ObjCObjectTypeBitfields) <= 8,
-		"ObjCObjectTypeBitfields is larger than 8 bytes!");
-  static_assert(sizeof(ReferenceTypeBitfields) <= 8,
-		"ReferenceTypeBitfields is larger than 8 bytes!");
-  static_assert(sizeof(TypeWithKeywordBitfields) <= 8,
-		"TypeWithKeywordBitfields is larger than 8 bytes!");
-  static_assert(sizeof(ElaboratedTypeBitfields) <= 8,
-		"ElaboratedTypeBitfields is larger than 8 bytes!");
-  static_assert(sizeof(VectorTypeBitfields) <= 8,
-		"VectorTypeBitfields is larger than 8 bytes!");
-  static_assert(sizeof(SubstTemplateTypeParmPackTypeBitfields) <= 8,
-		"SubstTemplateTypeParmPackTypeBitfields is larger"
-		" than 8 bytes!");
-  static_assert(sizeof(TemplateSpecializationTypeBitfields) <= 8,
-		"TemplateSpecializationTypeBitfields is larger"
-		" than 8 bytes!");
-  static_assert(sizeof(DependentTemplateSpecializationTypeBitfields) <= 8,
-		"DependentTemplateSpecializationTypeBitfields is larger"
-		" than 8 bytes!");
-  static_assert(sizeof(PackExpansionTypeBitfields) <= 8,
-		"PackExpansionTypeBitfields is larger than 8 bytes");
-
 private:
   template <class T> friend class TypePropertyCache;
 
@@ -2526,6 +2499,9 @@ public:
 // PPC MMA Types
 #define PPC_VECTOR_TYPE(Name, Id, Size) Id,
 #include "clang/Basic/PPCTypes.def"
+// RVV Types
+#define RVV_TYPE(Name, Id, SingletonId) Id,
+#include "clang/Basic/RISCVVTypes.def"
 // All other builtin types
 #define BUILTIN_TYPE(Id, SingletonId) Id,
 #define LAST_BUILTIN_TYPE(Id) LastKind = Id
@@ -5446,8 +5422,13 @@ class ElaboratedType final
   ElaboratedType(ElaboratedTypeKeyword Keyword, NestedNameSpecifier *NNS,
                  QualType NamedType, QualType CanonType, TagDecl *OwnedTagDecl)
       : TypeWithKeyword(Keyword, Elaborated, CanonType,
+                        // Any semantic dependence on the qualifier will have
+                        // been incorporated into NamedType. We still need to
+                        // track syntactic (instantiation / error / pack)
+                        // dependence on the qualifier.
                         NamedType->getDependence() |
-                            (NNS ? toTypeDependence(NNS->getDependence())
+                            (NNS ? toSyntacticDependence(
+                                       toTypeDependence(NNS->getDependence()))
                                  : TypeDependence::None)),
         NNS(NNS), NamedType(NamedType) {
     ElaboratedTypeBits.HasOwnedTagDecl = false;
