@@ -35,6 +35,8 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#define IN_HISTORICAL_NETS		/* include class masks */
+
 #include <sys/param.h>
 #include <sys/eventhandler.h>
 #include <sys/systm.h>
@@ -461,9 +463,15 @@ in_aifaddr_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp, struct thread *td)
 		in_addr_t i = ntohl(addr->sin_addr.s_addr);
 
 		/*
-	 	 * Be compatible with network classes, if netmask isn't
-		 * supplied, guess it based on classes.
+	 	 * If netmask isn't supplied, use historical default.
+		 * This is deprecated for interfaces other than loopback
+		 * or point-to-point; warn in other cases.  In the future
+		 * we should return an error rather than warning.
 	 	 */
+		if ((ifp->if_flags & (IFF_POINTOPOINT | IFF_LOOPBACK)) == 0)
+			printf("%s: set address: WARNING: network mask "
+			     "should be specified; using historical default\n",
+			     ifp->if_xname);
 		if (IN_CLASSA(i))
 			ia->ia_subnetmask = IN_CLASSA_NET;
 		else if (IN_CLASSB(i))

@@ -46,6 +46,7 @@ M=		${MACHINE}
 
 AWK?=		awk
 CP?=		cp
+ELFDUMP?=	elfdump
 NM?=		nm
 OBJCOPY?=	objcopy
 SIZE?=		size
@@ -90,7 +91,7 @@ WERROR?=	-Werror
 CFLAGS+=	-fno-common
 
 # XXX LOCORE means "don't declare C stuff" not "for locore.s".
-ASM_CFLAGS= -x assembler-with-cpp -DLOCORE ${CFLAGS} ${ASM_CFLAGS.${.IMPSRC:T}} 
+ASM_CFLAGS= -x assembler-with-cpp -DLOCORE ${CFLAGS} ${ASM_CFLAGS.${.IMPSRC:T}}
 
 .if defined(PROFLEVEL) && ${PROFLEVEL} >= 1
 CFLAGS+=	-DGPROF
