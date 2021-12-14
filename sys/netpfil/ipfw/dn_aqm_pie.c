@@ -628,9 +628,8 @@ pie_callout_cleanup(void *x)
 	mtx_unlock(&pst->lock_mtx);
 	mtx_destroy(&pst->lock_mtx);
 	free(x, M_DUMMYNET);
-	DN_BH_WLOCK();
+
 	pie_desc.ref_count--;
-	DN_BH_WUNLOCK();
 }
 
 /* 
