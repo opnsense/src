@@ -628,8 +628,13 @@ _sdhci_fdt=	sdhci_fdt
 .if ${MACHINE_CPUARCH} == "i386" || ${MACHINE_CPUARCH} == "amd64"
 _agp=		agp
 _an=		an
+.if ${MACHINE_CPUARCH} == "i386" || !empty(COMPAT_FREEBSD32_ENABLED)
 _aout=		aout
+<<<<<<< HEAD
 _apuled=	apuled
+=======
+.endif
+>>>>>>> upstream/stable/13
 _bios=		bios
 .if ${MK_SOURCELESS_UCODE} != "no"
 _bxe=		bxe
