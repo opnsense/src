@@ -126,10 +126,10 @@ static STAILQ_HEAD(, mca_internal) mca_freelist;
 static int mca_freecount;
 static STAILQ_HEAD(, mca_internal) mca_records;
 static STAILQ_HEAD(, mca_internal) mca_pending;
-static struct callout mca_timer;
 static int mca_ticks = 3600;	/* Check hourly by default. */
 static struct taskqueue *mca_tq;
-static struct task mca_resize_task, mca_scan_task;
+static struct task mca_resize_task;
+static struct timeout_task mca_scan_task;
 static struct mtx mca_lock;
 
 static unsigned int
@@ -225,6 +225,26 @@ cmci_supported(uint64_t mcg_cap)
 	if (cpu_vendor_id != CPU_VENDOR_INTEL)
 		return (false);
 	return ((mcg_cap & MCG_CAP_CMCI_P) != 0);
+}
+
+static inline bool
+tes_supported(uint64_t mcg_cap)
+{
+
+	/*
+	 * MCG_CAP_TES_P bit is reserved in AMD documentation.  Until
+	 * it is defined, do not use it to check for TES support.
+	 */
+	if (cpu_vendor_id != CPU_VENDOR_INTEL)
+		return (false);
+	return ((mcg_cap & MCG_CAP_TES_P) != 0);
+}
+
+static inline bool
+ser_supported(uint64_t mcg_cap)
+{
+
+	return (tes_supported(mcg_cap) && (mcg_cap & MCG_CAP_SER_P) != 0);
 }
 
 static int
@@ -352,6 +372,25 @@ mca_error_mmtype(uint16_t mca_error)
 	return ("???");
 }
 
+static const char *
+mca_addres_mode(uint64_t mca_misc)
+{
+
+	switch ((mca_misc & MC_MISC_ADDRESS_MODE) >> 6) {
+	case 0x0:
+		return ("Segment Offset");
+	case 0x1:
+		return ("Linear Address");
+	case 0x2:
+		return ("Physical Address");
+	case 0x3:
+		return ("Memory Address");
+	case 0x7:
+		return ("Generic");
+	}
+	return ("???");
+}
+
 static int
 mca_mute(const struct mca_record *rec)
 {
@@ -403,9 +442,25 @@ mca_log(const struct mca_record *rec)
 		if (cmci_supported(rec->mr_mcg_cap))
 			printf("(%lld) ", ((long long)rec->mr_status &
 			    MC_STATUS_COR_COUNT) >> 38);
+		if (tes_supported(rec->mr_mcg_cap)) {
+			switch ((rec->mr_status & MC_STATUS_TES_STATUS) >> 53) {
+			case 0x1:
+				printf("(Green) ");
+			case 0x2:
+				printf("(Yellow) ");
+			}
+		}
 	}
+	if (rec->mr_status & MC_STATUS_EN)
+		printf("EN ");
 	if (rec->mr_status & MC_STATUS_PCC)
 		printf("PCC ");
+	if (ser_supported(rec->mr_mcg_cap)) {
+		if (rec->mr_status & MC_STATUS_S)
+			printf("S ");
+		if (rec->mr_status & MC_STATUS_AR)
+			printf("AR ");
+	}
 	if (rec->mr_status & MC_STATUS_OVER)
 		printf("OVER ");
 	mca_error = rec->mr_status & MC_STATUS_MCA_ERROR;
@@ -429,8 +484,22 @@ mca_log(const struct mca_record *rec)
 	case 0x0005:
 		printf("internal parity error");
 		break;
+	case 0x0006:
+		printf("SMM handler code access violation");
+		break;
 	case 0x0400:
 		printf("internal timer error");
+		break;
+	case 0x0e0b:
+		printf("generic I/O error");
+		if (rec->mr_cpu_vendor_id == CPU_VENDOR_INTEL &&
+		    (rec->mr_status & MC_STATUS_MISCV)) {
+			printf(" (pci%d:%d:%d:%d)",
+			    (int)((rec->mr_misc & MC_MISC_PCIE_SEG) >> 32),
+			    (int)((rec->mr_misc & MC_MISC_PCIE_BUS) >> 24),
+			    (int)((rec->mr_misc & MC_MISC_PCIE_SLOT) >> 19),
+			    (int)((rec->mr_misc & MC_MISC_PCIE_FUNC) >> 16));
+		}
 		break;
 	default:
 		if ((mca_error & 0xfc00) == 0x0400) {
@@ -463,7 +532,7 @@ mca_log(const struct mca_record *rec)
 			printf(" memory error");
 			break;
 		}
-		
+
 		/* Cache error. */
 		if ((mca_error & 0xef00) == 0x0100) {
 			printf("%sCACHE %s %s error",
@@ -473,8 +542,19 @@ mca_log(const struct mca_record *rec)
 			break;
 		}
 
+		/* Extended memory error. */
+		if ((mca_error & 0xef80) == 0x0280) {
+			printf("%s channel ", mca_error_mmtype(mca_error));
+			if ((mca_error & 0x000f) != 0x000f)
+				printf("%d", mca_error & 0x000f);
+			else
+				printf("??");
+			printf(" extended memory error");
+			break;
+		}
+
 		/* Bus and/or Interconnect error. */
-		if ((mca_error & 0xe800) == 0x0800) {			
+		if ((mca_error & 0xe800) == 0x0800) {
 			printf("BUS%s ", mca_error_level(mca_error));
 			switch ((mca_error & 0x0600) >> 9) {
 			case 0:
@@ -514,8 +594,16 @@ mca_log(const struct mca_record *rec)
 		break;
 	}
 	printf("\n");
-	if (rec->mr_status & MC_STATUS_ADDRV)
-		printf("MCA: Address 0x%llx\n", (long long)rec->mr_addr);
+	if (rec->mr_status & MC_STATUS_ADDRV) {
+		printf("MCA: Address 0x%llx", (long long)rec->mr_addr);
+		if (ser_supported(rec->mr_mcg_cap) &&
+		    (rec->mr_status & MC_STATUS_MISCV)) {
+			printf(" (Mode: %s, LSB: %d)",
+			    mca_addres_mode(rec->mr_misc),
+			    (int)(rec->mr_misc & MC_MISC_RA_LSB));
+		}
+		printf("\n");
+	}
 	if (rec->mr_status & MC_STATUS_MISCV)
 		printf("MCA: Misc 0x%llx\n", (long long)rec->mr_misc);
 }
@@ -890,14 +978,8 @@ mca_scan_cpus(void *context, int pending)
 	thread_unlock(td);
 	if (count != 0)
 		mca_process_records(POLLED);
-}
-
-static void
-mca_periodic_scan(void *arg)
-{
-
-	taskqueue_enqueue(mca_tq, &mca_scan_task);
-	callout_reset(&mca_timer, mca_ticks * hz, mca_periodic_scan, NULL);
+	taskqueue_enqueue_timeout_sbt(mca_tq, &mca_scan_task,
+	    mca_ticks * SBT_1S, 0, C_PREL(1));
 }
 
 static int
@@ -910,7 +992,8 @@ sysctl_mca_scan(SYSCTL_HANDLER_ARGS)
 	if (error)
 		return (error);
 	if (i)
-		taskqueue_enqueue(mca_tq, &mca_scan_task);
+		taskqueue_enqueue_timeout_sbt(mca_tq, &mca_scan_task,
+		    0, 0, 0);
 	return (0);
 }
 
@@ -944,28 +1027,18 @@ sysctl_mca_maxcount(SYSCTL_HANDLER_ARGS)
 }
 
 static void
-mca_createtq(void *dummy)
-{
-	if (mca_banks <= 0)
-		return;
-
-	mca_tq = taskqueue_create_fast("mca", M_WAITOK,
-	    taskqueue_thread_enqueue, &mca_tq);
-	taskqueue_start_threads(&mca_tq, 1, PI_SWI(SWI_TQ), "mca taskq");
-
-	/* CMCIs during boot may have claimed items from the freelist. */
-	mca_resize_freelist();
-}
-SYSINIT(mca_createtq, SI_SUB_CONFIGURE, SI_ORDER_ANY, mca_createtq, NULL);
-
-static void
 mca_startup(void *dummy)
 {
 
 	if (mca_banks <= 0)
 		return;
 
-	callout_reset(&mca_timer, mca_ticks * hz, mca_periodic_scan, NULL);
+	/* CMCIs during boot may have claimed items from the freelist. */
+	mca_resize_freelist();
+
+	taskqueue_start_threads(&mca_tq, 1, PI_SWI(SWI_TQ), "mca taskq");
+	taskqueue_enqueue_timeout_sbt(mca_tq, &mca_scan_task,
+	    mca_ticks * SBT_1S, 0, C_PREL(1));
 }
 #ifdef EARLY_AP_STARTUP
 SYSINIT(mca_startup, SI_SUB_KICK_SCHEDULER, SI_ORDER_ANY, mca_startup, NULL);
@@ -985,7 +1058,7 @@ cmci_setup(void)
 		cmc_state[i] = malloc(sizeof(struct cmc_state) * mca_banks,
 		    M_MCA, M_WAITOK | M_ZERO);
 	SYSCTL_ADD_PROC(NULL, SYSCTL_STATIC_CHILDREN(_hw_mca), OID_AUTO,
-	    "cmc_throttle", CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
+	    "cmc_throttle", CTLTYPE_INT | CTLFLAG_RWTUN | CTLFLAG_MPSAFE,
 	    &cmc_throttle, 0, sysctl_positive_int, "I",
 	    "Interval in seconds to throttle corrected MC interrupts");
 }
@@ -1001,7 +1074,7 @@ amd_thresholding_setup(void)
 		amd_et_state[i] = malloc(sizeof(struct amd_et_state) *
 		    mca_banks, M_MCA, M_WAITOK | M_ZERO);
 	SYSCTL_ADD_PROC(NULL, SYSCTL_STATIC_CHILDREN(_hw_mca), OID_AUTO,
-	    "cmc_throttle", CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
+	    "cmc_throttle", CTLTYPE_INT | CTLFLAG_RWTUN | CTLFLAG_MPSAFE,
 	    &cmc_throttle, 0, sysctl_positive_int, "I",
 	    "Interval in seconds to throttle corrected MC interrupts");
 }
@@ -1024,8 +1097,9 @@ mca_setup(uint64_t mcg_cap)
 	mtx_init(&mca_lock, "mca", NULL, MTX_SPIN);
 	STAILQ_INIT(&mca_records);
 	STAILQ_INIT(&mca_pending);
-	TASK_INIT(&mca_scan_task, 0, mca_scan_cpus, NULL);
-	callout_init(&mca_timer, 1);
+	mca_tq = taskqueue_create_fast("mca", M_WAITOK,
+	    taskqueue_thread_enqueue, &mca_tq);
+	TIMEOUT_TASK_INIT(mca_tq, &mca_scan_task, 0, mca_scan_cpus, NULL);
 	STAILQ_INIT(&mca_freelist);
 	TASK_INIT(&mca_resize_task, 0, mca_resize, NULL);
 	mca_resize_freelist();
@@ -1037,8 +1111,8 @@ mca_setup(uint64_t mcg_cap)
 	    &mca_maxcount, 0, sysctl_mca_maxcount, "I",
 	    "Maximum record count (-1 is unlimited)");
 	SYSCTL_ADD_PROC(NULL, SYSCTL_STATIC_CHILDREN(_hw_mca), OID_AUTO,
-	    "interval", CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE, &mca_ticks,
-	    0, sysctl_positive_int, "I",
+	    "interval", CTLTYPE_INT | CTLFLAG_RWTUN | CTLFLAG_MPSAFE,
+	    &mca_ticks, 0, sysctl_positive_int, "I",
 	    "Periodic interval in seconds to scan for machine checks");
 	SYSCTL_ADD_NODE(NULL, SYSCTL_STATIC_CHILDREN(_hw_mca), OID_AUTO,
 	    "records", CTLFLAG_RD | CTLFLAG_MPSAFE, sysctl_mca_records,
@@ -1222,11 +1296,6 @@ amd_thresholding_monitor(int i)
 		    __func__, i, amd_elvt);
 		return;
 	}
-
-	/* Re-use Intel CMC support infrastructure. */
-	if (bootverbose)
-		printf("%s: Starting AMD thresholding on bank %d\n", __func__,
-		    i);
 
 	cc = &amd_et_state[PCPU_GET(cpuid)][i];
 	cc->cur_threshold = 1;

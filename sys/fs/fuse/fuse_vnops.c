@@ -613,6 +613,7 @@ fuse_vnop_close(struct vop_close_args *ap)
 	int fflag = ap->a_fflag;
 	struct thread *td = ap->a_td;
 	pid_t pid = td->td_proc->p_pid;
+	struct fuse_vnode_data *fvdat = VTOFUD(vp);
 	int err = 0;
 
 	if (fuse_isdeadfs(vp))
@@ -623,8 +624,15 @@ fuse_vnop_close(struct vop_close_args *ap)
 		return 0;
 
 	err = fuse_flush(vp, cred, pid, fflag);
+	if (err == 0 && (fvdat->flag & FN_ATIMECHANGE)) {
+		struct vattr vap;
+
+		VATTR_NULL(&vap);
+		vap.va_atime = fvdat->cached_attrs.va_atime;
+		err = fuse_internal_setattr(vp, &vap, td, NULL);
+	}
 	/* TODO: close the file handle, if we're sure it's no longer used */
-	if ((VTOFUD(vp)->flag & FN_SIZECHANGE) != 0) {
+	if ((fvdat->flag & FN_SIZECHANGE) != 0) {
 		fuse_vnode_savesize(vp, cred, td->td_proc->p_pid);
 	}
 	return err;
@@ -650,6 +658,7 @@ fuse_vnop_copy_file_range(struct vop_copy_file_range_args *ap)
 	struct vnode *invp = ap->a_invp;
 	struct vnode *outvp = ap->a_outvp;
 	struct mount *mp = vnode_mount(invp);
+	struct fuse_vnode_data *outfvdat = VTOFUD(outvp);
 	struct fuse_dispatcher fdi;
 	struct fuse_filehandle *infufh, *outfufh;
 	struct fuse_copy_file_range_in *fcfri;
@@ -731,6 +740,8 @@ fuse_vnop_copy_file_range(struct vop_copy_file_range_args *ap)
 		*ap->a_inoffp += fwo->size;
 		*ap->a_outoffp += fwo->size;
 		fuse_internal_clear_suid_on_write(outvp, outcred, td);
+		if (*ap->a_outoffp > outfvdat->cached_attrs.va_size)
+			fuse_vnode_setsize(outvp, *ap->a_outoffp, false);
 	}
 	fdisp_destroy(&fdi);
 
@@ -1286,7 +1297,6 @@ fuse_vnop_lookup(struct vop_lookup_args *ap)
 			break;
 
 		case ENOENT:		/* negative match */
-			getnanouptime(&now);
 			if (timespeccmp(&timeout, &now, <=)) {
 				/* Cache timeout */
 				cache_purge_negative(dvp);
