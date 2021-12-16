@@ -347,7 +347,6 @@ passin:
 	 */
 	if (IP_HAS_NEXTHOP(m) && !ip_get_fwdtag(m, &ndst, &nifp)) {
 		dest.s_addr = ndst.sin_addr.s_addr;
-		ip_flush_fwdtag(m);
 	}
 
 	/*
@@ -401,7 +400,6 @@ forwardlocal:
 		 */
 		if (!ip_get_fwdtag(m, &ndst, &nnifp)) {
 			dest.s_addr = ndst.sin_addr.s_addr;
-			ip_flush_fwdtag(m);
 		}
 		if (!nnifp && dest.s_addr != rtdest.s_addr &&
 		    ip_findroute(&nh, dest, m) != 0)
