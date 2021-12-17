@@ -176,12 +176,7 @@ ip6_tryforward(struct mbuf *m)
 		return (m);
 
 	ip6 = mtod(m, struct ip6_hdr *);
-	if (IP6_HAS_NEXTHOP(m) && !ip6_get_fwdtag(m, &dst, &nifp)) {
-		/*
-		 * Now we will find route to forwarded by pfil destination.
-		 */
-		ip6_flush_fwdtag(m);
-	} else {
+	if (!IP6_HAS_NEXTHOP(m) || ip6_get_fwdtag(m, &dst, &nifp)) {
 		/* Update dst since pfil could change it */
 		dst.sin6_addr = ip6->ip6_dst;
 	}
@@ -246,10 +241,10 @@ passin:
 	if (IP6_HAS_NEXTHOP(m) ||
 	    !IN6_ARE_ADDR_EQUAL(&dst.sin6_addr, &ip6->ip6_dst)) {
 		struct ifnet *nnifp = NULL;
-		if (!ip6_get_fwdtag(m, &dst, &nnifp))
-			ip6_flush_fwdtag(m);
-		else
+		if (ip6_get_fwdtag(m, &dst, &nnifp)) {
+			/* Update dst since pfil could change it */
 			dst.sin6_addr = ip6->ip6_dst;
+		}
 		/*
 		 * Redo route lookup with new destination address
 		 */

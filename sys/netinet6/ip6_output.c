@@ -1097,6 +1097,8 @@ nonh6lookup:
 		 */
 		ia = in6_ifawithifp(ifp, &ip6->ip6_src);
 		mtu = ifp->if_mtu;
+		dst = &sin6;
+		*dst = dst_sa;	/* XXX */
 		ro = NULL;
 	}
 
@@ -3419,7 +3421,13 @@ ip6_set_fwdtag(struct mbuf *m, struct sockaddr_in6 *dst, struct ifnet *ifp)
 
 	fwd_info = (struct ip6_fwdtag *)(fwd_tag+1);
 
+	fwd_info->if_index = ifp ? ifp->if_index : 0;
+
 	bcopy(dst, &fwd_info->dst, sizeof(fwd_info->dst));
+	if (fwd_info->if_index) {
+		/* force scope for pf(4) giving us an interface */
+		fwd_info->dst.sin6_scope_id = fwd_info->if_index;
+	}
 
 	/*
 	 * If nh6 address is link-local we should convert
@@ -3437,9 +3445,7 @@ ip6_set_fwdtag(struct mbuf *m, struct sockaddr_in6 *dst, struct ifnet *ifp)
 	else
 		m->m_flags &= ~M_FASTFWD_OURS;
 
-	fwd_info->if_index = ifp ? ifp->if_index : 0;
 	m->m_flags |= M_IP6_NEXTHOP;
-
 	m_tag_prepend(m, fwd_tag);
 
 	return (0);
