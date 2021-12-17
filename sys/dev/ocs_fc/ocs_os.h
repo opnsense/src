@@ -1031,14 +1031,16 @@ typedef struct ocs_pci_reg_s {
 #define PCI_MAX_BAR				6
 #define PCI_64BIT_BAR0				0
 
-#define PCI_VENDOR_EMULEX       		0x10df		/* Emulex */
+#define PCI_VENDOR_EMULEX			0x10df	/* Emulex */
 
-#define PCI_PRODUCT_EMULEX_OCE16001		0xe200		/* OneCore 16Gb FC (lancer) */
-#define PCI_PRODUCT_EMULEX_OCE16002		0xe200		/* OneCore 16Gb FC (lancer) */
+#define PCI_PRODUCT_EMULEX_OCE16001		0xe200	/* OneCore 16Gb FC (lancer) */
+#define PCI_PRODUCT_EMULEX_OCE16002		0xe200	/* OneCore 16Gb FC (lancer) */
 #define PCI_PRODUCT_EMULEX_LPE31004		0xe300  /* LightPulse 16Gb x 4 FC (lancer-g6) */
 #define PCI_PRODUCT_EMULEX_LPE32002		0xe300  /* LightPulse 32Gb x 2 FC (lancer-g6) */
+#define PCI_PRODUCT_EMULEX_LANCER_G7		0xf400	/* LightPulse 32Gb x 4 FC (lancer-g7) */
+ 
 #define PCI_PRODUCT_EMULEX_OCE1600_VF		0xe208
-#define PCI_PRODUCT_EMULEX_OCE50102		0xe260		/* OneCore FCoE (lancer) */
+#define PCI_PRODUCT_EMULEX_OCE50102		0xe260	/* OneCore FCoE (lancer) */
 #define PCI_PRODUCT_EMULEX_OCE50102_VF		0xe268
 
 /**
@@ -1050,9 +1052,8 @@ typedef struct ocs_pci_reg_s {
  * @param dev Pointer to location to store the device number.
  * @param func Pointer to location to store the function number.
  *
- * @return Returns 0.
  */
-extern int32_t
+extern void
 ocs_get_bus_dev_func(ocs_t *ocs, uint8_t* bus, uint8_t* dev, uint8_t* func);
 
 extern ocs_t *ocs_get_instance(uint32_t index);
