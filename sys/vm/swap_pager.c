@@ -100,6 +100,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/sysproto.h>
 #include <sys/systm.h>
 #include <sys/sx.h>
+#include <sys/unistd.h>
 #include <sys/user.h>
 #include <sys/vmmeter.h>
 #include <sys/vnode.h>
@@ -470,7 +471,7 @@ static void	swp_pager_free_empty_swblk(vm_object_t, struct swblk *sb);
 static int	swapongeom(struct vnode *);
 static int	swaponvp(struct thread *, struct vnode *, u_long);
 static int	swapoff_one(struct swdevt *sp, struct ucred *cred,
-		    bool ignore_check);
+		    u_int flags);
 
 /*
  * Swap bitmap functions
@@ -2473,14 +2474,9 @@ swaponsomething(struct vnode *vp, void *id, u_long nblks,
  * rather than filename as specification.  We keep sw_vp around
  * only to make this work.
  */
-#ifndef _SYS_SYSPROTO_H_
-struct swapoff_args {
-	char *name;
-};
-#endif
-
-int
-sys_swapoff(struct thread *td, struct swapoff_args *uap)
+static int
+kern_swapoff(struct thread *td, const char *name, enum uio_seg name_seg,
+    u_int flags)
 {
 	struct vnode *vp;
 	struct nameidata nd;
@@ -2488,13 +2484,14 @@ sys_swapoff(struct thread *td, struct swapoff_args *uap)
 	int error;
 
 	error = priv_check(td, PRIV_SWAPOFF);
-	if (error)
+	if (error != 0)
 		return (error);
+	if ((flags & ~(SWAPOFF_FORCE)) != 0)
+		return (EINVAL);
 
 	sx_xlock(&swdev_syscall_lock);
 
-	NDINIT(&nd, LOOKUP, FOLLOW | AUDITVNODE1, UIO_USERSPACE, uap->name,
-	    td);
+	NDINIT(&nd, LOOKUP, FOLLOW | AUDITVNODE1, name_seg, name, td);
 	error = namei(&nd);
 	if (error)
 		goto done;
@@ -2511,14 +2508,26 @@ sys_swapoff(struct thread *td, struct swapoff_args *uap)
 		error = EINVAL;
 		goto done;
 	}
-	error = swapoff_one(sp, td->td_ucred, false);
+	error = swapoff_one(sp, td->td_ucred, flags);
 done:
 	sx_xunlock(&swdev_syscall_lock);
 	return (error);
 }
 
+int
+freebsd13_swapoff(struct thread *td, struct freebsd13_swapoff_args *uap)
+{
+	return (kern_swapoff(td, uap->name, UIO_USERSPACE, 0));
+}
+
+int
+sys_swapoff(struct thread *td, struct swapoff_args *uap)
+{
+	return (kern_swapoff(td, uap->name, UIO_USERSPACE, uap->flags));
+}
+
 static int
-swapoff_one(struct swdevt *sp, struct ucred *cred, bool ignore_check)
+swapoff_one(struct swdevt *sp, struct ucred *cred, u_int flags)
 {
 	u_long nblks;
 #ifdef MAC
@@ -2548,7 +2557,7 @@ swapoff_one(struct swdevt *sp, struct ucred *cred, bool ignore_check)
 	 * means that we can lose swap data when filesystems go away,
 	 * which is arguably worse.
 	 */
-	if (!ignore_check &&
+	if ((flags & SWAPOFF_FORCE) == 0 &&
 	    vm_free_count() + swap_pager_avail < nblks + nswap_lowat)
 		return (ENOMEM);
 
@@ -2599,7 +2608,7 @@ swapoff_all(void)
 			devname = devtoname(sp->sw_vp->v_rdev);
 		else
 			devname = "[file]";
-		error = swapoff_one(sp, thread0.td_ucred, true);
+		error = swapoff_one(sp, thread0.td_ucred, SWAPOFF_FORCE);
 		if (error != 0) {
 			printf("Cannot remove swap device %s (error=%d), "
 			    "skipping.\n", devname, error);

@@ -855,28 +855,44 @@ fail:
 	return (error);
 }
 
-static u_long
-__CONCAT(rnd_, __elfN(base))(vm_map_t map __unused, u_long minv, u_long maxv,
-    u_int align)
+/*
+ * Select randomized valid address in the map map, between minv and
+ * maxv, with specified alignment.  The [minv, maxv) range must belong
+ * to the map.  Note that function only allocates the address, it is
+ * up to caller to clamp maxv in a way that the final allocation
+ * length fit into the map.
+ *
+ * Result is returned in *resp, error code indicates that arguments
+ * did not pass sanity checks for overflow and range correctness.
+ */
+static int
+__CONCAT(rnd_, __elfN(base))(vm_map_t map, u_long minv, u_long maxv,
+    u_int align, u_long *resp)
 {
 	u_long rbase, res;
 
 	MPASS(vm_map_min(map) <= minv);
-	MPASS(maxv <= vm_map_max(map));
-	MPASS(minv < maxv);
-	MPASS(minv + align < maxv);
+
+	if (minv >= maxv || minv + align >= maxv || maxv > vm_map_max(map)) {
+		uprintf("Invalid ELF segments layout\n");
+		return (ENOEXEC);
+	}
+
 	arc4rand(&rbase, sizeof(rbase), 0);
 	res = roundup(minv, (u_long)align) + rbase % (maxv - minv);
 	res &= ~((u_long)align - 1);
 	if (res >= maxv)
 		res -= align;
+
 	KASSERT(res >= minv,
 	    ("res %#lx < minv %#lx, maxv %#lx rbase %#lx",
 	    res, minv, maxv, rbase));
 	KASSERT(res < maxv,
 	    ("res %#lx > maxv %#lx, minv %#lx rbase %#lx",
 	    res, maxv, minv, rbase));
-	return (res);
+
+	*resp = res;
+	return (0);
 }
 
 static int
@@ -1076,7 +1092,7 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 	Elf_Brandinfo *brand_info;
 	struct sysentvec *sv;
 	u_long addr, baddr, et_dyn_addr, entry, proghdr;
-	u_long maxalign, mapsz, maxv, maxv1;
+	u_long maxalign, maxsalign, mapsz, maxv, maxv1, anon_loc;
 	uint32_t fctl0;
 	int32_t osrel;
 	bool free_interp;
@@ -1117,7 +1133,20 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 	interp = NULL;
 	free_interp = false;
 	td = curthread;
+
+	/*
+	 * Somewhat arbitrary, limit accepted max alignment for the
+	 * loadable segment to the max supported superpage size. Too
+	 * large alignment requests are not useful and are indicators
+	 * of corrupted or outright malicious binary.
+	 */
 	maxalign = PAGE_SIZE;
+	maxsalign = PAGE_SIZE * 1024;
+	for (i = MAXPAGESIZES - 1; i > 0; i--) {
+		if (pagesizes[i] > maxsalign)
+			maxsalign = pagesizes[i];
+	}
+
 	mapsz = 0;
 
 	for (i = 0; i < hdr->e_phnum; i++) {
@@ -1125,8 +1154,19 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 		case PT_LOAD:
 			if (n == 0)
 				baddr = phdr[i].p_vaddr;
+			if (!powerof2(phdr[i].p_align) ||
+			    phdr[i].p_align > maxsalign) {
+				uprintf("Invalid segment alignment\n");
+				error = ENOEXEC;
+				goto ret;
+			}
 			if (phdr[i].p_align > maxalign)
 				maxalign = phdr[i].p_align;
+			if (mapsz + phdr[i].p_memsz < mapsz) {
+				uprintf("Mapsize overflow\n");
+				error = ENOEXEC;
+				goto ret;
+			}
 			mapsz += phdr[i].p_memsz;
 			n++;
 
@@ -1137,8 +1177,8 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 			 * a PT_PHDR entry.
 			 */
 			if (phdr[i].p_offset == 0 &&
-			    hdr->e_phoff + hdr->e_phnum * hdr->e_phentsize
-				<= phdr[i].p_filesz)
+			    hdr->e_phoff + hdr->e_phnum * hdr->e_phentsize <=
+			    phdr[i].p_filesz)
 				proghdr = phdr[i].p_vaddr + hdr->e_phoff;
 			break;
 		case PT_INTERP:
@@ -1255,13 +1295,18 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 	imgp->proc->p_sysent = sv;
 
 	maxv = vm_map_max(map) - lim_max(td, RLIMIT_STACK);
-	if (et_dyn_addr == ET_DYN_ADDR_RAND) {
+	if (mapsz >= maxv - vm_map_min(map)) {
+		uprintf("Excessive mapping size\n");
+		error = ENOEXEC;
+	}
+
+	if (error == 0 && et_dyn_addr == ET_DYN_ADDR_RAND) {
 		KASSERT((map->flags & MAP_ASLR) != 0,
 		    ("ET_DYN_ADDR_RAND but !MAP_ASLR"));
-		et_dyn_addr = __CONCAT(rnd_, __elfN(base))(map,
+		error = __CONCAT(rnd_, __elfN(base))(map,
 		    vm_map_min(map) + mapsz + lim_max(td, RLIMIT_DATA),
 		    /* reserve half of the address space to interpreter */
-		    maxv / 2, 1UL << flsl(maxalign));
+		    maxv / 2, maxalign, &et_dyn_addr);
 	}
 
 	vn_lock(imgp->vp, LK_SHARED | LK_RETRY);
@@ -1288,10 +1333,12 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 	    RLIMIT_DATA));
 	if ((map->flags & MAP_ASLR) != 0) {
 		maxv1 = maxv / 2 + addr / 2;
-		MPASS(maxv1 >= addr);	/* No overflow */
-		map->anon_loc = __CONCAT(rnd_, __elfN(base))(map, addr, maxv1,
+		error = __CONCAT(rnd_, __elfN(base))(map, addr, maxv1,
 		    (MAXPAGESIZES > 1 && pagesizes[1] != 0) ?
-		    pagesizes[1] : pagesizes[0]);
+		    pagesizes[1] : pagesizes[0], &anon_loc);
+		if (error != 0)
+			goto ret;
+		map->anon_loc = anon_loc;
 	} else {
 		map->anon_loc = addr;
 	}
@@ -1303,12 +1350,13 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 		if ((map->flags & MAP_ASLR) != 0) {
 			/* Assume that interpreter fits into 1/4 of AS */
 			maxv1 = maxv / 2 + addr / 2;
-			MPASS(maxv1 >= addr);	/* No overflow */
-			addr = __CONCAT(rnd_, __elfN(base))(map, addr,
-			    maxv1, PAGE_SIZE);
+			error = __CONCAT(rnd_, __elfN(base))(map, addr,
+			    maxv1, PAGE_SIZE, &addr);
 		}
-		error = __elfN(load_interp)(imgp, brand_info, interp, &addr,
-		    &imgp->entry_addr);
+		if (error == 0) {
+			error = __elfN(load_interp)(imgp, brand_info, interp,
+			    &addr, &imgp->entry_addr);
+		}
 		vn_lock(imgp->vp, LK_SHARED | LK_RETRY);
 		if (error != 0)
 			goto ret;
@@ -1343,6 +1391,7 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 	imgp->proc->p_elf_flags = hdr->e_flags;
 
 ret:
+	ASSERT_VOP_LOCKED(imgp->vp, "skipped relock");
 	if (free_interp)
 		free(interp, M_TEMP);
 	return (error);
