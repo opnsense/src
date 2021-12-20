@@ -97,7 +97,7 @@ ip6_forward(struct mbuf *m, int srcrt)
 	int error, type = 0, code = 0;
 	struct mbuf *mcopy = NULL;
 	struct ifnet *origifp;	/* maybe unnecessary */
-	struct ifnet *nifp = NULL;
+	struct ifnet *ifp = NULL, *nifp = NULL;
 	u_int32_t inzone, outzone;
 	struct in6_addr odst;
 	char ip6bufs[INET6_ADDRSTRLEN], ip6bufd[INET6_ADDRSTRLEN];
@@ -196,6 +196,10 @@ again:
 		goto bad;
 	}
 
+routed:
+	if (nh)
+		ifp = nh->nh_ifp;
+
 	/*
 	 * Source scope check: if a packet can't be delivered to its
 	 * destination for the reason that the destination is beyond the scope
@@ -204,12 +208,12 @@ again:
 	 * address).
 	 * [draft-ietf-ipngwg-icmp-v3-04.txt, Section 3.1]
 	 */
-	outzone = in6_get_unicast_scopeid(&ip6->ip6_src, nh->nh_ifp);
+	outzone = in6_get_unicast_scopeid(&ip6->ip6_src, ifp);
 	inzone = in6_get_unicast_scopeid(&ip6->ip6_src, m->m_pkthdr.rcvif);
 	if (inzone != outzone) {
 		IP6STAT_INC(ip6s_cantforward);
 		IP6STAT_INC(ip6s_badscope);
-		in6_ifstat_inc(nh->nh_ifp, ifs6_in_discard);
+		in6_ifstat_inc(ifp, ifs6_in_discard);
 
 		if (V_ip6_log_time + V_ip6_log_interval < time_uptime) {
 			V_ip6_log_time = time_uptime;
@@ -219,7 +223,7 @@ again:
 			    ip6_sprintf(ip6bufs, &ip6->ip6_src),
 			    ip6_sprintf(ip6bufd, &ip6->ip6_dst),
 			    ip6->ip6_nxt,
-			    if_name(m->m_pkthdr.rcvif), if_name(nh->nh_ifp));
+			    if_name(m->m_pkthdr.rcvif), if_name(ifp));
 		}
 		if (mcopy)
 			icmp6_error(mcopy, ICMP6_DST_UNREACH,
@@ -235,7 +239,7 @@ again:
 	 * packet to a different zone by (e.g.) a default route.
 	 */
 	inzone = in6_get_unicast_scopeid(&ip6->ip6_dst, m->m_pkthdr.rcvif);
-	outzone = in6_get_unicast_scopeid(&ip6->ip6_dst, nh->nh_ifp);
+	outzone = in6_get_unicast_scopeid(&ip6->ip6_dst, ifp);
 
 	if (inzone != outzone) {
 		IP6STAT_INC(ip6s_cantforward);
@@ -243,7 +247,7 @@ again:
 		goto bad;
 	}
 
-	if (nh->nh_flags & NHF_GATEWAY) {
+	if (nh && nh->nh_flags & NHF_GATEWAY) {
 		/* Store gateway address in deembedded form */
 		dst.sin6_addr = nh->gw6_sa.sin6_addr;
 		dst.sin6_scope_id = ntohs(in6_getscope(&dst.sin6_addr));
@@ -259,7 +263,7 @@ again:
 	 * Also, don't send redirect if forwarding using a route
 	 * modified by a redirect.
 	 */
-	if (V_ip6_sendredirects && nh->nh_ifp == m->m_pkthdr.rcvif && !srcrt &&
+	if (V_ip6_sendredirects && nh && nh->nh_ifp == m->m_pkthdr.rcvif && !srcrt &&
 	    (nh->nh_flags & NHF_REDIRECT) == 0)
 		type = ND_REDIRECT;
 
@@ -271,7 +275,7 @@ again:
 	 * link identifiers, we can do this stuff after making a copy for
 	 * returning an error.
 	 */
-	if ((nh->nh_ifp->if_flags & IFF_LOOPBACK) != 0) {
+	if ((ifp->if_flags & IFF_LOOPBACK) != 0) {
 		/*
 		 * See corresponding comments in ip6_output.
 		 * XXX: but is it possible that ip6_forward() sends a packet
@@ -292,14 +296,14 @@ again:
 			       ip6_sprintf(ip6bufs, &ip6->ip6_src),
 			       ip6_sprintf(ip6bufd, &ip6->ip6_dst),
 			       ip6->ip6_nxt, if_name(m->m_pkthdr.rcvif),
-			       if_name(nh->nh_ifp));
+			       if_name(ifp));
 		}
 
 		/* we can just use rcvif in forwarding. */
 		origifp = m->m_pkthdr.rcvif;
 	}
 	else
-		origifp = nh->nh_ifp;
+		origifp = ifp;
 	/*
 	 * clear embedded scope identifiers if necessary.
 	 * in6_clearscope will touch the addresses only when necessary.
@@ -313,7 +317,7 @@ again:
 
 	odst = ip6->ip6_dst;
 	/* Run through list of hooks for forwarded packets. */
-	if (pfil_run_hooks(V_inet6_pfil_head, &m, nh->nh_ifp, PFIL_OUT |
+	if (pfil_run_hooks(V_inet6_pfil_head, &m, ifp, PFIL_OUT |
 	    PFIL_FWD, NULL) != PFIL_PASS)
 		goto freecopy;
 	ip6 = mtod(m, struct ip6_hdr *);
@@ -363,24 +367,20 @@ again:
 		NH_FREE(nh);
 		if (!nifp)
 			goto again;
-		/* XXX for safety but not sure */
-		if ((nifp->if_flags & IFF_LOOPBACK) != 0)
-			origifp = m->m_pkthdr.rcvif;
-		else
-			origifp = nifp;
+		nh = NULL;
+		ifp = nifp;
+		goto routed;
 	}
 
 pass:
-	if (!nifp)
-		nifp = nh->nh_ifp;
 
 	/* See if the size was changed by the packet filter. */
 	/* TODO: change to nh->nh_mtu */
-	if (m->m_pkthdr.len > IN6_LINKMTU(nifp)) {
-		in6_ifstat_inc(nifp, ifs6_in_toobig);
+	if (m->m_pkthdr.len > IN6_LINKMTU(ifp)) {
+		in6_ifstat_inc(ifp, ifs6_in_toobig);
 		if (mcopy)
 			icmp6_error(mcopy, ICMP6_PACKET_TOO_BIG, 0,
-			    IN6_LINKMTU(nifp));
+			    IN6_LINKMTU(ifp));
 		goto bad;
 	}
 
@@ -389,13 +389,13 @@ pass:
 		in6_set_unicast_scopeid(&dst.sin6_addr, dst.sin6_scope_id);
 		dst.sin6_scope_id = 0;
 	}
-	error = nd6_output_ifp(nifp, origifp, m, &dst, NULL);
+	error = nd6_output_ifp(ifp, origifp, m, &dst, NULL);
 	if (error) {
-		in6_ifstat_inc(nifp, ifs6_out_discard);
+		in6_ifstat_inc(ifp, ifs6_out_discard);
 		IP6STAT_INC(ip6s_cantforward);
 	} else {
 		IP6STAT_INC(ip6s_forward);
-		in6_ifstat_inc(nifp, ifs6_out_forward);
+		in6_ifstat_inc(ifp, ifs6_out_forward);
 		if (type)
 			IP6STAT_INC(ip6s_redirectsent);
 		else {

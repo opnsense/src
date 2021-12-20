@@ -671,6 +671,7 @@ again:
 	 */
 	nh = NULL;
 	ifp = NULL;
+	origifp = NULL;
 	mtu = 0;
 	if (ro != NULL) {
 		if (ro->ro_nh != NULL && inp != NULL) {
@@ -1083,18 +1084,13 @@ nonh6lookup:
 		has_fwd_tag = 1;
 		if (!nifp)
 			goto again;
-		/* XXX for safety but not sure */
-		if ((nifp->if_flags & IFF_LOOPBACK) != 0)
-			origifp = m->m_pkthdr.rcvif;
-		else
-			origifp = nifp;
-		ifp = nifp;
 		/*
 		 * pf(4) decided on interface so
 		 * emulate the previous way of
 		 * if_output() with new ifp/dst
 		 * combo and no route set.
 		 */
+		ifp = nifp;
 		ia = in6_ifawithifp(ifp, &ip6->ip6_src);
 		mtu = ifp->if_mtu;
 		dst = &sin6;
