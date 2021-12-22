@@ -6142,11 +6142,10 @@ pf_route_shared(struct mbuf **m, struct pf_krule *r, int dir,
 	if (ip_set_fwdtag(m0, &dst, ifp))
 		goto bad;
 
-	if ((r->rt == PF_DUPTO || r->rt == PF_REPLYTO) && IP_HAS_NEXTHOP(m0)) {
+	if (r->rt == PF_DUPTO) {
 		ip_forward(m0, 1);
-		if (r->rt == PF_REPLYTO)
-			*m = NULL;
 	}
+
 	return;
 
 bad_locked:
@@ -6380,21 +6379,16 @@ pf_route6_shared(struct mbuf **m, struct pf_krule *r, int dir,
 			PF_ACPY((struct pf_addr *)&dst.sin6_addr,
 			    &s->rt_addr, AF_INET6);
 		ifp = s->rt_kif ? s->rt_kif->pfik_ifp : NULL;
-	}
-
-	if (s)
 		PF_STATE_UNLOCK(s);
-
+	}
 	if (ifp == NULL)
 		goto bad;
 
 	if (ip6_set_fwdtag(m0, &dst, ifp))
 		goto bad;
 
-	if ((r->rt == PF_DUPTO || r->rt == PF_REPLYTO) && IP6_HAS_NEXTHOP(m0)) {
+	if (r->rt == PF_DUPTO) {
 		ip6_forward(m0, 1);
-		if (r->rt == PF_REPLYTO)
-			*m = NULL;
 	}
 
 	return;
