@@ -194,12 +194,11 @@ again:
 			ICMP6_DST_UNREACH_NOROUTE, 0);
 		}
 		goto bad;
+	} else {
+		ifp = nh->nh_ifp;
 	}
 
 routed:
-	if (nh)
-		ifp = nh->nh_ifp;
-
 	/*
 	 * Source scope check: if a packet can't be delivered to its
 	 * destination for the reason that the destination is beyond the scope
@@ -329,7 +328,8 @@ routed:
 		if (in6_localip(&ip6->ip6_dst))
 			m->m_flags |= M_FASTFWD_OURS;
 		else {
-			NH_FREE(nh);
+			if (nh)
+				NH_FREE(nh);
 
 			/* Update address and scopeid. Assume scope is embedded */
 			dst.sin6_scope_id = ntohs(in6_getscope(&ip6->ip6_dst));
@@ -364,10 +364,10 @@ routed:
 
 		m->m_flags |= M_SKIP_FIREWALL;
 		ip6_flush_fwdtag(m);
-		NH_FREE(nh);
+		if (nh)
+			NH_FREE(nh);
 		if (!nifp)
 			goto again;
-		nh = NULL;
 		ifp = nifp;
 		goto routed;
 	}
