@@ -383,7 +383,7 @@ static void pmap_abort_ptp(pmap_t pmap, vm_offset_t va, vm_page_t mpte);
 static bool pmap_activate_int(pmap_t pmap);
 static void pmap_alloc_asid(pmap_t pmap);
 static int pmap_change_props_locked(vm_offset_t va, vm_size_t size,
-    vm_prot_t prot, int mode);
+    vm_prot_t prot, int mode, bool skip_unmapped);
 static pt_entry_t *pmap_demote_l1(pmap_t pmap, pt_entry_t *l1, vm_offset_t va);
 static pt_entry_t *pmap_demote_l2_locked(pmap_t pmap, pt_entry_t *l2,
     vm_offset_t va, struct rwlock **lockp);
@@ -5569,14 +5569,14 @@ retry:
 			}
 		}
 		va = pv->pv_va;
-		pde = pmap_pde(pmap, pv->pv_va, &lvl);
+		pde = pmap_pde(pmap, va, &lvl);
 		KASSERT(pde != NULL, ("pmap_ts_referenced: no l1 table found"));
 		KASSERT(lvl == 1,
 		    ("pmap_ts_referenced: invalid pde level %d", lvl));
 		tpde = pmap_load(pde);
 		KASSERT((tpde & ATTR_DESCR_MASK) == L1_TABLE,
 		    ("pmap_ts_referenced: found an invalid l1 table"));
-		pte = pmap_l1_to_l2(pde, pv->pv_va);
+		pte = pmap_l1_to_l2(pde, va);
 		tpte = pmap_load(pte);
 		if (pmap_pte_dirty(pmap, tpte)) {
 			/*
@@ -5606,11 +5606,11 @@ retry:
 			 * since the superpage is wired, the current state of
 			 * its reference bit won't affect page replacement.
 			 */
-			if ((((pa >> PAGE_SHIFT) ^ (pv->pv_va >> L2_SHIFT) ^
+			if ((((pa >> PAGE_SHIFT) ^ (va >> L2_SHIFT) ^
 			    (uintptr_t)pmap) & (Ln_ENTRIES - 1)) == 0 &&
 			    (tpte & ATTR_SW_WIRED) == 0) {
 				pmap_clear_bits(pte, ATTR_AF);
-				pmap_invalidate_page(pmap, pv->pv_va);
+				pmap_invalidate_page(pmap, va);
 				cleared++;
 			} else
 				not_cleared++;
@@ -6115,7 +6115,7 @@ pmap_change_attr(vm_offset_t va, vm_size_t size, int mode)
 	int error;
 
 	PMAP_LOCK(kernel_pmap);
-	error = pmap_change_props_locked(va, size, PROT_NONE, mode);
+	error = pmap_change_props_locked(va, size, PROT_NONE, mode, false);
 	PMAP_UNLOCK(kernel_pmap);
 	return (error);
 }
@@ -6137,17 +6137,18 @@ pmap_change_prot(vm_offset_t va, vm_size_t size, vm_prot_t prot)
 		return (EINVAL);
 
 	PMAP_LOCK(kernel_pmap);
-	error = pmap_change_props_locked(va, size, prot, -1);
+	error = pmap_change_props_locked(va, size, prot, -1, false);
 	PMAP_UNLOCK(kernel_pmap);
 	return (error);
 }
 
 static int
 pmap_change_props_locked(vm_offset_t va, vm_size_t size, vm_prot_t prot,
-    int mode)
+    int mode, bool skip_unmapped)
 {
 	vm_offset_t base, offset, tmpva;
 	vm_size_t pte_size;
+	vm_paddr_t pa;
 	pt_entry_t pte, *ptep, *newpte;
 	pt_entry_t bits, mask;
 	int lvl, rv;
@@ -6195,13 +6196,14 @@ pmap_change_props_locked(vm_offset_t va, vm_size_t size, vm_prot_t prot,
 
 	for (tmpva = base; tmpva < base + size; ) {
 		ptep = pmap_pte(kernel_pmap, tmpva, &lvl);
-		if (ptep == NULL)
+		if (ptep == NULL && !skip_unmapped) {
 			return (EINVAL);
-
-		if ((pmap_load(ptep) & mask) == bits) {
+		} else if ((ptep == NULL && skip_unmapped) ||
+		    (pmap_load(ptep) & mask) == bits) {
 			/*
-			 * We already have the correct attribute,
-			 * ignore this entry.
+			 * We already have the correct attribute or there
+			 * is no memory mapped at this address and we are
+			 * skipping unmapped memory.
 			 */
 			switch (lvl) {
 			default:
@@ -6261,13 +6263,14 @@ pmap_change_props_locked(vm_offset_t va, vm_size_t size, vm_prot_t prot,
 			pmap_update_entry(kernel_pmap, ptep, pte, tmpva,
 			    pte_size);
 
-			if (!VIRT_IN_DMAP(tmpva)) {
+			pa = pte & ~ATTR_MASK;
+			if (!VIRT_IN_DMAP(tmpva) && PHYS_IN_DMAP(pa)) {
 				/*
 				 * Keep the DMAP memory in sync.
 				 */
 				rv = pmap_change_props_locked(
-				    PHYS_TO_DMAP(pte & ~ATTR_MASK), pte_size,
-				    prot, mode);
+				    PHYS_TO_DMAP(pa), pte_size,
+				    prot, mode, true);
 				if (rv != 0)
 					return (rv);
 			}
@@ -7178,11 +7181,12 @@ sysctl_kmaps_dump(struct sbuf *sb, struct pmap_kernel_map_range *range,
 		break;
 	}
 
-	sbuf_printf(sb, "0x%016lx-0x%016lx r%c%c%c %3s %d %d %d %d\n",
+	sbuf_printf(sb, "0x%016lx-0x%016lx r%c%c%c%c %3s %d %d %d %d\n",
 	    range->sva, eva,
 	    (range->attrs & ATTR_S1_AP_RW_BIT) == ATTR_S1_AP_RW ? 'w' : '-',
 	    (range->attrs & ATTR_S1_PXN) != 0 ? '-' : 'x',
-	    (range->attrs & ATTR_S1_AP_USER) != 0 ? 'u' : 's',
+	    (range->attrs & ATTR_S1_UXN) != 0 ? '-' : 'X',
+	    (range->attrs & ATTR_S1_AP(ATTR_S1_AP_USER)) != 0 ? 'u' : 's',
 	    mode, range->l1blocks, range->l2blocks, range->l3contig,
 	    range->l3pages);
 
@@ -7211,6 +7215,30 @@ sysctl_kmaps_reinit(struct pmap_kernel_map_range *range, vm_offset_t va,
 	range->attrs = attrs;
 }
 
+/* Get the block/page attributes that correspond to the table attributes */
+static pt_entry_t
+sysctl_kmaps_table_attrs(pd_entry_t table)
+{
+	pt_entry_t attrs;
+
+	attrs = 0;
+	if ((table & TATTR_UXN_TABLE) != 0)
+		attrs |= ATTR_S1_UXN;
+	if ((table & TATTR_PXN_TABLE) != 0)
+		attrs |= ATTR_S1_PXN;
+	if ((table & TATTR_AP_TABLE_RO) != 0)
+		attrs |= ATTR_S1_AP(ATTR_S1_AP_RO);
+
+	return (attrs);
+}
+
+/* Read the block/page attributes we care about */
+static pt_entry_t
+sysctl_kmaps_block_attrs(pt_entry_t block)
+{
+	return (block & (ATTR_S1_AP_MASK | ATTR_S1_XN | ATTR_S1_IDX_MASK));
+}
+
 /*
  * Given a leaf PTE, derive the mapping's attributes.  If they do not match
  * those of the current run, dump the address range and its attributes, and
@@ -7223,15 +7251,22 @@ sysctl_kmaps_check(struct sbuf *sb, struct pmap_kernel_map_range *range,
 {
 	pt_entry_t attrs;
 
-	attrs = l0e & (ATTR_S1_AP_MASK | ATTR_S1_XN);
-	attrs |= l1e & (ATTR_S1_AP_MASK | ATTR_S1_XN);
-	if ((l1e & ATTR_DESCR_MASK) == L1_BLOCK)
-		attrs |= l1e & ATTR_S1_IDX_MASK;
-	attrs |= l2e & (ATTR_S1_AP_MASK | ATTR_S1_XN);
-	if ((l2e & ATTR_DESCR_MASK) == L2_BLOCK)
-		attrs |= l2e & ATTR_S1_IDX_MASK;
-	attrs |= l3e & (ATTR_S1_AP_MASK | ATTR_S1_XN | ATTR_S1_IDX_MASK);
+	attrs = sysctl_kmaps_table_attrs(l0e);
 
+	if ((l1e & ATTR_DESCR_TYPE_MASK) == ATTR_DESCR_TYPE_BLOCK) {
+		attrs |= sysctl_kmaps_block_attrs(l1e);
+		goto done;
+	}
+	attrs |= sysctl_kmaps_table_attrs(l1e);
+
+	if ((l2e & ATTR_DESCR_TYPE_MASK) == ATTR_DESCR_TYPE_BLOCK) {
+		attrs |= sysctl_kmaps_block_attrs(l2e);
+		goto done;
+	}
+	attrs |= sysctl_kmaps_table_attrs(l2e);
+	attrs |= sysctl_kmaps_block_attrs(l3e);
+
+done:
 	if (range->sva > va || !sysctl_kmaps_match(range, attrs)) {
 		sysctl_kmaps_dump(sb, range, va);
 		sysctl_kmaps_reinit(range, va, attrs);
