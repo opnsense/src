@@ -464,15 +464,9 @@ passout:
 
 	/* Handle redirect case. */
 	redest.s_addr = 0;
-<<<<<<< HEAD
-	if (V_ipsendredirects && (nifp == m->m_pkthdr.rcvif) &&
-	    gw->sa_family == AF_INET)
-		mcopy = ip_redir_alloc(m, nh, ip, &redest.s_addr);
-=======
 	if (V_ipsendredirects && osrc.s_addr == ip->ip_src.s_addr &&
-	    nh->nh_ifp == m->m_pkthdr.rcvif)
+	    nifp == m->m_pkthdr.rcvif)
 		mcopy = ip_redir_alloc(m, nh, ip_len, &osrc, &redest);
->>>>>>> upstream/stable/13
 
 	/*
 	 * Check if packet fits MTU or if hardware will fragment for us
