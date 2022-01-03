@@ -119,6 +119,7 @@ SYSCTL_INT(_kern, OID_AUTO, coredump_pack_vmmapinfo, CTLFLAG_RWTUN,
 
 static int sysctl_kern_ps_strings(SYSCTL_HANDLER_ARGS);
 static int sysctl_kern_usrstack(SYSCTL_HANDLER_ARGS);
+static int sysctl_kern_stacktop(SYSCTL_HANDLER_ARGS);
 static int sysctl_kern_stackprot(SYSCTL_HANDLER_ARGS);
 static int do_execve(struct thread *td, struct image_args *args,
     struct mac *mac_p, struct vmspace *oldvmspace);
@@ -132,6 +133,10 @@ SYSCTL_PROC(_kern, KERN_PS_STRINGS, ps_strings, CTLTYPE_ULONG|CTLFLAG_RD|
 SYSCTL_PROC(_kern, KERN_USRSTACK, usrstack, CTLTYPE_ULONG|CTLFLAG_RD|
     CTLFLAG_CAPRD|CTLFLAG_MPSAFE, NULL, 0, sysctl_kern_usrstack, "LU",
     "Top of process stack");
+
+SYSCTL_PROC(_kern, KERN_STACKTOP, stacktop, CTLTYPE_ULONG | CTLFLAG_RD |
+    CTLFLAG_CAPRD | CTLFLAG_MPSAFE, NULL, 0, sysctl_kern_stacktop, "LU",
+    "Top of process stack with stack gap.");
 
 SYSCTL_PROC(_kern, OID_AUTO, stackprot, CTLTYPE_INT|CTLFLAG_RD|CTLFLAG_MPSAFE,
     NULL, 0, sysctl_kern_stackprot, "I",
@@ -191,7 +196,31 @@ sysctl_kern_usrstack(SYSCTL_HANDLER_ARGS)
 #endif
 		error = SYSCTL_OUT(req, &p->p_sysent->sv_usrstack,
 		    sizeof(p->p_sysent->sv_usrstack));
-	return error;
+	return (error);
+}
+
+static int
+sysctl_kern_stacktop(SYSCTL_HANDLER_ARGS)
+{
+	vm_offset_t stacktop;
+	struct proc *p;
+	int error;
+
+	p = curproc;
+#ifdef SCTL_MASK32
+	if (req->flags & SCTL_MASK32) {
+		unsigned int val;
+
+		val = (unsigned int)(p->p_sysent->sv_usrstack -
+		    p->p_vmspace->vm_stkgap);
+		error = SYSCTL_OUT(req, &val, sizeof(val));
+	} else
+#endif
+	{
+		stacktop = p->p_sysent->sv_usrstack - p->p_vmspace->vm_stkgap;
+		error = SYSCTL_OUT(req, &stacktop, sizeof(stacktop));
+	}
+	return (error);
 }
 
 static int
@@ -352,6 +381,7 @@ kern_execve(struct thread *td, struct image_args *args, struct mac *mac_p,
     struct vmspace *oldvmspace)
 {
 
+	TSEXEC(td->td_proc->p_pid, args->begin_argv);
 	AUDIT_ARG_ARGV(args->begin_argv, args->argc,
 	    exec_args_get_begin_envv(args) - args->begin_argv);
 	AUDIT_ARG_ENVV(exec_args_get_begin_envv(args), args->envc,
@@ -1223,6 +1253,7 @@ exec_new_vmspace(struct image_params *imgp, struct sysentvec *sv)
 		    stack_prot, error, vm_mmap_to_errno(error));
 		return (vm_mmap_to_errno(error));
 	}
+	vmspace->vm_stkgap = 0;
 
 	/*
 	 * vm_ssize and vm_maxsaddr are somewhat antiquated concepts, but they
@@ -1633,12 +1664,16 @@ exec_args_get_begin_envv(struct image_args *args)
 void
 exec_stackgap(struct image_params *imgp, uintptr_t *dp)
 {
+	struct proc *p = imgp->proc;
+
 	if (imgp->sysent->sv_stackgap == NULL ||
-	    (imgp->proc->p_fctl0 & (NT_FREEBSD_FCTL_ASLR_DISABLE |
+	    (p->p_fctl0 & (NT_FREEBSD_FCTL_ASLR_DISABLE |
 	    NT_FREEBSD_FCTL_ASG_DISABLE)) != 0 ||
-	    (imgp->map_flags & MAP_ASLR) == 0)
+	    (imgp->map_flags & MAP_ASLR) == 0) {
+		p->p_vmspace->vm_stkgap = 0;
 		return;
-	imgp->sysent->sv_stackgap(imgp, dp);
+	}
+	p->p_vmspace->vm_stkgap = imgp->sysent->sv_stackgap(imgp, dp);
 }
 
 /*
