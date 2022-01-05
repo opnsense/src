@@ -2076,6 +2076,7 @@ device_probe_child(device_t dev, device_t child)
 	driverlink_t best = NULL;
 	driverlink_t dl;
 	int result, pri = 0;
+	/* We should preserve the devclass (or lack of) set by the bus. */
 	int hasclass = (child->devclass != NULL);
 
 	GIANT_REQUIRED;
@@ -2085,10 +2086,9 @@ device_probe_child(device_t dev, device_t child)
 		panic("device_probe_child: parent device has no devclass");
 
 	/*
-	 * If the state is already probed, then return.  However, don't
-	 * return if we can rebid this object.
+	 * If the state is already probed, then return.
 	 */
-	if (child->state == DS_ALIVE && (child->flags & DF_REBID) == 0)
+	if (child->state == DS_ALIVE)
 		return (0);
 
 	for (; dc; dc = dc->parent) {
@@ -2128,11 +2128,6 @@ device_probe_child(device_t dev, device_t child)
 
 			result = DEVICE_PROBE(child);
 
-			/* Reset flags and devclass before the next probe. */
-			child->devflags = 0;
-			if (!hasclass)
-				(void)device_set_devclass(child, NULL);
-
 			/*
 			 * If the driver returns SUCCESS, there can be
 			 * no higher match for this device.
@@ -2142,6 +2137,11 @@ device_probe_child(device_t dev, device_t child)
 				pri = 0;
 				break;
 			}
+
+			/* Reset flags and devclass before the next probe. */
+			child->devflags = 0;
+			if (!hasclass)
+				(void)device_set_devclass(child, NULL);
 
 			/*
 			 * Reset DF_QUIET in case this driver doesn't
@@ -2187,62 +2187,43 @@ device_probe_child(device_t dev, device_t child)
 			break;
 	}
 
+	if (best == NULL)
+		return (ENXIO);
+
 	/*
 	 * If we found a driver, change state and initialise the devclass.
 	 */
-	/* XXX What happens if we rebid and got no best? */
-	if (best) {
-		/*
-		 * If this device was attached, and we were asked to
-		 * rescan, and it is a different driver, then we have
-		 * to detach the old driver and reattach this new one.
-		 * Note, we don't have to check for DF_REBID here
-		 * because if the state is > DS_ALIVE, we know it must
-		 * be.
-		 *
-		 * This assumes that all DF_REBID drivers can have
-		 * their probe routine called at any time and that
-		 * they are idempotent as well as completely benign in
-		 * normal operations.
-		 *
-		 * We also have to make sure that the detach
-		 * succeeded, otherwise we fail the operation (or
-		 * maybe it should just fail silently?  I'm torn).
-		 */
-		if (child->state > DS_ALIVE && best->driver != child->driver)
-			if ((result = device_detach(dev)) != 0)
-				return (result);
-
+	if (pri < 0) {
 		/* Set the winning driver, devclass, and flags. */
-		if (!child->devclass) {
-			result = device_set_devclass(child, best->driver->name);
-			if (result != 0)
-				return (result);
-		}
 		result = device_set_driver(child, best->driver);
 		if (result != 0)
 			return (result);
+		if (!child->devclass) {
+			result = device_set_devclass(child, best->driver->name);
+			if (result != 0) {
+				(void)device_set_driver(child, NULL);
+				return (result);
+			}
+		}
 		resource_int_value(best->driver->name, child->unit,
 		    "flags", &child->devflags);
 
-		if (pri < 0) {
-			/*
-			 * A bit bogus. Call the probe method again to make
-			 * sure that we have the right description.
-			 */
-			DEVICE_PROBE(child);
-#if 0
-			child->flags |= DF_REBID;
-#endif
-		} else
-			child->flags &= ~DF_REBID;
-		child->state = DS_ALIVE;
-
-		bus_data_generation_update();
-		return (0);
+		/*
+		 * A bit bogus. Call the probe method again to make sure
+		 * that we have the right description.
+		 */
+		result = DEVICE_PROBE(child);
+		if (result > 0) {
+			if (!hasclass)
+				(void)device_set_devclass(child, NULL);
+			(void)device_set_driver(child, NULL);
+			return (result);
+		}
 	}
 
-	return (ENXIO);
+	child->state = DS_ALIVE;
+	bus_data_generation_update();
+	return (0);
 }
 
 /**
@@ -2868,7 +2849,7 @@ device_probe(device_t dev)
 
 	GIANT_REQUIRED;
 
-	if (dev->state >= DS_ALIVE && (dev->flags & DF_REBID) == 0)
+	if (dev->state >= DS_ALIVE)
 		return (-1);
 
 	if (!(dev->flags & DF_ENABLED)) {
@@ -4092,8 +4073,7 @@ bus_generic_driver_added(device_t dev, driver_t *driver)
 
 	DEVICE_IDENTIFY(driver, dev);
 	TAILQ_FOREACH(child, &dev->children, link) {
-		if (child->state == DS_NOTPRESENT ||
-		    (child->flags & DF_REBID))
+		if (child->state == DS_NOTPRESENT)
 			device_probe_and_attach(child);
 	}
 }
@@ -5319,7 +5299,7 @@ print_device_short(device_t dev, int indent)
 	if (!dev)
 		return;
 
-	indentprintf(("device %d: <%s> %sparent,%schildren,%s%s%s%s%s%s,%sivars,%ssoftc,busy=%d\n",
+	indentprintf(("device %d: <%s> %sparent,%schildren,%s%s%s%s%s,%sivars,%ssoftc,busy=%d\n",
 	    dev->unit, dev->desc,
 	    (dev->parent? "":"no "),
 	    (TAILQ_EMPTY(&dev->children)? "no ":""),
@@ -5327,7 +5307,6 @@ print_device_short(device_t dev, int indent)
 	    (dev->flags&DF_FIXEDCLASS? "fixed,":""),
 	    (dev->flags&DF_WILDCARD? "wildcard,":""),
 	    (dev->flags&DF_DESCMALLOCED? "descmalloced,":""),
-	    (dev->flags&DF_REBID? "rebiddable,":""),
 	    (dev->flags&DF_SUSPENDED? "suspended,":""),
 	    (dev->ivars? "":"no "),
 	    (dev->softc? "":"no "),
@@ -5729,7 +5708,7 @@ devctl2_ioctl(struct cdev *cdev, u_long cmd, caddr_t data, int fflag,
 	/* Perform the requested operation. */
 	switch (cmd) {
 	case DEV_ATTACH:
-		if (device_is_attached(dev) && (dev->flags & DF_REBID) == 0)
+		if (device_is_attached(dev))
 			error = EBUSY;
 		else if (!device_is_enabled(dev))
 			error = ENXIO;
