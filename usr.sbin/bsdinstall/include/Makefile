@@ -1,4 +1,4 @@
-OSNAME?=	FreeBSD
+OSNAME?=	OPNsense
 GENHDRS=	opt_osname.h
 SRCS+=		${GENHDRS}
 CLEANFILES+=	${GENHDRS}
