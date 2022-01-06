@@ -111,7 +111,8 @@ const char *
 bootpart_type(const char *scheme, const char **mountpoint)
 {
 
-	if (strcmp(x86_bootmethod(), "UEFI") == 0) {
+	if (strcmp(x86_bootmethod(), "UEFI") == 0 ||
+	    getenv("WORKAROUND_HYBRID")) {
 		*mountpoint = "/boot/efi";
 		return ("efi");
 	}
