@@ -28,6 +28,7 @@
 
 #include <sys/types.h>
 #include <sys/sysctl.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "partedit.h"
@@ -111,7 +112,8 @@ const char *
 bootpart_type(const char *scheme, const char **mountpoint)
 {
 
-	if (strcmp(x86_bootmethod(), "UEFI") == 0) {
+	if (strcmp(x86_bootmethod(), "UEFI") == 0 ||
+	    getenv("WORKAROUND_HYBRID")) {
 		*mountpoint = "/boot/efi";
 		return ("efi");
 	}
