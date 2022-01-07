@@ -708,7 +708,14 @@ tsc_calibrate(void)
 	if (tsc_disabled)
 		return;
 
+	/*
+	 * Avoid using a low-quality timecounter to re-calibrate.  In
+	 * particular, old 32-bit platforms might only have the 8254 timer to
+	 * calibrate against.
+	 */
 	tc = atomic_load_ptr(&timecounter);
+	if (tc->tc_quality <= 0)
+		goto calibrated;
 
 	flags = intr_disable();
 	cpu = curcpu;
@@ -737,6 +744,7 @@ tsc_calibrate(void)
 	freq_khz = tc->tc_frequency * (tsc_end - tsc_start) / (t_end - t_start);
 
 	tsc_update_freq(freq_khz);
+calibrated:
 	tc_init(&tsc_timecounter);
 	set_cputicker(rdtsc, tsc_freq, !tsc_is_invariant);
 }

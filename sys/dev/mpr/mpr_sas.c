@@ -1229,14 +1229,12 @@ static void
 mprsas_logical_unit_reset_complete(struct mpr_softc *sc, struct mpr_command *tm)
 {
 	MPI2_SCSI_TASK_MANAGE_REPLY *reply;
-	MPI2_SCSI_TASK_MANAGE_REQUEST *req;
 	unsigned int cm_count = 0;
 	struct mpr_command *cm;
 	struct mprsas_target *targ;
 
 	callout_stop(&tm->cm_callout);
 
-	req = (MPI2_SCSI_TASK_MANAGE_REQUEST *)tm->cm_req;
 	reply = (MPI2_SCSI_TASK_MANAGE_REPLY *)tm->cm_reply;
 	targ = tm->cm_targ;
 
@@ -1678,19 +1676,19 @@ mprsas_scsiio_timeout(void *data)
 		/* target already in recovery, just queue up another
 		 * timedout command to be processed later.
 		 */
-		mpr_dprint(sc, MPR_RECOVERY, "queued timedout cm %p for "
-		    "processing by tm %p\n", cm, targ->tm);
-	}
-	else if ((targ->tm = mprsas_alloc_tm(sc)) != NULL) {
-		/* start recovery by aborting the first timedout command */
+		mpr_dprint(sc, MPR_RECOVERY,
+		    "queued timedout cm %p for processing by tm %p\n",
+		    cm, targ->tm);
+	} else if ((targ->tm = mprsas_alloc_tm(sc)) != NULL) {
 		mpr_dprint(sc, MPR_RECOVERY|MPR_INFO,
 		    "Sending abort to target %u for SMID %d\n", targ->tid,
 		    cm->cm_desc.Default.SMID);
 		mpr_dprint(sc, MPR_RECOVERY, "timedout cm %p allocated tm %p\n",
 		    cm, targ->tm);
+
+		/* start recovery by aborting the first timedout command */
 		mprsas_send_abort(sc, targ->tm, cm);
-	}
-	else {
+	} else {
 		/* XXX queue this target up for recovery once a TM becomes
 		 * available.  The firmware only has a limited number of
 		 * HighPriority credits for the high priority requests used
@@ -1839,10 +1837,11 @@ mprsas_build_nvme_unmap(struct mpr_softc *sc, struct mpr_command *cm,
 	mpr_build_nvme_prp(sc, cm, req,
 	    (void *)(uintptr_t)nvme_dsm_ranges_dma_handle, 0, data_length);
 	mpr_map_command(sc, cm);
+	res = 0;
 
 out:
 	free(plist, M_MPR);
-	return 0;
+	return (res);
 }
 
 static void
@@ -2919,11 +2918,9 @@ mprsas_send_smpcmd(struct mprsas_softc *sassc, union ccb *ccb, uint64_t sasaddr)
 	uint8_t *request, *response;
 	MPI2_SMP_PASSTHROUGH_REQUEST *req;
 	struct mpr_softc *sc;
-	struct sglist *sg;
 	int error;
 
 	sc = sassc->sc;
-	sg = NULL;
 	error = 0;
 
 	switch (ccb->ccb_h.flags & CAM_DATA_MASK) {
