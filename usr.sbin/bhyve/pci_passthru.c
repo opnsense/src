@@ -420,7 +420,7 @@ msix_table_write(struct vmctx *ctx, int vcpu, struct passthru_softc *sc,
 }
 
 static int
-init_msix_table(struct vmctx *ctx, struct passthru_softc *sc, uint64_t base)
+init_msix_table(struct vmctx *ctx, struct passthru_softc *sc)
 {
 	struct pci_devinst *pi = sc->psc_pi;
 	struct pci_bar_mmap pbm;
@@ -444,7 +444,7 @@ init_msix_table(struct vmctx *ctx, struct passthru_softc *sc, uint64_t base)
 	memset(&pbm, 0, sizeof(pbm));
 	pbm.pbm_sel = sc->psc_sel;
 	pbm.pbm_flags = PCIIO_BAR_MMAP_RW;
-	pbm.pbm_reg = PCIR_BAR(pi->pi_msix.pba_bar);
+	pbm.pbm_reg = PCIR_BAR(pi->pi_msix.table_bar);
 	pbm.pbm_memattr = VM_MEMATTR_DEVICE;
 
 	if (ioctl(pcifd, PCIOCBARMMAP, &pbm) != 0) {
@@ -462,7 +462,7 @@ init_msix_table(struct vmctx *ctx, struct passthru_softc *sc, uint64_t base)
 	table_size = roundup2(table_size, 4096);
 
 	/*
-	 * Unmap any pages not covered by the table, we do not need to emulate
+	 * Unmap any pages not containing the table, we do not need to emulate
 	 * accesses to them.  Avoid releasing address space to help ensure that
 	 * a buggy out-of-bounds access causes a crash.
 	 */
@@ -471,7 +471,8 @@ init_msix_table(struct vmctx *ctx, struct passthru_softc *sc, uint64_t base)
 		    PROT_NONE) != 0)
 			warn("Failed to unmap MSI-X table BAR region");
 	if (table_offset + table_size != pi->pi_msix.mapped_size)
-		if (mprotect(pi->pi_msix.mapped_addr,
+		if (mprotect(
+		    pi->pi_msix.mapped_addr + table_offset + table_size,
 		    pi->pi_msix.mapped_size - (table_offset + table_size),
 		    PROT_NONE) != 0)
 			warn("Failed to unmap MSI-X table BAR region");
@@ -537,13 +538,6 @@ cfginitbar(struct vmctx *ctx, struct passthru_softc *sc)
 		if (error)
 			return (-1);
 
-		/* The MSI-X table needs special handling */
-		if (i == pci_msix_table_bar(pi)) {
-			error = init_msix_table(ctx, sc, base);
-			if (error) 
-				return (-1);
-		}
-
 		/*
 		 * 64-bit BAR takes up two slots so skip the next one.
 		 */
@@ -584,6 +578,20 @@ cfginit(struct vmctx *ctx, struct pci_devinst *pi, int bus, int slot, int func)
 
 	pci_set_cfgdata16(pi, PCIR_COMMAND, read_config(&sc->psc_sel,
 	    PCIR_COMMAND, 2));
+
+	/*
+	 * We need to do this after PCIR_COMMAND got possibly updated, e.g.,
+	 * a BAR was enabled, as otherwise the PCIOCBARMMAP might fail on us.
+	 */
+	if (pci_msix_table_bar(pi) >= 0) {
+		error = init_msix_table(ctx, sc);
+		if (error != 0) {
+			warnx(
+			    "failed to initialize MSI-X table for PCI %d/%d/%d: %d",
+			    bus, slot, func, error);
+			goto done;
+		}
+	}
 
 	error = 0;				/* success */
 done:
