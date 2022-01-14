@@ -111,6 +111,9 @@ struct fs_ops {
     off_t	(*fo_seek)(struct open_file *f, off_t offset, int where);
     int		(*fo_stat)(struct open_file *f, struct stat *sb);
     int		(*fo_readdir)(struct open_file *f, struct dirent *d);
+    int		(*fo_preload)(struct open_file *f);
+    int		(*fo_mount)(const char *, const char *, void **);
+    int		(*fo_unmount)(const char *, void *);
 };
 
 /*
@@ -283,6 +286,8 @@ extern void	ngets(char *, int);
 #define gets(x)	ngets((x), 0)
 extern int	fgetstr(char *buf, int size, int fd);
 
+extern int	mount(const char *dev, const char *path, int flags, void *data);
+extern int	unmount(const char *dev, int flags);
 extern int	open(const char *, int);
 #define	O_RDONLY	0x0
 #define O_WRONLY	0x1
@@ -296,6 +301,7 @@ extern void	closeall(void);
 extern ssize_t	read(int, void *, size_t);
 extern ssize_t	write(int, const void *, size_t);
 extern struct	dirent *readdirfd(int);
+extern void	preload(int);
 
 extern void	srandom(unsigned int);
 extern long	random(void);
