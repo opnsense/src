@@ -59,6 +59,7 @@ __FBSDID("$FreeBSD$");
 uint64_t	tsc_freq;
 int		tsc_is_invariant;
 int		tsc_perf_stat;
+static int	tsc_early_calib_exact;
 
 static eventhandler_tag tsc_levels_tag, tsc_pre_tag, tsc_post_tag;
 
@@ -133,6 +134,7 @@ tsc_freq_vmware(void)
 			tsc_freq = regs[0] | ((uint64_t)regs[1] << 32);
 	}
 	tsc_is_invariant = 1;
+	tsc_early_calib_exact = 1;
 }
 
 /*
@@ -700,13 +702,15 @@ void
 tsc_calibrate(void)
 {
 	struct timecounter *tc;
-	uint64_t freq_khz, tsc_start, tsc_end;
+	uint64_t freq, tsc_start, tsc_end;
 	u_int t_start, t_end;
 	register_t flags;
 	int cpu;
 
 	if (tsc_disabled)
 		return;
+	if (tsc_early_calib_exact)
+		goto calibrated;
 
 	/*
 	 * Avoid using a low-quality timecounter to re-calibrate.  In
@@ -741,9 +745,9 @@ tsc_calibrate(void)
 		t_end += (uint64_t)tc->tc_counter_mask + 1;
 	}
 
-	freq_khz = tc->tc_frequency * (tsc_end - tsc_start) / (t_end - t_start);
+	freq = tc->tc_frequency * (tsc_end - tsc_start) / (t_end - t_start);
 
-	tsc_update_freq(freq_khz);
+	tsc_update_freq(freq);
 calibrated:
 	tc_init(&tsc_timecounter);
 	set_cputicker(rdtsc, tsc_freq, !tsc_is_invariant);

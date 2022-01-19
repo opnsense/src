@@ -1504,40 +1504,28 @@ pmap_pt_page_count_adj(pmap_t pmap, int count)
 	}
 }
 
+pt_entry_t vtoptem __read_mostly = (1ul << (NPTEPGSHIFT + NPDEPGSHIFT +
+    NPDPEPGSHIFT + NPML4EPGSHIFT)) - 1;
+pt_entry_t *PTmap __read_mostly = P4Tmap;
+
 PMAP_INLINE pt_entry_t *
 vtopte(vm_offset_t va)
 {
-	u_int64_t mask;
-
 	KASSERT(va >= VM_MAXUSER_ADDRESS, ("vtopte on a uva/gpa 0x%0lx", va));
 
-	if (la57) {
-		mask = ((1ul << (NPTEPGSHIFT + NPDEPGSHIFT + NPDPEPGSHIFT +
-		    NPML4EPGSHIFT + NPML5EPGSHIFT)) - 1);
-		return (P5Tmap + ((va >> PAGE_SHIFT) & mask));
-	} else {
-		mask = ((1ul << (NPTEPGSHIFT + NPDEPGSHIFT + NPDPEPGSHIFT +
-		    NPML4EPGSHIFT)) - 1);
-		return (P4Tmap + ((va >> PAGE_SHIFT) & mask));
-	}
+	return (PTmap + ((va >> PAGE_SHIFT) & vtoptem));
 }
+
+pd_entry_t vtopdem __read_mostly = (1ul << (NPDEPGSHIFT + NPDPEPGSHIFT +
+    NPML4EPGSHIFT)) - 1;
+pd_entry_t *PDmap __read_mostly = P4Dmap;
 
 static __inline pd_entry_t *
 vtopde(vm_offset_t va)
 {
-	u_int64_t mask;
-
 	KASSERT(va >= VM_MAXUSER_ADDRESS, ("vtopde on a uva/gpa 0x%0lx", va));
 
-	if (la57) {
-		mask = ((1ul << (NPDEPGSHIFT + NPDPEPGSHIFT +
-		    NPML4EPGSHIFT + NPML5EPGSHIFT)) - 1);
-		return (P5Dmap + ((va >> PDRSHIFT) & mask));
-	} else {
-		mask = ((1ul << (NPDEPGSHIFT + NPDPEPGSHIFT +
-		    NPML4EPGSHIFT)) - 1);
-		return (P4Dmap + ((va >> PDRSHIFT) & mask));
-	}
+	return (PDmap + ((va >> PDRSHIFT) & vtopdem));
 }
 
 static u_int64_t
@@ -2206,6 +2194,13 @@ pmap_bootstrap_la57(void *arg __unused)
 	 * PDmap.
 	 */
 	v_pml5[PML5PML5I] = KPML5phys | X86_PG_RW | X86_PG_V | pg_nx;
+
+	vtoptem = (1ul << (NPTEPGSHIFT + NPDEPGSHIFT + NPDPEPGSHIFT +
+	    NPML4EPGSHIFT + NPML5EPGSHIFT)) - 1;
+	PTmap = P5Tmap;
+	vtopdem = (1ul << (NPDEPGSHIFT + NPDPEPGSHIFT +
+	    NPML4EPGSHIFT + NPML5EPGSHIFT)) - 1;
+	PDmap = P5Dmap;
 
 	kernel_pmap->pm_cr3 = KPML5phys;
 	kernel_pmap->pm_pmltop = v_pml5;
@@ -3859,7 +3854,8 @@ pmap_kenter(vm_offset_t va, vm_paddr_t pa)
 	pt_entry_t *pte;
 
 	pte = vtopte(va);
-	pte_store(pte, pa | X86_PG_RW | X86_PG_V | pg_g | pg_nx);
+	pte_store(pte, pa | pg_g | pg_nx | X86_PG_A | X86_PG_M |
+	    X86_PG_RW | X86_PG_V);
 }
 
 static __inline void
@@ -3870,7 +3866,8 @@ pmap_kenter_attr(vm_offset_t va, vm_paddr_t pa, int mode)
 
 	pte = vtopte(va);
 	cache_bits = pmap_cache_bits(kernel_pmap, mode, 0);
-	pte_store(pte, pa | X86_PG_RW | X86_PG_V | pg_g | pg_nx | cache_bits);
+	pte_store(pte, pa | pg_g | pg_nx | X86_PG_A | X86_PG_M |
+	    X86_PG_RW | X86_PG_V | cache_bits);
 }
 
 /*
@@ -3929,7 +3926,8 @@ pmap_qenter(vm_offset_t sva, vm_page_t *ma, int count)
 		pa = VM_PAGE_TO_PHYS(m) | cache_bits;
 		if ((*pte & (PG_FRAME | X86_PG_PTE_CACHE)) != pa) {
 			oldpte |= *pte;
-			pte_store(pte, pa | pg_g | pg_nx | X86_PG_RW | X86_PG_V);
+			pte_store(pte, pa | pg_g | pg_nx | X86_PG_A |
+			    X86_PG_M | X86_PG_RW | X86_PG_V);
 		}
 		pte++;
 	}
@@ -8172,7 +8170,7 @@ pmap_remove_pages(pmap_t pmap)
 		other_cpus = all_cpus;
 		critical_enter();
 		CPU_CLR(PCPU_GET(cpuid), &other_cpus);
-		CPU_AND(&other_cpus, &pmap->pm_active);
+		CPU_AND(&other_cpus, &other_cpus, &pmap->pm_active);
 		critical_exit();
 		KASSERT(CPU_EMPTY(&other_cpus), ("pmap active %p", pmap));
 	}

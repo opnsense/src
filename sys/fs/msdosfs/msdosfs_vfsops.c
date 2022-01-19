@@ -53,6 +53,7 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/buf.h>
+#include <sys/bufobj.h>
 #include <sys/conf.h>
 #include <sys/fcntl.h>
 #include <sys/iconv.h>
@@ -64,7 +65,9 @@
 #include <sys/namei.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
+#include <sys/rwlock.h>
 #include <sys/stat.h>
+#include <sys/taskqueue.h>
 #include <sys/vnode.h>
 
 #include <geom/geom.h>
@@ -112,6 +115,7 @@ struct iconv_functions *msdosfs_iconv;
 
 static int	update_mp(struct mount *mp, struct thread *td);
 static int	mountmsdosfs(struct vnode *devvp, struct mount *mp);
+static void	msdosfs_remount_ro(void *arg, int pending);
 static vfs_fhtovp_t	msdosfs_fhtovp;
 static vfs_mount_t	msdosfs_mount;
 static vfs_root_t	msdosfs_root;
@@ -227,7 +231,7 @@ msdosfs_cmount(struct mntarg *ma, void *data, uint64_t flags)
 static int
 msdosfs_mount(struct mount *mp)
 {
-	struct vnode *devvp;	  /* vnode for blk device to mount */
+	struct vnode *devvp, *odevvp;	  /* vnode for blk device to mount */
 	struct thread *td;
 	/* msdosfs specific mount control block */
 	struct msdosfsmount *pmp = NULL;
@@ -300,17 +304,17 @@ msdosfs_mount(struct mount *mp)
 			 * If upgrade to read-write by non-root, then verify
 			 * that user has necessary permissions on the device.
 			 */
-			devvp = pmp->pm_devvp;
-			vn_lock(devvp, LK_EXCLUSIVE | LK_RETRY);
-			error = VOP_ACCESS(devvp, VREAD | VWRITE,
+			odevvp = pmp->pm_odevvp;
+			vn_lock(odevvp, LK_EXCLUSIVE | LK_RETRY);
+			error = VOP_ACCESS(odevvp, VREAD | VWRITE,
 			    td->td_ucred, td);
 			if (error)
 				error = priv_check(td, PRIV_VFS_MOUNT_PERM);
 			if (error) {
-				VOP_UNLOCK(devvp);
+				VOP_UNLOCK(odevvp);
 				return (error);
 			}
-			VOP_UNLOCK(devvp);
+			VOP_UNLOCK(odevvp);
 			g_topology_lock();
 			error = g_access(pmp->pm_cp, 0, 1, 0);
 			g_topology_unlock();
@@ -337,6 +341,13 @@ msdosfs_mount(struct mount *mp)
 			mp->mnt_flag &= ~MNT_RDONLY;
 			MNT_IUNLOCK(mp);
 		}
+
+		/*
+		 * Avoid namei() below.  The "from" option is not set.
+		 * Update of the devvp is pointless for this case.
+		 */
+		if ((pmp->pm_flags & MSDOSFS_ERR_RO) != 0)
+			return (0);
 	}
 	/*
 	 * Not an update, or updating the name: look up the name
@@ -376,7 +387,7 @@ msdosfs_mount(struct mount *mp)
 #endif
 	} else {
 		vput(devvp);
-		if (devvp != pmp->pm_devvp)
+		if (devvp != pmp->pm_odevvp)
 			return (EINVAL);	/* XXX needs translation */
 	}
 	if (error) {
@@ -399,11 +410,12 @@ msdosfs_mount(struct mount *mp)
 }
 
 static int
-mountmsdosfs(struct vnode *devvp, struct mount *mp)
+mountmsdosfs(struct vnode *odevvp, struct mount *mp)
 {
 	struct msdosfsmount *pmp;
 	struct buf *bp;
 	struct cdev *dev;
+	struct vnode *devvp;
 	union bootsector *bsp;
 	struct byte_bpb33 *b33;
 	struct byte_bpb50 *b50;
@@ -418,10 +430,13 @@ mountmsdosfs(struct vnode *devvp, struct mount *mp)
 	pmp = NULL;
 	ronly = (mp->mnt_flag & MNT_RDONLY) != 0;
 
+	devvp = mntfs_allocvp(mp, odevvp);
+	VOP_UNLOCK(odevvp);
+	vn_lock(devvp, LK_EXCLUSIVE | LK_RETRY);
 	dev = devvp->v_rdev;
 	if (atomic_cmpset_acq_ptr((uintptr_t *)&dev->si_mountpt, 0,
 	    (uintptr_t)mp) == 0) {
-		VOP_UNLOCK(devvp);
+		mntfs_freevp(devvp);
 		return (EBUSY);
 	}
 	g_topology_lock();
@@ -429,11 +444,14 @@ mountmsdosfs(struct vnode *devvp, struct mount *mp)
 	g_topology_unlock();
 	if (error != 0) {
 		atomic_store_rel_ptr((uintptr_t *)&dev->si_mountpt, 0);
-		VOP_UNLOCK(devvp);
+		mntfs_freevp(devvp);
 		return (error);
 	}
 	dev_ref(dev);
 	bo = &devvp->v_bufobj;
+	BO_LOCK(&odevvp->v_bufobj);
+	odevvp->v_bufobj.bo_flag |= BO_NOBUFS;
+	BO_UNLOCK(&odevvp->v_bufobj);
 	VOP_UNLOCK(devvp);
 	if (dev->si_iosize_max != 0)
 		mp->mnt_iosize_max = dev->si_iosize_max;
@@ -470,6 +488,8 @@ mountmsdosfs(struct vnode *devvp, struct mount *mp)
 
 	lockinit(&pmp->pm_fatlock, 0, msdosfs_lock_msg, 0, 0);
 	lockinit(&pmp->pm_checkpath_lock, 0, "msdoscp", 0, 0);
+
+	TASK_INIT(&pmp->pm_rw2ro_task, 0, msdosfs_remount_ro, pmp);
 
 	/*
 	 * Initialize ownerships and permissions, since nothing else will
@@ -558,6 +578,14 @@ mountmsdosfs(struct vnode *devvp, struct mount *mp)
 	}
 
 	pmp->pm_HugeSectors *= pmp->pm_BlkPerSec;
+	if ((off_t)pmp->pm_HugeSectors * pmp->pm_BytesPerSec <
+	    pmp->pm_HugeSectors /* overflow */ ||
+	    (off_t)pmp->pm_HugeSectors * pmp->pm_BytesPerSec >
+	    cp->provider->mediasize /* past end of vol */) {
+		error = EINVAL;
+		goto error_exit;
+	}
+
 	pmp->pm_HiddenSects *= pmp->pm_BlkPerSec;	/* XXX not used? */
 	pmp->pm_FATsecs     *= pmp->pm_BlkPerSec;
 	SecPerClust         *= pmp->pm_BlkPerSec;
@@ -577,6 +605,10 @@ mountmsdosfs(struct vnode *devvp, struct mount *mp)
 		pmp->pm_firstcluster = pmp->pm_rootdirblk + pmp->pm_rootdirsize;
 	}
 
+	if (pmp->pm_HugeSectors <= pmp->pm_firstcluster) {
+		error = EINVAL;
+		goto error_exit;
+	}
 	pmp->pm_maxcluster = (pmp->pm_HugeSectors - pmp->pm_firstcluster) /
 	    SecPerClust + 1;
 	pmp->pm_fatsize = pmp->pm_FATsecs * DEV_BSIZE;	/* XXX not used? */
@@ -686,6 +718,7 @@ mountmsdosfs(struct vnode *devvp, struct mount *mp)
 	 * fillinusemap() needs pm_devvp.
 	 */
 	pmp->pm_devvp = devvp;
+	pmp->pm_odevvp = odevvp;
 	pmp->pm_dev = dev;
 
 	/*
@@ -741,7 +774,12 @@ error_exit:
 		free(pmp, M_MSDOSFSMNT);
 		mp->mnt_data = NULL;
 	}
+	BO_LOCK(&odevvp->v_bufobj);
+	odevvp->v_bufobj.bo_flag &= ~BO_NOBUFS;
+	BO_UNLOCK(&odevvp->v_bufobj);
 	atomic_store_rel_ptr((uintptr_t *)&dev->si_mountpt, 0);
+	vn_lock(devvp, LK_EXCLUSIVE | LK_RETRY);
+	mntfs_freevp(devvp);
 	dev_rel(dev);
 	return (error);
 }
@@ -818,11 +856,16 @@ msdosfs_unmount(struct mount *mp, int mntflags)
 	if (susp)
 		vfs_write_resume(mp, VR_START_WRITE);
 
+	vn_lock(pmp->pm_devvp, LK_EXCLUSIVE | LK_RETRY);
 	g_topology_lock();
 	g_vfs_close(pmp->pm_cp);
 	g_topology_unlock();
+	BO_LOCK(&pmp->pm_odevvp->v_bufobj);
+	pmp->pm_odevvp->v_bufobj.bo_flag &= ~BO_NOBUFS;
+	BO_UNLOCK(&pmp->pm_odevvp->v_bufobj);
 	atomic_store_rel_ptr((uintptr_t *)&pmp->pm_dev->si_mountpt, 0);
-	vrele(pmp->pm_devvp);
+	mntfs_freevp(pmp->pm_devvp);
+	vrele(pmp->pm_odevvp);
 	dev_rel(pmp->pm_dev);
 	free(pmp->pm_inusemap, M_MSDOSFSFAT);
 	lockdestroy(&pmp->pm_fatlock);
@@ -833,6 +876,53 @@ msdosfs_unmount(struct mount *mp, int mntflags)
 	mp->mnt_flag &= ~MNT_LOCAL;
 	MNT_IUNLOCK(mp);
 	return (error);
+}
+
+static void
+msdosfs_remount_ro(void *arg, int pending)
+{
+	struct msdosfsmount *pmp;
+	int error;
+
+	pmp = arg;
+
+	MSDOSFS_LOCK_MP(pmp);
+	if ((pmp->pm_flags & MSDOSFS_ERR_RO) != 0) {
+		while ((pmp->pm_flags & MSDOSFS_ERR_RO) != 0)
+			msleep(&pmp->pm_flags, &pmp->pm_fatlock, PVFS,
+			    "msdoserrro", hz);
+	} else if ((pmp->pm_mountp->mnt_flag & MNT_RDONLY) == 0) {
+		pmp->pm_flags |= MSDOSFS_ERR_RO;
+		MSDOSFS_UNLOCK_MP(pmp);
+		printf("%s: remounting read-only due to corruption\n",
+		    pmp->pm_mountp->mnt_stat.f_mntfromname);
+		error = vfs_remount_ro(pmp->pm_mountp);
+		if (error != 0)
+			printf("%s: remounting read-only failed: error %d\n",
+			    pmp->pm_mountp->mnt_stat.f_mntfromname, error);
+		else
+			printf("remounted %s read-only\n",
+			    pmp->pm_mountp->mnt_stat.f_mntfromname);
+		MSDOSFS_LOCK_MP(pmp);
+		pmp->pm_flags &= ~MSDOSFS_ERR_RO;
+		wakeup(&pmp->pm_flags);
+	}
+	MSDOSFS_UNLOCK_MP(pmp);
+
+	vfs_unbusy(pmp->pm_mountp);
+}
+
+void
+msdosfs_integrity_error(struct msdosfsmount *pmp)
+{
+	int error;
+
+	error = vfs_busy(pmp->pm_mountp, MBF_NOWAIT);
+	if (error == 0)
+		taskqueue_enqueue(taskqueue_thread, &pmp->pm_rw2ro_task);
+	else
+		printf("%s: integrity error busying failed, error %d\n",
+		    pmp->pm_mountp->mnt_stat.f_mntfromname, error);
 }
 
 static int

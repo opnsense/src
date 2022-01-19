@@ -226,6 +226,23 @@ FuseTest::expect_destroy(int error)
 }
 
 void
+FuseTest::expect_fallocate(uint64_t ino, uint64_t offset, uint64_t length,
+	uint32_t mode, int error, int times)
+{
+	EXPECT_CALL(*m_mock, process(
+		ResultOf([=](auto in) {
+			return (in.header.opcode == FUSE_FALLOCATE &&
+				in.header.nodeid == ino &&
+				in.body.fallocate.offset == offset &&
+				in.body.fallocate.length == length &&
+				in.body.fallocate.mode == mode);
+		}, Eq(true)),
+		_)
+	).Times(times)
+	.WillRepeatedly(Invoke(ReturnErrno(error)));
+}
+
+void
 FuseTest::expect_flush(uint64_t ino, int times, ProcessMockerT r)
 {
 	EXPECT_CALL(*m_mock, process(
@@ -621,6 +638,15 @@ out:
 	}
 	munmap(sem, sizeof(*sem));
 	return;
+}
+
+void
+FuseTest::reclaim_vnode(const char *path)
+{
+	int err;
+
+	err = sysctlbyname(reclaim_mib, NULL, 0, path, strlen(path) + 1);
+	ASSERT_EQ(0, err) << strerror(errno);
 }
 
 static void usage(char* progname) {

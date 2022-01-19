@@ -30,6 +30,8 @@ SRCS+=	__getosreldate.c \
 	clock_getcpuclockid.c \
 	closedir.c \
 	confstr.c \
+	cpuset_alloc.c \
+	cpuset_free.c \
 	crypt.c \
 	ctermid.c \
 	daemon.c \
@@ -123,6 +125,8 @@ SRCS+=	__getosreldate.c \
 	scandir.c \
 	scandir_b.c \
 	scandir-compat11.c \
+	sched_getaffinity.c \
+	sched_setaffinity.c \
 	seed48.c \
 	seekdir.c \
 	semctl.c \
