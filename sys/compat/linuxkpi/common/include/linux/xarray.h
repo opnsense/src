@@ -25,8 +25,8 @@
  *
  * $FreeBSD$
  */
-#ifndef	_LINUX_XARRAY_H_
-#define	_LINUX_XARRAY_H_
+#ifndef	_LINUXKPI_LINUX_XARRAY_H_
+#define	_LINUXKPI_LINUX_XARRAY_H_
 
 #include <linux/gfp.h>
 #include <linux/radix-tree.h>
@@ -40,6 +40,7 @@
 
 #define	XA_FLAGS_ALLOC (1U << 0)
 #define	XA_FLAGS_LOCK_IRQ (1U << 1)
+#define	XA_FLAGS_ALLOC1 (1U << 2)
 
 #define	XA_ERROR(x) \
 	ERR_PTR(x)
@@ -53,6 +54,7 @@
 struct xarray {
 	struct radix_tree_root root;
 	struct mtx mtx;		/* internal mutex */
+	uint32_t flags;		/* see XA_FLAGS_XXX */
 };
 
 /*
@@ -120,4 +122,4 @@ xa_to_value(const void *e)
 
 	return (v >> 1);
 }
-#endif		/* _LINUX_XARRAY_H_ */
+#endif		/* _LINUXKPI_LINUX_XARRAY_H_ */

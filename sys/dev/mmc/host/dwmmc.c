@@ -38,12 +38,14 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/conf.h>
 #include <sys/bus.h>
 #include <sys/kernel.h>
 #include <sys/lock.h>
 #include <sys/module.h>
 #include <sys/malloc.h>
 #include <sys/mutex.h>
+#include <sys/proc.h>
 #include <sys/rman.h>
 #include <sys/queue.h>
 #include <sys/taskqueue.h>
@@ -145,6 +147,11 @@ struct idmac_desc {
  * second half of page
  */
 #define	IDMAC_MAX_SIZE	2048
+/*
+ * Busdma may bounce buffers, so we must reserve 2 descriptors
+ * (on start and on end) for bounced fragments.
+ */
+#define DWMMC_MAX_DATA	(IDMAC_MAX_SIZE * (IDMAC_DESC_SEGS - 2)) / MMC_SECTOR_SIZE
 
 static void dwmmc_next_operation(struct dwmmc_softc *);
 static int dwmmc_setup_bus(struct dwmmc_softc *, int);
@@ -453,6 +460,9 @@ static void
 dwmmc_handle_card_present(struct dwmmc_softc *sc, bool is_present)
 {
 	bool was_present;
+
+	if (dumping || SCHEDULER_STOPPED())
+		return;
 
 	was_present = sc->child != NULL;
 
@@ -1350,13 +1360,7 @@ dwmmc_read_ivar(device_t bus, device_t child, int which, uintptr_t *result)
 		*(int *)result = sc->host.caps;
 		break;
 	case MMCBR_IVAR_MAX_DATA:
-		/*
-		 * Busdma may bounce buffers, so we must reserve 2 descriptors
-		 * (on start and on end) for bounced fragments.
-		 *
-		 */
-		*(int *)result = (IDMAC_MAX_SIZE * IDMAC_DESC_SEGS) /
-		    MMC_SECTOR_SIZE - 3;
+		*(int *)result = DWMMC_MAX_DATA;
 		break;
 	case MMCBR_IVAR_TIMING:
 		*(int *)result = sc->host.ios.timing;
@@ -1436,7 +1440,7 @@ dwmmc_get_tran_settings(device_t dev, struct ccb_trans_settings_mmc *cts)
 	cts->host_f_min = sc->host.f_min;
 	cts->host_f_max = sc->host.f_max;
 	cts->host_caps = sc->host.caps;
-	cts->host_max_data = (IDMAC_MAX_SIZE * IDMAC_DESC_SEGS) / MMC_SECTOR_SIZE;
+	cts->host_max_data = DWMMC_MAX_DATA;
 	memcpy(&cts->ios, &sc->host.ios, sizeof(struct mmc_ios));
 
 	return (0);
@@ -1536,6 +1540,15 @@ dwmmc_cam_request(device_t dev, union ccb *ccb)
 
 	return (0);
 }
+
+static void
+dwmmc_cam_poll(device_t dev)
+{
+	struct dwmmc_softc *sc;
+
+	sc = device_get_softc(dev);
+	dwmmc_intr(sc);
+}
 #endif /* MMCCAM */
 
 static device_method_t dwmmc_methods[] = {
@@ -1557,6 +1570,7 @@ static device_method_t dwmmc_methods[] = {
 	DEVMETHOD(mmc_sim_get_tran_settings,	dwmmc_get_tran_settings),
 	DEVMETHOD(mmc_sim_set_tran_settings,	dwmmc_set_tran_settings),
 	DEVMETHOD(mmc_sim_cam_request,		dwmmc_cam_request),
+	DEVMETHOD(mmc_sim_cam_poll,		dwmmc_cam_poll),
 
 	DEVMETHOD(bus_add_child,		bus_generic_add_child),
 #endif

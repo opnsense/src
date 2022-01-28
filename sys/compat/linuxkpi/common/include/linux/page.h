@@ -28,8 +28,8 @@
  *
  * $FreeBSD$
  */
-#ifndef	_LINUX_PAGE_H_
-#define _LINUX_PAGE_H_
+#ifndef	_LINUXKPI_LINUX_PAGE_H_
+#define _LINUXKPI_LINUX_PAGE_H_
 
 #include <linux/types.h>
 
@@ -105,6 +105,7 @@ pgprot2cachemode(pgprot_t prot)
 #define	trunc_page(x)	((uintptr_t)(x) & ~(PAGE_SIZE - 1))
 
 #if defined(__i386__) || defined(__amd64__)
+#undef clflush
 #undef clflushopt
 static inline void
 lkpi_clflushopt(unsigned long addr)
@@ -116,7 +117,15 @@ lkpi_clflushopt(unsigned long addr)
 	else
 		pmap_invalidate_cache();
 }
+#define	clflush(x)	clflush((unsigned long)(x))
 #define	clflushopt(x)	lkpi_clflushopt((unsigned long)(x))
+
+static inline void
+clflush_cache_range(void *addr, unsigned int size)
+{
+	pmap_force_invalidate_cache_range((vm_offset_t)addr,
+	    (vm_offset_t)addr + size);
+}
 #endif
 
-#endif	/* _LINUX_PAGE_H_ */
+#endif	/* _LINUXKPI_LINUX_PAGE_H_ */

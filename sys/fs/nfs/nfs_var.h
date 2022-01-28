@@ -329,7 +329,7 @@ int nfsm_advance(struct nfsrv_descript *, int, int);
 void *nfsm_dissct(struct nfsrv_descript *, int, int);
 void newnfs_copycred(struct nfscred *, struct ucred *);
 void newnfs_copyincred(struct ucred *, struct nfscred *);
-int nfsrv_dissectacl(struct nfsrv_descript *, NFSACL_T *, int *,
+int nfsrv_dissectacl(struct nfsrv_descript *, NFSACL_T *, bool, int *,
     int *, NFSPROC_T *);
 int nfsrv_getattrbits(struct nfsrv_descript *, nfsattrbit_t *, int *,
     int *);
@@ -429,12 +429,11 @@ int nfs_catnap(int, int, const char *);
 struct nfsreferral *nfsv4root_getreferral(vnode_t, vnode_t, u_int32_t);
 int nfsvno_pathconf(vnode_t, int, long *, struct ucred *, NFSPROC_T *);
 int nfsrv_atroot(vnode_t, uint64_t *);
-void newnfs_timer(void *);
 int nfs_supportsnfsv4acls(vnode_t);
 
 /* nfs_commonacl.c */
 int nfsrv_dissectace(struct nfsrv_descript *, struct acl_entry *,
-    int *, int *, NFSPROC_T *);
+    bool, int *, int *, NFSPROC_T *);
 int nfsrv_buildacl(struct nfsrv_descript *, NFSACL_T *, enum vtype,
     NFSPROC_T *);
 int nfsrv_compareacl(NFSACL_T *, NFSACL_T *);

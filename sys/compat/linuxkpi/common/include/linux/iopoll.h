@@ -27,8 +27,8 @@
  * $FreeBSD$
  */
 
-#ifndef	__LINUXKPI_LINUX_IOPOLL_H
-#define	__LINUXKPI_LINUX_IOPOLL_H
+#ifndef	_LINUXKPI_LINUX_IOPOLL_H
+#define	_LINUXKPI_LINUX_IOPOLL_H
 
 #include <sys/types.h>
 #include <sys/time.h>
@@ -61,6 +61,9 @@
 	(_cond) ? 0 : (-ETIMEDOUT);						\
 })
 
+#define readx_poll_timeout(_pollfp, _addr, _var, _cond, _us, _to)		\
+	read_poll_timeout(_pollfp, _var, _cond, _us, _to, false, _addr)
+
 #define	read_poll_timeout_atomic(_pollfp, _var, _cond, _us, _to, _early_sleep, ...)	\
 ({										\
 	struct timeval __now, __end;						\
@@ -88,4 +91,4 @@
 	(_cond) ? 0 : (-ETIMEDOUT);						\
 })
 
-#endif	/* __LINUXKPI_LINUX_IOPOLL_H */
+#endif	/* _LINUXKPI_LINUX_IOPOLL_H */

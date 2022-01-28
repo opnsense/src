@@ -28,8 +28,8 @@
  *
  * $FreeBSD$
  */
-#ifndef	_LINUX_IO_H_
-#define	_LINUX_IO_H_
+#ifndef	_LINUXKPI_LINUX_IO_H_
+#define	_LINUXKPI_LINUX_IO_H_
 
 #include <sys/endian.h>
 #include <sys/types.h>
@@ -482,4 +482,12 @@ memunmap(void *addr)
 	iounmap(addr);
 }
 
-#endif	/* _LINUX_IO_H_ */
+#define	__MTRR_ID_BASE	1
+int lkpi_arch_phys_wc_add(unsigned long, unsigned long);
+void lkpi_arch_phys_wc_del(int);
+#define	arch_phys_wc_add(...)	lkpi_arch_phys_wc_add(__VA_ARGS__)
+#define	arch_phys_wc_del(...)	lkpi_arch_phys_wc_del(__VA_ARGS__)
+#define	arch_phys_wc_index(x)	\
+	(((x) < __MTRR_ID_BASE) ? -1 : ((x) - __MTRR_ID_BASE))
+
+#endif	/* _LINUXKPI_LINUX_IO_H_ */

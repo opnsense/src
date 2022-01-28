@@ -671,9 +671,9 @@ em_isc_rxd_pkt_get(void *arg, if_rxd_info_t ri)
 	u32 pkt_info;
 	u32 staterr = 0;
 	bool eop;
-	int i, cidx, vtag;
+	int i, cidx;
 
-	i = vtag = 0;
+	i = 0;
 	cidx = ri->iri_cidx;
 
 	do {
@@ -706,16 +706,13 @@ em_isc_rxd_pkt_get(void *arg, if_rxd_info_t ri)
 		i++;
 	} while (!eop);
 
-	if (if_getcapenable(ri->iri_ifp) & IFCAP_RXCSUM)
+	if (scctx->isc_capenable & IFCAP_RXCSUM)
 		em_receive_checksum(staterr, staterr >> 24, ri);
 
 	if (staterr & E1000_RXD_STAT_VP) {
-		vtag = le16toh(rxd->wb.upper.vlan);
-	}
-
-	ri->iri_vtag = vtag;
-	if (vtag)
+		ri->iri_vtag = le16toh(rxd->wb.upper.vlan);
 		ri->iri_flags |= M_VLANTAG;
+	}
 
 	ri->iri_flowid = le32toh(rxd->wb.lower.hi_dword.rss);
 	ri->iri_rsstype = em_determine_rsstype(pkt_info);

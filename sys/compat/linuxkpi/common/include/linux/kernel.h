@@ -29,8 +29,8 @@
  *
  * $FreeBSD$
  */
-#ifndef	_LINUX_KERNEL_H_
-#define	_LINUX_KERNEL_H_
+#ifndef	_LINUXKPI_LINUX_KERNEL_H_
+#define	_LINUXKPI_LINUX_KERNEL_H_
 
 #include <sys/cdefs.h>
 #include <sys/types.h>
@@ -109,9 +109,7 @@
 #define	BUILD_BUG_ON_MSG(x, msg)	BUILD_BUG_ON(x)
 #define	BUILD_BUG_ON_NOT_POWER_OF_2(x)	BUILD_BUG_ON(!powerof2(x))
 #define	BUILD_BUG_ON_INVALID(expr)	while (0) { (void)(expr); }
-
-extern const volatile int lkpi_build_bug_on_zero;
-#define	BUILD_BUG_ON_ZERO(x)	((x) ? lkpi_build_bug_on_zero : 0)
+#define	BUILD_BUG_ON_ZERO(x)	((int)sizeof(struct { int:-((x) != 0); }))
 
 #define	BUG()			panic("BUG at %s:%d", __FILE__, __LINE__)
 #define	BUG_ON(cond)		do {				\
@@ -466,6 +464,12 @@ kstrtou64(const char *cp, unsigned int base, u64 *res)
 }
 
 static inline int
+kstrtoull(const char *cp, unsigned int base, unsigned long long *res)
+{
+	return (kstrtou64(cp, base, (u64 *)res));
+}
+
+static inline int
 kstrtobool(const char *s, bool *res)
 {
 	int len;
@@ -722,4 +726,4 @@ hex2bin(uint8_t *bindst, const char *hexsrc, size_t binlen)
 #define	IS_REACHABLE(_x)	(IS_BUILTIN(_x) || \
 				    (IS_MODULE(_x) && IS_BUILTIN(MODULE)))
 
-#endif	/* _LINUX_KERNEL_H_ */
+#endif	/* _LINUXKPI_LINUX_KERNEL_H_ */

@@ -393,13 +393,12 @@ static int
 ixgbe_isc_rxd_pkt_get(void *arg, if_rxd_info_t ri)
 {
 	struct ixgbe_softc       *sc = arg;
+	if_softc_ctx_t		 scctx = sc->shared;
 	struct ix_rx_queue       *que = &sc->rx_queues[ri->iri_qsidx];
 	struct rx_ring           *rxr = &que->rxr;
-	struct ifnet             *ifp = iflib_get_ifp(sc->ctx);
 	union ixgbe_adv_rx_desc  *rxd;
 
 	uint16_t                  pkt_info, len, cidx, i;
-	uint16_t                  vtag = 0;
 	uint32_t                  ptype;
 	uint32_t                  staterr = 0;
 	bool                      eop;
@@ -424,16 +423,10 @@ ixgbe_isc_rxd_pkt_get(void *arg, if_rxd_info_t ri)
 		rxd->wb.upper.status_error = 0;
 		eop = ((staterr & IXGBE_RXD_STAT_EOP) != 0);
 
-		if ( (rxr->vtag_strip) && (staterr & IXGBE_RXD_STAT_VP) ) {
-			vtag = le16toh(rxd->wb.upper.vlan);
-		} else {
-			vtag = 0;
-		}
-
 		/* Make sure bad packets are discarded */
 		if (eop && (staterr & IXGBE_RXDADV_ERR_FRAME_ERR_MASK) != 0) {
 			if (sc->feat_en & IXGBE_FEATURE_VF)
-				if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
+				if_inc_counter(ri->iri_ifp, IFCOUNTER_IERRORS, 1);
 
 			rxr->rx_discarded++;
 			return (EBADMSG);
@@ -452,7 +445,7 @@ ixgbe_isc_rxd_pkt_get(void *arg, if_rxd_info_t ri)
 	rxr->packets++;
 	rxr->rx_bytes += ri->iri_len;
 
-	if ((ifp->if_capenable & IFCAP_RXCSUM) != 0)
+	if ((scctx->isc_capenable & IFCAP_RXCSUM) != 0)
 		ixgbe_rx_checksum(staterr, ri,  ptype);
 
 	ri->iri_flowid = le32toh(rxd->wb.lower.hi_dword.rss);
@@ -463,10 +456,12 @@ ixgbe_isc_rxd_pkt_get(void *arg, if_rxd_info_t ri)
 		else
 			ri->iri_rsstype = M_HASHTYPE_OPAQUE_HASH;
 	}
-	ri->iri_vtag = vtag;
-	ri->iri_nfrags = i;
-	if (vtag)
+	if ((rxr->vtag_strip) && (staterr & IXGBE_RXD_STAT_VP)) {
+		ri->iri_vtag = le16toh(rxd->wb.upper.vlan);
 		ri->iri_flags |= M_VLANTAG;
+	}
+
+	ri->iri_nfrags = i;
 	return (0);
 } /* ixgbe_isc_rxd_pkt_get */
 

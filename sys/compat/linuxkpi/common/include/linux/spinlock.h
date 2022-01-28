@@ -28,8 +28,8 @@
  *
  * $FreeBSD$
  */
-#ifndef	_LINUX_SPINLOCK_H_
-#define	_LINUX_SPINLOCK_H_
+#ifndef	_LINUXKPI_LINUX_SPINLOCK_H_
+#define	_LINUXKPI_LINUX_SPINLOCK_H_
 
 #include <asm/atomic.h>
 #include <sys/param.h>
@@ -41,6 +41,7 @@
 #include <linux/compiler.h>
 #include <linux/rwlock.h>
 #include <linux/bottom_half.h>
+#include <linux/lockdep.h>
 
 typedef struct {
 	struct mtx m;
@@ -184,4 +185,4 @@ _atomic_dec_and_lock_irqsave(atomic_t *cnt, spinlock_t *lock,
 	return (0);
 }
 
-#endif					/* _LINUX_SPINLOCK_H_ */
+#endif					/* _LINUXKPI_LINUX_SPINLOCK_H_ */

@@ -28,8 +28,8 @@
  *
  * $FreeBSD$
  */
-#ifndef	_LINUX_SLAB_H_
-#define	_LINUX_SLAB_H_
+#ifndef	_LINUXKPI_LINUX_SLAB_H_
+#define	_LINUXKPI_LINUX_SLAB_H_
 
 #include <sys/types.h>
 #include <sys/malloc.h>
@@ -39,6 +39,7 @@
 #include <linux/types.h>
 #include <linux/gfp.h>
 #include <linux/llist.h>
+#include <linux/overflow.h>
 
 MALLOC_DECLARE(M_KMALLOC);
 
@@ -85,18 +86,8 @@ struct linux_kmem_cache;
 #define	ARCH_KMALLOC_MINALIGN \
 	__alignof(unsigned long long)
 
-/*
- * Critical section-friendly version of kfree().
- * Requires knowledge of the allocation size at build time.
- */
-#define kfree_async(ptr)	do {					\
-	_Static_assert(sizeof(*(ptr)) >= sizeof(struct llist_node),	\
-	    "Size of object to free is unknown or too small");		\
-	if (curthread->td_critnest != 0)				\
-		linux_kfree_async(ptr);					\
-	else								\
-		kfree(ptr);						\
-} while (0)
+/* drm-kmod 5.4 compat */
+#define kfree_async(ptr)	kfree(ptr);
 
 static inline gfp_t
 linux_check_m_flags(gfp_t flags)
@@ -116,7 +107,8 @@ linux_check_m_flags(gfp_t flags)
 static inline void *
 kmalloc(size_t size, gfp_t flags)
 {
-	return (malloc(size, M_KMALLOC, linux_check_m_flags(flags)));
+	return (malloc(MAX(size, sizeof(struct llist_node)), M_KMALLOC,
+	    linux_check_m_flags(flags)));
 }
 
 static inline void *
@@ -185,10 +177,15 @@ krealloc(void *ptr, size_t size, gfp_t flags)
 	return (realloc(ptr, size, M_KMALLOC, linux_check_m_flags(flags)));
 }
 
+extern void linux_kfree_async(void *);
+
 static inline void
 kfree(const void *ptr)
 {
-	free(__DECONST(void *, ptr), M_KMALLOC);
+	if (curthread->td_critnest != 0)
+		linux_kfree_async(__DECONST(void *, ptr));
+	else
+		free(__DECONST(void *, ptr), M_KMALLOC);
 }
 
 static __inline void
@@ -209,8 +206,7 @@ extern void *lkpi_kmem_cache_alloc(struct linux_kmem_cache *, gfp_t);
 extern void *lkpi_kmem_cache_zalloc(struct linux_kmem_cache *, gfp_t);
 extern void lkpi_kmem_cache_free(struct linux_kmem_cache *, void *);
 extern void linux_kmem_cache_destroy(struct linux_kmem_cache *);
-void linux_kfree_async(void *);
 void linux_kmem_cache_free_rcu_callback(struct rcu_head *head);
 void linux_kmem_cache_free_rcu(struct linux_kmem_cache *, void *);
 
-#endif					/* _LINUX_SLAB_H_ */
+#endif					/* _LINUXKPI_LINUX_SLAB_H_ */
