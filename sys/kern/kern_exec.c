@@ -160,19 +160,18 @@ static int
 sysctl_kern_ps_strings(SYSCTL_HANDLER_ARGS)
 {
 	struct proc *p;
-	int error;
+	vm_offset_t ps_strings;
 
 	p = curproc;
 #ifdef SCTL_MASK32
 	if (req->flags & SCTL_MASK32) {
 		unsigned int val;
-		val = (unsigned int)p->p_sysent->sv_psstrings;
-		error = SYSCTL_OUT(req, &val, sizeof(val));
-	} else
+		val = (unsigned int)PROC_PS_STRINGS(p);
+		return (SYSCTL_OUT(req, &val, sizeof(val)));
+	}
 #endif
-		error = SYSCTL_OUT(req, &p->p_sysent->sv_psstrings,
-		   sizeof(p->p_sysent->sv_psstrings));
-	return error;
+	ps_strings = PROC_PS_STRINGS(p);
+	return (SYSCTL_OUT(req, &ps_strings, sizeof(ps_strings)));
 }
 
 static int
@@ -1210,9 +1209,6 @@ exec_new_vmspace(struct image_params *imgp, struct sysentvec *sv)
 	} else {
 		ssiz = maxssiz;
 	}
-	imgp->eff_stack_sz = lim_cur(curthread, RLIMIT_STACK);
-	if (ssiz < imgp->eff_stack_sz)
-		imgp->eff_stack_sz = ssiz;
 	stack_addr = sv->sv_usrstack - ssiz;
 	stack_prot = obj != NULL && imgp->stack_prot != 0 ?
 	    imgp->stack_prot : sv->sv_stackprot;
@@ -1632,21 +1628,6 @@ exec_args_get_begin_envv(struct image_args *args)
 	return (args->endp);
 }
 
-void
-exec_stackgap(struct image_params *imgp, uintptr_t *dp)
-{
-	struct proc *p = imgp->proc;
-
-	if (imgp->sysent->sv_stackgap == NULL ||
-	    (p->p_fctl0 & (NT_FREEBSD_FCTL_ASLR_DISABLE |
-	    NT_FREEBSD_FCTL_ASG_DISABLE)) != 0 ||
-	    (imgp->map_flags & MAP_ASLR) == 0) {
-		p->p_vmspace->vm_stkgap = 0;
-		return;
-	}
-	p->p_vmspace->vm_stkgap = imgp->sysent->sv_stackgap(imgp, dp);
-}
-
 /*
  * Copy strings out to the new process address space, constructing new arg
  * and env vector tables. Return a pointer to the base so that it can be used
@@ -1669,9 +1650,8 @@ exec_copyout_strings(struct image_params *imgp, uintptr_t *stack_base)
 	p = imgp->proc;
 	sysent = p->p_sysent;
 
-	arginfo = (struct ps_strings *)sysent->sv_psstrings;
-	destp =	(uintptr_t)arginfo;
-	imgp->ps_strings = arginfo;
+	destp =	PROC_PS_STRINGS(p);
+	arginfo = imgp->ps_strings = (void *)destp;
 
 	/*
 	 * Install sigcode.
@@ -1726,8 +1706,6 @@ exec_copyout_strings(struct image_params *imgp, uintptr_t *stack_base)
 	destp -= ARG_MAX - imgp->args->stringspace;
 	destp = rounddown2(destp, sizeof(void *));
 	ustringp = destp;
-
-	exec_stackgap(imgp, &destp);
 
 	if (imgp->auxargs) {
 		/*

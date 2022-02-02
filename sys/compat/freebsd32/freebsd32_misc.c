@@ -937,7 +937,11 @@ freebsd32_ptrace(struct thread *td, struct freebsd32_ptrace_args *uap)
 		struct ptrace_sc_ret32 psr;
 	} r32;
 	void *addr;
-	int data, error = 0, i;
+	int data, error, i;
+
+	if (!allow_ptrace)
+		return (ENOSYS);
+	error = 0;
 
 	AUDIT_ARG_PID(uap->pid);
 	AUDIT_ARG_CMD(uap->req);
@@ -3353,7 +3357,7 @@ freebsd32_copyout_strings(struct image_params *imgp, uintptr_t *stack_base)
 
 	sysent = imgp->sysent;
 
-	arginfo = (struct freebsd32_ps_strings *)sysent->sv_psstrings;
+	arginfo = (struct freebsd32_ps_strings *)PROC_PS_STRINGS(imgp->proc);
 	imgp->ps_strings = arginfo;
 	destp =	(uintptr_t)arginfo;
 
@@ -3412,8 +3416,6 @@ freebsd32_copyout_strings(struct image_params *imgp, uintptr_t *stack_base)
 	destp -= ARG_MAX - imgp->args->stringspace;
 	destp = rounddown2(destp, sizeof(uint32_t));
 	ustringp = destp;
-
-	exec_stackgap(imgp, &destp);
 
 	if (imgp->auxargs) {
 		/*
