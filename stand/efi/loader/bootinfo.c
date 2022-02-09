@@ -130,6 +130,14 @@ bi_getboothowto(char *kargs)
 				    NULL, NULL);
 			}
 		}
+		if (getenv("efi_com_mmio") != NULL &&
+		    getenv("efi_com_speed") != NULL && /* verifies uart mode */
+		    getenv("hw.uart.console") == NULL) {
+			snprintf(buf, sizeof(buf), "mm:%s,rs:2",
+			    getenv("efi_com_mmio"));
+			env_setenv("hw.uart.console", EV_VOLATILE, buf, NULL,
+			    NULL);
+		}
 #endif
 #endif
 	}
