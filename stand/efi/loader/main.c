@@ -4,7 +4,7 @@
  * All rights reserved.
  *
  * Copyright (c) 2016-2019 Netflix, Inc. written by M. Warner Losh
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -720,13 +720,16 @@ setenv_int(const char *key, int val)
 int
 parse_uefi_con_out(void)
 {
-	int how, rv;
+	int how, rv, len;
 	int vid_seen = 0, com_seen = 0, seen = 0;
+	int uidx = 0 , token_idx = 0, is_uart =0;
 	size_t sz;
-	char buf[4096], *ep;
+	char buf[4096], *ep, *devpname, *token,  *uart_addr, *uart_ref, *rest;
+	char uart_addr_le[30], mmio_addr[30];
 	EFI_DEVICE_PATH *node;
 	ACPI_HID_DEVICE_PATH  *acpi;
 	UART_DEVICE_PATH  *uart;
+	CHAR16 *text;
 	bool pci_pending;
 
 	how = 0;
@@ -778,6 +781,49 @@ parse_uefi_con_out(void)
 			pci_pending = true;
 		}
 		node = NextDevicePathNode(node);
+	}
+
+	/*
+	 * When no legacy serial is found, we might be looking at a non-legacy mmio serial device mapping
+	 * In which case the efi_devpath_name() for name ConOutDev looks like this:
+	 * 		VenHw(XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX,0090DCFE00000000)/Uart(115200,8,N,1)/VenVt100()
+	 * Which should tell the kernel to attach a console to fedc9000 (little endian)
+	 */
+	if (getenv("efi_8250_uid") == NULL) {
+		text = efi_devpath_name((EFI_DEVICE_PATH *)buf);
+		if (text != NULL) {
+				len = ucs2len(text);
+				if ((devpname = malloc(len + 1)) != NULL) {
+						cpy16to8(text, devpname, len+1);
+						rest = devpname;
+						while ((token = strtok_r(rest, ",()/", &rest))) {
+							if (strcmp(token, "Uart") == 0) {
+								is_uart = 1;
+							} else if (token_idx == 2) {
+								uart_addr = token;
+							}
+							++token_idx;
+						}
+						if (is_uart && uart_addr && strlen(uart_addr) <= 20) {
+							// big endian to little endian
+							memset(uart_addr_le, 0, sizeof(uart_addr_le));
+							for (int i=strlen(uart_addr) -1; i >= 0; i--) {
+								if ( i%2 == 0) {
+									uidx = (int)strlen(uart_addr)  - i -1;
+								} else {
+									uidx = (int)strlen(uart_addr)  - i +1;
+								}
+								uart_addr_le[uidx-1] = uart_addr[i];
+							}
+							uart_ref = uart_addr_le;
+							while (*uart_ref == '0') uart_ref++;
+							sprintf(mmio_addr, "0x%s", uart_ref);
+							setenv("efi_uart_mmio", mmio_addr, 1);
+						}
+						free(devpname);
+				}
+				efi_free_devpath_name(text);
+		}
 	}
 
 	/*

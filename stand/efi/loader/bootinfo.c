@@ -122,6 +122,10 @@ bi_getboothowto(char *kargs)
 				    NULL, NULL);
 			}
 		}
+		if (getenv("efi_uart_mmio") != NULL && getenv("hw.uart.console") == NULL) {
+			snprintf(buf, sizeof(buf),  "mm:%s,rs:2", getenv("efi_uart_mmio"));
+			env_setenv("hw.uart.console", EV_VOLATILE, buf, NULL, NULL);
+		}
 #endif
 	}
 
@@ -507,7 +511,7 @@ bi_load(char *args, vm_offset_t *modulep, vm_offset_t *kernendp)
 	/* Handle device tree blob */
 	dtbp = addr;
 	dtb_size = fdt_copy(addr);
-		
+
 	/* Pad to a page boundary */
 	if (dtb_size)
 		addr += roundup(dtb_size, PAGE_SIZE);
