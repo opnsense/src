@@ -180,7 +180,7 @@ badoff:
 	ldep->de_dirclust = dirclust;
 	ldep->de_diroffset = diroffset;
 	ldep->de_inode = inode;
-	lockmgr(nvp->v_vnlock, LK_EXCLUSIVE, NULL);
+	lockmgr(nvp->v_vnlock, LK_EXCLUSIVE | LK_NOWITNESS, NULL);
 	VN_LOCK_AREC(nvp);	/* for doscheckpath */
 	fc_purge(ldep, 0);	/* init the FAT cache for this denode */
 	error = insmntque(nvp, mntp);
@@ -205,9 +205,9 @@ badoff:
 	/*
 	 * Copy the directory entry into the denode area of the vnode.
 	 */
-	if ((dirclust == MSDOSFSROOT
-	     || (FAT32(pmp) && dirclust == pmp->pm_rootdirblk))
-	    && diroffset == MSDOSFSROOT_OFS) {
+	if ((dirclust == MSDOSFSROOT ||
+	    (FAT32(pmp) && dirclust == pmp->pm_rootdirblk)) &&
+	    diroffset == MSDOSFSROOT_OFS) {
 		/*
 		 * Directory entry for the root directory. There isn't one,
 		 * so we manufacture one. We should probably rummage
@@ -386,7 +386,7 @@ detrunc(struct denode *dep, u_long length, int flags, struct ucred *cred)
 
 	if (dep->de_FileSize < length) {
 		vnode_pager_setsize(DETOV(dep), length);
-		return deextend(dep, length, cred);
+		return (deextend(dep, length, cred));
 	}
 
 	/*
@@ -476,7 +476,7 @@ detrunc(struct denode *dep, u_long length, int flags, struct ucred *cred)
 			return (error);
 		}
 		fc_setcache(dep, FC_LASTFC, de_cluster(pmp, length - 1),
-			    eofentry);
+		    eofentry);
 	}
 
 	/*

@@ -238,6 +238,7 @@ SUBDIR=	\
 	${_malo} \
 	md \
 	mdio \
+	${_mgb} \
 	mem \
 	mfi \
 	mii \
@@ -662,6 +663,7 @@ _ixv=		ixv
 .if ${MK_SOURCELESS_UCODE} != "no"
 _lio=		lio
 .endif
+_mgb=		mgb
 _nctgpio=	nctgpio
 _ndis=		ndis
 _ntb=		ntb

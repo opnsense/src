@@ -25,7 +25,10 @@
  * $FreeBSD$
  */
 
-#include "en.h"
+#include "opt_rss.h"
+#include "opt_ratelimit.h"
+
+#include <dev/mlx5/mlx5_en/en.h>
 
 struct mlx5_cqe64 *
 mlx5e_get_cqe(struct mlx5e_cq *cq)

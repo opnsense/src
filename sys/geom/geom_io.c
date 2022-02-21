@@ -521,7 +521,7 @@ g_io_request(struct bio *bp, struct g_consumer *cp)
 		KASSERT(bp->bio_data != NULL,
 		    ("NULL bp->data in g_io_request(cmd=%hu)", bp->bio_cmd));
 	}
-	if (cmd == BIO_DELETE || cmd == BIO_FLUSH) {
+	if (cmd == BIO_DELETE || cmd == BIO_FLUSH || cmd == BIO_SPEEDUP) {
 		KASSERT(bp->bio_data == NULL,
 		    ("non-NULL bp->data in g_io_request(cmd=%hu)",
 		    bp->bio_cmd));
@@ -561,7 +561,7 @@ g_io_request(struct bio *bp, struct g_consumer *cp)
 
 	direct = (cp->flags & G_CF_DIRECT_SEND) != 0 &&
 	    (pp->flags & G_PF_DIRECT_RECEIVE) != 0 &&
-	    !g_is_geom_thread(curthread) &&
+	    curthread != g_down_td &&
 	    ((pp->flags & G_PF_ACCEPT_UNMAPPED) != 0 ||
 	    (bp->bio_flags & BIO_UNMAPPED) == 0 || THREAD_CAN_SLEEP()) &&
 	    pace == 0;
@@ -653,7 +653,7 @@ g_io_deliver(struct bio *bp, int error)
 
 	direct = (pp->flags & G_PF_DIRECT_SEND) &&
 		 (cp->flags & G_CF_DIRECT_RECEIVE) &&
-		 !g_is_geom_thread(curthread);
+		 curthread != g_up_td;
 	if (direct) {
 		/* Block direct execution if less then half of stack left. */
 		size_t	st, su;
@@ -886,6 +886,8 @@ g_read_data(struct g_consumer *cp, off_t offset, off_t length, int *error)
 	bp->bio_data = ptr;
 	g_io_request(bp, cp);
 	errorc = biowait(bp, "gread");
+	if (errorc == 0 && bp->bio_completed != length)
+		errorc = EIO;
 	if (error != NULL)
 		*error = errorc;
 	g_destroy_bio(bp);
@@ -940,6 +942,8 @@ g_write_data(struct g_consumer *cp, off_t offset, void *ptr, off_t length)
 	bp->bio_data = ptr;
 	g_io_request(bp, cp);
 	error = biowait(bp, "gwrite");
+	if (error == 0 && bp->bio_completed != length)
+		error = EIO;
 	g_destroy_bio(bp);
 	return (error);
 }
@@ -971,6 +975,8 @@ g_delete_data(struct g_consumer *cp, off_t offset, off_t length)
 	bp->bio_data = NULL;
 	g_io_request(bp, cp);
 	error = biowait(bp, "gdelete");
+	if (error == 0 && bp->bio_completed != length)
+		error = EIO;
 	g_destroy_bio(bp);
 	return (error);
 }
@@ -1011,6 +1017,8 @@ g_format_bio(struct sbuf *sb, const struct bio *bp)
 
 	if (bp->bio_to != NULL)
 		pname = bp->bio_to->name;
+	else if (bp->bio_parent != NULL && bp->bio_parent->bio_to != NULL)
+		pname = bp->bio_parent->bio_to->name;
 	else
 		pname = "[unknown]";
 
