@@ -710,8 +710,11 @@ again:
 					in6_ifstat_inc(ifp, ifs6_out_discard);
 				goto bad;
 			}
-			if (ifp != NULL)
-			    mtu = ifp->if_mtu;
+			if (ifp == NULL) {
+				error = EHOSTUNREACH;
+				goto bad;
+			}
+			mtu = ifp->if_mtu;
 		}
 		if (nh == NULL) {
 			/*
