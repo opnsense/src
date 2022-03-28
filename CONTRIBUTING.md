@@ -59,9 +59,12 @@ And above all: stay kind and open.  :)
 Pull requests
 -------------
 
+Since this is a "downstream" FreeBSD repository, most pull requests should
+be directed elsewhere unless specific for OPNsense.
+
 When creating pull request, please heed the following:
 
-* Base your code on the latest master branch to avoid manual merges
+* Base your code on the latest "primary" branch to avoid manual merges
 * Code review may ensue in order to help shape your proposal
 * Pull request must adhere to 2-Clause BSD licensing
 * Explain the problem and your proposed solution
