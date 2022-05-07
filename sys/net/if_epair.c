@@ -812,6 +812,9 @@ epair_mod_init()
 
 		epair_tasks.tasks++;
 	}
+	thread_lock(curthread);
+	sched_unbind(curthread);
+	thread_unlock(curthread);
 #else
 	snprintf(name, sizeof(name), "epair_task");
 
