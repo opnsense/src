@@ -1575,7 +1575,8 @@ host(const char *s)
 
 	/* interface with this name exists? */
 	/* expensive with thousands of interfaces - prioritze IPv4/6 check */
-	if (cont && (h = host_if(ps, mask)) != NULL)
+	if (cont && ((h = host_if(ps, mask)) != NULL ||
+	    strchr(ps, ':') != NULL))
 		cont = 0;
 
 	/* dns lookup */
