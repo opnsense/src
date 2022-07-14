@@ -1506,17 +1506,24 @@ xgbe_log_gpio_expander(struct xgbe_prv_data *pdata)
 {
 	struct xgbe_phy_data *phy_data = pdata->phy_data;
 
-	axgbe_printf(0, "%s: Input port registers: 0x%x\n", __func__, phy_data->sfp_gpio_inputs);
-	axgbe_printf(0, "%s: Output port registers: 0x%x\n", __func__, phy_data->sfp_gpio_outputs);
-	axgbe_printf(0, "%s: Polarity port registers: 0x%x\n", __func__, phy_data->sfp_gpio_polarity);
-	axgbe_printf(0, "%s: Configuration port registers: 0x%x\n", __func__, phy_data->sfp_gpio_configuration);
+	axgbe_printf(0, "Input port registers: 0x%x\n", phy_data->sfp_gpio_inputs);
+	axgbe_printf(0, "Output port registers: 0x%x\n", phy_data->sfp_gpio_outputs);
+	axgbe_printf(0, "Polarity port registers: 0x%x\n", phy_data->sfp_gpio_polarity);
+	axgbe_printf(0, "Configuration port registers: 0x%x\n", phy_data->sfp_gpio_configuration);
 }
 
 static int
 xgbe_phy_validate_gpio_expander(struct xgbe_prv_data *pdata)
 {
 	struct xgbe_phy_data *phy_data = pdata->phy_data;
-	uint8_t polarity[3];
+	uint8_t gpio_data[3] = {0};
+	int rx_los_pos = (1 << phy_data->sfp_gpio_rx_los) >> 8;
+	int tx_fault_pos = (1 << phy_data->sfp_gpio_tx_fault) >> 8;
+	int mod_abs_pos = (1 << phy_data->sfp_gpio_mod_absent) >> 8;
+	int port_id = phy_data->port_id == 0 ? 1 : 0;
+	int shift = 4 * port_id;
+	int nibble = (mod_abs_pos | rx_los_pos | tx_fault_pos);
+	int config = 0;
 	int ret = 0;
 
 	ret = xgbe_phy_get_comm_ownership(pdata);
@@ -1527,36 +1534,52 @@ xgbe_phy_validate_gpio_expander(struct xgbe_prv_data *pdata)
 	if (ret)
 		goto put;
 
-	if (phy_data->sfp_gpio_polarity) {
+	if (phy_data->sfp_gpio_polarity)
 		axgbe_printf(0, "GPIO polarity inverted - resetting\n");
 
-		ret = xgbe_phy_sfp_get_mux(pdata);
-		if (ret) {
-			axgbe_error("I2C error setting SFP MUX\n");
-			goto put;
-		}
+	ret = xgbe_phy_sfp_get_mux(pdata);
+	if (ret) {
+		axgbe_error("I2C error setting SFP MUX\n");
+		goto put;
+	}
 
-		polarity[0] = 4;
-		polarity[1] = 0x0;
-		polarity[2] = 0x0;
+	gpio_data[0] = 4;
 
-		ret = xgbe_phy_i2c_write(pdata, phy_data->sfp_gpio_address,
-				polarity, sizeof(polarity));
-		if (ret) {
-			axgbe_error("%s: I2C error writing address to GPIO polarity register\n",
-			    __func__);
-			goto put_mux;
-		}
+	ret = xgbe_phy_i2c_write(pdata, phy_data->sfp_gpio_address,
+			gpio_data, sizeof(gpio_data));
+	if (ret) {
+		axgbe_error("%s: I2C error writing to GPIO polarity register\n",
+			__func__);
+		goto put_mux;
+	}
 
-		ret = xgbe_read_gpio_expander(pdata);
-		if (ret)
-			goto put_mux;
+	/* Write the I/O states to the configuration register */
+	gpio_data[0] = 6; /* configuration register */
+	gpio_data[1] = 0xFF; /* All inputs for port 0 */
 
-		xgbe_log_gpio_expander(pdata);
+	config = phy_data->sfp_gpio_configuration >> 8;
+
+	config = config & ~(0xF << shift);
+	config = config | nibble;
+	gpio_data[2] = (uint8_t)config;
+
+	ret = xgbe_phy_i2c_write(pdata, phy_data->sfp_gpio_address,
+			gpio_data, sizeof(gpio_data));
+	if (ret) {
+		axgbe_error("%s: I2C error writing to GPIO configuration register\n",
+			__func__);
+		goto put_mux;
+	}
 
 put_mux:
-		xgbe_phy_sfp_put_mux(pdata);
-	}
+	xgbe_phy_sfp_put_mux(pdata);
+
+
+	ret = xgbe_read_gpio_expander(pdata);
+	if (ret)
+		goto put;
+
+	xgbe_log_gpio_expander(pdata);
 
 put:
 	xgbe_phy_put_comm_ownership(pdata);
