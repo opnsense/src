@@ -2,6 +2,8 @@ command Zap %s/[\xA0]/ /g
 set viminfo='20,<1000
 set colorcolumn=80
 syntax on
+set ttymouse=
+set paste
 set ts=8
 set hls
 set nu
