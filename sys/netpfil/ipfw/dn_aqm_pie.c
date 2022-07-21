@@ -628,7 +628,6 @@ pie_callout_cleanup(void *x)
 	mtx_unlock(&pst->lock_mtx);
 	mtx_destroy(&pst->lock_mtx);
 	free(x, M_DUMMYNET);
-
 	pie_desc.ref_count--;
 }
 
