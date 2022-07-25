@@ -2437,7 +2437,7 @@ static struct protosw in_pfsync_protosw = {
 #endif
 
 static void
-pfsync_pointers_init()
+pfsync_pointers_init(void)
 {
 
 	PF_RULES_WLOCK();
@@ -2451,7 +2451,7 @@ pfsync_pointers_init()
 }
 
 static void
-pfsync_pointers_uninit()
+pfsync_pointers_uninit(void)
 {
 
 	PF_RULES_WLOCK();
@@ -2501,7 +2501,7 @@ VNET_SYSUNINIT(vnet_pfsync_uninit, SI_SUB_PROTO_FIREWALL, SI_ORDER_FOURTH,
     vnet_pfsync_uninit, NULL);
 
 static int
-pfsync_init()
+pfsync_init(void)
 {
 #ifdef INET
 	int error;
@@ -2522,7 +2522,7 @@ pfsync_init()
 }
 
 static void
-pfsync_uninit()
+pfsync_uninit(void)
 {
 	pfsync_detach_ifnet_ptr = NULL;
 
