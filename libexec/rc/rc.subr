@@ -795,7 +795,8 @@ check_startmsgs()
 #
 #	${name}_prepend	n	Command added before ${command}.
 #
-#	${name}_setup	n	Command executed before ${command}.
+#	${name}_setup	n	Command executed during a (re)start before
+#				${command} or a reload before ${sig_reload}.
 #
 #	${name}_login_class n	Login class to use, else "daemon".
 #
@@ -1187,6 +1188,12 @@ $command $rc_flags $command_args"
 			fi
 
 			_run_rc_precmd || return 1
+
+			if [ -n "$_setup" ]; then
+				if ! _run_rc_doit "$_setup"; then
+					warn "failed to setup ${name}"
+				fi
+			fi
 
 			_doit=$(_run_rc_killcmd "${sig_reload:-HUP}")
 			_run_rc_doit "$_doit" || return 1
