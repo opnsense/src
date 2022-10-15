@@ -3455,6 +3455,7 @@ prison_priv_check(struct ucred *cred, int priv)
 	case PRIV_NET_GIF:
 	case PRIV_NET_SETIFVNET:
 	case PRIV_NET_SETIFFIB:
+	case PRIV_NET_ME:
 
 		/*
 		 * 802.11-related privileges.
