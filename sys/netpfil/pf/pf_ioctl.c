@@ -5040,7 +5040,7 @@ done:
 }
 
 /*
- * XXX - Check for version missmatch!!!
+ * XXX - Check for version mismatch!!!
  */
 static void
 pf_clear_all_states(void)
@@ -5468,7 +5468,7 @@ errout:
 }
 
 /*
- * XXX - Check for version missmatch!!!
+ * XXX - Check for version mismatch!!!
  */
 
 /*
