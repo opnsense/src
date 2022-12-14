@@ -71,12 +71,12 @@ stf_status(int s)
 {
 	struct stfv4args param;
 
-	if (do_cmd(s, STF_GV4NET, &param, sizeof(param), 0) < 0)
+	if (do_cmd(s, STF6RD_GV4NET, &param, sizeof(param), 0) < 0)
 		return;
 
-	/* inet_ntoa() uses a shared buffer */
-	printf("\tv4net %s/%d ", inet_ntoa(param.inaddr), param.prefix);
-	printf("-> tv4br %s\n", inet_ntoa(param.dstv4_addr));
+	printf("\tv4net %s/%d -> ", inet_ntoa(param.inaddr),
+	    param.prefix);
+	printf("tv4br %s\n", inet_ntoa(param.dstv4_addr));
 }
 
 static void
@@ -94,8 +94,8 @@ setstf_br(const char *val, int d, int s, const struct afswtch *afp)
 		errx(1, "%s: bad value", val);
 
 	req.dstv4_addr = sin.sin_addr;
-	if (do_cmd(s, STF_SDSTV4, &req, sizeof(req), 1) < 0)
-		err(1, "STF_SV4DST %s",  val);
+	if (do_cmd(s, STF6RD_SBR, &req, sizeof(req), 1) < 0)
+		err(1, "STF6RD_SBR%s",  val);
 }
 
 static void
@@ -129,8 +129,8 @@ setstf_set(const char *val, int d, int s, const struct afswtch *afp)
 		errx(1, "%s: bad value", val);
 
 	req.inaddr = sin.sin_addr;
-	if (do_cmd(s, STF_SV4NET, &req, sizeof(req), 1) < 0)
-		err(1, "STF_SV4NET %s",  val);
+	if (do_cmd(s, STF6RD_SV4NET, &req, sizeof(req), 1) < 0)
+		err(1, "STF6RD_SV4NET %s",  val);
 }
 
 static struct cmd stf_cmds[] = {
@@ -139,9 +139,9 @@ static struct cmd stf_cmds[] = {
 };
 
 static struct afswtch af_stf = {
-	.af_name	= "af_stf",
-	.af_af		= AF_UNSPEC,
-	.af_other_status = stf_status,
+	.af_name		= "af_stf",
+	.af_af			= AF_UNSPEC,
+	.af_other_status	= stf_status,
 };
 
 static __constructor void
