@@ -351,8 +351,10 @@ nm_os_catch_rx(struct netmap_generic_adapter *gna, int intercept)
 
 	nm_os_ifnet_lock();
 	if (intercept) {
+		ifp->if_capenable |= IFCAP_NETMAP;
 		ifp->if_input = freebsd_generic_rx_handler;
 	} else {
+		ifp->if_capenable &= ~IFCAP_NETMAP;
 		ifp->if_input = na->if_input;
 	}
 	nm_os_ifnet_unlock();
