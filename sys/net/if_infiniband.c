@@ -409,8 +409,13 @@ infiniband_input(struct ifnet *ifp, struct mbuf *m)
 	struct infiniband_header *ibh;
 	struct epoch_tracker et;
 	int isr;
+	bool needs_epoch;
+
+	needs_epoch = (ifp->if_flags & IFF_KNOWSEPOCH) == 0;
 
 	CURVNET_SET_QUIET(ifp->if_vnet);
+	if (__predict_false(needs_epoch))
+		NET_EPOCH_ENTER(et);
 
 	if ((ifp->if_flags & IFF_UP) == 0) {
 		if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
@@ -498,10 +503,10 @@ infiniband_input(struct ifnet *ifp, struct mbuf *m)
 	mac_ifnet_create_mbuf(ifp, m);
 #endif
 	/* Allow monitor mode to claim this frame, after stats are updated. */
-	NET_EPOCH_ENTER(et);
 	netisr_dispatch(isr, m);
-	NET_EPOCH_EXIT(et);
 done:
+	if (__predict_false(needs_epoch))
+		NET_EPOCH_EXIT(et);
 	CURVNET_RESTORE();
 }
 
