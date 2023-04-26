@@ -152,6 +152,9 @@ struct mtx xgbe_phy_comm_lock;
 /* RRC frequency during link status check */
 #define XGBE_RRC_FREQUENCY		10
 
+/* SFP port max PHY probe retries */
+#define XGBE_SFP_PHY_RETRY_MAX		5
+
 enum xgbe_port_mode {
 	XGBE_PORT_MODE_RSVD = 0,
 	XGBE_PORT_MODE_BACKPLANE,
@@ -188,6 +191,11 @@ enum xgbe_sfp_cable {
 
 enum xgbe_sfp_base {
 	XGBE_SFP_BASE_UNKNOWN = 0,
+	XGBE_SFP_BASE_PX,
+	XGBE_SFP_BASE_BX10,
+	XGBE_SFP_BASE_100_FX,
+	XGBE_SFP_BASE_100_LX10,
+	XGBE_SFP_BASE_100_BX,
 	XGBE_SFP_BASE_1000_T,
 	XGBE_SFP_BASE_1000_SX,
 	XGBE_SFP_BASE_1000_LX,
@@ -202,6 +210,7 @@ enum xgbe_sfp_base {
 
 enum xgbe_sfp_speed {
 	XGBE_SFP_SPEED_UNKNOWN = 0,
+	XGBE_SFP_SPEED_100,
 	XGBE_SFP_SPEED_100_1000,
 	XGBE_SFP_SPEED_1000,
 	XGBE_SFP_SPEED_10000,
@@ -228,12 +237,18 @@ enum xgbe_sfp_speed {
 #define XGBE_SFP_BASE_1GBE_CC_LX		BIT(1)
 #define XGBE_SFP_BASE_1GBE_CC_CX		BIT(2)
 #define XGBE_SFP_BASE_1GBE_CC_T			BIT(3)
+#define XGBE_SFP_BASE_100M_CC_LX10		BIT(4)
+#define XGBE_SFP_BASE_100M_CC_FX		BIT(5)
+#define XGBE_SFP_BASE_CC_BX10			BIT(6)
+#define XGBE_SFP_BASE_CC_PX			BIT(7)
 
 #define XGBE_SFP_BASE_CABLE			8
 #define XGBE_SFP_BASE_CABLE_PASSIVE		BIT(2)
 #define XGBE_SFP_BASE_CABLE_ACTIVE		BIT(3)
 
 #define XGBE_SFP_BASE_BR			12
+#define XGBE_SFP_BASE_BR_100M_MIN		0x1
+#define XGBE_SFP_BASE_BR_100M_MAX		0x2
 #define XGBE_SFP_BASE_BR_1GBE_MIN		0x0a
 #define XGBE_SFP_BASE_BR_1GBE_MAX		0x0d
 #define XGBE_SFP_BASE_BR_10GBE_MIN		0x64
@@ -389,6 +404,7 @@ struct xgbe_phy_data {
 	enum xgbe_mdio_reset mdio_reset;
 	unsigned int mdio_reset_addr;
 	unsigned int mdio_reset_gpio;
+	int sfp_phy_retries;
 
 	/* Re-driver support */
 	unsigned int redrv;
@@ -406,6 +422,8 @@ struct xgbe_phy_data {
 
 static enum xgbe_an_mode xgbe_phy_an_mode(struct xgbe_prv_data *pdata);
 static int xgbe_phy_reset(struct xgbe_prv_data *pdata);
+static int axgbe_ifmedia_upd(struct ifnet *ifp);
+static void axgbe_ifmedia_sts(struct ifnet *ifp, struct ifmediareq *ifmr);
 
 static int
 xgbe_phy_i2c_xfer(struct xgbe_prv_data *pdata, struct xgbe_i2c_op *i2c_op)
@@ -780,6 +798,14 @@ xgbe_phy_sfp_phy_settings(struct xgbe_prv_data *pdata)
 	}
 
 	switch (phy_data->sfp_base) {
+	case XGBE_SFP_BASE_100_FX:
+	case XGBE_SFP_BASE_100_LX10:
+	case XGBE_SFP_BASE_100_BX:
+		pdata->phy.speed = SPEED_100;
+		pdata->phy.duplex = DUPLEX_FULL;
+		pdata->phy.autoneg = AUTONEG_DISABLE;
+		pdata->phy.pause_autoneg = AUTONEG_DISABLE;
+		break;
 	case XGBE_SFP_BASE_1000_T:
 	case XGBE_SFP_BASE_1000_SX:
 	case XGBE_SFP_BASE_1000_LX:
@@ -802,6 +828,7 @@ xgbe_phy_sfp_phy_settings(struct xgbe_prv_data *pdata)
 		}
 		break;
 	case XGBE_SFP_BASE_1000_BX:
+	case XGBE_SFP_BASE_PX:
 		pdata->phy.speed = SPEED_1000;
 		pdata->phy.duplex = DUPLEX_FULL;
 		pdata->phy.autoneg = AUTONEG_DISABLE;
@@ -875,6 +902,10 @@ xgbe_phy_sfp_bit_rate(struct xgbe_sfp_eeprom *sfp_eeprom,
 	sfp_base = sfp_eeprom->base;
 
 	switch (sfp_speed) {
+	case XGBE_SFP_SPEED_100:
+		min = XGBE_SFP_BASE_BR_100M_MIN;
+		max = XGBE_SFP_BASE_BR_100M_MAX;
+		break;
 	case XGBE_SFP_SPEED_1000:
 		min = XGBE_SFP_BASE_BR_1GBE_MIN;
 		max = XGBE_SFP_BASE_BR_1GBE_MAX;
@@ -898,6 +929,11 @@ xgbe_phy_free_phy_device(struct xgbe_prv_data *pdata)
 
 	if (phy_data->phydev)
 		phy_data->phydev = 0;
+
+	if (pdata->axgbe_miibus != NULL) {
+		device_delete_child(pdata->dev, pdata->axgbe_miibus);
+		pdata->axgbe_miibus = NULL;
+	}
 }
 
 static bool
@@ -1073,7 +1109,7 @@ xgbe_phy_start_aneg(struct xgbe_prv_data *pdata)
 
 	if (changed > 0) {
 		ret = xgbe_phy_mii_read(pdata, pdata->mdio_addr, MII_BMCR);
-		if (ret)
+		if (ret < 0)
 			return (ret);
 
 		ret = xgbe_phy_mii_write(pdata, pdata->mdio_addr, MII_BMCR,
@@ -1133,7 +1169,6 @@ xgbe_phy_find_phy_device(struct xgbe_prv_data *pdata)
 
 	phy_data->phydev = 1;
 	xgbe_phy_external_phy_quirks(pdata);
-	xgbe_phy_start_aneg(pdata);
 
 	return (0);
 }
@@ -1146,24 +1181,36 @@ xgbe_phy_sfp_external_phy(struct xgbe_prv_data *pdata)
 
 	axgbe_printf(3, "%s: sfp_changed: 0x%x\n", __func__,
 	    phy_data->sfp_changed);
-	if (!phy_data->sfp_changed)
-		return;
+	if (!phy_data->sfp_phy_retries) {
+		if (!phy_data->sfp_changed)
+			return;
+	}
 
 	phy_data->sfp_phy_avail = 0;
-
-	if (phy_data->sfp_base != XGBE_SFP_BASE_1000_T)
-		return;
 
 	/* Check access to the PHY by reading CTRL1 */
 	ret = xgbe_phy_i2c_mii_read(pdata, MII_BMCR);
 	if (ret < 0) {
-		axgbe_error("%s: ext phy fail %d\n", __func__, ret);
+		phy_data->sfp_phy_retries++;
+		if (phy_data->sfp_phy_retries >= XGBE_SFP_PHY_RETRY_MAX)
+			phy_data->sfp_phy_retries = 0;
+		axgbe_printf(1, "%s: ext phy fail %d. retrying.\n", __func__, ret);
 		return;
 	}
 
 	/* Successfully accessed the PHY */
 	phy_data->sfp_phy_avail = 1;
 	axgbe_printf(3, "Successfully accessed External PHY\n");
+
+	/* Attach external PHY to the miibus */
+	ret = mii_attach(pdata->dev, &pdata->axgbe_miibus, pdata->netdev,
+		(ifm_change_cb_t)axgbe_ifmedia_upd,
+		(ifm_stat_cb_t)axgbe_ifmedia_sts, BMSR_DEFCAPMASK,
+		pdata->mdio_addr, MII_OFFSET_ANY, MIIF_FORCEANEG);
+
+	if (ret) {
+		axgbe_error("mii attach failed with err=(%d)\n", ret);
+	}
 }
 
 static bool
@@ -1270,16 +1317,41 @@ xgbe_phy_sfp_parse_eeprom(struct xgbe_prv_data *pdata)
 		phy_data->sfp_base = XGBE_SFP_BASE_1000_CX;
 	else if (sfp_base[XGBE_SFP_BASE_1GBE_CC] & XGBE_SFP_BASE_1GBE_CC_T)
 		phy_data->sfp_base = XGBE_SFP_BASE_1000_T;
+	else if (sfp_base[XGBE_SFP_BASE_1GBE_CC] & XGBE_SFP_BASE_100M_CC_LX10)
+		phy_data->sfp_base = XGBE_SFP_BASE_100_LX10;
+	else if (sfp_base[XGBE_SFP_BASE_1GBE_CC] & XGBE_SFP_BASE_100M_CC_FX)
+		phy_data->sfp_base = XGBE_SFP_BASE_100_FX;
+	else if (sfp_base[XGBE_SFP_BASE_1GBE_CC] & XGBE_SFP_BASE_CC_BX10) {
+		/* BX10 can be either 100 or 1000 */
+		if (xgbe_phy_sfp_bit_rate(sfp_eeprom, XGBE_SFP_SPEED_100)) {
+			phy_data->sfp_base = XGBE_SFP_BASE_100_BX;
+		} else {
+			/* default to 1000 */
+			phy_data->sfp_base = XGBE_SFP_BASE_1000_BX;
+		}
+	}
+	else if (sfp_base[XGBE_SFP_BASE_1GBE_CC] & XGBE_SFP_BASE_CC_PX)
+		phy_data->sfp_base = XGBE_SFP_BASE_PX;
 	else if (xgbe_phy_sfp_bit_rate(sfp_eeprom, XGBE_SFP_SPEED_1000)
 			&& (sfp_base[XGBE_SFP_BASE_SM_LEN_KM] >= XGBE_SFP_BASE_SM_LEN_KM_MIN
 			|| sfp_base[XGBE_SFP_BASE_SM_LEN_100M] >= XGBE_SFP_BASE_SM_LEN_100M_MIN)
 			&& wavelen >= XGBE_SFP_BASE_OSC_1310)
 		phy_data->sfp_base = XGBE_SFP_BASE_1000_BX;
-		
+	else if (xgbe_phy_sfp_bit_rate(sfp_eeprom, XGBE_SFP_SPEED_100)
+			&& (sfp_base[XGBE_SFP_BASE_SM_LEN_KM] >= XGBE_SFP_BASE_SM_LEN_KM_MIN
+			|| sfp_base[XGBE_SFP_BASE_SM_LEN_100M] >= XGBE_SFP_BASE_SM_LEN_100M_MIN)
+			&& wavelen >= XGBE_SFP_BASE_OSC_1310)
+		phy_data->sfp_base = XGBE_SFP_BASE_100_BX;
+
 	switch (phy_data->sfp_base) {
+	case XGBE_SFP_BASE_100_FX:
+	case XGBE_SFP_BASE_100_LX10:
+	case XGBE_SFP_BASE_100_BX:
+		phy_data->sfp_speed = XGBE_SFP_SPEED_100;
 	case XGBE_SFP_BASE_1000_T:
 		phy_data->sfp_speed = XGBE_SFP_SPEED_100_1000;
 		break;
+	case XGBE_SFP_BASE_PX:
 	case XGBE_SFP_BASE_1000_SX:
 	case XGBE_SFP_BASE_1000_LX:
 	case XGBE_SFP_BASE_1000_CX:
@@ -1377,13 +1449,14 @@ xgbe_phy_sfp_read_eeprom(struct xgbe_prv_data *pdata)
 	    &eeprom_addr, sizeof(eeprom_addr),
 	    &sfp_eeprom, sizeof(sfp_eeprom));
 
-	eeprom = &sfp_eeprom;
-	base = eeprom->base;
-	dump_sfp_eeprom(pdata, base);
 	if (ret) {
 		axgbe_error("I2C error reading SFP EEPROM\n");
 		goto put;
 	}
+
+	eeprom = &sfp_eeprom;
+	base = eeprom->base;
+	dump_sfp_eeprom(pdata, base);
 
 	/* Validate the contents read */
 	if (!xgbe_phy_sfp_verify_eeprom(sfp_eeprom.base[XGBE_SFP_BASE_CC],
@@ -1787,17 +1860,17 @@ xgbe_phy_an37_sgmii_outcome(struct xgbe_prv_data *pdata)
 		}
 		break;
 	case XGBE_SGMII_AN_LINK_SPEED_1000:
+	default:
+		/* Default to 1000 */
 		if (pdata->an_status & XGBE_SGMII_AN_LINK_DUPLEX) {
 			XGBE_SET_LP_ADV(&pdata->phy, 1000baseT_Full);
 			mode = XGBE_MODE_SGMII_1000;
 		} else {
 			/* Half-duplex not supported */
 			XGBE_SET_LP_ADV(&pdata->phy, 1000baseT_Half);
-			mode = XGBE_MODE_UNKNOWN;
+			mode = XGBE_MODE_SGMII_1000;
 		}
 		break;
-	default:
-		mode = XGBE_MODE_UNKNOWN;
 	}
 
 	return (mode);
@@ -2090,7 +2163,6 @@ xgbe_phy_an_config(struct xgbe_prv_data *pdata)
 	if (!phy_data->phydev)
 		return (0);
 
-	ret = xgbe_phy_start_aneg(pdata);
 	return (ret);
 }
 
@@ -2656,7 +2728,7 @@ xgbe_phy_get_type(struct xgbe_prv_data *pdata, struct ifmediareq * ifmr)
 		if(phy_data->port_mode == XGBE_PORT_MODE_NBASE_T)
 			ifmr->ifm_active |= IFM_100_T;
 		else if(phy_data->port_mode == XGBE_PORT_MODE_SFP)
-			ifmr->ifm_active |= IFM_1000_SGMII;
+			ifmr->ifm_active |= IFM_100_SGMII;
 		else
 			ifmr->ifm_active |= IFM_OTHER;
 		break;
@@ -2851,7 +2923,8 @@ xgbe_phy_valid_speed_sfp_mode(struct xgbe_phy_data *phy_data, int speed)
 
 	switch (speed) {
 	case SPEED_100:
-		return (phy_data->sfp_speed == XGBE_SFP_SPEED_100_1000);
+		return ((phy_data->sfp_speed == XGBE_SFP_SPEED_100) ||
+			(phy_data->sfp_speed == XGBE_SFP_SPEED_100_1000));
 	case SPEED_1000:
 		return ((phy_data->sfp_speed == XGBE_SFP_SPEED_100_1000) ||
 		    (phy_data->sfp_speed == XGBE_SFP_SPEED_1000));
@@ -3070,10 +3143,12 @@ xgbe_phy_link_status(struct xgbe_prv_data *pdata, int *an_restart)
 			    phy_data->sfp_rx_los);
 			return (0);
 		}
-	} else {
+	}
+
+	if (phy_data->phydev || phy_data->port_mode != XGBE_PORT_MODE_SFP) {
 		mii = device_get_softc(pdata->axgbe_miibus);
 		mii_tick(mii);
-	
+
 		ret = xgbe_phy_read_status(pdata);
 		if (ret) {
 			axgbe_printf(2, "Link: Read status returned %d\n", ret);
@@ -3579,6 +3654,7 @@ xgbe_phy_start(struct xgbe_prv_data *pdata)
 		axgbe_printf(0, "Checking GPIO expander validity\n");
 		xgbe_phy_validate_gpio_expander(pdata);
 
+		phy_data->sfp_phy_retries = 0;
 		xgbe_phy_sfp_detect(pdata);
 		break;
 	default:
