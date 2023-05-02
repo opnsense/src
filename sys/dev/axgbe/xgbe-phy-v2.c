@@ -214,6 +214,7 @@ enum xgbe_sfp_speed {
 	XGBE_SFP_SPEED_100_1000,
 	XGBE_SFP_SPEED_1000,
 	XGBE_SFP_SPEED_10000,
+	XGBE_SFP_SPEED_25000,
 };
 
 /* SFP Serial ID Base ID values relative to an offset of 0 */
@@ -253,6 +254,7 @@ enum xgbe_sfp_speed {
 #define XGBE_SFP_BASE_BR_1GBE_MAX		0x0d
 #define XGBE_SFP_BASE_BR_10GBE_MIN		0x64
 #define XGBE_SFP_BASE_BR_10GBE_MAX		0x68
+#define XGBE_SFP_BASE_BR_25GBE			0xFF
 
 /* Single mode, length of fiber in units of km */
 #define XGBE_SFP_BASE_SM_LEN_KM			14
@@ -914,6 +916,10 @@ xgbe_phy_sfp_bit_rate(struct xgbe_sfp_eeprom *sfp_eeprom,
 		min = XGBE_SFP_BASE_BR_10GBE_MIN;
 		max = XGBE_SFP_BASE_BR_10GBE_MAX;
 		break;
+	case XGBE_SFP_SPEED_25000:
+		min = XGBE_SFP_BASE_BR_25GBE;
+		max = XGBE_SFP_BASE_BR_25GBE;
+		break;
 	default:
 		return (false);
 	}
@@ -1296,10 +1302,13 @@ xgbe_phy_sfp_parse_eeprom(struct xgbe_prv_data *pdata)
 	 * Determine the type of SFP. Certain 10G SFP+ modules read as
 	 * 1000BASE-CX. To prevent 10G DAC cables to be recognized as
 	 * 1G, we first check if it is a DAC and the bitrate is 10G.
+	 * If it's greater than 10G, we assume the DAC is capable
+	 * of multiple bitrates, set the MAC to 10G and hope for the best.
 	 */
 	if (((sfp_base[XGBE_SFP_BASE_CV] & XGBE_SFP_BASE_CV_CP) ||
-	    (phy_data->sfp_cable == XGBE_SFP_CABLE_PASSIVE)) &&
-	    xgbe_phy_sfp_bit_rate(sfp_eeprom, XGBE_SFP_SPEED_10000))
+		(phy_data->sfp_cable == XGBE_SFP_CABLE_PASSIVE)) &&
+		(xgbe_phy_sfp_bit_rate(sfp_eeprom, XGBE_SFP_SPEED_10000) ||
+		xgbe_phy_sfp_bit_rate(sfp_eeprom, XGBE_SFP_SPEED_25000)))
 		phy_data->sfp_base = XGBE_SFP_BASE_10000_CR;
 	else if (sfp_base[XGBE_SFP_BASE_10GBE_CC] & XGBE_SFP_BASE_10GBE_CC_SR)
 		phy_data->sfp_base = XGBE_SFP_BASE_10000_SR;
@@ -2991,6 +3000,7 @@ xgbe_upd_link(struct xgbe_prv_data *pdata)
 
 	axgbe_printf(2, "%s: Link %d\n", __func__, pdata->phy.link);
 	reg = xgbe_phy_mii_read(pdata, pdata->mdio_addr, MII_BMSR);
+	reg = xgbe_phy_mii_read(pdata, pdata->mdio_addr, MII_BMSR);
 	if (reg < 0)
 		return (reg);
 
@@ -3116,6 +3126,25 @@ xgbe_phy_read_status(struct xgbe_prv_data *pdata)
 	return (0);
 }
 
+static void
+xgbe_rrc(struct xgbe_prv_data *pdata)
+{
+	struct xgbe_phy_data *phy_data = pdata->phy_data;
+	int ret;
+
+	if (phy_data->rrc_count++ > XGBE_RRC_FREQUENCY) {
+		axgbe_printf(1, "ENTERED RRC: rrc_count: %d\n",
+			phy_data->rrc_count);
+		phy_data->rrc_count = 0;
+		if (pdata->link_workaround) {
+			ret = xgbe_phy_reset(pdata);
+			if (ret)
+				axgbe_error("Error resetting phy\n");
+		} else
+			xgbe_phy_rrc(pdata);
+	}
+}
+
 static int
 xgbe_phy_link_status(struct xgbe_prv_data *pdata, int *an_restart)
 {
@@ -3141,6 +3170,11 @@ xgbe_phy_link_status(struct xgbe_prv_data *pdata, int *an_restart)
 			axgbe_printf(1, "%s: SFP absent 0x%x & sfp_rx_los 0x%x\n",
 			    __func__, phy_data->sfp_mod_absent,
 			    phy_data->sfp_rx_los);
+
+			if (!phy_data->sfp_mod_absent) {
+				xgbe_rrc(pdata);
+			}
+
 			return (0);
 		}
 	}
@@ -3151,8 +3185,8 @@ xgbe_phy_link_status(struct xgbe_prv_data *pdata, int *an_restart)
 
 		ret = xgbe_phy_read_status(pdata);
 		if (ret) {
-			axgbe_printf(2, "Link: Read status returned %d\n", ret);
-			return (ret);
+			axgbe_error("Link: Read status returned %d\n", ret);
+			return (0);
 		}
 
 		axgbe_printf(2, "%s: link speed %#x duplex %#x media %#x "
@@ -3164,7 +3198,10 @@ xgbe_phy_link_status(struct xgbe_prv_data *pdata, int *an_restart)
 		if ((pdata->phy.autoneg == AUTONEG_ENABLE) && !ret)
 			return (0);
 
-		return (pdata->phy.link);
+		if (pdata->phy.link)
+			return (1);
+
+		xgbe_rrc(pdata);
 	}
 
 	/* Link status is latched low, so read once to clear
@@ -3177,17 +3214,7 @@ xgbe_phy_link_status(struct xgbe_prv_data *pdata, int *an_restart)
 		return (1);
 
 	/* No link, attempt a receiver reset cycle */
-	if (phy_data->rrc_count++ > XGBE_RRC_FREQUENCY) {
-		axgbe_printf(1, "ENTERED RRC: rrc_count: %d\n",
-		    phy_data->rrc_count);
-		phy_data->rrc_count = 0;
-		if (pdata->link_workaround) {
-			ret = xgbe_phy_reset(pdata);
-			if (ret)
-				axgbe_error("Error resetting phy\n");
-		} else
-			xgbe_phy_rrc(pdata);
-	}
+	xgbe_rrc(pdata);
 
 	return (0);
 }
