@@ -1439,7 +1439,10 @@ xgbe_phy_stop(struct xgbe_prv_data *pdata)
 static int
 xgbe_phy_start(struct xgbe_prv_data *pdata)
 {
-	int ret;
+	int ret = 0;
+
+	if (pdata->phy_started)
+		return (ret);
 
 	DBGPR("-->xgbe_phy_start\n");
 
@@ -1584,6 +1587,7 @@ xgbe_phy_init(struct xgbe_prv_data *pdata)
 		pdata->phy.duplex = DUPLEX_FULL;
 	}
 
+	pdata->phy_started = 0;
 	pdata->phy.link = 0;
 
 	pdata->phy.pause_autoneg = pdata->pause_autoneg;

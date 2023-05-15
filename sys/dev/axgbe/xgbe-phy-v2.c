@@ -3178,6 +3178,11 @@ xgbe_phy_link_status(struct xgbe_prv_data *pdata, int *an_restart)
 	}
 
 	if (phy_data->phydev || phy_data->port_mode != XGBE_PORT_MODE_SFP) {
+		if (pdata->axgbe_miibus == NULL) {
+			axgbe_printf(1, "%s: miibus not initialized", __func__);
+			goto mdio_read;
+		}
+
 		mii = device_get_softc(pdata->axgbe_miibus);
 		mii_tick(mii);
 
@@ -3201,6 +3206,8 @@ xgbe_phy_link_status(struct xgbe_prv_data *pdata, int *an_restart)
 
 		xgbe_rrc(pdata);
 	}
+
+mdio_read:
 
 	/* Link status is latched low, so read once to clear
 	 * and then read again to get current state
