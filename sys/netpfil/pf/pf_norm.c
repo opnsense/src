@@ -1008,7 +1008,7 @@ pf_refragment6(struct ifnet *ifp, struct mbuf **m0, struct m_tag *mtag)
 		m->m_flags |= M_SKIP_FIREWALL;
 		memset(&pd, 0, sizeof(pd));
 		pd.pf_mtag = pf_find_mtag(m);
-		if (error == 0)
+		if (error == 0 && m->m_pkthdr.rcvif) /* XXX discard instead of panic */
 			ip6_forward(m, 0);
 		else
 			m_freem(m);
