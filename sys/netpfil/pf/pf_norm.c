@@ -1008,9 +1008,16 @@ pf_refragment6(struct ifnet *ifp, struct mbuf **m0, struct m_tag *mtag)
 		m->m_flags |= M_SKIP_FIREWALL;
 		memset(&pd, 0, sizeof(pd));
 		pd.pf_mtag = pf_find_mtag(m);
-		if (error == 0)
-			ip6_forward(m, 0);
-		else
+		if (error == 0) {
+			/*
+			 * XXX deal with KPI change in forwarding,
+			 * try to output the packet otherwise
+			 */
+			if (m->m_pkthdr.rcvif)
+				ip6_forward(m, 0);
+			else
+				ip6_output(m, NULL, NULL, 0, NULL, NULL, NULL);
+		} else
 			m_freem(m);
 	}
 
