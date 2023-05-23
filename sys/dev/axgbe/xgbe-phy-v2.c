@@ -1602,13 +1602,12 @@ xgbe_phy_validate_gpio_expander(struct xgbe_prv_data *pdata)
 {
 	struct xgbe_phy_data *phy_data = pdata->phy_data;
 	uint8_t gpio_data[3] = {0};
-	int rx_los_pos = (1 << phy_data->sfp_gpio_rx_los) >> 8;
-	int tx_fault_pos = (1 << phy_data->sfp_gpio_tx_fault) >> 8;
-	int mod_abs_pos = (1 << phy_data->sfp_gpio_mod_absent) >> 8;
-	int port_id = phy_data->port_id == 0 ? 1 : 0;
-	int shift = 4 * port_id;
-	int nibble = (mod_abs_pos | rx_los_pos | tx_fault_pos);
-	int config = 0;
+	int shift = GPIO_MASK_WIDTH * (3 - phy_data->port_id);
+	int rx_los_pos = (1 << phy_data->sfp_gpio_rx_los);
+	int tx_fault_pos = (1 << phy_data->sfp_gpio_tx_fault);
+	int mod_abs_pos = (1 << phy_data->sfp_gpio_mod_absent);
+	int port_sfp_pins = (mod_abs_pos | rx_los_pos | tx_fault_pos);
+	uint16_t config = 0;
 	int ret = 0;
 
 	ret = xgbe_phy_get_comm_ownership(pdata);
@@ -1619,52 +1618,53 @@ xgbe_phy_validate_gpio_expander(struct xgbe_prv_data *pdata)
 	if (ret)
 		goto put;
 
-	if (phy_data->sfp_gpio_polarity)
-		axgbe_printf(0, "GPIO polarity inverted - resetting\n");
-
 	ret = xgbe_phy_sfp_get_mux(pdata);
 	if (ret) {
 		axgbe_error("I2C error setting SFP MUX\n");
 		goto put;
 	}
 
-	gpio_data[0] = 4;
+	if (phy_data->sfp_gpio_polarity) {
+		axgbe_printf(0, "GPIO polarity inverted, resetting\n");
 
-	ret = xgbe_phy_i2c_write(pdata, phy_data->sfp_gpio_address,
+		xgbe_log_gpio_expander(pdata);
+		gpio_data[0] = 4; /* polarity register */
+
+		ret = xgbe_phy_i2c_write(pdata, phy_data->sfp_gpio_address,
 			gpio_data, sizeof(gpio_data));
-	if (ret) {
-		axgbe_error("%s: I2C error writing to GPIO polarity register\n",
-			__func__);
-		goto put_mux;
+
+		if (ret) {
+			axgbe_error("%s: I2C error writing to GPIO polarity register\n",
+				__func__);
+			goto put_mux;
+		}
 	}
 
-	/* Write the I/O states to the configuration register */
-	gpio_data[0] = 6; /* configuration register */
-	gpio_data[1] = 0xFF; /* All inputs for port 0 */
+	config = phy_data->sfp_gpio_configuration;
+	if ((config & port_sfp_pins) != port_sfp_pins) {
+		xgbe_log_gpio_expander(pdata);
 
-	config = phy_data->sfp_gpio_configuration >> 8;
+		/* Write the I/O states to the configuration register */
+		axgbe_printf(0, "Invalid GPIO configuration, resetting\n");
+		gpio_data[0] = 6; /* configuration register */
+		config = config & ~(0xF << shift); /* clear port id bits */
+		config |= port_sfp_pins;
+		gpio_data[1] = config & 0xff;
+		gpio_data[2] = (config >> 8);
 
-	config = config & ~(0xF << shift);
-	config = config | nibble;
-	gpio_data[2] = (uint8_t)config;
-
-	ret = xgbe_phy_i2c_write(pdata, phy_data->sfp_gpio_address,
+		ret = xgbe_phy_i2c_write(pdata, phy_data->sfp_gpio_address,
 			gpio_data, sizeof(gpio_data));
-	if (ret) {
-		axgbe_error("%s: I2C error writing to GPIO configuration register\n",
-			__func__);
-		goto put_mux;
+		if (ret) {
+			axgbe_error("%s: I2C error writing to GPIO configuration register\n",
+				__func__);
+			goto put_mux;
+		}
+	} else {
+		axgbe_printf(0, "GPIO configuration valid\n");
 	}
 
 put_mux:
 	xgbe_phy_sfp_put_mux(pdata);
-
-
-	ret = xgbe_read_gpio_expander(pdata);
-	if (ret)
-		goto put;
-
-	xgbe_log_gpio_expander(pdata);
 
 put:
 	xgbe_phy_put_comm_ownership(pdata);
