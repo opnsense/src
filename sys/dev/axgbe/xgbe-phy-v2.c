@@ -1194,6 +1194,9 @@ xgbe_phy_sfp_external_phy(struct xgbe_prv_data *pdata)
 
 	phy_data->sfp_phy_avail = 0;
 
+	if (phy_data->sfp_base != XGBE_SFP_BASE_1000_T)
+		return;
+
 	/* Check access to the PHY by reading CTRL1 */
 	ret = xgbe_phy_i2c_mii_read(pdata, MII_BMCR);
 	if (ret < 0) {
