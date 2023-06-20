@@ -58,8 +58,6 @@ firewall_config()
 		jexec ${jname} pfctl -e
 		jexec ${jname} pfctl -F all
 		jexec ${jname} pfctl -f $cwd/pf.rule
-		jexec ${jname} pfilctl link -o pf:default-out inet-local
-		jexec ${jname} pfilctl link -o pf:default-out6 inet6-local
 	elif [ ${fw} == "ipf" ]; then
 		jexec ${jname} ipf -E
 		jexec ${jname} ipf -Fa -f $cwd/ipf.rule
