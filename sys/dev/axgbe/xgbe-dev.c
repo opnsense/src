@@ -1443,8 +1443,10 @@ xgbe_dev_read(struct xgbe_channel *channel)
 
 	/* Set checksum done indicator as appropriate */
 	/* TODO - add tunneling support */
-	XGMAC_SET_BITS(packet->attributes, RX_PACKET_ATTRIBUTES,
-	    CSUM_DONE, 1);
+	if (if_getcapenable(pdata->netdev) & IFCAP_RXCSUM) {
+		XGMAC_SET_BITS(packet->attributes, RX_PACKET_ATTRIBUTES,
+			CSUM_DONE, 1);
+	}
 
 	/* Check for errors (only valid in last descriptor) */
 	err = XGMAC_GET_BITS_LE(rdesc->desc3, RX_NORMAL_DESC3, ES);
