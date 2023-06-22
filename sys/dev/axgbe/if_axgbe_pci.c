@@ -1398,7 +1398,7 @@ xgbe_default_config(struct xgbe_prv_data *pdata)
         pdata->tx_sf_mode = MTL_TSF_ENABLE;
         pdata->tx_threshold = MTL_TX_THRESHOLD_64;
         pdata->tx_osp_mode = DMA_OSP_ENABLE;
-        pdata->rx_sf_mode = MTL_RSF_ENABLE;
+        pdata->rx_sf_mode = MTL_RSF_DISABLE;
         pdata->rx_threshold = MTL_RX_THRESHOLD_64;
         pdata->pause_autoneg = 1;
         pdata->phy_speed = SPEED_UNKNOWN;
