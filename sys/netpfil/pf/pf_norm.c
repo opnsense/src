@@ -1223,6 +1223,8 @@ pf_normalize_ip6(struct mbuf **m0, int dir, struct pfi_kkif *kif,
 	if (sizeof(struct ip6_hdr) + IPV6_MAXPACKET < m->m_pkthdr.len)
 		goto drop;
 
+again:
+	h = mtod(m, struct ip6_hdr *);
 	plen = ntohs(h->ip6_plen);
 	/* jumbo payload option not supported */
 	if (plen == 0)
@@ -1293,6 +1295,8 @@ pf_normalize_ip6(struct mbuf **m0, int dir, struct pfi_kkif *kif,
 	return (PF_PASS);
 
  fragment:
+	if (pd->flags & PFDESC_IP_REAS)
+		return (PF_DROP);
 	if (sizeof(struct ip6_hdr) + plen > m->m_pkthdr.len)
 		goto shortpkt;
 
@@ -1310,7 +1314,7 @@ pf_normalize_ip6(struct mbuf **m0, int dir, struct pfi_kkif *kif,
 		return (PF_DROP);
 
 	pd->flags |= PFDESC_IP_REAS;
-	return (PF_PASS);
+	goto again;
 
  shortpkt:
 	REASON_SET(reason, PFRES_SHORT);
