@@ -134,6 +134,7 @@ struct mtx xgbe_phy_comm_lock;
 #define XGBE_SFP_DIAG_INFO_ADDRESS	0x51
 #define XGBE_SFP_PHY_ADDRESS		0x56
 #define XGBE_GPIO_ADDRESS_PCA9555	0x20
+#define XGBE_IO_ADDRESS_PCF8574A	0x38
 
 /* SFP sideband signal indicators */
 #define XGBE_GPIO_NO_TX_FAULT		BIT(0)
@@ -360,6 +361,7 @@ struct xgbe_phy_data {
 	enum xgbe_port_mode port_mode;
 
 	unsigned int port_id;
+	unsigned int led_avail;
 
 	unsigned int port_speeds;
 
@@ -426,6 +428,8 @@ static enum xgbe_an_mode xgbe_phy_an_mode(struct xgbe_prv_data *pdata);
 static int xgbe_phy_reset(struct xgbe_prv_data *pdata);
 static int axgbe_ifmedia_upd(struct ifnet *ifp);
 static void axgbe_ifmedia_sts(struct ifnet *ifp, struct ifmediareq *ifmr);
+static int xgbe_phy_get_comm_ownership(struct xgbe_prv_data *pdata);
+static void xgbe_phy_put_comm_ownership(struct xgbe_prv_data *pdata);
 
 static int
 xgbe_phy_i2c_xfer(struct xgbe_prv_data *pdata, struct xgbe_i2c_op *i2c_op)
@@ -554,6 +558,74 @@ again2:
 		goto again2;
 
 	return (ret);
+}
+
+static int
+xgbe_phy_i2c_read_single(struct xgbe_prv_data *pdata, unsigned int target,
+    void *val, unsigned int val_len)
+{
+	struct xgbe_i2c_op i2c_op;
+	int retry = 1;
+	int ret;
+
+again:
+	/* Read the specfied register */
+	i2c_op.cmd = XGBE_I2C_CMD_READ;
+	i2c_op.target = target;
+	i2c_op.len = val_len;
+	i2c_op.buf = val;
+	ret = xgbe_phy_i2c_xfer(pdata, &i2c_op);
+	axgbe_printf(3, "%s: ret2 %d retry %d\n", __func__, ret, retry);
+	if ((ret == -EAGAIN) && retry--)
+		goto again;
+
+	return (ret);
+}
+
+static void
+xgbe_sfp_toggle_led(struct xgbe_prv_data *pdata, enum xgbe_led_mode mode)
+{
+	struct xgbe_phy_data *phy_data = pdata->phy_data;
+	unsigned int port_id = phy_data->port_id;
+	uint8_t state = 0;
+	int ret = 0;
+
+	if (!phy_data->led_avail)
+		return;
+
+	ret = xgbe_phy_get_comm_ownership(pdata);
+	if (ret)
+		return;
+
+	ret = xgbe_phy_i2c_read_single(pdata, XGBE_IO_ADDRESS_PCF8574A,
+				       &state, sizeof(state));
+	if (ret == -ENOTCONN)
+		phy_data->led_avail = 0;
+
+	if (ret)
+		goto put;
+
+	switch (mode) {
+	case XGBE_SFP_LED_OFF:
+		state |= (BIT(port_id) | (BIT(port_id) << 4));
+		break;
+	case XGBE_SFP_LED_HI:
+		/* turn off low speed LED first */
+		state |= (1 << (port_id + 4));
+		state &= ~(1 << port_id);
+		break;
+	case XGBE_SFP_LED_LOW:
+		/* turn off high speed LED first */
+		state |= (1 << port_id);
+		state &= ~(1 << (port_id + 4));
+		break;
+	}
+
+	xgbe_phy_i2c_write(pdata, XGBE_IO_ADDRESS_PCF8574A,
+			   &state, sizeof(state));
+
+put:
+	xgbe_phy_put_comm_ownership(pdata);
 }
 
 static int
@@ -3230,6 +3302,15 @@ mdio_read:
 }
 
 static void
+xgbe_phy_sfp_led_setup(struct xgbe_prv_data *pdata)
+{
+	struct xgbe_phy_data *phy_data = pdata->phy_data;
+
+	phy_data->led_avail = 1;
+	xgbe_sfp_toggle_led(pdata, XGBE_SFP_LED_OFF);
+}
+
+static void
 xgbe_phy_sfp_gpio_setup(struct xgbe_prv_data *pdata)
 {
 	struct xgbe_phy_data *phy_data = pdata->phy_data;
@@ -3282,6 +3363,7 @@ xgbe_phy_sfp_setup(struct xgbe_prv_data *pdata)
 {
 	xgbe_phy_sfp_comm_setup(pdata);
 	xgbe_phy_sfp_gpio_setup(pdata);
+	xgbe_phy_sfp_led_setup(pdata);
 }
 
 static int
@@ -3631,6 +3713,8 @@ static void
 xgbe_phy_stop(struct xgbe_prv_data *pdata)
 {
 	struct xgbe_phy_data *phy_data = pdata->phy_data;
+
+	xgbe_sfp_toggle_led(pdata, XGBE_SFP_LED_OFF);
 
 	/* If we have an external PHY, free it */
 	xgbe_phy_free_phy_device(pdata);
@@ -4118,4 +4202,6 @@ xgbe_init_function_ptrs_phy_v2(struct xgbe_phy_if *phy_if)
 
 	phy_impl->module_info		= xgbe_phy_module_info;
 	phy_impl->module_eeprom		= xgbe_phy_module_eeprom;
+
+	phy_impl->toggle_led		= xgbe_sfp_toggle_led;
 }

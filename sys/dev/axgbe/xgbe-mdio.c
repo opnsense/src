@@ -1071,14 +1071,23 @@ xgbe_phy_speed_string(int speed)
 static void
 xgbe_phy_print_status(struct xgbe_prv_data *pdata)
 {
-	if (pdata->phy.link)
+	if (pdata->phy.link) {
+		if (pdata->phy.speed & SPEED_10000)
+			pdata->phy_if.phy_impl.toggle_led(pdata,
+				XGBE_SFP_LED_HI);
+		else
+			pdata->phy_if.phy_impl.toggle_led(pdata,
+				XGBE_SFP_LED_LOW);
+
 		axgbe_printf(0,
 		    "Link is UP - %s/%s - flow control %s\n",
 		    xgbe_phy_speed_string(pdata->phy.speed),
 		    pdata->phy.duplex == DUPLEX_FULL ? "Full" : "Half",
 		    xgbe_phy_fc_string(pdata));
-	else
+	} else {
+		pdata->phy_if.phy_impl.toggle_led(pdata, XGBE_SFP_LED_OFF);
 		axgbe_printf(0, "Link is DOWN\n");
+	}
 }
 
 static void

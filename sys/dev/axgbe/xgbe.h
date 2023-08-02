@@ -550,6 +550,12 @@ enum xgbe_state {
 	XGBE_STOPPED,
 };
 
+enum xgbe_led_mode {
+	XGBE_SFP_LED_OFF,
+	XGBE_SFP_LED_HI,
+	XGBE_SFP_LED_LOW
+};
+
 enum xgbe_int {
 	XGMAC_INT_DMA_CH_SR_TI,
 	XGMAC_INT_DMA_CH_SR_TPS,
@@ -841,6 +847,7 @@ struct xgbe_hw_if {
  *     an_pre, an_post
  *     kr_training_pre, kr_training_post
  *     module_info, module_eeprom
+ *     set_led
  */
 struct xgbe_phy_impl_if {
 	/* Perform Setup/teardown actions */
@@ -895,6 +902,9 @@ struct xgbe_phy_impl_if {
 	/* SFP module related info */
 	int (*module_info)(struct xgbe_prv_data *pdata);
 	int (*module_eeprom)(struct xgbe_prv_data *pdata);
+
+	/* Drive LED status */
+	void (*toggle_led)(struct xgbe_prv_data *pdata, enum xgbe_led_mode);
 };
 
 struct xgbe_phy_if {
