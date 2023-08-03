@@ -508,6 +508,7 @@ struct e1000_softc {
 	u32			smartspeed;
 	u32			dmac;
 	int			link_mask;
+	int			tso_automasked;
 
 	u64			que_mask;
 
