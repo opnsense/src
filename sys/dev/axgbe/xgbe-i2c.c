@@ -112,10 +112,17 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include "xgbe.h"
 #include "xgbe-common.h"
+__FBSDID("$FreeBSD$");
+#include <sys/systm.h>
+#include <sys/proc.h>
+#include <sys/types.h>
+#include <sys/lock.h>
+#include <sys/lockmgr.h>
+
+struct lock xgbe_i2c_lock;
 
 #define XGBE_ABORT_COUNT	500
 #define XGBE_DISABLE_COUNT	1000
@@ -326,8 +333,12 @@ out:
 	axgbe_printf(3, "%s: ret %d stop %d\n", __func__, state->ret,
 	    XI2C_GET_BITS(isr, IC_RAW_INTR_STAT, STOP_DET));
 
-	if (state->ret || XI2C_GET_BITS(isr, IC_RAW_INTR_STAT, STOP_DET))
+	if (state->ret || XI2C_GET_BITS(isr, IC_RAW_INTR_STAT, STOP_DET)) {
 		pdata->i2c_complete = true;
+		if (!cold) {
+			wakeup_one(&pdata->i2c_complete);
+		}
+	}
 
 reissue_check:
 	/* Reissue interrupt if status is not clear */
@@ -419,23 +430,35 @@ xgbe_i2c_xfer(struct xgbe_prv_data *pdata, struct xgbe_i2c_op *op)
 	 */
 	xgbe_i2c_enable_interrupts(pdata);
 
-	timeout = ticks + (20 * hz);
-	while (ticks < timeout) {
+	if (cold) {
+		timeout = ticks + (20 * hz);
+		while (ticks < timeout) {
 
-		if (!pdata->i2c_complete) {
-			DELAY(200);
-			continue;
+			if (!pdata->i2c_complete) {
+				DELAY(200);
+				continue;
+			}
+
+			axgbe_printf(1, "%s: I2C OP complete\n", __func__);
+			break;
 		}
 
-		axgbe_printf(1, "%s: I2C OP complete\n", __func__);
-		break;
+		if ((ticks >= timeout) && !pdata->i2c_complete) {
+			axgbe_error("%s: operation timed out\n", __func__);
+			ret = -ETIMEDOUT;
+			goto disable;
+		}
+
+	} else {
+		if (mtx_sleep(&pdata->i2c_complete, &pdata->i2c_mutex, 0, "i2c_xfer",
+			      10*hz) == EWOULDBLOCK) {
+			axgbe_error("%s: operation timed out\n", __func__);
+			ret = (-ETIMEDOUT);
+			goto disable;
+		}
 	}
 
-	if ((ticks >= timeout) && !pdata->i2c_complete) {
-		axgbe_error("%s: operation timed out\n", __func__);
-		ret = -ETIMEDOUT;
-		goto disable;
-	}
+	axgbe_printf(1, "%s: I2C OP complete\n", __func__);
 
 	ret = state->ret;
 	axgbe_printf(3, "%s: i2c xfer ret %d abrt_source 0x%x \n", __func__,

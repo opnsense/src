@@ -112,12 +112,17 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
 
 #include "xgbe.h"
 #include "xgbe-common.h"
 
-struct mtx xgbe_phy_comm_lock;
+__FBSDID("$FreeBSD$");
+#include <sys/types.h>
+#include <sys/lock.h>
+#include <sys/lockmgr.h>
+
+struct mtx xgbe_cold_comm_lock;
+struct lock xgbe_comm_lock;
 
 #define XGBE_PHY_PORT_SPEED_100		BIT(0)
 #define XGBE_PHY_PORT_SPEED_1000	BIT(1)
@@ -671,7 +676,11 @@ xgbe_phy_sfp_get_mux(struct xgbe_prv_data *pdata)
 static void
 xgbe_phy_put_comm_ownership(struct xgbe_prv_data *pdata)
 {
-	mtx_unlock(&xgbe_phy_comm_lock);
+	if (cold) {
+		mtx_unlock(&xgbe_cold_comm_lock);
+	} else {
+		lockmgr(&xgbe_comm_lock, LK_RELEASE, NULL);
+	}
 }
 
 static int
@@ -685,7 +694,12 @@ xgbe_phy_get_comm_ownership(struct xgbe_prv_data *pdata)
 	 * the driver needs to take the software mutex and then the hardware
 	 * mutexes before being able to use the busses.
 	 */
-	mtx_lock(&xgbe_phy_comm_lock);
+	if (cold) {
+		mtx_lock(&xgbe_cold_comm_lock);
+	} else if (lockmgr(&xgbe_comm_lock, LK_EXCLUSIVE, NULL) == EWOULDBLOCK) {
+		axgbe_error("unable to grab lockmgr comms lock\n");
+		return (-ETIMEDOUT);
+	}
 
 	/* Clear the mutexes */
 	XP_IOWRITE(pdata, XP_I2C_MUTEX, XGBE_MUTEX_RELEASE);
@@ -712,7 +726,7 @@ xgbe_phy_get_comm_ownership(struct xgbe_prv_data *pdata)
 		return (0);
 	}
 
-	mtx_unlock(&xgbe_phy_comm_lock);
+	xgbe_phy_put_comm_ownership(pdata);
 
 	axgbe_error("unable to obtain hardware mutexes\n");
 
@@ -1575,12 +1589,13 @@ put:
 	return (ret);
 }
 
-static void
+static int
 xgbe_phy_sfp_signals(struct xgbe_prv_data *pdata)
 {
 	struct xgbe_phy_data *phy_data = pdata->phy_data;
 	uint8_t gpio_reg, gpio_ports[2];
-	int ret, prev_sfp_inputs = phy_data->port_sfp_inputs;
+	int ret = 0;
+	int prev_sfp_inputs = phy_data->port_sfp_inputs;
 	int shift = GPIO_MASK_WIDTH * (3 - phy_data->port_id);
 
 	/* Read the input port registers */
@@ -1590,7 +1605,7 @@ xgbe_phy_sfp_signals(struct xgbe_prv_data *pdata)
 	ret = xgbe_phy_sfp_get_mux(pdata);
 	if (ret) {
 		axgbe_error("I2C error setting SFP MUX\n");
-		return;
+		return (-EIO);
 	}
 
 	gpio_reg = 0;
@@ -1615,7 +1630,13 @@ xgbe_phy_sfp_signals(struct xgbe_prv_data *pdata)
 	    __func__, phy_data->sfp_mod_absent, phy_data->sfp_gpio_inputs);
 
 put_mux:
-	xgbe_phy_sfp_put_mux(pdata);
+	ret = xgbe_phy_sfp_put_mux(pdata);
+	if (ret) {
+		axgbe_error("I2C error putting SFP MUX\n");
+		ret = (-EIO);
+	}
+
+	return (ret);
 }
 
 static int
@@ -1767,36 +1788,40 @@ xgbe_phy_sfp_reset(struct xgbe_phy_data *phy_data)
 	phy_data->sfp_speed = XGBE_SFP_SPEED_UNKNOWN;
 }
 
-static void
+static int
 xgbe_phy_sfp_detect(struct xgbe_prv_data *pdata)
 {
 	struct xgbe_phy_data *phy_data = pdata->phy_data;
-	int ret, prev_sfp_state = phy_data->sfp_mod_absent;
+	int prev_sfp_state = phy_data->sfp_mod_absent;
+	int ret = 0;
 
 	ret = xgbe_phy_get_comm_ownership(pdata);
 	if (ret)
-		return;
+		return (-EIO);
 
 	/* Read the SFP signals and check for module presence */
-	xgbe_phy_sfp_signals(pdata);
+	ret = xgbe_phy_sfp_signals(pdata);
+	if (ret) {
+		ret = (-EIO);
+		goto put;
+	}
+
 	if (phy_data->sfp_mod_absent) {
 		if (prev_sfp_state != phy_data->sfp_mod_absent)
 			axgbe_error("%s: mod absent\n", __func__);
 		xgbe_phy_sfp_mod_absent(pdata);
-		goto put;
+		goto phy_settings;
 	}
 
 	ret = xgbe_phy_sfp_read_eeprom(pdata);
 	if (ret) {
-		/* Treat any error as if there isn't an SFP plugged in */
+		/* Assume last known state when an error occurs */
 		axgbe_error("%s: eeprom read failed\n", __func__);
 		ret = xgbe_read_gpio_expander(pdata);
 		
 		if (!ret)
 			xgbe_log_gpio_expander(pdata);
 
-		xgbe_phy_sfp_reset(phy_data);
-		xgbe_phy_sfp_mod_absent(pdata);
 		goto put;
 	}
 
@@ -1804,14 +1829,16 @@ xgbe_phy_sfp_detect(struct xgbe_prv_data *pdata)
 
 	xgbe_phy_sfp_external_phy(pdata);
 
-put:
+phy_settings:
 	xgbe_phy_sfp_phy_settings(pdata);
 
 	axgbe_printf(3, "%s: phy speed: 0x%x duplex: 0x%x autoneg: 0x%x "
 	    "pause_autoneg: 0x%x\n", __func__, pdata->phy.speed,
 	    pdata->phy.duplex, pdata->phy.autoneg, pdata->phy.pause_autoneg);
-
+put:
 	xgbe_phy_put_comm_ownership(pdata);
+
+	return (ret);
 }
 
 static int
@@ -3233,12 +3260,16 @@ xgbe_phy_link_status(struct xgbe_prv_data *pdata, int *an_restart)
 	if (phy_data->port_mode == XGBE_PORT_MODE_SFP) {
 		/* Check SFP signals */
 		axgbe_printf(3, "%s: calling phy detect\n", __func__);
-		xgbe_phy_sfp_detect(pdata);
+		ret = xgbe_phy_sfp_detect(pdata);
+
+		if (ret) {
+			return (XGBE_LINK_UNKNOWN);
+		}
 
 		if (phy_data->sfp_changed) {
 			axgbe_printf(1, "%s: SFP changed observed\n", __func__);
 			*an_restart = 1;
-			return (0);
+			return (XGBE_LINK_DOWN);
 		}
 
 		if (phy_data->sfp_mod_absent || phy_data->sfp_rx_los) {
@@ -3250,7 +3281,7 @@ xgbe_phy_link_status(struct xgbe_prv_data *pdata, int *an_restart)
 				xgbe_rrc(pdata);
 			}
 
-			return (0);
+			return (XGBE_LINK_DOWN);
 		}
 	}
 
@@ -3266,7 +3297,7 @@ xgbe_phy_link_status(struct xgbe_prv_data *pdata, int *an_restart)
 		ret = xgbe_phy_read_status(pdata);
 		if (ret) {
 			axgbe_error("Link: Read status returned %d\n", ret);
-			return (0);
+			return (XGBE_LINK_UNKNOWN);
 		}
 
 		axgbe_printf(2, "%s: link speed %#x duplex %#x media %#x "
@@ -3276,10 +3307,10 @@ xgbe_phy_link_status(struct xgbe_prv_data *pdata, int *an_restart)
 		ret = (ret < 0) ? ret : (ret & BMSR_ACOMP);
 		axgbe_printf(2, "Link: BMCR returned %d\n", ret);
 		if ((pdata->phy.autoneg == AUTONEG_ENABLE) && !ret)
-			return (0);
+			return (XGBE_LINK_DOWN);
 
 		if (pdata->phy.link)
-			return (1);
+			return (XGBE_LINK_UP);
 
 		xgbe_rrc(pdata);
 	}
@@ -3293,12 +3324,12 @@ mdio_read:
 	reg = XMDIO_READ(pdata, MDIO_MMD_PCS, MDIO_STAT1);
 	axgbe_printf(1, "%s: link_status reg: 0x%x\n", __func__, reg);
 	if (reg & MDIO_STAT1_LSTATUS)
-		return (1);
+		return (XGBE_LINK_UP);
 
 	/* No link, attempt a receiver reset cycle */
 	xgbe_rrc(pdata);
 
-	return (0);
+	return (XGBE_LINK_DOWN);
 }
 
 static void
@@ -3888,9 +3919,11 @@ xgbe_phy_init(struct xgbe_prv_data *pdata)
 	struct xgbe_phy_data *phy_data;
 	int ret;
 
-	/* Initialize the global lock */
-	if (!mtx_initialized(&xgbe_phy_comm_lock))
-		mtx_init(&xgbe_phy_comm_lock, "xgbe phy common lock", NULL, MTX_DEF);
+	/* Initialize the global locks */
+	if (!mtx_initialized(&xgbe_cold_comm_lock))
+		mtx_init(&xgbe_cold_comm_lock, "xgbe cold boot common lock",
+			NULL, MTX_DEF | MTX_RECURSE);
+	lockinit(&xgbe_comm_lock, 0, "xgbe", 500, LK_TIMELOCK | LK_CANRECURSE);
 
 	/* Check if enabled */
 	if (!xgbe_phy_port_enabled(pdata)) {

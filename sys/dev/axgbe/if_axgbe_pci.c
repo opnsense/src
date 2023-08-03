@@ -855,7 +855,8 @@ xgbe_service(void *ctx, int pending)
 
         pdata->phy_if.phy_status(pdata);
 
-	if (prev_state != pdata->phy.link) {
+	if (prev_state != pdata->phy.link &&
+		pdata->phy.link != XGBE_LINK_UNKNOWN) {
 		pdata->phy_link = pdata->phy.link;
 		axgbe_if_update_admin_status(sc->ctx);
 	}

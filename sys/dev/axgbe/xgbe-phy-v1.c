@@ -596,7 +596,7 @@ xgbe_phy_link_status(struct xgbe_prv_data *pdata, int *an_restart)
 	reg = XMDIO_READ(pdata, MDIO_MMD_PCS, MDIO_STAT1);
 	reg = XMDIO_READ(pdata, MDIO_MMD_PCS, MDIO_STAT1);
 
-	return ((reg & MDIO_STAT1_LSTATUS) ? 1 : 0);
+	return ((reg & MDIO_STAT1_LSTATUS) ? XGBE_LINK_UP : XGBE_LINK_DOWN);
 }
 
 static void

@@ -1386,12 +1386,15 @@ xgbe_phy_status(struct xgbe_prv_data *pdata)
 	axgbe_printf(1, "link_status returned Link:%d an_restart:%d aneg:%d\n",
 	    pdata->phy.link, an_restart, link_aneg);
 
+	if (pdata->phy.link == XGBE_LINK_UNKNOWN)
+		return;
+
 	if (an_restart) {
 		xgbe_phy_config_aneg(pdata);
 		return;
 	}
 
-	if (pdata->phy.link) {
+	if (pdata->phy.link == XGBE_LINK_UP) {
 		axgbe_printf(2, "Link Active\n");
 		if (link_aneg && !xgbe_phy_aneg_done(pdata)) {
 			axgbe_printf(1, "phy_link set check timeout\n");
