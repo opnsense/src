@@ -128,6 +128,11 @@
 
 #include "xgbe_osdep.h"
 
+/* Link states */
+#define XGBE_LINK_DOWN		0
+#define XGBE_LINK_UP		1
+#define XGBE_LINK_UNKNOWN	2
+
 /* From linux/dcbnl.h */
 #define IEEE_8021QAZ_MAX_TCS	8
 
