@@ -109,7 +109,7 @@ SYSCTL_INT(_kern, OID_AUTO, ncallout, CTLFLAG_RDTUN | CTLFLAG_NOFETCH, &ncallout
     "Number of entries in callwheel and size of timeout() preallocation");
 
 #ifdef	RSS
-static int pin_default_swi = 1;
+static int pin_default_swi = 0;
 static int pin_pcpu_swi = 1;
 #else
 static int pin_default_swi = 0;
