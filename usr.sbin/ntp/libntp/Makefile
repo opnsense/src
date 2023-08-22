@@ -1,4 +1,3 @@
-# $FreeBSD$
 
 .PATH: ${SRCTOP}/contrib/ntp/libntp \
 	${SRCTOP}/contrib/ntp/lib/isc \
