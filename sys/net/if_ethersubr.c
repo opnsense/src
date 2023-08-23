@@ -1367,11 +1367,12 @@ SYSCTL_INT(_net_link_vlan, OID_AUTO, mtag_pcp, CTLFLAG_RW,
 
 bool
 ether_8021q_frame(struct mbuf **mp, struct ifnet *ife, struct ifnet *p,
-    struct ether_8021q_tag *qtag)
+    const struct ether_8021q_tag *qtag)
 {
 	struct m_tag *mtag;
 	int n;
 	uint16_t tag;
+	uint8_t pcp = qtag->pcp;
 	static const char pad[8];	/* just zeros */
 
 	/*
@@ -1404,7 +1405,7 @@ ether_8021q_frame(struct mbuf **mp, struct ifnet *ife, struct ifnet *p,
 	 * If PCP is set in mbuf, use it
 	 */
 	if ((*mp)->m_flags & M_VLANTAG) {
-		qtag->pcp = EVL_PRIOFTAG((*mp)->m_pkthdr.ether_vtag);
+		pcp = EVL_PRIOFTAG((*mp)->m_pkthdr.ether_vtag);
 	}
 
 	/*
@@ -1418,7 +1419,7 @@ ether_8021q_frame(struct mbuf **mp, struct ifnet *ife, struct ifnet *p,
 	    MTAG_8021Q_PCP_OUT, NULL)) != NULL)
 		tag = EVL_MAKETAG(qtag->vid, *(uint8_t *)(mtag + 1), 0);
 	else
-		tag = EVL_MAKETAG(qtag->vid, qtag->pcp, 0);
+		tag = EVL_MAKETAG(qtag->vid, pcp, 0);
 	if ((p->if_capenable & IFCAP_VLAN_HWTAGGING) &&
 	    (qtag->proto == ETHERTYPE_VLAN)) {
 		(*mp)->m_pkthdr.ether_vtag = tag;
