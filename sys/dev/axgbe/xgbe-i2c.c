@@ -115,7 +115,7 @@
 
 #include "xgbe.h"
 #include "xgbe-common.h"
-__FBSDID("$FreeBSD$");
+
 #include <sys/systm.h>
 #include <sys/proc.h>
 #include <sys/types.h>
