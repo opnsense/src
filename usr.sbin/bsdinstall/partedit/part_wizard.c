@@ -261,7 +261,8 @@ query:
 		char warning[512];
 		int subchoice;
 
-		sprintf(warning, "The existing partition scheme on this "
+		snprintf(warning, sizeof(warning),
+		    "The existing partition scheme on this "
 		    "disk (%s) is not bootable on this platform. To install "
 		    "OPNsense, it must be repartitioned. This will destroy all "
 		    "data on the disk. Are you sure you want to proceed?",
@@ -348,7 +349,8 @@ wizard_makeparts(struct gmesh *mesh, const char *disk, const char *fstype,
 		    HN_DECIMAL);
 		humanize_number(neededstr, 7, MIN_FREE_SPACE, "B", HN_AUTOSCALE,
 		    HN_DECIMAL);
-		sprintf(message, "There is not enough free space on %s to "
+		snprintf(message, sizeof(message),
+		    "There is not enough free space on %s to "
 		    "install OPNsense (%s free, %s required). Would you like "
 		    "to choose another disk or to open the partition editor?",
 		    disk, availablestr, neededstr);
