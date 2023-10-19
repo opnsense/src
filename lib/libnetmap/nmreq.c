@@ -54,8 +54,26 @@ static int
 nm_is_identifier(const char *s, const char *e)
 {
 	for (; s != e; s++) {
-		if (!isalnum(*s) && *s != '_') {
+		/* XXX libnetmap reserves a number of characters for
+		 * private consumption leading to a reject of strange
+		 * interfaces names because the former check was too
+		 * restrictive.  In theory there is no limit to it,
+		 * but since libnetmap will not even use escaping we
+		 * need to exclude a bunch of control characters, mainly
+		 * to allow "." which is in use in FreeBSD by default
+		 * for VLANs nowadays.  There may be more characters
+		 * that need to be excluded but that is up to maintainers
+		 * to deal with accordingly.
+		 */
+		switch (*s) {
+		case '^': /* only SW ring */
+		case '*': /* NIC and SW */
+		case '-': /* one NIC ring pair */
+		case '/': /* start of flags */
+		case '@': /* start of memid */
 			return 0;
+		default:
+			break;
 		}
 	}
 
