@@ -2698,7 +2698,7 @@ numarray_find(struct table_info *ti, void *key)
 	struct numarray *ri;
 
 	ri = bsearch(key, ti->state, ti->data, sizeof(struct numarray),
-	    compare_ifidx);
+	    compare_numarray);
 
 	return (ri);
 }
