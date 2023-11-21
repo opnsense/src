@@ -1169,14 +1169,14 @@ $command $rc_flags $command_args"
 
 			_run_rc_precmd || return 1
 
-					# send the signal to stop
-					#
+			# send the signal to stop
+			#
 			echo "Stopping ${name}."
 			_doit=$(_run_rc_killcmd "${sig_stop:-TERM}")
 			_run_rc_doit "$_doit" || return 1
 
-					# wait for the command to exit,
-					# and run postcmd.
+			# wait for the command to exit,
+			# and run postcmd.
 			wait_for_pids $rc_pid
 
 			_run_rc_postcmd
@@ -1199,9 +1199,11 @@ $command $rc_flags $command_args"
 			;;
 
 		restart)
-					# prevent restart being called more
-					# than once by any given script
-					#
+			_run_rc_setup || warn "failed to setup ${name}"
+
+			# prevent restart being called more
+			# than once by any given script
+			#
 			if ${_rc_restart_done:-false}; then
 				return 0
 			fi
@@ -1348,7 +1350,8 @@ _run_rc_postcmd()
 
 _run_rc_setup()
 {
-	if [ -n "$_setup" ]; then
+	# prevent multiple execution on restart => stop/start split
+	if ! ${_rc_restart_done:-false} && [ -n "$_setup" ]; then
 		debug "run_rc_command: ${rc_arg}_setup: $_setup"
 		eval "$_setup"
 		_return=$?
