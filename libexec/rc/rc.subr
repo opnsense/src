@@ -795,8 +795,8 @@ check_startmsgs()
 #
 #	${name}_prepend	n	Command added before ${command}.
 #
-#	${name}_setup	n	Command executed during a (re)start before
-#				${command} or a reload before ${sig_reload}.
+#	${name}_setup	n	Command executed during start, restart and
+#				reload before ${rc_arg}_precmd is run.
 #
 #	${name}_login_class n	Login class to use, else "daemon".
 #
