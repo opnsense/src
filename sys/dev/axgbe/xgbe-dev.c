@@ -2030,7 +2030,7 @@ xgbe_config_mac_address(struct xgbe_prv_data *pdata)
 {
 	xgbe_set_mac_address(pdata, if_getlladdr(pdata->netdev));
 
-	/* 
+	/*
 	 * Promisc mode does not work as intended. When receiving CARP
 	 * packets, the filter still seems to kick in. As a workaround,
 	 * enable the "Receive All" mode on the card during init.

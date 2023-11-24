@@ -266,7 +266,7 @@ enum xgbe_sfp_speed {
 
 /* Single mode, length of fiber in units of 100m */
 #define XGBE_SFP_BASE_SM_LEN_100M		15
-#define XGBE_SFP_BASE_SM_LEN_100M_MIN	0x64
+#define XGBE_SFP_BASE_SM_LEN_100M_MIN		0x64
 
 #define XGBE_SFP_BASE_CU_CABLE_LEN		18
 
@@ -277,15 +277,15 @@ enum xgbe_sfp_speed {
 #define XGBE_SFP_BASE_VENDOR_REV		56
 #define XGBE_SFP_BASE_VENDOR_REV_LEN		4
 
-/* 
- * Optical specification compliance - denotes wavelength 
+/*
+ * Optical specification compliance - denotes wavelength
  * for optical tranceivers
  */
 #define XGBE_SFP_BASE_OSC			60
-#define XGBE_SFP_BASE_OSC_LEN		2
-#define XGBE_SFP_BASE_OSC_1310		0x051E
-#define XGBE_SFP_BASE_OSC_1439		0x05D2
-#define XGBE_SFP_BASE_OSC_1550		0x060E
+#define XGBE_SFP_BASE_OSC_LEN			2
+#define XGBE_SFP_BASE_OSC_1310			0x051E
+#define XGBE_SFP_BASE_OSC_1439			0x05D2
+#define XGBE_SFP_BASE_OSC_1550			0x060E
 
 #define XGBE_SFP_BASE_CC			63
 
@@ -1816,7 +1816,7 @@ xgbe_phy_sfp_detect(struct xgbe_prv_data *pdata)
 		/* Assume last known state when an error occurs */
 		axgbe_error("%s: eeprom read failed\n", __func__);
 		ret = xgbe_read_gpio_expander(pdata);
-		
+
 		if (!ret)
 			xgbe_log_gpio_expander(pdata);
 

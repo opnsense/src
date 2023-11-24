@@ -733,7 +733,7 @@ axgbe_init_iflib_softc_ctx(struct axgbe_if_softc *sc)
 }
 
 static void
-axgbe_initialize_rss_mapping(struct xgbe_prv_data *pdata) 
+axgbe_initialize_rss_mapping(struct xgbe_prv_data *pdata)
 {
 	int i;
 
