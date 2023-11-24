@@ -30,8 +30,6 @@
  */
 
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD$");
-
 #include <sys/param.h>
 #include <sys/sysctl.h>
 #include <sys/sbuf.h>
@@ -1623,11 +1621,11 @@ axgbe_sysctl_init(struct xgbe_prv_data *pdata)
 	SYSCTL_ADD_UINT(clist, top, OID_AUTO, "link_workaround",
 	    CTLFLAG_RWTUN, &pdata->link_workaround, 0,
 	    "enable the workaround for link issue in coming up");
-	
+
 	SYSCTL_ADD_UINT(clist, top, OID_AUTO, "rss_enabled",
 		CTLFLAG_RDTUN, &pdata->enable_rss, 1,
 		"shows the RSS feature state (1 - enable, 0 - disable)");
-	
+
 	SYSCTL_ADD_UINT(clist, top, OID_AUTO, "tx_pause",
 		CTLFLAG_RDTUN, &pdata->tx_pause, 1,
 		"shows the Flow Control TX pause feature state (1 - enable, 0 - disable)");

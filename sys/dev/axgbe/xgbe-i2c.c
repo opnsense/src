@@ -112,7 +112,6 @@
  */
 
 #include <sys/cdefs.h>
-
 #include "xgbe.h"
 #include "xgbe-common.h"
 
