@@ -1677,6 +1677,27 @@ error:
 	}
 }
 
+#ifdef DEV_NETMAP
+static void
+wg_deliver_netmap(if_t ifp, struct mbuf *m, int af)
+{
+	struct ether_header *eh;
+
+	M_PREPEND(m, ETHER_HDR_LEN, M_NOWAIT);
+	if (__predict_false(m == NULL)) {
+		if_inc_counter(ifp, IFCOUNTER_IQDROPS, 1);
+		return;
+	}
+
+	eh = mtod(m, struct ether_header *);
+	eh->ether_type = af == AF_INET ?
+	    htons(ETHERTYPE_IP) : htons(ETHERTYPE_IPV6);
+	memcpy(eh->ether_shost, "\x02\x02\x02\x02\x02\x02", ETHER_ADDR_LEN);
+	memcpy(eh->ether_dhost, "\x06\x06\x06\x06\x06\x06", ETHER_ADDR_LEN);
+	if_input(ifp, m);
+}
+#endif
+
 static void
 wg_deliver_in(struct wg_peer *peer)
 {
@@ -1685,6 +1706,7 @@ wg_deliver_in(struct wg_peer *peer)
 	struct wg_packet	*pkt;
 	struct mbuf		*m;
 	struct epoch_tracker	 et;
+	int			 af;
 
 	while ((pkt = wg_queue_dequeue_serial(&peer->p_decrypt_serial)) != NULL) {
 		if (pkt->p_state != WG_PACKET_CRYPTED)
@@ -1710,19 +1732,25 @@ wg_deliver_in(struct wg_peer *peer)
 		if (m->m_pkthdr.len == 0)
 			goto done;
 
-		MPASS(pkt->p_af == AF_INET || pkt->p_af == AF_INET6);
+		af = pkt->p_af;
+		MPASS(af == AF_INET || af == AF_INET6);
 		pkt->p_mbuf = NULL;
 
 		m->m_pkthdr.rcvif = ifp;
 
 		NET_EPOCH_ENTER(et);
-		BPF_MTAP2_AF(ifp, m, pkt->p_af);
+		BPF_MTAP2_AF(ifp, m, af);
 
 		CURVNET_SET(ifp->if_vnet);
 		M_SETFIB(m, ifp->if_fib);
-		if (pkt->p_af == AF_INET)
+#ifdef DEV_NETMAP
+		if ((if_getcapenable(ifp) & IFCAP_NETMAP) != 0)
+			wg_deliver_netmap(ifp, m, af);
+		else
+#endif
+		if (af == AF_INET)
 			netisr_dispatch(NETISR_IP, m);
-		if (pkt->p_af == AF_INET6)
+		else if (af == AF_INET6)
 			netisr_dispatch(NETISR_IPV6, m);
 		CURVNET_RESTORE();
 		NET_EPOCH_EXIT(et);
@@ -2182,6 +2210,16 @@ wg_transmit(struct ifnet *ifp, struct mbuf *m)
 		return (ENOBUFS);
 	}
 
+#ifdef DEV_NETMAP
+	if ((if_getcapenable(ifp) & IFCAP_NETMAP) != 0) {
+		if (__predict_false(m->m_len < sizeof(struct ether_header))) {
+			xmit_err(ifp, m, NULL, AF_UNSPEC);
+			return (EINVAL);
+		}
+		m_adj(m, sizeof(struct ether_header));
+	}
+#endif
+
 	ret = determine_af_and_pullup(&m, &af);
 	if (ret) {
 		xmit_err(ifp, m, NULL, AF_UNSPEC);
@@ -2189,6 +2227,58 @@ wg_transmit(struct ifnet *ifp, struct mbuf *m)
 	}
 	return (wg_xmit(ifp, m, af, ifp->if_mtu));
 }
+
+#ifdef DEV_NETMAP
+static void
+wg_if_input(if_t ifp, struct mbuf *m)
+{
+	struct ether_header *eh;
+
+	KASSERT((if_getcapenable(ifp) & IFCAP_NETMAP) != 0,
+	    ("%s: ifp %p is not in netmap mode", __func__, ifp));
+
+	m = m_pullup(m, sizeof(struct ether_header));
+	if (__predict_false(m == NULL)) {
+		if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
+		return;
+	}
+	eh = mtod(m, struct ether_header *);
+	CURVNET_SET(ifp->if_vnet);
+	switch (ntohs(eh->ether_type)) {
+	case ETHERTYPE_IP:
+		m_adj(m, sizeof(struct ether_header));
+		netisr_dispatch(NETISR_IP, m);
+		break;
+	case ETHERTYPE_IPV6:
+		m_adj(m, sizeof(struct ether_header));
+		netisr_dispatch(NETISR_IPV6, m);
+		break;
+	default:
+		if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
+		m_freem(m);
+		break;
+	}
+	CURVNET_RESTORE();
+}
+
+static int
+wg_xmit_netmap(if_t ifp, struct mbuf *m, int af)
+{
+	struct ether_header *eh;
+
+	M_PREPEND(m, ETHER_HDR_LEN, M_NOWAIT);
+	if (__predict_false(m == NULL)) {
+		if_inc_counter(ifp, IFCOUNTER_IQDROPS, 1);
+		return (ENOBUFS);
+	}
+	eh = mtod(m, struct ether_header *);
+	eh->ether_type = af == AF_INET ?
+	    htons(ETHERTYPE_IP) : htons(ETHERTYPE_IPV6);
+	memcpy(eh->ether_shost, "\x06\x06\x06\x06\x06\x06", ETHER_ADDR_LEN);
+	memcpy(eh->ether_dhost, "\x02\x02\x02\x02\x02\x02", ETHER_ADDR_LEN);
+	return (ifp->if_transmit(ifp, m));
+}
+#endif
 
 static int
 wg_output(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst, struct route *ro)
@@ -2206,6 +2296,11 @@ wg_output(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst, struct 
 		xmit_err(ifp, m, NULL, af);
 		return (EAFNOSUPPORT);
 	}
+
+#ifdef DEV_NETMAP
+	if ((if_getcapenable(ifp) & IFCAP_NETMAP) != 0)
+		return (wg_xmit_netmap(ifp, m, af));
+#endif
 
 	defragged = m_defrag(m, M_NOWAIT);
 	if (defragged)
@@ -2782,6 +2877,9 @@ wg_clone_create(struct if_clone *ifc, char *name, size_t len,
 	ifp->if_reassign = wg_reassign;
 	ifp->if_qflush = wg_qflush;
 	ifp->if_transmit = wg_transmit;
+#ifdef DEV_NETMAP
+	ifp->if_input = wg_if_input;
+#endif
 	ifp->if_output = wg_output;
 	ifp->if_ioctl = wg_ioctl;
 	if_attach(ifp);
