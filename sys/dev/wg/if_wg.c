@@ -2270,11 +2270,20 @@ wg_xmit_netmap(if_t ifp, struct mbuf *m, int af)
 {
 	struct ether_header *eh;
 
+	if (__predict_false(if_tunnel_check_nesting(ifp, m, MTAG_WGLOOP,
+	    MAX_LOOPS))) {
+		printf("%s:%d\n", __func__, __LINE__);
+		if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
+		m_freem(m);
+		return (ELOOP);
+	}
+
 	M_PREPEND(m, ETHER_HDR_LEN, M_NOWAIT);
 	if (__predict_false(m == NULL)) {
 		if_inc_counter(ifp, IFCOUNTER_IQDROPS, 1);
 		return (ENOBUFS);
 	}
+
 	eh = mtod(m, struct ether_header *);
 	eh->ether_type = af == AF_INET ?
 	    htons(ETHERTYPE_IP) : htons(ETHERTYPE_IPV6);
