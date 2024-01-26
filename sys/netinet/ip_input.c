@@ -647,8 +647,6 @@ tooshort:
 	if (pfil_mbuf_in(V_inet_pfil_head, &m, ifp, NULL) !=
 	    PFIL_PASS)
 		return;
-	if (m == NULL)			/* consumed by filter */
-		return;
 
 	ip = mtod(m, struct ip *);
 	dchg = (odst.s_addr != ip->ip_dst.s_addr);
@@ -864,8 +862,6 @@ ours:
 	if (PFIL_HOOKED_OUT(V_inet_local_pfil_head)) {
 		if (pfil_mbuf_out(V_inet_local_pfil_head, &m, V_loif, NULL) !=
 		    PFIL_PASS)
-			return;
-		if (m == NULL)			/* consumed by filter */
 			return;
 		ip = mtod(m, struct ip *);
 	}
