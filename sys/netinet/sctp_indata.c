@@ -1358,7 +1358,7 @@ sctp_add_chk_to_control(struct sctp_queued_to_read *control,
 
 /*
  * Dump onto the re-assembly queue, in its proper place. After dumping on the
- * queue, see if anthing can be delivered. If so pull it off (or as much as
+ * queue, see if anything can be delivered. If so pull it off (or as much as
  * we can. If we run out of space then we must dump what we can and set the
  * appropriate flag to say we queued what we could.
  */
