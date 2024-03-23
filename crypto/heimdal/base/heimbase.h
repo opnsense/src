@@ -175,10 +175,6 @@ heim_number_t heim_number_create(int);
 heim_tid_t heim_number_get_type_id(void);
 int heim_number_get_int(heim_number_t);
 
-/*
- *
- */
-
 typedef struct heim_auto_release * heim_auto_release_t;
 
 heim_auto_release_t heim_auto_release_create(void);
