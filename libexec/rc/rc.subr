@@ -810,7 +810,8 @@ startmsg()
 #
 #	${name}_prepend	n	Command added before ${command}.
 #
-#	${name}_setup	n	Command executed before ${command}.
+#	${name}_setup	n	Command executed during start, restart and
+#				reload before ${rc_arg}_precmd is run.
 #
 #	${name}_login_class n	Login class to use, else "daemon".
 #
@@ -1069,9 +1070,9 @@ run_rc_command()
 			return 1
 		fi
 
-					# if there's a custom ${XXX_cmd},
-					# run that instead of the default
-					#
+		# if there's a custom ${XXX_cmd},
+		# run that instead of the default
+		#
 		eval _cmd=\$${rc_arg}_cmd \
 		     _precmd=\$${rc_arg}_precmd \
 		     _postcmd=\$${rc_arg}_postcmd
@@ -1079,6 +1080,11 @@ run_rc_command()
 		if [ -n "$_cmd" ]; then
 			if [ -n "$_env" ]; then
 				eval "export -- $_env"
+			fi
+			# service can redefine all so check for valid targets
+			if [ "$rc_arg" = 'start' -o "$rc_arg" = 'restart' -o \
+			    "$rc_arg" = 'reload' ]; then
+				_run_rc_setup || warn "failed to setup ${name}"
 			fi
 			_run_rc_precmd || return 1
 			_run_rc_doit "$_cpusetcmd $_cmd $rc_extra_args" || return 1
@@ -1140,13 +1146,15 @@ run_rc_command()
 				return 1
 			fi
 
+			_run_rc_setup || warn "failed to setup ${name}"
+
 			if ! _run_rc_precmd; then
 				warn "failed precmd routine for ${name}"
 				return 1
 			fi
 
-					# setup the full command to run
-					#
+			# setup the full command to run
+			#
 			startmsg "Starting ${name}."
 			if [ -n "$_chroot" ]; then
 				_cd=
@@ -1177,24 +1185,18 @@ $_cpusetcmd $command $rc_flags $command_args"
 				fi
 			fi
 
-			if [ -n "$_setup" ]; then
-				if ! _run_rc_doit "$_setup"; then
-					warn "failed to setup ${name}"
-				fi
-			fi
-
-					# Prepend default limits
+			# Prepend default limits
 			_doit="$_cd limits -C $_login_class $_limits $_doit"
 
-					# run the full command
-					#
+			# run the full command
+			#
 			if ! _run_rc_doit "$_doit"; then
 				warn "failed to start ${name}"
 				return 1
 			fi
 
-					# finally, run postcmd
-					#
+			# finally, run postcmd
+			#
 			_run_rc_postcmd
 			;;
 
@@ -1207,14 +1209,14 @@ $_cpusetcmd $command $rc_flags $command_args"
 
 			_run_rc_precmd || return 1
 
-					# send the signal to stop
-					#
+			# send the signal to stop
+			#
 			echo "Stopping ${name}."
 			_doit=$(_run_rc_killcmd "${sig_stop:-TERM}")
 			_run_rc_doit "$_doit" || return 1
 
-					# wait for the command to exit,
-					# and run postcmd.
+			# wait for the command to exit,
+			# and run postcmd.
 			wait_for_pids $rc_pid
 
 			_run_rc_postcmd
@@ -1226,6 +1228,8 @@ $_cpusetcmd $command $rc_flags $command_args"
 				return 1
 			fi
 
+			_run_rc_setup || warn "failed to setup ${name}"
+
 			_run_rc_precmd || return 1
 
 			_doit=$(_run_rc_killcmd "${sig_reload:-HUP}")
@@ -1235,9 +1239,11 @@ $_cpusetcmd $command $rc_flags $command_args"
 			;;
 
 		restart)
-					# prevent restart being called more
-					# than once by any given script
-					#
+			_run_rc_setup || warn "failed to setup ${name}"
+
+			# prevent restart being called more
+			# than once by any given script
+			#
 			if ${_rc_restart_done:-false}; then
 				return 0
 			fi
@@ -1350,6 +1356,7 @@ $_cpusetcmd $command $rc_flags $command_args"
 #	_precmd		R
 #	_postcmd	R
 #	_return		W
+#	_setup		R
 #
 _run_rc_precmd()
 {
@@ -1377,6 +1384,20 @@ _run_rc_postcmd()
 		debug "run_rc_command: ${rc_arg}_postcmd: $_postcmd $rc_extra_args"
 		eval "$_postcmd $rc_extra_args"
 		_return=$?
+	fi
+	return 0
+}
+
+_run_rc_setup()
+{
+	# prevent multiple execution on restart => stop/start split
+	if ! ${_rc_restart_done:-false} && [ -n "$_setup" ]; then
+		debug "run_rc_command: ${rc_arg}_setup: $_setup"
+		eval "$_setup"
+		_return=$?
+		if [ $_return -ne 0 ]; then
+			return 1
+		fi
 	fi
 	return 0
 }
