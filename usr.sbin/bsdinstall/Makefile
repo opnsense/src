@@ -1,5 +1,5 @@
 
-OSNAME?=	FreeBSD
+OSNAME?=	OPNsense
 SUBDIR=	distextract distfetch partedit runconsoles scripts
 SUBDIR_PARALLEL=
 SUBDIR_DEPEND_distfetch = distextract
