@@ -8206,7 +8206,7 @@ pf_test(int dir, int pflags, struct ifnet *ifp, struct mbuf **m0,
 				V_pfsync_update_state_ptr(s);
 			r = s->rule.ptr;
 			a = s->anchor.ptr;
-		} else {
+		} else if (s == NULL) {
 			action = pf_test_rule(&r, &s, kif, m, off,
 			    &pd, &a, &ruleset, inp);
 		}
@@ -8815,7 +8815,7 @@ pf_test6(int dir, int pflags, struct ifnet *ifp, struct mbuf **m0, struct inpcb 
 				V_pfsync_update_state_ptr(s);
 			r = s->rule.ptr;
 			a = s->anchor.ptr;
-		} else {
+		} else if (s == NULL) {
 			action = pf_test_rule(&r, &s, kif, m, off,
 			    &pd, &a, &ruleset, inp);
 		}
