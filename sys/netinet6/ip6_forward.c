@@ -194,9 +194,6 @@ again:
 		goto bad;
 	}
 
-	ifp = nh->nh_ifp;
-
-routed:
 	if (nh->nh_flags & (NHF_BLACKHOLE | NHF_REJECT)) {
 		IP6STAT_INC(ip6s_cantforward);
 		if (mcopy != NULL) {
@@ -209,6 +206,9 @@ routed:
 		goto bad;
 	}
 
+	ifp = nh->nh_ifp;
+
+routed:
 	/*
 	 * Source scope check: if a packet can't be delivered to its
 	 * destination for the reason that the destination is beyond the scope
