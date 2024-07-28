@@ -1692,7 +1692,7 @@ wg_deliver_netmap(if_t ifp, struct mbuf *m, int af)
 	eh->ether_type = af == AF_INET ?
 	    htons(ETHERTYPE_IP) : htons(ETHERTYPE_IPV6);
 	memcpy(eh->ether_shost, "\x02\x02\x02\x02\x02\x02", ETHER_ADDR_LEN);
-	memcpy(eh->ether_dhost, "\xff\xff\xff\xff\xff\xff", ETHER_ADDR_LEN);
+	memcpy(eh->ether_dhost, "\x06\x06\x06\x06\x06\x06", ETHER_ADDR_LEN);
 	if_input(ifp, m);
 }
 #endif
@@ -2316,7 +2316,7 @@ wg_xmit_netmap(if_t ifp, struct mbuf *m, int af)
 	eh->ether_type = af == AF_INET ?
 	    htons(ETHERTYPE_IP) : htons(ETHERTYPE_IPV6);
 	memcpy(eh->ether_shost, "\x06\x06\x06\x06\x06\x06", ETHER_ADDR_LEN);
-	memcpy(eh->ether_dhost, "\xff\xff\xff\xff\xff\xff", ETHER_ADDR_LEN);
+	memcpy(eh->ether_dhost, "\x02\x02\x02\x02\x02\x02", ETHER_ADDR_LEN);
 	return (if_transmit(ifp, m));
 }
 #endif /* DEV_NETMAP */
