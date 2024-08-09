@@ -322,6 +322,8 @@ struct xgbe_sfp_eeprom {
 #define XGBE_BEL_FUSE_VENDOR			"BEL-FUSE        "
 #define XGBE_BEL_FUSE_PARTNO			"1GBT-SFP06      "
 
+#define XGBE_FS_XGSPON_PARTNO			"XGS-ONU-25-20NI "
+
 struct xgbe_sfp_ascii {
 	union {
 		char vendor[XGBE_SFP_BASE_VENDOR_NAME_LEN + 1];
@@ -1310,11 +1312,17 @@ static bool
 xgbe_phy_check_sfp_rx_los(struct xgbe_phy_data *phy_data)
 {
 	uint8_t *sfp_extd = phy_data->sfp_eeprom.extd;
+	struct xgbe_sfp_eeprom *sfp_eeprom = &phy_data->sfp_eeprom;
 
 	if (!(sfp_extd[XGBE_SFP_EXTD_OPT1] & XGBE_SFP_EXTD_OPT1_RX_LOS))
 		return (false);
 
 	if (phy_data->sfp_gpio_mask & XGBE_GPIO_NO_RX_LOS)
+		return (false);
+
+	/* For FS XGSPON, ignore RX_LOS */
+	if (memcmp(&sfp_eeprom->base[XGBE_SFP_BASE_VENDOR_PN],
+		   XGBE_FS_XGSPON_PARTNO, XGBE_SFP_BASE_VENDOR_PN_LEN) == 0)
 		return (false);
 
 	if (phy_data->sfp_gpio_inputs & (1 << phy_data->sfp_gpio_rx_los))
