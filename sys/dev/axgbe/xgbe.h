@@ -904,7 +904,8 @@ struct xgbe_phy_impl_if {
 
 	/* SFP module related info */
 	int (*module_info)(struct xgbe_prv_data *pdata);
-	int (*module_eeprom)(struct xgbe_prv_data *pdata);
+	int (*module_eeprom)(struct xgbe_prv_data *pdata, uint16_t, uint16_t,
+		uint8_t *, uint16_t);
 
 	/* Drive LED status */
 	void (*toggle_led)(struct xgbe_prv_data *pdata, enum xgbe_led_mode);

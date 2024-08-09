@@ -1840,61 +1840,55 @@ put:
 }
 
 static int
-xgbe_phy_module_eeprom(struct xgbe_prv_data *pdata)
+xgbe_phy_module_eeprom(struct xgbe_prv_data *pdata, uint16_t dev_addr,
+	uint16_t offset, uint8_t *data, uint16_t length)
 {
 	struct xgbe_phy_data *phy_data = pdata->phy_data;
-	uint8_t eeprom_addr, eeprom_data[XGBE_SFP_EEPROM_MAX];
-	struct xgbe_sfp_eeprom *sfp_eeprom;
+	uint8_t eeprom_addr;
+	unsigned int target;
 	int ret;
 
 	if (phy_data->port_mode != XGBE_PORT_MODE_SFP) {
-		ret = -ENXIO;
+		ret = (ENXIO);
 		goto done;
 	}
 
 	if (phy_data->sfp_mod_absent) {
-		ret = -EIO;
+		ret = (EIO);
 		goto done;
 	}
 
+	if ((offset + length) > XGBE_SFP_EEPROM_MAX) {
+		ret = (EINVAL);
+	}
+
+	if (!length || length > 16) {
+		return (EINVAL);
+	}
+
+	target = dev_addr == 0xA0 ? XGBE_SFP_SERIAL_ID_ADDRESS :
+		XGBE_SFP_DIAG_INFO_ADDRESS;
+
 	ret = xgbe_phy_get_comm_ownership(pdata);
 	if (ret) {
-		ret = -EIO;
+		ret = (EIO);
 		goto done;
 	}
 
 	ret = xgbe_phy_sfp_get_mux(pdata);
 	if (ret) {
 		axgbe_error("I2C error setting SFP MUX\n");
-		ret = -EIO;
+		ret = (EIO);
 		goto put_own;
 	}
 
-	/* Read the SFP serial ID eeprom */
-	eeprom_addr = 0;
-	ret = xgbe_phy_i2c_read(pdata, XGBE_SFP_SERIAL_ID_ADDRESS,
-				&eeprom_addr, sizeof(eeprom_addr),
-				eeprom_data, XGBE_SFP_EEPROM_BASE_LEN);
+	eeprom_addr = offset;
+	ret = xgbe_phy_i2c_read(pdata, target, &eeprom_addr, sizeof(eeprom_addr),
+	    (void *)data, length);
 	if (ret) {
 		axgbe_error("I2C error reading SFP EEPROM\n");
-		ret = -EIO;
+		ret = (EIO);
 		goto put_mux;
-	}
-
-	sfp_eeprom = (struct xgbe_sfp_eeprom *)eeprom_data;
-
-	if (XGBE_SFP_DIAGS_SUPPORTED(sfp_eeprom)) {
-		/* Read the SFP diagnostic eeprom */
-		eeprom_addr = 0;
-		ret = xgbe_phy_i2c_read(pdata, XGBE_SFP_DIAG_INFO_ADDRESS,
-					&eeprom_addr, sizeof(eeprom_addr),
-					eeprom_data + XGBE_SFP_EEPROM_BASE_LEN,
-					XGBE_SFP_EEPROM_DIAG_LEN);
-		if (ret) {
-			axgbe_error("I2C error reading SFP DIAGS\n");
-			ret = -EIO;
-			goto put_mux;
-		}
 	}
 
 put_mux:
