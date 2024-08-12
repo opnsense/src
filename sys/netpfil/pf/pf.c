@@ -1791,21 +1791,21 @@ pf_icmp_mapping(struct pf_pdesc *pd, u_int8_t type,
 		*icmp_dir = PF_IN;
 	case ICMP_TSTAMPREPLY:
 		*icmptype = ICMP_TSTAMP;
-		*icmpid = pd->hdr.icmp.icmp_id;
+		*icmpid = 0; /* Time is not a secret. */
 		break;
 
 	case ICMP_IREQ:
 		*icmp_dir = PF_IN;
 	case ICMP_IREQREPLY:
 		*icmptype = ICMP_IREQ;
-		*icmpid = pd->hdr.icmp.icmp_id;
+		*icmpid = 0; /* Nothing sane to match on! */
 		break;
 
 	case ICMP_MASKREQ:
 		*icmp_dir = PF_IN;
 	case ICMP_MASKREPLY:
 		*icmptype = ICMP_MASKREQ;
-		*icmpid = pd->hdr.icmp.icmp_id;
+		*icmpid = 0; /* Nothing sane to match on! */
 		break;
 
 	case ICMP_IPV6_WHEREAREYOU:
