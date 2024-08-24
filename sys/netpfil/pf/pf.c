@@ -1893,7 +1893,7 @@ pf_icmp_mapping(struct pf_pdesc *pd, u_int8_t type,
 		case ND_NEIGHBOR_ADVERT: {
 			*virtual_type = ND_NEIGHBOR_SOLICIT;
 			*virtual_id = 0;
-			break;
+			return (1);  /* These types match to another state */
 		}
 
 		/*
