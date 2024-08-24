@@ -28,6 +28,7 @@
 
 #include <sys/types.h>
 #include <sys/sysctl.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "partedit.h"
