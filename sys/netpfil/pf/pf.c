@@ -1878,7 +1878,7 @@ pf_icmp_mapping(struct pf_pdesc *pd, u_int8_t type,
 			 */
 			*icmp_dir = PF_IN;
 			*virtual_type = MLD_LISTENER_QUERY;
-			*virtual_id = 0;
+			*virtual_id = 0; /* XXX missing fake id */
 			break;
 		}
 		case MLD_MTRACE:
@@ -1892,7 +1892,9 @@ pf_icmp_mapping(struct pf_pdesc *pd, u_int8_t type,
 			*icmp_dir = PF_IN;
 		case ND_NEIGHBOR_ADVERT: {
 			*virtual_type = ND_NEIGHBOR_SOLICIT;
-			*virtual_id = 0;
+			*multi = PF_ICMP_MULTI_SOLICITED;
+			*virtual_id = 0; /* XXX missing fake id */
+			HTONS(*virtual_type); return (1); /* XXX disable state tracking for now */
 			break;
 		}
 
