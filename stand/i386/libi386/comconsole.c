@@ -39,7 +39,7 @@
 #define COMPORT		0x3f8
 #endif
 #ifndef	COMSPEED
-#define COMSPEED	115200
+#define COMSPEED	9600
 #endif
 
 static void	comc_probe(struct console *cp);
