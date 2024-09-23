@@ -44,7 +44,6 @@ __SCCSID("@(#)syslog.c	8.5 (Berkeley) 4/29/95");
 #include <fcntl.h>
 #include <paths.h>
 #include <pthread.h>
-#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -60,7 +59,7 @@ __SCCSID("@(#)syslog.c	8.5 (Berkeley) 4/29/95");
 #define	MAXLINE		8192
 
 static int	LogFile = -1;		/* fd for log */
-static bool	connected;		/* have done connect */
+static int	status;			/* connection status */
 static int	opened;			/* have done openlog() */
 static int	LogStat = 0;		/* status bits, set by openlog() */
 static pid_t	LogPid = -1;		/* process id to tag the entry with */
@@ -86,6 +85,12 @@ static void	disconnectlog(void); /* disconnect from syslogd */
 static void	connectlog(void);	/* (re)connect to syslogd */
 static void	openlog_unlocked(const char *, int, int);
 static void	parse_tag(void);	/* parse ident[NNN] if needed */
+
+enum {
+	NOCONN = 0,
+	CONNDEF,
+	CONNPRIV,
+};
 
 /*
  * Format of the magic cookie passed through the stdio hook
@@ -294,17 +299,46 @@ vsyslog1(int pri, const char *fmt, va_list ap)
 	connectlog();
 
 	/*
-	 * If the send() failed, there are two likely scenarios:
-	 * 1) syslogd was restarted.  In this case make one (only) attempt
-	 *    to reconnect.
-	 * 2) We filled our buffer due to syslogd not being able to read
-	 *    as fast as we write.  In this case prefer to lose the current
-	 *    message rather than whole buffer of previously logged data.
+	 * If the send() fails, there are two likely scenarios: 
+	 *  1) syslogd was restarted
+	 *  2) /var/run/log is out of socket buffer space, which
+	 *     in most cases means local DoS.
+	 * If the error does not indicate a full buffer, we address
+	 * case #1 by attempting to reconnect to /var/run/log[priv]
+	 * and resending the message once.
+	 *
+	 * If we are working with a privileged socket, the retry
+	 * attempts end there, because we don't want to freeze a
+	 * critical application like su(1) or sshd(8).
+	 *
+	 * Otherwise, we address case #2 by repeatedly retrying the
+	 * send() to give syslogd a chance to empty its socket buffer.
 	 */
+
 	if (send(LogFile, tbuf, cnt, 0) < 0) {
 		if (errno != ENOBUFS) {
+			/*
+			 * Scenario 1: syslogd was restarted
+			 * reconnect and resend once
+			 */
 			disconnectlog();
 			connectlog();
+			if (send(LogFile, tbuf, cnt, 0) >= 0)
+				return;
+			/*
+			 * if the resend failed, fall through to
+			 * possible scenario 2
+			 */
+		}
+		while (errno == ENOBUFS) {
+			/*
+			 * Scenario 2: out of socket buffer space
+			 * possible DoS, fail fast on a privileged
+			 * socket
+			 */
+			if (status == CONNPRIV)
+				break;
+			_usleep(1);
 			if (send(LogFile, tbuf, cnt, 0) >= 0)
 				return;
 		}
@@ -363,7 +397,7 @@ disconnectlog(void)
 		_close(LogFile);
 		LogFile = -1;
 	}
-	connected = false;			/* retry connect */
+	status = NOCONN;			/* retry connect */
 }
 
 /* Should be called with mutex acquired */
@@ -387,16 +421,29 @@ connectlog(void)
 			}
 		}
 	}
-	if (!connected) {
+	if (LogFile != -1 && status == NOCONN) {
 		SyslogAddr.sun_len = sizeof(SyslogAddr);
 		SyslogAddr.sun_family = AF_UNIX;
 
-		(void)strncpy(SyslogAddr.sun_path, _PATH_LOG,
+		/*
+		 * First try privileged socket. If no success,
+		 * then try default socket.
+		 */
+		(void)strncpy(SyslogAddr.sun_path, _PATH_LOG_PRIV,
 		    sizeof SyslogAddr.sun_path);
 		if (_connect(LogFile, (struct sockaddr *)&SyslogAddr,
 		    sizeof(SyslogAddr)) != -1)
-			connected = true;
-		else {
+			status = CONNPRIV;
+
+		if (status == NOCONN) {
+			(void)strncpy(SyslogAddr.sun_path, _PATH_LOG,
+			    sizeof SyslogAddr.sun_path);
+			if (_connect(LogFile, (struct sockaddr *)&SyslogAddr,
+			    sizeof(SyslogAddr)) != -1)
+				status = CONNDEF;
+		}
+
+		if (status == NOCONN) {
 			(void)_close(LogFile);
 			LogFile = -1;
 		}
@@ -442,7 +489,7 @@ closelog(void)
 	}
 	LogTag = NULL;
 	LogTagLength = -1;
-	connected = false;
+	status = NOCONN;
 	THREAD_UNLOCK();
 }
 
