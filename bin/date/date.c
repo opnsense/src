@@ -369,7 +369,7 @@ setthetime(const char *fmt, const char *p, int jflag, struct timespec *ts)
 
 		if ((p = getlogin()) == NULL)
 			p = "???";
-		syslog(LOG_AUTH | LOG_NOTICE, "date set from %ld"
+		syslog(LOG_AUTH | LOG_NOTICE, "date set from %ld "
 			"to %ld by %s",
 			(long)tv_from.tv_sec, (long)tv_to.tv_sec, p);
 	}
