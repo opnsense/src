@@ -265,6 +265,7 @@ setthetime(const char *fmt, const char *p, int jflag, struct timespec *ts)
 	struct tm *lt;
 	const char *dot, *t;
 	int century;
+	struct timeval tv_from, tv_to;
 
 	lt = localtime(&ts->tv_sec);
 	if (lt == NULL)
@@ -357,16 +358,20 @@ setthetime(const char *fmt, const char *p, int jflag, struct timespec *ts)
 		utx.ut_type = OLD_TIME;
 		memset(utx.ut_id, 0, sizeof(utx.ut_id));
 		(void)gettimeofday(&utx.ut_tv, NULL);
+		tv_from = utx.ut_tv;
 		pututxline(&utx);
 		if (clock_settime(CLOCK_REALTIME, ts) != 0)
 			err(1, "clock_settime");
 		utx.ut_type = NEW_TIME;
 		(void)gettimeofday(&utx.ut_tv, NULL);
+		tv_to = utx.ut_tv;
 		pututxline(&utx);
 
 		if ((p = getlogin()) == NULL)
 			p = "???";
-		syslog(LOG_AUTH | LOG_NOTICE, "date set by %s", p);
+		syslog(LOG_AUTH | LOG_NOTICE, "date set from %ld "
+			"to %ld by %s",
+			(long)tv_from.tv_sec, (long)tv_to.tv_sec, p);
 	}
 }
 
