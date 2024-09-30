@@ -230,9 +230,7 @@ pflog_packet(struct pfi_kkif *kif, struct mbuf *m, sa_family_t af,
 	bzero(&hdr, sizeof(hdr));
 	hdr.length = PFLOG_REAL_HDRLEN;
 	hdr.af = af;
-	/* Default rule does not pass packets dropped for other reasons. */
-	hdr.action = (rm->nr == (u_int32_t)-1 && reason != PFRES_MATCH) ?
-	    PF_DROP : rm->action;
+	hdr.action = rm->action;
 	hdr.reason = reason;
 	memcpy(hdr.ifname, kif->pfik_name, sizeof(hdr.ifname));
 
