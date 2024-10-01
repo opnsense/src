@@ -4760,6 +4760,7 @@ pf_test_rule(struct pf_krule **rm, struct pf_kstate **sm, struct pfi_kkif *kif,
 	if (r->log) {
 		if (rewrite)
 			m_copyback(m, off, hdrlen, pd->hdr.any);
+		/* XXX logs before pf_create_state() decides on the action */
 		PFLOG_PACKET(kif, m, af, r->action, reason, r, a, ruleset, pd, 1);
 	}
 
@@ -8396,9 +8397,8 @@ done:
 		else
 			lr = r;
 
-		if (pd.act.log & PF_LOG_FORCE || lr->log & PF_LOG_ALL)
-			PFLOG_PACKET(kif, m, AF_INET, action, reason, lr, a,
-			    ruleset, &pd, (s == NULL));
+		PFLOG_PACKET(kif, m, AF_INET, action, reason, lr, a,
+		    ruleset, &pd, (s == NULL));
 		if (s) {
 			SLIST_FOREACH(ri, &s->match_rules, entry)
 				if (ri->r->log & PF_LOG_ALL)
@@ -8962,9 +8962,8 @@ done:
 		else
 			lr = r;
 
-		if (pd.act.log & PF_LOG_FORCE || lr->log & PF_LOG_ALL)
-			PFLOG_PACKET(kif, m, AF_INET6, action, reason, lr, a, ruleset,
-			    &pd, (s == NULL));
+		PFLOG_PACKET(kif, m, AF_INET6, action, reason, lr, a, ruleset,
+		    &pd, (s == NULL));
 		if (s) {
 			SLIST_FOREACH(ri, &s->match_rules, entry)
 				if (ri->r->log & PF_LOG_ALL)
