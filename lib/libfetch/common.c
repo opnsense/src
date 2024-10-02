@@ -1060,7 +1060,7 @@ fetch_ssl_setup_peer_verification(SSL_CTX *ctx, int verbose)
 {
 	X509_LOOKUP *crl_lookup;
 	X509_STORE *crl_store;
-	const char *ca_cert_file, *ca_cert_path, *crl_file;
+	const char *ca_cert_file, *ca_cert_path, *crl_file, *crl_verify;
 
 	if (getenv("SSL_NO_VERIFY_PEER") == NULL) {
 		ca_cert_file = getenv("SSL_CA_CERT_FILE");
@@ -1084,6 +1084,13 @@ fetch_ssl_setup_peer_verification(SSL_CTX *ctx, int verbose)
 			    ca_cert_path);
 		else
 			SSL_CTX_set_default_verify_paths(ctx);
+		if ((crl_verify = getenv("SSL_CRL_VERIFY")) != NULL) {
+			if (verbose)
+				fetch_info("Using CRL verify: yes");
+			X509_VERIFY_PARAM_set_flags(SSL_CTX_get0_param(ctx),
+			    X509_V_FLAG_CRL_CHECK |
+			    X509_V_FLAG_CRL_CHECK_ALL);
+		}
 		if ((crl_file = getenv("SSL_CRL_FILE")) != NULL) {
 			if (verbose)
 				fetch_info("Using CRL file: %s", crl_file);
