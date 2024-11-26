@@ -4793,7 +4793,7 @@ pf_test_rule(struct pf_krule **rm, struct pf_kstate **sm, struct pfi_kkif *kif,
 		KASSERT(nk != NULL, ("%s: null nk", __func__));
 
 		if (nr->log) {
-			PFLOG_PACKET(kif, m, af, PF_PASS, PFRES_MATCH, nr, a,
+			PFLOG_PACKET(kif, m, af, nr->action, PFRES_MATCH, nr, a,
 			    ruleset, pd, 1);
 		}
 
