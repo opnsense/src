@@ -8510,6 +8510,15 @@ pf_test(int dir, int pflags, struct ifnet *ifp, struct mbuf **m0,
 	h = mtod(m, struct ip *);
 	off = h->ip_hl << 2;
 
+	if (dir == PF_OUT && pflags & PFIL_FWD &&
+	    h->ip_off & htons(IP_DF) && (*m0)->m_pkthdr.len > ifp->if_mtu) {
+		PF_RULES_RUNLOCK();
+		icmp_error(*m0, ICMP_UNREACH, ICMP_UNREACH_NEEDFRAG,
+			0, ifp->if_mtu);
+		*m0 = NULL;
+		return (PF_DROP);
+	}
+
 	if (__predict_false(ip_divert_ptr != NULL) &&
 	    ((mtag = m_tag_locate(m, MTAG_PF_DIVERT, 0, NULL)) != NULL)) {
 		struct pf_divert_mtag *dt = (struct pf_divert_mtag *)(mtag+1);
@@ -9084,6 +9093,19 @@ pf_test6(int dir, int pflags, struct ifnet *ifp, struct mbuf **m0, struct inpcb 
 
 	h = mtod(m, struct ip6_hdr *);
 	off = ((caddr_t)h - m->m_data) + sizeof(struct ip6_hdr);
+
+	/*
+	 * If we end up changing IP addresses (e.g. binat) the stack may get
+	 * confused and fail to send the icmp6 packet too big error. Just send
+	 * it here, before we do any NAT.
+	 */
+	if (dir == PF_OUT && pflags & PFIL_FWD &&
+	    IN6_LINKMTU(ifp) < pf_max_frag_size(*m0)) {
+		PF_RULES_RUNLOCK();
+		icmp6_error(*m0, ICMP6_PACKET_TOO_BIG, 0, IN6_LINKMTU(ifp));
+		*m0 = NULL;
+		return (PF_DROP);
+	}
 
 	/* We do IP header normalization and packet reassembly here */
 	if (pf_normalize_ip6(m0, kif, &reason, &pd) != PF_PASS) {

@@ -2282,6 +2282,7 @@ int	pf_normalize_ip6(struct mbuf **, struct pfi_kkif *, u_short *,
 void	pf_poolmask(struct pf_addr *, struct pf_addr*,
 	    struct pf_addr *, struct pf_addr *, sa_family_t);
 void	pf_addr_inc(struct pf_addr *, sa_family_t);
+int	pf_max_frag_size(struct mbuf *);
 int	pf_refragment6(struct ifnet *, struct mbuf **, struct m_tag *, bool);
 #endif /* INET6 */
 
