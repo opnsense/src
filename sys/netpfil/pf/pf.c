@@ -2384,6 +2384,9 @@ pf_icmp_mapping(struct pf_pdesc *pd, u_int8_t type,
 
 		case MLD_LISTENER_QUERY:
 		case MLD_LISTENER_REPORT: {
+			struct mld_hdr *mld = &pd->hdr.mld;
+			u_int32_t h;
+
 			/*
 			 * Listener Report can be sent by clients
 			 * without an associated Listener Query.
@@ -2393,7 +2396,12 @@ pf_icmp_mapping(struct pf_pdesc *pd, u_int8_t type,
 			 */
 			*icmp_dir = PF_IN;
 			*virtual_type = MLD_LISTENER_QUERY;
-			*virtual_id = 0;
+			/* generate fake id for these messages */
+			h = mld->mld_addr.s6_addr32[0] ^
+			    mld->mld_addr.s6_addr32[1] ^
+			    mld->mld_addr.s6_addr32[2] ^
+			    mld->mld_addr.s6_addr32[3];
+			*virtual_id = (h >> 16) ^ (h & 0xffff);
 			break;
 		}
 		case MLD_MTRACE:
@@ -2408,8 +2416,28 @@ pf_icmp_mapping(struct pf_pdesc *pd, u_int8_t type,
 			*icmp_dir = PF_IN;
 			/* FALLTHROUGH */
 		case ND_NEIGHBOR_ADVERT: {
+			struct nd_neighbor_solicit *nd = &pd->hdr.nd_ns;
+			u_int32_t h;
+
 			*virtual_type = ND_NEIGHBOR_SOLICIT;
-			*virtual_id = 0;
+			/* generate fake id for these messages */
+			h = nd->nd_ns_target.s6_addr32[0] ^
+			    nd->nd_ns_target.s6_addr32[1] ^
+			    nd->nd_ns_target.s6_addr32[2] ^
+			    nd->nd_ns_target.s6_addr32[3];
+			*virtual_id = (h >> 16) ^ (h & 0xffff);
+			/*
+			 * the extra work here deals with 'keep state' option
+			 * at pass rule  for unsolicited advertisement.  By
+			 * returning 1 (state_icmp = 1) we override 'keep
+			 * state' to 'no state' so we don't create state for
+			 * unsolicited advertisements. No one expects answer to
+			 * unsolicited advertisements so we should be good.
+			 */
+			if (type == ND_NEIGHBOR_ADVERT) {
+				*virtual_type = htons(*virtual_type);
+				return (1);
+			}
 			break;
 		}
 
@@ -5720,6 +5748,13 @@ pf_match_rule(struct pf_test_ctx *ctx, struct pf_kruleset *ruleset)
 			/* icmp only. type always 0 in other cases */
 			PF_TEST_ATTRIB(r->code && r->code != ctx->icmpcode + 1,
 				TAILQ_NEXT(r, entries));
+			/* icmpv6 only. don't create states on replies */
+		        PF_TEST_ATTRIB(pd->proto == IPPROTO_ICMPV6 &&
+			    r->keep_state && !ctx->state_icmp &&
+			    (r->rule_flag & PFRULE_STATESLOPPY) == 0 &&
+			    ctx->icmp_dir != PF_IN &&
+			    ctx->icmptype != ND_NEIGHBOR_ADVERT,
+			    TAILQ_NEXT(r, entries));
 			break;
 
 		default:
