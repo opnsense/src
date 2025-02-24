@@ -1549,7 +1549,9 @@ struct pf_pdesc {
 		struct sctphdr		sctp;
 		struct icmp		icmp;
 #ifdef INET6
-		struct icmp6_hdr	icmp6;
+		struct icmp6_hdr		icmp6;
+		struct mld_hdr			mld;
+		struct nd_neighbor_solicit	nd_ns;
 #endif /* INET6 */
 		char any[0];
 	} hdr;
