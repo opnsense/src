@@ -573,8 +573,11 @@ pfr_get_addrs(struct pfr_table *tbl, struct pfr_addr *addr, int *size,
 	if (rv)
 		return (rv);
 
-	KASSERT(w.pfrw_free == 0, ("%s: corruption detected (%d)", __func__,
-	    w.pfrw_free));
+	if (w.pfrw_free) {
+		printf("%s: corruption detected (%d).\n", __func__,
+		    w.pfrw_free);
+		return (ENOTTY);
+	}
 
 	*size = kt->pfrkt_cnt;
 	return (0);
@@ -627,10 +630,11 @@ pfr_get_astats(struct pfr_table *tbl, struct pfr_astats *addr, int *size,
 		return (rv);
 
 	if (w.pfrw_free) {
-		printf("pfr_get_astats: corruption detected (%d).\n",
+		printf("%s: corruption detected (%d).\n", __func__,
 		    w.pfrw_free);
 		return (ENOTTY);
 	}
+
 	*size = kt->pfrkt_cnt;
 	return (0);
 }
