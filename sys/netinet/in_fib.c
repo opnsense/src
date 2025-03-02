@@ -120,7 +120,7 @@ fib4_lookup(uint32_t fibnum, struct in_addr dst, uint32_t scopeid,
 	if (nh != NULL) {
 		nh = nhop_select(nh, flowid);
 		/* Ensure route & ifp is UP */
-		if (RT_LINK_IS_UP(nh->nh_ifp)) {
+		if (NH_IS_VALID(nh)) {
 			if (flags & NHR_REF)
 				nhop_ref_object(nh);
 			return (nh);
@@ -157,7 +157,7 @@ fib4_lookup(uint32_t fibnum, struct in_addr dst, uint32_t scopeid,
 	if (rn != NULL && ((rn->rn_flags & RNF_ROOT) == 0)) {
 		nh = nhop_select((RNTORT(rn))->rt_nhop, flowid);
 		/* Ensure route & ifp is UP */
-		if (RT_LINK_IS_UP(nh->nh_ifp)) {
+		if (NH_IS_VALID(nh)) {
 			if (flags & NHR_REF)
 				nhop_ref_object(nh);
 			RIB_RUNLOCK(rh);
@@ -323,7 +323,7 @@ fib4_lookup_debugnet(uint32_t fibnum, struct in_addr dst, uint32_t scopeid,
 	if (rt != NULL) {
 		struct nhop_object *nh = nhop_select(rnd.rnd_nhop, 0);
 		/* Ensure route & ifp is UP */
-		if (RT_LINK_IS_UP(nh->nh_ifp))
+		if (NH_IS_VALID(nh))
 			return (nh);
 	}
 

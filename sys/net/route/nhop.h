@@ -152,7 +152,10 @@ struct nhop_object {
  *  with NHF_INVALID flag.
  */
 
-#define	NH_IS_VALID(_nh)	RT_LINK_IS_UP((_nh)->nh_ifp)
+#define	NH_IS_VALID(_nh)	((!((_nh)->nh_ifp->if_capabilities & IFCAP_LINKSTATE) \
+				 || (_nh)->nh_ifp->if_link_state == LINK_STATE_UP) \
+				 && (_nh)->nh_ifp->if_afdata_initialized != 0)
+
 #define	NH_IS_NHGRP(_nh)	((_nh)->nh_flags & NHF_MULTIPATH)
 
 #define	NH_FREE(_nh) do {					\
