@@ -2078,6 +2078,11 @@ icmp6_reflect(struct mbuf *m, size_t off)
 	hlim = 0;
 	srcp = NULL;
 
+	/* Do not reflect a packet coming from the unspecified address. */
+	if (IN6_IS_ADDR_UNSPECIFIED(&ip6->ip6_src)) {
+		goto bad;
+	}
+
 	/*
 	 * If the incoming packet was addressed directly to us (i.e. unicast),
 	 * use dst as the src for the reply.
