@@ -2415,15 +2415,19 @@ pf_unlink_state(struct pf_kstate *s)
 
 	PF_HASHROW_ASSERT(ih);
 
+	PF_STATE_LOCK(s);
 	if (s->timeout == PFTM_UNLINKED) {
 		/*
 		 * State is being processed
 		 * by pf_unlink_state() in
 		 * an other thread.
 		 */
+		PF_STATE_UNLOCK(s);
 		PF_HASHROW_UNLOCK(ih);
 		return (0);	/* XXXGL: undefined actually */
 	}
+	s->timeout = PFTM_UNLINKED;
+	PF_STATE_UNLOCK(s);
 
 	if (s->src.state == PF_TCPS_PROXY_DST) {
 		/* XXX wire key the right one? */
@@ -2443,8 +2447,6 @@ pf_unlink_state(struct pf_kstate *s)
 		V_pfsync_delete_state_ptr(s);
 
 	STATE_DEC_COUNTERS(s);
-
-	s->timeout = PFTM_UNLINKED;
 
 	/* Ensure we remove it from the list of halfopen states, if needed. */
 	if (s->key[PF_SK_STACK] != NULL &&
