@@ -5084,7 +5084,9 @@ pf_test_rule(struct pf_krule **rm, struct pf_kstate **sm, struct pfi_kkif *kif,
 		    hdrlen, &match_rules);
 		sk = nk = NULL;
 		if (action != PF_PASS) {
-			pd->act.log |= PF_LOG_FORCE;
+			/* XXX force drop log only for eligible rules */
+			if (r->log || (nr != NULL && nr->log))
+				pd->act.log |= PF_LOG_FORCE;
 			if (action == PF_DROP &&
 			    (r->rule_flag & PFRULE_RETURN))
 				pf_return(r, nr, pd, off, m, th, kif,
