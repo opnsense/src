@@ -167,6 +167,8 @@ hw_is_apu( void )
 					apu = 3;
 				else if (strcasecmp("apu4", product) == 0)
 					apu = 4;
+				else if (strcasecmp("apu6", product) == 0)
+					apu = 6;
 
 				freeenv(product);
 			}
@@ -293,6 +295,7 @@ apuled_identify(driver_t *driver, device_t parent)
 	case 2:
 	case 3:
 	case 4:
+	case 6:
 		if (devid != AMDFCH_SMBUS_DEVID)
 			return;
 		break;
