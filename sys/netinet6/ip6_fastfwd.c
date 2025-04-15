@@ -189,8 +189,15 @@ passin:
 		in6_ifstat_inc(rcvif, ifs6_in_noroute);
 		goto dropin;
 	}
+	/* pick up the next hop result if there is no forward request */
 	if (!nifp)
 		nifp = nh->nh_ifp;
+	/* work around the fact that a netgraph device is dying slowly */
+	if (nifp->if_afdata_initialized == 0) {
+		m = NULL;
+		in6_ifstat_inc(rcvif, ifs6_in_noroute);
+		goto dropin;
+	}
 	mtu = IN6_LINKMTU(nifp);
 	if (!PFIL_HOOKED_OUT(V_inet6_pfil_head)) {
 		if (m->m_pkthdr.len > mtu) {
