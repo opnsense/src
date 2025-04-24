@@ -40,6 +40,7 @@
 #include <linux/skbuff.h>
 #include <linux/workqueue.h>
 #include <linux/dcache.h>
+#include <linux/ieee80211.h>
 #include <net/cfg80211.h>
 
 #define	ARPHRD_IEEE80211_RADIOTAP		__LINE__ /* XXX TODO brcmfmac */
@@ -206,19 +207,6 @@ struct ieee80211_bar {
 	uint16_t	frame_control;
 };
 
-struct ieee80211_p2p_noa_desc {
-	uint32_t				count;		/* uint8_t ? */
-	uint32_t				duration;
-	uint32_t				interval;
-	uint32_t				start_time;
-};
-
-struct ieee80211_p2p_noa_attr {
-	uint8_t					index;
-	uint8_t					oppps_ctwindow;
-	struct ieee80211_p2p_noa_desc		desc[4];
-};
-
 struct ieee80211_mutable_offsets {
 	/* TODO FIXME */
 	uint16_t				tim_offset;
@@ -332,6 +320,7 @@ struct ieee80211_bss_conf {
 
 	uint8_t					dtim_period;
 	uint8_t					sync_dtim_count;
+	uint8_t					bss_param_ch_cnt_link_id;
 	bool					qos;
 	bool					twt_broadcast;
 	bool					use_cts_prot;
@@ -802,6 +791,7 @@ enum ieee80211_vif_driver_flags {
 #endif
 	IEEE80211_VIF_EML_ACTIVE		= BIT(4),
 	IEEE80211_VIF_IGNORE_OFDMA_WIDER_BW	= BIT(5),
+	IEEE80211_VIF_REMOVE_AP_AFTER_DISASSOC	= BIT(6),
 };
 
 #define	IEEE80211_BSS_ARP_ADDR_LIST_LEN		4
@@ -978,6 +968,7 @@ struct ieee80211_ops {
 	int  (*config)(struct ieee80211_hw *, u32);
 	void (*reconfig_complete)(struct ieee80211_hw *, enum ieee80211_reconfig_type);
 
+	void (*prep_add_interface)(struct ieee80211_hw *, enum nl80211_iftype);
 	int  (*add_interface)(struct ieee80211_hw *, struct ieee80211_vif *);
 	void (*remove_interface)(struct ieee80211_hw *, struct ieee80211_vif *);
 	int  (*change_interface)(struct ieee80211_hw *, struct ieee80211_vif *, enum nl80211_iftype, bool);
@@ -1016,6 +1007,7 @@ struct ieee80211_ops {
 	int  (*sta_state)(struct ieee80211_hw *, struct ieee80211_vif *, struct ieee80211_sta *, enum ieee80211_sta_state, enum ieee80211_sta_state);
 	void (*sta_notify)(struct ieee80211_hw *, struct ieee80211_vif *, enum sta_notify_cmd, struct ieee80211_sta *);
 	void (*sta_rc_update)(struct ieee80211_hw *, struct ieee80211_vif *, struct ieee80211_sta *, u32);
+	void (*link_sta_rc_update)(struct ieee80211_hw *, struct ieee80211_vif *, struct ieee80211_link_sta *, u32);
 	void (*sta_rate_tbl_update)(struct ieee80211_hw *, struct ieee80211_vif *, struct ieee80211_sta *);
 	void (*sta_set_4addr)(struct ieee80211_hw *, struct ieee80211_vif *, struct ieee80211_sta *, bool);
 	void (*sta_set_decap_offload)(struct ieee80211_hw *, struct ieee80211_vif *, struct ieee80211_sta *, bool);
@@ -1108,6 +1100,8 @@ struct ieee80211_ops {
 	int (*change_sta_links)(struct ieee80211_hw *, struct ieee80211_vif *, struct ieee80211_sta *, u16, u16);
 	bool (*can_activate_links)(struct ieee80211_hw *, struct ieee80211_vif *, u16);
 	enum ieee80211_neg_ttlm_res (*can_neg_ttlm)(struct ieee80211_hw *, struct ieee80211_vif *, struct ieee80211_neg_ttlm *);
+
+	void (*rfkill_poll)(struct ieee80211_hw *);
 
 /* #ifdef CONFIG_MAC80211_DEBUGFS */	/* Do not change depending on compile-time option. */
 	void (*sta_add_debugfs)(struct ieee80211_hw *, struct ieee80211_vif *, struct ieee80211_sta *, struct dentry *);
@@ -2259,7 +2253,7 @@ ieee80211_disconnect(struct ieee80211_vif *vif, bool _x)
 }
 
 static __inline void
-ieee80211_channel_switch_disconnect(struct ieee80211_vif *vif, bool _x)
+ieee80211_channel_switch_disconnect(struct ieee80211_vif *vif)
 {
 	TODO();
 }
