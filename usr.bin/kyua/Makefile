@@ -34,9 +34,6 @@ MAN=		kyua-about.1 \
 CFLAGS+=	-I${KYUA_SRCDIR} -I${.CURDIR}
 CFLAGS+=	-I${SRCTOP}/contrib/lutok/include
 CFLAGS+=	-I${SYSROOT:U${DESTDIR}}/${INCLUDEDIR}/private/sqlite3
-# kyua uses auto_ptr
-CFLAGS+=	-Wno-deprecated-declarations
-CXXSTD=		c++11
 CFLAGS+=	-DHAVE_CONFIG_H
 
 # We compile the kyua libraries as part of the main executable as this saves
