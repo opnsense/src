@@ -615,10 +615,10 @@ struct utils::process::executor::executor_handle::impl : utils::noncopyable {
                  "an internal error") % root_work_directory->directory()
                % e.what());
         }
-        root_work_directory.reset(NULL);
+        root_work_directory.reset();
 
         interrupts_handler->unprogram();
-        interrupts_handler.reset(NULL);
+        interrupts_handler.reset();
     }
 
     /// Common code to run after any of the wait calls.

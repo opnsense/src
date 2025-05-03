@@ -198,7 +198,7 @@ struct utils::fs::detail::directory_iterator::impl : utils::noncopyable {
                                    original_errno);
         }
         if (result == NULL) {
-            _entry.reset(NULL);
+            _entry.reset();
             close();
         } else {
             _entry.reset(new directory_entry(result->d_name));
