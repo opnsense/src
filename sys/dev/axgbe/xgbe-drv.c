@@ -124,7 +124,7 @@ xgbe_calc_rx_buf_size(if_t netdev, unsigned int mtu)
 		return (-EINVAL);
 
 	rx_buf_size = mtu + ETH_HLEN + ETH_FCS_LEN + VLAN_HLEN;
-	rx_buf_size = min(max(rx_buf_size, XGBE_RX_MIN_BUF_SIZE), PAGE_SIZE);
+	rx_buf_size = min(max(rx_buf_size, XGBE_RX_MIN_BUF_SIZE), MJUM9BYTES);
 	rx_buf_size = (rx_buf_size + XGBE_RX_BUF_ALIGN - 1) & 
 	    ~(XGBE_RX_BUF_ALIGN - 1);
 
