@@ -17,6 +17,7 @@
 #include "wow.h"
 
 #if defined(__FreeBSD__)
+#include <linux/cleanup.h>
 DEFINE_GUARD(mutex, struct mutex *, mutex_lock(_T), mutex_unlock(_T))
 #endif
 
