@@ -450,6 +450,10 @@ axgbe_if_attach_pre(if_ctx_t ctx)
 		&& pci_get_vendor(rdev) == 0x1022) {
 		pdata->xpcs_window_def_reg = PCS_V2_RV_WINDOW_DEF;
 		pdata->xpcs_window_sel_reg = PCS_V2_RV_WINDOW_SELECT;
+	} else if (rdev && (pci_get_device(rdev) == 0x14b5
+		&& pci_get_vendor(rdev) == 0x1022)) {
+		pdata->xpcs_window_def_reg = PCS_V2_YC_WINDOW_DEF;
+		pdata->xpcs_window_sel_reg = PCS_V2_YC_WINDOW_SELECT;
 	} else {
 		pdata->xpcs_window_def_reg = PCS_V2_WINDOW_DEF;
 		pdata->xpcs_window_sel_reg = PCS_V2_WINDOW_SELECT;
