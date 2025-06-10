@@ -103,13 +103,12 @@ ip6_forward(struct mbuf *m, int srcrt)
 
 	/*
 	 * Do not forward packets to multicast destination (should be handled
-	 * by ip6_mforward() or unspecified destination.
+	 * by ip6_mforward().
 	 * Do not forward packets with unspecified source.  It was discussed
 	 * in July 2000, on the ipngwg mailing list.
 	 */
 	if ((m->m_flags & (M_BCAST|M_MCAST)) != 0 ||
 	    IN6_IS_ADDR_MULTICAST(&ip6->ip6_dst) ||
-	    IN6_IS_ADDR_UNSPECIFIED(&ip6->ip6_dst) ||
 	    IN6_IS_ADDR_UNSPECIFIED(&ip6->ip6_src)) {
 		IP6STAT_INC(ip6s_cantforward);
 		/* XXX in6_ifstat_inc(rt->rt_ifp, ifs6_in_discard) */
