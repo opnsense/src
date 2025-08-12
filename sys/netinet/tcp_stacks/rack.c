@@ -12425,7 +12425,7 @@ rack_process_ack(struct mbuf *m, struct tcphdr *th, struct socket *so,
 			/* tcp_close will kill the inp pre-log the Reset */
 			tcp_log_end_status(tp, TCP_EI_STATUS_SERVER_RST);
 			tp = tcp_close(tp);
-			ctf_do_dropwithreset(m, tp, th, BANDLIM_TCP_RST, tlen);
+			ctf_do_dropwithreset(m, tp, th, tlen);
 			return (1);
 		}
 	}
@@ -13262,7 +13262,7 @@ rack_do_syn_sent(struct mbuf *m, struct tcphdr *th, struct socket *so,
 	    (SEQ_LEQ(th->th_ack, tp->iss) ||
 	    SEQ_GT(th->th_ack, tp->snd_max))) {
 		tcp_log_end_status(tp, TCP_EI_STATUS_RST_IN_FRONT);
-		ctf_do_dropwithreset(m, tp, th, BANDLIM_TCP_RST, tlen);
+		ctf_do_dropwithreset(m, tp, th, tlen);
 		return (1);
 	}
 	if ((thflags & (TH_ACK | TH_RST)) == (TH_ACK | TH_RST)) {
@@ -13458,7 +13458,7 @@ rack_do_syn_recv(struct mbuf *m, struct tcphdr *th, struct socket *so,
 	    (SEQ_LEQ(th->th_ack, tp->snd_una) ||
 	    SEQ_GT(th->th_ack, tp->snd_max))) {
 		tcp_log_end_status(tp, TCP_EI_STATUS_RST_IN_FRONT);
-		ctf_do_dropwithreset(m, tp, th, BANDLIM_TCP_RST, tlen);
+		ctf_do_dropwithreset(m, tp, th, tlen);
 		return (1);
 	}
 	if (IS_FASTOPEN(tp->t_flags)) {
@@ -13471,7 +13471,7 @@ rack_do_syn_recv(struct mbuf *m, struct tcphdr *th, struct socket *so,
 		 */
 		if ((thflags & (TH_SYN | TH_ACK)) == (TH_SYN | TH_ACK)) {
 			tcp_log_end_status(tp, TCP_EI_STATUS_RST_IN_FRONT);
-			ctf_do_dropwithreset(m, tp, th, BANDLIM_TCP_RST, tlen);
+			ctf_do_dropwithreset(m, tp, th, tlen);
 			return (1);
 		} else if (thflags & TH_SYN) {
 			/* non-initial SYN is ignored */
@@ -13505,7 +13505,7 @@ rack_do_syn_recv(struct mbuf *m, struct tcphdr *th, struct socket *so,
 	 */
 	if (SEQ_LT(th->th_seq, tp->irs)) {
 		tcp_log_end_status(tp, TCP_EI_STATUS_RST_IN_FRONT);
-		ctf_do_dropwithreset(m, tp, th, BANDLIM_TCP_RST, tlen);
+		ctf_do_dropwithreset(m, tp, th, tlen);
 		return (1);
 	}
 	if (_ctf_drop_checks(to, m, th, tp, &tlen, &thflags, &drop_hdrlen, &ret_val,
@@ -13773,7 +13773,7 @@ rack_do_established(struct mbuf *m, struct tcphdr *th, struct socket *so,
 	if (sbavail(&so->so_snd)) {
 		if (ctf_progress_timeout_check(tp, true)) {
 			rack_log_progress_event(rack, tp, tick, PROGRESS_DROP, __LINE__);
-			ctf_do_dropwithreset_conn(m, tp, th, BANDLIM_TCP_RST, tlen);
+			ctf_do_dropwithreset_conn(m, tp, th, tlen);
 			return (1);
 		}
 	}
@@ -13874,7 +13874,7 @@ rack_do_close_wait(struct mbuf *m, struct tcphdr *th, struct socket *so,
 		if (ctf_progress_timeout_check(tp, true)) {
 			rack_log_progress_event((struct tcp_rack *)tp->t_fb_ptr,
 						tp, tick, PROGRESS_DROP, __LINE__);
-			ctf_do_dropwithreset_conn(m, tp, th, BANDLIM_TCP_RST, tlen);
+			ctf_do_dropwithreset_conn(m, tp, th, tlen);
 			return (1);
 		}
 	}
@@ -13896,7 +13896,7 @@ rack_check_data_after_close(struct mbuf *m,
 		tcp_log_end_status(tp, TCP_EI_STATUS_SERVER_RST);
 		tp = tcp_close(tp);
 		KMOD_TCPSTAT_INC(tcps_rcvafterclose);
-		ctf_do_dropwithreset(m, tp, th, BANDLIM_TCP_RST, (*tlen));
+		ctf_do_dropwithreset(m, tp, th, *tlen);
 		return (1);
 	}
 	if (sbavail(&so->so_snd) == 0)
@@ -14029,7 +14029,7 @@ rack_do_fin_wait_1(struct mbuf *m, struct tcphdr *th, struct socket *so,
 		if (ctf_progress_timeout_check(tp, true)) {
 			rack_log_progress_event((struct tcp_rack *)tp->t_fb_ptr,
 						tp, tick, PROGRESS_DROP, __LINE__);
-			ctf_do_dropwithreset_conn(m, tp, th, BANDLIM_TCP_RST, tlen);
+			ctf_do_dropwithreset_conn(m, tp, th, tlen);
 			return (1);
 		}
 	}
@@ -14135,7 +14135,7 @@ rack_do_closing(struct mbuf *m, struct tcphdr *th, struct socket *so,
 		if (ctf_progress_timeout_check(tp, true)) {
 			rack_log_progress_event((struct tcp_rack *)tp->t_fb_ptr,
 						tp, tick, PROGRESS_DROP, __LINE__);
-			ctf_do_dropwithreset_conn(m, tp, th, BANDLIM_TCP_RST, tlen);
+			ctf_do_dropwithreset_conn(m, tp, th, tlen);
 			return (1);
 		}
 	}
@@ -14241,7 +14241,7 @@ rack_do_lastack(struct mbuf *m, struct tcphdr *th, struct socket *so,
 		if (ctf_progress_timeout_check(tp, true)) {
 			rack_log_progress_event((struct tcp_rack *)tp->t_fb_ptr,
 						tp, tick, PROGRESS_DROP, __LINE__);
-			ctf_do_dropwithreset_conn(m, tp, th, BANDLIM_TCP_RST, tlen);
+			ctf_do_dropwithreset_conn(m, tp, th, tlen);
 			return (1);
 		}
 	}
@@ -14350,7 +14350,7 @@ rack_do_fin_wait_2(struct mbuf *m, struct tcphdr *th, struct socket *so,
 		if (ctf_progress_timeout_check(tp, true)) {
 			rack_log_progress_event((struct tcp_rack *)tp->t_fb_ptr,
 						tp, tick, PROGRESS_DROP, __LINE__);
-			ctf_do_dropwithreset_conn(m, tp, th, BANDLIM_TCP_RST, tlen);
+			ctf_do_dropwithreset_conn(m, tp, th, tlen);
 			return (1);
 		}
 	}
@@ -16935,7 +16935,7 @@ rack_do_segment_nounlock(struct tcpcb *tp, struct mbuf *m, struct tcphdr *th,
 	if ((tp->t_state == TCPS_SYN_SENT) && (thflags & TH_ACK) &&
 	    (SEQ_LEQ(th->th_ack, tp->iss) || SEQ_GT(th->th_ack, tp->snd_max))) {
 		tcp_log_end_status(tp, TCP_EI_STATUS_RST_IN_FRONT);
-		ctf_do_dropwithreset(m, tp, th, BANDLIM_TCP_RST, tlen);
+		ctf_do_dropwithreset(m, tp, th, tlen);
 #ifdef TCP_ACCOUNTING
 		sched_unpin();
 #endif
