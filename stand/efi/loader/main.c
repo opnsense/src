@@ -728,15 +728,6 @@ setenv_int(const char *key, int val)
 	setenv(key, buf, 1);
 }
 
-static void
-setenv_addr(const char *key, uint64_t addr)
-{
-	char buf[30];
-
-	snprintf(buf, sizeof(buf), "0x%llx", addr);
-	setenv(key, buf, 1);
-}
-
 static void *
 acpi_map_sdt(vm_offset_t addr)
 {
@@ -941,7 +932,6 @@ parse_uefi_con_out(void)
 	EFI_DEVICE_PATH *node;
 	ACPI_HID_DEVICE_PATH  *acpi;
 	UART_DEVICE_PATH  *uart;
-	VENDOR_DEVICE_PATH *hw;
 	bool pci_pending;
 
 	/*
@@ -1010,14 +1000,6 @@ parse_uefi_con_out(void)
 			 * so only match it if it's last.
 			 */
 			pci_pending = true;
-		} else if (DevicePathType(node) == HARDWARE_DEVICE_PATH &&
-		    DevicePathSubType(node) == HW_VENDOR_DP) {
-			hw = (void *)node;
-
-			if (DevicePathNodeLength(&hw->Header) ==
-			    sizeof(*hw) + sizeof(uint64_t)) {
-				setenv_addr("efi_com_mmio", *(uint64_t *)(hw + 1));
-			}
 		}
 		node = NextDevicePathNode(node);
 	}
