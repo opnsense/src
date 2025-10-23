@@ -279,7 +279,7 @@ passout:
 	 * calculate it for us, do it here.
 	 */
 	if (__predict_false(m->m_pkthdr.csum_flags & CSUM_DELAY_DATA_IPV6 &
-	    ~nh->nh_ifp->if_hwassist)) {
+	    ~nifp->if_hwassist)) {
 		int offset = ip6_lasthdr(m, 0, IPPROTO_IPV6, NULL);
 
 		if (offset < sizeof(struct ip6_hdr) || offset > m->m_pkthdr.len)
@@ -289,7 +289,7 @@ passout:
 	}
 #if defined(SCTP) || defined(SCTP_SUPPORT)
 	if (__predict_false(m->m_pkthdr.csum_flags & CSUM_IP6_SCTP &
-	    ~nh->nh_ifp->if_hwassist)) {
+	    ~nifp->if_hwassist)) {
 		int offset = ip6_lasthdr(m, 0, IPPROTO_IPV6, NULL);
 
 		sctp_delayed_cksum(m, offset);

@@ -463,13 +463,13 @@ passout:
 	 * calculate it for us, do it here.
 	 */
 	if (__predict_false(m->m_pkthdr.csum_flags & CSUM_DELAY_DATA &
-	    ~nh->nh_ifp->if_hwassist)) {
+	    ~nifp->if_hwassist)) {
 		in_delayed_cksum(m);
 		m->m_pkthdr.csum_flags &= ~CSUM_DELAY_DATA;
 	}
 #if defined(SCTP) || defined(SCTP_SUPPORT)
 	if (__predict_false(m->m_pkthdr.csum_flags & CSUM_IP_SCTP &
-	    ~nh->nh_ifp->if_hwassist)) {
+	    ~nifp->if_hwassist)) {
 		sctp_delayed_cksum(m, (uint32_t)(ip->ip_hl << 2));
 		m->m_pkthdr.csum_flags &= ~CSUM_IP_SCTP;
 	}
