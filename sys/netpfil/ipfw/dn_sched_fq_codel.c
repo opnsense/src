@@ -325,7 +325,8 @@ fq_codel_enqueue(struct dn_sch_inst *_si, struct dn_queue *_q,
 	/* check the limit for all queues and remove a packet from the
 	 * largest one 
 	 */
-	if (mainq->ni.length > schk->cfg.limit) { D("over limit");
+	if (mainq->ni.length > schk->cfg.limit) {
+		DX(1, "over limit");
 		/* find first active flow */
 		for (maxidx = 0; maxidx < schk->cfg.flows_cnt; maxidx++)
 			if (si->flows[maxidx].active)
@@ -337,7 +338,7 @@ fq_codel_enqueue(struct dn_sch_inst *_si, struct dn_queue *_q,
 					si->flows[maxidx].stats.length)
 					maxidx = i;
 			codel_drop_head(&si->flows[maxidx], si);
-			D("maxidx = %d",maxidx);
+			DX(1, "maxidx = %d", maxidx);
 			drop = 1;
 		}
 	}
