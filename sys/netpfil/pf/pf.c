@@ -8301,9 +8301,6 @@ pf_pdesc_to_dnflow(const struct pf_pdesc *pd, const struct pf_krule *r,
 		dndir = pd->dir;
 	}
 
-	if (pd->pf_mtag->flags & PF_MTAG_FLAG_DUMMYNETED)
-		return (false);
-
 	memset(dnflow, 0, sizeof(*dnflow));
 
 	if (pd->dport != NULL)
@@ -8445,7 +8442,6 @@ pf_dummynet_route(struct pf_pdesc *pd, struct pf_kstate *s,
 
 		if (pf_pdesc_to_dnflow(pd, r, s, &dnflow)) {
 			pd->pf_mtag->flags |= PF_MTAG_FLAG_DUMMYNET;
-			pd->pf_mtag->flags |= PF_MTAG_FLAG_DUMMYNETED;
 			ip_dn_io_ptr(m0, &dnflow);
 			if (*m0 != NULL) {
 				pd->pf_mtag->flags &= ~PF_MTAG_FLAG_ROUTE_TO;
