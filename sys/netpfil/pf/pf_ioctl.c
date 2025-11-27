@@ -3203,16 +3203,16 @@ DIOCADDRULENV_error:
 
 		pr->anchor[sizeof(pr->anchor) - 1] = 0;
 
-		PF_RULES_WLOCK();
+		PF_RULES_RLOCK();
 		ruleset = pf_find_kruleset(pr->anchor);
 		if (ruleset == NULL) {
-			PF_RULES_WUNLOCK();
+			PF_RULES_RUNLOCK();
 			error = EINVAL;
 			break;
 		}
 		rs_num = pf_get_ruleset_number(pr->rule.action);
 		if (rs_num >= PF_RULESET_MAX) {
-			PF_RULES_WUNLOCK();
+			PF_RULES_RUNLOCK();
 			error = EINVAL;
 			break;
 		}
@@ -3223,7 +3223,7 @@ DIOCADDRULENV_error:
 		else
 			pr->nr = 0;
 		pr->ticket = ruleset->rules[rs_num].active.ticket;
-		PF_RULES_WUNLOCK();
+		PF_RULES_RUNLOCK();
 		break;
 	}
 
@@ -3235,21 +3235,21 @@ DIOCADDRULENV_error:
 
 		pr->anchor[sizeof(pr->anchor) - 1] = 0;
 
-		PF_RULES_WLOCK();
+		PF_RULES_RLOCK();
 		ruleset = pf_find_kruleset(pr->anchor);
 		if (ruleset == NULL) {
-			PF_RULES_WUNLOCK();
+			PF_RULES_RUNLOCK();
 			error = EINVAL;
 			break;
 		}
 		rs_num = pf_get_ruleset_number(pr->rule.action);
 		if (rs_num >= PF_RULESET_MAX) {
-			PF_RULES_WUNLOCK();
+			PF_RULES_RUNLOCK();
 			error = EINVAL;
 			break;
 		}
 		if (pr->ticket != ruleset->rules[rs_num].active.ticket) {
-			PF_RULES_WUNLOCK();
+			PF_RULES_RUNLOCK();
 			error = EBUSY;
 			break;
 		}
@@ -3257,7 +3257,7 @@ DIOCADDRULENV_error:
 		while ((rule != NULL) && (rule->nr != pr->nr))
 			rule = TAILQ_NEXT(rule, entries);
 		if (rule == NULL) {
-			PF_RULES_WUNLOCK();
+			PF_RULES_RUNLOCK();
 			error = EBUSY;
 			break;
 		}
@@ -3265,22 +3265,25 @@ DIOCADDRULENV_error:
 		pf_krule_to_rule(rule, &pr->rule);
 
 		if (pf_kanchor_copyout(ruleset, rule, pr)) {
-			PF_RULES_WUNLOCK();
+			PF_RULES_RUNLOCK();
 			error = EBUSY;
 			break;
 		}
 		pf_addr_copyout(&pr->rule.src.addr);
 		pf_addr_copyout(&pr->rule.dst.addr);
 
+		PF_RULES_RUNLOCK();
+
 		if (pr->action == PF_GET_CLR_CNTR) {
+			PF_RULES_WLOCK();
 			pf_counter_u64_zero(&rule->evaluations);
 			for (int i = 0; i < 2; i++) {
 				pf_counter_u64_zero(&rule->packets[i]);
 				pf_counter_u64_zero(&rule->bytes[i]);
 			}
 			counter_u64_zero(rule->states_tot);
+			PF_RULES_WUNLOCK();
 		}
-		PF_RULES_WUNLOCK();
 		break;
 	}
 
