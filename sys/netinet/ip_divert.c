@@ -147,10 +147,22 @@ struct divcb {
 	struct epoch_context	 dcb_epochctx;
 };
 
-CK_SLIST_HEAD(divhashhead, divcb);
+struct divcblbgroup {
+	CK_SLIST_ENTRY(divcblbgroup) dl_next;
+	struct epoch_context	 dl_epochctx;
+	uint16_t	dl_port;
+	uint16_t	dl_count;
+#define	DIVCBLBGROUP_SIZE	32
+	struct divcb	*dl_dcb[DIVCBLBGROUP_SIZE];
+};
 
-VNET_DEFINE_STATIC(struct divhashhead, divhash[DIVHASHSIZE]) = {};
+CK_SLIST_HEAD(divhashhead, divcb);
+CK_SLIST_HEAD(divlbgrouphashhead, divcblbgroup);
+
+VNET_DEFINE_STATIC(struct divhashhead, divhash[DIVHASHSIZE]);
 #define	V_divhash	VNET(divhash)
+VNET_DEFINE_STATIC(struct divlbgrouphashhead, divlbhash[DIVHASHSIZE]);
+#define	V_divlbhash	VNET(divlbhash)
 VNET_DEFINE_STATIC(uint64_t, dcb_count) = 0;
 #define	V_dcb_count	VNET(dcb_count)
 VNET_DEFINE_STATIC(uint64_t, dcb_gencnt) = 0;
@@ -165,8 +177,9 @@ MTX_SYSINIT(divert, &divert_mtx, "divert(4) socket pcb lists", MTX_DEF);
  * Divert a packet by passing it up to the divert socket at port 'port'.
  */
 static void
-divert_packet(struct mbuf *m, bool incoming)
+divert_packet(struct mbuf *m, uint64_t id, bool incoming)
 {
+	struct divcblbgroup *dlb;
 	struct divcb *dcb;
 	u_int16_t nport;
 	struct sockaddr_in divsrc;
@@ -273,9 +286,20 @@ divert_packet(struct mbuf *m, bool incoming)
 	}
 
 	/* Put packet on socket queue, if any */
-	CK_SLIST_FOREACH(dcb, &V_divhash[DIVHASH(nport)], dcb_next)
-		if (dcb->dcb_port == nport)
+	CK_SLIST_FOREACH(dlb, &V_divlbhash[DIVHASH(nport)], dl_next) {
+		uint16_t count;
+
+		count = atomic_load_16(&dlb->dl_count);
+		if (dlb->dl_port == nport && count > 0) {
+			dcb = dlb->dl_dcb[id % count];
 			break;
+		}
+	}
+	if (dlb == NULL) {
+		CK_SLIST_FOREACH(dcb, &V_divhash[DIVHASH(nport)], dcb_next)
+			if (dcb->dcb_port == nport)
+				break;
+	}
 
 	if (dcb != NULL) {
 		struct socket *sa = dcb->dcb_socket;
@@ -540,6 +564,12 @@ div_output_inbound(int family, struct socket *so, struct mbuf *m,
 			m->m_flags |= M_MCAST;
 		else if (in_broadcast(ip->ip_dst, m->m_pkthdr.rcvif))
 			m->m_flags |= M_BCAST;
+#if 0
+		M_ASSERTPKTHDR(m);
+		m->m_pkthdr.csum_flags |= CSUM_IP_CHECKED | CSUM_IP_VALID |
+		    CSUM_DATA_VALID | CSUM_PSEUDO_HDR;
+		m->m_pkthdr.csum_data = 0xffff;
+#endif
 		netisr_queue_src(NETISR_IP, (uintptr_t)so, m);
 		DIVSTAT_INC(inbound);
 		break;
@@ -594,14 +624,44 @@ div_free(epoch_context_t ctx)
 }
 
 static void
+divlbgroup_free(epoch_context_t ctx)
+{
+	struct divcblbgroup *dlb = __containerof(ctx, struct divcblbgroup,
+	    dl_epochctx);
+
+	free(dlb, M_PCB);
+}
+
+static void
 div_detach(struct socket *so)
 {
+	struct divcblbgroup *dlb;
 	struct divcb *dcb = so->so_pcb;
 
 	so->so_pcb = NULL;
 	DIVERT_LOCK();
-	if (dcb->dcb_bound != DCB_UNBOUND)
+	if (dcb->dcb_bound != DCB_UNBOUND) {
 		CK_SLIST_REMOVE(&V_divhash[DCBHASH(dcb)], dcb, divcb, dcb_next);
+		CK_SLIST_FOREACH(dlb, &V_divlbhash[DCBHASH(dcb)], dl_next) {
+			if (dlb->dl_port != dcb->dcb_port)
+				continue;
+			for (int i = 0; i < dlb->dl_count; i++) {
+				if (dlb->dl_dcb[i] != dcb)
+					continue;
+				dlb->dl_dcb[i] = NULL;
+				dlb->dl_count--;
+				if (dlb->dl_count == 0) {
+					CK_SLIST_REMOVE(
+					    &V_divlbhash[DCBHASH(dcb)], dlb,
+					    divcblbgroup, dl_next);
+					NET_EPOCH_CALL(divlbgroup_free,
+					    &dlb->dl_epochctx);
+				}
+				goto out;
+			}
+		}
+out:;
+	}
 	V_dcb_count--;
 	V_dcb_gencnt++;
 	DIVERT_UNLOCK();
@@ -611,28 +671,68 @@ div_detach(struct socket *so)
 static int
 div_bind(struct socket *so, struct sockaddr *nam, struct thread *td)
 {
+	struct divcblbgroup *dlb;
 	struct divcb *dcb;
+	int error;
 	uint16_t port;
 
 	if (nam->sa_family != AF_INET)
 		return EAFNOSUPPORT;
 	if (nam->sa_len != sizeof(struct sockaddr_in))
 		return EINVAL;
+
+	error = 0;
+	if ((so->so_options & SO_REUSEPORT_LB) != 0)
+		dlb = malloc(sizeof(*dlb), M_PCB, M_WAITOK | M_ZERO);
+	else
+		dlb = NULL;
+
 	port = ((struct sockaddr_in *)nam)->sin_port;
 	DIVERT_LOCK();
-	CK_SLIST_FOREACH(dcb, &V_divhash[DIVHASH(port)], dcb_next)
-		if (dcb->dcb_port == port) {
-			DIVERT_UNLOCK();
-			return (EADDRINUSE);
-		}
+	if (dlb == NULL) {
+		CK_SLIST_FOREACH(dcb, &V_divhash[DIVHASH(port)], dcb_next)
+			if (dcb->dcb_port == port) {
+				DIVERT_UNLOCK();
+				free(dlb, M_PCB);
+				return (EADDRINUSE);
+			}
+	}
 	dcb = so->so_pcb;
 	if (dcb->dcb_bound != DCB_UNBOUND)
 		CK_SLIST_REMOVE(&V_divhash[DCBHASH(dcb)], dcb, divcb, dcb_next);
 	dcb->dcb_port = port;
 	CK_SLIST_INSERT_HEAD(&V_divhash[DIVHASH(port)], dcb, dcb_next);
+	if (dlb != NULL) {
+		struct divcblbgroup *tmp;
+
+		CK_SLIST_FOREACH(tmp, &V_divlbhash[DIVHASH(port)], dl_next) {
+			if (tmp->dl_port == port)
+				break;
+		}
+		if (tmp == NULL) {
+			dlb->dl_port = port;
+			dlb->dl_count = 1;
+			dlb->dl_dcb[0] = dcb;
+			CK_SLIST_INSERT_HEAD(&V_divlbhash[DIVHASH(port)], dlb,
+			    dl_next);
+		} else if (tmp->dl_count < DIVCBLBGROUP_SIZE) {
+			for (int i = 0; i < DIVCBLBGROUP_SIZE; i++) {
+				if (tmp->dl_dcb[i] == NULL) {
+					tmp->dl_dcb[i] = dcb;
+					tmp->dl_count++;
+					free(dlb, M_PCB);
+					break;
+				}
+			}
+			/* XXX-MJ what if we didn't find a slot? */
+		} else {
+			error = ENOSPC;
+			free(dlb, M_PCB);
+		}
+	}
 	DIVERT_UNLOCK();
 
-	return (0);
+	return (error);
 }
 
 static int
