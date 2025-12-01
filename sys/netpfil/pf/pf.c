@@ -8879,11 +8879,10 @@ done:
 	    IN_LOOPBACK(ntohl(pd.dst->v4.s_addr)))
 		m->m_flags |= M_SKIP_FIREWALL;
 
-	if (__predict_false(ip_divert_ptr != NULL) && action == PF_PASS &&
-	    r->divert.port && !PACKET_LOOPED(&pd)) {
+	if (action == PF_PASS && r->divert.port && !PACKET_LOOPED(&pd)) {
 		mtag = m_tag_alloc(MTAG_PF_DIVERT, 0,
 		    sizeof(struct pf_divert_mtag), M_NOWAIT | M_ZERO);
-		if (mtag != NULL) {
+		if (__predict_true(mtag != NULL && ip_divert_ptr != NULL)) {
 			((struct pf_divert_mtag *)(mtag+1))->port =
 			    ntohs(r->divert.port);
 			((struct pf_divert_mtag *)(mtag+1))->idir =
@@ -8910,15 +8909,20 @@ done:
 			}
 			ip_divert_ptr(*m0, dir == PF_IN);
 			*m0 = NULL;
-
 			return (action);
-		} else {
+		} else if (mtag == NULL) {
 			/* XXX: ipfw has the same behaviour! */
 			action = PF_DROP;
 			REASON_SET(&reason, PFRES_MEMORY);
 			pd.act.log = PF_LOG_FORCE;
 			DPFPRINTF(PF_DEBUG_MISC,
 			    ("pf: failed to allocate divert tag\n"));
+		} else {
+			action = PF_DROP;
+			REASON_SET(&reason, PFRES_MATCH);
+			pd.act.log = PF_LOG_FORCE;
+			DPFPRINTF(PF_DEBUG_MISC,
+			    ("pf: divert(4) is not loaded\n"));
 		}
 	}
 	/* this flag will need revising if the pkt is forwarded */
