@@ -36,6 +36,7 @@
 #include <sys/param.h>
 #include <sys/ck.h>
 #include <sys/eventhandler.h>
+#include <sys/hash.h>
 #include <sys/kernel.h>
 #include <sys/lock.h>
 #include <sys/malloc.h>
@@ -291,7 +292,10 @@ divert_packet(struct mbuf *m, uint64_t id, bool incoming)
 
 		count = atomic_load_16(&dlb->dl_count);
 		if (dlb->dl_port == nport && count > 0) {
-			dcb = dlb->dl_dcb[id % count];
+			uint32_t hash;
+
+			hash = jenkins_hash(&id, sizeof(uint64_t), 0);
+			dcb = dlb->dl_dcb[hash % count];
 			break;
 		}
 	}
