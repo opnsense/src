@@ -581,6 +581,12 @@ div_output_inbound(int family, struct socket *so, struct mbuf *m,
 #endif
 #ifdef INET6
 	case AF_INET6:
+#if 0
+		M_ASSERTPKTHDR(m);
+		m->m_pkthdr.csum_flags |= CSUM_IP_CHECKED | CSUM_IP_VALID |
+		    CSUM_DATA_VALID | CSUM_PSEUDO_HDR;
+		m->m_pkthdr.csum_data = 0xffff;
+#endif
 		netisr_queue_src(NETISR_IPV6, (uintptr_t)so, m);
 		DIVSTAT_INC(inbound);
 		break;
@@ -652,8 +658,16 @@ div_detach(struct socket *so)
 			for (int i = 0; i < dlb->dl_count; i++) {
 				if (dlb->dl_dcb[i] != dcb)
 					continue;
-				dlb->dl_dcb[i] = NULL;
-				dlb->dl_count--;
+
+				if (i != dlb->dl_count - 1) {
+					dlb->dl_dcb[i] =
+					    dlb->dl_dcb[dlb->dl_count - 1];
+					dlb->dl_dcb[dlb->dl_count - 1] = NULL;
+				} else {
+					dlb->dl_dcb[i] = NULL;
+				}
+				atomic_store_rel_16(&dlb->dl_count,
+				    dlb->dl_count - 1);
 				if (dlb->dl_count == 0) {
 					CK_SLIST_REMOVE(
 					    &V_divlbhash[DCBHASH(dcb)], dlb,
