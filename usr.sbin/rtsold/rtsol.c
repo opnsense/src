@@ -328,9 +328,11 @@ rtsol_input(int sock)
 	}
 
 	/*
-	 * "Always" script.
+	 * "Always" script.  This extracts router information, but only
+	 * once per interface "lifetime".  To make it more effective check
+	 * the lifetime of the RA in order to see if this router is viable.
 	 */
-	if (!ifi->alwaysconfig) {
+	if (!ifi->alwaysconfig && ntohs(nd_ra->nd_ra_router_lifetime) != 0) {
 		const char *rasender = inet_ntop(AF_INET6, &from.sin6_addr,
 		    ntopbuf, sizeof(ntopbuf));
 		ifi->alwaysconfig = 1;
