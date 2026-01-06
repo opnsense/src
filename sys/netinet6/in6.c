@@ -1034,6 +1034,15 @@ in6_alloc_ifa(struct ifnet *ifp, struct in6_aliasreq *ifra, int flags)
 	return (ia);
 }
 
+time_t
+in6_expire_time(uint32_t ltime)
+{
+	if (ltime == ND6_INFINITE_LIFETIME)
+		return (0);
+	else
+		return (time_uptime + ltime);
+}
+
 /*
  * Update/configure interface address parameters:
  *
@@ -1056,16 +1065,10 @@ in6_update_ifa_internal(struct ifnet *ifp, struct in6_aliasreq *ifra,
 	 * these members for applications.
 	 */
 	ia->ia6_lifetime = ifra->ifra_lifetime;
-	if (ia->ia6_lifetime.ia6t_vltime != ND6_INFINITE_LIFETIME) {
-		ia->ia6_lifetime.ia6t_expire =
-		    time_uptime + ia->ia6_lifetime.ia6t_vltime;
-	} else
-		ia->ia6_lifetime.ia6t_expire = 0;
-	if (ia->ia6_lifetime.ia6t_pltime != ND6_INFINITE_LIFETIME) {
-		ia->ia6_lifetime.ia6t_preferred =
-		    time_uptime + ia->ia6_lifetime.ia6t_pltime;
-	} else
-		ia->ia6_lifetime.ia6t_preferred = 0;
+	ia->ia6_lifetime.ia6t_expire =
+	    in6_expire_time(ifra->ifra_lifetime.ia6t_vltime);
+	ia->ia6_lifetime.ia6t_preferred =
+	    in6_expire_time(ifra->ifra_lifetime.ia6t_pltime);
 
 	/*
 	 * backward compatibility - if IN6_IFF_DEPRECATED is set from the
@@ -1323,6 +1326,28 @@ in6_addifaddr(struct ifnet *ifp, struct in6_aliasreq *ifra, struct in6_ifaddr *i
 				(*carp_detach_p)(&ia->ia_ifa, false);
 			goto out;
 		}
+	} else if (pr->ndpr_raf_onlink) {
+		time_t expiry;
+
+		/*
+		 * If the prefix already exists, update lifetimes, but avoid
+		 * shortening them.
+		 */
+		ND6_WLOCK();
+		expiry = in6_expire_time(pr0.ndpr_pltime);
+		if (pr->ndpr_preferred != 0 &&
+		    (pr->ndpr_preferred < expiry || expiry == 0)) {
+			pr->ndpr_pltime = pr0.ndpr_pltime;
+			pr->ndpr_preferred = expiry;
+		}
+		expiry = in6_expire_time(pr0.ndpr_vltime);
+		if (pr->ndpr_expire != 0 &&
+		    (pr->ndpr_expire < expiry || expiry == 0)) {
+			pr->ndpr_vltime = pr0.ndpr_vltime;
+			pr->ndpr_expire = expiry;
+		}
+		pr->ndpr_lastupdate = time_uptime;
+		ND6_WUNLOCK();
 	}
 
 	/* relate the address to the prefix */
