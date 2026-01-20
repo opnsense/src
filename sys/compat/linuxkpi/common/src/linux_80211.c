@@ -7417,7 +7417,7 @@ lkpi_wiphy_delayed_work_timer(struct timer_list *tl)
 {
 	struct wiphy_delayed_work *wdwk;
 
-	wdwk = timer_container_of(wdwk, tl, timer);
+	wdwk = from_timer(wdwk, tl, timer);
 	wiphy_work_queue(wdwk->wiphy, &wdwk->work);
 }
 
