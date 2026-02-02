@@ -274,8 +274,6 @@ static void	expire_upcalls(void *);
  */
 static struct ifnet *multicast_register_if6;
 
-#define ENCAP_HOPS 64
-
 /*
  * Private variables.
  */
