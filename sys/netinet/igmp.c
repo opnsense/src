@@ -247,7 +247,7 @@ VNET_DEFINE_STATIC(int, igmp_sendlocal) = 1;
 VNET_DEFINE_STATIC(int, igmp_v1enable) = 1;
 VNET_DEFINE_STATIC(int, igmp_v2enable) = 1;
 VNET_DEFINE_STATIC(int, igmp_legacysupp);
-VNET_DEFINE_STATIC(int, igmp_default_version) = IGMP_VERSION_3;
+VNET_DEFINE_STATIC(int, igmp_default_version) = IGMP_VERSION_2;
 
 #define	V_igmp_recvifkludge		VNET(igmp_recvifkludge)
 #define	V_igmp_sendra			VNET(igmp_sendra)
@@ -404,32 +404,43 @@ out:
 static int
 sysctl_igmp_default_version(SYSCTL_HANDLER_ARGS)
 {
+	struct epoch_tracker	 et;
 	int	 error;
 	int	 new;
+	struct igmp_ifsoftc *igi;
 
 	error = sysctl_wire_old_buffer(req, sizeof(int));
 	if (error)
 		return (error);
 
-	IGMP_LOCK();
-
 	new = V_igmp_default_version;
 
 	error = sysctl_handle_int(oidp, &new, 0, req);
 	if (error || !req->newptr)
-		goto out_locked;
+		return (error);
 
-	if (new < IGMP_VERSION_1 || new > IGMP_VERSION_3) {
-		error = EINVAL;
-		goto out_locked;
+	if (new < IGMP_VERSION_1 || new > IGMP_VERSION_3)
+		return (EINVAL);
+
+	IN_MULTI_LIST_LOCK();
+	IGMP_LOCK();
+	NET_EPOCH_ENTER(et);
+
+	if (V_igmp_default_version != new) {
+		CTR2(KTR_IGMPV3, "change igmp_default_version from %d to %d",
+			V_igmp_default_version, new);
+
+		V_igmp_default_version = new;
+
+		LIST_FOREACH(igi, &V_igi_head, igi_link) {
+			if (igi->igi_version > V_igmp_default_version){
+				igmp_set_version(igi, V_igmp_default_version);
+			}
+		}
 	}
 
-	CTR2(KTR_IGMPV3, "change igmp_default_version from %d to %d",
-	     V_igmp_default_version, new);
-
-	V_igmp_default_version = new;
-
-out_locked:
+	NET_EPOCH_EXIT(et);
+	IN_MULTI_LIST_UNLOCK();
 	IGMP_UNLOCK();
 	return (error);
 }
@@ -2122,7 +2133,8 @@ igmp_v1v2_process_querier_timers(struct igmp_ifsoftc *igi)
 		 *
 		 * Revert to IGMPv3.
 		 */
-		if (igi->igi_version != IGMP_VERSION_3) {
+		if (V_igmp_default_version == IGMP_VERSION_3 &&
+		    igi->igi_version != IGMP_VERSION_3) {
 			CTR5(KTR_IGMPV3,
 			    "%s: transition from v%d -> v%d on %p(%s)",
 			    __func__, igi->igi_version, IGMP_VERSION_3,
@@ -2137,7 +2149,8 @@ igmp_v1v2_process_querier_timers(struct igmp_ifsoftc *igi)
 		 * revert to IGMPv3.
 		 * If IGMPv2 is enabled, revert to IGMPv2.
 		 */
-		if (!V_igmp_v2enable) {
+		if (V_igmp_default_version == IGMP_VERSION_3 &&
+		    !V_igmp_v2enable) {
 			CTR5(KTR_IGMPV3,
 			    "%s: transition from v%d -> v%d on %p(%s)",
 			    __func__, igi->igi_version, IGMP_VERSION_3,
@@ -2146,7 +2159,8 @@ igmp_v1v2_process_querier_timers(struct igmp_ifsoftc *igi)
 			igi->igi_version = IGMP_VERSION_3;
 		} else {
 			--igi->igi_v2_timer;
-			if (igi->igi_version != IGMP_VERSION_2) {
+			if (V_igmp_default_version == IGMP_VERSION_2 &&
+			    igi->igi_version != IGMP_VERSION_2) {
 				CTR5(KTR_IGMPV3,
 				    "%s: transition from v%d -> v%d on %p(%s)",
 				    __func__, igi->igi_version, IGMP_VERSION_2,
@@ -2164,7 +2178,8 @@ igmp_v1v2_process_querier_timers(struct igmp_ifsoftc *igi)
 		 * revert to IGMPv3.
 		 * If IGMPv1 is enabled, reset IGMPv2 timer if running.
 		 */
-		if (!V_igmp_v1enable) {
+		if (V_igmp_default_version == IGMP_VERSION_3 &&
+		    !V_igmp_v1enable) {
 			CTR5(KTR_IGMPV3,
 			    "%s: transition from v%d -> v%d on %p(%s)",
 			    __func__, igi->igi_version, IGMP_VERSION_3,
