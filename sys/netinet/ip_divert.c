@@ -530,8 +530,10 @@ static int
 div_output_inbound(int family, struct socket *so, struct mbuf *m,
     struct sockaddr_in *sin)
 {
+	struct divcb *dcb;
 	struct ifaddr *ifa;
 
+	dcb = so->so_pcb;
 	if (m->m_pkthdr.rcvif == NULL) {
 		/*
 		 * No luck with the name, check by IP address.
@@ -574,7 +576,7 @@ div_output_inbound(int family, struct socket *so, struct mbuf *m,
 		    CSUM_DATA_VALID | CSUM_PSEUDO_HDR;
 		m->m_pkthdr.csum_data = 0xffff;
 #endif
-		netisr_queue_src(NETISR_IP, (uintptr_t)so, m);
+		netisr_queue_src(NETISR_IP, (uintptr_t)dcb->dcb_gencnt, m);
 		DIVSTAT_INC(inbound);
 		break;
 	    }
@@ -587,7 +589,7 @@ div_output_inbound(int family, struct socket *so, struct mbuf *m,
 		    CSUM_DATA_VALID | CSUM_PSEUDO_HDR;
 		m->m_pkthdr.csum_data = 0xffff;
 #endif
-		netisr_queue_src(NETISR_IPV6, (uintptr_t)so, m);
+		netisr_queue_src(NETISR_IPV6, (uintptr_t)dcb->dcb_gencnt, m);
 		DIVSTAT_INC(inbound);
 		break;
 #endif
