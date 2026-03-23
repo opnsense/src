@@ -881,7 +881,8 @@ in6_selecthlim(struct inpcb *inp, struct ifnet *ifp)
 		fibnum = inp->inp_inc.inc_fibnum;
 		in6_splitscope(&inp->in6p_faddr, &dst, &scopeid);
 		nh = fib6_lookup(fibnum, &dst, scopeid, 0, 0);
-		if (nh != NULL) {
+		/* work around the fact that a netgraph device is dying slowly */
+		if (nh != NULL && (nh->nh_ifp)->if_afdata_initialized != 0) {
 			hlim = ND_IFINFO(nh->nh_ifp)->chlim;
 			return (hlim);
 		}
