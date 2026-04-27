@@ -6123,6 +6123,18 @@ lkpi_80211_txq_tx_one(struct lkpi_sta *lsta, struct mbuf *m)
 		TRACE_RATES("M_EAPOL -> TX_CTL_USE_MINRATE");
 	}
 	info->control.vif = vif;
+
+	if (tid != IEEE80211_NONQOS_TID) {
+		struct ieee80211_tx_ampdu *tap;
+
+		tap = &ni->ni_tx_ampdu[tid];
+		if (ieee80211_is_data_qos(hdr->frame_control) &&
+		    !ieee80211_is_qos_nullfunc(hdr->frame_control) &&
+		    !is_multicast_ether_addr(hdr->addr1) &&
+		    IEEE80211_AMPDU_RUNNING(tap))
+			info->flags |= IEEE80211_TX_CTL_AMPDU;
+	}
+
 	/* XXX-BZ info->control.rates */
 #ifdef __notyet__
 #ifdef LKPI_80211_HT
