@@ -2405,7 +2405,7 @@ static __inline uint64_t
 pf_get_uptime(void)
 {
 	struct timeval t;
-	microuptime(&t);
+	getmicrouptime(&t);
 	return ((t.tv_sec * 1000) + (t.tv_usec / 1000));
 }
 
@@ -2413,7 +2413,7 @@ static __inline uint64_t
 pf_get_time(void)
 {
 	struct timeval t;
-	microtime(&t);
+	getmicrotime(&t);
 	return ((t.tv_sec * 1000) + (t.tv_usec / 1000));
 }
 
