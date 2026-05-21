@@ -344,11 +344,12 @@ obsolete(int *argcp, char **argvp[])
 				warnx("option requires an argument -- %c", *ap);
 				usage();
 			}
-			if ((nargv[0] = malloc(strlen(*argv) + 2 + 1)) == NULL)
+			size_t len = strlen(*argv);
+			if ((nargv[0] = malloc(len + 2 + 1)) == NULL)
 				err(1, NULL);
 			nargv[0][0] = '-';
 			nargv[0][1] = *ap;
-			(void)strcpy(&nargv[0][2], *argv);
+			memcpy(&nargv[0][2], *argv, len + 1);
 			++argv;
 			++nargv;
 			break;

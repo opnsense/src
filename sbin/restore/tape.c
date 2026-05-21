@@ -398,7 +398,11 @@ again:
 		return;
 	}
 	if (buf[0] != '\n') {
-		(void) strcpy(magtape, buf);
+		free(magtape);
+		if ((magtape = strdup(buf)) == NULL) {
+			fprintf(stderr, "Cannot allocate space for tape name\n");
+			done(1);
+		}
 		magtape[strlen(magtape) - 1] = '\0';
 	}
 	if (pipecmdin) {
