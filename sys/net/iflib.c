@@ -2367,8 +2367,7 @@ iflib_timer(void *arg)
 		     (sctx->isc_pause_frames == 0)))
 			goto hung;
 
-		if (txq->ift_qstatus != IFLIB_QUEUE_IDLE &&
-		    ifmp_ring_is_stalled(txq->ift_br)) {
+		if (ifmp_ring_is_stalled(txq->ift_br)) {
 			KASSERT(ctx->ifc_link_state == LINK_STATE_UP,
 			    ("queue can't be marked as hung if interface is down"));
 			txq->ift_qstatus = IFLIB_QUEUE_HUNG;
