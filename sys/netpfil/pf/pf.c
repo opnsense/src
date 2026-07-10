@@ -9241,7 +9241,6 @@ pf_route(struct pf_krule *r, struct ifnet *oifp,
 			action = PF_DROP;
 			goto bad_locked;
 		}
-		ip->ip_ttl -= IPTTLDEC;
 	}
 
 	if (s != NULL) {
@@ -9286,6 +9285,9 @@ pf_route(struct pf_krule *r, struct ifnet *oifp,
 
 		return (PF_PASS); /* XXX check this */
 	}
+
+        /* do not mangle the IP header until hardcoded send path is used */
+	ip->ip_ttl -= IPTTLDEC;
 
 	/*
 	 * Bind to the correct interface if we're if-bound. We don't know which
@@ -9579,7 +9581,6 @@ pf_route6(struct pf_krule *r, struct ifnet *oifp,
 			action = PF_DROP;
 			goto bad_locked;
 		}
-		ip6->ip6_hlim -= IPV6_HLIMDEC;
 	}
 
 	if (s != NULL) {
@@ -9629,6 +9630,9 @@ pf_route6(struct pf_krule *r, struct ifnet *oifp,
 
 		return (PF_PASS); /* XXX check this */
 	}
+
+        /* do not mangle the IP header until hardcoded send path is used */
+	ip6->ip6_hlim -= IPV6_HLIMDEC;
 
 	/*
 	 * Bind to the correct interface if we're if-bound. We don't know which
