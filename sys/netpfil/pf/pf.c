@@ -9286,7 +9286,7 @@ pf_route(struct pf_krule *r, struct ifnet *oifp,
 		return (PF_PASS); /* XXX check this */
 	}
 
-        /* do not mangle the IP header until hardcoded send path is used */
+	/* do not mangle the IP header until hardcoded send path is used */
 	ip->ip_ttl -= IPTTLDEC;
 
 	/*
@@ -9631,7 +9631,7 @@ pf_route6(struct pf_krule *r, struct ifnet *oifp,
 		return (PF_PASS); /* XXX check this */
 	}
 
-        /* do not mangle the IP header until hardcoded send path is used */
+	/* do not mangle the IP header until hardcoded send path is used */
 	ip6->ip6_hlim -= IPV6_HLIMDEC;
 
 	/*
