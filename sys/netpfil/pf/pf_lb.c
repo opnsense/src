@@ -138,6 +138,8 @@ pf_match_translation_rule(int rs_num, struct pf_test_ctx *ctx, struct pf_krulese
 {
 	struct pf_krule		*r;
 	struct pf_pdesc		*pd = ctx->pd;
+	struct pf_krule		*save_a;
+	struct pf_kruleset	*save_aruleset;
 	int			 rtableid = -1;
 
 	r = TAILQ_FIRST(ruleset->rules[rs_num].active.ptr);
@@ -218,12 +220,22 @@ pf_match_translation_rule(int rs_num, struct pf_test_ctx *ctx, struct pf_krulese
 			}
 			break;
 		} else {
+			save_a = ctx->a;
+			save_aruleset = ctx->aruleset;
+
 			ctx->a = r;			/* remember anchor */
 			ctx->aruleset = ruleset;	/* and its ruleset */
+			/*
+			 * Note: we don't need to restore if we are not going
+			 * to continue with ruleset evaluation.
+			 */
 			if (pf_step_into_translation_anchor(rs_num, ctx,
 			    r) != PF_TEST_OK) {
 				break;
 			}
+
+			ctx->a = save_a;
+			ctx->aruleset = save_aruleset;
 		}
 		r = TAILQ_NEXT(r, entries);
 	}
