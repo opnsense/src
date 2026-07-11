@@ -74,7 +74,7 @@ void		 print_fromto(struct pf_rule_addr *, pf_osfp_t,
 		    struct pf_rule_addr *, sa_family_t, u_int8_t, int, int);
 int		 ifa_skip_if(const char *filter, struct node_host *p);
 
-struct node_host	*host_if(const char *, int);
+struct node_host	*host_if(const char *, int, int *);
 struct node_host	*host_ip(const char *, int);
 struct node_host	*host_dns(const char *, int, int);
 
@@ -1785,7 +1785,7 @@ struct node_host *
 host(const char *s, int opts)
 {
 	struct node_host	*h = NULL;
-	int			 mask = -1;
+	int			 mask = -1, cont = 1;
 	char			*p, *ps;
 	const char		*errstr;
 
@@ -1804,7 +1804,7 @@ host(const char *s, int opts)
 	}
 
 	if ((h = host_ip(ps, mask)) == NULL &&
-	    (h = host_if(ps, mask)) == NULL &&
+	    (h = host_if(ps, mask, &cont)) == NULL && cont &&
 	    (h = host_dns(ps, mask, (opts & PF_OPT_NODNS))) == NULL) {
 		fprintf(stderr, "no IP address found for %s\n", s);
 		goto error;
@@ -1816,7 +1816,7 @@ error:
 }
 
 struct node_host *
-host_if(const char *s, int mask)
+host_if(const char *s, int mask, int *cont)
 {
 	struct node_host	*n, *h = NULL;
 	char			*p, *ps;
@@ -1836,6 +1836,7 @@ host_if(const char *s, int mask)
 		else
 			goto error;
 		*p = '\0';
+		*cont = 0;
 	}
 	if (flags & (flags - 1) & PFI_AFLAG_MODEMASK) { /* Yep! */
 		fprintf(stderr, "illegal combination of interface modifiers\n");
