@@ -9276,14 +9276,16 @@ pf_route(struct pf_krule *r, struct ifnet *oifp,
 
 	if (V_pf_share_forward) {
 		if (!IP_HAS_NEXTHOP(m0)) {
-			if (ip_set_fwdtag(m0, &dst->sin, ifp))
+			if (ip_set_fwdtag(m0, &dst->sin, ifp)) {
+				action = PF_DROP;
 				goto bad;
+			}
 
-			if (r->rt == PF_DUPTO)
+			if (pd->act.rt == PF_DUPTO)
 				ip_forward(m0, 1);
 		}
 
-		return (PF_PASS); /* XXX check this */
+		return (action);
 	}
 
 	/* do not mangle the IP header until hardcoded send path is used */
@@ -9621,14 +9623,16 @@ pf_route6(struct pf_krule *r, struct ifnet *oifp,
 
 	if (V_pf_share_forward6) {
 		if (!IP6_HAS_NEXTHOP(m0)) {
-			if (ip6_set_fwdtag(m0, &dst, ifp))
+			if (ip6_set_fwdtag(m0, &dst, ifp)) {
+				action = PF_DROP;
 				goto bad;
+			}
 
-			if (r->rt == PF_DUPTO)
+			if (pd->act.rt == PF_DUPTO)
 				ip6_forward(m0, 1);
 		}
 
-		return (PF_PASS); /* XXX check this */
+		return (action);
 	}
 
 	/* do not mangle the IP header until hardcoded send path is used */
