@@ -421,7 +421,7 @@ int	ip6_fragment(struct ifnet *, struct mbuf *, int, u_char, int,
 			uint32_t);
 
 #define	IP6_HAS_NEXTHOP(m)	((m)->m_flags & M_IP6_NEXTHOP)
-int	ip6_set_fwdtag(struct mbuf *, struct sockaddr_in6 *, struct ifnet *);
+int	ip6_set_fwdtag(struct mbuf *, const struct sockaddr_in6 *, const struct ifnet *);
 int	ip6_get_fwdtag(struct mbuf *, struct sockaddr_in6 *, struct ifnet **);
 void	ip6_flush_fwdtag(struct mbuf *);
 

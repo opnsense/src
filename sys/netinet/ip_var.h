@@ -253,7 +253,7 @@ ipproto_input_t		rip_input;
 ipproto_ctlinput_t	rip_ctlinput;
 
 #define	IP_HAS_NEXTHOP(m)	((m)->m_flags & M_IP_NEXTHOP)
-int	ip_set_fwdtag(struct mbuf *, struct sockaddr_in *, struct ifnet *);
+int	ip_set_fwdtag(struct mbuf *, const struct sockaddr_in *, const struct ifnet *);
 int	ip_get_fwdtag(struct mbuf *, struct sockaddr_in *, struct ifnet **);
 void	ip_flush_fwdtag(struct mbuf *);
 

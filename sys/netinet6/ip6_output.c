@@ -3373,7 +3373,7 @@ struct ip6_fwdtag {
 };
 
 int
-ip6_set_fwdtag(struct mbuf *m, struct sockaddr_in6 *dst, struct ifnet *ifp)
+ip6_set_fwdtag(struct mbuf *m, const struct sockaddr_in6 *dst, const struct ifnet *ifp)
 {
 	struct ip6_fwdtag *fwd_info;
 	struct m_tag *fwd_tag;

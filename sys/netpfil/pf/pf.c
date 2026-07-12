@@ -9275,17 +9275,25 @@ pf_route(struct pf_krule *r, struct ifnet *oifp,
 	}
 
 	if (V_pf_share_forward) {
-		if (!IP_HAS_NEXTHOP(m0)) {
-			if (ip_set_fwdtag(m0, &dst->sin, ifp)) {
-				action = PF_DROP;
-				goto bad;
+		switch (pd->act.rt_af) {
+#ifdef INET
+		case AF_INET:
+			if (!IP_HAS_NEXTHOP(m0)) {
+				if (ip_set_fwdtag(m0, (const struct sockaddr_in *)gw, ifp)) {
+					action = PF_DROP;
+					goto bad;
+				}
+
+				if (pd->act.rt == PF_DUPTO)
+					ip_forward(m0, 1);
 			}
 
-			if (pd->act.rt == PF_DUPTO)
-				ip_forward(m0, 1);
+			return (action);
+#endif /* INET */
+		default:
+			/* XXX support AF_INET6 */
+			break;
 		}
-
-		return (action);
 	}
 
 	/* do not mangle the IP header until hardcoded send path is used */

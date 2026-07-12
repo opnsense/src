@@ -1608,7 +1608,7 @@ struct ip_fwdtag {
 };
 
 int
-ip_set_fwdtag(struct mbuf *m, struct sockaddr_in *dst, struct ifnet *ifp)
+ip_set_fwdtag(struct mbuf *m, const struct sockaddr_in *dst, const struct ifnet *ifp)
 {
 	struct ip_fwdtag *fwd_info;
 	struct m_tag *fwd_tag;
