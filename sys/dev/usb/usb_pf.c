@@ -199,15 +199,15 @@ usbpf_clone_create(struct if_clone *ifc, char *name, size_t len,
 	if_initname(ifp, usbusname, unit);
 	if_setname(ifp, name);
 	if_setioctlfn(ifp, usbpf_ioctl);
-	if_attach(ifp);
-	if_setflagbits(ifp, IFF_UP, 0);
-	rt_ifmsg(ifp, IFF_UP);
 	/*
 	 * XXX According to the specification of DLT_USB, it indicates
 	 * packets beginning with USB setup header. But not sure all
 	 * packets would be.
 	 */
 	bpfattach(ifp, DLT_USB, USBPF_HDR_LEN);
+	if_attach(ifp);
+	if_setflagbits(ifp, IFF_UP, 0);
+	rt_ifmsg(ifp, IFF_UP);
 	*ifpp = ifp;
 
 	return (0);
