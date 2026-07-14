@@ -1934,7 +1934,6 @@ static struct snl_attr_parser ap_state[] = {
 	{ .type = PF_ST_PEER_DST, .off = _OUT(dst), .arg = &speer_parser, .cb = snl_attr_get_nested },
 	{ .type = PF_ST_RT_ADDR, .off = _OUT(rt_addr), .cb = snl_attr_get_pfaddr },
 	{ .type = PF_ST_RULE, .off = _OUT(rule), .cb = snl_attr_get_uint32 },
-	{ .type = PF_ST_RULE_LABEL, .off = _OUT(rule_label), .cb = snl_attr_store_ifname },
 	{ .type = PF_ST_ANCHOR, .off = _OUT(anchor), .cb = snl_attr_get_uint32 },
 	{ .type = PF_ST_NAT_RULE, .off = _OUT(nat_rule), .cb = snl_attr_get_uint32 },
 	{ .type = PF_ST_CREATION, .off = _OUT(creation), .cb = snl_attr_get_uint32 },
@@ -1956,6 +1955,7 @@ static struct snl_attr_parser ap_state[] = {
 	{ .type = PF_ST_RT_IFNAME, .off = _OUT(rt_ifname), .cb = snl_attr_store_ifname },
 	{ .type = PF_ST_SRC_NODE_FLAGS, .off = _OUT(src_node_flags), .cb = snl_attr_get_uint8 },
 	{ .type = PF_ST_RT_AF, .off = _OUT(rt_af), .cb = snl_attr_get_uint8 },
+	{ .type = PF_ST_RULE_LABEL, .off = _OUT(rule_label), .cb = snl_attr_store_ifname },
 };
 #undef _IN
 #undef _OUT

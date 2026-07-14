@@ -364,7 +364,7 @@ print_state(struct pfctl_state *s, int opts)
 		if (s->rule != -1) {
 			printf(", rule %u", s->rule);
 			if (s->rule_label[0] != '\0') {
-				printf(", rlabel %u", s->rule_label);
+				printf(", rlabel %s", s->rule_label);
 			}
 		}
 		if (s->state_flags & PFSTATE_ALLOWOPTS)
