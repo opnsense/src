@@ -198,6 +198,7 @@ dump_state(struct nlpcb *nlp, const struct nlmsghdr *hdr, struct pf_kstate *s,
 	nlattr_add_u32(nw, PF_ST_CREATORID, htonl(s->creatorid));
 
 	nlattr_add_u32(nw, PF_ST_RULE, s->rule ? s->rule->nr : -1);
+	nlattr_add_string(nw, PF_ST_RULE_LABEL, s->rule ? s->rule->label[0] : "");
 	nlattr_add_u32(nw, PF_ST_ANCHOR, s->anchor ? s->anchor->nr : -1);
 	nlattr_add_u32(nw, PF_ST_NAT_RULE, s->nat_rule ? s->nat_rule->nr : -1);
 

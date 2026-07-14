@@ -361,8 +361,12 @@ print_state(struct pfctl_state *s, int opts)
 		    s->bytes[1]);
 		if (s->anchor != -1)
 			printf(", anchor %u", s->anchor);
-		if (s->rule != -1)
+		if (s->rule != -1) {
 			printf(", rule %u", s->rule);
+			if (s->rule_label[0] != '\0') {
+				printf(", rlabel %u", s->rule_label);
+			}
+		}
 		if (s->state_flags & PFSTATE_ALLOWOPTS)
 			printf(", allow-opts");
 		if (s->state_flags & PFSTATE_SLOPPY)

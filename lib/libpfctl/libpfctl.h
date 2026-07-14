@@ -394,6 +394,7 @@ struct pfctl_state {
 	char			 rt_ifname[IFNAMSIZ];
 	sa_family_t		 rt_af;
 	uint8_t			 src_node_flags;
+	char			 rule_label[PF_RULE_LABEL_SIZE];
 };
 
 TAILQ_HEAD(pfctl_statelist, pfctl_state);
