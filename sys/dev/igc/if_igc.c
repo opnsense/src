@@ -789,6 +789,7 @@ igc_if_suspend(if_ctx_t ctx)
 static int
 igc_if_resume(if_ctx_t ctx)
 {
+	printf("igc_if_resume: requested init\n");
 	igc_if_init(ctx);
 
 	return(0);
@@ -1270,7 +1271,8 @@ igc_if_media_change(if_ctx_t ctx)
 		device_printf(sc->dev, "Unsupported media type\n");
 	}
 
-	igc_if_init(ctx);
+	device_printf(sc->dev, "igc_if_media_change: requested init\n");
+	iflib_request_reset(sc->ctx);
 
 	return (0);
 }
@@ -2087,7 +2089,7 @@ igc_if_rx_queues_alloc(if_ctx_t ctx, caddr_t *vaddrs, uint64_t *paddrs,
 		rxr->rx_base = (union igc_rx_desc_extended *)vaddrs[i*nrxqs];
 		rxr->rx_paddr = paddrs[i*nrxqs];
 	}
- 
+
 	if (bootverbose)
 		device_printf(iflib_get_dev(ctx),
 		    "allocated for %d rx_queues\n", sc->rx_num_queues);
@@ -3202,7 +3204,8 @@ igc_sysctl_dmac(SYSCTL_HANDLER_ARGS)
 			return (EINVAL);
 	}
 	/* Reinit the interface */
-	igc_if_init(sc->ctx);
+	device_printf(sc->dev, "igc_sysctl_dmac: requested init\n");
+	iflib_request_reset(sc->ctx);
 	return (error);
 }
 
@@ -3223,7 +3226,8 @@ igc_sysctl_eee(SYSCTL_HANDLER_ARGS)
 		return (error);
 
 	sc->hw.dev_spec._i225.eee_disable = (value != 0);
-	igc_if_init(sc->ctx);
+	device_printf(sc->dev, "igc_sysctl_eee: requested init\n");
+	iflib_request_reset(sc->ctx);
 
 	return (0);
 }
