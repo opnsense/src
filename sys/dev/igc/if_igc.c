@@ -270,6 +270,14 @@ static int igc_enable_aim = 1;
 SYSCTL_INT(_hw_igc, OID_AUTO, enable_aim, CTLFLAG_RWTUN, &igc_enable_aim,
     0, "Enable adaptive interrupt moderation (1=normal, 2=lowlatency)");
 
+
+/**
+ * TMP: Debug verbosity
+ */
+static int igc_debug_level = 0;
+SYSCTL_INT(_hw_igc, OID_AUTO, debug_level, CTLFLAG_RWTUN, &igc_debug_level,
+    0, "Debug level (0=off, 1=low, 2=high)");
+
 /*
 ** Tuneable Interrupt rate
 */
@@ -488,6 +496,13 @@ igc_if_attach_pre(if_ctx_t ctx)
 	    OID_AUTO, "enable_aim", CTLFLAG_RW,
 	    &sc->enable_aim, 0,
 	    "Interrupt Moderation (1=normal, 2=lowlatency)");
+
+	sc->debug_level = igc_debug_level;
+	SYSCTL_ADD_INT(device_get_sysctl_ctx(dev),
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)),
+	    OID_AUTO, "debug_level", CTLFLAG_RW,
+	    &sc->debug_level, 0,
+	    "Debug level (0=off, 1=low, 2=high)");
 
 	SYSCTL_ADD_PROC(device_get_sysctl_ctx(dev),
 	    SYSCTL_CHILDREN(device_get_sysctl_tree(dev)),
@@ -789,7 +804,9 @@ igc_if_suspend(if_ctx_t ctx)
 static int
 igc_if_resume(if_ctx_t ctx)
 {
-	printf("igc_if_resume: requested init\n");
+	struct igc_softc *sc = iflib_get_softc(ctx);
+
+	igc_printf(0, "igc_if_resume: requested init\n");
 	igc_if_init(ctx);
 
 	return(0);
@@ -1271,7 +1288,8 @@ igc_if_media_change(if_ctx_t ctx)
 		device_printf(sc->dev, "Unsupported media type\n");
 	}
 
-	device_printf(sc->dev, "igc_if_media_change: requested init\n");
+
+	igc_printf(0, "igc_if_media_change: requested init\n");
 	iflib_request_reset(sc->ctx);
 
 	return (0);
@@ -3204,7 +3222,7 @@ igc_sysctl_dmac(SYSCTL_HANDLER_ARGS)
 			return (EINVAL);
 	}
 	/* Reinit the interface */
-	device_printf(sc->dev, "igc_sysctl_dmac: requested init\n");
+	igc_printf(0, "igc_sysctl_dmac: requested init\n");
 	iflib_request_reset(sc->ctx);
 	return (error);
 }
@@ -3226,7 +3244,7 @@ igc_sysctl_eee(SYSCTL_HANDLER_ARGS)
 		return (error);
 
 	sc->hw.dev_spec._i225.eee_disable = (value != 0);
-	device_printf(sc->dev, "igc_sysctl_eee: requested init\n");
+	igc_printf(0, "igc_sysctl_eee: requested init\n");
 	iflib_request_reset(sc->ctx);
 
 	return (0);
