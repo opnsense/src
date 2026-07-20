@@ -198,6 +198,11 @@
 #define HW_DEBUGOUT1(S, A)          if (DEBUG_HW) printf(S "\n", A)
 #define HW_DEBUGOUT2(S, A, B)       if (DEBUG_HW) printf(S "\n", A, B)
 
+#define igc_printf(lvl, ...) do {			\
+	if (lvl <= sc->debug_level)			\
+		device_printf(sc->dev, __VA_ARGS__);	\
+} while (0)
+
 #define IGC_MAX_SCATTER			40
 #define IGC_VFTA_SIZE			128
 #define IGC_TSO_SIZE			65535
@@ -336,6 +341,8 @@ struct igc_softc {
 	u32		rx_mbuf_sz;
 
 	int		enable_aim;
+
+	int		debug_level;
 
 	/* Management and WOL features */
 	u32		wol;
