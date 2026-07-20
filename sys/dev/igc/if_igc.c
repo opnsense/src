@@ -900,7 +900,7 @@ igc_if_init(if_ctx_t ctx)
 	if (sc->intr_type == IFLIB_INTR_MSIX) /* Set up queue routing */
 		igc_configure_queues(sc);
 
-	igc_printf(2, "%s: init clearing pending causes\n", __func__);
+	igc_printf(1, "%s: init clearing pending causes\n", __func__);
 	/* this clears any pending interrupts */
 	IGC_READ_REG(&sc->hw, IGC_ICR);
 	igc_printf(1, "%s: init forcing link-status interrupt\n", __func__);
@@ -1193,13 +1193,13 @@ igc_msix_link(void *arg)
 	MPASS(sc->hw.back != NULL);
 	reg_icr = IGC_READ_REG(&sc->hw, IGC_ICR);
 
-	if (reg_icr & (IGC_ICR_LSC | IGC_ICR_RXSEQ)) {
-		igc_printf(1,
-		"%s: link event ICR=%#x lsc=%d rxseq=%d\n",
-		__func__, reg_icr,
-		!!(reg_icr & IGC_ICR_LSC),
-		!!(reg_icr & IGC_ICR_RXSEQ));
-	}
+	// if (reg_icr & (IGC_ICR_LSC | IGC_ICR_RXSEQ)) {
+	// 	igc_printf(1,
+	// 	"%s: link event ICR=%#x lsc=%d rxseq=%d\n",
+	// 	__func__, reg_icr,
+	// 	!!(reg_icr & IGC_ICR_LSC),
+	// 	!!(reg_icr & IGC_ICR_RXSEQ));
+	// }
 
 	if (reg_icr & IGC_ICR_RXO)
 		sc->rx_overruns++;
@@ -1220,7 +1220,7 @@ igc_handle_link(void *context)
 	if_ctx_t ctx = context;
 	struct igc_softc *sc = iflib_get_softc(ctx);
 
-	igc_printf(2, "%s: mark link status stale and defer admin task\n", __func__);
+	// igc_printf(2, "%s: mark link status stale and defer admin task\n", __func__);
 	sc->hw.mac.get_link_status = true;
 	iflib_admin_intr_deferred(ctx);
 }
