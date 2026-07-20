@@ -900,8 +900,10 @@ igc_if_init(if_ctx_t ctx)
 	if (sc->intr_type == IFLIB_INTR_MSIX) /* Set up queue routing */
 		igc_configure_queues(sc);
 
+	igc_printf(2, "%s: init clearing pending causes\n", __func__);
 	/* this clears any pending interrupts */
 	IGC_READ_REG(&sc->hw, IGC_ICR);
+	igc_printf(1, "%s: init forcing link-status interrupt\n", __func__);
 	IGC_WRITE_REG(&sc->hw, IGC_ICS, IGC_ICS_LSC);
 
 	/* the driver can now take control from firmware */
@@ -1050,6 +1052,13 @@ igc_set_next_eitr:
 	neweitr |= IGC_EITR_CNT_IGNR;
 
 	if (neweitr != que->eitr_setting) {
+		igc_printf(2,
+			"%s: AIM q=%u vec=%u state=%u eitr=%#x->%#x "
+			"tx=%lu/%lu rx=%lu/%lu\n",
+			__func__,
+			que->me, que->msix, nextlatency,
+			que->eitr_setting, neweitr,
+			txpackets, txbytes, rxpackets, rxbytes);
 		que->eitr_setting = neweitr;
 		IGC_WRITE_REG(hw, IGC_EITR(que->msix), que->eitr_setting);
 	}
@@ -1092,6 +1101,15 @@ igc_intr(void *arg)
 	 */
 	IFDI_INTR_DISABLE(ctx);
 
+	if (reg_icr & (IGC_ICR_LSC | IGC_ICR_RXSEQ | IGC_ICR_RXO)) {
+		igc_printf((reg_icr & IGC_ICR_RXO) ? 0 : 2,
+		"intr: combined cause=%#x lsc=%d rxseq=%d rxo=%d\n",
+		reg_icr,
+		!!(reg_icr & IGC_ICR_LSC),
+		!!(reg_icr & IGC_ICR_RXSEQ),
+		!!(reg_icr & IGC_ICR_RXO));
+	}
+
 	/* Link status change */
 	if (reg_icr & (IGC_ICR_RXSEQ | IGC_ICR_LSC))
 		igc_handle_link(ctx);
@@ -1116,6 +1134,8 @@ igc_if_rx_queue_intr_enable(if_ctx_t ctx, uint16_t rxqid)
 	struct igc_softc *sc = iflib_get_softc(ctx);
 	struct igc_rx_queue *rxq = &sc->rx_queues[rxqid];
 
+	igc_printf(3, "%s: RX queue re-enable q=%u vector=%u mask=%#x\n", __func__, rxqid, rxq->msix, rxq->eims);
+
 	IGC_WRITE_REG(&sc->hw, IGC_EIMS, rxq->eims);
 	return (0);
 }
@@ -1125,6 +1145,8 @@ igc_if_tx_queue_intr_enable(if_ctx_t ctx, uint16_t txqid)
 {
 	struct igc_softc *sc = iflib_get_softc(ctx);
 	struct igc_tx_queue *txq = &sc->tx_queues[txqid];
+
+	igc_printf(3, "%s: TX queue re-enable q=%u vector=%u mask=%#x\n", __func__, txqid, txq->msix, txq->eims);
 
 	IGC_WRITE_REG(&sc->hw, IGC_EIMS, txq->eims);
 	return (0);
@@ -1171,6 +1193,14 @@ igc_msix_link(void *arg)
 	MPASS(sc->hw.back != NULL);
 	reg_icr = IGC_READ_REG(&sc->hw, IGC_ICR);
 
+	if (reg_icr & (IGC_ICR_LSC | IGC_ICR_RXSEQ)) {
+		igc_printf(1,
+		"%s: link event ICR=%#x lsc=%d rxseq=%d\n",
+		__func__, reg_icr,
+		!!(reg_icr & IGC_ICR_LSC),
+		!!(reg_icr & IGC_ICR_RXSEQ));
+	}
+
 	if (reg_icr & IGC_ICR_RXO)
 		sc->rx_overruns++;
 
@@ -1190,6 +1220,7 @@ igc_handle_link(void *context)
 	if_ctx_t ctx = context;
 	struct igc_softc *sc = iflib_get_softc(ctx);
 
+	igc_printf(2, "%s: mark link status stale and defer admin task\n", __func__);
 	sc->hw.mac.get_link_status = true;
 	iflib_admin_intr_deferred(ctx);
 }
@@ -1410,6 +1441,8 @@ igc_if_update_admin_status(if_ctx_t ctx)
 	device_t dev = iflib_get_dev(ctx);
 	u32 link_check, thstat, ctrl;
 
+	igc_printf(2, "%s: admin task enter get_link_status=%d active=%d\n", __func__, hw->mac.get_link_status, sc->link_active);
+
 	link_check = thstat = ctrl = 0;
 	/* Get the cached link value or read phy for real */
 	switch (hw->phy.media_type) {
@@ -1448,6 +1481,8 @@ igc_if_update_admin_status(if_ctx_t ctx)
 		iflib_link_state_change(ctx, LINK_STATE_DOWN, 0);
 	}
 	igc_update_stats_counters(sc);
+
+	igc_printf(2, "%s: admin task exit active=%d get_link_status=%d\n", __func__, sc->link_active, hw->mac.get_link_status);
 }
 
 static void
@@ -1546,12 +1581,18 @@ igc_if_msix_intr_assign(if_ctx_t ctx, int msix)
 	struct igc_rx_queue *rx_que = sc->rx_queues;
 	struct igc_tx_queue *tx_que = sc->tx_queues;
 	int error, rid, i, vector = 0, rx_vectors;
+	if_softc_ctx_t scctx = sc->shared;
 	char buf[16];
+
+	igc_printf(1,
+		"%s: MSI-X assign requested=%d rxqsets=%d txqsets=%d\n",
+		__func__, msix, scctx->isc_nrxqsets, scctx->isc_ntxqsets);
 
 	/* First set up ring resources */
 	for (i = 0; i < sc->rx_num_queues; i++, rx_que++, vector++) {
 		rid = vector + 1;
 		snprintf(buf, sizeof(buf), "rxq%d", i);
+		igc_printf(2, "%s: assign RX queue=%d vector=%d\n", __func__, i, vector);
 		error = iflib_irq_alloc_generic(ctx, &rx_que->que_irq, rid,
 		    IFLIB_INTR_RXTX, igc_msix_que, rx_que, rx_que->me, buf);
 		if (error) {
@@ -1578,6 +1619,7 @@ igc_if_msix_intr_assign(if_ctx_t ctx, int msix)
 	for (i = 0; i < sc->tx_num_queues; i++, tx_que++, vector++) {
 		snprintf(buf, sizeof(buf), "txq%d", i);
 		tx_que = &sc->tx_queues[i];
+		igc_printf(2, "%s: assign TX softirq queue=%d associated_rxq=%d\n", __func__,  i, i % sc->rx_num_queues);
 		iflib_softirq_alloc_generic(ctx,
 		    &sc->rx_queues[i % sc->rx_num_queues].que_irq,
 		    IFLIB_INTR_TX, tx_que, tx_que->me, buf);
@@ -1595,6 +1637,7 @@ igc_if_msix_intr_assign(if_ctx_t ctx, int msix)
 
 	/* Link interrupt */
 	rid = rx_vectors + 1;
+	igc_printf(2, "%s: assign admin/link rid=%d\n", __func__, rid);
 	error = iflib_irq_alloc_generic(ctx, &sc->irq, rid, IFLIB_INTR_ADMIN,
 	    igc_msix_link, sc, 0, "aq");
 
@@ -1620,6 +1663,8 @@ igc_configure_queues(struct igc_softc *sc)
 	struct igc_rx_queue *rx_que;
 	struct igc_tx_queue *tx_que;
 	u32 ivar = 0, newitr = 0;
+
+	igc_printf(1, "%s: configure routing rxqs=%d txqs=%d\n", __func__, sc->rx_num_queues, sc->tx_num_queues);
 
 	/* First turn on RSS capability */
 	IGC_WRITE_REG(hw, IGC_GPIE,
@@ -2372,6 +2417,8 @@ igc_if_intr_enable(if_ctx_t ctx)
 	struct igc_hw *hw = &sc->hw;
 	u32 mask;
 
+	igc_printf(1, "%s: global enable type=%d\n", __func__, sc->intr_type);
+
 	if (__predict_true(sc->intr_type == IFLIB_INTR_MSIX)) {
 		mask = (sc->que_mask | sc->link_mask);
 		IGC_WRITE_REG(hw, IGC_EIAC, mask);
@@ -2388,6 +2435,8 @@ igc_if_intr_disable(if_ctx_t ctx)
 {
 	struct igc_softc *sc = iflib_get_softc(ctx);
 	struct igc_hw *hw = &sc->hw;
+
+	igc_printf(1, "%s: global disable type=%d\n", __func__, sc->intr_type);
 
 	if (__predict_true(sc->intr_type == IFLIB_INTR_MSIX)) {
 		IGC_WRITE_REG(hw, IGC_EIMC, 0xffffffff);
