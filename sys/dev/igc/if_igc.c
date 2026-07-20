@@ -806,7 +806,7 @@ igc_if_resume(if_ctx_t ctx)
 {
 	struct igc_softc *sc = iflib_get_softc(ctx);
 
-	igc_printf(0, "igc_if_resume: requested init\n");
+	igc_printf(0, "%s: requested init\n", __func__);
 	igc_if_init(ctx);
 
 	return(0);
@@ -1288,8 +1288,7 @@ igc_if_media_change(if_ctx_t ctx)
 		device_printf(sc->dev, "Unsupported media type\n");
 	}
 
-
-	igc_printf(0, "igc_if_media_change: requested init\n");
+	igc_printf(0, "%s: requested init\n", __func__);
 	iflib_request_reset(sc->ctx);
 
 	return (0);
@@ -3222,7 +3221,7 @@ igc_sysctl_dmac(SYSCTL_HANDLER_ARGS)
 			return (EINVAL);
 	}
 	/* Reinit the interface */
-	igc_printf(0, "igc_sysctl_dmac: requested init\n");
+	igc_printf(0, "%s: requested init\n", __func__);
 	iflib_request_reset(sc->ctx);
 	return (error);
 }
@@ -3244,7 +3243,7 @@ igc_sysctl_eee(SYSCTL_HANDLER_ARGS)
 		return (error);
 
 	sc->hw.dev_spec._i225.eee_disable = (value != 0);
-	igc_printf(0, "igc_sysctl_eee: requested init\n");
+	igc_printf(0, "%s: requested init\n", __func__);
 	iflib_request_reset(sc->ctx);
 
 	return (0);
