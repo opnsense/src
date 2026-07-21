@@ -474,9 +474,9 @@ igc_if_attach_pre(if_ctx_t ctx)
 	struct igc_hw *hw;
 	int error = 0;
 
-	INIT_DEBUGOUT("igc_if_attach_pre: begin");
 	dev = iflib_get_dev(ctx);
 	sc = iflib_get_softc(ctx);
+	igc_printf(0, "%s: begin\n", __func__);
 
 	sc->ctx = sc->osdep.ctx = ctx;
 	sc->dev = sc->osdep.dev = dev;
@@ -739,7 +739,7 @@ igc_if_attach_post(if_ctx_t ctx)
 	/* the driver can now take control from firmware */
 	igc_get_hw_control(sc);
 
-	INIT_DEBUGOUT("igc_if_attach_post: end");
+	igc_printf(0, "%s: end\n", __func__);
 
 	return (error);
 
@@ -766,7 +766,7 @@ igc_if_detach(if_ctx_t ctx)
 {
 	struct igc_softc	*sc = iflib_get_softc(ctx);
 
-	INIT_DEBUGOUT("igc_if_detach: begin");
+	igc_printf(0, "%s: begin\n", __func__);
 
 	igc_phy_hw_reset(&sc->hw);
 
@@ -819,7 +819,7 @@ igc_if_mtu_set(if_ctx_t ctx, uint32_t mtu)
 	struct igc_softc *sc = iflib_get_softc(ctx);
 	if_softc_ctx_t scctx = iflib_get_softc_ctx(ctx);
 
-	IOCTL_DEBUGOUT("ioctl rcv'd: SIOCSIFMTU (Set Interface MTU)");
+	igc_printf(0, "%s: ioctl rcv'd: SIOCSIFMTU (Set Interface MTU)\n", __func__);
 
 	 /* 9K Jumbo Frame size */
 	 max_frame_size = 9234;
@@ -851,8 +851,7 @@ igc_if_init(if_ctx_t ctx)
 	struct igc_tx_queue *tx_que;
 	int i;
 
-	INIT_DEBUGOUT("igc_if_init: begin");
-
+	igc_printf(0, "%s: begin\n", __func__);
 	/* Get the latest mac address, User can use a LAA */
 	bcopy(if_getlladdr(ifp), sc->hw.mac.addr,
 	    ETHER_ADDR_LEN);
@@ -862,6 +861,7 @@ igc_if_init(if_ctx_t ctx)
 
 	/* Initialize the hardware */
 	igc_reset(ctx);
+
 	igc_if_update_admin_status(ctx);
 
 	for (i = 0, tx_que = sc->tx_queues; i < sc->tx_num_queues;
@@ -900,10 +900,10 @@ igc_if_init(if_ctx_t ctx)
 	if (sc->intr_type == IFLIB_INTR_MSIX) /* Set up queue routing */
 		igc_configure_queues(sc);
 
-	igc_printf(1, "%s: init clearing pending causes\n", __func__);
+	igc_printf(0, "%s: init clearing pending causes\n", __func__);
 	/* this clears any pending interrupts */
 	IGC_READ_REG(&sc->hw, IGC_ICR);
-	igc_printf(1, "%s: init forcing link-status interrupt\n", __func__);
+	igc_printf(0, "%s: init forcing link-status interrupt\n", __func__);
 	IGC_WRITE_REG(&sc->hw, IGC_ICS, IGC_ICS_LSC);
 
 	/* the driver can now take control from firmware */
@@ -1052,13 +1052,6 @@ igc_set_next_eitr:
 	neweitr |= IGC_EITR_CNT_IGNR;
 
 	if (neweitr != que->eitr_setting) {
-		igc_printf(2,
-			"%s: AIM q=%u vec=%u state=%u eitr=%#x->%#x "
-			"tx=%lu/%lu rx=%lu/%lu\n",
-			__func__,
-			que->me, que->msix, nextlatency,
-			que->eitr_setting, neweitr,
-			txpackets, txbytes, rxpackets, rxbytes);
 		que->eitr_setting = neweitr;
 		IGC_WRITE_REG(hw, IGC_EITR(que->msix), que->eitr_setting);
 	}
@@ -1134,8 +1127,6 @@ igc_if_rx_queue_intr_enable(if_ctx_t ctx, uint16_t rxqid)
 	struct igc_softc *sc = iflib_get_softc(ctx);
 	struct igc_rx_queue *rxq = &sc->rx_queues[rxqid];
 
-	igc_printf(3, "%s: RX queue re-enable q=%u vector=%u mask=%#x\n", __func__, rxqid, rxq->msix, rxq->eims);
-
 	IGC_WRITE_REG(&sc->hw, IGC_EIMS, rxq->eims);
 	return (0);
 }
@@ -1145,8 +1136,6 @@ igc_if_tx_queue_intr_enable(if_ctx_t ctx, uint16_t txqid)
 {
 	struct igc_softc *sc = iflib_get_softc(ctx);
 	struct igc_tx_queue *txq = &sc->tx_queues[txqid];
-
-	igc_printf(3, "%s: TX queue re-enable q=%u vector=%u mask=%#x\n", __func__, txqid, txq->msix, txq->eims);
 
 	IGC_WRITE_REG(&sc->hw, IGC_EIMS, txq->eims);
 	return (0);
@@ -1193,13 +1182,15 @@ igc_msix_link(void *arg)
 	MPASS(sc->hw.back != NULL);
 	reg_icr = IGC_READ_REG(&sc->hw, IGC_ICR);
 
-	// if (reg_icr & (IGC_ICR_LSC | IGC_ICR_RXSEQ)) {
-	// 	igc_printf(1,
-	// 	"%s: link event ICR=%#x lsc=%d rxseq=%d\n",
-	// 	__func__, reg_icr,
-	// 	!!(reg_icr & IGC_ICR_LSC),
-	// 	!!(reg_icr & IGC_ICR_RXSEQ));
-	// }
+	if (reg_icr & (IGC_ICR_LSC | IGC_ICR_RXSEQ | IGC_ICR_RXO)) {
+		igc_printf(0,
+		"%s: combined cause=%#x lsc=%d rxseq=%d rxo=%d\n",
+		__func__,
+		reg_icr,
+		!!(reg_icr & IGC_ICR_LSC),
+		!!(reg_icr & IGC_ICR_RXSEQ),
+		!!(reg_icr & IGC_ICR_RXO));
+	}
 
 	if (reg_icr & IGC_ICR_RXO)
 		sc->rx_overruns++;
@@ -1220,7 +1211,6 @@ igc_handle_link(void *context)
 	if_ctx_t ctx = context;
 	struct igc_softc *sc = iflib_get_softc(ctx);
 
-	// igc_printf(2, "%s: mark link status stale and defer admin task\n", __func__);
 	sc->hw.mac.get_link_status = true;
 	iflib_admin_intr_deferred(ctx);
 }
@@ -1237,8 +1227,6 @@ static void
 igc_if_media_status(if_ctx_t ctx, struct ifmediareq *ifmr)
 {
 	struct igc_softc *sc = iflib_get_softc(ctx);
-
-	INIT_DEBUGOUT("igc_if_media_status: begin");
 
 	iflib_admin_intr_deferred(ctx);
 
@@ -1286,7 +1274,7 @@ igc_if_media_change(if_ctx_t ctx)
 	struct igc_softc *sc = iflib_get_softc(ctx);
 	struct ifmedia *ifm = iflib_get_media(ctx);
 
-	INIT_DEBUGOUT("igc_if_media_change: begin");
+	igc_printf(0, "%s: begin\n", __func__);
 
 	if (IFM_TYPE(ifm->ifm_media) != IFM_ETHER)
 		return (EINVAL);
@@ -1388,7 +1376,7 @@ igc_if_multi_set(if_ctx_t ctx)
 	u32 reg_rctl = 0;
 	int mcnt = 0;
 
-	IOCTL_DEBUGOUT("igc_set_multi: begin");
+	igc_printf(0, "%s: begin\n", __func__);
 
 	mta = sc->mta;
 	bzero(mta, sizeof(u8) * ETHER_ADDR_LEN * MAX_NUM_MULTICAST_ADDRESSES);
@@ -1441,8 +1429,6 @@ igc_if_update_admin_status(if_ctx_t ctx)
 	device_t dev = iflib_get_dev(ctx);
 	u32 link_check, thstat, ctrl;
 
-	igc_printf(2, "%s: admin task enter get_link_status=%d active=%d\n", __func__, hw->mac.get_link_status, sc->link_active);
-
 	link_check = thstat = ctrl = 0;
 	/* Get the cached link value or read phy for real */
 	switch (hw->phy.media_type) {
@@ -1481,8 +1467,6 @@ igc_if_update_admin_status(if_ctx_t ctx)
 		iflib_link_state_change(ctx, LINK_STATE_DOWN, 0);
 	}
 	igc_update_stats_counters(sc);
-
-	igc_printf(2, "%s: admin task exit active=%d get_link_status=%d\n", __func__, sc->link_active, hw->mac.get_link_status);
 }
 
 static void
@@ -1508,7 +1492,7 @@ igc_if_stop(if_ctx_t ctx)
 {
 	struct igc_softc *sc = iflib_get_softc(ctx);
 
-	INIT_DEBUGOUT("igc_if_stop: begin");
+	igc_printf(0, "%s: begin\n", __func__);
 
 	igc_reset_hw(&sc->hw);
 	IGC_WRITE_REG(&sc->hw, IGC_WUC, 0);
@@ -1584,7 +1568,7 @@ igc_if_msix_intr_assign(if_ctx_t ctx, int msix)
 	if_softc_ctx_t scctx = sc->shared;
 	char buf[16];
 
-	igc_printf(1,
+	igc_printf(0,
 		"%s: MSI-X assign requested=%d rxqsets=%d txqsets=%d\n",
 		__func__, msix, scctx->isc_nrxqsets, scctx->isc_ntxqsets);
 
@@ -1664,7 +1648,7 @@ igc_configure_queues(struct igc_softc *sc)
 	struct igc_tx_queue *tx_que;
 	u32 ivar = 0, newitr = 0;
 
-	igc_printf(1, "%s: configure routing rxqs=%d txqs=%d\n", __func__, sc->rx_num_queues, sc->tx_num_queues);
+	igc_printf(0, "%s: configure routing rxqs=%d txqs=%d\n", __func__, sc->rx_num_queues, sc->tx_num_queues);
 
 	/* First turn on RSS capability */
 	IGC_WRITE_REG(hw, IGC_GPIE,
@@ -1867,7 +1851,7 @@ igc_reset(if_ctx_t ctx)
 	u32 rx_buffer_size;
 	u32 pba;
 
-	INIT_DEBUGOUT("igc_reset: begin");
+	igc_printf(0, "%s: begin\n", __func__);
 	/* Let the firmware know the OS is in control */
 	igc_get_hw_control(sc);
 
@@ -1877,8 +1861,6 @@ igc_reset(if_ctx_t ctx)
 	 * the remainder is used for the transmit buffer.
 	 */
 	pba = IGC_PBA_34K;
-
-	INIT_DEBUGOUT1("igc_reset: pba=%dK",pba);
 
 	/*
 	 * These parameters control the automatic generation (Tx) and
@@ -2040,7 +2022,7 @@ igc_setup_interface(if_ctx_t ctx)
 	struct igc_softc *sc = iflib_get_softc(ctx);
 	if_softc_ctx_t scctx = sc->shared;
 
-	INIT_DEBUGOUT("igc_setup_interface: begin");
+	igc_printf(0, "%s: begin\n", __func__);
 
 	/* Single Queue */
 	if (sc->tx_num_queues == 1) {
@@ -2207,7 +2189,7 @@ igc_initialize_transmit_unit(if_ctx_t ctx)
 	struct igc_hw	*hw = &sc->hw;
 	u32 tctl, txdctl = 0;
 
-	INIT_DEBUGOUT("igc_initialize_transmit_unit: begin");
+	igc_printf(0, "%s: begin\n", __func__);
 
 	for (int i = 0; i < sc->tx_num_queues; i++, txr++) {
 		u64 bus_addr;
@@ -2275,8 +2257,6 @@ igc_initialize_receive_unit(if_ctx_t ctx)
 	struct igc_rx_queue *que;
 	int i;
 	u32 psize, rctl, rxcsum, srrctl = 0;
-
-	INIT_DEBUGOUT("igc_initialize_receive_units: begin");
 
 	/*
 	 * Make sure receives are disabled while setting
@@ -2417,7 +2397,7 @@ igc_if_intr_enable(if_ctx_t ctx)
 	struct igc_hw *hw = &sc->hw;
 	u32 mask;
 
-	igc_printf(1, "%s: global enable type=%d\n", __func__, sc->intr_type);
+	igc_printf(0, "%s: global enable\n", __func__);
 
 	if (__predict_true(sc->intr_type == IFLIB_INTR_MSIX)) {
 		mask = (sc->que_mask | sc->link_mask);
@@ -2436,7 +2416,7 @@ igc_if_intr_disable(if_ctx_t ctx)
 	struct igc_softc *sc = iflib_get_softc(ctx);
 	struct igc_hw *hw = &sc->hw;
 
-	igc_printf(1, "%s: global disable type=%d\n", __func__, sc->intr_type);
+	igc_printf(0, "%s: global disable\n", __func__);
 
 	if (__predict_true(sc->intr_type == IFLIB_INTR_MSIX)) {
 		IGC_WRITE_REG(hw, IGC_EIMC, 0xffffffff);
