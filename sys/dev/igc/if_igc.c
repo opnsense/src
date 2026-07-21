@@ -807,7 +807,6 @@ igc_if_resume(if_ctx_t ctx)
 	struct igc_softc *sc = iflib_get_softc(ctx);
 
 	igc_printf(0, "%s: requested init\n", __func__);
-	igc_if_init(ctx);
 
 	return(0);
 }
