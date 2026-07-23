@@ -1560,14 +1560,22 @@ igc_disable_broken_aspm_l1_2(if_ctx_t ctx)
 	int cap;
 	uint32_t ctl1;
 
+	igc_printf(0, "%s: begin\n", __func__);
+
 	if (!igc_is_device_id_i226(&sc->hw))
 		return;
 
-	if (pci_find_extcap(dev, PCIZ_L1PM, &cap) != 0)
+	if (pci_find_extcap(dev, PCIZ_L1PM, &cap) != 0) {
+		igc_printf(0,
+		    "%s: pci_find_extcap(dev, PCIZ_L1PM, &cap) != 0\n",
+		    __func__);
 		return;
+	}
 
 	ctl1 = pci_read_config(dev, cap + PCIR_L1PM_CTL1, 4);
+	igc_printf(0, "%s: read_config ctl1=%#x\n", __func__, ctl1);
 	ctl1 &= ~(PCIM_L1PM_CTL1_ASPM_L1_2 | PCIM_L1PM_CTL1_PCIPM_L1_2);
+	igc_printf(0, "%s: write_config ctl1=%#x\n", __func__, ctl1);
 	pci_write_config(dev, cap + PCIR_L1PM_CTL1, ctl1, 4);
 }
 
