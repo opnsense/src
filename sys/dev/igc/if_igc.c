@@ -1557,7 +1557,9 @@ igc_disable_broken_aspm_l1_2(if_ctx_t ctx)
 {
 	device_t dev = iflib_get_dev(ctx);
 	struct igc_softc *sc = iflib_get_softc(ctx);
-	int cap;
+	int pcie_cap;
+	int l1ss_cap;
+	uint16_t linkctl;
 	uint32_t ctl1;
 
 	igc_printf(0, "%s: begin\n", __func__);
@@ -1565,18 +1567,34 @@ igc_disable_broken_aspm_l1_2(if_ctx_t ctx)
 	if (!igc_is_device_id_i226(&sc->hw))
 		return;
 
-	if (pci_find_extcap(dev, PCIZ_L1PM, &cap) != 0) {
-		igc_printf(0,
-		    "%s: pci_find_extcap(dev, PCIZ_L1PM, &cap) != 0\n",
-		    __func__);
-		return;
-	}
+	/* Locate and disable base PCIe ASPM L0s and L1. */
+	if (pci_find_cap(dev, PCIY_EXPRESS, &pcie_cap) == 0) {
+		linkctl = pci_read_config(dev,
+			pcie_cap + PCIER_LINK_CTL, 2);
 
-	ctl1 = pci_read_config(dev, cap + PCIR_L1PM_CTL1, 4);
-	igc_printf(0, "%s: read_config ctl1=%#x\n", __func__, ctl1);
-	ctl1 &= ~(PCIM_L1PM_CTL1_ASPM_L1_2 | PCIM_L1PM_CTL1_PCIPM_L1_2);
-	igc_printf(0, "%s: write_config ctl1=%#x\n", __func__, ctl1);
-	pci_write_config(dev, cap + PCIR_L1PM_CTL1, ctl1, 4);
+		igc_printf(0, "%s: read_config linkctl=%#x\n", __func__, linkctl);
+		linkctl &= ~PCIEM_LINK_CTL_ASPMC;
+
+		igc_printf(0, "%s: write_config linkctl=%#x\n", __func__, linkctl);
+		pci_write_config(dev,
+			pcie_cap + PCIER_LINK_CTL, linkctl, 2);
+    }
+
+	/* Locate and disable all L1 PM substates. */
+	if (pci_find_extcap(dev, PCIZ_L1PM, &l1ss_cap) == 0) {
+		ctl1 = pci_read_config(dev,
+			l1ss_cap + PCIR_L1PM_CTL1, 4);
+
+		igc_printf(0, "%s: read_config ctl1=%#x\n", __func__, ctl1);
+		ctl1 &= ~(PCIM_L1PM_CTL1_PCIPM_L1_2 |
+			PCIM_L1PM_CTL1_PCIPM_L1_1 |
+			PCIM_L1PM_CTL1_ASPM_L1_2 |
+			PCIM_L1PM_CTL1_ASPM_L1_1);
+
+		igc_printf(0, "%s: write_config ctl1=%#x\n", __func__, ctl1);
+		pci_write_config(dev,
+			l1ss_cap + PCIR_L1PM_CTL1, ctl1, 4);
+    }
 }
 
 static int
