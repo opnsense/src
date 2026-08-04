@@ -116,6 +116,7 @@ static void	igc_identify_hardware(if_ctx_t);
 static int	igc_allocate_pci_resources(if_ctx_t);
 static void	igc_free_pci_resources(if_ctx_t);
 static void	igc_disable_broken_l1_2(if_ctx_t);
+static void	igc_disable_pcie_aspm(if_ctx_t);
 static void	igc_reset(if_ctx_t);
 static int	igc_setup_interface(if_ctx_t);
 static int	igc_setup_msix(if_ctx_t);
@@ -547,6 +548,9 @@ igc_if_attach_pre(if_ctx_t ctx)
 
 	/* Determine hardware and mac info */
 	igc_identify_hardware(ctx);
+
+	/* Disable PCIe ASPM  */
+	igc_disable_pcie_aspm(ctx);
 
 	/* Apply device-specific PCIe L1.2 errata workarounds. */
 	igc_disable_broken_l1_2(ctx);
@@ -1280,7 +1284,7 @@ igc_if_media_change(if_ctx_t ctx)
 		device_printf(sc->dev, "Unsupported media type\n");
 	}
 
-	igc_if_init(ctx);
+	iflib_request_reset(sc->ctx);
 
 	return (0);
 }
@@ -1534,6 +1538,32 @@ igc_disable_broken_l1_2(if_ctx_t ctx)
 	ctl1 = pci_read_config(dev, cap + PCIR_L1PM_CTL1, 4);
 	ctl1 &= ~mask;
 	pci_write_config(dev, cap + PCIR_L1PM_CTL1, ctl1, 4);
+}
+
+/*********************************************************************
+ *
+ * In order to function reliably, ASPM needs to be disabled, in some cases
+ * strange link and througput issues exist otherwise.  For now, only apply
+ * this setting on I226 cards.
+ *
+ **********************************************************************/
+static void
+igc_disable_pcie_aspm(if_ctx_t ctx)
+{
+	device_t dev = iflib_get_dev(ctx);
+	struct igc_softc *sc = iflib_get_softc(ctx);
+	int cap;
+	uint32_t linkctl;
+
+	if (!igc_is_device_id_i226(&sc->hw))
+		return;
+
+	if (pci_find_cap(dev, PCIY_EXPRESS, &cap) != 0)
+		return;
+
+	linkctl = pci_read_config(dev, cap + PCIER_LINK_CTL, 2);
+	linkctl &= ~PCIEM_LINK_CTL_ASPMC;
+	pci_write_config(dev, cap + PCIER_LINK_CTL, linkctl, 2);
 }
 
 static int
@@ -3248,7 +3278,7 @@ igc_sysctl_dmac(SYSCTL_HANDLER_ARGS)
 			return (EINVAL);
 	}
 	/* Reinit the interface */
-	igc_if_init(sc->ctx);
+	iflib_request_reset(sc->ctx);
 	return (error);
 }
 
@@ -3269,7 +3299,7 @@ igc_sysctl_eee(SYSCTL_HANDLER_ARGS)
 		return (error);
 
 	sc->hw.dev_spec._i225.eee_disable = (value != 0);
-	igc_if_init(sc->ctx);
+	iflib_request_reset(sc->ctx);
 
 	return (0);
 }
