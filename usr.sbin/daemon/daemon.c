@@ -689,7 +689,6 @@ static bool
 listen_child(struct daemon_state *state)
 {
 	ssize_t rv;
-	unsigned char *cp;
 
 	assert(state != NULL);
 	assert(state->pos < LBUF_SIZE - 1);
@@ -697,20 +696,17 @@ listen_child(struct daemon_state *state)
 	rv = read(state->pipe_rd, state->buf + state->pos,
 	    LBUF_SIZE - state->pos - 1);
 	if (rv > 0) {
+		unsigned char *cp;
+
 		state->pos += rv;
 		assert(state->pos <= LBUF_SIZE - 1);
 		/* Always NUL-terminate just in case. */
 		state->buf[LBUF_SIZE - 1] = '\0';
-
 		/*
-		 * Find position of the last newline in the buffer.
-		 * The buffer is guaranteed to have one or more complete lines
-		 * if at least one newline was found when searching in reverse.
-		 * All complete lines are flushed.
+		 * Chomp line by line until we run out of buffer.
 		 * This does not take NUL characters into account.
 		 */
-		cp = memrchr(state->buf, '\n', state->pos);
-		if (cp != NULL) {
+		while ((cp = memchr(state->buf, '\n', state->pos)) != NULL) {
 			size_t bytes_line = cp - state->buf + 1;
 			assert(bytes_line <= state->pos);
 			do_output(state->buf, bytes_line, state);
