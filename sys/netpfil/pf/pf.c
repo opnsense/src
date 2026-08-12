@@ -3420,11 +3420,8 @@ pf_change_ap(struct pf_pdesc *pd, struct pf_addr *a, u_int16_t *p,
 	if (pd->m->m_pkthdr.csum_flags & (CSUM_DELAY_DATA | CSUM_DELAY_DATA_IPV6))
 		*pd->pcksum = ~*pd->pcksum;
 
-	if (p == NULL) {
-		/* XXX no port -> done. no cksum to worry about. */
-		pd->m->m_pkthdr.csum_flags |= CSUM_IP;
+	if (p == NULL)  /* no port -> done. no cksum to worry about. */
 		return;
-	}
 	po = *p;
 	*p = pn;
 
