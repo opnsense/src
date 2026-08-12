@@ -271,9 +271,7 @@ struct accept_filter_arg {
 #define	AF_HYPERV	43		/* HyperV sockets */
 #define	AF_DIVERT	44		/* divert(4) */
 #define	AF_IPFWLOG	46
-
-#define	AF_MAX		47
-
+#define	AF_MAX		46
 /*
  * When allocating a new AF_ constant, please only allocate
  * even numbered constants for FreeBSD until 134 as odd numbered AF_
