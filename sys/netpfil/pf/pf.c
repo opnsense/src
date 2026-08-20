@@ -1999,14 +1999,9 @@ out:
 			return (PF_DROP);
 		}
 	}
-	if (PACKET_LOOPED(pd)) {
-		PF_STATE_UNLOCK(s);
-		return (PF_PASS);
-	}
 
 	*state = s;
-
-	return (PF_MATCH);
+	return (PACKET_LOOPED(pd) ? PF_PASS : PF_MATCH);
 }
 
 /*
@@ -7929,7 +7924,7 @@ pf_icmp_state_lookup(struct pf_state_key_cmp *key, struct pf_pdesc *pd,
 		return (PF_DROP);
 
 	action = pf_find_state(pd, key, state);
-	if (action != PF_MATCH)
+	if (action != PF_MATCH && action != PF_PASS)
 		return (action);
 
 	if ((*state)->state_flags & PFSTATE_SLOPPY)
@@ -8254,7 +8249,7 @@ pf_test_state_icmp(struct pf_kstate **state, struct pf_pdesc *pd,
 			key.port[pd2.didx] = th->th_dport;
 
 			action = pf_find_state(&pd2, &key, state);
-			if (action != PF_MATCH)
+			if (action != PF_MATCH && action != PF_PASS)
 				return (action);
 
 			if (pd->dir == (*state)->direction) {
@@ -8449,7 +8444,7 @@ pf_test_state_icmp(struct pf_kstate **state, struct pf_pdesc *pd,
 			key.port[pd2.didx] = uh->uh_dport;
 
 			action = pf_find_state(&pd2, &key, state);
-			if (action != PF_MATCH)
+			if (action != PF_MATCH && action != PF_PASS)
 				return (action);
 
 			/* translate source/destination address, if necessary */
@@ -8581,7 +8576,7 @@ pf_test_state_icmp(struct pf_kstate **state, struct pf_pdesc *pd,
 			key.port[pd2.didx] = sh->dest_port;
 
 			action = pf_find_state(&pd2, &key, state);
-			if (action != PF_MATCH)
+			if (action != PF_MATCH && action != PF_PASS)
 				return (action);
 
 			if (pd->dir == (*state)->direction) {
@@ -8967,7 +8962,7 @@ pf_test_state_icmp(struct pf_kstate **state, struct pf_pdesc *pd,
 			key.port[0] = key.port[1] = 0;
 
 			action = pf_find_state(&pd2, &key, state);
-			if (action != PF_MATCH)
+			if (action != PF_MATCH && action != PF_PASS)
 				return (action);
 
 			/* translate source/destination address, if necessary */
