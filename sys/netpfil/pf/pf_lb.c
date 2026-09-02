@@ -196,11 +196,9 @@ pf_match_translation_rule(int rs_num, struct pf_test_ctx *ctx, struct pf_krulese
 		if (r->rtableid >= 0)
 			rtableid = r->rtableid;
 		if (r->anchor == NULL) {
-			if (r->action == PF_NONAT ||
-			    r->action == PF_NORDR ||
-			    r->action == PF_NOBINAT) {
-				*ctx->rm = NULL;
-			} else {
+			if (r->action != PF_NONAT &&
+			    r->action != PF_NORDR &&
+			    r->action != PF_NOBINAT) {
 				/*
 				 * found matching r
 				 */
