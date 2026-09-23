@@ -915,9 +915,6 @@ lkpi_sta_sync_from_ni(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	bss_changed = 0;
 	rc_changed = 0;
 
-	if (updchnctx)
-		lockdep_assert_wiphy(hw->wiphy);
-
 	/*
 	 * Ensure rx_nss is at least 1 as otherwise drivers run into
 	 * unexpected problems.
