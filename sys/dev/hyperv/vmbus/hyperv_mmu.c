@@ -231,7 +231,7 @@ hv_vm_tlb_flush(pmap_t pmap, vm_offset_t addr1, vm_offset_t addr2,
 			goto native;
 	}
 	max_gvas = (PAGE_SIZE - sizeof(*flush)) / sizeof(flush->gva_list[0]);
-	if ((end == 0 || (end - start) / HV_TLB_FLUSH_UNIT) > max_gvas) {
+	if (end == 0 || ((end - start) / HV_TLB_FLUSH_UNIT) > max_gvas) {
 		status = hypercall_do_md(HVCALL_FLUSH_VIRTUAL_ADDRESS_SPACE,
 		    (uint64_t)flush, (uint64_t)NULL);
 	} else {
@@ -303,7 +303,7 @@ hv_flush_tlb_others_ex(pmap_t pmap, vm_offset_t addr1, vm_offset_t addr2,
 		    0, nr_bank, (uint64_t)flush, (uint64_t)NULL);
 	} else {
 		gva_n = fill_gva_list(&flush->hv_vp_set.bank_contents[nr_bank],
-		    end, start);
+		    start, end);
 		status = hv_do_rep_hypercall(
 		    HVCALL_FLUSH_VIRTUAL_ADDRESS_LIST_EX,
 		    gva_n, nr_bank, (uint64_t)flush, (uint64_t)NULL);
