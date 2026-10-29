@@ -3389,7 +3389,7 @@ ip6_set_fwdtag(struct mbuf *m, const struct sockaddr_in6 *dst, const struct ifne
 
 		m_tag_unlink(m, fwd_tag);
 	} else {
-		fwd_tag = m_tag_get(PACKET_TAG_IPFORWARD, sizeof(*dst),
+		fwd_tag = m_tag_get(PACKET_TAG_IPFORWARD, sizeof(*fwd_info),
 		    M_NOWAIT);
 		if (fwd_tag == NULL) {
 			return (ENOBUFS);
