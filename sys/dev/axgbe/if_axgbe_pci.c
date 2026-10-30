@@ -1494,7 +1494,10 @@ axgbe_if_attach_post(if_ctx_t ctx)
 	/* Calculate the Rx buffer size before allocating rings */
 	ret = xgbe_calc_rx_buf_size(pdata->netdev, if_getmtu(pdata->netdev));
 	pdata->rx_buf_size = ret;
-	DBGPR("%s: rx_buf_size %d\n", __func__, ret);
+	if (!pdata->sph_enable)
+		pdata->rx_buf_size = ((if_getmtu(ifp) + ETHER_HDR_LEN +
+		    ETHER_CRC_LEN <= MCLBYTES) ? MCLBYTES : MJUMPAGESIZE) / 2;
+	DBGPR("%s: rx_buf_size %d\n", __func__, pdata->rx_buf_size);
 
 	/* 
 	 * Mark the device down until it is initialized, which happens
@@ -1634,6 +1637,18 @@ axgbe_if_init(if_ctx_t ctx)
 {
 	struct axgbe_if_softc   *sc = iflib_get_softc(ctx);
 	struct xgbe_prv_data    *pdata = &sc->pdata;	
+
+	if (!pdata->sph_enable) {
+		/*
+		 * Without split header the DMA fills buffer 1 and then buffer 2
+		 * of a descriptor before it moves to the next descriptor.  Both
+		 * buffers are halves of the single cluster iflib gives us, see
+		 * axgbe_isc_rxd_refill(), so the hardware buffer size is half
+		 * the cluster size.
+		 */
+		MPASS(iflib_get_rx_mbuf_sz(ctx) == 2 * pdata->rx_buf_size);
+		pdata->rx_buf_size = iflib_get_rx_mbuf_sz(ctx) / 2;
+	}
 
 	axgbe_pci_init(pdata);
 }
@@ -2452,9 +2467,12 @@ axgbe_if_mtu_set(if_ctx_t ctx, uint32_t mtu)
 
 	ret = xgbe_calc_rx_buf_size(pdata->netdev, mtu);
         pdata->rx_buf_size = ret;
-        axgbe_printf(1, "%s: rx_buf_size %d\n", __func__, ret);
-
         sc->scctx->isc_max_frame_size = mtu + ETHER_HDR_LEN + ETHER_CRC_LEN;
+	if (!pdata->sph_enable)
+		pdata->rx_buf_size = ((sc->scctx->isc_max_frame_size <= MCLBYTES) ?
+		    MCLBYTES : MJUMPAGESIZE) / 2;
+	axgbe_printf(1, "%s: rx_buf_size %d\n", __func__, pdata->rx_buf_size);
+
         return (0);
 }
 
