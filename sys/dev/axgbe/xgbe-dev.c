@@ -1385,16 +1385,20 @@ xgbe_dev_read(struct xgbe_channel *channel)
 		    CONTEXT_NEXT, 1);
 
 	/* Get the header length */
+	rdata->rx.hdr_len = 0;
 	if (XGMAC_GET_BITS_LE(rdesc->desc3, RX_NORMAL_DESC3, FD)) {
 		XGMAC_SET_BITS(packet->attributes, RX_PACKET_ATTRIBUTES,
 		    FIRST, 1);
-		rdata->rx.hdr_len = XGMAC_GET_BITS_LE(rdesc->desc2,
-		    RX_NORMAL_DESC2, HL);
-		if (rdata->rx.hdr_len)
-			pdata->ext_stats.rx_split_header_packets++;
-	} else
+		if (pdata->sph_enable) {
+			rdata->rx.hdr_len = XGMAC_GET_BITS_LE(rdesc->desc2,
+			    RX_NORMAL_DESC2, HL);
+			if (rdata->rx.hdr_len)
+				pdata->ext_stats.rx_split_header_packets++;
+		}
+	} else {
 		XGMAC_SET_BITS(packet->attributes, RX_PACKET_ATTRIBUTES,
 		    FIRST, 0);
+	}
 
 	/* Get the RSS hash */
 	if (XGMAC_GET_BITS_LE(rdesc->desc3, RX_NORMAL_DESC3, RSV)) {

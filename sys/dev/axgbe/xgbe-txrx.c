@@ -492,11 +492,21 @@ axgbe_isc_rxd_refill(void *arg, if_rxd_update_t iru)
 				config_intr = true;
 			}
 		} else {
-			/* Fill header/buffer1 address */
-			rdesc->desc0 = rdesc->desc2 =
-			    cpu_to_le32(lower_32_bits(iru->iru_paddrs[j]));
-			rdesc->desc1 = rdesc->desc3 =
-			    cpu_to_le32(upper_32_bits(iru->iru_paddrs[j]));
+			/*
+			 * Buffer 1 is the first half of the cluster and buffer 2
+			 * the second half.  A packet that outgrows buffer 1
+			 * continues in buffer 2, which keeps it contiguous, and
+			 * then in the next descriptor.  rx_buf_size is half the
+			 * cluster size, see axgbe_if_init().
+			 */
+			uint64_t buf1 = iru->iru_paddrs[j];
+			uint64_t buf2 = buf1 + pdata->rx_buf_size;
+
+			MPASS(iru->iru_buf_size == 2 * pdata->rx_buf_size);
+			rdesc->desc0 = cpu_to_le32(lower_32_bits(buf1));
+			rdesc->desc1 = cpu_to_le32(upper_32_bits(buf1));
+			rdesc->desc2 = cpu_to_le32(lower_32_bits(buf2));
+			rdesc->desc3 = cpu_to_le32(upper_32_bits(buf2));
 
 			config_intr = true;
 		}
@@ -616,7 +626,7 @@ axgbe_isc_rxd_available(void *arg, uint16_t qsidx, qidx_t idx, qidx_t budget)
 
 static unsigned int
 xgbe_rx_buf1_len(struct xgbe_prv_data *pdata, struct xgbe_ring_data *rdata,
-    struct xgbe_packet_data *packet)
+    struct xgbe_packet_data *packet, unsigned int len)
 {
 	unsigned int ret = 0;
 
@@ -629,7 +639,7 @@ xgbe_rx_buf1_len(struct xgbe_prv_data *pdata, struct xgbe_ring_data *rdata,
 	}
 
 	/* First descriptor with split header, return header length */
-	if (rdata->rx.hdr_len) {
+	if (pdata->sph_enable && rdata->rx.hdr_len) {
 		axgbe_printf(1, "%s: hdr_len %d\n", __func__, rdata->rx.hdr_len);
 		return (rdata->rx.hdr_len);
 	}
@@ -644,21 +654,28 @@ xgbe_rx_buf1_len(struct xgbe_prv_data *pdata, struct xgbe_ring_data *rdata,
 		if (pdata->sph_enable) {
 			return (256);
 		} else {
-			return (pdata->rx_buf_size);
+			/* Buffer 1 and buffer 2 of this descriptor, both full */
+			return (2 * pdata->rx_buf_size);
 		}
 	}
 
-	/* First descriptor and last descriptor and no split header, so
-	 * calculate how much of the buffer was used, we can return the
-	 * segment length or the remaining bytes of the packet
+	/* Last descriptor and no split header, so calculate how much of the
+	 * descriptor was used for the last bit of data: the packet length
+	 * minus what the earlier descriptors of the packet carried.
 	 */
-	axgbe_printf(1, "%s: pkt_len %d buf_size %d\n", __func__, rdata->rx.len,
-	    pdata->rx_buf_size);
+	axgbe_printf(1, "%s: pkt_len %d len %d buf_size %d\n", __func__,
+	    rdata->rx.len, len, pdata->rx_buf_size);
 
 	if (pdata->sph_enable) {
 		ret = min_t(unsigned int, 256, rdata->rx.len);
 	} else {
-		ret = rdata->rx.len;
+		if (rdata->rx.len < len ||
+		    rdata->rx.len - len > 2 * pdata->rx_buf_size) {
+			axgbe_error("%s: invalid packet length %u\n", __func__,
+			    rdata->rx.len);
+			return (UINT_MAX);
+		}
+		ret = rdata->rx.len - len;
 	}
 
 	return (ret);
@@ -734,7 +751,9 @@ read_again:
 
 		if (!context) {
 			/* Get the data length in the descriptor buffers */
-			buf1_len = xgbe_rx_buf1_len(pdata, rdata, packet);
+			buf1_len = xgbe_rx_buf1_len(pdata, rdata, packet, len);
+			if (buf1_len == UINT_MAX)
+				return (EINVAL);
 			len += buf1_len;
 			if (pdata->sph_enable) {
 				buf2_len = xgbe_rx_buf2_len(pdata, rdata, packet, len);
