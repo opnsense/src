@@ -3000,7 +3000,7 @@ The following case-insensitive parameters can be configured for a
 scheduler:
 .Pp
 .Bl -tag -width indent -compact
-.It Cm type Ar {fifo | wf2q+ | rr | qfq | fq_codel | fq_pie}
+.It Cm type Ar {fifo | wf2q+ | rr | qfq | fq_codel | fq_pie | cake}
 specifies the scheduling algorithm to use.
 .Bl -tag -width indent -compact
 .It Cm fifo
@@ -3039,6 +3039,21 @@ created sub-queues are controlled by separate instances of CoDel AQM.
 implements the FQ-PIE (FlowQueue-PIE) scheduler/AQM algorithm, which similar to
 .Cm fq_codel
 but uses per sub-queue PIE AQM instance to control the queue delay.
+.It Cm cake
+implements the flow queueing and AQM parts of CAKE (Common Applications Kept
+Enhanced).
+Packets are sorted by DSCP into priority tins, hashed into flows with an
+8-way set-associative table, served by Deficit Round Robin with new flows
+first, and controlled by COBALT (CoDel with ECN marking, plus BLUE on
+overflow).
+When the pipe has a
+.Cm bw ,
+each tin may use its share of it (Bulk 1/16, Video 1/2, Voice 1/4) at
+priority; above that, tins share the rest in proportion.
+The pipe still does the rate limiting.
+This scheduler is provided by the
+.Pa dn_cake
+kernel module.
 .El
 .Pp
 .Cm fq_codel
@@ -3089,6 +3104,142 @@ So, ensure all scheduler
 configuration options not related to fq_{codel/pie} are written before
 .Cm fq_codel/fq_pie
 tokens.
+.Pp
+.Cm cake
+takes
+.Cm target ,
+.Cm interval ,
+.Cm ecn
+and
+.Cm noecn
+as for
+.Cm codel ,
+and
+.Cm quantum ,
+.Cm limit
+and
+.Cm flows
+as above, except that the minimum
+.Cm quantum
+is 300 bytes, the maximum
+.Cm limit
+is 65535 packets, and
+.Cm flows
+is per tin, rounded up to a multiple of 8.
+ECN is on by default.
+It also takes one of:
+.Bl -tag -width indent
+.It Cm besteffort
+a single tin.
+.It Cm diffserv3
+Bulk (LE, CS1), Best Effort and Voice (TOS4, VA, EF, CS6, CS7) tins.
+This is the default.
+.It Cm diffserv4
+Bulk (LE, CS1), Best Effort, Video (TOS4, CS2, AF2x, CS3, AF3x, AF4x) and
+Voice (CS4, CS5, VA, EF, CS6, CS7) tins.
+.It Cm diffserv8
+eight tins: Background (LE), High Throughput (AF1x, CS1), Best Effort,
+Low Latency (AF2x), Video (AF3x, AF4x, CS3), Interactive (CS2), Minimum
+Latency (EF, VA, CS4, CS5) and Network Control (CS6, CS7).
+.It Cm precedence
+eight tins by IP precedence, the top three DSCP bits.
+.El
+.Pp
+.Cm diffserv8
+and
+.Cm precedence
+are experimental: each tin may use 7/8 of the share of the one below it at
+priority, so busy higher tins can starve a lower one, Best Effort included.
+.Pp
+and one flow isolation mode:
+.Bl -tag -width indent
+.It Cm flowblind
+all packets of a tin share one queue.
+.It Cm srchost , dsthost , hosts
+one queue per source host, destination host, or source and destination
+pair.
+.It Cm flows
+one queue per 5-tuple flow.
+.It Cm dual-srchost , dual-dsthost
+one queue per flow, and each source (destination) host gets an equal share,
+split between its flows.
+.It Cm triple-isolate
+one queue per flow, and both source and destination hosts get fair shares,
+so it works without knowing which side is the LAN.
+This is the default.
+.El
+.Pp
+A bare
+.Cm flows
+selects the mode;
+.Cm flows Ar m
+sets the number of flow queues.
+Host isolation looks at the addresses dummynet sees, so on a NAT gateway
+the scheduler has to run where they are not yet translated: before
+.Xr pf 4
+for outbound packets and after it for inbound packets.
+.Pp
+Link-layer overhead compensation makes the pipe charge each packet for the
+bytes it takes on the bottleneck link rather than its IP length, so the
+pipe
+.Cm bw
+can be set close to the real line rate:
+.Bl -tag -width indent
+.It Cm overhead Ar n
+bytes added to each packet, from -64 to 256.
+.It Cm mpu Ar n
+minimum size of a packet on the link, up to 256 bytes.
+.It Cm atm , ptm , noatm
+ATM cell framing (48 bytes of payload in each 53 byte cell), PTM 64b/65b
+encoding (VDSL2), or neither.
+.It Cm ethernet , docsis , pppoe-ptm , bridged-ptm , conservative , raw
+presets as in tc-cake(8): Ethernet (overhead 38 mpu 84), DOCSIS cable
+(overhead 18 mpu 64), VDSL2 with PPPoE (overhead 30 ptm) or bridged (22
+ptm), worst-case ATM (overhead 48 atm), or no compensation.
+.It Cm pppoa-vcmux , pppoa-llc , pppoe-vcmux , pppoe-llcsnap , bridged-vcmux , bridged-llcsnap , ipoa-vcmux , ipoa-llcsnap
+ADSL encapsulations, all with ATM framing.
+.It Cm ether-vlan
+adds 4 bytes for a VLAN tag; give it after a preset.
+.El
+.Pp
+The scheduler's tin shares are charged the same way.
+With a
+.Nm dummynet
+that lacks the scheduler wire length method, the scheduler adjusts the
+pipe's credit itself, with the same result.
+.Pp
+Further options:
+.Bl -tag -width indent
+.It Cm ack-filter , ack-filter-aggressive , no-ack-filter
+drop pure TCP ACKs made redundant by a newer ACK of the same connection
+queued behind them, which helps on asymmetric links.
+The aggressive filter also drops a single redundant ACK right in front of
+the new one.
+.It Cm wash , nowash
+clear the DSCP field, keeping ECN, after classifying a packet, e.g. on the
+download pipe of a link whose markings are not to be trusted.
+.It Cm ingress , egress
+in ingress mode, for a pipe that shapes traffic after it has crossed the
+bottleneck, dropped packets are still charged to the rate, and the AQM
+allows for the number of bulk flows.
+.It Cm memlimit Ar size
+byte limit of all queues, with an optional k, m or g suffix.
+By default it is four times what the pipe sends in an interval, and at
+least 4 MB.
+.El
+.Pp
+Parameters that are not given take their defaults from the
+.Va net.inet.ip.dummynet.cake
+sysctls.
+The tin AQM parameters are computed from the pipe
+.Cm bw
+when a scheduler instance is created, so reconfigure the scheduler after
+changing the pipe bandwidth.
+As with
+.Cm fq_codel ,
+any token after
+.Cm cake
+is considered a parameter for it.
 .El
 .Pp
 In addition to the type, all parameters allowed for a pipe can also
@@ -5008,6 +5159,16 @@ such as disable ECN and change the
 to 10ms, we do:
 .Pp
 .Dl "dnctl sched 1 config pipe 1 type fq_codel target 10ms noecn"
+.Pp
+To use
+.Cm cake
+with four diffserv tins on a 95Mbits/s uplink, we do:
+.Pp
+.Dl "kldload dn_cake"
+.Dl "dnctl pipe 1 config bw 95mbits/s"
+.Dl "dnctl sched 1 config pipe 1 type cake diffserv4"
+.Dl "dnctl queue 1 config sched 1"
+.Dl "ipfw add 100 queue 1 ip from any to any out xmit em0"
 .Pp
 Similar to
 .Cm fq_codel ,

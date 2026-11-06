@@ -75,6 +75,7 @@ static struct _s_x dummynet_params[] = {
 	{ "fq_codel",	TOK_FQ_CODEL}, /* FQ-Codel  */
 	{ "pie",		TOK_PIE}, /* PIE AQM */
 	{ "fq_pie",		TOK_FQ_PIE}, /* FQ-PIE */
+	{ "cake",		TOK_CAKE}, /* CAKE */
 #endif
 	{ "bw",			TOK_BW },
 	{ "bandwidth",		TOK_BW },
@@ -120,6 +121,32 @@ static struct _s_x aqm_params[] = {
 	{ "ts",	TOK_TS},
 	{ "derand",	TOK_DERAND},
 	{ "noderand",	TOK_NO_DERAND},
+	{ "besteffort",	TOK_BESTEFFORT},
+	{ "diffserv3",	TOK_DIFFSERV3},
+	{ "diffserv4",	TOK_DIFFSERV4},
+	{ "flowblind",	TOK_FLOWBLIND},
+	{ "srchost",	TOK_SRCHOST},
+	{ "dsthost",	TOK_DSTHOST},
+	{ "hosts",	TOK_HOSTS},
+	{ "dual-srchost",	TOK_DUAL_SRCHOST},
+	{ "dual-dsthost",	TOK_DUAL_DSTHOST},
+	{ "triple-isolate",	TOK_TRIPLE_ISOLATE},
+	{ "overhead",	TOK_OVERHEAD},
+	{ "mpu",	TOK_MPU},
+	{ "atm",	TOK_ATM},
+	{ "ptm",	TOK_PTM},
+	{ "noatm",	TOK_NOATM},
+	{ "ether-vlan",	TOK_ETHER_VLAN},
+	{ "diffserv8",	TOK_DIFFSERV8},
+	{ "precedence",	TOK_PRECEDENCE},
+	{ "wash",	TOK_WASH},
+	{ "nowash",	TOK_NOWASH},
+	{ "ack-filter",	TOK_ACK_FILTER},
+	{ "ack-filter-aggressive",	TOK_ACK_FILTER_AGGR},
+	{ "no-ack-filter",	TOK_NO_ACK_FILTER},
+	{ "ingress",	TOK_INGRESS},
+	{ "egress",	TOK_EGRESS},
+	{ "memlimit",	TOK_MEMLIMIT},
 	{ NULL, 0 }	/* terminator */
 };
 #endif
@@ -151,6 +178,55 @@ o_next(struct dn_id **o, int len, int type)
 enum {
 	CODEL_ECN_ENABLED = 1
 };
+
+/* CAKE flags and diffserv modes, from CAKE kernel module */
+enum {
+	CAKE_ECN_ENABLED = 0x01,
+	CAKE_WASH = 0x02,
+	CAKE_ACK_FILTER = 0x04,
+	CAKE_ACK_AGGRESSIVE = 0x08,
+	CAKE_INGRESS = 0x10
+};
+/* par[2] carries the flags given in the low bits and which they are here */
+#define	CAKE_FLAGS_MASK_SHIFT	16
+
+static const char *cake_diffserv_names[] = {
+	"besteffort", "diffserv3", "diffserv4", "diffserv8", "precedence"
+};
+
+/* flow isolation modes, indexed by the kernel's CAKE_FLOW_* value */
+static const char *cake_flow_mode_names[] = {
+	"flowblind", "srchost", "dsthost", "hosts",
+	"flows", "dual-srchost", "dual-dsthost", "triple-isolate"
+};
+
+/* link framing, indexed by the kernel's CAKE_ATM_* value */
+static const char *cake_atm_names[] = { "noatm", "atm", "ptm" };
+
+/* link-layer overhead presets as in tc-cake(8); mpu -1 leaves it alone */
+static const struct {
+	const char *name;
+	int overhead, mpu, atm;
+} cake_presets[] = {
+	{ "raw",		0,	0,	0 },
+	{ "conservative",	48,	-1,	1 },
+	{ "ethernet",		38,	84,	0 },
+	{ "docsis",		18,	64,	0 },
+	{ "pppoe-ptm",		30,	-1,	2 },
+	{ "bridged-ptm",	22,	-1,	2 },
+	{ "ipoa-vcmux",		8,	-1,	1 },
+	{ "ipoa-llcsnap",	16,	-1,	1 },
+	{ "bridged-vcmux",	24,	-1,	1 },
+	{ "bridged-llcsnap",	32,	-1,	1 },
+	{ "pppoa-vcmux",	10,	-1,	1 },
+	{ "pppoa-llc",		14,	-1,	1 },
+	{ "pppoe-vcmux",	32,	-1,	1 },
+	{ "pppoe-llcsnap",	40,	-1,	1 },
+	{ NULL,			0,	0,	0 }
+};
+
+/* par[8] carries the overhead offset by this, so that -1 means unset */
+#define	CAKE_OVERHEAD_BIAS	64
 
 /* PIE flags, from PIE kernel module */
 enum {
@@ -306,6 +382,44 @@ get_extra_parms(uint32_t nr, char *out, int subtype)
 				l += sprintf(out + l, " ECN");
 			else
 				l += sprintf(out + l, " NoECN");
+			l += sprintf(out + l, "\n");
+		} else 	if (!strcasecmp(ep->name,"CAKE")) {
+			us_to_time(ep->par[0], strt1);
+			us_to_time(ep->par[1], strt2);
+			l = sprintf(out," CAKE %s %s target %s interval %s"
+				" quantum %jd limit %jd flows %jd",
+				(ep->par[3] >= 0 && ep->par[3] <= 4) ?
+				    cake_diffserv_names[ep->par[3]] : "?",
+				(ep->par[7] >= 0 && ep->par[7] <= 7) ?
+				    cake_flow_mode_names[ep->par[7]] : "?",
+				strt1, strt2,
+				(intmax_t) ep->par[4],
+				(intmax_t) (ep->par[5] & 0xffffffff),
+				(intmax_t) ep->par[6]
+				);
+			if (ep->par[2] & CAKE_ECN_ENABLED)
+				l += sprintf(out + l, " ECN");
+			else
+				l += sprintf(out + l, " NoECN");
+			if (ep->par[2] & CAKE_WASH)
+				l += sprintf(out + l, " wash");
+			if (ep->par[2] & CAKE_ACK_AGGRESSIVE)
+				l += sprintf(out + l, " ack-filter-aggressive");
+			else if (ep->par[2] & CAKE_ACK_FILTER)
+				l += sprintf(out + l, " ack-filter");
+			if (ep->par[2] & CAKE_INGRESS)
+				l += sprintf(out + l, " ingress");
+			if (ep->par[5] >> 32)
+				l += sprintf(out + l, " memlimit %jdK",
+				    (intmax_t)(ep->par[5] >> 32));
+			/* overhead compensation, if any (older kernels: none) */
+			if (ep->par[8] > 0 && ep->par[9] >= 0 &&
+			    (ep->par[8] != CAKE_OVERHEAD_BIAS || ep->par[9] != 0))
+				l += sprintf(out + l, " overhead %jd mpu %jd %s",
+				    (intmax_t)(ep->par[8] - CAKE_OVERHEAD_BIAS),
+				    (intmax_t)(ep->par[9] & 0xffff),
+				    (ep->par[9] >> 16) <= 2 ?
+				    cake_atm_names[ep->par[9] >> 16] : "?");
 			l += sprintf(out + l, "\n");
 		} else 	if (!strcasecmp(ep->name,"FQ_PIE")) {
 			us_to_time(ep->par[0], strt1);
@@ -603,7 +717,7 @@ list_pipes(struct dn_id *oid, struct dn_id *end)
 			s->sched_nr,
 			s->name, s->flags, s->buckets, s->oid.id);
 #ifdef NEW_AQM
-		char parms[200];
+		char parms[320];	/* CAKE uses up to ~180 */
 		get_extra_parms(s->sched_nr, parms, DN_SCH_PARAMS);
 		printf("%s",parms);
 #endif
@@ -1109,6 +1223,217 @@ process_extra_parms(int *ac, char **av, struct dn_extra_parms *ep,
 			}
 		}
 		break;
+	case TOK_CAKE: {
+		/* CAKE
+		 * 0- target, 1- interval, 2- flags, 3- diffserv,
+		 * 4- quantum, 5- limit | memlimit (KB) << 32, 6- flows,
+		 * 7- flow mode, 8- overhead + 64, 9- mpu | framing << 16
+		 */
+		int ovh = INT_MIN, mpu = -1, atm = -1, flags = 0, fmask = 0;
+		int64_t limit = 0, memkb = 0;
+		double mem;
+		char *end;
+
+		while (*ac > 0) {
+			int tok = match_token(aqm_params, *av);
+			(*ac)--; av++;
+			switch(tok) {
+			case TOK_TARGET:
+				if (*ac <= 0 || time_to_us(av[0]) < 0)
+					errx(EX_DATAERR, "target needs time\n");
+
+				ep->par[0] = time_to_us(av[0]);
+				(*ac)--; av++;
+				break;
+
+			case TOK_INTERVAL:
+				if (*ac <= 0 || time_to_us(av[0]) < 0)
+					errx(EX_DATAERR, "interval needs time\n");
+
+				ep->par[1] = time_to_us(av[0]);
+				(*ac)--; av++;
+				break;
+
+			case TOK_ECN:
+				flags |= CAKE_ECN_ENABLED;
+				fmask |= CAKE_ECN_ENABLED;
+				break;
+			case TOK_NO_ECN:
+				flags &= ~CAKE_ECN_ENABLED;
+				fmask |= CAKE_ECN_ENABLED;
+				break;
+			case TOK_WASH:
+				flags |= CAKE_WASH;
+				fmask |= CAKE_WASH;
+				break;
+			case TOK_NOWASH:
+				flags &= ~CAKE_WASH;
+				fmask |= CAKE_WASH;
+				break;
+			case TOK_ACK_FILTER:
+				flags = (flags | CAKE_ACK_FILTER) &
+				    ~CAKE_ACK_AGGRESSIVE;
+				fmask |= CAKE_ACK_FILTER | CAKE_ACK_AGGRESSIVE;
+				break;
+			case TOK_ACK_FILTER_AGGR:
+				flags |= CAKE_ACK_FILTER | CAKE_ACK_AGGRESSIVE;
+				fmask |= CAKE_ACK_FILTER | CAKE_ACK_AGGRESSIVE;
+				break;
+			case TOK_NO_ACK_FILTER:
+				flags &= ~(CAKE_ACK_FILTER | CAKE_ACK_AGGRESSIVE);
+				fmask |= CAKE_ACK_FILTER | CAKE_ACK_AGGRESSIVE;
+				break;
+			case TOK_INGRESS:
+				flags |= CAKE_INGRESS;
+				fmask |= CAKE_INGRESS;
+				break;
+			case TOK_EGRESS:
+				flags &= ~CAKE_INGRESS;
+				fmask |= CAKE_INGRESS;
+				break;
+
+			case TOK_BESTEFFORT:
+				ep->par[3] = 0;
+				break;
+			case TOK_DIFFSERV3:
+				ep->par[3] = 1;
+				break;
+			case TOK_DIFFSERV4:
+				ep->par[3] = 2;
+				break;
+			case TOK_DIFFSERV8:
+				ep->par[3] = 3;
+				break;
+			case TOK_PRECEDENCE:
+				ep->par[3] = 4;
+				break;
+
+			case TOK_QUANTUM:
+				if (*ac <= 0 || !is_valid_number(av[0]))
+					errx(EX_DATAERR, "quantum needs number\n");
+
+				ep->par[4] = atoi(av[0]);
+				(*ac)--; av++;
+				break;
+
+			case TOK_LIMIT:
+				if (*ac <= 0 || !is_valid_number(av[0]))
+					errx(EX_DATAERR, "limit needs number\n");
+
+				limit = atoi(av[0]);
+				(*ac)--; av++;
+				break;
+
+			case TOK_MEMLIMIT:	/* bytes, k/m/g suffix as in tc */
+				if (*ac <= 0)
+					errx(EX_DATAERR, "memlimit needs size\n");
+				mem = strtod(av[0], &end);
+				if (*end == 'k' || *end == 'K')
+					mem *= 1024, end++;
+				else if (*end == 'm' || *end == 'M')
+					mem *= 1024 * 1024, end++;
+				else if (*end == 'g' || *end == 'G')
+					mem *= 1024 * 1024 * 1024, end++;
+				if (*av[0] == '\0' || *end != '\0' || mem < 1024 ||
+				    mem > 4.0 * 1024 * 1024 * 1024)
+					errx(EX_DATAERR,
+					    "memlimit must be 1k to 4g\n");
+				memkb = (int64_t)((mem + 1023) / 1024);
+				(*ac)--; av++;
+				break;
+
+			/* "flows N" sets the flow count; a bare "flows" is
+			 * the flow isolation mode, as in tc-cake(8) */
+			case TOK_FLOWS:
+				if (*ac <= 0 || !is_valid_number(av[0])) {
+					ep->par[7] = 4;
+					break;
+				}
+				ep->par[6] = atoi(av[0]);
+				(*ac)--; av++;
+				break;
+
+			case TOK_FLOWBLIND:
+				ep->par[7] = 0;
+				break;
+			case TOK_SRCHOST:
+				ep->par[7] = 1;
+				break;
+			case TOK_DSTHOST:
+				ep->par[7] = 2;
+				break;
+			case TOK_HOSTS:
+				ep->par[7] = 3;
+				break;
+			case TOK_DUAL_SRCHOST:
+				ep->par[7] = 5;
+				break;
+			case TOK_DUAL_DSTHOST:
+				ep->par[7] = 6;
+				break;
+			case TOK_TRIPLE_ISOLATE:
+				ep->par[7] = 7;
+				break;
+
+			case TOK_OVERHEAD:
+				if (*ac <= 0)
+					errx(EX_DATAERR, "overhead needs number\n");
+				ovh = strtol(av[0], &end, 10);
+				if (*av[0] == '\0' || *end != '\0' ||
+				    ovh < -64 || ovh > 256)
+					errx(EX_DATAERR,
+					    "overhead must be -64 to 256\n");
+				(*ac)--; av++;
+				break;
+
+			case TOK_MPU:
+				if (*ac <= 0 || !is_valid_number(av[0]) ||
+				    atoi(av[0]) > 256)
+					errx(EX_DATAERR, "mpu must be 0 to 256\n");
+				mpu = atoi(av[0]);
+				(*ac)--; av++;
+				break;
+
+			case TOK_NOATM:
+				atm = 0;
+				break;
+			case TOK_ATM:
+				atm = 1;
+				break;
+			case TOK_PTM:
+				atm = 2;
+				break;
+
+			case TOK_ETHER_VLAN:	/* adds a VLAN tag */
+				ovh = (ovh == INT_MIN ? 0 : ovh) + 4;
+				break;
+
+			default:
+				for (i = 0; cake_presets[i].name != NULL; i++)
+					if (!strcmp(av[-1], cake_presets[i].name))
+						break;
+				if (cake_presets[i].name == NULL) {
+					printf("%s is invalid parameter\n",
+					    av[-1]);
+					break;
+				}
+				ovh = cake_presets[i].overhead;
+				if (cake_presets[i].mpu >= 0)
+					mpu = cake_presets[i].mpu;
+				atm = cake_presets[i].atm;
+			}
+		}
+		if (fmask != 0)
+			ep->par[2] = flags | fmask << CAKE_FLAGS_MASK_SHIFT;
+		if (limit != 0 || memkb != 0)
+			ep->par[5] = limit | memkb << 32;
+		if (ovh != INT_MIN)
+			ep->par[8] = ovh + CAKE_OVERHEAD_BIAS;
+		if (mpu >= 0 || atm >= 0)
+			ep->par[9] = (mpu < 0 ? 0 : mpu) |
+			    (atm < 0 ? 0 : atm) << 16;
+		break;
+	}
 	case TOK_PIE:
 	case TOK_FQ_PIE:
 		/* PIE
@@ -1604,10 +1929,11 @@ end_mask:
 
 		case TOK_FQ_CODEL:
 		case TOK_FQ_PIE:
+		case TOK_CAKE:
 			if (!strcmp(av[-1],"type"))
-				errx(EX_DATAERR, "use type before fq_codel/fq_pie");
+				errx(EX_DATAERR, "use type before fq_codel/fq_pie/cake");
 
-			NEED(sch, "fq_codel/fq_pie is only for schd");
+			NEED(sch, "fq_codel/fq_pie/cake is only for schd");
 			strlcpy(sch_extra->name, av[-1],
 			    sizeof(sch_extra->name));
 			sch_extra->oid.subtype = DN_SCH_PARAMS;
@@ -1684,7 +2010,8 @@ end_mask:
 			/* if fq_codel is selected, consider all tokens after it
 			 * as parameters
 			 */
-			if (!strcasecmp(av[0],"fq_codel") || !strcasecmp(av[0],"fq_pie")){
+			if (!strcasecmp(av[0],"fq_codel") || !strcasecmp(av[0],"fq_pie") ||
+			    !strcasecmp(av[0],"cake")){
 				strlcpy(sch_extra->name, av[0],
 				    sizeof(sch_extra->name));
 				sch_extra->oid.subtype = DN_SCH_PARAMS;

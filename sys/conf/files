@@ -4553,6 +4553,7 @@ netlink/route/rt.c		optional netlink
 netpfil/ipfw/dn_aqm_codel.c	optional inet dummynet
 netpfil/ipfw/dn_aqm_pie.c	optional inet dummynet
 netpfil/ipfw/dn_heap.c		optional inet dummynet
+netpfil/ipfw/dn_sched_cake.c	optional inet dummynet
 netpfil/ipfw/dn_sched_fifo.c	optional inet dummynet
 netpfil/ipfw/dn_sched_fq_codel.c	optional inet dummynet
 netpfil/ipfw/dn_sched_fq_pie.c	optional inet dummynet

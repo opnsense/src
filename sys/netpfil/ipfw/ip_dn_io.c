@@ -638,7 +638,9 @@ serve_sched(struct mq *q, struct dn_sch_inst *si, uint64_t now)
 
 		done++;
 		len_scaled = (bw == 0) ? 0 : hz *
-			(m->m_pkthdr.len * 8 + extra_bits(m, s));
+			((uint64_t)((s->fp->flags & DN_WIRE_LEN) ?
+			s->fp->wire_len(si, m) : m->m_pkthdr.len) * 8 +
+			extra_bits(m, s));
 		si->credit -= len_scaled;
 		/* Move packet in the delay line */
 		dn_tag_get(m)->output_time = V_dn_cfg.curr_time + s->link.delay ;

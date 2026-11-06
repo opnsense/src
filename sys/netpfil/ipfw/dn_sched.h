@@ -36,6 +36,7 @@
 #include <sys/ck.h>
 
 #define	DN_MULTIQUEUE	0x01
+#define	DN_WIRE_LEN	0x02	/* wire_len method is present */
 /*
  * Descriptor for a scheduling algorithm.
  * Contains all function pointers for a given scheduler
@@ -142,6 +143,16 @@ struct dn_alg {
 	/* run-time fields */
 	int ref_count;      /* XXX number of instances in the system */
 	CK_LIST_ENTRY(dn_alg) next; /* Next scheduler in the list */
+
+	/*
+	 * Optional, only read if flags has DN_WIRE_LEN, so schedulers
+	 * built without it keep working:
+	 *
+	 * wire_len	bytes to charge against the link rate for a packet
+	 *	the scheduler has just dequeued, for link-layer overhead
+	 *	compensation. Called with the scheduler lock held.
+	 */
+	uint32_t (*wire_len)(struct dn_sch_inst *, struct mbuf *);
 };
 
 /* MSVC does not support initializers so we need this ugly macro */
