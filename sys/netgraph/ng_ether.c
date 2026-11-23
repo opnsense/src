@@ -44,6 +44,9 @@
  * ng_ether(4) netgraph node type
  */
 
+#include "opt_inet.h"
+#include "opt_inet6.h"
+
 #include <sys/param.h>
 #include <sys/eventhandler.h>
 #include <sys/systm.h>
@@ -65,6 +68,11 @@
 #include <net/ethernet.h>
 #include <net/if_bridgevar.h>
 #include <net/vnet.h>
+
+#if defined(INET) || defined(INET6)
+#include <netinet/in.h>
+#include <netinet/ip_carp.h>
+#endif
 
 #include <netgraph/ng_message.h>
 #include <netgraph/netgraph.h>
@@ -712,6 +720,7 @@ static int
 ng_ether_rcv_upper(hook_p hook, item_p item)
 {
 	struct mbuf *m;
+	struct ether_header *eh;
 	const node_p node = NG_HOOK_NODE(hook);
 	const priv_p priv = NG_NODE_PRIVATE(node);
 	struct ifnet *ifp = priv->ifp;
@@ -736,6 +745,20 @@ ng_ether_rcv_upper(hook_p hook, item_p item)
 		if (m == NULL)
 			return (0);
 	}
+
+	/*
+	 * Reclassify the frame after it returns from the netgraph path.
+	 */
+	eh = mtod(m, struct ether_header *);
+	m->m_flags &= ~M_PROMISC;
+#if defined(INET) || defined(INET6)
+	if (!(ifp->if_carp != NULL &&
+	    (*carp_forus_p)(ifp, eh->ether_dhost)))
+#endif
+		if (!ETHER_IS_MULTICAST(eh->ether_dhost) &&
+		    memcmp(IF_LLADDR(ifp), eh->ether_dhost,
+		    ETHER_ADDR_LEN) != 0)
+			m->m_flags |= M_PROMISC;
 
 	/* Route packet back in */
 	ether_demux(ifp, m);
