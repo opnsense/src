@@ -869,19 +869,17 @@ in6_selecthlim(struct inpcb *inp, struct ifnet *ifp)
 	if (inp && inp->in6p_hops >= 0)
 		return (inp->in6p_hops);
 	else if (ifp)
-		return (ND_IFINFO(ifp)->chlim);
+		return (nd6_ifhlim(ifp));
 	else if (inp && !IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_faddr)) {
 		struct nhop_object *nh;
 		struct in6_addr dst;
 		uint32_t fibnum, scopeid;
-		int hlim;
 
 		fibnum = inp->inp_inc.inc_fibnum;
 		in6_splitscope(&inp->in6p_faddr, &dst, &scopeid);
 		nh = fib6_lookup(fibnum, &dst, scopeid, 0, 0);
 		if (nh != NULL) {
-			hlim = ND_IFINFO(nh->nh_ifp)->chlim;
-			return (hlim);
+			return (nd6_ifhlim(nh->nh_ifp));
 		}
 	}
 	return (V_ip6_defhlim);

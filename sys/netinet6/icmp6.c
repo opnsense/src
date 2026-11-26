@@ -2079,11 +2079,8 @@ icmp6_reflect(struct mbuf *m, size_t off)
 			src6 = ia->ia_addr.sin6_addr;
 			srcp = &src6;
 
-			if (m->m_pkthdr.rcvif != NULL) {
-				/* XXX: This may not be the outgoing interface */
-				hlim = ND_IFINFO(m->m_pkthdr.rcvif)->chlim;
-			} else
-				hlim = V_ip6_defhlim;
+			/* XXX: This may not be the outgoing interface */
+			hlim = nd6_ifhlim(m->m_pkthdr.rcvif);
 		}
 	}
 

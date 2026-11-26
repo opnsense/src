@@ -351,6 +351,13 @@ nd6_ifdetach(struct ifnet *ifp, struct nd_ifinfo *nd)
 	free(nd, M_IP6NDP);
 }
 
+int
+nd6_ifhlim(struct ifnet *ifp)
+{
+	struct in6_ifextra *ext = ifp ? if_getafdata(ifp, AF_INET6) : NULL;
+	return (ext ? ext->nd_ifinfo->chlim : V_ip6_defhlim);
+}
+
 /*
  * Reset ND level link MTU. This function is called when the physical MTU
  * changes, which means we might have to adjust the ND level MTU.

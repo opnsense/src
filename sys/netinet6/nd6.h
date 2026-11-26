@@ -350,6 +350,7 @@ void nd6_init(void);
 #ifdef VIMAGE
 void nd6_destroy(void);
 #endif
+int nd6_ifhlim(struct ifnet *);
 struct nd_ifinfo *nd6_ifattach(struct ifnet *);
 void nd6_ifdetach(struct ifnet *, struct nd_ifinfo *);
 int nd6_is_addr_neighbor(const struct sockaddr_in6 *, struct ifnet *);
