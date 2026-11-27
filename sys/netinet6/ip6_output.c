@@ -793,6 +793,13 @@ nonh6lookup:
 	KASSERT((ifp != NULL), ("output interface must not be NULL"));
 	KASSERT((origifp != NULL), ("output address interface must not be NULL"));
 
+	/* Work around the fact that a netgraph device is dying slowly. */
+	if (ifp->if_afdata_initialized == 0) {
+		IP6STAT_INC(ip6s_noroute);
+		error = EHOSTUNREACH;
+		goto bad;
+	}
+
 #if defined(IPSEC) || defined(IPSEC_SUPPORT)
 	/*
 	 * IPSec checking which handles several cases.
