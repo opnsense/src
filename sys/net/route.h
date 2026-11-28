@@ -382,8 +382,9 @@ struct rt_addrinfo {
 
 #ifdef _KERNEL
 
-#define RT_LINK_IS_UP(ifp)	(!((ifp)->if_capabilities & IFCAP_LINKSTATE) \
-				 || (ifp)->if_link_state == LINK_STATE_UP)
+#define RT_LINK_IS_UP(ifp)	((!((ifp)->if_capabilities & IFCAP_LINKSTATE) \
+				 || (ifp)->if_link_state == LINK_STATE_UP) \
+				 && (ifp)->if_afdata_initialized != 0)
 
 #define	RO_NHFREE(_ro) do {					\
 	if ((_ro)->ro_nh) {					\
